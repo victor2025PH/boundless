@@ -19,6 +19,18 @@ from typing import Any, Optional, Tuple
 DEFAULT_STREAK_RESET_AFTER = 1800.0
 
 
+def reply_logic_key(account_id: Any, chat_id: Any, user_id: Any) -> str:
+    """冷却/连发计数字典的键——**闸门读与发送后记账写必须同一格式**。
+
+    2026-08-03 实锤：闸门侧（telegram_client）做「双号隔离」时把读键改成
+    ``{account_id}:{chat_id}:{user_id}``，而记账侧（sender._record_auto_reply）
+    仍写旧键 ``{chat_id}:{user_id}`` → 读写永不相交 → ``last_reply_ts`` 恒 None
+    → UI「回复逻辑」的冷却与最大连续回复**静默失效**（SpamBot 80 秒 8 轮空转
+    事故中本该第 3 轮就停）。两侧统一经本函数构键，格式契约由单测钉死。
+    """
+    return f"{account_id}:{chat_id}:{user_id}"
+
+
 def _to_num(value: Any, default: float = 0.0) -> float:
     """宽容数值化：config 里的值可能是 int/float/数字字符串，坏值回退 default。"""
     try:

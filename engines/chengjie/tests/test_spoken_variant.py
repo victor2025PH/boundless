@@ -210,7 +210,7 @@ async def test_voice_autosend_synth_uses_spoken_variant(monkeypatch, tmp_path):
     import src.inbox.voice_autosend as va
     reset_store()
     audio = tmp_path / "a.ogg"
-    audio.write_bytes(b"OGGfake")
+    audio.write_bytes(b"OggS" + b"\x00" * 60 + b"OpusHead" + b"\x00" * 32)
 
     class _FakeResult:
         ok = True

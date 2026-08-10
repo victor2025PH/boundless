@@ -33,10 +33,49 @@
 .badge-risk{background:rgba(239,68,68,.12);color:var(--red)}
 .badge-esc{background:rgba(245,158,11,.12);color:var(--amber)}
 .badge-closed{background:rgba(16,185,129,.12);color:var(--green)}
+.badge-res{background:rgba(16,185,129,.08);color:var(--green);border:1px solid rgba(16,185,129,.25)}
 .badge-claim{background:rgba(14,165,233,.12);color:#0ea5e9}
+.stat-pill.warn{border-color:rgba(245,158,11,.45);color:var(--amber)}
+.stat-pill.warn strong{color:var(--amber)}
 .cs-toast{position:fixed;top:70px;right:18px;z-index:1300;background:var(--card);border:1px solid var(--amber);color:var(--t);border-radius:10px;padding:.55rem .9rem;font-size:.8rem;box-shadow:0 8px 24px rgba(0,0,0,.18);max-width:320px}
 .case-user{font-size:.78rem;color:var(--t2);font-weight:600}
 .case-time{margin-left:auto;font-size:.72rem;color:var(--t3);white-space:nowrap}
+
+/* ── 身份行（平台徽标 + 账号 + 客户） ─────────────────────────────────── */
+.plat-badge{display:inline-flex;align-items:center;justify-content:center;font-size:.6rem;font-weight:800;letter-spacing:.03em;border-radius:5px;padding:.12rem .4rem;color:#fff;line-height:1.2;flex-shrink:0}
+.case-acct{font-size:.72rem;color:var(--t3);font-family:'Consolas',monospace}
+.case-arrow{color:var(--t3);font-size:.7rem}
+.case-peer{font-size:.8rem;font-weight:700;color:var(--t)}
+.case-uid{font-size:.7rem;color:var(--t3);font-family:'Consolas',monospace}
+.badge-drill{background:rgba(148,163,184,.18);color:var(--t3)}
+
+/* ── 信号时间线（chip 展开） ──────────────────────────────────────────── */
+.sig-chip{display:inline-flex;align-items:center;gap:.2rem;font-weight:600;font-size:.72rem;color:var(--p);background:color-mix(in srgb, var(--p,#1e8cf2) 9%, transparent);border:1px solid color-mix(in srgb, var(--p,#1e8cf2) 25%, transparent);border-radius:999px;padding:.1rem .55rem;margin-left:.45rem;cursor:pointer;user-select:none}
+.sig-chip:hover{background:color-mix(in srgb, var(--p,#1e8cf2) 16%, transparent)}
+.case-timeline{display:none;margin:.45rem 0 .1rem;padding:.5rem .7rem;background:var(--input);border-radius:9px;border:1px solid var(--bd)}
+.case-timeline.show{display:block}
+.tl-title{font-size:.68rem;font-weight:700;color:var(--t3);margin-bottom:.35rem;letter-spacing:.02em}
+.tl-item{display:flex;gap:.55rem;font-size:.75rem;line-height:1.55;padding:.14rem 0;align-items:baseline}
+.tl-ts{color:var(--t3);font-size:.68rem;white-space:nowrap;font-family:'Consolas',monospace;flex-shrink:0}
+.tl-lbl{color:var(--p);font-weight:600;white-space:nowrap;flex-shrink:0}
+.tl-quote{color:var(--t2);word-break:break-word}
+
+/* ── 会话预览抽屉（只读，分诊不跳窗口） ──────────────────────────────── */
+.cs-drawer-mask{position:fixed;inset:0;background:rgba(15,23,42,.35);z-index:1250;display:none}
+.cs-drawer-mask.show{display:block}
+.cs-drawer{position:fixed;top:0;right:0;bottom:0;width:min(430px,92vw);background:var(--card);border-left:1px solid var(--bd);z-index:1251;display:none;flex-direction:column;box-shadow:-12px 0 40px rgba(0,0,0,.18)}
+.cs-drawer.show{display:flex}
+.cs-drawer-head{display:flex;align-items:center;gap:.5rem;padding:.8rem 1rem;border-bottom:1px solid var(--bd);flex-wrap:wrap}
+.cs-drawer-head .tt{font-size:.86rem;font-weight:700;color:var(--t)}
+.cs-drawer-head .sub{font-size:.7rem;color:var(--t3);width:100%}
+.cs-drawer-close{margin-left:auto;background:none;border:none;color:var(--t3);cursor:pointer;font-size:1.05rem;line-height:1;padding:.2rem .4rem}
+.cs-drawer-close:hover{color:var(--t)}
+.cs-drawer-body{flex:1;overflow-y:auto;padding:.8rem 1rem;display:flex;flex-direction:column;gap:.4rem}
+.cs-drawer-foot{padding:.65rem 1rem;border-top:1px solid var(--bd);display:flex;gap:.5rem;justify-content:flex-end}
+.cs-drawer .bubble{max-width:88%}
+.cs-drawer .bubble .bts{display:block;font-size:.62rem;color:var(--t3);margin-top:.15rem}
+.cs-drawer .bubble.hit{outline:2px solid color-mix(in srgb, var(--amber,#f59e0b) 65%, transparent);outline-offset:1px}
+.cs-drawer-note{font-size:.72rem;color:var(--t3);padding:.4rem 1rem;background:var(--input);border-bottom:1px solid var(--bd)}
 .case-reason{margin:.55rem 0 .1rem;font-size:.88rem;font-weight:600;color:var(--t);line-height:1.5}
 .case-reason .sig{font-weight:500;font-size:.72rem;color:var(--t3);margin-left:.4rem}
 .case-meta{font-size:.75rem;color:var(--t3);margin-top:.15rem}
@@ -60,7 +99,7 @@
 
 /* 已结案：折叠成单行收据 */
 .case-card.closed{opacity:.72}
-.case-card.closed .case-chain,.case-card.closed .case-bubbles,.case-card.closed .case-actions,.case-card.closed .case-meta{display:none}
+.case-card.closed .case-chain,.case-card.closed .case-bubbles,.case-card.closed .case-actions,.case-card.closed .case-meta,.case-card.closed .case-timeline{display:none}
 .case-card.closed.expanded .case-chain{display:flex}
 .case-card.closed.expanded .case-bubbles{display:flex}
 .case-card.closed.expanded .case-meta{display:block}
@@ -74,6 +113,7 @@
 /* 骨架屏 */
 .cs-skel{height:118px;border-radius:12px;border:1px solid var(--bd);background:linear-gradient(100deg,var(--card) 40%,var(--input) 50%,var(--card) 60%);background-size:200% 100%;animation:csShimmer 1.2s infinite}
 @keyframes csShimmer{0%{background-position:120% 0}100%{background-position:-80% 0}}
+@keyframes csspin{to{transform:rotate(360deg)}}
 
 /* 空态教育 + 示例卡 */
 .cs-empty{padding:2.2rem 1rem;text-align:center;color:var(--t2)}
@@ -95,6 +135,7 @@
 .cs-quick{display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:.55rem}
 .cs-quick button{padding:.3rem .7rem;border-radius:999px;font-size:.74rem;border:1px solid var(--bd);background:var(--input);color:var(--t2);cursor:pointer}
 .cs-quick button:hover{border-color:var(--p);color:var(--p)}
+.cs-quick button.active{background:color-mix(in srgb, var(--p,#1e8cf2) 14%, transparent);border-color:var(--p);color:var(--p);font-weight:700}
 .cs-modal textarea{width:100%;box-sizing:border-box;resize:vertical}
 .cs-modal-actions{display:flex;justify-content:flex-end;gap:.5rem;margin-top:.85rem}
 </style>
@@ -130,12 +171,23 @@
     <option value="media_complaint">{{ (i18n or {}).get('cases.src.media_complaint','媒体质疑') }}</option>
     <option value="escalation">{{ (i18n or {}).get('cases.src.escalation','人工升级') }}</option>
     <option value="intent_chain">{{ (i18n or {}).get('cases.src.intent_chain','意图链模式') }}</option>
+    <option value="drill">{{ (i18n or {}).get('cases.src.drill','🧪 演练数据') }}</option>
   </select>
   <input class="cs-search" id="cs-search" type="search" placeholder="{{ (i18n or {}).get('cases.search.ph','搜索用户 / 案号 / 内容…') }}" oninput="csSetQ(this.value)" />
   <div class="stat-pill">{{ (i18n or {}).get('cases.stat.new_today','今日新增') }}: <strong id="cs-new-today">-</strong></div>
+  <div class="stat-pill" id="cs-oldest-pill" style="display:none" title="{{ (i18n or {}).get('cases.stat.oldest_open_t','待处理里最久没人管的案例年龄') }}">{{ (i18n or {}).get('cases.stat.oldest_open','最老待处理') }}: <strong id="cs-oldest">-</strong></div>
+  <div class="stat-pill" id="cs-avgresp-pill" style="display:none" title="{{ (i18n or {}).get('cases.stat.avg_first_resp_t','今日被认领案例的平均「开案→认领」耗时') }}">{{ (i18n or {}).get('cases.stat.avg_first_resp','今日平均首响') }}: <strong id="cs-avgresp">-</strong></div>
+  <div class="stat-pill warn" id="cs-media-stale-pill" style="display:none" title="{{ (i18n or {}).get('cases.stat.media_stale_t','未结媒体质疑超过 SLA') }}">{{ (i18n or {}).get('cases.stat.media_stale','媒体质疑超龄') }}: <strong id="cs-media-stale">-</strong></div>
+  <div class="stat-pill warn" id="cs-drill-pill" style="display:none" title="{{ (i18n or {}).get('cases.stat.drill_open_t','未结演练号段案例') }}">{{ (i18n or {}).get('cases.stat.drill_open','演练残影') }}: <strong id="cs-drill-open">-</strong>
+    <button type="button" class="btn btn-xs" style="margin-left:.35rem" onclick="csCloseDrill()">{{ (i18n or {}).get('cases.drill.cleanup','清演练残影') }}</button>
+  </div>
+  <div class="stat-pill" id="cs-takeover-pill" style="display:none" title="{{ (i18n or {}).get('cases.stat.takeover_t','由结案「转人工」触发的 AI 暂停：次数 · 回流中位时长 · 进行中') }}">{{ (i18n or {}).get('cases.stat.takeover','人工接管(30天)') }}: <strong id="cs-takeover-val">-</strong></div>
+  <a id="cs-ops-link" href="/admin/ops" data-winname="admin" onclick="return __openUnique(event,this)" style="display:none;font-size:.76rem;color:var(--p);font-weight:600;text-decoration:none" title="{{ (i18n or {}).get('cases.ops_link_t','个案之外：哪个人设被质疑最多、缺什么素材——去运维看板「图文一致性」卡') }}">📊 {{ (i18n or {}).get('cases.ops_link','人设级质疑聚合') }}</a>
   <span class="cs-paused" id="cs-paused">{{ (i18n or {}).get('cases.note.editing','编辑中，本轮自动刷新已暂停') }}</span>
   <button class="btn btn-s" data-help="btn_refresh" onclick="loadCases()">{{ (i18n or {}).get('refresh','刷新') }}</button>
 </div>
+
+<div id="cs-advice" style="display:none;margin:-.4rem 0 .8rem;padding:.5rem .8rem;border:1px solid rgba(245,158,11,.4);background:rgba(245,158,11,.07);border-radius:9px;font-size:.78rem;color:var(--t2);line-height:1.7"></div>
 
 <div class="case-grid" id="case-list">
   <div class="cs-skel"></div>
@@ -144,16 +196,37 @@
 
 <div id="cs-toast" class="cs-toast" style="display:none"></div>
 
+<div class="cs-drawer-mask" id="cs-drawer-mask" onclick="csDrawerClose()"></div>
+<div class="cs-drawer" id="cs-drawer" role="dialog" aria-modal="true">
+  <div class="cs-drawer-head">
+    <span class="tt">{{ (i18n or {}).get('cases.preview.title','会话预览（只读）') }}</span>
+    <button class="cs-drawer-close" onclick="csDrawerClose()" title="{{ (i18n or {}).get('cases.close.cancel','取消') }}">✕</button>
+    <span class="sub" id="cs-drawer-sub"></span>
+  </div>
+  <div class="cs-drawer-note">{{ (i18n or {}).get('cases.preview.hint','只读快照：高亮为触发立案的质疑消息；要回复请打开工作台。') }}</div>
+  <div class="cs-drawer-body" id="cs-drawer-body"></div>
+  <div class="cs-drawer-foot">
+    <button class="btn btn-s" onclick="csDrawerClose()">{{ (i18n or {}).get('cases.close.cancel','取消') }}</button>
+    <button class="btn btn-s" style="background:var(--p);color:var(--th-ink-inverse,#fff);border-color:var(--p)" id="cs-drawer-open" onclick="csDrawerOpenConv()">{{ (i18n or {}).get('cases.preview.open_ws','在工作台打开 ↗') }}</button>
+  </div>
+</div>
+
 <div class="cs-modal-mask" id="cs-close-modal" style="display:none" onclick="if(event.target===this)csCloseCancel()">
   <div class="cs-modal">
     <h3 data-help="close_case">{{ (i18n or {}).get('cases.close.title','结案') }} <span class="case-id" id="cs-close-cid" style="cursor:default;margin-left:.2rem"></span></h3>
     <p class="desc">{{ (i18n or {}).get('cases.close.desc','简单记录处理结果（可选）。') }}</p>
     <div class="cs-quick">
-      <button onclick="csQuickRes(this)">{{ (i18n or {}).get('cases.close.quick.soothed','已安抚') }}</button>
-      <button onclick="csQuickRes(this)">{{ (i18n or {}).get('cases.close.quick.handoff','已转人工') }}</button>
-      <button onclick="csQuickRes(this)">{{ (i18n or {}).get('cases.close.quick.false_alarm','误报') }}</button>
+      <button type="button" data-bucket="soothed" onclick="csQuickRes(this)">{{ (i18n or {}).get('cases.close.quick.soothed','已安抚') }}</button>
+      <button type="button" data-bucket="handoff" onclick="csQuickRes(this)">{{ (i18n or {}).get('cases.close.quick.handoff','已转人工') }}</button>
+      <button type="button" data-bucket="false_alarm" onclick="csQuickRes(this)">{{ (i18n or {}).get('cases.close.quick.false_alarm','误报') }}</button>
     </div>
     <textarea id="cs-close-res" class="input" rows="3" placeholder="{{ (i18n or {}).get('cases.close.ph','例如：已安抚，客户接受补偿方案') }}"></textarea>
+    <label id="cs-mute-row" style="display:none;align-items:center;gap:.4rem;font-size:.76rem;color:var(--t2);margin:.45rem 0 .1rem;cursor:pointer">
+      <input type="checkbox" id="cs-mute-fa" style="accent-color:var(--p)"> {{ (i18n or {}).get('cases.close.mute_fa','24 小时内同类信号不再自动立案（仅本会话；危机信号不受影响）') }}
+    </label>
+    <label id="cs-takeover-row" style="display:none;align-items:center;gap:.4rem;font-size:.76rem;color:var(--t2);margin:.45rem 0 .1rem;cursor:pointer">
+      <input type="checkbox" id="cs-takeover-cb" style="accent-color:var(--p)"> {{ (i18n or {}).get('cases.close.takeover','同时暂停本会话 AI 自动回复（转人工接管，空闲后按接管规则自动回流）') }}
+    </label>
     <div class="cs-modal-actions">
       <button class="btn btn-s" onclick="csCloseCancel()">{{ (i18n or {}).get('cases.close.cancel','取消') }}</button>
       <button class="btn btn-s" style="background:var(--green);color:var(--th-ink-inverse,#fff);border-color:var(--green)" onclick="csCloseConfirm()">{{ (i18n or {}).get('cases.close.confirm','确认结案') }}</button>
@@ -163,7 +236,7 @@
 
 <script>
 /* ── 状态 ── */
-var _csRows=[], _csView=[], _csFilter='open', _csSrc='all', _csQ='', _csKnownIds=null, _csCloseCid='', _csLoaded=false;
+var _csRows=[], _csView=[], _csFilter='open', _csSrc='all', _csQ='', _csKnownIds=null, _csCloseCid='', _csLoaded=false, _csSummary={}, _csEff=null, _csTk=null, _csUidFilter=null;
 /* 当前登录坐席（「我认领的」筛选判据；冷渲染/无会话时为空串） */
 window.__csMe = {{ (request.session.get('username','') if request else '')|tojson }};
 
@@ -181,6 +254,25 @@ function fmtRel(ts){
 function srcLabel(s){var k='cases.src.'+s;return window.T(k,s);}
 function sevLabel(v){var k='cases.sev.'+v;return window.T(k,String(v));}
 function intentLabel(n){var k='cases.int.'+n;return window.T(k,n);}
+
+/* 平台徽标：与工作台同一配色语言（品牌色底 + 短代码），无图标资产依赖 */
+var _PLAT_BADGE={
+  telegram:['TG','#229ED9'], whatsapp:['WA','#25D366'], line:['LINE','#06C755'],
+  messenger:['MSG','#0084FF'], instagram:['IG','#E4405F'], zalo:['ZALO','#0068FF'],
+  web:['WEB','#64748b']
+};
+function platBadge(p){
+  p=String(p||'').toLowerCase();
+  if(!p) return '';
+  var d=_PLAT_BADGE[p]||[p.slice(0,4).toUpperCase(),'#64748b'];
+  return '<span class="plat-badge" style="background:'+d[1]+'" title="'+esc(p)+'">'+esc(d[0])+'</span>';
+}
+/* 账号显示：尾 6 位（完整值悬停可见）；default/空不显示 */
+function acctShort(a){
+  a=String(a||'');
+  if(!a||a==='default') return '';
+  return a.length>6?'\u2026'+a.slice(-6):a;
+}
 
 /* ── 编辑保护：有人在输备注/弹窗开着 → 本轮自动刷新跳过 ── */
 function _csHasUnsaved(){
@@ -205,6 +297,9 @@ async function loadCases(){
     var res=await apiFetch('/api/cases/active');
     var d=await res.json();
     _csRows=d.cases||[];
+    _csSummary=d.summary||{};
+    _csEff=d.effectiveness||null;
+    _csTk=d.takeover_stats||null;
     _csLoaded=true;
     csRender();
   }catch(e){
@@ -222,37 +317,136 @@ function csSetFilter(f){
   for(var i=0;i<chips.length;i++){chips[i].classList.toggle('on',chips[i].getAttribute('data-cf')===f);}
   csRender();
 }
-function csSetSrc(v){_csSrc=v;csRender();}
+function csAdvFilter(i){
+  /* 建议条点击＝按该分桶的复发会话过滤（切到「全部」视角，历史结案也看得见） */
+  var a=((_csEff&&_csEff.alerts)||[])[i];
+  if(!a||!(a.sample_uids||[]).length) return false;
+  _csUidFilter=new Set((a.sample_uids||[]).map(String));
+  var sel=document.getElementById('cs-src-filter');
+  if(sel)sel.value='all';
+  _csSrc='all';
+  csSetFilter('all');
+  return false;
+}
+function csAdvClear(){
+  _csUidFilter=null;
+  csRender();
+}
+function csSetSrc(v){
+  _csSrc=v;
+  /* 媒体质疑筛选下亮出「人设级质疑聚合」入口——个案处理沉淀到供给侧决策（ops 图文一致性卡） */
+  var lk=document.getElementById('cs-ops-link');
+  if(lk)lk.style.display=(v==='media_complaint')?'':'none';
+  csRender();
+}
 function csSetQ(v){_csQ=(v||'').toLowerCase();csRender();}
 
 function _csMatch(c){
+  /* 演练号段案例：只在来源=「演练数据」下可见（测试残影不进日常跟进面） */
+  if(_csSrc==='drill'){ if(!c.drill) return false; }
+  else if(c.drill) return false;
+  /* P8：建议条点击后的「复发会话」过滤（跨其余筛选生效，chip 可清） */
+  if(_csUidFilter&&!_csUidFilter.has(String(c.user_id||''))) return false;
   if(_csFilter==='open'&&c.closed) return false;
   if(_csFilter==='closed'&&!c.closed) return false;
   if(_csFilter==='mine'&&(c.closed||!window.__csMe||(c.claimed_by||'')!==window.__csMe)) return false;
   if(_csFilter==='risk'&&(c.closed||!(c.at_risk||c.severity>=3))) return false;
-  if(_csSrc!=='all'&&(c.source||'intent_chain')!==_csSrc) return false;
+  if(_csSrc!=='all'&&_csSrc!=='drill'&&(c.source||'intent_chain')!==_csSrc) return false;
   if(_csQ){
-    var hay=((c.case_id||'')+' '+(c.user_id||'')+' '+(c.chat_title||'')+' '+(c.last_message||'')+' '+(c.last_reply||'')+' '+(c.note||'')+' '+(c.reason||'')).toLowerCase();
+    var hay=((c.case_id||'')+' '+(c.user_id||'')+' '+(c.chat_title||'')+' '+(c.peer_name||'')+' '+(c.account_id||'')+' '+(c.last_message||'')+' '+(c.last_reply||'')+' '+(c.note||'')+' '+(c.reason||'')).toLowerCase();
     if(hay.indexOf(_csQ)<0) return false;
   }
   return true;
 }
 
+function _csDur(sec){
+  sec=Math.max(0,Number(sec||0));
+  if(sec<3600) return window.Tf('cases.dur.min',{n:Math.max(1,Math.round(sec/60))});
+  if(sec<172800) return window.Tf('cases.dur.hour',{n:(sec/3600).toFixed(1)});
+  return window.Tf('cases.dur.day',{n:(sec/86400).toFixed(1)});
+}
+
 function _csCounts(){
-  var t=_csRows.length,o=0,r=0,cl=0,nt=0,mine=0;
+  var t=0,o=0,r=0,cl=0,nt=0,mine=0;
   var dayStart=new Date();dayStart.setHours(0,0,0,0);
-  var d0=dayStart.getTime()/1000;
+  var d0=dayStart.getTime()/1000, nowSec=Date.now()/1000;
+  var oldestOpen=0, respSum=0, respN=0;
   for(var i=0;i<_csRows.length;i++){
     var c=_csRows[i];
+    if(c.drill) continue;   /* 计数一律排除演练数据（与徽标/看门狗同口径） */
+    t++;
     if(c.closed){cl++;}else{
       o++;
       if(c.at_risk||c.severity>=3)r++;
       if(window.__csMe&&(c.claimed_by||'')===window.__csMe)mine++;
+      if(!c.claimed_by&&(c.created_at||0)>0) oldestOpen=Math.max(oldestOpen, nowSec-c.created_at);
     }
     if((c.created_at||0)>=d0)nt++;
+    if((c.claimed_at||0)>=d0&&(c.created_at||0)>0&&c.claimed_at>=c.created_at){
+      respSum+=(c.claimed_at-c.created_at);respN++;
+    }
   }
   var set=function(id,v){var el=document.getElementById(id);if(el)el.textContent=v;};
   set('cs-n-all',t);set('cs-n-open',o);set('cs-n-mine',mine);set('cs-n-risk',r);set('cs-n-closed',cl);set('cs-new-today',nt);
+  /* 时效两枚：最老无人认领案龄 / 今日「开案→认领」平均耗时（无数据即隐藏，不摆空壳） */
+  var op=document.getElementById('cs-oldest-pill');
+  if(op){ op.style.display=oldestOpen>0?'':'none'; if(oldestOpen>0)set('cs-oldest',_csDur(oldestOpen)); }
+  var ap=document.getElementById('cs-avgresp-pill');
+  if(ap){ ap.style.display=respN>0?'':'none'; if(respN>0)set('cs-avgresp',_csDur(respSum/respN)); }
+  /* P4：看板摘要同源（媒体 SLA / 演练残影）——有待办才亮，零噪音 */
+  var ms=Number((_csSummary&&_csSummary.media_stale)||0);
+  var mp=document.getElementById('cs-media-stale-pill');
+  if(mp){ mp.style.display=ms>0?'':'none'; if(ms>0)set('cs-media-stale',ms); }
+  var od=Number((_csSummary&&_csSummary.open_drill)||0);
+  var dp=document.getElementById('cs-drill-pill');
+  if(dp){ dp.style.display=od>0?'':'none'; if(od>0)set('cs-drill-open',od); }
+  /* P7：复发回环建议条（样本够且复发率高的处置分桶才点名，零噪音）
+     P8：带 sample_uids 的行可点击 → 直接过滤出复发会话（chip 可清） */
+  var adv=document.getElementById('cs-advice');
+  if(adv){
+    var alerts=(_csEff&&_csEff.alerts)||[];
+    if(alerts.length){
+      var html=alerts.map(function(a,i){
+        var line='⚠ '+esc(window.Tf('cases.eff.line',{
+          b:_csResLabel(a.bucket),r:a.recurred,m:a.matured,
+          p:Math.round((a.rate||0)*100)}));
+        if((a.sample_uids||[]).length){
+          line+=' <a href="#" onclick="return csAdvFilter('+i+')" style="color:var(--p);font-weight:600;text-decoration:none">'+window.T('cases.eff.view')+'</a>';
+        }
+        return line;
+      }).join('<br>');
+      if(_csUidFilter){
+        html+='<div style="margin-top:.35rem"><span class="cs-chip on" style="cursor:pointer" onclick="csAdvClear()">'+window.T('cases.eff.filtering')+' ✕</span></div>';
+      }
+      adv.innerHTML=html;
+      adv.style.display='';
+    } else {
+      adv.style.display='none';
+      _csUidFilter=null;   /* 告警消失 → 残留过滤一并清（防「看不见的筛子」） */
+    }
+  }
+  /* P7：人工接管闭环（结案「转人工」→ 回流时长）——有数据才亮 */
+  var tkp=document.getElementById('cs-takeover-pill');
+  if(tkp){
+    if(_csTk&&Number(_csTk.count||0)>0){
+      var bits=[window.Tf('cases.takeover.count',{n:_csTk.count})];
+      if(_csTk.median_hours!=null)bits.push(window.Tf('cases.takeover.median',{h:_csTk.median_hours}));
+      if(Number(_csTk.open||0)>0)bits.push(window.Tf('cases.takeover.open',{n:_csTk.open}));
+      var tv=document.getElementById('cs-takeover-val');
+      if(tv)tv.textContent=bits.join(' · ');
+      tkp.style.display='';
+    } else tkp.style.display='none';
+  }
+}
+function _csResLabel(bucket){
+  bucket=String(bucket||'');
+  if(!bucket) return '';
+  var k='cases.res.'+bucket;
+  var v=window.T(k);
+  if(v!==k) return v;
+  var k2='ov2_cs_res_'+bucket;
+  v=window.T(k2);
+  return (v!==k2)?v:bucket;
 }
 
 function csRenderCard(c,idx,sample){
@@ -260,15 +454,52 @@ function csRenderCard(c,idx,sample){
   var cls='case-card sev-'+sev+(c.closed?' closed':'')+(sample?' cs-sample':'');
   var badges='<span class="badge badge-sev-'+sev+'">'+esc(sevLabel(sev))+'</span>'
     +'<span class="badge badge-src">'+esc(srcLabel(c.source||'intent_chain'))+'</span>'
+    +(c.drill?'<span class="badge badge-drill">🧪 '+window.T('cases.drill_badge')+'</span>':'')
     +(c.at_risk&&!c.closed?'<span class="badge badge-risk">⚠ '+window.T('cases_risk')+'</span>':'')
     +(c.escalation?'<span class="badge badge-esc">'+window.T('cases_escalated')+'</span>':'')
     +(c.claimed_by?'<span class="badge badge-claim" title="'+window.T('cases.claim.by')+'">👤 '+esc(c.claimed_by)+'</span>':'')
-    +(c.closed?'<span class="badge badge-closed">'+window.T('cases_closed')+'</span>':'');
-  var userLine=esc((c.user_id||'-').slice(-8))+(c.chat_title?' · '+esc(c.chat_title):'');
+    +(c.closed?'<span class="badge badge-closed">'+window.T('cases_closed')+'</span>':'')
+    +(c.closed&&c.resolution_bucket?'<span class="badge badge-res">'+esc(_csResLabel(c.resolution_bucket))+'</span>':'');
+  /* 身份行：平台徽标 + 账号（哪个号出的事）→ 客户（名字 + id 尾段） */
+  var uidTail=esc(String(c.user_id||'-').split(':').pop().slice(-10));
+  var peer=c.peer_name||c.chat_title||'';
+  var identHtml='';
+  var pb=platBadge(c.platform);
+  if(pb) identHtml+=pb;
+  var acct=acctShort(c.account_id);
+  if(acct) identHtml+='<span class="case-acct" title="'+esc(c.account_id||'')+'">'+esc(acct)+'</span>';
+  if(identHtml) identHtml+='<span class="case-arrow">→</span>';
+  identHtml+=peer
+    ?('<span class="case-peer">'+esc(peer)+'</span><span class="case-uid">'+uidTail+'</span>')
+    :('<span class="case-peer">'+uidTail+'</span>');
+  /* 时间锚点＝最近一次信号（不是开案时间——老案刚复发必须能看出来）；
+     悬停给「立案 / 最近信号」两个绝对时刻 */
   var ts=c.created_at||c.last_active;
-  var timeHtml='<span class="case-time" title="'+esc(c.last_active?window.wsFmtDateTime(c.last_active):'')+'">'+esc(fmtRel(ts))+'</span>';
+  var lastSig=Number(c.last_signal_at||0)||ts;
+  var tip=[];
+  if(c.created_at) tip.push(window.T('cases.opened_at')+' '+window.wsFmtDateTime(c.created_at));
+  if(c.last_signal_at&&Math.abs(c.last_signal_at-(c.created_at||0))>60) tip.push(window.T('cases.last_signal')+' '+window.wsFmtDateTime(c.last_signal_at));
+  var timeHtml='<span class="case-time" title="'+esc(tip.join(' · '))+'">'+esc(fmtRel(lastSig))+'</span>';
+  /* 信号计数：有事件时间线 → 可点 chip 展开；无（旧案）→ 原样灰字 */
   var sig=Number(c.signal_count||1);
-  var reason='<div class="case-reason">'+esc(c.reason||'')+(sig>1?'<span class="sig">'+esc(window.Tf('cases.signal_times',{n:sig}))+'</span>':'')+'</div>';
+  var evs=Array.isArray(c.events)?c.events:[];
+  var sigHtml='';
+  if(evs.length&&!sample){
+    sigHtml='<span class="sig-chip" onclick="csToggleTlIdx(event,'+idx+')" title="'+window.T('cases.timeline.title')+'">'+esc(window.Tf('cases.signal_times',{n:sig}))+' ▾</span>';
+  }else if(sig>1){
+    sigHtml='<span class="sig">'+esc(window.Tf('cases.signal_times',{n:sig}))+'</span>';
+  }
+  var reason='<div class="case-reason">'+esc(c.reason||'')+sigHtml+'</div>';
+  var tlHtml='';
+  if(evs.length&&!sample){
+    tlHtml='<div class="case-timeline" id="tl-'+esc(c.case_id)+'"><div class="tl-title">'+window.T('cases.timeline.title')+'</div>'
+      +evs.map(function(e){
+        return '<div class="tl-item"><span class="tl-ts">'+esc(e.ts?window.wsFmtDateTime(e.ts):'-')+'</span>'
+          +(e.label?'<span class="tl-lbl">'+esc(e.label)+'</span>':'')
+          +'<span class="tl-quote">'+(e.quote?esc(e.quote):'\u2014')+'</span></div>';
+      }).join('')
+      +'</div>';
+  }
   var meta='';
   var showSat=(c.source==='intent_chain'||c.source==='escalation');
   if(!c.closed&&(showSat||Number(c.consecutive_same||0)>2)){
@@ -295,7 +526,9 @@ function csRenderCard(c,idx,sample){
   var closedLine='';
   if(c.closed){
     closedLine='<div class="closed-line">'+window.T('cases.closed.at')+' '+esc(c.closed_at?window.wsFmtDateTime(c.closed_at):'-')
-      +' · '+window.T('cases.closed.res')+': '+(c.resolution?esc(c.resolution):window.T('cases.closed.none'))+'</div>';
+      +' · '+window.T('cases.closed.res')+': '+(c.resolution?esc(c.resolution):window.T('cases.closed.none'))
+      +(Number(c.mute_until||0)>Date.now()/1000?' · '+esc(window.Tf('cases.closed.muted',{t:window.wsFmtDateTime(c.mute_until)})):'')
+      +'</div>';
   }
   /* 动作按钮一律传「行索引」而非拼字符串参数——HTML 实体在属性里会被解码，
      拼接的引号能逃出 JS 字符串（注入面）；数字索引天然免疫。 */
@@ -309,7 +542,8 @@ function csRenderCard(c,idx,sample){
         :'<button class="btn btn-xs" onclick="csClaimIdx('+idx+')">👋 '+window.T('cases.claim')+'</button>';
     }
     actions='<div class="case-actions">'
-      +(c.conv_ref?'<button class="btn btn-xs" style="background:var(--p);color:var(--th-ink-inverse,#fff);border-color:var(--p)" onclick="csOpenConvIdx('+idx+')">'+window.T('cases.open_conv')+'</button>':'')
+      +(c.conv_ref?'<button class="btn btn-xs" onclick="csPreviewIdx('+idx+')" title="'+window.T('cases.preview.title')+'">👁 '+window.T('cases.preview')+'</button>':'')
+      +(c.conv_ref?'<button class="btn btn-xs" style="background:var(--p);color:var(--th-ink-inverse,#fff);border-color:var(--p)" onclick="csOpenConvIdx('+idx+')">'+window.T('cases.open_conv')+' ↗</button>':'')
       +claimBtn
       +'<input class="input case-note-input" id="note-'+esc(c.case_id)+'" placeholder="'+window.T('cases_note_ph')+'" />'
       +'<button class="btn btn-xs" data-help="btn_save" onclick="saveNoteIdx('+idx+')">'+window.T('cases_save_note')+'</button>'
@@ -320,8 +554,8 @@ function csRenderCard(c,idx,sample){
   var ribbon=sample?'<span class="cs-ribbon">'+window.T('cases.example.badge')+'</span>':'';
   var clickAttr=c.closed&&!sample?' onclick="csToggleClosed(this,event)"':'';
   return '<div class="'+cls+'" data-cid="'+esc(c.case_id)+'"'+clickAttr+'>'+ribbon
-    +'<div class="case-head">'+badges+'<span class="case-user">'+userLine+'</span>'+timeHtml+'</div>'
-    +reason+meta+closedLine+chain+bubbles+noteView+actions
+    +'<div class="case-head">'+badges+'<span class="case-user">'+identHtml+'</span>'+timeHtml+'</div>'
+    +reason+meta+closedLine+tlHtml+chain+bubbles+noteView+actions
     +'</div>';
 }
 
@@ -361,6 +595,8 @@ function csEmptyEdu(){
   var sample={case_id:'CASE-DEMO66-00000',user_id:'demo88664422',chat_title:'',
     source:'human_request',severity:2,reason:window.T('case.reason.human_request'),
     created_at:Date.now()/1000-7500,signal_count:2,
+    platform:'telegram',account_id:'8801234',peer_name:window.T('cases.example.peer'),
+    last_signal_at:Date.now()/1000-3200,events:[],drill:false,
     intent_chain:['greeting','direct_chat','complaint'],satisfaction:36,at_risk:true,
     consecutive_same:3,last_message:window.T('cases.example.user_msg'),
     last_reply:window.T('cases.example.ai_msg'),last_active:Date.now()/1000-7500,
@@ -383,11 +619,20 @@ function csEmptyEdu(){
 }
 
 /* ── 卡片动作（*Idx 变体供内联 onclick 用，见 csRenderCard 注） ── */
-function _csToast(msg){
+function _csToast(msg,action){
+  /* action={label,fn}（可选）→ toast 里附动作按钮（DOM API 构建，非 innerHTML 防注入） */
   var t=document.getElementById('cs-toast');
   if(!t)return;
-  t.textContent=msg;t.style.display='block';
-  clearTimeout(t.__h);t.__h=setTimeout(function(){t.style.display='none';},2600);
+  t.textContent=msg;
+  if(action&&action.label&&typeof action.fn==='function'){
+    var b=document.createElement('button');
+    b.className='btn btn-xs';b.style.marginLeft='.6rem';
+    b.textContent=action.label;
+    b.onclick=function(ev){if(ev)ev.stopPropagation();try{action.fn();}catch(_){}t.style.display='none';};
+    t.appendChild(b);
+  }
+  t.style.display='block';
+  clearTimeout(t.__h);t.__h=setTimeout(function(){t.style.display='none';},action?6500:2600);
 }
 async function _csClaim(cid,release){
   try{
@@ -404,16 +649,100 @@ async function _csClaim(cid,release){
 }
 function csClaimIdx(i){var c=(_csView||[])[i];if(c)_csClaim(c.case_id,false);}
 function csReleaseIdx(i){var c=(_csView||[])[i];if(c)_csClaim(c.case_id,true);}
-function csOpenConvIdx(i){var c=(_csView||[])[i];if(c)csOpenConv(c.conv_ref);}
+function csOpenConvIdx(i){var c=(_csView||[])[i];if(c)csOpenConv(c.conv_ref,c.case_id,c.anchor_mid||'');}
 function saveNoteIdx(i){var c=(_csView||[])[i];if(c)saveNote(c.case_id);}
 function closeCaseIdx(i){var c=(_csView||[])[i];if(c)closeCase(c.case_id);}
 function csCopyIdIdx(el,i){var c=(_csView||[])[i];if(c)csCopyId(el,c.case_id);}
-function csOpenConv(ref){
+function csToggleTlIdx(ev,i){
+  if(ev)ev.stopPropagation();
+  var c=(_csView||[])[i];if(!c)return;
+  var el=document.getElementById('tl-'+c.case_id);
+  if(el)el.classList.toggle('show');
+}
+function csOpenConv(ref,caseId,mid){
   if(!ref)return;
-  var url='/workspace?conv='+encodeURIComponent(ref);
+  /* 深链契约：conv=会话引用 + case=案号（工作台线程头出案例条、就地结案）
+     + mid=质疑气泡消息 id（有则直达高亮，无则工作台回落 quote 闪烁）+ src 归因 */
+  var url='/workspace?conv='+encodeURIComponent(ref)+'&src=cases'
+    +(caseId?('&case='+encodeURIComponent(caseId)):'')
+    +(mid?('&mid='+encodeURIComponent(mid)):'');
   /* 复用/聚焦唯一工作台窗口；helper 不可用（弹窗拦截等）回落旧 _blank 行为 */
   if(window.__openUniqueUrl && window.__openUniqueUrl(url,'workspace')) return;
   window.open(url,'_blank');
+}
+/* 跨浏览上下文组交接（_win_unique BroadcastChannel）：会话已被既有工作台窗口
+   接手，但浏览器不允许本页替用户聚焦那个标签页 → 明说，别让人以为点了没反应 */
+window.addEventListener('aitr:ws-handoff', function(){
+  _csToast(window.T('cases.handoff_toast'));
+});
+
+/* ── 会话预览抽屉（只读分诊；夜班大部分案例不必跳工作台） ── */
+var _csDrawerCase=null;
+function csPreviewIdx(i){var c=(_csView||[])[i];if(c)csOpenPreview(c);}
+async function csOpenPreview(c){
+  _csDrawerCase=c;
+  var ref=String(c.conv_ref||'');
+  var mask=document.getElementById('cs-drawer-mask'), dr=document.getElementById('cs-drawer');
+  var body=document.getElementById('cs-drawer-body'), sub=document.getElementById('cs-drawer-sub');
+  if(!mask||!dr||!body)return;
+  mask.classList.add('show');dr.classList.add('show');
+  var peer=c.peer_name||c.chat_title||String(c.user_id||'').split(':').pop();
+  sub.innerHTML=platBadge(c.platform)+' <b>'+esc(peer)+'</b>'
+    +(acctShort(c.account_id)?' · '+window.T('cases.acct')+' <span style="font-family:Consolas,monospace">'+esc(acctShort(c.account_id))+'</span>':'')
+    +' · '+esc(c.case_id||'');
+  body.innerHTML='<div style="text-align:center;color:var(--t3);padding:1.6rem"><span class="spin" style="display:inline-block;width:16px;height:16px;border:2px solid var(--bd);border-top-color:var(--p);border-radius:50%;animation:csspin .8s linear infinite"></span></div>';
+  var parts=ref.split(':');
+  if(parts.length<3){
+    body.innerHTML='<div style="color:var(--t3);font-size:.8rem">'+window.T('cases.preview.fail')+'</div>';
+    return;
+  }
+  var chatKey=parts.slice(2).join(':');
+  try{
+    var r=await apiFetch('/api/unified-inbox/thread?platform='+encodeURIComponent(parts[0])
+      +'&account_id='+encodeURIComponent(parts[1])+'&chat_key='+encodeURIComponent(chatKey)+'&limit=30',
+      undefined,{timeoutMs:15000});
+    var d=null;try{d=await r.json();}catch(_){}
+    if(_csDrawerCase!==c)return;   /* 已切换到别的案例预览，丢弃过期结果 */
+    if(!r.ok){
+      body.innerHTML='<div style="color:var(--red);font-size:.8rem">'+esc((d&&d.detail)||window.T('cases.preview.fail'))+'</div>';
+      return;
+    }
+    var msgs=(d&&d.messages)||[];
+    if(!msgs.length){
+      body.innerHTML='<div style="color:var(--t3);font-size:.8rem">'+window.T('cases.preview.empty')+'</div>';
+      return;
+    }
+    /* 立案信号 → 气泡高亮：优先 mid（精确）→ 回落 quote 前 18 字包含匹配 */
+    var mids={}; (c.events||[]).forEach(function(e){var id=String(e.mid||''); if(id) mids[id]=1;});
+    if(c.anchor_mid) mids[String(c.anchor_mid)]=1;
+    var quotes=(c.events||[]).map(function(e){return String(e.quote||'').slice(0,18);}).filter(Boolean);
+    var hitEl=null;
+    body.innerHTML=msgs.map(function(m){
+      var t=String(m.text||'');
+      var mid=String(m.message_id||m.platform_msg_id||'');
+      var hit=!!(mid&&mids[mid])||(t&&quotes.some(function(q){return t.indexOf(q)>=0;}));
+      var out=(m.direction==='out');
+      var html='<div class="bubble '+(out?'ai':'user')+(hit?' hit':'')+'"'+(mid?(' data-mid="'+esc(mid)+'"'):'')+'><span class="who">'+(out?'AI':window.T('cases_user'))+'</span>'
+        +esc(t||'-')
+        +'<span class="bts">'+esc(m.ts?window.wsFmtDateTime(m.ts):'')+'</span></div>';
+      return html;
+    }).join('');
+    hitEl=body.querySelector('.bubble.hit');
+    if(hitEl) try{ hitEl.scrollIntoView({block:'center'}); }catch(_){ body.scrollTop=body.scrollHeight; }
+    else body.scrollTop=body.scrollHeight;
+  }catch(e){
+    if(_csDrawerCase===c) body.innerHTML='<div style="color:var(--red);font-size:.8rem">'+esc(String(e))+'</div>';
+  }
+}
+function csDrawerClose(){
+  var m=document.getElementById('cs-drawer-mask'), d=document.getElementById('cs-drawer');
+  if(m)m.classList.remove('show');
+  if(d)d.classList.remove('show');
+  _csDrawerCase=null;
+}
+function csDrawerOpenConv(){
+  var c=_csDrawerCase;
+  if(c){ csOpenConv(c.conv_ref,c.case_id,c.anchor_mid||''); csDrawerClose(); }
 }
 function csCopyId(el,cid){
   var done=function(){
@@ -461,36 +790,121 @@ function closeCase(cid){
   if(m)m.style.display='flex';
   if(ta)setTimeout(function(){ta.focus();},50);
 }
+function _csMuteRow(show){
+  var mr=document.getElementById('cs-mute-row');
+  var cb=document.getElementById('cs-mute-fa');
+  if(mr)mr.style.display=show?'flex':'none';
+  if(!show&&cb)cb.checked=false;
+}
+function _csTakeoverRow(show){
+  var tr=document.getElementById('cs-takeover-row');
+  var cb=document.getElementById('cs-takeover-cb');
+  if(tr)tr.style.display=show?'flex':'none';
+  if(!show&&cb)cb.checked=false;
+}
+function _csCloseRowByCid(){
+  for(var i=0;i<(_csRows||[]).length;i++){
+    if(_csRows[i].case_id===_csCloseCid) return _csRows[i];
+  }
+  return null;
+}
 function csQuickRes(btn){
+  /* P4：点快捷标签＝定主因（覆盖，不再逗号堆叠——分桶观测才稳） */
   var ta=document.getElementById('cs-close-res');
   if(!ta)return;
-  var t=(btn.textContent||'').trim();
-  ta.value=ta.value?(ta.value.replace(/[,，]\s*$/,'')+', '+t):t;
+  ta.value=(btn.textContent||'').trim();
+  var bucket=btn.getAttribute('data-bucket')||'';
+  ta.setAttribute('data-bucket', bucket);
+  document.querySelectorAll('#cs-close-modal .cs-quick button').forEach(function(b){
+    b.classList.toggle('active', b===btn);
+  });
+  /* P5：误报标签亮出「同类静默」勾选（运营显式决定，不自动开）
+     P6：转人工标签亮出「AI 暂停/人工接管」勾选（会话可定位才有意义） */
+  _csMuteRow(bucket==='false_alarm');
+  var row=_csCloseRowByCid();
+  _csTakeoverRow(bucket==='handoff'&&!!(row&&row.conv_ref));
   ta.focus();
 }
 function csCloseCancel(){
   var m=document.getElementById('cs-close-modal');
   if(m)m.style.display='none';
   _csCloseCid='';
+  var ta=document.getElementById('cs-close-res');
+  if(ta) ta.removeAttribute('data-bucket');
+  document.querySelectorAll('#cs-close-modal .cs-quick button').forEach(function(b){
+    b.classList.remove('active');
+  });
+  _csMuteRow(false);
+  _csTakeoverRow(false);
 }
 async function csCloseConfirm(){
   if(!_csCloseCid)return csCloseCancel();
   var ta=document.getElementById('cs-close-res');
   var res=ta?ta.value.trim():'';
-  await apiFetch('/api/cases/'+encodeURIComponent(_csCloseCid)+'/close',{
+  var cb=document.getElementById('cs-mute-fa');
+  var muteH=(cb&&cb.checked)?24:0;
+  var tcb=document.getElementById('cs-takeover-cb');
+  var takeover=!!(tcb&&tcb.checked);
+  /* 结案前先抓行——handoff 后 toast 里给「打开会话」直达（刷新后行会淡出） */
+  var row=_csCloseRowByCid();
+  var r=await apiFetch('/api/cases/'+encodeURIComponent(_csCloseCid)+'/close',{
     method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({resolution:res})
+    body:JSON.stringify({resolution:res,mute_hours:muteH,takeover:takeover})
   },{timeoutMs:60000});
+  try{
+    var d=r&&r.ok?await r.json():null;
+    if(d&&d.resolution_bucket){
+      var msg=window.T('cases.close.ok_bucket')+' · '+_csResLabel(d.resolution_bucket);
+      if(Number(d.muted_hours||0)>0) msg+=' · '+window.Tf('cases.close.mute_applied',{n:Number(d.muted_hours)});
+      if(d.takeover) msg+=' · '+window.T('cases.close.takeover_ok');
+      /* 版本错位守卫：勾了接管但服务端没确认（旧后端/新前端错位、store 未挂载）
+         → 明说未生效，坐席去工作台手动暂停，不留「以为停了其实没停」的静默谎言 */
+      else if(takeover) msg+=' · '+window.T('cases.close.takeover_pending');
+      var act=null;
+      if(d.resolution_bucket==='handoff'&&row&&row.conv_ref){
+        act={label:window.T('cases.open_conv')+' ↗',
+             fn:(function(cr,cid,mid){return function(){csOpenConv(cr,cid,mid);};})(row.conv_ref,row.case_id,row.anchor_mid||'')};
+      }
+      _csToast(msg,act);
+    }
+  }catch(_){}
   csCloseCancel();
   loadCases();
 }
+async function csCloseDrill(){
+  if(!window.confirm(window.T('cases.drill.cleanup_confirm'))) return;
+  try{
+    var r=await apiFetch('/api/cases/close-drill',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({})
+    },{timeoutMs:60000});
+    var d=r&&r.ok?await r.json():null;
+    var n=(d&&d.closed!=null)?Number(d.closed):0;
+    _csToast(window.Tf('cases.drill.cleanup_ok',{n:n}));
+  }catch(e){_csToast(String(e));}
+  loadCases();
+}
+/* 手改结案原因 → 快捷标签高亮失效（分桶以服务端文本分类为准）+ 勾选行一并收起 */
+(function(){
+  var ta=document.getElementById('cs-close-res');
+  if(!ta||ta._csBound) return;
+  ta._csBound=1;
+  ta.addEventListener('input',function(){
+    ta.removeAttribute('data-bucket');
+    document.querySelectorAll('#cs-close-modal .cs-quick button').forEach(function(b){
+      b.classList.remove('active');
+    });
+    _csMuteRow(false);
+    _csTakeoverRow(false);
+  });
+})();
 
 /* 备注框失焦且无未保存改动 → 补一轮刷新（把暂停的那轮补回来） */
 document.getElementById('case-list').addEventListener('focusout',function(){
   setTimeout(function(){ if(!_csHasUnsaved())loadCases(); },200);
 });
 document.addEventListener('keydown',function(e){
-  if(e.key==='Escape')csCloseCancel();
+  if(e.key==='Escape'){csCloseCancel();csDrawerClose();}
 });
 
 loadCases();

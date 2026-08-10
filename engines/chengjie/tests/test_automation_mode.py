@@ -35,7 +35,11 @@ def test_maybe_bootstrap_persists_auto_ai():
     mode = maybe_bootstrap_automation_mode(
         store, cid, _cfg(automation_mode="auto_ai"))
     assert mode == "auto_ai"
-    store.set_automation_mode.assert_called_once_with(cid, "auto_ai")
+    # 2026-08-09 断言随 source 打标落地更新：bootstrap 写入带来源标（可解释性
+    # 链路的一环——「谁把档位写成这样」）；旧 store 无该形参时模块内有
+    # TypeError 回落，MagicMock 不会触发回落故只会收到带 source 的一次调用。
+    store.set_automation_mode.assert_called_once_with(
+        cid, "auto_ai", source="bootstrap")
 
 
 def test_bootstrap_respects_explicit_mode():

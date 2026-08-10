@@ -13,6 +13,13 @@ App 上回过的客户，工作台仍停在客户那条「未回复」上 → �
 - 去重：同 ``message.id`` 镜像两次（发送侧已镜像 + 轮询又看到）只有一条消息；
 - 时间闸门：过老的 outgoing 消息不镜像（防重启回灌远古历史）；
 - 入站行为完全不变（回归保护）。
+
+媒体归档段（2026-08-04，修「手机发图坐席只见『[图片]』占位」）：
+
+- ``mirror_outgoing_media`` 关（默认）→ 严格旧行为：占位文字、零下载 RPC、无媒体字段；
+- 开 → ``media_type`` 恒结构化落库；策略放行的类型真下载得 ``media_ref``（坐席可见图）；
+- 下载失败/超限/类型未放行 → 退化为 ref 空的媒体行，**消息不丢**；
+- caption 与媒体并存时两者都保留（修旧路径「有配文的图整条丢媒体语义」的潜伏缺口）。
 """
 
 from __future__ import annotations
@@ -33,15 +40,23 @@ PEER = 5433982810
 
 # ── 假 client 装配（沿用 tests/test_message_dedup.py 的最小 TelegramClient 构造法）──
 
-def _mk_tc(*, mirror_outgoing: bool, mirror_inbox: bool = True):
+def _mk_tc(*, mirror_outgoing: bool, mirror_inbox: bool = True, media_cfg=None):
     from src.client.telegram_client import TelegramClient
     tc = TelegramClient.__new__(TelegramClient)
+    _pf = {"mirror_outgoing": mirror_outgoing}
+    if media_cfg is not None:
+        _pf["mirror_outgoing_media"] = media_cfg
     tc.config = SimpleNamespace(get_telegram_config=lambda: {
         "process_private": True,
-        "poll_fallback": {"mirror_outgoing": mirror_outgoing},
+        "poll_fallback": _pf,
     })
     tc._rate_limiter = SimpleNamespace(enabled=False)
     tc._msg_dedup = MessageDedup()
+    # 水位闸属性（_poll_inbound_once 入站路径必经；与 test_message_dedup 的
+    # 最小构造同款——缺了会 AttributeError 被 per-dialog try 吞掉，表现为
+    # 入站管道静默不触发）
+    from src.client.message_dedup import PollWatermark as _PW
+    tc._poll_watermark = _PW()
     tc._boot_timestamp = time.time() - 3600
     tc.user_info = SimpleNamespace(id=999)
     tc.account_id = ACCOUNT
@@ -152,7 +167,10 @@ async def test_mirrored_ts_is_message_date_not_discovery_time(wired_store):
 
 @pytest.mark.asyncio
 async def test_media_without_caption_mirrors_placeholder(wired_store):
-    """无正文的出站媒体 → 落「[图片]」占位（刻意不下载媒体本体，见实现 docstring）。"""
+    """媒体归档关（默认）：无正文的出站媒体 → 落「[图片]」占位、零下载、无媒体字段。
+
+    这是 ``mirror_outgoing_media`` 缺省时的严格向后兼容行为。
+    """
     store, _ = wired_store
     tc = _mk_tc(mirror_outgoing=True)
     _wire_dialogs(tc, [_mk_dialog(mid=641, outgoing=True, text=None,
@@ -165,6 +183,7 @@ async def test_media_without_caption_mirrors_placeholder(wired_store):
     assert rows[0]["text"] == "[图片]"
     assert rows[0]["direction"] == "out"
     assert rows[0]["media_ref"] == ""                # 没为镜像多打一次下载 RPC
+    assert rows[0]["media_type"] == ""               # 也不落结构化媒体字段（旧口径）
 
 
 # ── 红线：出站镜像不触发任何自动化 ────────────────────────────────────────────
@@ -329,3 +348,198 @@ async def test_respects_mirror_inbox_master_switch(wired_store):
     await tc._poll_inbound_once(30, catchup=600)
 
     assert store.get_conversation(_conv_id()) is None
+
+
+# ═════════ 媒体归档（mirror_outgoing_media，2026-08-04）═════════════════════
+#
+# 修「手机发图坐席只见『[图片]』占位」：开关开启后镜像行结构化落 media_type，
+# 策略放行的类型经 download_tg_media 归档得 media_ref → 前端直接渲染 <img>。
+
+from src.client.telegram_client import parse_mirror_outgoing_media_cfg  # noqa: E402
+
+_URL = "/static/protocol_media/telegram/out_accTG_ab12cd.jpg"
+
+
+# ── 配置解析纯函数 ───────────────────────────────────────────────────────────
+
+def test_media_cfg_absent_or_false_is_disabled():
+    assert parse_mirror_outgoing_media_cfg({}) == (False, 0, frozenset())
+    assert parse_mirror_outgoing_media_cfg(
+        {"mirror_outgoing_media": False}) == (False, 0, frozenset())
+    assert parse_mirror_outgoing_media_cfg(None) == (False, 0, frozenset())
+    assert parse_mirror_outgoing_media_cfg(
+        {"mirror_outgoing_media": "yes"}) == (False, 0, frozenset())  # 非法类型=关
+
+
+def test_media_cfg_bool_true_uses_builtin_defaults():
+    on, max_bytes, kinds = parse_mirror_outgoing_media_cfg(
+        {"mirror_outgoing_media": True})
+    assert on is True
+    assert max_bytes == 5 * 1024 * 1024
+    assert kinds == frozenset({"image", "sticker", "voice"})
+
+
+def test_media_cfg_dict_implies_enabled_and_overrides():
+    on, max_bytes, kinds = parse_mirror_outgoing_media_cfg({
+        "mirror_outgoing_media": {"max_mb": 10, "kinds": ["Image", " VOICE ", ""]},
+    })
+    assert on is True
+    assert max_bytes == 10 * 1024 * 1024
+    assert kinds == frozenset({"image", "voice"})    # 归一化小写、剔空串
+
+
+def test_media_cfg_dict_explicit_disable_and_edge_values():
+    assert parse_mirror_outgoing_media_cfg(
+        {"mirror_outgoing_media": {"enabled": False, "max_mb": 10}},
+    ) == (False, 0, frozenset())
+    # max_mb: 0 = 不限体积（对齐 download_tg_media(max_bytes=0) 语义）
+    on, max_bytes, _ = parse_mirror_outgoing_media_cfg(
+        {"mirror_outgoing_media": {"max_mb": 0}})
+    assert on is True and max_bytes == 0
+    # max_mb 非法 → 回落默认；kinds 非法类型 → 回落默认；kinds: [] = 只结构化不下载
+    on, max_bytes, kinds = parse_mirror_outgoing_media_cfg(
+        {"mirror_outgoing_media": {"max_mb": "abc", "kinds": "image"}})
+    assert on is True and max_bytes == 5 * 1024 * 1024
+    assert kinds == frozenset({"image", "sticker", "voice"})
+    on, _, kinds = parse_mirror_outgoing_media_cfg(
+        {"mirror_outgoing_media": {"kinds": []}})
+    assert on is True and kinds == frozenset()
+
+
+# ── 行为：下载成功 → 坐席可见图 ─────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_media_on_photo_gets_media_ref(wired_store, monkeypatch):
+    """开关开 + 图片下载成功 → 行带 media_type/media_ref（前端据此渲染 <img>），
+    正文保持空（媒体行新口径），会话预览自动补「[图片]」标记。"""
+    store, cbs = wired_store
+    dl = AsyncMock(return_value=("image", _URL))
+    monkeypatch.setattr(pb, "download_tg_media", dl)
+
+    tc = _mk_tc(mirror_outgoing=True, media_cfg=True)
+    _wire_dialogs(tc, [_mk_dialog(mid=801, outgoing=True, text=None,
+                                  photo=object())])
+    await tc._poll_inbound_once(30, catchup=600)
+
+    rows = store.list_messages(_conv_id())
+    assert len(rows) == 1
+    assert rows[0]["direction"] == "out"
+    assert rows[0]["media_type"] == "image"
+    assert rows[0]["media_ref"] == _URL
+    assert rows[0]["text"] == ""                     # 形态语义由 media_type 承载
+    conv = store.get_conversation(_conv_id())
+    assert conv["last_text"] == "[图片]"             # 预览列仍可读（media_preview_text）
+    assert conv["unread"] == 0
+    assert cbs == []                                 # 红线：媒体行同样零自动化
+    # 下载参数：账号 + 体积上限透传
+    assert dl.await_args.kwargs.get("max_bytes") == 5 * 1024 * 1024
+
+
+@pytest.mark.asyncio
+async def test_media_on_caption_keeps_both_text_and_media(wired_store, monkeypatch):
+    """带配文的图：caption 与媒体字段都保留——修旧路径「有配文整条丢媒体语义」缺口。"""
+    store, _ = wired_store
+    monkeypatch.setattr(pb, "download_tg_media",
+                        AsyncMock(return_value=("image", _URL)))
+
+    tc = _mk_tc(mirror_outgoing=True, media_cfg=True)
+    _wire_dialogs(tc, [_mk_dialog(mid=802, outgoing=True, text=None,
+                                  caption="给你看下这个", photo=object())])
+    await tc._poll_inbound_once(30, catchup=600)
+
+    rows = store.list_messages(_conv_id())
+    assert rows[0]["text"] == "给你看下这个"
+    assert rows[0]["media_type"] == "image"
+    assert rows[0]["media_ref"] == _URL
+
+
+# ── 行为：下载失败/超限/未放行 → 退化为无归档媒体行，消息不丢 ────────────────
+
+@pytest.mark.asyncio
+async def test_media_on_download_failure_still_mirrors_structured_row(
+        wired_store, monkeypatch):
+    store, _ = wired_store
+    monkeypatch.setattr(pb, "download_tg_media",
+                        AsyncMock(return_value=("", "")))   # 硬失败
+
+    tc = _mk_tc(mirror_outgoing=True, media_cfg=True)
+    _wire_dialogs(tc, [_mk_dialog(mid=803, outgoing=True, text=None,
+                                  photo=object())])
+    await tc._poll_inbound_once(30, catchup=600)
+
+    rows = store.list_messages(_conv_id())
+    assert len(rows) == 1                            # 消息不丢
+    assert rows[0]["media_type"] == "image"          # 类型来自 tg_media_meta，不依赖下载
+    assert rows[0]["media_ref"] == ""
+
+
+@pytest.mark.asyncio
+async def test_media_on_oversize_keeps_type_without_ref(wired_store, monkeypatch):
+    """超限：download_tg_media 返回 (kind, '') → 保类型、无归档（与入站口径一致）。"""
+    store, _ = wired_store
+    monkeypatch.setattr(pb, "download_tg_media",
+                        AsyncMock(return_value=("image", "")))
+
+    tc = _mk_tc(mirror_outgoing=True, media_cfg={"max_mb": 1})
+    _wire_dialogs(tc, [_mk_dialog(mid=804, outgoing=True, text=None,
+                                  photo=object())])
+    await tc._poll_inbound_once(30, catchup=600)
+
+    rows = store.list_messages(_conv_id())
+    assert rows[0]["media_type"] == "image"
+    assert rows[0]["media_ref"] == ""
+
+
+@pytest.mark.asyncio
+async def test_media_on_kind_not_allowed_skips_download(wired_store, monkeypatch):
+    """kinds 未放行（视频）→ 不打下载 RPC，但仍结构化落 media_type（形态卡可见）。"""
+    store, _ = wired_store
+    dl = AsyncMock(return_value=("video", _URL))
+    monkeypatch.setattr(pb, "download_tg_media", dl)
+
+    tc = _mk_tc(mirror_outgoing=True, media_cfg=True)   # 默认 kinds 不含 video
+    _wire_dialogs(tc, [_mk_dialog(mid=805, outgoing=True, text=None,
+                                  video=object())])
+    await tc._poll_inbound_once(30, catchup=600)
+
+    rows = store.list_messages(_conv_id())
+    assert rows[0]["media_type"] == "video"
+    assert rows[0]["media_ref"] == ""
+    assert dl.await_count == 0                       # 一次下载 RPC 都没打
+
+
+@pytest.mark.asyncio
+async def test_media_off_never_calls_download(wired_store, monkeypatch):
+    """对照组：开关缺省 → 下载函数零调用（「默认零下载 RPC」不是靠运气）。"""
+    _store, _ = wired_store
+    dl = AsyncMock(return_value=("image", _URL))
+    monkeypatch.setattr(pb, "download_tg_media", dl)
+
+    tc = _mk_tc(mirror_outgoing=True)
+    _wire_dialogs(tc, [_mk_dialog(mid=806, outgoing=True, text=None,
+                                  photo=object())])
+    await tc._poll_inbound_once(30, catchup=600)
+
+    assert dl.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_media_publish_stats_recorded(wired_store, monkeypatch):
+    """成败进 outbound_mirror_stats（ops「📤 出站媒体归档」卡的数据源）。"""
+    from src.integrations.outbound_mirror_stats import get_outbound_mirror_stats
+    stats = get_outbound_mirror_stats()
+    stats.reset()
+    store, _ = wired_store
+    monkeypatch.setattr(pb, "download_tg_media",
+                        AsyncMock(side_effect=[("image", _URL), ("", "")]))
+
+    tc = _mk_tc(mirror_outgoing=True, media_cfg=True)
+    _wire_dialogs(tc, [_mk_dialog(mid=807, outgoing=True, text=None, photo=object()),
+                       _mk_dialog(mid=808, outgoing=True, text=None, photo=object(),
+                                  chat_id=PEER + 1)])
+    await tc._poll_inbound_once(30, catchup=600)
+
+    d = stats.dump()
+    assert d["total"] == 2 and d["fail"] == 1
+    assert d["by_platform"]["telegram"]["total"] == 2
+    stats.reset()                                    # 不给其他用例留脏计数

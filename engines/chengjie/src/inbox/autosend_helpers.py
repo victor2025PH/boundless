@@ -6,6 +6,7 @@ autosend_voice(assistant, platform, account_id, chat_key, text) -> bool：
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any  # noqa: F401
 
 
@@ -25,13 +26,16 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
     from src.inbox.voice_autosend import (
         resolve_voice_autosend_cfg,
         decide_voice, stage_voice_file,
+        effective_voice_block,
         record_voice_sent, record_voice_fallback,
         record_voice_decision,
         persona_allowed_for_voice,
         pop_synth_failure_reason,
         resolve_defer_during_image,
     )
-    _vb = resolve_voice_autosend_cfg(_cfg)
+    # 平台触发覆写（P1）：voice.platform_triggers = {platform: trigger}——
+    # 在唯一决策点套用，Messenger 置 never 即只关一个平台的语音。
+    _vb = effective_voice_block(resolve_voice_autosend_cfg(_cfg), platform)
     if not _vb.get("enabled"):
         return False
     # 反双发：仅对**编排器管理**的账号发语音。原生 standalone
@@ -44,6 +48,13 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
     _orch = _go(_cfg)
     if not _orch.owns_media(platform, account_id):
         return False
+    from src.inbox.voice_session_guard import (
+        resolve_voice_session_cfg as _rvsc,
+        should_quiet_after_voice as _sqav,
+        voice_peer_lang_conflict as _vplc,
+        mark_voice_delivered as _mvd,
+    )
+    _session_cfg = _rvsc(_vb)
     # 上下文信号采集：when_peer_voice 用 peer_voice;
     # smart 档额外用「频率 + 客户此刻情绪 + 危机 + 亲密度」做情境评分。
     # 一次 list_recent_messages 复用算 peer_voice + 频率 + 客户末条文本。
@@ -54,6 +65,9 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
     _peer_emo_int = -1.0
     _intimacy = 0.0
     _crisis_block = False
+    _cid = ""
+    _recent = []
+    _peer_lang = ""
     try:
         from src.inbox.normalizer import conv_id as _cidf
         _st = getattr(assistant, "inbox_store", None)
@@ -66,7 +80,7 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
             except Exception:
                 _win = 6
             _recent = _st.list_recent_messages(
-                _cid, limit=max(_win, 6)) or []
+                _cid, limit=max(_win, 12)) or []
             # peer_voice + 客户末条入站文本（危机判定用）
             for _m in reversed(_recent):
                 if str(_m.get("direction") or "in") == "in":
@@ -75,6 +89,11 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
                     ).lower() in ("voice", "audio")
                     _peer_text = str(_m.get("text") or "")
                     break
+            try:
+                from src.inbox.outbound_translate import peer_language_hint
+                _peer_lang = peer_language_hint(_st, _cid) or ""
+            except Exception:
+                _peer_lang = ""
             # recent_voice_ratio：近窗口 outbound 语音占比（频率刹车，保证"克制"）
             _outs = [
                 _m for _m in _recent
@@ -95,6 +114,26 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
                 # 子系统/可能未启用 → msg_count 归一近似，0~1）。
                 _mc = float(_cm.get("msg_count") or 0)
                 _intimacy = max(0.0, min(1.0, _mc / 50.0))
+                # P1-198 续（2026-08-02）：坐席人工「情绪低落」标注（TTL 内）→
+                # 语音安抚加权。voice_fitness 的 peer_emotion 轴只按强度计分
+                # （w=0.20），人工标注视同高强度负面（≥0.7）——「该被声音安抚」
+                # 跟随坐席判断；「积极开朗」不反向压低（不对称覆写）。
+                try:
+                    from src.inbox.effective_mood import (
+                        GATE_EMOTION_NEG,
+                        manual_negative_active,
+                        record_mood_consume,
+                        resolve_mood_steering_cfg,
+                    )
+                    _ms_v = resolve_mood_steering_cfg(_cfg)
+                    if _ms_v["enabled"] and manual_negative_active(
+                            _cm, now=time.time(),
+                            ttl_hours=_ms_v["ttl_hours"]):
+                        _peer_emo = GATE_EMOTION_NEG
+                        _peer_emo_int = max(_peer_emo_int, 0.7)
+                        record_mood_consume("voice")
+                except Exception:
+                    pass
             except Exception:
                 pass
             # 危机：对客户末条入站文本跑权威 detect_crisis（severe/
@@ -112,6 +151,17 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
                 _crisis_block = False
     except Exception:
         _peer_voice = False
+    # 跨草稿静默窗：语音已达且无新入站 → 本轮不再发语音（文本侧在 deliver 同闸）。
+    _vk0 = _cid or f"{platform}:{account_id}:{chat_key}"
+    if _sqav(
+        conv_key=_vk0, recent_messages=_recent,
+        quiet_after_sec=_session_cfg.get("quiet_after_sec", 90),
+    ):
+        record_voice_decision(False, "voice_quiet")
+        assistant.logger.info(
+            "[autosend voice] 判文字 reason=voice_quiet（语音已达无新入站）"
+            "platform=%s acct=%s", platform, account_id)
+        return False
     # 语言闸门：出站翻译生效（实际发出的译文 ≠ 人设原文 → 客户语言 ≠ 人设语言）时，
     # 仅当对方上一条也是语音（对等回应，说明对方听得懂人设语言）才继续；否则回落译文
     # 文本——给只打外语文字的客户发人设母语语音只会露馅。
@@ -123,6 +173,15 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
             "[autosend voice] 判文字 reason=lang_mismatch（出站翻译生效且对方"
             "未发语音）platform=%s acct=%s", platform, account_id)
         return False
+    # peer 语种硬闸（翻译关/失败时的盲区）：外语客户 + 念稿实质中文 → 拒语音。
+    if _session_cfg.get("peer_lang_gate", True) and not _peer_voice:
+        _pl_why = _vplc(str(text or ""), _peer_lang)
+        if _pl_why:
+            record_voice_decision(False, _pl_why)
+            assistant.logger.info(
+                "[autosend voice] 判文字 reason=%s peer_lang=%s platform=%s acct=%s",
+                _pl_why, _peer_lang or "?", platform, account_id)
+            return False
     # 客户点名要语音/唱歌（复用 wants_media 的 voice 轴）→ 强制语音（P0-5）。
     _peer_req_voice = False
     try:
@@ -201,6 +260,102 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
             "文本 platform=%s acct=%s", _real_pid or "?",
             platform, account_id)
         return False
+    # ── P0-4 分条语音（2026-08-03）：像真人一样连发 2-3 条短语音，替代 20-30s
+    # 一整条。stage_voice_parts 不满足（未开/文本短/切不出两条/任一条合成失败）
+    # → None → 走下方单条整段旧路径，行为绝不劣化。条间等待=「下一条要录完才能
+    # 发」的物理节奏（part_gap_seconds，确定性）；中途投递失败=已发算数、剩余丢弃
+    # （与 A 线 split_send 同语义——绝不重发已出口的条目）。
+    _staged_parts = None
+    try:
+        from src.inbox.voice_autosend import stage_voice_parts
+        _staged_parts = await stage_voice_parts(
+            _cfg, platform, account_id, _real_pid, text,
+            contact_key=str(chat_key))
+    except Exception:
+        assistant.logger.debug(
+            "[autosend voice] 分条 staging 异常 → 回落单条", exc_info=True)
+        _staged_parts = None
+    if _staged_parts and len(_staged_parts) >= 2:
+        from src.ai.persona_voice import persona_display_name as _pdn
+        from src.inbox.voice_autosend import part_gap_seconds as _pgap
+        _v_sender2 = _pdn(_real_pid)
+        _wl2 = getattr(assistant, "_web_loop", None)
+        _sp_cfg = _vb.get("split_send") if isinstance(
+            _vb.get("split_send"), dict) else {}
+        try:
+            _gap_max = float(_sp_cfg.get("gap_max_sec", 6.0) or 6.0)
+        except (TypeError, ValueError):
+            _gap_max = 6.0
+        _sent_n = 0
+        _total_dur = 0
+        for _idx, (_plocal, _purl, _pmeta) in enumerate(_staged_parts):
+            _pdur = 0
+            try:
+                from src.client.voice_sender import (
+                    probe_audio_duration_ms as _probe2,
+                )
+                _pdur = int(_probe2(_plocal) or 0)
+            except Exception:
+                _pdur = 0
+            _ptext = str(_pmeta.get("part_text") or "").strip() or str(text)
+            if _idx:
+                await asyncio.sleep(_pgap(_ptext, _pdur, gap_max_sec=_gap_max))
+
+            async def _pcoro(_pl=_plocal, _pu=_purl, _pt=_ptext):
+                return await _orch.send_media(
+                    platform, account_id, chat_key,
+                    media_path=_pl, media_url=_pu,
+                    media_type="voice", caption="",
+                    inbox_text=_pt, sender_name=_v_sender2)
+
+            if _wl2 is not None and _wl2.is_running():
+                _pf = asyncio.run_coroutine_threadsafe(_pcoro(), _wl2)
+                _pres = await asyncio.wrap_future(_pf)
+            else:
+                _pres = await _pcoro()
+            if not (isinstance(_pres, dict) and _pres.get("delivered")):
+                assistant.logger.warning(
+                    "[autosend voice] 分条第 %d/%d 条投递失败（已发 %d 条算数，"
+                    "剩余丢弃）platform=%s acct=%s",
+                    _idx + 1, len(_staged_parts), _sent_n, platform, account_id)
+                break
+            _sent_n += 1
+            _total_dur += _pdur
+        if _sent_n <= 0:
+            record_voice_fallback("deliver_failed")
+            assistant.logger.info(
+                "[autosend voice] 分条首条投递失败回落文本 platform=%s acct=%s",
+                platform, account_id)
+            return False
+        _first_meta = dict(_staged_parts[0][2] or {})
+        record_voice_sent(_total_dur, synth_meta={
+            **_first_meta,
+            "audio_duration_ms": _total_dur,
+            "persona_id": _real_pid,
+            "parts_total": len(_staged_parts),
+            "parts_sent": _sent_n,
+        })
+        assistant.logger.info(
+            "[autosend voice] 已分条发语音 parts=%d/%d total_dur=%sms "
+            "provider=%s pid=%s platform=%s acct=%s",
+            _sent_n, len(_staged_parts), _total_dur,
+            _first_meta.get("provider") or "?", _real_pid or "-",
+            platform, account_id)
+        _vk = _cid or f"{platform}:{account_id}:{chat_key}"
+        _mvd(_vk)
+        try:
+            from src.client.voice_burst_guard import note_voice_send as _nvs
+            # 分条按「每次投递」记窗；阈值 > max_parts 才告警（默认 3）
+            for _ in range(_sent_n):
+                _nvs(_vk, {
+                    "burst_alert": (_vb.get("burst_alert")
+                                   if isinstance(_vb.get("burst_alert"), dict)
+                                   else {"enabled": True}),
+                })
+        except Exception:
+            pass
+        return True
+
     # 至此策略已判定「该发语音」：合成/投递的成败计入指标。
     # P3：传 chat_key（端用户身份）→ 按会员档分层路由 TTS
     # 后端（VIP→旗舰，免费→降级省成本）；monetization 未就绪
@@ -217,6 +372,10 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
         return False
     _local, _url, _smeta = _staged
 
+    # P1-3：镜像行带「谁的音色」（语音人设显示名，best-effort 空串安全）
+    from src.ai.persona_voice import persona_display_name
+    _v_sender = persona_display_name(_real_pid)
+
     async def _vcoro():
         # caption="" → 客户收纯语音；inbox_text=text →
         # 坐席台会话里显示「自动语音念了什么」(转写)。
@@ -224,7 +383,7 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
             platform, account_id, chat_key,
             media_path=_local, media_url=_url,
             media_type="voice", caption="",
-            inbox_text=text)
+            inbox_text=text, sender_name=_v_sender)
 
     _wl = getattr(assistant, "_web_loop", None)
     if _wl is not None and _wl.is_running():
@@ -264,6 +423,17 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
                 "platform=%s acct=%s",
                 _smeta.get("provider"), _smeta.get("fallback_from"),
                 platform, account_id)
+        _vk = _cid or f"{platform}:{account_id}:{chat_key}"
+        _mvd(_vk)
+        try:
+            from src.client.voice_burst_guard import note_voice_send as _nvs
+            _nvs(_vk, {
+                "burst_alert": (_vb.get("burst_alert")
+                               if isinstance(_vb.get("burst_alert"), dict)
+                               else {"enabled": True}),
+            })
+        except Exception:
+            pass
     else:
         record_voice_fallback("deliver_failed")
         assistant.logger.info(
@@ -485,14 +655,15 @@ async def autosend_image(assistant, platform, account_id, chat_key, text,
         except Exception:
             _pname = ""
 
-        async def _caption(_kind, _subject, _scene="", _freshness="fresh"):
+        async def _caption(_kind, _subject, _scene="", _freshness="fresh",
+                           _wanted=""):
             from src.ai.companion_selfie import (
                 build_photo_caption_instruction as _bc,
             )
             return await _ai.chat(_bc(
                 _peer_text, kind=_kind, subject=_subject,
                 persona_name=_pname, scene=_scene,
-                freshness=_freshness))
+                freshness=_freshness, wanted_subject=_wanted))
 
     # 发送 marshalling：把 orch.send_media 投到 web loop（与语音同口径）。
     async def _send_fn(_mp, _mu, _mt, _cap, _inbox):
@@ -677,22 +848,35 @@ def _is_desktop_account(platform, account_id) -> bool:
 
 
 def build_autosend_translate_cb(assistant, web_app):
-    """构造 AutosendWorker 出站自动翻译回调（投递前把 AI 回复译成客户语言）。
+    """构造 AutosendWorker 出站翻译/语言硬闸回调（投递前的语言正确性最后防线）。
 
-    从 main.py initialize() 原样抽出（行为不变）：未启用/装配失败返回 None。
-    translation_service 懒取（worker 真正投递时早已挂到 web_app.state）。
+    两种模式（P1-198，2026-08-03）：
+      - ``translate.enabled=true``  → 常规出站翻译（旧行为）：译成客户语言 +
+        CJK 冲突 HOLD 护栏；
+      - ``translate.enabled=false`` 而 ``lang_gate.enabled``（默认开）→
+        **gate-only 语言硬闸**：常规消息原样放行（尊重运营关闭翻译的决定），
+        仅 CJK↔非 CJK 冲突时抢救翻译 / HOLD——修「翻译一关、7/31 的 CJK
+        护栏一起消失，错语言草稿裸奔」的防护空窗。
+    两者都关才返回 None。translation_service 懒取（worker 真正投递时早已挂到
+    web_app.state）。回调带 ``gate_only`` 属性供 status 快照如实上报模式。
     """
     try:
         from src.inbox.outbound_translate import (
+            parse_outbound_lang_gate_cfg as _parse_gate_cfg,
             parse_outbound_translate_cfg as _parse_otx_cfg,
         )
-        _otx_cfg = _parse_otx_cfg(assistant.config.config or {})
-        if not _otx_cfg.get("enabled"):
+        _cfg_root = assistant.config.config or {}
+        _otx_cfg = _parse_otx_cfg(_cfg_root)
+        _gate_cfg = _parse_gate_cfg(_cfg_root)
+        if not _otx_cfg.get("enabled") and not _gate_cfg.get("enabled"):
             return None
+        _gate_only = not _otx_cfg.get("enabled")
         _otx_src = _otx_cfg.get("source_lang") or "zh"
         _otx_style = _otx_cfg.get("style") or "chat"
 
-        async def _autosend_translate(item, _src=_otx_src, _style=_otx_style):
+        async def _autosend_translate(
+            item, _src=_otx_src, _style=_otx_style, _go=_gate_only,
+        ):
             from src.inbox.outbound_translate import (
                 translate_outbound_text as _tot,
             )
@@ -702,17 +886,22 @@ def build_autosend_translate_cb(assistant, web_app):
             return await _tot(
                 item, translation_service=_ts,
                 store=assistant.inbox_store,
-                source_lang=_src, style=_style)
+                source_lang=_src, style=_style, gate_only=_go)
 
-        assistant.logger.info(
-            "AutosendWorker 出站自动翻译已启用（src=%s）", _otx_src)
+        _autosend_translate.gate_only = _gate_only
+        if _gate_only:
+            assistant.logger.info(
+                "AutosendWorker 语言硬闸已启用（gate-only：常规翻译关闭，仅拦 CJK 冲突）")
+        else:
+            assistant.logger.info(
+                "AutosendWorker 出站自动翻译已启用（src=%s）", _otx_src)
         return _autosend_translate
     except Exception:
         assistant.logger.debug("出站自动翻译装配跳过", exc_info=True)
         return None
 
 
-def build_autosend_mark_read_cb(assistant):
+def build_autosend_mark_read_cb(assistant, *, always: bool = False):
     """构造 AutosendWorker 投递前「已读回执」回调（拟人「先看后回」）。
 
     真人一定是先看到消息（对端出现已读）、想一会儿、再回——此前全自动直接投递，
@@ -725,11 +914,16 @@ def build_autosend_mark_read_cb(assistant):
     「已讀不回」格外扎人，若哪天把它挪到入站阶段就会造出那个效果。
 
     ``inbox.l2_autosend.mark_read_before_reply``（默认 true）置 false 可关闭。
+    ``always=True`` 跳过该构造期开关（P1 2026-08-02）：AutosendWorker 在 bootstrap
+    只装配一次，构造期 return None 会把开关**冻结到重启**；worker 现自持运行时开关
+    （``apply_humanize_flags`` 可热更），故它要的是「回调永远在、开关在 worker 手里」。
+    其余按调用重建的消费方（reply_bubbles 逐条投递现建现用）保持默认 False——
+    它们的构造期检查每次投递都会重跑，本就等价于热读。
     与发送同口径：编排器 client 活在 web 线程 loop 上 → 跨线程调度执行。
     """
     _cfg = assistant.config.config or {}
     _as_cfg = ((_cfg.get("inbox") or {}).get("l2_autosend") or {})
-    if not bool(_as_cfg.get("mark_read_before_reply", True)):
+    if not always and not bool(_as_cfg.get("mark_read_before_reply", True)):
         return None
     from src.integrations.account_orchestrator import get_orchestrator as _go
 
@@ -771,19 +965,22 @@ def record_text_outreach(assistant, platform, account_id, chat_key, kind,
         pass
 
 
-def build_autosend_typing_cb(assistant):
+def build_autosend_typing_cb(assistant, *, always: bool = False):
     """构造 AutosendWorker 投递延迟期「正在输入」状态回调（拟人打字气泡）。
 
     真人回复前对端会看到「对方正在输入…」。此前全自动在打字延迟(3-12s)期间无任何提示，
     延迟结束消息突然出现，仍显机械。回调经编排器 ``orch.send_chat_action`` 分发到受管
     worker（当前 Telegram 协议号 pyrogram send_chat_action；其余 worker 暂不支持 → 静默）。
 
-    ``inbox.l2_autosend.typing_indicator``（默认 true）置 false 可关闭。与发送同口径：
-    编排器 client 活在 web 线程 loop 上 → 跨线程调度执行。
+    ``inbox.l2_autosend.typing_indicator``（默认 true）置 false 可关闭。
+    ``always=True`` 语义同 ``build_autosend_mark_read_cb``：给一次性装配的
+    AutosendWorker 用（开关由 worker 运行时自持、可热更），逐次重建的消费方
+    （reply_bubbles）保持默认。与发送同口径：编排器 client 活在 web 线程 loop 上
+    → 跨线程调度执行。
     """
     _cfg = assistant.config.config or {}
     _as_cfg = ((_cfg.get("inbox") or {}).get("l2_autosend") or {})
-    if not bool(_as_cfg.get("typing_indicator", True)):
+    if not always and not bool(_as_cfg.get("typing_indicator", True)):
         return None
     from src.integrations.account_orchestrator import get_orchestrator as _go
 
@@ -998,6 +1195,41 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled):
             except Exception:
                 _assistant_ref.logger.debug(
                     "[autosend video] 失败，回落语音/文本", exc_info=True)
+            # 跨草稿「语音后静默」：上一轮语音已达且客户无新话 → 整轮抑制
+            # （含文本/气泡），避免孤儿二稿叠发（2026-08-04 .198）。
+            try:
+                from src.inbox.normalizer import conv_id as _cid_q
+                from src.inbox.voice_autosend import (
+                    resolve_voice_autosend_cfg as _rva_q,
+                    effective_voice_block as _evb_q,
+                )
+                from src.inbox.voice_session_guard import (
+                    resolve_voice_session_cfg as _rvsc_q,
+                    should_quiet_after_voice as _sqav_q,
+                )
+                _vb_q = _evb_q(
+                    _rva_q(_assistant_ref.config.config or {}), platform)
+                _scfg_q = _rvsc_q(_vb_q)
+                _cid_quiet = _cid_q(platform, account_id, chat_key)
+                _st_q = getattr(_assistant_ref, "inbox_store", None)
+                _recent_q = []
+                if _st_q is not None:
+                    _recent_q = _st_q.list_recent_messages(
+                        _cid_quiet, limit=12) or []
+                if _sqav_q(
+                    conv_key=_cid_quiet, recent_messages=_recent_q,
+                    quiet_after_sec=_scfg_q.get("quiet_after_sec", 90),
+                ):
+                    _assistant_ref.logger.info(
+                        "[autosend] voice_quiet 抑制孤儿二稿（语音已达无新入站）"
+                        " platform=%s acct=%s", platform, account_id)
+                    return {
+                        "ok": True,
+                        "delivered_as": "suppressed_voice_quiet",
+                    }
+            except Exception:
+                _assistant_ref.logger.debug(
+                    "[autosend] voice_quiet 判定跳过", exc_info=True)
             # 全自动语音优先（gated）：成功即作为语音发出；
             # 未启用/不满足/失败 → 回落到下面的文本投递（零行为变更）。
             # 语音念**翻译前原文**（人设克隆声念母语；长度判定同口径），
@@ -1090,6 +1322,20 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled):
                     from src.integrations.account_registry import (
                         get_account_registry as _gar2,
                     )
+                    # 桥路径没有分条能力（DOM 整段一次发出）：bubbles 开启时
+                    # 拟稿是「每行一句」多行合同，原样入队＝一条消息带结构化
+                    # 换行（2026-08-08 客户实锤质疑的 AI 感形态）→ 折叠成
+                    # 自然单段再入队（与协议直发链同款收口，2026-08-09）。
+                    try:
+                        from src.inbox.reply_split import (
+                            collapse_paragraphs as _clp_dt,
+                            parse_bubbles_cfg as _pbc_dt,
+                        )
+                        if (_pbc_dt(_cfg).get("enabled")
+                                and "\n" in str(text or "")):
+                            text = _clp_dt(text) or text
+                    except Exception:
+                        pass
                     # 人审模式（review_mode）：命令落 held 等运营放行，
                     # 而非直接 pending 自动发。仍先过闸门（受控不变式）。
                     _review = bool(_br.get("review_mode", False))
@@ -1150,8 +1396,9 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled):
             _holdout_parts = 0   # P3 随机保留组：>0=本可拆 N 条但被抽中强制整段
             try:
                 from src.inbox.reply_split import (
-                    inter_part_delay_sec as _ipd,
+                    collapse_paragraphs as _cp,
                     parse_bubbles_cfg as _pbc,
+                    plan_bubble_gaps as _pbg,
                     record_bubble_send as _rbs,
                     should_split_for_delivery as _ssd,
                     split_reply_parts as _srp,
@@ -1167,6 +1414,7 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled):
                         max_chars=int(_bcfg["max_chars"]),
                         min_tail_chars=int(_bcfg["min_tail_chars"]),
                         min_total_chars=int(_bcfg["min_total_chars"]),
+                        per_sentence=bool(_bcfg.get("per_sentence")),
                     )
                     if len(_split) >= 2:
                         _hp = float(_bcfg.get("holdout_pct") or 0.0)
@@ -1178,6 +1426,11 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled):
                             _assistant_ref.logger.info(
                                 "[reply_bubbles] 保留组抽中，整段发送 "
                                 "parts=%d platform=%s", _holdout_parts, platform)
+                            # 保留组＝「这回合像一口气说完」→ 必须折叠成单段：
+                            # bubbles 开启时拟稿合同是「每行一句」，多行原样单条
+                            # 发出＝「一条消息带结构化换行」（2026-08-08 客户实锤
+                            # 的 AI 感形态），比拆条更糟（2026-08-09 修）。
+                            _parts = [_cp(str(text or "")) or str(text or "")]
                         else:
                             _parts = _split
             except Exception:
@@ -1187,7 +1440,9 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled):
                 _holdout_parts = 0
 
             if len(_parts) <= 1:
-                _res_single = await _send_one(str(text or ""))
+                # 单条分支发 _parts[0]（保留组时是折叠后的单段，非原始多行文本）
+                _single_text = _parts[0] if _parts else str(text or "")
+                _res_single = await _send_one(_single_text)
                 if not (isinstance(_res_single, dict) and (
                         _res_single.get("ok") is False
                         or _res_single.get("delivered") is False
@@ -1207,24 +1462,114 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled):
                 _typing = build_autosend_typing_cb(_assistant_ref)
             except Exception:
                 _typing = None
+            # 条间打断守卫前置解析（fresh_guard 同闸门，2026-08-05）：条间隔现可达
+            # 20s，客户此间插话（任意文本/媒体）→ 停发剩余条——真人被打断就是停手。
+            # 首条已发出＝客户已有回复，无「取消后零回复」断链风险，判据用宽口径
+            # interrupted_by_inbound（与创建侧 find_superseding_inbound 刻意不同）。
+            # 任何解析失败＝守卫不激活（照发，绝不阻断投递）。
+            _bub_started = time.time()
+            _bub_store = None
+            _bub_cid = ""
+            try:
+                from src.inbox.draft_fresh_guard import (
+                    parse_fresh_guard_cfg as _pfg_bub,
+                )
+                if _pfg_bub(_assistant_ref.config.config or {}).get("enabled"):
+                    from src.inbox.normalizer import conv_id as _cidf_bub
+                    _bub_store = getattr(_assistant_ref, "inbox_store", None)
+                    _bub_cid = _cidf_bub(platform, account_id, chat_key)
+            except Exception:
+                _bub_store = None
+                _bub_cid = ""
+            # 条间隔预排（2026-08-09）：整组一次估值 → total_budget_sec 等比压缩
+            # 保节奏形状（防 per_sentence 5 条×20s 把一条回复拖到 80s+）。
+            _gaps: list = []
+            try:
+                _gaps = _pbg(
+                    _parts,
+                    gap_sec_lo=float(_bcfg["gap_sec_lo"]),
+                    gap_sec_hi=float(_bcfg["gap_sec_hi"]),
+                    per_char_sec=float(_bcfg["per_char_sec"]),
+                    latin_per_char_sec=_bcfg.get("latin_per_char_sec"),
+                    max_gap_sec=float(_bcfg.get("max_gap_sec", 6.0)),
+                    total_budget_sec=float(
+                        _bcfg.get("total_budget_sec") or 0.0),
+                )
+            except Exception:
+                _gaps = []
             _sent_n = 0
             _last_res: dict = {}
             for _i, _part in enumerate(_parts):
                 if _i > 0:
-                    if _typing is not None:
-                        try:
-                            await _typing(platform, account_id, chat_key)
-                        except Exception:
-                            pass
+                    # 条间节奏 = 想（静默）+ 打下一条（挂「正在输入」续挂，
+                    # >5s 间隔气泡不断续）——与首条前的拟人序列同一节奏模型。
+                    _gap = (_gaps[_i - 1]
+                            if _i - 1 < len(_gaps) else 0.8)
                     try:
-                        await asyncio.sleep(_ipd(
-                            _part,
-                            gap_sec_lo=float(_bcfg["gap_sec_lo"]),
-                            gap_sec_hi=float(_bcfg["gap_sec_hi"]),
-                            per_char_sec=float(_bcfg["per_char_sec"]),
-                        ))
+                        from src.integrations.humanize_metrics import (
+                            record_bubble_gap as _rbg,
+                        )
+                        _rbg("autosend", platform, _gap)
                     except Exception:
-                        await asyncio.sleep(0.8)
+                        pass
+                    try:
+                        from src.inbox.humanize import (
+                            estimate_typing_lead as _etl,
+                            run_presend_humanization as _rph,
+                        )
+                        _tp_part = None
+                        if _typing is not None:
+                            async def _tp_part(_action, _p=platform,
+                                               _a=account_id, _c=chat_key):
+                                await _typing(_p, _a, _c)
+                        await _rph(
+                            delay=_gap, action="typing", typing=_tp_part,
+                            sleep=asyncio.sleep,
+                            typing_lead_sec=_etl(
+                                _part,
+                                per_char_sec=float(_bcfg["per_char_sec"]),
+                                latin_per_char_sec=_bcfg.get(
+                                    "latin_per_char_sec")),
+                        )
+                    except Exception:
+                        await asyncio.sleep(_gap)
+                    # 条间打断复查：间隔睡完、发出前最后看一眼——对方在这几秒
+                    # 里说话了就停手，剩余内容丢弃（插话触发的新稿自带完整上下文）。
+                    if _bub_store is not None and _bub_cid:
+                        try:
+                            from src.inbox.draft_fresh_guard import (
+                                interrupted_by_inbound as _ibi,
+                            )
+                            if _ibi(
+                                _bub_store.list_recent_messages(
+                                    _bub_cid, limit=5),
+                                started_ts=_bub_started,
+                            ) is not None:
+                                _assistant_ref.logger.info(
+                                    "[reply_bubbles] 条间客户插话，停发剩余 "
+                                    "%d/%d 条 platform=%s",
+                                    len(_parts) - _sent_n, len(_parts), platform)
+                                try:
+                                    _rbs("autosend", _sent_n, partial=True)
+                                except Exception:
+                                    pass
+                                record_text_outreach(
+                                    _assistant_ref, platform, account_id,
+                                    chat_key, "bubbles",
+                                    note=(f"parts={_sent_n}/{len(_parts)}"
+                                          " interrupted"))
+                                return {
+                                    "ok": True,
+                                    "delivered_as": "text_bubbles",
+                                    "parts_sent": _sent_n,
+                                    "parts_total": len(_parts),
+                                    "partial": True,
+                                    "interrupted": True,
+                                }
+                        except Exception:
+                            _assistant_ref.logger.debug(
+                                "[reply_bubbles] 条间打断判定异常（继续发）",
+                                exc_info=True)
                 try:
                     _last_res = await _send_one(_part) or {}
                 except Exception as _ex:

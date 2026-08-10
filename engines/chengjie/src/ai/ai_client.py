@@ -62,9 +62,14 @@ def build_time_context_line(now: Any = None, *, place_label: str = "") -> str:
                 "中午" if 12 <= _h < 14 else "下午" if 14 <= _h < 18 else
                 "傍晚" if 18 <= _h < 20 else "晚上" if 20 <= _h < 23 else "深夜")
     _where = f"（{place_label}当地）" if str(place_label or "").strip() else ""
+    # 星期几必须显式给出：LLM 从日期心算星期不可靠（实录：周日被说成
+    # "Saturday evening"），而星期词一旦说错会被手机端 DataDetector 下划线
+    # 高亮成可点击证物，是验证成本最低的穿帮。
+    _wd = "周" + "一二三四五六日"[_t.weekday()]
     line = (
-        "【当前真实时间】" + _t.strftime("%Y-%m-%d %H:%M")
-        + f"（{_tod}）{_where}。问候语、作息话题、以及照片场景标记里的光线时段"
+        "【当前真实时间】" + _t.strftime("%Y-%m-%d ") + _wd + _t.strftime(" %H:%M")
+        + f"（{_tod}）{_where}。今天是{_wd}——提到星期/周末必须与此一致。"
+          "问候语、作息话题、以及照片场景标记里的光线时段"
           "都必须符合这个时间（深夜就是室内暖光/夜景，不要白天场景）。"
           "凡涉及日期的推理（票据/行程/纪念日的先后、隔了几天）一律以上面日期"
           "为「今天」计算——早于今天的日期是已经发生的过去，不要当成未来安排。")
@@ -160,6 +165,14 @@ class AIClient(LoggerMixin):
         self._oa_num_ctx: int = 0  # 主链原生 /api/chat 的 num_ctx（0=不下发，维持端侧默认）
         self._fb_calls = 0
         self._fb_ok = 0
+        # P1（本地优先 / 全本地）：ai.primary ∈ cloud（默认，行为不变）| local | local_only。
+        # 此处先置默认，保证**任何构造路径**下该字段都存在；真实解析放在 fallback 配置
+        # 之后（要有 _fb_client 才能校验「声明本地优先却没配本地端点」）。
+        self._primary_mode = "cloud"
+        # 分级路由默认（真实解析在 initialize()；此处防直构对象缺属性，与熔断器同款）
+        self._tiers_enabled = False
+        self._tiers_default = "normal"
+        self._tiers: Dict[str, Dict[str, Any]] = {}
         # 云端 Key 备用池（ai.key_pool，2026-07）：主 Key 失效/云端主链双失败时，先切池内
         # 备用云 Key（云质量优于本地兜底），全池失败才落 LAN 本地模型。entries 元素：
         # {name, client, model, label, bad_until}（bad_until=失败冷却，冷却期内跳过）。
@@ -415,6 +428,37 @@ class AIClient(LoggerMixin):
                 self._fb_model or "?", fb_base,
                 "，原生 /api/chat" if self._fb_native_base else "")
 
+        # ── P1：本地优先 / 全本地模式（自托管 + 隐私敏感客户）───────────────────
+        # ``ai.primary``：
+        #   cloud（默认）：完全维持既有行为——云主链 → 备用池 → 本地兜底 → canned。
+        #   local        ：**本地模型即主链**；本地失败仍可回落云端（可用性优先）。
+        #   local_only   ：本地模型即主链，且**绝不把用户内容发往云端**（严格隐私）；
+        #                  本地失败 → canned 占位（宁可不出话，也不泄数据）。
+        #
+        # 覆盖面如实声明（别把它讲成「全链数据不出本地」）：本键只管**主对话链**，
+        # 即数据量最大的那条。嵌入 / 视觉 / 翻译各有自己的端点配置（本部署本就是
+        # LAN GPU），不由本键代管。
+        #
+        # 配错保护：声明本地优先却没配 ``ai.fallback`` 端点 → 记 ERROR 并退回 cloud。
+        # 「无声降级」不好，但把聊天变砖更糟。
+        self._primary_mode = str(ai_config.get("primary") or "cloud").strip().lower()
+        if self._primary_mode not in ("cloud", "local", "local_only"):
+            self.logger.error(
+                "ai.primary 非法值 %r（应为 cloud|local|local_only），按 cloud 处理",
+                self._primary_mode)
+            self._primary_mode = "cloud"
+        if self._primary_mode != "cloud" and not (self._fb_client and self._fb_model):
+            self.logger.error(
+                "ai.primary=%s 但 ai.fallback 本地端点未配置（需 enabled+base_url+model），退回 cloud",
+                self._primary_mode)
+            self._primary_mode = "cloud"
+        if self._primary_mode != "cloud":
+            self.logger.info(
+                "本地优先模式已启用: primary=%s model=%s（%s）",
+                self._primary_mode, self._fb_model,
+                "严格隐私：本地失败也不回落云端"
+                if self._primary_mode == "local_only" else "本地失败可回落云端")
+
         # 云端 Key 备用池：主 Key 坏了先切备用云 Key（质量与主链同级），全池失败才落本地。
         # 池条目缺省继承主链 base_url/model → 「同厂商备用号」只填 api_key 即可。
         self._pool_entries = []
@@ -461,6 +505,27 @@ class AIClient(LoggerMixin):
                     len(self._pool_entries),
                     ", ".join(e["name"] for e in self._pool_entries))
 
+        # 启动探针按 primary 模式分流（P1）：local/local_only 先探**本地主链**。
+        # 纯本地部署常根本没配云端 key——旧逻辑只探云端，会把「本地一切就绪」误判成
+        # 初始化失败：reload_ai_runtime 因此拒绝换绑（模式切换永远显示未生效），
+        # 启动期也会被标成 AI 未就绪。云端在这两档里只是回落/不使用，探针失败
+        # 不该一票否决初始化。
+        if self._primary_mode in ("local", "local_only"):
+            local_ok = await self._run_boot_probe(self._test_local_connection())
+            if local_ok:
+                self.logger.info(
+                    "✅ AI 客户端初始化成功 — 本地主链 (模型: %s%s)",
+                    self._fb_model,
+                    "；local_only 不探云端" if self._primary_mode == "local_only"
+                    else "；云端仅作回落不阻断启动")
+                return True
+            if self._primary_mode == "local_only":
+                self.logger.error(
+                    "本地主链连接测试失败且 local_only（无云端可回落）——"
+                    "请检查 ai.fallback.base_url / 模型是否已拉起")
+                return False
+            self.logger.warning("本地主链探针失败，按 local 语义回落云端探针")
+
         test_result = await self._run_boot_probe(self._test_openai_connection())
         if not test_result:
             self.logger.error(
@@ -494,6 +559,42 @@ class AIClient(LoggerMixin):
         except Exception:
             self.logger.debug("AI 启动连接探针包装异常（忽略，放行）", exc_info=True)
             return True
+
+    async def _test_local_connection(self) -> bool:
+        """本地主链启动探针（``ai.primary=local*``）：对 ``ai.fallback`` 端点打一句短 chat。
+
+        与 ``_test_openai_connection`` 对称，但**不**触发坏 key 告警——本地 Ollama
+        无凭证概念，失败多为「端点未起/模型未拉」，属部署问题而非凭证事故。
+        """
+        try:
+            if not (self._fb_client and self._fb_model):
+                return False
+            messages = [{"role": "user", "content": "Say hi in one word."}]
+            if self._fb_native_base:
+                text, _, _ = await self._fb_native_chat(
+                    messages, max_tokens=64, temperature=0.3)
+            else:
+                kw: Dict[str, Any] = dict(
+                    model=self._fb_model, messages=messages,
+                    max_tokens=64, temperature=0.3)
+                if self._fb_extra_body:
+                    kw["extra_body"] = self._fb_extra_body
+                resp = await self._fb_client.chat.completions.create(**kw)
+                text = ""
+                if resp and getattr(resp, "choices", None):
+                    c0 = resp.choices[0].message
+                    text = (c0.content or "").strip()
+                    if not text:
+                        extra = getattr(c0, "model_extra", None) or {}
+                        text = (extra.get("reasoning") or "").strip()
+            if text:
+                self.logger.info("本地主链连接测试成功 (model=%s)", self._fb_model)
+                return True
+            self.logger.error("本地主链连接测试返回空 (model=%s)", self._fb_model)
+            return False
+        except Exception as e:
+            self.logger.error("本地主链连接测试失败: %s", e)
+            return False
 
     async def _test_openai_connection(self) -> bool:
         try:
@@ -607,7 +708,13 @@ class AIClient(LoggerMixin):
     ) -> Optional[str]:
         """OpenAI 兼容（Ollama）对话生成，与 generate_reply 行为对齐（熔断、重试、兜底）。"""
         _fb_lang = (context or {}).get("reply_lang", "zh")
-        if not self._oa_client:
+        # 本地优先模式（P1）：本地端点齐备即可出话——全本地部署常**根本没配云端 key**，
+        # 此时 _oa_client 为 None，若照旧早退就会在试本地之前先回 canned。
+        _local_primary = bool(
+            self._primary_mode in ("local", "local_only")
+            and self._fb_client and self._fb_model
+        )
+        if not self._oa_client and not _local_primary:
             self.logger.error("AI 客户端未初始化")
             return self._fallback_reply(_fb_lang)
         if context is not None:
@@ -637,6 +744,11 @@ class AIClient(LoggerMixin):
             use_max_tokens = 256
         use_context_rounds = int(so["context_rounds"]) if "context_rounds" in so else None
         use_model = str(so["model"]) if so.get("model") else self.model
+        # P3 本地档分层：``ai.tiers.<tier>.local_model``（经 _apply_tier_overrides 随
+        # setdefault 流入 so）或调用方显式 strategy_overrides.local_model —— 本地链
+        # （local 主链 + 云挂兜底，同一端点不同模型即可分层，如 .173 同机 14b/30b）
+        # 按会话分级换模型。空＝旧行为（ai.fallback.model）。
+        use_local_model = str(so["local_model"]) if so.get("local_model") else ""
 
         max_hist = use_context_rounds if use_context_rounds is not None else max(1, int(self.max_conversation_history or 10))
         system_instruction = self._build_system_instruction(context)
@@ -682,6 +794,28 @@ class AIClient(LoggerMixin):
         messages.append({"role": "user", "content": user_message})
 
         request_id = (context or {}).get("request_id", "")
+        # P1 本地优先：本地模型即主链，在**所有云端逻辑之前**短路（云端熔断态与它无关）。
+        if _local_primary:
+            local_reply = await self._try_local_fallback_chat(
+                messages, use_temperature, use_max_tokens, context, request_id,
+                skip_quality_check=_skip_quality_check, as_primary=True,
+                model_override=use_local_model,
+            )
+            if local_reply:
+                return local_reply
+            if self._primary_mode == "local_only":
+                # 严格隐私：绝不把用户内容发往云端 —— 宁可出 canned 占位，也不泄数据。
+                self.logger.warning(
+                    "本地主模型失败且 local_only（不回落云端）→ canned request_id=%s",
+                    request_id or "n/a")
+                return self._fallback_reply(_fb_lang)
+            if not self._oa_client:
+                self.logger.warning(
+                    "本地主模型失败且未配置云端主链 → canned request_id=%s",
+                    request_id or "n/a")
+                return self._fallback_reply(_fb_lang)
+            self.logger.warning(
+                "本地主模型失败 → 回落云端主链 request_id=%s", request_id or "n/a")
         if _cb_blocked:
             # 熔断开路：主模型免打扰（保住冷却窗口语义）。降级链＝备用云 Key（质量同级）
             # → 本地兜底 → canned，逐级尝试。
@@ -694,6 +828,7 @@ class AIClient(LoggerMixin):
             fb_reply = await self._try_local_fallback_chat(
                 messages, use_temperature, use_max_tokens, context, request_id,
                 skip_quality_check=_skip_quality_check,
+                model_override=use_local_model,
             )
             return fb_reply if fb_reply else self._fallback_reply(_fb_lang)
         last_error = None
@@ -783,6 +918,7 @@ class AIClient(LoggerMixin):
                                 pass
                             self._alert_circuit_recovered()
                     reply = await self._guard_reply_language(reply, context)
+                    reply = self._shape_single_paragraph(reply, context)
                     # ★ QualityTracker / reply_length 必须用 guard 之后的最终文本，
                     #   否则 LLM 偶发的 "yes..." 等 raw 前缀会被反复误判 too_short。
                     # ★ _skip_quality_check：yes/no 短答型 prompt（chat() 入口）
@@ -834,6 +970,7 @@ class AIClient(LoggerMixin):
         fb_reply = await self._try_local_fallback_chat(
             messages, use_temperature, use_max_tokens, context, request_id,
             skip_quality_check=_skip_quality_check,
+            model_override=use_local_model,
         )
         if fb_reply:
             return fb_reply
@@ -989,6 +1126,7 @@ class AIClient(LoggerMixin):
                 except Exception:
                     pass
                 reply = await self._guard_reply_language(reply, context)
+                reply = self._shape_single_paragraph(reply, context)
                 if not skip_quality_check:
                     try:
                         self._quality_tracker.record_call(
@@ -1020,15 +1158,29 @@ class AIClient(LoggerMixin):
         request_id: str,
         *,
         skip_quality_check: bool = False,
+        as_primary: bool = False,
+        model_override: str = "",
     ) -> Optional[str]:
-        """主对话模型不可达/熔断时，用 LAN 本地模型出真话（替代 canned 占位句）。
+        """用 LAN 本地模型出话。既作**云链兜底**，也作 ``ai.primary=local*`` 的**主链**。
 
         - 复用主链已构建好的 messages（人设/记忆/上下文全保留），只换模型与端点；
         - 语言守卫照常跑（守卫内部纠偏调用若碰主模型故障会自然放行原文）；
-        - 兜底自身失败返回 None，由调用方回落 canned —— 行为最差不劣于旧链。
+        - 失败返回 None，由调用方回落（兜底身份→canned；主链身份→按 local_only 决定）；
+        - ``model_override``（P3 分层）：同端点换模型（tier/strategy_overrides 的
+          ``local_model``）；空＝``ai.fallback.model``。成本记账记**实际所用模型**，
+          分层效果在 llm_cost/看板可分模型对比。
+
+        ``as_primary=True``（本地优先模式）与兜底身份的**观测语义必须分开**，否则正常的
+        本地优先部署会被 ``degradation_snapshot`` 永久误报成「降级顶班」、坐席端天天挂
+        假红条、告警也会长期误鸣：
+          - 成功记进 ``_last_primary_ok_ts``（本地就是主链）而非 ``_last_fb_ok_ts``；
+          - 成本记 tier=``local_primary`` 而非 ``local_fallback``（出话分布看板才不失真）；
+          - **不**记 ``local_llm_fallback``「顶班」计数（与 ``_local_tool_chat`` 同款克制）；
+          - 日志降为 INFO（正常运行，不是事故）。
         """
         if not (self._fb_client and self._fb_model):
             return None
+        use_fb_model = str(model_override or "").strip() or self._fb_model
         self._fb_calls += 1
         t0 = time.time()
         try:
@@ -1054,10 +1206,11 @@ class AIClient(LoggerMixin):
             pt = ct = 0
             if self._fb_native_base:
                 reply, pt, ct = await self._fb_native_chat(
-                    fb_messages, max_tokens=max_tokens, temperature=temperature)
+                    fb_messages, max_tokens=max_tokens, temperature=temperature,
+                    model=use_fb_model)
             else:
                 kw: Dict[str, Any] = dict(
-                    model=self._fb_model,
+                    model=use_fb_model,
                     messages=fb_messages,
                     temperature=temperature,
                     max_tokens=max_tokens,
@@ -1080,31 +1233,43 @@ class AIClient(LoggerMixin):
                 except Exception:
                     pass
             if not reply:
-                self.logger.warning("本地兜底模型返回空 request_id=%s", request_id or "n/a")
-                self._record_local_fallback_metric(False)
+                self.logger.warning(
+                    "本地%s模型返回空 request_id=%s",
+                    "主" if as_primary else "兜底", request_id or "n/a")
+                if not as_primary:
+                    self._record_local_fallback_metric(False)
                 return None
             elapsed = time.time() - t0
             self._fb_ok += 1
-            self._last_fb_ok_ts = time.time()
+            if as_primary:
+                self._last_primary_ok_ts = time.time()
+            else:
+                self._last_fb_ok_ts = time.time()
             self.total_calls += 1
             self.total_tokens += pt + ct
             self.last_call_time = time.time()
             try:
                 from src.ai.llm_cost import get_llm_cost
                 get_llm_cost().record(
-                    model=str(self._fb_model),
+                    model=str(use_fb_model),
                     prompt_tokens=pt, completion_tokens=ct,
-                    tier="local_fallback",
+                    tier="local_primary" if as_primary else "local_fallback",
                     account_id=str((context or {}).get("account_id") or "default"),
                     latency_ms=int(elapsed * 1000),
                 )
             except Exception:
                 pass
-            self._record_local_fallback_metric(True, latency_ms=elapsed * 1000)
-            self.logger.warning(
-                "主模型不可用 → 本地兜底模型已出话 model=%s elapsed=%.1fs request_id=%s",
-                self._fb_model, elapsed, request_id or "n/a")
+            if as_primary:
+                self.logger.info(
+                    "本地主模型已出话 model=%s elapsed=%.1fs request_id=%s",
+                    use_fb_model, elapsed, request_id or "n/a")
+            else:
+                self._record_local_fallback_metric(True, latency_ms=elapsed * 1000)
+                self.logger.warning(
+                    "主模型不可用 → 本地兜底模型已出话 model=%s elapsed=%.1fs request_id=%s",
+                    use_fb_model, elapsed, request_id or "n/a")
             reply = await self._guard_reply_language(reply, context)
+            reply = self._shape_single_paragraph(reply, context)
             if not skip_quality_check:
                 try:
                     self._quality_tracker.record_call(
@@ -1116,7 +1281,8 @@ class AIClient(LoggerMixin):
                     pass
             return reply
         except Exception as e:
-            self._record_local_fallback_metric(False)
+            if not as_primary:
+                self._record_local_fallback_metric(False)
             # 4xx/5xx 把响应体一并带出（如「exceeds the available context size」），
             # 否则日志只有裸状态码，事后排障要去翻远端 Ollama server.log。
             _body = ""
@@ -1194,13 +1360,15 @@ class AIClient(LoggerMixin):
         *,
         max_tokens: int,
         temperature: float,
+        model: str = "",
     ) -> tuple:
         """兜底模型走 Ollama 原生 /api/chat：/v1 兼容层不认 keep_alive/think（实测被忽略），
         原生口才能让兜底模型断云期驻留显存（keep_alive）+ 思考系模型不慢答（think:false）。
+        ``model`` 空＝``ai.fallback.model``（分层覆写经此透传）。
         返回 (content, prompt_tokens, completion_tokens)，风格对齐 _ollama_native_chat。"""
         import httpx
         payload: Dict[str, Any] = {
-            "model": self._fb_model,
+            "model": str(model or "").strip() or self._fb_model,
             "messages": messages,
             "stream": False,
             "think": False,
@@ -1340,6 +1508,22 @@ class AIClient(LoggerMixin):
             return strategy_overrides
         tier = str((context or {}).get("ai_tier") or "").strip()
         if not tier:
+            # P4：无显式 ai_tier 时按会员权益自动选档——``entitlement.tier``
+            # （vip/svip…，A 线 _ensure_entitlement 懒加载）与 ``ai.tiers`` 档名
+            # 对齐即进档；档名未配置/无权益 → 默认档。显式 ai_tier 永远优先，
+            # 运营可只给 vip 配 ``local_model`` 让高价值会话吃大模型。
+            ent = (context or {}).get("entitlement")
+            if isinstance(ent, dict):
+                _ent_tier = str(ent.get("tier") or "").strip().lower()
+                if _ent_tier and _ent_tier in self._tiers:
+                    tier = _ent_tier
+                    # 回写 context（仅自动进档且原位为空时）：云链成本按
+                    # context.ai_tier 记账（P6-4），不回写会把 VIP 会话记成
+                    # default，档位 ROI 无法对账。落默认档时刻意不写，
+                    # 保住既有 "default" 记账口径。
+                    if isinstance(context, dict) and not context.get("ai_tier"):
+                        context["ai_tier"] = tier
+        if not tier:
             tier = self._tiers_default
         spec = self._tiers.get(tier) or self._tiers.get(self._tiers_default) or {}
         if not spec:
@@ -1428,7 +1612,12 @@ class AIClient(LoggerMixin):
         strategy_overrides = self._apply_tier_overrides(strategy_overrides, context)
         # P1-b：命中订单号则注入电商真实事实（含「查不到就如实说」反幻觉守卫）
         await self._maybe_inject_ecommerce_facts(user_message, context)
-        if self._use_openai_compat:
+        # 本地链只挂在 openai-compat 分支上（_try_local_fallback_chat 只在那条链里被调），
+        # 故**零云端配置的全本地部署**也必须走这里，否则会掉进 gemini 分支拿不到本地模型。
+        if self._use_openai_compat or (
+            self._primary_mode in ("local", "local_only")
+            and self._fb_client and self._fb_model
+        ):
             return await self._generate_reply_openai_compat(
                 user_message, context, conversation_history, strategy_overrides,
                 _skip_quality_check=_skip_quality_check,
@@ -1548,6 +1737,7 @@ class AIClient(LoggerMixin):
                                 self._alert_circuit_recovered()
                         stripped = reply.strip()
                         stripped = await self._guard_reply_language(stripped, context)
+                        stripped = self._shape_single_paragraph(stripped, context)
                         # ★ QualityTracker / reply_length 移到 guard 之后，记录最终发出的文本；
                         #   _skip_quality_check：yes/no 短答（chat()）跳过 too_short 误报。
                         if not _skip_quality_check:
@@ -1741,6 +1931,52 @@ class AIClient(LoggerMixin):
         if cjk > 8 and letters < cjk:
             return True
         return False
+
+    def _single_paragraph_mode(self, context: Optional[Dict[str, Any]]) -> bool:
+        """聊天回复是否须收成**一个段落**（2026-08-08）。
+
+        判据与 ``_build_context_prompt`` 的「回复格式」合同完全同源：
+        陪伴域或 RPA 聊天链（合同注入面）且投递层 bubbles **未开**（多行不会被
+        拆成独立消息，只会呈现为一条消息里的多段）→ True。
+        工具型调用（``chat()``，context=None）天然 False，不误伤结构化输出。
+        """
+        if not isinstance(context, dict) or not context:
+            return False
+        try:
+            _cfg = (self.config.config or {}) if self.config else {}
+            if not isinstance(_cfg, dict):
+                return False
+            _ch = str(context.get("channel") or "").lower()
+            if not (
+                effective_domain_name(_cfg) == "conversion"
+                or _ch in ("whatsapp_rpa", "messenger_rpa", "line_rpa")
+            ):
+                return False
+            from src.inbox.reply_split import parse_bubbles_cfg
+            return not bool(parse_bubbles_cfg(_cfg).get("enabled"))
+        except Exception:
+            return False
+
+    def _shape_single_paragraph(
+        self, reply: Optional[str], context: Optional[Dict[str, Any]]
+    ) -> Optional[str]:
+        """单段落硬护栏：合同要求一段话时，把 LLM 惯性写出的多行折成单段。
+
+        prompt 合同是软约束——历史窗口里的旧两段式回复就是现成 few-shot，
+        换合同后模型仍会偶发换行；此护栏保证出口形态与合同一致。绝不抛。
+        """
+        if not reply or not self._single_paragraph_mode(context):
+            return reply
+        try:
+            from src.inbox.reply_split import collapse_paragraphs
+            collapsed = collapse_paragraphs(reply)
+            if collapsed and collapsed != reply:
+                self.logger.debug(
+                    "single-paragraph guard collapsed reply (%d -> %d chars)",
+                    len(reply), len(collapsed))
+            return collapsed or reply
+        except Exception:
+            return reply
 
     async def _guard_reply_language(
         self, reply: str, context: Optional[Dict[str, Any]]
@@ -2566,7 +2802,9 @@ class AIClient(LoggerMixin):
             _epi = (context.get("_episodic_memory_text") or "").strip()
             if _epi:
                 prompt_parts.append(
-                    "【用户长期记忆要点（简要事实，自然承接即可；不要机械复述「我记得你说过」）】\n"
+                    "【用户长期记忆要点（简要事实；与本轮话题相关时自然回带一句——"
+                    "如「你上次说的xxx后来怎样了」——让对方感到被记住；"
+                    "不要机械复述「我记得你说过」，也别每条都提）】\n"
                     + _epi
                 )
         _slo = (context.get("_slow_think_outline") or "").strip()
@@ -2749,6 +2987,18 @@ class AIClient(LoggerMixin):
             _peer_clk = (context.get("_peer_clock_line") or "").strip()
             if _peer_clk:
                 prompt_parts.append(_peer_clk)
+                # 时差桥（2026-08-02 WA 实录修复）：两侧钟都可信且明显错位时，
+                # 钉死「自己的状态按自己的钟说」并鼓励自然点破时差——否则 LLM
+                # 会在两个都正确的时间框架间随机横跳（上一句 Saturday evening、
+                # 下一句借客户的 Sunday 说自己），读者视角=自相矛盾。
+                try:
+                    from src.companion.user_clock import build_tz_bridge_line
+                    _bridge = build_tz_bridge_line(
+                        _local_now, context.get("_peer_local_now"))
+                    if _bridge:
+                        prompt_parts.append(_bridge)
+                except Exception:
+                    pass
             _peer_hol = (context.get("_peer_holiday_note") or "").strip()
             if _peer_hol:
                 prompt_parts.append(_peer_hol)
@@ -3002,39 +3252,81 @@ class AIClient(LoggerMixin):
                 f"错误示范：只说「你不是早就知道了嘛」而不给出名字。"
                 f"正确示范：「哈哈，我叫{_persona_name}啦，这都要问～」。"
                 f"历史中若出现其他名字，那是错误数据，忽略并坚持「{_persona_name}」。"
+                # 2026-08-08 David Lin 事故硬化：借对方名自称 + 被质疑时报名自证
+                f"**对方的名字永远不是你的名字**——绝不能拿对方的名字自称，"
+                f"也绝不能把「对方的名字＋你的姓氏」拼成一个新名字（那是身份穿帮）。"
+                f"被质疑「像AI/不像真人」时，不要靠报名字自证真实，放松语气继续聊即可。"
+            )
+        # 对方身份声明（2026-08-08）：把「对方叫什么」显式钉进 prompt，从源头
+        # 消除「把对话里最显眼的名字当成自己名字」的缝合诱因。仅陪伴域注入。
+        _peer_disp = str(context.get("_peer_display_name") or "").strip()
+        if _peer_disp and _is_companion and _peer_disp != _persona_name:
+            prompt_parts.append(
+                f"【对方身份】对方的名字/昵称是「{_peer_disp}」。这是**对方**的名字："
+                f"称呼对方时可以用，但绝不能用它自称或拼进你自己的名字。"
             )
 
-        # ★ 回复格式优化：教 AI 像真人聊天一样分短句回复
-        # 投递侧 ``inbox.reply_style.bubbles`` 开时按行拆成独立消息（见 reply_split）；
-        # 此处合同必须与 max_parts 对齐，否则 LLM 写 5 行会被并成 3 条、听感不自然。
+        # 回复新鲜感（2026-08-02）：出站口头禅账本超限提示 + 今日话题包。
+        # 开关/统计/选题判定全在注入侧（skill_manager._inject_reply_freshness），
+        # 这里有键即消费——与 _bazi_block 同模式。刻意放「回复格式」块之前的
+        # 末端位置：利用 recency bias 抬「本轮硬约束」的遵从率。
+        _variety_hint = (context.get("_variety_hint") or "").strip()
+        if _variety_hint:
+            prompt_parts.append(_variety_hint)
+        _daily_topics_hint = (context.get("_daily_topics_hint") or "").strip()
+        if _daily_topics_hint:
+            prompt_parts.append(_daily_topics_hint)
+
+        # ★ 回复格式合同——与投递能力对齐（2026-08-08 重构，运营拍板）：
+        #   bubbles 开 → 多行合同（投递层真的按行拆独立消息，行数与 max_parts 对齐）；
+        #   bubbles 关 → **一段话合同**——旧版无条件注多行合同，产物整段一条发出，
+        #   呈现为固定「段1+空行+段2」节奏，客户实锤质疑「why your messages always
+        #   2 parts / Look like ai」。合同注入什么，出口就 enforce 什么
+        #   （_shape_single_paragraph 硬护栏，与本判据共用 _single_paragraph_mode）。
         _channel = (context.get("channel") or "").lower()
         if _is_companion or _channel in ("whatsapp_rpa", "messenger_rpa", "line_rpa"):
+            _bubbles_on = False
             _max_lines = 3
             try:
                 from src.inbox.reply_split import parse_bubbles_cfg as _pbc_fmt
                 _bc = _pbc_fmt(_cfg_ctx if isinstance(_cfg_ctx, dict) else {})
-                if _bc.get("enabled"):
+                _bubbles_on = bool(_bc.get("enabled"))
+                if _bubbles_on:
                     _max_lines = max(2, min(5, int(_bc.get("max_parts") or 3)))
             except Exception:
-                _max_lines = 3
-            prompt_parts.append(
-                "【回复格式——像真人发消息（最高优先级）】\n"
-                "你在用手机聊天，不是写文章。每行会被拆成独立消息发出去。\n"
-                "规则：\n"
-                "- 每行 1 句话，10-30 字。用真正的换行隔开（不是写 \\n 字符）。\n"
-                f"- 一次回复 1-{_max_lines} 行就够了，不要超过 {_max_lines} 行。\n"
-                "- emoji 最多 1/3 的行带 emoji，每行最多 1 个。\n"
-                "- 想单独发表情就独占一行，放 1-3 个相同 emoji。\n"
-                "- 语气词（嗯、哈哈、诶）可以单独一行。\n"
-                "- 只有情绪很强烈时才写长句（超过 40 字）。\n"
-                "- 绝对禁止把所有话挤在一段里！\n\n"
-                "✅ 好的示例：\n"
-                "哈哈真的假的\n"
-                "我还以为你忘了呢\n"
-                "😂\n\n"
-                "❌ 坏的示例：\n"
-                "哈哈真的假的？我还以为你忘了呢！那你后来怎么处理的呀？我之前也遇到过类似情况好麻烦😂"
-            )
+                _bubbles_on = False
+            if _bubbles_on:
+                prompt_parts.append(
+                    "【回复格式——像真人发消息（最高优先级）】\n"
+                    "你在用手机聊天，不是写文章。每行会被拆成独立消息发出去。\n"
+                    "规则：\n"
+                    "- 每行 1 句话，10-30 字。用真正的换行隔开（不是写 \\n 字符）。\n"
+                    f"- 一次回复 1-{_max_lines} 行就够了，不要超过 {_max_lines} 行。\n"
+                    "- 行数要自然变化：简短回应就 1 行，有内容才多行——"
+                    "别每条回复都固定拆成同样的行数。\n"
+                    "- emoji 最多 1/3 的行带 emoji，每行最多 1 个。\n"
+                    "- 想单独发表情就独占一行，放 1-3 个相同 emoji。\n"
+                    "- 语气词（嗯、哈哈、诶）可以单独一行。\n"
+                    "- 只有情绪很强烈时才写长句（超过 40 字）。\n"
+                    "- 绝对禁止把所有话挤在一段里！\n\n"
+                    "✅ 好的示例：\n"
+                    "哈哈真的假的\n"
+                    "我还以为你忘了呢\n"
+                    "😂\n\n"
+                    "❌ 坏的示例：\n"
+                    "哈哈真的假的？我还以为你忘了呢！那你后来怎么处理的呀？我之前也遇到过类似情况好麻烦😂"
+                )
+            else:
+                prompt_parts.append(
+                    "【回复格式——一段话（最高优先级）】\n"
+                    "整条回复必须写成**一个段落**：绝对不要换行、不要空行、不要分成两段，"
+                    "也不要列点/编号。像真人随手打一条消息：1-3 个短句连着说完就停。\n"
+                    "节奏别固定：不必每条都「先回应再补一句」，也不要每条都用问句收尾。\n"
+                    "❌ 坏的示例（分成两段）：\n"
+                    "哈哈真的假的\n\n那你后来怎么处理的呀？\n"
+                    "✅ 好的示例（一段话）：\n"
+                    "哈哈真的假的，那你后来怎么处理的呀？"
+                )
 
         if prompt_parts:
             return "上下文信息:\n" + "\n".join([f"- {part}" for part in prompt_parts])
@@ -3844,6 +4136,8 @@ class AIClient(LoggerMixin):
             "model": self.model,
             "temperature": self.temperature,
             "provider": self._provider,
+            # 主对话位置（ai.primary）；local_* 时 local_fallback_* 计数含「本地主链」调用
+            "primary_mode": getattr(self, "_primary_mode", None) or "cloud",
             "local_fallback_model": self._fb_model or None,
             "local_fallback_calls": self._fb_calls,
             "local_fallback_ok": self._fb_ok,
@@ -3874,8 +4168,11 @@ class AIClient(LoggerMixin):
         pool_recent = _recent(self._last_pool_ok_ts)
         fb_recent = _recent(self._last_fb_ok_ts)
         degraded = cb_open or (not primary_recent and (pool_recent or fb_recent))
+        primary_mode = str(getattr(self, "_primary_mode", None) or "cloud").strip().lower()
+        if primary_mode not in ("cloud", "local", "local_only"):
+            primary_mode = "cloud"
         if not degraded:
-            return {"degraded": False, "mode": "primary"}
+            return {"degraded": False, "mode": "primary", "primary": primary_mode}
         if pool_recent:
             mode = "pool"
         elif fb_recent:
@@ -3884,7 +4181,8 @@ class AIClient(LoggerMixin):
             # 开路但尚无顶班出话：按可用降级链预告（池 > 本地）
             mode = ("pool" if self._pool_entries
                     else ("local" if (self._fb_client and self._fb_model) else "none"))
-        return {"degraded": True, "mode": mode, "circuit_open": cb_open}
+        return {"degraded": True, "mode": mode, "circuit_open": cb_open,
+                "primary": primary_mode}
 
     def pool_status(self) -> List[Dict[str, Any]]:
         """备用 Key 池运行态快照（看板用）：每条目冷却状态与剩余秒数。不含任何密钥。"""

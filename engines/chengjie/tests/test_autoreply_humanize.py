@@ -62,6 +62,156 @@ def test_pick_delay_range():
         assert 1.0 <= d <= 4.0
 
 
+# ── 单一节奏源收口·第三链（2026-08-07）─────────────────────────────────────
+# 协议 7×24 直发链此前只读 protocol_autoreply.delay（从没人配 → 秒回），
+# 而设置页滑杆写 inbox.l2_autosend.deliver_delay → 「滑杆不生效」根因。
+
+_SLIDER = {"inbox": {"l2_autosend": {"deliver_delay": {
+    "min_sec": 8, "max_sec": 20, "adaptive": True}}}}
+
+
+def test_pacing_block_follows_slider_when_own_absent():
+    # 未配 protocol_autoreply.delay → 跟随滑杆键（本次修复的核心行为）
+    block = pa.resolve_send_pacing_block(_SLIDER, {})
+    assert block == {"min_sec": 8, "max_sec": 20, "adaptive": True}
+
+
+def test_pacing_block_follows_slider_when_own_zeroed():
+    # 显式 0/0（「没意见」而非「要秒回」）也跟随——不能按「块存在」判定
+    block = pa.resolve_send_pacing_block(
+        _SLIDER, {"delay": {"min_sec": 0, "max_sec": 0}})
+    assert block == {"min_sec": 8, "max_sec": 20, "adaptive": True}
+
+
+def test_pacing_block_own_wins_when_configured():
+    block = pa.resolve_send_pacing_block(
+        _SLIDER, {"delay": {"min_sec": 2, "max_sec": 5}})
+    assert block == {"min_sec": 2, "max_sec": 5}
+
+
+def test_pacing_block_follow_false_keeps_instant():
+    # 想保住本链秒回的逃生阀：follow:false → 用 own（空节奏＝0 延迟），不套兜底默认
+    block = pa.resolve_send_pacing_block(
+        _SLIDER, {"delay": {"follow": False}})
+    assert block == {"follow": False}
+
+
+def test_pacing_block_falls_back_to_default_when_nothing_configured():
+    # 存量节点收口：own 与 slider 都没配（无 deliver_delay）→ 兜底拟人默认，绝不裸秒回。
+    block = pa.resolve_send_pacing_block({}, {})
+    assert block == pa.DEFAULT_PROTOCOL_PACING
+    assert float(block["max_sec"]) >= 3   # 非秒回
+
+    # slider 显式 0/0（「没意见」）同样兜底，不当成「要秒回」
+    block2 = pa.resolve_send_pacing_block(
+        {"inbox": {"l2_autosend": {"deliver_delay": {"min_sec": 0, "max_sec": 0}}}}, {})
+    assert block2 == pa.DEFAULT_PROTOCOL_PACING
+
+
+def test_effective_protocol_pacing_source_labels():
+    # runtime 与 banner 共用本函数——四种来源标注锁定（banner 据此显示不说谎）
+    assert pa.effective_protocol_pacing({"min_sec": 2, "max_sec": 5}, _SLIDER["inbox"]["l2_autosend"]["deliver_delay"])[1] == "own"
+    assert pa.effective_protocol_pacing({}, {"min_sec": 8, "max_sec": 20})[1] == "slider"
+    assert pa.effective_protocol_pacing({}, {})[1] == "default"
+    assert pa.effective_protocol_pacing({"follow": False}, {"min_sec": 8, "max_sec": 20})[1] == "instant"
+
+
+@pytest.mark.asyncio
+async def test_run_autoreply_uses_default_when_unconfigured():
+    """存量节点端到端：protocol_autoreply 开、无任何节奏配置 → 兜底延迟真的生效（非秒回）。"""
+    slept = []
+
+    async def _send(**kw):
+        pass
+
+    async def _sleep(d):
+        slept.append(d)
+
+    cfg = {"protocol_autoreply": {"enabled": True}}   # 无 delay、无 deliver_delay
+    res = await pa.run_autoreply(
+        _payload(), registry=_Reg(), cfg=cfg, generate=_gen, send=_send,
+        risk_fn=lambda t: "low", now=None, sleep=_sleep)   # now=None → 走真实 elapsed 扣减
+    assert res["sent"] is True
+    # 兜底 8-20s adaptive；短回复"你好"估时后仍应 >0（非秒回），且 <=20
+    assert slept and 0 < sum(slept) <= 20
+
+
+def test_humanize_flags_default_both_on():
+    assert pa.humanize_flags({}, "telegram") == (True, True)
+
+
+def test_humanize_flags_global_off():
+    cfg = {"inbox": {"l2_autosend": {
+        "mark_read_before_reply": False, "typing_indicator": False}}}
+    assert pa.humanize_flags(cfg, "telegram") == (False, False)
+
+
+def test_humanize_flags_platform_override():
+    cfg = {"inbox": {"l2_autosend": {
+        "typing_indicator": True,
+        "platform_humanize": {"telegram": {"typing": False}}}}}
+    assert pa.humanize_flags(cfg, "telegram") == (True, False)
+    # 覆写只作用于该平台，其余平台仍跟随全局
+    assert pa.humanize_flags(cfg, "whatsapp") == (True, True)
+
+
+@pytest.mark.asyncio
+async def test_run_autoreply_follows_slider_and_runs_humanize_in_order():
+    """协议链集成：无 own.delay 时跟随滑杆延迟，且已读→打字→发送有序。"""
+    events = []
+
+    async def _send(**kw):
+        events.append(("send", kw.get("text")))
+
+    async def _sleep(d):
+        events.append(("sleep", round(float(d), 2)))
+
+    async def _mark_read(**kw):
+        events.append(("read", kw.get("chat_key")))
+
+    async def _typing(**kw):
+        events.append(("type", kw.get("action")))
+
+    cfg = {"protocol_autoreply": {"enabled": True},
+           "inbox": {"l2_autosend": {"deliver_delay": {
+               "min_sec": 3, "max_sec": 3, "adaptive": False}}}}
+    res = await pa.run_autoreply(
+        _payload(), registry=_Reg(), cfg=cfg, generate=_gen, send=_send,
+        risk_fn=lambda t: "low", now=1000, sleep=_sleep,
+        mark_read=_mark_read, typing=_typing)
+    assert res["sent"] is True
+    kinds = [e[0] for e in events]
+    assert kinds[0] == "read"                 # 先看
+    assert "type" in kinds                    # 挂过「正在输入」
+    assert kinds[-1] == "send"                # 最后才发
+    assert kinds.index("read") < kinds.index("type") < kinds.index("send")
+    # 总等待≈3s（滑杆值）——证明协议链确实吃到了 deliver_delay
+    slept = sum(e[1] for e in events if e[0] == "sleep")
+    assert 2.5 <= slept <= 3.5
+
+
+@pytest.mark.asyncio
+async def test_run_autoreply_follow_false_stays_instant():
+    """follow:false 逃生阀：协议链保持秒回（不吃滑杆）。"""
+    slept = []
+
+    async def _send(**kw):
+        pass
+
+    async def _sleep(d):
+        slept.append(d)
+
+    cfg = {"protocol_autoreply": {"enabled": True,
+                                  "delay": {"follow": False}},
+           "inbox": {"l2_autosend": {"deliver_delay": {
+               "min_sec": 30, "max_sec": 60}}}}
+    res = await pa.run_autoreply(
+        _payload(), registry=_Reg(), cfg=cfg, generate=_gen, send=_send,
+        risk_fn=lambda t: "low", now=1000, sleep=_sleep)
+    assert res["sent"] is True
+    assert slept == []   # follow:false → 空节奏 → 0 延迟
+
+
 # ── 接管摘标 ──────────────────────────────────────────────────────────────
 
 class _Store:

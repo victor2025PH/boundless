@@ -364,6 +364,9 @@
     <button id="ov-dh-refresh" style="font-size:.72rem;padding:.18rem .6rem;border:1px solid var(--bd);border-radius:6px;background:transparent;color:inherit;cursor:pointer" title="{{ (i18n or {}).get('ov_dh_refresh_title','内嵌平台注入逐选择器命中；失配多为官方网页改版，可改 config/desktop_selector_profiles.json 热修') }}">{{ (i18n or {}).get('refresh','刷新') }}</button>
   </div>
   <div id="ov-dh-body" style="margin-top:.45rem;font-size:.76rem;line-height:1.5;color:var(--muted)">{{ (i18n or {}).get('rpa_loading','载入中…') }}</div>
+  <!-- 逐字段失配诊断（仅在有持续失配时出现）：把「N 个账号坏了」下钻到「先校准哪个字段」。
+       数据早在 /api/desktop/inject-health/alerts.selector_diagnosis，此前无人渲染＝白算。 -->
+  <div id="ov-dh-diag" style="margin-top:.35rem;font-size:.72rem;color:var(--muted);display:none"></div>
 </div>
 
 <!-- D4b：受控桌面出站队列（autopilot 发给内嵌账号的回复，已过 send-gate/kill-switch 闸门）-->
@@ -1430,6 +1433,10 @@ const _DH_STATUS = {
   ok:                {t:window.T('ov_js_dh_ok'),        c:'#3fb950'},
   mismatch_composer: {t:window.T('ov_js_dh_composer'),      c:'#f85149'},
   mismatch_bubble:   {t:window.T('ov_js_dh_bubble'),        c:'#f85149'},
+  // 元素都在、取不出内容（selectors 布尔表全绿的那类失效）：修法是校准取值字段，
+  // 与「元素找不到」两种失配区分开，否则运营照着状态去改一个没坏的定位选择器。
+  mismatch_text:     {t:window.T('ov_js_dh_text_fail'),   c:'#f85149', h:window.T('ov_js_dh_text_title')},
+  mismatch_ingest:   {t:window.T('ov_js_dh_ingest_fail'), c:'#f85149', h:window.T('ov_js_dh_ingest_fail_title')},
   no_chat:           {t:window.T('ov_js_dh_nochat'), c:'#d29922'},
   unsupported:       {t:window.T('ov_js_dh_unsupported'),      c:'var(--muted)'},
 };
@@ -1465,7 +1472,11 @@ async function ovRefreshDesktopHealth(){
       const st = _DH_STATUS[a.status] || {t:a.status||window.T('ov_js_unknown'), c:'var(--muted)'};
       const stale = a.stale ? ' <span style="color:#d29922" title="'+window.T('ov_js_dh_stale_title')+'">'+window.T('ov_js_dh_stalled')+'</span>' : '';
       const sel = a.selectors||{};
-      const bad = ['composer','bubble','sendBtn','peerTitle'].filter(function(k){ return sel[k]===false; });
+      // 入库时缺失键被补成 false → 「客户端没上报这张表」与「四个键全坏」同形。数到了
+      // 气泡还说 bubble 抓空、或 composer 标志为真还说 composer 抓空 = 那是补出来的默认
+      // 值，整表弃用（与后端 missing_selectors 同口径）。宁可不给线索，不给错线索。
+      const selTrust = !((a.bubbles>0 && sel.bubble===false) || (a.composer && sel.composer===false));
+      const bad = selTrust ? ['composer','sendBtn','bubble','peerTitle'].filter(function(k){ return sel[k]===false; }) : [];
       const selNote = (String(a.status||'').indexOf('mismatch')===0 && bad.length)
         ? ' <span style="color:var(--muted);font-size:.68rem">'+window.T('ov_js_dh_missing')+bad.join('/')+'</span>' : '';
       // #4：失配持续时长（≥1 分钟标红，提示是「持续」而非「抖动」）
@@ -1475,9 +1486,29 @@ async function ovRefreshDesktopHealth(){
       const ing = a.can_ingest ? '' : ' <span style="color:var(--muted);font-size:.68rem" title="'+window.T('ov_js_dh_ingest_title')+'">'+window.T('ov_js_dh_ingest_off')+'</span>';
       return '<div style="display:flex;justify-content:space-between;gap:.5rem;padding:.2rem 0;border-bottom:1px solid var(--bd)">'
         + '<span>'+_dhEsc(a.platform)+' · '+_dhEsc(a.account_id||'—')+gen+ing+'</span>'
-        + '<span style="color:'+st.c+'">'+st.t+selNote+durNote+stale+'</span></div>';
+        + '<span style="color:'+st.c+'"'+(st.h?' title="'+_dhEsc(st.h)+'"':'')+'>'+st.t+selNote+durNote+stale+'</span></div>';
     }).join('');
+    await _dhRenderDiagnosis(persist);
   }catch(e){ body.textContent = window.T('ov_js_dh_req_fail'); }
+}
+
+// 逐字段诊断行：只在有持续失配时才多打一发请求（健康态零额外轮询开销）。
+async function _dhRenderDiagnosis(persist){
+  const el = document.getElementById('ov-dh-diag');
+  if(!el) return;
+  if(!persist){ el.style.display='none'; el.textContent=''; return; }
+  try{
+    const d = await apiFetch('/api/desktop/inject-health/alerts').then(r=>r.json());
+    const rows = (d&&d.selector_diagnosis)||[];
+    if(!rows.length){ el.style.display='none'; return; }
+    el.innerHTML = window.T('ov_js_dh_diag')+rows.map(function(r){
+      // advisory＝抓空未必是故障（sendBtn 多数平台只在有内容时渲染）；不标注它会凭恒
+      // False 稳居榜首，把运营引向没坏的字段。
+      const adv = r.advisory ? ' <span style="opacity:.7">'+window.T('ov_js_dh_advisory')+'</span>' : '';
+      return '<code>'+_dhEsc(r.key)+'</code>×'+(r.missing||0)+adv;
+    }).join(' · ');
+    el.style.display='';
+  }catch(e){ el.style.display='none'; }
 }
 
 // ── D4b：受控桌面出站队列看板 ────────────────────────────────────────────────

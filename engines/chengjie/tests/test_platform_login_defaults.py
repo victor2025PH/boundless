@@ -43,7 +43,7 @@ SEED = ENGINE_ROOT / "config" / "config.desktop.min.yaml"
 
 # 接入启用开关的命名约定叶子名。device_fingerprint.enabled / sync.enabled /
 # credpool.enabled / platform_login.enabled 等非「登录方式」开关据此天然排除。
-_LOGIN_SWITCH_LEAVES = ("protocol_enabled", "web_enabled")
+_LOGIN_SWITCH_LEAVES = ("protocol_enabled", "web_enabled", "phone_enabled")
 _ORCH_KEY = "platform_login.orchestrator_enabled"
 
 
@@ -131,13 +131,14 @@ def test_unlisted_key_not_defaulted_on():
 # ── 登录方式读取函数实际接线（桌面升级自愈；本轮补齐 messenger 曾漏接）──────
 
 def _login_mode_readers():
-    """四个登录方式开关的**canonical 读取函数**（全部消费方都经它们）。
+    """登录方式开关的**canonical 读取函数**（全部消费方都经它们）。
 
-    必须与 ``_DESKTOP_LOGIN_DEFAULT_ON`` 里的四个平台键一一对应——漏一个就等于那个
+    必须与 ``_DESKTOP_LOGIN_DEFAULT_ON`` 里的平台键一一对应——漏一个就等于那个
     平台的表项是死的（messenger 与 telegram 各出过一次这个形态）。
     """
     from src.integrations.line_protocol_login import protocol_enabled as line_on
     from src.integrations.messenger_web_login import web_enabled as mg_on
+    from src.integrations.telegram_phone_login import phone_enabled as tg_phone_on
     from src.integrations.telegram_protocol_login import protocol_enabled as tg_on
     from src.integrations.whatsapp_baileys_login import protocol_enabled as wa_on
     return {
@@ -145,6 +146,7 @@ def _login_mode_readers():
         "platform_login.whatsapp.protocol_enabled": wa_on,
         "platform_login.messenger.web_enabled": mg_on,
         "platform_login.telegram.protocol_enabled": tg_on,
+        "platform_login.telegram.phone_enabled": tg_phone_on,
     }
 
 

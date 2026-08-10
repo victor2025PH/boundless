@@ -158,7 +158,7 @@ def wired_store(tmp_path):
 async def test_outgoing_never_reaches_process_message(mirror_outgoing):
     """最重要的一条：无论镜像开关如何，我方自己发的消息都不得走 AI 全链。"""
     tc = _mk_tc(mirror_outgoing=mirror_outgoing)
-    tc._mirror_outgoing_message = MagicMock(return_value=True)
+    tc._mirror_outgoing_message = AsyncMock(return_value=True)
     handler = _private_handler(tc)
 
     await handler(tc.client, _mk_msg(mid=638, outgoing=True))
@@ -171,7 +171,7 @@ async def test_outgoing_never_reaches_process_message(mirror_outgoing):
 @pytest.mark.asyncio
 async def test_flag_on_mirrors_outgoing():
     tc = _mk_tc(mirror_outgoing=True)
-    tc._mirror_outgoing_message = MagicMock(return_value=True)
+    tc._mirror_outgoing_message = AsyncMock(return_value=True)
     handler = _private_handler(tc)
 
     msg = _mk_msg(mid=639, outgoing=True)
@@ -188,7 +188,7 @@ async def test_flag_on_mirrors_outgoing():
 async def test_flag_off_skips_without_mirroring():
     """关掉镜像只是不落工作台，**不是**放行进 AI 管道（这里曾是唯一的守卫缺口）。"""
     tc = _mk_tc(mirror_outgoing=False)
-    tc._mirror_outgoing_message = MagicMock(return_value=True)
+    tc._mirror_outgoing_message = AsyncMock(return_value=True)
     handler = _private_handler(tc)
 
     await handler(tc.client, _mk_msg(mid=640, outgoing=True))
@@ -209,7 +209,7 @@ async def test_mirror_flag_is_read_live_per_message():
         },
         get=lambda _k, _d=None: _d if _d is not None else {},
     )
-    tc._mirror_outgoing_message = MagicMock(return_value=True)
+    tc._mirror_outgoing_message = AsyncMock(return_value=True)
     handler = _private_handler(tc)
 
     await handler(tc.client, _mk_msg(mid=641, outgoing=True))
@@ -225,7 +225,7 @@ async def test_mirror_flag_is_read_live_per_message():
 @pytest.mark.asyncio
 async def test_outgoing_does_not_consume_rate_limit_or_autoban():
     tc = _mk_tc(mirror_outgoing=True)
-    tc._mirror_outgoing_message = MagicMock(return_value=True)
+    tc._mirror_outgoing_message = AsyncMock(return_value=True)
     handler = _private_handler(tc)
 
     for mid in (643, 644, 645):
@@ -246,7 +246,7 @@ async def test_outbound_branch_does_not_claim_before_mirroring():
     """
     trace: list = []
     tc = _mk_tc(mirror_outgoing=True, trace=trace)
-    tc._mirror_outgoing_message = MagicMock(
+    tc._mirror_outgoing_message = AsyncMock(
         side_effect=lambda *_a: trace.append(("mirror",)) or True)
     handler = _private_handler(tc)
 
@@ -300,7 +300,7 @@ async def test_saved_messages_neither_processed_nor_mirrored():
     """收藏夹（chat.id == 本账号 id）：pyrogram 明确「发给自己的不算 outgoing」，
     没这道闸就会变成「AI 在老板的收藏夹里回复他」。笔记不是客户会话，也不该镜像。"""
     tc = _mk_tc(mirror_outgoing=True)
-    tc._mirror_outgoing_message = MagicMock(return_value=True)
+    tc._mirror_outgoing_message = AsyncMock(return_value=True)
     handler = _private_handler(tc)
 
     await handler(tc.client, _mk_msg(mid=648, outgoing=False, chat_id=SELF_ID,
@@ -315,7 +315,7 @@ async def test_saved_messages_neither_processed_nor_mirrored():
 async def test_telegram_service_chat_neither_processed_nor_mirrored():
     """777000 = Telegram 官方服务号（登录验证码）。让 AI 对它回话既荒唐又白烧 token。"""
     tc = _mk_tc(mirror_outgoing=True)
-    tc._mirror_outgoing_message = MagicMock(return_value=True)
+    tc._mirror_outgoing_message = AsyncMock(return_value=True)
     handler = _private_handler(tc)
 
     await handler(tc.client, _mk_msg(mid=649, outgoing=False,
@@ -332,7 +332,7 @@ async def test_saved_messages_not_mirrored_even_if_marked_outgoing():
     """防隐私外泄：万一某天 Saved Messages 真带上 ``outgoing=True``（服务端行为随 layer
     变动），也绝不能把老板的私人笔记镜像进客户工作台——故系统会话判在出站分支之前。"""
     tc = _mk_tc(mirror_outgoing=True)
-    tc._mirror_outgoing_message = MagicMock(return_value=True)
+    tc._mirror_outgoing_message = AsyncMock(return_value=True)
     handler = _private_handler(tc)
 
     await handler(tc.client, _mk_msg(mid=650, outgoing=True, chat_id=SELF_ID,
@@ -360,7 +360,7 @@ async def test_normal_inbound_still_flows_into_pipeline():
     """对照组：普通客户消息照旧限流 → claim → 进 AI 管道（证明上面的断言不是整条路都死了）。"""
     trace: list = []
     tc = _mk_tc(mirror_outgoing=True, trace=trace)
-    tc._mirror_outgoing_message = MagicMock(return_value=True)
+    tc._mirror_outgoing_message = AsyncMock(return_value=True)
     handler = _private_handler(tc)
 
     await handler(tc.client, _mk_msg(mid=660, outgoing=False, text="在吗"))

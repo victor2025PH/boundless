@@ -10,6 +10,7 @@ const {
   selectorHealth,
   BUILTIN_PROFILES,
   OVERLAYABLE_KEYS,
+  textWithoutInjected,
 } = require("../../shared/inject/profiles.js");
 const { needsChromeUa, urlNeedsChromeUa } = require("../webview-ua.js");
 
@@ -137,5 +138,58 @@ ok("ua x", needsChromeUa("x") === true);
 ok("ua telegram 不伪装", needsChromeUa("telegram") === false);
 ok("ua url instagram", urlNeedsChromeUa("https://www.instagram.com/direct/inbox/") === true);
 ok("ua url telegram 不伪装", urlNeedsChromeUa("https://web.telegram.org/k/") === false);
+
+// ── 取原文必须摘掉我们自己注入的译文/按钮 ─────────────────────────────────────
+// 迷你假 DOM：只实现 textWithoutInjected 用到的四种能力（querySelector / querySelectorAll +
+// remove / cloneNode / textContent），够钉住「注入物有没有被摘掉」这一个不变量。
+function fakeNode(parts) {
+  const node = {
+    _parts: parts.map((p) => ({ cls: p.cls, text: p.text })),
+    get textContent() { return this._parts.map((p) => p.text).join(""); },
+    _match(sel) {
+      const want = String(sel).split(",").map((s) => s.trim().replace(/^\./, ""));
+      return this._parts.filter((p) => want.indexOf(p.cls) >= 0);
+    },
+    querySelector(sel) { return this._match(sel)[0] || null; },
+    querySelectorAll(sel) {
+      const owner = this;
+      return this._match(sel).map((p) => ({
+        remove() { owner._parts = owner._parts.filter((x) => x !== p); },
+      }));
+    },
+    cloneNode() { return fakeNode(this._parts); },
+  };
+  return node;
+}
+
+const clean = fakeNode([{ cls: "", text: "Hello there" }]);
+ok("无注入物：原样返回（零克隆快路径）", textWithoutInjected(clean) === "Hello there");
+const dirty = fakeNode([
+  { cls: "", text: "Hello there" },
+  { cls: "aitr-box", text: "你好呀" },
+  { cls: "aitr-btn", text: "点击翻译" },
+]);
+ok("摘掉译文块与按钮", textWithoutInjected(dirty) === "Hello there");
+ok("摘除只作用于克隆,原节点不动", dirty.textContent === "Hello there你好呀点击翻译");
+ok("null 安全", textWithoutInjected(null) === "");
+
+// WhatsApp 回落取文路径的回归钉：注入控件挂在 `.copyable-text` 里,而媒体气泡没有
+// selectable-text → 不摘注入物就会把译文当原文读回去（"Hello there你好呀"）,污染 ingest
+// 与智能回复上下文,并让原文指纹每轮判「已变」→ 陈旧标记与自动重译死循环。
+const waInjected = fakeNode([
+  { cls: "", text: "Hello there" },
+  { cls: "aitr-box", text: "你好呀" },
+]);
+const waBubble = {
+  classList: { contains: (c) => c === "message-in" },
+  getAttribute: (k) => (k === "data-id" ? "false_1@c.us_ABC" : null),
+  querySelector: (sel) => {
+    const s = String(sel);
+    if (s.indexOf("selectable-text") >= 0) return null; // 媒体气泡：无可选文本节点
+    if (s.indexOf(".copyable-text, .copyable-area") >= 0) return waInjected;
+    return null;
+  },
+};
+ok("wa 回落取文摘掉注入译文", BUILTIN_PROFILES.whatsapp.text(waBubble) === "Hello there");
 
 console.log(`profiles.test.js: ${pass} passed`);

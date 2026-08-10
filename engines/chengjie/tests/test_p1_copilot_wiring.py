@@ -64,8 +64,11 @@ def test_next_actions_route_returns_current_mood_and_exclusive_write():
            ).read_text(encoding="utf-8")
     assert '"current_mood": current_mood' in src
     assert "MOOD_TAGS" in src            # 单一事实源引用（词表别抄第二份）
-    # 情绪标签互斥：写入前剔除同词表旧值
-    assert "t for t in existing_tags if t not in MOOD_TAGS" in src
+    # 情绪标签互斥（P1-198 续，2026-08-02 起收口）：路由不再内联剔旧值，统一走
+    # effective_mood.apply_mood_tag（组内互斥 + arbitration 列双写的唯一 IO 入口，
+    # 与工作链 runner / 批量打标同源——旧断言钉的内联实现已被该收口取代）。
+    assert "apply_mood_tag" in src
+    assert '"mood_manual"' in src        # 转向状态随响应回给前端徽标
 
 
 def test_cp_next_actions_shows_mood_state_in_both_trees():

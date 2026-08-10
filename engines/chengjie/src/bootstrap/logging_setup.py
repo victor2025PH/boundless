@@ -98,3 +98,15 @@ def setup_logging(assistant, log_config: dict) -> None:
                 pass
 
         assistant.logger.info(f"日志已重新配置: level={log_level}, file={log_file}")
+    # ★★★ 无论有没有 logging 配置段，src.* 都必须能出声（2026-08-04 198 教训）：
+    # 桌面版 logging.file 常为空 → 上面的 file 补丁不生效，src.*（编排器/扫码
+    # 登录/会话健康）在 backend.log 全体隐身——事故复盘五个进程会话零编排器
+    # 日志。把主 logger 现有 handler（console±file）整体镜像给 "src"（幂等，
+    # 身份+同文件双重去重，绝不重复行）。
+    try:
+        from src.utils.log_setup import mirror_handlers_to_src
+        _lvl = getattr(logging, str(
+            (log_config or {}).get("level", "INFO")).upper(), logging.INFO)
+        mirror_handlers_to_src(assistant.logger, level=_lvl)
+    except Exception:
+        pass

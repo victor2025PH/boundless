@@ -30,6 +30,10 @@ class OutreachFilters:
     max_silent_days: float = 0.0     # 0=无上限；用于排除"已流失太久"
     exclude_archived: bool = True
     limit: int = 500                 # 扫描会话上限
+    # P1 2026-08-09 点名名单（目标报表勾选完成客户等场景）：非空＝跳过圈选筛子
+    # （运营已显式选人，沉默天数/标签/归档筛子不适用），但**资格管线原样过**
+    # （cooldown / 账号配额）——绕开管线裸循环单发会同时丢三层护栏。
+    conversation_ids: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -43,6 +47,9 @@ class OutreachTarget:
     silent_days: float
     tags: List[str]
     rel_stage: str
+    # 会话客户语言（P1：批量模板是单一文案，预览里亮出语言分布让运营看见
+    # 「这批人不是一种语言」；空串=未知）
+    language: str = ""
 
 
 @dataclass
@@ -88,6 +95,10 @@ class OutreachPlanner:
         self, filters: OutreachFilters, *, now: Optional[float] = None,
     ) -> List[OutreachTarget]:
         now = float(now if now is not None else time.time())
+        ids = [str(c).strip() for c in (filters.conversation_ids or [])
+               if str(c).strip()]
+        if ids:
+            return self._select_by_ids(ids, filters, now=now)
         rows = self._store.list_conversations(
             limit=max(1, int(filters.limit or 500)),
             platform=filters.platform or "",
@@ -124,9 +135,42 @@ class OutreachPlanner:
                 silent_days=round((now - last_ts) / 86400.0, 2) if last_ts else 0.0,
                 tags=list(tags),
                 rel_stage=rel_stage,
+                language=str(r.get("language") or ""),
             ))
         # 最沉默的优先触达
         out.sort(key=lambda t: t.last_ts)
+        return out
+
+    def _select_by_ids(
+        self, ids: List[str], filters: OutreachFilters, *, now: float,
+    ) -> List[OutreachTarget]:
+        """点名名单直取（P1）：运营已显式选人 → 圈选筛子（沉默/标签/归档）不适用；
+        平台过滤仍尊重（防跨平台误选），查无此会话静默剔除。上限沿用 filters.limit。"""
+        ids = list(dict.fromkeys(ids))[:max(1, int(filters.limit or 500))]
+        try:
+            rows_map = self._store.get_conversations_for_ids(ids) or {}
+        except Exception:
+            rows_map = {}
+        out: List[OutreachTarget] = []
+        for cid in ids:                       # 保持勾选顺序
+            r = rows_map.get(cid)
+            if not r:
+                continue
+            if filters.platform and str(r.get("platform") or "") != filters.platform:
+                continue
+            last_ts = float(r.get("last_ts") or 0)
+            out.append(OutreachTarget(
+                conversation_id=cid,
+                platform=str(r.get("platform") or ""),
+                account_id=str(r.get("account_id") or "default"),
+                chat_key=str(r.get("chat_key") or ""),
+                display_name=str(r.get("display_name") or ""),
+                last_ts=last_ts,
+                silent_days=round((now - last_ts) / 86400.0, 2) if last_ts else 0.0,
+                tags=[],
+                rel_stage="",
+                language=str(r.get("language") or ""),
+            ))
         return out
 
     # ── 计划（dry-run）────────────────────────────────────

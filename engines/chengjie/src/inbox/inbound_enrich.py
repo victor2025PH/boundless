@@ -128,18 +128,23 @@ def build_language_switch_hint(
     current_lang: str,
     current_text: str,
 ) -> str:
-    """近几轮用户语系与本轮不同 → 提示模型像真人一样自然跟上（不解释规则）。"""
-    from src.ai.translation_service import detect_language
+    """近几轮用户语系与本轮不同 → 提示模型自然跟上（**绝不指示点破切换**）。
 
-    # 本条到底是什么语种，以**当前文本实际检测**为准——不能只信传入的 current_lang
-    # （那是 reply_lang，可能被上一轮锁成 en 等而与本条文本矛盾）。否则会出现"用户明明
-    # 说中文，却被提示'突然换成英语啦'"的误判（真机语音场景实测复现）。
-    text_lang = (detect_language(current_text) or "").strip()
-    cur = text_lang if (text_lang and text_lang != "unknown") else (current_lang or "").strip()
-    if not cur or cur in ("unknown", "zh"):
-        return ""
-    # 一致性护栏：传入 current_lang 与文本实际语种矛盾时，以文本为准（文本已非 zh/unknown）。
-    if text_lang and text_lang != "unknown" and text_lang != cur:
+    语种判定一律走 ``lang_policy.evidence_lang``（P0-198，2026-08-03）：系统注入的
+    emoji 加注/识图描述不构成客户语言证据；本条**没有语言证据时不做任何切换断言**
+    （旧实现拿裸检测的统计兜底当证据，「Haha 😄」也能被判成 en）。
+
+    措辞纪律（两起实锤后收紧）：旧提示鼓励模型「轻轻点一下这个切换（例如"突然换成
+    日语啦？"）」——7/31 WhatsApp 与 8/03 Telegram 两起事故里，切换判定本身是被投毒的
+    误判，模型照做后变成反咬客户「suddenly switching to English?」。点破错误的代价
+    （像 gaslighting）远大于点破正确的收益（可有可无的人味），故一律禁止点破。
+    """
+    from src.ai.lang_policy import evidence_lang
+
+    # 本条到底是什么语种，以**当前文本的语言证据**为准——不能只信传入的 current_lang
+    # （那是 reply_lang，可能被上一轮锁成 en 等而与本条文本矛盾）。无证据 → 不断言。
+    cur = evidence_lang(current_text)
+    if not cur or cur == "zh":
         return ""
     prev_langs: List[str] = []
     for m in reversed(history or []):
@@ -148,8 +153,8 @@ def build_language_switch_hint(
         c = str(m.get("content") or "").strip()
         if not c or c == (current_text or "").strip():
             continue
-        lg = detect_language(c)
-        if lg and lg not in ("unknown",):
+        lg = evidence_lang(c)
+        if lg:
             prev_langs.append(lg)
         if len(prev_langs) >= 3:
             break
@@ -166,9 +171,10 @@ def build_language_switch_hint(
     cur_n = _names.get(cur, cur)
     return (
         f"【语言切换 · 自然承接】对方刚才主要用「{prev_n}」聊，本条改用了「{cur_n}」。"
-        f"请用「{cur_n}」回复，并像真人一样可轻轻点一下这个切换"
-        "（例如“突然换成日语啦？”这种自然反应，按语境决定，不要生硬解释语言规则）；"
-        "然后直接接住本条内容，保持一致的自然私聊感。"
+        f"请用「{cur_n}」回复，直接自然地接住本条内容本身。"
+        "**不要点破、追问或评论这次语言变化**（不要说「怎么换语言了/突然讲某语啦/"
+        "switched to English」之类的话——语言判断可能有误，点破错了对方会觉得莫名其妙"
+        "甚至被冒犯；真人朋友通常直接跟着对方的语言聊下去）。"
     )
 
 
@@ -217,8 +223,13 @@ _LANG_DISPLAY_NAMES = {
 def _dominant_recent_user_lang(
     history: List[Dict[str, Any]], *, exclude_text: str = "",
 ) -> str:
-    """近 3 条用户消息的主导语种（与 switch hint 同口径）；取不到返回 ""。"""
-    from src.ai.translation_service import detect_language
+    """最近一条**有语言证据**的用户消息语种（与 switch hint 同口径）；取不到返回 ""。
+
+    证据口径经 ``lang_policy.evidence_lang``（P0-198）：系统注入的 emoji 加注
+    「（表情：中文）」曾让这里把英文客户判成「主导中文」，联动 switch hint 产出
+    「你切英文了」的反咬。
+    """
+    from src.ai.lang_policy import evidence_lang
 
     for m in reversed(list(history or [])):
         if not isinstance(m, dict) or m.get("role") != "user":
@@ -226,8 +237,8 @@ def _dominant_recent_user_lang(
         c = str(m.get("content") or "").strip()
         if not c or c == (exclude_text or "").strip():
             continue
-        lg = detect_language(c)
-        if lg and lg != "unknown":
+        lg = evidence_lang(c)
+        if lg:
             return lg
     return ""
 
@@ -243,19 +254,25 @@ def build_language_anchor_hint(
     「哈哈，突然跟我讲起英文来了😅」——历史里自己的语言点评进上下文后自我强化，
     旧钉子只认「本条是中文」，反向场景零覆盖。
 
-    现语义：本条语种可判定时——
+    新增触发（2026-08-03，198 Telegram 实锤）：**我方自己刚发过错语言的消息**
+    ——英文会话里我方错发一条中文后，模型看到 assistant=中文 → user=英文 的相邻
+    轮次，会脑补「对方切回英文了」并反咬 "suddenly switching to English?"。
+    此时用户语言并没变，必须钉住事实。
+
+    现语义：本条语种可判定（``evidence_lang`` 证据口径）时——
     - 中文：历史含外语轮次或语言点评痕迹 → 锚定「对方用中文，没换语言」（原行为）；
-    - 非中文：与近几条用户消息主导语一致（即根本没发生切换）且历史里出现过
-      语言点评痕迹 → 锚定「对方一直用 X 语，没换语言，禁止评论语言切换」。
+    - 非中文：与近几条用户消息主导语一致（即根本没发生切换），且历史里出现过
+      语言点评痕迹 **或 我方最近一条有语言证据的消息语种 ≠ 对方语种**（自己发错过
+      语言）→ 锚定「对方一直用 X 语，没换语言，禁止评论语言切换」。
     条件克制（无风险语境不注入，防 prompt 膨胀）。纯函数。
     """
-    from src.ai.translation_service import detect_language
+    from src.ai.lang_policy import evidence_lang
 
     t = str(current_text or "").strip()
     if not t:
         return ""
-    cur = (detect_language(t) or "").strip()
-    if not cur or cur == "unknown":
+    cur = evidence_lang(t)
+    if not cur:
         return ""
 
     def _assistant_commented() -> bool:
@@ -285,18 +302,93 @@ def build_language_anchor_hint(
         )
 
     # 非中文：只有「语言确实没变（正面证据：近几条用户消息主导语==本条）
-    # + AI 点评过语言」的自我强化语境才注入。无用户历史证据时宁缺勿错——
-    # 断言「对方一直用 X 语」必须有据（防对新会话说瞎话）。
+    # + 自我强化风险语境（AI 点评过语言 / 我方刚发过别的语言）」才注入。
+    # 无用户历史证据时宁缺勿错——断言「对方一直用 X 语」必须有据（防对新会话说瞎话）。
     dominant = _dominant_recent_user_lang(history, exclude_text=t)
     if not dominant or dominant != cur:
         return ""  # 无证据 / 真的切换了 → 不锚定（后者交给 switch hint）
-    if not _assistant_commented():
+
+    def _assistant_recent_lang() -> str:
+        # 最近一条「有语言证据」的 assistant 消息语种（evidence_lang 同口径）。
+        # 我方错发中文给英文客户后，正是它 ≠ cur 的形态（2026-08-03 实锤）。
+        from src.ai.lang_policy import evidence_lang as _ev
+        for m in reversed(list(history or [])[-8:]):
+            if isinstance(m, dict) and m.get("role") == "assistant":
+                lg = _ev(str(m.get("content") or ""))
+                if lg:
+                    return lg
+        return ""
+
+    a_lang = _assistant_recent_lang()
+    if not (_assistant_commented() or (a_lang and a_lang != cur)):
         return ""
     name = _LANG_DISPLAY_NAMES.get(cur, cur)
     return (
         f"【语言事实——锚定】对方**一直在用「{name}」交流**，本条也是「{name}」，"
-        "并没有切换语言。不要再提「突然讲英文/换语言/switched to English」之类的话"
-        "（历史里那类点评是误判），直接回应对方消息的内容本身。"
+        "并没有切换语言。历史里若有其它语言的消息或「换语言」的点评，那是我方"
+        "发出的或是误判，**不是**对方换语言的证据。不要提「突然讲英文/换语言/"
+        f"switched to English」之类的话，直接用「{name}」回应对方消息的内容本身。"
+    )
+
+
+# 语言困惑/抱怨句式（保守窄口径，宁漏勿误——必须配合「错语言语境」前置条件用）：
+# 看不懂类 / 问语言类 / english please 类 / why are you speaking 类。
+# 刻意不收「什么意思/what does that mean」（多为问内容含义，太宽）。
+_LANG_CONFUSION_RE = re.compile(
+    r"(?:can'?t|cannot|don'?t|do\s+not)\s+(?:understand|read)\b"
+    r"|\bwhat\s+language\b"
+    r"|\b(?:in\s+)?english[\s,]*(?:please|pls|plz)\b"
+    r"|\bwhy\s+(?:are\s+you\s+)?(?:speaking|writing|texting|typing)\b"
+    r"|看不懂|聽不懂|听不懂|读不懂|讀不懂"
+    r"|什么语言|什麼語言",
+    re.IGNORECASE,
+)
+# 纯问号消息（≥2 个）：错语言语境下＝典型「你发的这是啥」困惑信号
+_PURE_QMARKS_RE = re.compile(r"^[\s!！。.…]*[?？]{2,}[\s?？!！。.…]*$")
+
+
+def detect_language_complaint(
+    text: str, history: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """客户在抱怨/困惑「语言不对」→ 返回 "confusion"；否则 ""（P3-198）。
+
+    **错语言语境是必要条件**：我方最近一条有语言证据的消息语种 ≠ 对方语种时，
+    困惑句式才被采信——否则 "can't understand why she left" / 中文会话里的
+    「看不懂」（说的是内容）全是误报。8/03 事故里客户收到中文后若发 "??"，
+    此前系统毫无感知；这是「客户已经被伤到」的最后观测点 + 恢复话术触发点。
+    纯函数，绝不抛。
+    """
+    t = str(text or "").strip()
+    if not t or len(t) > 200:
+        return ""
+    from src.ai.lang_policy import evidence_lang
+
+    a_lang = ""
+    for m in reversed(list(history or [])[-8:]):
+        if isinstance(m, dict) and m.get("role") == "assistant":
+            a_lang = evidence_lang(str(m.get("content") or ""))
+            if a_lang:
+                break
+    if not a_lang:
+        return ""
+    u_lang = evidence_lang(t) or _dominant_recent_user_lang(
+        history or [], exclude_text=t)
+    if not u_lang or u_lang == a_lang:
+        return ""
+    if _LANG_CONFUSION_RE.search(t) or _PURE_QMARKS_RE.match(t):
+        return "confusion"
+    return ""
+
+
+def build_language_recovery_hint() -> str:
+    """错语言事故后的恢复话术提示（P3-198）——事故后的恢复动作比事故本身更决定
+    信任：真人发错语言会自嘲带过；装没发生（甚至反咬对方）才是信任事故（8/03 实锤）。"""
+    return (
+        "【语言致歉——重要】对方这条是在表示「看不懂/你用错了语言」——你上一条"
+        "消息很可能不是对方的语言。本条回复：先用**对方的语言**说一句很短、自然的"
+        "道歉或自嘲（像真人发错聊天窗口那样轻轻带过），然后用对方的语言把上一条的"
+        "意思简短重说一遍，再接住对方的内容。绝不辩解、绝不提「系统/翻译」，"
+        "也绝不再用错的语言。"
     )
 
 
@@ -310,15 +402,17 @@ def build_reply_lang_mismatch_hint(
     对方突然讲英文了」→ 产出「哈哈，突然跟我讲起英文来了😅」这类答非所问
     （198 后端日志 10:18–10:35 至少 8 次）。本提示把「为什么草稿语言与客户
     语言不同」显式讲给模型听，消除脑补空间。纯函数，语种判不出时不注入。
+    语种判定走 ``evidence_lang`` 证据口径（P0-198）：系统注入的中文加注不算
+    客户语言，无证据的中性消息（Haha/emoji）不做「对方用 X 语」的断言。
     """
-    from src.ai.translation_service import detect_language
+    from src.ai.lang_policy import evidence_lang
 
     target = str(reply_lang or "").strip().lower()
     t = str(current_text or "").strip()
     if not target or not t:
         return ""
-    cur = (detect_language(t) or "").strip().lower()
-    if not cur or cur == "unknown":
+    cur = evidence_lang(t)
+    if not cur:
         return ""
     if cur.split("-")[0] == target.split("-")[0]:
         return ""
@@ -559,6 +653,23 @@ def apply_inbound_enrichments(
     anchor = build_language_anchor_hint(list(history or []), current_text=t)
     if anchor:
         hints.append(anchor)
+    # 语言投诉/困惑（P3-198）：计数恒记（错语言伤害的最后观测点）；恢复话术
+    # 只在**非钉死工作语言**场景注入——mismatch hint 在场＝运营刻意锁了草稿
+    # 语言，「改用对方语言重说」会与之打架，此时只观测、语言决策交给运营。
+    try:
+        _lc = detect_language_complaint(t, list(history or []))
+        if _lc:
+            try:
+                from src.inbox.outbound_lang_stats import get_outbound_lang_stats
+                get_outbound_lang_stats().record(
+                    "complaint",
+                    conversation_id=str(user_context.get("chat_id") or ""))
+            except Exception:
+                pass
+            if not mismatch:
+                hints.append(build_language_recovery_hint())
+    except Exception:
+        pass
     # 时间断层（P2-198 复活）：Phase8 只在 process_message 链写 _turn_gap_sec，
     # 草稿链恒缺 → 该提示从未生效。键**缺席**时从历史行的可选 ts 推导
     # （normalize_history 已透传）：取「最后一条 != 当前文本的用户消息」时间。
@@ -601,6 +712,24 @@ def apply_inbound_enrichments(
         sc_hint = build_self_claims_hint(list(history or []))
         if sc_hint:
             hints.append(sc_hint)
+    except Exception:
+        pass
+    # AI 质疑应对（2026-08-03，AI 味周报闭环）：客户质疑「你是AI/机器人」或吐槽
+    # 「机器味」→ 注入应对要点（别否认三连/别自证/别突然热情），并进程计数供观测。
+    # 词表保守（宁漏勿误，正常聊 AI 工具不命中），与周报离线口径同源
+    # （src/utils/ai_suspicion 单一事实源）。
+    try:
+        from src.utils.ai_suspicion import (
+            build_suspicion_hint,
+            detect_ai_suspicion,
+            record_suspicion,
+        )
+        _sus_kind = detect_ai_suspicion(t)
+        if _sus_kind:
+            record_suspicion(_sus_kind, t)
+            _sus_hint = build_suspicion_hint(_sus_kind, t)
+            if _sus_hint:
+                hints.append(_sus_hint)
     except Exception:
         pass
     if hints:

@@ -1012,3 +1012,21 @@ def test_warmup_personas_collects_refs_and_registers(tmp_path):
         n = warmup_personas(cfg)
     assert n == 1
     assert reg.call_count == 1
+
+
+# ── 跨机 TTS 鉴权头（2026-08-02：修 140/173 节点 401，多端点回落从未生效）────────
+def test_svc_headers_loopback_none_lan_token(tmp_path):
+    from src.ai.avatar_voice import AvatarVoiceClient
+    tok = tmp_path / "svc_token.txt"
+    tok.write_text("tok-abc\n", encoding="utf-8")
+    c = AvatarVoiceClient({"stt": {"token_file": str(tok)}})
+    assert c._svc_headers("http://127.0.0.1:7852") is None
+    assert c._svc_headers("http://localhost:7852") is None
+    assert c._svc_headers("http://192.168.0.140:7852") == {"X-AH-Svc": "tok-abc"}
+    assert c._svc_headers("http://192.168.0.173:7852") == {"X-AH-Svc": "tok-abc"}
+
+
+def test_svc_headers_missing_token_stays_old_behavior(tmp_path):
+    from src.ai.avatar_voice import AvatarVoiceClient
+    c = AvatarVoiceClient({"stt": {"token_file": str(tmp_path / "nope.txt")}})
+    assert c._svc_headers("http://192.168.0.140:7852") is None

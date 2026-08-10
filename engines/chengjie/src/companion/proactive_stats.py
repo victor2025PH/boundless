@@ -25,6 +25,8 @@ _photo_sent = 0
 _variety_blocks = 0
 _optout_mutes = 0
 _checkin_gate_skips = 0
+_fabrication_blocks = 0
+_lang_gate_blocks = 0
 _sent_modes: Dict[str, int] = {}
 _media_skips: Dict[str, Dict[str, int]] = {}
 _last: Dict[str, Any] = {}
@@ -88,6 +90,21 @@ def record_checkin_gate() -> None:
         _checkin_gate_skips += 1
 
 
+def record_fabrication_block() -> None:
+    """反编造守卫拦截计数（P1 2026-08-03：拦下=避免了一次「编造共同回忆」穿帮）。"""
+    global _fabrication_blocks
+    with _lock:
+        _fabrication_blocks += 1
+
+
+def record_lang_gate_block() -> None:
+    """出站语言闸拦截计数（P2-198 2026-08-04：拦下=避免了一次「给外语客户
+    发中文开场」穿帮——生产实锤 telegram:8244899… 30 天 6 条中文晨安）。"""
+    global _lang_gate_blocks
+    with _lock:
+        _lang_gate_blocks += 1
+
+
 def record_tick(*, planned: int, sent: int, dry_run: bool = False) -> None:
     global _ticks, _planned_sum, _sent_sum, _last
     with _lock:
@@ -114,6 +131,8 @@ def metrics_snapshot() -> Dict[str, Any]:
             "variety_blocks": _variety_blocks,
             "optout_mutes": _optout_mutes,
             "checkin_gate_skips": _checkin_gate_skips,
+            "fabrication_blocks": _fabrication_blocks,
+            "lang_gate_blocks": _lang_gate_blocks,
             "sent_modes": dict(_sent_modes),
             "media_skips": {k: dict(v) for k, v in _media_skips.items()},
             "last_tick": dict(_last),
@@ -124,6 +143,7 @@ __all__ = [
     "record_tick", "record_voice", "record_photo",
     "record_sent_mode", "record_media_skip",
     "record_variety_block", "record_optout_mute",
-    "record_checkin_gate",
+    "record_checkin_gate", "record_fabrication_block",
+    "record_lang_gate_block",
     "metrics_snapshot",
 ]

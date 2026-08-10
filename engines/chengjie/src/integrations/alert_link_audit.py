@@ -122,6 +122,34 @@ def audit_alert_link(
     }
 
 
+def config_fingerprint(webhooks: Optional[Iterable[Dict[str, Any]]]) -> str:
+    """webhook 列表的**非密钥字段**稳定指纹（12 hex）。
+
+    用途＝分歧检测：「磁盘文件真相」与「运行中 notifier 已装载的配置」是否同一份
+    ——手改文件绕过面板时 notifier 不会热更，两边指纹一比即现形；只比数量会漏掉
+    「条数相同、events/enabled 被改」的分歧。刻意不把 token/secret/url/target 原文
+    喂进哈希（只记 *_set 布尔）：指纹会出现在自检 API 响应里，输入面保持零敏感。
+    events 排序 + sort_keys ＝ 与条目内字段顺序无关，同配置恒同指纹。
+    """
+    import hashlib
+    import json as _json
+
+    canon = [
+        {
+            "name": str(w.get("name") or ""),
+            "format": str(w.get("format") or "json").lower(),
+            "events": sorted(str(e) for e in (w.get("events") or [])),
+            "enabled": w.get("enabled") is not False,
+            "url_set": bool(w.get("url")),
+            "token_set": bool(w.get("token")),
+            "target_set": bool(w.get("target") or w.get("chat_id")),
+        }
+        for w in (webhooks or []) if isinstance(w, dict)
+    ]
+    blob = _json.dumps(canon, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:12]
+
+
 def detect_orphan_config(
     engine_root: Any,
     data_root: Any,

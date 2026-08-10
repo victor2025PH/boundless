@@ -40,7 +40,7 @@ import sys
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
-DEFAULT_BASE = "http://localhost:18799"
+DEFAULT_BASE = "http://127.0.0.1:18799"  # 勿改回 localhost：::1 回退每连接 ~2s（见 verify_inbox_density.py 同行注释）
 DEFAULT_DATA_ROOT = "D:/chengjie-instances/zhiliao/data"
 CANDIDATE_PLATFORMS = ["telegram", "whatsapp", "line", "messenger", "web"]
 
@@ -409,7 +409,15 @@ def run(base: str, token: str, *, shots: Optional[Path] = None,
                               wait_until="domcontentloaded")
                     page.wait_for_function(
                         "() => typeof window.setPlatFilter === 'function'", timeout=15000)
-                    page.wait_for_timeout(3500)   # loadChats 一轮 + 救援 scoped 取数
+                    # 事件驱动等待（勿改回固定 3500ms）：救援 fetch 可能撞冷启动请求
+                    # 风暴被浏览器排队（2026-08-05 实测首发挂 6s+ 后靠重试成功），
+                    # 门禁等「头部出名字」这一事实、上限 15s，不赌固定窗口。
+                    try:
+                        page.wait_for_function(
+                            "() => ((document.getElementById('hdr-name')||{})"
+                            ".textContent||'').trim().length > 0", timeout=15000)
+                    except Exception:
+                        pass   # 超时也继续取值，让断言如实红
                     hdr = page.evaluate(
                         "() => ((document.getElementById('hdr-name')||{})"
                         ".textContent||'').trim()")

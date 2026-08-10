@@ -9,7 +9,14 @@
 //   ③启动共享核心。
 //
 // preload 在隔离世界运行但可用 require（main.js 已对 webview 关 sandbox）；
-// 故直接 require repo 根 shared/inject（本仓库无 electron-builder 打包，目录结构稳定）。
+// 故直接 require repo 根 shared/inject。
+//
+// ⚠ 这条相对路径在**装机版里跨出了 app.asar**：包内本文件在 app.asar/inject/ 下，
+// `../../shared/inject/*` 落到 resources/shared/inject/ —— 只有 package.json 的
+// extraResources 映射（`../shared/inject` → `shared/inject`）把它随包送过去才成立。
+// 那条映射曾经不存在，于是 1.016/1.017 出货时整个注入层在客户机 MODULE_NOT_FOUND
+// 静默死掉（开发机因为能直接读到 repo 根，永远复现不出）。现由
+// test/package-layout.test.js（按真实 require 反推包内路径）+ after-pack REQUIRED 双守。
 
 const { ipcRenderer } = require("electron");
 
@@ -20,10 +27,23 @@ try {
 } catch (e) {
   /* 媒体格式化模块缺失：媒体翻译降级关闭，不影响文本链路 */
 }
+let translateScheduler = null;
+try {
+  translateScheduler = require("../../shared/inject/translate-scheduler.js");
+} catch (e) {
+  /* 调度器缺失：core 回落逐条 translate，行为不变 */
+}
+let bubbleModel = null;
+try {
+  bubbleModel = require("../../shared/inject/bubble-model.js");
+} catch (e) {
+  /* 渲染模型缺失：core 回落单块译文旧渲染，行为不变 */
+}
 const { createInject } = require("../../shared/inject/core.js");
 
 const host = {
   translate: (args) => ipcRenderer.invoke("desktop:translate", args),
+  translateBatch: (args) => ipcRenderer.invoke("desktop:translate-batch", args),
   translateMedia: (args) => ipcRenderer.invoke("desktop:translate-media", args),
   smartReply: (args) => ipcRenderer.invoke("desktop:smart-reply", args),
   ingest: (args) => ipcRenderer.invoke("desktop:ingest", args),
@@ -58,10 +78,19 @@ const host = {
       /* 非 webview 宿主：忽略 */
     }
   },
+  // 受控出站回执：fill-composer 到底填没填上、发没发出去（宿主据此 ack 后端队列）。
+  // 没有它，宿主只能「发完就当成功」——注入失效时会把每条命令谎报成已送达。
+  reportFillResult: (payload) => {
+    try {
+      ipcRenderer.sendToHost("fill-result", payload);
+    } catch (e) {
+      /* 非 webview 宿主：忽略 */
+    }
+  },
   onSetPersona: (cb) => ipcRenderer.on("set-persona", (_e, payload) => cb(payload)),
   onSetReplyLang: (cb) => ipcRenderer.on("set-reply-lang", (_e, payload) => cb(payload)),
   onSetAccount: (cb) => ipcRenderer.on("set-account", (_e, payload) => cb(payload)),
   onFillComposer: (cb) => ipcRenderer.on("fill-composer", (_e, payload) => cb(payload)),
 };
 
-createInject(host, { profiles, mediaFormat }).autostart();
+createInject(host, { profiles, mediaFormat, translateScheduler, bubbleModel }).autostart();

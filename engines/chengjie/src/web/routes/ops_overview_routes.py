@@ -665,6 +665,43 @@ def register_ops_overview_routes(app, ctx) -> None:
             logger.debug("gpu-watermark 探测失败（已忽略）", exc_info=True)
             return {"ok": True, "enabled": False, "hosts": []}
 
+    @app.get("/api/admin/automation-coverage")
+    async def api_automation_coverage(request: Request):
+        """自动化覆盖率（P1 2026-08-09，.198/.104 事故第三批）。
+
+        「多少会话真在全自动跑、没跑的被什么压住（封顶/接管/显式档位）、
+        待审稿龄分布」一次读全——此前这个老板级问题只能逐会话点开拼答案。
+        口径与护栏同源（compute_mode_caps / takeover source / 全局默认回落），
+        纯读 fail-open；无持久层/零会话 → ``applicable:false`` 前端整卡隐藏
+        （gpu-watermark 同约定）。
+        """
+        api_auth(request)
+        from src.inbox.automation_coverage import collect_automation_coverage
+        store = getattr(request.app.state, "inbox_store", None)
+        cfg = getattr(config_manager, "config", None) or {}
+        cfg = cfg if isinstance(cfg, dict) else {}
+        if store is None:
+            return {"ok": True, "applicable": False}
+        data = collect_automation_coverage(store, cfg)
+        data["applicable"] = bool(
+            (data.get("totals") or {}).get("conversations"))
+        # 趋势段（P2）：ops.automation_coverage_trend 开启才有（watchdog 每小时
+        # 落当日快照）；关闭/无历史 → 键缺席，前端不画趋势线。
+        try:
+            from src.inbox.automation_coverage_trend import (
+                get_coverage_trend_store,
+                trend_cfg,
+            )
+            if trend_cfg(cfg)["enabled"]:
+                try:
+                    days = int(request.query_params.get("days") or 14)
+                except (TypeError, ValueError):
+                    days = 14
+                data["trend"] = get_coverage_trend_store().recent(days=days)
+        except Exception:
+            logger.debug("[coverage] 趋势段读取失败（忽略）", exc_info=True)
+        return data
+
     @app.get("/api/admin/acquisition-health")
     async def api_acquisition_health(request: Request):
         """个人号获客健康（P8）：所有 ``personal_rpa`` 账号的 account_health 聚合。
@@ -747,6 +784,75 @@ def register_ops_overview_routes(app, ctx) -> None:
         return _Resp(
             content=blob, media_type="application/zip",
             headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+    @app.post("/api/admin/diagnostic-upload")
+    async def api_diagnostic_upload(request: Request, probe: int = 0):
+        """P1-⑦ 一键诊断直传：本机打包 → 服务端转投官网 → 回 6 位短码。
+
+        「下载 zip → 找客服 → 发文件」三步高摩擦变一步：用户点一下，把短码念给
+        客服即可（官网收包自动推送到客服 TG，见 website /api/diag-upload）。
+        走后端 server-to-server 转投而非浏览器直传——工作台是 127.0.0.1 源，
+        直 POST 官网必撞 CORS 预检。``?probe=1`` 探活（旧后端 404 → 按钮隐藏）。
+        """
+        api_auth(request)
+        if probe:
+            return {"ok": True}
+        import asyncio as _aio
+        import json as _json
+        import urllib.request as _rq
+        from pathlib import Path as _P
+
+        from src.utils.diagnostic_bundle import build_diagnostic_bundle
+        cfg_dir = None
+        logs_dir = None
+        try:
+            cfg_path = getattr(config_manager, "config_path", "") or ""
+            if cfg_path:
+                cfg_dir = _P(cfg_path).parent
+                logs_dir = cfg_dir.parent / "logs"
+        except Exception:
+            logger.debug("diagnostic-upload 目录解析失败", exc_info=True)
+        meta: Dict[str, Any] = {}
+        ver = ""
+        try:
+            from src.utils.app_identity import identity_payload
+            meta["app"] = identity_payload()
+            ver = str((meta["app"] or {}).get("version") or "")
+        except Exception:
+            pass
+        fp = ""
+        try:
+            from src.licensing.machine_bridge import machine_fingerprint
+            fp = machine_fingerprint() or ""
+        except Exception:
+            pass
+        blob = await _aio.to_thread(
+            build_diagnostic_bundle,
+            config_dir=cfg_dir, logs_dir=logs_dir, meta=meta)
+
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        try:
+            from src.ai.hosted_gateway import _site_url
+            site = _site_url(cfg)
+        except Exception:
+            site = "https://bd2026.cc"
+
+        def _upload() -> Dict[str, Any]:
+            req = _rq.Request(f"{site}/api/diag-upload", data=blob, method="POST")
+            req.add_header("content-type", "application/zip")
+            req.add_header("x-diag-meta", _json.dumps(
+                {"app": ver, "fp": fp}, ensure_ascii=False))
+            with _rq.urlopen(req, timeout=30) as resp:
+                return _json.loads(resp.read().decode("utf-8") or "{}")
+        try:
+            out = await _aio.to_thread(_upload)
+        except Exception:  # noqa: BLE001 —— 官网不可达/超限如实报错，别让用户干等
+            logger.info("diagnostic-upload 转投官网失败", exc_info=True)
+            return {"ok": False, "detail": tr(request, "err.svc.upstream_unreachable")}
+        if not out.get("ok") or not out.get("code"):
+            return {"ok": False,
+                    "detail": str(out.get("error") or "upload_failed")[:120]}
+        return {"ok": True, "code": str(out.get("code"))}
 
     @app.get("/api/admin/media-consistency")
     async def api_media_consistency(request: Request, force: int = 0):

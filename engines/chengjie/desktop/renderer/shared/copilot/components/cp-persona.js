@@ -198,7 +198,7 @@
         const isAcct = p.id === acctId;
         const q = `${p.name || ""} ${p.role || ""} ${p.id || ""}`.toLowerCase();
         return `<div class="pcard${on ? " on" : ""}" data-act="pick" data-pid="${esc(p.id)}" data-q="${esc(q)}">` +
-          `<span class="pnm">${esc(p.name || p.id)}${p.has_voice ? " 🎙" : ""}</span>` +
+          `<span class="pnm">${esc(p.name || p.id)}${p.has_voice ? " " + this.ic("mic", 11) : ""}</span>` +
           `<span class="prole">${esc(p.role || "")}</span>` +
           (on ? `<span class="pmark">✓</span>` : "") +
           (isAcct && !on ? `<span class="ptag">${esc(this._tierChip("account_profile"))}</span>` : "") +

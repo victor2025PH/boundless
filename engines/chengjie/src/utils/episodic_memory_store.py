@@ -1162,32 +1162,54 @@ class EpisodicMemoryStore:
         prefix: str = "",
         limit: int = 100,
         source: str = "",
+        q: str = "",
+        q_keys: Optional[List[str]] = None,
+        offset: int = 0,
     ) -> List[Dict[str, Any]]:
         """Admin: recent rows, optional filter on memory key (user_id) and source。
 
         R13：``source`` 可选筛选（``user_stated`` / ``ai_inferred``），让运营一眼分辨
         哪些记忆是 AI 推断、便于人工纠错。
+
+        身份化检索：``q``＝人类可读联合搜索——命中 **记忆键 LIKE、内容 LIKE、
+        或 q_keys 键集**（路由层先把昵称/用户名/手机号译成 conversation_id 集合
+        传入）三者任一即返回；与 prefix/source 仍为 AND 关系。q_keys 单独给而
+        q 为空时不生效（键集只是 q 的翻译产物，不是独立筛选维度）。
+
+        ``offset``＝「加载更多」分页（P1）。排序带 id 次键：created_at 只有秒级
+        粒度，同秒多行在纯 created_at 排序下跨页可能重排 → 翻页丢行/重行。
         """
         limit = max(1, min(int(limit or 100), 500))
+        off = max(0, min(int(offset or 0), 100000))
         p = (prefix or "").strip()
         src = source if source in ("user_stated", "ai_inferred") else ""
+        qq = (q or "").strip()
         where = []
         params: List[Any] = []
         if p:
             where.append("user_id LIKE ?")
             params.append(f"%{p}%")
+        if qq:
+            ors = ["user_id LIKE ?", "content LIKE ?"]
+            params.extend([f"%{qq}%", f"%{qq}%"])
+            keys = [str(k) for k in (q_keys or []) if str(k or "").strip()]
+            keys = keys[:300]  # SQLite 参数上限护栏（默认 999）
+            if keys:
+                ors.append(f"user_id IN ({','.join('?' * len(keys))})")
+                params.extend(keys)
+            where.append("(" + " OR ".join(ors) + ")")
         if src:
             where.append("COALESCE(source, 'user_stated') = ?")
             params.append(src)
         clause = (" WHERE " + " AND ".join(where)) if where else ""
-        params.append(limit)
+        params.extend([limit, off])
         rows = self._conn.execute(
             f"""
             SELECT id, user_id, content, category, created_at,
               CASE WHEN embedding IS NOT NULL AND length(embedding) >= 8 THEN 1 ELSE 0 END,
               COALESCE(source, 'user_stated'), COALESCE(tier, 'raw'), COALESCE(hits, 1)
             FROM episodic_memory{clause}
-            ORDER BY created_at DESC LIMIT ?
+            ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?
             """,
             params,
         ).fetchall()
@@ -1205,6 +1227,67 @@ class EpisodicMemoryStore:
                 "hits": int(r[8] or 1),
             })
         return out
+
+    def admin_summary(self, days: int = 7, top_n: int = 3) -> Dict[str, Any]:
+        """管理者摘要：近 N 天新增条数/覆盖用户数 + 全库记忆最多 Top-N 用户。
+
+        ``created_at`` 为 epoch 浮点（生产实测 92/92 全 REAL），时间窗按数值
+        比较——**不要**改成字符串时间戳比较：SQLite 类型序里 TEXT 恒大于
+        REAL，混用会把全部历史行都算进「新增」。
+        """
+        d = max(1, min(int(days or 7), 90))
+        n = max(1, min(int(top_n or 3), 10))
+        since = time.time() - d * 86400
+        try:
+            row = self._conn.execute(
+                "SELECT COUNT(*), COUNT(DISTINCT user_id) FROM episodic_memory"
+                " WHERE created_at >= ?",
+                (since,),
+            ).fetchone()
+            top = self._conn.execute(
+                "SELECT user_id, COUNT(*) AS n FROM episodic_memory"
+                " GROUP BY user_id ORDER BY n DESC, MAX(created_at) DESC LIMIT ?",
+                (n,),
+            ).fetchall()
+        except Exception:
+            return {"window_days": d, "new_count": 0, "new_users": 0, "top": []}
+        return {
+            "window_days": d,
+            "new_count": int(row[0] or 0),
+            "new_users": int(row[1] or 0),
+            "top": [
+                {"memory_key": str(r[0] or ""), "count": int(r[1] or 0)}
+                for r in top
+            ],
+        }
+
+    def get_row_brief(self, row_id: int) -> Optional[Dict[str, Any]]:
+        """单行摘要（删除审计留痕用）：{id, memory_key, content, source}。
+
+        与 ``confirm_inferred_fact`` 的审计留痕对称——删除是不可逆动作，
+        审计里必须能看到「删的是谁的哪条记忆」，仅记 row_id 无法回溯。
+        """
+        try:
+            rid = int(row_id)
+        except (TypeError, ValueError):
+            return None
+        try:
+            row = self._conn.execute(
+                "SELECT id, user_id, content,"
+                " COALESCE(source, 'user_stated')"
+                " FROM episodic_memory WHERE id = ?",
+                (rid,),
+            ).fetchone()
+        except Exception:
+            return None
+        if not row:
+            return None
+        return {
+            "id": int(row[0]),
+            "memory_key": str(row[1] or ""),
+            "content": str(row[2] or ""),
+            "source": str(row[3] or ""),
+        }
 
     def delete_by_id(self, row_id: int) -> bool:
         cur = self._conn.execute(

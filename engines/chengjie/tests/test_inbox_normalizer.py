@@ -51,6 +51,18 @@ def test_normalize_chat_shape():
     assert len(c["messages"]) == 1
 
 
+def test_normalize_chat_promotes_source_msg_id():
+    """P4：source.message_id → last_message.message_id，ingest 双路径可抽。"""
+    c = normalize_chat(
+        platform="messenger", platform_name="Messenger", account_id="a",
+        account_label="a", chat_key="peer1", name="P",
+        last_msg="hi", last_ts=9, unread=1,
+        source={"message_id": "m_deadbeefdeadbeef"},
+    )
+    assert c["last_message"]["message_id"] == "m_deadbeefdeadbeef"
+    assert c["last_message"]["source"]["message_id"] == "m_deadbeefdeadbeef"
+
+
 def test_normalize_chat_empty_last_msg_no_messages():
     c = normalize_chat(
         platform="tg", platform_name="Telegram", account_id="d",

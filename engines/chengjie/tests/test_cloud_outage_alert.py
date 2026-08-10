@@ -355,8 +355,13 @@ class TestDegradationSnapshot:
         return c
 
     def test_no_traffic_not_degraded(self):
+        # 2026-08-09 断言随 snapshot 增量更新：并行线给快照补了 primary 键
+        # （主链形态 cloud/local/local_only，坐席状态条区分「云主链」与「本地
+        # 主链」部署）。本测试守的不变量不变：无流量 ≠ 降级。
         snap = self._client().degradation_snapshot()
-        assert snap == {"degraded": False, "mode": "primary"}
+        assert snap["degraded"] is False
+        assert snap["mode"] == "primary"
+        assert snap.get("primary") in ("cloud", "local", "local_only")
 
     def test_primary_recent_not_degraded(self):
         c = self._client()

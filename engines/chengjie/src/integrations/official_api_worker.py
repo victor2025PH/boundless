@@ -274,6 +274,37 @@ class OfficialApiWorker:
         return res
 
 
+#: 官方通道里媒体出站**必须走公网 URL** 的平台（对应 send_media 的 no_public_url 分支）。
+OFFICIAL_MEDIA_URL_PLATFORMS = ("line", "instagram")
+
+
+def official_send_caps(platform: str, config: Dict[str, Any]) -> Dict[str, Any]:
+    """官方通道的**诚实**媒体/语音能力位（供 send-caps 端点按账号 mode 覆盖）。
+
+    背景：``owns_media()`` 的判据是 ``hasattr(worker, "send_media")``——官方 worker
+    类上方法恒存在，但运行时按平台分支：Zalo 直接 ``not_supported``、LINE/Instagram
+    没配 ``official_media.public_base_url`` 就是 ``no_public_url``。按 hasattr 报能力
+    会让坐席对着可点的按钮撞运行时错误（「点了才知道不行」正是能力位要消灭的）。
+
+    本表**必须与 ``send_media`` 的运行时分支一致**，由门禁
+    ``tests/test_official_channel_onboarding.py`` 双向钉住（改分支不改这里会红）。
+    返回 ``{"can_media": bool, "can_voice": bool, "reason": str}``；reason ∈
+    ``""`` / ``zalo_api_no_media`` / ``needs_public_url``。
+    """
+    p = str(platform or "").lower()
+    if p == "zalo":
+        return {"can_media": False, "can_voice": False, "reason": "zalo_api_no_media"}
+    if p in OFFICIAL_MEDIA_URL_PLATFORMS:
+        base = str(
+            (((config or {}).get("official_media") or {}).get("public_base_url")) or ""
+        ).strip()
+        ok = bool(base)
+        return {"can_media": ok, "can_voice": ok,
+                "reason": "" if ok else "needs_public_url"}
+    # WhatsApp Cloud（media_id 直传）/ Messenger（URL 或 multipart 直传）无前置依赖
+    return {"can_media": True, "can_voice": True, "reason": ""}
+
+
 def official_pipeline_enabled(config: Dict[str, Any]) -> bool:
     """官方入站是否走 protocol_autoreply 主管道（G4c）。
 
@@ -318,4 +349,5 @@ def register_official_workers(config: Dict[str, Any]) -> None:
 __all__ = [
     "OfficialApiWorker", "official_enabled", "official_pipeline_enabled",
     "register_official_workers", "dest_from_chat_key", "OFFICIAL_PLATFORMS",
+    "OFFICIAL_MEDIA_URL_PLATFORMS", "official_send_caps",
 ]

@@ -143,6 +143,19 @@ class WorkflowRunner:
         step = steps[step_idx]
         result = self._execute_step(conv_id, step, ex)
 
+        # P1 2026-08-09：环节执行落账（成功/失败/重试各一行）——每环节转化率的
+        # 数据地基；此前只有 last_result_json（新步覆盖旧步）无从聚合。绝不阻塞推进。
+        try:
+            self._store.log_workflow_step(
+                exec_id=exec_id, chain_id=chain_id, conversation_id=conv_id,
+                step_idx=step_idx,
+                action_type=str(step.get("action_type") or "template"),
+                ok=bool(result.get("ok", True)),
+                detail=str(result.get("error") or result.get("detail") or "")[:200],
+                now=now)
+        except Exception:
+            logger.debug("workflow step log skipped", exc_info=True)
+
         if not result.get("ok", True):
             if self._schedule_step_retry(ex, step_idx, result, now):
                 return False
@@ -251,9 +264,11 @@ class WorkflowRunner:
             tag = str(step.get("tag") or note or "").strip()
             if tag:
                 try:
-                    existing = self._store.get_conv_tags(conv_id)
-                    if tag not in existing:
-                        self._store.set_conv_tags(conv_id, existing + [tag])
+                    # 与 execute-action 路由同一写入口（组内互斥 + 情绪组落
+                    # arbitration 列）——旧版裸 append 会让「情绪低落」「积极开朗」
+                    # 并存，「当前情绪」读数取决于数组顺序。
+                    from src.inbox.effective_mood import apply_mood_tag
+                    apply_mood_tag(self._store, conv_id, tag, by="workflow")
                     result["tag"] = tag
                 except Exception:
                     result["ok"] = False

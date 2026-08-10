@@ -38,6 +38,37 @@ _PERCEPTION_PREFIX_RE = re.compile(
     r"(觉得|以为|当成|当作|误会|怀疑)[^。！？!?\n]{0,4}$"
 )
 
+# ── 已撤销旧设定的「认领」检测（2026-08-04 P2 期，出站兜底）────────────────────
+# prompt 钉子（boundaries.retired_facts）偶尔还是会被历史窗口压过——AI 又说出
+# 「我家猫今天很乖」。本检测**刻意只抓第一人称认领**：
+#   命中 = 第一人称归属/偏好标记 + ≤8 个非标点字符间隔 + 锚词；
+#   豁免 = 窗口内含否定（「我没有养猫」是钉子要求的正确澄清，绝不能剥）。
+# 「你家的猫真可爱」（聊客户的猫）没有第一人称标记 → 不命中——撤销语义本就允许
+# 正常参与话题，只禁认领。宁可漏拦（钉子已是主防线）不可误伤正常社交。
+_RETIRED_FP_MARKER = r"(我们家|我家|我的|我养|我新养|我喜欢|我超喜欢|我最爱|我爱|\bmy\b|\bour\b)"
+_RETIRED_NEG_RE = re.compile(r"(没有|没在|没养|从没|从来没|不再|不养|哪有|不是|别提)")
+
+
+def _retired_claim_re(term: str) -> "re.Pattern":
+    return re.compile(
+        _RETIRED_FP_MARKER + r"[^。！？!?\n]{0,8}" + re.escape(term), re.I)
+
+
+def _matches_retired_claims(text: str, terms: List[str]) -> List[str]:
+    out: List[str] = []
+    s = str(text or "")
+    for term in terms or []:
+        t = str(term).strip()
+        if not t:
+            continue
+        for m in _retired_claim_re(t).finditer(s):
+            window = s[max(0, m.start() - 6):m.end()]
+            if _RETIRED_NEG_RE.search(window):
+                continue          # 否定澄清是钉子要求的正确行为
+            out.append(m.group(0))
+            break                 # 每词至多记一个片段（与既有模式一致）
+    return out
+
 # 按中英文句末标点切句（保留标点，便于无缝重组剩余句子）
 _SENTENCE_SPLIT_RE = re.compile(r"[^。！？!?\n]*[。！？!?\n]|[^。！？!?\n]+")
 
@@ -49,7 +80,11 @@ _SENT_PUNCT_RE = re.compile(r"[。！？!?\n]")
 
 
 def collect_forbidden(persona: Dict[str, Any]) -> Dict[str, Any]:
-    """从人设 dict 抽取守卫所需的禁用项。"""
+    """从人设 dict 抽取守卫所需的禁用项。
+
+    ``retired_terms``（2026-08-04）＝撤销旧设定的锚词（仅结构化条目提供，
+    legacy 纯文案条目无锚词=不参与守卫）；异常一律空列表，绝不拖垮守卫。
+    """
     speaking = (persona or {}).get("speaking") or {}
     identity = (persona or {}).get("identity") or {}
     phrases = [
@@ -57,7 +92,13 @@ def collect_forbidden(persona: Dict[str, Any]) -> Dict[str, Any]:
         for p in (speaking.get("forbidden_phrases") or [])
         if str(p).strip()
     ]
-    return {"phrases": phrases, "deny_ai": bool(identity.get("deny_ai"))}
+    try:
+        from src.utils.persona_retired import retired_guard_terms
+        retired = retired_guard_terms(persona)
+    except Exception:
+        retired = []
+    return {"phrases": phrases, "deny_ai": bool(identity.get("deny_ai")),
+            "retired_terms": retired}
 
 
 def _norm(s: str) -> str:
@@ -103,6 +144,8 @@ def find_violations(text: str, persona: Dict[str, Any]) -> List[str]:
     hits = _matches_phrase(_norm(text), fb["phrases"])
     if fb["deny_ai"]:
         hits.extend(_matches_ai_self_id(text))
+    if fb.get("retired_terms"):
+        hits.extend(_matches_retired_claims(text, fb["retired_terms"]))
     return hits
 
 
@@ -122,6 +165,9 @@ def _sentence_violates(sentence: str, fb: Dict[str, Any]) -> bool:
         return True
     if fb["deny_ai"] and _matches_ai_self_id(sentence):
         return True
+    if fb.get("retired_terms") and _matches_retired_claims(
+            sentence, fb["retired_terms"]):
+        return True
     return False
 
 
@@ -135,7 +181,7 @@ def sanitize(text: str, persona: Dict[str, Any]) -> Tuple[str, List[str]]:
     if not text:
         return text, []
     fb = collect_forbidden(persona)
-    if not fb["phrases"] and not fb["deny_ai"]:
+    if not fb["phrases"] and not fb["deny_ai"] and not fb.get("retired_terms"):
         return text, []
     violations = find_violations(text, persona)
     if not violations:
@@ -148,11 +194,294 @@ def sanitize(text: str, persona: Dict[str, Any]) -> Tuple[str, List[str]]:
             if p:
                 cleaned = re.sub(re.escape(p), "", cleaned, flags=re.I)
         cleaned = cleaned.strip()
+        # 子句级降级（2026-08-04 真机实测缺口）：单句回复（只有逗号）里
+        # 「刚下课～我家猫特别黏人，你吃了吗？」——句级剥离把整段删光 →
+        # 回退原文＝认领句原样出站。逗号级再切一刀只丢违规子句，其余保留。
+        if cleaned == text.strip() or not cleaned:
+            base = cleaned or text
+            clauses = [m.group(0) for m in
+                       re.finditer(r"[^，,;；]+[，,;；]?", base)]
+            kept2 = [c for c in clauses if not _sentence_violates(c, fb)]
+            c2 = "".join(kept2).strip("，,;； ")
+            if c2 and c2 != base.strip():
+                cleaned = c2
         if not cleaned:
             return text, violations
     return cleaned, violations
 
 
+# ── 错误自称名守卫（2026-08-08「David Lin」事故）────────────────────────────────
+# 实录：客户（显示名 David）质疑「Look like ai」，AI 回「I'm just David Lin, a real
+# guy…」——把**对方的名字**和自己的姓氏缝成新身份自称，3 分钟后被问「Who are you?」
+# 又改口真名 Lin Xiaoyu，当场穿帮。prompt 侧「自称规则·强制」在场仍失守 ⇒ 需要出站
+# 硬护栏。判罚分级（宁可漏拦不误拦，与本模块其余检测同哲学）：
+#   hard（剥除）＝ ① 自称名含**对方名字** token（借名缝合，任何脚本）；
+#                 ② CJK 强模式（我叫/我的名字是/叫我）报出非白名单 CJK 名；
+#                 ③ 拉丁 ≥2 词全名且白名单已含拉丁变体（names.* 西名或拼音罗马化
+#                    在册）仍不匹配——白名单不完备时绝不启用此档。
+#   soft（只记日志）＝ 其余非白名单自称（如单词英文名/绰号玩笑），先观测后收紧。
+# 白名单 = persona.name + names.*（full_western/english/german/french/nickname）
+#          + 调用方补充（spoken_name/ai_name 覆写）+ CJK 条目的拼音变体
+#          （pypinyin 软依赖，缺库自动少一层，判罚档 ③ 随之自动收窄）。
+# 引导词大小写不敏感（(?i: ) 作用域旗标），但**名字捕获组保持大小写敏感**——
+# 「首字母大写」正是英文里区分 "I'm fine" 与 "I'm David" 的关键信号。
+_SELF_NAME_EN_RE = re.compile(
+    r"\b(?i:i\s*['’]?\s*m|i\s+am|my\s+name(?:['’]s|\s+is)|call\s+me)\s+"
+    r"(?:(?i:just|actually|really|still|now|officially)\s+)*"
+    r"([A-Z][A-Za-z'’\-]*(?:\s+[A-Z][A-Za-z'’\-]*){0,2})"
+)
+_SELF_NAME_CJK_STRONG_RE = re.compile(
+    r"(?<![不没别可])(?:我叫|我的名字[是叫]|叫我)\s*([\u4e00-\u9fff][\u4e00-\u9fff·]{0,5})"
+)
+_SELF_NAME_CJK_WEAK_RE = re.compile(
+    r"(?<![不没别])(?:我是|我就是)\s*([\u4e00-\u9fff][\u4e00-\u9fff·]{1,5})"
+)
+# 英文感知/转述前缀（"you think I'm David" 不是自称）；CJK 侧复用 _PERCEPTION_PREFIX_RE
+_EN_PERCEPTION_PREFIX_RE = re.compile(
+    r"(?:think|thought|assumed?|guess(?:ed)?|wish|pretend(?:ed)?)\s*$", re.I)
+# 英文名 token 停用词：命中任一 token ＝ 不是名字（"I'm Just Kidding" / "I'm So Sorry"）
+_EN_NAME_STOPWORDS = frozenset({
+    "just", "kidding", "sorry", "fine", "good", "okay", "ok", "sure",
+    "serious", "done", "back", "here", "home", "not", "so", "really",
+    "busy", "tired", "late", "happy", "sad", "glad", "ready", "right",
+    "wrong", "sick", "free", "online", "offline", "alright", "great",
+})
+_CJK_TRAIL_PARTICLES = "吧哦呀啦哈嘛呢哟喔噢咯呗啊呐嘞哩喽欸诶嗯～~！!。，,"
+_LATIN_TOKEN_RE = re.compile(r"[A-Za-z]{2,}")
+
+
+def _pinyin_variants(name: str) -> List[str]:
+    """CJK 名 → 拼音罗马化变体（全名连写 / 名不带姓）。pypinyin 缺失返回空。"""
+    s = str(name or "").strip()
+    if not s or not _CJK_RE.search(s):
+        return []
+    try:
+        from pypinyin import lazy_pinyin
+        syls = [str(x).strip().lower() for x in lazy_pinyin(s) if str(x).strip()]
+    except Exception:
+        return []
+    if not syls:
+        return []
+    out = {"".join(syls)}
+    if len(syls) >= 2:
+        out.add("".join(syls[1:]))          # 名（去姓）：xiaoyu
+    return [v for v in out if len(v) >= 2]
+
+
+def build_self_name_allowlist(
+    persona: Dict[str, Any], extra_names: List[str] | None = None
+) -> List[str]:
+    """收集「本人设可以用来自称」的全部名字（含 names.* 西名与拼音变体）。绝不抛。"""
+    out: List[str] = []
+    try:
+        p = persona or {}
+        cands: List[str] = [str(p.get("name") or "")]
+        names = p.get("names") or {}
+        if isinstance(names, dict):
+            for k in ("full_western", "english", "german", "french", "nickname"):
+                cands.append(str(names.get(k) or ""))
+        for x in (extra_names or []):
+            cands.append(str(x or ""))
+        seen = set()
+        for c in cands:
+            c = c.strip()
+            if not c:
+                continue
+            variants = [c] + _pinyin_variants(c)
+            # CJK 姓名补「去姓的名」（林小语 → 小语；复姓 4 字 → 再补后 2 字）：
+            # 「叫我小语」是最常见的合法自称形态，白名单没有它=strong 档必误伤。
+            if _CJK_RE.search(c) and len(c) >= 3:
+                variants.append(c[1:])
+                if len(c) >= 4:
+                    variants.append(c[2:])
+            for v in variants:
+                nv = _norm(v)
+                if len(nv) >= 2 and nv not in seen:
+                    seen.add(nv)
+                    out.append(v)
+    except Exception:
+        pass
+    return out
+
+
+def _peer_norm_tokens(peer_names: List[str] | None) -> Tuple[List[str], List[str]]:
+    """对方名 → (拉丁 token 集, CJK 归一串集)。@username / first+last 都拆词。"""
+    latin: List[str] = []
+    cjk: List[str] = []
+    for p in (peer_names or []):
+        s = str(p or "").strip().lstrip("@")
+        if not s:
+            continue
+        for t in _LATIN_TOKEN_RE.findall(s):
+            tl = t.lower()
+            if tl not in _EN_NAME_STOPWORDS and tl not in latin:
+                latin.append(tl)
+        cs = "".join(ch for ch in s if _CJK_RE.match(ch))
+        if len(cs) >= 2 and cs not in cjk:
+            cjk.append(cs)
+    return latin, cjk
+
+
+def _expand_allowed_norms(allowed_names: List[str] | None) -> List[str]:
+    """归一化白名单 + CJK 姓名自动补「去姓的名」变体（检测器内置，
+    调用方传裸名单也不丢保护：「叫我小语」对白名单只有「林小语」的部署零误伤）。"""
+    out: List[str] = []
+    seen = set()
+    for a in (allowed_names or []):
+        s = str(a or "").strip()
+        if not s:
+            continue
+        cands = [s]
+        if _CJK_RE.search(s) and len(s) >= 3:
+            cands.append(s[1:])
+            if len(s) >= 4:
+                cands.append(s[2:])
+        for c in cands:
+            n = _norm(c)
+            if len(n) >= 2 and n not in seen:
+                seen.add(n)
+                out.append(n)
+    return out
+
+
+def _claim_allowed(claim_norm: str, allowed_norms: List[str]) -> bool:
+    if not claim_norm or len(claim_norm) < 2:
+        return True          # 太短不判（保守放行）
+    for a in allowed_norms:
+        if len(a) >= 2 and (claim_norm == a or claim_norm in a or a in claim_norm):
+            return True
+    return False
+
+
+def _iter_self_name_claims(text: str):
+    """产出 (claim_text, is_strong, is_latin)。已剔除否定/感知/所有格/停用词形态。"""
+    s = str(text or "")
+    if not s:
+        return
+    for m in _SELF_NAME_EN_RE.finditer(s):
+        prefix = s[:m.start()]
+        if _EN_PERCEPTION_PREFIX_RE.search(prefix[-24:]):
+            continue
+        raw = m.group(1).strip()
+        toks = [t for t in re.split(r"\s+", raw) if t]
+        # 所有格截断（"David's friend" 不是自称）：遇 's 丢弃该词及其后
+        kept: List[str] = []
+        for t in toks:
+            if re.search(r"['’]s$", t):
+                break
+            kept.append(t)
+        if not kept:
+            continue
+        if any(t.lower() in _EN_NAME_STOPWORDS for t in kept):
+            continue
+        yield " ".join(kept), True, True
+    for pat, strong in ((_SELF_NAME_CJK_STRONG_RE, True),
+                        (_SELF_NAME_CJK_WEAK_RE, False)):
+        for m in pat.finditer(s):
+            if _PERCEPTION_PREFIX_RE.search(s[:m.start()]):
+                continue
+            raw = m.group(1).strip().rstrip(_CJK_TRAIL_PARTICLES)
+            if "的" in raw:      # 「我是大卫的朋友」＝关系描述不是自称
+                continue
+            if len(raw) < 2:
+                continue
+            yield raw, strong, False
+
+
+def find_wrong_self_name(
+    text: str,
+    allowed_names: List[str] | None,
+    peer_names: List[str] | None = None,
+) -> Tuple[List[str], List[str]]:
+    """返回 ``(hard_hits, soft_suspicions)``——错误自称名的分级命中。
+
+    hard = 高置信必错（借对方名 / CJK 强模式报非白名单名 / 拉丁全名且白名单
+    已含拉丁变体仍不匹配）→ 调用方应剥除；soft = 非白名单但置信不足 → 只观测。
+    纯函数，绝不抛。
+    """
+    hard: List[str] = []
+    soft: List[str] = []
+    try:
+        allowed_norms = _expand_allowed_norms(allowed_names)
+        peer_latin, peer_cjk = _peer_norm_tokens(peer_names)
+        allow_has_latin = any(re.search(r"[a-z]", a) for a in allowed_norms)
+        for claim, strong, is_latin in _iter_self_name_claims(text):
+            cn = _norm(claim)
+            if _claim_allowed(cn, allowed_norms):
+                continue
+            borrowed = False
+            if is_latin:
+                ctoks = {t.lower() for t in re.split(r"\s+", claim) if t}
+                borrowed = bool(ctoks & set(peer_latin))
+            else:
+                borrowed = any(pc in cn or cn in pc for pc in peer_cjk)
+            if borrowed:
+                hard.append(claim)
+            elif strong and not is_latin and allowed_norms:
+                hard.append(claim)          # 我叫〈非白名单 CJK 名〉
+            elif (is_latin and len(claim.split()) >= 2
+                    and allowed_norms and allow_has_latin):
+                hard.append(claim)          # 拉丁全名 + 白名单有拉丁变体仍不匹配
+            else:
+                soft.append(claim)
+    except Exception:
+        return [], []
+    return hard, soft
+
+
+# 英文感知句界（仅自称名守卫用）：既有 _split_sentences 不认 ASCII 句点——
+# 英文回复 "…sweet. What makes…?" 会整段并成一句，一处违规连带剥掉好句。
+# 此处补「.!? 后跟空白」为句界（防 3.5 / example.com / U.S. 中间误切），
+# 刻意不动 _split_sentences 本体（既有 sanitize 行为/测试保持原样）。
+_SN_SENT_BOUNDARY_RE = re.compile(r"(?:(?<=[。！？!?\n])|(?<=[.!?])(?=\s))")
+
+
+def _split_sentences_sn(text: str) -> List[str]:
+    s = str(text or "")
+    if not s:
+        return []
+    cuts = sorted({m.start() for m in _SN_SENT_BOUNDARY_RE.finditer(s)
+                   if 0 < m.start() < len(s)})
+    frags: List[str] = []
+    prev = 0
+    for i in cuts:
+        frags.append(s[prev:i])
+        prev = i
+    frags.append(s[prev:])
+    return [f for f in frags if f]
+
+
+def sanitize_self_name(
+    text: str,
+    allowed_names: List[str] | None,
+    peer_names: List[str] | None = None,
+) -> Tuple[str, List[str], List[str]]:
+    """剥离 hard 级错误自称句，返回 ``(清洁文本, hard 命中, soft 观测)``。
+
+    与 :func:`sanitize` 同一套「按句剥离 → 剥光则 inline 抹名 → 绝不返回空」策略。
+    """
+    t = str(text or "")
+    if not t:
+        return t, [], []
+    hard, soft = find_wrong_self_name(t, allowed_names, peer_names)
+    if not hard:
+        return t, hard, soft
+    kept = [
+        s for s in _split_sentences_sn(t)
+        if not find_wrong_self_name(s, allowed_names, peer_names)[0]
+    ]
+    cleaned = "".join(kept).strip()
+    if not cleaned:
+        cleaned = t
+        for h in hard:
+            cleaned = re.sub(re.escape(h), "", cleaned)
+        cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
+        if not cleaned or _norm(cleaned) == _norm(t):
+            return t, hard, soft          # 无法安全剥离 → 保留原文（调用方记日志）
+    return cleaned, hard, soft
+
+
 __all__ = [
     "collect_forbidden", "find_violations", "matches_ai_self_identity", "sanitize",
+    "build_self_name_allowlist", "find_wrong_self_name", "sanitize_self_name",
 ]

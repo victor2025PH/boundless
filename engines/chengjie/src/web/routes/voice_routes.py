@@ -328,10 +328,16 @@ def register_voice_routes(app, api_auth, config_manager=None):
             # str() 为空，日志只剩一行「TTS error: 」，无从排查。）
             # fast mode gets a tighter budget: edge_tts is cheap and the whole
             # point is answering before the frontend gives up waiting.
+            # 试听=发送契约（P0 2026-08-10）：send-voice 已改「原文直念」（手打
+            # 文字不进口语化改写链，实录：LLM 档把问句改写成对它的回答后念出），
+            # 试听与发送**全同参**（pre_colloquialized + interactive）——坐席听到
+            # 的字与发出的字永远一致，试听产物经「所听即所发」复用时零分叉；
+            # interactive 同时把 hub 候选数封顶（人在等）+ 豁免开场词去重剥词。
             result = await _aio.wait_for(
                 tts.synthesize(
                     text, timeout_sec=(15.0 if fast else 45.0),
                     emotion=voice_ctx.get("emotion"),
+                    pre_colloquialized=True, interactive=True,
                     total_budget_sec=(15.0 if fast else 45.0)),
                 timeout=(20.0 if fast else 50.0),
             )

@@ -237,6 +237,13 @@ def lan_gpu_probe_targets(config: Dict[str, Any]) -> List[str]:
         if isinstance(mb, str):
             mb = [u.strip() for u in mb.split(",")]
         bases += [str(u or "") for u in (mb if isinstance(mb, (list, tuple)) else [])]
+    # 语音口语化专属 LAN 端点（avatar_voice.colloquial.llm_endpoints，2026-08-01）：
+    # 挂了会静默降级到 cloud/规则档，同属「该被巡检点名」的算力依赖。
+    col = (((config.get("avatar_voice") or {}).get("colloquial")) or {})
+    if isinstance(col, dict):
+        for item in (col.get("llm_endpoints") or []):
+            if isinstance(item, dict):
+                bases.append(str(item.get("base_url") or ""))
 
     out: List[str] = []
     seen = set()
@@ -269,6 +276,36 @@ def probe_lan_gpu_host(root: str, *, timeout: float = 3.0) -> Dict[str, Any]:
     except Exception as e:
         result["error"] = str(e)[:120]
     return result
+
+
+def probe_alert_link(state, config) -> Optional[Dict[str, Any]]:
+    """告警外发链路探针（进程内只读：store mtime 快照 + notifier 状态，零网络 IO）。
+
+    None＝检查被显式关闭（``ops.alert_link_health: false``——刻意不配外发通道的
+    部署不必长期黄灯）；**默认开**：「告警报进虚空」（0 通道，SLA/积压/host_alert
+    只进日志与铃铛）正是最需要被看见的出货默认态，L3 草稿烂 167h 的根因。
+    返回 ``build_health(alert_link=)`` 需要的最小子集（verdict+计数）；完整明细走
+    ``GET /api/admin/alert-link-status`` 与 ops-overview「🔔 告警链路」卡（同一
+    聚合器 ``collect_alert_link_status``，永远一个口径）。
+    """
+    knob = ((config or {}).get("ops") or {}).get("alert_link_health", True)
+    if isinstance(knob, dict):
+        knob = knob.get("enabled", True)
+    if knob is False:
+        return None
+    from src.integrations.alert_link_status import collect_alert_link_status
+
+    s = collect_alert_link_status(config, getattr(state, "webhook_notifier", None))
+    a = s.get("audit") or {}
+    p = s.get("process") or {}
+    return {
+        "verdict": s.get("verdict"),
+        "channels_enabled": int(a.get("channels_enabled") or 0),
+        "covered": int(a.get("covered_count") or 0),
+        "focus": int(a.get("focus_count") or 0),
+        "uncovered": len(a.get("uncovered") or []),
+        "total_errors": int(p.get("total_errors") or 0),
+    }
 
 
 def collect_health(app, config_manager=None, *, pending_threshold: int = 200) -> Dict[str, Any]:
@@ -316,6 +353,12 @@ def collect_health(app, config_manager=None, *, pending_threshold: int = 200) ->
     except Exception:
         logger.debug("AvatarHub 语音探测失败（已忽略）", exc_info=True)
 
+    alert_link = None
+    try:
+        alert_link = probe_alert_link(state, config)
+    except Exception:
+        logger.debug("告警链路探测失败（已忽略）", exc_info=True)
+
     return build_health(
         db_ok=db_ok,
         ai_provider=ai_provider, ai_key_ok=ai_key_ok,
@@ -327,6 +370,7 @@ def collect_health(app, config_manager=None, *, pending_threshold: int = 200) ->
         audio_service=audio,
         avatar_voice=avatar,
         sla_backlog=_sla_backlog(state),
+        alert_link=alert_link,
     )
 
 
@@ -423,6 +467,12 @@ class HealthWatchdog:
         self._avatar_down_since: float = 0.0
         self._avatar_alerted: bool = False
         self._avatar_last_remind: float = 0.0
+        # 语音出站断档巡检（2026-08-02）：hub 音色档 404 → strict 全拒发 5 天零告警
+        # ——avatar hang 检测（探针绿+streak 新鲜度）对「低流量下零星请求全失败」
+        # 不敏感。判据换成 voice_outage 滚动窗「尝试 ≥N 且 0 成功」。
+        self._vo_alerted: bool = False
+        self._vo_last_remind: float = 0.0
+        self.total_voice_outage_alerts: int = 0
         # 履约端（厂商机签发链单点）停摆升级提醒：首次不健康时刻 + 已首提 + 上次重提 + 种类
         self._fulfiller_bad_since: float = 0.0
         self._fulfiller_alerted: bool = False
@@ -448,6 +498,9 @@ class HealthWatchdog:
         self._last_media_restock_ts: float = 0.0
         self._media_restock_day: str = ""
         self._media_restock_added_today: int = 0
+        # Telegram 历史自动补缺口（2026-08-02）：15min 节流 + 触发计数
+        self._last_tg_autosync_ts: float = 0.0
+        self.total_tg_autosyncs: int = 0
         # 人工通过投递链静默断裂巡检（2026-07-29）：观测窗起点 = 本进程起来的时刻
         # （worker 计数器是进程内的，必须与之同窗口才可比），+ 首提/重提去抖。
         self._hd_since_ts: float = time.time()
@@ -455,11 +508,41 @@ class HealthWatchdog:
         self._hd_alerted: bool = False
         self._hd_last_remind: float = 0.0
         self.total_human_deliver_alerts: int = 0
+        # 撤销设定「复活」巡检（2026-08-04）：稀疏扫描 + 冲突指纹去抖 + 恢复通知
+        self._retired_scan_ts: float = 0.0
+        self._retired_fp: str = ""
+        self._retired_alerted: bool = False
+        self._retired_last_remind: float = 0.0
+        self.total_persona_retired_alerts: int = 0
         # 草稿积压无人处理巡检（2026-07-29）：SLA watcher 只盯 L3/L4，**L1 是盲区**
         # （见 _check_draft_backlog），而 L1 恰恰是「必须人来处理」的那一档。
         self._db_alerted: bool = False
         self._db_last_remind: float = 0.0
         self.total_draft_backlog_alerts: int = 0
+        # 入站漏球巡检（P0 2026-08-05）：客户最后一句无回复且**无草稿** → 拟稿链
+        # 丢球（draft_backlog 只看「有稿没人处理」，这里补「压根没稿」的盲区）。
+        self._ui_alerted: bool = False
+        self._ui_last_remind: float = 0.0
+        self.total_unanswered_inbound_alerts: int = 0
+        # 被埋会话巡检（P0-198，2026-08-04）：归档着却有未读入站＝客户在等，而工作台
+        # 所有默认视图都看不见它（见 _check_buried_conversations）。
+        self._bc_alerted: bool = False
+        self._bc_last_remind: float = 0.0
+        self.total_buried_conv_alerts: int = 0
+        # 案例积压巡检（2026-08-03 案例中心 P4）：AI 立了案没人认领/处理 →
+        # 案例中心就退化回「永远 0 的看板」老病。聚合告警 + 危机级单独点名。
+        self._cb_alerted: bool = False
+        self._cb_last_remind: float = 0.0
+        self.total_case_backlog_alerts: int = 0
+        # 账号接入漏斗停摆巡检（2026-08-02）：ops 卡已能显示 stalled，但**看板要有人开
+        # 才有用**——2026-07-25 的 LINE 扫码 100% 失败正是烂了多日无人知。这里把它升级
+        # 为主动外发。state: key(platform:mode) → 上次告警时的 started 计数 / 上次提醒时刻。
+        # 接入漏斗：只记「上次见到的累计 authorized」——恢复通知要正面证据（真的又成过
+        # 一次），停摆判据本身由 stats 侧的 started_since_success 自带基线
+        self._lf_base: Dict[str, int] = {}
+        self._lf_alerted: Dict[str, int] = {}
+        self._lf_last_remind: Dict[str, float] = {}
+        self.total_login_funnel_alerts: int = 0
         # CSRF 写请求拦截激增巡检（P1 2026-07-31）：中间件拒绝已进 csrf_stats 看板，
         # 但看板要有人开才有用——窗口增量达阈值主动外发。样本=(ts,total,by_kind,by_path)。
         self._csrf_samples: List[tuple] = []
@@ -482,6 +565,13 @@ class HealthWatchdog:
         self.total_orchestrator_worker_alerts: int = 0
         self.total_memory_key_drift_alerts: int = 0
         self.total_platform_session_reminders: int = 0
+        # 内嵌网页端选择器失配提醒（2026-08-10）：节流状态在 InjectHealthStore 内
+        # （恢复自动清零），本类只记外发计数。
+        self.total_inject_health_reminders: int = 0
+        # 入站半死态提醒（P0 2026-08-04）：账号 authorized（登录探测绿）但侧栏有未读、
+        # 进线程读取持续全失败＝看得到读不到（E2EE 卡 Loading 等）。节流状态在
+        # PlatformSessionHealth 内（恢复自动清零），本类只记外发计数。
+        self.total_inbox_read_stall_reminders: int = 0
         self.total_cloud_balance_alerts: int = 0
         self.total_license_quota_alerts: int = 0
         self.total_fallback_duty_reminders: int = 0
@@ -606,6 +696,34 @@ class HealthWatchdog:
         except Exception:
             logger.debug("编排器 worker 巡检异常（已忽略）", exc_info=True)
 
+        # 接管自动接回（P0 2026-08-09）：坐席手动出站把会话钉在 manual 后，
+        # 静默超时自动恢复档位（takeover_rearm，默认关；只碰 source=takeover*）。
+        try:
+            self._check_takeover_rearm()
+        except Exception:
+            logger.debug("接管接回巡检异常（已忽略）", exc_info=True)
+
+        # AI 对聊提醒（P0-6 2026-08-09）：全自动会话双向高频互发（受管账号
+        # 互聊/测试是允许行为）→ 只标记+提醒绝不拦截；默认开、独立去抖。
+        try:
+            self._check_mutual_chat()
+        except Exception:
+            logger.debug("AI 对聊提醒巡检异常（已忽略）", exc_info=True)
+
+        # 停泊态草稿卡死回收（P1 2026-08-09）：enriching 中途进程重启 → 草稿
+        # 永久停泊 + 幂等保护挡住该会话所有后续拟稿（默认开，状态机泄漏修复）。
+        try:
+            self._check_stale_enriching()
+        except Exception:
+            logger.debug("停泊草稿回收异常（已忽略）", exc_info=True)
+
+        # 自动化覆盖率按日快照（P2 2026-08-09，默认关）：给覆盖率卡供趋势线
+        # ——「有效全自动占比在掉」比当下值更需要行动。
+        try:
+            self._check_coverage_trend()
+        except Exception:
+            logger.debug("覆盖率趋势快照异常（已忽略）", exc_info=True)
+
         # 平台会话持续掉线提醒（P4）：worker push 的掉线转移只告警一次，若长时间没人修
         # 则周期性再提醒（升级式：after_min 首提，之后每 interval_min 一条）。
         try:
@@ -613,12 +731,39 @@ class HealthWatchdog:
         except Exception:
             logger.debug("平台会话持续掉线巡检异常（已忽略）", exc_info=True)
 
+        # 内嵌网页端选择器持续失配（2026-08-10）：登录态好着、页面也在，但注入脚本抓
+        # 不到气泡/输入框＝官方改版了。与上面「会话不健康」正交（那个重登、这个改选择器）。
+        try:
+            self._check_inject_health()
+        except Exception:
+            logger.debug("注入健康巡检异常（已忽略）", exc_info=True)
+
+        # 入站半死态（P0 2026-08-04）：账号登录探测绿、侧栏有未读、进线程读取持续全失败
+        # ＝看得到读不到（E2EE 卡 Loading 实锤 4 天零告警）。与上面「会话不健康」正交。
+        try:
+            self._check_inbox_read_stall()
+        except Exception:
+            logger.debug("入站半死态巡检异常（已忽略）", exc_info=True)
+
+        # 常备扫描循环停摆（P4 2026-08-09）：目标结算/提醒 + 工作链推进的心跳
+        # 停走即告警——两者都曾挂死调度器静默从未运行，这类病不许再靠人发现。
+        try:
+            self._check_scan_loop_stall()
+        except Exception:
+            logger.debug("扫描循环停摆巡检异常（已忽略）", exc_info=True)
+
         # AvatarHub 7852 持续掉线升级提醒：黄灯只在看板可见（alert_on_warn=False），
         # 掉线超阈值后主动外发（首提 + 周期重提，恢复补发恢复通知）。
         try:
             self._check_avatar_voice()
         except Exception:
             logger.debug("AvatarHub 语音巡检异常（已忽略）", exc_info=True)
+        # 语音出站断档：探针绿也可能整链拒发（hub 音色档 404 实锤 5 天零告警），
+        # 按 voice_outage 台账滚动窗判「有请求全在失败」，低流量同样敏感。
+        try:
+            self._check_voice_outage()
+        except Exception:
+            logger.debug("语音出站断档巡检异常（已忽略）", exc_info=True)
         # LAN GPU 主机宕机升级提醒（嵌入/视觉/兜底 LLM/本地 MT 所在主机整机下线时，
         # 各链路静默转移备点——业务不断，但冗余归零必须有人知道）。
         try:
@@ -638,6 +783,39 @@ class HealthWatchdog:
             self._check_draft_backlog()
         except Exception:
             logger.debug("草稿积压巡检异常（已忽略）", exc_info=True)
+
+        # 入站漏球：最后一条是客户消息、既没回也没拟稿——draft_backlog 只覆盖
+        # 「有稿没人处理」，这里补「压根没稿」的盲区（2026-08-05 实锤：客户 22:27
+        # 高意向消息整晚零出站零草稿，无任何信号）
+        try:
+            self._check_unanswered_inbound()
+        except Exception:
+            logger.debug("入站漏球巡检异常（已忽略）", exc_info=True)
+
+        # 被埋会话：归档着却有未读——客户在等，工作台所有默认视图都看不见它
+        try:
+            self._check_buried_conversations()
+        except Exception:
+            logger.debug("被埋会话巡检异常（已忽略）", exc_info=True)
+
+        # 案例积压：AI 判定「需要人跟进」的案例无人认领/处理——危机级尤其不能等
+        try:
+            self._check_case_backlog()
+        except Exception:
+            logger.debug("案例积压巡检异常（已忽略）", exc_info=True)
+
+        # 演练残影自动清扫：白天 ad-hoc 对练留下的 drill 案例不该等人手点清
+        try:
+            self._check_drill_hygiene()
+        except Exception:
+            logger.debug("演练残影清扫异常（已忽略）", exc_info=True)
+
+        # 账号接入漏斗停摆：某平台某方式「发起 N 次、成功 0 次」= 那条登录链路事实上
+        # 不可用。看板能看见，但得有人开；这里主动轰人（零流量天然静默）。
+        try:
+            self._check_login_funnel()
+        except Exception:
+            logger.debug("接入漏斗巡检异常（已忽略）", exc_info=True)
 
         # CSRF 写请求拦截激增：某前端宿主写通道断了（cookie_no_header）或有人在
         # 跨站探测——2026-07 人设切换事故静默烂了两周，这类信号必须主动轰人
@@ -679,6 +857,14 @@ class HealthWatchdog:
             self._check_media_restock()
         except Exception:
             logger.debug("相册补货巡检异常（已忽略）", exc_info=True)
+
+        # Telegram 历史自动补缺口（2026-08-02）：实时镜像只覆盖在线时段，停机窗口
+        # 丢的消息不会自己回来 → 到期账号自动跑一轮账号级云端同步（dedup 落库，
+        # 不触发自动回复/SSE），重启/断线后缺口 ≤per_chat 条即自愈。
+        try:
+            self._check_tg_history_autosync()
+        except Exception:
+            logger.debug("tg 历史自动同步巡检异常（已忽略）", exc_info=True)
 
         # 出站媒体承诺未兑现升级提醒（Phase21a）：AI 文本承诺发图/语音却撤回=信任受损，
         # 看板黄条只被动可见；本窗口净撤回累加达阈值→主动外发（首提+周期重提，恢复清零）。
@@ -755,6 +941,14 @@ class HealthWatchdog:
             self._check_memory_key_drift()
         except Exception:
             logger.debug("记忆 key 漂移巡检异常（已忽略）", exc_info=True)
+
+        # 撤销设定复活巡检（2026-08-04）：直改 profiles_runtime.yaml 的写入方
+        # （agent 批量丰富/运维手改）绕过 Studio 保存路径的 retired_conflicts 检测
+        # → 以内存态（热重载几秒内跟文件）兜底扫「被删的设定又被写回档案」。
+        try:
+            self._check_persona_retired_conflicts()
+        except Exception:
+            logger.debug("撤销设定复活巡检异常（已忽略）", exc_info=True)
 
         # 跨平台身份影子周期扫描（P3.2）：只读发现「疑似同一人」配对，state 落文件
         # 供看板读。默认关；稀疏节流（默认 6h）；异常全吞绝不影响巡检主流程。
@@ -1232,6 +1426,69 @@ class HealthWatchdog:
             return True
         return bool(row) and str(row.get("status") or "") == "online"
 
+    def _check_inject_health(self, *, now: Optional[float] = None) -> None:
+        """内嵌网页端「选择器持续失配」提醒（2026-08-10）。
+
+        桌面壳把官方网页端嵌进 webview 再注入脚本做翻译/回流，这套模式的长期命门就是
+        **官方一改版选择器就失配**。此前失配态只在壳层状态条 + 运营看板可见（
+        ``/api/desktop/inject-health/alerts``），没有任何外发出口——这正是本仓反复吃过的
+        「报进虚空」：L3 草稿在 SLA 覆盖内烂了 167h，就因为最后一公里从未接通。
+
+        与 ``_check_platform_sessions`` 正交：那条盯「会话掉线/需重登」（登录态问题），
+        这条盯「登录态好着、页面也在，但脚本抓不到东西」（DOM 契约问题），修法完全不同
+        （前者重登、后者改选择器覆写层 ``config/desktop_selector_profiles.json``）。
+
+        升级式：失配持续 ``after_min`` → 首提，之后每 ``interval_min`` 一条；节流状态在
+        ``InjectHealthStore`` 内（恢复自动清零）。**陈旧上报一律不催**（壳已关/账号已卸，
+        见 ``due_reminders`` 的 stale 防线）。配置
+        ``health_watchdog.inject_health_remind.{enabled,after_min,interval_min}``
+        （默认开，20min 首提 / 4h 重提）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        sr = (((cfg.get("health_watchdog") or {}).get("inject_health_remind"))
+              or {}) if isinstance(cfg, dict) else {}
+        if not sr.get("enabled", True):
+            return
+        try:
+            from src.web.desktop_inject_health import (
+                EXTRACT_STATUS_KEYS, get_inject_health_store, missing_selectors,
+            )
+            store = get_inject_health_store()
+        except Exception:
+            return
+        after_sec = max(60.0, float(sr.get("after_min", 20) or 20) * 60.0)
+        interval_sec = max(600.0, float(sr.get("interval_min", 240) or 240) * 60.0)
+        due = store.due_reminders(min_age_sec=after_sec, interval_sec=interval_sec,
+                                  now=now)
+        if not due:
+            return
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            bus = get_event_bus()
+        except Exception:
+            return
+        for key, rec in due.items():
+            status = str(rec.get("status") or "")
+            # 该校准哪个字段：提取器类失效在 selectors 布尔表里全绿（元素确实在），
+            # 只能按 status 反推，否则运营会被引去改一个没坏的选择器。
+            field = EXTRACT_STATUS_KEYS.get(status) or (
+                "composer" if status == "mismatch_composer" else "bubble")
+            missing = missing_selectors(rec)
+            bus.publish("inject_health_alert", {
+                "platform": str(rec.get("platform") or ""),
+                "account_id": str(rec.get("account_id") or ""),
+                "status": status,
+                "field": field,
+                "generic": bool(rec.get("generic")),
+                "bubbles": int(rec.get("bubbles") or 0),
+                "missing_selectors": missing,
+                "down_minutes": int(float(rec.get("mismatch_secs") or 0) // 60),
+                "first_reminder": bool(rec.get("first_reminder")),
+                # 独立限流键：多账号互不挤占 notifier 的限流窗（与会话类告警也分开）。
+                "rate_key": f"inject:{key}",
+            })
+            self.total_inject_health_reminders += 1
+
     def _check_platform_sessions(self, *, now: Optional[float] = None) -> None:
         """平台会话「持续不健康」提醒（P4，闭环 P0-2 的告警时效性）。
 
@@ -1286,6 +1543,72 @@ class HealthWatchdog:
             })
             self.total_platform_session_reminders += 1
 
+    def _check_inbox_read_stall(self, *, now: Optional[float] = None) -> None:
+        """入站「半死态」升级提醒（P0，2026-08-04 Messenger 黑洞事故直接解药）。
+
+        与 ``_check_platform_sessions`` 正交：那条盯「会话不健康（needs_login 等）」，
+        这条盯**会话看着健康、内容却读不到**——账号 status=authorized（有输入框、有会话
+        列表 → 登录探测绿），但侧栏有未读、外部 worker 进线程读取持续全失败。实测根因
+        是 cookie 快照恢复了登录、E2EE 设备密钥没恢复，消息区永久卡 Loading；轮询一路
+        「健康」，坐席看到未读却零入站，掉进去 4 天无人知。信号本身平台无关（选择器失配、
+        密钥丢失同样命中），故不做 messenger 专属探针。
+
+        升级式：stalled 持续 ``after_min`` → 首提，之后每 ``interval_min`` 一条；节流在
+        ``PlatformSessionHealth`` 内（下一次心跳读到内容即 recover 清零）。只催**期望在线**
+        的号（``_session_expected_online``，与会话掉线提醒同口径——运营自己登出的号不催）。
+        配置 ``health_watchdog.inbox_read_stall_remind.{enabled,after_min,interval_min}``
+        （默认开，20min 首提 / 4h 重提）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        sr = (((cfg.get("health_watchdog") or {}).get("inbox_read_stall_remind"))
+              or {}) if isinstance(cfg, dict) else {}
+        if not sr.get("enabled", True):
+            return
+        try:
+            from src.integrations.platform_session_health import (
+                get_platform_session_health,
+            )
+            store = get_platform_session_health()
+        except Exception:
+            return
+        after_sec = max(60.0, float(sr.get("after_min", 20) or 20) * 60.0)
+        interval_sec = max(600.0, float(sr.get("interval_min", 240) or 240) * 60.0)
+        due = store.due_inbox_stalls(min_age_sec=after_sec, interval_sec=interval_sec,
+                                     now=now)
+        due = {k: v for k, v in due.items() if self._session_expected_online(k)}
+        if not due:
+            return
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            bus = get_event_bus()
+        except Exception:
+            return
+        for key, h in due.items():
+            plat, _, acct = key.partition(":")
+            down_min = int(float(h.get("down_sec") or 0) // 60)
+            if str(h.get("stall_kind") or "") == "e2ee_placeholder":
+                _why = (f"看得到未读({int(h.get('unread') or 0)})却读不到内容："
+                        f"会话列表 {int(h.get('conv_count') or 0)} 条中 "
+                        f"{int(round(float(h.get('e2ee_ratio') or 0) * 100))}% 是"
+                        f"端到端加密占位预览（解密不可用）。")
+            else:
+                _why = (f"看得到未读({int(h.get('unread') or 0)})却读不到内容："
+                        f"进线程读取连续失败 {int(h.get('read_fails') or 0)}/"
+                        f"{int(h.get('read_attempts') or 0)}。")
+            bus.publish("platform_session_alert", {
+                "platform": plat,
+                "account_id": acct,
+                "status": "inbox_stalled",
+                "detail": _why + "多为登录态在、E2EE 消息未解密"
+                          "（需在服务器上完整重登该账号）。",
+                "reminder": True,
+                "down_minutes": down_min,
+                "unread": int(h.get("unread") or 0),
+                # 独立限流键：与会话掉线告警、掉线重提都分开，多账号互不挤占。
+                "rate_key": f"{key}:inbox_stall",
+            })
+            self.total_inbox_read_stall_reminders += 1
+
     #: `decided_by` 里属「系统自动」的值——统计人工通过时必须排除
     _HD_SYSTEM_DECIDERS = frozenset({
         "autosend_worker", "mode_downgraded", "send_blocked", "stale_peer",
@@ -1325,6 +1648,168 @@ class HealthWatchdog:
     #: 保守算作「客户在等」——宁可多报不漏报。积压通常个位数，够用且不压 DB。
     _BACKLOG_REPLY_PROBE_CAP = 50
 
+    def _check_takeover_rearm(self, *, now: Optional[float] = None) -> None:
+        """坐席接管静默超时 → 自动把会话档位接回（P0 2026-08-09）。
+
+        为什么需要它（.198/.104 实测）：「接管即静音」把会话钉死在 manual 且
+        **无任何恢复机制**——两台坐席机各有会话在 manual 卡了 27 小时，坐席
+        全程不知道是自己那条手动消息关掉了 AI。sweep 逻辑（含「只碰
+        source=takeover*、恢复到接管前档位」的全部语义）在
+        ``takeover_rearm.sweep_takeover_rearm`` 纯核心里，这里只是接线；
+        配置 ``inbox.takeover_rearm.{enabled,after_minutes}``，默认关。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        if not isinstance(cfg, dict):
+            return
+        store = getattr(getattr(self._app, "state", self._app),
+                        "inbox_store", None)
+        if store is None:
+            return
+        from src.inbox.takeover_rearm import sweep_takeover_rearm
+        res = sweep_takeover_rearm(store, cfg, now=now)
+        if int(res.get("restored") or 0) > 0:
+            logger.info("[takeover_rearm] 本轮自动接回 %s 个会话：%s",
+                        res.get("restored"),
+                        ", ".join(res.get("restored_cids") or [])[:400])
+
+    def _check_mutual_chat(self, *, now: Optional[float] = None) -> None:
+        """AI 对聊「标记+提醒」（P0-6 2026-08-09；绝不拦截）。
+
+        运营方针：受管账号互聊是允许的测试手段——风险只在「没人知道它在
+        跑」（双边烧配额）。判定/去抖纯核心在 ``mutual_chat_monitor``，这里
+        只接线：小时级扫描节流 → 满足「全自动 + 窗口内双向高频」的会话 →
+        每会话按重提间隔去抖 → 聚合成**一条** ``ai_mutual_chat_alert``
+        （逐会话逐条＝噪音；别名 ``ai_mutual_chat``，business 受众）。
+        配置 ``health_watchdog.mutual_chat_remind``（默认开，纯观测）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        if not isinstance(cfg, dict):
+            return
+        from src.inbox.mutual_chat_monitor import (
+            filter_due_reminders,
+            mutual_chat_cfg,
+            scan_mutual_chat,
+        )
+        mc = mutual_chat_cfg(cfg)
+        if not mc["enabled"]:
+            return
+        ts = float(now if now is not None else time.time())
+        last = float(getattr(self, "_mutual_chat_last_scan", 0.0) or 0.0)
+        if last and (ts - last) < mc["interval_min"] * 60.0:
+            return
+        self._mutual_chat_last_scan = ts
+        store = getattr(getattr(self._app, "state", self._app),
+                        "inbox_store", None)
+        if store is None:
+            return
+        items = scan_mutual_chat(store, mc, now=ts)
+        if not items:
+            return
+        ledger = getattr(self, "_mutual_chat_ledger", None)
+        if ledger is None:
+            ledger = {}
+            self._mutual_chat_ledger = ledger
+        due = filter_due_reminders(
+            items, ledger, now=ts,
+            remind_interval_hours=mc["remind_interval_hours"])
+        if not due:
+            return
+        logger.info(
+            "[mutual_chat] AI 对聊提醒：%d 个全自动会话双向高频（%s）",
+            len(due),
+            ", ".join(d["conversation_id"] for d in due)[:300])
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("ai_mutual_chat_alert", {
+                "conversations": due,
+                "window_hours": mc["window_hours"],
+                "rate_key": "ai_mutual_chat",
+            })
+        except Exception:
+            logger.debug("[mutual_chat] 事件发布失败（已忽略）", exc_info=True)
+
+    def _check_coverage_trend(self, *, now: Optional[float] = None) -> None:
+        """自动化覆盖率按日快照（P2 2026-08-09；``ops.automation_coverage_trend``）。
+
+        REPLACE 语义（同日最后一次写胜出＝当日最新态），interval_min 节流
+        （默认 60 分钟）保证零热路开销；聚合与卡片同源
+        （collect_automation_coverage），趋势读数绝不另算一套口径。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        if not isinstance(cfg, dict):
+            return
+        from src.inbox.automation_coverage_trend import trend_cfg
+        tc = trend_cfg(cfg)
+        if not tc["enabled"]:
+            return
+        ts = float(now if now is not None else time.time())
+        last = float(getattr(self, "_cov_trend_last_ts", 0.0) or 0.0)
+        if last and (ts - last) < tc["interval_min"] * 60.0:
+            return
+        store = getattr(getattr(self._app, "state", self._app),
+                        "inbox_store", None)
+        if store is None:
+            return
+        from src.inbox.automation_coverage import collect_automation_coverage
+        from src.inbox.automation_coverage_trend import (
+            get_coverage_trend_store,
+        )
+        snap = collect_automation_coverage(store, cfg, now=ts)
+        if not int((snap.get("totals") or {}).get("conversations") or 0):
+            return   # 零会话不落行（空库/冷启动，落 0 会污染趋势）
+        get_coverage_trend_store().record_snapshot(snap, now=ts)
+        self._cov_trend_last_ts = ts
+
+    def _check_stale_enriching(self, *, now: Optional[float] = None) -> None:
+        """停泊态（enriching）草稿卡死回收（P1 2026-08-09，状态机泄漏修复）。
+
+        enriching 是「人设产线补全中」的停泊态，正常几秒内翻 pending；補全
+        协程有三层失败兜底（enrich 失败/调度失败/异常都 release）——**唯独
+        进程重启**没有任何一层接得住：停泊行永久卡死，且 auto_generate_draft
+        的幂等保护（「已有 pending/enriching 则跳过」）会从此**挡住该会话的
+        所有后续自动拟稿**，客户消息永远无人回、界面上还什么都看不见（enriching
+        不在待审队列里显示）。桌面机天天重启，这是必然踩中的静默坑。
+
+        修法＝超时 release（翻 pending 保留规则模板占位，与产线失败兜底同一条
+        降级路径，语义零新增）。默认开（这是泄漏修复不是新功能）；配置
+        ``health_watchdog.stale_enriching_release.{enabled,after_min}``。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        er = (((cfg.get("health_watchdog") or {})
+               .get("stale_enriching_release")) or {}) if isinstance(cfg, dict) else {}
+        if not er.get("enabled", True):
+            return
+        svc = getattr(getattr(self._app, "state", self._app), "draft_service", None)
+        if svc is None or not hasattr(svc, "release_enriching_draft"):
+            return
+        after_min = max(2.0, float(er.get("after_min", 15) or 15))
+        ts = float(now if now is not None else time.time())
+        cutoff = ts - after_min * 60.0
+        try:
+            rows = svc.list_drafts(status="enriching", limit=200) or []
+        except Exception:
+            logger.debug("停泊草稿取数失败（忽略）", exc_info=True)
+            return
+        released = 0
+        for d in rows:
+            try:
+                created = float(d.get("created_ts") or 0)
+                did = str(d.get("draft_id") or "")
+            except Exception:
+                continue
+            if not did or created <= 0 or created >= cutoff:
+                continue
+            try:
+                if svc.release_enriching_draft(did):
+                    released += 1
+            except Exception:
+                logger.debug("停泊草稿回收失败 draft_id=%s（跳过）", did,
+                             exc_info=True)
+        if released:
+            logger.info(
+                "[stale_enriching] 回收 %s 条卡死停泊草稿（>%.0f 分钟未收尾，"
+                "translated to pending 待人审/自动链接手）", released, after_min)
+
     def _check_draft_backlog(self, *, now: Optional[float] = None) -> None:
         """待审草稿长期无人处理 → 主动轰人（补 SLA 告警的 **L1 盲区**）。
 
@@ -1343,7 +1828,9 @@ class HealthWatchdog:
         刻意做成**聚合**信号而非逐条：L1 是低风险日常稿，逐条告警＝噪音；
         「N 条超过 X 小时无人处理」才是运维该看的（排班/注意力问题，非单条草稿问题）。
         配置 ``health_watchdog.draft_backlog_remind.{enabled,min_age_hours,min_count,
-        interval_min}``（默认开：≥3 条超 24h 触发，每 4h 重提，清空自动补恢复通知）。
+        interval_min,work_resume_grace_hours}``（默认开：≥3 条超 24h 触发，每 4h
+        重提，清空自动补恢复通知；班表开启时休息期扣留稿不计入、复班给 2h 宽限，
+        见 _filter_backlog_by_schedule）。
         """
         cfg = getattr(self._config_manager, "config", None) or {}
         br = (((cfg.get("health_watchdog") or {}).get("draft_backlog_remind"))
@@ -1372,6 +1859,14 @@ class HealthWatchdog:
             if created > 0 and created < cutoff:
                 aged.append(d)
 
+        # 工作时间班表感知（2026-08-04）：班表开启时，休息中账号的积压是
+        # **刻意扣留**（AutosendWorker 复班会接续/补觉重拟），此时轰「无人
+        # 处理」=狼来了；复班后再给宽限（work_resume_grace_hours 默认 2h）
+        # 让补觉链/坐席消化隔夜积压——宽限只豁免**休息期攒下的**稿
+        # （created < 本班次开始），复班后新拖延照常告警。
+        aged, off_hours_held = self._filter_backlog_by_schedule(
+            aged, cfg, br, now_ts=ts)
+
         # 把「账目残留」与「客户真的在等」分开：坐席走「采用文案→手动发送」时
         # 发送路由不处置草稿行，那行会一直 pending。两者处置完全不同（前者清账、
         # 后者要回客户），混成一个数字会让运维对告警失去信任 → 告警按「真的在等」
@@ -1392,7 +1887,9 @@ class HealthWatchdog:
             stale.append(d)
 
         if len(stale) < min_count:
-            if self._db_alerted and not stale:
+            # 恢复通知的诚实前提：队列真清空。仅因休息期扣留而「暂时看不见」
+            # 不算处理完（off_hours_held>0 时不发恢复，复班后见真章）。
+            if self._db_alerted and not stale and not off_hours_held:
                 try:
                     from src.integrations.shared.event_bus import get_event_bus
                     get_event_bus().publish("draft_backlog_alert", {
@@ -1432,6 +1929,8 @@ class HealthWatchdog:
                 "sla_uncovered": uncovered,
                 # 账目残留（内容已人工回过、草稿行没人处置）——与「客户在等」分开报
                 "already_replied": already_replied,
+                # 班表扣留/复班宽限中的条数（刻意延后，不算无人处理）
+                "off_hours_held": off_hours_held,
                 "reminder": bool(self._db_alerted),
                 "rate_key": "draft_backlog:remind",
             })
@@ -1443,8 +1942,456 @@ class HealthWatchdog:
         self.total_draft_backlog_alerts += 1
         logger.warning(
             "待审草稿积压：%d 条超过 %.0fh 客户仍在等（最老 %.0fh，分级 %s；"
-            "其中 %d 条不在 SLA 逐条告警覆盖内；另有 %d 条已人工回过仅账目残留）",
-            len(stale), min_age_h, oldest_h, by_level, uncovered, already_replied)
+            "其中 %d 条不在 SLA 逐条告警覆盖内；另有 %d 条已人工回过仅账目残留；"
+            "%d 条处于班表扣留/复班宽限）",
+            len(stale), min_age_h, oldest_h, by_level, uncovered,
+            already_replied, off_hours_held)
+
+    def _check_buried_conversations(self, *, now: Optional[float] = None) -> None:
+        """归档着、却有未读入站的会话 → 主动轰人（P0-198）。
+
+        事故：一条 33 条消息的**活跃**会话在坐席聊天途中从工作台彻底消失。归档在实现上
+        是永久的（所有默认视图过滤 ``archived=1``），入站链路从不复位该标记，于是客户
+        之后无论说多少句话都不回来、也不产生任何提示——**没有任何信号会响**。
+
+        入站自动复活（``InboxStore._unarchive_on_inbound``）已经堵住新发生的这类事故，
+        但它**够不着存量**：``archived_at`` 是那次才加的列，存量已归档行只能回填「升级
+        时刻」（真实归档时刻不可追溯），客户是在升级之前开口的 → ts 早于回填值 → 判据
+        天然不成立。本检查用一条**与时间戳无关**的信号兜住这批历史损失：未读只可能由
+        入站消息产生，而「没人读过」本身就是「没人看得见」的直接证据。
+
+        它同时是复活链路的**反向哨兵**：复活正常工作时这个清单应恒为空；一旦复活断了
+        （接线丢失/判据回归），这里就会响。故即便存量清完也不该拆。
+
+        聚合而非逐条（与 ``_check_draft_backlog`` 同哲学）：这是「有人被埋着」的排班/
+        注意力问题，逐条＝噪音。配置 ``health_watchdog.buried_conv_remind.
+        {enabled,min_count,min_unread,interval_min}``（默认开：≥1 条即触发——被埋一条
+        就是一个客户在等，不像草稿积压那样存在「日常队列深度」的正常态）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        br = (((cfg.get("health_watchdog") or {}).get("buried_conv_remind"))
+              or {}) if isinstance(cfg, dict) else {}
+        if not br.get("enabled", True):
+            return
+        store = self._inbox()
+        if store is None or not hasattr(store, "list_buried_archived"):
+            return
+        min_count = max(1, int(br.get("min_count", 1) or 1))
+        min_unread = max(1, int(br.get("min_unread", 1) or 1))
+        ts = float(now if now is not None else time.time())
+        try:
+            rows = store.list_buried_archived(min_unread=min_unread, limit=100) or []
+        except Exception:
+            logger.debug("被埋会话巡检取数失败（忽略）", exc_info=True)
+            return
+
+        if len(rows) < min_count:
+            if self._bc_alerted and not rows:
+                try:
+                    from src.integrations.shared.event_bus import get_event_bus
+                    get_event_bus().publish("buried_conv_alert", {
+                        "recovered": True,
+                        "rate_key": "buried_conv:recovered",
+                    })
+                    logger.info("HealthWatchdog 发出被埋会话恢复通知")
+                except Exception:
+                    logger.debug("buried_conv recovery 发布失败（忽略）", exc_info=True)
+                self._bc_alerted = False
+                self._bc_last_remind = 0.0
+            return
+
+        interval_sec = max(600.0, float(br.get("interval_min", 240) or 240) * 60.0)
+        if self._bc_alerted and ts - self._bc_last_remind < interval_sec:
+            return
+
+        total_unread = 0
+        oldest_h = 0.0
+        auto_n = 0
+        for r in rows:
+            try:
+                total_unread += int(r.get("unread") or 0)
+            except (TypeError, ValueError):
+                pass
+            try:
+                last_ts = float(r.get("last_ts") or 0)
+                if last_ts > 0:
+                    oldest_h = max(oldest_h, (ts - last_ts) / 3600.0)
+            except (TypeError, ValueError):
+                pass
+            try:
+                if float(r.get("auto_archived_at") or 0) > 0:
+                    auto_n += 1
+            except (TypeError, ValueError):
+                pass
+        # 人工/自动分开报：处置完全不同——人工归档要找那个人问清楚是不是误操作，
+        # 自动归档说明策略把活跃会话判死了（该调 idle_hours 或干脆关掉）。
+        samples = [str(r.get("conversation_id") or "") for r in rows[:5]]
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("buried_conv_alert", {
+                "buried_count": len(rows),
+                "total_unread": total_unread,
+                "oldest_hours": round(oldest_h, 1),
+                "auto_archived": auto_n,
+                "manual_archived": len(rows) - auto_n,
+                "samples": samples,
+                "reminder": bool(self._bc_alerted),
+                "rate_key": "buried_conv:remind",
+            })
+        except Exception:
+            logger.debug("buried_conv alert 发布失败（忽略）", exc_info=True)
+            return
+        self._bc_alerted = True
+        self._bc_last_remind = ts
+        self.total_buried_conv_alerts += 1
+        logger.warning(
+            "被埋会话：%d 个会话已归档却有未读入站（共 %d 条未读，最近活动距今 %.0fh；"
+            "人工归档 %d / 自动归档 %d）——客户在等，但工作台默认视图看不见它们",
+            len(rows), total_unread, oldest_h, len(rows) - auto_n, auto_n,
+        )
+
+    def _filter_backlog_by_schedule(
+        self, aged: List[Dict[str, Any]], cfg: Any, br: Any,
+        *, now_ts: float,
+    ) -> "tuple[List[Dict[str, Any]], int]":
+        """按账号工作时间班表剔除「刻意扣留/复班宽限中」的积压稿。
+
+        返回（仍算积压的列表, 豁免条数）。班表未启用 = 原样返回（零行为变更）；
+        账号状态按 (platform, account) 记忆化（≤500 条稿也只探几次班表）；
+        单条判定异常按「在等」计（宁可多报不漏报，与本检查其他路径同哲学）。
+        """
+        try:
+            from src.inbox.work_hours_gate import (
+                schedule_state,
+                work_schedule_cfg,
+            )
+            ws = work_schedule_cfg(cfg if isinstance(cfg, dict) else {})
+            if not ws.get("enabled"):
+                return aged, 0
+            try:
+                grace_sec = max(0.0, float(
+                    (br or {}).get("work_resume_grace_hours", 2) or 0)) * 3600.0
+            except (TypeError, ValueError):
+                grace_sec = 2 * 3600.0
+            states: Dict[str, Dict[str, Any]] = {}
+            kept: List[Dict[str, Any]] = []
+            held = 0
+            for d in aged:
+                try:
+                    plat = str(d.get("platform") or "")
+                    acct = str(d.get("account_id") or "default")
+                    key = f"{plat}:{acct}"
+                    st = states.get(key)
+                    if st is None:
+                        st = schedule_state(ws, plat, acct, now_ts)
+                        states[key] = st
+                    if st.get("gated"):
+                        if not st.get("in_hours"):
+                            held += 1  # 休息中：刻意扣留，不算无人处理
+                            continue
+                        shift_start = float(st.get("shift_started_ts") or 0)
+                        if (grace_sec > 0 and shift_start > 0
+                                and now_ts - shift_start < grace_sec
+                                and float(d.get("created_ts") or 0)
+                                < shift_start):
+                            held += 1  # 复班宽限：隔夜稿给补觉/坐席消化窗口
+                            continue
+                except Exception:
+                    logger.debug("积压巡检班表判定失败（按在等计）", exc_info=True)
+                kept.append(d)
+            return kept, held
+        except Exception:
+            logger.debug("积压巡检班表过滤失败（忽略）", exc_info=True)
+            return aged, 0
+
+    def _case_ctx_store(self) -> Any:
+        """案例巡检/周报共用的 ContextStore 发现（skill_manager 优先，tg 回落）。"""
+        state = getattr(self._app, "state", self._app)
+        sm = getattr(state, "skill_manager", None)
+        if sm is None:
+            tg = getattr(state, "telegram_client", None)
+            sm = getattr(tg, "skill_manager", None) if tg is not None else None
+        return getattr(sm, "_context_store", None) if sm is not None else None
+
+    def _check_case_backlog(self, *, now: Optional[float] = None) -> None:
+        """案例中心积压巡检：AI 立了案却无人认领/处理 → 主动轰人。
+
+        存在理由与草稿积压同构：案例告警（case_alert）只在**开案那一刻**响一声
+        （铃铛/webhook），之后没人接手是静默的——「案例跟进」页要有人开才有用。
+        三档判据（都只数**未认领且未结案**的案例；已认领=有人在跟，不吵）：
+
+        - **危机档**：severity 3 无人认领超 ``urgent_min``（默认 30 分钟）→ 立即报
+          （数量不设门槛——危机一条就够格）；
+        - **媒体档**（P5）：media_complaint 无人认领超 ``media_stale_hours``（默认
+          随 case_center.DEFAULT_MEDIA_STALE_HOURS=4h）达 ``media_min_count``
+          （默认 **1**）条 → 报。媒体质疑=穿帮风险，客户在等解释——severity 2
+          的常规档要凑满 3 条才响，单条超龄的穿帮不该等凑数；
+        - **常规档**：severity ≤2 无人认领超 ``min_age_hours``（默认 4h）达
+          ``min_count``（默认 3）条 → 聚合报。
+
+        重提间隔 ``interval_min``（默认 4h）；三档同时清零时补恢复通知。
+        配置 ``health_watchdog.case_backlog_remind.{enabled,urgent_min,min_age_hours,
+        min_count,media_stale_hours,media_min_count,interval_min}``
+        （默认开——零案例天然静默）。事件仍是 ``case_backlog_alert``（``cases``
+        别名一次订阅全收，不新增订阅面）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        br = (((cfg.get("health_watchdog") or {}).get("case_backlog_remind"))
+              or {}) if isinstance(cfg, dict) else {}
+        if not br.get("enabled", True):
+            return
+        ctx_store = self._case_ctx_store()
+        if ctx_store is None:
+            return
+
+        ts = float(now if now is not None else time.time())
+        urgent_min = max(5.0, float(br.get("urgent_min", 30) or 30))
+        min_age_h = max(0.5, float(br.get("min_age_hours", 4) or 4))
+        min_count = max(1, int(br.get("min_count", 3) or 3))
+        try:
+            from src.utils.case_center import (
+                DEFAULT_MEDIA_STALE_HOURS, collect_case_rows,
+            )
+            rows = collect_case_rows(ctx_store, now=ts)
+        except Exception:
+            logger.debug("案例积压巡检取数失败（忽略）", exc_info=True)
+            return
+        media_stale_h = max(0.5, float(
+            br.get("media_stale_hours", DEFAULT_MEDIA_STALE_HOURS)
+            or DEFAULT_MEDIA_STALE_HOURS))
+        media_min_count = max(1, int(br.get("media_min_count", 1) or 1))
+
+        urgent: List[Dict[str, Any]] = []
+        stale: List[Dict[str, Any]] = []
+        media_stale: List[Dict[str, Any]] = []
+        for r in rows:
+            if r.get("closed") or r.get("claimed_by"):
+                continue
+            created = float(r.get("created_at") or 0)
+            if created <= 0:
+                continue
+            age_min = (ts - created) / 60.0
+            if int(r.get("severity") or 1) >= 3:
+                if age_min >= urgent_min:
+                    urgent.append(r)
+            else:
+                if age_min >= min_age_h * 60.0:
+                    stale.append(r)
+                if (str(r.get("source") or "") == "media_complaint"
+                        and age_min >= media_stale_h * 60.0):
+                    media_stale.append(r)
+
+        media_hit = len(media_stale) >= media_min_count
+        if not urgent and not media_hit and len(stale) < min_count:
+            if self._cb_alerted and not urgent and not stale and not media_stale:
+                try:
+                    from src.integrations.shared.event_bus import get_event_bus
+                    get_event_bus().publish("case_backlog_alert", {
+                        "recovered": True,
+                        "rate_key": "case_backlog:recovered",
+                    })
+                    logger.info("HealthWatchdog 发出案例积压恢复通知")
+                except Exception:
+                    logger.debug("case_backlog recovery 发布失败（忽略）", exc_info=True)
+                self._cb_alerted = False
+                self._cb_last_remind = 0.0
+            return
+
+        interval_sec = max(600.0, float(br.get("interval_min", 240) or 240) * 60.0)
+        if self._cb_alerted and ts - self._cb_last_remind < interval_sec:
+            return
+
+        by_source: Dict[str, int] = {}
+        oldest_h = 0.0
+        for r in urgent + stale:
+            src = str(r.get("source") or "unknown")
+            by_source[src] = by_source.get(src, 0) + 1
+            created = float(r.get("created_at") or 0)
+            if created > 0:
+                oldest_h = max(oldest_h, (ts - created) / 3600.0)
+        media_oldest_h = 0.0
+        for r in media_stale:
+            created = float(r.get("created_at") or 0)
+            if created > 0:
+                media_oldest_h = max(media_oldest_h, (ts - created) / 3600.0)
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("case_backlog_alert", {
+                "urgent_count": len(urgent),
+                "stale_count": len(stale),
+                "oldest_hours": round(oldest_h, 1),
+                "by_source": by_source,
+                "min_age_hours": min_age_h,
+                # P5 媒体档（穿帮风险 SLA）：0 条时字段仍在，formatter 按需渲染
+                "media_stale_count": len(media_stale),
+                "media_stale_hours": media_stale_h,
+                "media_oldest_hours": round(media_oldest_h, 1),
+                "reminder": bool(self._cb_alerted),
+                "rate_key": "case_backlog:remind",
+            })
+        except Exception:
+            logger.debug("case_backlog alert 发布失败（忽略）", exc_info=True)
+            return
+        self._cb_alerted = True
+        self._cb_last_remind = ts
+        self.total_case_backlog_alerts += 1
+        logger.warning(
+            "案例积压：危机级无人认领 %d 条、媒体质疑超龄 %d 条、常规超龄未认领 %d 条"
+            "（最老 %.1fh，来源 %s）",
+            len(urgent), len(media_stale), len(stale), oldest_h, by_source)
+
+    def _check_drill_hygiene(self, *, now: Optional[float] = None) -> None:
+        """演练残影自动清扫（P6）：最近活动超窗的未结 drill 案例自动结案归零。
+
+        为什么需要它（2026-08-09 实锤）：duel_nightly 收尾会 close-drill，但白天
+        各线 **ad-hoc** 跑对练（bubble pacing 等）不走那个脚本——上午刚清完 3 条、
+        28 分钟后又积 3 条。残影只在 /cases「演练数据」筛选下可见、不进任何计数/
+        告警，但「测试数据不得污染跟进面」应该是机制而不是人肉习惯。
+
+        判据＝**最近活动**（末条信号 ts）早于 ``drill_autoclean_hours``（默认 6h，
+        0=关）——正在跑的演练信号还在进、不会被中途搅局；仅动保留号段 uid，真实
+        客户零误伤面。30min 节流；清扫是卫生动作不是事故，只记 INFO 不发告警。
+        配置挂 ``health_watchdog.case_backlog_remind.drill_autoclean_hours``
+        （与案例巡检同块——同一个 ctx_store、同一族关注点）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        br = (((cfg.get("health_watchdog") or {}).get("case_backlog_remind"))
+              or {}) if isinstance(cfg, dict) else {}
+        try:
+            clean_h = float(br.get("drill_autoclean_hours", 6) or 0)
+        except (TypeError, ValueError):
+            clean_h = 6.0
+        if clean_h <= 0:
+            return
+        ts = float(now if now is not None else time.time())
+        if ts - getattr(self, "_drill_clean_last", 0.0) < 1800.0:
+            return
+        self._drill_clean_last = ts
+        ctx_store = self._case_ctx_store()
+        if ctx_store is None:
+            return
+        try:
+            from src.utils.case_center import close_open_drill_cases
+            n = close_open_drill_cases(
+                ctx_store, resolution="drill auto-clean (watchdog)",
+                now=ts, persist=True, min_age_hours=clean_h)
+        except Exception:
+            logger.debug("演练残影清扫失败（忽略）", exc_info=True)
+            return
+        if n:
+            self.total_drill_autocleaned = (
+                getattr(self, "total_drill_autocleaned", 0) + n)
+            logger.info("演练残影自动清扫：结案 %d 条（最近活动早于 %.1fh 的 drill 案例）",
+                        n, clean_h)
+
+    def _check_login_funnel(self, *, now: Optional[float] = None) -> None:
+        """某平台某接入方式「发起 N 次、成功 0 次」→ 主动轰人。
+
+        为什么需要它（2026-07-25 事故的第二半）：LINE 协议扫码 100% 失败烂了多日，
+        根因是**没有任何一层在看「发起了多少次、成功了几次」**。为此建了
+        ``login_funnel_stats`` 并在 ops 卡上画了 stalled 标记——但那仍是**被动**的：
+        看板要有人打开才有用，而登录链路坏掉时通常没人正盯着运营总览。
+        这条巡检把同一判据变成推送，闭合最后一公里。
+
+        **判据是「距上次成功以来」而非累计**：累计口径（``authorized == 0``）会让
+        「上周成功过、这周彻底坏掉」的链路永久静默，而回归比从没通过的新链路更隐蔽。
+        计数由 ``login_funnel_stats`` 侧维护（``started_since_success``，成功即清零），
+        **与 ops 卡的 stalled 标记同一字段**——否则会出现「收到告警去看板却显示健康」，
+        比没告警更糟。
+
+        - ``started_since_success >= min_started`` → 报（成功过一次即自动清零闭嘴）；
+        - **重提要求它又涨了**：夜里没人再试就不刷屏（比单纯按时间重提精确，也免掉
+          「已知坏、修不了」的方式每 4 小时叫一次）；
+        - 恢复通知要**正面证据**（累计 authorized 真的涨了）；计数回退（进程重启 /
+          stats.reset）不算成功。
+
+        零流量天然静默，故默认开。
+        配置 ``health_watchdog.login_funnel_remind.{enabled,min_started,interval_min}``。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        lf = (((cfg.get("health_watchdog") or {}).get("login_funnel_remind"))
+              or {}) if isinstance(cfg, dict) else {}
+        if not lf.get("enabled", True):
+            return
+        min_started = max(2, int(lf.get("min_started", 5) or 5))
+        interval_sec = max(600.0, float(lf.get("interval_min", 240) or 240) * 60.0)
+        ts = float(now if now is not None else time.time())
+        try:
+            from src.integrations.login_funnel_stats import get_login_funnel_stats
+            rows = (get_login_funnel_stats().dump() or {}).get("rows") or []
+        except Exception:
+            logger.debug("接入漏斗取数失败（忽略）", exc_info=True)
+            return
+
+        for row in rows:
+            key = str(row.get("key") or "")
+            if not key or key == "__other__":
+                continue
+            try:
+                started = int(row.get("started") or 0)
+                authorized = int(row.get("authorized") or 0)
+            except (TypeError, ValueError):
+                continue
+
+            # 旧快照（升级窗口内的进程/测试替身）没有 since 字段时退回累计口径：
+            # 少报「回归」形态，但不会误报。
+            d_started = int(row.get("started_since_success",
+                                    started if authorized == 0 else 0) or 0)
+            base_auth = self._lf_base.get(key, authorized)
+            if authorized < base_auth:
+                base_auth = authorized      # 计数回退＝进程重启，不是「成功了」
+                self._lf_base[key] = authorized
+
+            if authorized > base_auth:
+                self._lf_base[key] = authorized
+                if key in self._lf_alerted:
+                    try:
+                        from src.integrations.shared.event_bus import get_event_bus
+                        get_event_bus().publish("login_funnel_alert", {
+                            "recovered": True, "key": key,
+                            "rate_key": f"login_funnel:{key}:recovered",
+                        })
+                        logger.info("HealthWatchdog 发出接入链路恢复通知（%s）", key)
+                    except Exception:
+                        logger.debug("login_funnel recovery 发布失败（忽略）", exc_info=True)
+                    self._lf_alerted.pop(key, None)
+                    self._lf_last_remind.pop(key, None)
+                continue
+
+            self._lf_base[key] = authorized
+            if d_started < min_started:
+                continue
+            prev = self._lf_alerted.get(key)
+            if prev is not None:
+                # 没有新的失败尝试就不重提——「坏着但没人再试」不值得每 4h 叫一次
+                if d_started <= prev or ts - self._lf_last_remind.get(key, 0.0) < interval_sec:
+                    continue
+
+            plat, _, mode = key.partition(":")
+            reasons = row.get("reasons") or {}
+            try:
+                from src.integrations.shared.event_bus import get_event_bus
+                get_event_bus().publish("login_funnel_alert", {
+                    "key": key, "platform": plat, "mode": mode,
+                    "started": d_started,
+                    "qr_shown": int(row.get("qr_shown_since_success",
+                                            row.get("qr_shown") or 0) or 0),
+                    "failed": int(row.get("failed_since_success",
+                                          row.get("failed") or 0) or 0),
+                    # 归因分布是「代码坏了 vs 账号被风控」的分水岭：全是 checkpoint
+                    # 就别去查代码了。（累计口径，够定性；精确到窗口不值得为它建时序表）
+                    "reasons": dict(reasons),
+                    "reminder": prev is not None,
+                    "rate_key": f"login_funnel:{key}",
+                })
+            except Exception:
+                logger.debug("login_funnel alert 发布失败（忽略）", exc_info=True)
+                continue
+            self._lf_alerted[key] = d_started
+            self._lf_last_remind[key] = ts
+            self.total_login_funnel_alerts += 1
+            logger.warning("账号接入链路停摆：%s 近期发起 %d 次、成功 0 次（原因分布 %s）",
+                           key, d_started, reasons or "—")
 
     def _check_csrf_rejects(self, *, now: Optional[float] = None) -> None:
         """CSRF 写请求拦截在观察窗内激增 → 主动轰人（P1，2026-07-31 事故沉淀）。
@@ -1669,6 +2616,95 @@ class HealthWatchdog:
                 "——投递回调疑似未接线，客户可能一条都没收到",
                 approved)
 
+    def _check_scan_loop_stall(self, *, now: Optional[float] = None) -> None:
+        """常备扫描循环停摆巡检（P4 2026-08-09）。
+
+        事故背景：目标结算/提醒扫描与工作链推进都曾挂在 ``report.enabled``
+        闸死的调度器上**静默从未运行**（三轮开发后才被生产探针拆穿）。两者已
+        迁常备循环并挂心跳（``app.state.goal_scan_state`` /
+        ``workflow_autorun_state``），本巡检把「心跳停走」变成主动告警——
+        「没跑」和「没货」必须分得出来，且不能再靠人想起来去看。
+
+        判据（每循环独立）：心跳 dict 缺失（挂载失败/被移除）或
+        ``last_tick_ts`` 停走超 ``stall_min``（tick=60s → 默认 10 分钟=缺 10 拍）
+        → 首提 + ``interval_min`` 重提 + 心跳恢复补发恢复通知。循环内部被
+        配置闸住（gated 非空）**不算停摆**——闸住时心跳照跳，这正是二者的
+        判别面。配置 ``health_watchdog.scan_loop_remind.{enabled,stall_min,
+        interval_min}``（默认开——这是巡检不是新行为）。"""
+        cfg = getattr(self._config_manager, "config", None) or {}
+        if not isinstance(cfg, dict):
+            return
+        sc = ((cfg.get("health_watchdog") or {}).get("scan_loop_remind")
+              or {})
+        if not isinstance(sc, dict):
+            sc = {}
+        if not bool(sc.get("enabled", True)):
+            return
+        try:
+            stall_min = float(sc.get("stall_min", 10) or 10)
+        except (TypeError, ValueError):
+            stall_min = 10.0
+        try:
+            interval_min = float(sc.get("interval_min", 240) or 240)
+        except (TypeError, ValueError):
+            interval_min = 240.0
+        ts = float(now if now is not None else time.time())
+        if not hasattr(self, "_scanloop_alerted"):
+            self._scanloop_alerted: Dict[str, float] = {}
+            self._scanloop_watch_since = ts
+        state_root = getattr(self._app, "state", self._app)
+        loops = (
+            ("goal_scan", getattr(state_root, "goal_scan_state", None)),
+            ("workflow_autorun",
+             getattr(state_root, "workflow_autorun_state", None)),
+        )
+        from src.integrations.shared.event_bus import get_event_bus
+        for name, st in loops:
+            last_tick = float((st or {}).get("last_tick_ts") or 0.0)
+            if last_tick <= 0:
+                # 心跳从未出现：挂载失败或旧进程。给足启动宽限（watch_since
+                # 起算），宽限外仍无心跳 → 与停摆同罪。
+                stalled = (ts - float(self._scanloop_watch_since)) \
+                    >= stall_min * 60.0
+                stalled_min = ((ts - float(self._scanloop_watch_since)) / 60.0
+                               if stalled else 0.0)
+            else:
+                stalled = (ts - last_tick) >= stall_min * 60.0
+                stalled_min = (ts - last_tick) / 60.0
+            alerted_at = float(self._scanloop_alerted.get(name) or 0.0)
+            if stalled:
+                if alerted_at and (ts - alerted_at) < interval_min * 60.0:
+                    continue
+                payload = {
+                    "loop": name,
+                    "stalled_min": round(stalled_min, 1),
+                    "ticks": int((st or {}).get("ticks") or 0),
+                    "last_tick_ts": last_tick,
+                    "mounted": st is not None,
+                    "reminder": bool(alerted_at),
+                    "rate_key": f"scan_stall:{name}",
+                }
+                try:
+                    get_event_bus().publish("scan_loop_stall_alert", payload)
+                    self._scanloop_alerted[name] = ts
+                    logger.warning(
+                        "[scan-stall] 常备循环 %s 心跳停走 %.1f 分钟"
+                        "（mounted=%s ticks=%s）", name, stalled_min,
+                        st is not None, (st or {}).get("ticks"))
+                except Exception:
+                    logger.debug("scan stall publish failed", exc_info=True)
+            elif alerted_at:
+                # 心跳恢复 → 补发恢复通知并清标记（只发给告过警的，防噪）
+                try:
+                    get_event_bus().publish("scan_loop_stall_alert", {
+                        "loop": name, "recovered": True,
+                        "rate_key": f"scan_stall:{name}:recovered",
+                    })
+                except Exception:
+                    logger.debug("scan stall recover publish failed",
+                                 exc_info=True)
+                self._scanloop_alerted.pop(name, None)
+
     def _check_avatar_voice(self, *, now: Optional[float] = None) -> None:
         """AvatarHub 7852（在线语音克隆主力）持续掉线/半死的升级式提醒。
 
@@ -1788,6 +2824,304 @@ class HealthWatchdog:
         self._avatar_alerted = True
         self._avatar_last_remind = ts
         self.total_avatar_voice_reminders += 1
+
+    def _check_voice_outage(self, *, now: Optional[float] = None) -> None:
+        """语音出站断档巡检（2026-08-02）：滚动窗内「尝试 ≥N 次且 0 成功」告警。
+
+        为什么 ``_check_avatar_voice`` 不够：zhiliao 语音链断 5 天（hub 音色档
+        404 → tts_pipeline voice_consistency=strict 全部拒发）零告警——hang 检测
+        要求「7852 探针绿 + 失败 streak ≥3 且最近失败 ≤20min 新鲜」，低流量下
+        零星请求隔几小时失败一次，永远不新鲜；探针又一直绿。本巡检改用
+        ``voice_outage`` 台账（A 线 sender / B 线 autosend 的最终成败账），只看
+        滚动窗聚合：**只要有人要语音且全在失败**，无论频率多低都会响。
+
+        判据（零误报优先，信息不足一律静默）：
+          - 窗口内 ``attempts ≥ min_attempts``（默认 3，防单条巧合）且 **0 成功**
+            → 首提（EventBus ``voice_outage_alert``），此后每 ``interval_min``
+            （默认 240）重提；
+          - 告警过之后窗口内出现**任一成功**（正面证据）→ 补发恢复通知一次；
+            无流量导致样本掉出窗口 ≠ 恢复，保持已告警态等证据；
+          - 台账空/读取异常/快照坏形 → 静默。
+        配置 ``health_watchdog.voice_outage_remind.{enabled,min_attempts,
+        window_hours,interval_min}``（默认开 / 3 / 24 / 240）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        vr = (((cfg.get("health_watchdog") or {}).get("voice_outage_remind"))
+              or {}) if isinstance(cfg, dict) else {}
+        if not vr.get("enabled", True):
+            return
+        ts = float(now if now is not None else time.time())
+        try:
+            window_hours = max(1.0, float(vr.get("window_hours", 24) or 24))
+        except (TypeError, ValueError):
+            window_hours = 24.0
+        try:
+            from src.ai.voice_outage import get_voice_outage
+            snap = get_voice_outage().outage_snapshot(
+                now=ts, window_hours=window_hours)
+        except Exception:
+            return  # 台账不可用=信息不足，宁可漏报不误报
+        if not isinstance(snap, dict):
+            return
+        attempts = int(snap.get("attempts_24h") or 0)
+        ok_n = int(snap.get("ok_24h") or 0)
+
+        if ok_n > 0:
+            # 窗口内有成功=链路活着；从「已告警」恢复 → 补发恢复通知一次
+            # （未告警过的正常态不发，防噪）。
+            if self._vo_alerted:
+                try:
+                    from src.integrations.shared.event_bus import get_event_bus
+                    get_event_bus().publish("voice_outage_alert", {
+                        "recovered": True,
+                        "rate_key": "voice_outage:recovered",
+                    })
+                    logger.info("HealthWatchdog 发出语音出站恢复通知")
+                except Exception:
+                    logger.debug(
+                        "voice_outage recovery 发布失败（已忽略）", exc_info=True)
+            self._vo_alerted = False
+            self._vo_last_remind = 0.0
+            return
+
+        min_attempts = max(1, int(vr.get("min_attempts", 3) or 3))
+        if attempts < min_attempts:
+            # 样本不足不判：不告警、也不无凭据发恢复（已告警态保持，等正面证据）
+            return
+
+        interval_sec = max(600.0, float(vr.get("interval_min", 240) or 240) * 60.0)
+        due = ((not self._vo_alerted)
+               or (ts - self._vo_last_remind >= interval_sec))
+        if not due:
+            return
+        reasons = snap.get("fail_reasons") or {}
+        top_reasons = dict(sorted(
+            reasons.items(), key=lambda kv: (-int(kv[1] or 0), kv[0]))[:3])
+        last_ok_ts = float(snap.get("last_ok_ts") or 0.0)
+        last_ok_hours = (round((ts - last_ok_ts) / 3600.0, 1)
+                         if last_ok_ts > 0 else -1.0)
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("voice_outage_alert", {
+                "attempts": attempts,
+                "window_hours": int(window_hours),
+                "consecutive_fails": int(snap.get("consecutive_fails") or 0),
+                "top_reasons": top_reasons,
+                "last_ok_hours": last_ok_hours,
+                "by_source": dict(snap.get("by_source") or {}),
+                "reminder": bool(self._vo_alerted),
+                # 独立限流键：首提/重提不与其他事件挤 1h 窗
+                "rate_key": "voice_outage:remind",
+            })
+        except Exception:
+            logger.debug("voice_outage alert 发布失败（已忽略）", exc_info=True)
+            return
+        self._vo_alerted = True
+        self._vo_last_remind = ts
+        self.total_voice_outage_alerts += 1
+        logger.warning(
+            "语音出站断档：%s 小时窗内 %d 次尝试 0 成功（连败 %d，原因 Top %s）"
+            "——该发语音的回复全部回落文字",
+            int(window_hours), attempts,
+            int(snap.get("consecutive_fails") or 0), top_reasons)
+
+    # 入站漏球巡检每轮最多审视的活跃会话数（list_conversations 按活跃度取近段）
+    _UNANSWERED_SCAN_LIMIT = 400
+
+    def _check_unanswered_inbound(self, *, now: Optional[float] = None) -> None:
+        """「客户说了最后一句、系统既没回也没拟稿」的漏球巡检（P0 2026-08-05）。
+
+        实锤：telegram 客户 22:27 连发两条（含「以后给你介绍做你老公」这类
+        高意向社交信号），整晚零出站、零草稿，次日 07:10 只等来一条不接茬的
+        通用晨安。现有告警对这形态全部沉默：draft_backlog 只看「草稿行存在」
+        的积压、SLA 只看 L3/L4 草稿——**根本没拟稿**的丢球没有任何信号。
+
+        判据（逐条都要满足，零误报优先）：
+          - 会话最后一条是**入站**（last_message_dirs 批量口径）；
+          - 悬空时长在 [min_age_hours, max_age_hours]（默认 2h..72h——太新给
+            拟稿/拟人延迟链留时间，太旧属回访语义不是漏球）；
+          - 私聊（chat_type 白名单 + telegram 负 ID 兜底排群）且未归档；
+          - 非 bot/业务号（复用 peer_bot_guard 的排除口径）；
+          - automation_mode 允许自动拟稿（manual=坐席显式接管，客户在等的是
+            人，工作台未读就是它的信号，不进本告警防噪）；
+          - 该会话**无 pending 草稿**（有稿未处理是 draft_backlog 的辖区，不双报）。
+
+        聚合外发（EventBus ``unanswered_inbound_alert``，订阅别名
+        ``unanswered_inbound``）：默认 ≥1 条即报（本检查的价值就在单条也不放过），
+        4h 重提；候选清零补恢复通知（部分消化不发，防谎报）。任何取数异常一律
+        静默。配置 ``health_watchdog.unanswered_inbound_remind.{enabled,
+        min_age_hours,max_age_hours,min_count,interval_min}``（默认开/2/72/1/240）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        ur = (((cfg.get("health_watchdog") or {}).get("unanswered_inbound_remind"))
+              or {}) if isinstance(cfg, dict) else {}
+        if not ur.get("enabled", True):
+            return
+        store = self._inbox()
+        if store is None or not (hasattr(store, "list_conversations")
+                                 and hasattr(store, "last_message_dirs")):
+            return
+        ts = float(now if now is not None else time.time())
+        try:
+            min_age_h = float(ur.get("min_age_hours", 2) or 2)
+            max_age_h = float(ur.get("max_age_hours", 72) or 72)
+            min_count = max(1, int(ur.get("min_count", 1) or 1))
+            interval_sec = max(
+                600.0, float(ur.get("interval_min", 240) or 240) * 60.0)
+        except (TypeError, ValueError):
+            return
+        try:
+            rows = store.list_conversations(
+                limit=self._UNANSWERED_SCAN_LIMIT) or []
+        except Exception:
+            return
+        # 第一遍：便宜过滤（类型/年龄窗），把要做批量查询的候选收窄
+        cand: List[Dict[str, Any]] = []
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            ct = str(r.get("chat_type") or "").strip().lower()
+            if ct and ct not in ("private", "user"):
+                continue  # 群/频道/bot 会话不属「客户在等」语义
+            cid = str(r.get("conversation_id") or "")
+            if not cid:
+                continue
+            try:
+                last_ts = float(r.get("last_ts") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if last_ts <= 0:
+                continue
+            age_h = (ts - last_ts) / 3600.0
+            if age_h < min_age_h or age_h > max_age_h:
+                continue
+            if str(r.get("platform") or "") == "telegram":
+                try:
+                    if int(str(r.get("chat_key") or "")) < 0:
+                        continue  # 负 ID=群/频道（chat_type 缺失时兜底）
+                except (TypeError, ValueError):
+                    pass
+            try:
+                from src.inbox.peer_bot_guard import proactive_exclude_row
+                if proactive_exclude_row(r, cfg if isinstance(cfg, dict) else {}):
+                    continue  # bot/接码/业务号：不是真客户在等
+            except Exception:
+                pass
+            cand.append(r)
+        stale: List[Dict[str, Any]] = []
+        if cand:
+            cids = [str(r.get("conversation_id")) for r in cand]
+            try:
+                dirs = store.last_message_dirs(cids) or {}
+            except Exception:
+                return  # 末条方向查不到＝没法判，宁可漏报不误报
+            tags: Dict[str, Any] = {}
+            if hasattr(store, "list_conv_tags_map"):
+                try:
+                    tags = store.list_conv_tags_map(cids) or {}
+                except Exception:
+                    tags = {}
+            pending_cids = self._pending_draft_conversations()
+            for r in cand:
+                cid = str(r.get("conversation_id"))
+                if str((dirs.get(cid) or {}).get("direction") or "") != "in":
+                    continue  # 最后一条是我方发的 → 球不在我们这边
+                if bool((tags.get(cid) or {}).get("archived")):
+                    continue  # 归档会话由 buried_conv 巡检负责
+                if cid in pending_cids:
+                    continue  # 有稿在队 → draft_backlog 的辖区，不双报
+                if not self._automation_allows_autodraft(cid, cfg):
+                    continue  # manual=坐席显式接管，不属机器漏球
+                try:
+                    age_h = (ts - float(r.get("last_ts") or 0.0)) / 3600.0
+                except (TypeError, ValueError):
+                    age_h = 0.0
+                stale.append({
+                    "conversation_id": cid,
+                    "platform": str(r.get("platform") or ""),
+                    "account_id": str(r.get("account_id") or ""),
+                    "age_hours": round(age_h, 1),
+                })
+        count = len(stale)
+        if count < min_count:
+            # 只有**清零**才算恢复（部分消化不发恢复，防谎报「已处理完」）
+            if self._ui_alerted and count == 0:
+                try:
+                    from src.integrations.shared.event_bus import get_event_bus
+                    get_event_bus().publish("unanswered_inbound_alert", {
+                        "recovered": True,
+                        "rate_key": "unanswered_inbound:recovered",
+                    })
+                    logger.info("HealthWatchdog 发出入站漏球恢复通知")
+                except Exception:
+                    logger.debug(
+                        "unanswered_inbound recovery 发布失败（已忽略）",
+                        exc_info=True)
+                self._ui_alerted = False
+                self._ui_last_remind = 0.0
+            return
+        due = ((not self._ui_alerted)
+               or (ts - self._ui_last_remind >= interval_sec))
+        if not due:
+            return
+        stale.sort(key=lambda s: -float(s.get("age_hours") or 0.0))
+        oldest = float(stale[0].get("age_hours") or 0.0)
+        samples = stale[:5]
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("unanswered_inbound_alert", {
+                "count": count,
+                "min_age_hours": min_age_h,
+                "oldest_hours": round(oldest, 1),
+                "samples": samples,
+                "reminder": bool(self._ui_alerted),
+                # 独立限流键：首提/重提不与其他事件挤 1h 窗
+                "rate_key": "unanswered_inbound:remind",
+            })
+        except Exception:
+            logger.debug("unanswered_inbound alert 发布失败（已忽略）", exc_info=True)
+            return
+        self._ui_alerted = True
+        self._ui_last_remind = ts
+        self.total_unanswered_inbound_alerts += 1
+        # 日志=本机唯一保证在的持久告警通道（webhook 可能 0 通道），与
+        # draft_backlog/lan_gpu 同款落一行供实弹验证与事后追溯。
+        logger.warning(
+            "入站漏球：%d 个会话最后一条是客户消息、超 %.0fh 无回复且无待审稿"
+            "（最老 %.1fh；样例 %s）——拟稿链可能把球掉了",
+            count, min_age_h, oldest,
+            ", ".join(str(s.get("conversation_id")) for s in samples[:3]))
+
+    def _pending_draft_conversations(self) -> set:
+        """当前 pending 草稿覆盖的会话集合（漏球巡检的「有稿」排除口径）。"""
+        svc = getattr(getattr(self._app, "state", self._app), "draft_service", None)
+        if svc is None or not hasattr(svc, "list_drafts"):
+            return set()
+        try:
+            rows = svc.list_drafts(status="pending", limit=1000) or []
+        except Exception:
+            return set()
+        out: set = set()
+        for d in rows:
+            k = str((d or {}).get("conversation_id") or "")
+            if k:
+                out.add(k)
+        return out
+
+    def _automation_allows_autodraft(self, cid: str, cfg: Any) -> bool:
+        """该会话的 automation_mode 是否属自动拟稿范畴（manual=人接管 → False）。
+
+        判定异常按 True（计入告警）：本机默认档是 auto_ai，判不出更可能是
+        瞬时故障——与 draft_backlog「宁可多报不漏报（漏报＝客户真的没人回）」
+        同一取向。
+        """
+        try:
+            from src.inbox.automation_mode import resolve_automation_mode
+            mode = str(resolve_automation_mode(
+                self._inbox(), cid, cfg if isinstance(cfg, dict) else {}) or "")
+            return mode != "manual"
+        except Exception:
+            return True
 
     def _check_lan_gpu_hosts(self, *, now: Optional[float] = None) -> None:
         """LAN GPU 主机（嵌入/视觉/兜底 LLM/本地 MT 所在）宕机的升级式提醒。
@@ -2254,6 +3588,32 @@ class HealthWatchdog:
             logger.info("缺口自动入库 %d 条：%s", n,
                         "; ".join(f"{a['text']}→{a['target']}"
                                   for a in rv["added"]))
+
+    def _check_tg_history_autosync(self, *, now: Optional[float] = None) -> None:
+        """Telegram 历史自动补缺口（2026-08-02）：到期账号自动触发账号级云端同步。
+
+        配置 ``inbox.tg_history_autosync.{enabled,interval_hours,dialogs,per_chat,
+        max_accounts_per_tick}``（默认关——新子系统约定，生产经 overlay 开）。
+        本检查仅做 15min 节流 + 开关判定；到期挑选/冷却/单飞/client 把关全部在
+        ``maybe_autostart_tg_history_sync`` 里（与手动同步共用同一触发核心）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        acfg = ((cfg.get("inbox") or {}).get("tg_history_autosync") or {}) \
+            if isinstance(cfg, dict) else {}
+        if not acfg.get("enabled", False):
+            return
+        ts = float(now if now is not None else time.time())
+        if self._last_tg_autosync_ts and (ts - self._last_tg_autosync_ts) < 900.0:
+            return
+        self._last_tg_autosync_ts = ts
+        if self._app is None:
+            return
+        from src.web.routes.unified_inbox_account_routes import (
+            maybe_autostart_tg_history_sync,
+        )
+        started = maybe_autostart_tg_history_sync(self._app, cfg)
+        if started:
+            self.total_tg_autosyncs += len(started)
 
     def _check_media_restock(self, *, now: Optional[float] = None) -> None:
         """相册场景缺口自动补货（P2 图文一致性）：需求侧反复要不到 + 供给侧
@@ -2961,6 +4321,108 @@ class HealthWatchdog:
         except Exception:
             logger.debug("memory_key_drift_alert 发布失败（已忽略）", exc_info=True)
 
+    def _check_persona_retired_conflicts(self, *, now: Optional[float] = None) -> None:
+        """撤销设定「复活」巡检（2026-08-04 P2 收尾）。
+
+        档案内容与 ``boundaries.retired_facts`` 锚词打架 = 被运营删除的设定又被
+        写回来了（2026-08-02 批量丰富实锤这一类）。Studio 保存路径已有同款落库前
+        检测（persona_routes → ``retired_conflicts``），但**直改 profiles_runtime.yaml
+        的写入方**（agent 批量丰富 / 运维手改）完全绕过 API——本巡检以进程内存态
+        为准（profiles_runtime 热重载会在几秒内把文件编辑拉进内存），关掉最后盲区。
+
+        配置 ``health_watchdog.persona_retired_remind.{enabled,interval_min,remind_min}``
+        （默认开 / 60min 一轮 / 24h 重提；告警只减不增行为，enabled 缺省 True 与
+        *_remind 家族一致）。去抖＝冲突指纹（persona×锚词×路径）变化立即再报，
+        不变按重提间隔；清零且**报过**才补恢复通知（没报过的抖动恢复不发）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        rc = ((cfg.get("health_watchdog") or {}).get("persona_retired_remind")
+              or {}) if isinstance(cfg, dict) else {}
+        if not rc.get("enabled", True):
+            return
+        ts = float(now if now is not None else time.time())
+        interval = max(5.0, float(rc.get("interval_min", 60) or 60)) * 60.0
+        if self._retired_scan_ts and (ts - self._retired_scan_ts) < interval:
+            return
+        self._retired_scan_ts = ts
+        try:
+            from src.utils.persona_manager import PersonaManager
+            from src.utils.persona_retired import retired_conflicts
+            pm = PersonaManager.get_instance()
+            try:
+                pm.maybe_reload_runtime_profiles()
+            except Exception:
+                pass
+            profiles = dict(getattr(pm, "_profile_personas", {}) or {})
+        except Exception:
+            logger.debug("撤销设定巡检取档案失败（已忽略）", exc_info=True)
+            return
+        conflicts: Dict[str, List[Dict[str, str]]] = {}
+        for pid, p in profiles.items():
+            try:
+                hits = retired_conflicts(p)
+            except Exception:
+                continue
+            if hits:
+                conflicts[str(pid)] = [
+                    {"term": str(h.get("term") or ""),
+                     "path": str(h.get("path") or "")}
+                    for h in hits[:6]
+                ]
+        if not conflicts:
+            if self._retired_alerted:
+                self._emit_persona_retired_recovery()
+            self._retired_alerted = False
+            self._retired_fp = ""
+            self._retired_last_remind = 0.0
+            return
+        fp = "|".join(
+            f"{pid}:{h['term']}@{h['path']}"
+            for pid in sorted(conflicts)
+            for h in conflicts[pid]
+        )
+        remind = max(10.0, float(rc.get("remind_min", 1440) or 1440)) * 60.0
+        first = not self._retired_alerted
+        changed = fp != self._retired_fp
+        due = (ts - self._retired_last_remind) >= remind
+        if not (first or changed or due):
+            return
+        self._retired_fp = fp
+        self._retired_alerted = True
+        self._retired_last_remind = ts
+        self.total_persona_retired_alerts += 1
+        self._emit_persona_retired_alert(conflicts, reminder=not (first or changed))
+
+    def _emit_persona_retired_alert(
+        self, conflicts: Dict[str, List[Dict[str, str]]], *, reminder: bool,
+    ) -> None:
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            total = sum(len(v) for v in conflicts.values())
+            get_event_bus().publish("persona_retired_alert", {
+                "conflicts": conflicts,
+                "personas": sorted(conflicts.keys()),
+                "total": int(total),
+                "reminder": bool(reminder),
+                "rate_key": "persona_retired:remind",
+            })
+            logger.warning(
+                "撤销设定复活告警：%d 个人设 %d 处冲突（被删设定被写回档案）",
+                len(conflicts), total)
+        except Exception:
+            logger.debug("persona_retired 告警发布失败（已忽略）", exc_info=True)
+
+    def _emit_persona_retired_recovery(self) -> None:
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("persona_retired_alert", {
+                "recovered": True,
+                "rate_key": "persona_retired:recovered",
+            })
+            logger.info("HealthWatchdog 发出撤销设定冲突恢复通知")
+        except Exception:
+            logger.debug("persona_retired recovery 发布失败（已忽略）", exc_info=True)
+
     def _emit_memory_key_drift_recovery(self) -> None:
         try:
             inbox = self._inbox()
@@ -3041,8 +4503,41 @@ class HealthWatchdog:
             {"incidents": {"total": cur_inc.get("total")}, "automation": cur_roi["automation"]},
             {"incidents": {"total": prev_inc.get("total")}, "automation": prev_roi["automation"]},
         )
-        return build_ops_report(days=days, incident_stats=cur_inc, roi=cur_roi,
-                                billing=billing, compare=compare)
+        report = build_ops_report(days=days, incident_stats=cur_inc, roi=cur_roi,
+                                  billing=billing, compare=compare)
+        # AI 价值总账行（2026-08-06）：与 /api/report/weekly.value / ops「AI 价值周报」卡
+        # 同源（src/ops/value_report）。此前 ops_report 推送只有「运维+自动化+计费」，
+        # 「AI 本周替你干了什么」（拟稿/触达回复率/出站量）恰好从缺——而 F4 legacy
+        # 周报循环虽带价值行，却只走 config.yaml::webhook 旧栈（默认关）；接通推荐
+        # 通道（notify_webhooks.json）的运营收到的是本条 ops_report。软失败不阻断主体。
+        try:
+            from src.ops.value_report import build_weekly_value
+            vl = (build_weekly_value(inbox, now=ts) or {}).get("text_lines") or []
+            if vl:
+                report["value_lines"] = list(vl)
+        except Exception:
+            logger.debug("ops_report 价值行装配失败（已忽略）", exc_info=True)
+        # P4：案例跟进待办行（紧急未结 / 媒体质疑超龄 / 演练残影）——与
+        # /api/cases/active.summary 同源纯函数，软失败不阻断周报主体。
+        # P7：处置质量行（媒体结案后复发率超阈的分桶）——老板看到的不只是
+        # 「处理了多少」，还有「处理得管不管用」。
+        try:
+            ctx_store = self._case_ctx_store()
+            if ctx_store is not None:
+                from src.utils.case_center import (
+                    case_board_text_lines, collect_case_rows,
+                    effectiveness_text_lines, media_resolution_effectiveness,
+                    summarize_case_board,
+                )
+                rows = collect_case_rows(ctx_store, now=ts, include_drill=True)
+                clines = case_board_text_lines(summarize_case_board(rows, now=ts))
+                clines.extend(effectiveness_text_lines(
+                    media_resolution_effectiveness(ctx_store, now=ts)))
+                if clines:
+                    report.setdefault("value_lines", []).extend(clines)
+        except Exception:
+            logger.debug("ops_report 案例跟进行装配失败（已忽略）", exc_info=True)
+        return report
 
     def _maybe_weekly_report(self, *, now: Optional[float] = None) -> Optional[Dict[str, Any]]:
         if not self._weekly_enabled:
@@ -3133,6 +4628,10 @@ class HealthWatchdog:
             "total_media_promise_alerts": self.total_media_promise_alerts,
             "total_colloquial_llm_reminders": self.total_colloquial_llm_reminders,
             "total_identity_shadow_scans": self.total_identity_shadow_scans,
+            # P4：入站半死升级提醒次数（此前只累加未出网 → 漏斗盲区）
+            "total_inbox_read_stall_reminders": self.total_inbox_read_stall_reminders,
+            # P0 2026-08-05：入站漏球（客户最后一句无回复且无草稿）告警次数
+            "total_unanswered_inbound_alerts": self.total_unanswered_inbound_alerts,
             "last_check_ts": self.last_check_ts,
             "last_light": self.last_light,
         }

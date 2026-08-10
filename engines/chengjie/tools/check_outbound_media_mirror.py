@@ -10,6 +10,12 @@
 指定 ``--since``（缺省=最近 2 小时），看该时间点之后新增的 TG 出站媒体里，
 带 ``media_type`` 的占比是否已经起来。
 
+⚠ 口径演进（2026-08-02 分条语音逐条镜像 + 媒体行去前缀）：新写入的媒体行 text
+不再带 ``[图片]/[语音]`` 标记（语义由 media_type 承载），故 ``marked_text`` 只会
+命中**存量旧行**与「发布失败退回纯文本」的兜底行；新的核心缺口指标是
+``ref_gap = media_rows - with_ref``（落了媒体行、却没有可回放归档的条数——
+对应 outbound_mirror_stats 的 publish 失败计数）。
+
 用法::
 
     python tools/check_outbound_media_mirror.py                # 最近 2 小时
@@ -60,6 +66,11 @@ def collect(db_path: Path, since_ts: float) -> dict:
             st["with_ref"] += 1
         if any(k in text for k in _MEDIA_MARKS):
             st["marked_text"] += 1
+    for st in out.values():
+        # text_gap＝发了媒体但只记成文字（旧病，修复后新增应趋 0）；
+        # ref_gap＝落了媒体行但无可回放归档（publish 失败，配 outbound_mirror_stats 查因）。
+        st["text_gap"] = max(0, st["marked_text"] - st["media_rows"])
+        st["ref_gap"] = max(0, st["media_rows"] - st["with_ref"])
     return out
 
 
@@ -89,13 +100,12 @@ def main() -> int:
             print("    (窗口内无出站消息)")
         for platform in sorted(per):
             s = per[platform]
-            # marked_text = 文本里带媒体标记的条数；media_rows = 真正落了 media_type 的。
-            # 二者差值就是「发了媒体但只记成文字」的漏账量——修复后应趋近 0。
-            gap = max(0, s["marked_text"] - s["media_rows"])
+            # marked_text = 文本里带媒体标记的条数（新口径下只剩存量旧行）；
+            # media_rows = 真正落了 media_type 的；ref_gap = 媒体行里无可回放归档的。
             print("    %-10s outbound=%-5s media_rows=%-4s marked_text=%-4s "
-                  "with_ref=%-4s 漏账=%s"
+                  "with_ref=%-4s 漏账=%-4s 无档=%s"
                   % (platform, s["outbound"], s["media_rows"], s["marked_text"],
-                     s["with_ref"], gap))
+                     s["with_ref"], s["text_gap"], s["ref_gap"]))
     return 0
 
 

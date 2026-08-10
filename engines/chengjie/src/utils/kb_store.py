@@ -1433,6 +1433,24 @@ class KnowledgeBaseStore:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def seed_miss(self, query: str, min_cnt: int = 1):
+        """手动喂料入口：把查询放入未命中池并保证计数 ≥ min_cnt。
+
+        学习队列「入队学习」用——人工判定值得学的问题直接抬到达标计数，
+        不必等自然流量凑够 min_miss_count 次。
+        """
+        query = str(query or "").strip()[:200]
+        if not query:
+            return
+        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        with self._conn() as c:
+            c.execute(
+                "INSERT INTO kb_miss_log(query, cnt, last_at) VALUES(?,?,?) "
+                "ON CONFLICT(query) DO UPDATE SET "
+                "cnt=MAX(cnt, excluded.cnt), last_at=excluded.last_at",
+                (query, max(1, int(min_cnt)), now),
+            )
+
     # ── 翻译审核 ──────────────────────────────────────────
 
     def get_pending_translations(self, limit: int = 100) -> List[Dict]:

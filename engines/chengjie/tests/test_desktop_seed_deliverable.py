@@ -146,8 +146,8 @@ def test_seed_configures_platform_login_at_all():
 def test_seed_modes_are_implemented():
     """种子列出的每个非 device 方式，本系统必须真的实现了。
 
-    未实现的方式（如 whatsapp/web、telegram/web）恒报 not_enabled —— 摆在弹窗里
-    就是一个点了没反应的灰选项，比不显示更糟。
+    未实现的方式（如 whatsapp/web）恒报 not_implemented —— 摆在弹窗里就是一个
+    永不可用的灰选项（前端会诚实标「规划中」并导流，但种子没必要主动列它）。
     """
     from src.integrations.platform_readiness import _IMPLEMENTED_MODES
 

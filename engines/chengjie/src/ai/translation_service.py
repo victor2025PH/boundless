@@ -412,6 +412,21 @@ class TranslationService:
             return result
 
         out = restore_protected(res.text, mapping)
+        # 引擎拒绝话术拦截（P1-198）：LLM 引擎对无意义短文本（"1"/表情）可能
+        # 输出「没有可翻译的内容，请提供文本」类客套话——它曾被当译文直接发给
+        # 客户（198 实锤）。按失败处理：出站链自动回落原文/HOLD、收件箱译文行
+        # 不显示、预览如实报错。只进 L1 短缓存（防重复打引擎），绝不进翻译记忆。
+        try:
+            from src.ai.translation_confidence import looks_like_engine_refusal
+            if looks_like_engine_refusal(src_text, out):
+                result = TranslationResult(
+                    src_text, src_text, source, target, False,
+                    provider=res.engine or "ai", error="engine_refusal",
+                )
+                self._cache_put(key, result)
+                return result
+        except Exception:
+            pass
         result = TranslationResult(
             src_text, out or src_text, source, target,
             bool(out), provider=res.engine,

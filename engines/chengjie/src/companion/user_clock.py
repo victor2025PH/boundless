@@ -73,6 +73,7 @@ __all__ = [
     "user_day_key",
     "user_month_day",
     "user_time_line",
+    "build_tz_bridge_line",
     "in_quiet_hours",
     "schedule_clock",
     "shift_hours_to_clock",
@@ -874,6 +875,59 @@ def user_time_line(
             f"{_WEEKDAYS_EN[dt.weekday()]} {dt:%H:%M} ({part}) where they are. "
             "Never quote the timestamp; reflect their daily rhythm only when it fits "
             "naturally — this is an inference, don't repeat it as fact."
+        )
+    except Exception:
+        return ""
+
+
+def build_tz_bridge_line(
+    persona_now: Optional[datetime],
+    peer_now: Optional[datetime],
+    lang: str = "zh",
+) -> str:
+    """「时差桥」prompt 行（纯函数）：两侧当地时间都已知且明显错位时，把时差
+    从穿帮源变成真实感资产。
+
+    背景（2026-08-02 WA 实录）：温哥华人设周六傍晚 × 客户周日凌晨——两侧的
+    星期/时段各自都对，但 LLM 在没有显式桥接指令时会随机混用两个框架
+    （上一句 "Saturday evening"、下一句借客户的 "Sunday" 说自己），读者视角
+    就是自相矛盾。桥接指令钉死「自己的状态用自己的钟表述」，并鼓励自然点破
+    时差（真人异地聊天本来就会说「你那边该是周日早上了吧」）。
+
+    触发条件：两个 naive datetime 都在 && （星期不同 或 小时差 ≥ 3）；
+    否则返回 ""（同城/近时区注入桥接反而是噪音）。
+    """
+    try:
+        if not isinstance(persona_now, datetime) or not isinstance(peer_now, datetime):
+            return ""
+        wd_diff = persona_now.weekday() != peer_now.weekday()
+        # 小时差取环上最短距离（23 点 vs 1 点 = 2 小时，不是 22）
+        raw = abs(persona_now.hour - peer_now.hour)
+        hr_diff = min(raw, 24 - raw)
+        if not wd_diff and hr_diff < 3:
+            return ""
+        p_part = daypart_label(persona_now.hour, lang)
+        u_part = daypart_label(peer_now.hour, lang)
+        if str(lang or "zh").lower().startswith("zh"):
+            return (
+                f"【时差桥（内部事实）】你和对方不在同一时区：你那边是"
+                f"{_WEEKDAYS_ZH[persona_now.weekday()]}{persona_now:%H:%M}（{p_part}），"
+                f"对方那边约 {_WEEKDAYS_ZH[peer_now.weekday()]}{peer_now:%H:%M}（{u_part}）。"
+                "谈「今天/明天/周末/几点」时：**你自己的状态只按你的当地钟说**，"
+                "对方的作息按对方的钟聊；可以自然点破时差（如「你那边该是"
+                "周日早上了吧，我这边还是周六傍晚」）——这更像真的异地聊天；"
+                "但绝不要用对方的星期/时段来描述你自己正在做的事。"
+            )
+        return (
+            f"[Timezone bridge — internal] You two are in different timezones: "
+            f"for you it's {_WEEKDAYS_EN[persona_now.weekday()]} "
+            f"{persona_now:%H:%M} ({p_part}); for them it's about "
+            f"{_WEEKDAYS_EN[peer_now.weekday()]} {peer_now:%H:%M} ({u_part}). "
+            "When talking about today/tomorrow/the weekend, describe YOUR state "
+            "strictly on your own clock and theirs on their clock. Feel free to "
+            "acknowledge the gap naturally (e.g. 'it must be Sunday morning over "
+            "there — still Saturday evening here'); never borrow their weekday or "
+            "daypart to describe what you yourself are doing."
         )
     except Exception:
         return ""

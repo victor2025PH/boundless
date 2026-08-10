@@ -386,3 +386,24 @@ async def test_no_text_no_media_still_incomplete():
     )
     assert res["skipped"] == "incomplete"
     assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_multiline_reply_collapsed_before_send():
+    """单段落收口（2026-08-09）：本链不分条，多行拟稿合同的产物必须折叠成单段。
+
+    bubbles 开启时 ai_client 不再折叠（合同=「每行一句」交投递层拆条），而本链
+    整条直发——不折叠就会发出「一条消息带结构化换行」（2026-08-08 客户实锤的
+    AI 感形态）。折叠语义与 collapse_paragraphs 一致：CJK 裸边界补「，」。
+    """
+    sent = []
+    res = await pa.run_autoreply(
+        _payload(), registry=_FakeRegistry(_row()),
+        cfg={"protocol_autoreply": {"enabled": True}},
+        generate=_make_gen("今天好累\n想你了"), send=_make_send(sent),
+        risk_fn=lambda t: "low",
+    )
+    assert res["sent"] is True
+    assert len(sent) == 1
+    assert "\n" not in sent[0]["text"]
+    assert sent[0]["text"] == "今天好累，想你了"

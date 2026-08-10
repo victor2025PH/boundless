@@ -57,6 +57,32 @@ class Channel:
     # 「协议多开」永远灰着、扫上的号也不会被编排器拉上线，而这两个键没有别的
     # 产品入口会写。语义：只把「从未设置」的键补成 true；显式 false 尊重不动。
     enable_on_ready: List[str] = field(default_factory=list)
+    #: 纯官方 API 渠道（Instagram / Zalo 这类没有「自己账号扫码」形态的）：凭证保存
+    #: 成功后要自动在账号注册表开一行 ``mode=official`` 的账号，编排器才会把官方
+    #: 出站 worker 拉上线、收件箱账号栏才会出现该平台分组。值＝注册表 platform 名。
+    #: 空＝无此语义（扫码类渠道的账号由登录流程落库，不走这里）。
+    official_platform: str = ""
+    #: official 账号 id 取哪个 config 键（如 ``instagram.ig_id``）。取值为空时回落
+    #: ``"official"``——**必须与对应 webhook 入站镜像的 account_id 口径一致**
+    #: （instagram_webhook: ``ig_id or "official"``；zalo_webhook: ``oa_id or
+    #: "official"``），否则入站会话与出站 worker 的账号对不上，坐席能看见却回不了。
+    official_account_id_key: str = ""
+    #: 该渠道凭证的官方后台入口（如 Zalo OA 后台 / Meta 开发者控制台）。
+    #: 单一事实源：接入弹窗「准备清单」的直达链接与向导官方 API 区的入口链接都读它
+    #: （2026-08-10 前弹窗侧是 JS 硬编码表 `_OFFICIAL_CONSOLE`，现降级为旧后端回落）。
+    #: 空＝该渠道无官方后台语义，前端不渲染链接行。
+    console_url: str = ""
+    #: 「个人号登录」路径的**门控开关**（config 点分路径）。非空时，仅当该键为真才对外
+    #: 呈现 login 路径——用于给纯官方渠道（Instagram/Zalo）**增量、可回退**地补一条个人号
+    #: 扫码登录路径：未开时整条渠道现状与官方 API 独存时**逐字节一致**（不动
+    #: DEFAULT_PLATFORM_MODES 静态声明、不改既有官方漏斗与其浏览器门禁），开了才点亮。
+    #: 空＝该 login 路径无条件呈现（Telegram/LINE/WhatsApp/Messenger 的既有语义，不受影响）。
+    login_gated_by: str = ""
+    #: 个人号登录路径随附的「稳定运行建议」i18n 键（2026-08-10 起为正向最佳实践口径，
+    #: 不再作风险恐吓）。非空时随 login_path 下发，向导在个人号主卡渲一条建议提示。
+    #: 单一事实源＝与 /modes 的 notice 同键，保证「弹窗」与「向导」两处话术一致。
+    #: 空＝不渲染（官方渠道等无需建议的形态）。
+    login_notice_key: str = ""
 
 
 CHANNELS: List[Channel] = [
@@ -68,6 +94,7 @@ CHANNELS: List[Channel] = [
         login_platform="telegram",
         intro="用你自己的 Telegram 账号登录即可开始收发消息。",
         api_intro="自备 API 凭证（官网未自动派发时才需要，去 my.telegram.org 申请）。",
+        console_url="https://my.telegram.org/",
         enable_on_ready=[
             "platform_login.telegram.protocol_enabled",
             "platform_login.orchestrator_enabled",
@@ -86,42 +113,145 @@ CHANNELS: List[Channel] = [
         name="LINE",
         enable_key="line.enabled",
         login_platform="line",
+        official_platform="line",
+        official_account_id_key="line.account_id",
+        console_url="https://developers.line.biz/console/",
+        # 官方凭证齐 → 打开编排器，否则 mode=official 行落了库也不会被拉上线
+        enable_on_ready=["platform_login.orchestrator_enabled"],
         intro="用你自己的 LINE 账号扫码登录（手机上输 6 位验证码即可）。",
-        api_intro="改用 LINE 官方账号（Messaging API）：需要 LINE Developers 控制台与回调域名。",
+        api_intro=(
+            "改用 LINE 官方账号（Messaging API）：需要 LINE Developers 控制台与回调域名；"
+            "官方通道发图/语音须另配公网媒体 URL（下方字段，IG/LINE 共用）。"
+        ),
         fields=[
             Field("line.channel_access_token", "Channel Access Token", secret=True,
                   help="Messaging API 设置页签发的长期 token"),
             Field("line.channel_secret", "Channel Secret", secret=True,
                   help="频道基本设置页的 Channel secret"),
+            Field("line.account_id", "官方账号 ID", required=False,
+                  help="可选；官方账号标识（留空按 official 记账）"),
+            Field("official_media.public_base_url", "公网媒体 URL（IG/LINE 共用）",
+                  required=False,
+                  help="官方通道发图/语音用：本服务的公网 https 地址（如经隧道/反代暴露的 "
+                       "https://bot.example.com）。留空则官方通道仅能发文字。"),
         ],
     ),
     Channel(
         id="whatsapp",
         name="WhatsApp",
-        # 没有「whatsapp.enabled」这种顶层键：WhatsApp 在本仓只有两个真实形态——
-        # 扫码协议接入（Baileys）与官方 Cloud API。这里挂扫码那条路的开关，
-        # 免得为了凑格式发明一个没人读的配置键。
-        enable_key="platform_login.whatsapp.protocol_enabled",
+        # 双路径：扫码（Baileys / protocol）+ 官方 Cloud API（mode=official）。
+        # enable_key 挂 Cloud 开关——与 LINE/Messenger 同构（官方凭证保存即置 true）；
+        # 扫码就绪不靠这个键，靠注册表已接入账号数（channel_status ready_by=login）。
+        enable_key="whatsapp_cloud.enabled",
         login_platform="whatsapp",
+        official_platform="whatsapp",
+        official_account_id_key="whatsapp_cloud.phone_number_id",
+        # Cloud API 的 Phone Number ID / token / App Secret 都在 Meta 开发者应用面板
+        console_url="https://developers.facebook.com/apps/",
+        enable_on_ready=["platform_login.orchestrator_enabled"],
         intro="用你自己的 WhatsApp 账号扫码登录（手机 → 已关联的设备）。",
-        # 刻意没有凭证字段：WhatsApp Cloud API 在本仓有 webhook 实现但没有产品级
-        # 配置入口，硬塞一个半成品表单只会制造「填了也不通」。扫码是唯一在跑的路。
-        fields=[],
+        api_intro=(
+            "改用 Meta WhatsApp Cloud API（合规 Business 通道）：需要 Meta 开发者后台的 "
+            "WhatsApp Business App，把 Webhook 指到 https://<你的域名>/wa/webhook 并订阅 messages。"
+            "出站媒体走 media_id 直传，无需另配公网媒体 URL。"
+        ),
+        fields=[
+            Field("whatsapp_cloud.phone_number_id", "Phone Number ID",
+                  help="Cloud API 的 Phone Number ID（不是手机号；Meta 后台 WhatsApp → API 设置）"),
+            Field("whatsapp_cloud.access_token", "Access Token", secret=True,
+                  help="永久/系统用户 access token（whatsapp_business_messaging 权限）"),
+            Field("whatsapp_cloud.app_secret", "App Secret", secret=True,
+                  help="Meta App 的 App Secret，用于 Webhook 签名校验（X-Hub-Signature-256）"),
+            Field("whatsapp_cloud.verify_token", "Verify Token",
+                  help="自定义任意字符串，需与 Meta 后台 Webhook 配置里的一致"),
+        ],
     ),
     Channel(
         id="messenger",
         name="Facebook Messenger",
         enable_key="facebook_messenger.enabled",
         login_platform="messenger",
+        official_platform="messenger",
+        official_account_id_key="facebook_messenger.page_id",
+        console_url="https://developers.facebook.com/apps/",
+        enable_on_ready=["platform_login.orchestrator_enabled"],
         intro="在服务器的隔离浏览器里登录你的 Facebook 账号（账密 / 2FA，不用二维码）。",
-        api_intro="改用 Meta 官方 Page 接入：需要 Meta 开发者后台的 App 与 Webhook 回调。",
+        api_intro=(
+            "改用 Meta 官方 Page 接入（官方合规通道）：需要 Meta 开发者后台的 App，"
+            "把 Webhook 指到 https://<你的域名>/fb/webhook 并订阅 messages。"
+        ),
         fields=[
             Field("facebook_messenger.page_access_token", "Page Access Token", secret=True,
                   help="绑定主页后签发的 Page token"),
             Field("facebook_messenger.verify_token", "Verify Token",
                   help="自定义任意字符串，需与 Webhook 配置一致"),
-            Field("facebook_messenger.app_secret", "App Secret", secret=True, required=False,
-                  help="可选；用于校验 Webhook 签名（X-Hub-Signature）"),
+            # 2026-08-10 升必填：webhook 入站对空 app_secret 硬拒（无签名校验的公网
+            # 回调不该放行），「向导说可选、入站却拒收」的口径分裂修复为同一门。
+            Field("facebook_messenger.app_secret", "App Secret", secret=True,
+                  help="Meta App 的 App Secret，用于 Webhook 签名校验"
+                       "（X-Hub-Signature-256）；不填则入站消息不放行"),
+            Field("facebook_messenger.page_id", "Page ID", required=False,
+                  help="可选；主页 id——多 Page 同 App 时用于过滤事件（留空按 official 记账）"),
+        ],
+    ),
+    Channel(
+        id="instagram",
+        name="Instagram",
+        enable_key="instagram.enabled",
+        official_platform="instagram",
+        official_account_id_key="instagram.ig_id",
+        console_url="https://developers.facebook.com/apps/",
+        enable_on_ready=["platform_login.orchestrator_enabled"],
+        # 个人号网页托管登录路径（Playwright 边车，mode=web/hosted）——门控于开关，未开则
+        # 整条渠道与官方 Graph 独存时一致。开了才在向导呈现「用你自己的 IG 账号登录」主路径。
+        login_platform="instagram",
+        login_gated_by="platform_login.instagram.web_enabled",
+        login_notice_key="inbox.connect.notice_unofficial",
+        intro="接入 Instagram 专业账号私信（Meta 官方 Graph API）：填好凭证即可收发 DM。",
+        api_intro=(
+            "需要 Meta 开发者后台的 App：把 Webhook 回调指到 https://<你的域名>/ig/webhook "
+            "并订阅 messages；发图/发语音须填「公网媒体 URL」（IG/LINE 共用）。"
+        ),
+        fields=[
+            Field("instagram.ig_id", "IG 专业账号 ID",
+                  help="Graph API 里的 IG 专业账号 id（17 位数字，Meta 后台可查）"),
+            Field("instagram.page_access_token", "Page Access Token", secret=True,
+                  help="关联 Facebook Page 的长期 token（需 instagram_manage_messages 权限）"),
+            Field("instagram.app_secret", "App Secret", secret=True,
+                  help="Meta App 的 App Secret，用于 Webhook 签名校验（X-Hub-Signature-256）"),
+            Field("instagram.verify_token", "Verify Token",
+                  help="自定义任意字符串，需与 Meta 后台 Webhook 配置里的一致"),
+            Field("official_media.public_base_url", "公网媒体 URL（IG/LINE 共用）",
+                  required=False,
+                  help="官方通道发图/语音用：本服务的公网 https 地址（如经隧道/反代暴露的 "
+                       "https://bot.example.com）。留空则官方通道仅能发文字。"),
+        ],
+    ),
+    Channel(
+        id="zalo",
+        name="Zalo",
+        enable_key="zalo.enabled",
+        official_platform="zalo",
+        official_account_id_key="zalo.oa_id",
+        console_url="https://oa.zalo.me/",
+        enable_on_ready=["platform_login.orchestrator_enabled"],
+        # 个人号扫码登录路径（zca-js 边车，mode=web/qr）——门控于开关，未开则整条渠道
+        # 与官方 OA 独存时完全一致。开了才在向导呈现「用你自己的 Zalo 账号扫码」主路径。
+        login_platform="zalo",
+        login_gated_by="platform_login.zalo.web_enabled",
+        login_notice_key="inbox.connect.notice_unofficial",
+        intro="接入 Zalo 官方账号（OA API）：越南市场主流渠道，填好凭证即可收发文字消息。",
+        api_intro=(
+            "需要 Zalo OA 后台：把 Webhook 指到 https://<你的域名>/zalo/webhook。"
+            "注意：Zalo OA API 暂不支持发送图片/语音（官方能力限制，界面会自动置灰）。"
+        ),
+        fields=[
+            Field("zalo.access_token", "OA Access Token", secret=True,
+                  help="Zalo OA 后台签发的 access token"),
+            Field("zalo.oa_secret", "OA Secret", secret=True, required=False,
+                  help="可选；用于 Webhook 签名校验（X-ZEvent-Signature）"),
+            Field("zalo.oa_id", "OA 账号 ID", required=False,
+                  help="可选；官方账号 id（留空按 official 记账）"),
         ],
     ),
     Channel(
@@ -228,9 +358,13 @@ def channel_status(
         configured = True if auto else ((not missing) and (bool(ch.fields) or enabled))
 
         # 路径一：用自己的账号登录（扫码 / 协议 / 服务器托管登录）
+        # login_gated_by 非空时，仅当门控键为真才呈现——纯官方渠道（Zalo/IG）补个人号
+        # 路径的可回退闸门：未开＝旧行为（官方独存），开了＝点亮个人号主路径。
         login_path: Optional[Dict[str, Any]] = None
         linked = 0
-        if ch.login_platform:
+        if ch.login_platform and (
+            not ch.login_gated_by or bool(_dig(config, ch.login_gated_by))
+        ):
             linked = int(accounts_by_platform.get(ch.login_platform) or 0)
             login_path = {
                 "platform": ch.login_platform,
@@ -239,6 +373,8 @@ def channel_status(
                 # 点进去看到真实原因，也不要在向导里谎报「不可用」）。
                 "available": bool(login_ready.get(ch.login_platform, True)),
                 "deeplink": f"/workspace?drawer=1&connect={ch.login_platform}",
+                # 个人号「稳定运行建议」键（与 /modes 的 notice 同键，两处话术一致）；空则前端不渲染。
+                "notice_key": ch.login_notice_key,
             }
         # 路径二：企业官方 API（凭据表单）——只有声明了字段的渠道才有
         api_path: Optional[Dict[str, Any]] = None
@@ -265,6 +401,7 @@ def channel_status(
             "id": ch.id, "name": ch.name, "enable_key": ch.enable_key,
             "enabled": enabled,
             "intro": (auto["intro"] if auto else ch.intro),
+            "console_url": ch.console_url,
             "login_required": ch.login_required,
             "fields": fields_status, "missing": missing,
             "configured": configured,

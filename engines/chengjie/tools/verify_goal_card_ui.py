@@ -30,6 +30,22 @@ CJK 逐字换行）之所以能上生产，就是因为**没有窄宽回归**—
      - 点「我来补录」→ 补录表单打开且焦点落在对应字段
      - 点已填 chip → 表单打开且焦点落在该字段
      - 产品行：pitch 常显（offsetHeight>0）、价格文本在、外链 href 在
+  E. 改期限 + 临期决策行（P25/P1）：
+     - 点「第X/Y天」→ 内联表单：min=day_index、低于下限的预设 chip 隐藏、
+       近30天同模板基准线（fixture report：终局6 → 67%·6.5天）
+     - 低于下限预检＝就地报错 + 零请求（与后端护栏同口径）；
+       合法保存＝POST {deadline_days} 契约 + 表单收起
+     - 临期夹具（第9/10天）→ 琥珀 chip「明天到期」+「今天收口/延长7天」，
+       点延长 → POST deadline_days=17（10+7）
+  D. 建目标两步向导（P24；空态 fixture，模板=真实注册表 list_templates()）：
+     - 第一步：分组场景卡（≥2 组、≥7 卡、全带线稿图标）+ 自定义高亮卡
+     - 第二步弹层：宽 >300px（逃离窄栏）、类别色带、节奏预览 4 段带力度 pill
+     - 解锁项下拉（目录项+自定义）：称呼自动跟随所选项；切「自定义…」时
+       item_id 归属互斥切换（select ↔ 手填框）
+     - 参与度三张单选卡（默认 suggest）；点 auto 档出诚实信息气泡
+     - 返回=弹层关第一步在；自定义面板 textarea+示例 chips 点击填入
+     - 创建 POST 契约（template/item_id/item_label/autonomy/deadline_days）
+       → 弹层关 + 「接下来会发生什么」提示出现
 
 用法::
 
@@ -83,6 +99,23 @@ def _slots(filled: bool) -> List[Dict[str, Any]]:
     return rows
 
 
+def _templates_fixture() -> Dict[str, Any]:
+    """建目标向导的模板 fixture＝真实注册表形状（含 P24 push_curve）——
+    向导渲染的就是生产同款 schema。caps 置 false 以覆盖「auto 档诚实气泡」；
+    刻意不带 pickers：走 /api/monetize/catalog 回落路径（旧后端兼容面）。"""
+    from src.companion.goals.templates import (
+        AUTONOMY_LEVELS,
+        GOAL_STATUSES,
+        list_templates,
+    )
+    return {
+        "templates": list_templates(),
+        "autonomy_levels": list(AUTONOMY_LEVELS),
+        "statuses": list(GOAL_STATUSES),
+        "caps": {"bridge_enabled": False, "proactive_enabled": False},
+    }
+
+
 def _fixtures() -> Dict[str, Any]:
     goal = {
         "goal_id": "g_probe", "conversation_id": "telegram:acc:qa_probe_goal",
@@ -114,7 +147,33 @@ def _fixtures() -> Dict[str, Any]:
               "missing_bant": ["need", "channel", "team_size",
                                "budget", "authority", "timeline"],
               "updated_at": 0}
-    return {"goal": goal, "profA": prof_a, "profB": prof_b}
+    catalog = {
+        "currency": "USD",
+        "items": {
+            "bazi_reading": {"price": 4.99, "label": "命理详批"},
+            "exclusive_album": {"price": 4.99, "label": "专属相册"},
+        },
+        "tiers": {
+            "free": {"monthly": 0, "label": "免费"},
+            "vip": {"monthly": 9.9, "label": "VIP 会员"},
+        },
+    }
+    # P25/P1：临期变体（第 9/10 天=明天到期 → chip+双快捷动作）与近30天基准
+    # report fixture（acquire_and_convert 终局 6=done4+failed1+expired1 → 67%）
+    goal_due = dict(goal)
+    goal_due.update({"goal_id": "g_due", "day_index": 9, "total_days": 10,
+                     "conversation_id": "telegram:acc:qa_due_goal"})
+    report = {
+        "by_template": {
+            "acquire_and_convert": {
+                "done": 4, "failed": 1, "expired": 1, "cancelled": 2,
+                "n": 8, "avg_days_to_done": 6.5,
+            },
+        },
+    }
+    return {"goal": goal, "goalDue": goal_due, "profA": prof_a,
+            "profB": prof_b, "templates": _templates_fixture(),
+            "catalog": catalog, "report": report}
 
 
 _HTML = """<!doctype html>
@@ -138,18 +197,45 @@ window.CopilotShared = { lang: 'zh', t: (k, vars) => __fmt(window.T(k), vars) };
 // 零遥测外发：探针点击不许污染 ui-event 漏斗（那正是 7 天复盘要读的数）
 try { Object.defineProperty(navigator, 'sendBeacon', { value: () => true }); }
 catch (_e) { navigator.sendBeacon = () => true; }
-// 假 fetch：按 URL 发 fixture；profile 按 window.__PROFILE_MODE 取 A/B
+// 假 fetch：按 URL 发 fixture；profile 按 window.__PROFILE_MODE 取 A/B；
+// 向导流按 window.__GOAL_MODE（empty=空态起步，创建成功后翻 active 镜像生产）
 window.__PROFILE_MODE = 'A';
+window.__GOAL_MODE = 'active';
+window.__GOAL_VARIANT = '';
+window.__posts = [];
 const __respond = (d, st) => new Response(JSON.stringify(d),
   { status: st || 200, headers: { 'Content-Type': 'application/json' } });
-window.fetch = async (url) => {
+window.fetch = async (url, opts) => {
   url = String(url);
+  const method = String((opts && opts.method) || 'GET').toUpperCase();
+  if (url.indexOf('/api/goals/templates') >= 0)
+    return __respond(window.__FX__.templates);
+  if (url.indexOf('/api/monetize/catalog') >= 0)
+    return __respond({ ok: true, catalog: window.__FX__.catalog });
+  if (url.indexOf('/api/goals/report') >= 0)
+    return __respond(window.__FX__.report);
   if (url.indexOf('/api/goals/for-conversation') >= 0)
-    return __respond({ goal: window.__FX__.goal, last: null });
+    return __respond(window.__GOAL_MODE === 'empty'
+      ? { goal: null, last: null }
+      : { goal: window.__GOAL_VARIANT === 'due'
+          ? window.__FX__.goalDue : window.__FX__.goal, last: null });
   if (url.indexOf('/api/goals/profile') >= 0)
     return __respond(window.__PROFILE_MODE === 'B' ? window.__FX__.profB : window.__FX__.profA);
-  if (url.indexOf('/api/goals/g_probe') >= 0)
+  if (method === 'POST' && url.indexOf('/update') >= 0) {
+    // 改期限 POST：记契约、回带 goal（生产同形状）——须在 g_probe GET 之前匹配
+    try { window.__posts.push(JSON.parse(String((opts && opts.body) || '{}'))); }
+    catch (e) { window.__posts.push({ __bad: String(e) }); }
+    return __respond({ ok: true, goal: window.__GOAL_VARIANT === 'due'
+      ? window.__FX__.goalDue : window.__FX__.goal });
+  }
+  if (url.indexOf('/api/goals/g_probe') >= 0 || url.indexOf('/api/goals/g_due') >= 0)
     return __respond({ ok: true, actions: [] });
+  if (method === 'POST' && url.endsWith('/api/goals')) {
+    try { window.__posts.push(JSON.parse(String((opts && opts.body) || '{}'))); }
+    catch (e) { window.__posts.push({ __bad: String(e) }); }
+    window.__GOAL_MODE = 'active';  // 创建成功 → refresh 拿到活跃目标（生产同流）
+    return __respond({ ok: true, goal_id: 'g_new' });
+  }
   return __respond({}, 404);
 };
 </script>
@@ -309,6 +395,201 @@ async (a) => {
 }
 """
 
+# 建目标两步向导整链（P24）：空态挂载 → 第一步分组卡 → 解锁弹层（下拉联动/
+# 自定义切换/参与度卡/诚实气泡）→ 返回 → 自定义面板（示例填入）→ 创建 POST。
+_WIZ_JS = r"""
+async (a) => {
+  window.__GOAL_MODE = 'empty';
+  window.__posts = [];
+  const host = document.createElement('div');
+  host.id = a.hostId;
+  host.style.cssText = 'width:' + a.width + 'px;flex:0 0 auto;outline:1px dashed #cbd5e1;';
+  document.body.appendChild(host);
+  const el = document.createElement('cp-goal');
+  el.context = { conversationId: 'telegram:acc:qa_' + a.hostId };
+  host.appendChild(el);
+  const sr = el.shadowRoot;
+  const wait = async (fn, n) => {
+    for (let i = 0; i < (n || 60); i++) {
+      const v = fn();
+      if (v) return v;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return null;
+  };
+  const tick = () => new Promise((r) => setTimeout(r, 60));
+  const out = {};
+  const setBtn = await wait(() => sr.querySelector('[data-act="open_form"]'));
+  if (!setBtn) return { error: 'no set button' };
+  setBtn.click();
+  const list = await wait(() => sr.querySelector('.gl-scenlist'));
+  if (!list) return { error: 'step1 not rendered' };
+  out.groups = sr.querySelectorAll('.gl-grp').length;
+  out.cards = sr.querySelectorAll('.gl-scen').length;
+  out.customCard = !!sr.querySelector('.gl-scen-custom');
+  out.icons = sr.querySelectorAll('.gl-scen .gl-scen-ic svg').length;
+  // ── 第二步：付费解锁弹层 ─────────────────────────────────────────
+  const unlockCard = sr.querySelector('.gl-scen[data-tid="conversion_unlock"]');
+  if (!unlockCard) return Object.assign(out, { error: 'no unlock card' });
+  unlockCard.click();
+  const modal = await wait(() => sr.querySelector('.gl-ov .gl-modal'));
+  if (!modal) return Object.assign(out, { error: 'modal not shown' });
+  out.modalW = modal.getBoundingClientRect().width;
+  out.modalKind = String(modal.className || '');
+  out.band = !!modal.querySelector('.gl-mband');
+  out.arcRows = modal.querySelectorAll('.gl-arc-row').length;
+  out.arcPills = modal.querySelectorAll('.gl-arc-row .gl-pill').length;
+  const sel = modal.querySelector('select[data-chg="unlock_sel"]');
+  if (!sel) return Object.assign(out, { error: 'no unlock select' });
+  out.unlockOpts = sel.options.length;
+  out.unlockParamKey = sel.getAttribute('data-param-key');
+  const labelInp = modal.querySelector('input[data-param-key="item_label"]');
+  out.labelInit = labelInp ? labelInp.value : '';
+  // 换选第二项 → 称呼跟随
+  sel.value = sel.options[1].value;
+  sel.dispatchEvent(new Event('change', { bubbles: true }));
+  await tick();
+  out.labelFollow = labelInp ? labelInp.value : '';
+  out.opt2Label = String(sel.options[1].textContent || '').split(' \u00b7 ')[0];
+  // 「自定义…」：item_id 归属互斥切换（select ↔ 手填框）
+  sel.value = '__custom__';
+  sel.dispatchEvent(new Event('change', { bubbles: true }));
+  await tick();
+  const cwrap = modal.querySelector('[data-ref="unlock_custom"]');
+  const cinp = modal.querySelector('[data-ref="unlock_custom_id"]');
+  out.customShown = !!(cwrap && !cwrap.hidden);
+  out.customOwnsKey = !!(cinp && cinp.getAttribute('data-param-key') === 'item_id')
+    && !sel.getAttribute('data-param-key');
+  sel.value = sel.options[0].value;
+  sel.dispatchEvent(new Event('change', { bubbles: true }));
+  await tick();
+  out.customHidden = !!(cwrap && cwrap.hidden);
+  // 参与度三卡 + auto 档诚实气泡（caps.bridge_enabled=false）
+  out.autoCards = modal.querySelectorAll('.gl-auto-card').length;
+  const selCard = modal.querySelector('.gl-auto-card.sel');
+  out.autoDefault = selCard ? selCard.getAttribute('data-lvl') : '';
+  const note0 = modal.querySelector('[data-ref="anote"]');
+  out.noteHiddenBefore = !!(note0 && note0.hidden);
+  const autoCard = modal.querySelector('.gl-auto-card[data-lvl="auto"]');
+  if (autoCard) autoCard.click();
+  await tick();
+  out.noteShownAfterAuto = !!(note0 && !note0.hidden
+    && String(note0.textContent || '').length > 4);
+  const sugCard = modal.querySelector('.gl-auto-card[data-lvl="suggest"]');
+  if (sugCard) sugCard.click();
+  // 返回 → 弹层关、第一步在
+  modal.querySelector('.gl-mfoot [data-act="form_back"]').click();
+  await wait(() => !sr.querySelector('.gl-ov'));
+  out.backToStep1 = !sr.querySelector('.gl-ov') && !!sr.querySelector('.gl-scenlist');
+  // ── 自定义目标面板：textarea + 示例 chips 填入 ────────────────────
+  sr.querySelector('.gl-scen-custom').click();
+  const modal3 = await wait(() => sr.querySelector('.gl-ov .gl-modal.gk-custom'));
+  out.customModal = !!modal3;
+  if (modal3) {
+    const ta = modal3.querySelector('textarea[data-param-key="note"]');
+    out.customTa = !!ta;
+    out.exChips = modal3.querySelectorAll('[data-act="note_example"]').length;
+    const chip = modal3.querySelector('[data-act="note_example"]');
+    if (chip && ta) {
+      chip.click();
+      await tick();
+      out.exFilled = String(ta.value || '').length > 4;
+    }
+    modal3.querySelector('.gl-mfoot [data-act="form_back"]').click();
+    await wait(() => !sr.querySelector('.gl-ov'));
+  }
+  // ── 重开解锁弹层 → 创建 → POST 契约 + 建后提示 ────────────────────
+  sr.querySelector('.gl-scen[data-tid="conversion_unlock"]').click();
+  const modal2 = await wait(() => sr.querySelector('.gl-ov .gl-modal'));
+  if (!modal2) return Object.assign(out, { error: 'modal2 not shown' });
+  modal2.querySelector('.gl-mfoot [data-act="create"]').click();
+  const posted = await wait(() => window.__posts.length > 0);
+  out.post = posted ? window.__posts[0] : null;
+  await wait(() => !sr.querySelector('.gl-ov'));
+  out.modalClosedAfterCreate = !sr.querySelector('.gl-ov');
+  out.createdHint = !!(await wait(() => sr.querySelector('.gl-created')));
+  return out;
+}
+"""
+
+
+# 改期限内联表单 + 临期决策行（P25/P1）：variant=''=常规（开表单/预检/保存契约），
+# variant='due'=临期夹具（chip+快捷动作 POST 契约）。
+_DL_JS = r"""
+async (a) => {
+  window.__GOAL_MODE = 'active';
+  window.__GOAL_VARIANT = a.variant || '';
+  window.__posts = [];
+  const host = document.createElement('div');
+  host.id = a.hostId;
+  host.style.cssText = 'width:' + a.width + 'px;flex:0 0 auto;outline:1px dashed #cbd5e1;';
+  document.body.appendChild(host);
+  const el = document.createElement('cp-goal');
+  el.context = { conversationId: 'telegram:acc:qa_' + a.hostId };
+  host.appendChild(el);
+  const sr = el.shadowRoot;
+  const wait = async (fn, n) => {
+    for (let i = 0; i < (n || 60); i++) {
+      const v = fn();
+      if (v) return v;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return null;
+  };
+  const metaBtn = await wait(() => sr.querySelector('.gl-meta-btn'));
+  if (!metaBtn) return { error: 'meta button not rendered' };
+  const out = {};
+  const dueChip = sr.querySelector('.gl-due-chip');
+  // 剥 U+23F3 沙漏符：Windows GBK 控制台打印检查详情时编不出该字符
+  out.dueChip = dueChip
+    ? String(dueChip.textContent || '').replace(/\u23F3/g, '').trim() : '';
+  out.dueBtns = Array.from(sr.querySelectorAll('.gl-due button'))
+    .map((b) => b.getAttribute('data-act'));
+  if (a.variant === 'due') {
+    const b = sr.querySelector('[data-act="due_extend"]');
+    if (!b) return Object.assign(out, { error: 'no extend button' });
+    b.click();
+    const posted = await wait(() => window.__posts.length > 0);
+    out.extendPost = posted ? window.__posts[0] : null;
+    return out;
+  }
+  // 常规态：开表单 → 读 min/chips → 等基准线 → 预检拦截 → 合法保存。
+  // 每步动作前重查节点：基准线为 DOM 注入不重渲染（组件保证），但探针
+  // 不依赖该实现细节——若未来改回重渲染，这里也不该假红。
+  metaBtn.click();
+  const q = (sel) => sr.querySelector(sel);
+  const inp0 = await wait(() => q('[data-ref="dl_days"]'));
+  if (!inp0) return Object.assign(out, { error: 'deadline form not opened' });
+  out.min = inp0.getAttribute('min');
+  out.val = inp0.value;
+  out.chips = Array.from(sr.querySelectorAll('[data-act="deadline_chip"]'))
+    .map((b) => b.getAttribute('data-days'));
+  const bench = await wait(() => q('.gl-dl-bench'));
+  out.bench = bench ? String(bench.textContent || '') : '';
+  out.focusKept = sr.activeElement === inp0 || document.activeElement === el
+    || !!q('[data-ref="dl_days"]');   // 基准线注入不得重建表单（节点仍是同一个）
+  out.sameNode = q('[data-ref="dl_days"]') === inp0;
+  // 低于下限 → 就地报错、零请求（预检与后端护栏同口径）
+  const inp1 = q('[data-ref="dl_days"]');
+  inp1.value = String(Math.max(0, parseInt(out.min, 10) - 1));
+  inp1.dispatchEvent(new Event('input', { bubbles: true }));
+  q('[data-act="deadline_save"]').click();
+  await new Promise((r) => setTimeout(r, 120));
+  const err = q('[data-ref="dl_err"]');
+  out.errShown = !!(err && !err.hidden && String(err.textContent || '').length > 2);
+  out.postsAfterInvalid = window.__posts.length;
+  // 合法值 → POST 契约 + 表单收起
+  const inp2 = q('[data-ref="dl_days"]');
+  inp2.value = '5';
+  inp2.dispatchEvent(new Event('input', { bubbles: true }));
+  q('[data-act="deadline_save"]').click();
+  const posted = await wait(() => window.__posts.length > 0);
+  out.savePost = posted ? window.__posts[window.__posts.length - 1] : null;
+  out.formClosed = !!(await wait(() => !q('[data-ref="dl_days"]')));
+  return out;
+}
+"""
+
 
 def run(headed: bool, shots: str) -> int:
     from playwright.sync_api import sync_playwright
@@ -432,6 +713,106 @@ def run(headed: bool, shots: str) -> int:
                          and r4.get("focusKey") == r4.get("slot"), str(r4))
             else:
                 ck.check("[交互] 挂载渲染", False, str(ri))
+
+            # ── D. 建目标两步向导（236px；P24）────────────────────────────
+            rw = page.evaluate(_WIZ_JS, {"hostId": "m_w_236", "width": 236})
+            if isinstance(rw, dict) and not rw.get("error"):
+                ck.check("[向导] 第一步分组场景卡+图标",
+                         int(rw.get("groups") or 0) >= 2
+                         and int(rw.get("cards") or 0) >= 7
+                         and int(rw.get("icons") or 0) >= 7,
+                         f"groups={rw.get('groups')} cards={rw.get('cards')}"
+                         f" icons={rw.get('icons')}")
+                ck.check("[向导] 自定义目标高亮卡在", rw.get("customCard"))
+                ck.check("[向导] 弹层逃离窄栏（宽>300）",
+                         float(rw.get("modalW") or 0) > 300, f"w={rw.get('modalW')}")
+                ck.check("[向导] 弹层类别色带+节奏预览带力度",
+                         rw.get("band") and int(rw.get("arcRows") or 0) == 4
+                         and int(rw.get("arcPills") or 0) >= 1,
+                         f"rows={rw.get('arcRows')} pills={rw.get('arcPills')}")
+                ck.check("[向导] 解锁项下拉（目录项+自定义）",
+                         int(rw.get("unlockOpts") or 0) >= 3
+                         and rw.get("unlockParamKey") == "item_id",
+                         f"opts={rw.get('unlockOpts')}")
+                ck.check("[向导] 称呼自动跟随所选项",
+                         rw.get("labelInit") == "命理详批"
+                         and rw.get("labelFollow") == rw.get("opt2Label"),
+                         f"init={rw.get('labelInit')} follow={rw.get('labelFollow')}")
+                ck.check("[向导] 自定义解锁项切换（item_id 归属互斥）",
+                         rw.get("customShown") and rw.get("customOwnsKey")
+                         and rw.get("customHidden"))
+                ck.check("[向导] 参与度三卡+auto 档诚实气泡",
+                         int(rw.get("autoCards") or 0) == 3
+                         and rw.get("autoDefault") == "suggest"
+                         and rw.get("noteHiddenBefore")
+                         and rw.get("noteShownAfterAuto"),
+                         f"cards={rw.get('autoCards')} def={rw.get('autoDefault')}")
+                ck.check("[向导] 返回=弹层关、第一步在", rw.get("backToStep1"))
+                ck.check("[向导] 自定义面板（textarea+示例填入）",
+                         rw.get("customModal") and rw.get("customTa")
+                         and int(rw.get("exChips") or 0) == 3 and rw.get("exFilled"),
+                         f"chips={rw.get('exChips')}")
+                post = rw.get("post") or {}
+                pp = post.get("params") or {}
+                ck.check("[向导] 创建 POST 契约（item_id/称呼/参与度/期限）",
+                         post.get("template") == "conversion_unlock"
+                         and pp.get("item_id") == "bazi_reading"
+                         and pp.get("item_label") == "命理详批"
+                         and post.get("autonomy") == "suggest"
+                         and float(post.get("deadline_days") or 0) == 14.0,
+                         json.dumps(post, ensure_ascii=False)[:160])
+                ck.check("[向导] 创建后弹层关+「接下来」提示在",
+                         rw.get("modalClosedAfterCreate") and rw.get("createdHint"))
+            else:
+                ck.check("[向导] 挂载渲染", False, str(rw))
+
+            # ── E. 改期限 + 临期决策行（P25/P1；236px）──────────────────────
+            rd = page.evaluate(_DL_JS, {"hostId": "m_dl_236", "width": 236,
+                                        "variant": ""})
+            if isinstance(rd, dict) and not rd.get("error"):
+                ck.check("[期限] 常规态（第4/10天）不出临期行",
+                         not rd.get("dueChip"), str(rd.get("dueChip")))
+                ck.check("[期限] 点「第X/Y天」→ 表单开（min=day_index, 值=当前总天数）",
+                         rd.get("min") == "4" and rd.get("val") == "10",
+                         f"min={rd.get('min')} val={rd.get('val')}")
+                chips = rd.get("chips") or []
+                ck.check("[期限] chips=今天收口(4)+7/14，低于下限的 3 隐藏",
+                         chips[:1] == ["4"] and "7" in chips
+                         and "14" in chips and "3" not in chips, str(chips))
+                ck.check("[期限] 近30天基准线（n=6→67%·6.5天）",
+                         "67" in str(rd.get("bench")) and "6.5" in str(rd.get("bench")),
+                         str(rd.get("bench")))
+                ck.check("[期限] 基准线注入不重建表单（输入焦点/节点保持）",
+                         rd.get("sameNode"))
+                ck.check("[期限] 低于下限预检拦截（就地报错+零请求）",
+                         rd.get("errShown")
+                         and int(rd.get("postsAfterInvalid") or 0) == 0)
+                sp = rd.get("savePost") or {}
+                ck.check("[期限] 保存 POST 契约 deadline_days=5 + 表单收起",
+                         float(sp.get("deadline_days") or 0) == 5.0
+                         and rd.get("formClosed"),
+                         json.dumps(sp, ensure_ascii=False)[:80])
+                if shots_dir:
+                    page.locator("#m_dl_236").screenshot(
+                        path=str(shots_dir / "goal_card_deadline_form.png"))
+            else:
+                ck.check("[期限] 挂载渲染", False, str(rd))
+            rdue = page.evaluate(_DL_JS, {"hostId": "m_due_236", "width": 236,
+                                          "variant": "due"})
+            if isinstance(rdue, dict) and not rdue.get("error"):
+                ck.check("[临期] 第9/10天 → 琥珀 chip「明天到期」+ 收口/延长双动作",
+                         "明天到期" in str(rdue.get("dueChip") or "")
+                         and rdue.get("dueBtns") == ["due_wrap", "due_extend"],
+                         f"chip={rdue.get('dueChip')} btns={rdue.get('dueBtns')}")
+                ep = rdue.get("extendPost") or {}
+                ck.check("[临期] 点「延长 7 天」→ POST deadline_days=17",
+                         float(ep.get("deadline_days") or 0) == 17.0,
+                         json.dumps(ep, ensure_ascii=False)[:80])
+                if shots_dir:
+                    page.locator("#m_due_236").screenshot(
+                        path=str(shots_dir / "goal_card_due_row.png"))
+            else:
+                ck.check("[临期] 挂载渲染", False, str(rdue))
 
             browser.close()
     return ck.summary()

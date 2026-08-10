@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import threading
 import time
@@ -33,6 +34,10 @@ logger = logging.getLogger("GoalStore")
 MAX_ACTIVE_PER_CONVERSATION = 3
 
 ACTION_STATUSES = ("planned", "consumed", "sent", "skipped", "blocked")
+
+# 期限编辑事件明细（goal_routes 写入端唯一口径：``deadline_days:14->30``，
+# 可能与其他字段名逗号相连）——deadline_edit_outcomes 据此归队列
+_DEADLINE_EDIT_RE = re.compile(r"deadline_days:([0-9.]+)->([0-9.]+)")
 
 
 def _now() -> float:
@@ -108,6 +113,21 @@ class GoalStore:
         self._lock = threading.Lock()
         self._conn: Optional[sqlite3.Connection] = None
         self._init_db()
+
+    @classmethod
+    def open_readonly(cls, db_path) -> "GoalStore":
+        """只读打开（``mode=ro`` URI，不建表不迁移）——周报/巡检 CLI 对活体
+        生产库零写事务的 sanctioned 入口（与 persona_media 回填的只读连接
+        同纪律）。库不存在/不可读会抛，调用方自兜。写方法在该实例上会因
+        SQLite 只读连接直接报错——这是特性不是缺陷。"""
+        self = cls.__new__(cls)
+        self._db_path = Path(db_path)
+        self._lock = threading.Lock()
+        self._conn = sqlite3.connect(
+            f"file:{self._db_path}?mode=ro", uri=True,
+            check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
+        return self
 
     def _init_db(self) -> None:
         if self._db_path != ":memory:":
@@ -247,8 +267,15 @@ class GoalStore:
         chat_key: str = "",
         account_id: str = "",
     ) -> Optional[Dict[str, Any]]:
-        """当前会话的活跃目标（优先 conversation_id 精确命中；回落 platform+chat_key，
-        A 线 process_message 拿不到 account_id 时仍能命中）。多条取 priority 高、新建优先。"""
+        """当前会话的活跃目标（优先 conversation_id 精确命中；回落 platform+chat_key）。
+        多条取 priority 高、新建优先。
+
+        **账号锁**（P4 2026-08-09 修串号）：(platform, chat_key) 通配回落**只在
+        调用方没给 account_id 时**才走——它的存在理由是「A 线 process_message
+        拿不到 account_id 仍能命中」；调用方明确知道账号却借到别人的目标＝串号。
+        实锤：两个账号的收藏消息（chat_key 同为 'me'）解析到同一个目标；订单
+        回流的兜底匹配走同一口，存在跨账号误结算面。给了账号而账号内无命中
+        → 如实返回 None，绝不再放宽。"""
         try:
             if conversation_id:
                 row = self._conn.execute(
@@ -266,8 +293,7 @@ class GoalStore:
                         " ORDER BY priority DESC, created_at DESC LIMIT 1",
                         (str(platform), str(chat_key), str(account_id)),
                     ).fetchone()
-                    if row:
-                        return self._row_to_goal(row)
+                    return self._row_to_goal(row) if row else None
                 row = self._conn.execute(
                     "SELECT * FROM goals WHERE platform = ? AND chat_key = ?"
                     " AND status = 'active'"
@@ -545,6 +571,29 @@ class GoalStore:
                 return c.rowcount > 0
         except Exception as e:  # noqa: BLE001
             logger.debug("mark_action failed: %s", e)
+            return False
+
+    def delete_planned_action(
+        self, goal_id: str, day: str, *, kind: str = "beat"
+    ) -> bool:
+        """删除某日**还没发生任何事**的拍（status=planned 且无坐席反馈标记），
+        让下一次 ``refresh_goal`` 按新参数重排——「改期限当天生效」的唯一口径。
+
+        状态过滤写死在 SQL：``consumed/sent`` 是既成事实（已进过生成/已发出，
+        删了会把沉默熔断的 engaged 计数抹掉）、``detail=adopted/rejected:*`` 是
+        坐席的明示决定——都绝不能被一次改期限顺手清除。失败返回 False，绝不抛。"""
+        try:
+            with self._lock:
+                c = self._conn.execute(
+                    "DELETE FROM goal_actions WHERE goal_id = ? AND day = ?"
+                    " AND kind = ? AND status = 'planned'"
+                    " AND (detail = '' OR detail IS NULL)",
+                    (str(goal_id or ""), str(day or ""), str(kind or "beat")),
+                )
+                self._conn.commit()
+                return c.rowcount > 0
+        except Exception as e:  # noqa: BLE001
+            logger.debug("delete_planned_action failed: %s", e)
             return False
 
     def list_actions(
@@ -997,11 +1046,538 @@ class GoalStore:
                 outcomes.items(),
                 key=lambda kv: (-int(kv[1].get("n") or 0), kv[0])))
 
+            # P25/P2：期限调整 × 终态（加急/延期/未调三队列 done_rate 横比——
+            # 「赶进度伤不伤转化」的耐久读数；方法自软失败不拖垮报表主体）
+            out["deadline_edits"] = self.deadline_edit_outcomes(s)
+
             r = self._conn.execute(
                 "SELECT COUNT(*) FROM goals WHERE status = 'active'").fetchone()
             out["active_now"] = int(r[0]) if r else 0
         except Exception as e:  # noqa: BLE001
             logger.debug("outcome_report failed: %s", e)
+        return out
+
+    def deadline_edit_outcomes(self, since_ts: float) -> Dict[str, Any]:
+        """「被调过期限的目标结局如何」——P2 校准闭环的耐久口径（挖事件表，
+        零新存储：数据源是 P25 起 update 路由落的 ``deadline_days:X->Y`` 明细）。
+
+        人群＝窗口内终态目标（``done_at ≥ since``，与 ``by_template`` 同窗）；
+        队列归属＝该目标**生命周期内**是否有过加急/延期编辑（编辑可能发生在
+        窗口外——影响的是这个目标的节奏，跟着目标走而不是跟着窗口走）。
+        等值改动（|X−Y| ≤ 0.05 天）不计方向；先加急后延期的目标同时进两个
+        队列（两种行为都真实发生过，n 刻意不互斥，横比时各队列独立成立）；
+        ``unedited``＝从没被调过期限的终态目标＝基线。三队列 ``done_rate``
+        与报表同 organic 口径（分母排除 cancelled）。绝不抛，坏库返回空骨架。
+        """
+        def _cohort() -> Dict[str, Any]:
+            return {"n": 0, "done": 0, "failed": 0, "expired": 0,
+                    "cancelled": 0, "done_rate": 0.0}
+
+        out: Dict[str, Any] = {
+            "totals": {"edited_n": 0, "shortened": _cohort(),
+                       "extended": _cohort(), "unedited": _cohort()},
+            "by_template": {},
+        }
+        s = float(since_ts or 0.0)
+        try:
+            rows = self._conn.execute(
+                "SELECT goal_id, template, status FROM goals"
+                " WHERE status IN ('done','failed','expired','cancelled')"
+                " AND done_at >= ?", (s,),
+            ).fetchall()
+            if not rows:
+                return out
+            goals = {str(r["goal_id"]): (str(r["template"]), str(r["status"]))
+                     for r in rows}
+            # 这批目标的期限编辑事件（人手动作量级；LIMIT 兜异常写入）
+            erows = self._conn.execute(
+                "SELECT goal_id, detail FROM goal_events"
+                " WHERE kind = 'updated' AND detail LIKE '%deadline_days:%'"
+                " AND goal_id IN (SELECT goal_id FROM goals"
+                "  WHERE status IN ('done','failed','expired','cancelled')"
+                "  AND done_at >= ?) LIMIT 5000", (s,),
+            ).fetchall()
+            directions: Dict[str, set] = {}
+            for r in erows:
+                gid = str(r["goal_id"])
+                if gid not in goals:
+                    continue
+                m = _DEADLINE_EDIT_RE.search(str(r["detail"] or ""))
+                if not m:
+                    continue
+                try:
+                    old_d, new_d = float(m.group(1)), float(m.group(2))
+                except ValueError:
+                    continue
+                if new_d < old_d - 0.05:
+                    directions.setdefault(gid, set()).add("shortened")
+                elif new_d > old_d + 0.05:
+                    directions.setdefault(gid, set()).add("extended")
+            tot = out["totals"]
+            for gid, (tmpl, st) in goals.items():
+                bt = out["by_template"].setdefault(tmpl, {
+                    "edited_n": 0, "shortened": _cohort(),
+                    "extended": _cohort(), "unedited": _cohort()})
+                dirs = directions.get(gid)
+                if dirs:
+                    bt["edited_n"] += 1
+                    tot["edited_n"] += 1
+                for bucket in (sorted(dirs) if dirs else ("unedited",)):
+                    for scope in (bt, tot):
+                        c = scope[bucket]
+                        c["n"] += 1
+                        if st in c:
+                            c[st] += 1
+            for scope in [tot] + list(out["by_template"].values()):
+                for key in ("shortened", "extended", "unedited"):
+                    c = scope[key]
+                    organic = (int(c["done"]) + int(c["failed"])
+                               + int(c["expired"]))
+                    if organic:
+                        c["done_rate"] = round(int(c["done"]) / organic, 3)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("deadline_edit_outcomes failed: %s", e)
+        return out
+
+    # ── 报表/提醒（P0 2026-08-09：账号×客户完成情况 + 完成事件扫描）──────────
+    def list_active_page(
+        self, *, offset: int = 0, limit: int = 40,
+    ) -> List[Dict[str, Any]]:
+        """active 目标按 ``goal_id`` 稳定序分页（定时结算扫描的取数口）。
+
+        为什么不按 ``updated_at`` 排轮转（P0 首版设计，2026-08-09 修正）：
+        ``refresh_goal`` **无变化时不写库**，updated_at 不动 → 「最旧优先」会
+        永远重扫同一批无变化目标，active 数超预算时队尾目标**饿死**。稳定序 +
+        调用方持游标 = 预算内真轮转，陈旧度有界 ``(active数/budget)×扫描间隔``。
+        绝不抛。"""
+        lim = max(1, min(int(limit or 40), 200))
+        off = max(0, int(offset or 0))
+        try:
+            rows = self._conn.execute(
+                "SELECT * FROM goals WHERE status = 'active'"
+                " ORDER BY goal_id ASC LIMIT ? OFFSET ?",
+                (lim, off),
+            ).fetchall()
+        except Exception:
+            return []
+        return [self._row_to_goal(r) for r in rows]
+
+    def list_done_unnotified(
+        self, *, since_ts: float, limit: int = 10,
+        kind: str = "completed_notified",
+    ) -> List[Dict[str, Any]]:
+        """窗口内已 done 且**尚未发过完成通知**的目标（NOT EXISTS 反连接）。
+
+        幂等判据＝``goal_events`` 里的 ``kind`` 标记事件——settle-on-read /
+        订单回流 / 人工成交 / 将来新增的任何完成路径都被同一扫描覆盖，
+        不必在每个跃迁点各埋一次发布。绝不抛。"""
+        lim = max(1, min(int(limit or 10), 100))
+        try:
+            rows = self._conn.execute(
+                "SELECT g.* FROM goals g WHERE g.status = 'done'"
+                " AND g.done_at >= ? AND NOT EXISTS ("
+                "   SELECT 1 FROM goal_events e"
+                "   WHERE e.goal_id = g.goal_id AND e.kind = ?)"
+                " ORDER BY g.done_at ASC LIMIT ?",
+                (float(since_ts or 0.0), str(kind or "completed_notified"), lim),
+            ).fetchall()
+        except Exception:
+            return []
+        return [self._row_to_goal(r) for r in rows]
+
+    def list_missed_unnotified(
+        self, *, since_ts: float, limit: int = 50,
+        kind: str = "miss_notified",
+    ) -> List[Dict[str, Any]]:
+        """窗口内 failed/expired 且未进过失守日报的目标（聚合 digest 取数口）。
+
+        与 ``list_done_unnotified`` 同一反连接设计——坏消息**聚合**成一条日报
+        而非逐条轰（与 draft_backlog 的克制哲学一致），幂等标记防重报。绝不抛。"""
+        lim = max(1, min(int(limit or 50), 200))
+        try:
+            rows = self._conn.execute(
+                "SELECT g.* FROM goals g"
+                " WHERE g.status IN ('failed','expired')"
+                " AND g.done_at >= ? AND NOT EXISTS ("
+                "   SELECT 1 FROM goal_events e"
+                "   WHERE e.goal_id = g.goal_id AND e.kind = ?)"
+                " ORDER BY g.done_at ASC LIMIT ?",
+                (float(since_ts or 0.0), str(kind or "miss_notified"), lim),
+            ).fetchall()
+        except Exception:
+            return []
+        return [self._row_to_goal(r) for r in rows]
+
+    def find_recent_terminal_goal(
+        self,
+        *,
+        conversation_id: str = "",
+        platform: str = "",
+        chat_key: str = "",
+        account_id: str = "",
+        since_ts: float = 0.0,
+    ) -> Optional[Dict[str, Any]]:
+        """近窗内 expired/failed 的目标（迟到订单对账的取数口，P6 2026-08-09）。
+
+        语义与 ``find_active_goal`` 同构：conversation_id 精确 → 账号限定
+        (platform, chat_key)——**账号锁同样生效**（给了账号绝不借别人的目标）；
+        无账号才放宽。**刻意排除 cancelled**：运营手动叫停是人的明示决定，
+        订单也不越权复活；done 不在此口（续费语义归留存环）。
+        多条取 done_at 最新（最近到期的那个最可能是这单的归属）。绝不抛。"""
+        s = float(since_ts or 0.0)
+        try:
+            if conversation_id:
+                row = self._conn.execute(
+                    "SELECT * FROM goals WHERE conversation_id = ?"
+                    " AND status IN ('expired','failed') AND done_at >= ?"
+                    " ORDER BY done_at DESC LIMIT 1",
+                    (str(conversation_id), s),
+                ).fetchone()
+                if row:
+                    return self._row_to_goal(row)
+            if platform and chat_key:
+                if account_id:
+                    row = self._conn.execute(
+                        "SELECT * FROM goals WHERE platform = ? AND chat_key = ?"
+                        " AND account_id = ? AND status IN ('expired','failed')"
+                        " AND done_at >= ?"
+                        " ORDER BY done_at DESC LIMIT 1",
+                        (str(platform), str(chat_key), str(account_id), s),
+                    ).fetchone()
+                    return self._row_to_goal(row) if row else None
+                row = self._conn.execute(
+                    "SELECT * FROM goals WHERE platform = ? AND chat_key = ?"
+                    " AND status IN ('expired','failed') AND done_at >= ?"
+                    " ORDER BY done_at DESC LIMIT 1",
+                    (str(platform), str(chat_key), s),
+                ).fetchone()
+                if row:
+                    return self._row_to_goal(row)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("find_recent_terminal_goal failed: %s", e)
+        return None
+
+    def direct_engaged_map(self, goal_ids: List[str]) -> Dict[str, bool]:
+        """批量判「开价拍真的发出过」：goal_actions 里存在 push_level='direct'
+        且 status ∈ (consumed, sent) 的拍（P5 失守三分法的 offered 判据——
+        里程碑 idx 有时间兑底不可信，这才是「真开过价」的硬证据）。绝不抛。"""
+        ids = [str(g).strip() for g in (goal_ids or []) if str(g).strip()]
+        if not ids:
+            return {}
+        out = {g: False for g in ids}
+        try:
+            ph = ",".join("?" * len(ids))
+            rows = self._conn.execute(
+                f"SELECT DISTINCT goal_id FROM goal_actions"
+                f" WHERE goal_id IN ({ph}) AND push_level = 'direct'"
+                f" AND status IN ('consumed','sent')",
+                ids,
+            ).fetchall()
+            for r in rows:
+                out[str(r["goal_id"])] = True
+        except Exception as e:  # noqa: BLE001
+            logger.debug("direct_engaged_map failed: %s", e)
+        return out
+
+    def event_exists(self, goal_id: str, kind: str) -> bool:
+        try:
+            r = self._conn.execute(
+                "SELECT 1 FROM goal_events WHERE goal_id = ? AND kind = ?"
+                " LIMIT 1",
+                (str(goal_id or ""), str(kind or "")),
+            ).fetchone()
+            return r is not None
+        except Exception:
+            return False
+
+    def won_amounts_for_goals(
+        self, goal_ids: List[str],
+    ) -> Dict[str, Dict[str, Any]]:
+        """批量取成交归因（``goal_events kind=won_meta`` 的 JSON detail）。
+
+        同目标多条 won_meta（理论上不该有）取最新一条。坏 JSON 静默跳过。"""
+        ids = [str(g).strip() for g in (goal_ids or []) if str(g).strip()]
+        if not ids:
+            return {}
+        out: Dict[str, Dict[str, Any]] = {}
+        try:
+            ph = ",".join("?" * len(ids))
+            rows = self._conn.execute(
+                f"SELECT goal_id, detail FROM goal_events"
+                f" WHERE kind = 'won_meta' AND goal_id IN ({ph})"
+                f" ORDER BY ts ASC",
+                ids,
+            ).fetchall()
+            for r in rows:
+                try:
+                    meta = json.loads(r["detail"] or "{}")
+                except Exception:
+                    continue
+                if isinstance(meta, dict) and meta:
+                    out[str(r["goal_id"])] = meta
+        except Exception as e:  # noqa: BLE001
+            logger.debug("won_amounts_for_goals failed: %s", e)
+        return out
+
+    def account_matrix(
+        self, since_ts: float, *, now: Optional[float] = None,
+    ) -> List[Dict[str, Any]]:
+        """按（平台×账号）聚合目标完成情况——「哪个号在出成绩」的读数面。
+
+        口径与 ``outcome_report`` 对齐：终态按 ``done_at`` 落窗；``done_rate``
+        分母排除 cancelled（运营叫停≠客户结果）；``won``＝result 前缀
+        order:/manual:（真金白银/人工拍板成交）；``active``＝当前时点存量
+        （不落窗——「现在手里有多少单在跑」）。全 SQL 聚合，绝不抛。"""
+        s = float(since_ts or 0.0)
+        acc: Dict[tuple, Dict[str, Any]] = {}
+
+        def _bucket(pf: str, aid: str) -> Dict[str, Any]:
+            key = (pf, aid)
+            if key not in acc:
+                acc[key] = {
+                    "platform": pf, "account_id": aid,
+                    "active": 0, "done": 0, "failed": 0, "expired": 0,
+                    "cancelled": 0, "won": 0, "won_amount": 0.0,
+                    "done_rate": 0.0, "avg_days_to_done": None,
+                    "top_template": "",
+                }
+            return acc[key]
+
+        try:
+            rows = self._conn.execute(
+                "SELECT platform, account_id, status, COUNT(*) AS n,"
+                " AVG(CASE WHEN status='done' AND done_at > 0"
+                "     THEN (done_at - start_ts) / 86400.0 END) AS avg_days"
+                " FROM goals"
+                " WHERE status IN ('done','failed','expired','cancelled')"
+                " AND done_at >= ? GROUP BY platform, account_id, status",
+                (s,),
+            ).fetchall()
+            for r in rows:
+                b = _bucket(str(r["platform"]), str(r["account_id"]))
+                st = str(r["status"])
+                b[st] = int(r["n"])
+                if st == "done" and r["avg_days"] is not None:
+                    b["avg_days_to_done"] = round(float(r["avg_days"]), 1)
+
+            rows = self._conn.execute(
+                "SELECT platform, account_id, COUNT(*) AS n FROM goals"
+                " WHERE status = 'active' GROUP BY platform, account_id",
+            ).fetchall()
+            for r in rows:
+                _bucket(str(r["platform"]), str(r["account_id"]))["active"] = \
+                    int(r["n"])
+
+            rows = self._conn.execute(
+                "SELECT platform, account_id, COUNT(*) AS n FROM goals"
+                " WHERE status = 'done' AND done_at >= ?"
+                " AND (result LIKE 'order:%' OR result LIKE 'manual:%')"
+                " GROUP BY platform, account_id",
+                (s,),
+            ).fetchall()
+            for r in rows:
+                _bucket(str(r["platform"]), str(r["account_id"]))["won"] = \
+                    int(r["n"])
+
+            # 主力模板：窗口内 done 数最多的模板（并列取先扫到的）
+            rows = self._conn.execute(
+                "SELECT platform, account_id, template, COUNT(*) AS n"
+                " FROM goals WHERE status = 'done' AND done_at >= ?"
+                " GROUP BY platform, account_id, template"
+                " ORDER BY n DESC",
+                (s,),
+            ).fetchall()
+            for r in rows:
+                b = _bucket(str(r["platform"]), str(r["account_id"]))
+                if not b["top_template"]:
+                    b["top_template"] = str(r["template"])
+
+            # 赢单金额：won_meta 事件按 goal join 回账号（窗口按目标 done_at）
+            rows = self._conn.execute(
+                "SELECT g.platform AS pf, g.account_id AS aid, e.detail AS d"
+                " FROM goal_events e JOIN goals g ON g.goal_id = e.goal_id"
+                " WHERE e.kind = 'won_meta' AND g.status = 'done'"
+                " AND g.done_at >= ?",
+                (s,),
+            ).fetchall()
+            for r in rows:
+                try:
+                    amt = json.loads(r["d"] or "{}").get("amount")
+                    if amt is not None:
+                        b = _bucket(str(r["pf"]), str(r["aid"]))
+                        b["won_amount"] = round(
+                            float(b["won_amount"]) + float(amt), 2)
+                except Exception:
+                    continue
+
+            for b in acc.values():
+                organic = b["done"] + b["failed"] + b["expired"]
+                if organic:
+                    b["done_rate"] = round(b["done"] / organic, 3)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("account_matrix failed: %s", e)
+        return sorted(
+            acc.values(),
+            key=lambda b: (-int(b["done"]), -int(b["active"]),
+                           str(b["platform"]), str(b["account_id"])))
+
+    def contact_outcomes(
+        self,
+        since_ts: float,
+        *,
+        status: str = "done",
+        platform: str = "",
+        account_id: str = "",
+        template: str = "",
+        limit: int = 25,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """账号×客户明细行（报表页核心区取数）。
+
+        ``status``：done / failed / expired / cancelled / active /
+        ``ended``（=done+failed+expired+cancelled）/ 空=全部。
+        终态按 ``done_at`` 落窗排序；active 不落窗（存量）按 ``updated_at``。
+        返回 ``{rows, total}``（total=过滤后总数，供分页）。绝不抛。"""
+        st = str(status or "").strip().lower()
+        lim = max(1, min(int(limit or 25), 50))
+        off = max(0, int(offset or 0))
+        terminal = ("done", "failed", "expired", "cancelled")
+        where: List[str] = []
+        params: List[Any] = []
+        if st == "active":
+            where.append("status = 'active'")
+            order = "updated_at DESC"
+        elif st == "ended":
+            where.append(
+                "status IN ('done','failed','expired','cancelled')")
+            where.append("done_at >= ?")
+            params.append(float(since_ts or 0.0))
+            order = "done_at DESC"
+        elif st in terminal:
+            where.append("status = ?")
+            params.append(st)
+            where.append("done_at >= ?")
+            params.append(float(since_ts or 0.0))
+            order = "done_at DESC"
+        else:
+            # 全部：终态落窗 + 全部 active
+            where.append(
+                "(status = 'active' OR (status IN"
+                " ('done','failed','expired','cancelled') AND done_at >= ?))")
+            params.append(float(since_ts or 0.0))
+            order = ("CASE WHEN status='active' THEN updated_at ELSE done_at"
+                     " END DESC")
+        if platform:
+            where.append("platform = ?")
+            params.append(str(platform))
+        if account_id:
+            where.append("account_id = ?")
+            params.append(str(account_id))
+        if template:
+            where.append("template = ?")
+            params.append(str(template))
+        cond = " AND ".join(where) or "1=1"
+        out: Dict[str, Any] = {"rows": [], "total": 0}
+        try:
+            r = self._conn.execute(
+                f"SELECT COUNT(*) FROM goals WHERE {cond}", tuple(params),
+            ).fetchone()
+            out["total"] = int(r[0]) if r else 0
+            rows = self._conn.execute(
+                f"SELECT * FROM goals WHERE {cond} ORDER BY {order}"
+                f" LIMIT ? OFFSET ?",
+                tuple(params + [lim, off]),
+            ).fetchall()
+            out["rows"] = [self._row_to_goal(r) for r in rows]
+        except Exception as e:  # noqa: BLE001
+            logger.debug("contact_outcomes failed: %s", e)
+        return out
+
+    def outcome_counts(self, lo: float, hi: float) -> Dict[str, Any]:
+        """[lo, hi) 窗口的终态计数 + 赢单金额（AI 价值周报的 goals 段）。绝不抛。"""
+        out = {"done": 0, "failed": 0, "expired": 0, "won": 0,
+               "won_amount": 0.0}
+        try:
+            rows = self._conn.execute(
+                "SELECT status, COUNT(*) FROM goals"
+                " WHERE status IN ('done','failed','expired')"
+                " AND done_at >= ? AND done_at < ? GROUP BY status",
+                (float(lo), float(hi))).fetchall()
+            for r in rows:
+                out[str(r[0])] = int(r[1])
+            r = self._conn.execute(
+                "SELECT COUNT(*) FROM goals WHERE status = 'done'"
+                " AND done_at >= ? AND done_at < ?"
+                " AND (result LIKE 'order:%' OR result LIKE 'manual:%')",
+                (float(lo), float(hi))).fetchone()
+            out["won"] = int(r[0]) if r else 0
+            rows = self._conn.execute(
+                "SELECT e.detail FROM goal_events e"
+                " JOIN goals g ON g.goal_id = e.goal_id"
+                " WHERE e.kind = 'won_meta' AND g.status = 'done'"
+                " AND g.done_at >= ? AND g.done_at < ?",
+                (float(lo), float(hi))).fetchall()
+            for r in rows:
+                try:
+                    amt = json.loads(r[0] or "{}").get("amount")
+                    if amt is not None:
+                        out["won_amount"] = round(
+                            out["won_amount"] + float(amt), 2)
+                except Exception:
+                    continue
+        except Exception as e:  # noqa: BLE001
+            logger.debug("outcome_counts failed: %s", e)
+        return out
+
+    def daily_outcomes(
+        self, *, days: int = 14, now: Optional[float] = None,
+    ) -> List[Dict[str, Any]]:
+        """近 N 天逐日 done/won 计数（报表趋势 sparkline 数据源）。
+
+        按**本地日**分桶（与生产机 UTC+8 口径一致）；无数据的日子补零行，
+        前端画折线不用自己补洞。绝不抛（坏库返回全零序列）。"""
+        d = max(1, min(int(days or 14), 60))
+        n = float(now if now is not None else _now())
+        buckets: Dict[str, Dict[str, int]] = {}
+        for i in range(d):
+            day = time.strftime("%m-%d", time.localtime(n - (d - 1 - i) * 86400))
+            buckets[day] = {"day": day, "done": 0, "won": 0}
+        try:
+            since = n - d * 86400.0
+            rows = self._conn.execute(
+                "SELECT done_at, result FROM goals WHERE status = 'done'"
+                " AND done_at >= ? AND done_at <= ?",
+                (since, n)).fetchall()
+            for r in rows:
+                day = time.strftime(
+                    "%m-%d", time.localtime(float(r["done_at"] or 0)))
+                b = buckets.get(day)
+                if b is None:
+                    continue
+                b["done"] += 1
+                res = str(r["result"] or "")
+                if res.startswith("order:") or res.startswith("manual:"):
+                    b["won"] += 1
+        except Exception as e:  # noqa: BLE001
+            logger.debug("daily_outcomes failed: %s", e)
+        return list(buckets.values())
+
+    def account_template_matrix(
+        self, since_ts: float,
+    ) -> Dict[str, Dict[str, int]]:
+        """窗口内 done 数按（账号 × 模板）交叉（报表热力矩阵数据源）。绝不抛。"""
+        out: Dict[str, Dict[str, int]] = {}
+        try:
+            rows = self._conn.execute(
+                "SELECT platform, account_id, template, COUNT(*) AS n"
+                " FROM goals WHERE status = 'done' AND done_at >= ?"
+                " GROUP BY platform, account_id, template",
+                (float(since_ts or 0.0),)).fetchall()
+            for r in rows:
+                acct = f"{r['platform']}:{r['account_id']}"
+                out.setdefault(acct, {})[str(r["template"])] = int(r["n"])
+        except Exception as e:  # noqa: BLE001
+            logger.debug("account_template_matrix failed: %s", e)
         return out
 
     # ── events ──────────────────────────────────────────────────────────────

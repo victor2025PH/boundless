@@ -45,6 +45,10 @@ BudgetGate = Callable[[str], bool]
 # sent_hook：(item dict) -> None（真发 enqueue 成功后回调；background 侧用它把 care
 # 触达落 outreach_log 共享账本，对周报/其它预算消费方可见）。异常绝不影响已完成的发送。
 SentHook = Callable[[dict], None]
+# peer_filter：(platform, account_id, chat_key) -> bool（True=对端是 bot/自家账号，
+# 该跳过不派发）。bot 不该收任何主动消息——**危机关怀也不豁免**（给 @SpamBot 发
+# 「我一直都在」比日常寒暄更荒谬）。best-effort，异常按放行（增量护栏 fail-open）。
+PeerFilter = Callable[[str, str, str], bool]
 
 _IDENTITY_LEAK = ("作为AI", "作为一个AI", "AI助手", "as an AI", "i'm an ai", "i am an ai")
 
@@ -175,6 +179,7 @@ class CareDispatcher:
         cfg_provider: Optional[CfgProvider] = None,
         budget_gate: Optional[BudgetGate] = None,
         sent_hook: Optional[SentHook] = None,
+        peer_filter: Optional[PeerFilter] = None,
     ) -> None:
         self._store = store
         self._ai = ai_client
@@ -199,6 +204,8 @@ class CareDispatcher:
         # P3：每联系人主动预算闸 + 真发落账回调（均可选，None=旧行为）
         self._budget_gate = budget_gate
         self._sent_hook = sent_hook
+        # 对方机器人/自家账号守卫（P1 2026-08-03）：None=旧行为（不拦）
+        self._peer_filter = peer_filter
         # 健康自检读数（/api/care/health 消费）：最近一次 tick 的时刻/结果/是否被闸
         self.last_tick_ts: float = 0.0
         self.last_tick_scheduled: int = 0
@@ -334,6 +341,17 @@ class CareDispatcher:
             self._mark_skipped(sid, "missing platform/chat_key")
             return False
 
+        # 对方机器人/自家账号守卫（P1 2026-08-03）：给 bot 发关怀是纯空转 + 向平台
+        # 风控表演自动化，给自家账号发是自嗨。放最前（省最多 token）；**危机关怀
+        # 也不豁免**——bot 不该收任何主动消息；异常按放行（fail-open）。
+        if self._peer_filter is not None:
+            try:
+                if self._peer_filter(platform, account_id, chat_key):
+                    self._mark_skipped(sid, "peer_bot_or_fleet")
+                    return False
+            except Exception:
+                logger.debug("care peer_filter 异常（放行）", exc_info=True)
+
         # Phase ④续¹⁰：危机来源关怀（## 56 主动护栏拦下后转的兜底）走「克制陪伴」专线——
         # 不追问、不引用具体事、不寒暄；且**不因变现配额/无上下文而跳过**：
         # 危机期的一句陪伴不该被计费门控掐断，也不该因「没聊过具体事」而不发（陪伴本身即目的）。
@@ -429,7 +447,8 @@ class CareDispatcher:
                 })
             except Exception:
                 logger.debug("record_care_dry_run 异常", exc_info=True)
-            self._store.mark_sent(sid, note="dry_run")
+            # 快照进 care 表：metrics 侧样本是进程内易失的，本列是持久口径
+            self._store.mark_sent(sid, note="dry_run", sent_text=reply)
             return True
 
         try:
@@ -452,7 +471,8 @@ class CareDispatcher:
                 self._sent_hook(dict(item))
             except Exception:
                 logger.debug("care sent_hook 异常（忽略）", exc_info=True)
-        self._store.mark_sent(sid, note=f"deferred:{int(row_id)}")
+        # 话术快照随行留档（deferred 队列有终态保留期，审计文本以本表为持久口径）
+        self._store.mark_sent(sid, note=f"deferred:{int(row_id)}", sent_text=reply)
         return True
 
     async def _avoid_disliked(self, prompt: str, reply: str, sid: int) -> str:

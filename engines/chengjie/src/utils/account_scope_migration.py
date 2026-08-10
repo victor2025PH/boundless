@@ -46,7 +46,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 # 现行接入平台（键首段命中 = platform 前缀键）；RPA/组合键不进候选。
 KNOWN_PLATFORMS = frozenset({
-    "telegram", "whatsapp", "line", "messenger", "instagram", "web",
+    "telegram", "whatsapp", "line", "messenger", "instagram", "zalo", "web",
 })
 
 _SIMPLE_PEER = re.compile(r"^[A-Za-z0-9@.\-]+$")

@@ -49,6 +49,9 @@ def clean_text_for_tts(text: str) -> str:
     模型常在换行、emoji 或**人工插入的逗号停顿**处早停，产出半截音频。
     2026-07-14 真机：换行折「，」后第二句仍被截在首句（2.85s≈只念前半句）。
     优化：换行 → **空格**（保留语义连续、降低「句末」误判）；原句内标点逗号不动。
+    另做疑问语调还原（P0 2026-08-05）：「…吗。」→「…吗？」——LLM 常把疑问句
+    写成句号收尾，TTS 按平调陈述念（「昨晚睡得还好吗。」实锤），问号才有疑问语调。
+    「吧/呢」语义两可（「走吧。」是祈使），刻意不动。
     """
     try:
         t = str(text or "")
@@ -58,6 +61,7 @@ def clean_text_for_tts(text: str) -> str:
         t = re.sub(r"[ \t]{2,}", " ", t)
         t = re.sub(r"[，,]{2,}", "，", t)
         t = re.sub(r"\s+([，。！？,.!?])", r"\1", t)
+        t = re.sub(r"吗[。.]+", "吗？", t)  # 疑问语调还原（仅「吗」，零误伤面）
         return t.strip().strip("，,").strip()
     except Exception:
         return str(text or "").strip()
@@ -292,6 +296,81 @@ def _is_non_fallback_error(err: Optional[str]) -> bool:
     if not err:
         return False
     return any(m in err for m in _NON_FALLBACK_ERROR_MARKERS)
+
+
+# 坐席可行动的失败分类（2026-08-05 P0，「默认音色不可用」修复配套）：
+# 坐席手动链（tts-test 试听 / send-voice 发送）此前把管线错误码原样透出，
+# 前端只能显示「生成失败: hub_voice_source_unavailable」——坐席不知道下一步
+# 该换音色、该重录、还是该等运维。分类词表与 _NON_FALLBACK_ERROR_MARKERS
+# 同址维护（同一批错误码的两种消费口径：要不要兜底 / 怎么向人解释）。
+_VOICE_ERR_HUB_MARKERS = ("hub_voice_source_unavailable",)
+_VOICE_ERR_NOT_READY_MARKERS = (
+    "voice_profile_requires_owner_consent",
+    "voice_profile_missing_reference_audio_path",
+    "voice_profile_reference_audio_missing",
+)
+
+
+def classify_voice_error(err: Optional[str]) -> str:
+    """把管线错误码归类为坐席可行动的桶（纯函数）。
+
+    返回：``hub_source_down``（音色源 hub 不可用且一致性策略拒绝顶包——
+    换「系统通用音色」或其他就绪音色即可发）/ ``profile_not_ready``（该音色
+    登记不完整：缺授权确认或参考音——去语音面板重新登记）/ ``""``（其他，
+    保持原始错误码透出）。
+    """
+    e = str(err or "")
+    if not e:
+        return ""
+    if any(m in e for m in _VOICE_ERR_HUB_MARKERS):
+        return "hub_source_down"
+    if any(m in e for m in _VOICE_ERR_NOT_READY_MARKERS):
+        return "profile_not_ready"
+    return ""
+
+
+def hub_strict_scope(avatar_voice_cfg: Any, persona_id: Any) -> bool:
+    """该人设的语音是否处于「hub 音色源 + 严格一致性」辖区（纯函数）。
+
+    与 ``_try_hub_fish`` 的门控**同口径**：hub_fish.enabled 且人设命中
+    allowlist（空表=全员）且 ``voice_consistency=strict``。命中＝hub 挂时
+    该人设的语音会被「宁缺毋滥」硬拒发（hub_voice_source_unavailable）——
+    坐席选音色前的风险预告（effective-config 的 hub_risk 字段）据此判定，
+    预告与真实拒发行为不一致比没有预告更糟，所以逻辑必须同源镜像。
+    """
+    cfg = avatar_voice_cfg if isinstance(avatar_voice_cfg, dict) else {}
+    hf = cfg.get("hub_fish") if isinstance(cfg.get("hub_fish"), dict) else {}
+    if not bool(hf.get("enabled", False)):
+        return False
+    pid = str(persona_id or "").strip()
+    if not pid:
+        return False
+    allow = hf.get("persona_allowlist") or []
+    if allow and pid not in allow:
+        return False
+    return str(cfg.get("voice_consistency") or "lenient").strip().lower() == "strict"
+
+
+def probe_hub_reachable(avatar_voice_cfg: Any, *, timeout: float = 1.5) -> bool:
+    """hub 网关 TCP 可达性（True=可达/无法判定，False=确定不可达）。
+
+    复用 ``_assert_http_reachable`` 的 60s 不可达负缓存——status 面高频轮询
+    不放大探测流量。**单边确定性**：TCP 不通 ⇒ hub 必挂（高置信红）；TCP 通
+    不代表音色档存在（404 类由 voice_outage 台账的事后证据补位），拿不准一律
+    返 True 不告警（宁可漏报不误报）。
+    """
+    cfg = avatar_voice_cfg if isinstance(avatar_voice_cfg, dict) else {}
+    hf = cfg.get("hub_fish") if isinstance(cfg.get("hub_fish"), dict) else {}
+    base = str(hf.get("base_url") or "").strip()
+    if not base:
+        return True
+    try:
+        _assert_http_reachable(base, timeout=timeout)
+        return True
+    except RuntimeError:
+        return False
+    except Exception:
+        return True
 
 
 def _assert_http_reachable(base_url: str, timeout: float = 3.0) -> None:
@@ -561,6 +640,10 @@ class TTSPipeline:
         self.persona_id = str(cfg.get("persona_id") or "").strip()
         # 人设口头禅/说话习惯（quirks）：口语化句首词 + LLM 改写语气提示。
         self.persona_quirks = str(cfg.get("persona_quirks") or "").strip()
+        # 会话口味键（voice_opener_guard，P0-2 2026-08-03）：同一会话跨消息的
+        # 开场词去重。由 persona_voice.resolve_effective_voice_context 统一注入
+        # （platform:account:chat）；预渲染/试听等无会话上下文的调用天然为空=不去重。
+        self.variety_key = str(cfg.get("variety_key") or "").strip()
         # ── 后端不可达/失败时的兜底合成 ──────────────────────────────────────
         # 主后端（如 coqui_http / voice_clone_command 指向的局域网/云主机）连不上时，
         # 回落到免额外基建的在线 edge_tts，避免「生成失败 + WinError 10060」直接抛给用户。
@@ -615,9 +698,16 @@ class TTSPipeline:
         colloquial_lead: bool = True,
         pre_colloquialized: bool = False,
         skip_llm_colloquial: bool = False,
+        split_part: bool = False,
+        interactive: bool = False,
         total_budget_sec: Optional[float] = None,
     ) -> TTSResult:
         """合成语音。``emotion`` 可为 None / 情绪字符串 / dict / EmotionSpec。
+
+        ``interactive``（2026-08-10 坐席手动链提速）：有人正盯着等这次合成
+        （收件箱直发语音）→ hub 候选数封顶（缺省 1，可配 hub_fish.
+        best_of_interactive）——synth_verify 已兜坏 take，第二候选对交互路径
+        是 ~1×hub 往返的纯延迟税。不进缓存键（候选数不改变音频身份）。
 
         - 不传 ``emotion`` 且未开 ``emotion.enabled`` → neutral（与升级前完全一致）。
         - 命中 TTS 缓存（同 text+voice+backend+format+情绪+参考音频指纹）→ 直接复用字节。
@@ -628,6 +718,10 @@ class TTSPipeline:
         - ``skip_llm_colloquial``：调用方已用 ``prepass_colloquial_llm`` 对**整段**
           做过一次 LLM 口语化（分条场景省 N-1 次往返）→ 本条只跑免费的规则档/微特征，
           不再打 LLM。与 ``pre_colloquialized`` 的区别：后者整段跳过改写链。
+        - ``split_part``（2026-08-01 GPU 减负）：本条是分条发送的其中一条 →
+          hub_fish 按 ``best_of_parts``（缺省沿用 best_of）取候选数。分条 2-3 条
+          × best_of=2 是 hub GPU 的主要放大器，而 synth_verify（CER 回验重合成）
+          已兜坏 take，分条降为 1 候选把 hub 压力砍半、直播共卡更稳。
         - ``total_budget_sec``（2026-07-28 试听超时复盘）：**调用方 opt-in 的全链总预算**。
           交互式端点（tts-test / voice preview）外面套 ``wait_for``，而链内各级预算之和
           （LLM 口语化 25s + hub 45+15s + 本机克隆 90s×2…）远超外闸 → 外层 TimeoutError
@@ -669,7 +763,12 @@ class TTSPipeline:
         if self.enabled and self.cache_enabled and text_s.strip():
             eff_backend = self._effective_backend()
             eff_voice = voice or self._effective_voice()
-            cache_key = self._cache_key(text_s, eff_voice, eff_backend, spec)
+            # 改写变体维度（2026-08-10）：原文直念（pre_colloquialized）与改写链
+            # （口语化可改词）产出的不是同一份音频——不分键会让手动「原文直念」
+            # 命中自动链缓存的「改过词」音频，改词穿帮借尸还魂。
+            cache_key = self._cache_key(
+                text_s, eff_voice, eff_backend, spec,
+                variant=("verbatim" if pre_colloquialized else ""))
             hit = _tts_cache_get(cache_key, ttl_sec=self.cache_ttl_sec)
             if hit is not None:
                 cached = self._result_from_cache(hit, text_s)
@@ -717,6 +816,8 @@ class TTSPipeline:
             colloquial_lead=colloquial_lead,
             pre_colloquialized=pre_colloquialized,
             skip_llm_colloquial=skip_llm_colloquial,
+            split_part=split_part,
+            interactive=interactive,
             total_budget_sec=total_budget_sec)
 
         # ── RVC 变声（可选）：把克隆输出 WAV 再变成人设选定的 66 音色之一 ──
@@ -864,11 +965,13 @@ class TTSPipeline:
             pass
 
     def _cache_key(self, text: str, voice: str, backend: str, spec: Any,
-                   *, hour: Optional[int] = None) -> str:
+                   *, hour: Optional[int] = None, variant: str = "") -> str:
         """TTS 缓存键：克隆类后端额外并入参考音频指纹（换音频自动失效）。
 
         另并入：① 深夜桶（夜间语速 ×0.96 与白天是两份音频，防深夜命中白天缓存）；
-        ② 情绪分库参考音键（同文本不同情绪 ref 必须分缓存，防串「说话状态」）。
+        ② 情绪分库参考音键（同文本不同情绪 ref 必须分缓存，防串「说话状态」）；
+        ③ ``variant``＝改写变体（"verbatim"=原文直念 vs ""=可经口语化改词）——
+        两者同文本不是同一份音频，不分键会跨链串播（2026-08-10）。
         """
         ref_fp = ""
         emo_ref = ""
@@ -914,7 +1017,7 @@ class TTSPipeline:
         base = "|".join([
             backend, voice or "", self.format, self.model or "",
             self.instructions or "", emo, ref_fp, emo_ref, night, rvc_v,
-            hub_fp, text,
+            hub_fp, str(variant or ""), text,
         ])
         return hashlib.sha1(base.encode("utf-8")).hexdigest()
 
@@ -1066,6 +1169,8 @@ class TTSPipeline:
         colloquial_lead: bool = True,
         pre_colloquialized: bool = False,
         skip_llm_colloquial: bool = False,
+        split_part: bool = False,
+        interactive: bool = False,
         total_budget_sec: Optional[float] = None,
     ) -> TTSResult:
         rv = TTSResult(
@@ -1110,6 +1215,8 @@ class TTSPipeline:
                 rv, out, t0, spec=spec, colloquial_lead=colloquial_lead,
                 pre_colloquialized=pre_colloquialized,
                 skip_llm_colloquial=skip_llm_colloquial,
+                split_part=split_part,
+                interactive=interactive,
                 deadline=deadline)
             if av_rv is not None:
                 return av_rv
@@ -1414,6 +1521,7 @@ class TTSPipeline:
     async def _try_hub_fish(
         self, rv: "TTSResult", out: Path, t0: float, *, spec: Any = None,
         text: Optional[str] = None, budget_cap: Optional[float] = None,
+        split_part: bool = False, interactive: bool = False,
     ) -> Optional["TTSResult"]:
         """幻声 hub IndexTTS-2 高保真克隆（.176:9000 /api/tts_only）。
 
@@ -1462,6 +1570,24 @@ class TTSPipeline:
             best_of = int(hf.get("best_of", 1) or 1)
         except (TypeError, ValueError):
             best_of = 1
+        # 分条发送的单条（split_part）按 best_of_parts 取候选（缺省=沿用 best_of，
+        # 行为不变）：2-3 条 × best_of=2 是 hub GPU 的主要放大器，synth_verify 已
+        # 兜坏 take，分条降 1 候选可把 hub 压力近乎砍半（与直播/出图共卡更稳）。
+        if split_part and hf.get("best_of_parts") is not None:
+            try:
+                best_of = max(1, int(hf.get("best_of_parts")))
+            except (TypeError, ValueError):
+                pass
+        # 交互式（坐席盯着等：收件箱试听/直发）：候选数封顶（缺省 1，可配
+        # best_of_interactive）——synth_verify 已兜坏 take，第二候选对交互路径
+        # 是 ~1×hub 往返的纯延迟税。试听与直发同参（interactive 一致），试听
+        # 产物经「所听即所发」复用为出站音频时零分叉。
+        if interactive:
+            try:
+                best_of = min(best_of, max(1, int(
+                    hf.get("best_of_interactive", 1) or 1)))
+            except (TypeError, ValueError):
+                best_of = 1
         # ogg 直出（2026-07-25）：请求 hub 侧转 opus 48k，省本机发送前一次 ffmpeg 转码
         # （voice_sender.convert_to_ogg_opus 对 .ogg 直接放行）。基线 wav=零行为变化；
         # 实际落盘格式以响应字节魔数为准（hub ffmpeg 异常会静默回退 wav）。
@@ -1484,6 +1610,18 @@ class TTSPipeline:
                 _thr = float(cfg.get(
                     "emotion_channel_threshold", STRONG_EMOTION_THRESHOLD)
                     or STRONG_EMOTION_THRESHOLD)
+                # hub 专属情感阈值（P0-3 2026-08-03）：全局阈值是 7852 CosyVoice
+                # 的「情感标签会掉 instruct2 → 音色漂移」权衡；hub 底座 IndexTTS-2
+                # 情感与音色**解耦**（emo 通道不吃音色税），弱情绪塌缩成 neutral
+                # 只剩平板念稿的代价。``hub_fish.emotion_threshold`` 单独放低阈值
+                # （overlay 0.35），日常闲聊情绪（0.4-0.7）也带情感标签；缺省
+                # 沿用全局阈值=旧行为。7852 回落路径不受影响（仍走全局阈值）。
+                _hub_thr = hf.get("emotion_threshold")
+                if _hub_thr is not None:
+                    try:
+                        _thr = float(_hub_thr)
+                    except (TypeError, ValueError):
+                        pass
                 emotion = to_cosyvoice_emotion(
                     spec, default="neutral", strong_threshold=_thr)
             except Exception:
@@ -1601,7 +1739,8 @@ class TTSPipeline:
             _catch = str(vp.get("catchphrase") or "").strip()
             _style = build_voice_style_hint(
                 str(vp.get("instruct_style") or ""), self.persona_quirks,
-                catchphrase=_catch)
+                catchphrase=_catch,
+                dialect=str(vp.get("dialect_flavor") or ""))
             _every = int(col_cfg.get("disfluency_every", 5) or 5)
             _every = max(2, min(20, _every))
             _disf = (bool(col_cfg.get("disfluency", False))
@@ -1614,7 +1753,9 @@ class TTSPipeline:
                 disfluency=_disf,
                 intensity=str(col_cfg.get("rewrite_intensity", "natural")
                               or "natural"),
-                provider=str(col_cfg.get("provider", "local") or "local"))
+                provider=str(col_cfg.get("provider", "local") or "local"),
+                llm_endpoints=col_cfg.get("llm_endpoints"),
+                temperature=float(col_cfg.get("temperature", 0.5) or 0.5))
         except Exception:
             logger.debug("[tts] 整段口语化预处理异常（回落逐条改写）", exc_info=True)
             return None
@@ -1623,7 +1764,8 @@ class TTSPipeline:
     async def _try_avatar_clone(
         self, rv: "TTSResult", out: Path, t0: float, *, spec: Any = None,
         colloquial_lead: bool = True, pre_colloquialized: bool = False,
-        skip_llm_colloquial: bool = False,
+        skip_llm_colloquial: bool = False, split_part: bool = False,
+        interactive: bool = False,
         deadline: Optional[float] = None,
     ) -> Optional["TTSResult"]:
         """AvatarHub CosyVoice3 情感克隆（本机 7852，backend=avatar_clone）。
@@ -1691,10 +1833,15 @@ class TTSPipeline:
                 )
                 _persona_leads = parse_persona_lead_phrases(
                     self.persona_quirks, catchphrase=_catch)
+                _dialect = str(vp.get("dialect_flavor") or "")
                 _style = build_voice_style_hint(
                     str(vp.get("instruct_style") or ""),
                     self.persona_quirks,
-                    catchphrase=_catch)
+                    catchphrase=_catch,
+                    dialect=_dialect)
+                if _dialect:
+                    # 观测锚：方言档生效与否零流量可查（rv.extra 随语音结果落日志）
+                    rv.extra["dialect_flavor"] = _dialect
             except Exception:
                 _persona_leads = ()
                 _style = str(vp.get("instruct_style") or "")
@@ -1734,10 +1881,20 @@ class TTSPipeline:
                             intensity=str(
                                 col_cfg.get("rewrite_intensity", "natural")
                                 or "natural"),
-                            provider=str(col_cfg.get("provider", "local") or "local"))
+                            provider=str(col_cfg.get("provider", "local") or "local"),
+                            llm_endpoints=col_cfg.get("llm_endpoints"),
+                            temperature=float(
+                                col_cfg.get("temperature", 0.5) or 0.5))
                     # 原样返回 ≠ 成功：让规则档再救一刀（因此/您/无需 等书面词）
                     if _col and _col != synth_text:
                         rv.extra["colloquial_llm"] = True
+                        try:
+                            from src.ai.voice_colloquial_llm import get_last_provider
+                            _lp = get_last_provider()
+                            if _lp:
+                                rv.extra["colloquial_provider"] = _lp
+                        except Exception:
+                            pass
                     else:
                         _col = None
                 except Exception:
@@ -1817,10 +1974,31 @@ class TTSPipeline:
             elif re.search(r"([\u4e00-\u9fff]{2})……\1", synth_text or ""):
                 rv.extra["thinking_repeat"] = True
 
+        # ── 开场词会话级去重（P0-2 2026-08-03「嘿病」）────────────────────────
+        # 生产实锤：同一会话连续多条语音都以同一感叹词开场（嘿/哎呀/哈哈…）＝
+        # 新的机械感。口语化整条链（生成层口语版/LLM 改写/规则档/C+ 轻笑）都是
+        # 句级无状态，跨消息重复只有这里能看见（variety_key=会话）。任何来源的
+        # 开场词一视同仁；仅 colloquial_lead=True（整条/分条首条）时参与——分条
+        # 第 2/3 条本就不该有开场词，也不该重复占历史窗。剥除是安全方向：丢弃的
+        # 是语义近零的话语标记，且剥后余文过短会拒剥。
+        # interactive（坐席手动链）豁免：手打文字「所打即所念」，一个字都不动
+        # ——去重剥词只该作用于机器产文（自动链/生成层口语版）。
+        if (self.variety_key and colloquial_lead and not interactive
+                and col_cfg.get("opener_dedupe", True) is not False):
+            try:
+                from src.ai.voice_opener_guard import guard_opener
+                _og = guard_opener(self.variety_key, synth_text)
+                if _og != synth_text:
+                    rv.extra["opener_deduped"] = True
+                    synth_text = _og
+            except Exception:
+                pass
+
         # hub IndexTTS-2 优先（口语化后的送稿）；失败贯穿回落本地 CosyVoice3。
         _rem = _remaining()
         hub_rv = await self._try_hub_fish(
-            rv, out, t0, spec=spec, text=synth_text,
+            rv, out, t0, spec=spec, text=synth_text, split_part=split_part,
+            interactive=interactive,
             # 留 6s 给 hub 失败后的本机克隆回落
             budget_cap=(None if _rem is None else _rem - 6.0))
         if hub_rv is not None and hub_rv.ok:

@@ -72,13 +72,28 @@ def test_visibility_listener_stops_flash(shared_scripts_text: str):
 # i18n（③-S9b/c/d）后 badge 标签不再是硬编码中文，而是「平台前缀 + 客户端 window.T(待审键)」——
 # 随语言切换（zh '待审' / en 'Pending'）。平台前缀（LINE/WA/FB）保留为字面量：它是多 tab 下区分
 # "哪个平台来的提醒"的线索，非文案，无需翻译。overview 用跨平台键、无平台前缀。
-# 渠道中心融合：三渠道正文迁 _channel_body_*.html（断言语义不变）
+# 渠道中心融合：三渠道正文迁 _channel_body_*.html（断言语义不变）。
+# P2-3（2026-08-02）Messenger 主 JS 外迁 static/messenger/messenger_rpa.js —— 扫描口径
+# 升级为「模板 + 模板引用的本地静态 JS」（与 test_channel_alignment_vocab 同一解析器），
+# 断言语义不变：调用与防御护栏在页面加载的任一代码源里必须存在。
 INTEGRATIONS = [
     ("_channel_body_line.html",      "LINE ", "ov_kpi_pending"),
     ("_channel_body_whatsapp.html",  "WA ",   "ov_kpi_pending"),
     ("_channel_body_messenger.html", "FB ",   "ov_kpi_pending"),
     ("rpa_overview.html",            "",      "ov_tab_pending"),
 ]
+
+STATIC_ROOT = TEMPLATES_DIR.parent / "static"
+
+
+def _page_code(template: str) -> str:
+    """模板源码 + 其引用的本地静态 JS（外迁脚本也算页面代码）。"""
+    from tests import _inline_handler_scan as scan
+
+    html = (TEMPLATES_DIR / template).read_text(encoding="utf-8")
+    return html + "".join(
+        p.read_text(encoding="utf-8", errors="replace")
+        for p in scan.local_static_scripts(html, STATIC_ROOT))
 
 
 @pytest.mark.parametrize("template,prefix,pending_key", INTEGRATIONS)
@@ -89,9 +104,9 @@ def test_template_calls_setBadge_with_label(template: str, prefix: str, pending_
     分"哪个平台来的提醒"的唯一线索。i18n 后校验落到 setBadge 调用行本身：
     「待审」文案经 window.T(待审键) 本地化，平台前缀（若有）保留字面量以区分来源。
     """
-    text = (TEMPLATES_DIR / template).read_text(encoding="utf-8")
+    text = _page_code(template)
     call_lines = [ln for ln in text.splitlines() if "rpa.notify.setBadge" in ln]
-    assert call_lines, f"{template} 必须调 rpa.notify.setBadge"
+    assert call_lines, f"{template} 必须调 rpa.notify.setBadge（含外迁静态 JS）"
     line = call_lines[0]
     assert f"window.T('{pending_key}')" in line, (
         f"{template} setBadge 标签须经 window.T('{pending_key}') 本地化（随语言切换）"
@@ -110,9 +125,9 @@ def test_setBadge_guards_against_missing_rpa(template: str, _prefix: str, _pendi
     页面底部）时，setBadge 早调用会 ReferenceError 直接整个 callback
     崩掉。这条防御是低成本的"不会坏" 保障。
     """
-    text = (TEMPLATES_DIR / template).read_text(encoding="utf-8")
+    text = _page_code(template)
     assert "window.rpa && window.rpa.notify" in text, (
-        f"{template} 调 setBadge 前必须做 window.rpa.notify 存在性检查"
+        f"{template} 调 setBadge 前必须做 window.rpa.notify 存在性检查（含外迁静态 JS）"
     )
 
 

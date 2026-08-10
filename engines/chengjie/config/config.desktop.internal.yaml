@@ -1,4 +1,4 @@
-# ── ChatX 内测版 overlay 种子（v1.002，2026-08-01）────────────────────────────
+# ── ChatX 内测版 overlay 种子（v1.004，2026-08-04）────────────────────────────
 # 目标：安装包开箱 = 与 117 生产机（zhiliao 实例）同一形态——12 个人设、克隆语音、
 # 人设相册、主动触达、全自动回复（人审档）、本地 MT 翻译、LAN 视觉/嵌入/LLM 兜底全部点亮。
 #
@@ -15,8 +15,19 @@
 # 铁律：
 #   · 本文件是**公开分发物**：绝不写任何密钥/token/生产账号数据（AI Key 走官网托管
 #     网关 ensure_hosted_ai；Telegram api_id 走设备令牌粘定派发；均不落盘）。
-#   · 仅供内测（办公室同一局域网）：192.168.0.x / 117 端点出了 LAN 即不可达，相关能力
-#     自动软降级（克隆语音回落文字、视觉/MT 回落云链、ASR 报听不清），聊天主链不受影响。
+#   · v1.004（2026-08-04）：与 zhiliao overlay 重新净差分对齐（1.0.10 四机部署前）——
+#     补 8/2-8/3 新开关（分条回复参数/入站合并/出站防双发/peer_bot_guard/fresh_guard/
+#     语音分条/voice_iou/interject_absorb/tg_history_autosync/daily_topics/user_clock/
+#     care 影子档/趋势卡/reply_variety）；修 hub_fish 档名映射（旧英文档名在 hub 404
+#     =语音断档实锤）、ai.fallback 改 173 qwen14b（176 30b 按显存纪律不可加载=配置性
+#     死亡）、口语化改写 local_first（173/198 LAN 端点）；vision/嵌入/MT 端点序对齐
+#     140 首位；automation_mode 对齐生产机 auto_ai。
+#   · v1.003 起为**混合形态**（非局域网机器也可用算力）：视觉/克隆语音/语音识别三段带
+#     `_lan_seed: true` 标记——hosted_gateway 启动时探测 LAN 端点，可达＝直连（办公室
+#     低延迟），不可达＝自动切官网网关 bd2026.cc（经 117→VPS 反向隧道回同一批 GPU，
+#     设备令牌鉴权）。标记只授权注入器动「种子写的端点」，用户自配端点仍绝不覆盖。
+#     未走网关的能力出了 LAN 仍软降级（本地 MT→DeepSeek 翻译、嵌入→关键词召回、
+#     hub_fish→普通克隆链），聊天主链不受影响。
 #   · 与生产 zhiliao 合并视图（config.yaml ⊕ config.local.yaml）的差异只有四类
 #     （2026-08-01 用 config.yaml⊕overlay 三方净差分逐键核对过）：
 #     ①密钥/凭据/生产账号数据剔除——ai.api_key、telegram.api_id/api_hash、
@@ -48,20 +59,63 @@ web_admin:
 inbox:
   enabled: true
   realtime_poll_sec: 3
+  # 多句分条回复（与生产机对齐）：base 已开 bubbles.enabled，这里补齐节奏参数
+  reply_style:
+    bubbles:
+      enabled: true
+      # 每句一条（2026-08-07 运营拍板）：全自动回复按句子分条发，不按 max_chars 回包成段。
+      per_sentence: true
+      max_parts: 5          # 逐句可能多于 3 句；封顶 5（余量并入末条）
+      max_chars: 60         # per_sentence 下不再用它回包，仅留作回落
+      gap_sec_lo: 0.8
+      gap_sec_hi: 2.5
+      holdout_pct: 0.0      # 逐句是既定行为，不留 A/B 保留组（否则 10% 仍整段）
+  # Telegram 历史自动补缺口：停机/断线窗口的消息不再永久缺失
+  tg_history_autosync:
+    enabled: true
   persona_conv_override:
     enabled: true
   auto_draft:
     enabled: true
-    automation_mode: review
+    # v1.004：对齐生产机 auto_ai（此前 review 人审档）——「与本机一致」口径 2026-08-04 拍板
+    automation_mode: auto_ai
     skip_group_chats: true
+    # 入站爆发合并（防同义双发·治因）：几秒内连发多条合并成一次拟稿
+    inbound_merge:
+      enabled: true
+      window_sec: 8
+      max_wait_sec: 25
+      max_texts: 6
+  # 出站近重复守卫（防同义双发·治果）：投递前与最近出站核对，近重复静默跳过
+  outbound_dup_guard:
+    enabled: true
+    window_sec: 180
+    block_similar: true
+  # 对方机器人守卫：确定级降 manual、复读/秒回熔断降 review、单会话日预算
+  peer_bot_guard:
+    enabled: true
+    # 内测/演示档预算放宽（2026-08-04 198 实锤：默认 40 轮在高强度试聊场景
+    # 一下午就触顶——双账号互测 + 手发混聊烧得更快）。预算语义 P2 起＝
+    # 「自动链回复轮次/日」（人工手发不再挤占）；触顶后真人会话软停转
+    # 人审拟稿 + 收件箱出横幅可救济，不再静默哑火。正式租户用默认 40。
+    daily_reply_budget: 200
   l2_autosend:
     enabled: true
     deliver: true
+    # 草稿过期守卫：拟稿后客户又说了新话 → 旧稿不投（计 skip 不计 error）
+    fresh_guard:
+      enabled: true
     voice:
       enabled: true
       trigger: always
       no_edge_fallback: true
       max_chars: 110
+      # 分条语音：>40 字连发 2-3 条短语音；全部合成成功才逐条发，任一失败回落单条
+      split_send:
+        enabled: true
+        min_total_chars: 40
+        part_max_chars: 36
+        max_parts: 3
   sla_watcher:
     escalate_hours: 24
   # 覆盖 config.desktop.min.yaml 的桌面默认关（P1-198）：内测口径=与生产机对齐，
@@ -83,8 +137,12 @@ lang_prior:
   - whatsapp
 
 # ── 克隆语音（AvatarHub CosyVoice3 @117 + 备点 140；hub_fish 高保真 @176）────
+# _lan_seed: 授权 hosted_gateway 做混合注入——LAN 可达时网关殿后兜底，不可达时
+# 网关排首位（外网机器克隆语音经 bd2026.cc → 隧道 → 7852）。hub_fish 无健康预检，
+# 外网不可达时会被注入器就地禁用（回内网自动恢复）。
 avatar_voice:
   enabled: true
+  _lan_seed: true
   policy:
     no_edge_fallback: true
   synth_timeout_sec: 75
@@ -107,7 +165,17 @@ avatar_voice:
     human_ticks: true
     think_prob: 0.28
     laugh_prob: 0.08
-    provider: cloud
+    # LLM 改写走 LAN 端点列表（173 qwen14b 主 / 198 qwen3:8b 备，逐端点冷却 failover），
+    # 全 LAN 挂了才落云端，最后才规则档——零 API 费主路 + 双 GPU 冗余
+    provider: local_first
+    temperature: 0.5
+    llm_endpoints:
+    - base_url: http://192.168.0.173:11434
+      model: qwen14b-fallback
+      timeout_sec: 6.0
+    - base_url: http://192.168.0.198:11434
+      model: qwen3:8b
+      timeout_sec: 6.0
     llm_timeout_sec: 12.0
     min_chars: 12
     lead_prob: 0.5
@@ -120,12 +188,19 @@ avatar_voice:
   base_urls:
   - http://192.168.0.117:7852
   - http://192.168.0.140:7852
+  - http://192.168.0.173:7852
   voice_consistency: strict
   hub_fish:
     enabled: true
     base_url: http://192.168.0.176:9000
     timeout_sec: 75.0
     best_of: 2
+    # 分条单条 1 候选（整段仍 2）：分条×best_of 是 hub GPU 的主要放大器
+    best_of_parts: 1
+    # IndexTTS-2 情感/音色解耦（无 7852 的音色税）：0.35 放行日常闲聊情绪
+    emotion_threshold: 0.35
+    # ⚠️ 档名必须是 hub 上真实存在的中文档：旧英文档名（chengjie_* 等）在 hub 404 →
+    # strict 拒发 → 全语音回落文字（2026-08-02 生产实锤），勿回退
     persona_allowlist:
     - lin_xiaoyu
     - lin_jiaxin
@@ -133,11 +208,21 @@ avatar_voice:
     - chen_mo
     - mizuki
     - su_wan
+    - chen_meiling
+    - haruko_traveler
+    - zhao_laoshi
+    - zhang_jingguang
     profile_map:
-      lin_xiaoyu: chengjie_lin_xiaoyu
-      lin_jiaxin: 林小玲
-      mizuki: Mizuki
-      su_wan: Mizuki
+      lin_xiaoyu: 林小雨-智聊
+      lin_jiaxin: 林佳欣-智聊
+      mizuki: 美月-智聊
+      su_wan: 苏婉
+      chen_meiling: 陈美玲-智聊
+      haruko_traveler: 晴子-智聊
+      zhao_laoshi: 赵明德-智聊
+      zhang_jingguang: 张景光-智聊
+      marcus_wei: 魏卡斯-智聊
+      chen_mo: 陈默
     response_format: ogg
 
 voice_clone_lan:
@@ -145,6 +230,9 @@ voice_clone_lan:
 
 # ── AI（Key 不随包：托管网关派发；这里只带行为参数 + LAN 嵌入/兜底）──────────
 ai:
+  # 反复读治理：出站口头禅账本，超限注入多样性硬约束
+  reply_variety:
+    enabled: true
   ai_name: 顾嘉
   system_prompt: "你是「顾嘉」（英文名 Gary），无界科技（BOUNDLESS）的资深方案顾问，8 年 AI 产品方案经验，\n既懂技术也懂生意。你正在在线聊天窗口接待访客。\n\
     \n【公司与产品】无界科技主打七款 AI 产品（按商业主线）：\n· 通译 LingoX：多平台实时聊天翻译（文字+语音双向互译）\n· 通传 VoxX：会议/直播实时语音同传（克隆音同传+双语字幕）\n\
@@ -159,20 +247,25 @@ ai:
   max_conversation_history: 8
   persona_block_detail: compact
   num_ctx: 8192
-  embedding_base_url: http://192.168.0.176:11434
+  # 端点序对齐生产机：140 首位（宕机端点排首位=每个冷却窗过期先吃一次连接超时的尾延迟税）
+  embedding_base_url: http://192.168.0.140:11434
   embedding_base_urls:
-  - http://192.168.0.176:11434
   - http://192.168.0.140:11434
+  - http://192.168.0.176:11434
   embedding_model: bge-m3
   fallback:
     enabled: true
-    base_url: http://192.168.0.176:11434
-    model: qwen3:30b-a3b-instruct-2507-q4_K_M
+    # 173 qwen14b 7x24 常驻（176 30b 按集群显存纪律不可加载=配置性死亡，2026-08-01 实锤）；
+    # 同时服务：① 主链 DeepSeek 断时的回复兜底 ② colloquial local_first 的口语化改写
+    base_url: http://192.168.0.173:11434
+    model: qwen14b-fallback
     api_key: ollama
     timeout: 90
-    keep_alive: 30m
+    keep_alive: 8h
     num_ctx: 8192
     think: false
+  reply_defaults:
+    length: detailed
 
 memory:
   extract:
@@ -188,6 +281,15 @@ memory:
     semantic_dedup: true
 
 skills:
+  enabled:
+  - greeting
+  - order_query
+  - price_check
+  - status_check
+  - channel_info
+  - complaint
+  - small_talk
+  - test
   cooldown:
     global: 0
     per_user: 5
@@ -225,9 +327,20 @@ telegram:
       default: warm
     split_send:
       enabled: true
+    # 语音补欠账：诚实回落说了「回头补给你」→ 该会话下一回合语音链恢复时强制兑现
+    voice_iou:
+      enabled: true
+    text_first:
+      # 对方发语音在等语音条：40s 预算内不落文字占位
+      budget_sec: 40
   reply_logic:
     follow_up:
       lookback_count: 10
+  # 插话吸收：连发短消息出队合并成一条输入；生成期间对方补话则放弃过期回复（仅私聊文本）
+  interject_absorb:
+    enabled: true
+    max_merge: 3
+    max_age_sec: 45
 
 protocol_autoreply:
   enabled: true
@@ -263,15 +376,18 @@ platform_login:
       outbound: true
 
 # ── 视觉（LAN 双活：176 5090 主 / 140 4070 备）──────────────────────────────
+# _lan_seed: LAN 不可达时由 hosted_gateway 接管指向官网网关（同一批 GPU），回内网还原直连
 vision:
   enabled: true
+  _lan_seed: true
   provider: openai_compatible
-  base_url: http://192.168.0.176:11434/v1
+  # 端点序对齐生产机：140 首位、176 备（2026-08-01 重排，176 修好后仍是备点）
+  base_url: http://192.168.0.140:11434/v1
   model: qwen3-vl:8b-instruct
   api_key: ollama
   base_urls:
-  - http://192.168.0.176:11434/v1
   - http://192.168.0.140:11434/v1
+  - http://192.168.0.176:11434/v1
   timeout: 150
   prompt: 请仔细观察图片：1) 列出画面中所有可见的物体、人物、食物、商品（含角落和背景的）；2) 若是票据/订单/证件/表单/聊天记录类截图，把画面里的文字字段逐字抄录（尤其姓名/Name、日期、单号、金额、座位、电话等小字，不要总结省略；看不清的字段标注「不清晰」，不要猜）；3)
     一句话总结场景（票面/单据类型以画面文字为准，不要臆测交通工具或商家）。回答用中文，简洁分条。
@@ -280,6 +396,28 @@ vision:
 
 companion:
   enabled: true
+  # 今日话题包：RSS 抓当日新鲜事，冷场/被问起/主动开场时注入 1-3 条自然聊起
+  daily_topics:
+    enabled: true
+    proactive:
+      enabled: true
+  relations_health:
+    health_board:
+      payer_sort_priority: true
+      inbox_sort_tiebreak: true
+  # 主动关怀（与生产机同为 dry_run 灰度档：只拟稿不真发，样本进审核队列）
+  proactive_care:
+    enabled: true
+    dry_run: true
+    interval_sec: 300
+    llm_extract:
+      shadow: true
+      daily_budget: 150
+  # 客户侧时钟（时空一致性：对方当地时间事实行 + 时差桥 + 出站星期守卫）
+  user_clock:
+    enabled: true
+  multiplatform_deferred:
+    enabled: true
   proactive_topic:
     enabled: true
     dry_run: false
@@ -342,6 +480,12 @@ companion:
       probability: 0.5
       foreign:
         enabled: true
+        # 名单内外语主动开场走克隆链（同一把声念外语；en/ja/es 真机实证，
+        # ko 在 hub 稳定失败、th/vi/id/hi 引擎不支持 → 仍 edge）
+        clone_languages:
+        - en
+        - ja
+        - es
         languages:
         - en
         - ja
@@ -399,8 +543,10 @@ companion:
       default_album_key: lin_xiaoyu
 
 # ── 语音识别（冻结包无本地模型：主走 176 GPU ASR，备走 140 AvatarHub Whisper）─
+# _lan_seed: LAN 不可达时主转写切官网网关 /audio/transcriptions（设备令牌），回内网还原
 voice_recognition:
   enabled: true
+  _lan_seed: true
   provider: openai_compatible
   language: auto
   base_url: http://192.168.0.176:8765/v1
@@ -412,7 +558,7 @@ voice_recognition:
   - provider: avatar_whisper
     base_url: http://192.168.0.140:7854
     timeout: 30
-  hotwords: 智聊ChatX、通译LingoX、通传VoxX、智拓ReachX、幻声VoiceX、幻颜FaceX、幻影LiveX、无界科技、WhatsApp、Telegram
+  hotwords: 智聊ChatX、通译LingoX、通传VoxX、智拓ReachX、幻声VoiceX、幻颜FaceX、幻影LiveX、无界科技、WhatsApp、Telegram、拉黑、发语音、语音条、视频通话、红包、转账、加好友、朋友圈
 
 speech_emotion:
   enabled: true
@@ -448,7 +594,8 @@ translation:
     - ai
     timeout_sec: 8
     ollama_mt:
-      base_url: http://192.168.0.176:11434
+      # 对齐生产机：MT 在 140（与嵌入同机常驻）
+      base_url: http://192.168.0.140:11434
       model: hy-mt2-7b-official:latest
 
 workspace:
@@ -468,6 +615,12 @@ licensing:
     enabled: true
     plan_override: flagship
   shop_url: https://bd2026.cc/order
+  # 内测机不做字符计量：关闭本地体验档（出厂默认 10k 字符 / 48 小时）。
+  # configure_local_trial 尊重显式 enabled:false（不被桌面默认开启顶掉）；无签名授权时
+  # check_license_quota 走「included=0＝不限」分支，record_license_chars 直接零 IO，
+  # 「字符额度已用尽」host_alert 也随之不再触发。内测放开、正式包不带本段（各自 overlay）。
+  trial:
+    enabled: false
 
 fatex:
   enabled: true
@@ -479,6 +632,12 @@ ops:
     balance_warn_cny: 20
   frontend_error_trend:
     enabled: true
+  login_funnel_trend:
+    enabled: true
+  ui_event_trend:
+    enabled: true
+  contacts_asset_trend:
+    enabled: true
   csrf_trend:
     enabled: true
   gpu_watermark:
@@ -486,6 +645,8 @@ ops:
     hosts:
     - {name: "176-5090", base_url: "http://192.168.0.176:11434", vram_gb: 32}
     - {name: "140-4070", base_url: "http://192.168.0.140:11434", vram_gb: 12}
+    - {name: "173-5090", base_url: "http://192.168.0.173:11434", vram_gb: 32}
+    - {name: "198-4070", base_url: "http://192.168.0.198:11434", vram_gb: 12}
   isolation_trend:
     enabled: true
   dead_peer_registry:
@@ -495,6 +656,8 @@ ops:
       write_forbidden: 259200
 
 contacts:
+  enabled: true
+  intimacy_refresh_interval_minutes: 360
   identity_shadow:
     enabled: true
     scan_interval_hours: 6
@@ -505,12 +668,20 @@ line_rpa:
     enabled: true
 
 reply:
+  # 扩池 12 条并混入无语气词版本（原 5 条被高频复用看穿模板感）
   ai_fallback_replies:
   - 来啦来啦，等我一下下～
   - 收到收到，马上回你！
   - 嗯嗯我在，稍等哈～
   - 在的在的，等我组织下语言～
   - 好嘞，这就来～
+  - 稍等，我看下你说的
+  - 唔，让我想想怎么说
+  - 在呢，刚在忙别的，马上
+  - 等我几秒，打字中
+  - 嗯？我看看
+  - 哈，你等我下
+  - 手头有点事，很快回你
 
 personas:
   doc_import:
@@ -591,3 +762,9 @@ intent:
     - 有空吗
     - 无聊
     - 干吗呢
+    test:
+    - 测试
+    - test
+    - 试验
+    - 试试
+    - camille

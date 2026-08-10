@@ -37,6 +37,12 @@ SLOTS: Tuple[Dict[str, Any], ...] = (
     {"key": "occupation", "track": "relation", "weight": 2,
      "label_zh": "职业/生意", "label_en": "Occupation",
      "ask_zh": "做什么生意/工作", "ask_en": "what business they run"},
+    # P26（2026-08-05）：age 槽——「获取客户年龄」是摸底类目标高频诉求，
+    # 此前全系统无此槽（坐席只能写进自定义 note 软文案）。采集正则见
+    # _AGE_RE/_AGE_BAND_RE（自述+岁/了 锚定，宁可漏采不错采）。
+    {"key": "age", "track": "relation", "weight": 1,
+     "label_zh": "年龄", "label_en": "Age",
+     "ask_zh": "大概哪个年龄段", "ask_en": "roughly their age range"},
     {"key": "interests", "track": "relation", "weight": 1,
      "label_zh": "兴趣", "label_en": "Interests",
      "ask_zh": "平时喜欢做什么", "ask_en": "what they enjoy"},
@@ -112,13 +118,26 @@ def fill_rates(fields: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
 def missing_slots(
     fields: Optional[Dict[str, Any]], *, track: str = "bant", limit: int = 2,
+    include: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """按登记顺序取还没填的槽位定义（画像缺口 → 采集提示/UI chips）。
 
     ``track=""``（全轨枚举，LLM 抽取用）只枚举 TRACKS 内槽位——lifecycle
     采集专用槽（churn_reason）不进缺口，防被当「该问的问题」推给所有客户。
+    ``include``（P26）：显式槽位键列表（摸底目标按坐席勾选出缺口，顺序即
+    优先级）；给了 include 时 track 忽略。
     """
     out: List[Dict[str, Any]] = []
+    if include:
+        for k in include:
+            s = _SLOT_BY_KEY.get(str(k or "").strip().lower())
+            if s is None or s["track"] not in TRACKS:
+                continue
+            if not _filled(fields or {}, s["key"]):
+                out.append(dict(s))
+                if len(out) >= max(1, int(limit)):
+                    break
+        return out
     for s in SLOTS:
         if track:
             if s["track"] != track:
@@ -133,13 +152,56 @@ def missing_slots(
 
 
 def gap_hint(fields: Optional[Dict[str, Any]], *, lang: str = "zh",
-             limit: int = 2) -> str:
-    """摸底段注入用的缺口短语（如「业务痛点、预算档」）；全齐 → ""。"""
-    miss = missing_slots(fields, track="bant", limit=limit)
+             limit: int = 2, include: Optional[List[str]] = None) -> str:
+    """摸底段注入用的缺口短语（如「业务痛点、预算档」）；全齐 → ""。
+
+    ``include``：摸底目标的勾选槽位（缺口只在其中取，配 ``limit=1`` 实现
+    「每轮只带一个最高优先缺口」——列表越长 LLM 越想一口气问完）。
+    """
+    miss = missing_slots(
+        fields, track=("" if include else "bant"), limit=limit,
+        include=include)
     if not miss:
         return ""
     k = "ask_en" if str(lang).lower().startswith("en") else "ask_zh"
     return "、".join(str(m.get(k) or m.get("label_zh") or m["key"]) for m in miss)
+
+
+def parse_selected_slots(raw: Any) -> List[str]:
+    """目标 ``params.slots``（逗号/顿号/空白分隔字符串或列表）→ 合法槽位键
+    （保序去重；未知键/lifecycle 专用槽忽略）。空 → []。"""
+    if isinstance(raw, (list, tuple)):
+        items = [str(x) for x in raw]
+    else:
+        items = re.split(r"[,，、;\s]+", str(raw or ""))
+    out: List[str] = []
+    for it in items:
+        k = it.strip().lower()
+        s = _SLOT_BY_KEY.get(k)
+        if s is not None and s["track"] in TRACKS and k not in out:
+            out.append(k)
+    return out
+
+
+def selected_fill_rate(
+    fields: Optional[Dict[str, Any]], keys: Optional[List[str]],
+) -> float:
+    """按坐席勾选槽位算的等权填充率（0..1）；勾选为空 → -1.0（未知，调用方
+    按「信号缺失」处理而非当 0 分）。摸底目标（profile_discovery）的
+    结算信号源——填一格进一格，全填即达成。"""
+    ks = [k for k in (keys or []) if k in _SLOT_BY_KEY]
+    if not ks:
+        return -1.0
+    got = sum(1 for k in ks if _filled(fields or {}, k))
+    return round(got / len(ks), 3)
+
+
+def slot_value(fields: Optional[Dict[str, Any]], key: str) -> str:
+    """读槽位现值（兼容 ``{"v":...}`` 单元与裸值）；空 → ""。"""
+    cell = (fields or {}).get(str(key or ""))
+    if isinstance(cell, dict):
+        return str(cell.get("v") or "").strip()
+    return str(cell or "").strip()
 
 
 def facts_line(
@@ -292,6 +354,17 @@ _OCCUPATION_RE = re.compile(
     r"(?:的|生意|平台|店|铺|公司|工作室)?(?=[，。,.!！?？\s]|$)")
 _OCCUPATION_STOP = re.compile(r"^(?:什么|啥|梦|不了|不到|完)$")
 
+# 年龄（P26）：只认明确自述——「我28岁 / 我今年28了 / I'm 28 years old」。
+# 「我今年28」不带 岁/了 刻意不采（可能是 28 号出发/28 楼）；「我住28楼」
+# 「28号见」都不含自述锚不会命中。数值 14..90 夹界（超界=玩笑/误写不采）。
+_AGE_RE = re.compile(
+    r"我(?:今年|都|现在)?\s*(\d{1,2})\s*岁|"
+    r"我今年\s*(\d{1,2})\s*了|"
+    r"I(?:'m|\s+am)\s+(\d{1,2})\s+years?\s*old",
+    re.IGNORECASE)
+# 年龄段：「我(是)90后/00后」——存段标签，诚实不虚构具体岁数
+_AGE_BAND_RE = re.compile(r"我(?:是)?\s*((?:[5-9]0|00)后)")
+
 
 def capture_from_text(text: str) -> List[Tuple[str, str]]:
     """从一条入站消息确定性抽画像槽位。返回 ``[(slot_key, value), ...]``。
@@ -357,6 +430,20 @@ def capture_from_text(text: str) -> List[Tuple[str, str]]:
     if m and not _OCCUPATION_STOP.match(m.group(1).strip()):
         _add("occupation", m.group(1).strip())
 
+    m = _AGE_RE.search(t)
+    if m:
+        raw_n = next((g for g in m.groups() if g), "")
+        try:
+            n = int(raw_n)
+            if 14 <= n <= 90:
+                _add("age", f"{n}岁")
+        except ValueError:
+            pass
+    if "age" not in seen:
+        m = _AGE_BAND_RE.search(t)
+        if m:
+            _add("age", m.group(1))
+
     return out
 
 
@@ -421,6 +508,9 @@ __all__ = [
     "gap_hint",
     "get_slot",
     "missing_slots",
+    "parse_selected_slots",
+    "selected_fill_rate",
     "slot_keys",
     "slot_label",
+    "slot_value",
 ]

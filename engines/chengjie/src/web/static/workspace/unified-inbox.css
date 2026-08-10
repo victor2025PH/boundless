@@ -546,6 +546,14 @@
 /* P0：翻译质量徽章（引擎不可用/降级/失败时提示「译文可能不准」） */
 .msg-translation .xl-warn-badge{display:inline-block;font-size:11px;font-weight:700;color:var(--xl-warn-text);background:var(--xl-warn-bg);border-radius:4px;padding:0 4px;margin-left:5px;vertical-align:middle;cursor:help;}
 .msg-row.out .msg-translation .xl-warn-badge{color:var(--ofg);background:rgba(251,146,60,.55);}
+/* 2026-08-09 翻译提速批次：批量补译在途骨架占位 + 译文行到货淡入（消除「行突然出现」跳动）。
+   全部基于 currentColor 派生，明暗主题/出站气泡自适应，零硬编码色。 */
+.msg-translation.auto{animation:xlRowIn .18s ease-out;}
+@keyframes xlRowIn{from{opacity:0;transform:translateY(2px);}to{opacity:1;transform:none;}}
+.msg-translation.xl-skel{animation:none;}
+.msg-translation.xl-skel .xl-skel-bar{display:inline-block;width:62%;height:10px;border-radius:5px;background:currentColor;opacity:.16;animation:xlSkelPulse 1.1s ease-in-out infinite;vertical-align:middle;}
+@keyframes xlSkelPulse{0%,100%{opacity:.09;}50%{opacity:.24;}}
+@media (prefers-reduced-motion:reduce){.msg-translation.auto{animation:none;}.msg-translation.xl-skel .xl-skel-bar{animation:none;}}
 /* 多线路对照弹窗：原为写死白底内联样式（暗色下刺眼白卡），收口为主题感知卡片。 */
 .xlcompare-mask{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;}
 .xlcompare-card{background:var(--bg-elev);color:var(--text-main);border:1px solid var(--border);border-radius:12px;max-width:560px;width:100%;max-height:80vh;overflow:auto;padding:18px;box-shadow:0 12px 40px rgba(0,0,0,.3);}
@@ -1324,7 +1332,11 @@ button.fleet-cell:disabled{cursor:default;}
 /* ===== 扫码连接弹窗 ===== */
 .connect-modal{position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:300;display:none;align-items:center;justify-content:center;backdrop-filter:blur(2px);}
 .connect-modal.show{display:flex;}
-.connect-box{background:var(--bg-elev);border-radius:16px;width:380px;max-width:92vw;padding:22px;box-shadow:0 20px 60px rgba(0,0,0,.3);text-align:center;}
+.connect-box{background:var(--bg-elev);border-radius:16px;width:380px;max-width:92vw;padding:22px;box-shadow:0 20px 60px rgba(0,0,0,.3);text-align:center;position:relative;overflow:hidden;}
+/* 平台品牌顶条（--pc 由 openConnect 按平台注入）：把弹窗与所接平台建立视觉从属，
+   渐变淡出避免整条色带压过内容；无 --pc 时回落品牌蓝。 */
+.connect-box::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;
+  background:linear-gradient(90deg,var(--pc,var(--accent,#1e8cf2)),color-mix(in srgb,var(--pc,var(--accent,#1e8cf2)) 25%,transparent) 68%,transparent);}
 .connect-head{display:flex;align-items:center;gap:10px;margin-bottom:14px;text-align:left;}
 .connect-plat-icon{width:40px;height:40px;border-radius:10px;overflow:hidden;display:flex;align-items:center;justify-content:center;flex-shrink:0;line-height:0;}
 .connect-title{font-size:16px;font-weight:700;color:var(--text-main);}
@@ -1333,12 +1345,15 @@ button.fleet-cell:disabled{cursor:default;}
 .connect-qr-wrap{position:relative;width:220px;height:220px;margin:6px auto 12px;border-radius:12px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;background:#f9fafb;overflow:hidden;}
 .connect-qr-wrap img{width:100%;height:100%;object-fit:contain;}
 .connect-qr-mask{position:absolute;inset:0;background:rgba(255,255,255,.86);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;font-size:12px;color:var(--text-sub);text-align:center;padding:14px;}
+/* 状态行文字色一律走 --tk-*-ink 语义 ink（2026-08-10 实测：旧写法拿填充系
+   --warn/--green/--accent 当文字色，亮色下 pending 2.15:1 / ok 2.54:1 /
+   scanned 3.45:1 全不达标——「等待扫码」是每个坐席必看的默认态）。 */
 .connect-state{font-size:13px;font-weight:600;margin-bottom:6px;}
-.connect-state.pending{color:var(--warn);}
-.connect-state.scanned{color:var(--accent);}
-.connect-state.ok{color:var(--green);}
-.connect-state.err{color:var(--red);}
-.connect-state.warn{color:var(--warn);}
+.connect-state.pending{color:var(--tk-warn-ink,#b45309);}
+.connect-state.scanned{color:var(--bdg-info-ink,#0b64b7);}
+.connect-state.ok{color:var(--tk-ok-ink,#15803d);}
+.connect-state.err{color:var(--tk-danger-ink,#b91c1c);}
+.connect-state.warn{color:var(--tk-warn-ink,#b45309);}
 /* 离线账号卡：掉线时长 + 平台自助指引（W2） */
 .acct-offline-hint{font-size:11.5px;color:var(--text-sub);margin:2px 0 6px;line-height:1.5;}
 /* P4：在线半死（E2EE）——琥珀字色，与离线 hint 同位 */
@@ -1347,9 +1362,12 @@ button.fleet-cell:disabled{cursor:default;}
 .acct-down-dur{color:var(--warn);font-weight:600;}
 /* 登录步骤指示器（W2 #8）：扫码 → 确认 → 完成，跟随连接状态高亮 */
 .connect-steps{display:flex;align-items:center;justify-content:center;gap:6px;margin:2px 0 10px;font-size:11px;color:var(--text-sub);}
-.connect-steps .cs-step{display:flex;align-items:center;gap:5px;opacity:.5;transition:opacity .2s,color .2s;}
-.connect-steps .cs-step.active{opacity:1;color:var(--accent);font-weight:600;}
-.connect-steps .cs-step.done{opacity:1;color:var(--green);}
+/* 未到步 .5 透明实测 1.98:1（亮）/2.69:1（暗）——弱化保留但提到 .65（≥2.8:1，
+   非当前步的辅助标识允许低于正文线，但不能低到「像没渲染」）；
+   当前/已完成步走 ink 语义色（旧 --accent/--green 亮色 3.45/2.54 不达标）。 */
+.connect-steps .cs-step{display:flex;align-items:center;gap:5px;opacity:.65;transition:opacity .2s,color .2s;}
+.connect-steps .cs-step.active{opacity:1;color:var(--bdg-info-ink,#0b64b7);font-weight:600;}
+.connect-steps .cs-step.done{opacity:1;color:var(--tk-ok-ink,#15803d);}
 .connect-steps .cs-dot{width:16px;height:16px;border-radius:50%;border:1.5px solid currentColor;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;}
 .connect-steps .cs-sep{width:14px;height:1.5px;background:currentColor;opacity:.35;}
 .connect-hint{font-size:11.5px;color:var(--text-sub);line-height:1.6;}
@@ -1359,9 +1377,9 @@ button.fleet-cell:disabled{cursor:default;}
 /* 登录方式选择 */
 .connect-modes{display:flex;flex-direction:column;gap:8px;margin:4px 0 6px;text-align:left;}
 .connect-modes-tip{font-size:11.5px;color:var(--text-sub);margin-bottom:2px;}
-.connect-mode-opt{display:flex;align-items:flex-start;gap:10px;padding:11px 12px;border:1px solid var(--border);border-radius:10px;cursor:pointer;transition:border-color .15s,background .15s,box-shadow .15s;}
-.connect-mode-opt:hover{border-color:var(--accent);background:color-mix(in srgb, var(--accent,#1e8cf2) 8%, transparent);}
-.connect-mode-opt:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+.connect-mode-opt{display:flex;align-items:flex-start;gap:10px;padding:11px 12px;border:1px solid var(--border);border-radius:12px;cursor:pointer;transition:border-color .15s,background .15s,box-shadow .15s;}
+.connect-mode-opt:hover{border-color:var(--pc,var(--accent));background:color-mix(in srgb, var(--pc,var(--accent,#1e8cf2)) 7%, transparent);}
+.connect-mode-opt:focus-visible{outline:2px solid var(--pc,var(--accent));outline-offset:2px;}
 .connect-mode-opt.recommended{border-color:color-mix(in srgb, var(--accent,#1e8cf2) 45%, transparent);box-shadow:0 1px 6px color-mix(in srgb, var(--accent,#1e8cf2) 10%, transparent);}
 /* 不可用态：斜纹 + 锁，而不是单纯半透明。半透明只说明「这里坏了」，斜纹加锁说明「这是有
    条件的」——且该项**仍可点击**（展开解释卡），所以保留 pointer，不用 not-allowed。 */
@@ -1378,14 +1396,38 @@ button.fleet-cell:disabled{cursor:default;}
 .connect-mode-lock{font-size:12px;line-height:1;filter:grayscale(1);opacity:.75;}
 /* 能力标签：让运营不读技术描述也能横向比较（可多开 / 需手机 / 需运维…） */
 .connect-mode-caps{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;}
-.connect-cap-chip{font-size:10px;font-weight:600;color:var(--text-sub);background:var(--bg-soft);border:1px solid var(--border);border-radius:999px;padding:1px 7px;line-height:1.5;}
-.connect-mode-unavail-cue{font-size:10.5px;font-weight:700;color:var(--accent);margin-top:6px;}
+.connect-cap-chip{font-size:10.5px;font-weight:600;color:var(--text-sub);background:var(--bg-soft);border:1px solid var(--border);border-radius:999px;padding:1px 7px;line-height:1.5;}
+.connect-mode-unavail-cue{font-size:11px;font-weight:700;color:var(--accent);margin-top:6px;}
 /* blocked：能点但一定失败（依赖已具备、服务没起）。刻意不用 .disabled 的斜纹灰——
    那是「还没做」的语义；这里是「做了但现在不通」，用琥珀左边框区分。 */
 .connect-mode-opt.blocked{border-color:rgba(217,119,6,.45);box-shadow:inset 3px 0 0 var(--warn);}
 .connect-mode-opt.blocked:hover{border-color:var(--warn);}
 /* softwarn：只影响「能否常驻在线」这类非阻断隐患，低调一行，不拦点击 */
-.connect-mode-softwarn{font-size:10.5px;color:var(--tk-amber-ink,#b45309);margin-top:5px;}
+.connect-mode-softwarn{font-size:11px;color:var(--tk-warn-ink,#b45309);margin-top:5px;}
+/* 方式卡随附提示（2026-08-10 运营决策：风险恐吓口径转正向「稳定运行建议」）：
+   基础态=info 蓝的建议语气；.sev-warn/.sev-danger 语义皮肤保留给真告警。不拦点击。
+   配色全走 --bdg-*/--tk-*-ink 语义 token（日/夜自适配）——旧写法引用从未定义的
+   --tk-amber-ink，暗色恒走亮色回落值 ≈3:1 不可读，正是「暗色看不清」的病根。 */
+.connect-mode-notice{font-size:11.5px;line-height:1.55;margin-top:6px;padding:6px 9px;border-radius:8px;
+  color:var(--bdg-info-ink,#0b64b7);background:var(--bdg-info-bg,rgba(30,140,242,.11));
+  border:1px solid color-mix(in srgb,var(--bdg-info-ink,#0b64b7) 24%,transparent);}
+/* sev-warn 渍底刻意用 --tk-amber 10% 而非 --bdg-warn-bg(.14)：亮色下 warn-ink(#b45309)
+   压 .14 琥珀渍实测 4.32:1 差 AA 一线，10% 混色提到 ≈4.65:1——L6 浏览器门禁按 ≥4.5
+   统一断言，不留主题特例。 */
+.connect-mode-notice.sev-warn{color:var(--tk-warn-ink,#b45309);
+  background:color-mix(in srgb,var(--tk-amber,#f59e0b) 10%,transparent);
+  border-color:color-mix(in srgb,var(--tk-warn-ink,#b45309) 30%,transparent);}
+.connect-mode-notice.sev-danger{color:var(--tk-danger-ink,#b91c1c);background:var(--bdg-danger-bg,rgba(220,38,38,.12));
+  border-color:color-mix(in srgb,var(--tk-danger-ink,#b91c1c) 30%,transparent);}
+/* 扫码/登录步顶部的同款提示（更靠前——动手前一眼可见）。 */
+.connect-qr-notice{font-size:12px;line-height:1.55;text-align:left;margin:0 0 12px;padding:9px 12px;border-radius:10px;
+  color:var(--bdg-info-ink,#0b64b7);background:var(--bdg-info-bg,rgba(30,140,242,.11));
+  border:1px solid color-mix(in srgb,var(--bdg-info-ink,#0b64b7) 24%,transparent);}
+.connect-qr-notice.sev-warn{color:var(--tk-warn-ink,#b45309);
+  background:color-mix(in srgb,var(--tk-amber,#f59e0b) 10%,transparent);
+  border-color:color-mix(in srgb,var(--tk-warn-ink,#b45309) 30%,transparent);}
+.connect-qr-notice.sev-danger{color:var(--tk-danger-ink,#b91c1c);background:var(--bdg-danger-bg,rgba(220,38,38,.12));
+  border-color:color-mix(in srgb,var(--tk-danger-ink,#b91c1c) 30%,transparent);}
 /* 不可用方式的解释卡 */
 .connect-unavail{text-align:left;border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--bg-soft);animation:cuFade .16s ease-out;}
 @keyframes cuFade{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:none;}}
@@ -1412,6 +1454,39 @@ button.fleet-cell:disabled{cursor:default;}
 .connect-enable-msg{font-size:11.5px;line-height:1.5;margin-top:6px;display:none;}
 .connect-enable-msg.ok{color:#16a34a;}
 .connect-enable-msg.err{color:var(--red);}
+/* ── 官方渠道开通引导卡增强（2026-08-10）：按钮主次 / 三步指示 / 准备清单 / 状态行 ── */
+/* 按钮分主次：去接入向导=accent 实心主按钮（沿用 .connect-enable-go），
+   重新检测/复制指引=ghost 次按钮——两个同色实心按钮并排会抢主行动点。 */
+.connect-enable-go.ghost{background:transparent;color:var(--accent);border:1px solid color-mix(in srgb, var(--accent,#1e8cf2) 45%, transparent);}
+.connect-enable-go.ghost:hover{filter:none;background:color-mix(in srgb, var(--accent,#1e8cf2) 10%, transparent);}
+/* credentials 形态三步指示（qr/hosted 流程另有 connect-steps，此为凭证流专属词汇） */
+.connect-cred-steps{display:flex;flex-direction:column;gap:5px;margin:0 0 10px;text-align:left;}
+.connect-cred-steps .ccs-item{display:flex;align-items:flex-start;gap:7px;font-size:11.5px;color:var(--text-sub);line-height:1.5;}
+.connect-cred-steps .ccs-n{width:15px;height:15px;border-radius:50%;background:color-mix(in srgb, var(--accent,#1e8cf2) 14%, transparent);color:var(--accent);font-size:10px;font-weight:700;font-style:normal;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;margin-top:1px;}
+/* 准备清单：字段 chip（必填/可选/已填）+ 平台后台链接 + 政策注释 */
+.connect-prep-chip{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:600;color:var(--text-sub);background:var(--bg-elev);border:1px solid var(--border);border-radius:999px;padding:2px 8px;margin:2px 5px 2px 0;line-height:1.5;}
+.connect-prep-chip b{font-weight:700;}
+.connect-prep-chip .req{color:var(--tk-warn-ink,#b45309);}
+.connect-prep-chip .opt{color:var(--text-tiny);font-weight:600;}
+.connect-prep-chip.done{border-color:rgba(16,185,129,.4);}
+.connect-prep-chip .ok{color:var(--tk-ok-ink,#059669);}
+.connect-prep-link{display:inline-flex;align-items:center;gap:3px;font-size:11px;color:var(--accent);font-weight:600;text-decoration:none;margin-top:6px;}
+.connect-prep-link:hover{text-decoration:underline;}
+.connect-prep-note{font-size:10.5px;color:var(--text-tiny);line-height:1.55;margin-top:6px;}
+/* 说明卡内通用状态行（重新检测反馈原写进 #connect-enable-msg——那块只在 Telegram
+   显示，Zalo/IG 点「重新检测」没任何反馈；独立一行对所有平台可见） */
+.connect-unavail-msg{font-size:11.5px;line-height:1.5;margin:6px 0 0;display:none;text-align:left;}
+.connect-unavail-msg.err{color:var(--red);}
+.connect-unavail-msg.ok{color:var(--tk-ok-ink,#16a34a);}
+/* 禁用态对比度（WCAG AA）：原 .72 整卡淡化 × text-tiny 双重降压过狠；
+   名称回 --text-sub、整卡 .85——「有条件可用」不等于「快看不清」。
+   2026-08-10 补：desc 行此前仍是 text-tiny（暗色 ×.85 后 ≈3.9:1 不达标），同步提级。 */
+.connect-mode-opt.disabled{opacity:.85;}
+.connect-mode-opt.disabled .connect-mode-name{color:var(--text-sub);}
+.connect-mode-opt.disabled .connect-mode-desc{color:var(--text-sub);}
+/* 锁/钥匙图标换 SVG（uiIcon，currentColor 取色）后：清掉 emoji 时代的灰度滤镜 */
+.connect-mode-lock{display:inline-flex;color:var(--text-tiny);filter:none;opacity:1;}
+.connect-unavail-lock{display:inline-flex;color:var(--text-sub);}
 /* 服务器托管登录：图是登录页截图不是二维码，角标常驻说明，避免坐席举着手机扫 */
 .connect-qr-wrap.server-shot{width:260px;height:190px;}
 .connect-shot-tag{position:absolute;left:0;right:0;bottom:0;background:rgba(15,23,42,.78);color:#e2e8f0;font-size:10px;font-weight:600;padding:4px 6px;line-height:1.4;text-align:center;}
@@ -1420,9 +1495,34 @@ button.fleet-cell:disabled{cursor:default;}
 .connect-mode-badge{font-size:11px;font-weight:700;padding:1px 6px;border-radius:8px;background:color-mix(in srgb, var(--accent,#1e8cf2) 12%, transparent);color:var(--accent);}
 .connect-mode-badge.soon{background:var(--bg-soft);color:var(--text-tiny);}
 /* warn 徽标＝「开关开着但这条路现在走不通」（典型：sidecar 没起）。
-   与 soon 的灰色区分开：灰=还没做，琥珀=做了但没跑起来，处置动作完全不同。 */
-.connect-mode-badge.warn{background:rgba(217,119,6,.16);color:var(--tk-amber-ink,#b45309);}
-.connect-mode-desc{font-size:11px;color:var(--text-sub);line-height:1.5;margin-top:2px;}
+   与 soon 的灰色区分开：灰=还没做，琥珀=做了但没跑起来，处置动作完全不同。
+   （ink 用 --tk-warn-ink：workspace_base 亮暗各有定义；旧 --tk-amber-ink 无定义恒走回落） */
+.connect-mode-badge.warn{background:rgba(217,119,6,.16);color:var(--tk-warn-ink,#b45309);}
+/* cfg 徽标＝「功能已建成，等你在接入向导里填官方凭证」（IG/Zalo 等 official 渠道）。
+   四态语义：accent=推荐 / 蓝(info)=待配置可自助解锁 / 琥珀=服务没跑 / 灰=真没做。
+   把「待配置」从「敬请期待」里拆出来，正是修「把已交付能力说成没做」的视觉根。 */
+.connect-mode-badge.cfg{background:var(--bdg-info-bg,rgba(30,140,242,.11));color:var(--bdg-info-ink,#0b64b7);}
+/* 暗色：本文件开头的暗色通配（:root[dark] .connect-mode-badge，特异性 0,3,0）会把
+   soon/warn/cfg（0,2,0）一并染成品牌蓝底——三态在暗色下全糊成一种（IG 弹层「敬请期待」
+   实锤）。按态补 0,4,0 档夺回各自语义色；border-color 清掉通配给的描边混色。 */
+:root[data-cp-theme="dark"] .connect-mode-badge.soon{background:var(--bg-soft);border-color:transparent;color:var(--text-tiny);}
+:root[data-cp-theme="dark"] .connect-mode-badge.warn{background:var(--bdg-warn-bg,rgba(245,158,11,.16));border-color:transparent;color:var(--tk-warn-ink,#fbbf24);}
+:root[data-cp-theme="dark"] .connect-mode-badge.cfg{background:var(--bdg-info-bg,rgba(96,165,250,.15));border-color:transparent;color:var(--bdg-info-ink,#93c5fd);}
+/* cfg（可开通）卡整体形态：与「真没做」的斜纹灰划清界限——功能已建成、只差凭证，
+   不该长得像故障品。干净表面 + 全对比度 + 引导箭头 hover 位移；锁形图标染 info 蓝
+   （「可解锁」语义）。徽标/引导线仍由上面的 .cfg / .connect-mode-unavail-cue 承担。 */
+.connect-mode-opt.disabled.cfg{opacity:1;background:none;}
+.connect-mode-opt.disabled.cfg:hover{border-color:var(--pc,var(--accent,#1e8cf2));
+  background:color-mix(in srgb,var(--pc,var(--accent,#1e8cf2)) 6%,transparent);}
+.connect-mode-opt.disabled.cfg .connect-mode-name{color:var(--text-main);}
+.connect-mode-opt.disabled.cfg .connect-mode-desc{color:var(--text-sub);}
+.connect-mode-opt.disabled.cfg .connect-mode-lock{color:var(--bdg-info-ink,#0b64b7);}
+.connect-mode-opt.disabled.cfg .connect-mode-unavail-cue{transition:transform .15s;}
+.connect-mode-opt.disabled.cfg:hover .connect-mode-unavail-cue{transform:translateX(3px);}
+@media (prefers-reduced-motion:reduce){
+  .connect-mode-opt.disabled.cfg:hover .connect-mode-unavail-cue{transform:none;}
+}
+.connect-mode-desc{font-size:11.5px;color:var(--text-sub);line-height:1.5;margin-top:2px;}
 /* 账号配置（代理 + 指纹），仿截图分区 */
 .cfg-section{border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px;text-align:left;}
 .cfg-section-title{font-size:11.5px;font-weight:700;color:var(--accent);margin-bottom:6px;letter-spacing:.5px;}
@@ -2245,14 +2345,31 @@ button.ftab-more-item{border:none;background:none;width:100%;text-align:left;fon
 .connect-qr-wrap.hosted{width:100%;max-width:340px;height:auto;aspect-ratio:16/10;background:var(--bg-soft);}
 .connect-qr-wrap.hosted.has-img img{padding-top:20px;}
 .connect-qr-wrap.hosted img.qr-fresh{animation:none;}   /* 截图每轮轮询都在变，换码脉冲会闪个不停 */
+/* phone_code：无二维码主视觉，方框藏起；号码/验证码表单占中轴 */
+.connect-qr-wrap.phone-mode{display:none!important;}
+.connect-phone-view,.connect-code-view{max-width:320px;margin:0 auto;text-align:left;}
+.connect-phone-label{display:block;font-size:12px;line-height:1.45;color:var(--ink-slate5,#64748b);margin:0 0 8px;}
+:root[data-cp-theme="dark"] .connect-phone-label{color:var(--ink-slate5,#94a3b8);}
+.connect-phone-input,.connect-code-input{width:100%;box-sizing:border-box;font-size:16px;letter-spacing:.02em;}
+.connect-code-input{font-variant-numeric:tabular-nums;letter-spacing:.18em;text-align:center;font-weight:600;}
+.connect-code-view .connect-actions{display:flex;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:wrap;}
+#connect-code-resend{border:0;background:none;padding:0 8px 0 0;min-width:7.5em;font-size:12px;color:var(--accent);cursor:pointer;}
+#connect-code-resend:disabled{color:var(--text-sub);cursor:default;opacity:.75;}
 .connect-qr-chrome{display:none;position:absolute;top:0;left:0;right:0;height:20px;background:var(--bg-elev);border-bottom:1px solid var(--border);align-items:center;gap:4px;padding:0 8px;z-index:2;}
 .connect-qr-chrome i{width:7px;height:7px;border-radius:50%;background:var(--border);}
 .connect-qr-wrap.hosted.has-img .connect-qr-chrome{display:flex;}
-.connect-live-badge{display:none;position:absolute;top:25px;right:6px;z-index:2;font-size:10px;font-weight:700;letter-spacing:.4px;padding:1px 7px;border-radius:999px;background:color-mix(in srgb, var(--green,#16a34a) 14%, transparent);color:var(--tk-emerald-ink,#047857);border:1px solid color-mix(in srgb, var(--green,#16a34a) 35%, transparent);}
+/* 亮色钉深绿 #047857（绿渍底上 tk-ok-ink 亮档 #15803d 实测仅 4.22:1，深一档才过
+   AA=4.61）；暗色由下一行覆盖走 --tk-ok-ink 暗档（旧写法引用本页从未定义的
+   --tk-emerald-ink → 暗色恒走亮色回落，wrap 深底上实测 2.36:1，即本次病根）。 */
+.connect-live-badge{display:none;position:absolute;top:25px;right:6px;z-index:2;font-size:10px;font-weight:700;letter-spacing:.4px;padding:1px 7px;border-radius:999px;background:color-mix(in srgb, var(--green,#16a34a) 14%, transparent);color:#047857;border:1px solid color-mix(in srgb, var(--green,#16a34a) 35%, transparent);}
+:root[data-cp-theme="dark"] .connect-live-badge{color:var(--tk-ok-ink,#34d399);}
 .connect-qr-wrap.hosted.has-img .connect-live-badge{display:inline-flex;align-items:center;}
 @keyframes connect-live-dot{0%,100%{opacity:1;}50%{opacity:.35;}}
 .connect-live-badge::before{content:'';display:inline-block;width:5px;height:5px;border-radius:50%;background:currentColor;margin-right:4px;animation:connect-live-dot 1.6s ease-in-out infinite;}
-.connect-hosted-note{font-size:10.5px;color:var(--text-tiny);line-height:1.6;margin:-6px auto 10px;max-width:340px;}
+.connect-hosted-note{font-size:11px;color:var(--text-sub);line-height:1.6;margin:-6px auto 10px;max-width:340px;}
+/* 错误详情原文（模板内联样式给的 --text-tiny 亮色 4.47:1 差一线；本文件晚于
+   模板 <style> 加载，同特异性覆盖即可，不动热区模板）。 */
+.connect-err-body{color:var(--text-sub);}
 /* 托管登录「谁来操作」出口：坐席不在服务器旁时一键把指引转交运维 */
 .connect-hosted-ops{display:flex;align-items:center;justify-content:center;gap:6px;font-size:11.5px;color:var(--text-sub);margin-top:10px;}
 .connect-ops-copy{border:0;background:none;padding:0;font-size:11.5px;font-weight:600;color:var(--accent);cursor:pointer;text-decoration:underline;text-underline-offset:2px;}

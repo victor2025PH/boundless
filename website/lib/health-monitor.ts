@@ -5,6 +5,7 @@ import { getAdminChats } from "./admin-store";
 import { appendAlert, listAlertsSince } from "./alert-log";
 import { SITE_URL } from "./site";
 import { DATA_DIR } from "./data-dir";
+import { card } from "./tg-card";
 
 const DIR = DATA_DIR;
 const STATE = process.env.HEALTH_STATE || path.join(DIR, "health-state.json");
@@ -97,10 +98,47 @@ async function maybeDailyDigest(st: State, h: HealthResult, now: number, force =
     `Telegram Bot：${tg.ok ? `✅ @${tg.bot ?? "?"}` : "⚠️ 不可达"}`,
   ];
   if (!h.healthy) lines.push(``, `降级原因：${h.reasons.map((r) => `\n· ${r}`).join("")}`);
+
+  // P2-⑩ 激活 SLO 并入日报（评估失败绝不拖垮日报；破线时日报后再补一张告警卡）
+  let sloBreach: string[] | null = null;
+  try {
+    const { activationSlo } = await import("./activation-funnel");
+    const slo = await activationSlo(7);
+    if (slo.evaluated) {
+      lines.push(...slo.lines);
+      if (slo.breached) sloBreach = slo.lines;
+    }
+  } catch {
+    /* funnel 数据面缺失＝日报少一行，不报错 */
+  }
   lines.push(``, `详情：${SITE_URL}/api/health`);
 
-  const delivered = await notifyAdmins(lines.join("\n"));
+  const delivered = await notifyAdmins(
+    card({
+      sev: "digest",
+      cat: "服务器",
+      title: `官网每日健康日报 · ${day}`,
+      body: lines.slice(1).join("\n").trim(),
+      source: "官网健康巡检",
+    })
+  );
   await appendAlert({ kind: "digest", reasons: [`deg${degradeN}`, `rec${recoverN}`], delivered: delivered > 0 });
+  if (sloBreach) {
+    // 单独的破线卡：日报是「顺便看一眼」，破线是「今天要处理」——严重级别分开
+    await notifyAdmins(
+      card({
+        sev: "warn",
+        cat: "增长",
+        title: "激活 SLO 破线",
+        body: sloBreach.join("\n") +
+          `\n排查顺序：/console/funnel 看卡点段 → /console/errors 看同码聚集 → ` +
+          `挽回名单联系用户。`,
+        source: "激活漏斗巡检",
+      })
+    ).catch(() => {});
+    await appendAlert({ kind: "degrade", reasons: ["activation_slo"], delivered: true })
+      .catch(() => {});
+  }
   return force ? undefined : day; // drills don't consume the day slot
 }
 
@@ -136,9 +174,15 @@ export async function runHealthAlert(
     if (shouldPage) {
       const downMins = Math.round((now - (st.since ?? now)) / 60000);
       const delivered = await notifyAdmins(
-        `🚨 <b>服务降级告警</b>（连续 ${consec} 次确认）\n\n` +
-          `原因：${h.reasons.map((r) => `\n· ${r}`).join("")}\n\n` +
-          `已持续约 ${downMins} 分钟\n时间：${h.time}\n详情：${SITE_URL}/api/health`
+        card({
+          sev: "critical",
+          cat: "服务器",
+          title: `官网服务降级（连续 ${consec} 次确认）`,
+          body:
+            `原因：${h.reasons.map((r) => `\n· ${r}`).join("")}\n` +
+            `已持续约 ${downMins} 分钟\n详情：${SITE_URL}/api/health`,
+          source: "官网健康巡检",
+        })
       );
       await appendAlert({ kind: "degrade", reasons: h.reasons, delivered: delivered > 0, consec, escalated: true });
       alerted = true;
@@ -154,7 +198,15 @@ export async function runHealthAlert(
     // Recovery is only worth paging if we actually escalated for this episode.
     if (st.degraded && st.escalated) {
       const mins = Math.round((st.since ? now - st.since : 0) / 60000);
-      const delivered = await notifyAdmins(`✅ <b>服务已恢复正常</b>\n\n本次降级持续约 ${mins} 分钟。`);
+      const delivered = await notifyAdmins(
+        card({
+          sev: "recover",
+          cat: "服务器",
+          title: "官网服务已恢复正常",
+          body: `本次降级持续约 ${mins} 分钟。`,
+          source: "官网健康巡检",
+        })
+      );
       await appendAlert({ kind: "recover", reasons: [`down_${mins}min`], delivered: delivered > 0 });
       alerted = true;
     }

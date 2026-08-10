@@ -4,6 +4,14 @@
 - 用 AI 自动生成知识条目草稿
 - 存入 kb_drafts 表等人工审核
 - 审核通过后一键入库
+
+2026-08-02 断粮复盘改造：
+- AI 客户端改为**可选**——stats/list/approve/reject/edit 全是纯 DB 操作，
+  不该被"AI 不可达"连坐（zhiliao 实锤：telegram 协议客户端下线后整个
+  /api/learner/* 家族假空，库里 3 条待审草稿被藏了一周多）。
+- 素材收集出**漏斗计数**（总量/占位符/非问题样式/低于门槛/已有草稿），
+  每次运行落 kb_meta（learner_last_run），页面可自解释"为什么是 0"。
+- 新增手动喂料 feed_and_learn（运营把没答好的问题直接入队，AI 可用时当场生成）。
 """
 
 import asyncio
@@ -13,9 +21,32 @@ import sqlite3
 import time
 import uuid
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
+
+from src.utils.kb_gate import is_system_placeholder, looks_like_kb_query
 
 _logger = logging.getLogger("ai_chat_assistant.DailyLearner")
+
+LAST_RUN_META_KEY = "learner_last_run"
+
+
+def resolve_learner_ai(app=None, telegram_client=None):
+    """学习引擎 AI 客户端回落链：telegram 协议客户端 → app.state.ai_client → skill_manager。
+
+    实锤（2026-08-02）：实例迁到 RPA/收件箱形态后 telegram_client=None，
+    绑死它的取法让学习队列页面在库里有数据时也渲染成全 0。
+    """
+    ai = getattr(telegram_client, "ai_client", None) if telegram_client else None
+    if ai is not None:
+        return ai
+    state = getattr(app, "state", None) if app is not None else None
+    if state is None:
+        return None
+    ai = getattr(state, "ai_client", None)
+    if ai is not None:
+        return ai
+    sm = getattr(state, "skill_manager", None)
+    return getattr(sm, "ai_client", None) if sm is not None else None
 
 
 class DailyLearner:
@@ -38,13 +69,27 @@ class DailyLearner:
     );
     """
 
-    def __init__(self, kb_store, ai_client, db_path: Optional[Path] = None):
+    def __init__(self, kb_store, ai_client=None, db_path: Optional[Path] = None):
         self._kb = kb_store
-        self._ai = ai_client
-        self._db_path = db_path or (
-            Path(kb_store._db_path).parent / "knowledge_base.db"
-        )
+        self._ai = ai_client  # 可为 None：纯 DB 操作（审核/统计）不需要 AI
+        if db_path is None:
+            # 真实 KnowledgeBaseStore 的属性是 db_path（无下划线）；旧 mock/旧代码
+            # 用 _db_path——两者都认，避免"不传 db_path 就 AttributeError"的暗雷。
+            kb_db = getattr(kb_store, "_db_path", None) or getattr(kb_store, "db_path", None)
+            if kb_db is None:
+                raise ValueError("DailyLearner 需要 db_path 或带 db_path 属性的 kb_store")
+            db_path = Path(kb_db).parent / "knowledge_base.db"
+        self._db_path = db_path
         self._ensure_table()
+
+    @property
+    def ai_ready(self) -> bool:
+        return self._ai is not None
+
+    def attach_ai(self, ai_client) -> None:
+        """AI 客户端晚绑定（启动顺序/热接入后补挂，缓存实例即刻恢复生成能力）。"""
+        if ai_client is not None:
+            self._ai = ai_client
 
     _MIGRATION_CONFIDENCE = (
         "ALTER TABLE kb_drafts ADD COLUMN confidence INTEGER DEFAULT 0",
@@ -85,22 +130,50 @@ class DailyLearner:
 
     def collect_learning_material(self, min_miss_count: int = 2,
                                   max_items: int = 20) -> List[Dict]:
+        """向后兼容薄封装：只要素材列表，不要漏斗。"""
+        materials, _ = self.collect_with_funnel(
+            min_miss_count=min_miss_count, max_items=max_items
+        )
+        return materials
+
+    def collect_with_funnel(self, min_miss_count: int = 2,
+                            max_items: int = 20) -> Tuple[List[Dict], Dict]:
         """
-        从三个来源收集需要学习的素材：
-        1. miss_log 高频未命中
+        从三个来源收集需要学习的素材，并输出漏斗计数（页面自解释"为什么是 0"）：
+        1. miss_log 高频未命中（占位符/非问题样式在此过滤——历史池子里
+           已混入陪聊闲聊与系统占位符，采集侧兜底一层）
         2. kb_feedback 负反馈（score <= 0 且未处理）
         3. 弱命中（已有条目但匹配分数低）
         """
-        materials = []
+        materials: List[Dict] = []
         seen_queries = set()
+        funnel = {
+            "miss_total": 0, "miss_placeholder": 0, "miss_not_question": 0,
+            "miss_below_threshold": 0, "miss_qualified": 0,
+            "feedback_material": 0, "weak_hits": 0,
+            "already_drafted": 0, "final": 0,
+            "min_miss_count": max(1, int(min_miss_count)),
+        }
+        min_miss_count = funnel["min_miss_count"]
 
-        # 来源 1：高频未命中
-        miss_stats = self._kb.get_miss_stats(top_k=30)
+        # 来源 1：高频未命中（filter 后可用名额变少，top_k 放宽到 100）
+        miss_stats = self._kb.get_miss_stats(top_k=100)
         for m in miss_stats:
             q = m["query"].strip()
             if q.startswith("[TRANSLATE:"):
+                continue  # 翻译缺口标记走独立管线，不计入学习漏斗
+            funnel["miss_total"] += 1
+            if is_system_placeholder(q):
+                funnel["miss_placeholder"] += 1
                 continue
-            if m["cnt"] >= min_miss_count and q not in seen_queries:
+            if not looks_like_kb_query(q):
+                funnel["miss_not_question"] += 1
+                continue
+            if m["cnt"] < min_miss_count:
+                funnel["miss_below_threshold"] += 1
+                continue
+            if q not in seen_queries:
+                funnel["miss_qualified"] += 1
                 materials.append({
                     "source": "miss",
                     "query": q,
@@ -115,7 +188,8 @@ class DailyLearner:
             for fb in feedbacks:
                 if fb.get("score", 0) <= 0 and not fb.get("added_to_examples"):
                     q = fb.get("user_message", "").strip()
-                    if q and q not in seen_queries:
+                    if q and not is_system_placeholder(q) and q not in seen_queries:
+                        funnel["feedback_material"] += 1
                         materials.append({
                             "source": "negative_feedback",
                             "query": q,
@@ -135,7 +209,8 @@ class DailyLearner:
             for s in suggestions:
                 if s.get("source") == "weak_hit":
                     q = s.get("query", "").strip()
-                    if q and q not in seen_queries:
+                    if q and not is_system_placeholder(q) and q not in seen_queries:
+                        funnel["weak_hits"] += 1
                         materials.append({
                             "source": "weak_hit",
                             "query": q,
@@ -153,16 +228,23 @@ class DailyLearner:
                 "SELECT query FROM kb_drafts WHERE status IN ('pending','approved')"
             ).fetchall()
             existing = {r["query"] for r in rows}
+        before = len(materials)
         materials = [m for m in materials if m["query"] not in existing]
+        funnel["already_drafted"] = before - len(materials)
 
         materials.sort(key=lambda x: -x["count"])
-        return materials[:max_items]
+        materials = materials[:max_items]
+        funnel["final"] = len(materials)
+        return materials, funnel
 
     async def generate_drafts(self, materials: List[Dict],
                               domain_context: str = "") -> List[Dict]:
         """用 AI 批量生成知识条目草稿"""
         if not materials:
             _logger.info("没有需要学习的素材")
+            return []
+        if not self._ai:
+            _logger.warning("AI 客户端不可用，无法生成草稿（素材保留在池中）")
             return []
 
         categories = []
@@ -298,31 +380,112 @@ class DailyLearner:
                     pass
         return saved
 
-    async def run_daily_learn(self, domain_context: str = "") -> Dict:
-        """执行一次完整的学习流程"""
-        _logger.info("开始每日自动学习...")
+    async def run_daily_learn(self, domain_context: str = "",
+                              min_miss_count: Optional[int] = None,
+                              source: str = "scheduled") -> Dict:
+        """执行一次完整的学习流程。
 
-        materials = self.collect_learning_material()
+        无论收集结果如何都落 last_run（kb_meta）——「上次跑了、收集了多少、
+        为什么是 0」必须对页面可见，否则全 0 页面无法自解释。
+        """
+        _logger.info("开始每日自动学习...")
+        t0 = time.time()
+        try:
+            mmc = 2 if min_miss_count is None else max(1, int(min_miss_count))
+        except (TypeError, ValueError):
+            mmc = 2
+
+        materials, funnel = self.collect_with_funnel(min_miss_count=mmc)
         _logger.info("收集到 %d 条学习素材", len(materials))
 
-        if not materials:
-            return {"collected": 0, "generated": 0, "saved": 0}
+        result = {"collected": len(materials), "generated": 0, "saved": 0}
+        if materials and not self._ai:
+            # 有素材但 AI 不可用：如实记录，素材留在池里等 AI 恢复后下轮处理
+            result["error"] = "ai_unavailable"
+            _logger.warning("有 %d 条学习素材但 AI 客户端不可用，跳过生成", len(materials))
+        elif materials:
+            drafts = await self.generate_drafts(materials, domain_context)
+            _logger.info("AI 生成了 %d 条草稿", len(drafts))
 
-        drafts = await self.generate_drafts(materials, domain_context)
-        _logger.info("AI 生成了 %d 条草稿", len(drafts))
+            saved = self.save_drafts(drafts)
+            _logger.info("保存了 %d 条草稿，等待人工审核", saved)
+            result.update({"generated": len(drafts), "saved": saved})
 
-        saved = self.save_drafts(drafts)
-        _logger.info("保存了 %d 条草稿，等待人工审核", saved)
+            # 清理已处理的 miss_log 条目
+            for m in materials:
+                if m["source"] == "miss":
+                    try:
+                        self._kb.delete_miss_entry(m["query"])
+                    except Exception:
+                        pass
 
-        # 清理已处理的 miss_log 条目
-        for m in materials:
-            if m["source"] == "miss":
-                try:
-                    self._kb.delete_miss_entry(m["query"])
-                except Exception:
-                    pass
+        self._record_last_run(result, funnel, source,
+                              duration_ms=int((time.time() - t0) * 1000))
+        return result
 
-        return {"collected": len(materials), "generated": len(drafts), "saved": saved}
+    def _record_last_run(self, result: Dict, funnel: Dict, source: str,
+                         duration_ms: int = 0) -> None:
+        """把本轮运行结果落 kb_meta（best-effort，绝不影响学习流程本身）。"""
+        try:
+            payload = {
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "source": source,
+                "collected": result.get("collected", 0),
+                "generated": result.get("generated", 0),
+                "saved": result.get("saved", 0),
+                "duration_ms": duration_ms,
+                "funnel": funnel,
+            }
+            if result.get("error"):
+                payload["error"] = result["error"]
+            self._kb.set_meta(LAST_RUN_META_KEY, json.dumps(payload, ensure_ascii=False))
+        except Exception:
+            _logger.debug("last_run 落盘失败（忽略）", exc_info=True)
+
+    def last_run(self) -> Optional[Dict]:
+        try:
+            raw = self._kb.get_meta(LAST_RUN_META_KEY)
+            return json.loads(raw) if raw else None
+        except Exception:
+            return None
+
+    async def feed_and_learn(self, query: str, domain_context: str = "",
+                             min_miss_count: int = 2) -> Dict:
+        """手动喂料：把运营指定的问题入队；AI 可用则当场生成草稿。
+
+        人工点名的问题**不过问题样式过滤**（人的判断优先于启发式）；
+        重复（已有 pending/approved 同题草稿）直接短路，不烧 LLM。
+        """
+        q = str(query or "").strip()[:200]
+        if len(q) < 2:
+            return {"queued": False, "reason": "too_short"}
+
+        with self._conn() as c:
+            dup = c.execute(
+                "SELECT id FROM kb_drafts WHERE query=? AND status IN ('pending','approved')",
+                (q,)
+            ).fetchone()
+        if dup:
+            return {"queued": False, "reason": "duplicate", "draft_id": dup["id"]}
+
+        # 先落池（AI 不可用时素材不丢，等下轮定时学习收割）
+        try:
+            self._kb.seed_miss(q, min_cnt=max(1, int(min_miss_count)))
+        except Exception:
+            _logger.debug("seed_miss 失败（忽略）", exc_info=True)
+
+        if not self._ai:
+            return {"queued": True, "generated": 0, "reason": "ai_unavailable"}
+
+        material = {"source": "manual", "query": q, "count": max(1, int(min_miss_count))}
+        drafts = await self.generate_drafts([material], domain_context)
+        saved = self.save_drafts(drafts) if drafts else 0
+        if saved:
+            try:
+                self._kb.delete_miss_entry(q)
+            except Exception:
+                pass
+        return {"queued": True, "generated": saved}
 
     # ── 草稿管理 API ──
 
@@ -463,8 +626,20 @@ class DailyLearner:
             dup_flagged = c.execute(
                 "SELECT COUNT(*) FROM kb_drafts WHERE status='pending' AND dup_score > 0"
             ).fetchone()[0]
-        return {"pending": pending, "approved": approved, "rejected": rejected,
-                "dup_flagged": dup_flagged}
+        out = {"pending": pending, "approved": approved, "rejected": rejected,
+               "dup_flagged": dup_flagged}
+        # 未命中池现存量（排除翻译标记）——状态条用，坏了不影响主数据
+        try:
+            with self._kb._conn() as c:
+                out["miss_rows"] = c.execute(
+                    "SELECT COUNT(*) FROM kb_miss_log WHERE query NOT LIKE '[TRANSLATE:%'"
+                ).fetchone()[0]
+        except Exception:
+            pass
+        lr = self.last_run()
+        if lr:
+            out["last_run"] = lr
+        return out
 
     # ── A3: Semantic duplicate detection ─────────────────────────────
 

@@ -94,6 +94,10 @@ class AutosendWorker:
         persona_resolver: Optional[Callable[[str, str], str]] = None,
         sleep: Optional[Callable[[float], Awaitable[Any]]] = None,
         deliver_only: bool = False,
+        dup_guard_cfg: Optional[Dict[str, Any]] = None,
+        fresh_guard_cfg: Optional[Dict[str, Any]] = None,
+        work_schedule_provider: Optional[Callable[[], Dict[str, Any]]] = None,
+        catchup_regenerate_cb: Optional[Callable[..., bool]] = None,
     ) -> None:
         cfg = config or {}
         # deliver_only=True：本实例**只**作「人工通过→真投递」的载体，自动轮询循环
@@ -123,6 +127,17 @@ class AutosendWorker:
         self._mark_read_callback: Optional[MarkReadCallback] = mark_read_callback
         # 打字状态回调（None=不挂打字状态，旧行为；非 None=打字延迟期间周期挂「正在输入」）。
         self._typing_callback: Optional[TypingCallback] = typing_callback
+        # 拟人链运行时开关（P1 2026-08-02）：回调「有没有」是装配期能力（deliver 模式
+        # 才建），「用不用」是运营开关——两者此前都冻在构造期，设置页改
+        # mark_read_before_reply / typing_indicator 只能等重启。现在开关由 worker
+        # 自持（apply_humanize_flags 可热更），bootstrap 以 always=True 装配回调。
+        self._mark_read_enabled: bool = bool(cfg.get("mark_read_before_reply", True))
+        self._typing_enabled: bool = bool(cfg.get("typing_indicator", True))
+        # 平台拟人开关覆写（P1 2026-08-03）：{platform: {mark_read?, typing?}}。
+        # 显式 true/false 覆盖全局开关（全局关时也可单平台开）；缺省=跟随全局。
+        # 与 deliver_delay 同款「构造期拷贝 + 热更入口」（apply_platform_humanize）。
+        self._platform_humanize: Dict[str, Dict[str, Any]] = \
+            self._norm_platform_humanize(cfg.get("platform_humanize"))
         # 人设解析器（None=不按人设化节奏，用 block 顶层默认；非 None=按 (platform,account_id)
         # 解析 persona_id → 合并 deliver_delay.persona_overrides + 观测按人设分维）。
         self._persona_resolver: Optional[Callable[[str, str], str]] = persona_resolver
@@ -142,6 +157,17 @@ class AutosendWorker:
         # （见 humanize.compute_pacing_delay），否则 uniform(min,max)。原始块整体留存，
         # 交由 compute_pacing_delay 统一解析（单一装配点，与原生 A 线回复共用）。
         self._deliver_delay_block: Dict[str, Any] = dict(cfg.get("deliver_delay") or {})
+        # 并行投递（2026-08-09，默认关）：拟人节奏上线后单条投递可占 30-54s 延迟
+        # + 至多 75s 分条间隔，串行循环下并发会话互相排队。开启后按会话分组并发
+        # （同会话保序），见 _deliver_parallel。max_concurrent 夹 [1,8] 防误配。
+        _par_cfg = cfg.get("parallel_deliver") or {}
+        self._parallel_enabled: bool = bool(_par_cfg.get("enabled", False))
+        try:
+            self._parallel_max: int = max(1, min(8, int(
+                _par_cfg.get("max_concurrent", 3))))
+        except (TypeError, ValueError):
+            self._parallel_max = 3
+        self.parallel_batches: int = 0
         # 可注入 sleep（测试用）；生产用 asyncio.sleep
         self._sleep: Callable[[float], Awaitable[Any]] = sleep or asyncio.sleep
 
@@ -205,6 +231,44 @@ class AutosendWorker:
         self.total_skipped_raced: int = 0    # resolve 撞闸门（已被人工/他方处置）跳过数
         self.total_human_delivered: int = 0      # 人工通过草稿经本 worker 真投递成功数
         self.total_human_deliver_errors: int = 0  # 人工通过草稿投递失败数
+        self.total_dup_blocked: int = 0          # 出站近重复守卫拦截数（不算投递错误）
+        self.total_superseded: int = 0           # 新入站过期守卫跳过数（fresh_guard，不算 error）
+        # 工作时间闸扣留事件数（同一草稿每 tick 重扫会重复计数——这是「扣留中」的
+        # 活动信号而非唯一草稿数；复班后自然归零增长）
+        self.total_skipped_off_hours: int = 0
+        self.total_catchup_regenerated: int = 0  # 复班补觉：作废陈稿并重拟的条数
+
+        # 出站近重复守卫（2026-08-02）：与最近出站（DB 镜像 + 进程级在途登记表）比对，
+        # 命中即静默跳过——防「客户连发多条 → 两次独立生成互不知情 → 同义双发」。
+        # 配置由 bootstrap 经 resolve_guard_cfg 注入（本 worker 拿不到全局配置树，
+        # 与 _dead_peer_shared 同理）；None/enabled=false = 零行为变更。
+        self._dup_guard_cfg: Dict[str, Any] = dict(dup_guard_cfg or {})
+
+        # 新入站过期守卫（fresh_guard，2026-08-03，默认关）：拟稿窗口里客户又说了话
+        # → 旧稿答非所问且新稿马上会再发一条。配置优先取 bootstrap 注入（完整树解析，
+        # 含 auto_draft.min_text_len 镜像——与 dup_guard_cfg 同一注入范式）；未注入时
+        # 从本 cfg 块自解析（enabled/grace 可用）。解析失败按关闭，绝不影响构造。
+        try:
+            from src.inbox.draft_fresh_guard import parse_fresh_guard_cfg
+            self._fresh_guard_cfg: Dict[str, Any] = (
+                dict(fresh_guard_cfg) if isinstance(fresh_guard_cfg, dict)
+                else parse_fresh_guard_cfg(cfg))
+        except Exception:
+            self._fresh_guard_cfg = {"enabled": False}
+
+        # 工作时间班表（inbox.work_schedule，2026-08-04，默认关）：账号休息中
+        # 的 L2 草稿**留 pending 不处置**（复班自动接续），危机消息穿透照发。
+        # provider=每次调用活读 config 根的闭包（班表改动经 overlay 热重载即生效，
+        # 与 dup/fresh 的「构造期冻结」刻意不同——作息是运营高频调的东西）；
+        # None = 未接线 = 零行为变更。判定全程 fail-open（见 work_hours_gate）。
+        self._ws_provider: Optional[Callable[[], Dict[str, Any]]] = \
+            work_schedule_provider
+        # 复班补觉重拟回调（P1）：(conv_dict, peer_text) -> bool（True=已派发重拟）。
+        # 由 bootstrap 在 auto_draft 装配完成后经 set_catchup_regenerate_cb 注入
+        # （worker 先于 auto_draft 构造，构造期拿不到）；未注入 = 不作废不重拟，
+        # 陈稿按旧行为原样投递——绝不允许「作废了却没人重拟」的静默丢回复。
+        self._catchup_regen_cb: Optional[Callable[..., bool]] = \
+            catchup_regenerate_cb
 
     # ── 生命周期 ──────────────────────────────────────────────
 
@@ -282,20 +346,121 @@ class AutosendWorker:
             return False
         return True
 
+    def _dup_guard_check(self, item: Dict[str, Any],
+                         send_text: str) -> Optional[Dict[str, Any]]:
+        """出站近重复判定：DB 出站镜像 + 进程级在途登记表合并比对。
+
+        防御式：store 缺失/查询异常按「不命中」（守卫绝不阻断正常投递）。
+        """
+        conv = str(item.get("conversation_id") or "")
+        if not conv:
+            return None
+        rows: List[Dict[str, Any]] = []
+        store = getattr(self._svc, "_store", None)
+        if store is not None:
+            try:
+                rows = list(store.list_recent_messages(conv, limit=8) or [])
+            except Exception:
+                rows = []
+        try:
+            from src.inbox.outbound_dup_guard import (
+                near_duplicate_of_recent,
+                outbound_registry,
+            )
+            rows.extend(outbound_registry.recent_rows(conv))
+            return near_duplicate_of_recent(
+                send_text, rows,
+                window_sec=float(self._dup_guard_cfg.get("window_sec", 180.0)),
+            )
+        except Exception:
+            logger.debug("[AutosendWorker] 近重复守卫异常（放行）", exc_info=True)
+            return None
+
+    def apply_deliver_delay(self, block: Optional[Dict[str, Any]]) -> None:
+        """运行时热更新拟人打字延迟配置（「自动回复设置」页保存后即时生效）。
+
+        ``_deliver_delay_block`` 在构造时从 config 拷贝了一份——写 overlay 后
+        config 热重载不会传导到这里，若不提供本入口，设置页改「回复速度」就成了
+        「已保存但线上没变」的静默失真（本仓 CWD 相对路径同款病）。传完整块
+        （含 persona_overrides 等本页不管的键），替换语义与构造时一致。"""
+        self._deliver_delay_block = dict(block or {})
+
+    def apply_humanize_flags(
+        self, *, mark_read: Optional[bool] = None, typing: Optional[bool] = None,
+    ) -> None:
+        """运行时热更新拟人链开关（已读回执 / 打字气泡），None=不动该项。
+
+        与 ``apply_deliver_delay`` 同一模式：开关构造期从 cfg 拷贝、写 overlay
+        传导不到，设置页保存后由路由调本入口即时生效。只改「用不用」——回调
+        本体（「有没有」，deliver 模式装配）不在此处变更。"""
+        if mark_read is not None:
+            self._mark_read_enabled = bool(mark_read)
+        if typing is not None:
+            self._typing_enabled = bool(typing)
+
+    @staticmethod
+    def _norm_platform_humanize(raw: Any) -> Dict[str, Dict[str, Any]]:
+        """归一平台拟人覆写表：平台键小写、条目须为 dict（其余静默丢弃）。"""
+        out: Dict[str, Dict[str, Any]] = {}
+        if isinstance(raw, dict):
+            for k, v in raw.items():
+                if isinstance(v, dict):
+                    out[str(k).lower()] = dict(v)
+        return out
+
+    def apply_platform_humanize(self, block: Optional[Dict[str, Any]]) -> None:
+        """运行时热更新平台拟人开关覆写表（「自动回复设置」页保存后即时生效）。
+
+        整表替换语义（与构造时一致）：删掉的平台真被删掉、回到跟随全局。"""
+        self._platform_humanize = self._norm_platform_humanize(block)
+
+    def _humanize_flag(self, platform: str, key: str) -> bool:
+        """某平台的拟人开关生效值：平台显式覆写 > 全局开关（缺省=跟随全局）。"""
+        base = (self._mark_read_enabled if key == "mark_read"
+                else self._typing_enabled)
+        try:
+            v = (self._platform_humanize.get(
+                str(platform or "").lower()) or {}).get(key)
+        except Exception:
+            v = None
+        return base if v is None else bool(v)
+
+    def runtime_pacing_snapshot(self) -> Dict[str, Any]:
+        """线上实际生效的节奏/拟人参数（设置页「保存后回读验证」用）。
+
+        与 status_snapshot 的区别：这里回的是 worker **内存里正在用**的值——
+        「overlay 写成功 + 热更调成功」之后，UI 拿它对账「线上真的变了」，
+        闭合「已保存但没生效」的信任缺口。"""
+        return {
+            "deliver_delay": dict(self._deliver_delay_block),
+            "mark_read_enabled": (
+                self._mark_read_callback is not None and self._mark_read_enabled),
+            "typing_enabled": (
+                self._typing_callback is not None and self._typing_enabled),
+            "mark_read_capable": self._mark_read_callback is not None,
+            "typing_capable": self._typing_callback is not None,
+            "platform_humanize": {
+                k: dict(v) for k, v in self._platform_humanize.items()},
+        }
+
     def _pick_deliver_delay(
         self, text: str = "", elapsed_sec: float = 0.0, persona_id: str = "",
+        platform: str = "",
     ) -> float:
         """按 deliver_delay 配置取本次拟人延迟（秒）。统一走 resolve_pacing：
-        先按 ``persona_id`` 合并 persona_overrides；adaptive=false→uniform(min,max)（旧行为）；
-        adaptive=true→按回复内容长度/激活度估时并扣除 ``elapsed_sec`` 已耗时。未配置/非法 → 0。
-        顺带按人设分维记录节奏观测（best-effort）。"""
+        先合并覆写层（人设 > 平台 > 全局，见 humanize._apply_scoped_overrides）；
+        adaptive=false→uniform(min,max)（旧行为）；adaptive=true→按回复内容长度/
+        激活度估时并扣除 ``elapsed_sec`` 已耗时。未配置/非法 → 0。
+        顺带按 平台/人设 分维记录节奏观测（best-effort；路径
+        ``autosend/{platform|-}/{persona|-}``，旧单段格式的前端解析已兼容两代）。"""
         from src.inbox.humanize import resolve_pacing
         r = resolve_pacing(
             self._deliver_delay_block, text=text, elapsed_sec=elapsed_sec,
-            persona_id=persona_id)
+            persona_id=persona_id, platform=platform)
         try:
             from src.integrations.humanize_metrics import record_pacing
-            record_pacing(f"autosend/{persona_id or '-'}", r)
+            record_pacing(
+                f"autosend/{platform or '-'}/{persona_id or '-'}", r)
         except Exception:
             pass
         return r.delay
@@ -304,13 +469,19 @@ class AutosendWorker:
         self, platform: str, account_id: str, chat_key: str,
         *, text: str = "", elapsed_sec: float = 0.0,
     ) -> None:
-        """投递前拟人序列：已读 → 打字续挂 → 拟人延迟（委托 humanize 协作器）。
+        """投递前拟人序列：已读 → 静默思考 → 打字续挂 → 投递（委托 humanize 协作器）。
 
         已读/打字回调缺省时各自跳过（无回调=旧行为）；延迟取 deliver_delay 配置
         （adaptive 时按 ``text`` 长度自适应、扣 ``elapsed_sec`` 已耗时）。mark_read 成功
         累计 total_marked_read（与旧口径一致：调用不抛即计数）。
+        打字气泡两段式（2026-08-04）：延迟前段静默（真人在想/在忙，无输入状态），
+        只有临发前 ``typing_lead``（按文本长度×人设手速估）秒挂「正在输入」——
+        全程挂打字的旧行为等于宣称「我打了一分钟字只打出一句话」。
         """
-        from src.inbox.humanize import run_presend_humanization
+        from src.inbox.humanize import (
+            resolve_typing_lead,
+            run_presend_humanization,
+        )
 
         # 人设解析（best-effort）：用于人设化节奏参数 + 观测分维。失败→空（用顶层默认）。
         # 优先 3 参（含 chat_key → 会话级覆写生效，节奏跟人走）；旧 2 参 resolver
@@ -327,11 +498,13 @@ class AutosendWorker:
                 _pid = ""
 
         _mr = None
-        if self._mark_read_callback is not None:
+        if (self._mark_read_callback is not None
+                and self._humanize_flag(platform, "mark_read")):
             async def _mr():
                 await self._mark_read_callback(platform, account_id, chat_key)
         _tp = None
-        if self._typing_callback is not None:
+        if (self._typing_callback is not None
+                and self._humanize_flag(platform, "typing")):
             async def _tp(action):
                 await self._typing_callback(platform, account_id, chat_key, action)
 
@@ -339,12 +512,16 @@ class AutosendWorker:
             self.total_marked_read += 1
 
         await run_presend_humanization(
-            delay=self._pick_deliver_delay(text, elapsed_sec, persona_id=_pid),
+            delay=self._pick_deliver_delay(
+                text, elapsed_sec, persona_id=_pid, platform=platform),
             action="typing",
             mark_read=_mr,
             typing=_tp,
             sleep=self._sleep,
             refresh_sec=_TYPING_REFRESH_SEC,
+            typing_lead_sec=resolve_typing_lead(
+                self._deliver_delay_block, text=text,
+                persona_id=_pid, platform=platform),
             on_marked=_inc_marked,
         )
 
@@ -546,135 +723,16 @@ class AutosendWorker:
                     continue
                 deliver_now.append(r["item"])
         if self._send_callback is not None and deliver_now:
-            for item in deliver_now:
-                try:
-                    # 出站翻译：投递前把 AI 中文回复译成客户语言（补「全自动聊天翻译」闭环）。
-                    # 一般不阻塞投递（回调内部异常/不可译回落原文）；唯一例外＝回调返回
-                    # None（HOLD：文本含 CJK 而客户语言非 CJK 且翻译不可用）→ 按投递失败
-                    # 处理（进重试队列，翻译引擎恢复后自动补投）——发中文给外语客户是
-                    # 人设事故，比这条消息迟到更糟（2026-07-31 198 实锤）。
-                    send_text = str(item.get("text", ""))
-                    if self._translate_callback is not None:
-                        _tx = send_text
-                        try:
-                            _tx = await self._translate_callback(item)
-                        except Exception:
-                            logger.warning(
-                                "[AutosendWorker] 出站翻译异常，发原文 conv=%s",
-                                item.get("conversation_id", "?"), exc_info=True)
-                        if _tx is None:
-                            raise RuntimeError(
-                                "translate_hold: 出站翻译不可用且文本语言与客户语言冲突，已拦截")
-                        if _tx:
-                            if _tx != send_text:
-                                self.total_translated += 1
-                            send_text = _tx
-                    # 拟人序列（已读 → 打字续挂 → 延迟）：统一走 humanize 协作器，
-                    # 与 L3 缓冲话术共用同一节奏。对端视角：已读 → 正在输入 → 收到回复。
-                    # best-effort：mark_read/typing 失败不阻断投递（协作器内部吞异常）。
-                    _plat = item.get("platform", "")
-                    _acc = item.get("account_id", "default")
-                    _ck = item.get("chat_key", "")
-                    # 自适应延迟按实际要发的文本长度估时，并扣除草稿创建至今的已耗时
-                    # （adaptive=true 时生效；总响应时长目标而非叠加）。
-                    _created = float(item.get("created_ts") or 0)
-                    _elapsed = max(0.0, time.time() - _created) if _created > 0 else 0.0
-                    await self._run_humanize(
-                        _plat, _acc, _ck, text=send_text, elapsed_sec=_elapsed)
-                    # original_text 透传（签名探测一次并缓存）：语音分支须用翻译前原文
-                    # 判定+合成；旧 4 参回调（含测试桩）不受影响。
-                    _send_kw: Dict[str, Any] = self._send_cb_kwargs(
-                        str(item.get("text", "")))
-                    res = await self._send_callback(
-                        item.get("platform", ""), item.get("account_id", "default"),
-                        item.get("chat_key", ""), send_text, **_send_kw,
-                    )
-                    # 投递失败判定：除显式 ok=False 外，编排器/出站闸门返回
-                    # {delivered: False} 或 {blocked: ...}（如 kill-switch/send-gate 拦截、
-                    # 桌面出站被闸门拒）也算未送达——否则会把「被拦截」误计为已送达刷指标。
-                    if isinstance(res, dict) and (
-                        res.get("ok") is False
-                        or res.get("delivered") is False
-                        or res.get("blocked")
-                    ):
-                        raise RuntimeError(str(
-                            res.get("error") or res.get("blocked") or "send not ok"))
-                    self.total_delivered += 1
-                    if int(item.get("_attempt", 0)) > 0:
-                        self.total_retry_recovered += 1
-                    try:   # P4 埋点：AI 承接（该会话首条自动回复投递成功，进程内每会话一次）
-                        from src.utils.telemetry import track_once
-                        _tele_cid = str(item.get("conversation_id") or "")
-                        track_once(f"ai_engaged:{_tele_cid}", "session.ai_engaged", {
-                            "session_id": _tele_cid,
-                            "first_response_ms": int(_elapsed * 1000)})
-                    except Exception:
-                        pass
-                except Exception as exc:  # noqa: BLE001
-                    self.total_deliver_errors += 1
-                    self.last_error = f"deliver: {exc}"
-                    _conv = str(item.get("conversation_id", "") or "?")
-                    _plat = item.get("platform", "?")
-                    _permanent = _is_permanent_send_error(str(exc))
-                    # 跨链共享登记（gated）：注销/被拉黑/无权限这类**永久**不可达写进
-                    # 共享表，A 线 sender 与 proactive 立即同步受益；peer 失效等可自愈类
-                    # 由 registry 按「非永久」忽略，仍只走下面的本地会话冷却。
-                    if _permanent:
-                        self._dead_peer_record(_conv, str(exc))
-                    # 永久性错误（无发言权/被拉黑/会话失效）→ 会话进封禁冷却；仅「首次进入
-                    # 封禁」打一条 WARNING，冷却窗口内的后续同类失败降级 debug（防刷屏）。
-                    if (self._send_block_cooldown_sec > 0
-                            and _conv != "?"
-                            and _permanent):
-                        _already = self._conv_send_blocked(_conv)
-                        self._blocked_conv_until[_conv] = (
-                            time.time() + self._send_block_cooldown_sec)
-                        if _already:
-                            logger.debug(
-                                "[AutosendWorker] 会话仍处发送封禁 conv=%s: %s", _conv, exc)
-                        else:
-                            logger.warning(
-                                "[AutosendWorker] 投递永久失败，暂停会话自动发 %.0fs "
-                                "conv=%s platform=%s: %s",
-                                self._send_block_cooldown_sec, _conv, _plat, exc)
-                    else:
-                        logger.warning(
-                            "[AutosendWorker] 投递失败 conv=%s platform=%s: %s",
-                            _conv, _plat, exc,
-                        )
-                    # Sprint2 可恢复：瞬时失败且未耗尽 → 排入重试队列（指数退避），不记 failed、
-                    # 不 re-resolve（幂等重发同文本）。永久错误不重试（会话已进封禁冷却）。
-                    _attempt = int(item.get("_attempt", 0))
-                    if (self._recoverable and not _permanent
-                            and _attempt + 1 < self._retry_max_attempts):
-                        _delay = min(
-                            self._retry_backoff_base * (2 ** _attempt),
-                            self._retry_backoff_max)
-                        _ritem = dict(item)
-                        _ritem["_attempt"] = _attempt + 1
-                        self._retry_queue.append(
-                            {"item": _ritem, "next_ts": time.time() + _delay})
-                        self.total_retry_scheduled += 1
-                        logger.info(
-                            "[AutosendWorker] 投递瞬时失败，%.0fs 后第%d次重试 conv=%s",
-                            _delay, _attempt + 1, _conv)
-                        continue  # 重试中：本条暂不记 autosend_failed
-                    if self._recoverable and not _permanent:
-                        self.total_retry_exhausted += 1
-                    # 写 autosend_failed 审计，让安全条/记录弹窗看见「自动发了但没送达」
-                    try:
-                        rec = getattr(self._svc, "record_autosend_failure", None)
-                        if rec is not None:
-                            rec(
-                                item.get("draft_id", ""),
-                                conversation_id=item.get("conversation_id", ""),
-                                reason=f"平台投递失败: {exc}",
-                            )
-                    except Exception:
-                        logger.debug("[AutosendWorker] autosend_failed 审计写入失败", exc_info=True)
-                    # Sprint2：开启 recoverable 时，永久/耗尽失败发实时提醒事件，坐席可补发。
-                    if self._recoverable:
-                        self._publish_deliver_failed(item, str(exc), permanent=_permanent)
+            # 并行投递（2026-08-09，默认关）：拟人节奏上线后单条投递可占
+            # 30-54s（deliver_delay）+ 至多 75s（分条间隔）——串行循环下并发
+            # 会话互相排队（§95 已知边界升级为实际瓶颈）。开启后按会话分组
+            # 并发：同会话保序串行（顺序/防双发不变量），跨会话受
+            # max_concurrent 信号量封顶。关闭=逐条串行（旧行为）。
+            if self._parallel_enabled and len(deliver_now) > 1:
+                await self._deliver_parallel(deliver_now)
+            else:
+                for item in deliver_now:
+                    await self._deliver_one(item)
 
         self.last_sent = sent
         self.total_sent += sent
@@ -724,6 +782,267 @@ class AutosendWorker:
             except Exception:
                 logger.debug("[AutosendWorker] cleanup_old_drafts 失败", exc_info=True)
 
+    async def _deliver_one(self, item: Dict[str, Any]) -> None:
+        """投递单条已 resolve 草稿（翻译→近重复守卫→拟人延迟→过期复查→发送→失败处置）。
+
+        2026-08-09 从 _tick 的串行 for 循环整体抽出（并行化前置）。并发语义边界：
+        **同会话必须串行**（调度层 _deliver_parallel 按会话分组保证——顺序与
+        防双发不变量都建立在会话内有序上）；跨会话可并发——本方法更新的共享
+        状态（计数器/重试队列/封禁表/dup 登记）全部在事件循环单线程语义下写入，
+        无跨线程共享。原 for 循环体的 continue 在此为 return（单条早退）。
+        """
+        _dup_token = 0  # 出站登记 token（失败撤销用），须在 try 外初始化
+        try:
+            # 出站翻译：投递前把 AI 中文回复译成客户语言（补「全自动聊天翻译」闭环）。
+            # 一般不阻塞投递（回调内部异常/不可译回落原文）；唯一例外＝回调返回
+            # None（HOLD：文本含 CJK 而客户语言非 CJK 且翻译不可用）→ 按投递失败
+            # 处理（进重试队列，翻译引擎恢复后自动补投）——发中文给外语客户是
+            # 人设事故，比这条消息迟到更糟（2026-07-31 198 实锤）。
+            send_text = str(item.get("text", ""))
+            if self._translate_callback is not None:
+                _tx = send_text
+                try:
+                    _tx = await self._translate_callback(item)
+                except Exception:
+                    logger.warning(
+                        "[AutosendWorker] 出站翻译异常，发原文 conv=%s",
+                        item.get("conversation_id", "?"), exc_info=True)
+                if _tx is None:
+                    raise RuntimeError(
+                        "translate_hold: 出站翻译不可用且文本语言与客户语言冲突，已拦截")
+                if _tx:
+                    if _tx != send_text:
+                        self.total_translated += 1
+                    send_text = _tx
+            # 出站近重复守卫（2026-08-02）：客户短时间连发多条 → 两次独立
+            # LLM 生成互不知情 → 同义双发。投递前与最近出站（DB + 在途登记）
+            # 最后核对一次，命中即静默跳过——不算投递错误、不喂熔断（重复
+            # 是「多余」不是「故障」）。重试项 (_attempt>0) 免检：重发同文本
+            # 是 recoverable 的既定语义。放行后**乐观登记**待发文本（先于
+            # humanize 延迟窗），让并行在途的下一条立即可见；失败即撤销。
+            _conv_id_g = str(item.get("conversation_id") or "")
+            if (self._dup_guard_cfg.get("enabled")
+                    and int(item.get("_attempt", 0)) == 0):
+                from src.inbox.outbound_dup_guard import (
+                    outbound_registry as _dup_reg,
+                    record_dup_check as _dup_rec,
+                )
+                _hit = self._dup_guard_check(item, send_text)
+                _lvl = (_hit or {}).get("level", "")
+                _block = bool(_hit) and (
+                    _lvl == "dup"
+                    or bool(self._dup_guard_cfg.get("block_similar", True)))
+                try:
+                    _dup_rec(_lvl, source="autosend", blocked=_block)
+                except Exception:
+                    pass
+                if _block:
+                    self.total_dup_blocked += 1
+                    logger.warning(
+                        "[AutosendWorker] guard=near_duplicate 出站近重复"
+                        "拦截 conv=%s level=%s sim=%.2f age=%.0fs matched=%r",
+                        _conv_id_g, _lvl, _hit.get("similarity", 0.0),
+                        _hit.get("age_sec", 0.0),
+                        str(_hit.get("matched_text", ""))[:60])
+                    return
+                _dup_token = _dup_reg.register(_conv_id_g, send_text)
+            # 拟人序列（已读 → 打字续挂 → 延迟）：统一走 humanize 协作器，
+            # 与 L3 缓冲话术共用同一节奏。对端视角：已读 → 正在输入 → 收到回复。
+            # best-effort：mark_read/typing 失败不阻断投递（协作器内部吞异常）。
+            _plat = item.get("platform", "")
+            _acc = item.get("account_id", "default")
+            _ck = item.get("chat_key", "")
+            # 自适应延迟按实际要发的文本长度估时，并扣除草稿创建至今的已耗时
+            # （adaptive=true 时生效；总响应时长目标而非叠加）。
+            _created = float(item.get("created_ts") or 0)
+            _elapsed = max(0.0, time.time() - _created) if _created > 0 else 0.0
+            await self._run_humanize(
+                _plat, _acc, _ck, text=send_text, elapsed_sec=_elapsed)
+            # 延迟后二次过期复查（fresh_guard 同闸门，2026-08-05）：拟人延迟
+            # 现可配 30-60s，而 _process_batch 的过期检查跑在延迟**之前**——
+            # 整个延迟窗口原本不设防：客户此间插话，旧稿照发＝答非所问，
+            # 且插话催生的新稿接踵而至＝两连发。判据与创建侧同一纯函数
+            # find_superseding_inbound（同文本/过短不拦——保证「拦下后一定
+            # 有新稿覆盖两问」）；重试项免检（recoverable 既定语义）；
+            # 守卫自身异常一律放行（宁发旧稿不可断链）。草稿此时已 resolve，
+            # 只跳过投递不回滚状态——与「resolve-先于-deliver」既定语义一致，
+            # 计 total_superseded 不计 error（竞态非故障，不喂熔断器）。
+            if (self._fresh_guard_cfg.get("enabled") and _conv_id_g
+                    and int(item.get("_attempt", 0)) == 0):
+                try:
+                    from src.inbox.draft_fresh_guard import (
+                        find_superseding_inbound as _fsi_ph,
+                    )
+                    _ph_store = getattr(self._svc, "_store", None)
+                    _ph_ts = float(item.get("created_ts") or 0)
+                    _ph_hit = None
+                    if (_ph_store is not None and _ph_ts > 0
+                            and hasattr(_ph_store, "list_recent_messages")):
+                        _ph_hit = _fsi_ph(
+                            _ph_store.list_recent_messages(
+                                _conv_id_g, limit=8),
+                            draft_ts=_ph_ts,
+                            peer_text=str(item.get("peer_text") or ""),
+                            grace_sec=float(
+                                self._fresh_guard_cfg.get("grace_sec", 3.0)),
+                            min_text_len=int(
+                                self._fresh_guard_cfg.get("min_text_len", 0)),
+                        )
+                    if _ph_hit is not None:
+                        self.total_superseded += 1
+                        if _dup_token:
+                            try:
+                                from src.inbox.outbound_dup_guard import (
+                                    outbound_registry as _dup_reg_ph,
+                                )
+                                _dup_reg_ph.unregister(
+                                    _conv_id_g, _dup_token)
+                            except Exception:
+                                pass
+                        logger.info(
+                            "[AutosendWorker] guard=fresh post_humanize "
+                            "延迟窗内客户插话，放弃本条投递 draft=%s conv=%s "
+                            "（等新稿覆盖两问）",
+                            item.get("draft_id", ""), _conv_id_g)
+                        return
+                except Exception:
+                    logger.debug(
+                        "[AutosendWorker] guard=fresh 延迟后复查异常（放行）",
+                        exc_info=True)
+            # original_text 透传（签名探测一次并缓存）：语音分支须用翻译前原文
+            # 判定+合成；旧 4 参回调（含测试桩）不受影响。
+            _send_kw: Dict[str, Any] = self._send_cb_kwargs(
+                str(item.get("text", "")))
+            res = await self._send_callback(
+                item.get("platform", ""), item.get("account_id", "default"),
+                item.get("chat_key", ""), send_text, **_send_kw,
+            )
+            # 投递失败判定：除显式 ok=False 外，编排器/出站闸门返回
+            # {delivered: False} 或 {blocked: ...}（如 kill-switch/send-gate 拦截、
+            # 桌面出站被闸门拒）也算未送达——否则会把「被拦截」误计为已送达刷指标。
+            if isinstance(res, dict) and (
+                res.get("ok") is False
+                or res.get("delivered") is False
+                or res.get("blocked")
+            ):
+                raise RuntimeError(str(
+                    res.get("error") or res.get("blocked") or "send not ok"))
+            self.total_delivered += 1
+            if int(item.get("_attempt", 0)) > 0:
+                self.total_retry_recovered += 1
+            try:   # P4 埋点：AI 承接（该会话首条自动回复投递成功，进程内每会话一次）
+                from src.utils.telemetry import track_once
+                _tele_cid = str(item.get("conversation_id") or "")
+                track_once(f"ai_engaged:{_tele_cid}", "session.ai_engaged", {
+                    "session_id": _tele_cid,
+                    "first_response_ms": int(_elapsed * 1000)})
+            except Exception:
+                pass
+        except Exception as exc:  # noqa: BLE001
+            self.total_deliver_errors += 1
+            self.last_error = f"deliver: {exc}"
+            _conv = str(item.get("conversation_id", "") or "?")
+            # 投递失败 → 撤销出站登记（防登记幽灵把后续重试当重复拦住）
+            if _dup_token:
+                try:
+                    from src.inbox.outbound_dup_guard import (
+                        outbound_registry as _dup_reg2,
+                    )
+                    _dup_reg2.unregister(_conv, _dup_token)
+                except Exception:
+                    pass
+            _plat = item.get("platform", "?")
+            _permanent = _is_permanent_send_error(str(exc))
+            # 跨链共享登记（gated）：注销/被拉黑/无权限这类**永久**不可达写进
+            # 共享表，A 线 sender 与 proactive 立即同步受益；peer 失效等可自愈类
+            # 由 registry 按「非永久」忽略，仍只走下面的本地会话冷却。
+            if _permanent:
+                self._dead_peer_record(_conv, str(exc))
+            # 永久性错误（无发言权/被拉黑/会话失效）→ 会话进封禁冷却；仅「首次进入
+            # 封禁」打一条 WARNING，冷却窗口内的后续同类失败降级 debug（防刷屏）。
+            if (self._send_block_cooldown_sec > 0
+                    and _conv != "?"
+                    and _permanent):
+                _already = self._conv_send_blocked(_conv)
+                self._blocked_conv_until[_conv] = (
+                    time.time() + self._send_block_cooldown_sec)
+                if _already:
+                    logger.debug(
+                        "[AutosendWorker] 会话仍处发送封禁 conv=%s: %s", _conv, exc)
+                else:
+                    logger.warning(
+                        "[AutosendWorker] 投递永久失败，暂停会话自动发 %.0fs "
+                        "conv=%s platform=%s: %s",
+                        self._send_block_cooldown_sec, _conv, _plat, exc)
+            else:
+                logger.warning(
+                    "[AutosendWorker] 投递失败 conv=%s platform=%s: %s",
+                    _conv, _plat, exc,
+                )
+            # Sprint2 可恢复：瞬时失败且未耗尽 → 排入重试队列（指数退避），不记 failed、
+            # 不 re-resolve（幂等重发同文本）。永久错误不重试（会话已进封禁冷却）。
+            _attempt = int(item.get("_attempt", 0))
+            if (self._recoverable and not _permanent
+                    and _attempt + 1 < self._retry_max_attempts):
+                _delay = min(
+                    self._retry_backoff_base * (2 ** _attempt),
+                    self._retry_backoff_max)
+                _ritem = dict(item)
+                _ritem["_attempt"] = _attempt + 1
+                self._retry_queue.append(
+                    {"item": _ritem, "next_ts": time.time() + _delay})
+                self.total_retry_scheduled += 1
+                logger.info(
+                    "[AutosendWorker] 投递瞬时失败，%.0fs 后第%d次重试 conv=%s",
+                    _delay, _attempt + 1, _conv)
+                return  # 重试中：本条暂不记 autosend_failed
+            if self._recoverable and not _permanent:
+                self.total_retry_exhausted += 1
+            # 写 autosend_failed 审计，让安全条/记录弹窗看见「自动发了但没送达」
+            try:
+                rec = getattr(self._svc, "record_autosend_failure", None)
+                if rec is not None:
+                    rec(
+                        item.get("draft_id", ""),
+                        conversation_id=item.get("conversation_id", ""),
+                        reason=f"平台投递失败: {exc}",
+                    )
+            except Exception:
+                logger.debug("[AutosendWorker] autosend_failed 审计写入失败", exc_info=True)
+            # Sprint2：开启 recoverable 时，永久/耗尽失败发实时提醒事件，坐席可补发。
+            if self._recoverable:
+                self._publish_deliver_failed(item, str(exc), permanent=_permanent)
+
+
+    async def _deliver_parallel(self, deliver_now: List[Dict[str, Any]]) -> None:
+        """按会话分组并发投递（inbox.l2_autosend.parallel_deliver，默认关）。
+
+        分组键=conversation_id（缺失则独占一组）：同会话内条目保持批内顺序串行；
+        组间经全局信号量（max_concurrent，默认 3）并发——30-54s 拟人延迟与
+        分条间隔不再让并发会话互相排队。gather(return_exceptions=True) 兜底：
+        _deliver_one 自吞业务异常，这里只记录意外崩溃，绝不让单组炸掉整轮 tick。
+        """
+        groups: Dict[str, List[Dict[str, Any]]] = {}
+        for idx, it in enumerate(deliver_now):
+            key = str(it.get("conversation_id") or "") or f"__solo_{idx}"
+            groups.setdefault(key, []).append(it)
+        sem = asyncio.Semaphore(self._parallel_max)
+
+        async def _run_group(rows: List[Dict[str, Any]]) -> None:
+            async with sem:
+                for row in rows:
+                    await self._deliver_one(row)
+
+        self.parallel_batches += 1
+        results = await asyncio.gather(
+            *(_run_group(rows) for rows in groups.values()),
+            return_exceptions=True,
+        )
+        for res in results:
+            if isinstance(res, BaseException):
+                logger.error("[AutosendWorker] 并行投递组异常: %s", res,
+                             exc_info=res)
+
     def _publish_deliver_failed(self, item: Dict[str, Any], reason: str,
                                 *, permanent: bool) -> None:
         """Sprint2：发「autosend 投递失败」实时事件，供工作台铃铛/webhook 提醒坐席补发。
@@ -754,6 +1073,9 @@ class AutosendWorker:
         l2 = [d for d in drafts if d.get("autopilot_level") == "L2"]
         sent, errors = 0, 0
         to_deliver: List[Dict[str, Any]] = []
+        # 复班补觉每批重拟预算：防复班瞬间对整夜积压一次性打满 LLM；超预算的
+        # 留 pending，下一 tick 继续（min_interval 节拍天然把补觉摊开）。
+        catchup_budget = 5
         for d in l2:
             draft_id = d.get("draft_id", "")
             _conv = str(d.get("conversation_id") or "")
@@ -794,6 +1116,152 @@ class AutosendWorker:
                         exc_info=True)
                 self.total_skipped_blocked += 1
                 continue
+            # 工作时间闸（inbox.work_schedule，2026-08-04，默认关）：账号休息中
+            # → 草稿**留 pending 不处置**（不 resolve 不取消——复班后自动接续
+            # 投递/补觉重拟），危机消息（severe/elevated）在判定内穿透照发。
+            # 人工通过投递走 deliver_human_approved 独立方法，天然不经本闸；
+            # 判定 fail-open：任何异常一律放行，闸门故障绝不闸死自动回复。
+            if self._ws_provider is not None:
+                _ws_hold = ""
+                try:
+                    from src.inbox.work_hours_gate import (
+                        in_work_hours,
+                        should_hold_auto_reply,
+                    )
+                    _ws_cfg_hold = self._ws_provider() or {}
+                    _ws_plat = str(d.get("platform") or "")
+                    _ws_acct = str(d.get("account_id") or "default")
+                    _ws_hold = should_hold_auto_reply(
+                        _ws_cfg_hold, _ws_plat, _ws_acct,
+                        peer_text=str(d.get("peer_text") or ""))
+                    if _ws_hold:
+                        # 下班收尾宽限：稿在班内拟出、刚过下班边界（≤15min）
+                        # → 放行把最后一句说完——聊到一半突然蒸发比晚几分钟
+                        # 下班更穿帮。窗口硬顶防「worker 停摆隔夜稿凌晨漏发」。
+                        _ws_created = float(
+                            d.get("created_ts") or d.get("created_at") or 0)
+                        if (_ws_created > 0
+                                and time.time() - _ws_created <= 900
+                                and in_work_hours(
+                                    _ws_cfg_hold, _ws_plat, _ws_acct,
+                                    now_ts=_ws_created)):
+                            _ws_hold = ""
+                except Exception:
+                    _ws_hold = ""
+                    logger.debug(
+                        "[AutosendWorker] 工作时间闸判定异常（放行）",
+                        exc_info=True)
+                if _ws_hold:
+                    self.total_skipped_off_hours += 1
+                    continue
+            # 新入站过期守卫（fresh_guard，2026-08-03，默认关）：拟稿的 10-20s 里客户
+            # 又补了话 → 本稿按旧输入写成，投出去=答非所问，且 stale_peer 重拟的新稿
+            # 随后又到=两连发。判据（draft_fresh_guard.find_superseding_inbound）＝存在
+            # **更晚且内容不同、会触发新拟稿**的入站——相同文本/过短文本不拦（那类入站
+            # 不会催生新稿，取消本稿=客户没有任何回复）。处置=cancelled/superseded_by_
+            # inbound（stale_peer 同族原子闸）；计 skip 不计 error（竞态非故障，不喂
+            # 熔断器）。守卫自身任何异常 → 放行投递（宁可发旧稿不可断链）。
+            if (self._send_callback is not None
+                    and self._fresh_guard_cfg.get("enabled") and _conv):
+                try:
+                    from src.inbox.draft_fresh_guard import find_superseding_inbound
+                    _fg_store = getattr(self._svc, "_store", None)
+                    _fg_draft_ts = float(
+                        d.get("created_ts") or d.get("created_at") or 0)
+                    _fg_hit = None
+                    if (_fg_store is not None and _fg_draft_ts > 0
+                            and hasattr(_fg_store, "list_recent_messages")):
+                        _fg_rows = _fg_store.list_recent_messages(_conv, limit=8)
+                        _fg_hit = find_superseding_inbound(
+                            _fg_rows,
+                            draft_ts=_fg_draft_ts,
+                            peer_text=str(d.get("peer_text") or ""),
+                            grace_sec=float(
+                                self._fresh_guard_cfg.get("grace_sec", 3.0)),
+                            min_text_len=int(
+                                self._fresh_guard_cfg.get("min_text_len", 0)),
+                        )
+                    if _fg_hit is not None:
+                        try:
+                            if hasattr(_fg_store, "update_draft_status"):
+                                _fg_store.update_draft_status(
+                                    draft_id, status="cancelled",
+                                    decided_by="superseded_by_inbound")
+                        except Exception:
+                            logger.debug(
+                                "[AutosendWorker] fresh_guard 作废草稿失败 "
+                                "draft_id=%s", draft_id, exc_info=True)
+                        self.total_superseded += 1
+                        _fg_now = time.time()
+                        logger.info(
+                            "[AutosendWorker] guard=fresh 新入站过期跳过 draft=%s "
+                            "conv=%s 草稿龄=%.1fs 入站晚于拟稿 %.1fs（等新稿覆盖两问）",
+                            draft_id, _conv, max(0.0, _fg_now - _fg_draft_ts),
+                            float(_fg_hit.get("ts") or 0) - _fg_draft_ts)
+                        continue
+                except Exception:
+                    logger.debug(
+                        "[AutosendWorker] fresh_guard 异常（放行投递）", exc_info=True)
+            # 复班补觉重拟（work_schedule.off_hours.catch_up，2026-08-04）：
+            # 扣留期攒下的稿龄超过 catch_up_regenerate_hours → 原样发会内容穿帮
+            # （凌晨拟的「我刚到家」早上发出当场露馅）。作废旧稿 + 经 auto_draft
+            # **原产线**重拟（enrich/人设/档位封顶全生效），新稿 created_ts 新鲜、
+            # 随后正常投递。铁律：**重拟回调未注入就绝不作废**（宁发陈稿不丢回复）；
+            # 作废失败也不重拟（防同会话双稿）。预算外的留 pending 下一 tick 继续。
+            if (self._ws_provider is not None
+                    and self._catchup_regen_cb is not None
+                    and self._send_callback is not None and _conv):
+                try:
+                    from src.inbox.work_hours_gate import off_hours_cfg
+                    _ws_cfg = self._ws_provider() or {}
+                    _oh = off_hours_cfg(_ws_cfg)
+                    _regen_h = float(_oh.get("catch_up_regenerate_hours") or 0)
+                    _peer_txt = str(d.get("peer_text") or "")
+                    _draft_ts = float(
+                        d.get("created_ts") or d.get("created_at") or 0)
+                    if (_ws_cfg.get("enabled") and _oh.get("catch_up")
+                            and _regen_h > 0 and _draft_ts > 0 and _peer_txt
+                            and time.time() - _draft_ts > _regen_h * 3600.0):
+                        if catchup_budget <= 0:
+                            continue  # 本批预算用完，留 pending 下一 tick
+                        _cancelled = False
+                        try:
+                            _cu_store = getattr(self._svc, "_store", None)
+                            if (_cu_store is not None
+                                    and hasattr(_cu_store, "update_draft_status")):
+                                _cu_store.update_draft_status(
+                                    draft_id, status="cancelled",
+                                    decided_by="work_schedule_regen")
+                                _cancelled = True
+                        except Exception:
+                            logger.debug(
+                                "[AutosendWorker] 补觉作废陈稿失败 draft_id=%s"
+                                "（留待下一 tick）", draft_id, exc_info=True)
+                        if not _cancelled:
+                            continue
+                        catchup_budget -= 1
+                        try:
+                            self._catchup_regen_cb({
+                                "conversation_id": _conv,
+                                "platform": str(d.get("platform") or ""),
+                                "account_id": str(
+                                    d.get("account_id") or "default"),
+                                "chat_key": str(d.get("chat_key") or ""),
+                            }, _peer_txt)
+                            self.total_catchup_regenerated += 1
+                            logger.info(
+                                "[AutosendWorker] 补觉重拟 conv=%s 稿龄=%.1fh"
+                                "（旧稿已作废，新稿走原拟稿产线）",
+                                _conv, (time.time() - _draft_ts) / 3600.0)
+                        except Exception:
+                            logger.warning(
+                                "[AutosendWorker] 补觉重拟派发失败 conv=%s"
+                                "（旧稿已作废，该会话本轮无回复）",
+                                _conv, exc_info=True)
+                        continue
+                except Exception:
+                    logger.debug(
+                        "[AutosendWorker] 补觉判定异常（按正常投递）", exc_info=True)
             # 投递用文本优先取最终文本，回落草稿文本
             text = str(d.get("final_text") or d.get("draft_text") or "").strip()
             # 投递模式下，空正文草稿绝不 resolve：否则会被标记 approved/已发，却因
@@ -822,6 +1290,9 @@ class AutosendWorker:
                             # 草稿创建时间作「已耗时」基准（自适应延迟扣除；≈入站到现在）
                             "created_ts": float(
                                 d.get("created_at") or d.get("created_ts") or 0),
+                            # 拟稿所回应的客户原话：延迟后二次过期复查须同文本免拦
+                            # （同文本新入站不会催生新稿，拦了=客户零回复）
+                            "peer_text": str(d.get("peer_text") or ""),
                         })
                 elif int(result.get("code") or 0) == 409:
                     # 撞状态闸门＝该草稿刚被人工窗口处置（含人工通过后自带投递）。
@@ -852,6 +1323,14 @@ class AutosendWorker:
             )
 
     # ── 运维动作 ──────────────────────────────────────────────
+
+    def set_catchup_regenerate_cb(self, cb: Optional[Callable[..., bool]]) -> None:
+        """注入复班补觉重拟回调（bootstrap 在 auto_draft 装配完成后调用）。
+
+        worker 先于 auto_draft 子系统构造，构造期拿不到拟稿回调——后装配
+        避免顺序耦合。未注入期间补觉分支整体跳过（陈稿按旧行为原样投递）。
+        """
+        self._catchup_regen_cb = cb if callable(cb) else None
 
     def reset_circuit(self) -> bool:
         """手动重置熔断器（H2 一键动作）。
@@ -896,10 +1375,18 @@ class AutosendWorker:
             "total_delivered": self.total_delivered,
             "total_deliver_errors": self.total_deliver_errors,
             "translate_enabled": self._translate_callback is not None,  # 是否投递前出站翻译
+            # gate-only=常规翻译关闭、仅语言硬闸在岗（P1-198）——不标出来的话
+            # translate_enabled=true 会让运营误以为常规出站翻译开着。
+            "translate_gate_only": bool(
+                getattr(self._translate_callback, "gate_only", False)),
             "total_translated": self.total_translated,
-            "mark_read_enabled": self._mark_read_callback is not None,  # 是否投递前补平台已读
+            # 「能力在（回调装配了）且开关开」才算 enabled——P1 起开关可热更，
+            # 只看回调在不在会在运营关闭后仍谎报 true。
+            "mark_read_enabled": (
+                self._mark_read_callback is not None and self._mark_read_enabled),
             "total_marked_read": self.total_marked_read,
-            "typing_enabled": self._typing_callback is not None,  # 是否投递延迟期挂打字状态
+            "typing_enabled": (
+                self._typing_callback is not None and self._typing_enabled),
             "total_skipped_blocked": self.total_skipped_blocked,  # 因会话发送封禁跳过取消数
             "total_skipped_mode": self.total_skipped_mode,  # 因会话被降级(接管)取消的 L2 数
             "recoverable": self._recoverable,
@@ -910,7 +1397,32 @@ class AutosendWorker:
             "total_skipped_raced": self.total_skipped_raced,  # resolve 撞闸门（他方已处置）
             "total_human_delivered": self.total_human_delivered,  # 人工通过经 worker 投递成功
             "total_human_deliver_errors": self.total_human_deliver_errors,
+            "total_dup_blocked": self.total_dup_blocked,  # 出站近重复守卫拦截数
+            "dup_guard_enabled": bool(self._dup_guard_cfg.get("enabled")),
+            "total_superseded": self.total_superseded,  # 新入站过期守卫跳过数
+            "fresh_guard_enabled": bool(self._fresh_guard_cfg.get("enabled")),
+            # 并行投递（2026-08-09）：开关/并发上限/走过并行分发的批次数——
+            # 「配置开了没生效」零流量即可判（enabled=false 而运营以为开了）。
+            "parallel_deliver": {
+                "enabled": self._parallel_enabled,
+                "max_concurrent": self._parallel_max,
+                "batches": self.parallel_batches,
+            },
             "blocked_conversations": sum(
                 1 for c in list(self._blocked_conv_until) if self._conv_send_blocked(c)
             ),  # 当前处于发送封禁冷却的会话数
+            # 工作时间班表（enabled=配置总闸而非「已接线」——provider 未注入时
+            # 恒 False；扣留计数是每 tick 重扫的活动事件数，非唯一草稿数）
+            "work_schedule_enabled": self._work_schedule_enabled(),
+            "total_skipped_off_hours": self.total_skipped_off_hours,
+            "total_catchup_regenerated": self.total_catchup_regenerated,
+            "catchup_regen_wired": self._catchup_regen_cb is not None,
         }
+
+    def _work_schedule_enabled(self) -> bool:
+        if self._ws_provider is None:
+            return False
+        try:
+            return bool((self._ws_provider() or {}).get("enabled"))
+        except Exception:
+            return False

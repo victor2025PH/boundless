@@ -390,7 +390,11 @@
     } };
   }
 
-  /* ── 线性 SVG 图标集（currentColor，明暗自适应）：卡头 data-cp-ic 用，与网页端同风格 ── */
+  /* ── 线性 SVG 图标（currentColor，明暗自适应）：卡头 data-cp-ic 与组件按钮共用 ──
+     SSOT 契约（2026-08-08 P2B）：宿主页载有 /static/ui_icons.js（网页收件箱）时**委托全站库**
+     （83 图标注册表 + icon_miss 遥测）；独立 iframe / 桌面壳未载库时回落本地子集表。
+     子集表必须是库的**逐字节拷贝**（tests/test_ui_icon_registry.py 钉住，防两份美术漂移）；
+     新增图标先进 ui_icons.js，再按需拷贝进本表。 */
   var UI_ICONS = {
     search: '<circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.6" y2="16.6"/>',
     user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
@@ -400,7 +404,7 @@
     mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/>',
     spark: '<path d="M11 3l1.7 4.6L17 9l-4.3 1.4L11 15l-1.7-4.6L5 9l4.3-1.4L11 3z"/>',
     zap: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
-    heart: '<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/>',
+    heart: '<path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>',
     link: '<path d="M10 13a5 5 0 0 0 7.5 0l2-2a5 5 0 0 0-7.1-7.1l-1.3 1.3"/><path d="M14 11a5 5 0 0 0-7.5 0l-2 2a5 5 0 0 0 7.1 7.1l1.3-1.3"/>',
     brain: '<path d="M9.5 2A5.5 5.5 0 0 0 4 7.5c0 1.9.9 3.6 2.3 4.7L6 22h12l-.3-9.8A5.5 5.5 0 0 0 14.5 2 5.5 5.5 0 0 0 9.5 2z"/>',
     folder: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
@@ -410,13 +414,30 @@
     clock: '<circle cx="12" cy="12" r="9"/><polyline points="12 7.5 12 12 15 13.8"/>',
     archive: '<rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><line x1="10" y1="12" x2="14" y2="12"/>',
     target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/>',
+    trash: '<polyline points="3 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>',
+    x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+    refresh: '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
+    pin: '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>',
+    mask: '<path d="M12 3C7.5 3 4 4.8 4 8.5c0 5 3.6 9.6 8 12.5 4.4-2.9 8-7.5 8-12.5C20 4.8 16.5 3 12 3z"/><path d="M8 10c.7.8 1.8.8 2.5 0"/><path d="M13.5 10c.7.8 1.8.8 2.5 0"/><path d="M9.5 14.5c1.5 1 3.5 1 5 0"/>',
+    bulb: '<path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4.9 12c.9.9 1.4 1.9 1.6 3h6.6c.2-1.1.7-2.1 1.6-3A7 7 0 0 0 12 2z"/>',
+    alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12" y2="17"/>',
+    headphones: '<path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z"/><path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>',
+    volume: '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a9 9 0 0 1 0 14"/>'
   };
 
   function uiIcon(name, size, cls) {
+    // 委托优先：宿主已载全站图标库（window.UiIcons）→ 用它（注册表更全 + icon_miss 遥测）；
+    // 未载（独立 iframe / 桌面壳）→ 本地子集表兜底，保持组件自包含。
+    var lib = root.UiIcons;
+    if (lib && typeof lib.svg === "function") {
+      var out = "";
+      try { out = lib.svg(name, { size: size || 16, cls: cls }); } catch (_e) { out = ""; }
+      if (out) return out;
+    }
     var p = UI_ICONS[name];
     if (!p) return "";
     var s = size || 16;
-    return '<svg class="ui-ic' + (cls ? " " + cls : "") + '" viewBox="0 0 24 24" width="' + s +
+    return '<svg class="ui-ic' + (cls ? " " + cls : "") + '" style="vertical-align:-0.15em;flex:none" viewBox="0 0 24 24" width="' + s +
       '" height="' + s + '" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + p + "</svg>";
   }
 

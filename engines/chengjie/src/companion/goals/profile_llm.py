@@ -282,10 +282,15 @@ def schedule_llm_capture(
     chat_key: str,
     text: str,
     fields: Optional[Dict[str, Any]] = None,
+    include: Optional[List[str]] = None,
     now: Optional[float] = None,
 ) -> bool:
     """门控通过 → 在当前事件循环 fire-and-forget 一次 LLM 摘录。
-    返回是否已调度。无运行 loop / 未启用 / 无缺口 / 冷却预算不过 → False。"""
+    返回是否已调度。无运行 loop / 未启用 / 无缺口 / 冷却预算不过 → False。
+
+    ``include``（P27）：摸底目标的勾选槽位——提示词只问坐席点名要采的缺口
+    （全 11 槽提示词又长又散，抽取面越大误摘面越大）；None=全轨旧行为。
+    """
     try:
         cfg = resolve_llm_cfg(cfg_root)
         if not cfg.get("enabled") or ai_client is None or store is None:
@@ -295,7 +300,8 @@ def schedule_llm_capture(
                                or DEFAULT_MIN_CHARS))
         if len(t) < min_chars or len(t) > 2000:
             return False
-        miss = missing_slots(fields, track="", limit=8)
+        miss = (missing_slots(fields, include=list(include), limit=8)
+                if include else missing_slots(fields, track="", limit=8))
         if not miss:
             return False
         # 名额有限（每日预算 + 每会话上限），别把它花在纯寒暄上

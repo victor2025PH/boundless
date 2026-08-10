@@ -78,7 +78,7 @@
          单一事实源）+ 转向徽标（生效判据与消费链同源）+「AI 检测」行。 */
       let moodLine = `<div class="moodline">${esc(this.t("cp.nba.mood_current"))}: `;
       if (mood) {
-        moodLine += `<span class="mv">🏷 ${esc(disp(mood))}</span>`;
+        moodLine += `<span class="mv">${this.ic("tag", 11)} ${esc(disp(mood))}</span>`;
         if (mm && String(mm.tag || "") === mood) {
           if (mm.active) {
             moodLine += `<span class="steer">${esc(this.t("cp.nba.steer_on"))}</span>`;
@@ -121,7 +121,7 @@
                 const lab = (o && typeof o === "object") ? String(o.label || val) : val;
                 if (!val) return "";
                 const on = cur && val === cur ? " class=\"on\"" : "";
-                return `<button${on} data-act="exec" data-idx="${i}" data-kind="tag" data-tag="${esc(val)}">🏷 ${esc(lab)}</button>`;
+                return `<button${on} data-act="exec" data-idx="${i}" data-kind="tag" data-tag="${esc(val)}">${this.ic("tag", 11)} ${esc(lab)}</button>`;
               }).join("");
               const lab = String((g && g.label) || "");
               btns.push(`<span class="grp">${lab ? `<span class="grplab">${esc(lab)}</span>` : ""}${inner}</span>`);
@@ -130,7 +130,7 @@
             const opts = (a.config.tag_options || [a.config.tag]).filter(Boolean);
             opts.forEach((tag) => {
               const on = (mood && tag === mood) || (attention && tag === attention) ? " class=\"on\"" : "";
-              btns.push(`<button${on} data-act="exec" data-idx="${i}" data-kind="tag" data-tag="${esc(tag)}">🏷 ${esc(disp(tag))}</button>`);
+              btns.push(`<button${on} data-act="exec" data-idx="${i}" data-kind="tag" data-tag="${esc(tag)}">${this.ic("tag", 11)} ${esc(disp(tag))}</button>`);
             });
           }
         }
@@ -148,7 +148,7 @@
             `</div></div>`
           : "";
         return `<div class="${cls}">` +
-          `<div class="title">${esc(a.icon || "💡")} ${esc(a.name || "")}</div>` +
+          `<div class="title">${a.icon ? esc(a.icon) : this.ic("bulb", 13)} ${esc(a.name || "")}</div>` +
           (a.reason ? `<div class="reason">${esc(a.reason)}</div>` : "") +
           (btns.length ? `<div class="acts">${btns.join("")}</div>` : "") +
           noteBox +

@@ -61,11 +61,16 @@ DATAS = [
 #   · licensing —— 机器指纹（授权绑机 + 首启体验档归属）；漏打 → 绑机校验放行、
 #     体验档退化为无机器归属，一样是静默降级。
 # 冻结后落在 sys._MEIPASS/platform/<name>/，与各 bridge 的查找顺序一一对应。
+#
+# ⚠️ 不能整目录直打（2026-08-09 实锤）：这两个目录里除 .py 外还常年躺着**运行时/机密
+# 数据**——credpool/config/account_registry.db（真实 Telegram 账号 + credpool_cred）、
+# credpool/config/registry.key（Fernet 密钥，registry_crypto 用它加解密 meta.session_string
+# 等）、credpool/data/tgmatrix.db。整目录 --add-data 会把它们卷进**公网安装包**＝真实账号
+# ＋解密钥同包交付。而消费方（credpool_bridge / license_client）运行时**只按文件路径加载
+# .py**，这些数据文件从不被读。故与 src/web/static 的 RUNTIME_STATIC_EXCLUDES 同哲学：
+# 暂存清洗（剔除 config/data/__pycache__ 与 .db/.key 等机密后缀）后再打，见 _stage_platform_pkg。
 _PLATFORM_ROOT = REPO.parent.parent / "platform"
-for _pkg in ("credpool", "licensing"):
-    _src = _PLATFORM_ROOT / _pkg
-    if _src.is_dir():
-        DATAS.append((_src, f"platform/{_pkg}"))
+PLATFORM_PKGS = ("credpool", "licensing")
 
 # static/ 下的运行时落地目录：protocol_media＝客户聊天媒体（语音/照片/视频），
 # persona_avatars＝运行时同步的账号/人设头像。均为 gitignore 的生产数据，随包分发
@@ -81,8 +86,18 @@ STATIC_STAGED = HERE / "static-staged"
 DOMAINS_SRC = REPO / "domains"
 DOMAINS_STAGED = HERE / "domains-staged"
 
+# 集团底座瘦模块（credpool/licensing）暂存目录与「机密数据」剔除规则（见上方 _PLATFORM_ROOT
+# 注释的事故背景）。EXCLUDE_DIRS 整块剔（credpool 的运行时数据只在 config/ data/ 里，licensing
+# 当前无运行时数据目录，剔了也不误伤代码/schema）；SECRET_SUFFIXES 逐文件剔（防将来任意子目录
+# 里躺库/密钥/证书被顺带打进公网包）。
+PLATFORM_STAGED = HERE / "platform-staged"
+PLATFORM_EXCLUDE_DIRS = {"config", "data", "__pycache__"}
+PLATFORM_SECRET_SUFFIXES = {".db", ".db-wal", ".db-shm", ".key", ".pem",
+                            ".sqlite", ".sqlite3", ".pyc", ".pyo"}
+
 # 需要「暂存清洗后再打」的目录的包内目标（打包完整性门禁读这个常量，防两边口径漂移）
-STAGED_DESTS = ("src/web/static", "domains")
+STAGED_DESTS = ("src/web/static", "domains",
+                "platform/credpool", "platform/licensing")
 
 
 def _stage_static() -> Path:
@@ -109,10 +124,49 @@ def _stage_domains() -> Path:
     return DOMAINS_STAGED
 
 
+def _stage_platform_pkg(pkg: str):
+    """把 platform/<pkg> 复制到暂存目录，剔除运行时/机密数据后供 --add-data。
+
+    落地前**断言零 .db/.key/.pem 幸存**——防「同目录恰好躺着账号库/解密钥」被打进公网
+    安装包（2026-08-09 credpool 实锤：account_registry.db + registry.key + tgmatrix.db）。
+    宁可打不出（RuntimeError 中止）也不泄账号。源不存在 → None（打包侧跳过，与旧 is_dir 判一致）。
+    """
+    src = _PLATFORM_ROOT / pkg
+    if not src.is_dir():
+        return None
+    dest = PLATFORM_STAGED / pkg
+    shutil.rmtree(dest, ignore_errors=True)
+
+    def _ignore(dirpath: str, names: list[str]) -> set[str]:
+        drop: set[str] = set()
+        for n in names:
+            full = Path(dirpath) / n
+            if full.is_dir():
+                if n in PLATFORM_EXCLUDE_DIRS:
+                    drop.add(n)
+            elif full.suffix.lower() in PLATFORM_SECRET_SUFFIXES:
+                drop.add(n)
+        return drop
+
+    shutil.copytree(src, dest, ignore=_ignore)
+    _hard = {".db", ".db-wal", ".db-shm", ".key", ".pem", ".sqlite", ".sqlite3"}
+    leaked = [str(p.relative_to(dest)) for p in dest.rglob("*")
+              if p.is_file() and p.suffix.lower() in _hard]
+    if leaked:
+        raise RuntimeError(
+            f"platform/{pkg} 暂存仍含机密数据（打包中止防账号/密钥泄漏）: {leaked}")
+    return dest
+
+
 def _staged_datas() -> list:
     out = [(_stage_static(), "src/web/static")]
     if DOMAINS_SRC.is_dir():
         out.append((_stage_domains(), "domains"))
+    # 集团底座瘦模块：清洗后再打（绝不整目录直打，见 _PLATFORM_ROOT 注释）
+    for _pkg in PLATFORM_PKGS:
+        staged = _stage_platform_pkg(_pkg)
+        if staged is not None:
+            out.append((staged, f"platform/{_pkg}"))
     return out
 
 # 动态 import 的包，PyInstaller 静态分析抓不全 → 显式 collect。
@@ -164,7 +218,8 @@ def main() -> int:
         return 2
 
     if args.clean:
-        for d in (OUT, HERE / "build", HERE / "__pycache__", STATIC_STAGED, DOMAINS_STAGED):
+        for d in (OUT, HERE / "build", HERE / "__pycache__", STATIC_STAGED,
+                  DOMAINS_STAGED, PLATFORM_STAGED):
             shutil.rmtree(d, ignore_errors=True)
 
     OUT.mkdir(parents=True, exist_ok=True)
@@ -219,9 +274,26 @@ def main() -> int:
         shutil.rmtree(inner, ignore_errors=True)
 
     final = OUT / exe
-    print(f"✓ 完成：{final}" if final.exists() else f"⚠ 产出未在预期路径：{OUT}（请检查 PyInstaller 输出）")
+    if not final.exists():
+        print(f"⚠ 产出未在预期路径：{OUT}（请检查 PyInstaller 输出）", file=sys.stderr)
+        return 1
+
+    # 源码指纹戳：predist 用它拦「改了 src 却直接 dist」的陈旧 sidecar
+    try:
+        if str(HERE) not in sys.path:
+            sys.path.insert(0, str(HERE))
+        from backend_source_fingerprint import compute_fingerprint, write_stamp
+        fp = compute_fingerprint(REPO, datas=list(DATAS))
+        stamp = write_stamp(OUT, fp)
+        print(f"✓ 源码指纹已写入 {stamp.name} ({fp['aggregate'][:16]}… files={fp['file_count']})")
+    except Exception as e:
+        print(f"✗ 写入源码指纹失败（拒绝产出无戳 backend-dist）: {e}", file=sys.stderr)
+        return 1
+
+    print(f"✓ 完成：{final}")
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

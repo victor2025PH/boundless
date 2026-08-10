@@ -23,7 +23,45 @@ from typing import Any, Dict, List, Optional
 
 # 情绪状态标签词表（单一事实源：__add_mood_tag 的 tag_options 与「当前情绪」读取
 # 共用同一张表——P1-198 情绪标记状态化，路由据此从 conv_tags 反查当前生效情绪）。
-MOOD_TAGS = ("情绪低落", "积极开朗", "需要关注", "进展顺利")
+#
+# P1-198 续（2026-08-02）拆成两个正交维度（旧版四词互斥单选，标「需要关注」会静默
+# 吞掉「情绪低落」——坐席丢信息而不自知）：
+#   - emotion   组：客户情绪（人工标注 → effective_mood 仲裁 → AI 语气/主动节奏/让路）
+#   - attention 组：跟进状态（纯工作流维度，不进 AI 仲裁）
+# 组内互斥、跨组共存；MOOD_TAGS 保持四词合集（顺序不变）供旧消费方/门禁零改动。
+MOOD_TAGS_EMOTION = ("情绪低落", "积极开朗")
+MOOD_TAGS_ATTENTION = ("需要关注", "进展顺利")
+MOOD_TAGS = MOOD_TAGS_EMOTION + MOOD_TAGS_ATTENTION
+
+# 标签值（存储用中文 canonical，历史兼容）→ 展示层 i18n 键（路由用 tr() 出译文）。
+MOOD_TAG_I18N = {
+    "情绪低落": "inbox.nba.opt.mood_low",
+    "积极开朗": "inbox.nba.opt.mood_positive",
+    "需要关注": "inbox.nba.opt.attn_watch",
+    "进展顺利": "inbox.nba.opt.attn_good",
+}
+
+
+def merge_mood_tag(existing: Optional[List[str]], tag: str) -> List[str]:
+    """会话标签合并的**唯一入口**（execute-action 路由 / 工作链 runner / 批量打标共用）。
+
+    旧病：互斥规则只在 execute-action 路由实现，工作链/批量打标裸 append →
+    「情绪低落」「积极开朗」并存，「当前情绪」读数取决于数组顺序。收口为纯函数：
+    - tag ∈ emotion 组 → 剔除组内旧值（情绪是单选状态）
+    - tag ∈ attention 组 → 剔除组内旧值（跟进状态同理）
+    - 其他标签 → 原语义（append 去重），零行为变化
+    """
+    tag = str(tag or "").strip()
+    out = [str(t) for t in (existing or []) if str(t or "").strip()]
+    if not tag:
+        return out
+    if tag in MOOD_TAGS_EMOTION:
+        out = [t for t in out if t not in MOOD_TAGS_EMOTION]
+    elif tag in MOOD_TAGS_ATTENTION:
+        out = [t for t in out if t not in MOOD_TAGS_ATTENTION]
+    if tag not in out:
+        out.append(tag)
+    return out
 
 
 # ── 内置场景动作库（情感陪伴场景） ─────────────────────────────────────────
@@ -98,13 +136,20 @@ _BUILTIN_ACTIONS: List[Dict[str, Any]] = [
     {
         "action_id": "__add_mood_tag",
         "icon": "🏷",
-        "name": "标记情绪状态",
+        # 名称显式说明标的是「客户」的状态（P1-198 客户实测困惑：分不清标客户还是标 AI）；
+        # hint 与 tag_groups 的展示文案由路由按请求语言经 tr() 重写（见 workflow routes），
+        # 这里是 zh 缺省值。旧 hint「便于后续个性化」是未兑现的承诺，已按真实行为改写。
+        "name": "标记客户情绪状态",
         "action_type": "tag",
         "builtin": True,
         "priority": 55,
         "config": {
-            "hint": "为当前情绪状态打标签，便于后续个性化",
+            "hint": "给客户当前状态打标签：情绪标注会在时效窗内引导 AI 语气与主动节奏",
             "tag_options": list(MOOD_TAGS),
+            "tag_groups": [
+                {"key": "emotion", "options": list(MOOD_TAGS_EMOTION)},
+                {"key": "attention", "options": list(MOOD_TAGS_ATTENTION)},
+            ],
         },
         "trigger_conditions": ["any"],
     },
@@ -121,6 +166,9 @@ _BUILTIN_ACTIONS: List[Dict[str, Any]] = [
         },
         "trigger_conditions": ["crisis_signal", "escalation_intent", "churn_intent_high"],
     },
+    # 「添加内部备注」2026-08-02 上午曾因桌面壳 Electron 不支持 window.prompt()
+    # （点击静默无反应）整卡删除；同日下午组件改为卡内 inline 输入框
+    # （cp-next-actions.js notebox，两端可用）后恢复——病因在输入方式，不在能力。
     {
         "action_id": "__add_internal_note",
         "icon": "📝",

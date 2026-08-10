@@ -1,9 +1,19 @@
 "use strict";
 /* 两端共享组件 · 工作目标(<cp-goal>)— 继承 CpPanelBase
    统一收件箱右栏「工作目标」卡（对接 /api/goals*，后端 goal_routes.py）：
-   - 无目标：插画空态 + 内联建目标表单（P18 场景卡片选模板：每模板一句人话适用
-     场景，custom 收进「进阶」入口且不参与默认预选；沉默 ≥72h 时推荐「沉默唤回」
-     （ctx.goalHint.silentHours 由宿主喂）；期限/自治档保留偏好记忆）
+   - 无目标：插画空态 + 两步建目标向导（P24 改版）：
+     第一步（栏内）＝按业务分组的场景卡（转化/关系/唤回，类别色+线稿图标，
+     每模板一句人话适用场景）+ 底部「自定义目标」独立高亮卡（进阶入口，
+     不参与默认预选）；沉默 ≥72h 时推荐「沉默唤回」（ctx.goalHint.silentHours
+     由宿主喂）。第二步＝场景专属设置弹层（shadow 内 fixed 居中 modal）：
+     「AI 会怎么推进」节奏预览（milestones + push_curve）→ 场景参数人话控件
+     （解锁项/会员档下拉读 /api/monetize/catalog 或 templates.pickers，称呼
+     字段自动跟随所选项；阶段下拉中文化；亲密度滑杆；备注示例 chips；
+     留存续费自动继承参数折叠进「高级」）→ 期限 → AI 参与度三张单选卡 +
+     主动触达信息气泡。期限/自治档保留偏好记忆；未注册参数回落通用输入框。
+     弹层输入有**草稿幸存层**（P0 2026-08-04）：逐键快照进 sessionStorage（按会话
+     id，24h TTL），背板误触/宿主重喂 context/取数失败/页面刷新都不丢；编辑期
+     同会话的外部刷新一律挂起（set context 覆写），表单关闭后补刷。
    - 进行中(active/paused)：标题+状态、里程碑条(节点+当前名常显)、第X/Y天、
      今日拍(语义色条 / hold)、采纳/驳回(+5s 撤销)、按意图生成草稿、
      「AI 做了什么」进展时间线(懒取 /api/goals/{id} 的拍史)、画像/产品——
@@ -31,7 +41,38 @@
   // P22：生命周期/人设自动创建的来源 → UI「AI 自建」徽标
   const AUTO_ORIGIN = { auto_create: 1, winback_auto: 1, retention_auto: 1, reconvert_auto: 1 };
   const PREFS_KEY = "cp_goal_form_prefs_v1";
+  // 表单草稿幸存层（P0 2026-08-04）：第二步弹层输入的实时快照，键=会话 id。
+  // 刻意用 sessionStorage（同标签页作用域）：跨「误触关闭/外部重渲染/页面刷新」
+  // 存活，关标签页即清——共用工位不跨天残留与客户相关的文本。
+  const DRAFT_KEY_PREFIX = "cp_goal_form_draft_v1:";
+  const DRAFT_TTL_MS = 24 * 3600 * 1000;
   const UNDO_MS = 5000;
+  // 场景卡分组序（模板 kind → 组；未知 kind 追加到尾部「其他」组）
+  const KIND_ORDER = ["conversion", "relationship", "engagement", "discovery"];
+  // 摸底槽位 chips 回落表（后端 pickers.discovery_slots 优先；与 profile_slots 登记对齐）
+  const FALLBACK_DISCOVERY_SLOTS = [
+    { key: "age", track: "relation", label_zh: "年龄", label_en: "Age" },
+    { key: "occupation", track: "relation", label_zh: "职业/生意", label_en: "Occupation" },
+    { key: "location", track: "relation", label_zh: "坐标", label_en: "Location" },
+    { key: "interests", track: "relation", label_zh: "兴趣", label_en: "Interests" },
+    { key: "name", track: "relation", label_zh: "称呼", label_en: "Name" },
+    { key: "need", track: "bant", label_zh: "业务痛点", label_en: "Pain point" },
+    { key: "channel", track: "bant", label_zh: "在用平台", label_en: "Channels" },
+    { key: "team_size", track: "bant", label_zh: "团队规模", label_en: "Team size" },
+    { key: "budget", track: "bant", label_zh: "预算档", label_en: "Budget" },
+    { key: "authority", track: "bant", label_zh: "决策角色", label_en: "Authority" },
+    { key: "timeline", track: "bant", label_zh: "上线时间", label_en: "Timeline" },
+  ];
+  const DISCOVERY_NOTE_RE = /获取|了解|摸底|年龄|职业|几岁|做什么|画像|兴趣|坐标|城市|age|occupation|profile|discover|learn.*(age|job|work)/i;
+  // 漏斗阶段词表兜底（与 contacts Journey STAGE_ORDER 对齐；后端 templates
+  // 响应带 pickers.stages 时优先用服务端数据，这里只是旧后端回落）
+  const STAGES = ["initial", "contacted", "engaged", "qualified",
+    "handoff_ready", "handed_off", "converted"];
+  // 折叠进「高级参数」的字段（通常由系统自动带入，一般不用改）
+  const ADV_PARAMS = {
+    retention_expand: ["product_id", "last_plan", "last_period", "base_goal"],
+    engagement_reactivate: ["product_id", "last_plan"],
+  };
 
   /* C1：目标模板 → 配套跟进 SOP 映射。**单一事实源＝CopilotShared.GOAL_CHAIN_REC**
      （sidebar-chrome.js），此处仅引用——改映射去那里。链未导入/未启用则整行不显示
@@ -67,9 +108,16 @@
       this._client = this._client || {};
       this._templates = null;
       this._formOpen = false;
+      this._formStep = 1;            // 两步向导：1=选场景（栏内） 2=场景设置弹层
       this._formTid = "";
-      this._formAutonomy = "";       // 场景切换重渲时保住坐席未提交的自治档选择
+      this._formAutonomy = "";       // 参与度单选卡当前选择（跨 DOM 更新持久）
       this._formUsePrefDays = true;  // 首开用偏好天数；坐席换场景后跟场景默认
+      this._catalog = null;          // /api/monetize/catalog 解析结果（解锁项/会员档）
+      this._catalogTried = false;    // 只试一次，失败回落通用输入框
+      this._unlockSel = "";          // 解锁项下拉选中 id（"__custom__"=高级手填）
+      this._tierSel = "";            // 会员档下拉选中 id
+      this._labelTouched = false;    // 坐席手改过「称呼」→ 停止自动跟随
+      this._lastAutoLabel = "";      // 上次自动填入的称呼（判断可否覆盖）
       this._createdHintAutonomy = ""; // 建目标后一次性「接下来会发生什么」提示
       this._createdHintTid = "";      // 建目标所用模板（配套 SOP 推荐的映射键）
       this._chainReco = null;         // {chain:{chain_id,name}, state:'idle'|'started', err}
@@ -90,20 +138,92 @@
       this._progRows = null;
       this._progLoading = false;
       this._progErr = false;
+      // 调整期限内联表单（P25）：开合态 + 输入暂存 + 归属目标（防换会话串卡）
+      this._deadlineOpen = false;
+      this._deadlineVal = null;
+      this._deadlineForGid = "";
+      this._benchCache = {};        // P1：模板 → 近30天基准（null=无足量数据）
+      this._lastDeadlineErr = "";
+      // 草稿幸存层 + 编辑防打断（P0 2026-08-04；详见 _draftCapture/_applyFormDraft/set context）
+      this._formDraft = null;       // 当前会话未提交草稿（sessionStorage 镜像）
+      this._formBaseline = null;    // 第二步「出厂快照」＝判脏基准（草稿应用前拍）
+      this._ctxDeferred = false;    // 编辑期被挂起的宿主 context 重喂（关表单后补刷）
+      this._restoring = false;      // 草稿回填进行中（抑制埋点/焦点抢占）
+      this._mhintTimer = null;      // 弹层内提示条自动隐藏定时器
+      // P1 2026-08-04：弹层键盘/焦点体验（初始聚焦、重建后焦点回位、Tab 陷阱）
+      this._modalWasOpen = false;   // 弹层是否已呈现过（区分「新开聚焦」vs「重建回位」）
+      this._lastFocusRef = "";      // 弹层内最后聚焦的控件（param key 或 __days__）
 
       this.shadowRoot.addEventListener("change", (e) => {
         const t = e.target;
         if (!t || !t.getAttribute) return;
-        if (t.getAttribute("data-chg") === "autonomy") this._syncAutonomyHint();
+        const chg = t.getAttribute("data-chg");
+        if (chg === "unlock_sel") this._onUnlockSel(t);
+        else if (chg === "tier_sel") this._onTierSel(t);
+        this._draftCapture();   // 任何控件变化实时进草稿（select/checkbox 走 change）
+      });
+      this.shadowRoot.addEventListener("input", (e) => {
+        const t = e.target;
+        if (!t || !t.getAttribute) return;
+        const chg = t.getAttribute("data-chg");
+        if (chg === "range") {
+          const out = this._ref("rangeval");
+          if (out) out.textContent = String(t.value);
+        } else if (chg === "item_label") {
+          this._labelTouched = true;   // 坐席自己写了称呼 → 不再自动跟随下拉
+        } else if (chg === "dl_days") {
+          // 改期限动态提示：只改 DOM 文本不重渲染（保输入焦点）
+          this._deadlineVal = t.value;
+          const g = this._d && this._d.goal;
+          const h = this.shadowRoot.querySelector('[data-ref="dl_hint"]');
+          if (g && h) h.textContent = this._deadlineHint(g, t.value);
+          const er = this.shadowRoot.querySelector('[data-ref="dl_err"]');
+          if (er) er.hidden = true;
+        } else if (chg === "note_disc") {
+          // 自定义 note 像摸底诉求 → 显/隐「改用客户摸底」条（不重渲染保焦点）
+          const tip = this._ref("disc_tip");
+          if (tip) tip.hidden = !DISCOVERY_NOTE_RE.test(String(t.value || ""));
+        }
+        this._draftCapture();   // 逐键实时进草稿（文本/数字/滑杆走 input）
       });
       this.shadowRoot.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && this._deadlineOpen) {
+          e.preventDefault();
+          this.onAction("deadline_cancel", null);
+          return;
+        }
+        if (e.key === "Escape" && this._formOpen && this._formStep === 2) {
+          e.preventDefault();
+          this.onAction("form_back", null);
+          return;
+        }
+        if (e.key === "Tab" && this._formOpen && this._formStep === 2) {
+          this._trapModalTab(e);   // P1：对话框语义——Tab 只在弹层内循环
+          return;
+        }
         if (e.key !== "Enter") return;
+        if ((e.ctrlKey || e.metaKey) && this._formOpen && this._formStep === 2) {
+          // P1：Ctrl/Cmd+Enter＝创建（键盘流不必够到弹层底部按钮）
+          e.preventDefault();
+          const cbtn = this.shadowRoot.querySelector('.gl-mfoot [data-act="create"]');
+          if (cbtn && !cbtn.disabled) this.onAction("create", cbtn);
+          return;
+        }
         const t = e.target;
         if (!t || !t.getAttribute) return;
         if (t.getAttribute("data-prof-key") != null) {
           e.preventDefault();
           this._profSave(this.shadowRoot.querySelector('[data-act="prof_save"]'));
         }
+      });
+      // P1：记住弹层内最后聚焦的控件——整块重建后焦点回到编辑位而不是丢到 body
+      this.shadowRoot.addEventListener("focusin", (e) => {
+        if (!this._formOpen || this._formStep !== 2) return;
+        const t = e.target;
+        if (!t || !t.getAttribute) return;
+        const k = t.getAttribute("data-param-key")
+          || (t.getAttribute("data-ref") === "days" ? "__days__" : "");
+        if (k) this._lastFocusRef = k;
       });
       // 宿主深链 / 英雄卡 CTA：打开建目标表单
       this.addEventListener("cp-goal-open-form", () => {
@@ -163,6 +283,24 @@
                    margin:3px 0 2px; }
       .gl-meta { font-size:var(--cp-fs-sm,12px); color:var(--cp-text-dim,#64748b);
                  margin:2px 0 var(--cp-gap-xs,4px); }
+      /* 「第X/Y天」可点改期限：视觉与旧纯文本一致，hover 才显出可交互 */
+      .gl-meta-btn { background:transparent; border:none; padding:0; margin:0; cursor:pointer;
+                     font:inherit; font-size:var(--cp-fs-sm,12px); color:var(--cp-text-dim,#64748b); }
+      .gl-meta-btn:hover { color:var(--cp-accent,#4f46e5); }
+      .gl-meta-pen { margin-left:4px; opacity:.55; font-size:10px; }
+      .gl-dl-row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+      .gl-dl-row input { width:64px; flex:0 0 auto; }
+      .gl-dl-chips { display:flex; flex-wrap:wrap; gap:4px; }
+      .gl-chip.on { color:var(--cp-accent,#4f46e5); border-color:var(--cp-accent,#4f46e5);
+                    background:var(--cp-accent-weak,rgba(79,70,229,.08)); }
+      /* 临期决策行（P1）：琥珀 chip + 就地动作，样式对齐 .gl-badge.warn */
+      .gl-due { display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+                margin:2px 0 var(--cp-gap-xs,4px); }
+      .gl-due-chip { display:inline-block; padding:1px 7px; border-radius:99px; line-height:1.5;
+                     font-size:var(--cp-fs-tiny,11px); color:var(--cp-warn,#b45309);
+                     border:1px solid color-mix(in srgb,var(--cp-warn,#d97706) 40%,transparent);
+                     background:color-mix(in srgb,var(--cp-warn,#d97706) 12%,transparent); }
+      .gl-due button { font-size:var(--cp-fs-tiny,11px); padding:1px 8px; }
       .gl-sec { border-radius:8px; padding:7px 9px; margin:var(--cp-gap-xs,4px) 0;
                 background:var(--cp-surface-2,#f8fafc); border:1px solid var(--cp-border,#e2e8f0);
                 border-left:3px solid var(--cp-border,#e2e8f0); }
@@ -204,6 +342,7 @@
                      box-shadow:0 4px 14px rgba(15,23,42,.08); }
       .gl-more-pop button { display:block; width:100%; text-align:left; margin:0; border:none;
                             background:transparent; color:var(--cp-danger,#dc2626); padding:5px 8px; }
+      .gl-more-pop button.safe { color:var(--cp-text,#374151); }
       .gl-result { font-size:var(--cp-fs-sm,12px); color:var(--cp-text,#374151);
                    line-height:1.5; margin:var(--cp-gap-xs,4px) 0; }
       .gl-last { display:flex; gap:5px; align-items:center; flex-wrap:wrap;
@@ -215,10 +354,12 @@
                      line-height:1.5; padding:4px 0; }
       .gl-form { display:flex; flex-direction:column; gap:var(--cp-gap-sm,6px); }
       .gl-fl { display:block; font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b); margin-bottom:2px; }
-      .gl-form select,.gl-form input { width:100%; box-sizing:border-box; font:inherit;
+      .gl-form select,.gl-form input,.gl-form textarea { width:100%; box-sizing:border-box; font:inherit;
                  font-size:var(--cp-fs-sm,12px); color:var(--cp-text,#1e293b);
                  background:var(--cp-surface,#fff); border:1px solid var(--cp-border,#e2e8f0);
                  border-radius:var(--cp-radius-sm,6px); padding:4px 7px; }
+      .gl-form textarea { resize:vertical; min-height:54px; line-height:1.5; }
+      .gl-form input[type="range"] { padding:0; border:none; background:transparent; }
       .gl-hint { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-tiny,#94a3b8);
                  line-height:1.45; margin-top:2px; }
       .gl-ferr { font-size:var(--cp-fs-tiny,11px); color:var(--cp-danger,#dc2626); line-height:1.45; }
@@ -289,22 +430,174 @@
       .gl-empty svg { display:block; margin:0 auto 8px; color:var(--cp-accent,#4f46e5); opacity:.85; }
       .gl-toast { font-size:var(--cp-fs-tiny,11px); color:var(--cp-ok,#0f9d75); margin-top:4px; }
       .gl-draft-btn { font-size:10px; padding:1px 7px; margin-left:auto; }
+      /* ── 建目标向导 · 第一步：分组场景卡（类别色条 + 线稿图标）────────── */
       .gl-scenlist { display:flex; flex-direction:column; gap:4px; }
-      .gl-scen { border:1px solid var(--cp-border,#e2e8f0); border-radius:8px; padding:6px 9px;
+      .gl-grp { font-size:10px; font-weight:700; letter-spacing:.4px;
+                color:var(--cp-text-tiny,#94a3b8); margin:5px 0 0; }
+      .gl-grp:first-child { margin-top:0; }
+      .gl-scen { display:flex; gap:8px; align-items:flex-start;
+                 border:1px solid var(--cp-border,#e2e8f0);
+                 border-left:3px solid var(--cp-border,#e2e8f0);
+                 border-radius:8px; padding:7px 9px;
                  cursor:pointer; background:var(--cp-surface,#fff); }
+      .gl-scen:hover { box-shadow:0 1px 6px rgba(15,23,42,.10); }
       .gl-scen.sel { border-color:var(--cp-accent,#4f46e5);
                      background:var(--cp-accent-weak,rgba(79,70,229,.06));
                      box-shadow:0 0 0 1px var(--cp-accent,#4f46e5) inset; }
+      /* 类别色条放在 .sel 之后：选中态也保留业务类别色 */
+      .gl-scen.gk-conversion { border-left-color:var(--cp-goal-conv,#b45309); }
+      .gl-scen.gk-relationship { border-left-color:var(--cp-goal-rel,#e11d48); }
+      .gl-scen.gk-engagement { border-left-color:var(--cp-goal-eng,#0284c7); }
+      .gl-scen.gk-discovery { border-left-color:var(--cp-goal-disc,#0d9488); }
+      .gl-scen-ic { flex:0 0 auto; width:15px; height:15px; margin-top:1px;
+                    color:var(--cp-text-dim,#64748b); }
+      .gl-scen-ic svg { display:block; width:100%; height:100%; }
+      .gk-conversion .gl-scen-ic { color:var(--cp-goal-conv,#b45309); }
+      .gk-relationship .gl-scen-ic { color:var(--cp-goal-rel,#e11d48); }
+      .gk-engagement .gl-scen-ic { color:var(--cp-goal-eng,#0284c7); }
+      .gk-discovery .gl-scen-ic { color:var(--cp-goal-disc,#0d9488); }
+      .gk-custom .gl-scen-ic,.gl-scen-custom .gl-scen-ic { color:var(--cp-violet,#7c3aed); }
+      .gl-scen-mn { flex:1 1 auto; min-width:0; }
       .gl-scen-nm { font-size:var(--cp-fs-sm,12px); font-weight:var(--cp-fw-bold,600);
-                    color:var(--cp-text,#1e293b); display:flex; align-items:center; gap:6px; }
+                    color:var(--cp-text,#1e293b); display:flex; align-items:center;
+                    gap:6px; flex-wrap:wrap; }
       .gl-scen-d { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b);
                    line-height:1.45; margin-top:1px; }
       .gl-scen-rec { flex:0 0 auto; font-size:10px; padding:0 6px; border-radius:99px;
                      line-height:16px; background:var(--cp-accent,#4f46e5); color:#fff; }
-      .gl-adv { background:transparent; border:none; cursor:pointer; text-align:left;
-                font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b);
-                text-decoration:underline; padding:2px 0; }
+      .gl-scen-last { flex:0 0 auto; font-size:10px; padding:0 6px; border-radius:99px;
+                      line-height:15px; border:1px solid var(--cp-border,#e2e8f0);
+                      color:var(--cp-text-tiny,#94a3b8); }
+      /* 自定义目标＝独立高亮卡（violet 描边+浅底；比场景卡更醒目的进阶入口） */
+      .gl-scen-custom { border-style:dashed;
+                        border-color:color-mix(in srgb,var(--cp-violet,#7c3aed) 55%,var(--cp-border,#e2e8f0));
+                        border-left-style:solid; border-left-width:3px;
+                        border-left-color:var(--cp-violet,#7c3aed);
+                        background:color-mix(in srgb,var(--cp-violet,#7c3aed) 6%,var(--cp-surface,#fff)); }
+      .gl-scen-custom.sel { border-color:var(--cp-violet,#7c3aed);
+                            box-shadow:0 0 0 1px var(--cp-violet,#7c3aed) inset;
+                            background:color-mix(in srgb,var(--cp-violet,#7c3aed) 11%,var(--cp-surface,#fff)); }
+      .gl-adv-pill { flex:0 0 auto; font-size:10px; padding:0 6px; border-radius:99px;
+                     line-height:15px; border:1px solid var(--cp-violet,#7c3aed);
+                     color:var(--cp-violet,#7c3aed);
+                     background:color-mix(in srgb,var(--cp-violet,#7c3aed) 10%,transparent); }
       .gl-anote { color:var(--cp-warn,#b45309); }
+      /* ── 建目标向导 · 第二步：场景设置弹层（fixed 居中，逃离窄栏约束）──── */
+      .gl-ov { position:fixed; inset:0; z-index:9999;
+               background:rgba(15,23,42,.48); display:flex; align-items:center;
+               justify-content:center; padding:16px 10px; }
+      .gl-modal { width:min(94vw,400px); max-height:min(86vh,660px);
+                  display:flex; flex-direction:column; overflow:hidden;
+                  background:var(--cp-surface,#fff); color:var(--cp-text,#1e293b);
+                  border:1px solid var(--cp-border,#e2e8f0); border-radius:14px;
+                  box-shadow:0 24px 64px rgba(15,23,42,.30); }
+      .gl-mband { flex:0 0 auto; height:4px; background:var(--cp-accent,#4f46e5); }
+      .gl-modal.gk-conversion .gl-mband { background:var(--cp-goal-conv,#b45309); }
+      .gl-modal.gk-relationship .gl-mband { background:var(--cp-goal-rel,#e11d48); }
+      .gl-modal.gk-engagement .gl-mband { background:var(--cp-goal-eng,#0284c7); }
+      .gl-modal.gk-discovery .gl-mband { background:var(--cp-goal-disc,#0d9488); }
+      .gl-modal.gk-custom .gl-mband { background:var(--cp-violet,#7c3aed); }
+      /* 摸底进度打勾清单 + 建目标槽位 chips */
+      .gl-slots { margin-top:6px; }
+      .gl-slots-hd { font-size:var(--cp-fs-tiny,11px); font-weight:600;
+                     color:var(--cp-text-dim,#64748b); margin-bottom:4px; }
+      .gl-slots-row { display:flex; flex-wrap:wrap; gap:4px; }
+      .gl-slotchk { display:inline-flex; align-items:center; gap:3px;
+                    font-size:10px; padding:1px 7px; border-radius:99px;
+                    border:1px solid var(--cp-border,#e2e8f0);
+                    color:var(--cp-text-tiny,#94a3b8); background:transparent; }
+      .gl-slotchk.on { color:var(--cp-ok,#0f9d75); border-color:rgba(15,157,117,.45);
+                       background:rgba(15,157,117,.08); }
+      .gl-slotpicks { margin-top:4px; }
+      .gl-disc-tip { margin-top:6px; padding:6px 8px; border-radius:8px;
+                     background:rgba(13,148,136,.08);
+                     border:1px solid rgba(13,148,136,.28);
+                     font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b);
+                     line-height:1.45; }
+      .gl-disc-tip .acts { margin-top:4px; }
+      .gl-mhd { display:flex; gap:8px; align-items:flex-start; padding:12px 14px 2px; }
+      .gl-mhd .gl-scen-ic { width:18px; height:18px; margin-top:1px; }
+      .gl-mtitle { flex:1 1 auto; min-width:0; font-size:14px;
+                   font-weight:var(--cp-fw-bold,700); color:var(--cp-text,#1e293b); }
+      .gl-mclose { flex:0 0 auto; border:none; background:transparent; cursor:pointer;
+                   font-size:15px; line-height:1; color:var(--cp-text-tiny,#94a3b8);
+                   padding:2px 6px; border-radius:6px; }
+      .gl-mclose:hover { color:var(--cp-text,#1e293b); background:var(--cp-surface-2,#f8fafc); }
+      .gl-mdesc { padding:2px 14px 0; font-size:var(--cp-fs-sm,12px);
+                  color:var(--cp-text-dim,#64748b); line-height:1.5; }
+      .gl-mbody { padding:10px 14px 12px; overflow:auto; }
+      .gl-mfoot { flex:0 0 auto; display:flex; gap:6px; justify-content:flex-end;
+                  align-items:center; padding:9px 14px;
+                  border-top:1px solid var(--cp-border,#e2e8f0);
+                  background:var(--cp-surface-2,#f8fafc); }
+      /* 背板误触反馈（gl-mfoot 左侧轻提示，DOM 级显隐不重渲染）；
+         .dim＝P1 常驻「自动暂存中」灰字微反馈（警示态优先） */
+      .gl-mhint { flex:1 1 auto; min-width:0; margin-right:auto; text-align:left;
+                  font-size:var(--cp-fs-tiny,11px); line-height:1.4;
+                  color:var(--cp-warn,#b45309); }
+      .gl-mhint.dim { color:var(--cp-text-tiny,#94a3b8); }
+      /* P1：窄屏（手机竖屏）弹层改底部抽屉——贴 dvh，软键盘弹出不顶飞输入框 */
+      @media (max-width: 520px) {
+        .gl-ov { align-items:flex-end; padding:0; }
+        .gl-modal { width:100vw; max-width:100vw; border-radius:14px 14px 0 0;
+                    max-height:92vh; max-height:92dvh; }
+      }
+      /* 草稿恢复提示条（mbody 顶部）+ 场景卡「有草稿」徽标 */
+      .gl-mrestore { display:flex; gap:8px; align-items:center; justify-content:space-between;
+                     padding:5px 9px; border-radius:8px; margin-bottom:2px;
+                     font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b);
+                     background:color-mix(in srgb,var(--cp-ok,#0f9d75) 9%,var(--cp-surface,#fff));
+                     border:1px solid color-mix(in srgb,var(--cp-ok,#0f9d75) 30%,transparent); }
+      .gl-mrestore button { flex:0 0 auto; font-size:var(--cp-fs-tiny,11px); padding:2px 8px; }
+      .gl-scen-draftb { flex:0 0 auto; font-size:10px; padding:0 6px; border-radius:99px;
+                        line-height:16px; color:#fff; background:var(--cp-ok,#0f9d75); }
+      .gl-msec-t { font-size:10px; font-weight:700; letter-spacing:.4px;
+                   color:var(--cp-text-tiny,#94a3b8); margin-bottom:3px; }
+      /* 节奏预览（AI 会怎么推进）：编号节点 + 里程碑名 + 推进力度 pill */
+      .gl-arc { border:1px solid var(--cp-border,#e2e8f0); border-radius:10px;
+                padding:7px 10px; background:var(--cp-surface-2,#f8fafc); }
+      .gl-arc-row { display:flex; gap:7px; align-items:center; padding:2px 0;
+                    font-size:var(--cp-fs-sm,12px); color:var(--cp-text,#374151); }
+      .gl-arc-idx { flex:0 0 auto; width:16px; height:16px; border-radius:50%;
+                    background:var(--cp-track,#e2e8f0); color:var(--cp-text-dim,#64748b);
+                    font-size:10px; line-height:16px; text-align:center; font-weight:700; }
+      .gl-arc-nm { flex:1 1 auto; min-width:0; }
+      /* AI 参与度三张单选卡（替代原生 select，选中态 accent 描边） */
+      .gl-auto-cards { display:flex; flex-direction:column; gap:4px; }
+      .gl-auto-card { border:1px solid var(--cp-border,#e2e8f0); border-radius:8px;
+                      padding:6px 9px; cursor:pointer; background:var(--cp-surface,#fff); }
+      .gl-auto-card.sel { border-color:var(--cp-accent,#4f46e5);
+                          background:var(--cp-accent-weak,rgba(79,70,229,.06));
+                          box-shadow:0 0 0 1px var(--cp-accent,#4f46e5) inset; }
+      .gl-auto-nm { font-size:var(--cp-fs-sm,12px); font-weight:var(--cp-fw-bold,600);
+                    color:var(--cp-text,#1e293b); display:flex; align-items:center; gap:6px; }
+      .gl-auto-d { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b);
+                   line-height:1.45; margin-top:1px; }
+      /* 信息气泡（中性说明，替代橙色警告字——「未开主动触达」是状态不是错误） */
+      .gl-note-info { display:flex; gap:6px; align-items:flex-start; padding:6px 9px;
+                      border-radius:8px; font-size:var(--cp-fs-tiny,11px); line-height:1.5;
+                      color:var(--cp-text-dim,#64748b);
+                      background:var(--cp-accent-bg,#eef6fe);
+                      border:1px solid color-mix(in srgb,var(--cp-accent,#1e8cf2) 26%,transparent); }
+      .gl-note-info svg { flex:0 0 auto; width:13px; height:13px; margin-top:1px;
+                          color:var(--cp-accent,#1e8cf2); }
+      /* 亲密度滑杆 */
+      .gl-range-row { display:flex; gap:8px; align-items:center; }
+      .gl-range-row input { flex:1 1 auto; }
+      .gl-range-val { flex:0 0 auto; min-width:26px; text-align:right;
+                      font-size:var(--cp-fs-sm,12px); font-weight:700;
+                      color:var(--cp-accent,#4f46e5); font-variant-numeric:tabular-nums; }
+      .gl-range-scale { display:flex; justify-content:space-between; font-size:10px;
+                        color:var(--cp-text-tiny,#94a3b8); margin-top:1px; }
+      /* 示例 chips 行（点击填入 textarea） */
+      .gl-exrow { display:flex; flex-wrap:wrap; gap:4px; margin-top:4px; }
+      /* 「高级参数」折叠（自动继承字段收进来，别吓住新手） */
+      details.gl-advp { border:1px dashed var(--cp-border,#e2e8f0); border-radius:8px;
+                        padding:5px 8px; }
+      details.gl-advp summary { cursor:pointer; font-size:var(--cp-fs-tiny,11px);
+                                color:var(--cp-text-dim,#64748b); }
+      .gl-advp-bd { display:flex; flex-direction:column; gap:6px; margin-top:6px; }
+      .gl-params { display:flex; flex-direction:column; gap:6px; }
       .gl-created { border-left-color:var(--cp-ok,#0f9d75);
                     background:color-mix(in srgb,var(--cp-ok,#0f9d75) 7%,var(--cp-surface-2,#f8fafc)); }
       .gl-created-tx { font-size:var(--cp-fs-sm,12px); line-height:1.55; color:var(--cp-text,#374151); }
@@ -345,9 +638,11 @@
       if (this._lastCid !== cid) {
         this._lastCid = cid;
         this._formOpen = false;
+        this._formStep = 1;
         this._formTid = "";
         this._formAutonomy = "";
         this._formUsePrefDays = true;
+        this._resetParamState();
         this._createdHintAutonomy = "";
         this._createdHintTid = "";
         this._chainReco = null;
@@ -364,6 +659,10 @@
         this._progRows = null;
         this._progLoading = false;
         this._progErr = false;
+        // 草稿：内存态随会话复位；sessionStorage 里按 cid 各存各的，切回来还能续写
+        this._formDraft = null;
+        this._formBaseline = null;
+        this._ctxDeferred = false;
       }
       const url = "/api/goals/for-conversation?conversation_id=" + encodeURIComponent(cid);
       let res = null;
@@ -407,11 +706,18 @@
         _beacon("goal_card_expose");
       }
       if (d.__error) {
+        // 取数瞬时失败不打断编辑：表单开着就保表单（旧行为＝错误行顶掉表单，输入全丢）
+        if (this._formOpen) return this._renderForm() + this._toastHtml();
         return `<div class="gl-errline" data-act="retry">${this.esc(this.t("inbox.goal.err_retry"))}</div>`;
       }
       const g = d.goal || null;
       if (g && !TERMINAL[g.status]) {
-        this._formOpen = false;
+        // 编辑中冒出进行中目标（AI 自建 P22 / 另一窗口刚建）：不再静默强关表单——
+        // 保留编辑态，坐席若坚持创建由后端 active_limit 如实 409、错误就地显示。
+        if (this._formOpen) {
+          this._emitLoadedSignal(g);
+          return this._renderForm() + this._toastHtml();
+        }
         this._wonFormOpen = false;
         const mi = parseInt(g.milestone_idx, 10) || 0;
         if (this._prevMsIdx >= 0 && mi > this._prevMsIdx) this._celebrateMs = true;
@@ -544,7 +850,16 @@
       }
 
       const pct = Math.max(0, Math.min(100, Math.round((parseFloat(g.progress) || 0) * 100)));
-      const meta = `<div class="gl-meta">${esc(this.t("inbox.goal.day_of", { day: g.day_index || 1, total: g.total_days || 0 }))} · ${pct}%</div>`;
+      // 「第X/Y天」即改期限入口（P25）；换了会话/目标自动收起旧表单
+      if (this._deadlineOpen && this._deadlineForGid !== String(g.goal_id || "")) {
+        this._deadlineOpen = false;
+        this._deadlineVal = null;
+      }
+      const dayTxt = this.t("inbox.goal.day_of", { day: g.day_index || 1, total: g.total_days || 0 });
+      const meta = `<div class="gl-meta"><button type="button" class="gl-meta-btn" data-act="deadline_toggle"` +
+        ` title="${esc(this.t("inbox.goal.deadline.edit_t"))}">${esc(dayTxt)} · ${pct}%` +
+        `<span class="gl-meta-pen" aria-hidden="true">\u270E</span></button></div>` +
+        (this._deadlineOpen ? this._renderDeadlineForm(g) : this._renderDueRow(g));
 
       let today = "";
       const beat = g.today;
@@ -600,6 +915,7 @@
         `<button class="gl-link" data-act="more_toggle">${esc(this.t("inbox.goal.more_menu"))} \u22EF</button>` +
         (this._moreOpen
           ? `<div class="gl-more-pop">` +
+            `<button class="safe" data-act="deadline_toggle">${esc(this.t("inbox.goal.deadline.title"))}</button>` +
             `<button data-act="redirect">${esc(this.t("inbox.goal.act.redirect"))}</button>` +
             `<button data-act="cancel">${esc(this.t("inbox.goal.act.cancel"))}</button></div>`
           : "") +
@@ -628,7 +944,218 @@
 
       return `<div class="gl-hdr"><span class="gl-title">${esc(g.title || g.template_name || "")}</span>` +
         `${this._statusBadge(g.status)}${origin}${tag}</div>` + createdHint + track + meta + today +
-        this._renderProgress() + this._renderProfile() + this._renderProducts(g) + acts;
+        this._renderSlotsProgress(g) + this._renderProgress() + this._renderProfile() +
+        this._renderProducts(g) + acts;
+    }
+
+    /* P28：摸底类目标 params.slots → 打勾清单（API slots_progress）。
+       客户答了职业下轮刷新即打勾；缺清单=非摸底目标，零渲染。 */
+    _renderSlotsProgress(g) {
+      const rows = (g && Array.isArray(g.slots_progress)) ? g.slots_progress : [];
+      if (!rows.length) return "";
+      const esc = (s) => this.esc(s);
+      const filled = rows.filter((s) => s && s.filled).length;
+      const chips = rows.map((s) => {
+        const on = !!s.filled;
+        const tip = on
+          ? (String(s.label || s.key) + (s.value ? ": " + s.value : ""))
+          : this.t("inbox.goal.slots.miss_t", { label: s.label || s.key });
+        return `<span class="gl-slotchk${on ? " on" : ""}" title="${esc(tip)}">` +
+          `${on ? "\u2713" : "\u25CB"} ${esc(s.label || s.key)}` +
+          (on && s.value ? `\u00b7${esc(s.value)}` : "") + `</span>`;
+      }).join("");
+      return `<div class="gl-sec gl-slots"><div class="gl-slots-hd">` +
+        `${esc(this.t("inbox.goal.slots.title"))} · ${filled}/${rows.length}</div>` +
+        `<div class="gl-slots-row">${chips}</div></div>`;
+    }
+
+    /* ── 调整期限（改节奏）内联表单（P25）── */
+
+    _renderDeadlineForm(g) {
+      const esc = (s) => this.esc(s);
+      const minD = Math.max(1, parseInt(g.day_index, 10) || 1);
+      const cur = Math.max(minD, parseInt(g.total_days, 10) || minD);
+      const raw = (this._deadlineVal == null || this._deadlineVal === "") ? cur : this._deadlineVal;
+      const val = parseInt(raw, 10);
+      const mk = (days, label, tip, on) =>
+        `<button type="button" class="gl-chip${on ? " on" : ""}" data-act="deadline_chip"` +
+        ` data-days="${days}"${tip ? ` title="${esc(tip)}"` : ""}>${esc(label)}</button>`;
+      const chips = [mk(minD, this.t("inbox.goal.deadline.chip_today"),
+        this.t("inbox.goal.deadline.chip_today_t"), val === minD)];
+      [3, 7, 14].forEach((d) => {
+        if (d <= minD) return;          // 低于下限的预设不出现（出现即误导）
+        chips.push(mk(d, this.t("inbox.goal.deadline.chip_days", { n: d }), "", val === d));
+      });
+      const bench = this._benchLine(g);
+      return `<div class="gl-form gl-dl">` +
+        `<div><label class="gl-fl">${esc(this.t("inbox.goal.deadline.days_label"))}</label>` +
+        `<div class="gl-dl-row">` +
+        `<input type="number" min="${minD}" max="180" step="1" data-ref="dl_days"` +
+        ` data-chg="dl_days" value="${esc(String(isFinite(val) ? val : cur))}">` +
+        `<span class="gl-dl-chips">${chips.join("")}</span></div>` +
+        `<div class="gl-hint" data-ref="dl_hint">${esc(this._deadlineHint(g, raw))}</div>` +
+        (bench ? `<div class="gl-hint gl-dl-bench">${esc(bench)}</div>` : "") +
+        `<div class="gl-ferr" data-ref="dl_err" hidden></div></div>` +
+        `<div class="acts gl-acts"><button data-act="deadline_cancel">${esc(this.t("cp.common.cancel"))}</button>` +
+        `<button class="primary" data-act="deadline_save">${esc(this.t("inbox.goal.deadline.save"))}</button></div>` +
+        `</div>`;
+    }
+
+    /* 临期决策行（P1）：最后一天/倒数第二天把「快到期」从静默变成显式选择。
+       只在 active 且期限表单未展开时出现（表单里已有同款控件，不重复）。 */
+    _renderDueRow(g) {
+      if (String(g.status) !== "active") return "";
+      const total = parseInt(g.total_days, 10) || 0;
+      const day = parseInt(g.day_index, 10) || 0;
+      if (total <= 0 || day < total - 1) return "";
+      const esc = (s) => this.esc(s);
+      const dueToday = day >= total;
+      const labKey = dueToday ? "inbox.goal.due.today" : "inbox.goal.due.tomorrow";
+      const tipKey = dueToday ? "inbox.goal.due.today_t" : "inbox.goal.due.tomorrow_t";
+      let acts = "";
+      if (!dueToday) {
+        acts += `<button type="button" data-act="due_wrap"` +
+          ` title="${esc(this.t("inbox.goal.deadline.chip_today_t"))}">` +
+          `${esc(this.t("inbox.goal.deadline.chip_today"))}</button>`;
+      }
+      acts += `<button type="button" data-act="due_extend">${esc(this.t("inbox.goal.due.extend7"))}</button>`;
+      return `<div class="gl-due"><span class="gl-due-chip" title="${esc(this.t(tipKey))}">` +
+        `\u23F3 ${esc(this.t(labKey))}</span>${acts}</div>`;
+    }
+
+    /* 近30天同模板基准线（P1）：终局 ≥3 才显示——小样本读数比没数据更误导 */
+    _benchLine(g) {
+      const b = this._benchCache ? this._benchCache[String(g.template || "")] : null;
+      if (!b || !b.n) return "";
+      if (b.days != null) {
+        return this.t("inbox.goal.deadline.bench",
+          { rate: b.rate, n: b.n, days: b.days });
+      }
+      return this.t("inbox.goal.deadline.bench_no_avg", { rate: b.rate, n: b.n });
+    }
+
+    async _loadBenchmark(tid) {
+      tid = String(tid || "");
+      if (!tid || (tid in this._benchCache)) return;   // null 占位=已取过/取数中
+      this._benchCache[tid] = null;
+      let res = null;
+      try {
+        res = await this._api("/api/goals/report?days=30");
+      } catch (_e) { res = null; }
+      const bt = (res && res.ok && res.data && res.data.by_template)
+        ? res.data.by_template[tid] : null;
+      if (bt) {
+        // organic 终局＝done+failed+expired（cancelled 是人的放弃，不进分母）
+        const org = (parseInt(bt.done, 10) || 0) + (parseInt(bt.failed, 10) || 0)
+          + (parseInt(bt.expired, 10) || 0);
+        if (org >= 3) {
+          this._benchCache[tid] = {
+            n: org,
+            rate: Math.round(((parseInt(bt.done, 10) || 0) / org) * 100),
+            days: (bt.avg_days_to_done == null) ? null
+              : Math.round(Number(bt.avg_days_to_done) * 10) / 10,
+          };
+        }
+      }
+      // 基准线到达＝DOM 注入而非 _rerender（与动态提示同模式）：重渲染会把
+      // 正在输入的坐席焦点抢走、把探针/外部引用的节点整批作废——表单重开时
+      // 由渲染路径从缓存直出，两条路都只有一份 .gl-dl-bench。
+      if (this._deadlineOpen) {
+        const g = this._d && this._d.goal;
+        const line = g ? this._benchLine(g) : "";
+        if (line && !this.shadowRoot.querySelector(".gl-dl-bench")) {
+          const h = this.shadowRoot.querySelector('[data-ref="dl_hint"]');
+          if (h && h.parentNode) {
+            const div = document.createElement("div");
+            div.className = "gl-hint gl-dl-bench";
+            div.textContent = line;
+            h.parentNode.insertBefore(div, h.nextSibling);
+          }
+        }
+      }
+    }
+
+    /* 动态后果提示：加速/放缓/今天收口/低于下限，与后端护栏同一判定式 */
+    _deadlineHint(g, raw) {
+      const minD = Math.max(1, parseInt(g.day_index, 10) || 1);
+      const cur = parseInt(g.total_days, 10) || 0;
+      const v = parseInt(raw, 10);
+      if (!isFinite(v) || v < minD || v > 180) {
+        return this.t("inbox.goal.deadline.err_min", { day: minD });
+      }
+      if (v === minD) return this.t("inbox.goal.deadline.hint_today");
+      if (cur && v < cur) return this.t("inbox.goal.deadline.hint_faster");
+      if (cur && v > cur) return this.t("inbox.goal.deadline.hint_slower");
+      return this.t("inbox.goal.deadline.hint_same");
+    }
+
+    /* 改期限的唯一 POST 出口：表单保存与临期快捷动作共用（口径零分叉）。
+       成功＝收表单/换视图/toast/回源刷新；失败＝把 detail 暂存给调用方渲染。 */
+    async _postDeadline(days) {
+      const g = this._d && this._d.goal;
+      if (!g || !g.goal_id) return false;
+      this._lastDeadlineErr = "";
+      let res = null;
+      try {
+        res = await this._api(`/api/goals/${encodeURIComponent(g.goal_id)}/update`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deadline_days: days }),
+        });
+      } catch (_e) { res = null; }
+      if (res && res.status === 403) { this._hideCard(!_showDisabledHint()); return false; }
+      if (res && res.ok && res.data && res.data.goal) {
+        this._deadlineOpen = false;
+        this._deadlineVal = null;
+        const ng = res.data.goal;
+        if (g.today && !ng.today) ng.today = g.today;   // 旧后端 update 不带 today
+        this._d = Object.assign({}, this._d, { goal: ng });
+        this._flashToast(this.t("inbox.goal.deadline.saved", { n: days }));
+        this._rerender();
+        this.emit("cp-goal-changed", { action: "deadline", conversationId: g.conversation_id });
+        this.refresh();   // 回源刷一次：产品行/今日拍与服务端结算完全对齐
+        return true;
+      }
+      const detail = res && res.data && res.data.detail;
+      this._lastDeadlineErr = detail ? String(detail) : "";
+      return false;
+    }
+
+    async _saveDeadline(btn) {
+      const g = this._d && this._d.goal;
+      if (!g || !g.goal_id) return;
+      const inp = this._ref("dl_days");
+      const v = parseInt(inp && inp.value != null && inp.value !== ""
+        ? inp.value : this._deadlineVal, 10);
+      const minD = Math.max(1, parseInt(g.day_index, 10) || 1);
+      const err = this._ref("dl_err");
+      if (!isFinite(v) || v < minD || v > 180) {
+        // 预检与后端护栏同口径：低于「已进行天数」＝立即过期，压根不发请求
+        if (err) {
+          err.textContent = this.t("inbox.goal.deadline.err_min", { day: minD });
+          err.hidden = false;
+        }
+        return;
+      }
+      if (v === (parseInt(g.total_days, 10) || 0)) {
+        // 没改值＝没事可做：静默收起，不发一个无意义请求、不落无意义事件
+        this._deadlineOpen = false;
+        this._deadlineVal = null;
+        this._rerender();
+        return;
+      }
+      if (btn) btn.disabled = true;
+      _beacon("goal_deadline_save");
+      const ok = await this._postDeadline(v);
+      if (!ok) {
+        if (btn) btn.disabled = false;
+        const e2 = this._ref("dl_err");
+        if (e2) {
+          e2.textContent = (this._lastDeadlineErr
+            || this.t("inbox.goal.err_retry")).slice(0, 160);
+          e2.hidden = false;
+        }
+      }
     }
 
     /* ── 「AI 做了什么」进展时间线（拍史；懒取 + 每目标缓存）── */
@@ -829,15 +1356,452 @@
       return null;
     }
 
+    /* ── 建目标向导 · 参数控件注册表 ──────────────────────────────────────
+       已知 (模板, 参数) 渲染人话控件（下拉/滑杆/textarea/示例 chips）；
+       未注册参数回落通用输入框——未来新模板零前端改动也能用。
+       label/help 优先走 i18n 键（模板热更零重启），键缺失回落后端 schema
+       的 label_zh/en（绝不裸奔键名）。 */
+
+    _paramLabel(tid, p) {
+      const v = this.t("inbox.goal.param_label." + tid + "." + p.key);
+      if (v && String(v).indexOf("inbox.goal.") !== 0) return String(v);
+      return LANG === "en" ? (p.label_en || p.label_zh || p.key)
+        : (p.label_zh || p.label_en || p.key);
+    }
+
+    _paramHelp(tid, p) {
+      const v = this.t("inbox.goal.param_help." + tid + "." + p.key);
+      if (v && String(v).indexOf("inbox.goal.") !== 0) return String(v);
+      // 后端 schema 若带 help_zh/en（包2 起），作为未登记键的回落
+      const h = LANG === "en" ? (p.help_en || p.help_zh) : (p.help_zh || p.help_en);
+      return h ? String(h) : "";
+    }
+
+    _helpHtml(text) {
+      return text ? `<div class="gl-hint">${this.esc(text)}</div>` : "";
+    }
+
+    /* pickers 优先（包2 后端 templates 响应自带），否则用 /api/monetize/catalog */
+    _unlockItems() {
+      const pk = this._templates && this._templates.pickers;
+      if (pk && Array.isArray(pk.unlock_items) && pk.unlock_items.length) return pk.unlock_items;
+      return (this._catalog && this._catalog.items) || [];
+    }
+
+    _tierItems() {
+      const pk = this._templates && this._templates.pickers;
+      if (pk && Array.isArray(pk.tiers) && pk.tiers.length) return pk.tiers;
+      return (this._catalog && this._catalog.tiers) || [];
+    }
+
+    _stageList() {
+      const pk = this._templates && this._templates.pickers;
+      if (pk && Array.isArray(pk.stages) && pk.stages.length) return pk.stages;
+      return STAGES;
+    }
+
+    _needsCatalog(tid) {
+      if (tid === "conversion_unlock") return !this._unlockItems().length;
+      if (tid === "conversion_subscribe") return !this._tierItems().length;
+      return false;
+    }
+
+    async _loadCatalog() {
+      this._catalogTried = true;
+      let res = null;
+      try { res = await this._api("/api/monetize/catalog"); } catch (_e) { res = null; }
+      const cat = res && res.ok && res.data && res.data.catalog;
+      if (!cat || typeof cat !== "object") { this._catalog = null; return; }
+      const currency = String(cat.currency || "USD");
+      const items = [];
+      const rawItems = cat.items || {};
+      Object.keys(rawItems).forEach((id) => {
+        const c = rawItems[id] || {};
+        items.push({ id, label: String(c.label || id), price: parseFloat(c.price) || 0 });
+      });
+      const tiers = [];
+      const rawTiers = cat.tiers || {};
+      Object.keys(rawTiers).forEach((id) => {
+        if (id === "free") return;   // 卖「免费档」没有意义
+        const c = rawTiers[id] || {};
+        tiers.push({ id, label: String(c.label || id), monthly: parseFloat(c.monthly) || 0 });
+      });
+      this._catalog = { currency, items, tiers };
+    }
+
+    _money(n) {
+      const v = Math.round((parseFloat(n) || 0) * 100) / 100;
+      if (!v) return "";
+      const pk = this._templates && this._templates.pickers;
+      const cur = String((pk && pk.currency)
+        || (this._catalog && this._catalog.currency) || "USD");
+      return cur === "USD" ? "$" + v : v + " " + cur;
+    }
+
+    _unlockLabelFor(id) {
+      const hit = this._unlockItems().find((i) => i && i.id === id);
+      return hit ? String(hit.label || "") : "";
+    }
+
+    _tierLabelFor(id) {
+      const hit = this._tierItems().find((i) => i && i.id === id);
+      return hit ? String(hit.label || "") : "";
+    }
+
+    _paramControl(tmpl, p) {
+      const tid = String(tmpl.id || "");
+      const key = String(p.key || "");
+      if (tid === "conversion_unlock" && key === "item_id") return this._unlockPickerHtml(p);
+      if (tid === "conversion_subscribe" && key === "tier") return this._tierPickerHtml(p);
+      if ((tid === "conversion_unlock" || tid === "conversion_subscribe") && key === "item_label") {
+        return this._itemLabelHtml(tmpl, p);
+      }
+      if (tid === "relationship_stage" && key === "target_stage") return this._stageSelectHtml(p);
+      if (tid === "relationship_intimacy" && key === "target_score") return this._intimacySliderHtml(p);
+      if (key === "product_id") return this._productSelectHtml(tmpl, p);
+      if (key === "slots") return this._slotsPickerHtml(tmpl, p);
+      if (key === "note") return this._noteHtml(tmpl, p);
+      return this._genericParamHtml(tmpl, p);
+    }
+
+    _discoverySlotOptions() {
+      const pk = this._templates && this._templates.pickers;
+      if (pk && Array.isArray(pk.discovery_slots) && pk.discovery_slots.length) {
+        return pk.discovery_slots;
+      }
+      return FALLBACK_DISCOVERY_SLOTS;
+    }
+
+    _parseSlotsCsv(raw) {
+      return String(raw || "").split(/[,，\s]+/).map((s) => s.trim().toLowerCase())
+        .filter((s) => /^[a-z_]+$/.test(s));
+    }
+
+    /* 摸底目标「要了解的信息」：多选 chips（隐藏域写 CSV，与后端 parse_selected_slots 同口径） */
+    _slotsPickerHtml(tmpl, p) {
+      const esc = (s) => this.esc(s);
+      const opts = this._discoverySlotOptions();
+      let selected = this._parseSlotsCsv(p.default);
+      if (!selected.length) selected = ["age", "occupation", "location", "interests"];
+      const sel = {};
+      selected.forEach((k) => { sel[k] = 1; });
+      const chips = opts.map((s) => {
+        const k = String(s.key || "");
+        const lab = LANG === "en" ? (s.label_en || s.label_zh || k)
+          : (s.label_zh || s.label_en || k);
+        const on = !!sel[k];
+        return `<button type="button" class="gl-chip${on ? " on" : ""}" data-act="slot_toggle"` +
+          ` data-slot="${esc(k)}" aria-pressed="${on ? "true" : "false"}">${esc(lab)}</button>`;
+      }).join("");
+      return `<div><label class="gl-fl">${esc(this._paramLabel(tmpl.id, p))}</label>` +
+        `<input type="hidden" data-param-key="slots" data-ref="slots_val" value="${esc(selected.join(","))}">` +
+        `<div class="gl-chips gl-slotpicks" data-ref="slotpicks">${chips}</div>` +
+        this._helpHtml(this._paramHelp(tmpl.id, p)) + `</div>`;
+    }
+
+    _syncSlotChips() {
+      const hid = this._ref("slots_val");
+      const wrap = this._ref("slotpicks");
+      if (!hid || !wrap) return;
+      const sel = {};
+      this._parseSlotsCsv(hid.value).forEach((k) => { sel[k] = 1; });
+      wrap.querySelectorAll("button[data-slot]").forEach((b) => {
+        const on = !!sel[b.getAttribute("data-slot")];
+        b.classList.toggle("on", on);
+        b.setAttribute("aria-pressed", on ? "true" : "false");
+      });
+    }
+
+    _toggleSlotChip(key) {
+      const k = String(key || "").trim().toLowerCase();
+      if (!k) return;
+      const hid = this._ref("slots_val");
+      if (!hid) return;
+      const cur = this._parseSlotsCsv(hid.value);
+      const idx = cur.indexOf(k);
+      if (idx >= 0) {
+        if (cur.length <= 1) return;   // 至少留一项——空 slots 摸底目标等于无目标
+        cur.splice(idx, 1);
+      } else {
+        cur.push(k);
+      }
+      hid.value = cur.join(",");
+      this._syncSlotChips();
+      this._draftCapture();
+    }
+
+    /* 从自定义 note 推断该勾哪些槽（关键词→槽位；无命中回落默认四项） */
+    _inferSlotsFromNote(note) {
+      const t = String(note || "");
+      const hits = [];
+      const rules = [
+        [/年龄|几岁|age/i, "age"],
+        [/职业|生意|工作|occupation|job|work/i, "occupation"],
+        [/城市|坐标|在哪|location|city/i, "location"],
+        [/兴趣|爱好|喜欢|interest/i, "interests"],
+        [/称呼|叫什么|name/i, "name"],
+        [/痛点|头疼|need|pain/i, "need"],
+        [/平台|渠道|channel/i, "channel"],
+        [/预算|budget/i, "budget"],
+        [/团队|几个人|team/i, "team_size"],
+        [/拍板|决策|authority/i, "authority"],
+        [/上线|什么时候|timeline/i, "timeline"],
+      ];
+      rules.forEach(([re, key]) => { if (re.test(t) && hits.indexOf(key) < 0) hits.push(key); });
+      return hits.length ? hits : ["age", "occupation", "location", "interests"];
+    }
+
+    /* 主推产品下拉（数据=templates.pickers.site_products，包2 后端提供；
+       旧后端无此段 → 回落通用输入框）。首项「不指定」=AI 按画像自动选品。 */
+    _productSelectHtml(tmpl, p) {
+      const esc = (s) => this.esc(s);
+      const pk = this._templates && this._templates.pickers;
+      const prods = (pk && Array.isArray(pk.site_products)) ? pk.site_products : [];
+      if (!prods.length) return this._genericParamHtml(tmpl, p);
+      const dv = p.default == null ? "" : String(p.default);
+      const opts = `<option value=""${dv ? "" : " selected"}>` +
+        `${esc(this.t("inbox.goal.form.product_auto_opt"))}</option>` +
+        prods.map((pr) => {
+          const nm = LANG === "en" ? (pr.name_en || pr.name_zh || pr.id)
+            : (pr.name_zh || pr.name_en || pr.id);
+          const tx = String(nm) + (pr.price_from ? " \u00b7 " + pr.price_from : "");
+          return `<option value="${esc(pr.id)}"${pr.id === dv ? " selected" : ""}>${esc(tx)}</option>`;
+        }).join("");
+      return `<div><label class="gl-fl">${esc(this._paramLabel(tmpl.id, p))}</label>` +
+        `<select data-param-key="${esc(p.key)}">${opts}</select>` +
+        this._helpHtml(this._paramHelp(tmpl.id, p)) + `</div>`;
+    }
+
+    _genericParamHtml(tmpl, p) {
+      const esc = (s) => this.esc(s);
+      const typ = String(p.type || "").toLowerCase() === "number" ? "number" : "text";
+      const dv = p.default == null ? "" : String(p.default);
+      return `<div><label class="gl-fl">${esc(this._paramLabel(tmpl.id, p))}</label>` +
+        `<input type="${typ}" data-param-key="${esc(p.key)}" value="${esc(dv)}"${typ === "number" ? ` step="any"` : ""}>` +
+        this._helpHtml(this._paramHelp(tmpl.id, p)) + `</div>`;
+    }
+
+    /* 「卖什么」下拉：目录项（label · 价格）+「自定义…」高级手填。
+       item_id 是功能字段（ledger 对照权益自动判达成），下拉=数据质量护栏。 */
+    _unlockPickerHtml(p) {
+      const esc = (s) => this.esc(s);
+      const items = this._unlockItems();
+      if (!items.length) {
+        // 目录不可用 → 通用输入框 + 帮助（绝不空板）
+        return this._genericParamHtml({ id: "conversion_unlock" }, p);
+      }
+      let cur = this._unlockSel;
+      if (!cur) {
+        const dv = p.default == null ? "" : String(p.default);
+        cur = items.some((i) => i.id === dv) ? dv : items[0].id;
+        this._unlockSel = cur;
+      }
+      const isCustom = cur === "__custom__";
+      const opts = items.map((i) => {
+        const price = this._money(i.price);
+        const tx = String(i.label || i.id) + (price ? " \u00b7 " + price : "");
+        return `<option value="${esc(i.id)}"${i.id === cur ? " selected" : ""}>${esc(tx)}</option>`;
+      }).join("") +
+        `<option value="__custom__"${isCustom ? " selected" : ""}>${esc(this.t("inbox.goal.form.unlock_custom_opt"))}</option>`;
+      return `<div><label class="gl-fl">${esc(this._paramLabel("conversion_unlock", p))}</label>` +
+        `<select data-chg="unlock_sel"${isCustom ? "" : ` data-param-key="item_id"`}>${opts}</select>` +
+        this._helpHtml(this._paramHelp("conversion_unlock", p)) +
+        `<div class="gl-advp-bd" data-ref="unlock_custom"${isCustom ? "" : " hidden"}>` +
+        `<div><label class="gl-fl">${esc(this.t("inbox.goal.form.unlock_custom_id"))}</label>` +
+        `<input data-ref="unlock_custom_id"${isCustom ? ` data-param-key="item_id"` : ""}` +
+        ` placeholder="${esc(this.t("inbox.goal.form.unlock_custom_id_ph"))}">` +
+        this._helpHtml(this.t("inbox.goal.form.unlock_custom_id_help")) + `</div></div></div>`;
+    }
+
+    _tierPickerHtml(p) {
+      const esc = (s) => this.esc(s);
+      const tiers = this._tierItems();
+      if (!tiers.length) return this._genericParamHtml({ id: "conversion_subscribe" }, p);
+      let cur = this._tierSel;
+      if (!cur) {
+        const dv = p.default == null ? "" : String(p.default);
+        cur = tiers.some((t) => t.id === dv) ? dv : tiers[0].id;
+        this._tierSel = cur;
+      }
+      const opts = tiers.map((t) => {
+        const price = this._money(t.monthly);
+        const tx = String(t.label || t.id)
+          + (price ? " \u00b7 " + price + this.t("inbox.goal.form.per_month") : "");
+        return `<option value="${esc(t.id)}"${t.id === cur ? " selected" : ""}>${esc(tx)}</option>`;
+      }).join("");
+      return `<div><label class="gl-fl">${esc(this._paramLabel("conversion_subscribe", p))}</label>` +
+        `<select data-chg="tier_sel" data-param-key="tier">${opts}</select>` +
+        this._helpHtml(this._paramHelp("conversion_subscribe", p)) + `</div>`;
+    }
+
+    /* 「聊天里怎么称呼它」：自动跟随所选目录项，坐席可改（改过即不再覆盖） */
+    _itemLabelHtml(tmpl, p) {
+      const esc = (s) => this.esc(s);
+      const tid = String(tmpl.id || "");
+      let init = "";
+      if (this._lastAutoLabel) {
+        init = this._lastAutoLabel;
+      } else if (tid === "conversion_unlock") {
+        init = (this._unlockSel && this._unlockSel !== "__custom__")
+          ? this._unlockLabelFor(this._unlockSel) : "";
+        if (!init && !this._unlockItems().length) init = p.default == null ? "" : String(p.default);
+      } else {
+        init = this._tierSel ? this._tierLabelFor(this._tierSel) : "";
+        if (!init && !this._tierItems().length) init = p.default == null ? "" : String(p.default);
+      }
+      if (init && !this._labelTouched) this._lastAutoLabel = init;
+      let ph = this.t("inbox.goal.form.item_label_ph");
+      if (ph && String(ph).indexOf("inbox.goal.") === 0) ph = "";
+      return `<div><label class="gl-fl">${esc(this._paramLabel(tid, p))}</label>` +
+        `<input data-param-key="item_label" data-chg="item_label" value="${esc(init)}"` +
+        (ph ? ` placeholder="${esc(ph)}"` : "") + `>` +
+        this._helpHtml(this._paramHelp(tid, p)) + `</div>`;
+    }
+
+    _stageSelectHtml(p) {
+      const esc = (s) => this.esc(s);
+      const dv = p.default == null ? "" : String(p.default);
+      const opts = this._stageList().map((s) => {
+        const v = this.t("inbox.goal.stage." + s);
+        const nm = (v && String(v).indexOf("inbox.goal.") !== 0) ? String(v) : s;
+        return `<option value="${esc(s)}"${s === dv ? " selected" : ""}>${esc(nm)}</option>`;
+      }).join("");
+      return `<div><label class="gl-fl">${esc(this._paramLabel("relationship_stage", p))}</label>` +
+        `<select data-param-key="target_stage">${opts}</select>` +
+        this._helpHtml(this._paramHelp("relationship_stage", p)) + `</div>`;
+    }
+
+    _intimacySliderHtml(p) {
+      const esc = (s) => this.esc(s);
+      const v0 = Math.max(0, Math.min(100, Math.round(parseFloat(p.default) || 55)));
+      return `<div><label class="gl-fl">${esc(this._paramLabel("relationship_intimacy", p))}</label>` +
+        `<div class="gl-range-row">` +
+        `<input type="range" min="0" max="100" step="1" value="${v0}"` +
+        ` data-param-key="target_score" data-chg="range">` +
+        `<span class="gl-range-val" data-ref="rangeval">${v0}</span></div>` +
+        `<div class="gl-range-scale"><span>${esc(this.t("inbox.goal.form.intimacy_lo"))}</span>` +
+        `<span>${esc(this.t("inbox.goal.form.intimacy_mid"))}</span>` +
+        `<span>${esc(this.t("inbox.goal.form.intimacy_hi"))}</span></div>` +
+        this._helpHtml(this._paramHelp("relationship_intimacy", p)) + `</div>`;
+    }
+
+    _noteHtml(tmpl, p) {
+      const esc = (s) => this.esc(s);
+      const tid = String(tmpl.id || "");
+      const phKey = tid === "custom" ? "inbox.goal.form.note_ph_custom"
+        : (tid === "engagement_reactivate" ? "inbox.goal.form.note_ph_reactivate" : "");
+      let ph = phKey ? this.t(phKey) : "";
+      if (ph && String(ph).indexOf("inbox.goal.") === 0) ph = "";
+      let extra = "";
+      if (tid === "custom") {
+        const chips = [1, 2, 3].map((i) => {
+          const tx = this.t("inbox.goal.form.note_ex" + i);
+          if (!tx || String(tx).indexOf("inbox.goal.") === 0) return "";
+          return `<button type="button" class="gl-chip" data-act="note_example"` +
+            ` data-ex="${i}">${esc(tx)}</button>`;
+        }).join("");
+        if (chips) {
+          extra = `<div class="gl-hint">${esc(this.t("inbox.goal.form.note_ex_t"))}</div>` +
+            `<div class="gl-exrow">${chips}</div>`;
+        }
+        // P28：自定义 note 像「获取年龄/职业」时，一键改走摸底模板（状态机+打勾）
+        if (this._tmplById("profile_discovery")) {
+          const noteNow = (this._formDraft && this._formDraft.tid === "custom"
+            && this._formDraft.params && this._formDraft.params.note)
+            ? String(this._formDraft.params.note) : String(p.default || "");
+          const hot = DISCOVERY_NOTE_RE.test(noteNow);
+          extra += `<div class="gl-disc-tip" data-ref="disc_tip"${hot ? "" : " hidden"}>` +
+            `<div>${esc(this.t("inbox.goal.form.rec_discovery"))}</div>` +
+            `<div class="acts"><button type="button" class="primary" data-act="switch_discovery">` +
+            `${esc(this.t("inbox.goal.form.rec_discovery_btn"))}</button></div></div>` +
+            `<div class="gl-hint">${esc(this.t("inbox.goal.form.rec_discovery_soft"))}</div>`;
+        }
+      }
+      const dv = p.default == null ? "" : String(p.default);
+      return `<div><label class="gl-fl">${esc(this._paramLabel(tid, p))}</label>` +
+        `<textarea data-param-key="note" rows="3" data-chg="note_disc"` +
+        `${ph ? ` placeholder="${esc(ph)}"` : ""}>${esc(dv)}</textarea>` +
+        this._helpHtml(this._paramHelp(tid, p)) + extra + `</div>`;
+    }
+
     _paramsHtml(tmpl) {
       const esc = (s) => this.esc(s);
-      return ((tmpl && tmpl.params) || []).map((p) => {
-        const label = LANG === "en" ? (p.label_en || p.label_zh || p.key) : (p.label_zh || p.label_en || p.key);
-        const typ = String(p.type || "").toLowerCase() === "number" ? "number" : "text";
-        const dv = p.default == null ? "" : String(p.default);
-        return `<div><label class="gl-fl">${esc(label)}</label>` +
-          `<input type="${typ}" data-param-key="${esc(p.key)}" value="${esc(dv)}"${typ === "number" ? ` step="any"` : ""}></div>`;
-      }).join("");
+      const params = (tmpl && tmpl.params) || [];
+      if (!params.length) return `<div data-ref="params" class="gl-params"></div>`;
+      const advKeys = ADV_PARAMS[String(tmpl.id || "")] || [];
+      const vis = params.filter((p) => advKeys.indexOf(p.key) < 0);
+      const adv = params.filter((p) => advKeys.indexOf(p.key) >= 0);
+      let html = vis.map((p) => this._paramControl(tmpl, p)).join("");
+      if (adv.length) {
+        // 自动继承字段折叠：留存续费/唤回的产品与套餐通常由系统在成交后带入
+        html += `<details class="gl-advp"><summary>${esc(this.t("inbox.goal.form.adv_params"))}</summary>` +
+          `<div class="gl-advp-bd">${adv.map((p) => this._paramControl(tmpl, p)).join("")}</div></details>`;
+      }
+      return `<div data-ref="params" class="gl-params">${html}</div>`;
+    }
+
+    /* 下拉联动：解锁项/会员档变化 → 同步 item_id 归属 + 称呼自动跟随 */
+    _onUnlockSel(sel) {
+      const v = String(sel.value || "");
+      this._unlockSel = v;
+      const wrap = this._ref("unlock_custom");
+      const cid = this._ref("unlock_custom_id");
+      const isCustom = v === "__custom__";
+      if (wrap) wrap.hidden = !isCustom;
+      if (isCustom) {
+        sel.removeAttribute("data-param-key");
+        if (cid) {
+          cid.setAttribute("data-param-key", "item_id");
+          if (!this._restoring) { try { cid.focus(); } catch (_e) { /* soft */ } }
+        }
+        if (!this._restoring) _beacon("goal_form_unlock_custom");
+      } else {
+        sel.setAttribute("data-param-key", "item_id");
+        if (cid) cid.removeAttribute("data-param-key");
+        this._autoFillLabel(this._unlockLabelFor(v));
+      }
+    }
+
+    _onTierSel(sel) {
+      const v = String(sel.value || "");
+      this._tierSel = v;
+      this._autoFillLabel(this._tierLabelFor(v));
+    }
+
+    _autoFillLabel(label) {
+      const inp = this.shadowRoot.querySelector('input[data-param-key="item_label"]');
+      if (!inp || this._labelTouched) return;
+      const cur = String(inp.value || "");
+      if (!cur || cur === this._lastAutoLabel) {
+        inp.value = String(label || "");
+        this._lastAutoLabel = String(label || "");
+      }
+    }
+
+    /* 场景类别（custom 独立成类）→ 图标 / 色条 / 弹层色带共用 */
+    _kindOf(tmpl) {
+      if (String(tmpl && tmpl.id) === "custom") return "custom";
+      const k = String((tmpl && tmpl.kind) || "");
+      return k || "other";
+    }
+
+    _kindIcon(kind) {
+      const P = {
+        conversion: '<path d="M20.6 13.4 11 3.8H4v7l9.6 9.6a2 2 0 0 0 2.8 0l4.2-4.2a2 2 0 0 0 0-2.8Z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
+        relationship: '<path d="M12 20.7S4.6 16.1 2.7 11.9A5.3 5.3 0 0 1 12 6.6a5.3 5.3 0 0 1 9.3 5.3C19.4 16.1 12 20.7 12 20.7Z"/>',
+        engagement: '<path d="M18 8.5a6 6 0 1 0-12 0c0 6.5-2.5 6.5-2.5 8.5h17c0-2-2.5-2-2.5-8.5"/><path d="M10 20.5a2 2 0 0 0 4 0"/>',
+        discovery: '<path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/><path d="M2 21v-1a5 5 0 0 1 5-5h4"/><path d="M19 8v6"/><path d="M16 11h6"/>',
+        custom: '<path d="M17.2 3.3a2.6 2.6 0 1 1 3.6 3.6L8 19.7 2.8 21.2 4.3 16Z"/>',
+      };
+      return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"` +
+        ` stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
+        (P[kind] || P.conversion) + `</svg>`;
+    }
+
+    _infoIcon() {
+      return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"` +
+        ` stroke-linecap="round" aria-hidden="true">` +
+        `<circle cx="12" cy="12" r="9"/><path d="M12 8h.01"/><path d="M11.2 12H12v4h.8"/></svg>`;
     }
 
     /* 场景一句话说明（i18n 键尾=模板 id；键缺失=不显示，不裸奔键名） */
@@ -868,102 +1832,475 @@
       return "";
     }
 
+    /* ── 建目标向导（P24：一页堆全 → 两步）──────────────────────────────
+       第一步（栏内）＝按业务分组的场景卡；第二步＝场景专属设置弹层。
+       弹层打开时第一步仍渲染在卡内（返回时零闪烁）。 */
     _renderForm() {
-      const esc = (s) => this.esc(s);
       const list = (this._templates && this._templates.templates) || [];
       if (!list.length) {
-        return `<div class="gl-errline" data-act="open_form">${esc(this.t("inbox.goal.form.load_fail"))}</div>`;
+        return `<div class="gl-errline" data-act="open_form">${this.esc(this.t("inbox.goal.form.load_fail"))}</div>`;
       }
+      const step1 = this._renderFormStep1(list);
+      if (this._formStep === 2 && this._formTid && this._tmplById(this._formTid)) {
+        return step1 + this._renderFormModal();
+      }
+      return step1;
+    }
+
+    _renderFormStep1(list) {
+      const esc = (s) => this.esc(s);
       const prefs = this._loadPrefs();
       const rec = this._recommendTid();
-      if (!this._formTid || !this._tmplById(this._formTid)) {
-        // 默认选中：上次偏好（custom 不参与预选，进阶路径须显式点开）→ 情境推荐 → 首个场景模板
-        const prefTid = (prefs.template && prefs.template !== "custom"
-          && this._tmplById(prefs.template)) ? prefs.template : "";
-        const firstScen = list.find((t) => t.id !== "custom") || list[0];
-        this._formTid = prefTid || rec || firstScen.id;
-      }
-      const tmpl = this._tmplById(this._formTid) || {};
-
-      const scenRows = list.filter((t) => t.id !== "custom").map((t) => {
+      // 「上次」徽标只贴场景卡（custom 不参与——进阶路径须显式选择，P18 决策）
+      const lastTid = (prefs.template && prefs.template !== "custom"
+        && this._tmplById(prefs.template)) ? prefs.template : "";
+      // 「有草稿」徽标：本会话有未提交草稿的场景（返回第一步后草稿去向可见）
+      const draftTid = (this._formDraft && this._formDraft.cid === this._draftCid())
+        ? String(this._formDraft.tid || "") : "";
+      const draftBadge = `<span class="gl-scen-draftb">${esc(this.t("inbox.goal.form.draft_badge"))}</span>`;
+      const groups = {};
+      list.filter((t) => t.id !== "custom").forEach((t) => {
+        const k = String(t.kind || "other");
+        (groups[k] = groups[k] || []).push(t);
+      });
+      const order = KIND_ORDER.concat(
+        Object.keys(groups).filter((k) => KIND_ORDER.indexOf(k) < 0));
+      const card = (t) => {
+        const kind = this._kindOf(t);
         const nm = LANG === "en" ? (t.name_en || t.name_zh || t.id) : (t.name_zh || t.name_en || t.id);
-        const sel = t.id === this._formTid;
-        const recBadge = (t.id === rec)
-          ? `<span class="gl-scen-rec">${esc(this.t("inbox.goal.form.recommended"))}</span>` : "";
+        const sel = t.id === this._formTid && this._formStep === 2;
+        const badges =
+          (t.id === rec ? `<span class="gl-scen-rec">${esc(this.t("inbox.goal.form.recommended"))}</span>` : "") +
+          (t.id === lastTid ? `<span class="gl-scen-last">${esc(this.t("inbox.goal.form.last_used"))}</span>` : "") +
+          (t.id === draftTid ? draftBadge : "");
         const desc = this._tmplDesc(t.id);
-        return `<div class="gl-scen${sel ? " sel" : ""}" data-act="pick_tmpl" data-tid="${esc(t.id)}"` +
-          ` role="radio" aria-checked="${sel ? "true" : "false"}">` +
-          `<div class="gl-scen-nm">${esc(nm)}${recBadge}</div>` +
-          (desc ? `<div class="gl-scen-d">${esc(desc)}</div>` : "") + `</div>`;
-      }).join("");
+        return `<div class="gl-scen gk-${esc(kind)}${sel ? " sel" : ""}" data-act="pick_tmpl"` +
+          ` data-tid="${esc(t.id)}" role="radio" aria-checked="${sel ? "true" : "false"}">` +
+          `<span class="gl-scen-ic">${this._kindIcon(kind)}</span>` +
+          `<div class="gl-scen-mn"><div class="gl-scen-nm">${esc(nm)}${badges}</div>` +
+          (desc ? `<div class="gl-scen-d">${esc(desc)}</div>` : "") + `</div></div>`;
+      };
+      let rows = "";
+      order.forEach((k) => {
+        const grp = groups[k];
+        if (!grp || !grp.length) return;
+        const gv = this.t("inbox.goal.form.grp." + k);
+        if (gv && String(gv).indexOf("inbox.goal.") !== 0) {
+          rows += `<div class="gl-grp">${esc(gv)}</div>`;
+        }
+        rows += grp.map(card).join("");
+      });
+      // 自定义目标＝独立高亮卡（进阶入口；与场景卡同级、视觉更醒目）
       const customT = this._tmplById("custom");
       let advHtml = "";
       if (customT) {
-        if (this._formTid === "custom") {
-          const nm = LANG === "en" ? (customT.name_en || customT.name_zh || "custom")
-            : (customT.name_zh || customT.name_en || "custom");
-          const desc = this._tmplDesc("custom");
-          advHtml = `<div class="gl-scen sel" data-act="pick_custom" role="radio" aria-checked="true">` +
-            `<div class="gl-scen-nm">${esc(nm)}</div>` +
-            (desc ? `<div class="gl-scen-d">${esc(desc)}</div>` : "") + `</div>`;
-        } else {
-          advHtml = `<button type="button" class="gl-adv" data-act="pick_custom">${esc(this.t("inbox.goal.form.advanced"))}</button>`;
-        }
+        const nm = LANG === "en" ? (customT.name_en || customT.name_zh || "custom")
+          : (customT.name_zh || customT.name_en || "custom");
+        const sel = this._formTid === "custom" && this._formStep === 2;
+        const desc = this._tmplDesc("custom");
+        advHtml = `<div class="gl-scen gl-scen-custom${sel ? " sel" : ""}" data-act="pick_custom"` +
+          ` role="radio" aria-checked="${sel ? "true" : "false"}">` +
+          `<span class="gl-scen-ic">${this._kindIcon("custom")}</span>` +
+          `<div class="gl-scen-mn"><div class="gl-scen-nm">${esc(nm)}` +
+          `<span class="gl-adv-pill">${esc(this.t("inbox.goal.form.adv_pill"))}</span>` +
+          (draftTid === "custom" ? draftBadge : "") + `</div>` +
+          (desc ? `<div class="gl-scen-d">${esc(desc)}</div>` : "") + `</div></div>`;
       }
-      // 推荐理由：只有当推荐项被选中时说一句「为什么」（数据来自宿主喂的沉默时长）
+      // 推荐理由（数据来自宿主喂的沉默时长；有推荐才说「为什么」）
       let recNote = "";
-      if (rec && this._formTid === rec) {
+      if (rec) {
         const h = (this._ctx && this._ctx.goalHint) || {};
         const days = Math.max(1, Math.round((parseFloat(h.silentHours) || 0) / 24));
         recNote = `<div class="gl-hint">${esc(this.t("inbox.goal.form.rec_silent", { d: days }))}</div>`;
       }
+      return `<div class="gl-form">` +
+        `<div class="gl-alias">${esc(this.t("inbox.goal.title_hint"))}</div>` +
+        `<div><label class="gl-fl">${esc(this.t("inbox.goal.form.scenario"))}</label>` +
+        `<div class="gl-hint">${esc(this.t("inbox.goal.form.step1_lead"))}</div>` +
+        `<div class="gl-scenlist" role="radiogroup">${rows}${advHtml}</div>${recNote}</div>` +
+        `<div class="acts gl-acts"><button data-act="close_form">${esc(this.t("cp.common.cancel"))}</button></div>` +
+        `</div>`;
+    }
 
-      const levels = (this._templates.autonomy_levels && this._templates.autonomy_levels.length)
-        ? this._templates.autonomy_levels : AUTONOMY;
-      const curAuto = AUTONOMY.indexOf(this._formAutonomy) >= 0 ? this._formAutonomy
-        : (AUTONOMY.indexOf(prefs.autonomy) >= 0 ? prefs.autonomy : "suggest");
-      const aOpts = levels.map((l) =>
-        `<option value="${esc(l)}"${l === curAuto ? " selected" : ""}>${esc(this._autonomyLabel(String(l)))}</option>`).join("");
+    /* 第二步：场景专属设置弹层（fixed 居中）。退出语义（P0/P1 2026-08-04）：
+       「返回」/Esc＝回第一步；×＝关闭整个表单（对话框惯例，与「返回」分离）；
+       背板点击＝判脏——干净回第一步、有输入不关闭只提示已暂存（误触防线）。
+       所有退出路径草稿都在（sessionStorage），重进同场景/重开表单即恢复。 */
+    _renderFormModal() {
+      const esc = (s) => this.esc(s);
+      const tmpl = this._tmplById(this._formTid) || {};
+      const kind = this._kindOf(tmpl);
+      const nm = LANG === "en" ? (tmpl.name_en || tmpl.name_zh || tmpl.id)
+        : (tmpl.name_zh || tmpl.name_en || tmpl.id);
+      const desc = this._tmplDesc(tmpl.id);
+      const prefs = this._loadPrefs();
       const daysVal = (this._formUsePrefDays && prefs.deadline_days > 0)
         ? prefs.deadline_days : (tmpl.default_days || 14);
-      const prefNote = (prefs.template || prefs.autonomy || prefs.deadline_days)
+      const curAuto = AUTONOMY.indexOf(this._formAutonomy) >= 0 ? this._formAutonomy
+        : (AUTONOMY.indexOf(prefs.autonomy) >= 0 ? prefs.autonomy : "suggest");
+      this._formAutonomy = curAuto;
+      const aNote = this._autonomyNoteFull(curAuto);
+      const prefNote = (this._formUsePrefDays && prefs.deadline_days > 0)
         ? `<div class="gl-hint">${esc(this.t("inbox.goal.prefs_restored"))}</div>` : "";
-      const aNote = this._autonomyNote(curAuto);
-      return `<div class="gl-form">` +
-        `<div class="gl-alias">${esc(this.t("inbox.goal.title_hint"))}</div>` + prefNote +
-        `<div><label class="gl-fl">${esc(this.t("inbox.goal.form.scenario"))}</label>` +
-        `<div class="gl-scenlist" role="radiogroup">${scenRows}${advHtml}</div>${recNote}</div>` +
-        `<div data-ref="params">${this._paramsHtml(tmpl)}</div>` +
+      const hasParams = ((tmpl.params) || []).length > 0;
+      const paramsSec = hasParams
+        ? `<div><div class="gl-msec-t">${esc(this.t("inbox.goal.form.params_title"))}</div>` +
+          this._paramsHtml(tmpl) + `</div>`
+        : this._paramsHtml(tmpl);
+      // 草稿恢复提示条（仅当本会话草稿属于当前场景时显示；「清空重填」＝显式弃稿口）
+      const restoreBar = (this._formDraft && this._formDraft.tid === String(tmpl.id || "")
+        && this._formDraft.cid === this._draftCid())
+        ? `<div class="gl-mrestore"><span>${esc(this.t("inbox.goal.form.draft_restored"))}</span>` +
+          `<button type="button" data-act="draft_clear">${esc(this.t("inbox.goal.form.draft_clear"))}</button></div>`
+        : "";
+      // 背板＝ov_dismiss（判脏：干净回第一步/有输入不关闭），显式退出走 ×/「返回」/Esc
+      return `<div class="gl-ov" data-act="ov_dismiss" role="presentation">` +
+        `<div class="gl-modal gk-${esc(kind)}" data-act="modal_noop" role="dialog"` +
+        ` aria-modal="true" aria-label="${esc(nm)}">` +
+        `<div class="gl-mband"></div>` +
+        `<div class="gl-mhd"><span class="gl-scen-ic">${this._kindIcon(kind)}</span>` +
+        `<span class="gl-mtitle">${esc(nm)}</span>` +
+        `<button type="button" class="gl-mclose" data-act="close_form"` +
+        ` title="${esc(this.t("inbox.goal.form.close"))}"` +
+        ` aria-label="${esc(this.t("inbox.goal.form.close"))}">\u2715</button></div>` +
+        (desc ? `<div class="gl-mdesc">${esc(desc)}</div>` : "") +
+        `<div class="gl-mbody gl-form">` +
+        restoreBar +
+        this._arcHtml(tmpl) +
+        paramsSec +
+        prefNote +
         `<div><label class="gl-fl">${esc(this.t("inbox.goal.form.days"))}</label>` +
-        `<input type="number" min="1" max="180" step="1" data-ref="days" value="${esc(String(daysVal))}"></div>` +
+        `<input type="number" min="1" max="180" step="1" data-ref="days" value="${esc(String(daysVal))}">` +
+        this._helpHtml(this.t("inbox.goal.form.days_help")) + `</div>` +
         `<div><label class="gl-fl">${esc(this.t("inbox.goal.form.autonomy"))}</label>` +
-        `<select data-chg="autonomy" data-ref="autonomy">${aOpts}</select>` +
-        `<div class="gl-hint" data-ref="ahint">${esc(this._autonomyHint(curAuto))}</div>` +
-        `<div class="gl-hint gl-anote" data-ref="anote"${aNote ? "" : " hidden"}>${esc(aNote)}</div></div>` +
+        this._autonomyCardsHtml(curAuto) +
+        `<input type="hidden" data-ref="autonomy" value="${esc(curAuto)}">` +
+        `<div class="gl-note-info" data-ref="anote"${aNote ? "" : " hidden"}>${this._infoIcon()}` +
+        `<span data-ref="anotetx">${esc(aNote)}</span></div></div>` +
+        `<div class="gl-hint">${esc(this.t("inbox.goal.form.summary"))}</div>` +
         `<div class="gl-ferr" data-ref="ferr" hidden></div>` +
-        `<div class="acts gl-acts"><button data-act="close_form">${esc(this.t("cp.common.cancel"))}</button>` +
+        `</div>` +
+        `<div class="gl-mfoot"><span class="gl-mhint" data-ref="mhint" hidden></span>` +
+        `<button data-act="form_back">${esc(this.t("inbox.goal.form.back"))}</button>` +
         `<button class="primary" data-act="create">${esc(this.t("inbox.goal.form.create"))}</button></div>` +
-        `</div>`;
+        `</div></div>`;
+    }
+
+    /* 「AI 会怎么推进」节奏预览：里程碑 + 推进力度（push_curve 由包2 后端
+       templates 响应提供；旧后端无此字段 → 只显示里程碑名，不猜力度）。 */
+    _arcHtml(tmpl) {
+      const esc = (s) => this.esc(s);
+      const ms = Array.isArray(tmpl.milestones) ? tmpl.milestones : [];
+      if (!ms.length) return "";
+      const curve = Array.isArray(tmpl.push_curve) ? tmpl.push_curve : [];
+      const rows = ms.map((m, i) => {
+        const nm = LANG === "en" ? (m.en || m.zh || "") : (m.zh || m.en || "");
+        let pill = "";
+        if (curve.length) {
+          const pl = String(curve[Math.min(i, curve.length - 1)] || "");
+          if (PUSH_LEVELS.indexOf(pl) >= 0) {
+            pill = `<span class="gl-pill ${pl}">${esc(this.t("inbox.goal.push." + pl))}</span>`;
+          }
+        }
+        return `<div class="gl-arc-row"><span class="gl-arc-idx">${i + 1}</span>` +
+          `<span class="gl-arc-nm">${esc(nm)}</span>${pill}</div>`;
+      }).join("");
+      return `<div><div class="gl-msec-t">${esc(this.t("inbox.goal.form.arc_title"))}</div>` +
+        `<div class="gl-arc">${rows}</div>` +
+        `<div class="gl-hint">${esc(this.t("inbox.goal.form.arc_hint"))}</div></div>`;
+    }
+
+    /* AI 参与度三张单选卡（点选走 pick_autonomy，DOM 级切换不重渲染表单） */
+    _autonomyCardsHtml(cur) {
+      const esc = (s) => this.esc(s);
+      const levels = (this._templates && this._templates.autonomy_levels
+        && this._templates.autonomy_levels.length)
+        ? this._templates.autonomy_levels : AUTONOMY;
+      return `<div class="gl-auto-cards" role="radiogroup">` + levels.map((l) => {
+        const lvl = String(l);
+        const sel = lvl === cur;
+        const rec = lvl === "suggest"
+          ? `<span class="gl-scen-rec">${esc(this.t("inbox.goal.form.recommended"))}</span>` : "";
+        return `<div class="gl-auto-card${sel ? " sel" : ""}" data-act="pick_autonomy"` +
+          ` data-lvl="${esc(lvl)}" role="radio" aria-checked="${sel ? "true" : "false"}">` +
+          `<div class="gl-auto-nm">${esc(this._autonomyLabel(lvl))}${rec}</div>` +
+          `<div class="gl-auto-d">${esc(this._autonomyHint(lvl))}</div></div>`;
+      }).join("") + `</div>`;
     }
 
     _ref(name) { return this.shadowRoot.querySelector(`[data-ref="${name}"]`); }
 
-    _syncAutonomyHint() {
-      const a = this._ref("autonomy");
-      if (!a) return;
-      this._formAutonomy = String(a.value);
-      const h = this._ref("ahint");
-      if (h) h.textContent = this._autonomyHint(this._formAutonomy);
+    /* auto 档注解 + 开启指路（有注解才拼指路句，正常态不贴说明书） */
+    _autonomyNoteFull(lvl) {
+      const base = this._autonomyNote(lvl);
+      if (!base) return "";
+      const extra = this.t("inbox.goal.form.auto_note_help");
+      return (extra && String(extra).indexOf("inbox.goal.") !== 0)
+        ? base + " " + extra : base;
+    }
+
+    /* 参与度单选卡点选：类切换 + 隐藏 input 同步 + 注解气泡更新（零重渲染） */
+    _setAutonomy(lvl) {
+      if (AUTONOMY.indexOf(lvl) < 0) return;
+      this._formAutonomy = lvl;
+      const hid = this._ref("autonomy");
+      if (hid) hid.value = lvl;
+      this.shadowRoot.querySelectorAll(".gl-auto-card").forEach((c) => {
+        const on = c.getAttribute("data-lvl") === lvl;
+        c.classList.toggle("sel", on);
+        c.setAttribute("aria-checked", on ? "true" : "false");
+      });
+      const note = this._autonomyNoteFull(lvl);
       const n = this._ref("anote");
-      if (n) {
-        const note = this._autonomyNote(this._formAutonomy);
-        n.textContent = note;
-        n.hidden = !note;
-      }
+      const tx = this._ref("anotetx");
+      if (tx) tx.textContent = note;
+      if (n) n.hidden = !note;
+    }
+
+    /* 弹层参数控件的会话内状态（换场景/重开表单/切会话时清零） */
+    _resetParamState() {
+      this._unlockSel = "";
+      this._tierSel = "";
+      this._labelTouched = false;
+      this._lastAutoLabel = "";
     }
 
     _rerender() {
       this._render(this.renderData(this._d || { goal: null, last: null }));
+    }
+
+    /* ── 草稿幸存层 + 编辑防打断（P0 2026-08-04）───────────────────────────
+       病灶：表单值只活在 DOM 里，而本组件的 DOM 会被三类事件整块重建——
+       ①背板误触/Esc（form_back 重进时按模板默认值重建）②宿主重喂 context
+       （轮询身份合并/peer 解析/回前台补轮 → refresh() 先渲 loading 再重建）
+       ③renderData 分支切换（出错行/进行中目标强关表单）。修法＝三层：
+       输入实时快照（_draftCapture）→ 重建后原样回填（_applyFormDraft）→
+       编辑期挂起同会话的外部刷新（set context 覆写）。 */
+
+    _draftCid() { return String((this._ctx && this._ctx.conversationId) || ""); }
+
+    _loadDraftStore(cid) {
+      const key = String(cid || this._draftCid());
+      if (!key) return null;
+      try {
+        const raw = root.sessionStorage && root.sessionStorage.getItem(DRAFT_KEY_PREFIX + key);
+        if (!raw) return null;
+        const d = JSON.parse(raw);
+        if (!d || d.v !== 1 || d.cid !== key || !d.tid) { this._clearDraftStore(key); return null; }
+        if (!isFinite(d.ts) || (Date.now() - d.ts) > DRAFT_TTL_MS) { this._clearDraftStore(key); return null; }
+        return d;
+      } catch (_e) { return null; }
+    }
+
+    _clearDraftStore(cid) {
+      const key = String(cid || this._draftCid());
+      if (!key) return;
+      try { root.sessionStorage && root.sessionStorage.removeItem(DRAFT_KEY_PREFIX + key); } catch (_e) {}
+    }
+
+    /* 第二步当前值全量快照（与 _create 的取值口径一致：一切 [data-param-key] + 期限 + 参与度） */
+    _formSnapshot() {
+      const snap = { tid: this._formTid, autonomy: this._formAutonomy || "", params: {}, days: "" };
+      this.shadowRoot.querySelectorAll("[data-param-key]").forEach((el) => {
+        const k = el.getAttribute("data-param-key");
+        if (k) snap.params[k] = String(el.value == null ? "" : el.value);
+      });
+      const dy = this._ref("days");
+      if (dy) snap.days = String(dy.value == null ? "" : dy.value);
+      return snap;
+    }
+
+    _snapshotDiffers(a, b) {
+      if (!a || !b) return true;
+      if (a.tid !== b.tid || String(a.days) !== String(b.days)
+        || String(a.autonomy) !== String(b.autonomy)) return true;
+      const keys = {};
+      Object.keys(a.params || {}).forEach((k) => { keys[k] = 1; });
+      Object.keys(b.params || {}).forEach((k) => { keys[k] = 1; });
+      return Object.keys(keys).some((k) =>
+        String((a.params || {})[k] == null ? "" : a.params[k])
+        !== String((b.params || {})[k] == null ? "" : b.params[k]));
+    }
+
+    /* 判脏＝当前值 vs 本场景「出厂快照」。恢复过草稿的表单天然算脏（同样受保护）。 */
+    _formDirty() {
+      if (!this._formOpen || this._formStep !== 2 || !this._formBaseline) return false;
+      return this._snapshotDiffers(this._formSnapshot(), this._formBaseline);
+    }
+
+    /* 输入实时快照进内存 + sessionStorage；改回与出厂一致＝撤草稿（不留幻影）。 */
+    _draftCapture() {
+      if (this._restoring || !this._formOpen || this._formStep !== 2 || !this._formTid) return;
+      const cid = this._draftCid();
+      if (!cid) return;
+      const snap = this._formSnapshot();
+      if (this._formBaseline && !this._snapshotDiffers(snap, this._formBaseline)) {
+        this._formDraft = null;
+        this._clearDraftStore(cid);
+        this._autosaveNote(false);   // 改回与出厂一致＝撤草稿，微反馈同步熄灭
+        return;
+      }
+      const d = {
+        v: 1, cid, tid: this._formTid, ts: Date.now(),
+        params: snap.params, days: snap.days, autonomy: snap.autonomy,
+        unlockSel: this._unlockSel, tierSel: this._tierSel, labelTouched: !!this._labelTouched,
+      };
+      this._formDraft = d;
+      try {
+        root.sessionStorage && root.sessionStorage.setItem(DRAFT_KEY_PREFIX + cid, JSON.stringify(d));
+      } catch (_e) { /* 存不进（隐私模式配额等）＝退化为内存草稿，不阻断 */ }
+      this._autosaveNote(true);   // P1：常驻「输入自动暂存中」微反馈
+    }
+
+    /* 重建后的 DOM 回填草稿值（顺序敏感：labelTouched → 解锁/会员下拉（会重排
+       data-param-key 归属）→ 参数值 → 期限 → 参与度 → 滑杆读数）。 */
+    _applyFormDraft() {
+      const d = this._formDraft;
+      if (!d || d.tid !== this._formTid || d.cid !== this._draftCid()) return;
+      this._restoring = true;
+      try {
+        const sr = this.shadowRoot;
+        this._labelTouched = !!d.labelTouched;
+        const us = sr.querySelector('select[data-chg="unlock_sel"]');
+        if (us && d.unlockSel) {
+          us.value = d.unlockSel;
+          if (us.value === d.unlockSel) this._onUnlockSel(us);
+        }
+        const tsel = sr.querySelector('select[data-chg="tier_sel"]');
+        if (tsel && d.tierSel) {
+          tsel.value = d.tierSel;
+          if (tsel.value === d.tierSel) this._tierSel = d.tierSel;
+        }
+        Object.keys(d.params || {}).forEach((k) => {
+          if (!/^[\w.-]+$/.test(k)) return;   // 键来自模板注册表；防御非常规键进选择器
+          const el = sr.querySelector(`[data-param-key="${k}"]`);
+          if (el && d.params[k] != null) el.value = String(d.params[k]);
+        });
+        this._syncSlotChips();   // slots 隐藏域回填后同步 chips 选中态
+        const tip = this._ref("disc_tip");
+        if (tip && d.params && d.params.note != null) {
+          tip.hidden = !DISCOVERY_NOTE_RE.test(String(d.params.note));
+        }
+        const dy = this._ref("days");
+        if (dy && d.days) dy.value = String(d.days);
+        if (d.autonomy && AUTONOMY.indexOf(d.autonomy) >= 0) this._setAutonomy(d.autonomy);
+        const rg = sr.querySelector('input[data-chg="range"]');
+        if (rg) {
+          const out = this._ref("rangeval");
+          if (out) out.textContent = String(rg.value);
+        }
+      } finally { this._restoring = false; }
+    }
+
+    /* 弹层内轻提示（背板误触反馈，琥珀警示）：只改 DOM 不重渲染——重渲染会丢
+       输入焦点。警示退场后回落 P1 的常驻「自动暂存中」灰字微反馈。 */
+    _modalHint(text) {
+      const el = this._ref("mhint");
+      if (!el) return;
+      el.textContent = String(text || "");
+      el.classList.add("warn");
+      el.classList.remove("dim");
+      el.hidden = !text;
+      if (this._mhintTimer) clearTimeout(this._mhintTimer);
+      if (text) {
+        this._mhintTimer = setTimeout(() => {
+          this._mhintTimer = null;
+          const cur = this._ref("mhint");
+          if (cur) { cur.hidden = true; cur.classList.remove("warn"); }
+          this._autosaveNote(this._formDirty());
+        }, 4000);
+      }
+    }
+
+    /* P1：常驻自动暂存微反馈（footer 左侧灰字）——「输入是安全的」要说出来才算数；
+       警示提示占用期间不覆盖。DOM 级显隐，零重渲染。 */
+    _autosaveNote(on) {
+      if (this._mhintTimer) return;
+      const el = this._ref("mhint");
+      if (!el) return;
+      el.classList.remove("warn");
+      el.classList.toggle("dim", !!on);
+      el.textContent = on ? this.t("inbox.goal.form.autosave_note") : "";
+      el.hidden = !on;
+    }
+
+    /* P1：弹层焦点陷阱——Tab 只在弹层内循环（aria-modal 对话框语义），
+       不许跑进被遮罩盖住的工作台。 */
+    _trapModalTab(e) {
+      const modal = this.shadowRoot.querySelector(".gl-modal");
+      if (!modal) return;
+      const foc = Array.from(modal.querySelectorAll(
+        "button, input, select, textarea, summary, [tabindex]"))
+        .filter((n) => !n.disabled && n.getAttribute("tabindex") !== "-1"
+          && n.offsetParent !== null);
+      if (!foc.length) return;
+      const first = foc[0];
+      const last = foc[foc.length - 1];
+      const cur = this.shadowRoot.activeElement;
+      if (!modal.contains(cur)) { e.preventDefault(); first.focus(); return; }
+      if (!e.shiftKey && cur === last) { e.preventDefault(); first.focus(); return; }
+      if (e.shiftKey && cur === first) { e.preventDefault(); last.focus(); }
+    }
+
+    /* P1：弹层初始聚焦（新开＝第一个可输入控件）/ 焦点回位（重建后回编辑位）。 */
+    _focusModal(justOpened) {
+      const sr = this.shadowRoot;
+      let target = null;
+      if (!justOpened && this._lastFocusRef) {
+        target = this._lastFocusRef === "__days__"
+          ? this._ref("days")
+          : (/^[\w.-]+$/.test(this._lastFocusRef)
+            ? sr.querySelector(`.gl-modal [data-param-key="${this._lastFocusRef}"]`)
+            : null);
+      }
+      if (!target) {
+        target = sr.querySelector(
+          '.gl-mbody textarea, .gl-mbody input:not([type="hidden"]), .gl-mbody select');
+      }
+      if (!target) return;
+      try { target.focus({ preventScroll: !justOpened }); }
+      catch (_e) { try { target.focus(); } catch (_e2) { /* soft */ } }
+    }
+
+    /* 任何整块重渲染（refresh / _rerender 两条路径都经 _render）之后：
+       先拍「出厂快照」（草稿应用前＝判脏基准），再回填草稿——表单值在重建中幸存；
+       再补 P1 体验层：自动暂存微反馈 + 初始聚焦/焦点回位。 */
+    _render(html) {
+      super._render(html);
+      if (this._formOpen && this._formStep === 2) {
+        const justOpened = !this._modalWasOpen;
+        this._modalWasOpen = true;
+        if (!this._formBaseline || this._formBaseline.tid !== this._formTid) {
+          this._formBaseline = this._formSnapshot();
+        }
+        this._applyFormDraft();
+        this._autosaveNote(this._formDirty());
+        this._focusModal(justOpened);
+      } else {
+        this._modalWasOpen = false;
+      }
+    }
+
+    /* 编辑防打断硬不变量：表单打开期，同会话的宿主重喂（轮询身份合并/peer 解析/
+       回前台补轮）只更新 _ctx 并挂起刷新，表单关闭后补刷；换会话不受此限（走正常
+       refresh → fetchData 会重置表单，草稿已在 sessionStorage，回来可续写）。 */
+    get context() { return this._ctx; }
+    set context(ctx) {
+      const prev = this._ctx;
+      const sameCid = !!(prev && ctx && prev.conversationId
+        && prev.conversationId === ctx.conversationId);
+      this._ctx = ctx;
+      if (sameCid && this._formOpen) {
+        if (!this._ctxDeferred) _beacon("goal_ctx_deferred");   // 每次编辑会话只记一次
+        this._ctxDeferred = true;
+        return;
+      }
+      this.refresh();
+    }
+
+    async refresh() {
+      this._ctxDeferred = false;   // 真刷新即清挂起标记（create 成功等内部刷新同样收口）
+      return super.refresh();
     }
 
     _clearUndo() {
@@ -980,22 +2317,129 @@
         _beacon("goal_set_click");
         if (!this._templates) await this._loadTemplates();
         this._formOpen = true;
+        this._formStep = 1;
         this._formTid = "";
         this._formAutonomy = "";
         this._formUsePrefDays = true;
+        this._resetParamState();
+        this._formBaseline = null;
+        // 断点续写：本会话有未提交草稿（含页面刷新前留下的）→ 直接回到第二步续写
+        const dr = this._loadDraftStore();
+        this._formDraft = dr;
+        if (dr && dr.tid && this._tmplById(dr.tid)) {
+          this._formTid = dr.tid;
+          this._formStep = 2;
+          this._formUsePrefDays = false;   // 期限以草稿为准（回填在 _applyFormDraft）
+          if (this._needsCatalog(dr.tid) && this._catalog == null && !this._catalogTried) {
+            await this._loadCatalog();
+          }
+          _beacon("goal_form_draft_restore");
+        }
         this._rerender();
         return;
       }
-      if (act === "close_form") { this._formOpen = false; this._rerender(); return; }
+      if (act === "close_form") {
+        this._formOpen = false;
+        this._formStep = 1;
+        // 编辑期挂起的外部刷新此刻补上（数据新鲜度在表单关闭后立即恢复）
+        if (this._ctxDeferred) { this.refresh(); return; }
+        this._rerender();
+        return;
+      }
+      if (act === "ov_dismiss") {
+        // 背板点击：干净表单＝照旧回第一步；已有输入＝不关闭（误触是丢内容主因），
+        // 就地提示已自动暂存 + 指路显式退出（返回/Esc）。
+        if (this._formDirty()) {
+          _beacon("goal_form_backdrop_dirty");
+          this._draftCapture();   // input 事件已实时捕获，这里双保险
+          this._modalHint(this.t("inbox.goal.form.draft_saved_hint"));
+          return;
+        }
+        this.onAction("form_back", null);
+        return;
+      }
+      if (act === "draft_clear") {
+        this._formDraft = null;
+        this._clearDraftStore();
+        this._formBaseline = null;
+        this._resetParamState();
+        this._formAutonomy = "";
+        const _prefs = this._loadPrefs();
+        this._formUsePrefDays = (_prefs.template === this._formTid && _prefs.deadline_days > 0);
+        _beacon("goal_form_draft_clear");
+        this._rerender();
+        return;
+      }
+      if (act === "form_back") {
+        // 弹层 → 回第一步（Esc/×/「返回」+ 干净背板同入口；草稿已在，重进同场景即恢复）
+        this._formStep = 1;
+        _beacon("goal_form_back");
+        this._rerender();
+        return;
+      }
       if (act === "pick_tmpl" || act === "pick_custom") {
         const tid = act === "pick_custom" ? "custom"
           : ((el && el.getAttribute("data-tid")) || "");
-        if (!tid || tid === this._formTid || !this._tmplById(tid)) return;
-        const aSel = this._ref("autonomy");
-        if (aSel && aSel.value) this._formAutonomy = String(aSel.value);
+        if (!tid || !this._tmplById(tid)) return;
+        const prefs = this._loadPrefs();
         this._formTid = tid;
-        this._formUsePrefDays = false;   // 换场景 → 期限跟场景默认，不再回放偏好
+        this._formStep = 2;
+        // 期限偏好只在「又选了上次那个场景」时回放；换场景跟场景默认
+        this._formUsePrefDays = (prefs.template === tid && prefs.deadline_days > 0);
+        this._resetParamState();
+        this._formBaseline = null;   // 换场景重拍出厂快照
+        if (this._formDraft && this._formDraft.tid === tid) this._formUsePrefDays = false;
         _beacon(tid === "custom" ? "goal_form_pick_custom" : "goal_form_pick_scenario");
+        // 解锁项/会员档需要价目表：先取再开弹层（避免控件回落后再替换闪烁）
+        if (this._needsCatalog(tid) && this._catalog == null && !this._catalogTried) {
+          await this._loadCatalog();
+        }
+        this._rerender();
+        return;
+      }
+      if (act === "pick_autonomy") {
+        this._setAutonomy(String((el && el.getAttribute("data-lvl")) || ""));
+        this._draftCapture();   // 参与度点选走 DOM 级切换不触发 input/change，手动进草稿
+        return;
+      }
+      if (act === "note_example") {
+        const i = (el && el.getAttribute("data-ex")) || "";
+        const tx = this.t("inbox.goal.form.note_ex" + i);
+        if (!tx || String(tx).indexOf("inbox.goal.") === 0) return;
+        const ta = this.shadowRoot.querySelector('textarea[data-param-key="note"]');
+        if (ta) {
+          ta.value = String(tx);
+          try { ta.focus(); } catch (_e) { /* soft */ }
+          const tip = this._ref("disc_tip");
+          if (tip) tip.hidden = !DISCOVERY_NOTE_RE.test(String(tx));
+          this._draftCapture();   // 程序化填入不触发 input 事件，手动进草稿
+        }
+        _beacon("goal_note_example");
+        return;
+      }
+      if (act === "slot_toggle") {
+        this._toggleSlotChip((el && el.getAttribute("data-slot")) || "");
+        _beacon("goal_slot_toggle");
+        return;
+      }
+      if (act === "switch_discovery") {
+        // 自定义 → 客户摸底：保留 note 作补充方向，按 note 关键词预勾槽位
+        if (!this._tmplById("profile_discovery")) return;
+        const ta = this.shadowRoot.querySelector('textarea[data-param-key="note"]');
+        const note = ta ? String(ta.value || "") : "";
+        const slots = this._inferSlotsFromNote(note);
+        this._formTid = "profile_discovery";
+        this._formStep = 2;
+        this._formUsePrefDays = false;
+        this._resetParamState();
+        this._formBaseline = null;
+        this._formDraft = {
+          v: 1, cid: this._draftCid(), tid: "profile_discovery", ts: Date.now(),
+          params: { slots: slots.join(","), note: note },
+          days: "", autonomy: this._formAutonomy || "suggest",
+          unlockSel: "", tierSel: "", labelTouched: false,
+        };
+        _beacon("goal_switch_discovery");
         this._rerender();
         return;
       }
@@ -1038,6 +2482,50 @@
         await this._cycleAutonomy();
         return;
       }
+      if (act === "deadline_toggle") {
+        const g0 = this._d && this._d.goal;
+        if (!g0 || !g0.goal_id) return;
+        this._moreOpen = false;
+        this._deadlineOpen = !this._deadlineOpen;
+        this._deadlineForGid = String(g0.goal_id || "");
+        this._deadlineVal = null;      // 重开时回读当前期限
+        if (this._deadlineOpen) {
+          _beacon("goal_deadline_open");
+          this._loadBenchmark(g0.template);   // fire-and-forget，取到再补渲染
+        }
+        this._rerender();
+        return;
+      }
+      if (act === "due_wrap" || act === "due_extend") {
+        // 临期快捷动作：今天收口（=当前天数）/ 延长 7 天（走同一 POST 出口）
+        const g1 = this._d && this._d.goal;
+        if (!g1 || !g1.goal_id) return;
+        const day1 = Math.max(1, parseInt(g1.day_index, 10) || 1);
+        const total1 = parseInt(g1.total_days, 10) || day1;
+        const days = act === "due_wrap" ? day1 : Math.min(180, total1 + 7);
+        if (el) el.disabled = true;
+        _beacon(act === "due_wrap" ? "goal_due_wrap" : "goal_due_extend");
+        const ok = await this._postDeadline(days);
+        if (!ok) {
+          if (el) el.disabled = false;
+          this._flashToast(this.t("inbox.goal.err_retry"));
+          this._rerender();
+        }
+        return;
+      }
+      if (act === "deadline_chip") {
+        const d = parseInt((el && el.getAttribute("data-days")) || "", 10);
+        if (isFinite(d)) this._deadlineVal = d;
+        this._rerender();
+        return;
+      }
+      if (act === "deadline_cancel") {
+        this._deadlineOpen = false;
+        this._deadlineVal = null;
+        this._rerender();
+        return;
+      }
+      if (act === "deadline_save") { await this._saveDeadline(el); return; }
       if (act === "won") { this._wonFormOpen = true; this._rerender(); return; }
       if (act === "won_cancel") { this._wonFormOpen = false; this._rerender(); return; }
       if (act === "won_confirm") { await this._status("done"); return; }
@@ -1233,7 +2721,8 @@
         const v = String(inp.value == null ? "" : inp.value).trim();
         if (!k || !v) return;
         const num = parseFloat(v);
-        params[k] = (inp.getAttribute("type") === "number" && isFinite(num)) ? num : v;
+        const typ = inp.getAttribute("type");
+        params[k] = ((typ === "number" || typ === "range") && isFinite(num)) ? num : v;
       });
       const body = { conversation_id: ctx.conversationId, template: this._formTid, params };
       const aSel = this._ref("autonomy");
@@ -1259,12 +2748,17 @@
           deadline_days: body.deadline_days || 0,
         });
         this._formOpen = false;
+        this._formStep = 1;
+        this._formDraft = null;          // 已提交＝草稿使命完成
+        this._clearDraftStore(ctx.conversationId);
+        this._formBaseline = null;
         // 一次性「接下来会发生什么」提示（按所选自治档如实说明，消除「建完然后呢」断崖）
         this._createdHintAutonomy = String(body.autonomy || "suggest");
         this._createdHintTid = String(this._formTid || "");
         this._chainReco = null;
         this._loadChainReco();   // fire-and-forget：查到配套链后原位补一行推荐
         _beacon("goal_create_ok");
+        _beacon("goal_create_ok_" + String(this._formTid || ""));  // 每模板漏斗
         this.emit("cp-goal-changed", { action: "create", conversationId: ctx.conversationId });
         this.refresh();
         return;
@@ -1416,9 +2910,11 @@
         if (o.thenOpenForm) {
           if (!this._templates) await this._loadTemplates();
           this._formOpen = true;
+          this._formStep = 1;
           this._formTid = "";
           this._formAutonomy = "";
           this._formUsePrefDays = true;
+          this._resetParamState();
         }
         this._rerender();
         this.emit("cp-goal-changed", { action, conversationId: g.conversation_id });

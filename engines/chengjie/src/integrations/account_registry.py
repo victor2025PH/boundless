@@ -344,6 +344,22 @@ def _invalidate_business_line_cache(platform: str, account_id: str) -> None:
     _BL_CACHE.pop(_bl_cache_key(platform, account_id), None)
 
 
+def peek_account(platform: str, account_id: str) -> Optional[Dict[str, Any]]:
+    """只读现有单例查账号行；单例未初始化/异常 → None，**绝不隐式建库**。
+
+    供 web 读路径（会话头「账号已停用」横幅，P1-198 2026-08-05）取
+    status/mode——读路径不该有建库副作用（纯单测/无编排器部署里注册表
+    本就不存在；与 cached_business_line 同一铁律）。
+    """
+    try:
+        reg = _registry
+        if reg is None:
+            return None
+        return reg.get(platform, account_id)
+    except Exception:
+        return None
+
+
 def cached_business_line(platform: str, account_id: str) -> str:
     """账号业务线标签（'' = 未标注）。带 TTL 缓存，任何异常回落 ''。"""
     key = _bl_cache_key(platform, account_id)

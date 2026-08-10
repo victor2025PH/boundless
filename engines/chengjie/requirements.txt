@@ -93,5 +93,12 @@ Pillow>=10.0.0
 # 表情/emoji 语义（入站 emoji Unicode → 中文语义，帮 AI 读懂情绪）
 emoji>=2.12.0
 
+# HTTP 响应压缩（src/web/compression.py：brotli 优先 gzip 兜底；缺库自动退化纯 gzip 不崩）
+brotli>=1.1.0
+
+# 中文姓名拼音变体（persona_guard 错误自称名守卫：CJK 人设名 → 罗马化白名单，
+# 防「I'm Lin Xiaoyu」这类正确英文自称被误拦；纯 Python 无二进制依赖，缺库软降级）
+pypinyin>=0.53.0
+
 # 视频理解依赖系统 ffmpeg/ffprobe（抽画面帧 + 抽音轨；Dockerfile 已装）。
 # 视频音轨复用 faster-whisper ASR；画面帧复用 Pillow 拼图 + Vision。

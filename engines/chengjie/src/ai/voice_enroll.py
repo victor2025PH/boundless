@@ -15,6 +15,7 @@ import json
 import mimetypes
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -123,6 +124,145 @@ def build_delete_payload(voice: str) -> Dict[str, Any]:
     return {"model": ENROLLMENT_MODEL, "input": {"action": "delete", "voice": voice}}
 
 
+# ── P0（2026-08-02）参考音「策展 + 质检门」+ 来源溯源 ────────────────────────
+def build_source_ref(
+    *, kind: str, media_ref: str = "", platform: str = "",
+    conversation_id: str = "", message_id: str = "", imported_by: str = "",
+    ts: Optional[float] = None,
+) -> Dict[str, Any]:
+    """音色来源溯源块（写进 voice_profile.source_ref + 审计行）。纯函数。
+
+    kind: upload（坐席上传文件）| inbox_message（从会话语音消息一键导入）。
+    空字段不落键，dict 保持精简；ts 缺省取当前时间。
+    """
+    ref: Dict[str, Any] = {
+        "kind": str(kind or "upload"),
+        "ts": round(float(ts if ts is not None else time.time()), 3),
+    }
+    for k, v in (("media_ref", media_ref), ("platform", platform),
+                 ("conversation_id", conversation_id),
+                 ("message_id", message_id), ("imported_by", imported_by)):
+        s = str(v or "").strip()
+        if s:
+            ref[k] = s
+    return ref
+
+
+def _is_riff_wav(data: bytes) -> bool:
+    return len(data or b"") >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WAVE"
+
+
+def prepare_reference_audio(
+    data: bytes, src_suffix: str, dst_dir: str, safe_name: str,
+    *, force: bool = False, target_sec: float = 8.0, converter: Any = None,
+) -> Dict[str, Any]:
+    """参考音登记前的「策展 + 质检门」：任意输入 → 可登记的单声道 WAV。
+
+    步骤：
+      ① 非 WAV 先经 ffmpeg 转单声道 WAV（保原采样率，converter 可注入供测试）；
+      ② ``pick_best_segment`` 自动去首尾静音 + 选韵律最佳窗（过长素材裁到
+         target_sec，与夜间审计同一刻度——选出来的段天然过审）；
+      ③ 写 ``dst_dir/<safe_name>.wav`` → analyze+classify 出体检回显。
+
+    闸门语义（只拒确定不可用的，其余如实回显不拦）：
+      - 转换器在但转不出 → reject ``not_decodable``（force → 存原件放行）；
+      - 裁剪后有效时长 < 3s → reject ``too_short``（force 放行）；
+      - ffmpeg 缺失 / 质检基建自身故障 → **绝不阻塞登记**，存原件降级放行
+        （degraded 字段注明原因，行为与旧版「原格式直存」一致）。
+
+    返回：{ok, audio_path, reject_code, level, issues, tips, metrics,
+           curated, degraded, duration_sec}。
+    """
+    out_dir = Path(dst_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    suffix = str(src_suffix or ".bin").lower()
+    if not suffix.startswith("."):
+        suffix = "." + suffix
+
+    def _degrade(note: str) -> Dict[str, Any]:
+        p = out_dir / f"{safe_name}{suffix}"
+        p.write_bytes(data or b"")
+        return {"ok": True, "audio_path": str(p), "reject_code": "",
+                "level": "unknown", "issues": [], "tips": [], "metrics": {},
+                "curated": False, "degraded": note, "duration_sec": 0.0}
+
+    def _reject(code: str, dur: float, issues: List[str], tips: List[str]) -> Dict[str, Any]:
+        return {"ok": False, "audio_path": "", "reject_code": code,
+                "level": "bad", "issues": issues, "tips": tips, "metrics": {},
+                "curated": False, "degraded": "", "duration_sec": round(dur, 2)}
+
+    # ① 拿到 WAV bytes（源本身是 WAV → 零转换；否则 ffmpeg）
+    if _is_riff_wav(data):
+        wav_bytes = data
+    else:
+        conv = converter
+        if conv is None:
+            import shutil as _sh
+            if _sh.which("ffmpeg") is None:
+                return _degrade("no_ffmpeg")
+            from src.ai.avatar_voice import convert_to_wav_mono as conv  # noqa: N813
+        tmp = out_dir / f"{safe_name}_src{suffix}"
+        try:
+            tmp.write_bytes(data or b"")
+            try:
+                wav_path = conv(str(tmp))
+            except Exception:
+                wav_path = None
+            if not wav_path:
+                if force:
+                    return _degrade("convert_failed_forced")
+                return _reject(
+                    "not_decodable", 0.0,
+                    ["参考音无法解码为音频（文件损坏或格式不支持）"],
+                    ["换一条能正常播放的语音，或导出为 WAV/MP3 后重试"])
+            wav_bytes = Path(wav_path).read_bytes()
+            Path(wav_path).unlink(missing_ok=True)
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    # ② 解码 + 策展。质检基建自身故障（numpy 缺失等）绝不阻塞登记。
+    try:
+        from src.ai.reference_audio_audit import (
+            DUR_MIN_SEC, analyze_wav_bytes, classify_reference,
+            decode_wav_bytes, pick_best_segment, write_wav_mono)
+    except Exception:
+        return _degrade("audit_unavailable")
+    try:
+        a, sr = decode_wav_bytes(wav_bytes)
+    except Exception:
+        if force:
+            return _degrade("bad_wav_forced")
+        return _reject(
+            "not_decodable", 0.0,
+            ["WAV 数据无法解析（可能是坏文件）"],
+            ["换一条能正常播放的语音后重试"])
+    try:
+        full_sec = (len(a) / sr) if sr else 0.0
+        s0, s1 = pick_best_segment(a, sr, target_sec=float(target_sec))
+        dur = max(0.0, s1 - s0)
+        if dur < DUR_MIN_SEC and not force:
+            return _reject(
+                "too_short", dur,
+                [f"有效语音时长仅 {round(dur, 2)}s（<{DUR_MIN_SEC}s），特征不够稳"],
+                ["换一条 5~10 秒的连续说话语音，或多选几条合并后再登记"])
+        seg = a[int(s0 * sr): int(s1 * sr)]
+        final = out_dir / f"{safe_name}.wav"
+        write_wav_mono(seg, sr, str(final))
+        metrics = analyze_wav_bytes(final.read_bytes())
+        # 逐字稿 sidecar 由登记链自动补（STT/坐席输入），闸门期不当缺陷报
+        verdict = classify_reference(metrics, has_sidecar=True)
+        curated = bool(s0 > 0.05 or (full_sec - s1) > 0.05)
+        return {"ok": True, "audio_path": str(final), "reject_code": "",
+                "level": str(verdict.get("level") or "ok"),
+                "issues": list(verdict.get("issues") or []),
+                "tips": list(verdict.get("tips") or []),
+                "metrics": metrics if metrics.get("ok") else {},
+                "curated": curated, "degraded": "",
+                "duration_sec": round(dur, 2)}
+    except Exception:
+        return _degrade("curation_error")
+
+
 def qwen_profile_json_dict(
     *, voice: str, target_model: str, reference_audio_path: str,
     region: str, preferred_name: str,
@@ -143,15 +283,18 @@ def build_qwen_voice_profile(
     speaker_id: str, region: str = "intl", target_model: str = DEFAULT_TARGET_MODEL,
     language_type: str = "Japanese", python_exe: str = "python",
     wrapper_path: str = "tools/qwen_tts_wrapper.py", command_timeout_sec: int = 120,
+    owner_consent: bool = True, source_ref: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """登记成功后写回人设的 voice_profile（TTSPipeline.voice_clone_command 消费）。
 
     用 command_args（避免 Windows 路径/引号问题）；{text}/{out} 由 TTSPipeline 在运行时填充。
     enabled+owner_consent+reference_audio_path 齐备 → /api/voice/profiles 标记为 ready。
+    owner_consent 不再硬编码——由登记入口按「授权确认」实际结果传入；
+    source_ref（build_source_ref 产物）记录音色从哪来（上传/会话消息+操作人）。
     """
-    return {
+    vp: Dict[str, Any] = {
         "enabled": True,
-        "owner_consent": True,
+        "owner_consent": bool(owner_consent),
         "backend": "voice_clone_command",
         "speaker_id": speaker_id,
         "voice": voice,
@@ -167,12 +310,16 @@ def build_qwen_voice_profile(
         ],
         "command_timeout_sec": command_timeout_sec,
     }
+    if source_ref:
+        vp["source_ref"] = dict(source_ref)
+    return vp
 
 
 def build_lan_voice_profile(
     *, reference_audio_path: str, speaker_id: str,
     base_url: str, language: str = "zh", reference_text: str = "",
     clone_path: str = "/v1/tts/clone",
+    owner_consent: bool = True, source_ref: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """局域网零样本登记成功后写回人设的 voice_profile（fish_speech）。
 
@@ -182,7 +329,7 @@ def build_lan_voice_profile(
     """
     vp: Dict[str, Any] = {
         "enabled": True,
-        "owner_consent": True,
+        "owner_consent": bool(owner_consent),
         "backend": "voice_clone_lan",
         "source": "lan_zeroshot",
         "speaker_id": speaker_id,
@@ -194,12 +341,15 @@ def build_lan_voice_profile(
     }
     if reference_text:
         vp["reference_text"] = reference_text
+    if source_ref:
+        vp["source_ref"] = dict(source_ref)
     return vp
 
 
 def build_avatar_voice_profile(
     *, reference_audio_path: str, speaker_id: str,
     reference_text: str = "", emotion_default: str = "gentle",
+    owner_consent: bool = True, source_ref: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """AvatarHub(7852 CosyVoice3) 零样本登记成功后写回人设的 voice_profile。
 
@@ -210,7 +360,7 @@ def build_avatar_voice_profile(
     """
     vp: Dict[str, Any] = {
         "enabled": True,
-        "owner_consent": True,
+        "owner_consent": bool(owner_consent),
         "backend": "avatar_clone",
         "source": "avatar_zeroshot",
         "speaker_id": speaker_id,
@@ -220,6 +370,8 @@ def build_avatar_voice_profile(
     }
     if reference_text:
         vp["reference_text"] = reference_text
+    if source_ref:
+        vp["source_ref"] = dict(source_ref)
     return vp
 
 

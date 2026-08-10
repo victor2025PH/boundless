@@ -1027,6 +1027,14 @@ HELP_TERMS: dict = {
         "desc": "通道成功率不稳定，可能影响交易。AI 会提醒用户注意风险",
         "desc_en": "The channel's success rate is unstable and may affect transactions. The AI will warn users of the risk"
     },
+    "zalo_7d_window": {
+        "zh": "7 天互动窗",
+        "en": "7-day messaging window",
+        "desc": "Zalo OA 客服消息政策：用户最后一次互动后 7 天内可主动给 TA 发消息，超过窗口需等对方再次发起会话。不是本系统限制，是平台规则",
+        "desc_en": "Zalo OA customer-service policy: you may message a user within 7 days of their last interaction; after that you must wait for them to message first. A platform rule, not a limit of this system",
+        "usage": "接入 Zalo 官方渠道后留意回复时效；窗口内尽快回复可避免会话失联",
+        "usage_en": "After connecting the Zalo official channel, reply within the window to avoid losing the conversation"
+    },
     # ── 用户角色 ───
     "role_master": {
         "zh": "主帐号",

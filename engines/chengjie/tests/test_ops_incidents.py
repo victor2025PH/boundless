@@ -425,6 +425,10 @@ def test_weekly_report_emits_and_throttles(tmp_path, monkeypatch):
     ops = [d for (t, d) in published if t == "ops_report"]
     assert len(ops) == 1
     assert wd.total_weekly_reports == 1
+    # AI 价值总账行随报文携带（2026-08-06：与 value_report 同源；空活动周=零值行，
+    # 「AI 这周什么都没干」也是周报该说的实话）
+    assert rep.get("value_lines"), "ops_report 未携带 AI 价值行"
+    assert any("AI 拟稿" in ln for ln in rep["value_lines"])
     # 节流：距上次不足一周 → 不再发
     assert wd._maybe_weekly_report(now=t0 + 60) is None
     assert len([d for (t, d) in published if t == "ops_report"]) == 1
@@ -442,6 +446,21 @@ def test_ops_report_event_alias_and_message():
     assert "运维事件" in text
     assert "环比上周" in text
     assert "/admin/ops" in text
+
+
+def test_ops_report_message_carries_value_lines():
+    """价值行（AI 拟稿/触达/出站）须原样进推送文案，且有上限防撑爆。"""
+    from src.inbox.webhook_notifier import _build_message
+    lines = [f"行{i}" for i in range(10)]
+    lines[0] = "AI 拟稿 4 条（环比 -50%）"
+    _, text = _build_message("ops_report", {
+        "days": 7, "headline": ["近 7 天运维事件 0 起"], "value_lines": lines,
+    })
+    assert "AI 拟稿 4 条" in text
+    assert "行5" in text and "行6" not in text   # 上限 6 行
+    # 无价值行的旧报文格式不受影响
+    _, legacy = _build_message("ops_report", {"days": 7, "headline": ["x"]})
+    assert "AI 拟稿" not in legacy
 
 
 # ── H2：一键动作（重置熔断 + 重新巡检）─────────────────────────────────────

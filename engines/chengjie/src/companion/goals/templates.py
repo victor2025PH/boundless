@@ -40,12 +40,23 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
         "name_en": "Paid unlock",
         "kind": "conversion",
         "default_days": 14,
+        # P24：默认值中性化——item_id/item_label 由前端向导按变现价目表下拉
+        # 选择并联动（默认「八字详批」曾与实际业务错位、坐席照发穿帮；引擎侧
+        # create_goal 不合并默认值，改空仅影响表单预填，零行为变更）。
+        # help_* 为通用回落说明；前端 i18n 键（inbox.goal.param_help.*）优先。
         "params": [
-            {"key": "item_id", "type": "string", "default": "bazi_reading",
-             "label_zh": "解锁项 ID", "label_en": "Unlock item id"},
-            {"key": "item_label", "type": "string", "default": "八字详批",
-             "label_zh": "解锁项说法（对话里怎么称呼它）",
-             "label_en": "How to call it in chat"},
+            {"key": "item_id", "type": "string", "default": "",
+             "label_zh": "解锁项（卖什么）", "label_en": "Unlock item",
+             "help_zh": "须与后台价目表（monetization.catalog.items）的编号一致；"
+                        "客户真解锁后目标自动标「已达成」",
+             "help_en": "Must match an id in the price catalog; the goal"
+                        " auto-completes when the customer unlocks it"},
+            {"key": "item_label", "type": "string", "default": "",
+             "label_zh": "聊天里怎么称呼它",
+             "label_en": "How to call it in chat",
+             "help_zh": "AI 在对话里用这个说法提到它，写客户听得懂的词",
+             "help_en": "AI mentions it with this wording — use words the"
+                        " customer understands"},
         ],
         "milestones": [
             {"id": "connect", "zh": "破冰回暖", "en": "Reconnect"},
@@ -274,6 +285,58 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
                 "TA犹豫就问清顾虑（价格/用量/效果），对症回应，给足台阶不催单"),
         },
     },
+    "profile_discovery": {
+        # P26（2026-08-05）：「获取客户年龄、职业」类信息采集目标的一等模板。
+        # 此前坐席只能写自定义 note 软文案——没有槽位、没有缺口指令、客户答了
+        # 也不推进。本模板把采集目标状态机化：勾选槽位 → 每轮单缺口采集指令
+        # （gap_from_milestone=0，摸底就是全部目的，破冰当天就带方向）→
+        # 填充率驱动里程碑/完成（ledger selected_fill 分支）→ 全填自动达成。
+        "name_zh": "客户摸底（信息采集）",
+        "name_en": "Profile discovery",
+        "kind": "discovery",
+        "default_days": 10,
+        "params": [
+            {"key": "slots", "type": "string",
+             "default": "age,occupation,location,interests",
+             "label_zh": "要了解的信息（逗号分隔槽位键）",
+             "label_en": "Slots to learn (comma separated)",
+             "help_zh": "可选：age=年龄 occupation=职业 location=坐标 "
+                        "interests=兴趣 name=称呼 need=痛点 channel=在用平台 "
+                        "team_size=团队规模 budget=预算 authority=决策角色 "
+                        "timeline=上线时间；客户全说出来目标自动标「已达成」",
+             "help_en": "Pick from: age occupation location interests name "
+                        "need channel team_size budget authority timeline; "
+                        "the goal auto-completes when all are learned"},
+            {"key": "note", "type": "string", "default": "",
+             "label_zh": "补充方向（可选，给 AI 看）",
+             "label_en": "Extra direction (optional)"},
+        ],
+        "milestones": [
+            {"id": "warmup", "zh": "破冰起步", "en": "Warm up"},
+            {"id": "collect", "zh": "自然摸底", "en": "Collect"},
+            {"id": "fillgap", "zh": "补齐缺口", "en": "Fill gaps"},
+            {"id": "wrap", "zh": "确认收尾", "en": "Wrap up"},
+        ],
+        "push_curve": ("soft", "soft", "direct", "soft"),
+        "profile_slots": True,
+        # 缺口指令从里程碑 0 就出（acquire 是先破冰再摸底=1；摸底目标破冰
+        # 本身就该带方向，否则头几天与无目标无异）
+        "gap_from_milestone": 0,
+        # P27：缺口并进「今日意图」（独立缺口行取消）——今日意图是 opener
+        # 转向与主动桥唯一携带的载荷，缺口不进意图就到不了那两处
+        "gap_in_intent": True,
+        "phase_days": (2, 5, 8, 10),
+        "intents": {
+            0: ("先把互动热起来：顺着TA的话题聊，让TA觉得跟你聊天轻松不设防",
+                "从今天的日常小事自然切入，先建立「聊得来」的感觉，不急着问"),
+            1: ("顺着当下话题自然带出你想了解的那件事，问完就回到闲聊，绝不连环追问",
+                "用「分享自己→顺口反问」换信息：先说你自己的情况，再轻轻问TA"),
+            2: ("对方兴致好时，把还没聊到的那一项自然问出来，语气像朋友好奇不像登记",
+                "结合TA之前说过的事往下追一层，把模糊的信息聊具体"),
+            3: ("把了解到的事自然回带确认（「你之前说…」），别像核对表格",
+                "话题收在轻松处；还缺的信息以后有机会再聊，不硬凑"),
+        },
+    },
     "custom": {
         "name_zh": "自定义目标",
         "name_en": "Custom",
@@ -290,12 +353,23 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"id": "s3", "zh": "深化", "en": "Deepen"},
             {"id": "s4", "zh": "收口", "en": "Wrap up"},
         ],
-        "push_curve": ("none", "soft", "soft", "soft"),
+        # 2026-08-05 P25：首段 none→soft。custom 的里程碑纯时间驱动（ledger
+        # 兜底分支），14 天目标头 3~4 天全程「只字不提」——坐席实测「设了目标
+        # AI 完全不往那个方向聊」的软根因。none 起步是给转化模板防 day-1 硬销
+        # 设计的；custom 是坐席显式写下的方向（「获取客户职业」类居多），
+        # soft（顺势自然带到）+ 恒在纪律行已足够保住自然度。
+        "push_curve": ("soft", "soft", "direct", "soft"),
+        # P26：每段扩到 2 条——custom 单条池在同一里程碑期间每天同一句
+        # （pick_intent 的 crc32 轮换只在池内生效），目标开场连续几天一个套路
         "intents": {
-            0: ("围绕目标「{note}」找一个自然的切入点起步，节奏以对方舒适为先",),
-            1: ("顺着已有话题把「{note}」自然推进一小步，不生硬",),
-            2: ("在对方兴致好的时候，围绕「{note}」聊得更具体一些",),
-            3: ("围绕「{note}」自然收口：确认对方的态度，给足台阶",),
+            0: ("围绕目标「{note}」找一个自然的切入点起步，节奏以对方舒适为先",
+                "先顺着TA的话题聊热乎，再朝「{note}」的方向轻轻靠一步"),
+            1: ("顺着已有话题把「{note}」自然推进一小步，不生硬",
+                "结合TA今天聊到的事，把「{note}」往前带半步，点到即止"),
+            2: ("在对方兴致好的时候，围绕「{note}」聊得更具体一些",
+                "把「{note}」聊到具体处：给一个贴合TA情况的说法或例子"),
+            3: ("围绕「{note}」自然收口：确认对方的态度，给足台阶",
+                "轻描淡写地把「{note}」收个尾，对方犹豫就先放下聊回日常"),
         },
     },
 }
@@ -310,7 +384,11 @@ def get_template(template_id: str) -> Optional[Dict[str, Any]]:
 
 
 def list_templates() -> List[Dict[str, Any]]:
-    """API/UI 消费的公开形状（含 id；不含 intents 内部池）。"""
+    """API/UI 消费的公开形状（含 id；不含 intents 内部池）。
+
+    ``push_curve``（P24）随形状导出——建目标向导第二步的「AI 会怎么推进」
+    节奏预览据此给每段里程碑标推进力度（不提销售/顺势/可直说）。
+    """
     out: List[Dict[str, Any]] = []
     for tid, t in TEMPLATES.items():
         out.append({
@@ -321,6 +399,7 @@ def list_templates() -> List[Dict[str, Any]]:
             "default_days": t["default_days"],
             "params": [dict(p) for p in t["params"]],
             "milestones": [dict(m) for m in t["milestones"]],
+            "push_curve": list(t.get("push_curve") or ()),
         })
     return out
 

@@ -22,5 +22,10 @@
   --cp-danger: #f06a6a;
   /* violet 暗色取亮档（深紫贴深底不可读） */
   --cp-violet: #a78bfa;
+  /* goal-* 场景类别色：暗色一律取亮档（语义=同等强调度而非同色值） */
+  --cp-goal-conv: #fbbf24;
+  --cp-goal-rel: #fb7185;
+  --cp-goal-eng: #38bdf8;
+  --cp-goal-disc: #2dd4bf;
   --cp-track: #26272e;
 }

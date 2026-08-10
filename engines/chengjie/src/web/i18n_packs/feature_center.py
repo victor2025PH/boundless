@@ -62,6 +62,11 @@ ZH = {
     "diag_sub": "一键导出版本 + 配置（密钥已打码）+ 日志尾部，发给支持即可远程定位",
     "diag_btn": "下载诊断包",
     "diag_hint": "不含聊天记录数据库；配置里的 API Key / Token 等已全部打码。",
+    # P1-⑦ 一键直传（后端转投官网 /api/diag-upload，回 6 位短码）
+    "diag_upload_btn": "一键上传给客服",
+    "diag_upload_busy": "正在打包上传…",
+    "diag_upload_ok": "已上传。把这个诊断码发给客服：{code}",
+    "diag_upload_fail": "上传失败：{detail}",
     "err.fc.readonly": "只读账号无法修改功能开关",
     "err.fc.unknown": "未知功能：{name}",
     "err.fc.locked": "该功能未开放自助开关",
@@ -121,6 +126,11 @@ EN = {
     "diag_sub": "Export version + configs (secrets redacted) + log tails in one click for remote support",
     "diag_btn": "Download bundle",
     "diag_hint": "No chat databases included; API keys / tokens in configs are fully redacted.",
+    # P1-⑦ one-click direct upload (backend relays to the vendor site, returns a 6-char code)
+    "diag_upload_btn": "Upload to support",
+    "diag_upload_busy": "Packing & uploading…",
+    "diag_upload_ok": "Uploaded. Give this code to support: {code}",
+    "diag_upload_fail": "Upload failed: {detail}",
     "err.fc.readonly": "Read-only accounts cannot change feature toggles",
     "err.fc.unknown": "Unknown feature: {name}",
     "err.fc.locked": "This feature is not self-service toggleable",

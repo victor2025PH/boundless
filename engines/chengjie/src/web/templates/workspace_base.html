@@ -23,13 +23,25 @@
 (function(){
   var KEY='cp_theme';
   try{ var u=new URLSearchParams(location.search).get('theme'); if(u==='dark'||u==='light') localStorage.setItem(KEY,u); }catch(_){}
+  /* embed=1：iframe 内嵌模式（坐席台「管理工作链」抽屉等）——隐藏顶栏 chrome 只留正文；
+     尽早置属性避免先渲染顶栏再消失的闪烁 */
+  try{ if(new URLSearchParams(location.search).get('embed')==='1') document.documentElement.setAttribute('data-ws-embed','1'); }catch(_){}
   function pref(){ try{ return localStorage.getItem(KEY)||'auto'; }catch(_){ return 'auto'; } }
   function sysDark(){ try{ return window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches; }catch(_){ return false; } }
   function eff(){ var p=pref(); return p==='auto'?(sysDark()?'dark':'light'):p; }
+  window.cpEffTheme=window.cpEffTheme||eff;
+  /* 主题标签＝「偏好 · 当前生效」：auto 偏好下系统在深色时，用户点了「自动」以为是
+     白天模式——生效态不可见就会「切了却看不出变化」。三处（点击/初始/系统切换）同步。 */
+  window.cpSyncThemeLbl=window.cpSyncThemeLbl||function(){
+    var lb=document.getElementById('ws-theme-lbl'); if(!lb||!window.T) return;
+    var p=pref(), e=eff();
+    var effTxt=window.T(e==='dark'?'base.theme.dark':'base.theme.light');
+    lb.textContent=(p==='auto')?(window.T('base.theme.auto')+' · '+effTxt):effTxt;
+  };
   window.cpApplyTheme=window.cpApplyTheme||function(){ document.documentElement.setAttribute('data-cp-theme', eff()); };
-  window.cpCycleTheme=window.cpCycleTheme||function(){ var o=['auto','light','dark'],p=pref(),i=o.indexOf(p); try{ localStorage.setItem(KEY,o[(i+1)%3]); }catch(_){} window.cpApplyTheme(); var lb=document.getElementById('ws-theme-lbl'); if(lb){ var np=pref(); lb.textContent=(np==='auto'?window.T('base.theme.auto'):(np==='dark'?window.T('base.theme.dark'):window.T('base.theme.light'))); } };
+  window.cpCycleTheme=window.cpCycleTheme||function(){ var o=['auto','light','dark'],p=pref(),i=o.indexOf(p); try{ localStorage.setItem(KEY,o[(i+1)%3]); }catch(_){} window.cpApplyTheme(); window.cpSyncThemeLbl(); };
   window.cpApplyTheme();
-  try{ if(window.matchMedia){ window.matchMedia('(prefers-color-scheme:dark)').addEventListener('change',function(){ if(pref()==='auto') window.cpApplyTheme(); }); } }catch(_){}
+  try{ if(window.matchMedia){ window.matchMedia('(prefers-color-scheme:dark)').addEventListener('change',function(){ if(pref()==='auto'){ window.cpApplyTheme(); window.cpSyncThemeLbl(); } }); } }catch(_){}
 })();
 </script>
 <style>
@@ -60,6 +72,10 @@
     /* 文字专用语义色（WCAG：亮底用更深值保证对比度；fills/圆点仍用上方高亮 accent）*/
     --tk-ok-ink:#15803d;
     --tk-warn-ink:#b45309;
+    /* 兼容别名：存量代码写了 --tk-amber-ink（从未定义，恒走亮色回落值 → 暗色下
+       ≈3:1 不可读，2026-08-10 接入弹窗实锤）。别名让所有旧引用点吃到正确的日夜双档；
+       新代码一律直接写 --tk-warn-ink（见 .cursor/rules/frontend-theme.mdc）。 */
+    --tk-amber-ink:var(--tk-warn-ink);
     --tk-danger-ink:#b91c1c;
     --tk-vio-ink:#6d28d9;
     --tk-grad:linear-gradient(135deg,#22d3ee,var(--bl-growth,#1e8cf2));        /* 科技青→品牌智连蓝 */
@@ -71,6 +87,7 @@
     /* 密度令牌（圆角/间距统一，mode 无关，仅此处定义）*/
     --tk-radius:10px;
     --tk-radius-sm:7px;
+    --tk-radius-lg:14px;   /* 大卡/向导卡（此前仅靠回落字面量，token 契约补齐） */
     --tk-gap:12px;
   }
   [data-cp-theme="dark"]{
@@ -205,6 +222,9 @@
   .ws-um-danger:hover{background:#fee2e2;}
   @media (max-width:1280px){ .ws-brand .brand-lockup__surface{display:none;} .ws-brand .brand-lockup__sep{display:none;} .ws-funnel,.ws-agents{display:none;} }
   .ws-body{height:calc(100vh - 52px);overflow:hidden;}
+  /* embed=1（坐席台抽屉 iframe 等内嵌宿主）：隐藏顶栏 chrome，正文全高 */
+  html[data-ws-embed="1"] .ws-top{display:none!important;}
+  html[data-ws-embed="1"] .ws-body{height:100vh!important;}
   /* 左侧导航（opt-in，见 _ws_sidebar.html）：只在开了侧栏的页面改变 .ws-body 的
      布局语义，收件箱等未开启的页面仍是原来的单块满高容器，零影响。 */
   .ws-body.ws-has-side{display:flex;}
@@ -434,7 +454,7 @@
 <!-- 平台原生图标库(单一事实来源)：window.platformIconSVG / platformBrandColor -->
 <script src="/static/platform_icons.js?v=20260701"></script>
 <!-- 通用线性图标库(单一事实来源)：window.uiIcon / data-ui-icon 声明式 enhance -->
-<script src="/static/ui_icons.js?v=20260808a"></script>
+<script src="/static/ui_icons.js?v=20260808b"></script>
 {% block head %}{% endblock %}
 <script>
 (function(){
@@ -544,6 +564,7 @@
         <div class="ws-more-grp" id="ws-grp-ops" style="display:none;" data-i18n="base.grp.ops">运营监控</div>
         <a href="/workspace/queue" id="ws-queue-link" style="display:none;" data-i18n="base.nav.queue" data-i18n-title="base.nav.queue_t" title="实时运营队列看板（主管）">队列</a>
         <a href="/workspace/agent-perf" id="ws-perf-link" style="display:none;" data-i18n="base.nav.perf" data-i18n-title="base.nav.perf_t" title="坐席绩效看板（主管）">绩效</a>
+        <a href="/workspace/goal-report" id="ws-goalrpt-link" style="display:none;" data-i18n="base.nav.goalrpt" data-i18n-title="base.nav.goalrpt_t" title="目标达成报表（主管）">目标报表</a>
         <div class="ws-more-grp" id="ws-grp-quality" style="display:none;" data-i18n="base.grp.quality">质量</div>
         <a href="/workspace/ai-quality" id="ws-aiq-link" style="display:none;" data-i18n="base.nav.aiq" data-i18n-title="base.nav.aiq_t" title="AI 回复质量看板（主管）">AI 质量</a>
         <div class="ws-more-grp" id="ws-grp-biz" style="display:none;" data-i18n="base.grp.biz">经营</div>
@@ -814,7 +835,7 @@ function _wsAiTrialDismiss(){
      桌面壳包的也是本工作台 → 桌面端同享，无需壳侧代码。 -->
 <div id="ws-aidegrade" style="display:none;align-items:center;gap:10px;padding:6px 14px;
      background:linear-gradient(90deg,#78350f,var(--th-bg-amber8,#92400e));color:#fef3c7;font-size:12.5px;">
-  <span style="flex:0 0 auto;">☁️</span>
+  <span style="flex:0 0 auto;display:inline-flex;" data-ui-icon="cloud" data-size="15"></span>
   <span style="flex:1 1 auto;line-height:1.5;">
     <span data-i18n="ws.aidegrade.text">{{ i18n.get('ws.aidegrade.text', '云端 AI 降级中，回复可能稍慢；系统已自动切换备用通道，无需操作。') }}</span>
     <span id="ws-aidegrade-mode" style="opacity:.85"></span>
@@ -826,7 +847,7 @@ function _wsAiTrialDismiss(){
      文案全部由 JS 经 window.T/Tf 填充（platform/account 为英文原文，无需翻译）。 -->
 <div id="ws-chandown" style="display:none;align-items:center;gap:10px;padding:6px 14px;
      background:linear-gradient(90deg,var(--th-bg-red9,#7f1d1d),var(--th-bg-red8,#991b1b));color:var(--th-ink-red2,#fecaca);font-size:12.5px;">
-  <span style="flex:0 0 auto;">📵</span>
+  <span style="flex:0 0 auto;display:inline-flex;" data-ui-icon="phone-off" data-size="15"></span>
   <span style="flex:1 1 auto;line-height:1.5;">
     <span id="ws-chandown-text"></span>
     <span id="ws-chandown-detail" style="opacity:.85"></span>
@@ -836,7 +857,7 @@ function _wsAiTrialDismiss(){
      勿催坐席狂刷。数据随同一 60s 轮询（ai-runtime-status.instance_restart）。 -->
 <div id="ws-restartcool" style="display:none;align-items:center;gap:10px;padding:6px 14px;
      background:linear-gradient(90deg,#1e3a5f,var(--th-bg-blue8,#1e40af));color:#dbeafe;font-size:12.5px;">
-  <span style="flex:0 0 auto;">🔄</span>
+  <span style="flex:0 0 auto;display:inline-flex;" data-ui-icon="refresh" data-size="14"></span>
   <span style="flex:1 1 auto;line-height:1.5;">
     <span id="ws-restartcool-text"></span>
     <span id="ws-restartcool-detail" style="opacity:.85"></span>
@@ -1057,7 +1078,7 @@ function _wsAiTrialDismiss(){
 <script>
 function _wsToggleMore(e){ e.stopPropagation(); var m=document.getElementById('ws-more-menu'); if(m) m.classList.toggle('show'); }
 function _wsToggleUser(e){ e.stopPropagation(); var m=document.getElementById('ws-user-menu'); if(m) m.classList.toggle('show'); }
-document.addEventListener('DOMContentLoaded',function(){ try{ var lb=document.getElementById('ws-theme-lbl'); if(lb){ var p=(localStorage.getItem('cp_theme')||'auto'); lb.textContent=(p==='auto'?window.T('base.theme.auto'):(p==='dark'?window.T('base.theme.dark'):window.T('base.theme.light'))); } }catch(_){} });
+document.addEventListener('DOMContentLoaded',function(){ try{ window.cpSyncThemeLbl&&window.cpSyncThemeLbl(); }catch(_){} });
 document.addEventListener('click',function(e){
   var m=document.getElementById('ws-more-menu'); if(m && !e.target.closest('.ws-more-wrap')) m.classList.remove('show');
   var u=document.getElementById('ws-user-menu'); if(u && !e.target.closest('.ws-user-wrap')) u.classList.remove('show');
@@ -1623,6 +1644,14 @@ document.addEventListener('click',function(e){
       if(_ul) _ul.style.display='block';  // C0-2: 用量看板仅主管/老板可见
       var _pl=document.getElementById('ws-perf-link');
       if(_pl) _pl.style.display='block';
+      // P0 2026-08-09: 目标达成报表仅主管可见；按端点探测显隐——模板热更新先于
+      // 进程重启上生产，路由未装载时(404)不亮死链接，重启后自动出现（零二次改动）
+      var _grl=document.getElementById('ws-goalrpt-link');
+      if(_grl){
+        fetch('/api/goals/report/accounts?days=7').then(function(r){
+          if(r.status!==404) _grl.style.display='block';
+        }).catch(function(){});
+      }
       var _ql=document.getElementById('ws-queue-link');
       if(_ql) _ql.style.display='block';  // P29: 队列看板仅主管可见
       var _wfl=document.getElementById('ws-workflow-link');
@@ -1787,7 +1816,7 @@ document.addEventListener('click',function(e){
         }
       }
       // P24：通知中心 — 所有重要事件写入铃铛
-      if(msg && ['inbox_message','draft_sla_breach','draft_backlog_summary','draft_reassigned','conversation_assigned','anomaly_alert','sla_alert','escalation','queue_alert','stage_advance','stage_advance_pending','stage_downgrade','stage_reunion','stage_sync','workflow_step','workflow_execution_completed','workflow_execution_failed','workflow_execution_cancelled'].indexOf(msg.type)>=0){
+      if(msg && ['inbox_message','draft_sla_breach','draft_backlog_summary','draft_reassigned','conversation_assigned','anomaly_alert','sla_alert','escalation','queue_alert','stage_advance','stage_advance_pending','stage_downgrade','stage_reunion','stage_sync','workflow_step','workflow_execution_completed','workflow_execution_failed','workflow_execution_cancelled','goal_completed_alert'].indexOf(msg.type)>=0){
         if(window.__wsNotif) window.__wsNotif.add(msg);
       }
       // P0-协作闭环：同事 @ 提及 —— 定向通知（仅被 @ 的坐席收）：铃铛 + 提示音 +
@@ -1869,6 +1898,19 @@ document.addEventListener('click',function(e){
           _wsEl.onclick=function(){
             try{ sessionStorage.setItem('ws_focus_conv',_ws.conversation_id); }catch(_){}
             location.href='/workspace';
+          };
+        }
+      }
+      // P0 2026-08-09：目标达成 — 好消息 toast（点击跳该会话趁热跟进）
+      if(msg && msg.type==='goal_completed_alert' && msg.data && !_sseSettling()){
+        var _gd=msg.data;
+        var _gdEl=CRMW.toast(window.Tf('base.sse.goal_done',{name:(_gd.contact_name||_gd.chat_key||'?'),title:(_gd.title||_gd.template_name||'')}),'#ca8a04','star');
+        if(_gdEl && _gd.conversation_id){
+          _gdEl.style.cursor='pointer';
+          _gdEl.onclick=function(){
+            if(typeof window.__wsFocusConv==='function'){ window.__wsFocusConv(_gd.conversation_id); return; }
+            try{ sessionStorage.setItem('ws_focus_conv',_gd.conversation_id); }catch(_){}
+            if(location.pathname!=='/workspace') location.href='/workspace';
           };
         }
       }
@@ -2001,6 +2043,7 @@ document.addEventListener('click',function(e){
     sla_alert:      { iconName:'alert', bg:'#fee2e2', label:window.T('base.notif.type_sla_alert'), accent:'#dc2626' },
     escalation:     { iconName:'bell', bg:'#ede9fe', label:window.T('base.notif.type_escalation'), accent:'#7c3aed' },
     conv_note:      { iconName:'users', bg:'#ede9fe', label:window.T('base.notif.type_conv_note'), accent:'#7c3aed' },
+    goal_completed_alert:{ iconName:'star', bg:'#fef9c3', label:window.T('base.notif.type_goal_done'), accent:'#ca8a04' },
   };
   // 群组动态：inbox_message 且会话类型为群组/频道 → 折叠展示、不计未读、不打扰
   function _isGroup(n){
@@ -2045,6 +2088,8 @@ document.addEventListener('click',function(e){
       sub = window.Tf('base.notif.assigned_sub',{by:(d.by_name||d.by||'?'),n:(d.count||1)});
     } else if(n.type==='conv_note'){
       sub = window.Tf('base.notif.mention_sub',{name:(d.agent_name||d.agent_id||'?'),text:(d.body||'').slice(0,40)});
+    } else if(n.type==='goal_completed_alert'){
+      sub = window.Tf('base.notif.goal_done_sub',{name:(d.contact_name||d.chat_key||'?'),title:(d.title||d.template_name||'').slice(0,40)});
     }
     return '<div class="ws-notif-item'+(unread?' unread':'')+'" style="border-left-color:'+(meta.accent||'transparent')+';" onclick="window.__wsNotif.click(\''+esc(JSON.stringify(n).replace(/'/g,'\\'+"'"))+'\')">'
       +'<div class="ws-notif-icon" style="background:'+meta.bg+'">'+(typeof uiIcon==='function'?uiIcon(meta.iconName||'pin',14):'')+'</div>'
@@ -2204,7 +2249,7 @@ document.addEventListener('click',function(e){
         var n = JSON.parse(jsonStr);
         var d = n.data || {};
         // 新消息/升级/SLA/转派/@提及 → 定位会话：已在收件箱直接选中，否则跳回工作台
-        if((n.type==='inbox_message'||n.type==='escalation'||n.type==='sla_alert'||n.type==='conversation_assigned'||n.type==='conv_note') && d.conversation_id){
+        if((n.type==='inbox_message'||n.type==='escalation'||n.type==='sla_alert'||n.type==='conversation_assigned'||n.type==='conv_note'||n.type==='goal_completed_alert') && d.conversation_id){
           if(typeof window.__wsFocusConv==='function'){ window.__wsFocusConv(d.conversation_id); _toggle(); return; }
           try{ sessionStorage.setItem('ws_focus_conv', d.conversation_id); }catch(_){}
           location.href='/workspace';
@@ -2533,7 +2578,11 @@ window.__wsMultiWin = (function(){
 // P39: 全局搜索
 (function(){
   var _timer=null, _panel=null, _input=null;
-  var _TYPE_ICON={message:'💬',contact:'👤',note:'📝'};
+  var _TYPE_ICON={
+    message:(typeof uiIcon==='function'?uiIcon('chat',14):''),
+    contact:(typeof uiIcon==='function'?uiIcon('user',14):''),
+    note:(typeof uiIcon==='function'?uiIcon('edit',14):'')
+  };
   var _TYPE_COLOR={message:'#2563eb',contact:'#7c3aed',note:'#0f766e'};
   function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
   function fmtTs(ts){if(!ts)return '';return window.wsFmtDate(ts);}

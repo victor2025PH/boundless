@@ -18,7 +18,7 @@
 用法::
 
     python tools/verify_copilot_write_csrf.py
-    python tools/verify_copilot_write_csrf.py --base http://localhost:18799
+    python tools/verify_copilot_write_csrf.py --base http://127.0.0.1:18799
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ import sys
 from pathlib import Path
 from typing import Any, List, Tuple
 
-DEFAULT_BASE = "http://localhost:18799"
+DEFAULT_BASE = "http://127.0.0.1:18799"  # 勿改回 localhost：::1 回退每连接 ~2s（见 verify_inbox_density.py 同行注释）
 DEFAULT_DATA_ROOT = "D:/chengjie-instances/zhiliao/data"
 PROBE_CID = "telegram:8244899900:qa_probe_write_csrf"
 

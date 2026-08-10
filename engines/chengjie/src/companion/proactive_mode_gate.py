@@ -1,7 +1,7 @@
 """gentle_checkin 效能门控（P5，2026-07-29，纯函数核心）。
 
 问题：温和问候是「什么钩子都没有」时的兜底开场。若数据证明它的回复率远低于
-富开场（记忆回访/生活分享/天气/剧情），继续按原频率发就是在烧账号信誉——
+富开场（记忆回访/生活分享/新鲜事/天气/剧情），继续按原频率发就是在烧账号信誉——
 「没话找话」不如「今天不说」。本模块把这个判断交给数据：
 
     skip_prob = clamp(1 - checkin回复率/富开场回复率, 0, max_skip)
@@ -25,9 +25,11 @@ import zlib
 from typing import Any, Dict, Optional, Tuple
 
 # 富开场臂（有真实钩子的 mode；仪式/纪念日是时点驱动、ask_* 是采集意图，
-# 回复动力学不同，均不入基线）
+# 回复动力学不同，均不入基线）。news_share（今日新鲜事，2026-08-03）＝
+# 真实新闻钩子，与生活分享/天气同类。
 RICH_MODES = (
-    "follow_up", "life_share", "weather_hook", "story_invite", "story_teaser",
+    "follow_up", "life_share", "news_share", "weather_hook",
+    "story_invite", "story_teaser",
 )
 CHECKIN_MODE = "gentle_checkin"
 

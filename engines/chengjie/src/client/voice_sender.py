@@ -68,7 +68,8 @@ def convert_to_ogg_opus(
 
     Returns the path to the ``.ogg`` file on success, ``None`` on failure.
     If *delete_src* is ``True`` the original file is removed after conversion.
-    If the source is already ``.ogg`` the path is returned unchanged.
+    If the source is already a real Ogg/Opus (``OggS``+``OpusHead``) the path
+    is returned unchanged; a ``.ogg`` suffix alone is not trusted.
 
     ``application``：``voip``=Telegram 语音条稳态（默认）；``audio``=音乐档，
     频带更宽、听感更「立体」（Phase D 活人感，部分客户端波形同样正常）。
@@ -82,11 +83,20 @@ def convert_to_ogg_opus(
         logger.warning("[voice_sender] source file not found: %s", src_path)
         return None
 
+    # 仅当魔数确认为 OggS+OpusHead 才原样放行。扩展名 .ogg 但内容是
+    # WAV/MP3 的「假 ogg」会骗过旧逻辑，经 Baileys 硬标 opus 后客户侧无法下载
+    # （2026-08-04 智拓 .198 事故）。魔数不合 → 继续走重编码。
     if src.suffix.lower() == ".ogg":
-        return src_path
+        try:
+            from src.client.voice_ptt_gate import looks_like_ogg_opus_file
+            if looks_like_ogg_opus_file(str(src)):
+                return src_path
+        except Exception:
+            # 闸模块异常时保守重编码，绝不盲信扩展名
+            pass
 
     dst = src.with_suffix(".ogg")
-    if dst == src:
+    if dst == src or src.suffix.lower() == ".ogg":
         dst = src.parent / (src.stem + "_opus.ogg")
 
     try:
@@ -155,18 +165,21 @@ async def send_telegram_voice(
     duration: Optional[int] = None,
     reply_to_message_id: Optional[int] = None,
     opus_application: str = "voip",
-) -> bool:
+) -> Any:
     """Send a voice note via ``pyrogram client.send_voice()``.
 
     Converts to OGG/Opus if needed; falls back to sending the original file
     as an audio document if conversion is unavailable.
 
-    Returns ``True`` on success, ``False`` on failure.
+    Returns a **truthy** value on success, falsy (``None``/``False``) on
+    failure——成功时尽量返回 pyrogram 的 ``Message``（其 ``.id`` 供出站收件箱
+    镜像做 platform_msg_id 主键去重，2026-08-02 分条语音逐条镜像需要），拿不到
+    Message 时退回 ``True``。旧调用方按 bool 语义使用（``if sent:``）不受影响。
     """
     path = Path(audio_path)
     if not path.is_file():
         logger.error("[voice_sender] audio file not found: %s", audio_path)
-        return False
+        return None
 
     ogg_path: Optional[str] = None
     cleanup_ogg = False
@@ -192,15 +205,16 @@ async def send_telegram_voice(
         send_kw["reply_to_message_id"] = int(reply_to_message_id)
 
     try:
-        await client.send_voice(**send_kw)
+        msg = await client.send_voice(**send_kw)
         logger.info(
             "[voice_sender] sent voice chat_id=%s file=%s dur=%s",
             chat_id, Path(ogg_path).name, duration,
         )
-        return True
+        # 成功但 API 返回空（极少数分支）也必须回 truthy——绝不把已送达判成失败。
+        return msg if msg is not None else True
     except Exception as ex:
         logger.error("[voice_sender] send_voice failed chat_id=%s: %s", chat_id, ex)
-        return False
+        return None
     finally:
         if cleanup_ogg and ogg_path != audio_path:
             try:

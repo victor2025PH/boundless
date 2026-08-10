@@ -58,11 +58,11 @@ function parseRow(line: string): ClientLogRow | null {
   }
 }
 
-export async function summarizeClientLogs(windowHours = 24): Promise<ClientLogSummary> {
-  const empty: ClientLogSummary = {
-    present: false, window_hours: windowHours, total_events: 0, machines: 0,
-    by_version: [], top_errors: [], crashes: [], recent: [],
-  };
+/**
+ * 读时间窗内的回传行（错误看板与激活漏斗共用的取数口）。
+ * 文件缺失返回 null（区别于「文件在但窗口内没数据」的空数组）。
+ */
+export async function readClientLogRows(windowHours: number): Promise<ClientLogRow[] | null> {
   let raw = "";
   try {
     const st = await stat(LOG);
@@ -70,7 +70,7 @@ export async function summarizeClientLogs(windowHours = 24): Promise<ClientLogSu
     const buf = await readFile(LOG);
     raw = buf.subarray(start).toString("utf8");
   } catch {
-    return empty;
+    return null;
   }
   const since = Date.now() - windowHours * 3600 * 1000;
   const rows: ClientLogRow[] = [];
@@ -82,6 +82,16 @@ export async function summarizeClientLogs(windowHours = 24): Promise<ClientLogSu
     if (Number.isFinite(tms) && tms < since) continue;
     rows.push(r);
   }
+  return rows;
+}
+
+export async function summarizeClientLogs(windowHours = 24): Promise<ClientLogSummary> {
+  const empty: ClientLogSummary = {
+    present: false, window_hours: windowHours, total_events: 0, machines: 0,
+    by_version: [], top_errors: [], crashes: [], recent: [],
+  };
+  const rows = await readClientLogRows(windowHours);
+  if (rows === null) return empty;
   if (!rows.length) return { ...empty, present: true };
 
   const machines = new Set(rows.map((r) => r.fp).filter(Boolean));

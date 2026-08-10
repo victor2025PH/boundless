@@ -181,6 +181,12 @@ def metrics_snapshot() -> Dict[str, Any]:
                   "complaints_by_persona", "scene_demand", "scene_unmet"):
             snap[k] = dict(_METRICS.get(k) or {})
     snap["gen_inflight"] = image_gen_inflight()
+    # 出站前图文核对（P2）：核过几张、改写过几条、软放行原因分布。
+    try:
+        from src.ai.caption_image_guard import stats_snapshot as _cg
+        snap["caption_guard"] = _cg()
+    except Exception:
+        pass
     return snap
 
 
@@ -623,6 +629,7 @@ def pick_registered_media(
     avoid_id: str = "", bond_level: Optional[int] = None,
     force_generic: bool = False, conv_key: str = "",
     required_scene: str = "",
+    deny_generic: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """查该人设注册相册：关键词命中，或（是泛化「要照片/自拍」请求时）通用池。命中返回行 dict。
 
@@ -634,6 +641,9 @@ def pick_registered_media(
     ``conv_key`` 非空＝启用防复读记忆（同会话不重发同一张/同一系列，见 select_media）。
     ``required_scene``（P0 一致性）＝显式点名场景（客户原话/承诺原文抽取）：
     通用池只出场景类匹配条目，挑不到 → None（交生成/诚实文字）。
+    ``deny_generic``（P1 图文一致性，2026-08-08）＝对方点名要看的是**非人像主体**
+    （「你煮的燕窝粥」）：通用人像池一律不放开，只有运营给该主体配过触发词的
+    条目才算有货——没货就该发诚实文字，绝不拿随机自拍顶包。
     另自动带时段过滤 + 重发冷却 + 服装连续窗（``companion.selfie.consistency``）。
     """
     scfg = resolve_image_autosend_cfg(config)
@@ -648,8 +658,8 @@ def pick_registered_media(
     store = get_persona_media_store()
     if store is None:
         return None
-    generic_ok = bool(force_generic) or bool(
-        detect_selfie_request(str(peer_text or "")))
+    generic_ok = (not deny_generic) and (
+        bool(force_generic) or bool(detect_selfie_request(str(peer_text or ""))))
     try:
         _resend_days = float(scfg.get("resend_after_days", 90) or 0)
     except (TypeError, ValueError):
@@ -727,13 +737,16 @@ def _should_grow_album(
 
 
 def _fixed_caption(scfg: Dict[str, Any], kind: str, freshness: str,
-                   lang: str = "") -> str:
+                   lang: str = "", *, chat_key: str = "") -> str:
     """固定配文兜底（运营/LLM 配文都缺时），按图片来源新旧取**诚实口径**（P0）。
 
     ``freshness="old"``（相册存货/注册相册）→ ``caption_album`` 配置 → 双语
     旧照文案池——绝不回落全局 ``caption``（那是「刚拍」口径，配旧照是实录
     穿帮点）；``fresh``（刚生成）→ 原有 ``caption``/``contextual_caption``。
     video 无旧照文案池（措辞是"照片"），只认 ``caption_album`` 配置。
+    ``chat_key``（2026-08-03 复读治理）：透传给池选取——crc32(会话+日期)
+    确定性 + 近用避重（发出成功后调用方经 ``_note_caption_sent`` 记账），治
+    「同一客户几天内反复收到逐字相同配文」；空＝旧游标行为（向后兼容）。
     """
     if kind == KIND_OBJECT:
         return str(scfg.get("contextual_caption") or "")
@@ -744,31 +757,49 @@ def _fixed_caption(scfg: Dict[str, Any], kind: str, freshness: str,
         try:
             from src.ai.companion_selfie import selfie_stage_text
             _lg = "zh" if str(lang or "").lower() == "yue" else str(lang or "")
-            return selfie_stage_text("caption_album", _lg)
+            return selfie_stage_text("caption_album", _lg,
+                                     chat_key=str(chat_key or ""))
         except Exception:
             return ""
     return str(scfg.get("caption") or "")
 
 
+def _note_caption_sent(conv_key: str, caption: str) -> None:
+    """固定池配文**真发出后**记近用账本（软失败；LLM/运营配文不记——
+    3 条避重窗只服务池选取，掺入天然多样的 LLM 配文会挤掉池指纹）。"""
+    try:
+        from src.ai.companion_selfie import note_caption_used
+        note_caption_used(conv_key, caption)
+    except Exception:
+        logger.debug("[image_autosend] 配文近用记账失败（忽略）", exc_info=True)
+
+
 async def _llm_caption_safe(fn, *, kind: str, subject: str = "", scene: str = "",
-                            freshness: str = "fresh") -> str:
+                            freshness: str = "fresh",
+                            wanted_subject: str = "") -> str:
     """调 LLM 写照片配文（知道图已发出的上下文配文）；失败/超长回空串让调用方回落。
 
     ``scene``（Phase18）＝照片实际拍摄场景，透传给配文指令（图文叙事一体）。
     ``freshness``（P0 一致性）＝``old`` 时配文指令按「之前拍的存货」口径写
     （禁止「刚拍」谎言）；``fresh``=刚生成的图（可说刚拍）。
-    回调旧签名 ``fn(kind, subject[, scene])`` 兼容（TypeError 回退），防漏改的调用方拿不到配文。
+    ``wanted_subject``（P0 图文一致性，2026-08-08）＝对方点名想看的非人像主体
+    （相册只有自拍时会走到这里）——指令据此禁止「假装照片里有它」。
+    回调旧签名 ``fn(kind, subject[, scene[, freshness]])`` 兼容（TypeError 逐级回退），
+    防漏改的调用方拿不到配文。
     """
     if fn is None:
         return ""
     try:
         try:
-            raw = await fn(kind, subject, scene, freshness)
+            raw = await fn(kind, subject, scene, freshness, wanted_subject)
         except TypeError:
             try:
-                raw = await fn(kind, subject, scene)
+                raw = await fn(kind, subject, scene, freshness)
             except TypeError:
-                raw = await fn(kind, subject)
+                try:
+                    raw = await fn(kind, subject, scene)
+                except TypeError:
+                    raw = await fn(kind, subject)
         s = str(raw or "").strip().strip('"').strip("“”'").strip()
         if not s:
             return ""
@@ -879,6 +910,43 @@ async def run_autosend_image(
         except Exception:
             logger.debug("[image_autosend] on_sent 回调异常（忽略）", exc_info=True)
 
+    async def _guard_caption(path: str, cap_text: str, cap_src: str,
+                             kind_: str, fresh_: str) -> Tuple[str, str]:
+        """P2 出站前图文核对：配文声称画面里有的东西，VLM 说没有 → 换诚实兜底。
+
+        只核 LLM 写的配文（运营配的 registry 配文与固定文案池本就不声称画面内容）；
+        软失败/未开一律原样返回。返回 ``(配文, 来源)``。"""
+        if cap_src != "llm" or not cap_text:
+            return cap_text, cap_src
+        try:
+            from src.ai.caption_image_guard import ensure_truthful_caption
+            fb = _fixed_caption(scfg, kind_, fresh_, lang, chat_key=ck)
+            new_cap, reason = await ensure_truthful_caption(
+                path, cap_text, root_config=config, scfg=scfg, kind=kind_,
+                fallback=fb)
+        except Exception:
+            logger.debug("[image_autosend] 图文核对异常（原样发）", exc_info=True)
+            return cap_text, cap_src
+        if new_cap != cap_text:
+            record_image_fallback("caption_guard_rewrite", detail=reason)
+            return new_cap, "fixed"
+        return cap_text, cap_src
+
+    # P1 图文一致性（2026-08-08）：对方这次想看的**非人像主体**（AI 自己 offer 的
+    # 「我煮了燕窝粥」也算）。非空＝相册里的人像照不能顶包：通用池关闭，只有运营
+    # 给该主体配过触发词的条目才算有货，否则不发图交诚实文字。
+    _wanted = ""
+    try:
+        from src.ai.companion_selfie import detect_selfie_request
+        from src.ai.outbound_promise_guard import wanted_media_subject
+        # 泛化要图（「有照片就发来看看」）同样要回溯 offer 主体——最常见的顶包
+        # 现场正是「AI 说煮了粥 → 客户泛泛要图 → 系统发自拍」。
+        _wanted = wanted_media_subject(
+            peer_text, history,
+            generic_request=bool(assume_intent) or detect_selfie_request(peer_text))
+    except Exception:
+        logger.debug("[image_autosend] 想看主体判定异常（忽略）", exc_info=True)
+
     # 0a) LLM 发图指令直通（photo_directive）：意图与场景都来自主 LLM 对上下文的
     # 理解，不再经关键词/相册池。失败回落 False（正文承诺由调用方 promise 链撤回）。
     if directive_override and str(directive_override.get("kind") or "") in (
@@ -924,11 +992,13 @@ async def run_autosend_image(
             cap = await _llm_caption_safe(
                 llm_caption, kind=kind, subject=_d["subject"],
                 scene=(_d["scene"] if kind == KIND_SELFIE else ""),
-                freshness=_fresh)
+                freshness=_fresh,
+                wanted_subject=(_wanted if kind == KIND_SELFIE else ""))
             cap_src = "llm" if cap else ""
         if not cap:
-            cap = _fixed_caption(scfg, kind, _fresh, lang)
+            cap = _fixed_caption(scfg, kind, _fresh, lang, chat_key=ck)
             cap_src = "fixed" if cap else ""
+        cap, cap_src = await _guard_caption(local, cap, cap_src, kind, _fresh)
         try:
             ok = bool(await send_fn(local, url, "image", cap,
                                     ("[图片] " + (cap or "")).strip()))
@@ -938,6 +1008,8 @@ async def run_autosend_image(
         if ok:
             if cap_src:
                 record_caption(cap_src, cap)
+            if cap_src == "fixed":
+                _note_caption_sent(ck, cap)
             record_image_sent(kind, source=(
                 "llm_directive_album" if _fresh == "old" else "llm_directive"))
             _notify_sent("[图片] " + (cap or ""),
@@ -970,10 +1042,20 @@ async def run_autosend_image(
     # （requested_scene）时，注册相册只允许出**场景匹配**的条目——没有匹配条目
     # 就放弃相册走生成链，绝不拿随机人像顶包承诺场景。
     _need_scene = str(assume_scene or requested_scene or "").strip()
+    # P1：想看的是具体主体时——能归到场景类（「卧室」→bedroom）就按场景硬匹配，
+    # 归不到（「燕窝粥」这类食物/物件）就彻底关掉通用人像池。
+    _wanted_scene = ""
+    if _wanted and not _need_scene:
+        try:
+            from src.companion.persona_media import scene_class_of
+            _wanted_scene = scene_class_of(_wanted)
+        except Exception:
+            _wanted_scene = ""
     row = pick_registered_media(
         config, persona_id, peer_text, avoid_id=last_media_sent(ck),
         force_generic=bool(assume_intent), conv_key=ck,
-        required_scene=_need_scene)
+        required_scene=(_need_scene or _wanted_scene),
+        deny_generic=bool(_wanted and not _wanted_scene))
     # 相册自动扩容：通用池只剩「上次刚发过的那张 auto 照片」且额度未满 → 本次改走
     # 生成（新场景照，发完自动入册），相册有机长到 max 张后回到纯轮换。
     if row and _should_grow_album(scfg, persona_id, row, ck):
@@ -992,25 +1074,41 @@ async def run_autosend_image(
                 _cap_lang = "yue"
         except Exception:
             pass
+        # 条目实际场景/系列：配文与账本都以它为准（配文层先要，别等发完再算）。
+        _row_scene = ""
+        _row_series = ""
+        try:
+            from src.companion.persona_media import row_scene_class, series_of
+            _row_scene = row_scene_class(row)
+            _row_series = series_of(row)
+        except Exception:
+            pass
         cap = media_caption(row, _cap_lang, fallback="")
         cap_src = "registry" if cap else ""
         if not cap:
             # 相册条目无运营配文（如 auto 定妆照）→ LLM 按当前对话写配文 → 固定配文。
             # freshness=old：相册图是「之前拍的」，配文不得写「刚拍的」。
+            # scene/wanted_subject（P0，2026-08-08）：不给条目真实场景，LLM 只能
+            # 顺着对话瞎编（自拍被配成「给你瞅瞅我卧室」正是这么来的）。
             _k = "video" if mt == "video" else KIND_SELFIE
-            cap = await _llm_caption_safe(llm_caption, kind=_k, freshness="old")
+            cap = await _llm_caption_safe(
+                llm_caption, kind=_k, scene=_row_scene, freshness="old",
+                wanted_subject=_wanted)
             cap_src = "llm" if cap else ""
         if not cap:
             # 注册相册＝备货旧照：固定兜底走旧照口径（caption_album 配置/双语池），
             # 绝不用全局 caption 的「刚拍」措辞（P0 实录穿帮点）。
             cap = _fixed_caption(scfg, ("video" if mt == "video" else KIND_SELFIE),
-                                 "old", _cap_lang)
+                                 "old", _cap_lang, chat_key=ck)
             cap_src = "fixed" if cap else ""
         if not cap:
             cap = str(ai_text or "")
             cap_src = "draft" if cap else ""
         if local or url:
             tag = "[视频] " if mt == "video" else "[图片] "
+            cap, cap_src = await _guard_caption(
+                local, cap, cap_src, ("video" if mt == "video" else KIND_SELFIE),
+                "old")
             try:
                 ok = bool(await send_fn(local, url, mt, cap, (tag + (cap or "")).strip()))
             except Exception:
@@ -1019,6 +1117,8 @@ async def run_autosend_image(
             if ok:
                 if cap_src:
                     record_caption(cap_src, cap)
+                if cap_src == "fixed":
+                    _note_caption_sent(ck, cap)
                 note_media_sent(ck, str(row.get("id")))
                 try:
                     from src.companion.persona_media import series_of
@@ -1038,15 +1138,7 @@ async def run_autosend_image(
                 record_image_sent(mt, source="registry")
                 if _need_scene:
                     record_scene_request(_need_scene, unmet=False)
-                # 相册现成图：场景取条目 scene:* 标签（回填后可用；无标签则未知留空）
-                _row_scene = ""
-                _row_series = ""
-                try:
-                    from src.companion.persona_media import row_scene_class, series_of
-                    _row_scene = row_scene_class(row)
-                    _row_series = series_of(row)
-                except Exception:
-                    pass
+                # 相册现成图：场景取条目 scene:* 标签（配文层已算过，见上）
                 _notify_sent((tag + (cap or "")).strip(), _row_scene, _row_series)
                 logger.info(
                     "[autosend image] 已发相册媒体 platform=%s acct=%s type=%s id=%s",
@@ -1054,10 +1146,37 @@ async def run_autosend_image(
                 return True
             record_image_fallback("registry_deliver_failed")
 
+    # 1b) P1「无货就别发图」：对方想看的是非人像主体，而相册没有对应货。
+    # 相册后端只出人像 → 继续走下去必然拿自拍顶包（实录：燕窝粥→人脸照配
+    # 「家里随便吃吃嘛」）；真出图后端则改按**物体图**出这个主体，走 image_gate
+    # 的 subject_match 后验，出不对宁可失败回落文字。
+    _forced_directive: Optional[Dict[str, Any]] = None
+    if _wanted and not row:
+        _bk0 = str(((scfg.get("provider") or {}).get("backend")) or "").lower()
+        if _bk0 in ("", "disabled", "album"):
+            record_image_fallback("wanted_subject_no_stock", detail=str(_wanted)[:40])
+            logger.info(
+                "[image_autosend] 对方想看「%s」而相册无对应货 → 不发图（交诚实文字）"
+                " platform=%s acct=%s", _wanted, platform, account_id)
+            return False
+        try:
+            from src.ai.contextual_image import build_object_image_prompt
+            _forced_directive = {
+                "kind": KIND_OBJECT, "subject": _wanted,
+                "prompt": build_object_image_prompt(
+                    _wanted, style=str(scfg.get("style") or "")),
+            }
+        except Exception:
+            logger.debug("[image_autosend] 物体图 prompt 构造异常", exc_info=True)
+            record_image_fallback("wanted_subject_no_stock", detail=str(_wanted)[:40])
+            return False
+
     # 2) 回落生成（原有：selfie 相册/openai img2img、物体图 text2img）。
     # 承诺兑现/offer-接受路径（assume_intent）跳过 peer_text 意图判定——意图来自
     # 出站承诺或上一轮 offer，本条客户文本可能没有任何要图关键词。
-    if assume_intent:
+    if _forced_directive is not None:
+        directive: Optional[Dict[str, Any]] = _forced_directive
+    elif assume_intent:
         directive: Optional[Dict[str, Any]] = {"kind": str(assume_intent)}
     else:
         directive = plan_autosend_image(peer_text, history, scfg)
@@ -1111,14 +1230,16 @@ async def run_autosend_image(
         (directive or {}).get("scene") if _fresh == "fresh" else "") or "") \
         if kind == KIND_SELFIE else ""
     cap = await _llm_caption_safe(
-        llm_caption, kind=kind, subject=_subject, scene=_scene, freshness=_fresh)
+        llm_caption, kind=kind, subject=_subject, scene=_scene, freshness=_fresh,
+        wanted_subject=(_wanted if kind == KIND_SELFIE else ""))
     cap_src = "llm" if cap else ""
     if not cap:
-        cap = _fixed_caption(scfg, kind, _fresh, lang)
+        cap = _fixed_caption(scfg, kind, _fresh, lang, chat_key=ck)
         cap_src = "fixed" if cap else ""
     if not cap:
         cap = str(ai_text or "")
         cap_src = "draft" if cap else ""
+    cap, cap_src = await _guard_caption(local, cap, cap_src, kind, _fresh)
     try:
         ok = bool(await send_fn(local, url, "image", cap, ("[图片] " + (cap or "")).strip()))
     except Exception:
@@ -1127,6 +1248,8 @@ async def run_autosend_image(
     if ok:
         if cap_src:
             record_caption(cap_src, cap)
+        if cap_src == "fixed":
+            _note_caption_sent(ck, cap)
         record_image_sent(kind, source=(
             "keyword_album" if _fresh == "old" else "keyword"))
         _notify_sent("[图片] " + (cap or ""), _scene,

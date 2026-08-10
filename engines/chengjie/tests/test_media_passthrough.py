@@ -70,6 +70,13 @@ def test_msg_from_obj_falls_back_to_source_media():
     assert im.media_type == "voice" and im.media_ref == "/v.ogg"
 
 
+def test_msg_from_obj_accepts_toplevel_msg_id():
+    """Messenger thread-history 常把 synth id 放顶层，不包进 source。"""
+    raw = {"text": "hi", "direction": "in", "ts": 1, "msg_id": "m_deadbeefdeadbeef"}
+    im = _msg_from_obj("messenger:a:c", raw, platform="messenger")
+    assert im.platform_msg_id == "m_deadbeefdeadbeef"
+
+
 # ── 端到端：source → obj → store → 读回 ────────────────────────────────────
 def test_media_survives_store_roundtrip():
     store = InboxStore(":memory:")

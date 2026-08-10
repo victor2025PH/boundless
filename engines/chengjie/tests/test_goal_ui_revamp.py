@@ -14,6 +14,7 @@ import pytest
 
 _REPO = Path(__file__).resolve().parents[1]
 _GOAL_JS = _REPO / "shared" / "copilot" / "components" / "cp-goal.js"
+_DRAFT_JS = _REPO / "shared" / "copilot" / "components" / "cp-draft.js"
 _INBOX = _REPO / "src" / "web" / "templates" / "unified_inbox.html"
 _CSS = _REPO / "src" / "web" / "static" / "workspace" / "unified-inbox.css"
 _CHROME = _REPO / "shared" / "copilot" / "sidebar-chrome.js"
@@ -22,6 +23,11 @@ _CHROME = _REPO / "shared" / "copilot" / "sidebar-chrome.js"
 @pytest.fixture(scope="module")
 def goal_js() -> str:
     return _GOAL_JS.read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def draft_js() -> str:
+    return _DRAFT_JS.read_text(encoding="utf-8")
 
 
 @pytest.fixture(scope="module")
@@ -70,14 +76,54 @@ def test_inbox_host_discoverability(inbox_html: str):
     assert "accent" in inbox_html
     assert "card" in inbox_html and "_handleGoalDeepLink" in inbox_html
     assert "cp-goal-drive-draft" in inbox_html
-    assert "cp-goal.js?v=20260801" in inbox_html
+    assert "cp-goal.js?v=20260805" in inbox_html  # 改 cp-goal.js 必须 bump 缓存戳（本断言随批次前移）
+
+
+def test_goal_form_draft_survival_layer(goal_js: str, inbox_html: str):
+    """P0 2026-08-04 草稿幸存层 + 编辑防打断：误触背板/宿主重喂 context/取数失败
+    都不得丢已填内容。行为不变量由 fixture 门禁 tools/verify_goal_form_ui.py 在真
+    浏览器里钉；本测只钉源码存在性，防「顺手清理」裸退。"""
+    assert "cp_goal_form_draft_v1:" in goal_js       # sessionStorage 草稿键（按会话 id）
+    assert 'data-act="ov_dismiss"' in goal_js        # 背板＝判脏动作，不再直连 form_back
+    assert "_applyFormDraft" in goal_js              # 整块重渲染后的草稿回填
+    assert "_formBaseline" in goal_js                # 判脏基准＝出厂快照
+    assert "goal_ctx_deferred" in goal_js            # 编辑期挂起外部刷新（每编辑会话记一次）
+    assert '"draft_clear"' in goal_js or "draft_clear" in goal_js  # 显式弃稿口
+    assert "inbox.goal.form.draft_restored" in goal_js
+    assert "inbox.goal.form.draft_saved_hint" in goal_js
+    # 宿主侧：同会话重喂去抖（身份合并/peer 解析不再核爆右栏 8 组件）
+    assert "_wsCpIdentFp" in inbox_html
+    assert "cid===_wsCpCid" in inbox_html
+    # P1（同日）：键盘/焦点体验 + ×语义分离 + 自动暂存微反馈 + 移动端底部抽屉
+    assert "inbox.goal.form.close" in goal_js          # ×＝关闭整表单（与「返回」分离）
+    assert "inbox.goal.form.autosave_note" in goal_js  # 常驻「自动暂存中」微反馈
+    assert "_trapModalTab" in goal_js                  # Tab 焦点陷阱
+    assert "e.ctrlKey || e.metaKey" in goal_js         # Ctrl/Cmd+Enter 创建
+    assert "_focusModal" in goal_js                    # 初始聚焦/重建后焦点回位
+    assert "max-width: 520px" in goal_js               # 窄屏底部抽屉
+
+
+def test_panel_base_same_cid_refresh_no_flash():
+    """P3 2026-08-05：基类 refresh 同会话不清屏（换会话仍清屏防串数据；无旧数据时
+    保留 loading 反馈）。行为断言在 verify_goal_form_ui.py S20；这里钉源码防裸退。"""
+    base = (_REPO / "shared" / "copilot" / "components" / "cp-panel-base.js")\
+        .read_text(encoding="utf-8")
+    assert "_renderedCid" in base
+    assert "switching || !this._d" in base
 
 
 def test_target_icon_registered():
+    """goal 卡头 target 图标须在两端可解析。
+
+    2026-08-08 SSOT 收敛后收件箱页不再内联图标表（uiIcon 走 /static/ui_icons.js
+    全站注册表），断言随架构更新：页内保留 data-cp-ic="target" 用点 + 注册表有
+    target 条目；独立壳（app.html/桌面）仍由 sidebar-chrome 子集表兜底。"""
     chrome = _CHROME.read_text(encoding="utf-8")
     assert "target:" in chrome
     inbox = _INBOX.read_text(encoding="utf-8")
-    assert "target:" in inbox
+    assert 'data-cp-ic="target"' in inbox
+    lib = (_REPO / "src" / "web" / "static" / "ui_icons.js").read_text(encoding="utf-8")
+    assert "target:" in lib
 
 
 def test_goal_css_tokens_present():
@@ -106,12 +152,19 @@ def test_goal_auto_expose_on_customer_tab(inbox_html: str):
     assert "goal_auto_expand" in inbox_html
 
 
-def test_goal_drive_draft_uses_set_directive(inbox_html: str):
+def test_goal_drive_draft_uses_set_directive(inbox_html: str, goal_js: str, draft_js: str):
     """P22：驱动草稿走 setDirective，绝不写 composer（旧版空输入框预填意图原文
-    → 误发风险 + 生成引擎根本收不到指令）。"""
+    → 误发风险 + 生成引擎根本收不到指令）。
+    P28：opener 已吃 instruction+目标注入 → setDirective 不得再强制切回 reply。"""
     assert "setDirective" in inbox_html
     assert "ta.value=String(intent)" not in inbox_html
     assert "!ta.value.trim()" not in inbox_html
+    assert 'this._mode === "opener") this._setMode("reply")' not in draft_js
+    assert "_goalBadgeHtml" in draft_js
+    assert "goal_applied" in draft_js
+    assert "slots_progress" in goal_js or "_renderSlotsProgress" in goal_js
+    assert "slot_toggle" in goal_js and "switch_discovery" in goal_js
+    assert "discovery" in goal_js  # KIND_ORDER / gk-discovery
 
 
 def test_goal_deep_link_defers_when_conv_param(inbox_html: str):
@@ -302,21 +355,25 @@ def test_p22_goal_management_surface(goal_js: str):
     assert "inbox.goal.push.none_tip" in goal_js
 
 
-def test_p22_draft_directive_api():
-    draft = (_REPO / "shared" / "copilot" / "components" / "cp-draft.js").read_text(
-        encoding="utf-8")
+def test_p22_draft_directive_api(draft_js: str):
+    draft = draft_js
     assert "setDirective" in draft
     assert "clearDirective" in draft
     assert "payload.instruction" in draft
     assert "dirchip" in draft
     assert "cp.draft.directive_label" in draft
-    # P22.1：opener 态强制切回 reply，避免 instruction 静默丢失
-    assert 'this._mode === "opener"' in draft
-    assert 'this._setMode("reply")' in draft
+    # P28：opener 已吃 instruction+目标注入 → 禁止再强制切回 reply（旧 P22.1 翻车点）
+    assert 'this._mode === "opener") this._setMode("reply")' not in draft
+    assert "P28" in draft  # 注释钉住设计决策
     assert "summary" in draft
     # P23：目标/来源随 payload 走（服务端落 drive_draft 耐久事件 + 样本归属）
     assert "payload.goal_id" in draft
     assert "payload.instruction_source" in draft
+    # P28：goal_applied 坐席可见
+    assert "_goalBadgeHtml" in draft
+    assert "cp.draft.goal_on" in draft or "goal_on" in (
+        _REPO / "shared" / "copilot" / "i18n" / "cp-i18n.js"
+    ).read_text(encoding="utf-8")
 
 
 def test_p23_host_forwards_source(inbox_html: str):
@@ -394,3 +451,175 @@ def test_profile_ask_i18n_bilingual():
                 "inbox.goal.profile.miss_t", "inbox.goal.profile.edit_t"):
         for lang in (goals_pack.ZH, goals_pack.EN):
             assert key in lang, key
+
+
+# ── P24（2026-08-03）：建目标两步向导 + 场景设置弹层 + 参数人话控件 ──────────
+
+
+def test_p24_wizard_two_steps(goal_js: str):
+    """一页堆全 → 两步：第一步分组场景卡，第二步场景专属设置弹层（fixed 居中，
+    逃离 236px 窄栏）；背板点击/Esc/×/「返回」四路同回第一步；点击面板空白
+    不许误关（modal_noop 挡事件委托冒泡到背板）。"""
+    assert "_renderFormStep1" in goal_js
+    assert "_renderFormModal" in goal_js
+    assert "_formStep" in goal_js
+    assert 'data-act="form_back"' in goal_js
+    assert "goal_form_back" in goal_js
+    assert '"Escape"' in goal_js
+    assert "gl-ov" in goal_js and "gl-modal" in goal_js
+    assert 'role="dialog"' in goal_js and 'aria-modal="true"' in goal_js
+    assert 'data-act="modal_noop"' in goal_js
+
+
+def test_p24_step1_grouped_cards_custom_highlight(goal_js: str):
+    """场景卡按 kind 分组（转化/关系/唤回，类别色条+线稿图标）；「自定义目标」
+    从 11px 灰色下划线文字链升级为独立高亮卡（violet 描边 + 进阶 pill）。"""
+    assert "KIND_ORDER" in goal_js
+    assert "inbox.goal.form.grp." in goal_js
+    assert "_kindIcon" in goal_js
+    assert "gl-scen-custom" in goal_js
+    assert "gl-adv-pill" in goal_js
+    assert "inbox.goal.form.adv_pill" in goal_js
+    for tok in ("--cp-goal-conv", "--cp-goal-rel", "--cp-goal-eng",
+                "--cp-goal-disc", "--cp-violet"):
+        assert tok in goal_js, f"missing token ref {tok}"
+    assert '"discovery"' in goal_js  # KIND_ORDER 含摸底组
+    # 旧「进阶」下划线文字链退役（被高亮卡取代）
+    assert 'class="gl-adv"' not in goal_js
+    # P18 决策保留：偏好里存了 custom 也不参与预选/「上次」徽标
+    assert 'prefs.template !== "custom"' in goal_js
+
+
+def test_p24_unlock_picker_catalog(goal_js: str):
+    """解锁项＝价目表下拉（名称 · 价格），原始 ID 不再直接示人；「聊天里怎么
+    称呼它」自动跟随所选项、坐席手改过即不再覆盖；「自定义…」高级手填带
+    格式说明（item_id 是 ledger 自动判达成的功能字段，填错=静默失效）。"""
+    assert "/api/monetize/catalog" in goal_js
+    assert "_loadCatalog" in goal_js
+    assert 'data-chg="unlock_sel"' in goal_js
+    assert "__custom__" in goal_js
+    assert "_autoFillLabel" in goal_js
+    assert "_labelTouched" in goal_js
+    assert "goal_form_unlock_custom" in goal_js
+    assert "inbox.goal.form.unlock_custom_id_help" in goal_js
+    assert 'data-chg="tier_sel"' in goal_js
+    # pickers 优先（包2 后端 templates 响应），catalog 直拉是旧后端回落
+    assert "unlock_items" in goal_js and "site_products" in goal_js
+
+
+def test_p24_param_widgets(goal_js: str):
+    """参数控件注册表：阶段下拉中文化 / 亲密度滑杆 / 备注示例 chips /
+    自动继承参数折叠进「高级」；未注册参数回落通用输入框（未来新模板
+    零前端改动也能用）。"""
+    assert "_paramControl" in goal_js
+    assert "_genericParamHtml" in goal_js
+    assert "inbox.goal.stage." in goal_js
+    assert 'type="range"' in goal_js
+    assert "note_example" in goal_js and "goal_note_example" in goal_js
+    assert "ADV_PARAMS" in goal_js
+    assert "inbox.goal.form.adv_params" in goal_js
+    assert "inbox.goal.param_label." in goal_js
+    assert "inbox.goal.param_help." in goal_js
+
+
+def test_p24_arc_preview_and_autonomy_cards(goal_js: str):
+    """「AI 会怎么推进」节奏预览（milestones + push_curve，旧后端缺 curve 时
+    只显示里程碑名不猜力度）+ 参与度三张单选卡 + 主动触达信息气泡（中性
+    说明替代橙色警告——未开启是状态不是错误）。"""
+    assert "_arcHtml" in goal_js
+    assert "push_curve" in goal_js
+    assert "inbox.goal.form.arc_title" in goal_js
+    assert "gl-auto-card" in goal_js
+    assert 'data-act="pick_autonomy"' in goal_js
+    assert "gl-note-info" in goal_js
+    assert "_autonomyNoteFull" in goal_js
+    assert "inbox.goal.form.auto_note_help" in goal_js
+    # 创建链契约不变：仍从隐藏 autonomy input 取值
+    assert 'data-ref="autonomy"' in goal_js
+
+
+def test_p24_backend_pickers_and_push_curve():
+    """包2 后端：templates 响应带 pickers 枚举源（解锁项/会员档/官网产品/
+    阶段词表，逐段软失败）；push_curve 随模板形状导出；conversion_unlock
+    默认值中性化（bazi_reading/八字详批 曾与官网产品业务错位）。"""
+    routes = (_REPO / "src" / "web" / "routes" / "goal_routes.py").read_text(encoding="utf-8")
+    assert "_pickers" in routes
+    assert "unlock_items" in routes and "site_products" in routes
+    assert '"stages"' in routes
+
+    from src.companion.goals.templates import list_templates
+
+    shapes = {t["id"]: t for t in list_templates()}
+    assert shapes["conversion_unlock"]["push_curve"], "push_curve 须随模板形状导出"
+    p = {x["key"]: x for x in shapes["conversion_unlock"]["params"]}
+    assert p["item_id"]["default"] == ""
+    assert p["item_label"]["default"] == ""
+    assert "ID" not in p["item_id"]["label_zh"]
+
+
+def test_p24_i18n_dynamic_keys_bilingual():
+    """P24 动态拼键（grp.<kind> / stage.<stage> / param_label|param_help
+    注册面 / note_ex{i}）静态键门禁扫不到——显式钉 zh+en 齐备。"""
+    import importlib
+
+    goals_pack = importlib.import_module("src.web.i18n_packs.goals")
+    from src.companion.goals.templates import STAGE_ORDER, TEMPLATES
+
+    kinds = {str(t["kind"]) for t in TEMPLATES.values() if t["kind"] != "custom"}
+    for k in kinds:
+        for lang in (goals_pack.ZH, goals_pack.EN):
+            assert f"inbox.goal.form.grp.{k}" in lang, f"missing grp.{k}"
+    for s in STAGE_ORDER:
+        for lang in (goals_pack.ZH, goals_pack.EN):
+            assert f"inbox.goal.stage.{s}" in lang, f"missing stage.{s}"
+    for key in (
+        "inbox.goal.form.step1_lead", "inbox.goal.form.adv_pill",
+        "inbox.goal.form.last_used", "inbox.goal.form.back",
+        "inbox.goal.form.arc_title", "inbox.goal.form.arc_hint",
+        "inbox.goal.form.params_title", "inbox.goal.form.summary",
+        "inbox.goal.form.days_help", "inbox.goal.form.auto_note_help",
+        "inbox.goal.form.adv_params", "inbox.goal.form.per_month",
+        "inbox.goal.form.item_label_ph", "inbox.goal.form.unlock_custom_opt",
+        "inbox.goal.form.unlock_custom_id", "inbox.goal.form.unlock_custom_id_ph",
+        "inbox.goal.form.unlock_custom_id_help", "inbox.goal.form.product_auto_opt",
+        "inbox.goal.form.intimacy_lo", "inbox.goal.form.intimacy_mid",
+        "inbox.goal.form.intimacy_hi", "inbox.goal.form.note_ph_custom",
+        "inbox.goal.form.note_ph_reactivate", "inbox.goal.form.note_ex_t",
+        "inbox.goal.form.note_ex1", "inbox.goal.form.note_ex2",
+        "inbox.goal.form.note_ex3",
+        "inbox.goal.param_label.conversion_unlock.item_id",
+        "inbox.goal.param_help.conversion_unlock.item_id",
+        "inbox.goal.param_label.conversion_unlock.item_label",
+        "inbox.goal.param_help.conversion_unlock.item_label",
+        "inbox.goal.param_label.conversion_subscribe.tier",
+        "inbox.goal.param_help.conversion_subscribe.tier",
+        "inbox.goal.param_label.conversion_subscribe.item_label",
+        "inbox.goal.param_help.conversion_subscribe.item_label",
+        "inbox.goal.param_label.relationship_stage.target_stage",
+        "inbox.goal.param_help.relationship_stage.target_stage",
+        "inbox.goal.param_label.relationship_intimacy.target_score",
+        "inbox.goal.param_help.relationship_intimacy.target_score",
+        "inbox.goal.param_label.engagement_reactivate.note",
+        "inbox.goal.param_help.engagement_reactivate.note",
+        "inbox.goal.param_label.acquire_and_convert.product_id",
+        "inbox.goal.param_help.acquire_and_convert.product_id",
+        "inbox.goal.param_help.acquire_and_convert.note",
+        "inbox.goal.param_help.retention_expand.note",
+        "inbox.goal.param_label.custom.note",
+        "inbox.goal.param_help.custom.note",
+        "inbox.goal.param_label.profile_discovery.slots",
+        "inbox.goal.form.rec_discovery",
+        "inbox.goal.slots.title",
+    ):
+        for lang in (goals_pack.ZH, goals_pack.EN):
+            assert key in lang, key
+
+
+def test_p24_goal_kind_tokens_defined_both_themes():
+    """--cp-goal-* 类别色必须明暗双表齐平（test_copilot_theme_tokens 管全量
+    集合一致，这里显式钉三个新类别色到位，防「只进 light 不进 dark」）。"""
+    for name in ("theme-light.css", "theme-dark.css"):
+        css = (_REPO / "shared" / "copilot" / name).read_text(encoding="utf-8")
+        for tok in ("--cp-goal-conv:", "--cp-goal-rel:", "--cp-goal-eng:",
+                    "--cp-goal-disc:"):
+            assert tok in css, f"{name} missing {tok}"

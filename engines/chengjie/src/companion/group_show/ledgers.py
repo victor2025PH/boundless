@@ -429,6 +429,67 @@ def read_show_context(
     )
 
 
+# ── 演出效果：与五条风险轴同规矩，读账只此一处 ────────────────────────────────
+
+
+def read_show_outcomes(shows: Any = None, inbox: Any = None, *,
+                       window_hours: float = 0.0, limit: int = 10,
+                       now: Optional[float] = None,
+                       degraded: Optional[List[str]] = None) -> List[Any]:
+    """最近若干**真发**场次的效果读数（排练一律剔除）。
+
+    与风险轴同一条规矩：口径在 :mod:`outcome`（纯函数），取数只在这里，路由与看板
+    都不许自己再算一遍。效果数字会被写进周报、变成「这批号还投不投」的依据——
+    两处实现漂掉的代价比风险轴更直接。
+
+    ``degraded`` 非空 ⇒ 某本账没读到，此时读数一律偏「没效果」（少一本账 = 少一批
+    证据），必须原样透给用户：**「查不到」和「真的没人理」在屏幕上长得一模一样**，
+    而两者该做的事完全相反。
+    """
+    from src.companion.group_show.outcome import (
+        DEFAULT_WINDOW_HOURS,
+        INBOUND_CAP,
+        build_outcome,
+        clamp_window_hours,
+        is_real_show,
+    )
+
+    t_now = float(now if now is not None else time.time())
+    win = clamp_window_hours(window_hours or DEFAULT_WINDOW_HOURS)
+    n = max(1, min(int(limit or 10), 50))
+
+    # 多取一些再筛：排练与真发混在同一张表里，只取 n 条很可能全是排练。
+    rows = _call(shows, "recent_sessions", degraded, "shows", limit=n * 5) or []
+    sessions = [s for s in rows if is_real_show(s)][:n]
+    if not sessions:
+        return []
+
+    out: List[Any] = []
+    for s in sessions:
+        actors = [str(m.get("account_id") or "")
+                  for m in ((s.get("cast") or {}).get("members") or ())]
+        start = float(s.get("ended_at") or 0.0) or float(s.get("started_at") or 0.0)
+        inbound = _call(
+            inbox, "group_inbound_since", degraded, "inbox",
+            chat_key=str(s.get("group_key") or ""),
+            since_ts=start, platform=str(s.get("platform") or ""),
+            exclude_senders=[a for a in actors if a], limit=INBOUND_CAP,
+        ) or []
+        # 转化侧只在真有人开口时才查——没人说话就没有可归因的对象，
+        # 白跑一次查询还会把 degraded 标脏（让整张卡显示「读数不全」）。
+        senders = [str(r.get("sender_id") or "") for r in inbound
+                   if str(r.get("sender_id") or "")]
+        first_dm = None
+        if senders:
+            first_dm = _call(
+                inbox, "first_private_inbound_ts", degraded, "dm",
+                chat_keys=senders, platform=str(s.get("platform") or ""),
+            )
+        out.append(build_outcome(s, inbound, first_dm,
+                                 window_hours=win, now=t_now))
+    return out
+
+
 # ── 长跑：把开演那一刻的快照按 TTL 续上 ──────────────────────────────────────
 
 #: 跨群间隔台账的重读间隔（秒）。一场戏／一次影子挂机就是几十分钟，期间别的群随时可能

@@ -439,6 +439,8 @@ class ConfigManager:
         - ``AITR_HOSTED_AI_*``：厂商托管试用 Key（打包/实例注入，**永不入库**）。仅当
           配置里 ``ai.api_key`` 仍为空/占位时填入——用户自己保存的 Key 永远优先。
         - ``AITR_HOSTED_VISION_*``：厂商托管识图网关（同上，**永不入库**）。
+        - ``AITR_HOSTED_VOICE_* / AITR_HOSTED_ASR_*``：托管克隆语音 / 语音识别
+          （混合形态，只动种子 ``_lan_seed`` 标记过的段，**永不入库**）。
         """
         desktop = self._env_truthy("AITR_DESKTOP_MODE")
         host = os.environ.get("AITR_WEB_HOST")
@@ -446,6 +448,8 @@ class ConfigManager:
         token = os.environ.get("AITR_WEB_TOKEN")
         hosted_key = (os.environ.get("AITR_HOSTED_AI_KEY") or "").strip()
         hosted_vision = (os.environ.get("AITR_HOSTED_VISION_BASE_URL") or "").strip()
+        hosted_voice = (os.environ.get("AITR_HOSTED_VOICE_BASE_URL") or "").strip()
+        hosted_asr = (os.environ.get("AITR_HOSTED_ASR_BASE_URL") or "").strip()
         if desktop or host or port or token:
             web = self.config.get("web_admin")
             if not isinstance(web, dict):
@@ -466,6 +470,8 @@ class ConfigManager:
             self._apply_hosted_ai_env(hosted_key)
         if hosted_vision:
             self._apply_hosted_vision_env(hosted_vision)
+        if hosted_voice or hosted_asr:
+            self._apply_hosted_media_env(hosted_voice, hosted_asr)
 
     def _apply_hosted_ai_env(self, hosted_key: str) -> None:
         """把 ``AITR_HOSTED_AI_*`` 注入内存中的 ``ai.*``（用户自有 Key 不覆盖）。"""
@@ -505,8 +511,10 @@ class ConfigManager:
         if not isinstance(vision, dict):
             vision = {}
             self.config["vision"] = vision
-        # 用户/运维自配的识图后端（无托管标记）→ 尊重，绝不覆盖
-        if not vision.get("_hosted_vision") and (
+        # 用户/运维自配的识图后端（无托管标记）→ 尊重，绝不覆盖。
+        # 例外：内测种子的 LAN 后端（_lan_seed，混合形态）——env 在场＝启动时已判定
+        # 「LAN 不可达 → 网关接管」，热重载按同一结论回放（重载路径不做网络探测）。
+        if not (vision.get("_hosted_vision") or vision.get("_lan_seed")) and (
             str(vision.get("base_url") or "").strip()
             or vision.get("base_urls")
             or str(vision.get("api_key") or "").strip()
@@ -515,14 +523,51 @@ class ConfigManager:
         token = (os.environ.get("AITR_HOSTED_AI_KEY") or "").strip()
         if not token:
             return
+        # 混合形态：重载刚从盘上读回 LAN 种子值 → 先暂存，供回内网时可逆还原
+        if vision.get("_lan_seed") and not vision.get("_hosted_vision"):
+            vision["_lan_backend"] = {
+                "provider": vision.get("provider"),
+                "base_url": vision.get("base_url"),
+                "base_urls": list(vision.get("base_urls") or []) or None,
+                "api_key": vision.get("api_key"),
+                "model": vision.get("model"),
+            }
         model = (os.environ.get("AITR_HOSTED_VISION_MODEL") or "").strip()
         vision["provider"] = "openai_compatible"
         vision["base_url"] = base_url
+        # base_urls 一并指网关：种子 LAN 列表优先级高于单数 base_url，不改写会
+        # 让 VisionClient 继续打死掉的 192.168.0.x
+        vision["base_urls"] = [base_url]
         vision["api_key"] = token
         if model:
             vision["model"] = model
         vision["_hosted_vision"] = True
         vision.setdefault("enabled", True)
+
+    def _apply_hosted_media_env(self, voice_base: str, asr_base: str) -> None:
+        """回放托管克隆语音 / 语音识别注入（与 ``_apply_hosted_vision_env`` 同款理由）。
+
+        端点次序按注入时的 LAN 探测结论回放（``AITR_HOSTED_*_FIRST``）——热重载在
+        web 请求检查点触发，**绝不能**在这条路径上做秒级网络探测。变更逻辑的单一
+        事实源在 ``hosted_gateway.apply_hosted_voice/apply_hosted_asr``（惰性导入防
+        环）。生产实例没有这些 env → 全程 no-op。
+        """
+        try:
+            from src.ai.hosted_gateway import apply_hosted_asr, apply_hosted_voice
+        except Exception:
+            return
+        if voice_base:
+            apply_hosted_voice(
+                self.config, voice_base,
+                gateway_first=(os.environ.get("AITR_HOSTED_VOICE_FIRST")
+                               or "").strip() == "1",
+                hub_fish_off=(os.environ.get("AITR_HOSTED_HUBFISH_OFF")
+                              or "").strip() == "1")
+        if asr_base:
+            apply_hosted_asr(
+                self.config, asr_base,
+                gateway_first=(os.environ.get("AITR_HOSTED_ASR_FIRST")
+                               or "").strip() == "1")
 
     def _ensure_baseline(self) -> None:
         """桌面态（AITR_DESKTOP_MODE）产品基线增量补齐——修「种子只影响新装」缺口。
@@ -883,18 +928,32 @@ class ConfigManager:
                 return False
 
         # 验证Telegram配置
+        # 桌面/托管版：全局 telegram 凭据故意留空——多账号经 credpool 逐账号提供
+        # （account_registry meta.credpool_cred / session_string），全局 api_id 是占位。
+        # 此时占位/缺失是**预期态**，旧实现每次启动刷 ERROR（`请配置有效的Telegram api_id`）
+        # 淹没日志、惊到运营、也污染日志监控。managed 下降级 INFO 并放行 telegram 段；
+        # 单账号/服务器部署仍走严格校验。（2026-08-07 198/104 日志监控实锤：这是最吵的伪 ERROR）
+        managed = (self._env_truthy("AITR_DESKTOP_MODE")
+                   or self._env_truthy("AITR_MANAGED_EDITION"))
         telegram_config = self.config.get('telegram', {})
         required_telegram_keys = ['api_id', 'api_hash', 'phone_number']
 
         for key in required_telegram_keys:
-            if key not in telegram_config:
+            missing = key not in telegram_config
+            value = None if missing else telegram_config[key]
+            placeholder = missing or value == f"YOUR_{key.upper()}" or not value
+            if not placeholder:
+                continue
+            if managed:
+                self.logger.info(
+                    "桌面/托管版：全局 telegram.%s 未配置（账号走 credpool 逐账号提供），"
+                    "跳过全局校验", key)
+                continue
+            if missing:
                 self.logger.error(f"Telegram配置缺少必需键: {key}")
-                return False
-
-            value = telegram_config[key]
-            if value == f"YOUR_{key.upper()}" or not value:
+            else:
                 self.logger.error(f"请配置有效的Telegram {key}")
-                return False
+            return False
 
         # 验证AI配置
         ai_config = self.config.get('ai', {})
@@ -1049,7 +1108,13 @@ class ConfigManager:
         self._strategies_mtime = 0
         return await self.load()
 
-    _HOT_RELOAD_PROTECTED_KEYS = {"api_id", "api_hash", "phone_number", "session_name"}
+    # _hosted_cred / _hosted_proxy 是托管注入三件套的标记与出口（hosted_gateway.
+    # ensure_hosted_telegram），与 api_id/api_hash 同批写入，必须同批携带：只带值不带
+    # 标记的话，热重载后渠道设置页会把本该隐藏的池凭据字段重新亮出来（channel_setup.
+    # _AUTO_PROVISIONED 按它判定）；只带凭据不带出口的话，热重载后大陆机器的登录
+    # 会从代理出口悄悄变回直连（被墙=登录挂、没被墙=出口 IP 漂移，都是错）。
+    _HOT_RELOAD_PROTECTED_KEYS = {"api_id", "api_hash", "phone_number", "session_name",
+                                  "_hosted_cred", "_hosted_proxy"}
 
     @staticmethod
     def _validate_hot_reload_config(data) -> str:

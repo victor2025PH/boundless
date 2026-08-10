@@ -255,15 +255,33 @@ async def test_conflict_detected_cjk_lang_keeps_detected_source():
 
 
 @pytest.mark.asyncio
-async def test_hold_when_translation_echoes_cjk():
-    """引擎返回 ok 但译文仍含中文（半吊子回显）→ 冲突态按不可用处理，HOLD。"""
-    ts = _FakeTS(_FakeRes("Okay 别担心 friend"), detect="en")
+async def test_hold_when_translation_echoes_substantial_cjk():
+    """引擎返回 ok 但译文**实质性**残留中文（半吊子回显）→ 冲突态按不可用处理，HOLD。
+
+    口径校准（P1-198，2026-08-04 生产首扫实锤）：残留判定从 contains_cjk 收紧为
+    cjk_substantial（≥2 字且占比 ≥25% 或 ≥8 字）——好译文合法保留「村BA」这类
+    专名引用（1-2 字、占比极低）不再被误 HOLD（误 HOLD 是系统性的：每条引用
+    中文专名的消息都中招）；完整回显走 translated==text 分支照旧 HOLD。
+    """
+    ts = _FakeTS(_FakeRes("Okay 别担心朋友 friend"), detect="en")   # 5字/33% = 实质残留
     store = _FakeStore(language="en")
     out = await translate_outbound_text(
         {"conversation_id": "x1", "text": "好的，别担心朋友"},
         translation_service=ts, store=store, source_lang="zh")
     assert out is None
     assert store.recorded == []
+
+
+@pytest.mark.asyncio
+async def test_translation_keeping_fragment_name_passes():
+    """译文只保留专名级片段（<2 字或占比极低）→ 视为合格译文正常投递。"""
+    ts = _FakeTS(_FakeRes("Okay my friend, don't worry about 村BA"), detect="en")
+    store = _FakeStore(language="en")
+    out = await translate_outbound_text(
+        {"conversation_id": "x1", "text": "好的朋友，别担心村BA的事"},
+        translation_service=ts, store=store, source_lang="zh")
+    assert out == "Okay my friend, don't worry about 村BA"
+    assert len(store.recorded) == 1
 
 
 def test_contains_cjk_and_lang_is_cjk_helpers():

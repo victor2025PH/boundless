@@ -217,6 +217,40 @@ def extract_ig_messages(body: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
+def extract_ig_media(body: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """解析 IG webhook 的**媒体**消息 → 每条消息一项
+    ``{sender, mid, media_type, url, count}``（非 echo、无文字、带 attachments）。
+
+    与 :func:`extract_ig_messages` 刻意分离：文字走回复产线，媒体只做收件箱可见化
+    （镜像占位 + 可选“暂不支持”回复）。此前媒体消息被整条丢弃——客户发了图，
+    坐席端连一个占位都没有，AI 与人都不知道发生过（Phase I1 只铺了 WA/LINE/
+    Messenger 三端，IG/Zalo 是漏网）。
+    """
+    if str(body.get("object") or "") != "instagram":
+        return []
+    out: List[Dict[str, Any]] = []
+    for entry in body.get("entry") or []:
+        for ev in entry.get("messaging") or []:
+            msg = ev.get("message") or {}
+            if msg.get("is_echo"):
+                continue
+            if (msg.get("text") or "").strip():
+                continue  # 有文字的走 extract_ig_messages，别双镜像
+            sender = str((ev.get("sender") or {}).get("id") or "")
+            atts = msg.get("attachments")
+            if not (sender and isinstance(atts, list) and atts):
+                continue
+            first = atts[0] or {}
+            out.append({
+                "sender": sender,
+                "mid": str(msg.get("mid") or ""),
+                "media_type": str(first.get("type") or "file").lower(),
+                "url": str(((first.get("payload") or {}).get("url")) or ""),
+                "count": len(atts),
+            })
+    return out
+
+
 def register_instagram_routes(
     app: FastAPI, config_manager: Any, telegram_client: Any,
 ) -> None:
@@ -239,7 +273,11 @@ def register_instagram_routes(
 
     ig_account_id = ig_id or "official"
     human_agent_fallback = bool(cfg.get("human_agent_fallback"))
-    unsupported = (cfg.get("unsupported_type_reply") or "").strip() or "目前仅支持文字消息。"
+    # 显式空串 = 运营选择对媒体消息保持沉默（陪伴人设下自动回「仅支持文字」会穿帮）；
+    # 键缺席才落默认话术。旧写法 `or 默认` 让空串永远配不出来。
+    _raw_unsup = cfg.get("unsupported_type_reply")
+    unsupported = ("目前仅支持文字消息。" if _raw_unsup is None
+                   else str(_raw_unsup).strip())
     try:
         from src.integrations.official_api_worker import official_pipeline_enabled
         use_pipeline = official_pipeline_enabled(getattr(config_manager, "config", None) or {})
@@ -257,21 +295,31 @@ def register_instagram_routes(
         hub_verify_token: Optional[str] = Query(None, alias="hub.verify_token"),
         hub_challenge: Optional[str] = Query(None, alias="hub.challenge"),
     ) -> Response:
+        from src.integrations.official_webhook_stats import record_verify
         if hub_mode != "subscribe" or (hub_verify_token or "") != verify_token:
+            # 只有真 Meta 式握手（带 hub.mode=subscribe）才记失败——裸 GET 是扫描噪声
+            if hub_mode == "subscribe":
+                record_verify("instagram", ok=False)
             return Response(status_code=403, content=b"forbidden")
+        record_verify("instagram", ok=True)
         return Response(status_code=200, content=(hub_challenge or "").encode("utf-8"))
 
     async def ig_webhook_event(request: Request) -> Response:
+        from src.integrations.official_webhook_stats import record_error, record_event
         raw = await request.body()
         sig = (request.headers.get("X-Hub-Signature-256")
                or request.headers.get("x-hub-signature-256") or "")
         if not verify_fb_signature(raw, sig, app_secret):
             logger.warning("IG Webhook 签名校验失败")
+            record_error("instagram", "bad_signature")
             return Response(status_code=403, content=b"invalid signature")
         try:
             data = json.loads(raw.decode("utf-8"))
         except Exception:
+            record_error("instagram", "bad_json")
             return Response(status_code=400, content=b"invalid json")
+        # 到达即记（验签已过）：后续单条处理失败不影响「回调可达」这个事实
+        record_event("instagram")
 
         for m in extract_ig_messages(data):
             try:
@@ -282,11 +330,52 @@ def register_instagram_routes(
                     human_agent_fallback=human_agent_fallback)
             except Exception as e:  # noqa: BLE001
                 logger.exception("IG 事件处理异常: %s", e)
+        # 媒体消息：镜像占位进收件箱（坐席可见可接管）+ 可选「暂不支持」回复
+        for mm in extract_ig_media(data):
+            try:
+                await _handle_ig_media(
+                    item=mm, ig_id=ig_id, ig_account_id=ig_account_id,
+                    page_token=page_token, unsupported=unsupported,
+                    human_agent_fallback=human_agent_fallback)
+            except Exception as e:  # noqa: BLE001
+                logger.exception("IG 媒体事件处理异常: %s", e)
         return Response(status_code=200, content=b"OK")
 
     app.add_api_route(path, ig_webhook_verify, methods=["GET"], name="instagram_webhook_verify")
     app.add_api_route(path, ig_webhook_event, methods=["POST"], name="instagram_webhook_event")
     logger.info("Instagram Webhook 已注册: GET/POST %s (ig_id=%s)", path, ig_id)
+
+
+async def _handle_ig_media(
+    *, item: Dict[str, Any], ig_id: str, ig_account_id: str,
+    page_token: str, unsupported: str = "", human_agent_fallback: bool = False,
+) -> None:
+    """单条 IG 媒体入站 → 收件箱占位镜像（带 CDN URL 供后续识图层取用）+ 可选回复。
+
+    与 Messenger 官方链同款语义（facebook_webhook Phase I1 分支）：镜像每消息一次、
+    ``unsupported`` 非空才回话（空串=运营选择沉默）。绝不喂 SkillManager——媒体
+    没有可靠文字语义，硬喂只会产出幻觉回复。
+    """
+    sender = str(item.get("sender") or "")
+    if not sender:
+        return
+    chat_key = f"ig:user:{sender}"
+    try:
+        from src.integrations.shared.official_inbound import mirror_inbound_media
+        mirror_inbound_media(
+            platform="instagram", account_id=ig_account_id, chat_key=chat_key,
+            media_type=str(item.get("media_type") or "file"),
+            name=sender, msg_id=str(item.get("mid") or ""),
+            media_ref=str(item.get("url") or ""))
+    except Exception:  # noqa: BLE001
+        logger.debug("IG 媒体镜像失败（已忽略）", exc_info=True)
+    if unsupported:
+        if human_agent_fallback:
+            await ig_send_with_window_fallback(
+                sender, unsupported, ig_id, page_token, account_id=ig_account_id)
+        else:
+            await ig_send_text(sender, unsupported, ig_id, page_token,
+                               account_id=ig_account_id)
 
 
 async def _handle_ig_message(
@@ -333,5 +422,5 @@ async def _handle_ig_message(
 
 __all__ = [
     "ig_send_text", "ig_send_with_window_fallback", "extract_ig_messages",
-    "register_instagram_routes",
+    "extract_ig_media", "register_instagram_routes",
 ]

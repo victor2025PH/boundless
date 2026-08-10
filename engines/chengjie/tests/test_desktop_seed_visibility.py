@@ -83,6 +83,44 @@ def test_baseline_and_denylist_disjoint():
     assert not overlap, f"分级冲突：{sorted(overlap)}"
 
 
+# ── 出厂默认节奏「不秒回」不变量（2026-08-07：修「装完即秒回」出货缺陷）──────
+# 背景：新装机默认档 l2_autosend.deliver=false（C 类安全默认），此时自动回复走
+# 协议 7×24 直发链，它的延迟读 inbox.l2_autosend.deliver_delay。种子里若缺该块
+# 或配成 0/0，协议链恒 0s 秒回——客户与平台风控当场识破机器人，正是老板实锤的
+# 「设了不生效、一直秒回」。这两条门禁钉住「出厂即拟人」：任何人把种子/示例的
+# deliver_delay 改回 0 或删掉，CI 立刻红（比等客户装完投诉早无数个数量级）。
+# ⚠ 与 test_c_class_keys_absent_or_off 正交：那条保证 deliver(真发) 关着，本条
+# 保证「真要发时的等待」非零——两者一起才是「安全默认 + 不秒回」。
+
+_INSTANT_FLOOR_SEC = 3.0   # <3s＝秒回带（与 reply_settings 的 bot-band 同口径）
+ENGINE_ROOT_CFG = ENGINE_ROOT / "config"
+
+
+def _deliver_delay_of(path) -> dict:
+    cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return (((cfg.get("inbox") or {}).get("l2_autosend") or {})
+            .get("deliver_delay")) or {}
+
+
+def test_desktop_seed_ships_human_like_pacing():
+    dd = _deliver_delay_of(SEED)
+    mx = float(dd.get("max_sec", 0) or 0)
+    assert mx >= _INSTANT_FLOOR_SEC, (
+        f"桌面种子 deliver_delay.max_sec={mx} < {_INSTANT_FLOOR_SEC}s——新装机"
+        "协议链会秒回（装完即露馅）。种子应带保守拟人区间（如 8–20s）。")
+
+
+def test_example_config_ships_human_like_pacing():
+    example = ENGINE_ROOT_CFG / "config.example.yaml"
+    if not example.exists():
+        pytest.skip("no config.example.yaml")
+    dd = _deliver_delay_of(example)
+    mx = float(dd.get("max_sec", 0) or 0)
+    assert mx >= _INSTANT_FLOOR_SEC, (
+        f"示例配置 deliver_delay.max_sec={mx} < {_INSTANT_FLOOR_SEC}s——照抄示例"
+        "部署的自建实例会秒回。示例应带非零拟人默认。")
+
+
 # ── 路由级探针：种子配置起 app，工作目标真的可见 ─────────────────────────────
 # 探针端点选 /api/goals/agenda——与前端 featureOn 判定（unified_inbox.html）
 # 完全同口径：非 403 = 功能可见。

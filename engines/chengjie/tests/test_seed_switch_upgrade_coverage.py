@@ -61,24 +61,33 @@ _EXEMPT: Dict[str, str] = {
         "同上，outbound_gate._DEFAULTS['require_inbound_since_connect']=True",
     "companion.proactive_topic.cold_start.quota_gate":
         "同上，outbound_gate._DEFAULTS['quota_gate']=True",
-    "companion.proactive_topic.cold_start.warmup_review":
-        "同上，outbound_gate._DEFAULTS['warmup_review']=True。另注：该档只在能"
-        "**判出**账号接入时刻时才封顶（account_registry.created_at 或已有登记），"
-        "判不出一律不封顶 → 存量安装升级后零行为变更，不存在「升级即静默降级」风险",
     "inbox.read_from_store":
         "代码默认已 True（unified_inbox_aggregate._read_from_store_enabled，"
         "2026-07-31 由 False 改齐）：灰度早已完成，example/种子/生产均显式 true，"
         "原 False 默认只有陈旧升级配置会走到，正是那条静默分叉的成因",
+    "inbox.l2_autosend.deliver_delay.adaptive":
+        "非功能开关而是节奏子项（2026-08-07 出厂拟人默认随 min/max 一并播种，修"
+        "「装完即秒回」）：升级可达路径＝设置页 /reply-settings「回复节奏」的"
+        "「按内容长度自适应」复选框（模板 rps-adaptive，键同名，保存即热更），"
+        "关掉后随时可再勾回；code 默认 resolve_pacing 取 get('adaptive', False)，"
+        "种子写 true 只为出厂即用更拟人的长度自适应节奏，升级安装不写也不影响",
 }
 
 #: **真实缺口，待产品决策**（沿用本仓 _PENDING_* 惯例：CI 保绿 + 债务可见 + 防过期）。
 #: 与豁免的区别：这些确实存在「全新装开 / 升级装关」的行为分叉，只是「该不该给存量
 #: 用户改」不是门禁能替产品定的。
 #:
-#: 当前为空——首版唯一条目 ``inbox.read_from_store`` 已在 2026-07-31 按「代码默认对齐
-#: 既有部署」收口（见 _EXEMPT 同名条目），不再是分叉。空表不影响门禁：主断言按
-#: 集合并集判定，``test_pending_entries_still_uncovered`` 对空表天然通过。
-_PENDING: Dict[str, str] = {}
+#: （首版唯一条目 ``inbox.read_from_store`` 已在 2026-07-31 按「代码默认对齐
+#: 既有部署」收口，见 _EXEMPT 同名条目。）
+_PENDING: Dict[str, str] = {
+    "inbox.takeover_rearm.enabled":
+        "接管自动接回（2026-08-09 .198/.104 事故沉淀）：新装机随种子开（桌面版"
+        "「全自动」交付承诺闭环），升级安装保持代码默认关（takeover_rearm."
+        "takeover_rearm_cfg 取 get('enabled', False)）。要不要经 feature_registry"
+        " A 类给存量用户补齐＝产品决策：自动接回会覆盖坐席的隐式接管，对已习惯"
+        "「发一条就永久转人工」的存量团队属行为变更，不宜门禁代拍。UI 侧不受影响："
+        "让位横幅+一键接回对新旧安装都可用（不依赖本开关）。",
+}
 
 
 def _seed_cfg() -> dict:

@@ -993,6 +993,44 @@ def test_merge_orchestrator_status_injects_unhealthy_since(monkeypatch):
         h.reset()
 
 
+def test_merge_orchestrator_status_injects_inbox_stall(monkeypatch):
+    """P4：chats.platform_status 带 inbox_stalled/hint，坐席不用另打 metrics。"""
+    from src.integrations.platform_session_health import (
+        get_platform_session_health,
+    )
+    from src.web.routes import unified_inbox_read_routes as read_routes
+    h = get_platform_session_health()
+    h.reset()
+    try:
+        h.record("messenger", "6158", "authorized")
+        h.record_inbox_health(
+            "messenger", "6158", unread=3, read_attempts=0, read_fails=0,
+            e2ee_ratio=0.7, conv_count=12, detail="e2ee_relogin")
+        fake_orch = SimpleNamespace(status=lambda: {"accounts": [
+            {"platform": "messenger", "account_id": "6158", "state": "running",
+             "mode": "protocol", "last_error": "", "worker": {}},
+            {"platform": "telegram", "account_id": "1", "state": "running",
+             "mode": "protocol", "last_error": "", "worker": {}},
+        ]})
+        monkeypatch.setattr(
+            "src.integrations.account_orchestrator.get_orchestrator",
+            lambda cfg=None: fake_orch)
+        monkeypatch.setattr(
+            "src.integrations.account_registry.get_account_registry",
+            lambda: SimpleNamespace(list=lambda platform=None: []))
+        status: dict = {}
+        read_routes._merge_orchestrator_status(
+            status, SimpleNamespace(config={}))
+        m = status["messenger:6158"]
+        assert m["inbox_stalled"] is True
+        assert m["inbox_hint"] == "e2ee_relogin"
+        assert m["stall_kind"] == "e2ee_placeholder"
+        assert float(m["e2ee_ratio"]) == pytest.approx(0.7)
+        assert "inbox_stalled" not in status["telegram:1"]
+    finally:
+        h.reset()
+
+
 # ── 批量对齐 / churn 纯函数 + 路由 ───────────────────────────────────────────
 
 def test_meta_persona_id_and_bound_filter():

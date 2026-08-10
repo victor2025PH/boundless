@@ -324,10 +324,20 @@ class OpenAITranscriber(VoiceTranscriber):
                 self.logger.error("OpenAI API密钥未配置")
                 return None
 
+            # 托管占位值 "hosted"（hosted_gateway 注入）→ 调用时解析当前设备令牌。
+            # 转写器构建一次常驻，令牌 30 天换新；在这里取 env 而非构建期取值，
+            # 换新后无需重建转写器。令牌尚未领到 → 如实失败交给下一级 fallback。
+            api_key = str(self.api_key or "")
+            if api_key.strip().lower() == "hosted":
+                api_key = str(os.environ.get("AITR_HOSTED_AI_KEY") or "").strip()
+                if not api_key:
+                    self.logger.warning("托管转写：设备令牌尚未就绪（AITR_HOSTED_AI_KEY 空）")
+                    return None
+
             # 设置客户端（支持 OpenAI 兼容端点：Groq / SiliconFlow / 本地等）。
             # max_retries=0 + timeout：主转录不可达/慢时快速失败回落，不重试、不阻塞理解链。
             client_kwargs: Dict[str, Any] = {
-                "api_key": self.api_key,
+                "api_key": api_key,
                 "max_retries": self.max_retries,
                 "timeout": self.timeout_sec,
             }

@@ -3203,7 +3203,16 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         from src.web.routes.unified_inbox_routes import register_unified_inbox_routes
 
         def _unified_inbox_page_auth(request: Request):
-            # 坐席工作台：master/admin/agent 可进（agent 仅此处可达）
+            # 坐席工作台：master/admin/agent 可进（agent 仅此处可达）。
+            # P1 2026-08-09：接受 Bearer 主令牌（与 _api_auth 同口径、恒时
+            # 比较）——send/send-media/send-voice 是挂在页面鉴权下的 **JSON**
+            # 端点，此前脚本/集成用主令牌调用会被 303 到登录页 HTML（.198/.104
+            # 排障实测：为发一条验证消息只能模拟表单登录拿 session+CSRF）。
+            # 主令牌本就拥有 _api_auth 全接口最高权限，此处放行不扩大权限面。
+            if token:
+                _auth_header = request.headers.get("Authorization", "")
+                if hmac.compare_digest(_auth_header, f"Bearer {token}"):
+                    return
             _require_role(request, "workspace")
 
         register_unified_inbox_routes(
@@ -3281,6 +3290,14 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         register_agent_perf_routes(
             app,
             api_auth=_api_auth,
+            page_auth=_unified_inbox_page_auth,
+            templates=templates,
+            config_manager=config_manager,
+        )
+        # P0 2026-08-09：目标达成报表页（主管；数据走 /api/goals/report/*）
+        from src.web.routes.goal_routes import register_goal_report_page
+        register_goal_report_page(
+            app,
             page_auth=_unified_inbox_page_auth,
             templates=templates,
             config_manager=config_manager,

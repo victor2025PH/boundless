@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Callable, Dict, List, Optional
 
 
 def voice_gate_verdict(
@@ -62,6 +63,30 @@ def voice_gate(
 _PHOTO_DEFAULT_MODES = ("gentle_checkin", "follow_up")
 
 
+def _snapshot_emotion(meta: Dict[str, Any], *, mood_ttl: float, now: float) -> str:
+    """候选快照的情绪标签（P1-198 续，2026-08-02）。
+
+    缺省＝机器 ``last_emotion``；坐席人工「情绪低落」标注在 TTL 窗内 → 覆写为
+    负面标签（planner 的 ``proactive_emotion_gate`` 收到负面标签 + 强度未知
+    → 保守 soft：抑制剧情邀约、保留温和问候）。``mood_ttl<=0``＝转向关闭，
+    纯机器口径。「积极开朗」刻意不放松机器信号（不对称覆写，人不能让 AI 更莽）。
+    """
+    machine = str((meta or {}).get("last_emotion") or "")
+    if mood_ttl and mood_ttl > 0:
+        try:
+            from src.inbox.effective_mood import (
+                gate_emotion_override,
+                record_mood_consume,
+            )
+            ovr = gate_emotion_override(meta, now=now, ttl_hours=mood_ttl)
+            if ovr:
+                record_mood_consume("proactive_gate")
+                return ovr
+        except Exception:
+            pass
+    return machine
+
+
 def is_translation_account(platform: str, account_id: str) -> bool:
     """账号是否翻译业务线（融合实例 P1）。
 
@@ -74,6 +99,24 @@ def is_translation_account(platform: str, account_id: str) -> bool:
         return cached_business_line(platform, account_id) == "translation"
     except Exception:
         return False
+
+
+def account_on_duty(cfg_root: Any, platform: str, account_id: str) -> bool:
+    """账号此刻是否「在班」（工作时间班表 ``inbox.work_schedule``，P1-ws）。
+
+    休息中的账号**不主动外发**（topic/ritual/milestone/沉默回访共用候选
+    快照，本判定在 ``_account_can_send`` 一处生效）——入站闸把回复扣到复班、
+    转头却主动搭讪，且对方回话没人理＝精分行为；班表与入站闸同一事实源
+    （work_hours_gate），语义天然一致。未启用 / 判定异常 → True（旧行为）。
+    刻意用 ``in_work_hours`` 而非 should_hold：主动外发没有入站文本，
+    不存在危机豁免语义。
+    """
+    try:
+        from src.inbox.work_hours_gate import in_work_hours, work_schedule_cfg
+        return in_work_hours(
+            work_schedule_cfg(cfg_root or {}), platform, account_id)
+    except Exception:
+        return True
 
 
 def photo_share_verdict(
@@ -121,6 +164,307 @@ def photo_share_gate(
     """
     return bool(photo_share_verdict(
         photo_cfg, mode=mode, intimacy=intimacy, rand01=rand01)[0])
+
+
+# ── 今日新鲜事主动开场（news_share，2026-08-03）──────────────────────────────
+# 升级链＝生活分享 → **新鲜事** → 天气：life_beat / weather 在
+# skill_manager.build_proactive_opener 内部（P1 2026-07-29 修的链，禁改文件）；
+# 本模块在其结果上二次升级——life_share 原样放行（生活线优先不变），落到
+# weather_hook / gentle_checkin 时若今日话题包有货则改用 news_share
+# （新闻钩子 > 天气强信号 > 裸问候）。
+NEWS_MODE = "news_share"
+_NEWS_UPGRADEABLE_MODES = ("gentle_checkin", "weather_hook")
+# 同一会话 72h 内不重复用新闻开场——新闻是全网同一批素材，高频轮播一眼机器人。
+NEWS_REPEAT_WINDOW_HOURS = 72.0
+# 缓存超过一天没刷出来的「新鲜事」不能当「今天看到的」讲（诚实口径，与
+# 配文 freshness=old 同哲学）；反应式链（skill_manager 注入）负责养缓存。
+NEWS_CACHE_MAX_AGE_HOURS = 24.0
+# 条目级时效**软偏好**（非硬闸）：优先今天内发布的条目，全旧才放宽——
+# 「今天刷到」说的是「今天在信息流看到」，条目发布 30h 前也成立；硬闸由
+# 缓存新鲜度（上面 24h）兜底，条目级卡死只会白白空池。
+NEWS_TOPIC_MAX_AGE_HOURS = 24.0
+
+# 进程内账本（bounded，与 daily_topics._OFFER_TS 同款模式）：只在**真发成功**
+# 后落账（_on_teaser_sent），规划/生成失败/被守卫拦下都不烧 72h 窗口——
+# life_share 周配额踩过「构建即扣」的坑（P1），这里直接按修好后的语义来。
+_NEWS_OPENER_LOCK = threading.Lock()
+_NEWS_OPENER_TS: Dict[str, float] = {}
+_NEWS_OPENER_CAP = 400
+
+# 账本持久化（P2 2026-08-04）：进程内 dict 在桌面打包版上随 app 每日多次重启
+# 清零 → 72h 频控实际缩水成「距上次重启」。经 set_news_ledger_path()（调度
+# 启动时注入实例数据根路径）镜像到 JSON：首次访问懒加载合并（取较新时间戳），
+# 真发落账时全量覆写（只留 2×窗口内条目=自然瘦身）。无路径＝纯进程内
+# （单测/未接线零行为变化）。
+_NEWS_LEDGER_PATH: Optional[str] = None
+_NEWS_LEDGER_LOADED = True
+
+
+def set_news_ledger_path(path: Optional[str]) -> None:
+    """注入 news_share 频控账本的落盘路径（None=回到纯进程内模式）。"""
+    global _NEWS_LEDGER_PATH, _NEWS_LEDGER_LOADED
+    with _NEWS_OPENER_LOCK:
+        p = str(path or "").strip() or None
+        if p != _NEWS_LEDGER_PATH:
+            _NEWS_LEDGER_PATH = p
+            _NEWS_LEDGER_LOADED = p is None
+
+
+def _ensure_news_ledger_loaded() -> None:
+    """懒加载落盘账本并与进程内合并（取较新）。须已持锁；失败静默＝纯内存。"""
+    global _NEWS_LEDGER_LOADED
+    if _NEWS_LEDGER_LOADED or not _NEWS_LEDGER_PATH:
+        return
+    _NEWS_LEDGER_LOADED = True
+    try:
+        data = json.loads(Path(_NEWS_LEDGER_PATH).read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(data, dict):
+        return
+    for k, v in data.items():
+        try:
+            ts = float(v)
+        except (TypeError, ValueError):
+            continue
+        key = str(k or "")
+        if key and ts > float(_NEWS_OPENER_TS.get(key) or 0.0):
+            _NEWS_OPENER_TS[key] = ts
+
+
+def _persist_news_ledger(now_v: float) -> None:
+    """全量覆写落盘（只留 2×窗口内条目）。须已持锁；失败静默不阻塞发送。"""
+    if not _NEWS_LEDGER_PATH:
+        return
+    try:
+        horizon = NEWS_REPEAT_WINDOW_HOURS * 3600.0 * 2
+        keep = {k: v for k, v in _NEWS_OPENER_TS.items()
+                if (now_v - float(v)) < horizon}
+        p = Path(_NEWS_LEDGER_PATH)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(keep, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def news_opener_allowed(
+    convo_key: str, *, now: Optional[float] = None,
+    window_hours: float = NEWS_REPEAT_WINDOW_HOURS,
+) -> bool:
+    """该会话现在可否再用 news_share 开场（72h 频控；无记录=可用）。"""
+    key = str(convo_key or "")
+    if not key:
+        return True
+    now_v = float(now if now is not None else time.time())
+    with _NEWS_OPENER_LOCK:
+        _ensure_news_ledger_loaded()
+        try:
+            last = float(_NEWS_OPENER_TS.get(key) or 0.0)
+        except (TypeError, ValueError):
+            last = 0.0
+    return not (last > 0 and (now_v - last) < float(window_hours) * 3600.0)
+
+
+def note_news_opener(convo_key: str, ts: Optional[float] = None) -> None:
+    """记录该会话真发过一次 news_share（超上限裁最旧一半，防会话数无限涨）。"""
+    key = str(convo_key or "")
+    if not key:
+        return
+    ts_v = float(ts if ts is not None else time.time())
+    with _NEWS_OPENER_LOCK:
+        _ensure_news_ledger_loaded()
+        if len(_NEWS_OPENER_TS) >= _NEWS_OPENER_CAP and key not in _NEWS_OPENER_TS:
+            for old in sorted(
+                    _NEWS_OPENER_TS, key=_NEWS_OPENER_TS.get)[:_NEWS_OPENER_CAP // 2]:
+                _NEWS_OPENER_TS.pop(old, None)
+        _NEWS_OPENER_TS[key] = ts_v
+        _persist_news_ledger(ts_v)
+
+
+# 同日话题用量账本（P2 2026-08-04）：加盐轮换只保证「分散」不保证「均匀」——
+# 回放实测 9 会话落 4+4+1。真发成功按 fact（标题前 80 字归一化）计数，选题时
+# 只在**今日用量最少**的子池里轮换 → 顺序发送自然近似轮询。刻意纯进程内：
+# 这是日粒度的均匀度偏好而非正确性约束，重启后前几发重新聚簇可接受；
+# 池子每日 ≤ max_items（≤50），跨日整体清空，天然有界。
+_NEWS_TOPIC_USE_LOCK = threading.Lock()
+_NEWS_TOPIC_USE: Dict[str, int] = {}
+_NEWS_TOPIC_USE_DAY = ""
+
+
+def _news_topic_use_key(title: str) -> str:
+    from src.companion.daily_topics import _norm_title
+    return _norm_title(str(title or "")[:80])
+
+
+def _news_topic_day(now: Optional[float] = None) -> str:
+    return time.strftime("%Y-%m-%d", time.localtime(
+        float(now if now is not None else time.time())))
+
+
+def note_news_topic_used(title: str, now: Optional[float] = None) -> None:
+    """真发成功后把该话题计入今日用量（fact=标题前 80 字口径，跨日清零）。"""
+    key = _news_topic_use_key(title)
+    if not key:
+        return
+    day = _news_topic_day(now)
+    global _NEWS_TOPIC_USE_DAY
+    with _NEWS_TOPIC_USE_LOCK:
+        if _NEWS_TOPIC_USE_DAY != day:
+            _NEWS_TOPIC_USE.clear()
+            _NEWS_TOPIC_USE_DAY = day
+        _NEWS_TOPIC_USE[key] = int(_NEWS_TOPIC_USE.get(key) or 0) + 1
+
+
+def news_topic_use_count(title: str, now: Optional[float] = None) -> int:
+    """该话题今日已真发次数（无记录/跨日=0）。"""
+    key = _news_topic_use_key(title)
+    if not key:
+        return 0
+    day = _news_topic_day(now)
+    with _NEWS_TOPIC_USE_LOCK:
+        if _NEWS_TOPIC_USE_DAY != day:
+            return 0
+        return int(_NEWS_TOPIC_USE.get(key) or 0)
+
+
+def _news_opener(
+    config: Dict[str, Any],
+    contact_key: str,
+    *,
+    gate: str = "",
+    now: Optional[float] = None,
+    persona_words: Optional[List[str]] = None,
+    persona_words_fn: Optional[Callable[[], List[str]]] = None,
+) -> Dict[str, Any]:
+    """今日新鲜事主动开场（签名对齐 _life_beat_opener/_weather_opener 同族，
+    模块级故多收 config；返回 opener dict 或 {}＝无货，升级链自然落下一级）。
+
+    gated：``companion.daily_topics.enabled`` **且** ``companion.daily_topics
+    .proactive.enabled``（新子键，默认 False）都开才活；72h 每会话频控；
+    素材=话题缓存挑 1 条——**只认轻话题**（``smalltalk_topic`` allowlist，
+    军政财法灾一律回落；2026-08-04 霍尔木兹群发实锤）、条目时效软偏好
+    （今天内优先，全旧放宽）、人设 tastes 命中优先、**按联系人加盐**当日
+    确定性轮换（不同客户分散到整个话题池，同客户当日恒定）；缓存超过
+    ``NEWS_CACHE_MAX_AGE_HOURS`` 没刷新视同无货（旧闻不能冒充「今天看到的」）。
+    ``gate=="block"``（近期危机）→ {}（同族 opener 口径）。绝不抛。
+    """
+    try:
+        if str(gate or "").strip().lower() == "block":
+            return {}
+        from src.companion.daily_topics import (
+            parse_topics_cfg,
+            pick_topics_for,
+            read_topics_cache,
+            smalltalk_topic,
+        )
+        cfg_root = config if isinstance(config, dict) else {}
+        tcfg = parse_topics_cfg(cfg_root)
+        if not tcfg.get("enabled"):
+            return {}
+        comp = cfg_root.get("companion")
+        dt_raw = (comp.get("daily_topics") if isinstance(comp, dict) else None)
+        dt_raw = dt_raw if isinstance(dt_raw, dict) else {}
+        pro = dt_raw.get("proactive") if isinstance(
+            dt_raw.get("proactive"), dict) else {}
+        if not bool(pro.get("enabled", False)):
+            return {}
+        if not news_opener_allowed(contact_key, now=now):
+            return {}
+        cache = read_topics_cache(tcfg.get("cache_path"))
+        now_v = float(now if now is not None else time.time())
+        fetched_ts = float(cache.get("fetched_ts") or 0.0)
+        if fetched_ts <= 0 or (
+                now_v - fetched_ts) > NEWS_CACHE_MAX_AGE_HOURS * 3600.0:
+            return {}
+        # 轻话题硬闸（allowlist）：识别不出类别的一律不做主动开场素材
+        pool = [t for t in (cache.get("topics") or [])
+                if isinstance(t, dict) and smalltalk_topic(t)]
+        if not pool:
+            return {}
+        # 条目时效软偏好：优先今天内发布的，全旧才放宽（见常量注释）
+        fresh = [
+            t for t in pool
+            if float(t.get("published_ts") or 0.0) <= 0
+            or (now_v - float(t.get("published_ts") or 0.0))
+            <= NEWS_TOPIC_MAX_AGE_HOURS * 3600.0
+        ]
+        pool = fresh or pool
+        # 同日用量最少优先（P2）：池收窄到今日真发次数最少的子集，加盐轮换
+        # 只在其中进行——顺序发送近似轮询，摊平 4+4+1 式聚簇。
+        if len(pool) > 1:
+            try:
+                counts = [news_topic_use_count(
+                    str(t.get("title") or ""), now=now_v) for t in pool]
+                m = min(counts)
+                if m != max(counts):
+                    pool = [t for t, c in zip(pool, counts) if c == m]
+            except Exception:
+                pass
+        words = persona_words
+        if words is None and persona_words_fn is not None:
+            try:
+                words = persona_words_fn() or []
+            except Exception:
+                words = []
+        topics = pick_topics_for(
+            list(words or []), k=1, now=now_v, cache={"topics": pool},
+            variety_key=str(contact_key or ""))
+        if not topics:
+            return {}
+        t = topics[0] or {}
+        title = str(t.get("title") or "").strip()
+        summary = str(t.get("summary") or "").strip()[:80]
+        if not title:
+            return {}
+        blob = title
+        if summary and summary not in title and title not in summary:
+            blob += f"——{summary}"
+        return {
+            "mode": NEWS_MODE,
+            "fact": title[:80],
+            "directive": (
+                f"你今天刷到一件新鲜事：「{blob}」。以你的人设口吻自然分享这件"
+                "今天看到的事：先说一句你自己的看法或感受，再用一个轻巧的问题"
+                "把话题抛给对方。禁止播报腔、禁止贴链接、禁止一次讲多件事。"
+                "素材只有这一句，标题之外的细节你并不知道——不要编造具体"
+                "数字、进展或结果；对方若追问细节，就坦然说只是刷到标题"
+                "没细看，顺势把话题带回对方身上。"
+            ),
+            "context_facts": [],
+        }
+    except Exception:
+        return {}
+
+
+def maybe_upgrade_to_news(
+    op: Dict[str, Any],
+    config: Dict[str, Any],
+    contact_key: str,
+    *,
+    now: Optional[float] = None,
+    persona_words: Optional[List[str]] = None,
+    persona_words_fn: Optional[Callable[[], List[str]]] = None,
+) -> Dict[str, Any]:
+    """在 build_proactive_opener 结果上做 news_share 升级判定（纯决策，可测）。
+
+    只动 ``_NEWS_UPGRADEABLE_MODES``（gentle_checkin / weather_hook）——
+    life_share 及一切富开场原样放行；升级成功把 ``silent_hours`` / ``gap_bucket``
+    从原 opener 透传（prompt 框定层按真实沉默时长说话）。无货/未开闸/异常 →
+    返回原 op，零行为变化。
+    """
+    try:
+        if str((op or {}).get("mode") or "") not in _NEWS_UPGRADEABLE_MODES:
+            return op
+        news = _news_opener(
+            config, contact_key, now=now,
+            persona_words=persona_words, persona_words_fn=persona_words_fn)
+        if news:
+            news["silent_hours"] = (op or {}).get("silent_hours", 0.0)
+            news["gap_bucket"] = str((op or {}).get("gap_bucket") or "")
+            return news
+    except Exception:
+        pass
+    return op
 
 
 async def maybe_start_companion_proactive(assistant) -> None:
@@ -456,6 +800,34 @@ async def maybe_start_companion_proactive(assistant) -> None:
             except Exception:
                 assistant.logger.debug("[proactive] optout 注册表落盘失败", exc_info=True)
 
+        # 冷启动隔离（2026-08-04 智拓机 .198 新号群发事故根因闸）：给每个账号记「接入
+        # 本系统时刻」（自举自「该账号最早会话 created_at」，见 account_connection），
+        # 账号接入不足预热窗内一切主动外呼一律不发。落盘 best-effort；初始化失败也降级
+        # 内存表，绝不让安全闸变成崩溃点。判定逻辑在纯函数 outbound_gate.may_contact。
+        try:
+            from src.inbox.account_connection import AccountConnectionLog
+            _conn_log = AccountConnectionLog(
+                Path(assistant.config.config_path).parent
+                / "account_connection.json")
+        except Exception:
+            _conn_log = None
+            assistant.logger.debug("[proactive] 冷启动接入登记初始化失败", exc_info=True)
+
+        # 冷启动闸的**本轮**观测快照（每次 _conversations() 重建）。安全闸最危险的失败
+        # 形态是「悄悄拦住一切」或「悄悄没生效」，两者在日志里都不显眼 → 挂到预览面板
+        # （GET /api/companion/proactive/preview）供运营直接读：本轮压了谁、按什么理由、
+        # 闸到底有没有生效。best-effort，读写都不影响判定。
+        _cs_last: Dict[str, Any] = {
+            "enabled": False, "suppressed": {}, "quota_exhausted": False, "cfg": {}}
+
+        def _cs_suppression_total() -> Dict[str, int]:
+            """进程累计抑制数（重启清零）。取不到 → 空 dict，绝不让观测拖垮预览。"""
+            try:
+                from src.inbox.outbound_gate import suppression_snapshot
+                return suppression_snapshot()
+            except Exception:
+                return {}
+
         # 主客户端回落路径吞异常只回 False（拿不到错误类型）→ 按连败计数拉黑：
         # 连败 2 次进 _bad_peers（2026-07-27 实锤：INPUT_USER_DEACTIVATED 会话
         # 每 tick 烧掉一个名额；单败不拉防网络抖动误伤）。
@@ -482,8 +854,14 @@ async def maybe_start_companion_proactive(assistant) -> None:
             客户端回落 ✓；其余（如 tg-desktop 桌面工作台镜像）没有出站通道——
             若不过滤，_send 会错用**主账号**向别人的会话发消息（张冠李戴事故）。
             融合实例 P1：翻译业务线账号一票否决（翻译客服客户收到"想你了"=事故）。
+            P1-ws：休息中的账号（工作时间班表）不主动外发——入站被扣到复班、
+            却主动搭讪且对方回话没人理＝精分；topic/ritual/milestone 同享此闸。
             """
             if is_translation_account(platform, account_id):
+                return False
+            if not account_on_duty(
+                    getattr(assistant.config, "config", None) or {},
+                    platform, account_id):
                 return False
             try:
                 from src.integrations.account_orchestrator import get_orchestrator
@@ -532,10 +910,63 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     limit=scan_limit) or []
             except Exception:
                 return []
+            # ── 冷启动隔离预备（2026-08-04 智拓机 .198 新号群发事故根因闸）──────────
+            # 账号「接入时刻」自举：取该账号所有会话里最早的 created_at（目录同步把占位
+            # created_at 落为同步时刻≈账号接入本系统时刻）。用**原始** rows（含群/系统会
+            # 话）估更准的账号年龄。判定在纯函数 outbound_gate.may_contact；全程 fail-open：
+            # 预备/判定任一异常都 _cs_on=False 本轮放行，安全闸绝不变成「静默不发」故障源。
+            _now_ts = time.time()
+            _cs_on = False
+            _cs_cfg: Dict[str, Any] = {}
+            _acct_earliest: Dict[Any, float] = {}
+            _quota_exhausted = False
+            _cs_suppressed: Dict[str, int] = {}
+            _may_contact = None
+            _record_suppression = None
+            try:
+                if _conn_log is not None:
+                    from src.inbox.outbound_gate import (
+                        account_earliest_created as _acct_earliest_fn,
+                        may_contact as _may_contact,
+                        quota_exhausted_now as _quota_now,
+                        record_suppression as _record_suppression,
+                        resolve_cold_start_cfg as _resolve_cs_cfg,
+                    )
+                    _cs_cfg = _resolve_cs_cfg(
+                        getattr(assistant.config, "config", None) or {})
+                    _cs_on = bool(_cs_cfg.get("enabled", True))
+                    if _cs_on:
+                        # 账号接入时刻自举取数（纯函数，已单测）：用原始 rows（含群/系统
+                        # 会话）估更准的账号年龄。
+                        _acct_earliest = _acct_earliest_fn(rows)
+                    # 授权/试用字符额度耗尽 → 停系统自主外呼（人工不受限）。每 tick
+                    # 读一次（非每会话），开销＝一次额度快照。关闸时连读都省掉。
+                    # 取「原始耗尽」而非「受 enforce 调节的裁决」的理由见 quota_exhausted_now
+                    # ——.198 正是 exceeded=True 且 enforce=False 才一路烧到 180%。
+                    _quota_exhausted = (
+                        _quota_now() if _cs_cfg.get("quota_gate", True) else False)
+            except Exception:
+                _cs_on = False
+                # 安全闸「装不上」比「误拦」更该被看见：升 warning，避免静默永久放行。
+                assistant.logger.warning(
+                    "[proactive] 冷启动隔离闸预备失败（本轮放行，安全闸未生效）",
+                    exc_info=True)
             # ⚠ 主动开场只面向「能发的账号 × 私聊」（2026-07-13 真机预览实锤：
             # 不过滤则候选被沉默几个月的群聊/桌面镜像会话占满——给群发
             # "好久没联系啦" / 用错账号发送，都是灾难）。群聊天然不适合
             # 一对一情感问候；ritual/milestone/沉默回访共用本快照同享此护栏。
+            # 舰队自嗨排除（P1 2026-08-03）：本 tick 建一次自家账号索引，循环内判
+            # 「对端是不是自己人」。best-effort：registry 拿不到只保留「自己给自己」
+            # 弱判定（is_own_fleet_peer 不依赖索引也能判 chat_key==account_id）。
+            _own_fleet_index = {}
+            try:
+                from src.companion.proactive_peer_hygiene import (
+                    build_own_fleet_index,
+                )
+                from src.integrations.account_registry import get_account_registry
+                _own_fleet_index = build_own_fleet_index(get_account_registry())
+            except Exception:
+                _own_fleet_index = {}
             _filtered = []
             for r in rows:
                 _ct = str(r.get("chat_type") or "").strip().lower()
@@ -547,6 +978,40 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     continue
                 if _is_bad_peer(str(r.get("conversation_id") or ""), _pf):
                     continue  # 死 peer（本地集 or 共享登记表：含 A 线 sender 拉黑的）
+                # 对方机器人守卫（P0 2026-08-03）：上面 chat_type 白名单历史上
+                # 把 'bot' 也放行了 → 沉默 9 个月的 @SpamBot 成了「好久没联系」
+                # 的完美候选（10:09 实锤：主动问候官方反垃圾 bot → 8 轮空转）。
+                # 给机器人发早安 = 纯空转 + 向风控表演自动化行为。
+                try:
+                    from src.inbox.peer_bot_guard import proactive_exclude_row
+                    if proactive_exclude_row(
+                            r, getattr(assistant.config, "config", None) or {}):
+                        continue
+                except Exception:
+                    pass
+                # 舰队自嗨排除（P1 2026-08-03）：对端是自家账号（自己给自己 /
+                # 账号A→账号B）→ 主动情感触达零意义，跳过。收件箱镜像仍保留该会话。
+                try:
+                    from src.companion.proactive_peer_hygiene import (
+                        is_own_fleet_peer,
+                    )
+                    if is_own_fleet_peer(
+                            _pf, str(r.get("account_id") or ""), _ck,
+                            _own_fleet_index):
+                        continue
+                except Exception:
+                    pass
+                # 业务号排除（P2 2026-08-04）：接码/发卡/官方客服类显示名——
+                # 不是 bot 也不是自家号，但主动情感触达零意义且有暴露面
+                # （news_share 实锤给「实卡接码」号发过新闻问候）。
+                try:
+                    from src.companion.proactive_peer_hygiene import (
+                        is_service_peer_name,
+                    )
+                    if is_service_peer_name(str(r.get("display_name") or "")):
+                        continue
+                except Exception:
+                    pass
                 if _pf == "telegram":
                     if _is_system_peer(
                             _pf, str(r.get("account_id") or ""), _ck):
@@ -589,6 +1054,23 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 meta_intel = assistant.inbox_store.get_conv_meta_for_ids(cids)
             except Exception:
                 meta_intel = {}
+            # P1-198 续（2026-08-02）：坐席人工「情绪低落」标注（TTL 窗内）覆写快照
+            # 情绪标签——planner 的 proactive_emotion_gate 收到负面标签且强度未知(-1)
+            # 时按保守 soft（抑制剧情邀约、保留温和问候）。「积极开朗」刻意不放松
+            # 机器信号（不对称覆写）；判据与拟稿/goals 让路同源（effective_mood）。
+            _mood_ttl = 0.0
+            try:
+                from src.inbox.effective_mood import (
+                    gate_emotion_override as _mood_gate_ovr,
+                    resolve_mood_steering_cfg as _mood_cfg,
+                )
+                _ms_snap = _mood_cfg(
+                    getattr(assistant.config, "config", None) or {})
+                if _ms_snap["enabled"]:
+                    _mood_ttl = float(_ms_snap["ttl_hours"])
+            except Exception:
+                _mood_ttl = 0.0
+            _mood_now = time.time()
             # Phase ④续⁵：把真实 intimacy/funnel 注入快照——既让记忆开场的沉默阈值
             # 缩放更准，也让「主动剧情邀约」能按真实关系等级判断可邀约剧情。
             # 复用 N 线已就绪的进程级 provider（resolve_*）；未注册 → 返回 None → 退回 0/""。
@@ -658,6 +1140,27 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     except Exception:
                         _intim, _stage = 0.0, ""
                 _last_in_ts = float(last_in_map.get(cid) or 0.0)
+                # 冷启动隔离闸（.198 根因）：账号接入不足预热窗 / 只有导入历史没人开过口
+                # / 额度烧穿 → 不进候选。放在快照层＝topic/ritual/milestone/沉默回访共用。
+                # fail-open：判定异常一律放行（安全闸不做新的静默故障源）。
+                if _cs_on and _may_contact is not None:
+                    try:
+                        _conn_at = _conn_log.observe(
+                            platform, account_id,
+                            _acct_earliest.get((platform, account_id), 0.0),
+                            now=_now_ts)
+                        _v = _may_contact(
+                            {"last_in_ts": _last_in_ts},
+                            connected_at=_conn_at, now=_now_ts,
+                            cfg=_cs_cfg, quota_exhausted=_quota_exhausted)
+                        if not _v.ok:
+                            _record_suppression(_v.reason)
+                            _cs_suppressed[_v.reason] = (
+                                _cs_suppressed.get(_v.reason, 0) + 1)
+                            continue
+                    except Exception:
+                        assistant.logger.debug(
+                            "[proactive] 冷启动闸判定异常（放行）", exc_info=True)
                 # P1 opt-out：静默期内不进候选（对方 opt-out 后又开口 → 自动解除）。
                 # 放在快照层 = 沉默回访/仪式/节点问候共用同一道闸。
                 if _optout_on and cid in _optout_mutes:
@@ -688,9 +1191,17 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     # 会话语言（ingest 持续标注）：用户时钟/地区节日在缺显式信号时按语种
                     # 兜底猜国家（跨洲通用语刻意不猜，见 user_clock/locale_holidays）。
                     "language": str(r.get("language") or "").strip().lower(),
-                    "last_emotion": str(
-                        (meta_intel.get(cid) or {}).get("last_emotion") or ""),
+                    "last_emotion": _snapshot_emotion(
+                        meta_intel.get(cid) or {},
+                        mood_ttl=_mood_ttl, now=_mood_now),
                 })
+            # 本轮快照（即便零抑制也要刷新，否则预览会显示上一轮的陈旧数字）
+            _cs_last.update({
+                "enabled": _cs_on, "suppressed": dict(_cs_suppressed),
+                "quota_exhausted": _quota_exhausted, "cfg": dict(_cs_cfg)})
+            if _cs_suppressed:
+                assistant.logger.info(
+                    "[proactive] 冷启动隔离本轮抑制候选 %s", dict(_cs_suppressed))
             _conv_index.clear()
             _conv_index.update({str(c["conversation_id"]): c for c in out})
             return out
@@ -769,6 +1280,28 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     "[proactive] 地区节日解析失败 cid=%s", cid, exc_info=True)
                 return None
 
+        def _news_persona_words(contact_key: str) -> list:
+            """news_share 选题用的人设词（tastes.likes + selfie_scenes 中文名词，
+            与反应式注入同一提取器）。人设解析与 _persona_style 同路（effective
+            persona=账号绑定人设），platform/account/chat 取会话快照 _conv_index。
+            任何失败返回 [] ＝ 纯当日轮换选题。"""
+            try:
+                conv = _conv_index.get(str(contact_key or "")) or {}
+                from src.ai.persona_voice import resolve_effective_persona_id
+                from src.ai.reply_variety import extract_persona_words
+                from src.utils.persona_manager import PersonaManager
+                pid = resolve_effective_persona_id(
+                    assistant.config.config or {},
+                    str(conv.get("platform") or ""),
+                    str(conv.get("account_id") or ""),
+                    str(conv.get("chat_key") or ""))
+                if not pid:
+                    return []
+                return extract_persona_words(
+                    PersonaManager.get_instance().get_persona_by_id(pid)) or []
+            except Exception:
+                return []
+
         def _opener(*, memory_key, silent_hours, stage, intimacy,
                     last_emotion="", last_emotion_intensity=-1.0, contact_key="",
                     min_silent_hours=None):
@@ -784,6 +1317,24 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 last_emotion=last_emotion,
                 last_emotion_intensity=last_emotion_intensity,
                 contact_key=contact_key)
+            # 今日新鲜事升级（news_share）：升级链＝生活分享 → 新鲜事 → 天气。
+            # life_beat/weather 在 build_proactive_opener 内部——life_share 结果
+            # 原样放行（生活线优先不变），落到 weather_hook/gentle_checkin 才试
+            # 新闻钩子。危机 block 时 mode 为空 → 天然不触发；gated 于
+            # companion.daily_topics.proactive.enabled（默认关）+ 72h 每会话频控
+            # （真发才落账，见 _on_teaser_sent）。无货/异常 → 原 op，零行为变化。
+            if str((op or {}).get("mode") or "") in _NEWS_UPGRADEABLE_MODES:
+                try:
+                    _ck = str(contact_key or memory_key or "")
+                    _upg = maybe_upgrade_to_news(
+                        op, assistant.config.config or {}, _ck,
+                        persona_words_fn=lambda: _news_persona_words(
+                            str(contact_key or "")))
+                    if str((_upg or {}).get("mode") or "") == NEWS_MODE:
+                        return _upg
+                except Exception:
+                    assistant.logger.debug(
+                        "[proactive] news_share 升级跳过", exc_info=True)
             # Stage T：bland gentle_checkin → 顺势采集某缺失画像（关系深 + 槽位未知 + 未在冷却）。
             # 按优先级择一问（一次开场只问一个，不连环逼问）；便宜条件(冷却/亲密)先过滤再查
             # 记忆（resolve 是 IO），控成本。生日 capture 见 Stage S；称呼 capture 由 heuristic 落库。
@@ -847,6 +1398,14 @@ async def maybe_start_companion_proactive(assistant) -> None:
         # 账本 v2（P0）：除冷却时间外记「连续未回 streak + 上次主动文案」；
         # 旧 float 格式文件透明升级，读写同一路径。
         _cd_store = JsonProactiveLedger(cd_path)
+        # news_share 72h 频控账本落盘（P2）：桌面打包版每日多次重启，
+        # 纯进程内账本会把 72h 窗缩水成「距上次重启」——镜像到实例数据根。
+        try:
+            set_news_ledger_path(str(
+                Path(assistant.config.config_path).parent
+                / "companion_news_opener.json"))
+        except Exception:
+            pass
 
         # 与 proactive_care(Phase O) 去重：已排关怀的会话让路（best-effort）。
         # 仅在 care 子系统已就绪（store 已挂 web_app.state）时生效，否则不去重、无害。
@@ -1005,6 +1564,15 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 # 「主动队列看起来没动」从猜测变成一屏可读原因。
                 "skip_summary": _skip_counts,
                 "skipped": _skip_samples,
+                # 冷启动隔离闸（.198 根因闸）：本轮抑制明细 + 进程累计 + 生效配置。
+                # 「闸有没有生效」必须零流量可读——否则装了跟没装在面板上长得一样。
+                "cold_start": {
+                    "enabled": bool(_cs_last.get("enabled")),
+                    "suppressed_this_tick": dict(_cs_last.get("suppressed") or {}),
+                    "suppressed_total": _cs_suppression_total(),
+                    "quota_exhausted": bool(_cs_last.get("quota_exhausted")),
+                    "config": dict(_cs_last.get("cfg") or {}),
+                },
             }
 
         ai_name = "她"
@@ -1014,13 +1582,61 @@ async def maybe_start_companion_proactive(assistant) -> None:
             ai_name = "她"
 
         def _peer_language(plan) -> str:
-            """会话语言（inbox ingest 持续标注的 conversations.language）。"""
+            """会话客户语言——证据口径（P2-198，2026-08-04 根因修复）。
+
+            旧实现只读 ``conversations.language`` 持久列，注释声称「inbox ingest
+            持续标注」——该假设对 Telegram **从不成立**（ingest 不写该列，恒
+            'unknown'）→ ``build_proactive_prompt`` 的语言硬约束整块被跳过 →
+            LLM 按中文人设默认写中文（生产实锤 telegram:8244899… 30 天收到
+            6 条中文晨安）。现走 ``peer_language_hint``（与出站翻译/硬闸同一
+            证据剥离口径）：入站证据投票 → 持久列 → 出站历史参照。
+            """
             try:
-                conv = assistant.inbox_store.get_conversation(
-                    str(plan.get("conversation_id") or "")) or {}
-                return str(conv.get("language") or "").strip().lower()
+                from src.ai.translation_service import detect_language
+                from src.inbox.outbound_translate import peer_language_hint
+                return peer_language_hint(
+                    assistant.inbox_store,
+                    str(plan.get("conversation_id") or ""),
+                    detect=detect_language)
             except Exception:
                 return ""
+
+        async def _guard_outbound_language(plan, text: str):
+            """主动触达出站语言闸（P2-198，2026-08-04）——与 AutosendWorker 同一
+            函数同一配置：``translate.enabled`` → 译成客户语言；否则 ``lang_gate``
+            （默认开）gate-only 只拦 CJK↔非 CJK 实质冲突。返回应发文本；
+            None=HOLD（调用方放弃本轮）；异常/服务缺位一律放行（绝不阻断主动链）。
+
+            背景：主动触达直发 ``orch.send``，不经 worker 的翻译回调——L2 修好后
+            这条链仍在裸奔（生产实锤 6 条中文晨安直达英文客户）。配置每次现读
+            （攒批热重载后免重启生效）。
+            """
+            try:
+                from src.inbox.outbound_translate import (
+                    parse_outbound_lang_gate_cfg,
+                    parse_outbound_translate_cfg,
+                    translate_outbound_text,
+                )
+                _cfg_root = assistant.config.config or {}
+                _otx = parse_outbound_translate_cfg(_cfg_root)
+                if not _otx.get("enabled") and not parse_outbound_lang_gate_cfg(
+                        _cfg_root).get("enabled"):
+                    return text
+                _st = getattr(getattr(assistant, "_web_app", None), "state", None)
+                _svc = getattr(_st, "translation_service", None) if _st else None
+                if _svc is None:
+                    return text
+                return await translate_outbound_text(
+                    {"conversation_id": str(plan.get("conversation_id") or ""),
+                     "text": text},
+                    translation_service=_svc,
+                    store=assistant.inbox_store,
+                    source_lang=_otx.get("source_lang") or "zh",
+                    style=_otx.get("style") or "chat",
+                    gate_only=not _otx.get("enabled"))
+            except Exception:
+                assistant.logger.debug("[proactive] 语言闸异常（放行）", exc_info=True)
+                return text
 
         def _persona_style(plan) -> str:
             """人设说话风格一行（personality.style + style_hint，截断）。
@@ -1091,8 +1707,22 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     plan["conversation_id"], limit=10) or []
             except Exception:
                 msgs = []
-            from src.utils.proactive_variety import format_recent_context
+            from src.utils.proactive_variety import (
+                format_recent_context,
+                rel_age_label,
+                trailing_unanswered_inbound,
+            )
             ctx = format_recent_context(msgs, now=time.time())
+            # 悬空话头（P0 2026-08-05）：最后若是 TA 发的且一直没回——晨安/回访
+            # 必须先接住它再问候（实锤：22:27「介绍老公」无人接，07:10 通用晨安）。
+            pending_in = trailing_unanswered_inbound(msgs, max_texts=2)
+            pending_age = ""
+            if pending_in:
+                try:
+                    pending_age = rel_age_label(
+                        time.time() - float((msgs[-1] or {}).get("ts") or 0.0))
+                except (TypeError, ValueError):
+                    pending_age = ""
             # few-shot 风格示范（默认关）：人工认可样本作口吻示范，反哺生成。
             # 按当前 plan 的 mode 分桶取示范（follow_up/gentle_checkin/ritual_* 各用各的口吻）。
             fs_block = ""
@@ -1114,7 +1744,9 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 ai_name, plan, recent_context=ctx, few_shot_block=fs_block,
                 peer_language=_peer_language(plan), scene_note=scene_note,
                 persona_style=_persona_style(plan),
-                avoid_texts=list(avoid_texts or []))
+                avoid_texts=list(avoid_texts or []),
+                pending_inbound=pending_in,
+                pending_inbound_age=pending_age)
             try:
                 text = await assistant.ai_client.chat(prompt)
             except Exception:
@@ -1243,7 +1875,8 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 pass
 
         async def _try_send_voice(plan, text) -> bool:
-            """主动开场语音分支：中文→克隆声(7852/预渲染)；外语→edge 多语(Phase15)。
+            """主动开场语音分支：中文 + clone_languages 名单内外语→克隆声
+            (hub_fish/7852/预渲染)；名单外外语→edge 多语(Phase15)。
             失败 False=回落文本。P1：每个早退/失败口记原因（修「配置 50% 实际
             6% 无人知晓」的观测盲区）。
             """
@@ -1281,44 +1914,53 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 except Exception:
                     return False
 
-            # 外语：edge 多语神经声（不占克隆 GPU；文案已是客户语言）
+            # 外语：clone_languages 名单内→走下方克隆链（P2 2026-08-02：同一把声
+            # 念外语，hub Fish 实证 en/ja/es；克隆失败回落文本、刻意**不**回落 edge
+            # ——同一人设一会克隆声一会通用声，比这条没有语音更伤（音色一致性方针））；
+            # 名单外→edge 多语神经声（Phase15 旧行为，不占克隆 GPU）
             from src.companion.proactive_voice_foreign import (
                 foreign_voice_allowed,
                 is_chinese_peer_language,
                 resolve_foreign_voice_cfg,
                 stage_foreign_voice_file,
+                use_clone_for_language,
             )
             if _plang and not is_chinese_peer_language(_plang):
-                try:
-                    _fb = resolve_foreign_voice_cfg(_cfg_root)
-                    if not foreign_voice_allowed(_fb, _plang):
-                        _media_skip("voice", "foreign_disabled")
-                        return False
-                    staged = await stage_foreign_voice_file(
-                        _cfg_root, platform, account_id, text,
-                        peer_language=_plang)
-                    if not staged:
-                        _media_skip("voice", "foreign_stage_failed")
-                        return False
-                    if await _deliver_staged(staged):
-                        assistant.logger.info(
-                            "[proactive] 外语语音开场已发 %s:%s chat=%s lang=%s mode=%s",
-                            platform, account_id, chat_key, _plang,
-                            plan.get("mode"))
-                        try:
-                            from src.companion.proactive_stats import record_voice
-                            record_voice(foreign=True)
-                        except Exception:
-                            pass
-                        return True
-                    _media_skip("voice", "foreign_deliver_failed")
-                except Exception:
-                    _media_skip("voice", "foreign_error")
+                _fb = resolve_foreign_voice_cfg(_cfg_root)
+                if use_clone_for_language(_fb, _plang):
                     assistant.logger.info(
-                        "[proactive] 外语语音开场失败，回落文本", exc_info=True)
-                return False
+                        "[proactive] 外语开场走克隆链 lang=%s（clone_languages 名单内）",
+                        _plang)
+                else:
+                    try:
+                        if not foreign_voice_allowed(_fb, _plang):
+                            _media_skip("voice", "foreign_disabled")
+                            return False
+                        staged = await stage_foreign_voice_file(
+                            _cfg_root, platform, account_id, text,
+                            peer_language=_plang)
+                        if not staged:
+                            _media_skip("voice", "foreign_stage_failed")
+                            return False
+                        if await _deliver_staged(staged):
+                            assistant.logger.info(
+                                "[proactive] 外语语音开场已发 %s:%s chat=%s lang=%s mode=%s",
+                                platform, account_id, chat_key, _plang,
+                                plan.get("mode"))
+                            try:
+                                from src.companion.proactive_stats import record_voice
+                                record_voice(foreign=True)
+                            except Exception:
+                                pass
+                            return True
+                        _media_skip("voice", "foreign_deliver_failed")
+                    except Exception:
+                        _media_skip("voice", "foreign_error")
+                        assistant.logger.info(
+                            "[proactive] 外语语音开场失败，回落文本", exc_info=True)
+                    return False
 
-            # 中文：克隆声全套（预渲染 / 7852 混合保真）
+            # 克隆声全套（预渲染 / hub_fish / 7852 混合保真）：中文 + 名单内外语
             try:
                 from src.integrations.account_orchestrator import get_orchestrator
                 orch = get_orchestrator(_cfg_root)
@@ -1657,11 +2299,70 @@ async def maybe_start_companion_proactive(assistant) -> None:
                             plan.get("conversation_id"),
                             (retry or text)[:36], _dup[:36])
                         return False
+            # 1.07) 反编造守卫（P1 2026-08-03 神马搜索事故）：文案凭空断言了无据的
+            # 共同往事（"你以前拽我去打球"而该会话零记忆事实）→ 重写一次；仍编造 →
+            # 放弃本轮（与变体守卫同哲学：宁可不发也不当场穿帮）。放在文本/语音/照片
+            # 三条发送分支之前——语音稿与配文同源，一次拦全部。prompt 层已有主防线
+            # （build_proactive_prompt 无条件注入），这里是后置兜底。best-effort。
+            try:
+                from src.utils.proactive_fabrication_guard import (
+                    detect_fabricated_memory,
+                )
+                _fab, _fab_ev = detect_fabricated_memory(
+                    text, plan.get("context_facts") or [])
+                if _fab:
+                    _retry = await _gen_text(
+                        plan, scene_note=_scene,
+                        avoid_texts=(_avoid or []) + [text])
+                    _fab2 = True
+                    if _retry:
+                        _fab2, _ = detect_fabricated_memory(
+                            _retry, plan.get("context_facts") or [])
+                    if _retry and not _fab2:
+                        text = _retry
+                    else:
+                        _cd_store.mark_attempt(
+                            plan["conversation_id"], time.time())
+                        try:
+                            from src.companion.proactive_stats import (
+                                record_fabrication_block,
+                            )
+                            record_fabrication_block()
+                        except Exception:
+                            pass
+                        assistant.logger.info(
+                            "[proactive] 反编造守卫拦截 cid=%s：%s（文案=%r），本轮放弃",
+                            plan.get("conversation_id"), _fab_ev, text[:48])
+                        return False
+            except Exception:
+                assistant.logger.debug(
+                    "[proactive] 反编造守卫异常（放行）", exc_info=True)
             # 1.1) 出站优惠守卫（P14）：目标桥带来的开场也可能被 LLM 加一句
             # 「给你打个折」。只守目标驱动的开场（普通陪伴开场不碰），文案/
             # 配图配文/语音稿三条分支同源，所以放在这里一次搞定。
             if (plan or {}).get("_goal_action_id"):
                 text = _guard_offer_text(text, plan)
+            # 1.2) 出站语言闸（P2-198，2026-08-04）：照片配文/语音稿/文本三分支
+            # 同源，在此一次守住——生产实锤 telegram:8244899… 30 天收到 6 条
+            # 中文晨安（prompt 语言约束因 conversations.language 恒 unknown 被
+            # 整块跳过 + 直发链无任何翻译/闸门）。HOLD → 记 attempt 放弃本轮
+            # （下 tick 冷却窗内不重烧 LLM，翻译引擎恢复后自然重试）。
+            _gated = await _guard_outbound_language(plan, text)
+            if _gated is None:
+                _cd_store.mark_attempt(plan["conversation_id"], time.time())
+                try:
+                    from src.companion.proactive_stats import (
+                        record_lang_gate_block,
+                    )
+                    record_lang_gate_block()
+                except Exception:
+                    pass
+                assistant.logger.info(
+                    "[proactive] 语言闸拦截 cid=%s（文案=%r），本轮放弃",
+                    plan.get("conversation_id"), text[:48])
+                return False
+            if _gated and _gated != text:
+                text = _gated
             # 账本记录用：最终要发出的文案（成功后 mark_send 写入，供下次反复读）
             plan["_sent_text"] = text
             platform = plan["platform"]
@@ -1765,6 +2466,21 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 except Exception:
                     assistant.logger.debug(
                         "[proactive] life_share 配额落账失败", exc_info=True)
+            # news_share 真发成功才记 72h 频控（与 life_share 配额同哲学：
+            # 规划/生成失败/被守卫拦下都不烧窗口）；同轮记同日话题用量
+            # （fact=标题前 80 字），下一发自动避开已用话题。
+            if _mode == NEWS_MODE:
+                try:
+                    note_news_opener(
+                        str((plan or {}).get("conversation_id") or ""))
+                except Exception:
+                    assistant.logger.debug(
+                        "[proactive] news_share 频控落账失败", exc_info=True)
+                try:
+                    note_news_topic_used(str((plan or {}).get("fact") or ""))
+                except Exception:
+                    assistant.logger.debug(
+                        "[proactive] news 话题用量落账失败", exc_info=True)
             # P1 质量闭环：真发文案落样本库（此前只记「试发」采样，真发的文案
             # 反而无处评分）——运营在采样面板 👍/👎 的就是真实发出的开场。
             if sample_store is not None and (plan or {}).get("_sent_text"):

@@ -18,17 +18,19 @@ class GoalStats:
         "_lock", "_since", "created", "done", "failed", "expired", "cancelled",
         "paused", "beats_planned", "hold_emotion", "hold_silent",
         "injected_draft", "injected_reply", "injected_proactive",
+        "injected_opener",
         "beats_sent_proactive", "settle_runs", "milestones_advanced",
         "feedback_adopt", "feedback_reject", "feedback_undo", "agenda_reads",
         "profile_captured", "catalog_injected",
         "catalog_cta_order", "catalog_cta_cs", "catalog_cta_roi",
         "auto_created", "profile_captured_llm",
-        "orders_received", "orders_matched",
+        "orders_received", "orders_matched", "orders_late_settled",
         "link_stripped", "retention_created", "winback_created",
         "reconvert_created", "churn_captured", "churn_steered",
         "offer_cited", "offer_by_id", "offer_claims_stripped",
         "offer_strip_samples", "offer_strip_by_source",
         "offer_strip_by_persona", "claim_stripped",
+        "deadline_shorten", "deadline_extend",
     )
 
     def __init__(self) -> None:
@@ -46,6 +48,7 @@ class GoalStats:
         self.injected_draft = 0
         self.injected_reply = 0
         self.injected_proactive = 0
+        self.injected_opener = 0
         self.beats_sent_proactive = 0
         self.settle_runs = 0
         self.milestones_advanced = 0
@@ -62,6 +65,7 @@ class GoalStats:
         self.profile_captured_llm = 0
         self.orders_received = 0
         self.orders_matched = 0
+        self.orders_late_settled = 0
         self.link_stripped = 0
         self.retention_created = 0
         self.winback_created = 0
@@ -75,6 +79,8 @@ class GoalStats:
         self.offer_strip_by_source: Dict[str, int] = {}
         self.offer_strip_by_persona: Dict[str, int] = {}
         self.claim_stripped = 0
+        self.deadline_shorten = 0
+        self.deadline_extend = 0
 
     # ── 记录（绝不抛）────────────────────────────────────────────────────────
     def record_created(self) -> None:
@@ -115,6 +121,8 @@ class GoalStats:
                 self.injected_draft += 1
             elif c == "proactive":
                 self.injected_proactive += 1
+            elif c == "opener":
+                self.injected_opener += 1
             else:
                 self.injected_reply += 1
 
@@ -171,11 +179,15 @@ class GoalStats:
         with self._lock:
             self.profile_captured_llm += max(1, int(slots or 1))
 
-    def record_order(self, *, matched: bool) -> None:
+    def record_order(self, *, matched: bool, late: bool = False) -> None:
+        """``late=True``＝迟到结算（P6：订单到时目标已到期/失败，按硬事实复活
+        为 done）——单独计数供观测「站外成交漏标」有多系统性。"""
         with self._lock:
             self.orders_received += 1
             if matched:
                 self.orders_matched += 1
+            if late:
+                self.orders_late_settled += 1
 
     def record_link_stripped(self, n: int = 1) -> None:
         """链接纪律守卫剥离越纪律官网链 +n（P4 出站守卫命中面观测）。"""
@@ -221,6 +233,19 @@ class GoalStats:
         with self._lock:
             self.claim_stripped += max(0, int(n or 0))
 
+    def record_deadline_edit(self, direction: str) -> None:
+        """坐席改目标期限一次（P25 续）：``shorten``=加急 / ``extend``=延期。
+
+        进程级脉搏（重启清零）——耐久口径在 goal_events 的
+        ``deadline_days:X->Y`` 明细里，周审/P2 校准挖那份。加急占比高
+        ＝坐席在跟模板默认节奏对着干＝default_days 该调的信号。"""
+        with self._lock:
+            d = str(direction or "")
+            if d == "shorten":
+                self.deadline_shorten += 1
+            elif d == "extend":
+                self.deadline_extend += 1
+
     def record_offer_claim_stripped(
         self, n: int = 1, samples: Any = (), source: str = "",
         persona: str = "",
@@ -259,7 +284,7 @@ class GoalStats:
     def dump(self) -> Dict[str, Any]:
         with self._lock:
             injected = (self.injected_draft + self.injected_reply
-                        + self.injected_proactive)
+                        + self.injected_proactive + self.injected_opener)
             out: Dict[str, Any] = {
                 "since": self._since,
                 "created": self.created,
@@ -274,6 +299,7 @@ class GoalStats:
                 "injected": {"draft": self.injected_draft,
                              "reply": self.injected_reply,
                              "proactive": self.injected_proactive,
+                             "opener": self.injected_opener,
                              "total": injected},
                 "feedback": {"adopt": self.feedback_adopt,
                              "reject": self.feedback_reject},
@@ -291,7 +317,8 @@ class GoalStats:
                                 "roi": self.catalog_cta_roi},
                 "auto_created": self.auto_created,
                 "orders": {"received": self.orders_received,
-                           "matched": self.orders_matched},
+                           "matched": self.orders_matched,
+                           "late_settled": self.orders_late_settled},
                 "link_stripped": self.link_stripped,
                 "retention_created": self.retention_created,
                 "winback_created": self.winback_created,
@@ -305,6 +332,8 @@ class GoalStats:
                 "offer_strip_by_source": dict(self.offer_strip_by_source),
                 "offer_strip_by_persona": dict(self.offer_strip_by_persona),
                 "claim_stripped": self.claim_stripped,
+                "deadline_edits": {"shorten": self.deadline_shorten,
+                                   "extend": self.deadline_extend},
             }
             out["active"] = bool(
                 self.created or injected or self.beats_planned
@@ -334,6 +363,7 @@ class GoalStats:
                 f'goals_injected_total{{chain="draft"}} {self.injected_draft}',
                 f'goals_injected_total{{chain="reply"}} {self.injected_reply}',
                 f'goals_injected_total{{chain="proactive"}} {self.injected_proactive}',
+                f'goals_injected_total{{chain="opener"}} {self.injected_opener}',
                 "# HELP goals_milestones_advanced_total Milestone advances",
                 "# TYPE goals_milestones_advanced_total counter",
                 f"goals_milestones_advanced_total {self.milestones_advanced}",
@@ -399,6 +429,10 @@ class GoalStats:
                 "# HELP goals_claim_stripped_total Outbound factual claims contradicting the catalog, stripped",
                 "# TYPE goals_claim_stripped_total counter",
                 f"goals_claim_stripped_total {self.claim_stripped}",
+                "# HELP goals_deadline_edits_total Agent deadline adjustments (pace changes)",
+                "# TYPE goals_deadline_edits_total counter",
+                f'goals_deadline_edits_total{{direction="shorten"}} {self.deadline_shorten}',
+                f'goals_deadline_edits_total{{direction="extend"}} {self.deadline_extend}',
             ]
             return "\n".join(lines) + "\n"
 
@@ -417,6 +451,7 @@ class GoalStats:
             self.injected_draft = 0
             self.injected_reply = 0
             self.injected_proactive = 0
+            self.injected_opener = 0
             self.beats_sent_proactive = 0
             self.settle_runs = 0
             self.milestones_advanced = 0
@@ -446,6 +481,8 @@ class GoalStats:
             self.offer_strip_by_source = {}
             self.offer_strip_by_persona = {}
             self.claim_stripped = 0
+            self.deadline_shorten = 0
+            self.deadline_extend = 0
 
 
 _SINGLETON: Optional[GoalStats] = None

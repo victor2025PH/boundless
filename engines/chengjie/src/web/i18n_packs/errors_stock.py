@@ -246,6 +246,7 @@ ZH = {
     "err.svc.handoff_store_not_ready": "人工转接存储未初始化",
     "err.svc.inbox_not_ready": "inbox_store 未就绪",
     "err.svc.kb_not_ready": "kb_store 未就绪",
+    "err.svc.upstream_unreachable": "连不上官网服务，请检查网络后重试。",
     "err.svc.skill_manager_not_ready": "SkillManager 未初始化（Bot 未运行）",
     "err.svc.strategy_tracker_not_ready": "策略追踪器未就绪",
     "err.tg.file_too_large_20mb": "文件过大（最大 20MB）",
@@ -312,6 +313,10 @@ ZH = {
     "err.ws.unsupported_bot_flag": "不支持的机器人标记值: {value}（应为 bot/human/clear）",
     "err.ws.until_ts_invalid": "until_ts 非法",
     "err.ws.until_ts_past": "不能搁置到过去的时间，请选择未来时刻",
+    "err.draft.regen_failed": "重新生成失败：AI 未产出内容，请稍后重试或用「改写后发送」",
+    "err.ws.group_confirm_required": "这是群聊/频道：开全自动后 AI 会在群里自动发言，请确认后重试",
+    "err.ws.config_write_unavailable": "配置写入能力不可用（ConfigManager 未就绪）",
+    "err.ws.config_write_failed": "配置写入失败：{err}",
 }
 
 EN = {
@@ -560,6 +565,7 @@ EN = {
     "err.svc.handoff_store_not_ready": "Human handoff store not initialized",
     "err.svc.inbox_not_ready": "Inbox store is not ready",
     "err.svc.kb_not_ready": "Knowledge base store is not ready",
+    "err.svc.upstream_unreachable": "Couldn’t reach the vendor site. Check your network and try again.",
     "err.svc.skill_manager_not_ready": "SkillManager not initialized (Bot not running)",
     "err.svc.strategy_tracker_not_ready": "Strategy tracker not ready",
     "err.tg.file_too_large_20mb": "File too large (max 20MB)",
@@ -626,4 +632,8 @@ EN = {
     "err.ws.unsupported_bot_flag": "Unsupported bot flag value: {value} (expected bot/human/clear)",
     "err.ws.until_ts_invalid": "until_ts is invalid",
     "err.ws.until_ts_past": "Cannot snooze to a past time; pick a future moment",
+    "err.draft.regen_failed": "Regeneration failed: the AI produced no content. Retry later or use \"edit & send\"",
+    "err.ws.group_confirm_required": "This is a group/channel: with Full-Auto the AI will speak in the group on its own. Confirm to proceed",
+    "err.ws.config_write_unavailable": "Config write capability unavailable (ConfigManager not ready)",
+    "err.ws.config_write_failed": "Config write failed: {err}",
 }

@@ -105,6 +105,11 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
         except Exception:
             logger.debug("注册 telegram protocol provider 失败", exc_info=True)
         try:
+            from src.integrations.telegram_phone_login import maybe_register as _tg_phone_reg
+            _tg_phone_reg(cfg)
+        except Exception:
+            logger.debug("注册 telegram phone provider 失败", exc_info=True)
+        try:
             from src.integrations.whatsapp_baileys_login import maybe_register as _wa_reg
             _wa_reg(cfg)
         except Exception:
@@ -114,6 +119,16 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
             _mg_reg(cfg)
         except Exception:
             logger.debug("注册 messenger web provider 失败", exc_info=True)
+        try:
+            from src.integrations.zalo_personal_login import maybe_register as _zl_reg
+            _zl_reg(cfg)
+        except Exception:
+            logger.debug("注册 zalo personal provider 失败", exc_info=True)
+        try:
+            from src.integrations.instagram_web_login import maybe_register as _ig_reg
+            _ig_reg(cfg)
+        except Exception:
+            logger.debug("注册 instagram web provider 失败", exc_info=True)
         try:
             from src.integrations.line_protocol_login import maybe_register as _ln_reg
             _ln_reg(cfg)
@@ -134,6 +149,14 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                 get_proxy_pool().assign(sess.proxy_id, f"{platform}:{account_id}")
         except Exception:
             logger.debug("账号注册表上线 upsert 失败", exc_info=True)
+        # P1-⑧ 激活里程碑：首个账号接入成功（所有平台/形态的登录成功都汇到本函数，
+        # 单点上报；beacon 未装=no-op，只送 platform/mode 两个低敏字段）
+        try:
+            from src.utils.telemetry_beacon import note_milestone
+            note_milestone("account_online",
+                           f"platform={platform} mode={getattr(sess, 'mode', '')}")
+        except Exception:
+            logger.debug("account_online 里程碑上报失败（忽略）", exc_info=True)
 
     async def _diagnose_modes(platform: str, modes: list, *, force: bool = False) -> None:
         """给每个 mode 补 ``ready`` / ``blockers``，并把笼统的 reason_code 换成真原因。
@@ -191,6 +214,23 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
         await _diagnose_modes(platform, modes, force=bool(recheck))
         return {"ok": True, "platform": platform, "modes": modes}
 
+    @app.get("/api/platforms/telegram/login/preflight")
+    async def api_tg_login_preflight(request: Request, force: int = 0):
+        """Telegram 直连可达性预检（P1-⑥，2026-08-10 事故链）。
+
+        进入扫码步时前端调用：直连不通（大陆典型形态）→ 黄条提前给「配代理」
+        路标，而不是让用户撞完失败再猜。只探 TCP 通性（60s 缓存），**只提示
+        不阻断**——用户给本次登录配了代理时直连不通是预期态。
+        """
+        api_auth(request)
+        try:
+            from src.integrations.tg_preflight import probe_telegram_reachable
+            res = await probe_telegram_reachable(force=bool(force))
+        except Exception:  # noqa: BLE001 —— 预检自身故障=没有信息，绝不影响登录
+            logger.debug("telegram 预检探测失败（静默）", exc_info=True)
+            return {"ok": False}
+        return {"ok": True, **res}
+
     @app.post("/api/platforms/{platform}/login/start")
     async def api_platform_login_start(platform: str, request: Request):
         api_auth(request)
@@ -212,6 +252,7 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
         cfg_group = str((body or {}).get("group") or "")
         cfg_proxy_id = str((body or {}).get("proxy_id") or "")
         cfg_use_fp = bool((body or {}).get("use_fingerprint") or False)
+        cfg_phone = str((body or {}).get("phone") or "")
         _ensure_login_providers()
         # 解析登录方式：缺省取该平台默认 mode
         platform_cfg = _platform_login_cfg().get(platform, {}) or {}
@@ -252,9 +293,13 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                 login_ctx["fingerprint"] = fp["profile"]
             except Exception:
                 logger.debug("生成指纹失败", exc_info=True)
+        if cfg_phone:
+            login_ctx["phone"] = cfg_phone
 
         qr_url = qr_image = instruction = instruction_key = prov_reason = ""
-        poll_fn = cancel_fn = submit_fn = provider_state = None
+        poll_fn = cancel_fn = submit_fn = submit_code_fn = resend_code_fn = None
+        provider_state = None
+        init_status = init_detail = ""
         provider = get_login_provider(platform, mode)
         if provider is not None:
             try:
@@ -273,8 +318,12 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                 poll_fn = info.get("poll")
                 cancel_fn = info.get("cancel")
                 submit_fn = info.get("submit_password")
+                submit_code_fn = info.get("submit_code")
+                resend_code_fn = info.get("resend_code")
                 provider_state = info.get("state")
                 prov_reason = str(info.get("reason_code") or "")
+                init_status = str(info.get("status") or "")
+                init_detail = str(info.get("detail") or "")
             except Exception:
                 logger.debug("登录 provider[%s:%s] 失败（回落设备端指引）",
                              platform, mode, exc_info=True)
@@ -286,14 +335,19 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
             label=cfg_label, group=cfg_group,
             proxy_id=cfg_proxy_id, fingerprint_id=fingerprint_id,
             provider_state=provider_state, poll_fn=poll_fn, cancel_fn=cancel_fn,
-            submit_fn=submit_fn,
+            submit_fn=submit_fn, submit_code_fn=submit_code_fn,
+            resend_code_fn=resend_code_fn,
+            initial_status=init_status, reason_code=prov_reason,
+            detail=init_detail,
         )
         _funnel(sess, "started")
         if sess.qr_image or sess.qr_url:
             _funnel(sess, "qr_shown")
         # provider 开局就报致命故障（组件缺失/客户端起不来）且没给 poll：立刻置终态，
         # 否则会话只能挂到 TTL 耗尽——用户对着转圈等满三分钟才等来一句超时。
-        if prov_reason and poll_fn is None:
+        if sess.status == "failed" and sess.reason_code:
+            _funnel(sess, "failed", reason_code=sess.reason_code)
+        elif prov_reason and poll_fn is None:
             sess.reason_code = prov_reason
             sess.status = "failed"
             _funnel(sess, "failed", reason_code=prov_reason)
@@ -442,6 +496,82 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
             logger.debug("provider submit_password 失败", exc_info=True)
             return {"ok": False, "status": sess.status,
                     "detail": tr(request, "err.login.password_submit_failed")}
+
+    @app.post("/api/platforms/{platform}/login/{login_id}/code")
+    async def api_platform_login_code(platform: str, login_id: str, request: Request):
+        """手机号登录：提交短信/App 验证码（仅 status==code_needed 的会话有效）。
+
+        body：``{"code": "..."}``。码错停留 code_needed 可重试；成功→authorized，
+        或→password_needed（两步验证）。
+        """
+        api_auth(request)
+        platform = str(platform or "").lower()
+        sess = get_login_manager().get(login_id)
+        if sess is None:
+            return {"ok": False, "status": "expired",
+                    "detail": tr(request, "err.login.session_expired")}
+        if sess.submit_code_fn is None:
+            return {"ok": False, "status": sess.status,
+                    "detail": tr(request, "err.login.code_unsupported")}
+        body: Dict[str, Any] = {}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        code = str((body or {}).get("code") or "")
+        if not code:
+            return {"ok": False, "status": sess.status,
+                    "detail": tr(request, "err.login.code_empty")}
+        try:
+            res = sess.submit_code_fn(sess, code)
+            if inspect.isawaitable(res):
+                res = await res
+            res = res or {}
+            st = str(res.get("status") or sess.status)
+            sess.status = st
+            rc = str(res.get("reason_code") or "")
+            if rc:
+                sess.reason_code = rc
+            if st == "authorized" and res.get("account_id"):
+                _persist_login_account(platform, str(res["account_id"]), sess)
+                _funnel(sess, "authorized")
+            elif st == "failed":
+                _funnel(sess, "failed", reason_code=sess.reason_code)
+            return {"ok": st == "authorized", "status": st,
+                    "detail": str(res.get("detail") or ""),
+                    "reason_code": sess.reason_code}
+        except Exception:
+            logger.debug("provider submit_code 失败", exc_info=True)
+            return {"ok": False, "status": sess.status,
+                    "detail": tr(request, "err.login.code_submit_failed")}
+
+    @app.post("/api/platforms/{platform}/login/{login_id}/resend-code")
+    async def api_platform_login_resend_code(
+        platform: str, login_id: str, request: Request,
+    ):
+        """手机号登录：重发验证码（仅 code_needed；刷新 phone_code_hash）。"""
+        api_auth(request)
+        sess = get_login_manager().get(login_id)
+        if sess is None:
+            return {"ok": False, "status": "expired",
+                    "detail": tr(request, "err.login.session_expired")}
+        if sess.resend_code_fn is None:
+            return {"ok": False, "status": sess.status,
+                    "detail": tr(request, "err.login.code_unsupported")}
+        try:
+            res = sess.resend_code_fn(sess)
+            if inspect.isawaitable(res):
+                res = await res
+            res = res or {}
+            st = str(res.get("status") or sess.status)
+            sess.status = st
+            return {"ok": True, "status": st,
+                    "detail": str(res.get("detail") or ""),
+                    "reason_code": str(res.get("reason_code") or "")}
+        except Exception:
+            logger.debug("provider resend_code 失败", exc_info=True)
+            return {"ok": False, "status": sess.status,
+                    "detail": tr(request, "err.login.code_resend_failed")}
 
     @app.post("/api/platforms/{platform}/login/{login_id}/cancel")
     async def api_platform_login_cancel(platform: str, login_id: str, request: Request):

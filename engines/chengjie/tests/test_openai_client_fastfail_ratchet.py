@@ -27,7 +27,9 @@ _SRC = Path(__file__).resolve().parents[1] / "src"
 #   ② 构造点前 25 行内出现 connect=（httpx.Timeout 拆分连接/读超时）。
 _REQUIRED_FASTFAIL: Dict[str, int] = {
     "ai/ai_client.py": 4,             # 主链 / 嵌入双活 / 本地兜底 / 云 Key 池
-    "ai/translation_engines.py": 1,   # ollama_mt（出站翻译热路，base_urls 含 LAN 双活）
+    # ollama_mt 已于 2026-08-09 弃用 AsyncOpenAI（/v1 兼容层忽略请求级 keep_alive
+    # → 模型反复冷加载），改走 httpx 原生 /api/chat，连接 5s 快败语义在
+    # OllamaMTEngine._post_chat 内保留（httpx.Timeout(read, connect=5.0)）。
     "vision_client.py": 1,            # VLM 双活（176/140）——早已合规，钉住防回退
 }
 

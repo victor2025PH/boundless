@@ -406,6 +406,13 @@ def register_desktop_routes(app, *, api_auth) -> None:
             body = {}
         from src.web.desktop_inject_health import get_inject_health_store
         rec = get_inject_health_store().record(body or {})
+        # 抽取率趋势旁路（默认关；供「归零判 → 比率阈值」校准攒分布）。record 内部
+        # 自带闸门与吞异常，这里再兜一层防 import 期意外拖垮健康上报主链。
+        try:
+            from src.web.inject_extract_trend import record_inject_extract_trend
+            record_inject_extract_trend(rec)
+        except Exception:
+            logger.debug("[desktop] extract 趋势落库失败（已忽略）", exc_info=True)
         return {"ok": True, "status": rec.get("status")}
 
     @app.get("/api/desktop/inject-health")
@@ -460,6 +467,40 @@ def register_desktop_routes(app, *, api_auth) -> None:
                 "alerts": alerts,
                 "selector_diagnosis": selector_failure_breakdown(alerts),
                 "events": store.recent_events(limit=limit)}
+
+    @app.get("/api/desktop/inject-health/extract-trend")
+    async def api_desktop_inject_health_extract_trend(
+            request: Request, _=Depends(api_auth)):
+        """抽取率按日聚合（阈值校准数据面）：近 N 天各平台装饰率分布 + 回流归零率。
+
+        为「归零判 → 比率阈值」升级攒真实分布（详见 ``inject_extract_trend`` 模块
+        docstring）。未开启趋势落库（inbox.desktop_inject.trend_log=false）→ 返回
+        enabled:false + 空序列，消费方（校准工具/诊断读数）据此提示先开闸。
+        ``calibration`` 是**建议阈值**（不改告警行为）：数据攒够即逐平台给出可安全从
+        「归零判」升级到的比率阈值（详见 ``inject_extract_trend.suggest_extract_threshold``），
+        样本不足时 status=insufficient——运营看数后再显式决定是否切换。
+        query: days?（默认 14，上限 120）
+        返回: {ok, enabled, days:[{day,platform,accounts,reports,decorated_rate,
+               zero_rate,ratio_b0..b4,ingest_zero_rate,...}],
+               calibration:[{platform,status,threshold,samples,...}]}
+        """
+        from src.web.inject_extract_trend import (
+            get_inject_extract_trend_store, suggest_extract_thresholds,
+        )
+        store = get_inject_extract_trend_store()
+        if store is None:
+            return {"ok": True, "enabled": False, "days": [], "calibration": []}
+        try:
+            days = int(request.query_params.get("days") or 14)
+        except Exception:
+            days = 14
+        try:
+            store.prune()
+        except Exception:
+            logger.debug("[desktop] extract 趋势 prune 失败（已忽略）", exc_info=True)
+        rows = store.daily(days=days)
+        return {"ok": True, "enabled": True, "days": rows,
+                "calibration": suggest_extract_thresholds(rows)}
 
     @app.get("/api/desktop/outbound")
     async def api_desktop_outbound_pull(request: Request, _=Depends(api_auth)):

@@ -288,6 +288,52 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         report["window_days"] = d
         return report
 
+    @app.get("/api/goals/report/accounts")
+    async def goals_report_accounts(
+        request: Request, days: int = 30, _auth=Depends(auth_dep)
+    ):
+        """账号视角矩阵（P0 2026-08-09）：每（平台×账号）的 进行中/完成/未达成/
+        完成率/赢单数+金额/平均达成天数/主力模板 + 顶层合计——「哪个号在出成绩」。
+        只读；viewer 照常可读。"""
+        svc = _require_enabled(request)
+        store = _store(svc)
+        from src.companion.goals.report import matrix_report
+        d = max(1, min(int(days or 30), 365))
+        out = matrix_report(store, days=d, lang=_lang(request))
+        out["ok"] = True
+        return out
+
+    @app.get("/api/goals/report/contacts")
+    async def goals_report_contacts(
+        request: Request,
+        days: int = 30,
+        status: str = "done",
+        platform: str = "",
+        account_id: str = "",
+        template: str = "",
+        page: int = 1,
+        page_size: int = 25,
+        _auth=Depends(auth_dep),
+    ):
+        """账号×客户明细（P0 2026-08-09）：完成客户清单＝销售线索列表——
+        每行带客户展示名、完成方式（订单/人工/自动结算）、金额、用时、
+        **完成后是否已跟进**（done 后有出站消息＝已跟进，客观推导零打点）、
+        推荐后续链。分页 + 状态/平台/账号/模板筛选。只读；viewer 照常可读。"""
+        svc = _require_enabled(request)
+        store = _store(svc)
+        from src.companion.goals.report import contacts_report
+        st = str(status or "").strip().lower()
+        if st and st not in ("done", "active", "failed", "expired",
+                             "cancelled", "ended", "all"):
+            raise HTTPException(400, tr(request, "err.goals.bad_state"))
+        out = contacts_report(
+            store, _inbox_store(),
+            days=days, status="" if st == "all" else st,
+            platform=platform, account_id=account_id, template=template,
+            page=page, page_size=page_size, lang=_lang(request))
+        out["ok"] = True
+        return out
+
     @app.get("/api/goals/instr-samples")
     async def goals_instr_samples(
         request: Request, limit: int = 20, _auth=Depends(auth_dep)
@@ -338,6 +384,11 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         # 「拍/注入/目录/画像/守卫剥离」——workspace metrics 是坐席会话口径，
         # admin bearer 读不到）。内容为计数+守卫片段，无客户原文。
         snap["stats"] = stats_dump
+        # P3 2026-08-09：常备扫描循环心跳（bootstrap 挂 app.state）——「没跑」
+        # 和「没货」必须从外面分得出来（P0 扫描器挂死调度器上静默从未运行的
+        # 教训）。空 dict=循环没挂载（旧进程/测试 app），如实外露。
+        snap["scan_loop"] = dict(
+            getattr(request.app.state, "goal_scan_state", None) or {})
         return snap
 
     @app.post("/api/goals/batch")
@@ -1040,3 +1091,54 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 "goal": svc.goal_view(goal, lang=_lang(request))}
 
     logger.info("营销目标路由已注册（/api/goals*）")
+
+
+def register_goal_report_page(app, *, page_auth, templates,
+                              config_manager=None):
+    """目标达成报表页（P0 2026-08-09；与 agent_perf 同族：主管专属工作台页）。
+
+    GET /workspace/goal-report —— 账号×客户完成情况 + 完成客户跟进动作面。
+    数据走 ``/api/goals/report/accounts`` + ``/api/goals/report/contacts``；
+    发消息复用 ``/api/unified-inbox/send``（幂等键 ``goalrpt-*``）。
+    goals 未启用时页面照常可开（前端按 403 显示未启用引导，与 ops 卡同语义）。
+    """
+    from fastapi import Depends
+    from fastapi.responses import HTMLResponse, RedirectResponse
+
+    def _session_role(request: Request) -> str:
+        try:
+            return str(request.session.get("role", "") or "")
+        except Exception:
+            return ""
+
+    def _ctx(request) -> dict:
+        try:
+            sess = request.session
+        except (AttributeError, AssertionError):
+            sess = {}
+        ctx: dict = {
+            "user_name": sess.get("username") or "",
+            "user_display_name": (
+                sess.get("display_name") or sess.get("username") or ""),
+        }
+        try:
+            if config_manager is not None:
+                _wa = (config_manager.config or {}).get("web_admin", {}) or {}
+                if _wa.get("site_name"):
+                    ctx["site_name"] = _wa["site_name"]
+        except Exception:
+            pass
+        return ctx
+
+    @app.get("/workspace/goal-report", response_class=HTMLResponse)
+    async def workspace_goal_report_page(
+        request: Request, _=Depends(page_auth),
+    ):
+        """目标达成报表（主管专属；非主管重定向到工作台）。"""
+        # 与 drafts_routes._SUPERVISOR_ROLES 同口径（master/admin=主管）
+        if _session_role(request) not in ("master", "admin"):
+            return RedirectResponse(url="/workspace", status_code=302)
+        return templates.TemplateResponse(
+            request, "goal_report.html", _ctx(request))
+
+    logger.info("目标达成报表页已注册（/workspace/goal-report）")

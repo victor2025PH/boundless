@@ -210,43 +210,83 @@ async def enrich_inbound_media_text(
         return cap, ""
 
     local = _resolve_local_path(media_ref)
-    if not local:
-        # 远程 URL 或文件不存在 → 无法识别，保留 caption 或占位
-        if mt:
-            _record_enrich(mt, cfg, understood=False, reason="unresolved")
-        return (cap or media_placeholder(mt)), ""
-
-    # 宿主（TelegramClient）启动时未建 transcriber、但配置已（热）启用 → 懒建兜底
-    if voice_transcriber is None and mt in (_VOICE_KINDS | _VIDEO_KINDS):
-        voice_transcriber = lazy_voice_transcriber(cfg)
-
-    desc = ""
+    tmp_download: Optional[str] = None
     try:
-        if mt in _IMAGE_KINDS:
-            desc = await _describe_image(local, cfg)
-        elif mt in _VOICE_KINDS:
-            desc = await _transcribe_voice(local, cfg, voice_transcriber)
-        elif mt in _VIDEO_KINDS:
-            desc = await _understand_video(local, cfg, voice_transcriber)
-    except Exception:
-        logger.debug("[media_enrich] 识别失败 kind=%s", mt, exc_info=True)
+        # 官方通道镜像常把 CDN https 写进 media_ref（IG/Messenger/Zalo）；
+        # 本地解析不到时，按 media.remote_fetch（默认关，SSRF 护栏）受控下载再识别。
+        if not local:
+            local, tmp_download = await _maybe_fetch_remote(media_ref, mt, cfg)
+        if not local:
+            if mt:
+                _record_enrich(mt, cfg, understood=False, reason="unresolved")
+            return (cap or media_placeholder(mt)), ""
+
+        # 宿主（TelegramClient）启动时未建 transcriber、但配置已（热）启用 → 懒建兜底
+        if voice_transcriber is None and mt in (_VOICE_KINDS | _VIDEO_KINDS):
+            voice_transcriber = lazy_voice_transcriber(cfg)
+
         desc = ""
+        try:
+            if mt in _IMAGE_KINDS:
+                desc = await _describe_image(local, cfg)
+            elif mt in _VOICE_KINDS:
+                desc = await _transcribe_voice(local, cfg, voice_transcriber)
+            elif mt in _VIDEO_KINDS:
+                desc = await _understand_video(local, cfg, voice_transcriber)
+        except Exception:
+            logger.debug("[media_enrich] 识别失败 kind=%s", mt, exc_info=True)
+            desc = ""
 
-    desc = (desc or "").strip()
-    _record_enrich(mt, cfg, understood=bool(desc))
-    if not desc:
-        return (cap or media_placeholder(mt)), ""
+        desc = (desc or "").strip()
+        _record_enrich(mt, cfg, understood=bool(desc))
+        if not desc:
+            return (cap or media_placeholder(mt)), ""
 
-    if mt in _VIDEO_KINDS:
-        text = f"{cap}\n[视频内容] {desc}" if cap else f"[视频内容] {desc}"
-    elif mt in _IMAGE_KINDS:
-        text = f"{cap}\n[图片内容] {desc}" if cap else f"[图片内容] {desc}"
-    elif mt in _VOICE_KINDS:
-        # 语音转写即"对方说的话"，直接作为待回复正文（有 caption 少见，拼上）
-        text = f"{cap}\n{desc}" if cap else desc
-    else:
-        text = cap or desc
-    return text, desc
+        if mt in _VIDEO_KINDS:
+            text = f"{cap}\n[视频内容] {desc}" if cap else f"[视频内容] {desc}"
+        elif mt in _IMAGE_KINDS:
+            text = f"{cap}\n[图片内容] {desc}" if cap else f"[图片内容] {desc}"
+        elif mt in _VOICE_KINDS:
+            # 语音转写即"对方说的话"，直接作为待回复正文（有 caption 少见，拼上）
+            text = f"{cap}\n{desc}" if cap else desc
+        else:
+            text = cap or desc
+        return text, desc
+    finally:
+        if tmp_download:
+            try:
+                os.unlink(tmp_download)
+            except Exception:
+                pass
+
+
+async def _maybe_fetch_remote(
+    media_ref: str, media_type: str, cfg: Dict[str, Any],
+) -> Tuple[Optional[str], Optional[str]]:
+    """http(s) media_ref → 临时本地路径（调用方负责删除）。未开远程下载 / 非 URL → (None, None)。"""
+    ref = str(media_ref or "").strip()
+    if not ref.lower().startswith(("http://", "https://")):
+        return None, None
+    rf = ((cfg.get("media") or {}).get("remote_fetch") or {})
+    if not rf.get("enabled"):
+        return None, None
+    mt = str(media_type or "").strip().lower()
+    kind = "image" if mt in _IMAGE_KINDS else "audio"
+    try:
+        from src.inbox.media_fetch import fetch_remote_media
+        path, reason = await fetch_remote_media(
+            ref,
+            kind=kind,
+            max_bytes=int(rf.get("max_mb", 10) or 10) * 1024 * 1024,
+            timeout_sec=float(rf.get("timeout_sec", 8) or 8),
+            allow_domains=list(rf.get("allow_domains") or []),
+        )
+        if path:
+            return path, path
+        logger.debug("[media_enrich] remote_fetch 未取到文件 reason=%s", reason)
+    except Exception:
+        logger.debug("[media_enrich] remote_fetch 异常", exc_info=True)
+    return None, None
 
 
 __all__ = [

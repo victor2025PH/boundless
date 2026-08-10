@@ -164,6 +164,35 @@ def render(snap: Dict[str, Any]) -> str:
                     f"won={int(bt.get('won') or 0)} "
                     f"won_rate={_pct(bt.get('won_rate'))}{mark}")
 
+        # P25/P2：期限调整 × 终态——「赶进度伤不伤转化」的耐久读数
+        # （旧后端 report 无此键 → 整段跳过；有键零数据 → 一行报平安）
+        de = rep.get("deadline_edits")
+        if isinstance(de, dict):
+            if int((de.get("totals") or {}).get("edited_n") or 0):
+                out.append("期限调整 × 终态（同模板三队列 done_rate 横比）：")
+                for tmpl, row in sorted(
+                        (de.get("by_template") or {}).items(),
+                        key=lambda kv: -int(
+                            (kv[1] or {}).get("edited_n") or 0)):
+                    if not int((row or {}).get("edited_n") or 0):
+                        continue
+                    sh = row.get("shortened") or {}
+                    ex = row.get("extended") or {}
+                    un = row.get("unedited") or {}
+                    sh_org = (int(sh.get("done") or 0)
+                              + int(sh.get("failed") or 0)
+                              + int(sh.get("expired") or 0))
+                    mark = "" if sh_org >= 5 else "  ⚠加急样本不足只读不判"
+                    out.append(
+                        f"  {tmpl:<22} 加急 n={int(sh.get('n') or 0)} "
+                        f"done_rate={_pct(sh.get('done_rate'))}"
+                        f" · 延期 n={int(ex.get('n') or 0)} "
+                        f"done_rate={_pct(ex.get('done_rate'))}"
+                        f" · 未调 n={int(un.get('n') or 0)} "
+                        f"done_rate={_pct(un.get('done_rate'))}{mark}")
+            else:
+                out.append("期限调整 × 终态：窗口内没有被调过期限的终态目标")
+
         # P23 「采纳并拟稿」使用面（DB 口径，重启免疫）+ 画像填充漏斗
         dd = rep.get("drive_draft") or {}
         dd_total = int(dd.get("total") or 0)
@@ -249,6 +278,17 @@ def trend_row(snap: Dict[str, Any]) -> Dict[str, Any]:
         "drive_draft": int((rep.get("drive_draft") or {}).get("total") or 0),
         "profile_fills": int(
             (rep.get("profile_fills") or {}).get("total") or 0),
+        # P25/P2：期限调整队列（加急/未调 done_rate 周对比——校准 default_days
+        # 的趋势判据；旧后端无键=全 0）
+        "dl_edited_n": int(
+            ((rep.get("deadline_edits") or {}).get("totals")
+             or {}).get("edited_n") or 0),
+        "dl_shorten_done_rate": (
+            ((rep.get("deadline_edits") or {}).get("totals")
+             or {}).get("shortened") or {}).get("done_rate"),
+        "dl_unedited_done_rate": (
+            ((rep.get("deadline_edits") or {}).get("totals")
+             or {}).get("unedited") or {}).get("done_rate"),
         "churn": {k: {"n": int((v or {}).get("n") or 0),
                       "won": int((v or {}).get("won") or 0),
                       "won_rate": (v or {}).get("won_rate")}

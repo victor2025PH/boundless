@@ -68,6 +68,32 @@ def foreign_voice_allowed(
     return prefix in _DEFAULT_EDGE_VOICE
 
 
+def clone_capable_languages(foreign_cfg: Dict[str, Any]) -> frozenset:
+    """``foreign.clone_languages`` 名单（BCP47 前缀化）。
+
+    P2（2026-08-02 一人一声后续）：hub Fish 克隆链已实证可念部分外语（en/ja/es
+    真机试听通过；ko 在 hub 上稳定失败 hub_voice_source_unavailable，th/vi/id/hi
+    引擎不支持）。名单内语种的主动开场改走与中文同一条克隆链——同一把声念外语，
+    比 edge 通用声更像「本人」。**基线默认空＝旧行为全走 edge**（新行为 opt-in），
+    生产经 overlay 开：companion.proactive_topic.voice.foreign.clone_languages。
+    """
+    langs = (foreign_cfg or {}).get("clone_languages")
+    if isinstance(langs, str):
+        langs = [langs]
+    if not isinstance(langs, (list, tuple)):
+        return frozenset()
+    return frozenset(
+        str(x).strip().lower().split("-")[0]
+        for x in langs if x and str(x).strip())
+
+
+def use_clone_for_language(foreign_cfg: Dict[str, Any], peer_language: str) -> bool:
+    """该外语是否改走克隆链（同一把声念外语）。中文恒 False（本就走克隆链）。"""
+    if is_chinese_peer_language(peer_language):
+        return False
+    return peer_lang_prefix(peer_language) in clone_capable_languages(foreign_cfg)
+
+
 def pick_edge_voice(foreign_cfg: Dict[str, Any], peer_language: str) -> str:
     prefix = peer_lang_prefix(peer_language)
     overrides = (foreign_cfg or {}).get("edge_voices") or {}
@@ -146,4 +172,6 @@ __all__ = [
     "foreign_voice_allowed",
     "stage_foreign_voice_file",
     "resolve_foreign_voice_cfg",
+    "clone_capable_languages",
+    "use_clone_for_language",
 ]

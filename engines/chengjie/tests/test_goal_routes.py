@@ -7,7 +7,10 @@ config_manager（.config dict + .config_path），不起生产服务。
 缺会话 400 / conversation_id 自动拆三元组 / 活跃上限 409 + 硬顶 3）；
 for-conversation（活跃视图含 today / 无目标 goal=None / 终态目标进 last）；
 list + summary；detail 404 与正常（actions/events）；update（title/autonomy/
-deadline_days、空字段 400、非法 autonomy 单独提交按实际行为 500）；status
+deadline_days、空字段 400、非法 autonomy 单独提交按实际行为 500）；改期限
+护栏（P25：过短=立即过期 400 + 文案带最小天数 / 「今天收口」边界合法 /
+终态 409 且不闸其他字段 / 事件台账记差值 / active 返回带 today 的 refreshed
+视图 / planned 拍当场重排、adopted/rejected 拍原样保留）；status
 转移全表 + 非法转移 400；viewer 只读三写端点 403。
 
 goals.db_path 用 ":memory:"（进程单例）→ autouse fixture 每测复位防串味。
@@ -61,6 +64,21 @@ def _create(client, conv=CONV, template="conversion_unlock", **extra):
     return client.post("/api/goals", json=body)
 
 
+def _backdate_start(gid: str, days: float) -> None:
+    """把目标开始时刻往回拨 ``days`` 天（模拟已进行 N 天；deadline_ts 不动）。
+
+    start_ts 不在 update_goal_fields 白名单（生产不该改开始时刻），测试走
+    裸 SQL 直改单例库。"""
+    import time as _t
+
+    from src.companion.goals.store import get_goal_store
+    store = get_goal_store()
+    store._conn.execute(
+        "UPDATE goals SET start_ts = ? WHERE goal_id = ?",
+        (_t.time() - days * 86400.0, gid))
+    store._conn.commit()
+
+
 # ── disabled 门 ─────────────────────────────────────────────────────────────
 
 def test_disabled_all_endpoints_403():
@@ -89,11 +107,12 @@ def test_templates_shape():
     r = client.get("/api/goals/templates")
     assert r.status_code == 200
     d = r.json()
-    assert len(d["templates"]) == 8
+    assert len(d["templates"]) == 9
     assert {t["id"] for t in d["templates"]} == {
         "conversion_unlock", "conversion_subscribe", "relationship_stage",
         "relationship_intimacy", "engagement_reactivate",
-        "acquire_and_convert", "retention_expand", "custom"}
+        "acquire_and_convert", "retention_expand", "profile_discovery",
+        "custom"}
     assert d["autonomy_levels"] == ["observe", "suggest", "auto"]
     assert set(d["statuses"]) == {"active", "paused", "done", "failed",
                                   "expired", "cancelled"}
@@ -287,6 +306,113 @@ class TestUpdate:
         assert client.post("/api/goals/ghost/update",
                            json={"title": "x"}).status_code == 404
 
+    # ── 改期限（调节奏）护栏 + 当日拍重排（P25） ─────────────────────────────
+
+    def test_update_deadline_shorter_than_elapsed_400(self):
+        # 已进行 2.5 天还改成 2 天 → 新截止时间落在过去＝立即判死不是加速，拦下
+        client, _ = _build_client()
+        gid = _create(client).json()["goal"]["goal_id"]
+        _backdate_start(gid, 2.5)
+        r = client.post(f"/api/goals/{gid}/update", json={"deadline_days": 2})
+        assert r.status_code == 400
+        assert "3" in r.json()["detail"]        # 文案里给出最小可改天数（第3天）
+
+    def test_update_deadline_min_edge_ok(self):
+        # 第 3 天改成 3 天（=「今天收口」chip 的语义）合法：截止时间仍在未来
+        client, _ = _build_client()
+        gid = _create(client).json()["goal"]["goal_id"]
+        _backdate_start(gid, 2.5)
+        r = client.post(f"/api/goals/{gid}/update", json={"deadline_days": 3})
+        assert r.status_code == 200
+        g = r.json()["goal"]
+        assert g["total_days"] == 3 and g["day_index"] == 3
+        assert g["status"] == "active"          # 没被顺手结算成过期
+
+    def test_update_deadline_terminal_409(self):
+        # 终态目标的期限是死数据，改了也不会被结算读到——静默接受＝误导
+        client, _ = _build_client()
+        gid = _create(client).json()["goal"]["goal_id"]
+        client.post(f"/api/goals/{gid}/status", json={"action": "cancel"})
+        r = client.post(f"/api/goals/{gid}/update", json={"deadline_days": 7})
+        assert r.status_code == 409
+
+    def test_update_terminal_title_still_editable(self):
+        # 终态护栏只闸期限：其他字段（标题等）照旧可改，最小干预
+        client, _ = _build_client()
+        gid = _create(client).json()["goal"]["goal_id"]
+        client.post(f"/api/goals/{gid}/status", json={"action": "cancel"})
+        r = client.post(f"/api/goals/{gid}/update", json={"title": "归档名"})
+        assert r.status_code == 200 and r.json()["goal"]["title"] == "归档名"
+
+    def test_update_deadline_event_records_old_new(self):
+        # 事件台账记差值（deadline_days:14->30）——复盘时间线能看出节奏为何变
+        client, _ = _build_client()
+        gid = _create(client).json()["goal"]["goal_id"]   # 模板默认 14 天
+        client.post(f"/api/goals/{gid}/update", json={"deadline_days": 30})
+        events = client.get(f"/api/goals/{gid}").json()["events"]
+        rows = [e for e in events if e.get("kind") == "updated"]
+        assert rows and "deadline_days:14->30" in rows[0]["detail"]
+
+    def test_update_returns_refreshed_view_with_today(self):
+        # active 目标的 update 返回 settle 后完整视图（带 today），与 detail 同口径
+        client, _ = _build_client()
+        gid = _create(client).json()["goal"]["goal_id"]
+        r = client.post(f"/api/goals/{gid}/update", json={"title": "改标题"})
+        assert r.status_code == 200
+        today = r.json()["goal"]["today"]
+        assert today and today.get("intent")
+
+    def test_update_deadline_replans_planned_beat(self):
+        # planned 且无坐席反馈的今日拍 → 改期限当场按新节奏重排（action_id 换新）
+        client, _ = _build_client()
+        created = _create(client).json()["goal"]
+        gid = created["goal_id"]
+        old_aid = created["today"]["action_id"]
+        r = client.post(f"/api/goals/{gid}/update", json={"deadline_days": 30})
+        today = r.json()["goal"]["today"]
+        assert today and today["action_id"] and today["action_id"] != old_aid
+        assert today["status"] == "planned"
+
+    def test_update_deadline_keeps_adopted_beat(self):
+        # 坐席已采纳＝人的决定：改期限不得抹掉（action_id 原样保留）
+        client, _ = _build_client()
+        created = _create(client).json()["goal"]
+        gid = created["goal_id"]
+        aid = created["today"]["action_id"]
+        client.post(f"/api/goals/{gid}/beat/feedback", json={"verdict": "adopt"})
+        r = client.post(f"/api/goals/{gid}/update", json={"deadline_days": 30})
+        today = r.json()["goal"]["today"]
+        assert today["action_id"] == aid and today["detail"] == "adopted"
+
+    def test_update_deadline_keeps_rejected_beat(self):
+        # 坐席已驳回（今日不推）不得被一次改期限悄悄复活
+        client, _ = _build_client()
+        created = _create(client).json()["goal"]
+        gid = created["goal_id"]
+        aid = created["today"]["action_id"]
+        client.post(f"/api/goals/{gid}/beat/feedback", json={"verdict": "reject"})
+        r = client.post(f"/api/goals/{gid}/update", json={"deadline_days": 30})
+        today = r.json()["goal"]["today"]
+        assert today["action_id"] == aid
+        assert today["status"] == "skipped"
+
+    def test_update_deadline_records_direction_stats(self):
+        # P1 观测反哺：加急/延期方向计数（等值改动不计——那不是节奏信号）
+        from src.companion.goals.stats import get_goal_stats
+        client, _ = _build_client()
+        gid = _create(client).json()["goal"]["goal_id"]   # 模板默认 14 天
+        s = get_goal_stats()
+        base_s, base_e = s.deadline_shorten, s.deadline_extend
+        client.post(f"/api/goals/{gid}/update", json={"deadline_days": 7})
+        assert (s.deadline_shorten, s.deadline_extend) == (base_s + 1, base_e)
+        client.post(f"/api/goals/{gid}/update", json={"deadline_days": 30})
+        assert (s.deadline_shorten, s.deadline_extend) == (base_s + 1, base_e + 1)
+        client.post(f"/api/goals/{gid}/update", json={"deadline_days": 30})
+        assert (s.deadline_shorten, s.deadline_extend) == (base_s + 1, base_e + 1)
+        dump = s.dump()
+        assert dump["deadline_edits"]["shorten"] >= 1
+        assert 'goals_deadline_edits_total{direction="shorten"}' in s.dump_prom()
+
 
 # ── status 生命周期 ─────────────────────────────────────────────────────────
 
@@ -474,6 +600,23 @@ def test_report_shape_and_window_clamp():
         "/api/goals/report?days=9999").json()["window_days"] == 180
     assert client.get(
         "/api/goals/report?days=0").json()["window_days"] == 30   # 0=用默认
+
+
+def test_report_deadline_edits_end_to_end():
+    """P2 校准闭环端到端：改期限（update 落事件）→ 标成交 → report 三队列。"""
+    client, _ = _build_client()
+    gid = _create(client).json()["goal"]["goal_id"]
+    client.post(f"/api/goals/{gid}/update", json={"deadline_days": 7})   # 加急
+    client.post(f"/api/goals/{gid}/status", json={"action": "done"})
+    g2 = _create(client, conv="telegram:a1:210").json()["goal"]["goal_id"]
+    client.post(f"/api/goals/{g2}/status", json={"action": "done"})      # 未调基线
+    de = client.get("/api/goals/report?days=30").json()["deadline_edits"]
+    assert de["totals"]["edited_n"] == 1
+    bt = de["by_template"]["conversion_unlock"]
+    assert bt["shortened"]["n"] == 1 and bt["shortened"]["done"] == 1
+    assert bt["shortened"]["done_rate"] == 1.0
+    assert bt["extended"]["n"] == 0
+    assert bt["unedited"]["n"] == 1 and bt["unedited"]["done"] == 1
 
 
 # ── P1：客户画像卡 ──────────────────────────────────────────────────────────

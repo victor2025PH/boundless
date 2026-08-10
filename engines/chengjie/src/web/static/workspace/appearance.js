@@ -20,6 +20,17 @@
   'use strict';
   var LS_KEY = 'ws_appearance_v1';
   var THEME_KEY = 'cp_theme';
+  /* ?theme=dark|light = explicit embed pin (desktop-shell webview locks its theme
+   * via URL param, see unified_inbox head script). Without a pin, boot-time
+   * applyTheme() stomps the param with state.night.mode ('auto' by default) ->
+   * "dark shell flashes back to light" race (found 2026-08-10 while probing).
+   * The pin wins inside this window only; tabs without the param keep the
+   * night-mode governance exactly as before. */
+  var URL_THEME_PIN = null;
+  try {
+    var _utp = new URLSearchParams(location.search).get('theme');
+    if (_utp === 'dark' || _utp === 'light') URL_THEME_PIN = _utp;
+  } catch (_) {}
 
   /* ---- catalog (ids must stay in sync with appearance_prefs.py) ---- */
   var BUNDLES = [
@@ -178,7 +189,7 @@
     html.classList.toggle('ws-anim-off', !state.anim);
   }
   function applyTheme() {
-    var mode = (state.night && state.night.mode) || 'auto';
+    var mode = URL_THEME_PIN || (state.night && state.night.mode) || 'auto';
     var want = (mode === 'schedule') ? schedEffective() : mode;
     try { localStorage.setItem(THEME_KEY, want); } catch (_) {}
     if (typeof window.cpApplyTheme === 'function') { window.cpApplyTheme(); }

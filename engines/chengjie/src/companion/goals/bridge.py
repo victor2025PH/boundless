@@ -133,6 +133,21 @@ def augment_plan_with_goal(
         if not intent:
             return
         push = str(action.get("push_level") or "soft")
+        # P27：摸底目标的当前缺口并进意图（与注入链同一 merged_beat_intent
+        # ——桥直读 DB 拍意图，缺口原本到不了主动开场）。none 力度日不合。
+        if push != "none":
+            try:
+                from src.companion.goals.service import (
+                    discovery_gap_for_goal,
+                    merged_beat_intent,
+                )
+                from src.companion.goals.templates import get_template
+                _tpl = get_template(str(goal.get("template") or "")) or {}
+                _gap = discovery_gap_for_goal(store, _tpl, goal)
+                if _gap:
+                    intent = merged_beat_intent(intent, _gap)
+            except Exception:
+                logger.debug("bridge gap merge skipped", exc_info=True)
         if push == "none":
             hint = "（今天只陪伴，营销内容只字不提）"
         elif push == "direct":

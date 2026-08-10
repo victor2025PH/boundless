@@ -31,20 +31,50 @@
       this._persona = "";
       this._enrollOpen = false;
       this._lastReconcile = null;
+      // P0「从消息一键导入」：气泡上点「克隆音色」→ prefillEnroll() 填充；
+      // {media_ref, platform, conversation_id, message_id}，非空即「消息导入模式」
+      // （登记免选文件，服务端直读会话归档语音）。
+      this._prefillSrc = null;
+      // ── 生成/发送状态机（P0 2026-08-05：修「预览清不掉 / 生成入口迷失 / 连点双发」）──
+      // _busy: "" | "tts" | "send"，请求期互斥闸门（连点＝双烧 GPU / 给客户双发）；
+      // _previewText/_previewPersona: 最近一次试听的生成基准——发送是服务端按**当前**
+      //   文本/音色重新合成，两者与基准不一致＝会发出从未试听过的内容，须标过期拦发送；
+      // _epoch: 渲染代际，会话切换后在途请求的 UI 回写一律作废（防串会话）。
+      this._busy = "";
+      this._previewText = null;
+      this._previewPersona = "";
+      this._previewFilename = "";   // 所听即所发：随发送带回，服务端校验后复用试听音频
+      this._epoch = 0;
+      this._genTimer = null;
+      this._hintTimer = null;
+      this._hintResetMs = 4000;   // 发送成功提示驻留时长（验收脚本可调短）
+      this._maxChars = 400;       // 与服务端 tts-test 上限同口径（超限前端先拦，省一次白跑）
       this.shadowRoot.innerHTML = `<style>${this._css()}</style><div class="wrap empty">${this._t("cp.voice.empty")}</div>`;
       this.shadowRoot.addEventListener("click", (e) => this._onClick(e));
       this.shadowRoot.addEventListener("change", (e) => this._onChange(e));
+      this.shadowRoot.addEventListener("input", (e) => {
+        if (e.target && e.target.matches && e.target.matches('[data-role="text"]')) {
+          this._syncStale();
+          this._syncCounter();
+        }
+      });
       this.addEventListener("cp-fill", (e) => {
         const t = (e.detail && e.detail.text) || "";
         if (!t) return;
         const ta = this.shadowRoot.querySelector('[data-role="text"]');
-        if (ta) ta.value = t;
+        if (ta) { ta.value = t; this._syncStale(); this._syncCounter(); }   // 程序化赋值不触发 input，这里补判
       });
+    }
+
+    disconnectedCallback() {
+      this._stopGenTimer();
+      if (this._hintTimer) { clearTimeout(this._hintTimer); this._hintTimer = null; }
     }
 
     _css() {
       return `
       :host { display:block; font-size:var(--cp-fs-sm,12px); color:var(--cp-text,#e2e8f0); }
+      svg.ui-ic { pointer-events:none; }  /* Shadow DOM 不吃宿主页样式：图标不抢点击，事件落宿主按钮 */
       .wrap { background:var(--cp-surface-2,#1a2332); border:1px solid var(--cp-border,#2a3544);
               border-radius:var(--cp-radius-sm,8px); padding:8px; }
       .empty { color:var(--cp-text-tiny,#94a3b8); text-align:center; padding:12px 4px; }
@@ -60,11 +90,26 @@
       button:disabled { opacity:.5; cursor:default; }
       .hint { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-tiny,#94a3b8); margin:4px 0; }
       .preview { margin-top:6px; padding:6px; border:1px dashed var(--cp-border,#2a3544); border-radius:6px; }
+      .preview.stale { border-color:var(--cp-warn,#d97706); }
+      .preview.stale audio { opacity:.5; }
+      .pv-hd { justify-content:space-between; margin-bottom:2px; }
+      .pv-hd .pv-actions { display:flex; gap:6px; }
+      .warn { color:var(--cp-warn,#d97706); }
+      .cnt { text-align:right; font-size:var(--cp-fs-tiny,11px);
+             color:var(--cp-text-tiny,#94a3b8); margin:-2px 0 2px; }
+      .cnt.err { color:var(--cp-danger,#dc2626); font-weight:600; }
       audio { width:100%; margin-top:4px; }
       .panel { margin-top:8px; padding-top:8px; border-top:1px dashed var(--cp-border,#2a3544); }
       .panel h5 { margin:0 0 6px; font-size:12px; font-weight:600; }
       .recon { max-height:120px; overflow:auto; font-size:11px; color:var(--cp-text-dim,#94a3b8); }
-      .ok { color:var(--cp-ok,#16a34a); } .err { color:var(--cp-danger,#dc2626); }`;
+      .ok { color:var(--cp-ok,#16a34a); } .err { color:var(--cp-danger,#dc2626); }
+      .consent { display:flex; gap:6px; align-items:flex-start; cursor:pointer;
+                 font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-tiny,#94a3b8); }
+      .consent input { margin:1px 0 0; flex:none; }
+      .srcchip { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text,#e2e8f0);
+                 background:var(--cp-surface,#0f1419); border:1px dashed var(--cp-border,#2a3544);
+                 border-radius:6px; padding:4px 6px; }
+      .srcchip button { padding:0 5px; line-height:16px; }`;
     }
 
     set client(c) { this._client = c; }
@@ -103,6 +148,18 @@
       const f = root.CopilotShared && root.CopilotShared.t;
       return f ? f(key, vars) : key;
     }
+    /* 线性 SVG 图标（P2B 统一图标语言）：库在（收件箱宿主）走全站注册表，
+       否则回落 sidebar-chrome 子集表；再不行返回空串（按钮仍有 title/文字兜底）。 */
+    _ic(name, size) {
+      try {
+        const sc = root.CopilotShared && root.CopilotShared.sidebarChrome;
+        if (sc && typeof sc.uiIcon === "function") return sc.uiIcon(name, size || 13) || "";
+      } catch (_e) { /* 图标缺失不阻塞渲染 */ }
+      return "";
+    }
+    _genLabelHtml() {
+      return `${this._ic("mic", 13)} ${this._esc(this._t("cp.voice.tts_btn"))}`;
+    }
 
     _metaLine(d) {
       const m = (d && d.voice_meta) || {};
@@ -125,21 +182,112 @@
         this._profiles = d.profiles || [];
         const sel = this.shadowRoot.querySelector('[data-role="persona"]');
         if (!sel) return;
+        // 三档语义（2026-08-05 P0）：""=跟随会话人设（回落链，声音随会话绑定变）；
+        // "__system__"=系统通用音色（钉死全局配置，绕过 hub 人设层=最稳）；
+        // 具名人设=显式克隆声。d.default 描述的是全局配置=系统通用音色的实况。
         let html = `<option value="">${this._t("cp.voice.default_voice")}</option>`;
         const dft = d.default || {};
-        if (dft.is_clone) html = `<option value="">${this._t("cp.voice.default_voice_clone")}</option>`;
+        let sysLabel = this._t("cp.voice.system_voice");
+        if (dft.is_clone) {
+          sysLabel = dft.ready
+            ? this._t("cp.voice.system_voice_clone")
+            : this._t("cp.voice.system_voice_warn");
+        }
+        const sysDis = dft.is_clone && !dft.ready ? " disabled" : "";
+        html += `<option value="__system__"${sysDis}>${sysLabel}</option>`;
         this._profiles.forEach((p) => {
           const tag = p.is_clone ? (p.ready ? " 🎤" : " 🎤⚠") : "";
+          // P3 音色体检徽标（warn=低于正常带 / critical=疑似参考音坏或换错）。
+          // 刻意不置灰：体检差仍能出声，弃用与否人决定（就绪置灰是另一语义）。
+          const q = p.quality === "critical" ? this._t("cp.voice.q_crit_tag")
+            : (p.quality === "warn" ? this._t("cp.voice.q_warn_tag") : "");
           const dis = p.is_clone && !p.ready ? " disabled" : "";
-          html += `<option value="${this._esc(p.persona_id)}"${dis}>${this._esc(p.name)}${tag}</option>`;
+          html += `<option value="${this._esc(p.persona_id)}"${dis}>${this._esc(p.name)}${tag}${this._esc(q)}</option>`;
         });
         sel.innerHTML = html;
         const ok = Array.from(sel.options).some((o) => o.value === this._persona && !o.disabled);
         sel.value = ok ? this._persona : "";
+        this._refreshEffStatus();
       } catch (e) { /* */ }
     }
 
+    /* 音色状态条（P1 2026-08-05）：选择生效前先亮真相——当前选择实际会解析成
+       谁的声（尤其「跟随会话人设」的空值到底落到哪）、克隆是否就绪、以及该音色
+       是否处于「hub 严格辖区且 hub 有险」（unreachable=TCP 确定不可达必拒发；
+       recent_failures=台账事后证据）。与 send-voice 同源解析（effective-config
+       带 chat/account 上下文），杜绝「状态条一套、发送另一套」。代际（_epoch）
+       防会话切换后的陈旧回写；客户端无该方法（旧桌面壳）→ 静默隐藏，零依赖。 */
+    async _refreshEffStatus() {
+      const box = this.shadowRoot.querySelector('[data-role="effstatus"]');
+      const c = this._ctx;
+      if (!box) return;
+      if (!c || !c.chatKey || !this._client || !this._client.voiceEffectiveConfig) {
+        box.hidden = true;
+        return;
+      }
+      const epoch = this._epoch;
+      try {
+        const d = await this._client.voiceEffectiveConfig({
+          persona_id: this._persona || undefined,
+          chat_key: c.chatKey,
+          platform: c.platform || undefined,
+          account_id: c.accountId || undefined,
+        });
+        if (epoch !== this._epoch) return;   // 会话已切换：陈旧回写作废
+        if (!d || d.ok === false) { box.hidden = true; return; }
+        // 老后端护栏：响应缺新字段（hub_strict 等）＝服务端还没装载本批解析
+        // （不认 chat_key 入参）——此时渲染的是「无会话上下文」的错误解析，
+        // 与真实发送不同源。宁可不显示，不显示错的。
+        if (!("hub_strict" in d)) { box.hidden = true; return; }
+        const pid = d.persona_id || "";
+        let name;
+        if (d.persona_source === "system") {
+          name = this._t("cp.voice.system_voice");
+        } else if (pid) {
+          const row = (this._profiles || []).find((p) => p.persona_id === pid);
+          name = (row && row.name) || pid;
+        } else {
+          name = this._t("cp.voice.eff_global");
+        }
+        const bits = [this._t("cp.voice.eff_line",
+          { name, backend: d.backend || "" })];
+        const srcKey = `cp.voice.eff_src_${d.persona_source || ""}`;
+        const srcTxt = this._t(srcKey);
+        if (srcTxt && srcTxt !== srcKey) bits.push(srcTxt);
+        if (d.is_clone) bits.push(d.ready ? "🎤" : this._t("cp.voice.eff_not_ready"));
+        let riskHtml = "";
+        if (d.hub_risk === "unreachable") {
+          riskHtml = `<div class="err">${this._esc(this._t("cp.voice.eff_hub_unreachable"))}</div>`;
+        } else if (d.hub_risk === "recent_failures") {
+          riskHtml = `<div class="warn">${this._esc(this._t("cp.voice.eff_hub_recent"))}</div>`;
+        }
+        // P3 音色体检行：解析出的人设最近声纹体检 warn/critical → 状态条给分数
+        // 与出路（critical=建议重新登记；数据源=夜间探针+enroll 即时体检 jsonl）
+        const qrow = pid
+          ? (this._profiles || []).find((p) => p.persona_id === pid) : null;
+        if (qrow && (qrow.quality === "warn" || qrow.quality === "critical")) {
+          const qk = qrow.quality === "critical"
+            ? "cp.voice.eff_quality_crit" : "cp.voice.eff_quality_warn";
+          const score = (Number(qrow.quality_score) || 0).toFixed(2);
+          riskHtml += `<div class="${qrow.quality === "critical" ? "err" : "warn"}">`
+            + `${this._esc(this._t(qk, { score }))}</div>`;
+        }
+        box.innerHTML = this._esc(bits.join(" · ")) + riskHtml;
+        box.hidden = false;
+      } catch (e) {
+        if (epoch === this._epoch) box.hidden = true;
+      }
+    }
+
     _render() {
+      this._prefillSrc = null;   // 会话切换/重渲＝消息导入上下文失效，防陈旧 media_ref 被提交
+      this._epoch += 1;          // 在途请求的 UI 回写按代际作废（防「已发送」串到新会话）
+      this._busy = "";
+      this._previewText = null;
+      this._previewPersona = "";
+      this._previewFilename = "";
+      this._stopGenTimer();
+      if (this._hintTimer) { clearTimeout(this._hintTimer); this._hintTimer = null; }
       const w = this.shadowRoot.querySelector(".wrap");
       if (!this._ctx || !this._ctx.chatKey) {
         w.className = "wrap empty";
@@ -149,12 +297,14 @@
       w.className = "wrap";
       w.innerHTML =
         `<div class="row">
-          <button class="primary" data-act="tts">${this._t("cp.voice.tts_btn")}</button>
+          <button class="primary" data-act="tts" data-role="gen-main">${this._genLabelHtml()}</button>
           <select data-role="persona" title="${this._esc(this._t("cp.voice.persona_title"))}"></select>
-          <button data-act="unbind" title="${this._esc(this._t("cp.voice.unbind_title"))}">🗑</button>
+          <button data-act="unbind" title="${this._esc(this._t("cp.voice.unbind_title"))}">${this._ic("trash", 13)}</button>
           <button data-act="toggle-enroll" title="${this._esc(this._t("cp.voice.enroll_title"))}">${this._t("cp.voice.enroll_btn")}</button>
         </div>
+        <div data-role="effstatus" class="hint" hidden></div>
         <textarea data-role="text" placeholder="${this._esc(this._t("cp.voice.text_ph"))}"></textarea>
+        <div class="cnt" data-role="cnt" hidden></div>
         <div class="hint">${this._t("cp.voice.hint")}</div>
         <div data-role="preview" class="preview" hidden></div>
         <div data-role="enroll" class="panel" hidden>${this._enrollHtml()}</div>`;
@@ -167,6 +317,7 @@
 
     _enrollHtml() {
       return `<h5>${this._t("cp.voice.enroll_h")}</h5>
+        <div data-role="esrc"></div>
         <div class="row">
           <input type="file" data-role="efile" accept="audio/*,.wav,.mp3,.m4a" />
           <input type="text" data-role="ename" placeholder="${this._esc(this._t("cp.voice.ename_ph"))}" />
@@ -177,10 +328,13 @@
         <div class="row">
           <input type="text" data-role="ereftext" placeholder="${this._esc(this._t("cp.voice.reftext_ph"))}" style="flex:1;" />
         </div>
+        <div class="row">
+          <label class="consent"><input type="checkbox" data-role="econsent" /><span>${this._t("cp.voice.consent_label")}</span></label>
+        </div>
         <div data-role="ehint" class="hint">${this._t("cp.voice.enroll_hint")}</div>
         <div data-role="audition"></div>
         <div class="panel">
-          <h5>${this._t("cp.voice.reuse_h")}</h5>
+          <h5>${this._ic("refresh", 12)} ${this._t("cp.voice.reuse_h")}</h5>
           <div class="row">
             <select data-role="rfrom"><option value="">${this._t("cp.voice.src_persona_opt")}</option></select>
             <span>→</span>
@@ -224,6 +378,8 @@
       if (sel) {
         this._persona = sel.value;
         this._savePersona(this._persona);
+        this._syncStale();   // 换音色同样使试听过期（发送按当前音色重新合成）
+        this._refreshEffStatus();
       }
     }
 
@@ -233,6 +389,8 @@
       const act = b.getAttribute("data-act");
       if (act === "tts") return this._genTts();
       if (act === "send") return this._sendVoice();
+      if (act === "clear-preview") { this._clearPreview(); return; }
+      if (act === "cancel-gen") { this._cancelGen(); return; }
       if (act === "unbind") return this._unbind();
       if (act === "toggle-enroll") {
         this._enrollOpen = !this._enrollOpen;
@@ -240,6 +398,7 @@
         if (ep) {
           ep.hidden = !this._enrollOpen;
           if (this._enrollOpen) {
+            this._prefillSrc = null;   // 手动展开＝上传模式（面板重建后 chip 已不在，状态同步清）
             ep.innerHTML = this._enrollHtml();
             this._loadEnrollPersonas();
             this._reconcile();
@@ -247,7 +406,13 @@
         }
         return;
       }
-      if (act === "enroll-submit") return this._enroll();
+      if (act === "enroll-submit") return this._enroll(false);
+      if (act === "enroll-force") return this._enroll(true);
+      if (act === "clear-src") {
+        this._prefillSrc = null;
+        this._renderSrcChip();
+        return;
+      }
       if (act === "rebind") return this._rebind();
       if (act === "reconcile") return this._reconcile();
       if (act === "purge-orphans") return this._purgeOrphans();
@@ -261,68 +426,206 @@
 
     async _genTts() {
       const text = this._text();
-      if (!text) { this._hint(this._t("cp.voice.need_text")); return; }
+      if (!text) { this._hint(this._t("cp.voice.need_text"), false); return; }
+      if (text.length > this._maxChars) {   // 超限前端先拦（服务端同上限，省一次白跑）
+        this._hint(this._t("cp.voice.too_long", { max: this._maxChars }), false);
+        return;
+      }
       const box = this.shadowRoot.querySelector('[data-role="preview"]');
       if (!box) return;
+      if (this._busy) return;   // 在途互斥：连点不重复烧合成
+      const ep = this._epoch;
+      const persona = this._persona || "";   // 生成基准取点击时刻（生成期间的改动会被判过期）
+      this._setBusy("tts");
       box.hidden = false;
-      box.textContent = this._t("cp.voice.gen_audition");
+      box.classList.remove("stale");
+      // 等待态一次成形（计秒只更新 span，别整块重写——否则「取消」按钮每秒被销毁重建）
+      box.innerHTML =
+        `<span data-role="gen-wait"></span>` +
+        `<div class="row" style="justify-content:flex-end;margin-top:6px;">` +
+        `<button data-act="cancel-gen">${this._t("cp.voice.cancel_btn")}</button></div>`;
+      const waitEl = box.querySelector('[data-role="gen-wait"]');
+      const t0 = Date.now();
+      this._stopGenTimer();
+      const tick = () => {
+        if (waitEl) waitEl.textContent = this._t("cp.voice.gen_wait", { s: Math.floor((Date.now() - t0) / 1000) });
+      };
+      tick();
+      this._genTimer = setInterval(tick, 1000);
+      let d = null;
+      let reqFail = false;
       try {
-        const d = await this._client.voiceTts({ text, persona_id: this._persona || undefined });
-        const url = d.dataUrl || d.audio_url ||
-          (d.filename ? `/api/voice/tts-file/${encodeURIComponent(d.filename)}` : "");
-        if (!url && !d.ok) {
-          box.innerHTML = `<span class="err">${this._esc(this._t("cp.voice.gen_fail", { msg: d.message || d.error || this._t("cp.voice.tts_unavailable") }))}</span>`;
-          return;
-        }
+        // 带会话上下文：试听与发送同一组解析入参（试听=发送 契约）
+        const c = this._ctx || {};
+        d = await this._client.voiceTts({
+          text, persona_id: persona || undefined,
+          chat_key: c.chatKey || undefined,
+          platform: c.platform || undefined,
+          account_id: c.accountId || undefined,
+        });
+      } catch (e) { reqFail = true; }
+      this._stopGenTimer();
+      if (ep !== this._epoch) return;   // 已切会话：结果作废，不回写新会话 UI
+      this._setBusy("");
+      const url = d ? (d.dataUrl || d.audio_url ||
+        (d.filename ? `/api/voice/tts-file/${encodeURIComponent(d.filename)}` : "")) : "";
+      if (reqFail || !url) {
+        // 失败态同样要能清除/重试——错误文案赖着不走与旧预览赖着不走是同一个病
+        const msg = reqFail
+          ? this._t("cp.voice.req_fail")
+          : this._t("cp.voice.gen_fail",
+              { msg: (d && (d.message || d.error)) || this._t("cp.voice.tts_unavailable") });
+        this._previewText = null;
+        this._previewFilename = "";
         box.innerHTML =
-          `${this._t("cp.voice.preview")}<br><audio controls src="${url}"></audio>` +
-          this._metaLine(d) +
+          `<span class="err">${this._esc(msg)}</span>` +
           `<div class="row" style="justify-content:flex-end;margin-top:6px;">` +
-          `<button class="primary" data-act="send">${this._t("cp.voice.send_btn")}</button></div>`;
-      } catch (e) {
-        box.innerHTML = `<span class="err">${this._esc(this._t("cp.voice.req_fail"))}</span>`;
+          `<button data-act="tts">${this._t("cp.voice.retry_btn")}</button>` +
+          `<button data-act="clear-preview" title="${this._esc(this._t("cp.voice.clear_t"))}">${this._ic("x", 12)}</button></div>`;
+        return;
       }
+      this._previewText = text;
+      this._previewPersona = persona;
+      this._previewFilename = String((d && d.filename) || "");
+      const fb = ((d && d.voice_meta) || {}).fallback_from;
+      box.innerHTML =
+        `<div class="row pv-hd"><span>${this._ic("mic", 12)} ${this._t("cp.voice.preview")}</span>` +
+        `<span class="pv-actions">` +
+        `<button data-act="tts" title="${this._esc(this._t("cp.voice.regen_t"))}">${this._ic("refresh", 12)} ${this._t("cp.voice.regen_btn")}</button>` +
+        `<button data-act="clear-preview" title="${this._esc(this._t("cp.voice.clear_t"))}">${this._ic("x", 12)}</button>` +
+        `</span></div>` +
+        `<audio controls src="${url}"></audio>` +
+        this._metaLine(d) +
+        (fb ? `<div class="hint warn">${this._esc(this._t("cp.voice.fallback_warn"))}</div>` : "") +
+        `<div class="hint err" data-role="stale-note" hidden>${this._esc(this._t("cp.voice.stale_note"))}</div>` +
+        `<div class="row" style="justify-content:flex-end;margin-top:6px;">` +
+        `<button class="primary" data-act="send">${this._t("cp.voice.send_btn")}</button></div>`;
+      this._syncStale();   // 生成期间若已改字/换音色，立即标过期
     }
 
     async _sendVoice() {
+      if (this._busy) return;   // 在途互斥：连点=双发客户，必须拦
       const c = this._ctx;
       const text = this._text();
       if (!text || !c) return;
+      if (this._isStale()) {   // 双保险：按钮已禁用，键盘/时序穿透也拦
+        this._hint(this._t("cp.voice.stale_note"), false);
+        return;
+      }
+      const ep = this._epoch;
+      this._setBusy("send");
+      let d = null;
+      let reqFail = false;
       try {
-        const d = await this._client.sendVoice({
+        d = await this._client.sendVoice({
           platform: c.platform,
           account_id: c.accountId || "default",
           chat_key: c.chatKey,
           text,
           persona_id: this._persona || undefined,
+          // 所听即所发（P1）：带回试听产物名，服务端校验（同文本/同音色/未过期）
+          // 通过则直接复用试听音频——客户听到的与坐席试听的逐字节一致，且省一次合成。
+          preview_filename: this._previewFilename || undefined,
+          // P0 幂等键（与主输入框语音发送同口径）：双窗口/重放场景服务端拒重，
+          // 语音双发还烧双份 TTS/GPU，比文本更值得拦。
+          client_msg_id: "cpv-" + Date.now().toString(36) + "-"
+            + Math.random().toString(36).slice(2, 10),
         });
-        if (d && d.ok) {
-          const m = d.voice_meta || {};
-          this._hint(
-            this._t("cp.voice.sent")
-              + (m.provider ? ` (${m.provider}${m.emotion ? " / " + m.emotion : ""})` : ""),
-            true);
-          this.dispatchEvent(new CustomEvent("cp-voice-sent", { bubbles: true, composed: true }));
-        } else {
-          this._hint(this._t("cp.voice.send_fail", { msg: d.message || d.detail || d.reason || this._t("cp.voice.need_online") }), false);
-        }
-      } catch (e) { this._hint(this._t("cp.voice.send_req_fail"), false); }
+      } catch (e) { reqFail = true; }
+      if (ep !== this._epoch) return;   // 已切会话：不把结果回写到新会话 UI
+      this._setBusy("");
+      if (!reqFail && d && d.ok) {
+        // 发送即闭环：清预览+清文字，界面回到「可写下一条」状态（与主输入框行为对齐）
+        this._clearPreview();
+        const ta = this.shadowRoot.querySelector('[data-role="text"]');
+        if (ta) ta.value = "";
+        const m = d.voice_meta || {};
+        this._hint(
+          this._t("cp.voice.sent")
+            + (m.provider ? ` (${m.provider}${m.emotion ? " / " + m.emotion : ""})` : ""),
+          true);
+        this._hintResetLater();
+        this.dispatchEvent(new CustomEvent("cp-voice-sent", {
+          bubbles: true, composed: true,
+          // reused=true ⇒ 客户收到的就是坐席试听的那份音频（宿主可分桶埋点）
+          detail: { reused: !!(d && d.reused_preview) },
+        }));
+      } else if (reqFail) {
+        this._hint(this._t("cp.voice.send_req_fail"), false);
+      } else {
+        this._hint(this._t("cp.voice.send_fail",
+          { msg: (d && (d.message || d.error || d.detail || d.reason)) || this._t("cp.voice.need_online") }), false);
+      }
     }
 
     async _unbind() {
-      if (!this._persona) { this._hint(this._t("cp.voice.need_pick_unbind")); return; }
+      // "__system__"（系统通用音色）不是人设档，没有可解绑的声纹
+      if (!this._persona || this._persona === "__system__") {
+        this._hint(this._t("cp.voice.need_pick_unbind"), false);
+        return;
+      }
       if (!confirm(this._t("cp.voice.unbind_confirm"))) return;
       const purge = confirm(this._t("cp.voice.purge_cloud_confirm"));
       try {
         const d = await this._client.voiceUnbind({ persona_id: this._persona, purge_cloud: purge });
         if (d && d.ok) {
-          this._hint(this._t("cp.voice.unbound"));
+          this._hint(this._t("cp.voice.unbound"), true);
           await this._loadProfiles();
-        } else this._hint(d.message || this._t("cp.voice.unbind_fail"));
-      } catch (e) { this._hint(this._t("cp.voice.unbind_fail")); }
+        } else this._hint((d && (d.message || d.error)) || this._t("cp.voice.unbind_fail"), false);
+      } catch (e) { this._hint(this._t("cp.voice.unbind_fail"), false); }
     }
 
-    async _enroll() {
+    /* 从会话语音消息预填登记表单（宿主气泡「克隆音色」按钮调用）。
+       data: {media_ref, name?, reference_text?, language?, platform?,
+              conversation_id?, message_id?}。media_ref 为空则忽略。 */
+    prefillEnroll(data) {
+      const d = data || {};
+      if (!d.media_ref || !this._ctx || !this._ctx.chatKey) return;
+      if (!this._enrollOpen) {
+        this._enrollOpen = true;
+        const ep = this.shadowRoot.querySelector('[data-role="enroll"]');
+        if (ep) {
+          ep.hidden = false;
+          ep.innerHTML = this._enrollHtml();
+          this._loadEnrollPersonas();
+          this._reconcile();
+        }
+      }
+      this._prefillSrc = {
+        media_ref: String(d.media_ref || ""),
+        platform: String(d.platform || ""),
+        conversation_id: String(d.conversation_id || ""),
+        message_id: String(d.message_id || ""),
+      };
+      const q = (r) => this.shadowRoot.querySelector(`[data-role="${r}"]`);
+      const nameEl = q("ename");
+      if (nameEl && d.name && !nameEl.value) nameEl.value = String(d.name).slice(0, 40);
+      const refEl = q("ereftext");
+      if (refEl && d.reference_text) refEl.value = String(d.reference_text);
+      const langEl = q("elang");
+      const lt = ({ zh: "Chinese", en: "English", ja: "Japanese" })[
+        String(d.language || "").toLowerCase().slice(0, 2)];
+      if (langEl && lt) langEl.value = lt;
+      this._renderSrcChip();
+      const hint = q("ehint");
+      if (hint) hint.textContent = this._t("cp.voice.prefilled_hint");
+    }
+
+    _renderSrcChip() {
+      const box = this.shadowRoot.querySelector('[data-role="esrc"]');
+      const file = this.shadowRoot.querySelector('[data-role="efile"]');
+      if (!box) return;
+      if (this._prefillSrc && this._prefillSrc.media_ref) {
+        box.innerHTML = `<div class="row srcchip">${this._ic("headphones", 13)} <span>${this._esc(this._t("cp.voice.src_msg"))}</span>
+          <button data-act="clear-src" title="${this._esc(this._t("cp.voice.src_clear_t"))}">${this._ic("x", 12)}</button></div>`;
+        if (file) file.style.display = "none";   // 消息导入模式：免选文件，防两个来源歧义
+      } else {
+        box.innerHTML = "";
+        if (file) file.style.display = "";
+      }
+    }
+
+    async _enroll(force) {
       const file = this.shadowRoot.querySelector('[data-role="efile"]');
       const name = (this.shadowRoot.querySelector('[data-role="ename"]').value || "").trim();
       const persona = this.shadowRoot.querySelector('[data-role="epersona"]').value;
@@ -330,33 +633,67 @@
       const refEl = this.shadowRoot.querySelector('[data-role="ereftext"]');
       const refText = ((refEl && refEl.value) || "").trim();
       const hint = this.shadowRoot.querySelector('[data-role="ehint"]');
-      if (!file || !file.files || !file.files[0]) { hint.textContent = this._t("cp.voice.need_file"); return; }
+      const src = (this._prefillSrc && this._prefillSrc.media_ref) ? this._prefillSrc : null;
+      const hasFile = !!(file && file.files && file.files[0]);
+      if (!src && !hasFile) { hint.textContent = this._t("cp.voice.need_file"); return; }
       if (!name || !persona) { hint.textContent = this._t("cp.voice.need_name_persona"); return; }
+      // 授权闸门（前端第一道；后端 owner_consent 同语义强校验）
+      const consentEl = this.shadowRoot.querySelector('[data-role="econsent"]');
+      if (!consentEl || !consentEl.checked) {
+        hint.textContent = "❌ " + this._t("cp.voice.consent_need");
+        return;
+      }
       hint.textContent = this._t("cp.voice.enrolling");
+      const extra = { owner_consent: "1" };
+      if (force) extra.force = "1";
+      if (src) {
+        extra.media_ref = src.media_ref;
+        extra.platform = src.platform;
+        extra.conversation_id = src.conversation_id;
+        extra.message_id = src.message_id;
+      }
       try {
         let d;
-        if (root.shell && root.shell.voiceEnroll) {
+        if (!src && root.shell && root.shell.voiceEnroll) {
           const b64 = await fileToB64(file.files[0]);
           d = await this._client.voiceEnroll({
             audio_b64: b64, filename: file.files[0].name,
             persona_id: persona, preferred_name: name, language_type: lang,
-            reference_text: refText,
+            reference_text: refText, ...extra,
           });
         } else {
           d = await this._client.voiceEnroll({
-            file: file.files[0], persona_id: persona, preferred_name: name, language_type: lang,
-            reference_text: refText,
+            ...(src ? {} : { file: file.files[0] }),
+            persona_id: persona, preferred_name: name, language_type: lang,
+            reference_text: refText, ...extra,
           });
         }
         if (d && d.ok) {
-          hint.textContent = this._t("cp.voice.enroll_ok");
+          // 质检回显：自动裁剪/警告项跟成功提示一起给，坐席对素材质量有数
+          const qz = d.quality || {};
+          const bits = [];
+          if (qz.curated) bits.push(this._t("cp.voice.q_curated"));
+          if (qz.level === "warn" && Array.isArray(qz.issues) && qz.issues.length) {
+            bits.push(qz.issues.join(" / "));
+          }
+          hint.textContent = this._t("cp.voice.enroll_ok") + (bits.length ? " · " + bits.join(" · ") : "");
           this._persona = persona;
           this._savePersona(persona);
           await this._loadProfiles();
           const sel = this.shadowRoot.querySelector('[data-role="persona"]');
           if (sel) sel.value = persona;
           await this._audition(persona);
-        } else hint.textContent = "❌ " + (d.message || d.reason || this._t("cp.voice.enroll_failed"));
+        } else {
+          const qz = (d && d.quality) || {};
+          const tips = (Array.isArray(qz.tips) && qz.tips.length) ? " " + qz.tips.join(" ") : "";
+          hint.textContent = "❌ " + ((d && (d.message || d.reason)) || this._t("cp.voice.enroll_failed")) + tips;
+          if (d && /^ref_/.test(String(d.reason || ""))) {
+            // 质检拒绝 → 主管逃生门：同素材带 force 重新提交
+            hint.insertAdjacentHTML(
+              "beforeend",
+              ` <button data-act="enroll-force" title="${this._esc(this._t("cp.voice.force_t"))}">${this._esc(this._t("cp.voice.force_btn"))}</button>`);
+          }
+        }
       } catch (e) { hint.textContent = "❌ " + this._t("cp.voice.req_fail"); }
     }
 
@@ -368,7 +705,7 @@
         const d = await this._client.voiceTts({ text: this._t("cp.voice.audition_sample"), persona_id });
         const url = d.dataUrl || d.audio_url || "";
         box.innerHTML = url
-          ? `🔊 <audio controls src="${url}" style="max-width:100%;"></audio>${this._metaLine(d)}`
+          ? `${this._ic("volume", 13)} <audio controls src="${url}" style="max-width:100%;"></audio>${this._metaLine(d)}`
           : this._t("cp.voice.audition_fail");
       } catch (e) { box.textContent = this._t("cp.voice.audition_unavailable"); }
     }
@@ -413,8 +750,94 @@
       const h = this.shadowRoot.querySelector(".hint");
       if (h) {
         h.textContent = msg;
-        h.className = ok ? "hint ok" : "hint err";
+        h.className = ok === true ? "hint ok" : (ok === false ? "hint err" : "hint");
       }
+    }
+
+    _stopGenTimer() {
+      if (this._genTimer) { clearInterval(this._genTimer); this._genTimer = null; }
+    }
+
+    _clearPreview() {
+      this._stopGenTimer();
+      this._previewText = null;
+      this._previewPersona = "";
+      this._previewFilename = "";
+      const box = this.shadowRoot.querySelector('[data-role="preview"]');
+      if (box) { box.hidden = true; box.innerHTML = ""; box.classList.remove("stale"); }
+    }
+
+    /* 取消生成＝代际+1（与切会话同一作废机制）：在途请求的结果回来后发现代际
+       不符即静默丢弃——桌面壳/网页两端零额外桥接，服务端任务自然由 TTL 清理。 */
+    _cancelGen() {
+      if (this._busy !== "tts") return;
+      this._epoch += 1;
+      this._stopGenTimer();
+      this._busy = "";
+      this._setBusy("");
+      this._clearPreview();
+      this._hint(this._t("cp.voice.hint"));
+    }
+
+    /* 字数计（与服务端试听上限同口径）：超限红字 + 生成按钮禁用，超限前先拦。 */
+    _syncCounter() {
+      const el = this.shadowRoot.querySelector('[data-role="cnt"]');
+      if (!el) return;
+      const n = this._text().length;
+      el.hidden = n === 0;
+      el.textContent = `${n}/${this._maxChars}`;
+      el.classList.toggle("err", n > this._maxChars);
+      const main = this.shadowRoot.querySelector('[data-role="gen-main"]');
+      if (main) main.disabled = !!this._busy || n > this._maxChars;
+    }
+
+    /* 预览过期判定：文字或音色与生成基准不一致（发送是服务端按**当前**文本重新合成，
+       不拦＝把从未试听过的内容发给客户）。无预览/无基准恒 false。 */
+    _isStale() {
+      if (this._previewText == null) return false;
+      const box = this.shadowRoot.querySelector('[data-role="preview"]');
+      if (!box || box.hidden) return false;
+      return this._text() !== this._previewText || (this._persona || "") !== this._previewPersona;
+    }
+
+    _syncStale() {
+      if (this._previewText == null) return;
+      const box = this.shadowRoot.querySelector('[data-role="preview"]');
+      if (!box || box.hidden) return;
+      const stale = this._isStale();
+      box.classList.toggle("stale", stale);
+      const note = box.querySelector('[data-role="stale-note"]');
+      if (note) note.hidden = !stale;
+      const send = box.querySelector('[data-act="send"]');
+      if (send) send.disabled = stale || !!this._busy;
+    }
+
+    /* 请求期按钮互斥：主生成钮换「生成中…」文案，预览区 🔁/发送一并禁用（连点=双烧/双发）。 */
+    _setBusy(kind) {
+      this._busy = kind || "";
+      const main = this.shadowRoot.querySelector('[data-role="gen-main"]');
+      if (main) {
+        // 解除 busy 时超限禁用要保留（否则清 busy 会把超限文本的生成按钮重新点亮）
+        main.disabled = !!this._busy || this._text().length > this._maxChars;
+        if (this._busy === "tts") main.textContent = this._t("cp.voice.gen_busy_btn");
+        else main.innerHTML = this._genLabelHtml();   // 恢复图标+动词标签（textContent 会抹掉 SVG）
+      }
+      this.shadowRoot.querySelectorAll('[data-act="tts"]').forEach((b) => { b.disabled = !!this._busy; });
+      const send = this.shadowRoot.querySelector('[data-act="send"]');
+      if (send) {
+        send.disabled = !!this._busy || this._isStale();
+        send.textContent = this._busy === "send"
+          ? this._t("cp.voice.sending") : this._t("cp.voice.send_btn");
+      }
+    }
+
+    /* 发送成功提示驻留一段时间后恢复默认引导——旧实现状态文案会永久顶掉引导语。 */
+    _hintResetLater() {
+      if (this._hintTimer) clearTimeout(this._hintTimer);
+      this._hintTimer = setTimeout(() => {
+        this._hintTimer = null;
+        this._hint(this._t("cp.voice.hint"));
+      }, this._hintResetMs);
     }
   }
 

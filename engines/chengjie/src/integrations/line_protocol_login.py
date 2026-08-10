@@ -551,6 +551,8 @@ def make_provider(config: Dict[str, Any]):
             "qr_image": str(state.get("qr_image") or ""),
             "instruction": "用手机 LINE 扫码：设置 → 我的账户 →「用其他设备登录 / 登录中的设备」出示二维码，"
                            "用主设备 LINE 扫描；如提示 PIN，请在手机上输入弹出的数字。",
+            # i18n 键随会话下发：英文坐席按键取本地化指引，raw instruction 仅兜底
+            "instruction_key": "inbox.connect.instr_line_protocol",
             "poll": _poll,
             "cancel": _cancel,
             "state": state,

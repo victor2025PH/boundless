@@ -16,6 +16,7 @@ from src.client.reply_logic_gates import (
     cooldown_remaining,
     group_allowlist_blocked,
     normalize_chat_type,
+    reply_logic_key,
     should_ignore_edited,
 )
 
@@ -193,3 +194,74 @@ def test_normalize_chat_type_plain_string_and_empty():
     assert normalize_chat_type(" group ") == "group"
     assert normalize_chat_type(None) == ""
     assert normalize_chat_type("") == ""
+
+
+# ── reply_logic_key（闸门读 × 记账写 同键契约，2026-08-03 死闸门修复）────────
+# 历史 bug：闸门做「双号隔离」时把读键改成 {account}:{chat}:{user}，记账侧仍写
+# 旧键 {chat}:{user} → 读写永不相交 → last_reply_ts 恒 None → UI「回复逻辑」的
+# 冷却与最大连续回复**静默失效**（SpamBot 80 秒 8 轮空转事故里两道闸都没响）。
+def test_reply_logic_key_format():
+    assert reply_logic_key("acct", 123, 456) == "acct:123:456"
+    assert reply_logic_key("default", "8921664288", "178220800") == (
+        "default:8921664288:178220800")
+
+
+def test_recorder_writes_the_key_the_gate_reads():
+    """回归钉：sender 记账落的键必须能被闸门读回（端到端语义）。"""
+    import logging
+    from types import SimpleNamespace
+
+    from src.client.sender import TelegramSenderMixin
+
+    fake = SimpleNamespace(
+        _auto_reply_ts={},
+        _auto_reply_streak={},
+        account_id="acct1",
+        logger=logging.getLogger("test_reply_logic"),
+    )
+    TelegramSenderMixin._record_auto_reply(fake, 123, 456)
+    key = reply_logic_key("acct1", 123, 456)
+    assert key in fake._auto_reply_ts, (
+        "记账键与闸门读键不一致——冷却/连发上限会静默失效")
+    assert fake._auto_reply_streak.get(key) == 1
+    # 记账后的时间戳必须真的能让冷却闸拦住下一条
+    cfg = {"cooldown_seconds": 60}
+    ts = fake._auto_reply_ts[key]
+    assert cooldown_remaining(cfg, ts, ts + 1.0) > 0
+    # 连发计数随后续记账递增（复位语义共用 effective_streak）
+    TelegramSenderMixin._record_auto_reply(fake, 123, 456)
+    assert fake._auto_reply_streak.get(key) == 2
+
+
+def test_recorder_missing_account_id_still_consistent():
+    """无 account_id 属性的宿主（测试桩/旧形态）回落 'default' 分桶，不炸不丢。"""
+    import logging
+    from types import SimpleNamespace
+
+    from src.client.sender import TelegramSenderMixin
+
+    fake = SimpleNamespace(
+        _auto_reply_ts={},
+        _auto_reply_streak={},
+        logger=logging.getLogger("test_reply_logic"),
+    )
+    TelegramSenderMixin._record_auto_reply(fake, 1, 2)
+    assert reply_logic_key("default", 1, 2) in fake._auto_reply_ts
+
+
+def test_gate_source_uses_same_key_format():
+    """静态契约：telegram_client 闸门侧的读键构造必须与 reply_logic_key 同格式。
+
+    不 import telegram_client（避免 pyrogram 依赖），扫源码钉住：要么保持
+    ``f"{self.account_id}:{chat_id}:{user_id}"`` 字面量，要么已重构为直接调用
+    ``reply_logic_key(``——两种形态都视为契约成立；两者都消失即红（说明有人
+    改了闸门键格式，记账侧必须同步，否则闸门再次变死）。
+    """
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1] / "src" / "client"
+           / "telegram_client.py").read_text(encoding="utf-8")
+    assert (
+        'f"{self.account_id}:{chat_id}:{user_id}"' in src
+        or "reply_logic_key(" in src
+    ), "telegram_client 闸门读键格式已漂移，须与 reply_logic_key 对齐"

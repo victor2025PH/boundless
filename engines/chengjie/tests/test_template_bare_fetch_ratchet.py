@@ -27,35 +27,22 @@ TEMPLATES_ROOT = Path(__file__).resolve().parents[1] / "src" / "web" / "template
 _BARE_FETCH_RX = re.compile(r"(?<![A-Za-z0-9_$.])fetch\s*\(")
 
 # ── 账本：文件 → 裸 fetch 天花板（只许降不许升） ──
-# 2026-07-23 基线 613 → P1-1 GET 批迁 318 → P2-1 写路径批迁 256（60s 预算）后余 39。
-# 余量构成（tools/fetch_codemod.py 的 LONG_OP_PATTERNS 决策）：
-#   - 长操作端点：FormData 上传 / embed-all / seed-pack / 文档翻译同步档 / relogin /
-#     prerender / persona 媒体 / backfill 批扫描 / bulk-autosend(同步循环≤200张) /
-#     data-purge——这些可以合法跑分钟级，统一超时=回归风险，按端点单独治理；
-#   - 自带 signal: 的调用（调用方自管生命周期，voice_call 实时链等）；
-#   - 字符串/注释内的伪命中（计数口径一致性保留）。
-# 未列出的文件天花板=0：新模板必须走 apiFetch。
+# 2026-07-23 基线 613 → P1-1 GET 批迁 318 → P2-1 写路径批迁 256（60s 预算）后余 39
+# → 2026-08-07 两线接力批清（unified_inbox 13 处 + 全站其余 21 处）后余 5。
+# 原「长操作端点统一超时=回归风险」的欠账已按端点显式预算兑现：普通写 60s、
+# 上传/拉媒体 120s、OCR/VLM 翻译 180s、文档翻译/大上传 5min、backfill/bulk-autosend 10min；
+# 自带 signal 的生命周期中断（rpa_overview lint 取消）由 apiFetch race 语义原样承接。
+# 未列出的文件天花板=0：新模板必须走 apiFetch(url, init, {timeoutMs})。
 _BARE_FETCH_CEILINGS = {
     # 统一层自身的原生 fetch 调用（_oneAttempt 两处 + 老浏览器透传一处）——豁免基线，
     # 全站唯一允许长期保留裸 fetch 的文件。
     "_api_fetch.html": 3,
-    "draft_review.html": 2,
-    "episodic_memory.html": 1,
-    "kb_cold_start.html": 1,
-    "knowledge.html": 1,
-    "ops_overview.html": 3,
-    "personas.html": 5,
-    "relations_health.html": 1,
-    "rpa_overview.html": 1,
-    "setup_wizard.html": 1,
-    "strategy_analytics.html": 1,
-    # 渠道中心融合：telegram 正文迁 partial（计数随内容平移）
-    "_channel_body_telegram.html": 1,
-    "templates.html": 1,
-    "unified_inbox.html": 11,
-    "users.html": 4,
+    # 2026-08-07 批清尾巴：仅剩 /api/personas/{pid}/media/test 一处（并行线在途文件，
+    # 归零后请顺手除名本条目）。
+    "personas.html": 1,
+    # 独立整页（布局链无 _api_fetch.html）+ 实时通话链自带 signal 的超时包装——
+    # 结构性豁免：为一处迁移给独立页挂统一层，收益低于回归风险，刻意保留。
     "voice_call.html": 1,
-    "workspace_dashboard.html": 1,
 }
 
 
@@ -100,10 +87,11 @@ def test_bare_fetch_ledger_not_stale():
 
 # P1-1 起 apiFetch 挂载面扩展到全部根布局（base 家族 + 独立整页）。
 # 列出的每个文件必须 include _api_fetch.html——漏挂＝该家族所有页面 ReferenceError 全灭。
+# ops_overview.html 2026-08-03 P1 挂壳后 extends base.html（挂载随壳继承，经
+# _resolve_root 的 extends 链解析自动纳入 base 家族口径），从根清单除名。
 _WIRED_ROOTS = (
     "workspace_base.html",
     "base.html",
-    "ops_overview.html",
     "ops/contacts.html",
     "ops/merge_reviews.html",
     "ops/mobile_handoffs.html",

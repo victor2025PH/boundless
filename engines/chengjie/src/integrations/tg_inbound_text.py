@@ -34,10 +34,18 @@ def sticker_text_from_message(message: Any) -> str:
 
 
 def annotate_inbound_emoji(text: str) -> str:
-    """入站 Unicode emoji → 追加中文语义，帮 AI 读懂情绪。
+    """入站 Unicode emoji → 语义化（仅限**纯 emoji** 消息）。
 
-    - 纯 emoji：``[表情] 笑哭了``
-    - 混合文本：原文后 ``（表情：…）``
+    - 纯 emoji：``[表情] 笑哭了``——方括号形态，媒体块解析（inbound_enrich）与
+      语言证据剥离（lang_policy 的媒体描述行剥离）都认识它。
+    - 混合文本：**原样返回，绝不改写客户原话**。
+      P0-198（2026-08-03 实锤，tg 7331682689）：旧行为在原文后追加
+      ``（表情：中文语义）``，这段系统注入的中文被全链当成「客户在说中文」的
+      语言证据——``Haha 🤣`` 落库成 ``Haha 🤣（表情：笑得满地打滚）`` → 草稿
+      reply_lang 判成 zh → 中文稿原样发给英文客户 → 下一轮还按「切换提示」反咬
+      客户 "suddenly switching to English?"。emoji 本身就留在正文里，模型读得懂；
+      语义加注若将来要回归，走 prompt 组装期的结构化字段（media_desc 族），
+      不许再写进存储层的消息正文。
     - 无 emoji：原样
     """
     if not text:
@@ -51,6 +59,8 @@ def annotate_inbound_emoji(text: str) -> str:
         if not found:
             return text
         stripped = _emoji.replace_emoji(text, replace="").strip()
+        if stripped:
+            return text  # 混合文本：客户原话不可改写（见 docstring P0-198）
         names = []
         for ch in found:
             nm = demojize_one(ch)
@@ -61,9 +71,7 @@ def annotate_inbound_emoji(text: str) -> str:
         if not names:
             return text
         uniq = list(dict.fromkeys(names))
-        if not stripped:
-            return f"[表情] {'、'.join(uniq)}"
-        return f"{text}（表情：{'、'.join(uniq)}）"
+        return f"[表情] {'、'.join(uniq)}"
     except Exception:
         return text
 

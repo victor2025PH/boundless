@@ -262,6 +262,60 @@ def switched_cells(config: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[st
 #: 入站列的表头（判据来源与出站四列不同，见 ``inbound_media_wired``）
 INBOUND_LABEL = "收图/语音（AI 可见）"
 
+#: 「自动回复设置」页拟人链关心的两项能力（键与 ``CAPABILITY_METHODS`` 对齐）
+HUMANIZE_CAPS = ("mark_read", "typing")
+
+
+def humanize_caps_by_platform(
+    config: Optional[Dict[str, Any]] = None, *,
+    matrix: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    """按**平台**收敛 mark_read / typing 支持度（给 /reply-settings 的能力清单）。
+
+    背景：设置页的「回复前先标已读 / 正在输入」是全局开关，但底层能力按平台分裂；
+    此前页面 hint 手写「当前 Telegram 协议号支持」——已经过时（WhatsApp/LINE 早就
+    支持已读）。手写清单必然烂掉，故这里从 ``capability_matrix``（与编排器运行时
+    hasattr 判据同源）现算，UI 直接渲染，能力变了清单自动跟。
+
+    返回 ``{platform: {cap: {"state": ..., "hard": bool}}}``；state ∈
+
+    - ``ok``          该平台所有可构造模式都支持
+    - ``partial``     部分模式支持（同平台两档不一致，如实陈述不硬判）
+    - ``unsupported`` 没有模式支持
+    - ``unknown``     所有 worker 都构造不出（多为缺可选依赖）——**不等于不支持**
+
+    ``hard=True`` = ``HARD_LIMITS`` 登记的协议层硬限制（对面没有，不是我们没接）。
+    ``matrix`` 可注入（门禁用假矩阵钉纯逻辑），缺省现算。
+    """
+    rows = matrix if matrix is not None else capability_matrix(config)
+    votes: Dict[str, Dict[str, List[bool]]] = {}
+    for row in (rows or {}).values():
+        platform = str(row.get("platform") or "")
+        if not platform:
+            continue
+        bucket = votes.setdefault(platform, {c: [] for c in HUMANIZE_CAPS})
+        if not row.get("available"):
+            continue  # 构造不出的模式不投票；全构造不出 → 零票 → unknown
+        caps = row.get("caps") or {}
+        for c in HUMANIZE_CAPS:
+            bucket[c].append(bool(caps.get(c)))
+    out: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for platform, buckets in votes.items():
+        entry: Dict[str, Dict[str, Any]] = {}
+        for cap, flags in buckets.items():
+            if not flags:
+                state = "unknown"
+            elif all(flags):
+                state = "ok"
+            elif any(flags):
+                state = "partial"
+            else:
+                state = "unsupported"
+            entry[cap] = {"state": state,
+                          "hard": (platform, cap) in HARD_LIMITS}
+        out[platform] = entry
+    return out
+
 # ── 代码接线 × 实际到货 对照 ─────────────────────────────────────────────────
 # 静态矩阵回答「代码支不支持」，生产库回答「实际有没有到货」。两者**并排**才有诊断力：
 # 一致＝真健康；「接了没到货」多半是上游或配置；「没接却有货」说明判据漏了某条旁路。
@@ -367,6 +421,8 @@ def reconcile(
 __all__ = [
     "CAPABILITY_METHODS",
     "CAPABILITY_LABELS",
+    "HUMANIZE_CAPS",
+    "humanize_caps_by_platform",
     "INBOUND_SITES",
     "INBOUND_LABEL",
     "ACCEPTED_MISMATCHES",

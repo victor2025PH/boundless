@@ -189,14 +189,26 @@ def refresh_goal(
         # （acquire_and_convert 结算据 bant_fill 推「摸底完成」里程碑）。
         if template.get("profile_slots"):
             try:
-                from src.companion.goals.profile_slots import fill_rates
+                from src.companion.goals.profile_slots import (
+                    fill_rates,
+                    parse_selected_slots,
+                    selected_fill_rate,
+                )
                 prof = store.get_customer_profile(
                     str(goal.get("platform") or ""),
                     str(goal.get("chat_key") or ""))
-                rates = fill_rates((prof or {}).get("fields") or {})
+                _pf = (prof or {}).get("fields") or {}
+                rates = fill_rates(_pf)
                 signals.extras["bant_fill"] = float(rates.get("bant") or 0.0)
                 signals.extras["relation_fill"] = float(
                     rates.get("relation") or 0.0)
+                # P26 摸底目标：勾选槽位填充率（-1=没勾选，ledger 按信号缺失
+                # 处理）——「客户说了职业」当轮变成里程碑推进/完成判定
+                _sel = parse_selected_slots(
+                    (goal.get("params") or {}).get("slots"))
+                if _sel:
+                    signals.extras["selected_fill"] = selected_fill_rate(
+                        _pf, _sel)
             except Exception:
                 logger.debug("profile fill rates skipped", exc_info=True)
         stats = get_goal_stats()
@@ -553,6 +565,11 @@ def maybe_auto_create_goal(
         uc = user_context or {}
         if uc.get("is_group"):
             return None
+        # 自聊排除（P4 2026-08-09 实锤：auto_create 把账号自己的收藏消息
+        # （chat_key='me'）当新好友建了获客转化目标——演练/自检消息都发那里，
+        # 自己不是获客对象）。
+        if str(chat_key or "").strip().lower() == "me":
+            return None
         personas = [str(x).strip() for x in (ac.get("personas") or [])
                     if str(x).strip()]
         if not personas:
@@ -614,6 +631,47 @@ def maybe_auto_create_goal(
         return None
 
 
+def merged_beat_intent(intent: str, gap: str) -> str:
+    """P27 意图×缺口合流（纯函数）：把「本轮最优先缺口」并进今日意图。
+
+    「今日意图」是 opener 转向（goal_applied.intent）与主动桥 directive 唯一
+    携带的载荷——缺口只挂独立的【画像缺口】行到不了那两处，摸底目标的
+    开场/主动触达就只剩泛化模式没有具体方向。合流后独立缺口行由调用方
+    取消（防同块重复）。gap 空 → 原样返回。"""
+    g = str(gap or "").strip()
+    it = str(intent or "").strip()
+    if not g:
+        return it
+    tail = f"本轮顺势了解：{g}（一次只问这一件，问完就回到闲聊）"
+    return f"{it}；{tail}" if it else tail
+
+
+def discovery_gap_for_goal(
+    store: Any, template: Dict[str, Any], goal: Dict[str, Any],
+    *, lang: str = "zh",
+) -> str:
+    """摸底类目标（模板声明 ``gap_in_intent``）当前最优先的单个缺口短语；
+    非摸底/无勾选/全填/异常 → ""。注入链与主动桥共用（同源保证两处
+    「本轮问什么」永远一致）。"""
+    try:
+        if not template.get("gap_in_intent"):
+            return ""
+        from src.companion.goals.profile_slots import (
+            gap_hint,
+            parse_selected_slots,
+        )
+        sel = parse_selected_slots((goal.get("params") or {}).get("slots"))
+        if not sel:
+            return ""
+        prof = store.get_customer_profile(
+            str(goal.get("platform") or ""), str(goal.get("chat_key") or ""))
+        return gap_hint(dict((prof or {}).get("fields") or {}),
+                        include=sel, limit=1, lang=lang)
+    except Exception:
+        logger.debug("discovery_gap_for_goal failed", exc_info=True)
+        return ""
+
+
 def build_block_for_chat(
     config_obj: Any,
     *,
@@ -630,16 +688,30 @@ def build_block_for_chat(
 ) -> Optional[str]:
     """skill_manager 注入口（单调用闭环）：找活跃目标 → 顺手采画像 →
     结算+当日拍 → 组块（+缺口提示 +目录块）→ 标记拍已进入生成。
-    未启用/无目标/hold → None。绝不抛。"""
+    未启用/无目标/hold → None。绝不抛。
+
+    P25 观测：每条判定路径把「注没注入、为什么」写回 ``user_context
+    ["_goal_inject_meta"]``（生成链透传成 API 的 ``goal_applied``）——坐席端
+    「设了目标为什么没切入」从黑箱变成可读原因。user_context 非 dict 时静默。
+    """
+    def _note_meta(injected: bool, reason: str, **extra: Any) -> None:
+        if isinstance(user_context, dict):
+            m: Dict[str, Any] = {
+                "injected": bool(injected), "reason": str(reason or "")}
+            m.update(extra)
+            user_context["_goal_inject_meta"] = m
+
     try:
         cfg_root = getattr(config_obj, "config", None)
         if not isinstance(cfg_root, dict):
             cfg_root = config_obj if isinstance(config_obj, dict) else {}
         cfg = resolve_goals_cfg(cfg_root)
         if not cfg.get("enabled", False):
+            _note_meta(False, "disabled")
             return None
         inject_cfg = cfg.get("inject") or {}
         if not inject_cfg.get("enabled", True):
+            _note_meta(False, "inject_disabled")
             return None
         store = get_configured_store(
             cfg_root, getattr(config_obj, "config_path", None))
@@ -656,12 +728,27 @@ def build_block_for_chat(
                 conversation_id=conversation_id,
                 user_context=user_context, now=now)
         if goal is None:
+            _note_meta(False, "no_goal")
             return None
         # observe 档：目标只作看板观测，完全不进 prompt
         if str(goal.get("autonomy") or "suggest") == "observe":
+            _note_meta(False, "observe",
+                       goal_id=str(goal.get("goal_id") or ""),
+                       title=str(goal.get("title") or ""))
             return None
         template = get_template(str(goal.get("template") or "")) or {}
         has_slots = bool(template.get("profile_slots"))
+        # 勾选槽位（摸底目标 params.slots）一次解析全程复用：LLM 摘录聚焦 /
+        # 缺口指令 / 意图合流三处同一口径
+        sel_slots: list = []
+        if has_slots:
+            try:
+                from src.companion.goals.profile_slots import (
+                    parse_selected_slots as _pss,
+                )
+                sel_slots = _pss((goal.get("params") or {}).get("slots"))
+            except Exception:
+                sel_slots = []
 
         # P1 顺手采集：对方本条消息里的高置信画像信号 → 只填空槽（坐席手录优先）。
         # 采在结算**前**——「预算两千美金」这类信号当轮就计入 bant_fill 推里程碑。
@@ -690,6 +777,9 @@ def build_block_for_chat(
                         platform=platform, chat_key=str(chat_key or ""),
                         text=inbound_text,
                         fields=dict((prof0 or {}).get("fields") or {}),
+                        # P27：摸底目标只问坐席勾选的缺口——全 11 槽提示词
+                        # 又长又散，抽取面越大误摘面越大
+                        include=(sel_slots or None),
                         now=now)
                 except Exception:
                     logger.debug("profile llm schedule skipped", exc_info=True)
@@ -761,14 +851,47 @@ def build_block_for_chat(
             except Exception:
                 logger.debug("goal cta stash skipped", exc_info=True)
         neg = is_negative_emotion(uc.get("user_emotion_hint"))
+        # P1-198 续（2026-08-02）：坐席人工「情绪低落」标注（TTL 窗内）视同强负面
+        # → 今日让路（hold 文案沿用 inbox.goal.hold.emotion）。判据与拟稿指令 /
+        # NBA 徽标同源（effective_mood）；「积极开朗」刻意不反向解锁——不对称覆写：
+        # 人可以让 AI 更谨慎，不能替客户宣布心情好了就加速推进。
+        if not neg and inbox_store is not None:
+            try:
+                from src.inbox.effective_mood import (
+                    manual_negative_active,
+                    record_mood_consume,
+                    resolve_mood_steering_cfg,
+                )
+                _ms = resolve_mood_steering_cfg(cfg_root)
+                _cid_m = str(conversation_id or "").strip()
+                if not _cid_m and platform and account_id and chat_key:
+                    _cid_m = f"{platform}:{account_id}:{chat_key}"
+                if _ms["enabled"] and _cid_m:
+                    _meta_m = inbox_store.get_conv_meta(_cid_m) or {}
+                    if manual_negative_active(
+                            _meta_m,
+                            now=float(now if now is not None else time.time()),
+                            ttl_hours=_ms["ttl_hours"]):
+                        neg = True
+                        record_mood_consume("goal_hold")
+            except Exception:
+                logger.debug("goal mood hold override skipped", exc_info=True)
         res = refresh_goal(
             store, cfg_root, goal, inbox_store=inbox_store,
             negative_emotion=neg, now=now)
         if res.get("hold") or str((res.get("goal") or {}).get("status")) != "active":
+            _note_meta(
+                False, "hold" if res.get("hold") else "inactive",
+                hold_reason=str(res.get("hold") or ""),
+                goal_id=str(goal.get("goal_id") or ""),
+                title=str(goal.get("title") or ""))
             return None
         action = res.get("action")
         # 坐席驳回今日拍（P2）→ 今天彻底不注入（明日 planner 按驳回回流降档重排）
         if action is not None and str(action.get("status")) in ("skipped", "blocked"):
+            _note_meta(False, "beat_rejected",
+                       goal_id=str(goal.get("goal_id") or ""),
+                       title=str(goal.get("title") or ""))
             return None
 
         # 画像 → prompt（P1 缺口 + P9a 档案事实）。档案对所有模板有益
@@ -782,9 +905,19 @@ def build_block_for_chat(
             prof = store.get_customer_profile(platform, str(chat_key or ""))
             prof_fields = dict((prof or {}).get("fields") or {})
             profile_facts = facts_line(prof_fields)
+            # 缺口起始里程碑随模板（P26）：acquire 先破冰再摸底（默认 1）；
+            # profile_discovery 摸底即全部目的（0，破冰当天就带方向）
+            _gap_from = int(template.get("gap_from_milestone", 1) or 0)
             if has_slots and int(
-                    (res.get("goal") or {}).get("milestone_idx") or 0) >= 1:
-                profile_gap = gap_hint(prof_fields)
+                    (res.get("goal") or {}).get("milestone_idx") or 0
+            ) >= _gap_from:
+                if sel_slots:
+                    # 勾选槽位 → 每轮只带一个最高优先缺口（列表越长 LLM
+                    # 越想一口气问完，「一次最多问一件」得靠数据侧收口）
+                    profile_gap = gap_hint(
+                        prof_fields, include=sel_slots, limit=1)
+                else:
+                    profile_gap = gap_hint(prof_fields)
         except Exception:
             profile_gap = profile_facts = ""
 
@@ -805,6 +938,19 @@ def build_block_for_chat(
 
         suppress = bool(str(uc.get("_bazi_block") or "").strip())
         view = goal_view(res["goal"], res.get("action"), now=now)
+        # P27 意图×缺口合流（gap_in_intent 模板=摸底）：缺口并进今日意图——
+        # 「今日意图」是 opener 转向与主动桥唯一携带的载荷，独立缺口行到不了
+        # 那两处；合流后取消独立行防同块重复。none 力度日不合（「今天只陪伴」
+        # 与缺口发问相矛盾）；meta 保留原始缺口值供观测（本轮瞄准哪个槽）。
+        gap_for_meta = profile_gap
+        if profile_gap and template.get("gap_in_intent"):
+            _today_m = dict(view.get("today") or {})
+            if str(_today_m.get("push_level") or "soft") != "none":
+                _today_m["intent"] = merged_beat_intent(
+                    str(_today_m.get("intent") or ""), profile_gap)
+                view = dict(view)
+                view["today"] = _today_m
+                profile_gap = ""
         block = goal_view_block(
             view,
             suppress_push=suppress,
@@ -814,7 +960,21 @@ def build_block_for_chat(
             note_suffix=note_suffix,
         )
         if not block:
+            _note_meta(False, "empty_block",
+                       goal_id=str(goal.get("goal_id") or ""),
+                       title=str(goal.get("title") or ""))
             return None
+        _beat = view.get("today") or {}
+        _note_meta(
+            True, "",
+            goal_id=str(goal.get("goal_id") or ""),
+            title=str(view.get("title") or ""),
+            template=str(goal.get("template") or ""),
+            push_level=str(_beat.get("push_level") or "soft"),
+            intent=str(_beat.get("intent") or ""),
+            milestone_idx=int(view.get("milestone_idx") or 0),
+            profile_gap=gap_for_meta,
+        )
 
         # 官网产品目录块（P3）：模板声明 catalog + 今日拍力度 soft/direct →
         # 附「可推荐产品 + CTA 纪律」。同轮已有命理变现引导（suppress）不叠加。
@@ -919,6 +1079,14 @@ def build_block_for_chat(
         return block
     except Exception:
         logger.debug("build_block_for_chat failed", exc_info=True)
+        try:
+            # 直接覆写：异常路径返回 None（块没出去），哪怕成功元数据已写过
+            # 也已失真——统一按 error 记，绝不留「injected=True 却没块」的谎
+            if isinstance(user_context, dict):
+                user_context["_goal_inject_meta"] = {
+                    "injected": False, "reason": "error"}
+        except Exception:
+            pass
         return None
 
 
@@ -1456,25 +1624,50 @@ def settle_order_ref(
     if not ref:
         return out
 
+    parts = ref.split(":", 2)
+    has_parts = len(parts) == 3 and parts[0].strip() and parts[1].strip()
     goal = store.find_active_goal(conversation_id=ref)
+    if goal is None and has_parts:
+        goal = store.find_active_goal(
+            platform=parts[0].strip(), chat_key=parts[2].strip(),
+            account_id=parts[1].strip())
+
+    # ── 迟到订单对账（P6 2026-08-09）：ref 匹配不上**活跃**目标时，找近窗内
+    # expired/failed 的同会话目标复活为 done——付费是硬事实，到期只是跟踪窗
+    # 先关了（生产实锤：acquire 10 天到期批量「失守」，而官网成交在站外，
+    # 晚到的单此前只记一行 matched=False 日志＝赢单被永久记成流失）。
+    # cancelled 刻意不复活（运营手动叫停是人的明示决定）；窗宽
+    # ``companion.goals.order_late_settle_days``（默认 14，0=关）。
+    late = False
     if goal is None:
-        parts = ref.split(":", 2)
-        if len(parts) == 3 and parts[0].strip() and parts[1].strip():
-            goal = store.find_active_goal(
-                platform=parts[0].strip(), chat_key=parts[2].strip(),
-                account_id=parts[1].strip())
+        try:
+            late_days = float(resolve_goals_cfg(cfg_root).get(
+                "order_late_settle_days", 14) or 0)
+        except (TypeError, ValueError):
+            late_days = 14.0
+        if late_days > 0:
+            since = ts - late_days * 86400.0
+            goal = store.find_recent_terminal_goal(
+                conversation_id=ref, since_ts=since)
+            if goal is None and has_parts:
+                goal = store.find_recent_terminal_goal(
+                    platform=parts[0].strip(), chat_key=parts[2].strip(),
+                    account_id=parts[1].strip(), since_ts=since)
+            late = goal is not None
+
     try:
-        get_goal_stats().record_order(matched=goal is not None)
+        get_goal_stats().record_order(matched=goal is not None, late=late)
     except Exception:
         pass
     if goal is None:
-        logger.info("[goal-order] 未匹配到活跃目标 ref=%s order=%s",
+        logger.info("[goal-order] 未匹配到活跃/近窗终态目标 ref=%s order=%s",
                     ref, order_id or "-")
         return out
 
     gid = str(goal.get("goal_id") or "")
     out["matched"] = True
     out["goal_id"] = gid
+    out["late"] = late
     # 幂等升级为**会话级**（P5）：留存环 spawn 后会话常年有活跃目标，旧单重放
     # （order_pull paid→activated 二次出现 / 重启后 _SEEN 清空）若只查当前目标
     # 的事件，会把历史单误认成续费单假结算新周期。
@@ -1501,12 +1694,18 @@ def settle_order_ref(
         return out
     out["updated"] = True
     store.add_event(gid, "order", f"{order_id or '-'}|{plan or '-'}")
+    if late:
+        # 复活痕迹显式进台账（报表/周审能看见「这单是迟到结算捞回来的」）
+        store.add_event(
+            gid, "status",
+            f"{goal.get('status')}->done:late_order")
     try:
         get_goal_stats().record_terminal("done")
     except Exception:
         pass
-    logger.info("[goal-order] 目标 %s 经订单回流结算 done（order=%s plan=%s）",
-                gid, order_id or "-", plan or "-")
+    logger.info("[goal-order] 目标 %s 经订单回流结算 done（order=%s plan=%s%s）",
+                gid, order_id or "-", plan or "-",
+                " late=1" if late else "")
     # P5 留存环：成交即起下一周期（retention 默认关；cfg 未传=旧行为）
     if cfg_root is not None:
         maybe_create_retention_goal(
@@ -1527,8 +1726,10 @@ __all__ = [
     "beat_feedback_state",
     "build_block_for_chat",
     "catalog_guard_facts",
+    "discovery_gap_for_goal",
     "get_configured_store",
     "goal_view",
+    "merged_beat_intent",
     "goals_enabled",
     "is_negative_emotion",
     "maybe_auto_create_goal",

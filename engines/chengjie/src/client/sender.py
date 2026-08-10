@@ -416,20 +416,44 @@ class TelegramSenderMixin:
     async def run_prereply_humanize(
         self, chat_id, *, text: str = "", elapsed_sec: float = 0.0,
     ) -> None:
-        """原生 A 线文本回复前的拟人序列：已读 → 正在输入(续挂) → 思考延迟。
+        """原生 A 线文本回复前的拟人序列：已读 → 静默思考 → 正在输入(续挂) → 发送。
 
-        与全自动 autosend 共用 ``humanize`` 协作器与 ``compute_pacing_delay`` 装配，节奏一致。
-        延迟取 ``telegram.reply_humanize.thinking_delay``；**默认 0=不延迟**（只已读、不改
-        现有近即时手感）。配了 min/max 后：``adaptive=false`` 走 uniform(min,max)；
-        ``adaptive=true`` 按回复 ``text`` 长度/``emotion`` 自适应估时并扣除 ``elapsed_sec``
-        已耗时（入站至今）。语音回复不走此路（自带「正在录音」分条节奏）。best-effort。
+        与全自动 autosend 共用 ``humanize`` 协作器与 ``resolve_pacing`` 装配，节奏一致。
+        延迟配置解析（2026-08-04 单一节奏源收口）：
+          1. ``telegram.reply_humanize.thinking_delay`` **实际配了值**（max_sec>0）→ 用它
+             （A 线独立覆写，运营显式选择时优先）；
+          2. 未配置/为零（出厂基准就是显式 0/0 块，**不能**按「块存在」判定——否则
+             回落在所有标准部署上永远死路）→ **跟随** ``inbox.l2_autosend.deliver_delay``
+             （设置页「回复节奏」滑杆写的就是这个键——修「设置页调了节奏、A 线原生
+             回复不吃」的双源分裂；``platform_overrides.telegram`` /
+             ``persona_overrides`` 同步生效）；
+          3. 想要「B 线有延迟、A 线保持秒回」的旧行为 → ``thinking_delay.follow: false``
+             显式退出跟随。
+        两处都没配 → 0=不延迟（只已读，保持旧手感）。
+        ``adaptive=false`` 走 uniform(min,max)；``adaptive=true`` 按回复 ``text`` 长度/
+        激活度自适应估时并扣除 ``elapsed_sec`` 已耗时（入站至今）。
+        打字气泡走**两段式**（typing_lead）：思考期静默、临发前才挂「正在输入」——
+        真人不会为 20 个字打 45 秒字。语音回复不走此路（自带「正在录音」分条节奏）。
+        best-effort。
         """
         if chat_id is None:
             return
         try:
             raw_cfg = self.config.config if hasattr(self.config, "config") else {}
             rh = (raw_cfg.get("telegram") or {}).get("reply_humanize") or {}
-            from src.inbox.humanize import resolve_pacing, run_presend_humanization
+            from src.inbox.humanize import (
+                resolve_following_delay_block,
+                resolve_pacing,
+                resolve_typing_lead,
+                run_presend_humanization,
+            )
+            # 单一节奏源（2026-08-07）：thinking_delay 未独立配值时跟随设置页滑杆键
+            # deliver_delay。follow 判定收口于 resolve_following_delay_block，
+            # 与协议链 / coverage 自检同一函数（改 follow 规则不再三处漂移）。
+            _block, _ = resolve_following_delay_block(
+                rh.get("thinking_delay"),
+                (((raw_cfg.get("inbox") or {}).get("l2_autosend") or {})
+                 .get("deliver_delay")))
             # 人设化节奏 + 观测分维：账号人设（与语音路径同口径 account_persona_ids[0]）。
             _pid = ""
             try:
@@ -439,8 +463,8 @@ class TelegramSenderMixin:
                 _pid = ""
             # arousal 由 resolve_pacing 从回复 text 自动估（语义正确：回复自身激活度）。
             _pr = resolve_pacing(
-                rh.get("thinking_delay") or {}, text=text, elapsed_sec=elapsed_sec,
-                persona_id=_pid)
+                _block, text=text, elapsed_sec=elapsed_sec,
+                persona_id=_pid, platform="telegram")
             try:
                 from src.integrations.humanize_metrics import record_pacing
                 record_pacing(f"native_tg/{_pid or '-'}", _pr)
@@ -456,7 +480,9 @@ class TelegramSenderMixin:
 
             await run_presend_humanization(
                 delay=delay, action="typing",
-                mark_read=_mr, typing=_tp, sleep=asyncio.sleep)
+                mark_read=_mr, typing=_tp, sleep=asyncio.sleep,
+                typing_lead_sec=resolve_typing_lead(
+                    _block, text=text, persona_id=_pid, platform="telegram"))
         except Exception:
             self.logger.debug("[prereply_humanize] 失败（忽略）", exc_info=True)
 
@@ -485,8 +511,14 @@ class TelegramSenderMixin:
         """发送成功后统一记账：刷新墙钟 + 记入与 B 线共用的发送计数器。
 
         墙钟供下次 ``_presend_pace`` 节流；计数器喂反封号闸门 + 机群健康灯今日外发量（best-effort）。
+        另喂渠道页「AI 已发」当日计数（daily_stats.replies，P2-0 四页 KPI 对齐）：
+        口径=A 线自动链成功出站条数（文字/语音分条各计一条，与出站镜像同频）。
         """
         self._last_send_wallclock = time.time()
+        try:
+            daily_stats.bump("replies")
+        except Exception:
+            pass
         try:
             _lim = self._shared_send_limiter(
                 self.config.config if hasattr(self.config, "config") else {}
@@ -500,12 +532,13 @@ class TelegramSenderMixin:
     def _postsend_mirror_and_record(self, chat_id: Any, preview: str,
                                     msg_id: Any = "",
                                     media_type: str = "",
-                                    media_ref: str = "") -> None:
+                                    media_ref: str = "",
+                                    mirror_text: Optional[str] = None) -> None:
         """发送成功后：出站镜像到坐席台（N4b）+ 记入 contacts 的外发互动（Q3）。
 
-        文本回复与富媒体（照片/语音）共用——富媒体传带标记的 preview（如「[图片] 配文」/「[语音]」），
-        让坐席台**看见** AI 发了富媒体、IntimacyEngine 也**计入**一次外发（否则只见入站、mutuality 偏低）。
-        两步各自 best-effort，绝不阻断发送。
+        文本回复与富媒体（照片/语音）共用。两步各自 best-effort，绝不阻断发送；
+        实现拆在 ``_mirror_out_row`` / ``_record_contact_out``（2026-08-02，分条语音
+        逐条镜像需要两个口径各自演进：收件箱 N 行、contacts 一轮一次）。
 
         ``msg_id``：发送 API 返回的真实 message.id（治本幂等键）。带上它后乐观出站镜像行与
         「自身已发消息被回显」共用同一 platform_msg_id → 主键级精确去重，不再依赖时间窗近似。
@@ -514,14 +547,36 @@ class TelegramSenderMixin:
         （2026-07-31 补）。此前 A 线只写 ``[图片] 配文`` 这种纯文本，后果两条：坐席在
         工作台看不到自家人设发出去的图；按 ``media_type`` 统计出站媒体的口径把 A 线
         整条漏掉（实测 Telegram 868 条出站只数出 1 条，实际文本占位有 166 条）。
-        两者都是**可选**的——取不到 URL 就退回纯文本镜像，与改动前逐字一致。
+
+        ``mirror_text``：收件箱镜像行的正文覆写（None=沿用 preview）。媒体行的
+        ``[语音]``/``[图片]`` 语义已由 media_type 承载，镜像正文应是干净的念稿/配文
+        （与 B 线 ``send_media(inbox_text=…)`` 同口径）；而 contacts 时间线是纯文本，
+        preview 保留标记才有表意。
+        """
+        self._mirror_out_row(
+            chat_id, preview if mirror_text is None else mirror_text,
+            msg_id=msg_id, media_type=media_type, media_ref=media_ref)
+        self._record_contact_out(chat_id, preview)
+
+    def _mirror_out_row(self, chat_id: Any, text: str, *, msg_id: Any = "",
+                        media_type: str = "", media_ref: str = "",
+                        sender_name: str = "") -> None:
+        """出站镜像**单行**进收件箱（含「已发送」回执），不记 contacts；best-effort。
+
+        分条语音（2026-08-02）逐条调用：客户收到 N 条独立语音，收件箱就该有 N 行
+        （每行自己的 msg_id/念稿/media_ref，坐席可逐条回放）。
+
+        ``sender_name``（P1-3）：语音行带「谁的音色」（人设显示名）——非空才透传，
+        经 ``_emit_inbox`` 的 source 落 ``messages.sender_name``，坐席气泡显示徽标。
         """
         try:
             _emit = getattr(self, "_emit_inbox", None)
             if _emit is not None:
-                _emit(chat_id=chat_id, text=preview, direction="out",
+                _kw = {"sender_name": str(sender_name)} if sender_name else {}
+                _emit(chat_id=chat_id, text=text, direction="out",
                       msg_id=str(msg_id or ""),
-                      media_type=media_type or "", media_ref=media_ref or "")
+                      media_type=media_type or "", media_ref=media_ref or "",
+                      **_kw)
                 # P4-4：镜像出站即置「已发送」（单勾）；对端读后由 UpdateReadHistoryOutbox
                 # 回执升级为「已读」（蓝色双勾）。仅 companion 镜像开启且带真实 id 时生效。
                 if getattr(self, "_mirror_inbox", False) and msg_id:
@@ -531,6 +586,13 @@ class TelegramSenderMixin:
                         str(chat_id), str(msg_id), "sent")
         except Exception:
             pass
+
+    def _record_contact_out(self, chat_id: Any, preview: str) -> None:
+        """contacts 外发互动记账（IntimacyEngine mutuality 口径）；best-effort。
+
+        与镜像行拆开：分条语音 N 行镜像仍只记**一轮**互动，保持既有亲密度动力学
+        （真人一口气连发 3 条短语音也是一轮对话，不是三倍热情）。
+        """
         try:
             from src.utils.companion_context import (
                 record_relationship_message as _rec_rel_msg,
@@ -591,15 +653,22 @@ class TelegramSenderMixin:
 
         连续计数的过期复位语义与 ``reply_logic_gates`` 闸门共用 ``effective_streak``
         （距上次自动回复超 30 分钟 → 从 1 重新计，否则 +1），两处永远一致。
+        键必须经 ``reply_logic_key``（账号分桶）——闸门读的就是这个键；此前这里
+        写旧格式 ``{chat}:{user}``，读写不相交 → 冷却/连发上限静默失效（2026-08-03
+        SpamBot 空转事故复盘时发现，修复回归钉在 test_reply_logic_gates）。
         best-effort：记账失败绝不影响发送主流程。
         """
         try:
-            from src.client.reply_logic_gates import effective_streak
+            from src.client.reply_logic_gates import (
+                effective_streak,
+                reply_logic_key,
+            )
             ts_map = getattr(self, '_auto_reply_ts', None)
             streak_map = getattr(self, '_auto_reply_streak', None)
             if ts_map is None or streak_map is None:
                 return
-            key = f"{chat_id}:{user_id}"
+            key = reply_logic_key(
+                getattr(self, 'account_id', 'default'), chat_id, user_id)
             now = time.time()
             streak_map[key] = effective_streak(
                 streak_map.get(key, 0), ts_map.get(key), now) + 1
@@ -969,10 +1038,13 @@ class TelegramSenderMixin:
             # 发布用 canonical 原图（不是去重微扰出的临时副本，那个已被删掉）。
             _cap = (caption or "").strip()
             _mt, _mref = self._publish_media_ref(photo_path)
+            # 镜像正文＝干净配文（[图片] 语义由 media_type 承载，与 B 线 caption 同
+            # 口径，气泡里不再重复方括号标记）；contacts 预览保留标记表意。
             self._postsend_mirror_and_record(
                 chat_id, f"[图片] {_cap}".strip() if _cap else "[图片]",
                 msg_id=getattr(_sent, "id", "") or "",
-                media_type=_mt or "image", media_ref=_mref)
+                media_type=_mt or "image", media_ref=_mref,
+                mirror_text=_cap)
             self.logger.info("已发送照片到 %s（%s）", chat_id, photo_path)
             return True
         except Exception as e:
@@ -1098,11 +1170,17 @@ class TelegramSenderMixin:
         *,
         is_peer_voice: bool = False,
         peer_audio_emotion: Optional[Dict[str, Any]] = None,
+        fail_state: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Try to send a TTS voice note for *reply_text*.
 
         Returns ``True`` if a voice note was sent (caller should skip text send).
         Returns ``False`` if voice was skipped/failed (caller sends text normally).
+
+        ``fail_state``（2026-08-02，可选 out 参数）：语音**被触发且尝试后失败**
+        的出口会写入 ``{"synth_failed": True, "reason": ...}``——返回值语义不变
+        （False=调用方发文字），调用方据此做「诚实回落」（剥语音承诺句）。
+        trigger 未命中/策略判文字的早退不写。
 
         Trigger modes (``telegram.voice_reply.trigger``):
         - ``when_peer_voice`` — only when the incoming message was a voice note
@@ -1134,6 +1212,32 @@ class TelegramSenderMixin:
                 _peer_req_voice = (_wm_v(str(_msg_txt)) == "voice")
             except Exception:
                 _peer_req_voice = False
+            # 语音欠账兑现（voice_iou，默认关）：上一轮诚实回落许过「回头补给
+            # 你」→ 本轮视同客户点名要语音强制尝试合成（trigger=never 已在上方
+            # 早退，不受影响）；真发成功后 _note_voice_ok 里清账，失败保留欠账
+            # TTL 内下次再试（不重复记账，防覆盖时间戳永不过期）。
+            _iou_pending = False
+            _iou_key = ""
+            try:
+                from src.client.voice_iou import (
+                    parse_iou_cfg as _iou_cfg_fn,
+                    pending_iou as _iou_pending_fn,
+                )
+                _iou_cfg = _iou_cfg_fn(raw_cfg)
+                if _iou_cfg["enabled"]:
+                    _iou_key = str(getattr(
+                        getattr(original_message, "chat", None), "id", "")
+                        or "")
+                    if _iou_key and _iou_pending_fn(
+                            _iou_key, ttl_hours=_iou_cfg["ttl_hours"]):
+                        _iou_pending = True
+                        if not _peer_req_voice:
+                            _peer_req_voice = True
+                            self.logger.info(
+                                "[voice_iou] 欠账待补 → 本轮视同点名要语音 "
+                                "chat=%s", _iou_key)
+            except Exception:
+                _iou_pending = False
             if (trigger == "when_peer_voice" and not is_peer_voice
                     and not _peer_req_voice):
                 self.logger.debug("[voice_reply] skip: trigger=when_peer_voice but msg is not voice")
@@ -1174,6 +1278,46 @@ class TelegramSenderMixin:
             if self._presend_blocked():
                 self.logger.info("[voice_reply] skip: 发送前护栏拦截（kill-switch/反封号闸门）")
                 return False
+
+            # ── 语音断档台账 + 失败事实回传（2026-08-02）─────────────────────
+            # 到这里=语音已被触发；此后「尝试合成但最终回落文字」的每个出口
+            # 都要记账（低流量断档看门狗 voice_outage 的判据）+ 把失败写回
+            # fail_state（调用方据此做诚实回落，剥「语音这就来」类空头支票）。
+            # 上方 trigger/长度/护栏早退不记。record=False 用于「决定层拒发」
+            # （如语言不匹配）：要诚实回落但不算合成断档——外语会话拒发是
+            # 能力缺口不是故障，混进台账会把断档告警刷成假阳性。
+            def _note_voice_fail(reason: str, *, record: bool = True) -> None:
+                if fail_state is not None:
+                    try:
+                        fail_state["synth_failed"] = True
+                        fail_state["reason"] = str(reason or "")
+                    except Exception:
+                        pass
+                if not record:
+                    return
+                try:
+                    from src.ai.voice_outage import get_voice_outage
+                    get_voice_outage().record_voice_attempt(
+                        False, "aline", str(reason or ""))
+                except Exception:
+                    pass
+
+            def _note_voice_ok() -> None:
+                try:
+                    from src.ai.voice_outage import get_voice_outage
+                    get_voice_outage().record_voice_attempt(True, "aline")
+                except Exception:
+                    pass
+                # 语音欠账已补（voice_iou）：本函数是「语音真发成功」的唯一
+                # 汇聚点（整段/分条/text-first 后台补发都经此）→ 在此清账。
+                if _iou_pending and _iou_key:
+                    try:
+                        from src.client.voice_iou import clear_iou as _iou_clear
+                        _iou_clear(_iou_key)
+                        self.logger.info(
+                            "[voice_iou] 欠账已补 chat=%s", _iou_key)
+                    except Exception:
+                        pass
 
             # 发图 GPU 占用中 defer（与 B 线 autosend 同口径，继承全局 avatar_voice.policy）
             from src.inbox.voice_autosend import resolve_defer_during_image
@@ -1240,6 +1384,8 @@ class TelegramSenderMixin:
                     self.logger.info(
                         "[voice_reply] 语言不匹配拒发语音（%s）→ 回落文字",
                         _lang_route)
+                    _note_voice_fail(
+                        "lang_mismatch:" + str(_lang_route), record=False)
                     return False
             except Exception:
                 self.logger.debug("[voice_reply] 语言路由异常（忽略）", exc_info=True)
@@ -1331,6 +1477,7 @@ class TelegramSenderMixin:
                             skip_llm_colloquial=_skip_llm_col,
                             on_part_sent=_note_voice_sent)
                         if split_sent:
+                            _note_voice_ok()
                             if vr_cfg.get("send_text_summary", False):
                                 await self._send_reply(original_message, reply_text)
                             return True
@@ -1343,6 +1490,7 @@ class TelegramSenderMixin:
                     skip_llm_colloquial=_skip_llm_col)
                 if not result.ok:
                     self.logger.warning("[voice_reply] TTS failed: %s", result.error)
+                    _note_voice_fail(str(result.error or "synth_failed"))
                     return False
                 try:
                     from src.inbox.voice_autosend import should_reject_voice_tts_result
@@ -1356,6 +1504,7 @@ class TelegramSenderMixin:
                             os.unlink(result.audio_path)
                         except Exception:
                             pass
+                        _note_voice_fail("edge_rejected")
                         return False
                 except Exception:
                     pass
@@ -1371,6 +1520,7 @@ class TelegramSenderMixin:
                         os.unlink(result.audio_path)
                     except Exception:
                         pass
+                    _note_voice_fail("duration_exceeded")
                     return False
 
                 # ── 质量闸门：截断/坏音（过短）→ 回落文字（宁缺毋滥）──
@@ -1393,6 +1543,7 @@ class TelegramSenderMixin:
                             os.unlink(result.audio_path)
                         except Exception:
                             pass
+                        _note_voice_fail("truncation_rejected:" + str(_why))
                         return False
 
                 dur_int = int(result.duration_sec) if result.duration_sec > 0 else None
@@ -1422,6 +1573,7 @@ class TelegramSenderMixin:
 
                 if sent:
                     _note_voice_sent()
+                    _note_voice_ok()
                     self.logger.info(
                         "[voice_reply] voice sent chat=%s persona=%s dur=%s",
                         original_message.chat.id,
@@ -1434,20 +1586,38 @@ class TelegramSenderMixin:
                     note_voice_send(original_message.chat.id, vr_cfg)
                     # 统一记账：语音也刷墙钟 + 计入今日外发量（反封号/健康灯不漏算语音条）。
                     self._postsend_record_count()
+                    # 镜像正文＝干净念稿（[语音] 语义由 media_type 承载，与 B 线
+                    # send_media(inbox_text=念稿) 同口径）；发布失败时 media_ref 为空，
+                    # 前端按「无音频存档」转写行展示，media_type 仍如实标 voice。
+                    # msg_id＝send_voice 返回的真实 id（回显主键去重，2026-08-02）。
+                    _vclean = " ".join(str(reply_text or "").split())
+                    _vmid = getattr(sent, "id", "") or ""
+                    # P1-3：语音行带「谁的音色」（人设显示名，best-effort 空串安全）
+                    from src.ai.persona_voice import persona_display_name
+                    _vwho = persona_display_name(voice_ctx.get("persona_id"))
                     if vr_cfg.get("send_text_summary", False):
+                        # 语音行本体也要可见/可回放（此前该分支只镜像文本摘要，语音
+                        # 条在收件箱隐形）；contacts 由随后的 _send_reply 记一次，
+                        # 这里只镜像不重复记账。
+                        self._mirror_out_row(
+                            original_message.chat.id, _vclean, msg_id=_vmid,
+                            media_type=_vmt or "voice", media_ref=_vref,
+                            sender_name=_vwho)
                         # 文本摘要走 _send_reply→自带护栏/节流/计数/镜像/记账
                         # （语音+文本=确有 2 条外发，各记一次属正确口径）。
                         await self._send_reply(original_message, reply_text)
                     else:
                         # 仅发语音时也要镜像/记账，否则坐席台/亲密度看不到这次外发。
-                        # 镜像**带上念稿**（与 B 线 send_media 的 inbox_text 同口径）：
-                        # 此前只写一个「[语音]」，坐席根本不知道 AI 说了什么，防复读
-                        # 逻辑读历史时看到的也只是占位。客户那边仍是纯语音，不受影响。
-                        self._postsend_mirror_and_record(
+                        # contacts 预览保留 [语音] 标记（纯文本时间线需要表意）。
+                        self._mirror_out_row(
+                            original_message.chat.id, _vclean, msg_id=_vmid,
+                            media_type=_vmt or "voice", media_ref=_vref,
+                            sender_name=_vwho)
+                        self._record_contact_out(
                             original_message.chat.id,
-                            self._voice_mirror_preview(reply_text),
-                            media_type=_vmt, media_ref=_vref)
+                            self._voice_mirror_preview(reply_text))
                     return True
+                _note_voice_fail("send_failed")
                 return False
 
             # ── A1 text-first 编排（2026-07-15 阶段A）：合成超预算先发文字占位，
@@ -1491,7 +1661,60 @@ class TelegramSenderMixin:
                 await self._send_reply(original_message, _txt)
 
             async def _send_fallback_text():
-                await self._send_reply(original_message, reply_text)
+                # 诚实回落（2026-08-02）：text-first 兜底=语音已确定失败，但调用方
+                # 早拿到 True（编排接管），同步路径的改写够不到这里 → 兜底文字
+                # 自己剥语音承诺/补台阶，防「语音这就来～」原样打字发出。
+                _fb_text = reply_text
+                try:
+                    from src.ai.voice_honest_fallback import (
+                        apply_voice_failure_fallback,
+                        honest_fallback_enabled,
+                        resolve_fallback_lang,
+                    )
+                    if honest_fallback_enabled(raw_cfg):
+                        _peer_txt = str(
+                            getattr(original_message, "text", None)
+                            or getattr(original_message, "caption", None) or "")
+                        _new_txt, _chg = apply_voice_failure_fallback(
+                            reply_text, _peer_txt,
+                            lang=resolve_fallback_lang(reply_text))
+                        if _chg and _new_txt.strip():
+                            _fb_text = _new_txt
+                            self.logger.info(
+                                "[voice_reply] 诚实回落改写（text-first 兜底）"
+                                "reason=%s",
+                                (fail_state or {}).get("reason")
+                                or "synth_failed")
+                            # 语音欠账登记（voice_iou，默认关）：与同步路径同
+                            # 判据——改写确实发生且客户点名要过语音才记。
+                            try:
+                                from src.client.voice_iou import (
+                                    parse_iou_cfg as _iou_cfg_fn2,
+                                    record_iou as _iou_rec,
+                                )
+                                from src.ai.outbound_promise_guard import (
+                                    wants_media as _iou_wm,
+                                )
+                                _iou_chat = str(getattr(
+                                    getattr(original_message, "chat", None),
+                                    "id", "") or "")
+                                if (_iou_chat
+                                        and _iou_wm(_peer_txt) == "voice"
+                                        and _iou_cfg_fn2(raw_cfg)["enabled"]):
+                                    _iou_rec(
+                                        _iou_chat,
+                                        str((voice_ctx or {}).get(
+                                            "persona_id") or ""))
+                                    self.logger.info(
+                                        "[voice_iou] 欠账登记 chat=%s",
+                                        _iou_chat)
+                            except Exception:
+                                self.logger.debug(
+                                    "[voice_iou] 欠账登记失败（忽略）",
+                                    exc_info=True)
+                except Exception:
+                    _fb_text = reply_text
+                await self._send_reply(original_message, _fb_text)
 
             import asyncio as _aio
             _vt = _aio.create_task(_voice_flow())
@@ -1607,7 +1830,10 @@ class TelegramSenderMixin:
           - 合成期间与条间间隔都挂「正在录音」chat action（对方视角=真人在录）。
           - 每条独立走预渲染/缓存命中（短句命中率更高）；只有第一条 reply 引用
             原消息（真人连发也只有第一条是"回复"）。
-          - 记账：每条各记一次外发（反封号口径）；镜像一次 ``[语音]×N``。
+          - 记账：每条各记一次外发（反封号口径）；**镜像逐条**（2026-08-02）——
+            客户实际收到 N 条独立语音，收件箱就有 N 行（每行自己的 msg_id/念稿/
+            可回放音频）。旧口径「合并一行 [语音]×N 不附音频」正是「坐席看不到
+            自己发的语音」的最后一块缺口。contacts 亲密度仍按一轮记一次。
         返回 True=至少发出一条（调用方不再发文字）。
         """
         import random as _rnd
@@ -1634,7 +1860,9 @@ class TelegramSenderMixin:
                 # 免得首条被规则档二次起头（「其实，说真的，…」）。
                 colloquial_lead=(i == 0 and not skip_llm_colloquial),
                 pre_colloquialized=pre_colloquialized,
-                skip_llm_colloquial=skip_llm_colloquial)
+                skip_llm_colloquial=skip_llm_colloquial,
+                # 分条单条：hub_fish 按 best_of_parts 减候选（GPU 减负）
+                split_part=True)
             if not rv.ok:
                 self.logger.info(
                     "[voice_reply] 分条第 %d/%d 条合成失败(%s)",
@@ -1718,6 +1946,9 @@ class TelegramSenderMixin:
         except Exception:
             jit_lo, jit_hi = 1.0, 2.5
         max_gap = float(split_cfg.get("max_gap_sec", 20) or 20)
+        # P1-3：语音人设显示名（「谁的音色」徽标）——循环外解析一次，空串安全。
+        from src.ai.persona_voice import persona_display_name as _pdn
+        _v_sender = _pdn(voice_ctx.get("persona_id"))
 
         sent_n = 0
         for i, rv in enumerate(results):
@@ -1729,15 +1960,19 @@ class TelegramSenderMixin:
                 await self._voice_recording_gap(chat_id, gap)
             await self._presend_pace()
             dur_int = int(rv.duration_sec) if rv.duration_sec > 0 else None
-            ok = await send_telegram_voice(
+            sent_msg = await send_telegram_voice(
                 self.client, chat_id, rv.audio_path, duration=dur_int,
                 reply_to_message_id=(_rt if i == 0 else None),
                 opus_application=opus_application)
+            # 发布到 /static **必须在 unlink 之前**（音频发完即删）；失败回空 →
+            # 该条镜像成「无音频存档」转写行（media_type 仍如实标 voice）。
+            _pmt, _pref = (self._publish_media_ref(rv.audio_path)
+                           if sent_msg else ("", ""))
             try:
                 os.unlink(rv.audio_path)
             except Exception:
                 pass
-            if not ok:
+            if not sent_msg:
                 self.logger.warning(
                     "[voice_reply] 分条第 %d/%d 条发送失败，停止后续",
                     i + 1, len(results))
@@ -1758,6 +1993,13 @@ class TelegramSenderMixin:
             from src.client.voice_burst_guard import note_voice_send
             note_voice_send(chat_id, vr_cfg)
             self._postsend_record_count()
+            # 逐条镜像（2026-08-02）：每条自己的 msg_id（回显主键去重）/该条念稿/
+            # 该条音频——坐席可逐条回放。contacts 记账在循环外按一轮记一次。
+            self._mirror_out_row(
+                chat_id, " ".join(str(list(parts)[i]).split()),
+                msg_id=getattr(sent_msg, "id", "") or "",
+                media_type=_pmt or "voice", media_ref=_pref,
+                sender_name=_v_sender)
 
         if sent_n:
             self.logger.info(
@@ -1765,9 +2007,9 @@ class TelegramSenderMixin:
                 sent_n, len(results), chat_id,
                 voice_ctx.get("persona_id") or "", total_dur)
             daily_stats.bump("tts_sent")
-            # 分条只镜像一行，故把**已发出的那几条**的念稿拼进去（后续条失败时不带）。
-            # 不附音频：N 个文件对一行镜像无从表达，可读性由念稿本身解决。
-            self._postsend_mirror_and_record(
+            # contacts 外发互动：一轮分条记一次；预览带 ×N 与**已发出那几条**的
+            # 念稿（后续条失败时不带——contacts 时间线不能谎报送达量）。
+            self._record_contact_out(
                 chat_id,
                 self._voice_mirror_preview(
                     " ".join(str(p) for p in list(parts)[:sent_n]), sent_n))

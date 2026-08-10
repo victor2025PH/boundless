@@ -4,6 +4,9 @@
   - 默认 thinking_delay=0 → 只已读、不挂打字（保持近即时手感）
   - 配了 min/max → 先已读、再挂「正在输入」、停顿后返回（顺序正确）
   - 读回执/打字异常不抛（best-effort）
+  - thinking_delay 未配置 → **跟随** inbox.l2_autosend.deliver_delay
+    （设置页「回复节奏」滑杆的单一节奏源收口，2026-08-04）；
+    显式配置的 thinking_delay 永远优先。
 """
 from __future__ import annotations
 
@@ -33,18 +36,21 @@ class _FakeClient:
 
 
 class _Cfg:
-    def __init__(self, thinking_delay):
+    def __init__(self, thinking_delay, deliver_delay=None):
         self.config = {"telegram": {"reply_humanize": {
             "thinking_delay": thinking_delay}}}
+        if deliver_delay is not None:
+            self.config["inbox"] = {"l2_autosend": {
+                "deliver_delay": deliver_delay}}
 
     def get(self, k, d=None):
         return self.config.get(k, d if d is not None else {})
 
 
-def _sender(thinking_delay, events, **client_kw):
+def _sender(thinking_delay, events, *, deliver_delay=None, **client_kw):
     class _S(TelegramSenderMixin):
         def __init__(self):
-            self.config = _Cfg(thinking_delay)
+            self.config = _Cfg(thinking_delay, deliver_delay)
             self.client = _FakeClient(events, **client_kw)
             self.logger = logging.getLogger("prereply")
 
@@ -102,3 +108,84 @@ def test_adaptive_deducts_elapsed_no_typing_when_already_waited(monkeypatch):
                  "per_char_sec": 0.1, "jitter": 0}, events)
     _run(s.run_prereply_humanize(7, text="短短", elapsed_sec=100.0))
     assert events == [("read", 7)]     # delay 被扣到 0，无 typing/sleep
+
+
+def test_missing_thinking_delay_follows_deliver_delay(monkeypatch):
+    # thinking_delay 未配置 → 跟随设置页写的 deliver_delay（min=max=5 消随机）
+    events = []
+
+    async def _fast_sleep(_s):
+        events.append(("sleep", _s))
+
+    monkeypatch.setattr(asyncio, "sleep", _fast_sleep)
+    s = _sender(None, events, deliver_delay={"min_sec": 5, "max_sec": 5})
+    _run(s.run_prereply_humanize(321, text="一句正常长度的回复内容"))
+    assert events[0] == ("read", 321)
+    assert any(e[0] == "sleep" for e in events[1:])       # 真等了
+    assert sum(s for k, s in events if k == "sleep") == pytest.approx(5.0)
+
+
+def test_zero_thinking_delay_block_still_follows_deliver_delay(monkeypatch):
+    # 出厂基准就是显式 0/0 块 → 必须照样跟随设置页（按「块存在」判定=回落死路，
+    # 所有标准部署 A 线永远秒回——2026-08-04 首版实现踩过，此测试钉死语义）
+    events = []
+
+    async def _fast_sleep(_s):
+        events.append(("sleep", _s))
+
+    monkeypatch.setattr(asyncio, "sleep", _fast_sleep)
+    s = _sender({"min_sec": 0, "max_sec": 0, "adaptive": False}, events,
+                deliver_delay={"min_sec": 30, "max_sec": 30})
+    _run(s.run_prereply_humanize(11, text="回复内容"))
+    assert sum(s for k, s in events if k == "sleep") == pytest.approx(30.0)
+
+
+def test_follow_false_opts_out_of_deliver_delay():
+    # 显式 follow:false=「B 线有延迟、A 线保持秒回」的旧行为出口 → 只已读
+    events = []
+    s = _sender({"min_sec": 0, "max_sec": 0, "follow": False}, events,
+                deliver_delay={"min_sec": 30, "max_sec": 30})
+    _run(s.run_prereply_humanize(11))
+    assert events == [("read", 11)]
+
+
+def test_nonzero_thinking_delay_wins_over_deliver_delay(monkeypatch):
+    # 非零 thinking_delay=A 线独立覆写 → 优先于 deliver_delay
+    events = []
+
+    async def _fast_sleep(_s):
+        events.append(("sleep", _s))
+
+    monkeypatch.setattr(asyncio, "sleep", _fast_sleep)
+    s = _sender({"min_sec": 6, "max_sec": 6}, events,
+                deliver_delay={"min_sec": 30, "max_sec": 30})
+    _run(s.run_prereply_humanize(11, text="回复内容"))
+    assert sum(s for k, s in events if k == "sleep") == pytest.approx(6.0)
+
+
+def test_empty_thinking_delay_block_follows_deliver_delay(monkeypatch):
+    # thinking_delay: {}（空块=未配置）→ 同样回落 deliver_delay
+    events = []
+
+    async def _fast_sleep(_s):
+        events.append(("sleep", _s))
+
+    monkeypatch.setattr(asyncio, "sleep", _fast_sleep)
+    s = _sender({}, events, deliver_delay={"min_sec": 4, "max_sec": 4})
+    _run(s.run_prereply_humanize(22, text="回复"))
+    assert sum(s for k, s in events if k == "sleep") == pytest.approx(4.0)
+
+
+def test_deliver_delay_platform_override_applies_to_telegram(monkeypatch):
+    # deliver_delay.platform_overrides.telegram 对 A 线生效（platform 透传）
+    events = []
+
+    async def _fast_sleep(_s):
+        events.append(("sleep", _s))
+
+    monkeypatch.setattr(asyncio, "sleep", _fast_sleep)
+    s = _sender(None, events, deliver_delay={
+        "min_sec": 2, "max_sec": 2,
+        "platform_overrides": {"telegram": {"min_sec": 7, "max_sec": 7}}})
+    _run(s.run_prereply_humanize(33, text="回复文本"))
+    assert sum(s for k, s in events if k == "sleep") == pytest.approx(7.0)

@@ -1018,11 +1018,18 @@ class LineRpaRunner:
             if not send_res.get("ok"):
                 overall_ok = False
                 break
-            # 5) 条间间隔（最后一条不再 sleep）
+            # 5) 条间间隔（最后一条不再 sleep）；采样进 bubble_gap 观测
+            #    （与 orchestrator 三链同口径，设置页「实测节奏」可见 RPA 分布）
             if pacing.enabled and idx < len(parts) - 1:
-                await asyncio.sleep(
-                    jitter_ms(pacing.inter_msg_ms_lo, pacing.inter_msg_ms_hi)
-                )
+                _gap = jitter_ms(pacing.inter_msg_ms_lo, pacing.inter_msg_ms_hi)
+                try:
+                    from src.integrations.humanize_metrics import (
+                        record_bubble_gap as _rbg_rpa,
+                    )
+                    _rbg_rpa("rpa", "line", _gap)
+                except Exception:
+                    pass
+                await asyncio.sleep(_gap)
 
         return {
             "ok": overall_ok,
@@ -1117,6 +1124,33 @@ class LineRpaRunner:
 
     def _failure_shots_cfg(self) -> FailureShotsConfig:
         return FailureShotsConfig.from_dict(self._cfg.get("failure_shots"))
+
+    def _note_risk_screen(self) -> None:
+        """P6：发送失败时从屏幕文字识别平台风控（验证墙/限制/封号）→ 24h 滚动计数。
+
+        verify/limit → risk_events flood 家族（喂 account_health 降 cap）；ban → 告警
+        不计数（终态）。即时 dump 一次 XML（发送失败低频，可接受）。全 best-effort。
+        """
+        try:
+            raw, _ = self._dump_ui_xml()
+            if not raw:
+                return
+            xml_text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+            account_id = str(self._cfg_get("account_id", "default") or "default")
+            from src.ops.rpa_risk_screen import note_risk_screen
+            _alert = None
+            if self._state_store is not None:
+                def _alert(_kind, _ctx, _msg):
+                    self._state_store.insert_alert(
+                        kind="account_risk", severity="warn",
+                        message=f"{_msg} account={account_id}",
+                        dedup_window_sec=600.0)
+            kind = note_risk_screen("line", account_id, xml_text, alert=_alert)
+            if kind and kind != "none":
+                logger.warning("[line_rpa] 屏幕风控识别 kind=%s account=%s",
+                               kind, account_id)
+        except Exception:
+            logger.debug("[line_rpa] _note_risk_screen 跳过", exc_info=True)
 
     async def _capture_failure_shot(
         self, *, step: str, chat_key: str,
@@ -1681,6 +1715,8 @@ class LineRpaRunner:
             )
             if shot:
                 out["screenshot_path"] = shot
+            # P6：设备 RPA 屏幕级风控识别 → 24h 滚动风控计数（喂 account_health）。
+            self._note_risk_screen()
         return out
 
     async def _run_once_multi(

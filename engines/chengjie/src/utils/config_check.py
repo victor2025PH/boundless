@@ -119,8 +119,35 @@ def _check_ai(ctx: _Ctx) -> None:
     if provider == "openai_compatible":
         _require(ctx, "ai.base_url", when="provider=openai_compatible 需要 base_url",
                  hint="如 DeepSeek: https://api.deepseek.com；Ollama: http://127.0.0.1:11434/v1")
-    _require(ctx, "ai.api_key", when="AI 调用需要 api_key",
-             hint="本地 Ollama 可填任意非空值（如 ollama）", severity=WARN)
+    # 主对话链位置（ai.primary，P2 本地化交付）：local/local_only 时本地端点三件套
+    # 是硬性（与 golive 清单 / AIClient 启动探针同一契约——声明了本地却缺端点，
+    # 启动时会退回 cloud 或直接不可用，必须在自检期点名）。
+    primary = str(ai.get("primary") or "cloud").strip().lower()
+    if primary not in ("cloud", "local", "local_only"):
+        ctx.add(WARN, "ai.primary",
+                f"primary='{primary}' 不是合法值（cloud|local|local_only），"
+                "运行时会按 cloud 处理",
+                "常见笔误：local-only（连字符）应为 local_only（下划线）")
+        primary = "cloud"
+    if primary in ("local", "local_only"):
+        fb = ai.get("fallback") if isinstance(ai.get("fallback"), dict) else {}
+        if not fb.get("enabled"):
+            ctx.add(ERROR, "ai.fallback.enabled",
+                    f"ai.primary={primary} 但本地端点未启用",
+                    "local/local_only 需 ai.fallback: enabled: true + base_url + model")
+        _require(ctx, "ai.fallback.base_url",
+                 when=f"ai.primary={primary} 需本地 LLM 端点",
+                 hint="如 http://127.0.0.1:11434（Ollama）")
+        _require(ctx, "ai.fallback.model",
+                 when=f"ai.primary={primary} 需本地模型名",
+                 hint="如 qwen3:30b-a3b-instruct")
+    if primary == "local_only":
+        # 严格隐私档：云端 key 在主对话链上根本不会被使用——不再劝填
+        # （误导本地化客户填一个用不上的云凭证）。
+        pass
+    else:
+        _require(ctx, "ai.api_key", when="AI 调用需要 api_key",
+                 hint="本地 Ollama 可填任意非空值（如 ollama）", severity=WARN)
     _require(ctx, "ai.model", when="需指定模型名", hint="如 deepseek-chat / gemini-2.0-flash")
 
     # 数值合法性

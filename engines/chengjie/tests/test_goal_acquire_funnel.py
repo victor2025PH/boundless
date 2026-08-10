@@ -166,7 +166,8 @@ def test_fill_rates_weighted_and_missing_order():
     assert miss == ["channel", "authority", "timeline"]
     hint = gap_hint(fields)
     assert "平台" in hint                       # channel 的 ask_zh
-    assert len(slot_keys("bant")) == 6 and len(slot_keys("relation")) == 4
+    # P26 起 relation 轨 5 槽（+age）；bant 轨不变
+    assert len(slot_keys("bant")) == 6 and len(slot_keys("relation")) == 5
 
 
 # ── store：customer_profiles 写入语义 ───────────────────────────────────────

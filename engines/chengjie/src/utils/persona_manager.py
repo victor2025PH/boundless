@@ -10,10 +10,11 @@ Supports:
 
 import logging
 import copy
+import threading
 import time
 from collections import deque
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 import yaml
 
@@ -65,6 +66,11 @@ PROMPT_CONSUMED_FIELDS = frozenset({
     # 身份/边界/情绪
     "identity.deny_ai", "identity.deny_ai_reply", "identity.claim_human",
     "boundaries.topics_to_avoid",
+    # 已撤销的旧设定（2026-08-03「删除不干净」事故链）：运营删掉某设定后，
+    # 会话历史窗口里的旧轮次仍会诱导 LLM 复读（客户甚至会主动灌「你上次给我看过
+    # 你的猫」这类假记忆钩子）。本字段显式注入「这些旧设定已作废，绝不再认领」，
+    # 是 prompt 层唯一能压住历史自强化的手段。条目由运营在删除设定时写入。
+    "boundaries.retired_facts",
     "capabilities.video_call",           # 反向消费：为真时撤掉「不能视频」约束
     "capabilities.photos",               # 反向消费：为真时撤掉「不能发照片」约束
                                          # （人设级发图总闸，默认关；SSOT=
@@ -189,6 +195,92 @@ def _canonical_emoji_level(persona: Dict[str, Any]) -> str:
         raw = str(s.get("emoji_level") or "").strip()
     lv = raw.lower()
     return _EMOJI_LEVEL_ALIASES.get(lv, lv)
+
+
+# resolve_reply_defaults 认可的取值域（与格式化器分支一致；超出即忽略＝不干预）
+_REPLY_DEFAULT_LENGTHS = frozenset(
+    {"short", "concise", "brief", "balanced", "moderate", "detailed", "long"})
+_REPLY_DEFAULT_EMOJIS = frozenset({"none", "minimal", "moderate", "rich", "high"})
+
+
+def resolve_reply_defaults(cfg_root: Any) -> Dict[str, Any]:
+    """``ai.reply_defaults`` 全局表达层默认（回复设置页写入，P0-style 2026-08-02）。
+
+    precedence 铁律：**人设显式值永远优先，全局默认只在人设沉默时兜底**——
+    人设对长度表过态（``reply_length`` **或** ``max_reply_sentences`` 任一存在）
+    则全局长度层整体退出，绝不出现「全局覆盖人设」的反转。
+
+    返回归一后的子集 dict（仅含有效键：length / max_sentences / emoji_level /
+    tone_hint），非法值静默忽略＝该项不干预；任何异常返回 {}，聊天链零阻断。
+    """
+    try:
+        ai = cfg_root.get("ai") if isinstance(cfg_root, dict) else None
+        rd = ai.get("reply_defaults") if isinstance(ai, dict) else None
+        if not isinstance(rd, dict):
+            return {}
+        out: Dict[str, Any] = {}
+        length = str(rd.get("length") or "").strip().lower()
+        if length in _REPLY_DEFAULT_LENGTHS:
+            out["length"] = length
+        try:
+            ms = int(rd.get("max_sentences") or 0)
+        except (TypeError, ValueError):
+            ms = 0
+        if 0 < ms <= 10:
+            out["max_sentences"] = ms
+        emoji = str(rd.get("emoji_level") or "").strip().lower()
+        emoji = _EMOJI_LEVEL_ALIASES.get(emoji, emoji)
+        if emoji in _REPLY_DEFAULT_EMOJIS:
+            out["emoji_level"] = emoji
+        hint = " ".join(str(rd.get("tone_hint") or "").split())
+        if hint:
+            out["tone_hint"] = hint[:120]
+        return out
+    except Exception:
+        return {}
+
+
+def explain_reply_style(
+    persona: Any, defaults: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """逐字段回答「长度/句数/emoji/风格钉子来自哪一层」（P1 生效值溯源）。
+
+    **核心不变量＝与两条格式化链的 precedence 完全一致**（徽标另算一套 →
+    「溯源说全局、prompt 实际用人设」比没有溯源更糟；有门禁与格式化器对拍）：
+    - 人设对长度表过态（reply_length **或** max_reply_sentences）→ 全局长度层退出；
+    - 两键并存时 length 占主导（max_sentences 标 suppressed 不标生效）；
+    - emoji＝personality/speaking 任一侧显式即人设，否则全局；
+    - tone_hint 只有全局层（附加语义，对全部人设生效）。
+    source ∈ persona | global | ""(无约束)。
+    """
+    p = persona if isinstance(persona, dict) else {}
+    s = p.get("speaking") if isinstance(p.get("speaking"), dict) else {}
+    rd = dict(defaults or {})
+
+    p_len = str(s.get("reply_length") or "").strip().lower()
+    p_max = s.get("max_reply_sentences", 0) or 0
+    length = p_len or ("" if p_max else rd.get("length", ""))
+    length_src = "persona" if p_len else ("global" if length else "")
+    max_sent = p_max or (0 if p_len else rd.get("max_sentences", 0))
+    # 与格式化器同款：有 length 档时句数行不发（suppressed）
+    max_effective = max_sent if (max_sent and not length) else 0
+    max_src = ""
+    if max_effective:
+        max_src = "persona" if p_max else "global"
+
+    emoji = _canonical_emoji_level(p)
+    emoji_src = "persona" if emoji else ""
+    if not emoji:
+        emoji = rd.get("emoji_level", "")
+        emoji_src = "global" if emoji else ""
+
+    tone = rd.get("tone_hint", "")
+    return {
+        "length": {"value": length, "source": length_src},
+        "max_sentences": {"value": max_effective, "source": max_src},
+        "emoji_level": {"value": emoji, "source": emoji_src},
+        "tone_hint": {"value": tone, "source": "global" if tone else ""},
+    }
 
 # Default persona when none is configured
 _DEFAULT_PERSONA: Dict[str, Any] = {
@@ -337,6 +429,19 @@ class PersonaManager:
         self._global_rules_sig: tuple = ("", 0.0, -1)
         #: **显式覆写**读写落点（测试/调用方指定）；None = 按 overlay 顺序每次重算
         self._global_rules_path: Optional[Path] = None
+        # P0-style：config_manager 引用（ai.reply_defaults 全局回复默认活读）。
+        # 持 manager 而非 config dict——整装热重载可能换掉根对象，经属性访问
+        # 永远拿当前活配置；None（测试/CLI 未装配）＝无全局默认，行为与旧版一致。
+        self._app_config_ref: Any = None
+        # profiles_runtime.yaml 热重载监视（2026-08-03「改了要等重启」修复）：
+        # 进程内存态与磁盘态只在启动对齐一次，导致 ① 双实例下 A 存 B 不知，
+        # ② 运维/agent 直改文件永不生效，③ persist 失败后重启还魂无从察觉。
+        # 签名取 (mtime_ns, size) —— 单 mtime 会漏同一时钟刻度内的连续写
+        # （global_rules_sig 同款教训）。path 为 None = 从未 load 过，监视不启用。
+        self._runtime_profiles_path: Optional[Path] = None
+        self._runtime_profiles_sig: tuple = (0, -1)
+        self._runtime_reload_next: float = 0.0   # 节流：下次允许 stat 的时刻
+        self._runtime_reload_lock = threading.Lock()
 
     @classmethod
     def get_instance(cls) -> "PersonaManager":
@@ -347,6 +452,42 @@ class PersonaManager:
     @classmethod
     def reset(cls):
         cls._instance = None
+
+    def attach_config_manager(self, config_manager: Any) -> None:
+        """挂 config_manager 引用供全局回复默认（``ai.reply_defaults``）活读。
+
+        只存引用不读内容；重复调用幂等（后到者胜，同进程只有一个真 manager）。
+        save_overlay_patch / 热重载就地合并后，格式化器每次拼 prompt 现读现取
+        ——回复设置页保存即生效，零重启。
+        """
+        if config_manager is not None:
+            self._app_config_ref = config_manager
+
+    def _reply_defaults(self) -> Dict[str, Any]:
+        """当前生效的全局回复默认（未装配 config → {} ＝旧行为）。"""
+        cm = self._app_config_ref
+        cfg = getattr(cm, "config", None) if cm is not None else None
+        return resolve_reply_defaults(cfg)
+
+    def count_speaking_overrides(self) -> Dict[str, int]:
+        """人设「说话方式」显式覆写计数（回复设置页「N 个人设自定义」提示）。
+
+        口径与格式化器 precedence 一致：length 桶＝``reply_length`` **或**
+        ``max_reply_sentences`` 任一显式（任一存在都会让全局长度层退出）；
+        emoji 桶＝personality/speaking 任一侧非空。只数 profile 库人设。
+        """
+        length_n = emoji_n = 0
+        for p in self._profile_personas.values():
+            if not isinstance(p, dict):
+                continue
+            s = p.get("speaking")
+            s = s if isinstance(s, dict) else {}
+            if str(s.get("reply_length") or "").strip() or s.get("max_reply_sentences"):
+                length_n += 1
+            if _canonical_emoji_level(p):
+                emoji_n += 1
+        return {"profiles": len(self._profile_personas),
+                "length": length_n, "emoji": emoji_n}
 
     def set_domain_persona(self, persona_data: Dict[str, Any]):
         """Set the domain-level default persona (loaded from domain pack or runtime file)."""
@@ -713,11 +854,26 @@ class PersonaManager:
         }
         ok = self.save_persona_file(path, wrapper)
         if ok:
+            # 自写抑制：刷新监视签名，防 maybe_reload 把自己刚写的文件再读一遍
+            self._runtime_profiles_path = path
+            self._runtime_profiles_sig = self._runtime_file_sig(path)
             logger.info(
                 "profiles 已持久化到 %s (%d 条，已过滤 _mrpa_source 自动导入)",
                 path, len(operator_profiles),
             )
         return ok
+
+    @staticmethod
+    def _runtime_file_sig(path: Optional[Path]) -> tuple:
+        """profiles_runtime.yaml 的内容签名 ``(mtime_ns, size)``；缺文件/异常 → (0, -1)。"""
+        if not path:
+            return (0, -1)
+        try:
+            st = path.stat()
+            return (int(getattr(st, "st_mtime_ns", 0) or int(st.st_mtime * 1e9)),
+                    int(st.st_size))
+        except OSError:
+            return (0, -1)
 
     def load_profiles_runtime(
         self,
@@ -727,6 +883,9 @@ class PersonaManager:
         """若存在 profiles_runtime.yaml 且启用持久化，则加载并合并到 profile store。
         运行时 profiles 优先于 config.yaml::personas.profiles（覆盖同 id 条目）。
         返回合并的 profile 数量。
+
+        成功解析路径后开启文件监视（``maybe_reload_runtime_profiles``）——
+        文件此刻不存在也登记路径，之后被创建同样能被热加载。
         """
         root_config = root_config or {}
         pp = root_config.get("persona_persistence") or {}
@@ -735,6 +894,12 @@ class PersonaManager:
         path = self.profiles_runtime_file_path(
             config_path, str(pp.get("profiles_path") or "")
         )
+        self._runtime_profiles_path = path
+        self._runtime_profiles_sig = self._runtime_file_sig(path)
+        return self._load_profiles_runtime_file(path)
+
+    def _load_profiles_runtime_file(self, path: Path) -> int:
+        """从指定文件读 profiles + history 合入内存（热重载与启动装载共用体）。"""
         raw = self.load_persona_file(path)
         if not raw or not isinstance(raw, dict):
             return 0
@@ -762,6 +927,48 @@ class PersonaManager:
             logger.info("已从 %s 加载 %d 个运行时 profile", path.name, count)
         return count
 
+    def maybe_reload_runtime_profiles(self, min_interval: float = 3.0) -> bool:
+        """profiles_runtime.yaml 变了就热重载（节流 stat，默认 ≥3s 一次）。
+
+        修「进程内存态只在启动对齐一次」的三类静默失真：双实例下 A 存 B 不知、
+        运维/agent 直改文件永不生效、persist 失败后重启还魔。挂在
+        ``get_persona_with_tier`` / ``get_persona_by_id`` 读取口——聊天链与
+        Studio 读档案都会经过，无需独立定时器。
+
+        语义边界（刻意如此）：
+        - **只增改不删**——文件里没有的内存 profile 原样保留（canonical/mrpa
+          层的人设本就不在 runtime 文件里，按文件差集删除会误伤）；
+        - 同 id 条目以文件为准——「内存有未持久化的编辑 × 文件被外部改」冲突时
+          外部编辑赢（persist 失败现已对运营可见，重存即可）；
+        - 自身 persist 会同步刷新签名，不触发自我重载；
+        - 刻意不 fire change hooks（重载是同步不是变更，防止联动副作用风暴）。
+        """
+        path = self._runtime_profiles_path
+        if path is None:
+            return False
+        now = time.time()
+        if now < self._runtime_reload_next:
+            return False
+        # 非阻塞：并发读取路径撞车时让一个线程干活，其余立刻走开
+        if not self._runtime_reload_lock.acquire(blocking=False):
+            return False
+        try:
+            self._runtime_reload_next = now + max(0.5, float(min_interval))
+            sig = self._runtime_file_sig(path)
+            if sig == self._runtime_profiles_sig:
+                return False
+            self._runtime_profiles_sig = sig
+            if sig == (0, -1):
+                return False  # 文件被删：保守保留内存态（重启才回落下层）
+            n = self._load_profiles_runtime_file(path)
+            logger.info("profiles_runtime.yaml 变更热重载：%d 个 profile 已刷新", n)
+            return True
+        except Exception:
+            logger.warning("profiles_runtime 热重载失败（保留内存态）", exc_info=True)
+            return False
+        finally:
+            self._runtime_reload_lock.release()
+
     def load_personas_canonical(self, config_manager: Any) -> int:
         """P5-D: Load operator-curated profiles from personas.yaml (canonical layer).
 
@@ -774,6 +981,9 @@ class PersonaManager:
         operator-owned and will not be clobbered by Messenger RPA import on restart.
         Returns number of profiles loaded.
         """
+        # 顺手装配 config 引用（全局回复默认活读）——本方法是 web/CLI 两条
+        # 装配链都必经的点，且在任何 early-return 之前执行。
+        self.attach_config_manager(config_manager)
         try:
             cfg = getattr(config_manager, "config", None) or {}
             pp = cfg.get("persona_persistence") or {}
@@ -890,6 +1100,10 @@ class PersonaManager:
         """Look up a persona by its profile id (from personas.profiles[].id)."""
         if not profile_id:
             return None
+        try:
+            self.maybe_reload_runtime_profiles()
+        except Exception:
+            pass
         return self._profile_personas.get(str(profile_id))
 
     def list_profile_ids(self) -> List[str]:
@@ -1161,6 +1375,10 @@ class PersonaManager:
         > ``account_persona_id``（多协议号 2026-07-24 修复：账号人设优先于
         peer-global chat_binding，防双号串话）> chat_binding > domain > default。
         """
+        try:
+            self.maybe_reload_runtime_profiles()
+        except Exception:
+            pass
         if conversation_key:
             _conv_ref = self._chat_bindings.get(str(conversation_key))
             if _conv_ref:
@@ -1297,7 +1515,10 @@ class PersonaManager:
         # P2-A compact 模式也接通 emoji_level / reply_length（修真断链）
         # — web 后台改完后即使在 compact 配置下也能立刻看到效果
         # K1：档位归一 + speaking.emoji_level 回落，与 full 模式同口径。
-        emoji_level = _canonical_emoji_level(persona)
+        # P0-style：人设沉默时回落全局默认 ai.reply_defaults（人设显式值优先；
+        # 人设对长度表过态——含只填 max_reply_sentences——全局长度层整体退出）。
+        _rd = self._reply_defaults()
+        emoji_level = _canonical_emoji_level(persona) or _rd.get("emoji_level", "")
         if emoji_level == "none":
             lines.append("不用 emoji。")
         elif emoji_level == "minimal":
@@ -1306,12 +1527,16 @@ class PersonaManager:
             lines.append("emoji 用得自然（约 60% 回复带 1-2 个）。")
         # moderate 不输出（默认行为，省 token）
         reply_length = (s.get("reply_length") or "").strip().lower()
+        if not reply_length and not s.get("max_reply_sentences"):
+            reply_length = _rd.get("length", "")
         if reply_length in ("short", "concise", "brief"):
             lines.append("回复 1-2 句即可，像微信私聊。")
         elif reply_length in ("detailed", "long"):
             lines.append("回复可稍详细（4-6 句），但保持口语。")
         if s.get("language_follow"):
             lines.append("用户用什么语言发消息，就用同一语言回复。")
+        if _rd.get("tone_hint"):
+            lines.append(f"全局说话风格要求：{_rd['tone_hint']}。")
         # P1-1（compact 安全网）：full 模式有完整 5 条硬约束，compact 模式至少
         # 保留最核心的 2 条 — 直接答问 + 禁括号标记 — 防配置切到 compact 时
         # 整个底线消失。身份硬锁也保留，因为 AI 身份露馅是转化场景的最大伤害。
@@ -1329,6 +1554,17 @@ class PersonaManager:
             lines.append(
                 f"避开话题：{'、'.join(_avoid_c[:8])}——轻巧带过后立即换话题，"
                 "绝不以该话题反问对方（如求推荐/求分享）。"
+            )
+        # 已撤销的旧设定（2026-08-03）：compact 是生产主用格式，这条防线缺了
+        # 就等于没修——历史窗口越长复读越强，恰恰是 compact 生效的场景。
+        # P2 期起条目支持 str / {text,added,terms} 双形态，取数统一走 persona_retired。
+        from src.utils.persona_retired import retired_prompt_items as _rpi_c
+        _rfc = _rpi_c(persona)
+        if _rfc:
+            lines.append(
+                f"【已作废的旧设定】{'；'.join(_rfc[:8])}——这些不属于现在的你，"
+                "绝不认领或当现状提起；对方提到就轻巧澄清（你是不是记成别人啦）"
+                "再带回当下，历史消息里的旧说法一律作废。"
             )
         _caps_c = persona.get("capabilities") or {}
         if not (isinstance(_caps_c, dict) and _caps_c.get("video_call")):
@@ -1656,7 +1892,9 @@ class PersonaManager:
         # web 后台改了 emoji_level 用户感知不到。这里转成自然语言指令。
         # K1：档位归一（low/medium 旧写法此前一个分支都不命中 = 整档静默失效）
         # + speaking.emoji_level 兼容位回落。
-        emoji_level = _canonical_emoji_level(persona)
+        # P0-style：人设两侧都没表态 → 回落全局默认 ai.reply_defaults.emoji_level。
+        _rd = self._reply_defaults()
+        emoji_level = _canonical_emoji_level(persona) or _rd.get("emoji_level", "")
         if emoji_level == "none":
             lines.append("不使用任何 emoji 或表情符号。")
         elif emoji_level == "minimal":
@@ -1683,18 +1921,26 @@ class PersonaManager:
         # P2-A：reply_length 真生效（修真断链）— 优先用语义化标签，fallback 到
         # max_reply_sentences 保持向后兼容。两者并存时 reply_length 占主导。
         # concise/brief 是 short 的别名（兼容旧 yaml）
-        reply_length = (s.get("reply_length") or "").strip().lower()
+        # P0-style：人设对长度**完全沉默**（reply_length 与 max_reply_sentences
+        # 都没填）才回落全局默认——只填 max_reply_sentences 的人设，其句数上限
+        # 必须继续生效，全局 length 不得把它顶掉（precedence 反转即事故）。
+        _p_len = (s.get("reply_length") or "").strip().lower()
+        _p_max = s.get("max_reply_sentences", 0)
+        reply_length = _p_len or ("" if _p_max else _rd.get("length", ""))
         if reply_length in ("short", "concise", "brief"):
             lines.append("回复要短：1-2 句话，像微信私聊一行；不要展开长篇。")
         elif reply_length in ("balanced", "moderate"):
             lines.append("回复均衡：2-4 句话，简洁直接，不堆砌客套。")
         elif reply_length in ("detailed", "long"):
             lines.append("可以稍详细：4-6 句，但仍要口语，不写小作文。")
-        max_sentences = s.get("max_reply_sentences", 0)
+        max_sentences = _p_max or (0 if _p_len else _rd.get("max_sentences", 0))
         if max_sentences and not reply_length:
             lines.append(f"单次回复建议不超过 {max_sentences} 句。")
         if s.get("language_follow"):
             lines.append("用户用什么语言发消息，就用同一语言回复。")
+        if _rd.get("tone_hint"):
+            lines.append(
+                f"全局说话风格要求：{_rd['tone_hint']}（与人设性格自然融合，不冲突时遵循）。")
         # 口头脏话/粗话尺度（per-persona opt-in `speaking.banter_profanity`）：
         # 仅在【关系亲密（intimate/steady）】才放开，用于「朋友/情侣间的口癖」增加真人感。
         # 硬红线永不松动：不人身攻击、不辱骂贬低对方本人、不涉歧视/仇恨/性；对方一旦情绪
@@ -1736,6 +1982,23 @@ class PersonaManager:
                 "碰到这些话题时：轻巧带过后**立即转移**到别的日常话题，"
                 "绝不追问细节、绝不在结尾用该话题反问对方（如让对方推荐/分享），"
                 "不评判不说教。"
+            )
+        # 已撤销的旧设定（2026-08-03「删除不干净」事故链）：运营删掉的人设事实，
+        # 会话历史旧轮次仍会诱导复读，客户还会主动灌「你上次给我看过你的猫」这类
+        # 假记忆钩子——本块是 prompt 层唯一能压住两者的手段。只否认「认领」，
+        # 不禁话题本身（客户聊猫是正常社交，硬回避反而机器人味）。
+        # P2 期起条目支持 str / {text,added,terms} 双形态，取数统一走 persona_retired。
+        from src.utils.persona_retired import retired_prompt_items as _rpi
+        _rf = _rpi(persona)
+        if _rf:
+            lines.append(
+                "【已作废的旧设定·纠错】以下内容不属于现在的你（旧资料已删除）：\n"
+                + "\n".join(f"- {x}" for x in _rf)
+                + "\n绝不把这些当成你的现状说出来或认领，也绝不基于它们编新细节。"
+                "如果对方提起（如「你的猫怎么样了」「你上次给我看过的」），"
+                "别顺着承认，用一句轻巧自然的话澄清（比如「我没有养猫呀，"
+                "你是不是记成别人啦哈哈」），然后把话题接回当下。"
+                "对方聊这类话题本身没问题，正常参与就好，只是别说那是你的。"
             )
         # A2（2026-07-22）：能力边界——陪聊人设默认不能视频/语音通话（无此能力，
         # 应允=穿帮）。人设可显式声明 capabilities.video_call: true 关闭本约束。

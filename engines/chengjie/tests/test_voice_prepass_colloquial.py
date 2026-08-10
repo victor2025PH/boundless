@@ -158,8 +158,20 @@ class _PartsHost:
     def _postsend_record_count(self):
         return None
 
-    def _postsend_mirror_and_record(self, chat_id, text):
+    def _mirror_out_row(self, chat_id, text, **kw):
+        # 2026-08-02 起分条路径逐条镜像走此口
         self.mirrored.append(text)
+
+    def _record_contact_out(self, chat_id, preview):
+        pass
+
+    def _publish_media_ref(self, path):
+        return ("", "")   # 本文件只测口语化前处理，不关心归档
+
+    def _voice_mirror_preview(self, *a, **k):
+        # c2edfa8（并行线 2026-08-01）在 _send_voice_reply_parts 里新增了该调用，
+        # 假宿主补 no-op 对齐——真实现属 TelegramSenderMixin，非本测试关注点。
+        return None
 
     def _reply_to_message_id_for_send(self, msg):
         return 7

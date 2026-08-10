@@ -89,6 +89,60 @@ def test_domains_are_packaged(build_mod):
     )
 
 
+def test_platform_pkgs_not_raw_in_datas(build_mod):
+    """platform/credpool|licensing **绝不能**以整目录原样进 DATAS（必须走暂存清洗）。
+
+    事故（2026-08-09 实锤）：整目录 --add-data 把 credpool/config/account_registry.db
+    （真实 Telegram 账号 + credpool_cred）、credpool/config/registry.key（Fernet 解密钥）、
+    credpool/data/tgmatrix.db 一并打进**公网安装包** = 账号 + 解密钥同包交付。这些数据文件
+    运行时从不被读（消费方只按路径加载 .py），必须经 _stage_platform_pkg 清洗后再打。
+    """
+    platform_root = build_mod._PLATFORM_ROOT
+    offenders = []
+    for src, dst in build_mod.DATAS:
+        src_p = Path(src).resolve()
+        try:
+            inside = src_p == platform_root.resolve() or platform_root.resolve() in src_p.parents
+        except Exception:
+            inside = False
+        # 只有「原目录」才违规；暂存目录（platform-staged）不在 _PLATFORM_ROOT 下，放行
+        if inside:
+            offenders.append(f"{src} -> {dst}")
+    assert not offenders, (
+        "DATAS 直指 platform 原目录（会把 account_registry.db / registry.key / *.db "
+        "打进公网安装包）：\n  " + "\n  ".join(offenders)
+        + "\n改用 _stage_platform_pkg 暂存清洗后再打（见 _staged_datas）。"
+    )
+
+
+def test_platform_staging_strips_secrets(build_mod):
+    """暂存 platform 瘦模块后：机密数据必被剔净、瘦客户端代码必须幸存。
+
+    这是上一条门禁的运行期对照：不仅「不许原目录直打」，还要证明「清洗真的把
+    .db/.key/.pem/.sqlite 全剔了」且没误伤 credpool_client.py 这类真正要随包的代码。
+    """
+    secret_suffixes = {".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite3",
+                       ".key", ".pem"}
+    for pkg in build_mod.PLATFORM_PKGS:
+        src = build_mod._PLATFORM_ROOT / pkg
+        if not src.is_dir():
+            continue
+        staged = build_mod._stage_platform_pkg(pkg)
+        assert staged is not None and staged.is_dir()
+        leaked = [
+            str(p.relative_to(staged))
+            for p in staged.rglob("*")
+            if p.is_file() and p.suffix.lower() in secret_suffixes
+        ]
+        assert not leaked, f"platform/{pkg} 暂存仍含机密数据（会泄漏进安装包）: {leaked}"
+    # credpool 瘦客户端是运行时按路径加载的唯一必需文件，清洗不得误删
+    cred = build_mod._stage_platform_pkg("credpool")
+    if cred is not None:
+        assert (cred / "credpool_client.py").is_file(), (
+            "清洗把 credpool_client.py 也剔掉了 —— 中央凭据池会静默失效"
+        )
+
+
 def test_datas_sources_exist(build_mod):
     """DATAS 里登记的源路径必须真实存在——写错路径时 PyInstaller 只打印一行
     「跳过不存在的数据」就继续，构建照样成功、缺陷照样出厂。"""

@@ -141,6 +141,8 @@ def make_provider(config: Dict[str, Any]):
             "qr_image": qr_image,
             "qr_url": qr_url,
             "instruction": "用手机 WhatsApp：设置 → 已关联的设备 → 关联新设备，扫描二维码。",
+            # i18n 键随会话下发：英文坐席按键取本地化指引，raw instruction 仅兜底
+            "instruction_key": "inbox.connect.instr_wa_protocol",
             "poll": _poll,
             "cancel": _cancel,
             "state": {"login_id": login_id, "base": base},

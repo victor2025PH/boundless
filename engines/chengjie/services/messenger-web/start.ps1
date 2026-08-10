@@ -45,16 +45,26 @@ if ($env:PY_API_TOKEN) {
 } else {
   Write-Host "[messenger-web] WARN: auth_token not found - inbound pushes may be 401-rejected"
 }
-# 登录交互：0=headed（弹窗，运营在窗口内完成官方登录）；登录成功持久化后可切 1 后台常驻
+# 交互登录：0=headed（弹窗，运营在窗口内完成官方登录）；1=无头（一般不用，登录要人工过 2FA）
 $env:MSG_HEADLESS = "0"
+# restore/开机恢复/崩溃自愈已授权会话：1=无头后台保活（默认，稳态 0 可见窗口，多账号规模化
+# 的窗口治理靠这条）；0=restore 也 headed（旧行为，调试用）。交互登录仍受 MSG_HEADLESS 管。
+$env:MSG_RESTORE_HEADLESS = "1"
 # 开机自动恢复持久化 profile（headed 默认关 → 曾出现「主进程先起时 restore 落空、
 # 账号一直不上线」的启动顺序依赖）。显式开：服务一起来就恢复会话，与主进程启动顺序解耦。
 $env:MSG_RESTORE_ON_BOOT = "1"
 # 入站轮询间隔（毫秒）；0 关闭入站同步
 $env:MSG_POLL_MS = "4000"
-# 首连回填最近会话末条数（0 关闭）
+# 首连历史回填：登录后对最近 N 个会话各回填末尾若干条历史（0 关闭）。
+# P1 起真实生效：每 tick 回填 1 条线程 → POST /api/internal/protocol/thread-history
+# （Python 侧只对空会话落库=重启幂等；历史不触发 AI/SSE/未读）。
 $env:MSG_BACKFILL = "20"
 $env:MSG_SYNC = "1"
+# P1 目录同步 / 拉更早（默认值在 server.js，通常无需改）：
+#   MSG_DIR_SYNC_EVERY=75    会话占位推送周期（tick 数，≈5min；首轮全量+指纹去重）
+#   MSG_DIR_SYNC_MIN_MS=30000 两次推送最小间隔（防抖）
+#   MSG_BURST_MAX=6          一次变更最多补报的对端连发条数
+#   MSG_INBOX_HEALTH_EVERY=15 入站健康心跳周期（tick 数，≈60s）
 # 入站媒体落地目录（对齐 whatsapp-baileys）：进线程读到图片/视频等媒体气泡时，用浏览器会话
 # 下载写入 Python 静态目录（同机共享），前端按 /static URL 加载。未配置则回落占位文本。
 $env:MSG_MEDIA_DIR = "$root\src\web\static\protocol_media\messenger"

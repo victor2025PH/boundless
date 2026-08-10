@@ -85,6 +85,7 @@ contextBridge.exposeInMainWorld("shell", {
   // 原生系统通知（新私聊消息弹窗）：{title, body} → 主进程 Notification，点击聚焦主窗口。
   notify: (args) => ipcRenderer.invoke("desktop:notify", args),
   voiceProfiles: () => ipcRenderer.invoke("desktop:voice-profiles"),
+  voiceEffectiveConfig: (args) => ipcRenderer.invoke("desktop:voice-effective-config", args),
   voiceTts: (args) => ipcRenderer.invoke("desktop:voice-tts", args),
   sendVoice: (body) => ipcRenderer.invoke("desktop:send-voice", body),
   voiceReconcile: () => ipcRenderer.invoke("desktop:voice-reconcile"),
@@ -97,6 +98,10 @@ contextBridge.exposeInMainWorld("shell", {
   // 在对应 webview 的官方页 DOM 填入并发送，再回执。
   outboundPull: (args) => ipcRenderer.invoke("desktop:outbound-pull", args),
   outboundAck: (args) => ipcRenderer.invoke("desktop:outbound-ack", args),
+  // 拟人节奏计划：{account_id,text} → {typingMs,waitMs,throttled}（策略在主进程 outbound-pace.js）
+  pacePlan: (args) => ipcRenderer.invoke("desktop:pace-plan", args),
+  // 注入回执 → 主进程判定该不该 ack：{id,account_id,result:{ok,reason,timeout}}
+  outboundReport: (args) => ipcRenderer.invoke("desktop:outbound-report", args),
   // 受控出站人审介入：{id, action: cancel|hold|release|edit|retry, text?}
   outboundAction: (args) => ipcRenderer.invoke("desktop:outbound-action", args),
   // AI 重写助手：{id} → {ok, reply, original}

@@ -129,6 +129,9 @@ _PROBES: Dict[str, _Probe] = {
     "identity.deny_ai_reply": _Probe("探针否认话术我是真人啦", "探针否认话术我是真人啦"),
     "identity.claim_human": _Probe(True, f"你就是真人{_ROLE}{_NAME}"),
     "boundaries.topics_to_avoid": _Probe(["探针雷区话题"], "探针雷区话题"),
+    # 已撤销的旧设定（2026-08-03 删除不干净事故链）：列表条目必须逐条进
+    # 【已作废的旧设定】块——这是压住会话历史复读/客户假记忆钩子的 prompt 层防线
+    "boundaries.retired_facts": _Probe(["探针撤销养猫设定"], "探针撤销养猫设定"),
     # 反向消费：声明会视频 → 「不能视频通话」的默认约束必须消失
     "capabilities.video_call": _Probe(True, "你不能进行视频通话", mode="absent"),
     # 反向消费（2026-07-31）：人设级发图开关开 → 「没有发照片功能」默认约束必须消失

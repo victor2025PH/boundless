@@ -129,7 +129,8 @@ def infer_chat_type(
 _PLATFORM_MSG_ID_FIELDS = {
     "telegram":  ("id", "message_id"),         # MTProto message.id
     "whatsapp":  ("wamid", "message_id", "msg_id"),
-    "messenger": ("mid", "message_id"),
+    # msg_id = messenger-web synthMsgId（DOM 无 mid/wamid 时的确定性指纹）
+    "messenger": ("mid", "message_id", "msg_id"),
     "line":      ("message_id", "server_id"),  # 不取裸 id（房间 id）
     "web":       ("message_id", "id"),
 }
@@ -266,7 +267,16 @@ def normalize_chat(
     ``username`` / ``phone`` / ``avatar_url``：peer 真实身份画像（缺省空，可从
     ``source`` 兜底）；落库后列表/头部/客户信息面板统一读出，替代「一排数字 id」。
     """
-    msg = message_obj(text=last_msg, ts=last_ts, direction="in", source=source)
+    # 顶层 message_id 与 source 双写：protocol_bridge 常把 msg_id 放进 source；
+    # 显式提到顶层后，ingest._msg_from_obj 任一抽取路径都能命中（防 source 被剥）。
+    _src = source if isinstance(source, dict) else {}
+    _pmid = extract_platform_msg_id(_src, platform) or str(
+        _src.get("message_id") or _src.get("msg_id") or ""
+    ).strip()
+    msg = message_obj(
+        text=last_msg, ts=last_ts, direction="in",
+        message_id=_pmid, source=source,
+    )
     ctype = (str(chat_type).strip().lower()
              or infer_chat_type(platform, chat_key, source))
     src = source if isinstance(source, dict) else {}

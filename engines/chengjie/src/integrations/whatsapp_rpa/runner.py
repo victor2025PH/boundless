@@ -446,6 +446,35 @@ class WhatsAppRpaRunner:
             line_pkg=self._wa_pkg,
         )
 
+    def _note_risk_screen(self, chat_xml: Optional[bytes]) -> None:
+        """P6：发送失败时从屏幕文字识别平台风控（验证墙/限制/封号）→ 24h 滚动计数。
+
+        verify/limit → risk_events flood 家族（喂 account_health 降 cap）；ban → 告警
+        不计数（终态）。复用手上 chat_xml（无则即时 dump 一次，发送失败低频可接受）。
+        全 best-effort，绝不抛。
+        """
+        try:
+            raw = chat_xml
+            if not raw:
+                raw, _ = self._dump_ui_xml()
+            if not raw:
+                return
+            xml_text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+            from src.ops.rpa_risk_screen import note_risk_screen
+            _alert = None
+            if self._state_store is not None:
+                def _alert(_kind, _ctx, _msg):
+                    self._state_store.insert_alert(
+                        kind="account_risk", severity="warn",
+                        message=f"{_msg} account={self._account_id}",
+                        dedup_window_sec=600.0)
+            kind = note_risk_screen("whatsapp", self._account_id, xml_text, alert=_alert)
+            if kind and kind != "none":
+                logger.warning("[wa_rpa] 屏幕风控识别 kind=%s account=%s",
+                               kind, self._account_id)
+        except Exception:
+            logger.debug("[wa_rpa] _note_risk_screen 跳过", exc_info=True)
+
     def _dump_ui_xml(self) -> Tuple[Optional[bytes], str]:
         serial = self._serial
         if not serial:
@@ -1540,7 +1569,16 @@ class WhatsAppRpaRunner:
                 )
                 break
             if pacing.enabled and idx < len(parts) - 1:
-                await asyncio.sleep(jitter_ms(pacing.inter_msg_ms_lo, pacing.inter_msg_ms_hi))
+                # 条间隔采样进 bubble_gap 观测（与 orchestrator 三链同口径）
+                _gap = jitter_ms(pacing.inter_msg_ms_lo, pacing.inter_msg_ms_hi)
+                try:
+                    from src.integrations.humanize_metrics import (
+                        record_bubble_gap as _rbg_rpa,
+                    )
+                    _rbg_rpa("rpa", "whatsapp", _gap)
+                except Exception:
+                    pass
+                await asyncio.sleep(_gap)
 
         out: Dict[str, Any] = {"ok": overall_ok, "parts": results, "parts_count": len(parts)}
         if not overall_ok and results:
@@ -3431,6 +3469,9 @@ class WhatsAppRpaRunner:
                     message=f"发送失败: chat={chat_key} err={result['error'][:80]}",
                     dedup_window_sec=120.0,
                 )
+            # P6：设备 RPA 屏幕级风控识别 → 24h 滚动风控计数（喂 account_health）。
+            # 复用本轮 chat_xml（发送时已 dump），零额外 IO；全 best-effort 不影响主链。
+            self._note_risk_screen(chat_xml)
 
         # 抓包补漏：发完后检测 AI 处理期间到达的新消息（最多 N 轮）
         # 背景：bot 打开聊天 → AI 思考 15-25s → 用户发新消息 → WhatsApp 自动已读

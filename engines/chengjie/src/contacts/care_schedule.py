@@ -54,7 +54,9 @@ class CareScheduleStore:
         created_at REAL NOT NULL,
         updated_at REAL NOT NULL,
         sent_at REAL,
-        note TEXT NOT NULL DEFAULT ''
+        note TEXT NOT NULL DEFAULT '',
+        sent_text TEXT NOT NULL DEFAULT '',
+        review TEXT NOT NULL DEFAULT ''
     );
     CREATE INDEX IF NOT EXISTS idx_care_due ON care_schedule(status, due_at);
     CREATE INDEX IF NOT EXISTS idx_care_contact ON care_schedule(contact_key, status);
@@ -74,6 +76,17 @@ class CareScheduleStore:
             check_same_thread=False,
         )
         self._conn.executescript(self._DDL)
+        # 幂等迁移（老库补列）：sent_text=话术快照（P2 长期留档，deferred 队列有
+        # 终态清理保留期，审计文本以本表为持久口径）；review=拟稿人工审核判定
+        # （P3 持久化，审核进度重启不丢）。
+        for ddl in (
+            "ALTER TABLE care_schedule ADD COLUMN sent_text TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE care_schedule ADD COLUMN review TEXT NOT NULL DEFAULT ''",
+        ):
+            try:
+                self._conn.execute(ddl)
+            except sqlite3.OperationalError:
+                pass  # 列已存在（新 DDL 或已迁移）
         self._conn.commit()
 
     def close(self) -> None:
@@ -156,14 +169,15 @@ class CareScheduleStore:
     _COLS = [
         "id", "contact_key", "platform", "account_id", "chat_key", "due_at", "event_at",
         "topic", "topic_norm", "sentiment", "source_text", "confidence", "status",
-        "created_at", "updated_at", "sent_at", "note",
+        "created_at", "updated_at", "sent_at", "note", "sent_text", "review",
     ]
 
-    def _rows(self, where: str, params: list, limit: int) -> List[Dict[str, Any]]:
+    def _rows(self, where: str, params: list, limit: int,
+              order_by: str = "due_at ASC") -> List[Dict[str, Any]]:
         try:
             rows = self._conn.execute(
                 f"SELECT {', '.join(self._COLS)} FROM care_schedule{where}"
-                " ORDER BY due_at ASC LIMIT ?",
+                f" ORDER BY {order_by} LIMIT ?",
                 (*params, int(limit)),
             ).fetchall()
         except Exception as e:  # noqa: BLE001
@@ -184,6 +198,29 @@ class CareScheduleStore:
         if status:
             return self._rows(" WHERE status = ?", [str(status)], max(1, min(int(limit), 500)))
         return self._rows("", [], max(1, min(int(limit), 500)))
+
+    # 历史/审计视图排序键：sent 行按实际发送时刻，其余按最后状态变化时刻。
+    _HISTORY_ORDER = "COALESCE(NULLIF(sent_at, 0), updated_at) DESC, id DESC"
+
+    def list_history(self, *, status: str = "", contact_key: str = "",
+                     limit: int = 100) -> List[Dict[str, Any]]:
+        """历史视图：按「最近发生」降序（P0 2026-08-03 历史可读性）。
+
+        与 ``list_recent``（due_at 升序=待办语义）互补——翻已发/已跳过记录
+        想看的是「最近发生了什么」，最新在前；pending 行按 updated_at
+        （捕获/改期时刻）参与排序。``contact_key`` 非空＝「TA 的关怀史」
+        （P2 联系人维度）。查询列与语义与 list_recent 完全一致。
+        """
+        clauses, params = [], []
+        if status:
+            clauses.append("status = ?")
+            params.append(str(status))
+        if contact_key:
+            clauses.append("contact_key = ?")
+            params.append(str(contact_key))
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        return self._rows(where, params, max(1, min(int(limit), 500)),
+                          order_by=self._HISTORY_ORDER)
 
     def list_by_contact(self, contact_key: str, *, status: str = "",
                         limit: int = 100) -> List[Dict[str, Any]]:
@@ -230,31 +267,116 @@ class CareScheduleStore:
 
     # ── 状态流转 ────────────────────────────────────────────────────────
     def _set_status(self, sid: int, status: str, *, note: str = "",
-                    set_sent_at: bool = False) -> bool:
+                    set_sent_at: bool = False, sent_text: str = "") -> bool:
         if status not in _STATUSES:
             return False
+        sets = ["status = ?", "note = ?", "updated_at = ?"]
+        params: list = [status, str(note)[:300], time.time()]
+        if set_sent_at:
+            sets.append("sent_at = ?")
+            params.append(time.time())
+        if sent_text:
+            sets.append("sent_text = ?")
+            params.append(str(sent_text)[:2000])
         try:
             with self._lock:
-                if set_sent_at:
-                    cur = self._conn.execute(
-                        "UPDATE care_schedule SET status = ?, note = ?, updated_at = ?,"
-                        " sent_at = ? WHERE id = ? AND status = 'pending'",
-                        (status, str(note)[:300], time.time(), time.time(), int(sid)),
-                    )
-                else:
-                    cur = self._conn.execute(
-                        "UPDATE care_schedule SET status = ?, note = ?, updated_at = ?"
-                        " WHERE id = ? AND status = 'pending'",
-                        (status, str(note)[:300], time.time(), int(sid)),
-                    )
+                cur = self._conn.execute(
+                    f"UPDATE care_schedule SET {', '.join(sets)}"
+                    " WHERE id = ? AND status = 'pending'",
+                    (*params, int(sid)),
+                )
                 self._conn.commit()
                 return bool(cur.rowcount)
         except Exception as e:  # noqa: BLE001
             logger.debug("care_schedule set_status failed: %s", e)
             return False
 
-    def mark_sent(self, sid: int, *, note: str = "") -> bool:
-        return self._set_status(sid, "sent", note=note, set_sent_at=True)
+    def mark_sent(self, sid: int, *, note: str = "", sent_text: str = "") -> bool:
+        """标记已发；``sent_text``＝当时发出的话术快照（P2 长期留档，一次
+        写入后不可变——deferred 队列按保留期清理后本列仍可审计）。"""
+        return self._set_status(sid, "sent", note=note, set_sent_at=True,
+                                sent_text=sent_text)
+
+    def backfill_sent_text(self, sid: int, text: str) -> bool:
+        """存量回填：只补 sent 行的**空**快照（工具用；已有快照不覆盖，幂等安全）。
+
+        刻意不动 updated_at——回填是元数据修复，不该改写历史序。
+        """
+        t = str(text or "").strip()
+        if not t:
+            return False
+        try:
+            with self._lock:
+                cur = self._conn.execute(
+                    "UPDATE care_schedule SET sent_text = ? WHERE id = ?"
+                    " AND status = 'sent' AND sent_text = ''",
+                    (t[:2000], int(sid)))
+                self._conn.commit()
+                return bool(cur.rowcount)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("care_schedule backfill_sent_text failed: %s", e)
+            return False
+
+    # ── P3 2026-08-03：拟稿人工审核持久化（review 列）────────────────────
+    def set_review(self, sid: int, verdict: str):
+        """拟稿审核判定落行。返回 ``(ok, newly_reviewed)``——newly=该行首评
+        （调用方据此决定进程内计数器是否 +1，改判允许但不重复计数）。"""
+        v = str(verdict or "").strip().lower()
+        if v not in ("like", "dislike"):
+            return False, False
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT review FROM care_schedule WHERE id = ?", (int(sid),)
+                ).fetchone()
+                if not row:
+                    return False, False
+                newly = not str(row[0] or "")
+                self._conn.execute(
+                    "UPDATE care_schedule SET review = ? WHERE id = ?",
+                    (v, int(sid)))
+                self._conn.commit()
+                return True, newly
+        except Exception as e:  # noqa: BLE001
+            logger.debug("care_schedule set_review failed: %s", e)
+            return False, False
+
+    def review_stats(self) -> Dict[str, Any]:
+        """审核进度（持久口径，替代进程内计数的「重启清零」）：
+        dry 拟稿近 7 天数 / 已审 like/dislike / 未审数。"""
+        out = {"drafts_7d": 0, "reviewed": 0, "like": 0, "dislike": 0, "unreviewed": 0}
+        try:
+            week = time.time() - 7 * _DAY
+            r1 = self._conn.execute(
+                "SELECT COUNT(*) FROM care_schedule WHERE status = 'sent'"
+                " AND note = 'dry_run' AND COALESCE(sent_at, 0) >= ?", (week,)).fetchone()
+            out["drafts_7d"] = int(r1[0] or 0) if r1 else 0
+            rows = self._conn.execute(
+                "SELECT review, COUNT(*) FROM care_schedule WHERE status = 'sent'"
+                " AND note = 'dry_run' GROUP BY review").fetchall()
+            for rv, n in rows:
+                v = str(rv or "")
+                if v == "like":
+                    out["like"] = int(n)
+                elif v == "dislike":
+                    out["dislike"] = int(n)
+                else:
+                    out["unreviewed"] += int(n)
+            out["reviewed"] = out["like"] + out["dislike"]
+        except Exception as e:  # noqa: BLE001
+            logger.debug("care_schedule review_stats failed: %s", e)
+        return out
+
+    def list_unreviewed_drafts(self, *, limit: int = 8) -> List[Dict[str, Any]]:
+        """持久待审队列：dry 拟稿、有话术快照、未审，最近在前。
+
+        （审核队列从进程内 metrics 样本升级为本表——重启后待审拟稿不再消失；
+        无快照的老 dry 行文本已不可考，不进队列。）
+        """
+        return self._rows(
+            " WHERE status = 'sent' AND note = 'dry_run' AND review = ''"
+            " AND sent_text != ''", [],
+            max(1, min(int(limit), 50)), order_by=self._HISTORY_ORDER)
 
     def mark_skipped(self, sid: int, *, note: str = "") -> bool:
         return self._set_status(sid, "skipped", note=note)
@@ -276,6 +398,25 @@ class CareScheduleStore:
                 return bool(cur.rowcount)
         except Exception as e:  # noqa: BLE001
             logger.debug("care_schedule bring_forward failed: %s", e)
+            return False
+
+    def reschedule(self, sid: int, due_at: float) -> bool:
+        """把一条 pending 待办改期到 ``due_at``（P7 方案卡「改时间」）。
+
+        与 bring_forward 同族（只动 due_at，仅 pending 可改）；目标时刻的合法性
+        （须在未来）由路由层校验——store 保持纯粹的状态操作语义。
+        """
+        try:
+            with self._lock:
+                cur = self._conn.execute(
+                    "UPDATE care_schedule SET due_at = ?, updated_at = ?"
+                    " WHERE id = ? AND status = 'pending'",
+                    (float(due_at), time.time(), int(sid)),
+                )
+                self._conn.commit()
+                return bool(cur.rowcount)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("care_schedule reschedule failed: %s", e)
             return False
 
     def expire_overdue(self, now: Optional[float] = None, *, grace_days: float = 1.0) -> int:

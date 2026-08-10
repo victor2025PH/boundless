@@ -1042,6 +1042,12 @@ def test_workspace_prefs_set_languages_persists_via_store_slice14():
     captured: Dict[str, Any] = {}
 
     class _Inbox:
+        def get_agent_prefs(self, agent_id):
+            # 2026-08-04 局部更新语义：body 不带告警键时路由改「读现值」而非整条覆盖
+            #（防外观 appearance 等单键 POST 把告警偏好清零）——桩同步补读口。
+            return {"agent_id": agent_id, "warn_sec": 0, "crit_sec": 0, "muted": 0,
+                    "dnd_start": -1, "dnd_end": -1, "languages": "", "appearance": ""}
+
         def set_agent_prefs(self, agent_id, **kw):
             return {"agent_id": agent_id, **kw}
 

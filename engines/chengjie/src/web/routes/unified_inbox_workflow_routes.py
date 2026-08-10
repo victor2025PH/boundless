@@ -625,6 +625,11 @@ def register_workflow_routes(app, *, api_auth) -> None:
             "eligible": eligible,
             "rate": round(followed / eligible, 3) if eligible else None,
         }
+        # P3 2026-08-09：链推进循环心跳（bootstrap 挂 app.state；空 dict=循环
+        # 没挂载）——链推进曾挂在 report.enabled 闸死的调度器上**从未运行**，
+        # 「点了启动步骤永不走」这类静默断线从此在监控口可见。
+        data["autorun"] = dict(
+            getattr(request.app.state, "workflow_autorun_state", None) or {})
         return data
 
     @app.get("/api/workspace/conv/{conversation_id}/chain-executions")

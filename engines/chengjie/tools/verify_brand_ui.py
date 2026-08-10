@@ -40,7 +40,7 @@ import sys
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
-DEFAULT_BASE = "http://localhost:18799"
+DEFAULT_BASE = "http://127.0.0.1:18799"  # 勿改回 localhost：::1 回退每连接 ~2s（见 verify_inbox_density.py 同行注释）
 DEFAULT_DATA_ROOT = "D:/chengjie-instances/zhiliao/data"
 _ENGINE = Path(__file__).resolve().parents[1]
 DESKTOP_INDEX = _ENGINE / "desktop" / "renderer" / "index.html"

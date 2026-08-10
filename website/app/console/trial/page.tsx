@@ -27,6 +27,7 @@ import {
   fmtDateTime,
 } from "../parts";
 import { TrialRedeemPanel } from "./ui";
+import { UnquarantineButton } from "../ui";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -204,16 +205,28 @@ export default async function TrialPage({
               <span className="font-medium text-white">
                 {tgPool.total_used}/{tgPool.total_cap} 号位
               </span>
+              {tgPool.quarantined_groups > 0 && (
+                <span className="rounded bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-medium text-rose-300">
+                  {tgPool.quarantined_groups} 组已隔离
+                </span>
+              )}
             </span>
             {tgPool.groups.map((g) => (
-              <span key={g.api_id_tail} className="text-slate-500">
+              <span key={g.api_id_tail}
+                className={`inline-flex items-center gap-1 ${g.quarantined ? "text-rose-300/90" : "text-slate-500"}`}>
                 {g.name}(…{g.api_id_tail}) {g.used}/{g.max}
+                {g.has_proxy && (
+                  <span className="rounded bg-sky-500/15 px-1 text-[10px] text-sky-300" title="该组随凭据下发出口代理">出口</span>
+                )}
+                {g.quarantined && <UnquarantineButton apiId={g.api_id} name={g.name} />}
               </span>
             ))}
           </div>
           <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
             公网用户登录 Telegram 时按机器指纹粘定分到一组集团 api_id（同机恒定），
             无需自己去 my.telegram.org 申请。某组占满前自动优先空闲组；全满则新用户回落自备凭据。
+            被多台机器举报 API_ID_INVALID 的组会自动隔离停发（红标）——先跑 tg_cred_probe
+            核实真伪：真废换池、误报解除。带「出口」的组优先派给直连不通的大陆机器。
           </p>
         </Card>
       )}

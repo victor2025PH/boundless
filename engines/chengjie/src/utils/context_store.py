@@ -69,6 +69,10 @@ class ContextStore:
     CREATE INDEX IF NOT EXISTS idx_ctx_updated ON user_context(updated_at);
     """
 
+    # 案例兜底扫描的 TTL 缓存窗（秒）：徽章/待办条/案例页 30s 轮询/看门狗四方
+    # 都在调 iter_persisted_case_rows，裸 LIKE 全表扫不该按调用次数付费。
+    _CASE_SCAN_TTL_SEC = 20.0
+
     def __init__(self, db_path: Path, ttl_days: int = 30, max_memory: int = 500):
         self._db_path = db_path
         self._ttl = ttl_days * 86400
@@ -76,6 +80,8 @@ class ContextStore:
         self._cache: Dict[str, Dict[str, Any]] = {}
         self._dirty: set = set()
         self._conn: Optional[sqlite3.Connection] = None
+        # (扫描时刻, rows[(uid, ctx)], 当时的 limit)；flush 到带案例的 ctx 时失效
+        self._case_scan_cache: Optional[tuple] = None
         self._init_db()
 
     def _init_db(self):
@@ -127,10 +133,13 @@ class ContextStore:
     def flush(self, user_id: str = ""):
         targets = [user_id] if user_id else list(self._dirty)
         now = time.time()
+        case_touched = False
         for uid in targets:
             ctx = self._cache.get(uid)
             if not ctx:
                 continue
+            if ctx.get("_case_id"):
+                case_touched = True
             persist = {k: v for k, v in ctx.items()
                        if k in _PERSIST_KEYS or (k not in _NON_PERSIST and _is_serializable(v))}
             try:
@@ -142,6 +151,10 @@ class ContextStore:
             except Exception as e:
                 logger.debug("上下文持久化失败 %s: %s", uid, e)
             self._dirty.discard(uid)
+        if case_touched:
+            # 带案例的上下文刚落库 → 兜底扫描缓存失效（备注/结案/认领即时可见，
+            # 即便该 ctx 之后被逐出内存缓存也不受 TTL 窗拖累）
+            self._case_scan_cache = None
         try:
             self._conn.commit()
         except Exception:
@@ -161,6 +174,49 @@ class ContextStore:
         remove_count = len(self._cache) - self._max_memory // 2
         for uid, _ in sorted_users[:remove_count]:
             self._cache.pop(uid, None)
+
+    def iter_persisted_case_rows(self, exclude=(), limit: int = 300,
+                                 ttl: Optional[float] = None):
+        """列出 SQLite 里带 ``_case_id`` 的会话上下文 ``(uid, ctx)``。
+
+        /api/cases/active 的重启兜底：内存缓存重启即空，而案例要能被跟进到底。
+        LIKE 粗筛 + JSON 精筛；``exclude``（通常是缓存里已有的 uid）跳过；
+        **只读、不进缓存**——把整表拉进内存会挤掉活跃会话。
+
+        **TTL 缓存**（默认 20s，``ttl=0`` 强制重扫）：徽章、待办条、案例页 30s
+        轮询、看门狗四方共用本扫描，LIKE 全表扫不该按调用次数付费。正确性：
+        缓存后的写入经 flush 失效（见 flush）；仍在内存缓存的 ctx 由调用方
+        cache-first 合并覆盖（collect_case_rows 的 exclude），双保险。
+        返回行是缓存共享引用，**调用方只读勿改**。
+        """
+        if self._conn is None:
+            return []
+        now = time.time()
+        window = self._CASE_SCAN_TTL_SEC if ttl is None else max(0.0, float(ttl))
+        cached = self._case_scan_cache
+        if (cached is not None and (now - cached[0]) < window
+                and cached[2] >= int(limit)):
+            rows_all = cached[1]
+        else:
+            rows_all = []
+            try:
+                rows = self._conn.execute(
+                    "SELECT user_id, data FROM user_context WHERE data LIKE ? "
+                    "ORDER BY updated_at DESC LIMIT ?",
+                    ('%"_case_id"%', int(limit)),
+                ).fetchall()
+            except Exception:
+                return []
+            for uid, data in rows:
+                try:
+                    ctx = json.loads(data)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if isinstance(ctx, dict) and ctx.get("_case_id"):
+                    rows_all.append((uid, ctx))
+            self._case_scan_cache = (now, rows_all, int(limit))
+        ex = set(exclude or ())
+        return [(uid, ctx) for uid, ctx in rows_all if uid not in ex]
 
     def close(self):
         self.flush_all()

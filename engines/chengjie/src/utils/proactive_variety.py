@@ -84,6 +84,29 @@ def trailing_unanswered_texts(
     return tail[-max(0, int(max_texts)):]
 
 
+def trailing_unanswered_inbound(
+    messages: List[Dict[str, Any]], *, max_texts: int = 2,
+) -> List[str]:
+    """末尾「连续入站未获回应」的文案（时间升序输入，返回时间升序）。
+
+    这些是「TA 说了、我一直没回」的悬空话头（2026-08-05 实锤：客户 22:27
+    撩了一句「以后给你介绍做你老公」整晚没人接，次日 07:10 只等来一条与
+    话头完全脱节的通用晨安）——晨安/回访开场必须先接住它，否则「装没看见 +
+    标准问候」当场穿帮。媒体占位（``[图片]``）保留原文（能被自然指涉）。
+    """
+    tail: List[str] = []
+    for m in reversed(messages or []):
+        if not isinstance(m, dict):
+            continue
+        if str(m.get("direction") or "") != "in":
+            break  # 一遇到出站 = 我方回过话，悬空尾结束
+        t = str(m.get("text") or "").strip()
+        if t:
+            tail.append(t)
+    tail.reverse()
+    return tail[-max(0, int(max_texts)):]
+
+
 def rel_age_label(age_sec: float) -> str:
     """相对时间标签：刚刚 / N分钟前 / N小时前 / 昨天 / N天前。"""
     try:
@@ -145,6 +168,7 @@ __all__ = [
     "similarity",
     "most_similar",
     "trailing_unanswered_texts",
+    "trailing_unanswered_inbound",
     "rel_age_label",
     "format_recent_context",
 ]

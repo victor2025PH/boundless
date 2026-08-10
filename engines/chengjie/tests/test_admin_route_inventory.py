@@ -36,21 +36,28 @@ _BASELINE = """
 /api/admin/tts-cost-trend	GET
 /api/admin/translation-confidence-trend	GET
 /api/admin/frontend-error-trend	GET
+/api/admin/login-funnel-trend	GET
 /api/admin/ui-event-trend	GET
 /api/admin/identity-health-trend	GET
 /api/admin/anti-repeat-advice	GET
 /api/admin/ai-safety-overview	GET
+/api/admin/alert-link-status	GET
+/api/admin/official-webhook-status	GET
+/api/admin/buried-conversations	GET
 /api/admin/ui-event	POST
 /api/telemetry/frontend-error	POST
 /api/admin/ai-quality-calibrate	GET
 /api/admin/ai-quality-thresholds	POST
 /api/admin/instance-restart-status	GET
 /api/admin/platform-sessions/relogin	POST
+/api/admin/platform-sessions/e2ee-pin	POST
 /api/admin/profile-audit	GET
 /api/admin/realtime-voice-alert-calibrate	GET
 /api/admin/realtime-voice-alert-thresholds	POST
 /api/admin/realtime-voice-trend	GET
 /api/admin/gpu-watermark	GET
+/api/admin/automation-coverage	GET
+/api/admin/acquisition-health	GET
 /api/admin/send-route-trend	GET
 /api/admin/media-promise-trend	GET
 /api/admin/media-consistency	GET
@@ -81,10 +88,12 @@ _BASELINE = """
 /api/care/schedule/due	GET
 /api/care/schedule/{sid}/cancel	POST
 /api/care/schedule/{sid}/send-now	POST
+/api/care/schedule/{sid}/reschedule	POST
 /api/care/schedule/{sid}/preview	POST
 /api/care/dry-run-samples	GET
 /api/care/dry-run-feedback	POST
 /api/care/health	GET
+/api/care/plan	GET
 /api/care/engine	POST
 /api/deferred-outbox/status	GET
 /api/deferred-outbox/retry	POST
@@ -107,6 +116,7 @@ _BASELINE = """
 /api/monetize/webhook/stripe	POST
 /api/monetize/webhook/telegram	POST
 /api/cases/active	GET
+/api/cases/close-drill	POST
 /api/cases/{case_id}/close	POST
 /api/cases/{case_id}/note	POST
 /api/change-password	POST
@@ -122,7 +132,9 @@ _BASELINE = """
 /api/data-purge	POST
 /api/episodic-memory	GET
 /api/episodic-memory/backfill	POST
+/api/episodic-memory/bulk-delete	POST
 /api/episodic-memory/correction-stats	GET
+/api/episodic-memory/summary	GET
 /api/episodic-memory/{row_id}	DELETE
 /api/episodic-memory/{row_id}/confirm	POST
 /api/episodic-memory/key-health	GET
@@ -232,6 +244,7 @@ _BASELINE = """
 /api/learner/drafts/{draft_id}/approve	POST
 /api/learner/drafts/{draft_id}/recheck-dup	POST
 /api/learner/drafts/{draft_id}/reject	POST
+/api/learner/feed	POST
 /api/learner/run	POST
 /api/learner/stats	GET
 /api/line-rpa/accept-friends	POST
@@ -383,10 +396,12 @@ _BASELINE = """
 /api/personas/profiles/{profile_id}	GET
 /api/personas/profiles/{profile_id}	PUT
 /api/personas/profiles/{profile_id}/bindings	GET
+/api/personas/profiles/{profile_id}/content-scan	GET
 /api/personas/profiles/{profile_id}/diff-canonical	GET
 /api/personas/profiles/{profile_id}/history	GET
 /api/personas/profiles/{profile_id}/promote	POST
 /api/personas/profiles/{profile_id}/prompt-preview	GET
+/api/personas/profiles/{profile_id}/retire-verify	POST
 /api/personas/profiles/{profile_id}/revert	POST
 /api/personas/status	GET
 /api/personas/sync-to-config	POST
@@ -410,6 +425,9 @@ _BASELINE = """
 /api/registry/templates	GET
 /api/reply-logic	GET
 /api/reply-logic	POST
+/api/reply-settings	GET
+/api/reply-settings	POST
+/api/reply-settings/explain	GET
 /api/report/daily	GET
 /api/report/weekly	GET
 /api/rollback	POST
@@ -499,6 +517,8 @@ _BASELINE = """
 /api/internal/ops/maintenance-notice	POST
 /api/internal/protocol/ingest	POST
 /api/internal/protocol/session-status	POST
+/api/internal/protocol/inbox-health	POST
+/api/internal/protocol/thread-history	POST
 /api/internal/protocol/contacts	POST
 /api/internal/protocol/chats	POST
 /api/internal/protocol/reaction	POST
@@ -517,6 +537,7 @@ _BASELINE = """
 /api/platforms/{platform}/{account_id}/group-members	GET
 /api/unified-inbox/send-media	POST
 /api/unified-inbox/send-voice	POST
+/api/unified-inbox/send-voice-status	GET
 /api/unified-inbox/send-caps	GET
 /api/workspace/quota	GET
 /api/desktop/ping	GET
@@ -530,6 +551,7 @@ _BASELINE = """
 /api/desktop/inject-health	POST
 /api/desktop/inject-health	GET
 /api/desktop/inject-health/alerts	GET
+/api/desktop/inject-health/extract-trend	GET
 /api/desktop/outbound	GET
 /api/desktop/outbound/ack	POST
 /api/desktop/outbound/action	POST
@@ -549,12 +571,19 @@ _BASELINE = """
 /api/telegram/voice-sample/{filename}	GET
 /api/templates	GET
 /api/templates/{key}	PUT
+/api/todo-summary	GET
 /api/trigger-decisions	GET
 /api/unified-inbox/analyze	POST
 /api/unified-inbox/automation	GET
 /api/unified-inbox/automation	POST
 /api/unified-inbox/automation/bulk-downgrade	POST
 /api/unified-inbox/automation-stats	GET
+/api/unified-inbox/bot-flag	GET
+/api/unified-inbox/bot-flag	POST
+/api/unified-inbox/conv-probe	GET
+/api/unified-inbox/why-no-reply	GET
+/api/unified-inbox/warmup-review	POST
+/api/unified-inbox/reply-budget/relief	POST
 /api/unified-inbox/chats	GET
 /api/unified-inbox/history	GET
 /api/unified-inbox/kb-search	GET
@@ -660,6 +689,7 @@ _BASELINE = """
 /api/setup/companion-preflight	GET
 /api/setup/ai	GET
 /api/setup/ai-key	POST
+/api/setup/ai-primary	POST
 /api/setup/cloud-credentials	GET
 /api/setup/key-pool	POST
 /api/setup/features	GET
@@ -698,6 +728,7 @@ _BASELINE = """
 /api/workspace/handoff-brief	GET
 /api/workspace/conversation/{conversation_id}/seen-mention	POST
 /api/workspace/conversation/{conversation_id}/snooze	POST
+/api/workspace/conversation/{conversation_id}/snooze-history	GET
 /api/workspace/conversation/{conversation_id}/unsnooze	POST
 /api/workspace/snoozed	GET
 /api/workspace/follow-up/{task_id}/assign	POST
@@ -821,6 +852,7 @@ _BASELINE = """
 /export	GET
 /health	GET
 /help	GET
+/i18n/ws-i18n.js	GET
 /import	GET
 /import	POST
 /kb-images/{filename}	GET
@@ -834,7 +866,9 @@ _BASELINE = """
 /logs/stream	GET
 /messenger-rpa	GET
 /openapi.json	GET
+/personal-settings	GET
 /personas	GET
+/reply-settings	GET
 /rpa-overview	GET
 /set_lang	GET
 /set_ui_mode	GET
@@ -948,6 +982,15 @@ _ADDITIONS_2026_07_22 = """
 """
 _BASELINE += _ADDITIONS_2026_07_22
 
+# 2026-08-02: Telegram 单会话「深度回填」（POST 从库中最旧锚点向云端连续拉到
+# 上限/到头，流式分批落库跑在 pyrogram loop；GET 轮询进度）——/history 单页
+# ≤200 条的深历史补全升级，详见 unified_inbox_account_routes。
+_ADDITIONS_2026_08_02 = """
+/api/platforms/telegram/{account_id}/deep-backfill	GET
+/api/platforms/telegram/{account_id}/deep-backfill	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_02
+
 # 2026-07-22 读路径 P0：坐席打开会话即写「已读水位」(last_read_ts) 落库，
 # 读路径据此派生有效未读、永不回弹（unified_inbox_read_routes.py）。
 _ADDITIONS_2026_07_22_READ = """
@@ -998,6 +1041,7 @@ _ADDITIONS_2026_07_25_GROUP_SHOW = """
 /api/group-show/exposure	GET
 /api/group-show/live	POST
 /api/group-show/linkage	GET
+/api/group-show/outcomes	GET
 /api/group-show/playbooks	GET
 /api/group-show/playbooks/{pid}	GET
 /api/group-show/rehearse	POST
@@ -1083,6 +1127,7 @@ _ADDITIONS_2026_07_27_PERSONA_QUIZ_BIO = """
 /api/personas/quiz/status	GET
 /api/personas/{profile_id}/quiz	POST
 /api/personas/{profile_id}/quiz/jobs/{job_id}	GET
+/api/personas/{profile_id}/retired-quiz	POST
 /api/personas/{profile_id}/bio-doc	POST
 /api/personas/{profile_id}/bio-doc	GET
 /api/personas/{profile_id}/bio-doc	DELETE
@@ -1161,6 +1206,92 @@ _ADDITIONS_2026_08_01_INSTR_SAMPLES = """
 /api/goals/instr-samples	GET
 """
 _BASELINE += _ADDITIONS_2026_08_01_INSTR_SAMPLES
+
+# 2026-08-02 客户资产趋势：好友/未开口/沉默按日快照（写侧=看板读时懒快照；
+# 破冰/主动触达上线后「未开口存量有没有压下去」的验收判据）。
+_ADDITIONS_2026_08_02_CONTACTS_ASSET_TREND = """
+/api/admin/contacts-asset-trend	GET
+"""
+_BASELINE += _ADDITIONS_2026_08_02_CONTACTS_ASSET_TREND
+
+# 2026-08-03 案例中心 P4：案例认领/释放（多坐席分工——谁在跟、别重复跟；
+# body {"release": bool}，审计 case_claim/case_release）。
+_ADDITIONS_2026_08_03_CASE_CLAIM = """
+/api/cases/{case_id}/claim	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_03_CASE_CLAIM
+
+# 2026-08-04 媒体按需拉取 P1：历史/超限/存量占位行的「拉取原件」——按 store 行的
+# platform_msg_id 经 pyrogram get_messages + download_tg_media 归档并回填 media_ref
+# （update_message_media 幂等）。配置闸 telegram.media_fetch（默认关）+ 行级单飞
+# + 全局并发上限；body {"message_id"}。
+_ADDITIONS_2026_08_04_FETCH_MEDIA = """
+/api/platforms/telegram/{account_id}/fetch-media	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_04_FETCH_MEDIA
+
+# 2026-08-05 全量深同步 P2：战役式把账号云端全部会话深历史吸进工作台（热会话
+# 优先、per_chat×total 双预算、断点续跑；引擎 src/integrations/tg_full_sync.py）。
+# POST 触发（body {"restart": bool}）/ GET 轮询进度+断点账本摘要。
+# 配置闸 telegram.full_sync（默认关）；与账号级 sync-history 双向互斥。
+_ADDITIONS_2026_08_05_FULL_SYNC = """
+/api/platforms/telegram/{account_id}/full-sync	GET,POST
+"""
+_BASELINE += _ADDITIONS_2026_08_05_FULL_SYNC
+
+# 2026-08-07 托管租户观测面：实例状态/持单台账/三守护心跳（ops「☁️ 托管租户」卡；
+# 收集器 src/ops/tenant_overview.py，30s TTL；active=false 前端整卡隐藏）。
+_ADDITIONS_2026_08_07_TENANT_OVERVIEW = """
+/api/admin/tenant-overview	GET
+"""
+_BASELINE += _ADDITIONS_2026_08_07_TENANT_OVERVIEW
+
+# 2026-08-09 目标达成报表（P0）：账号×客户完成情况（matrix=哪个号在出成绩 /
+# contacts=完成客户清单＝销售线索，含「完成后是否已跟进」客观推导）+ 主管报表页。
+# 配套：goals.sweep 定时结算 + goals.notify 完成提醒（goal_completed_alert →
+# 铃铛/toast/webhook 别名 goal_complete）。
+_ADDITIONS_2026_08_09_GOAL_REPORT = """
+/api/goals/report/accounts	GET
+/api/goals/report/contacts	GET
+/workspace/goal-report	GET
+"""
+_BASELINE += _ADDITIONS_2026_08_09_GOAL_REPORT
+
+# 2026-08-09 坐席翻译提速批次：批量翻译端点——收件箱视口懒翻从「N 条消息 N 个
+# HTTP 往返」收成一次请求（逐条复用与 /translate 同一 TranslationService：缓存/
+# 术语/会话首选引擎；服务端 gather + 信号量 8 防 GPU 队列被突发塞满）。
+_ADDITIONS_2026_08_09_TRANSLATE_BATCH = """
+/api/unified-inbox/translate-batch	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_09_TRANSLATE_BATCH
+
+# 2026-08-10 FB Messenger Webhook 常驻挂载：SkillManager 改为请求期解析
+# （telegram_client → app.state 双兜底），协议号未配置的部署（telegram_client
+# =None）路由也照常挂载——未就绪回 503 由 Meta 重投。见 facebook_webhook.py
+# 模块 docstring（2026-08-10 搭车验证实锤：注册期取不到 → /fb/webhook 404）。
+_ADDITIONS_2026_08_10_FB_WEBHOOK = """
+/fb/webhook	GET
+/fb/webhook	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_10_FB_WEBHOOK
+
+# 2026-08-10 API_ID_INVALID 事故链 P1：
+# - preflight：接入弹窗打开即探「本机能否直连 Telegram DC」（TCP 快败 + 60s 缓存），
+#   直连不通提前亮黄条给配代理路标（只提示不阻断；src/integrations/tg_preflight.py）。
+# - diagnostic-upload：一键诊断直传——本机打包（密钥打码）→ 后端转投官网
+#   /api/diag-upload → 回 6 位短码给客服（浏览器直传会撞 CORS，故走 server-to-server）。
+_ADDITIONS_2026_08_10_ONBOARDING_RESCUE = """
+/api/platforms/telegram/login/preflight	GET
+/api/admin/diagnostic-upload	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_10_ONBOARDING_RESCUE
+
+# 2026-08-10 Telegram 手机号+验证码登录：submit/resend 与扫码的 /password 并列。
+_ADDITIONS_2026_08_10_PHONE_CODE = """
+/api/platforms/{platform}/login/{login_id}/code	POST
+/api/platforms/{platform}/login/{login_id}/resend-code	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_10_PHONE_CODE
 
 
 def _parse_baseline():

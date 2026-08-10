@@ -39,7 +39,7 @@
         const c = e.target.closest('select[data-role="contrast"]');
         if (c) this._saveContrast(c.value);
         const p = e.target.closest('select[data-role="persona"]');
-        if (p) this._updatePinState();
+        if (p) { this._pinState = null; this._updatePinState(); }
       });
     }
     emptyText() { return this.t("cp.draft.empty"); }
@@ -64,6 +64,9 @@
              background:var(--cp-accent-weak,rgba(79,70,229,.1)); color:var(--cp-accent,#4f46e5); }
       .bdg.intent { background:var(--cp-surface,#eef2ff); color:var(--cp-text-dim,#64748b); }
       .bdg.kb { background:var(--cp-surface-2,#f8fafc); color:var(--cp-text-dim,#64748b); border:1px solid var(--cp-border,#e2e8f0); cursor:help; }
+      .bdg.goal { cursor:help; }
+      .bdg.goal.on { background:rgba(15,157,117,.14); color:var(--cp-ok,#0f9d75); }
+      .bdg.goal.off { background:rgba(217,119,6,.14); color:var(--cp-warn,#92400e); }
       .reply { font-size:var(--cp-fs,13px); color:var(--cp-text,#1e293b); line-height:1.5; white-space:pre-wrap; }
       .tr { margin-top:5px; padding-top:5px; border-top:1px dashed var(--cp-border,#e2e8f0);
             font-size:var(--cp-fs-sm,12px); color:var(--cp-text-dim,#475569); white-space:pre-wrap; }
@@ -121,7 +124,7 @@
         personaRow =
           `<div class="prow"><label>${this.esc(this.t("cp.draft.persona_label"))}</label>` +
           `<select data-role="persona"><option value="">${this.esc(this.t("cp.draft.persona_default"))}</option></select>` +
-          `<button class="pin" data-act="pin" title="${this.esc(this.t("cp.draft.pin_title"))}">📌</button></div>` +
+          `<button class="pin" data-act="pin" title="${this.esc(this.t("cp.draft.pin_title"))}">${this.ic("pin", 12)}</button></div>` +
           `<div class="psrc" data-role="psrc"></div>`;
       }
       let contrastRow = "";
@@ -175,6 +178,7 @@
     async _loadPersonas() {
       const sel = this.shadowRoot.querySelector('select[data-role="persona"]');
       if (!sel || !this._client) return;
+      this._pinState = null;
       let summary = [];
       this._profiles = {};
       try {
@@ -188,6 +192,18 @@
         const ck = (this._ctx && this._ctx.chatKey) || "";
         const bd = (b && b.bindings && ck) ? b.bindings[ck] : null;
         bound = bd ? (bd.id || "") : "";
+      } catch (e) {}
+      /* 会话覆写层优先回显（cp-persona 同源 effective API）：之前只读 legacy 绑定，
+         会话覆写钉过的人设换回会话后下拉框显示成「默认」，坐席误以为掉绑再钉一次。 */
+      try {
+        const cid = String((this._ctx && this._ctx.conversationId) || "");
+        if (cid.split(":").length >= 3 && typeof this._client.personaEffective === "function") {
+          const eff = await this._client.personaEffective({ conversationId: cid });
+          if (eff && eff.ok && eff.conv && eff.conv.id) {
+            bound = eff.conv.id;
+            this._pinState = { scope: "conversation", suppressed: false };
+          }
+        }
       } catch (e) {}
       let h = `<option value="">${this.esc(this.t("cp.draft.persona_default"))}</option>`;
       summary.forEach((p) => {
@@ -204,28 +220,64 @@
       const pin = this.shadowRoot.querySelector("button.pin");
       const src = this.shadowRoot.querySelector('[data-role="psrc"]');
       if (pin && sel) pin.classList.toggle("on", !!sel.value);
-      if (src && sel) src.textContent = sel.value ? this.t("cp.draft.pinned") : this.t("cp.draft.unpinned");
+      if (!src || !sel) return;
+      if (!sel.value) { src.textContent = this.t("cp.draft.unpinned"); return; }
+      const st = this._pinState || {};
+      if (st.suppressed) src.textContent = this.t("cp.draft.pin_suppressed");
+      else if (st.scope === "conversation") src.textContent = this.t("cp.draft.pinned_conv");
+      else src.textContent = this.t("cp.draft.pinned");
     }
 
     async _pinPersona() {
       const sel = this.shadowRoot.querySelector('select[data-role="persona"]');
       const pid = sel ? sel.value : "";
-      const chatKey = (this._ctx && this._ctx.chatKey) || "";
-      if (!chatKey || !this._client) return;
-      let ok = false;
-      try {
-        if (pid) {
-          const persona = (this._profiles || {})[pid];
-          if (!persona) return;
-          const r = await this._client.bindPersona({ chatKey, persona });
-          ok = !!(r && r.ok);
-        } else {
-          const r = await this._client.unbindPersona({ chatKey });
-          ok = !!(r && r.ok);
-        }
-      } catch (e) { ok = false; }
+      const ctx = this._ctx || {};
+      const chatKey = ctx.chatKey || "";
+      const cid = String(ctx.conversationId || "");
+      if (!this._client) return;
+      const persona = pid ? (this._profiles || {})[pid] : null;
+      if (pid && !persona) return;
+      /* 会话覆写优先（出站链 resolve_effective_persona 的最高层，压得住账号默认人设）；
+         开关关（服务端 400）/ 壳未暴露 IPC → 回落 legacy 旧语义。legacy 绑定在
+         「账号配了默认人设」的部署里必被压制（conv_override > account_profile > legacy），
+         正是「钉了林若曦、出站还是林小雨」的根因——所以能走覆写就绝不写 legacy。 */
+      const canConv = cid.split(":").length >= 3 &&
+        typeof this._client.bindConvPersona === "function";
+      if (!canConv && !chatKey) return;
+      let ok = false, scope = "";
+      if (canConv) {
+        try {
+          const r = pid
+            ? await this._client.bindConvPersona({ conversationId: cid, profileId: pid })
+            : await this._client.unbindConvPersona({ conversationId: cid });
+          if (r && r.ok) { ok = true; scope = "conversation"; }
+        } catch (e) { /* 覆写不可用 → 下面回落 legacy */ }
+      }
+      if (!ok && chatKey) {
+        try {
+          const r = pid
+            ? await this._client.bindPersona({ chatKey, persona })
+            : await this._client.unbindPersona({ chatKey });
+          if (r && r.ok) { ok = true; scope = "legacy"; }
+        } catch (e) { ok = false; }
+      }
+      /* legacy 档钉完读一次生效真相：被更高层压制就如实警示，别再宣称「全端生效」 */
+      let suppressed = false;
+      if (ok && scope === "legacy" && pid && cid.split(":").length >= 3 &&
+          typeof this._client.personaEffective === "function") {
+        try {
+          const eff = await this._client.personaEffective({ conversationId: cid });
+          const effId = eff && eff.ok && eff.effective && eff.effective.id;
+          suppressed = !!(effId && effId !== pid);
+        } catch (e) {}
+      }
+      this._pinState = ok ? { scope, suppressed } : null;
       this._updatePinState();
-      this.emit("cp-persona-pinned", { personaId: pid, chatKey, ok });
+      this.emit("cp-persona-pinned", {
+        personaId: pid,
+        personaName: persona ? (persona.name || pid) : "",
+        chatKey, conversationId: cid, scope, suppressed, ok,
+      });
     }
 
     onAction(act, el) {
@@ -417,13 +469,13 @@
     /* P22：宿主（目标卡「采纳并拟稿」）注入坐席指令。
        opts: {text, summary?, label?, pushLevel?, goalId?, source?, autoGen?}
        text=送进 smart-reply.instruction 的完整指令；summary=chip 短展示（默认取首行）。
-       autoGen 默认 true。设指令时强制切回「续聊」模式——opener 产线不吃 instruction，
-       否则「采纳并拟稿」在 opener 态会静默丢掉意图（P22.1 实锤）。 */
+       autoGen 默认 true。
+       P28：opener 产线已吃 instruction + 注入目标（P25），**不再**强制切回 reply——
+       否则「开新话题」态点采纳会丢掉 opener 语义（坐席实录：目标设了开场仍跑题）。 */
     setDirective(opts) {
       const o = opts || {};
       const text = String(o.text || o.intent || "").trim().slice(0, 400);
       if (!text) return;
-      if (this._mode === "opener") this._setMode("reply");
       const summary = String(o.summary || o.intent || "").trim()
         || text.split(/\n/)[0].slice(0, 80);
       this._directive = {
@@ -477,6 +529,30 @@
       });
     }
 
+    /* P28：goal_applied 徽章——「设了目标为什么没切入」从黑箱变可读。
+       成功=绿；有 goal_id / 驱动指令却跳过=琥珀（带 reason）；无目标静默不刷。 */
+    _goalBadgeHtml(r) {
+      const ga = r && r.goal_applied;
+      if (!ga || typeof ga !== "object") return "";
+      const esc = (s) => this.esc(s);
+      if (ga.injected) {
+        const pl = String(ga.push_level || "").trim();
+        const tip = [ga.title, ga.intent, ga.profile_gap].filter(Boolean).join("\n");
+        return `<span class="bdg goal on" title="${esc(tip)}">${this.ic("target", 11)} ${esc(this.t("cp.draft.goal_on"))}` +
+          (pl ? ` · ${esc(pl)}` : "") + `</span>`;
+      }
+      const reason = String(ga.reason || "").trim();
+      if (!reason || reason === "no_goal" || reason === "unknown") return "";
+      if (!ga.goal_id && !(this._directive && this._directive.goalId)) return "";
+      const key = "cp.draft.goal_" + reason;
+      let lab = this.t(key);
+      if (!lab || lab === key || String(lab).indexOf("cp.draft.") === 0) {
+        lab = this.t("cp.draft.goal_skipped");
+      }
+      const tip = [ga.title, reason, ga.hold_reason].filter(Boolean).join(" · ");
+      return `<span class="bdg goal off" title="${esc(tip)}">${this.ic("target", 11)} ${esc(lab)}</span>`;
+    }
+
     _paintDraft(r) {
       const esc = (s) => this.esc(s);
       const slot = this._slot();
@@ -484,13 +560,14 @@
       const tierKey = TIER[r.persona_tier];
       const tierLbl = tierKey ? this.t(tierKey) : (r.persona_tier || "");
       const badges =
-        (r.persona ? `<span class="bdg">🎭 ${esc(r.persona)}${tierLbl ? " · " + esc(tierLbl) : ""}</span>` : "") +
-        (r.intent ? `<span class="bdg intent">${esc(this.t("cp.draft.intent"))} ${esc(r.intent)}</span>` : "");
+        (r.persona ? `<span class="bdg">${this.ic("mask", 11)} ${esc(r.persona)}${tierLbl ? " · " + esc(tierLbl) : ""}</span>` : "") +
+        (r.intent ? `<span class="bdg intent">${esc(this.t("cp.draft.intent"))} ${esc(r.intent)}</span>` : "") +
+        this._goalBadgeHtml(r);
       // P2 证据链：草稿引用的 KB 条目（display-only chips，悬停看片段——引用注入不再黑盒）
       const kbRefs = Array.isArray(r.kb_refs) ? r.kb_refs.slice(0, 3) : [];
       const kbChips = kbRefs.length
         ? `<div class="badges">` + kbRefs.map((k) =>
-            `<span class="bdg kb" title="${esc(String(k.snippet || "").slice(0, 200))}">📚 ${esc(String(k.title || k.category || "").slice(0, 24))}</span>`
+            `<span class="bdg kb" title="${esc(String(k.snippet || "").slice(0, 200))}">${this.ic("book", 11)} ${esc(String(k.title || k.category || "").slice(0, 24))}</span>`
           ).join("") + `</div>`
         : "";
       // —— 对比语言路径(桌面：reply/contrast 双块可编辑 + send-pick) ——

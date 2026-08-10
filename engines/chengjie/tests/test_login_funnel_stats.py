@@ -48,6 +48,38 @@ def test_healthy_funnel_not_stalled():
     assert _row(s, "tg:protocol")["stalled"] is False
 
 
+def test_regression_after_past_success_is_stalled():
+    """先能用、后彻底坏＝回归。累计口径（authorized>0）会漏掉它，而它比「从没通过」
+    更隐蔽——所有人都默认那条链路还好着。判据必须是「距上次成功以来」。"""
+    s = LoginFunnelStats()
+    for _ in range(9):                       # 上周好好的
+        s.record("messenger", "web", "started")
+        s.record("messenger", "web", "authorized", elapsed_ms=3000)
+    for _ in range(5):                       # 今天全挂
+        s.record("messenger", "web", "started")
+        s.record("messenger", "web", "failed", reason_code="checkpoint")
+
+    r = _row(s, "messenger:web")
+    assert r["authorized"] == 9              # 累计口径看着很健康
+    assert r["started_since_success"] == 5 and r["failed_since_success"] == 5
+    assert r["stalled"] is True              # 但它现在确实接不上
+
+
+def test_success_clears_the_since_counters():
+    """成功一次即闭嘴：看板与 watchdog 共用这一清零动作，不必各自维护基线。"""
+    s = LoginFunnelStats()
+    for _ in range(5):
+        s.record("line", "protocol", "started")
+        s.record("line", "protocol", "failed", reason_code="pin_timeout")
+    assert _row(s, "line:protocol")["stalled"] is True
+
+    s.record("line", "protocol", "started")
+    s.record("line", "protocol", "authorized", elapsed_ms=2000)
+    r = _row(s, "line:protocol")
+    assert r["stalled"] is False and r["started_since_success"] == 0
+    assert r["failed"] == 5                  # 累计计数不受影响，历史仍可查
+
+
 def test_few_attempts_not_flagged():
     """样本太少不下结论，避免「新装机第一次没扫成」就报警。"""
     s = LoginFunnelStats()
@@ -77,6 +109,28 @@ def test_distinct_key_cap():
     assert s.overflow > 0
 
 
+def test_overflow_does_not_leak_side_tables():
+    """超限折叠进 __other__ 后，旁挂表也必须按生效 key 落键。
+
+    否则主表封顶、``_since`` / ``_reasons`` / ``_auth_ms_*`` 却按原始脏 key 无限
+    长，正好绕过 ``_MAX_KEYS`` 想防的内存撑爆；而且那些条目在 dump 里永远读不到
+    （只按 ``_funnel`` 的 key 查），是纯泄漏。
+    """
+    s = LoginFunnelStats()
+    for i in range(200):
+        s.record(f"p{i}", "protocol", "failed", reason_code="network")
+        s.record(f"p{i}", "protocol", "authorized", elapsed_ms=1000)
+    cap = 41  # _MAX_KEYS + __other__
+    assert len(s._since) <= cap
+    assert len(s._reasons) <= cap
+    assert len(s._auth_ms_sum) <= cap
+    assert len(s._auth_ms_n) <= cap
+    # 折叠后的计数不能丢：__other__ 行照样得记到 reasons/耗时
+    other = _row(s, "__other__")
+    assert other["failed"] > 0 and other["avg_authorized_ms"] == 1000
+    assert other["reasons"].get("network", 0) > 0
+
+
 def test_unknown_stage_ignored():
     s = LoginFunnelStats()
     s.record("line", "protocol", "not_a_stage")
@@ -99,6 +153,23 @@ def test_prom_exposition_shape():
     assert 'login_funnel_total{platform="line",mode="protocol",stage="pin_issued"} 1' in out
     assert 'login_funnel_failed_total{platform="line",mode="protocol",reason="pin_timeout"} 1' in out
     assert out.endswith("\n")
+
+
+def test_prom_exposes_since_success_criterion():
+    """看板/watchdog/外部告警必须读同一个判据数，否则会出现「Prom 静默但看板标红」。"""
+    s = LoginFunnelStats()
+    for _ in range(3):
+        s.record("messenger", "web", "started")
+    out = s.dump_prom()
+    assert ('login_funnel_since_success{platform="messenger",mode="web",'
+            'stage="started"} 3') in out
+    # 成功一次即清零——这正是累计 counter 判不出回归、而本指标能判的原因
+    s.record("messenger", "web", "authorized", elapsed_ms=1000)
+    out2 = s.dump_prom()
+    assert ('login_funnel_since_success{platform="messenger",mode="web",'
+            'stage="started"} 0') in out2
+    assert ('login_funnel_total{platform="messenger",mode="web",'
+            'stage="started"} 3') in out2  # 累计值不受影响
 
 
 def test_module_entrypoint_never_raises():

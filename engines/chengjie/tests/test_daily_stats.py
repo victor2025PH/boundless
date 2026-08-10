@@ -26,19 +26,21 @@ def test_bump_and_today_counts(tmp_path):
     bump("messages", path=p)
     bump("messages", path=p)
     bump("voice_in", path=p)
-    # tts_sent 当日无 bump → 键缺省补 0
-    assert today_counts(path=p) == {"messages": 2, "voice_in": 1, "tts_sent": 0}
+    # tts_sent / replies 当日无 bump → 键缺省补 0
+    assert today_counts(path=p) == {"messages": 2, "voice_in": 1,
+                                    "tts_sent": 0, "replies": 0}
 
 
 def test_bump_accepts_arbitrary_key(tmp_path):
     # 与 gate_stats 同：不做枚举硬校验，任意 str 键都累加（today_counts
-    # 只回读三个统计名，未知键留在文件里不外泄）。
+    # 只回读四个统计名，未知键留在文件里不外泄）。
     p = tmp_path / "daily_stats.json"
     bump("weird_key", path=p)
     bump("weird_key", path=p)
     data = json.loads(p.read_text(encoding="utf-8"))
     assert data[datetime.date.today().isoformat()]["weird_key"] == 2
-    assert today_counts(path=p) == {"messages": 0, "voice_in": 0, "tts_sent": 0}
+    assert today_counts(path=p) == {"messages": 0, "voice_in": 0,
+                                    "tts_sent": 0, "replies": 0}
 
 
 def test_bump_isolates_days(tmp_path):
@@ -50,7 +52,8 @@ def test_bump_isolates_days(tmp_path):
     data = json.loads(p.read_text(encoding="utf-8"))
     assert data[yesterday]["messages"] == 5
     assert data[datetime.date.today().isoformat()]["messages"] == 1
-    assert today_counts(path=p) == {"messages": 1, "voice_in": 0, "tts_sent": 0}
+    assert today_counts(path=p) == {"messages": 1, "voice_in": 0,
+                                    "tts_sent": 0, "replies": 0}
 
 
 def test_today_counts_missing_file_returns_none(tmp_path):
@@ -85,7 +88,8 @@ def test_corrupt_file_bump_no_raise_and_rebuilds(tmp_path):
     p.write_text("{not valid json!!", encoding="utf-8")
     assert today_counts(path=p) is None   # 损坏 → None（回落日志扫描）
     bump("voice_in", path=p)              # 不抛，重建文件
-    assert today_counts(path=p) == {"messages": 0, "voice_in": 1, "tts_sent": 0}
+    assert today_counts(path=p) == {"messages": 0, "voice_in": 1,
+                                    "tts_sent": 0, "replies": 0}
 
 
 def test_bump_atomic_write_no_tmp_residue(tmp_path):
@@ -108,12 +112,13 @@ def test_recent_counts_fills_missing_days_ascending(tmp_path):
     assert len(rows) == 7
     dates = [r["date"] for r in rows]
     assert dates == sorted(dates)                  # 升序，最后一天=今天
-    assert rows[-1] == {"date": today.isoformat(),
-                        "messages": 2, "voice_in": 1, "tts_sent": 1}
-    assert rows[3] == {"date": d3, "messages": 5, "voice_in": 0, "tts_sent": 0}
+    assert rows[-1] == {"date": today.isoformat(), "messages": 2,
+                        "voice_in": 1, "tts_sent": 1, "replies": 0}
+    assert rows[3] == {"date": d3, "messages": 5, "voice_in": 0,
+                       "tts_sent": 0, "replies": 0}
     assert rows[0] == {                            # 无数据日全 0
         "date": (today - datetime.timedelta(days=6)).isoformat(),
-        "messages": 0, "voice_in": 0, "tts_sent": 0,
+        "messages": 0, "voice_in": 0, "tts_sent": 0, "replies": 0,
     }
 
 
@@ -157,3 +162,8 @@ def test_wiring_sender_bump_sites():
     assert n_single_logs >= 1
     n_bumps = len(re.findall(r'daily_stats\.bump\("tts_sent"\)', src))
     assert n_bumps >= n_single_logs + n_split_logs
+    # P2-0「AI 已发」：埋点必须在统一出站记账点 _postsend_record_count 内
+    # （渠道页 KPI 数据源；挪走/删除即 TG hero 永久显 —）。
+    assert 'daily_stats.bump("replies")' in src
+    seg = src.split("def _postsend_record_count", 1)[1].split("def ", 1)[0]
+    assert 'daily_stats.bump("replies")' in seg

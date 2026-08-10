@@ -376,12 +376,15 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                                     assistant.logger.debug(
                                         "人工通过真发回调构建失败", exc_info=True)
                             # 拟人已读回执 + 打字状态：仅真投递模式需要（DB-only 不碰平台）。
+                            # always=True：开关（mark_read_before_reply / typing_indicator）
+                            # 由 worker 运行时自持（apply_humanize_flags 可热更）——这里只
+                            # 决定「能力在不在」，不再把开关冻进「回调建不建」。
                             _mark_read_cb = (
-                                build_autosend_mark_read_cb(assistant)
+                                build_autosend_mark_read_cb(assistant, always=True)
                                 if _deliver else None
                             )
                             _typing_cb = (
-                                build_autosend_typing_cb(assistant)
+                                build_autosend_typing_cb(assistant, always=True)
                                 if _deliver else None
                             )
                             # 人设解析器（人设化节奏参数 + 观测分维）：按 (platform,
@@ -401,6 +404,41 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                                         ) or ""
                                     except Exception:
                                         return ""
+                            # 出站近重复守卫配置（inbox.outbound_dup_guard，默认关）：
+                            # worker 只收 l2_autosend 子段拿不到全局树，这里解析注入。
+                            try:
+                                from src.inbox.outbound_dup_guard import (
+                                    resolve_guard_cfg as _dup_cfg_fn,
+                                )
+                                _dup_guard_cfg = _dup_cfg_fn(
+                                    assistant.config.config or {})
+                            except Exception:
+                                _dup_guard_cfg = None
+                            # 新入站过期守卫配置（inbox.l2_autosend.fresh_guard，默认关）：
+                            # 完整树解析（含 auto_draft.min_text_len 镜像——判「新入站会不会
+                            # 触发新拟稿」用），worker 只收 l2_autosend 子段拿不到，这里注入。
+                            try:
+                                from src.inbox.draft_fresh_guard import (
+                                    parse_fresh_guard_cfg as _fresh_cfg_fn,
+                                )
+                                _fresh_guard_cfg = _fresh_cfg_fn(
+                                    assistant.config.config or {})
+                            except Exception:
+                                _fresh_guard_cfg = None
+                            # 工作时间班表 provider（inbox.work_schedule，默认关）：
+                            # 每次调用活读 config 根（overlay 热重载就地 merge，
+                            # 闭包持 config_manager 引用天然看到新值）——班表改动
+                            # 免重启生效。worker 只收 l2_autosend 子段拿不到全局树，
+                            # 与 dup/fresh 注入同因，但作息要热调所以给闭包不给快照。
+                            def _ws_provider(_cm=assistant.config):
+                                try:
+                                    from src.inbox.work_hours_gate import (
+                                        work_schedule_cfg,
+                                    )
+                                    return work_schedule_cfg(
+                                        getattr(_cm, "config", None) or {})
+                                except Exception:
+                                    return {}
                             _as_worker = AutosendWorker(
                                 draft_service=draft_svc,
                                 config=_merged_as_cfg,
@@ -410,6 +448,9 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                                 mark_read_callback=_mark_read_cb,
                                 typing_callback=_typing_cb,
                                 persona_resolver=_persona_resolver,
+                                dup_guard_cfg=_dup_guard_cfg,
+                                fresh_guard_cfg=_fresh_guard_cfg,
+                                work_schedule_provider=_ws_provider,
                             )
                             web_app.state.autosend_worker = _as_worker
                             # C3：注册 L2 事件驱动钩子，新草稿落库时立即唤醒
@@ -633,9 +674,69 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                     except Exception:
                         assistant.logger.debug("ScheduledReporter 启动跳过", exc_info=True)
 
+                    # ── P2 2026-08-09：目标结算/提醒扫描（常备循环）─────────
+                    # 刻意不搭 ScheduledReporter 便车——那个调度器受 report.enabled
+                    # 闸（生产常年关），P0 首版挂那里导致扫描从未运行（实锤见
+                    # goals/notify.py 模块注释）。与 care 引擎同哲学：循环无条件
+                    # 启动、每 tick 现读配置自闸（goals/sweep/notify 全关＝零开销），
+                    # 开关经 overlay 热重载免重启。state 挂 app.state 当心跳快照。
+                    try:
+                        from src.companion.goals.notify import run_scan_loop
+                        _gscan_state: dict = {}
+                        web_app.state.goal_scan_state = _gscan_state
+                        asyncio.ensure_future(run_scan_loop(
+                            assistant.config,
+                            inbox_store=web_app.state.inbox_store,
+                            state=_gscan_state,
+                        ))
+                        assistant.logger.info(
+                            "目标结算/提醒扫描循环已挂载（常备接线，配置热自闸）")
+                    except Exception:
+                        assistant.logger.debug(
+                            "目标扫描循环启动跳过", exc_info=True)
+
+                    # ── P3 2026-08-09：工作链推进常备循环 ────────────────
+                    # 同一次事故的同类病：链推进原挂 ScheduledReporter
+                    # （report.enabled 闸，生产常年关）＝坐席点「启动工作链」
+                    # 后步骤永不推进。迁到常备循环（inbox.workflows.autorun
+                    # 默认开可热关）。生产现状 4 条种子链 0 执行 → 迁移当天
+                    # 零行为变化，链从此「点了真会走」。
+                    try:
+                        from src.inbox.workflow_autorun import run_workflow_loop
+                        _wfrun_state: dict = {}
+                        web_app.state.workflow_autorun_state = _wfrun_state
+                        asyncio.ensure_future(run_workflow_loop(
+                            web_app.state, state=_wfrun_state))
+                        assistant.logger.info(
+                            "工作链推进循环已挂载（常备接线，配置热自闸）")
+                    except Exception:
+                        assistant.logger.debug(
+                            "工作链推进循环启动跳过", exc_info=True)
+
                     # E2/F2：按 auto_draft 配置注册入站新消息 → 自动草稿生成回调
                     from src.inbox.autodraft_helpers import setup_auto_draft
                     setup_auto_draft(assistant, draft_svc, web_app)
+
+                    # 复班补觉重拟接线（work_schedule.off_hours.catch_up）：
+                    # setup_auto_draft 把拟稿回调存进 app.state.auto_draft_cb 后，
+                    # 回填给 AutosendWorker——重拟走**原拟稿产线**（enrich/人设/
+                    # 档位封顶全生效）。skip_companion_yield=True：补觉重拟的消息
+                    # A 线早已跳过（当时休息中），双轨互斥的「让位」在此必须旁路，
+                    # 否则 TG 陪伴号的隔夜消息作废后无人重拟=静默丢回复。
+                    # 任一句柄缺席（auto_draft 关/worker 没建）→ 不接线，
+                    # worker 侧「未注入就绝不作废」的铁律兜底。
+                    try:
+                        _adc = getattr(web_app.state, "auto_draft_cb", None)
+                        _asw = getattr(web_app.state, "autosend_worker", None)
+                        if callable(_adc) and _asw is not None and hasattr(
+                                _asw, "set_catchup_regenerate_cb"):
+                            def _catchup_regen(conv, text, _cb=_adc):
+                                _cb(conv, text, skip_companion_yield=True)
+                                return True
+                            _asw.set_catchup_regenerate_cb(_catchup_regen)
+                    except Exception:
+                        assistant.logger.debug(
+                            "补觉重拟回调接线跳过", exc_info=True)
 
                     # I3：预置回复模板库（幂等，id 冲突则跳过）
                     try:

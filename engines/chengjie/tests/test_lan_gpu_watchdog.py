@@ -94,6 +94,21 @@ def test_targets_strip_v1_suffix_and_keep_port():
     assert hw.lan_gpu_probe_targets(cfg) == ["http://10.0.0.5:11434"]
 
 
+def test_targets_collect_colloquial_llm_endpoints():
+    """口语化专属 LAN 端点（avatar_voice.colloquial.llm_endpoints）也进巡检——
+    挂了会静默降级 cloud/规则档，与嵌入/视觉/兜底 LLM 同一口径（2026-08-01）。"""
+    cfg = {
+        "avatar_voice": {"colloquial": {"llm_endpoints": [
+            {"base_url": "http://192.168.0.198:11434", "model": "qwen3:8b"},
+            {"base_url": "https://api.deepseek.com", "model": "x"},   # 公网滤掉
+            "garbage",                                                 # 防御
+        ]}},
+        "ai": {"embedding_base_url": "http://192.168.0.198:11434"},
+    }
+    # 与嵌入同主机 → 去重后仍只有一个根
+    assert hw.lan_gpu_probe_targets(cfg) == ["http://192.168.0.198:11434"]
+
+
 # ── 升级语义 ─────────────────────────────────────────────────────
 
 

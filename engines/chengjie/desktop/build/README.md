@@ -25,11 +25,19 @@ npm run build:backend          # = python build/build_backend.py
 cd desktop
 npm install
 npm run dist:win        # 或 dist:mac / dist（当前平台）
+# 改过 src/ 模板后一键：先重打 sidecar 再出安装包
+npm run dist:win:fresh
 ```
 
 `extraResources` 会把 `build/backend-dist/` 复制进安装包的 `resources/backend/`。
 运行时 `backend-launcher.js` 在发布态优先用 `resources/backend/backend(.exe)`，
 开发态回退系统 Python 跑仓库根 `main.py`。
+
+**新鲜度门禁（2026-08-08）**：`predist` / `predist:win` 会跑
+`python build/check_backend_freshness.py`。`build:backend` 成功后在
+`backend-dist/.source-fingerprint.json` 落源码内容指纹；若工作树相对该戳已脏，
+**拒打安装包**（防再出现「版本号新、sidecar 仍是旧 `_cancelMedia`」）。
+手动自检：`npm run check:backend-fresh`。
 
 ## 运行时行为（生命周期）
 

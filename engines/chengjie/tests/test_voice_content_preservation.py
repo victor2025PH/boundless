@@ -11,8 +11,11 @@
 双层守卫各管一半，本门禁两边都钉：
 - ``lost_anchors``（纯函数）：数字/金额/型号丢了或被改即拒。确定性、零误伤；
   余弦抓不到这类（「198→168」语义几乎不变，实测 cos=0.974）。
-- ``_semantically_same``（余弦，fail-open）：答非所问/换主题即拒。anchor 抓不到
-  这类（没有数字可丢）。阈值 0.78 由实测校准：真改写 0.862~0.986 / 漂移 0.526~0.696。
+- ``_semantically_same``（余弦，**fail-closed**，2026-08-10 反转）：答非所问/
+  换主题即拒。anchor 抓不到这类（没有数字可丢）。阈值 0.84（2026-08-10 由 0.78
+  上调：当日生产拦下的答话式漂移已爬到 0.746/0.774、漏网出站的那条在 0.78 之上；
+  真改写带下沿 0.862 不受影响）。校验不成立（无 embed/端点抖动/返空）＝拒用
+  LLM 稿——旧 fail-open 语义下「嵌入抖动窗口」恰好成了漂移稿的出站通道。
 
 语义层用**注入的确定性假嵌入**，CI 不依赖局域网 GPU。
 """
@@ -78,7 +81,7 @@ def test_anchor_covers_latin_product_token():
     assert lost_anchors("走 autochat-team 这档", "走那个便宜档就行") != []
 
 
-# ── 第二层：语义地板（fail-open）──────────────────────────────────────────
+# ── 第二层：语义地板（fail-closed）────────────────────────────────────────
 class _FakeEmbedder:
     """确定性假嵌入：按预置相似度表返回可控向量（CI 不碰局域网 GPU）。"""
 
@@ -97,9 +100,11 @@ def _same(sim: float, min_similarity: float = DEFAULT_MIN_SIMILARITY) -> bool:
         _semantically_same(_FakeEmbedder(sim), CORE_A, "任意改写", min_similarity))
 
 
-@pytest.mark.parametrize("sim", [0.526, 0.684, 0.696, 0.77])
+@pytest.mark.parametrize("sim", [0.526, 0.684, 0.696, 0.746, 0.774, 0.78, 0.83])
 def test_semantic_rejects_drift_band(sim):
-    """实测漂移带（换主题 0.526 / 答非所问 0.684 / 回答式 0.696）必须拒。"""
+    """实测漂移带必须拒：换主题 0.526 / 答非所问 0.684 / 回答式 0.696，
+    加 2026-08-10 生产实拦点 0.746/0.774 与旧阈值漏网带 0.78~0.83
+    （答话与原问同话题余弦天然偏高——旧阈值 0.78 正好放走事故那条）。"""
     assert _same(sim) is False
 
 
@@ -110,40 +115,45 @@ def test_semantic_keeps_legit_band(sim):
 
 
 def test_semantic_threshold_sits_in_measured_gap():
-    """阈值必须落在实测间隔内——防有人随手把它调进任一带里。"""
-    assert 0.70 < DEFAULT_MIN_SIMILARITY < 0.86
+    """阈值必须落在「旧漏网带上沿」与「真改写带下沿 0.862」之间——
+    防有人随手把它调回漂移带附近或调进真改写带里误杀。"""
+    assert 0.80 < DEFAULT_MIN_SIMILARITY < 0.862
 
 
-def test_semantic_fail_open_without_embed():
-    """client 没有 embed → 放行（守卫故障不该拖死口语化）。"""
+def test_semantic_fail_closed_without_embed():
+    """client 没有 embed → 拒用 LLM 稿（2026-08-10 由 fail-open 反转）。
+
+    旧语义的代价已被生产实锤：嵌入不可用的窗口恰好放行了答话式漂移。
+    拒的代价只是回落规则档原文照念，永不劣化。
+    """
     class NoEmbed:
         pass
 
     got = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
         _semantically_same(NoEmbed(), CORE_A, "完全无关的一句话", 0.78))
-    assert got is True
+    assert got is False
 
 
-def test_semantic_fail_open_on_endpoint_error():
-    """嵌入端点抛异常 → 放行。"""
+def test_semantic_fail_closed_on_endpoint_error():
+    """嵌入端点抛异常 → 拒用 LLM 稿（未经校验的非确定性改写不出站）。"""
     class Boom:
         async def embed(self, texts):
             raise RuntimeError("endpoint down")
 
     got = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
         _semantically_same(Boom(), CORE_A, "完全无关的一句话", 0.78))
-    assert got is True
+    assert got is False
 
 
-def test_semantic_fail_open_on_empty_vectors():
-    """端点返回空向量 → 放行。"""
+def test_semantic_fail_closed_on_empty_vectors():
+    """端点返回空向量 → 拒用 LLM 稿。"""
     class Empty:
         async def embed(self, texts):
             return []
 
     got = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
         _semantically_same(Empty(), CORE_A, "完全无关的一句话", 0.78))
-    assert got is True
+    assert got is False
 
 
 def test_semantic_disabled_by_zero_threshold():

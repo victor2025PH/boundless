@@ -52,6 +52,27 @@ def _media_placeholder(media_type: str) -> str:
     return media_placeholder(media_type)
 
 
+def media_preview_text(text: str, media_type: str) -> str:
+    """媒体消息的**会话列表预览**文案（P1-1，2026-08-02）。
+
+    背景：媒体行正文自 2026-08-02 起是干净转写/配文（``[语音]``/``[图片]`` 语义由
+    ``media_type`` 承载）——气泡里由媒体卡渲染形态，但**会话列表是纯文本**，没了
+    标记就分不清「一句话」和「一条语音」。故预览层按 media_type 补形态标记：
+
+    - 正文为空 → 纯占位（``[语音]``，与旧行为一致）；
+    - 正文已带 ``[…]`` 标记（如 ``[图片内容] 描述``、存量旧行）→ 原样不叠加；
+    - 干净正文（转写/配文）→ ``[语音] 正文``。
+
+    只影响 conversations 预览列，消息正文不动。
+    """
+    t = str(text or "").strip()
+    if not t:
+        return media_placeholder(media_type)
+    if t.startswith("["):
+        return t
+    return f"{media_placeholder(media_type)} {t}"
+
+
 def protocol_media_root() -> Path:
     """协议媒体落地根目录：``src/web/static/protocol_media``（按需创建）。"""
     root = Path(__file__).resolve().parents[1] / "web" / "static" / _STATIC_MEDIA_SUBDIR
@@ -133,7 +154,24 @@ def publish_outbound_media(
 
     已经落在 ``protocol_media`` 根下的文件**直接推 URL、不重复拷贝**；其余拷进去
     （与坐席上传出站媒体同一目录，生命周期一致）。
+
+    每次调用的成败都进 ``outbound_mirror_stats``（2026-08-02）：失败＝该条媒体在
+    坐席台退化成纯文本占位，此前完全静默，现在有计数/看板指向根因。
     """
+    url, mt = _publish_outbound_media_impl(platform, account_id, local_path)
+    try:
+        from src.integrations.outbound_mirror_stats import get_outbound_mirror_stats
+        kind = mt or media_type_from_ext(
+            os.path.splitext(str(local_path or ""))[1])
+        get_outbound_mirror_stats().record_publish(platform, kind, ok=bool(url))
+    except Exception:
+        pass
+    return url, mt
+
+
+def _publish_outbound_media_impl(
+    platform: str, account_id: str, local_path: str,
+) -> Tuple[str, str]:
     p = str(local_path or "")
     if not p or not os.path.isfile(p):
         return "", ""
@@ -499,9 +537,9 @@ def ingest_incoming(
         lm["media_type"] = str(media_type or "")
         lm["media_ref"] = str(media_ref or "")
         chat["messages"] = [lm]
-        # 会话预览用占位符，但消息正文保持原文（空则不喂 auto-draft）
-        if not text:
-            chat["last_msg"] = _media_placeholder(media_type)
+        # 会话预览：空文本→占位；干净转写/配文→补形态标记「[语音] 转写」（P1-1）。
+        # 消息正文保持原文（空则不喂 auto-draft），只动预览列。
+        chat["last_msg"] = media_preview_text(text, media_type)
     # P4-11E：群入站会话列表预览前缀发言人名（「张三：早上好」，对齐官方群聊列表），
     # 只改**会话预览** last_msg，不动**消息正文**（气泡正文保持干净，发言人走结构化字段）。
     if direction == "in" and str(chat_type or "") == "group" and _sender_name:
@@ -691,12 +729,15 @@ def history_message_obj(payload: Optional[Dict[str, Any]], message: Any) -> Dict
     - 仍无文本（服务消息等）→ 返回 {}，调用方跳过；
     - ``source`` 带 ``id`` 让 ``extract_platform_msg_id`` 抽到 MTProto 消息 id，
       与实时路径产出同一去重主键——重复同步/实时推送不会落重复行。
+    - **媒体行结构化**（2026-08-04）：有媒体时落 ``media_type``（本体仍不下载、
+      ``media_ref`` 留空）——工作台按形态卡渲染并给出「拉取原件」入口
+      （``/api/platforms/telegram/{acct}/fetch-media`` 按行回填），替代纯占位文字。
+      占位文本保留（会话预览与旧口径一致；气泡层 ``_dropBarePlaceholder`` 会剥掉）。
     """
     text = str((payload or {}).get("text") or "")
-    if not text:
-        meta = tg_media_meta(message)
-        if meta:
-            text = media_placeholder(meta[0])
+    meta = tg_media_meta(message)
+    if not text and meta:
+        text = media_placeholder(meta[0])
     if not text:
         return {}
     mid = str((payload or {}).get("msg_id") or "")
@@ -704,6 +745,7 @@ def history_message_obj(payload: Optional[Dict[str, Any]], message: Any) -> Dict
         text=text, ts=(payload or {}).get("ts") or 0,
         direction=str((payload or {}).get("direction") or "in"),
         message_id=mid, source={"id": mid} if mid else {},
+        media_type=(meta[0] if meta else ""),
     )
 
 
@@ -855,4 +897,85 @@ async def sync_telegram_history(
                 pass
         if pace_sec > 0:
             await asyncio.sleep(pace_sec)
+    return stats
+
+
+async def deep_backfill_tg_history(
+    client: Any, account_id: str, chat_key: str, *,
+    max_messages: int = 2000, offset_id: int = 0,
+    ingest: Optional[Callable[[Dict[str, Any], List[Dict[str, Any]]], Any]] = None,
+    progress: Optional[Callable[[int, int], None]] = None,
+    batch_size: int = 200, pace_sec: float = 0.3,
+) -> Dict[str, Any]:
+    """单会话「深度回填」：从锚点（``offset_id``，0=最新）向更早方向连续拉取，
+    直到攒够 ``max_messages`` 或云端到头。
+
+    与 ``collect_tg_dialog_history``（单页、攒齐一次性返回）的区别：**流式分批落库**
+    ——每 ``batch_size`` 条 ingest 一次并回调 ``progress(fetched, inserted)``，几千条
+    的深回填中途崩溃时已落批次不重来；pyrogram 的 ``get_chat_history`` 生成器内部
+    自带分页与 FloodWait 自动等待，无需手工翻页；批间 ``pace_sec`` 温和节流
+    （与账号级同步同哲学）。
+
+    返回 ``{"fetched": 云端拉到的原始条数, "inserted": 新插入条数,
+    "exhausted": 云端是否已到头}``。fetched < max_messages 即到头（生成器提前收尾
+    只有「没有更早了」一种含义）；服务消息等不可入库条目计入 fetched 不计入
+    inserted，两数值差不代表丢失。
+    """
+    stats: Dict[str, Any] = {"fetched": 0, "inserted": 0, "exhausted": False}
+    if client is None or not chat_key or int(max_messages or 0) <= 0 or ingest is None:
+        return stats
+    peer: Any = chat_key
+    try:
+        peer = int(chat_key)
+    except (TypeError, ValueError):
+        peer = chat_key
+    kwargs: Dict[str, Any] = {"limit": int(max_messages)}
+    if offset_id:
+        kwargs["offset_id"] = int(offset_id)
+    chat_obj: Any = None
+    batch: List[Dict[str, Any]] = []
+
+    def _flush() -> None:
+        nonlocal batch
+        if chat_obj is None or not batch:
+            batch = []
+            return
+        newest = max(batch, key=lambda m: float(m.get("ts") or 0))
+        chat = tg_chat_dict(
+            chat_obj, account_id,
+            last_msg=str(newest.get("text") or ""),
+            last_ts=float(newest.get("ts") or 0),
+        )
+        if chat is not None:
+            try:
+                stats["inserted"] += int(ingest(chat, batch) or 0)
+            except Exception:
+                logger.debug("[protocol_bridge] 深度回填 ingest 批次失败（已跳过）",
+                             exc_info=True)
+        batch = []
+
+    def _report() -> None:
+        if progress is not None:
+            try:
+                progress(stats["fetched"], stats["inserted"])
+            except Exception:
+                pass
+
+    async for message in client.get_chat_history(peer, **kwargs):
+        stats["fetched"] += 1
+        if chat_obj is None:
+            chat_obj = getattr(message, "chat", None)
+        payload = tg_message_payload(message, account_id)
+        if payload is not None:
+            obj = history_message_obj(payload, message)
+            if obj:
+                batch.append(obj)
+        if len(batch) >= max(1, int(batch_size)):
+            _flush()
+            _report()
+            if pace_sec > 0:
+                await asyncio.sleep(pace_sec)
+    _flush()
+    stats["exhausted"] = stats["fetched"] < int(max_messages)
+    _report()
     return stats

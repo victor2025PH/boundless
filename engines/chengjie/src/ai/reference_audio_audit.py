@@ -86,6 +86,16 @@ def _f0_energy(a: Any, sr: int, *, fmin: int = 75, fmax: int = 400,
     return np.array(f0), np.array(en)
 
 
+def decode_wav_bytes(raw: bytes) -> Tuple[Any, int]:
+    """公开封装：WAV bytes → (float32 单声道 ndarray, sample_rate)。失败抛。
+
+    供登记链（voice_enroll.prepare_reference_audio）复用同一解码器做
+    「裁剪前的原始样本」——与 analyze/pick_best_segment 同一口径。
+    """
+    a, sr, _nch, _sw = _decode_wav(raw or b"")
+    return a, sr
+
+
 def analyze_wav_bytes(raw: bytes) -> Dict[str, Any]:
     """参考音 WAV → 体检指标 dict。任何异常 → ``{"ok": False, "detail": ...}``。
 

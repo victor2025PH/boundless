@@ -196,6 +196,10 @@ _ADMIN_SEALED_PAGES = {"cases.html": 0, "logs.html": 0, "analytics.html": 0, "pe
                        # + JS 64→lr_js*/lr_*，知识草稿审核/批量通过拒绝/相似去重）。title site_name default 复用
                        # msg_s444；label 动词经 window.T 派生入 Tf；次→kb_js_174(' times') 纠反 runs 复用。
                        "episodic_memory.html": 0, "learner.html": 0,
+                       # 自动回复设置（2026-08-02 可读性/信息架构改版随批收口）：全部可见文案走
+                       # Jinja get（rps_* 键，zh/en 镜像有专项门禁），JS 文案经服务端注入的
+                       # RPS_I18N 消费；源码层 cap-0 与下方 EN 渲染门禁双锁。
+                       "reply_settings.html": 0,
                        # ③-S9n：关系/转化运营两页——relations_health（静态 40→rh_s* + JS 78→rh_js*，流失预警榜/
                        # 跨域归档回填/单人健康卡）；monetization（静态 114→mo_s* + JS 111→mo_js*，端变现营收/
                        # 挽回榜/漏斗/出图预算/权益开通/门控预览）。title site_name default 复用 msg_s444；
@@ -503,6 +507,44 @@ def test_template_window_t_keys_resolve(name):
     assert not missing, (
         f"{name} 里 window.T/Tf 引用了译表中不存在的静态键（会把裸 key 显示给用户，"
         f"请在 web_i18n.py 补 zh/en）: {missing}"
+    )
+
+
+def _static_js_with_window_t():
+    """src/web/static 下含 window.T/Tf 调用的 JS 文件（相对路径），供参数化。"""
+    from scripts.i18n_scan import _TPL_DIR
+    static_dir = _TPL_DIR.parent / "static"
+    out = []
+    for p in sorted(static_dir.rglob("*.js")):
+        try:
+            src = p.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        if "window.T" in src or ".Tf(" in src:
+            out.append(p.relative_to(static_dir).as_posix())
+    return out
+
+
+@pytest.mark.parametrize("relname", _static_js_with_window_t())
+def test_static_js_window_t_keys_resolve(relname):
+    """P2-3（2026-08-02）：模板 JS 外迁到 ``src/web/static/**/*.js`` 后，
+    ``window.T('k')`` 的键保护不得随迁移丢失——本门禁把
+    :func:`test_template_window_t_keys_resolve` 同款检查扩到静态 JS。
+
+    历史盲区实锤：persona_studio_core.js（第五批瘦身外迁）带 39+ 处 window.T
+    却一直不在键门禁内。取键前先 ``_strip_comments``（cmdk.js 文档注释里的
+    ``window.T('ws.cmdk.*')`` 通配示例属说明文字，不是真调用）。"""
+    from scripts.i18n_scan import _TPL_DIR, _strip_comments, window_t_static_keys
+    from src.web.web_i18n import get_translations
+
+    zh = get_translations("zh")
+    src = (_TPL_DIR.parent / "static" / relname).read_text(
+        encoding="utf-8", errors="replace")
+    missing = sorted(
+        k for k in window_t_static_keys(_strip_comments(src)) if k not in zh)
+    assert not missing, (
+        f"static/{relname} 里 window.T/Tf 引用了译表中不存在的静态键"
+        f"（会把裸 key 显示给用户，请在对应 i18n pack 补 zh/en）: {missing}"
     )
 
 
@@ -908,6 +950,12 @@ SEALED_PAGES = (
     ("workspace_dashboard.html", dict(ui_mode="full", user_name="admin", user_display_name="Admin",
                                       funnel_done_stages=[])),
     ("draft_review.html", dict(ui_mode="full", user_name="admin", user_display_name="Admin")),
+    # 自动回复设置（2026-08-02）：可见文案全走服务端 (i18n or {}).get(rps_*)；JS 文案经
+    # RPS_I18N（Jinja 按渲染语言注入）而非 window.T——<script> 源码里的中文是 get 默认值、
+    # 随语言被 Jinja 消费，故**刻意不入** _SCRIPT_CJK_ZERO_PAGES（那是 window.T 架构的门禁）；
+    # EN 正确性由本渲染门禁 + rps pack 双语镜像（test_reply_settings.test_i18n_pack_bilingual）
+    # 共同证明。正文无 ui_mode 分支，一态即可。
+    ("reply_settings.html", {"ui_mode": "full"}),
     # ③-S9k：ops 运营家族三页——原 contacts_routes._load_ops_html 直出原始 HTML（不过 Jinja），本轮
     # 升级为 templates.TemplateResponse 渲染（i18n_render 注入 i18n/ui_lang）+ {% include
     # _i18n_bootstrap %}（拿 window.T/Tf + wsFmt*，退役 /static/ops_locale.js）+ {% include
@@ -1095,7 +1143,8 @@ def test_admin_chrome_nav_keys_present_and_translated():
     from src.web.web_i18n import get_translations
 
     zh, en = get_translations("zh"), get_translations("en")
-    same_ok = {"messenger_rpa"}  # 品牌名两语一致，豁免
+    # 品牌名两语一致，豁免（真机矩阵更名后四渠道菜单项=裸品牌名，品牌不翻译）
+    same_ok = {"telegram_settings", "line_rpa", "messenger_rpa", "whatsapp_rpa"}
     missing, untranslated = [], []
     for k in _ADMIN_CHROME_NAV_KEYS:
         if k not in zh or k not in en:

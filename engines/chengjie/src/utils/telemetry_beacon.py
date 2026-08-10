@@ -217,6 +217,30 @@ class _Beacon(logging.Handler):
             return False
 
 
+#: 里程碑去重：同类事件进程内只发一次（激活漏斗按机器指纹去重，重复行只是噪声）
+_MILESTONE_SENT: set = set()
+
+
+def note_milestone(kind: str, detail: str = "") -> None:
+    """产品激活里程碑（P1-⑧ 漏斗数据源）：INFO 级经 client-log 回传官网。
+
+    与错误回传共用 beacon 管道与全部隐私红线（消毒/节流/桌面态才激活）；
+    beacon 未装（server 部署 / 显式关闭 / 测试）→ 纯 no-op。调用方无需判环境，
+    但**必须**保证自己在热路径上先做零成本短路（见 inbox store 的接法）。
+    """
+    b = _installed
+    if b is None:
+        return
+    key = str(kind or "").strip()
+    if not key or key in _MILESTONE_SENT:
+        return
+    _MILESTONE_SENT.add(key)
+    try:
+        b.note_event("milestone", "INFO", f"{key} {sanitize_message(detail)}".strip())
+    except Exception:  # noqa: BLE001 —— 回传是旁路
+        pass
+
+
 def install_beacon(config: Optional[dict],
                    post: Optional[Callable[[str, dict], bool]] = None) -> Optional[_Beacon]:
     """挂到 root logger（幂等）。非桌面/显式关闭返回 None。"""
@@ -243,3 +267,4 @@ def reset_for_tests() -> None:
             except Exception:
                 pass
         _installed = None
+        _MILESTONE_SENT.clear()

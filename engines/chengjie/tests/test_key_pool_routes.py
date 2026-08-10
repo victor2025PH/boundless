@@ -276,6 +276,9 @@ class TestAiRuntimeStatus:
         # Phase3: seat restart-cooldown banner payload (may be inactive)
         assert isinstance(r.get("instance_restart"), dict)
         assert "cooldown_active" in r["instance_restart"]
+        # P4 (2026-08-08): 托管到期提醒字段恒在；非托管部署（无 tenant_notice.json）
+        # 恒 None——前端据此不渲染横幅
+        assert "tenant_notice" in r and r["tenant_notice"] is None
 
     def test_with_ai_client_snapshot(self, tmp_path):
         import types
@@ -336,6 +339,10 @@ def test_workspace_base_wires_degrade_bar():
     assert "ws.restartcool.text" in src
     assert "instance_restart" in src
     assert "window.__wsRestartCool" in src
+    # P4: 托管到期提醒横幅（tenant_notice → ws-expiry；i18n 键 zh/en 由 pack 门禁守）
+    assert 'id="ws-expiry"' in src
+    assert "ws.expiry.expiring" in src and "ws.expiry.expired" in src
+    assert "tenant_notice" in src
 
 
 # ── AIClient.pool_status ─────────────────────────────────────────

@@ -153,6 +153,24 @@ function makeGenericProfile(cfg) {
   };
 }
 
+// 读节点可见文本前必须先摘掉我们自己注入的 .aitr-box/.aitr-btn。注入控件挂在
+// `.copyable-text` 里（core.js::appendInjectControl），而 WhatsApp 的取文回落路径正好读
+// 这一层 → 不摘就会把译文当原文读回去：污染 ingest 与智能回复上下文（"原文译文"双份），
+// 并让原文指纹每轮都判「已变」→ 陈旧标记与自动重译陷入死循环。
+// 无注入物时走零克隆快路径（扫描循环每轮对每个气泡都会调这里）。
+function _textWithoutInjected(node) {
+  if (!node) return "";
+  if (!node.querySelector || !node.querySelector(".aitr-box,.aitr-btn")) {
+    return node.textContent || "";
+  }
+  let clone;
+  try { clone = node.cloneNode(true); } catch (e) { return node.textContent || ""; }
+  if (clone.querySelectorAll) {
+    clone.querySelectorAll(".aitr-box,.aitr-btn").forEach((n) => n.remove());
+  }
+  return clone.textContent || "";
+}
+
 // ── 内置定制档（telegram / whatsapp）：逐字保留原实现，零回归 ──────────────────
 const _telegram = {
   platform: "telegram",
@@ -257,13 +275,13 @@ const _whatsapp = {
     const span = bubble.querySelector(
       "span.selectable-text, .copyable-text span.selectable-text, [data-testid='selectable-text']"
     );
-    let raw = span ? span.textContent : "";
+    let raw = _textWithoutInjected(span);
     if (!raw) {
       const cp = bubble.querySelector(".copyable-text, .copyable-area");
-      raw = cp ? cp.textContent : "";
+      raw = _textWithoutInjected(cp);
     }
     if (!raw && bubble.getAttribute && bubble.getAttribute("data-id")) {
-      raw = bubble.textContent || "";
+      raw = _textWithoutInjected(bubble);
     }
     return cleanVisibleText(raw);
   },
@@ -429,6 +447,7 @@ function selectorHealth(profile, doc) {
   }
 })({
   cleanVisibleText,
+  textWithoutInjected: _textWithoutInjected,
   detectPlatform,
   makeGenericProfile,
   applySelectorOverlay,

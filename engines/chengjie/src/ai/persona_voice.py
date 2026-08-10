@@ -15,6 +15,17 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Tuple
 
+# UI 哨兵「系统通用音色」（2026-08-05 P0）：坐席下拉的第三种选择，介于
+# 「空串=跟随会话人设回落链」与「显式人设 id」之间——**钉死全局默认配置**
+# （resolve_voice_cfg(None)，即 telegram.voice_reply ⊎ messenger_rpa.voice_output），
+# 不做会话/账号人设回落、不做 per-contact 会员档路由、不注入 persona_id。
+# 由此获得两个硬保证：① 选它永远是同一把声音（与会话绑定无关）；② voice_cfg 无
+# persona_id → tts_pipeline 的 hub 人设层（allowlist/voice_consistency=strict）
+# 天然不参与 → 不会因 hub 单点故障被「宁缺毋滥」拒发——这正是「默认音色不可用」
+# 事故的结构性出口。刻意**不**把空串改成这个语义：空串的回落链是既有会话的
+# 听感事实源，重定义会让老会话静默换声（比不发语音更伤）。
+SYSTEM_VOICE_ID = "__system__"
+
 
 # Fields that pin a *specific* cloned/reference voice. When a persona switches
 # to a different backend (e.g. a public neural voice via edge_tts), these must
@@ -74,6 +85,10 @@ def resolve_voice_cfg(
     按 ``voice_routing`` 策略改写后端（VIP→elevenlabs，免费→edge 降级省成本）。
     ``tier=None``（默认）或 ``voice_routing.enabled=false`` → 不路由，行为不变。
     """
+    # UI 哨兵防御：任何路径把「系统通用音色」当人设 id 传进来都按 None 处理
+    # （主消费口在 resolve_effective_voice_context；这里兜住散装调用方）。
+    if str(persona_id or "").strip() == SYSTEM_VOICE_ID:
+        persona_id = None
     try:
         # ── Layer 0 (lowest): messenger_rpa.voice_output compat shim ──
         mrpa_vo: Dict[str, Any] = dict(
@@ -267,36 +282,61 @@ def resolve_effective_voice_context(
     resolved_persona: Dict[str, Any] = {}
     resolved_id = str(persona_id or "").strip()
     source = "explicit" if resolved_id else "fallback"
-    try:
-        from src.utils.persona_manager import PersonaManager
-        pm = PersonaManager.get_instance()
-        if resolved_id:
-            p = pm.get_persona_by_id(resolved_id)
-            if isinstance(p, dict):
-                resolved_persona = p
-        else:
-            # 会话级覆写（与文本出站链同一优先级：conv_override > account >
-            # legacy chat > domain）——开关关/键缺失时 _conv_key 为空，行为不变。
-            _conv_key = ""
-            if chat_key and account_id and conv_override_enabled(cfg):
-                _conv_key = conv_binding_key(
-                    str(platform or ""), str(account_id or ""), str(chat_key))
-            p, tier = pm.get_persona_with_tier(
-                str(chat_key or ""), str(account_persona_id or ""),
-                conversation_key=_conv_key)
-            if isinstance(p, dict):
-                resolved_persona = p
-                resolved_id = str(p.get("id") or "").strip()
-                source = str(tier or source)
-    except Exception:
-        resolved_persona = {}
+    # 「系统通用音色」哨兵：钉死全局默认，绕过人设回落链与 per-contact 路由
+    # （语义与保证见模块顶 SYSTEM_VOICE_ID 注释）。persona_id 置空 → hub 人设层
+    # / 预渲染命中层天然跳过；variety_key / 情绪解析仍走共享尾部（听感连续性
+    # 与情绪基线是会话属性，不随「选哪把声音」变）。
+    pin_system = resolved_id == SYSTEM_VOICE_ID
+    if pin_system:
+        resolved_id = ""
+        source = "system"
+    if not pin_system:   # 钉死全局时人设层完全不参与
+        try:
+            from src.utils.persona_manager import PersonaManager
+            pm = PersonaManager.get_instance()
+            if resolved_id:
+                p = pm.get_persona_by_id(resolved_id)
+                if isinstance(p, dict):
+                    resolved_persona = p
+            else:
+                # 会话级覆写（与文本出站链同一优先级：conv_override > account >
+                # legacy chat > domain）——开关关/键缺失时 _conv_key 为空，行为不变。
+                _conv_key = ""
+                if chat_key and account_id and conv_override_enabled(cfg):
+                    _conv_key = conv_binding_key(
+                        str(platform or ""), str(account_id or ""), str(chat_key))
+                p, tier = pm.get_persona_with_tier(
+                    str(chat_key or ""), str(account_persona_id or ""),
+                    conversation_key=_conv_key)
+                if isinstance(p, dict):
+                    resolved_persona = p
+                    resolved_id = str(p.get("id") or "").strip()
+                    source = str(tier or source)
+        except Exception:
+            resolved_persona = {}
 
-    voice_cfg = resolve_voice_cfg_for_contact(
-        resolved_id or None, cfg, contact_key=contact_key)
-    # Inline/snapshot bindings can carry a voice_profile without an id. Merge it
-    # directly so legacy chat bindings still get their own voice.
-    if isinstance(resolved_persona, dict):
-        _merge_voice_profile(voice_cfg, resolved_persona.get("voice_profile") or {})
+    if pin_system:
+        # 刻意用裸 resolve_voice_cfg(None)（不走 for_contact 的会员档路由）：
+        # 「系统通用音色」的价值就是 100% 可预测——同一台机器上任何会话选它
+        # 都得到同一份配置；VIP 分层属人设/回落链路径的优化，不属于这里。
+        voice_cfg = resolve_voice_cfg(None, cfg)
+    else:
+        voice_cfg = resolve_voice_cfg_for_contact(
+            resolved_id or None, cfg, contact_key=contact_key)
+        # Inline/snapshot bindings can carry a voice_profile without an id. Merge
+        # it directly so legacy chat bindings still get their own voice.
+        if isinstance(resolved_persona, dict):
+            _merge_voice_profile(
+                voice_cfg, resolved_persona.get("voice_profile") or {})
+
+    # 会话口味键（voice_opener_guard，P0-2 2026-08-03）：三条语音链（A 线
+    # voice_reply / B 线 autosend / 坐席手动）都经本解析器 → 在此注入一次，
+    # 调用方零改动同享「同一会话跨消息开场词去重」。键与人设无关——标识的是
+    # 同一个客户的听感连续性；无 chat/contact 上下文（预渲染/试听）保持为空。
+    _vk = str(chat_key or contact_key or "").strip()
+    if _vk and not str(voice_cfg.get("variety_key") or "").strip():
+        voice_cfg["variety_key"] = (
+            f"{str(platform or '')}:{str(account_id or '')}:{_vk}")
 
     # The pinned emotion baseline lives on the *resolved* voice_profile (which an
     # inline binding inherits from its profile by id). Surface it to the emotion
@@ -591,3 +631,21 @@ def get_voice_profile_for_persona(
     cfg = resolve_voice_cfg(persona_id, full_config)
     vp = cfg.get("voice_profile")
     return dict(vp) if isinstance(vp, dict) else {}
+
+
+def persona_display_name(persona_id: Optional[str]) -> str:
+    """人设显示名（best-effort；查不到/异常一律回空串，绝不抛）。
+
+    P1-3（2026-08-02）：出站语音镜像行把「谁的音色在说话」带进 ``sender_name``
+    （A 线 voice_reply / B 线 autosend / 坐席手动语音三条链共用本函数）——
+    坐席在气泡上能看到语音出自哪个人设，音色错绑一眼可见。
+    """
+    pid = str(persona_id or "").strip()
+    if not pid:
+        return ""
+    try:
+        from src.utils.persona_manager import PersonaManager
+        p = PersonaManager.get_instance().get_persona_by_id(pid)
+        return str(p.get("name") or "").strip() if isinstance(p, dict) else ""
+    except Exception:
+        return ""

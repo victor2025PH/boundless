@@ -38,7 +38,8 @@ EXAMPLE_CFG = BASE / "config" / "config.example.yaml"
 
 def _load_stack() -> dict:
     try:
-        return json.loads(STACK_PATH.read_text(encoding="utf-8"))
+        # utf-8-sig：现网 stack.json 带 BOM（PowerShell 写入史），普通 utf-8 抛 JSONDecodeError
+        return json.loads(STACK_PATH.read_text(encoding="utf-8-sig"))
     except Exception as e:  # noqa: BLE001
         print(f"[错误] 读取 stack.json 失败: {e}", file=sys.stderr)
         raise
@@ -51,14 +52,29 @@ def main(argv=None) -> int:
     ap.add_argument("--instance-id", default="", help="显式 instance_id（默认 <product>_<slug>）")
     ap.add_argument("--host", default="127.0.0.1", help="web 绑定（默认本地；对外经反代）")
     ap.add_argument("--enable-monitoring", action="store_true")
+    ap.add_argument("--ai-primary", default="cloud",
+                    choices=["cloud", "local", "local_only"],
+                    help="主对话链位置（P2 本地化交付）：local_only=严格隐私全本地，"
+                         "须配 --local-llm-model")
+    ap.add_argument("--local-llm-base", default="http://127.0.0.1:11434",
+                    help="本地 LLM 端点（默认本机 Ollama）")
+    ap.add_argument("--local-llm-model", default="",
+                    help="本地模型名（--ai-primary=local/local_only 时必填，"
+                         "如 qwen3:30b-a3b-instruct）")
     ap.add_argument("--apply", action="store_true", help="真正写盘 + 登记 stack.json（默认只规划）")
     args = ap.parse_args(argv)
+    if args.ai_primary != "cloud" and not args.local_llm_model.strip():
+        ap.error("--ai-primary=local/local_only 需要 --local-llm-model（本地模型名）")
 
     stack = _load_stack()
     plan = plan_instance(
         stack, product=args.product, customer=args.customer,
         instance_id=(args.instance_id or None))
-    overlay = render_overlay(plan, host=args.host, enable_monitoring=args.enable_monitoring)
+    overlay = render_overlay(
+        plan, host=args.host, enable_monitoring=args.enable_monitoring,
+        ai_primary=args.ai_primary,
+        local_llm_base_url=args.local_llm_base,
+        local_llm_model=args.local_llm_model)
     entry = build_stack_entry(plan)
 
     print(f"[plan] instance_id = {plan.instance_id}")
@@ -74,7 +90,9 @@ def main(argv=None) -> int:
         print(f"  - deploy/stack.json  += service {plan.service_id} (enabled=false)")
         print("\n--- config.local.yaml 预览 ---")
         print(overlay)
-        _print_handoff(plan)
+        _print_handoff(plan, ai_primary=args.ai_primary,
+                       local_llm_base=args.local_llm_base,
+                       local_llm_model=args.local_llm_model)
         return 0
 
     # ── apply：建骨架 + 写配置 + 登记 stack（幂等）──
@@ -105,12 +123,19 @@ def main(argv=None) -> int:
         print(f"[apply] stack.json += {plan.service_id}（enabled=false）")
     else:
         print(f"[apply] stack.json 已有 {plan.service_id}，跳过（幂等）")
-    _print_handoff(plan)
+    _print_handoff(plan, ai_primary=args.ai_primary,
+                   local_llm_base=args.local_llm_base,
+                   local_llm_model=args.local_llm_model)
     return 0
 
 
-def _print_handoff(plan) -> None:
+def _print_handoff(plan, *, ai_primary: str = "cloud",
+                   local_llm_base: str = "", local_llm_model: str = "") -> None:
     print("\n--- 后续（交 PowerShell / 人工，provision 不代做）---")
+    if ai_primary != "cloud" and local_llm_model:
+        print(f"  0) 本地模型备货:      ollama pull {local_llm_model}   "
+              f"(端点 {local_llm_base}；{ai_primary} 档无需云端 key，"
+              "golive 清单 AI 项按本地端点判绿)")
     print(f"  1) domains junction:  New-Item -ItemType Junction -Path \"{plan.data_dir}\\domains\" "
           f"-Target \"{BASE}\\domains\"")
     print(f"  2) license（可选）:   fulfill_chatx.py 签发 → 放 {plan.data_dir}\\config\\license.key")

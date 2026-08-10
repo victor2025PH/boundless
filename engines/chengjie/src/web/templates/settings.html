@@ -220,6 +220,9 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
     </div>
     <div class="acc-body" id="body-diag">
       <a class="btn-s" href="/api/admin/diagnostic-bundle" style="display:inline-block;padding:.45rem 1rem;border:1.5px solid var(--bd);border-radius:8px;background:var(--p);color:var(--th-ink-inverse);font-size:.8rem;font-weight:600;text-decoration:none">{{ (i18n or {}).get('diag_btn', "下载诊断包") }}</a>
+      <!-- P1-⑦ 一键直传：后端打包→转投官网→回 6 位短码（旧后端无路由时按钮保持隐藏） -->
+      <button type="button" class="btn-s" id="diag-upload-btn" style="display:none;margin-left:.5rem;padding:.45rem 1rem;border:1.5px solid var(--bd);border-radius:8px;background:transparent;color:var(--tx);font-size:.8rem;font-weight:600;cursor:pointer">{{ (i18n or {}).get('diag_upload_btn', "一键上传给客服") }}</button>
+      <p class="f-hint" id="diag-upload-out" style="display:none;margin-top:.55rem;font-weight:600"></p>
       <p class="f-hint" style="margin-top:.55rem">{{ (i18n or {}).get('diag_hint', "不含聊天记录数据库；配置里的 API Key / Token 等已全部打码。") }}</p>
     </div>
   </div>
@@ -230,6 +233,32 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
     apiFetch('/api/admin/diagnostic-bundle?probe=1').then(function(r){
       if(r&&r.ok) card.style.display='';
     }).catch(function(){});
+    // 直传按钮独立探活：升级半拉的后端只有下载没有直传，按钮不该出现骗点击
+    var ub=document.getElementById('diag-upload-btn');
+    var out=document.getElementById('diag-upload-out');
+    if(!ub||!out) return;
+    /* 封印页家规：script 内不留中文兜底（键在 feature_center pack 双语齐备，缺键=裸键名可见即修） */
+    var T_BUSY={{ ((i18n or {}).get('diag_upload_busy', 'diag_upload_busy'))|tojson }};
+    var T_OK={{ ((i18n or {}).get('diag_upload_ok', 'diag_upload_ok'))|tojson }};
+    var T_FAIL={{ ((i18n or {}).get('diag_upload_fail', 'diag_upload_fail'))|tojson }};
+    var T_IDLE={{ ((i18n or {}).get('diag_upload_btn', 'diag_upload_btn'))|tojson }};
+    apiFetch('/api/admin/diagnostic-upload?probe=1',{method:'POST'}).then(function(r){
+      if(r&&r.ok) ub.style.display='inline-block';
+    }).catch(function(){});
+    ub.addEventListener('click', function(){
+      if(ub.disabled) return;
+      ub.disabled=true; ub.textContent=T_BUSY; out.style.display='none';
+      apiFetch('/api/admin/diagnostic-upload',{method:'POST'}).then(function(r){
+        return r.json();
+      }).then(function(d){
+        out.style.display='block';
+        if(d&&d.ok&&d.code){ out.textContent=T_OK.replace('{code}', d.code); }
+        else { out.textContent=T_FAIL.replace('{detail}', (d&&d.detail)||'network'); }
+      }).catch(function(){
+        out.style.display='block';
+        out.textContent=T_FAIL.replace('{detail}','network');
+      }).finally(function(){ ub.disabled=false; ub.textContent=T_IDLE; });
+    });
   })();
   </script>
 

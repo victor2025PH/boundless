@@ -58,7 +58,8 @@
       "workdir": "D:\\\\boundless",
       "shortcut": "D:\\\\开发\\\\智拓",
       "wallpaper": "brand-assets/05_backgrounds/machines/zhituo-wallpaper.png",
-      "services": []
+      "services": ["ollama:11434"],
+      "note": "2026-08-01 起兼任 LAN LLM 备节点：Ollama qwen3:8b(智聊口语化第二端点)+qwen3:4b(备)；启动器 C:\\\\Users\\\\Administrator\\\\ollama_serve.bat（Run 键自启，模型库 D:\\\\ollama_models，OLLAMA_HOST=0.0.0.0，防火墙仅放 192.168.0.0/24；ICMP 被防火墙禁，探活用 /api/version 别用 ping）"
     },
     {
       "id": "huanyan-node",

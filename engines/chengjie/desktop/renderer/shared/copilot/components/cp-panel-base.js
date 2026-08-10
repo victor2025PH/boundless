@@ -80,6 +80,16 @@
         ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
     }
     esc(s) { return this._escStatic(s); }
+    /* 线性 SVG 图标（P2B 统一图标语言）：委托 sidebar-chrome.uiIcon（其内部先委托全站
+       /static/ui_icons.js 注册表、缺库回落子集表）；全链缺失返回空串——图标只是增强，
+       绝不阻塞渲染（按钮仍有 title/文字兜底）。 */
+    ic(name, size) {
+      try {
+        const sc = root.CopilotShared && root.CopilotShared.sidebarChrome;
+        if (sc && typeof sc.uiIcon === "function") return sc.uiIcon(name, size || 13) || "";
+      } catch (_e) { /* 静默 */ }
+      return "";
+    }
     emit(name, detail) {
       this.dispatchEvent(new CustomEvent(name, { bubbles: true, composed: true, detail: detail || {} }));
     }

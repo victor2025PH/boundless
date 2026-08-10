@@ -139,6 +139,10 @@ _VOICE_PROMISE = [re.compile(p, re.IGNORECASE) for p in (
     r"(?:我|人家)\s*(?:去)?\s*(?:录|錄)\s*(?:一?[条條段个個])?\s*(?:语音|語音)",
     r"等\s*我\s*(?:发|發|录|錄)\s*(?:语音|語音)",
     r"(?:语音|語音)\s*(?:说|說|讲|講)\s*给\s*你",
+    # 2026-08-02 实录（A 线 TTS 失败空头支票）：「语音这就来～」——"在路上"式
+    # 将发宣告，与图片轨「照片来啦/(photo) on the way」同语义；旧表只认
+    # 「发/录+语音」动词结构全漏。窄口径：语音后必须紧跟即时副词+来/到。
+    r"(?:语音|語音)\s*(?:这就|這就|马上|馬上|立刻|等下|一会儿?|一會兒|待会儿?|待會兒?)\s*(?:来|來|到)",
     r"\bi(?:'|’)?ll\s+(?:send|record)\s+(?:you\s+)?(?:a|an|one)?\s*voice",
     r"\blet\s+me\s+(?:send|record)\s+(?:you\s+)?(?:a|an)?\s*voice",
     r"\bsending\s+(?:you\s+)?a\s+voice",
@@ -596,10 +600,169 @@ def offer_accepted(peer_text: str, history: Optional[Sequence[Dict[str, Any]]]) 
     return ""
 
 
+# ── 「想看的是什么」主体抽取（P1 图文一致性，2026-08-08）────────────────────
+# 实录事故：AI 说「我煮了燕窝粥，要不要看看？」→ 客户「你有照片就发我看一下」→
+# detect_selfie_request 命中泛化要图 → 相册里只有自拍 → 发出人脸照配文「家里
+# 随便吃吃嘛」。根因是 offer 的**主体**在链路上全程丢失，只剩一个 'image'。
+
+# 人像词：这些是「看看我」类提议，本就该走自拍链，不算非人像主体。
+_PERSON_SUBJECT_WORDS = (
+    "自拍", "照片", "相片", "图片", "圖片", "视频", "視頻", "影片", "视屏",
+    "样子", "樣子", "长相", "長相", "素颜", "素顏", "近照", "美照", "脸", "臉",
+    "本人", "自己",
+)
+# 抽出来但没信息量的壳词（宁可不判，也别拿它当"想看的东西"）
+_VAGUE_SUBJECT_WORDS = (
+    "一下", "一个", "一個", "这个", "這個", "那个", "那個", "什么", "什麼",
+    "东西", "東西", "时候", "時候", "地方", "别的", "別的", "其他", "一点",
+)
+# 「要不要看/给你看」类展示提议标记——没有它就不是在提议展示，别乱抽名词。
+_SHOW_MARKERS = (
+    "要不要看", "想不想看", "想看", "给你看", "給你看", "给你瞧", "給你瞧",
+    "给你瞅", "給你瞅", "拍给你", "拍給你", "发给你", "發給你", "看看吗",
+    "看看嗎", "让你看", "讓你看", "给你晒", "給你曬",
+)
+# 名词候选里不该出现的功能字（代词/动词/助词）——正则难免把「你有」「发张自」
+# 这类片段当名词捞出来，字级黑名单比继续堆正则可靠。
+_FUNCTION_CHARS = set(
+    "你我他她它您咱有没沒就都也还還很是在和跟给給让讓把将將拍发發传傳送看想要"
+    "能会會可以过過再又的了吗嗎呢吧啊呀哦嘛么麼这這那什怎"
+)
+# 量词开头不能算名词（「那碗粥」抽成「碗粥」是实测踩到的坑）
+_QUANTIFIER_CHARS = "碗杯锅鍋盘盤份个個只隻张張条條瓶袋盆束件套"
+_NOT_QUANT = f"(?![{_QUANTIFIER_CHARS}])"
+# 「（我）刚+动作+了+名词」：AI 亲口说做了/买了个具体东西
+_MADE_SUBJECT_RE = re.compile(
+    r"(?:我|刚刚|剛剛|刚|剛|才|今天|昨天)(?:刚刚|剛剛|刚|剛|才|今天|昨天|自己|又)*"
+    r"(?:煮|做|烤|炖|燉|熬|泡|蒸|炒|买|買|点|點|种|種|养|養|画|畫|织|織|"
+    r"收拾|整理|布置|摆|擺|插)了?"
+    r"(?:一|两|兩|几|幾|点|點|些)?"
+    rf"[{_QUANTIFIER_CHARS}]?"
+    rf"({_NOT_QUANT}[\u4e00-\u9fff]{{2,6}})"
+)
+# 「给你看看我的卧室」：直接点名要展示的东西/地方
+_SHOW_SUBJECT_RE = re.compile(
+    r"(?:给|給|让|讓)你(?:看看|瞧瞧|瞅瞅|看下|看一下|晒晒|曬曬)\s*"
+    r"(?:我(?:的|家的|家里的|家裡的)?)?\s*"
+    rf"({_NOT_QUANT}[\u4e00-\u9fff]{{2,6}})"
+)
+# 客户侧：「燕窝粥的照片」「那碗粥拍给我看看」「给我看看你卧室」
+_REQ_OF_PHOTO_RE = re.compile(
+    rf"({_NOT_QUANT}[\u4e00-\u9fff]{{2,6}})(?:的)?(?:照片|相片|图片|圖片)"
+)
+_REQ_SHOW_RE = re.compile(
+    r"(?:把|将|將)?\s*(?:那|这|這)?"
+    rf"[{_QUANTIFIER_CHARS}]?\s*"
+    rf"({_NOT_QUANT}[\u4e00-\u9fff]{{2,6}})\s*"
+    r"(?:拍|发|發|传|傳)(?:给|給)?我?(?:看看|看一下|看下|看)"
+)
+_REQ_SHOW_ME_RE = re.compile(
+    r"(?:给|給|让|讓)我(?:看看|瞧瞧|瞅瞅|看下|看一下)\s*"
+    r"(?:你(?:的|家的|家里的|家裡的)?)?\s*"
+    rf"({_NOT_QUANT}[\u4e00-\u9fff]{{2,6}})"
+)
+
+
+def _clean_subject(raw: Any) -> str:
+    """名词候选清洗：削掉尾部虚词，剔除人像词/壳词/带功能字的片段。
+
+    判不准一律返回 ""——抽错主体会让「无货不发图」误拦正常自拍请求，
+    宁可退化成旧行为（照发自拍），也不能因为一次误抽把图卡掉。
+    """
+    s = str(raw or "").strip()
+    while s and s[-1] in "的了吗嗎呢吧啊呀哦嘛么麼":
+        s = s[:-1]
+    # 贪婪匹配常把「发张」「你有」这类前缀吃进候选（finditer 不会回头试子串），
+    # 先削前缀再判，比让整条候选作废更少漏。
+    while len(s) > 2 and (s[0] in _FUNCTION_CHARS or s[0] in _QUANTIFIER_CHARS):
+        s = s[1:]
+    if len(s) < 2 or len(s) > 6:
+        return ""
+    if s[0] in _QUANTIFIER_CHARS:  # 「那碗粥」削掉「那」后剩「碗粥」＝量词开头，不是名词
+        return ""
+    if any(w in s for w in _PERSON_SUBJECT_WORDS):
+        return ""
+    if s in _VAGUE_SUBJECT_WORDS:
+        return ""
+    if any(c in _FUNCTION_CHARS for c in s):
+        return ""
+    return s
+
+
+def detect_show_offer_subject(text: str) -> str:
+    """出站 AI 文本里「提议展示的**非人像**主体」（如 燕窝粥/卧室）；没有返回 ""。
+
+    与 :func:`detect_media_offer` 互补：那个只回答"有没有在提议发图"，这个回答
+    "提议给人看的是什么"——后者才是图文一致性需要的信息。保守取值：必须同时出现
+    展示提议标记与可识别名词，抽到人像词（自拍/样子）一律视作普通自拍 offer。
+    """
+    s = str(text or "")
+    if not s.strip() or len(s) > 400:
+        return ""
+    if not any(m in s for m in _SHOW_MARKERS):
+        return ""
+    for rx in (_SHOW_SUBJECT_RE, _MADE_SUBJECT_RE):
+        for m in rx.finditer(s):
+            sub = _clean_subject(m.group(1))
+            if sub:
+                return sub
+    return ""
+
+
+def _requested_subject(text: str) -> str:
+    """客户本条里直接点名的非人像主体（「燕窝粥的照片」「给我看看你卧室」）。"""
+    s = str(text or "")
+    if not s.strip() or len(s) > 200:
+        return ""
+    for rx in (_REQ_OF_PHOTO_RE, _REQ_SHOW_ME_RE, _REQ_SHOW_RE):
+        for m in rx.finditer(s):
+            sub = _clean_subject(m.group(1))
+            if sub:
+                return sub
+    return ""
+
+
+def wanted_media_subject(
+    peer_text: str,
+    history: Optional[Sequence[Dict[str, Any]]] = None,
+    *,
+    generic_request: bool = False,
+    lookback: int = 6,
+) -> str:
+    """这次要发的图，对方想看的**非人像主体**；普通自拍请求返回 ""。
+
+    两个来源：① 客户本条直接点名（「燕窝粥的照片」）；② 客户本条只是泛化要图
+    （「你有照片就发我看看」/短肯定「好呀」）而最近一条 assistant 消息提议展示的
+    是个具体东西——此时「发照片」指的是**那个东西**，不是自拍。
+    ``generic_request`` 由调用方给（已判定这是一次要图），避免本模块反向依赖
+    selfie 意图判定；未给时短肯定也算。``lookback``＝往回看几条消息找 offer。
+    """
+    own = _requested_subject(peer_text) or detect_show_offer_subject(peer_text)
+    if own:
+        return own
+    if not (generic_request or is_short_affirmative(peer_text)):
+        return ""
+    seen = 0
+    for m in reversed(list(history or [])):
+        if seen >= max(1, int(lookback or 1)):
+            break
+        seen += 1
+        if str((m or {}).get("role") or "") != "assistant":
+            continue
+        sub = detect_show_offer_subject(str((m or {}).get("content") or ""))
+        if sub:
+            return sub
+        # 最近一条 assistant 若在提议发自拍（无具体主体）→ 就是普通自拍请求，别再往回翻
+        if detect_media_offer(str((m or {}).get("content") or "")):
+            return ""
+    return ""
+
+
 __all__ = [
     "KIND_IMAGE", "KIND_VIDEOCALL", "KIND_VOICE",
     "detect_media_promise", "strip_media_promises",
     "detect_media_claim", "strip_media_claims", "wants_media",
     "build_promise_rewrite_instruction", "deflection_line",
     "detect_media_offer", "is_short_affirmative", "offer_accepted",
+    "detect_show_offer_subject", "wanted_media_subject",
 ]

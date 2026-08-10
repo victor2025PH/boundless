@@ -27,10 +27,14 @@ BUILTINS = {
     "isNaN", "RegExp", "Set", "Map", "requestAnimationFrame", "URLSearchParams",
     "location", "navigator", "localStorage", "sessionStorage",
 }
-# 共享脚本提供的全局：rpa（_rpa_shared_scripts.html）、T（_i18n_bootstrap.html）；
-# _applyFilter/_onSearchInput（/static/js/persona_studio_core.js 顶层函数，第五批瘦身
-# 自 personas.html 迁出——扫描器不解析外部 <script src>，按惯例在此登记）。
-SHARED_GLOBALS = {"rpa", "T", "_applyFilter", "_onSearchInput"}
+# 共享脚本提供的全局：rpa（_rpa_shared_scripts.html）、T（_i18n_bootstrap.html）、
+# __openUnique/__openUniqueUrl（_win_unique.html 窗口唯一性 helper，2026-08-03——
+# 两个外壳 + ops 总览都 include，双下划线独占命名不存在与页面局部函数撞名的误放行面）。
+# 历史上还登记过 _applyFilter/_onSearchInput（persona_studio_core.js 顶层函数）——
+# P2-3（2026-08-02）起扫描器会解析模板引用的本地 <script src="/static/…">
+# （见 local_static_globals），外迁 JS 的全局按模板逐一解析，不再进全局豁免表
+# （全局表会把 saveConfig 这类通用名的保护面整个打掉，正是本门禁抓过的历史事故名）。
+SHARED_GLOBALS = {"rpa", "T", "__openUnique", "__openUniqueUrl"}
 # 模板字符串里生成 HTML 的插值/拼接辅助（生成期即时求值，非内联 handler，无需暴露）。
 HELPERS = {"esc", "escAttr", "fn"}
 
@@ -249,6 +253,41 @@ def dead_functions(html: str) -> list:
                 dead.append(name)
             seen.add(name)
     return sorted(dead)
+
+
+_LOCAL_SRC = re.compile(
+    r"""<script\b[^>]*\bsrc\s*=\s*["']/static/([^"'?#]+)""", re.IGNORECASE)
+
+
+def local_static_scripts(html: str, static_root) -> list:
+    """模板经 <script src="/static/…"> 引用的**本地**静态 JS 文件路径列表。
+
+    只认 /static/ 前缀（本仓静态挂载点）；查询串 ?v= 缓存戳剥掉；文件不存在的
+    引用跳过（缺文件属部署问题，别的门禁管）。CDN/外链天然不匹配。
+    """
+    from pathlib import Path
+    root = Path(static_root)
+    out = []
+    for m in _LOCAL_SRC.finditer(html):
+        p = root / m.group(1)
+        if p.is_file():
+            out.append(p)
+    return out
+
+
+def local_static_globals(html: str, static_root) -> set:
+    """模板引用的本地静态 JS 里、全局可达的可调用名（顶层声明 + window 暴露）。
+
+    外部 script 文件在浏览器里以**全局作用域**执行——顶层 `function f(){}` 即
+    window.f，与内联 <script> 同语义，故复用同一套作用域分析；文件内 IIFE 包住的
+    局部名同样不算（除非挂 window）。P2-3 外迁 JS（messenger_rpa.js 等）的内联
+    handler 可达性由此判定，取代旧的 SHARED_GLOBALS 全局登记法。
+    """
+    names = set()
+    for p in local_static_scripts(html, static_root):
+        js = p.read_text(encoding="utf-8", errors="replace")
+        names |= _global_names_in_block(js) | window_exposed(js)
+    return names
 
 
 def ambient_globals(tpl_dir) -> set:

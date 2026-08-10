@@ -104,9 +104,20 @@ class TestBuildAutosendCallbacks:
         send_cb, _tr = build_autosend_callbacks(_assistant_full(), _web_app(), True)
         assert asyncio.iscoroutinefunction(send_cb)
 
-    def test_translate_cb_none_when_disabled(self):
+    def test_translate_cb_gate_only_when_translate_disabled(self):
+        # P1-198（2026-08-03）契约升级：出站翻译未启用时不再返回 None——
+        # 语言硬闸（lang_gate 默认开）以 gate-only 模式驻守，只拦 CJK↔非 CJK
+        # 冲突（7/31 CJK HOLD 护栏此前跟着翻译开关一起消失，防护空窗）。
         _s, tr = build_autosend_callbacks(_assistant_full(), _web_app(), False)
-        assert tr is None  # 出站翻译默认未启用
+        assert tr is not None and getattr(tr, "gate_only", None) is True
+
+    def test_translate_cb_none_when_gate_also_disabled(self):
+        # 翻译 + 硬闸都显式关闭 → 才回到「无翻译回调」旧行为（逃生门语义）。
+        cfg = {"inbox": {"l2_autosend": {
+            "translate": {"enabled": False},
+            "lang_gate": {"enabled": False}}}}
+        _s, tr = build_autosend_callbacks(_assistant_full(cfg), _web_app(), False)
+        assert tr is None
 
     def test_send_cb_falls_through_to_text(self, monkeypatch):
         # image/voice 都返回 False → deliver 落到文本投递(_send_via)。
@@ -508,7 +519,12 @@ class TestReplyBubblesDeliver:
         assert "parts=2" in str(b.get("note") or "")
 
     def test_holdout_forces_single_and_records(self, monkeypatch):
-        """P3 随机保留组：抽中 → 本可分条的消息整段发 + 记 autosend_text:holdout。"""
+        """P3 随机保留组：抽中 → 本可分条的消息整段发 + 记 autosend_text:holdout。
+
+        2026-08-09 语义升级：整段发＝**折叠成自然单段**（collapse_paragraphs），
+        不是把多行合同的产物原样单条发出——「一条消息带结构化换行」正是
+        2026-08-08 客户实锤质疑的 AI 感形态，保留组不折叠比拆条更糟。
+        """
         rows = []
         sent = []
 
@@ -541,7 +557,9 @@ class TestReplyBubblesDeliver:
         text = "第一句呀呀\n第二句呀呀"
         res = asyncio.run(send_cb("telegram", "acct", "123", text))
         assert res.get("delivered_as") == "text"
-        assert sent == [text]                       # 整段单发，未拆
+        # 整段单发且已折叠成单段（CJK 裸边界补「，」，无结构化换行泄漏）
+        assert sent == ["第一句呀呀，第二句呀呀"]
+        assert all("\n" not in s for s in sent)
         assert [r["batch_id"] for r in rows] == ["autosend_text:holdout"]
         assert "parts=2" in str(rows[0].get("note") or "")
 

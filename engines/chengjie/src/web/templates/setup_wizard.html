@@ -47,6 +47,16 @@
   .sw-path-adv>summary{font-size:12px;color:var(--tk-text-muted);cursor:pointer;list-style:revert;}
   .sw-path-adv>summary:hover{color:var(--tk-text);}
   .sw-reach{margin-top:10px;padding:9px 12px;border-left:3px solid var(--tk-border);border-radius:6px;background:var(--tk-surface-2);font-size:12px;line-height:1.6;}
+  /* 深链高亮（?channel=xx 定位到的渠道卡）：短暂描边引导视线，2.6s 后自动褪去 */
+  .sw-card.sw-hl{outline:2px solid var(--tk-brand);outline-offset:2px;box-shadow:0 0 0 6px var(--tk-ring),var(--tk-shadow);}
+  /* 官方后台直达链接（api 折叠区 intro 下方） */
+  .sw-console-link{margin:8px 0 2px;}
+  .sw-console-link a{font-size:12px;color:var(--tk-brand);text-decoration:none;font-weight:600;}
+  .sw-console-link a:hover{text-decoration:underline;}
+  /* 个人号主卡随附「稳定运行建议」（2026-08-10 由琥珀风险横幅转正向建议口径，
+     与接入弹窗同一 i18n 键）：中性表面 + 全对比度正文，token 驱动日/夜自适配。 */
+  .sw-login-notice{margin-top:10px;padding:8px 11px;border-radius:9px;font-size:12px;line-height:1.55;
+    color:var(--tk-text);background:var(--tk-surface-2);border:1px solid var(--tk-border);}
 </style>
 {% endblock %}
 {% block content %}
@@ -150,13 +160,35 @@ function loginPathHtml(ch){
     : '<span style="color:var(--tk-text-muted);">'+window.T('setup.ch.path_login_none')+'</span>';
   var warn = p.available ? ''
     : '<div class="hint" style="color:var(--tk-warn-ink);margin-top:4px;">'+window.T('setup.ch.path_login_blocked')+'</div>';
+  /* 非官方接入风险横幅（个人号扫码等）：键由后端 channel_status 下发（与收件箱弹窗同键），
+     旧后端无该字段 → 不渲染，向导照常。 */
+  var notice = p.notice_key ? '<div class="sw-login-notice">'+esc(window.T(p.notice_key))+'</div>' : '';
   /* intro 已在卡头呈现，这里不复述——只讲这条路当前的状态与下一步动作 */
   return '<div class="sw-path sw-path-primary">'
     +'<div class="sw-path-hd">'+window.T('setup.ch.path_login_title')+'</div>'
-    +'<div class="sw-path-state">'+state+'</div>'+warn
+    +'<div class="sw-path-state">'+state+'</div>'+warn+notice
     +'<div class="sw-actions"><button class="sw-btn primary" onclick="swConnect(\''+esc(p.platform)+'\')">'
     +window.T('setup.ch.path_login_cta')+'</button></div>'
     +'</div>';
+}
+
+/* Messenger「保存即探针」结果横幅（2026-08-10）：结果存 JS 态、由渲染函数消费——
+   swSave 成功后 load(true) 会整卡重渲染，直接写 DOM 的横幅会被冲掉；状态驱动天然
+   幸存。头像刻意不放：FB CDN 外链在 LAN 后台常被 referrer/CSP 拦成裂图，
+   「主页名 + ID」本身就是确认时刻。 */
+var _swProbeLast={};
+function _swProbeHtml(chid){
+  var p=_swProbeLast[chid];
+  if(!p) return '';
+  if(p.ok){
+    return '<div class="sw-probe" style="margin-top:8px;font-size:12.5px;font-weight:600;color:var(--tk-ok-ink);">'
+      +esc(window.Tf('sw_probe_ok',{name:p.name||'?',pid:p.page_id||'?'}))+'</div>';
+  }
+  var auth=(p.error_kind==='auth');
+  var key=auth?'sw_probe_auth_fail':'sw_probe_net_fail';
+  return '<div class="sw-probe" style="margin-top:8px;font-size:12.5px;color:'
+    +(auth?'var(--tk-warn-ink)':'var(--tk-text-muted)')+';">'
+    +esc(window.Tf(key,{err:String(p.error||'').slice(0,160)}))+'</div>';
 }
 
 /* 路径二：企业官方 API。折叠——它要开发者账号与回调域名，是少数客户才走的路；
@@ -171,14 +203,25 @@ function apiPathHtml(ch){
   var reach=REACH_PLATS[ch.id]
     ? '<div class="sw-reach" data-reach-plat="'+esc(ch.id)+'" style="display:none;"></div>'
     : '';
-  return '<details class="sw-path sw-path-adv">'
+  /* 纯官方渠道（IG/Zalo：无「自己账号登录」形态）：官方 API 是卡内唯一内容，
+     再折叠一层＝点开卡看到空壳还得再点一次。默认展开；双路径渠道保持折叠不动。 */
+  var openAttr=(ch.paths&&ch.paths.login)?'':' open';
+  /* 官方后台直达（单一事实源＝channel_setup.Channel.console_url，经 /api/setup/channels
+     下发；旧后端无该字段 → 不渲染此行，表单照常可填） */
+  var consoleLink=ch.console_url
+    ?'<div class="sw-console-link"><a href="'+esc(ch.console_url)+'" target="_blank" rel="noopener noreferrer">'
+      +window.T('setup.ch.console_link')+'</a></div>'
+    :'';
+  return '<details class="sw-path sw-path-adv"'+openAttr+'>'
     +'<summary>'+window.T('setup.ch.path_api_title')+'</summary>'
     +'<div class="sw-path-sub">'+esc(a.intro||window.T('setup.ch.path_api_prereq'))+'</div>'
+    +consoleLink
     +fields
     +'<div class="sw-actions">'
     +'<button class="sw-btn primary" onclick="swSave(\''+ch.id+'\',this)">'+window.T('sw_js_007')+'</button>'
     +'<span class="sw-msg" id="sw-msg-'+ch.id+'"></span></div>'
     +'<div class="sw-issues" id="sw-iss-'+ch.id+'"></div>'
+    +_swProbeHtml(ch.id)
     +reach
     +'</details>';
 }
@@ -273,6 +316,39 @@ function swToggle(id){
   if(b) b.classList.toggle('open');
 }
 
+/* 深链定位：/workspace/setup?channel=zalo（收件箱接入弹窗「去接入向导」带来）——
+   自动展开该渠道卡与官方 API 折叠区并滚动高亮，免得用户对着长列表自己找。
+   #ai / #media 两张非渠道卡沿用各自既有处理（swAiLoad 里已有 #ai 定位）。 */
+var _swDeepDone=false;
+function _swDeepLink(){
+  if(_swDeepDone) return;
+  var id='';
+  try{ id=(new URLSearchParams(location.search).get('channel')||''); }catch(_){}
+  if(!id && location.hash && location.hash.length>1) id=location.hash.slice(1);
+  id=String(id||'').toLowerCase();
+  if(!id || id==='ai' || id==='media') return;
+  var card=document.querySelector('.sw-card[data-id="'+id+'"]');
+  if(!card) return;
+  _swDeepDone=true;
+  var body=document.getElementById('sw-body-'+id);
+  if(body) body.classList.add('open');
+  var det=body&&body.querySelector('details.sw-path-adv');
+  if(det) det.open=true;
+  card.classList.add('sw-hl');
+  try{ card.scrollIntoView({behavior:'smooth',block:'start'}); }catch(_){}
+  setTimeout(function(){ card.classList.remove('sw-hl'); }, 2600);
+}
+
+/* 官方渠道开通漏斗埋点（unavail_shown → wizard_open → saved → online；
+   经 /api/telemetry/ui-event 通用通道，ops 侧按 prefix=official_setup_ 查趋势） */
+var OFFICIAL_CHS={instagram:1,zalo:1,line:1,messenger:1,whatsapp:1};
+function _swBeacon(action){
+  try{
+    var body=JSON.stringify({page:'/workspace/setup', action:String(action||'')});
+    navigator.sendBeacon('/api/telemetry/ui-event', new Blob([body],{type:'application/json'}));
+  }catch(_){}
+}
+
 /* ── 官方 webhook 回调状态条（接入向导内嵌握手反馈，2026-08-07）──────────────
    配 Meta/Zalo 开发者后台时最大的等待焦虑是「配完不知道通没通」。此条轮询
    /api/admin/official-webhook-status（5s；仅官方折叠区展开且页面可见时才打接口），
@@ -291,7 +367,9 @@ function _swReachHtml(p){
   var v=p.verdict, txt='', color='var(--tk-text-muted)';
   if(v==='live'){ color='var(--tk-ok-ink)'; txt=window.Tf('sw_reach_live',{age:_swReachAge(p.last_event_age_sec)}); }
   else if(v==='handshake_only'){ color='var(--tk-ok-ink)'; txt=window.T('sw_reach_handshake'); }
-  else if(v==='auth_failing'){ color='var(--tk-warn-ink)'; txt=window.T('sw_reach_auth'); }
+  else if(v==='auth_failing'){ color='var(--tk-warn-ink)';
+    /* no_app_secret＝配置残缺的定向指引（Messenger 热门控错误类），与「疑似被扫」分开说 */
+    txt=(p.last_error_kind==='no_app_secret')?window.T('sw_reach_auth_nosecret'):window.T('sw_reach_auth'); }
   else if(v==='not_mounted'){ color='var(--tk-text-muted)'; txt=window.T('sw_reach_not_mounted'); }
   else { color='var(--tk-warn-ink)'; txt=window.T('sw_reach_never'); }
   var path=p.webhook_path?('<div style="margin-top:3px;color:var(--tk-text-muted);">'+esc(window.Tf('sw_reach_path',{path:p.webhook_path}))+'</div>'):'';
@@ -345,6 +423,13 @@ function swSave(id, btn){
     btn.disabled=false;
     if(!d.ok){ msg.className='sw-msg err'; msg.textContent=d.detail||window.T('ov_js_save_fail'); return; }
     msg.className='sw-msg ok'; msg.textContent=window.T('sw_js_008');
+    if(OFFICIAL_CHS[id]) _swBeacon('official_setup_saved_'+id);
+    /* Messenger 保存探针（响应 probe 字段）：结果入态，随下方 load(true) 的重
+       渲染落进卡片；漏斗补 probe ok/fail 分桶（前缀对齐 official_setup_）。 */
+    if(d.probe){
+      _swProbeLast[id]=d.probe;
+      _swBeacon('official_setup_probe_'+(d.probe.ok?'ok':'fail')+'_'+id);
+    }
     var iss=document.getElementById('sw-iss-'+id);
     iss.innerHTML=(d.issues||[]).map(function(i){
       return '<div class="sw-issue '+(i.severity==='error'?'error':'')+'"><b>['+esc(i.severity)+']</b> '+esc(i.message)+'</div>';
@@ -360,6 +445,7 @@ function load(keepOpen){
     if(!d||!d.ok) return;
     render(d);
     Object.keys(open).forEach(function(bid){var b=document.getElementById(bid);if(b)b.classList.add('open');});
+    _swDeepLink();
   }).catch(function(){});
 }
 load();

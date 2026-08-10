@@ -50,9 +50,12 @@ def test_channels_expose_both_paths(monkeypatch):
     assert "whatsapp" in by_id, "WhatsApp 缺席会让客户以为产品不支持"
     for cid in ("telegram", "line", "whatsapp", "messenger"):
         assert by_id[cid]["paths"]["login"] is not None, cid
-    # 官方 API 只给真有凭据形态的渠道
+    # 官方 API 只给真有凭据形态的渠道。
+    # 2026-08-07 期望更新：channel_setup 注册表已给 WhatsApp 补上 Cloud API 表单
+    # （并行线批次；与 platform_login whatsapp:official 模式、_IMPLEMENTED_MODES
+    # ("whatsapp","official") 一致），旧断言「whatsapp 无 api 路径」随注册表过期。
     assert by_id["line"]["paths"]["api"] is not None
-    assert by_id["whatsapp"]["paths"]["api"] is None
+    assert by_id["whatsapp"]["paths"]["api"] is not None
 
 
 def test_linked_accounts_flow_into_readiness(monkeypatch):

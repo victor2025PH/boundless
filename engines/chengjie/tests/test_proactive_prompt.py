@@ -163,3 +163,118 @@ def test_no_optional_blocks_when_absent():
     assert "背景" not in p          # 无 context_facts
     assert "最近的聊天" not in p     # 无 recent_context
     assert "风格示范" not in p       # 无 few_shot
+
+
+# ── P1 语言锚补口（2026-08-03 おはよう 实锤）────────────────────────────────
+# 会话 language=zh 的用户历史里混着日语探针消息 → 晨安 ritual 生成时 LLM 跟着
+# 上下文写出「おはよう～」。此前语言钉子只对非中文加，zh 完全裸奔。
+
+def test_peer_language_zh_pins_chinese():
+    p = build_proactive_prompt(
+        "小柔", {"mode": "ritual_morning", "directive": "道一句早安"},
+        peer_language="zh",
+        recent_context="TA(昨天): あなたは日本語で自己紹介をしますか？")
+    assert "必须用中文写" in p
+    assert "不要跟着换语言" in p
+
+
+def test_peer_language_zh_variants_all_pin():
+    for lang in ("zh", "zh-cn", "zh-TW", "zh-hans", "ZH-HANT"):
+        p = build_proactive_prompt(
+            "她", {"mode": "gentle_checkin", "directive": "x",
+                   "silent_hours": 40}, peer_language=lang)
+        assert "必须用中文写" in p, f"lang={lang} 未钉中文"
+
+
+def test_peer_language_foreign_pin_unchanged():
+    p = build_proactive_prompt(
+        "她", {"mode": "gentle_checkin", "directive": "x", "silent_hours": 40},
+        peer_language="ja")
+    assert "必须用日语写" in p and "绝不要用中文" in p
+
+
+def test_peer_language_unknown_or_empty_no_pin():
+    for lang in ("", "unknown"):
+        p = build_proactive_prompt(
+            "她", {"mode": "gentle_checkin", "directive": "x",
+                   "silent_hours": 40}, peer_language=lang)
+        assert "必须用中文写" not in p
+        assert "必须用" not in p
+
+
+# ── P0 悬空话头接茬（2026-08-05 实锤：客户 22:27「以后给你介绍做你老公」无人接，
+# 07:10 收到一条完全不接茬的通用晨安语音——上下文明明在 prompt 里，但 ritual 的
+# 「发一句平常的问候 + ≤30字」框定压制了接茬动机）─────────────────────────────
+
+def test_ritual_with_pending_inbound_requires_pickup():
+    p = build_proactive_prompt(
+        "小柔", {"mode": "ritual_morning", "directive": "道一句早安"},
+        pending_inbound=["以后给你介绍做你老公"], pending_inbound_age="昨天")
+    assert "以后给你介绍做你老公" in p
+    assert "接住" in p and "装没看见" in p
+    assert "TA 昨天说的" in p          # 相对时间进措辞
+    assert "不超过40字" in p           # 有话头要接 → 字数放宽
+    assert "不超过30字" not in p
+
+
+def test_ritual_without_pending_inbound_unchanged():
+    p = build_proactive_prompt(
+        "小柔", {"mode": "ritual_morning", "directive": "道一句早安"})
+    assert "接住" not in p             # 无话头 → 无接茬块（零行为变化）
+    assert "不超过30字" in p
+
+
+def test_checkin_with_pending_inbound_block():
+    """接茬块对沉默回访类 mode 同样生效（不只 ritual）。"""
+    p = build_proactive_prompt(
+        "小柔", {"mode": "gentle_checkin", "directive": "x", "silent_hours": 40},
+        pending_inbound=["我小弟，没关系", "以后给你介绍做你老公"])
+    assert "我小弟，没关系" in p and "以后给你介绍做你老公" in p
+    assert "TA 之前说的" in p          # 无 age → 兜底措辞
+
+
+def test_pending_inbound_capped_and_truncated():
+    p = build_proactive_prompt(
+        "小柔", {"mode": "gentle_checkin", "directive": "x", "silent_hours": 40},
+        pending_inbound=["第一条旧话头", "第二条旧话头", "长" * 80])
+    assert "第一条旧话头" not in p     # 只保留最近 2 条
+    assert "第二条旧话头" in p
+    assert "长" * 60 in p and "长" * 61 not in p  # 单条截断 60 字
+
+
+def test_ritual_header_has_casual_texting_style():
+    """晨安文风钉子：像随手发微信、别用工整书面句（配合语音口语化 P0）。"""
+    p = build_proactive_prompt(
+        "小柔", {"mode": "ritual_morning", "directive": "道一句早安"})
+    assert "随手发的微信" in p
+    assert "句尾别用句号" in p
+
+
+# ── P1 晨/晚安当日切入角（确定性轮换，防「每天同一句问候壳」）────────────────
+
+def test_ritual_angle_deterministic_same_day_rotates_across_days():
+    from src.utils.proactive_prompt import (
+        _RITUAL_MORNING_ANGLES,
+        _ritual_angle,
+    )
+    base = 1_785_900_000.0  # 2026-08-05 白天（UTC 与 UTC+8 落同一天，跨时区稳定）
+    a1 = _ritual_angle("ritual_morning", "cid1", now=base)
+    a2 = _ritual_angle("ritual_morning", "cid1", now=base + 3600)
+    assert a1 and a1 == a2                    # 同日恒定（15min tick 重试不换角）
+    assert a1 in _RITUAL_MORNING_ANGLES
+    days = {_ritual_angle("ritual_morning", "cid1", now=base + 86400 * i)
+            for i in range(10)}
+    assert len(days) > 1                      # 跨日轮换（确定性非随机）
+    assert _ritual_angle("gentle_checkin", "cid1", now=base) == ""
+
+
+def test_ritual_prompt_carries_daily_angle_only_without_pending():
+    p = build_proactive_prompt(
+        "小柔", {"mode": "ritual_morning", "directive": "道一句早安",
+                 "conversation_id": "c1"})
+    assert "今天的切入角" in p
+    p2 = build_proactive_prompt(
+        "小柔", {"mode": "ritual_morning", "directive": "道一句早安",
+                 "conversation_id": "c1"},
+        pending_inbound=["以后给你介绍做你老公"])
+    assert "今天的切入角" not in p2            # 接茬就是今天的切入角，不再另配

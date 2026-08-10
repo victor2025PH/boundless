@@ -212,6 +212,41 @@ def test_config_fallback_carries_no_proxy(monkeypatch):
     assert alloc.source == "config" and alloc.proxy is None
 
 
+# ── P2-⑨ 托管派发出口/换组凭据缓存（config 回落链的三件套补齐）───────────────
+
+def test_config_fallback_carries_hosted_proxy(monkeypatch):
+    """托管派发随凭据带了出口（telegram._hosted_proxy）→ config 回落也三件套齐发。"""
+    cfg = {"telegram": {"api_id": 111, "api_hash": "localhash",
+                        "_hosted_proxy": {"scheme": "socks5", "host": "5.6.7.8",
+                                          "port": 1080, "username": "u", "password": "p"}}}
+    # 无池键 = 走新登录 config 回落分支（不开池，零 I/O）
+    alloc = cb.resolve_for_account(cfg)
+    assert alloc.source == "config" and alloc.api_id == 111
+    assert alloc.proxy and alloc.proxy["host"] == "5.6.7.8"
+
+
+def test_config_fallback_half_hosted_proxy_dropped(monkeypatch):
+    """半个 _hosted_proxy（缺端口）→ 丢掉不半用（与池出口同口径）。"""
+    cfg = {"telegram": {"api_id": 111, "api_hash": "localhash",
+                        "_hosted_proxy": {"host": "5.6.7.8", "port": 0}}}
+    alloc = cb.resolve_for_account(cfg)
+    assert alloc.source == "config" and alloc.proxy is None
+
+
+def test_hosted_cred_cache_beats_config_after_group_swap(monkeypatch):
+    """换组事故的收口：账号 meta 里有登录时缓存的凭据 → 优先于 config 注入的**新组**，
+    避免 runner 拿新组 api_id 跑旧 session（错配风控）。自建账号无此缓存=旧行为。"""
+    # config 里是「换组后的新组」凭据，但该账号 session 是旧组建的（缓存在 meta）
+    cfg = {"telegram": {"api_id": 999, "api_hash": "newgroup"}}
+    account = {"account_id": "acc1", "platform": "telegram", "meta": {
+        cb.META_CRED_KEY: {"api_id": 111, "api_hash": "oldgroup", "tier": "free",
+                           "proxy": {"scheme": "socks5", "host": "5.6.7.8", "port": 1080}}}}
+    alloc = cb.resolve_for_account(cfg, account=account)  # 无池键=新登录/自建链
+    assert alloc.api_id == 111, "必须用 session 绑定的旧组，不能用 config 的新组"
+    assert alloc.source == "credpool_cache"
+    assert alloc.proxy and alloc.proxy["host"] == "5.6.7.8"
+
+
 # ── 降级回落（核心安全性）─────────────────────────────────────────────────
 
 @pytest.mark.parametrize("payload,why", [

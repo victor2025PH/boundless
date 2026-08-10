@@ -45,7 +45,7 @@ except Exception:
 # 官网档位 → 引擎授权档（enterprise 引擎侧同 pro 全开能力，另加座席特性）
 EDITION_MAP = {"trial": "trial", "standard": "standard", "pro": "pro", "enterprise": "pro"}
 # 订阅周期 → 授权天数（留 1 天缓冲，跨时区/链上确认延迟不吃亏在客户头上）
-PERIOD_DAYS = {"monthly": 32, "annual": 366}
+PERIOD_DAYS = {"monthly": 32, "quarterly": 92, "annual": 366}
 
 
 def load_conf() -> dict:

@@ -24,6 +24,7 @@ import subprocess
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional, Pattern, Tuple
@@ -1131,49 +1132,91 @@ _STAGE_TEXTS: dict = {
         # 配文一字不差都是「这是刚拍的」→ 客户当场质疑"你刚拍的怎么衣服和场景
         # 都变了""脸怎么这么假"。两条教训：① 高频配文键也必须是变体池（同
         # no_photo/capped 的防复读语义）；② album 后端发的是**旧照**，配文不能
-        # 每次都声称「刚拍」——变体池里只保留一条弱时间声明，其余不带拍摄时间，
+        # 每次都声称「刚拍」——变体池里只保留一条弱时间声明（「刚拍」≤1，有门禁），
         # 图文一致性（media_consistency_eval「附图否认/无图称已发」红线）不受
         # 影响：这些句子都只随真实已附图的消息发出。
+        # 2026-08-03 复读治理扩容：生产 7 天出站抓到本池首句 ×4 逐字复读 →
+        # zh ≥10 / en ≥6 + 按会话避重轮换（pick_caption）。本池是**新照口径**
+        # （随刚生成的图发出），允许现在时措辞。
         "zh": [
             "给你看张照片～喜欢吗？😊",
             "喏，照片来啦～要给好评哦😆",
             "偷偷发你一张，不许外传哦😝",
             "翻了张我觉得好看的发你，嘿嘿～",
             "这张怎么样？拍的时候光线刚刚好😊",
+            "刚拍的哦，快夸我😝",
+            "拍了张新的，第一个发给你😊",
+            "来～今日份的我，请查收😆",
+            "咔嚓一张，你要的照片来咯～",
+            "看看这张，我觉得拍得还挺好的😊",
+            "给你发张照片，看看最近的我～",
+            "拍了一张感觉还不错的，给你看看嘛",
         ],
         "en": [
             "here's a pic for you~ do you like it? 😊",
             "sending you one, don't share it around 😝",
             "picked one I really like, just for you 😊",
             "how's this one? the lighting was so nice~",
+            "took a new one for you, be nice 😆",
+            "one more, for your eyes only 😊",
+            "say hi to today's me~ 😆",
         ],
     },
     "caption_object": {
+        # 物体图（对话里提到的东西）配文——新照口径（图是现场生成的）。
+        # 2026-08-03 复读治理扩容：zh ≥10 / en ≥6。
         "zh": [
             "拍好啦，给你看～😊",
             "喏，就是这个～",
             "看，拍给你啦😆",
+            "拍了一张，怎么样？",
+            "给你瞧瞧，就是它😊",
+            "专门拍给你看的哦～",
+            "照片来啦，就是这个样子😆",
+            "喏喏，拍到了，给你～",
+            "就是这个啦，好看吧😊",
+            "拍了发你，快看看～",
         ],
         "en": [
             "here you go, just took it~ 😊",
             "there it is~ 😊",
             "took this for you, see? 😆",
+            "snapped it for you~ 😊",
+            "here's what it looks like 😆",
+            "see? told you I'd show you~",
         ],
     },
     "caption_album": {
         # P0 一致性（2026-07-27）：**明确旧照口径**的配文池——注册相册/相册兜底
         # 发的是存货，配文声称「刚拍」曾被客户按衣着/时间对不上当场戳穿。
         # 本池所有变体都不含"刚拍/现在"类时间声明，诚实且自然。
+        # 2026-08-03 复读治理扩容：生产 7 天出站抓到本池前三句 ×10/×4/×3 逐字
+        # 复读（进程游标重启归零恒取池首 + 池太小）→ zh ≥10 / en ≥6 + 按会话
+        # 避重轮换（pick_caption）。**红线不变**：全部「翻出来的/之前拍的/存货」
+        # 口径，禁「刚拍/刚出炉/热乎」等新鲜词（tests/test_persona_media_consistency
+        # + tests/test_caption_variety 双门禁扫池）。
         "zh": [
             "翻到一张之前拍的，给你看～😊",
             "找到一张我还挺喜欢的，分享给你嘿嘿",
             "这张是前阵子拍的，感觉还不错吧～",
             "给你看张我的照片，不许笑话我哦😝",
+            "翻相册翻到这张，越看越顺眼，给你也看看～",
+            "存货里挑了张顺眼的，只给你看哦😊",
+            "之前拍的这张一直没舍得发，便宜你啦😝",
+            "相册里躺了好久的一张，想起来给你看看",
+            "这张有点日子了，不过我真的挺喜欢～",
+            "挖出一张旧照，你猜是什么时候拍的？",
+            "手机里存的这张，感觉状态还行，给你瞧瞧😊",
+            "之前随手拍的一张，居然还挺好看的嘿嘿",
         ],
         "en": [
             "found an older pic of me, here you go~ 😊",
             "this one's from a while back, but I kinda like it hehe",
             "sharing one of my favorite pics with you 😊",
+            "dug this one up from my gallery, what do you think?",
+            "an old one I never got around to sending~ 😝",
+            "was scrolling through my album and thought of you, so here 😊",
+            "this one's been sitting in my phone for a while, still cute right?",
         ],
     },
     "promise_fail": {
@@ -1192,19 +1235,119 @@ _STAGE_TEXTS: dict = {
     },
 }
 
-# 变体池轮换游标（进程级）：连续两次触发同一 key 必换措辞——防复读的最强保证。
-# 有意用计数器而非随机：行为可预期、可测试（显式 variant_salt 时完全确定性）。
+# 变体池轮换游标（进程级）：连续两次触发同一 key 必换措辞——防复读的兜底保证。
+# 2026-08-03 复读治理：游标**起点随机**（旧实现恒从池首起步——生产机重启频繁，
+# 每个进程生命周期的首次触发都取池[0]，7 天出站「翻到一张之前拍的给你看」×10
+# 的直接根因）；起步后仍逐次 +1（「连续必换」既有保证不变；显式 variant_salt
+# 时完全确定性，测试口径不变）。带 chat_key 的消费点优先走 pick_caption
+# （按会话×日期确定性 + 近用避重，见下）。
 _STAGE_VARIANT_SEQ: dict = {}
+
+# ── 按会话避重的配文轮换（2026-08-03 发图配文复读治理）─────────────────────────
+# 生产实锤：近 7 天出站发图配文高度模板化（「翻到一张之前拍的给你看」×10 等），
+# 同一客户几天内反复收到逐字相同的配文＝一眼机器人。固定配文池是 LLM 防复读
+# 守卫（reply_variety）管不到的静态文案层，治理在选取层做两件事：
+#   ① 种子＝crc32(chat_key + 日期)——不同会话同一天各取不同条、同会话同日
+#      （无新记账时）恒定可测；
+#   ② 近用避重账本（进程级 bounded：512 会话 × 最近 3 条配文指纹）——真发出
+#      后由消费方调 note_caption_used 记账；候选命中近用则顺移下一条，全池
+#      都近用过按种子取（绝不死循环/拒答）。账本重启即清（可接受：种子层已
+#      保证跨重启的会话间多样性，账本只负责同会话短期避重）。
+_RECENT_CAPTION_LOCK = threading.Lock()
+_RECENT_CAPTIONS: "OrderedDict[str, tuple]" = OrderedDict()
+_RECENT_CAPTIONS_MAX_KEYS = 512   # 会话数上限（LRU 裁剪）
+_RECENT_CAPTIONS_PER_KEY = 3      # 每会话记最近 N 条
+
+
+def _caption_fp(text: Any) -> int:
+    """配文指纹（crc32）：近用避重账本存指纹不存原文。"""
+    import zlib
+    return zlib.crc32(str(text or "").encode("utf-8"))
+
+
+def recent_captions(chat_key: str) -> tuple:
+    """该会话最近真发出过的配文指纹（无记录/空 key 返回空元组）。"""
+    k = str(chat_key or "").strip()
+    if not k:
+        return ()
+    with _RECENT_CAPTION_LOCK:
+        return tuple(_RECENT_CAPTIONS.get(k) or ())
+
+
+def note_caption_used(chat_key: str, caption: str) -> None:
+    """**发出成功后**记账（挑了没发不记，防空烧避重位）。软失败绝不抛。"""
+    try:
+        k = str(chat_key or "").strip()
+        cap = str(caption or "").strip()
+        if not k or not cap:
+            return
+        fp = _caption_fp(cap)
+        with _RECENT_CAPTION_LOCK:
+            cur = [x for x in (_RECENT_CAPTIONS.get(k) or ()) if x != fp]
+            cur.append(fp)
+            _RECENT_CAPTIONS[k] = tuple(cur[-_RECENT_CAPTIONS_PER_KEY:])
+            _RECENT_CAPTIONS.move_to_end(k)
+            while len(_RECENT_CAPTIONS) > _RECENT_CAPTIONS_MAX_KEYS:
+                _RECENT_CAPTIONS.popitem(last=False)
+    except Exception:
+        logger.debug("[caption] note_caption_used 记账失败（忽略）", exc_info=True)
+
+
+def pick_caption(pool: Any, chat_key: str, *, now: Any = None,
+                 recent: Any = None) -> str:
+    """按会话确定性挑配文 + 近用避重（纯选取；账本另经 ``note_caption_used``）。
+
+    种子＝crc32(chat_key + 当日)：不同会话同一天取不同条、同会话同日（无新
+    记账时）恒定。``recent`` 显式传入（配文原文或 crc32 指纹的可迭代）则用之，
+    否则查进程账本；候选命中近用 → 顺移下一条；全池都近用过 → 按种子取
+    （绝不死循环）。任何异常回落纯种子取；池空返回 ""。
+    """
+    try:
+        if isinstance(pool, str):
+            items = [pool] if pool.strip() else []
+        else:
+            items = [str(t) for t in (pool or ()) if str(t or "").strip()]
+    except Exception:
+        return ""
+    if not items:
+        return ""
+    import datetime as _dt
+    import zlib as _zlib
+    try:
+        t = now if isinstance(now, _dt.datetime) else _dt.datetime.now()
+        day = t.strftime("%Y%m%d")
+    except Exception:
+        day = ""
+    try:
+        seed = _zlib.crc32(f"{str(chat_key or '')}#{day}".encode("utf-8"))
+    except Exception:
+        seed = 0
+    idx = seed % len(items)
+    try:
+        used = set()
+        src = recent if recent is not None else recent_captions(chat_key)
+        for x in (src or ()):
+            used.add(_caption_fp(x) if isinstance(x, str) else int(x))
+        for step in range(len(items)):
+            cand = items[(idx + step) % len(items)]
+            if _caption_fp(cand) not in used:
+                return cand
+        return items[idx]
+    except Exception:
+        return items[idx]
 
 
 def selfie_stage_text(key: str, lang: str = "", *, persona_name: str = "",
-                      variant_salt: Any = None) -> str:
+                      variant_salt: Any = None, chat_key: str = "") -> str:
     """Stage 短路搪塞/兜底/配文文案：按会话语言取 zh/en 模板。
 
     ``lang`` 为空或 zh* → 中文（产品主语言）；其余一律英文。运营在 config 里
     配置的 ``caption``/``scene_hint`` 等自定义值优先于本函数（调用方先查 config）。
-    值为列表 = 变体池：``variant_salt`` 显式传入时确定性取（纯函数口径，测试用），
-    缺省用进程级轮换游标——同一 key 连续两次触发必换措辞（防复读穿帮）。
+    值为列表 = 变体池：``variant_salt`` 显式传入时确定性取（纯函数口径，测试用）；
+    ``chat_key`` 传入时走 ``pick_caption``（crc32(会话+日期) 确定性 + 近用避重，
+    2026-08-03 复读治理——**发出成功后**调用方须 ``note_caption_used`` 记账）；
+    两者都缺省用进程级轮换游标（随机起步防重启偏置）——同一 key 连续两次触发
+    必换措辞（防复读穿帮）。
     ``persona_name`` 仅保留参数兼容：模板已全部第一人称，不再用名字自称。
     """
     entry = _STAGE_TEXTS.get(str(key or ""), {})
@@ -1216,13 +1359,19 @@ def selfie_stage_text(key: str, lang: str = "", *, persona_name: str = "",
     if isinstance(tpl, (list, tuple)):
         if not tpl:
             return ""
-        if variant_salt is None:
-            _k = f"{key}:{'zh' if use_zh else 'en'}"
-            idx = _STAGE_VARIANT_SEQ.get(_k, -1) + 1
-            _STAGE_VARIANT_SEQ[_k] = idx
+        if variant_salt is None and str(chat_key or "").strip():
+            tpl = pick_caption(tpl, chat_key) or tpl[0]
         else:
-            idx = int(variant_salt)
-        tpl = tpl[idx % len(tpl)]
+            if variant_salt is None:
+                _k = f"{key}:{'zh' if use_zh else 'en'}"
+                prev = _STAGE_VARIANT_SEQ.get(_k)
+                # 随机起步（2026-08-03）：进程首次触发不再恒取池[0]——频繁重启的
+                # 生产机会把池首句放大成高频复读；后续仍逐次 +1（连续必换不变）。
+                idx = random.randrange(len(tpl)) if prev is None else prev + 1
+                _STAGE_VARIANT_SEQ[_k] = idx
+            else:
+                idx = int(variant_salt)
+            tpl = tpl[idx % len(tpl)]
     name = str(persona_name or "").strip()
     if use_zh:
         name = name or "我"
@@ -1242,6 +1391,7 @@ def build_photo_caption_instruction(
     persona_name: str = "",
     scene: str = "",
     freshness: str = "fresh",
+    wanted_subject: str = "",
 ) -> str:
     """构造「照片配文」LLM 指令（纯函数）——文图协同的关键一环。
 
@@ -1254,23 +1404,41 @@ def build_photo_caption_instruction(
     ``old``=相册存货（注册相册/相册兜底）——**禁止声称刚拍**（实录事故：相册旧照
     配「刚拍的，新鲜出炉」→ 客户对时间/衣着对不上当场质疑「你真会骗人」），
     改为「翻到一张之前拍的」口径，时间上永远诚实。
+    ``wanted_subject``（P0 图文一致性，2026-08-08）＝对方（或 AI 自己的 offer）
+    点名想看的**非人像主体**（「燕窝粥」「我的卧室」）——这张图里并没有它时，
+    指令显式禁止「假装照片里有」。实录事故：自拍配文写成「给你瞅瞅我卧室的
+    样子」「之前拍的存货，家里随便吃吃嘛」，画面里只有人脸。
     解析/调用在 autosend 侧（保持本模块纯净可测）。
     """
     who = f"「{persona_name}」" if persona_name else "一个真人"
     is_old = str(freshness or "").strip().lower() == "old"
+    is_portrait = kind != "object"
     if kind == "object" and subject:
         desc = f"一张「{subject}」的照片"
     elif kind == "video":
-        desc = "一段你的小视频"
+        desc = "一段你自己出镜的小视频"
     elif is_old:
-        desc = "一张你之前拍的照片（存货，不是现在拍的）"
+        desc = "一张你之前拍的自拍照（存货，画面里是你本人，不是现在拍的）"
     else:
         desc = "一张你刚拍的自拍照"
     pt = str(peer_text or "").strip()[:120]
     sc = str(scene or "").strip()[:120]
     scene_line = (
-        f"照片的拍摄场景是：{sc}（配文可自然带到你正在做的事，用对话语言口语化转述，"
-        "不要输出英文原文）。\n" if sc else "")
+        f"照片的拍摄场景是：{sc}（配文可自然带到你人在那儿、在做什么，用对话语言"
+        "口语化转述，不要输出英文原文；画面主体仍是你本人，别写成在展示那个地方）。\n"
+        if sc else "")
+    # 人像硬约束：画面里只有人。LLM 拿不到图，只凭对话上下文写配文——不钉死
+    # 「这是你的人像照」它就会顺着对话把自拍说成食物/房间/物件的照片。
+    portrait_line = (
+        "- 这是一张**你本人的人像照**：画面里只有你，没有食物、房间、物品、"
+        "风景细节。禁止把它说成别的东西的照片（如「给你看看我的卧室」「这是我做的"
+        "XX」「家里的存货」），也不要描述画面里根本没有的东西——可以说你人在哪儿、"
+        "在做什么，但不能声称照片里拍到了那样东西\n" if is_portrait else "")
+    ws = str(wanted_subject or "").strip()[:40]
+    wanted_line = (
+        f"- 对方想看的是「{ws}」，但**这张照片里没有它**：绝不能假装这就是{ws}、"
+        f"也不要说照片里能看到{ws}；要提就诚实说明这张是你自己，{ws}晚点再补\n"
+        if (ws and is_portrait) else "")
     old_line = (
         "- 这张是之前拍的：**禁止**说「刚拍的/刚出炉/现在拍的」这类话，"
         "可以自然带过「翻到一张之前拍的/之前拍的这张」，也不要编造现在的拍摄过程\n"
@@ -1283,7 +1451,7 @@ def build_photo_caption_instruction(
         "- 使用与对方消息相同的语言\n"
         "- 口语化、自然、不超过 30 字，最多 1 个 emoji\n"
         "- 照片已经发出去了：禁止写「等我去拍」「我发不了照片」这类否认或拖延的话\n"
-        + old_line +
+        + portrait_line + wanted_line + old_line +
         "- 不要复述对方的话，不要加引号\n"
         "只输出配文正文。"
     )
@@ -1787,6 +1955,10 @@ __all__ = [
     "build_scene_choice_instruction",
     "parse_scene_choice",
     "build_photo_caption_instruction",
+    "selfie_stage_text",
+    "pick_caption",
+    "note_caption_used",
+    "recent_captions",
     "album_scene_class_of_path",
     "album_series_of_path",
     "load_album_meta",

@@ -43,7 +43,7 @@ platform_login:
 |---|---|---|
 | GET | `/health` | 健康检查 |
 | POST | `/login/start` | 发起登录（弹登录页）→ `{login_id, qr_image, status}` |
-| GET | `/login/:id/status` | 轮询 → `{status, account_id, name, avatar_url, qr_image}` |
+| GET | `/login/:id/status` | 轮询 → `{status, account_id, name, avatar_url, qr_image, reason_code, hint_code}` |
 | POST | `/login/:id/cancel` | 取消并关闭该登录上下文 |
 | POST | `/accounts/restore` | 恢复磁盘已持久化登录（幂等） |
 | GET | `/accounts` | 已登录账号列表 |
@@ -52,6 +52,23 @@ platform_login:
 
 `status`：`pending | scanned | authorized | expired | failed`。
 
+### `reason_code` / `hint_code`（登录归因）
+
+托管登录是「人在服务器窗口里手动完成」，Node 只能旁观 URL / cookie / 错误框。
+`login_classify.js`（纯函数，`npm test` 有门禁）把旁观信号归成三段可操作原因，
+两个字段**共用同一套词汇**，也与 Python 侧 `login_funnel_stats._REASON_CODES` 同源：
+
+| 码 | 含义 | 运维动作 |
+|---|---|---|
+| `two_factor` | 密码已过、卡在第二因子 | 去服务器窗口输验证码 |
+| `checkpoint` | Facebook 安全检查点（风控/异常登录/受限） | 账号问题，非代码故障 |
+| `password_error` | 登录表单挂着错误框 | 核对账号密码 |
+| `login_failed` | 冷启失败（Chromium/依赖异常） | 看服务日志 |
+
+- `hint_code`：**非终态**，实时回报「此刻登录页在要什么」，授权后清空；
+  正常等待态（干净登录表单 / 加载中）一律空串——认不出就不报，不硬凑原因。
+- `reason_code`：终态原因。窗口期结束仍未登上时，取最后观察到的分段。
+
 ## 环境变量
 
 | 变量 | 默认 | 说明 |
@@ -59,7 +76,8 @@ platform_login:
 | `PORT` | `8791` | 监听端口（须与主进程 `web_url` 一致） |
 | `PY_INGEST_URL` | 空 | 入站桥（统一收件箱 `/api/internal/protocol/ingest`）；空=不上报 |
 | `PY_API_TOKEN` | 空 | 入站桥 Bearer（须与 `web_admin.auth_token` 一致） |
-| `MSG_HEADLESS` | `0` | `1`=无头后台；`0`=弹窗交互登录 |
+| `MSG_HEADLESS` | `0` | **交互登录**是否无头；`0`=弹窗（需人工过 2FA），`1`=无头（一般不用） |
+| `MSG_RESTORE_HEADLESS` | `1` | **restore/开机恢复/崩溃自愈已授权会话**是否无头。默认 `1`=稳态零可见窗口（多账号规模化靠此）；`0`=restore 也 headed（调试用） |
 | `MSG_POLL_MS` | `4000` | 入站轮询间隔；`0` 关闭入站同步 |
 | `MSG_BACKFILL` | `20` | 首连回填最近会话末条数 |
 | `MSG_SYNC` | `1` | `0` 关闭入站上报 |

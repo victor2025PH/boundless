@@ -666,17 +666,17 @@ def test_migration_adds_tz_columns_with_expected_defaults(tmp_path):
 def test_existing_db_gains_tz_columns_on_reopen(tmp_path, monkeypatch):
     """在位升级路径（生产实例下次重启真实走的那条）：老库重开必须补上 6 列且零迁移错误。
 
-    `schema_migrations` 按**列表下标**记账 → 新迁移只能追加在末尾（插进中间会让存量库
-    把后续条目当已应用而永久跳过）。这里先用「截断到首个 tz 迁移之前」的前缀建一个老库，
-    再用完整迁移表重开，等价于把存量生产库升上来；顺带钉住「tz 迁移必须在末尾」。
+    2026-08-02 起迁移记账键＝**SQL 内容哈希**（schema_migrations_sha），与列表位置
+    彻底解耦——「截断到首个 tz 迁移之前」的前缀库重开后，缺的条目按内容补跑即可，
+    不再要求 tz 迁移钉在列表末尾（旧的下标记账时代才需要那个位置不变量；tz 之后
+    已合法追加 T-mood / peer_bot_guard 等新列）。
     """
     from src.inbox import store as store_mod
 
     full = list(store_mod._MIGRATIONS)
     first_tz = next(i for i, sql in enumerate(full) if "ADD COLUMN tz_" in sql)
-    legacy = full[:first_tz]                      # 真前缀 → 下标与老库记账逐条对齐
+    legacy = full[:first_tz]                      # 前缀库：tz 及其后的迁移都没跑过
     assert len([sql for sql in full[first_tz:] if "ADD COLUMN tz_" in sql]) == 6
-    assert first_tz == len(full) - 6, "tz 迁移必须追加在 _MIGRATIONS 末尾"
 
     db = tmp_path / "legacy.db"
     monkeypatch.setattr(store_mod, "_MIGRATIONS", legacy)

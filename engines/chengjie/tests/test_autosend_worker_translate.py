@@ -265,7 +265,9 @@ async def test_mark_read_failure_does_not_block_delivery():
 
 @pytest.mark.asyncio
 async def test_typing_indicator_kept_during_deliver_delay():
-    """打字状态：deliver_delay 期间按 4s 分片周期挂「正在输入」，且在发送前。"""
+    """打字状态两段式（2026-08-04/09）：延迟前段静默（真人在想，无输入状态），
+    临发前 typing_lead（按文本长度×手速估，短文本下限 1.2s）才挂「正在输入」，
+    且在发送之前——全程挂打字＝「打了 10 秒字只打出一句话」比不挂更假。"""
     events = []
 
     async def _typing_cb(p, a, c, action):
@@ -278,7 +280,8 @@ async def test_typing_indicator_kept_during_deliver_delay():
     async def _fast_sleep(_s):
         return None
 
-    # deliver_delay 10s → 需 4s/4s/2s 三次续挂
+    # deliver_delay 10s：静默 ~8.8s + 尾部 typing_lead ~1.2s（短文本下限）
+    # → 恰好一次挂「正在输入」，紧邻发送
     w = AutosendWorker(
         draft_service=_FakeSvc(),
         config={"deliver_delay": {"min_sec": 10, "max_sec": 10}},
@@ -288,8 +291,11 @@ async def test_typing_indicator_kept_during_deliver_delay():
     )
     await w._tick()
     typings = [e for e in events if e[0] == "typing"]
-    assert len(typings) == 3
+    assert len(typings) == 1, (
+        f"两段式应只在临发前挂一次打字（短文本 lead≈1.2s），实得 {len(typings)}")
     assert all(a == "typing" for _, a in typings)
+    _send_idx = next(i for i, e in enumerate(events) if e[0] == "send")
+    assert events.index(typings[0]) < _send_idx, "打字必须发生在发送之前"
     # 所有 typing 都在 send 之前
     assert events.index(("send", "你好呀~")) == len(events) - 1
     snap = w.status_snapshot()
@@ -412,12 +418,14 @@ async def test_persona_resolver_drives_persona_scoped_pacing():
     w_slow, slept_slow = _run_with_persona("slow", 8.0)
     await w_slow._tick()
     snap_slow = hm.pacing_snapshot()
-    assert "autosend/slow" in snap_slow           # 观测按人设分维
+    # 2026-08-09 观测路径升级为 autosend/{platform|-}/{persona|-}（平台/人设
+    # 双分维，见 _pick_deliver_delay docstring；旧单段格式前端已兼容两代）
+    assert "autosend/telegram/slow" in snap_slow  # 观测按 平台/人设 分维
     slow_total = slept_slow["total"]
 
     w_fast, slept_fast = _run_with_persona("fast", 1.0)
     await w_fast._tick()
-    assert "autosend/fast" in hm.pacing_snapshot()
+    assert "autosend/telegram/fast" in hm.pacing_snapshot()
     fast_total = slept_fast["total"]
 
     assert slow_total > fast_total                # base_sec 大的人设延迟更长

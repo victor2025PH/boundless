@@ -2,75 +2,165 @@
 {% block title %}{{ (i18n or {}).get('wf_s001', "工作流管理") }}{% endblock %}
 {% block head %}
 <style>
-  .wf-wrap{height:100%;overflow-y:auto;background:#f7f8fa;padding:18px;}
-  .wf-tabs{display:flex;gap:0;border-bottom:2px solid #e5e7eb;margin-bottom:18px;}
-  .wf-tab{padding:9px 20px;font-size:14px;font-weight:500;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;color:#64748b;}
+  /* 页内主题变量：亮值=改造前字面量（亮色观感零变化），暗值语言对齐
+     theme-tokens.css 的 [data-theme=dark] 色板；由双开关（base 系 data-theme /
+     工作台 data-cp-theme）任一进入暗色。此前本页骨架硬编码浅色而动态内容
+     用 th-* token → 暗色下黑白花斑 + 浅底浅字不可读（2026-08-09 修）。 */
+  .wf-wrap{
+    --wf-bg:#f7f8fa; --wf-surface:#fff; --wf-surface-2:#f8fafc;
+    --wf-bd:#e5e7eb; --wf-bd-soft:#f3f4f6; --wf-bd-input:#d1d5db;
+    --wf-ink:#374151; --wf-ink-h:#1e3a5f; --wf-ink-mut:#64748b; --wf-ink-soft:#94a3b8;
+    --wf-input-bg:#fff; --wf-hover:#f3f4f6; --wf-toggle-off:#d1d5db; --wf-dot:#e5e7eb;
+    height:100%;overflow-y:auto;background:var(--wf-bg);padding:18px;color:var(--wf-ink);
+  }
+  [data-theme="dark"] .wf-wrap,[data-cp-theme="dark"] .wf-wrap{
+    --wf-bg:#15171c; --wf-surface:#1e2026; --wf-surface-2:#23252c;
+    --wf-bd:#2c2e36; --wf-bd-soft:#26272e; --wf-bd-input:#3a3d46;
+    --wf-ink:#d7dce4; --wf-ink-h:#dbe4f0; --wf-ink-mut:#94a3b8; --wf-ink-soft:#6b7280;
+    --wf-input-bg:#16181d; --wf-hover:#262931; --wf-toggle-off:#3a3f4b; --wf-dot:#3a3d46;
+  }
+  .wf-tabs{display:flex;gap:0;border-bottom:2px solid var(--wf-bd);margin-bottom:18px;}
+  .wf-tab{padding:9px 20px;font-size:14px;font-weight:500;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;color:var(--wf-ink-mut);}
   .wf-tab.active{color:var(--bl-growth-600,#0d76d9);border-bottom-color:var(--bl-growth-600,#0d76d9);}
   .wf-panel{display:none;} .wf-panel.active{display:block;}
-  .wf-section{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:16px;}
-  .wf-section h3{margin:0 0 12px;font-size:15px;color:#1e3a5f;display:flex;justify-content:space-between;align-items:center;}
+  .wf-section{background:var(--wf-surface);border:1px solid var(--wf-bd);border-radius:12px;padding:16px;margin-bottom:16px;}
+  .wf-section h3{margin:0 0 12px;font-size:15px;color:var(--wf-ink-h);display:flex;justify-content:space-between;align-items:center;}
   .wf-table{width:100%;border-collapse:collapse;font-size:13px;}
-  .wf-table th{background:#f8fafc;padding:8px 10px;text-align:left;font-weight:600;color:#374151;border-bottom:2px solid #e5e7eb;}
-  .wf-table td{padding:8px 10px;border-bottom:1px solid #f3f4f6;vertical-align:middle;}
+  .wf-table th{background:var(--wf-surface-2);padding:8px 10px;text-align:left;font-weight:600;color:var(--wf-ink);border-bottom:2px solid var(--wf-bd);}
+  .wf-table td{padding:8px 10px;border-bottom:1px solid var(--wf-bd-soft);vertical-align:middle;}
   .wf-table tr:last-child td{border-bottom:0;}
-  .wf-table tr:hover td{background:#f8fafc;}
-  .btn-sm{border:1px solid #d1d5db;background:#fff;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;}
-  .btn-sm:hover{background:#f3f4f6;}
+  .wf-table tr:hover td{background:var(--wf-surface-2);}
+  .btn-sm{border:1px solid var(--wf-bd-input);background:var(--wf-surface);color:var(--wf-ink);border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;}
+  .btn-sm:hover{background:var(--wf-hover);}
   .btn-primary{background:var(--bl-growth-600,#0d76d9);color:#fff;border-color:var(--bl-growth-600,#0d76d9);}
   .btn-primary:hover{background:var(--bl-growth-700,#0b64b7);}
   .btn-danger{border-color:#fca5a5;color:#dc2626;}
   .btn-danger:hover{background:#fee2e2;}
+  [data-theme="dark"] .wf-wrap .btn-danger,[data-cp-theme="dark"] .wf-wrap .btn-danger{border-color:rgba(248,81,73,.45);color:#f26d5f;}
+  [data-theme="dark"] .wf-wrap .btn-danger:hover,[data-cp-theme="dark"] .wf-wrap .btn-danger:hover{background:rgba(248,81,73,.16);}
   .badge{display:inline-block;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:600;}
   .badge-template{background:#d1fae5;color:#065f46;} .badge-task{background:#dbeafe;color:#1e40af;}
   .badge-tag{background:#fef3c7;color:#92400e;} .badge-escalate{background:#fee2e2;color:#991b1b;}
   .badge-chain{background:#ede9fe;color:#5b21b6;} .badge-note{background:#f0fdfa;color:#0f766e;}
   .form-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;align-items:flex-start;}
-  .form-row label{font-size:12px;color:#374151;display:block;margin-bottom:3px;}
+  .form-row label{font-size:12px;color:var(--wf-ink);display:block;margin-bottom:3px;}
   .form-row input,.form-row select,.form-row textarea{
-    border:1px solid #d1d5db;border-radius:6px;padding:6px 9px;font-size:13px;width:100%;}
+    border:1px solid var(--wf-bd-input);background:var(--wf-input-bg);color:var(--wf-ink);border-radius:6px;padding:6px 9px;font-size:13px;width:100%;}
   .form-col{flex:1;min-width:140px;}
-  .wf-empty{text-align:center;padding:24px;color:#94a3b8;font-size:13px;}
+  .wf-empty{text-align:center;padding:24px;color:var(--wf-ink-soft);font-size:13px;}
   .toggle-sw{position:relative;display:inline-block;width:36px;height:20px;cursor:pointer;}
   .toggle-sw input{opacity:0;width:0;height:0;}
-  .toggle-slider{position:absolute;top:0;left:0;right:0;bottom:0;background:#d1d5db;border-radius:10px;transition:.2s;}
+  .toggle-slider{position:absolute;top:0;left:0;right:0;bottom:0;background:var(--wf-toggle-off);border-radius:10px;transition:.2s;}
   .toggle-sw input:checked + .toggle-slider{background:var(--bl-growth-600,#0d76d9);}
   .toggle-slider:before{content:'';position:absolute;height:14px;width:14px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s;}
   .toggle-sw input:checked + .toggle-slider:before{left:19px;}
-  .step-card{background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:8px 12px;margin-bottom:6px;display:flex;gap:8px;align-items:center;}
+  .step-card{background:var(--wf-surface-2);border:1px solid var(--wf-bd);border-radius:8px;padding:8px 12px;margin-bottom:6px;display:flex;gap:8px;align-items:center;}
   .step-num{width:22px;height:22px;background:var(--bl-growth-600,#0d76d9);color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex:0 0 22px;}
   .cond-tag{display:inline-block;background:#eef2ff;color:#3730a3;border-radius:5px;padding:1px 7px;font-size:11px;margin:2px;}
   .badge-running{background:#dbeafe;color:#1e40af;} .badge-completed{background:#d1fae5;color:#065f46;}
   .badge-failed{background:#fee2e2;color:#991b1b;} .badge-cancelled{background:#f3f4f6;color:#6b7280;}
+  /* 暗色 badge/标签：半透明深底 + 高亮字（与 token 暗板同语言），修「浅底徽章浮在黑卡上」 */
+  [data-theme="dark"] .wf-wrap .badge-template,[data-cp-theme="dark"] .wf-wrap .badge-template,
+  [data-theme="dark"] .wf-wrap .badge-completed,[data-cp-theme="dark"] .wf-wrap .badge-completed{background:rgba(46,160,67,.18);color:#56d364;}
+  [data-theme="dark"] .wf-wrap .badge-task,[data-cp-theme="dark"] .wf-wrap .badge-task,
+  [data-theme="dark"] .wf-wrap .badge-running,[data-cp-theme="dark"] .wf-wrap .badge-running{background:rgba(49,109,202,.22);color:#79b8ff;}
+  [data-theme="dark"] .wf-wrap .badge-tag,[data-cp-theme="dark"] .wf-wrap .badge-tag{background:rgba(201,143,47,.2);color:#e3b341;}
+  [data-theme="dark"] .wf-wrap .badge-escalate,[data-cp-theme="dark"] .wf-wrap .badge-escalate,
+  [data-theme="dark"] .wf-wrap .badge-failed,[data-cp-theme="dark"] .wf-wrap .badge-failed{background:rgba(248,81,73,.16);color:#f26d5f;}
+  [data-theme="dark"] .wf-wrap .badge-chain,[data-cp-theme="dark"] .wf-wrap .badge-chain{background:rgba(127,86,217,.22);color:#c4a7f7;}
+  [data-theme="dark"] .wf-wrap .badge-note,[data-cp-theme="dark"] .wf-wrap .badge-note{background:rgba(20,120,110,.22);color:#4dd4c0;}
+  [data-theme="dark"] .wf-wrap .badge-cancelled,[data-cp-theme="dark"] .wf-wrap .badge-cancelled{background:rgba(148,163,184,.14);color:#94a3b8;}
+  [data-theme="dark"] .wf-wrap .cond-tag,[data-cp-theme="dark"] .wf-wrap .cond-tag{background:rgba(99,102,241,.18);color:#a5b4fc;}
   .exec-step-mini{display:flex;gap:2px;margin-top:4px;}
-  .exec-step-dot{width:8px;height:8px;border-radius:50%;background:#e5e7eb;}
+  .exec-step-dot{width:8px;height:8px;border-radius:50%;background:var(--wf-dot);}
   .exec-step-dot.done{background:#34d399;} .exec-step-dot.active{background:#2563eb;}
   .exec-step-dot.pending{background:#fbbf24;}
+  /* 工作链卡片（loadChains 渲染）：结构样式收进类，JS 里不再拼内联色 */
+  .wf-chain-card{background:var(--wf-surface);border:1px solid var(--wf-bd);border-radius:8px;padding:12px 14px;margin-bottom:10px;}
+  .wf-chain-card.off{opacity:.62;}
+  .wf-chain-hd{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;}
+  .wf-chain-nm{font-size:14px;font-weight:700;color:var(--wf-ink);}
+  .wf-chain-sp{flex:1 1 auto;}
+  .wf-run-pill{display:inline-block;padding:1px 8px;border-radius:99px;font-size:11px;font-weight:600;background:rgba(45,108,223,.12);color:var(--bl-growth-600,#0d76d9);}
+  [data-theme="dark"] .wf-wrap .wf-run-pill,[data-cp-theme="dark"] .wf-wrap .wf-run-pill{background:rgba(88,166,255,.16);color:#79b8ff;}
+  /* P3：每链 72h 回复率 pill（有成熟数才显示；绿系与「运行中」蓝系区分） */
+  .wf-reply-pill{display:inline-block;padding:1px 8px;border-radius:99px;font-size:11px;font-weight:600;background:rgba(16,185,129,.12);color:#047857;cursor:help;}
+  [data-theme="dark"] .wf-wrap .wf-reply-pill,[data-cp-theme="dark"] .wf-wrap .wf-reply-pill{background:rgba(46,160,67,.18);color:#56d364;}
+  .wf-step-t{color:var(--wf-ink-mut);margin-left:8px;font-size:11px;}
+  .wf-step-note{color:var(--wf-ink-mut);margin-top:2px;}
+  /* ── P2 增量（2026-08-09）：页头价值条 / 漏斗横条 / 步骤连线 / 状态语义色 ──
+     状态色进变量（JS 里 style.color 引用 var()），暗值对齐 token 暗板 */
+  .wf-wrap{--wf-ok:#10b981;--wf-err:#dc2626;}
+  [data-theme="dark"] .wf-wrap,[data-cp-theme="dark"] .wf-wrap{--wf-ok:#3fb950;--wf-err:#f26d5f;}
+  .wf-value-bar{display:none;align-items:center;gap:18px;flex-wrap:wrap;background:var(--wf-surface);
+    border:1px solid var(--wf-bd);border-radius:10px;padding:10px 16px;margin-bottom:14px;}
+  .wf-value-bar.on{display:flex;}
+  .wf-vb-head{font-size:12px;color:var(--wf-ink-mut);flex:0 0 auto;}
+  .wf-vb-item{display:flex;flex-direction:column;gap:1px;min-width:72px;}
+  .wf-vb-n{font-size:17px;font-weight:800;color:var(--wf-ink);line-height:1.15;}
+  .wf-vb-n.ok{color:var(--wf-ok);}
+  .wf-vb-l{font-size:11px;color:var(--wf-ink-mut);}
+  .wf-vb-go{margin-left:auto;font-size:12px;font-weight:600;color:var(--bl-growth-600,#0d76d9);cursor:pointer;}
+  .wf-vb-go:hover{text-decoration:underline;}
+  .wf-funnel-bars{display:flex;flex-direction:column;gap:4px;margin:2px 0 10px;max-width:520px;}
+  .wf-fb-row{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--wf-ink-mut);}
+  .wf-fb-lab{flex:0 0 76px;text-align:right;}
+  .wf-fb-track{display:block;flex:1;background:var(--wf-surface-2);border-radius:5px;height:13px;overflow:hidden;}
+  .wf-fb-fill{display:block;height:100%;border-radius:5px;background:var(--bl-growth-600,#0d76d9);}
+  .wf-fb-fill.done{background:var(--wf-ok);}
+  .wf-fb-fill.fail{background:var(--wf-err);}
+  .wf-fb-n{flex:0 0 34px;font-weight:700;color:var(--wf-ink);}
+  /* 步骤卡间连接段：在卡间空隙画一小节竖线，与步骤圆点(左 12px 内边距+11px 半径≈23px)对齐 */
+  .wf-steps-tl .step-card{position:relative;}
+  .wf-steps-tl .step-card:not(:last-child)::after{content:'';position:absolute;left:22px;bottom:-7px;height:7px;width:2px;background:var(--wf-bd);}
+  /* ── P5：漏斗表格「环节明细」下钻（消费 chain-funnel.chains[].by_step）── */
+  .wf-bs-btn{border:0;background:transparent;color:var(--bl-growth-600,#0d76d9);font-size:12px;cursor:pointer;padding:0 4px;}
+  .wf-bs-btn:hover{text-decoration:underline;}
+  .wf-bs-row td{background:var(--wf-surface-2);padding:8px 12px 10px;}
+  .wf-bs-item{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--wf-ink-mut);padding:2px 0;}
+  .wf-bs-idx{flex:0 0 18px;height:18px;border-radius:50%;background:var(--bl-growth-600,#0d76d9);color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;}
+  .wf-bs-note{color:var(--wf-ink);}
+  .wf-bs-track{display:flex;flex:0 0 120px;background:var(--wf-bg);border-radius:4px;height:10px;overflow:hidden;}
+  .wf-bs-ok{display:block;height:100%;background:var(--wf-ok);}
+  .wf-bs-fail{display:block;height:100%;background:var(--wf-err);}
+  .wf-bs-n{flex:0 0 auto;font-weight:600;}
+  .wf-bs-n .ok{color:var(--wf-ok);} .wf-bs-n .fail{color:var(--wf-err);}
 </style>
 {% endblock %}
 {% block content %}
 <div class="wf-wrap">
-  <h2 style="margin:0 0 16px;font-size:18px;">⚡ {{ (i18n or {}).get('wf_s001', "工作流管理") }}</h2>
+  <h2 style="margin:0 0 16px;font-size:18px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+    <span>⚡ {{ (i18n or {}).get('wf_s001', "工作流管理") }}</span>
+    <button class="btn-sm" id="wf-tour-btn" onclick="WF.startTour()">{{ (i18n or {}).get('wf_tour_replay', "▶ 播放引导") }}</button>
+  </h2>
+
+  <!-- P2 价值条：近 14 天 SOP 战绩前置（数据=chain-funnel，与监控 tab 同源缓存；
+       零启动记录整条隐藏——不给空账面撑门面） -->
+  <div id="wf-value-bar" class="wf-value-bar" role="status"></div>
 
   <!-- 一分钟上手（首次可见，「知道了」后本机不再显示；JS 按 localStorage 控显防闪） -->
-  <div id="wf-onboard" style="display:none;align-items:flex-start;gap:10px;background:var(--th-bg-blue08,rgba(45,108,223,.08));border:1px solid var(--th-bd-blue30,rgba(59,130,246,.3));border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:12px;line-height:1.7;color:var(--th-ink-gray7,#374151);">
+  <div id="wf-onboard" style="display:none;align-items:flex-start;gap:10px;background:var(--th-bg-blue08,rgba(45,108,223,.08));border:1px solid var(--th-bd-blue30,rgba(59,130,246,.3));border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:12px;line-height:1.7;color:var(--wf-ink);">
     <div style="flex:1;">
       <strong style="font-size:13px;">🚀 {{ (i18n or {}).get('wf_onboard_title', "一分钟上手") }}</strong>
       <div>{{ (i18n or {}).get('wf_onboard_s1', "① 点「导入示例链」拿到 4 条现成跟进 SOP") }}</div>
       <div>{{ (i18n or {}).get('wf_onboard_s2', "② 到收件箱会话右栏「跟进 SOP（工作链）」卡挂到客户") }}</div>
       <div>{{ (i18n or {}).get('wf_onboard_s3', "③ 回「执行监控」看漏斗与 72h 回复率") }}</div>
     </div>
+    <button class="btn-sm btn-primary" onclick="WF.startTour()">{{ (i18n or {}).get('wf_tour_replay', "▶ 播放引导") }}</button>
     <button class="btn-sm" onclick="WF.dismissOnboard()">{{ (i18n or {}).get('wf_onboard_dismiss', "知道了") }}</button>
   </div>
 
+  <!-- tab 顺序按坐席使用频率：工作链（默认落点）→ 监控 → 动作 → 路由；
+       data-tab 与 WF.tab 解耦 DOM 顺序（旧实现按 index 对号，重排即错位） -->
   <div class="wf-tabs">
-    <div class="wf-tab active" onclick="WF.tab('actions')">💡 {{ (i18n or {}).get('wf_s002', "自定义动作") }}</div>
-    <div class="wf-tab" onclick="WF.tab('chains')">🔗 {{ (i18n or {}).get('wf_s003', "工作链") }}</div>
-    <div class="wf-tab" onclick="WF.tab('routing')">🔀 {{ (i18n or {}).get('wf_s004', "分流路由") }}</div>
-    <div class="wf-tab" onclick="WF.tab('monitor')">📊 {{ (i18n or {}).get('wf_s006', "执行监控") }}</div>
+    <div class="wf-tab active" data-tab="chains" onclick="WF.tab('chains')">🔗 {{ (i18n or {}).get('wf_s003', "工作链") }}</div>
+    <div class="wf-tab" data-tab="monitor" onclick="WF.tab('monitor')">📊 {{ (i18n or {}).get('wf_s006', "执行监控") }}</div>
+    <div class="wf-tab" data-tab="actions" onclick="WF.tab('actions')">💡 {{ (i18n or {}).get('wf_s002', "自定义动作") }}</div>
+    <div class="wf-tab" data-tab="routing" onclick="WF.tab('routing')">🔀 {{ (i18n or {}).get('wf_s004', "分流路由") }}</div>
   </div>
 
   <!-- ── 自定义动作 ── -->
-  <div id="panel-actions" class="wf-panel active">
+  <div id="panel-actions" class="wf-panel">
     <div class="wf-section">
       <h3>💡 {{ (i18n or {}).get('wf_s007', "自定义动作库") }}
         <button class="btn-sm btn-primary" onclick="WF.showActionForm()">+ {{ (i18n or {}).get('wf_s008', "新建动作") }}</button>
@@ -160,12 +250,12 @@
   </div>
 
   <!-- ── 工作链 ── -->
-  <div id="panel-chains" class="wf-panel">
+  <div id="panel-chains" class="wf-panel active">
     <div class="wf-section">
       <h3>🔗 {{ (i18n or {}).get('wf_s049', "工作链配置") }}
         <span style="display:flex;gap:8px;align-items:center;">
           <span id="seed-msg" style="font-size:12px;font-weight:400;"></span>
-          <button class="btn-sm" onclick="WF.seedChains(this)">📦 {{ (i18n or {}).get('wf_seed_btn', "导入示例链") }}</button>
+          <button class="btn-sm" id="wf-seed-btn" onclick="WF.seedChains(this)">📦 {{ (i18n or {}).get('wf_seed_btn', "导入示例链") }}</button>
           <button class="btn-sm btn-primary" onclick="WF.showChainForm()">+ {{ (i18n or {}).get('wf_s050', "新建工作链") }}</button>
         </span>
       </h3>
@@ -176,7 +266,7 @@
       <div class="form-row">
         <div class="form-col"><label>{{ (i18n or {}).get('wf_s051', "工作链名称") }} *</label><input id="cf-name" placeholder="{{ (i18n or {}).get('wf_s052', '例：沉默客户挽回流程') }}"></div>
       </div>
-      <div class="form-row" style="background:#f8fafc;border:1px solid var(--th-bd-gray2,#e5e7eb);border-radius:8px;padding:10px 12px;margin-bottom:12px;">
+      <div class="form-row" style="background:var(--wf-surface-2);border:1px solid var(--wf-bd);border-radius:8px;padding:10px 12px;margin-bottom:12px;">
         <div class="form-col" style="flex:0 0 160px;">
           <label>{{ (i18n or {}).get('wf_s053', "自动触发 · 沉默天数") }}</label>
           <input id="cf-silence-days" type="number" min="0" value="0" placeholder="0={{ (i18n or {}).get('wf_s054', '不自动触发') }}">
@@ -187,8 +277,8 @@
             {{ (i18n or {}).get('wf_s055', "仅高流失风险客户") }}
           </label>
         </div>
-        <div class="form-col" style="font-size:11px;color:var(--th-ink-slate5,#64748b);align-self:center;">
-          P44: {{ (i18n or {}).get('wf_s056', "后台定时扫描，满足条件时自动启动本链（防重：同会话同链仅一条 running）") }}
+        <div class="form-col" style="font-size:11px;color:var(--wf-ink-mut);align-self:center;">
+          {{ (i18n or {}).get('wf_auto_trigger_hint', "后台定时扫描，满足条件时自动启动本链（同会话同链仅一条运行中，不会重复）") }}
         </div>
       </div>
       <div style="font-size:13px;font-weight:600;color:var(--th-ink-gray7,#374151);margin-bottom:8px;">{{ (i18n or {}).get('wf_s057', "工作步骤（按序执行）") }}</div>
@@ -296,16 +386,18 @@
 (function(){
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
-// ── 选项卡切换 ──────────────────────────────────────────────────────────────
+// ── 选项卡切换（data-tab 匹配，与 DOM 顺序解耦；记忆上次停留）────────────────
 var _loaded={};
 var _monTimer=null;
 window.WF={
   tab:function(name){
-    document.querySelectorAll('.wf-tab').forEach(function(el,i){
-      el.classList.toggle('active',['actions','chains','routing','monitor'][i]===name);
+    document.querySelectorAll('.wf-tab').forEach(function(el){
+      el.classList.toggle('active',el.getAttribute('data-tab')===name);
     });
     document.querySelectorAll('.wf-panel').forEach(function(el){el.classList.remove('active');});
-    document.getElementById('panel-'+name).classList.add('active');
+    var p=document.getElementById('panel-'+name);
+    if(p)p.classList.add('active');
+    try{ localStorage.setItem('wf_last_tab',name); }catch(_){}
     if(!_loaded[name]){ _loaded[name]=true; WF['load'+name[0].toUpperCase()+name.slice(1)](); }
     if(name==='monitor'){
       if(_monTimer) clearInterval(_monTimer);
@@ -398,13 +490,13 @@ WF.saveAction=function(){
     enabled:1,
     trigger_conditions:JSON.stringify(conds.length?conds:['any']),
   };
-  if(!data.name){document.getElementById('af-msg').textContent=window.T('psn_js_137');document.getElementById('af-msg').style.color='#ef4444';return;}
+  if(!data.name){document.getElementById('af-msg').textContent=window.T('psn_js_137');document.getElementById('af-msg').style.color='var(--wf-err)';return;}
   var url=data.action_id?'/api/workspace/workflow-actions/'+encodeURIComponent(data.action_id):'/api/workspace/workflow-actions';
   var method=data.action_id?'PUT':'POST';
   apiFetch(url,{method:method,headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}, {timeoutMs: 60000})
     .then(function(r){return r.json();}).then(function(d){
-      if(d.ok){document.getElementById('af-msg').textContent=window.T('wa_js_053');document.getElementById('af-msg').style.color='#10b981';WF.loadActions();setTimeout(function(){WF.cancelForm();},1000);}
-      else{document.getElementById('af-msg').textContent=window.T('ov_js_save_fail');document.getElementById('af-msg').style.color='#ef4444';}
+      if(d.ok){document.getElementById('af-msg').textContent=window.T('wa_js_053');document.getElementById('af-msg').style.color='var(--wf-ok)';WF.loadActions();setTimeout(function(){WF.cancelForm();},1000);}
+      else{document.getElementById('af-msg').textContent=window.T('ov_js_save_fail');document.getElementById('af-msg').style.color='var(--wf-err)';}
     });
 };
 WF.toggleAction=function(id,enabled){
@@ -419,42 +511,86 @@ WF.delAction=function(id){
 
 // ── 工作链 ──────────────────────────────────────────────────────────────────
 var _chainSteps=[];
+var _chainsCache=[];
 WF.loadChains=function(){
+  // 并行拉「运行中执行」按链聚合成徽标；执行接口异常只丢徽标，不影响主渲染
+  var pRun=apiFetch('/api/workspace/chain-executions?status=running&limit=200')
+    .then(function(r){return r.json();}).catch(function(){return {};});
+  // P3：每链 72h 回复率进卡片（决策就地可见，不用切监控）——复用漏斗单飞缓存，
+  // 失败只丢徽标；只给窗口内有成熟数（mature_n>0）的链显示，无数据不装零
+  var pFun=WF._funnelFetch().catch(function(){return null;});
   apiFetch('/api/workspace/workflow-chains').then(function(r){return r.json();}).then(function(d){
     var box=document.getElementById('chains-list');
     var chains=d.chains||[];
+    _chainsCache=chains;
     if(!chains.length){box.innerHTML='<div class="wf-empty">'+window.T('wf_js006')+' — '+window.T('wf_js007')
+      +'<div style="margin-top:6px;font-size:12px;">'+window.T('wf_empty_packs')+'</div>'
       +'<div style="margin-top:10px;"><button class="btn-sm btn-primary" onclick="WF.seedChains(this)">📦 '+window.T('wf_seed_btn')+'</button></div></div>';return;}
-    box.innerHTML=chains.map(function(c){
-      var steps=c.steps||[];
-      return '<div style="background:var(--th-bg-surface,#fff);border:1px solid var(--th-bd-gray2,#e5e7eb);border-radius:8px;padding:12px 14px;margin-bottom:10px;">'
-        +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
-          +'<strong style="font-size:14px;">🔗 '+esc(c.name)+'</strong>'
-          +'<div><button class="btn-sm" onclick="WF.editChain(\''+esc(c.chain_id)+'\')">'+window.T('edit')+'</button> '
-            +'<button class="btn-sm btn-danger" onclick="WF.delChain(\''+esc(c.chain_id)+'\')">'+window.T('delete')+'</button></div>'
-        +'</div>'
-        +'<div style="font-size:11px;color:var(--th-ink-slate4,#5b6b85);margin-bottom:6px;">ID: '+esc(c.chain_id)+'</div>'
-        +(function(){
-          var tc=c.trigger_conditions||{};
-          var tags=[];
-          if(tc.silence_days)tags.push(window.T('ov_js_th_silent')+'≥'+tc.silence_days+window.T('wa_s158'));
-          if(tc.churn_risk_high)tags.push(window.T('wf_js008'));
-          return tags.length?'<div style="margin-bottom:6px;">'+tags.map(function(t){return '<span class="cond-tag">⚡ '+t+'</span>';}).join('')+'</div>':'';
-        })()
-        +'<div>'
-          +steps.map(function(s,i){
-            return '<div class="step-card">'
-              +'<div class="step-num">'+(i+1)+'</div>'
-              +'<div style="flex:1;font-size:12px;">'
-                +'<strong>'+esc(_TYPE_LABELS[s.action_type]||s.action_type||window.T('rpa_unknown'))+'</strong>'
-                +(s.delay_hours?'<span style="color:var(--th-ink-slate4,#5b6b85);margin-left:8px;">'+window.T('wf_js009')+' '+s.delay_hours+' '+window.T('msg_js_009')+'</span>':'')
-                +(s.note?'<div style="color:var(--th-ink-slate5,#64748b);margin-top:2px;">'+esc(s.note)+'</div>':'')
-              +'</div></div>';
-          }).join('')
-        +'</div>'
-        +'</div>';
-    }).join('');
+    Promise.all([pRun,pFun]).then(function(rs){
+      var rd=rs[0], fd=rs[1];
+      var runN={};
+      ((rd&&rd.executions)||[]).forEach(function(ex){ if(ex&&ex.chain_id) runN[ex.chain_id]=(runN[ex.chain_id]||0)+1; });
+      var replyN={};
+      (((fd||{}).chains)||[]).forEach(function(fc){ if(fc&&fc.chain_id) replyN[fc.chain_id]=fc; });
+      box.innerHTML=chains.map(function(c){
+        var steps=c.steps||[];
+        var on=(c.enabled===undefined)?true:!!c.enabled;
+        var running=runN[c.chain_id]||0;
+        var fc=replyN[c.chain_id];
+        var replyPill=(fc&&fc.mature_n>0&&fc.reply_rate!=null)
+          ?('<span class="wf-reply-pill" title="'+window.T('wf_funnel_reply_hint')+'">↩ '
+            +window.Tf('wf_chain_reply_pill',{p:Math.round(fc.reply_rate*100),n:fc.replied_n,m:fc.mature_n})+'</span>')
+          :'';
+        var cum=0;
+        return '<div class="wf-chain-card'+(on?'':' off')+'">'
+          +'<div class="wf-chain-hd">'
+            +'<strong class="wf-chain-nm" title="ID: '+esc(c.chain_id)+'">🔗 '+esc(c.name)+'</strong>'
+            +(running?'<span class="wf-run-pill">'+window.Tf('wf_chain_running_n',{n:running})+'</span>':'')
+            +replyPill
+            +(on?'':'<span class="badge badge-cancelled">'+window.T('wf_chain_disabled')+'</span>')
+            +'<span class="wf-chain-sp"></span>'
+            +'<label class="toggle-sw" title="'+window.T('wf_chain_enable_t')+'"><input type="checkbox"'+(on?' checked':'')
+              +' onchange="WF.toggleChain(\''+esc(c.chain_id)+'\',this.checked)"><span class="toggle-slider"></span></label>'
+            +'<button class="btn-sm" onclick="WF.editChain(\''+esc(c.chain_id)+'\')">'+window.T('edit')+'</button> '
+            +'<button class="btn-sm btn-danger" onclick="WF.delChain(\''+esc(c.chain_id)+'\')">'+window.T('delete')+'</button>'
+          +'</div>'
+          +(function(){
+            var tc=c.trigger_conditions||{};
+            var tags=[];
+            if(tc.silence_days)tags.push(window.T('ov_js_th_silent')+'≥'+tc.silence_days+window.T('wa_s158'));
+            if(tc.churn_risk_high)tags.push(window.T('wf_js008'));
+            return tags.length?'<div style="margin-bottom:6px;">'+tags.map(function(t){return '<span class="cond-tag">⚡ '+t+'</span>';}).join('')+'</div>':'';
+          })()
+          +'<div class="wf-steps-tl">'
+            +steps.map(function(s,i){
+              var dh=Number(s.delay_hours)||0;
+              cum+=dh;
+              var t=dh?('+'+dh+'h'+(cum>dh||i>0?'（'+window.Tf('wf_step_cum',{h:cum})+'）':'')):(i===0?window.T('wf_step_imm'):'+0h');
+              return '<div class="step-card">'
+                +'<div class="step-num">'+(i+1)+'</div>'
+                +'<div style="flex:1;font-size:12px;">'
+                  +'<strong>'+esc(_TYPE_LABELS[s.action_type]||s.action_type||window.T('rpa_unknown'))+'</strong>'
+                  +'<span class="wf-step-t">⏱ '+t+'</span>'
+                  +(s.note?'<div class="wf-step-note">'+esc(s.note)+'</div>':'')
+                +'</div></div>';
+            }).join('')
+          +'</div>'
+          +'</div>';
+      }).join('');
+    });
   });
+};
+// 启用开关：全量 upsert（页面本就是全量 PUT 语义）；失败也重载回真状态
+WF.toggleChain=function(id,en){
+  var c=(_chainsCache||[]).find(function(x){return x.chain_id===id;});
+  if(!c)return;
+  apiFetch('/api/workspace/workflow-chains/'+encodeURIComponent(id),{method:'PUT',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({chain_id:id,name:c.name,steps:c.steps||[],
+      trigger_conditions:c.trigger_conditions||{},enabled:en?1:0})}, {timeoutMs: 60000})
+    .then(function(r){return r.json();})
+    .then(function(){WF.loadChains();})
+    .catch(function(){WF.loadChains();});
 };
 WF.showChainForm=function(chain){
   _chainSteps=chain?JSON.parse(JSON.stringify(chain.steps||[])):[];
@@ -505,10 +641,13 @@ WF.saveChain=function(){
   if(silenceDays>0)trigger.silence_days=silenceDays;
   if(churnHigh)trigger.churn_risk_high=true;
   var data={chain_id:document.getElementById('cf-id').value||undefined,name:name,steps:_chainSteps,trigger_conditions:trigger};
+  // 保存必须回传当前 enabled（upsert 缺省按 True——否则编辑一条已停用的链会把它悄悄启用）
+  var _cur=data.chain_id?(_chainsCache||[]).find(function(x){return x.chain_id===data.chain_id;}):null;
+  if(_cur&&_cur.enabled!==undefined)data.enabled=_cur.enabled?1:0;
   var url=data.chain_id?'/api/workspace/workflow-chains/'+encodeURIComponent(data.chain_id):'/api/workspace/workflow-chains';
   apiFetch(url,{method:data.chain_id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}, {timeoutMs: 60000})
     .then(function(r){return r.json();}).then(function(d){
-      if(d.ok){document.getElementById('cf-msg').textContent=window.T('wa_js_053');document.getElementById('cf-msg').style.color='#10b981';WF.loadChains();setTimeout(function(){WF.cancelChainForm();},1000);}
+      if(d.ok){document.getElementById('cf-msg').textContent=window.T('wa_js_053');document.getElementById('cf-msg').style.color='var(--wf-ok)';WF.loadChains();setTimeout(function(){WF.cancelChainForm();},1000);}
     });
 };
 WF.delChain=function(id){
@@ -523,11 +662,11 @@ WF.seedChains=function(btn){
   apiFetch('/api/workspace/workflow-chains/seed',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}, {timeoutMs: 60000})
     .then(function(r){return r.json();}).then(function(d){
       if(btn)btn.disabled=false;
-      if(!d||!d.ok){_say(window.T('wf_seed_fail'),'#dc2626');return;}
+      if(!d||!d.ok){_say(window.T('wf_seed_fail'),'var(--wf-err)');return;}
       var n=(d.imported||[]).length;
-      _say(n?window.Tf('wf_seed_done',{n:n}):window.T('wf_seed_none'), n?'#10b981':'#94a3b8');
+      _say(n?window.Tf('wf_seed_done',{n:n}):window.T('wf_seed_none'), n?'var(--wf-ok)':'var(--wf-ink-soft)');
       WF.loadChains();
-    }).catch(function(){ if(btn)btn.disabled=false; _say(window.T('wf_seed_fail'),'#dc2626'); });
+    }).catch(function(){ if(btn)btn.disabled=false; _say(window.T('wf_seed_fail'),'var(--wf-err)'); });
 };
 
 // ── 分流路由 ──────────────────────────────────────────────────────────────
@@ -584,7 +723,7 @@ WF.saveRouting=function(){
   var url=data.rule_id?'/api/workspace/routing-rules/'+encodeURIComponent(data.rule_id):'/api/workspace/routing-rules';
   apiFetch(url,{method:data.rule_id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}, {timeoutMs: 60000})
     .then(function(r){return r.json();}).then(function(d){
-      if(d.ok){document.getElementById('rf-msg').textContent=window.T('wa_js_053');document.getElementById('rf-msg').style.color='#10b981';WF.loadRouting();setTimeout(function(){WF.cancelRoutingForm();},1000);}
+      if(d.ok){document.getElementById('rf-msg').textContent=window.T('wa_js_053');document.getElementById('rf-msg').style.color='var(--wf-ok)';WF.loadRouting();setTimeout(function(){WF.cancelRoutingForm();},1000);}
     });
 };
 WF.toggleRule=function(id,enabled){
@@ -600,10 +739,10 @@ WF.testRouting=function(){
   apiFetch('/api/workspace/routing-rules/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversation:conv})}, {timeoutMs: 60000})
     .then(function(r){return r.json();}).then(function(d){
       var el=document.getElementById('rt-result');
-      if(!d.matched||!d.matched.length){el.textContent=window.T('wf_js020');el.style.color='#94a3b8';return;}
+      if(!d.matched||!d.matched.length){el.textContent=window.T('wf_js020');el.style.color='var(--wf-ink-soft)';return;}
       var best=d.best_match;
       el.innerHTML=window.T('db_js_094')+' '+d.matched.length+' '+window.T('wf_js021')+'<strong>'+esc(best.name)+'</strong> → '+window.T('wf_s064')+' <strong>'+esc(best.assign_to||'—')+'</strong>';
-      el.style.color='#10b981';
+      el.style.color='var(--wf-ok)';
     });
 };
 
@@ -615,12 +754,75 @@ function _fmtDur(sec){
   return sec+'s';
 }
 // ── B2：链效果漏斗（近 14 天 + 启动后 72h 回复率，分母只算已满窗口期的执行）──
-WF.loadFunnel=function(){
-  apiFetch('/api/workspace/chain-funnel?days=14').then(function(r){return r.json();}).then(function(d){
-    var box=document.getElementById('funnel-box'); if(!box) return;
+// P2：漏斗与页头价值条共享一次取数（单飞 promise；失败清引用下次重试）
+WF._funnelP=null;
+WF._funnelFetch=function(fresh){
+  if(fresh||!WF._funnelP){
+    WF._funnelP=apiFetch('/api/workspace/chain-funnel?days=14')
+      .then(function(r){return r.json();})
+      .catch(function(){ WF._funnelP=null; return null; });
+  }
+  return WF._funnelP;
+};
+// P2 页头价值条：近 14 天 SOP 战绩前置（零启动整条隐藏——不拿空账面撑门面）
+WF.loadValueBar=function(){
+  WF._funnelFetch().then(function(d){
+    var bar=document.getElementById('wf-value-bar'); if(!bar)return;
+    var t=(d&&d.total)||{};
+    if(!t.started){
+      // P3 空账面引导：只在「一分钟上手」条已被关掉后补位（不三重发声——
+      // 首访有 onboard 条 + 自动导览兜着）；点击回工作链 tab 走导入
+      var seen=false;
+      try{ seen=localStorage.getItem('wf_onboard_v1')==='1'; }catch(_){}
+      if(seen&&d){
+        bar.innerHTML='<span class="wf-vb-head">'+window.Tf('wf_vb_head',{d:(d&&d.days)||14})+'</span>'
+          +'<span class="wf-vb-l">'+window.T('wf_vb_empty_note')+'</span>'
+          +'<span class="wf-vb-go" onclick="WF.tab(\'chains\')">'+window.T('wf_vb_empty_cta')+'</span>';
+        bar.className='wf-value-bar on';
+      }else{ bar.className='wf-value-bar'; bar.innerHTML=''; }
+      return;
+    }
+    var reply=(t.reply_rate!=null)?(Math.round(t.reply_rate*100)+'%'):'—';
+    function item(n,label,ok){ return '<span class="wf-vb-item"><span class="wf-vb-n'+(ok?' ok':'')+'">'+n+'</span><span class="wf-vb-l">'+label+'</span></span>'; }
+    bar.innerHTML='<span class="wf-vb-head">'+window.Tf('wf_vb_head',{d:(d&&d.days)||14})+'</span>'
+      +item(t.started,window.T('wf_funnel_started'))
+      +item(t.completed||0,window.T('ops.ct.st_completed'),true)
+      +item(reply,window.T('wf_funnel_reply'),(t.reply_rate!=null&&t.reply_rate>=0.3))
+      +(Number(t.attributed)>0?item(t.attributed,window.T('wf_vb_goal')):'')
+      +'<span class="wf-vb-go" onclick="WF.tab(\'monitor\')">'+window.T('wf_vb_go_monitor')+'</span>';
+    bar.className='wf-value-bar on';
+  });
+};
+// P5：环节明细展开态（chain_id → bool）——存变量而非 DOM，30s 轮询整块重渲后回填不丢
+var _stepOpen={};
+WF.toggleStepFunnel=function(cid){
+  _stepOpen[cid]=!_stepOpen[cid];
+  WF.loadFunnel(true);   // 用缓存就地重渲（纯展开态翻转，不值得一次接口往返）
+};
+WF.loadFunnel=function(useCache){
+  WF._funnelFetch(!useCache).then(function(d){
+    var box=document.getElementById('funnel-box'); if(!box||!d) return;
     var t=(d&&d.total)||{};
     if(!t.started){ box.innerHTML='<div class="wf-empty" style="padding:10px;">'+window.T('wf_funnel_empty')+'</div>'; return; }
     function rate(x){ return (x&&x.reply_rate!=null)?(Math.round(x.reply_rate*100)+'% ('+x.replied_n+'/'+x.mature_n+')'):'—'; }
+    // P5：每环节执行明细（goal P1 落的 workflow_step_log 聚合）——「链在哪一环损耗」读数化
+    function bsRows(c){
+      var bs=c.by_step||[];
+      if(!bs.length||!_stepOpen[c.chain_id])return '';
+      var items=bs.map(function(s){
+        var at=Math.max(0,Number(s.attempts)||0);
+        var okW=at?Math.round((s.ok||0)/at*100):0;
+        var failW=at?Math.round((s.failed||0)/at*100):0;
+        return '<div class="wf-bs-item">'
+          +'<span class="wf-bs-idx">'+(Number(s.step_idx)+1)+'</span>'
+          +'<span>'+esc(_TYPE_LABELS[s.action_type]||s.action_type||'')+'</span>'
+          +(s.note?'<span class="wf-bs-note">'+esc(s.note)+'</span>':'')
+          +'<span class="wf-bs-track"><span class="wf-bs-ok" style="width:'+okW+'%"></span><span class="wf-bs-fail" style="width:'+failW+'%"></span></span>'
+          +'<span class="wf-bs-n"><span class="ok">✓'+(s.ok||0)+'</span> <span class="fail">✗'+(s.failed||0)+'</span> / '+at+'</span>'
+          +'</div>';
+      }).join('');
+      return '<tr class="wf-bs-row"><td colspan="5">'+items+'</td></tr>';
+    }
     var chips='<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">'
       +'<strong style="font-size:13px;margin-right:4px;">'+window.Tf('wf_funnel_title',{d:d.days||14})+'</strong>'
       +'<span class="badge badge-template">'+window.T('wf_funnel_started')+' '+t.started+'</span>'
@@ -641,15 +843,32 @@ WF.loadFunnel=function(){
         : '')
       +'</div>';
     var rows=(d.chains||[]).map(function(c){
-      return '<tr><td>'+esc(c.chain_name||c.chain_id)+'</td><td>'+c.started+'</td><td>'+(c.completed||0)+'</td>'
-        +'<td>'+(c.failed||0)+'</td><td title="'+window.T('wf_funnel_reply_hint')+'">'+rate(c)+'</td></tr>';
+      var hasBs=(c.by_step||[]).length>0;
+      var bsBtn=hasBs?(' <button class="wf-bs-btn" onclick="WF.toggleStepFunnel(\''+esc(c.chain_id)+'\')">'
+        +(_stepOpen[c.chain_id]?'\u25BE '+window.T('wf_bs_hide'):'\u25B8 '+window.T('wf_bs_show'))+'</button>'):'';
+      return '<tr><td>'+esc(c.chain_name||c.chain_id)+bsBtn+'</td><td>'+c.started+'</td><td>'+(c.completed||0)+'</td>'
+        +'<td>'+(c.failed||0)+'</td><td title="'+window.T('wf_funnel_reply_hint')+'">'+rate(c)+'</td></tr>'
+        +bsRows(c);
     }).join('');
     var table=rows?('<table class="wf-table"><thead><tr>'
       +'<th>'+window.T('wf_funnel_col_chain')+'</th><th>'+window.T('wf_funnel_started')+'</th>'
       +'<th>'+window.T('ops.ct.st_completed')+'</th><th>'+window.T('rpa_js_st_failed')+'</th>'
       +'<th>'+window.T('wf_funnel_col_reply')+'</th>'
       +'</tr></thead><tbody>'+rows+'</tbody></table>'):'';
-    box.innerHTML=chips+table;
+    // P2 横条漏斗：宽度按启动数归一（0 值零宽不画假条）
+    function fbRow(label,n,cls){
+      var w=(n>0&&t.started)?Math.max(2,Math.round(n/t.started*100)):0;
+      return '<div class="wf-fb-row"><span class="wf-fb-lab">'+label+'</span>'
+        +'<span class="wf-fb-track"><span class="wf-fb-fill'+(cls?' '+cls:'')+'" style="width:'+w+'%"></span></span>'
+        +'<span class="wf-fb-n">'+n+'</span></div>';
+    }
+    var bars='<div class="wf-funnel-bars">'
+      +fbRow(window.T('wf_funnel_started'),t.started,'')
+      +fbRow(window.T('ops.ct.st_completed'),t.completed||0,'done')
+      +fbRow(window.T('rpa_js_st_failed'),t.failed||0,'fail')
+      +'</div>';
+    box.innerHTML=chips+bars+table;
+    WF.loadValueBar();   // 同一份新数据顺带刷新页头价值条（复用单飞缓存）
   }).catch(function(){});
 };
 WF.loadMonitor=function(){
@@ -708,9 +927,38 @@ try{
   }
 }catch(_){}
 
-// ── 初始加载 ─────────────────────────────────────────────────────────────────
-WF.loadActions();
-_loaded.actions=true;
+// ── 引导式教程（复用 workspace_base 的 blTour 聚光灯组件；锚定真实元素，
+//    目标缺席自动跳步不卡人，Esc/跳过随时退出）─────────────────────────────
+WF.startTour=function(){
+  if(!window.blTour) return;
+  WF.tab('chains');   // 导览主线在工作链 tab，先归位保证锚点在场
+  window.blTour.start([
+    {sel:'[data-tab="chains"]', title:window.T('wf_tour_t1'), body:window.T('wf_tour_b1')},
+    {sel:'#wf-seed-btn',        title:window.T('wf_tour_t2'), body:window.T('wf_tour_b2')},
+    {sel:'#chains-list',        title:window.T('wf_tour_t3'), body:window.T('wf_tour_b3')},
+    {                           title:window.T('wf_tour_t4'), body:window.T('wf_tour_b4')},
+    {sel:'[data-tab="monitor"]',title:window.T('wf_tour_t5'), body:window.T('wf_tour_b5')}
+  ]);
+};
+
+// ── 初始加载：默认落「工作链」；#hash 深链 > 上次停留 > 默认 ────────────────
+var _TABS=['actions','chains','routing','monitor'];
+var _initTab='chains';
+try{
+  var _h=(location.hash||'').replace('#','');
+  if(_TABS.indexOf(_h)>=0)_initTab=_h;
+  else{ var _sv=localStorage.getItem('wf_last_tab'); if(_TABS.indexOf(_sv)>=0)_initTab=_sv; }
+}catch(_){}
+WF.tab(_initTab);
+WF.loadValueBar();   // P2 页头价值条：进页即拉（与监控 tab 共享单飞缓存，零重复请求）
+// 首访自动播放引导（play-once：写 key 在播放前——完成/跳过/Esc 任何出口都不再自动纠缠；
+// 手动「▶ 播放引导」按钮不受此限）
+try{
+  if(!localStorage.getItem('wf_tour_v1')){
+    localStorage.setItem('wf_tour_v1','1');
+    setTimeout(function(){ try{ WF.startTour(); }catch(_){} },600);
+  }
+}catch(_){}
 })();
 </script>
 {% endblock %}

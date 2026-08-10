@@ -168,14 +168,21 @@ def test_resolve_caches_within_ttl(monkeypatch):
 
 # ── 静态接线：封顶必须真的挂在入站档位链上 ───────────────────────────────────
 def test_wired_into_autodraft_mode_chain():
-    """防「写了模块但没接线」——安全闸最常见的静默失效形态。"""
+    """防「写了模块但没接线」——安全闸最常见的静默失效形态。
+
+    2026-08-07 起封顶收口进 effective_automation 单一事实源（A 线/B 线/API/
+    CLI 同源）：本门禁改为钉「B 线消费 resolver + resolver 串真判定源」，
+    排序不变量（封顶早于双轨互斥）语义原样保留。
+    """
     from pathlib import Path
-    src = Path(
-        __file__).resolve().parents[1] / "src" / "inbox" / "autodraft_helpers.py"
-    text = src.read_text("utf-8")
-    assert "automation_ceiling" in text, "预热封顶未接入 autodraft 档位链"
-    assert "resolve_account_connected_at" in text
+    base = Path(__file__).resolve().parents[1] / "src" / "inbox"
+    text = (base / "autodraft_helpers.py").read_text("utf-8")
+    assert "compute_mode_caps" in text, "预热封顶未接入 autodraft 档位链"
     # 必须在 companion 双轨互斥判定之前封顶：否则 A 线不让位、System Z 也不拟稿
     # ＝198 那种「两边都让、无人拟稿」的静默丢回复。
-    assert text.index("automation_ceiling") < text.index(
+    assert text.index("apply_mode_caps") < text.index(
         "allows_direct_autosend"), "预热封顶必须早于双轨互斥判定"
+    # resolver 自身必须真的串到预热判定源（防收口后变成空壳）
+    ea = (base / "effective_automation.py").read_text("utf-8")
+    assert "automation_ceiling" in ea
+    assert "resolve_account_connected_at" in ea

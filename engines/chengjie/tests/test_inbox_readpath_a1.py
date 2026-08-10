@@ -459,6 +459,7 @@ def test_extract_platform_msg_id_per_platform():
     assert extract_platform_msg_id({"id": 123}, "telegram") == "123"
     assert extract_platform_msg_id({"wamid": "ABC"}, "whatsapp") == "ABC"
     assert extract_platform_msg_id({"mid": "x"}, "messenger") == "x"
+    assert extract_platform_msg_id({"msg_id": "m_ab"}, "messenger") == "m_ab"
     # LINE 不取裸 id（房间 id），仅取 message_id/server_id
     assert extract_platform_msg_id({"id": "room1"}, "line") == ""
     assert extract_platform_msg_id({"message_id": "m1", "id": "room1"}, "line") == "m1"

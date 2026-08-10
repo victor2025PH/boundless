@@ -23,6 +23,11 @@ def _reset_module_state():
     hg._quota_cache["ts"] = 0.0
     hg._quota_cache["data"] = None
     yield
+    # ensure_* 直接写 os.environ（刻意，供热重载回放）——测试进程里必须收尾清理，
+    # 否则泄漏给同进程后续测试（config_manager._apply_env_overrides 会突然重放注入）
+    for key in (hg.VOICE_ENV_BASE, hg.VOICE_ENV_FIRST, hg.VOICE_ENV_HUBFISH_OFF,
+                hg.ASR_ENV_BASE, hg.ASR_ENV_FIRST):
+        os.environ.pop(key, None)
 
 
 def _fp(monkeypatch, value="AAAA-BBBB-CCCC-DDDD"):
@@ -278,6 +283,143 @@ def test_hosted_telegram_noop_when_not_hosted(tmp_path, monkeypatch):
     assert hg.ensure_hosted_telegram(cm, fetch=lambda *a, **k: {"ok": True}) is False
 
 
+def test_refresh_once_retries_telegram_cred(tmp_path, monkeypatch):
+    """刷新守护必须补领 Telegram 凭据（2026-08-10 连带发现的断链）。
+
+    此前 refresh_once 只刷 AI/识图/语音——首启没网错过启动注入的机器，
+    凭据缺口要等到下次重启才补，用户全程停在自助填写表单。
+    """
+    called = []
+    for fn in ("ensure_hosted_ai", "ensure_hosted_vision",
+               "ensure_hosted_voice", "ensure_hosted_asr"):
+        monkeypatch.setattr(hg, fn, lambda cm, _n=fn: called.append(_n))
+    monkeypatch.setattr(hg, "ensure_hosted_telegram",
+                        lambda cm: called.append("ensure_hosted_telegram"))
+    hg.refresh_once(object())
+    assert "ensure_hosted_telegram" in called, "refresh_once 漏掉 Telegram 凭据补领"
+
+
+def test_report_invalid_and_refetch_swaps_creds(tmp_path, monkeypatch):
+    """P1-⑤ 无感换发：举报废组 → 领新组 → 内存凭据就地更新。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    _fp(monkeypatch)
+    hg._reset_swap_cooldown_for_tests()
+    cfg = {"telegram": {"api_id": "1001", "api_hash": "a" * 32, "_hosted_cred": True},
+           "licensing": {"hosted_ai": {"enabled": True}}, "ai": {"api_key": "cx.tok"}}
+    seen = {}
+
+    def fake(u, m, b, bearer=""):
+        assert u.endswith("/api/pool/telegram-cred") and m == "POST"
+        seen.update(b or {})
+        return {"ok": True, "api_id": "2002", "api_hash": "b" * 32,
+                "name": "grp-B", "swapped": True}
+
+    got = hg.report_invalid_and_refetch(cfg, "1001", fetch=fake)
+    assert got == ("2002", "b" * 32)
+    assert seen.get("invalid_api_id") == "1001", "举报必须带废 api_id"
+    assert cfg["telegram"]["api_id"] == "2002"
+    assert cfg["telegram"]["api_hash"] == "b" * 32
+    assert cfg["telegram"]["_hosted_cred"] is True
+
+
+def test_report_invalid_never_touches_user_creds(tmp_path, monkeypatch):
+    """用户自填凭据（无 _hosted_cred 标记）→ 一个字节都不动、不发请求。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    _fp(monkeypatch)
+    hg._reset_swap_cooldown_for_tests()
+    cfg = {"telegram": {"api_id": "999", "api_hash": "f" * 32}}
+
+    def boom(*a, **k):
+        raise AssertionError("用户自填凭据不得触发换发请求")
+
+    assert hg.report_invalid_and_refetch(cfg, "999", fetch=boom) is None
+    assert cfg["telegram"]["api_id"] == "999"
+
+
+def test_report_invalid_cooldown_blocks_hammering(tmp_path, monkeypatch):
+    """120s 冷却：坏组 × 连点刷新不能变成打官网的机关枪。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    _fp(monkeypatch)
+    hg._reset_swap_cooldown_for_tests()
+    cfg = {"telegram": {"api_id": "1001", "api_hash": "a" * 32, "_hosted_cred": True}}
+    calls = []
+
+    def fake(u, m, b, bearer=""):
+        calls.append(1)
+        return {"ok": True, "api_id": "2002", "api_hash": "b" * 32}
+
+    assert hg.report_invalid_and_refetch(cfg, "1001", fetch=fake) is not None
+    # 立刻再来一次（新凭据又废的极端场景）→ 冷却挡下，fetch 不再发生
+    assert hg.report_invalid_and_refetch(cfg, "2002", fetch=fake) is None
+    assert len(calls) == 1
+
+
+def test_report_invalid_same_group_back_is_failure(tmp_path, monkeypatch):
+    """服务端把同一组发回来（池只剩这组/异常）→ 视为失败，不得假成功空转。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    _fp(monkeypatch)
+    hg._reset_swap_cooldown_for_tests()
+    cfg = {"telegram": {"api_id": "1001", "api_hash": "a" * 32, "_hosted_cred": True}}
+    assert hg.report_invalid_and_refetch(
+        cfg, "1001",
+        fetch=lambda *a, **k: {"ok": True, "api_id": "1001", "api_hash": "a" * 32},
+    ) is None
+    assert cfg["telegram"]["api_id"] == "1001"  # 原值不动
+
+
+def test_hot_reload_carries_hosted_cred_marker():
+    """热重载保护集必须含 ``_hosted_cred`` / ``_hosted_proxy``：api_id/api_hash、
+    托管标记、出口是同批注入的整体，漏任一个都会在热重载后造成错配。"""
+    from src.utils.config_manager import ConfigManager
+
+    keys = ConfigManager._HOT_RELOAD_PROTECTED_KEYS
+    assert "_hosted_cred" in keys
+    assert "_hosted_proxy" in keys
+    assert {"api_id", "api_hash"} <= keys
+
+
+def test_hosted_telegram_sends_tg_direct_and_applies_proxy(tmp_path, monkeypatch):
+    """P2-⑨ 智能派发：派发请求带 tg_direct；响应带出口 → 注入 _hosted_proxy。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    _fp(monkeypatch)
+    monkeypatch.setattr(hg, "_probe_tg_direct", lambda: False)  # 直连不通
+    cm = _CMT(tmp_path, {"api_id": "", "api_hash": ""})
+    seen = {}
+
+    def fake(u, m, b, bearer=""):
+        seen.update(b or {})
+        return {"ok": True, "api_id": "3003", "api_hash": "c" * 32, "name": "grp-proxy",
+                "proxy": {"scheme": "socks5", "host": "1.2.3.4", "port": 1080,
+                          "username": "x", "password": "y"}}
+
+    assert hg.ensure_hosted_telegram(cm, fetch=fake) is True
+    assert seen.get("tg_direct") is False, "直连探测结论必须随派发请求上报"
+    hp = cm.config["telegram"].get("_hosted_proxy")
+    assert hp and hp["host"] == "1.2.3.4" and hp["port"] == 1080
+
+
+def test_hosted_proxy_cleared_when_new_group_has_none(tmp_path, monkeypatch):
+    """换组到无出口的组 → 旧出口必须清（否则新组带旧出口连=错配出口 IP）。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    _fp(monkeypatch)
+    hg._reset_swap_cooldown_for_tests()
+    monkeypatch.setattr(hg, "_probe_tg_direct", lambda: None)
+    cfg = {"telegram": {"api_id": "1001", "api_hash": "a" * 32, "_hosted_cred": True,
+                        "_hosted_proxy": {"scheme": "socks5", "host": "9.9.9.9", "port": 1080}}}
+    got = hg.report_invalid_and_refetch(
+        cfg, "1001",
+        fetch=lambda *a, **k: {"ok": True, "api_id": "2002", "api_hash": "b" * 32})
+    assert got == ("2002", "b" * 32)
+    assert "_hosted_proxy" not in cfg["telegram"], "换到无出口组必须清掉旧出口"
+
+
+def test_probe_tg_direct_soft_fails(monkeypatch):
+    """预检模块不可用/抛错 → 返回 None（没有信息，绝不影响派发）。"""
+    import sys
+    monkeypatch.setitem(sys.modules, "src.integrations.tg_preflight", None)
+    assert hg._probe_tg_direct() is None
+
+
 # ── 托管识图注入（问题 #2 公网解）──────────────────────────────────────
 
 class _CMV:
@@ -322,3 +464,307 @@ def test_hosted_vision_noop_when_not_hosted(tmp_path, monkeypatch):
     cm = _CMV(tmp_path)
     cm.config["licensing"]["hosted_ai"]["enabled"] = False
     assert hg.ensure_hosted_vision(cm) is False
+
+
+# ── 混合形态（_lan_seed，2026-08-03）：LAN 直连优先 / 出网网关接管 ────────
+
+
+def _seed_vision() -> dict:
+    return {
+        "enabled": True, "_lan_seed": True, "provider": "openai_compatible",
+        "base_url": "http://192.168.0.176:11434/v1",
+        "base_urls": ["http://192.168.0.176:11434/v1", "http://192.168.0.140:11434/v1"],
+        "api_key": "ollama", "model": "qwen3-vl:8b-instruct",
+    }
+
+
+def test_hosted_vision_lan_seed_keeps_lan_when_alive(tmp_path, monkeypatch):
+    """办公室内网：种子 LAN 后端可达 → 保持直连，不注入网关。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMV(tmp_path, vision=_seed_vision())
+    assert hg.ensure_hosted_vision(cm, probe=lambda u: True) is False
+    v = cm.config["vision"]
+    assert v["base_url"] == "http://192.168.0.176:11434/v1"
+    assert v["api_key"] == "ollama"
+    assert not v.get("_hosted_vision")
+
+
+def test_hosted_vision_lan_seed_takes_over_when_dead(tmp_path, monkeypatch):
+    """外网机器：LAN 全不可达 → 网关接管（base_urls 必须一并改写，否则种子列表仍打死端点）。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    monkeypatch.delenv(hg.VISION_ENV_BASE, raising=False)
+    cm = _CMV(tmp_path, vision=_seed_vision())
+    assert hg.ensure_hosted_vision(cm, probe=lambda u: False) is True
+    v = cm.config["vision"]
+    assert v["base_url"] == "https://bd2026.cc/api/ai/v1"
+    assert v["base_urls"] == ["https://bd2026.cc/api/ai/v1"]
+    assert v["api_key"] == "cx.tok" and v.get("_hosted_vision") is True
+    assert v["_lan_backend"]["base_url"] == "http://192.168.0.176:11434/v1"
+    assert os.environ.get(hg.VISION_ENV_BASE) == "https://bd2026.cc/api/ai/v1"
+
+
+def test_hosted_vision_lan_seed_restores_on_return(tmp_path, monkeypatch):
+    """漫游回内网：LAN 恢复可达 → 还原直连、撤 env（防热重载把网关重放回来）。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMV(tmp_path, vision=_seed_vision())
+    assert hg.ensure_hosted_vision(cm, probe=lambda u: False) is True
+    assert hg.ensure_hosted_vision(cm, probe=lambda u: True) is False
+    v = cm.config["vision"]
+    assert v["base_url"] == "http://192.168.0.176:11434/v1"
+    assert v["base_urls"] == [
+        "http://192.168.0.176:11434/v1", "http://192.168.0.140:11434/v1"]
+    assert v["api_key"] == "ollama"
+    assert not v.get("_hosted_vision") and not v.get("_lan_backend")
+    assert not os.environ.get(hg.VISION_ENV_BASE)
+
+
+# ── 托管克隆语音（混合形态）──────────────────────────────────────────────
+
+
+class _CMM:
+    def __init__(self, tmp_path, ai_key="cx.tok", avatar_voice=None,
+                 voice_recognition=None):
+        self.config_path = str(tmp_path / "config" / "config.yaml")
+        Path(self.config_path).parent.mkdir(parents=True, exist_ok=True)
+        self.config = {
+            "ai": {"api_key": ai_key},
+            "licensing": {"hosted_ai": {"enabled": True, "site_url": "https://bd2026.cc"}},
+        }
+        if avatar_voice is not None:
+            self.config["avatar_voice"] = avatar_voice
+        if voice_recognition is not None:
+            self.config["voice_recognition"] = voice_recognition
+
+
+_HUB = "https://bd2026.cc/api/ai/hub"
+
+
+def _seed_voice() -> dict:
+    return {
+        "enabled": True, "_lan_seed": True,
+        "base_urls": ["http://192.168.0.117:7852", "http://192.168.0.140:7852"],
+        "hub_fish": {"enabled": True, "base_url": "http://192.168.0.176:9000"},
+    }
+
+
+def test_hosted_voice_lan_alive_appends_gateway_last(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, avatar_voice=_seed_voice())
+    assert hg.ensure_hosted_voice(cm, probe=lambda u: True) is True
+    av = cm.config["avatar_voice"]
+    assert av["base_urls"] == [
+        "http://192.168.0.117:7852", "http://192.168.0.140:7852", _HUB]
+    assert av["base_url"] == "http://192.168.0.117:7852"
+    assert av["hub_fish"]["enabled"] is True  # LAN 可达 → 高保真链不动
+    assert os.environ.get(hg.VOICE_ENV_FIRST) == "0"
+
+
+def test_hosted_voice_lan_dead_gateway_first_and_hubfish_off(tmp_path, monkeypatch):
+    """外网机器：网关排首位（省首条语音的死端点等待）+ hub_fish 就地禁用。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, avatar_voice=_seed_voice())
+    assert hg.ensure_hosted_voice(cm, probe=lambda u: False) is True
+    av = cm.config["avatar_voice"]
+    assert av["base_urls"][0] == _HUB and av["base_url"] == _HUB
+    assert av["base_urls"][1:] == [
+        "http://192.168.0.117:7852", "http://192.168.0.140:7852"]
+    assert av["hub_fish"]["enabled"] is False
+    assert av["hub_fish"]["_hosted_off"] is True
+    assert os.environ.get(hg.VOICE_ENV_FIRST) == "1"
+    assert os.environ.get(hg.VOICE_ENV_HUBFISH_OFF) == "1"
+
+
+def test_hosted_voice_back_on_lan_restores(tmp_path, monkeypatch):
+    """漫游回内网：LAN 回到首位，hub_fish 自动恢复。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, avatar_voice=_seed_voice())
+    assert hg.ensure_hosted_voice(cm, probe=lambda u: False) is True
+    assert hg.ensure_hosted_voice(cm, probe=lambda u: True) is True
+    av = cm.config["avatar_voice"]
+    assert av["base_urls"] == [
+        "http://192.168.0.117:7852", "http://192.168.0.140:7852", _HUB]
+    assert av["hub_fish"]["enabled"] is True
+    assert "_hosted_off" not in av["hub_fish"]
+    assert os.environ.get(hg.VOICE_ENV_FIRST) == "0"
+    assert not os.environ.get(hg.VOICE_ENV_HUBFISH_OFF)
+
+
+def test_hosted_voice_never_touches_unseeded_config(tmp_path, monkeypatch):
+    """用户/运维自配 TTS 端点（无 _lan_seed 标记）→ 绝不动。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    own = {"enabled": True, "base_urls": ["http://10.0.0.9:7852"]}
+    cm = _CMM(tmp_path, avatar_voice=own)
+    assert hg.ensure_hosted_voice(cm, probe=lambda u: True) is False
+    assert cm.config["avatar_voice"]["base_urls"] == ["http://10.0.0.9:7852"]
+
+
+def test_hosted_voice_requires_device_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, ai_key="", avatar_voice=_seed_voice())
+    assert hg.ensure_hosted_voice(cm, probe=lambda u: True) is False
+
+
+def test_apply_hosted_voice_replay_after_reload(tmp_path):
+    """模拟热重载：盘上种子刚读回 → env 回放（apply_*）复现同一注入结论。"""
+    cfg = {"avatar_voice": _seed_voice()}
+    assert hg.apply_hosted_voice(
+        cfg, _HUB, gateway_first=True, hub_fish_off=True) is True
+    av = cfg["avatar_voice"]
+    assert av["base_urls"][0] == _HUB
+    assert av["hub_fish"]["enabled"] is False
+
+
+# ── 托管语音识别（混合形态）──────────────────────────────────────────────
+
+
+def _seed_asr() -> dict:
+    return {
+        "enabled": True, "_lan_seed": True, "provider": "openai_compatible",
+        "base_url": "http://192.168.0.176:8765/v1", "api_key": "local",
+        "model": "large-v3-turbo", "timeout": 20, "max_retries": 0,
+        "fallback": [
+            {"provider": "avatar_whisper", "base_url": "http://192.168.0.140:7854"}],
+    }
+
+
+_GW = "https://bd2026.cc/api/ai/v1"
+
+
+def test_hosted_asr_lan_alive_appends_fallback(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, voice_recognition=_seed_asr())
+    assert hg.ensure_hosted_asr(cm, probe=lambda u: True) is True
+    vr = cm.config["voice_recognition"]
+    assert vr["base_url"] == "http://192.168.0.176:8765/v1"  # 主转写保持 LAN
+    assert vr["api_key"] == "local"
+    assert vr["fallback"][0]["provider"] == "avatar_whisper"
+    tail = vr["fallback"][-1]
+    assert tail["base_url"] == _GW
+    assert tail["api_key"] == hg.HOSTED_KEY_PLACEHOLDER
+    assert tail["_hosted_asr_entry"] is True
+    assert os.environ.get(hg.ASR_ENV_FIRST) == "0"
+
+
+def test_hosted_asr_lan_dead_swaps_primary(tmp_path, monkeypatch):
+    """外网机器：主转写直接换网关（原 LAN 主位入 _lan_primary 暂存），不吃 20s 死端点等待。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, voice_recognition=_seed_asr())
+    assert hg.ensure_hosted_asr(cm, probe=lambda u: False) is True
+    vr = cm.config["voice_recognition"]
+    assert vr["base_url"] == _GW
+    assert vr["api_key"] == hg.HOSTED_KEY_PLACEHOLDER
+    assert vr["_lan_primary"]["base_url"] == "http://192.168.0.176:8765/v1"
+    assert all(not e.get("_hosted_asr_entry") for e in vr["fallback"])
+    assert os.environ.get(hg.ASR_ENV_FIRST) == "1"
+
+
+def test_hosted_asr_back_on_lan_restores_primary(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, voice_recognition=_seed_asr())
+    assert hg.ensure_hosted_asr(cm, probe=lambda u: False) is True
+    assert hg.ensure_hosted_asr(cm, probe=lambda u: True) is True
+    vr = cm.config["voice_recognition"]
+    assert vr["base_url"] == "http://192.168.0.176:8765/v1"
+    assert vr["api_key"] == "local"
+    assert vr["fallback"][-1]["_hosted_asr_entry"] is True
+
+
+def test_hosted_asr_untouched_without_seed(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    own = {"enabled": True, "provider": "openai_compatible",
+           "base_url": "http://10.0.0.9:8765/v1"}
+    cm = _CMM(tmp_path, voice_recognition=own)
+    assert hg.ensure_hosted_asr(cm, probe=lambda u: True) is False
+    assert "fallback" not in cm.config["voice_recognition"]
+
+
+# ── 托管态下的调用端令牌解析 ────────────────────────────────────────────
+
+
+def test_svc_headers_falls_back_to_device_token(tmp_path, monkeypatch):
+    """客户机没有集群令牌文件 → 非回环端点带设备令牌（网关验它；LAN 401 同旧行为）。"""
+    from src.ai.avatar_voice import AvatarVoiceClient
+
+    monkeypatch.setenv("AITR_HOSTED_AI_KEY", "cx.dev.tok")
+    client = AvatarVoiceClient({
+        "stt": {"token_file": str(tmp_path / "no-such-token.txt")},
+    })
+    assert client._svc_headers(_HUB) == {"X-AH-Svc": "cx.dev.tok"}
+    assert client._svc_headers("http://127.0.0.1:7852") is None  # 回环恒不带头
+    monkeypatch.setenv("AITR_HOSTED_AI_KEY", "sk-not-device-token")
+    assert client._svc_headers(_HUB) is None  # 非 cx. 形态不冒充集群令牌
+
+
+async def test_openai_transcriber_resolves_hosted_key_at_call_time(tmp_path, monkeypatch):
+    """api_key='hosted' 占位 → 调用时取 env 设备令牌；未就绪则如实失败交 fallback。"""
+    import openai
+
+    from src.voice_transcriber import OpenAITranscriber
+
+    seen: dict = {}
+
+    def fake_client(**kwargs):
+        seen.update(kwargs)
+        raise RuntimeError("stop-here")
+
+    monkeypatch.setattr(openai, "OpenAI", fake_client)
+    wav = tmp_path / "a.wav"
+    wav.write_bytes(b"RIFF0000WAVE")
+    t = OpenAITranscriber({
+        "provider": "openai_compatible", "api_key": "hosted",
+        "base_url": _GW, "timeout": 5,
+    })
+    monkeypatch.setenv("AITR_HOSTED_AI_KEY", "cx.now")
+    assert await t._transcribe_impl(str(wav), "auto") is None  # 假客户端抛错 → 软失败
+    assert seen.get("api_key") == "cx.now"
+
+    seen.clear()
+    monkeypatch.delenv("AITR_HOSTED_AI_KEY", raising=False)
+    assert await t._transcribe_impl(str(wav), "auto") is None
+    assert not seen  # 令牌未就绪 → 根本不构建客户端，直接交 fallback
+
+
+def test_resolve_instance_id_from_chengjie_instances(monkeypatch):
+    monkeypatch.delenv("AITR_INSTANCE_ID", raising=False)
+    monkeypatch.delenv("AITR_DESKTOP_MODE", raising=False)
+    monkeypatch.setenv(
+        "AITR_DATA_DIR", r"D:\chengjie-instances\zhiliao_pilot\data")
+    assert hg.resolve_instance_id() == "zhiliao_pilot"
+
+
+def test_resolve_instance_id_ignores_desktop_data_dir(monkeypatch):
+    monkeypatch.delenv("AITR_INSTANCE_ID", raising=False)
+    monkeypatch.setenv("AITR_DATA_DIR", r"C:\Users\x\AppData\chatx\data")
+    assert hg.resolve_instance_id() == ""
+
+
+def test_fetch_device_token_forwards_instance_id(monkeypatch):
+    monkeypatch.delenv("AITR_DESKTOP_MODE", raising=False)
+    monkeypatch.setenv("AITR_INSTANCE_ID", "zhiliao_acme")
+    _fp(monkeypatch)
+    seen = {}
+
+    def fake_fetch(url, method, body):
+        seen.update(body)
+        return {"ok": True, "token": "cx.x", "model": "m", "exp": 9}
+
+    got = hg.fetch_device_token(fetch=fake_fetch)
+    assert got["ok"] and got["instance_id"] == "zhiliao_acme"
+    assert seen["instance_id"] == "zhiliao_acme"
+    assert seen["source"] == "hosted"
+
+
+def test_fetch_device_token_desktop_skips_instance_id(monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    monkeypatch.setenv("AITR_INSTANCE_ID", "should-ignore")
+    _fp(monkeypatch)
+    seen = {}
+
+    def fake_fetch(url, method, body):
+        seen.update(body)
+        return {"ok": True, "token": "cx.x", "model": "m", "exp": 9}
+
+    got = hg.fetch_device_token(fetch=fake_fetch)
+    assert "instance_id" not in seen
+    assert seen["source"] == "desktop"
+    assert got.get("instance_id") == ""

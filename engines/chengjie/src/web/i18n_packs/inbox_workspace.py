@@ -118,6 +118,10 @@ ZH = {
     "inbox.acct.today_convs": "今日 {n} 会话",
     "inbox.acct.unnamed_t": "点击给该账号起个名字，列表角标就不再是一串数字",
     "inbox.acct.view_chats": "查看该账号会话",
+    # ── 桌面壳「官方网页版」入口（2026-08-11 双栏融合：网页版=账号的打开方式，仅桌面壳内显示）──
+    "inbox.acct.open_web": "打开官方网页版",
+    "inbox.acct.open_web_t": "在桌面顶部标签打开/切到该平台官方网页版（标签内扫码登录，支持页内翻译与辅助回复）",
+    "inbox.acct.open_web_sent": "已在顶部标签打开网页版",
     # ── 账号 rail 可发现性 + scoped 账号视角（P0，2026-07-29）──
     "inbox.acct.picker_t": "账号总览 · 共 {n} 个账号",
     "inbox.acct.scroll_left": "向左滚动账号列表",
@@ -240,14 +244,14 @@ ZH = {
     "inbox.acct.align_st_aligned": "已对齐",
     "inbox.acct.align_st_excluded": "已排除",
     "inbox.acct.align_st_other": "其他",
-    "inbox.acct.align_pick_hint": "取消勾选可跳过个别账号（同平台多号风险会随勾选实时更新）",
-    "inbox.acct.align_auto_trim": "已为你默认只勾选每个平台的 1 个号，降低关联封号风险；可手动改。",
+    "inbox.acct.align_pick_hint": "取消勾选可跳过个别账号（同平台多号提示会随勾选实时更新）",
+    "inbox.acct.align_auto_trim": "已为你默认只勾选每个平台的 1 个号，让账号之间保持独立；可手动改。",
     "inbox.acct.align_fields_lbl": "对齐字段：",
     "inbox.acct.badge_persona": "已绑人设",
     "inbox.acct.badge_persona_t": "该账号已绑定人设「{id}」，可在详情页一键对齐官方资料",
     "inbox.acct.badge_churn": "改资料 {n} 次/7天",
     "inbox.acct.badge_churn_t": "近 7 天已成功修改官方资料 {n} 次，改动偏频繁，建议放缓以免平台风控",
-    "inbox.acct.align_same_plat_warn": "⚠ 同平台多号将使用相同官方昵称/头像，平台可能关联封号：",
+    "inbox.acct.align_same_plat_warn": "⚠ 同平台多号将使用相同官方昵称/头像，平台可能将其识别为关联账号：",
     "inbox.acct.align_same_plat_line": "· {plat} × {n} 个账号",
     "inbox.acct.profile_churn": "近 7 天已改资料 {n} 次，平台可能风控频繁变更，建议放缓",
     "inbox.acct.pu_name": "昵称",
@@ -377,7 +381,7 @@ ZH = {
     "inbox.cfg.np_pass": "密码(可空)",
     "inbox.cfg.np_port": "端口",
     "inbox.cfg.np_user": "用户名(可空)",
-    "inbox.cfg.proxy_hint": "代理资源需自备（住宅/移动 IP）。一号一 IP 可有效降低多账号关联风险。",
+    "inbox.cfg.proxy_hint": "代理资源需自备（住宅/移动 IP）。一号一 IP，账号之间更独立、运行更稳定。",
     "inbox.cfg.proxy_ip": "选择 IP",
     "inbox.cfg.proxy_on": "启用代理",
     "inbox.cfg.proxy_title": "代理配置",
@@ -467,6 +471,9 @@ ZH = {
     "inbox.connect.hint_scanned": "已检测到扫码，请在手机上确认登录…",
     "inbox.connect.mode_recommended": "推荐",
     "inbox.connect.mode_soon": "敬请期待",
+    # 「待配置」≠「敬请期待」：前者=功能已建成、填官方凭证即自助解锁（IG/Zalo official）；
+    # 后者=真没实现。混用会把已交付的能力说成没做（2026-08-10 IG 弹层实锤）。
+    "inbox.connect.mode_needs_config": "可开通",
     "inbox.connect.mode_tip": "选择登录方式：",
     "inbox.connect.modes_fail": "无法加载登录方式",
     "inbox.connect.next_scan": "下一步 · 开始扫码",
@@ -525,6 +532,9 @@ ZH = {
     "inbox.connect.err_checkpoint": "Facebook 对这个账号出了安全验证（检查点）。请先在服务器窗口里按官方提示完成验证／申诉，再重新接入。",
     "inbox.connect.err_password_error": "登录页提示账号或密码有误。请核对凭据后重新接入。",
     "inbox.connect.err_session_timeout": "本次接入超时结束（窗口期内没有完成登录）。点「重新打开登录窗口」再来一次即可。",
+    "inbox.connect.err_cred_invalid": "接入凭据已失效。凭据是自动配置的话，请等约 2 分钟后点「刷新二维码」——系统会自动更换一组；若你自己填过 API ID / Hash，请核对后重填。反复失败请联系客服。",
+    "inbox.connect.err_tg_unreachable": "本机连不上 Telegram 服务器。若在中国大陆需先配置代理：点「← 上一步」→ 账号配置 → 启用代理，填代理工具的本地地址（Clash 常用 127.0.0.1:7890，v2rayN 常用 127.0.0.1:10808），保存后回来刷新二维码。",
+    "inbox.connect.preflight_tg_blocked": "检测到本机无法直连 Telegram。若你在中国大陆，请点「← 上一步」→ 账号配置 → 启用代理（Clash 常用 127.0.0.1:7890，v2rayN 常用 127.0.0.1:10808）后再扫码；本次登录已配代理的可忽略此提示。",
     # ── 托管登录实时提示（hint_code，非终态：服务器上那个登录页此刻在要什么）──
     "inbox.connect.st_live_2fa": "等待两步验证",
     "inbox.connect.hint_live_2fa": "服务器上的登录窗口正在要验证码。请到那台机器上输入验证码，完成后这里会自动确认。",
@@ -537,32 +547,88 @@ ZH = {
     "inbox.connect.mode_d_protocol": "服务端协议直连，单机可挂大量账号，最省资源",
     "inbox.connect.mode_l_web": "网页扫码",
     "inbox.connect.mode_d_web": "隔离浏览器 + 平台网页二维码，兼容好、更像真人",
+    # Zalo 个人号扫码（zca-js 边车）：与官方 OA 并列的第二路，能力更全
+    "inbox.connect.mode_l_zalo_web": "扫码登录（个人号）",
+    "inbox.connect.mode_d_zalo_web": "用你自己的 Zalo 账号扫码登录，可收发文字/图片/语音/贴纸；建议搭配小号与独立代理使用",
+    # Instagram 个人号网页托管（Playwright 边车）：与官方 Graph 并列的第二路，不用二维码
+    "inbox.connect.mode_l_ig_web": "账号登录（个人号）",
+    "inbox.connect.mode_d_ig_web": "在服务器的隔离浏览器里登录你的 Instagram（账密 / 2FA，不用二维码），收发私信；建议搭配小号与独立代理使用",
+    # 个人号接入「稳定运行建议」（弹窗方式卡 + 扫码步 + 向导个人号主卡共用同一键；
+    # 2026-08-10 运营决策：由风险恐吓口径改为正向最佳实践口径，建议内容保留）
+    "inbox.connect.notice_unofficial": "💡 稳定运行建议：使用专用小号登录，并为每个账号配置独立代理，运行更稳定、体验更佳。",
+    # Telegram 手机号+验证码（login_kind=phone_code；次要入口，风险高于扫码）
+    "inbox.connect.mode_l_phone": "手机号 + 验证码",
+    "inbox.connect.mode_d_phone": "输入手机号收验证码登录（可能需两步验证密码）；无法扫自己屏幕时的备选",
+    "inbox.connect.notice_tg_phone": "💡 建议用专用小号，并为本次登录配置独立代理。号码验证码路径比扫码更容易触发限流，正式号请优先扫码。",
+    "inbox.connect.instr_tg_phone": "输入带国际区号的手机号（大陆 11 位可自动补 +86），我们会把验证码发到 Telegram App 或短信。",
+    "inbox.connect.instr_tg_phone_code": "验证码已发到你的 Telegram App / 短信，请输入后继续。",
+    "inbox.connect.next_phone": "下一步 · 输入手机号",
+    "inbox.connect.step_phone": "手机号",
+    "inbox.connect.step_code": "验证码",
+    "inbox.connect.state_phone": "填写手机号",
+    "inbox.connect.state_code": "等待验证码",
+    "inbox.connect.mask_phone": "准备手机号登录…",
+    "inbox.connect.restart_phone": "重新开始",
+    "inbox.connect.phone_expired": "本次验证已超时。请重新填写手机号领取新验证码。",
+    "inbox.connect.phone_ph": "+86 13800000000",
+    "inbox.connect.phone_hint": "请输入手机号（含国际区号；大陆 11 位可省略 +86）",
+    "inbox.connect.phone_send": "发送验证码",
+    "inbox.connect.phone_sending": "正在发送…",
+    "inbox.connect.phone_required": "请先填写手机号",
+    "inbox.connect.code_ph": "5–6 位验证码",
+    "inbox.connect.code_hint": "打开 Telegram App 或查看短信，输入收到的验证码",
+    "inbox.connect.code_submit": "确认登录",
+    "inbox.connect.code_checking": "正在验证…",
+    "inbox.connect.code_required": "请输入验证码",
+    "inbox.connect.code_rejected": "验证码不正确",
+    "inbox.connect.code_resend": "重发验证码",
+    "inbox.connect.code_resent": "验证码已重发",
+    "inbox.connect.code_resend_wait": "{sec}s 后可重发",
+    "inbox.connect.err_phone_invalid": "手机号格式不正确。请带国际区号重试（大陆示例 +86138…）。",
+    "inbox.connect.err_phone_banned": "该手机号已被 Telegram 限制，无法用验证码登录。请换号，或改用扫码关联设备。",
+    "inbox.connect.err_phone_unoccupied": "该号码尚未注册 Telegram。请先在手机 App 完成注册，再回来登录（本系统不会代注册）。",
+    "inbox.connect.err_code_invalid": "验证码错误，请重新输入。",
+    "inbox.connect.err_code_expired": "验证码已过期。请点「重发验证码」再试一次。",
     "inbox.connect.mode_l_device": "真机 / 模拟器",
-    "inbox.connect.mode_d_device": "在真机 / 模拟器上完成官方 App 登录，封号风险最低，账号数受设备数限制",
+    "inbox.connect.mode_d_device": "在真机 / 模拟器上完成官方 App 登录，最稳妥，账号数受设备数限制",
     # Messenger 的 device 专属描述：FB App 是账密登录，没有扫码环节
-    "inbox.connect.mode_d_msg_device": "在真机 / 模拟器上完成 Facebook App 官方登录，封号风险最低，账号数受设备数限制",
+    "inbox.connect.mode_d_msg_device": "在真机 / 模拟器上完成 Facebook App 官方登录，最稳妥，账号数受设备数限制",
     # Messenger 的 web 不是扫码：Facebook 网页端没有设备配对二维码，登录只能在服务器上做。
     "inbox.connect.mode_l_msg_web": "服务器托管登录",
     "inbox.connect.mode_d_msg_web": "在服务器的隔离浏览器内完成 Facebook 官方登录（账密 / 2FA），不使用二维码",
     # 官方 API 接入（Instagram / Zalo 等纯官方渠道，凭证经接入向导配置）
     "inbox.connect.mode_l_official": "官方 API 接入",
-    "inbox.connect.mode_d_official": "平台官方开放接口，最合规零封号风险；凭证在接入向导里配置，无需扫码",
+    "inbox.connect.mode_d_official": "平台官方开放接口，最合规稳定；凭证在接入向导里配置，无需扫码",
     # ── 登录方式能力标签（chips）──
     "inbox.connect.cap_multi": "可多开",
     "inbox.connect.cap_light": "省资源",
     "inbox.connect.cap_compat": "兼容好",
     "inbox.connect.cap_human": "更像真人",
-    "inbox.connect.cap_antiban": "封号风险最低",
+    "inbox.connect.cap_antiban": "最稳妥",
     "inbox.connect.cap_need_device": "需手机设备",
     "inbox.connect.cap_server": "服务器端完成",
     "inbox.connect.cap_need_ops": "首次需运维配置",
     "inbox.connect.cap_compliant": "官方合规",
     # ── 不可用方式的解释卡（点击灰色选项后展开：为什么 / 要做什么 / 现在怎么办）──
     "inbox.connect.unavail_title": "这个方式暂时不能用",
+    # credentials 形态（官方 API 渠道）的引导态变体：不是故障、不是没做，
+    # 是「等你把凭证填进向导」。标题/提示语按此改口吻，处置按钮=去接入向导。
+    "inbox.connect.unavail_title_config": "还差官方凭证",
+    "inbox.connect.unavail_cue_config": "功能已就绪，填好凭证即可用",
+    "inbox.connect.unavail_alt_config":
+        "这不是故障：功能已建成，到「接入向导」填好凭证保存即自动上线；期间可先接入其他平台开始工作。",
     "inbox.connect.unavail_why_t": "为什么",
     "inbox.connect.unavail_how_t": "需要做什么",
     "inbox.connect.unavail_alt_t": "现在可以怎么办",
     "inbox.connect.unavail_alt": "先选用上面其他可用的登录方式，或先接入别的平台；本方式就绪后会自动可选。",
+    # 规划中形态（not_implemented）的三件套：标题不再说「暂时」（暗示等等就好），
+    # alt 不再许「就绪后自动可选」的空头支票——处置就一个：改用可用方式。
+    "inbox.connect.unavail_title_planned": "这个方式还未上线",
+    "inbox.connect.unavail_cue_planned": "未上线 · 查看替代方式",
+    "inbox.connect.unavail_alt_planned":
+        "直接改用其他可用的登录方式（推荐带绿色标记的那个）；或先接入别的平台。",
+    # 规划中说明卡的直达按钮：一键切到当前平台真正可用的方式（{mode}=方式名）
+    "inbox.connect.use_alt_btn": "改用「{mode}」",
     "inbox.connect.unavail_back": "← 返回方式列表",
     # 引导式启用（Telegram 协议多开）：解释卡内直接填凭据开闸
     "inbox.connect.enable_t": "在这里直接启用",
@@ -585,6 +651,11 @@ ZH = {
     "inbox.connect.rc_not_enabled_how":
         "在下方「在这里直接启用」填入 Telegram API ID/Hash 并保存，或若凭据已配置则点「一键启用」；"
         "保存后立即生效，无需重启。",
+    # noform 变体：自助面板只在 Telegram 协议/手机号卡上渲染——其他 (平台, 方式) 走到
+    # not_enabled 时若沿用上面那句「在下方填入」，用户会照指引找一个不存在的表单
+    # （2026-08 creds_missing 曾踩过的同款死胡同，这次从文案层根治）。
+    "inbox.connect.rc_not_enabled_how_noform":
+        "该方式的开关未开启，需要管理员在系统配置中启用后才可选；现在可先改用其他可用的登录方式。",
     "inbox.connect.rc_needs_server_setup_why":
         "Messenger 走的是服务器托管登录：由服务器上的隔离浏览器打开 Facebook 登录页、"
         "人工完成一次登录后长期保持在线。目前服务器端组件还没就绪，所以这条路暂时走不通。"
@@ -602,6 +673,9 @@ ZH = {
         "这条链路需要平台开发者凭据（{field}），目前还没配置。",
     "inbox.connect.rc_creds_missing_how":
         "在下方「在这里直接启用」填入并保存即可，保存后立即生效；"
+        "也可由运维开启中央凭据池，让新账号免申请直接用。",
+    "inbox.connect.rc_creds_missing_how_noform":
+        "缺少平台开发者凭据（{field}）。请联系管理员配置；"
         "也可由运维开启中央凭据池，让新账号免申请直接用。",
     "inbox.connect.rc_service_down_why":
         "本机的连接服务 {svc} 没有响应（{url}）。开关是开的，但服务没跑起来，扫码会卡在生成二维码这一步。",
@@ -622,9 +696,21 @@ ZH = {
     # official 渠道（Instagram/Zalo）：处置永远是「去接入向导」，与 Telegram 的
     # 「在这里直接启用」面板无关，故单列一码各说各话
     "inbox.connect.rc_official_creds_missing_why":
-        "该渠道走平台官方 API 接入，尚未就绪：{field}。",
+        "该渠道走平台官方 API 接入，还差官方凭证未配置：{field}。",
     "inbox.connect.rc_official_creds_missing_how":
         "到「接入向导」选择该渠道，填入官方凭证并保存——保存即自动开通上线，无需扫码、无需重启。",
+    # 同码双态（params.state=switch_off）：凭证已齐、只差渠道启用开关——
+    # 码不变（诊断契约见 platform_readiness._official_blockers），文案各说各话
+    "inbox.connect.rc_official_switch_off_why":
+        "官方凭证已配置齐全，只差渠道启用开关还没打开。",
+    "inbox.connect.rc_official_switch_off_how":
+        "到「接入向导」打开该渠道重新保存一次即可自动开启——无需重新填凭证、无需重启。",
+    # 功能不存在（not_implemented，如 whatsapp/web 占位）：诚实说「没做」——
+    # 不是故障、不是配置问题，做任何设置都不会让它变可用；处置＝改用别的方式。
+    "inbox.connect.rc_not_implemented_why":
+        "这个登录方式还没有上线（在产品规划中）——不是故障，也不是配置问题，现在做任何设置都不会让它变可用。",
+    "inbox.connect.rc_not_implemented_how":
+        "无需任何操作、也不用等待：直接改用列表里其他可用的登录方式即可（推荐带绿色「推荐」标记的那个）。",
     # 方式卡上的短标签（一眼看出卡在哪一环，不用点开说明卡）
     "inbox.connect.bk_not_enabled": "未启用",
     "inbox.connect.bk_dep_missing": "缺组件",
@@ -635,8 +721,42 @@ ZH = {
     "inbox.connect.bk_needs_server_setup": "需运维配置",
     "inbox.connect.bk_login_disabled": "接入已关闭",
     "inbox.connect.bk_orchestrator_off": "不会常驻在线",
+    "inbox.connect.bk_not_implemented": "规划中",
     # official 渠道解释卡内的向导跳转按钮
     "inbox.connect.cred_go_wizard": "去接入向导",
+    # ── 官方渠道开通引导卡增强（2026-08-10：准备清单 / 三步指示 / 权限分流 / 就绪提示）──
+    "inbox.connect.official_ready": "{plat} 官方渠道已开通，账号已自动上线，可开始接待",
+    "inbox.connect.prep_t": "需要准备",
+    "inbox.connect.prep_req": "必填",
+    "inbox.connect.prep_opt": "可选",
+    "inbox.connect.prep_done": "已填",
+    "inbox.connect.prep_time": "约 3 分钟",
+    "inbox.connect.prep_console": "打开 {plat} 官方后台 ↗",
+    "inbox.connect.cred_step1": "在接入向导填入官方凭证",
+    "inbox.connect.cred_step2": "保存即自动开通（免重启）",
+    "inbox.connect.cred_step3": "回到这里自动解锁，开始接待",
+    # 凭证保存是主管权限（向导 _require_supervisor）：普通坐席给「复制指引发管理员」
+    "inbox.connect.cred_need_admin": "凭证保存需要主管 / 管理员账号操作。",
+    "inbox.connect.cred_copy_admin": "复制给管理员的操作指引",
+    "inbox.connect.cred_copied": "指引已复制，可转发给管理员",
+    "inbox.connect.cred_admin_text":
+        "请管理员完成 {plat} 官方渠道接入：\n"
+        "1. 用主管/管理员账号打开 {url}；\n"
+        "2. 填入 {plat} 官方凭证（{fields}）并保存；\n"
+        "3. 保存即自动开通上线，坐席工作台会自动出现该渠道账号。",
+    # 平台政策注释（前端按 win_note_<platform> 动态取键，缺键即不显示）
+    "inbox.connect.win_note_zalo":
+        "「7 天互动窗」＝Zalo OA 客服消息政策：用户最后一次互动后 7 天内可主动发消息，"
+        "超窗需等对方再次发起。这是平台规则，不是本系统限制。",
+    "inbox.connect.win_note_whatsapp":
+        "「24 小时客服窗」＝WhatsApp Cloud API 政策：用户最后一次发消息后 24 小时内可自由回复，"
+        "超窗只能发送预先审核的模板消息。平台规则，非本系统限制。",
+    "inbox.connect.win_note_messenger":
+        "Messenger 平台政策：标准消息窗为用户最后互动后 24 小时，超窗发送受平台消息标签规则约束。",
+    "inbox.connect.win_note_instagram":
+        "Instagram 私信同样有 24 小时互动窗（获批的人工坐席标签可延至 7 天），超窗需等用户再次发起。",
+    "inbox.connect.win_note_line":
+        "LINE 官方账号没有互动窗限制：回复消息免费，主动推送计入官方账号方案的月度消息额度。",
     "inbox.connect.recheck": "重新检测",
     "inbox.connect.rechecking": "检测中…",
     "inbox.connect.recheck_same": "状态没变化，仍未就绪。",
@@ -692,6 +812,11 @@ ZH = {
         "Instagram 走官方 API 接入：在「接入向导」里填好 Meta 凭证即自动上线，无需扫码。",
     "inbox.connect.instr_zalo":
         "Zalo 走官方 OA API 接入：在「接入向导」里填好 OA 凭证即自动上线，无需扫码。",
+    "inbox.connect.instr_zalo_web":
+        "用手机 Zalo：右上角 ＋ → 扫码（QR），扫描本窗口二维码。登录成功后本窗口会自动确认。",
+    "inbox.connect.instr_ig_web":
+        "服务器上已打开 Instagram 官方登录窗口，请在该机器上完成登录（账密 / 2FA）。"
+        "完成后本窗口会自动确认——本方式不使用二维码，无需用手机扫描。",
     # 协议 provider 自带指引的 i18n 键（provider 返回 instruction_key 指到这里）
     "inbox.connect.instr_tg_protocol": "用手机 Telegram：设置 → 设备 → 关联桌面设备，扫描二维码。",
     "inbox.connect.instr_wa_protocol": "用手机 WhatsApp：设置 → 已关联的设备 → 关联新设备，扫描二维码。",
@@ -781,6 +906,8 @@ ZH = {
     "inbox.cp.exec_fail": "执行失败，请重试",
     "inbox.cp.exec_ok": "已执行",
     "inbox.cp.fill_toast": "已填入输入框，可编辑后发送",
+    "inbox.wf.drawer_title": "跟进 SOP（工作链）管理",
+    "inbox.wf.drawer_close": "关闭",
     "inbox.cp.h.ai_analysis": "AI 对话分析",
     "inbox.cp.h.ai_reply": "回复工坊",
     "inbox.cp.h.chain": "跟进 SOP（工作链）",
@@ -1509,6 +1636,17 @@ ZH = {
     "inbox.toast.list_neterr": "网络错误，请检查连接",
     "inbox.toast.net_err": "网络错误",
     "inbox.toast.not_in_list": "该会话不在当前列表（可能已归档），请先切换到归档视图",
+    # 深链失败出路（2026-08-09 收口：按 conv-probe 真实原因分支，不再一律「可能已归档」）
+    "inbox.toast.conv_archived_opened": "该会话已归档——已为你打开，可在会话头部取消归档",
+    "inbox.toast.conv_readonly_removed": "该会话所属账号已移除，以下为只读历史",
+    "inbox.toast.conv_autofixed": "会话引用已自动校正（原引用的账号段不准确）",
+    "inbox.toast.conv_acct_offline": "该会话所属账号已登出，暂无法打开；历史保留，账号重登后可见",
+    "inbox.toast.conv_not_found": "找不到该会话：可能从未接入收件箱（演练/测试数据），或已被清理",
+    # 案例条（案例页深链 &case=）
+    "inbox.casebar.close_case": "结案",
+    "inbox.casebar.goto_cases": "案例页",
+    "inbox.casebar.resolved_via_ws": "已在工作台处理",
+    "inbox.casebar.closed_ok": "已结案，案例页已销账",
     "inbox.toast.note_cc": "已自动抄送主管：{name}",
     "inbox.toast.note_deleted": "注解已删除",
     "inbox.toast.note_need_content": "请先选择会话并输入内容",
@@ -1548,6 +1686,12 @@ ZH = {
     "inbox.voice.risk_hub_down": "当前音色的声源（hub）不可达，发送会被拒——可换「系统通用音色」或其他就绪音色",
     "inbox.voice.risk_hub_recent": "当前音色的声源（hub）最近合成失败过，发送可能被拒",
     "inbox.voice.risk_not_ready": "当前音色登记不完整（缺授权/参考音），发送会失败",
+    "inbox.voice.risk_persona_mismatch": "语音音色「{voice}」≠ 会话身份「{ident}」——客户会听出换人；建议选「跟随会话人设」",
+    "inbox.voice.stage_synth": "合成中",
+    "inbox.voice.stage_send": "投递中",
+    "inbox.voice.reconciling": "网络超时，正在核对发送结果…",
+    "inbox.voice.result_unknown": "发送结果未知：已刷新会话，请先确认这条语音是否已出现在消息流，再决定要不要重发（盲目重发可能让客户收到两条）",
+    "inbox.voice.tip_preview_first": "小技巧：长句先点「试听」确认，再发送会直接复用试听音频——秒回，且发出的就是你听到的",
     "inbox.voice.q_warn_tag": "(音质⚠)",
     "inbox.voice.q_crit_tag": "(音质⛔)",
     "inbox.voice.copied": "✅ 已复制音色",
@@ -1681,11 +1825,14 @@ ZH = {
     "inbox.xl.docx_translating": "翻译中（保留版式）…",
     "inbox.xl.download_txt": "下载 .txt",
     "inbox.xl.eng_ai": "AI引擎",
+    "inbox.xl.eng_auto": "自动",
     "inbox.xl.eng_eff_t": "目标语 {tgt}：实际由 {eff} 处理",
     "inbox.xl.eng_no_avail_t": "目标语 {tgt}：无可用引擎",
     "inbox.xl.eng_notready": "翻译未就绪",
     "inbox.xl.eng_off": "未启用",
     "inbox.xl.eng_origin": "原文",
+    "inbox.xl.eng_pick": "引擎",
+    "inbox.xl.eng_pick_t": "本会话首选翻译引擎：自动=按可用性智能兜底；选定引擎会记住（跨刷新生效），失败时仍自动回落其他引擎",
     "inbox.xl.eng_plain_t": "目标语 {tgt}：{eff}",
     "inbox.xl.eng_reason_unconfig": "{eff} · {primary}未配置",
     "inbox.xl.eng_reason_unsupported": "{primary}不支持·{eff}兜底",
@@ -1890,6 +2037,10 @@ EN = {
     "inbox.acct.today_convs": "Today {n} chats",
     "inbox.acct.unnamed_t": "Click to name this account so the list badge isn’t just a string of digits",
     "inbox.acct.view_chats": "View this account's chats",
+    # ── Desktop-shell "official web app" entry (2026-08-11 rail fusion: web app = a way to open an account; desktop shell only) ──
+    "inbox.acct.open_web": "Open official web app",
+    "inbox.acct.open_web_t": "Open/switch to this platform's official web app in the desktop tab strip (scan QR inside the tab; in-page translation & assisted replies)",
+    "inbox.acct.open_web_sent": "Opened in the desktop tab strip",
     # ── Account rail discoverability + scoped account view (P0, 2026-07-29) ──
     "inbox.acct.picker_t": "Account overview · {n} accounts",
     "inbox.acct.scroll_left": "Scroll account list left",
@@ -2012,14 +2163,14 @@ EN = {
     "inbox.acct.align_st_aligned": "already aligned",
     "inbox.acct.align_st_excluded": "excluded",
     "inbox.acct.align_st_other": "other",
-    "inbox.acct.align_pick_hint": "Uncheck accounts to skip them (same-platform risk updates live as you toggle)",
-    "inbox.acct.align_auto_trim": "Defaulted to just 1 account per platform to cut ban-correlation risk; you can change this.",
+    "inbox.acct.align_pick_hint": "Uncheck accounts to skip them (the same-platform notice updates live as you toggle)",
+    "inbox.acct.align_auto_trim": "Defaulted to just 1 account per platform so each account stays independent; you can change this.",
     "inbox.acct.align_fields_lbl": "Fields to align:",
     "inbox.acct.badge_persona": "Persona",
     "inbox.acct.badge_persona_t": "This account is bound to persona \"{id}\"; align its official profile from the detail panel",
     "inbox.acct.badge_churn": "{n} edits/7d",
     "inbox.acct.badge_churn_t": "Official profile changed {n} times in 7 days — slow down to avoid platform risk controls",
-    "inbox.acct.align_same_plat_warn": "⚠ Multiple accounts on the same platform will share the same official name/avatar — ban-correlation risk:",
+    "inbox.acct.align_same_plat_warn": "⚠ Multiple accounts on the same platform will share the same official name/avatar — the platform may treat them as linked:",
     "inbox.acct.align_same_plat_line": "· {plat} × {n} account(s)",
     "inbox.acct.profile_churn": "Official profile changed {n} times in 7 days — platforms may flag frequent edits; slow down",
     "inbox.acct.pu_name": "name",
@@ -2149,7 +2300,7 @@ EN = {
     "inbox.cfg.np_pass": "Password (optional)",
     "inbox.cfg.np_port": "Port",
     "inbox.cfg.np_user": "Username (optional)",
-    "inbox.cfg.proxy_hint": "Bring your own proxy (residential/mobile IP). One IP per account effectively lowers multi-account linkage risk.",
+    "inbox.cfg.proxy_hint": "Bring your own proxy (residential/mobile IP). One IP per account keeps accounts independent and stable.",
     "inbox.cfg.proxy_ip": "Choose IP",
     "inbox.cfg.proxy_on": "Enable proxy",
     "inbox.cfg.proxy_title": "Proxy settings",
@@ -2235,6 +2386,7 @@ EN = {
     "inbox.connect.hint_scanned": "Scan detected; please confirm the login on your phone…",
     "inbox.connect.mode_recommended": "Recommended",
     "inbox.connect.mode_soon": "Coming soon",
+    "inbox.connect.mode_needs_config": "Ready to set up",
     "inbox.connect.mode_tip": "Choose a login method:",
     "inbox.connect.modes_fail": "Failed to load login methods",
     "inbox.connect.next_scan": "Next · Start QR scan",
@@ -2293,6 +2445,9 @@ EN = {
     "inbox.connect.err_checkpoint": "Facebook raised a security checkpoint for this account. Clear it in the sign-in window on the server first, then connect again.",
     "inbox.connect.err_password_error": "The sign-in page reported a wrong username or password. Double-check the credentials and try again.",
     "inbox.connect.err_session_timeout": "This attempt timed out — sign-in wasn’t completed in time. Click “Reopen sign-in window” to try again.",
+    "inbox.connect.err_cred_invalid": "The connection credentials are no longer valid. If they were provisioned automatically, wait about 2 minutes and click “Refresh QR code” — the system will swap in a fresh set. If you entered your own API ID / Hash, double-check and re-enter them. Contact support if it keeps failing.",
+    "inbox.connect.err_tg_unreachable": "This computer can’t reach Telegram’s servers. If you’re on a restricted network, set up a proxy first: click “← Back” → Account settings → Enable proxy, and enter your proxy tool’s local address (Clash usually 127.0.0.1:7890, v2rayN 127.0.0.1:10808), save, then refresh the QR code.",
+    "inbox.connect.preflight_tg_blocked": "This computer can’t reach Telegram directly. If you’re on a restricted network, click “← Back” → Account settings → Enable proxy (Clash usually 127.0.0.1:7890, v2rayN 127.0.0.1:10808) before scanning; ignore this notice if you already set a proxy for this login.",
     # ── Hosted-login live hints (hint_code — not terminal: what the page is asking for right now) ──
     "inbox.connect.st_live_2fa": "Waiting for 2FA",
     "inbox.connect.hint_live_2fa": "The sign-in window on the server is asking for a verification code. Enter it on that machine — this page confirms automatically once you do.",
@@ -2305,31 +2460,90 @@ EN = {
     "inbox.connect.mode_d_protocol": "Direct protocol connection; run many accounts on one machine, lightest on resources",
     "inbox.connect.mode_l_web": "Web QR",
     "inbox.connect.mode_d_web": "Isolated browser + the platform’s web QR code; broad compatibility, more human-like",
+    # Zalo personal-account QR (zca-js sidecar): a second path alongside the official OA — fuller capability
+    "inbox.connect.mode_l_zalo_web": "Scan to log in (personal account)",
+    "inbox.connect.mode_d_zalo_web": "Log in by scanning with your own Zalo account; send/receive text, images, voice and stickers. Works best with a secondary account plus a dedicated proxy.",
+    # Instagram personal-account hosted login (Playwright sidecar): a second path alongside official Graph — no QR
+    "inbox.connect.mode_l_ig_web": "Log in (personal account)",
+    "inbox.connect.mode_d_ig_web": "Log in to your Instagram in an isolated server browser (password / 2FA, no QR) and handle DMs. Works best with a secondary account plus a dedicated proxy.",
+    # Personal-account best-practice tip (shared key across modal mode card + QR step + wizard personal card;
+    # 2026-08-10 ops decision: advisory tone replaces the former risk-warning tone, advice content kept)
+    "inbox.connect.notice_unofficial": "💡 Best practice: log in with a dedicated secondary account and give each account its own proxy for the smoothest, most stable experience.",
+    # Telegram phone + code (login_kind=phone_code; secondary to QR)
+    "inbox.connect.mode_l_phone": "Phone + code",
+    "inbox.connect.mode_d_phone": "Sign in with a phone number and SMS/App code (2FA password may follow). Best when you cannot scan your own screen.",
+    "inbox.connect.notice_tg_phone": "💡 Prefer a dedicated secondary number and an independent proxy for this login. Phone-code sign-in hits rate limits more easily than QR — use QR for primary accounts.",
+    "inbox.connect.instr_tg_phone": "Enter a phone number with country code (11-digit CN numbers auto-get +86). We send the code to Telegram or SMS.",
+    "inbox.connect.instr_tg_phone_code": "Code sent to your Telegram app / SMS — enter it to continue.",
+    "inbox.connect.next_phone": "Next · Enter phone",
+    "inbox.connect.step_phone": "Phone",
+    "inbox.connect.step_code": "Code",
+    "inbox.connect.state_phone": "Enter phone number",
+    "inbox.connect.state_code": "Waiting for code",
+    "inbox.connect.mask_phone": "Preparing phone login…",
+    "inbox.connect.restart_phone": "Start over",
+    "inbox.connect.phone_expired": "This verification timed out. Enter the phone number again for a new code.",
+    "inbox.connect.phone_ph": "+86 13800000000",
+    "inbox.connect.phone_hint": "Phone number with country code (CN 11-digit numbers can omit +86)",
+    "inbox.connect.phone_send": "Send code",
+    "inbox.connect.phone_sending": "Sending…",
+    "inbox.connect.phone_required": "Enter a phone number first",
+    "inbox.connect.code_ph": "5–6 digit code",
+    "inbox.connect.code_hint": "Open Telegram or check SMS, then enter the code you received",
+    "inbox.connect.code_submit": "Confirm login",
+    "inbox.connect.code_checking": "Verifying…",
+    "inbox.connect.code_required": "Enter the verification code",
+    "inbox.connect.code_rejected": "Incorrect code",
+    "inbox.connect.code_resend": "Resend code",
+    "inbox.connect.code_resent": "Code resent",
+    "inbox.connect.code_resend_wait": "Resend in {sec}s",
+    "inbox.connect.err_phone_invalid": "Invalid phone number. Retry with a country code (CN example: +86138…).",
+    "inbox.connect.err_phone_banned": "This number is restricted by Telegram and cannot use code login. Try another number, or use QR device linking.",
+    "inbox.connect.err_phone_unoccupied": "This number is not registered on Telegram yet. Register in the mobile app first — we never auto-sign-up.",
+    "inbox.connect.err_code_invalid": "Incorrect code. Please try again.",
+    "inbox.connect.err_code_expired": "Code expired. Tap “Resend code” and try again.",
     "inbox.connect.mode_l_device": "Real device / emulator",
-    "inbox.connect.mode_d_device": "Sign in with the official app on a real device or emulator; lowest ban risk, capped by how many devices you have",
+    "inbox.connect.mode_d_device": "Sign in with the official app on a real device or emulator — the most reliable option; account count capped by your devices",
     # Messenger device flavor: the FB app signs in with credentials — no QR step
-    "inbox.connect.mode_d_msg_device": "Sign in with the official Facebook app on a real device or emulator; lowest ban risk, capped by device count",
+    "inbox.connect.mode_d_msg_device": "Sign in with the official Facebook app on a real device or emulator — the most reliable option; capped by device count",
     "inbox.connect.mode_l_msg_web": "Server-hosted login",
     "inbox.connect.mode_d_msg_web": "Sign in to Facebook (password / 2FA) inside an isolated browser on the server — no QR code involved",
     # Official API onboarding (Instagram / Zalo — credentials via the setup wizard)
     "inbox.connect.mode_l_official": "Official API",
-    "inbox.connect.mode_d_official": "The platform's official API — fully compliant, zero ban risk; credentials are configured in the setup wizard, no QR scan",
+    "inbox.connect.mode_d_official": "The platform's official open API — fully compliant and stable; credentials are configured in the setup wizard, no QR scan",
     # ── Capability chips ──
     "inbox.connect.cap_multi": "Multi-account",
     "inbox.connect.cap_light": "Lightweight",
     "inbox.connect.cap_compat": "Broad compatibility",
     "inbox.connect.cap_human": "More human-like",
-    "inbox.connect.cap_antiban": "Lowest ban risk",
+    "inbox.connect.cap_antiban": "Most reliable",
     "inbox.connect.cap_need_device": "Phone required",
     "inbox.connect.cap_server": "Done on the server",
     "inbox.connect.cap_need_ops": "One-time ops setup",
     "inbox.connect.cap_compliant": "Officially compliant",
     # ── Explanation card for unavailable methods ──
     "inbox.connect.unavail_title": "This method isn’t available yet",
+    # credentials-kind (official API channels) onboarding variant: not broken,
+    # not unbuilt — just waiting for credentials in the Setup Wizard.
+    "inbox.connect.unavail_title_config": "Just add official credentials",
+    "inbox.connect.unavail_cue_config": "Built and ready — add credentials to enable",
+    "inbox.connect.unavail_alt_config":
+        "Nothing is broken: the feature is fully built and goes live automatically once "
+        "you save the official credentials in the Setup Wizard. You can connect another "
+        "platform in the meantime.",
     "inbox.connect.unavail_why_t": "Why",
     "inbox.connect.unavail_how_t": "What needs to happen",
     "inbox.connect.unavail_alt_t": "What you can do now",
     "inbox.connect.unavail_alt": "Pick one of the available methods above, or connect another platform first — this option unlocks automatically once it’s ready.",
+    # Planned-kind (not_implemented) trio: no “yet”-style hinting that waiting helps,
+    # and no “unlocks automatically” promise — the one remedy is switching methods.
+    "inbox.connect.unavail_title_planned": "This method hasn’t shipped yet",
+    "inbox.connect.unavail_cue_planned": "Not shipped yet · see alternatives",
+    "inbox.connect.unavail_alt_planned":
+        "Just switch to another available login method (the “Recommended” one is the "
+        "best bet), or connect another platform first.",
+    # One-tap jump on the planned card to a method that actually works ({mode}=label)
+    "inbox.connect.use_alt_btn": "Use “{mode}” instead",
     "inbox.connect.unavail_back": "← Back to methods",
     # Guided enablement (Telegram protocol multi-account): fill credentials inline
     "inbox.connect.enable_t": "Enable it right here",
@@ -2355,6 +2569,13 @@ EN = {
         "Use “Enable it right here” below to save Telegram API ID/Hash, or tap "
         "“Enable protocol multi-account” if credentials are already set — takes "
         "effect immediately, no restart.",
+    # noform variant: the self-serve panel only renders on Telegram protocol/phone
+    # cards — every other (platform, mode) hitting not_enabled must not point users
+    # at a form that doesn't exist below (the 2026-08 creds_missing dead-end, fixed
+    # at the copy layer this time).
+    "inbox.connect.rc_not_enabled_how_noform":
+        "This method’s switch is off — an administrator needs to enable it in the "
+        "system configuration. In the meantime, use another available login method.",
     "inbox.connect.rc_needs_server_setup_why":
         "Messenger uses a server-hosted login: an isolated browser on the server opens the Facebook "
         "login page, someone signs in once, and the session is then kept alive. The server-side "
@@ -2374,6 +2595,10 @@ EN = {
     "inbox.connect.rc_creds_missing_how":
         "Fill them in under “Enable it right here” below — it takes effect immediately. "
         "Ops can also turn on the shared credential pool so new accounts need no application.",
+    "inbox.connect.rc_creds_missing_how_noform":
+        "Platform developer credentials ({field}) are missing. Ask an administrator to "
+        "configure them; ops can also enable the shared credential pool so new accounts "
+        "need no application.",
     "inbox.connect.rc_service_down_why":
         "The local connector service {svc} isn’t responding ({url}). The switch is on, but the "
         "service isn’t running, so QR generation will hang.",
@@ -2395,10 +2620,26 @@ EN = {
         "For long-running accounts, ask ops to enable platform_login.orchestrator_enabled.",
     # Official channels (Instagram/Zalo): the fix is always the setup wizard
     "inbox.connect.rc_official_creds_missing_why":
-        "This channel connects via the platform's official API and isn't ready yet: {field}.",
+        "This channel connects via the platform's official API; these official credentials "
+        "are still missing: {field}.",
     "inbox.connect.rc_official_creds_missing_how":
         "Open the Setup Wizard, pick this channel and save its official credentials — it goes "
         "online automatically on save. No QR scan, no restart.",
+    # Same code, second state (params.state=switch_off): credentials complete,
+    # only the channel enable switch is off (contract: platform_readiness._official_blockers)
+    "inbox.connect.rc_official_switch_off_why":
+        "Official credentials are all set — only the channel enable switch is still off.",
+    "inbox.connect.rc_official_switch_off_how":
+        "Open the Setup Wizard and simply re-save this channel: it switches on automatically. "
+        "No need to re-enter credentials, no restart.",
+    # Feature doesn't exist (not_implemented, e.g. the whatsapp/web placeholder):
+    # honest “not built” — nothing is broken and no setting will unlock it.
+    "inbox.connect.rc_not_implemented_why":
+        "This login method hasn’t shipped yet (it’s on the roadmap) — nothing is broken, "
+        "and no configuration will make it available right now.",
+    "inbox.connect.rc_not_implemented_how":
+        "No action needed and no point waiting: just use one of the available methods in "
+        "the list (the one marked “Recommended” is the best bet).",
     # Short chips on the method card
     "inbox.connect.bk_not_enabled": "Not enabled",
     "inbox.connect.bk_dep_missing": "Component missing",
@@ -2408,8 +2649,45 @@ EN = {
     "inbox.connect.bk_provider_unavailable": "Not loaded",
     "inbox.connect.bk_needs_server_setup": "Ops setup required",
     "inbox.connect.bk_login_disabled": "Onboarding disabled",
+    "inbox.connect.bk_not_implemented": "Planned",
     # Wizard jump button inside the explanation card for official channels
     "inbox.connect.cred_go_wizard": "Open Setup Wizard",
+    # ── Official-channel guidance card extras (2026-08-10: prep list / 3 steps / role fork / ready toast) ──
+    "inbox.connect.official_ready": "{plat} official channel is live — the account is online, you can start serving",
+    "inbox.connect.prep_t": "What you need",
+    "inbox.connect.prep_req": "required",
+    "inbox.connect.prep_opt": "optional",
+    "inbox.connect.prep_done": "filled",
+    "inbox.connect.prep_time": "~3 minutes",
+    "inbox.connect.prep_console": "Open the official {plat} console ↗",
+    "inbox.connect.cred_step1": "Enter the official credentials in the Setup Wizard",
+    "inbox.connect.cred_step2": "Save — it activates automatically (no restart)",
+    "inbox.connect.cred_step3": "Come back here: unlocked, start serving",
+    "inbox.connect.cred_need_admin": "Saving credentials requires a supervisor / admin account.",
+    "inbox.connect.cred_copy_admin": "Copy instructions for your admin",
+    "inbox.connect.cred_copied": "Instructions copied — forward them to your admin",
+    "inbox.connect.cred_admin_text":
+        "Please complete the {plat} official channel setup:\n"
+        "1. Open {url} with a supervisor/admin account;\n"
+        "2. Enter the official {plat} credentials ({fields}) and save;\n"
+        "3. It activates automatically on save — the channel account then appears in the agent workspace.",
+    "inbox.connect.win_note_zalo":
+        "The “7-day window” is Zalo OA customer-service policy: you can message a user within "
+        "7 days of their last interaction; after that, wait for them to message first. "
+        "A platform rule, not a limit of this system.",
+    "inbox.connect.win_note_whatsapp":
+        "The “24-hour service window” is WhatsApp Cloud API policy: reply freely within 24 hours "
+        "of the user's last message; outside the window only pre-approved template messages can "
+        "be sent. A platform rule, not a limit of this system.",
+    "inbox.connect.win_note_messenger":
+        "Messenger platform policy: the standard messaging window is 24 hours after the user's "
+        "last interaction; sending outside it is governed by message-tag rules.",
+    "inbox.connect.win_note_instagram":
+        "Instagram DMs also have a 24-hour window (an approved human-agent tag extends it to "
+        "7 days); outside it, wait for the user to message again.",
+    "inbox.connect.win_note_line":
+        "LINE official accounts have no messaging window: replies are free, while proactive "
+        "pushes count against your LINE OA plan's monthly message quota.",
     "inbox.connect.bk_orchestrator_off": "Won’t stay online",
     "inbox.connect.recheck": "Re-check",
     "inbox.connect.rechecking": "Checking…",
@@ -2469,6 +2747,12 @@ EN = {
     "inbox.connect.instr_zalo":
         "Zalo connects via the official OA API: save the OA credentials in the Setup "
         "Wizard and it goes online automatically — no QR scan.",
+    "inbox.connect.instr_zalo_web":
+        "On your phone’s Zalo: top-right ＋ → Scan QR, then scan the code in this window. "
+        "This window confirms automatically once login succeeds.",
+    "inbox.connect.instr_ig_web":
+        "An Instagram login window is open on the server — complete login there (password / 2FA). "
+        "This window confirms automatically once done. No QR code, no phone scan needed.",
     # Protocol providers' own instructions (providers return instruction_key pointing here)
     "inbox.connect.instr_tg_protocol": "On your phone’s Telegram: Settings → Devices → Link Desktop Device, then scan the QR code.",
     "inbox.connect.instr_wa_protocol": "On your phone’s WhatsApp: Settings → Linked devices → Link a device, then scan the QR code.",
@@ -2550,6 +2834,8 @@ EN = {
     "inbox.cp.exec_fail": "Action failed — please retry",
     "inbox.cp.exec_ok": "Done",
     "inbox.cp.fill_toast": "Filled into the composer — edit, then send",
+    "inbox.wf.drawer_title": "Follow-up SOP (Workflows) manager",
+    "inbox.wf.drawer_close": "Close",
     "inbox.cp.h.ai_analysis": "AI Conversation Analysis",
     "inbox.cp.h.ai_reply": "Reply Studio",
     "inbox.cp.h.chain": "Follow-up SOP (Workflows)",
@@ -3277,6 +3563,15 @@ EN = {
     "inbox.toast.list_neterr": "Network error, please check your connection",
     "inbox.toast.net_err": "Network error",
     "inbox.toast.not_in_list": "This conversation isn’t in the current list (may be archived); switch to the archived view first",
+    "inbox.toast.conv_archived_opened": "This conversation is archived — opened it for you; you can unarchive from the header",
+    "inbox.toast.conv_readonly_removed": "The account owning this conversation was removed; showing read-only history",
+    "inbox.toast.conv_autofixed": "Conversation reference auto-corrected (the referenced account segment was inaccurate)",
+    "inbox.toast.conv_acct_offline": "The account owning this conversation is logged out; history is kept and reappears after re-login",
+    "inbox.toast.conv_not_found": "Conversation not found: it may never have been mirrored into the inbox (drill/test data) or was cleaned up",
+    "inbox.casebar.close_case": "Close case",
+    "inbox.casebar.goto_cases": "Cases",
+    "inbox.casebar.resolved_via_ws": "Handled in workspace",
+    "inbox.casebar.closed_ok": "Case closed and cleared from the cases page",
     "inbox.toast.note_cc": "Auto-CC\u2019d supervisor: {name}",
     "inbox.toast.note_deleted": "Note deleted",
     "inbox.toast.note_need_content": "Select a conversation and enter content",
@@ -3316,6 +3611,12 @@ EN = {
     "inbox.voice.risk_hub_down": "This voice's source (hub) is unreachable; sending will be refused — pick \"System voice\" or another ready voice",
     "inbox.voice.risk_hub_recent": "This voice's source (hub) failed recently; sending may be refused",
     "inbox.voice.risk_not_ready": "This voice's enrollment is incomplete (missing consent/reference audio); sending will fail",
+    "inbox.voice.risk_persona_mismatch": "Voice \"{voice}\" ≠ conversation identity \"{ident}\" — the customer will hear a different person; switch to \"Follow conversation persona\"",
+    "inbox.voice.stage_synth": "Synthesizing",
+    "inbox.voice.stage_send": "Delivering",
+    "inbox.voice.reconciling": "Timed out — reconciling with server…",
+    "inbox.voice.result_unknown": "Result unknown: thread refreshed — first check whether the voice already appears in the conversation before retrying (a blind retry may send the customer two copies)",
+    "inbox.voice.tip_preview_first": "Tip: for long lines, hit Preview first — sending then reuses the auditioned audio (instant, and you send exactly what you heard)",
     "inbox.voice.q_warn_tag": "(quality⚠)",
     "inbox.voice.q_crit_tag": "(quality⛔)",
     "inbox.voice.copied": "✅ Voice copied",
@@ -3449,11 +3750,14 @@ EN = {
     "inbox.xl.docx_translating": "Translating (keeping layout)…",
     "inbox.xl.download_txt": "Download .txt",
     "inbox.xl.eng_ai": "AI engine",
+    "inbox.xl.eng_auto": "Auto",
     "inbox.xl.eng_eff_t": "Target {tgt}: actually handled by {eff}",
     "inbox.xl.eng_no_avail_t": "Target {tgt}: no available engine",
     "inbox.xl.eng_notready": "Translation not ready",
     "inbox.xl.eng_off": "Off",
     "inbox.xl.eng_origin": "Original",
+    "inbox.xl.eng_pick": "Engine",
+    "inbox.xl.eng_pick_t": "Preferred translation engine for this conversation: Auto = smart failover by availability; a chosen engine is remembered (survives refresh) and still falls back automatically on failure",
     "inbox.xl.eng_plain_t": "Target {tgt}: {eff}",
     "inbox.xl.eng_reason_unconfig": "{eff} · {primary} not configured",
     "inbox.xl.eng_reason_unsupported": "{primary} unsupported · {eff} fallback",

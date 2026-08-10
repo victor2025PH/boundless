@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import secrets
@@ -74,6 +75,37 @@ def protocol_enabled(config: Dict[str, Any]) -> bool:
     return resolve_login_switch(config, "platform_login.telegram.protocol_enabled")
 
 
+def classify_login_exception(ex: Exception) -> str:
+    """把发起扫码登录的异常归类为漏斗 ``reason_code``（同 LINE 侧 classify_login_error 哲学）。
+
+    只归**高置信**桶，判定按「具体 → 泛化」排序（API_ID_PUBLISHED_FLOOD 同时含
+    FLOOD 字样，凭据判定必须先于限流判定）：
+    - ``cred_invalid``：api_id/api_hash 本体无效（托管池组废了 / 用户自填错值）——
+      重试与刷新二维码永远无解，2026-08-10 实锤为「用户拍照求助」级事故，必须与
+      笼统 login_failed 分开，前端才能给「换凭据/重启」而非「请重试」。
+    - ``rate_limited``：FLOOD_WAIT 限流——处置是等待，复用既有前端文案。
+    - ``tg_unreachable``：连不上 Telegram DC（超时/拒连/代理故障）——大陆直连被墙
+      的典型形态，前端据此给「配代理」行动指引，而不是让用户反复点刷新。
+    其余返回空串（上层回落 login_failed 通用文案）——宁可笼统，不可误导。
+    """
+    name = type(ex).__name__
+    text = str(ex or "").lower()
+    if ("api_id_invalid" in text or "api_id_published_flood" in text
+            or name in ("ApiIdInvalid", "ApiIdPublishedFlood")):
+        return "cred_invalid"
+    if "flood_wait" in text or name == "FloodWait":
+        return "rate_limited"
+    if "proxy" in name.lower() or isinstance(ex, (OSError, asyncio.TimeoutError)):
+        # OSError 族覆盖 ConnectionError/TimeoutError/socket.gaierror；
+        # python-socks 的 Proxy*Error 按类名兜（用户代理工具没开也归这桶）
+        return "tg_unreachable"
+    if any(k in text for k in ("timed out", "timeout", "connection", "unreachable",
+                               "network", "refused", "reset", "getaddrinfo",
+                               "socks", "proxy")):
+        return "tg_unreachable"
+    return ""
+
+
 def _is_password_needed(ex: Exception) -> bool:
     """判定异常是否为「账号开启两步验证，需云密码」（SESSION_PASSWORD_NEEDED）。
 
@@ -115,6 +147,8 @@ class TelegramQrLogin:
         self.phone = ""
         self.qr_url = ""
         self.detail = ""
+        # 失败归因码（classify_login_exception 产出；空=不明，前端回落通用文案）
+        self.reason_code = ""
         # N2：扫码成功时导出的 session_string（in-memory 启动用，比文件 session 抗 DC 迁移）
         self.session_string = ""
         # P1 身份化：扫码成功时从授权返回的 user 抽取自身昵称/用户名（写入注册表 meta.self_*）
@@ -126,6 +160,8 @@ class TelegramQrLogin:
             "account_id": self.account_id,
             "qr_url": self.qr_url,
             "detail": self.detail,
+            # 路由 poll 只在非空时落 sess.reason_code → 前端按码取行动指引文案
+            "reason_code": self.reason_code,
         }
 
     async def start(self) -> Dict[str, Any]:
@@ -149,7 +185,13 @@ class TelegramQrLogin:
         except Exception as ex:  # noqa: BLE001
             self.status = "failed"
             self.detail = f"发起登录失败：{ex}"
-            logger.debug("[tg_protocol_login] start 失败", exc_info=True)
+            self.reason_code = classify_login_exception(ex)
+            # ERROR 级（2026-08-10 事故沉淀）：此前是 DEBUG，公网桌面版的 beacon 只回传
+            # ERROR——池组凭据废掉（cred_invalid）这种「我们侧坏了」的信号全靠用户拍照
+            # 才被发现。升级后同码多机聚集会直接出现在官网 /console/errors。
+            logger.error("[tg_protocol_login] 发起登录失败 reason=%s type=%s: %s",
+                         self.reason_code or "login_failed", type(ex).__name__, ex,
+                         exc_info=True)
             await self._safe_disconnect()
         return self.result()
 
@@ -197,7 +239,9 @@ class TelegramQrLogin:
             else:
                 self.status = "failed"
                 self.detail = f"两步验证失败：{ex}"
-                logger.debug("[tg_protocol_login] check_password 失败", exc_info=True)
+                # 非密码错误的 2FA 失败（扫码已确认后的收尾故障）罕见且重要 → ERROR 进 beacon
+                logger.error("[tg_protocol_login] check_password 失败 type=%s: %s",
+                             type(ex).__name__, ex, exc_info=True)
                 await self._safe_disconnect()
         return self.result()
 
@@ -265,11 +309,17 @@ class TelegramQrLogin:
                 self.session_string = str(await self.client.export_session_string() or "")
             except Exception:  # noqa: BLE001
                 self.session_string = ""
-                logger.debug("[tg_protocol_login] 导出 session_string 失败（忽略）", exc_info=True)
+                # P1-198 升级为 INFO：session_string 缺位=该号重启后只能靠文件
+                # session 拉起（抗 DC 迁移弱一档）。198 实锤两个号 meta 均无
+                # session_string 且无任何日志痕迹——静默弱化不可接受。
+                logger.info("[tg_protocol_login] 导出 session_string 失败"
+                            "（该号将依赖文件 session 恢复）", exc_info=True)
         except Exception as ex:  # noqa: BLE001
             self.status = "failed"
             self.detail = f"完成登录失败：{ex}"
-            logger.debug("[tg_protocol_login] finish 失败", exc_info=True)
+            # 用户已扫码确认、收尾却失败＝最伤信任的一档，必须远程可见
+            logger.error("[tg_protocol_login] finish 失败 type=%s: %s",
+                         type(ex).__name__, ex, exc_info=True)
         finally:
             # disconnect 以把 session 落盘（供编排器后续拉起）
             await self._safe_disconnect(remove_session=False)
@@ -338,7 +388,10 @@ def make_provider(config: Dict[str, Any], sessions_dir: str = _DEFAULT_SESSIONS_
         pool_key = _cp.new_pool_key() if _cp.credpool_enabled(cfg) else ""
         alloc = await _cp.aresolve_for_account(cfg, pool_key=pool_key)
         if alloc is None:
-            return {"instruction": "未配置 Telegram api_id/api_hash，无法发起协议登录。"}
+            # 必须带 reason_code（同 messenger_web 的教训）：只回 instruction 的话，
+            # start 路由不会置终态，会话挂到 TTL 耗尽——用户对着转圈干等 3 分钟。
+            return {"instruction": "未配置 Telegram api_id/api_hash，无法发起协议登录。",
+                    "reason_code": "creds_missing"}
         api_id, api_hash = alloc.api_id, alloc.api_hash
         # 只有真从池里拿到才需要把粘定键落库/回报（配置自带的不占池容量）
         used_pool_key = pool_key if alloc.source == "credpool" else ""
@@ -367,6 +420,33 @@ def make_provider(config: Dict[str, Any], sessions_dir: str = _DEFAULT_SESSIONS_
             if used_pool_key:
                 _cp.release(cfg, used_pool_key)
             raise
+
+        # ── 凭据无感换发（2026-08-10 API_ID_INVALID 事故闭环）────────────────
+        # 托管注入的凭据废了（池组死）→ 当场向官网举报换新组 → 同一轮重试一次。
+        # 用户视角：二维码照常出现，全程无感；换发也失败才把 cred_invalid 露给 UI。
+        # 只对「官网托管注入」的凭据自愈（LAN credpool 有自己的 report/release 闭环；
+        # 用户自填的值绝不代改）。设备指纹沿用同一种子——同一台机器的身份不因换组漂移。
+        if (login.status == "failed" and login.reason_code == "cred_invalid"
+                and alloc.source != "credpool"):
+            try:
+                from src.ai import hosted_gateway as _hg
+                swapped = _hg.report_invalid_and_refetch(cfg, str(api_id))
+            except Exception:  # noqa: BLE001 —— 自愈失败保持原失败语义，绝不加戏
+                logger.debug("[tg_protocol_login] 废凭据换发异常（忽略）", exc_info=True)
+                swapped = None
+            if swapped:
+                api_id, api_hash = swapped  # TelegramQrLogin.__init__ 自会 int() 校型
+                # 出口跟着新组走（P2-⑨）：换发可能从「无出口组」换到「带出口组」
+                # （或反之），_hosted_proxy 已被换发函数同步更新；显式 ctx 代理仍最高优先
+                proxy = (_to_pyrogram_proxy((ctx or {}).get("proxy"))
+                         or _to_pyrogram_proxy(
+                             (cfg.get("telegram") or {}).get("_hosted_proxy")))
+                retry = TelegramQrLogin(
+                    api_id, api_hash, sessions_dir, proxy=proxy, device_kwargs=device_fp)
+                await retry.start()
+                logger.info("[tg_protocol_login] 换发后重试 status=%s（api_id=%s）",
+                            retry.status, api_id)
+                login = retry
 
         def _persist_if_authorized(res: Dict[str, Any]) -> None:
             """扫码/两步验证成功即把账号落注册表（幂等；供编排器重启后拉起）。"""
@@ -438,6 +518,24 @@ def make_provider(config: Dict[str, Any], sessions_dir: str = _DEFAULT_SESSIONS_
                     )
                 except Exception:  # noqa: BLE001
                     pass
+                # P2-⑨ 托管凭据随账号落库（复用池内号的 META_CRED_KEY 缓存，runner
+                # 优先读它）：托管机器换组后（隔离/换发），config 注入的是**新组**，
+                # 而本账号 session 是**这组**建的——不落库的话 runner 重启就会拿
+                # 新组凭据跑旧 session（session×api_id 错配=风控信号）。出口一并存，
+                # 重启后仍按登录时的出口连（IP 恒定同样是隔离三件套的一部分）。
+                if (not used_pool_key and alloc.source != "credpool"
+                        and (cfg.get("telegram") or {}).get("_hosted_cred")):
+                    try:
+                        _hp = (cfg.get("telegram") or {}).get("_hosted_proxy")
+                        _cp.remember_cred(
+                            {"platform": "telegram",
+                             "account_id": res["account_id"], "meta": {}},
+                            _cp.Allocation(int(api_id), str(api_hash), "config",
+                                           "free",
+                                           dict(_hp) if isinstance(_hp, dict) else None))
+                    except Exception:  # noqa: BLE001
+                        logger.debug("[tg_protocol_login] 托管凭据落库失败（忽略）",
+                                     exc_info=True)
             except Exception:  # noqa: BLE001
                 logger.debug("[tg_protocol_login] 注册表写入失败", exc_info=True)
 
@@ -480,6 +578,8 @@ def make_provider(config: Dict[str, Any], sessions_dir: str = _DEFAULT_SESSIONS_
         return {
             "qr_url": login.qr_url,
             "instruction": "用手机 Telegram：设置 → 设备 → 关联桌面设备，扫描二维码。",
+            # i18n 键随会话下发：英文坐席按键取本地化指引，raw instruction 仅兜底
+            "instruction_key": "inbox.connect.instr_tg_protocol",
             "poll": _poll,
             "submit_password": _submit_password,
             "cancel": _cancel,

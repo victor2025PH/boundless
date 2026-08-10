@@ -33,11 +33,17 @@ def build_account_signals(
     limiter: Any = None,
     now: Optional[float] = None,
     extra: Optional[Dict[str, Any]] = None,
+    risk_source: Any = None,
 ) -> Dict[str, Any]:
     """装配单账号风控信号（best-effort，缺数据视为良性）。
 
     返回字段对齐 ``account_health`` / ``companion_send_gate``：
-    ``account_id, age_days?, proxy_bound, banned, sends_today?, _circuit_open?``。
+    ``account_id, age_days?, proxy_bound, banned, sends_today?, _circuit_open?,
+    flood_waits_24h?, errors_24h?``。
+
+    ``risk_source``：近 24h flood/error 计数来源（缺省走 ``risk_events.risk_counts_24h``，
+    可注入假对象单测）。这是反封号反馈闭环的读侧——``ban_signal`` 记的事件在此读回，
+    喂 ``account_health`` 扣分轴，让被风控狂限的号自动降 ``recommended_cap``。
     """
     now = float(now if now is not None else time.time())
     sig: Dict[str, Any] = {"account_id": str(account_id or "")}
@@ -75,6 +81,21 @@ def build_account_signals(
                 sig["_circuit_open"] = True
         except Exception:
             pass
+
+    # 反封号反馈闭环：近 24h flood/error 计数 → account_health 扣分轴（缺数据视为良性）
+    try:
+        rc = risk_source
+        if rc is None:
+            from src.ops.risk_events import risk_counts_24h as rc
+        counts = rc(platform, account_id, now=now) or {}
+        floods = int(counts.get("flood") or 0)
+        errors = int(counts.get("error") or 0)
+        if floods:
+            sig["flood_waits_24h"] = floods
+        if errors:
+            sig["errors_24h"] = errors
+    except Exception:
+        pass
 
     if extra:
         for k, v in extra.items():

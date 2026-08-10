@@ -5,10 +5,65 @@ import logging
 import sqlite3
 import time
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import Dict, List, Optional, Sequence, Tuple
+
+
+# 不可逆/破坏性动作 token（展示强调 + family=danger + EventBus 告警共用）。
+# 放在 utils 层避免 webhook/store → web 反向依赖。
+DANGER_TOKENS: Tuple[str, ...] = (
+    "delete", "remove", "revoke", "cancel_all", "unlink", "purge",
+)
+
+
+def is_danger_action(action: str) -> bool:
+    """不可逆/破坏性动作判定（展示层 / family=danger / 告警共用）。"""
+    a = (action or "").lower()
+    return any(t in a for t in DANGER_TOKENS)
+
+
+# 进程内节流：(user_id, action) → 上次告警 epoch；防批量删除刷爆 webhook。
+_DANGER_ALERT_GAP_SEC = 60.0
+_danger_alert_last: Dict[str, float] = {}
+
+
+def _maybe_publish_danger_alert(
+    user_id: str, action: str, target: str,
+    old_val: str, new_val: str, snapshot_id: str,
+) -> None:
+    if not is_danger_action(action):
+        return
+    key = f"{user_id}:{action}"
+    now = time.time()
+    last = _danger_alert_last.get(key, 0.0)
+    if now - last < _DANGER_ALERT_GAP_SEC:
+        return
+    _danger_alert_last[key] = now
+    # 防止长期运行字典无限涨（运营账号×动作基数很小，软上限即可）
+    if len(_danger_alert_last) > 256:
+        cutoff = now - _DANGER_ALERT_GAP_SEC
+        stale = [k for k, ts in _danger_alert_last.items() if ts < cutoff]
+        for k in stale:
+            _danger_alert_last.pop(k, None)
+    try:
+        from src.integrations.shared.event_bus import get_event_bus
+        get_event_bus().publish("audit_danger_alert", {
+            "user_id": str(user_id or ""),
+            "action": action or "",
+            "target": (target or "")[:200],
+            "old_val": (old_val or "")[:200],
+            "new_val": (new_val or "")[:200],
+            "snapshot_id": snapshot_id or "",
+            "rate_key": f"audit_danger:{user_id}:{action}",
+        })
+    except Exception:
+        pass
 
 
 class AuditStore:
+
+    # 保留策略默认值（cleanup 缺省 + /audit 页保留期标注共用，防魔法数字漂移）
+    DEFAULT_KEEP_DAYS = 90
+    DEFAULT_MAX_ROWS = 50000
 
     _DDL = """
     CREATE TABLE IF NOT EXISTS audit_log (
@@ -80,6 +135,7 @@ class AuditStore:
     def log(self, user_id: str, action: str, target: str = "",
             old_val: str = "", new_val: str = "", snapshot_id: str = ""):
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        wrote = False
         try:
             self._conn.execute(
                 "INSERT INTO audit_log (ts, user_id, action, target, old_val, new_val, snapshot_id) "
@@ -87,6 +143,7 @@ class AuditStore:
                 (ts, str(user_id), action, target, old_val, new_val, snapshot_id),
             )
             self._conn.commit()
+            wrote = True
         except Exception as e:
             self._logger.warning("审计写入失败: %s", e)
         self._logger.info("[配置审计] %s %s by %s", action, target, user_id)
@@ -95,29 +152,116 @@ class AuditStore:
                 "action": action, "target": target, "user_id": user_id,
                 "old_val": old_val, "new_val": new_val,
             })
+        # 高危动作 → EventBus（仅写入成功后；60s 同 actor×action 节流）
+        if wrote:
+            _maybe_publish_danger_alert(
+                str(user_id), action, target, old_val, new_val, snapshot_id)
 
-    def query(self, limit: int = 50, action: str = "", user_id: str = "",
-              since: str = "", keyword: str = "") -> List[Dict]:
-        sql = "SELECT * FROM audit_log WHERE 1=1"
+    def _filter_sql(
+        self, *, action: str = "", user_id: str = "",
+        since: str = "", until: str = "", keyword: str = "",
+        action_patterns: Optional[Sequence[str]] = None,
+    ) -> Tuple[str, list]:
+        """拼 WHERE 子句（不含 ORDER/LIMIT）。页面/导出/计数/枚举下拉共用。"""
+        sql = " WHERE 1=1"
         params: list = []
         if action:
             sql += " AND action = ?"
             params.append(action)
+        if action_patterns:
+            ors = " OR ".join(["action LIKE ? ESCAPE '\\'"] * len(action_patterns))
+            sql += f" AND ({ors})"
+            params.extend(list(action_patterns))
         if user_id:
             sql += " AND user_id = ?"
             params.append(str(user_id))
         if since:
             sql += " AND ts >= ?"
             params.append(since)
+        if until:
+            sql += " AND ts <= ?"
+            params.append(until)
         if keyword:
             sql += " AND (action LIKE ? OR target LIKE ? OR old_val LIKE ? OR new_val LIKE ?)"
             like = f"%{keyword}%"
             params.extend([like, like, like, like])
-        sql += " ORDER BY id DESC LIMIT ?"
-        params.append(limit)
+        return sql, params
+
+    def query(self, limit: int = 50, action: str = "", user_id: str = "",
+              since: str = "", until: str = "", keyword: str = "",
+              action_patterns: Optional[List[str]] = None,
+              offset: int = 0, newest_first: bool = False) -> List[Dict]:
+        """查询审计行。
+
+        - ``action_patterns``: LIKE 模式列表（OR，ESCAPE '\\'），模式源=
+          ``audit_display.family_like_patterns``。
+        - 默认返回**旧→新**（CSV 导出历史契约）；``newest_first=True`` 时
+          新→旧，配合 ``offset`` 做 SQL 分页（/audit 页用）。
+        """
+        where, params = self._filter_sql(
+            action=action, user_id=user_id, since=since, until=until,
+            keyword=keyword, action_patterns=action_patterns)
+        sql = "SELECT * FROM audit_log" + where + " ORDER BY id DESC"
+        lim = max(0, int(limit or 0))
+        off = max(0, int(offset or 0))
+        if lim:
+            sql += " LIMIT ?"
+            params.append(lim)
+            if off:
+                sql += " OFFSET ?"
+                params.append(off)
         try:
             rows = self._conn.execute(sql, params).fetchall()
-            return [dict(r) for r in reversed(rows)]
+            items = [dict(r) for r in rows]
+            if newest_first:
+                return items
+            return list(reversed(items))
+        except Exception:
+            return []
+
+    def count(self, action: str = "", user_id: str = "",
+              since: str = "", until: str = "", keyword: str = "",
+              action_patterns: Optional[List[str]] = None) -> int:
+        """与 query 同过滤条件下的全库命中数（诚实分页总数）。"""
+        where, params = self._filter_sql(
+            action=action, user_id=user_id, since=since, until=until,
+            keyword=keyword, action_patterns=action_patterns)
+        try:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM audit_log" + where, params).fetchone()
+            return int(row[0] if row else 0)
+        except Exception:
+            return 0
+
+    def distinct_actions(self, **filters) -> List[str]:
+        """筛选条件下的 action 枚举（下拉用，全库而非当前页）。"""
+        where, params = self._filter_sql(**filters)
+        try:
+            rows = self._conn.execute(
+                "SELECT DISTINCT action FROM audit_log" + where
+                + " ORDER BY action", params).fetchall()
+            return [r[0] for r in rows if r[0]]
+        except Exception:
+            return []
+
+    def distinct_operators(self, **filters) -> List[str]:
+        """筛选条件下的操作人枚举（下拉用）。"""
+        where, params = self._filter_sql(**filters)
+        try:
+            rows = self._conn.execute(
+                "SELECT DISTINCT user_id FROM audit_log" + where
+                + " ORDER BY user_id", params).fetchall()
+            return [str(r[0]) for r in rows if r[0]]
+        except Exception:
+            return []
+
+    def actions_since(self, since_ts: str) -> List[str]:
+        """自 since_ts 起的 action 名列表（首页「今日操作」摘要用，只取一列）。"""
+        try:
+            rows = self._conn.execute(
+                "SELECT action FROM audit_log WHERE ts >= ?", (since_ts,)
+            ).fetchall()
+            return [r[0] for r in rows]
         except Exception:
             return []
 
@@ -128,7 +272,7 @@ class AuditStore:
         except Exception:
             return None
 
-    def cleanup(self, keep_days: int = 90, max_rows: int = 50000):
+    def cleanup(self, keep_days: int = DEFAULT_KEEP_DAYS, max_rows: int = DEFAULT_MAX_ROWS):
         """归档清理：删除超期记录，并在总行数超限时进一步清理最早的记录"""
         try:
             cutoff = time.strftime("%Y-%m-%d %H:%M:%S",

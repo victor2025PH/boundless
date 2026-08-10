@@ -191,12 +191,23 @@ def test_partial_safe_to_include_twice(jinja_env: Environment):
 
 
 def test_messenger_keeps_own_funnel():
-    """Messenger 自家 funnel 增强了 variants/handoff/ab_conclusions，
-    不应被 shared partial 替换；其页面仍调用 /api/messenger-rpa/funnel。
+    """Messenger 自家 funnel（P2-2 起更名「引流漏斗」，Messenger→LINE 口径）增强了
+    variants/handoff/ab_conclusions，不应被 shared partial 替换——两个漏斗**并存**：
+    监控 view 的引流漏斗（自研，/api/messenger-rpa/funnel）+ 漏斗 Tab 的共享
+    Journey 漏斗。P2-3 起主 JS 外迁 static/messenger/messenger_rpa.js，
+    端点调用的判定口径 = 模板 + 其引用的本地静态 JS。
     """
+    from tests import _inline_handler_scan as scan
     path = TEMPLATES_DIR / "_channel_body_messenger.html"
     text = path.read_text(encoding="utf-8")
-    # Messenger 自己的 funnel 端点仍在
-    assert "/api/messenger-rpa/funnel" in text
+    static_root = TEMPLATES_DIR.parent / "static"
+    blob = text + "".join(
+        p.read_text(encoding="utf-8", errors="replace")
+        for p in scan.local_static_scripts(text, static_root))
+    # Messenger 自己的 funnel 端点仍在（模板或外迁 JS）
+    assert "/api/messenger-rpa/funnel" in blob
     # 自家 CSS class（mr-funnel-row）保留
-    assert "mr-funnel-row" in text
+    assert "mr-funnel-row" in blob
+    # P2-2：共享 Journey 漏斗以独立 Tab 并存（include partial + 懒加载 init）
+    assert '_rpa_shared_funnel.html' in text
+    assert 'id="view-funnel"' in text

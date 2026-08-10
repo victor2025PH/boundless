@@ -28,7 +28,13 @@ from src.web.routes.unified_inbox_aggregate import _INBOX_ADAPTERS
 from src.web.routes.unified_inbox_auth import _agent_from_request
 from src.contacts.models import WON_STAGES  # 单一来源：狭义「已成交」阶段（P5-2c）
 from src.web.routes.unified_inbox_helpers import FUNNEL_STAGE_LABELS
-from src.web.routes.unified_inbox_services import _contacts_store, _inbox_store
+from src.web.routes.unified_inbox_services import (
+    _contacts_store,
+    _get_translation_service,
+    _inbox_store,
+    _resolve_conv_engine,
+    _resolve_conv_language,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +154,10 @@ def register_conversion_outreach_routes(app, *, api_auth) -> None:
             max_silent_days=float(body.get("max_silent_days") or 0),
             exclude_archived=bool(body.get("exclude_archived", True)),
             limit=int(body.get("limit") or 500),
+            # P1 2026-08-09 点名名单（目标报表勾选完成客户）：跳圈选筛子、
+            # 资格管线（cooldown/账号配额）原样过
+            conversation_ids=[str(c) for c in (body.get("conversation_ids") or [])
+                              if str(c).strip()],
         )
         planner = OutreachPlanner(
             store,
@@ -198,6 +208,8 @@ def register_conversion_outreach_routes(app, *, api_auth) -> None:
             max_silent_days=float(fb.get("max_silent_days") or 0),
             exclude_archived=bool(fb.get("exclude_archived", True)),
             limit=int(fb.get("limit") or 500),
+            conversation_ids=[str(c) for c in (fb.get("conversation_ids") or [])
+                              if str(c).strip()],
         )
         limiter = getattr(request.app.state, "account_limiter", None)
         planner = OutreachPlanner(
@@ -212,10 +224,41 @@ def register_conversion_outreach_routes(app, *, api_auth) -> None:
         req_max = int(body.get("max_send") or 0)
         max_send = min(hard_cap, req_max) if req_max > 0 else hard_cap
 
+        # P1 2026-08-09 逐客户翻译（opt-in ``translate:true``）：批量模板是单一文案，
+        # 名单可能混语种——发送前按**该会话**客户语言走单发同一条翻译链（会话首选
+        # 引擎优先）。任何失败/不可译/语言未知一律回落原文，绝不阻塞投递。
+        do_translate = bool(body.get("translate"))
+        _tx_stat = {"translated": 0, "skipped": 0, "failed": 0}
+
         async def _send_fn(target, text):
+            out_text = text
+            if do_translate:
+                try:
+                    tl = _resolve_conv_language(
+                        request, target.platform, target.account_id,
+                        target.chat_key)
+                    if tl and tl.lower() != "unknown":
+                        svc = _get_translation_service(request)
+                        eng = _resolve_conv_engine(
+                            request, target.platform, target.account_id,
+                            target.chat_key)
+                        res = await svc.translate(
+                            text, target_lang=tl, source_lang="",
+                            style="chat", engine=eng)
+                        if res.ok and (res.translated_text or "").strip():
+                            out_text = res.translated_text.strip()
+                            _tx_stat["translated"] += 1
+                        else:
+                            _tx_stat["failed"] += 1
+                    else:
+                        _tx_stat["skipped"] += 1
+                except Exception:
+                    _tx_stat["failed"] += 1
+                    logger.debug("[outreach] 逐客户翻译失败，按原文发送",
+                                 exc_info=True)
             return await send_via_adapters(
                 request, target.platform, target.account_id, target.chat_key,
-                text, _INBOX_ADAPTERS,
+                out_text, _INBOX_ADAPTERS,
             )
 
         executor = OutreachExecutor(
@@ -228,6 +271,8 @@ def register_conversion_outreach_routes(app, *, api_auth) -> None:
             batch_id=str(body.get("batch_id") or ""), max_send=max_send,
         )
         result["planned_eligible"] = len(plan.eligible)
+        if do_translate:
+            result["translation"] = dict(_tx_stat)
         return result
 
     @app.get("/api/unified-inbox/outreach/batch")

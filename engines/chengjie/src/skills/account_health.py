@@ -103,7 +103,8 @@ def account_health(
         reasons.append("未绑定独立代理（多号共出口 IP 极易被关联封号）")
     if floods > 0:
         score -= min(40, 12 * floods)
-        reasons.append(f"近 24h 触发 {floods} 次限频（FLOOD_WAIT），需放缓节奏")
+        # 多来源信号：协议线 FloodWait/PeerFlood + RPA 页面风控态，措辞保持平台中性
+        reasons.append(f"近 24h 触发 {floods} 次限频/风控信号，需放缓节奏")
     if errors > 0:
         score -= min(20, 4 * errors)
         reasons.append(f"近 24h {errors} 次发送失败/异常")

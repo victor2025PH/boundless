@@ -159,6 +159,9 @@ def pwa_manifest(branding: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         "scope": "/",
         "display": "standalone",
         "display_override": ["standalone", "minimal-ui", "browser"],
+        # 点任务栏图标 → 聚焦已开的应用窗（不新开、不整页刷新导航——navigate-existing
+        # 会每次点击都重载 /workspace，聊天现场太贵）；没有已开窗才按 start_url 新开。
+        "launch_handler": {"client_mode": "focus-existing"},
         "orientation": "any",
         "background_color": "#1b2038",
         "theme_color": theme,

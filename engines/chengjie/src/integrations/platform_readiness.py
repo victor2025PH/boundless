@@ -39,24 +39,50 @@ BLOCK_LOGIN_DISABLED = "login_disabled"
 BLOCK_NOT_ENABLED = "not_enabled"
 BLOCK_DEP_MISSING = "dep_missing"
 BLOCK_CREDS_MISSING = "creds_missing"
+# official 渠道专属码：creds_missing 的解释文案是 Telegram「在这里直接启用」面板
+# 专用的，对 Instagram/Zalo 会把人指去一个不存在的表单——official 的处置永远是
+# 「去接入向导」，单列一码让文案可各说各话。
+BLOCK_OFFICIAL_CREDS = "official_creds_missing"
 BLOCK_SERVICE_DOWN = "service_down"
 BLOCK_NEEDS_SERVER_SETUP = "needs_server_setup"
 BLOCK_PROVIDER_UNAVAILABLE = "provider_unavailable"
+# 「功能不存在」专属码（2026-08-11）：此前与 not_enabled 共用一个码，前端于是给
+# 「压根没做」的方式（telegram/web 占位）渲染「填凭据/点一键启用/重新检测」整套
+# 指引——全是永远兑现不了的空头支票（实录：用户照指引找一个不存在的表单）。
+# 「开关没开（你能开）」与「没实现（做什么都没用，请改用别的方式）」处置完全不同，
+# 必须各说各话。
+BLOCK_NOT_IMPLEMENTED = "not_implemented"
 WARN_ORCHESTRATOR_OFF = "orchestrator_off"
 
 # 需要 sidecar 常驻进程的 (平台, 方式)。值＝该方式的启用判定与服务地址取值来源。
-_SIDECAR_MODES = {("whatsapp", "protocol"), ("messenger", "web")}
+# zalo/web = 个人号扫码（zca-js Node 边车）；instagram/web = 个人号网页托管（Playwright 边车）——
+# 与 whatsapp/protocol、messenger/web 同族。
+_SIDECAR_MODES = {
+    ("whatsapp", "protocol"), ("messenger", "web"),
+    ("zalo", "web"), ("instagram", "web"),
+}
 
-# 本系统**真正实现了**的 (平台, 方式)。不在表内＝功能不存在（如 telegram/web、
-# whatsapp/web 只在 modes 清单里占位），恒报「未启用」。
+# 本系统**真正实现了**的 (平台, 方式)。不在表内＝功能不存在（如 whatsapp/web 只在
+# modes 清单里占位），恒报 not_implemented（规划中）——诚实说「没做」，绝不再伪装成
+# 「未启用」误导用户去翻开关/填凭据（telegram/web 占位曾因此成为死胡同，2026-08-11
+# 已从默认清单摘除；protocol 本就是官方关联设备扫码，体验等同）。
 #
 # 为什么不靠「provider 有没有注册」判断：注册是**进程内运行时状态**，只有 web 进程
 # 在 /modes 前调过 _ensure_login_providers 才有意义。CLI 自检、后台 worker 等进程里
 # 它恒为 False —— 早期版本据此兜底，于是 protocol_doctor 把「依赖齐全、开关已开」的
 # Telegram 报成 not_enabled，正是本模块要消灭的那种误导。判定必须与进程状态无关。
 _IMPLEMENTED_MODES = {
-    ("telegram", "protocol"), ("line", "protocol"),
+    ("telegram", "protocol"), ("telegram", "phone"),
+    ("line", "protocol"),
     ("whatsapp", "protocol"), ("messenger", "web"),
+    # 个人号扫码/网页托管（Node 边车）：给原本纯官方的 Zalo / Instagram 补的第二路
+    # （默认关，由 platform_login.<p>.web_enabled 门控是否对外呈现，见 platform_login）。
+    ("zalo", "web"), ("instagram", "web"),
+    # 官方 API 通道（凭证经 /workspace/setup 接入向导；无扫码会话）：
+    # IG/Zalo 是唯一形态；LINE/Messenger/WhatsApp Cloud 是与扫码/托管并列的合规第二路
+    ("instagram", "official"), ("zalo", "official"),
+    ("line", "official"), ("messenger", "official"),
+    ("whatsapp", "official"),
 }
 
 
@@ -106,16 +132,31 @@ def service_probe_targets(config: Dict[str, Any]) -> Dict[str, str]:
             targets["messenger"] = mg_url(config)
     except Exception:  # noqa: BLE001
         logger.debug("[readiness] 解析 messenger sidecar 地址失败", exc_info=True)
+    try:
+        from src.integrations.zalo_personal_login import (
+            service_base_url as zl_url, web_enabled as zl_on,
+        )
+        if zl_on(config):
+            targets["zalo"] = zl_url(config)
+    except Exception:  # noqa: BLE001
+        logger.debug("[readiness] 解析 zalo sidecar 地址失败", exc_info=True)
+    try:
+        from src.integrations.instagram_web_login import (
+            service_base_url as ig_url, web_enabled as ig_on,
+        )
+        if ig_on(config):
+            targets["instagram"] = ig_url(config)
+    except Exception:  # noqa: BLE001
+        logger.debug("[readiness] 解析 instagram sidecar 地址失败", exc_info=True)
     return targets
 
 
-def _telegram_protocol_blockers(config: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _telegram_runtime_blockers(config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Telegram 协议栈公共依赖（pyrogram + 凭据/池）——扫码与手机号登录共用。"""
     from src.integrations.telegram_protocol_login import (
-        is_pyrogram_available, protocol_enabled, resolve_credentials,
+        is_pyrogram_available, resolve_credentials,
     )
     out: List[Dict[str, Any]] = []
-    if not protocol_enabled(config):
-        out.append(_blocker(BLOCK_NOT_ENABLED))
     if not is_pyrogram_available():
         out.append(_blocker(BLOCK_DEP_MISSING, dep="pyrogram",
                             install="pip install pyrogram tgcrypto"))
@@ -130,6 +171,25 @@ def _telegram_protocol_blockers(config: Dict[str, Any]) -> List[Dict[str, Any]]:
         # 此时不该报缺凭据。
         if not pooled:
             out.append(_blocker(BLOCK_CREDS_MISSING, field="telegram.api_id / api_hash"))
+    return out
+
+
+def _telegram_protocol_blockers(config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    from src.integrations.telegram_protocol_login import protocol_enabled
+    out: List[Dict[str, Any]] = []
+    if not protocol_enabled(config):
+        out.append(_blocker(BLOCK_NOT_ENABLED))
+    out += _telegram_runtime_blockers(config)
+    return out
+
+
+def _telegram_phone_blockers(config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """手机号登录与扫码共用 pyrogram/凭据，但开关是独立的 ``phone_enabled``。"""
+    from src.integrations.telegram_phone_login import phone_enabled
+    out: List[Dict[str, Any]] = []
+    if not phone_enabled(config):
+        out.append(_blocker(BLOCK_NOT_ENABLED))
+    out += _telegram_runtime_blockers(config)
     return out
 
 
@@ -156,13 +216,26 @@ def _line_protocol_blockers(config: Dict[str, Any]) -> List[Dict[str, Any]]:
 def _sidecar_blockers(
     platform: str, config: Dict[str, Any], service_ok: Optional[bool],
 ) -> List[Dict[str, Any]]:
-    """WhatsApp(protocol) / Messenger(web) 共用：开关 + sidecar 可达性。"""
+    """WhatsApp(protocol) / Messenger(web) / Zalo(web) / Instagram(web) 共用：开关 + sidecar 可达性。"""
     out: List[Dict[str, Any]] = []
     if platform == "whatsapp":
         from src.integrations.whatsapp_baileys_login import (
             protocol_enabled as on, service_base_url as url_of,
         )
         svc, not_enabled_code = "whatsapp-baileys", BLOCK_NOT_ENABLED
+    elif platform == "zalo":
+        from src.integrations.zalo_personal_login import (
+            service_base_url as url_of, web_enabled as on,
+        )
+        # Zalo 个人号同 Messenger：开开关还不够，须先起 Node 边车并用手机扫码登录一次，
+        # 属「需运维配置」，与忘了开开关分开说。
+        svc, not_enabled_code = "zalo-personal", BLOCK_NEEDS_SERVER_SETUP
+    elif platform == "instagram":
+        from src.integrations.instagram_web_login import (
+            service_base_url as url_of, web_enabled as on,
+        )
+        # IG 个人号同 Messenger：须先起 Playwright 边车并在服务器隔离浏览器内登录一次。
+        svc, not_enabled_code = "instagram-web", BLOCK_NEEDS_SERVER_SETUP
     else:
         from src.integrations.messenger_web_login import (
             service_base_url as url_of, web_enabled as on,
@@ -174,6 +247,39 @@ def _sidecar_blockers(
         out.append(_blocker(not_enabled_code, svc=svc))
     elif service_ok is False:
         out.append(_blocker(BLOCK_SERVICE_DOWN, svc=svc, url=url_of(config)))
+    return out
+
+
+def _official_blockers(platform: str, config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """official 模式（Instagram/Zalo 官方 API）：凭证与开关就绪判定。
+
+    单一事实源＝`channel_setup` 的渠道声明（必填字段清单与向导表单同一份），
+    缺哪个字段就点名哪个——「去接入向导填 X」比笼统「未启用」可操作得多。
+    """
+    out: List[Dict[str, Any]] = []
+    try:
+        from src.utils.channel_setup import _dig, _is_placeholder, get_channel
+        ch = get_channel(platform)
+        if ch is None:
+            return [_blocker(BLOCK_NOT_ENABLED)]
+        missing = [
+            f.label for f in ch.fields
+            if f.required and _is_placeholder(_dig(config or {}, f.key))
+        ]
+        if missing:
+            # params 只带纯字段名（后端吐码与参数、前端出文案的 i18n 约定——
+            # 「缺少」这类散文在 rc_official_creds_missing_why 的文案模板里，
+            # 否则英文界面会中英夹杂）。多字段用语言中立的 " / " 连接。
+            out.append(_blocker(BLOCK_OFFICIAL_CREDS, field=" / ".join(missing)))
+        elif not _dig(config or {}, ch.enable_key):
+            # 凭证齐但渠道开关没开：处置同样是去向导（保存会自动置 enabled），
+            # 沿用同一码（门禁 test_readiness_official_enabled_missing_uses_same_code
+            # 钉住「码不该变」）；差异经结构化参数 state 传给前端选文案变体
+            # （rc_official_switch_off_*），不再把中文散文塞进 params。
+            out.append(_blocker(BLOCK_OFFICIAL_CREDS, state="switch_off"))
+    except Exception:  # noqa: BLE001
+        logger.debug("[readiness] official 凭证诊断失败", exc_info=True)
+        out.append(_blocker(BLOCK_NOT_ENABLED))
     return out
 
 
@@ -204,10 +310,16 @@ def diagnose_mode(
     if mode != "device":
         implemented = (platform, mode) in _IMPLEMENTED_MODES
         if not implemented:
-            blockers.append(_blocker(BLOCK_NOT_ENABLED))
+            # 与 not_enabled 分码：这不是「开关没开」，是功能本身不存在——
+            # 前端据此隐藏「重新检测」（永不就绪）并给「改用可用方式」的直达按钮。
+            blockers.append(_blocker(BLOCK_NOT_IMPLEMENTED))
         else:
             try:
-                if platform == "telegram":
+                if mode == "official":
+                    blockers += _official_blockers(platform, config)
+                elif platform == "telegram" and mode == "phone":
+                    blockers += _telegram_phone_blockers(config)
+                elif platform == "telegram":
                     blockers += _telegram_protocol_blockers(config)
                 elif platform == "line":
                     blockers += _line_protocol_blockers(config)

@@ -60,7 +60,7 @@ import sys
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
-DEFAULT_BASE = "http://localhost:18799"
+DEFAULT_BASE = "http://127.0.0.1:18799"  # 勿改回 localhost：Windows 下先试 ::1 而服务只听 IPv4，每个新连接吃 ~2s 回退超时（2026-08-01 实测 16ms vs 2070ms）
 DEFAULT_DATA_ROOT = "D:/chengjie-instances/zhiliao/data"
 
 # 量测视口固定，否则高度不可比（换宽度会改变筛选 tab 的换行行数）

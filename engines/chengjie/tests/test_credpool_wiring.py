@@ -390,10 +390,10 @@ def test_frozen_bundle_path_is_probed(monkeypatch):
 def test_desktop_build_bundles_credpool_client():
     """桌面包必须带上瘦客户端——它在引擎目录之外，PyInstaller 静态分析看不见。
 
-    断言的是**行为**（DATAS 里真有一条 credpool → platform/credpool 的映射），
-    不是源码字面量：打包清单被重构成 f-string 拼路径也应照样通过，
-    只有真的漏打才红。（早前写成字面量断言，同仓另一条线把它改成
-    `f"platform/{_pkg}"` 循环登记后就误红了——测试太脆等于制造噪音。）
+    断言的是**行为**（打包清单里真有 credpool → platform/credpool 的映射，且清洗后
+    的产物含 credpool_client.py），不是源码字面量：清单被重构成 f-string 拼路径、或
+    改走「暂存清洗后再打」（2026-08-09 起，防 account_registry.db/registry.key 随包泄漏）
+    都应照样通过，只有真的漏打才红。
     """
     import importlib.util
     from pathlib import Path as _P
@@ -404,11 +404,15 @@ def test_desktop_build_bundles_credpool_client():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)  # 顶层只算路径，不跑打包
 
+    # 目标 = DATAS ∪ STAGED_DESTS（credpool 现走暂存清洗，落在 STAGED_DESTS）
     targets = {str(dst).replace("\\", "/") for _src, dst in mod.DATAS}
+    targets |= {str(d).replace("\\", "/") for d in getattr(mod, "STAGED_DESTS", ())}
     assert "platform/credpool" in targets, (
         f"桌面打包清单缺 credpool 瘦客户端 → 桌面版中央池会静默失效；现有目标={sorted(targets)}")
-    src = next(s for s, d in mod.DATAS if str(d).replace("\\", "/") == "platform/credpool")
-    assert (_P(src) / "credpool_client.py").is_file(), "登记的源路径里没有瘦客户端本体"
+    # 清洗后的产物必须仍含瘦客户端本体（暂存不得误删代码）
+    staged = mod._stage_platform_pkg("credpool")
+    assert staged is not None and (staged / "credpool_client.py").is_file(), (
+        "暂存清洗后 credpool_client.py 不见了 → 桌面版中央池会静默失效")
 
 
 def test_registry_remove_releases_pool_capacity():

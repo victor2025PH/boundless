@@ -106,7 +106,10 @@ def within_business_hours(cfg: Dict[str, Any], now: Optional[float] = None) -> b
 def pick_delay(cfg: Dict[str, Any]) -> float:
     """按 config.protocol_autoreply.delay = {min_sec, max_sec} 取随机拟人延迟（秒）。
 
-    未配置 / 非法 → 0（不延迟）。"""
+    未配置 / 非法 → 0（不延迟）。
+    ⚠ 遗留入口：正常发送路径已改走 ``resolve_send_pacing_block`` + humanize
+    ``resolve_pacing``（单一节奏源收口·第三链，2026-08-07）；本函数仅作
+    节奏解析异常时的兜底与旧测试契约，勿再新增调用方。"""
     d = ((cfg or {}).get("protocol_autoreply") or {}).get("delay") or {}
     try:
         lo = float(d.get("min_sec", 0) or 0)
@@ -116,6 +119,93 @@ def pick_delay(cfg: Dict[str, Any]) -> float:
     if hi <= 0 or hi < lo:
         return 0.0
     return random.uniform(max(0.0, lo), hi)
+
+
+# 协议链「什么都没配」时的兜底拟人节奏（2026-08-07 存量节点秒回收口）。
+# 语义＝安全默认：一个卖「像真人」的自动回复 bot，其发送链的**缺省**行为必须是
+# 「等几秒再发」而非「秒回」。区间与桌面种子 / 示例配置同口径（8–20s 自适应）。
+DEFAULT_PROTOCOL_PACING: Dict[str, Any] = {
+    "min_sec": 8, "max_sec": 20, "adaptive": True,
+}
+
+
+def resolve_send_pacing_block(
+    cfg: Dict[str, Any], acct_pa: Dict[str, Any],
+) -> Dict[str, Any]:
+    """选出协议链本次发送生效的延迟配置块（纯函数；单一节奏源收口·第三链）。
+
+    2026-08-07 老板实锤根因：本链此前只读独立键 ``protocol_autoreply.delay``，
+    而设置页「回复节奏」滑杆写的是 ``inbox.l2_autosend.deliver_delay``——
+    ChatX 独立包默认档（``l2_autosend.deliver=false``）下协议链自发消息，
+    滑杆拖到哪都秒回。follow 判定收口于 ``humanize.resolve_following_delay_block``
+    （与 A 线 ``sender.run_prereply_humanize`` / coverage 自检**同一函数**，改
+    follow 规则不再三处漂移）：own 配了值优先 → 否则跟随滑杆 → follow:false 保留
+    「本链秒回」逃生阀。
+
+    **兜底默认（2026-08-07 P0.6，存量节点收口）**：`_ensure_seeded` 只在 config
+    缺失时播种，**存量 ChatX 节点重装保留旧 config**（无 deliver_delay）→ 新代码
+    跟随滑杆也是空 → resolve_pacing 得 0 → 依旧秒回。故当 own 与 slider **都没配**
+    （max_sec<=0）时回落 ``DEFAULT_PROTOCOL_PACING``（8–20s），让存量节点仅凭新代码
+    即拟人、无需改 config / 推 overlay。**尊重显式秒回**：``protocol_autoreply.delay
+    .follow: false`` 时按用户意图返回其 own 块（空＝秒回逃生阀），不套默认。
+    本兜底**仅作用于协议链**（本函数），A/B 线节奏不受影响（各自装配口不同）。
+    """
+    own = acct_pa.get("delay") if isinstance(acct_pa, dict) else None
+    slider = (((cfg or {}).get("inbox") or {}).get("l2_autosend") or {}
+              ).get("deliver_delay")
+    block, _src = effective_protocol_pacing(own, slider)
+    return block
+
+
+def effective_protocol_pacing(
+    own: Any, slider: Any,
+) -> "tuple[Dict[str, Any], str]":
+    """协议链**最终生效**延迟块 + 来源标注（纯 ``(own, slider)`` 核心，2026-08-07）。
+
+    runtime（``resolve_send_pacing_block``）与设置页自检 banner
+    （``reply_pacing_settings.chain_pacing_coverage``）**共用本函数**——banner 因此
+    永远与 runtime 同口径，绝不出现「横幅说秒回、实际有节奏」的说谎（延续
+    ``resolve_following_delay_block`` 单一源同一铁律）。返回 ``(block, source)``：
+
+    - ``source='own'``    — 独立键 ``protocol_autoreply.delay`` 配了值，用它；
+    - ``source='slider'`` — own 未配，跟随 ``inbox.l2_autosend.deliver_delay``；
+    - ``source='default'``— own 与 slider **都没配**（max_sec<=0）→ 回落
+      ``DEFAULT_PROTOCOL_PACING``（存量节点重装保留旧 config、无任何节奏键时，
+      仅凭新代码即拟人，不必改 config/推 overlay/等种子）；
+    - ``source='instant'``— own 显式 ``follow: false``（用户明示「本链就要秒回」）→
+      返回其 own 块（通常空＝0 延迟），**不**套兜底默认（尊重意图）。
+    """
+    from src.inbox.humanize import resolve_following_delay_block
+    block, following = resolve_following_delay_block(own, slider)
+    if isinstance(own, dict) and own.get("follow") is False:
+        return block, "instant"
+    try:
+        _mx = float((block or {}).get("max_sec", 0) or 0)
+    except (TypeError, ValueError):
+        _mx = 0.0
+    if _mx <= 0:
+        return dict(DEFAULT_PROTOCOL_PACING), "default"
+    return block, ("slider" if following else "own")
+
+
+def humanize_flags(cfg: Dict[str, Any], platform: str) -> tuple:
+    """协议链拟人开关生效值 ``(mark_read, typing)``（纯函数）。
+
+    与 ``AutosendWorker._humanize_flag`` 同键同语义：设置页「回复先标已读」
+    ``inbox.l2_autosend.mark_read_before_reply`` /「正在输入」``typing_indicator``
+    （默认皆开）为全局档，``platform_humanize.{platform}`` 键级覆写优先。
+    """
+    l2 = (((cfg or {}).get("inbox") or {}).get("l2_autosend") or {})
+    mr = bool(l2.get("mark_read_before_reply", True))
+    tp = bool(l2.get("typing_indicator", True))
+    ph = l2.get("platform_humanize")
+    ov = ph.get(str(platform or "").lower()) if isinstance(ph, dict) else None
+    if isinstance(ov, dict):
+        if ov.get("mark_read") is not None:
+            mr = bool(ov.get("mark_read"))
+        if ov.get("typing") is not None:
+            tp = bool(ov.get("typing"))
+    return mr, tp
 # 值得落审计的原因（过滤掉门控/冷却/去重等噪声）
 AUDIT_REASONS = frozenset({"ok"}) | HANDOFF_REASONS
 
@@ -145,6 +235,8 @@ async def run_autoreply(
     limiter: Any = None,
     sleep: Optional[Callable[[float], Awaitable[Any]]] = None,
     inbox_mode_fn: Optional[Callable[[str, str, str], str]] = None,
+    mark_read: Optional[Callable[..., Awaitable[Any]]] = None,
+    typing: Optional[Callable[..., Awaitable[Any]]] = None,
 ) -> Dict[str, Any]:
     """核心：判断并执行一次自动回复。返回结构化结果（便于测试/观测）。
 
@@ -154,6 +246,9 @@ async def run_autoreply(
     ``inbox_mode_fn`` 可选（Phase 3 防双发）：(platform, account_id, chat_key)→会话
     automation_mode。若返回 ``auto_ai`` 表示该会话已由**收件箱全自动**（草稿/审批/
     autosend 链路，带人设+二次风控）托管，本直发链路早退，避免对同一条消息双生成、双发。
+    ``mark_read`` / ``typing`` 可选（2026-08-07 拟人链补齐）：投递前「已读」回执与
+    延迟尾段「正在输入」状态回调（kwargs: platform/account_id/chat_key[/action]），
+    生产由 build_reply_hook 经编排器接线；None＝跳过（旧行为，纯单测零负担）。
     """
     if (payload or {}).get("direction", "in") != "in":
         return _result("not_inbound")
@@ -251,6 +346,22 @@ async def run_autoreply(
     # 营业时段外：不自动发，转人工（坐席上班后处理）
     if not within_business_hours(acct_cfg, ts):
         return _result("off_hours", inbound=text)
+    # 账号工作时间班表（inbox.work_schedule，2026-08-04）：与 A 线直发 /
+    # B 线 autosend 同一 should_hold 判定——账号休息中不直发（危机消息
+    # severe/elevated 在判定内穿透照发），复用同一 off_hours 语义（转人工
+    # 打标 + 审计）。与上面的 protocol_autoreply.hours（本链路遗留营业时段）
+    # 并存：任一判休即休。fail-open：判定异常一律放行。
+    try:
+        from src.inbox.work_hours_gate import (
+            should_hold_auto_reply,
+            work_schedule_cfg,
+        )
+        if should_hold_auto_reply(
+                work_schedule_cfg(cfg), platform, account_id,
+                peer_text=text, now_ts=ts):
+            return _result("off_hours", inbound=text)
+    except Exception:
+        logger.debug("[protocol-autoreply] 班表判定失败（放行）", exc_info=True)
 
     # 账号级闸门：限速 / 熔断（区别于下方会话级去重/冷却）
     account_key = f"{platform}:{account_id}"
@@ -320,9 +431,73 @@ async def run_autoreply(
         logger.warning("[protocol-autoreply] 命中高风险，转人工不自动发：%s", key)
         return _result("high_risk", text=reply, inbound=text, risk=risk)
 
-    # 拟人化发送延迟（模拟打字；只在确定要发时才等，跳过的不浪费时间）
+    # 单段落收口（2026-08-09）：本链不具备分条能力，而 bubbles 开启时拟稿合同是
+    # 「每行一句」——多行文本从本链整条发出＝「一条消息带结构化换行」（2026-08-08
+    # 客户实锤的 AI 感形态）。折叠成自然单段再发；bubbles 关闭时 ai_client 出口
+    # 已折叠过，此处幂等。纯文本操作，绝不阻断发送。
+    try:
+        from src.inbox.reply_split import collapse_paragraphs as _collapse
+        reply = _collapse(reply) or reply
+    except Exception:
+        pass
+
+    # 拟人化发送前序列（模拟「看到→想→打字」；只在确定要发时才等，跳过的不浪费）。
+    # 单一节奏源收口·第三链（2026-08-07）：延迟经 resolve_send_pacing_block 解析——
+    # 显式 protocol_autoreply.delay 优先，否则跟随设置页滑杆键 deliver_delay
+    # （platform/persona 覆写、adaptive 按回复长度估时并扣生成耗时，均随
+    # resolve_pacing 同步生效）；观测打点 protocol/* 进设置页「节奏观测」——
+    # 此前本链零观测，秒回在所有仪表盘上隐形。已读/打字回调在手且开关开时走
+    # humanize 协作器（已读 → 静默思考 → 临发前挂「正在输入」），与 A/B 线同一
+    # 节奏模型；无回调时保持单次裸 sleep（兼容注入 sleep 断言次数的既有测试契约）。
+    # 解析异常回落旧 pick_delay——节奏是增强，绝不阻断发送。
     if sleep is not None:
-        d = pick_delay(acct_cfg)
+        _pace_block: Dict[str, Any] = {}
+        _pr = None
+        try:
+            from src.inbox.humanize import resolve_pacing
+            _pace_block = resolve_send_pacing_block(cfg, acct_pa)
+            _pr = resolve_pacing(
+                _pace_block, text=reply,
+                elapsed_sec=(max(0.0, time.time() - ts) if now is None else 0.0),
+                persona_id=persona_id, platform=platform)
+            d = _pr.delay
+            try:
+                from src.integrations.humanize_metrics import record_pacing
+                record_pacing(
+                    f"protocol/{platform or '-'}/{persona_id or '-'}", _pr)
+            except Exception:
+                pass
+        except Exception:
+            logger.debug("[protocol-autoreply] 节奏解析失败，回落旧延迟", exc_info=True)
+            d = pick_delay(acct_cfg)
+        _mr_cb = None
+        _tp_cb = None
+        if mark_read is not None or typing is not None:
+            _mr_on, _tp_on = humanize_flags(cfg, platform)
+            if mark_read is not None and _mr_on:
+                async def _mr_cb():
+                    await mark_read(platform=platform, account_id=account_id,
+                                    chat_key=chat_key)
+            if typing is not None and _tp_on:
+                async def _tp_cb(action):
+                    await typing(platform=platform, account_id=account_id,
+                                 chat_key=chat_key, action=action)
+        if _mr_cb is not None or _tp_cb is not None:
+            try:
+                from src.inbox.humanize import (
+                    resolve_typing_lead,
+                    run_presend_humanization,
+                )
+                await run_presend_humanization(
+                    delay=d, action="typing", mark_read=_mr_cb, typing=_tp_cb,
+                    sleep=sleep,
+                    typing_lead_sec=resolve_typing_lead(
+                        _pace_block, text=reply,
+                        persona_id=persona_id, platform=platform))
+                d = 0.0   # 协作器已消费延迟（含已读/打字），下方裸 sleep 不再等
+            except Exception:
+                logger.debug(
+                    "[protocol-autoreply] 拟人序列失败，回落裸延迟", exc_info=True)
         if d > 0:
             try:
                 await sleep(d)
@@ -573,6 +748,40 @@ def build_reply_hook(app: Any) -> Callable[[Dict[str, Any]], Awaitable[None]]:
             _ks_on, _ks_scope = False, ""
         if _ks_on:
             raise RuntimeError(f"kill_switch_blocked:{_ks_scope}")
+        # 出站语言闸（P3-198，2026-08-04）：协议号自动回复的直发边界——此前不经
+        # AutosendWorker 翻译回调，「中文回复发给外语客户」在这条链零防护（与
+        # 主动触达同类缺口）。与 L2/主动触达同一函数同一配置：translate 开→译成
+        # 客户语言；关→lang_gate（默认开）gate-only 只拦 CJK↔非 CJK 实质冲突。
+        # 刻意放在语音分支**之前**：语音稿与文本同源，闸后语音念的就是客户语言。
+        # HOLD → 抛错走 run_autoreply 既有失败链，绝不把冲突语言的内容发出。
+        try:
+            from src.inbox.outbound_translate import (
+                parse_outbound_lang_gate_cfg as _plg,
+                parse_outbound_translate_cfg as _pot,
+                translate_outbound_text as _tot,
+            )
+            _otx = _pot(cfg or {})
+            if _otx.get("enabled") or _plg(cfg or {}).get("enabled"):
+                _svc = getattr(app.state, "translation_service", None)
+                if _svc is not None:
+                    from src.inbox.normalizer import conv_id
+                    _gated = await _tot(
+                        {"conversation_id": conv_id(platform, account_id, chat_key),
+                         "text": text},
+                        translation_service=_svc,
+                        store=getattr(app.state, "inbox_store", None),
+                        source_lang=_otx.get("source_lang") or "zh",
+                        style=_otx.get("style") or "chat",
+                        gate_only=not _otx.get("enabled"))
+                    if _gated is None:
+                        raise RuntimeError(
+                            "lang_gate_hold: 文本语言与客户语言冲突且翻译不可用，已拦截")
+                    if _gated:
+                        text = _gated
+        except RuntimeError:
+            raise
+        except Exception:
+            logger.debug("[protocol-autoreply] 语言闸异常（放行）", exc_info=True)
         # 语音自动回复（方案B · 2026-07-20）：复用 Path B 的跨平台 autosend_voice
         #   （经 orch.send_media → WhatsApp 边车 /send-media 发 ogg/opus 语音条）。受
         #   inbox.l2_autosend.voice 配置门控（enabled / trigger / 长度 / 人设白名单 / 克隆音优先），
@@ -655,11 +864,28 @@ def build_reply_hook(app: Any) -> Callable[[Dict[str, Any]], Awaitable[None]]:
             except Exception:
                 return ""
 
+        # 拟人链回调（2026-08-07）：与 autosend 同经编排器分发（TG 协议号
+        # pyrogram read_chat_history / send_chat_action，WA Baileys /read，
+        # LINE sendChatChecked；不支持的 worker 编排器静默 False）。hook 本就
+        # 跑在 web loop（与 _send 同域），无需跨线程调度；开关判定
+        # （mark_read_before_reply / typing_indicator / platform_humanize）
+        # 在 run_autoreply 内按调用实时读 cfg——设置页保存即生效，免重启。
+        async def _mark_read(*, platform, account_id, chat_key):
+            from src.integrations.account_orchestrator import get_orchestrator
+            return await get_orchestrator(cfg).mark_read(
+                platform, account_id, str(chat_key))
+
+        async def _typing(*, platform, account_id, chat_key, action="typing"):
+            from src.integrations.account_orchestrator import get_orchestrator
+            return await get_orchestrator(cfg).send_chat_action(
+                platform, account_id, str(chat_key), action)
+
         res = await run_autoreply(
             payload, registry=get_account_registry(), cfg=cfg,
             generate=_generate, send=_send,
             limiter=get_autoreply_limiter(cfg), sleep=asyncio.sleep,
             inbox_mode_fn=_inbox_mode,
+            mark_read=_mark_read, typing=_typing,
         )
         # Phase 5：熔断刚触发 → 告警（断路器自身已在冷却期拦截后续）
         if res.get("breaker_opened"):

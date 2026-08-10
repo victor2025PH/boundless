@@ -223,7 +223,7 @@ async def test_fallback_uses_native_api_chat_when_ollama(monkeypatch):
     c._fb_keep_alive = "30m"
     seen = {}
 
-    async def _fake_native(messages, *, max_tokens, temperature):
+    async def _fake_native(messages, *, max_tokens, temperature, model=""):
         seen["messages"] = messages
         seen["max_tokens"] = max_tokens
         return "原生口出话", 7, 3
@@ -336,7 +336,7 @@ async def test_fallback_trims_long_history_before_send(monkeypatch):
     c._fb_num_ctx = 700          # 压小预算逼出裁剪
     seen = {}
 
-    async def _fake_native(messages, *, max_tokens, temperature):
+    async def _fake_native(messages, *, max_tokens, temperature, model=""):
         seen["messages"] = messages
         return "出话", 7, 3
 

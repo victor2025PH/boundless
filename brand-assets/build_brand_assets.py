@@ -12,6 +12,10 @@
 
 重跑：  python build_brand_assets.py
 依赖：  Pillow >= 10, numpy；fonts/ 下 NotoSansCJKsc(Black/Bold/Medium) + Montserrat 可变字体
+
+注：幻境 STUDIO（原 AvatarHub 客户端）的客户端级图标不在本管线九产品之列，
+由 build_studio_icon.py 单独生成（复用本文件的抠白/方形化函数）；全量重跑后
+若需刷新 STUDIO 图标，另跑 `python build_studio_icon.py`。
 """
 
 import os

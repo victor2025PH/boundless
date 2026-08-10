@@ -759,6 +759,121 @@ def register_drafts_routes(app, *, api_auth):
             raise HTTPException(404, tr(request, "err.draft.not_found"))
         return {"ok": True, "draft": draft}
 
+    @app.post("/api/drafts/{draft_id}/regenerate")
+    async def api_drafts_regenerate(request: Request, draft_id: str,
+                                    _=Depends(api_auth)):
+        """陈旧稿一键重生成（P1 2026-08-09，stale 护栏 409 的出路闭环）。
+
+        stale_approve_hours 护栏把老稿拦下后，坐席此前只有「编辑改写」或
+        「去输入框重新生成再手发」两条手工路。本端点＝按**当前**会话上下文
+        重走人设产线（``generate_persona_reply``，与全自动草稿/composer AI
+        同一条产线）→ 生成成功后**原子作废**旧稿（竞态窗内被同事处置 →
+        409 already_resolved，不铸新稿）→ 铸新 pending 稿。
+
+        安全语义：新稿 autopilot 按 review 口径定级（只产 L1/L3/L4）——
+        重生成是人工审阅流，**绝不**产 L2 落进自动投递批次。
+        """
+        svc = _get_draft_service(request)
+        store = getattr(request.app.state, "inbox_store", None)
+        if store is None:
+            store = getattr(svc, "_store", None)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        old = store.get_draft(draft_id)
+        if old is None:
+            raise HTTPException(404, tr(request, "err.draft.not_found"))
+        if str(old.get("status") or "") not in ("pending", "enriching"):
+            raise HTTPException(409, tr(request, "err.draft.already_resolved"))
+        cid = str(old.get("conversation_id") or "")
+        platform = str(old.get("platform") or "")
+        chat_key = str(old.get("chat_key") or "")
+        account_id = str(old.get("account_id") or "default")
+
+        # 按**当前**会话上下文生成（老稿之所以老，就是因为情境已经变了）
+        from src.inbox.persona_reply import generate_persona_reply, normalize_history
+        rows = []
+        try:
+            if cid and hasattr(store, "list_recent_messages"):
+                rows = store.list_recent_messages(cid, limit=30) or []
+        except Exception:
+            rows = []
+        msgs = []
+        for r in rows:
+            try:
+                _txt = str((r.get("text") or r.get("original_text") or "")).strip()
+                if _txt:
+                    msgs.append({"direction": str(r.get("direction") or "in"),
+                                 "text": _txt})
+            except Exception:
+                continue
+        history, last_inbound = normalize_history(msgs)
+        if not last_inbound:
+            last_inbound = str(old.get("peer_text") or "")
+        if not last_inbound:
+            raise HTTPException(400, tr(request, "err.ws.no_conversation_context"))
+        # P3：最近一条入站的平台 message_id → 案例 mid 锚点（rows 已升序）
+        _inbound_mid = ""
+        try:
+            for r in reversed(rows or []):
+                if str(r.get("direction") or "") != "in":
+                    continue
+                mid = str(r.get("message_id") or "").strip()
+                if mid and mid not in ("0",):
+                    _inbound_mid = mid
+                    break
+        except Exception:
+            _inbound_mid = ""
+        out = await generate_persona_reply(
+            app=request.app, platform=platform, chat_key=chat_key,
+            last_inbound=last_inbound, history=history,
+            conversation_id=cid, account_id=account_id,
+            inbound_msg_id=_inbound_mid)
+        reply = str((out or {}).get("reply") or "").strip()
+        if not (out or {}).get("ok") or not reply:
+            raise HTTPException(502, tr(request, "err.draft.regen_failed"))
+
+        by = _session_agent_id(request) or "regen"
+        # 生成成功才作废旧稿；原子闸门（仅 pending/enriching 可转）防竞态双活
+        cancelled = store.update_draft_status(
+            draft_id, status="cancelled", decided_by=f"regen:{by}")
+        if not cancelled:
+            raise HTTPException(409, tr(request, "err.draft.already_resolved"))
+
+        import uuid as _uuid
+        from src.ai.chat_assistant_service import quick_analyze
+        from src.inbox.drafts import _max_risk, keyword_risk_level, risk_to_autopilot
+        analysis = quick_analyze(reply)
+        risk_level = _max_risk(
+            analysis.get("risk_level", "low"), keyword_risk_level(reply))
+        autopilot = risk_to_autopilot(risk_level, "review")
+        new_id = store.upsert_draft({
+            "source_kind": "inbox",
+            "source_id": "regen_" + _uuid.uuid4().hex,
+            "conversation_id": cid,
+            "platform": platform,
+            "account_id": account_id,
+            "chat_key": chat_key,
+            "chat_name": str(old.get("chat_name") or ""),
+            "peer_text": last_inbound,
+            "draft_text": reply,
+            "draft_lang": str(out.get("reply_lang") or ""),
+            "risk_level": risk_level,
+            "risk_reasons": analysis.get("risk_reasons") or [],
+            "autopilot_level": autopilot,
+            "status": "pending",
+            "trace_id": f"regen:{draft_id}",
+        })
+        try:
+            store.record_draft_audit(
+                new_id, autopilot_level=autopilot, action="regenerate_draft",
+                agent_id=by, reason=f"from={draft_id}",
+                risk_level=risk_level, conversation_id=cid)
+        except Exception:
+            pass
+        return {"ok": True, "draft_id": new_id, "cancelled": draft_id,
+                "risk_level": risk_level, "autopilot_level": autopilot,
+                "draft_text": reply}
+
     @app.post("/api/drafts/{draft_id}/resolve")
     async def api_drafts_resolve(request: Request, draft_id: str, _=Depends(api_auth)):
         """带 L4 拦截 + 敏感词强制升级 + 审计的统一处置（B2）。
@@ -1383,6 +1498,18 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # 回复时延 SLO（P1-8 2026-08-09）：首答 p50/p95 + 零回复率，inbox 持久库
+        # 口径（重启不清零），进程级 300s TTL 缓存防 ops 轮询逐次全扫消息表。
+        try:
+            _rl_store = getattr(request.app.state, "inbox_store", None)
+            if _rl_store is not None:
+                from src.ops.reply_latency import reply_latency_snapshot
+                _rl = reply_latency_snapshot(_rl_store)
+                if _rl:
+                    metrics["reply_latency"] = _rl
+        except Exception:
+            pass
+
         # 案例中心观测（2026-08-03：自启动立案/结案/升级/告警计数 + 平均结案时长；
         # 当前未结案的 live 口径在 /api/cases/active，两者互补）
         try:
@@ -1796,6 +1923,16 @@ def register_metrics_route(app, *, api_auth):
                        "Persona album media items by type", labels='type="photo"')
                 _gauge("ws_persona_media_by_type", pm.get("video", 0),
                        labels='type="video"')
+
+            # 回复时延 SLO（24h 窗：p50/p95/零回复——市场可承诺数字的机器可读面）
+            rl = (metrics.get("reply_latency") or {}).get("d1") or {}
+            if rl.get("episodes"):
+                _gauge("ws_reply_latency_p50_seconds", rl.get("p50_s", 0),
+                       "First-reply latency p50 over last 24h (seconds)")
+                _gauge("ws_reply_latency_p95_seconds", rl.get("p95_s", 0),
+                       "First-reply latency p95 over last 24h (seconds)")
+                _gauge("ws_reply_unanswered_24h", rl.get("unanswered", 0),
+                       "Inbound bursts unanswered past grace over last 24h")
 
             # 案例中心（立案/结案/升级/告警；来源分布走 dump_prom 的 label 行）
             cs = metrics.get("cases") or {}

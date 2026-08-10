@@ -61,7 +61,11 @@ def maybe_bootstrap_automation_mode(
         return explicit
     mode = global_automation_mode_from_config(config)
     if bootstrap_enabled_from_config(config) and mode in AUTOMATION_MODES:
-        store.set_automation_mode(conversation_id, mode)
+        try:
+            store.set_automation_mode(conversation_id, mode, source="bootstrap")
+        except TypeError:
+            # 旧 store / 测试假件无 source 形参 → 按旧签名写（来源留空=未知）
+            store.set_automation_mode(conversation_id, mode)
         try:
             from src.inbox.automation_mode_stats import record_bootstrap
             _plat = str(conversation_id or "").split(":", 1)[0]

@@ -43,12 +43,44 @@ def build_checklist(
     config = config or {}
     checks: List[Dict[str, Any]] = []
 
-    # 1) AI 大模型已配置（provider + api_key 非占位）——硬性
+    # 1) AI 大模型已配置——硬性。判据按主链位置分流（ai.primary，P2）：
+    #    cloud（默认）：provider + api_key 非占位（旧口径逐字节不变）；
+    #    local/local_only：看**本地端点**（ai.fallback enabled+base_url+model）——
+    #    纯本地部署云 key 本就是占位，按旧口径会红灯「不能开张」，与事实相反
+    #    （与 AIClient 启动探针按模式分流同一主题：本地档的就绪判定必须看本地）。
     ai = (config.get("ai") or {})
     provider = str(ai.get("provider") or "").strip()
     api_key = ai.get("api_key")
+    primary = str(ai.get("primary") or "cloud").strip().lower()
+    fb = ai.get("fallback") if isinstance(ai.get("fallback"), dict) else {}
+    local_ready = (bool(fb.get("enabled"))
+                   and bool(str(fb.get("base_url") or "").strip())
+                   and bool(str(fb.get("model") or "").strip()))
     # 本地 Ollama 允许任意非空 key；这里只判「非占位」
-    if provider and not _is_placeholder(api_key):
+    cloud_ready = bool(provider) and not _is_placeholder(api_key)
+    if primary in ("local", "local_only"):
+        local_model = str(fb.get("model") or "").strip()
+        if not local_ready:
+            checks.append(_check("ai", "AI 大模型已配置", "fail",
+                                 f"已声明本地主链（ai.primary={primary}）但 ai.fallback "
+                                 "端点未配置（需 enabled + base_url + model）",
+                                 "/developer", "去配置"))
+        elif primary == "local_only":
+            checks.append(_check("ai", "AI 大模型已配置", "ok",
+                                 f"本地主链 {local_model}（local_only 严格隐私，"
+                                 "无需云端 key）"))
+        elif cloud_ready:
+            checks.append(_check("ai", "AI 大模型已配置", "ok",
+                                 f"本地主链 {local_model}；云端回落已配置"
+                                 f"（provider={provider}）"))
+        else:
+            # local（非 only）语义上想要云端回落——没配 key 能开张，但意图半配置：
+            # 黄灯提示补 key 或改 local_only，不拦上线。
+            checks.append(_check("ai", "AI 大模型已配置", "warn",
+                                 f"本地主链 {local_model} 可开张；云端回落 key 未配置"
+                                 "（若无需回落请改 local_only）",
+                                 "/developer", "去配置"))
+    elif cloud_ready:
         checks.append(_check("ai", "AI 大模型已配置", "ok",
                              f"provider={provider}"))
     elif provider:

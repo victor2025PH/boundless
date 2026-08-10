@@ -155,8 +155,33 @@ def register_stored_read_routes(app, *, api_auth) -> None:
             logger.debug("[automation] effective 档位求值失败（忽略）",
                          exc_info=True)
             effective = None
+        # P0 2026-08-09 接管可见化：显式档位的来源与时间（「谁在什么时候把它
+        # 写成这样」），以及接管态的自动接回倒计时——横幅说的与 watchdog
+        # sweep 做的同参同判定（takeover_rearm.rearm_state）。None＝无显式行
+        # / 旧 store，前端不渲染。
+        mode_source = None
+        rearm = None
+        try:
+            _ms_store = _inbox_store(request)
+            if _ms_store is not None and hasattr(
+                    _ms_store, "get_automation_mode_meta"):
+                _meta = _ms_store.get_automation_mode_meta(cid)
+                if _meta:
+                    mode_source = {
+                        "source": str(_meta.get("source") or ""),
+                        "updated_at": float(_meta.get("updated_at") or 0.0),
+                    }
+                    from src.inbox.takeover_rearm import rearm_state
+                    _cm3 = getattr(request.app.state, "config_manager", None)
+                    rearm = rearm_state(
+                        _meta,
+                        (getattr(_cm3, "config", None) or {}) if _cm3 else {})
+        except Exception:
+            logger.debug("[automation] mode_source 读取失败（忽略）",
+                         exc_info=True)
         return {"ok": True, "conversation_id": cid, "mode": mode,
-                "budget": budget, "account": account, "effective": effective}
+                "budget": budget, "account": account, "effective": effective,
+                "mode_source": mode_source, "rearm": rearm}
 
     @app.post("/api/unified-inbox/automation")
     async def api_unified_inbox_automation_set(request: Request, _=Depends(api_auth)):
@@ -170,6 +195,26 @@ def register_stored_read_routes(app, *, api_auth) -> None:
         if mode not in AUTOMATION_MODES:
             raise HTTPException(400, tr(request, "err.ws.unsupported_automation_mode", mode=mode))
         cid = _conv_id(platform, account_id, chat_key)
+        # P0 2026-08-09 群聊上全自动要显式确认：把群/频道一把切到 auto_ai（AI 会
+        # 在群里自动说话）多为批量误操作——.104 实弹修复时 3 个群被顺手切成
+        # 全自动。仅拦「升到 auto_ai 且会话是 group/channel 且未带 confirm_group」；
+        # 私聊、降档方向、会话行缺失（fail-open）都不受影响。409 detail 带
+        # code=group_confirm_required，前端弹确认后带 confirm_group 重试。
+        if mode == "auto_ai" and not bool(body.get("confirm_group")):
+            _chat_type = ""
+            try:
+                _gg_store = _inbox_store(request)
+                if _gg_store is not None:
+                    _chat_type = str((_gg_store.get_conversation(cid) or {})
+                                     .get("chat_type") or "")
+            except Exception:
+                _chat_type = ""
+            if _chat_type in ("group", "channel"):
+                raise HTTPException(409, {
+                    "code": "group_confirm_required",
+                    "chat_type": _chat_type,
+                    "message": tr(request, "err.ws.group_confirm_required"),
+                })
         cancelled = _write_automation_mode(request, cid, mode)
         return {
             "ok": True,
@@ -177,6 +222,58 @@ def register_stored_read_routes(app, *, api_auth) -> None:
             "mode": mode,
             "cancelled_l2": int(cancelled or 0),
         }
+
+    @app.get("/api/unified-inbox/why-no-reply")
+    async def api_unified_inbox_why_no_reply(
+        request: Request,
+        platform: str,
+        account_id: str = "default",
+        chat_key: str = "",
+    ):
+        """「为什么没自动回」进程内诊断（why_no_reply CLI 的 API 化）。
+
+        findings 只出码+参数（文案由前端按 UI 语言渲染），判定与 A/B 两线
+        护栏同源（reply_diagnosis.diagnose_conversation）。只读零副作用。
+        """
+        api_auth(request)
+        if not platform or not chat_key:
+            raise HTTPException(400, tr(request, "err.ws.platform_chatkey_required"))
+        from src.inbox.reply_diagnosis import diagnose_conversation
+        _cm = getattr(request.app.state, "config_manager", None)
+        cfg = (getattr(_cm, "config", None) or {}) if _cm else {}
+        data = diagnose_conversation(
+            _inbox_store(request), cfg,
+            platform=str(platform or "").lower(),
+            account_id=str(account_id or "default"),
+            chat_key=str(chat_key or ""))
+        data["ok"] = True
+        return data
+
+    @app.post("/api/unified-inbox/warmup-review")
+    async def api_unified_inbox_warmup_review_set(request: Request):
+        """主管一键开/关「预热期入站人审」（cold_start.warmup_review）。
+
+        Body: ``{enabled: bool}``。写 config.local.yaml overlay（ruamel 保注释
+        链路）+ 配置热重载 ~30s 生效免重启。这是 .198/.104 事故里「看得见
+        （封顶胶囊）但改不了（要 SSH 改 YAML）」的最后一块补齐。
+        """
+        from src.web.routes.unified_inbox_auth import _require_supervisor
+        _require_supervisor(request)
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        enabled = bool((body or {}).get("enabled"))
+        cm = getattr(request.app.state, "config_manager", None)
+        if cm is None or not hasattr(cm, "set_overlay_flag"):
+            raise HTTPException(503, tr(request, "err.ws.config_write_unavailable"))
+        path = "companion.proactive_topic.cold_start.warmup_review"
+        ok, msg = cm.set_overlay_flag(path, enabled)
+        if not ok:
+            raise HTTPException(500, tr(request, "err.ws.config_write_failed",
+                                        err=str(msg or "")))
+        return {"ok": True, "path": path, "value": enabled}
 
     @app.post("/api/unified-inbox/reply-budget/relief")
     async def api_unified_inbox_reply_budget_relief(

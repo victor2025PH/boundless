@@ -31,10 +31,31 @@
   window.__openUnique = function(){ return true; };
 
   if (window.top !== window) return;   /* iframe 内嵌（AI Studio 等）不参与命名与复用 */
-  /* 桌面壳（Electron webview，UA 含 Electron/，壳 webview 开了 allowpopups）整体退出：
-     壳内 window.open 不是「找同名标签页」而是真弹一个原生子窗口——「管理后台」原地
-     跳转 / _blank 弹壳窗是壳内既有语义，保持零回归；壳自身已有 app 级单实例锁。 */
-  try { if (/\bElectron\//.test(navigator.userAgent || '')) return; } catch(_) {}
+  /* 桌面壳（Electron webview，UA 含 Electron/，壳 webview 开了 allowpopups）：
+     壳内 window.open 不是「找同名标签页」而是真弹一个原生子窗口，命名寻址语义
+     不存在——旧版在此整体退出（每点一次会话深链弹一个新壳窗）。2026-08-09 起
+     改为**精简版** helper：仅对「工作台会话深链」先走 BC 交接（壳内已开的工作台
+     webview 同 partition，BroadcastChannel 可达 → 站内切会话零弹窗），250ms 无
+     应答回落 window.open 弹壳窗（壳内既有语义，allowpopups 恒可用，零回归）；
+     其余入口（管理后台原地跳转等）保持默认行为。壳自身已有 app 级单实例锁。 */
+  try {
+    if (/\bElectron\//.test(navigator.userAgent || '')) {
+      window.__openUniqueUrl = function(url, kind){
+        try {
+          url = String(url || '');
+          if (!url || url.charAt(0) !== '/') return false;
+          if (kind === 'admin') return false;
+          var path0 = (url.split('#')[0].split('?')[0].replace(/\/+$/, '')) || '/';
+          if (path0 !== '/workspace') return false;
+          if (!/[?&](?:conv|focus)=/.test(url)) return false;
+          return _bcHandoff(url, {
+            miss: function(){ try { window.open(url, '_blank'); } catch(_) {} }
+          });
+        } catch(_) { return false; }
+      };
+      return;
+    }
+  } catch(_) {}
   /* 已安装 PWA 应用窗（任务栏「坐席工作台」图标，display-mode: standalone/minimal-ui）：
      app 窗自成一个浏览上下文组，window.open 按名寻址够不到组外窗口 → 每次都新开，
      且 Chrome 会把它落成**普通浏览器标签页**——实测＝在 app 窗里点「坐席工作台/
@@ -76,19 +97,28 @@
     }
   } catch(_) {}
 
+  /* 深链参数拆包（conv/mid/flag/case）：postMessage 与 BroadcastChannel 两条
+     交接路共用同一份口径，别让「案例条只在其中一条路上生效」这种口径分裂出现。 */
+  function _deepLinkParts(url){
+    var m = /[?&](?:conv|focus)=([^&#]+)/.exec(url);
+    if (!m) return null;
+    var cid = m[1];
+    try { cid = decodeURIComponent(cid); } catch(_) {}
+    var mid = '', flag = '', caseId = '';
+    try {
+      var usp = new URLSearchParams(url.slice(url.indexOf('?') + 1).split('#')[0]);
+      mid = usp.get('mid') || ''; flag = usp.get('flag') || '';
+      caseId = usp.get('case') || '';
+    } catch(_) {}
+    return {cid: cid, mid: mid, flag: flag, caseId: caseId};
+  }
+
   /* 会话深链免刷新（P1-②）：目标是「已在坐席页的收件箱窗口」且 URL 带 ?conv=/?focus=
      时，点对点 postMessage 让它站内切会话；~350ms 收到 ack → 只聚焦零刷新，
      没等到（旧版收件箱无监听器 / 消息丢失）→ 整页导航兜底。返回 true=已接手异步收尾。 */
   function _tryHandoff(w, url){
-    var m = /[?&](?:conv|focus)=([^&#]+)/.exec(url);
-    if (!m || typeof w.postMessage !== 'function') return false;
-    var cid = m[1];
-    try { cid = decodeURIComponent(cid); } catch(_) {}
-    var mid = '', flag = '';
-    try {
-      var usp = new URLSearchParams(url.slice(url.indexOf('?') + 1).split('#')[0]);
-      mid = usp.get('mid') || ''; flag = usp.get('flag') || '';
-    } catch(_) {}
+    var p = _deepLinkParts(url);
+    if (!p || typeof w.postMessage !== 'function') return false;
     var token = 'hk' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     var acked = false;
     function onAck(ev){
@@ -98,7 +128,7 @@
       } catch(_) {}
     }
     window.addEventListener('message', onAck);
-    try { w.postMessage({aitr: 'open-conv', token: token, cid: cid, mid: mid, flag: flag}, location.origin); }
+    try { w.postMessage({aitr: 'open-conv', token: token, cid: p.cid, mid: p.mid, flag: p.flag, caseId: p.caseId}, location.origin); }
     catch(_) { window.removeEventListener('message', onAck); return false; }
     setTimeout(function(){
       window.removeEventListener('message', onAck);
@@ -106,6 +136,56 @@
       try { w.focus(); } catch(_) {}   /* 兜底导航后补一次聚焦；ack 路径此前已聚焦 */
     }, 350);
     return true;
+  }
+
+  /* 跨浏览上下文组交接核心（P0-C，2026-08-09；P2 抽公共核供浏览器/桌面壳两形态）：
+     命名查找只在同组内成立——书签/手输网址开出的工作台在别的组，named open 找不到
+     它；桌面壳（Electron）则根本没有命名寻址语义。BroadcastChannel 同源同
+     profile/partition 全组可达，正好补这两个洞：
+     · ws-ping 探活，250ms 内有工作台主控应答 → open-conv 交给那边站内打开，
+       派发 aitr:ws-handoff（入口页自行 toast「请切过去」——浏览器安全模型不允许
+       本页替用户聚焦别组标签页，明说比再开一个窗口诚实），再执行 cbs.hit 收尾；
+     · 无应答（没有工作台 / 旧版页面无监听）→ 执行 cbs.miss（调用方自定兜底：
+       浏览器=导航预开的空白命名窗；壳内=window.open 弹壳窗，均为原有语义零回归）。
+     返回 true=已接手异步收尾；false=BC 不可用/非会话深链，调用方走默认路径。 */
+  function _bcHandoff(url, cbs){
+    cbs = cbs || {};
+    var ch = null;
+    try { ch = new BroadcastChannel('aitr_ws_bridge::' + location.host); } catch(_) { return false; }
+    var p = _deepLinkParts(url);
+    if (!p) { try { ch.close(); } catch(_) {} return false; }
+    var token = 'bc' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    var done = false;
+    ch.onmessage = function(ev){
+      var d = ev && ev.data;
+      if (done || !d || d.aitr !== 'ws-pong' || d.token !== token) return;
+      done = true;
+      try { ch.postMessage({aitr: 'open-conv', token: token, cid: p.cid, mid: p.mid, flag: p.flag, caseId: p.caseId}); } catch(_) {}
+      try { ch.close(); } catch(_) {}
+      try { if (cbs.hit) cbs.hit(); } catch(_) {}
+      try { window.dispatchEvent(new CustomEvent('aitr:ws-handoff', {detail: {cid: p.cid}})); } catch(_) {}
+    };
+    try { ch.postMessage({aitr: 'ws-ping', token: token}); }
+    catch(_) { try { ch.close(); } catch(_) {} return false; }
+    setTimeout(function(){
+      if (done) return;
+      done = true;
+      try { ch.close(); } catch(_) {}
+      try { if (cbs.miss) cbs.miss(); } catch(_) {}
+    }, 250);
+    return true;
+  }
+
+  /* 浏览器形态包装：刚开出的空白命名窗（本组无工作台）→ 先 BC 探别组，
+     命中关掉空白窗交接；无应答导航空白窗为唯一工作台。 */
+  function _tryBcHandoff(w, url){
+    return _bcHandoff(url, {
+      hit: function(){ try { w.close(); } catch(_) {} },
+      miss: function(){
+        try { w.location.replace(url); } catch(_) { try { w.location.href = url; } catch(_) {} }
+        try { w.focus(); } catch(_) {}
+      }
+    });
   }
 
   /* 程序化入口：url 须为站内绝对路径。返回 true=已复用/聚焦成功；false=请调用方走默认路径。 */
@@ -138,7 +218,10 @@
       } catch(_) { cur = null; }
       var deep = url.indexOf('?') >= 0 || url.indexOf('#') >= 0;
       if (cur === '') {
-        /* 新开的空白窗：replace 导航，避免 about:blank 留在该标签页的历史里 */
+        /* 新开的空白窗＝本组内没有该命名窗口。工作台会话深链先试跨组交接
+           （别组可能已开着工作台），250ms 无应答才把这个空白窗导航成新工作台 */
+        if (slot === 'workspace' && deep && _tryBcHandoff(w, url)) return true;
+        /* replace 导航，避免 about:blank 留在该标签页的历史里 */
         try { w.location.replace(url); } catch(_) { w.location.href = url; }
       } else if (cur === null) {
         w.location.href = url;                 /* 外站游子：领回来 */

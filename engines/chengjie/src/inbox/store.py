@@ -25,6 +25,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import sqlite3
 import threading
 import time
@@ -39,6 +40,31 @@ logger = logging.getLogger(__name__)
 AUTOMATION_MODES = {"manual", "review", "multi_choice", "auto_ai"}
 _DEFAULT_AUTOMATION_MODE = "review"
 
+# P1-⑧ 激活里程碑「首条真实出站」的进程级一次性闸（ingest 是热路径，标志位短路
+# 保证稳态零成本；重复上报对按指纹去重的漏斗只是噪声）
+_FIRST_REPLY_NOTED = False
+
+
+def _note_first_reply_milestone(msg: "InboxMessage") -> None:
+    """本进程首条**新鲜**出站消息 → 激活漏斗 first_reply 里程碑。
+
+    新鲜度闸（10 分钟）：目录同步会把手机历史会话整批灌进来，旧出站不代表
+    「这台新装机真的用起来了」；只有 ts≈now 的出站才算数。beacon 未装（server
+    部署/测试）时 note_milestone 自身 no-op。任何异常吞掉且不再重试。
+    """
+    global _FIRST_REPLY_NOTED
+    if _FIRST_REPLY_NOTED:
+        return
+    try:
+        if abs(time.time() - float(msg.ts or 0)) > 600:
+            return
+        _FIRST_REPLY_NOTED = True
+        from src.utils.telemetry_beacon import note_milestone
+        platform = str(msg.conversation_id or "").split(":", 1)[0]
+        note_milestone("first_reply", f"platform={platform}")
+    except Exception:  # noqa: BLE001
+        _FIRST_REPLY_NOTED = True
+
 # 计费席位口径：draft_audit_log.agent_id 里有「机器/系统」actor（L2 自动发送
 # worker、SLA 看门狗、工作链、无登录用户回退），它们不是人工坐席，不应计入授权
 # 席位（否则会把自动化跑量误判成 over_seats 触发计费红灯告警）。统计活跃坐席时排除。
@@ -47,6 +73,22 @@ _NON_BILLABLE_AGENT_IDS = ("autosend_worker", "system")
 # 好友名单「沉默」判定阈值（天）：聊过但超过这么久没动静 = 需要激活的存量线索。
 # 做成常量而非 SQL 魔数，便于运营侧调档（30 天 ≈ 一个自然运营周期）。
 PROTOCOL_CONTACT_SILENT_DAYS = 30.0
+
+# 「永久搁置」哨兵时间戳 = 2100-01-01 00:00:00 UTC。
+# 刻意用远期有限值而非 +inf / 新列：复用现有 snooze_until REAL 列与全部读路径
+# （snoozed_ids/now 过滤、SLA/升级/红点排除、排序索引）零改动即工作；且 FastAPI 的
+# JSONResponse(allow_nan=False) 序列化 inf 会 500，有限哨兵天然可序列化。
+# 语义：永久搁置≠静音——ingest 侧客户再来消息仍会 clear_snooze 立即重浮（这正是
+# 与「归档」的分界：归档连客户回复都不回来）。前端镜像常量见 unified_inbox.html。
+SNOOZE_FOREVER_TS = 4102444800.0
+
+
+def is_permanent_snooze(until_ts: Any) -> bool:
+    """该 snooze_until 是否表示「永久搁置」（>= 哨兵值；容忍浮点毫厘）。"""
+    try:
+        return float(until_ts or 0) >= SNOOZE_FOREVER_TS - 1.0
+    except (TypeError, ValueError):
+        return False
 
 
 def _contact_query_clause(query: str) -> Tuple[str, List[Any]]:
@@ -298,6 +340,20 @@ CREATE TABLE IF NOT EXISTS conversation_settings (
     automation_mode   TEXT NOT NULL DEFAULT 'review',
     updated_at        REAL NOT NULL
 );
+
+-- P2 2026-08-09 档位变更时间线：conversation_settings 只存最新态，「谁在什么时候
+-- 把档位改成什么、之前是什么」此前不可追溯（.198 接管钉死 27h 的排障只能靠猜）。
+-- 只记**真实跃迁**（mode 或 source 变了才落行；接管重刷时间戳不落）→ 行数受真实
+-- 状态变化约束，天然有界。消费：why-no-reply 的 mode_history 段 + AI 状态面板时间线。
+CREATE TABLE IF NOT EXISTS automation_mode_log (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id   TEXT NOT NULL,
+    mode              TEXT NOT NULL,
+    source            TEXT NOT NULL DEFAULT '',
+    prev_mode         TEXT NOT NULL DEFAULT '',
+    ts                REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_amlog_conv ON automation_mode_log(conversation_id, ts DESC);
 
 -- Phase B：统一草稿层。
 -- 注意：平台来源的草稿事实源仍在各 RPA 表（line_rpa_pending / wa_rpa_pending /
@@ -658,6 +714,10 @@ _MIGRATIONS = [
     "ALTER TABLE agent_prefs ADD COLUMN languages TEXT NOT NULL DEFAULT ''",
     # P8：通知中心「已读水位线」上云（跨设备保留「全部已读」状态，毫秒时戳）。
     "ALTER TABLE agent_prefs ADD COLUMN notif_read_at INTEGER NOT NULL DEFAULT 0",
+    # 外观个性化（2026-08-04）：坐席「主题/壁纸/气泡色/夜间/字号/圆角/动画」偏好 JSON。
+    # 服务端漫游的单一事实源；写入前经 src/web/appearance_prefs.sanitize_appearance 白名单净化，
+    # 空串=从未设置/恢复默认（前端回落内置默认主题，视觉与未部署本功能时一致）。
+    "ALTER TABLE agent_prefs ADD COLUMN appearance TEXT NOT NULL DEFAULT ''",
     # P3：出向翻译漏斗「按日」持久化聚合（看板按 7/30 日窗读取，跨重启/含趋势线）。
     # 与内存版 OutboundTranslationStats 同口径；day 用本地日期，与 dashboard 其它面板分桶一致。
     # by_lang_json 为该日各目标语译出次数的 JSON（读改写，已在锁内）。
@@ -806,6 +866,76 @@ _MIGRATIONS = [
     "ALTER TABLE conversation_meta ADD COLUMN tz_country TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE conversation_meta ADD COLUMN tz_offset REAL NOT NULL DEFAULT 0",
     "ALTER TABLE conversation_meta ADD COLUMN tz_resolved_at REAL NOT NULL DEFAULT 0",
+    # T-mood（P1-198 续，2026-08-02）：坐席「客户情绪」人工标注的 arbitration 列。
+    # conv_tags 仍是展示/筛选投影；AI 消费（拟稿指令/主动闸门/goals 让路/语音安抚）
+    # 走 effective_mood 仲裁（TTL + 标签在场校验）。ts=0（历史标注无时间戳）恒不激活
+    # ——存量部署零行为突变。
+    "ALTER TABLE conversation_meta ADD COLUMN mood_manual TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE conversation_meta ADD COLUMN mood_manual_ts REAL NOT NULL DEFAULT 0",
+    "ALTER TABLE conversation_meta ADD COLUMN mood_manual_by TEXT NOT NULL DEFAULT ''",
+    # 对方机器人守卫 P1（2026-08-03）：检测结果持久化——收件箱 🤖 徽章/一键覆写/
+    # 统计剔除的地基。peer_is_bot：0=未知、1=已判定 bot（Tier0 平台真值或运营标记）、
+    # -1=运营覆写「确认是真人」（启发式疑似对其不再拦截/降档；Tier0 平台真值与
+    # 复读/秒回/预算等**行为刹车**不受覆写影响——那些是行为安全项不是身份判定）。
+    # bot_score=最近一次启发式疑似评分 0..1；bot_evidence=原因码+摘要（人可读，
+    # 证据 chips 直显）。纯加法、缺省 0/空=存量零行为变化。
+    "ALTER TABLE conversations ADD COLUMN peer_is_bot INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE conversations ADD COLUMN bot_score REAL NOT NULL DEFAULT 0",
+    "ALTER TABLE conversations ADD COLUMN bot_evidence TEXT NOT NULL DEFAULT ''",
+    # 归档生命周期（P0-198，2026-08-04）：archived_at＝**归档动作发生的时刻**。
+    # 此前只有 auto_archived_at（仅自动归档路径写），手动归档不留任何时间戳，于是
+    # 「客户是不是在归档之后又说过话」无从判定——唯一可用的近似是 conversation_meta
+    # .updated_at，而那一列会被入站链路（update_conv_meta 写情绪/意图）刷成最新入站
+    # 时刻，导致「新消息时间 > 归档时刻」这个判据**恒不成立**。实锤：198 上一条 33
+    # 条消息的活跃会话被手动归档，updated_at 与最后一条入站消息精确到秒相同，归档
+    # 时刻已被覆盖、不可追溯。故必须独立成列，别再退回 updated_at 代理。
+    "ALTER TABLE conversation_meta ADD COLUMN archived_at REAL NOT NULL DEFAULT 0",
+    # 存量已归档行回填「本次升级时刻」：语义＝从升级那刻起客户再开口就能复活，而
+    # 升级之前的历史消息（首次全量同步/thread 重放灌进来的）不会误触发复活。
+    # 自证幂等（列表按 SQL 内容哈希记账、只跑一次，仍保持可安全重跑不变量）：
+    # WHERE archived_at=0 过滤掉已回填行，且此后 set_conv_archived 总会写入非 0 值。
+    "UPDATE conversation_meta SET archived_at = CAST(strftime('%s','now') AS REAL)"
+    " WHERE archived = 1 AND archived_at = 0",
+    # 对方机器人守卫 P2（2026-08-04，198「全自动静默哑火」事故修复）：每日预算台账。
+    # 旧口径按 messages 数「当日全部出站」——坐席手发/双气泡拆条全都挤占 AI 预算
+    # （198 实锤：手动档人工聊掉 27 条 + 切全自动后 13 条 = 40 触顶，全自动只跑了
+    # 7 轮就静默停发）。新口径＝本表数「自动链回复轮次」：A 线获准直回 +1、B 线将
+    # 自动投递的拟稿 +1；人审通过/坐席手发/主动触达（自有预算）永不占。
+    # day 变更即自动清零（跨日恢复）；relief_day=当日 → 坐席显式救济（「今日继续
+    # 自动回复」按钮），当日不再受预算限制，明天自动回到正常预算。
+    """CREATE TABLE IF NOT EXISTS peer_reply_ledger (
+        conversation_id  TEXT PRIMARY KEY,
+        day              TEXT NOT NULL DEFAULT '',
+        auto_replies     INTEGER NOT NULL DEFAULT 0,
+        relief_day       TEXT NOT NULL DEFAULT '',
+        updated_at       REAL NOT NULL DEFAULT 0
+    )""",
+    # 档位来源治理（P1 2026-08-07，effective_automation §98 续）：谁把会话写成
+    # 这个档的？source＝写入者身份：human（UI 下拉/坐席）| bulk（主管一键降档）|
+    # bootstrap（首条入站持久化全局档）| guard:<原因码>（peer_bot_guard 降档：
+    # tg_is_bot/inbound_repeat/instant_echo/suspected_bot…）| sweep:<信号>（存量
+    # bot 一次性降档）。空串＝本列上线前的存量行（不可考，如实展示为未知）。
+    # 回答两个排障问题：「界面为什么是人审」「误降档找谁翻案」。与 conversations.
+    # bot_evidence 分工：那是**身份证据**，本列是**动作出处**——复读/秒回这类
+    # 行为刹车刻意不写身份列，此前降档动作因此完全无痕（.104/.198 排障实锤：
+    # 7/29 两侧会话同一分钟被写成 review，事后无法区分是人手切的还是系统降的）。
+    "ALTER TABLE conversation_settings ADD COLUMN source TEXT NOT NULL DEFAULT ''",
+    # 工作链环节执行日志（P1 2026-08-09）：此前每步只留 executions.last_result_json
+    # （新步覆盖旧步）——「每环节转化率/哪一步在损耗」无数据可算。本表按**执行尝试**
+    # 落账（成功/失败/重试各记一行，如实反映重试成本）；只增不改，报表窗口聚合用。
+    """CREATE TABLE IF NOT EXISTS workflow_step_log (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        exec_id     TEXT NOT NULL DEFAULT '',
+        chain_id    TEXT NOT NULL DEFAULT '',
+        conversation_id TEXT NOT NULL DEFAULT '',
+        step_idx    INTEGER NOT NULL DEFAULT 0,
+        action_type TEXT NOT NULL DEFAULT '',
+        ok          INTEGER NOT NULL DEFAULT 1,
+        detail      TEXT NOT NULL DEFAULT '',
+        ts          REAL NOT NULL DEFAULT 0
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_wf_steplog_chain ON workflow_step_log(chain_id, ts DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_wf_steplog_exec ON workflow_step_log(exec_id, step_idx)",
 ]
 
 
@@ -859,12 +989,37 @@ class InboxStore:
         except Exception:
             logger.debug("[InboxStore] 记录 migration #%d 失败", mig_id, exc_info=True)
 
+    @staticmethod
+    def _migration_sha(sql: str) -> str:
+        """migration 记账键＝SQL 归一化（压空白）后的 sha1——与列表位置无关。"""
+        return hashlib.sha1(" ".join(str(sql).split()).encode("utf-8")).hexdigest()
+
+    def _record_migration_sha(self, sha: str) -> None:
+        """记录一条已应用 migration（内容哈希键，幂等）。调用方已持锁。"""
+        try:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations_sha(sql_sha, applied_at)"
+                " VALUES (?, ?)",
+                (str(sha), self._now()),
+            )
+        except Exception:
+            logger.debug(
+                "[InboxStore] 记录 migration sha=%s 失败", sha[:8], exc_info=True)
+
     def _run_migrations(self) -> None:
         """执行 ``_MIGRATIONS``——可观测替代原「for sql: try/except: pass」静默吞错。
 
-        Sprint1 迁移可观测：
-        - ``schema_migrations(mig_id)`` 记录已应用条目 → 二次启动直接跳过（不再对 46 条
-          ALTER 反复撞 ``duplicate column name``）；
+        记账键＝**SQL 内容哈希**（``schema_migrations_sha``，2026-08-02 起）：
+        旧版按列表位置（``schema_migrations.mig_id``＝list index）记账，任何一次
+        「往列表中段插入/删除条目」都会让后续条目索引错位、撞上已记录的旧 id 被
+        静默跳过——当日实锤：T-mood 三条 ALTER 只有一条在生产库生效（转向列缺失、
+        功能静默失效）。换内容键后与位置彻底解耦；首个启动会把历史条目全量重试
+        一遍，安全性由列表构造保证：ALTER 撞重复列＝良性跳过、CREATE TABLE/INDEX
+        均带 IF NOT EXISTS、两条 UPDATE 回填各自自证幂等（chat_type / archived_at 条目注释）。
+        **新增 migration 必须保持这个「可安全重跑」不变量。**
+        旧 ``schema_migrations`` 表保留：过程式一次性迁移（900001+ 保留 id）仍用它，
+        历史行留作诊断，不迁移不清理。
+
         - 「duplicate column name」是新库(列已由 _DDL 建)/旧库(已迁)的良性重复 → debug + 记为已应用；
         - 其余 ``OperationalError``/异常 → ``logger.error`` + ``self.migration_errors`` 计数
           （不 crash，保可用性，但不再静默——升级后缺列/半迁移可被发现）。
@@ -884,16 +1039,30 @@ class InboxStore:
         except Exception:
             logger.error("[InboxStore] schema_migrations 版本表初始化失败", exc_info=True)
             applied = set()
+        try:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS schema_migrations_sha ("
+                "sql_sha TEXT PRIMARY KEY, applied_at REAL NOT NULL)"
+            )
+            applied_sha = {
+                str(r[0]) for r in conn.execute(
+                    "SELECT sql_sha FROM schema_migrations_sha").fetchall()
+            }
+        except Exception:
+            logger.error(
+                "[InboxStore] schema_migrations_sha 版本表初始化失败", exc_info=True)
+            applied_sha = set()
         for _idx, _sql in enumerate(_MIGRATIONS):
-            if _idx in applied:
+            _sha = self._migration_sha(_sql)
+            if _sha in applied_sha:
                 continue
             try:
                 conn.execute(_sql)
-                self._record_migration(_idx)
+                self._record_migration_sha(_sha)
             except sqlite3.OperationalError as exc:
                 if "duplicate column name" in str(exc).lower():
                     # 新库(列已由 _DDL 建)或旧库(已迁过)——良性，记为已应用不再重试。
-                    self._record_migration(_idx)
+                    self._record_migration_sha(_sha)
                     logger.debug("[InboxStore] migration #%d 列已存在（良性跳过）", _idx)
                 else:
                     self.migration_errors += 1
@@ -1219,7 +1388,11 @@ class InboxStore:
                 ),
             )
             self._conn.commit()
-            return cur.rowcount > 0
+            inserted = cur.rowcount > 0
+        # 激活里程碑（锁外，热路径稳态＝一次布尔判断）：只认真实新插入的新鲜出站
+        if inserted and msg.direction == "out" and not _FIRST_REPLY_NOTED:
+            _note_first_reply_milestone(msg)
+        return inserted
 
     def ingest_batch(self, conv: InboxConversation, msgs: List[InboxMessage]) -> int:
         """一个事务内 upsert 会话 + 批量 ingest 消息；返回新插入消息条数。"""
@@ -1227,6 +1400,9 @@ class InboxStore:
             return 0
         now = self._now()
         inserted = 0
+        # 本批**真正新插入**的入站消息里最晚的 ts（0=本批没有新入站消息）。
+        # 只有它能驱动「归档会话自动复活」，见 _unarchive_on_inbound 的判据说明。
+        _new_inbound_ts = 0.0
         with self._lock:
             # P4 埋点：upsert 前按主键探测是否「新会话首次入库」（PK 查询微秒级）
             _tele_new_conv = self._conn.execute(
@@ -1339,8 +1515,19 @@ class InboxStore:
                         str(msg.sender_id or ""), str(msg.sender_name or ""),
                     ),
                 )
-                inserted += 1 if cur.rowcount > 0 else 0
+                if cur.rowcount > 0:
+                    inserted += 1
+                    if msg.direction == "in":
+                        _new_inbound_ts = max(_new_inbound_ts, float(msg.ts or 0))
             self._conn.commit()
+        # 归档会话收到「归档之后」的新入站消息 → 自动解档，防客户被静默埋没。
+        # 放在 with 块之外：_unarchive_on_inbound 自己取锁，且它与 ingest 无需同一事务
+        # （最坏情况＝解档延到下一条消息，不会丢消息）。
+        if _new_inbound_ts > 0:
+            try:
+                self._unarchive_on_inbound(conv.conversation_id, _new_inbound_ts)
+            except Exception:   # 复活是增益路径，绝不能反过来阻断消息入库
+                logger.warning("[InboxStore] 入站自动解档失败（消息已入库）", exc_info=True)
         if _tele_new_conv:
             try:   # P4 埋点：新会话首次入库（fail-silent，绝不影响 ingest）
                 from src.utils.telemetry import track
@@ -1619,6 +1806,25 @@ class InboxStore:
         account_id = str(account_id or "")
         if not platform or not account_id or not rows:
             return 0
+        # P1（Messenger 目录同步）：rows 可以**不带 unread 键**（DOM 侧抓不到可靠
+        # 计数，宁缺勿假）。而 upsert_conversation 的 unread 是无条件覆盖语义——
+        # 缺键按 0 传会让每轮目录推送把 ingest 累计的真实未读清零（Telegram/WA 的
+        # rows 带云端真值，此前从未踩到这条覆盖语义）。缺键时回填库内现值：
+        # 一次批量 SELECT，不逐行查询。
+        need = [str(r.get("jid") or r.get("chat_key") or "").strip()
+                for r in rows
+                if isinstance(r, dict) and "unread" not in r]
+        keep_unread: Dict[str, int] = {}
+        need = [k for k in need if k]
+        if need:
+            cids = [f"{platform}:{account_id}:{k}" for k in need[:500]]
+            marks = ",".join("?" * len(cids))
+            with self._lock:
+                for row in self._conn.execute(
+                    f"SELECT conversation_id, unread FROM conversations "
+                    f"WHERE conversation_id IN ({marks})", cids,
+                ).fetchall():
+                    keep_unread[str(row[0])] = int(row[1] or 0)
         n = 0
         for r in rows:
             if not isinstance(r, dict):
@@ -1631,11 +1837,17 @@ class InboxStore:
                     or ck)
             # P2：群会话占位 chat_type=group（分流「群组动态」，不刷 SLA）
             ctype = "group" if bool(r.get("is_group")) else "private"
+            cid = f"{platform}:{account_id}:{ck}"
+            unread = (int(r.get("unread") or 0) if "unread" in r
+                      else keep_unread.get(cid, 0))
             conv = InboxConversation(
-                conversation_id=f"{platform}:{account_id}:{ck}",
+                conversation_id=cid,
                 platform=platform, account_id=account_id, chat_key=ck,
                 display_name=name, last_ts=float(r.get("ts") or 0),
-                unread=int(r.get("unread") or 0), chat_type=ctype,
+                unread=unread, chat_type=ctype,
+                # P1（Messenger 目录同步）：占位会话带头像——messenger-web 侧栏
+                # 每轮都抓得到头像直链；upsert 的 CASE 保证空值绝不冲掉已有头像。
+                avatar_url=str(r.get("avatar_url") or ""),
             )
             self.upsert_conversation(conv)
             n += 1
@@ -2093,6 +2305,124 @@ class InboxStore:
             self._conn.commit()
             return cur.rowcount > 0
 
+    def set_peer_bot_verdict(
+        self,
+        conversation_id: str,
+        *,
+        is_bot: Optional[int] = None,
+        score: Optional[float] = None,
+        evidence: Optional[str] = None,
+    ) -> bool:
+        """对方机器人守卫 P1：持久化检测/覆写结果（None=该列不动，部分更新）。
+
+        ``is_bot``：0 未知 / 1 已判定 bot / -1 运营覆写「确认真人」；
+        ``score``：启发式疑似评分 0..1（夹紧）；``evidence``：原因摘要（截 200 字）。
+        返回是否更新到行（会话不存在 → False）。best-effort 语义由调用方包 try。
+        """
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            return False
+        sets: List[str] = []
+        params: List[Any] = []
+        if is_bot is not None:
+            try:
+                v = int(is_bot)
+            except (TypeError, ValueError):
+                v = 0
+            sets.append("peer_is_bot = ?")
+            params.append(v if v in (-1, 0, 1) else 0)
+        if score is not None:
+            try:
+                s = float(score)
+            except (TypeError, ValueError):
+                s = 0.0
+            sets.append("bot_score = ?")
+            params.append(min(1.0, max(0.0, s)))
+        if evidence is not None:
+            sets.append("bot_evidence = ?")
+            params.append(str(evidence)[:200])
+        if not sets:
+            return False
+        sets.append("updated_at = ?")
+        params.append(self._now())
+        params.append(cid)
+        with self._lock:
+            cur = self._conn.execute(
+                f"UPDATE conversations SET {', '.join(sets)} WHERE conversation_id = ?",
+                params,
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    # ── 对方机器人守卫 P2：每日预算台账（自动链回复轮次） ────────────────
+    # 语义见 _MIGRATIONS 里 peer_reply_ledger 的建表注释。三个方法都是
+    # best-effort 调用面（guard 侧包 try），本层只保证原子与跨日清零。
+
+    def bump_auto_reply(self, conversation_id: str, day: str) -> int:
+        """自动链回复轮次 +1（day 变更自动清零），返回当日新计数。"""
+        cid = str(conversation_id or "").strip()
+        d = str(day or "").strip()
+        if not cid or not d:
+            return 0
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO peer_reply_ledger
+                       (conversation_id, day, auto_replies, updated_at)
+                   VALUES (?, ?, 1, ?)
+                   ON CONFLICT(conversation_id) DO UPDATE SET
+                     auto_replies = CASE
+                         WHEN peer_reply_ledger.day = excluded.day
+                         THEN peer_reply_ledger.auto_replies + 1 ELSE 1 END,
+                     day = excluded.day,
+                     updated_at = excluded.updated_at""",
+                (cid, d, self._now()),
+            )
+            self._conn.commit()
+            row = self._conn.execute(
+                "SELECT auto_replies FROM peer_reply_ledger WHERE conversation_id = ?",
+                (cid,),
+            ).fetchone()
+            return int(row["auto_replies"]) if row else 0
+
+    def get_auto_reply_ledger(self, conversation_id: str) -> Dict[str, Any]:
+        """读台账行：{day, auto_replies, relief_day}；无行返回空值行。"""
+        cid = str(conversation_id or "").strip()
+        empty = {"day": "", "auto_replies": 0, "relief_day": ""}
+        if not cid:
+            return empty
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT day, auto_replies, relief_day FROM peer_reply_ledger "
+                "WHERE conversation_id = ?",
+                (cid,),
+            ).fetchone()
+        if not row:
+            return empty
+        return {
+            "day": str(row["day"] or ""),
+            "auto_replies": int(row["auto_replies"] or 0),
+            "relief_day": str(row["relief_day"] or ""),
+        }
+
+    def set_budget_relief(self, conversation_id: str, day: str) -> bool:
+        """坐席救济：标记该会话当日不再受预算限制（不清计数，保留观测口径）。"""
+        cid = str(conversation_id or "").strip()
+        d = str(day or "").strip()
+        if not cid or not d:
+            return False
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO peer_reply_ledger
+                       (conversation_id, day, auto_replies, relief_day, updated_at)
+                   VALUES (?, ?, 0, ?, ?)
+                   ON CONFLICT(conversation_id) DO UPDATE SET
+                     relief_day = excluded.relief_day,
+                     updated_at = excluded.updated_at""",
+                (cid, d, d, self._now()),
+            )
+            self._conn.commit()
+        return True
+
     def list_messages(self, conversation_id: str, *, limit: int = 50) -> List[Dict[str, Any]]:
         limit = max(1, min(500, int(limit or 50)))
         with self._lock:
@@ -2278,6 +2608,89 @@ class InboxStore:
             )
             self._conn.commit()
             return int(cur.rowcount or 0)
+
+    def last_outbound_ts_map(
+        self, conversation_ids: List[str],
+    ) -> Dict[str, float]:
+        """批量取每会话**最后一条出站**消息时刻（目标报表「完成后是否已跟进」
+        的推导数据源：last_out_ts > goal.done_at ＝ 已跟进）。
+
+        一次 IN 分组查询，不逐会话打库；空入参/异常返回空 map（调用方按
+        「未知」降级，绝不抛）。direction 兼容 'out'/'outbound' 两种历史写法。
+        """
+        ids = list(dict.fromkeys(
+            str(x).strip() for x in (conversation_ids or []) if str(x).strip()))
+        if not ids:
+            return {}
+        try:
+            ph = ",".join("?" * len(ids))
+            with self._lock:
+                rows = self._conn.execute(
+                    f"SELECT conversation_id AS cid, MAX(ts) AS ts"
+                    f" FROM messages WHERE conversation_id IN ({ph})"
+                    f" AND direction IN ('out','outbound')"
+                    f" GROUP BY conversation_id",
+                    ids,
+                ).fetchall()
+            return {str(r["cid"]): float(r["ts"] or 0.0) for r in rows}
+        except Exception:
+            logger.debug("last_outbound_ts_map failed", exc_info=True)
+            return {}
+
+    def count_inbound_between(
+        self, conversation_id: str, since_ts: float, until_ts: float = 0.0,
+    ) -> int:
+        """窗口内**入站**消息数（目标失守三分法「对方有没有真回话」的判据；
+        P5 2026-08-09）。``until_ts<=0``＝不设上限。单会话索引查询，绝不抛。"""
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            return 0
+        try:
+            sql = ("SELECT COUNT(*) FROM messages WHERE conversation_id = ?"
+                   " AND direction IN ('in','inbound') AND ts > ?")
+            params: List[Any] = [cid, float(since_ts or 0.0)]
+            if until_ts and until_ts > 0:
+                sql += " AND ts <= ?"
+                params.append(float(until_ts))
+            with self._lock:
+                r = self._conn.execute(sql, tuple(params)).fetchone()
+            return int(r[0]) if r else 0
+        except Exception:
+            logger.debug("count_inbound_between failed", exc_info=True)
+            return 0
+
+    def message_volume_map(
+        self, since_ts: float, *, min_total: int = 1, limit: int = 50,
+    ) -> Dict[str, Dict[str, int]]:
+        """窗口内每会话的双向消息量（AI 对聊提醒的判据数据源；2026-08-09）。
+
+        返回 ``{conversation_id: {"in": n, "out": n}}``，只含总量 ≥ ``min_total``
+        的会话、按总量降序截断 ``limit``。一次 GROUP BY 查询不逐会话打库；
+        异常返回空 map（提醒是旁路观测，绝不因它抛错）。
+        """
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT conversation_id AS cid,"
+                    " SUM(CASE WHEN direction IN ('in','inbound')"
+                    "     THEN 1 ELSE 0 END) AS n_in,"
+                    " SUM(CASE WHEN direction IN ('out','outbound')"
+                    "     THEN 1 ELSE 0 END) AS n_out"
+                    " FROM messages WHERE ts > ?"
+                    " GROUP BY conversation_id"
+                    " HAVING (n_in + n_out) >= ?"
+                    " ORDER BY (n_in + n_out) DESC LIMIT ?",
+                    (float(since_ts or 0.0), int(max(1, min_total)),
+                     int(max(1, limit))),
+                ).fetchall()
+            return {
+                str(r["cid"]): {"in": int(r["n_in"] or 0),
+                                "out": int(r["n_out"] or 0)}
+                for r in rows
+            }
+        except Exception:
+            logger.debug("message_volume_map failed", exc_info=True)
+            return {}
 
     def list_recent_messages(
         self,
@@ -2537,6 +2950,62 @@ class InboxStore:
                 WHERE {where}
                 """,
                 tuple([new_text, new_text] + params),
+            )
+            self._conn.commit()
+            return int(cur.rowcount or 0) > 0
+
+    def get_message(self, message_id: str) -> Optional[Dict[str, Any]]:
+        """按主键取单条消息行（媒体按需拉取等「按行回填」路径的定位读）。"""
+        mid = str(message_id or "").strip()
+        if not mid:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM messages WHERE message_id = ?", (mid,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def update_message_media(
+        self,
+        conversation_id: str,
+        *,
+        media_type: str,
+        media_ref: str,
+        message_id: str = "",
+        platform_msg_id: str = "",
+        only_if_empty: bool = True,
+    ) -> bool:
+        """回填消息媒体字段（「按需拉取原件」下载归档完成后），占位卡原地变真图。
+
+        与 ``update_message_text`` 同族的幂等回写：定位优先 ``message_id``（主键精确），
+        否则 ``(conversation_id, platform_msg_id)``（服务端补拉后按平台消息 id 定位）。
+        ``only_if_empty=True`` 时仅在原 ``media_ref`` 为空时写入——绝不踩掉已有归档
+        （与出站镜像/重复点击天然防竞态）。``media_type`` 仅在传非空时覆盖（存量
+        「[图片]」纯文字行借此一并升级成结构化媒体行）。返回是否真的更新了行。
+        """
+        ref = str(media_ref or "").strip()
+        if not ref:
+            return False
+        mid = str(message_id or "").strip()
+        pmid = str(platform_msg_id or "").strip()
+        cid = str(conversation_id or "").strip()
+        if not mid and not (cid and pmid):
+            return False
+        where = "message_id = ?" if mid else \
+            "conversation_id = ? AND platform_msg_id = ?"
+        params: List[Any] = [mid] if mid else [cid, pmid]
+        if only_if_empty:
+            where += " AND COALESCE(TRIM(media_ref), '') = ''"
+        mt = str(media_type or "").strip()
+        with self._lock:
+            cur = self._conn.execute(
+                f"""
+                UPDATE messages SET
+                    media_ref = ?,
+                    media_type = CASE WHEN ? != '' THEN ? ELSE media_type END
+                WHERE {where}
+                """,
+                tuple([ref, mt, mt] + params),
             )
             self._conn.commit()
             return int(cur.rowcount or 0) > 0
@@ -2939,22 +3408,196 @@ class InboxStore:
         explicit = self.get_automation_mode_if_set(conversation_id)
         return explicit if explicit is not None else _DEFAULT_AUTOMATION_MODE
 
-    def set_automation_mode(self, conversation_id: str, mode: str) -> None:
+    def set_automation_mode(
+        self, conversation_id: str, mode: str, *, source: str = "",
+    ) -> None:
+        """写档位。``source``＝写入者身份（human/bulk/bootstrap/guard:*/sweep:*），
+        空串向后兼容（旧调用方不传即视为未知——比误标来源诚实）。"""
         if not conversation_id:
             return
         mode = mode if mode in AUTOMATION_MODES else _DEFAULT_AUTOMATION_MODE
+        src = str(source or "")[:80]
+        now = self._now()
         with self._lock:
+            # 时间线只记真实跃迁：mode/source 有一个变了才落行（接管重刷时间戳、
+            # bootstrap 幂等重写都不产生历史噪音）。SELECT 在同一把锁内，与
+            # upsert 原子成对。
+            prev = self._conn.execute(
+                "SELECT automation_mode, source FROM conversation_settings "
+                "WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+            prev_mode = str(prev["automation_mode"]) if prev else ""
+            prev_src = str(prev["source"] or "") if prev else ""
             self._conn.execute(
                 """
-                INSERT INTO conversation_settings (conversation_id, automation_mode, updated_at)
-                VALUES (?, ?, ?)
+                INSERT INTO conversation_settings
+                    (conversation_id, automation_mode, updated_at, source)
+                VALUES (?, ?, ?, ?)
                 ON CONFLICT(conversation_id) DO UPDATE SET
                     automation_mode = excluded.automation_mode,
-                    updated_at = excluded.updated_at
+                    updated_at = excluded.updated_at,
+                    source = excluded.source
                 """,
-                (conversation_id, mode, self._now()),
+                (conversation_id, mode, now, src),
             )
+            if prev_mode != mode or prev_src != src:
+                try:
+                    self._conn.execute(
+                        "INSERT INTO automation_mode_log "
+                        "(conversation_id, mode, source, prev_mode, ts) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (conversation_id, mode, src, prev_mode, now),
+                    )
+                except Exception:
+                    logger.debug("automation_mode_log 落行失败（忽略）",
+                                 exc_info=True)
             self._conn.commit()
+
+    def list_automation_mode_log(
+        self, conversation_id: str, *, limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """会话档位变更时间线（新→旧）。无历史 → 空表。"""
+        if not conversation_id:
+            return []
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT mode, source, prev_mode, ts FROM automation_mode_log "
+                "WHERE conversation_id = ? ORDER BY ts DESC, id DESC LIMIT ?",
+                (conversation_id, max(1, min(100, int(limit or 20)))),
+            ).fetchall()
+        return [
+            {
+                "mode": str(r["mode"] or ""),
+                "source": str(r["source"] or ""),
+                "prev_mode": str(r["prev_mode"] or ""),
+                "ts": float(r["ts"] or 0.0),
+            }
+            for r in rows
+        ]
+
+    def takeover_episodes(
+        self, *, source_prefix: str = "case:", days: float = 30.0,
+        limit: int = 200,
+    ) -> List[Dict[str, Any]]:
+        """人工接管闭环观测（P7，只读）：``source`` 匹配前缀的 manual 切档行，
+        配对同会话**其后**首条非 manual 档位行（rearm 回流/人工改回）。
+
+        返回 ``[{conversation_id, start, end}]``（end=0.0＝还没回流）。逐条子查
+        走 idx_amlog_conv 索引，limit 封顶（默认 200——接管是人肉动作，量级小）。
+        """
+        cutoff = self._now() - max(1.0, float(days or 30.0)) * 86400.0
+        out: List[Dict[str, Any]] = []
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT conversation_id, ts FROM automation_mode_log "
+                "WHERE mode = 'manual' AND source LIKE ? AND ts >= ? "
+                "ORDER BY ts DESC LIMIT ?",
+                (str(source_prefix or "") + "%", cutoff,
+                 max(1, min(1000, int(limit or 200)))),
+            ).fetchall()
+            for r in rows:
+                cid = str(r["conversation_id"] or "")
+                t1 = float(r["ts"] or 0.0)
+                nxt = self._conn.execute(
+                    "SELECT ts FROM automation_mode_log "
+                    "WHERE conversation_id = ? AND ts > ? AND mode != 'manual' "
+                    "ORDER BY ts ASC LIMIT 1",
+                    (cid, t1),
+                ).fetchone()
+                out.append({
+                    "conversation_id": cid,
+                    "start": t1,
+                    "end": float(nxt["ts"]) if nxt else 0.0,
+                })
+        return out
+
+    def get_automation_mode_meta(
+        self, conversation_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """显式档位行全貌 ``{mode, source, updated_at}``；无显式行 → None。
+
+        供「谁在什么时候把档位写成这样」的可解释性消费（GET /automation 的
+        mode_source 段、why_no_reply CLI）；热路仍走 get_automation_mode_if_set。
+        """
+        if not conversation_id:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT automation_mode, source, updated_at FROM "
+                "conversation_settings WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+        if not row:
+            return None
+        mode = str(row["automation_mode"] or _DEFAULT_AUTOMATION_MODE)
+        return {
+            "mode": mode if mode in AUTOMATION_MODES else _DEFAULT_AUTOMATION_MODE,
+            "source": str(row["source"] or ""),
+            "updated_at": float(row["updated_at"] or 0.0),
+        }
+
+    def list_takeover_manual(
+        self, *, before_ts: float, limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """接管态会话扫描（takeover_rearm 自动接回专用）。
+
+        只取「mode=manual 且 source 以 takeover 开头 且最后写入早于
+        ``before_ts``」的行——坐席下拉显式选的 manual（source=human）、
+        守卫降档（guard:*/sweep）都不在此列，自动接回绝不碰它们。
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT conversation_id, automation_mode, source, updated_at
+                  FROM conversation_settings
+                 WHERE automation_mode = 'manual'
+                   AND source LIKE 'takeover%'
+                   AND updated_at <= ?
+                 ORDER BY updated_at ASC
+                 LIMIT ?
+                """,
+                (float(before_ts), int(limit)),
+            ).fetchall()
+        return [
+            {
+                "conversation_id": str(r["conversation_id"]),
+                "mode": str(r["automation_mode"] or ""),
+                "source": str(r["source"] or ""),
+                "updated_at": float(r["updated_at"] or 0.0),
+            }
+            for r in rows
+        ]
+
+    def automation_coverage_rows(self) -> List[Dict[str, Any]]:
+        """自动化覆盖率聚合的原料行（ops 卡「多少会话真在全自动跑」）。
+
+        conversations LEFT JOIN conversation_settings：每会话一行，mode 为
+        NULL＝坐席/系统从未显式写过档位（运行时回落全局默认）。一次全表查询
+        （会话量级 <1e4），聚合在纯函数 automation_coverage 里做——store 只出
+        事实不出口径。
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT c.platform, c.account_id, c.chat_type,
+                       s.automation_mode AS mode,
+                       COALESCE(s.source, '') AS source
+                  FROM conversations c
+                  LEFT JOIN conversation_settings s
+                    ON s.conversation_id = c.conversation_id
+                """,
+            ).fetchall()
+        return [
+            {
+                "platform": str(r["platform"] or ""),
+                "account_id": str(r["account_id"] or "default"),
+                "chat_type": str(r["chat_type"] or "private"),
+                "mode": (None if r["mode"] is None else str(r["mode"])),
+                "source": str(r["source"] or ""),
+            }
+            for r in rows
+        ]
 
     def cancel_pending_l2_drafts(
         self, conversation_id: str, *, decided_by: str = "mode_downgraded",
@@ -2982,7 +3625,7 @@ class InboxStore:
         return int(cur.rowcount or 0)
 
     def bulk_set_automation_mode(
-        self, from_mode: str, to_mode: str,
+        self, from_mode: str, to_mode: str, *, source: str = "bulk",
     ) -> List[str]:
         """把所有 ``from_mode`` 会话改成 ``to_mode``。返回被改动的 conversation_id 列表。"""
         if from_mode not in AUTOMATION_MODES or to_mode not in AUTOMATION_MODES:
@@ -3000,11 +3643,22 @@ class InboxStore:
                 self._conn.execute(
                     """
                     UPDATE conversation_settings
-                       SET automation_mode=?, updated_at=?
+                       SET automation_mode=?, updated_at=?, source=?
                      WHERE automation_mode=?
                     """,
-                    (to_mode, now, from_mode),
+                    (to_mode, now, str(source or "bulk")[:80], from_mode),
                 )
+                # 时间线同步落行（bulk 直写不经 set_automation_mode，单独补记）
+                try:
+                    self._conn.executemany(
+                        "INSERT INTO automation_mode_log "
+                        "(conversation_id, mode, source, prev_mode, ts) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        [(cid, to_mode, str(source or "bulk")[:80], from_mode,
+                          now) for cid in cids],
+                    )
+                except Exception:
+                    logger.debug("bulk 档位时间线落行失败（忽略）", exc_info=True)
                 self._conn.commit()
         return cids
 
@@ -3721,6 +4375,60 @@ class InboxStore:
                 "ts": ts, "sender_id": sid or name,
                 "sender_name": name, "text": text,
             })
+        return out
+
+    def first_private_inbound_ts(
+        self,
+        chat_keys: Sequence[str],
+        *,
+        platform: str = "",
+        limit: int = 200,
+    ) -> Dict[str, float]:
+        """``{chat_key: 该 peer 与我们**首次**私聊进向消息的时刻}``。
+
+        群脉效果归因的转化侧：某人在群里发过言、之后**第一次**私聊我们 ⇒ 这场戏
+        带来的转化。取 ``MIN(ts)`` 而不是 ``last_ts`` 是这条读数成立的全部前提——
+        用最后活跃时刻会把「本来就在聊的老客户」全部算成新转化，把转化数直接刷爆，
+        而那个数字看起来完全正常（老客户当然最近有活跃）。
+
+        只认私聊（``chat_type`` 为 private/空）：群里说过话本身是反响、不是转化，
+        混进来会让两级证据糊成一个数。查不到的 key 不出现在结果里（调用方按
+        「没私聊过」处理），读挂 → 空表（由调用方标 degraded，别装作零转化）。
+        """
+        keys = [str(k).strip() for k in (chat_keys or ()) if str(k or "").strip()]
+        if not keys:
+            return {}
+        keys = list(dict.fromkeys(keys))[:max(1, min(int(limit or 200), 500))]
+        clauses = [
+            "m.direction='in'",
+            "c.chat_type IN ('private', '')",
+            "c.chat_key IN (" + ",".join("?" for _ in keys) + ")",
+        ]
+        params: List[Any] = list(keys)
+        if platform:
+            clauses.append("c.platform=?")
+            params.append(str(platform))
+        sql = (
+            "SELECT c.chat_key AS k, MIN(m.ts) AS t "
+            "FROM messages m JOIN conversations c "
+            "  ON c.conversation_id = m.conversation_id "
+            "WHERE " + " AND ".join(clauses) + " GROUP BY c.chat_key"
+        )
+        try:
+            with self._lock:
+                rows = self._conn.execute(sql, params).fetchall()
+        except Exception:  # noqa: BLE001 —— 读不出来只该让转化列显示「未知」，不该 500
+            logger.debug("[inbox] 首次私聊时刻查询失败", exc_info=True)
+            return {}
+        out: Dict[str, float] = {}
+        for r in rows:
+            k = str(r["k"] or "")
+            try:
+                t = float(r["t"] or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if k and t > 0:
+                out[k] = t
         return out
 
     # ── Phase A / C1：坐席绩效聚合 ───────────────────────────
@@ -4726,7 +5434,7 @@ class InboxStore:
         if row is None:
             return {"agent_id": aid, "warn_sec": 0, "crit_sec": 0,
                     "muted": 0, "dnd_start": -1, "dnd_end": -1, "updated_at": 0,
-                    "languages": "", "notif_read_at": 0}
+                    "languages": "", "notif_read_at": 0, "appearance": ""}
         return dict(row)
 
     def set_notif_read_at(self, agent_id: str, read_at_ms: int) -> int:
@@ -4788,6 +5496,25 @@ class InboxStore:
                 "ON CONFLICT(agent_id) DO UPDATE SET languages=excluded.languages, "
                 "updated_at=excluded.updated_at",
                 (aid, langs, now))
+            self._conn.commit()
+        return self.get_agent_prefs(aid)
+
+    def set_agent_appearance(self, agent_id: str, appearance_json: str) -> Dict[str, Any]:
+        """写坐席外观个性化 JSON（调用方已 sanitize；空串=恢复默认）。
+
+        只动 appearance 列，不影响告警偏好/语言（与 set_agent_languages 同模式）。
+        """
+        aid = str(agent_id or "").strip()
+        if not aid:
+            raise ValueError("agent_id required")
+        payload = str(appearance_json or "")
+        now = self._now()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO agent_prefs (agent_id, appearance, updated_at) VALUES (?,?,?) "
+                "ON CONFLICT(agent_id) DO UPDATE SET appearance=excluded.appearance, "
+                "updated_at=excluded.updated_at",
+                (aid, payload, now))
             self._conn.commit()
         return self.get_agent_prefs(aid)
 
@@ -5899,28 +6626,54 @@ class InboxStore:
             ).fetchall()
         return {r["conversation_id"]: float(r["mx"] or 0) for r in rows}
 
+    # 对方机器人守卫 P1（2026-08-03）：触达效果统计剔除 bot 会话的共享条件。
+    # 「SpamBot 们的回复率」会污染 pacing/媒体反哺/mode 门控的决策数字——统计
+    # 把 bot 算进分母本身就是失真。判定与 peer_bot_guard.conversation_row_is_bot
+    # **矩阵全等**（门禁 test_sql_and_python_bot_predicates_agree 钉死，改口径
+    # 两边一起改）：持久判定（peer_is_bot=1，跨平台）> 运营覆写（-1 视为真人，
+    # 不剔）> Tier0 行级信号（chat_type='bot' / username 以 bot 结尾——**仅限
+    # Telegram**，那是 TG 官方保留语义，其他平台无此真值）。
+    # 要求外层查询里 outreach_log 别名为 o。
+    _NOT_BOT_PEER_SQL = (
+        " AND NOT EXISTS (SELECT 1 FROM conversations c"
+        " WHERE c.conversation_id = o.conversation_id AND ("
+        "   COALESCE(c.peer_is_bot, 0) = 1"
+        "   OR (COALESCE(c.peer_is_bot, 0) != -1"
+        "       AND lower(COALESCE(c.platform,'')) = 'telegram'"
+        "       AND ("
+        "     lower(COALESCE(c.chat_type,'')) = 'bot'"
+        "     OR (lower(COALESCE(c.username,'')) LIKE '%bot'"
+        "         AND length(c.username) > 3)"
+        "   ))"
+        " ))"
+    )
+
     def outreach_mode_histogram(
         self, batch_prefix: str, *, days: float = 14.0,
         now: Optional[float] = None,
+        exclude_bot_peers: bool = True,
     ) -> Dict[str, int]:
         """近 N 天某前缀批次已发触达按 note（=开场 mode）直方图（P2 观测）。
 
         proactive_topic 真发时 ``record_outreach(batch_id="proactive_topic:<kind>",
         note=<mode>)``——mode 分布从进程计数（重启即清零）升级为落库口径，
         「gentle_checkin 是否还占 100%」重启后照样能回看。纯查询，无副作用。
+        ``exclude_bot_peers``（默认 True）＝分布剔除 bot 会话（P1 精度修正）。
         """
         prefix = str(batch_prefix or "").strip()
         if not prefix:
             return {}
         t = float(now if now is not None else self._now())
         since = t - max(0.0, float(days or 0.0)) * 86400.0
+        sql = (
+            "SELECT o.note AS note, COUNT(*) AS n FROM outreach_log o "
+            "WHERE o.batch_id LIKE ? AND o.status='sent' AND o.ts >= ?"
+        )
+        if exclude_bot_peers:
+            sql += self._NOT_BOT_PEER_SQL
+        sql += " GROUP BY o.note"
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT note, COUNT(*) AS n FROM outreach_log "
-                "WHERE batch_id LIKE ? AND status='sent' AND ts >= ? "
-                "GROUP BY note",
-                (prefix + "%", since),
-            ).fetchall()
+            rows = self._conn.execute(sql, (prefix + "%", since)).fetchall()
         return {
             str(r["note"] or "unknown"): int(r["n"])
             for r in rows
@@ -5931,13 +6684,15 @@ class InboxStore:
         response_window_days: float = 3.0,
         lookback_days: float = 14.0,
         now: Optional[float] = None,
+        exclude_bot_peers: bool = True,
     ) -> Dict[str, Dict[str, Any]]:
         """近 N 天某前缀批次按 note（=开场 mode）分组的回复率（P4 观测）。
 
         与 ``outreach_response_stats`` 同一判定口径（触达后 window 内该会话有
         入站=已回复），只是按 note 分桶——「哪种开场客户真的会回」从拍脑袋
         变成读数。纯查询，无副作用。返回 ``{note: {sent, responded,
-        response_rate}}``。
+        response_rate}}``。``exclude_bot_peers``（默认 True）＝剔除 bot 会话
+        （SpamBot 秒回会把某 mode 的「回复率」推成 100%，喂脏门控）。
         """
         prefix = str(batch_prefix or "").strip()
         if not prefix:
@@ -5956,6 +6711,8 @@ class InboxStore:
         if lookback_days and float(lookback_days) > 0:
             sql += " AND o.ts >= ?"
             params.append(t - float(lookback_days) * 86400.0)
+        if exclude_bot_peers:
+            sql += self._NOT_BOT_PEER_SQL
         with self._lock:
             rows = self._conn.execute(sql, tuple(params)).fetchall()
         out: Dict[str, Dict[str, Any]] = {}
@@ -5993,6 +6750,7 @@ class InboxStore:
         response_window_days: float = 7.0,
         lookback_days: float = 0.0,
         now: Optional[float] = None,
+        exclude_bot_peers: bool = True,
     ) -> Dict[str, Any]:
         """P61-5：触达效果回流——某批次"已发送"消息的回复率。
 
@@ -6002,6 +6760,8 @@ class InboxStore:
         三个月前的回复习惯不该决定今天的形态选择；0=全历史，旧行为）。
         返回 sent / responded / response_rate / avg_response_minutes。
         纯查询、无副作用，可随时回看（回复是异步累积的）。
+        ``exclude_bot_peers``（默认 True）＝剔除 bot 会话（P1 精度修正：
+        媒体反哺/回复率反哺按此读数，bot 秒回会喂脏两套自适应）。
         """
         bid = str(batch_id or "").strip()
         if not bid:
@@ -6021,6 +6781,8 @@ class InboxStore:
             t = float(now if now is not None else self._now())
             sql += " AND o.ts >= ?"
             params.append(t - float(lookback_days) * 86400.0)
+        if exclude_bot_peers:
+            sql += self._NOT_BOT_PEER_SQL
         with self._lock:
             rows = self._conn.execute(sql, tuple(params)).fetchall()
         sent = len(rows)
@@ -6323,6 +7085,37 @@ class InboxStore:
             self._conn.commit()
         return True
 
+    def set_manual_mood(
+        self, conversation_id: str, mood: str, *, by: str = "",
+        ts: Optional[float] = None,
+    ) -> bool:
+        """T-mood：落人工「客户情绪」标注 arbitration 列（mood=''=清除）。
+
+        唯一调用方是 ``effective_mood.apply_mood_tag``（标签与列同步双写）；
+        AI 消费判据（TTL/在场校验）在 effective_mood，本方法只管持久化。
+        """
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            return False
+        now = self._now()
+        stamp = float(ts if ts is not None else now)
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO conversation_meta
+                    (conversation_id, mood_manual, mood_manual_ts, mood_manual_by, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(conversation_id) DO UPDATE SET
+                    mood_manual    = excluded.mood_manual,
+                    mood_manual_ts = excluded.mood_manual_ts,
+                    mood_manual_by = excluded.mood_manual_by,
+                    updated_at     = excluded.updated_at
+                """,
+                (cid, str(mood or "").strip(), stamp, str(by or "").strip(), now),
+            )
+            self._conn.commit()
+        return True
+
     def set_conversation_pref_engine(self, conversation_id: str, engine: str) -> bool:
         """F+：持久化会话首选翻译引擎（多线路对照择优后记住）。空串=清除偏好。
 
@@ -6409,8 +7202,18 @@ class InboxStore:
             })
         return out
 
-    def set_conv_archived(self, conversation_id: str, archived: bool) -> bool:
-        """T1：标记/取消归档；如 conversation_meta 行不存在则插入。"""
+    def set_conv_archived(self, conversation_id: str, archived: bool, *,
+                          source: str = "", actor: str = "") -> bool:
+        """T1：标记/取消归档；如 conversation_meta 行不存在则插入。
+
+        ``archived_at`` 与 ``archived`` 同一次写入（取消归档写 0）——它是
+        ``_unarchive_on_inbound`` 判断「客户是否在归档之后又开口」的唯一判据，
+        **别再用 updated_at 代理**（见该列 migration 注释里的实锤）。
+
+        ``source``/``actor`` 只进审计日志：归档会让会话从工作台所有视图消失，属高
+        影响动作，而此前它在服务端完全不留痕——198 事故排查时日志里 archive 零命中，
+        既无法证明也无法否证「谁在什么时候用什么方式归档的」。
+        """
         cid = str(conversation_id or "").strip()
         if not cid:
             return False
@@ -6419,15 +7222,21 @@ class InboxStore:
         with self._lock:
             self._conn.execute(
                 """
-                INSERT INTO conversation_meta (conversation_id, archived, updated_at)
-                VALUES (?, ?, ?)
+                INSERT INTO conversation_meta
+                    (conversation_id, archived, archived_at, updated_at)
+                VALUES (?, ?, ?, ?)
                 ON CONFLICT(conversation_id) DO UPDATE SET
-                    archived   = excluded.archived,
-                    updated_at = excluded.updated_at
+                    archived    = excluded.archived,
+                    archived_at = excluded.archived_at,
+                    updated_at  = excluded.updated_at
                 """,
-                (cid, val, now),
+                (cid, val, (now if archived else 0.0), now),
             )
             self._conn.commit()
+        logger.info(
+            "[InboxStore] 会话%s cid=%s source=%s actor=%s",
+            "归档" if archived else "取消归档", cid, source or "-", actor or "-",
+        )
         if archived:
             try:   # P4 埋点：会话归档视作关闭（fail-silent）
                 from src.utils.telemetry import track
@@ -6435,6 +7244,100 @@ class InboxStore:
             except Exception:
                 pass
         return True
+
+    def _unarchive_on_inbound(self, conversation_id: str, inbound_ts: float) -> bool:
+        """归档会话收到「归档之后」的新入站消息 → 自动取消归档。返回是否真的复活了。
+
+        为什么必须有这条（P0-198，2026-08-04 实锤）：归档只是「收起来」的意思，而实现
+        上它是**永久**的——归档后无论客户再说多少句话，会话都不会回到任何默认视图
+        （工作台列表默认 ``archived=0``），坐席看不到、也不会有未读提示。198 上那条 33
+        条消息的活跃会话就是这样在聊天中途「凭空消失」的：手机上客户还在发，工作台里
+        人已经找不到它了。归档在语义上应当是**可被客户自己撤销**的。
+
+        判据只有一条：``inbound_ts > archived_at``（消息的**平台时间**，不是入库时间）。
+        这样才能区分两类外形一致的入站：
+        - 客户在归档后又开口 → ts 晚于归档时刻 → 复活（想要）；
+        - 首次全量同步 / thread 重放把**归档之前**的历史消息灌进来 → ts 早于归档时刻
+          → 不动（不然刚归档的会话会被自己的历史消息立刻顶回来，归档功能等于失效）。
+
+        单条原子 UPDATE 完成「判定+写入」，不做先读后写——ingest 是并发热路径，
+        read-modify-write 会在两条消息同时到达时丢一次判定。
+        ``archived_at > 0`` 是保守闸：理论上 migration 回填后不存在
+        ``archived=1 且 archived_at=0`` 的行，真出现了也宁可不动（避免一次误判把大批
+        历史归档会话集体唤回），只留一条 warning 便于追查。
+        """
+        cid = str(conversation_id or "").strip()
+        ts = float(inbound_ts or 0)
+        if not cid or ts <= 0:
+            return False
+        now = self._now()
+        stale = None
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE conversation_meta SET archived = 0, archived_at = 0, updated_at = ? "
+                "WHERE conversation_id = ? AND archived = 1 AND archived_at > 0 "
+                "AND archived_at < ?",
+                (now, cid, ts),
+            )
+            revived = (cur.rowcount or 0) > 0
+            if revived:
+                self._conn.commit()
+            else:
+                # 顺带体检：归档着却没有归档时刻＝上面那条保守闸拦下的异常行
+                stale = self._conn.execute(
+                    "SELECT 1 FROM conversation_meta WHERE conversation_id = ? "
+                    "AND archived = 1 AND archived_at <= 0 LIMIT 1", (cid,),
+                ).fetchone()
+        if revived:
+            logger.info(
+                "[InboxStore] 会话自动取消归档 cid=%s 触发=入站消息 ts=%.0f", cid, ts,
+            )
+            return True
+        if stale is not None:
+            logger.warning(
+                "[InboxStore] 会话 archived=1 但 archived_at=0，未自动复活 cid=%s"
+                "（migration 回填是否跑过？）", cid,
+            )
+        return False
+
+    def list_buried_archived(self, *, min_unread: int = 1, limit: int = 50) -> list[dict]:
+        """「被埋掉的会话」体检：归档着、却有未读入站——客户在等，而工作台看不见它。
+
+        为什么需要一条与 ``archived_at`` 无关的信号（P0-198）：``archived_at`` 是本次
+        才加的列，存量已归档行只能回填「升级时刻」（真实归档时刻不可追溯——
+        ``updated_at`` 早被入站链路刷掉，见该列 migration 注释）。于是**存量**被埋的
+        会话里，客户是在升级之前开口的 → ts < 回填值 → ``_unarchive_on_inbound`` 判据
+        天然够不着它们，光靠自动复活永远查不出这批历史损失。
+
+        ``unread > 0`` 恰好绕开时间戳完全成立：未读只可能由入站消息产生，且「没人读过」
+        本身就是「没人看得见」的直接证据。误报面极小——真要归档一段已收尾的对话，坐席
+        通常读完了才归档（unread=0）。
+
+        纯查询、零副作用：**刻意不自动解档**。存量行缺可信归档时刻，批量唤回等于拿
+        一个猜测去覆盖运营的明示决定；这里只负责让损失可数、可核对，处置交人。
+        返回按未读数降序，供审计 CLI / 后续 watchdog 与 ops 卡共用（下一阶段只需接线）。
+        """
+        try:
+            n = max(1, int(min_unread))
+        except Exception:
+            n = 1
+        try:
+            cap = max(1, min(500, int(limit)))
+        except Exception:
+            cap = 50
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT c.conversation_id, c.platform, c.account_id, c.chat_key,
+                          c.display_name, c.unread, c.last_ts, c.last_text,
+                          cm.archived_at, cm.auto_archived_at
+                   FROM conversations c
+                   JOIN conversation_meta cm ON cm.conversation_id = c.conversation_id
+                   WHERE cm.archived = 1 AND c.unread >= ?
+                   ORDER BY c.unread DESC, c.last_ts DESC
+                   LIMIT ?""",
+                (n, cap),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def tag_stats(self, *, since: float = 0.0) -> List[Dict[str, Any]]:
         """T2：聚合每个标签的会话数、未读数、平均等待秒数（用于标签概览 strip）。
@@ -6994,6 +7897,26 @@ class InboxStore:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def mark_auto_archived(self, conversation_id: str, ts: float = 0.0) -> None:
+        """P36：记录「本次归档是自动归档」的时刻（人工归档不写这一列）。
+
+        ``auto_archived_at`` 同时是 ``_auto_archive_candidates`` 的**幂等闸**——非 0 即
+        永不再次入选，故坐席把自动归档的会话解档后，它不会被下一个 tick 立刻archive 回去。
+        与 ``archived_at``（任何归档都写、供入站复活判据）职责不同，两列都要留。
+        ⚠ 只 UPDATE 不 INSERT：调用序必须在 ``set_conv_archived`` 之后（那步已保证行存在）。
+        """
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            return
+        now = self._now()
+        with self._lock:
+            self._conn.execute(
+                "UPDATE conversation_meta SET auto_archived_at=?, updated_at=? "
+                "WHERE conversation_id=?",
+                (float(ts or now), now, cid),
+            )
+            self._conn.commit()
+
 
     # ── AA1: 自定义动作 / 工作链 CRUD（Phase 37） ─────────────────────────
 
@@ -7206,6 +8129,63 @@ class InboxStore:
         self.complete_workflow_execution(exec_id, status="cancelled")
         return True
 
+    def log_workflow_step(
+        self,
+        *,
+        exec_id: str,
+        chain_id: str,
+        conversation_id: str,
+        step_idx: int,
+        action_type: str,
+        ok: bool,
+        detail: str = "",
+        now: Optional[float] = None,
+    ) -> None:
+        """工作链环节执行落账（P1 2026-08-09；每次尝试一行，绝不抛）。"""
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "INSERT INTO workflow_step_log (exec_id, chain_id,"
+                    " conversation_id, step_idx, action_type, ok, detail, ts)"
+                    " VALUES (?,?,?,?,?,?,?,?)",
+                    (str(exec_id or ""), str(chain_id or ""),
+                     str(conversation_id or ""), int(step_idx or 0),
+                     str(action_type or "")[:40], 1 if ok else 0,
+                     str(detail or "")[:200],
+                     float(now if now is not None else time.time())),
+                )
+                self._conn.commit()
+        except Exception:
+            logger.debug("log_workflow_step failed", exc_info=True)
+
+    def workflow_step_stats(
+        self, since_ts: float, *, chain_id: str = "",
+    ) -> Dict[str, Dict[str, Dict[str, int]]]:
+        """窗口内每链×每环节的执行尝试聚合：{chain_id: {step_idx: {attempts,ok,failed}}}。
+
+        「哪一环节在损耗」的读数面（monitor.chain_funnel 消费拼 by_step）。绝不抛。"""
+        out: Dict[str, Dict[str, Dict[str, int]]] = {}
+        sql = ("SELECT chain_id, step_idx, ok, COUNT(*) AS n"
+               " FROM workflow_step_log WHERE ts >= ?")
+        params: List[Any] = [float(since_ts or 0.0)]
+        if chain_id:
+            sql += " AND chain_id = ?"
+            params.append(str(chain_id))
+        sql += " GROUP BY chain_id, step_idx, ok"
+        try:
+            with self._lock:
+                rows = self._conn.execute(sql, tuple(params)).fetchall()
+            for r in rows:
+                c = out.setdefault(str(r["chain_id"]), {})
+                s = c.setdefault(str(int(r["step_idx"])),
+                                 {"attempts": 0, "ok": 0, "failed": 0})
+                n = int(r["n"])
+                s["attempts"] += n
+                s["ok" if int(r["ok"]) else "failed"] += n
+        except Exception:
+            logger.debug("workflow_step_stats failed", exc_info=True)
+        return out
+
     def list_chain_executions(
         self,
         *,
@@ -7285,6 +8265,9 @@ class InboxStore:
     ) -> bool:
         """把会话搁置到 ``until_ts``（epoch 秒）。``until_ts<=now`` 视为取消搁置。
 
+        ``until_ts >= SNOOZE_FOREVER_TS``（含 +inf，一律钉到哨兵）＝「永久搁置」：
+        不再按时间重浮，但客户再来消息仍经 ingest ``clear_snooze`` 立即重浮。
+        NaN 视为非法输入按 0（取消）处理——NaN 与 now 比较恒 False，不拦会被存进库。
         返回是否处于搁置态。与 automation_mode（谁来答）正交——只影响「待接管/超时告警」
         队列的可见性（读侧 ``_snoozed_set`` 排除）；到点由 ``snoozed_ids`` 的 now 过滤
         自动重浮，客户再来消息由 ingest 侧 ``clear_snooze`` 立即重浮。``by`` 暂仅审计留痕用。
@@ -7296,6 +8279,10 @@ class InboxStore:
             until = float(until_ts or 0)
         except (TypeError, ValueError):
             until = 0.0
+        if math.isnan(until):
+            until = 0.0
+        elif until > SNOOZE_FOREVER_TS:
+            until = SNOOZE_FOREVER_TS
         if until <= self._now():
             self.clear_snooze(cid)
             return False
@@ -7366,8 +8353,26 @@ class InboxStore:
                 "name": str(r["display_name"] or r["chat_key"] or cid),
                 "snooze_until": until,
                 "remaining_sec": int(max(0, until - ts)),
+                # 永久搁置：remaining_sec 数值巨大无展示意义，消费方按本旗标显示「永久」
+                "permanent": is_permanent_snooze(until),
             })
         return out
+
+    def snooze_counts(self, now: Optional[float] = None) -> Dict[str, int]:
+        """搁置中总数与其中永久数——「沉默坟场」防线的量化读数（监督面消费）。
+
+        单条聚合 SQL，供 escalation 快照 / 看板行等低频读；与 ``snoozed_ids`` 同一
+        now 过滤语义（到点即不计入）。
+        """
+        ts = float(now if now is not None else self._now())
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS n, "
+                "SUM(CASE WHEN snooze_until >= ? THEN 1 ELSE 0 END) AS p "
+                "FROM conversation_meta WHERE snooze_until > ?",
+                (SNOOZE_FOREVER_TS - 1.0, ts),
+            ).fetchone()
+        return {"total": int(row["n"] or 0), "permanent": int(row["p"] or 0)}
 
     def get_rel_stage_cached(self, conversation_id: str) -> str:
         meta = self.get_rel_stage_meta(conversation_id)

@@ -240,13 +240,23 @@ def test_telegram_does_not_register_bulk():
 def test_messenger_keeps_own_batch_implementation():
     """Messenger 已有自家批量审批（P2-6 / P6-3 / batch endpoint /
     dry_run / pacing_sec / reject_reason 等丰富参数），不接 shared bulk。
+
+    P2-3 起主 JS 外迁 static/messenger/messenger_rpa.js —— 判定口径升级为
+    「模板 + 其引用的本地静态 JS」（与 test_rpa_shared_funnel 同口径），
+    正反两个断言语义都不变：外迁后 shared bulk 也不许从 JS 里接进来。
     """
+    from tests import _inline_handler_scan as scan
+
     text = (TEMPLATES_DIR / "_channel_body_messenger.html").read_text(encoding="utf-8")
-    assert "rpa.bulk.register" not in text, (
+    static_root = TEMPLATES_DIR.parent / "static"
+    blob = text + "".join(
+        p.read_text(encoding="utf-8", errors="replace")
+        for p in scan.local_static_scripts(text, static_root))
+    assert "rpa.bulk.register" not in blob, (
         "Messenger 不应该接入 shared bulk —— 它有自家更丰富的 batch endpoint"
     )
-    # 自家 batch endpoint 仍在
-    assert "/api/messenger-rpa/approvals/batch" in text
+    # 自家 batch endpoint 仍在（模板或外迁 JS）
+    assert "/api/messenger-rpa/approvals/batch" in blob
 
 
 def test_overview_does_not_register_bulk():

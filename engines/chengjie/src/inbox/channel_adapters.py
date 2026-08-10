@@ -605,7 +605,9 @@ class WebInboxAdapter:
                 logger.debug("[web_chat] funnel(agent out) 失败", exc_info=True)
         if store is not None:
             try:
-                store.set_automation_mode(cid, "manual")  # 人工接管后停 AI
+                # 人工接管后停 AI（source=takeover，供横幅/自动接回识别）
+                from src.inbox.takeover_rearm import record_agent_takeover
+                record_agent_takeover(store, cid)
             except Exception:
                 logger.debug("[web_chat] set manual 失败", exc_info=True)
         try:

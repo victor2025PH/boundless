@@ -380,3 +380,28 @@ async def test_quiet_hours_defers_send_time():
     assert len(rec) == 1
     dd = datetime.fromtimestamp(rec[0]["defer_until"])
     assert dd.hour >= 8 and dd.day == 18  # 顺延到次日 08:00 之后
+
+
+# ── P2 2026-08-03：话术快照随行留档（长期审计口径，独立于 deferred 保留期）──
+async def test_dispatch_writes_sent_text_snapshot():
+    s = _store_with()
+    rec = []
+    d = CareDispatcher(store=s, ai_client=_AI("面试顺利吗？我一直记着这事呢"),
+                       send_callback=_sender(rec),
+                       context_provider=lambda ck: "上次聊到她准备面试")
+    assert await d.run_once(now=NOW) == 1
+    row = s.list_recent(status="sent")[0]
+    assert row["note"].startswith("deferred:")
+    assert row["sent_text"] == "面试顺利吗？我一直记着这事呢"
+
+
+async def test_dry_run_writes_sent_text_snapshot():
+    """dry 拟稿也落快照：metrics 侧样本进程内易失，本列才是持久口径。"""
+    s = _store_with()
+    d = CareDispatcher(store=s, ai_client=_AI("记得你说的复查，还顺利吗？"),
+                       send_callback=_sender([]),
+                       context_provider=lambda ck: "ctx", dry_run=True)
+    assert await d.run_once(now=NOW) == 1
+    row = s.list_recent(status="sent")[0]
+    assert row["note"] == "dry_run"
+    assert row["sent_text"] == "记得你说的复查，还顺利吗？"

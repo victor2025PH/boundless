@@ -146,12 +146,17 @@ def test_bridge_ignores_optional_fields():
 
 
 def test_bridge_only_on_declaring_channels():
-    """line 等未声明 enable_on_ready 的渠道不产生 platform_login 写入。"""
+    """未声明 enable_on_ready 的渠道（网页客服）不产生 platform_login 写入；
+    LINE/WhatsApp 等官方第二路会桥编排器，属刻意行为。"""
     overlay = {}
-    ok, _ = apply_channel_values(overlay, "line", {
-        "channel_access_token": "tok123", "channel_secret": "sec456"})
+    ok, _ = apply_channel_values(overlay, "web", {})
     assert ok is True
     assert "platform_login" not in overlay
+    # 对照：声明了桥接的渠道应写入 orchestrator_enabled
+    overlay2 = {}
+    apply_channel_values(overlay2, "line", {
+        "channel_access_token": "tok123", "channel_secret": "sec456"})
+    assert (_pl(overlay2).get("orchestrator_enabled") is True)
 
 
 # ── 「能不能收发消息」口径（2026-07-31）────────────────────────────────
@@ -205,12 +210,17 @@ def test_every_account_channel_exposes_a_login_path():
         assert p["deeplink"] == f"/workspace?drawer=1&connect={cid}"
 
 
-def test_whatsapp_is_present_and_scan_only():
-    """WhatsApp 此前整个缺席，客户据此以为不支持；且它只有扫码一条真实路径。"""
+def test_whatsapp_exposes_scan_and_cloud_api_paths():
+    """WhatsApp = 扫码（Baileys）+ Cloud API 双路径（P2：向导产品化补齐官方第二路）。"""
     wa = _by_id({}, "whatsapp")
     assert wa["paths"]["login"] is not None
-    assert wa["paths"]["api"] is None       # 不摆一个填了也不通的半成品表单
-    assert wa["fields"] == []
+    api = wa["paths"]["api"]
+    assert api is not None and api["is_transport"] is True
+    keys = {f["key"] for f in wa["fields"]}
+    assert "whatsapp_cloud.phone_number_id" in keys
+    assert "whatsapp_cloud.access_token" in keys
+    assert "whatsapp_cloud.app_secret" in keys
+    assert "whatsapp_cloud.verify_token" in keys
 
 
 def test_login_path_unavailable_is_reported():

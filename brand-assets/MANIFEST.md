@@ -2,6 +2,11 @@
 
 重新生成：`python build_brand_assets.py`
 
+> 幻境 STUDIO（原 AvatarHub 客户端）图标为「客户端级」资产，由 `python build_studio_icon.py`
+> 单独生成（刻意不进九产品管线，防组合标/海报把它当第十款产品）：
+> `00_master/keyed/studio-keyed.png`、`02_product-icons/studio/studio-{512,256,128}.png`、
+> `../website/public/brand/products/studio.{png,webp}`。
+
 | 文件 | 尺寸 | 用途 |
 |---|---|---|
 | `00_master/keyed/mark-keyed.png` | 1386x813 | 透明底母版（抠白，防高光穿孔） |

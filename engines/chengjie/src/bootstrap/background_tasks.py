@@ -151,6 +151,18 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
                 note="care",
             )
 
+        # 对方机器人/自家账号守卫（P1 2026-08-03）：care 派发前统一卫生闸——复用
+        # 主动触达同一入口 proactive_candidate_ok。inbox_store 缺失时闭包恒放行。
+        _care_peer_filter = None
+        try:
+            from src.companion.proactive_peer_hygiene import build_peer_filter
+            from src.integrations.account_registry import get_account_registry
+            _care_peer_filter = build_peer_filter(
+                assistant.inbox_store, assistant.config.config or {},
+                registry=get_account_registry())
+        except Exception:
+            assistant.logger.debug("care peer_filter 构造失败（不拦）", exc_info=True)
+
         dispatcher = CareDispatcher(
             store=care_store, ai_client=assistant.ai_client, send_callback=_care_send,
             context_provider=_care_context, proactive_allowed=proactive_paywall,
@@ -164,6 +176,7 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
             cfg_provider=_live_care_cfg,
             budget_gate=_care_budget_gate,
             sent_hook=_care_sent_hook,
+            peer_filter=_care_peer_filter,
         )
         await dispatcher.start()
         assistant._care_dispatcher = dispatcher
@@ -284,6 +297,19 @@ async def maybe_start_reactivation_loop(assistant) -> None:
         _min_silent_days = float(
             ((assistant.config.config.get("contacts") or {}).get("min_silent_days")) or 3)
 
+        # 对方机器人/自家账号守卫（P1 2026-08-03）：reactivation 派发前统一卫生闸
+        # （与 care / proactive_topic 复用 build_peer_filter 同一入口）。
+        _react_peer_filter = None
+        try:
+            from src.companion.proactive_peer_hygiene import build_peer_filter
+            from src.integrations.account_registry import get_account_registry
+            _react_peer_filter = build_peer_filter(
+                assistant.inbox_store, assistant.config.config or {},
+                registry=get_account_registry())
+        except Exception:
+            assistant.logger.debug(
+                "reactivation peer_filter 构造失败（不拦）", exc_info=True)
+
         loop = ReactivationLoop(
             scheduler=assistant.contacts.reactivation,
             store=assistant.contacts.store,
@@ -293,6 +319,7 @@ async def maybe_start_reactivation_loop(assistant) -> None:
             last_activity_provider=_last_activity_provider,
             min_silent_sec=_min_silent_days * 86400.0,
             ai_name=ai_name,
+            peer_filter=_react_peer_filter,
             max_per_tick=int(cfg_react.get("max_per_tick", 3)),
             interval_sec=float(cfg_react.get("interval_sec", 600)),
             skip_if_no_episodic=bool(cfg_react.get("skip_if_no_episodic", True)),
@@ -342,11 +369,16 @@ def ensure_deferred_outbox(assistant):
         store = DeferredOutboxStore(_cfg_dir / "deferred_outbox.db")
 
         async def _universal_send(account_id, chat_key, text, *, platform):
-            # 出站自动翻译（主动触达：care/reactivation 等经 deferred 队列的非 messenger 主动消息）。
-            # care 默认按 zh 生成 → 真译成客户语言；reactivation 本就按客户语言生成 → 检测护栏
-            # 自动跳过（no-op）。绝不阻塞投递（异常回落原文）。统一受 translate.enabled 开关控。
+            # 出站自动翻译/语言硬闸（主动触达：care/reactivation 等经 deferred 队列的
+            # 非 messenger 主动消息）。care 默认按 zh 生成 → 真译成客户语言；
+            # reactivation 本就按客户语言生成 → 检测护栏自动跳过（no-op）。
+            # translate 关闭时 lang_gate（默认开）gate-only 只拦 CJK 实质冲突。
             text = await assistant._maybe_translate_outbound(
                 platform, account_id, chat_key, text)
+            if text is None:
+                # 语言硬闸 HOLD（P3-198）：文本语言与客户语言实质冲突且翻译不可用
+                # → 按暂态推后重试（翻译引擎恢复后自动补投），绝不原样发出。
+                raise DeferredSenderNotReady("lang_gate_hold")
             # 1) 编排器受管 worker（telegram/whatsapp/line… 任一暴露 send 的）
             try:
                 from src.integrations.account_orchestrator import get_orchestrator

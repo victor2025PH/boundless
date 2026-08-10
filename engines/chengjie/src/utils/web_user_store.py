@@ -30,13 +30,10 @@ UI_MODE_LABELS = {
     UI_MODE_FULL:   "完整模式",
 }
 
-SIMPLE_MODE_CORE_PAGES = {"cases", "care", "knowledge", "ch", "learner", "personas",
-                          "rpa_overview", "telegram", "line_rpa", "messenger_rpa",
-                          "whatsapp_rpa"}
-
-SIMPLE_MODE_MORE_PAGES = {"dash", "analytics", "audit", "episodic", "crisis_audit",
-                          "relations_health", "monetization", "help"}
-
+# 简洁模式可见页清单的唯一事实源在 src/web/nav_schema.py（SIMPLE_CORE /
+# SIMPLE_MORE）。此处曾有一份按 page_key 的重复清单（SIMPLE_MODE_*_PAGES），
+# 模板早已不消费且内容过时（含废键 "ch"、缺 workspace 等），2026-08-03 删除
+# ——双源清单是静默漂移的温床。
 ROLE_DEFAULT_UI_MODE = {
     ROLE_MASTER: UI_MODE_SIMPLE,
     ROLE_ADMIN:  UI_MODE_SIMPLE,
@@ -51,10 +48,6 @@ def resolve_ui_mode(cookie_val: str, role: str) -> str:
         return cookie_val
     return ROLE_DEFAULT_UI_MODE.get(role, UI_MODE_SIMPLE)
 
-
-def is_page_visible_in_simple(page_key: str) -> bool:
-    """Whether a page shows in simple-mode sidebar (core or 'more' fold)."""
-    return page_key in SIMPLE_MODE_CORE_PAGES or page_key in SIMPLE_MODE_MORE_PAGES
 
 # ── 页面与写入权限 ──────────────────────────────────────────
 PAGE_PERMISSIONS = {

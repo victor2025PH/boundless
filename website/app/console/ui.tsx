@@ -10,6 +10,7 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   BarChart3,
   Bug,
+  Filter,
   Gift,
   Inbox,
   KeyRound,
@@ -306,6 +307,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
     items: [
       { href: "/console/leads", label: "留资", Icon: Inbox },
       { href: "/console/trial", label: "试用", Icon: Gift },
+      { href: "/console/funnel", label: "激活漏斗", Icon: Filter },
       { href: "/console/channels", label: "渠道", Icon: Radio },
     ],
   },
@@ -1236,5 +1238,128 @@ export function AttachIdentityForm({ customerId }: { customerId: string }) {
         {busy ? "挂接中…" : "＋ 挂身份"}
       </button>
     </div>
+  );
+}
+
+// ── 挽回名单：标记已联系 + 一键复制（P3-⑬；/console/funnel）──────────────────
+// 「已联系」落 winback-outreach 台账避免重复外呼；复制走客户端 TSV（零新路由）。
+export interface WinbackClientRow {
+  fp: string;
+  contact: string;
+  contactKind: string;
+  claimedAt: string;
+  ver: string;
+  capable: boolean;
+  dispatched: boolean;
+  contactedAt?: string;
+  contactedBy?: string;
+}
+
+export function WinbackContactButton({ fp, contacted }: { fp: string; contacted: boolean }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  async function toggle() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api("/api/console/funnel/winback-contacted", {
+        method: "POST",
+        json: { fingerprint: fp, undo: contacted },
+      });
+      emitToast(contacted ? "已恢复为未联系" : "已标记为已联系");
+      router.refresh();
+    } catch (e) {
+      emitToast(e instanceof Error ? e.message : String(e), false);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <button
+      onClick={toggle}
+      disabled={busy}
+      className={`rounded border px-1.5 py-0.5 text-[10px] disabled:opacity-50 ${
+        contacted
+          ? "border-slate-600 text-slate-400 hover:bg-slate-500/10"
+          : "border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10"
+      }`}
+    >
+      {busy ? "…" : contacted ? "撤销" : "标记已联系"}
+    </button>
+  );
+}
+
+export function WinbackCopyButton({ rows }: { rows: WinbackClientRow[] }) {
+  const [done, setDone] = useState(false);
+  function copy() {
+    // TSV：贴进表格/群直接可读；只含运营外呼所需字段，不含任何聊天内容
+    const header = ["联系方式", "类型", "领取时间", "指纹", "版本", "已派发", "已联系"];
+    const body = rows.map((r) => [
+      r.contact, r.contactKind, r.claimedAt, r.fp, r.ver || "?",
+      r.dispatched ? "是" : "否", r.contactedAt ? "是" : "否",
+    ].join("\t"));
+    const tsv = [header.join("\t"), ...body].join("\n");
+    const fallback = () => {
+      const ta = document.createElement("textarea");
+      ta.value = tsv;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); } catch { /* ignore */ }
+      document.body.removeChild(ta);
+    };
+    const p = navigator.clipboard?.writeText?.(tsv);
+    if (p && typeof p.then === "function") p.then(() => {}, fallback);
+    else fallback();
+    setDone(true);
+    emitToast(`已复制 ${rows.length} 行到剪贴板`);
+    setTimeout(() => setDone(false), 2000);
+  }
+  return (
+    <button
+      onClick={copy}
+      disabled={!rows.length}
+      className="rounded border border-ink-600 px-2 py-1 text-[11px] text-slate-300 hover:bg-ink-700 disabled:opacity-50"
+    >
+      {done ? "已复制 ✓" : `复制全部（${rows.length}）`}
+    </button>
+  );
+}
+
+// ── 凭据组解除隔离（P2；试用页凭据池条）────────────────────────────────────
+// 隔离由客户端举报聚类自动触发；解除是人的决定——按钮文案提醒先跑探针核实，
+// 误报才解除（真废组解除了也只会被再次举报隔离，白折腾用户一轮）。
+export function UnquarantineButton({ apiId, name }: { apiId: string; name: string }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [armed, setArmed] = useState(false);
+  async function go() {
+    if (busy) return;
+    if (!armed) {
+      setArmed(true);
+      emitToast(`再点一次确认解除 ${name} 的隔离（请先用 tg_cred_probe 核实为误报）`, true);
+      setTimeout(() => setArmed(false), 4000);
+      return;
+    }
+    setBusy(true);
+    try {
+      await api("/api/console/pool/unquarantine", { method: "POST", json: { api_id: apiId } });
+      emitToast(`已解除 ${name} 的隔离，恢复派发`);
+      router.refresh();
+    } catch (e) {
+      emitToast(e instanceof Error ? e.message : String(e), false);
+    } finally {
+      setBusy(false);
+      setArmed(false);
+    }
+  }
+  return (
+    <button
+      onClick={go}
+      disabled={busy}
+      className="rounded border border-amber-500/40 px-1.5 py-0.5 text-[10px] text-amber-300 hover:bg-amber-500/10 disabled:opacity-50"
+      title="先用 tg_cred_probe 核实为误报再解除"
+    >
+      {busy ? "解除中…" : armed ? "确认解除?" : "解除隔离"}
+    </button>
   );
 }

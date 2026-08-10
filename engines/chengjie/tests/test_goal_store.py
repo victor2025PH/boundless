@@ -3,7 +3,9 @@
 覆盖：goals CRUD 全链、find_active_goal 三级回落、update_goal_fields 白名单、
 upsert_action (goal_id, day, kind) 幂等、mark_action 状态校验、
 count_engaged_since 只数 consumed/sent、events 追加与 400 字截断、
-count_active_for_conversation / list_goals / summary 聚合，及单例三件套。
+count_active_for_conversation / list_goals / summary 聚合，及单例三件套；
+P25/P2 期限调整 × 终态（deadline_edit_outcomes：三队列归属/混合编辑双计/
+等值与噪声事件不串/窗口与 active 排除/cancelled 不进分母/report 携带）。
 
 注意：store 层**不校验模板名**（路由层才校验）——按实际行为断言未知模板仍会建。
 """
@@ -103,11 +105,17 @@ class TestFindActiveGoal:
         assert store.find_active_goal(
             platform="telegram", chat_key="100")["goal_id"] == gid
 
-    def test_account_mismatch_falls_back_to_chat_scope(self, store):
-        gid = _mk(store)["goal_id"]
+    def test_account_mismatch_returns_none(self, store):
+        """P4 2026-08-09 语义翻转（原名 *_falls_back_to_chat_scope）：旧行为
+        「账号不匹配仍回落宽口径」是生产实锤 bug——两个账号的收藏消息
+        （chat_key 同为 'me'）解析到同一个目标，订单回流同口存在跨账号误结算。
+        新不变量：**给了 account_id 就锁死账号**，账号内无命中如实 None；
+        宽口径只留给「拿不到 account_id」的 A 线（见 test_three_level_fallback
+        第 3 级）。完整回归钉在 tests/test_goal_account_scoping.py。"""
+        _mk(store)
         hit = store.find_active_goal(
             platform="telegram", chat_key="100", account_id="other")
-        assert hit and hit["goal_id"] == gid
+        assert hit is None
 
     def test_only_active_status_matches(self, store):
         g = _mk(store)
@@ -392,6 +400,91 @@ class TestOutcomeReport:
         assert pf["total"] == 2
         assert pf["by_src"] == {"agent": 2}
         assert pf["by_track"] == {"relation": 1, "bant": 1}
+
+
+# ── P25/P2：期限调整 × 终态（deadline_edit_outcomes）────────────────────────
+
+class TestDeadlineEditOutcomes:
+    def _terminal(self, store, gid, status, done_at=NOW):
+        assert store.update_goal_fields(gid, status=status, done_at=done_at)
+
+    def test_cohorts_and_rates(self, store):
+        # 加急达成 / 延期过期 / 未调达成+未调过期 → 三队列各自成立
+        g1 = _mk(store, conv="t:a:1", chat_key="1", deadline_days=14, now=NOW)
+        store.add_event(g1["goal_id"], "updated", "deadline_days:14->7")
+        self._terminal(store, g1["goal_id"], "done")
+        g2 = _mk(store, conv="t:a:2", chat_key="2", deadline_days=14, now=NOW)
+        store.add_event(g2["goal_id"], "updated",
+                        "autonomy,deadline_days:14->30")   # 与其他字段相连也认
+        self._terminal(store, g2["goal_id"], "expired")
+        g3 = _mk(store, conv="t:a:3", chat_key="3", deadline_days=14, now=NOW)
+        self._terminal(store, g3["goal_id"], "done")
+        g4 = _mk(store, conv="t:a:4", chat_key="4", deadline_days=14, now=NOW)
+        self._terminal(store, g4["goal_id"], "expired")
+        de = store.deadline_edit_outcomes(NOW - 86400.0)
+        bt = de["by_template"]["conversion_unlock"]
+        assert bt["edited_n"] == 2
+        assert bt["shortened"]["n"] == 1 and bt["shortened"]["done"] == 1
+        assert bt["shortened"]["done_rate"] == 1.0
+        assert bt["extended"]["n"] == 1 and bt["extended"]["expired"] == 1
+        assert bt["extended"]["done_rate"] == 0.0
+        assert bt["unedited"]["n"] == 2
+        assert bt["unedited"]["done_rate"] == 0.5
+        tot = de["totals"]
+        assert tot["edited_n"] == 2 and tot["unedited"]["n"] == 2
+
+    def test_mixed_edits_count_in_both_cohorts(self, store):
+        # 先加急后延期＝两种行为都发生过，两队列都进（n 刻意不互斥）
+        g = _mk(store, deadline_days=14, now=NOW)
+        store.add_event(g["goal_id"], "updated", "deadline_days:14->7")
+        store.add_event(g["goal_id"], "updated", "deadline_days:7->21")
+        self._terminal(store, g["goal_id"], "done")
+        de = store.deadline_edit_outcomes(NOW - 86400.0)
+        bt = de["by_template"]["conversion_unlock"]
+        assert bt["edited_n"] == 1
+        assert bt["shortened"]["n"] == 1 and bt["extended"]["n"] == 1
+        assert bt["unedited"]["n"] == 0
+
+    def test_equal_edit_and_noise_events_stay_unedited(self, store):
+        # 等值改动不计方向；无期限片段的 updated 事件不串
+        g = _mk(store, deadline_days=14, now=NOW)
+        store.add_event(g["goal_id"], "updated", "deadline_days:14->14")
+        store.add_event(g["goal_id"], "updated", "title")
+        self._terminal(store, g["goal_id"], "done")
+        de = store.deadline_edit_outcomes(NOW - 86400.0)
+        bt = de["by_template"]["conversion_unlock"]
+        assert bt["edited_n"] == 0 and bt["unedited"]["n"] == 1
+
+    def test_window_excludes_old_terminals_and_active(self, store):
+        # 窗口外终态不进人群；active 目标（没结局）也不进
+        g_old = _mk(store, conv="t:a:8", chat_key="8",
+                    deadline_days=14, now=NOW)
+        store.add_event(g_old["goal_id"], "updated", "deadline_days:14->7")
+        self._terminal(store, g_old["goal_id"], "done",
+                       done_at=NOW - 40 * 86400.0)
+        g_act = _mk(store, conv="t:a:9", chat_key="9",
+                    deadline_days=14, now=NOW)
+        store.add_event(g_act["goal_id"], "updated", "deadline_days:14->7")
+        de = store.deadline_edit_outcomes(NOW - 86400.0)
+        assert de["totals"]["edited_n"] == 0
+        assert de["by_template"] == {}
+
+    def test_cancelled_out_of_denominator(self, store):
+        # cancelled 计入 n 但不进 done_rate 分母（organic 0 → 率保持 0 不除零）
+        g = _mk(store, deadline_days=14, now=NOW)
+        store.add_event(g["goal_id"], "updated", "deadline_days:14->7")
+        self._terminal(store, g["goal_id"], "cancelled")
+        de = store.deadline_edit_outcomes(NOW - 86400.0)
+        sh = de["by_template"]["conversion_unlock"]["shortened"]
+        assert sh["n"] == 1 and sh["cancelled"] == 1
+        assert sh["done_rate"] == 0.0
+
+    def test_outcome_report_carries_deadline_edits(self, store):
+        g = _mk(store, deadline_days=14, now=NOW)
+        store.add_event(g["goal_id"], "updated", "deadline_days:14->7")
+        self._terminal(store, g["goal_id"], "done")
+        rep = store.outcome_report(NOW - 86400.0)
+        assert rep["deadline_edits"]["totals"]["edited_n"] == 1
 
 
 # ── 单例三件套 ──────────────────────────────────────────────────────────────

@@ -8,9 +8,12 @@ Hermetic 离线：假 TTSPipeline（不碰真 TTS/GPU/网络）、PersonaManager
   音色不含 "Neural" 时置 zh-CN-XiaoxiaoNeural；链内超时 15s / 外层 20s。
   响应成功与失败路径都带 ``fast``；成功再带 ``requested_backend``（fast=被替换前的
   后端名；非 fast=当前 voice_cfg backend）。不传 fast → 旧行为不变（45s/50s）。
-- GET /api/voice/effective-config?platform=&persona_id= → 固定 8 键：
-  ok/platform/persona_id/persona_source/backend/voice/channel_backend/reference_audio；
-  reference_audio 只给 basename（不泄露目录）；异常 → {ok:false,error}（不抛 500）。
+- GET /api/voice/effective-config?platform=&persona_id=[&chat_key=&account_id=] →
+  固定 12 键：ok/platform/persona_id/persona_source/backend/voice/is_clone/ready/
+  hub_strict/hub_risk/channel_backend/reference_audio（2026-08-05 P1 增
+  is_clone/ready/hub_strict/hub_risk 四键=坐席音色状态条数据源；chat_key/account_id
+  为可选入参，不传=旧解析行为）；reference_audio 只给 basename（不泄露目录）；
+  异常 → {ok:false,error}（不抛 500）。
 """
 from __future__ import annotations
 
@@ -188,7 +191,9 @@ def test_failure_paths_carry_fast_flag(client, monkeypatch):
 
 
 _CONTRACT_KEYS = {"ok", "platform", "persona_id", "persona_source",
-                  "backend", "voice", "channel_backend", "reference_audio"}
+                  "backend", "voice", "is_clone", "ready",
+                  "hub_strict", "hub_risk",
+                  "channel_backend", "reference_audio"}
 
 
 def test_effective_config_contract_telegram(client):

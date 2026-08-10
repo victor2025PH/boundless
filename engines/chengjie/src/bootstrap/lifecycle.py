@@ -160,12 +160,18 @@ async def start_assistant(assistant):
             assistant._maybe_init_identity_trend_log()
             # ★ P9：前端错误/意图落空按日落库（scoped_fail/dead_intent/conv_not_found；默认关）
             assistant._maybe_init_frontend_error_trend_log()
+            # ★ 账号接入漏斗按日落库（成功率 / checkpoint 周趋势；默认关）
+            assistant._maybe_init_login_funnel_trend_log()
             # ★ UI 事件按日落库（AI 回复漏斗 dpick.* 取消率/采纳率的耐久口径；默认关）
             assistant._maybe_init_ui_event_trend_log()
+            # ★ 客户资产（好友/未开口/沉默）日快照落库（破冰/主动触达的趋势验收判据；默认关）
+            assistant._maybe_init_contacts_asset_trend_log()
             # ★ P2（2026-07-31）：CSRF 准入/拒绝按日落库（同源回落收口决策的数据面；默认关）
             assistant._maybe_init_csrf_trend_log()
             # ★ Phase22c：出站媒体承诺兑现率按日落库（供看板 sparkline + 阈值校准；默认关）
             assistant._maybe_init_media_promise_trend_log()
+            # ★ 注入抽取率按日落库（选择器失效遥测「归零判 → 比率阈值」的校准数据面；默认关）
+            assistant._maybe_init_inject_extract_trend_log()
 
             # ★ 每人设「相册/媒体」注册表（图/视频 + 触发词；始终开启，供相册后台/回复链读写）
             assistant._init_persona_media_store()

@@ -17,7 +17,7 @@ cp-persona 是 shadow-DOM Web Component，模板热更新直上生产。故用�
   404       → 文案含「不存在/已删除」+ 按钮 fail-refresh
   network   → 文案含「网络异常」+ 按钮 fail-retry + fail-refresh + **不**重申状态
 
-用法::  python tools/verify_persona_failtip.py [--base http://localhost:18799]
+用法::  python tools/verify_persona_failtip.py [--base http://127.0.0.1:18799]
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 from typing import Any, List, Tuple
 
-DEFAULT_BASE = "http://localhost:18799"
+DEFAULT_BASE = "http://127.0.0.1:18799"  # 勿改回 localhost：::1 回退每连接 ~2s（见 verify_inbox_density.py 同行注释）
 DEFAULT_DATA_ROOT = "D:/chengjie-instances/zhiliao/data"
 
 

@@ -143,6 +143,24 @@ def apply_action(
     return out
 
 
+def risk_kind_for(kind: str, reason: str) -> Optional[str]:
+    """分类结果 → 24h 滚动计数的风控类别（喂 account_health 扣分轴）；无则 None。
+
+    - backoff（FloodWait/Slowmode）/ pause（PeerFlood 家族）→ ``flood``（限频信号）。
+    - none 且为**真实发送异常** → ``error``；我方控制流 / 对端注销一律不计（不误伤）。
+    - ban → None：``meta.banned`` 已让健康分直接红灯 0 分，无需再计。
+    """
+    from src.ops.risk_events import KIND_ERROR, KIND_FLOOD
+    if kind in ("backoff", "pause"):
+        return KIND_FLOOD
+    if kind == "none":
+        r = str(reason or "")
+        if r == "own_control_flow" or r.startswith("peer_side"):
+            return None
+        return KIND_ERROR
+    return None
+
+
 def handle_send_exception(
     platform: str,
     account_id: str,
@@ -153,13 +171,28 @@ def handle_send_exception(
     alert: Optional[Callable[..., Any]] = None,
     pause_minutes: float = DEFAULT_PAUSE_MINUTES,
     now: Optional[float] = None,
+    risk_recorder: Optional[Callable[..., Any]] = None,
 ) -> Dict[str, Any]:
-    """发送异常的便捷处置入口：classify → apply。
+    """发送异常的便捷处置入口：classify → 记 24h 风控计数 → apply。
 
-    ``kill_switch`` 缺省时取进程单例。绝不抛异常（处置失败不应掩盖原始发送错误）。
+    ``kill_switch`` 缺省时取进程单例。``risk_recorder`` 缺省走
+    ``risk_events.record_risk_event``（可注入假对象单测）。反馈闭环：本函数是 A/B 两线
+    发送异常的唯一入口，在此记 flood/error → ``build_account_signals`` 读回 →
+    ``account_health`` 扣分 → 自动降 ``recommended_cap``。绝不抛异常（处置失败不应
+    掩盖原始发送错误，记账失败更不应拖垮发送主链）。
     """
     try:
         action = classify(exc)
+        # 反封号反馈：先记 24h 滚动计数（含 none/backoff 早退分支，那正是 FloodWait 所在）
+        try:
+            rk = risk_kind_for(action["kind"], action.get("reason", ""))
+            if rk:
+                rec = risk_recorder
+                if rec is None:
+                    from src.ops.risk_events import record_risk_event as rec
+                rec(platform, account_id, rk, now=now)
+        except Exception:
+            pass
         if action["kind"] in ("none", "backoff"):
             return {"applied": action["kind"], "kind": action["kind"]}
         ks = kill_switch
@@ -176,4 +209,5 @@ def handle_send_exception(
         return {"applied": "error", "kind": "none"}
 
 
-__all__ = ["classify", "apply_action", "handle_send_exception", "DEFAULT_PAUSE_MINUTES"]
+__all__ = ["classify", "apply_action", "handle_send_exception",
+           "risk_kind_for", "DEFAULT_PAUSE_MINUTES"]

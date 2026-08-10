@@ -165,10 +165,17 @@ def test_messenger_service_down():
 # ── 兜底不变量 ────────────────────────────────────────────────────────────
 
 def test_unimplemented_mode_still_explains():
-    """telegram/web 这类压根没实现的组合也必须给得出原因。"""
-    d = pr.diagnose_mode("telegram", "web", ON, provider_registered=False)
-    assert d["ready"] is False
-    assert _codes(d) == [pr.BLOCK_NOT_ENABLED]
+    """压根没实现的组合必须给得出原因，且码是 not_implemented 而非 not_enabled。
+
+    2026-08-11 分码：not_enabled 的处置文案是「翻开关/填凭据」，对「功能不存在」
+    全是空头支票（实录：用户照指引找一个不存在的表单）。「没做」必须诚实说没做，
+    前端据此隐藏「重新检测」并给「改用可用方式」直达键。
+    """
+    for platform, mode in (("telegram", "web"), ("whatsapp", "web")):
+        d = pr.diagnose_mode(platform, mode, ON, provider_registered=False)
+        assert d["ready"] is False
+        assert _codes(d) == [pr.BLOCK_NOT_IMPLEMENTED]
+        assert d["reason_code"] == pr.BLOCK_NOT_IMPLEMENTED
 
 
 @pytest.mark.parametrize("platform,mode", [

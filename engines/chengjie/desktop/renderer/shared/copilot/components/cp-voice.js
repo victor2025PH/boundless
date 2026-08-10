@@ -74,6 +74,7 @@
     _css() {
       return `
       :host { display:block; font-size:var(--cp-fs-sm,12px); color:var(--cp-text,#e2e8f0); }
+      svg.ui-ic { pointer-events:none; }  /* Shadow DOM 不吃宿主页样式：图标不抢点击，事件落宿主按钮 */
       .wrap { background:var(--cp-surface-2,#1a2332); border:1px solid var(--cp-border,#2a3544);
               border-radius:var(--cp-radius-sm,8px); padding:8px; }
       .empty { color:var(--cp-text-tiny,#94a3b8); text-align:center; padding:12px 4px; }
@@ -146,6 +147,18 @@
     _t(key, vars) {
       const f = root.CopilotShared && root.CopilotShared.t;
       return f ? f(key, vars) : key;
+    }
+    /* 线性 SVG 图标（P2B 统一图标语言）：库在（收件箱宿主）走全站注册表，
+       否则回落 sidebar-chrome 子集表；再不行返回空串（按钮仍有 title/文字兜底）。 */
+    _ic(name, size) {
+      try {
+        const sc = root.CopilotShared && root.CopilotShared.sidebarChrome;
+        if (sc && typeof sc.uiIcon === "function") return sc.uiIcon(name, size || 13) || "";
+      } catch (_e) { /* 图标缺失不阻塞渲染 */ }
+      return "";
+    }
+    _genLabelHtml() {
+      return `${this._ic("mic", 13)} ${this._esc(this._t("cp.voice.tts_btn"))}`;
     }
 
     _metaLine(d) {
@@ -284,9 +297,9 @@
       w.className = "wrap";
       w.innerHTML =
         `<div class="row">
-          <button class="primary" data-act="tts" data-role="gen-main">${this._t("cp.voice.tts_btn")}</button>
+          <button class="primary" data-act="tts" data-role="gen-main">${this._genLabelHtml()}</button>
           <select data-role="persona" title="${this._esc(this._t("cp.voice.persona_title"))}"></select>
-          <button data-act="unbind" title="${this._esc(this._t("cp.voice.unbind_title"))}">🗑</button>
+          <button data-act="unbind" title="${this._esc(this._t("cp.voice.unbind_title"))}">${this._ic("trash", 13)}</button>
           <button data-act="toggle-enroll" title="${this._esc(this._t("cp.voice.enroll_title"))}">${this._t("cp.voice.enroll_btn")}</button>
         </div>
         <div data-role="effstatus" class="hint" hidden></div>
@@ -321,7 +334,7 @@
         <div data-role="ehint" class="hint">${this._t("cp.voice.enroll_hint")}</div>
         <div data-role="audition"></div>
         <div class="panel">
-          <h5>${this._t("cp.voice.reuse_h")}</h5>
+          <h5>${this._ic("refresh", 12)} ${this._t("cp.voice.reuse_h")}</h5>
           <div class="row">
             <select data-role="rfrom"><option value="">${this._t("cp.voice.src_persona_opt")}</option></select>
             <span>→</span>
@@ -468,7 +481,7 @@
           `<span class="err">${this._esc(msg)}</span>` +
           `<div class="row" style="justify-content:flex-end;margin-top:6px;">` +
           `<button data-act="tts">${this._t("cp.voice.retry_btn")}</button>` +
-          `<button data-act="clear-preview" title="${this._esc(this._t("cp.voice.clear_t"))}">✕</button></div>`;
+          `<button data-act="clear-preview" title="${this._esc(this._t("cp.voice.clear_t"))}">${this._ic("x", 12)}</button></div>`;
         return;
       }
       this._previewText = text;
@@ -476,10 +489,10 @@
       this._previewFilename = String((d && d.filename) || "");
       const fb = ((d && d.voice_meta) || {}).fallback_from;
       box.innerHTML =
-        `<div class="row pv-hd"><span>${this._t("cp.voice.preview")}</span>` +
+        `<div class="row pv-hd"><span>${this._ic("mic", 12)} ${this._t("cp.voice.preview")}</span>` +
         `<span class="pv-actions">` +
-        `<button data-act="tts" title="${this._esc(this._t("cp.voice.regen_t"))}">${this._t("cp.voice.regen_btn")}</button>` +
-        `<button data-act="clear-preview" title="${this._esc(this._t("cp.voice.clear_t"))}">✕</button>` +
+        `<button data-act="tts" title="${this._esc(this._t("cp.voice.regen_t"))}">${this._ic("refresh", 12)} ${this._t("cp.voice.regen_btn")}</button>` +
+        `<button data-act="clear-preview" title="${this._esc(this._t("cp.voice.clear_t"))}">${this._ic("x", 12)}</button>` +
         `</span></div>` +
         `<audio controls src="${url}"></audio>` +
         this._metaLine(d) +
@@ -603,8 +616,8 @@
       const file = this.shadowRoot.querySelector('[data-role="efile"]');
       if (!box) return;
       if (this._prefillSrc && this._prefillSrc.media_ref) {
-        box.innerHTML = `<div class="row srcchip">🎧 <span>${this._esc(this._t("cp.voice.src_msg"))}</span>
-          <button data-act="clear-src" title="${this._esc(this._t("cp.voice.src_clear_t"))}">✕</button></div>`;
+        box.innerHTML = `<div class="row srcchip">${this._ic("headphones", 13)} <span>${this._esc(this._t("cp.voice.src_msg"))}</span>
+          <button data-act="clear-src" title="${this._esc(this._t("cp.voice.src_clear_t"))}">${this._ic("x", 12)}</button></div>`;
         if (file) file.style.display = "none";   // 消息导入模式：免选文件，防两个来源歧义
       } else {
         box.innerHTML = "";
@@ -692,7 +705,7 @@
         const d = await this._client.voiceTts({ text: this._t("cp.voice.audition_sample"), persona_id });
         const url = d.dataUrl || d.audio_url || "";
         box.innerHTML = url
-          ? `🔊 <audio controls src="${url}" style="max-width:100%;"></audio>${this._metaLine(d)}`
+          ? `${this._ic("volume", 13)} <audio controls src="${url}" style="max-width:100%;"></audio>${this._metaLine(d)}`
           : this._t("cp.voice.audition_fail");
       } catch (e) { box.textContent = this._t("cp.voice.audition_unavailable"); }
     }
@@ -806,8 +819,8 @@
       if (main) {
         // 解除 busy 时超限禁用要保留（否则清 busy 会把超限文本的生成按钮重新点亮）
         main.disabled = !!this._busy || this._text().length > this._maxChars;
-        main.textContent = this._busy === "tts"
-          ? this._t("cp.voice.gen_busy_btn") : this._t("cp.voice.tts_btn");
+        if (this._busy === "tts") main.textContent = this._t("cp.voice.gen_busy_btn");
+        else main.innerHTML = this._genLabelHtml();   // 恢复图标+动词标签（textContent 会抹掉 SVG）
       }
       this.shadowRoot.querySelectorAll('[data-act="tts"]').forEach((b) => { b.disabled = !!this._busy; });
       const send = this.shadowRoot.querySelector('[data-act="send"]');

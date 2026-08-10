@@ -74,6 +74,8 @@ _SSE_EVENT_TYPES = frozenset({
     "health_alert",
     "billing_alert",
     "ops_report",
+    # P0 2026-08-09：营销目标达成（goals.notify 扫描器发布）——工作台 toast + 铃铛
+    "goal_completed_alert",
 })
 
 # 写入 app.state.notif_queue 的重要事件类型
@@ -93,6 +95,7 @@ _NOTIF_EVENT_TYPES = frozenset({
     "billing_alert",
     "orchestrator_worker_alert",
     "ops_report",
+    "goal_completed_alert",
 })
 
 # 复发型告警：按「类型+会话」在 notif_queue 内合并，仅保留最新一条（避免历史堆叠）

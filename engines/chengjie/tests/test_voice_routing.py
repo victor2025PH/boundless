@@ -195,8 +195,9 @@ def test_stage_voice_file_routes_by_tier(tmp_path, monkeypatch):
         set_relationship_providers, reset_relationship_providers,
     )
 
+    _ptt = b"OggS" + b"\x00" * 60 + b"OpusHead" + b"\x00" * 32
     fd, audio = tempfile.mkstemp(suffix=".ogg")
-    os.write(fd, b"OGGfakebytes")
+    os.write(fd, _ptt)
     os.close(fd)
 
     captured = {}
@@ -208,7 +209,7 @@ def test_stage_voice_file_routes_by_tier(tmp_path, monkeypatch):
         async def synthesize(self, text, timeout_sec=45.0, emotion=None,
                              pre_colloquialized=False):
             with open(audio, "wb") as f:   # 每次重建（stage 读后会删）
-                f.write(b"OGGfakebytes")
+                f.write(_ptt)
 
             class _R:
                 ok = True

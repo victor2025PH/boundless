@@ -251,7 +251,20 @@ def register_report_routes(app, ctx) -> None:
         try:
             from src.ops.value_report import build_weekly_value
             _inbox = getattr(request.app.state, "inbox_store", None)
-            report["value"] = build_weekly_value(_inbox) if _inbox is not None else {}
+            # P2 2026-08-09：goals 段数据源显式解析（configured store；goals 未启用
+            # 时 build_weekly_value 内部会因两周皆零而不出段）——主消费面不靠 peek
+            # 的初始化时序运气。解析失败回落 None＝peek 兜底。
+            _gs = None
+            try:
+                from src.companion.goals import service as _goal_svc
+                if _goal_svc.goals_enabled(config_manager.config or {}):
+                    _gs = _goal_svc.get_configured_store(
+                        config_manager.config or {},
+                        getattr(config_manager, "config_path", None))
+            except Exception:
+                _gs = None
+            report["value"] = (build_weekly_value(_inbox, goal_store=_gs)
+                               if _inbox is not None else {})
         except Exception:
             report["value"] = {}
 

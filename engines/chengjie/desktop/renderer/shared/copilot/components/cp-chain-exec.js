@@ -24,6 +24,20 @@
     try { return /^https?:$/.test(root.location.protocol); } catch (_e) { return false; }
   })();
 
+  /* 宿主抽屉接管（2026-08-09）：坐席台（unified_inbox）暴露
+     window.__wsOpenWorkflowsDrawer 时，「管理工作链」改为在坐席台内开抽屉
+     （/workspace/workflows?embed=1），不再 target=_blank 弹新标签页丢会话上下文。
+     App 模式下本组件活在同源 iframe（/copilot/app.html）里 → 经 parent 探测；
+     跨源/无宿主函数（独立打开、桌面壳）→ 返回 null 走旧深链行为，零破坏。 */
+  function _hostDrawerOpener() {
+    try { if (typeof root.__wsOpenWorkflowsDrawer === "function") return root.__wsOpenWorkflowsDrawer; } catch (_e) { /* ignore */ }
+    try {
+      const p = root.parent;
+      if (p && p !== root && typeof p.__wsOpenWorkflowsDrawer === "function") return p.__wsOpenWorkflowsDrawer;
+    } catch (_e) { /* 跨源 parent 访问抛错＝无宿主接管 */ }
+    return null;
+  }
+
   /* C1：目标模板 → 种子链 静态映射（推荐的单一事实源；两侧 id 由
      tests/test_workflows_feature_flag.py 钉住必须真实存在——防幽灵推荐）。
      只登记高置信对应；relationship_* / custom 诚实不推荐。 */
@@ -168,6 +182,10 @@
 
     _manageLink() {
       if (!HAS_HTTP) return "";
+      if (_hostDrawerOpener()) {
+        return `<a class="mng" data-act="manage" role="button" tabindex="0">` +
+          `${this.esc(this.t("cp.chain.manage_link"))}</a>`;
+      }
       return `<a class="mng" href="/workflows" target="_blank" rel="noopener">` +
         `${this.esc(this.t("cp.chain.manage_link"))}</a>`;
     }
@@ -318,6 +336,11 @@
     /* ── 动作 ── */
 
     async onAction(act, el) {
+      if (act === "manage") {
+        const fn = _hostDrawerOpener();
+        if (fn) { try { fn("chains"); } catch (_e) { /* ignore */ } }
+        return;
+      }
       if (act === "pick_close") {
         this._pickOpen = false;
         this._startErr = "";

@@ -936,7 +936,13 @@ class DraftService:
                             chat_key=chat_key, config=self._cfg or {})
                     except Exception:
                         _hint = ""
-                    _lang = detect_language(t) or _hint or "zh"
+                    # P0-198（2026-08-03）：改走 evidence_lang 证据口径。
+                    # 旧写法两处失真：① detect_language 落空返回 "unknown"
+                    # （truthy）→ `or _hint` 永不生效，与上面注释的意图相反；
+                    # ② 系统注入的「（表情：中文）」加注会把外语客户的首条
+                    # 消息判成 zh → 欢迎语直接用错语言开场。
+                    from src.ai.lang_policy import evidence_lang
+                    _lang = evidence_lang(t) or _hint or "zh"
                     _greet_draft = build_greeting_draft(
                         conv, _lang,
                         templates_store=self._store,

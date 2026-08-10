@@ -368,12 +368,14 @@ async def test_send_photo_mirrors_and_records(monkeypatch):
     s._emit_inbox = lambda **kw: emitted.update(kw)
 
     assert await s.send_photo(7, "/p.png", "看我新裙子") is True
-    # 坐席台镜像：带 [图片] 前缀 + 配文，方向 out；msg_id 供回显去重（mock 客户端无 id→空串）
+    # 坐席台镜像（2026-08-02 起媒体行正文=干净配文，[图片] 语义由 media_type 承载，
+    # 与 B 线 caption 同口径）；msg_id 供回显去重（mock 客户端无 id→空串）
     assert emitted["chat_id"] == 7
-    assert emitted["text"] == "[图片] 看我新裙子"
+    assert emitted["text"] == "看我新裙子"
+    assert emitted["media_type"] == "image"
     assert emitted["direction"] == "out"
     assert emitted.get("msg_id") == ""
-    # contacts 记账：外发互动计入 IntimacyEngine（mutuality）
+    # contacts 记账：外发互动计入 IntimacyEngine（mutuality）；纯文本时间线保留标记表意
     assert recorded["dir"] == "out" and recorded["prev"] == "[图片] 看我新裙子"
     assert recorded["chat"] == 7 and recorded["acc"] == "a"
 
@@ -387,7 +389,8 @@ async def test_send_photo_empty_caption_preview(monkeypatch):
     monkeypatch.setattr(s, "_presend_blocked", lambda: False)
     s._emit_inbox = lambda **kw: emitted.update(kw)
     assert await s.send_photo(7, "/p.png", "") is True
-    assert emitted["text"] == "[图片]"  # 无配文 → 仅标记
+    # 无配文 → 正文空、media_type=image（前端按 🖼️ 占位/真图渲染，不再显示裸标记）
+    assert emitted["text"] == "" and emitted["media_type"] == "image"
 
 
 @pytest.mark.asyncio

@@ -101,6 +101,67 @@ def growth_calibration(
                         f"主因「{focus}」成交偏低（won {won_rate:.0%} / n={n}）"
                         "——对照 ops 转向计数与目录 CTA 分布")
 
+    # 2.5) 期限调整 × 终态（P2 校准闭环）：坐席在跟默认节奏对着干吗？
+    # 加急有没有伤转化？结局证据（两队列 organic ≥5）优先且与占比证据互斥
+    # ——「加急达成率反而更低」与「考虑下调默认天数」同屏出现是自相矛盾。
+    de = rep.get("deadline_edits") if isinstance(
+        rep.get("deadline_edits"), dict) else {}
+    de_byt = de.get("by_template") if isinstance(
+        de.get("by_template"), dict) else {}
+    rep_byt = rep.get("by_template") if isinstance(
+        rep.get("by_template"), dict) else {}
+
+    def _organic(c: Dict[str, Any]) -> int:
+        return (int(c.get("done") or 0) + int(c.get("failed") or 0)
+                + int(c.get("expired") or 0))
+
+    ranked_de = sorted(
+        ((k, v) for k, v in de_byt.items() if isinstance(v, dict)),
+        key=lambda kv: -int((kv[1].get("shortened") or {}).get("n") or 0))
+    for tmpl, row in ranked_de[:2]:
+        sh = row.get("shortened") if isinstance(
+            row.get("shortened"), dict) else {}
+        un = row.get("unedited") if isinstance(
+            row.get("unedited"), dict) else {}
+        sh_n = int(sh.get("n") or 0)
+        if not sh_n:
+            continue
+        total_n = int((rep_byt.get(tmpl) or {}).get("n") or 0)
+        if _organic(sh) >= 5 and _organic(un) >= 5:
+            sh_rate = float(sh.get("done_rate") or 0.0)
+            un_rate = float(un.get("done_rate") or 0.0)
+            if sh_rate + 0.15 <= un_rate:
+                hints.append(
+                    f"「{tmpl}」被加急的目标达成率反而更低"
+                    f"（{sh_rate:.0%} vs 未调 {un_rate:.0%}，n={sh_n}）"
+                    "——先查加急是否用力过猛（弧线压缩后首日直推），"
+                    "别急着下调默认天数")
+                continue
+            if sh_rate >= un_rate + 0.15:
+                hints.append(
+                    f"「{tmpl}」被加急的目标达成率更高"
+                    f"（{sh_rate:.0%} vs 未调 {un_rate:.0%}，n={sh_n}）"
+                    "——默认节奏偏保守的实证，考虑下调模板 default_days"
+                    "（用 auto_create 的话 days 同步调）")
+                continue
+        if total_n >= 8 and sh_n / max(1, total_n) >= 0.3:
+            hints.append(
+                f"「{tmpl}」近窗 {sh_n}/{total_n} 个终态目标被人工加急过"
+                "——坐席在跟默认节奏对着干，考虑下调模板 default_days"
+                "（结局对比攒够样本后以数据为准）")
+    ranked_ext = sorted(
+        ((k, v) for k, v in de_byt.items() if isinstance(v, dict)),
+        key=lambda kv: -int((kv[1].get("extended") or {}).get("n") or 0))
+    if ranked_ext:
+        tmpl, row = ranked_ext[0]
+        ex_n = int((row.get("extended") or {}).get("n") or 0)
+        total_n = int((rep_byt.get(tmpl) or {}).get("n") or 0)
+        if ex_n and total_n >= 8 and ex_n / max(1, total_n) >= 0.3:
+            hints.append(
+                f"「{tmpl}」近窗 {ex_n}/{total_n} 个终态目标被人工延期过"
+                "——默认节奏可能偏快（客户没热就到收口段），"
+                "考虑上调模板 default_days")
+
     # 3) 转向/注入健康
     steered = int(st.get("churn_steered") or 0)
     captured = int(st.get("churn_captured") or 0)

@@ -12,9 +12,75 @@ import pytest
 from src.inbox.humanize import (
     compute_pacing_delay,
     estimate_thinking_delay,
+    resolve_following_delay_block,
     resolve_pacing,
     run_presend_humanization,
 )
+
+
+# ── 单一节奏源收口（2026-08-07）：三条自动回复链共用的 follow 判定 ─────────
+# 此前 sender（A 线）/ protocol_autoreply（协议链）/ reply_pacing_settings
+# （coverage 自检）各写一份 follow 逻辑 → 改规则三处漂移。收口到本函数后，
+# 这批断言是三条链共同的行为契约；下方 test_follow_resolver_is_single_source
+# 另钉「三个消费方都真的在调它」，任一改回内联实现即红。
+
+_SLIDER = {"min_sec": 8, "max_sec": 20, "adaptive": True}
+
+
+class TestFollowingDelayBlock:
+    def test_own_absent_follows_slider(self):
+        blk, following = resolve_following_delay_block(None, _SLIDER)
+        assert blk == _SLIDER and following is True
+
+    def test_own_empty_follows_slider(self):
+        blk, following = resolve_following_delay_block({}, _SLIDER)
+        assert blk == _SLIDER and following is True
+
+    def test_own_zeroed_follows_slider(self):
+        # 显式 0/0 = 「没意见」而非「要秒回」→ 仍跟随（不能按「块存在」判定）
+        blk, following = resolve_following_delay_block(
+            {"min_sec": 0, "max_sec": 0}, _SLIDER)
+        assert blk == _SLIDER and following is True
+
+    def test_own_configured_wins(self):
+        blk, following = resolve_following_delay_block(
+            {"min_sec": 2, "max_sec": 5}, _SLIDER)
+        assert blk == {"min_sec": 2, "max_sec": 5} and following is False
+
+    def test_follow_false_keeps_own_even_if_empty(self):
+        # 逃生阀：显式 follow:false → 用 own（空块＝resolve_pacing 解析为 0 秒回）
+        blk, following = resolve_following_delay_block(
+            {"follow": False}, _SLIDER)
+        assert blk == {"follow": False} and following is False
+        assert resolve_pacing(blk, text="x").delay == 0.0
+
+    def test_returned_block_is_a_copy(self):
+        # 返回拷贝——消费方 mutate 不得污染调用方传入的 slider/own
+        blk, _ = resolve_following_delay_block({}, _SLIDER)
+        blk["min_sec"] = 999
+        assert _SLIDER["min_sec"] == 8
+
+    def test_bad_types_degrade_to_follow(self):
+        blk, following = resolve_following_delay_block("nope", _SLIDER)
+        assert blk == _SLIDER and following is True
+        blk2, following2 = resolve_following_delay_block({}, None)
+        assert blk2 == {} and following2 is True
+
+
+def test_follow_resolver_is_single_source():
+    """三条自动回复链都必须调用共享 follow 判定——防有人改回内联实现再漂移。
+
+    源码级断言（import 关系）：sender / protocol_autoreply / reply_pacing_settings
+    都引用 resolve_following_delay_block。任一处改回自写 follow 逻辑即红。
+    """
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent
+    for rel in ("src/client/sender.py",
+                "src/integrations/protocol_autoreply.py",
+                "src/inbox/reply_pacing_settings.py"):
+        src = (root / rel).read_text(encoding="utf-8")
+        assert "resolve_following_delay_block" in src, (
+            f"{rel} 未使用共享 follow 判定——follow 规则有再次漂移的风险")
 
 
 def _run(coro):
@@ -142,6 +208,135 @@ async def test_typing_exception_does_not_break_delay():
     await run_presend_humanization(
         delay=4.0, typing=_tp, sleep=_sleep, refresh_sec=4.0)
     assert slept == [4.0]            # typing 抛了照样睡完
+
+
+@pytest.mark.asyncio
+async def test_typing_lead_silent_head_then_typing_tail():
+    # 两段式：delay=20、lead=4 → 先静默 sleep(16)，再打字续挂 4s（typing 只出现在尾段）
+    events = []
+
+    async def _tp(action):
+        events.append("typing")
+
+    async def _sleep(s):
+        events.append(("sleep", s))
+
+    await run_presend_humanization(
+        delay=20.0, typing=_tp, sleep=_sleep, refresh_sec=4.0,
+        typing_lead_sec=4.0)
+    assert events[0] == ("sleep", 16.0)          # 静默思考段无 typing
+    assert events[1] == "typing"                 # 打字段才挂气泡
+    tail = events[1:]
+    assert tail.count("typing") == 1
+    assert [e for e in tail if isinstance(e, tuple)] == [("sleep", 4.0)]
+
+
+@pytest.mark.asyncio
+async def test_typing_lead_longer_than_delay_types_whole():
+    # lead ≥ delay → 无静默段，整段打字（自适应扣耗时后延迟很短的场景）
+    events = []
+
+    async def _tp(action):
+        events.append("typing")
+
+    async def _sleep(s):
+        events.append(("sleep", s))
+
+    await run_presend_humanization(
+        delay=3.0, typing=_tp, sleep=_sleep, refresh_sec=4.0,
+        typing_lead_sec=10.0)
+    assert events == ["typing", ("sleep", 3.0)]
+
+
+@pytest.mark.asyncio
+async def test_typing_lead_none_keeps_legacy_full_typing():
+    # 缺省 None → 旧行为：全程打字续挂（向后兼容锚）
+    events = []
+
+    async def _tp(action):
+        events.append("typing")
+
+    async def _sleep(s):
+        events.append(("sleep", s))
+
+    await run_presend_humanization(
+        delay=8.0, typing=_tp, sleep=_sleep, refresh_sec=4.0)
+    assert events == ["typing", ("sleep", 4.0), "typing", ("sleep", 4.0)]
+
+
+@pytest.mark.asyncio
+async def test_typing_lead_tiny_tail_stays_silent():
+    # 打字段 < min_typing_delay → 静默补完，不闪气泡
+    events = []
+
+    async def _tp(action):
+        events.append("typing")
+
+    async def _sleep(s):
+        events.append(("sleep", s))
+
+    await run_presend_humanization(
+        delay=10.0, typing=_tp, sleep=_sleep, refresh_sec=4.0,
+        min_typing_delay=1.0, typing_lead_sec=0.5)
+    assert "typing" not in events
+    assert [s for _, s in events] == [9.5, 0.5]
+
+
+class TestTypingLead:
+    def test_longer_text_longer_lead(self):
+        from src.inbox.humanize import estimate_typing_lead
+        short = estimate_typing_lead("好", per_char_sec=0.08)
+        long = estimate_typing_lead("好" * 40, per_char_sec=0.08)
+        assert long > short
+
+    def test_clamped_to_bounds(self):
+        from src.inbox.humanize import estimate_typing_lead
+        assert estimate_typing_lead("", per_char_sec=0.08) == 1.2
+        assert estimate_typing_lead("字" * 500, per_char_sec=0.08) == 10.0
+
+    def test_latin_weighted_lighter_than_cjk(self):
+        # 同字符数：英文打字比 CJK 快（加权 0.25），lead 更短
+        from src.inbox.humanize import estimate_typing_lead
+        cjk = estimate_typing_lead("字" * 30, per_char_sec=0.1)
+        latin = estimate_typing_lead("a" * 30, per_char_sec=0.1)
+        assert latin < cjk
+
+    def test_resolve_typing_lead_uses_persona_override_speed(self):
+        # persona_overrides.slow 的 per_char_sec 更大 → lead 更长（同一手速源）
+        from src.inbox.humanize import resolve_typing_lead
+        blk = {"min_sec": 0, "max_sec": 60, "per_char_sec": 0.05,
+               "persona_overrides": {"slow": {"per_char_sec": 0.2}}}
+        base = resolve_typing_lead(blk, text="测试文本一二三四五六七八")
+        slow = resolve_typing_lead(blk, text="测试文本一二三四五六七八",
+                                   persona_id="slow")
+        assert slow > base
+
+    def test_resolve_typing_lead_bad_block_defaults(self):
+        from src.inbox.humanize import resolve_typing_lead
+        v = resolve_typing_lead({"per_char_sec": "junk"}, text="你好呀")
+        assert 1.2 <= v <= 10.0
+
+    def test_latin_rate_extends_english_lead(self):
+        # 2026-08-09：latin_per_char_sec 按真实英文手速计（加权刻度虚高 ~4 倍）；
+        # 缺省=旧加权行为锚
+        from src.inbox.humanize import estimate_typing_lead
+        legacy = estimate_typing_lead("a" * 40, per_char_sec=0.1)
+        real = estimate_typing_lead("a" * 40, per_char_sec=0.1,
+                                    latin_per_char_sec=0.06)
+        assert legacy == pytest.approx(max(1.2, 0.6 + 40 * 0.25 * 0.1))
+        assert real == pytest.approx(0.6 + 40 * 0.06)
+        assert real > legacy
+
+    def test_resolve_typing_lead_reads_latin_key(self):
+        from src.inbox.humanize import resolve_typing_lead
+        blk = {"per_char_sec": 0.1, "latin_per_char_sec": 0.06}
+        assert resolve_typing_lead(blk, text="a" * 40) == pytest.approx(
+            0.6 + 40 * 0.06)
+        # 非法 latin 值回落加权刻度，不抛
+        bad = resolve_typing_lead(
+            {"per_char_sec": 0.1, "latin_per_char_sec": "junk"},
+            text="a" * 40)
+        assert bad == pytest.approx(max(1.2, 0.6 + 40 * 0.25 * 0.1))
 
 
 def _norng(a, b):
@@ -319,6 +514,47 @@ class TestPersonaOverrides:
                "persona_overrides": {"other": {"max_sec": 99}}}
         # persona_id 不在 overrides → 顶层默认
         assert resolve_pacing(blk, persona_id="nope", rng=_norng).delay == 3.0
+
+
+class TestPlatformOverridesPacing:
+    """平台节奏覆写（P1 2026-08-03）：人设 > 平台 > 全局，键级合并。"""
+
+    def test_platform_layer_applies(self):
+        blk = {"min_sec": 1, "max_sec": 5, "adaptive": False,
+               "platform_overrides": {
+                   "messenger": {"min_sec": 10, "max_sec": 30}}}
+        r = resolve_pacing(blk, platform="messenger", rng=_norng)
+        assert r.delay == 20.0   # uniform(10,30) 中点
+        # 未覆写平台 / 不带平台 → 顶层默认
+        assert resolve_pacing(blk, platform="line", rng=_norng).delay == 3.0
+        assert resolve_pacing(blk, rng=_norng).delay == 3.0
+
+    def test_persona_wins_over_platform(self):
+        blk = {"min_sec": 1, "max_sec": 1, "adaptive": False,
+               "platform_overrides": {"messenger": {"min_sec": 10, "max_sec": 10}},
+               "persona_overrides": {"fast": {"min_sec": 2, "max_sec": 2}}}
+        r = resolve_pacing(blk, platform="messenger", persona_id="fast",
+                           rng=_norng)
+        assert r.delay == 2.0   # 人设覆写压过平台覆写
+
+    def test_key_level_merge_across_layers(self):
+        # 人设只给 min、平台只给 max → min 取人设、max 取平台（键级不连坐）
+        blk = {"min_sec": 1, "max_sec": 60, "adaptive": False,
+               "platform_overrides": {"messenger": {"max_sec": 20}},
+               "persona_overrides": {"p": {"min_sec": 10}}}
+        r = resolve_pacing(blk, platform="messenger", persona_id="p",
+                           rng=_norng)
+        assert r.delay == 15.0   # uniform(10,20) 中点
+
+    def test_platform_key_case_insensitive_on_lookup(self):
+        blk = {"min_sec": 1, "max_sec": 1, "adaptive": False,
+               "platform_overrides": {"messenger": {"min_sec": 4, "max_sec": 4}}}
+        assert resolve_pacing(blk, platform="MESSENGER", rng=_norng).delay == 4.0
+
+    def test_compute_pacing_delay_passthrough(self):
+        blk = {"min_sec": 1, "max_sec": 1, "adaptive": False,
+               "platform_overrides": {"line": {"min_sec": 6, "max_sec": 6}}}
+        assert compute_pacing_delay(blk, platform="line", rng=_norng) == 6.0
 
 
 @pytest.mark.asyncio

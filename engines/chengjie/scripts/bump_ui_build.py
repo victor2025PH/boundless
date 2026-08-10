@@ -11,22 +11,36 @@ from __future__ import annotations
 
 import sys
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 STAMP = (Path(__file__).resolve().parents[1]
          / "src" / "web" / "static" / "workspace" / "ui-build.txt")
 
 
+def next_stamp(old: str, now_str: str) -> str:
+    """单调递增守卫（2026-08-09 实锤：并行线刚打了 1106 的戳，本脚本按当前时钟
+    1101 一跑就把它**回拨**——陈旧页提醒按戳变化判断，回拨会误触/漏触刷新提示）。
+    新值 <= 旧值时取「旧值 +1 分钟」；旧值非本格式（历史手写）按当前时间。"""
+    if not old or now_str > old:
+        return now_str
+    try:
+        t = datetime.strptime(old.strip(), "%Y%m%d-%H%M") + timedelta(minutes=1)
+        return t.strftime("%Y%m%d-%H%M")
+    except ValueError:
+        return now_str
+
+
 def main() -> int:
     lines = STAMP.read_text(encoding="utf-8").splitlines()
-    old = lines[0] if lines else "(空)"
-    new = time.strftime("%Y%m%d-%H%M")
+    old = lines[0] if lines else ""
+    new = next_stamp(old, time.strftime("%Y%m%d-%H%M"))
     if not lines:
         lines = [new]
     else:
         lines[0] = new
     STAMP.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print(f"ui-build: {old} -> {new}")
+    print(f"ui-build: {old or '(空)'} -> {new}")
     return 0
 
 

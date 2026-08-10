@@ -236,6 +236,29 @@ class MetricsStore:
     def record_reply_length(self, length: int):
         self._reply_lengths.append(length)
 
+    def reply_length_snapshot(self) -> dict:
+        """近 200 条回复的长度分布（「自动回复设置」页内容卡实测回读用）。
+
+        桶边界对齐长度三档的粗粒度语义：≤60 字≈简短带、61-160≈适中带、
+        >160≈详细带（字符数含标点；只是参照带不是硬阈值）。空样本 → n=0。
+        """
+        lens = sorted(self._reply_lengths)
+        n = len(lens)
+        if not n:
+            return {"n": 0, "avg": 0, "p50": 0, "p90": 0,
+                    "buckets": {"short": 0, "mid": 0, "long": 0}}
+        return {
+            "n": n,
+            "avg": round(sum(lens) / n),
+            "p50": lens[n // 2],
+            "p90": lens[min(n - 1, int(n * 0.9))],
+            "buckets": {
+                "short": sum(1 for x in lens if x <= 60),
+                "mid": sum(1 for x in lens if 60 < x <= 160),
+                "long": sum(1 for x in lens if x > 160),
+            },
+        }
+
     def record_ai_success(self):
         self._ai_last_success_at = time.time()
         self._ai_consecutive_errors = 0

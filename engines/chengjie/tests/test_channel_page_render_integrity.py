@@ -38,7 +38,9 @@ def test_channel_page_shell_integrity(auth_client, channel):
     assert i_top < i_body, f"{channel}: 正文渲染在顶栏之前（内容疑似进了 <head>）"
 
     # 3) 正文必须落在 <main class="ws-body"> 内
-    i_main = html.find('<main class="ws-body"')
+    #    class 列表按前缀匹配：壳层会按页附加修饰类（如开了左侧导航的
+    #    ws-has-side），钉死完整 class 串会把「加个修饰类」误报成结构事故。
+    i_main = html.find('<main class="ws-body')
     assert i_main >= 0, f"{channel}: <main class=\"ws-body\"> 缺失"
     assert i_main < i_body, f"{channel}: 正文在 <main> 之外"
 

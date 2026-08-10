@@ -49,6 +49,11 @@ _TAILWIND_CEILINGS = {
     # 2026-07-30 全文件审毕：100% 品牌 tint（选中态/未读 pill/焦点环/闪烁），
     # 93 处经 --fix-tailwind 收口为 var(--accent)/growth 阶/color-mix
     "src/web/static/workspace/unified-inbox.css": 0,
+    # 外观个性化引擎（2026-08-04）：主题预设「智连蓝」bundle 的数据值——JS 要拿
+    # hex 字面量算 WCAG 对比度（守卫）再写入 --bbl-out-bg，var() 无法参与运算；
+    # 与 CSS 侧回落值 var(--bbl-out-bg,var(--bl-growth-600,#2563eb)) 同源。
+    # 属「语义调色板数据」而非样式硬编码，新增预设若引入 Tailwind 蓝需同步调数。
+    "src/web/static/workspace/appearance.js": 1,
     # 2026-07-30 逐点审毕，25 处转 14 留 11：info toast(.tk-toast.info) 1 +
     # 套餐阶梯徽章(.ws-plan-basic，蓝/紫/金阶梯刻意非品牌) 3 + 深蓝信息横幅
     # (#dbeafe on --th-bg-blue8，语义蓝族非品牌桥) 1 + JS 类型调色板
@@ -80,19 +85,30 @@ _TAILWIND_CEILINGS = {
     # stranger灰/friend蓝/close紫/soulmate粉（CSS 渐变/条/章 + 两份 JS 色表）
     # + 分数档 score-pill.s-low 蓝
     "src/web/templates/ai_studio.html": 8,
+    # 身份化 P0（2026-08-02）：头像渐变 8 组确定性色池 _EM_GRADS，#3b82f6 为
+    # 多色渐变池一臂（与 unified_inbox 头像池同判据：一臂跟变量其余臂字面量
+    # 会破坏池子一致性）
+    "src/web/templates/episodic_memory.html": 1,
     # 16 转 1 留 15（调色板重镇）：平台色表 PC web=蓝 1 + 头像渐变 12 组池 2 +
     # 账号 8 色池 1 + 说话人分离 6 色 1 + info toast/模式提示 5 + 命名语义令牌
     # --xl-info-*（回复预览蓝框）2 / --bdg-info-*（信息徽章）2 + 冷却 pill info 底 1
+    # 2026-08-02 收紧 15→14（08-01 批次减了一处，ratchet 只降不升）
+    # 2026-08-10 14→15（清账线按 git diff 归因后代记，owner=接管体检线）：
+    # `_toast(...,'#2563eb')` 接管恢复 toast 的信息蓝——与本台账 crm-widgets.js
+    # 「toast 语义调色板 info:[...]」同构判据＝语义留；该线在途（.py 待重启装载），
+    # owner 若改用 toast 色板常量可回收本处 +1。
     "src/web/templates/unified_inbox.html": 15,
-    # 10 转 3 留 7：info toast 2 + KPI 卡色 2 + 权重刻度（橙≥5/蓝≥2/灰）1 +
-    # 发送队列五态（amber/蓝/绿/红/灰）1 + 选择条 on-indigo 浅蓝文字 1
-    "src/web/templates/_channel_body_messenger.html": 7,
+    # 10 转 3 留 7 → P2-3（2026-08-02）主 IIFE 外迁 static/messenger/messenger_rpa.js
+    # 带走 JS 侧 3 处（在下方 JS 条目续记），模板余 4：KPI 卡色 2 + 选择条 on-indigo 1 +
+    # dc-tab/dc-bar-cell 品牌蓝回落 1
+    "src/web/templates/_channel_body_messenger.html": 4,
+    # ↑ 外迁续记：权重刻度（橙≥5/蓝≥2/灰）+ 发送队列五态 + info toast（生成期 JS 串）
+    "src/web/static/messenger/messenger_rpa.js": 3,
     # 8 转 5 留 3：交接状态 .st-acknowledged 蓝（多态族）1 + 同族确认按钮
     # .btn-ack 及 hover 2
     "src/web/templates/ops/mobile_handoffs.html": 3,
-    # 7 转 2 留 5：意图调色板（purchase绿/support红/inquiry蓝/greeting灰）
-    # CSS+JS 4 + KPI 卡图标 tint 1
-    "src/web/templates/_channel_body_whatsapp.html": 5,
+    # 7 转 2 留 4 → P3-1（2026-08-02）图标 SVG 化回收意图卡蓝图标盒 1，现存 CSS+JS 3
+    "src/web/templates/_channel_body_whatsapp.html": 3,
     # 6 转 0 留 6（全语义）：策略卡身份渐变 S2=蓝青 1 + TG 范围章及图例点 4 +
     # 绿蓝双色装饰横幅 1
     "src/web/templates/strategies.html": 6,
@@ -154,6 +170,17 @@ _TAILWIND_CEILINGS = {
     "src/web/templates/membership.html": 0,
     # 1 转 0 留 1：动作调色板 enable=蓝（advance绿/downgrade红 并列）
     "src/web/templates/rpa_overview.html": 1,
+    # 2026-08-02 补审（08-01 批次落盘后首扫，5 处全语义留）：分数档
+    # .score-pill.s-low 蓝（high绿/mid?/zero灰 档位梯）2 + 关系阶段调色板
+    # .stage-tag.t-friend（stranger灰/friend蓝/close紫/soulmate粉）2 +
+    # JS 色表 _REL_STAGE_COLORS.friend 1 —— 与 ai_studio.html 同构判据
+    "src/web/templates/analytics.html": 5,
+    # 2026-08-10 登记（清账线代记，owner=goal 报表线，意向已标 DEPLOYED 未跑广域
+    # 门禁）：9 处按判据分类＝语义留 2（.st-active 蓝=「进行中」状态档，与 done绿/
+    # failed红/expired橙 并列的档位调色板）+ 品牌用途应令牌化 7（.gr-act:hover 2 +
+    # .gr-chip 3 + .gr-btn-primary 2）——后者随该页暗色适配一起归 owner 线收口
+    # （与 inline_color 台账同一条目注释互引）。数值取自门禁实测。
+    "src/web/templates/goal_report.html": 9,
 }
 
 

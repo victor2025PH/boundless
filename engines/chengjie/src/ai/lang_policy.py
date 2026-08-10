@@ -33,6 +33,7 @@ __all__ = [
     "strip_neutral_tokens",
     "parse_language_request",
     "classify_evidence",
+    "evidence_lang",
     "latest_explicit_request",
     "resolve_conversation_language",
     "normalize_lang_code",
@@ -86,6 +87,11 @@ _MEDIA_DESC_LINE_RE = re.compile(
 )
 _VOICE_TAG_RE = re.compile(r"\[(?:语音|音频)[^\]\n]*\]")
 _STALE_LABEL_RE = re.compile(r"\[\s*(?:\d+\s*天前|很久以前)\s*\]")
+# 混排 emoji 加注「原文（表情：中文语义）」——tg_inbound_text.annotate_inbound_emoji
+# 的历史产物（2026-08-03 P0-198 起不再产生，但存量落库消息仍带着）。这段中文是
+# 系统写的、不是客户说的话，曾把英文会话整条判成中文（198 实锤）。全角/半角括号
+# 都认；截断缺闭括号也剥到行尾。
+_EMOJI_NOTE_RE = re.compile(r"[（(]\s*表情\s*[：:][^）)\n]*[）)]?")
 
 
 def strip_neutral_tokens(text: str) -> str:
@@ -101,6 +107,7 @@ def strip_neutral_tokens(text: str) -> str:
     t = _MEDIA_DESC_LINE_RE.sub(" ", t)
     t = _VOICE_TAG_RE.sub(" ", t)
     t = _STALE_LABEL_RE.sub(" ", t)
+    t = _EMOJI_NOTE_RE.sub(" ", t)
     t = _URL_RE.sub(" ", t)
     t = _MENTION_RE.sub(" ", t)
     t = _EMAIL_RE.sub(" ", t)
@@ -540,6 +547,27 @@ def classify_evidence(text: str) -> Tuple[str, str]:
     if letters >= 4:
         return "en", EvidenceStrength.WEAK
     return "", EvidenceStrength.NONE
+
+
+def evidence_lang(text: str) -> str:
+    """「这段文本构成什么语言证据」的统一入口：剥离系统注入/中性内容后再检测。
+
+    与 ``classify_evidence`` 同一剥离口径，只回语种码不回强度——供出站翻译的
+    会话语言投票、语言切换/锚点/工作语言提示等「只要证据语种」的消费方复用。
+    此前这些消费方各自对**裸文本** ``detect_language``，系统注入的中文
+    （emoji 加注 ``（表情：…）``、识图/贴纸描述、媒体占位）被当成客户语言证据，
+    是 2026-08-03 P0-198「英文会话突然发中文 + 反咬客户切语言」整条事故链的
+    共同根因。无实质内容/检测不出 → ""。
+    """
+    core = strip_neutral_tokens(text)
+    if not core:
+        return ""
+    from src.ai.translation_service import detect_language
+
+    lang = detect_language(core)
+    if not lang or lang == "unknown":
+        return ""
+    return normalize_lang_code(lang)
 
 
 # ══════════════════════════════════════════════════════════════════════

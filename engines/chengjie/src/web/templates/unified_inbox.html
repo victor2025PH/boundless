@@ -65,17 +65,17 @@
 <!-- Copilot 组件 i18n：宿主语言(WS_LANG)在组件加载前注入 CP_LANG，cp-i18n.js 据此解析 zh/en。
      语言切换走整页刷新(wsToggleLang→/set_lang)，组件随新 LANG 重渲，无需热切换。 -->
 <script>window.CP_LANG = (window.WS_LANG === 'zh') ? 'zh' : 'en';</script>
-<script src="/copilot/i18n/cp-i18n.js?v=20260807a"></script>
+<script src="/copilot/i18n/cp-i18n.js?v=20260809c"></script>
 <script src="/copilot/client/copilot-client.js?v=20260805e"></script>
-<script src="/copilot/sidebar-chrome.js?v=20260801h"></script>
-<script src="/copilot/components/cp-panel-base.js?v=20260805a"></script>
-<script src="/copilot/components/cp-rel-stage.js?v=20260723"></script>
-<script src="/copilot/components/cp-next-actions.js?v=20260802c"></script>
-<script src="/copilot/components/cp-persona.js?v=20260801i"></script>
+<script src="/copilot/sidebar-chrome.js?v=20260808b"></script>
+<script src="/copilot/components/cp-panel-base.js?v=20260808b"></script>
+<script src="/copilot/components/cp-rel-stage.js?v=20260808b"></script>
+<script src="/copilot/components/cp-next-actions.js?v=20260808b"></script>
+<script src="/copilot/components/cp-persona.js?v=20260808b"></script>
 <script src="/copilot/components/cp-collab.js?v=20260801b"></script>
-<script src="/copilot/components/cp-chain-exec.js?v=20260801f"></script>
-<script src="/copilot/components/cp-draft.js?v=20260807a"></script>
-<script src="/copilot/components/cp-voice.js?v=20260805f"></script>
+<script src="/copilot/components/cp-chain-exec.js?v=20260809a"></script>
+<script src="/copilot/components/cp-draft.js?v=20260808b"></script>
+<script src="/copilot/components/cp-voice.js?v=20260808b"></script>
 <script src="/copilot/components/cp-goal.js?v=20260805a"></script>
 {% endblock %}
 {% block content %}
@@ -202,8 +202,21 @@
 .connect-err-body{margin:6px 0 0;padding:6px 8px;max-height:96px;overflow:auto;text-align:left;
   border:1px solid var(--border);border-radius:6px;background:var(--bg-soft);
   color:var(--text-tiny);font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-all;}
+/* 工作链管理抽屉（2026-08-09，JS 动态创建；样式集中于此防内联色垒高 ratchet 台账）：
+   坐席台内打开 /workspace/workflows?embed=1，替代旧「管理工作链」新标签页跳转 */
+#wf-mgr-drawer{display:none;position:fixed;inset:0;z-index:9000;}
+#wf-mgr-mask{position:absolute;inset:0;background:rgba(2,6,23,.55);}
+#wf-mgr-panel{position:absolute;top:0;right:0;bottom:0;width:min(1080px,88vw);
+  background:var(--bg-elev);border-left:1px solid var(--border);
+  box-shadow:-14px 0 40px rgba(0,0,0,.35);display:flex;flex-direction:column;}
+#wf-mgr-hd{display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--border);}
+#wf-mgr-hd strong{font-size:13px;color:var(--text-main);}
+#wf-mgr-x{padding:4px 12px;border-radius:8px;border:1px solid var(--btn-border);
+  background:var(--bg-elev);color:var(--text-sub);font-size:12px;font-weight:600;cursor:pointer;}
+#wf-mgr-x:hover{border-color:var(--accent);color:var(--accent);}
+#wf-mgr-frame{flex:1;border:0;width:100%;background:var(--bg-elev);}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260807a">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260810h">
 <link rel="stylesheet" href="/static/workspace/appearance.css?v=20260804a">
 <script src="/static/workspace/inbox-messages.js?v=20260720b"></script>
 
@@ -477,7 +490,10 @@
           <!-- 2026-08-07 有效档位胶囊（effective_automation 可见化）：下拉框只是
                基础档位，被系统封顶（新号预热/平台/业务线）时在此说真话。默认隐藏，
                _renderEffChip 按 /automation 响应 effective 段控显（旧后端无该段=不显示）。 -->
-          <span class="hdr-eff-chip" id="mode-eff-chip" style="display:none;align-items:center;gap:4px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:var(--th-bg-amber100,#fef3c7);color:var(--th-ink-amber8,#92400e);white-space:nowrap;cursor:help;"></span>
+          <span class="hdr-eff-chip" id="mode-eff-chip" onclick="openAiDiag()" style="display:none;align-items:center;gap:4px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:var(--th-bg-amber100,#fef3c7);color:var(--th-ink-amber8,#92400e);white-space:nowrap;cursor:pointer;"></span>
+          <!-- P0 2026-08-09 AI 状态体检入口：why_no_reply 排障 CLI 的面板化。
+               「为什么这条没自动回」从工程师 SSH 变成坐席自己点一下。 -->
+          <button class="hdr-btn" id="ai-diag-btn" onclick="openAiDiag()" title="AI 回复链路体检：这个会话为什么没自动回" data-i18n-title="inbox.diag.btn_t"><span>🩺</span><span data-i18n="inbox.diag.btn">AI 状态</span></button>
           <button class="hdr-btn" id="ai-toggle-btn" onclick="toggleAiDraft()" style="display:none;" title="待审 AI 草稿队列（仅「AI草稿/多选」档显示，人工审批后发送）" data-i18n-title="inbox.ai.pending_t"><span data-i18n="inbox.ai.pending">📝 待审</span><span id="ai-pending-badge" style="display:none;margin-left:4px;background:var(--th-bg-red5,#ef4444);color:var(--th-ink-inverse,#fff);border-radius:9px;font-size:11px;font-weight:700;padding:0 5px;">0</span></button>
           <button class="hdr-btn" id="info-toggle-btn" onclick="toggleInfoSidebar()" title="业务助手（AI回复/洞察/客户档案）" data-i18n-title="inbox.assist_t"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="14" y1="3" x2="14" y2="21"/></svg><span data-i18n="inbox.assist">助手</span></button>
           <!-- P17 Phase2: 右栏收起时的「工作目标」快捷入口（U6 窄屏可达性；JS 按 featureOn+会话选中 控显） -->
@@ -500,6 +516,24 @@
            走 POST /api/unified-inbox/reply-budget/relief。配色内联（琥珀警示，
            带暗色回落），不动共享 CSS 免缓存戳连锁。 -->
       <div id="budget-banner" style="display:none;align-items:center;gap:10px;padding:8px 14px;font-size:13px;line-height:1.5;background:var(--th-bg-amber100,#fef3c7);color:var(--th-ink-amber5,#92400e);border-bottom:1px solid var(--th-bd-amber2,#fde68a);"></div>
+
+      <!-- P0 2026-08-09「接管让位」横幅：坐席手动发送 → 会话被切 manual 停 AI，
+           此前该状态完全不可见（.198/.104 实测卡 27h 无人知）。数据随 /automation
+           响应的 mode_source/rearm 段，_renderTakeoverBanner 控显；「让 AI 接回」
+           走既有 POST /automation（恢复到接管前档位）。蓝色信息级（非告警）。 -->
+      <div id="takeover-banner" style="display:none;align-items:center;gap:10px;padding:8px 14px;font-size:13px;line-height:1.5;background:var(--th-bg-blue1,#dbeafe);color:var(--th-ink-blue8,#1e40af);border-bottom:1px solid var(--th-bd-blue2,#bfdbfe);"></div>
+
+      <!-- P0 2026-08-09 AI 状态体检面板（why-no-reply findings 渲染 + 一键修复） -->
+      <div id="ai-diag-overlay" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:1200;align-items:center;justify-content:center;" onclick="closeAiDiag(event)">
+        <div style="background:var(--th-bg-panel,#fff);border-radius:12px;max-width:600px;width:calc(100% - 48px);max-height:76vh;display:flex;flex-direction:column;box-shadow:0 18px 50px rgba(0,0,0,.25);overflow:hidden;">
+          <div style="display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--th-bd-soft,#e2e8f0);font-weight:700;">
+            <span style="flex:1;" data-i18n="inbox.diag.title">🩺 AI 回复状态体检</span>
+            <button class="hdr-btn" onclick="openAiDiag()" data-i18n="inbox.diag.recheck">重新体检</button>
+            <button class="hdr-btn" onclick="closeAiDiag()" data-i18n="inbox.diag.close">关闭</button>
+          </div>
+          <div id="ai-diag-body" style="overflow:auto;"></div>
+        </div>
+      </div>
 
       <!-- 主体：消息 + 可选信息栏 -->
       <div style="display:flex;flex:1;min-height:0;overflow:hidden;">
@@ -526,6 +560,14 @@
               <span data-i18n="inbox.xl.show">显示译文</span>
             </label>
             <span class="xl-top-engine" id="xl-top-engine"></span>
+          </div>
+          <!-- 案例条（案例页深链 &case= 时出现：这单为什么需要人 + 就地结案闭环） -->
+          <div id="case-bar" style="display:none;align-items:center;gap:8px;padding:7px 14px;background:color-mix(in srgb, var(--th-bg-amber5,#f59e0b) 9%, var(--tk-surface,#fff));border-bottom:1px solid color-mix(in srgb, var(--th-bg-amber5,#f59e0b) 30%, transparent);font-size:12.5px;line-height:1.45;flex-wrap:wrap;">
+            <span data-ui-icon="clipboard" data-size="14" style="flex-shrink:0;color:var(--th-ink-amber7,#b45309)"></span>
+            <span id="case-bar-text" style="flex:1;min-width:180px;color:var(--text-med,#334155)"></span>
+            <button id="case-bar-close-btn" onclick="_caseBarResolve()" style="flex-shrink:0;border:1px solid var(--th-bg-green6,#16a34a);background:var(--th-bg-green6,#16a34a);color:var(--th-ink-inverse,#fff);border-radius:7px;padding:3px 12px;font-size:12px;font-weight:600;cursor:pointer" data-i18n="inbox.casebar.close_case">结案</button>
+            <button onclick="_caseBarGotoCases()" style="flex-shrink:0;border:1px solid var(--tk-border,#d8dee9);background:var(--tk-surface,#fff);color:var(--text-med,#334155);border-radius:7px;padding:3px 12px;font-size:12px;font-weight:600;cursor:pointer" data-i18n="inbox.casebar.goto_cases">案例页</button>
+            <span role="button" onclick="_hideCaseBar()" style="cursor:pointer;color:var(--text-tiny);flex-shrink:0;font-size:14px;line-height:1;padding:2px 4px">✕</span>
           </div>
           <div class="msg-area" id="msg-area">
             <div style="text-align:center;color:var(--text-tiny);font-size:13px;"><span class="spin"></span></div>
@@ -686,6 +728,17 @@
                         <option value="ru" data-i18n="dash.lang.ru">俄语</option>
                         <option value="es" data-i18n="dash.lang.es">西班牙语</option>
                         <option value="pt" data-i18n="dash.lang.pt">葡萄牙语</option>
+                      </select>
+                    </div>
+                    <!-- P1（2026-08-09）：显式引擎选择——自动=failover 智能兜底；选定=会话级首选（跨刷新记忆，失败仍自动回落） -->
+                    <div class="xlate-dir">
+                      <span data-i18n="inbox.xl.eng_pick">引擎</span><span class="arrow">→</span>
+                      <select id="xlate-engine-sel" class="xlate-sel" onchange="_onXlateEngineSel()" title="本会话首选翻译引擎：自动=按可用性智能兜底；选定引擎会记住（跨刷新生效），失败时仍自动回落其他引擎" data-i18n-title="inbox.xl.eng_pick_t">
+                        <option value="" data-i18n="inbox.xl.eng_auto">自动</option>
+                        <option value="ollama_mt">HY-MT</option>
+                        <option value="ai" data-i18n="inbox.xl.eng_ai">AI引擎</option>
+                        <option value="deepl">DeepL</option>
+                        <option value="google">Google</option>
                       </select>
                     </div>
                     <span class="xlate-engine" id="xlate-engine"><span class="dot"></span><span data-i18n="inbox.xl.ai_engine">AI引擎</span></span>
@@ -1052,8 +1105,14 @@
       <!-- 方式不可用说明卡：为什么不能用 / 需要做什么 / 现在可以怎么办 -->
       <div class="connect-unavail" id="connect-unavail" style="display:none;" role="note" aria-live="polite">
         <div class="connect-unavail-head">
-          <span class="connect-unavail-lock" aria-hidden="true">&#128274;</span>
+          <span class="connect-unavail-lock" aria-hidden="true" data-ui-icon="lock" data-size="15"></span>
           <span class="connect-unavail-title" id="connect-unavail-title" data-i18n="inbox.connect.unavail_title">这个方式暂时不能用</span>
+        </div>
+        <!-- credentials 形态专属：三步开通指示（凭证流没有扫码步骤条，这里给全流程一眼图） -->
+        <div class="connect-cred-steps" id="connect-cred-steps" style="display:none;" role="list">
+          <span class="ccs-item" role="listitem"><i class="ccs-n">1</i><span data-i18n="inbox.connect.cred_step1">在接入向导填入官方凭证</span></span>
+          <span class="ccs-item" role="listitem"><i class="ccs-n">2</i><span data-i18n="inbox.connect.cred_step2">保存即自动开通（免重启）</span></span>
+          <span class="ccs-item" role="listitem"><i class="ccs-n">3</i><span data-i18n="inbox.connect.cred_step3">回到这里自动解锁，开始接待</span></span>
         </div>
         <div class="connect-unavail-sec">
           <div class="connect-unavail-t" data-i18n="inbox.connect.unavail_why_t">为什么</div>
@@ -1062,6 +1121,12 @@
         <div class="connect-unavail-sec">
           <div class="connect-unavail-t" data-i18n="inbox.connect.unavail_how_t">需要做什么</div>
           <div class="connect-unavail-b" id="connect-unavail-how"></div>
+        </div>
+        <!-- credentials 形态专属：准备清单（字段清单与向导同源 /api/setup/channels；
+             含平台后台直达链接与政策注释，如 Zalo 的 7 天互动窗） -->
+        <div class="connect-unavail-sec" id="connect-prep" style="display:none;">
+          <div class="connect-unavail-t" data-i18n="inbox.connect.prep_t">需要准备</div>
+          <div class="connect-unavail-b" id="connect-prep-body"></div>
         </div>
         <div class="connect-unavail-sec">
           <div class="connect-unavail-t" data-i18n="inbox.connect.unavail_alt_t">现在可以怎么办</div>
@@ -1082,13 +1147,21 @@
           </div>
           <div id="connect-enable-msg" class="connect-enable-msg" role="status" aria-live="polite"></div>
         </div>
-        <!-- 重新检测：sidecar/依赖是实时状态，运维刚起完服务不该逼用户关弹窗重开 -->
+        <!-- 凭证保存是主管权限：普通坐席显示提示 + 复制指引（_applyCredRoleActions 分流） -->
+        <div class="connect-unavail-b" id="connect-cred-admin" style="display:none;" data-i18n="inbox.connect.cred_need_admin">凭证保存需要主管 / 管理员账号操作。</div>
+        <!-- 重新检测：sidecar/依赖是实时状态，运维刚起完服务不该逼用户关弹窗重开。
+             按钮主次：去接入向导=主行动（实心），重新检测/复制指引=次行动（ghost） -->
         <div class="connect-unavail-acts">
-          <button type="button" id="connect-recheck-btn" class="connect-enable-go" onclick="recheckModes()" data-i18n="inbox.connect.recheck">重新检测</button>
           <!-- official 渠道（Instagram/Zalo）：凭证在接入向导里配，这里给一键直达 -->
-          <button type="button" id="connect-wizard-btn" class="connect-enable-go" style="display:none;" onclick="window.open('/workspace/setup','_blank')" data-i18n="inbox.connect.cred_go_wizard">去接入向导</button>
+          <button type="button" id="connect-wizard-btn" class="connect-enable-go" style="display:none;" onclick="openSetupWizard()" data-i18n="inbox.connect.cred_go_wizard">去接入向导</button>
+          <!-- 规划中（not_implemented）：主行动=一键切到本平台真正可用的方式（文案 JS 填 use_alt_btn） -->
+          <button type="button" id="connect-alt-btn" class="connect-enable-go" style="display:none;" onclick="useAltConnectMode()"></button>
+          <button type="button" id="connect-cred-copy-btn" class="connect-enable-go ghost" style="display:none;" onclick="_copyCredAdminGuide()" data-i18n="inbox.connect.cred_copy_admin">复制给管理员的操作指引</button>
+          <button type="button" id="connect-recheck-btn" class="connect-enable-go ghost" onclick="recheckModes()" data-i18n="inbox.connect.recheck">重新检测</button>
           <button type="button" id="connect-proceed-btn" class="connect-unavail-proceed" style="display:none;" onclick="proceedAnyway()" data-i18n="inbox.connect.proceed_anyway">仍要继续</button>
         </div>
+        <!-- 说明卡状态行：重新检测反馈对所有平台可见（#connect-enable-msg 只在 Telegram 面板里） -->
+        <div class="connect-unavail-msg" id="connect-unavail-msg" role="status" aria-live="polite"></div>
         <button type="button" class="connect-unavail-back" onclick="hideModeUnavailable()" data-i18n="inbox.connect.unavail_back">← 返回方式列表</button>
       </div>
     </div>
@@ -1146,6 +1219,10 @@
         <div class="connect-qr-okov" aria-hidden="true"><svg viewBox="0 0 52 52"><circle cx="26" cy="26" r="24"/><path d="M15 27l7 7 15-16"/></svg><div class="connect-qr-okid" id="connect-qr-okid"></div></div>
       </div>
       <div class="connect-hosted-note" id="connect-hosted-note" style="display:none;" data-i18n="inbox.connect.server_shot">上方为服务器登录窗口的实时画面（非二维码，仅供查看进度、无法直接操作）</div>
+      <!-- 非官方接入风险横幅（个人号扫码等）：扫码前一眼可见，文案随所选方式的 notice 下发 -->
+      <div class="connect-qr-notice" id="connect-qr-notice" role="note" aria-live="polite" style="display:none;"></div>
+      <!-- Telegram 直连预检黄条（P1-⑥）：直连不通提前给「配代理」路标，只提示不阻断 -->
+      <div class="connect-qr-notice sev-warn" id="connect-preflight-notice" role="note" aria-live="polite" style="display:none;"></div>
       <div class="connect-steps" id="connect-steps" aria-hidden="true">
         <span class="cs-step" data-step="1"><span class="cs-dot">1</span><span data-i18n="inbox.connect.step_scan">扫码</span></span>
         <span class="cs-sep"></span>
@@ -1155,6 +1232,29 @@
       </div>
       <div class="connect-state pending" id="connect-state" data-i18n="inbox.connect.state_pending">等待扫码</div>
       <div class="connect-hint" id="connect-hint" data-i18n="inbox.connect.hint">请用手机 App 扫描上方二维码完成登录。</div>
+      <!-- 手机号 + 验证码（login_kind=phone_code）：与扫码并列的次要入口；先填号再收码 -->
+      <div id="connect-phone-view" class="connect-phone-view" style="display:none;margin-top:12px;">
+        <label class="connect-phone-label" for="connect-phone-input" data-i18n="inbox.connect.phone_hint">请输入手机号（含国际区号；大陆 11 位可省略 +86）</label>
+        <input id="connect-phone-input" class="cfg-input connect-phone-input" type="tel" inputmode="tel"
+               placeholder="+86 13800000000" data-i18n-placeholder="inbox.connect.phone_ph"
+               autocomplete="tel" maxlength="20"
+               onkeydown="if(event.key==='Enter'){submitConnectPhone();}">
+        <div class="connect-actions" style="margin-top:8px;">
+          <button class="primary" id="connect-phone-btn" onclick="submitConnectPhone()" data-i18n="inbox.connect.phone_send">发送验证码</button>
+        </div>
+      </div>
+      <div id="connect-code-view" class="connect-code-view" style="display:none;margin-top:12px;">
+        <label class="connect-phone-label" for="connect-code-input" data-i18n="inbox.connect.code_hint">打开 Telegram App 或查看短信，输入收到的验证码</label>
+        <input id="connect-code-input" class="cfg-input connect-code-input" type="text" inputmode="numeric"
+               placeholder="5–6 位验证码" data-i18n-placeholder="inbox.connect.code_ph"
+               autocomplete="one-time-code" maxlength="8" pattern="[0-9]*"
+               onkeydown="if(event.key==='Enter'){submitConnectCode();}"
+               oninput="if(this.value.replace(/\D/g,'').length>=5){submitConnectCode();}">
+        <div class="connect-actions" style="margin-top:8px;">
+          <button type="button" id="connect-code-resend" onclick="resendConnectCode()" data-i18n="inbox.connect.code_resend">重发验证码</button>
+          <button class="primary" id="connect-code-btn" onclick="submitConnectCode()" data-i18n="inbox.connect.code_submit">确认登录</button>
+        </div>
+      </div>
       <!-- 两步验证（云密码）：扫码确认后账号若开启 2FA，后端返回 password_needed，前端在此收集密码 -->
       <div id="connect-password-view" style="display:none;margin-top:12px;">
         <input id="connect-cloud-password" class="cfg-input" type="password"
@@ -1983,6 +2083,11 @@ function buildNavRail(chats){
     order.forEach(p=> el.appendChild(_navIconPlat(p, platCounts[p]||0)));
   }
   _renderMobPlatBar(order, platCounts);
+  // 桌面壳：未读总数回推壳收件箱标签徽标（口径与本 rail 完全同源；纯浏览器无桥零开销跳过）
+  try{
+    if(window.__chatxShell && typeof window.__chatxShell.pushBadge==='function')
+      window.__chatxShell.pushBadge({unread:_totalUnread()});
+  }catch(_){}
 }
 /* 四/五期：窄屏底栏镜像平台图标。platCounts 必须入参（不可闭包 buildNavRail 内 const）。 */
 function _renderMobPlatBar(order, counts){
@@ -3574,7 +3679,7 @@ function renderConvList(){
           }
           // 归档图标
           const nm=body.querySelector('.conv-name');
-          if(nm) nm.innerHTML=esc(c.name||c.chat_key||window.T('dash.unknown'))+(c.archived?` <span style="font-size:11px;color:var(--th-ink-slate4,#5b6b85);" title="${window.T('inbox.conv.archived_t')}">📦</span>`:'');
+          if(nm) nm.innerHTML=esc(c.name||c.chat_key||window.T('dash.unknown'))+(c.archived?` <span style="color:var(--th-ink-slate4,#5b6b85);" title="${window.T('inbox.conv.archived_t')}">${uiIcon('archive',11)}</span>`:'');
           // 自动派单：建议你接管徽章
           let sgRow=body.querySelector('.conv-suggest-row');
           if(_convSuggestMine(c)){
@@ -4180,6 +4285,8 @@ function selectChat(key){
   try{ document.body.classList.add('mob-chat-open'); }catch(_){}
   // 切换会话时重置 KB 推荐状态（收起态/条目/chip 一并清，单一入口）
   _kbResetForChat();
+  // 案例条跟随深链会话——手动切走即收起（新深链会在 afterOpen 重新挂上）
+  try{ _hideCaseBar(); }catch(_){}
 
   // 清除该会话的未读气泡（打开即视为已读）
   _clearUnread(c);
@@ -4657,55 +4764,96 @@ function _openAiDraftPanel(){
   }catch(_){}
 }
 
-/* 外部页深链：/workspace?conv=<conversation_id>[&flag=blocked] → 打开该会话（AI 安全看板
-   「风控拦截」明细跳转等）；flag=blocked 时额外展开 AI 草稿面板直达处置。
-   复用开会话原语；按 conversation_id 或 convKey 命中，缺列表则刷新一次再试（仍无则静默忽略）。 */
+/* 外部页深链：/workspace?conv=<conversation_id>[&flag=blocked][&case=CASE-x] →
+   打开该会话（AI 安全看板「风控拦截」明细、案例页「打开会话」等）；
+   flag=blocked 额外展开 AI 草稿面板直达处置；case= 在线程头挂案例条（就地结案）。
+   复用开会话原语；按 conversation_id 或 convKey 命中，缺列表则刷新一次再试。
+   2026-08-09 失败出路收口：终兜底从「盲猜 scoped 列表」升级为 conv-probe 按 id
+   直查持久库（自动纠账号段错拼/无窗口限制），并按真实原因分支给可操作文案——
+   旧版一律报「可能已归档」，坐席切去归档视图也找不到＝误导性死胡同。 */
 function _openConvByCid(cid, opts){
   cid=String(cid||'').trim(); if(!cid) return false;
   opts=opts||{};
   searchQ='';
   const sb=document.getElementById('search-input'); if(sb) sb.value='';
   setPlatFilter('all',{skipChatFilter:true});   // 经法定 setter 解除视角（rail/标题/账号 chips 同步刷新）
-  const afterOpen=()=>{ if(opts.flag==='blocked') _openAiDraftPanel(); };
-  const tryOpen=()=>{
-    const c=allChats.find(x=>String(x.conversation_id)===cid || convKey(x)===cid);
+  const afterOpen=()=>{
+    if(opts.flag==='blocked') _openAiDraftPanel();
+    if(opts.caseId) _showCaseBar(String(opts.caseId));
+  };
+  const tryOpen=(id)=>{
+    const want=String(id||cid);
+    const c=allChats.find(x=>String(x.conversation_id)===want || convKey(x)===want);
     if(c){ applyFilters(); selectChat(convKey(c)); afterOpen(); return true; }
     return false;
   };
   if(tryOpen()) return true;
-  // 七期：刷新一次再试；P7：仍不在（沉在全局 top-N 窗口外）→ 按 conv_id 自带的
-  // platform:account 反解 scoped 直查持久库救援，救不回才如实告知（归档/未接入等）
+  // 七期：刷新一次再试；仍不在 → conv-probe 直查持久库救援，按真实原因出话
   Promise.resolve(loadChats()).then(async ()=>{
     if(tryOpen()) return;
-    try{ if(await _rescueConvFromStore(cid)){ if(tryOpen()) return; } }
+    let probe=null;
+    try{ probe=await _rescueConvFromStore(cid); }
     catch(e){ try{ console.warn('[conv-rescue] failed:', e&&(e.message||e)); }catch(_){} }
-    _toast(window.T('inbox.toast.not_in_list'), '#b45309');
+    if(probe&&probe.injected&&tryOpen(probe.resolved_cid||cid)){
+      // 打开成功后再按探针事实补一句上下文（归档/只读/自动纠错），坐席不用猜
+      if(probe.archived) _toast(window.T('inbox.toast.conv_archived_opened'), '#b45309');
+      else if(probe.account_status==='removed') _toast(window.T('inbox.toast.conv_readonly_removed'), '#b45309');
+      else if(probe.resolved_cid&&probe.resolved_cid!==cid) _toast(window.T('inbox.toast.conv_autofixed'), '#0f766e');
+      return;
+    }
+    if(probe&&probe.found&&probe.account_status==='offline'){
+      _toast(window.T('inbox.toast.conv_acct_offline'), '#b45309');
+      _beaconUiIssue('openConvByCid','conv_acct_offline');
+      return;
+    }
+    _toast(window.T('inbox.toast.conv_not_found'), '#b45309');
     _beaconUiIssue('openConvByCid','conv_not_found');   // 深链落空进看板归因
   });
   return false;
 }
-/* P7: 深链会话不在全局窗口时的救援——conversation_id 形如 platform:account:chat_key，
-   直接反解出账号维度打 scoped 端点（持久库全量），命中则并入 allChats。
-   只翻首页 200 条（深链目标几乎都是该账号近期会话）；解析不出/查不到=false 不吵。 */
+/* 深链救援 v2（conv-probe）：按 conversation_id 直查持久库——自动纠「账号段/平台段
+   拼错的引用」（按尾段 chat_key 反查）、无 200 条窗口限制、带归档/账号状态事实。
+   命中且可开 → 注入 allChats（_oow 标记：轮询快照不含它时补回而非误关，见 loadChats）。
+   返回探针结果对象（found/injected/resolved_cid/archived/account_status）或 null。
+   6s 超时 + 1 次重试（勿改回单发长超时）：深链救援常在冷启动请求风暴里发出，
+   HTTP/1.1 同源 6 连接下首发可能在浏览器队列饿死（2026-08-05 实测挂满 15s 被
+   abort，接口本身 30ms)；短超时快败 + 风暴散去后重试一发即中。 */
 async function _rescueConvFromStore(cid){
+  const r=await apiFetch('/api/unified-inbox/conv-probe?cid='+encodeURIComponent(cid),
+    undefined, {timeoutMs: 6000, retries: 1});
+  if(r.status===404) return _rescueConvLegacy(cid);   // 探针未装载（模板热更新先于后端重启的窗口期）→ 旧救援
+  if(!r.ok) return null;
+  const d=await r.json();
+  if(!d||!d.ok) return null;
+  const out={found:!!d.found, injected:false, resolved_cid:String(d.resolved_cid||''),
+             archived:!!d.archived, account_status:String(d.account_status||'')};
+  if(d.found&&d.chat){
+    const hit=d.chat;
+    hit._oow=true;
+    if(!allChats.find(x=>convKey(x)===convKey(hit))) allChats.push(hit);
+    out.injected=true;
+  }
+  return out;
+}
+/* 旧救援（v1，保留作探针 404 的兼容回落）：按 conv_ref 反解 platform:account
+   打 scoped 列表（该账号最近 200 条），命中并入 allChats。 */
+async function _rescueConvLegacy(cid){
   const parts=String(cid||'').split(':');
-  if(parts.length<3) return false;
+  if(parts.length<3) return null;
   const pl=parts[0], aid=parts[1]||'default';
-  if(!pl||!aid) return false;
-  // 6s 超时 + 1 次重试（勿改回单发长超时）：深链救援常在冷启动请求风暴里发出，
-  // HTTP/1.1 同源 6 连接下首发可能在浏览器队列饿死（2026-08-05 实测挂满 15s 被
-  // abort，接口本身 30ms）；短超时快败 + 风暴散去后重试一发即中。
+  if(!pl||!aid) return null;
   const r=await apiFetch('/api/unified-inbox/chats?limit=200&platform='
     +encodeURIComponent(pl)+'&account_id='+encodeURIComponent(aid),
     undefined, {timeoutMs: 6000, retries: 1});
-  if(!r.ok) return false;
+  if(!r.ok) return null;
   const d=await r.json();
-  if(!d||!d.ok) return false;
+  if(!d||!d.ok) return null;
   const hit=(d.chats||[]).find(x=>String(x.conversation_id)===cid || convKey(x)===cid);
-  if(!hit) return false;
-  hit._oow=true;   // 窗口外来源标记：轮询快照不含它时补回而非误关（见 loadChats）
+  if(!hit) return null;
+  hit._oow=true;
   if(!allChats.find(x=>convKey(x)===convKey(hit))) allChats.push(hit);
-  return true;
+  return {found:true, injected:true, resolved_cid:cid, archived:!!hit.archived,
+          account_status:String(hit.account_status||'')};
 }
 /* P1-② 深链免刷新（2026-08-03）：入口页（ops 看板/记忆页/关系页/案例页…）经
    _win_unique.html 把 ?conv= 深链 postMessage 给本已打开的收件箱窗口，这里站内
@@ -4724,10 +4872,112 @@ window.addEventListener('message', function(ev){
     }
     var mid=String(d.mid||'');
     if(mid){ try{ sessionStorage.setItem('ws_focus_mid', mid); }catch(_){} }
-    _openConvByCid(String(d.cid||''), {flag:String(d.flag||'')});
+    _openConvByCid(String(d.cid||''), {flag:String(d.flag||''), caseId:String(d.caseId||'')});
     if(mid && typeof _scrollToMsgHighlight==='function') _scrollToMsgHighlight(mid, {fetchOlder:true});
   }catch(_){}
 });
+
+/* 跨浏览上下文组桥（P0-C，2026-08-09；发起端在 _win_unique._tryBcHandoff）：
+   书签/手输网址开出的本窗拿不到命名窗口寻址（不同浏览上下文组互相看不见），
+   入口页深链此前只能再开一个新工作台。BroadcastChannel 同源同 profile 全组可达：
+   入口页 ws-ping 探活 → 本窗（仅多窗协调器**主控**应答，standby 静音防多窗抢开
+   同一会话）ws-pong → 入口页把 open-conv 交给本窗站内打开并关掉它刚开的空白窗。
+   window.focus() 尽力而为——浏览器不允许非用户手势跨窗抢焦点，入口页会提示用户切过来。 */
+try{
+  const _bcBridge=new BroadcastChannel('aitr_ws_bridge::'+location.host);
+  _bcBridge.onmessage=function(ev){
+    try{
+      const d=ev&&ev.data;
+      if(!d||!d.aitr) return;
+      if(window.__wsMultiWin&&window.__wsMultiWin.isStandby()) return;
+      if(d.aitr==='ws-ping'&&d.token){
+        _bcBridge.postMessage({aitr:'ws-pong', token:String(d.token)});
+      } else if(d.aitr==='open-conv'){
+        const mid=String(d.mid||'');
+        if(mid){ try{ sessionStorage.setItem('ws_focus_mid', mid); }catch(_){} }
+        _openConvByCid(String(d.cid||''), {flag:String(d.flag||''), caseId:String(d.caseId||'')});
+        if(mid&&typeof _scrollToMsgHighlight==='function') _scrollToMsgHighlight(mid,{fetchOlder:true});
+        try{ window.focus(); }catch(_){}
+      }
+    }catch(_){}
+  };
+}catch(_){}
+
+/* ── 案例条（P1-B，2026-08-09）：案例页深链 &case= → 线程头出「这单为什么需要人」
+   并支持就地结案——坐席处理完不必切回案例页找卡销账，闭环收在现场。
+   数据按需拉 /api/cases/active 匹配案号（列表接口本就是案例唯一读源，不加新端点）；
+   接口失败只显示裸案号，绝不挡开会话主流程。 ── */
+let _caseBarId='';
+async function _showCaseBar(caseId){
+  caseId=String(caseId||'').trim(); if(!caseId) return;
+  const bar=document.getElementById('case-bar'), txt=document.getElementById('case-bar-text');
+  if(!bar||!txt) return;
+  _caseBarId=caseId;
+  txt.textContent=caseId;
+  bar.style.display='flex';
+  try{
+    const r=await apiFetch('/api/cases/active', undefined, {timeoutMs:10000});
+    const d=await r.json();
+    if(_caseBarId!==caseId) return;   // 期间已切会话/关条，丢弃过期结果
+    const row=((d&&d.cases)||[]).find(c=>String(c.case_id)===caseId);
+    if(!row) return;
+    const sig=Number(row.signal_count||1);
+    txt.textContent=caseId+' · '+(row.reason||'')+(sig>1?'（×'+sig+'）':'');
+    const btn=document.getElementById('case-bar-close-btn');
+    if(btn) btn.style.display=row.closed?'none':'';
+    // 优先消息 id 锚点（&mid= / events[].mid / anchor_mid）→ 直达质疑气泡；
+    // 旧案无 mid 才回落 quote 子串闪烁（匹配不到静默放弃，绝不阻塞开会话）。
+    const mid=String(row.anchor_mid||'').trim()
+      || String(((row.events||[]).slice().reverse().find(e=>e&&e.mid)||{}).mid||'').trim();
+    if(mid && typeof _scrollToMsgHighlight==='function'){
+      _scrollToMsgHighlight(mid, {fetchOlder:true});
+    } else {
+      _caseFlashQuote((row.events||[]).map(e=>String((e&&e.quote)||'').slice(0,18)).filter(q=>q.length>=4));
+    }
+  }catch(_){}
+}
+/* 从最新气泡往回找包含案例信号原话的消息并闪烁定位。线程异步加载 → 轮询重试
+   几轮（500ms×12）；命中即停，全程静默 best-effort。 */
+let _caseFlashGen=0;
+function _caseFlashQuote(quotes){
+  if(!quotes||!quotes.length) return;
+  const gen=++_caseFlashGen;
+  let tries=0;
+  const attempt=()=>{
+    if(gen!==_caseFlashGen) return;          // 新一轮深链/切会话 → 旧扫描作废
+    try{
+      const rows=document.querySelectorAll('#msg-area .msg-row');
+      for(let i=rows.length-1;i>=0;i--){
+        const t=rows[i].textContent||'';
+        if(quotes.some(q=>t.indexOf(q)>=0)){ _flashMsgEl(rows[i]); return; }
+      }
+    }catch(_){}
+    if(++tries<12) setTimeout(attempt,500);
+  };
+  setTimeout(attempt,600);
+}
+function _hideCaseBar(){
+  _caseBarId='';
+  const bar=document.getElementById('case-bar');
+  if(bar) bar.style.display='none';
+}
+async function _caseBarResolve(){
+  if(!_caseBarId) return _hideCaseBar();
+  const cid=_caseBarId;
+  try{
+    const r=await apiFetch('/api/cases/'+encodeURIComponent(cid)+'/close',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({resolution:window.T('inbox.casebar.resolved_via_ws')})
+    },{timeoutMs:15000});
+    if(r&&r.ok){ _toast(window.T('inbox.casebar.closed_ok'), '#0f766e'); _hideCaseBar(); return; }
+    let d=null; try{ d=await r.json(); }catch(_){}
+    _toast((d&&d.detail)||('HTTP '+(r?r.status:'?')), '#b45309');
+  }catch(e){ _toast(String(e), '#b45309'); }
+}
+function _caseBarGotoCases(){
+  if(window.__openUniqueUrl&&window.__openUniqueUrl('/cases','admin')) return;
+  window.open('/cases','_blank');
+}
 
 /* ===== 线程加载 ===== */
 /* 失败自愈：红屏不再是死状态——自动指数退避重试（常态 2s→…→30s；冷却/重启窗
@@ -7774,7 +8024,7 @@ function _threadEmptyHtml(c){
     : '';
   if(placeholder && canPull){
     return `<div class="empty-list placeholder-empty">
-      <div class="empty-list-icon">📥</div>
+      <div class="empty-list-icon">${uiIcon('inbox',30)}</div>
       <div class="ph-empty-title">${window.T('inbox.thread.placeholder_title')}</div>
       <div class="ph-empty-sub">${window.T(pl==='messenger'?'inbox.thread.placeholder_hint_messenger':'inbox.thread.placeholder_hint')}</div>
       ${e2eeHint}
@@ -7787,7 +8037,7 @@ function _threadEmptyHtml(c){
   // Messenger 空会话（非占位）：仍给「拉更早」——目录同步可能建了会话但首连回填被 E2EE 挡住
   if(pl==='messenger' && canPull){
     return `<div class="empty-list placeholder-empty">
-      <div class="empty-list-icon">🌿</div>
+      <div class="empty-list-icon">${uiIcon('leaf',30)}</div>
       <div>${window.T('inbox.skel.no_msgs')}</div>
       ${e2eeHint}
       <button class="tiny-btn" style="margin-top:8px;" onclick="loadFromPhone()" ${_pullingPhone?'disabled':''}>
@@ -7797,7 +8047,7 @@ function _threadEmptyHtml(c){
     </div>`;
   }
   const hint=icebreak?`<div style="font-size:11px;color:var(--text-tiny);margin-top:6px;line-height:1.5;max-width:240px;">${window.T('inbox.thread.icebreak_hint')}</div>`:'';
-  return `<div class="empty-list"><div class="empty-list-icon">🌿</div><div>${window.T('inbox.skel.no_msgs')}</div>${icebreak}${hint}</div>`;
+  return `<div class="empty-list"><div class="empty-list-icon">${uiIcon('leaf',30)}</div><div>${window.T('inbox.skel.no_msgs')}</div>${icebreak}${hint}</div>`;
 }
 function renderMessages(c, msgs, opts={}){
   const el=document.getElementById('msg-area');
@@ -8180,6 +8430,10 @@ async function sendMsg(){
       _cdraftResolveAdopted();   // 二期：人工发送成功 → 已采用的 pending 草稿闭环 cancel
       await loadThread(selectedChat,true);
       await loadChats();
+      // P0 2026-08-09：手动发送触发「接管即静音」（服务端已切 manual），
+      // 立即回拉档位真值 → 下拉/让位横幅马上说真话，而不是等 45s 周期刷新
+      // （.198/.104 事故里坐席对「自己关掉了 AI」零感知的修复点）。
+      try{ _refreshConvStatus(selectedChat); }catch(_){}
     } else {
       // P0-198：服务端护栏 409（语言错配 / 近重复）→ 记下守卫详情，待收尾解锁后
       // 弹确认框（保持「置位→清零」单点收尾结构，异常路径也能解锁发送按钮）。
@@ -8526,6 +8780,159 @@ function _renderEffChip(){
   el.title=tip;
   el.style.display='inline-flex';
 }
+// ── P0 2026-08-09 接管让位横幅 + AI 状态体检（.198/.104 事故三件套）──────
+// 「接管即静音」此前完全不可见：坐席手动发一条 → 会话被钉死 manual（实测
+// 卡 27h），坐席全程不知道是自己关掉了 AI。数据随 /automation 响应的
+// mode_source/rearm 段（旧后端无该段=横幅不渲染，前后端可独立发布）。
+var _takeoverState=null;   // {source, updated_at}
+var _rearmState=null;      // {enabled, after_minutes, restore_mode, eta_ts, ...}
+function _isTakeoverSource(s){ s=String(s||''); return s==='takeover'||s.indexOf('takeover_from:')===0; }
+function _renderTakeoverBanner(){
+  var el=document.getElementById('takeover-banner');
+  if(!el) return;
+  var ms=_takeoverState;
+  var show=!!(ms&&_lastAutomationMode==='manual'&&_isTakeoverSource(ms.source));
+  if(!show){ el.style.display='none'; el.innerHTML=''; return; }
+  var t='';
+  try{
+    var ts=Number(ms.updated_at)||0;
+    if(ts>0) t=window.wsFmtTime(ts,{hour:'2-digit',minute:'2-digit'});
+  }catch(_){ t=''; }
+  var txt=window.Tf('inbox.takeover.banner',{time:t||'--:--'});
+  var r=_rearmState;
+  if(r&&r.enabled){
+    txt+=window.Tf('inbox.takeover.banner_rearm',{min:String(Math.round(Number(r.after_minutes)||30))});
+  }
+  el.innerHTML='<span style="flex:1;min-width:0;">'+esc(txt)+'</span>'
+    +'<button class="hdr-btn" style="flex:none;font-weight:600;" onclick="takeoverResume()">'
+    +esc(window.T('inbox.takeover.resume_btn'))+'</button>';
+  el.style.display='flex';
+}
+async function takeoverResume(){
+  var r=_rearmState;
+  var mode=(r&&r.restore_mode)||'auto_ai';
+  await setMode(mode);
+  try{ _toast(window.Tf('inbox.takeover.resumed',{mode:_modeLabel(mode)}),'#2563eb'); }catch(_){}
+  _takeoverState=null; _rearmState=null; _renderTakeoverBanner();
+}
+// AI 状态体检面板：why_no_reply CLI 的面板化（GET /api/unified-inbox/why-no-reply，
+// findings 只回码+参数，文案在 i18n pack inbox_takeover_diag 按 UI 语言渲染）。
+function closeAiDiag(ev){
+  if(ev&&ev.target&&ev.currentTarget&&ev.target!==ev.currentTarget) return;
+  var ov=document.getElementById('ai-diag-overlay');
+  if(ov) ov.style.display='none';
+}
+function _diagFindingText(f){
+  var code=String((f&&f.code)||'');
+  var p=(f&&f.params)||{};
+  if(code.indexOf('guard_')===0){
+    return window.Tf('inbox.diag.guard',{reason:code.slice(6),evidence:String(p.evidence||'')});
+  }
+  var known={account_status:1,account_missing:1,conv_missing:1,takeover_manual:1,
+    explicit_non_auto:1,cap_warmup:1,cap_platform:1,cap_business_line:1,
+    deliver_off:1,l2_off:1,work_schedule:1,pending_drafts:1,managed_peer:1,
+    peer_bot_flag:1,looks_alive:1};
+  if(known[code]){
+    var fmt={};
+    Object.keys(p).forEach(function(k){ fmt[k]=String(p[k]==null?'':p[k]); });
+    return window.Tf('inbox.diag.'+code,fmt);
+  }
+  return window.Tf('inbox.diag.unknown',{code:code});
+}
+function _diagSrcLabel(src){
+  src=String(src||'');
+  if(src==='human') return window.T('inbox.diag.src_human');
+  if(src==='bootstrap') return window.T('inbox.diag.src_bootstrap');
+  if(src.indexOf('guard')===0) return window.T('inbox.diag.src_guard');
+  if(src==='sweep') return window.T('inbox.diag.src_sweep');
+  if(src==='bulk'||src.indexOf('bulk')===0) return window.T('inbox.diag.src_bulk');
+  if(src==='takeover'||src.indexOf('takeover_from:')===0) return window.T('inbox.diag.src_takeover');
+  if(src==='rearm') return window.T('inbox.diag.src_rearm');
+  return src||window.T('inbox.diag.src_unknown');
+}
+function _diagFixHtml(f){
+  var code=String((f&&f.code)||'');
+  var btn=function(label,js){
+    return '<button class="hdr-btn" style="flex:none;font-weight:600;" onclick="'+js+'">'+esc(label)+'</button>';
+  };
+  if(code==='takeover_manual') return btn(window.T('inbox.diag.fix_resume'),'closeAiDiag();takeoverResume();');
+  if(code==='explicit_non_auto') return btn(window.T('inbox.diag.fix_auto'),"closeAiDiag();setMode('auto_ai');");
+  if(code==='cap_warmup') return btn(window.T('inbox.diag.fix_warmup'),'diagDisableWarmup();');
+  if(code==='pending_drafts') return btn(window.T('inbox.diag.fix_drafts'),'closeAiDiag();diagOpenDrafts();');
+  return '';
+}
+function diagOpenDrafts(){
+  try{
+    if(typeof toggleAiDraft==='function'){
+      if(typeof aiDraftOn!=='undefined'&&!aiDraftOn) toggleAiDraft();
+      else if(typeof loadDrafts==='function'&&selectedChat) loadDrafts(selectedChat);
+    }
+  }catch(_){}
+}
+async function diagDisableWarmup(){
+  try{
+    var r=await apiFetch('/api/unified-inbox/warmup-review',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:false})},{timeoutMs:30000});
+    var d={}; try{ d=await r.json(); }catch(_){ d={}; }
+    if(!r.ok||d.ok===false) throw new Error('warmup off failed');
+    try{ _toast(window.T('inbox.diag.warmup_off_ok'),'#0f9d75'); }catch(_){}
+    openAiDiag();
+  }catch(_){
+    try{ _toast(window.T('inbox.diag.warmup_off_fail'),'#b91c1c'); }catch(_){}
+  }
+}
+async function openAiDiag(){
+  if(!selectedChat) return;
+  var ov=document.getElementById('ai-diag-overlay');
+  var body=document.getElementById('ai-diag-body');
+  if(!ov||!body) return;
+  ov.style.display='flex';
+  body.innerHTML='<div style="padding:18px;color:var(--th-ink-muted,#64748b);">'+esc(window.T('inbox.diag.loading'))+'</div>';
+  var c=selectedChat;
+  try{
+    var r=await apiFetch('/api/unified-inbox/why-no-reply?platform='+enc(c.platform)
+      +'&account_id='+enc(c.account_id||'default')+'&chat_key='+enc(c.chat_key),undefined,{timeoutMs:30000});
+    if(r.status===404){
+      body.innerHTML='<div style="padding:18px;color:var(--th-ink-muted,#64748b);">'
+        +esc(window.T('inbox.diag.stale_backend'))+'</div>';
+      return;
+    }
+    var d=await r.json();
+    if(!r.ok||d.ok===false) throw new Error('diag failed');
+    if(!selectedChat||selectedChat.conversation_id!==c.conversation_id) return;
+    var rows=(d.findings||[]).map(function(f){
+      var lv=String(f.level||'');
+      var ic=lv==='block'?'⛔':(lv==='warn'?'⚠️':'✅');
+      var color=lv==='block'?'var(--th-ink-red8,#991b1b)':(lv==='warn'?'var(--th-ink-amber8,#92400e)':'var(--th-ink-green8,#166534)');
+      var fix=_diagFixHtml(f);
+      return '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--th-bd-soft,#e2e8f0);">'
+        +'<span style="flex:none;">'+ic+'</span>'
+        +'<span style="flex:1;min-width:0;font-size:13px;line-height:1.5;color:'+color+';">'+esc(_diagFindingText(f))+'</span>'
+        +fix+'</div>';
+    }).join('');
+    // P2 2026-08-09 档位变更时间线：谁在什么时候把档位改成什么（mode_history 段，
+    // 旧后端无该段=不渲染）。来源码→人话经 _diagSrcLabel；时间走 wsFmtDateTime。
+    var hist=(d.mode_history||[]);
+    if(hist.length){
+      rows+='<div style="padding:10px 12px 4px;font-size:12px;font-weight:700;color:var(--th-ink-muted,#64748b);">'
+        +esc(window.T('inbox.diag.history_title'))+'</div>'
+        +hist.map(function(h){
+          var t=''; try{ t=window.wsFmtDateTime(Number(h.ts)||0,{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}); }catch(_){ t=''; }
+          var prev=''; try{ prev=h.prev_mode?_modeLabel(h.prev_mode):'—'; }catch(_){ prev=String(h.prev_mode||'—'); }
+          var cur=''; try{ cur=_modeLabel(h.mode); }catch(_){ cur=String(h.mode||''); }
+          return '<div style="display:flex;align-items:center;gap:8px;padding:4px 12px;font-size:12px;color:var(--th-ink-sub,#475569);">'
+            +'<span style="flex:none;font-variant-numeric:tabular-nums;">'+esc(t)+'</span>'
+            +'<span style="flex:none;">'+esc(prev)+' → '+esc(cur)+'</span>'
+            +'<span style="flex:1;min-width:0;color:var(--th-ink-muted,#94a3b8);">'+esc(_diagSrcLabel(h.source))+'</span>'
+            +'</div>';
+        }).join('')
+        +'<div style="height:8px;"></div>';
+    }
+    body.innerHTML=rows||('<div style="padding:18px;">'+esc(window.T('inbox.diag.fail'))+'</div>');
+  }catch(_){
+    body.innerHTML='<div style="padding:18px;color:var(--th-ink-red8,#991b1b);">'+esc(window.T('inbox.diag.fail'))+'</div>';
+  }
+}
 // 轻量状态刷新：只更新横幅（预算/账号/有效档位），**不动**档位下拉（用户可能正在操作）。
 // 45s 周期 + 页面可见 + 有选中会话才拉；开会话/救济/重启后也各主动调一次。
 async function _refreshConvStatus(c){
@@ -8538,9 +8945,24 @@ async function _refreshConvStatus(c){
     _budgetState=(d&&d.budget)||null;
     _acctState=(d&&d.account)||null;
     _effState=(d&&d.effective)||null;
+    _takeoverState=(d&&d.mode_source)||null;
+    _rearmState=(d&&d.rearm)||null;
+    // 档位真值同步（接管/自动接回都发生在服务端，周期刷新是唯一感知口）：
+    // 下拉未被用户操作（无焦点）时才动，操作中只更新内存值供横幅判断。
+    if(d&&typeof d.mode==='string'&&d.mode){
+      _lastAutomationMode=d.mode;
+      try{
+        var _msel=document.getElementById('mode-select');
+        if(_msel&&document.activeElement!==_msel&&_msel.value!==d.mode){
+          _msel.value=d.mode; _syncAutoUi();
+          _applyLocalAutomationMode(c, d.mode);
+        }
+      }catch(_){}
+    }
     _renderBudgetBanner();
     _renderAcctBanner();
     _renderEffChip();
+    _renderTakeoverBanner();
   }catch(_){}
 }
 setInterval(function(){
@@ -8554,6 +8976,7 @@ async function loadModeState(c){
   _budgetState=null; _renderBudgetBanner();
   _acctState=null; _renderAcctBanner();
   _effState=null; _renderEffChip();
+  _takeoverState=null; _rearmState=null; _renderTakeoverBanner();
   try{
     const r=await apiFetch(`/api/unified-inbox/automation?platform=${enc(c.platform)}&account_id=${enc(c.account_id||'default')}&chat_key=${enc(c.chat_key)}`);
     const d=await r.json();
@@ -8569,6 +8992,9 @@ async function loadModeState(c){
       if(c) c.automation_mode=mode;
       _effState=(d&&d.effective)||null;
       _renderEffChip();
+      _takeoverState=(d&&d.mode_source)||null;
+      _rearmState=(d&&d.rearm)||null;
+      _renderTakeoverBanner();
       try{
         var row=(typeof allChats!=='undefined'?allChats:chats||[]).find(function(x){
           return x && c && x.conversation_id===c.conversation_id;
@@ -8611,7 +9037,15 @@ async function setMode(mode){
     var r=await apiFetch('/api/unified-inbox/automation',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({platform:selectedChat.platform,account_id:selectedChat.account_id||'default',chat_key:selectedChat.chat_key,mode})}, {timeoutMs: 60000});
     var d={}; try{ d=await r.json(); }catch(_){ d={}; }
-    if(!r.ok || d.ok===false) throw new Error((d&&d.detail)||'save failed');
+    // P0 2026-08-09 群聊上全自动需显式确认（AI 会在群里自动发言）：
+    // 服务端 409 code=group_confirm_required → confirm 后带 confirm_group 重试。
+    if(r.status===409 && d && d.detail && d.detail.code==='group_confirm_required'){
+      if(!confirm(window.T('inbox.mode.group_confirm'))) throw new Error('group confirm cancelled');
+      r=await apiFetch('/api/unified-inbox/automation',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({platform:selectedChat.platform,account_id:selectedChat.account_id||'default',chat_key:selectedChat.chat_key,mode,confirm_group:true})}, {timeoutMs: 60000});
+      d={}; try{ d=await r.json(); }catch(_){ d={}; }
+    }
+    if(!r.ok || d.ok===false) throw new Error((d&&(d.detail&&d.detail.message||d.detail))||'save failed');
     _applyLocalAutomationMode(selectedChat, mode);
     // 档位变了 → 旧封顶胶囊立即失效，异步按服务端真值重渲（防串显）
     _effState=null; _renderEffChip();
@@ -8849,11 +9283,35 @@ async function _loadDraftsBody(c){
         <div class="draft-acts">
           ${sendBtn}
           <button class="btn-reject" onclick="rejectDraft('${esc(dr.draft_id)}',this)">${window.T('inbox.draft_mini.reject')}</button>
-          <button class="tiny-btn${blocked?' is-suggested':''}" onclick="useDraftText('${esc(dr.draft_text||dr.text||'')}')">${window.T('inbox.edit')}</button>
+          ${blocked?`<button class="tiny-btn is-suggested" onclick="regenDraft('${esc(dr.draft_id)}',this)" title="${esc(window.T('inbox.draft_mini.regen_t'))}">${window.T('inbox.draft_mini.regen')}</button>`:''}
+          <button class="tiny-btn" onclick="useDraftText('${esc(dr.draft_text||dr.text||'')}')">${window.T('inbox.edit')}</button>
         </div>
       </div>`;
     }).join('');
   }catch(e){ console.warn('loadDrafts error',e); }
+}
+
+/* P2 2026-08-09 陈旧稿一键重生成：stale 护栏（发送被拦）之后的出路——作废旧稿、
+   按**当前**对话上下文重走人设产线铸新稿（POST /api/drafts/{id}/regenerate，
+   服务端强制 review 口径定级，绝不产 L2 自动发）。409＝刚被别的窗口处理，刷新即可。 */
+async function regenDraft(id,btn){
+  if(btn){ btn.disabled=true; btn.textContent=window.T('inbox.draft_mini.regen_busy'); }
+  try{
+    const r=await apiFetch(`/api/drafts/${enc(id)}/regenerate`,
+      {method:'POST',headers:{'Content-Type':'application/json'},body:'{}'},{timeoutMs:60000});
+    let d={}; try{ d=await r.json(); }catch(_){ d={}; }
+    if(r.status===409){
+      try{ _toast(window.T('inbox.draft_mini.regen_conflict'),'#64748b'); }catch(_){}
+      if(selectedChat) loadDrafts(selectedChat);
+      return;
+    }
+    if(!r.ok || d.ok===false) throw new Error('regen failed');
+    try{ _toast(window.T('inbox.draft_mini.regen_ok'),'#0f9d75'); }catch(_){}
+    if(selectedChat) loadDrafts(selectedChat);
+  }catch(e){
+    try{ _toast(window.T('inbox.draft_mini.regen_fail'),'#b91c1c'); }catch(_){}
+    if(btn){ btn.disabled=false; btn.textContent=window.T('inbox.draft_mini.regen'); }
+  }
 }
 
 async function approveDraft(id,btn){
@@ -9572,6 +10030,44 @@ function _refreshWsCpComponent(suffix){
   if(_cpCardCollapsed(_CP_ID_CARD[suffix]||suffix)){ if(_wsCpCtx) el._pendingCtx=_wsCpCtx; return; }
   el.refresh();
 }
+
+/* ── 工作链管理抽屉（2026-08-09）：坐席台内打开 /workspace/workflows?embed=1，
+   不再弹新标签页丢会话上下文。cp-chain-exec 组件检测到本函数（含 App 模式
+   iframe 经同源 parent 探测）即把「管理工作链」切成抽屉入口；无本函数的宿主
+   保持旧 target=_blank 行为。iframe 常驻复用（第二次秒开）；关闭时刷新右栏
+   工作链卡（导入/改链的结果立即回填）。 */
+window.__wsOpenWorkflowsDrawer=function(hash){
+  var d=document.getElementById('wf-mgr-drawer');
+  if(!d){
+    d=document.createElement('div');
+    d.id='wf-mgr-drawer';
+    d.innerHTML=
+      '<div id="wf-mgr-mask" onclick="__wsCloseWorkflowsDrawer()"></div>'+
+      '<div id="wf-mgr-panel">'+
+        '<div id="wf-mgr-hd">'+
+          '<strong>'+window.T('inbox.wf.drawer_title')+'</strong>'+
+          '<span style="flex:1"></span>'+
+          '<button id="wf-mgr-x" onclick="__wsCloseWorkflowsDrawer()">'+window.T('inbox.wf.drawer_close')+'</button>'+
+        '</div>'+
+        '<iframe id="wf-mgr-frame" title="'+window.T('inbox.wf.drawer_title')+'"></iframe>'+
+      '</div>';
+    document.body.appendChild(d);
+  }
+  var f=document.getElementById('wf-mgr-frame');
+  var url='/workspace/workflows?embed=1'+(hash?('#'+encodeURIComponent(String(hash))):'');
+  if(f&&f.getAttribute('src')!==url) f.setAttribute('src',url);
+  d.style.display='block';
+};
+window.__wsCloseWorkflowsDrawer=function(){
+  var d=document.getElementById('wf-mgr-drawer');
+  if(d)d.style.display='none';
+  try{ _refreshWsCpComponent('chain'); }catch(_){}
+};
+document.addEventListener('keydown',function(e){
+  if(e.key!=='Escape')return;
+  var d=document.getElementById('wf-mgr-drawer');
+  if(d&&d.style.display!=='none') window.__wsCloseWorkflowsDrawer();
+});
 
 function _maybeLoadAiAnalysis(){
   if(_wsCpTab==='tools'&&infoOn&&selectedChat&&!_cpCardCollapsed('analysis')&&typeof _loadAiAnalysis==='function') _loadAiAnalysis(selectedChat);
@@ -10931,7 +11427,7 @@ async function _sendDraftParts(parts){
 }
 
 /* ===== 语音音色（按人设克隆）选择 ===== */
-const _VOICE_KEY='ws_voice_persona_v1';   // { [convKey]: persona_id }
+const _VOICE_KEY='ws_voice_persona_v1';   // { [convKey]: {v:音色id, ident:选择时会话身份} }（旧格式=裸 persona_id 字符串，仍兼容）
 function currentVoicePersona(){ const s=document.getElementById('voice-persona'); return s?s.value:''; }
 function _voicePrefs(){ try{ return JSON.parse(localStorage.getItem(_VOICE_KEY)||'{}'); }catch(_){ return {}; } }
 function _voiceMetaLine(d){
@@ -10975,7 +11471,21 @@ async function loadVoiceProfiles(){
 function _loadVoiceForConv(c){
   const sel=document.getElementById('voice-persona');
   if(!sel||!c) return;
-  const want=(_voicePrefs()[convKey(c)])||'';
+  const ck=convKey(c);
+  const raw=_voicePrefs()[ck];
+  let want='';
+  if(typeof raw==='string'){ want=raw; }   /* 旧格式：无身份快照，沿用（P1-2 告警行兜底） */
+  else if(raw&&typeof raw==='object'){
+    /* P2 粘滞根治（2026-08-11）：偏好带「选择时的会话身份」快照——会话日后换绑
+       人设，选择的前提就不存在了 → 旧音色选择自动作废并清存储，回「跟随会话
+       人设」。这是苏婉/林小雨实录（换了身份还粘着旧音色）的源头修复；身份任一侧
+       未知（accountMeta 未加载等）不作废，宁可留给告警行也不误删坐席的选择。 */
+    const cur=_convIdentityPersona(c).id||'';
+    if(raw.ident&&cur&&raw.ident!==cur){
+      want='';
+      try{ const p=_voicePrefs(); delete p[ck]; localStorage.setItem(_VOICE_KEY,JSON.stringify(p)); }catch(_){}
+    } else { want=String(raw.v||''); }
+  }
   // 该人设选项可能已不存在/被禁用：回落默认
   const ok=Array.prototype.some.call(sel.options,o=>o.value===want&&!o.disabled);
   sel.value=ok?want:'';
@@ -10984,7 +11494,7 @@ function _loadVoiceForConv(c){
 function _onVoicePersonaChange(){
   if(!selectedChat) return;
   const prefs=_voicePrefs();
-  prefs[convKey(selectedChat)]=currentVoicePersona();
+  prefs[convKey(selectedChat)]={v:currentVoicePersona(),ident:(_convIdentityPersona(selectedChat).id||'')};
   try{ localStorage.setItem(_VOICE_KEY,JSON.stringify(prefs)); }catch(_){}
   _refreshVoiceRisk();
 }
@@ -11010,6 +11520,22 @@ async function _refreshVoiceRisk(){
     if(d.hub_risk==='unreachable') msg='⛔ '+window.T('inbox.voice.risk_hub_down');
     else if(d.hub_risk==='recent_failures') msg='⚠ '+window.T('inbox.voice.risk_hub_recent');
     else if(d.is_clone&&d.ready===false) msg='⚠ '+window.T('inbox.voice.risk_not_ready');
+    if(!msg){
+      /* P1-2（2026-08-11）：语音人设 ≠ 会话身份 → 客户会听出「换人」（实录：
+         文字以林小雨回复、语音却是苏婉的克隆声）。身份取值与行徽章同一真相源
+         （行级 eff_persona → 账号级）；语音侧＝显式下拉优先、否则用服务端同源
+         解析结果。「系统通用音色」是刻意的中性选择，不警。 */
+      const vSel=currentVoicePersona();
+      if(vSel!=='__system__'){
+        const idp=_convIdentityPersona(c);
+        const vpid=vSel?vSel:String(d.persona_id||'');
+        if(idp.id&&vpid&&vpid!=='__system__'&&vpid!==idp.id){
+          const sel=document.getElementById('voice-persona');
+          const vName=(sel&&sel.value&&sel.selectedOptions[0])?sel.selectedOptions[0].textContent.trim():vpid;
+          msg='⚠ '+window.Tf('inbox.voice.risk_persona_mismatch',{voice:vName,ident:(idp.name||idp.id)});
+        }
+      }
+    }
     el.textContent=msg;
     el.hidden=!msg;
   }catch(_){ if(seq===_voiceRiskSeq) el.hidden=true; }
@@ -11042,6 +11568,49 @@ async function unbindVoice(){
 }
 
 /* 试听（P0-6/C7 后为可选路径）：tts-test 本地预览，确认后经预览面板按钮发送 */
+/* 所听即所发（P0 2026-08-10）：记住最近一次试听产物；发送时会话/文本/音色都
+   没变就带 preview_filename——服务端校验（同文本指纹/同音色键/未过期）通过后
+   直接复用试听音频：零二次合成、客户听到的与坐席试听的逐字节一致。任何校验
+   不过服务端自动回落现场合成，绝不新增失败面。 */
+let _voicePreviewReuse=null;
+function _vpConvKey(){ return selectedChat?`${selectedChat.platform}|${selectedChat.account_id||'default'}|${selectedChat.chat_key}`:''; }
+
+/* 会话身份人设（P1-2 2026-08-11）：与行徽章同一真相源——行级 eff_persona
+   （会话覆写，_enrich_chat_list 附带）优先，缺失回落账号级 accountMeta。 */
+function _convIdentityPersona(c){
+  if(!c) return {id:'',name:''};
+  const eff=(c.eff_persona&&c.eff_persona.id)?c.eff_persona:null;
+  const pmeta=accountMeta[`${c.platform}:${c.account_id||'default'}`]||{};
+  return {
+    id: eff?String(eff.id):(pmeta.persona_id||''),
+    name: eff?String(eff.name||eff.id):(pmeta.persona_name||pmeta.persona_id||''),
+  };
+}
+
+/* P1-1（2026-08-11）：语音发送对账——前端超时 ≠ 发送失败（服务端可能仍在合成
+   并最终发出；盲目报失败诱导坐席重试＝客户收到两条一样的语音）。 */
+async function _voiceSendStatus(c,cid){
+  const q=new URLSearchParams({platform:c.platform||'',account_id:c.account_id||'default',
+    chat_key:c.chat_key||'',client_msg_id:cid});
+  const r=await apiFetch('/api/unified-inbox/send-voice-status?'+q.toString(),{},{timeoutMs:5000});
+  if(!r.ok) return null;              /* 404=老后端：无对账面 */
+  return await r.json().catch(()=>null);
+}
+async function _reconcileVoiceSend(c,cid){
+  /* 超时后对账：最多再等 ~30s。sent/failed=确定结论；unknown=保守提示人工确认。 */
+  let nulls=0;
+  for(let i=0;i<12;i++){
+    let d=null;
+    try{ d=await _voiceSendStatus(c,cid); }catch(_){ d=null; }
+    if(d&&d.state==='sent') return d;
+    if(d&&d.state==='failed') return d;
+    if(d&&d.state==='unknown') return {state:'unknown'};
+    if(!d&&++nulls>=2) return {state:'unknown'};   /* 老后端/接口不可达：别空等 */
+    await new Promise(rs=>setTimeout(rs,2500));
+  }
+  return {state:'unknown'};
+}
+
 async function genVoiceReply(){
   if(!selectedChat) return;
   const ta=document.getElementById('reply-ta');
@@ -11059,6 +11628,7 @@ async function genVoiceReply(){
         account_id: selectedChat.account_id||'default'})}, {timeoutMs: 60000});
     const d=await r.json();
     const audioUrl=d.audio_url||(d.filename?`/api/voice/tts-file/${enc(d.filename)}`:'');
+    _voicePreviewReuse=(d.filename&&!d.fast)?{ck:_vpConvKey(),text:text,persona:currentVoicePersona()||'',fn:d.filename}:null;
     if(audioUrl){
       const vp=document.getElementById('voice-preview');
       vp.innerHTML=`${window.T('inbox.voice.preview')}<br><audio controls src="${audioUrl}" style="width:100%;margin-top:4px;"></audio>`+
@@ -11086,33 +11656,76 @@ async function sendVoiceReply(){
   const vbHtml=vb?vb.innerHTML:'';
   if(sb){ sb.textContent=window.T('inbox.msg.sending'); sb.disabled=true; }
   if(vb){ vb.textContent='⏳'; vb.disabled=true; }
+  const sendChat=selectedChat;          /* 锁定发送会话：等待/对账期坐席可能切走 */
+  const cid=_newClientMsgId();          // P0 幂等键：语音双发还烧双份 TTS，更要拦
+  /* P1-1 等待期秒表 + 真实阶段（每 3s 问一次对账端点；best-effort 失败静默） */
+  const t0=Date.now();
+  let liveStage=window.T('inbox.voice.stage_synth');
+  const tick=setInterval(()=>{
+    const s=Math.floor((Date.now()-t0)/1000);
+    if(vb) vb.textContent='⏳'+s+'s';
+    if(sb) sb.textContent=liveStage+' '+s+'s';
+    if(s>=3&&s%3===0){
+      _voiceSendStatus(sendChat,cid).then(d=>{
+        if(d&&d.state==='in_flight'&&d.stage==='send') liveStage=window.T('inbox.voice.stage_send');
+      }).catch(()=>{});
+    }
+  },1000);
+  const onSent=async(meta,reused)=>{
+    _voicePreviewReuse=null;   /* 试听产物已消费，防陈旧复用 */
+    const m=meta||{};
+    let hint=window.T('inbox.voice.sent')+(m.provider?`（${m.provider}${m.emotion?' / '+m.emotion:''}）`:'');
+    /* 教学时刻（P2 2026-08-11）：这单直发等了 >8s 且没走试听复用 → 顺手教
+       更优工作流（疼的时候讲道理才听得进）：试听后发送=秒回且所听即所发。 */
+    if(!reused&&(Date.now()-t0)>8000&&text.length>=24){
+      hint+=' · '+window.T('inbox.voice.tip_preview_first');
+    }
+    showHint(hint);
+    const vp=document.getElementById('voice-preview');
+    if(vp){ vp.style.display='none'; vp.innerHTML=''; }
+    /* 只在坐席仍停留在发送会话时清输入框——切走后 reply-ta 已属新会话草稿 */
+    if(ta&&selectedChat&&convKey(selectedChat)===convKey(sendChat)) ta.value='';
+    await loadThread(selectedChat,true);
+    await loadChats();
+  };
+  const onFail=(msg)=>{
+    showHint(window.Tf('inbox.voice.send_fail',{msg:(msg||window.T('inbox.voice.send_fail_default'))}));
+    if(sb){ sb.textContent=window.T('inbox.voice.send_to'); sb.disabled=false; }
+  };
   try{
     const body={
-      platform: selectedChat.platform,
-      account_id: selectedChat.account_id||'default',
-      chat_key: selectedChat.chat_key,
+      platform: sendChat.platform,
+      account_id: sendChat.account_id||'default',
+      chat_key: sendChat.chat_key,
       text: text,
       persona_id: currentVoicePersona()||undefined,
-      client_msg_id: _newClientMsgId(),   // P0 幂等键：语音双发还烧双份 TTS，更要拦
+      client_msg_id: cid,
     };
+    /* 所听即所发：刚试听过且会话/文本/音色未变 → 复用试听音频（零二次合成） */
+    const _pv=_voicePreviewReuse;
+    if(_pv&&_pv.fn&&_pv.ck===_vpConvKey()&&_pv.text===text&&_pv.persona===(currentVoicePersona()||'')){
+      body.preview_filename=_pv.fn;
+    }
     const r=await apiFetch('/api/unified-inbox/send-voice',{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}, {timeoutMs: 60000});
     const d=await r.json().catch(()=>({}));
-    if(r.ok && d.ok){
-      const m=d.voice_meta||{};
-      showHint(window.T('inbox.voice.sent')+(m.provider?`（${m.provider}${m.emotion?' / '+m.emotion:''}）`:''));
-      const vp=document.getElementById('voice-preview');
-      if(vp){ vp.style.display='none'; vp.innerHTML=''; }
-      if(ta) ta.value='';
-      await loadThread(selectedChat,true);
-      await loadChats();
-    } else {
-      showHint(window.Tf('inbox.voice.send_fail',{msg:(d.detail||d.message||d.reason||window.T('inbox.voice.send_fail_default'))}));
+    clearInterval(tick);
+    if(r.ok && d.ok){ await onSent(d.voice_meta,d.reused_preview); }
+    else { onFail(d.detail||d.message||d.reason||''); }
+  }catch(_){
+    /* P1-1：网络/超时 ≠ 失败——服务端可能仍在合成并最终发出。先对账再定论：
+       sent=按成功收尾；failed=如实报错；unknown=保守提示 + 刷新会话让坐席
+       亲眼确认，绝不诱导盲目重发（那等于客户收两条）。 */
+    clearInterval(tick);
+    if(sb){ sb.textContent=window.T('inbox.voice.reconciling'); }
+    const v=await _reconcileVoiceSend(sendChat,cid);
+    if(v&&v.state==='sent'){ await onSent(v.voice_meta,v.reused_preview); }
+    else if(v&&v.state==='failed'){ onFail(v.reason||''); }
+    else{
+      showHint(window.T('inbox.voice.result_unknown'));
+      try{ await loadThread(selectedChat,true); }catch(_2){}
       if(sb){ sb.textContent=window.T('inbox.voice.send_to'); sb.disabled=false; }
     }
-  }catch(_){
-    showHint(window.T('inbox.voice.send_fail_net'));
-    if(sb){ sb.textContent=window.T('inbox.voice.send_to'); sb.disabled=false; }
   }
   if(vb){ vb.innerHTML=vbHtml; vb.disabled=false; }
 }
@@ -11212,6 +11825,39 @@ async function _clearConvPrefEngine(){
   await _rememberConvEngine('');   // 复用 POST，engine="" 即清除
   _convPrefEngine='';
   _updateEngineHint();
+}
+/* P1（2026-08-09 提速批次）：显式引擎下拉——把「多线路对照→记住」的隐藏能力升为一等控件。
+   ""=自动（failover 智能兜底）；选具体引擎=会话级首选（复用 F+ conv-engine 持久化，
+   跨刷新/重启生效；引擎失败仍自动回落，不会卡死在坏引擎上）。 */
+function _onXlateEngineSel(){
+  const s=document.getElementById('xlate-engine-sel');
+  if(!s) return;
+  if(!selectedChat){ s.value=_convPrefEngine||''; return; }   // 无会话：还原显示不落库
+  const v=String(s.value||'');
+  const p=(!v)?_clearConvPrefEngine():_rememberConvEngine(v);
+  // 切引擎立即用新引擎重译本会话（否则客户端缓存让切换看起来「没反应」）：
+  // 只清客户端侧补译标记；服务端 store 持久译文（enrich 写回）不动。
+  Promise.resolve(p).then(function(){
+    try{
+      _xlCache.clear();
+      (threadMsgs||[]).forEach(function(m){
+        if(m._xlLang){ m._xlLang=''; m.translation=''; m._xlMeta=null; }
+      });
+      if(_xlateIn && threadMsgs.length) _autoTranslateInbound();
+    }catch(_){}
+  });
+}
+/* 下拉与会话状态同步：值=当前会话首选；矩阵已知时不可用/不支持目标语的引擎灰显。 */
+function _syncEngineSel(matrix){
+  const s=document.getElementById('xlate-engine-sel');
+  if(!s) return;
+  s.value=_convPrefEngine||'';
+  const rows=(matrix&&Array.isArray(matrix.engines))?matrix.engines:null;
+  for(const opt of s.options){
+    if(!opt.value||!rows){ opt.disabled=false; continue; }
+    const row=rows.find(function(x){ return x.engine===opt.value; });
+    opt.disabled=!(row&&row.available!==false&&row.supports!==false);
+  }
 }
 function _onXlateChange(){
   const si=document.getElementById('xlate-in'), so=document.getElementById('xlate-out');
@@ -11546,13 +12192,17 @@ function _vcmSetConv(){
   // 直接写偏好表（弹窗打开期间坐席可能已切走会话，不能经 _onVoicePersonaChange 走 selectedChat）
   try{
     const prefs=_voicePrefs();
-    prefs[_vcm.convKey]=_vcm.boundPid;
+    /* 身份快照（P2 2026-08-11）：仅当仍停留在该会话时可取；切走了取不到＝存空
+       （空快照永不触发自动作废，告警行兜底），绝不拿别的会话的身份充数 */
+    const _ident=(selectedChat&&convKey(selectedChat)===_vcm.convKey)?(_convIdentityPersona(selectedChat).id||''):'';
+    prefs[_vcm.convKey]={v:_vcm.boundPid,ident:_ident};
     localStorage.setItem(_VOICE_KEY,JSON.stringify(prefs));
   }catch(_){}
   try{
     if(selectedChat&&convKey(selectedChat)===_vcm.convKey){
       const sel=document.getElementById('voice-persona');
       if(sel&&Array.prototype.some.call(sel.options,o=>o.value===_vcm.boundPid&&!o.disabled)) sel.value=_vcm.boundPid;
+      _refreshVoiceRisk();
     }
   }catch(_){}
   _toast(window.T('inbox.vcm.set_conv_ok'),'#16a34a');
@@ -11892,9 +12542,11 @@ async function _doTranslate(text, lang, purpose){
   const ck=lang+'\u0001'+text;
   if(_xlCache.has(ck)) return {text:_xlCache.get(ck), cached:true, provider:'cache', ok:true};
   // P1-2：'auto' 由服务端统一解析客户语言（与 /send 同一逻辑），随 body 传会话定位。
+  // 2026-08-09：会话标识改为恒传（有会话即带）——服务端据此解析「会话首选引擎」
+  // （F+ conv-engine）。旧行为只在 auto 时带，导致记住的引擎对入站显示翻译永不生效。
   const body={text,target_lang:lang};
   if(purpose) body.purpose=purpose;
-  if(lang==='auto' && selectedChat){
+  if(selectedChat){
     body.platform=selectedChat.platform;
     body.account_id=selectedChat.account_id||'default';
     body.chat_key=selectedChat.chat_key;
@@ -12031,15 +12683,16 @@ async function _updateEngineHint(){
     const _cl=String((selectedChat&&selectedChat.language)||'').trim();
     target=(_cl&&_cl!=='unknown')?_cl:'';
   }
-  if(!target){ el.innerHTML='<span class="dot"></span>'+window.T('inbox.xl.eng_ai')+_prefEngineBadge(null); el.title=''; return; }
+  if(!target){ el.innerHTML='<span class="dot"></span>'+window.T('inbox.xl.eng_ai')+_prefEngineBadge(null); el.title=''; _syncEngineSel(null); return; }
   try{
     let m=_engineMatrixCache.get(target);
     if(!m){
       const r=await apiFetch('/api/unified-inbox/translation-engines?target_lang='+encodeURIComponent(target));
       const d=await r.json();
-      if(!d||!d.ok||!d.matrix) return;
+      if(!d||!d.ok||!d.matrix){ _syncEngineSel(null); return; }
       m=d.matrix; _engineMatrixCache.set(target,m);
     }
+    _syncEngineSel(m);   // P1：下拉值/灰显与徽标同步刷新
     const eff=m.effective, primary=m.primary;
     const effLabel=_XL_ENGINE_LABEL[eff]||eff;
     if(eff==='none'){
@@ -12156,23 +12809,124 @@ function _outHasOrig(m){
   }
   return false;
 }
-// 单条补译 + 就地渲染译文行（入/出站通用）。
+// 单条/批量共用的结果落地：写消息对象 + 就地渲染译文行（与旧 _translateMsgInto 语义逐字一致）。
+function _applyXlResult(m,lang,res){
+  if(!res||!res.text) return;
+  m._xlLang=lang; m._xlCached=res.cached; m._xlMeta=res;
+  // P0 护栏：identity / 同语种回原文时不写译文、不渲染重复行
+  if(!_meaningfulXlate(m.text,res.text)){ m.translation=''; return; }
+  m.translation=res.text;
+  const el=document.getElementById('msg-'+esc(m.message_id||''));
+  if(el){
+    const bub=el.querySelector('.msg-bubble');
+    let tx=bub.querySelector('.msg-translation');
+    if(!tx){tx=document.createElement('div');tx.className='msg-translation auto';bub.appendChild(tx);}
+    tx.classList.remove('xl-skel');
+    _txPatch(tx,esc(res.text)+(res.cached?'<span class="tm-badge">'+window.T('inbox.msg.mem_badge')+'</span>':'')+_xlWarnBadge(res));
+  }
+}
+// 骨架占位：批量请求在途时给待译消息一条 shimmer 行（消除「译文行突然出现」的布局跳动）。
+function _xlSkelOn(m){
+  const el=document.getElementById('msg-'+esc(m.message_id||''));
+  if(!el) return;
+  const bub=el.querySelector('.msg-bubble');
+  if(!bub||bub.querySelector('.msg-translation')) return;   // 已有行（含骨架）不重复
+  const tx=document.createElement('div');
+  tx.className='msg-translation auto xl-skel';
+  tx.innerHTML='<span class="xl-skel-bar"></span>';
+  bub.appendChild(tx);
+}
+function _xlSkelOff(m){
+  const el=document.getElementById('msg-'+esc(m.message_id||''));
+  if(!el) return;
+  const tx=el.querySelector('.msg-translation.xl-skel');
+  if(tx) tx.remove();
+}
+// ── 批量补译管线（2026-08-09 提速批次）──────────────────────────────────────
+// 视口懒翻从「每条一个 /translate 往返」收敛为「一批一个 /translate-batch」：
+// 服务端逐条复用同一 TranslationService（缓存/术语/会话首选引擎）+ gather 并发，
+// 6 条消息从 6 个请求逐条蹦 → 1 个请求整批到位。旧后端无该端点（404）→ 本页
+// 永久回落逐条路径（特性探测，前后端可独立发布）。
+const _XL_CHUNK=16;              // 单批上限（服务端 50 封顶；16 保证兜底端点降级时也在 60s 预算内）
+let _xlBatchUnsupported=false;   // 特性探测：一旦 404 本页不再尝试批量
+async function _translateMsgsBatch(lang,list){
+  if(!lang||!list||!list.length) return;
+  if(_xlBatchUnsupported){
+    for(let i=0;i<list.length;i+=_XL_BATCH){
+      await Promise.all(list.slice(i,i+_XL_BATCH).map(m=>_translateMsgInto(lang,m)));
+    }
+    return;
+  }
+  // 先吃会话级缓存（零请求）
+  const rest=[];
+  for(const m of list){
+    const ck=lang+'\u0001'+(m.text||'');
+    if(_xlCache.has(ck)) _applyXlResult(m,lang,{text:_xlCache.get(ck),cached:true,provider:'cache',ok:true});
+    else rest.push(m);
+  }
+  // 按方向分组：入站计入 inbound_display 成本漏斗，出站双语（坐席自译）不计——与逐条路径同口径
+  const groups=[['inbound_display',rest.filter(m=>m.direction!=='out')],
+                ['',rest.filter(m=>m.direction==='out')]];
+  for(const g of groups){
+    const purpose=g[0], arr=g[1];
+    for(let i=0;i<arr.length;i+=_XL_CHUNK){
+      const chunk=arr.slice(i,i+_XL_CHUNK);
+      const ids=chunk.map((m,j)=>String(m.message_id||('__i'+(i+j))));
+      chunk.forEach(_xlSkelOn);
+      let d=null;
+      const _t0=Date.now();
+      try{
+        const body={items:chunk.map((m,j)=>({id:ids[j],text:m.text||''})),target_lang:lang};
+        if(purpose) body.purpose=purpose;
+        if(selectedChat){   // 恒带会话标识：服务端据此解析会话首选引擎（与单条路径同口径）
+          body.platform=selectedChat.platform;
+          body.account_id=selectedChat.account_id||'default';
+          body.chat_key=selectedChat.chat_key;
+        }
+        const r=await apiFetch('/api/unified-inbox/translate-batch',{method:'POST',
+          headers:{'Content-Type':'application/json'},body:JSON.stringify(body)},{timeoutMs:60000});
+        if(r&&r.status===404) _xlBatchUnsupported=true;
+        else d=await r.json();
+      }catch(_){}
+      chunk.forEach(_xlSkelOff);
+      // 坐席视角耗时分桶埋点（ui_events 计数 + 按日趋势）：回答「批量补译体感多快/
+      // 有没有退化」——P0 提速后的验收指标常驻化，坏了看板先于坐席报障发现。
+      try{
+        const _ms=Date.now()-_t0;
+        _uiBeacon(_xlBatchUnsupported?'xl_batch_fallback404':((!d||!d.ok)?'xl_batch_fail':
+          (_ms<300?'xl_batch_lt300':(_ms<1000?'xl_batch_lt1000':(_ms<3000?'xl_batch_lt3000':'xl_batch_slow')))));
+      }catch(_){}
+      if(_xlBatchUnsupported){   // 旧后端：本批与后续一律回落逐条
+        for(let j=0;j<chunk.length;j+=_XL_BATCH){
+          await Promise.all(chunk.slice(j,j+_XL_BATCH).map(m=>_translateMsgInto(lang,m)));
+        }
+        continue;
+      }
+      // 整批失败＝静默不写状态（与旧逐条失败同语义：下轮渲染可重试，负缓存在服务端）
+      if(!d||!d.ok||!Array.isArray(d.items)) continue;
+      const byId=new Map();
+      d.items.forEach(it=>byId.set(String(it.id||''),it.translation||null));
+      let engineShown=false;
+      chunk.forEach(function(m,j){
+        const t=byId.get(ids[j]);
+        if(!t) return;
+        const out=t.translated_text||'';
+        if(t.ok===false||!out) return;               // 单条失败不写状态，保留下轮重试资格
+        if(!engineShown&&t.provider&&t.provider!=='identity'){ _setXlateEngine(t.provider); engineShown=true; }
+        _xlCache.set(lang+'\u0001'+(m.text||''),out);
+        _applyXlResult(m,lang,{text:out,cached:!!t.cached,provider:t.provider||'',ok:true,error:'',
+          confidence:(typeof t.confidence==='number'?t.confidence:-1)});
+      });
+    }
+  }
+}
+// 单条补译 + 就地渲染译文行（入/出站通用；手动「译」按钮与批量回落路径共用）。
 async function _translateMsgInto(lang,m){
   try{
     // P4-B：仅入站方向计入「客户→坐席」翻译成本；出站双语是坐席自译，不计入入站漏斗。
     const res=await _doTranslate(m.text,lang,(m.direction==='out')?'':'inbound_display');
     if(!res) return;
-    m._xlLang=lang; m._xlCached=res.cached; m._xlMeta=res;
-    // P0 护栏：identity / 同语种回原文时不写译文、不渲染重复行
-    if(!_meaningfulXlate(m.text,res.text)){ m.translation=''; return; }
-    m.translation=res.text;
-    const el=document.getElementById('msg-'+esc(m.message_id||''));
-    if(el){
-      const bub=el.querySelector('.msg-bubble');
-      let tx=bub.querySelector('.msg-translation');
-      if(!tx){tx=document.createElement('div');tx.className='msg-translation auto';bub.appendChild(tx);}
-      _txPatch(tx,esc(res.text)+(res.cached?'<span class="tm-badge">'+window.T('inbox.msg.mem_badge')+'</span>':'')+_xlWarnBadge(res));
-    }
+    _applyXlResult(m,lang,res);
   }catch(_){}
 }
 // 消息自动批量翻译（开启「译文语言」时）。P2：分批并发 + 最新优先 + 出站双语，控成本与卡顿。
@@ -12234,9 +12988,7 @@ function _ensureXlObserver(){
     });
     if(!todo.length) return;
     todo.reverse();                                 // 视口内也最新优先
-    (async()=>{ for(let i=0;i<todo.length;i+=_XL_BATCH){
-      await Promise.all(todo.slice(i,i+_XL_BATCH).map(m=>_translateMsgInto(lang,m)));
-    }})();
+    _translateMsgsBatch(lang,todo);                 // 一批一个往返（旧后端 404 时内部回落逐条）
   },{root:area,rootMargin:'200px 0px'});
   return _xlObserver;
 }
@@ -12250,15 +13002,13 @@ function _observePendingMsgs(){
     if(m && _xlNeeds(m,lang)) ob.observe(el);
   });
 }
-// 回落整批（无 IntersectionObserver 环境）：分批并发 + 最新优先。
+// 回落整批（无 IntersectionObserver 环境）：批量端点一次带走 + 最新优先。
 async function _autoTranslateBatch(){
   if(!_xlateIn || _xlAutoBlocked(_xlateIn)) return;
   const lang=_xlateIn;
   const pending=threadMsgs.filter(m=>_xlNeeds(m,lang));
   pending.reverse();
-  for(let i=0;i<pending.length;i+=_XL_BATCH){
-    await Promise.all(pending.slice(i,i+_XL_BATCH).map(m=>_translateMsgInto(lang,m)));
-  }
+  await _translateMsgsBatch(lang,pending);
 }
 async function _autoTranslateInbound(){
   if(!_xlateIn || _xlAutoBlocked(_xlateIn)) return;
@@ -12791,6 +13541,25 @@ function _acctStallHint(pl,a,on){
   const tip=window.T('inbox.acct.stall_tip_e2ee');
   return `<div class="acct-offline-hint acct-stall-hint">${dur}${dur?'<span class="acct-meta-sep">·</span>':''}${esc(tip)}</div>`;
 }
+/* ── 桌面壳「官方网页版」入口（2026-08-11 双栏融合）─────────────────────────
+   壳侧把内嵌官方网页从一级导航（左侧账号 rail）降级为「账号的一种打开方式」：
+   仅当本页跑在桌面壳收件箱 webview 里（inbox-preload.js 暴露 window.__chatxShell）
+   才渲染入口；纯浏览器访问无桥 → 不渲染，桌面/网页共用本模板零分叉。
+   平台白名单镜像 desktop/renderer/renderer.js::EMBEDDABLE（壳侧收到后仍二次校验，
+   此表只管显隐；LINE 无官方网页版聊天故不在列）。 */
+const _SHELL_EMBEDDABLE_PLATS=new Set(['telegram','whatsapp','instagram','messenger','x','zalo']);
+function _shellBridge(){
+  const sh=window.__chatxShell;
+  return (sh && typeof sh.openEmbedded==='function') ? sh : null;
+}
+function openAcctWebTab(pl){
+  const sh=_shellBridge();
+  if(!sh) return;
+  try{
+    sh.openEmbedded(pl,{});
+    _toast(window.T('inbox.acct.open_web_sent'),'#16a34a');
+  }catch(_){}
+}
 function _acctActionsHtml(pl,aid,a,on){
   const pv=esc(pl), av=esc(aid), a2=esc(a.account_id||'');
   const menuId=('acct-menu-'+pl+'-'+aid).replace(/[^a-zA-Z0-9_-]/g,'_');
@@ -12823,6 +13592,8 @@ function _acctActionsHtml(pl,aid,a,on){
   // 全量深同步（P2）：战役式动作频次低 → 收进溢出菜单，不挤动作行
   if(on&&pl==='telegram') items.push(`<button class="acct-menu-item" role="menuitem" title="${esc(window.T('inbox.acct.full_sync_t'))}" onclick="fullSyncAcct('${pv}','${av}',this)">${uiIcon('sync',15)}<span>${esc(L('inbox.acct.full_sync'))}</span></button>`);
   items.push(`<button class="acct-menu-item" role="menuitem" onclick="renameAcct('${pv}','${a2}')">${uiIcon('edit',15)}<span>${esc(L('inbox.acct.rename'))}</span></button>`);
+  // 桌面壳内：官方网页版入口（平台级动作——网页版标签内扫码定身份；纯浏览器无桥不渲染）
+  if(_shellBridge() && _SHELL_EMBEDDABLE_PLATS.has(pl)) items.push(`<button class="acct-menu-item" role="menuitem" title="${esc(window.T('inbox.acct.open_web_t'))}" onclick="openAcctWebTab('${pv}')">${uiIcon('globe',15)}<span>${esc(L('inbox.acct.open_web'))}</span></button>`);
   const danger=[];
   if(on&&a.removable!==false) danger.push(`<button class="acct-menu-item warn" role="menuitem" onclick="logoutAcct('${pv}','${av}',this)">${uiIcon('logout',15)}<span>${esc(L('inbox.acct.logout'))}</span></button>`);
   if(a.removable!==false)     danger.push(`<button class="acct-menu-item danger" role="menuitem" onclick="removeAcct('${pv}','${av}',this)">${uiIcon('trash',15)}<span>${esc(L('inbox.acct.remove'))}</span></button>`);
@@ -13884,7 +14655,7 @@ function _acctAlignPickConfirm(push, opts){
     let foot='';
     if(autoTrim) foot+='<div class="acct-align-foot warn">'+esc(window.T('inbox.acct.align_auto_trim'))+'</div>';
     if(skippedN>0) foot+='<div class="acct-align-foot">'+esc(window.Tf('inbox.acct.align_skipped_line',{n:skippedN,parts:skipParts}))+'</div>';
-    card.innerHTML='<div class="app-confirm-title">'+(opts.icon||'🎭')+' '+esc(opts.title||window.T('inbox.acct.align_title'))+'</div>'
+    card.innerHTML='<div class="app-confirm-title">'+((opts.iconName&&typeof uiIcon==='function')?uiIcon(opts.iconName,16):(opts.icon||uiIcon('mask',16)))+' '+esc(opts.title||window.T('inbox.acct.align_title'))+'</div>'
       +'<div class="app-confirm-msg">'+esc(window.Tf('inbox.acct.align_confirm_head',{n:(push||[]).length,persona:persona}))+'</div>'
       +'<div class="acct-align-hint">'+esc(window.T('inbox.acct.align_pick_hint'))+'</div>'
       +'<div class="acct-align-list">'+rowsHtml+'</div>'
@@ -14025,6 +14796,13 @@ const _CONNECT_FAIL_REASON_KEYS={
   checkpoint:'inbox.connect.err_checkpoint',
   password_error:'inbox.connect.err_password_error',
   session_timeout:'inbox.connect.err_session_timeout',
+  cred_invalid:'inbox.connect.err_cred_invalid',
+  tg_unreachable:'inbox.connect.err_tg_unreachable',
+  phone_invalid:'inbox.connect.err_phone_invalid',
+  phone_banned:'inbox.connect.err_phone_banned',
+  phone_unoccupied:'inbox.connect.err_phone_unoccupied',
+  code_invalid:'inbox.connect.err_code_invalid',
+  code_expired:'inbox.connect.err_code_expired',
 };
 // 托管登录的**实时**提示码（hint_code，非终态）：Node 旁观服务器上那个登录页，判出
 // 此刻在要什么。没有它时，坐席看到的是一句恒定的「已打开登录窗口」，而窗口里其实
@@ -14110,7 +14888,14 @@ const _KIND_VOCAB={
   device:{next:'inbox.connect.next_device',step1:'inbox.connect.step_device',step2:'inbox.connect.step_confirm',
       pending:'inbox.connect.state_wait_device',mask:'inbox.connect.mask_device',refresh:'inbox.connect.restart_generic',
       expired_st:'inbox.connect.st_login_expired',expired_hint:'inbox.connect.device_expired'},
+  phone_code:{next:'inbox.connect.next_phone',step1:'inbox.connect.step_phone',step2:'inbox.connect.step_code',
+      pending:'inbox.connect.state_phone',mask:'inbox.connect.mask_phone',refresh:'inbox.connect.restart_phone',
+      expired_st:'inbox.connect.st_login_expired',expired_hint:'inbox.connect.phone_expired'},
 };
+let _connectPhoneDraft='';
+let _connectCodeResendAt=0;
+let _connectCodeResendTimer=null;
+const _CONNECT_CODE_RESEND_SEC=45;
 function _kindVocab(){ return _KIND_VOCAB[_connectKind]||_KIND_VOCAB.qr; }
 // 换词必须连 data-i18n 属性一起换（同 _setConnectStep2Label 的教训：wsApplyI18n 只认属性，
 // 只改 textContent 会在任何一次语言重刷时被悄悄打回原词）。
@@ -14131,11 +14916,64 @@ function _applyConnectKindVocab(){
   _swapConnectI18n(document.getElementById('connect-refresh-btn'), v.refresh);
   // hosted 专属 UI：浏览器窗体化预览 + 「实时画面」注脚 + 运维指引出口
   const wrap=document.querySelector('#connect-qr-view .connect-qr-wrap');
-  if(wrap) wrap.classList.toggle('hosted', _connectKind==='hosted');
+  if(wrap){
+    wrap.classList.toggle('hosted', _connectKind==='hosted');
+    // phone_code 没有二维码主视觉——藏起方框，把注意力交给号码/验证码表单
+    wrap.classList.toggle('phone-mode', _connectKind==='phone_code');
+  }
   const note=document.getElementById('connect-hosted-note');
   if(note) note.style.display=_connectKind==='hosted'?'block':'none';
   const ops=document.getElementById('connect-hosted-ops');
   if(ops) ops.style.display=_connectKind==='hosted'?'flex':'none';
+}
+function _clearConnectCodeResendTimer(){
+  if(_connectCodeResendTimer){ clearInterval(_connectCodeResendTimer); _connectCodeResendTimer=null; }
+}
+function _tickConnectCodeResend(){
+  const btn=document.getElementById('connect-code-resend');
+  if(!btn) return;
+  const left=Math.max(0, Math.ceil((_connectCodeResendAt-Date.now())/1000));
+  if(left<=0){
+    btn.disabled=false;
+    btn.textContent=window.T('inbox.connect.code_resend');
+    _clearConnectCodeResendTimer();
+    return;
+  }
+  btn.disabled=true;
+  btn.textContent=window.Tf('inbox.connect.code_resend_wait',{sec:left});
+}
+function _armConnectCodeResend(){
+  _connectCodeResendAt=Date.now()+_CONNECT_CODE_RESEND_SEC*1000;
+  _clearConnectCodeResendTimer();
+  _tickConnectCodeResend();
+  _connectCodeResendTimer=setInterval(_tickConnectCodeResend, 1000);
+}
+/** phone_code 表单显隐：互斥于 QR 方框 / PIN / 云密码。phase=''|phone|code */
+function _showConnectPhonePhase(phase){
+  const phoneBox=document.getElementById('connect-phone-view');
+  const codeBox=document.getElementById('connect-code-view');
+  const wrap=document.querySelector('#connect-qr-view .connect-qr-wrap');
+  const showPhone=phase==='phone';
+  const showCode=phase==='code';
+  if(phoneBox) phoneBox.style.display=showPhone?'block':'none';
+  if(codeBox) codeBox.style.display=showCode?'block':'none';
+  if(!showPhone && !showCode) _clearConnectCodeResendTimer();
+  // phone_code 全程藏 QR 方框；其它形态仅在密码/PIN 阶段藏（既有逻辑）
+  if(wrap && _connectKind==='phone_code'){
+    wrap.style.display='none';
+  }
+  if(showPhone){
+    const inp=document.getElementById('connect-phone-input');
+    if(inp){
+      if(_connectPhoneDraft) inp.value=_connectPhoneDraft;
+      setTimeout(()=>{ try{ inp.focus(); }catch(_){} }, 50);
+    }
+  }
+  if(showCode){
+    const inp=document.getElementById('connect-code-input');
+    if(inp){ inp.value=''; setTimeout(()=>{ try{ inp.focus(); }catch(_){} }, 50); }
+    _armConnectCodeResend();
+  }
 }
 // 提示语优先级：开局故障说明 > 后端 instruction_key（本地化）> hosted 本地键 >
 // 后端 raw instruction > 平台扫码兜底
@@ -14192,6 +15030,43 @@ function _showQrView(){
   document.getElementById('connect-mode-view').style.display='none';
   document.getElementById('connect-config-view').style.display='none';
   document.getElementById('connect-qr-view').style.display='block';
+  _renderConnectNotice();
+  _runTgPreflight();
+}
+/* Telegram 直连预检（P1-⑥）：进入扫码步即探「本机能否直连 Telegram」，不通亮黄条给
+   配代理路标（大陆「系统代理只救 HTTP、救不了 MTProto」的典型形态提前拦截）。
+   只提示不阻断：旧后端无此路由(404)/预检自身失败/用户已配代理，一律静默或自行忽略。 */
+async function _runTgPreflight(){
+  const el=document.getElementById('connect-preflight-notice');
+  if(!el) return;
+  el.style.display='none'; el.textContent='';
+  if(_connectPlat!=='telegram') return;
+  // protocol 扫码 + phone 验证码都走 MTProto，直连不通时同样需要代理路标
+  if(_connectMode && String(_connectMode)!=='protocol' && String(_connectMode)!=='phone') return;
+  const seq=_connectStartSeq;
+  try{
+    const r=await apiFetch('/api/platforms/telegram/login/preflight');
+    if(!r.ok) return;
+    const d=await r.json();
+    if(seq!==_connectStartSeq) return;   // 弹窗已翻篇，别给新会话装旧横幅
+    if(d && d.ok && d.reachable===false){
+      el.textContent=window.T('inbox.connect.preflight_tg_blocked');
+      el.style.display='';
+    }
+  }catch(_){ /* 预检失败＝没有信息，不打扰 */ }
+}
+/* 扫码步风险横幅：按当前所选方式的 notice（后端 /modes 下发）渲染。无 notice 则隐藏。
+   单一事实源＝后端 override.notice_key（与向导个人号主卡同键），不在前端硬编码平台。 */
+function _renderConnectNotice(){
+  const el=document.getElementById('connect-qr-notice');
+  if(!el) return;
+  const m=(_connectModes||[]).find(x=>String(x.mode)===String(_connectMode));
+  const key=m&&m.notice&&m.notice.key;
+  if(key){
+    el.textContent=window.T(key);
+    el.className='connect-qr-notice sev-'+((m.notice&&m.notice.severity)||'warn');
+    el.style.display='';
+  }else{ el.style.display='none'; el.textContent=''; }
 }
 function backToModeSelect(){
   _connectStartSeq++;   // 作废可能仍在飞的 login/start
@@ -14206,17 +15081,34 @@ let _connectModes=[];
 // bk_<code> 三个键——不认识的码回落 not_enabled，宁可笼统也不能让说明卡空着。
 const _CONN_REASON_CODES={not_enabled:1, needs_server_setup:1, dep_missing:1,
   creds_missing:1, service_down:1, login_disabled:1, orchestrator_off:1,
-  provider_unavailable:1};
+  provider_unavailable:1, official_creds_missing:1, not_implemented:1};
 function _modeReasonKeys(rc){
   const k=_CONN_REASON_CODES[String(rc||'')]?String(rc):'not_enabled';
   return {why:`inbox.connect.rc_${k}_why`, how:`inbox.connect.rc_${k}_how`};
 }
 // blocker → 本地化文案。params 由后端给（{dep}/{install}/{url}/{svc}/{field}），
 // 用 Tf 插值，使「缺 okline，跑 pip install okline」这类可直接照做的指令落到界面上。
-function _blockerText(b, kind){
-  const keys=_modeReasonKeys(b&&b.code);
-  const key=kind==='how'?keys.how:keys.why;
+// opts.noform=true＝「在这里直接启用」自助面板本卡不渲染：not_enabled/creds_missing
+// 的 how 换 noform 变体，绝不指向一个不存在的表单（2026-08 死胡同事故的文案层根治）。
+function _blockerText(b, kind, opts){
+  // official 同码双态：params.state=switch_off（凭证已齐、只差渠道启用开关）换专用
+  // 文案变体——契约见 platform_readiness._official_blockers；键写死保 i18n 门禁可校验。
+  if(String((b&&b.code)||'')==='official_creds_missing'
+      && String(((b&&b.params)||{}).state||'')==='switch_off'){
+    return window.T(kind==='how'?'inbox.connect.rc_official_switch_off_how'
+      :'inbox.connect.rc_official_switch_off_why');
+  }
+  const code=String((b&&b.code)||'');
   const p=(b&&b.params)||null;
+  if(kind==='how'&&opts&&opts.noform){
+    if(code==='not_enabled') return window.T('inbox.connect.rc_not_enabled_how_noform');
+    if(code==='creds_missing'){
+      const k2='inbox.connect.rc_creds_missing_how_noform';
+      try{ return p?window.Tf(k2,p):window.T(k2); }catch(_){ return window.T(k2); }
+    }
+  }
+  const keys=_modeReasonKeys(code);
+  const key=kind==='how'?keys.how:keys.why;
   try{ return p?window.Tf(key,p):window.T(key); }catch(_){ return window.T(key); }
 }
 // 显式映射而非拼键：动态拼 i18n 键会绕过「键必须可解析」门禁，一个拼错就只在
@@ -14230,6 +15122,12 @@ const _CONN_BK_CHIP={
   provider_unavailable:'inbox.connect.bk_provider_unavailable',
   login_disabled:'inbox.connect.bk_login_disabled',
   orchestrator_off:'inbox.connect.bk_orchestrator_off',
+  not_implemented:'inbox.connect.bk_not_implemented',
+  // official 渠道（IG/Zalo 等）缺凭证：处置=去接入向导。此码后端 2026-08-08 就有、
+  // i18n 三键齐备，但此处漏登记 → chip 取空 → 徽标回落「敬请期待」——把「差你一步
+  // 配置」说成「我们没做」（2026-08-10 IG 弹层实锤）。门禁 test_platform_readiness_i18n
+  // 的 _CODE_CONSTS 已同批补 BLOCK_OFFICIAL_CREDS，再漏码会红。
+  official_creds_missing:'inbox.connect.bk_official_creds_missing',
 };
 function _blockerChip(b){
   const k=_CONN_BK_CHIP[String((b&&b.code)||'')];
@@ -14258,16 +15156,25 @@ async function loadConnectModes(opts){
       _connectMode=''; _connectKind=_platDefaultKind(_connectPlat);
       _showQrView(); startConnect(); return;
     }
+    // 规划中（not_implemented）沉底：能用的方式先入眼，占位卡别插队；组内保持后端顺序
+    modes.sort((a,b)=>((String(a.reason_code||'')==='not_implemented')?1:0)
+      -((String(b.reason_code||'')==='not_implemented')?1:0));
     box.innerHTML=modes.map(m=>{
       const dis=!m.available;
+      // 规划中＝功能不存在：沙漏图标 + 「规划中」徽标 + 引导线索指向替代方式
+      const planned=String(m.reason_code||'')==='not_implemented';
       // ready===false 且 available===true＝「点得动但一定失败」（典型：sidecar 没起）。
       // 旧行为给它挂「推荐」角标骗点击，用户点进去干等一个永远不来的二维码。
       const blocked=!dis && m.ready===false;
+      // credentials 形态（IG/Zalo 等官方 API 渠道）：不可用 ≠ 没做，是「等你填凭证」。
+      // 徽标/引导线索按「待配置」口吻走，别把已建成的能力说成「敬请期待」。
+      const cfgable=String(m.login_kind||'')==='credentials';
       const top=_topBlocker(m);
       const chip=top?_blockerChip(top):'';
-      // 徽标优先级：具体卡点 > 即将支持 > 推荐。说清楚卡在哪一环，比说「暂时不能用」有用。
+      // 徽标优先级：具体卡点 > 待配置/即将支持 > 推荐。说清楚卡在哪一环，比说「暂时不能用」有用。
       let badge='';
-      if(dis) badge='<span class="connect-mode-badge soon">'+esc(chip||window.T('inbox.connect.mode_soon'))+'</span>';
+      if(dis) badge='<span class="connect-mode-badge '+(cfgable?'cfg':'soon')+'">'
+        +esc(chip||window.T(cfgable?'inbox.connect.mode_needs_config':'inbox.connect.mode_soon'))+'</span>';
       else if(blocked) badge='<span class="connect-mode-badge warn">'+esc(chip||window.T('inbox.connect.st_sidecar_down'))+'</span>';
       else if(m.preferred) badge='<span class="connect-mode-badge">'+window.T('inbox.connect.mode_recommended')+'</span>';
       const caps=(m.caps||[]).map(c=>{
@@ -14277,48 +15184,243 @@ async function loadConnectModes(opts){
       // 只有 warn（如编排器没开）不拦点击：它不影响这次能否扫上，只影响能否常驻。
       const softWarn=(!dis && !blocked && top && top.severity==='warn') ? _blockerChip(top) : '';
       const act=(dis||blocked)?`onclick="showModeUnavailable('${esc(m.mode)}')"`:`onclick="chooseMode('${esc(m.mode)}')"`;
-      return `<div class="connect-mode-opt${!dis&&!blocked&&m.preferred?' recommended':''}${dis?' disabled':''}${blocked?' blocked':''}"
+      return `<div class="connect-mode-opt${!dis&&!blocked&&m.preferred?' recommended':''}${dis?' disabled':''}${dis&&cfgable?' cfg':''}${blocked?' blocked':''}"
         role="button" tabindex="0" ${dis?'aria-disabled="true"':''} ${act}
         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click();}">
-        <div class="connect-mode-radio">${dis?'<span class="connect-mode-lock" aria-hidden="true">&#128274;</span>':''}</div>
+        <div class="connect-mode-radio">${dis?('<span class="connect-mode-lock" aria-hidden="true">'+uiIcon(planned?'hourglass':'lock',12)+'</span>'):''}</div>
         <div class="connect-mode-body">
           <div class="connect-mode-name">${esc(_connModeLabel(m))}${badge}</div>
           <div class="connect-mode-desc">${esc(_modeDesc(m))}</div>
           ${caps?`<div class="connect-mode-caps">${caps}</div>`:''}
+          ${m.notice&&m.notice.key?`<div class="connect-mode-notice sev-${esc(m.notice.severity||'warn')}">${esc(window.T(m.notice.key))}</div>`:''}
           ${softWarn?`<div class="connect-mode-softwarn">${esc(softWarn)}</div>`:''}
-          ${(dis||blocked)?`<div class="connect-mode-unavail-cue">${esc(window.T('inbox.connect.unavail_title'))} →</div>`:''}
+          ${(dis||blocked)?`<div class="connect-mode-unavail-cue">${esc(window.T((dis&&cfgable)?'inbox.connect.unavail_cue_config':(planned?'inbox.connect.unavail_cue_planned':'inbox.connect.unavail_title')))} →</div>`:''}
         </div></div>`;
     }).join('');
+    // 单方式 && 属「填凭证接入」（IG/Zalo）：唯一选项还要点一次才知道怎么开通＝伪选择步。
+    // 直接展开引导卡（为什么/怎么做/去向导按钮），把「选择」这步省给用户。
+    // recheck 路径重复调用无害：recheckModes 之后本就会按需 showModeUnavailable；
+    // 但那不算新曝光（requick 跳漏斗埋点，防自动重检每轮 +1 灌水）。
+    if(modes.length===1 && !modes[0].available
+        && String(modes[0].login_kind||'')==='credentials'){
+      showModeUnavailable(String(modes[0].mode||''), {requick:!!(opts&&opts.recheck)});
+    }
   }catch(_){
     box.innerHTML='<div style="font-size:12px;color:var(--red);text-align:center;padding:16px;">'+window.T('inbox.connect.modes_fail')+'</div>';
   }
 }
 let _connectBlockedMode='';   // 「仍要继续」要放行的那个 mode
-function showModeUnavailable(mode){
+let _connectShownMode='';     // 说明卡当前展示的 mode（recheck/自动重检以此为准；
+                              // _connectBlockedMode 对不可用方式恒为空，不能替代）
+let _connectAltMode='';       // 规划中说明卡「改用 X」按钮的目标方式（showModeUnavailable 计算）
+// 规划中（not_implemented）说明卡的主行动：一键切到本平台真正可用的方式
+function useAltConnectMode(){
+  const m=_connectAltMode;
+  if(!m) return;
+  _uiBeacon('connect_alt_click_'+_connectPlat+'_'+m);
+  hideModeUnavailable();
+  chooseMode(m);
+}
+// ── 官方渠道（credentials 形态）开通引导：权限分流 / 准备清单 / 回环自动重检 ──
+// 凭证保存是主管权限（向导 _require_supervisor）：普通坐席藏「去接入向导」，
+// 给「复制指引发管理员」（与 Messenger hosted_ops_copy 同模式）。角色取
+// /api/workspace/me（workspace_base 同源接口），缓存一次；取不到按主管放行
+// ——宁可让他点进向导看到真实的权限提示，也不要凭空拦人。
+let _wsMeSupCache=null;
+async function _wsMeIsSup(){
+  if(_wsMeSupCache!==null) return _wsMeSupCache;
+  try{
+    const r=await apiFetch('/api/workspace/me');
+    const d=r.ok?await r.json():null;
+    _wsMeSupCache=(d&&d.ok)?!!d.is_supervisor:true;
+  }catch(_){ _wsMeSupCache=true; }
+  return _wsMeSupCache;
+}
+async function _applyCredRoleActions(){
+  const sup=await _wsMeIsSup();
+  const card=document.getElementById('connect-unavail');
+  if(!card||card.style.display==='none') return;   // 卡已关：别改幽灵 DOM
+  if(sup) return;                                   // 主管：保持「去接入向导」主按钮
+  const wz=document.getElementById('connect-wizard-btn');
+  const adm=document.getElementById('connect-cred-admin');
+  const cpb=document.getElementById('connect-cred-copy-btn');
+  if(wz) wz.style.display='none';
+  if(adm) adm.style.display='block';
+  if(cpb) cpb.style.display='inline-block';
+}
+async function _copyCredAdminGuide(){
+  let fields='';
+  try{
+    const ch=await _officialChannelStatus();
+    fields=((ch&&ch.fields)||[]).filter(f=>f.required).map(f=>f.label).join(' / ');
+  }catch(_){}
+  const txt=window.Tf('inbox.connect.cred_admin_text',{
+    plat:platName(_connectPlat),
+    url:location.origin+'/workspace/setup?channel='+enc(_connectPlat||''),
+    fields:fields||'-'});
+  let ok=false;
+  try{ await navigator.clipboard.writeText(txt); ok=true; }
+  catch(_){ ok=_copyTextLegacy(txt); }
+  if(ok) _toast(window.T('inbox.connect.cred_copied'));
+}
+// 渠道字段清单（与向导同源 /api/setup/channels；platform 名==channel id，见 channel_setup）
+let _chStatusCache=null, _chStatusTs=0;
+async function _officialChannelStatus(){
+  const now=Date.now();
+  if(!_chStatusCache||(now-_chStatusTs)>=60000){
+    const r=await apiFetch('/api/setup/channels');
+    const d=r.ok?await r.json():null;
+    const by={};
+    ((d&&d.channels)||[]).forEach(c=>{ by[String(c.id||'')]=c; });
+    _chStatusCache=by; _chStatusTs=now;
+  }
+  return _chStatusCache[_connectPlat]||null;
+}
+// 平台政策注释键（win_note_<platform>）拼装收口：刻意不把「点+标识符」结尾的字面量
+// 直接与变量相拼——那个形状会被动态点属性门禁 test_template_dynamic_dot_access 判为
+// code-gen 陷阱（纯正则扫全文，注释也算）。与 setup_wizard 的 _swMediaKey 同解法。
+function _platNoteKey(p){ return 'inbox.connect.' + 'win_note_' + String(p||''); }
+// 各平台官方后台入口——**回落表**：单一事实源已收敛到 channel_setup.Channel.console_url
+// （经 /api/setup/channels 下发，_renderOfficialPrep 优先取它）；本表只兜「旧后端还没
+// 重启、响应无该字段」的过渡窗与异常态，与声明保持镜像即可，勿在此单独维护新平台。
+const _OFFICIAL_CONSOLE={
+  zalo:'https://oa.zalo.me/',
+  instagram:'https://developers.facebook.com/apps/',
+  messenger:'https://developers.facebook.com/apps/',
+  whatsapp:'https://developers.facebook.com/apps/',
+  line:'https://developers.line.biz/console/',
+};
+// 准备清单：让用户点「去接入向导」之前就知道要带什么材料、去哪拿、大约多久。
+// 字段 chip 标必填/可选/已填；win_note_<platform> 键存在时附平台政策注释（如 7 天窗）。
+function _renderOfficialPrep(m){
+  const sec=document.getElementById('connect-prep');
+  const body=document.getElementById('connect-prep-body');
+  if(!sec||!body) return;
+  if(!m){ sec.style.display='none'; body.innerHTML=''; return; }
+  sec.style.display='block';
+  body.innerHTML='<span class="spin"></span>';
+  const plat=_connectPlat;
+  _officialChannelStatus().then(ch=>{
+    if(plat!==_connectPlat) return;   // 已切平台：丢弃过期渲染
+    const sec2=document.getElementById('connect-prep');
+    const body2=document.getElementById('connect-prep-body');
+    if(!sec2||!body2||sec2.style.display==='none') return;
+    const fs=((ch&&ch.fields)||[]);
+    const chips=fs.map(f=>{
+      const tag=f.filled?('<b class="ok">✓ '+esc(window.T('inbox.connect.prep_done'))+'</b>')
+        :(f.required?('<b class="req">'+esc(window.T('inbox.connect.prep_req'))+'</b>')
+          :('<b class="opt">'+esc(window.T('inbox.connect.prep_opt'))+'</b>'));
+      return '<span class="connect-prep-chip'+(f.filled?' done':'')+'">'+esc(f.label)+' '+tag+'</span>';
+    }).join('');
+    if(!chips){ sec2.style.display='none'; body2.innerHTML=''; return; }
+    const time='<span class="connect-prep-chip">'+esc(window.T('inbox.connect.prep_time'))+'</span>';
+    // 后台链接优先取渠道声明（channel_setup.console_url，与向导同一事实源），
+    // 旧后端响应无该字段时回落本地表
+    const consoleUrl=String((ch&&ch.console_url)||_OFFICIAL_CONSOLE[plat]||'');
+    const con=consoleUrl
+      ?'<div><a class="connect-prep-link" href="'+esc(consoleUrl)+'" target="_blank" rel="noopener noreferrer">'
+        +esc(window.Tf('inbox.connect.prep_console',{plat:platName(plat)}))+'</a></div>'
+      :'';
+    const note=window.T(_platNoteKey(plat), null);
+    body2.innerHTML=chips+time+con+(note?'<div class="connect-prep-note">'+esc(note)+'</div>':'');
+  }).catch(()=>{
+    const sec2=document.getElementById('connect-prep');
+    if(sec2){ sec2.style.display='none'; }
+  });
+}
+// 从向导保存完回来自动重检（回环闭合）：说明卡开着且是 credentials 形态才触发，
+// 5s 节流防 focus/visibilitychange 双触发连打。凭证就绪后 recheckModes 自会庆祝。
+let _lastAutoRecheck=0;
+function _autoRecheckOnReturn(){
+  try{
+    if(document.hidden) return;
+    const modal=document.getElementById('connect-modal');
+    if(!modal||!modal.classList.contains('show')) return;
+    const card=document.getElementById('connect-unavail');
+    if(!card||card.style.display==='none') return;
+    if(_loginKindOf(_connectPlat, _connectShownMode)!=='credentials') return;
+    const now=Date.now();
+    if(now-_lastAutoRecheck<5000) return;
+    _lastAutoRecheck=now;
+    recheckModes({auto:true});
+  }catch(_){}
+}
+window.addEventListener('focus', _autoRecheckOnReturn);
+document.addEventListener('visibilitychange', _autoRecheckOnReturn);
+// opts.requick=true＝重检触发的同卡重渲（loadConnectModes 先藏卡再由本函数重开）：
+// 不算一次新的「引导卡曝光」，跳过漏斗埋点——否则 focus 自动重检每轮 +1，运营读
+// official_setup_ 漏斗时分母被灌水。
+function showModeUnavailable(mode, opts){
   const m=(_connectModes||[]).find(x=>String(x.mode)===String(mode));
   const card=document.getElementById('connect-unavail');
   if(!card) return;
   _connectBlockedMode=(m&&m.available)?String(mode):'';
+  _connectShownMode=String(mode||'');
+  // credentials 形态（官方 API 渠道）＝引导态而非故障态：标题「还差官方凭证」、
+  // 头部图标换钥匙（锁的隐喻是「没权限/没做」，对「等你配置」是错的）、
+  // 「现在可以怎么办」不再劝人「选其他方式」——IG/Zalo 根本没有其他方式。
+  const isCred=!!(m&&String(m.login_kind||'')==='credentials');
+  // 规划中形态（not_implemented）＝功能不存在：沙漏图标（锁=权限隐喻，对「没做」是错的）、
+  // 标题不说「暂时」、隐藏「重新检测」（永不就绪的安慰剂）、主行动=一键切到可用方式。
+  const isPlanned=!isCred&&(String((m&&m.reason_code)||'')==='not_implemented'
+    ||(_topBlocker(m)||{}).code==='not_implemented');
+  const lockEl=card.querySelector('.connect-unavail-lock');
+  if(lockEl) lockEl.innerHTML=uiIcon(isCred?'key':(isPlanned?'hourglass':'lock'),15);
   const nameEl=document.getElementById('connect-unavail-title');
-  if(nameEl&&m) nameEl.textContent=window.T('inbox.connect.unavail_title')+'：'+_connModeLabel(m);
+  if(nameEl&&m) nameEl.textContent=window.T(isCred?'inbox.connect.unavail_title_config':(isPlanned?'inbox.connect.unavail_title_planned':'inbox.connect.unavail_title'))+'：'+_connModeLabel(m);
   const put=(id,txt)=>{ const el=document.getElementById(id); if(el) el.textContent=txt; };
   // 多条卡点全列出来：开关没开 + 依赖没装是两件事，只说一件会让运维修完一个再来一轮。
   const bs=_sortedBlockers(m);
+  // 自助面板（在这里直接启用）不渲染的卡上，how 文案禁止再写「在下方填入」
+  const noForm=!_canOneClickEnable(m);
   const putList=(id,kind)=>{
     const el=document.getElementById(id); if(!el) return;
     // 没有 blockers（理论上不会：后端有兜底）也不能让说明卡空着 —— 回落笼统文案。
-    if(!bs.length){ el.textContent=_blockerText({code:m&&m.reason_code}, kind); return; }
-    el.innerHTML=bs.map(b=>'<div class="connect-unavail-item">'+esc(_blockerText(b,kind))+'</div>').join('');
+    if(!bs.length){ el.textContent=_blockerText({code:m&&m.reason_code}, kind, {noform:noForm}); return; }
+    el.innerHTML=bs.map(b=>'<div class="connect-unavail-item">'+esc(_blockerText(b,kind,{noform:noForm}))+'</div>').join('');
   };
   putList('connect-unavail-why','why');
   putList('connect-unavail-how','how');
-  put('connect-unavail-alt', window.T('inbox.connect.unavail_alt'));
+  put('connect-unavail-alt', window.T(isCred?'inbox.connect.unavail_alt_config':(isPlanned?'inbox.connect.unavail_alt_planned':'inbox.connect.unavail_alt')));
   const pb=document.getElementById('connect-proceed-btn');
   if(pb) pb.style.display=_connectBlockedMode?'inline-block':'none';
-  // official（credentials 形态）：处置入口是接入向导，直给按钮；「仍要继续」对它无意义
+  // official（credentials 形态）：处置入口是接入向导，直给按钮；「仍要继续」对它无意义。
+  // 凭证保存是主管权限——普通坐席经 _applyCredRoleActions 异步换成「复制指引发管理员」。
   const wz=document.getElementById('connect-wizard-btn');
-  if(wz) wz.style.display=(m&&String(m.login_kind||'')==='credentials')?'inline-block':'none';
-  if(pb&&m&&String(m.login_kind||'')==='credentials') pb.style.display='none';
+  if(wz) wz.style.display=isCred?'inline-block':'none';
+  const adm=document.getElementById('connect-cred-admin');
+  if(adm) adm.style.display='none';
+  const cpb=document.getElementById('connect-cred-copy-btn');
+  if(cpb) cpb.style.display='none';
+  if(pb&&isCred) pb.style.display='none';
+  // credentials 专属区：三步指示 + 准备清单（其余形态一律藏干净）
+  const steps=document.getElementById('connect-cred-steps');
+  if(steps) steps.style.display=isCred?'flex':'none';
+  _renderOfficialPrep(isCred?m:null);
+  const um=document.getElementById('connect-unavail-msg');
+  if(um){ um.style.display='none'; um.textContent=''; }
+  // 规划中：「重新检测」永不成功（安慰剂按钮）→ 藏掉；主行动换成一键切换可用方式。
+  const rk=document.getElementById('connect-recheck-btn');
+  if(rk) rk.style.display=isPlanned?'none':'inline-block';
+  _connectAltMode='';
+  const ab=document.getElementById('connect-alt-btn');
+  if(ab){
+    let alt=null;
+    if(isPlanned){
+      const pool=(_connectModes||[]).filter(x=>x.available&&x.ready!==false&&String(x.mode)!==String(mode));
+      alt=pool.find(x=>x.preferred)||pool[0]||null;
+    }
+    if(alt){ _connectAltMode=String(alt.mode); ab.textContent=window.Tf('inbox.connect.use_alt_btn',{mode:_connModeLabel(alt)}); }
+    ab.style.display=alt?'inline-block':'none';
+  }
+  if(isCred){
+    _applyCredRoleActions();
+    if(!(opts&&opts.requick)) _uiBeacon('official_setup_unavail_shown_'+_connectPlat);   // 开通漏斗：引导卡曝光
+  }else if(!(opts&&opts.requick)){
+    // 不可用卡曝光按 平台_方式_原因码 归桶（自动重检的重渲染不算新曝光，与 official 同口径）
+    // ——「接入卡在哪一环」从此有数据，修复优先级不再靠猜。
+    _uiBeacon('connect_unavail_'+_connectPlat+'_'+String(mode||'')+'_'+String((m&&m.reason_code)||'unknown'));
+  }
   const en=document.getElementById('connect-enable');
   if(en){
     const show=_canOneClickEnable(m);
@@ -14328,6 +15430,10 @@ function showModeUnavailable(mode){
     if(show) _primeEnableProtocolForm();
   }
   document.getElementById('connect-modes').style.display='none';
+  // 引导卡打开时收掉「选择登录方式：」——卡上方挂着假选择标题，对单方式平台
+  // （根本没有第二个选项）尤其误导；返回列表时由 hideModeUnavailable 恢复。
+  const tip=document.querySelector('#connect-mode-view .connect-modes-tip');
+  if(tip) tip.style.display='none';
   card.style.display='block';
 }
 function hideModeUnavailable(){
@@ -14335,26 +15441,59 @@ function hideModeUnavailable(){
   if(card) card.style.display='none';
   const box=document.getElementById('connect-modes');
   if(box) box.style.display='';
+  const tip=document.querySelector('#connect-mode-view .connect-modes-tip');
+  if(tip) tip.style.display='';
   _connectBlockedMode='';
 }
 // 依赖/服务是实时状态：运维刚把 sidecar 起起来，不该逼用户关弹窗重开。
 // recheck=1 让后端跳过探测缓存重新打一次 /health。
-async function recheckModes(){
+let _recheckBusy=false;   // focus 自动重检与手点可能重叠：在途时直接丢弃后到的
+// opts.auto=true＝focus/visibilitychange 自动触发：无变化时保持静默（用户没发起
+// 这次检查，别对着他弹「状态没变化」红字）；解锁成功照常庆祝。
+async function recheckModes(opts){
+  if(_recheckBusy) return;
+  _recheckBusy=true;
+  const auto=!!(opts&&opts.auto);
   const btn=document.getElementById('connect-recheck-btn');
-  const before=_connectBlockedMode||'';
+  // 说明卡对不可用方式展示时 _connectBlockedMode 恒为空（那是「仍要继续」的放行位），
+  // 重检目标以 _connectShownMode 为准——否则 Zalo/IG 点「重新检测」永远查不到自己。
+  const before=_connectShownMode||_connectBlockedMode||'';
+  // 规划中方式永不就绪：focus/visibility 自动重检对它是纯浪费的探测轮，直接跳过
+  //（手动按钮在规划中卡上本就隐藏；其他卡的自动重检不受影响）
+  if(auto){
+    const sm=(_connectModes||[]).find(x=>String(x.mode)===before);
+    if(sm&&String(sm.reason_code||'')==='not_implemented'){ _recheckBusy=false; return; }
+  }
   const prevReady=((_connectModes||[]).find(x=>String(x.mode)===before)||{}).ready;
+  _chStatusTs=0;   // 重检语义=重新看一眼：准备清单的字段已填状态一并刷新
   if(btn){ btn.disabled=true; btn.textContent=window.T('inbox.connect.rechecking'); }
   try{
     await loadConnectModes({recheck:true});
     const m=(_connectModes||[]).find(x=>String(x.mode)===before);
-    if(m&&(m.available&&m.ready!==false)){ chooseMode(before); return; }   // 好了就直接放行
-    if(before) showModeUnavailable(before);
-    if(m&&m.ready===prevReady){
+    if(m&&(m.available&&m.ready!==false)){
+      // credentials 形态：就绪＝凭证已在向导里配好、账号已被向导自动开通——
+      // chooseMode 会再开一个向导标签页（用户十有八九刚从那儿保存完回来），
+      // 正确动作是：庆祝 + 立刻把新账号刷进抽屉，回到方式列表看「推荐」绿标。
+      if(_loginKindOf(_connectPlat, before)==='credentials'){
+        _uiBeacon('official_setup_online_'+_connectPlat);   // 开通漏斗：就绪确认
+        try{ _toast(window.Tf('inbox.connect.official_ready',{plat:platName(_connectPlat)}),'#16a34a'); }catch(_){}
+        _refreshAfterAuthorize();
+        hideModeUnavailable(); return;
+      }
+      chooseMode(before); return;   // 好了就直接放行
+    }
+    if(before) showModeUnavailable(before, {requick:true});
+    if(m&&m.ready===prevReady&&!auto){
       const msg=document.getElementById('connect-enable-msg');
       if(msg){ msg.className='connect-enable-msg err'; msg.style.display='block';
         msg.textContent=window.T('inbox.connect.recheck_same'); }
+      // Telegram 面板外（Zalo/IG 等）#connect-enable 整块隐藏，反馈走说明卡状态行
+      const um=document.getElementById('connect-unavail-msg');
+      if(um){ um.className='connect-unavail-msg err'; um.style.display='block';
+        um.textContent=window.T('inbox.connect.recheck_same'); }
     }
   }finally{
+    _recheckBusy=false;
     if(btn){ btn.disabled=false; btn.textContent=window.T('inbox.connect.recheck'); }
   }
 }
@@ -14373,8 +15512,14 @@ function proceedAnyway(){
 // 启用』填入并保存即可」，而面板恰恰在这一档被隐藏 —— 用户照着指引找一个不存在的表单。
 const _ENABLE_PANEL_REASONS = ['not_enabled', 'creds_missing'];
 function _canOneClickEnable(m){
-  return _connectPlat==='telegram' && m && String(m.mode)==='protocol'
-    && _ENABLE_PANEL_REASONS.includes(String(m.reason_code||'not_enabled'));
+  if(_connectPlat!=='telegram'||!m) return false;
+  const rc=String(m.reason_code||'not_enabled');
+  if(String(m.mode)==='protocol') return _ENABLE_PANEL_REASONS.includes(rc);
+  // 手机号登录与协议多开共用同一对 api_id/api_hash（_telegram_runtime_blockers）：
+  // 缺凭据时同样给面板（桌面全新安装＝phone_enabled 开 + 缺凭据，正是这一档），
+  // 否则 rc_creds_missing_how 的「在下方填入」又是指向不存在表单的死胡同。
+  // not_enabled 不给：面板的 enable_on_ready 开的是 protocol 开关，救不了 phone。
+  return String(m.mode)==='phone' && rc==='creds_missing';
 }
 function _setEnableFormMode(hasCreds){
   const ready=document.getElementById('connect-enable-ready');
@@ -14411,10 +15556,12 @@ function enableProtocolMode(reuseExisting){
   .then(async d=>{
     if(!d||!d.ok) throw new Error((d&&d.detail)||'');
     await loadConnectModes();
-    const proto=(_connectModes||[]).find(x=>String(x.mode)==='protocol');
+    // 保存后回到用户所在的方式卡：在 phone 卡填凭据的人不该被劫持去 protocol
+    const back=(_connectShownMode==='phone')?'phone':'protocol';
+    const target=(_connectModes||[]).find(x=>String(x.mode)===back);
     if(btn) btn.disabled=false;
-    if(proto&&proto.available){ chooseMode('protocol'); return; }
-    showModeUnavailable('protocol');
+    if(target&&target.available){ chooseMode(back); return; }
+    showModeUnavailable(back);
     say(window.T('inbox.connect.enable_saved_wait'),true);
   })
   .catch(e=>{
@@ -14424,11 +15571,17 @@ function enableProtocolMode(reuseExisting){
   });
 }
 let _connectCfg={};
+// 官方 API 渠道的处置入口：带 ?channel= 平台参数——向导页可据此定位/展开对应渠道卡
+// （向导侧接参属 Zalo onboarding 线的工作；接线前多余参数无害，属向前兼容）。
+function openSetupWizard(){
+  _uiBeacon('official_setup_wizard_open_'+_connectPlat);   // 开通漏斗：跳向导
+  window.open('/workspace/setup?channel='+enc(_connectPlat||''),'_blank');
+}
 function chooseMode(mode){
   // credentials 形态（Instagram/Zalo 官方 API）：没有扫码会话可开，凭证在接入向导里配置
   // ——直接把人送到向导页，别让他走进一个永远等不来二维码的流程。
   if(_loginKindOf(_connectPlat, mode)==='credentials'){
-    window.open('/workspace/setup','_blank');
+    openSetupWizard();
     return;
   }
   _connectMode=mode;
@@ -14508,13 +15661,28 @@ function confirmConfigAndScan(){
     proxy_id:proxyId,
     use_fingerprint:document.getElementById('cfg-fp-on').checked,
   };
+  _connectKind=_loginKindOf(_connectPlat, _connectMode);
   _showQrView();
+  _applyConnectKindVocab();
+  // phone_code：先出号码表单，拿到号再调 login/start（避免空会话烧 TTL / 误触发 sendCode）
+  if(_connectKind==='phone_code'){
+    _showConnectPassword(false);
+    _showConnectPin(false);
+    _showConnectErrDetail('');
+    _setConnectQr(null);
+    _setConnectStep(1);
+    _setConnectState('pending', window.T('inbox.connect.state_phone'), window.T('inbox.connect.instr_tg_phone'));
+    _showConnectPhonePhase('phone');
+    return;
+  }
+  _showConnectPhonePhase('');
   startConnect();
 }
 function backToConfig(){
   _connectStartSeq++;   // 作废可能仍在飞的 login/start
   if(_connectPollTimer){ clearInterval(_connectPollTimer); _connectPollTimer=null; }
   _cancelPendingLogin();
+  _showConnectPhonePhase('');
   _showConnectPin(false); _showConnectErrDetail('');
   _showConfigView();
 }
@@ -14523,11 +15691,26 @@ function closeConnect(){
   if(_connectPollTimer){ clearInterval(_connectPollTimer); _connectPollTimer=null; }
   _cancelPendingLogin();
   _showConnectPassword(false);
+  _showConnectPhonePhase('');
   _showConnectPin(false); _showConnectErrDetail('');
   _releaseFocus(document.getElementById('connect-modal'));   // 三期 a11y
   document.getElementById('connect-modal').classList.remove('show');
 }
-function restartConnect(){ startConnect(); }
+function restartConnect(){
+  if(_connectKind==='phone_code'){
+    // 重新开始＝回到填号步，不立刻重发（防误触刷短信）
+    if(_connectPollTimer){ clearInterval(_connectPollTimer); _connectPollTimer=null; }
+    _cancelPendingLogin();
+    _showConnectPassword(false);
+    _showConnectPin(false);
+    _showConnectErrDetail('');
+    _setConnectStep(1);
+    _setConnectState('pending', window.T('inbox.connect.state_phone'), window.T('inbox.connect.instr_tg_phone'));
+    _showConnectPhonePhase('phone');
+    return;
+  }
+  startConnect();
+}
 function _setConnectState(cls, stateText, hint){
   const s=document.getElementById('connect-state');
   s.className='connect-state '+cls; s.textContent=stateText;
@@ -14573,11 +15756,15 @@ function _showConnectPassword(show, hint){
   const box=document.getElementById('connect-password-view');
   if(box) box.style.display=show?'block':'none';
   const qrw=document.querySelector('#connect-qr-view .connect-qr-wrap');
-  if(qrw) qrw.style.display=show?'none':'block';   // 需密码阶段隐藏二维码，聚焦密码输入
   if(show){
+    // 进 2FA：关掉号码/验证码表单，聚焦云密码
+    _showConnectPhonePhase('');
+    if(qrw) qrw.style.display='none';
     const inp=document.getElementById('connect-cloud-password');
     if(inp){ inp.value=''; setTimeout(()=>{ try{ inp.focus(); }catch(_){}} ,50); }
     if(hint){ const h=document.getElementById('connect-password-hint'); if(h) h.textContent=hint; }
+  } else if(qrw && _connectKind!=='phone_code'){
+    qrw.style.display='block';
   }
 }
 // 步骤条第 2 步语义随平台：Telegram 是「在手机上点确认」，LINE 是「把验证码敲进手机」。
@@ -14700,8 +15887,9 @@ function _showConnectErrDetail(detail){
   if(btn) btn.setAttribute('aria-expanded','false');
   if(wrap) wrap.style.display=txt?'block':'none';
 }
-async function startConnect(){
+async function startConnect(extra){
   const seq=++_connectStartSeq, plat=_connectPlat;
+  extra=extra||{};
   if(_connectPollTimer){ clearInterval(_connectPollTimer); _connectPollTimer=null; }
   // 先拆旧会话再开新一轮：手动「刷新二维码」与过期自动换码此前都直接重开，旧的后台登录
   // 线程从没被通知过，新旧并存时 PIN / 扫码结果会归给不确定的一方。
@@ -14713,17 +15901,28 @@ async function startConnect(){
   _showConnectPassword(false);
   _showConnectPin(false);
   _showConnectErrDetail('');
+  if(_connectKind!=='phone_code') _showConnectPhonePhase('');
   _setConnectQr(null);
   _applyConnectKindVocab();   // 步骤条 / 刷新按钮 / hosted 专属 UI 随形态换词
-  document.getElementById('connect-qr-mask').innerHTML='<span class="spin"></span><span>'+esc(window.T(_kindVocab().mask))+'</span>';
+  const maskEl=document.getElementById('connect-qr-mask');
+  if(maskEl && _connectKind!=='phone_code'){
+    maskEl.innerHTML='<span class="spin"></span><span>'+esc(window.T(_kindVocab().mask))+'</span>';
+  }
   _setConnectStep(1);
-  _setConnectState('pending',window.T('inbox.connect.st_prep'),window.T('inbox.connect.hint_prep'));
+  if(_connectKind==='phone_code'){
+    _setConnectState('pending', window.T('inbox.connect.phone_sending'), window.T('inbox.connect.instr_tg_phone'));
+  } else {
+    _setConnectState('pending',window.T('inbox.connect.st_prep'),window.T('inbox.connect.hint_prep'));
+  }
   try{
+    const payload={account_id:_connectAcct, mode:_connectMode,
+      label:(_connectCfg.label||''), group:(_connectCfg.group||''),
+      proxy_id:(_connectCfg.proxy_id||''), use_fingerprint:!!_connectCfg.use_fingerprint};
+    if(extra.phone) payload.phone=String(extra.phone);
+    else if(_connectPhoneDraft && _connectKind==='phone_code') payload.phone=_connectPhoneDraft;
     const r=await apiFetch(`/api/platforms/${enc(_connectPlat)}/login/start`,{
       method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({account_id:_connectAcct, mode:_connectMode,
-        label:(_connectCfg.label||''), group:(_connectCfg.group||''),
-        proxy_id:(_connectCfg.proxy_id||''), use_fingerprint:!!_connectCfg.use_fingerprint})
+      body:JSON.stringify(payload)
     }, {timeoutMs: 60000});
     const d=await r.json();
     if(seq!==_connectStartSeq){
@@ -14734,16 +15933,22 @@ async function startConnect(){
     }
     if(!r.ok||!d.ok){
       const detail=(d&&(d.detail||d.error))||'';
+      const reasonKey=_CONNECT_FAIL_REASON_KEYS[String((d&&d.reason_code)||'')]||'';
       // WA/Messenger 依赖本机 Node 连接服务(sidecar)；连不上时给「服务未运行 + 怎么启动」可操作引导，
       // 而不是甩一句原始错误。识别连接类错误关键词（后端 instruction 也常含服务地址）。
       if(_isSidecarDown(detail)){
         const hint=_sidecarDownHint();
         _setConnectState('warn',window.T('inbox.connect.st_sidecar_down'),hint);
-        document.getElementById('connect-qr-mask').innerHTML='<span style="display:inline-flex;">'+uiIcon('plug',26)+'</span><span>'+esc(hint)+'</span>';
+        if(maskEl) maskEl.innerHTML='<span style="display:inline-flex;">'+uiIcon('plug',26)+'</span><span>'+esc(hint)+'</span>';
+        if(_connectKind==='phone_code') _showConnectPhonePhase('phone');
         return;
       }
-      _setConnectState('err',window.T('inbox.connect.st_failstart'), detail||window.T('inbox.connect.hint_failstart'));
-      document.getElementById('connect-qr-mask').innerHTML='<span style="display:inline-flex;">'+uiIcon('alert',26)+'</span><span>'+esc(detail||window.T('inbox.connect.session_fail'))+'</span>';
+      _setConnectState('err',window.T('inbox.connect.st_failstart'),
+        reasonKey?window.T(reasonKey):(detail||window.T('inbox.connect.hint_failstart')));
+      if(maskEl && _connectKind!=='phone_code'){
+        maskEl.innerHTML='<span style="display:inline-flex;">'+uiIcon('alert',26)+'</span><span>'+esc(detail||window.T('inbox.connect.session_fail'))+'</span>';
+      }
+      if(_connectKind==='phone_code') _showConnectPhonePhase('phone');
       return;
     }
     _connectLoginId=d.login_id;
@@ -14752,22 +15957,137 @@ async function startConnect(){
       _connectKind=String(d.login_kind);
       _applyConnectKindVocab();
     }
+    // phone_code：开局即可能是 code_needed / failed（initial_status），别空等一轮 poll
+    if(_connectKind==='phone_code'){
+      if(d.status==='code_needed'){
+        _setConnectStep(2);
+        _setConnectState('pending', window.T('inbox.connect.state_code'), _connectHintText(d));
+        _showConnectPhonePhase('code');
+        // 仍轮询：会话 TTL / 远端失败要看得见（表单提交是主路径，poll 不抢 UI）
+        _connectPollTimer=setInterval(pollConnect, 2500);
+        return;
+      }
+      if(d.status==='failed'){
+        const reasonKey=_CONNECT_FAIL_REASON_KEYS[String(d.reason_code||'')]||'';
+        _setConnectState('err', window.T('inbox.connect.st_failed'),
+          reasonKey?window.T(reasonKey):(d.detail||window.T('inbox.connect.hint_failed')));
+        _showConnectErrDetail(d.detail||'');
+        _showConnectPhonePhase('phone');
+        return;
+      }
+      if(d.status==='password_needed'){
+        _setConnectStep(2);
+        _setConnectState('scanned',window.T('inbox.connect.st_pwd_pending'),(d.detail||window.T('inbox.connect.hint_pwd_needed')));
+        _showConnectPassword(true, d.detail||'');
+        return;
+      }
+    }
     // qr_image 由服务端渲染（令牌不出本机）；协议模式首帧多为 pending，二维码随 poll 到达。
     // hosted/device 形态的遮罩只放短句（叙事在下方提示行）——旧行为把整段 instruction
     // 同时塞进遮罩和提示行，同一段话在屏幕上出现两遍（实录截图问题）。
     // hosted：实时画面已到 = 登录窗口已打开，步骤条推进到「官方登录」。
     if(d.qr_image){ _setConnectQr(d.qr_image); if(_connectKind==='hosted') _setConnectStep(2); }
     else if(_connectKind==='qr'){
-      document.getElementById('connect-qr-mask').innerHTML='<span class="spin"></span><span>'+esc(d.instruction||window.T('inbox.connect.qr_gen'))+'</span>';
+      if(maskEl) maskEl.innerHTML='<span class="spin"></span><span>'+esc(d.instruction||window.T('inbox.connect.qr_gen'))+'</span>';
     }
-    else {
-      document.getElementById('connect-qr-mask').innerHTML='<span class="spin"></span><span>'+esc(window.T(_kindVocab().mask))+'</span>';
+    else if(_connectKind!=='phone_code' && maskEl){
+      maskEl.innerHTML='<span class="spin"></span><span>'+esc(window.T(_kindVocab().mask))+'</span>';
     }
     _setConnectState('pending',window.T(_kindVocab().pending), _connectHintText(d));
     _connectPollTimer=setInterval(pollConnect, 2500);
   }catch(e){
     _setConnectState('err',window.T('inbox.connect.st_neterr'),window.T('inbox.connect.hint_neterr'));
-    document.getElementById('connect-qr-mask').innerHTML='<span style="display:inline-flex;">'+uiIcon('alert',26)+'</span><span>'+window.T('inbox.toast.net_err')+'</span>';
+    if(maskEl && _connectKind!=='phone_code'){
+      maskEl.innerHTML='<span style="display:inline-flex;">'+uiIcon('alert',26)+'</span><span>'+window.T('inbox.toast.net_err')+'</span>';
+    }
+    if(_connectKind==='phone_code') _showConnectPhonePhase('phone');
+  }
+}
+async function submitConnectPhone(){
+  const inp=document.getElementById('connect-phone-input');
+  const btn=document.getElementById('connect-phone-btn');
+  const raw=((inp&&inp.value)||'').trim();
+  if(!raw){ _setConnectState('err', window.T('inbox.connect.phone_required'), ''); return; }
+  _connectPhoneDraft=raw;
+  if(btn){ btn.disabled=true; btn.textContent=window.T('inbox.connect.phone_sending'); }
+  try{ await startConnect({phone:raw}); }
+  finally{
+    if(btn){ btn.disabled=false; btn.textContent=window.T('inbox.connect.phone_send'); }
+  }
+}
+async function submitConnectCode(){
+  if(!_connectLoginId) return;
+  const inp=document.getElementById('connect-code-input');
+  const btn=document.getElementById('connect-code-btn');
+  const code=((inp&&inp.value)||'').replace(/\D/g,'').trim();
+  if(!code){ _setConnectState('err', window.T('inbox.connect.code_required'), ''); return; }
+  if(btn){ btn.disabled=true; }
+  // 防 oninput 自动提交与 Enter/按钮连点双发
+  if(inp && inp.dataset.busy==='1'){ if(btn) btn.disabled=false; return; }
+  if(inp) inp.dataset.busy='1';
+  _setConnectState('scanned', window.T('inbox.connect.code_checking'), '');
+  try{
+    const r=await apiFetch(`/api/platforms/${enc(_connectPlat)}/login/${enc(_connectLoginId)}/code`,{
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({code})
+    }, {timeoutMs: 60000});
+    const d=await r.json();
+    if(d.status==='authorized'){
+      await _connectOnAuthorized();
+    } else if(d.status==='password_needed'){
+      _setConnectStep(2);
+      _setConnectState('scanned',window.T('inbox.connect.st_pwd_pending'),(d.detail||window.T('inbox.connect.hint_pwd_needed')));
+      _showConnectPassword(true, d.detail||'');
+    } else if(d.status==='failed'){
+      const reasonKey=_CONNECT_FAIL_REASON_KEYS[String(d.reason_code||'')]||'';
+      _setConnectState('err', window.T('inbox.connect.st_failed'),
+        reasonKey?window.T(reasonKey):(d.detail||window.T('inbox.connect.hint_failed')));
+      _showConnectErrDetail(d.detail||'');
+      if(String(d.reason_code||'')==='code_expired'){
+        // 过期：留在验证码步但引导重发
+        _showConnectPhonePhase('code');
+      } else if(String(d.reason_code||'').startsWith('phone_')){
+        _showConnectPhonePhase('phone');
+      } else {
+        _showConnectPhonePhase('code');
+        if(inp){ inp.value=''; try{ inp.focus(); }catch(_){} }
+      }
+    } else {
+      // 仍停在 code_needed（码错可重试）
+      _setConnectState('err', window.T('inbox.connect.code_rejected'), (d.detail||window.T('inbox.connect.err_code_invalid')));
+      _showConnectPhonePhase('code');
+      if(inp){ inp.value=''; try{ inp.focus(); }catch(_){} }
+    }
+  }catch(_){ _setConnectState('err', window.T('inbox.connect.pwd_submit_fail'), window.T('inbox.toast.net_err')); }
+  finally{
+    if(btn){ btn.disabled=false; }
+    if(inp) inp.dataset.busy='';
+  }
+}
+async function resendConnectCode(){
+  if(!_connectLoginId) return;
+  if(Date.now() < _connectCodeResendAt) return;
+  const btn=document.getElementById('connect-code-resend');
+  if(btn) btn.disabled=true;
+  try{
+    const r=await apiFetch(`/api/platforms/${enc(_connectPlat)}/login/${enc(_connectLoginId)}/resend-code`,{
+      method:'POST'
+    }, {timeoutMs: 60000});
+    const d=await r.json();
+    if(d && d.ok){
+      _toast(window.T('inbox.connect.code_resent'));
+      _setConnectState('pending', window.T('inbox.connect.state_code'), d.detail||window.T('inbox.connect.instr_tg_phone_code'));
+      _armConnectCodeResend();
+      const inp=document.getElementById('connect-code-input');
+      if(inp){ inp.value=''; try{ inp.focus(); }catch(_){} }
+    } else {
+      const reasonKey=_CONNECT_FAIL_REASON_KEYS[String((d&&d.reason_code)||'')]||'';
+      _setConnectState('err', window.T('inbox.connect.st_failed'),
+        reasonKey?window.T(reasonKey):((d&&d.detail)||window.T('inbox.connect.hint_failed')));
+      _armConnectCodeResend();
+    }
+  }catch(_){
+    _setConnectState('err', window.T('inbox.connect.pwd_submit_fail'), window.T('inbox.toast.net_err'));
+    _armConnectCodeResend();
   }
 }
 /* 授权成功统一收口（2026-07-29）：扫码轮询与两步验证两条路径同走此处。
@@ -14778,6 +16098,7 @@ async function _connectOnAuthorized(){
   _connectAuthorized=true; // 标记已授权：关闭弹窗时绝不 cancel/logout 这个已上线的号
   _connectAutoRefresh=0;
   _showConnectPassword(false);
+  _showConnectPhonePhase('');
   _showConnectPin(false);
   _showConnectErrDetail('');
   _setConnectStep(3);
@@ -14843,6 +16164,14 @@ async function pollConnect(){
       _setConnectState('scanned',window.T('inbox.connect.st_pin'),window.T('inbox.connect.hint_pin'));
       _showConnectErrDetail('');
     }
+    else if(st==='code_needed'){
+      // phone_code：用户在本窗口输短信码——轮询只保会话存活，不抢表单
+      _setConnectStep(2);
+      _setConnectState('pending', window.T('inbox.connect.state_code'),
+        (d.detail||window.T('inbox.connect.instr_tg_phone_code')));
+      const codeBox=document.getElementById('connect-code-view');
+      if(codeBox && codeBox.style.display!=='block') _showConnectPhonePhase('code');
+    }
     else if(st==='password_needed'){
       // 扫码已确认，账号开启两步验证：停轮询、展示云密码输入（提交成功后再走 authorized）
       _setConnectStep(2);
@@ -14860,6 +16189,12 @@ async function pollConnect(){
       // 且提示里说明「刚完成登录的话账号稍后会自己上线」（cookie 已持久化在微服务侧）。
       if(_connectKind==='hosted'){
         _setConnectState('err',window.T('inbox.connect.st_login_expired'),window.T('inbox.connect.hosted_expired'));
+        return;
+      }
+      // phone_code：超时回到填号，绝不自动重发短信（防刷）
+      if(_connectKind==='phone_code'){
+        _setConnectState('err',window.T(_kindVocab().expired_st),window.T(_kindVocab().expired_hint));
+        _showConnectPhonePhase('phone');
         return;
       }
       // 用户正在手机上敲 PIN 时自动换码，等于当场作废他手上那串码（且旧后台线程还活着，
@@ -14898,6 +16233,10 @@ async function pollConnect(){
           reasonKey?window.T(reasonKey):window.T('inbox.connect.hint_failed'));
         // 原始 detail 不再直接糊在提示行（英文 + thrift 内部路径既看不懂又撑破容器），折叠备查
         _showConnectErrDetail(d.detail||'');
+        if(_connectKind==='phone_code'){
+          const rc=String(d.reason_code||'');
+          _showConnectPhonePhase(rc.startsWith('phone_')?'phone':'code');
+        }
       }
     }
   }catch(_){}
@@ -15421,7 +16760,7 @@ async function init(){
     if(_dc){
       if(_mid){ try{ sessionStorage.setItem('ws_focus_mid', _mid); }catch(_){} }
       if(typeof _openConvByCid==='function'){
-        _openConvByCid(_dc,{flag:_q.get('flag')||''});
+        _openConvByCid(_dc,{flag:_q.get('flag')||'', caseId:_q.get('case')||''});
         if(_mid) _scrollToMsgHighlight(_mid, {fetchOlder:true});
       } else {
         window.__wsFocusConv(_dc, _mid||undefined);
@@ -15487,6 +16826,11 @@ Object.assign(window, {
   toggleBotFlagOverride,   // 对方机器人守卫 P1：🤖 徽章一键覆写（确认真人/恢复自动判定）
   reliefReplyBudget,   // peer_bot_guard P2：预算熔断横幅「今日继续」救济（门禁扫出的漏挂，跨线补接）
   restartConvAccount,   // P1-198：账号离线红条「重新上线」（同为 innerHTML 生成的 onclick，须挂 window）
+  // P0 2026-08-09 接管让位横幅 + AI 状态体检（横幅按钮为 innerHTML 生成 onclick，同须挂 window）
+  takeoverResume, openAiDiag, closeAiDiag, diagDisableWarmup, diagOpenDrafts,
+  regenDraft,   // P2 2026-08-09 陈旧稿一键重生成（草稿卡 innerHTML 生成 onclick）
+  // 案例条（2026-08-09 案例页深链 &case=：就地结案/回案例页/收起，静态 onclick 须挂 window）
+  _caseBarResolve, _caseBarGotoCases, _hideCaseBar,
 
   // 发送 / 回复区
   sendMsg, resendFailed, sendMediaFile, _cancelMedia, genAiReply, genVoiceReply, sendVoiceReply, _onVoicePersonaChange,
@@ -15537,12 +16881,18 @@ Object.assign(window, {
   // P0 账号视角增强（2026-07-29）：溢出箭头 / 账号总览下拉（开关+选择+键盘）
   _acNudge, toggleAcctPicker, _acPickChoose, _acPickKey, _copyViewLink,
   refreshAcct, reconnectAcct, reloginMessengerAcct, setMessengerPin, viewAcctChats, logoutAcct, removeAcct, syncHistoryAcct, fullSyncAcct, toggleAcctMenu, dismissTgSyncHint, syncSuggestedAcct,
+  openAcctWebTab,                   // 桌面壳「打开官方网页版」（2026-08-11 双栏融合；无桥时不渲染入口）
   openConnect, closeConnect, restartConnect,
   chooseMode, backToModeSelect, backToConfig,
   showModeUnavailable, hideModeUnavailable, enableProtocolMode,
   recheckModes, proceedAnyway,
+  useAltConnectMode,                // 规划中说明卡「改用 X」直达键（2026-08-11，内联 onclick）
+  // 官方渠道开通引导卡（2026-08-10）：向导直达 / 复制指引给管理员（均为内联 onclick）
+  openSetupWizard, _copyCredAdminGuide,
   onProxyToggle, onFpToggle, toggleAddProxy, submitAddProxy, previewFingerprint,
   confirmConfigAndScan, orchSync, submitConnectPassword,
+  // Telegram 手机号+验证码（内联 onclick / Enter / 满 5 位自动提交）
+  submitConnectPhone, submitConnectCode, resendConnectCode,
   // 筛选空态 / 会话记录 / 业务助手切换 / 文档·多线路翻译
   resetAllFilters, _openAutoLog, wsToggleApp,
   _onXlateCompare, _openDocXlate, _onDocXlateRun, _docxlDownload,
@@ -15557,8 +16907,8 @@ Object.assign(window, {
   toggleContactsPanel, loadContactsList, _filterContacts, _contactStartChat, loadFromPhone, syncGroups,
   // 联系人页签（2026-08-01）：分段切换 / 关闭 / 档位 / 刷新名单 / 空态入口
   setListPane, exitContactsPane, setContactsOnly, contactsSyncNow, _openContactsFromEmpty,
-  // 标签输入建议/键控 / 知识库引用 / 清会话偏好引擎
-  _showTagSuggestions, _tagInputKey, _quoteKbEntry, _clearConvPrefEngine,
+  // 标签输入建议/键控 / 知识库引用 / 清会话偏好引擎 / 引擎下拉（2026-08-09）
+  _showTagSuggestions, _tagInputKey, _quoteKbEntry, _clearConvPrefEngine, _onXlateEngineSel,
   // 注解 @提及 输入（键控/输入/失焦隐藏）
   _noteKey, _onNoteInput, _hideMentionSuggest,
   // 图片/语音/文档(.txt/.docx) 翻译的文件选择 onchange
@@ -15668,5 +17018,5 @@ document.addEventListener('keydown',function(e){
 });
 })();
 </script>
-<script src="/static/workspace/appearance.js?v=20260804a" defer></script>
+<script src="/static/workspace/appearance.js?v=20260810a" defer></script>
 {% endblock %}

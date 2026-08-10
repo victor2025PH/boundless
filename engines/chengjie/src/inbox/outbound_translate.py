@@ -41,6 +41,31 @@ def contains_cjk(text: str) -> bool:
     return bool(_CJK_TEXT_RE.search(str(text or "")))
 
 
+_LATIN_COUNT_RE = re.compile(r"[A-Za-z]")
+
+
+def cjk_substantial(text: str) -> bool:
+    """CJK 是否构成文本的**实质内容**（语言硬闸的冲突判定口径）。
+
+    「含任何 CJK 即冲突」会误伤合法引用（P1-198 复盘扫描在生产数据实锤：
+    英文消息引用中文专名「村BA」——1 个汉字 / ~40 个拉丁字母——被标成错配；
+    照旧口径硬闸会把这类消息误翻译甚至误 HOLD）。量化口径：
+      - CJK 字符 ≥2（单字引用/emoji 混杂永不冲突），且
+      - 占「CJK+拉丁」语言性字符 ≥25%，或绝对数 ≥8（长文里整句中文）。
+    校准锚点：7/31 实锤『是Steven，别担心。😊』cjk=4/latin=6（40%）命中；
+    「Just read about 村BA's grassroots heart…」（1/40≈2%）放行。
+    """
+    t = str(text or "")
+    cjk = len(_CJK_TEXT_RE.findall(t))
+    if cjk < 2:
+        return False
+    if cjk >= 8:
+        return True
+    latin = len(_LATIN_COUNT_RE.findall(t))
+    total = cjk + latin
+    return total > 0 and (cjk / float(total)) >= 0.25
+
+
 def lang_is_cjk(lang: str) -> bool:
     """语言码（归一化后）是否为 CJK 语种。未知/空 → False。"""
     return normalize_target(lang) in _CJK_LANGS
@@ -51,6 +76,15 @@ def lang_is_cjk(lang: str) -> bool:
 # 且语音因译文超长静默回落」的根因。
 _LANG_VOTE_WINDOW = 12
 _LANG_VOTE_MIN_CHARS = 2
+
+# 语言证据剥离（P0-198，2026-08-03）：投票检测前先剥掉系统注入/语言中性内容——
+# emoji 加注「（表情：中文语义）」、识图/贴纸描述「[表情] 笑哭了」、haha/ok 填充词。
+# 裸文本检测曾把英文会话投成 zh（「Haha 🤣（表情：笑得满地打滚）」8 个中文字 >
+# 4 个拉丁字母）→ 中文草稿被判「已是客户语言」原样发出。与 lang_policy 证据链同源。
+try:
+    from src.ai.lang_policy import strip_neutral_tokens as _strip_evidence
+except Exception:  # pragma: no cover - 极端导入失败退回裸文本（旧行为）
+    _strip_evidence = None
 
 
 def parse_outbound_translate_cfg(config: Any) -> Dict[str, Any]:
@@ -88,13 +122,18 @@ def vote_language(
     detect: Any,
     window: int = _LANG_VOTE_WINDOW,
     min_chars: int = _LANG_VOTE_MIN_CHARS,
+    direction: str = "in",
 ) -> str:
-    """从最近若干条**入站**消息按新近度加权投票，得出会话主语言（纯函数）。
+    """从最近若干条消息按新近度加权投票，得出会话主语言（纯函数）。
 
-    - 只看入站（``direction != 'out'``）消息——出站是我们自己发的，不能拿来判客户语言。
+    - 默认只看入站（``direction="in"``）——出站是我们自己发的，不能拿来判**客户**语言。
+      ``direction="out"`` 时改为只对出站投票：衡量「我们一直在用什么语言聊」，
+      作为客户证据缺位时 CJK 冲突判定的**独立参照**（P1-198，2026-08-03）。
     - 语音/图片等媒体消息若已被转写/识别补全（``text`` 非占位）同样计入，让「客户一直发
       中文语音」被正确判为 zh，而非被一条外插文字带偏。
-    - 越新的消息权重越高（线性递减），且按**文本长度**加权——孤立短外语词很难翻转整窗。
+    - **只对语言证据文本检测**（P0-198）：系统注入的中文（emoji 加注/识图描述/占位）
+      与 haha/ok 类中性词先剥离；剥空＝本条不构成证据，不投票。
+    - 越新的消息权重越高（线性递减），且按**证据文本长度**加权——孤立短外语词很难翻转整窗。
     - 每条对 ``detect`` 得到的语言归一化后累加权重，取最高者；``unknown`` 不计。
     - 无有效样本 → 返回 ""（调用方回落 store 持久 language）。
     """
@@ -103,24 +142,35 @@ def vote_language(
     recent = [m for m in messages if isinstance(m, dict)][-max(1, int(window)):]
     scores: Dict[str, float] = {}
     n = len(recent)
+    want_out = str(direction or "in") == "out"
     for idx, m in enumerate(recent):
-        if str(m.get("direction") or "in") == "out":
+        d = str(m.get("direction") or "in")
+        if want_out:
+            if d != "out":
+                continue
+        elif d == "out":
             continue
         text = str(m.get("text") or "").strip()
         # 跳过纯媒体占位（未转写）：[语音] [图片] [媒体] 等
         if not text or (text.startswith("[") and text.endswith("]") and " " not in text):
             continue
-        if len(text) < int(min_chars):
+        core = text
+        if _strip_evidence is not None:
+            try:
+                core = (_strip_evidence(text) or "").strip()
+            except Exception:
+                core = text
+        if len(core) < int(min_chars):
             continue
         try:
-            lang = normalize_target(detect(text))
+            lang = normalize_target(detect(core))
         except Exception:
             continue
         if not lang:
             continue
         # 新近度权重（越靠后越大）× 长度权重（越长越可信，封顶避免长文一票独大）
         recency = 1.0 + idx / max(1, n - 1)
-        length_w = min(4.0, len(text) / 20.0 + 0.5)
+        length_w = min(4.0, len(core) / 20.0 + 0.5)
         scores[lang] = scores.get(lang, 0.0) + recency * length_w
     if not scores:
         return ""
@@ -168,6 +218,85 @@ def _detect_source(translation_service: Any, text: str) -> str:
         return ""
 
 
+def _outbound_history_language(store: Any, conversation_id: str, detect: Any) -> str:
+    """「我们最近**已投递**的消息是什么语言」——客户证据缺位时的独立参照（P1-198）。
+
+    与生成端决策完全解耦：已发出的历史是客户实际收到的地面真相，不受本轮
+    reply_lang 判定对错影响。仅用于 CJK 冲突判定（待发文本含 CJK 而我们一直
+    用非 CJK 语言在聊 → 大概率是错语言草稿），不作为常规翻译目标。
+    """
+    if store is None or not conversation_id or detect is None:
+        return ""
+    if not hasattr(store, "list_recent_messages"):
+        return ""
+    try:
+        recent = store.list_recent_messages(
+            conversation_id, limit=_LANG_VOTE_WINDOW) or []
+        return vote_language(recent, detect=detect, direction="out")
+    except Exception:
+        logger.debug("[outbound_translate] 出站历史语言参照失败 conv=%s",
+                     conversation_id, exc_info=True)
+        return ""
+
+
+def peer_language_hint(store: Any, conversation_id: str, *, detect: Any = None) -> str:
+    """best-effort「该用什么语言跟这个客户说话」——生成侧单一事实源（P2-198）。
+
+    组合三层证据（与出站翻译/硬闸同源）：
+      ① 最近入站消息加权多数决（系统注入已剥离）；
+      ② ``conversations.language`` 持久值（unknown/空 归一为 ""——**Telegram 的
+        ingest 从不写该列**，旧消费方直接读它等于永远拿到 unknown，主动触达的
+        prompt 语言硬约束因此从未生效过，生产实锤 telegram:8244899… 30 天收到
+        6 条中文晨安）；
+      ③ 出站历史参照（「我们一直在用什么语言聊」）。
+    全落空 → ""（调用方按「语言未知」处理）。
+
+    注意：出站翻译的 target 解析**刻意不含**第 ③ 层常规化（那边只在 CJK 冲突
+    判定时用出站参照，不作常规翻译目标）——本函数是给 prompt 生成侧用的提示，
+    错了最多措辞语言保守，不会触发翻译动作，故三层可以都上。
+    """
+    if store is None or not conversation_id:
+        return ""
+    if detect is None:
+        try:
+            from src.ai.translation_service import detect_language as detect
+        except Exception:
+            detect = None
+    lang = normalize_target(_conv_language(store, conversation_id, detect=detect))
+    if lang:
+        return lang
+    return normalize_target(
+        _outbound_history_language(store, conversation_id, detect))
+
+
+def _gate_record(outcome: str, *, conversation_id: str = "", target: str = "") -> None:
+    """语言硬闸观测埋点（best-effort，任何异常绝不影响投递链）。"""
+    try:
+        from src.inbox.outbound_lang_stats import get_outbound_lang_stats
+        get_outbound_lang_stats().record(
+            outcome, conversation_id=conversation_id, target=target)
+    except Exception:
+        logger.debug("[outbound_translate] 硬闸埋点失败", exc_info=True)
+
+
+def parse_outbound_lang_gate_cfg(config: Any) -> Dict[str, Any]:
+    """读 ``inbox.l2_autosend.lang_gate`` → ``{enabled}``。**默认开**。
+
+    语言硬闸不是新功能子系统，是 2026-07-31 CJK HOLD 安全不变量向「未开启
+    出站翻译的部署」的延伸——那类部署此前对「中文草稿发给外语客户」零防护
+    （护栏活在翻译回调里，翻译一关护栏一起没了）。默认开、只拦 CJK↔非 CJK
+    的高置信冲突（不碰 en/es 之类的低置信差异），``enabled: false`` 是逃生门。
+    兼容 ``lang_gate: false`` 布尔简写。
+    """
+    lg = (((config or {}).get("inbox", {}) or {}).get("l2_autosend", {}) or {}
+          ).get("lang_gate", {})
+    if isinstance(lg, bool):
+        return {"enabled": lg}
+    if not isinstance(lg, dict):
+        lg = {}
+    return {"enabled": bool(lg.get("enabled", True))}
+
+
 async def translate_outbound_text(
     item: Dict[str, Any],
     *,
@@ -175,6 +304,7 @@ async def translate_outbound_text(
     store: Any = None,
     source_lang: str = _DEFAULT_SOURCE,
     style: str = "chat",
+    gate_only: bool = False,
 ) -> Optional[str]:
     """把一条待投递文本译成会话客户语言；记录出向译文映射。**自带「已是客户语言则跳过」护栏**。
 
@@ -192,6 +322,15 @@ async def translate_outbound_text(
       - 翻译异常/失败/译文仍含 CJK → 返回 ``None``（HOLD，别发）——发中文给外语客户
         是人设事故，比这条消息不发出去更糟。调用方（AutosendWorker）把 None 转成
         投递失败，走既有重试/审计/坐席提醒链。
+
+    **gate_only 模式（P1-198，2026-08-03）**：``inbox.l2_autosend.translate.enabled=false``
+    的部署此前对错语言草稿零防护（护栏活在翻译回调里，翻译一关护栏一起没了）。
+    gate_only=True 时本函数只做「语言硬闸」：非 CJK 冲突一律原样放行（尊重运营
+    关闭常规翻译的决定），CJK 冲突则照常抢救翻译 / HOLD。
+
+    **客户证据缺位的独立参照（P1-198）**：目标语言判不出（新客户只发过贴纸/语气词）
+    而待发文本含 CJK 时，改用「我们最近已投递消息的语言」当参照——已发历史是客户
+    实际收到的地面真相，与本轮生成决策完全解耦；参照也缺位才盲发（并计数观测）。
     """
     text = str(item.get("text") or "")
     cid = str(item.get("conversation_id") or "")
@@ -202,11 +341,24 @@ async def translate_outbound_text(
     # 与入站落库检测同源），比 conversations.language 单值抗偶发外语翻转。
     _detect = getattr(translation_service, "detect_language", None)
     target = normalize_target(_conv_language(store, cid, detect=_detect))
+    # 冲突判定用「实质性 CJK」口径（cjk_substantial）：英文消息引用个别中文
+    # 专名不算冲突（生产实锤误伤面，见函数 docstring）。
+    text_cjk = cjk_substantial(text)
+    if not target and text_cjk:
+        # 独立参照：我们一直在用什么语言聊（出站历史投票，非 CJK 才有冲突语义）
+        ref = normalize_target(_outbound_history_language(store, cid, _detect))
+        if ref and not lang_is_cjk(ref):
+            target = ref
     if not target:
+        if text_cjk:
+            # CJK 文本盲发（客户证据 + 出站参照双缺位）——计数观测，别静默
+            _gate_record("no_target_sent", conversation_id=cid)
         return text  # 目标语言未知 → 不翻译（发原文）
 
+    cjk_conflict = text_cjk and not lang_is_cjk(target)
+    if gate_only and not cjk_conflict:
+        return text  # 硬闸模式：无冲突不翻译（运营已关闭常规出站翻译），免source检测
     detected = _detect_source(translation_service, text)
-    cjk_conflict = contains_cjk(text) and not lang_is_cjk(target)
     if cjk_conflict:
         # 冲突态：跳过护栏失效；源语言优先信「检测到的 CJK 语种」，检测非 CJK
         # （混排误判）则回落配置源。
@@ -228,6 +380,7 @@ async def translate_outbound_text(
             logger.warning(
                 "[outbound_translate] 翻译调用失败且文本含CJK、目标=%s → HOLD 不发 conv=%s",
                 target, cid, exc_info=True)
+            _gate_record("held", conversation_id=cid, target=target)
             return None
         logger.warning("[outbound_translate] 翻译调用失败，发原文 conv=%s", cid, exc_info=True)
         return text
@@ -237,22 +390,31 @@ async def translate_outbound_text(
     err = str(getattr(res, "error", "") or "")
     ok = bool(getattr(res, "ok", False))
 
-    # 失败 / 空 / 与原文相同（provider=identity/none 或未真译）/ 译文仍含 CJK：
+    # 失败 / 空 / 与原文相同（provider=identity/none 或未真译）/ 译文仍**实质性**含 CJK：
     #   - 冲突态 → HOLD（None）：identity 回显正是 198 泄漏的机制，绝不能当译文发；
     #   - 非冲突态 → 回落原文（旧行为），不记录无意义副行。
+    # 译文残留判定同用 cjk_substantial：好译文保留「村BA」这类专名引用不算失败
+    # （旧口径 contains_cjk 会把带专名的合格译文误 HOLD）。
     degraded = (not ok or not translated or translated == text
-                or (cjk_conflict and contains_cjk(translated)))
+                or (cjk_conflict and cjk_substantial(translated)))
     if degraded:
         if cjk_conflict:
             logger.warning(
                 "[outbound_translate] CJK→%s 翻译不可用(provider=%s err=%s) → HOLD 不发 conv=%s",
                 target, provider or "-", err or "-", cid)
+            _gate_record("held", conversation_id=cid, target=target)
             return None
         if err:
             logger.debug("[outbound_translate] 译文降级 conv=%s provider=%s err=%s",
                          cid, provider, err)
         return text
 
+    if cjk_conflict and gate_only:
+        # 硬闸救回（仅 gate_only 计数）：常规翻译模式下 CJK→客户语言是设计内的
+        # 例行路径（草稿中文生成 + 出站翻译），计进「救回」会把真异常淹没。
+        logger.info(
+            "[outbound_translate] 语言硬闸救回：CJK→%s 已翻译投递 conv=%s", target, cid)
+        _gate_record("rescued", conversation_id=cid, target=target)
     if store is not None and cid:
         try:
             store.record_outbound_translation(
@@ -266,10 +428,13 @@ async def translate_outbound_text(
 
 
 __all__ = [
+    "cjk_substantial",
     "contains_cjk",
     "lang_is_cjk",
+    "parse_outbound_lang_gate_cfg",
     "parse_outbound_translate_cfg",
     "normalize_target",
+    "peer_language_hint",
     "should_translate",
     "translate_outbound_text",
     "vote_language",

@@ -119,6 +119,48 @@ async def test_strict_flag_survives_budget_skip(tmp_path):
     assert rv.extra.get("hub_fish_required") is True
 
 
+# ── 1b. hub：分条 best_of_parts（2026-08-01 GPU 减负）────────────────────────
+def _spy_hub_bestof(ok: bool = True):
+    seen = {}
+
+    def fake(base_url, profile, text, *, language="", emotion="",
+             best_of=1, timeout_sec=30.0, audio_format="", tts_engine=""):
+        seen.update(profile=profile, best_of=best_of)
+        if not ok:
+            raise RuntimeError("hub down")
+        return b"OggS" + b"\x00" * 64, "ogg"
+
+    return fake, seen
+
+
+@pytest.mark.asyncio
+async def test_hub_best_of_parts_applies_only_to_split_parts(tmp_path):
+    """分条单条按 best_of_parts 取候选；整段发送不受影响（synth_verify 兜坏 take）。"""
+    fake, seen = _spy_hub_bestof()
+    tts = TTSPipeline(_cfg({"best_of": 2, "best_of_parts": 1}))
+    with patch("src.ai.avatar_voice.hub_fish_synthesize", fake):
+        out = await tts._try_hub_fish(
+            _rv(), tmp_path / "a.wav", time.monotonic(), spec=None,
+            split_part=True)
+        assert out is not None and seen["best_of"] == 1
+        out = await tts._try_hub_fish(
+            _rv(), tmp_path / "b.wav", time.monotonic(), spec=None,
+            split_part=False)
+        assert out is not None and seen["best_of"] == 2
+
+
+@pytest.mark.asyncio
+async def test_hub_best_of_parts_default_keeps_old_behavior(tmp_path):
+    """未配 best_of_parts：分条也沿用 best_of——缺省零行为变化。"""
+    fake, seen = _spy_hub_bestof()
+    tts = TTSPipeline(_cfg({"best_of": 2}))
+    with patch("src.ai.avatar_voice.hub_fish_synthesize", fake):
+        out = await tts._try_hub_fish(
+            _rv(), tmp_path / "c.wav", time.monotonic(), spec=None,
+            split_part=True)
+    assert out is not None and seen["best_of"] == 2
+
+
 # ── 2. LLM 口语化：预算不足让路给合成本体 ───────────────────────────────────
 def _col_cfg() -> dict:
     return {"enabled": True, "mode": "llm", "llm_timeout_sec": 25}

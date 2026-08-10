@@ -37,6 +37,11 @@ python -m scripts.voice_similarity_probe 2>&1 | Out-File $log -Append -Encoding 
 python -m scripts.reference_audio_audit 2>&1 | Out-File $log -Append -Encoding utf8
 "[nightly] reference audit exit=$LASTEXITCODE" | Out-File $log -Append -Encoding utf8
 
+# 音色 SSOT 三方对账（本地 ref × hub 档 × prerender 指纹；P1 一人一声 2026-08-02。
+# FAIL>0=音色分裂需要人来；渲染后跑，刚换声的 WARN 应已被上面重渲清掉）
+python tools/voice_ssot_check.py 2>&1 | Out-File $log -Append -Encoding utf8
+"[nightly] voice ssot exit=$LASTEXITCODE" | Out-File $log -Append -Encoding utf8
+
 # 清理 14 份以前的旧日志
 Get-ChildItem $logDir -Filter "nightly_*.log" | Sort-Object Name -Descending |
     Select-Object -Skip 14 | Remove-Item -Force -ErrorAction SilentlyContinue

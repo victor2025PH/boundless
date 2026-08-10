@@ -7,6 +7,10 @@ ZH = {
     "err.login.password_unsupported": "该登录会话不支持两步验证密码提交",
     "err.login.password_empty": "云密码不能为空",
     "err.login.password_submit_failed": "两步验证提交异常",
+    "err.login.code_unsupported": "该登录会话不支持验证码提交",
+    "err.login.code_empty": "验证码不能为空",
+    "err.login.code_submit_failed": "验证码提交异常",
+    "err.login.code_resend_failed": "重发验证码失败",
     # 账号官方资料修改（accounts.profile_push）
     "err.acct.profile_disabled": "资料修改功能未启用（accounts.profile_push.enabled）",
     "err.acct.profile_platform_manual": "该平台不支持在后台直接修改资料，请在手机官方 App 修改",
@@ -32,6 +36,10 @@ EN = {
     "err.login.password_unsupported": "This login session does not support 2FA password submission",
     "err.login.password_empty": "Cloud password must not be empty",
     "err.login.password_submit_failed": "2FA password submission failed",
+    "err.login.code_unsupported": "This login session does not support code submission",
+    "err.login.code_empty": "Verification code must not be empty",
+    "err.login.code_submit_failed": "Verification code submission failed",
+    "err.login.code_resend_failed": "Failed to resend verification code",
     # Account official profile push (accounts.profile_push)
     "err.acct.profile_disabled": "Profile editing is disabled (accounts.profile_push.enabled)",
     "err.acct.profile_platform_manual": "This platform does not support editing the profile from the console; please change it in the official mobile app",

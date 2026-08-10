@@ -107,6 +107,14 @@ class DeferredOutboxStore:
             self._conn.executescript(_DDL)
             self._conn.commit()
 
+    def close(self) -> None:
+        """关闭底层连接（离线工具用；服务进程常驻不调）。"""
+        with self._lock:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+
     def enqueue(
         self,
         *,
@@ -341,6 +349,31 @@ class DeferredOutboxStore:
                     (max(1, int(limit)),),
                 ).fetchall()
         return [dict(r) for r in rows]
+
+    def get_by_ids(self, ids) -> Dict[int, Dict[str, Any]]:
+        """按 id 批量取行（care 历史视图反查投递真相/话术用）。
+
+        返回 {id: row}；不存在的 id 缺席、异常返回已取到的部分（绝不抛）。
+        """
+        out: Dict[int, Dict[str, Any]] = {}
+        idl = sorted({int(i) for i in (ids or []) if int(i) > 0})
+        if not idl:
+            return out
+        try:
+            with self._lock:
+                for i in range(0, len(idl), 500):  # SQLite 变量上限保守分块
+                    chunk = idl[i:i + 500]
+                    ph = ",".join("?" * len(chunk))
+                    rows = self._conn.execute(
+                        f"SELECT * FROM deferred_outbox WHERE id IN ({ph})",
+                        chunk,
+                    ).fetchall()
+                    for r in rows:
+                        d = dict(r)
+                        out[int(d["id"])] = d
+        except Exception:
+            logger.debug("deferred_outbox get_by_ids failed", exc_info=True)
+        return out
 
 
 class DeferredDispatcher:

@@ -76,6 +76,31 @@ def record_pacing(path: str, result: Any) -> None:
         pass
 
 
+def record_bubble_gap(source: str, platform: str, gap_sec: float) -> None:
+    """记一次分条**条间**延迟采样（路径 ``bubble_gap/{source}/{platform}``）。
+
+    与 ``record_pacing`` 共用 ``_PACING`` 存储和 ``pacing_snapshot`` 出口——设置页
+    「实测节奏」与 autosend-status 的消费链零改动即可见。「第一句慢、后面机关枪」
+    这类条间节奏问题此前不可观测（只有首条延迟有采样），修好了也无从证明；
+    本入口补上分布数据（count/avg/max）。字段语义：delay=target=本次条间隔，
+    elapsed 恒 0（条间没有「已耗时」概念）。坏输入静默丢弃，绝不影响发送。
+    """
+    try:
+        g = max(0.0, float(gap_sec))
+    except (TypeError, ValueError):
+        return
+    src = (str(source or "other").strip() or "other").lower()
+    plat = (str(platform or "-").strip() or "-").lower()
+    p = f"bubble_gap/{src}/{plat}"
+    with _PACING_LOCK:
+        row = _PACING.setdefault(p, {k: 0.0 for k in _PACING_FIELDS})
+        row["count"] += 1
+        row["sum_delay"] += g
+        row["sum_target"] += g
+        row["max_delay"] = max(row["max_delay"], g)
+        row["last_delay"] = round(g, 2)
+
+
 def pacing_snapshot() -> Dict[str, Dict[str, float]]:
     """拟人延迟分布快照（每路径附 avg_delay/avg_target/avg_elapsed 便于直读）。"""
     with _PACING_LOCK:
@@ -101,5 +126,5 @@ def reset() -> None:
 
 __all__ = [
     "record_read", "record_typing", "snapshot",
-    "record_pacing", "pacing_snapshot", "reset",
+    "record_pacing", "record_bubble_gap", "pacing_snapshot", "reset",
 ]

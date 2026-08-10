@@ -50,10 +50,11 @@ def test_annotate_pure_emoji():
     assert t.startswith("[表情]")
 
 
-def test_annotate_mixed_emoji():
-    t = annotate_inbound_emoji("好的👍")
-    assert "好的👍" in t
-    assert "表情" in t
+def test_annotate_mixed_emoji_never_mutates_customer_text():
+    """P0-198（2026-08-03）：混排文本绝不改写——旧行为追加「（表情：…）」的系统
+    中文曾被全链当成客户语言证据（英文会话被判成中文、原样发出中文稿）。"""
+    assert annotate_inbound_emoji("好的👍") == "好的👍"
+    assert annotate_inbound_emoji("Haha 🤣") == "Haha 🤣"
 
 
 def test_sticker_text_from_message():
@@ -69,12 +70,12 @@ def test_tg_message_payload_sticker_enriched():
     assert payload["text"].startswith("[表情]")
 
 
-def test_tg_message_payload_text_emoji_enriched():
+def test_tg_message_payload_mixed_text_kept_verbatim():
+    """P0-198：混排文本落库必须保持客户原话（不再追加中文表情加注）。"""
     msg = _FakeMsg(text="嗨😊")
     payload = pb.tg_message_payload(msg, "acc1")
     assert payload is not None
-    assert "嗨" in payload["text"]
-    assert "表情" in payload["text"]
+    assert payload["text"] == "嗨😊"
 
 
 def test_is_positive_reaction():

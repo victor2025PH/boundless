@@ -144,6 +144,12 @@ def resolve_reply_language(
       3. 语言中性 token（whatsapp/ok/URL/数字/emoji）不构成语言证据——治
          「发一个 whatsapp 整条回复变英文」事故；短消息/弱证据一律粘住会话
          主导语言，只有脚本级/成句级强证据才立即跟随（保留切换敏捷性）。
+      4. **default 先看「我们自己最近在用什么语言聊」**（P0-198，2026-08-03）：
+         连串 haha/emoji/ok 的全中性窗口里，用户侧一切证据剥空，旧链落到静态
+         default（lang_prior/zh）→ 英文会话凭空拟出中文稿（198 实锤链的放大器）。
+         会话已建立的工作语言（最近一条有语言证据的 assistant 消息）是比静态先验
+         强得多的兜底；仅作 default（最低优先级），任何用户侧证据/请求/窗口主导
+         都先于它——用户真切换语言仍即时跟随。
 
     纯函数、零副作用、可单测；重依赖惰性导入（不抬升模块导入期成本）。
     """
@@ -151,18 +157,26 @@ def resolve_reply_language(
     if explicit:
         return explicit
     from src.ai.lang_policy import (
+        evidence_lang,
         latest_explicit_request,
         resolve_conversation_language,
     )
 
     last = str(last_inbound or "").strip()
     pref = latest_explicit_request(history)
+    eff_default = default
+    for m in reversed(history or []):
+        if isinstance(m, dict) and str(m.get("role") or "") == "assistant":
+            lg = evidence_lang(str(m.get("content") or ""))
+            if lg:
+                eff_default = lg
+                break
     decision = resolve_conversation_language(
         last,
         history,
         prev_lang="",       # 收件箱产线无跨轮内存状态——粘滞语义由 window/pref 承担
         lang_pref=pref,
-        default=default,
+        default=eff_default,
     )
     if decision.source not in ("detected", "default"):
         logger.debug(
@@ -272,6 +286,7 @@ async def generate_persona_reply(
     account_id: str = "",
     gloss_lang: str = "",
     agent_instruction: str = "",
+    inbound_msg_id: str = "",
 ) -> Dict[str, Any]:
     """人设化智能回复（单一事实源）。
 
@@ -357,11 +372,59 @@ async def generate_persona_reply(
         sm = getattr(tc, "skill_manager", None) if tc is not None else None
     ai = getattr(state, "ai_client", None)
 
+    # P1-198 续（2026-08-02）：坐席「客户情绪」人工标注 → 拟稿指令。生效判据
+    # （TTL/标签在场）与 NBA 卡「生效中」徽标同源（effective_mood 单一仲裁）；
+    # 显式坐席指令优先，标注句仅在余量内追加（merge_agent_instruction）。
+    # 本函数是 B 线唯一入口（auto-draft / 工坊智能回复 / replybus 都经这里）——
+    # 一处接线全链生效。任何异常按无标注处理，绝不阻断拟稿。
+    try:
+        _ibx = getattr(state, "inbox_store", None)
+        if _ibx is not None and str(conversation_id or "").strip():
+            from src.inbox.effective_mood import (
+                agent_mood_directive,
+                merge_agent_instruction,
+                record_mood_consume,
+                resolve_mood_steering_cfg,
+            )
+            _cmgr = getattr(state, "config_manager", None)
+            _ms = resolve_mood_steering_cfg(getattr(_cmgr, "config", None) or {})
+            if _ms["enabled"]:
+                _mood_meta = _ibx.get_conv_meta(str(conversation_id)) or {}
+                _mdir = agent_mood_directive(
+                    _mood_meta, now=time.time(), ttl_hours=_ms["ttl_hours"])
+                if _mdir:
+                    agent_instruction = merge_agent_instruction(
+                        agent_instruction, _mdir)
+                    record_mood_consume("draft_directive")
+    except Exception:
+        logger.debug("[persona_reply] mood directive 注入跳过", exc_info=True)
+
+    # 对方机器人守卫 P1（2026-08-03）：疑似自动化对方（bot_score 达灰区观察线
+    # 或已判定 bot、且未被运营覆写为真人）→ 拟稿注入「礼貌收尾勿追问」感知块。
+    # 与 mood directive 同一注入口（B 线唯一入口，一处接线全链生效）；
+    # best-effort，绝不阻断拟稿。
+    try:
+        _ibx_pb = getattr(state, "inbox_store", None)
+        if _ibx_pb is not None and str(conversation_id or "").strip():
+            from src.inbox.effective_mood import (
+                merge_agent_instruction as _pb_merge,
+            )
+            from src.inbox.peer_bot_guard import draft_awareness_hint
+            _cmgr_pb = getattr(state, "config_manager", None)
+            _pb_row = _ibx_pb.get_conversation(str(conversation_id)) or {}
+            _pb_hint = draft_awareness_hint(
+                _pb_row, getattr(_cmgr_pb, "config", None) or {})
+            if _pb_hint:
+                agent_instruction = _pb_merge(agent_instruction, _pb_hint)
+    except Exception:
+        logger.debug("[persona_reply] peer_bot hint 注入跳过", exc_info=True)
+
     reply = None
     used_persona = ""
     used_intent = ""
     kb_refs: list = []    # P2 证据链：本稿引用的 KB 条目（前端知识 chip / 工坊 chips 用）
     used_unified = False  # 统一引擎已自带记忆写回 → 避免文末重复写
+    goal_applied: Optional[Dict[str, Any]] = None  # P25：目标注入观测（透传前端）
 
     # ★ 统一规则引擎（单一事实源·彻底对齐）：优先走 SkillManager.generate_inbox_draft，
     # 与原生 bot/RPA 同享情感引擎/陪伴阶段/慢思考/人设守卫/危机兜底/记忆读写全栈规则。
@@ -397,6 +460,7 @@ async def generate_persona_reply(
                     peer_audio_emotion=peer_audio_emotion,
                     account_id=_acct,
                     agent_instruction=str(agent_instruction or "").strip()[:400],
+                    inbound_msg_id=str(inbound_msg_id or "").strip(),
                 )
                 if _res and (_res.get("reply") or "").strip():
                     reply = _res["reply"]
@@ -405,6 +469,9 @@ async def generate_persona_reply(
                     used_unified = True
                     _gen_path = "unified"
                     kb_refs = list(_res.get("kb_refs") or [])
+                    _ga = _res.get("goal_applied")
+                    if isinstance(_ga, dict):
+                        goal_applied = dict(_ga)
             except Exception:
                 logger.debug("[persona_reply] 统一引擎失败，回落直连", exc_info=True)
                 reply = None
@@ -452,6 +519,22 @@ async def generate_persona_reply(
             _ainst = str(agent_instruction or "").strip()[:400]
             if _ainst:
                 ctx["_agent_instruction"] = _ainst
+            # P25（2026-08-05）：直连回落路径此前不注入工作目标——统一引擎一旦
+            # 异常回落，目标方向就静默消失。与统一链同一注入口补平，观测元数据
+            # 同样透传（chain 仍记 draft：同一产线的降级形态，不是新链）。
+            if hasattr(sm, "_inject_goal_context"):
+                try:
+                    sm._inject_goal_context(
+                        ctx, platform=platform, chat_key=str(chat_key or ""),
+                        account_id=_acct, conversation_id=conversation_id,
+                        chain="draft", inbound_text=last_inbound,
+                    )
+                except Exception:
+                    logger.debug(
+                        "[persona_reply] direct 目标注入跳过", exc_info=True)
+                _gm = ctx.get("_goal_inject_meta")
+                if isinstance(_gm, dict):
+                    goal_applied = dict(_gm)
             # ★ 情景记忆注入（单一事实源补全）：全自动/手动产线此前不读长期记忆，导致
             # 「跨会话记不住（如名字）」。复用 SkillManager 既有读取逻辑，按 chat_key 命中
             # 该联系人的长期事实，写入 ctx["_episodic_memory_text"]——generate_reply 会把它
@@ -475,6 +558,15 @@ async def generate_persona_reply(
                 user_context=ctx,
                 strategy_overrides=so or None,
             )
+            # 目标注入的配平守卫（统一引擎内部第 9 步同口径）：直连路径现在
+            # 也可能带出目录链接/价格措辞，商业事实必须过同一道闸
+            if reply and hasattr(sm, "_apply_goal_link_guard"):
+                try:
+                    reply = sm._apply_goal_link_guard(
+                        reply, ctx, log_prefix="[persona_reply] ")
+                except Exception:
+                    logger.debug(
+                        "[persona_reply] direct 目标守卫跳过", exc_info=True)
             used_persona = persona_id or "domain"
             if reply:
                 _gen_path = "direct"
@@ -546,6 +638,9 @@ async def generate_persona_reply(
         "persona_tier": persona_tier,
         "intent": used_intent,
         "kb_refs": kb_refs,
+        # P25 观测：目标有没有进本条草稿、为什么（meta 缺失=生成走了无引擎
+        # 兜底或旧引擎，如实标 unknown 不编原因）
+        "goal_applied": goal_applied or {"injected": False, "reason": "unknown"},
     }
     _t_x0 = time.monotonic()
     translated = await _translate_reply(app, reply, target_lang)
@@ -604,11 +699,20 @@ def build_opener_directive(
     angle: str,
     reply_lang: str,
     recent_out: Optional[List[str]] = None,
+    goal_intent: str = "",
+    goal_push: str = "",
+    goal_title: str = "",
 ) -> str:
     """主动开场生成指令（纯函数，可单测）。
 
     纪律与 proactive P19 同源：禁「好久没联系/最近怎么样/在吗」模板壳；优先跟进
     记忆/历史里的具体事实；给出当日轮换的切入点参考；列出最近已发内容防复读。
+
+    P25（2026-08-05）目标接入：此前「开新话题」是唯一完全不消费工作目标的
+    生成链（坐席设「获取客户职业」，开场仍按轮换词表聊红酒相册）。有活跃目标
+    且今日力度 soft/direct → 切入点让位给目标的今日推进方向（angle 降为备选，
+    记忆跟进也限定「与该方向相关」防两个「优先」打架）；力度 none（今天只
+    陪伴）或无目标 → 输出与旧版逐字一致。
     """
     lang_line = (
         f"必须完全用客户的语言（{reply_lang}）来写正文。"
@@ -621,6 +725,29 @@ def build_opener_directive(
         avoid = (
             "你最近已经发过下面这些消息，新话题的内容、开头和句式都不要与之雷同：\n"
             + joined + "\n"
+        )
+    _gi = str(goal_intent or "").strip()
+    _gp = str(goal_push or "").strip().lower()
+    if _gi and _gp in ("soft", "direct"):
+        _gt = str(goal_title or "").strip()
+        head = (
+            f"这个会话有进行中的工作目标「{_gt}」，" if _gt
+            else "这个会话有进行中的工作目标，"
+        )
+        manner = (
+            "可以比较直接地把话题引到这个方向，但绝不硬销、不连环追问"
+            if _gp == "direct"
+            else "顺着日常话题自然带向这个方向，绝不生硬转折"
+        )
+        return (
+            "请你主动开启一个新话题，给对方发一条 1-2 句的消息（不是回答对方上一条，"
+            "而是自然地把对话推进到新的方向）。\n"
+            + head + f"本条新话题优先服务它——今日推进方向：{_gi}。\n"
+            + manner + f"；实在接不上时，退回这个备选切入点：{angle}。\n"
+            "如果历史或记忆里有对方提过的、与该方向相关的具体事，优先从那件事切入。\n"
+            "绝不要用「好久没联系」「最近怎么样」「在吗」这类模板问候；"
+            "最多问一个问题，不要连环发问。\n"
+            + avoid + lang_line + "只输出这条消息的正文。"
         )
     return (
         "请你主动开启一个新话题，给对方发一条 1-2 句的消息（不是回答对方上一条，"
@@ -654,8 +781,8 @@ async def generate_topic_opener(
     返回结构与回复链一致（{ok, reply, reply_lang, persona, persona_tier, intent,
     translated?}），前端零分叉。
 
-    ``agent_instruction``（P22.1）：若前端在 opener 态误带指令（正常路径会强制切
-    回 reply），仍注入 ``_agent_instruction``，避免意图静默丢失。
+    ``agent_instruction``（P22.1 / P28）：前端可在 opener 态带指令（「开新话题」+
+    目标驱动拟稿）；注入 ``_agent_instruction`` 与目标块，不再依赖「强制切 reply」。
     """
     history = list(history or [])
     resolved_lang = (
@@ -697,8 +824,6 @@ async def generate_topic_opener(
         str(m.get("content") or "") for m in history
         if isinstance(m, dict) and m.get("role") == "assistant"
     ][-3:]
-    directive = build_opener_directive(
-        angle=angle, reply_lang=resolved_lang, recent_out=recent_out)
 
     state = getattr(app, "state", None)
     sm = getattr(state, "skill_manager", None)
@@ -707,26 +832,52 @@ async def generate_topic_opener(
         sm = getattr(tc, "skill_manager", None) if tc is not None else None
     ai = getattr(state, "ai_client", None)
 
+    # P25（2026-08-05）：ctx 提前到 directive 之前组装——工作目标注入要先行。
+    # 「开新话题」此前是唯一完全不消费目标的生成链；现走 skill_manager 同一
+    # 注入口（settle-on-read / hold / observe / 力度全语义与回复链同源），
+    # `_goal_block` 进系统提示、今日意图喂进开场指令（none 力度只进块不带方向）。
+    user_id = f"desktop:{platform}:{chat_key}" or "__desktop__"
+    ctx: Dict[str, Any] = {
+        "user_id": user_id,
+        "chat_id": chat_key or user_id,
+        "channel": "desktop",
+        "platform": platform,
+        "intent": "proactive_opener",
+        "current_intent": "proactive_opener",
+        "reply_lang": resolved_lang,
+    }
+    if persona_id:
+        ctx["account_persona_id"] = persona_id
+    if history:
+        ctx["_conversation_history"] = history[-20:]
+    _ainst = str(agent_instruction or "").strip()[:400]
+    if _ainst:
+        ctx["_agent_instruction"] = _ainst
+
+    goal_meta: Dict[str, Any] = {}
+    if sm is not None and hasattr(sm, "_inject_goal_context"):
+        try:
+            sm._inject_goal_context(
+                ctx, platform=platform, chat_key=str(chat_key or ""),
+                account_id=_acct, conversation_id=conversation_id,
+                chain="opener",
+            )
+        except Exception:
+            logger.debug("[persona_reply] opener 目标注入跳过", exc_info=True)
+        _gm = ctx.get("_goal_inject_meta")
+        if isinstance(_gm, dict):
+            goal_meta = dict(_gm)
+
+    directive = build_opener_directive(
+        angle=angle, reply_lang=resolved_lang, recent_out=recent_out,
+        goal_intent=str(goal_meta.get("intent") or ""),
+        goal_push=str(goal_meta.get("push_level") or ""),
+        goal_title=str(goal_meta.get("title") or ""),
+    )
+
     reply = None
     if sm is not None and getattr(sm, "ai_client", None) is not None:
         try:
-            user_id = f"desktop:{platform}:{chat_key}" or "__desktop__"
-            ctx: Dict[str, Any] = {
-                "user_id": user_id,
-                "chat_id": chat_key or user_id,
-                "channel": "desktop",
-                "platform": platform,
-                "intent": "proactive_opener",
-                "current_intent": "proactive_opener",
-                "reply_lang": resolved_lang,
-            }
-            if persona_id:
-                ctx["account_persona_id"] = persona_id
-            if history:
-                ctx["_conversation_history"] = history[-20:]
-            _ainst = str(agent_instruction or "").strip()[:400]
-            if _ainst:
-                ctx["_agent_instruction"] = _ainst
             # 情景记忆注入：开场跟进「对方提过的具体事」正需要长期事实
             if chat_key and hasattr(sm, "_inject_episodic_into_context"):
                 try:
@@ -741,6 +892,16 @@ async def generate_topic_opener(
                 intent="proactive_opener",
                 user_context=ctx,
             )
+            # 与拟稿链步骤 9 同口径的出站商业事实守卫：目标开场可能带出目录
+            # 链接/价格措辞（catalog 模板已把 _goal_cta 暂存 ctx，读后即焚），
+            # opener 此前没有任何商业守卫——接入目标的同时必须配平
+            if reply and hasattr(sm, "_apply_goal_link_guard"):
+                try:
+                    reply = sm._apply_goal_link_guard(
+                        reply, ctx, log_prefix="[opener] ")
+                except Exception:
+                    logger.debug(
+                        "[persona_reply] opener 目标守卫跳过", exc_info=True)
         except Exception:
             logger.debug("[persona_reply] opener 主路径失败，回落通用", exc_info=True)
             reply = None
@@ -779,6 +940,9 @@ async def generate_topic_opener(
         "intent": "proactive_opener",
         "kb_refs": [],
         "mode": "opener",
+        # P25 观测：目标有没有进本条开场、为什么（no_goal/hold/observe/...）
+        # ——「设了目标为什么生成的话题不相关」从黑箱变成 API 可读字段
+        "goal_applied": goal_meta or {"injected": False, "reason": "no_engine"},
     }
     if not reply:
         out["detail"] = "开场生成失败"

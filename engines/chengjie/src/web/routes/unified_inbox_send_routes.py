@@ -43,6 +43,28 @@ from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
 
+# P1-3（2026-08-11）：语音合成期「正在录音」气泡的 fire-and-forget 任务强引用集
+# （create_task 对任务仅弱引用，防 GC 吞任务——与 voice_routes._TTS_JOBS 同教训）。
+_VOICE_ACTION_TASKS: set = set()
+
+
+def _fire_voice_recording_action(
+    orch: Any, platform: str, account_id: str, chat_key: str,
+) -> None:
+    """给客户挂「正在录音」状态（best-effort，绝不阻塞/不抛）。
+
+    orch.send_chat_action 自带能力探测与护栏（TG/WA 有；LINE/Messenger 协议无此
+    能力返 False）；一次 action ~5s 自动过期，调用方在合成前/合成后各挂一次即可
+    覆盖交互链常规时长，刻意不做常驻续挂循环（省去任务生命周期管理）。
+    """
+    try:
+        t = asyncio.create_task(
+            orch.send_chat_action(platform, account_id, chat_key, "record_audio"))
+        _VOICE_ACTION_TASKS.add(t)
+        t.add_done_callback(_VOICE_ACTION_TASKS.discard)
+    except Exception:
+        pass
+
 
 def _account_send_block(platform: str, account_id: str) -> str:
     """该 (platform, account_id) 的发送拦截原因：``""``（放行）/ ``removed`` / ``offline``。
@@ -142,7 +164,7 @@ async def _deliver_bubble_parts(
     typing + 思考/打字延迟；首条失败原样抛出（外层释放幂等键），中途失败
     已发算数、剩余丢弃。返回 (首条 result, 实发条数)。
     """
-    from src.inbox.reply_split import inter_part_delay_sec
+    from src.inbox.reply_split import plan_bubble_gaps
     _orch = None
     try:
         from src.integrations.account_orchestrator import get_orchestrator
@@ -151,22 +173,35 @@ async def _deliver_bubble_parts(
             _orch = _o
     except Exception:
         _orch = None
+    # 条间隔预排（2026-08-09 对齐 autosend/A 线）：整组一次估值 →
+    # total_budget_sec 等比压缩保节奏形状；latin_per_char_sec=英文真实手速
+    # （加权刻度会把英文打字耗时低估 ~4 倍，英语客户条间仍是机关枪）。
+    try:
+        _gaps = plan_bubble_gaps(
+            [str(p or "") for p in parts],
+            gap_sec_lo=float(bcfg["gap_sec_lo"]),
+            gap_sec_hi=float(bcfg["gap_sec_hi"]),
+            per_char_sec=float(bcfg["per_char_sec"]),
+            latin_per_char_sec=bcfg.get("latin_per_char_sec"),
+            max_gap_sec=float(bcfg.get("max_gap_sec", 6.0)),
+            total_budget_sec=float(bcfg.get("total_budget_sec") or 0.0),
+        )
+    except Exception:
+        _gaps = []
     first_result = None
     sent = 0
     for i, part in enumerate(parts):
         if i > 0:
             # 条间「想（静默）→ 打字（挂正在输入续挂）」：与 autosend/A 线同一
             # 节奏模型——客户视角是同一个人设在打字，不该因入口不同而两种手感。
+            _gap = _gaps[i - 1] if i - 1 < len(_gaps) else 0.8
             try:
-                _gap = inter_part_delay_sec(
-                    part,
-                    gap_sec_lo=float(bcfg["gap_sec_lo"]),
-                    gap_sec_hi=float(bcfg["gap_sec_hi"]),
-                    per_char_sec=float(bcfg["per_char_sec"]),
-                    max_gap_sec=float(bcfg.get("max_gap_sec", 6.0)),
+                from src.integrations.humanize_metrics import (
+                    record_bubble_gap as _rbg_manual,
                 )
+                _rbg_manual("manual", platform, _gap)
             except Exception:
-                _gap = 0.8
+                pass
             try:
                 from src.inbox.humanize import (
                     estimate_typing_lead,
@@ -181,7 +216,8 @@ async def _deliver_bubble_parts(
                     delay=_gap, action="typing", typing=_tp_part,
                     sleep=asyncio.sleep,
                     typing_lead_sec=estimate_typing_lead(
-                        part, per_char_sec=float(bcfg["per_char_sec"])),
+                        part, per_char_sec=float(bcfg["per_char_sec"]),
+                        latin_per_char_sec=bcfg.get("latin_per_char_sec")),
                 )
             except Exception:
                 await asyncio.sleep(_gap)
@@ -389,8 +425,11 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 logger.debug("清除 needs-human 标签失败（已忽略）", exc_info=True)
             # Sprint1 接管即静音：坐席出站即把会话切 manual，停 AI（后续入站不再产 L2/autosend，
             # protocol 直发亦让位），与 web_chat 适配器(channel_adapters.send)一致；重复调用幂等。
+            # P0 2026-08-09：统一走 record_agent_takeover——打 source=takeover 标
+            # （保留接管前档位），前端横幅与自动接回（takeover_rearm）都认这个标。
             try:
-                ibx.set_automation_mode(cid, "manual")
+                from src.inbox.takeover_rearm import record_agent_takeover
+                record_agent_takeover(ibx, cid)
             except Exception:
                 logger.debug("接管置 manual 失败（已忽略）", exc_info=True)
 
@@ -602,8 +641,10 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 ibx.record_agent_send(
                     cid, _send_agent["agent_id"],
                     agent_name=_send_agent.get("display_name", ""))
-                # Sprint1 接管即静音：媒体发送同属坐席接管，切 manual 停 AI。
-                ibx.set_automation_mode(cid, "manual")
+                # Sprint1 接管即静音：媒体发送同属坐席接管，切 manual 停 AI
+                # （source=takeover，供横幅/自动接回识别）。
+                from src.inbox.takeover_rearm import record_agent_takeover
+                record_agent_takeover(ibx, cid)
         except Exception:
             logger.debug("record_agent_send(media) 失败", exc_info=True)
         return {"ok": True, "result": res, "media_ref": url, "media_type": mtype}
@@ -642,11 +683,27 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 _dedup_scope, _client_msg_id[:16])
             return {"ok": True, "duplicate": True}
 
+        # P1-1 对账登记（2026-08-11）：前端超时 ≠ 发送失败——服务端可能仍在合成
+        # 并最终发出。每个阶段/终局落进程级登记表，配套 send-voice-status 端点，
+        # 前端超时后先对账再定论，从流程上消灭「盲目重试→客户收两条」。
+        import time as _time
+        from src.inbox import voice_send_tracker as _vst
+        _vst.record_start(_dedup_scope, _client_msg_id)
+        _t_route0 = _time.monotonic()
+        _synth_ms = 0
+        _conv_ms = 0
+
         from src.integrations.account_orchestrator import get_orchestrator
         orch = get_orchestrator()
         if not orch.owns_media(platform, account_id):
             _dedup.release(_dedup_scope, _client_msg_id)
+            _vst.record_failed(_dedup_scope, _client_msg_id, "voice_unsupported")
             raise HTTPException(501, tr(request, "err.inbox.voice_unsupported"))
+
+        # P1-3：合成期给客户挂「正在录音」气泡（TG/WA 支持；LINE/Messenger 协议
+        # 无此能力，orch 内部自会返 False）。一次 action ~5s 过期：合成前 + 合成后
+        # 各挂一次覆盖交互链常规时长，不引入常驻任务生命周期；best-effort 绝不阻塞。
+        _fire_voice_recording_action(orch, platform, account_id, chat_key)
 
         # 语音出站断档台账（2026-08-05 P1）：坐席手动链此前不记账 → 手动失败对
         # watchdog._check_voice_outage 不可见（自动链低流量时，坐席连续手动失败
@@ -663,6 +720,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         # 而非让 TTS 深处报一串英文 code）。闸门在 TTSPipeline 内还有兜底。
         from src.licensing.quota_store import check_license_quota
         if not check_license_quota()["allowed"]:
+            _vst.record_failed(_dedup_scope, _client_msg_id, "quota_exhausted")
             raise HTTPException(402, tr(request, "err.lic.chars_exhausted"))
 
         # ── 所听即所发（P1 2026-08-05）：优先复用坐席刚试听过的产物 ──────────
@@ -759,6 +817,8 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                     voice_cfg, _lang_route = route_voice_cfg_for_text(
                         voice_cfg, text, raw_cfg)
                     if is_reject_tag(_lang_route):
+                        _vst.record_failed(
+                            _dedup_scope, _client_msg_id, "lang_mismatch")
                         return {"ok": False, "reason": "lang_mismatch",
                                 "message": tr(request, "err.inbox.voice_lang_mismatch",
                                               lang=_lang_route.split(":", 1)[-1])}
@@ -774,15 +834,29 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             from src.ai.tts_pipeline import TTSPipeline
             try:
                 tts = TTSPipeline(voice_cfg)
+                # 原文直念（P0 2026-08-10）：手打文字＝坐席的最终意图，整段跳过
+                # 口语化改写链（实录：LLM 档把「你晚上吃饭了吗…」改写成**对它的
+                # 回答**后念出，气泡 caption=原文、音频=另一句话）。副语言标记/
+                # 情绪/变速照常。interactive=True 把 hub 候选数封顶 1（人在等，
+                # synth_verify 已兜坏 take）；total_budget_sec 与 tts-test 同口径，
+                # 防链内各级超时之和越过前端 60s 等待线。
+                _t_synth0 = _time.monotonic()
                 result = await tts.synthesize(
-                    text, timeout_sec=45.0, emotion=voice_ctx.get("emotion"))
+                    text, timeout_sec=45.0, emotion=voice_ctx.get("emotion"),
+                    pre_colloquialized=True, interactive=True,
+                    total_budget_sec=45.0)
+                _synth_ms = int((_time.monotonic() - _t_synth0) * 1000)
             except Exception as ex:  # noqa: BLE001
                 _dedup.release(_dedup_scope, _client_msg_id)
                 _vo_record(False, f"tts_exception:{type(ex).__name__}")
+                _vst.record_failed(_dedup_scope, _client_msg_id,
+                                   f"tts_exception:{type(ex).__name__}")
                 raise HTTPException(502, tr(request, "err.inbox.tts_failed", err=ex))
             if not result.ok or not result.audio_path:
                 _dedup.release(_dedup_scope, _client_msg_id)
                 _vo_record(False, str(getattr(result, "error", "") or "tts_failed"))
+                _vst.record_failed(_dedup_scope, _client_msg_id,
+                                   str(getattr(result, "error", "") or "tts_failed"))
                 # 坐席链此前只有 debug 日志：合成失败在 app.log 里查不到原因（全天零记录），
                 # 排障只能靠坐席口述。失败/成功各一行 INFO 是后续所有诊断的地基。
                 logger.warning(
@@ -836,6 +910,8 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                         except Exception:
                             pass
                         _vo_record(False, f"truncated:{_why}")
+                        _vst.record_failed(_dedup_scope, _client_msg_id,
+                                           f"truncated:{_why}")
                         return {"ok": False, "reason": "truncated",
                                 "message": tr(request, "err.inbox.tts_failed",
                                               err=f"truncated:{_why}")}
@@ -843,6 +919,9 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 logger.debug("[inbox/voice-send] 质量闸门异常（忽略）", exc_info=True)
 
         # 转 OGG/Opus，使其在 Telegram/WhatsApp 呈现为"语音消息"（ffmpeg 缺失则原样发）
+        _vst.record_stage(_dedup_scope, _client_msg_id, "convert")
+        _fire_voice_recording_action(orch, platform, account_id, chat_key)
+        _t_conv0 = _time.monotonic()
         audio_path = result.audio_path
         try:
             from src.client.voice_sender import convert_to_ogg_opus
@@ -851,6 +930,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 audio_path = converted
         except Exception:
             logger.debug("OGG 转码失败，按原格式发送", exc_info=True)
+        _conv_ms = int((_time.monotonic() - _t_conv0) * 1000)
 
         # 落到出站媒体目录（线程回写可见）+ 发送（强制 media_type=voice）
         try:
@@ -861,6 +941,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 platform, account_id, os.path.basename(audio_path), data)
         except Exception as ex:  # noqa: BLE001
             _vo_record(False, "save_failed")
+            _vst.record_failed(_dedup_scope, _client_msg_id, "save_failed")
             raise HTTPException(502, tr(request, "err.inbox.voice_save_failed", err=ex))
         finally:
             try:
@@ -868,11 +949,13 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             except Exception:
                 pass
 
+        _vst.record_stage(_dedup_scope, _client_msg_id, "send")
         _send_agent = _session_agent(request)
         # P1-3：镜像行带「谁的音色」（人设显示名，best-effort 空串安全）——坐席手动
         # 选别的人设音色发语音时，气泡徽标能看出「这条不是会话绑定人设的声音」。
         from src.ai.persona_voice import persona_display_name
         _voice_sender_name = persona_display_name(voice_ctx.get("persona_id"))
+        _t_send0 = _time.monotonic()
         try:
             res = await orch.send_media(
                 platform, account_id, chat_key,
@@ -881,7 +964,9 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         except Exception as ex:  # noqa: BLE001
             _dedup.release(_dedup_scope, _client_msg_id)  # 失败释放：重试可再发
             _vo_record(False, "deliver_failed")
+            _vst.record_failed(_dedup_scope, _client_msg_id, "deliver_failed")
             raise HTTPException(502, tr(request, "err.inbox.voice_send_failed", err=ex))
+        _send_ms = int((_time.monotonic() - _t_send0) * 1000)
         _vo_record(True)
         cid = _conv_id(platform, account_id, chat_key)
         try:
@@ -890,8 +975,10 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 ibx.record_agent_send(
                     cid, _send_agent["agent_id"],
                     agent_name=_send_agent.get("display_name", ""))
-                # Sprint1 接管即静音：语音发送同属坐席接管，切 manual 停 AI。
-                ibx.set_automation_mode(cid, "manual")
+                # Sprint1 接管即静音：语音发送同属坐席接管，切 manual 停 AI
+                # （source=takeover，供横幅/自动接回识别）。
+                from src.inbox.takeover_rearm import record_agent_takeover
+                record_agent_takeover(ibx, cid)
         except Exception:
             logger.debug("record_agent_send(voice) 失败", exc_info=True)
         _emotion = voice_ctx.get("emotion")
@@ -904,17 +991,26 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             "emotion": getattr(_emotion, "emotion", "") if _emotion else "",
             "fallback_from": _extra.get("fallback_from", ""),
         }
+        _vst.record_sent(_dedup_scope, _client_msg_id, {
+            "voice_meta": voice_meta,
+            "reused_preview": bool(_extra.get("reused_preview")),
+        })
         # 成功也留一行 INFO：口径对齐 B 线「[autosend voice] 已发语音 …」，
         # 让坐席这条链在 app.log 里可见（provider/延迟/口语化是否生效一目了然）。
+        # P2 分段耗时（2026-08-11）：synth/conv/send 各占多少直接进日志——
+        # 「慢在哪」从坐席口述变成一行可查。
         logger.info(
             "[inbox/voice-send] 已发语音 platform=%s acct=%s pid=%s dur=%sms "
-            "provider=%s fallback=%s len=%d colloq=%s/%s prerender=%s reuse=%s",
+            "provider=%s fallback=%s len=%d colloq=%s/%s prerender=%s reuse=%s "
+            "stage_ms=synth:%d/conv:%d/send:%d total:%d",
             platform, account_id, voice_meta["persona_id"],
             getattr(result, "latency_ms", 0), voice_meta["provider"] or "-",
             voice_meta["fallback_from"] or "-", len(text),
             bool(_extra.get("colloquial")), bool(_extra.get("colloquial_llm")),
             voice_meta["provider"] == "prerendered",
-            bool(_extra.get("reused_preview")))
+            bool(_extra.get("reused_preview")),
+            _synth_ms, _conv_ms, _send_ms,
+            int((_time.monotonic() - _t_route0) * 1000))
         return {
             "ok": True, "result": res, "media_ref": url, "media_type": "voice",
             "duration_sec": getattr(result, "duration_sec", -1.0),
@@ -924,6 +1020,25 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             # 所听即所发：true=客户收到的就是坐席试听的那份音频（零二次合成）
             "reused_preview": bool(_extra.get("reused_preview")),
         }
+
+    @app.get("/api/unified-inbox/send-voice-status")
+    async def api_unified_inbox_send_voice_status(
+        request: Request, platform: str = "", account_id: str = "default",
+        chat_key: str = "", client_msg_id: str = "", _=Depends(page_auth),
+    ):
+        """语音发送对账端点（P1-1 2026-08-11）：前端超时后先问结果再定论。
+
+        前端 60s 超时 ≠ 发送失败——服务端可能仍在合成并最终发出；坐席按直觉重试
+        ＝客户收到两条一样的语音（幂等键拦不住新 client_msg_id）。本端点按
+        (platform, account_id, chat_key, client_msg_id) 查进程级登记表：
+        ``state``＝in_flight（带 stage: synth|convert|send）/ sent（带 voice_meta）/
+        failed（带 reason）/ unknown（老后端/条目过期/从未提交成功——前端按保守
+        提示处理）。等待期也可低频轮询本端点把真实阶段渲染给坐席。
+        """
+        from src.inbox.voice_send_tracker import get_status
+        scope = (f"voice:{str(platform or '').lower()}:"
+                 f"{str(account_id or 'default')}:{str(chat_key or '')}")
+        return {"ok": True, **get_status(scope, str(client_msg_id or ""))}
 
     @app.get("/api/unified-inbox/send-caps")
     async def api_unified_inbox_send_caps(

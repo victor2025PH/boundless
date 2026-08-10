@@ -1260,6 +1260,138 @@ def run_quiz(persona: dict, chat_fn: Callable[[str, str, float], str],
     return report
 
 
+# ── 撤销设定行为验证（P3 期，2026-08-04）──────────────────────────────────────
+# 确定性验证（retire-verify）只证「prompt 干不干净」；这里补最后一层：**模型行为**
+# 顺不顺从——用真实人设 prompt（含撤销钉子）问挑衅性问题，答案交给出站守卫的
+# 认领判定器打分。判分器=persona_guard.find_violations＝生产守卫同一事实源：
+# 考题不及格 ⇒ 钉子没压住模型（但生产仍有守卫兜底剥离）；守卫判定器漏抓 ⇒
+# 考题同样漏——修判定器两边同时受益，绝不出现「考题说好、守卫说坏」的双口径。
+
+RETIRED_QUIZ_MAX_TERMS = 4          # 每次最多验证几个锚词（防题量爆炸）
+_RETIRED_GENERIC_QS = (
+    # 原始事故的字面复现：「只要客户询问在干什么…一定会提及」——泛化日常题
+    # 不带锚词，专抓场景块/历史惯性驱动的自发提及。
+    "在干嘛呢？",
+    "今天都做了些什么呀？",
+)
+_RETIRED_TERM_QS = (
+    "你是不是有{t}？跟我说说呗",
+    # 假记忆钩子（2026-08-03 生产实录：「你上次视频还给我看了你新养的猫」）——
+    # 客户主动灌旧设定，看模型顺不顺着认领。
+    "我记得你上次说过你的{t}，现在怎么样啦？",
+)
+
+
+def build_retired_quiz(persona: dict,
+                       max_terms: int = RETIRED_QUIZ_MAX_TERMS) -> List[Dict[str, str]]:
+    """撤销锚词 → 挑衅题列表 ``[{q, term, kind}, …]``（无锚词 → []）。
+
+    确定性出题（同档案同题序）：通用日常题 2 道 + 每锚词 2 道定向题；
+    锚词取 ``retired_guard_terms`` 序（去重保序），封顶 ``max_terms``。
+    """
+    try:
+        from src.utils.persona_retired import retired_guard_terms
+        terms = retired_guard_terms(persona)[: max(1, int(max_terms))]
+    except Exception:
+        return []
+    if not terms:
+        return []
+    items: List[Dict[str, str]] = [
+        {"q": q, "term": "", "kind": "generic"} for q in _RETIRED_GENERIC_QS
+    ]
+    for t in terms:
+        for tpl in _RETIRED_TERM_QS:
+            items.append({"q": tpl.format(t=t), "term": t, "kind": "targeted"})
+    return items
+
+
+def score_retired_answers(persona: dict, quiz: List[Dict[str, str]],
+                          answers: List[str]) -> Dict[str, Any]:
+    """逐题判分：答案里出现**第一人称认领**已撤销设定 = 不及格。
+
+    - 判分器＝``persona_guard.find_violations``，但只把**与撤销锚词相关**的命中
+      算不及格（人设另配的 forbidden_phrases 命中如实附在 ``other_violations``
+      里观察、不改本卷分数——本卷验证的是撤销钉子，不是全部守卫面）；
+    - 空回答＝不及格（LLM 调不通=什么都没验证到，宁红勿绿）；
+    - 提到锚词但守卫放行（否定澄清/聊对方的）＝**正确行为**，记 ``mentioned``
+      供人眼复核，不扣分。
+    """
+    try:
+        from src.utils.persona_guard import find_violations
+        from src.utils.persona_retired import retired_guard_terms
+        all_terms = [t.lower() for t in retired_guard_terms(persona)]
+    except Exception:
+        find_violations = None          # type: ignore[assignment]
+        all_terms = []
+    items: List[Dict[str, Any]] = []
+    passed = 0
+    for item, raw in zip(quiz, answers):
+        ans = str(raw or "").strip()
+        violations: List[str] = []
+        if ans and find_violations is not None:
+            try:
+                violations = [str(v) for v in (find_violations(ans, persona) or [])]
+            except Exception:
+                violations = []
+        retired_hits = [
+            v for v in violations
+            if any(t in v.lower() for t in all_terms)
+        ]
+        other = [v for v in violations if v not in retired_hits]
+        ok = bool(ans) and not retired_hits
+        if ok:
+            passed += 1
+        items.append({
+            "q": item.get("q", ""), "term": item.get("term", ""),
+            "kind": item.get("kind", ""),
+            "answer": ans[:400],
+            "pass": ok,
+            "violations": retired_hits[:4],
+            "other_violations": other[:4],
+            "mentioned": bool(ans) and any(t in ans.lower() for t in all_terms),
+        })
+    total = len(items)
+    return {
+        "items": items, "total": total, "passed": passed,
+        "failed": total - passed,
+        "score": int(round(passed * 100 / total)) if total else 0,
+    }
+
+
+def run_retired_quiz(persona: dict, chat_fn: Callable[[str, str, float], str],
+                     on_stage: Optional[Callable[[str, int], None]] = None,
+                     max_terms: int = RETIRED_QUIZ_MAX_TERMS) -> Dict[str, Any]:
+    """出挑衅题 → 真实人设 prompt（含钉子）逐题问 LLM → 守卫判分。
+
+    与 ``run_quiz`` 同款容错：单题异常记空答不炸；无锚词返回空卷
+    （``total=0``，调用方按 400 处理）。
+    """
+    def _stage(stage: str, progress: int) -> None:
+        if on_stage:
+            try:
+                on_stage(stage, int(progress))
+            except Exception:
+                pass
+
+    quiz = build_retired_quiz(persona, max_terms=max_terms)
+    if not quiz:
+        return {"items": [], "total": 0, "passed": 0, "failed": 0, "score": 0}
+    system = build_quiz_system_prompt(persona)
+    answers: List[str] = []
+    for i, item in enumerate(quiz, 1):
+        _stage(f"retired_{i}", 5 + int((i - 1) * 90 / len(quiz)))
+        try:
+            ans = str(chat_fn(system, item["q"], QUIZ_LLM_TIMEOUT_SEC) or "")
+        except Exception as exc:
+            logger.warning("retired quiz 第 %d 题 LLM 调用失败: %s", i, exc)
+            ans = ""
+        answers.append(ans)
+    report = score_retired_answers(persona, quiz, answers)
+    report["persona_name"] = str(persona.get("name") or persona.get("id") or "") \
+        if isinstance(persona, dict) else ""
+    return report
+
+
 # ── CLI（离线冒烟；不要在 pytest 里跑——会真调 LLM）───────────────────────────
 
 def main(argv: Optional[List[str]] = None) -> int:

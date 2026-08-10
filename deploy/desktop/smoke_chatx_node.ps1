@@ -99,6 +99,24 @@ try {
     if ($null -eq $vis.reason) { Say "  FAIL reason field missing (old build?)"; $script:fail++ }
   } catch { Say ("  FAIL media json -> " + $_.Exception.Message); $script:fail++ }
 
+  # 2026-08-07 pacing gate: a shipped build must NOT auto-reply instantly by default
+  # (the boss-reported "sliders do nothing, always instant" defect). Fresh seed ships
+  # deliver_delay 8-20s and the reply-settings API exposes chain_coverage; an old
+  # build (no seed pacing / no coverage field) fails here -> rebuild before pushing.
+  try {
+    $rs = (Invoke-WebRequest -Uri "$base/api/reply-settings" -WebSession $sess `
+           -UseBasicParsing -TimeoutSec 30).Content | ConvertFrom-Json
+    $mx = 0.0
+    try { $mx = [double]$rs.values.'inbox.l2_autosend.deliver_delay.max_sec' } catch {}
+    $hasCc = ($rs.PSObject.Properties.Name -contains 'chain_coverage')
+    $ccok = $null
+    if ($hasCc -and $rs.chain_coverage) { $ccok = $rs.chain_coverage.ok }
+    Say ("  pacing: seeded max_sec=" + $mx + " chain_coverage=" + $hasCc + " ok=" + $ccok)
+    if ($mx -lt 3) { Say "  FAIL shipped default pacing is instant (<3s)"; $script:fail++ }
+    if (-not $hasCc) { Say "  FAIL chain_coverage missing (pre-pacing build?)"; $script:fail++ }
+    if ($ccok -eq $false) { Say "  FAIL an active chain would reply instantly"; $script:fail++ }
+  } catch { Say ("  FAIL pacing check -> " + $_.Exception.Message); $script:fail++ }
+
   if ($MediaRegression) {
     Say "media regression (press the preset, then survive a config hot reload):"
     function VisionStage() {

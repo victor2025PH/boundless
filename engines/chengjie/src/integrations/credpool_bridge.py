@@ -503,6 +503,16 @@ def resolve_for_account(
             _stat_fallback("pool_down_no_cache")
             return None
 
+    # 既有号优先用**自己登录时**绑定的凭据缓存（P2-⑨，2026-08-10）：托管派发的
+    # 机器换组后（隔离/换发），config 里注入的是**新组**凭据，而旧账号的 session
+    # 是旧组建的——直接回落 config 就是「session×api_id 错配」风控信号（与上方
+    # 池内号的不变量同一条）。缓存由登录成功时写入（telegram_protocol_login），
+    # 自建部署的账号没有这行缓存 → 行为与旧版完全一致。
+    hosted_cached = cached_cred_of(account)
+    if hosted_cached is not None:
+        _stat_resolve("credpool_cache", hosted_cached.tier, bool(hosted_cached.proxy))
+        return hosted_cached
+
     from src.integrations.telegram_protocol_login import resolve_credentials
 
     local = resolve_credentials(config)
@@ -511,7 +521,11 @@ def resolve_for_account(
         _stat_resolve("config" if local else "none")
     if not local:
         return None
-    return Allocation(local[0], local[1], "config")
+    # 托管派发若随凭据带了出口（官网池 P2-⑨），新登录同样三件套齐发；
+    # 无托管代理时保持旧语义（自带凭据不带隔离能力，如实反映）。
+    tg_cfg = config.get("telegram") if isinstance(config.get("telegram"), dict) else {}
+    hosted_proxy = _sanitize_proxy(tg_cfg.get("_hosted_proxy"))
+    return Allocation(local[0], local[1], "config", "free", hosted_proxy)
 
 
 # ── 异步侧包装 ───────────────────────────────────────────────────────────────

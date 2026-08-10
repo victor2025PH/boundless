@@ -135,12 +135,29 @@ def render_overlay(
     auth_token: Optional[str] = None,
     enable_monitoring: bool = False,
     site_name: Optional[str] = None,
+    ai_primary: Optional[str] = None,
+    local_llm_base_url: str = "",
+    local_llm_model: str = "",
 ) -> str:
     """渲染该实例的 config.local.yaml（品牌 + 端口 + 机密断言）。
 
     新客户实例是全新初始化（非迁移），故默认**生成随机** secret_key/auth_token 写入 overlay
     （与迁移场景不同——迁移时机密留在现网 config.yaml，模板不携带）。
+
+    ``ai_primary``（P2 本地化交付剖面）：``local`` / ``local_only`` 时 overlay 追加
+    ``ai.primary`` + ``ai.fallback``（本地 LLM 端点），隐私敏感客户开箱即全本地——
+    与 golive 清单/AIClient 启动探针的本地档判定同一契约（enabled+base_url+model）。
+    缺省/``cloud`` 输出与旧版逐字节一致。声明 local* 却缺端点/模型 → ValueError
+    在开通期确定性失败，绝不产出「声明了本地却起不来」的半成品 overlay。
     """
+    _primary = str(ai_primary or "").strip().lower()
+    if _primary in ("", "cloud"):
+        _primary = ""
+    elif _primary not in ("local", "local_only"):
+        raise ValueError(f"ai_primary 非法值 {ai_primary!r}（应为 cloud|local|local_only）")
+    elif not (str(local_llm_base_url or "").strip() and str(local_llm_model or "").strip()):
+        raise ValueError(
+            f"ai_primary={_primary} 需要 local_llm_base_url + local_llm_model（本地端点契约）")
     sk = secret_key or _secrets.token_urlsafe(32)
     tok = auth_token or _secrets.token_urlsafe(24)
     _site = site_name or f"无界科技 · {plan.product_name}"
@@ -165,6 +182,17 @@ def render_overlay(
     ]
     if enable_monitoring:
         lines.append(f"  metrics_port: {plan.metrics_port}")
+    if _primary:
+        lines.extend([
+            "ai:",
+            f"  primary: {_primary}"
+            + ("   # 严格隐私：聊天内容绝不发往云端" if _primary == "local_only"
+               else "   # 本地优先；本地失败可回落云端"),
+            "  fallback:            # 本地主链端点（Ollama/vLLM 等 OpenAI 兼容）",
+            "    enabled: true",
+            f"    base_url: {str(local_llm_base_url).strip()}",
+            f"    model: {str(local_llm_model).strip()}",
+        ])
     lines.append("")
     return "\n".join(lines)
 

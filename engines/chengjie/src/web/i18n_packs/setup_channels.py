@@ -20,6 +20,9 @@ ZH = {
     "setup.ch.path_login_blocked": "这条路当前不可用——点进去可以看到具体缺什么",
     "setup.ch.path_api_title": "改用企业官方 API（需要开发者账号）",
     "setup.ch.path_api_prereq": "需要在平台开发者后台建应用并配置回调地址，多数客户不需要走这条。",
+    # 官方后台直达链接（数据源＝channel_setup.Channel.console_url，单一事实源；
+    # 旧后端无该字段时前端不渲染此行）
+    "setup.ch.console_link": "打开官方后台获取凭证 ↗",
     "setup.ch.badge_linked": "✓ 已接 {n} 个账号",
     "setup.ch.badge_api": "✓ 官方接入已就绪",
     "setup.ch.badge_on": "✓ 已开启",
@@ -42,6 +45,13 @@ ZH = {
     "sw_reach_auth": "⚠ 有请求到达但从未通过验证——核对 verify_token / app_secret（也可能只是外部扫描噪声）",
     "sw_reach_not_mounted": "凭证已保存 · 回调路由将在下次实例重启时装载，装载后此处自动更新",
     "sw_reach_path": "回调路径：{path}",
+    # auth_failing 的定向变体：入站被 no_app_secret 拒收（Messenger 热门控新错误类）
+    # ——处置是「补一个字段」而非泛泛排查，指哪补哪
+    "sw_reach_auth_nosecret": "⚠ 渠道已启用但缺 App Secret——入站事件被拒收。在上方表单补填 App Secret 并保存即可，无需重启",
+    # Messenger「保存即探针」结果横幅（数据源＝保存响应的 probe 字段，2026-08-10）
+    "sw_probe_ok": "✓ 已连接主页：{name}（ID {pid}）",
+    "sw_probe_auth_fail": "⚠ Page Token 校验未通过：{err}——请到 Meta 后台核对/重新生成 token 后再保存",
+    "sw_probe_net_fail": "Token 校验没有完成（{err}）——凭证已保存；网络恢复后重新保存一次即可再验",
 }
 
 EN = {
@@ -52,6 +62,7 @@ EN = {
     "setup.ch.path_login_blocked": "Unavailable right now — open it to see exactly what's missing",
     "setup.ch.path_api_title": "Use the official business API instead (developer account required)",
     "setup.ch.path_api_prereq": "Requires an app and callback URL in the platform's developer console. Most customers don't need this.",
+    "setup.ch.console_link": "Open the official console to get credentials ↗",
     "setup.ch.badge_linked": "✓ {n} account(s)",
     "setup.ch.badge_api": "✓ Official API ready",
     "setup.ch.badge_on": "✓ On",
@@ -74,4 +85,10 @@ EN = {
     "sw_reach_auth": "⚠ Requests arrive but never pass verification — double-check verify_token / app_secret (could also be external scanner noise)",
     "sw_reach_not_mounted": "Credentials saved · callback routes mount on the next instance restart; this strip updates automatically once live",
     "sw_reach_path": "Callback path: {path}",
+    # Targeted auth_failing variant: inbound rejected due to missing app_secret
+    "sw_reach_auth_nosecret": "⚠ Channel enabled but App Secret is missing — inbound events are rejected. Fill in App Secret in the form above and save; no restart needed",
+    # Messenger save-time probe result banner (from the save response `probe` field)
+    "sw_probe_ok": "✓ Page connected: {name} (ID {pid})",
+    "sw_probe_auth_fail": "⚠ Page token failed validation: {err} — double-check / regenerate the token in the Meta console, then save again",
+    "sw_probe_net_fail": "Token validation didn't complete ({err}) — credentials are saved; save again once the network recovers to re-validate",
 }

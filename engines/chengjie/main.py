@@ -185,8 +185,8 @@ class AIChatAssistant:
             # 守护线程每小时续期/补领（首启无网或未领试用时条件满足自动接入）。
             try:
                 from src.ai.hosted_gateway import (
-                    ensure_hosted_ai, ensure_hosted_telegram, ensure_hosted_vision,
-                    start_refresh_daemon)
+                    ensure_hosted_ai, ensure_hosted_asr, ensure_hosted_telegram,
+                    ensure_hosted_vision, ensure_hosted_voice, start_refresh_daemon)
                 if await asyncio.to_thread(ensure_hosted_ai, self.config):
                     self.logger.info("托管 AI 网关已就绪（设备令牌）")
                 # 托管 Telegram 凭据：用户只登录、不填 api_id/hash（池未配则静默跳过）
@@ -195,6 +195,12 @@ class AIChatAssistant:
                 # 托管识图：识图指向官网网关（我们的 GPU 模型；中继未开则不影响，客户端回落）
                 if await asyncio.to_thread(ensure_hosted_vision, self.config):
                     self.logger.info("托管识图已就绪（经网关调我们的 GPU VLM）")
+                # 托管克隆语音 / 语音识别（混合形态）：LAN 直连优先，出网走网关回集群 GPU。
+                # 必须先于各 worker 构建转写器（转写器构建一次常驻）。
+                if await asyncio.to_thread(ensure_hosted_voice, self.config):
+                    self.logger.info("托管克隆语音已就绪（LAN 不可达时经网关回集群 GPU）")
+                if await asyncio.to_thread(ensure_hosted_asr, self.config):
+                    self.logger.info("托管语音识别已就绪（LAN 不可达时经网关转写）")
                 start_refresh_daemon(self.config)
             except Exception as _hg:
                 self.logger.debug("托管网关跳过: %s", _hg)
@@ -540,18 +546,26 @@ class AIChatAssistant:
         return ensure_deferred_outbox(self, *args, **kwargs)
 
     async def _maybe_translate_outbound(self, platform, account_id, chat_key, text):
-        """deferred 主动触达投递前的出站自动翻译（best-effort，绝不阻塞投递）。
+        """deferred 主动触达投递前的出站翻译/语言硬闸（best-effort）。
 
         复用 L2 autosend 同一 ``translate_outbound_text``（含「已是客户语言则跳过」检测护栏）
-        与同一开关 ``inbox.l2_autosend.translate.enabled``。translation_service 懒取，
-        会话客户语言经 conversations.language 解析。任何缺失/异常 → 回落发原文。
+        与同一开关 ``inbox.l2_autosend.translate.enabled``。translation_service 懒取。
+
+        P3-198（2026-08-04）：``translate.enabled=false`` 时按 ``lang_gate``（默认开）
+        走 gate-only——常规消息原样放行（尊重运营关闭翻译的决定），CJK↔非 CJK 实质
+        冲突抢救翻译；翻译不可用返回 **None**（HOLD 信号，调用方转
+        DeferredSenderNotReady 推后重试——发中文给外语客户比这条消息晚到更糟）。
+        其余任何缺失/异常 → 回落发原文，绝不阻塞投递。
         """
         try:
             from src.inbox.outbound_translate import (
-                parse_outbound_translate_cfg, translate_outbound_text,
+                parse_outbound_lang_gate_cfg,
+                parse_outbound_translate_cfg,
+                translate_outbound_text,
             )
             cfg = parse_outbound_translate_cfg(self.config.config or {})
-            if not cfg.get("enabled"):
+            if not cfg.get("enabled") and not parse_outbound_lang_gate_cfg(
+                    self.config.config or {}).get("enabled"):
                 return text
             ts = getattr(self._web_app.state, "translation_service", None) \
                 if self._web_app is not None else None
@@ -562,7 +576,8 @@ class AIChatAssistant:
                     "text": str(text)}
             return await translate_outbound_text(
                 item, translation_service=ts, store=self.inbox_store,
-                source_lang=cfg.get("source_lang") or "zh", style=cfg.get("style") or "chat")
+                source_lang=cfg.get("source_lang") or "zh", style=cfg.get("style") or "chat",
+                gate_only=not cfg.get("enabled"))
         except Exception:
             self.logger.debug("[deferred_outbox] 出站翻译跳过", exc_info=True)
             return text
@@ -773,6 +788,35 @@ class AIChatAssistant:
         except Exception:
             self.logger.warning("前端错误趋势落库初始化失败（已忽略）", exc_info=True)
 
+    def _maybe_init_login_funnel_trend_log(self) -> None:
+        """按 ``ops.login_funnel_trend`` 装配账号接入漏斗日聚合落库（默认关）。
+
+        开启后 ``record_login_stage`` 旁路把 started/authorized/failed + 失败原因码
+        按日 upsert 进 ``login_funnel_trend.db``，ops 看板经
+        ``/api/admin/login-funnel-trend`` 读近 N 天——「成功率/checkpoint 占比是在收敛
+        还是回潮」从进程内瞬时快照变成跨重启可回看的时间线。
+        """
+        try:
+            _ops = (self.config.config.get("ops") or {})
+            _lft = (_ops.get("login_funnel_trend") or {})
+            if not _lft.get("enabled", False):
+                self.logger.info(
+                    "账号接入漏斗趋势落库未启用（ops.login_funnel_trend.enabled=false）")
+                return
+            from src.integrations.login_funnel_trend import configure_login_funnel_trend
+            _cfg_dir = Path(self.config.config_path).parent
+            store = configure_login_funnel_trend(
+                enabled=True,
+                db_path=_cfg_dir / "login_funnel_trend.db",
+                retention_days=float(_lft.get("retention_days", 90)),
+            )
+            if store is not None:
+                self.logger.info(
+                    "✅ 账号接入漏斗趋势落库已就绪（retention=%sd）",
+                    _lft.get("retention_days", 90))
+        except Exception:
+            self.logger.warning("账号接入漏斗趋势落库初始化失败（已忽略）", exc_info=True)
+
     def _maybe_init_ui_event_trend_log(self) -> None:
         """按 ``ops.ui_event_trend`` 装配 UI 事件日聚合落库（默认关）。
 
@@ -801,6 +845,34 @@ class AIChatAssistant:
                     _uet.get("retention_days", 90))
         except Exception:
             self.logger.warning("UI 事件趋势落库初始化失败（已忽略）", exc_info=True)
+
+    def _maybe_init_contacts_asset_trend_log(self) -> None:
+        """按 ``ops.contacts_asset_trend`` 装配客户资产（好友/未开口/沉默）日快照落库（默认关）。
+
+        写侧＝ops 看板 trend 端点的**读时懒快照**（当天一次），无常驻 job；
+        读经 ``/api/admin/contacts-asset-trend``。回答「破冰/主动触达上线后，
+        未开口存量有没有真的压下去」——点值卡片给不出的趋势判据。
+        """
+        try:
+            _ops = (self.config.config.get("ops") or {})
+            _cat = (_ops.get("contacts_asset_trend") or {})
+            if not _cat.get("enabled", False):
+                self.logger.info(
+                    "客户资产趋势落库未启用（ops.contacts_asset_trend.enabled=false）")
+                return
+            from src.web.contacts_asset_trend import configure_contacts_asset_trend
+            _cfg_dir = Path(self.config.config_path).parent
+            store = configure_contacts_asset_trend(
+                enabled=True,
+                db_path=_cfg_dir / "contacts_asset_trend.db",
+                retention_days=float(_cat.get("retention_days", 180)),
+            )
+            if store is not None:
+                self.logger.info(
+                    "✅ 客户资产趋势落库已就绪（retention=%sd）",
+                    _cat.get("retention_days", 180))
+        except Exception:
+            self.logger.warning("客户资产趋势落库初始化失败（已忽略）", exc_info=True)
 
     def _maybe_init_csrf_trend_log(self) -> None:
         """P2（2026-07-31）：按 ``ops.csrf_trend`` 装配 CSRF 准入/拒绝日聚合落库（默认关）。
@@ -944,6 +1016,39 @@ class AIChatAssistant:
                     _pg.get("trend_retention_days", 90))
         except Exception:
             self.logger.warning("媒体承诺趋势落库初始化失败（已忽略）", exc_info=True)
+
+    def _maybe_init_inject_extract_trend_log(self) -> None:
+        """按 ``inbox.desktop_inject.trend_log`` 装配注入抽取率日聚合落库（默认关）。
+
+        开启后 ``POST /api/desktop/inject-health`` 旁路把每条健康上报的抽取计数
+        （decorated/unresolved/ingest_tried/ingest_keyed + 装饰率直方图）写入
+        ``inject_extract_trend.db``——为「归零判 → 比率阈值」的校准攒各平台真实分布
+        （拍脑袋定 30% 会在某个平台天天误报）。读端点
+        ``GET /api/desktop/inject-health/extract-trend``。关闭时
+        ``record_inject_extract_trend`` 恒 no-op。
+        """
+        try:
+            _di = ((self.config.config.get("inbox") or {})
+                   .get("desktop_inject") or {})
+            if not _di.get("trend_log", False):
+                self.logger.info(
+                    "注入抽取率趋势落库未启用（inbox.desktop_inject.trend_log=false）")
+                return
+            from src.web.inject_extract_trend import (
+                configure_inject_extract_trend,
+            )
+            _cfg_dir = Path(self.config.config_path).parent
+            store = configure_inject_extract_trend(
+                enabled=True,
+                db_path=_cfg_dir / "inject_extract_trend.db",
+                retention_days=float(_di.get("trend_retention_days", 90)),
+            )
+            if store is not None:
+                self.logger.info(
+                    "✅ 注入抽取率趋势落库已就绪（retention=%sd）",
+                    _di.get("trend_retention_days", 90))
+        except Exception:
+            self.logger.warning("注入抽取率趋势落库初始化失败（已忽略）", exc_info=True)
 
     def _maybe_init_monetization(self, *args, **kwargs):
         from src.bootstrap.background_tasks import maybe_init_monetization
@@ -1095,10 +1200,16 @@ class AIChatAssistant:
                     kb = KnowledgeBaseStore(kb_path)
                     learner = DailyLearner(kb, self.ai_client, db_path=kb_path)
                     domain_name = ""
+                    lcfg = {}
                     if hasattr(self.config, "config") and isinstance(self.config.config, dict):
                         domain_name = effective_domain_name(self.config.config)
+                        lcfg = self.config.config.get("kb_learner") or {}
                     domain_ctx = f"当前行业: {domain_name}" if domain_name else ""
-                    result = await learner.run_daily_learn(domain_context=domain_ctx)
+                    result = await learner.run_daily_learn(
+                        domain_context=domain_ctx,
+                        min_miss_count=lcfg.get("min_miss_count"),
+                        source="scheduled",
+                    )
                     self.logger.info(
                         "每日自动学习完成: 收集=%d, 生成=%d, 保存=%d",
                         result["collected"], result["generated"], result["saved"]

@@ -75,7 +75,7 @@ cd desktop && npm test
 （`getElementById('x').prop` 直接解引用但 `id="x"` 全站不存在 → null.prop 必崩）+ **动态点属性拼接门禁**
 （字符串里 `X.name'+var` 拼点属性名，var 含连字符时被当减法 → ReferenceError）：
 ```bash
-python -m pytest tests/test_inbox_inline_handlers_exported.py tests/test_rpa_inline_handlers_exposed.py tests/test_template_unique_ids.py tests/test_template_orphan_refs.py tests/test_template_dynamic_dot_access.py -q --tb=line
+python -m pytest tests/test_inbox_inline_handlers_exported.py tests/test_rpa_inline_handlers_exposed.py tests/test_template_unique_ids.py tests/test_template_orphan_refs.py tests/test_template_dynamic_dot_access.py tests/test_template_free_capture.py tests/test_static_js_free_capture.py -q --tb=line
 ```
 预期：全绿。扫描/作用域分析共享核心在 `tests/_inline_handler_scan.py`——会**跳过字符串/模板字面量/注释/正则**
 的掩码器算括号深度，可靠区分「IIFE 内定义（不可达除非挂 window）」vs「顶层全局定义（可达）」，任意架构零假阳性；
@@ -115,6 +115,155 @@ personas 的 `previewTTS` 死代码（从不被调用、引用不存在的 `vp-*
 被解析成减法 → 点搜索结果开会话抽屉在 LINE/Messenger/WhatsApp 三页全坏（且触发 dead-click 红条兜底）；
 改**事件委托 + `data-rpa-ck` 属性**（结果容器一次绑定处理所有动态行，彻底去掉「每输入框全局函数+dot 访问」脆弱模式）。
 `_ALLOWLIST`（良性命中，如字面量以 `.ext` 结尾再拼变量的文件名串）当前为空，`test_allowlist_not_stale` 防过期。
+
+**工作目标「建目标弹层」草稿幸存 + 编辑防打断主线**（2026-08-04/05 P0-P3，修坐席实录
+「弹层误触即丢内容 / 没动鼠标编辑中也消失 / 丢了无法恢复」三连）：
+```bash
+python -m pytest tests/test_goal_ui_revamp.py -q --tb=line
+python tools/verify_goal_form_ui.py   # fixture 真浏览器 22 场景（零实例依赖/零遥测污染）
+```
+预期：全绿。关键不变量（改 cp-goal.js / cp-panel-base.js / syncWsCopilot 前先读）：
+① 第二步弹层输入逐键快照 sessionStorage（键=会话 id，24h TTL），任何整块重渲染后
+ `_applyFormDraft` 原样回填；创建成功/「清空重填」才清；重开表单断点续写直跳第二步。
+② **编辑期同会话的宿主 context 重喂一律挂起**（cp-goal `set context` 覆写，关表单补刷）；
+ 宿主 `syncWsCopilot` 同 cid 一律不重喂右栏组件（轮询身份合并/peer 解析回调/回前台补轮
+ 是三大核爆源；内联组件不消费昵称/头像，同会话重喂＝纯破坏；App 模式按身份指纹判）。
+③ 退出语义：背板判脏（有输入不关闭只提示已暂存）；×＝关闭整表单；「返回」/Esc＝回第一步。
+④ renderData 的 error/active 分支不得顶掉打开中的表单（冲突交后端 active_limit 409 就地报错）。
+⑤ 基类 `CpPanelBase.refresh` 同会话刷新不清屏（换会话仍先清屏防串数据；无旧数据保 loading 反馈）。
+⑥ 发布纪律：改共享组件必须 bump `?v=`（unified_inbox.html + shared/copilot/app.html 两处）
+ + ui-build.txt + desktop/renderer 镜像同步（test_goal_ui_revamp 钉版本戳前缀，双树门禁钉同步）。
+观测：ops-overview 🎯 卡「🛟 表单体验」行＝进程口径 + 14 天趋势（`/api/admin/ui-event-trend
+?prefix=goal_`，zhiliao 已开 ops.ui_event_trend）；核心埋点 goal_ctx_deferred（编辑被外部刷新
+打断-已挡）/ goal_form_backdrop_dirty（背板误触-已拦）/ goal_form_draft_restore（断点续写）。
+
+**右栏「语音克隆/发送」cp-voice 状态机主线**（2026-08-05 P0，修坐席实录「生成的试听
+清不掉 / 想再来一条找不到生成按钮」两连报障 + 连点双发隐患）：
+```bash
+python -m pytest tests/test_cp_voice_ui_revamp.py -q --tb=line
+python tools/verify_cp_voice_ui.py   # fixture 真浏览器 27 断言（stub client：零实例依赖/零 TTS 消耗）
+```
+预期：全绿。关键不变量（改 cp-voice.js 前先读）：
+① 生成按钮动词化（`cp.voice.tts_btn`＝「🎙️ 生成语音」）+ 请求期 busy 互斥（`_setBusy`，
+ 连点＝双烧 GPU/给客户双发）；预览区常驻「🔁 重新生成 / ✕ 清除」，**错误态同样带重试/✕**
+ （错误文案赖着不走与旧预览赖着不走是同一个病）。
+② 发送成功即复位（清预览+清文字+「已发送」驻留后自动恢复引导语）——与主输入框
+ `sendVoiceReply` 行为对齐；发送带幂等键 `client_msg_id=cpv-*`（`send_dedup.reserve`
+ 对空键直接放行，右栏此前裸奔；主输入框链早已带键）。
+③ 过期守卫：文字/音色偏离生成基准（`_previewText`/`_previewPersona`）→ 预览标 stale +
+ 发送禁用（发送是服务端按**当前**文本重新合成，不拦＝发出从未试听过的内容）；
+ cp-fill 程序化填入不触发 input 事件，组件内已补 `_syncStale()`。
+④ `_epoch` 渲染代际：在途请求跨会话切换一律作废（防「已发送/预览」串会话回写）。
+⑤ 宿主消费 `cp-voice-sent`（unified_inbox `__cpVoiceSentBound`）→ toast + loadThread +
+ loadChats，修「发完消息流不动，坐席以为没发出去再点一次」（此前事件发了没人听）。
+⑥ 回落警示：`voice_meta.fallback_from` 非空 → 黄字「标准音色（非人设克隆声）」——克隆链
+ 掉线时试听/发出的不是人设的声音，对客户是「换人了」级破绽，必须显式而非灰字黑话。
+发布纪律照旧（双树镜像 + `?v=` 两处 + ui-build.txt，本批 `20260805c`）；浏览器门禁已挂
+`gate_sweep -Full`。与同日并行线的「试听带会话上下文（试听=发送契约）」「`__system__`
+系统音色三档」互补共存，双方契约由 `test_cp_voice_ui_revamp` 一并钉住。
+**P1 增量（同日，所听即所发闭环）**：
+```bash
+python -m pytest tests/test_tts_preview_reuse.py -q --tb=line   # 契约 18 例
+```
+⑦ **试听产物复用**：tts-test 落盘时写 `<音频名>.json` sidecar（文本 sha1+音色键+
+ 元数据，`src/integrations/shared/tts_preview.py::record_preview_meta`）；send-voice
+ 带 `preview_filename` 且校验通过（同文本指纹/同音色键/未过期/非空壳/文件名白名单
+ 防穿越）→ **复制后**把试听音频直接送出站管线（原件保留，发送失败重试仍可用）——
+ 客户听到的与坐席试听的逐字节一致，且省一次合成/字符额度；任何校验不过回落现场
+ 合成（`resolve_reusable_preview` 返回 miss 原因进 INFO 日志）。复用分支**刻意跳过**
+ 时长质量闸门（坐席耳朵已把关）；响应带 `reused_preview`，宿主埋点 `cpv_sent_reuse`
+ 分桶。persona_key 用**请求侧** persona_id（含空串），依赖同并行线的「试听=发送
+ 同入参解析」契约。
+⑧ **取消生成**＝`_cancelGen`：epoch 代际+1 复用「切会话作废」同一机制——零服务端
+ 桥接、桌面壳零改动，在途结果回来即静默丢弃；**计秒 tick 只更新 span 不整块重写**
+ （否则取消按钮每秒被销毁重建，点不中）。
+⑨ **字数计 400**（`_syncCounter`，与 tts-test 上限同口径）：超限红字+生成禁用+
+ 前端先拦；`_setBusy` 解除 busy 时保留超限禁用（否则清 busy 会点亮超限按钮）。
+⑩ **复用观测三暴露面**（P2 同日）：计数器长在契约模块（`tts_preview.reuse_stats_snapshot`
+ ——recorded/hits/misses{原因}/hit_rate，resolve 入口自动计数）→ `/api/voice/avatar-status.
+ preview_reuse` + `/api/workspace/metrics.voice_preview_reuse` + ops「🎙️ AvatarHub 语音」卡
+ 「所听即所发」行（`ov2_av_reuse*`，零流量不占版面）。调参读法：misses 里 expired 多
+ → 放宽 REUSE_MAX_AGE_SEC；text_mismatch 多 → 坐席改稿没重生成，强化前端引导。
+⑪ **两个数据否决的「刻意不做」**（2026-08-05 生产日志实测，~52MB 窗口）：语音流量
+ 主力=A 线 TG 原生 voice_reply（有 prerender 命中层，单次合成无浪费）；**B 线 autosend
+ 语音≈0、坐席手动 send-voice=0** ⇒ B 线复用接线无数据支撑不做；composer 内联语音路径
+ 合流（genVoiceReply/sendVoiceReply 接 preview_filename）**服务端已就绪、纯前端接线**，
+ 但该链当前零流量 + unified_inbox.html 属多线活跃热区，等右栏语音真实用量起来后再合流。
+⑫ **线上冒烟工具** `python tools/smoke_voice_reuse.py`（2026-08-05 已实弹验证 8/8：
+ S1 观测装载 → S1.5 自动发现可发语音的协议账号（'default' 不是受管账号，owns_media
+ 要确切 id）→ S2 试听+sidecar → S3 复用发送 reused_preview=true → S4 计数+1 →
+ S5 收藏消息镜像）。**只发账号自己的收藏消息**（chat_key 钉死 'me'）；`--dry-run`
+ 零发送零合成。**刻意不进计划任务/gate_sweep**（每周真发=收藏消息积杂物，与 multiwin
+ 周批同决策：被动观测走 ops 卡计数）。实测复用命中 `dur=0ms`（发送侧零合成延迟）。
+ 附带教训：改 `.py` 后先看重启冷却账本（`-Advise` 显示 last restart）——本批代码被
+ 并行线 10:48 的重启顺路装载，读探针验证即可，不必再吃一次重启窗口。
+
+**坐席语音手动链「所打即所念 / 所听即所发」主线**（2026-08-10/11，修实录「手打
+『你晚上吃饭了吗，晚上有什么安排』，语音念出的是**对它的回答**」+「11 字 40 秒」）：
+```bash
+python -m pytest tests/test_voice_send_verbatim.py tests/test_voice_send_status.py \
+ tests/test_voice_colloquial_llm.py tests/test_voice_content_preservation.py -q --tb=line
+```
+预期：全绿。关键不变量（改 send-voice / tts-test / voice_colloquial_llm / 收件箱
+composer 语音区前先读）：
+① **手动链原文直念**：send-voice 与 tts-test 的 synthesize 必传
+ `pre_colloquialized=True + interactive=True + total_budget_sec`（试听=发送**全同参**，
+ 试听产物经 preview_filename 复用为出站音频时零分叉）；interactive 同时把 hub 候选
+ 封顶 1（synth_verify 已兜坏 take，第二候选对交互路径是纯延迟税）并**豁免开场词
+ 去重剥词**——手打文字一个字不动；TTS 缓存键含改写变体维度（verbatim 与改写链
+ 同文本不是同一份音频，不分键会跨链串播旧「改过词」音频）。
+② **LLM 口语化只属自动链兜底**，三道枷锁（2026-08-10 答话式漏网后加）：问句主导
+ 跳过 LLM 档（`is_interrogative_dominant` 子句级判定——「把问句答掉」是小模型最高发
+ 翻车，答话与原问同话题余弦天然偏高，语义守卫拦不稳）；语义地板 0.78→0.84（当日
+ 生产漂移已爬到 0.746/0.774）；语义校验不成立＝**fail-closed** 拒用 LLM 稿（不投毒
+ 缓存不推熔断——嵌入侧故障不冤枉改写端点）。`guard_stats` 计数经 health_signal →
+ avatar-status.colloquial → ops「改写守卫」行（`ov2_av_guard*`）。
+③ **前端超时 ≠ 发送失败**：send-voice 各阶段/终局落 `src/inbox/voice_send_tracker`
+ （终局后迟到的 stage 更新一律忽略），前端超时走 `GET /api/unified-inbox/
+ send-voice-status` 对账（sent/failed/unknown 三态；unknown＝保守提示+刷新会话，
+ 绝不诱导重发——幂等键拦不住人工重试的新键）；等待期渲染秒表+真实阶段；合成前后
+ 各挂一次 `record_audio` 会话状态（orch.send_chat_action，best-effort）；成功日志带
+ `stage_ms=synth/conv/send`。
+④ **音色偏好带身份快照**：localStorage 会话音色偏好为 `{v, ident}`（旧裸字符串
+ 兼容），会话换绑人设 → 快照失配 → 旧选择自动作废（「换了身份还粘着旧音色」的
+ 源头）；语音人设≠会话身份时 `voice-eff-risk` 行出「换人」警示（`__system__` 系统
+ 通用音色是刻意中性选择，不警）。
+⑤ 发布纪律照旧：模板/i18n 热更新直上生产，每批 bump ui-build.txt；`.py` 改动攒批
+ 重启（本主线代码 2026-08-10 23:56 / 08-11 00:28 两批已装载 zhiliao）。
+
+**A 线「被吞回复」补答/回滚主线**（2026-08-09，修 198↔104 实录「回复等了 11 分钟」三连）：
+```bash
+python -m pytest tests/test_reply_swallow_fix.py tests/test_message_dedup.py \
+ tests/test_interject_absorb.py tests/test_telegram_outgoing_mirror.py -q --tb=line
+```
+预期：全绿。事故机制＝冷却/interject 静默吞回复且无补救调度 → 被吞消息只能等去重
+TTL（600s）被轮询兜底碰巧重拾（实测表现「隔 10-11 分钟才回」）。三层不变量（改
+telegram_client 回复管线 / skill_manager 冷却记账前先读）：
+① 冷却拦截必须发跳过信号（`_note_reply_skip`/`consume_reply_skip`，取走即删）——
+ 上层才能区分「刻意不回」vs「被冷却吃了」；`_cooldown_remaining` 报**全部失败桶
+ 的最大剩余**（重试只有一次机会，只看首桶会撞上更长的 per_content 桶）；
+ `_check_cooldown` 布尔壳签名被 test_group_context_split 钉住，勿动。
+② client 两处冷却吞没点（回复逻辑闸 / skill 冷却信号）→ `_defer_swallowed_inbound`
+ 把该 mid 的去重寿命缩短到冷却结束后不久（`MessageDedup.reschedule` **只提前不
+ 延后**），轮询兜底按时重拾补答；水位闸保证至多重试一次绝不循环。开关
+ `telegram.poll_fallback.swallow_reschedule`（默认开，随 poll_fallback 总闸）。
+③ interject 丢弃已生成回复必须回滚 skill 侧冷却记账（生成前 `snapshot_reply_accounting`
+ → 丢弃时 `rollback_reply_accounting`，只动时间戳 >= 快照时刻的本轮写入）——幻影
+ 回复不得占冷却位（否则补话本身也被吞、整个爆发窗全灭）、不得留在 last_reply/
+ 防复读环（防「AI 说过对方从没收到的话」穿帮）。`_update_after_reply` 三个记账
+ 写点被 `test_update_after_reply_stamp_contract_pinned` 钉住——挪写点先红。
+
+**回复时延 SLO**（P1-8 2026-08-09，「被吞回复」事故的量化闭环）：
+```bash
+python -m pytest tests/test_reply_latency.py tests/test_ops_overview.py -q --tb=line
+```
+`src/ops/reply_latency.py`＝inbox 持久库口径（等待段=连续入站 burst → 下一条出站，
+按**首条**入站计等待=客户视角最坏值；只算私聊、剔 bot/群/系统会话；出站不分
+AI/人工——SLO 是客户体验口径）→ `/api/workspace/metrics.reply_latency`（300s TTL
+缓存防 ops 轮询全扫消息表）+ Prom `ws_reply_latency_p50/p95_seconds`、
+`ws_reply_unanswered_24h` + ops-overview「⏱️ 回复时延 SLO」卡（boss 组，
+`ov2_s_rlat`/`ov2_rl_*` zh+en，零流量整卡隐藏）。「零回复」＝入站超宽限
+（600s）无任何出站——与轮询兜底 TTL 同刻度，修复回归时此数先涨。
 
 **多开治理 / 防双发主线**（2026-07-29，修「同一坐席开两个窗口 → 客户收到两条一样的话」）：
 ```bash
@@ -362,6 +511,29 @@ min_unmet 且该人设该场景零备货」（`qualify_restock_targets`；单人
 → 策展命名 `<场景>_<系列>_<nn>.jpg` 落 `album_dir/<persona>/` + 登记 `_meta.json`（scene/tod/
 series）→ 供给/衣橱缓存失效——「看缺口→补图→下次有货」零人工。逐项落盘（中途崩溃已完成项不重跑）；
 0 张也标 done 防死循环（重试由运营改回 pending）。观测：ops 卡 restock 行（`ov2_mc_restock*`）。
+**P3 增量**（2026-08-08，配文诚实化——实录：自拍被配成「给你瞅瞅我卧室的样子」
+「之前拍的存货，家里随便吃吃嘛」，画面里只有人脸。前面四层护栏管的是**挑哪张图**，
+配文这条链一直是「LLM 看不到图、只顺着对话编」，所以图对了文照样穿帮）：
+```bash
+python -m pytest tests/test_caption_truthfulness.py -q --tb=line
+```
+① **P0 配文硬约束**（`build_photo_caption_instruction`，默认生效无开关）：人像类配文
+ 指令钉死「画面里只有你，没有食物/房间/物品」并显式禁「这是我做的 XX / 家里的存货」；
+ 相册分支此前**只传 freshness 不传 scene**（断链点）——现在把条目真实 `scene:*` 标签
+ 与 `wanted_subject` 一起喂进去，LLM 不必再猜。
+② **P1 无货不发**（`outbound_promise_guard.wanted_media_subject`）：把「对方这次想看的
+ **非人像主体**」从客户原话（「燕窝粥的照片」「给我看看你卧室」）与 **AI 自己的 offer**
+ （「我煮了燕窝粥，要不要看看」→ 客户「好呀」）里抽出来——**offer 主体此前在
+ offer-accept 桥上全程丢失，只剩一个 'image'**，这就是拿随机自拍顶包的根因。抽到主体后
+ `pick_registered_media(deny_generic=True)` 关掉通用人像池（能归场景类的如「卧室」改走
+ 场景硬匹配）；相册后端无货 → **不发图**交诚实文字（`wanted_subject_no_stock`），真出图
+ 后端 → 改按物体图出该主体走 `image_gate` 后验。抽取宁缺勿滥（功能字/量词/人像词一律
+ 弃权，误抽会误拦正常自拍）。
+③ **P2 出站前 VLM 图文核对**（`src/ai/caption_image_guard.py`，`companion.selfie.
+ caption_guard` example 默认关 / zhiliao 已开）：只核 **LLM 现写的**配文（运营配文与固定
+ 池不声称画面内容），VLM 明确判「配文声称的东西画面里没有」才换诚实兜底配文，
+ parse 失败/超时/无视觉后端一律放行原配文——**绝不阻塞发图**。观测
+ `metrics_snapshot().caption_guard` + fallback 原因 `caption_guard_rewrite`。
 
 **主动关怀（proactive_care）主线**（2026-08-01 当日 P0-P5 闭环，两条 agent 线接力；详版 DEVLOG §94）：
 ```bash
@@ -964,6 +1136,20 @@ python -m pytest tests/test_faq_resolution_gate.py tests/test_translation_qualit
  16 条命理包 → `/api/kb/embed-all` 向量化 →「命理」分类在 `/knowledge` 可管理。
  Phase 7 backlog：付费实验开闸（读数后）、合盘/他人档案、解读校验器上线做出站守卫。
 
+**AI 价值周报**（2026-08-06，「AI 本周替你干了什么」总账单一口径）：聚合纯函数
+`src/ops/value_report.py::build_weekly_value`（reply_drafts / outreach_log / messages
+**持久库 7 天窗**，重启不清零；触达回复判定与 `outreach_response_stats` 同款、剔 bot；
+by_batch 分布与主计数同一 bot 剔除 SQL——首跑曾 159 vs 157 口径分裂）。消费面四路同源：
+`GET /api/report/weekly` 的 `value` 段（F4 周报路由）、`_weekly_report_loop` 推送摘要
+（`text_lines`）、ops-overview「🧾 AI 价值周报」卡（boss 组，`loadValueWeekly`，零流量
+整卡隐藏）、**watchdog `ops_report` 事件 `value_lines`**（formatter 上限 6 行）。
+⚠ 周报推送是**双栈**：F4 legacy 循环只走 `config.yaml::webhook` 旧栈（默认关）；
+运营按推荐路径（告警渠道面板 → notify_webhooks.json）接通后收到的是 watchdog 的
+`ops_report`（别名同名，`health_watchdog.weekly_report_enabled` 默认关）——价值行两条链
+都在。门禁 `tests/test_value_report.py`（含三消费面接线断言）+ `test_ops_incidents.py`
+（emit 携带 value_lines / formatter 渲染+上限）+ `test_ops_overview.py` 卡片三件套断言
+（section/loader/注册表缺一＝静默缺陷）。
+
 ### i18n 施工约定（后台路由 CJK 收口 + 前端裸键）
 
 后台 API 的 `detail`/`error` 文案前端 verbatim 直显 → 硬编码中文会漏给英文用户。收口靠请求级
@@ -1011,8 +1197,13 @@ python -m pytest tests/test_faq_resolution_gate.py tests/test_translation_qualit
   它们的「杀所有 main.py + 引擎根老配置起单实例」语义会**同时杀死智聊/通译两个生产实例**并起一个
   抢同一 Telegram 账号的 18787 幽灵实例（2026-07-22 18:53 实锤事故：全站断连 + 看门狗被幽灵骗过）。
   两脚本已加双实例检测护栏（拒跑 exit 1），别绕过；
+- **重启前先跑预检**（2026-08-06 沉淀）：`scripts\restart_preflight.ps1`——五步只读
+ GO/NO-GO（10min 树静默+意向板 / 全量 dirty .py 语法 / app 装配测试 / -Advise /
+ 30min 手动间隔），任一红即 NO-GO（并按失败项给出下一步：`-Intent` / 修语法 / 搭便车验证）；
+ 全绿才给出重启命令。共享树重启装载**所有线**的落盘代码，预检是防「把 sibling 半存盘
+ 文件重启进生产」的机制化闸门；`-Advise` 本身也会指路先跑预检（三者互相引用，不靠记）；
 - **正确重启（唯一入口）**：
-  `powershell -ExecutionPolicy Bypass -File deploy\instances\restart_instance.ps1 -Instance zhiliao`
+ `powershell -ExecutionPolicy Bypass -File deploy\instances\restart_instance.ps1 -Instance zhiliao`
   （通译改 `-Instance tongyi`）。脚本自带：只动一台、**机器级** 10min 冷却（与 watchdog 共用
   `D:\chengjie-instances\.ops\restart_cooldown\`）、仅模板/i18n 脏树时拒重启、清 exit 哨兵、等 `/login` 200、
   可选 ops 告警。不确定先 `-Advise`；应急 `-Force`；热文件仍要硬重启 `-AllowHotOnly`。
@@ -1208,6 +1399,19 @@ resolve），那行于是永远 pending；投递接通后任何窗口点「通�
 建议先只订阅高价值别名（`draft_backlog` / `human_deliver` / `host_alert`）再逐步放开，
 避免一次性把所有订阅事件推成告警风暴。
 
+**自检面已闭环（2026-08-02）**：`GET /api/admin/alert-link-status`（文件真相×进程真相×
+指纹分歧×引擎根诱饵检测，verdict＝no_channel/not_running/divergent/uncovered/healthy，
+零密钥字段）→ ops-overview「🔔 告警链路」卡（未接通=红+接通 CTA；端点未装载=整卡隐藏）；
+进程外文件口径用 `python tools/alert_link_selfcheck.py`。配套地基：`notify_webhooks_store`
+缓存改按 **mtime 失效**（手改 JSON 下次 load 即见、删文件回 None——此前缓存永不失效，
+自检会对着陈旧数据说一致）；`WebhookNotifier.status_snapshot()` 带非密钥字段 `config_fp`
+（`alert_link_audit.config_fingerprint`，比对「磁盘 vs 进程装载」内容级分歧——手改文件
+不经面板不会热更，一比即现形）。聚合逻辑单一事实源＝`alert_link_status.collect_alert_link_status`
+（路由薄包装 + 健康灯 `health_watchdog.probe_alert_link` 同源消费）；**健康灯组件已接**
+（`ops.alert_link_health` 默认开，0 通道/分歧/停摆＝黄灯软性绝不红灯，且 warn 不经
+health_alert 外发——无循环告警）。门禁 `tests/test_alert_link_status_route.py` +
+`tests/test_alert_link_health.py`。
+
 ### 多 agent 共享工作树并发协议（2026-07-28，当日三线并发实录教训）
 
 worktree 隔离是理想态（见上），但实践中多条 agent 线常共用主工作树（生产实例共享
@@ -1244,6 +1448,13 @@ FLAP、内联按钮写了函数没挂 window 暴露块经热更新**直接上生
    （会话面板密度预算 + 「可见但空」扫描，2026-07-30）、`verify_inbox_identity.py`
    （人设身份真相：回复区身份条会话覆写/TTL 缓存/换绑即时校正 + 行徽章行级
    eff_persona，route mock 零生产写入，2026-07-30）。三者环境缺失一律 SKIP exit 0。
+6. **意向板**（2026-08-05 沉淀：两条线同小时内为同一事故各建了几乎相同的验证工具，
+   靠代码注释里的工具名才避免重复上线——mtime 探活只能看见「在哪打字」，看不见
+   「在追什么」）：开工时 `scripts\agent_probe.ps1 -Intent "主题 (涉及文件/区域)"`
+   登记（建议 ASCII），收工 `-Intent "同主题" -Done` 清除；探针 [2/3] 段展示各线
+   24h 内的在册意向（过期自清）。登记落 `D:\chengjie-instances\.ops\agent_intents\`。
+   动手前先看意向板：主题撞车 → 先合流（复用/增强对方产出）再动工。登记成功后提示
+   指向 `restart_preflight`；预检 NO-GO / `-Advise` 也会回指意向板——形成闭环。
 
 ### 崩溃恢复提示
 

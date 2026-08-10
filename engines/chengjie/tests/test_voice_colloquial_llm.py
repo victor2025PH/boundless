@@ -13,10 +13,17 @@ import pytest
 
 from src.ai.voice_colloquial_llm import (
     build_colloquial_prompt,
+    is_interrogative_dominant,
     llm_colloquialize,
     reset_state,
     sanitize_llm_output,
 )
+
+
+async def _identity_embed(texts):
+    """恒等向量（余弦 1.0）：语义守卫（2026-08-10 起 fail-closed）在单测里
+    默认「可校验且通过」——没有 embed 的客户端改写会被整体拒用。"""
+    return [[1.0, 0.0] for _ in texts]
 
 
 class _FakeAI:
@@ -34,6 +41,9 @@ class _FakeAI:
         if isinstance(r, list):
             return r[min(self.calls - 1, len(r) - 1)]
         return r
+
+    async def embed(self, texts):
+        return await _identity_embed(texts)
 
 
 # ── 纯函数：prompt ───────────────────────────────────────────────────────────
@@ -133,6 +143,9 @@ class _DualAI:
     async def rewrite_cloud(self, system, user, *, timeout_sec=12.0, **kw):
         self.cloud_calls += 1
         return self._cloud
+
+    async def embed(self, texts):
+        return await _identity_embed(texts)
 
 
 _SRC = "我今天其实过得挺不错的但是有点累"
@@ -239,7 +252,239 @@ async def test_lead_false_reflected_in_prompt(monkeypatch):
             seen["system"] = system
             return "其实这句被改写得挺自然的呢"
 
+        async def embed(self, texts):
+            return await _identity_embed(texts)
+
     src = "我今天其实过得挺不错的但是有点累啊"
     await llm_colloquialize(src, ai_client=_Spy(), emotion="warm", lead=False)
     assert "不要用语气词或开场白开头" in seen["system"]
+    reset_state()
+
+
+# ── 端点列表 / local_first / 温度 / 落盘缓存（2026-08-01）────────────────────
+from src.ai.voice_colloquial_llm import (  # noqa: E402
+    get_last_provider,
+    health_signal,
+    parse_llm_endpoints,
+)
+
+_EPS = [
+    {"base_url": "http://192.168.0.198:11434", "model": "qwen3:8b"},
+    {"base_url": "http://192.168.0.140:11434", "model": "qwen3.5:9b"},
+]
+
+
+def test_parse_llm_endpoints_validation():
+    eps = parse_llm_endpoints([
+        {"base_url": "http://192.168.0.198:11434/", "model": "qwen3:8b",
+         "timeout_sec": 4, "num_ctx": 4096},
+        {"base_url": "", "model": "x"},              # 缺 base → 剔
+        {"base_url": "not-a-url", "model": "x"},      # 无 scheme → 剔
+        {"base_url": "http://h:1", "model": ""},      # 缺 model → 剔
+        "garbage",                                     # 非 dict → 剔
+    ])
+    assert len(eps) == 1
+    assert eps[0]["base_url"] == "http://192.168.0.198:11434"   # 尾斜杠已剥
+    assert eps[0]["timeout_sec"] == 4.0 and eps[0]["num_ctx"] == 4096
+    assert parse_llm_endpoints(None) == ()
+    assert parse_llm_endpoints("not-a-list") == ()
+
+
+def test_prompt_contains_antianswer_rule_and_fewshot():
+    """「转述而非回答」硬规则 + few-shot 必须在两档 prompt 里都在场——
+    这是对生产实锤失败（改写变回答/人设改名「小六」）的源头矫正。"""
+    for intensity in ("natural", "vivid"):
+        p = build_colloquial_prompt("warm", lead=True, intensity=intensity)
+        assert "绝不能回答" in p, intensity
+        assert "同一个提问" in p, intensity
+        assert "原样保留" in p, intensity
+        assert "我叫林佳欣" in p, intensity      # few-shot 示例在场
+        assert "口语版：" in p, intensity
+    # 老断言口径不回归：保真硬要求仍在
+    assert "保持原意" in build_colloquial_prompt("warm", lead=True)
+
+
+@pytest.mark.asyncio
+async def test_endpoints_used_before_fallback_client(monkeypatch):
+    """配了 llm_endpoints：local 档走端点直连，不再碰 client.rewrite_local。"""
+    reset_state()
+    calls = []
+
+    async def _fake_ep(ep, system, user, *, temperature, max_tokens=240):
+        calls.append(ep["base_url"])
+        return "其实我今天过得还不错啦"
+
+    monkeypatch.setattr(
+        "src.ai.voice_colloquial_llm._rewrite_via_endpoint", _fake_ep)
+    fake = _DualAI(local="不该被调用", cloud="也不该被调用")
+    out = await llm_colloquialize(
+        _SRC, ai_client=fake, llm_endpoints=_EPS)
+    assert out == "其实我今天过得还不错啦"
+    assert calls == ["http://192.168.0.198:11434"]      # 首端点命中即止
+    assert (fake.local_calls, fake.cloud_calls) == (0, 0)
+    assert get_last_provider() == "http://192.168.0.198:11434|qwen3:8b"
+    reset_state()
+
+
+@pytest.mark.asyncio
+async def test_endpoint_failover_and_cooldown(monkeypatch):
+    """首端点异常 → 冷却 + 自动走第二端点；下一条直接跳过冷却中的首端点。"""
+    reset_state()
+    calls = []
+
+    async def _fake_ep(ep, system, user, *, temperature, max_tokens=240):
+        calls.append(ep["base_url"])
+        if "198" in ep["base_url"]:
+            raise RuntimeError("connect timeout")
+        return "其实我今天过得还不错啦"
+
+    monkeypatch.setattr(
+        "src.ai.voice_colloquial_llm._rewrite_via_endpoint", _fake_ep)
+    dummy = _DualAI(local="不该被调用", cloud="也不该被调用")
+    out1 = await llm_colloquialize(_SRC, ai_client=dummy, llm_endpoints=_EPS)
+    assert out1 == "其实我今天过得还不错啦"
+    assert calls == ["http://192.168.0.198:11434", "http://192.168.0.140:11434"]
+    sig = health_signal()
+    assert "http://192.168.0.198:11434|qwen3:8b" in sig["endpoints_cooling"]
+    # 第二条（新文本）：198 在冷却中 → 只打 140
+    calls.clear()
+    out2 = await llm_colloquialize(
+        "完全不同的另一句够长的中文内容呀", ai_client=dummy, llm_endpoints=_EPS)
+    assert out2 == "其实我今天过得还不错啦"
+    assert calls == ["http://192.168.0.140:11434"]
+    assert (dummy.local_calls, dummy.cloud_calls) == (0, 0)
+    reset_state()
+
+
+@pytest.mark.asyncio
+async def test_local_first_falls_back_to_cloud(monkeypatch):
+    """provider=local_first：全部 LAN 端点失败 → 落云端，不直接掉规则档。"""
+    reset_state()
+
+    async def _fake_ep(ep, system, user, *, temperature, max_tokens=240):
+        raise RuntimeError("all endpoints down")
+
+    monkeypatch.setattr(
+        "src.ai.voice_colloquial_llm._rewrite_via_endpoint", _fake_ep)
+    fake = _DualAI(local="不该被调用", cloud="其实我今天过得还不错啦")
+    out = await llm_colloquialize(
+        _SRC, ai_client=fake, provider="local_first", llm_endpoints=_EPS)
+    assert out == "其实我今天过得还不错啦"
+    assert (fake.local_calls, fake.cloud_calls) == (0, 1)
+    assert get_last_provider() == "cloud"
+    reset_state()
+
+
+@pytest.mark.asyncio
+async def test_local_first_without_endpoints_uses_fallback_then_cloud():
+    """local_first 未配端点：先 ai.fallback（rewrite_local）再云端——老部署可平滑切档。"""
+    reset_state()
+    fake = _DualAI(local=None, cloud="其实我今天过得还不错啦")
+    out = await llm_colloquialize(_SRC, ai_client=fake, provider="local_first")
+    assert out == "其实我今天过得还不错啦"
+    assert (fake.local_calls, fake.cloud_calls) == (1, 1)
+    reset_state()
+
+
+@pytest.mark.asyncio
+async def test_temperature_threaded_and_in_cache_key():
+    """温度透传给改写调用，且进缓存键（不同温度不串缓存）。"""
+    reset_state()
+    seen = {}
+
+    class _Spy:
+        def __init__(self):
+            self.calls = 0
+
+        async def rewrite_local(self, system, user, *, timeout_sec=8.0, **kw):
+            self.calls += 1
+            seen["temperature"] = kw.get("temperature")
+            return "其实我今天过得还不错啦"
+
+        async def embed(self, texts):
+            return await _identity_embed(texts)
+
+    spy = _Spy()
+    await llm_colloquialize(_SRC, ai_client=spy, temperature=0.35)
+    assert seen["temperature"] == 0.35
+    # 同文本换温度 → 不该命中同一缓存键 → 再调一次 LLM
+    await llm_colloquialize(_SRC, ai_client=spy, temperature=0.85)
+    assert spy.calls == 2
+    reset_state()
+
+
+@pytest.mark.asyncio
+async def test_disk_cache_survives_memory_reset():
+    """落盘缓存跨「重启」（清内存层）复用；失败结果绝不落盘。"""
+    reset_state()
+    src = "这是一句专门用于落盘缓存测试的中文长句子"
+    fake = _FakeAI("其实呀这是落盘缓存测试的口语版啦")
+    out1 = await llm_colloquialize(src, ai_client=fake)
+    assert out1 and fake.calls == 1
+    # 模拟进程重启：清内存/熔断，但保留磁盘
+    reset_state(disk=False)
+    dead = _FakeAI(None)                       # LLM 全挂也无所谓
+    out2 = await llm_colloquialize(src, ai_client=dead)
+    assert out2 == out1
+    assert dead.calls == 0                     # 全程零 LLM 调用
+    assert health_signal()["disk_cache_hits"] >= 1
+    # 失败不落盘：失败文本清内存后仍会重试（不被磁盘固化）
+    fail_src = "另一句注定改写失败的落盘语义测试句子"
+    await llm_colloquialize(fail_src, ai_client=dead)
+    reset_state(disk=False)
+    probe = _FakeAI("其实这句后来又能改出来了呢")
+    out3 = await llm_colloquialize(fail_src, ai_client=probe)
+    assert out3 == "其实这句后来又能改出来了呢"
+    assert probe.calls == 1
+    reset_state()
+
+
+# ── 问句主导跳过 + fail-closed（2026-08-10 实录事故矫正）─────────────────────
+def test_is_interrogative_dominant_cases():
+    # 实录句：被小模型改写成「对它的回答」后念出 → 必须被判问句主导
+    assert is_interrogative_dominant("你晚上吃饭了吗，晚上有什么安排")
+    assert is_interrogative_dominant("你今天过得怎么样？")
+    assert is_interrogative_dominant("吃了吗？睡得好吗？")
+    assert is_interrogative_dominant("诶，你晚上吃饭了吗")   # 语气短句不投票
+    # 混合文本（陈述+问句）不判 dominant——改写价值在陈述段，语义守卫兜底；
+    # 第一条即 prompt few-shot 的规范改写对象（陈述+结尾问句），绝不可误跳
+    assert not is_interrogative_dominant(
+        "我刚才在健身房锻炼完之后顺便去了趟超市买了点水果和牛奶，你今天过得怎么样？")
+    assert not is_interrogative_dominant("我明白，你很健忘啊")
+    assert not is_interrogative_dominant("我刚到家，正准备做饭呢。")
+    assert not is_interrogative_dominant("")
+
+
+@pytest.mark.asyncio
+async def test_interrogative_skips_llm_tier():
+    """问句主导 → 根本不调 LLM（答话式翻车的源头规避），回落规则档。"""
+    reset_state()
+    fake = _FakeAI("不该被调用")
+    assert await llm_colloquialize(
+        "你晚上吃饭了吗，晚上有什么安排", ai_client=fake) is None
+    assert fake.calls == 0
+    reset_state()
+
+
+@pytest.mark.asyncio
+async def test_unverifiable_rewrite_rejected_without_cache_poison():
+    """无 embed（语义校验不成立）→ 拒用 LLM 稿（fail-closed）；且**不投毒
+    缓存、不推熔断**——嵌入恢复后同句立刻可用，端点健康信号不被冤枉。"""
+    reset_state()
+
+    class _NoEmbed:
+        def __init__(self):
+            self.calls = 0
+
+        async def rewrite_local(self, system, user, *, timeout_sec=8.0, **kw):
+            self.calls += 1
+            return "其实我今天过得还不错啦"
+
+    ne = _NoEmbed()
+    assert await llm_colloquialize(_SRC, ai_client=ne) is None
+    assert ne.calls == 1
+    assert health_signal()["fail_streak"] == 0          # 不喂熔断
+    ok = _FakeAI("其实我今天过得还不错啦")
+    assert await llm_colloquialize(_SRC, ai_client=ok) == "其实我今天过得还不错啦"
+    assert ok.calls == 1                                # 缓存未被空串投毒
     reset_state()

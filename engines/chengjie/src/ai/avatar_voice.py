@@ -38,10 +38,12 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import subprocess
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -601,6 +603,32 @@ class AvatarVoiceClient:
         healthy = [b for b in alive if self._health_ok_base(b)]
         return healthy or alive or [self.base_urls[0]]
 
+    def _svc_headers(self, base_url: str) -> Optional[Dict[str, str]]:
+        """跨机 GPU 服务鉴权头（service_auth 语义：回环免鉴、LAN 需 X-AH-Svc）。
+
+        2026-08-02 实锤：base_urls 里的 140/173 CosyVoice 节点一直 401——TTS 调用
+        没带集群令牌（STT 早就带了），「多端点回落」从未对跨机端点真正生效。
+        令牌文件复用 stt.token_file（集群通用令牌，140 实测同牌可合成）。
+        令牌缺失时不带头：回环端点照常，LAN 端点继续 401→冷却切换＝旧行为零回退。
+        """
+        host = ""
+        try:
+            host = urllib.parse.urlsplit(base_url).hostname or ""
+        except Exception:
+            host = ""
+        if host in ("127.0.0.1", "localhost", "::1"):
+            return None
+        token = read_service_token(self.stt_token_file)
+        if not token:
+            # 托管桌面版（2026-08-03）：客户机没有集群令牌文件 → 改带设备令牌
+            # （cx.…，hosted_gateway 注入的 env，调用时取值＝换新不失效）。官网网关
+            # 验它放行（同一 X-AH-Svc 头）；LAN 节点令牌不匹配照旧 401→冷却切换，
+            # 与「无令牌 401」等价，零回退。
+            hosted = str(os.environ.get("AITR_HOSTED_AI_KEY") or "").strip()
+            if hosted.startswith("cx."):
+                token = hosted
+        return {"X-AH-Svc": token} if token else None
+
     def _post_any(self, path: str, payload: bytes, *, timeout: float) -> bytes:
         """按优先级在候选端点执行合成 POST：失败标记冷却并顺移下一端点。
 
@@ -617,7 +645,8 @@ class AvatarVoiceClient:
         for base in cands:
             try:
                 body = self._post_with_retry(
-                    f"{base}{path}", payload, timeout=timeout)
+                    f"{base}{path}", payload, timeout=timeout,
+                    headers=self._svc_headers(base))
                 self._note_endpoint_ok(base)
                 if base != self.base_urls[0]:
                     logger.info("[avatar_voice] 经备用端点合成成功 %s", base)
@@ -775,7 +804,8 @@ class AvatarVoiceClient:
             # 预热也过 GPU 锁：避开在线合成高峰互相拖垮
             body = self._post_with_retry(
                 f"{self.base_url}/v1/tts/register_spk", payload,
-                timeout=self.synth_timeout_sec)
+                timeout=self.synth_timeout_sec,
+                headers=self._svc_headers(self.base_url))
             try:
                 data = json.loads(body.decode("utf-8"))
                 ok = not (isinstance(data, dict) and data.get("ok") is False)
@@ -785,7 +815,15 @@ class AvatarVoiceClient:
                 _REGISTERED_SPK.add(fp)
             return ok
         except Exception as exc:
-            logger.warning("[avatar_voice] register_spk 失败: %s", exc)
+            code = getattr(exc, "code", None)
+            if code in (401, 403) or "401" in str(exc) or "Unauthorized" in str(exc):
+                # 该节点未配置 AvatarHub 服务令牌（D:/faceX/mfys/secrets/service_token.txt
+                # 通常仅算力机有）→ 预热被拒是**预期态**，不是故障；在线合成/回落链不受影响。
+                # 降级为 INFO，避免桌面/坐席机每次启动刷 WARNING（2026-08-07 日志监控实锤）。
+                logger.info(
+                    "[avatar_voice] register_spk 需鉴权令牌，本节点未配置，预热跳过（不影响合成）")
+            else:
+                logger.warning("[avatar_voice] register_spk 失败: %s", exc)
             return False
 
     # ── 批量预渲染（7858，夜间/离线专用）────────────────────────────────────
@@ -924,6 +962,34 @@ def convert_to_wav_16k_mono(src_path: str) -> Optional[str]:
         r = subprocess.run(
             ["ffmpeg", "-y", "-i", str(src), "-ar", "16000", "-ac", "1",
              "-f", "wav", str(dst)],
+            capture_output=True, text=True, timeout=60,
+        )
+        if r.returncode != 0 or not dst.is_file() or dst.stat().st_size == 0:
+            return None
+        return str(dst)
+    except Exception:
+        return None
+
+
+def convert_to_wav_mono(src_path: str) -> Optional[str]:
+    """任意音频（ogg/opus/m4a/mp3…）→ 单声道 16bit WAV，**保留原采样率**。
+
+    参考音登记用：与 STT 的 16k 版刻意分开——克隆参考音的高频细节直接决定
+    音色相似度上限，不做降采样（Telegram 48k opus 语音条转出仍是 48k）。
+    ffmpeg 缺失/失败 → None（调用方按「无法转换」降级，不抛）。
+    """
+    import shutil
+
+    if shutil.which("ffmpeg") is None:
+        return None
+    src = Path(src_path)
+    if not src.is_file():
+        return None
+    dst = src.parent / (src.stem + "_mono.wav")
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-i", str(src), "-ac", "1",
+             "-acodec", "pcm_s16le", "-f", "wav", str(dst)],
             capture_output=True, text=True, timeout=60,
         )
         if r.returncode != 0 or not dst.is_file() or dst.stat().st_size == 0:

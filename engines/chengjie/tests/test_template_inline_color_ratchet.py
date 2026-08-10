@@ -46,6 +46,18 @@ _COLOR = re.compile(r"#[0-9a-fA-F]{3,8}\b|rgba?\(")
 # 剩余=映射表外长尾一次性装饰色 + box-shadow 阴影色（阴影主题无关，刻意豁免
 # 角色映射但仍计数），后续批次继续收紧。未列出的文件天花板=0。
 _INLINE_COLOR_CEILINGS = {
+    # 2026-08-06 登记：告警接通共享部件（暖色横幅+弹窗，2026-08-05 alertlink 线新建，
+    # 未提交在途设计）——横幅刻意用固定暖棕/奶油色（跨主题恒定的告警视觉），
+    # token 化归属其 owner 线；先登记保 sweep 绿 + 债务可见（台账语义与 _PENDING_* 同）。
+    "_alertlink_connect.html": 6,
+    # 2026-08-10 登记（清账线代记，owner=goal 报表线，其意向已标 DEPLOYED 未跑广域
+    # 门禁）：新页 6 处=弹层说明行×2 + 趋势图轴标/图例/赢单圆点×3 + 热力格 JS 拼
+    # rgba 动态透明度×1。该页暗色适配整体未做（卡片底 #fff 硬编码），token 化应与
+    # 暗色适配一起由 owner 线做，勿单点替换致半暗怪胎。数值取自门禁实测。
+    "goal_report.html": 6,
+    # 2026-08-10 登记（清账线代记，owner=cases 线，意向 16h 前已收尾）：1 处，
+    # token 化归属 owner；数值取自门禁实测。
+    "cases.html": 1,
     "_rpa_shared_scripts.html": 4,
     "agent_perf.html": 3,
     "ai_studio.html": 2,
@@ -55,7 +67,10 @@ _INLINE_COLOR_CEILINGS = {
     "knowledge.html": 4,
     # 渠道中心融合：四渠道正文迁 _channel_body_*.html（计数随内容平移）
     "_channel_body_line.html": 1,
-    "_channel_body_messenger.html": 10,
+    # P2-3（2026-08-02）主 IIFE 外迁 static/messenger/messenger_rpa.js，
+    # JS 串里的内联色随迁移出模板 10→8（本门禁只扫模板；JS 侧旧蓝由
+    # test_legacy_blue_ratchet 的 JS 条目续管）
+    "_channel_body_messenger.html": 8,
     "ops/contacts.html": 1,
     "ops/mobile_handoffs.html": 1,
     "ops_overview.html": 2,
@@ -66,20 +81,28 @@ _INLINE_COLOR_CEILINGS = {
     "settings.html": 9,
     "setup_wizard.html": 1,
     "strategies.html": 2,
-    "_channel_body_telegram.html": 2,
-    "unified_inbox.html": 10,  # 2026-07-30 品牌收口：检测语言 chip tint → color-mix(var(--tk-brand))
-    "_channel_body_whatsapp.html": 13,
-    "workflows.html": 1,
+    # P3-1（2026-08-02）图标 SVG 化把快照卡内联紫图标盒归一标准色类 → 2→1
+    "_channel_body_telegram.html": 1,
+    # 2026-08-07 内联 AI 副驾面板下线（遮挡消息原文）随删一处内联色 10→9；
+    # 2026-08-10 9→11（清账线按 git diff 归因后代记，owner=接管体检线）：AI 体检
+    # 弹层 #ai-diag-overlay 的遮罩 rgba(15,23,42,.45) + 卡片 box-shadow rgba(0,0,0,.25)
+    # ——与本台账既有「阴影/遮罩主题无关，刻意豁免角色映射但仍计数」同类；该线
+    # .py 尚待重启装载属在途批次，token 化（或换 --th-bg-scrim* 族）归 owner。
+    "unified_inbox.html": 11,
+    # P3-1（2026-08-02）图标 SVG 化把 7 处内联色图标盒归一标准色类 → 13→8
+    "_channel_body_whatsapp.html": 8,
+    # workflows.html：2026-08-09 暗色收口（页内 --wf-* 变量 + 双开关暗段）随手清掉
+    # 最后一处内联 #f8fafc → 0，除名
     "workspace_base.html": 4,   # 2026-07-29：AI 引导/试用横幅+升级弹窗色彩层已抽类（ws-aiguide-*/ws-aitrial-*/ws-upsell-*）
     "workspace_dashboard.html": 4,  # 2026-07-30 品牌收口：当前行高亮 → color-mix(var(--tk-brand))
     # workspace_usage.html：2026-07-30 品牌收口把图例点 #93c5fd → var(--bl-growth-300) → 0，除名
 }
 
 # theme-tokens.css 必须挂载的根布局（覆盖全部 43 个欠账页的 extends 链）
+# ops_overview.html 2026-08-03 P1 挂壳后 extends base.html，token CSS 随壳继承，不再是根。
 _TOKEN_ROOTS = (
     "base.html",
     "workspace_base.html",
-    "ops_overview.html",
     "ops/contacts.html",
     "ops/merge_reviews.html",
     "ops/mobile_handoffs.html",

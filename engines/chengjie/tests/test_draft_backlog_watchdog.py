@@ -253,3 +253,114 @@ def test_watchdog_tick_calls_the_check():
 
     src = inspect.getsource(hw.HealthWatchdog)
     assert "_check_draft_backlog()" in src, "tick 未调用 _check_draft_backlog"
+
+
+# ── 工作时间班表感知（2026-08-04）────────────────────────────────
+# 班表开启时：休息中账号的积压=刻意扣留（复班补觉会处理），轰人=狼来了；
+# 复班后给 work_resume_grace_hours（默认 2h）宽限消化隔夜稿。
+# 窗口按「当前时刻 ±偏移」动态构造（UTC 显式时区、抖动 0），与机器时区无关。
+
+
+def _ws_now_window(offset_start_h: float, offset_end_h: float) -> Dict[str, Any]:
+    from datetime import datetime, timedelta
+    from datetime import timezone as _tz
+    now = datetime.now(_tz.utc)
+    return {
+        "enabled": True, "timezone": "UTC", "edge_jitter_min": 0,
+        "default": {
+            "start": (now + timedelta(hours=offset_start_h)).strftime("%H:%M"),
+            "end": (now + timedelta(hours=offset_end_h)).strftime("%H:%M"),
+        },
+    }
+
+
+def _sched_draft(level: str, age_h: float, account_id: str = "acct1"):
+    d = _draft(level, age_h)
+    d["platform"] = "telegram"
+    d["account_id"] = account_id
+    d["draft_id"] = f"{d['draft_id']}:{account_id}"
+    return d
+
+
+def test_off_hours_backlog_is_held_not_alerted(monkeypatch):
+    """休息中账号的隔夜积压是刻意扣留 → 不告警（复班后见真章）。"""
+    drafts = [_sched_draft("L1", 99.0 + i) for i in range(4)]
+    w, bus = _wd(monkeypatch, drafts)
+    w._config_manager.config["inbox"] = {
+        "work_schedule": _ws_now_window(2, 4)}   # 此刻休息中
+    w._check_draft_backlog(now=time.time())
+    assert bus.events == []
+
+
+def test_off_hours_hold_does_not_fake_recovery(monkeypatch):
+    """休息期把积压「藏起来」不等于处理完——绝不谎报恢复。"""
+    drafts = [_sched_draft("L1", 99.0) for _ in range(4)]
+    w, bus = _wd(monkeypatch, drafts)
+    w._db_alerted = True    # 之前（在班时）已告过警
+    w._config_manager.config["inbox"] = {
+        "work_schedule": _ws_now_window(2, 4)}
+    w._check_draft_backlog(now=time.time())
+    assert bus.events == []          # 不重提、也不发 recovered
+    assert w._db_alerted is True
+
+
+def test_resume_grace_holds_overnight_drafts(monkeypatch):
+    """复班 1h < 宽限 2h：隔夜稿（created < 班次开始）暂不告警。"""
+    drafts = [_sched_draft("L1", 99.0) for _ in range(4)]
+    w, bus = _wd(monkeypatch, drafts)
+    w._config_manager.config["inbox"] = {
+        "work_schedule": _ws_now_window(-1, 3)}
+    w._check_draft_backlog(now=time.time())
+    assert bus.events == []
+
+
+def test_resume_grace_expires_then_alerts(monkeypatch):
+    """复班已 3h > 宽限 2h：补觉窗口用完还没消化 → 照常轰人。"""
+    drafts = [_sched_draft("L1", 99.0) for _ in range(4)]
+    w, bus = _wd(monkeypatch, drafts)
+    w._config_manager.config["inbox"] = {
+        "work_schedule": _ws_now_window(-3, 3)}
+    w._check_draft_backlog(now=time.time())
+    assert len(bus.events) == 1
+    p = bus.events[0][1]
+    assert p["stale_count"] == 4
+    assert p["off_hours_held"] == 0
+
+
+def test_resume_grace_zero_disables_hold(monkeypatch):
+    drafts = [_sched_draft("L1", 99.0) for _ in range(4)]
+    w, bus = _wd(monkeypatch, drafts, {"work_resume_grace_hours": 0})
+    w._config_manager.config["inbox"] = {
+        "work_schedule": _ws_now_window(-1, 3)}
+    w._check_draft_backlog(now=time.time())
+    assert len(bus.events) == 1
+
+
+def test_mixed_accounts_partial_hold(monkeypatch):
+    """夜班号（休息中）扣留、常班号（复班已久）照报，payload 点名扣留数。"""
+    off = _ws_now_window(2, 4)["default"]
+    on = _ws_now_window(-3, 3)["default"]
+    drafts = (
+        [_sched_draft("L1", 99.0 + i, account_id="resting") for i in range(3)]
+        + [_sched_draft("L1", 88.0 + i, account_id="working")
+           for i in range(3)])
+    w, bus = _wd(monkeypatch, drafts)
+    w._config_manager.config["inbox"] = {"work_schedule": {
+        "enabled": True, "timezone": "UTC", "edge_jitter_min": 0,
+        "default": on,
+        "accounts": {"telegram:resting": off},
+    }}
+    w._check_draft_backlog(now=time.time())
+    assert len(bus.events) == 1
+    p = bus.events[0][1]
+    assert p["stale_count"] == 3
+    assert p["off_hours_held"] == 3
+
+
+def test_schedule_disabled_keeps_old_behavior(monkeypatch):
+    drafts = [_sched_draft("L1", 99.0) for _ in range(4)]
+    w, bus = _wd(monkeypatch, drafts)
+    w._config_manager.config["inbox"] = {
+        "work_schedule": {**_ws_now_window(2, 4), "enabled": False}}
+    w._check_draft_backlog(now=time.time())
+    assert len(bus.events) == 1

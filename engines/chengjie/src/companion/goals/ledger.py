@@ -192,6 +192,22 @@ def settle_goal(
             mi = max(mi, 1)
         if direct_beat_engaged:
             mi = max(mi, 3)
+    elif tid == "profile_discovery":
+        # 摸底目标（P26）：勾选槽位填充率即进度——客户说了职业当轮推进、
+        # 全说出来自动达成（settle-on-read，下轮读取/注入即结算）。
+        # selected_fill 由 service 从 customer_profiles×params.slots 现算注入
+        # extras；-1=勾选为空/画像不可读 → 只按开口+相位天窗推进，绝不自动完成。
+        fill = float(signals.extras.get("selected_fill", -1.0) or -1.0)
+        if fill >= 0.999:
+            done, result = True, "slots_filled"
+        if inbound_after_start:
+            mi = max(mi, 1)
+        if fill >= 0.5:
+            mi = max(mi, 2)
+        if fill >= 0.8:
+            mi = max(mi, 3)
+        if fill >= 0.0:
+            progress = max(progress, round(fill * 0.95, 3))
     else:  # custom / 未知模板：只按时间显示推进，绝不自动完成
         total = max(1.0, _total_days(goal, template.get("default_days", 14)))
         frac = max(0.0, min(1.0, _elapsed_days(goal, n) / total))

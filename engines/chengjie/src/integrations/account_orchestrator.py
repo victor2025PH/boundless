@@ -178,8 +178,21 @@ class AccountOrchestrator:
             return True
         factory = get_worker_factory(platform, mode)
         if factory is None:
+            # 自愈重试（P1-198）：工厂注册条件可能在启动之后才满足（托管凭据
+            # 由网关守护线程晚注入 / 运营热开 protocol_enabled）。
+            # ensure_builtin_workers 幂等且便宜——判死刑前再给一次机会，
+            # 「凭据到位后第一次拉号」即自我修复，不必等重启。
+            try:
+                ensure_builtin_workers(self._config)
+                factory = get_worker_factory(platform, mode)
+            except Exception:
+                factory = None
+        if factory is None:
             m.state = "error"
             m.last_error = "no worker factory"
+            logger.warning(
+                "[orchestrator] 无可用 worker 工厂 %s（协议开关/凭据/依赖未就绪，"
+                "该账号本轮不拉起）", key)
             return False
         m.state = "starting"
         m.updated_at = self._now_wall()
@@ -388,13 +401,17 @@ class AccountOrchestrator:
     async def send_media(
         self, platform: str, account_id: str, chat_key: str, *,
         media_path: str, media_url: str, media_type: str, caption: str = "",
-        inbox_text: Optional[str] = None,
+        inbox_text: Optional[str] = None, sender_name: str = "",
     ) -> Dict[str, Any]:
         """经 worker 发送媒体，并把出站媒体消息回写收件箱线程（media_ref 用 /static URL）。
 
         ``inbox_text``：**仅**回写给收件箱（坐席台可读）的文本，不发给客户；为 None 时回落
         ``caption``（向后兼容）。语音出站用它把「念了什么」带进会话视图——坐席不播放也能读，
         客户那边仍是纯语音（caption 不变）。
+
+        ``sender_name``（P1-3，2026-08-02）：出站媒体行的「谁的音色/人设」显示名——仅回写
+        收件箱（经 ``source`` 落 ``messages.sender_name``，坐席语音气泡显示徽标），不发给
+        客户；空串＝不带（旧行为）。
         """
         # Stage M：编排器发送入口统一护栏（Kill-Switch + 反封号闸门）——富媒体与文本同守。
         _blk, _reason = send_blocked(
@@ -449,6 +466,8 @@ class AccountOrchestrator:
                 platform=platform, account_id=account_id, chat_key=chat_key,
                 text=_itext, direction="out", msg_id=_mid,
                 media_type=media_type, media_ref=media_url,
+                source=({"sender_name": str(sender_name)}
+                        if sender_name else None),
             ))
         except Exception:
             logger.debug("[orchestrator] 出站媒体回写收件箱失败", exc_info=True)
@@ -613,8 +632,19 @@ def ensure_builtin_workers(config: Dict[str, Any]) -> None:
             ensure_wide_channel_ids()
         except Exception:
             pass
-        if (tg_enabled(config) and is_pyrogram_available()
-                and resolve_credentials(config) is not None
+        # 凭据判定与登录侧 maybe_register 同款豁免（P1-198，2026-08-05）：
+        # 中央池/托管部署无需本地自带 api_id——runner 起号时按账号 meta 粘定键
+        # 向池取凭据（或托管网关已在 init 期注入 config）。旧门槛在「网关/池
+        # 暂不可达的启动窗口」里会永远注册不上工厂 → 重启后在线号全部不恢复，
+        # 且 error 只有 debug 级（198 取证实锤：backend.log 零编排器痕迹）。
+        _tg_creds_ok = resolve_credentials(config) is not None
+        if not _tg_creds_ok:
+            try:
+                from src.integrations.credpool_bridge import credpool_enabled
+                _tg_creds_ok = credpool_enabled(config)
+            except Exception:
+                _tg_creds_ok = False
+        if (tg_enabled(config) and is_pyrogram_available() and _tg_creds_ok
                 and get_worker_factory("telegram", "protocol") is None):
             # N 线 核心4：companion_runtime 开 → 协议号跑 A 线"有灵魂"client；否则用 B 线薄连接
             from src.integrations.telegram_companion_worker import (
@@ -643,6 +673,20 @@ def ensure_builtin_workers(config: Dict[str, Any]) -> None:
                             lambda acc, cfg: MessengerWebWorker(acc, cfg))
     except Exception:
         logger.debug("[orchestrator] 注册 messenger web worker 失败", exc_info=True)
+    try:
+        from src.integrations.zalo_personal_login import web_enabled as zl_web_enabled
+        if zl_web_enabled(config) and get_worker_factory("zalo", "web") is None:
+            register_worker("zalo", "web",
+                            lambda acc, cfg: ZaloPersonalWorker(acc, cfg))
+    except Exception:
+        logger.debug("[orchestrator] 注册 zalo personal worker 失败", exc_info=True)
+    try:
+        from src.integrations.instagram_web_login import web_enabled as ig_web_enabled
+        if ig_web_enabled(config) and get_worker_factory("instagram", "web") is None:
+            register_worker("instagram", "web",
+                            lambda acc, cfg: InstagramWebWorker(acc, cfg))
+    except Exception:
+        logger.debug("[orchestrator] 注册 instagram web worker 失败", exc_info=True)
     try:
         from src.integrations.line_protocol_login import (
             protocol_enabled as line_enabled, is_okline_available,
@@ -1032,6 +1076,26 @@ class WhatsAppProtocolWorker:
         if self._session_unhealthy():
             return {"delivered": False, "blocked": "session_unhealthy",
                     "error": "whatsapp session unhealthy (logged out / reconnect gave up)"}
+        # Python 侧 PTT 闸：边车 400 之前先拦，失败原因进 delivered=False
+        # 供 autosend 回落文字（与 Baileys looksLikeOggOpus 同口径）。
+        if str(media_type or "").strip().lower() == "voice":
+            try:
+                from src.client.voice_ptt_gate import (
+                    is_ptt_ready, ptt_ready_reason,
+                )
+                if not is_ptt_ready(media_path):
+                    why = ptt_ready_reason(media_path) or "ptt_not_ogg_opus"
+                    return {
+                        "delivered": False,
+                        "blocked": "ptt_format",
+                        "error": why,
+                    }
+            except Exception:
+                return {
+                    "delivered": False,
+                    "blocked": "ptt_format",
+                    "error": "ptt_gate_error",
+                }
         res = await _post_json(
             f"{self._base()}/accounts/{self.account_id}/send-media",
             {"jid": chat_key, "path": media_path,
@@ -1231,6 +1295,211 @@ class MessengerWebWorker:
 
     def status(self) -> Dict[str, Any]:
         return {"type": "messenger_web", "account_id": self.account_id,
+                "state": self.state, "detail": self.detail}
+
+
+class ZaloPersonalWorker:
+    """薄监督一个 Zalo 个人号（zca-js Node 边车）：确保边车已恢复登录 + 读状态 + 路由出站。
+
+    与 ``MessengerWebWorker`` 同构（连接由 Node 微服务保活，Python 侧只监督 + 路由出站）。
+    出站能力：文字 + 媒体（图片/语音/贴纸）——个人号比官方 OA（仅文字）能力更全，故
+    实现 ``send_media`` 使编排器 ``owns_media("zalo",*)`` 判为 True，工作台媒体按钮点亮。
+    """
+
+    def __init__(self, account: Dict[str, Any], config: Dict[str, Any]) -> None:
+        self.account = account
+        self.config = config
+        self.account_id = str(account.get("account_id") or "")
+        self.state = "stopped"
+        self.detail = ""
+
+    def _base(self) -> str:
+        from src.integrations.zalo_personal_login import service_base_url
+        return service_base_url(self.config)
+
+    def _session_unhealthy(self) -> bool:
+        """Node push 的会话健康登记显示该账号掉线/需重登 → 自动路径快速失败，
+        免去注定失败的出站尝试。仅拦自动路径（worker/编排器），人工路径不查此表。"""
+        try:
+            from src.integrations.platform_session_health import (
+                get_platform_session_health,
+            )
+            return get_platform_session_health().is_unhealthy("zalo", self.account_id)
+        except Exception:
+            return False
+
+    async def start(self) -> None:
+        from src.integrations.zalo_personal_login import _post_json
+        # 触发 Node 恢复所有持久化会话（幂等）；Node 自身也会在开机时恢复。
+        await _post_json(f"{self._base()}/accounts/restore", {})
+        self.state = "running"
+        self.detail = ""
+
+    async def send(self, chat_key: str, text: str,
+                   *, reply_to: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        from src.integrations.zalo_personal_login import _post_json
+        if self._session_unhealthy():
+            return {"delivered": False, "blocked": "session_unhealthy",
+                    "error": "zalo session unhealthy (needs manual re-login)"}
+        try:
+            res = await _post_json(
+                f"{self._base()}/accounts/{self.account_id}/send",
+                {"thread_id": chat_key, "text": text},
+            )
+        except Exception as ex:  # noqa: BLE001
+            return {"delivered": False, "error": f"zalo send failed: {ex}"}
+        res = res or {}
+        delivered = (res.get("ok", True) is not False
+                     and res.get("delivered", True) is not False
+                     and res.get("sent", True) is not False)
+        return {"delivered": bool(delivered),
+                "message_id": str(res.get("message_id") or ""),
+                "error": str(res.get("error") or "")}
+
+    async def send_media(self, chat_key: str, *, media_path: str,
+                         media_type: str, caption: str = "") -> Dict[str, Any]:
+        """出站媒体（图片/语音/贴纸）。Node 与 Python 同机，直接把本地绝对路径交给
+        Node（zca-js 上传发送）。**本方法存在即被编排器 owns_media 判为 True**。"""
+        import os
+        from src.integrations.zalo_personal_login import _post_json
+        if self._session_unhealthy():
+            return {"delivered": False, "blocked": "session_unhealthy",
+                    "error": "zalo session unhealthy (needs manual re-login)"}
+        abs_path = os.path.abspath(media_path) if media_path else ""
+        res = await _post_json(
+            f"{self._base()}/accounts/{self.account_id}/send-media",
+            {"thread_id": chat_key, "media_path": abs_path,
+             "media_type": str(media_type or ""), "caption": caption},
+            timeout=120.0,
+        )
+        res = res or {}
+        delivered = (res.get("ok", True) is not False
+                     and res.get("delivered", True) is not False
+                     and res.get("sent", True) is not False)
+        return {"delivered": bool(delivered),
+                "message_id": str(res.get("message_id") or "")}
+
+    async def stop(self) -> None:
+        # 不登出（会话由 Node 保活）；仅停止 Python 侧监督。
+        self.state = "stopped"
+
+    async def healthy(self) -> bool:
+        from src.integrations.zalo_personal_login import _get_json
+        try:
+            res = await _get_json(f"{self._base()}/accounts")
+            for a in (res.get("accounts") or []):
+                if str(a.get("account_id") or "") != self.account_id:
+                    continue
+                if a.get("logged_in") is False:
+                    self.detail = "session listed but not logged in (cookie expired?)"
+                    return False
+                return True
+            return False
+        except Exception:
+            return False
+
+    def status(self) -> Dict[str, Any]:
+        return {"type": "zalo_personal", "account_id": self.account_id,
+                "state": self.state, "detail": self.detail}
+
+
+class InstagramWebWorker:
+    """薄监督一个 Instagram(网页托管) 账号：确保 Playwright 边车已恢复 + 读状态 + 路由出站。
+
+    与 ``MessengerWebWorker`` 同构（连接由 Node/Playwright 微服务保活，Python 侧只监督 +
+    路由出站）。实现 ``send_media`` → 编排器 ``owns_media("instagram",*)`` 判 True，工作台
+    对 IG 个人号点亮媒体按钮（IG DM 支持图片/视频）。
+    """
+
+    def __init__(self, account: Dict[str, Any], config: Dict[str, Any]) -> None:
+        self.account = account
+        self.config = config
+        self.account_id = str(account.get("account_id") or "")
+        self.state = "stopped"
+        self.detail = ""
+
+    def _base(self) -> str:
+        from src.integrations.instagram_web_login import service_base_url
+        return service_base_url(self.config)
+
+    def _session_unhealthy(self) -> bool:
+        try:
+            from src.integrations.platform_session_health import (
+                get_platform_session_health,
+            )
+            return get_platform_session_health().is_unhealthy(
+                "instagram", self.account_id)
+        except Exception:
+            return False
+
+    async def start(self) -> None:
+        from src.integrations.instagram_web_login import _post_json
+        await _post_json(f"{self._base()}/accounts/restore", {})
+        self.state = "running"
+        self.detail = ""
+
+    async def send(self, chat_key: str, text: str,
+                   *, reply_to: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        from src.integrations.instagram_web_login import _post_json
+        if self._session_unhealthy():
+            return {"delivered": False, "blocked": "session_unhealthy",
+                    "error": "instagram session unhealthy (needs manual re-login)"}
+        try:
+            res = await _post_json(
+                f"{self._base()}/accounts/{self.account_id}/send",
+                {"thread_id": chat_key, "text": text},
+            )
+        except Exception as ex:  # noqa: BLE001
+            return {"delivered": False, "error": f"instagram send failed: {ex}"}
+        res = res or {}
+        delivered = (res.get("ok", True) is not False
+                     and res.get("delivered", True) is not False
+                     and res.get("sent", True) is not False)
+        return {"delivered": bool(delivered),
+                "message_id": str(res.get("message_id") or ""),
+                "error": str(res.get("error") or "")}
+
+    async def send_media(self, chat_key: str, *, media_path: str,
+                         media_type: str, caption: str = "") -> Dict[str, Any]:
+        import os
+        from src.integrations.instagram_web_login import _post_json
+        if self._session_unhealthy():
+            return {"delivered": False, "blocked": "session_unhealthy",
+                    "error": "instagram session unhealthy (needs manual re-login)"}
+        abs_path = os.path.abspath(media_path) if media_path else ""
+        res = await _post_json(
+            f"{self._base()}/accounts/{self.account_id}/send-media",
+            {"thread_id": chat_key, "media_path": abs_path,
+             "media_type": str(media_type or ""), "caption": caption},
+            timeout=120.0,
+        )
+        res = res or {}
+        delivered = (res.get("ok", True) is not False
+                     and res.get("delivered", True) is not False
+                     and res.get("sent", True) is not False)
+        return {"delivered": bool(delivered),
+                "message_id": str(res.get("message_id") or "")}
+
+    async def stop(self) -> None:
+        self.state = "stopped"
+
+    async def healthy(self) -> bool:
+        from src.integrations.instagram_web_login import _get_json
+        try:
+            res = await _get_json(f"{self._base()}/accounts")
+            for a in (res.get("accounts") or []):
+                if str(a.get("account_id") or "") != self.account_id:
+                    continue
+                if a.get("logged_in") is False:
+                    self.detail = "session listed but not logged in (cookie expired?)"
+                    return False
+                return True
+            return False
+        except Exception:
+            return False
+
+    def status(self) -> Dict[str, Any]:
+        return {"type": "instagram_web", "account_id": self.account_id,
                 "state": self.state, "detail": self.detail}
 
 

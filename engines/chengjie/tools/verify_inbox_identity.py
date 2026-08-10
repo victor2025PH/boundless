@@ -52,7 +52,7 @@ import time
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
-DEFAULT_BASE = "http://localhost:18799"
+DEFAULT_BASE = "http://127.0.0.1:18799"  # 勿改回 localhost：::1 回退每连接 ~2s（见 verify_inbox_density.py 同行注释）
 DEFAULT_DATA_ROOT = "D:/chengjie-instances/zhiliao/data"
 VIEWPORT = {"width": 1440, "height": 900}
 # 空闲窗：realtime_poll 默认 3s，覆盖 ≥2 次 loadChats→_renderIdentityBar 重入

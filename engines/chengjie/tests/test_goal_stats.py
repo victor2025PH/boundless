@@ -16,7 +16,8 @@ def test_fresh_dump_shape_and_inactive():
     assert d["terminal"] == {"done": 0, "failed": 0, "expired": 0, "cancelled": 0}
     assert d["beats"] == {"planned": 0, "hold_emotion": 0, "hold_silent": 0,
                           "sent_proactive": 0}
-    assert d["injected"] == {"draft": 0, "reply": 0, "proactive": 0, "total": 0}
+    assert d["injected"] == {"draft": 0, "reply": 0, "proactive": 0,
+                             "opener": 0, "total": 0}
     assert d["settle_runs"] == 0 and d["milestones_advanced"] == 0
     assert d["since"] > 0
     assert d["active"] is False          # 零流量 → 看板卡可整卡隐藏
@@ -56,10 +57,13 @@ def test_record_injected_chains_and_total():
     st.record_injected("draft")
     st.record_injected("proactive")
     st.record_injected("reply")
+    st.record_injected("opener")         # P25：工坊「开新话题」链独立计数
     st.record_injected("")               # 未知链归 reply
     d = st.dump()
-    assert d["injected"] == {"draft": 1, "reply": 2, "proactive": 1, "total": 4}
+    assert d["injected"] == {"draft": 1, "reply": 2, "proactive": 1,
+                             "opener": 1, "total": 5}
     assert d["active"] is True
+    assert 'goals_injected_total{chain="opener"} 1' in st.dump_prom()
 
 
 def test_record_settle_and_milestone_advances():

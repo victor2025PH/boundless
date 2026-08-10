@@ -203,6 +203,94 @@ def register_translate_routes(app, *, api_auth) -> None:
             "translation": result.to_dict(),
         }
 
+    @app.post("/api/unified-inbox/translate-batch")
+    async def api_unified_inbox_translate_batch(request: Request, _=Depends(api_auth)):
+        """批量翻译（2026-08-09 提速批次）：一次往返译整批消息。
+
+        收件箱「视口懒翻」此前逐条 POST /translate——N 条消息 = N 个 HTTP 往返，
+        译文行一条条蹦。本端点把一批收进一个请求：逐条复用与 ``/translate``
+        **完全相同**的 TranslationService（L1/L2 缓存、术语 mask、F+ 会话首选
+        引擎、置信度评分），语义零分叉；服务端 gather 并发 + 信号量 8 封顶
+        （A 线/autosend 出站翻译与本端点共享同一 LAN GPU 引擎，别让一次打开
+        长会话的突发塞满推理队列）。
+
+        body：``{items:[{id,text,source_lang?}...], target_lang(支持 auto),
+        style?, engine?, platform?, account_id?, chat_key?, purpose?}``。
+        条目上限 50，超出部分计入 ``skipped``（调用方下一批再来）；
+        ``target_lang:"auto"`` 解析不出 → resolved_target="" 整批不译。
+        每条结果独立成败（translation.ok），单条失败不拖垮整批。
+        """
+        import asyncio as _aio
+
+        body = await request.json()
+        raw_items = [it for it in (body.get("items") or []) if isinstance(it, dict)]
+        target_lang = str(body.get("target_lang") or "zh").strip()
+        style = str(body.get("style") or "chat")
+        platform = str(body.get("platform") or "").lower()
+        account_id = str(body.get("account_id") or "default")
+        chat_key = str(body.get("chat_key") or "")
+        purpose = str(body.get("purpose") or "").strip()
+
+        if target_lang.lower() == "auto":
+            target_lang = _resolve_conv_language(request, platform, account_id, chat_key)
+        else:
+            target_lang = normalize_lang(target_lang)
+        if not target_lang:
+            return {"ok": False, "resolved_target": "", "items": [], "skipped": 0}
+
+        engine = str(body.get("engine") or "").strip().lower()
+        if not engine:
+            engine = _resolve_conv_engine(request, platform, account_id, chat_key)
+
+        svc = _get_translation_service(request)
+        _MAX_ITEMS = 50
+        sem = _aio.Semaphore(8)
+
+        async def _one(it):
+            iid = str(it.get("id") or "")
+            text = str(it.get("text") or "")
+            src = normalize_lang(str(it.get("source_lang") or ""))
+            async with sem:
+                result = await svc.translate(
+                    text, target_lang=target_lang, source_lang=src,
+                    style=style, engine=engine,
+                )
+            return iid, result
+
+        items = raw_items[:_MAX_ITEMS]
+        pairs = await _aio.gather(*[_one(it) for it in items]) if items else []
+
+        n_new = n_fail = 0
+        by_lang: dict = {}
+        out = []
+        for iid, result in pairs:
+            if result.ok and not getattr(result, "cached", False):
+                n_new += 1
+                src = normalize_lang(getattr(result, "source_lang", "") or "")
+                if src:
+                    by_lang[src] = by_lang.get(src, 0) + 1
+            elif not result.ok:
+                n_fail += 1
+            out.append({"id": iid, "translation": result.to_dict()})
+
+        # 与单条端点同口径：仅 purpose=inbound_display 记入站漏斗；缓存命中不计新增成本
+        if purpose == "inbound_display" and (n_new or n_fail):
+            try:
+                ibx = _inbox_store(request)
+                if ibx is not None and hasattr(ibx, "record_inbound_xlate"):
+                    ibx.record_inbound_xlate(
+                        translated=n_new, failed=n_fail, by_lang=by_lang or None)
+            except Exception:
+                logger.debug("[translate-batch] 入站翻译漏斗记账失败（忽略）", exc_info=True)
+
+        return {
+            "ok": True,
+            "resolved_target": target_lang,
+            "pref_engine": engine,
+            "items": out,
+            "skipped": max(0, len(raw_items) - _MAX_ITEMS),
+        }
+
     @app.get("/api/unified-inbox/conv-engine")
     async def api_unified_inbox_get_conv_engine(
         request: Request, platform: str = "", account_id: str = "default",

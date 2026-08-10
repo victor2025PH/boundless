@@ -75,10 +75,13 @@ _LEAD_FILLERS: Dict[str, Tuple[str, ...]] = {
     "excited": ("哇", "诶"),
 }
 # 句首已是这些词/符号 → 不加迟疑词（防「其实，其实吧」叠加、防破坏问候开场）。
+# 早安/晚安类问候开场同列（P0 2026-08-05 min_chars 降到 6 后短问候进改写范围，
+# 「话说，早安」这种句首注入比书面腔更假）。
 _LEAD_SKIP_RE = re.compile(
     r"^\s*[「『\"'（(【\[]?\s*"
     r"(嗯+|诶+|哦+|唉+|呃+|啊+|哎+|嘿+|哇+|唔+|其实|话说|对了|不过|所以|然后|"
-    r"那么?|这个|就是|说起来|你好|您好|亲爱|宝贝|哈喽|hi|hello)",
+    r"那么?|这个|就是|说起来|你好|您好|亲爱|宝贝|哈喽|早安|晚安|午安|早上好|"
+    r"晚上好|早呀|早哇|hi|hello)",
     re.IGNORECASE,
 )
 
@@ -214,13 +217,52 @@ def parse_persona_lead_phrases(
     return tuple(out[:6])
 
 
+# ── 地域方言词汇档（P1 2026-08-05，文本层方言 MVP）──────────────────────────
+# 只做「词汇/语气词」级的地域口味，绝不做拼音化方言书写（阔以/灰常）——TTS 按
+# 普通话音系发音，生僻方言写法反而 garble；「打字普通话、语音带乡音词」也正是
+# 真人的常态（比文本气泡同步方言化更自然）。注入走 LLM 口语化的 style 通道
+# （build_voice_style_hint → llm_colloquialize(style=)）：LLM 内存/落盘缓存键都
+# 含 style → 人设开关/换档自动失效旧缓存，零额外接线。规则档刻意不做方言
+# （无语境的词替换在方言上误伤率高）；LLM 三级端点全挂时回落标准普通话＝软降级。
+# 词表准入标准：普通话读者能懂 + 普通话音系可自然发音 + 无歧义贬义。
+# 粤语刻意不进本表——「系咯/唔使」是粤语书写形，普通话 TTS 念出来是 garble，
+# 粤语要走声学层（zh-HK 路由/粤语参考音），见 voice_lang_route.cantonese。
+_DIALECT_PACKS: Dict[str, Dict[str, str]] = {
+    "chuanyu": {
+        "label": "川渝",
+        "words": "巴适、要得、撒子、咋个、莫得、安逸、对头、要不得",
+    },
+    "dongbei": {
+        "label": "东北",
+        "words": "唠嗑、贼（贼好/贼香）、老…了（老好了）、咋整、麻溜、得劲",
+    },
+    "taiwan": {
+        "label": "台湾腔",
+        "words": "蛮…的、超…的（超好吃）、诶、好啦好啦、真的假的、还不错诶",
+    },
+}
+
+
+def dialect_style_line(flavor: str) -> str:
+    """方言档 → 口语化 prompt 的一行风格指令；未知/空档 → ""（零行为变化）。"""
+    p = _DIALECT_PACKS.get(str(flavor or "").strip().lower())
+    if not p:
+        return ""
+    return (
+        f"带一点{p['label']}口味说话：可自然用「{p['words']}」这类词，"
+        "一条至多一两处、放在语气自然的位置，绝不堆砌；拿不准就不用；"
+        "意思和事实必须与原文完全一致"
+    )
+
+
 def build_voice_style_hint(
     instruct_style: str = "",
     quirks: str = "",
     *,
     catchphrase: str = "",
+    dialect: str = "",
 ) -> str:
-    """拼 LLM 口语化用的语气/口头禅提示（instruct_style + quirks 合一）。"""
+    """拼 LLM 口语化用的语气/口头禅提示（instruct_style + quirks + 方言档合一）。"""
     parts: List[str] = []
     style = str(instruct_style or "").strip()
     if style:
@@ -231,6 +273,9 @@ def build_voice_style_hint(
     elif str(quirks or "").strip():
         q = str(quirks).strip().replace("\n", " ")
         parts.append(f"说话习惯：{q[:80]}")
+    d = dialect_style_line(dialect)
+    if d:
+        parts.append(d)
     return "；".join(parts)
 
 

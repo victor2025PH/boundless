@@ -341,3 +341,93 @@ def test_persona_import_bio_retrieval_i18n_keys_bilingual():
     for k in keys:
         assert ZH.get(k), k
         assert EN.get(k), k
+
+
+# ── 「🧾 AI 价值周报」卡（2026-08-06 P1-3 消费面：value_report 聚合 → ops 可见） ──
+
+def test_xlate_agent_feel_row_renders_and_registered():
+    """「坐席体感」行三件套（2026-08-09 翻译提速批次）：div 声明 / loader 读
+    ui-event 趋势 ``xl_batch_`` 前缀 / 挂进 xlate 卡 loaders——少任何一件都是
+    静默缺陷（有 div 没 loader＝永远空白；有 loader 没注册＝白写；注册了没
+    div＝白请求）。数据源=unified_inbox 批量补译前端埋点（同名分桶动作）。"""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1]
+           / "src" / "web" / "templates" / "ops_overview.html").read_text(
+               encoding="utf-8")
+    assert 'id="xlateAgentFeel"' in src
+    assert "async function loadXlateAgentFeel()" in src
+    assert "prefix=xl_batch_" in src                              # loader 数据源
+    assert "loadXlateTrend, loadXlateAgentFeel" in src            # 卡注册表登记
+    # 埋点动作名与收件箱发射端同名（两文件漂移=看板静默空行）
+    inbox = (Path(__file__).resolve().parents[1]
+             / "src" / "web" / "templates" / "unified_inbox.html").read_text(
+                 encoding="utf-8")
+    for act in ("xl_batch_lt300", "xl_batch_lt1000", "xl_batch_lt3000",
+                "xl_batch_slow", "xl_batch_fail", "xl_batch_fallback404"):
+        assert act in src, f"ops 卡缺分桶 {act}"
+        assert act in inbox, f"收件箱埋点缺分桶 {act}"
+
+
+def test_value_weekly_card_renders_and_registered():
+    """卡片三件套必须齐：section 声明 / loader 读 value 段 / 注册表登记。
+
+    历史教训（哑按钮/孤儿卡门禁的同款风险）：三者少任何一件都是静默缺陷——
+    有 section 没注册＝永远 loading；有 loader 没 section＝白请求；注册了
+    没 loader＝卡永远空。三断言钉成一个不变量。
+    """
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1]
+           / "src" / "web" / "templates" / "ops_overview.html").read_text(
+               encoding="utf-8")
+    assert 'id="valueWeeklySection"' in src
+    assert "async function loadValueWeekly()" in src
+    assert "/api/report/weekly" in src           # loader 数据源
+    assert "anchor:'valueWeeklyKpis'" in src     # P2 卡片注册表登记
+    # 零流量整卡隐藏的站内惯例（value 缺失/全零 → display none）
+    assert "if(!v.this_week || total === 0){ sec.style.display='none'; return; }" in src
+
+
+def test_value_weekly_i18n_keys_bilingual():
+    from src.web.i18n_packs.ops_overview_page import EN, ZH
+
+    keys = ("ov2_s_value", "ov2_vw_sub", "ov2_vw_drafts", "ov2_vw_draft_sent",
+            "ov2_vw_outreach", "ov2_vw_reply", "ov2_vw_out", "ov2_vw_in",
+            "ov2_vw_status", "ov2_vw_levels", "ov2_vw_batches",
+            "ov2_vw_wow_new", "ov2_vw_hint")
+    for k in keys:
+        assert ZH.get(k), k
+        assert EN.get(k), k
+
+
+# ── 「⏱️ 回复时延 SLO」卡（2026-08-09 P1-8 消费面：reply_latency 聚合 → ops 可见） ──
+
+def test_reply_latency_card_renders_and_registered():
+    """卡片三件套（section / loader / 注册表）+ 数据源 + 零流量隐藏惯例。
+
+    这张卡是「被吞回复等 11 分钟」事故的量化闭环：没有它，时延劣化只能靠
+    客户抱怨发现。三件套少任何一件都是静默缺陷（与 value 卡同款不变量）。
+    """
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1]
+           / "src" / "web" / "templates" / "ops_overview.html").read_text(
+               encoding="utf-8")
+    assert 'id="replyLatencySection"' in src
+    assert "async function loadReplyLatency()" in src
+    assert "d.reply_latency" in src                  # loader 数据源（metrics 段）
+    assert "anchor:'replyLatencyKpis'" in src        # 卡片注册表登记
+    # 零流量整卡隐藏惯例（d1 与 d7 均无等待段 → display none）
+    assert "if(!(Number(d1.episodes)||0) && !(Number(d7.episodes)||0))" in src
+
+
+def test_reply_latency_i18n_keys_bilingual():
+    from src.web.i18n_packs.ops_overview_page import EN, ZH
+
+    keys = ("ov2_s_rlat", "ov2_rl_sub", "ov2_rl_eps", "ov2_rl_p50",
+            "ov2_rl_p95", "ov2_rl_unans", "ov2_rl_unans_short",
+            "ov2_rl_p95_7d", "ov2_rl_buckets", "ov2_rl_byplat", "ov2_rl_hint")
+    for k in keys:
+        assert ZH.get(k), k
+        assert EN.get(k), k

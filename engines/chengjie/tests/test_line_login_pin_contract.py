@@ -365,11 +365,70 @@ def test_funnel_marks_dedupe_across_polls():
 
 
 def test_frontend_maps_every_reason_code():
-    """8 个码都要有本地化文案，否则用户又会看到一句看不懂的通用错误。"""
-    src = _text(_TEMPLATE)
-    for code in ("qr_expired", "pin_timeout", "network", "rate_limited",
-                 "login_failed", "okline_missing", "client_init", "cancelled"):
-        assert code in src, f"前端未映射 reason_code={code}"
+    """每个契约原因码都要有本地化文案，否则用户又会看到一句看不懂的通用错误。
+
+    **判据从后端枚举推导**（不再手抄一份清单）：原因码是三处同源的契约——
+    ``login_funnel_stats._REASON_CODES`` / 前端 ``_CONNECT_FAIL_REASON_KEYS`` /
+    i18n ``inbox.connect.err_<code>``。手抄清单的版本会随新增码悄悄漏掉，
+    而漏掉的代价正是「用户看到一句看不懂的通用错误」——本门禁存在的全部理由。
+    """
+    from src.integrations.login_funnel_stats import _REASON_CODES
+    from src.web.web_i18n import get_translations
+
+    src = _text(_TEMPLATE).replace(" ", "")
+    missing_map, missing_copy = [], []
+    for code in sorted(_REASON_CODES):
+        if f"{code}:'inbox.connect.err_{code}'" not in src:
+            missing_map.append(code)
+        for lang in ("zh", "en"):
+            if not str(get_translations(lang).get(f"inbox.connect.err_{code}") or "").strip():
+                missing_copy.append(f"[{lang}] inbox.connect.err_{code}")
+    assert not missing_map, f"前端 _CONNECT_FAIL_REASON_KEYS 未映射: {missing_map}"
+    assert not missing_copy, f"原因码缺文案: {missing_copy}"
+
+
+def test_hosted_live_hint_codes_are_wired():
+    """托管登录的**实时**提示码（hint_code）同样要三处同源。
+
+    它与 reason_code 共用词汇但语义不同（非终态、可来回变），所以单独钉：
+    Node 侧 ``login_classify.actionableCode`` 只放行这三个码，前端要认得、且
+    zh/en 都要有「此刻该做什么」的文案——否则坐席看到的仍是一句恒定的
+    「已打开登录窗口」，而服务器窗口里早就卡在验证码那一屏。
+    """
+    from src.integrations.login_funnel_stats import _REASON_CODES
+    from src.web.web_i18n import get_translations
+
+    live = ("two_factor", "checkpoint", "password_error")
+    src = _text(_TEMPLATE).replace(" ", "")
+    missing = []
+    for code in live:
+        # 实时码必须同时是合法原因码：窗口期结束时它会被当失败归因落进漏斗
+        assert code in _REASON_CODES, f"{code} 不在 _REASON_CODES 里，落漏斗会被归成 login_failed"
+        if f"{code}:{{st:'inbox.connect.st_live_" not in src:
+            missing.append(f"_CONNECT_LIVE_HINT_KEYS[{code}]")
+    for suffix in ("st_live_2fa", "hint_live_2fa", "st_live_checkpoint",
+                   "hint_live_checkpoint", "st_live_pwderr", "hint_live_pwderr"):
+        for lang in ("zh", "en"):
+            if not str(get_translations(lang).get(f"inbox.connect.{suffix}") or "").strip():
+                missing.append(f"[{lang}] inbox.connect.{suffix}")
+    assert not missing, f"托管登录实时提示未接通: {missing}"
+
+
+def test_node_classifier_vocabulary_matches_python_enum():
+    """Node 侧分类器的输出词汇必须落在 Python 原因码枚举内。
+
+    两个仓内子系统（Python 主进程 / Node 微服务）之间没有类型系统兜底，
+    Node 那边改个词、Python 这边 ``_san_reason`` 就默默把它归成 login_failed——
+    漏斗上看不出任何异常，归因却已经废了。故做纯文本级钉子。
+    """
+    from src.integrations.login_funnel_stats import _REASON_CODES
+
+    js = _text(_ROOT / "services" / "messenger-web" / "login_classify.js")
+    declared = set(re.findall(r'^\s*(?:TWO_FACTOR|CHECKPOINT|PASSWORD_ERROR):\s*"([a-z_]+)"',
+                              js, re.M))
+    assert declared, "login_classify.js 的 STAGE 常量表结构变了，门禁已失效"
+    unknown = sorted(declared - _REASON_CODES)
+    assert not unknown, f"Node 分类器输出了 Python 枚举里没有的码: {unknown}"
 
 
 @pytest.mark.parametrize("path", _CONSUMERS, ids=lambda p: p.name)

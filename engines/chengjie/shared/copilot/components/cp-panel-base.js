@@ -42,6 +42,7 @@
       this._ctx = null;
       this._d = null;
       this._reqToken = 0;
+      this._renderedCid = "";   // 最近一次真正渲染过的会话（同会话刷新免清屏判据）
       this.shadowRoot.addEventListener("click", (e) => {
         const b = e.target.closest("[data-act]");
         if (b && !b.disabled) this.onAction(b.getAttribute("data-act"), b);
@@ -79,6 +80,16 @@
         ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
     }
     esc(s) { return this._escStatic(s); }
+    /* 线性 SVG 图标（P2B 统一图标语言）：委托 sidebar-chrome.uiIcon（其内部先委托全站
+       /static/ui_icons.js 注册表、缺库回落子集表）；全链缺失返回空串——图标只是增强，
+       绝不阻塞渲染（按钮仍有 title/文字兜底）。 */
+    ic(name, size) {
+      try {
+        const sc = root.CopilotShared && root.CopilotShared.sidebarChrome;
+        if (sc && typeof sc.uiIcon === "function") return sc.uiIcon(name, size || 13) || "";
+      } catch (_e) { /* 静默 */ }
+      return "";
+    }
     emit(name, detail) {
       this.dispatchEvent(new CustomEvent(name, { bubbles: true, composed: true, detail: detail || {} }));
     }
@@ -98,11 +109,20 @@
       const ctx = this._ctx;
       if (!this._client || !ctx || !ctx.conversationId) {
         this._d = null;
+        this._renderedCid = "";
         this._render(`<div class="empty">${this._escStatic(this.emptyText())}</div>`);
         this._notifyLoaded({ ok: false, empty: true });
         return;
       }
-      this._render(`<div class="empty">${this._escStatic(this.t("cp.common.loading"))}</div>`);
+      // P3(2026-08-05) 同会话刷新不清屏：旧内容原地保留到新数据到位——重试/组件内部
+      // 刷新（建目标成功回源、拍反馈失败回源等）不再闪一帧「加载中」把面板打空。
+      // **换会话仍先清屏**：旧会话内容顶着新会话在读是串数据，比闪烁更糟；
+      // 无旧数据（错误行/空态）时同样给 loading 反馈，别让重试点了像没反应。
+      const switching = this._renderedCid !== String(ctx.conversationId);
+      if (switching || !this._d) {
+        this._render(`<div class="empty">${this._escStatic(this.t("cp.common.loading"))}</div>`);
+      }
+      this._renderedCid = String(ctx.conversationId);
       const token = ++this._reqToken;
       let d;
       try {

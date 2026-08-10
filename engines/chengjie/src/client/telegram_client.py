@@ -158,6 +158,58 @@ def _has_ingestable_media(message: Any) -> bool:
     )
 
 
+# 出站镜像媒体归档（mirror_outgoing_media）的内置保守默认：只自动拉「小体积、
+# 高信息量」的类型——图片/贴纸/语音；video/document 常见大文件，默认不拉本体
+# （media_type 仍结构化落库，坐席看到形态占位卡，原件走后续「按需拉取」补齐）。
+_MIRROR_MEDIA_DEFAULT_KINDS = ("image", "sticker", "voice")
+_MIRROR_MEDIA_DEFAULT_MAX_MB = 5.0
+# 单条媒体下载的硬超时：镜像是旁路功能，绝不允许一条挂死的下载拖住实时 handler
+# 或轮询循环；超时退化为「无归档的媒体行」（media_type 在、ref 空），消息不丢。
+_MIRROR_MEDIA_DL_TIMEOUT_SEC = 30.0
+
+
+def parse_mirror_outgoing_media_cfg(pf_cfg: Any) -> Tuple[bool, int, frozenset]:
+    """解析 ``telegram.poll_fallback.mirror_outgoing_media``（出站镜像要不要连媒体本体一起归档）。
+
+    返回 ``(enabled, max_bytes, kinds)``。宽容两种写法：
+
+    - ``mirror_outgoing_media: true`` → 内置默认（image/sticker/voice，单条 ≤5MB）；
+    - ``mirror_outgoing_media: {enabled, max_mb, kinds}`` → 逐项覆盖。**写成 dict 即视为
+      要开**（``enabled`` 可显式置 false 关回去）；``max_mb: 0`` = 不限体积
+      （与 ``download_tg_media(max_bytes=0)`` 的语义对齐）；``kinds: []`` = 只结构化
+      落 media_type、一律不下载本体（最保守档）。
+
+    键缺失 / 非法类型 → ``(False, 0, frozenset())`` = 严格旧行为（只落占位文字，
+    零下载 RPC）。纯函数、每次调用现读——config 热重载后下一条消息即生效。
+    """
+    raw = pf_cfg.get("mirror_outgoing_media") if isinstance(pf_cfg, dict) else None
+    if raw is None or raw is False:
+        return False, 0, frozenset()
+    default_bytes = int(_MIRROR_MEDIA_DEFAULT_MAX_MB * 1024 * 1024)
+    if raw is True:
+        return True, default_bytes, frozenset(_MIRROR_MEDIA_DEFAULT_KINDS)
+    if not isinstance(raw, dict):
+        return False, 0, frozenset()
+    if not bool(raw.get("enabled", True)):
+        return False, 0, frozenset()
+    try:
+        max_mb = float(raw.get("max_mb", _MIRROR_MEDIA_DEFAULT_MAX_MB))
+    except (TypeError, ValueError):
+        max_mb = _MIRROR_MEDIA_DEFAULT_MAX_MB
+    max_bytes = int(max(0.0, max_mb) * 1024 * 1024)
+    kinds_raw = raw.get("kinds", None)
+    if kinds_raw is None:
+        kinds = frozenset(_MIRROR_MEDIA_DEFAULT_KINDS)
+    elif isinstance(kinds_raw, (list, tuple, set, frozenset)):
+        kinds = frozenset(
+            str(k).strip().lower() for k in kinds_raw
+            if isinstance(k, str) and str(k).strip()
+        )
+    else:
+        kinds = frozenset(_MIRROR_MEDIA_DEFAULT_KINDS)
+    return True, max_bytes, kinds
+
+
 def _username_blocked(no_reply_usernames: Any, username: Any) -> bool:
     """「不自动回复发送者」（telegram.no_reply_sender_usernames，渠道中心「屏蔽名单」）命中判定。
 
@@ -213,9 +265,14 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
         # (chat_id, message_id) 去重 + per-chat 串行锁（2026-07-15 三连发语音事故修复：
         # 私聊实时路径原先不登记去重 → 轮询兜底把处理中的消息再跑一遍，双流水线并行
         # 生成两个矛盾回复。claim 收口在 _process_message 入口，三条入站路径共用）。
-        from src.client.message_dedup import MessageDedup, PerChatLocks
+        from src.client.message_dedup import (
+            MessageDedup, PerChatLocks, PollWatermark,
+        )
         self._msg_dedup = MessageDedup(max_size=2000, ttl_sec=600.0)
         self._chat_locks = PerChatLocks(max_size=512)
+        # 轮询兜底 per-chat 已处理水位（不过期，与 TTL 去重分职；198 事故修复：
+        # 未回复的 top_message 每过 dedup TTL 就被轮询重处理白跑 _process_message）
+        self._poll_watermark = PollWatermark(max_size=4000)
         self._gxp_pending: Dict[int, list] = {}  # chat_id -> [{cmd, ts, user_id, user_msg_id}, ...]
 
         from src.utils.i18n import I18n
@@ -760,7 +817,7 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                         # catchup 传 0：实时到达的消息 mts >= self._boot_timestamp 恒成立，
                         # 镜像方法里的 after_boot 分支必过，不需要 catchup 补窗
                         # （catchup 存在只是为了让轮询能补回宕机期间的旧消息）。
-                        self._mirror_outgoing_message(message.chat, message, 0)
+                        await self._mirror_outgoing_message(message.chat, message, 0)
                     return
 
                 uid = str(getattr(getattr(message, 'from_user', None), 'id', 0))
@@ -1371,6 +1428,66 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
             self.logger.warning(f"拉取群内最近图片并 OCR 失败: {e}")
             return None
 
+    def _defer_swallowed_inbound(
+        self, chat_id: Any, message_id: Any, retry_after_sec: float,
+        reason: str = "",
+    ) -> bool:
+        """被冷却类闸门吞掉的私聊入站 → 缩短其去重寿命，交轮询兜底定时补答。
+
+        2026-08-09「回复等了 11 分钟」修复（198↔104 实录三连）：冷却/interject
+        吞掉回复后没有任何补救调度，唯一复活途径是轮询兜底在去重 TTL（600s）
+        过期后把未回复的 top_message 当新进站重拾——等待时长＝一个从未被设计
+        过的巧合数字。本方法把该 mid 的去重到期改写为「冷却结束后不久」，
+        轮询兜底（默认 12s 一轮）届时自然重拾，全套既有守卫（自动化档位、
+        水位一次性重试、top_message 未回复判定）原样生效：
+        - 对方期间又来新消息且已被回 → top 变 outgoing，兜底自动不重试；
+        - 对方又来新消息也被吞 → 兜底只拾最新那条（正确的合并语义）；
+        - 重试再次被吞 → 水位闸已登记，绝不循环（本方法也直接放弃）。
+
+        仅私聊有意义（轮询兜底只扫私聊），调用方负责按 is_group 闸。
+        开关 ``telegram.poll_fallback.swallow_reschedule``（默认开，随
+        poll_fallback 总闸；关 poll_fallback 时重排去重毫无意义，直接跳过）。
+        """
+        try:
+            if not message_id:
+                return False
+            try:
+                tg_cfg = self.config.get_telegram_config()
+            except Exception:
+                tg_cfg = {}
+            pf = (tg_cfg.get("poll_fallback") or {}) if isinstance(tg_cfg, dict) else {}
+            if not pf.get("enabled", True):
+                return False
+            if not pf.get("swallow_reschedule", True):
+                return False
+            if self._poll_watermark.already_processed(chat_id, message_id):
+                # 这已经是轮询兜底给过的那次重试，又被吞 → 不再追（防循环）；
+                # 对话由对方下一条消息自然带动。
+                self.logger.info(
+                    "[冷却补答] 重试仍被吞，放弃 chat=%s mid=%s reason=%s",
+                    chat_id, message_id, reason or "-")
+                return False
+            margin = 3.0
+            try:
+                margin = float(pf.get("swallow_retry_margin_sec", 3.0) or 3.0)
+            except (TypeError, ValueError):
+                margin = 3.0
+            expire_in = max(1.0, float(retry_after_sec or 0.0) + margin)
+            if not self._msg_dedup.reschedule(chat_id, message_id, expire_in):
+                return False
+            self.logger.info(
+                "[冷却补答] 已安排轮询兜底约 %.0fs 后补答 chat=%s mid=%s reason=%s",
+                expire_in, chat_id, message_id, reason or "-")
+            try:
+                from src.client.gate_stats import bump as _gate_bump
+                _gate_bump("swallow_deferred")
+            except Exception:
+                pass
+            return True
+        except Exception:
+            self.logger.debug("[冷却补答] 调度失败（忽略）", exc_info=True)
+            return False
+
     async def _poll_inbound_loop(self):
         """轮询兜底主循环：定时拉取新进站私聊消息（补实时推送缺失）。
 
@@ -1450,7 +1567,7 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     # 我们自己发的（含已回复）→ **绝不进 AI 管道**。flag 开时额外镜像
                     # 进工作台（老板/运营用手机 App 亲自回复的场景），随后照旧跳过。
                     if mirror_outgoing:
-                        self._mirror_outgoing_message(chat, msg, catchup)
+                        await self._mirror_outgoing_message(chat, msg, catchup)
                     continue
                 from_user = getattr(msg, "from_user", None)
                 if from_user and self.user_info and \
@@ -1480,6 +1597,11 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 _cid = getattr(chat, "id", 0)
                 if mid and self._msg_dedup.seen(_cid, mid):  # 与实时 handler 共用去重
                     continue
+                # 水位闸（198 修复）：一条一直是 top_message 的未回复消息，靠 TTL
+                # 去重挡不住周期性重处理（TTL 600s ≈ catchup 600s）。已处理水位
+                # 不过期，命中即彻底跳过——同 peer 新消息 mid 更大不受影响。
+                if mid and self._poll_watermark.already_processed(_cid, mid):
+                    continue
                 uid = str(getattr(from_user, "id", 0))
                 if self._rate_limiter.enabled:
                     if self._rate_limiter.is_banned(uid):
@@ -1494,6 +1616,9 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     if _m:
                         _m.record_dedup_blocked()
                     continue
+                # claim 成功＝本条由轮询接手：立刻推进水位（幂等语义与 claim 一致
+                # ——即便下方 _process_message 让位/异常，本条也不再被轮询重处理）
+                self._poll_watermark.mark(_cid, mid)
                 self.logger.info(
                     "[轮询兜底] 发现新进站私聊 chat=%s mid=%s text=%r",
                     getattr(chat, "id", ""), mid,
@@ -1595,7 +1720,7 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
             mirror = False
         return True, mirror
 
-    def _mirror_outgoing_message(self, chat: Any, msg: Any, catchup: float) -> bool:
+    async def _mirror_outgoing_message(self, chat: Any, msg: Any, catchup: float) -> bool:
         """把「本账号在手机 App 上亲自发出的消息」镜像进统一收件箱（``direction="out"``）。
 
         **为什么需要**：老板/运营常直接用手机回客户。轮询兜底原先见 ``outgoing`` 就跳过，
@@ -1626,6 +1751,16 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
         话噪音大（群本就有四层触发、坐席主要在私聊线作业），且群 top_message 频繁翻动会
         持续刷镜像；先只覆盖私聊这条真正会造成「重复回复事故」的线。
 
+        **媒体本体归档**（2026-08-04，修「手机发图坐席只见『[图片]』占位」）：
+        ``telegram.poll_fallback.mirror_outgoing_media``（默认关）开启后，镜像行不再是
+        纯文字占位——``media_type`` 恒结构化落库（前端渲染形态卡），且对策略放行的类型
+        （默认 image/sticker/voice，单条 ≤5MB）经 ``download_tg_media`` 把本体归档进
+        ``/static/protocol_media``，坐席直接看图/回放。下载有硬超时（30s）且任何失败只
+        退化为「无归档的媒体行」（ref 空），消息本身绝不丢；成败计入
+        ``outbound_mirror_stats``（ops「📤 出站媒体归档」卡可见）。开关关闭时保持旧行为
+        （占位文字、零下载 RPC）——历史上「刻意不下载」的风控/流量顾虑由该开关承接，
+        由部署方按账号风险偏好决定。
+
         返回是否真的镜像了一条。best-effort：任何异常吞掉，绝不影响轮询主循环。
         """
         try:
@@ -1650,29 +1785,65 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 return False
             text = _normalize_message_text(
                 getattr(msg, "text", None) or getattr(msg, "caption", None) or "")
-            if not text:
-                # 无正文的媒体 → 落占位文案（与历史同步 history_message_obj 同口径）。
-                # 刻意**不下载**媒体本体：出站媒体本就在客户手机上，为镜像多打一次
-                # 下载 RPC 既费流量又增风控面；坐席看到「[图片]」已足以知道回过了。
-                from src.integrations.protocol_bridge import media_placeholder, tg_media_meta
-                meta = tg_media_meta(msg)
-                if meta:
-                    text = media_placeholder(meta[0])
-            if not text:
+            from src.integrations.protocol_bridge import (
+                download_tg_media, media_placeholder, tg_media_meta, tg_peer_identity,
+            )
+            _mt = ""
+            _mr = ""
+            meta = tg_media_meta(msg)
+            if meta:
+                kind = meta[0]
+                # 媒体归档策略每次现读（与 mirror_outgoing 同口径：热重载后下一条即生效）
+                try:
+                    _tg_cfg = self.config.get_telegram_config()
+                    _pf = (_tg_cfg.get("poll_fallback") or {}) \
+                        if isinstance(_tg_cfg, dict) else {}
+                except Exception:
+                    _pf = {}
+                m_on, m_max_bytes, m_kinds = parse_mirror_outgoing_media_cfg(_pf)
+                if m_on:
+                    # 结构化媒体行：media_type 恒落库（前端渲染形态卡、会话预览自动补
+                    # 「[图片]」标记）；本体只对策略放行的类型真下载，超时/失败/超限
+                    # 一律退化为 ref 空的媒体行——消息不丢，缺口进观测。
+                    _mt = kind
+                    if kind in m_kinds:
+                        try:
+                            _dt, _dr = await asyncio.wait_for(
+                                download_tg_media(
+                                    msg, self.account_id, max_bytes=m_max_bytes),
+                                timeout=_MIRROR_MEDIA_DL_TIMEOUT_SEC)
+                            if _dt:
+                                _mt = _dt
+                            _mr = _dr or ""
+                        except Exception:
+                            _mr = ""
+                        try:
+                            from src.integrations.outbound_mirror_stats import (
+                                get_outbound_mirror_stats,
+                            )
+                            get_outbound_mirror_stats().record_publish(
+                                "telegram", kind, ok=bool(_mr))
+                        except Exception:
+                            pass
+                elif not text:
+                    # 旧行为（媒体归档未开）：无正文媒体落「[图片]」占位（与历史同步
+                    # history_message_obj 同口径），坐席至少知道「回过了」。
+                    text = media_placeholder(kind)
+            if not (text or _mt):
                 return False
-            from src.integrations.protocol_bridge import tg_peer_identity
             ident = tg_peer_identity(chat)
             self._emit_inbox(
                 chat_id=_cid, text=text, direction="out",
                 name=ident.get("name") or "",
                 msg_id=str(mid),
+                media_type=_mt, media_ref=_mr,
                 username=ident.get("username") or "",
                 phone=ident.get("phone") or "",
                 ts=mts or None,
             )
             self.logger.info(
-                "[轮询兜底] 镜像手机已发消息 chat=%s mid=%s text=%r",
-                _cid, mid, text[:50],
+                "[轮询兜底] 镜像手机已发消息 chat=%s mid=%s media=%s ref=%s text=%r",
+                _cid, mid, _mt or "-", "y" if _mr else "-", text[:50],
             )
             return True
         except Exception as e:
@@ -1728,6 +1899,7 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
             raw_text = getattr(message, "text", None) or getattr(message, "caption", None)
             text = _normalize_message_text(raw_text) if raw_text else ""
             image_ocr_text = None  # 带图时的 OCR 结果，会传给 AI 以保持话术与图一致
+            voice_media_ref = ""   # P1-2 入站语音归档 URL（可回放原音；空=未归档）
 
             # 处理语音消息
             _peer_audio_emotion = None      # 声学情绪（SER），供出站情感声 + 情绪落库融合
@@ -1743,6 +1915,22 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                             text = "[语音消息 - 下载失败]"
                             self.logger.error("语音文件下载失败")
                         else:
+                            # 1b. 入站语音留档（P1-2，2026-08-02）：转录**之前**先归档到
+                            # /static（与出站镜像同目录、同生命周期）——转录失败时坐席更
+                            # 需要能亲耳听原音（质检/纠错的证据链）。归档失败不阻塞转录，
+                            # 媒体行退化成仅转写 + 「无音频存档」灰标；成败计入
+                            # outbound_mirror_stats（归档链共用观测）。
+                            try:
+                                from src.integrations.protocol_bridge import (
+                                    publish_outbound_media,
+                                )
+                                _vurl, _ = publish_outbound_media(
+                                    "telegram",
+                                    getattr(self, "account_id", "default"),
+                                    str(voice_file))
+                                voice_media_ref = _vurl or ""
+                            except Exception:
+                                self.logger.debug("入站语音归档失败（忽略）", exc_info=True)
                             try:
                                 # 2. 调用转录服务
                                 language = self.config.get('voice_recognition', {}).get('language', 'zh')
@@ -1949,9 +2137,21 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     '_trigger_path': getattr(message, '_trigger_path', None),
                     '_is_voice_msg': bool(message.voice or message.audio),
                     '_peer_audio_emotion': _peer_audio_emotion,
+                    # P1-2：入站语音归档 URL（转录前已发布），异步段透传进镜像媒体行
+                    'voice_media_ref': voice_media_ref,
+                    # 插话吸收（interject_absorb）：入队时刻——出队合并的年龄判据
+                    # + 发送前过期关口的本消息基准时间
+                    '_enq_ts': time.time(),
                 }
                 try:
                     self.message_queue.put_nowait(msg_data)
+                    # 插话吸收：登记该会话最新入站时间（仅入队成功才记——队满
+                    # 丢弃的消息永远不会被处理，据它中止在途回复会让客户两头落空）
+                    try:
+                        from src.client.interject_absorb import note_inbound
+                        note_inbound(message.chat.id, msg_data['_enq_ts'])
+                    except Exception:
+                        pass
                 except asyncio.QueueFull:
                     self.logger.warning("消息队列已满 (%d)，丢弃消息: %s/%s",
                                         self.message_queue.maxsize, chat_title, username)
@@ -1975,6 +2175,67 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
             try:
                 message_data = await self.message_queue.get()
                 self.config.check_and_hot_reload()
+                # ── 插话吸收（interject_absorb，默认关）：客户连发的短消息在
+                # 出队口吸收成一条输入，一次生成覆盖多条（防「两条各回一条」
+                # 自说自话）。仅私聊、纯文本类；只看**队头紧随**的同 chat 消息
+                # （peek 不命中即停，绝不打乱其它会话顺序）。任何异常回退单条。──
+                try:
+                    from src.client.interject_absorb import (
+                        can_merge_queued as _ij_can,
+                        merge_texts as _ij_merge,
+                        parse_interject_cfg as _ij_cfg_fn,
+                    )
+                    _ij_cfg = _ij_cfg_fn(
+                        self.config.config
+                        if hasattr(self.config, "config") else {})
+                    if _ij_cfg["enabled"] and self.message_queue.qsize() > 0:
+                        from src.inbox.reply_split import (
+                            looks_like_group_chat as _ij_grp,
+                        )
+                        _ij_chat = message_data.get('chat_id')
+                        _ij_now = time.time()
+                        if (not _ij_grp("telegram", str(_ij_chat))
+                                and _ij_can(
+                                    message_data, chat_id=_ij_chat,
+                                    now=_ij_now,
+                                    max_age_sec=_ij_cfg["max_age_sec"])):
+                            _ij_texts = [message_data.get('text') or ""]
+                            while len(_ij_texts) < int(_ij_cfg["max_merge"]):
+                                try:
+                                    _ij_head = self.message_queue._queue[0]
+                                except Exception:
+                                    break   # 队空/内部结构不可用 → 停止吸收
+                                if not _ij_can(
+                                        _ij_head, chat_id=_ij_chat,
+                                        now=_ij_now,
+                                        max_age_sec=_ij_cfg["max_age_sec"]):
+                                    break
+                                try:
+                                    _ij_next = self.message_queue.get_nowait()
+                                except Exception:
+                                    break
+                                self.message_queue.task_done()
+                                _ij_texts.append(_ij_next.get('text') or "")
+                                # 锚点采最新一条：回复引用/入队时间戳随最新，
+                                # 防发送前过期关口把合并稿误判成旧稿
+                                if _ij_next.get('message') is not None:
+                                    message_data['message'] = _ij_next['message']
+                                if _ij_next.get('_enq_ts'):
+                                    message_data['_enq_ts'] = _ij_next['_enq_ts']
+                                message_data['_is_voice_msg'] = bool(
+                                    message_data.get('_is_voice_msg')
+                                    or _ij_next.get('_is_voice_msg'))
+                                if _ij_next.get('_peer_audio_emotion'):
+                                    message_data['_peer_audio_emotion'] = (
+                                        _ij_next.get('_peer_audio_emotion'))
+                            if len(_ij_texts) > 1:
+                                message_data['text'] = _ij_merge(_ij_texts)
+                                self.logger.info(
+                                    "[interject] 出队合并 %d 条连发消息 chat=%s",
+                                    len(_ij_texts), _ij_chat)
+                except Exception:
+                    self.logger.debug(
+                        "[interject] 出队合并异常（按单条处理）", exc_info=True)
                 m = _metrics()
                 if m:
                     m.set_queue_size(self.message_queue.qsize())
@@ -2133,6 +2394,12 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                                 image_ocr_text = _ocr
                     except Exception:
                         pass
+            elif getattr(message, "voice", None) or getattr(message, "audio", None):
+                # P1-2 入站语音：音频在 _process_message 里已归档（转录之前），此处只
+                # 透传引用——镜像成媒体行后坐席可回放客户原音、质检可核对转写。
+                # 归档失败 ref 为空 → 前端按「无音频存档」转写行展示（如实降级）。
+                _media_type = "voice"
+                _media_ref = str(message_data.get("voice_media_ref") or "")
             if _ocr and _media_type == "image" and "[图片内容]" not in (text or ""):
                 text = f"[图片内容] {_ocr}"
             # 会话显示名优先用对方真实昵称（first + last），无则回落 @username，
@@ -2159,8 +2426,14 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
             _mirror_is_group = _nct(
                 getattr(getattr(message, 'chat', None), 'type', '')
             ) in ('group', 'supergroup', 'channel')
+            # P1-2：语音镜像正文＝干净转写（与 B 线转录回填、A 线出站镜像同口径；
+            # [语音] 语义由 media_type 承载）。AI 链内部仍用带前缀的 text——既有
+            # 剥离逻辑在消费端（_VOICE_PREFIX），这里只影响坐席台展示与检索。
+            _mirror_text = text
+            if _media_type == "voice" and str(text or "").startswith("[语音转录] "):
+                _mirror_text = text[len("[语音转录] "):]
             self._emit_inbox(
-                chat_id=chat_id, text=text, direction="in",
+                chat_id=chat_id, text=_mirror_text, direction="in",
                 name=_peer_name,
                 msg_id=str(getattr(message, 'id', '') or ''),
                 media_type=_media_type,
@@ -2171,6 +2444,32 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                            if (_mirror_is_group and _peer is not None) else ''),
                 sender_name=(_peer_name if _mirror_is_group else ''),
             )
+
+            # ── 对方机器人守卫（P0 2026-08-03，SpamBot 空转实锤修复）────────
+            # 私聊实时路径此前从不看 from_user.is_bot / reply_markup（群路径反而
+            # 有闸）→ AI 跟按钮 bot 80 秒空转 8 轮。放在镜像**之后**：入站照常
+            # 进收件箱（bot 线程对运营有查询价值），只拦「继续走 LLM 回复」；
+            # 确定级顺手把会话降 manual（A/B/主动触达三链全部自动尊重档位）。
+            # 守卫默认关（inbox.peer_bot_guard.enabled），异常一律放行。
+            try:
+                from src.inbox.peer_bot_guard import guard_a_line_should_skip
+                _pbg_reason = guard_a_line_should_skip(
+                    config=(self.config.config
+                            if hasattr(self.config, 'config') else {}),
+                    account_id=str(getattr(self, 'account_id', 'default')
+                                   or 'default'),
+                    chat_id=chat_id,
+                    message=message,
+                    current_text=str(text or ''),
+                )
+                if _pbg_reason:
+                    self.logger.info(
+                        "[peer_bot_guard] A线跳过自动回复 chat=%s user=%s "
+                        "reason=%s", chat_id, user_id, _pbg_reason)
+                    return
+            except Exception:
+                self.logger.debug(
+                    "[peer_bot_guard] 检查失败（放行）", exc_info=True)
 
             _es_cnt, _es_key = 0, ""
             if text and self._human_escalation:
@@ -2327,6 +2626,9 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
             _sm_context = {
                 'chat_id': chat_id,
                 'chat_title': chat_title,
+                # 对方显示名（first+last / @username 回落）：喂给 ①提示词「对方身份」
+                # 声明 ②persona_guard 错误自称名守卫的借名锚点（2026-08-08 David Lin 事故）
+                '_peer_display_name': _peer_name,
                 'context_analysis': context_analysis,
                 'image_ocr_text': image_ocr_text,
                 'recent_bot_messages': recent_bot_messages,
@@ -2379,6 +2681,11 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
             # UI「手动 / AI草稿我审 / 多选」只写 conversation_settings；此前 A 线
             # 完全不读 → 坐席切档后仍全自动互聊。仅 auto_ai 才直发；其余档位
             # 已镜像进收件箱，交 System Z 拟稿人审（或静音）。store 未就绪 fail-open。
+            # 2026-08-07：档位再过 effective_automation 封顶（平台/业务线/冷启动
+            # 预热），与 B 线拟稿链同源——此前封顶只在 B 线生效，companion 架构下
+            # 新号预热期照样直发（.198「新号全自动哑火」在两种架构行为分叉的另一半）。
+            # 封顶命中 → A 线让位；B 线因同一封顶判定不再让位，接住 review 拟稿
+            # （不双发、不丢消息）。封顶求值异常 = 不封顶（fail-open，与 B 线一致）。
             if getattr(self, "_mirror_inbox", False):
                 try:
                     from src.integrations.protocol_bridge import get_inbox_store
@@ -2399,22 +2706,81 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                             if hasattr(self.config, "config") else {}
                         )
                         _mode = resolve_automation_mode(_ibx, _cid, _cfg_root)
-                        if not allows_direct_autosend(_mode):
+                        _eff_mode, _eff_caps = _mode, []
+                        try:
+                            from src.inbox.effective_automation import (
+                                apply_mode_caps,
+                                compute_mode_caps,
+                            )
+                            _eff_mode, _eff_caps = apply_mode_caps(
+                                _mode, compute_mode_caps(
+                                    platform="telegram",
+                                    account_id=str(
+                                        getattr(self, "account_id", "default")
+                                        or "default"),
+                                    config=_cfg_root,
+                                ))
+                        except Exception:
+                            _eff_mode, _eff_caps = _mode, []
+                        if not allows_direct_autosend(_eff_mode):
                             self.logger.info(
-                                "[automation] A线让位 mode=%s chat=%s account=%s"
+                                "[automation] A线让位 mode=%s effective=%s "
+                                "caps=%s chat=%s account=%s"
                                 "（收件箱档位非全自动）",
-                                _mode, chat_id,
+                                _mode, _eff_mode,
+                                ",".join(c.layer for c in _eff_caps) or "-",
+                                chat_id,
                                 getattr(self, "account_id", "default"),
                             )
                             try:
                                 from src.client.gate_stats import bump as _gate_bump
                                 _gate_bump("automation_mode")
+                                if _eff_caps:
+                                    # 封顶导致的让位单独计数（与坐席显式切档区分）
+                                    _gate_bump("automation_capped")
                             except Exception:
                                 pass
                             return
                 except Exception:
                     self.logger.debug(
                         "[automation] 档位闸检查失败（放行）", exc_info=True)
+
+            # ── 工作时间闸（inbox.work_schedule，2026-08-04，默认关）：账号
+            # 休息中 A 线不直发（危机消息 severe/elevated 在判定内穿透照发）。
+            # 让位后走向：镜像开时本条已进收件箱，System Z 的双轨互斥同一
+            # should_hold 口径判「A 线休息」→ 照常拟稿，稿由 AutosendWorker
+            # 班表闸扣到复班投递/补觉重拟；镜像关=纯直发部署则整段静默（这
+            # 正是「非工作时间不予自动回复」的字面语义）。每条消息活读 config
+            # → 班表改动免重启生效；判定 fail-open，异常绝不闸死回复。──
+            try:
+                from src.inbox.work_hours_gate import (
+                    should_hold_auto_reply as _ws_should_hold,
+                    work_schedule_cfg as _ws_cfg_fn,
+                )
+                _ws_root = (
+                    self.config.config
+                    if hasattr(self.config, "config") else {}
+                )
+                _ws_hold = _ws_should_hold(
+                    _ws_cfg_fn(_ws_root or {}), "telegram",
+                    str(getattr(self, "account_id", "default") or "default"),
+                    peer_text=ai_text)
+                if _ws_hold:
+                    self.logger.info(
+                        "[work-schedule] A线让位 reason=%s chat=%s account=%s"
+                        "（账号休息中；危机消息除外）",
+                        _ws_hold, chat_id,
+                        getattr(self, "account_id", "default"),
+                    )
+                    try:
+                        from src.client.gate_stats import bump as _gate_bump
+                        _gate_bump("work_schedule")
+                    except Exception:
+                        pass
+                    return
+            except Exception:
+                self.logger.debug(
+                    "[work-schedule] 闸检查失败（放行）", exc_info=True)
 
             # ── 回复逻辑闸门（UI「回复逻辑」页：冷却 + 最大连续回复；每条消息重读
             # config → 保存即生效）。私聊/群/轮询兜底三条入站路径都汇到本函数，
@@ -2440,6 +2806,12 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     _gate_bump("cooldown")
                 except Exception:
                     pass
+                # 2026-08-09：被冷却吞掉 ≠ 刻意不回——安排轮询兜底在冷却结束后
+                # 补答一次（仅私聊；详见 _defer_swallowed_inbound）。
+                if not _is_group:
+                    self._defer_swallowed_inbound(
+                        chat_id, getattr(message, 'id', 0), _cd_left,
+                        reason="reply_logic_cooldown")
                 return
             _rl_hit, _rl_eff = consecutive_limit_reached(
                 _rl_cfg, self._auto_reply_streak.get(_rl_key, 0), _rl_last, _rl_now)
@@ -2457,11 +2829,36 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 except Exception:
                     pass
                 return
+            # 2026-08-09：生成前拍冷却记账快照——interject 在下方丢弃已生成回复
+            # 时按此回滚（未发出的回复不得占冷却位/进 last_reply 记忆）。拍不到
+            # （异常）＝退回旧行为，不影响主链路。
+            _acct_snap = None
+            try:
+                _acct_snap = self.skill_manager.snapshot_reply_accounting(
+                    user_id, _sm_context)
+            except Exception:
+                _acct_snap = None
             reply_text = await self.skill_manager.process_message(
                 text=ai_text,
                 user_id=user_id,
                 context=_sm_context,
             )
+            if reply_text is None and not _is_group:
+                # 冷却吞没补答（2026-08-09）：skill 侧冷却拦截静默返回 None，与
+                # 「刻意不回」（no-reply 判定/屏蔽等）不可区分 → 消费专用跳过
+                # 信号；命中则把该 mid 的去重寿命缩短到冷却结束后不久，轮询
+                # 兜底届时把它当新进站重拾（水位闸保证至多一次）。
+                try:
+                    _skip = self.skill_manager.consume_reply_skip(
+                        chat_id, user_id,
+                        str(getattr(self, "account_id", "") or ""))
+                except Exception:
+                    _skip = None
+                if _skip and _skip.get("reason") == "cooldown":
+                    self._defer_swallowed_inbound(
+                        chat_id, getattr(message, 'id', 0),
+                        float(_skip.get("retry_after") or 0.0),
+                        reason="skill_cooldown")
 
             # 情绪增强（仅在启用时）
             enhanced_reply = reply_text
@@ -2550,20 +2947,214 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
 
             _parse_mode = ParseMode.HTML if (PYROGRAM_AVAILABLE and suffix_html) else None
 
+            # ── 出站近重复守卫（A 线，2026-08-02）─────────────────────────
+            # per-chat 锁只保证「串行」，保证不了第二次生成不复读上一条（context
+            # 时差 / LLM echo，实录：同店名介绍 5s 内两发、同一句自我介绍换词重说）。
+            # 发送前与最近出站（inbox 镜像 + 进程级在途登记表）最后核对一次，命中
+            # 即本轮静默不发（客户视角＝少一条废话；比同义双发暴露机器人便宜）。
+            # gated：inbox.outbound_dup_guard.enabled（默认关＝零行为变更）；
+            # 放语音判定之前 → 语音复读同样被拦。异常一律放行，绝不阻断正常回复。
+            # 乐观登记的 token 存变量：插话吸收关口中止本条回复时撤销登记，
+            # 防「登记了却没发」的幽灵条目把下一条（覆盖两问的新回复）误拦成复读。
+            _dg_reg_token = 0
+            _dg_reg_cid = ""
+            if reply_final:
+                try:
+                    from src.inbox.outbound_dup_guard import (
+                        near_duplicate_of_recent as _dg_near,
+                        outbound_registry as _dg_reg,
+                        record_dup_check as _dg_rec,
+                        resolve_guard_cfg as _dg_cfg_fn,
+                    )
+                    _dg_cfg = _dg_cfg_fn(
+                        self.config.config if hasattr(self.config, "config") else {})
+                    if _dg_cfg.get("enabled"):
+                        from src.inbox.normalizer import conv_id as _dg_conv_id
+                        _dg_cid = _dg_conv_id(
+                            "telegram",
+                            str(getattr(self, "account_id", "default") or "default"),
+                            str(chat_id))
+                        _dg_rows: List[Dict[str, Any]] = []
+                        if getattr(self, "_mirror_inbox", False):
+                            try:
+                                from src.integrations.protocol_bridge import (
+                                    get_inbox_store as _dg_get_store,
+                                )
+                                _dg_store = _dg_get_store()
+                                if _dg_store is not None:
+                                    _dg_rows = list(_dg_store.list_recent_messages(
+                                        _dg_cid, limit=8) or [])
+                            except Exception:
+                                _dg_rows = []
+                        _dg_rows.extend(_dg_reg.recent_rows(_dg_cid))
+                        _dg_hit = _dg_near(
+                            reply_final, _dg_rows,
+                            window_sec=float(_dg_cfg.get("window_sec", 180.0)))
+                        _dg_lvl = (_dg_hit or {}).get("level", "")
+                        _dg_block = bool(_dg_hit) and (
+                            _dg_lvl == "dup"
+                            or bool(_dg_cfg.get("block_similar", True)))
+                        try:
+                            _dg_rec(_dg_lvl, source="a_line", blocked=_dg_block)
+                        except Exception:
+                            pass
+                        if _dg_block:
+                            self.logger.warning(
+                                "[dup_guard] guard=near_duplicate A线出站近重复拦截 "
+                                "chat=%s level=%s sim=%.2f age=%.0fs matched=%r",
+                                chat_id, _dg_lvl,
+                                _dg_hit.get("similarity", 0.0),
+                                _dg_hit.get("age_sec", 0.0),
+                                str(_dg_hit.get("matched_text", ""))[:60])
+                            try:
+                                from src.client.gate_stats import bump as _gate_bump
+                                _gate_bump("dup_guard")
+                            except Exception:
+                                pass
+                            return
+                        # 乐观登记待发文本（先于实际发送）：并行在途/跨链投递立即可见；
+                        # 条目按守卫窗口自然过期，A 线无自动重发同文本语义故不撤销
+                        # （唯一例外：插话吸收关口中止 → 用 token 撤销，见下）。
+                        _dg_reg_token = _dg_reg.register(_dg_cid, reply_final)
+                        _dg_reg_cid = _dg_cid
+                except Exception:
+                    self.logger.debug(
+                        "[dup_guard] A线近重复守卫异常（放行）", exc_info=True)
+
             # 语音回复：如果启用且触发条件满足，先尝试发语音；成功则跳过文字
             _is_voice_msg = bool(message_data.get('_is_voice_msg'))
             _voice_sent = False
+            _voice_fail_state: Dict[str, Any] = {}
             if reply_final:
                 try:
                     _voice_sent = await self._maybe_send_voice_reply(
                         message, reply_final, is_peer_voice=_is_voice_msg,
                         peer_audio_emotion=message_data.get('_peer_audio_emotion'),
+                        fail_state=_voice_fail_state,
                     )
                 except Exception as _ve:
                     self.logger.warning("[voice_reply] probe failed: %s", _ve)
 
             # 如果有回复，发送消息（言简意赅：长回复可分条发送）
             if reply_final and not _voice_sent:
+                # 诚实回落（2026-08-02 实录 21:38：TTS 失败后「语音这就来～」原样
+                # 打字发出=空头支票）：本轮语音尝试过且失败 → 出站前剥语音承诺/
+                # 断言句，客户点名要语音时补一句诚实台阶。改写后的 reply_final
+                # 自然流入下游分条/整段发送与上下文记录，无需另改。
+                if _voice_fail_state.get("synth_failed"):
+                    try:
+                        from src.ai.voice_honest_fallback import (
+                            apply_voice_failure_fallback,
+                            honest_fallback_enabled,
+                            resolve_fallback_lang,
+                        )
+                        _vhf_cfg = (self.config.config
+                                    if hasattr(self.config, "config") else {})
+                        if honest_fallback_enabled(_vhf_cfg):
+                            _vhf_new, _vhf_chg = apply_voice_failure_fallback(
+                                reply_final, ai_text,
+                                lang=resolve_fallback_lang(
+                                    reply_final or ai_text))
+                            if _vhf_chg and _vhf_new.strip():
+                                self.logger.info(
+                                    "[voice_reply] 诚实回落改写 reason=%s",
+                                    _voice_fail_state.get("reason")
+                                    or "synth_failed")
+                                reply_final = _vhf_new
+                                # 语音欠账登记（voice_iou，默认关）：台阶话许了
+                                # 「回头补给你」→ 只在客户点名要过语音时记账，
+                                # 下一回合语音链恢复即强制补发兑现。
+                                try:
+                                    from src.ai.outbound_promise_guard import (
+                                        wants_media as _iou_wm,
+                                    )
+                                    from src.client.voice_iou import (
+                                        parse_iou_cfg as _iou_cfg_fn,
+                                        record_iou as _iou_rec,
+                                    )
+                                    if (_iou_wm(ai_text) == "voice"
+                                            and _iou_cfg_fn(_vhf_cfg)["enabled"]):
+                                        _iou_rec(str(message.chat.id),
+                                                 _eff_persona_id or "")
+                                        self.logger.info(
+                                            "[voice_iou] 欠账登记 chat=%s",
+                                            message.chat.id)
+                                except Exception:
+                                    self.logger.debug(
+                                        "[voice_iou] 欠账登记失败（忽略）",
+                                        exc_info=True)
+                    except Exception:
+                        self.logger.debug(
+                            "[voice_reply] 诚实回落改写失败（发原文）",
+                            exc_info=True)
+
+                # ── 插话吸收·过期中止关口（interject_absorb，默认关）────────
+                # 生成的 4-8 秒里客户又补了话 → 本条回复按旧输入写成，发出去就是
+                # 「答非所问/自说自话」。仅私聊文本路径设两道关口（语音已发不可
+                # 撤回，不设）：①诚实回落改写后/humanize 前；②humanize 思考延迟
+                # sleep 后/真正 send 前（那又是几秒窗口）。中止＝不发送、不记
+                # reply 统计、不写 context AI 回复、撤销 dup_guard 乐观登记——
+                # 队列里新消息的处理天然带着本条上下文，新回复覆盖两问。
+                # 2026-08-09 补：中止还必须**回滚 skill 侧已提交的冷却记账**
+                # （_update_after_reply 在生成完成时就写了冷却戳/last_reply）——
+                # 否则一条从未发出的回复占住冷却位，把补话本身也吞进冷却，
+                # 整个爆发窗全灭（198↔104 实录：三连发零回复，10 分钟后才由
+                # 轮询兜底补答）。快照在 process_message 前拍（_acct_snap）。
+                def _interject_is_stale() -> bool:
+                    """纯判定：生成/延迟期间对方是否又补了话（无副作用，条间复用）。"""
+                    try:
+                        from src.client.interject_absorb import (
+                            latest_inbound_ts as _ij_latest,
+                            parse_interject_cfg as _ij_cfg_fn,
+                            should_abort_stale_reply as _ij_stale,
+                        )
+                        if _is_group:
+                            return False
+                        _ij_cfg = _ij_cfg_fn(
+                            self.config.config
+                            if hasattr(self.config, "config") else {})
+                        if not _ij_cfg.get("enabled"):
+                            return False
+                        return _ij_stale(
+                            float(message_data.get('_enq_ts') or 0.0),
+                            _ij_latest(chat_id))
+                    except Exception:
+                        return False
+
+                def _interject_stale_abort(where: str) -> bool:
+                    try:
+                        if not _interject_is_stale():
+                            return False
+                        self.logger.info(
+                            "[interject] 生成期间对方补话，放弃本条回复 "
+                            "chat=%s gate=%s", chat_id, where)
+                        if _dg_reg_token:
+                            try:
+                                from src.inbox.outbound_dup_guard import (
+                                    outbound_registry as _ij_dg_reg,
+                                )
+                                _ij_dg_reg.unregister(
+                                    _dg_reg_cid, _dg_reg_token)
+                            except Exception:
+                                pass
+                        # 2026-08-09：撤销这条从未发出回复的冷却记账/last_reply
+                        # ——它占着冷却位会把「补话」本身也吞掉（整个爆发窗
+                        # 零回复），且 AI 记忆里会多一条对方从未收到的话。
+                        try:
+                            if _acct_snap is not None and \
+                                    self.skill_manager.rollback_reply_accounting(
+                                        _acct_snap):
+                                self.logger.info(
+                                    "[interject] 已回滚未发出回复的冷却记账 "
+                                    "chat=%s", chat_id)
+                        except Exception:
+                            pass
+                        return True
+                    except Exception:
+                        return False
+
+                if _interject_stale_abort("pre_humanize"):
+                    return
                 # 发送前拟人序列（已读 → 正在输入 → 思考延迟）：与全自动 autosend 共用
                 # humanize 协作器。默认 thinking_delay=0 → 仅已读、近即时（不改现手感），
                 # 运营灰度打开后文本回复才有「思考+打字」节奏。只在整段回复前跑一次
@@ -2583,6 +3174,9 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                         message.chat.id, text=reply_final, elapsed_sec=_elapsed)
                 except Exception:
                     self.logger.debug("[prereply_humanize] 调度失败（忽略）", exc_info=True)
+                # 插话吸收·关口②：humanize 思考延迟 sleep 期间对方补话 → 同样中止
+                if _interject_stale_abort("post_humanize"):
+                    return
                 sent_text_for_context = reply_final
                 split_cfg = self.config.get("reply", {}).get("split_send", {})
                 # P1.5 多句分条（inbox.reply_style.bubbles）：陪伴域 prompt 要求
@@ -2592,13 +3186,22 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 _bubble_chunks = None
                 try:
                     from src.inbox.reply_split import (
-                        inter_part_delay_sec as _ipd_bub,
+                        collapse_paragraphs as _clp_bub,
                         looks_like_group_chat as _lgc_bub,
                         parse_bubbles_cfg as _pbc_bub,
+                        plan_bubble_gaps as _pbg_bub,
                         split_reply_parts as _srp_bub,
                     )
+                    # ⚠ self.config 是 ConfigManager（main.py / companion_worker
+                    # 传入的都是管理器对象，不是 dict）——2026-08-03 198 实锤：
+                    # 旧写法 isinstance(self.config, dict) 恒 False → 恒拿空配置
+                    # → A 线分条自上线起从未生效（两段式回复整段一条发出）。
+                    # 取法对齐本类其它 20 处：优先 .config 属性，测试传 dict 兼容。
                     _bcfg_bub = _pbc_bub(
-                        self.config if isinstance(self.config, dict) else {})
+                        self.config.config
+                        if hasattr(self.config, "config")
+                        else (self.config
+                              if isinstance(self.config, dict) else {}))
                     if (_bcfg_bub["enabled"]
                             and not _lgc_bub("telegram", str(message.chat.id))):
                         _cand_bub = _srp_bub(
@@ -2607,31 +3210,108 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                             max_chars=int(_bcfg_bub["max_chars"]),
                             min_tail_chars=int(_bcfg_bub["min_tail_chars"]),
                             min_total_chars=int(_bcfg_bub["min_total_chars"]),
+                            per_sentence=bool(_bcfg_bub.get("per_sentence")),
                         )
                         if len(_cand_bub) >= 2:
-                            _bubble_chunks = _cand_bub
+                            # 保留组（2026-08-09，A 线对齐 B 线 holdout）：可拆条的
+                            # 回合按 holdout_pct 随机改走整段——「有时一口气说完」
+                            # 的真人多样性，也是恒定拆条模式（2026-08-08 客户实锤
+                            # 「always 2 parts」）的解药。折叠必做：bubbles 开启时
+                            # 拟稿合同是「每行一句」，多行原样单条发出＝被投诉的
+                            # 「段1+空行+段2」形态，比拆条更糟。
+                            _hp_bub = float(
+                                _bcfg_bub.get("holdout_pct") or 0.0)
+                            if _hp_bub > 0 and random.random() < _hp_bub:
+                                reply_final = (_clp_bub(reply_final)
+                                               or reply_final)
+                                self.logger.info(
+                                    "[reply_bubbles] A线保留组抽中，折叠整段"
+                                    "发送 parts=%d chat=%s",
+                                    len(_cand_bub), chat_id)
+                            else:
+                                _bubble_chunks = _cand_bub
                 except Exception:
                     self.logger.debug(
                         "[reply_bubbles] A线分条判定失败，回落原路径", exc_info=True)
                     _bubble_chunks = None
                 if _bubble_chunks:
                     chunks = _apply_suffix_chunks(_bubble_chunks)
-                    sent_text_for_context = "\n\n".join(chunks)
+                    # 条间隔预排（2026-08-09 对齐 B 线）：整组一次估值 →
+                    # total_budget_sec 等比压缩保节奏形状（防 per_sentence 5 条
+                    # ×20s 把一条回复拖到 80s+）；latin_per_char_sec=英文真实
+                    # 手速（加权刻度会把英文打字耗时低估 ~4 倍）。
+                    try:
+                        _gaps_bub = _pbg_bub(
+                            chunks,
+                            gap_sec_lo=float(_bcfg_bub["gap_sec_lo"]),
+                            gap_sec_hi=float(_bcfg_bub["gap_sec_hi"]),
+                            per_char_sec=float(_bcfg_bub["per_char_sec"]),
+                            latin_per_char_sec=_bcfg_bub.get(
+                                "latin_per_char_sec"),
+                            max_gap_sec=float(
+                                _bcfg_bub.get("max_gap_sec", 6.0)),
+                            total_budget_sec=float(
+                                _bcfg_bub.get("total_budget_sec") or 0.0),
+                        )
+                    except Exception:
+                        _gaps_bub = []
+                    # 逐条发送：条间「想（静默）→ 打字（挂正在输入续挂）」与首条前
+                    # 同一节奏模型；条间对方插话 → 停发剩余条（真人被打断会停，
+                    # 新消息的回复自带完整上下文覆盖两问）。上下文只记**实际发出**
+                    # 的部分——记了没发的话，下一轮 AI 会以为自己说过。
+                    _sent_chunks: list = []
+                    _bubbles_interrupted = False
                     for i, chunk in enumerate(chunks):
                         if i > 0:
+                            _gap_bub = (_gaps_bub[i - 1]
+                                        if i - 1 < len(_gaps_bub) else 0.8)
                             try:
-                                await asyncio.sleep(_ipd_bub(
-                                    chunk,
-                                    gap_sec_lo=float(_bcfg_bub["gap_sec_lo"]),
-                                    gap_sec_hi=float(_bcfg_bub["gap_sec_hi"]),
-                                    per_char_sec=float(_bcfg_bub["per_char_sec"]),
-                                ))
+                                from src.integrations.humanize_metrics import (
+                                    record_bubble_gap as _rbg_bub,
+                                )
+                                _rbg_bub("aline", "telegram", _gap_bub)
                             except Exception:
-                                await asyncio.sleep(0.8)
+                                pass
+                            try:
+                                from src.inbox.humanize import (
+                                    estimate_typing_lead as _etl_bub,
+                                    run_presend_humanization as _rph_bub,
+                                )
+
+                                async def _tp_bub(_action):
+                                    await self._send_typing_action(
+                                        message.chat.id)
+
+                                await _rph_bub(
+                                    delay=_gap_bub, action="typing",
+                                    typing=_tp_bub, sleep=asyncio.sleep,
+                                    typing_lead_sec=_etl_bub(
+                                        chunk,
+                                        per_char_sec=float(
+                                            _bcfg_bub["per_char_sec"]),
+                                        latin_per_char_sec=_bcfg_bub.get(
+                                            "latin_per_char_sec")),
+                                )
+                            except Exception:
+                                await asyncio.sleep(_gap_bub)
+                            if _interject_is_stale():
+                                self.logger.info(
+                                    "[interject] 分条间对方补话，停发剩余 "
+                                    "%d/%d 条 chat=%s",
+                                    len(chunks) - len(_sent_chunks),
+                                    len(chunks), chat_id)
+                                _bubbles_interrupted = True
+                                break
                         await self._send_reply(message, chunk, parse_mode=_parse_mode)
+                        _sent_chunks.append(chunk)
+                    sent_text_for_context = (
+                        "\n\n".join(_sent_chunks) if _sent_chunks
+                        else "\n\n".join(chunks))
                     try:
                         from src.inbox.reply_split import record_bubble_send
-                        record_bubble_send("aline", len(chunks))
+                        record_bubble_send(
+                            "aline", len(_sent_chunks) or len(chunks),
+                            partial=_bubbles_interrupted)
                     except Exception:
                         pass
                 elif split_cfg.get("enabled", False):

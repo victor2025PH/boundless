@@ -264,6 +264,42 @@ def test_session_status_unknown_account_no_row_created(_session_client):
     assert reg.get("messenger", "never_seen") is None
 
 
+def test_session_status_authorized_promotes_pending_and_fixes_mode(_session_client):
+    """慢登录根因回归（2026-08）：self_profile 富集把行按默认值建成 device/pending，
+    edge worker 的 authorized push 必须把它提升为 online 并把 mode 钉成 web——否则
+    account 卡「未接入」且 mode=device 无 worker 工厂（拉不起 worker）。"""
+    reg = get_account_registry()
+    reg.upsert("messenger", "m_slow", mode="device", status="pending")
+    r = _post_status(_session_client, "authorized", acct="m_slow")
+    assert r.status_code == 200
+    row = reg.get("messenger", "m_slow")
+    assert row["status"] == "online"
+    assert row["mode"] == "web"
+
+
+def test_session_status_authorized_creates_row_as_web(_session_client):
+    """兜底建行：登录轮询 TTL 过期时注册表可能压根没这行，authorized push 直接把它
+    建成 web/online（否则 offline 提升条件永远等不到一个不存在的行）。"""
+    reg = get_account_registry()
+    assert reg.get("messenger", "m_fresh") is None
+    _post_status(_session_client, "authorized", acct="m_fresh")
+    row = reg.get("messenger", "m_fresh")
+    assert row is not None
+    assert row["status"] == "online"
+    assert row["mode"] == "web"
+
+
+def test_session_status_authorized_whatsapp_mode_protocol(_session_client):
+    """WA baileys 边车对应 mode=protocol（与 whatsapp login provider 落库口径一致），
+    authorized 兜底钉正的是 protocol 而非 web。"""
+    reg = get_account_registry()
+    reg.upsert("whatsapp", "w_slow", mode="device", status="pending")
+    _post_status(_session_client, "authorized", acct="w_slow", plat="whatsapp")
+    row = reg.get("whatsapp", "w_slow")
+    assert row["status"] == "online"
+    assert row["mode"] == "protocol"
+
+
 # ── 6. 草稿「通过」预判/护栏第三档：account_offline ──────────────────────────
 
 def test_draft_account_offline_block(monkeypatch):

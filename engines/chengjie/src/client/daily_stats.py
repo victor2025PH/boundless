@@ -97,14 +97,18 @@ def recent_counts(days: int = 7, path=None) -> list:
             "messages": _n(day.get("messages")),
             "voice_in": _n(day.get("voice_in")),
             "tts_sent": _n(day.get("tts_sent")),
+            "replies": _n(day.get("replies")),
         })
     return rows
 
 
 def today_counts(path=None):
-    """返回当日 {"messages": n, "voice_in": n, "tts_sent": n}；文件缺失/无当日条目/解析失败 → None。
+    """返回当日 {"messages", "voice_in", "tts_sent", "replies"}；文件缺失/无当日条目/解析失败 → None。
 
     返回 None 表示"结构化数据不可用"，调用方应回落到日志扫描口径。
+    ``replies``（P2-0，2026-08-02 起）=A 线自动链成功出站条数（sender
+    ``_postsend_record_count`` 埋点）——渠道页「AI 已发」KPI 数据源；上线首日
+    与其他键同享「升级前事件不补计」的既有权衡（见模块 docstring）。
     """
     try:
         p = Path(path) if path is not None else DEFAULT_PATH
@@ -116,6 +120,7 @@ def today_counts(path=None):
             "messages": int(day.get("messages", 0) or 0),
             "voice_in": int(day.get("voice_in", 0) or 0),
             "tts_sent": int(day.get("tts_sent", 0) or 0),
+            "replies": int(day.get("replies", 0) or 0),
         }
     except Exception:
         return None

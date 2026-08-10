@@ -29,6 +29,7 @@ from src.inbox.normalizer import (
     conv_id,
     message_obj,
     name_is_real,
+    store_row_to_chat,
 )
 from src.web.routes.unified_inbox_aggregate import (
     _INBOX_ADAPTERS,
@@ -950,4 +951,106 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
             "has_more": len(out_msgs) >= limit,
             "oldest_ts": out_msgs[0].get("ts") if out_msgs else None,
             "auto_translate": translate_stats,
+        }
+
+    @app.get("/api/unified-inbox/conv-probe")
+    async def api_unified_inbox_conv_probe(request: Request, cid: str = ""):
+        """会话深链探针：按 conversation_id 直查持久库，答「这条引用指向哪、
+        还能不能开」（2026-08-09，案例页「打开会话」落空事故的失败出路收口）。
+
+        深链落空的四类真实原因（旧前端救援只覆盖第 2 类且一律误报「可能已归档」）：
+        1. 引用的账号段/平台段拼错 → 按尾段 ``chat_key`` 反查全库，唯一同键会话
+           即自动匹配（``exact=false`` + ``resolved_cid``，前端明示「已自动匹配」）；
+        2. 会话沉在账号 200 条窗口外 → 本端点按 id 直查，无窗口限制；
+        3. 会话所属账号已登出 → ``account_status=offline``（thread 端点对
+           offline 会 409，前端如实提示而不是让坐席去归档视图白找）；
+        4. 会话真的已归档 → ``archived=true``，前端照常打开并提示。
+        找不到（演练残影/从未镜像）→ ``found=false``，前端给诚实文案。
+
+        响应无本地化文案（纯数据，判词在前端 i18n）。
+        """
+        api_auth(request)
+        cid = str(cid or "").strip()
+        if not cid:
+            raise HTTPException(
+                400, tr(request, "err.ws.field_required", field="cid"))
+        store = _inbox_store(request)
+        if store is None:
+            return {"ok": True, "found": False, "reason": "store_unavailable"}
+
+        row = None
+        exact = True
+        try:
+            row = store.get_conversation(cid)
+        except Exception:
+            row = None
+        if not row:
+            # 尾段 chat_key 反查（引用的平台/账号段可能是缺省猜测拼出来的）
+            exact = False
+            chat_key = cid.rsplit(":", 1)[-1].strip()
+            want_plat = cid.split(":", 1)[0].strip().lower() if ":" in cid else ""
+            cands: List[Dict[str, Any]] = []
+            if chat_key and chat_key != cid:
+                try:
+                    cands = store.find_conversations_by_chat_key(chat_key, limit=10)
+                except Exception:
+                    cands = []
+            if cands:
+                same_plat = [c for c in cands
+                             if str(c.get("platform") or "").lower() == want_plat]
+                pick = (same_plat or cands)[0]   # 各自已按 last_ts DESC
+                try:
+                    row = store.get_conversation(
+                        str(pick.get("conversation_id") or ""))
+                except Exception:
+                    row = None
+        if not row:
+            return {"ok": True, "found": False, "reason": "not_in_store"}
+
+        resolved_cid = str(row.get("conversation_id") or cid)
+        archived = False
+        try:
+            meta = store.get_conv_meta(resolved_cid) or {}
+            archived = bool(meta.get("archived"))
+        except Exception:
+            archived = False
+        st = ""
+        try:
+            st = (_account_status_map(request) or {}).get(
+                (str(row.get("platform") or ""),
+                 str(row.get("account_id") or "default")), "") or ""
+        except Exception:
+            st = ""
+
+        chat = None
+        if st != "offline":
+            # offline 不给 chat：thread 端点对 offline 拒 409，注入了也打不开，
+            # 前端按 account_status 出诚实文案。removed=只读历史，照常可开。
+            try:
+                mode = store.get_automation_mode(resolved_cid)
+            except Exception:
+                mode = "review"
+            try:
+                mc = store.count_messages(resolved_cid)
+            except Exception:
+                mc = 0
+            chat = store_row_to_chat(
+                row, automation_mode=mode, message_count=mc,
+                read_only=(st == "removed"),
+                account_status=st,
+                can_send=(False if st else None),
+            )
+            try:
+                _enrich_chat_list(request, [chat], config_manager=config_manager)
+            except Exception:
+                logger.debug("[conv-probe] enrich 失败（忽略）", exc_info=True)
+
+        return {
+            "ok": True,
+            "found": True,
+            "exact": exact,
+            "resolved_cid": resolved_cid,
+            "archived": archived,
+            "account_status": st,
+            "chat": chat,
         }

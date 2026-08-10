@@ -8,6 +8,7 @@ import asyncio
 import base64
 import io
 import json
+import os
 import wave
 from pathlib import Path
 from types import SimpleNamespace
@@ -220,7 +221,9 @@ class _FakeSender:
             error=lambda *a, **k: None, debug=lambda *a, **k: None)
         self.paced = 0
         self.recorded = 0
-        self.mirrored = []
+        self.mirror_rows = []       # (text, kwargs) —— 逐条镜像（2026-08-02）
+        self.contact_previews = []  # contacts 记账预览（一轮一次）
+        self.published = []         # 发布过的音频路径（须在 unlink 前，文件仍存在）
         self.tmp = tmp_path
 
     async def _presend_pace(self):
@@ -229,14 +232,29 @@ class _FakeSender:
     def _postsend_record_count(self):
         self.recorded += 1
 
-    def _postsend_mirror_and_record(self, chat_id, text):
-        self.mirrored.append(text)
+    def _postsend_mirror_and_record(self, chat_id, text, **kw):
+        # 2026-08-02 起分条路径必须逐条走 _mirror_out_row + 循环外一次
+        # _record_contact_out——谁再退回「合并一行」这里立刻炸给他看。
+        raise AssertionError("split path must not use the aggregate mirror")
+
+    def _mirror_out_row(self, chat_id, text, **kw):
+        self.mirror_rows.append((text, kw))
+
+    def _record_contact_out(self, chat_id, preview):
+        self.contact_previews.append(preview)
+
+    def _publish_media_ref(self, path):
+        # 真实现须在 unlink 之前调用——此刻文件必须还在，否则就是接线顺序回归。
+        assert os.path.isfile(path), "publish must run before unlink"
+        self.published.append(path)
+        return ("voice", "/static/protocol_media/telegram/%s"
+                % os.path.basename(path))
 
     def _reply_to_message_id_for_send(self, msg):
         return 42
 
-    # 语音镜像文案（2026-07-31 起分条镜像带念稿）——借真实实现，别在假对象里
-    # 另写一份，否则「镜像里到底写了什么」的断言就测不到真代码。
+    # 语音镜像文案（contacts 预览用 [语音]×N 表意）——借真实实现，别在假对象里
+    # 另写一份，否则「contacts 里到底写了什么」的断言就测不到真代码。
     _voice_mirror_preview = staticmethod(
         __import__("src.client.sender", fromlist=["TelegramSenderMixin"])
         .TelegramSenderMixin._voice_mirror_preview)
@@ -287,7 +305,8 @@ async def test_split_send_happy_path(tmp_path, monkeypatch):
                               reply_to_message_id=None, **kwargs):
         sends.append({"chat": chat_id, "reply_to": reply_to_message_id,
                       "dur": duration})
-        return True
+        # 真实现返回 pyrogram Message（其 .id 供逐条镜像做回显主键去重）
+        return SimpleNamespace(id=100 + len(sends))
 
     monkeypatch.setattr(
         "src.client.voice_sender.send_telegram_voice", fake_send_voice)
@@ -310,9 +329,17 @@ async def test_split_send_happy_path(tmp_path, monkeypatch):
     assert len(sends) == 3          # 三条全发出
     assert sends[0]["reply_to"] == 42 and sends[1]["reply_to"] is None
     assert s.recorded == 3          # 每条各记一次外发
-    # 镜像一行、带念稿（2026-07-31）：此前只写「[语音]×3」，坐席根本不知道 AI 说了
-    # 什么、防复读读历史时也只看到占位。客户那边仍是纯语音，不受影响。
-    assert s.mirrored == ["[语音]×3 第一条。 第二条。 第三条。"]
+    # 逐条镜像（2026-08-02）：客户收到 3 条独立语音 → 收件箱 3 行媒体行，每行
+    # 自己的干净念稿（[语音] 语义由 media_type 承载）/真实 msg_id/可回放音频。
+    # 旧口径「合并一行 [语音]×3 不附音频」正是「坐席看不到自己发的语音」的缺口。
+    assert [t for t, _ in s.mirror_rows] == ["第一条。", "第二条。", "第三条。"]
+    assert [kw.get("media_type") for _, kw in s.mirror_rows] == ["voice"] * 3
+    assert all(str(kw.get("media_ref") or "").startswith(
+        "/static/protocol_media/telegram/") for _, kw in s.mirror_rows)
+    assert [kw.get("msg_id") for _, kw in s.mirror_rows] == [101, 102, 103]
+    assert len(s.published) == 3    # 每条都在 unlink 前发布归档
+    # contacts 亲密度仍按一轮记一次（不是三倍热情），预览带 ×N 表意
+    assert s.contact_previews == ["[语音]×3 第一条。 第二条。 第三条。"]
     assert no_sleep.total > 0       # 条间确实等待过（拟人间隔）
     assert s.client.send_chat_action.await_count >= 2   # 录音状态挂过
 
@@ -333,7 +360,8 @@ async def test_split_send_synth_fail_falls_back(tmp_path, monkeypatch):
     assert ok is False
     assert calls["n"] == 2
     assert not (tmp_path / "part0.ogg").exists()   # 清理干净
-    assert s.mirrored == []
+    assert s.mirror_rows == [] and s.contact_previews == []
+    assert s.published == []                       # 没发出去的不归档
 
 
 @pytest.mark.asyncio
@@ -344,7 +372,7 @@ async def test_split_send_mid_send_failure_keeps_sent(tmp_path, monkeypatch):
 
     async def flaky_send(client, chat_id, path, **kw):
         n["i"] += 1
-        return n["i"] == 1          # 只有第一条成功
+        return SimpleNamespace(id=200) if n["i"] == 1 else None  # 只第一条成功
 
     monkeypatch.setattr(
         "src.client.voice_sender.send_telegram_voice", flaky_send)
@@ -360,10 +388,12 @@ async def test_split_send_mid_send_failure_keeps_sent(tmp_path, monkeypatch):
         {"gap_factor": 1.0, "gap_jitter_sec": [0, 0], "max_gap_sec": 20})
     assert ok is True
     assert s.recorded == 1
-    # 念稿只带**已发出的那几条**：第 2 条投递失败 → 镜像里不能出现「二。/三。」，
+    # 镜像/归档只有**已发出的那几条**：第 2 条投递失败 → 不能出现「二。/三。」，
     # 否则坐席会以为那两句也送到了客户手上。
-    assert s.mirrored == ["[语音] 一。"]
-    assert "二。" not in s.mirrored[0] and "三。" not in s.mirrored[0]
+    assert [t for t, _ in s.mirror_rows] == ["一。"]
+    assert s.published and len(s.published) == 1
+    # contacts 预览同理只带已发出的（sent_n=1 → 单条 [语音] 标记）
+    assert s.contact_previews == ["[语音] 一。"]
     assert not (tmp_path / "part2.ogg").exists()   # 未发的清理掉
 
 

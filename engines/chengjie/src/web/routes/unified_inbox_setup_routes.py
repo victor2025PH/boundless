@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import Request
 
@@ -220,6 +220,47 @@ def _provision_official_account(channel_id: str, config: Dict[str, Any]) -> str:
     except Exception:
         logger.debug("official 账号自动开通失败（已忽略；可手动重试保存）", exc_info=True)
         return ""
+
+
+async def _maybe_probe_messenger_page(
+    channel_id: str, config_manager: Any,
+) -> Optional[Dict[str, Any]]:
+    """Messenger 官方渠道保存后的 Graph ``/me`` 探针（best-effort，2026-08-10）。
+
+    ① 验 token 真伪：抄错一个字符当场在保存响应里暴露（含 Graph 原始报错），
+       而不是等第一次真实出站失败才发现；
+    ② 成功顺带带回主页身份（page_id/name/picture）——config 缺 page_id 时自动
+       回填 overlay（用户不必去 Meta 后台抄 id），并让紧随其后的
+       ``_provision_official_account`` 开出的账号行 id 与 webhook 入站镜像口径
+       （``page_id or "official"``）天然一致，堵住「先存一半、后补 page_id →
+       新旧账号行分裂」的边界；
+    ③ 探针失败（网络/鉴权）只随响应报告，**绝不阻塞保存本身**——离线环境照样
+       能把凭证存进去。
+
+    返回探针结果 dict；非 messenger 渠道 / token 未填 / 探针异常返回 None
+    （响应里不出现 ``probe`` 字段＝前端不渲染，旧行为零变化）。
+    """
+    if str(channel_id or "").lower() != "messenger":
+        return None
+    try:
+        cfg = getattr(config_manager, "config", None) or {}
+        block = cfg.get("facebook_messenger") or {}
+        token = str(block.get("page_access_token") or "").strip()
+        if not token:
+            return None
+        from src.integrations.facebook_webhook import fb_probe_page
+        probe = await fb_probe_page(token, timeout_sec=6.0)
+        if (probe.get("ok") and probe.get("page_id")
+                and not str(block.get("page_id") or "").strip()):
+            try:
+                config_manager.save_channel_credentials(
+                    "messenger", {"page_id": str(probe["page_id"])})
+            except Exception:
+                logger.debug("page_id 自动回填失败（已忽略）", exc_info=True)
+        return probe
+    except Exception:
+        logger.debug("messenger 保存探针失败（已忽略）", exc_info=True)
+        return None
 
 
 async def _probe_public_media_url(url: str) -> Dict[str, Any]:
@@ -705,6 +746,12 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
         ok, msg, issues = config_manager.save_channel_credentials(channel, values)
         if not ok:
             return {"ok": False, "detail": msg}
+        # Messenger 官方通道：保存后 Graph 探针（验 token 真伪 + 自动回填 page_id +
+        # 把主页名称/头像带回响应）。必须在 _provision_official_account **之前**——
+        # 回填的 page_id 决定账号行 id，与 webhook 入站镜像（page_id or "official"）
+        # 同口径。探针 6s 超时、绝不阻塞保存（离线也能存）。
+        page_probe = await _maybe_probe_messenger_page(
+            str(channel).lower(), config_manager)
         # 纯官方 API 渠道（Instagram/Zalo）：凭证齐 → 自动开通注册表 official 账号行，
         # 下面的编排器热拉起才有东西可认领（没有这行 = 收得到发不出，且无处报因）。
         official_account = _provision_official_account(
@@ -736,4 +783,8 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
         out = {"ok": True, "detail": msg, "channel": status, "issues": rel}
         if official_account:
             out["official_account"] = official_account
+        # 探针结论随保存响应直达前端（None＝非 messenger/无 token，不出字段）：
+        # ok 时前端可显示「已连接：<主页名>」确认时刻；失败带 Graph 原始报错就地纠错
+        if page_probe is not None:
+            out["probe"] = page_probe
         return out

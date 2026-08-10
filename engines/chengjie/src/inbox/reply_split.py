@@ -52,6 +52,33 @@ def weighted_len(text: str) -> float:
     return cjk + (len(s) - cjk) * _LATIN_CHAR_WEIGHT
 
 
+def typing_time_sec(
+    text: str,
+    *,
+    per_char_sec: float,
+    latin_per_char_sec: Optional[float] = None,
+) -> float:
+    """估「真人打这段文本」的耗时（纯函数，2026-08-09）。
+
+    CJK 字符按 ``per_char_sec``；其它字符（拉丁/数字/空格/emoji）默认沿用加权
+    刻度（``per_char_sec × 0.25``＝旧 ``weighted_len × per_char`` 行为，零变更锚）。
+    显式给 ``latin_per_char_sec`` 时非 CJK 字符按它计——加权刻度是给「分条**预算**」
+    校准的，挪用到打字**耗时**会把英文手速虚高 ~4 倍（60 字符英文只算 1.2s，
+    真人 40-60 wpm 要 6s+），英文会话条间偏机关枪的根因就在这。
+    """
+    s = str(text or "")
+    cjk = len(_CJK_CHAR_RE.findall(s))
+    other = len(s) - cjk
+    p = max(0.0, float(per_char_sec))
+    lp = p * _LATIN_CHAR_WEIGHT
+    if latin_per_char_sec is not None:
+        try:
+            lp = max(0.0, float(latin_per_char_sec))
+        except (TypeError, ValueError):
+            lp = p * _LATIN_CHAR_WEIGHT
+    return cjk * p + other * lp
+
+
 def _sentence_fragments(text: str, *, soft_cjk: bool = False) -> List[str]:
     """把文本按句界切成原文切片（零字符丢失：切片拼接 == 原文）。
 
@@ -148,22 +175,81 @@ def parse_bubbles_cfg(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
 
     gap_lo = max(0.0, _f("gap_sec_lo", 0.8))
     gap_hi = max(gap_lo, _f("gap_sec_hi", 2.5))
+    # latin_per_char_sec（2026-08-09）：非 CJK 字符的独立手速；None=沿用
+    # per_char_sec×0.25 加权刻度（零行为变更锚）。见 typing_time_sec docstring。
+    latin_raw = bubbles.get("latin_per_char_sec")
+    latin_pcs: Optional[float]
+    try:
+        latin_pcs = (max(0.0, min(2.0, float(latin_raw)))
+                     if latin_raw is not None else None)
+    except (TypeError, ValueError):
+        latin_pcs = None
     # P3 随机保留组：0..0.5——本可分条的消息按此概率强制整段（干净因果对照，
     # 与 bubbles 组比 3 天回复率）；0=不留对照（默认）。
     holdout = min(0.5, max(0.0, _f("holdout_pct", 0.0)))
+    # per_sentence（2026-08-07 运营拍板）：全自动回复「每句一条」而非按 max_chars 打包
+    # 多句成段。开时 split_reply_parts 走逐句成条（仍受 max_parts 封顶、超短尾并入）。
+    per_sentence = bool(bubbles.get("per_sentence", False))
+    # 逐句模式默认放宽条数：3 条常把 4-5 句并回段落，与「每句一条」相悖；未显式配 max_parts
+    # 时逐句默认 5（硬上限），显式配了则尊重运营。
+    default_max_parts = 5 if (per_sentence and "max_parts" not in bubbles) else 3
     return {
         "enabled": bool(bubbles.get("enabled", False)),
+        "per_sentence": per_sentence,
         "holdout_pct": holdout,
-        "max_parts": _i("max_parts", 3, lo=1, hi=5),
+        "max_parts": _i("max_parts", default_max_parts, lo=1, hi=5),
         "max_chars": _i("max_chars", 60, lo=20, hi=300),
         "min_tail_chars": _i("min_tail_chars", 4, lo=0, hi=40),
         "min_total_chars": _i("min_total_chars", 24, lo=0, hi=500),
         "gap_sec_lo": gap_lo,
         "gap_sec_hi": gap_hi,
         "per_char_sec": max(0.0, _f("per_char_sec", 0.03)),
+        "latin_per_char_sec": latin_pcs,
+        # 条间延迟封顶（2026-08-04）：旧硬编码 6s 使「人设手速慢」在条间被一刀切
+        # 截断（60 字中文按真人手速要 5-8s+ 打字）；默认仍 6=零行为变更，运营可放宽。
+        "max_gap_sec": max(1.0, min(60.0, _f("max_gap_sec", 6.0))),
+        # 条间隔序列总预算（秒；0=关，默认关）：所有条间隔之和超预算 → 等比例压缩
+        # （保节奏形状），压缩后仍有 0.6s 地板。防 per_sentence 5 条×20s 拖满 80s。
+        "total_budget_sec": max(0.0, min(300.0, _f("total_budget_sec", 0.0))),
         "skip_groups": bool(bubbles.get("skip_groups", True)),
         "orch_only": bool(bubbles.get("orch_only", True)),
     }
+
+
+# ── 单段落收口（2026-08-08 运营拍板）────────────────────────────────────────────
+# 客户实锤质疑「why your messages always 2 parts」——bubbles 关闭的部署里，拟稿层
+# 多行合同的产物整段一条发出，呈现为固定「段1+空行+段2」节奏＝AI 感第一破绽。
+# bubbles 关时拟稿合同改「一段话」（ai_client._build_context_prompt），本函数是
+# 出口硬护栏：LLM 惯性/历史 few-shot 仍可能写多行，折成单段，零内容丢失。
+_CJK_JOIN_PUNCT = "。！？…，、；：～"
+
+
+def collapse_paragraphs(text: str) -> str:
+    """把多行/多段文本折成**一个段落**（纯函数，绝不抛）。
+
+    连接规则（保句读、防跑句）：
+      - 前行以 CJK 标点结尾 + 下行 CJK 开头 → 直接续（标点已是停顿）；
+      - CJK 字 ↔ CJK 字裸边界 → 补「，」（「今天好累\\n想你了」→「今天好累，想你了」）；
+      - 其余（拉丁/数字/emoji 边界）→ 单空格（英文句间天然用空格）。
+    单行/空文本原样返回（仅 strip）。
+    """
+    raw = str(text or "").strip()
+    if not raw or "\n" not in raw:
+        return raw
+    lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    out = lines[0]
+    for ln in lines[1:]:
+        prev_ch = out[-1]
+        next_ch = ln[0]
+        if prev_ch in _CJK_JOIN_PUNCT and _CJK_CHAR_RE.match(next_ch):
+            out += ln
+        elif _CJK_CHAR_RE.match(prev_ch) and _CJK_CHAR_RE.match(next_ch):
+            out += "，" + ln
+        else:
+            out += " " + ln
+    return out
 
 
 def looks_like_group_chat(platform: str, chat_key: str) -> bool:
@@ -269,6 +355,31 @@ def _from_newlines(text: str, max_parts: int, max_chars: int,
     return expanded if len(expanded) >= 2 else None
 
 
+def _sentence_parts(text: str, *, max_parts: int, min_tail_chars: int) -> List[str]:
+    """逐句成条（per_sentence 模式核心）：LLM 换行合同优先，行内再按句界拆，
+    **每个句子独占一条**（不按 max_chars 回包）。原子块（URL/长单号）整行不拆；
+    超短尾并入前条；最后按 max_parts 封顶（多出的并入末条）。零字符丢失。
+    """
+    t = str(text or "").strip()
+    if not t:
+        return []
+    lines = [ln.strip() for ln in t.splitlines() if ln.strip()] or [t]
+    out: List[str] = []
+    for ln in lines:
+        if _is_atomic_chunk(ln):
+            out.append(ln)
+            continue
+        frags = _sentence_fragments(ln)
+        if len(frags) <= 1:
+            out.append(ln)
+        else:
+            out.extend(f.strip() for f in frags if f and f.strip())
+    out = [p.strip() for p in out if p and str(p).strip()]
+    out = _merge_short_tail(out, min_tail_chars)
+    out = _cap_part_count(out, max_parts)
+    return [p for p in out if p and str(p).strip()]
+
+
 def split_reply_parts(
     text: str,
     *,
@@ -276,6 +387,7 @@ def split_reply_parts(
     max_chars: int = 60,
     min_tail_chars: int = 4,
     min_total_chars: int = 24,
+    per_sentence: bool = False,
 ) -> List[str]:
     """把回复拆成 1..max_parts 条短消息文本。
 
@@ -298,9 +410,20 @@ def split_reply_parts(
     max_chars = max(20, int(max_chars))
     min_tail_chars = max(0, int(min_tail_chars))
     min_total_chars = max(0, int(min_total_chars))
-    if min_total_chars and weighted_len(t) < min_total_chars:
-        return [t]
     if max_parts <= 1:
+        return [t]
+
+    # 逐句模式（运营「每句一条」）：整段是原子块不拆；否则每句独占一条。
+    # 刻意**不**套 min_total_chars（那是"太短不值得拆"的字数闸，与"每句一条"相悖，
+    # 且英文按加权长度会被误判为短）；过短/单句由 _sentence_parts 的 min_tail 合并 +
+    # 「不足两条→整段」自然兜住，不会把「好的。嗯。」拆碎。
+    if per_sentence:
+        if _is_atomic_chunk(t) and len(t.split()) <= 3:
+            return [t]
+        sp = _sentence_parts(t, max_parts=max_parts, min_tail_chars=min_tail_chars)
+        return sp if len(sp) >= 2 else [t]
+
+    if min_total_chars and weighted_len(t) < min_total_chars:
         return [t]
 
     lined = _from_newlines(t, max_parts, max_chars, min_tail_chars)
@@ -330,19 +453,70 @@ def inter_part_delay_sec(
     gap_sec_lo: float = 0.8,
     gap_sec_hi: float = 2.5,
     per_char_sec: float = 0.03,
+    latin_per_char_sec: Optional[float] = None,
+    max_gap_sec: float = 6.0,
     rng: Optional[random.Random] = None,
 ) -> float:
     """条间延迟 = 基础思考抖动 + 下一条长度×打字速率（Stephanie2 简化版）。
 
-    夹在 [gap_lo, gap_hi + 1.5]；``rng`` 可注入以便测试确定性。
+    打字分量走 ``typing_time_sec``：默认加权刻度（CJK=1.0/其它=0.25，旧行为锚）；
+    ``latin_per_char_sec`` 显式给出时英文按真实手速计（加权刻度会把英文打字
+    耗时低估 ~4 倍，英语客户看到的条间仍是机关枪）。封顶 ``max_gap_sec``
+    （默认 6=旧行为；运营可放宽让慢热人设的条间节奏跟上手速）。
+    ``rng`` 可注入以便测试确定性。
     """
     lo = max(0.0, float(gap_sec_lo))
     hi = max(lo, float(gap_sec_hi))
     r = rng or random
     think = r.uniform(lo, hi)
-    typing = max(0.0, len(str(next_text or ""))) * max(0.0, float(per_char_sec))
+    typing = typing_time_sec(
+        str(next_text or ""), per_char_sec=per_char_sec,
+        latin_per_char_sec=latin_per_char_sec)
     # 思考占主导、打字微调；总时长封顶防拖垮投递 SLA
-    return min(6.0, max(lo, think * 0.55 + typing))
+    cap = max(1.0, float(max_gap_sec))
+    return min(cap, max(lo, think * 0.55 + typing))
+
+
+def plan_bubble_gaps(
+    parts: List[str],
+    *,
+    gap_sec_lo: float = 0.8,
+    gap_sec_hi: float = 2.5,
+    per_char_sec: float = 0.03,
+    latin_per_char_sec: Optional[float] = None,
+    max_gap_sec: float = 6.0,
+    total_budget_sec: float = 0.0,
+    min_gap_floor: float = 0.6,
+    rng: Optional[random.Random] = None,
+) -> List[float]:
+    """为 ``parts[1:]`` 预排条间延迟（纯函数，2026-08-09，返回 len-1 个间隔）。
+
+    每条先按 ``inter_part_delay_sec`` 同模型独立估值；``total_budget_sec > 0``
+    且间隔总和超预算 → **等比例压缩**——保持「长句间隔相对更长」的节奏形状
+    （真人赶时间是整体加快，不是前慢后机关枪的砍尾），压缩后仍不低于
+    ``min_gap_floor``（反机关枪是首要目标，预算是软约束：地板生效时总和可略超）。
+    parts < 2 → ``[]``。纯算术不抛；调用方仍应 try 兜底。
+    """
+    ps = [str(p or "") for p in (parts or [])]
+    if len(ps) < 2:
+        return []
+    gaps = [
+        inter_part_delay_sec(
+            p, gap_sec_lo=gap_sec_lo, gap_sec_hi=gap_sec_hi,
+            per_char_sec=per_char_sec, latin_per_char_sec=latin_per_char_sec,
+            max_gap_sec=max_gap_sec, rng=rng)
+        for p in ps[1:]
+    ]
+    try:
+        budget = float(total_budget_sec or 0.0)
+    except (TypeError, ValueError):
+        budget = 0.0
+    total = sum(gaps)
+    if budget > 0 and total > budget:
+        scale = budget / total
+        floor = max(0.0, float(min_gap_floor))
+        gaps = [max(floor, g * scale) for g in gaps]
+    return gaps
 
 
 def should_split_for_delivery(

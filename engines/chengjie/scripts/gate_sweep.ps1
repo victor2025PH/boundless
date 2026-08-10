@@ -74,13 +74,26 @@ for p, e in bad:
 $gates = @(
     'tests/test_inbox_inline_handlers_exported.py',
     'tests/test_rpa_inline_handlers_exposed.py',
+    # 哑图标门禁（2026-08-08）：图标名引用必须能在 ui_icons.js 注册表解析 + uiIcon 定义唯一
+    # （unified_inbox 页内同名副本覆盖全局导致顶栏图标静默变空的实锤事故防复发）。
+    'tests/test_ui_icon_registry.py',
+    # 控件位 emoji 棘轮（2026-08-08 P2A）：工作台模板 emoji 计数只减不增，新控件走 SVG。
+    'tests/test_workspace_emoji_ratchet.py',
     'tests/test_template_unique_ids.py',
     'tests/test_template_orphan_refs.py',
     'tests/test_template_dynamic_dot_access.py',
+    'tests/test_template_free_capture.py',
+    'tests/test_template_dead_classes.py',
+    'tests/test_static_js_free_capture.py',
     'tests/test_template_inline_js_syntax.py',
     'tests/test_template_jinja_comment_trap.py',
     'tests/test_channel_page_render_integrity.py',
     'tests/test_template_inline_color_ratchet.py',
+    # 主题调色板 WCAG 对比度契约（2026-08-04 白天模式可读性收口）：白天模式的
+    # 亮值历史上是暗色收口时"字节级保留"的字面量，从未按白底校准（t3 白底 2.5:1、
+    # 状态徽章 2.1~3.8:1）。这条把"哪个前景配哪个面 ≥ 多少"钉成两主题各测的
+    # 可执行契约（含 rgba 层叠合成、var 链解析、债务表防"永久白名单"化）。
+    'tests/test_theme_contrast_gate.py',
     # 品牌令牌桥的两个静默失效面（都不报错、不变红，只是颜色/交互悄悄不对）：
     # ① th-brand-bridge.css 靠「排在 theme-tokens.css 之后、同特异性后者胜」才能把
     #    --th-*-brand* 覆盖成品牌智连蓝，<head> 一被重排就退回旧紫蓝 #5b7cf6；
@@ -91,6 +104,11 @@ $gates = @(
     # 裸 periwinkle 旧品牌蓝清零（2026-07-30 117 处收口为 color-mix(var(--p|--tk-brand|--bl-growth))；
     # 分类器单一事实源 tools/audit_legacy_blues.py，var() fallback / 生成物 / 注释豁免）
     'tests/test_legacy_blue_ratchet.py',
+    # 输入控件主题三档门禁（2026-08-02）：① color/background 必须成对（.tag-add-input
+    # 暗色隐形事故）；② workspace css 无 fallback 的 var() 必须解析（--bg-main 幽灵
+    # token）；③ 全站模板 <style> 按**继承链**解析（--t1 跨页掩护 209 处两轮清零；
+    # 静态资产松度经 tools/audit_template_var_links.py 实证零暴露）。
+    'tests/test_input_theme_contrast.py',
     # 「忘 bump」探测：坐席前端面 mtime 比 ui-build.txt 新即红（修法 scripts/bump_ui_build.py；
     # 中批红=诚实状态，由收口方 bump）
     'tests/test_ui_build_freshness.py',
@@ -199,13 +217,49 @@ if ($missing.Count -gt 0) {
 }
 
 Write-Output ("=== [1/2] gate sweep: {0} gate files ===" -f $gates.Count)
-python -m pytest @gates -q --tb=line
+# Parallel sweep (2026-08-06): the serial run crossed 9 min (672 tests, growing
+# as every line registers more gates) - a per-wrap-up cost paid by ALL lines.
+# These same gate files already run under xdist (-n auto) in the daily full
+# regression, so they are parallel-safe by construction. Production discipline
+# mirrors regression.ps1: instance listening => this process drops to
+# BelowNormal (pytest children inherit) + workers capped at 4 (8-core box must
+# not starve live agents); otherwise -n auto. --timeout stops one hung worker
+# from stalling the whole sweep (pytest-timeout is a repo dependency).
+$prodUp = @(Get-NetTCPConnection -LocalPort 18799, 18899 -State Listen `
+    -ErrorAction SilentlyContinue).Count -gt 0
+if ($prodUp) {
+    try { (Get-Process -Id $PID).PriorityClass = 'BelowNormal' } catch {}
+    Write-Output '  [sweep] production instance online -> BelowNormal + workers capped at 4'
+}
+$nWorkers = if ($prodUp) { '4' } else { 'auto' }
+python -m pytest @gates -n $nWorkers -q --tb=line --timeout=90 --timeout-method=thread
 $code = $LASTEXITCODE
 
 if ($Full) {
     Write-Output ''
     Write-Output '=== -Full: whole-suite regression (scripts\regression.ps1) ==='
     powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'regression.ps1')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Template var() static-asset linkage audit (2026-08-02): gate tier-3 treats
+    # static/shared token definitions as globally reachable; this read-only audit
+    # closes the loop by checking the defining file is actually referenced by the
+    # host chain (UNLINKED/PARTIAL => fail). Baseline: 6 refs, all OK-linked.
+    Write-Output ''
+    Write-Output '=== -Full: template var() static linkage audit (tools\audit_template_var_links.py --strict) ==='
+    python (Join-Path $engineRoot 'tools\audit_template_var_links.py') --strict
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Local-first delivery profile (P2 2026-08-06): provision render -> real
+    # config.example.yaml copy -> ConfigManager deep-merge -> golive/config_check
+    # local_only verdicts. The pytest gates pin each layer with synthetic configs;
+    # this tool is the only place the REAL example config flows through the whole
+    # chain (catches example-config drift breaking the delivery profile). Offline
+    # by default: ~2s, zero network, zero GPU, temp dir self-cleans. The --live
+    # leg (real local LLM reply) is operator-run only, never wired here.
+    Write-Output ''
+    Write-Output '=== -Full: local-first delivery profile, offline (tools\verify_local_first_delivery.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_local_first_delivery.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 
     # Multi-window coordinator is PURE FRONTEND logic (localStorage primary slot +
@@ -226,6 +280,40 @@ if ($Full) {
     Write-Output ''
     Write-Output '=== -Full: account rail scoped view, real browser (tools\verify_account_rail_ui.py) ==='
     python (Join-Path $engineRoot 'tools\verify_account_rail_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Connection-starvation backend fixes (2026-08-05): avatar origin breaker +
+    # SSE silent-prime are backend .py, dormant until an instance restart loads
+    # them (shared tree: whoever restarts next carries the batch). This probe
+    # self-detects load state via the cooldown metrics key: not loaded => SKIP
+    # exit 0; loaded => asserts no replay flood + no 20s avatar hangs. Wiring it
+    # here closes the "restart happens but nobody re-verifies" gap.
+    Write-Output ''
+    Write-Output '=== -Full: connection-starvation fixes, live probe (tools\verify_conn_fixes.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_conn_fixes.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Platform-switch thread sync (2026-08-05 incident class): clicking another
+    # platform on the left rail must not leave the previous platform's conversation
+    # sitting in the center pane (agent types into the wrong customer = missend
+    # risk). Close-on-mismatch + desktop per-platform restore are PURE FRONTEND
+    # (_syncThreadToScope); hot-reloaded templates ship straight to production.
+    # Read-only (already-read rows only); missing playwright / instance => SKIP.
+    Write-Output ''
+    Write-Output '=== -Full: platform-switch thread sync, real browser (tools\verify_plat_thread_sync.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_plat_thread_sync.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Channel-center four-page alignment (2026-08-02, P1-P3 vocabulary/skeleton
+    # unification): five-segment tab order, shared KPI slots, pause tiers, the
+    # relocated Messenger main JS actually executing (window.saveConfig), shared
+    # funnel pane, rpa-card floor / mr-panel zero, mustache-leak + pageerror nets.
+    # Static vocab gates prove the SOURCE; this proves the RENDERED page - and
+    # hot-reloaded templates ship straight to production. Read-only; missing
+    # playwright / unreachable instance => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: channel-center alignment, real browser (tools\verify_channel_alignment.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_channel_alignment.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 
     # Inbox density budget (2026-07-30). The agent stares at a 300px-wide list;
@@ -254,6 +342,81 @@ if ($Full) {
     Write-Output ''
     Write-Output '=== -Full: inbox identity bar, real browser (tools\verify_inbox_identity.py) ==='
     python (Join-Path $engineRoot 'tools\verify_inbox_identity.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Voice "more" menu + one-click clone-bind modal (2026-08-03). Browser <audio>
+    # native menu cannot be extended, so a self-built menu (clone / speed / download /
+    # transcribe / quote) + a clone-bind modal drive /api/voice/enroll. Static gates
+    # only prove the handlers are wired + i18n keys exist; they cannot prove the menu
+    # pops, the modal prefills defaults, or the consent gate blocks a submit. This gate
+    # locates a voice conversation via a read-only inbox.db query (mode=ro) + history
+    # backfill, then verifies all of the above. Read-only: never checks the consent box,
+    # never sends /api/voice/enroll. Missing playwright / unreachable instance / no
+    # token / no voice conversation => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: voice clone menu+modal, real browser (tools\verify_voice_clone_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_voice_clone_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Cases page (2026-08-03 case-center overhaul): a real JS app now - customer
+    # text must render inert (the page once concatenated raw Telegram messages into
+    # innerHTML = XSS into the ops console), the 30s poll must not eat an in-progress
+    # note, claim buttons must adapt to old/new backend rows, closed cards collapse,
+    # empty state must teach what opens a case. All case data is route-mocked
+    # (zero production writes; close modal is open/cancel only). Static gates prove
+    # keys/wiring, only a browser proves the rendered behavior; hot-reloaded
+    # templates ship straight to production. Missing playwright / instance => SKIP.
+    Write-Output ''
+    Write-Output '=== -Full: cases page, real browser (tools\verify_cases_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_cases_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Inbox translate speedup batch (2026-08-09): engine dropdown wired to window,
+    # batch endpoint reachable through a browser session (cookie auth), skeleton
+    # CSS shipped under the new cache stamp, zero ReferenceError on load. Static
+    # gates prove exposure/keys; only a browser proves the rendered pipeline, and
+    # hot-reloaded templates ship straight to production. Read-only apart from two
+    # tiny cached test translations. Missing playwright / instance => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: inbox translate batch + engine dropdown, real browser (tools\verify_xlate_batch_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_xlate_batch_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Theme contrast RENDERED values (2026-08-04 light-mode readability close-out).
+    # The static gate pins palette VALUES; only a browser proves what agents SEE -
+    # cascade overrides, component opacity, a page missing the token CSS, a more
+    # specific rule hardcoding text back. Samples computed styles of the high-touch
+    # text nodes on /knowledge in BOTH themes (effective bg composited up the
+    # ancestor chain, element opacity folded in), pins the disabled-card badge and
+    # no-raw-kb2_-keys. Read-only. Missing playwright / instance => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: theme contrast rendered values, real browser (tools\verify_theme_contrast_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_theme_contrast_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Reply-settings page (2026-08-02 readability overhaul): P0 pinned the inline
+    # mode-box regression / base input-width leak / t3-tiny-CJK contrast floor /
+    # visited-purple links; P1 added preview playback, the advanced <details> group
+    # and anchor nav. Templates hot-reload straight to production, so a real browser
+    # must re-prove these. Read-only (client-side playback only, no config writes).
+    # Missing playwright / unreachable instance => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: reply settings page, real browser (tools\verify_reply_settings_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_reply_settings_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Contacts pane (2026-08-01 incident class): "entered the address book, could
+    # not get back" - the old icon-toggle was the ONLY exit and vanished when the
+    # list header collapsed. This pins the four exit paths (Esc / X / chat-side
+    # action auto-exit / cmdk entry under collapsed header), the never-spoke filter
+    # + icebreaker CTA loop, and the ops asset-card deep link. Read-only: never
+    # presses sync (POST) nor icebreaker generate (LLM); clicking a contact only
+    # synthesizes a client-side placeholder conversation. Waits use polling=100 -
+    # default rAF polling gets throttled in aged headless pages (fake 18.8s reads).
+    # Missing playwright / unreachable instance => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: inbox contacts pane, real browser (tools\verify_inbox_contacts.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_inbox_contacts.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 
     # Draft-approval predictive badges (2026-07-30). Before an agent clicks Send, the
@@ -355,11 +518,134 @@ if ($Full) {
     Write-Output '=== -Full: goal card narrow-width + interaction, fixture browser (tools\verify_goal_card_ui.py) ==='
     python (Join-Path $engineRoot 'tools\verify_goal_card_ui.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Goal form draft survival + edit-hold (2026-08-04 P0). The modal used to lose
+    # everything typed on a stray backdrop click, and ANY host context re-feed
+    # (poll identity merge / peer resolve / tab refocus) rebuilt the shadow DOM
+    # mid-edit. Fix = input snapshot (sessionStorage per conversation) + reapply
+    # after rebuild + deferring same-cid refreshes while the form is open. All of
+    # that is lifecycle-race behavior no static gate can see. Same fixture style
+    # as verify_goal_card_ui.py (file:// page, fake fetch, zero telemetry).
+    # Only missing playwright => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: goal form draft survival + edit-hold, fixture browser (tools\verify_goal_form_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_goal_form_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Goal outcomes report page (P2 2026-08-09): KPI/matrix/trend/heat rendering,
+    # per-row send modal, checkbox batch bar, outreach preview (stops before real
+    # send), deep-link filter presets, 403 disabled guidance. Live instance +
+    # page.route synthetic responses (zero production writes, zero data deps);
+    # page route not yet loaded (pre-restart) => live section SKIP, static wiring
+    # still gates. Missing playwright / instance down => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: goal outcomes report page, real browser (tools\verify_goal_report_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_goal_report_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # cp-voice state machine (P0 2026-08-05): preview clear/regenerate/stale-guard,
+    # in-flight mutex (double-click = double send to a customer), idempotency key,
+    # post-send reset, epoch guard across conversation switches. All interaction
+    # timing no static gate can see. Same fixture style (file:// + real component
+    # + stub client object, zero instance deps, zero TTS burn). Missing playwright
+    # => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: right-rail voice clone/send state machine, fixture browser (tools\verify_cp_voice_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_cp_voice_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Guided onboarding tour engine (P1 2026-08-07): spotlight positioning,
+    # auto-skip on missing targets (never trap the user), click-through overlay,
+    # Esc/done exits, centered no-target step, EN zero-CJK on visible surface.
+    # Pure front-end behavior no static gate can prove; same fixture style
+    # (real Jinja render + real i18n, zero instance deps). Missing playwright
+    # => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: guided onboarding tour engine, fixture browser (tools\verify_guided_tour_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_guided_tour_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Workflows page UX contract (2026-08-09 batch): in-page dark variable group
+    # (no more piebald dark mode), tab memory + #hash deep-link, disabled-chain
+    # edit must NOT resurrect it (PUT carries enabled=0), running pill, header
+    # value bar + funnel bars (P2). All hot-reloaded template JS/CSS that static
+    # gates cannot prove; block-level real Jinja render + apiFetch mock fixture
+    # (zero instance deps). First run already caught an invisible-bar bug
+    # (span fill without display:block => width:0). Missing playwright => SKIP.
+    Write-Output ''
+    Write-Output '=== -Full: workflows page UX contract, fixture browser (tools\verify_workflows_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_workflows_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Connect-modal official-channel guidance state (2026-08-10). IG/Zalo used to
+    # render "needs your credentials" as grey "coming soon" (= feature does not
+    # exist), and the explanation card fell back to Telegram-only instructions.
+    # The fix (code registration + cfg badge + guidance card + auto-open +
+    # ?channel= deeplink + recheck-no-rewizard) is all RENDERED behavior that
+    # static gates cannot prove, and the modal lives in a hot-reloaded template.
+    # Modes API is route-mocked (zero production writes; works whether or not IG
+    # is actually configured). switch_off variant auto-SKIPs until the sibling
+    # line's modal-side consumption lands. Missing playwright / instance => SKIP.
+    Write-Output ''
+    Write-Output '=== -Full: connect modal official-channel guidance, real browser (tools\verify_connect_modal_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_connect_modal_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Setup wizard deeplink + webhook reach strip (2026-08-10, other half of the
+    # official-channel onboarding loop): ?channel= arrival must auto-expand the
+    # channel card + official-API fold + highlight/scroll (else the deeplink is
+    # decorative), and the handshake strip must render verdicts and re-render on
+    # poll. webhook-status endpoint is route-mocked (works before the backend
+    # route's activating restart; arbitrary verdicts testable). NEVER clicks save
+    # (that writes real config). Missing playwright / instance => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: setup wizard deeplink + reach strip, real browser (tools\verify_setup_wizard_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_setup_wizard_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 }
 
 if ($code -eq 0) {
     Write-Output 'gate sweep: ALL GREEN'
 } else {
     Write-Output ("gate sweep: FAILURES (exit {0}) - a red gate in a file you did not touch usually means ANOTHER line broke it; report, do not silently fix inside their active edit window." -f $code)
+    # Attribution hints (2026-08-06): triaging 4 red gates by hand took ~15 min
+    # (run each gate, read the assertion, cross-check who touched what). Print the
+    # raw materials right here - recently modified dirty files + the declared-intent
+    # board (agent_probe -Intent) - so "which line likely owns this red" is one glance.
+    Write-Output ''
+    Write-Output '--- attribution hints: dirty files modified in the last 60 min ---'
+    $now2 = Get-Date
+    $hintRows = @()
+    foreach ($ln in (git status --short 2>$null)) {
+        if (-not $ln -or $ln.Length -lt 4) { continue }
+        $rel = $ln.Substring(3).Trim().Trim('"')
+        if ($rel -match ' -> ') { $rel = ($rel -split ' -> ')[-1].Trim('"') }
+        $p = Join-Path $engineRoot $rel
+        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) {
+            if ($rel.StartsWith('engines/chengjie/')) {
+                $p = Join-Path $engineRoot $rel.Substring('engines/chengjie/'.Length)
+            }
+            if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { continue }
+        }
+        $fage = ($now2 - (Get-Item -LiteralPath $p).LastWriteTime).TotalMinutes
+        if ($fage -lt 0 -or $fage -gt 60) { continue }
+        $hintRows += ('  {0,6:N1} min  {1}' -f [math]::Round($fage, 1), $rel)
+    }
+    if ($hintRows.Count -eq 0) {
+        Write-Output '  (none - reds are likely older than 60 min; try agent_probe -WindowMinutes 240)'
+    } else {
+        $hintRows | Select-Object -First 25 | ForEach-Object { Write-Output $_ }
+        if ($hintRows.Count -gt 25) { Write-Output ('  (+{0} more - bulk-touch batch?)' -f ($hintRows.Count - 25)) }
+    }
+    $intDir = 'D:\chengjie-instances\.ops\agent_intents'
+    if (Test-Path $intDir) {
+        Write-Output '--- attribution hints: declared intents (agent_probe -Intent) ---'
+        foreach ($f in (Get-ChildItem $intDir -Filter *.txt | Sort-Object LastWriteTime -Descending)) {
+            $ih = ($now2 - $f.LastWriteTime).TotalHours
+            if ($ih -gt 24) { continue }
+            $body = (Get-Content -LiteralPath $f.FullName -Encoding UTF8 | Select-Object -Skip 1) -join ' '
+            Write-Output ('  {0,5:N1} h   {1}' -f [math]::Round($ih, 1), $body)
+        }
+    }
 }
 exit $code

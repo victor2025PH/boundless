@@ -121,6 +121,23 @@ if (Test-Path $Trend)   { Say "trend   -> $Trend" }
 if (Test-Path $LastRun) { Say "last_run -> $LastRun" }
 Say ("judge done exit={0} (0 = every scenario within expect_defects)" -f $rc)
 
+# Close open drill-range cases left by tonight's process_message chain.
+# Without this, media_complaint / ai_doubt lines from duel cards stay on /cases
+# until a human clears them (2026-08-09 production residue). Best-effort: a
+# failed cleanup must NOT flip the judge exit code.
+try {
+    $hdr = @{ Authorization = "Bearer $($env:AITR_WEB_TOKEN)" }
+    $body = '{"resolution":"drill nightly cleanup"}'
+    $resp = Invoke-RestMethod -Method POST -Uri "$Base/api/cases/close-drill" `
+        -Headers $hdr -ContentType "application/json; charset=utf-8" `
+        -Body $body -TimeoutSec 30
+    $n = 0
+    if ($resp -and ($null -ne $resp.closed)) { $n = [int]$resp.closed }
+    Say ("drill cases closed={0}" -f $n)
+} catch {
+    Say ("drill case cleanup skipped: {0}" -f $_.Exception.Message)
+}
+
 # Keep 14 logs, same policy as logs/prerender
 Get-ChildItem (Join-Path $Root "logs\duel") -Filter "nightly_*.log" |
     Sort-Object LastWriteTime -Descending | Select-Object -Skip 14 |

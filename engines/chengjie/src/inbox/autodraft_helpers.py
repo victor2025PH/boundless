@@ -6,6 +6,8 @@ enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv, text, draft_id
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 from dataclasses import dataclass, field
 
 # 图文连发补识（Phase1.3）：拟稿时向前回扫多少条消息找「还没识别过」的入站媒体行。
@@ -536,6 +538,8 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
             conversation_id=cid,
             peer_audio_emotion=_peer_audio_emotion,
             account_id=account_id,
+            # P3：入站 mid（TG message.id / 协议 wamid…）贯通案例锚点
+            inbound_msg_id=str(_peer_msg_id or "").strip(),
         )
         if out.get("ok") and out.get("reply"):
             done = draft_svc.enrich_draft(
@@ -585,15 +589,16 @@ async def _maybe_holding_after_enrich(
         if _lvl not in _levels:
             return
         # 缓冲话术语言：**优先人设产线解析出的 reply_lang**——它已综合转写/短消息防误切，
-        # 是「该用什么语言跟客户说」的权威结论；仅当其缺失时才回落检测客户原话（原话可能仍是
-        # 未转写的 [语音] 占位，检测不可靠，故降为兜底）。
+        # 是「该用什么语言跟客户说」的权威结论；缺失时回落证据口径的会话语言
+        # （P3-198：peer_language_hint＝入站投票→持久列→出站参照——旧的裸
+        # detect(peer_text) 会把中性消息统计成 en、把系统注入的中文加注当客户语言）。
         _lang = reply_lang or ""
         if not _lang:
             try:
-                from src.ai.translation_service import detect_language as _dl
-                _det = _dl(str(peer_text or ""))
-                if _det and _det != "unknown":
-                    _lang = _det
+                from src.inbox.outbound_translate import peer_language_hint
+                _lang = peer_language_hint(
+                    getattr(assistant, "inbox_store", None),
+                    str(conv.get("conversation_id") or ""))
             except Exception:
                 pass
         await maybe_send_holding_reply(
@@ -626,6 +631,54 @@ class AutoDraftConfig:
         default_factory=lambda: {"translation": "review"})
 
 
+def _a_line_on_duty(app_config, conv: dict, text: str) -> bool:
+    """A 线此刻是否会直发本条消息（与 telegram_client 的班表闸同一判定）。
+
+    True = 在班或危机穿透（A 线直发 → System Z 应让位防双发）；
+    False = 休息中被扣（A 线不发 → System Z 必须接住拟稿）。
+    异常按 True（保持旧让位行为，宁可少拟稿不可双发）。
+    """
+    try:
+        from src.inbox.work_hours_gate import (
+            should_hold_auto_reply,
+            work_schedule_cfg,
+        )
+        return should_hold_auto_reply(
+            work_schedule_cfg(app_config), "telegram",
+            str(conv.get("account_id") or "default"),
+            peer_text=str(text or "")) == ""
+    except Exception:
+        return True
+
+
+_warmup_logged: set = set()
+
+
+def _log_warmup_cap_once(platform: str, account_id: str, cap) -> None:
+    """预热封顶首次生效时播报一次（每账号每进程一次）。
+
+    刻意不是每条消息都打：预热窗内该账号的每条入站都会命中，逐条打就是刷屏，运维反而
+    看不见。但**完全不打**更糟——「草稿怎么突然都要人审了」会变成一次无头悬案，故首次
+    命中时把原因、账号年龄、关闸办法一次讲清。``cap`` = effective_automation.ModeCap
+    （layer=warmup，detail 带 age_h、until_ts=预热窗结束时刻）。
+    """
+    k = f"{platform}:{account_id}"
+    if k in _warmup_logged:
+        return
+    _warmup_logged.add(k)
+    try:
+        left_h = max(0.0, (float(getattr(cap, "until_ts", 0.0) or 0.0)
+                           - time.time()) / 3600.0)
+        logging.getLogger("ai_chat_assistant.autodraft").info(
+            "[AutoDraft] 冷启动预热封顶生效：账号 %s（%s）→ 自动回复降级为 "
+            "review（AI 拟稿、人审后发）。预热窗还剩 %.1fh 自动恢复；"
+            "如需立刻恢复全自动："
+            "companion.proactive_topic.cold_start.warmup_review: false",
+            k, str(getattr(cap, "detail", "") or ""), left_h)
+    except Exception:
+        pass
+
+
 def make_auto_draft_cb(
     cfg: AutoDraftConfig, draft_svc, store, loop, enrich_fn, logger,
     *, app_config=None,
@@ -634,8 +687,13 @@ def make_auto_draft_cb(
 
     cfg=纯配置;draft_svc/store/loop/enrich_fn/logger=运行时依赖。
     app_config=完整配置树（可选）——供首条入站 bootstrap 持久化 auto_ai 档位。
-    返回的回调签名 (conv, text)->None 与 register_new_inbound_cb 契约一致。"""
-    def _auto_draft_cb(conv: dict, text: str) -> None:
+    返回的回调签名 (conv, text)->None 与 register_new_inbound_cb 契约一致；
+    ``skip_companion_yield``（仅复班补觉重拟用，keyword-only 不影响注册契约）
+    = 旁路 companion 双轨互斥的让位——重拟的消息 A 线当时休息已跳过，
+    让位=作废后无人重拟=静默丢回复。"""
+    def _auto_draft_cb(
+        conv: dict, text: str, *, skip_companion_yield: bool = False,
+    ) -> None:
         if conv.get("platform", "") in cfg.skip:
             return
         if cfg.skip_groups:
@@ -645,8 +703,71 @@ def make_auto_draft_cb(
                     return
             except Exception:
                 pass
-        if cfg.min_len > 0 and len(str(text or "").strip()) < cfg.min_len:
+        # min_len 活读（P1 2026-08-02）：cfg.min_len 是构造期快照，设置页写 overlay
+        # 后热重载传导不到冻结的 dataclass——有 app_config（生产恒有，持 config 根
+        # 引用、热重载就地 merge 可见新值）时以活值为准，异常/缺失回落快照。
+        _min_len = cfg.min_len
+        if app_config is not None:
+            try:
+                _min_len = int(((app_config.get("inbox") or {}).get(
+                    "auto_draft") or {}).get("min_text_len", cfg.min_len))
+            except (TypeError, ValueError):
+                _min_len = cfg.min_len
+        if _min_len > 0 and len(str(text or "").strip()) < _min_len:
             return
+        # 工作时间班表·休息期不拟稿档（inbox.work_schedule.off_hours.
+        # generate_drafts=false，默认 true=照常拟稿）：置 false = 休息期彻底
+        # 静默省 LLM——注意复班**不补**这段消息（补觉只重拟「已有」的扣留稿），
+        # 危机消息不受影响（should_hold 内 severe/elevated 穿透）。放在
+        # peer_bot_guard 之前：纯函数判定比守卫的 DB 读更便宜。
+        if app_config is not None and not skip_companion_yield:
+            try:
+                from src.inbox.work_hours_gate import (
+                    off_hours_cfg,
+                    should_hold_auto_reply,
+                    work_schedule_cfg,
+                )
+                _ws = work_schedule_cfg(app_config)
+                if (_ws.get("enabled")
+                        and not off_hours_cfg(_ws)["generate_drafts"]
+                        and should_hold_auto_reply(
+                            _ws, str(conv.get("platform") or ""),
+                            str(conv.get("account_id") or "default"),
+                            peer_text=str(text or ""))):
+                    logger.info(
+                        "[AutoDraft] 休息期不拟稿 cid=%s"
+                        "（work_schedule.off_hours.generate_drafts=false）",
+                        conv.get("conversation_id"))
+                    return
+            except Exception:
+                logger.debug(
+                    "[AutoDraft] 班表拟稿节流判定失败（放行）", exc_info=True)
+        # ── 对方机器人守卫（P0 2026-08-03 / P2 2026-08-04）：确定级（Telegram
+        # bot 账号）/复读/秒回熔断/每日预算 → **LLM 拟稿之前**判（才真省钱），
+        # 确定级会话降 manual（bootstrap 只在无显式档位时写，不会打回来）。
+        # P2：预算触顶的**真人**会话不再静默跳过（198 事故：A 线停 + 拟稿也停
+        # = 客户被已读不回、坐席零感知），改软停 _pbg_soft → 下方把档位封顶
+        # review：System Z 照常拟稿、AutosendWorker 不自动发、待审徽章可见。
+        # 全平台生效；守卫默认关，异常一律放行。
+        _pbg_soft = False
+        try:
+            from src.inbox.peer_bot_guard import guard_auto_draft_action
+            _pbg_reason, _pbg_soft = guard_auto_draft_action(
+                conv=conv, store=store, config=app_config)
+            if _pbg_reason and not _pbg_soft:
+                logger.info(
+                    "[AutoDraft] peer_bot_guard 跳过拟稿 cid=%s reason=%s",
+                    conv.get("conversation_id"), _pbg_reason)
+                return
+            if _pbg_soft:
+                logger.info(
+                    "[AutoDraft] peer_bot_guard 预算软停：本轮转人审拟稿 "
+                    "cid=%s reason=%s",
+                    conv.get("conversation_id"), _pbg_reason)
+        except Exception:
+            _pbg_soft = False
+            logger.debug(
+                "[AutoDraft] peer_bot_guard 检查失败（放行）", exc_info=True)
         # 每会话档位：坐席显式设置 > 全局 auto_draft.automation_mode。
         # Phase13：首条入站 bootstrap 持久化 auto_ai → UI/让位/System Z 口径一致。
         # 须在 companion 双轨判定之前解析——仅 auto_ai 时 A 线直发、System Z 让位；
@@ -667,38 +788,59 @@ def make_auto_draft_cb(
                         mode = explicit
         except Exception:
             pass
-        # 平台档位上限封顶（链路不稳时降级但不停）：如 Messenger 置
-        # review → auto_ai 会话被降为 review（仍拟稿、强制人审、不自动发），
-        # 坐席显式 manual 仍保持 manual。空配置 = 不封顶（零行为变更）。
-        _ceil = cfg.platform_ceilings.get(
-            str(conv.get("platform") or "").lower())
-        if _ceil:
-            try:
-                from src.inbox.drafts import cap_automation_mode
-                mode = cap_automation_mode(mode, _ceil)
-            except Exception:
-                logger.debug(
-                    "[AutoDraft] 平台档位封顶失败（忽略）", exc_info=True)
-        # 账号业务线封顶（融合实例：翻译线账号 → review，AI 仍拟稿、强制人审、
-        # 绝不自动发）。封顶链 = 会话显式 > 账号业务线 > 平台 > 全局，各级只降不升；
-        # 账号无标签 / 注册表未就绪 = 不封顶（零行为变更）。
+        # 档位封顶（平台 / 账号业务线 / 冷启动预热）——2026-08-07 收口为单一
+        # 事实源 effective_automation.compute_mode_caps：A 线档位闸、
+        # GET /api/unified-inbox/automation 的 effective 段、tools/why_no_reply.py
+        # 排障 CLI 与本处同源消费（「对人展示的口径必须与护栏行为完全一致」，
+        # 与 approve_blocked 预判徽标同一哲学）。逐层语义与旧内联实现等价：
+        # 平台表活读（platform_modes 键缺席=构造期快照、显式 {}=运营清空）、
+        # 业务线默认 translation→review（活读 business_line_modes，快照兜底）、
+        # 冷启动预热判不出不封顶（存量账号零行为变更）、各层 fail-open。
+        # 旧实现的三段内联代码与历史注释见本文件 git 历史（2026-08-03/04 落地）。
         try:
-            from src.integrations.account_registry import cached_business_line
-            _bl = cached_business_line(
-                str(conv.get("platform") or ""),
-                str(conv.get("account_id") or ""))
-            _bl_ceil = (cfg.business_line_ceilings or {}).get(_bl) if _bl else None
-            if _bl_ceil:
-                from src.inbox.drafts import cap_automation_mode
-                mode = cap_automation_mode(mode, _bl_ceil)
+            from src.inbox.effective_automation import (
+                apply_mode_caps,
+                compute_mode_caps,
+            )
+            _caps_applied = []
+            mode, _caps_applied = apply_mode_caps(mode, compute_mode_caps(
+                platform=str(conv.get("platform") or ""),
+                account_id=str(conv.get("account_id") or ""),
+                config=app_config,
+                platform_ceilings_fallback=cfg.platform_ceilings,
+                business_line_ceilings_fallback=cfg.business_line_ceilings,
+            ))
+            for _cap in _caps_applied:
+                if _cap.layer == "warmup":
+                    _log_warmup_cap_once(
+                        str(conv.get("platform") or "telegram"),
+                        str(conv.get("account_id") or ""), _cap)
         except Exception:
             logger.debug(
-                "[AutoDraft] 业务线档位封顶失败（忽略）", exc_info=True)
+                "[AutoDraft] 档位封顶失败（忽略）", exc_info=True)
+        # 预算软停封顶（peer_bot_guard P2）：auto_ai → review。放在 companion
+        # 双轨互斥**之前**——封顶后 allows_direct_autosend(mode)=False，互斥
+        # 判定自然不再让位（A 线已按预算停发，System Z 必须接管拟稿，否则
+        # 就是 198 事故的「两边都让、无人拟稿」）；同时 AutosendWorker 只发
+        # auto_ai 档草稿，review 草稿天然进人审队列。manual 仍保持 manual。
+        if _pbg_soft:
+            try:
+                from src.inbox.drafts import cap_automation_mode
+                mode = cap_automation_mode(mode, "review")
+            except Exception:
+                if mode == "auto_ai":
+                    mode = "review"
         # Sprint1 双轨互斥（收窄）：companion 持有的 TG 号在 **auto_ai** 时由 A 线
         # 直发 → System Z 抑制防双发。坐席切到 review/manual/multi_choice 后 A 线
         # 让位，本回调继续拟稿（manual 下方早退），收件箱档位才真正生效。
+        # 工作时间班表感知（2026-08-04）：A 线休息中不会直发（telegram_client
+        # 同一 should_hold 判定让位）→ 此时**不让位、照常拟稿**，稿由
+        # AutosendWorker 的班表闸扣到复班——否则隔夜消息两头都不管；
+        # 危机穿透时 A 线照发 → 照旧让位防双发。skip_companion_yield=
+        # 复班补觉重拟：消息当时已被 A 线跳过，必须旁路让位。
         try:
-            if str(conv.get("platform") or "") == "telegram" and app_config is not None:
+            if (str(conv.get("platform") or "") == "telegram"
+                    and app_config is not None and not skip_companion_yield):
                 from src.integrations.telegram_companion_worker import (
                     companion_runtime_enabled,
                 )
@@ -710,11 +852,25 @@ def make_auto_draft_cb(
                     _orch = get_orchestrator_if_running()
                     if _orch is not None and _orch.owns(
                             "telegram", str(conv.get("account_id") or "default")):
-                        return
+                        if _a_line_on_duty(app_config, conv, text):
+                            return
         except Exception:
             logger.debug("[AutoDraft] companion 双轨互斥判定失败（忽略）", exc_info=True)
         if mode == "manual":
             return
+        # 预算分子（peer_bot_guard P2）：只数「将自动投递」的拟稿轮次——
+        # auto_ai 档 L2 会被 AutosendWorker 真发；review/multi_choice 是
+        # 人审，人的决定不占 AI 预算。软停轮已封顶 review，天然不计。
+        # companion 互斥让位的会话在上方已 return（那些轮由 A 线守卫计）。
+        try:
+            from src.inbox.automation_mode import (
+                allows_direct_autosend as _pbg_allows,
+            )
+            if _pbg_allows(mode):
+                from src.inbox.peer_bot_guard import note_auto_reply
+                note_auto_reply(store, str(conv.get("conversation_id") or ""))
+        except Exception:
+            logger.debug("[AutoDraft] 预算台账计数失败（忽略）", exc_info=True)
         draft_id = draft_svc.auto_generate_draft(
             conv, text, automation_mode=mode, enrich=cfg.enrich
         )
@@ -793,7 +949,45 @@ def setup_auto_draft(assistant, draft_svc, web_app):
             draft_svc, _ad_store, _ad_loop, _enrich_auto_draft, assistant.logger,
             app_config=assistant.config.config or {},
         )
-        assistant.inbox_store.register_new_inbound_cb(_auto_draft_cb)
+        # 拟稿回调挂 app.state：复班补觉重拟（AutosendWorker）经它走**原产线**
+        # 重拟陈稿（bootstrap 在 setup_auto_draft 之后回填给 worker）。
+        # 刻意挂裸回调而非 merger.push——重拟不是实时入站，无需爆发合并。
+        try:
+            web_app.state.auto_draft_cb = _auto_draft_cb
+        except Exception:
+            pass
+        # 入站爆发合并（inbound_merge，2026-08-02 P0，默认关）：客户几秒内连发
+        # 多条 → 各自触发独立拟稿 → 同义双发（WA 实锤占比 64%）。开启后新入站先
+        # 进静默窗，窗内后续消息并入、到点用合并 peer_text 只拟一次稿。
+        _im_cfg = None
+        try:
+            from src.inbox.inbound_debounce import (
+                InboundMerger,
+                resolve_merge_cfg,
+            )
+            _im_cfg = resolve_merge_cfg(_ad_cfg)
+        except Exception:
+            assistant.logger.debug("[inbound_merge] 配置解析失败（按关闭）",
+                                   exc_info=True)
+        if _im_cfg and _im_cfg.get("enabled"):
+            _merger = InboundMerger(
+                _auto_draft_cb,
+                window_sec=_im_cfg["window_sec"],
+                max_wait_sec=_im_cfg["max_wait_sec"],
+                max_texts=_im_cfg["max_texts"],
+            )
+            assistant.inbox_store.register_new_inbound_cb(_merger.push)
+            try:
+                web_app.state.inbound_merger = _merger  # 观测挂点
+            except Exception:
+                pass
+            assistant.logger.info(
+                "[inbound_merge] 入站爆发合并已启用（window=%.1fs max_wait=%.1fs "
+                "max_texts=%d）",
+                _im_cfg["window_sec"], _im_cfg["max_wait_sec"],
+                _im_cfg["max_texts"])
+        else:
+            assistant.inbox_store.register_new_inbound_cb(_auto_draft_cb)
         assistant.logger.info(
             "AutoDraft 已启用（per-conv 优先, 全局默认 mode=%s min_len=%s "
             "persona_enrich=%s skip=%s skip_groups=%s）",

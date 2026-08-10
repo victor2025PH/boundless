@@ -71,7 +71,7 @@
       if (d.stage_conflict) {
         const detail = d.stage_conflict_detail || {};
         const reasons = (detail.reasons || []).join(this.t("cp.common.list_sep")) || this.t("cp.rel.multi_conflict");
-        lines.push(`⚠ ${esc(reasons)}`);
+        lines.push(`${this.ic("alert", 11)} ${esc(reasons)}`);
         const contactId = (d.context && d.context.contact_id) || "";
         if (contactId) {
           if (detail.show_to_contact !== false && detail.contact_stage) {

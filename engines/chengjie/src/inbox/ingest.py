@@ -76,6 +76,16 @@ def _msg_from_obj(
     # 因为两路径同文本同 ts）。LINE 不取裸 id（房间 id），见 normalizer 白名单。
     src = m.get("source") if isinstance(m.get("source"), dict) else {}
     pid = extract_platform_msg_id(src, platform)
+    # 顶层显式 id（thread-history / 拉更早 常把 synth msg_id 放顶层，不包进 source）
+    if not pid:
+        for _k in ("msg_id", "platform_msg_id", "message_id"):
+            _v = m.get(_k)
+            if _v is None:
+                continue
+            _s = str(_v).strip()
+            if _s:
+                pid = _s
+                break
     # P61：携带媒体字段（message_obj 已从 source 抽取；无则回落直接读 source）
     media_type = str(m.get("media_type") or "")
     media_ref = str(m.get("media_ref") or "")

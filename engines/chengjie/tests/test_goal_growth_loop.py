@@ -472,8 +472,8 @@ async def test_schedule_skips_short_text_and_full_profile(mem_store):
         ai, mem_store, cfg, platform="telegram", chat_key="1",
         text="嗯嗯", now=NOW) is False                    # 短文本
     full = {s: "x" for s in (
-        "name", "location", "occupation", "interests", "need", "channel",
-        "team_size", "budget", "authority", "timeline")}
+        "name", "location", "occupation", "age", "interests", "need",
+        "channel", "team_size", "budget", "authority", "timeline")}
     assert pl.schedule_llm_capture(
         ai, mem_store, cfg, platform="telegram", chat_key="1",
         text="这条够长了吧一二三四五", fields={k: {"v": v} for k, v in
@@ -2618,6 +2618,91 @@ class TestAuthorizedOffers:
         assert any("一次都没被引用" in h for h in cal2["hints"])
         # 快到期 → 续期提醒
         assert any("天到期" in h for h in cal2["hints"])
+
+    # ── P25/P2：期限调整 × 终态 → 校准建议（结局证据优先且与占比互斥）──────
+
+    @staticmethod
+    def _de_rep(sh, un, total_n, ext=None):
+        """组 deadline_edits 报表片段（sh/un/ext=队列 dict；total_n=模板终态数）。"""
+        zero = {"n": 0, "done": 0, "failed": 0, "expired": 0,
+                "cancelled": 0, "done_rate": 0.0}
+        return {
+            "by_template": {"acquire_and_convert": {"n": total_n}},
+            "deadline_edits": {"by_template": {"acquire_and_convert": {
+                "edited_n": sh.get("n", 0) + (ext or {}).get("n", 0),
+                "shortened": sh, "extended": ext or dict(zero),
+                "unedited": un,
+            }}},
+        }
+
+    @staticmethod
+    def _cal(rep):
+        from src.companion.goals.calibration import growth_calibration
+        # stats 给非零进程计数：绕开「从没触发过」的 traffic 分支噪声
+        return growth_calibration(
+            readiness={"status": "ready", "checks": {}, "blockers": [],
+                       "hints": []},
+            report=rep, stats={"auto_created": 1, "injected": {"total": 1}})
+
+    def test_calibration_deadline_share_hint(self):
+        # 结局样本不足（organic <5）→ 退占比证据：30%+ 被加急 → 下调建议
+        rep = self._de_rep(
+            sh={"n": 4, "done": 1, "failed": 1, "expired": 0,
+                "cancelled": 2, "done_rate": 0.5},
+            un={"n": 6, "done": 2, "failed": 1, "expired": 0,
+                "cancelled": 3, "done_rate": 0.667},
+            total_n=10)
+        cal = self._cal(rep)
+        assert any("被人工加急" in h and "default_days" in h
+                   for h in cal["hints"])
+
+    def test_calibration_deadline_outcome_worse_beats_share(self):
+        # 两队列 organic ≥5 且加急差 15pt+ → 出「反而更低」并抑制下调建议
+        rep = self._de_rep(
+            sh={"n": 8, "done": 2, "failed": 3, "expired": 3,
+                "cancelled": 0, "done_rate": 0.25},
+            un={"n": 12, "done": 7, "failed": 3, "expired": 2,
+                "cancelled": 0, "done_rate": 0.583},
+            total_n=20)
+        cal = self._cal(rep)
+        assert any("达成率反而更低" in h for h in cal["hints"])
+        assert not any("考虑下调模板 default_days" in h for h in cal["hints"])
+
+    def test_calibration_deadline_outcome_better(self):
+        # 加急达成率显著更高 → 「默认节奏偏保守」实证建议
+        rep = self._de_rep(
+            sh={"n": 10, "done": 8, "failed": 1, "expired": 1,
+                "cancelled": 0, "done_rate": 0.8},
+            un={"n": 10, "done": 5, "failed": 3, "expired": 2,
+                "cancelled": 0, "done_rate": 0.5},
+            total_n=20)
+        cal = self._cal(rep)
+        assert any("达成率更高" in h and "default_days" in h
+                   for h in cal["hints"])
+
+    def test_calibration_deadline_extend_hint(self):
+        # 延期占比 ≥30% → 默认节奏偏快提示
+        rep = self._de_rep(
+            sh={"n": 0, "done": 0, "failed": 0, "expired": 0,
+                "cancelled": 0, "done_rate": 0.0},
+            un={"n": 6, "done": 3, "failed": 2, "expired": 1,
+                "cancelled": 0, "done_rate": 0.5},
+            total_n=10,
+            ext={"n": 4, "done": 2, "failed": 1, "expired": 1,
+                 "cancelled": 0, "done_rate": 0.5})
+        cal = self._cal(rep)
+        assert any("被人工延期" in h and "上调" in h for h in cal["hints"])
+
+    def test_calibration_deadline_small_sample_silent(self):
+        # 模板终态 <8 → 占比证据不出手（小样本读数只看不判）
+        rep = self._de_rep(
+            sh={"n": 2, "done": 1, "failed": 1, "expired": 0,
+                "cancelled": 0, "done_rate": 0.5},
+            un={"n": 3, "done": 2, "failed": 1, "expired": 0,
+                "cancelled": 0, "done_rate": 0.667},
+            total_n=5)
+        cal = self._cal(rep)
+        assert not any(("加急" in h or "延期" in h) for h in cal["hints"])
 
     def test_bind_hint_shortens_long_account_ids(self):
         """无昵称账号 label＝一长串平台 id；hint/ops 用掐头留尾短名（可人工核对）。"""

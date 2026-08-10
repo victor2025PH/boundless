@@ -31,7 +31,7 @@
     '.cmdk-item .ck-ic{width:18px;text-align:center;flex-shrink:0;opacity:.75;}',
     '.cmdk-item .ck-lbl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
     '.cmdk-item .ck-sub{font-size:11px;color:var(--tk-text-muted,#888);flex-shrink:0;max-width:38%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
-    '.cmdk-item .ck-sub em,.cmdk-item .ck-lbl em{background:color-mix(in srgb,var(--tk-warn,#f59e0b) 28%,transparent);color:inherit;font-style:normal;border-radius:2px;padding:0 1px;}',
+    '.cmdk-item .ck-sub em,.cmdk-item .ck-lbl em{background:color-mix(in srgb,var(--tk-amber,#f59e0b) 28%,transparent);color:inherit;font-style:normal;border-radius:2px;padding:0 1px;}',
     '.cmdk-item.active{background:color-mix(in srgb,var(--tk-brand,#2563eb) 12%,transparent);}',
     '.cmdk-item.active .ck-lbl{color:var(--tk-brand,#2563eb);font-weight:600;}',
     '.cmdk-empty{padding:18px 12px;text-align:center;color:var(--tk-text-muted,#888);font-size:13px;}',

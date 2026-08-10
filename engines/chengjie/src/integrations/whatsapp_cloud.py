@@ -35,7 +35,7 @@ import json
 import logging
 import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import aiohttp
 from fastapi import FastAPI, Query, Request, Response
@@ -183,6 +183,78 @@ def _wa_send_kind(media_type: str, mime: str) -> str:
     if mt == "video" or mime.startswith("video/"):
         return "video"
     return "document"
+
+
+def extract_wa_media_id(msg: Dict[str, Any]) -> Tuple[str, str]:
+    """从入站非文字消息抽 (media_type, media_id)。无附件 → ("", "")。"""
+    mt = str((msg or {}).get("type") or "").strip().lower()
+    if mt not in ("image", "audio", "video", "sticker", "document", "voice"):
+        return "", ""
+    # voice 在 Cloud API 里常归 audio；保留原始 type 给占位文案
+    blob = (msg or {}).get(mt) if mt != "voice" else ((msg or {}).get("audio") or (msg or {}).get("voice"))
+    if not isinstance(blob, dict):
+        blob = (msg or {}).get("audio") if mt == "voice" else {}
+    mid = str((blob or {}).get("id") or "").strip()
+    return (mt or "file"), mid
+
+
+async def wa_download_media_file(
+    media_id: str, access_token: str, *, media_type: str = "image",
+) -> str:
+    """把 Cloud API 媒体拉到本地临时文件（需 Bearer；enrich/识图用）。
+
+    Graph 两步：``GET /{media-id}`` 取临时 url → 再带 Authorization 下载二进制。
+    失败返回空串（调用方仍可镜像占位）。临时文件由消费方 / OS 清理。
+    """
+    import os
+    import tempfile
+    mid = str(media_id or "").strip()
+    token = str(access_token or "").strip()
+    if not (mid and token):
+        return ""
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            meta_url = f"{GRAPH_BASE}/{mid}"
+            async with session.get(meta_url, headers=headers) as resp:
+                if resp.status != 200:
+                    return ""
+                meta = await resp.json(content_type=None)
+            dl = str((meta or {}).get("url") or "").strip()
+            mime = str((meta or {}).get("mime_type") or "").strip()
+            if not dl:
+                return ""
+            async with session.get(dl, headers=headers, allow_redirects=True) as resp:
+                if resp.status != 200:
+                    return ""
+                data = await resp.read()
+            if not data:
+                return ""
+            ext = ".bin"
+            if "jpeg" in mime or "jpg" in mime:
+                ext = ".jpg"
+            elif "png" in mime:
+                ext = ".png"
+            elif "webp" in mime:
+                ext = ".webp"
+            elif "ogg" in mime or "opus" in mime:
+                ext = ".ogg"
+            elif "mp4" in mime:
+                ext = ".mp4"
+            elif "mpeg" in mime or "mp3" in mime:
+                ext = ".mp3"
+            elif media_type in ("image", "sticker"):
+                ext = ".jpg"
+            elif media_type in ("audio", "voice"):
+                ext = ".ogg"
+            fd, path = tempfile.mkstemp(prefix="wa_in_", suffix=ext)
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+            return path
+    except Exception:
+        logger.debug("[wa_cloud] 入站媒体下载失败 media_id=%s", mid, exc_info=True)
+        return ""
 
 
 async def wa_upload_media(
@@ -350,24 +422,33 @@ def register_whatsapp_cloud_routes(
         hub_verify_token: Optional[str] = Query(None, alias="hub.verify_token"),
         hub_challenge: Optional[str] = Query(None, alias="hub.challenge"),
     ) -> Response:
+        from src.integrations.official_webhook_stats import record_verify
         if hub_mode != "subscribe":
+            # 裸 GET / 扫描噪声不算握手尝试，不记账
             return Response(status_code=400, content=b"bad mode")
         if (hub_verify_token or "") != verify_token:
             logger.warning("WA Webhook verify_token 不匹配")
+            record_verify("whatsapp", ok=False)
             return Response(status_code=403, content=b"forbidden")
+        record_verify("whatsapp", ok=True)
         return Response(status_code=200, content=(hub_challenge or "").encode("utf-8"))
 
     async def wa_webhook_event(request: Request) -> Response:
+        from src.integrations.official_webhook_stats import record_error, record_event
         raw = await request.body()
         sig = (request.headers.get("X-Hub-Signature-256")
                or request.headers.get("x-hub-signature-256") or "")
         if not verify_wa_signature(raw, sig, app_secret):
             logger.warning("WA Webhook 签名校验失败")
+            record_error("whatsapp", "bad_signature")
             return Response(status_code=403, content=b"invalid signature")
         try:
             data = json.loads(raw.decode("utf-8"))
         except Exception:
+            record_error("whatsapp", "bad_json")
             return Response(status_code=400, content=b"invalid json")
+        # 到达即记（验签已过）：单条处理失败不影响「回调可达」事实
+        record_event("whatsapp")
         for msg in extract_inbound_messages(data):
             try:
                 await _handle_one_message(
@@ -396,13 +477,22 @@ async def _handle_one_message(
     if not sender:
         return
     if str(msg.get("type") or "") != "text":
-        # Phase I1：入站媒体可见化——镜像占位（坐席台可见/可接管），再回不支持
+        # Phase I1：入站媒体可见化——镜像占位（坐席台可见/可接管），再回不支持。
+        # P2：尽力把 Cloud 媒体拉到本地路径写入 media_ref，供识图/转写链消费
+        # （Cloud CDN 必须带 Bearer，不能只塞远程 URL 给 remote_fetch）。
         try:
             from src.integrations.shared.official_inbound import mirror_inbound_media
+            _mt, _mid = extract_wa_media_id(msg)
+            _ref = ""
+            if _mid:
+                _ref = await wa_download_media_file(
+                    _mid, access_token, media_type=_mt or "image")
             mirror_inbound_media(
                 platform="whatsapp", account_id=phone_number_id,
-                chat_key=f"wa:user:{sender}", media_type=str(msg.get("type") or "file"),
-                name=sender, msg_id=str(msg.get("id") or ""))
+                chat_key=f"wa:user:{sender}",
+                media_type=_mt or str(msg.get("type") or "file"),
+                name=sender, msg_id=str(msg.get("id") or ""),
+                media_ref=_ref)
         except Exception:
             pass
         await wa_send_text(sender, unsupported, phone_number_id, access_token)

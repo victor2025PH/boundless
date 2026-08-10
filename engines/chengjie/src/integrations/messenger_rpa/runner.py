@@ -7558,6 +7558,15 @@ class MessengerRpaRunner:
                 block_duration_sec=block_hours * 3600,
                 require_consecutive=require,
             )
+            # 反封号反馈闭环（P0）：页面风控态 → 统一 24h 风控计数 → account_health
+            # 扣分 → companion_send_gate 自动降 recommended_cap。与协议线 FloodWait
+            # 走同一口径（risk_events），让机群健康分「看得见」RPA 号的风控压力。
+            # best-effort：记账失败绝不影响既有 pause/告警主流程。
+            try:
+                from src.ops.risk_events import KIND_FLOOD, record_risk_event
+                record_risk_event("messenger", self._account_id, KIND_FLOOD)
+            except Exception:
+                pass
             result["risk"] = {
                 "hit": True,
                 "severity": risk.severity,
@@ -11242,6 +11251,16 @@ class MessengerRpaRunner:
         if not reply_text:
             result["error"] = "empty_reply_text"
             return False
+        # 多行折叠（2026-08-09）：本路径整段注入+单次点发送、不具备分条能力；
+        # bubbles 开启时拟稿合同是「每行一句」，多行原样注入＝一条消息带结构化
+        # 换行（2026-08-08 客户实锤的 AI 感形态）→ 折叠成自然单段（与协议直发
+        # 链/桌面桥/human_pacing 单条出口同款收口；折叠不可用原样发，绝不阻断）。
+        if "\n" in reply_text:
+            try:
+                from src.inbox.reply_split import collapse_paragraphs as _clp_mr
+                reply_text = (_clp_mr(reply_text) or reply_text)[:1500]
+            except Exception:
+                pass
 
         text_x, text_y = cc.INPUT_TEXT_FIELD.at(*wh)
         if use_adb_keyboard:

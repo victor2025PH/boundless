@@ -102,6 +102,22 @@ _EVENT_ALIASES: Dict[str, Dict[str, Any]] = {
     "human_deliver": {"types": {"human_deliver_alert"}, "levels": None},
     # 待审草稿长期无人处理（补 SLA 的 L1 盲区：L1 既不自动发也无逐条告警 → 无声烂掉）
     "draft_backlog": {"types": {"draft_backlog_alert"}, "levels": None},
+    # 被埋会话（P0-198 2026-08-04）：会话归档着却有未读入站＝客户在等，而工作台所有
+    # 默认视图都过滤 archived=1 → 没人看得见、也没有任何信号会响
+    "buried_conv": {"types": {"buried_conv_alert"}, "levels": None},
+    # 对方机器人守卫（P0 2026-08-03：主动触达问候 @SpamBot → 80 秒 8 轮 LLM 空转实锤）
+    # ——检出 bot/复读/秒回熔断/预算封顶时通知（每会话每日至多一次）
+    "bot_peer": {"types": {"bot_peer_alert"}, "levels": None},
+    # AI 对聊提醒（P0-6 2026-08-09：受管账号互聊是**允许的测试手段**，只标记+
+    # 提醒、绝不拦截——风险只在「没人知道它在跑」，双边烧配额应发生在知情前提下）
+    "ai_mutual_chat": {"types": {"ai_mutual_chat_alert"}, "levels": None},
+    # 案例中心（2026-08-03 案例跟进页改造——「AI 判定需要人跟进」从看板变成推送）：
+    # case_alert=severity≥2 开案/升级；case_backlog_alert=立案后无人认领/处理的
+    # 积压巡检（危机级单独点名）。同一别名一次订阅两类都收。
+    "cases": {"types": {"case_alert", "case_backlog_alert"}, "levels": None},
+    # 账号接入链路停摆（某平台某方式发起 N 次成功 0 次；2026-07-25 LINE 扫码 100% 失败
+    # 烂了多日无人知——ops 卡能看见但要有人开，这条把它变成推送）
+    "login_funnel": {"types": {"login_funnel_alert"}, "levels": None},
     # CSRF 写请求拦截激增（前端宿主写通道断裂 / 反代漂移 / 跨站探测；2026-07-31 事故沉淀）
     "csrf_reject": {"types": {"csrf_reject_alert"}, "levels": None},
     # 原生通话主机持续不可用（MiniCPM-o 176:7860 掉线 → 打进来的电话全接不了）
@@ -119,10 +135,34 @@ _EVENT_ALIASES: Dict[str, Dict[str, Any]] = {
     "host_alert": {"types": {"host_alert"}, "levels": None},
     # 出站媒体承诺未兑现告警（Phase21a：AI 说发图/语音却频繁撤回 → 信任受损）
     "media_promise": {"types": {"media_promise_alert"}, "levels": None},
+    # 撤销设定复活（2026-08-04：运营删掉的人设设定被丰富管线/直改文件写回档案）
+    "persona_retired": {"types": {"persona_retired_alert"}, "levels": None},
     # 口语化 LLM 持续连败（2026-07-15：九连败静默降级规则档，拟人化卖点静默流失）
     "colloquial_llm": {"types": {"colloquial_llm_alert"}, "levels": None},
     # 出站语音连发异常（2026-07-15 三连发事故指纹：同会话短窗多条语音=重复处理回归）
     "voice_burst": {"types": {"voice_burst_alert"}, "levels": None},
+    # 语音出站断档（2026-08-02 实锤：hub 音色档 404 → strict 全拒发 5 天零告警——
+    # 探针全绿也可能整链拒发；低流量下按滚动窗「有尝试全失败」判）
+    "voice_outage": {"types": {"voice_outage_alert"}, "levels": None},
+    # 入站漏球（P0 2026-08-05：客户最后一句既没被回也没拟稿——draft_backlog 只看
+    # 「有稿没人处理」，「压根没稿」的丢球此前零信号；22:27 高意向消息整晚无人接实锤）
+    "unanswered_inbound": {"types": {"unanswered_inbound_alert"}, "levels": None},
+    # 审计高危操作（2026-08-05：批量删记忆/删模板等破坏性后台动作；store 写成功后
+    # 60s 同 actor×action 节流推 EventBus——通道未接通时仍进铃铛/日志）
+    "audit_danger": {"types": {"audit_danger_alert"}, "levels": None},
+    # 营销目标达成（P0 2026-08-09：客户完成设定目标——付费/订阅/关系达标/摸底
+    # 完成，goals.notify 扫描器发布；好消息逐条即时推，完成后 48h 是跟进黄金窗）
+    "goal_complete": {"types": {"goal_completed_alert"}, "levels": None},
+    # 营销目标失守日报（P1 2026-08-09：failed/expired **聚合**一条——坏消息逐条
+    # 推=告警风暴；攒够条数或压龄 24h 才出账，按模板/账号分布给调参抓手）
+    "goal_miss": {"types": {"goal_miss_alert"}, "levels": None},
+    # 常备扫描循环停摆（P4 2026-08-09：目标结算/提醒 + 工作链推进的心跳停走
+    # ——两者都曾挂死调度器**静默从未运行**，此类断线从此主动报警不靠人发现）
+    "scan_stall": {"types": {"scan_loop_stall_alert"}, "levels": None},
+    # 内嵌网页端选择器失配（2026-08-10：桌面壳把官方网页端嵌进 webview 注入脚本，
+    # 官方一改版 DOM 就抓不到气泡/输入框 → 翻译与回流静默全断；与 platform_session
+    # 正交：那个是登录态坏了要重登，这个是登录态好着但选择器要改）
+    "inject_health": {"types": {"inject_health_alert"}, "levels": None},
 }
 
 # ─── 告警受众分层（2026-07-31，产品化：终端客户能自己绑、看得懂）─────────────
@@ -139,10 +179,29 @@ _BUSINESS_ALERTS: Dict[str, str] = {
     "sla_breach":       "cp.alert.sla_breach",         # 回复超时
     "sla_escalated":    "cp.alert.sla_escalated",       # 严重超时升级
     "draft_backlog":    "cp.alert.draft_backlog",       # 待回复积压，客户在等
+    "buried_conv":      "cp.alert.buried_conv",         # 会话被归档埋掉，客户在等却看不见
+    "cases":            "cp.alert.cases",               # 会话需要人工跟进（案例开案/升级）
+    "bot_peer":         "cp.alert.bot_peer",            # 对方疑似机器人，AI 已自动停发/降档
+    "login_funnel":     "cp.alert.login_funnel",        # 账号一直接不上
     "queue_alert":      "cp.alert.queue_alert",         # 会话排队超时
     "csat_alert":       "cp.alert.csat_alert",          # 客户满意度跌破
     "reply_risk":       "cp.alert.reply_risk",          # 高危回复预警
     "billing_alert":    "cp.alert.billing_alert",       # 席位/用量异常
+    "persona_retired":  "cp.alert.persona_retired",     # 已删的人设设定被写回（运营在人设工作室可自行处置）
+    # 2026-08-08：客户说了最后一句、系统既没回也没拟稿。此前它在 _EVENT_ALIASES 里
+    # 存在（技术上可订阅），却**不在任何受众目录**→ alert_audience 归 other → 告警渠道
+    # 面板从来没把这一项列出来。于是「没人订阅」不是运营疏忽，是产品没提供选项：本机
+    # 实测 8 条真实漏球全程零外发。语义上它和 draft_backlog/buried_conv 是同一族
+    # （客户在等 + 运营能行动），归 business。
+    "unanswered_inbound": "cp.alert.unanswered_inbound",
+    # 目标达成＝老板/运营最想收的好消息（成交/订阅/关系达标），且需要立刻行动
+    # （趁热跟进），天然 business。
+    "goal_complete": "cp.alert.goal_complete",
+    # 目标失守日报＝运营要调整打法的信号（哪类目标/哪个号在漏），能行动 → business。
+    "goal_miss": "cp.alert.goal_miss",
+    # AI 对聊提醒＝老板/运营可行动（是测试就忽略；不是就把任一侧切手动止损配额），
+    # 与 bot_peer 同族的「对端身份」信号，天然 business。
+    "ai_mutual_chat": "cp.alert.ai_mutual_chat",
 }
 _TECHNICAL_ALERTS: Dict[str, str] = {
     "csrf_reject":         "cp.alert.csrf_reject",
@@ -162,6 +221,17 @@ _TECHNICAL_ALERTS: Dict[str, str] = {
     "voice_burst":         "cp.alert.voice_burst",
     "anomaly":             "cp.alert.anomaly",
     "trial_fulfiller":     "cp.alert.trial_fulfiller",
+    "audit_danger":        "cp.alert.audit_danger",
+    # 2026-08-08 与 unanswered_inbound 同批补登：这两个同样只存在于 _EVENT_ALIASES、
+    # 从未出现在面板。voice_outage 尤其讽刺——它正是为「音色档 404 → 整链拒发 5 天
+    # 零告警」建的告警，自己却也没有订阅入口。
+    "lan_gpu":             "cp.alert.lan_gpu",
+    "voice_outage":        "cp.alert.voice_outage",
+    # 常备循环心跳停走＝基建自愈信号（开发/技术支持处置），terminal 运营看不懂
+    "scan_stall":          "cp.alert.scan_stall",
+    # 选择器失配的修法是改 desktop_selector_profiles.json 覆写层（技术支持动作），
+    # 终端运营看不懂「composer 选择器失效」，故归 technical。
+    "inject_health":       "cp.alert.inject_health",
 }
 
 
@@ -373,6 +443,39 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
             "[📋 立即处理](/workspace/drafts)"
         )
 
+    elif event_type == "case_alert":
+        _src_names = {
+            "crisis": "危机信号", "human_request": "客户要求人工",
+            "ai_doubt": "怀疑机器人", "media_complaint": "质疑照片/媒体",
+            "escalation": "满意度升级", "intent_chain": "意图链风险",
+        }
+        _src = _src_names.get(str(data.get("source") or ""),
+                              str(data.get("source") or "?"))
+        _sev = int(data.get("severity") or 1)
+        _act = "严重度升级" if data.get("action") == "upgraded" else "新开案"
+        # P8：同源历史处置上下文——接警的人开局就知道旧招用过没用
+        _prior = data.get("prior_resolutions") or {}
+        _pb = _prior.get("buckets") or {}
+        _prior_txt = ""
+        if _pb:
+            _bn = {"soothed": "安抚", "handoff": "转人工",
+                   "false_alarm": "判误报", "empty": "未填原因", "other": "其他"}
+            _hist = "、".join(
+                f"{_bn.get(k, k)}×{v}" for k, v in sorted(_pb.items()))
+            _ago = _prior.get("last_closed_ago_hours")
+            _ago_txt = f"，最近一次 {_ago}h 前" if _ago is not None else ""
+            _prior_txt = (f"**历史处置**: {_hist}{_ago_txt}"
+                          "——同类问题处置后又立案，考虑换打法\n")
+        title = f"{'🚨' if _sev >= 3 else '🟠'} 需要人工跟进：{_src}"
+        text = (
+            f"**动作**: {_act}（severity {_sev}）\n"
+            f"**用户**: {str(data.get('user_id') or '?')[-8:]}\n"
+            f"**案号**: {data.get('case_id', '?')}\n"
+            f"**最近消息**: {str(data.get('last_message') or '')[:60] or '（无）'}\n"
+            f"{_prior_txt}"
+            "[🗂 打开案例跟进](/cases)"
+        )
+
     elif event_type == "draft_backlog_summary":
         cnt = data.get("count", "?")
         title = f"📥 草稿积压汇总：{cnt} 条待处理"
@@ -497,6 +600,8 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
         days = data.get("days", 7)
         title = f"📰 运营周报（近 {days} 天）"
         lines = [f"- {h}" for h in (data.get("headline") or [])]
+        # AI 价值总账行（2026-08-06，health_watchdog 装配随报文携带；上限防撑爆推送）
+        lines.extend(f"- {vl}" for vl in (data.get("value_lines") or [])[:6])
         cmp = data.get("compare") or {}
         ic = cmp.get("incidents_delta")
         pp = cmp.get("ai_share_delta_pp")
@@ -605,6 +710,33 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 "[📊 查看试用台账](/console/trial)"
             )
 
+    elif event_type == "unanswered_inbound_alert":
+        if data.get("recovered"):
+            title = "✅ 入站漏球已清"
+            text = (
+                "**状态**: 所有客户的最后一条消息都已有回复或有稿在审\n"
+                "[📥 打开工作台](/workspace/unified-inbox)"
+            )
+        else:
+            cnt = data.get("count", "?")
+            oldest = data.get("oldest_hours", "?")
+            samples = data.get("samples") or []
+            lines = [
+                f"- {s.get('platform','?')}:"
+                f"{str(s.get('conversation_id') or '?')[-12:]}"
+                f"（已等 {s.get('age_hours','?')}h）"
+                for s in samples[:5]
+            ]
+            title = f"📭 客户在等：{cnt} 个会话没人回、也没有草稿"
+            text = (
+                f"**数量**: {cnt} 个（最老 {oldest}h）"
+                + ("（重提）" if data.get("reminder") else "") + "\n"
+                + ("\n".join(lines) + "\n" if lines else "")
+                + "**含义**: 最后一条是客户消息，超时无任何回复且无待审稿——"
+                "拟稿链可能丢球（风控静默拦下/生成失败/触发漏了）\n"
+                "[📥 打开工作台](/workspace/unified-inbox)"
+            )
+
     elif event_type == "avatar_voice_alert":
         if data.get("recovered"):
             title = "✅ AvatarHub 语音克隆已恢复"
@@ -639,6 +771,38 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 "[📊 查看运营总览](/admin/ops)"
             )
 
+    elif event_type == "voice_outage_alert":
+        if data.get("recovered"):
+            title = "✅ 语音出站已恢复"
+            text = (
+                "**状态**: 观察窗内重新有语音条成功发出\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+        else:
+            n = int(data.get("attempts") or 0)
+            win = int(data.get("window_hours") or 24)
+            streak = int(data.get("consecutive_fails") or 0)
+            reasons = data.get("top_reasons") or {}
+            r_txt = "、".join(f"{k}×{v}" for k, v in sorted(
+                reasons.items(), key=lambda kv: -int(kv[1] or 0))) or "—"
+            try:
+                last_ok_h = float(data.get("last_ok_hours", -1))
+            except (TypeError, ValueError):
+                last_ok_h = -1.0
+            ok_txt = (f"{last_ok_h:.1f} 小时前" if last_ok_h >= 0
+                      else "本进程内无成功记录")
+            prefix = "⏰" if data.get("reminder") else "🔇"
+            title = f"{prefix} 语音出站连续失败：{win}h 内 {n} 次尝试 0 成功"
+            text = (
+                f"**连败**: {streak} 次；最近一次成功: {ok_txt}\n"
+                f"**失败原因 Top**: {r_txt}\n"
+                "**影响**: 该发语音的回复全部回落文字发出（低流量下 7852 探针"
+                "可能全绿），克隆声卖点静默失效\n"
+                "**排查**: 常见原因＝hub 音色档缺失(404)/7852 掉线/参考音丢失；"
+                "查 app.log 关键字 `TTS failed`，再看 `/api/voice/avatar-status`\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+
     elif event_type == "lan_gpu_alert":
         host = str(data.get("host") or data.get("url") or "-")
         if data.get("recovered"):
@@ -661,6 +825,87 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 "请到现场检查主机电源/系统/Ollama 服务\n"
                 "[📊 查看运营总览](/admin/ops)"
             )
+
+    elif event_type == "case_backlog_alert":
+        if data.get("recovered"):
+            title = "✅ 案例积压已清"
+            text = (
+                "**状态**: 无人认领的待跟进案例已全部处理\n"
+                "[🗂 查看案例跟进](/cases)"
+            )
+        else:
+            _urgent = int(data.get("urgent_count") or 0)
+            _stale = int(data.get("stale_count") or 0)
+            _media = int(data.get("media_stale_count") or 0)
+            _oldest = float(data.get("oldest_hours") or 0)
+            _srcs = data.get("by_source") or {}
+            _src_txt = "、".join(f"{k}×{v}" for k, v in sorted(_srcs.items())) or "—"
+            _prefix = ("🚨" if _urgent
+                       else ("📸" if _media
+                             else ("⏰" if data.get("reminder") else "🟠")))
+            _urgent_txt = (f"**危机级无人认领**: {_urgent} 条（最优先处理）\n"
+                           if _urgent else "")
+            # P5 媒体档：穿帮风险单独点名——客户在等解释，拖越久越像心虚
+            _media_txt = (
+                f"**媒体质疑超龄**: {_media} 条未认领超过 "
+                f"{float(data.get('media_stale_hours') or 4):.0f}h"
+                f"（最老 {float(data.get('media_oldest_hours') or 0):.1f}h；"
+                "穿帮风险，客户在等解释）\n" if _media else "")
+            _media_title = f" / 媒体 {_media} 条" if _media else ""
+            title = (f"{_prefix} 案例无人跟进：危机 {_urgent} 条"
+                     f"{_media_title} / 超龄 {_stale} 条")
+            text = (
+                f"{_urgent_txt}"
+                f"{_media_txt}"
+                f"**超龄未认领**: {_stale} 条（超过 {float(data.get('min_age_hours') or 4):.0f}h）\n"
+                f"**最老**: {_oldest:.1f} 小时\n"
+                f"**来源**: {_src_txt}\n"
+                "[🗂 立即处理](/cases)"
+            )
+
+    elif event_type == "bot_peer_alert":
+        _who = str(data.get("display_name") or data.get("username")
+                   or data.get("conversation_id") or "?")
+        _rs = str(data.get("reason") or "?")
+        _rs_txt = {
+            "tg_is_bot": "Telegram 官方标记为 bot",
+            "tg_chat_type_bot": "会话类型为 bot",
+            "tg_username_bot": "username 以 bot 结尾（Bot API 专属）",
+            "tg_inline_keyboard": "消息带按钮键盘（只有 bot 能发）",
+            "suspected_bot": "内容特征疑似自动化（菜单话术/链接刷屏/索取循环）",
+            "inbound_repeat": "对方连续多条相同内容",
+            "instant_echo": "秒回×同文（自动应答特征）",
+            "daily_budget": "今日自动回复达预算上限",
+        }.get(_rs, _rs)
+        title = f"🤖 检测到机器人对方：{_who}"
+        text = (
+            f"**会话**: {data.get('conversation_id', '?')}\n"
+            f"**判定**: {_rs_txt}\n"
+            f"**证据**: {str(data.get('evidence') or '')[:80] or '—'}\n"
+            f"**处置**: {data.get('action') or '已跳过自动回复'}"
+            "（入站照常进收件箱，坐席可手动交互；误判可在收件箱改回档位）\n"
+            "[📥 打开收件箱](/workspace/inbox)"
+        )
+
+    elif event_type == "ai_mutual_chat_alert":
+        convs = data.get("conversations") or []
+        wh = int(data.get("window_hours") or 24)
+        _rows = []
+        for c in convs[:6]:
+            _tag = "（对端是本机受管账号）" if c.get("managed_peer") else ""
+            _rows.append(
+                f"- `{c.get('conversation_id', '?')}` 入 {int(c.get('n_in') or 0)}"
+                f" / 出 {int(c.get('n_out') or 0)}{_tag}")
+        title = (f"🔁 AI 对聊提醒：{len(convs)} 个全自动会话 "
+                 f"{wh}h 内双向高频互发")
+        text = (
+            "\n".join(_rows) + "\n"
+            "**说明**: 这通常是两个受管账号在互聊（测试属预期——系统只提醒，"
+            "未做任何拦截）\n"
+            "**若非刻意测试**: 把任一侧会话切「手动」即停；持续互聊会消耗"
+            "双边 AI 配额\n"
+            "[📥 打开收件箱](/workspace/inbox)"
+        )
 
     elif event_type == "draft_backlog_alert":
         if data.get("recovered"):
@@ -693,6 +938,151 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 "**处置**: 工作台逐条「改写后发送」或「拒绝」清队列；长期缺人看队列"
                 "考虑开 `inbox.sla_watcher.auto_expire_hours` 自动作废\n"
                 "[📊 查看运营总览](/admin/ops)"
+            )
+
+    elif event_type == "goal_completed_alert":
+        _who = str(data.get("contact_name") or data.get("chat_key")
+                   or data.get("conversation_id") or "客户")
+        _tname = str(data.get("template_name") or data.get("template") or "目标")
+        _title_txt = str(data.get("title") or _tname)
+        _acct = f"{data.get('platform', '?')}:{data.get('account_id', '?')}"
+        _kind_txt = {
+            "order": "官网订单回流",
+            "manual": "坐席拍板成交",
+            "auto": "信号自动结算（权益/阶段/回话达标）",
+        }.get(str(data.get("result_kind") or ""), "—")
+        _amount = data.get("amount")
+        _amount_txt = (f"**金额**: {_amount}\n" if _amount is not None else "")
+        _prod = str(data.get("product") or "")
+        _prod_txt = (f"**产品**: {_prod}\n" if _prod else "")
+        _days = data.get("days_to_done")
+        _days_txt = (f"，用时 {_days} 天" if _days is not None else "")
+        title = f"🎯 目标达成：{_who} 完成「{_title_txt}」"
+        text = (
+            f"**账号**: {_acct}\n"
+            f"**目标**: {_tname}{_days_txt}\n"
+            f"**完成方式**: {_kind_txt}\n"
+            f"{_amount_txt}"
+            f"{_prod_txt}"
+            "**建议**: 完成后 48h 是跟进黄金窗——发个感谢/追加关怀，"
+            "转化类可顺手启动留存链\n"
+            "[🎯 打开目标达成报表](/workspace/goal-report?status=done&days=7)"
+        )
+
+    elif event_type == "scan_loop_stall_alert":
+        _loop_names = {"goal_scan": "目标结算/提醒扫描",
+                       "workflow_autorun": "工作链推进"}
+        _ln = _loop_names.get(str(data.get("loop") or ""),
+                              str(data.get("loop") or "?"))
+        if data.get("recovered"):
+            title = f"✅ 常备循环已恢复：{_ln}"
+            text = "**状态**: 心跳恢复跳动\n[📊 查看运营总览](/admin/ops)"
+        else:
+            _sm = float(data.get("stalled_min") or 0)
+            _mounted = data.get("mounted")
+            prefix = "⏰" if data.get("reminder") else "🚨"
+            _cause = ("循环未挂载（bootstrap 启动失败/旧进程）"
+                      if _mounted is False else "心跳停走（事件循环卡死/异常退出）")
+            title = f"{prefix} 常备循环停摆：{_ln}（{_sm:.0f} 分钟无心跳）"
+            text = (
+                f"**判定**: {_cause}\n"
+                "**影响**: 目标完成不被发现/提醒不发（goal_scan）或工作链步骤"
+                "不推进（workflow_autorun）——都是静默失效，不修没人会替你发现\n"
+                "**处置**: 查 app.log 里循环启动行与异常栈；重启实例可临时恢复\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+
+    elif event_type == "goal_miss_alert":
+        _n = int(data.get("count") or 0)
+        _f = int(data.get("failed") or 0)
+        _e = int(data.get("expired") or 0)
+        _bt = data.get("by_template") or {}
+        _ba = data.get("by_account") or {}
+        _bt_txt = "、".join(
+            f"{k}×{v}" for k, v in sorted(
+                _bt.items(), key=lambda kv: -int(kv[1]))[:4]) or "—"
+        _ba_txt = "、".join(
+            f"{k}×{v}" for k, v in sorted(
+                _ba.items(), key=lambda kv: -int(kv[1]))[:4]) or "—"
+        _tri = data.get("triage") or {}
+        _tri_txt = ""
+        if _tri:
+            _tri_txt = (
+                f"**三分法**: 已开价未成交 {int(_tri.get('offered') or 0)}"
+                f" / 有来有回 {int(_tri.get('engaged') or 0)}"
+                f" / 没聊起来 {int(_tri.get('silent') or 0)}\n")
+        title = f"📉 目标失守日报：{_n} 个目标未达成（失败 {_f} / 到期 {_e}）"
+        text = (
+            f"**按类型**: {_bt_txt}\n"
+            f"**按账号**: {_ba_txt}\n"
+            f"{_tri_txt}"
+            "**建议**: 「已开价未成交」先人工复核有没有站外成交漏标（官网单在"
+            "站外，系统看不见）；「没聊起来」复盘话术/名单；集中在个别账号则查"
+            "该号会话质量\n"
+            "[🎯 看这批未达成客户](/workspace/goal-report?status=ended&days=3)"
+        )
+
+    elif event_type == "buried_conv_alert":
+        if data.get("recovered"):
+            title = "✅ 被埋会话已清空"
+            text = (
+                "**状态**: 归档区里已没有「客户在等」的会话\n"
+                "[📥 打开收件箱](/workspace/inbox)"
+            )
+        else:
+            n = int(data.get("buried_count") or 0)
+            unread = int(data.get("total_unread") or 0)
+            oldest = float(data.get("oldest_hours") or 0)
+            auto_n = int(data.get("auto_archived") or 0)
+            manual_n = int(data.get("manual_archived") or 0)
+            prefix = "⏰" if data.get("reminder") else "🚨"
+            oldest_txt = (f"{oldest / 24:.1f} 天" if oldest >= 48 else f"{oldest:.0f} 小时")
+            # 人工 vs 自动的处置完全不同，故在正文里分开点名而不是合成一个数字
+            src_txt = "、".join(
+                x for x in (
+                    f"人工归档 {manual_n} 个" if manual_n else "",
+                    f"自动归档 {auto_n} 个" if auto_n else "",
+                ) if x
+            ) or "—"
+            title = f"{prefix} {n} 个会话被归档埋掉了（{unread} 条未读没人看见）"
+            text = (
+                f"**来源**: {src_txt}\n"
+                f"**最近活动**: 距今 {oldest_txt}\n"
+                "**影响**: 归档会话不出现在任何默认视图里，客户还在发消息但坐席看不到、"
+                "也不会有未读提示\n"
+                "**处置**: 收件箱「更多 → 归档」逐个确认，还在服务的点「取消归档」；"
+                "若多为自动归档，说明策略把活跃会话判死了（调 "
+                "`inbox.report.auto_archive.idle_hours` 或关掉 `enabled`）\n"
+                "[📥 打开收件箱](/workspace/inbox)"
+            )
+
+    elif event_type == "login_funnel_alert":
+        _key = str(data.get("key") or "?")
+        if data.get("recovered"):
+            title = f"✅ 账号接入已恢复：{_key}"
+            text = (
+                "**状态**: 该平台该接入方式已有账号成功登录\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+        else:
+            started = int(data.get("started") or 0)
+            qr_shown = int(data.get("qr_shown") or 0)
+            reasons = data.get("reasons") or {}
+            r_txt = "、".join(f"{k}×{v}" for k, v in sorted(
+                reasons.items(), key=lambda kv: -int(kv[1] or 0))) or "—"
+            prefix = "⏰" if data.get("reminder") else "🚨"
+            # 「二维码/登录窗根本没出来」和「出来了但没人扫通」是两种完全不同的故障，
+            # 摆在标题下第一行，收到告警的人不必先去翻日志判断该找谁。
+            stage = ("登录入口就没起来（连二维码/登录窗都没出现）" if qr_shown == 0
+                     else f"登录入口正常（{qr_shown} 次出现）但无人走到授权")
+            title = f"{prefix} 账号接不上：{_key} 发起 {started} 次、成功 0 次"
+            text = (
+                f"**卡在哪**: {stage}\n"
+                f"**失败归因**: {r_txt}\n"
+                "**怎么判**: 归因集中在 `checkpoint` / `two_factor` / `password_error` "
+                "＝账号侧被风控或凭据问题，别查代码；集中在 `service_down` / "
+                "`creds_missing` / `session_timeout` ＝接入服务或配置侧\n"
+                "[📊 查看接入漏斗](/admin/ops)"
             )
 
     elif event_type == "csrf_reject_alert":
@@ -772,6 +1162,31 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 "[📊 查看运营总览](/admin/ops)"
             )
 
+    elif event_type == "persona_retired_alert":
+        if data.get("recovered"):
+            title = "✅ 撤销设定冲突已清理"
+            text = (
+                "**状态**: 人设档案与撤销清单不再冲突\n"
+                "[🎭 人设工作室](/personas)"
+            )
+        else:
+            _pids = data.get("personas") or list((data.get("conflicts") or {}).keys())
+            _tot = int(data.get("total") or 0)
+            prefix = "⏰" if data.get("reminder") else "🧟"
+            title = f"{prefix} 已删除的人设设定被写回（{len(_pids)} 个人设 {_tot} 处）"
+            _rows = []
+            for _pid, _hits in sorted((data.get("conflicts") or {}).items())[:5]:
+                _terms = "、".join(sorted({str(h.get("term") or "") for h in _hits if h.get("term")}))
+                _rows.append(f"- `{_pid}`: {_terms}（{len(_hits)} 处）")
+            text = (
+                "**情况**: 运营删过的设定（retired_facts 锚词）又出现在档案字段里"
+                "——多半是批量丰富/直改文件把旧内容写了回来\n"
+                + ("\n".join(_rows) + "\n" if _rows else "")
+                + "**处置**: 人设工作室 → 该人设 → 预览 → 内容排查，删掉复活内容；"
+                "若是有意恢复设定，请先删除对应撤销钉子\n"
+                "[🎭 人设工作室](/personas)"
+            )
+
     elif event_type == "media_promise_alert":
         if data.get("recovered"):
             title = "✅ 媒体承诺兑现已恢复"
@@ -833,6 +1248,23 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
             "[📊 查看运营总览](/admin/ops)"
         )
 
+    elif event_type == "audit_danger_alert":
+        act = str(data.get("action") or "?")
+        who = str(data.get("user_id") or "?")
+        tgt = str(data.get("target") or "").strip()
+        title = f"⚠️ 高危后台操作：{act}（by {who}）"
+        lines = [
+            f"**操作人**: {who}",
+            f"**动作**: `{act}`",
+        ]
+        if tgt:
+            lines.append(f"**对象**: {tgt[:120]}")
+        snap = str(data.get("snapshot_id") or "").strip()
+        if snap:
+            lines.append(f"**快照**: [{snap}](/diff?a={snap}&b=__current__)")
+        lines.append("[📋 打开操作记录](/audit?family=danger)")
+        text = "\n".join(lines)
+
     elif event_type == "orchestrator_worker_alert":
         if data.get("recovered"):
             title = "✅ 编排器 worker 已恢复"
@@ -855,6 +1287,36 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 "[📊 查看运营总览](/admin/ops)"
             )
 
+    elif event_type == "inject_health_alert":
+        plat = str(data.get("platform") or "?")
+        acct = str(data.get("account_id") or "?")
+        down_min = int(data.get("down_minutes") or 0)
+        down_txt = (f"{down_min // 60} 小时 {down_min % 60} 分钟"
+                    if down_min >= 60 else f"{down_min} 分钟")
+        field = str(data.get("field") or "bubble")
+        st = str(data.get("status") or "")
+        # 元素在但抓不到内容 vs 元素压根找不到，是两种修法：前者改「怎么取值」，
+        # 后者改「怎么定位」。文案必须分开，否则运维照着改错地方。
+        _WHAT = {
+            "mismatch_text": "气泡元素找到了，但一条都取不出文字/媒体",
+            "mismatch_ingest": "气泡取到了，但取不到消息 id / 会话 id（回流全丢）",
+            "mismatch_composer": "输入框定位不到（无法发送）",
+        }
+        what = _WHAT.get(st, f"页面结构对不上（{st or '未知'}）")
+        miss = [str(x) for x in (data.get("missing_selectors") or [])][:6]
+        title = f"🧩 {plat} 网页端选择器失配（已 {down_txt}）"
+        text = (
+            f"**账号**: {acct}\n"
+            f"**症状**: {what}\n"
+            f"**待校准字段**: `{field}`"
+            + (f"　**缺失选择器**: {', '.join(miss)}" if miss else "") + "\n"
+            + ("**注意**: 该账号走的是通用兜底选择器（未命中平台档）\n"
+               if data.get("generic") else "")
+            + "官方网页端很可能改版了：翻译与消息回流此刻是静默失效的。"
+            "请在 `config/desktop_selector_profiles.json` 覆写该字段（热生效、无需重启）\n"
+            "[📊 查看运营总览](/admin/ops)"
+        )
+
     elif event_type == "platform_session_alert":
         plat = str(data.get("platform") or "?")
         acct = str(data.get("account_id") or "?")
@@ -863,6 +1325,21 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
             text = (
                 f"**账号**: {acct}\n"
                 "**状态**: 已重新登录/授权，收发恢复\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+        elif str(data.get("status") or "") == "inbox_stalled":
+            # 半死态（P0 2026-08-04）：账号登录在线（掉线文案会误导运维去查登录态），
+            # 但侧栏有未读、进线程读取持续全失败＝看得到读不到（E2EE 未解密等）。
+            down_min = int(data.get("down_minutes") or 0)
+            down_txt = (f"{down_min // 60} 小时 {down_min % 60} 分钟"
+                        if down_min >= 60 else f"{down_min} 分钟")
+            title = f"🕳️ {plat} 会话半死：在线但读不到新消息（已 {down_txt}）"
+            text = (
+                f"**账号**: {acct}\n"
+                f"**侧栏未读**: {int(data.get('unread') or 0)} 条（一条都没进平台）\n"
+                f"**详情**: {str(data.get('detail') or '')[:200]}\n"
+                "登录态正常但消息内容读不到——多为 E2EE 设备密钥未随会话恢复，"
+                "请在服务器上对该账号完整重新登录（不能只靠 cookie 恢复）\n"
                 "[📊 查看运营总览](/admin/ops)"
             )
         elif data.get("reminder"):
@@ -938,10 +1415,95 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
         )
 
     else:
-        title = f"[{event_type}] 事件"
-        text = json.dumps(data, ensure_ascii=False)[:300]
+        title = f"未分类事件：{event_type}"
+        _kv = "、".join(f"{k}={str(v)[:40]}" for k, v in list(data.items())[:6])
+        text = ("该事件暂未做中文说明（请在 _CARD_META / _build_message 补词典）。\n"
+                f"原始数据：{_kv or '（空）'}")
 
     return title, text
+
+
+# ─── 中文卡片（统一表单式：级别·类别 / 说明 / 来源·时间·原始事件）──────────────
+# 每条 Telegram 告警都套这层壳，解决坐席/老板端「看不懂、没分类、没来源」三连：
+# 顶部一眼看级别+类别，底部标明来自哪个系统 + 原始事件名（排查用）；正文沿用各
+# 事件既有的中文说明（多数已很详细，不重写，只加表头/表尾）。级别六档：
+# 🔴 严重 / 🟠 警告 / 🔵 提示 / ✅ 恢复(动态) / 💰 业务 / 📊 日报。
+_CARD_META: Dict[str, Tuple[str, str]] = {
+    "host_alert": ("🔴 严重", "服务器"),
+    "health_alert": ("🔴 严重", "服务器"),
+    "scan_loop_stall_alert": ("🔴 严重", "服务器"),
+    "platform_session_alert": ("🔴 严重", "链路"),
+    "orchestrator_worker_alert": ("🔴 严重", "链路"),
+    "autoreply_alert": ("🔴 严重", "链路"),
+    "voice_outage_alert": ("🔴 严重", "算力"),
+    "realtime_voice_alert": ("🔴 严重", "算力"),
+    "human_deliver_alert": ("🔴 严重", "运营"),
+    "draft_sla_escalated": ("🔴 严重", "运营"),
+    "lan_gpu_alert": ("🟠 警告", "算力"),
+    "avatar_voice_alert": ("🟠 警告", "算力"),
+    "tg_call_alert": ("🟠 警告", "算力"),
+    "colloquial_llm_alert": ("🔵 提示", "算力"),
+    "bot_peer_alert": ("🟠 警告", "链路"),
+    "inject_health_alert": ("🟠 警告", "链路"),
+    "login_funnel_alert": ("🟠 警告", "链路"),
+    "ai_mutual_chat_alert": ("🔵 提示", "链路"),
+    "draft_backlog_alert": ("🟠 警告", "运营"),
+    "draft_backlog_summary": ("🟠 警告", "运营"),
+    "draft_sla_breach": ("🟠 警告", "运营"),
+    "escalation": ("🟠 警告", "运营"),
+    "queue_alert": ("🟠 警告", "运营"),
+    "case_alert": ("🟠 警告", "运营"),
+    "case_backlog_alert": ("🔵 提示", "运营"),
+    "buried_conv_alert": ("🟠 警告", "运营"),
+    "unanswered_inbound_alert": ("🔵 提示", "运营"),
+    "draft_reassigned": ("🔵 提示", "运营"),
+    "draft_created": ("🔵 提示", "运营"),
+    "draft_resolved": ("🔵 提示", "运营"),
+    "anomaly_alert": ("🟠 警告", "运营"),
+    "report": ("📊 日报", "运营"),
+    "ops_report": ("📊 日报", "运营"),
+    "billing_alert": ("🟠 警告", "成本"),
+    "human_reply_risk": ("🟠 警告", "安全"),
+    "csrf_reject_alert": ("🟠 警告", "安全"),
+    "audit_danger_alert": ("🟠 警告", "安全"),
+    "csat_alert": ("🟠 警告", "业务"),
+    "trial_fulfiller_alert": ("🟠 警告", "业务"),
+    "goal_completed_alert": ("💰 业务", "业务"),
+    "goal_miss_alert": ("📊 日报", "业务"),
+    "draft_quality_alert": ("🟠 警告", "质量"),
+    "ai_quality_alert": ("🟠 警告", "质量"),
+    "media_promise_alert": ("🟠 警告", "质量"),
+    "voice_burst_alert": ("🟠 警告", "质量"),
+    "persona_retired_alert": ("🔵 提示", "质量"),
+    "memory_key_drift_alert": ("🔵 提示", "质量"),
+}
+
+_CARD_RULE = "━━━━━━━━━━━━━━"
+
+
+def _build_card(event_type: str, data: Dict[str, Any], title: str, text: str,
+                base_url: str = "") -> str:
+    """把已有中文标题+正文套成统一「表单式」卡片（仅 Telegram 等 IM 渠道用）。
+
+    顶部：级别 · 类别（自解释、可扫读）；正文：事件既有中文说明；
+    表尾：来源系统 + 时间 + 原始事件名（排查锚点）。不改各事件正文语义。
+    """
+    sev, cat = _CARD_META.get(event_type, ("🔵 提示", "其它"))
+    if data.get("recovered"):
+        sev = "✅ 恢复"
+    body_title = _plainify(title, base_url)
+    body = _plainify(text, base_url)
+    ts = time.strftime("%m-%d %H:%M", time.localtime())
+    parts = [
+        f"{sev} · {cat}",
+        _CARD_RULE,
+        f"📌 {body_title}" if body_title else "",
+        body,
+        _CARD_RULE,
+        f"🏷️ 来源：承接引擎(智聊)　🕒 {ts}",
+        f"🏳️ 原始事件：{event_type}（仅排查用）",
+    ]
+    return "\n".join(p for p in parts if p).strip()
 
 
 # ─── 主类 ────────────────────────────────────────────────────────────────────
@@ -1072,8 +1634,12 @@ class WebhookNotifier:
                 logger.warning("Webhook 跳过 [%s]：%s 渠道缺少 target",
                                matcher["name"], fmt)
                 return
-            # title 也过 _plainify（防标题偶含 markdown；海外 IM 均为纯文本渠道）
-            msg = f"{_plainify(title)}\n{_plainify(text)}".strip()
+            # Telegram 套统一中文卡片（级别·类别 / 说明 / 来源·时间·原始事件）；
+            # 其余 IM（whatsapp/messenger）保持纯文本拼接。
+            if fmt == "telegram":
+                msg = _build_card(etype, data, title, text, matcher.get("base_url", ""))
+            else:
+                msg = f"{_plainify(title)}\n{_plainify(text)}".strip()
             body, headers = _build_chat_body(fmt, msg, target, token)
         else:
             url = matcher["url"]
@@ -1136,10 +1702,18 @@ class WebhookNotifier:
     # ── 状态快照 ──────────────────────────────────────────────────────────
 
     def status_snapshot(self) -> Dict[str, Any]:
-        return {
+        snap = {
             "running": self._running,
             "webhooks": len(self._webhooks),
             "matchers": len(self._matchers),
             "total_sent": self.total_sent,
             "total_errors": self.total_errors,
         }
+        try:
+            # 非密钥字段指纹：供告警链路自检比对「进程装载的配置 vs 磁盘文件真相」
+            # （手改文件不经面板 → 不会热更，这里一比即现形）。软失败不阻断快照。
+            from src.integrations.alert_link_audit import config_fingerprint
+            snap["config_fp"] = config_fingerprint(self._webhooks)
+        except Exception:
+            pass
+        return snap

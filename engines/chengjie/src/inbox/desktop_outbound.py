@@ -35,6 +35,14 @@ _DEFAULT_DB = os.path.join("config", "desktop_outbound.db")
 
 # claimed 但迟迟未 ack（桌面壳崩溃/页面被关）→ 超过此秒数自动回收为 pending 可重取
 _RECLAIM_AFTER_SEC = 180.0
+# 认领次数上限：超过即判 failed（进人审队列），不再无限回收重取。
+#
+# 「不 ack ⇒ 回收重取」本身是好设计（桌面壳崩溃/注入还没装载都能自愈），但它**必须有底**：
+# 客户端 2026-08-10 起改为「拿不到注入送达证据就不 ack」，若某账号的注入永久失效
+# （平台改版把选择器全打飞、或那个平台压根没有选择器档案），同一条命令会每 180s 被
+# 认领一次、attempts 无上限地涨，而运营在队列里只看到「一直 claimed」永远等不到定论。
+# 给个上限后，最坏 6 次(~18min) 就落成 failed + reason，出现在人审队列里可被看见/重试。
+_MAX_ATTEMPTS = 6
 # 已终态（sent/failed）保留天数，enqueue 时顺手清理，防表无限增长
 _RETENTION_SEC = 7 * 86400.0
 # 人审纠正样本（AI 失误数据资产）保留更久——供 prompt/KB 离线调优，但仍设上限防无限增长
@@ -235,7 +243,9 @@ class DesktopOutboundQueue:
         会话、不会按 chat_key 导航；客户端按「当前打开会话」拉取，其余命令留队列等会话打开，
         既不丢、也**绝不发错聊天**（防封号/防串话的关键安全闸）。
 
-        认领前先回收**超时未 ack** 的 claimed（桌面壳崩溃/页面关闭），避免命令卡死。
+        认领前先回收**超时未 ack** 的 claimed（桌面壳崩溃/页面关闭），避免命令卡死；
+        并把认领次数已达 ``_MAX_ATTEMPTS`` 的判成 failed（见该常量注释：给「不 ack 即重取」
+        兜个底，否则注入永久失效时同一条命令会无限重取且永远等不到定论）。
         """
         p = str(platform or "").lower()
         a = str(account_id or "")
@@ -249,6 +259,12 @@ class DesktopOutboundQueue:
                 "WHERE platform=? AND account_id=? AND status='claimed' "
                 "AND claimed_at IS NOT NULL AND (? - claimed_at) > ?",
                 (p, a, ts, _RECLAIM_AFTER_SEC),
+            )
+            # 重取已到顶的 → 判死，进人审（放在回收之后：刚回收的这轮也一并结算）
+            self._conn.execute(
+                "UPDATE desktop_outbound SET status='failed', reason=?, acked_at=? "
+                "WHERE platform=? AND account_id=? AND status='pending' AND attempts>=?",
+                ("max_attempts", ts, p, a, _MAX_ATTEMPTS),
             )
             sql = ("SELECT * FROM desktop_outbound "
                    "WHERE platform=? AND account_id=? AND status='pending'")

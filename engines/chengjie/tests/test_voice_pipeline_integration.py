@@ -602,7 +602,8 @@ class TestVoiceUnifiedSendStack:
         async def _fake_send(client, chat, path, duration=None,
                              reply_to_message_id=None, **kwargs):
             sent_calls.update({"chat": chat, "path": path})
-            return True
+            # 真实现返回 pyrogram Message（.id 供镜像做回显主键去重）
+            return types.SimpleNamespace(id=55)
 
         monkeypatch.setattr(vs, "send_telegram_voice", _fake_send)
         recorded = {}
@@ -611,6 +612,10 @@ class TestVoiceUnifiedSendStack:
             lambda acc, chat, direction, **k: recorded.update(
                 {"dir": direction, "prev": k.get("text_preview")}),
         )
+        # 归档发布重定向到 tmp（别往仓库 static/protocol_media 写测试文件）
+        from src.integrations import protocol_bridge as PB
+        monkeypatch.setattr(
+            PB, "protocol_media_root", lambda: tmp_path / "static_media")
 
         s = self._make_sender(monkeypatch)
         monkeypatch.setattr(s, "_presend_blocked", lambda: False)
@@ -634,9 +639,16 @@ class TestVoiceUnifiedSendStack:
         assert paced.get("hit") is True       # 发前节流（共用墙钟）
         assert counted.get("hit") is True     # 发后计数（语音计入今日外发量）
         assert emitted["chat_id"] == 7
-        assert emitted["text"] == "[语音]"
+        # 2026-08-02：镜像成媒体行——正文=干净念稿（[语音] 语义由 media_type 承载，
+        # 与 B 线 inbox_text 同口径），带真实 msg_id 与可回放归档 URL。
+        assert emitted["text"] == "hi"
         assert emitted["direction"] == "out"
-        assert recorded == {"dir": "out", "prev": "[语音]"}
+        assert emitted["media_type"] == "voice"
+        assert str(emitted["media_ref"]).startswith(
+            "/static/protocol_media/telegram/")
+        assert emitted["msg_id"] == "55"
+        # contacts 时间线是纯文本，预览保留 [语音] 标记表意
+        assert recorded == {"dir": "out", "prev": "[语音] hi"}
 
     @pytest.mark.asyncio
     async def test_voice_with_text_summary_delegates_to_send_reply(self, monkeypatch, tmp_path):
@@ -651,6 +663,10 @@ class TestVoiceUnifiedSendStack:
                             AsyncMock(return_value=res))
         monkeypatch.setattr(vs, "send_telegram_voice",
                             AsyncMock(return_value=True))
+        # 归档发布重定向到 tmp（别往仓库 static/protocol_media 写测试文件）
+        from src.integrations import protocol_bridge as PB
+        monkeypatch.setattr(
+            PB, "protocol_media_root", lambda: tmp_path / "static_media")
 
         s = self._make_sender(monkeypatch, summary=True)
         monkeypatch.setattr(s, "_presend_blocked", lambda: False)
@@ -668,16 +684,23 @@ class TestVoiceUnifiedSendStack:
             reply_calls.update({"text": text})
 
         monkeypatch.setattr(s, "_send_reply", _send_reply)
-        # 仅语音分支才会调；summary 路径不应触发 mirror/record
+        # summary 路径不得走「镜像+contacts」合并口（contacts 由 _send_reply 记一次，
+        # 双记＝虚增亲密度）；但语音行本体自 2026-08-02 起必须单独镜像（此前该分支
+        # 语音条在收件箱隐形——正是「看不到自己发的语音」的一个入口）。
         s._postsend_mirror_and_record = lambda *a, **k: reply_calls.update({"mirror": True})
+        voice_rows = []
+        s._emit_inbox = lambda **kw: voice_rows.append(kw)
 
         msg = types.SimpleNamespace(chat=types.SimpleNamespace(id=7), id=1, from_user=None)
         out = await s._maybe_send_voice_reply(msg, "hello there", is_peer_voice=False)
 
         assert out is True
         assert reply_calls.get("text") == "hello there"   # 文本摘要交给 _send_reply
-        assert "mirror" not in reply_calls                # summary 路径不重复 mirror
+        assert "mirror" not in reply_calls                # 不重复 contacts 记账
         assert counted["n"] == 1                          # 语音计一次（文本由 _send_reply 自记）
+        assert len(voice_rows) == 1                       # 语音行本体单独镜像（可见/可回放）
+        assert voice_rows[0]["media_type"] == "voice"
+        assert voice_rows[0]["text"] == "hello there"
 
 
 # ─────────────────────────────────────────────────────────────────

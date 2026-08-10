@@ -207,6 +207,41 @@ def chain_funnel(
     for b in chains:
         b["reply_rate"] = _rate(b)
 
+    # P1 2026-08-09：每环节执行聚合（workflow_step_log 窗口内 attempts/ok/failed
+    # + 链定义里的动作类型与文案摘要）——「链走到哪一环节在损耗」从翻日志变成读数。
+    # 步骤标签取链**当前**定义（定义改过则按 idx 尽力对齐，超界只出统计不出标签）；
+    # store 无该表/方法（旧库/假 store）→ 空 map 软降级，绝不打红监控页。
+    try:
+        step_stats = store.workflow_step_stats(since)
+    except Exception:
+        step_stats = {}
+    if step_stats:
+        for b in chains:
+            cid = str(b.get("chain_id") or "")
+            per = step_stats.get(cid)
+            if not per:
+                continue
+            try:
+                ch = store.get_workflow_chain(cid) or {}
+                steps_def = json.loads(ch.get("steps_json") or "[]")
+            except Exception:
+                steps_def = []
+            by_step = []
+            for idx in sorted(per, key=lambda x: int(x)):
+                s = per[idx]
+                i = int(idx)
+                sd = steps_def[i] if 0 <= i < len(steps_def) else {}
+                by_step.append({
+                    "step_idx": i,
+                    "action_type": str(sd.get("action_type") or ""),
+                    "note": str(sd.get("note") or sd.get("text") or "")[:40],
+                    "attempts": int(s.get("attempts") or 0),
+                    "ok": int(s.get("ok") or 0),
+                    "failed": int(s.get("failed") or 0),
+                })
+            if by_step:
+                b["by_step"] = by_step
+
     return {
         "ok": True,
         "days": days,

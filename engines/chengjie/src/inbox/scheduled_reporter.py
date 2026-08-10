@@ -76,6 +76,12 @@ class ScheduledReporter:
         self._sla_renotify_sec: int = int(_sla_cfg.get("renotify_sec") or 900)  # 15 分钟内不重复
         # P36：自动归档定时器（每 N tick 触发一次，默认 60 tick = 1小时）
         _aa_cfg = cfg.get("auto_archive") or {}
+        # **默认关**（P0-198，2026-08-04）：该功能自上线起就因 `update_conv_meta(cid, {...})`
+        # 的 TypeError 每条必抛、且被 logger.debug 吞掉，从未真正归档过任何会话——它实质是
+        # 一个**从未运行过的新子系统**，按本仓「新子系统默认 enabled:false」约定显式开关。
+        # 直接把调用修好而不加闸是危险的：修好的那一刻，第一个 tick 就会把 idle≥24h 的会话
+        # 一次归档 50 条（＝一批会话从工作台集体消失），而运营从未见过这个行为、也没同意过。
+        self._auto_archive_enabled: bool = bool(_aa_cfg.get("enabled") or False)
         self._auto_archive_idle_hours: int = int(_aa_cfg.get("idle_hours") or 24)
         self._auto_archive_interval_ticks: int = int(_aa_cfg.get("check_interval_ticks") or 60)
         self._auto_archive_tick_count: int = 0  # 当前 tick 计数器
@@ -123,8 +129,9 @@ class ScheduledReporter:
             self._auto_archive_tick_count = 0
             await self._run_auto_archive_and_qa()
 
-        # P44：工作链自动执行（每 tick）
-        await self._run_workflow_chains()
+        # P44 工作链自动执行已迁出（P3 2026-08-09）：本调度器受 report.enabled
+        # 闸、生产常年关，链推进挂这里＝从未运行。现宿主＝bootstrap 常备循环
+        # src/inbox/workflow_autorun.py（无条件启动、配置热自闸），勿再挂回。
 
         now_ts = self._now_local()
         dt = datetime.datetime.utcfromtimestamp(now_ts)
@@ -409,7 +416,7 @@ class ScheduledReporter:
           2. 对每条会话：计算 QA 评分 → 生成规则摘要 → 标记归档 → 发布 conv_archived 事件
           3. 上限 50 条/次，避免批量阻塞
         """
-        if self._store is None:
+        if self._store is None or not self._auto_archive_enabled:
             return
         try:
             from src.integrations.shared.event_bus import get_event_bus
@@ -433,11 +440,15 @@ class ScheduledReporter:
                     summary = self._build_auto_summary(cid, qa)
 
                     # 步骤 3：归档 + 更新 auto_archived_at + 写入摘要
-                    self._store.update_conv_meta(cid, {
-                        "archived": 1,
-                        "auto_archived_at": now,
-                        "summary": summary,
-                    })
+                    # ⚠ 别改回 `update_conv_meta(cid, {...})`：它的签名是
+                    # `(conversation_id, *, platform=…, intent=…, …)`（关键字限定，且**没有**
+                    # archived / auto_archived_at / summary 这三个形参），传 dict 会当场抛
+                    # TypeError。归档一律走 set_conv_archived（唯一会写 archived_at 的入口，
+                    # 也是入站自动复活判据的来源），摘要走 update_conv_summary。
+                    self._store.set_conv_archived(cid, True, source="auto:idle", actor="system")
+                    if summary:
+                        self._store.update_conv_summary(cid, summary)
+                    self._store.mark_auto_archived(cid, now)
 
                     # 步骤 4：发布归档事件（Webhook / SSE 透传）
                     bus.publish("conv_archived", {
@@ -456,14 +467,19 @@ class ScheduledReporter:
                         c.get("display_name", cid), qa.get("score", "?"), self._auto_archive_idle_hours
                     )
                 except Exception:
-                    logger.debug("P36 自动归档单条失败（已跳过）", exc_info=True)
+                    # warning 而非 debug（P0-198）：这里曾把「每条候选都抛 TypeError」压成
+                    # debug，于是一个彻底坏掉的功能对外表现为「就是没有会话满足条件」，
+                    # 上线至今无人发现。归档会让会话从工作台消失，失败必须响。
+                    self.total_errors += 1
+                    logger.warning("P36 自动归档单条失败 cid=%s（已跳过）", cid, exc_info=True)
 
             if archived_count:
                 self.total_sent += archived_count
                 logger.info("P36 本轮自动归档 %d 条会话", archived_count)
 
         except Exception:
-            logger.debug("P36 自动归档任务失败（已忽略）", exc_info=True)
+            self.total_errors += 1
+            logger.warning("P36 自动归档任务失败", exc_info=True)
 
     def _build_auto_summary(self, conversation_id: str, qa: Dict[str, Any]) -> str:
         """P36：基于消息记录生成规则摘要（LLM 不可用时的可靠兜底）。"""
@@ -497,43 +513,6 @@ class ScheduledReporter:
             return "；".join(parts) + "。"
         except Exception:
             return ""
-
-    # ── P44：工作链自动执行 ───────────────────────────────────────────────
-
-    async def _run_workflow_chains(self) -> None:
-        """P44：处理到期工作链步骤 + 按条件自动启动新链。"""
-        if self._store is None:
-            return
-        try:
-            from src.inbox.workflow_runner import WorkflowRunner
-            contacts = None
-            goal_hook = None
-            if self._app_state is not None:
-                cs = getattr(getattr(self._app_state, "contacts", None), "store", None)
-                contacts = cs
-                try:
-                    cm = getattr(self._app_state, "config_manager", None)
-                    if cm is not None:
-                        from src.companion.goals.service import chain_event_recorder
-                        goal_hook = chain_event_recorder(cm)
-                except Exception:
-                    goal_hook = None
-            runner = WorkflowRunner(
-                self._store, contacts_store=contacts, goal_event_hook=goal_hook)
-            n = runner.process_due_executions()
-            # 自动启动：每 60 tick（约 1h）扫描一次，避免每 tick 全表扫
-            if not hasattr(self, "_wf_auto_tick"):
-                self._wf_auto_tick = 0
-            self._wf_auto_tick += 1
-            if self._wf_auto_tick >= 60:
-                self._wf_auto_tick = 0
-                started = runner.auto_start_chains()
-                if started:
-                    logger.info("P44 WorkflowRunner 自动启动 %d 条工作链", started)
-            if n:
-                logger.info("P44 WorkflowRunner 执行 %d 条到期步骤", n)
-        except Exception:
-            logger.debug("P44 工作链执行失败（已忽略）", exc_info=True)
 
     # ── 手动触发（用于测试 / API 按钮） ─────────────────────────────────
 

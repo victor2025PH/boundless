@@ -222,6 +222,24 @@ async function backendTranslate(text, targetLang) {
   return t.translated_text || t.text || t.translated || "";
 }
 
+// 批量翻译对齐辅助（纯函数,与注入调度器共用同一实现,已单测）。
+const { alignBatchResponse: _alignBatchResponse } = require("../shared/inject/translate-scheduler.js");
+
+/** 批量翻译（主进程发起）：一次往返译整批,返回「与输入等长、按序对齐」的 string[]。
+ *  复用后端 /api/unified-inbox/translate-batch（服务端 gather + 信号量,与单条同一 TranslationService）。 */
+async function backendTranslateBatch(texts, targetLang) {
+  const { base_url, token } = config.backend || {};
+  const arr = Array.isArray(texts) ? texts : [];
+  const items = arr.map((t, i) => ({ id: String(i), text: String(t || "") }));
+  const r = await fetch(`${base_url}/api/unified-inbox/translate-batch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ items, target_lang: targetLang || (config.translate || {}).target_lang || "zh" }),
+  });
+  const d = await r.json();
+  return _alignBatchResponse(arr, d);
+}
+
 /** 调用后端媒体翻译：图片 OCR(/translate-image) 或 语音转写(/translate-voice) → 翻译。
  *  kind=image|voice；b64 为去掉 dataURL 前缀的纯 base64。主进程发起以规避 webview CORS/CSP。 */
 async function backendTranslateMedia(kind, b64, targetLang) {
@@ -572,6 +590,40 @@ ipcMain.handle("desktop:outbound-ack", async (_e, { id, ok, error }) => {
   }
 });
 
+// ── 受控出站「拟人节奏 + 诚实回执」（outbound-pace.js 是唯一策略源）─────────────────
+// 节奏 pacer 常驻主进程：状态跨 renderer 重载存活（重载后不会突然爆发连发），
+// 且每账号只有一个权威。renderer 只报事实（这条要发多长的文本 / 注入回执说发没发出去），
+// 判断留在这里——与注入健康「前端报事实、后端分类」同一套哲学。
+const { createPacerRegistry, ackDecision } = require("./outbound-pace.js");
+const _pacers = createPacerRegistry({});
+
+ipcMain.handle("desktop:pace-plan", async (_e, { account_id, text }) => {
+  try {
+    return _pacers.for(account_id).plan({ text, now: Date.now() });
+  } catch (e) {
+    // 策略层出问题绝不能卡住回复：退化成「不等待直接发」（旧行为）
+    return { typingMs: 0, waitMs: 0, throttled: false, reason: "pace_error" };
+  }
+});
+
+// 注入回执 → 该不该 ack、ack 成还是败。三档语义见 outbound-pace.ackDecision 的注释；
+// 「不 ack」是刻意的：命令留 claimed，服务端 180s 后自动回收重取，比谎报成功或标死终态都好。
+ipcMain.handle("desktop:outbound-report", async (_e, { id, account_id, result }) => {
+  const d = ackDecision(result);
+  if (d.ok) {
+    try { _pacers.for(account_id).noteSent(Date.now()); } catch (e) { /* 记账失败不影响回执 */ }
+  }
+  if (!d.ack) return { ok: true, acked: false, decision: d };
+  try {
+    await backendPost("/api/desktop/outbound/ack", { id, ok: d.ok, error: d.error });
+    return { ok: true, acked: true, decision: d };
+  } catch (e) {
+    // ack 发不出去也不要紧：服务端回收机制会把它当未完成重取（重复发的风险由
+    // 注入侧「composer 已清空」回读把住，见 core.js::sendAndConfirm）
+    return { ok: false, acked: false, decision: d, error: String(e) };
+  }
+});
+
 // 受控出站「人审介入」（P2）：拦截/暂停/放行/改写/重试某条命令。
 ipcMain.handle("desktop:outbound-action", async (_e, { id, ids, action, text, reason, ai_suggestion, source }) => {
   try {
@@ -629,6 +681,14 @@ ipcMain.handle("desktop:translate", async (_e, { text, target_lang }) => {
   }
 });
 
+ipcMain.handle("desktop:translate-batch", async (_e, { texts, target_lang }) => {
+  try {
+    return { ok: true, texts: await backendTranslateBatch(texts || [], target_lang) };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+});
+
 ipcMain.handle("desktop:translate-media", async (_e, { kind, b64, target_lang }) => {
   try {
     return await backendTranslateMedia(kind === "image" ? "image" : "voice", String(b64 || ""), target_lang);
@@ -672,9 +732,28 @@ ipcMain.handle("desktop:voice-profiles", async () => {
   catch (e) { return { ok: false, error: String(e) }; }
 });
 
-ipcMain.handle("desktop:voice-tts", async (_e, { text, persona_id }) => {
+// 音色状态条（P1 2026-08-05）：带会话上下文的实际解析快照（与 send-voice 同源）
+ipcMain.handle("desktop:voice-effective-config", async (_e, args) => {
   try {
-    const d = await backendPost("/api/voice/tts-test", { text, persona_id: persona_id || undefined });
+    const a = args || {};
+    const q = new URLSearchParams();
+    if (a.persona_id) q.set("persona_id", a.persona_id);
+    if (a.chat_key) q.set("chat_key", a.chat_key);
+    if (a.platform) q.set("platform", a.platform);
+    if (a.account_id) q.set("account_id", a.account_id);
+    return await backendGet(`/api/voice/effective-config?${q.toString()}`);
+  } catch (e) { return { ok: false, error: String(e) }; }
+});
+
+ipcMain.handle("desktop:voice-tts", async (_e, { text, persona_id, chat_key, platform, account_id }) => {
+  try {
+    // 会话上下文透传（试听=发送 契约；旧渲染层不传=旧行为）
+    const d = await backendPost("/api/voice/tts-test", {
+      text, persona_id: persona_id || undefined,
+      chat_key: chat_key || undefined,
+      platform: platform || undefined,
+      account_id: account_id || undefined,
+    });
     if (d.audio_url) return { ...d, ok: d.ok !== false };
     if (!d.filename) return d;
     const { base_url, token } = config.backend || {};

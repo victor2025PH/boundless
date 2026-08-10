@@ -124,6 +124,7 @@ class ReactivationLoop:
         first_run_grace_minutes: float = 60.0,
         first_run_max_per_tick: int = 1,
         platform_priority: Optional[List[str]] = None,
+        peer_filter: Optional[Callable[[str, str, str], bool]] = None,
     ) -> None:
         self._scheduler = scheduler
         self._store = store
@@ -151,6 +152,9 @@ class ReactivationLoop:
         self._first_run_grace_sec = max(0.0, float(first_run_grace_minutes) * 60.0)
         self._first_run_max_per_tick = max(1, int(first_run_max_per_tick))
         self._started_ts: float = 0.0
+        # 对方机器人/自家账号守卫（P1 2026-08-03）：(channel, account_id, chat_key)
+        # -> True=该跳过。None=旧行为（不拦）。异常按放行（fail-open）。
+        self._peer_filter = peer_filter
         self._stop_evt: Optional[asyncio.Event] = None
         self._task: Optional[asyncio.Task] = None
 
@@ -270,6 +274,25 @@ class ReactivationLoop:
         if not chat_name:
             return False
         platform_label = _PLATFORM_LABELS.get(channel, channel)
+
+        # 对方机器人/自家账号守卫（P1 2026-08-03）：复用主动触达统一卫生闸——给 bot
+        # 发 reactivation 是纯空转 + 风控表演，给自家账号发是自嗨。放渠道选定后、
+        # LLM 之前（省 token）；异常放行（fail-open）。
+        if self._peer_filter is not None:
+            try:
+                if self._peer_filter(channel, account_id, chat_name):
+                    logger.info(
+                        "[reactivation] skip contact=%s peer=bot/自家账号 (%s:%s)",
+                        cand.contact_id, channel, chat_name)
+                    try:
+                        from src.monitoring.metrics_store import get_metrics_store
+                        get_metrics_store().record_reactivation_skipped(
+                            "peer_bot_or_fleet")
+                    except Exception:
+                        pass
+                    return False
+            except Exception:
+                logger.debug("reactivation peer_filter 异常（放行）", exc_info=True)
 
         # ★ 真实近期活跃校验（修「刚聊过几小时却发好久不见」）：用统一收件箱的会话
         # last_ts（权威）复核。journey.updated_at 常因跨平台/收件箱链路未回写而陈旧，

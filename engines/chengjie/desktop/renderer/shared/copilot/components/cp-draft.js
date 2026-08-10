@@ -124,7 +124,7 @@
         personaRow =
           `<div class="prow"><label>${this.esc(this.t("cp.draft.persona_label"))}</label>` +
           `<select data-role="persona"><option value="">${this.esc(this.t("cp.draft.persona_default"))}</option></select>` +
-          `<button class="pin" data-act="pin" title="${this.esc(this.t("cp.draft.pin_title"))}">📌</button></div>` +
+          `<button class="pin" data-act="pin" title="${this.esc(this.t("cp.draft.pin_title"))}">${this.ic("pin", 12)}</button></div>` +
           `<div class="psrc" data-role="psrc"></div>`;
       }
       let contrastRow = "";
@@ -538,7 +538,7 @@
       if (ga.injected) {
         const pl = String(ga.push_level || "").trim();
         const tip = [ga.title, ga.intent, ga.profile_gap].filter(Boolean).join("\n");
-        return `<span class="bdg goal on" title="${esc(tip)}">🎯 ${esc(this.t("cp.draft.goal_on"))}` +
+        return `<span class="bdg goal on" title="${esc(tip)}">${this.ic("target", 11)} ${esc(this.t("cp.draft.goal_on"))}` +
           (pl ? ` · ${esc(pl)}` : "") + `</span>`;
       }
       const reason = String(ga.reason || "").trim();
@@ -550,7 +550,7 @@
         lab = this.t("cp.draft.goal_skipped");
       }
       const tip = [ga.title, reason, ga.hold_reason].filter(Boolean).join(" · ");
-      return `<span class="bdg goal off" title="${esc(tip)}">🎯 ${esc(lab)}</span>`;
+      return `<span class="bdg goal off" title="${esc(tip)}">${this.ic("target", 11)} ${esc(lab)}</span>`;
     }
 
     _paintDraft(r) {
@@ -560,14 +560,14 @@
       const tierKey = TIER[r.persona_tier];
       const tierLbl = tierKey ? this.t(tierKey) : (r.persona_tier || "");
       const badges =
-        (r.persona ? `<span class="bdg">🎭 ${esc(r.persona)}${tierLbl ? " · " + esc(tierLbl) : ""}</span>` : "") +
+        (r.persona ? `<span class="bdg">${this.ic("mask", 11)} ${esc(r.persona)}${tierLbl ? " · " + esc(tierLbl) : ""}</span>` : "") +
         (r.intent ? `<span class="bdg intent">${esc(this.t("cp.draft.intent"))} ${esc(r.intent)}</span>` : "") +
         this._goalBadgeHtml(r);
       // P2 证据链：草稿引用的 KB 条目（display-only chips，悬停看片段——引用注入不再黑盒）
       const kbRefs = Array.isArray(r.kb_refs) ? r.kb_refs.slice(0, 3) : [];
       const kbChips = kbRefs.length
         ? `<div class="badges">` + kbRefs.map((k) =>
-            `<span class="bdg kb" title="${esc(String(k.snippet || "").slice(0, 200))}">📚 ${esc(String(k.title || k.category || "").slice(0, 24))}</span>`
+            `<span class="bdg kb" title="${esc(String(k.snippet || "").slice(0, 200))}">${this.ic("book", 11)} ${esc(String(k.title || k.category || "").slice(0, 24))}</span>`
           ).join("") + `</div>`
         : "";
       // —— 对比语言路径(桌面：reply/contrast 双块可编辑 + send-pick) ——

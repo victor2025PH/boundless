@@ -8,11 +8,21 @@
 #
 # Usage:  powershell -ExecutionPolicy Bypass -File scripts\agent_probe.ps1
 #         [-HotMinutes 10] [-WindowMinutes 30]
+#         [-Intent "theme (files/areas)"]   register/refresh what YOUR line works on
+#         [-Intent "theme" -Done]           clear it when finished
 # Exit code is always 0 (advisory tool, never blocks).
+#
+# Intent board (2026-08-05 lesson): two agent lines built near-identical
+# verification tools for the same incident within the hour, only a code
+# comment prevented double-shipping. mtime probing shows WHERE lines touch,
+# not WHAT they pursue - so declare intent up front. ASCII themes preferred
+# (PS5.1 GBK console). Entries expire after 24h automatically.
 
 param(
     [int]$HotMinutes = 10,
-    [int]$WindowMinutes = 30
+    [int]$WindowMinutes = 30,
+    [string]$Intent = '',
+    [switch]$Done
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -44,10 +54,36 @@ function Resolve-RepoFile([string]$rel) {
 }
 
 $now = Get-Date
+
+# --- intent registration (before probing, so the board reflects this run) ---
+$intentDir = 'D:\chengjie-instances\.ops\agent_intents'
+if ($Intent) {
+    New-Item -ItemType Directory -Path $intentDir -Force | Out-Null
+    $slug = (($Intent.ToLower() -replace '[^a-z0-9]+', '-').Trim('-'))
+    if ($slug.Length -gt 48) { $slug = $slug.Substring(0, 48) }
+    if (-not $slug) { $slug = 'unnamed' }
+    $f = Join-Path $intentDir ($slug + '.txt')
+    if ($Done) {
+        Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
+        Write-Output ("intent cleared: {0}" -f $slug)
+        Write-Output '  (siblings no longer wait on this batch; clear stale intents the same way)'
+        Write-Output '  did you sweep? scripts\gate_sweep.ps1 catches cross-gate misses'
+        Write-Output '  (hand-picked test files skip ratchets like inline-color / ui-build freshness)'
+    } else {
+        # UTF8 file content; console output stays ASCII-safe elsewhere
+        ("{0}`n{1}" -f $now.ToString('yyyy-MM-dd HH:mm'), $Intent) |
+            Out-File -LiteralPath $f -Encoding UTF8 -Force
+        Write-Output ("intent registered/refreshed: {0}" -f $slug)
+        Write-Output '  when finished: re-run with -Done so restart_preflight / siblings stop waiting'
+        Write-Output '  before restart: scripts\restart_preflight.ps1  (GO/NO-GO; never restarts itself)'
+    }
+    Write-Output ''
+}
+
 Write-Output ("=== agent probe @ {0} (window {1} min, active {2} min) ===" -f `
     $now.ToString('HH:mm:ss'), $WindowMinutes, $HotMinutes)
 Write-Output ''
-Write-Output '--- [1/2] dirty files recently modified (other lines mid-flight?) ---'
+Write-Output '--- [1/3] dirty files recently modified (other lines mid-flight?) ---'
 
 $rows = @()
 foreach ($ln in (git status --short 2>$null)) {
@@ -82,7 +118,25 @@ if ($rows.Count -eq 0) {
 }
 
 Write-Output ''
-Write-Output '--- [2/2] instance restart cooldown (piggyback, do not double-restart) ---'
+Write-Output '--- [2/3] declared intents (what each line PURSUES, not just where it types) ---'
+if (Test-Path $intentDir) {
+    $shown = $false
+    foreach ($f in (Get-ChildItem $intentDir -Filter *.txt | Sort-Object LastWriteTime -Descending)) {
+        $iage = ($now - $f.LastWriteTime).TotalHours
+        if ($iage -gt 24) { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue; continue }
+        $body = (Get-Content -LiteralPath $f.FullName -Encoding UTF8 | Select-Object -Skip 1) -join ' '
+        Write-Output ('  {0,5:N1} h   {1}' -f [math]::Round($iage, 1), $body)
+        $shown = $true
+    }
+    if (-not $shown) { Write-Output '  (none declared in the last 24h)' }
+} else {
+    Write-Output '  (none declared yet)'
+}
+Write-Output '  declare yours:  scripts\agent_probe.ps1 -Intent "theme (files/areas)"   [-Done to clear]'
+Write-Output '  before restart: scripts\restart_preflight.ps1   (chains probe quiet + syntax + Advise + cooldown)'
+
+Write-Output ''
+Write-Output '--- [3/3] instance restart cooldown (piggyback, do not double-restart) ---'
 $cdDir = 'D:\chengjie-instances\.ops\restart_cooldown'
 if (Test-Path $cdDir) {
     $any = $false

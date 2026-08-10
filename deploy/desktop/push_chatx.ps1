@@ -24,7 +24,8 @@ param(
   [string]$StageDir = 'C:\Users\Administrator\Downloads\chatx',
   [switch]$Install,
   [switch]$Relaunch,
-  [switch]$Smoke
+  [switch]$Smoke,
+  [switch]$VerifyLocal
 )
 
 $ErrorActionPreference = 'Stop'
@@ -50,7 +51,7 @@ Say ("sha256: " + $sha)
 $leaf = Split-Path -Leaf $Setup
 $stageFwd = $StageDir.Replace('\', '/')
 ssh $TargetSsh "mkdir `"$StageDir`" 2>nul & echo staged-dir-ok" | Out-Null
-foreach ($f in @('install_chatx_node.ps1', 'smoke_chatx_node.ps1', 'relaunch_chatx_node.ps1')) {
+foreach ($f in @('install_chatx_node.ps1', 'smoke_chatx_node.ps1', 'relaunch_chatx_node.ps1', 'verify_chatx_vs_local.ps1')) {
   scp -q (Join-Path $here $f) ("{0}:{1}/{2}" -f $TargetSsh, $stageFwd, $f)
 }
 Say "uploading installer ..."
@@ -83,6 +84,33 @@ if ($Relaunch) {
 if ($Smoke) {
   ssh $TargetSsh "powershell -ExecutionPolicy Bypass -File $StageDir\smoke_chatx_node.ps1"
   if ($LASTEXITCODE -ne 0) { Say ("smoke FAILED exit=" + $LASTEXITCODE); exit 5 }
+}
+
+# --- 6. shape/version/seed match vs local gold (optional) ----------------------
+if ($VerifyLocal) {
+  $beSize = ''
+  $beLocal = Join-Path $repo 'engines\chengjie\desktop\dist\win-unpacked\resources\backend\backend.exe'
+  if (Test-Path $beLocal) { $beSize = [string](Get-Item $beLocal).Length }
+  $seedPath = Join-Path $repo 'engines\chengjie\desktop\build\seed-data\seed-manifest.json'
+  $p = $kb = $mr = $af = $pr = $vr = -1
+  if (Test-Path $seedPath) {
+    $c = (Get-Content $seedPath -Raw -Encoding UTF8 | ConvertFrom-Json).counts
+    $p = [int]$c.personas; $kb = [int]$c.kb_entries; $mr = [int]$c.media_rows
+    $af = [int]$c.album_files; $pr = [int]$c.prerendered_files; $vr = [int]$c.voice_ref_files
+  }
+  Say "verifying shape vs local gold ..."
+  # Expected version comes from the installer we just shipped (was hardcoded 1.0.6
+  # once; every later rollout would false-fail the verify step).
+  $expVer = ''
+  if ($leaf -match 'ChatX-Setup-([0-9\.]+)\.exe') { $expVer = $Matches[1] }
+  $vcmd = "powershell -ExecutionPolicy Bypass -File $StageDir\verify_chatx_vs_local.ps1"
+  if ($expVer) { $vcmd += " -ExpectVersion $expVer" }
+  if ($beSize) { $vcmd += " -ExpectBackendSize $beSize" }
+  if ($p -ge 0) {
+    $vcmd += " -ExpectPersonas $p -ExpectKb $kb -ExpectMediaRows $mr -ExpectAlbumFiles $af -ExpectPrerendered $pr -ExpectVoiceRefs $vr"
+  }
+  ssh $TargetSsh $vcmd
+  if ($LASTEXITCODE -ne 0) { Say ("verify FAILED exit=" + $LASTEXITCODE); exit 6 }
 }
 
 Say "OK"

@@ -1,7 +1,7 @@
 """Messenger 网页模式（web mode）登录 provider（M5）。
 
 Messenger 没有像 WhatsApp Baileys 那样的干净协议库，但它**有官方网页版 messenger.com**。
-本模块是 Python 侧桥接：把统一收件箱「账号管理 → ＋ 扫码新增（网页）」的登录请求转发给
+本模块是 Python 侧桥接：把统一收件箱「账号管理 → ＋ 新增账号（网页托管）」的登录请求转发给
 一个独立运行的 **Playwright Node 微服务**（见 ``services/messenger-web/``），由它用隔离
 浏览器加载 messenger.com、完成官方登录、维护连接、DOM 收发，功能对齐官方网页版。
 
@@ -130,6 +130,11 @@ def make_provider(config: Dict[str, Any]):
                     logger.debug("[messenger_web] self_profile 富集失败（忽略）", exc_info=True)
             return {"status": st, "account_id": aid,
                     "detail": str(res.get("detail") or ""),
+                    # 终态失败原因（路由只在非空时落会话，避免被后续空值抹掉）
+                    "reason_code": str(res.get("reason_code") or ""),
+                    # 实时提示码：微服务旁观登录页判出的「此刻在要什么」
+                    # （two_factor / checkpoint / password_error），非终态，可来回变。
+                    "hint_code": str(res.get("hint_code") or ""),
                     "qr_image": str(res.get("qr_image") or "")}
 
         async def _cancel(session: Any) -> None:
@@ -138,10 +143,14 @@ def make_provider(config: Dict[str, Any]):
             except Exception:  # noqa: BLE001
                 logger.debug("[messenger_web] cancel 调用失败", exc_info=True)
 
+        # 措辞注意：Facebook 网页端没有扫码登录，这里绝不能出现「扫码」字样——
+        # 方式选择卡明写「不使用二维码」，等待页再冒出「扫码均可」是自相矛盾（实录事故）。
+        # instruction_key 供前端取本地化文案（zh/en 同源），raw instruction 仅作后端兜底。
         return {
             "qr_image": qr_image,
-            "instruction": "在弹出的浏览器窗口内用官方方式登录 Messenger（扫码 / 账密 / 2FA 均可）。"
-                           "登录成功后本窗口会自动确认。",
+            "instruction": "服务器上已打开 Facebook 官方登录窗口，请在该机器上完成登录（账密 / 2FA）。"
+                           "完成后本窗口会自动确认——本方式不使用二维码，无需用手机扫描。",
+            "instruction_key": "inbox.connect.hint_server_login",
             "poll": _poll,
             "cancel": _cancel,
             "state": {"login_id": login_id, "base": base},

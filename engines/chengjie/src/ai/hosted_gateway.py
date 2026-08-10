@@ -2,9 +2,13 @@
 
 流程：
   桌面/托管态 + 本地 api_key 仍为空/占位
-    → POST {site}/api/ai/device-token {fingerprint}
+    → POST {site}/api/ai/device-token {fingerprint, instance_id?}
     → 内存写入 ai.api_key=设备令牌、ai.base_url=官网 /api/ai/v1、ai._hosted_trial=True
   真云 Key 只在官网进程（DEEPSEEK_API_KEY），不下发。
+
+  ``instance_id`` 为前向兼容字段（多租户同机指纹共享时，服务端可按实例计量）；
+  旧服务端忽略未知字段，零破坏。解析序：``AITR_INSTANCE_ID`` →
+  ``AITR_DATA_DIR`` 父目录名（``…/<iid>/data``）。
 
 关键设计（P0 加固，2026-07-29）：
 - **热重载存活**：令牌同时写进程 env ``AITR_HOSTED_AI_*`` ——
@@ -32,8 +36,9 @@ import os
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +48,17 @@ STATE_FILENAME = "hosted_ai_token.json"
 #: 托管识图注入的 env 回放键（令牌本身复用 AITR_HOSTED_AI_KEY，避免两处各存一份会漂移）
 VISION_ENV_BASE = "AITR_HOSTED_VISION_BASE_URL"
 VISION_ENV_MODEL = "AITR_HOSTED_VISION_MODEL"
+#: 托管克隆语音 / 语音识别（混合形态，2026-08-03）的 env 回放键：
+#: *_BASE_URL=网关挂载点；*_FIRST="1"＝注入时 LAN 探测不可达 → 网关排首位。
+VOICE_ENV_BASE = "AITR_HOSTED_VOICE_BASE_URL"
+VOICE_ENV_FIRST = "AITR_HOSTED_VOICE_FIRST"
+VOICE_ENV_HUBFISH_OFF = "AITR_HOSTED_HUBFISH_OFF"
+ASR_ENV_BASE = "AITR_HOSTED_ASR_BASE_URL"
+ASR_ENV_FIRST = "AITR_HOSTED_ASR_FIRST"
+#: 注入 voice_recognition 用的 api_key 占位值：OpenAITranscriber 在**调用时**把它
+#: 解析为当前设备令牌（AITR_HOSTED_AI_KEY）——转写器构建一次常驻，令牌 30 天
+#: 换新不能把旧值钉死在已构建实例里。
+HOSTED_KEY_PLACEHOLDER = "hosted"
 #: 距过期不足此秒数即主动换新（服务端 TTL 30 天，留 7 天余量）
 REFRESH_MARGIN_SEC = 7 * 24 * 3600
 #: 令牌至少还有这么久才算「仍可用」（网络失败时的回落判据）
@@ -99,6 +115,34 @@ def _gateway_base(config: Optional[dict]) -> str:
     return f"{_site_url(config)}/api/ai/v1"
 
 
+def _hub_base(config: Optional[dict]) -> str:
+    """AvatarHub 形态中继的网关挂载点。
+
+    路径与 7852 服务契约逐字对齐（``{base}/v1/tts/clone`` / ``{base}/health``），
+    于是 ``avatar_voice.base_urls`` 里放这个地址，AvatarVoiceClient 零改动可用。
+    """
+    return f"{_site_url(config)}/api/ai/hub"
+
+
+def lan_alive(url: str, *, timeout: float = 2.0) -> bool:
+    """LAN 端点可达性＝TCP 连接探测（协议无关，2s 快败，不发请求体）。
+
+    只用于「混合形态」注入时决定端点次序；失败即 False，绝不抛。
+    """
+    import socket
+
+    try:
+        sp = urllib.parse.urlsplit(str(url or ""))
+        host = sp.hostname
+        port = sp.port or (443 if sp.scheme == "https" else 80)
+        if not host:
+            return False
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
 def _wants_hosted(config: Optional[dict]) -> bool:
     """桌面/托管版默认开；自建服可配 licensing.hosted_ai.enabled: false 关掉。"""
     hosted = ((config or {}).get("licensing") or {}).get("hosted_ai") or {}
@@ -138,6 +182,29 @@ def _save_cached(path, data: Dict[str, Any]) -> None:
         logger.debug("[hosted-ai] 令牌缓存写盘失败: %s", e)
 
 
+def resolve_instance_id(config: Optional[dict] = None) -> str:
+    """解析本进程所属实例 ID（托管多租户计量前向兼容；解析不到返回空串）。
+
+    序：显式 env ``AITR_INSTANCE_ID`` → 数据根落在 ``chengjie-instances/<iid>/data``
+    → config ``licensing.instance_id``。
+    刻意**不**把任意 ``AITR_DATA_DIR`` 父名当实例（桌面壳数据目录会误伤）。
+    """
+    env = (os.environ.get("AITR_INSTANCE_ID") or "").strip()
+    if env:
+        return env
+    data = (os.environ.get("AITR_DATA_DIR") or "").strip()
+    if data:
+        from pathlib import Path
+
+        p = Path(data)
+        parts_lower = {x.lower() for x in p.parts}
+        if "chengjie-instances" in parts_lower and p.name.lower() == "data" and p.parent.name:
+            return p.parent.name
+    cfg = config or {}
+    lic = cfg.get("licensing") if isinstance(cfg.get("licensing"), dict) else {}
+    return str((lic or {}).get("instance_id") or "").strip()
+
+
 def fetch_device_token(
     *,
     config: Optional[dict] = None,
@@ -153,10 +220,20 @@ def fetch_device_token(
     fp = machine_fingerprint()
     if not fp:
         return {"ok": False, "error": "no_fingerprint"}
+    # 桌面试用保持 source=desktop；服务器多实例才标 hosted（旧服务端忽略未知字段）
+    desktop = bool((os.environ.get("AITR_DESKTOP_MODE") or "").strip())
+    iid = "" if desktop else resolve_instance_id(config)
+    body: Dict[str, Any] = {
+        "fingerprint": fp,
+        "product": "chatx",
+        "source": "hosted" if iid else "desktop",
+    }
+    if iid:
+        body["instance_id"] = iid
     resp = f(
         f"{_site_url(config)}/api/ai/device-token",
         "POST",
-        {"fingerprint": fp, "product": "chatx", "source": "desktop"},
+        body,
     )
     if not resp.get("ok") or not resp.get("token"):
         return {"ok": False, "error": str(resp.get("error") or "token_failed")}
@@ -168,6 +245,7 @@ def fetch_device_token(
         "model": str(resp.get("model") or ""),
         "exp": int(resp.get("exp") or 0),
         "fingerprint": fp,
+        "instance_id": iid,
     }
 
 
@@ -200,9 +278,15 @@ def ensure_hosted_telegram(config_manager: Any, *, fetch: Optional[Fetch] = None
     cached = _load_cached(path) if path is not None else {}
     token = str(cached.get("token") or (cfg.get("ai") or {}).get("api_key") or "")
     bearer = token if str(token).startswith("cx.") else ""
+    body: Dict[str, Any] = {"fingerprint": fp}
+    direct = _probe_tg_direct()
+    if direct is not None:
+        # P2-⑨ 智能派发：直连不通的机器优先分到带出口的组（服务端软偏好，
+        # 探测失败不带此键=服务端按旧行为分配）
+        body["tg_direct"] = direct
     resp = f(f"{_site_url(cfg)}/api/pool/telegram-cred", "POST",
-             {"fingerprint": fp}, bearer) if bearer else f(
-        f"{_site_url(cfg)}/api/pool/telegram-cred", "POST", {"fingerprint": fp})
+             body, bearer) if bearer else f(
+        f"{_site_url(cfg)}/api/pool/telegram-cred", "POST", body)
     if not resp.get("ok") or not resp.get("api_id") or not resp.get("api_hash"):
         err = str(resp.get("error") or "")
         if err and err not in ("pool_disabled", "network"):
@@ -214,13 +298,125 @@ def ensure_hosted_telegram(config_manager: Any, *, fetch: Optional[Fetch] = None
     cfg["telegram"]["api_id"] = str(resp["api_id"])
     cfg["telegram"]["api_hash"] = str(resp["api_hash"])
     cfg["telegram"]["_hosted_cred"] = True
-    # 🔒 只记 api_id 与来源，绝不记 api_hash（与 LAN 池同口径）
-    logger.info("[hosted-tg] 已注入托管 Telegram 凭据 api_id=%s name=%s（用户无需申请）",
-                resp["api_id"], resp.get("name") or "?")
+    _apply_hosted_tg_proxy(cfg, resp.get("proxy"))
+    # 🔒 只记 api_id 与来源，绝不记 api_hash / 代理账密（与 LAN 池同口径）
+    logger.info("[hosted-tg] 已注入托管 Telegram 凭据 api_id=%s name=%s proxy=%s"
+                "（用户无需申请）", resp["api_id"], resp.get("name") or "?",
+                "yes" if cfg["telegram"].get("_hosted_proxy") else "no")
     return True
 
 
-def ensure_hosted_vision(config_manager: Any, *, fetch: Optional[Fetch] = None) -> bool:
+def _probe_tg_direct() -> Optional[bool]:
+    """探「本机能否直连 Telegram」（60s 缓存的 TCP 快败）；判不出返回 None。
+
+    在同步上下文运行（ensure_hosted_telegram 经 to_thread 调用，线程内无事件循环，
+    ``asyncio.run`` 安全）；任何异常＝没有信息，绝不影响凭据派发主链。
+    """
+    try:
+        import asyncio as _aio
+
+        from src.integrations.tg_preflight import probe_telegram_reachable
+        res = _aio.run(probe_telegram_reachable())
+        return bool(res.get("reachable"))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _apply_hosted_tg_proxy(cfg: Dict[str, Any], raw: Any) -> None:
+    """把派发响应里的出口写进内存 ``telegram._hosted_proxy``（无/非法则清掉）。
+
+    形状校验复用 credpool_bridge 的口径（宁可不用代理也不能用半个代理）；
+    换组后旧代理必须清（新组无出口时带着旧出口连=错配出口）。
+    """
+    try:
+        from src.integrations.credpool_bridge import _sanitize_proxy
+        proxy = _sanitize_proxy(raw)
+    except Exception:  # noqa: BLE001
+        proxy = None
+    if proxy:
+        cfg["telegram"]["_hosted_proxy"] = proxy
+    else:
+        cfg["telegram"].pop("_hosted_proxy", None)
+
+
+#: 无感换发冷却：坏组 × 连点刷新不能变成打官网的机关枪；120s 内只换一次
+SWAP_COOLDOWN_SEC = 120.0
+_swap_lock = threading.Lock()
+_last_swap_ts = 0.0
+
+
+def report_invalid_and_refetch(
+    cfg: Dict[str, Any], bad_api_id: str, *, fetch: Optional[Fetch] = None,
+) -> Optional[Tuple[str, str]]:
+    """凭据无感换发（2026-08-10 API_ID_INVALID 事故闭环的客户端半边）。
+
+    扫码撞 ``cred_invalid`` 时把废 api_id 举报给官网池并当场领新组：
+    服务端校验「该指纹确实粘定在这组」→ 删粘定 → 排除该组重新分配（同组被多台
+    机器举报会自动隔离）。成功则把新凭据写进内存 ``telegram.*`` 并返回
+    ``(api_id, api_hash)``；任何失败返回 None（调用方保持旧失败语义，不加戏）。
+
+    护栏：
+    - **只动托管注入的凭据**（``telegram._hosted_cred``）——用户自填的值一个字节
+      都不碰（自填错了该走表单重填，机器不猜人的意图）；
+    - 120s 冷却：坏组 × 用户连点「刷新二维码」不能变成打官网的机关枪；
+    - 新组与废组相同（服务端异常/池只剩这组）视为失败，防换发假成功空转。
+    """
+    global _last_swap_ts
+    if not _wants_hosted(cfg):
+        return None
+    tg = cfg.get("telegram") if isinstance(cfg.get("telegram"), dict) else {}
+    if not tg.get("_hosted_cred"):
+        return None
+    bad = str(bad_api_id or "").strip()
+    if not bad:
+        return None
+    now = time.time()
+    with _swap_lock:
+        if now - _last_swap_ts < SWAP_COOLDOWN_SEC:
+            return None
+        _last_swap_ts = now
+
+    from src.licensing.machine_bridge import machine_fingerprint
+
+    fp = machine_fingerprint()
+    if not fp:
+        return None
+    f = fetch or _http
+    token = (os.environ.get("AITR_HOSTED_AI_KEY")
+             or str((cfg.get("ai") or {}).get("api_key") or ""))
+    bearer = token if str(token).startswith("cx.") else ""
+    body: Dict[str, Any] = {"fingerprint": fp, "invalid_api_id": bad}
+    direct = _probe_tg_direct()
+    if direct is not None:
+        body["tg_direct"] = direct
+    url = f"{_site_url(cfg)}/api/pool/telegram-cred"
+    resp = f(url, "POST", body, bearer) if bearer else f(url, "POST", body)
+    new_id = str(resp.get("api_id") or "")
+    new_hash = str(resp.get("api_hash") or "")
+    if not (resp.get("ok") and new_id and new_hash) or new_id == bad:
+        logger.info("[hosted-tg] 废凭据换发未成功：%s（保持原失败语义）",
+                    resp.get("error") or "same_or_empty")
+        return None
+    tg["api_id"] = new_id
+    tg["api_hash"] = new_hash
+    tg["_hosted_cred"] = True
+    _apply_hosted_tg_proxy(cfg, resp.get("proxy"))
+    # 🔒 只记 api_id，绝不记 api_hash / 代理账密
+    logger.info("[hosted-tg] 已举报废凭据 api_id=%s 并换发新组 api_id=%s proxy=%s（无感自愈）",
+                bad, new_id, "yes" if tg.get("_hosted_proxy") else "no")
+    return new_id, new_hash
+
+
+def _reset_swap_cooldown_for_tests() -> None:
+    global _last_swap_ts
+    with _swap_lock:
+        _last_swap_ts = 0.0
+
+
+def ensure_hosted_vision(
+    config_manager: Any, *, fetch: Optional[Fetch] = None,
+    probe: Optional[Callable[[str], bool]] = None,
+) -> bool:
     """托管版：把识图（VLM）指向官网网关（我们自己的 GPU 识图模型，非云端大模型）。
 
     问题 #2 的公网解——集团识图 GPU（176/140）在内网，公网够不着；改由 bd2026.cc 网关
@@ -241,17 +437,52 @@ def ensure_hosted_vision(config_manager: Any, *, fetch: Optional[Fetch] = None) 
     if not _wants_hosted(cfg):
         return False
     v = cfg.get("vision") if isinstance(cfg.get("vision"), dict) else {}
-    # 用户已自配识图后端（base_url/base_urls/智谱 key）→ 不动
+    # 用户已自配识图后端（base_url/base_urls/智谱 key）→ 不动。
+    # 两个例外：本模块此前注入的（_hosted_vision，允许续期刷新）；内测种子的
+    # LAN 后端（_lan_seed，混合形态——LAN 可达保持直连、不可达由网关接管）。
     if (str(v.get("base_url") or "").strip() or v.get("base_urls")
             or str(v.get("api_key") or "").strip()):
-        # 但若是本模块此前注入的（_hosted_vision）则允许续期刷新
-        if not v.get("_hosted_vision"):
+        if not (v.get("_hosted_vision") or v.get("_lan_seed")):
             return False
 
     ai = cfg.get("ai") if isinstance(cfg.get("ai"), dict) else {}
     token = str(ai.get("api_key") or "")
     if not token.startswith("cx."):
         return False  # 还没拿到设备令牌（识图与聊天共用），等 ensure_hosted_ai 先成
+
+    # ── 混合形态（_lan_seed，2026-08-03）：LAN 探测决定 直连 / 网关接管，可逆 ──
+    # 同一个安装包在办公室内网直连 176/140 低延迟；装到外网机器上 LAN 不可达 →
+    # 网关接管（经 117→VPS 隧道回同一批 GPU）。回到内网后下轮刷新自动还原直连。
+    if v.get("_lan_seed"):
+        chk = probe or lan_alive
+        stash = v.get("_lan_backend") if isinstance(v.get("_lan_backend"), dict) else None
+        if stash is None and not v.get("_hosted_vision"):
+            stash = {
+                "provider": v.get("provider"),
+                "base_url": v.get("base_url"),
+                "base_urls": list(v.get("base_urls") or []) or None,
+                "api_key": v.get("api_key"),
+                "model": v.get("model"),
+            }
+        lan_urls = [u for u in ((stash or {}).get("base_urls")
+                                or [(stash or {}).get("base_url")]) if u]
+        if lan_urls and any(chk(str(u)) for u in lan_urls):
+            if v.get("_hosted_vision") and stash:
+                # 回到内网：还原 LAN 直连，撤网关接管（env 一并清，防热重载重放）
+                for key in ("provider", "base_url", "base_urls", "api_key", "model"):
+                    val = stash.get(key)
+                    if val is None:
+                        v.pop(key, None)
+                    else:
+                        v[key] = val
+                v.pop("_hosted_vision", None)
+                v.pop("_lan_backend", None)
+                os.environ.pop(VISION_ENV_BASE, None)
+                os.environ.pop(VISION_ENV_MODEL, None)
+                logger.info("[hosted-vision] LAN 识图后端恢复可达 → 还原直连")
+            return False
+        if stash is not None:
+            v["_lan_backend"] = stash
 
     # 规范 VLM：两台中继（176/140）都装 qwen3-vl:8b-instruct → 网关可任意分流。
     # 网关侧还会统一改写 model，故此值只影响日志/回显，不会造成中继找不到模型。
@@ -262,6 +493,9 @@ def ensure_hosted_vision(config_manager: Any, *, fetch: Optional[Fetch] = None) 
     vision = cfg["vision"]
     vision["provider"] = "openai_compatible"
     vision["base_url"] = _gateway_base(cfg)  # https://bd2026.cc/api/ai/v1
+    # base_urls 一并指网关：种子的 LAN 列表优先级高于单数 base_url，不改写的话
+    # 混合形态接管后 VisionClient 仍会去打死掉的 192.168.0.x。
+    vision["base_urls"] = [str(vision["base_url"])]
     vision["model"] = str(model)
     vision["api_key"] = token
     vision["_hosted_vision"] = True
@@ -292,6 +526,174 @@ def vision_provision_reason(config: Optional[dict]) -> str:
     if not str((cfg.get("ai") or {}).get("api_key") or "").startswith("cx."):
         return "no_token"
     return "not_provisioned"
+
+
+def _lan_bases(av: Dict[str, Any], *, exclude: str) -> list:
+    """取 ``avatar_voice`` 当前端点列表（去掉网关地址后的 LAN 部分）。"""
+    raw = av.get("base_urls")
+    bases = ([str(b).rstrip("/") for b in raw if str(b).strip()]
+             if isinstance(raw, (list, tuple)) else [])
+    if not bases:
+        single = str(av.get("base_url") or "").rstrip("/")
+        bases = [single] if single else []
+    return [b for b in bases if b != exclude]
+
+
+def apply_hosted_voice(cfg: Dict[str, Any], hub_base: str, *,
+                       gateway_first: bool, hub_fish_off: bool) -> bool:
+    """把网关端点排进 ``avatar_voice.base_urls``（纯内存变更）。
+
+    ensure_hosted_voice 与 ConfigManager 的 env 回放共用本函数＝变更逻辑单一事实源。
+    只动种子标记过（``_lan_seed``）或本模块注入过（``_hosted_voice``）的配置。
+    hub_fish 是 LAN 专属高保真链且调用处**没有**健康预检——不可达时就地禁用
+    （``_hosted_off`` 记账，可逆），否则外网机器 allowlist 人设每条语音硬吃 TCP 超时。
+    """
+    av = cfg.get("avatar_voice") if isinstance(cfg.get("avatar_voice"), dict) else None
+    if not av or not (av.get("_lan_seed") or av.get("_hosted_voice")):
+        return False
+    hub = str(hub_base or "").rstrip("/")
+    if not hub:
+        return False
+    lan = _lan_bases(av, exclude=hub)
+    av["base_urls"] = ([hub] + lan) if gateway_first else (lan + [hub])
+    av["base_url"] = av["base_urls"][0]
+    av["_hosted_voice"] = True
+    hf = av.get("hub_fish") if isinstance(av.get("hub_fish"), dict) else None
+    if hf is not None:
+        if hub_fish_off:
+            if hf.get("enabled"):
+                hf["enabled"] = False
+                hf["_hosted_off"] = True
+        elif hf.pop("_hosted_off", None):
+            hf["enabled"] = True
+    return True
+
+
+def apply_hosted_asr(cfg: Dict[str, Any], gw_base: str, *, gateway_first: bool) -> bool:
+    """把网关转写接进 ``voice_recognition``（纯内存变更；与 env 回放共用）。
+
+    LAN 可达 → 主转写保持 LAN，网关作**最后一级** fallback；LAN 不可达 → 主转写
+    换成网关（原 LAN 主位入 ``_lan_primary`` 暂存，回内网可逆还原）。api_key 用
+    占位值 ``hosted``：OpenAITranscriber 在调用时解析当前设备令牌，换新不失效。
+    """
+    vr = (cfg.get("voice_recognition")
+          if isinstance(cfg.get("voice_recognition"), dict) else None)
+    if not vr or not (vr.get("_lan_seed") or vr.get("_hosted_asr")):
+        return False
+    gw = str(gw_base or "").rstrip("/")
+    if not gw:
+        return False
+    stash = vr.get("_lan_primary") if isinstance(vr.get("_lan_primary"), dict) else None
+    if stash is None:
+        stash = {k: vr.get(k)
+                 for k in ("provider", "base_url", "api_key", "timeout", "max_retries")}
+        vr["_lan_primary"] = stash
+    fb = vr.get("fallback")
+    if isinstance(fb, dict):
+        fb = [fb]
+    fb = [dict(e) for e in fb if isinstance(e, dict)] if isinstance(fb, list) else []
+    fb = [e for e in fb if not e.get("_hosted_asr_entry")]
+    if gateway_first:
+        vr["provider"] = "openai_compatible"
+        vr["base_url"] = gw
+        vr["api_key"] = HOSTED_KEY_PLACEHOLDER
+        vr["timeout"] = 45
+        vr["max_retries"] = 0
+    else:
+        for key, val in stash.items():
+            if val is None:
+                vr.pop(key, None)
+            else:
+                vr[key] = val
+        fb.append({
+            "provider": "openai_compatible", "base_url": gw,
+            "api_key": HOSTED_KEY_PLACEHOLDER,
+            "model": str(vr.get("model") or "large-v3-turbo"),
+            "timeout": 45, "max_retries": 0, "_hosted_asr_entry": True,
+        })
+    vr["fallback"] = fb
+    vr["_hosted_asr"] = True
+    return True
+
+
+def ensure_hosted_voice(
+    config_manager: Any, *, probe: Optional[Callable[[str], bool]] = None,
+) -> bool:
+    """托管克隆语音（混合形态）：LAN 7852 直连优先，出了内网经官网网关回集群 GPU。
+
+    只动**内测种子标记过**的配置（``avatar_voice._lan_seed``；或本模块注入过
+    ``_hosted_voice``）——用户/运维自配的 TTS 端点绝不碰。需已持设备令牌：网关
+    鉴权走 ``X-AH-Svc: cx.…``，由 ``avatar_voice._svc_headers`` 在集群令牌缺失时
+    自动改带设备令牌。
+
+    端点次序只在「多个健康 / 全不健康」时起作用（AvatarVoiceClient 自带健康预检
+    与失败冷却）：LAN 活着 → ``[LAN…, 网关]``（办公室直连低延迟）；LAN 全不可达
+    → ``[网关, LAN…]``（外网首条语音不必先撞死端点吃连接超时）。
+    env 双写 ``AITR_HOSTED_VOICE_*``——热重载经 ``_apply_env_overrides`` 重放。
+    """
+    cfg = getattr(config_manager, "config", None) or {}
+    if not _wants_hosted(cfg):
+        return False
+    av = cfg.get("avatar_voice") if isinstance(cfg.get("avatar_voice"), dict) else None
+    if not av or not av.get("enabled"):
+        return False
+    if not (av.get("_lan_seed") or av.get("_hosted_voice")):
+        return False
+    if not str((cfg.get("ai") or {}).get("api_key") or "").startswith("cx."):
+        return False  # 网关要设备令牌鉴权，等 ensure_hosted_ai 先成
+    hub = _hub_base(cfg)
+    chk = probe or lan_alive
+    lan_ok = any(chk(b) for b in _lan_bases(av, exclude=hub))
+    hf = av.get("hub_fish") if isinstance(av.get("hub_fish"), dict) else None
+    hub_fish_off = bool(
+        hf and (hf.get("enabled") or hf.get("_hosted_off"))
+        and not chk(str(hf.get("base_url") or "")))
+    apply_hosted_voice(cfg, hub, gateway_first=not lan_ok, hub_fish_off=hub_fish_off)
+    os.environ[VOICE_ENV_BASE] = hub
+    os.environ[VOICE_ENV_FIRST] = "0" if lan_ok else "1"
+    if hub_fish_off:
+        os.environ[VOICE_ENV_HUBFISH_OFF] = "1"
+    else:
+        os.environ.pop(VOICE_ENV_HUBFISH_OFF, None)
+    logger.info(
+        "[hosted-voice] 克隆语音已接入网关兜底（%s；LAN %s%s）",
+        hub, "直连优先" if lan_ok else "不可达 → 网关优先",
+        "，hub_fish 暂禁" if hub_fish_off else "")
+    return True
+
+
+def ensure_hosted_asr(
+    config_manager: Any, *, probe: Optional[Callable[[str], bool]] = None,
+) -> bool:
+    """托管语音识别（混合形态）：LAN GPU ASR 优先，出了内网经网关转写。
+
+    只动内测种子标记过的配置（``voice_recognition._lan_seed`` / ``_hosted_asr``）。
+    注意：转写器在各 worker 启动时**构建一次常驻**（telegram_client / orchestrator /
+    media_enrich 懒建），本注入必须先于其构建（main.py 启动段已保证）；进程运行中
+    漫游换网需重启才重排——代价只是多一跳失败回落，可接受。
+    """
+    cfg = getattr(config_manager, "config", None) or {}
+    if not _wants_hosted(cfg):
+        return False
+    vr = (cfg.get("voice_recognition")
+          if isinstance(cfg.get("voice_recognition"), dict) else None)
+    if not vr or vr.get("enabled") is False:
+        return False
+    if not (vr.get("_lan_seed") or vr.get("_hosted_asr")):
+        return False
+    if not str((cfg.get("ai") or {}).get("api_key") or "").startswith("cx."):
+        return False
+    gw = _gateway_base(cfg)
+    chk = probe or lan_alive
+    stash = vr.get("_lan_primary") if isinstance(vr.get("_lan_primary"), dict) else None
+    lan_primary = str((stash or {}).get("base_url") or vr.get("base_url") or "")
+    lan_ok = bool(lan_primary) and lan_primary != gw and chk(lan_primary)
+    apply_hosted_asr(cfg, gw, gateway_first=not lan_ok)
+    os.environ[ASR_ENV_BASE] = gw
+    os.environ[ASR_ENV_FIRST] = "0" if lan_ok else "1"
+    logger.info("[hosted-asr] 语音识别已接入网关兜底（LAN %s）",
+                "直连优先" if lan_ok else "不可达 → 网关优先")
+    return True
 
 
 def ensure_hosted_ai(config_manager: Any, *, fetch: Optional[Fetch] = None) -> bool:
@@ -474,10 +876,20 @@ def refresh_once(config_manager: Any) -> None:
     令牌与识图**必须成对刷**：供给是两步，令牌后到（首启无网 / 未领试用 / 领完试用
     才签发）时若只补 AI，识图就会一直缺后端直到下次重启——这正是「一键开齐入站识别
     点了没用」的成因之一。已注入时识图那步是纯内存赋值，零 HTTP。
+    克隆语音 / 语音识别（混合形态）同批刷：每轮重探 LAN 可达性，办公室↔外网漫游
+    在一小时内自动换向（每轮代价＝几次 2s 快败 TCP 探测）。
+
+    Telegram 凭据也在此补领（2026-08-10 补，API_ID_INVALID 事故排查连带发现）：
+    此前只在启动时领一次——首启没网/官网抖动错过那一发，用户就一直停在「填
+    API ID/Hash」表单直到重启。已注入/用户自填时它秒级短路（不发 HTTP），
+    只有缺凭据时每小时多一次补领请求。
     """
     try:
         ensure_hosted_ai(config_manager)
+        ensure_hosted_telegram(config_manager)
         ensure_hosted_vision(config_manager)
+        ensure_hosted_voice(config_manager)
+        ensure_hosted_asr(config_manager)
     except Exception:
         logger.debug("[hosted-ai] 刷新守护异常（忽略）", exc_info=True)
 

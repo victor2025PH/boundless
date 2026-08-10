@@ -183,7 +183,24 @@ function resolveAccounts(cfg) {
   function onInjectStatus(payload, wv) {
     if (!payload || !wv) return;
     InjectStatus.byId[wv.dataset.id] = payload;
+    updateRailHealth(wv.dataset.id);   // 每个号刷自己的栏点(不只当前聚焦),这才是「一眼看全」
     if (InjectStatus.activeId === wv.dataset.id) renderInjectStatus();
+  }
+
+  // 账号栏健康三态点：把该账号最近一次 inject-status 经 webmulti.railBadge 滚成一枚角标点
+  // （dot=on/warn/off/idle）。当前 renderer 只有 inject 这一维可靠（session 在线 / translate
+  // 可达尚未逐账号接线）→ 直接用 inject 的 cls 驱动,诚实反映「已知的」；将来接了另两维,
+  // 换成 accountHealthState(三维取最差) 即可,railBadge 出参形状不变、这里零改动。
+  function updateRailHealth(id) {
+    if (typeof railBadge !== "function") return; // webmulti 未加载：静默降级,不影响主链
+    const item = document.querySelector('.rail-item[data-id="' + id + '"]');
+    if (!item) return;
+    const dot = item.querySelector(".rail-dot");
+    if (!dot) return;
+    const st = deriveInjectState(InjectStatus.byId[id]);
+    const badge = railBadge({ level: st.cls, text: st.text });
+    dot.className = "rail-dot " + badge.dot;
+    dot.title = badge.text || "";
   }
   buildInjectStatusPill();
 
@@ -210,7 +227,10 @@ function resolveAccounts(cfg) {
     item.className = "rail-item active";
     item.dataset.id = INBOX_ID;
     item.title = "智聊 · 统一收件箱";
-    item.innerHTML = `<span class="ic">📥</span><span>${ui.label || "统一收件箱"}</span>`;
+    // rail-badge＝全局未读徽标：数据由 /workspace 页面经 inbox-preload.js 桥回推
+    // （cmd=badge），壳自己不另拉后端——未读口径单源在页面聚合逻辑里。
+    item.innerHTML = `<span class="ic">📥</span><span>${ui.label || "统一收件箱"}</span>` +
+      '<span class="rail-badge" id="rail-inbox-badge" hidden></span>';
     item.addEventListener("click", () => activate(INBOX_ID));
     rail.appendChild(item);
 
@@ -225,6 +245,13 @@ function resolveAccounts(cfg) {
     wv.setAttribute("src", "about:blank");
     wv.setAttribute("partition", "persist:backend-workspace");
     wv.setAttribute("allowpopups", "true");
+    // 反向桥 preload：向 /workspace 页面暴露 window.__chatxShell（打开官方网页版标签 /
+    // 未读徽标回推）。preload 属性须在挂载(appendChild)前设置；跨导航（登录回跳）持续生效。
+    // 纯浏览器打开同一页面时没有这份 preload → 页面按「桥不存在」降级，模板零分叉。
+    try { wv.setAttribute("preload", new URL("inbox-preload.js", window.location.href).toString()); } catch (_) {}
+    wv.addEventListener("ipc-message", (e) => {
+      if (e.channel === "chatx-bridge") onShellBridge(e.args[0]);
+    });
     wv._loginIdx = 0;       // 凭据链游标
     wv._loginPending = false; // 登录尝试进行中标记
     stage.appendChild(wv);
@@ -453,7 +480,9 @@ function resolveAccounts(cfg) {
     item.title = `${a.label}（${a.platform}:${a.id}）`;
     // 运行时新增的账号(_auto)带「✕」可就地移除；config.json 定义的账号不可在此删（交配置管理）
     const rmHtml = a._auto ? '<span class="rm" title="移除该内嵌标签">✕</span>' : "";
-    item.innerHTML = `<span class="ic">${platIconHtml(a.platform)}</span><span>${a.label}</span>${rmHtml}`;
+    // rail-dot＝账号栏健康三态角标（左上角常驻）：一眼看清每个号能不能用,不必逐个切进去看。
+    item.innerHTML = `<span class="ic">${platIconHtml(a.platform)}</span><span>${a.label}</span>` +
+      `<span class="rail-dot idle" title="等待注入…"></span>${rmHtml}`;
     item.addEventListener("click", (e) => {
       if (e.target && e.target.classList && e.target.classList.contains("rm")) {
         e.stopPropagation();
@@ -481,6 +510,7 @@ function resolveAccounts(cfg) {
     wv.addEventListener("ipc-message", (e) => {
       if (e.channel === "active-chat") onActiveChat(e.args[0], wv);
       else if (e.channel === "inject-status") onInjectStatus(e.args[0], wv);
+      else if (e.channel === "fill-result") onFillResult(e.args[0]);
     });
     wv.addEventListener("dom-ready", () => {
       try {
@@ -490,6 +520,7 @@ function resolveAccounts(cfg) {
       }
     });
     stage.appendChild(wv);
+    syncRailVisibility();
     return true;
   }
 
@@ -506,12 +537,25 @@ function resolveAccounts(cfg) {
       flash(`${a.label} 无官方网页版，已切到统一收件箱`);
     });
     railInsert(ri);
+    syncRailVisibility();
   }
 
   // 新 Tab 一律插在「➕新增」按钮之前，保持 ➕ 常驻队尾
   function railInsert(node) {
     if (railAddBtn && railAddBtn.parentNode === rail) rail.insertBefore(node, railAddBtn);
     else rail.appendChild(node);
+  }
+
+  // 标签条按需出现（rail-solo）：只剩收件箱一个标签（无任何内嵌/↪收件箱 Tab）时整条隐藏，
+  // 常态桌面与网页版零差异；从抽屉「打开官方网页版」开出第一个标签才浮现（浏览器心智），
+  // 关掉最后一个自动消失——入口由页面账号抽屉兜底，不会死路。
+  // 收件箱未启用（纯内嵌形态）时标签条是唯一导航，恒显示；Option C（EMBEDDED_ON=false）
+  // 仍由 no-embedded 类整条隐藏，不归这里管。
+  function syncRailVisibility() {
+    const appEl = document.getElementById("app");
+    if (!appEl || !EMBEDDED_ON) return;
+    const hasTabs = !!rail.querySelector('.rail-item:not(.rail-add):not([data-id="' + INBOX_ID + '"])');
+    appEl.classList.toggle("rail-solo", inboxOn && !hasTabs);
   }
 
   // ── 运行时新增内嵌账号（无需改 config.json / 重启）：➕ → 选平台 → 起 webview 内扫码 ──────
@@ -543,9 +587,10 @@ function resolveAccounts(cfg) {
       closeAddMenu();
     });
     document.body.appendChild(menu);
+    // 标签条在顶部 → 菜单垂到锚点下方（原左侧 rail 语义是贴右弹出）
     const r = anchor.getBoundingClientRect();
-    menu.style.left = r.right + 6 + "px";
-    menu.style.top = r.top + "px";
+    menu.style.left = Math.round(r.left) + "px";
+    menu.style.top = Math.round(r.bottom + 6) + "px";
     addMenuEl = menu;
     // 下一拍起监听全局点击关菜单（避免本次 ➕ 点击立即触发；关闭时显式移除，防监听堆积）
     setTimeout(() => document.addEventListener("click", closeAddMenu), 0);
@@ -593,7 +638,37 @@ function resolveAccounts(cfg) {
       const fb = inboxOn ? INBOX_ID : ((ACCOUNTS.find((a) => isEmbeddable(a.platform)) || {}).id || INBOX_ID);
       activate(fb);
     }
+    syncRailVisibility();
     flash("已移除内嵌标签");
+  }
+
+  // ── 收件箱页 → 壳 反向桥（inbox-preload.js 经 sendToHost 抵达）──────────────
+  // 双栏融合后「打开官方网页版」入口下沉到页面账号抽屉（网页版是账号的一种打开方式，
+  // 不再是与收件箱并列的一级导航）；页面按钮点击经此桥驱动壳侧标签。
+  //   cmd=openEmbedded：已有该平台标签→切过去；没有→按 ➕新增 同一条路径现建
+  //                     （UA 伪装 / persist 分区 / 注入 preload 全复用）。
+  //   cmd=badge：收件箱未读总数 → 收件箱标签徽标（口径单源=页面聚合逻辑）。
+  function onShellBridge(msg) {
+    if (!msg || typeof msg !== "object") return;
+    if (msg.cmd === "badge") { updateInboxBadge(msg.unread); return; }
+    if (msg.cmd === "openEmbedded") {
+      const plat = String(msg.platform || "").toLowerCase();
+      if (!EMBEDDED_ON) {
+        flash("内嵌官方网页版未启用（config.embedded_official_pages）");
+        return;
+      }
+      if (!isEmbeddable(plat)) { flash("该平台无可内嵌的官方网页版"); return; }
+      const existing = ACCOUNTS.find((a) => a.platform === plat && RENDERED.has(a.id));
+      if (existing) { activate(existing.id); flash(`已切到网页版标签：${existing.label}`); return; }
+      addEmbeddedAccount(plat);
+    }
+  }
+  function updateInboxBadge(n) {
+    const b = document.getElementById("rail-inbox-badge");
+    if (!b) return;
+    const v = Number(n) || 0;
+    b.hidden = v <= 0;
+    b.textContent = v > 99 ? "99+" : String(v);
   }
 
   // Option C：内嵌官方网页关闭时，桌面只剩统一收件箱（rail 由 #app.no-embedded 隐藏），
@@ -605,6 +680,7 @@ function resolveAccounts(cfg) {
       // 统一收件箱开启时它占首屏，内嵌平台一律非激活；未开启时回退老行为（首个可内嵌账号激活）
       addAccountTab(a, { active: !inboxOn && idx === firstEmbeddableIdx });
     });
+    syncRailVisibility();   // 零内嵌账号的初始态：标签条按需隐藏（与网页版零差异）
   }
 
   // 启动首屏对齐：收件箱是首屏时必须走一遍 activate()——buildInboxTab 只置 active class，
@@ -712,6 +788,30 @@ function $(id) {
   return document.getElementById(id);
 }
 
+// 副驾空状态渲染成「能力橱窗」：把竞品没有的能力（AI 人设拟稿/受控出站人审/知识库/
+// 关系阶段/语音克隆）在第一屏显性化。数据来自 copilot-capabilities.js（浏览器全局纯函数）；
+// 内容全是我们自己的静态文案（非用户输入）→ innerHTML 安全。函数/数据缺失静默保留原有兜底文案。
+function renderCopilotShowcase() {
+  try {
+    const el = $("cp-empty");
+    if (!el || typeof capabilityShowcase !== "function") return;
+    const items = capabilityShowcase() || [];
+    if (!items.length) return;
+    const head = typeof showcaseHeadline === "function" ? showcaseHeadline() : "";
+    const esc = (s) => String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const rows = items.map((it) =>
+      '<li><span class="cp-sc-dot"></span><div>' +
+      '<b>' + esc(it.title) + '</b><span>' + esc(it.desc) + '</span></div></li>'
+    ).join("");
+    el.innerHTML =
+      '<div class="cp-showcase">' +
+      (head ? '<div class="cp-sc-hd">' + esc(head) + '</div>' : '') +
+      '<ul class="cp-sc-list">' + rows + '</ul>' +
+      '<div class="cp-sc-ft">打开一个会话即可开始</div></div>';
+  } catch (e) { /* 橱窗只是空状态美化,任何异常都不该影响副驾主链 */ }
+}
+
 function initCopilot() {
   $("cp-toggle").addEventListener("click", () => {
     const el = $("copilot");
@@ -750,6 +850,7 @@ function initCopilot() {
     _cpCardCtrl.bindClicks("copilot");
     _cpCardCtrl.apply();
   }
+  renderCopilotShowcase();   // 空状态＝能力橱窗（对标翻译型竞品,显性化我们独有的能力）
   if (sc.decorateCardIcons) sc.decorateCardIcons(document, 14);
   document.addEventListener("cp-data-loaded", (e) => _updateCardPill((e && e.detail) || {}));
   if (sc.initDesktopTabBadges) {
@@ -1147,9 +1248,16 @@ async function runAutopilotReply(c, sig) {
       flash("⚠ 风控命中，已转人工（未自动发送）");
       return;
     }
-    // 拟人延迟后自动发送
-    const delay = AUTO_DELAY_MIN_MS + Math.floor(Math.random() * (AUTO_DELAY_MAX_MS - AUTO_DELAY_MIN_MS));
-    await new Promise((r) => setTimeout(r, delay));
+    // 拟人延迟后自动发送。走与受控出站同一个节奏权威（主进程 outbound-pace）——固定的
+    // 2~4s 与文本长度无关，两行字和两百字用同样时间「打」出来本身就是机器特征。
+    let delay = AUTO_DELAY_MIN_MS + Math.floor(Math.random() * (AUTO_DELAY_MAX_MS - AUTO_DELAY_MIN_MS));
+    try {
+      if (window.shell.pacePlan) {
+        const p = await window.shell.pacePlan({ account_id: c.account_id || "", text });
+        if (p && !p.throttled) delay = Math.max(AUTO_DELAY_MIN_MS, (p.waitMs || 0) + (p.typingMs || 0));
+      }
+    } catch (e) { /* 用旧的随机延迟 */ }
+    await sleep(delay);
     if (!ap.on || !Copilot.ctx || Copilot.ctx.chat_key !== c.chat_key) {
       setAutopilotStatus("待命中（收到客户消息将自动回复）", "on");
       return;
@@ -1193,6 +1301,52 @@ async function fillComposer(text, send) {
 // 安全：只对**当前已打开对应会话**的账号拉取（chat_key 过滤）——注入 fill-composer 只填
 // 当前打开的 composer、不会按 chat_key 导航，故未打开的会话命令留队列等打开，绝不发错聊天。
 let _outboundTimer = null;
+
+// fill-composer 回执等待表：token → resolve。注入侧发完/填完经 sendToHost("fill-result")
+// 回来，这里把它变成一个可 await 的结果。等不到＝注入没装载/页面在跳转（不是「发失败」，
+// 见 FILL_ACK_TIMEOUT_MS 处的说明）。
+const _fillWaiters = new Map();
+let _fillSeq = 0;
+const FILL_ACK_TIMEOUT_MS = 8000; // > 注入侧 150ms 起手 + 1500ms 清空回读，留足余量
+function onFillResult(payload) {
+  const token = payload && payload.token;
+  const w = token ? _fillWaiters.get(token) : null;
+  if (!w) return; // 迟到的回执（已超时）：丢弃，本轮已按未确认处理
+  _fillWaiters.delete(token);
+  clearTimeout(w.timer);
+  w.resolve({ received: true, ok: payload.ok === true, reason: String(payload.reason || "") });
+}
+function sendAndAwaitFill(wv, text) {
+  const token = `f${Date.now().toString(36)}${++_fillSeq}`;
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      _fillWaiters.delete(token);
+      // 超时**不等于失败**：多半是注入层压根没装载（如 1.016/1.017 漏包）或页面正在跳转。
+      // 交主进程判成「不 ack」→ 服务端 180s 后回收重取，注入恢复即自愈。
+      resolve({ received: false, ok: false, reason: "no_inject_ack", timeout: true });
+    }, FILL_ACK_TIMEOUT_MS);
+    _fillWaiters.set(token, { resolve, timer });
+    try {
+      wv.send("fill-composer", { text, send: true, token });
+    } catch (e) {
+      _fillWaiters.delete(token);
+      clearTimeout(timer);
+      resolve({ received: false, ok: false, reason: "webview_send_failed", timeout: true });
+    }
+  });
+}
+
+// 注入侧压根不可能发出去的账号（无选择器档案）→ 不拉命令。
+// 拉了就是「认领 → 等不到回执 → 不 ack → 180s 回收 → 再认领」的空转，attempts 白涨到
+// 上限被判死；不拉则命令留 pending 等注入恢复/换平台，语义与「会话没打开」一致。
+// 只拦 unsupported（确定性事实）；warn/bad 仍尝试——失配未必发不出去，宁可试。
+function injectSendable(accountId) {
+  try {
+    const st = deriveInjectState(InjectStatus.byId[accountId]);
+    return !st || st.cls !== "bad" || st.code !== "unsupported";
+  } catch (e) { return true; } // 判不出来就照旧尝试，绝不因诊断层出问题停掉回复
+}
+
 async function pollOutboundOnce() {
   if (!window.shell || !window.shell.outboundPull) return;
   const wvs = document.querySelectorAll('#webviews webview[data-account]');
@@ -1202,26 +1356,53 @@ async function pollOutboundOnce() {
     if (!account_id || !platform) continue;
     const chat_key = ACTIVE_CHAT_BY_ACCOUNT[account_id];
     if (!chat_key) continue; // 该账号未打开任何会话 → 不拉（命令留队列等打开）
+    if (!injectSendable(account_id)) continue;
     let res;
     try {
       res = await window.shell.outboundPull({ platform, account_id, chat_key, limit: 10 });
     } catch (e) { continue; }
     const items = (res && res.items) || [];
     for (const it of items) {
+      // ① 拟人节奏：策略在主进程（outbound-pace.js）。不可用则退化成旧的固定间隔，
+      //    绝不因为节奏层出问题就不回复客户。
+      let plan = { typingMs: 0, waitMs: 600, throttled: false };
       try {
-        wv.send("fill-composer", { text: it.text, send: true });
-        await window.shell.outboundAck({ id: it.id, ok: true });
-        // 多条间隔，避免连发把 composer 冲掉（注入 send 后 ~150ms 才点发送）
-        await new Promise((r) => setTimeout(r, 600));
-      } catch (e) {
-        try { await window.shell.outboundAck({ id: it.id, ok: false, error: String(e) }); } catch (_) {}
-      }
+        if (window.shell.pacePlan) plan = await window.shell.pacePlan({ account_id, text: it.text });
+      } catch (e) { /* 用兜底 plan */ }
+      if (plan && plan.throttled) break; // 本账号已撞每分钟安全阀：剩下的留在队列（不 ack）
+      // 与上一条的自然间隔 + 打字耗时。填入会派发 input 事件 → 对端看到「正在输入…」，
+      // 故 typing 段先等再填**不**等价于空耗：等的是「像人一样想一下」。
+      if (plan && plan.waitMs > 0) await sleep(plan.waitMs);
+      if (plan && plan.typingMs > 0) await sleep(plan.typingMs);
+      // 等待期间坐席可能切走会话/关掉账号 → 复核，避免把回复填进已切换的聊天
+      if (ACTIVE_CHAT_BY_ACCOUNT[account_id] !== chat_key) break;
+
+      // ② 诚实回执：等注入告诉我们「填上了吗/发出去了吗」，由主进程按三档语义决定
+      //    ack 成功 / ack 失败 / 不 ack（旧实现无条件 ack 成功，注入一死就集体谎报送达）
+      const result = await sendAndAwaitFill(wv, it.text);
+      try {
+        if (window.shell.outboundReport) {
+          await window.shell.outboundReport({ id: it.id, account_id, result });
+        } else {
+          await window.shell.outboundAck({ id: it.id, ok: result.ok, error: result.reason });
+        }
+      } catch (e) { /* 回执发不出：服务端回收机制兜底 */ }
+      if (!result.ok) break; // 这个账号的发送链当前不通，别把整队命令喂进黑洞
     }
   }
 }
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+// 拟人节奏把一轮派发从「N×600ms」拉长到「N×(间隔+打字)」＝可达数十秒，远超 5s 轮询间隔
+// → 必须防重入。不防的话多个循环并行给同一账号发，节奏被有效对折（频控虽仍兜着上限，
+// 但「像人」这个目标就没了），且回执 token 表也会无谓膨胀。
+let _pollBusy = false;
 function startOutboundPoll() {
   if (_outboundTimer) return;
-  _outboundTimer = setInterval(() => { pollOutboundOnce().catch(() => {}); }, 5000);
+  _outboundTimer = setInterval(() => {
+    if (_pollBusy) return;
+    _pollBusy = true;
+    pollOutboundOnce().catch(() => {}).finally(() => { _pollBusy = false; });
+  }, 5000);
 }
 
 // 发送前风控：命中支付/密码=high 需确认；优惠/投诉=medium 提醒；AI 口吻提醒。护栏不可用不阻断。

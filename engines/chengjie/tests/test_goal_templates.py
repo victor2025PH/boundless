@@ -31,7 +31,7 @@ from src.companion.goals.templates import (
 EXPECTED_IDS = {
     "conversion_unlock", "conversion_subscribe", "relationship_stage",
     "relationship_intimacy", "engagement_reactivate", "acquire_and_convert",
-    "retention_expand", "custom",
+    "retention_expand", "profile_discovery", "custom",
 }
 
 # 14 天采样窗：意图池最小 size=2，crc32 确定性下必然轮换出 ≥2 种（已实测）
@@ -40,7 +40,7 @@ _DAYS = [f"2026-07-{d:02d}" for d in range(1, 15)]
 
 # ── 结构不变量 ──────────────────────────────────────────────────────────────
 
-def test_exactly_eight_templates():
+def test_exactly_nine_templates():
     assert set(TEMPLATES) == EXPECTED_IDS
     assert set(template_ids()) == EXPECTED_IDS
 
@@ -86,7 +86,7 @@ def test_get_template_hit_strip_and_miss():
 
 def test_list_templates_public_shape_no_intents_leak():
     out = list_templates()
-    assert len(out) == 8
+    assert len(out) == 9
     assert {e["id"] for e in out} == EXPECTED_IDS
     for e in out:
         assert "intents" not in e, e["id"]
@@ -156,6 +156,38 @@ def test_pick_care_intent_deterministic_and_rotates():
 
 
 # ── push_for_milestone / milestone_label ────────────────────────────────────
+
+def test_profile_discovery_shape():
+    """P26 摸底模板结构钉：profile_slots 能力位 + 缺口从里程碑 0 起 +
+    曲线 soft 起步 + 默认勾选含 age/occupation（「获取年龄职业」开箱即用）。"""
+    t = TEMPLATES["profile_discovery"]
+    assert t["profile_slots"] is True
+    assert t["gap_from_milestone"] == 0
+    assert [push_for_milestone(t, i) for i in range(4)] == [
+        "soft", "soft", "direct", "soft"]
+    slots_param = next(p for p in t["params"] if p["key"] == "slots")
+    assert "age" in slots_param["default"]
+    assert "occupation" in slots_param["default"]
+    # 每段意图池 ≥2 条（单条池=同一里程碑期间每天同一句）
+    assert all(len(pool) >= 2 for pool in t["intents"].values())
+
+
+def test_custom_intent_pools_expanded():
+    """P26：custom 每段池 ≥2 条（crc32 轮换只在池内生效，单条池=复读机）。"""
+    assert all(len(pool) >= 2
+               for pool in TEMPLATES["custom"]["intents"].values())
+
+
+def test_custom_curve_never_starts_none():
+    """P25（2026-08-05）回归钉：custom 里程碑纯时间驱动，首段若为 none，
+    14 天目标头 3~4 天注入块全程「营销内容只字不提」——坐席实测「设了目标
+    AI 完全不往那个方向聊」的软根因。custom 是坐席显式写下的方向，
+    起步必须至少 soft（顺势自然带到）。"""
+    t = TEMPLATES["custom"]
+    assert push_for_milestone(t, 0) == "soft"
+    assert [push_for_milestone(t, i) for i in range(4)] == [
+        "soft", "soft", "direct", "soft"]
+
 
 def test_push_for_milestone_curve_and_clamps():
     t = TEMPLATES["conversion_unlock"]

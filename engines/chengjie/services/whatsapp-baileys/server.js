@@ -37,6 +37,8 @@ import {
 // close 分支决策抽成零依赖纯函数（2026-07-22 断网假死事故的根修）：决策可被 node --test
 // 单测（server.js 顶层 app.listen，测试没法安全 import 本文件），本文件只执行副作用。
 import { decideCloseAction, CLOSE_CODES } from "./close-policy.js";
+import { looksLikeOggOpus } from "./ptt-format.js";
+import { withTimeout, UpstreamTimeoutError, AVATAR_QUERY_TIMEOUT_MS } from "./upstream-timeout.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SESSIONS_DIR = process.env.WA_SESSIONS_DIR || path.join(__dirname, "sessions");
@@ -1465,9 +1467,15 @@ app.get("/accounts/:id/avatar", async (req, res) => {
   const jid = toJid(req.query.jid || "");
   if (!jid) return res.status(400).json({ ok: false, error: "jid required" });
   try {
-    const url = await entry.sock.profilePictureUrl(jid, "image");
+    // withTimeout：socket 半死时 profilePictureUrl 无限挂起（2026-08-05 实锤每个挂 20s+，
+    // 占死调用方连接）——8s 兜底自保；熔断判定权在 Python 层 4s（见 upstream-timeout.js）。
+    const url = await withTimeout(
+      entry.sock.profilePictureUrl(jid, "image"), AVATAR_QUERY_TIMEOUT_MS);
     res.json({ ok: true, url: url || "" });
   } catch (e) {
+    if (e instanceof UpstreamTimeoutError) {
+      return res.status(504).json({ ok: false, error: "avatar query timeout" });
+    }
     res.json({ ok: true, url: "" }); // 无头像/隐私设置 → 空
   }
 });
@@ -1706,6 +1714,18 @@ app.post("/accounts/:id/send-media", async (req, res) => {
     let content;
     if (mtype === "image") content = { image: buf, caption };
     else if (mtype === "voice") {
+      // 防御纵深：上游 B 线不得再把 WAV/MP3 当 voice；边车再拦一次，
+      // 避免「建得了气泡、客户无法下载」的静默事故（2026-08-04）。
+      if (!looksLikeOggOpus(buf)) {
+        logger.warn(
+          { path: mpath, size: buf.length, head: buf.subarray(0, 4).toString("hex") },
+          "send-media reject: voice requires ogg/opus (OggS+OpusHead)",
+        );
+        return res.status(400).json({
+          ok: false,
+          error: "voice requires ogg/opus (OggS+OpusHead)",
+        });
+      }
       content = { audio: buf, ptt: true, mimetype: "audio/ogg; codecs=opus" };
     } else if (mtype === "video") content = { video: buf, caption };
     else {

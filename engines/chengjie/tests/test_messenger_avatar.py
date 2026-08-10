@@ -6,7 +6,15 @@
 
 Node 侧的 scontent 抓取与真实下载须真机联调（不在单测覆盖内）；这里锁死 Python 侧不变量：
 per-platform 子目录、文件名安全、空 url 走负缓存、下载成功 302、下载失败优雅 404。
+
+2026-08-05 追加「上游挂死熔断」不变量（WA socket 半死时 Baileys profilePictureUrl 无限
+挂起 → 每个头像吃满超时 → 几行 WA 会话就占死浏览器同源 6 连接、全页请求饿死）：
+- ``_proto_avatar_cooling`` / ``_mark_proto_avatar_bad`` / ``_clear_proto_avatar_bad``
+  账号级熔断三件套（60s 窗、过期自清、成功清除）；
+- 路由接线静态钉：回源必须带 4s 短超时、仅**超时**开熔断（业务快败不开）、
+  熔断检查在磁盘缓存之后（缓存命中不受熔断影响）。
 """
+import inspect
 import os
 
 import pytest
@@ -14,9 +22,13 @@ from fastapi import HTTPException
 from fastapi.responses import RedirectResponse
 
 import src.integrations.protocol_bridge as pb
+import src.web.routes.unified_inbox_account_routes as uiar
 from src.web.routes.unified_inbox_account_routes import (
     _avatar_disk_paths,
+    _clear_proto_avatar_bad,
     _download_and_cache_avatar,
+    _mark_proto_avatar_bad,
+    _proto_avatar_cooling,
 )
 
 
@@ -122,6 +134,55 @@ async def test_download_on_outcome_exception_never_breaks_flow(media_root, monke
                                             jpg, none_marker, url_path, on_outcome=_boom)
     assert resp.status_code == 302
     assert jpg.exists()
+
+
+@pytest.fixture()
+def _clean_cooldown():
+    uiar._PROTO_AVATAR_BAD_UNTIL.clear()
+    yield
+    uiar._PROTO_AVATAR_BAD_UNTIL.clear()
+
+
+def test_proto_avatar_cooldown_three_states(_clean_cooldown, monkeypatch):
+    # ① 无记录 → 不冷却
+    assert not _proto_avatar_cooling("whatsapp", "639270135480")
+    # ② mark 后 → 冷却中；不同账号/平台互不牵连
+    _mark_proto_avatar_bad("whatsapp", "639270135480")
+    assert _proto_avatar_cooling("whatsapp", "639270135480")
+    assert not _proto_avatar_cooling("whatsapp", "other-acct")
+    assert not _proto_avatar_cooling("messenger", "639270135480")
+    # ③ 窗口过期 → 自清（读即剔除，无需外部打扫）
+    import time as _t
+    real = _t.monotonic()
+    monkeypatch.setattr(uiar.time, "monotonic",
+                        lambda: real + uiar._PROTO_AVATAR_COOLDOWN_SEC + 1)
+    assert not _proto_avatar_cooling("whatsapp", "639270135480")
+    assert "whatsapp:639270135480" not in uiar._PROTO_AVATAR_BAD_UNTIL
+
+
+def test_proto_avatar_cooldown_clear_on_success(_clean_cooldown):
+    _mark_proto_avatar_bad("whatsapp", "a1")
+    _clear_proto_avatar_bad("whatsapp", "a1")
+    assert not _proto_avatar_cooling("whatsapp", "a1")
+    _clear_proto_avatar_bad("whatsapp", "never-marked")   # 清除不存在的键不炸
+
+
+def test_avatar_route_wiring_pins_timeout_and_breaker():
+    """接线静态钉（路由是闭包，不便装配全 app；源码不变量与门禁同哲学）：
+    ① WA/MSGR 回源必须带 4s 短超时（旧默认 20s = 浏览器里每个头像挂满 20s 的根因）；
+    ② 仅超时开熔断（httpx.TimeoutException；业务快败不占熔断窗）；
+    ③ 熔断检查在负缓存检查之后（磁盘/负缓存命中不受熔断影响）；
+    ④ 回源成功清除熔断。"""
+    src = inspect.getsource(uiar)
+    assert src.count("timeout=_PROTO_AVATAR_FETCH_TIMEOUT_SEC") >= 2, "WA/MSGR 回源缺短超时"
+    assert src.count("httpx.TimeoutException") >= 2, "熔断必须只认超时特征"
+    assert "_clear_proto_avatar_bad(platform, account_id)" in src, "成功路径缺熔断清除"
+    # 熔断闸位于 neg_hit 之后、cfg 读取之前（缓存命中不受影响）
+    route_src = src[src.index("async def api_platform_avatar"):]
+    i_neg = route_src.index('"neg_hit"')
+    i_cool = route_src.index("_proto_avatar_cooling(platform, account_id)")
+    i_cfg = route_src.index("cfg = (config_manager.config")
+    assert i_neg < i_cool < i_cfg, "熔断闸位置漂移（应在负缓存后、回源前）"
 
 
 def _install_fake_httpx(monkeypatch, content=b"img", raise_exc=None):

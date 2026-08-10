@@ -395,9 +395,17 @@ class OllamaMTEngine:
     """本地 Ollama 上的专用机器翻译模型引擎（默认适配腾讯 Hunyuan-MT）。
 
     与 AIEngine（走主对话 LLM 的完整回复管线）不同，本引擎直连 Ollama 的
-    OpenAI 兼容端点、用**专用翻译模型 + 官方翻译 prompt 模板**，零 API 成本、
-    亚秒延迟、且天然保留 glossary 占位符〔N〕与 emoji。缺 base_url/model 或
-    openai 库不可用时 available=False，路由自动跳过。
+    **原生 /api/chat 端点**、用**专用翻译模型 + 官方翻译 prompt 模板**，零 API
+    成本、亚秒延迟、且天然保留 glossary 占位符〔N〕与 emoji。缺 base_url/model
+    或 httpx 库不可用时 available=False，路由自动跳过。
+
+    为什么原生 /api/chat 而非 /v1 兼容层（2026-08-09 实锤，勿改回）：
+    /v1/chat/completions 会**忽略请求级 keep_alive**（生产两台 Ollama 0.31/0.32
+    双双实测：请求带 30m，实际按服务端默认 5m/env 走）→ 模型闲置 5 分钟即被
+    卸载，下一条翻译付 3~19s 冷加载；且 8s 引擎超时 < 冷载时长时直接超时 →
+    端点进 60s 冷却 → 整窗流量错发云端 LLM。原生 /api/chat 尊重请求级
+    keep_alive，每次翻译都会把驻留窗重置为 keep_alive——与 ai_client 断云兜底
+    「Ollama 端点自动走原生 /api/chat」是同一个教训（见 _ollama_native_chat）。
 
     多端点双活：``base_url`` 可为单地址或 ``base_urls`` 列表（两台 LAN GPU 各跑
     一份同名模型）。每次调用按序尝试，首个成功获胜；某端点异常后进入短冷却
@@ -453,33 +461,36 @@ class OllamaMTEngine:
         if not self._base_urls or not self._model:
             return False
         try:
-            from openai import AsyncOpenAI  # noqa: F401
+            import httpx  # noqa: F401
             return True
         except Exception:
             return False
 
-    def _client_for(self, url: str) -> Any:
+    @staticmethod
+    def _native_root(url: str) -> str:
+        """配置里误带 /v1 后缀也归一到 Ollama 根地址（原生 API 挂在根下）。"""
+        base = str(url or "").rstrip("/")
+        if base.endswith("/v1"):
+            base = base[: -len("/v1")].rstrip("/")
+        return base
+
+    async def _post_chat(self, url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """POST 原生 ``/api/chat``（非流式），返回解析后的 JSON。
+
+        每端点缓存一个 httpx.AsyncClient（进程生命周期，连接复用）；连接 5s
+        快败（死端点代价 ≤5s 即转下一端点），读超时全额保留给推理/冷加载。
+        测试注入点：直接替换本方法（按 url 分流成败即可验双活/冷却）。
+        """
+        import httpx
+
         cli = self._clients.get(url)
         if cli is None:
-            from openai import AsyncOpenAI
-
-            base = url.rstrip("/")
-            if not base.endswith("/v1"):
-                base = base + "/v1"
-            # 连接 5s 快败（2026-08-01 随 embed 同批补齐）：标量 timeout 会把 connect
-            # 一并抬到 20s——176 宕机时出站翻译要干等 ~20s 才轮到下一端点；拆开后
-            # 死端点代价 ≤5s，读超时保持不变（HY-MT 长句真需要 20s）。
-            try:
-                import httpx
-                _to: Any = httpx.Timeout(self._timeout, connect=5.0)
-            except Exception:
-                _to = self._timeout
-            cli = AsyncOpenAI(
-                api_key=self._key, base_url=base,
-                timeout=_to, max_retries=0,
-            )
+            cli = httpx.AsyncClient(
+                timeout=httpx.Timeout(self._timeout, connect=5.0))
             self._clients[url] = cli
-        return cli
+        resp = await cli.post(self._native_root(url) + "/api/chat", json=payload)
+        resp.raise_for_status()
+        return resp.json()
 
     def _ordered_urls(self) -> List[str]:
         """健康端点保持配置序在前，冷却中的端点降到队尾（仍保底可试）。"""
@@ -524,30 +535,28 @@ class OllamaMTEngine:
         if not self.supports_target(target_lang):
             return EngineResult("", self.name, False, f"unsupported_target:{target_lang}")
         prompt = self._build_prompt(text, source_lang, target_lang)
-        extra: Dict[str, Any] = {}
-        if self._keep_alive:
-            extra["keep_alive"] = self._keep_alive  # 保持模型常驻，避免冷启动 ~2-4s
-        kwargs: Dict[str, Any] = {
+        payload: Dict[str, Any] = {
             "model": self._model,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": self._max_tokens,
+            "stream": False,  # 原生端点默认流式，必须显式关掉才拿整块 JSON
+            "options": {"num_predict": self._max_tokens},
         }
         if self._temperature is not None:
-            kwargs["temperature"] = self._temperature
-        if extra:
-            kwargs["extra_body"] = extra
+            payload["options"]["temperature"] = self._temperature
+        if self._keep_alive:
+            # 原生端点尊重请求级 keep_alive：每次翻译都把模型驻留窗重置为该值
+            # （/v1 兼容层会忽略它——本引擎弃用 /v1 的直接原因，见类 docstring）。
+            payload["keep_alive"] = self._keep_alive
         last_err = "no_endpoint"
         for url in self._ordered_urls():
             try:
-                resp = await self._client_for(url).chat.completions.create(**kwargs)
+                data = await self._post_chat(url, payload)
             except Exception as exc:  # noqa: BLE001
                 self._mark_bad(url)
                 last_err = f"{type(exc).__name__}: {exc}"
                 continue
-            out = ""
-            if resp and getattr(resp, "choices", None):
-                out = getattr(resp.choices[0].message, "content", "") or ""
-            cleaned = _clean_translation(str(out))
+            out = str(((data.get("message") or {}).get("content")) or "")
+            cleaned = _clean_translation(out)
             if not cleaned:
                 # 空产出不冷却端点（是模型行为而非主机故障），直接试下一端点
                 last_err = "empty"

@@ -455,3 +455,42 @@ P23 候选里「英雄卡一键拟稿」已前移到 P22.1（发现成本优先�
    降频」（有数据地基后再谈机制）；
 ④ 抽检样本 ≥20 条后：若「指令遵循」人耳不合格率 >20%，把【坐席指令】块升权重
    或改 few-shot 注入（质量闸决策，读数说话）。
+
+## 12. P24（2026-08-03）：建目标表单改版——两步向导 + 场景设置弹层
+
+> 触发：运营截图实锤四诉求——「解锁项 ID」坐席看不懂（bazi_reading 裸奔）；
+> 默认「八字详批」与官网产品业务错位（坐席不改就照发穿帮）；「进阶：自定义目标」
+> 是 11px 灰色下划线文字链毫无存在感；参数区渲染在场景卡列表底部、与所选卡不相邻
+> （截图里「留存续费」卡下面紧跟付费解锁的参数，归属必然误解）。
+> 另有工程实锤：`item_id` 是 `ledger.py` 对照权益**自动判达成**的功能字段，
+> 自由文本填错＝目标永不自动完成 + win-rate 报表漏记，全程静默。
+
+### 已落地
+
+| # | 项 | 落点 |
+|---|----|------|
+| 1 | **两步向导**：第一步分组场景卡（按 kind 分转化/关系/唤回，类别色条+线稿图标+推荐/「上次」徽标），第二步场景专属设置弹层（shadow 内 fixed 居中 `min(94vw,400px)`，逃离 236px 窄栏；背板点击/Esc/×/「返回」四路回第一步，面板容器 `modal_noop` 挡事件委托误关） | `cp-goal.js`（双树，`?v=20260803a`） |
+| 2 | **自定义目标高亮化**：文字链 → 独立高亮卡（violet 描边+浅底+「进阶」pill）；专属面板=一句话方向 textarea + 3 个示例 chips 点击填入 + 写法引导（说清对象和结果） | 同上 + `goals.py` pack |
+| 3 | **解锁项人话化**：「卖什么」下拉读价目表（`label · $price`；`templates.pickers` 优先、`/api/monetize/catalog` 回落——后者是既有路由，**热更当天即可用**）；「聊天里怎么称呼它」自动跟随所选项（坐席手改过即不再覆盖，`_labelTouched`）；「自定义…」高级手填带格式说明；原始 ID 不再示人 | 同上 |
+| 4 | **参数控件注册表**：会员档下拉（tiers+月费）/ 阶段下拉中文化（`stage.<key>` 七态）/ 亲密度滑杆（30/55/78 刻度）/ 备注 textarea+占位示例 / 主推产品下拉（`pickers.site_products`，就绪前回落文本框）/ 留存续费自动继承参数折叠进「高级」；未注册参数回落通用输入框（未来新模板零前端改动） | 同上 |
+| 5 | **节奏预览 + 参与度卡**：「AI 会怎么推进」（milestones+push_curve 编号行+力度 pill，旧后端缺 curve 只显名不猜）+ AI 参与度三张单选卡（suggest 标推荐）+ 主动触达**信息气泡**（中性说明+「找管理员开启」指路，替代橙色警告——未开启是状态不是错误） | 同上 |
+| 6 | **包2（.py 攒批）**：templates 响应增 `pickers`（unlock_items/tiers/site_products/stages/currency，逐段软失败）+ `push_curve` 随模板形状导出；conversion_unlock 默认值中性化（default=""、label 去「ID」、schema 增 help_zh/en 回落）——`create_goal` 不合并模板默认值，改默认仅影响表单预填，零引擎行为变更 | `goal_routes.py` + `templates.py` |
+| 7 | **类别色 token**：`--cp-goal-conv/rel/eng`（明暗四份齐平，暗色取亮档）；自定义复用既有 `--cp-violet` | `theme-light/dark.css`（双树，宿主 `?v=20260803a`） |
+| 8 | **i18n**：goals pack 新增 ~55 键 zh+en（`form.grp.*`/`stage.*`/`param_label.*`/`param_help.*`/`note_ex*`/`unlock_custom_*` 等；label/help 走前端键=热更零重启，schema help 仅回落） | `goals.py` |
+| 9 | **新埋点**：`goal_form_back` / `goal_form_unlock_custom` / `goal_note_example` / `goal_create_ok_<tid>`（每模板创建漏斗） | 组件 |
+| 10 | **门禁**：`test_goal_ui_revamp` P24 段 8 例（向导结构/高亮卡/下拉联动/控件注册表/节奏预览/后端 pickers+默认值中性化/动态键双语/token 双表）；`verify_goal_card_ui.py` 新「向导」段 12 项（模板 fixture=真实 `list_templates()`，44/44 PASS：弹层逃离窄栏 w=402、称呼跟随、item_id 归属互斥、参与度气泡、POST 契约、创建后提示） | tests + tools |
+
+### 生效说明
+
+- JS / i18n / CSS：**热更新已生效**（`?v=20260803a` + ui-build bump）。新前端对
+  旧后端完全自洽：catalog 下拉走既有变现路由今天就能用；push_curve 力度 pill、
+  pickers（官网产品下拉/服务端阶段词表）、默认值中性化三项待重启后自动增强。
+- `.py`（goal_routes pickers / templates push_curve+默认值）：**攒批待下次重启**
+  装载（照例搭车，勿单独重启）。
+
+### 验收口径（上线 7 天读 ui-event / growth_review）
+
+- 表单完成率 `goal_create_ok / goal_set_click`：基线 50%（P18 冻结 1/2）→ ≥70%；
+- 新建解锁目标 `item_id` 与价目表匹配率 = 100%（下拉护栏的直接读数）；
+- `goal_form_pick_custom` 使用数：高亮卡上线后应显著 >0（此前趋零）；
+- `goal_form_back` 按模板分布：某模板高频回退 = 该场景第二步文案/参数还要打磨。

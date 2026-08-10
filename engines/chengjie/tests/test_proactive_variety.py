@@ -14,6 +14,7 @@ from src.utils.proactive_variety import (
     normalize_for_similarity,
     rel_age_label,
     similarity,
+    trailing_unanswered_inbound,
     trailing_unanswered_texts,
 )
 
@@ -157,3 +158,42 @@ def test_format_recent_context_caps_total_and_keeps_recent():
 def test_format_recent_context_empty_safe():
     assert format_recent_context([], now=0.0) == ""
     assert format_recent_context([{"direction": "in", "text": ""}], now=0.0) == ""
+
+
+# ── 悬空入站话头（P0 2026-08-05：22:27「介绍老公」无人接 → 07:10 通用晨安实锤）──
+
+def test_trailing_inbound_collects_unanswered_run():
+    msgs = [
+        _m("out", "看来他家亲戚里真有当领导的料啊"),
+        _m("in", "我小弟，没关系"),
+        _m("in", "以后给你介绍做你老公"),
+    ]
+    assert trailing_unanswered_inbound(msgs) == [
+        "我小弟，没关系", "以后给你介绍做你老公"]
+
+
+def test_trailing_inbound_empty_when_last_is_outbound():
+    msgs = [_m("in", "在吗"), _m("out", "在的呀")]
+    assert trailing_unanswered_inbound(msgs) == []
+
+
+def test_trailing_inbound_stops_at_outbound():
+    msgs = [
+        _m("in", "更早的那句"),
+        _m("out", "我回过这句"),
+        _m("in", "新话头"),
+    ]
+    # 我方回过话之前的入站不算「悬空」，只收本轮
+    assert trailing_unanswered_inbound(msgs) == ["新话头"]
+
+
+def test_trailing_inbound_caps_and_keeps_recent():
+    msgs = [_m("out", "x")] + [_m("in", f"第{i}句") for i in range(1, 5)]
+    assert trailing_unanswered_inbound(msgs, max_texts=2) == ["第3句", "第4句"]
+
+
+def test_trailing_inbound_skips_blank_and_empty_input():
+    msgs = [_m("out", "x"), _m("in", ""), _m("in", "有内容")]
+    assert trailing_unanswered_inbound(msgs) == ["有内容"]
+    assert trailing_unanswered_inbound([]) == []
+    assert trailing_unanswered_inbound(None) == []

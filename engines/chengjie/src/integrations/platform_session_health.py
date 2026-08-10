@@ -40,10 +40,33 @@ def _esc(s: str) -> str:
     return str(s).replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
 
 
+# 坐席/ops 可操作的入站半死产品码（与 messenger-web classifyInboxHint 对齐）。
+# e2ee_relogin      = 需在服务器完整重登恢复设备密钥（cookie 快照不够）；
+# e2ee_pin_required = worker 已确认 PIN 浮层在场但缺 PIN/输入未通过——托管 PIN 即自愈，
+#                     比泛泛「重登」更精确（坐席该做的是填 PIN 而非走完整登录流程）。
+_INBOX_HINT_CODES = frozenset({"e2ee_relogin", "e2ee_pin_required"})
+
+
+def derive_inbox_hint(*, stalled: bool, detail: str = "",
+                      stall_kind: str = "") -> str:
+    """半死产品提示码（纯函数）：优先 worker 显式 detail，否则按 stall_kind 推导。"""
+    d = str(detail or "").strip()
+    if d in _INBOX_HINT_CODES:
+        return d
+    if not stalled:
+        return ""
+    # read_fail / e2ee_placeholder / steady_fail 对坐席同一动作：服务器完整重登
+    if str(stall_kind or "") in ("read_fail", "e2ee_placeholder", "steady_fail", ""):
+        return "e2ee_relogin"
+    return d[:64]
+
+
 class PlatformSessionHealth:
     """外部 worker 会话状态登记（线程安全，进程级）。"""
 
-    __slots__ = ("_lock", "_started_at", "_sessions", "total_events", "_by_status")
+    __slots__ = ("_lock", "_started_at", "_sessions", "total_events",
+                 "_by_status", "_inbox_health",
+                 "total_stall_went", "total_stall_recovered", "total_relogin")
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -52,6 +75,17 @@ class PlatformSessionHealth:
         self._sessions: Dict[str, Dict[str, Any]] = {}
         self.total_events = 0
         self._by_status: Dict[str, int] = {}
+        # 入站健康心跳（P0，2026-08-04「Messenger 登录态在、消息读不到」半死态解药）：
+        # key = "platform:account_id" → {unread, read_attempts, read_fails,
+        #   last_inbound_ts, ts, first_seen, stall_since, last_remind_ts}。
+        # 与会话状态正交——账号 status=authorized（登录探测绿）不代表能读到消息内容
+        # （cookie 快照恢复登录但 E2EE 设备密钥没恢复 → 消息区永久卡 Loading）。
+        # 这里记「侧栏有未读、进线程读取却持续全失败」的确定性背离信号。
+        self._inbox_health: Dict[str, Dict[str, Any]] = {}
+        # P4 漏斗：半死进入 / 恢复 / 人工触发重登（进程累计，重启清零）
+        self.total_stall_went = 0
+        self.total_stall_recovered = 0
+        self.total_relogin = 0
 
     @staticmethod
     def _key(platform: str, account_id: str) -> str:
@@ -141,11 +175,147 @@ class PlatformSessionHealth:
                 due[key] = out
         return due
 
+    # ── 入站健康心跳（读得到未读却读不到内容 = 半死态）─────────────────────────
+    #: record_inbox_health 里判「此刻是否 stalled」的最小尝试数——低于此不判，
+    #: 防单次导航超时被当黑洞（宁可漏报不误报，与本仓告警纪律一致）。
+    _STALL_MIN_ATTEMPTS = 2
+
+    #: 「无读取样本」盲区的第二支判定阈值：会话列表 ≥ 该数 且 E2EE 占位预览占比 ≥
+    #: 比例阈值才判 stall（小账号/加载抖动不误报）。第三支（steady_fail）复用同两阈值。
+    _STALL_MIN_CONVS = 5
+    _STALL_PLACEHOLDER_RATIO = 0.6
+
+    def record_inbox_health(
+        self, platform: str, account_id: str, *,
+        unread: int = 0, read_attempts: int = 0, read_fails: int = 0,
+        last_inbound_ts: float = 0.0, detail: str = "",
+        min_attempts: Optional[int] = None,
+        e2ee_ratio: float = -1.0, conv_count: int = 0,
+    ) -> Dict[str, Any]:
+        """登记一次入站健康心跳（外部 worker 周期 push）。
+
+        ``read_attempts`` / ``read_fails`` 是 worker 侧**滚动窗**（最近 N 次进线程
+        读取）的成败计数。stall 判定两支（任一命中即半死态）：
+
+        - **读取全败**：「侧栏有未读 且 窗口内读取全失败」= 看得到读不到
+          （E2EE 卡 Loading / 选择器失配 / 密钥丢失都命中，比专测 E2EE 更通用）；
+        - **占位盲区**（P1 补，修被动信号的样本盲区）：读取窗**零样本**（存量未读、
+          预览不变 → 轮询永不进线程，第一支永无数据）但「有未读 + 会话列表大面积是
+          E2EE 加密占位预览」——健康会话的预览是解密后的正文，大面积占位＝解密不可用。
+          ``e2ee_ratio``（0..1，-1=worker 未上报，旧版兼容）与 ``conv_count`` 由
+          worker 从侧栏零成本统计，无导航、无标已读副作用。
+
+        返回 ``{"stalled", "went_stalled", "recovered", "down_sec"}``——``went_stalled``
+        / ``recovered`` 是边沿，供调用方决定是否即时告警（当前告警统一走看门狗
+        ``due_inbox_stalls`` 升级式提醒，本方法只记录 + 计时）。
+        """
+        key = self._key(platform, account_id)
+        thr = int(self._STALL_MIN_ATTEMPTS if min_attempts is None else min_attempts)
+        try:
+            unread_i = max(0, int(unread or 0))
+            att = max(0, int(read_attempts or 0))
+            fail = max(0, min(att, int(read_fails or 0)))
+            last_in = float(last_inbound_ts or 0.0)
+            ratio = float(e2ee_ratio if e2ee_ratio is not None else -1.0)
+            convs = max(0, int(conv_count or 0))
+        except (TypeError, ValueError):
+            unread_i, att, fail, last_in, ratio, convs = 0, 0, 0, 0.0, -1.0, 0
+        now = time.time()
+        ratio_high = (convs >= self._STALL_MIN_CONVS
+                      and 0.0 <= ratio
+                      and ratio >= self._STALL_PLACEHOLDER_RATIO)
+        # 支一：有未读 + 达到最小尝试数 + 窗口内全部失败。
+        full_fail = unread_i >= 1 and att >= thr and fail >= att
+        # 支二：零样本盲区——有未读 + 无读取样本 + 会话列表大面积加密占位。
+        placeholder_blind = (
+            unread_i >= 1 and att == 0 and ratio_high)
+        # 支三：稳态盲区（P3，198 实测）——读取窗全败 + 大面积占位，但 unread 已被
+        # 失败读取消费成 0（打开线程即 FB 侧标已读）。此时支一（要 unread≥1）漏判、
+        # 支二（要零样本）也漏判，账号一路「零告警」拖着。占位占比作旁证防误报：
+        # 真空会话/对端撤回不会大面积占位。
+        steady_fail = (att >= thr and fail >= att and ratio_high)
+        stalled = full_fail or placeholder_blind or steady_fail
+        with self._lock:
+            h = self._inbox_health.get(key)
+            if h is None:
+                if len(self._inbox_health) >= _MAX_KEYS:
+                    return {"stalled": stalled, "went_stalled": False,
+                            "recovered": False, "down_sec": 0.0}
+                h = {"first_seen": now, "stall_since": 0.0, "last_remind_ts": 0.0}
+                self._inbox_health[key] = h
+            was_stalled = bool(float(h.get("stall_since") or 0.0))
+            h["unread"] = unread_i
+            h["read_attempts"] = att
+            h["read_fails"] = fail
+            h["last_inbound_ts"] = last_in
+            h["e2ee_ratio"] = ratio
+            h["conv_count"] = convs
+            stall_kind = ("read_fail" if full_fail
+                          else "e2ee_placeholder" if placeholder_blind
+                          else "steady_fail" if steady_fail else "")
+            h["stall_kind"] = stall_kind
+            raw_detail = str(detail or "")[:300]
+            h["detail"] = raw_detail
+            h["hint_code"] = derive_inbox_hint(
+                stalled=stalled, detail=raw_detail, stall_kind=stall_kind)
+            h["ts"] = now
+            went = stalled and not was_stalled
+            recovered = (not stalled) and was_stalled
+            if stalled:
+                if not float(h.get("stall_since") or 0.0):
+                    h["stall_since"] = now
+            else:
+                h["stall_since"] = 0.0
+                h["last_remind_ts"] = 0.0
+            if went:
+                self.total_stall_went += 1
+            if recovered:
+                self.total_stall_recovered += 1
+            since = float(h.get("stall_since") or 0.0)
+            return {
+                "stalled": stalled,
+                "went_stalled": went,
+                "recovered": recovered,
+                "down_sec": (now - since) if since else 0.0,
+                "hint_code": h["hint_code"],
+            }
+
+    def due_inbox_stalls(self, *, min_age_sec: float, interval_sec: float,
+                         now: Optional[float] = None) -> Dict[str, Dict[str, Any]]:
+        """待提醒的「持续 stalled」入站会话（供 HealthWatchdog 周期复查）。
+
+        与 ``due_reminders`` 同升级式语义：stalled 持续 ``min_age_sec`` → 首提，
+        之后每 ``interval_sec`` 一条；返回即原子标记 ``last_remind_ts`` 防重复。
+        恢复（下一次心跳非 stalled）时 ``record_inbox_health`` 清零两个时间戳。
+        """
+        ts = time.time() if now is None else float(now)
+        due: Dict[str, Dict[str, Any]] = {}
+        with self._lock:
+            for key, h in self._inbox_health.items():
+                since = float(h.get("stall_since") or 0.0)
+                if not since or (ts - since) < float(min_age_sec):
+                    continue
+                last = float(h.get("last_remind_ts") or 0.0)
+                if last and (ts - last) < float(interval_sec):
+                    continue
+                h["last_remind_ts"] = ts
+                out = dict(h)
+                out["down_sec"] = ts - since
+                due[key] = out
+        return due
+
+    def inbox_health(self) -> Dict[str, Dict[str, Any]]:
+        with self._lock:
+            return {k: dict(v) for k, v in sorted(self._inbox_health.items())}
+
     def dump(self) -> Dict[str, Any]:
         with self._lock:
             sessions = {k: dict(v) for k, v in sorted(self._sessions.items())}
             unhealthy = [k for k, v in sessions.items()
                          if str(v.get("status")) in UNHEALTHY_STATUSES]
+            inbox = {k: dict(v) for k, v in sorted(self._inbox_health.items())}
+            stalled = [k for k, v in inbox.items()
+                       if float(v.get("stall_since") or 0.0)]
             return {
                 "started_at": self._started_at,
                 "total_events": self.total_events,
@@ -153,6 +323,16 @@ class PlatformSessionHealth:
                 "sessions": sessions,
                 "unhealthy": unhealthy,
                 "unhealthy_count": len(unhealthy),
+                "inbox_health": inbox,
+                "inbox_stalled": stalled,
+                "inbox_stalled_count": len(stalled),
+                # P4 漏斗：半死进入 → 人工重登 → 恢复（进程累计）
+                "stall_funnel": {
+                    "went": int(self.total_stall_went),
+                    "recovered": int(self.total_stall_recovered),
+                    "relogin": int(self.total_relogin),
+                    "open": len(stalled),
+                },
             }
 
     def dump_prom(self) -> str:
@@ -174,13 +354,50 @@ class PlatformSessionHealth:
                 val = 1 if str(sess.get("status")) in UNHEALTHY_STATUSES else 0
                 lines.append(
                     f'platform_session_unhealthy{{session="{_esc(key)}"}} {val}')
+            lines += [
+                "# HELP platform_inbox_stalled Whether the account can see unread "
+                "but thread reads keep failing (1) or not (0)",
+                "# TYPE platform_inbox_stalled gauge",
+            ]
+            for key, h in sorted(self._inbox_health.items()):
+                val = 1 if float(h.get("stall_since") or 0.0) else 0
+                lines.append(
+                    f'platform_inbox_stalled{{session="{_esc(key)}"}} {val}')
+            lines += [
+                "# HELP platform_inbox_stall_went_total Times an account "
+                "entered inbox-stall (half-dead inbound)",
+                "# TYPE platform_inbox_stall_went_total counter",
+                f"platform_inbox_stall_went_total {int(self.total_stall_went)}",
+                "# HELP platform_inbox_stall_recovered_total Times an account "
+                "left inbox-stall",
+                "# TYPE platform_inbox_stall_recovered_total counter",
+                f"platform_inbox_stall_recovered_total "
+                f"{int(self.total_stall_recovered)}",
+                "# HELP platform_session_relogin_total Manual re-login "
+                "triggers from ops/seat",
+                "# TYPE platform_session_relogin_total counter",
+                f"platform_session_relogin_total {int(self.total_relogin)}",
+            ]
         return "\n".join(lines) + "\n"
+
+    def record_relogin(self, platform: str, account_id: str) -> None:
+        """登记一次人工「重新登录」触发（ops/坐席 CTA）——漏斗中段。"""
+        key = self._key(platform, account_id)
+        with self._lock:
+            self.total_relogin += 1
+            h = self._inbox_health.get(key)
+            if h is not None:
+                h["last_relogin_ts"] = time.time()
 
     def reset(self) -> None:
         with self._lock:
             self.total_events = 0
             self._by_status.clear()
             self._sessions.clear()
+            self._inbox_health.clear()
+            self.total_stall_went = 0
+            self.total_stall_recovered = 0
+            self.total_relogin = 0
 
     def seed_offline_from_registry(
         self, rows: Any, *, detail: str = "seeded from registry offline",

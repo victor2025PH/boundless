@@ -127,6 +127,75 @@ def is_media_desc_text(text: str) -> bool:
     return t.startswith("[图片内容]") or t.startswith("[视频内容]")
 
 
+# ── 学习漏斗入池守门（2026-08-02 学习队列断粮复盘）────────────────────
+# miss_log 的语义 = 「像是在问知识、而 KB 没接住」。实测污染源两类：
+# ① 系统占位符文本（[语音消息 - 下载失败] / [名片] Wisley）被当"用户提问"入池，
+#    最终生成荒谬草稿；② 陪聊闲聊（"来聊聊你中午要吃什么"）灌爆池子，
+# 且陪聊语句从不逐字重复 → cnt 恒为 1，永远够不着 min_miss_count 门槛，
+# 徒占 top_k 名额。守门收口在 log_miss 的调用侧（[TRANSLATE: 标记是翻译缺口
+# 功能刻意写入的，走 log_miss 直呼，不经本守门）。
+
+_PLACEHOLDER_PREFIXES = (
+    "[图片内容]", "[视频内容]", "[图片", "[视频", "[语音", "[文件",
+    "[名片]", "[贴纸", "[表情", "[位置", "[链接", "[转发", "[红包",
+    "[音频", "[通话", "[TRANSLATE:",
+)
+
+# 疑问/求助标记（包含即视为"问题样式"）。保守偏召回：审核台与 AI 自信度
+# 是下游兜底，这里漏收一条真问题的代价 > 误收一条闲聊。
+_INTERROGATIVE_MARKERS = (
+    "怎么", "怎麼", "如何", "为什么", "為什麼", "什么", "什麼", "多少",
+    "几点", "幾點", "几时", "幾時", "哪里", "哪裡", "哪儿", "哪个", "哪個",
+    "能不能", "可不可以", "可以吗", "可以嗎", "行吗", "行嗎", "是不是",
+    "有没有", "有沒有", "吗", "嗎", "点解", "點解", "咩",
+)
+
+_REQUEST_PREFIXES = (
+    "我要", "我想", "我需要", "帮我", "幫我", "请问", "請問", "想问", "想問",
+    "咨询", "諮詢", "麻烦", "麻煩", "求",
+)
+
+_EN_QUERY_RE = re.compile(
+    r"\b(how|what|why|where|which|when|whats|price|cost|refund|pay|payment)\b"
+    r"|\b(can|could|do|does|is|are)\s+(i|you|we|it|there|this|that)\b",
+    re.IGNORECASE,
+)
+
+
+def is_system_placeholder(text: str) -> bool:
+    """入站文本是否为系统占位符（媒体占位/名片/翻译标记等），非用户提问。"""
+    t = str(text or "").lstrip()
+    return t.startswith(_PLACEHOLDER_PREFIXES)
+
+
+def looks_like_kb_query(text: str) -> bool:
+    """文本是否具有"知识提问"样式（疑问词/求助句式/问号）。
+
+    用于学习漏斗入池判定：True 才值得作为"KB 该答而没答上"的素材。
+    刻意保守偏召回——含"什么"的闲聊会被放进来，靠 cnt 门槛 + 人工审核兜底；
+    反向（把真问题挡在门外）才是这里不可接受的失败模式。
+    """
+    t = str(text or "").strip()
+    if len(t) < 2:
+        return False
+    if is_system_placeholder(t):
+        return False
+    if "？" in t or "?" in t:
+        return True
+    for m in _INTERROGATIVE_MARKERS:
+        if m in t:
+            return True
+    for p in _REQUEST_PREFIXES:
+        if t.startswith(p):
+            return True
+    return bool(_EN_QUERY_RE.search(t))
+
+
+def should_log_kb_miss(text: str) -> bool:
+    """KB 未命中时是否值得记入学习池（占位符/闲聊不进池）。"""
+    return looks_like_kb_query(text)
+
+
 def persona_kb_suppressed(
     persona: Any,
     tier: str,
@@ -149,6 +218,9 @@ __all__ = [
     "content_tokens",
     "entry_blob",
     "is_media_desc_text",
+    "is_system_placeholder",
     "lexical_overlap_ok",
+    "looks_like_kb_query",
     "persona_kb_suppressed",
+    "should_log_kb_miss",
 ]

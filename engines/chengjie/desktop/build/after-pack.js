@@ -28,6 +28,29 @@ function resourcesDir(context) {
 // [包内相对路径, 人话说明, 缺了会怎样]
 const REQUIRED = [
   ["backend", "后端 sidecar 目录", "桌面壳没有后端可拉起，整个 App 打不开工作台"],
+  // shared/inject 不在 app 目录内（单一事实来源在 repo 根），只能经 extraResources 随包。
+  // 包内 require 是从 asar 里跨出来打到 resources/shared/inject（app.asar/inject/../../
+  // 与 app.asar/../shared 都落在 resources 下，已用 electron 实测确认可加载）。
+  [
+    path.join("shared", "inject", "core.js"),
+    "注入层平台无关核心",
+    "webview preload 整体 MODULE_NOT_FOUND：点译/双语气泡/会话上报/注入健康遥测在装机版全哑（开发机能跑，只有装机版坏）",
+  ],
+  [
+    path.join("shared", "inject", "profiles.js"),
+    "注入层选择器档案",
+    "同上；preload 第一行 require 就抛，注入状态条永远「未生效」",
+  ],
+  [
+    path.join("shared", "inject", "translate-scheduler.js"),
+    "翻译批处理调度器",
+    "main.js 顶层 require 它 → **主进程起不来**，App 双击无反应",
+  ],
+  [
+    path.join("shared", "inject", "human-pace.js"),
+    "出站拟人节奏基元",
+    "main.js 经 outbound-pace.js 顶层 require 它 → **主进程起不来**，App 双击无反应",
+  ],
   [
     path.join("services", "whatsapp-baileys", "server.js"),
     "WhatsApp(Baileys) 协议边车入口",
@@ -59,6 +82,10 @@ const REQUIRED = [
     'ESM 解析失败（server.js 依赖其中的 "type":"module"）',
   ],
 ];
+
+// 导出给 test/package-layout.test.js 交叉核对：包内 require 跨出 asar 的每个目录，
+// 这张表里都得有代表文件——否则 extraResources 哪天被改歪，缺件只在客户机暴露。
+exports.REQUIRED = REQUIRED;
 
 // 通配判据（目录名带版本号，不能写死）：[所在目录, glob 前缀, 说明, 影响]
 const REQUIRED_GLOB = [
