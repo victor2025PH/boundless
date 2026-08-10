@@ -117,9 +117,11 @@ out = await fn(reply_segment, first=True)                  # None=直通原句
   自己产品的自然度档位缺省值（对话产品建议 2，客服/播报场景 1 或 flavor<0.5）。
 - 有问题先跑 `smoke_test.py` 定位是包坏了还是接入姿势不对。
 
-### chengjie（智聊引擎）桥接已就位
+### chengjie（智聊引擎）桥接已就位（L1–L4 全线）
 
-`engines/chengjie/src/ai/spoken_style_bridge.py` 已把三挂点接进 `ai_client`
+`engines/chengjie/src/ai/spoken_style_bridge.py` 已把四层接进 `ai_client`
 （**默认关**，`config.yaml` 的 `ai.spoken_style.enabled: true` 一键试点；
-中文消息才注入尾注、不与自有 persona/spoken_variant 叠加，详见桥接文件头）。
-契约测试 `tests/test_spoken_style_bridge.py`（红绿双向，可独立直跑）。
+中文消息才注入尾注、不与自有 persona/spoken_variant 叠加；L4 改写另有
+`rewrite: true` 独立开关——事实锁把关、失败原句直通，与 voice_colloquial_llm
+只开一个。详见桥接文件头与 config.example.yaml 注释）。
+契约测试 `tests/test_spoken_style_bridge.py`（七案红绿双向，可独立直跑）。

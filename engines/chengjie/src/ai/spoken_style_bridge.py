@@ -20,6 +20,7 @@
 
 配置（config.yaml ai.spoken_style，全部可缺省）：
     enabled: false / level: 2 / zh_only: true / role: "" / paraling: false / emotion_tags: false
+    rewrite: false / rewrite_llm: "" / rewrite_model: ""   ← L4 口语化改写（见 rewrite_reply）
 """
 from __future__ import annotations
 
@@ -145,6 +146,47 @@ def turn_tail(config, user_text: str) -> str:
     except Exception:
         logger.debug("spoken_style turn_tail 失败，跳过", exc_info=True)
         return ""
+
+
+async def rewrite_reply(config, reply: str) -> str:
+    """L4：口语化改写（本地小模型整段重写句子架构，事实锁把关；失败/超时/拒绝=原句直通）。
+
+    前提（都写在 config 注释里）：ai.spoken_style.rewrite: true，且 role 在包内
+    data/speech_prints.json 有说话指纹（改写提示按指纹分流，无指纹不开——文本×
+    声学要配套是包侧拍板）。改写后端缺省 192.168.0.173 qwen14b（同 LAN 零 API 费），
+    rewrite_llm / rewrite_model 可换成任何 OpenAI 兼容端点。
+    非中文主体回复直接跳过（改写器是中文口语手艺）。
+    """
+    if not reply or not _enabled(config):
+        return reply
+    c = _cfg(config)
+    if not c.get("rewrite", False):
+        return reply
+    role = str(c.get("role") or "")
+    if not role or not _is_zh(reply):
+        return reply
+    ss = _load()
+    if ss is None:
+        return reply
+    try:
+        cr = ss.colloquial_rewrite
+        # 包的灰度旗标是文件机制（data/conv_colloquial.flag）；桥接由 config 单点控制，
+        # 直接钉住旗标缓存为「全开」（TTL 检查 now-inf>2 恒 False，永不回读文件）——
+        # 不落盘、不弄脏 git 工作区，开关语义完全交给 ai.spoken_style.rewrite。
+        cr._flag_cache["t"] = float("inf")
+        cr._flag_cache["v"] = True
+        if c.get("rewrite_llm"):
+            cr._LLM_URL = str(c["rewrite_llm"])       # 模块全局在调用时读，改了即生效
+        if c.get("rewrite_model"):
+            cr._LLM_MODEL = str(c["rewrite_model"])
+        fn = cr.build_rewrite_fn(role)
+        if fn is None:
+            return reply
+        out = await fn(reply, first=True)
+        return out if out else reply                  # None=事实锁/超时直通
+    except Exception:
+        logger.debug("spoken_style rewrite 失败，原样返回", exc_info=True)
+        return reply
 
 
 def clean_reply_text(config, reply: str) -> str:

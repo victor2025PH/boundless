@@ -3242,6 +3242,16 @@ class AIClient(LoggerMixin):
             except Exception:
                 pass
 
+        # 真人感文本层 L4：口语化改写（默认关；事实锁把关，失败/超时原句直通。
+        # 放在 spoken_variant 摘取之后：即便改写生效，语音口语版哈希失配会自动
+        # 放弃暂存走既有口语化链——两层不会叠加）
+        if reply:
+            try:
+                from src.ai.spoken_style_bridge import rewrite_reply as _ss_rewrite
+                reply = await _ss_rewrite(self.config, reply)
+            except Exception:
+                pass
+
         return reply
 
     _INTENT_SUPPLEMENTS = {

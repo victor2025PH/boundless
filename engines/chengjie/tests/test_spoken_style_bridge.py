@@ -82,6 +82,40 @@ def test_clean_strips_but_never_empties():
     assert br.clean_reply_text(cfg, only_tag) == only_tag
 
 
+async def test_rewrite_gates_and_fact_lock():
+    _fresh()
+    # rewrite 未开 → 原样
+    assert await br.rewrite_reply(_Cfg(dict(_ON)), "今天挺好的。") == "今天挺好的。"
+    cfg = _Cfg({"enabled": True, "rewrite": True, "role": "美月"})
+    ss = br._load()
+    cr = ss.colloquial_rewrite
+
+    async def _fake_ok(role, text, timeout, client=None):
+        return "他家人均 120 块诶，是真的真的好呢。"
+
+    async def _fake_drop_num(role, text, timeout, client=None):
+        return "他家挺贵的，但是真的好。"
+
+    orig = cr._llm_rewrite
+    try:
+        cr._llm_rewrite = _fake_ok
+        out = await br.rewrite_reply(cfg, "这家店人均 120 块，味道特别好。")
+        assert "120" in out and "诶" in out            # 合法改写放行
+        cr._llm_rewrite = _fake_drop_num
+        src = "这家店人均 120 块，味道特别好。"
+        assert await br.rewrite_reply(cfg, src) == src  # 丢数字→事实锁拒→原句直通
+        # 非中文回复不碰（改写器是中文口语手艺）
+        en = "Sure, the average cost is 120 yuan per person."
+        assert await br.rewrite_reply(cfg, en) == en
+        # 无指纹角色不开（文本×声学配套是包侧拍板）
+        cfg2 = _Cfg({"enabled": True, "rewrite": True, "role": "查无此人"})
+        assert await br.rewrite_reply(cfg2, src) == src
+    finally:
+        cr._llm_rewrite = orig
+        cr._flag_cache["t"] = 0.0
+        cr._flag_cache["v"] = None
+
+
 def test_missing_package_is_permanent_noop():
     _fresh()
     br._PKG_DIR_OVERRIDE = r"Z:\no\such\dir"
@@ -94,11 +128,17 @@ def test_missing_package_is_permanent_noop():
 
 
 if __name__ == "__main__":
+    import asyncio
+    import inspect
+
     fails = 0
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
             try:
-                fn()
+                if inspect.iscoroutinefunction(fn):
+                    asyncio.run(fn())
+                else:
+                    fn()
                 print(f"  PASS  {name}")
             except AssertionError as e:
                 fails += 1

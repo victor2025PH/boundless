@@ -1167,6 +1167,11 @@ ai:
     role: ""              # 可选：platform/spoken_style/data/speech_prints.json 里的说话指纹角色名
     paraling: false       # 副语言标记提示（[呼吸]→句尾停顿；语音部署才有意义）
     emotion_tags: false   # 情绪标记协议（LLM 自报情绪 → TTS 情绪键；文字聊天保持关）
+    rewrite: false        # L4 口语化改写：本地小模型整段重写+事实锁把关，失败原句直通。
+                          # 需 role 在包内 speech_prints.json 有说话指纹；会增加约 1~5s 出口延迟
+                          # （文字聊天可接受再开；与 voice_colloquial_llm 只开一个）
+    rewrite_llm: ""       # 改写后端（OpenAI 兼容 chat/completions；空=包缺省 .173 qwen14b）
+    rewrite_model: ""     # 改写模型名（空=包缺省）
 
   # ── 文本嵌入（embedding）provider —— 记忆向量召回 + 语义去重的真实向量源 ──
   # 主对话 LLM（DeepSeek 等）多无 embedding 端点 → 需单独配嵌入源，否则 memory.vector /
