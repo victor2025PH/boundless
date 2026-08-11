@@ -42,6 +42,8 @@ import { classifyLoginPage, actionableCode, STAGE, isE2eePinText } from "./login
 import {
   synthMsgId, parseReactionFromAria, isUnsentPreview, isUnsentTombstone,
   classifyInboxHint, adaptiveReqEvery, canOpenThread, normalizePin, autoPinGate,
+  parseMsgAria, threadReadSample,
+  normalizeRequestAction, REQUEST_ACTION_LABELS,
 } from "./msg_ops.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -321,14 +323,40 @@ async function postStatus(loginId, entry, status, detail) {
 }
 
 // ── 入站健康心跳（P0 半死态探测）────────────────────────────────────────────
-// 进线程读取成败滚动窗：readThreadTail 每次真实调用后记录。「成功」＝读到 ≥1 条
-// 带正文/媒体的消息；null（硬失败）与 []（页面读到了但零真实消息——E2EE 卡 Loading
-// 的典型形态）都算失败。偶发失败（导航超时/对端撤回后的空会话）由窗口稀释，
-// 判「持续全失败」在 Python 侧（滚动窗全败 + 有未读才告警）。
-function recordThreadRead(entry, tail) {
+// 进线程读取成败滚动窗：readThreadTail 每次真实调用后记录。采样三态见
+// msg_ops.threadReadSample（ok / fail / skip——空读+占位预览＝锁死旧线程，不入窗）。
+// 另加**每线程失败冷却**：同一条永远读不出的线程（锁死会话 / 认不出的请求区页面）
+// 会被 sig 漂移或请求区扫描反复重读，若每次都记失败，一条卡死线程就能垄断整个
+// 窗口把账号钉成「半死」——真实管线故障的特征是**多个不同线程**都在失败，
+// 单线程重复失败 10 分钟只记一次即可保住该特征且不放大单点噪声。
+const READ_FAIL_COOLDOWN_MS = 10 * 60 * 1000;
+const READ_FAIL_BOOK_MAX = 64;
+function recordThreadRead(entry, tail, opts = {}) {
   if (!entry) return;
+  const key = String((opts && opts.key) || "");
+  const sample = threadReadSample(tail, {
+    previewPlaceholder: !(opts && opts.previewPlaceholder === false),
+  });
+  if (sample === "skip") return;
+  if (!entry._readFailBook) entry._readFailBook = new Map();
+  if (sample === "ok") {
+    if (key) entry._readFailBook.delete(key);
+  } else if (key) {
+    const now = Date.now();
+    const last = entry._readFailBook.get(key) || 0;
+    if (now - last < READ_FAIL_COOLDOWN_MS) return; // 同线程失败冷却期内不重复入窗
+    entry._readFailBook.set(key, now);
+    while (entry._readFailBook.size > READ_FAIL_BOOK_MAX) {
+      const oldest = entry._readFailBook.keys().next().value;
+      entry._readFailBook.delete(oldest);
+    }
+    // 失败样本落一条 info（2026-08-11 教训：全败 8/8 却查不到「谁在失败」——
+    // null 路径全程静默，只能靠猜）。冷却门内最多每线程 10min 一条，噪声有界。
+    logger.info({ accountId: entry.accountId, thread: key,
+      kind: tail === null ? "null" : "empty" }, "thread read fail sample");
+  }
   if (!entry._readWin) entry._readWin = [];
-  entry._readWin.push(Array.isArray(tail) && tail.length > 0);
+  entry._readWin.push(sample === "ok");
   while (entry._readWin.length > READ_WIN_MAX) entry._readWin.shift();
 }
 
@@ -462,7 +490,9 @@ async function backfillStep(entry) {
   try {
     // skipMedia：回填是文字上下文，不下载媒体（20 线程 × 若干图没必要，真媒体走实时链）
     const tail = await readThreadTail(entry, item.key, null, { skipMedia: true });
-    recordThreadRead(entry, tail); // 顺带喂半死态滚动窗（回填即免费探针样本）
+    // 回填队列无 preview 可判 → 按占位宽松处理（空读=skip 不入窗；锁死旧线程在
+    // 回填里大量出现，把它们记失败会在启动后立刻把窗口打成全败）。成功仍入窗。
+    recordThreadRead(entry, tail, { key: item.key });
     if (!Array.isArray(tail) || !tail.length) return;
     const nowSec = Math.floor(Date.now() / 1000);
     await postJson(PY_THREAD_HISTORY_URL, {
@@ -558,42 +588,13 @@ function isSelfEcho(entry, key, preview) {
 }
 
 // ── 进线程读正文：解析每条消息的无障碍标签 → 权威方向 + 发送者 + 全文 ─────────────
-// Messenger 每条消息是 div[role="button"]，aria-label 形如：
-//   「Enter，消息由<发送者>发送于<时间>：<正文>」（中文 UI）
-//   「Enter, Message sent by <sender> at <time>: <text>」（英文 UI，尽力兼容）
+// Messenger 每条消息是 div[role="button"]，aria-label 词序已历三代（zh 旧 / en 旧 /
+// en 新 2026-08「Message sent <datetime> by <sender>」）——解析器 parseMsgAria 与锚点
+// MSG_ARIA_RE 收口在 msg_ops.js（纯函数配 node --test 门禁），本文件只消费。
 // 发送者为「你/You」→ 本方(out)，否则对端(in)。正文为**未截断全文**；对 E2EE 会话同样可读
 // （对话正文渲染在主 frame 的 role=log 区，而非 fbsbx 沙箱 iframe）。
-function parseMsgAria(aria) {
-  if (!aria) return null;
-  const s = String(aria).replace(/^\s*Enter\s*[，,]\s*/i, "").trim();
-  // 中文：消息由<sender>发送于<time>[：<text>]。注意时间内部用半角冒号(14:44)，正文分隔用
-  // **全角冒号「：」** → 用第一个全角冒号切分 时间/正文（不能用半角冒号，否则会切碎 14:44）。
-  // sender 用 (.*?) 允许**为空**：E2EE 私聊里对端消息常渲染成「消息由发送于<time>：<text>」
-  // （发送者名缺失）——旧的 (.+?) 会整条匹配失败 → 静默丢弃所有对端消息！空发送者视为对端(in)。
-  let m = s.match(/^消息由(.*?)发送于([\s\S]+)$/);
-  if (m) {
-    const sender = m[1].trim();
-    const rest = m[2];
-    const idx = rest.indexOf("：");
-    const ts = (idx >= 0 ? rest.slice(0, idx) : rest).trim();
-    const text = (idx >= 0 ? rest.slice(idx + 1) : "").trim();
-    return { sender, direction: sender === "你" ? "out" : "in", ts, text };
-  }
-  // 英文尽力兼容：Message sent by <sender> at <time>[: <text>]（sender 同样允许空）。
-  m = s.match(/^Message sent by (.*?) at (.+?):\s([\s\S]*)$/i);
-  if (m) {
-    const sender = m[1].trim();
-    return { sender, direction: /^you$/i.test(sender) ? "out" : "in",
-      ts: (m[2] || "").trim(), text: (m[3] || "").trim() };
-  }
-  m = s.match(/^Message sent by (.*?) at (.+)$/i); // 无正文（媒体）
-  if (m) {
-    const sender = m[1].trim();
-    return { sender, direction: /^you$/i.test(sender) ? "out" : "in",
-      ts: (m[2] || "").trim(), text: "" };
-  }
-  return null;
-}
+// ⚠ 各 page.evaluate 里的消息锚点正则是浏览器作用域的**字面量副本**（evaluate 无法引用
+// Node 侧常量），词形必须与 msg_ops.MSG_ARIA_RE 同源同义：/(消息由.*发送于|Message sent )/i
 
 // 用浏览器会话下载线程里的媒体元素到 MSG_MEDIA_DIR，返回 {media_type, media_ref} 或 {}。
 // scontent CDN 直链用 page.request（带会话 cookie）；blob: 用页内 fetch→base64 回传。
@@ -657,7 +658,7 @@ async function waitThreadContent(page, timeoutMs = 3000) {
       const region = document.querySelector('[role="log"]') || document.body;
       return Array.from(region.querySelectorAll("[aria-label]"))
         .map((e) => e.getAttribute("aria-label") || "")
-        .filter((a) => /(消息由.*发送于|Message sent by)/i.test(a))
+        .filter((a) => /(消息由.*发送于|Message sent )/i.test(a))
         .some((a) => !/端到端加密|end-to-end encrypt|无法显示|can't display/i.test(a));
     }, { timeout: timeoutMs });
     return true;
@@ -741,7 +742,7 @@ async function readThreadTail(entry, key, extPage = null, opts = {}) {
       const region = document.querySelector('[role="log"]')
         || document.querySelector('[aria-label*="消息"],[aria-label*="Messages"],[aria-label*="对话"]')
         || document.querySelector('[role="main"]') || document.body;
-      const MSG_ARIA = /(消息由.*发送于|Message sent by)/i;
+      const MSG_ARIA = /(消息由.*发送于|Message sent )/i;
       const nodes = Array.from(region.querySelectorAll('[aria-label]'))
         .filter((e) => MSG_ARIA.test(e.getAttribute("aria-label") || ""))
         .slice(-15);
@@ -1574,7 +1575,9 @@ async function pollInbound(entry) {
         // 副作用清单：inbound 允许开线程（「正在处理」）；见 canOpenThread。
         if (!canOpenThread({ purpose: "inbound", unread: !!c.unread }).ok) continue;
         const tail = await readThreadTail(entry, c.key);
-        recordThreadRead(entry, tail); // 半死态探测：读取成败入滚动窗（null/[] 均为败）
+        // 半死态探测采样：占位预览行的空读=skip（锁死旧线程非管线故障证据）
+        recordThreadRead(entry, tail, { key: c.key,
+          previewPlaceholder: E2EE_PLACEHOLDER_RE.test(c.preview || "") });
         if (tail === null) continue; // 渲染未就绪/失败 → 不推进 seen，下轮重试
         entry.seen.set(c.key, sig); // 已成功读取（含空）→ 推进变更基线
         // P2：表情 / 撤回墓碑（不二次导航）
@@ -1686,7 +1689,9 @@ async function pollInbound(entry) {
         if (!canOpenThread({ purpose: "request_read", isRequest: true }).ok) continue;
         reqOpened++;
         const tail = await readThreadTail(entry, c.key);
-        recordThreadRead(entry, tail); // 半死态探测：请求区读取同样入窗
+        // 请求区读取同样入窗（同占位/冷却语义——认不出的请求页反复 null 不垄断窗口）
+        recordThreadRead(entry, tail, { key: c.key,
+          previewPlaceholder: E2EE_PLACEHOLDER_RE.test(c.preview || "") });
         if (tail === null) continue; // 读失败→不推进 seen，下轮重试
         try { await processThreadOps(entry, c.key, tail); } catch (_) { /* best-effort */ }
         const last = tail.length ? tail[tail.length - 1] : null;
@@ -2165,6 +2170,39 @@ async function clickAcceptRequest(page) {
   return false;
 }
 
+/** 点某组文案（中英）匹配的 role=button，命中即点、返回 true；无则 false（无副作用）。
+ *  与 clickAcceptRequest 同款保守定位：getByRole 精确名 → div[role=button] 文本兜底。 */
+async function clickButtonByLabels(page, labels, { timeout = 3000 } = {}) {
+  for (const name of labels) {
+    try {
+      const loc = page.getByRole("button", { name, exact: true });
+      if (await loc.count()) { await loc.first().click({ timeout }); return true; }
+    } catch (_) {}
+  }
+  try {
+    const re = new RegExp("^(" + labels.map((s) =>
+      s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")$");
+    const loc = page.locator('div[role="button"]', { hasText: re });
+    if (await loc.count()) { await loc.first().click({ timeout }); return true; }
+  } catch (_) {}
+  return false;
+}
+
+/** 某组文案（中英）的按钮当前是否存在（只探测不点击，供 decline 探测优先路径）。 */
+async function hasButtonByLabels(page, labels) {
+  for (const name of labels) {
+    try {
+      if (await page.getByRole("button", { name, exact: true }).count()) return true;
+    } catch (_) {}
+  }
+  try {
+    const re = new RegExp("^(" + labels.map((s) =>
+      s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")$");
+    if (await page.locator('div[role="button"]', { hasText: re }).count()) return true;
+  } catch (_) {}
+  return false;
+}
+
 /** 发送后校验：输入框应已清空（回车成功发出后 Messenger 会清空 composer）。
  *  若我们刚输入的文本仍在 → 多半没发出去。 */
 async function verifyComposerCleared(page) {
@@ -2196,7 +2234,7 @@ async function readbackLastOutgoing(page, text, timeoutMs = 5000) {
     try {
       const probe = await page.evaluate(() => {
         const region = document.querySelector('[role="log"]') || document.body;
-        const MSG = /(消息由.*发送于|Message sent by)/i;
+        const MSG = /(消息由.*发送于|Message sent )/i;
         const nodes = Array.from(region.querySelectorAll("[aria-label]"))
           .filter((e) => MSG.test(e.getAttribute("aria-label") || ""))
           .slice(-6);
@@ -2497,7 +2535,7 @@ app.get("/debug/tail", async (req, res) => {
     probe = await page.evaluate(() => {
       const all = Array.from(document.querySelectorAll("[aria-label]"))
         .map((e) => e.getAttribute("aria-label") || "");
-      const msgLike = all.filter((a) => /(消息由.*发送于|Message sent by)/i.test(a));
+      const msgLike = all.filter((a) => /(消息由.*发送于|Message sent )/i.test(a));
       return {
         url: location.href,
         hasLog: !!document.querySelector('[role="log"]'),
@@ -2511,7 +2549,7 @@ app.get("/debug/tail", async (req, res) => {
         // 最后一条消息行的图片候选明细（诊断媒体漏读：看 src 前缀/自然尺寸/渲染尺寸）
         lastRowImgs: (() => {
           const region2 = document.querySelector('[role="log"]') || document.body;
-          const MSG = /(消息由.*发送于|Message sent by)/i;
+          const MSG = /(消息由.*发送于|Message sent )/i;
           const nodes = Array.from(region2.querySelectorAll("[aria-label]"))
             .filter((e) => MSG.test(e.getAttribute("aria-label") || ""));
           const last = nodes[nodes.length - 1];
@@ -2527,6 +2565,37 @@ app.get("/debug/tail", async (req, res) => {
             return { src: src.slice(0, 22), natW: im.naturalWidth || 0,
               rW: Math.round(rc.width), rH: Math.round(rc.height) };
           });
+        })(),
+        // 2026-08-11 诊断：E2EE 线程渲染 19 行但 MSG aria 零命中（FB 改版）——
+        // 逐行转储 role=row 的文本/aria/结构，供新解析器选锚点。诊断专用，生产路径不消费。
+        rowDump: (() => {
+          const region2 = document.querySelector('[role="log"]') || document.body;
+          return Array.from(region2.querySelectorAll('div[role="row"]')).slice(-12).map((r) => ({
+            t: (r.innerText || "").replace(/\n/g, "⏎").slice(0, 140),
+            rowAria: (r.getAttribute("aria-label") || "").slice(0, 80),
+            aria: Array.from(r.querySelectorAll("[aria-label]")).slice(0, 6)
+              .map((e) => ((e.getAttribute("aria-label") || "") + "@" + e.tagName + (e.getAttribute("role") ? "/" + e.getAttribute("role") : "")).slice(0, 90)),
+            hs: Array.from(r.querySelectorAll("h1,h2,h3,h4,h5")).slice(0, 2)
+              .map((h) => (h.innerText || "").slice(0, 40)),
+            imgAlts: Array.from(r.querySelectorAll("img[alt]")).slice(0, 3)
+              .map((im) => (im.getAttribute("alt") || "").slice(0, 40)),
+            dirAuto: Array.from(r.querySelectorAll('[dir="auto"]')).slice(0, 4)
+              .map((d) => (d.innerText || "").replace(/\n/g, "⏎").slice(0, 60)),
+          }));
+        })(),
+        // 区域内 aria-label 去重样本（找新的消息级锚点词形）
+        ariaSample: (() => {
+          const region2 = document.querySelector('[role="log"]') || document.body;
+          const seen = new Set();
+          const out = [];
+          for (const e of region2.querySelectorAll("[aria-label]")) {
+            const a = (e.getAttribute("aria-label") || "").slice(0, 90);
+            if (!a || seen.has(a)) continue;
+            seen.add(a);
+            out.push(a);
+            if (out.length >= 30) break;
+          }
+          return out;
         })(),
       };
     });
@@ -2917,6 +2986,73 @@ app.post("/accounts/:id/send", async (req, res) => {
   }
 });
 
+// 消息请求（陌生人首讯）显式处置：接受（转正）/ 删除（移出请求箱）。坐席不必发消息也能处理。
+// body { jid, action:"accept"|"decline", confirm?:bool }。
+//
+// 安全设计（2026-08-11，破坏性操作 + 无请求样本 + FB DOM 易改版三重风险下的收敛）：
+// ① **请求线程前置闸**：仅当页面挂着「接受」按钮（＝确系待处置的消息请求）才允许 decline。
+//    普通会话的「删除」是删**整段对话**（远更破坏）——无接受按钮即判 not_a_request 拒绝，
+//    从根上杜绝把「拒绝陌生人」误伤成「删掉客户会话」。
+// ② **decline 探测优先**：confirm!==true 只回报删除按钮在不在（button_found），绝不点击；
+//    真删须显式 confirm:true。找不到按钮一律不瞎点（DOM 改版时宁可不动作也不误删）。
+// ③ accept 复用 clickAcceptRequest（生产已验证、非破坏）：非请求会话找不到按钮＝no-op，
+//    返回 was_request:false（安全幂等，可对普通会话验证端点而不产生副作用）。
+app.post("/accounts/:id/request-action", async (req, res) => {
+  const entry = findByAccount(req.params.id);
+  if (!entry || !entry.page) {
+    return res.status(404).json({ ok: false, error: "account not connected" });
+  }
+  const jid = String((req.body && req.body.jid) || "");
+  const action = normalizeRequestAction((req.body && req.body.action) || "");
+  const confirm = (req.body && req.body.confirm) === true;
+  if (!jid || !action) {
+    return res.status(400).json({
+      ok: false, error: "jid and valid action (accept|decline) required" });
+  }
+  try {
+    const page = entry.page;
+    await page.goto(`${MESSENGER_URL}t/${jid}`, {
+      waitUntil: "domcontentloaded", timeout: 20000 });
+    await page.waitForTimeout(2000); // 请求线程会先乐观渲染、再换成接受/删除栏，等稳定
+    const isRequestThread = await hasButtonByLabels(page, REQUEST_ACTION_LABELS.accept);
+    if (action === "accept") {
+      const accepted = await clickAcceptRequest(page);
+      if (accepted) await page.waitForTimeout(1500);
+      return res.json({ ok: true, action: "accept", was_request: !!accepted,
+        note: accepted ? "accepted" : "no accept button (already a normal chat)" });
+    }
+    // decline
+    if (!isRequestThread) {
+      // 无接受按钮＝不是待处置请求（可能已接受/已是普通会话）→ 绝不碰「删除对话」
+      return res.status(409).json({ ok: false, action: "decline",
+        error: "not_a_request", note: "no Accept button on this thread; refusing to "
+          + "delete (would delete a normal conversation)" });
+    }
+    const buttonFound = await hasButtonByLabels(page, REQUEST_ACTION_LABELS.decline);
+    if (!confirm) {
+      // 探测优先：只报告删除按钮在不在，不执行（真删须 confirm:true）
+      return res.json({ ok: true, action: "decline", probe: true,
+        button_found: buttonFound, is_request: true,
+        note: "probe only; pass confirm:true to actually delete this request" });
+    }
+    if (!buttonFound) {
+      return res.status(500).json({ ok: false, action: "decline",
+        error: "decline_button_not_found",
+        note: "confirmed request thread but no Delete button located (FB layout drift?)"
+          + " — handle in the official web tab" });
+    }
+    const clicked = await clickButtonByLabels(page, REQUEST_ACTION_LABELS.decline);
+    if (clicked) await page.waitForTimeout(1200);
+    // 二次确认弹窗（Messenger 删除常弹「Delete conversation?」需再点删除）——best-effort
+    await clickButtonByLabels(page, REQUEST_ACTION_LABELS.decline, { timeout: 2000 })
+      .catch(() => false);
+    return res.json({ ok: !!clicked, action: "decline", deleted: !!clicked });
+  } catch (e) {
+    logger.error({ e, jid, action }, "request-action failed");
+    return res.status(500).json({ ok: false, action, error: String(e) });
+  }
+});
+
 // M-parity①：出站媒体（图片/视频/音频/文件）——挂本地文件到 composer 发送，使 Messenger 与
 // Telegram 的 send_media 对称。Python 侧 MessengerWebWorker 有 send_media 即被编排器判为
 // owns_media=True → 工作台「图片/语音/视频/文件」按钮对 Messenger 一并点亮。语音走
@@ -3007,7 +3143,7 @@ app.post("/accounts/:id/thread-history", async (req, res) => {
   let page = null;
   const msgCount = async () => page.evaluate(() => {
     const region = document.querySelector('[role="log"]') || document.body;
-    const MSG_ARIA = /(消息由.*发送于|Message sent by)/i;
+    const MSG_ARIA = /(消息由.*发送于|Message sent )/i;
     return Array.from(region.querySelectorAll("[aria-label]"))
       .filter((e) => MSG_ARIA.test(e.getAttribute("aria-label") || "")).length;
   }).catch(() => -1);
@@ -3032,7 +3168,7 @@ app.post("/accounts/:id/thread-history", async (req, res) => {
     }
     const arias = await page.evaluate(() => {
       const region = document.querySelector('[role="log"]') || document.body;
-      const MSG_ARIA = /(消息由.*发送于|Message sent by)/i;
+      const MSG_ARIA = /(消息由.*发送于|Message sent )/i;
       return Array.from(region.querySelectorAll("[aria-label]"))
         .map((e) => e.getAttribute("aria-label") || "")
         .filter((a) => MSG_ARIA.test(a));
