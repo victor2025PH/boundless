@@ -936,6 +936,15 @@ _MIGRATIONS = [
     )""",
     "CREATE INDEX IF NOT EXISTS idx_wf_steplog_chain ON workflow_step_log(chain_id, ts DESC)",
     "CREATE INDEX IF NOT EXISTS idx_wf_steplog_exec ON workflow_step_log(exec_id, step_idx)",
+    # Messenger 陌生人「消息请求」可视化（2026-08-11）：worker ingest 早就携带
+    # is_request/request_category（general=可自动回 / spam=只入箱），但此前只用于
+    # 预置会话档位后即丢——前端看不出「这是待验证的陌生人」，坐席也不知道
+    # 「回复即自动通过验证」（worker 发送前会点官方「接受」按钮）。落列后
+    # store_row_to_chat 透传 → 会话列表徽章 + 打开会话引导条；出站消息一落库
+    # 即自动清零（回复=接受，见 ingest_message）；显式接受/拒绝经
+    # /api/platforms/messenger/{acct}/request-action 代理 worker。纯加法缺省 0/空。
+    "ALTER TABLE conversations ADD COLUMN is_request INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE conversations ADD COLUMN request_category TEXT NOT NULL DEFAULT ''",
 ]
 
 
@@ -1387,8 +1396,16 @@ class InboxStore:
                     str(getattr(msg, "sender_name", "") or ""),
                 ),
             )
-            self._conn.commit()
             inserted = cur.rowcount > 0
+            # 回复即接受：任何**新插入的出站**落库即撤「陌生人消息请求」标记——
+            # worker 发送时会自动点官方「接受」按钮（messenger-web clickAcceptRequest），
+            # 这里同步撤前端徽章/引导条。WHERE is_request=1 自守卫，非请求会话零成本。
+            if inserted and msg.direction == "out":
+                self._conn.execute(
+                    "UPDATE conversations SET is_request=0, request_category=''"
+                    " WHERE conversation_id=? AND is_request=1",
+                    (msg.conversation_id,))
+            self._conn.commit()
         # 激活里程碑（锁外，热路径稳态＝一次布尔判断）：只认真实新插入的新鲜出站
         if inserted and msg.direction == "out" and not _FIRST_REPLY_NOTED:
             _note_first_reply_milestone(msg)
@@ -1960,6 +1977,34 @@ class InboxStore:
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
+
+    def mark_conversation_request(
+        self, conversation_id: str, category: str = "",
+    ) -> None:
+        """标记会话为「陌生人消息请求」（Messenger worker ingest 携带；幂等）。
+
+        category：general=可自动回 / spam 等其它=只入箱不自动回（口径见
+        unified_inbox_account_routes 的 ingest 预置档位注释）。
+        """
+        if not conversation_id:
+            return
+        with self._lock:
+            self._conn.execute(
+                "UPDATE conversations SET is_request=1, request_category=?"
+                " WHERE conversation_id=?",
+                (str(category or "")[:32], conversation_id))
+            self._conn.commit()
+
+    def clear_conversation_request(self, conversation_id: str) -> None:
+        """撤「陌生人消息请求」标记（显式接受/拒绝后调用；出站落库另有自动清）。"""
+        if not conversation_id:
+            return
+        with self._lock:
+            self._conn.execute(
+                "UPDATE conversations SET is_request=0, request_category=''"
+                " WHERE conversation_id=? AND is_request=1",
+                (conversation_id,))
+            self._conn.commit()
 
     def count_conversations_older_than(
         self, ts: float, *, platform: str = "", account_id: str = "",

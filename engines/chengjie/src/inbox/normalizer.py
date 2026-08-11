@@ -396,6 +396,10 @@ def store_row_to_chat(
                                and int(message_count or 0) == 0),
         # P4-11B 群「@我」未读旗标（store-backed 读路径透出；前端据此出 @ 徽标/置顶/提醒）
         "mentioned": bool(row.get("mentioned_unread") or 0),
+        # Messenger 陌生人「消息请求」（待验证新客户）：前端徽章 + 引导「回复即通过验证」。
+        # 出站落库自动清（ingest_message），显式接受/拒绝走 request-action 代理。
+        "is_request": bool(row.get("is_request") or 0),
+        "request_category": str(row.get("request_category") or ""),
         "language": language,
         "last_message": last_msg_obj,
         "messages": [last_msg_obj] if last_msg_obj else [],

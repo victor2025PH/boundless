@@ -532,6 +532,7 @@ _BASELINE = """
 /api/platforms/{platform}/{account_id}/history	POST
 /api/platforms/{platform}/{account_id}/sync-groups	POST
 /api/platforms/{platform}/{account_id}/subscribe-presence	POST
+/api/platforms/messenger/{account_id}/request-action	POST
 /api/platforms/{platform}/{account_id}/react	POST
 /api/platforms/{platform}/{account_id}/message-op	POST
 /api/platforms/{platform}/{account_id}/group-members	GET
@@ -1083,6 +1084,16 @@ _ADDITIONS_2026_07_28_TRIAL_FUNNEL = """
 /api/admin/license/trial-funnel	POST
 """
 _BASELINE += _ADDITIONS_2026_07_28_TRIAL_FUNNEL
+
+# 2026-08-11 邀请裂变（license_routes.py）：会员页「邀请好友送字符」卡片数据
+# （我的邀请码/分享链接/进度统计，数据源=官网 referral 台账 invite-info）+
+# ops「🎁 邀请裂变」卡的官网全局聚合代理（licensing.trial.referral_stats 默认关，
+# 300s TTL；聚合是全站口径，只有厂商 ops 实例该开）。
+_ADDITIONS_2026_08_11_REFERRAL = """
+/api/admin/license/referral	GET
+/api/admin/referral-stats	GET
+"""
+_BASELINE += _ADDITIONS_2026_08_11_REFERRAL
 
 # 2026-07-27 营销目标（goal_routes.py）：会话级「工作目标」（付费转化/关系推进/沉默唤回…）
 # CRUD + settle-on-read 视图。右栏卡/看板/prompt 注入三个消费面读同一份结算口径

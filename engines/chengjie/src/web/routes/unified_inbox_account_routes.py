@@ -1009,6 +1009,14 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             sender_id=_sender_id,
             sender_name=_sender_name,
         )
+        # 请求标记落库（2026-08-11 可视化）：is_request 落 conversations 列 → chats 透传
+        # → 前端徽章/引导条「回复即通过验证」。出站落库自动清（ingest_message），
+        # 显式接受/拒绝走 request-action 代理。best-effort 不阻断入站。
+        if direction == "in" and _is_request and cid:
+            try:
+                store.mark_conversation_request(cid, _req_cat)
+            except Exception:
+                logger.debug("[protocol] 陌生人请求标记失败", exc_info=True)
         # 群聊不进自动回复（自动回复面向 1:1）。spam 类陌生人请求只入收件箱、不自动回。
         if direction == "in" and _chat_type != "group" and not _is_spam_request:
             await maybe_auto_reply(make_message(
@@ -1545,6 +1553,62 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             logger.debug("[protocol] presenceSubscribe 触发失败", exc_info=True)
             return {"ok": False, "reason": "service_error"}
         return {"ok": bool((res or {}).get("ok", False))}
+
+    @app.post("/api/platforms/messenger/{account_id}/request-action")
+    async def api_messenger_request_action(account_id: str, request: Request):
+        """Messenger 陌生人「消息请求」显式处置（接受/拒绝），代理 worker request-action。
+
+        body: {chat_key, action:"accept"|"decline", confirm?:bool}。
+        - accept：转正（非破坏；worker 复用生产验证过的点「接受」路径）。坐席直接回复
+          也会自动接受——本端点服务「先转正、稍后再聊」与不想回话的场景。
+        - decline：删除该请求（破坏性）。**须 confirm=true** 才真删；worker 侧另有双闸
+          （仅请求线程=页面有「接受」按钮才认 + 找不到删除按钮绝不瞎点）。
+        处置成功（接受 / 真删）即撤本地 is_request 标记（徽章/引导条消失）。
+        """
+        api_auth(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        chat_key = str(body.get("chat_key") or "").strip()
+        action = str(body.get("action") or "").strip().lower()
+        confirm = body.get("confirm") is True
+        if not chat_key:
+            raise HTTPException(400, tr(request, "err.ws.field_required",
+                                        field="chat_key"))
+        if action not in ("accept", "decline"):
+            raise HTTPException(400, tr(request, "err.ws.field_required",
+                                        field="action(accept|decline)"))
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        from src.integrations.messenger_web_login import (
+            _post_json, service_base_url,
+        )
+        try:
+            res = await _post_json(
+                f"{service_base_url(cfg)}/accounts/{account_id}/request-action",
+                {"jid": chat_key, "action": action, "confirm": confirm},
+                timeout=60.0)
+        except Exception as ex:  # worker 不可达 / 线程打不开等，如实回给坐席
+            raise HTTPException(502, tr(request, "err.rpa.op_failed",
+                                        op="request-action", err=str(ex)))
+        res = res if isinstance(res, dict) else {}
+        # 已处置（接受成功 / 真删成功）→ 撤本地标记，徽章与引导条随下一轮列表刷新消失
+        done = bool(res.get("ok")) and (action == "accept" or bool(res.get("deleted")))
+        if done:
+            try:
+                store = getattr(request.app.state, "inbox_store", None)
+                if store is not None:
+                    from src.inbox.normalizer import conv_id as _mk_conv_id
+                    store.clear_conversation_request(
+                        _mk_conv_id("messenger", account_id, chat_key))
+            except Exception:
+                logger.debug("[protocol] 请求标记清除失败", exc_info=True)
+        out: Dict[str, Any] = {"ok": bool(res.get("ok")), "action": action}
+        for k in ("was_request", "probe", "button_found", "deleted", "note", "error"):
+            if k in res:
+                out[k] = res[k]
+        return out
 
     @app.post("/api/platforms/{platform}/{account_id}/react")
     async def api_platform_react(platform: str, account_id: str, request: Request):
