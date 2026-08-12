@@ -31,6 +31,16 @@ param(
     [int]   $SilentSec   = 360,
     [int]   $ActiveSec   = 180,
     [int]   $StrikeLimit = 2,
+    # v2 流量闸（首日 4 条夜间误报的修正）：只有当窗口(600s)内**其他线**合计请求
+    # >= 本阈值时，静默线才计 strike——低流量时段负载均衡本就可能让健康线颗粒无收
+    # （(3/4)^40 ~= 1e-5 才是「统计上不可能」的界）。流量不足=证据不足，不判且清 strike。
+    [int]   $MinSiblingReq = 40,
+    # v3 突然死亡窗（同晚第二层修正）：工作台是 SSE/keep-alive 长连接，LB 只分配
+    # **新建连接**——请求量大不代表新连接多，闲置几小时的线可能只是没分到新连接。
+    # 可靠的被动信号只有「刚才还在跑、突然断流」（13:41 PLDT 事故形态）：静默时长
+    # 超过本窗（默认 30min）的线属「闲置衰减」，不可判死，不 strike（代价=错过
+    # 「死了很久才被注意」的慢发现，由 SLO/坐席端回执兜底）。
+    [int]   $RecentActiveMaxSec = 1800,
     [string]$VpsUser = "ubuntu",
     [string]$VpsHost = "165.154.233.121",
     [string]$Key     = "D:\chengjie-instances\.ops\vision_key",
@@ -130,8 +140,15 @@ if (-not $out) {
 }
 
 $ages = @{}
+$reqs = @{}
 foreach ($line in @($out)) {
-    if ("$line" -match '^(\d+\.\d+\.\d+\.\d+)\s+(-?\d+)$') { $ages[$Matches[1]] = [int]$Matches[2] }
+    # v2 三字段（age + 600s 请求数）；兼容 v1 两字段（计数按 0 = 永远过不了流量闸，
+    # 等价于「助手没升级就不判」——升级顺序安全）。
+    if ("$line" -match '^(\d+\.\d+\.\d+\.\d+)\s+(-?\d+)\s+(\d+)$') {
+        $ages[$Matches[1]] = [int]$Matches[2]; $reqs[$Matches[1]] = [int]$Matches[3]
+    } elseif ("$line" -match '^(\d+\.\d+\.\d+\.\d+)\s+(-?\d+)$') {
+        $ages[$Matches[1]] = [int]$Matches[2]; $reqs[$Matches[1]] = 0
+    }
 }
 if ($ages.Count -eq 0) { Write-Log "WARN" "unparseable probe output; skipping"; exit 0 }
 
@@ -139,7 +156,13 @@ $activeCount = 0
 foreach ($ip in $Uplinks) {
     if ($ages.ContainsKey($ip) -and $ages[$ip] -ge 0 -and $ages[$ip] -le $ActiveSec) { $activeCount++ }
 }
-$detail = ($Uplinks | ForEach-Object { "{0}={1}s" -f $_, $(if ($ages.ContainsKey($_)) { $ages[$_] } else { "?" }) }) -join " "
+$totalReq = 0
+foreach ($ip in $Uplinks) { if ($reqs.ContainsKey($ip)) { $totalReq += $reqs[$ip] } }
+$detail = ($Uplinks | ForEach-Object {
+    "{0}={1}s/{2}r" -f $_,
+        $(if ($ages.ContainsKey($_)) { $ages[$_] } else { "?" }),
+        $(if ($reqs.ContainsKey($_)) { $reqs[$_] } else { "?" })
+}) -join " "
 
 if ($activeCount -eq 0) {
     # Everything quiet (night shift / no seats online). Not judgeable - do not
@@ -157,9 +180,26 @@ foreach ($ip in $Uplinks) {
     if (-not $st.ContainsKey($ip)) { $st[$ip] = @{ strikes = 0; alerted = $false } }
 
     if ($silent) {
+        # v2 流量闸：他线窗口请求量不足 = 「健康线也可能颗粒无收」的低流量时段，
+        # 静默不构成死线证据——不 strike 且清零（半截 strike 留到高峰期会引爆误报）。
+        $siblingReq = $totalReq - $(if ($reqs.ContainsKey($ip)) { $reqs[$ip] } else { 0 })
+        if ($siblingReq -lt $MinSiblingReq) {
+            if ($st[$ip].strikes -ne 0) { $changed = $true }
+            $st[$ip].strikes = 0
+            Write-Log "LOWTRAFFIC" ("uplink {0} silent (age={1}s) but siblings only carried {2} req/600s (<{3}); evidence insufficient, no strike" -f $ip, $age, $siblingReq, $MinSiblingReq)
+            continue
+        }
+        # v3 突然死亡窗：静默太久（>RecentActiveMaxSec）= 闲置衰减形态，keep-alive
+        # 拓扑下不可判死；age<0（窗口内从未见过）同属不可判。
+        if ($age -lt 0 -or $age -gt $RecentActiveMaxSec) {
+            if ($st[$ip].strikes -ne 0) { $changed = $true }
+            $st[$ip].strikes = 0
+            Write-Log "IDLE" ("uplink {0} silent beyond sudden-death window (age={1}s > {2}s); idle-decay pattern, not judgeable" -f $ip, $age, $RecentActiveMaxSec)
+            continue
+        }
         $st[$ip].strikes = [int]$st[$ip].strikes + 1
         $changed = $true
-        Write-Log "STRIKE" ("uplink {0} silent (age={1}s, strike {2}/{3}; {4} sibling(s) active)" -f $ip, $age, $st[$ip].strikes, $StrikeLimit, $activeCount)
+        Write-Log "STRIKE" ("uplink {0} silent (age={1}s, strike {2}/{3}; {4} sibling(s) active, sibling req={5}/600s)" -f $ip, $age, $st[$ip].strikes, $StrikeLimit, $activeCount, $siblingReq)
         if ($st[$ip].strikes -ge $StrikeLimit -and -not $st[$ip].alerted) {
             if ($DryRun) {
                 Write-Log "DRYRUN" ("would alert: uplink {0} down" -f $ip)
