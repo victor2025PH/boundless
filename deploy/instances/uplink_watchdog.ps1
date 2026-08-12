@@ -86,9 +86,42 @@ function Save-State($st) {
 }
 
 # -- probe ---------------------------------------------------------------------
+# Hard process-level timeout (2026-08-12 hotfix): the first deployment hung at
+# 15:27 on a half-open ssh session (ConnectTimeout only covers the TCP connect
+# phase) - the stuck instance then blocked EVERY subsequent scheduled run for 6h
+# (scheduler refuses new instances while one is Running, result 0x800710E0).
+# Belt: ServerAlive kills a wedged session at the ssh layer in ~20s.
+# Suspenders: WaitForExit(30s) + Kill guarantees this process always exits.
 $ipArgs = ($Uplinks -join " ")
-$out = & ssh "-i" $Key "-o" "BatchMode=yes" "-o" "StrictHostKeyChecking=accept-new" `
-    "-o" "ConnectTimeout=15" "$VpsUser@$VpsHost" "/usr/local/bin/uplink_lastseen $ipArgs" 2>$null
+$outFile = Join-Path $env:TEMP ("uplink_probe_" + $PID + ".txt")
+$sshArgLine = ('-i "{0}" -o BatchMode=yes -o StrictHostKeyChecking=accept-new ' +
+    '-o ConnectTimeout=15 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 ' +
+    '{1}@{2} "/usr/local/bin/uplink_lastseen {3}"') -f $Key, $VpsUser, $VpsHost, $ipArgs
+$errFile = Join-Path $env:TEMP ("uplink_probe_err_" + $PID + ".txt")
+$out = $null
+try {
+    $p = Start-Process -FilePath "ssh" -ArgumentList $sshArgLine -NoNewWindow -PassThru `
+        -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+    # PS 5.1 quirk: without touching .Handle while alive, .ExitCode reads $null
+    # after exit ($null -eq 0 is False -> success path never taken; bit us 21:21).
+    $null = $p.Handle
+    if (-not $p.WaitForExit(30000)) {
+        try { $p.Kill() } catch {}
+        Write-Log "WARN" "probe ssh exceeded 30s hard timeout; killed (half-open session?)"
+    } else {
+        # Success judged by output content, not ExitCode (immune to the null quirk;
+        # the helper prints only valid "<ip> <age>" lines on success).
+        $out = Get-Content $outFile -ErrorAction SilentlyContinue
+        if (-not $out) {
+            $e1 = (Get-Content $errFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+            Write-Log "WARN" ("probe ssh empty (exit=" + $p.ExitCode + " err=" + $e1 + ")")
+        }
+    }
+} catch {
+    Write-Log "WARN" ("probe launch failed: " + $_.Exception.Message)
+} finally {
+    Remove-Item $outFile, $errFile -Force -ErrorAction SilentlyContinue
+}
 if (-not $out) {
     # Cannot reach the VPS at all -> the entrance chain is the problem, and that is
     # prod_edge_watchdog's jurisdiction. Stay quiet to avoid double alarms.
