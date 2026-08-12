@@ -59,7 +59,19 @@ if (-not (Test-Path (Join-Path $DataRoot 'domains'))) {
 }
 
 # ── 幂等/端口防呆：已在跑则退出 0；被别人占则报错（绝不 Stop-Process）────
-$own = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+# P0-1 配套豁免（2026-08-12）：netsh portproxy 的 LAN 直连转发监听（svchost/iphlpsvc
+# 持有、监听地址=在册规则、转发目标 127.0.0.1）不算占用——它转发给谁取决于谁绑
+# 127.0.0.1:$Port，与实例共存。豁免面窄：回环上的陌生进程照旧拒起。
+$portproxyListens = @()
+try {
+    foreach ($ln in @(netsh interface portproxy show v4tov4 2>$null)) {
+        if ("$ln" -match '^\s*(\d+\.\d+\.\d+\.\d+)\s+(\d+)\s+(\S+)\s+(\d+)\s*$' -and $Matches[3] -eq '127.0.0.1') {
+            $portproxyListens += ("{0}:{1}" -f $Matches[1], [int]$Matches[2])
+        }
+    }
+} catch {}
+$own = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+         Where-Object { $portproxyListens -notcontains ("{0}:{1}" -f $_.LocalAddress, [int]$_.LocalPort) })
 if ($own.Count) {
     $pids = @($own | Select-Object -ExpandProperty OwningProcess -Unique)
     $isOurs = $false

@@ -28,12 +28,23 @@ function Fail([string]$msg) {
     exit 1
 }
 
+# P0-1 配套（2026-08-12）：portproxy 的 LAN 转发监听（svchost 持有，转发目标
+# 127.0.0.1）不算「实例还在监听」——它独立于实例进程常驻。此表供占用判定过滤。
+$script:portproxyListenSet = @()
+try {
+    foreach ($ln in @(netsh interface portproxy show v4tov4 2>$null)) {
+        if ("$ln" -match '^\s*(\d+\.\d+\.\d+\.\d+)\s+(\d+)\s+(\S+)\s+(\d+)\s*$' -and $Matches[3] -eq '127.0.0.1') {
+            $script:portproxyListenSet += ("{0}:{1}" -f $Matches[1], [int]$Matches[2])
+        }
+    }
+} catch {}
+
 function Get-ListeningPorts {
     $still = @()
     foreach ($port in $Ports) {
-        if (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count) {
-            $still += $port
-        }
+        $conns = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
+                   Where-Object { $script:portproxyListenSet -notcontains ("{0}:{1}" -f $_.LocalAddress, [int]$_.LocalPort) })
+        if ($conns.Count) { $still += $port }
     }
     return $still
 }
@@ -52,6 +63,24 @@ if (-not $holders.Count) {
     exit 0
 }
 
+# P0-1 配套豁免（2026-08-12 可靠性复盘）：LAN 直连入口用 netsh portproxy 把
+# 192.168.x.x:18799 转发到 127.0.0.1:18799——该监听由 svchost(iphlpsvc) 持有，
+# 属合法基础设施：随系统服务自管、转发目标是谁绑 127.0.0.1 就转给谁，停实例
+# 无需也不应动它。只豁免「svchost 且其监听的 地址:端口 与在册 portproxy 规则
+# 完全匹配、转发目标为 127.0.0.1」的持有者；回环上的陌生进程照旧拒停——
+# 豁免面收得足够窄，真端口劫持不会被掩护。
+$portproxyRules = @()
+try {
+    foreach ($ln in @(netsh interface portproxy show v4tov4 2>$null)) {
+        if ("$ln" -match '^\s*(\d+\.\d+\.\d+\.\d+)\s+(\d+)\s+(\S+)\s+(\d+)\s*$') {
+            $portproxyRules += [pscustomobject]@{
+                ListenAddr = $Matches[1]; ListenPort = [int]$Matches[2]
+                ConnectAddr = $Matches[3]; ConnectPort = [int]$Matches[4]
+            }
+        }
+    }
+} catch {}
+
 $targets = @()
 foreach ($holderPid in $holders.Keys) {
     $p = Get-CimInstance Win32_Process -Filter "ProcessId=$holderPid" -ErrorAction SilentlyContinue
@@ -59,6 +88,26 @@ foreach ($holderPid in $holders.Keys) {
     if ($p.CommandLine -like '*main.py*') {
         $targets += [pscustomobject]@{ ProcessId = $holderPid; Name = $p.Name; Ports = $holders[$holderPid] }
     } else {
+        $isPortproxy = $false
+        if ($p.Name -ieq 'svchost.exe' -and $portproxyRules.Count) {
+            $conns = @(Get-NetTCPConnection -OwningProcess $holderPid -State Listen -ErrorAction SilentlyContinue |
+                       Where-Object { $Ports -contains [int]$_.LocalPort })
+            if ($conns.Count) {
+                $isPortproxy = $true
+                foreach ($c in $conns) {
+                    $hit = @($portproxyRules | Where-Object {
+                        $_.ListenPort -eq [int]$c.LocalPort -and
+                        $_.ListenAddr -eq "$($c.LocalAddress)" -and
+                        $_.ConnectAddr -eq '127.0.0.1'
+                    })
+                    if (-not $hit.Count) { $isPortproxy = $false; break }
+                }
+            }
+        }
+        if ($isPortproxy) {
+            Write-Host "[stop-$Instance] 端口 $($holders[$holderPid] -join ',') 的 svchost(PID=$holderPid) 为 netsh portproxy 转发监听（LAN 直连入口），跳过" -ForegroundColor DarkGray
+            continue
+        }
         Fail "端口 $($holders[$holderPid] -join ',') 持有者 PID=$holderPid($($p.Name)) 命令行不含 main.py，不是本引擎实例。拒绝停止（人工核实：Get-CimInstance Win32_Process -Filter `"ProcessId=$holderPid`" | Select CommandLine）"
     }
 }
