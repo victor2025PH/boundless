@@ -16,12 +16,25 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-try:
-    from zhipuai import ZhipuAI
-    ZHIPU_AVAILABLE = True
-except ImportError:
-    ZHIPU_AVAILABLE = False
-    ZhipuAI = None
+# zhipuai 懒加载（P3-2 2026-08-12 可靠性复盘）：顶层 import 实测 ~1.0s（-X importtime），
+# 而智谱云兜底自 2026-07-12 key 失效起已停用（overlay vision.zhipu_api_key: ''）——
+# 每个 import 本模块的进程（主程序 boot / RPA worker / CLI 工具）都在为死路径买单。
+# 改为 _initialize_zhipu 内按需 import；本模块内无其他消费者（ZHIPU_AVAILABLE 原本
+# 也只在本文件用，外部只 import VisionClient / has_any_vision_backend）。
+ZhipuAI = None  # 懒加载占位：真实类由 _zhipu_import() 填充
+
+
+def _zhipu_import():
+    """按需 import zhipuai；未安装返回 None（与旧 ZHIPU_AVAILABLE=False 同语义）。"""
+    global ZhipuAI
+    if ZhipuAI is not None:
+        return ZhipuAI
+    try:
+        from zhipuai import ZhipuAI as _Z
+        ZhipuAI = _Z
+    except ImportError:
+        return None
+    return ZhipuAI
 
 try:
     from openai import OpenAI
@@ -237,7 +250,8 @@ class VisionClient:
         self.logger = logging.getLogger(__name__)
 
     def _get_zhipu(self) -> Optional[Any]:
-        if not ZHIPU_AVAILABLE or not self._client:
+        # _client 只在 _initialize_zhipu 成功（即 zhipuai 已加载）后才非空
+        if not self._client:
             return None
         return self._client
 
@@ -289,15 +303,18 @@ class VisionClient:
         return True
 
     def _initialize_zhipu(self) -> bool:
-        if not ZHIPU_AVAILABLE:
-            self.logger.warning("zhipuai 未安装，Vision 不可用。请执行: pip install zhipuai")
-            return False
+        # 先查 key 再 import：未配 key（本部署常态——云兜底已停用）连 1s 的
+        # zhipuai import 都不必付。
         api_key = (self.config.get("api_key") or "").strip()
         if not api_key or api_key == "YOUR_ZHIPU_API_KEY":
             self.logger.warning("Vision 未配置 api_key，图像理解已禁用")
             return False
+        _cls = _zhipu_import()
+        if _cls is None:
+            self.logger.warning("zhipuai 未安装，Vision 不可用。请执行: pip install zhipuai")
+            return False
         try:
-            self._client = ZhipuAI(api_key=api_key)
+            self._client = _cls(api_key=api_key)
             self._backend = "zhipu"
             self.logger.info("智谱 GLM-4V Vision 客户端初始化成功")
             return True

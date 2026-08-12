@@ -826,6 +826,22 @@ def cmd_expose(args) -> int:
                 raise SystemExit(f"[错误] VPS 端口 {public_port} 已被他方占用，人工核查")
         conf = tl.render_nginx_site_port(slug, public_port, port)
 
+    # 2.4) 扫描拦截片段（P1-9）：幂等推送仓库 SSOT → /etc/nginx/snippets/scanner-deny.conf。
+    #      站点模板 include 了它——新 VPS/裸机若缺此文件，nginx -t 会失败，所以这里
+    #      **先于**站点落盘推送；推送失败仅警告（老 VPS 已有文件，无害）。
+    deny_snip = REPO_ROOT / "deploy" / "instances" / "scanner-deny.conf"
+    if deny_snip.is_file():
+        try:
+            _vps_push(deny_snip, "/tmp/__scanner_deny.conf")
+            rc, out = _vps("sudo -n mv /tmp/__scanner_deny.conf "
+                           "/etc/nginx/snippets/scanner-deny.conf && echo SNIP_OK")
+            print("[expose] 扫描拦截片段已同步 ✓" if "SNIP_OK" in out
+                  else f"[警告] 拦截片段落位失败（不阻断）: {out[-200:]}")
+        except SystemExit as e:
+            print(f"[警告] 拦截片段推送失败（不阻断）: {e}", file=sys.stderr)
+    else:
+        print(f"[警告] 拦截片段源文件缺失（不阻断）: {deny_snip}", file=sys.stderr)
+
     # 2.5) 后端不可达友好页（P5）：幂等推送仓库 SSOT → /var/www/html/__tenant_down.html
     #      （error_page 502/503/504 的落点；推送失败只警告——缺页回落 nginx 默认 502，无害）
     down_page = REPO_ROOT / "deploy" / "instances" / "tenant_down.html"

@@ -1223,6 +1223,11 @@ def _nginx_proxy_body(upstream_port: int) -> str:
     """
     return f"""    client_max_body_size 50m;
 
+    # reliability P1-9 (2026-08-12): scanner probes die at nginx (444), never
+    # traverse the ~30KB/s ssh tunnel. Snippet is idempotently pushed by
+    # tenant_ops expose (deploy/instances/scanner-deny.conf is the repo SSOT).
+    include snippets/scanner-deny.conf;
+
     error_page 502 503 504 /__tenant_down.html;
     location = /__tenant_down.html {{
         root /var/www/html;

@@ -698,6 +698,8 @@ def test_render_nginx_site_directives():
     # P5：后端不可达 → 友好页（到期被停的客户看到续费引导而非裸 502）
     assert "error_page 502 503 504 /__tenant_down.html;" in conf
     assert "location = /__tenant_down.html" in conf
+    # P1-9（2026-08-12）：扫描探测挡在 nginx，不烧隧道带宽（片段由 expose 幂等推送）
+    assert "include snippets/scanner-deny.conf;" in conf
 
 
 def test_render_nginx_site_port_mode():
@@ -710,6 +712,7 @@ def test_render_nginx_site_port_mode():
     # 反代主体与子域形态同源（SSE/WS/媒体语义一致，友好页同享）
     assert "proxy_buffering off;" in conf and "client_max_body_size 50m;" in conf
     assert "error_page 502 503 504 /__tenant_down.html;" in conf
+    assert "include snippets/scanner-deny.conf;" in conf
 
 
 def test_ensure_tunnel_port_idempotent(tmp_path: Path):

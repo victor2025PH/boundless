@@ -213,8 +213,16 @@ class AIClient(LoggerMixin):
         self._cb_half_open: bool = False
         self.logger.info("AI 客户端初始化")
 
-    async def initialize(self) -> bool:
-        """初始化 AI 客户端"""
+    async def initialize(self, *, defer_probe: bool = False) -> bool:
+        """初始化 AI 客户端。
+
+        ``defer_probe=True``（仅 main.py 冷启动路径传入，P3-1 2026-08-12 可靠性
+        复盘）：启动连接探针改后台任务——boot phases 实测该探针是 init 段最大
+        单项（DeepSeek 往返 4.3s），而 assistant.initialize() 根本不消费本方法的
+        返回值，阻塞探针在 boot 路径纯花时间不改行为。坏 key 告警/日志由后台
+        任务按原分支保留（只晚几秒）。``reload_ai_runtime``（桌面「模式切换是否
+        生效」的 UX 消费这个布尔值）不传本参数 → 阻塞语义原样。
+        """
         try:
             ai_config = self.config.get_ai_config()
             self._provider = (ai_config.get("provider") or "gemini").strip().lower()
@@ -283,7 +291,8 @@ class AIClient(LoggerMixin):
             self._cb_window = deque(maxlen=self._cb_window_size)
 
             if self._provider == "openai_compatible":
-                return await self._initialize_openai_compatible(ai_config, api_key)
+                return await self._initialize_openai_compatible(
+                    ai_config, api_key, defer_probe=defer_probe)
 
             if not GENAI_AVAILABLE:
                 self.logger.error("google-genai 库未安装，请运行: pip install google-genai")
@@ -308,7 +317,8 @@ class AIClient(LoggerMixin):
             self.logger.error(f"初始化 AI 客户端失败: {e}")
             return False
 
-    async def _initialize_openai_compatible(self, ai_config: Dict[str, Any], api_key: Optional[str]) -> bool:
+    async def _initialize_openai_compatible(self, ai_config: Dict[str, Any], api_key: Optional[str],
+                                            *, defer_probe: bool = False) -> bool:
         """Ollama / vLLM 等 OpenAI 兼容接口（base_url 形如 http://host:11434/v1）。"""
         self._oa_embed_client = None
         if not OPENAI_SDK_AVAILABLE:
@@ -505,6 +515,20 @@ class AIClient(LoggerMixin):
                     len(self._pool_entries),
                     ", ".join(e["name"] for e in self._pool_entries))
 
+        # boot 探针后台化（P3-1）：见 initialize() docstring。分支逻辑与阻塞路径
+        # 完全同构（_deferred_boot_probe），只是不再挡「进程起来 → /login 可服务」。
+        if defer_probe:
+            try:
+                self._boot_probe_task = asyncio.create_task(self._deferred_boot_probe())
+            except Exception:
+                self._boot_probe_task = None
+                self.logger.debug("后台启动探针创建失败（忽略，首个真实请求自会确认健康）",
+                                  exc_info=True)
+            self.logger.info(
+                "✅ AI 客户端初始化成功 — OpenAI 兼容 API (模型: %s, base: %s；"
+                "启动探针已后台化)", self.model, raw_base)
+            return True
+
         # 启动探针按 primary 模式分流（P1）：local/local_only 先探**本地主链**。
         # 纯本地部署常根本没配云端 key——旧逻辑只探云端，会把「本地一切就绪」误判成
         # 初始化失败：reload_ai_runtime 因此拒绝换绑（模式切换永远显示未生效），
@@ -535,6 +559,33 @@ class AIClient(LoggerMixin):
 
         self.logger.info("✅ AI 客户端初始化成功 — OpenAI 兼容 API (模型: %s, base: %s)", self.model, raw_base)
         return True
+
+    async def _deferred_boot_probe(self) -> None:
+        """boot 后台探针（P3-1）：跑与阻塞路径相同的分支，仅产日志/坏 key 告警。
+
+        绝不回写初始化状态——runtime 自有 主链重试 → 备用池 → 本地兜底 → canned
+        的降级链，探针结论只是观测。任何异常吞掉（探针不能反过来伤 boot）。
+        """
+        try:
+            if self._primary_mode in ("local", "local_only"):
+                if await self._run_boot_probe(self._test_local_connection()):
+                    self.logger.info(
+                        "AI 启动探针（后台）：本地主链就绪 (模型: %s)", self._fb_model)
+                    return
+                if self._primary_mode == "local_only":
+                    self.logger.error(
+                        "AI 启动探针（后台）：本地主链不可达且 local_only——"
+                        "请检查 ai.fallback.base_url / 模型是否已拉起")
+                    return
+                self.logger.warning("AI 启动探针（后台）：本地主链失败，改探云端")
+            if await self._run_boot_probe(self._test_openai_connection()):
+                self.logger.info("AI 启动探针（后台）：云端主链就绪 (模型: %s)", self.model)
+            else:
+                self.logger.error(
+                    "AI 启动探针（后台）：云端连接测试失败（坏 key 告警已按原路径触发；"
+                    "运行时降级链「重试→备用池→本地兜底→canned」不受影响）")
+        except Exception:
+            self.logger.debug("后台启动探针异常（忽略）", exc_info=True)
 
     async def _run_boot_probe(self, probe_coro) -> bool:
         """给启动连接探针套一个短上限（self._boot_probe_timeout）。
@@ -3296,6 +3347,11 @@ class AIClient(LoggerMixin):
         _daily_topics_hint = (context.get("_daily_topics_hint") or "").strip()
         if _daily_topics_hint:
             prompt_parts.append(_daily_topics_hint)
+        # 被骂回应指令（2026-08-12，skill_manager._inject_reply_freshness ③）：
+        # 有键即消费；末端位置压过 emotion_awareness 的通用共情条。
+        _temper_hint = (context.get("_temper_hint") or "").strip()
+        if _temper_hint:
+            prompt_parts.append(_temper_hint)
 
         # ★ 回复格式合同——与投递能力对齐（2026-08-08 重构，运营拍板）：
         #   bubbles 开 → 多行合同（投递层真的按行拆独立消息，行数与 max_parts 对齐）；
