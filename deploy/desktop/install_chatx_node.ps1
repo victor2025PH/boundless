@@ -190,10 +190,15 @@ if ($code -ne 0) {
     exit 3
   }
   Say "silent install failed 4x -- retrying in the console session (see note)"
-  schtasks /Delete /TN ChatXInstallFallback /F 2>$null | Out-Null
-  schtasks /Create /TN ChatXInstallFallback /SC ONCE /ST 23:59 /F /IT /RL LIMITED `
-    /TR ('"' + $Setup + '" /S') | Out-Null
-  schtasks /Run /TN ChatXInstallFallback | Out-Null
+  # schtasks via cmd /c: under ErrorActionPreference=Stop, a native command that
+  # writes to a REDIRECTED stderr raises NativeCommandError and kills the script
+  # (measured on .173 2026-08-13: the pre-delete of a not-yet-existing task did
+  # exactly that, so this fallback died before ever creating the task).
+  cmd /c 'schtasks /Delete /TN ChatXInstallFallback /F >nul 2>&1'
+  cmd /c ('schtasks /Create /TN ChatXInstallFallback /SC ONCE /ST 23:59 /F /IT /RL LIMITED /TR "\"' + $Setup + '\" /S" >nul 2>&1')
+  if ($LASTEXITCODE -ne 0) { Say "console-session task create FAILED"; exit 3 }
+  cmd /c 'schtasks /Run /TN ChatXInstallFallback >nul 2>&1'
+  if ($LASTEXITCODE -ne 0) { Say "console-session task run FAILED"; exit 3 }
   $deadline = (Get-Date).AddMinutes(4)
   while ((Get-Date) -lt $deadline) {
     Start-Sleep -Seconds 10
@@ -206,7 +211,7 @@ if ($code -ne 0) {
       break
     }
   }
-  schtasks /Delete /TN ChatXInstallFallback /F 2>$null | Out-Null
+  cmd /c 'schtasks /Delete /TN ChatXInstallFallback /F >nul 2>&1'
   if ($code -eq 0) { Say "console-session install OK" }
 }
 if ($code -ne 0) { exit 3 }

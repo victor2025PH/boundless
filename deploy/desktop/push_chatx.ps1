@@ -14,9 +14,15 @@
 # Usage:
 #   powershell -File deploy\desktop\push_chatx.ps1 -TargetSsh zhituo                # stage only
 #   powershell -File deploy\desktop\push_chatx.ps1 -TargetSsh zhituo -Install -Relaunch -Smoke
+#   powershell -File deploy\desktop\push_chatx.ps1 -TargetSsh zhituo -FreshInstall -Smoke -Relaunch
+#     ^ factory-fresh: backup(rename) data -> uninstall -> install. Codifies the
+#       2026-08-11 4-node rollout order so nobody re-improvises it (and nobody
+#       runs wipe AFTER backup again -- that used to eat the recovery copy).
+#       Old data survives as %APPDATA%\<dir>_bak<stamp>; delete once node is healthy.
 #
 # Exit: 0 ok / 2 no setup found / 3 stage or hash verify failed / 4 install failed
 #       5 smoke failed (install may still be fine; read the output)
+#       7 fresh-install prep failed (backup rename or uninstall; data dir locked?)
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)][string]$TargetSsh,
@@ -25,7 +31,8 @@ param(
   [switch]$Install,
   [switch]$Relaunch,
   [switch]$Smoke,
-  [switch]$VerifyLocal
+  [switch]$VerifyLocal,
+  [switch]$FreshInstall
 )
 
 $ErrorActionPreference = 'Stop'
@@ -51,7 +58,8 @@ Say ("sha256: " + $sha)
 $leaf = Split-Path -Leaf $Setup
 $stageFwd = $StageDir.Replace('\', '/')
 ssh $TargetSsh "mkdir `"$StageDir`" 2>nul & echo staged-dir-ok" | Out-Null
-foreach ($f in @('install_chatx_node.ps1', 'smoke_chatx_node.ps1', 'relaunch_chatx_node.ps1', 'verify_chatx_vs_local.ps1')) {
+foreach ($f in @('install_chatx_node.ps1', 'smoke_chatx_node.ps1', 'relaunch_chatx_node.ps1', 'verify_chatx_vs_local.ps1',
+                 'backup_chatx_data_node.ps1', 'uninstall_chatx_node.ps1', 'wipe_chatx_data_node.ps1')) {
   scp -q (Join-Path $here $f) ("{0}:{1}/{2}" -f $TargetSsh, $stageFwd, $f)
 }
 Say "uploading installer ..."
@@ -63,10 +71,24 @@ if (-not $remote -or ($remote.Trim().ToUpper() -ne $sha)) {
 }
 Say "staged + hash verified on target"
 
-if (-not $Install) {
+if (-not ($Install -or $FreshInstall)) {
   Say "stage-only done. To install (stops the running app!):"
   Say ("  ssh {0} powershell -ExecutionPolicy Bypass -File {1}\install_chatx_node.ps1 -Setup {1}\{2} -ExpectSha256 {3}" -f $TargetSsh, $StageDir, $leaf, $sha)
   exit 0
+}
+
+# --- 2.5 fresh-install prep (explicit + destructive-by-rename) -----------------
+# Proven order from the 2026-08-11 rollout: backup(rename, app sees factory-fresh,
+# recovery copy stays on disk) -> uninstall -> install. Deliberately NO wipe step:
+# backup already clears the updater cache, and running wipe after backup is how
+# node 198 lost its recovery copy (wipe now skips *bak20* too -- belt and braces).
+if ($FreshInstall) {
+  Say "fresh-install prep: backup(rename) data ..."
+  ssh $TargetSsh "powershell -ExecutionPolicy Bypass -File $StageDir\backup_chatx_data_node.ps1"
+  if ($LASTEXITCODE -ne 0) { Say ("backup FAILED exit=" + $LASTEXITCODE + " (data dir locked?)"); exit 7 }
+  Say "fresh-install prep: uninstall old app ..."
+  ssh $TargetSsh "powershell -ExecutionPolicy Bypass -File $StageDir\uninstall_chatx_node.ps1"
+  if ($LASTEXITCODE -ne 0) { Say ("uninstall FAILED exit=" + $LASTEXITCODE); exit 7 }
 }
 
 # --- 3. install (disruptive: stops the app; installer has its own retry) ------
