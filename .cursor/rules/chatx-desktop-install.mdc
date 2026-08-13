@@ -1,38 +1,52 @@
 ---
-description: 智聊(ChatX)桌面安装包的打包与坐席机安装/发版 SOP。凡是「打包智聊 / 安装智聊 / 发版 / 装给坐席机 173/198/104/140 / push_chatx」这类任务，先按本规则执行，不要重新排查 173 的安装崩溃。
+description: 智聊(ChatX)桌面包的打包与坐席机安装/发版 SOP。凡是「打包智聊 / 安装智聊 / 发版 / 装到 173/198/104/140 / push_chatx / 重装 / 清空重装」这类任务，先按本规则执行；173 的安装崩溃按既定处置，不要重新排查。
 alwaysApply: false
 ---
 
-# 智聊桌面包发版 SOP（2026-08-13 三机实测有效）
+# 智聊桌面包发版 SOP（2026-08-13 版，三机实测）
 
-## 机器与 SSH 别名（由 deploy/machines.json 生成，勿手改 ssh config）
+## 内测约定：「安装」＝先打包最新代码
 
-| 口头说法 | SSH 别名 | 系统 | 备注 |
+用户说「安装到这几台机器」＝**从当前工作树打全新安装包再装**，不是拿 `dist/` 里的旧包直接推。
+完整动作序列（每步都有实测背书，别跳步）：
+
+1. **探活+登记**：`engines\chengjie\scripts\agent_probe.ps1 -Intent "..."`；`services/messenger-web`、`shared/inject`、`desktop/` 有 ACTIVE（≤10min）先等静默——它们都会被打进包（extraResources）。
+2. **版本号**：`engines/chengjie/desktop/package.json` 的 `version`+`displayVersion` 一起递增（可能已被并行线 bump，确认即可，勿重复加）。
+3. **后端指纹**：`cd engines/chengjie/desktop && python build/check_backend_freshness.py`；红→`npm run build:backend`（约 12 分钟）。
+4. **打包**：`npm run dist:win`（predist 自带门禁+双冒烟；产物 `dist/ChatX-Setup-<ver>.exe` ~476MB，**必须落在 desktop\dist**——push 默认从那里取最新）。
+5. **逐台推**（默认升级保数据）：`powershell -File deploy\desktop\push_chatx.ps1 -TargetSsh <别名> -Install -Relaunch -Smoke`
+6. **终验**：`& deploy\desktop\chatx_fleet_status.ps1 -Targets yunsheng,kouxing,lianbei`——**以 fleet 台账的运行版本为准**（smoke 用的是一次性数据目录，只证明包能起，不证明坐席在跑新版）。
+7. **收尾**：删各机 `C:\Users\Administrator\Downloads\chatx` 旧安装包只留当前版；`agent_probe.ps1 -Intent ... -Done`。
+
+## 机器映射（ssh config 由 deploy/machines.json 生成）
+
+| 说法 | 别名 | 系统 | 备注 |
 |---|---|---|---|
-| 173 | `yunsheng` | Win11 | 用户是 `admin`；NSIS 静默安装高频崩溃（见下） |
-| 198 | `kouxing`（旧名 zhituo） | Win10 | C 盘小，装前先查剩余空间 |
-| 104 | `lianbei`（旧名 huanyan-node） | Win10 | |
-| 140 | `tingxie`（旧名 tongchuan） | Win10 | 历史坐席节点 |
+| 173 | `yunsheng` | Win11 | 用户 `admin`；NSIS 静默安装高频崩（见下） |
+| 198 | `kouxing` | Win10 | C 盘小，push 已内建 <3GB 快败预检（exit 8） |
+| 104 | `lianbei` | Win10 | |
+| 140 | `tingxie` | Win10 | 历史坐席节点 |
 
-## 标准流程（按序执行，每步都有实测背书）
+## 三档安装语义（都从 117 一条命令发起）
 
-1. **共享树协议**：`engines\chengjie\scripts\agent_probe.ps1 -Intent "..."` 登记；`services/messenger-web`、`shared/inject`、`desktop/` 若 ACTIVE（≤10 分钟内有人在写）先等静默——它们都会被打进安装包（extraResources）。
-2. **bump 版本**：`engines/chengjie/desktop/package.json` 的 `version` 与 `displayVersion` 一起改（如 1.0.23 / 1.023）。
-3. **后端指纹**：`cd engines/chengjie/desktop && python build/check_backend_freshness.py`；红了先 `npm run build:backend`（约 12 分钟，PyInstaller）。
-4. **打包**：`npm run dist:win`——predist 自带门禁（boot-invariants、种子暂存、安装版+内测种子双冒烟），坏包出不了生。产物 `dist/ChatX-Setup-<ver>.exe`（约 476MB）。
-5. **逐台安装（保数据）**：
-   `powershell -File deploy\desktop\push_chatx.ps1 -TargetSsh <别名> -Install -Relaunch -Smoke`
-   清档重装才用 `-FreshInstall`（内部顺序=备份改名→卸载→装，绝不先 wipe）。
-6. **终验**：`deploy\desktop\chatx_fleet_status.ps1 -Targets yunsheng,kouxing,lianbei` 全 UP 且 displayVersion 是新版。
-7. **收尾**：删各机暂存目录旧安装包（只留当前版，见下）；意向板 `-Done` 撤登记。
+| 目的 | 命令追加参数 | 数据结果 |
+|---|---|---|
+| 日常升级 | `-Install -Relaunch -Smoke` | 全部数据保留 |
+| **清空重装但保登录** | `-FreshInstall -KeepAccounts -Relaunch -Smoke` | 聊天库/缓存/设置清空重播种；**登录态保留**（网页分区+协议会话+账号注册表+sidecar profile+overlay），经 `restore_chatx_accounts_node.ps1` 从 `_bak` 拷回；首启播种只补缺失不覆盖 |
+| 彻底出厂 | `-FreshInstall -Relaunch -Smoke` | 全部清空（账号也没），旧数据留 `%APPDATA%\<dir>_bak<stamp>` 恢复副本 |
 
-## 173 专属坑（每次装都会撞，按此处置、别再排查）
+`_bak` 恢复副本只许人工删除（wipe 脚本会跳过 `*bak20*`）；节点确认健康后再清。
 
-- **现象**：`installer exit=-1073741819`（0xC0000005）连续崩——NSIS System.dll 在 SSH 会话里的已知抖动，Win11（173）上高发；**不是安装包坏了**（sha256 上传后已校验）。
-- **处置**：不需要人工干预。`install_chatx_node.ps1`（2026-08-13 修复后）自带 4 次静默重试 + 控制台会话计划任务兜底（要求 173 控制台有人登录，schtasks /IT）。若整条 push 仍失败，**原样重推一次** push_chatx——历史实测最多两轮必成。
-- **别做**：别 RDP 上去手点安装包；别在重试中途 kill；别删脚本里的重试/兜底逻辑（注释里有 3 台×多轮实测记录，2026-08-09 与 08-13 两次翻车都有归档）。
-- **风险意识**：脚本是先卸旧版再装新版——install 一旦失败，该机处于**无安装状态**，必须立刻重推直到成功，不能放着收工。
+## 173 专属坑（每次都撞，按此处置）
 
-## 暂存目录纪律
+- `installer exit=-1073741819`(0xC0000005) 连崩＝NSIS System.dll 在 SSH 会话的已知抖动（Win11 高发），**不是包坏**（sha256 已验）。脚本自带 4 次重试+控制台会话计划任务兜底（2026-08-13 修复过 PS5.1 stderr 终止 bug）。
+- push 整体失败→**立刻原样重推**（历史最多两轮必成）。install 是先卸旧再装新，失败时机器处于**无安装状态**，绝不能放着收工。
+- 别 RDP 手点安装、别中途 kill、别删脚本重试逻辑。
 
-每次发版会在目标机 `C:\Users\Administrator\Downloads\chatx` 留下约 476MB 的安装包，积压会吃满 C 盘（198 实测曾只剩 2.5GB 导致装不进）。装完健康验证后：删旧安装包，只保留当前运行版本对应的那个。
+## 踩过的坑台账（改这套工具/流程前先读）
+
+- **fleet 参数**：`powershell -File xx.ps1 -Targets a,b,c` 绑成单字符串→全队显示 unreachable 假象；脚本已自拆逗号，但报「未安装/不可达」时先怀疑调用方式再怀疑机器。
+- **磁盘**：每次发版在暂存目录攒 476MB；198 曾剩 2.5GB 装不进。push 已内建预检，装完照第 7 步清旧包。
+- **本机(117)也装着智聊坐席端**：测试任何带「杀 telegram-ai-desktop 进程」步骤的节点脚本，必须用合成 `-AppDataRoot`（restore 脚本对非真实 APPDATA 自动不杀进程——2026-08-13 曾误杀 117 在用的智聊）。
+- **PS 引号**：远程命令用单引号外壳内嵌 `\"`；多行提交信息用 here-string 写临时文件 `git commit -F`（bash heredoc 在 PowerShell 必炸）。
+- **验证**：升级/重装后一律 fleet 台账终验运行版本，不要只看 smoke OK。

@@ -19,10 +19,18 @@
 #       2026-08-11 4-node rollout order so nobody re-improvises it (and nobody
 #       runs wipe AFTER backup again -- that used to eat the recovery copy).
 #       Old data survives as %APPDATA%\<dir>_bak<stamp>; delete once node is healthy.
+#   powershell -File deploy\desktop\push_chatx.ps1 -TargetSsh zhituo -FreshInstall -KeepAccounts -Relaunch -Smoke
+#     ^ factory-fresh BUT the operator's logins survive: after the fresh install,
+#       restore_chatx_accounts_node.ps1 copies the login/account artifacts
+#       (web partitions, protocol sessions+registry, sidecar profiles, overlay)
+#       back from the _bak dir. First-boot seeding only fills MISSING files, so
+#       the restored logins are never overwritten. Chat dbs/caches stay fresh.
 #
 # Exit: 0 ok / 2 no setup found / 3 stage or hash verify failed / 4 install failed
 #       5 smoke failed (install may still be fine; read the output)
 #       7 fresh-install prep failed (backup rename or uninstall; data dir locked?)
+#       8 target disk too low (clean old setups in the stage dir first)
+#       9 account restore failed (recovery _bak dir is still intact on the node)
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)][string]$TargetSsh,
@@ -32,11 +40,17 @@ param(
   [switch]$Relaunch,
   [switch]$Smoke,
   [switch]$VerifyLocal,
-  [switch]$FreshInstall
+  [switch]$FreshInstall,
+  [switch]$KeepAccounts
 )
 
 $ErrorActionPreference = 'Stop'
 function Say($m) { Write-Output ("[push] " + $m) }
+
+if ($KeepAccounts -and -not $FreshInstall) {
+  Say "-KeepAccounts only makes sense with -FreshInstall (plain -Install keeps ALL data already)"
+  exit 2
+}
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path            # deploy\desktop
 $repo = Split-Path -Parent (Split-Path -Parent $here)              # repo root
@@ -54,12 +68,27 @@ $sha = (Get-FileHash $Setup -Algorithm SHA256).Hash
 Say ("setup: {0} ({1} MB)" -f (Split-Path -Leaf $Setup), $sz)
 Say ("sha256: " + $sha)
 
+# --- 1.5 disk preflight (2026-08-13 lesson: .198 was down to 2.5 GB free ------
+# mid-rollout because every release had parked another 476 MB setup in the stage
+# dir; the NSIS unpack needs ~2 GB on top of the upload). Fail fast + tell the
+# operator what to clean instead of dying halfway through a 476 MB scp.
+$freeRaw = ssh $TargetSsh 'powershell -NoProfile -Command "[math]::Round((Get-PSDrive C).Free/1GB,1)"'
+$freeGb = 0.0
+if (-not [double]::TryParse(("$freeRaw".Trim()), [ref]$freeGb)) { $freeGb = 0.0 }
+Say ("target C: free = " + $freeGb + " GB")
+if ($freeGb -lt 3.0) {
+  Say "target disk too low (<3 GB). Clean old setups first, e.g.:"
+  Say ("  ssh {0} powershell -NoProfile -Command `"Get-ChildItem {1} -Filter ChatX-Setup-*.exe | Remove-Item -Force`"" -f $TargetSsh, $StageDir)
+  exit 8
+}
+
 # --- 2. stage: scripts + installer, then verify the hash on the far end -------
 $leaf = Split-Path -Leaf $Setup
 $stageFwd = $StageDir.Replace('\', '/')
 ssh $TargetSsh "mkdir `"$StageDir`" 2>nul & echo staged-dir-ok" | Out-Null
 foreach ($f in @('install_chatx_node.ps1', 'smoke_chatx_node.ps1', 'relaunch_chatx_node.ps1', 'verify_chatx_vs_local.ps1',
-                 'backup_chatx_data_node.ps1', 'uninstall_chatx_node.ps1', 'wipe_chatx_data_node.ps1')) {
+                 'backup_chatx_data_node.ps1', 'uninstall_chatx_node.ps1', 'wipe_chatx_data_node.ps1',
+                 'restore_chatx_accounts_node.ps1')) {
   scp -q (Join-Path $here $f) ("{0}:{1}/{2}" -f $TargetSsh, $stageFwd, $f)
 }
 Say "uploading installer ..."
@@ -95,6 +124,18 @@ if ($FreshInstall) {
 Say "installing on target (this stops the running app) ..."
 ssh $TargetSsh "powershell -ExecutionPolicy Bypass -File $StageDir\install_chatx_node.ps1 -Setup $StageDir\$leaf -ExpectSha256 $sha -KeepSetup"
 if ($LASTEXITCODE -ne 0) { Say ("install FAILED exit=" + $LASTEXITCODE); exit 4 }
+
+# --- 3.5 keep-accounts: copy login artifacts back from the _bak dir -----------
+# BEFORE the first launch (seeding fills only what is missing, so restored
+# logins survive; restore itself wins over any half-seeded fresh state).
+if ($FreshInstall -and $KeepAccounts) {
+  Say "restoring account/login artifacts from the recovery dir ..."
+  ssh $TargetSsh "powershell -ExecutionPolicy Bypass -File $StageDir\restore_chatx_accounts_node.ps1"
+  if ($LASTEXITCODE -ne 0) {
+    Say ("account restore FAILED exit=" + $LASTEXITCODE + " (recovery _bak dir is intact; fix + rerun restore on the node)")
+    exit 9
+  }
+}
 
 # --- 4. relaunch in the console session (operator sees the app come back) -----
 if ($Relaunch) {
