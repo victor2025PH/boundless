@@ -85,12 +85,20 @@ def fb_env():
     ))
     stack.enter_context(patch.object(
         fb, "_list_messenger_conversations",
-        side_effect=lambda d, n: list(knobs["requests_list"][:n])
+        # P0 (2026-08-15): 被 mock 方法新增 keyword-only max_scrolls, 替身
+        # 跟随真实签名接受 **kwargs (否则调用传 max_scrolls 会 TypeError).
+        side_effect=lambda d, n, **kw: list(knobs["requests_list"][:n])
     ))
     stack.enter_context(patch.object(fb, "_open_and_read_conversation",
                                      side_effect=_open_and_read))
     stack.enter_context(patch.object(fb, "_ai_reply_and_send",
                                      side_effect=_ai_reply))
+    # 测试隔离修复 (2026-08-15): 这些 auto_reply=True 用例原本没 mock 对话
+    # 所有权锁, 依赖真实 conversation_claims DB 状态 —— 本机真实 DB 残留 claim
+    # 会让 `not claimed` 短路 continue, 整条链空转 (calls=0)。锁的语义由
+    # test_fb_messenger_active_lock 专测, 这里恒 claimed 以隔离主链。
+    stack.enter_context(patch("src.host.fb_store.try_claim_conversation",
+                              return_value={"claimed": True, "owner": "devA"}))
     stack.enter_context(patch.object(fb, "guarded",
                                      return_value=nullcontext()))
     stack.enter_context(patch(

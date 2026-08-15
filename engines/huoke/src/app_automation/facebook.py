@@ -10722,8 +10722,18 @@ class FacebookAutomation(BaseAutomation):
                               preset_key: str = "",
                               device_id: Optional[str] = None,
                               persona_key: Optional[str] = None,
-                              phase: Optional[str] = None) -> Dict[str, Any]:
+                              phase: Optional[str] = None, *,
+                              open_gate=None) -> Dict[str, Any]:
         """主收件箱(Messenger)— Sprint 2 完整实现 + 2026-04-22 persona 改造。
+
+        P4 (2026-08-16, 117↔176 交接预留): ``open_gate`` = 可注入谓词
+        ``(conv: Dict) -> bool``，作用于两处——①打开门判定（未读 OR 通知 OR
+        预览变化）为 True 之后的额外过滤；②P2 屏外搜索补捞的目标集过滤
+        （谓词收到 ``{"name": <peer>, "via": "search"}``）。默认 ``None`` =
+        现行为零变化。谓词抛异常一律 fail-open（不因谓词 bug 阻断收件箱）。
+        谓词拒绝的会话**不登记预览基线**——referral 定向轮跳过的会话，其
+        预览变化信号必须留给正常轮询召回。176 的 referral_mode 实装 =
+        签名加 3 个 kwargs + 构造该谓词注入，不再碰门逻辑本体。
 
         2026-04-22 改动:
           * ``max_conversations`` 未显式覆盖时,按 phase 从
@@ -10748,14 +10758,41 @@ class FacebookAutomation(BaseAutomation):
         if ab_cfg and max_conversations == 20 and "max_conversations" in ab_cfg:
             max_conversations = int(ab_cfg.get("max_conversations")
                                     or max_conversations)
+        # P0 (2026-08-15): 收件箱增量滚动屏数 (默认 3, playbook 可覆写).
+        max_scrolls = 3
+        if ab_cfg and "max_scrolls" in ab_cfg:
+            try:
+                max_scrolls = int(ab_cfg.get("max_scrolls"))
+            except (TypeError, ValueError):
+                max_scrolls = 3
+        # P2 (2026-08-15): 屏外会话搜索打开上限。搜索是主动 UI 操作(有风控
+        # 成本), 保守封顶; playbook 可配 0 关闭, 或按 phase 调 (cold_start 宜 0)。
+        max_search_opens = 2
+        if ab_cfg and "max_search_opens" in ab_cfg:
+            try:
+                max_search_opens = int(ab_cfg.get("max_search_opens"))
+            except (TypeError, ValueError):
+                max_search_opens = 2
 
         stats = {"opened": False, "conversations_listed": 0,
                  "unread_processed": 0, "replied": 0,
                  "wa_referrals": 0, "errors": 0,
+                 # P0 观测: 让「漏读/错人/重复」第一次可度量
+                 "unread_detected": 0, "title_mismatch": 0,
+                 "dedup_skipped": 0, "empty_extract": 0,
+                 # P1 观测: 召回增强来源分布
+                 "notif_active_peers": 0, "notif_forced": 0,
+                 "preview_forced": 0, "notif_offscreen": 0,
+                 # P2 观测: 屏外搜索打开 (只读不回)
+                 "search_opened": 0, "search_mismatch": 0,
+                 "search_failed": 0,
+                 # P4 观测: open_gate 谓词拒绝数 (referral 定向轮拦截量)
+                 "gate_skipped": 0,
                  "auto_reply": auto_reply,
                  "persona_key": persona_key or "",
                  "phase": eff_phase,
                  "max_conversations_applied": max_conversations,
+                 "max_scrolls_applied": max_scrolls,
                  "messages": []}
 
         # F3 (A→B review Q10): 拿 device-level "messenger_active" 锁,和 A 的
@@ -10763,6 +10800,11 @@ class FacebookAutomation(BaseAutomation):
         # A 的 device_section_lock 实现在拿不到锁超时时 raise RuntimeError。
         try:
             with _messenger_active_lock(did, timeout=30.0):
+                # P1: 打开 App 前预扫系统通知 (dumpsys, 零 App 交互/零已读回执),
+                # 把「未读判定漏判 / 不在首屏」的活动会话捞出来强制打开。
+                notif_peers = self._prescan_notifications(d, did)
+                _notif_names = set(notif_peers.keys())
+                stats["notif_active_peers"] = len(_notif_names)
                 d.app_stop(MESSENGER_PACKAGE)
                 time.sleep(0.5)
                 d.app_start(MESSENGER_PACKAGE)
@@ -10790,15 +10832,59 @@ class FacebookAutomation(BaseAutomation):
                     stats["risk_detected"] = msg
                     return stats
 
-                convs = self._list_messenger_conversations(d, max_conversations)
+                convs = self._list_messenger_conversations(
+                    d, max_conversations, max_scrolls=max_scrolls)
                 stats["conversations_listed"] = len(convs)
+                stats["unread_detected"] = sum(
+                    1 for c in convs if c.get("unread"))
+                # P1: 通知里有活动、但列表没列出的 = 屏外漏读候选 (P2 用搜索打开)
+                _listed_names = {c.get("name") for c in convs}
+                stats["notif_offscreen"] = sum(
+                    1 for p in _notif_names if p and p not in _listed_names)
 
                 _conv_lock_skipped = 0
                 for c in convs:
-                    if not c.get("unread"):
+                    name = c.get("name", "")
+                    fp = c.get("preview_fp", "")
+                    # P1: 打开门 = 未读判定 OR 通知活动 OR 预览内容核变化。
+                    # 三条正交召回信号叠加, 修「未读判定假阴 → 漏读」。
+                    forced_notif = bool(name) and name in _notif_names
+                    preview_changed = False
+                    try:
+                        from src.host.fb_store import (
+                            messenger_row_preview_changed)
+                        preview_changed = (messenger_row_preview_changed(
+                            did, name, fp) is True)
+                    except Exception:
+                        preview_changed = False
+                    should_open = bool(
+                        c.get("unread") or forced_notif or preview_changed)
+                    # P4 (176 referral_mode 注入点): 门开之后的额外谓词过滤。
+                    # 拒绝时不登记基线 (变化信号留给正常轮), 异常 fail-open。
+                    if should_open and open_gate is not None:
+                        try:
+                            if not open_gate(c):
+                                stats["gate_skipped"] += 1
+                                continue
+                        except Exception:
+                            pass
+                    if not should_open:
+                        # 已读且无新信号: 只登记基线指纹, 不打开 (省一次进出)
+                        try:
+                            from src.host.fb_store import (
+                                update_messenger_row_state)
+                            update_messenger_row_state(did, name, preview_fp=fp)
+                        except Exception:
+                            pass
                         continue
                     if stats["unread_processed"] >= max_conversations:
                         break
+                    # 强制打开来源计数 (未读判定没判出、靠 P1 信号救回的)
+                    if not c.get("unread"):
+                        if forced_notif:
+                            stats["notif_forced"] += 1
+                        elif preview_changed:
+                            stats["preview_forced"] += 1
                     # Phase B1: 跨设备对话所有权锁 — 防止多设备同时回复同一人
                     if auto_reply and c.get("name"):
                         try:
@@ -10818,16 +10904,28 @@ class FacebookAutomation(BaseAutomation):
                         detail = self._open_and_read_conversation(d, c, did,
                                                                   preset_key=preset_key)
                         if detail:
+                            # P0 观测: 标题不符 / 去重 / 空提取分别计数
+                            if detail.get("title_mismatch"):
+                                stats["title_mismatch"] += 1
+                            if detail.get("deduped"):
+                                stats["dedup_skipped"] += 1
                             stats["unread_processed"] += 1
                             stats["messages"].append(detail)
 
+                            # P0: 以「会话内校验后的名字」为准做后续回复/事件归属,
+                            # 而非可能脏/点错的列表名
+                            reply_peer = detail.get("peer_name") or c["name"]
+                            inc = detail.get("incoming_text")
+                            if not inc and not detail.get("deduped"):
+                                stats["empty_extract"] += 1
+
                             # P7 §7.1 message_received: 默认"只读",触发 reply 后覆写
                             msg_decision = "read_only"
-                            if auto_reply and detail.get("incoming_text"):
+                            if auto_reply and inc:
                                 reply, decision = self._ai_reply_and_send(
                                     d, did,
-                                    peer_name=c["name"],
-                                    incoming_text=detail["incoming_text"],
+                                    peer_name=reply_peer,
+                                    incoming_text=inc,
                                     referral_contact=referral_contact,
                                     preset_key=preset_key,
                                     persona_key=persona_key,
@@ -10839,12 +10937,20 @@ class FacebookAutomation(BaseAutomation):
                                 msg_decision = decision  # reply/wa_referral/skip
                             # P7 §7.1: 只要拿到 incoming 就写 message_received 事件
                             # (不管 B 是否 reply; auto_reply=False 写 'read_only')
-                            if detail.get("incoming_text"):
+                            if inc:
                                 _emit_contact_event_safe(
-                                    did, c["name"], "message_received",
+                                    did, reply_peer, "message_received",
                                     preset_key=preset_key,
                                     meta={"decision": msg_decision})
 
+                        # P1: 打开处理后落基线指纹 (下次同预览不再重复打开)
+                        try:
+                            from src.host.fb_store import (
+                                update_messenger_row_state)
+                            update_messenger_row_state(
+                                did, name, preview_fp=fp, mark_opened=True)
+                        except Exception:
+                            pass
                         d.press("back")
                         time.sleep(random.uniform(1.0, 1.8))
                     except Exception as e:
@@ -10855,6 +10961,76 @@ class FacebookAutomation(BaseAutomation):
                         except Exception:
                             pass
                 stats["conv_lock_skipped"] = _conv_lock_skipped
+
+                # P2: 屏外会话搜索打开 — 通知里有活动、但不在列表可见项的 peer,
+                # 主动搜索进入读取。刻意**只读入库、不自动回复**: 搜索误点 +
+                # 自动回复 = 给错误的人发消息 (P0 摸底的 PEER_ID_INVALID 事故面),
+                # 风险不可接受; 补捞的会话下一轮进了列表再正常回复。逐个搜索有
+                # 风控成本, 已由 max_search_opens 严格限流。
+                try:
+                    from .messenger_notifications import (
+                        offscreen_search_targets)
+                    _targets = offscreen_search_targets(
+                        list(_notif_names), list(_listed_names),
+                        max_search_opens)
+                except Exception:
+                    _targets = []
+                # P4 (176 referral_mode 注入点): 搜索目标集同受 open_gate 约束
+                # (referral 定向轮只搜 peers_filter 命中者); 异常 fail-open。
+                if _targets and open_gate is not None:
+                    _kept = []
+                    for _p in _targets:
+                        try:
+                            if open_gate({"name": _p, "via": "search"}):
+                                _kept.append(_p)
+                        except Exception:
+                            _kept.append(_p)
+                    if len(_targets) - len(_kept) > 0:
+                        stats["gate_skipped"] += len(_targets) - len(_kept)
+                    _targets = _kept
+                for _peer in _targets:
+                    if stats["unread_processed"] >= max_conversations:
+                        break
+                    try:
+                        _entered = self._open_thread_by_search(d, did, _peer)
+                    except Exception:
+                        _entered = False
+                    if not _entered:
+                        stats["search_failed"] += 1
+                        continue
+                    try:
+                        detail = self._open_and_read_conversation(
+                            d, {"name": _peer, "bounds": None}, did,
+                            preset_key=preset_key, entered=True,
+                            verify_name=_peer)
+                        if detail and detail.get("search_mismatch"):
+                            # 搜索误点到别人 → 已放弃, 不入库
+                            stats["search_mismatch"] += 1
+                        elif detail:
+                            stats["search_opened"] += 1
+                            if detail.get("deduped"):
+                                stats["dedup_skipped"] += 1
+                            inc = detail.get("incoming_text")
+                            reply_peer = detail.get("peer_name") or _peer
+                            if inc:
+                                stats["unread_processed"] += 1
+                                # 只读: message_received 记 read_only + via=search
+                                _emit_contact_event_safe(
+                                    did, reply_peer, "message_received",
+                                    preset_key=preset_key,
+                                    meta={"decision": "read_only",
+                                          "via": "search"})
+                            elif not detail.get("deduped"):
+                                stats["empty_extract"] += 1
+                        d.press("back")
+                        time.sleep(random.uniform(1.0, 1.8))
+                    except Exception as e:
+                        log.debug("[search_open] 读取失败 peer=%s: %s", _peer, e)
+                        stats["search_failed"] += 1
+                        try:
+                            d.press("back")
+                        except Exception:
+                            pass
         except RuntimeError as e:
             if "device_section_lock timeout" in str(e):
                 log.info("[check_messenger_inbox] messenger_active 锁超时,skip: %s", e)
@@ -10866,6 +11042,13 @@ class FacebookAutomation(BaseAutomation):
         except Exception as e:
             stats["error"] = str(e)
             log.warning("[check_messenger_inbox] 失败: %s", e)
+        # P3: 落库本次召回信号快照 (best-effort, 供体检报告聚合验证启发式有效性)
+        try:
+            from src.host.fb_store import record_messenger_recall_run
+            record_messenger_recall_run(did, stats, phase=eff_phase,
+                                        preset_key=preset_key)
+        except Exception:
+            pass
         return stats
 
     @_with_fb_foreground
@@ -10908,16 +11091,26 @@ class FacebookAutomation(BaseAutomation):
         # P6: playbook 也可配 auto_reply (覆盖默认 True)
         if ab_cfg and "auto_reply_stranger" in ab_cfg:
             auto_reply = bool(ab_cfg.get("auto_reply_stranger"))
+        # P0 (2026-08-15): 陌生人列表增量滚动屏数
+        max_scrolls = 3
+        if ab_cfg and "max_scrolls" in ab_cfg:
+            try:
+                max_scrolls = int(ab_cfg.get("max_scrolls"))
+            except (TypeError, ValueError):
+                max_scrolls = 3
 
         stats: Dict[str, Any] = {
             "opened": False, "requests_seen": 0,
             "messages_collected": 0,
             "replies_sent": 0, "wa_referrals": 0, "reply_skipped": 0,
             "errors": 0,
+            # P0 观测
+            "title_mismatch": 0, "dedup_skipped": 0, "empty_extract": 0,
             "auto_reply": auto_reply,
             "persona_key": persona_key or "",
             "phase": eff_phase,
             "max_requests": max_requests,
+            "max_scrolls_applied": max_scrolls,
         }
 
         # F3 (A→B review Q10): 和 A 的 send_greeting fallback 串行化
@@ -10940,7 +11133,8 @@ class FacebookAutomation(BaseAutomation):
                     stats["risk_detected"] = msg
                     return stats
 
-                convs = self._list_messenger_conversations(d, max_requests)
+                convs = self._list_messenger_conversations(
+                    d, max_requests, max_scrolls=max_scrolls)
                 stats["requests_seen"] = len(convs)
 
                 for c in convs[:max_requests]:
@@ -10962,36 +11156,45 @@ class FacebookAutomation(BaseAutomation):
                         detail = self._open_and_read_conversation(d, c, did,
                                                                   peer_type="stranger",
                                                                   preset_key=preset_key)
-                        if detail and detail.get("incoming_text"):
-                            stats["messages_collected"] += 1
+                        if detail:
+                            if detail.get("title_mismatch"):
+                                stats["title_mismatch"] += 1
+                            if detail.get("deduped"):
+                                stats["dedup_skipped"] += 1
+                            inc = detail.get("incoming_text")
+                            reply_peer = detail.get("peer_name") or c.get("name")
+                            if inc:
+                                stats["messages_collected"] += 1
 
-                            # P7 §7.1 message_received: stranger 场景默认 read_only
-                            msg_decision = "read_only"
-                            # P6: 陌生人场景自动回复 (peer_type='stranger' 触发
-                            # referral_gate 保守配置)
-                            if auto_reply and not detail.get("risk"):
-                                reply, decision = self._ai_reply_and_send(
-                                    d, did,
-                                    peer_name=c["name"],
-                                    incoming_text=detail["incoming_text"],
-                                    referral_contact=referral_contact,
+                                # P7 §7.1 message_received: stranger 默认 read_only
+                                msg_decision = "read_only"
+                                # P6: 陌生人自动回复 (peer_type='stranger' 触发
+                                # referral_gate 保守配置)
+                                if auto_reply and not detail.get("risk"):
+                                    reply, decision = self._ai_reply_and_send(
+                                        d, did,
+                                        peer_name=reply_peer,
+                                        incoming_text=inc,
+                                        referral_contact=referral_contact,
+                                        preset_key=preset_key,
+                                        persona_key=persona_key,
+                                        peer_type="stranger",
+                                    )
+                                    if reply:
+                                        stats["replies_sent"] += 1
+                                        if decision == "wa_referral":
+                                            stats["wa_referrals"] += 1
+                                    else:
+                                        stats["reply_skipped"] += 1
+                                    msg_decision = decision
+                                # P7 §7.1: message_received 带 peer_type=stranger
+                                _emit_contact_event_safe(
+                                    did, reply_peer, "message_received",
                                     preset_key=preset_key,
-                                    persona_key=persona_key,
-                                    peer_type="stranger",
-                                )
-                                if reply:
-                                    stats["replies_sent"] += 1
-                                    if decision == "wa_referral":
-                                        stats["wa_referrals"] += 1
-                                else:
-                                    stats["reply_skipped"] += 1
-                                msg_decision = decision
-                            # P7 §7.1: message_received 带 peer_type=stranger 区分
-                            _emit_contact_event_safe(
-                                did, c["name"], "message_received",
-                                preset_key=preset_key,
-                                meta={"decision": msg_decision,
-                                      "peer_type": "stranger"})
+                                    meta={"decision": msg_decision,
+                                          "peer_type": "stranger"})
+                            elif not detail.get("deduped"):
+                                stats["empty_extract"] += 1
 
                         d.press("back")
                         time.sleep(random.uniform(0.8, 1.5))
@@ -11446,111 +11649,353 @@ class FacebookAutomation(BaseAutomation):
         "RecyclerView", "ListView", "ScrollView", "LinearLayout",
     )
 
-    def _list_messenger_conversations(self, d, max_n: int) -> List[Dict]:
-        """从 Messenger 主列表 dump 当前可见对话。返回 [{name, unread, bounds}].
+    def _prescan_notifications(self, d, did: str) -> Dict[str, str]:
+        """P1: 打开 App 前用 `dumpsys notification` 预扫有活动的 peer。
+
+        返回 {peer_name: thread_token}。零 App 交互 / 零已读回执 —— 纯读系统
+        通知, 用于把「未读判定漏判 / 不在首屏」的会话在后续 UI 读取时强制打开。
+        任何异常返回 {}, 完全退化到纯 UI 读取, 绝不阻塞主链。
+        """
+        try:
+            raw = d.shell("dumpsys notification --noredact").output
+        except Exception:
+            try:
+                # 老 uiautomator2: shell 返回 (output, exit_code) 或直接 str
+                res = d.shell("dumpsys notification --noredact")
+                raw = res if isinstance(res, str) else getattr(
+                    res, "output", "") or (res[0] if isinstance(res, tuple) else "")
+            except Exception as e:
+                log.debug("[notif_prescan] dumpsys 失败: %s", e)
+                return {}
+        try:
+            from .messenger_notifications import (extract_active_peers,
+                                                  parse_dumpsys_notifications)
+            recs = parse_dumpsys_notifications(raw or "")
+            peers = extract_active_peers(
+                recs, valid_name_fn=FacebookAutomation._is_valid_peer_name)
+        except Exception as e:
+            log.debug("[notif_prescan] 解析失败: %s", e)
+            return {}
+        result = {pa.peer: (pa.key or "") for pa in peers}
+        # 观测登记 thread 令牌（身份地基, 不做强归属）
+        for pa in peers:
+            if pa.key:
+                try:
+                    from src.host.fb_store import upsert_thread_map
+                    upsert_thread_map(did, pa.peer, pa.key, source="notif")
+                except Exception:
+                    pass
+        if result:
+            log.info("[notif_prescan] 通知预扫发现 %d 个活动 peer", len(result))
+        return result
+
+    def _open_thread_by_search(self, d, did: str, peer_name: str) -> bool:
+        """P2: 按名字搜索进入会话（**不发送任何消息**）。
+
+        用于打开「通知里有活动但不在列表可见项」的屏外会话。复用 send_message
+        的搜索链 step 4/5 (搜索入口 → 输入名字 → 选第一个结果), 到进入会话即停。
+        任何异常返回 False (放弃该 peer, 不阻塞整轮)。
+
+        调用方**必须**随后用 ``_open_and_read_conversation(entered=True,
+        verify_name=peer_name)`` 校验搜到的确实是目标人 (搜索误点高发)。
+        """
+        if not peer_name:
+            return False
+        try:
+            self._enter_messenger_search(d, did)
+            time.sleep(0.5)
+            self.hb.type_text(d, peer_name)
+            time.sleep(1.5)
+            self._tap_first_search_result(d, did, peer_name)
+            time.sleep(1.0)
+            return True
+        except Exception as e:
+            log.debug("[search_open] peer=%s 搜索进入失败: %s", peer_name, e)
+            return False
+
+    def _list_messenger_conversations(self, d, max_n: int,
+                                      *, max_scrolls: int = 3) -> List[Dict]:
+        """从 Messenger 主列表 dump 可见对话。返回 [{name, unread, unread_reason, bounds}].
 
         Phase 17 (2026-04-25): 结构敏感 ListView 行级匹配.
         2026-04-27 A2 fix: parent_class 过滤太严导致 B 设备 0 对话, 改成软约束 +
         多 fallback (clickable text + content-desc + RelativeLayout).
+
+        P0 (2026-08-15) 两处「消息不读」根因修复:
+          * 未读判定改走 ``messenger_inbox_parse.detect_unread`` 综合信号
+            (selected 已在 screen_parser 补齐解析 + content-desc 多语未读关键词
+            + 前导圆点), 取代原「getattr selected 恒 False + name 含 • (分隔符
+            误判为未读)」的假信号.
+          * 增量滚动收集 (``max_scrolls``): 原实现只 dump 首屏, 屏外未读永不可见.
+            每屏 dump→收集(去重)→连续无新增 / 收够 max_n / 达上限即停. 滚动依赖
+            真机能力, 任何异常 (无 hb / window_size 不可解析) 优雅退化为单屏,
+            与旧行为等价 (故不破坏既有 mock 设备测试).
         """
-        try:
-            xml = d.dump_hierarchy()
-        except Exception as e:
-            log.debug("[list_messenger] dump_hierarchy 失败: %s", e)
-            return []
         try:
             from ..vision.screen_parser import XMLParser
         except Exception as e:
             log.debug("[list_messenger] XMLParser import 失败: %s", e)
             return []
         try:
-            elements = XMLParser.parse(xml)
-        except Exception as e:
-            log.debug("[list_messenger] parse 失败: %s", e)
-            return []
+            from .messenger_inbox_parse import (detect_unread, name_from_desc,
+                                                preview_fingerprint)
+        except Exception:
+            detect_unread = None
+
+            def name_from_desc(_s):
+                return ""
+
+            def preview_fingerprint(_n, _d):
+                return ""
+
+        def _unread_verdict(name, desc, selected):
+            if detect_unread is not None:
+                try:
+                    return detect_unread(name, desc, selected=selected)
+                except Exception:
+                    pass
+
+            class _V:
+                is_unread = bool(selected)
+                reason = "selected" if selected else ""
+            return _V()
 
         items: List[Dict] = []
         seen = set()
-        # Phase 1: 严格匹配 (parent_class in _MESSENGER_LIST_CONTAINERS)
-        for el in elements:
-            text = (el.text or "").strip()
-            if not el.clickable:
-                continue
-            parent_cls = getattr(el, "parent_class", "") or ""
-            if parent_cls:
-                in_list = any(kw in parent_cls
-                               for kw in
-                               FacebookAutomation._MESSENGER_LIST_CONTAINERS)
-                if not in_list:
-                    continue
-            if not FacebookAutomation._is_valid_peer_name(text):
-                continue
-            if text in seen:
-                continue
-            seen.add(text)
-            items.append({
-                "name": text,
-                "unread": bool(getattr(el, "selected", False) or "•" in text),
-                "bounds": getattr(el, "bounds", None),
-            })
-            if len(items) >= max_n:
-                break
 
-        # 2026-04-27 A2 fix: Phase 1 没找到任何对话时, 走宽松 fallback —
-        # 不限父容器 class, 只看 content-desc / desc / text 含日文/中文/英文姓名
-        if len(items) == 0:
-            log.warning("[list_messenger] Phase 1 (parent_class 严格) 0 hit, "
-                         "降级到宽松 fallback")
+        def _collect_screen() -> int:
+            try:
+                xml = d.dump_hierarchy()
+            except Exception as e:
+                log.debug("[list_messenger] dump_hierarchy 失败: %s", e)
+                return 0
+            try:
+                elements = XMLParser.parse(xml)
+            except Exception as e:
+                log.debug("[list_messenger] parse 失败: %s", e)
+                return 0
+            before = len(items)
+
+            # Phase 1: 结构严格 (parent_class in _MESSENGER_LIST_CONTAINERS)
             for el in elements:
-                text = (el.text or "").strip()
-                desc = getattr(el, "content_desc", "") or getattr(el, "desc", "") or ""
-                # 用 text 或 content_desc 作为名字源
-                candidate = text or desc
-                if not candidate:
-                    continue
-                if not FacebookAutomation._is_valid_peer_name(candidate):
-                    continue
-                if candidate in seen:
-                    continue
-                # 只要 clickable 或 content_desc 非空都收
-                if not el.clickable and not desc:
-                    continue
-                seen.add(candidate)
-                items.append({
-                    "name": candidate,
-                    "unread": bool(getattr(el, "selected", False)
-                                    or "未读" in desc or "Unread" in desc
-                                    or "•" in candidate),
-                    "bounds": getattr(el, "bounds", None),
-                    "_fallback": True,
-                })
                 if len(items) >= max_n:
                     break
-            log.info("[list_messenger] fallback 找到 %d 个对话", len(items))
+                text = (el.text or "").strip()
+                if not el.clickable:
+                    continue
+                parent_cls = getattr(el, "parent_class", "") or ""
+                if parent_cls:
+                    in_list = any(kw in parent_cls
+                                  for kw in
+                                  FacebookAutomation._MESSENGER_LIST_CONTAINERS)
+                    if not in_list:
+                        continue
+                desc = getattr(el, "content_desc", "") or ""
+                name = text or name_from_desc(desc)
+                if not FacebookAutomation._is_valid_peer_name(name):
+                    continue
+                if name in seen:
+                    continue
+                seen.add(name)
+                v = _unread_verdict(name, desc,
+                                    bool(getattr(el, "selected", False)))
+                items.append({
+                    "name": name,
+                    "unread": bool(v.is_unread),
+                    "unread_reason": getattr(v, "reason", ""),
+                    "bounds": getattr(el, "bounds", None),
+                    "preview_fp": preview_fingerprint(name, desc),
+                })
 
+            # 本屏严格零命中 → 宽松 fallback (不限父容器, 与 A2 fix 同语义,
+            # 但局部化到「本屏」而非「整个函数」, 以兼容多屏滚动)
+            if len(items) - before == 0 and len(items) < max_n:
+                for el in elements:
+                    if len(items) >= max_n:
+                        break
+                    text = (el.text or "").strip()
+                    desc = (getattr(el, "content_desc", "")
+                            or getattr(el, "desc", "") or "")
+                    candidate = text or name_from_desc(desc)
+                    if not candidate:
+                        continue
+                    if not FacebookAutomation._is_valid_peer_name(candidate):
+                        continue
+                    if candidate in seen:
+                        continue
+                    if not el.clickable and not desc:
+                        continue
+                    seen.add(candidate)
+                    v = _unread_verdict(candidate, desc,
+                                        bool(getattr(el, "selected", False)))
+                    items.append({
+                        "name": candidate,
+                        "unread": bool(v.is_unread),
+                        "unread_reason": getattr(v, "reason", ""),
+                        "bounds": getattr(el, "bounds", None),
+                        "preview_fp": preview_fingerprint(candidate, desc),
+                        "_fallback": True,
+                    })
+            return len(items) - before
+
+        # 第一屏 (永远执行, 等价旧单屏行为)
+        _collect_screen()
+
+        # 增量滚动 (防御: 无 hb / window_size 不可解析 / scroll 抛 → 退化单屏)
+        scrolls = 0
+        while len(items) < max_n and scrolls < max(0, max_scrolls):
+            try:
+                screen_h = int(d.window_size()[1])
+            except Exception:
+                break
+            hb = getattr(self, "hb", None)
+            if hb is None:
+                break
+            try:
+                hb.scroll_down(d, screen_height=screen_h)
+            except Exception:
+                break
+            try:
+                time.sleep(random.uniform(0.6, 1.2))
+            except Exception:
+                pass
+            added = _collect_screen()
+            scrolls += 1
+            if added == 0:
+                break  # 到底 / 本屏无新增
+
+        if any(it.get("_fallback") for it in items) and items:
+            log.info("[list_messenger] 含宽松 fallback 命中, 共 %d 对话 (滚动 %d 屏)",
+                     len(items), scrolls)
         return items
+
+    def _read_thread_title(self, d) -> str:
+        """进入会话后回读顶部标题栏对方名字, 用于校验「点对了行没有」(P0 2026-08-15)。
+
+        全异常兜底返回 "": 读不到就不纠正 (退回列表名), 绝不因标题读取失败影响
+        主读取流程。会话页顶部 toolbar 区域的名字是最权威身份 (列表名可能是脏
+        预览/UI 文本, 或 tap 点错了行), 与其比对即可现形。
+        """
+        try:
+            from .messenger_inbox_parse import (TitleCandidate,
+                                                pick_thread_title)
+            from ..vision.screen_parser import XMLParser
+            xml = d.dump_hierarchy()
+            elements = XMLParser.parse(xml)
+        except Exception:
+            return ""
+        screen_h = 2400
+        try:
+            screen_h = int(d.window_size()[1])
+        except Exception:
+            pass
+        cands = []
+        for el in elements:
+            b = getattr(el, "bounds", None)
+            text = (getattr(el, "text", "") or "").strip()
+            if not b or not text:
+                continue
+            cands.append(TitleCandidate(top=b[1], x_left=b[0], text=text))
+        try:
+            return pick_thread_title(
+                cands, screen_h,
+                valid_name_fn=FacebookAutomation._is_valid_peer_name)
+        except Exception:
+            return ""
 
     def _open_and_read_conversation(self, d, conv: Dict, did: str,
                                     peer_type: str = "friend",
-                                    preset_key: str = "") -> Optional[Dict]:
-        """点进对话,读最新一条对方消息,写入 fb_inbox_messages。"""
-        bounds = conv.get("bounds")
-        try:
-            if bounds and isinstance(bounds, (tuple, list)) and len(bounds) >= 4:
-                cx = (bounds[0] + bounds[2]) // 2
-                cy = (bounds[1] + bounds[3]) // 2
-                self.hb.tap(d, cx, cy)
-            else:
-                d(text=conv["name"]).click()
-        except Exception:
-            return None
+                                    preset_key: str = "", *,
+                                    entered: bool = False,
+                                    verify_name: str = "") -> Optional[Dict]:
+        """点进对话,读最新一条对方消息,写入 fb_inbox_messages。
 
-        time.sleep(random.uniform(2.0, 3.0))
+        P0 (2026-08-15):
+          * **标题回读校验**: 进入会话后回读 header 名字, 与列表名不一致则以
+            header 为权威 (``effective_name``) 并置 ``title_mismatch`` — 点错行/
+            列表名脏时消息不再挂错人。读不到标题就不纠正 (退回列表名)。
+          * **入库去重**: 最近窗口内已存同一条对方消息则跳过 (``deduped``),
+            不重复写库 / 不重复触发回复。
+
+        P2 (2026-08-15):
+          * ``entered=True``: 会话已由外部 (搜索进入) 打开, 跳过 tap 步骤。
+          * ``verify_name`` (搜索场景必传目标名): 读到 header 后**必须**与目标
+            人一致, 否则放弃 (返回 ``search_mismatch``, 不入库)。因为搜索误点是
+            已知高发风险 (zh inbox 常误选最近活跃联系人), 点错人时绝不能像列表
+            场景那样「以 header 为准入库」——那会把消息挂到错误的人名下。
+        """
+        bounds = conv.get("bounds")
+        list_name = conv.get("name", "")
+        if not entered:
+            try:
+                if bounds and isinstance(bounds, (tuple, list)) and len(bounds) >= 4:
+                    cx = (bounds[0] + bounds[2]) // 2
+                    cy = (bounds[1] + bounds[3]) // 2
+                    self.hb.tap(d, cx, cy)
+                else:
+                    d(text=list_name).click()
+            except Exception:
+                return None
+            time.sleep(random.uniform(2.0, 3.0))
         is_risk, msg = self._detect_risk_dialog(d)
         if is_risk:
-            return {"peer_name": conv["name"], "risk": msg}
+            return {"peer_name": list_name, "risk": msg}
+
+        # P0: 开会话后回读标题, 校验点对了行 (防「点错行→消息挂错人」)
+        title_mismatch = False
+        effective_name = list_name
+        try:
+            header = self._read_thread_title(d)
+        except Exception:
+            header = ""
+        header_valid = bool(header) and FacebookAutomation._is_valid_peer_name(
+            header)
+        if verify_name:
+            # P2 搜索进入: header 必须与目标一致, 否则放弃 (不入库到错误人)
+            ok = False
+            if header_valid:
+                try:
+                    from .messenger_inbox_parse import names_match
+                    ok = names_match(verify_name, header)
+                except Exception:
+                    ok = False
+            if not ok:
+                log.info("[messenger] 搜索进入校验失败 target=%r header=%r, 放弃",
+                         verify_name, header)
+                return {"peer_name": verify_name, "search_mismatch": True}
+            effective_name = header  # 搜对了, 用会话真实标题
+        elif header_valid:
+            try:
+                from .messenger_inbox_parse import names_match
+                same = names_match(list_name, header)
+            except Exception:
+                same = True
+            if not same:
+                title_mismatch = True
+                effective_name = header
+                log.warning("[messenger] 标题校验不符 list=%r header=%r "
+                            "→ 以会话标题为准", list_name, header)
 
         incoming_text = self._extract_latest_incoming_message(d)
+
+        # P0: 去重 — 最近窗口内已入库同一条则不重复处理。
+        # `is True` 严格比较: 真实函数明确返回 bool; 测试环境的 MagicMock
+        # fb_store 会让属性调用返回 truthy Mock, 严格比较可避免误判 deduped。
+        if incoming_text:
+            deduped = False
+            try:
+                from src.host.fb_store import inbox_message_seen_recently
+                deduped = (inbox_message_seen_recently(
+                    did, effective_name, incoming_text,
+                    window_min=180) is True)
+            except Exception:
+                deduped = False
+            if deduped:
+                log.info("[messenger] peer=%s 消息近窗口已入库, 跳过重复",
+                         (effective_name or "")[:16])
+                return {"peer_name": effective_name, "deduped": True,
+                        "title_mismatch": title_mismatch}
+
         lang = ""
         try:
             from src.ai.lang_detect import detect_language
@@ -11560,7 +12005,7 @@ class FacebookAutomation(BaseAutomation):
         try:
             from src.host.fb_store import record_inbox_message
             record_inbox_message(
-                did, conv["name"],
+                did, effective_name,
                 peer_type=peer_type,
                 message_text=incoming_text or "",
                 direction="incoming",
@@ -11573,7 +12018,7 @@ class FacebookAutomation(BaseAutomation):
         try:
             from src.host.customer_sync_bridge import sync_messenger_incoming
             sync_messenger_incoming(
-                did, conv["name"],
+                did, effective_name,
                 content=incoming_text or "",
                 content_lang=lang or None,
                 peer_type=peer_type,
@@ -11585,52 +12030,60 @@ class FacebookAutomation(BaseAutomation):
         # 的 greeting 行 (P0 的 mark_greeting_replied_back 幂等, 已标则跳过)。
         # 这覆盖 auto_reply=False 场景 — 只要对方回了 greeting 就算关系建立,
         # 即使 B 没 reply 也记到 fb_contact_events。
-        #
-        # Feature-detect: P0 已 merge (mark_greeting_replied_back 可用),
-        # F1 内部会同步写 greeting_replied event 到 fb_contact_events。
         if incoming_text:
             try:
                 from src.host.fb_store import mark_greeting_replied_back
-                mark_greeting_replied_back(did, conv["name"], window_days=7)
+                mark_greeting_replied_back(did, effective_name, window_days=7)
             except ImportError:
                 pass  # P0 未 merge (defensive, 当前 main 已含)
             except Exception as e:
                 log.debug("[P7 greeting_replied] skip: %s", e)
-        return {"peer_name": conv["name"], "incoming_text": incoming_text,
-                "language_detected": lang}
+        return {"peer_name": effective_name, "incoming_text": incoming_text,
+                "language_detected": lang, "title_mismatch": title_mismatch}
 
     def _extract_latest_incoming_message(self, d) -> str:
-        """从对话页面 dump 中提取最新一条对方消息(简单启发:取屏幕中靠左的最长 TextView)。"""
+        """从对话页面 dump 提取最新一条**对方**消息。
+
+        P0 (2026-08-15): 委托 ``messenger_inbox_parse.pick_latest_incoming``。
+        相对旧启发式的修复:
+          * 移除 "you" 子串过滤 (原会把对方的 "thank you" 整条丢掉 → 漏读)。
+          * 方向优先前缀判定 (自己发的) + content-desc 明确发送方, 几何仅兜底。
+          * 过短放宽 (CJK 单字「好/在」保留)。
+          * 排除顶部标题栏 / 底部输入区, 避免把 UI 文本当消息。
+        """
         try:
             xml = d.dump_hierarchy()
             from ..vision.screen_parser import XMLParser
             elements = XMLParser.parse(xml)
         except Exception:
             return ""
-        candidates = []
-        screen_w = 1080
+        screen_w, screen_h = 1080, 2400
         try:
-            screen_w = d.window_size()[0]
+            sz = d.window_size()
+            screen_w, screen_h = int(sz[0]), int(sz[1])
         except Exception:
             pass
+        try:
+            from .messenger_inbox_parse import BubbleRow, pick_latest_incoming
+        except Exception:
+            return ""
+        rows = []
         for el in elements:
-            text = (el.text or "").strip()
-            if not text or len(text) < 3:
-                continue
             bounds = getattr(el, "bounds", None)
             if not bounds:
                 continue
-            x_center = (bounds[0] + bounds[2]) / 2
-            if x_center > screen_w * 0.6:
+            text = (getattr(el, "text", "") or "").strip()
+            if not text:
                 continue
-            if any(skip in text.lower() for skip in
-                   ["type a message", "send", "active now", "online", "you"]):
+            top = bounds[1]
+            # 排除顶部 toolbar (标题区) 与底部输入/发送区
+            if top < screen_h * 0.12 or top > screen_h * 0.90:
                 continue
-            candidates.append((bounds[1], text))
-        if not candidates:
-            return ""
-        candidates.sort(key=lambda t: -t[0])
-        return candidates[0][1][:500]
+            desc = getattr(el, "content_desc", "") or ""
+            rows.append(BubbleRow(top=top,
+                                  x_center=(bounds[0] + bounds[2]) / 2,
+                                  text=text, desc=desc))
+        return pick_latest_incoming(rows, screen_w)
 
     def _ai_reply_and_send(self, d, did: str, *, peer_name: str,
                            incoming_text: str,

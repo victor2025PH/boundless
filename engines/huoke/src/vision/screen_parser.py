@@ -47,6 +47,11 @@ class XMLElement:
     scrollable: bool = False
     checkable: bool = False
     long_clickable: bool = False
+    # P0 (2026-08-15) 修实锤假信号: Messenger 未读判定曾 getattr(el, "selected",
+    # False) 而 XMLElement 从不解析该属性 → 恒 False → 未读门形同虚设. 现补齐,
+    # 与 checkable/checked 等 Android 状态属性同级解析.
+    selected: bool = False
+    checked: bool = False
     index: int = 0
     depth: int = 0
     # Phase 17 (2026-04-25): 父节点引用 (在 list 中的索引 + class). 默认 -1
@@ -169,6 +174,8 @@ class XMLParser:
                 scrollable=node.get("scrollable", "false") == "true",
                 checkable=node.get("checkable", "false") == "true",
                 long_clickable=node.get("long-clickable", "false") == "true",
+                selected=node.get("selected", "false") == "true",
+                checked=node.get("checked", "false") == "true",
                 index=int(node.get("index", 0)),
                 depth=depth,
                 # Phase 17 父节点引用
