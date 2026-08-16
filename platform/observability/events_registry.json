@@ -1,7 +1,7 @@
 {
   "note": "无界全域运营事件字典（单一真相）。新事件先在此注册、过隐私红线评审后才可发射；未注册事件不拒收，落盘信封会带 _unregistered=true 供治理。契约全文见 EVENT_CONTRACT.md。每个事件的 description 末尾即触发时机（……时发射）。",
   "version": 1,
-  "updated": "2026-07-18",
+  "updated": "2026-07-19",
   "name_pattern": "^[a-z0-9_]+\\.[a-z0-9_]+\\.[a-z0-9_]+$",
   "event_id_pattern": "^evt_[0-9A-HJKMNP-TV-Z]{26}$",
   "product_ids": [
@@ -183,6 +183,31 @@
         { "name": "success_count", "type": "int", "required": false, "description": "成功数" },
         { "name": "fail_count", "type": "int", "required": false, "description": "失败数" },
         { "name": "duration_s", "type": "int", "required": false, "description": "任务总耗时秒" }
+      ]
+    },
+    {
+      "name": "zhituo.lead.captured",
+      "tier": "core",
+      "product": "zhituo",
+      "description": "上游获客(TG群搜索/成员提取/关键词捕获)捕获一条线索并投递给 leadbus 承接总线时发射；联系方式/画像原文只走 leadbus 点对点业务通道，绝不进本指标事件（见 platform/leadbus/CONTRACT.md §4 隐私边界）。",
+      "props": [
+        { "name": "platform", "type": "string", "required": true, "description": "捕获平台（telegram/facebook/whatsapp 等）" },
+        { "name": "campaign", "type": "string", "required": false, "description": "归一化来源（群/关键词/utm 标识，非原文）" },
+        { "name": "intent_bucket", "type": "string", "required": false, "description": "意向分档（low/mid/high，由 intent_score 归档，不报可定位个人的明细）" },
+        { "name": "lang", "type": "string", "required": false, "description": "线索语言（BCP-47），用于跨语言承接决策" },
+        { "name": "delivered", "type": "bool", "required": false, "description": "是否已投递到承接总线（false=落 outbox 待补投）" }
+      ]
+    },
+    {
+      "name": "zhiliao.lead.ingested",
+      "tier": "core",
+      "product": "zhiliao",
+      "description": "承接中台经 leadbus 收到并入队一条上游线索时发射；串联获客→承接漏斗，只带来源与计数，不带联系方式/画像原文。",
+      "props": [
+        { "name": "source_product", "type": "string", "required": true, "description": "线索来源产品 product_id（如 zhituo）" },
+        { "name": "platform", "type": "string", "required": false, "description": "线索来源平台" },
+        { "name": "assigned", "type": "bool", "required": false, "description": "是否成功分配坐席/人设" },
+        { "name": "dedup_hit", "type": "bool", "required": false, "description": "是否命中幂等去重（补投重复到达）" }
       ]
     },
     {

@@ -748,6 +748,65 @@ _MIGRATIONS = [
     "CREATE INDEX IF NOT EXISTS idx_fpe_device ON fb_post_engagements(device_id, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_fpe_author ON fb_post_engagements(author_name, group_name)",
     "CREATE INDEX IF NOT EXISTS idx_fpe_tier ON fb_post_engagements(tier, created_at)",
+
+    # ─── 2026-08-15 P1: Messenger 读取召回增强 ────────────────────────────
+    # messenger_row_state: 每 (device, peer) 的会话行「预览内容核指纹」,
+    # 预览变化即视为有新活动 → 强制打开 (不依赖易变的未读 UI 表示)。
+    # last_preview_fp = preview_fingerprint(name, content-desc) 去时间戳后哈希。
+    """CREATE TABLE IF NOT EXISTS messenger_row_state (
+        device_id       TEXT NOT NULL,
+        peer_name       TEXT NOT NULL,
+        last_preview_fp TEXT DEFAULT '',
+        last_opened_at  TEXT DEFAULT '',
+        updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (device_id, peer_name)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_msg_row_state_dev"
+    " ON messenger_row_state(device_id, updated_at)",
+
+    # messenger_thread_map: (device, peer) ↔ 稳定 thread 令牌 (来自系统通知
+    # key / 会话页回读) 的身份地基。P1 只观测登记, 强身份归属留给 P2/P3。
+    """CREATE TABLE IF NOT EXISTS messenger_thread_map (
+        device_id     TEXT NOT NULL,
+        peer_name     TEXT NOT NULL,
+        thread_token  TEXT DEFAULT '',
+        source        TEXT DEFAULT '',
+        first_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_seen_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (device_id, peer_name)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_msg_thread_token"
+    " ON messenger_thread_map(thread_token) WHERE thread_token != ''",
+
+    # ─── 2026-08-15 P3: 召回体检 —— 每次 check_messenger_inbox 运行的召回
+    # 信号快照。用于聚合验证 P0/P1/P2 的启发式是否真的有效 (未读判定召回够不
+    # 够 / 通知·预览·搜索各救回多少 / 搜索误点率 / 身份错乱频度)。每次运行一行,
+    # 行很小; 读时按 device/phase/时间窗聚合。
+    """CREATE TABLE IF NOT EXISTS messenger_recall_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        device_id            TEXT NOT NULL DEFAULT '',
+        phase                TEXT DEFAULT '',
+        preset_key           TEXT DEFAULT '',
+        conversations_listed INTEGER DEFAULT 0,
+        unread_detected      INTEGER DEFAULT 0,
+        unread_processed     INTEGER DEFAULT 0,
+        notif_active_peers   INTEGER DEFAULT 0,
+        notif_forced         INTEGER DEFAULT 0,
+        preview_forced       INTEGER DEFAULT 0,
+        notif_offscreen      INTEGER DEFAULT 0,
+        search_opened        INTEGER DEFAULT 0,
+        search_mismatch      INTEGER DEFAULT 0,
+        search_failed        INTEGER DEFAULT 0,
+        title_mismatch       INTEGER DEFAULT 0,
+        dedup_skipped        INTEGER DEFAULT 0,
+        empty_extract        INTEGER DEFAULT 0,
+        errors               INTEGER DEFAULT 0,
+        run_at               TEXT NOT NULL DEFAULT (datetime('now'))
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_msg_recall_dev"
+    " ON messenger_recall_runs(device_id, run_at)",
+    "CREATE INDEX IF NOT EXISTS idx_msg_recall_at"
+    " ON messenger_recall_runs(run_at)",
 ]
 
 

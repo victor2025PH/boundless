@@ -283,17 +283,38 @@ function collectEvents(db, win) {
   return { cur, prev, dbTotals: { total: t.total, unregistered: t.unreg, first_ts: t.first_ts, last_ts: t.last_ts } };
 }
 
+// 测试数据过滤片段（实施22）：表有 is_test 列时排除 is_test=1；无列（未迁移旧库/只读快照）
+// 返回空串不误伤。KPI 只算真实经营数据。
+function testExclClause(db, table) {
+  try {
+    const has = db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === "is_test");
+    return has ? " AND COALESCE(is_test,0) = 0" : "";
+  } catch {
+    return "";
+  }
+}
+
 // ── 账本侧聚合 ──────────────────────────────────────────────────────
 function collectLedger(db, win) {
   const S = iso(win.since);
   const U = iso(win.until);
+  const XO = testExclClause(db, "orders");
+  const XL = testExclClause(db, "leads");
+  const XC = testExclClause(db, "licenses");
   const PS = iso(win.prevSince);
   const PU = iso(win.prevUntil);
+
+  // 被排除的测试数据量（全库累计，供数据健康区展示口径；无 is_test 列时为 0）
+  const testExcluded = {
+    orders: XO ? db.prepare("SELECT COUNT(*) AS c FROM orders WHERE is_test = 1").get().c : 0,
+    leads: XL ? db.prepare("SELECT COUNT(*) AS c FROM leads WHERE is_test = 1").get().c : 0,
+    licenses: XC ? db.prepare("SELECT COUNT(*) AS c FROM licenses WHERE is_test = 1").get().c : 0,
+  };
 
   // 线索：first_seen 归属窗口，interest → inferProductId（口径 §1/§2.2）
   function leadsAgg(s, u) {
     const rows = db
-      .prepare("SELECT interest, COUNT(*) AS c FROM leads WHERE first_seen >= ? AND first_seen < ? GROUP BY interest")
+      .prepare(`SELECT interest, COUNT(*) AS c FROM leads WHERE first_seen >= ? AND first_seen < ?${XL} GROUP BY interest`)
       .all(s, u);
     const byProduct = {};
     let total = 0;
@@ -311,7 +332,7 @@ function collectLedger(db, win) {
   function ordersAgg(col, s, u) {
     const rows = db
       .prepare(
-        `SELECT COALESCE(product_id, '') AS pid, COUNT(*) AS c FROM orders WHERE ${col} >= ? AND ${col} < ? GROUP BY pid`
+        `SELECT COALESCE(product_id, '') AS pid, COUNT(*) AS c FROM orders WHERE ${col} >= ? AND ${col} < ?${XO} GROUP BY pid`
       )
       .all(s, u);
     const byProduct = {};
@@ -328,7 +349,7 @@ function collectLedger(db, win) {
       .prepare(
         `SELECT COALESCE(product_id, '') AS pid, COALESCE(currency, '(未知币种)') AS ccy,
                 COALESCE(SUM(pay_amount), 0) AS amt
-         FROM orders WHERE paid_at >= ? AND paid_at < ? GROUP BY pid, ccy`
+         FROM orders WHERE paid_at >= ? AND paid_at < ?${XO} GROUP BY pid, ccy`
       )
       .all(s, u);
     const total = {};
@@ -345,12 +366,12 @@ function collectLedger(db, win) {
   function activatedAgg(s, u) {
     const ords = db
       .prepare(
-        "SELECT COALESCE(product_id, '') AS pid, customer_id, substr(activated_at, 1, 10) AS day FROM orders WHERE activated_at >= ? AND activated_at < ?"
+        `SELECT COALESCE(product_id, '') AS pid, customer_id, substr(activated_at, 1, 10) AS day FROM orders WHERE activated_at >= ? AND activated_at < ?${XO}`
       )
       .all(s, u);
     const lics = db
       .prepare(
-        "SELECT COALESCE(product_id, '') AS pid, customer_id, substr(issued_at, 1, 10) AS day FROM licenses WHERE issued_at >= ? AND issued_at < ?"
+        `SELECT COALESCE(product_id, '') AS pid, customer_id, substr(issued_at, 1, 10) AS day FROM licenses WHERE issued_at >= ? AND issued_at < ?${XC}`
       )
       .all(s, u);
     const orderKey = new Set(ords.filter((o) => o.customer_id).map((o) => `${o.customer_id}|${o.day}`));
@@ -376,7 +397,7 @@ function collectLedger(db, win) {
   function licensesNew(s, u) {
     const rows = db
       .prepare(
-        "SELECT COALESCE(product_id, '') AS pid, COUNT(*) AS c FROM licenses WHERE issued_at >= ? AND issued_at < ? GROUP BY pid"
+        `SELECT COALESCE(product_id, '') AS pid, COUNT(*) AS c FROM licenses WHERE issued_at >= ? AND issued_at < ?${XC} GROUP BY pid`
       )
       .all(s, u);
     const byProduct = {};
@@ -393,7 +414,7 @@ function collectLedger(db, win) {
     .prepare(
       `SELECT COALESCE(product_id, '') AS pid, COUNT(*) AS c FROM licenses
        WHERE expires_at IS NOT NULL AND expires_at > ? AND expires_at <= ?
-         AND (status IS NULL OR status NOT IN ('revoked','expired'))
+         AND (status IS NULL OR status NOT IN ('revoked','expired'))${XC}
        GROUP BY pid`
     )
     .all(U, horizon);
@@ -407,15 +428,15 @@ function collectLedger(db, win) {
   const gapCount = (sql, ...p) => db.prepare(sql).get(...p).c;
   const gaps = {
     orders_no_product: gapCount(
-      "SELECT COUNT(*) AS c FROM orders WHERE created_at >= ? AND created_at < ? AND (product_id IS NULL OR product_id = '')",
+      `SELECT COUNT(*) AS c FROM orders WHERE created_at >= ? AND created_at < ?${XO} AND (product_id IS NULL OR product_id = '')`,
       S, U
     ),
     orders_no_customer: gapCount(
-      "SELECT COUNT(*) AS c FROM orders WHERE created_at >= ? AND created_at < ? AND (customer_id IS NULL OR customer_id = '')",
+      `SELECT COUNT(*) AS c FROM orders WHERE created_at >= ? AND created_at < ?${XO} AND (customer_id IS NULL OR customer_id = '')`,
       S, U
     ),
     licenses_no_customer: gapCount(
-      "SELECT COUNT(*) AS c FROM licenses WHERE issued_at >= ? AND issued_at < ? AND (customer_id IS NULL OR customer_id = '')",
+      `SELECT COUNT(*) AS c FROM licenses WHERE issued_at >= ? AND issued_at < ?${XC} AND (customer_id IS NULL OR customer_id = '')`,
       S, U
     ),
   };
@@ -431,6 +452,7 @@ function collectLedger(db, win) {
     licensesNew: { cur: licensesNew(S, U), prev: licensesNew(PS, PU) },
     expiring,
     gaps,
+    testExcluded,
     licenseProductOf: (id) => {
       if (!id) return null;
       const row = licProductStmt.get(id);
@@ -639,6 +661,8 @@ function buildReport(win, args, sides) {
     anonymous_active_events: ev ? ev.cur.anonymousActive : null,
     metering_anomalies: ev ? ev.cur.meteringAnomalies : null,
     ledger_gaps: lg ? { ...lg.gaps, leads_unmapped_interest: lg.leads.cur.unmapped } : null,
+    // 测试数据排除口径（is_test=1，全库累计）：0/0/0 且库未迁移时表示还没打标
+    test_excluded: lg ? lg.testExcluded : null,
     zero_event_products: zeroEventProducts,
   };
 
@@ -846,6 +870,12 @@ function renderMd(r) {
     );
   } else {
     L.push(`- 账本侧：${NA}（账本库不可用）`);
+  }
+  if (h.test_excluded) {
+    L.push(
+      `- 测试数据排除（is_test=1，全库累计，账本各指标均不计）：订单 ${h.test_excluded.orders}、` +
+        `留资 ${h.test_excluded.leads}、授权 ${h.test_excluded.licenses}`
+    );
   }
   if (h.zero_event_products.length) {
     for (const z of h.zero_event_products) {

@@ -1,0 +1,178 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "platform/enable 赋能能力网关 — 三能力 request/response 契约",
+  "description": "字段契约与 client.py / CONTRACT.md 一一对应。所有 response 在引擎不可达时统一退化为 {available:false, error:...}（由瘦客户端收敛，引擎侧无需返回该形态）。",
+  "definitions": {
+    "degraded_response": {
+      "type": "object",
+      "description": "任一能力不可用时瘦客户端的统一降级返回（绝不抛异常）",
+      "properties": {
+        "available": {
+          "const": false,
+          "description": "false 表示能力不可用，调用方应按 CONTRACT.md §4 优雅退化"
+        },
+        "error": {
+          "type": "string",
+          "description": "失败摘要（如 'HTTP 503'、超时、连接失败）"
+        },
+        "detail": {
+          "type": "string",
+          "description": "可选：HTTP 错误响应体前 300 字符"
+        }
+      },
+      "required": ["available", "error"]
+    },
+    "tts_clone_speak": {
+      "_note": "2026-07-19 纠偏：真实端点是已在跑的 POST /api/tts_only（非首版臆测的 /api/voice_clone/tts），字段名与响应形状已对照 avatar_hub.py 源码核实。",
+      "request": {
+        "type": "object",
+        "description": "POST /api/tts_only（avatarhub，真实已在跑端点）— 单句合成，复用对话 TTS 路由",
+        "properties": {
+          "profile": {
+            "type": "string",
+            "description": "角色档案键（client.py 的 profile_id 映射到此字段；对应 avatarhub _profiles 字典的键，非文件路径）"
+          },
+          "text": {
+            "type": "string",
+            "description": "待合成的回复文本"
+          }
+        },
+        "required": ["profile", "text"],
+        "note_unused_fields": "avatarhub TtsOnlyRequest 还支持 language/emotion/fish_params/best_of，client.py 当前未传（用其默认值），避免猜错参数名"
+      },
+      "response": {
+        "type": "object",
+        "description": "成功响应（ok=false 也是 HTTP 200，代表角色不存在或合成失败，不是传输层故障）",
+        "properties": {
+          "available": {
+            "const": true,
+            "description": "由瘦客户端 setdefault 填入，表示 HTTP 层可达"
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "业务层是否成功；false 时通常伴随 detail 字段"
+          },
+          "audio_base64": {
+            "type": "string",
+            "description": "合成音频（WAV，base64 内联），不是 URL——首版契约猜测有误，已纠正"
+          },
+          "profile": {
+            "type": "string",
+            "description": "回显请求的 profile"
+          },
+          "elapsed_ms": {
+            "type": "integer",
+            "description": "合成耗时（毫秒）"
+          }
+        },
+        "required": ["ok"]
+      }
+    },
+    "translate": {
+      "request": {
+        "type": "object",
+        "description": "POST /api/translate（chengjie 翻译栈）— 翻译回复文本。隐私红线：text 原文是必要输入，但只作为本次请求载荷传输，不落任何日志/事件；计量只用字符计数（见 response.chars）。",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "待翻译原文（必要输入；原文不落任何日志/事件，呼应集团隐私红线）"
+          },
+          "to_lang": {
+            "type": "string",
+            "description": "目标语言短码（如 en / zh / ja）"
+          },
+          "from_lang": {
+            "type": "string",
+            "description": "可选：源语言短码；缺省由翻译栈自动检测"
+          }
+        },
+        "required": ["text", "to_lang"]
+      },
+      "response": {
+        "type": "object",
+        "description": "成功响应",
+        "properties": {
+          "available": {
+            "const": true,
+            "description": "由瘦客户端 setdefault 填入，表示能力可用"
+          },
+          "text": {
+            "type": "string",
+            "description": "译文"
+          },
+          "detected_lang": {
+            "type": "string",
+            "description": "检测到的源语言短码（from_lang 缺省时由翻译栈给出）"
+          },
+          "chars": {
+            "type": "integer",
+            "description": "原文字符计数——翻译类计量只用该数字，不涉及原文内容"
+          }
+        },
+        "required": ["text", "detected_lang"]
+      }
+    },
+    "avatar_render": {
+      "_note": "2026-07-19 第四阶段核实：已逐行读 avatar_hub.py 的 SpeakRequest/SpeakResponse 与 avatar_speak handler（@app.post(\"/avatar/speak\", response_model=SpeakResponse)），并用文件内嵌前端 JS（/ui、/mobile/ui）与内部调用方 _station_announce（点歌播报）的真实调用样例交叉验证。真实字段与首版设想差异很大：(1) 没有 audio_url 输入，text 恒为必填——这个端点是『文本→现场TTS→可选联动口型』一体流程，不接受喂入已合成音频；(2) persona_id 改名对齐为 profile_id，真实字段是 profile，与 tts_clone_speak 同一个 _profiles 档案；(3) 视频（lipsync_video_b64）是可选且有前置条件的软依赖——需要显式 generate_lipsync=true 且该 profile 已通过 PATCH /profiles/{name} 配过 face_b64，否则静默退化为纯音频，不报错，available 仍为 true；(4) 响应字段是 audio_base64/lipsync_video_b64（内联 base64），不是 videoUrl；elapsed_ms 是处理耗时不是视频时长。同族的 /avatar/speak/stream 与 /avatar/speak/batch/stream 是 SSE 流式（StreamingResponse），/avatar/speak/batch 是 JSON 但只有批量 TTS 无口型能力——三者均不纳入本契约，见 CONTRACT.md §6 与 client.py 的 avatar_render() docstring。",
+      "request": {
+        "type": "object",
+        "description": "POST /avatar/speak（avatarhub，真实已在跑端点，数字人开口族的基础/非流式变体）— text 现场合成语音；generate_lipsync=true 时尝试联动出一段口型同步视频（需 profile 已配 face_b64，否则静默退化为纯音频）。",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "待合成/开口的文本，恒为必填字段——这个端点不支持传入已合成好的音频跳过 TTS（SpeakRequest.text 无默认值）"
+          },
+          "profile": {
+            "type": "string",
+            "description": "角色档案键（client.py 的 profile_id 映射到此字段；与 tts_clone_speak 同一个 _profiles 字典，空串=用服务端当前激活角色 _active_profile）"
+          },
+          "generate_lipsync": {
+            "type": "boolean",
+            "description": "是否联动生成口型同步视频。avatarhub 侧字段默认 false；client.py 的 avatar_render() 把默认值改为 true（既然调用这个方法就是为了要视频，只要音频应直接用 tts_clone_speak）。传 true 时仍需目标 profile 已配 face_b64 才会真的产出视频，否则静默只回音频，不报错"
+          }
+        },
+        "required": ["text"],
+        "note_unused_fields": "avatarhub SpeakRequest 还支持 language/include_face/incognito/emotion/instruct/tts_engine/vc_engine/lipsync_engine/watermark，client.py 当前未传（用其默认值），避免猜错参数名（沿用 tts_clone_speak 的既定做法）"
+      },
+      "response": {
+        "type": "object",
+        "description": "成功响应（HTTP 200 即代表处理完成；upstream 无 ok 字段，这点与 tts_only 不同——有无口型视频要单独看 lipsync_video_b64 是否非空，不能只看请求是否成功）",
+        "properties": {
+          "available": {
+            "const": true,
+            "description": "由瘦客户端 setdefault 填入，表示 HTTP 层可达"
+          },
+          "audio_base64": {
+            "type": "string",
+            "description": "合成音频（WAV，base64 内联），必有字段"
+          },
+          "lipsync_video_b64": {
+            "type": "string",
+            "description": "口型同步视频（MP4，base64 内联），不是 URL——这是首版契约 videoUrl 字段的真实替代品。仅 generate_lipsync=true 且 profile 已配 face_b64 且口型引擎调用成功时非空，否则恒为空串（静默退化，不报错，需调用方显式检查）"
+          },
+          "elapsed_ms": {
+            "type": "integer",
+            "description": "本次请求的处理耗时（毫秒）——不是视频时长，首版契约对 ms 语义的猜测有误，已纠正"
+          },
+          "face_image": {
+            "type": "string",
+            "description": "可选：include_face=true 时的换脸快照（base64 图片）。这是与 lipsync_video_b64 不同的另一功能（换脸快照 vs 口型视频），client.py 未使用 include_face，恒为空串"
+          },
+          "rvc_applied": {
+            "type": "boolean",
+            "description": "角色绑定了 rvc_model 时是否实际完成了变声转换"
+          },
+          "warning": {
+            "type": "string",
+            "description": "降级警告；目前只在 RVC 失败时填充——lipsync 失败只记服务端日志，不会体现在这个字段，调用方判断口型是否成功仍应看 lipsync_video_b64 是否非空"
+          },
+          "detected_emotion": {
+            "type": "string",
+            "description": "emotion='auto' 时实际检测到的情感标签，client.py 未传 emotion 时恒为空串"
+          }
+        },
+        "required": ["audio_base64", "elapsed_ms"]
+      }
+    }
+  }
+}

@@ -1,3 +1,4 @@
+import fs from "fs";
 import path from "path";
 import { content } from "./content";
 import { SITE_URL } from "./site";
@@ -24,12 +25,22 @@ export interface CatalogPost {
   imagePath: string; // local fs path (for multipart upload)
 }
 
+/* 个别产品暂无专属配图（资产体检实测：solutions 含 interpret 而 public/products 无 prod-interpret.jpg）。
+ * 缺图时回退总览图：TG 发目录帖的 readFile 链路绝不因缺图 ENOENT 中断。 */
+function hasImage(id: string): boolean {
+  try {
+    return fs.existsSync(path.join(process.cwd(), "public", "products", `prod-${id}.jpg`));
+  } catch {
+    return false;
+  }
+}
+
 function imageFor(id: string): string {
-  return `${SITE_URL}/products/prod-${id}.jpg`;
+  return `${SITE_URL}/products/prod-${hasImage(id) ? id : "overview"}.jpg`;
 }
 
 function imagePathFor(id: string): string {
-  return path.join(process.cwd(), "public", "products", `prod-${id}.jpg`);
+  return path.join(process.cwd(), "public", "products", `prod-${hasImage(id) ? id : "overview"}.jpg`);
 }
 
 /** Build one channel post per product type, faithfully from the website content. */
@@ -81,7 +92,8 @@ export function buildOverviewPost(lang: "zh" | "en" = "zh"): { caption: string; 
         `👇 Open the site / Mini App / contact us below`;
   return {
     caption,
-    image: `${SITE_URL}/products/prod-overview.png`,
+    // .jpg：目录里实际是 prod-overview.jpg（此前 .png 笔误——实发走 imagePath 没炸，仅预览 URL 是坏的）
+    image: `${SITE_URL}/products/prod-overview.jpg`,
     imagePath: imagePathFor("overview"),
   };
 }

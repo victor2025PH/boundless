@@ -4,6 +4,7 @@ import {
   WEBAPP_SECTIONS,
   buildAutochat,
   buildContact,
+  buildCsWelcome,
   buildDeploy,
   buildFaqAnswer,
   buildFaqList,
@@ -13,6 +14,8 @@ import {
   buildWelcome,
   matchFreeText,
 } from "./bot-knowledge";
+import { getAdminChats } from "./admin-store";
+import { trackTg } from "./tg-events";
 import { CONTACT_URL, SITE_URL, CHANNEL_URL, GROUP_URL, BOT_URL, MINIAPP_URL, siteUtmLink } from "./site";
 import { BRAND } from "./brand";
 import { askDeepSeek } from "./deepseek";
@@ -59,7 +62,7 @@ export async function tgCall(method: string, body: Record<string, unknown>) {
 }
 
 export function mainMenuKeyboard(lang: BotLang): InlineBtn[][] {
-  const ai = lang === "zh" ? "🤖 AI 智能客服（问我）" : "🤖 AI assistant (ask me)";
+  const ai = lang === "zh" ? "👨‍💼 顾问顾嘉（问我）" : "👨‍💼 Ask Gary (consultant)";
   const open = lang === "zh" ? "🚀 打开官网" : "🚀 Open site";
   const rt = lang === "zh" ? "🎭 实时换脸" : "🎭 Live swap";
   const ac = lang === "zh" ? "💬 AI 成交" : "💬 AI closing";
@@ -199,6 +202,14 @@ export async function handleCommand(
   const kb = mainMenuKeyboard(lang);
 
   if (startArg) {
+    /* 客服承接场景（频道「👤 客服」按钮深链 /start cs_<campaign>）：
+       bot 秒回欢迎 = 客服先开口；campaign 落漏斗账 */
+    if (startArg === "cs" || startArg.startsWith("cs_")) {
+      const campaign = startArg.slice(3) || "direct";
+      void trackTg("tg_cs_start", { campaign });
+      await sendText(chatId, buildCsWelcome(lang), csKeyboard(lang));
+      return;
+    }
     const sectionMap: Record<string, string> = {
       pricing: buildPricing(lang),
       autochat: buildAutochat(lang),
@@ -231,6 +242,15 @@ export async function handleCommand(
   }
   const text = map[key] ?? buildWelcome(lang);
   await sendText(chatId, text, kb);
+}
+
+/** 客服场景键盘：AI 提问 / 常见问题 / 转人工（转人工会同步通知管理员迎接） */
+function csKeyboard(lang: BotLang): InlineBtn[][] {
+  return [
+    [{ text: lang === "zh" ? "👨‍💼 直接问顾嘉（秒回）" : "👨‍💼 Ask Gary (instant)", callback_data: "ask_ai" }],
+    [{ text: lang === "zh" ? "❓ 常见问题" : "❓ FAQ", callback_data: "faq_list" }],
+    [{ text: lang === "zh" ? "🙋 转人工客服" : "🙋 Human support", callback_data: "cs_human" }],
+  ];
 }
 
 function quickLeadKeyboard(lang: BotLang): InlineBtn[][] {
@@ -292,8 +312,8 @@ export async function handleGroupMessage(
   if (!text.trim()) {
     const intro =
       lang === "zh"
-        ? "👋 <b>无界科技 BOUNDLESS AI 助手</b>在这\n🎭 换脸 · 🎙 克隆声音 · 🎬 直播换脸换声 · 🌐 实时换语言 · 💬 AI 自动成交 · 🔐 私有部署\n\n直接 @我提问，或点下方按钮 👇"
-        : "👋 <b>BOUNDLESS AI assistant</b> here\n🎭 face swap · 🎙 voice clone · 🎬 live face/voice swap · 🌐 live translation · 💬 AI closing · 🔐 private deploy\n\n@mention me with a question, or tap below 👇";
+        ? "👋 <b>无界科技 BOUNDLESS 方案顾问 顾嘉（Gary）</b>在这\n🎭 换脸 · 🎙 克隆声音 · 🎬 直播换脸换声 · 🌐 实时换语言 · 💬 AI 自动成交 · 🔐 私有部署\n\n直接 @我提问，或点下方按钮 👇"
+        : "👋 <b>Gary, BOUNDLESS solutions consultant</b> here\n🎭 face swap · 🎙 voice clone · 🎬 live face/voice swap · 🌐 live translation · 💬 AI closing · 🔐 private deploy\n\n@mention me with a question, or tap below 👇";
     await sendText(chatId, intro, links, { replyTo });
     return;
   }
@@ -339,6 +359,26 @@ export async function handleCallback(
 
   await answerCallback(callbackId);
 
+  /* 转人工：给用户人工链接，同时通知管理员主动迎接（人工号无法自动开口，反向补齐） */
+  if (data === "cs_human") {
+    void trackTg("tg_cs_human", { user: from?.username ?? String(chatId) });
+    await sendText(
+      chatId,
+      lang === "zh"
+        ? `👤 已为你转人工客服：点下方按钮直达。\n人工已收到提醒，会尽快回复你；急事也可以先把问题发在这里，顾嘉先答。`
+        : `👤 Connecting you to human support — tap below.\nOur team has been notified and will reply soon; meanwhile Gary can answer here instantly.`,
+      [[{ text: lang === "zh" ? "👤 打开人工客服" : "👤 Open human support", url: CONTACT_URL }]]
+    );
+    const who = from?.username ? `@${from.username}` : from?.first_name ? `${from.first_name}（id ${chatId}）` : `id ${chatId}`;
+    const chats = await getAdminChats().catch(() => [] as string[]);
+    await Promise.allSettled(
+      chats.map((c) =>
+        sendText(c, `🔒 管理员 · 仅你可见\n🙋 <b>用户请求人工客服</b>：${who}\n请到 ${CONTACT_URL} 主动迎接（用户已拿到人工入口）。`)
+      )
+    );
+    return;
+  }
+
   if (data === "lead_quick") {
     const contact = from?.username ? `@${from.username}` : `tg:${chatId}`;
     const rec = {
@@ -373,8 +413,8 @@ export async function handleCallback(
     await sendText(
       chatId,
       lang === "zh"
-        ? "🤖 我就是 <b>AI 智能客服</b>，直接把问题发给我即可，比如：\n· 换脸怎么收费？\n· AI 成交聊天能接哪些平台？\n· 私有部署多少钱？\n\n需要真人随时点「👤 人工客服」。"
-        : "🤖 I'm your <b>AI assistant</b> — just send me your question, e.g.:\n· How much is face swap?\n· Which platforms does AI closing support?\n· What's the price of private deployment?\n\nNeed a human? Tap \"👤 Human support\" anytime.",
+        ? "👨‍💼 我是方案顾问<b>顾嘉（Gary）</b>，直接把问题发给我即可，比如：\n· 换脸怎么收费？\n· AI 成交聊天能接哪些平台？\n· 私有部署多少钱？\n\n需要其他同事随时点「👤 人工客服」。"
+        : "👨‍💼 I'm <b>Gary, your solutions consultant</b> — just send me your question, e.g.:\n· How much is face swap?\n· Which platforms does AI closing support?\n· What's the price of private deployment?\n\nNeed a human colleague? Tap \"👤 Human support\" anytime.",
       [[{ text: lang === "zh" ? "👤 人工客服" : "👤 Human support", url: CONTACT_URL }]]
     );
     return;

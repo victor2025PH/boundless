@@ -1,4 +1,5 @@
-// 集团账本 CLI 共享库（纯 JS，供 scripts/ledger-backfill.mjs、ledger-import-licenses.mjs 直接 node 运行）。
+// 集团账本 CLI 共享库（纯 JS，供 scripts/ledger-backfill.mjs、ledger-import-licenses.mjs、
+// ledger-link-customers.mjs 直接 node 运行）。
 //
 // ⚠️ 本文件是 website/lib/ledger.ts 的纯 JS 等价实现（DDL / upsert 语义 / ID 规范 /
 // inferProductId 与 TS 版一一对应）。修改任何一侧的表结构、upsert 语义或映射逻辑时，
@@ -10,7 +11,7 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import Database from "better-sqlite3";
 
-export const LEDGER_SCHEMA_VERSION = 4;
+export const LEDGER_SCHEMA_VERSION = 6;
 
 // ── ID 规范（与 lib/ids.ts 一致）───────────────────────────────────
 const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -270,6 +271,27 @@ CREATE INDEX IF NOT EXISTS idx_opplog_customer ON opportunities_log(customer_id)
 CREATE INDEX IF NOT EXISTS idx_opplog_status ON opportunities_log(status);
 `;
 
+// ── 表结构（schema v5：渠道账号台账 channel_accounts）───────────────
+// ⚠️ 与 website/lib/ledger.ts 中的 DDL_V5 逐字一致，修改必须同步！
+const DDL_V5 = `
+CREATE TABLE IF NOT EXISTS channel_accounts (
+  id TEXT PRIMARY KEY,
+  platform TEXT NOT NULL CHECK(platform IN ('telegram','whatsapp','messenger','line','web','other')),
+  label TEXT NOT NULL,
+  handle TEXT,
+  instance TEXT NOT NULL DEFAULT 'none' CHECK(instance IN ('zhiliao','tongyi','avatarhub','huoke','website','none')),
+  purpose TEXT NOT NULL DEFAULT '其他' CHECK(purpose IN ('总机接待','交付服务','测试','投放专号','其他')),
+  holder TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','paused','revoked','pending')),
+  session_ref TEXT,
+  notes TEXT,
+  created_at TEXT,
+  updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_channel_accounts_platform ON channel_accounts(platform);
+CREATE INDEX IF NOT EXISTS idx_channel_accounts_status ON channel_accounts(status);
+`;
+
 /** 打开账本 DB（WAL / busy_timeout 5000 / 自动建表迁移），与 lib/ledger.ts::getLedgerDb 等价。 */
 export function openLedgerDb(dbPath) {
   const file = path.resolve(dbPath || resolveLedgerDbPath());
@@ -283,11 +305,20 @@ export function openLedgerDb(dbPath) {
   return db;
 }
 
+// ⚠️ 与 website/lib/ledger.ts 的 migrateV6 逐字一致（is_test 标记列，条件式 ALTER 幂等）。
+function migrateV6(d) {
+  const hasCol = (t, c) => d.prepare(`PRAGMA table_info(${t})`).all().some((x) => x.name === c);
+  for (const t of ["customers", "orders", "leads", "licenses"]) {
+    if (!hasCol(t, "is_test")) d.exec(`ALTER TABLE ${t} ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0`);
+  }
+  d.exec("CREATE INDEX IF NOT EXISTS idx_orders_is_test ON orders(is_test)");
+}
+
 function migrate(db) {
   db.exec("CREATE TABLE IF NOT EXISTS meta (\n  key TEXT PRIMARY KEY,\n  value TEXT\n);");
   const row = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get();
   const current = row ? Number(row.value) || 0 : 0;
-  const migrations = [(d) => d.exec(DDL_V1), (d) => d.exec(DDL_V2), (d) => d.exec(DDL_V3), (d) => d.exec(DDL_V4)];
+  const migrations = [(d) => d.exec(DDL_V1), (d) => d.exec(DDL_V2), (d) => d.exec(DDL_V3), (d) => d.exec(DDL_V4), (d) => d.exec(DDL_V5), migrateV6];
   if (current >= migrations.length) return;
   const run = db.transaction(() => {
     for (let i = current; i < migrations.length; i++) migrations[i](db);
@@ -314,6 +345,49 @@ export function int(v) {
   return x === null ? null : Math.trunc(x);
 }
 const nowIso = () => new Date().toISOString();
+
+// ── 测试/演练数据判定（schema v6 is_test 的唯一口径）────────────────
+// 保守词边界匹配（宁可漏标不误标——误标会把真实数据从 KPI 滤掉）：
+//   - test / drill / smoke 前后都必须是非字母数字（"contest"/"latest"/"drilling"/
+//     "smoked" 不命中；"my-test" / "drill-run" 命中）；
+//   - e2e 只要求前边界（"E2ENOTIFYFP01" 这类 e2e 前缀指纹命中；正常英文词不会
+//     以 e2e 开头，误伤面为零）；
+//   - @internal 只认结尾（e2e 脚本约定 contact 形如 e2e-notify@internal）。
+// ⚠️ 与 lib/ledger.ts 的 isTestSignal 逐字一致，修改必须同步！
+const TEST_SIGNAL_RE = /(^|[^a-z0-9])e2e|(^|[^a-z0-9])(test|drill|smoke)([^a-z0-9]|$)|@internal\s*$/i;
+
+/** 任一入参命中测试信号即 true（null/undefined 跳过）。 */
+export function isTestSignal(...vals) {
+  return vals.some((v) => v !== null && v !== undefined && TEST_SIGNAL_RE.test(String(v)));
+}
+
+// ── 联系方式分类（客户归并的公共规则）───────────────────────────────
+// 仅显式 @xxx / t.me/xxx 形态判为 handle，email/phone 精确形态判定，其余为自由
+// 文本（不作跨行归并键）。ledger-link-customers.mjs 与 ensureCustomerFor* 的
+// create-on-miss 共用本函数。
+// ⚠️ 与 lib/ledger.ts 的 classifyStrongContact 同规则（TS 侧只取强信号三态），修改必须同步！
+export function classifyContact(text) {
+  const t = String(text ?? "").trim();
+  if (!t) return null;
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t)) return { type: "email", norm: t.toLowerCase() };
+  const handle =
+    t.match(/^@([A-Za-z0-9_]{3,32})$/) ||
+    t.match(/^(?:https?:\/\/)?(?:www\.)?t(?:elegram)?\.me\/@?([A-Za-z0-9_]{3,32})\/?$/i);
+  if (handle) return { type: "handle", norm: handle[1].toLowerCase() };
+  const digits = t.replace(/[\s\-()]/g, "");
+  if (/^\+?\d{7,15}$/.test(digits)) return { type: "phone", norm: digits };
+  return { type: "text", norm: t.toLowerCase().replace(/\s+/g, "") };
+}
+
+/** classifyContact 的强信号视图：handle/email/phone → { kind, value, display }；
+ *  自由文本/空 → null（不建档）。与 lib/ledger.ts::classifyStrongContact 语义一致。 */
+export function classifyStrongContact(text) {
+  const c = classifyContact(text);
+  if (!c || c.type === "text") return null;
+  if (c.type === "email") return { kind: "email", value: c.norm, display: c.norm };
+  if (c.type === "handle") return { kind: "contact", value: c.norm, display: `@${c.norm}` };
+  return { kind: "phone", value: c.norm, display: String(text).trim() };
+}
 
 // ── 产品映射（与 ledger.ts::inferProductId 一致，修改必须同步！）──
 const PRODUCT_EXACT = {
@@ -395,6 +469,7 @@ export function upsertOrderRow(row, db) {
     notify_chat: s(row.notify_chat),
     code: s(row.code),
     raw: s(row.raw),
+    is_test: row.is_test ? 1 : 0,
     synced_at: nowIso(),
   };
   const tx = db.transaction(() => {
@@ -402,11 +477,12 @@ export function upsertOrderRow(row, db) {
     if (!existing) {
       const id = row.id && isValidId(row.id, "ord") ? row.id : newId("ord");
       db.prepare(
-        `INSERT INTO orders (id, source_key, customer_id, product_id, sku_id, plan, edition, period, amount, pay_amount, currency, status, contact, fingerprint, lang, created_at, paid_at, activated_at, notify_chat, code, raw, synced_at)
-         VALUES (@id, @source_key, @customer_id, @product_id, @sku_id, @plan, @edition, @period, @amount, @pay_amount, @currency, @status, @contact, @fingerprint, @lang, @created_at, @paid_at, @activated_at, @notify_chat, @code, @raw, @synced_at)`
+        `INSERT INTO orders (id, source_key, customer_id, product_id, sku_id, plan, edition, period, amount, pay_amount, currency, status, contact, fingerprint, lang, created_at, paid_at, activated_at, notify_chat, code, raw, is_test, synced_at)
+         VALUES (@id, @source_key, @customer_id, @product_id, @sku_id, @plan, @edition, @period, @amount, @pay_amount, @currency, @status, @contact, @fingerprint, @lang, @created_at, @paid_at, @activated_at, @notify_chat, @code, @raw, @is_test, @synced_at)`
       ).run({ ...p, id });
       return { id, inserted: true };
     }
+    // is_test 只升不降（MAX）：回扫打过的测试标不被后续 JSON 镜像双写抹掉
     db.prepare(
       `UPDATE orders SET
          customer_id = COALESCE(customer_id, @customer_id),
@@ -416,7 +492,8 @@ export function upsertOrderRow(row, db) {
          amount = @amount, pay_amount = @pay_amount, currency = @currency,
          status = @status, contact = @contact, fingerprint = @fingerprint, lang = @lang,
          created_at = @created_at, paid_at = @paid_at, activated_at = @activated_at,
-         notify_chat = @notify_chat, code = @code, raw = @raw, synced_at = @synced_at
+         notify_chat = @notify_chat, code = @code, raw = @raw,
+         is_test = MAX(is_test, @is_test), synced_at = @synced_at
        WHERE source_key = @source_key`
     ).run(p);
     return { id: existing.id, inserted: false };
@@ -442,24 +519,26 @@ export function upsertLeadRow(row, db) {
     last_seen: s(row.last_seen),
     count: int(row.count),
     raw: s(row.raw),
+    is_test: row.is_test ? 1 : 0,
     synced_at: nowIso(),
   };
   const tx = db.transaction(() => {
     const existing = db.prepare("SELECT source_key FROM leads WHERE source_key = ?").get(sourceKey);
     if (!existing) {
       db.prepare(
-        `INSERT INTO leads (source_key, customer_id, name, contact, interest, message, lang, source, utm, status, first_seen, last_seen, count, raw, synced_at)
-         VALUES (@source_key, @customer_id, @name, @contact, @interest, @message, @lang, @source, @utm, @status, @first_seen, @last_seen, @count, @raw, @synced_at)`
+        `INSERT INTO leads (source_key, customer_id, name, contact, interest, message, lang, source, utm, status, first_seen, last_seen, count, raw, is_test, synced_at)
+         VALUES (@source_key, @customer_id, @name, @contact, @interest, @message, @lang, @source, @utm, @status, @first_seen, @last_seen, @count, @raw, @is_test, @synced_at)`
       ).run(p);
       return { id: sourceKey, inserted: true };
     }
+    // is_test 只升不降（MAX）：语义同订单
     db.prepare(
       `UPDATE leads SET
          customer_id = COALESCE(customer_id, @customer_id),
          name = @name, contact = @contact, interest = @interest, message = @message,
          lang = @lang, source = @source, utm = @utm, status = @status,
          first_seen = @first_seen, last_seen = @last_seen, count = @count,
-         raw = @raw, synced_at = @synced_at
+         raw = @raw, is_test = MAX(is_test, @is_test), synced_at = @synced_at
        WHERE source_key = @source_key`
     ).run(p);
     return { id: sourceKey, inserted: false };
@@ -485,6 +564,7 @@ export function upsertLicenseRow(row, db) {
     expires_at: s(row.expires_at),
     status: s(row.status),
     raw: s(row.raw),
+    is_test: row.is_test ? 1 : 0,
     synced_at: nowIso(),
   };
   const tx = db.transaction(() => {
@@ -494,11 +574,12 @@ export function upsertLicenseRow(row, db) {
     if (!existing) {
       const id = row.id && isValidId(row.id, "lic") ? row.id : newId("lic");
       db.prepare(
-        `INSERT INTO licenses (id, source_system, source_key, customer_id, product_id, sku_id, plan, edition, seats, machine_fingerprint, issued_at, expires_at, status, raw, synced_at)
-         VALUES (@id, @source_system, @source_key, @customer_id, @product_id, @sku_id, @plan, @edition, @seats, @machine_fingerprint, @issued_at, @expires_at, @status, @raw, @synced_at)`
+        `INSERT INTO licenses (id, source_system, source_key, customer_id, product_id, sku_id, plan, edition, seats, machine_fingerprint, issued_at, expires_at, status, raw, is_test, synced_at)
+         VALUES (@id, @source_system, @source_key, @customer_id, @product_id, @sku_id, @plan, @edition, @seats, @machine_fingerprint, @issued_at, @expires_at, @status, @raw, @is_test, @synced_at)`
       ).run({ ...p, id });
       return { id, inserted: true };
     }
+    // is_test 只升不降（MAX）：语义同订单
     db.prepare(
       `UPDATE licenses SET
          customer_id = COALESCE(customer_id, @customer_id),
@@ -507,7 +588,7 @@ export function upsertLicenseRow(row, db) {
          plan = @plan, edition = @edition, seats = @seats,
          machine_fingerprint = @machine_fingerprint,
          issued_at = @issued_at, expires_at = @expires_at, status = @status,
-         raw = @raw, synced_at = @synced_at
+         raw = @raw, is_test = MAX(is_test, @is_test), synced_at = @synced_at
        WHERE source_system = @source_system AND source_key = @source_key`
     ).run(p);
     return { id: existing.id, inserted: false };
@@ -516,6 +597,8 @@ export function upsertLicenseRow(row, db) {
 }
 
 // ── 身份匹配 / 自动归属 / 审计（与 ledger.ts 语义一致）──────────────
+export const IDENTITY_KINDS = ["contact", "tg", "email", "phone", "fingerprint"];
+
 export function normIdentityValue(kind, value) {
   const v = String(value ?? "").trim();
   if (kind === "contact" || kind === "email") return v.toLowerCase().replace(/\s+/g, "");
@@ -546,14 +629,91 @@ export function writeAudit(a, db) {
   return row;
 }
 
+/** 建客户主档（cust_ ULID + audit customer.create）。与 lib/ledger.ts::createCustomer
+ *  语义一致（修改必须同步）；mjs 侧无连接单例，db 必须显式传入。 */
+export function createCustomer(input = {}, db, actor = "system") {
+  const id = newId("cust");
+  const t = nowIso();
+  const rowValues = {
+    id,
+    display_name: s(input.display_name),
+    primary_contact: s(input.primary_contact),
+    tg_user_id: s(input.tg_user_id),
+    source: s(input.source),
+    notes: s(input.notes),
+    created_at: t,
+    updated_at: t,
+    is_test: input.is_test ? 1 : 0,
+  };
+  const tx = db.transaction(() => {
+    db.prepare(
+      `INSERT INTO customers (id, display_name, primary_contact, tg_user_id, source, notes, created_at, updated_at, is_test)
+       VALUES (@id, @display_name, @primary_contact, @tg_user_id, @source, @notes, @created_at, @updated_at, @is_test)`
+    ).run(rowValues);
+    writeAudit({ actor, action: "customer.create", entity: "customer", entity_id: id, detail: rowValues }, db);
+  });
+  tx();
+  return rowValues;
+}
+
+/** 给客户挂身份标识（幂等）。同 (kind,value) 已属于其他客户时不抢占，返回冲突信息。
+ *  与 lib/ledger.ts::attachIdentity 语义一致（修改必须同步）。 */
+export function attachIdentity(customerId, kind, value, db, actor = "system") {
+  if (!IDENTITY_KINDS.includes(kind)) throw new TypeError(`attachIdentity: bad kind ${kind}`);
+  const v = normIdentityValue(kind, value);
+  if (!v) throw new TypeError("attachIdentity: empty value");
+  const tx = db.transaction(() => {
+    const existing = db.prepare("SELECT customer_id FROM identities WHERE kind = ? AND value = ?").get(kind, v);
+    if (existing) {
+      if (existing.customer_id === customerId) return { ok: true, existed: true };
+      return { ok: false, existed: true, conflictCustomerId: existing.customer_id };
+    }
+    db.prepare("INSERT INTO identities (customer_id, kind, value, created_at) VALUES (?, ?, ?, ?)").run(
+      customerId,
+      kind,
+      v,
+      nowIso()
+    );
+    writeAudit(
+      { actor, action: "identity.attach", entity: "customer", entity_id: customerId, detail: { kind, value: v } },
+      db
+    );
+    return { ok: true, existed: false };
+  });
+  return tx();
+}
+
+/** create-on-miss 小工具：建客户主档（实时归档钩子用）。identities 由调用方随后挂。
+ *  ⚠️ 与 lib/ledger.ts::createCustomerForContact 一致，修改必须同步！ */
+function createCustomerForContact(input, db) {
+  const cust = createCustomer(
+    {
+      display_name: input.display,
+      primary_contact: input.primaryContact,
+      tg_user_id: input.tgUserId,
+      source: "auto:order-lead",
+      notes: "下单/留资实时自动建档（强信号）",
+      is_test: input.isTest ? 1 : 0,
+    },
+    db,
+    "system"
+  );
+  return cust.id;
+}
+
+/** 订单自动归属：先按身份匹配已有客户，未命中且有强信号（handle/email/phone/tg id）
+ *  则自动建档并回填。⚠️ 与 lib/ledger.ts::ensureCustomerForOrder 语义一致，修改必须同步！ */
 export function ensureCustomerForOrder(orderKey, db) {
   const o = db
-    .prepare("SELECT id, source_key, customer_id, contact, fingerprint FROM orders WHERE id = ? OR source_key = ?")
+    .prepare("SELECT id, source_key, customer_id, contact, fingerprint, notify_chat, is_test FROM orders WHERE id = ? OR source_key = ?")
     .get(orderKey, orderKey);
   if (!o) return null;
   if (o.customer_id) return o.customer_id;
+  const chat = String(o.notify_chat ?? "").trim();
+  const tgId = /^\d+$/.test(chat) ? chat : null; // 客户本人深链绑定的私聊 chat_id = 其 user id
   const candidates = [
     ["fingerprint", o.fingerprint],
+    ["tg", tgId],
     ["contact", o.contact],
     ["email", o.contact],
     ["phone", o.contact],
@@ -570,16 +730,48 @@ export function ensureCustomerForOrder(orderKey, db) {
       return cid;
     }
   }
-  return null;
+  const strong = classifyStrongContact(o.contact);
+  if (!strong && !tgId) return null;
+  const cid = createCustomerForContact(
+    {
+      display: strong?.display ?? `tg:${tgId}`,
+      primaryContact: o.contact,
+      tgUserId: tgId,
+      isTest: !!o.is_test || isTestSignal(o.contact),
+    },
+    db
+  );
+  if (strong) attachIdentity(cid, strong.kind, strong.value, db);
+  if (o.contact && (!strong || normIdentityValue("contact", o.contact) !== strong.value))
+    attachIdentity(cid, "contact", o.contact, db);
+  if (tgId) attachIdentity(cid, "tg", tgId, db);
+  db.prepare("UPDATE orders SET customer_id = ? WHERE id = ? AND customer_id IS NULL").run(cid, o.id);
+  writeAudit(
+    { actor: "system", action: "auto_create", entity: "order", entity_id: o.source_key, detail: { customer_id: cid, via: strong?.kind ?? "tg" } },
+    db
+  );
+  return cid;
 }
 
+/** 留资自动归属：语义同订单。⚠️ 与 lib/ledger.ts::ensureCustomerForLead 一致，修改必须同步！ */
 export function ensureCustomerForLead(sourceKey, db) {
-  const l = db.prepare("SELECT source_key, customer_id, contact FROM leads WHERE source_key = ?").get(sourceKey);
+  const l = db
+    .prepare("SELECT source_key, customer_id, name, contact, raw, is_test FROM leads WHERE source_key = ?")
+    .get(sourceKey);
   if (!l) return null;
   if (l.customer_id) return l.customer_id;
-  const tgUserId = l.source_key.startsWith("tg:") ? l.source_key.slice(3) : null;
+  let tgUserId = null;
+  if (l.source_key.startsWith("tg:") && /^\d+$/.test(l.source_key.slice(3))) tgUserId = l.source_key.slice(3);
+  let rawTgId = null;
+  try {
+    const raw = l.raw ? JSON.parse(l.raw) : null;
+    if (raw?.tg_user_id != null && /^\d+$/.test(String(raw.tg_user_id))) rawTgId = String(raw.tg_user_id);
+  } catch {
+    /* raw 非 JSON → 忽略 */
+  }
+  const tgId = tgUserId ?? rawTgId;
   const candidates = [
-    ["tg", tgUserId],
+    ["tg", tgId],
     ["contact", l.contact],
     ["email", l.contact],
     ["phone", l.contact],
@@ -596,7 +788,27 @@ export function ensureCustomerForLead(sourceKey, db) {
       return cid;
     }
   }
-  return null;
+  const strong = classifyStrongContact(l.contact);
+  if (!strong && !tgId) return null;
+  const cid = createCustomerForContact(
+    {
+      display: s(l.name) ?? strong?.display ?? (tgId ? `tg:${tgId}` : null),
+      primaryContact: l.contact,
+      tgUserId: tgId,
+      isTest: !!l.is_test || isTestSignal(l.contact, l.name),
+    },
+    db
+  );
+  if (tgId) attachIdentity(cid, "tg", tgId, db);
+  if (strong) attachIdentity(cid, strong.kind, strong.value, db);
+  if (l.contact && (!strong || normIdentityValue("contact", l.contact) !== strong.value))
+    attachIdentity(cid, "contact", l.contact, db);
+  db.prepare("UPDATE leads SET customer_id = ? WHERE source_key = ? AND customer_id IS NULL").run(cid, l.source_key);
+  writeAudit(
+    { actor: "system", action: "auto_create", entity: "lead", entity_id: l.source_key, detail: { customer_id: cid, via: strong?.kind ?? "tg" } },
+    db
+  );
+  return cid;
 }
 
 // ── 行转换（与 lib/ledger-sync.ts 的 orderEntryToRow/leadEntryToRow 一致）──
@@ -624,6 +836,8 @@ export function orderEntryToRow(o) {
     notify_chat: o.notify_chat != null ? String(o.notify_chat) : null,
     code: o.code ?? null,
     raw: JSON.stringify(o),
+    // e2e/演练单出生即标（contact 如 e2e-notify@internal、指纹如 E2ENOTIFYFP01）
+    is_test: isTestSignal(o.contact, o.fingerprint) ? 1 : 0,
   };
 }
 
@@ -642,6 +856,8 @@ export function leadEntryToRow(e) {
     last_seen: e.lastSeen ?? null,
     count: e.count ?? null,
     raw: JSON.stringify(e),
+    // e2e/演练留资出生即标（contact/name/来源键任一命中测试信号）
+    is_test: isTestSignal(e.contact, e.name, e.id) ? 1 : 0,
   };
 }
 

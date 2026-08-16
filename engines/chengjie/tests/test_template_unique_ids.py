@@ -22,9 +22,8 @@ _ID = re.compile(r"""\bid\s*=\s*(['"])([^'"]*)\1""")
 
 # 可接受的重复（非 bug）：附原因，修法变动时由 not_stale 检查提醒。
 _ACCEPTED_DUP_IDS = {
-    # 响应式：桌面侧栏 + 移动抽屉是两套镜像导航、共用同 badge id；base.html 的 setBadge()
-    # 已改用 querySelectorAll('[id=..]') 同时更新两套（见该函数注释）。
-    "base.html": {"badge-cases", "badge-crisis", "badge-learner"},
+    # base.html 徽标 id 原为简洁/完整两分支各写一份(镜像导航);nav_schema 单源重构后
+    # id 由 `id="{{ it.badge }}"` 动态渲染,静态扫描不再计入 → 白名单条目已回收。
     # 互斥 Jinja 分支：{% if has_users %} 密码登录 vs {% else %} 令牌登录，渲染时只出其一，
     # DOM 里永远只有一个 pwd-inp/eye-icon。静态扫描不评估分支 → 假阳性。
     "login.html": {"pwd-inp", "eye-icon"},

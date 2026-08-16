@@ -28,9 +28,14 @@ export interface OrderEntry {
   product_id?: string;
   /** 挂牌金额（整数 USDT）。 */
   amount: number;
-  /** 实际应付金额 = amount + 唯一小数尾数：到账金额可反查订单，自动核销的关键。 */
+  /** 实际应付金额 = amount + 唯一小数尾数：到账金额可反查订单，自动核销的关键。
+   *  卡支付（Stripe）按 session 对账不需要尾数，pay_amount === amount。 */
   pay_amount: number;
-  currency: "USDT";
+  currency: "USDT" | "USD";
+  /** 支付方式：usdt 链上转账（默认；历史订单无此字段视同 usdt）/ card 银行卡（Stripe Checkout）。 */
+  method?: "usdt" | "card";
+  /** Stripe Checkout Session id（卡支付审计/对账用，webhook 落地后回填）。 */
+  stripe_session_id?: string;
   contact: string;
   fingerprint: string;
   lang: string;
@@ -104,13 +109,16 @@ export async function createOrder(
 ): Promise<OrderEntry> {
   return serialize(async () => {
     const db = await readDb();
+    // usdt：分配唯一小数尾数供链上自动核销；card：Stripe 按 session 对账，金额原样不加尾数。
+    const method: "usdt" | "card" = input.method === "card" ? "card" : "usdt";
     const entry: OrderEntry = {
       ...input,
       id: newOrderId(),
       t: new Date().toISOString(),
       status: "pending",
-      pay_amount: allocPayAmount(db, input.amount),
-      currency: "USDT",
+      method,
+      pay_amount: method === "card" ? input.amount : allocPayAmount(db, input.amount),
+      currency: method === "card" ? "USD" : "USDT",
     };
     // 出生即带全域 SKU 关联（sku_registry.json）；映射为 null 时不写字段，宁缺毋错。
     const sku = resolveOrderSku(input.plan, input.edition, input.period);
@@ -158,6 +166,41 @@ export async function setOrderStatus(id: string, status: OrderStatus, code?: str
     // 影子账本双写（best-effort，失败静默）
     void import("./ledger-sync").then((m) => m.syncOrderEntry(o)).catch(() => {});
     return o;
+  });
+}
+
+/** Stripe 对账落地（webhook 实时 / reconcile 巡检共用）：标记到账 + 回填 session id，
+ *  一次串行写完成（幂等）。返回 changed=false 表示订单已是 paid/activated（Stripe 会重试投递、
+ *  同事件可能多次到达，调用方据此跳过重复通知）。via 记入订单流水，审计可区分来源通道。 */
+export async function markOrderCardPaid(
+  id: string,
+  sessionId: string,
+  via: "stripe_webhook" | "stripe_reconcile" = "stripe_webhook"
+): Promise<{ order: OrderEntry; changed: boolean } | null> {
+  return serialize(async () => {
+    const db = await readDb();
+    const o = db.orders[id.trim().toUpperCase()];
+    if (!o) return null;
+    if (o.status === "paid" || o.status === "activated") {
+      // 已到账/已开通：只补 session id（若缺），不动状态、不重复记流水
+      if (!o.stripe_session_id && sessionId) {
+        o.stripe_session_id = sessionId.slice(0, 120);
+        await writeDb(db);
+      }
+      return { order: o, changed: false };
+    }
+    o.status = "paid";
+    o.paid_at = o.paid_at || new Date().toISOString();
+    if (sessionId) o.stripe_session_id = sessionId.slice(0, 120);
+    await writeDb(db);
+    await appendFile(
+      LOG,
+      JSON.stringify({ t: new Date().toISOString(), id: o.id, event: "status:paid", via }) + "\n",
+      "utf-8"
+    ).catch(() => {});
+    // 影子账本双写（best-effort，失败静默）
+    void import("./ledger-sync").then((m) => m.syncOrderEntry(o)).catch(() => {});
+    return { order: o, changed: true };
   });
 }
 

@@ -638,7 +638,22 @@ class PersonaManager:
                 "role": p.get("role") or "",
                 "tags": list(p.get("tags") or []),
                 "has_voice": bool(vp.get("enabled") or vp.get("voice") or vp.get("backend")),
+                # personality 可能是 dict/字符串/None；normalize 会把字符串收敛成
+                # {"style": <strip 后原文>}，故 dict 分支须看值是否有实质内容
+                # （{} 与 {"style": ""} 都算未配置 → False）
+                "has_personality": bool(
+                    any(
+                        str(v).strip() if isinstance(v, str) else v
+                        for v in (p.get("personality") or {}).values()
+                    ) if isinstance(p.get("personality"), dict)
+                    else str(p.get("personality") or "").strip()
+                ),
                 "has_history": bool(self._profile_history.get(pid)),
+                # 最后一次编辑时间（取历史栈栈顶快照的 ts；从未编辑过的出厂/导入人设为空串）
+                "last_edited_at": (
+                    (self._profile_history.get(pid) or [{}])[-1].get("ts", "")
+                    if self._profile_history.get(pid) else ""
+                ),
                 "binding_count": bc,
                 "source": source,           # P6: 'config'|'canonical'|'runtime'|'studio'|'mrpa'
                 "is_mrpa_source": bool(p.get("_mrpa_source")),  # P6: convenience flag
@@ -745,6 +760,14 @@ class PersonaManager:
     def delete_profile(self, profile_id: str) -> bool:
         """Remove a persona profile. Returns True if it existed."""
         pid = str(profile_id)
+        existing = self._profile_personas.get(pid)
+        if existing is not None:
+            # 删除前快照进历史 → /revert 可恢复误删
+            q = self._profile_history.setdefault(pid, deque(maxlen=_HISTORY_MAXLEN))
+            q.append({
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "persona": copy.deepcopy(existing),
+            })
         existed = self._profile_personas.pop(pid, None) is not None
         if existed:
             self._profile_sources.pop(pid, None)  # P6: clean up source tracking
@@ -763,6 +786,8 @@ class PersonaManager:
             return False
         prev = q.pop()
         self._profile_personas[pid] = prev["persona"]
+        # 恢复（含误删恢复）后标记为已定制，避免 source 追踪缺失
+        self._profile_sources.setdefault(pid, "studio")
         self._fire_change_hooks("profile_revert", profile_id=pid)
         return True
 
@@ -868,6 +893,7 @@ class PersonaManager:
         platform: str = "",
         funnel_stage: str = "",
         fallback_name: str = "",
+        record_usage: bool = True,
     ) -> str:
         """供 AI 系统提示拼接。detail=full 完整；compact 仅核心句+禁忌，减轻与域 system_prompt 重复。
         name_override: 若 config 中配置了 ai.ai_name，应传入以覆盖域 persona.yaml 里的默认名，避免与主系统提示冲突。
@@ -876,8 +902,21 @@ class PersonaManager:
         funnel_stage: 漏斗阶段（'cold'/'warm'/'hot'），用于语调调节。
         fallback_name: 无人设解析出真实姓名时的兜底真名（config ai.fallback_display_name），
             防止回落到域标签「线上陪伴」被当名字念出。
+        record_usage: 近7日活跃统计埋点开关。生产回复链路保持默认 True；
+            预览/管理类调用（web 预览、routes 下的试装配）应传 False 免刷虚计数。
         """
         p = self.get_persona(chat_id, account_persona_id)
+        # 近7日活跃统计埋点：本方法是所有生产回复链路拼人设块的收口点。
+        # 仅统计解析出具名 profile（带 id）的生产调用；预览类调用传 record_usage=False。
+        # 埋点绝不允许影响回复链路——persona_usage 内部已吞异常，这里再兜一层。
+        if record_usage:
+            _upid = str((p or {}).get("id") or "").strip()
+            if _upid:
+                try:
+                    from src.utils.persona_usage import record as _usage_record
+                    _usage_record(_upid)
+                except Exception:
+                    pass
         if detail == "compact":
             return self._format_persona_compact(
                 p, name_override=name_override, fallback_name=fallback_name

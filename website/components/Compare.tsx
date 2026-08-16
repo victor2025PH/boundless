@@ -11,7 +11,8 @@ export default function Compare() {
   const c = t.compare;
 
   return (
-    <section className="relative py-20">
+    <section className="relative overflow-hidden py-20">
+      {/* overflow-hidden 在 section 上：裁掉这枚 680px 光晕的移动端隐性超宽 */}
       <div className="pointer-events-none absolute left-1/2 top-10 -z-10 h-72 w-[680px] -translate-x-1/2 rounded-full bg-neon-violet/10 blur-[120px]" />
       <div className="mx-auto max-w-5xl px-5">
         <Reveal className="mb-10 text-center">

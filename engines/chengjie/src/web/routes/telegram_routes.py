@@ -135,7 +135,8 @@ def _list_snapshots() -> list:
 
 def _today_stats_from_log(log_path: str = "logs/app.log") -> Dict[str, int]:
     """Count today's Telegram activity by scanning app.log (fast tail scan)."""
-    stats = {"messages": 0, "voice_in": 0, "tts_sent": 0}
+    stats = {"messages": 0, "voice_in": 0, "tts_sent": 0,
+             "gate_cooldown": 0, "gate_streak": 0}
     try:
         today = datetime.date.today().strftime("%Y-%m-%d")
         p = Path(log_path)
@@ -155,6 +156,21 @@ def _today_stats_from_log(log_path: str = "logs/app.log") -> Dict[str, int]:
             # TTS voice sent
             if "[voice_reply] voice sent" in line:
                 stats["tts_sent"] += 1
+            # reply-logic gates (cooldown / consecutive-limit blocks)
+            if "[回复逻辑] 冷却中，跳过自动回复" in line:
+                stats["gate_cooldown"] += 1
+            elif "[回复逻辑] 连续自动回复已达上限" in line:
+                stats["gate_streak"] += 1
+    except Exception:
+        pass
+    # 闸门计数优先取结构化落盘（高流量日 8000 行尾扫会漏计早间拦截）；
+    # 当日文件存在 → 覆盖为权威值，不存在 → 保留上面的日志扫描回落。
+    try:
+        from src.client.gate_stats import today_counts
+        gc = today_counts()
+        if gc is not None:
+            stats["gate_cooldown"] = int(gc.get("cooldown", 0))
+            stats["gate_streak"] = int(gc.get("streak", 0))
     except Exception:
         pass
     return stats
@@ -503,13 +519,14 @@ def register_telegram_routes(
             "online": False,
             "username": "",
             "display_name": "",
-            "stats": {"messages": 0, "voice_in": 0, "tts_sent": 0},
+            "stats": {"messages": 0, "voice_in": 0, "tts_sent": 0,
+                      "gate_cooldown": 0, "gate_streak": 0},
         }
 
         if telegram_client is not None:
             info["online"] = bool(getattr(telegram_client, "running", False))
             try:
-                me = getattr(telegram_client, "_me", None)
+                me = getattr(telegram_client, "user_info", None) or getattr(telegram_client, "_me", None)
                 if me:
                     info["username"] = (
                         f"@{me.username}" if getattr(me, "username", None) else ""
@@ -531,6 +548,15 @@ def register_telegram_routes(
             pass
 
         return {"ok": True, **info}
+
+    # ── 近 N 日拦截趋势（结构化计数文件，缺失日补 0） ─────────
+    @app.get("/api/telegram/gate-stats")
+    async def api_tg_gate_stats(request: Request, days: int = 7, _=Depends(api_auth)):
+        import asyncio as _aio
+        from src.client.gate_stats import recent_counts
+        days = max(1, min(int(days or 7), 30))
+        rows = await _aio.to_thread(recent_counts, days)
+        return {"ok": True, "days": days, "rows": rows}
 
     # ── 配置健康检查 ─────────────────────────────────────────────
     @app.get("/api/telegram/health")

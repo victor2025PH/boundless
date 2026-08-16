@@ -1,4 +1,5 @@
-// /api/console/customers —— 客户列表（GET ?q=）与创建（POST）。
+// /api/console/customers —— 客户列表（GET ?q=&test=1）与创建（POST）。
+// ?test=1 → includeTest：把测试/演练数据（is_test=1）一并带出，默认排除。
 // POST body: { display_name, primary_contact?, notes?, identity?: { kind, value } }
 // identity 可选：创建后立即挂一条身份标识（如 contact），便于后续订单/留资自动归属。
 // RBAC：GET viewer+；POST admin+（audit actor="console:<username>"）。
@@ -28,6 +29,7 @@ export async function GET(req: NextRequest) {
       q: sp.get("q") ?? undefined,
       limit: sp.get("limit") ? Number(sp.get("limit")) : undefined,
       offset: sp.get("offset") ? Number(sp.get("offset")) : undefined,
+      includeTest: sp.get("test") === "1",
     });
     return NextResponse.json({ ok: true, ...result });
   } catch (e) {

@@ -1,0 +1,132 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "platform/replybus 决策回执总线 — decide 的 request/response 契约",
+  "description": "字段契约与 client.py / CONTRACT.md 一一对应。执行权归智控王：chengjie 只返回决策、绝不代发，响应里不存在任何'已发送'语义字段。总线不可达/决策非法时由瘦客户端本地收敛为 {available:false, action:'fallback'}（服务端永不返回该形态）。隐私红线：message.text 是入站私信原文，只作本次请求载荷点对点传输，绝不落任何日志/事件/集团数仓。",
+  "definitions": {
+    "decide_request": {
+      "type": "object",
+      "description": "POST /api/replybus/decide 请求体：{\"message\": <消息信封>}。信封由智控王在收到入站私信时组装。",
+      "properties": {
+        "message": {
+          "type": "object",
+          "description": "入站消息信封（envelope_error 校验：platform + external_id + text 必填非空）",
+          "properties": {
+            "platform": {
+              "type": "string",
+              "description": "必填：来源平台短码（如 telegram）"
+            },
+            "account": {
+              "type": "string",
+              "description": "执行账号引用（池化编号，如 acct_pool_007）。只是引用不是凭据——.session 文件与登录态永不出智控王本机；chengjie 据此区分账号画像/人设，但绝不能也无法用它发送"
+            },
+            "external_id": {
+              "type": "string",
+              "description": "必填：对方在平台内的唯一 ID（如 tg:987654321）"
+            },
+            "text": {
+              "type": "string",
+              "description": "必填：入站私信原文。隐私红线：只作本次请求载荷发往 chengjie 决策，两端都不落日志/事件/数仓；可观测只允许计数与 action/persona 维度，不含原文"
+            },
+            "msg_id": {
+              "type": "string",
+              "description": "平台消息 ID。chengjie 侧按它幂等：同一 msg_id 重复问询返回同一决策，防调用方重试造成语义分叉"
+            },
+            "session_id": {
+              "type": "string",
+              "description": "可选：会话线索 ID，用于 chengjie 串联同一对话的多轮决策上下文"
+            },
+            "context_hint": {
+              "type": "object",
+              "description": "可选：轻量上下文提示（如 lang / funnel_stage / campaign），帮助大脑决策；不要塞历史原文"
+            }
+          },
+          "required": ["platform", "external_id", "text"]
+        }
+      },
+      "required": ["message"]
+    },
+    "decide_response": {
+      "type": "object",
+      "description": "成功决策（chengjie → 智控王）。防双发铁律：本响应只是'怎么回'的指令，执行发送由且仅由智控王在自己的 session 上完成；不存在也永远不得加入 sent/delivered 等'已发送'语义字段。",
+      "properties": {
+        "available": {
+          "const": true,
+          "description": "由瘦客户端 setdefault 填入，表示总线可用、决策有效"
+        },
+        "action": {
+          "type": "string",
+          "enum": ["send", "draft", "silent", "handoff"],
+          "description": "决策动作：send=智控王直接发 text / draft=生成草稿进人工确认队列 / silent=不回 / handoff=转人工坐席。服务端返回枚举外动作会被瘦客户端收敛为 fallback（不执行可疑决策）"
+        },
+        "text": {
+          "type": "string",
+          "description": "action=send/draft 时的回复文本（由智控王执行发送/呈现草稿）"
+        },
+        "media": {
+          "type": ["string", "object", "null"],
+          "description": "可选：随发媒体引用（URL 或资源 ID）；同样由智控王执行发送"
+        },
+        "persona": {
+          "type": "string",
+          "description": "可选：本次决策采用的人设 ID（可观测维度之一，不含原文）"
+        },
+        "delay_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "可选：建议拟人化延迟（毫秒），由智控王在执行发送前落实"
+        },
+        "reason": {
+          "type": "string",
+          "description": "可选：决策理由短码（如 new_lead_greeting / spam_suspect），供调用方发 observability 计数事件；禁止携带入站原文"
+        }
+      },
+      "required": ["action"]
+    },
+    "fallback_response": {
+      "type": "object",
+      "description": "降级返回——仅由瘦客户端本地合成，服务端永不返回。触发情形：单机模式（BOUNDLESS_BUS_URL 未配置）/ 连接失败 / 超时 / HTTP 错误 / JSON 解析失败 / 总线返回非法决策 / 信封非法。调用方（智控王）据此走本地 ai_auto_chat 兜底（总线可选），与总线决策路径互斥，天然防双发。",
+      "properties": {
+        "available": {
+          "const": false,
+          "description": "false 表示本次未拿到有效总线决策"
+        },
+        "action": {
+          "const": "fallback",
+          "description": "固定为 fallback：调用方走本地 ai_auto_chat 兜底"
+        },
+        "mode": {
+          "const": "standalone",
+          "description": "仅单机模式（未配置 BOUNDLESS_BUS_URL）时出现"
+        },
+        "error": {
+          "type": "string",
+          "description": "失败摘要（如 'HTTP 503'、超时、连接失败、'总线返回非法决策(...)'）"
+        },
+        "detail": {
+          "type": "string",
+          "description": "可选：HTTP 错误响应体前 300 字符"
+        },
+        "rejected": {
+          "const": true,
+          "description": "仅信封非法（envelope_error 拦截，未发起 HTTP）时出现，提示调用方修信封"
+        }
+      },
+      "required": ["available", "action"]
+    },
+    "status_response": {
+      "type": "object",
+      "description": "GET /api/replybus/status 成功响应（不可达时由瘦客户端收敛为 {available:false, error:...}）",
+      "properties": {
+        "available": {
+          "const": true,
+          "description": "由瘦客户端 setdefault 填入，表示 HTTP 可达"
+        },
+        "ready": {
+          "type": "boolean",
+          "description": "决策管线（人设/话术/意向模型）是否已加载就绪；available() = available && ready"
+        }
+      },
+      "required": ["ready"]
+    }
+  }
+}

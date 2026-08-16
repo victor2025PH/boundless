@@ -1,0 +1,49 @@
+{
+  "_note": "线索交接总线信封 schema（获客→承接的点对点业务载荷）。契约全文见 CONTRACT.md。红线：本信封字段绝不可转发进 observability 事件/集团数仓——数仓只收计数/意向分/渠道（走 *.lead.captured 指标事件）。",
+  "version": 1,
+  "updated": "2026-07-19",
+  "ingest_endpoint": "POST {BOUNDLESS_BUS_URL}/api/leadbus/ingest",
+  "status_endpoint": "GET {BOUNDLESS_BUS_URL}/api/leadbus/status",
+  "envelope": {
+    "lead_id": { "type": "string", "required": false, "description": "幂等键；客户端自动补 lead_<hex>，承接端按此去重，补投安全" },
+    "ts": { "type": "string", "required": false, "description": "捕获时刻 ISO8601 UTC，客户端自动补" },
+    "source": {
+      "type": "object", "required": true, "description": "线索来源",
+      "fields": {
+        "product": { "type": "string", "required": true, "description": "获客产品 product_id（zhituo / 或其它上游）" },
+        "platform": { "type": "string", "required": true, "description": "捕获平台（telegram / facebook / whatsapp 等）" },
+        "campaign": { "type": "string", "required": false, "description": "归因活动/来源（utm 或群/关键词标识）" }
+      }
+    },
+    "lead": {
+      "type": "object", "required": true, "description": "线索本体（点对点业务载荷，不进数仓）",
+      "fields": {
+        "external_id": { "type": "string", "required": true, "description": "平台内唯一标识，如 tg:<user_id>（幂等/去重用）" },
+        "handle": { "type": "string", "required": false, "description": "用户名/昵称（业务显示用，不进遥测）" },
+        "profile": {
+          "type": "object", "required": false, "description": "线索画像",
+          "fields": {
+            "lang": { "type": "string", "required": false, "description": "语言（BCP-47），决定是否需要翻译赋能" },
+            "funnel_stage": { "type": "string", "required": false, "description": "漏斗阶段枚举（new/contacted/replied/interested/negotiating/converted/churned）" },
+            "intent_score": { "type": "float", "required": false, "description": "意向分 0..1（客户端校验区间；用于承接优先级排序）" },
+            "source_group": { "type": "string", "required": false, "description": "来源群/频道标识（获客上下文）" }
+          }
+        }
+      }
+    },
+    "assign_hint": {
+      "type": "object", "required": false, "description": "分配提示（承接端可参考/可忽略）",
+      "fields": {
+        "domain": { "type": "string", "required": false, "description": "行业域，对齐 chengjie/domains（ecommerce/crypto/education/…）" },
+        "persona": { "type": "string", "required": false, "description": "建议承接人设角色（sales/support/expert）" }
+      }
+    }
+  },
+  "response": {
+    "_note": "承接端 /api/leadbus/ingest 的回执（客户端会 setdefault available=True）",
+    "ready": { "type": "bool", "description": "承接入口是否就绪" },
+    "assigned": { "type": "bool", "description": "是否已进入承接队列/分配成功" },
+    "lead_id": { "type": "string", "description": "回显幂等键" },
+    "session_id": { "type": "string", "description": "若即时建会话则回该会话 ID（可选）" }
+  }
+}

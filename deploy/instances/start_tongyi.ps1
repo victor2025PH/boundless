@@ -112,6 +112,16 @@ if (Test-Path $lic) {
     $chain += "set `"LICENSE_KEY=`""
     Write-Host "[start-$InstanceId] 未见实例授权文件（$lic），按社区模式/共享文件回落启动" -ForegroundColor Yellow
 }
+# 实施31：显式注入告警密钥/基址（ops_alert 推「号被风控/封号/熔断」到集团 TG 中继）。
+$ingestKey = [Environment]::GetEnvironmentVariable('EVENT_INGEST_KEY', 'Machine')
+if ($ingestKey) {
+    $chain += "set `"EVENT_INGEST_KEY=$ingestKey`""
+    Write-Host "[start-$InstanceId] 注入 EVENT_INGEST_KEY（告警联动就绪；掩码 …$($ingestKey.Substring([Math]::Max(0,$ingestKey.Length-4)))）"
+} else {
+    Write-Host "[start-$InstanceId] 未见机器级 EVENT_INGEST_KEY，反封号告警将只落日志（不影响接待）" -ForegroundColor Yellow
+}
+$syncBase = [Environment]::GetEnvironmentVariable('PERSONA_SYNC_BASE', 'Machine')
+if ($syncBase) { $chain += "set `"PERSONA_SYNC_BASE=$syncBase`"" }
 $chain += "python `"$EngineDir\main.py`" > `"$out`" 2> `"$err`""
 $cmdline = 'cmd.exe /c ' + ($chain -join ' && ')
 
@@ -120,8 +130,11 @@ Write-Host "[start-$InstanceId]   代码: $EngineDir （共享，只读；改代
 Write-Host "[start-$InstanceId]   数据: $DataRoot"
 # Win32_Process.Create（不继承句柄）：Start-Process 会让 python 继承本 shell 的
 # stdout 管道句柄，凡捕获本脚本输出的调用方（deploy.ps1/自动化）会挂死等 EOF。
+# ShowWindow=0（SW_HIDE）：Create 默认会弹出可见 cmd 窗口（本身又因输出重定向到日志
+# 而永远是空黑窗），这里用 Win32_ProcessStartup 隐藏之，不改变上面的无句柄继承特性。
+$startupInfo = New-CimInstance -CimClass (Get-CimClass -ClassName Win32_ProcessStartup) -ClientOnly -Property @{ ShowWindow = [uint16]0 }
 $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
-    CommandLine = $cmdline; CurrentDirectory = $DataRoot }
+    CommandLine = $cmdline; CurrentDirectory = $DataRoot; ProcessStartupInformation = $startupInfo }
 if ($r.ReturnValue -ne 0) { Fail "进程创建失败 ReturnValue=$($r.ReturnValue)" }
 
 Start-Sleep -Seconds 4

@@ -374,12 +374,26 @@ function safeRule(fn: () => Opportunity[]): Opportunity[] {
   }
 }
 
+/** 测试/演练客户集合（is_test=1）——商机默认不给测试客户生成（实施22）。
+ *  COALESCE 兼容迁移前旧行；表无 is_test 列（未迁移旧库）时返回空集不误伤。 */
+function testCustomerIds(db: Database.Database): Set<string> {
+  const set = new Set<string>();
+  try {
+    for (const r of db.prepare("SELECT id FROM customers WHERE COALESCE(is_test,0) = 1").all() as { id: string }[])
+      set.add(r.id);
+  } catch {
+    /* 旧库无 is_test 列 → 空集 */
+  }
+  return set;
+}
+
 function collect(db: Database.Database, kinds: readonly OpportunityKind[]): Opportunity[] {
   const out: Opportunity[] = [];
   if (kinds.includes("persona_cross_sell")) out.push(...safeRule(() => personaCrossSellOpportunities(db)));
   if (kinds.includes("product_gap_cross_sell")) out.push(...safeRule(() => productGapOpportunities(db)));
   if (kinds.includes("expiring_renewal")) out.push(...safeRule(() => expiringRenewalOpportunities(db)));
-  return out;
+  const testCust = testCustomerIds(db);
+  return testCust.size ? out.filter((o) => !testCust.has(o.customerId)) : out;
 }
 
 const KIND_ORDER: Record<OpportunityKind, number> = {

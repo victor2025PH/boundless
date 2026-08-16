@@ -26,7 +26,8 @@ export default function Contact() {
   };
 
   return (
-    <section id="contact" className="relative py-24">
+    <section id="contact" className="relative overflow-hidden py-24">
+      {/* overflow-hidden 在 section 上：裁掉这枚 600px 光晕的移动端隐性超宽 */}
       <div className="pointer-events-none absolute left-1/2 top-0 h-80 w-[600px] -translate-x-1/2 rounded-full bg-neon-violet/15 blur-[140px]" />
       <div className="relative mx-auto max-w-5xl px-5">
         <motion.div

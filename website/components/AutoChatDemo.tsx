@@ -1,6 +1,7 @@
 "use client";
 
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
+import { useReducedMotionSafe } from "@/components/fx/useReducedMotionSafe";
 import { useEffect, useState } from "react";
 import { Languages, Bot, Inbox, Play, Sparkles } from "lucide-react";
 import { useLang } from "./LanguageContext";
@@ -18,12 +19,18 @@ const VOICE_BARS = [6, 11, 8, 16, 10, 18, 9, 14, 7, 13, 17, 9, 12, 6, 15, 8];
 export default function AutoChatDemo() {
   const { t } = useLang();
   const d = t.autochat.demo;
-  const reduced = useReducedMotion();
+  const reduced = useReducedMotionSafe();
   const { ref, inView } = useInView<HTMLDivElement>();
-  const [step, setStep] = useState(reduced ? 5 : 0);
+  // 初始步进不读 reduced（SSR 恒 false、reduce 客户端首帧 true → hydration 不一致）；
+  // reduce 用户在挂载后直接跳到完整对话（step 5），首帧与 SSR 保持一致。
+  const [step, setStep] = useState(0);
 
   useEffect(() => {
-    if (reduced || !inView) return;
+    if (reduced) {
+      setStep(5);
+      return;
+    }
+    if (!inView) return;
     const id = setInterval(() => setStep((s) => (s + 1) % 6), 1600);
     return () => clearInterval(id);
   }, [reduced, inView]);

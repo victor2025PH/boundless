@@ -33,7 +33,8 @@ try {
   Write-Host '[1/4] 打包 website/ (排除 node_modules/.next/.git/.env.local/临时文件) ...'
   if (Test-Path $tar) { Remove-Item $tar -Force }
   tar -czf $tar --exclude=node_modules --exclude=.next --exclude=.git --exclude=.env.local `
-      "--exclude=*.tsbuildinfo" "--exclude=*.log" --exclude=og-test.png --exclude=test-fill.png .
+      "--exclude=*.tsbuildinfo" "--exclude=*.log" --exclude=og-test.png --exclude=test-fill.png `
+      --exclude=ops-overlay.tgz "--exclude=scripts/_*" .
   if ($LASTEXITCODE -ne 0) { throw '打包失败' }
   Write-Host ("    包大小 {0:N1} MB" -f ((Get-Item $tar).Length / 1MB))
 

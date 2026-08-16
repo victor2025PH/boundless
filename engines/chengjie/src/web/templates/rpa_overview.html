@@ -1,6 +1,6 @@
 {% extends "base.html" %}
-{% block title %}{{ (i18n or {}).get('ov_title','RPA 跨平台总览') }} · {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
-{% block page_title %}{{ (i18n or {}).get('ov_title','RPA 跨平台总览') }}{% endblock %}
+{% block title %}{{ (i18n or {}).get('ov_title','渠道总览') }} · {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
+{% block page_title %}{{ (i18n or {}).get('ov_title','渠道总览') }}{% endblock %}
 {% block head %}
 <style>
 /* ── /rpa-overview 专属布局 ────────────────────────────── */
@@ -489,10 +489,10 @@
 <div class="st-bar">
   <button class="st-tab active" type="button" data-pane="ov-tab-pending" onclick="rpa.switchTab(this)">{{ (i18n or {}).get('ov_tab_pending','跨平台待审') }} <span id="ov-pending-count" class="cfg-badge warn" style="display:none;margin-left:.4rem"></span></button>
   <button class="st-tab" type="button" data-pane="ov-tab-alerts" onclick="rpa.switchTab(this)">{{ (i18n or {}).get('ov_kpi_unacked','未确认告警') }} <span id="ov-alerts-count" class="cfg-badge err" style="display:none;margin-left:.4rem"></span></button>
-  <button class="st-tab" type="button" data-pane="ov-tab-devices" onclick="rpa.switchTab(this);devRefresh()">📱 {{ (i18n or {}).get('ov_devices','设备管理') }} <span id="ov-devices-count" class="cfg-badge" style="display:none;margin-left:.4rem"></span></button>
-  <button class="st-tab" type="button" data-pane="ov-tab-device-stats" onclick="rpa.switchTab(this);devStatsRefresh()">📊 {{ (i18n or {}).get('ov_devstats','设备统计') }}</button>
-  <button class="st-tab" type="button" data-pane="ov-tab-funnel" onclick="rpa.switchTab(this)">📈 {{ (i18n or {}).get('rpa_fn_title','运营漏斗') }}</button>
-  <button class="st-tab" type="button" data-pane="ov-tab-lang" onclick="rpa.switchTab(this);ovLangLoad()">🌍 {{ (i18n or {}).get('ov_lang','语言分布') }}</button>
+  <button class="st-tab" type="button" data-pane="ov-tab-devices" onclick="rpa.switchTab(this);devRefresh()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px;margin-right:.25rem"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>{{ (i18n or {}).get('ov_devices','设备管理') }} <span id="ov-devices-count" class="cfg-badge" style="display:none;margin-left:.4rem"></span></button>
+  <button class="st-tab" type="button" data-pane="ov-tab-device-stats" onclick="rpa.switchTab(this);devStatsRefresh()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px;margin-right:.25rem"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>{{ (i18n or {}).get('ov_devstats','设备统计') }}</button>
+  <button class="st-tab" type="button" data-pane="ov-tab-funnel" onclick="rpa.switchTab(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px;margin-right:.25rem"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>{{ (i18n or {}).get('rpa_fn_title','运营漏斗') }}</button>
+  <button class="st-tab" type="button" data-pane="ov-tab-lang" onclick="rpa.switchTab(this);ovLangLoad()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px;margin-right:.25rem"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>{{ (i18n or {}).get('ov_lang','语言分布') }}</button>
 </div>
 
 <div id="ov-tab-pending" class="st-pane active">

@@ -1,4 +1,5 @@
 import { SITE_URL } from "./site";
+import { isGatedSlug } from "./isolation";
 
 /** 可收录页面注册表：sitemap.xml 与 IndexNow 推送共用的单一数据源。
  *  bilingual=true 表示存在 /en 对应版本（hreflang 成对）。 */
@@ -27,9 +28,16 @@ export const SITE_PAGES: SitePage[] = [
   { slug: "/terms", bilingual: true, changeFrequency: "yearly", priority: 0.3 },
 ];
 
-/** 全部可收录 URL（绝对地址），zh + en + 额外语种展平。 */
+/** 合规隔离：主站对外可见的页面 = SITE_PAGES 去掉 gated（高风险）slug。
+ *  gated 页面（如 /face）仍保留在 SITE_PAGES 供直达访问与 hreflang 查询，
+ *  但不进 sitemap / IndexNow。gated 清单见 lib/isolation.ts。 */
+export function publicPages(): SitePage[] {
+  return SITE_PAGES.filter((p) => !isGatedSlug(p.slug));
+}
+
+/** 全部可收录 URL（绝对地址），zh + en + 额外语种展平；gated slug 已剔除。 */
 export function indexableUrls(): string[] {
-  return SITE_PAGES.flatMap((p) => {
+  return publicPages().flatMap((p) => {
     const zh = `${SITE_URL}${p.slug || "/"}`;
     const urls = p.bilingual ? [zh, `${SITE_URL}/en${p.slug}`] : [zh];
     for (const loc of p.locales ?? []) urls.push(`${SITE_URL}/${loc}${p.slug}`);

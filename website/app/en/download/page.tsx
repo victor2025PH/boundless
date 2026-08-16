@@ -27,7 +27,7 @@ const appLd = {
   applicationCategory: "MultimediaApplication",
   operatingSystem: "Windows 10/11, macOS 12+",
   softwareVersion: LATEST_VERSION,
-  offers: { "@type": "Offer", price: "0", priceCurrency: "USDT", description: "14-day free trial" },
+  offers: { "@type": "Offer", price: "0", priceCurrency: "USD", description: "14-day free trial" },
   publisher: { "@type": "Organization", name: "BOUNDLESS", url: SITE_URL },
 };
 

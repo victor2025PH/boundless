@@ -328,6 +328,30 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
             pass
         return None
 
+    @app.get("/api/personas/face-refs")
+    async def list_face_refs(_=Depends(auth_dep)):
+        """批量拉取全部人设的锁脸头像状态（人设卡片一次拉全量，替代逐卡请求的 N+1）。"""
+        refs: dict = {}
+        try:
+            from src.utils.persona_manager import PersonaManager
+            pm = PersonaManager.get_instance()
+            for pid in pm.list_profile_ids():
+                p = _find_face_ref(pid)
+                if p is None:
+                    continue
+                try:
+                    mtime = p.stat().st_mtime
+                except Exception:
+                    mtime = 0
+                refs[pid] = {
+                    "url": f"/api/personas/{pid}/face-ref/image?v={int(mtime)}",
+                    "mtime": mtime,
+                }
+        except Exception:
+            logger.debug("[pmedia] face-refs 批量状态拉取失败（已忽略）", exc_info=True)
+            return {"ok": True, "refs": {}}
+        return {"ok": True, "refs": refs}
+
     @app.get("/api/personas/{pid}/face-ref")
     async def get_face_ref(pid: str, request: Request, _=Depends(auth_dep)):
         """锁脸基准照状态：是否存在 + 预览端点 + 修改时间。"""
