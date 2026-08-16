@@ -340,10 +340,11 @@ def health():
         status = "unhealthy"
 
     build_id = (os.environ.get("OPENCLAW_BUILD_ID") or "").strip() or None
+    from src.host import brand
 
     return {
         "status": status,
-        "version": "1.2.0",
+        "version": brand.VERSION,
         "build_id": build_id,
         "capabilities": {
             "post_batch_install_apk": True,

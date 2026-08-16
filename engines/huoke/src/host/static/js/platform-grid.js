@@ -120,7 +120,7 @@ async function loadPlatGridPage(platform) {
 
   } catch(e) {
     const grid = document.getElementById(`pg-device-grid-${platform}`);
-    if (grid) grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;color:#f87171;padding:24px;font-size:13px">${e.message||'加载失败'}</div>`;
+    if (grid) grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;color:var(--red);padding:24px;font-size:13px">${e.message||'加载失败'}</div>`;
   }
   _pgLoading[platform] = false;
 }
@@ -134,13 +134,13 @@ function _pgBuildSkeleton(platform, icon, slogan, color, cfg) {
     <style>
       .pg-card{background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px 12px;cursor:pointer;transition:all .15s;position:relative;border-left:3px solid transparent}
       .pg-card:hover{border-color:${color}44;transform:translateY(-1px);box-shadow:0 4px 12px rgba(0,0,0,.2)}
-      .pg-card.state-online{border-left-color:#22c55e}
-      .pg-card.state-busy{border-left-color:#3b82f6}
+      .pg-card.state-online{border-left-color:var(--green-strong)}
+      .pg-card.state-busy{border-left-color:var(--blue-strong)}
       .pg-card.state-idle{border-left-color:#94a3b8}
-      .pg-card.state-offline{border-left-color:#ef4444;opacity:.65}
-      .pg-card.failed-heavy{box-shadow:inset 0 0 0 1px #ef4444,0 0 14px rgba(239,68,68,.35)}
+      .pg-card.state-offline{border-left-color:var(--red-strong);opacity:.65}
+      .pg-card.failed-heavy{box-shadow:inset 0 0 0 1px var(--red-strong),0 0 14px rgba(239,68,68,.35)}
       .pg-stat-failed-clickable{cursor:pointer;transition:all .15s}
-      .pg-stat-failed-clickable:hover{background:rgba(239,68,68,.12)!important;border-color:#ef4444!important;transform:translateY(-1px)}
+      .pg-stat-failed-clickable:hover{background:rgba(239,68,68,.12)!important;border-color:var(--red-strong)!important;transform:translateY(-1px)}
       .pg-card-head{display:flex;align-items:center;gap:6px;margin-bottom:6px}
       .pg-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
       .pg-alias{font-size:12px;font-weight:600;color:var(--text)}
@@ -163,10 +163,10 @@ function _pgBuildSkeleton(platform, icon, slogan, color, cfg) {
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <span style="font-size:11px;padding:4px 10px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px">
-          📱 在线 <b id="pg-online-${platform}" style="color:#22c55e">-</b> / <b id="pg-total-${platform}">-</b>
+          📱 在线 <b id="pg-online-${platform}" style="color:var(--green-strong)">-</b> / <b id="pg-total-${platform}">-</b>
         </span>
         <span style="font-size:11px;padding:4px 10px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px">
-          🔄 执行中 <b id="pg-running-${platform}" style="color:#f59e0b">-</b>
+          🔄 执行中 <b id="pg-running-${platform}" style="color:var(--amber)">-</b>
         </span>
         <button class="qa-btn" onclick="loadPlatGridPage('${platform}')" style="font-size:11px;padding:4px 10px">⟳ 刷新</button>
       </div>
@@ -237,14 +237,14 @@ function _pgRenderCard(dev, platform, color) {
 
   const taskTag = dev.running_task
     ? `<span class="pg-task-tag" style="background:${color}22;color:${color}">${TASK_NAMES[dev.running_task]||dev.running_task.replace(platform+'_','')}</span>`
-    : (online ? '<span class="pg-task-tag" style="color:var(--text-dim)">😴 空闲</span>' : '<span class="pg-task-tag" style="color:#ef4444">离线</span>');
+    : (online ? '<span class="pg-task-tag" style="color:var(--text-dim)">😴 空闲</span>' : '<span class="pg-task-tag" style="color:var(--red-strong)">离线</span>');
 
   const cfg = PLAT_GRID_CFG[platform] || {};
   // P0.4: 数字加 hover tooltip 显示完整 label；失败数字红色高亮
   const statItems = (cfg.stats||[]).map(s => {
     const v = dev[s.key] ?? 0;
     const isFailed = s.key === 'today_failed';
-    const failColor = (isFailed && v > 0) ? ';color:#ef4444' : '';
+    const failColor = (isFailed && v > 0) ? ';color:var(--red-strong)' : '';
     return `<span style="${v===0?'opacity:.4':''}${failColor}" title="${s.label}: ${v}">${s.icon}<b>${v}</b></span>`;
   }).join('');
 
@@ -294,8 +294,8 @@ function _pgRenderQuickActions(platform, taskTypes) {
     el.innerHTML = `
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:10px 12px;background:rgba(34,197,94,.06);border:1px dashed rgba(34,197,94,.25);border-radius:8px">
         <span style="font-size:14px;font-weight:700;color:var(--text)">🚀 批量任务下发</span>
-        <span style="font-size:11px;color:var(--text-dim)">作用于全部 <b style="color:#22c55e">${_onlineN}</b>/${_totalN} 台在线设备</span>
-        ${totalRunning>0?'<span style="margin-left:auto;font-size:11px;background:rgba(245,158,11,.12);color:#f59e0b;border-radius:5px;padding:2px 8px;font-weight:600">'+totalRunning+' 台执行中</span>':''}
+        <span style="font-size:11px;color:var(--text-dim)">作用于全部 <b style="color:var(--green-strong)">${_onlineN}</b>/${_totalN} 台在线设备</span>
+        ${totalRunning>0?'<span style="margin-left:auto;font-size:11px;background:rgba(245,158,11,.12);color:var(--amber);border-radius:5px;padding:2px 8px;font-weight:600">'+totalRunning+' 台执行中</span>':''}
       </div>
       ${hasFbPresets?`
       <button onclick="fbOpenPresetsModal()"
@@ -320,7 +320,7 @@ function _pgRenderQuickActions(platform, taskTypes) {
   // 其他平台保持原有大卡片布局
   el.innerHTML = `<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px;padding:8px 10px;background:rgba(34,197,94,.06);border:1px dashed rgba(34,197,94,.25);border-radius:8px">
     <span style="font-size:13px;font-weight:600;color:var(--text)">🚀 批量任务下发</span>
-    <span style="font-size:10px;color:var(--text-dim)">作用于全部 <b style="color:#22c55e">${_onlineN}</b>/${_totalN} 台在线设备 · 想给单台下发请点上方设备卡 →</span>
+    <span style="font-size:10px;color:var(--text-dim)">作用于全部 <b style="color:var(--green-strong)">${_onlineN}</b>/${_totalN} 台在线设备 · 想给单台下发请点上方设备卡 →</span>
   </div>` +
     '<div style="display:flex;flex-direction:column;gap:10px">' +
     phases.map(phase => {
@@ -344,7 +344,7 @@ function _pgRenderQuickActions(platform, taskTypes) {
               <div class="action-icon" style="background:${tGrad}">${tIcon}</div>
               <div class="action-label">${t.label}</div>
               <div style="font-size:10px;color:var(--text-dim);margin-top:1px">${hint}</div>
-              <div class="action-desc">${isRunning?'<span style="color:#f59e0b;font-weight:600">🔄 '+running+'台执行中</span>':'○ 空闲'}</div>
+              <div class="action-desc">${isRunning?'<span style="color:var(--amber);font-weight:600">🔄 '+running+'台执行中</span>':'○ 空闲'}</div>
             </div>`;
           }).join('')}
         </div>
@@ -397,15 +397,15 @@ function _pgBuildPanel(platform, dev) {
   const _failRate = _todayT > 0 ? _todayF / _todayT : 0;
   let topAlert = '';
   if (!online) {
-    topAlert = `<div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px;padding:8px 12px;font-size:11px;color:#f87171;margin-bottom:10px;display:flex;align-items:center;gap:6px">
+    topAlert = `<div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px;padding:8px 12px;font-size:11px;color:var(--red);margin-bottom:10px;display:flex;align-items:center;gap:6px">
       <span style="font-size:14px">📵</span><span style="flex:1">设备离线 — 请检查 ADB 连接</span></div>`;
   } else if (_failRate >= 0.5 && _todayT >= 3) {
-    topAlert = `<div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px;padding:8px 12px;font-size:11px;color:#f87171;margin-bottom:10px;display:flex;align-items:center;gap:6px">
+    topAlert = `<div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px;padding:8px 12px;font-size:11px;color:var(--red);margin-bottom:10px;display:flex;align-items:center;gap:6px">
       <span style="font-size:14px">�</span>
       <span style="flex:1">失败率 ${Math.round(_failRate*100)}% (${_todayF}/${_todayT})，建议先排查</span>
-      <button onclick="_pgShowFailureDetail('${platform}','${dev.device_id}');event.stopPropagation()" style="padding:3px 10px;font-size:10px;background:#ef4444;border:none;color:#fff;border-radius:5px;cursor:pointer;font-weight:600;flex-shrink:0">查看原因→</button></div>`;
+      <button onclick="_pgShowFailureDetail('${platform}','${dev.device_id}');event.stopPropagation()" style="padding:3px 10px;font-size:10px;background:var(--red-strong);border:none;color:#fff;border-radius:5px;cursor:pointer;font-weight:600;flex-shrink:0">查看原因→</button></div>`;
   } else if (dev.running_task) {
-    topAlert = `<div style="background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.25);border-radius:8px;padding:8px 12px;font-size:11px;color:#60a5fa;margin-bottom:10px;display:flex;align-items:center;gap:6px">
+    topAlert = `<div style="background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.25);border-radius:8px;padding:8px 12px;font-size:11px;color:var(--blue-soft);margin-bottom:10px;display:flex;align-items:center;gap:6px">
       <span style="font-size:14px">🔄</span><span>正在执行: ${TASK_NAMES[dev.running_task]||dev.running_task}</span></div>`;
   }
 
@@ -415,7 +415,7 @@ function _pgBuildPanel(platform, dev) {
     const isFailed = s.key === 'today_failed' && v > 0;
     const valColor = isFailed ? '#ef4444' : 'var(--text)';
     const clickAttr = isFailed
-      ? ` onclick="_pgShowFailureDetail('${platform}','${dev.device_id}');event.stopPropagation()" style="cursor:pointer;color:#ef4444;text-decoration:underline;text-decoration-style:dashed" title="点击查看失败详情"`
+      ? ` onclick="_pgShowFailureDetail('${platform}','${dev.device_id}');event.stopPropagation()" style="cursor:pointer;color:var(--red-strong);text-decoration:underline;text-decoration-style:dashed" title="点击查看失败详情"`
       : '';
     return isFailed
       ? `<span${clickAttr}><b>${v}</b> ${s.label}</span>`
@@ -499,7 +499,7 @@ function _pgBuildPanel(platform, dev) {
           <span style="font-size:16px;font-weight:700">${alias}</span>
           <span style="font-size:10px;padding:2px 8px;background:${color}18;color:${color};border-radius:4px;font-weight:600">${icon} ${PLATFORMS_META[platform]||platform}</span>
         </div>
-        <button onclick="_pgClosePanel('${platform}')" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px;width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;transition:all .12s" onmouseover="this.style.background='rgba(239,68,68,.15)';this.style.color='#ef4444'" onmouseout="this.style.background='none';this.style.color='var(--text-muted)'">✕</button>
+        <button onclick="_pgClosePanel('${platform}')" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px;width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;transition:all .12s" onmouseover="this.style.background='rgba(239,68,68,.15)';this.style.color='var(--red-strong)'" onmouseout="this.style.background='none';this.style.color='var(--text-muted)'">✕</button>
       </div>
 
       <!-- ② 风控/状态前置警告（profile 加载后若有更详细建议则自动隐藏） -->
@@ -675,7 +675,7 @@ async function _pgShowFailureDetail(platform, deviceId) {
     const summaryHtml = `
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px">
         <div style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.25);border-radius:8px;padding:10px;text-align:center">
-          <div style="font-size:22px;font-weight:700;color:#ef4444">${myStats.total_failed||myFails.length}</div>
+          <div style="font-size:22px;font-weight:700;color:var(--red-strong)">${myStats.total_failed||myFails.length}</div>
           <div style="font-size:10px;color:var(--text-muted);margin-top:2px">📛 总失败数</div>
         </div>
         <div style="background:var(--bg-main);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center">
@@ -692,7 +692,7 @@ async function _pgShowFailureDetail(platform, deviceId) {
     const tipKey = myStats.top_category || 'unknown';
     const tipHtml = `
       <div style="background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.25);border-radius:8px;padding:10px;margin-bottom:14px;font-size:12px">
-        <div style="font-weight:600;color:#60a5fa;margin-bottom:4px">💡 修复建议</div>
+        <div style="font-weight:600;color:var(--blue-soft);margin-bottom:4px">💡 修复建议</div>
         <div style="color:var(--text-muted);line-height:1.5">${_PG_CAT_TIPS[tipKey] || '请查看具体错误信息'}</div>
       </div>
     `;
@@ -709,8 +709,8 @@ async function _pgShowFailureDetail(platform, deviceId) {
           <div style="background:var(--bg-main);border:1px solid var(--border);border-radius:8px;margin-bottom:8px;overflow:hidden">
             <div style="padding:8px 10px;border-bottom:1px solid var(--border);font-size:11px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:6px;background:rgba(239,68,68,.04)">
               <span>${tIcon}</span><span>${taskName}</span>
-              <button onclick="_pgRetryFromFailure('${platform}','${tp}','${deviceId}')" title="重新发起一个相同类型的任务（如有参数会弹出配置框）" style="margin-left:auto;padding:3px 9px;font-size:10px;background:#3b82f6;border:none;color:#fff;border-radius:4px;cursor:pointer;font-weight:600">⟳ 重试</button>
-              <span style="color:#ef4444;font-weight:700">×${items.length}</span>
+              <button onclick="_pgRetryFromFailure('${platform}','${tp}','${deviceId}')" title="重新发起一个相同类型的任务（如有参数会弹出配置框）" style="margin-left:auto;padding:3px 9px;font-size:10px;background:var(--blue-strong);border:none;color:#fff;border-radius:4px;cursor:pointer;font-weight:600">⟳ 重试</button>
+              <span style="color:var(--red-strong);font-weight:700">×${items.length}</span>
             </div>
             <div style="padding:4px 10px 6px">
               ${items.slice(0,5).map(it => {
@@ -720,7 +720,7 @@ async function _pgShowFailureDetail(platform, deviceId) {
                 const ts = (it.updated_at || '').replace('T',' ').substring(0,16);
                 return `<div style="font-size:10px;color:var(--text-muted);padding:5px 0;border-bottom:1px dashed var(--border)">
                   <span style="color:var(--text-dim);font-family:monospace">${ts}</span>
-                  <div style="color:#f87171;margin-top:2px;line-height:1.4">${String(err).substring(0,160)}${String(err).length>160?'...':''}</div>
+                  <div style="color:var(--red);margin-top:2px;line-height:1.4">${String(err).substring(0,160)}${String(err).length>160?'...':''}</div>
                 </div>`;
               }).join('')}
               ${items.length > 5 ? `<div style="font-size:10px;color:var(--text-dim);padding:4px 0;text-align:center">… 还有 ${items.length-5} 条</div>` : ''}
@@ -733,11 +733,11 @@ async function _pgShowFailureDetail(platform, deviceId) {
     document.getElementById('_pg-fail-modal-body').innerHTML = summaryHtml + tipHtml + listHtml + `
       <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end">
         <button onclick="_pgCloseFailModal()" style="padding:6px 14px;font-size:12px;background:var(--bg-main);border:1px solid var(--border);color:var(--text);border-radius:6px;cursor:pointer">关闭</button>
-        <button onclick="if(typeof navigateToPage==='function')navigateToPage('tasks');_pgCloseFailModal()" style="padding:6px 14px;font-size:12px;background:#3b82f6;border:none;color:#fff;border-radius:6px;cursor:pointer">查看任务中心 →</button>
+        <button onclick="if(typeof navigateToPage==='function')navigateToPage('tasks');_pgCloseFailModal()" style="padding:6px 14px;font-size:12px;background:var(--blue-strong);border:none;color:#fff;border-radius:6px;cursor:pointer">查看任务中心 →</button>
       </div>
     `;
   } catch (e) {
-    document.getElementById('_pg-fail-modal-body').innerHTML = `<div style="color:#f87171;padding:20px;text-align:center;font-size:12px">加载失败: ${e.message||e}</div>`;
+    document.getElementById('_pg-fail-modal-body').innerHTML = `<div style="color:var(--red);padding:20px;text-align:center;font-size:12px">加载失败: ${e.message||e}</div>`;
   }
 }
 
@@ -801,7 +801,7 @@ async function _pgLoadAccountProfile(platform, dev) {
     profile = await _pgFallbackProfile(deviceId, dev);
   }
   if (!profile) {
-    target.innerHTML = `<div style="text-align:center;color:#f87171;padding:8px;font-size:10px">画像加载失败</div>`;
+    target.innerHTML = `<div style="text-align:center;color:var(--red);padding:8px;font-size:10px">画像加载失败</div>`;
     return;
   }
   // race guard: 用户秒切设备时，确保画像渲染到正确占位符
@@ -985,7 +985,7 @@ function _pgRenderProfile(target, p) {
       </div>
     </div>
     ${emptyDataHint}
-    ${lastBlockedAt ? `<div style="background:rgba(239,68,68,.06);border-left:3px solid #ef4444;padding:6px 8px;margin-bottom:8px;font-size:10px;color:#f87171">⚠ 上次限流: ${String(lastBlockedAt).replace('T',' ').substring(0,16)}</div>` : ''}
+    ${lastBlockedAt ? `<div style="background:rgba(239,68,68,.06);border-left:3px solid var(--red-strong);padding:6px 8px;margin-bottom:8px;font-size:10px;color:var(--red)">⚠ 上次限流: ${String(lastBlockedAt).replace('T',' ').substring(0,16)}</div>` : ''}
     ${recentTasks.length ? `
       <div style="font-size:10px;color:var(--text-dim);margin-bottom:4px">📋 最近任务（失败行可点击）</div>
       ${recentTasks.map(t => {
@@ -1001,7 +1001,7 @@ function _pgRenderProfile(target, p) {
           <span style="color:var(--text-dim);font-family:monospace;flex-shrink:0">${ts}</span>
           <span style="color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${tname}</span>
           <span style="font-size:9px;color:${statusColor};flex-shrink:0">${t.status||''}</span>
-          ${isFailed?'<span style="font-size:9px;color:#f87171;flex-shrink:0">→</span>':''}
+          ${isFailed?'<span style="font-size:9px;color:var(--red);flex-shrink:0">→</span>':''}
         </div>`;
       }).join('')}
     ` : ''}

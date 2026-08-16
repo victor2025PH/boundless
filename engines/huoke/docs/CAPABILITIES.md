@@ -42,7 +42,7 @@ OpenClaw 是一个**移动端社交平台 RPA 自动化系统**，用真实手�
 
 ## §3 — KPI 看板
 
-> 仪表盘地址：**http://localhost:8000/dashboard**
+> 仪表盘地址：**http://localhost:18080/dashboard**
 
 ### 3.1 实时指标
 

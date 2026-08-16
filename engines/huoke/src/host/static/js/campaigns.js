@@ -51,16 +51,16 @@ function renderCampaignList() {
           <span>${stats.completed||0}完成 · ${stats.failed||0}失败 · ${stats.running||0}运行中 · ${stats.pending||0}等待</span>
         </div>
         <div style="background:var(--bg-main);border-radius:4px;height:6px;overflow:hidden">
-          <div style="width:${pct}%;height:100%;background:linear-gradient(90deg,#3b82f6,#8b5cf6);transition:width .3s"></div>
+          <div style="width:${pct}%;height:100%;background:linear-gradient(90deg,var(--blue-strong),var(--violet));transition:width .3s"></div>
         </div>
       </div>` : ''}
       <div style="margin-top:10px;display:flex;gap:8px;justify-content:flex-end">
         <button class="sb-btn2" onclick="showCampaignDetail('${c.campaign_id}')">详情</button>
-        ${c.status==='draft'||c.status==='paused' ? `<button class="sb-btn2" style="background:#3b82f622;border-color:#3b82f6;color:#3b82f6" onclick="startCampaign('${c.campaign_id}')">启动</button>` : ''}
-        ${c.status==='active' ? `<button class="sb-btn2" style="background:#fb923c22;border-color:#fb923c;color:#fb923c" onclick="pauseCampaign('${c.campaign_id}')">暂停</button>` : ''}
-        ${c.status==='active'||c.status==='paused' ? `<button class="sb-btn2" style="background:#ef444422;border-color:#ef4444;color:#ef4444" onclick="stopCampaign('${c.campaign_id}')">停止</button>` : ''}
+        ${c.status==='draft'||c.status==='paused' ? `<button class="sb-btn2" style="background:#3b82f622;border-color:var(--blue-strong);color:var(--blue-strong)" onclick="startCampaign('${c.campaign_id}')">启动</button>` : ''}
+        ${c.status==='active' ? `<button class="sb-btn2" style="background:#fb923c22;border-color:var(--orange);color:var(--orange)" onclick="pauseCampaign('${c.campaign_id}')">暂停</button>` : ''}
+        ${c.status==='active'||c.status==='paused' ? `<button class="sb-btn2" style="background:#ef444422;border-color:var(--red-strong);color:var(--red-strong)" onclick="stopCampaign('${c.campaign_id}')">停止</button>` : ''}
         ${c.status!=='active' ? `<button class="sb-btn2" onclick="editCampaign('${c.campaign_id}')">编辑</button>` : ''}
-        ${c.status!=='active' ? `<button class="sb-btn2" style="color:#ef4444" onclick="deleteCampaign('${c.campaign_id}')">删除</button>` : ''}
+        ${c.status!=='active' ? `<button class="sb-btn2" style="color:var(--red-strong)" onclick="deleteCampaign('${c.campaign_id}')">删除</button>` : ''}
       </div>
     </div>`;
   }).join('');

@@ -121,6 +121,26 @@ def execute_scheduled_action(job: dict) -> dict:
             })
         elif action.startswith("tiktok_") or action.startswith("telegram_") or \
              action.startswith("whatsapp_") or action.startswith("facebook_"):
+            # 引流闭环热开关（只作用于 cron 自动跑；手动 POST /tasks 不受此限）：
+            # off→整条 skip；dry_run→注入 dry_run 只检测不写不发；live→正常。
+            # 这是比 disable_json_scheduled_jobs 全局闸门更细、可热切、默认最保守的一层。
+            _REFERRAL_LOOP_ACTIONS = {
+                "facebook_check_referral_replies",
+                "facebook_send_referral_replies",
+                "facebook_mark_stale_referrals",
+                "facebook_line_dispatch_from_reply",
+                "facebook_recycle_dead_peers",
+            }
+            if action in _REFERRAL_LOOP_ACTIONS:
+                try:
+                    from src.host import referral_loop
+                    _run, params, _rinfo = referral_loop.apply_to_scheduled(
+                        action, params)
+                    if not _run:
+                        return {"skipped": True, "reason": "referral_loop_off",
+                                **_rinfo}
+                except Exception:
+                    pass
             # 策略：关闭无人值守自动查收件箱（仍允许控制台手动批量）
             if action == "tiktok_check_inbox":
                 try:

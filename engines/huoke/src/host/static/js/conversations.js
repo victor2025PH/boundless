@@ -121,7 +121,7 @@ const Conv = (() => {
           <div style="display:flex;justify-content:space-between;align-items:start">
             <div>
               <span style="font-weight:600;font-size:13px">&#128172; ${_esc(item.contact || '未知用户')}</span>
-              <span style="margin-left:8px;font-size:10px;background:#ef44441a;color:#ef4444;border-radius:4px;padding:1px 5px">${_esc(item.intent || '未知意向')}</span>
+              <span style="margin-left:8px;font-size:10px;background:#ef44441a;color:var(--red-strong);border-radius:4px;padding:1px 5px">${_esc(item.intent || '未知意向')}</span>
             </div>
             <div style="display:flex;gap:6px;align-items:center">
               <span style="font-size:10px;color:var(--text-muted)">${_relTime(item.ts)}</span>
@@ -181,7 +181,7 @@ const Conv = (() => {
               <div style="font-size:11px;color:${needsAttention?'var(--text-main)':'var(--text-muted)'};margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px">
                 ${_esc((c.last_message || '(无消息)').slice(0, 70))}
               </div>
-              ${c.intent ? `<div style="font-size:10px;color:#f59e0b;margin-top:2px">意向: ${_esc(c.intent)}</div>` : ''}
+              ${c.intent ? `<div style="font-size:10px;color:var(--amber);margin-top:2px">意向: ${_esc(c.intent)}</div>` : ''}
             </div>
             <div style="flex-shrink:0;display:flex;flex-direction:column;gap:3px;align-items:flex-end">
               <span style="font-size:9px;background:${fsmColor}22;color:${fsmColor};border-radius:4px;padding:1px 5px;font-weight:600">${_esc(fsm)}</span>
@@ -253,7 +253,7 @@ const Conv = (() => {
       }).join('');
       el.scrollTop = el.scrollHeight;
     } catch(e) {
-      el.innerHTML = `<div style="color:#ef4444;font-size:12px;padding:20px">加载失败: ${_esc(String(e))}</div>`;
+      el.innerHTML = `<div style="color:var(--red-strong);font-size:12px;padding:20px">加载失败: ${_esc(String(e))}</div>`;
     }
   }
 
@@ -312,7 +312,7 @@ const Conv = (() => {
         </div>
       `).join('');
     } catch(e) {
-      panel.innerHTML = `<div style="font-size:11px;color:#ef4444;padding:4px">生成失败，请重试</div>`;
+      panel.innerHTML = `<div style="font-size:11px;color:var(--red-strong);padding:4px">生成失败，请重试</div>`;
     }
   }
 
@@ -520,7 +520,7 @@ const Conv = (() => {
             <div style="font-size:17px;font-weight:700;color:var(--text)">${_esc(lead.name||'未知')}</div>
             <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
               <span style="font-size:11px;background:${stColor}22;color:${stColor};padding:2px 8px;border-radius:4px;border:1px solid ${stColor}44">${stLabel}</span>
-              ${fsmState?`<span style="font-size:11px;background:#3b82f622;color:#60a5fa;padding:2px 8px;border-radius:4px">FSM: ${fsmState}</span>`:''}
+              ${fsmState?`<span style="font-size:11px;background:#3b82f622;color:var(--blue-soft);padding:2px 8px;border-radius:4px">FSM: ${fsmState}</span>`:''}
               <span style="font-size:11px;background:${scoreColor}22;color:${scoreColor};padding:2px 8px;border-radius:4px">评分 ${score}</span>
             </div>
           </div>
@@ -531,19 +531,19 @@ const Conv = (() => {
         ${lead.location?`<div class="ld-row"><span class="ld-label">地区</span><span>${_esc(lead.location)}</span></div>`:''}
         <div class="ld-row"><span class="ld-label">创建</span><span style="color:var(--text-dim)">${lead.created_at?new Date(lead.created_at).toLocaleString('zh-CN'):'—'}</span></div>
         ${lead.tags?.length?`<div class="ld-row"><span class="ld-label">标签</span><div style="display:flex;gap:4px;flex-wrap:wrap">${lead.tags.map(tag=>`<span style="font-size:10px;background:var(--bg-main);border:1px solid var(--border);padding:1px 6px;border-radius:3px">${_esc(tag)}</span>`).join('')}</div></div>`:''}
-        ${conv?.message_count?`<div class="ld-row"><span class="ld-label">消息数</span><span style="color:#60a5fa">${conv.message_count} 条</span></div>`:''}
+        ${conv?.message_count?`<div class="ld-row"><span class="ld-label">消息数</span><span style="color:var(--blue-soft)">${conv.message_count} 条</span></div>`:''}
         ${history.length?`<div class="ld-row"><span class="ld-label">状态历史</span><div style="flex:1">${history.map(h=>`<div style="font-size:11px;color:var(--text-dim);padding:1px 0">→ ${_esc(h.to||h.state||String(h))}</div>`).join('')}</div></div>`:''}
         ${lead.notes?`<div class="ld-row"><span class="ld-label">备注</span><span style="color:var(--text-dim);font-size:12px">${_esc(lead.notes)}</span></div>`:''}
         <!-- Action buttons -->
         <div style="display:flex;gap:8px;margin-top:20px;flex-wrap:wrap">
-          ${lead.status!=='qualified'&&lead.status!=='converted'?`<button class="qa-btn" style="color:#a78bfa;border-color:#a78bfa" onclick="_ldAction('qualify',${leadId})">⭐ 标记合格</button>`:''}
-          ${lead.status!=='converted'?`<button class="qa-btn" style="color:#22c55e;border-color:#22c55e" onclick="_ldAction('convert',${leadId})">🎉 标记转化</button>`:''}
-          ${lead.status!=='blacklisted'?`<button class="qa-btn" style="color:#f87171;border-color:#f87171" onclick="_ldAction('blacklist',${leadId})">🚫 屏蔽</button>`:''}
+          ${lead.status!=='qualified'&&lead.status!=='converted'?`<button class="qa-btn" style="color:var(--violet-soft);border-color:var(--violet-soft)" onclick="_ldAction('qualify',${leadId})">⭐ 标记合格</button>`:''}
+          ${lead.status!=='converted'?`<button class="qa-btn" style="color:var(--green-strong);border-color:var(--green-strong)" onclick="_ldAction('convert',${leadId})">🎉 标记转化</button>`:''}
+          ${lead.status!=='blacklisted'?`<button class="qa-btn" style="color:var(--red);border-color:var(--red)" onclick="_ldAction('blacklist',${leadId})">🚫 屏蔽</button>`:''}
           <button class="qa-btn" style="margin-left:auto" onclick="document.getElementById('lead-detail-modal').remove()">关闭</button>
         </div>
       `;
     }catch(e){
-      modal.querySelector('div>div').innerHTML=`<div style="padding:40px;text-align:center;color:#f87171">加载失败: ${_esc(e.message)}</div>
+      modal.querySelector('div>div').innerHTML=`<div style="padding:40px;text-align:center;color:var(--red)">加载失败: ${_esc(e.message)}</div>
         <div style="text-align:center;margin-top:12px"><button class="qa-btn" onclick="document.getElementById('lead-detail-modal').remove()">关闭</button></div>`;
     }
   }
@@ -602,7 +602,7 @@ const Leads = (() => {
       }).join('');
     } catch(e) {
       const tbody = document.getElementById('leads-tbody');
-      if (tbody) tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:#ef4444;padding:20px">加载失败: ${e}</td></tr>`;
+      if (tbody) tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--red-strong);padding:20px">加载失败: ${e}</td></tr>`;
     }
   }
 

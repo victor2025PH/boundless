@@ -58,7 +58,7 @@ const PLAT_FLOWS={
   twitter:{steps:[{n:'浏览话题',d:'Step1',c:'#1d9bf0'},{n:'搜索互动',d:'Step2',c:'#22c55e'},{n:'DM触达',d:'Step3',c:'#f59e0b'}],tips:['&#128240; <b>话题追踪</b>: 浏览时间线，建立账号权重','&#128269; <b>关键词互动</b>: 按关键词搜索+互动，精准触达目标','&#128172; <b>私信引流</b>: 向高意向用户发送DM']}
 };
 const PLAT_TASK_ICONS={tiktok_warmup:'&#127793;',tiktok_watch:'&#128250;',tiktok_follow:'&#128101;',tiktok_send_dm:'&#128172;',tiktok_check_inbox:'&#128229;',tiktok_acquisition:'&#128640;',telegram_send_message:'&#9993;',telegram_read_messages:'&#128196;',telegram_send_file:'&#128206;',telegram_workflow:'&#9881;',telegram_auto_reply:'&#129302;',telegram_join_group:'&#128101;',telegram_send_group:'&#128227;',telegram_monitor_chat:'&#128065;',whatsapp_send_message:'&#9993;',whatsapp_read_messages:'&#128196;',whatsapp_auto_reply:'&#129302;',whatsapp_send_media:'&#127909;',whatsapp_list_chats:'&#128203;',facebook_send_message:'&#9993;',facebook_add_friend:'&#129309;',facebook_browse_feed:'&#128240;',facebook_browse_feed_by_interest:'&#128293;',facebook_search_leads:'&#128269;',facebook_join_group:'&#128101;',facebook_profile_hunt:'&#127919;',linkedin_send_message:'&#9993;',linkedin_read_messages:'&#128196;',linkedin_post_update:'&#128221;',linkedin_search_profile:'&#128269;',linkedin_send_connection:'&#129309;',linkedin_accept_connections:'&#9989;',linkedin_like_post:'&#10084;',linkedin_comment_post:'&#128172;',instagram_browse_feed:'&#128247;',instagram_browse_hashtag:'&#128278;',instagram_search_leads:'&#128269;',instagram_send_dm:'&#128172;',twitter_browse_timeline:'&#128240;',twitter_search_leads:'&#128269;',twitter_search_and_engage:'&#128260;',twitter_send_dm:'&#128172;'};
-const PLAT_TASK_GRADIENTS={tiktok_warmup:'linear-gradient(135deg,#22c55e,#16a34a)',tiktok_watch:'linear-gradient(135deg,#8b5cf6,#6366f1)',tiktok_follow:'linear-gradient(135deg,#3b82f6,#2dd4bf)',tiktok_send_dm:'linear-gradient(135deg,#f59e0b,#ef4444)',tiktok_check_inbox:'linear-gradient(135deg,#06b6d4,#3b82f6)',tiktok_acquisition:'linear-gradient(135deg,#ef4444,#f97316)',telegram_join_group:'linear-gradient(135deg,#0088cc,#00afd4)',telegram_send_message:'linear-gradient(135deg,#22c55e,#16a34a)',telegram_send_file:'linear-gradient(135deg,#3b82f6,#6366f1)',telegram_auto_reply:'linear-gradient(135deg,#f59e0b,#f97316)',telegram_send_group:'linear-gradient(135deg,#06b6d4,#0088cc)',telegram_read_messages:'linear-gradient(135deg,#8b5cf6,#a78bfa)',telegram_monitor_chat:'linear-gradient(135deg,#6366f1,#8b5cf6)',whatsapp_list_chats:'linear-gradient(135deg,#25d366,#22c55e)',whatsapp_read_messages:'linear-gradient(135deg,#16a34a,#22c55e)',whatsapp_send_message:'linear-gradient(135deg,#3b82f6,#2dd4bf)',whatsapp_send_media:'linear-gradient(135deg,#8b5cf6,#6366f1)',whatsapp_auto_reply:'linear-gradient(135deg,#f59e0b,#f97316)',facebook_browse_feed:'linear-gradient(135deg,#1877f2,#3b82f6)',facebook_browse_feed_by_interest:'linear-gradient(135deg,#f97316,#ec4899)',facebook_search_leads:'linear-gradient(135deg,#06b6d4,#1877f2)',facebook_add_friend:'linear-gradient(135deg,#22c55e,#16a34a)',facebook_join_group:'linear-gradient(135deg,#8b5cf6,#1877f2)',facebook_send_message:'linear-gradient(135deg,#f59e0b,#f97316)',linkedin_search_profile:'linear-gradient(135deg,#0a66c2,#0088cc)',linkedin_accept_connections:'linear-gradient(135deg,#22c55e,#0a66c2)',linkedin_send_connection:'linear-gradient(135deg,#16a34a,#22c55e)',linkedin_post_update:'linear-gradient(135deg,#3b82f6,#0a66c2)',linkedin_like_post:'linear-gradient(135deg,#ef4444,#f97316)',linkedin_comment_post:'linear-gradient(135deg,#8b5cf6,#6366f1)',linkedin_send_message:'linear-gradient(135deg,#f59e0b,#ef4444)',linkedin_read_messages:'linear-gradient(135deg,#06b6d4,#0a66c2)',instagram_browse_feed:'linear-gradient(135deg,#e4405f,#f97316)',instagram_browse_hashtag:'linear-gradient(135deg,#8b5cf6,#e4405f)',instagram_search_leads:'linear-gradient(135deg,#06b6d4,#8b5cf6)',instagram_send_dm:'linear-gradient(135deg,#f59e0b,#e4405f)',twitter_browse_timeline:'linear-gradient(135deg,#1d9bf0,#3b82f6)',twitter_search_leads:'linear-gradient(135deg,#06b6d4,#1d9bf0)',twitter_search_and_engage:'linear-gradient(135deg,#22c55e,#1d9bf0)',twitter_send_dm:'linear-gradient(135deg,#f59e0b,#1d9bf0)'};
+const PLAT_TASK_GRADIENTS={tiktok_warmup:'linear-gradient(135deg,var(--green-strong),var(--green-deep))',tiktok_watch:'linear-gradient(135deg,var(--violet),#6366f1)',tiktok_follow:'linear-gradient(135deg,var(--blue-strong),#2dd4bf)',tiktok_send_dm:'linear-gradient(135deg,var(--amber),var(--red-strong))',tiktok_check_inbox:'linear-gradient(135deg,var(--cyan),var(--blue-strong))',tiktok_acquisition:'linear-gradient(135deg,var(--red-strong),#f97316)',telegram_join_group:'linear-gradient(135deg,#0088cc,#00afd4)',telegram_send_message:'linear-gradient(135deg,var(--green-strong),var(--green-deep))',telegram_send_file:'linear-gradient(135deg,var(--blue-strong),#6366f1)',telegram_auto_reply:'linear-gradient(135deg,var(--amber),#f97316)',telegram_send_group:'linear-gradient(135deg,var(--cyan),#0088cc)',telegram_read_messages:'linear-gradient(135deg,var(--violet),var(--violet-soft))',telegram_monitor_chat:'linear-gradient(135deg,#6366f1,var(--violet))',whatsapp_list_chats:'linear-gradient(135deg,#25d366,var(--green-strong))',whatsapp_read_messages:'linear-gradient(135deg,var(--green-deep),var(--green-strong))',whatsapp_send_message:'linear-gradient(135deg,var(--blue-strong),#2dd4bf)',whatsapp_send_media:'linear-gradient(135deg,var(--violet),#6366f1)',whatsapp_auto_reply:'linear-gradient(135deg,var(--amber),#f97316)',facebook_browse_feed:'linear-gradient(135deg,#1877f2,var(--blue-strong))',facebook_browse_feed_by_interest:'linear-gradient(135deg,#f97316,#ec4899)',facebook_search_leads:'linear-gradient(135deg,var(--cyan),#1877f2)',facebook_add_friend:'linear-gradient(135deg,var(--green-strong),var(--green-deep))',facebook_join_group:'linear-gradient(135deg,var(--violet),#1877f2)',facebook_send_message:'linear-gradient(135deg,var(--amber),#f97316)',linkedin_search_profile:'linear-gradient(135deg,#0a66c2,#0088cc)',linkedin_accept_connections:'linear-gradient(135deg,var(--green-strong),#0a66c2)',linkedin_send_connection:'linear-gradient(135deg,var(--green-deep),var(--green-strong))',linkedin_post_update:'linear-gradient(135deg,var(--blue-strong),#0a66c2)',linkedin_like_post:'linear-gradient(135deg,var(--red-strong),#f97316)',linkedin_comment_post:'linear-gradient(135deg,var(--violet),#6366f1)',linkedin_send_message:'linear-gradient(135deg,var(--amber),var(--red-strong))',linkedin_read_messages:'linear-gradient(135deg,var(--cyan),#0a66c2)',instagram_browse_feed:'linear-gradient(135deg,#e4405f,#f97316)',instagram_browse_hashtag:'linear-gradient(135deg,var(--violet),#e4405f)',instagram_search_leads:'linear-gradient(135deg,var(--cyan),var(--violet))',instagram_send_dm:'linear-gradient(135deg,var(--amber),#e4405f)',twitter_browse_timeline:'linear-gradient(135deg,#1d9bf0,var(--blue-strong))',twitter_search_leads:'linear-gradient(135deg,var(--cyan),#1d9bf0)',twitter_search_and_engage:'linear-gradient(135deg,var(--green-strong),#1d9bf0)',twitter_send_dm:'linear-gradient(135deg,var(--amber),#1d9bf0)'};
 let _platRunningTasks={};let _platAllTasks=[];
 // TikTok任务三阶段分组
 const PLAT_PHASES={
@@ -305,7 +305,7 @@ async function loadPlatformPage(platform){
         </div>
         <div style="display:flex;gap:14px;flex:1;flex-wrap:wrap;align-items:center">
           <div style="text-align:center;min-width:48px">
-            <div style="font-size:18px;font-weight:700;color:#60a5fa;line-height:1.1">${tkFollowed}</div>
+            <div style="font-size:18px;font-weight:700;color:var(--blue-soft);line-height:1.1">${tkFollowed}</div>
             ${_todayLabel(tkFollowedToday,'#60a5fa')}
             <div style="font-size:9px;color:var(--text-muted);margin-top:1px">关注</div>
           </div>
@@ -315,7 +315,7 @@ async function loadPlatformPage(platform){
             <div style="font-size:9px;color:var(--text-muted);margin-top:1px">回关</div>
           </div>
           <div style="text-align:center;min-width:48px">
-            <div style="font-size:18px;font-weight:700;color:#a78bfa;line-height:1.1">${tkDms}</div>
+            <div style="font-size:18px;font-weight:700;color:var(--violet-soft);line-height:1.1">${tkDms}</div>
             ${_todayLabel(tkDmsToday,'#a78bfa')}
             <div style="font-size:9px;color:var(--text-muted);margin-top:1px">私信</div>
           </div>
@@ -331,7 +331,7 @@ async function loadPlatformPage(platform){
           </div>
           <div style="text-align:center;min-width:48px">
             <div style="font-size:18px;font-weight:700;color:#f97316;line-height:1.1">${tkWatchedToday}</div>
-            <div style="font-size:11px;color:#fb923c;line-height:1">${tkLikedToday}♥</div>
+            <div style="font-size:11px;color:var(--orange);line-height:1">${tkLikedToday}♥</div>
             <div style="font-size:9px;color:var(--text-muted);margin-top:1px">今日刷视频</div>
           </div>
           <div style="text-align:center;min-width:54px">
@@ -340,11 +340,11 @@ async function loadPlatformPage(platform){
             <div style="font-size:9px;color:var(--text-muted);margin-top:1px">成交营收</div>
           </div>
           <div style="text-align:center;min-width:42px"><div style="font-size:18px;font-weight:700;color:${totalRunning>0?'#f59e0b':'var(--text-dim)'};line-height:1.1">${totalRunning}</div><div style="font-size:11px;color:var(--text-muted);line-height:1">&nbsp;</div><div style="font-size:9px;color:var(--text-muted);margin-top:1px">执行中</div></div>
-          ${followBackWarn?'<div style="display:flex;align-items:center;gap:5px;padding:3px 9px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:6px;font-size:10px;color:#f87171;white-space:nowrap">⚠ 0回关率 — 账号权重需提升</div>':''}
+          ${followBackWarn?'<div style="display:flex;align-items:center;gap:5px;padding:3px 9px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:6px;font-size:10px;color:var(--red);white-space:nowrap">⚠ 0回关率 — 账号权重需提升</div>':''}
           ${replyWarn?'<div style="display:flex;align-items:center;gap:5px;padding:3px 9px;background:rgba(234,179,8,.1);border:1px solid rgba(234,179,8,.3);border-radius:6px;font-size:10px;color:#fbbf24;white-space:nowrap">💡 0%回复 — 建议先互动再DM</div>':''}
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0;align-items:center">
-          <div id="tk-live-ticker" style="font-size:10px;color:#a78bfa;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:0;transition:opacity 1s"></div>
+          <div id="tk-live-ticker" style="font-size:10px;color:var(--violet-soft);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:0;transition:opacity 1s"></div>
           <button class="qa-btn" style="font-size:10px;padding:3px 8px" onclick="loadPlatformPage('tiktok')">↺ 刷新</button>
           <button class="qa-btn" style="font-size:10px;padding:3px 8px" onclick="_tkExportReport()" title="导出今日战报HTML">📊</button>
         </div>
@@ -360,7 +360,7 @@ async function loadPlatformPage(platform){
           const ts=a.timestamp?new Date(a.timestamp).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}):'';
           return '<div style="display:flex;align-items:center;gap:10px;padding:9px 14px;background:rgba(239,68,68,.07);border:1px solid rgba(239,68,68,.3);border-radius:8px;margin-bottom:8px;font-size:12px">'+
             '<span style="font-size:16px;flex-shrink:0">🚨</span>'+
-            '<div style="flex:1"><b style="color:#f87171">'+alias+'</b> — '+(a.message||'设备异常')+'</div>'+
+            '<div style="flex:1"><b style="color:var(--red)">'+alias+'</b> — '+(a.message||'设备异常')+'</div>'+
             (ts?'<span style="font-size:10px;color:var(--text-muted);white-space:nowrap">'+ts+'</span>':'')+
             '<button class="qa-btn" style="font-size:10px;padding:2px 8px" onclick="navigateToPage(\'screen\')">查看</button>'+
           '</div>';
@@ -377,7 +377,7 @@ async function loadPlatformPage(platform){
           </div>
         </div>
         <div style="display:flex;align-items:center;gap:8px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:6px 12px">
-          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${dc.online>0?'#22c55e':'#ef4444'};${dc.online>0?'box-shadow:0 0 6px #22c55e':''}"></span>
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${dc.online>0?'#22c55e':'#ef4444'};${dc.online>0?'box-shadow:0 0 6px var(--green-strong)':''}"></span>
           <span style="font-size:12px;font-weight:500">${dc.online} / ${dc.total} 设备在线</span>
         </div>
       </div>
@@ -428,7 +428,7 @@ async function loadPlatformPage(platform){
                   <div class="action-icon" style="background:${tGrad}">${tIcon}</div>
                   <div class="action-label">${t.label}</div>
                   <div style="font-size:10px;color:var(--text-dim);margin-top:1px">${hint}</div>
-                  <div class="action-desc">${isRunning?'<span style="color:#f59e0b;font-weight:600">&#128260; '+running+'台执行中</span>':'&#9675; 空闲'}</div>
+                  <div class="action-desc">${isRunning?'<span style="color:var(--amber);font-weight:600">&#128260; '+running+'台执行中</span>':'&#9675; 空闲'}</div>
                 </div>`;
               }).join('')}
             </div>
@@ -439,7 +439,7 @@ async function loadPlatformPage(platform){
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
           <div style="font-size:13px;font-weight:600">&#128279; 链式任务</div>
           <div style="display:flex;gap:4px">
-            <button class="qa-btn" onclick="_showChainRecommend('${platform}')" style="padding:3px 8px;font-size:10px;color:#a78bfa" title="智能推荐">&#9733; 推荐</button>
+            <button class="qa-btn" onclick="_showChainRecommend('${platform}')" style="padding:3px 8px;font-size:10px;color:var(--violet-soft)" title="智能推荐">&#9733; 推荐</button>
             <button class="qa-btn" onclick="_exportChains()" style="padding:3px 8px;font-size:10px" title="导出模板">&#128229;</button>
             <button class="qa-btn" onclick="_importChainsModal('${platform}')" style="padding:3px 8px;font-size:10px" title="导入模板">&#128228;</button>
             <button class="qa-btn" onclick="_openChainEditor('${platform}')" style="padding:3px 8px;font-size:10px">+ 新建</button>
@@ -569,7 +569,7 @@ async function _loadPlatRecentTasks(platform){
       const _workers=[...new Set(g.items.map(t=>t._worker).filter(Boolean))];
       const _allLocal=_workers.length===0;
       const nodeBadge=_allLocal?'':
-        '<span style="font-size:9px;color:#60a5fa;background:rgba(96,165,250,.12);padding:1px 5px;border-radius:3px;margin-left:3px;font-weight:600">'+
+        '<span style="font-size:9px;color:var(--blue-soft);background:rgba(96,165,250,.12);padding:1px 5px;border-radius:3px;margin-left:3px;font-weight:600">'+
         _workers.map(_wLabel).join('/')+'</span>';
       // 展开详情ID
       const expandId='plat-batch-'+gi;
@@ -578,7 +578,7 @@ async function _loadPlatRecentTasks(platform){
         const alias=ALIAS[t.device_id]||t.device_id?.substring(0,6)||'?';
         const out=_getPlatOutcome(t);
         const wl=t._worker?_wLabel(t._worker):'';
-        const wBadge=wl?'<span style="font-size:9px;color:#60a5fa;margin-left:3px">['+wl+']</span>':'';
+        const wBadge=wl?'<span style="font-size:9px;color:var(--blue-soft);margin-left:3px">['+wl+']</span>':'';
         return '<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:11px;color:var(--text-dim)">'+
           '<span>'+sIcon[t.status]+'</span>'+
           '<span style="min-width:38px;font-weight:500">'+alias+wBadge+'</span>'+
@@ -590,7 +590,7 @@ async function _loadPlatRecentTasks(platform){
       const cancelableIds=g.items.filter(t=>t.status==='running'||t.status==='pending').map(t=>t.task_id);
       const cancelBtn=canCancel
         ?'<button onclick="event.stopPropagation();_cancelTaskBatch('+JSON.stringify(cancelableIds)+')" '
-          +'style="padding:2px 8px;font-size:10px;background:rgba(239,68,68,.1);color:#ef4444;border:1px solid rgba(239,68,68,.3);border-radius:4px;cursor:pointer;white-space:nowrap;flex-shrink:0" '
+          +'style="padding:2px 8px;font-size:10px;background:rgba(239,68,68,.1);color:var(--red-strong);border:1px solid rgba(239,68,68,.3);border-radius:4px;cursor:pointer;white-space:nowrap;flex-shrink:0" '
           +'title="取消任务">✕ 取消</button>'
         :'';
       return '<div style="padding:8px 0;border-bottom:1px solid rgba(51,65,85,.4)"'+(expandable?' onclick="const e=document.getElementById(\''+expandId+'\');if(e)e.style.display=e.style.display===\'none\'?\'block\':\'none\';event.stopPropagation()"':'')+' style="cursor:'+(expandable?'pointer':'default')+'">'
@@ -787,7 +787,7 @@ async function _loadQualifiedLeads(){
       const scColor=sc>20?'#22c55e':sc>10?'#f59e0b':'#94a3b8';
       const uname=lead.username||lead.name||'Unknown';
       return `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)">
-        <div style="width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,#f97316,#ef4444);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0">&#128100;</div>
+        <div style="width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,#f97316,var(--red-strong));display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0">&#128100;</div>
         <div style="flex:1;min-width:0">
           <div style="font-size:12px;font-weight:600;color:var(--text)">@${uname}</div>
           <div style="font-size:10px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${preview||'无最近互动'}</div>
@@ -845,11 +845,11 @@ async function _loadAbStats(){
       // 自适应激活进度条
       const progPct=Math.min(100,Math.round(sent/ADAPT_MIN*100));
       const adaptBadge=adapted
-        ?`<span style="font-size:8px;background:#22c55e22;color:#22c55e;padding:1px 5px;border-radius:4px;font-weight:600">自适应激活</span>`
+        ?`<span style="font-size:8px;background:#22c55e22;color:var(--green-strong);padding:1px 5px;border-radius:4px;font-weight:600">自适应激活</span>`
         :`<span style="font-size:8px;color:var(--text-dim)">需再 ${ADAPT_MIN-sent} 条激活</span>`;
       const progressBar=!adapted?`
         <div style="height:3px;background:var(--border);border-radius:2px;margin-top:4px;overflow:hidden">
-          <div style="height:100%;width:${progPct}%;background:linear-gradient(90deg,#3b82f6,#6366f1);border-radius:2px;transition:width 0.4s"></div>
+          <div style="height:100%;width:${progPct}%;background:linear-gradient(90deg,var(--blue-strong),#6366f1);border-radius:2px;transition:width 0.4s"></div>
         </div>`:
         `<div style="height:3px;background:#22c55e33;border-radius:2px;margin-top:4px"></div>`;
       // 权重倍率标签（仅已激活时显示）
@@ -871,7 +871,7 @@ async function _loadAbStats(){
               <div style="font-size:8px;color:var(--text-muted)">发送</div>
             </div>
             <div style="text-align:center;min-width:32px">
-              <div style="font-size:12px;font-weight:600;color:#22c55e">${v.replied||0}</div>
+              <div style="font-size:12px;font-weight:600;color:var(--green-strong)">${v.replied||0}</div>
               <div style="font-size:8px;color:var(--text-muted)">回复</div>
             </div>
             <div style="text-align:center;min-width:40px">
@@ -890,7 +890,7 @@ async function _loadAbStats(){
       ?activeSent.reduce((a,b)=>(parseFloat(a.reply_rate)||0)>=(parseFloat(b.reply_rate)||0)?a:b,activeSent[0])
       :null;
     const champNote=champion
-      ?`<div style="font-size:9px;color:#f59e0b;margin-bottom:6px">&#127851; 领先变体: ${champion.name||champion.id} (${champion.reply_rate}%)</div>`
+      ?`<div style="font-size:9px;color:var(--amber);margin-bottom:6px">&#127851; 领先变体: ${champion.name||champion.id} (${champion.reply_rate}%)</div>`
       :`<div style="font-size:9px;color:var(--text-dim);margin-bottom:6px">累计发送 ${variants.reduce((s,v)=>s+(v.sent||0),0)}/${ADAPT_MIN*variants.length} 次后激活自适应权重</div>`;
     el.innerHTML=`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
       <div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-bottom:4px">&#129514; 话术 A/B 测试（${variants.length} 个变体）</div>
@@ -1058,7 +1058,7 @@ async function _loadFunnel(){
           +'<div style="height:100%;width:'+pct+'%;background:'+(isAnomaly?'rgba(239,68,68,0.5)':s.color)+';border-radius:5px;transition:width .6s ease;display:flex;align-items:center;justify-content:flex-end;padding-right:8px">'
             +'<span style="color:#fff;font-size:11px;font-weight:700;text-shadow:0 1px 2px rgba(0,0,0,.5)">'+s.value+'</span>'
           +'</div>'
-          +(s.value===0&&prevVal>10?'<div style="position:absolute;inset:0;display:flex;align-items:center;padding-left:8px;font-size:10px;color:#f87171">⚠ 0</div>':'')
+          +(s.value===0&&prevVal>10?'<div style="position:absolute;inset:0;display:flex;align-items:center;padding-left:8px;font-size:10px;color:var(--red)">⚠ 0</div>':'')
         +'</div>'
         +'<div style="width:46px;text-align:center;font-size:10px;color:'+rateColor+';font-weight:'+(i>0&&prevVal>0?'600':'400')+'">'+( i>0?rate:'')+'</div>'
       +'</div>';
@@ -1075,10 +1075,10 @@ async function _loadFunnel(){
     el.innerHTML+='<div style="display:flex;gap:16px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:11px;flex-wrap:wrap">'
       +'<span style="color:var(--text-muted)">线索 <b style="color:var(--text)">'+(d.leads_total||0)+'</b></span>'
       +'<span style="color:var(--text-muted)">回关率 <b style="color:'+(followBackRate>10?'#22c55e':followBackRate>0?'#f59e0b':'#f87171')+'">'+followBackRate.toFixed(1)+'%</b></span>'
-      +'<span style="color:var(--text-muted)">已回复 <b style="color:#22c55e">'+(d.leads_responded||0)+'</b></span>'
+      +'<span style="color:var(--text-muted)">已回复 <b style="color:var(--green-strong)">'+(d.leads_responded||0)+'</b></span>'
       +(_qualified>0?'<span style="color:var(--text-muted)">合格 <b style="color:#f97316;font-size:12px">🔥'+_qualified+'</b></span>':'<span style="color:var(--text-muted)">合格 <b style="color:var(--text-dim)">0</b></span>')
-      +'<span style="color:var(--text-muted)">已转化 <b style="color:#ef4444">'+_converted+'</b></span>'
-      +(_converted>0&&(d.leads_total||0)>0?'<span style="color:var(--text-muted)">转化率 <b style="color:#ef4444">'+(_converted/(d.leads_total||1)*100).toFixed(1)+'%</b></span>':'')
+      +'<span style="color:var(--text-muted)">已转化 <b style="color:var(--red-strong)">'+_converted+'</b></span>'
+      +(_converted>0&&(d.leads_total||0)>0?'<span style="color:var(--text-muted)">转化率 <b style="color:var(--red-strong)">'+(_converted/(d.leads_total||1)*100).toFixed(1)+'%</b></span>':'')
       +'<span style="color:var(--text-muted)">设备阶段 active:<b style="color:var(--text)">'+(d.device_phases?.active||0)+'</b> 建立中:<b style="color:var(--text)">'+(d.device_phases?.interest_building||0)+'</b></span>'
     +'</div>';
   }catch(e){
@@ -1121,7 +1121,7 @@ async function _tkQuickTaskWithModal(platform, taskType){
   // 构建设备选择列表（chip 风格）
   const devList=online.length?online.map(d=>{
     const alias=ALIAS[d.device_id]||d.device_id.substring(0,8);
-    return `<label style="display:inline-flex;align-items:center;gap:6px;padding:5px 10px;cursor:pointer;font-size:12px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.25);border-radius:6px;transition:all .12s;user-select:none" onmouseover="this.style.borderColor='#22c55e'" onmouseout="this.style.borderColor='rgba(34,197,94,.25)'"><input type="checkbox" data-did="${d.device_id}" checked style="accent-color:#22c55e;width:14px;height:14px"><span style="font-weight:500">${alias}</span></label>`;
+    return `<label style="display:inline-flex;align-items:center;gap:6px;padding:5px 10px;cursor:pointer;font-size:12px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.25);border-radius:6px;transition:all .12s;user-select:none" onmouseover="this.style.borderColor='var(--green-strong)'" onmouseout="this.style.borderColor='rgba(34,197,94,.25)'"><input type="checkbox" data-did="${d.device_id}" checked style="accent-color:var(--green-strong);width:14px;height:14px"><span style="font-weight:500">${alias}</span></label>`;
   }).join(''):'<div style="color:var(--text-dim);font-size:13px;text-align:center;padding:12px">暂无在线设备</div>';
   // 构建参数输入列表
   const paramHtml=paramDefs.map(p=>{
@@ -1156,13 +1156,13 @@ async function _tkQuickTaskWithModal(platform, taskType){
         </div>
         <button onclick="document.getElementById('tk-task-modal').remove()" style="background:rgba(255,255,255,.06);border:1px solid var(--border);color:var(--text-muted);cursor:pointer;font-size:16px;width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;transition:background .15s" onmouseover="this.style.background='rgba(239,68,68,.15)'" onmouseout="this.style.background='rgba(255,255,255,.06)'">✕</button>
       </div>
-      ${running>0?`<div style="display:flex;align-items:center;gap:8px;background:rgba(234,179,8,0.1);border:1px solid rgba(234,179,8,0.3);border-radius:8px;padding:8px 12px;font-size:12px;color:#f59e0b"><span style="font-size:14px">⚠</span> 当前已有 <b>${running}</b> 台设备在执行此任务</div>`:''}
+      ${running>0?`<div style="display:flex;align-items:center;gap:8px;background:rgba(234,179,8,0.1);border:1px solid rgba(234,179,8,0.3);border-radius:8px;padding:8px 12px;font-size:12px;color:var(--amber)"><span style="font-size:14px">⚠</span> 当前已有 <b>${running}</b> 台设备在执行此任务</div>`:''}
     </div>
     <!-- 内容区 -->
     <div style="padding:0 24px 20px;max-height:60vh;overflow-y:auto">
       <div style="margin-bottom:14px">
         <div style="font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:8px;display:flex;align-items:center;gap:6px">
-          <span style="width:3px;height:12px;border-radius:1px;background:#22c55e"></span>选择设备
+          <span style="width:3px;height:12px;border-radius:1px;background:var(--green-strong)"></span>选择设备
           <span style="margin-left:auto;font-size:10px;font-weight:normal;color:var(--text-muted)">${online.length} 台在线</span>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:6px;max-height:120px;overflow-y:auto;padding:8px;background:var(--bg-main);border:1px solid var(--border);border-radius:8px">${devList}</div>
@@ -1170,12 +1170,12 @@ async function _tkQuickTaskWithModal(platform, taskType){
       ${audienceHtml}
       ${paramDefs.length?`<div style="margin-bottom:14px">
         <div style="font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:10px;display:flex;align-items:center;gap:6px">
-          <span style="width:3px;height:12px;border-radius:1px;background:#3b82f6"></span>参数配置
+          <span style="width:3px;height:12px;border-radius:1px;background:var(--blue-strong)"></span>参数配置
         </div>
         <div style="display:flex;flex-direction:column;gap:10px;padding:10px;background:var(--bg-main);border:1px solid var(--border);border-radius:8px">${paramHtml}</div>
       </div>`:''}
       <div style="display:flex;gap:10px;justify-content:flex-end;padding-top:8px;border-top:1px solid var(--border)">
-        <button onclick="document.getElementById('tk-task-modal').remove()" style="padding:10px 20px;font-size:13px;background:var(--bg-main);border:1px solid var(--border);border-radius:8px;color:var(--text-muted);cursor:pointer;transition:all .12s" onmouseover="this.style.borderColor='#ef4444';this.style.color='#ef4444'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-muted)'">取消</button>
+        <button onclick="document.getElementById('tk-task-modal').remove()" style="padding:10px 20px;font-size:13px;background:var(--bg-main);border:1px solid var(--border);border-radius:8px;color:var(--text-muted);cursor:pointer;transition:all .12s" onmouseover="this.style.borderColor='var(--red-strong)';this.style.color='var(--red-strong)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-muted)'">取消</button>
         <button style="padding:10px 24px;font-size:13px;font-weight:700;background:${_tGrad};border:none;border-radius:8px;color:#fff;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.2);transition:transform .12s,box-shadow .12s;display:flex;align-items:center;gap:6px" onclick="_tkConfirmExec('${platform}','${taskType}')" onmouseover="this.style.transform='translateY(-1px)';this.style.boxShadow='0 4px 16px rgba(0,0,0,.3)'" onmouseout="this.style.transform='';this.style.boxShadow='0 2px 8px rgba(0,0,0,.2)'"><span style="font-size:14px">▶</span>立即执行</button>
       </div>
     </div>
@@ -1380,14 +1380,14 @@ async function _startChainModal(platform,chainId){
   if(!online.length){showToast('没有在线设备','warn');return;}
   const overlay=_fbModalOverlay('chain-modal-overlay');
   const stepsHtml=chain.steps.map((s,i)=>{const tt=typeof s==='string'?s:(s.task_type||'');const fail=typeof s==='object'?(s.on_fail||'skip'):'skip';return `<div style="display:flex;align-items:center;gap:6px;padding:4px 0">
-    <span style="width:18px;height:18px;border-radius:50%;background:rgba(139,92,246,.15);color:#8b5cf6;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center">${i+1}</span>
+    <span style="width:18px;height:18px;border-radius:50%;background:rgba(139,92,246,.15);color:var(--violet);font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center">${i+1}</span>
     <span style="font-size:11px">${TASK_NAMES[tt]||tt}</span>
     <span style="font-size:9px;color:${fail==='abort'?'#ef4444':'var(--text-dim)'}">${fail==='abort'?'失败中止':'失败跳过'}</span>
   </div>`;}).join('');
   const devChips=online.map(d=>{
     const alias=typeof ALIAS!=='undefined'?(ALIAS[d.device_id]||d.device_id.substring(0,8)):d.device_id.substring(0,8);
     return `<label style="display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:11px;transition:all .15s">
-      <input type="checkbox" name="chain-dev" value="${d.device_id}" checked style="accent-color:#8b5cf6"> ${alias}
+      <input type="checkbox" name="chain-dev" value="${d.device_id}" checked style="accent-color:var(--violet)"> ${alias}
     </label>`;
   }).join(' ');
   overlay.innerHTML=`<div style="background:var(--bg-card);border-radius:14px;padding:20px;max-width:420px;width:100%;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.3)">
@@ -1403,7 +1403,7 @@ async function _startChainModal(platform,chainId){
     </div>
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button class="qa-btn" onclick="this.closest('#chain-modal-overlay').remove()" style="padding:6px 16px;font-size:12px">取消</button>
-      <button class="qa-btn" id="chain-start-btn" onclick="_doStartChain('${platform}','${chainId}')" style="padding:6px 16px;font-size:12px;background:#8b5cf6;color:#fff;border-color:#8b5cf6;font-weight:600">&#9654; 启动链</button>
+      <button class="qa-btn" id="chain-start-btn" onclick="_doStartChain('${platform}','${chainId}')" style="padding:6px 16px;font-size:12px;background:var(--violet);color:#fff;border-color:var(--violet);font-weight:600">&#9654; 启动链</button>
     </div>
   </div>`;
 }
@@ -1447,9 +1447,9 @@ function _openChainEditor(platform, existingId){
       <div style="font-size:10px;color:var(--text-dim)">每步: {"task_type":"xxx","params":{},"on_fail":"skip|abort"}</div>
     </div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
-      ${existingId?'<button class="qa-btn" onclick="_deleteChainTemplate(\''+platform+'\',\''+existingId+'\')" style="padding:6px 14px;font-size:12px;color:#ef4444;margin-right:auto">&#128465; 删除</button>':''}
+      ${existingId?'<button class="qa-btn" onclick="_deleteChainTemplate(\''+platform+'\',\''+existingId+'\')" style="padding:6px 14px;font-size:12px;color:var(--red-strong);margin-right:auto">&#128465; 删除</button>':''}
       <button class="qa-btn" onclick="this.closest(\'#chain-editor-overlay\').remove()" style="padding:6px 16px;font-size:12px">取消</button>
-      <button class="qa-btn" id="ce-save-btn" onclick="_saveChainTemplate('${platform}'${existingId?',\''+existingId+'\'':''})" style="padding:6px 16px;font-size:12px;background:#8b5cf6;color:#fff;border-color:#8b5cf6;font-weight:600">保存</button>
+      <button class="qa-btn" id="ce-save-btn" onclick="_saveChainTemplate('${platform}'${existingId?',\''+existingId+'\'':''})" style="padding:6px 16px;font-size:12px;background:var(--violet);color:#fff;border-color:var(--violet);font-weight:600">保存</button>
     </div>
   </div>`;
 }
@@ -1518,7 +1518,7 @@ async function _showChainRunDetail(runId){
         icon=res.success?'&#9989;':'&#10060;';
         color=res.success?'#22c55e':'#ef4444';
         if(res.duration_sec!=null) dur=`<span style="color:var(--text-dim);margin-left:6px">${res.duration_sec}s</span>`;
-        if(!res.success&&res.error) err=`<div style="font-size:10px;color:#ef4444;margin-top:2px;padding-left:24px;word-break:break-all">${(res.error+'').substring(0,120)}</div>`;
+        if(!res.success&&res.error) err=`<div style="font-size:10px;color:var(--red-strong);margin-top:2px;padding-left:24px;word-break:break-all">${(res.error+'').substring(0,120)}</div>`;
       }else if(d.status==='aborted'||d.status==='running'){
         icon='&#9898;';color='var(--text-dim)';
       }
@@ -1527,7 +1527,7 @@ async function _showChainRunDetail(runId){
         <span style="flex-shrink:0">${icon}</span>
         <div style="flex:1;min-width:0">
           <span style="font-size:11px;font-weight:600">#${i+1} ${name}</span>${dur}
-          ${isParallel?'<span style="font-size:9px;color:#8b5cf6;margin-left:4px">并行</span>':''}
+          ${isParallel?'<span style="font-size:9px;color:var(--violet);margin-left:4px">并行</span>':''}
         </div>
       </div>${err}`;
     }
@@ -1540,18 +1540,18 @@ async function _showChainRunDetail(runId){
       <div style="text-align:right;font-size:10px;color:var(--text-dim)">
         <div>${d.created_at||''}</div>
         ${d.finished_at?'<div>→ '+d.finished_at+'</div>':''}
-        ${d.parent_run_id?'<div style="color:#8b5cf6">重放自: '+d.parent_run_id.substring(0,8)+'</div>':''}
+        ${d.parent_run_id?'<div style="color:var(--violet)">重放自: '+d.parent_run_id.substring(0,8)+'</div>':''}
       </div>
     </div>`;
 
-    const rerunBtn=hasFailed&&d.status!=='running'?`<button class="qa-btn" onclick="_rerunFailedSteps('${runId}')" id="rerun-btn" style="padding:6px 16px;font-size:12px;background:#8b5cf6;color:#fff;border-color:#8b5cf6;font-weight:600">&#128260; 重跑失败步骤 (${results.filter(r=>!r.success).length})</button>`:'';
+    const rerunBtn=hasFailed&&d.status!=='running'?`<button class="qa-btn" onclick="_rerunFailedSteps('${runId}')" id="rerun-btn" style="padding:6px 16px;font-size:12px;background:var(--violet);color:#fff;border-color:var(--violet);font-weight:600">&#128260; 重跑失败步骤 (${results.filter(r=>!r.success).length})</button>`:'';
 
     document.getElementById('chain-detail-body').innerHTML=headerHtml+
       '<div style="font-size:12px;font-weight:600;margin-bottom:6px">步骤时间线</div>'+
       '<div style="margin-bottom:12px">'+timelineHtml+'</div>'+
       '<div style="display:flex;gap:8px;justify-content:flex-end">'+rerunBtn+'</div>';
   }catch(e){
-    document.getElementById('chain-detail-body').innerHTML='<span style="color:#ef4444">加载失败: '+(e.message||e)+'</span>';
+    document.getElementById('chain-detail-body').innerHTML='<span style="color:var(--red-strong)">加载失败: '+(e.message||e)+'</span>';
   }
 }
 async function _rerunFailedSteps(runId){
@@ -1595,7 +1595,7 @@ async function _scheduleChainModal(platform, chainId){
     </div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
       <button class="qa-btn" onclick="this.closest('#chain-sched-overlay').remove()" style="padding:6px 16px;font-size:12px">取消</button>
-      <button class="qa-btn" id="cs-save-btn" onclick="_doScheduleChain('${chainId}')" style="padding:6px 16px;font-size:12px;background:#8b5cf6;color:#fff;border-color:#8b5cf6;font-weight:600">创建调度</button>
+      <button class="qa-btn" id="cs-save-btn" onclick="_doScheduleChain('${chainId}')" style="padding:6px 16px;font-size:12px;background:var(--violet);color:#fff;border-color:var(--violet);font-weight:600">创建调度</button>
     </div>
   </div>`;
 }
@@ -1635,7 +1635,7 @@ async function _showChainRecommend(platform){
       const color=rec.expected_success_rate>=70?'#22c55e':rec.expected_success_rate>=40?'#f59e0b':'#ef4444';
       const stepsHtml=rec.steps_analysis.map(s=>{
         const sColor=s.success_rate>=80?'#22c55e':s.success_rate>=50?'#f59e0b':'#ef4444';
-        const hintsHtml=s.hints.length?`<div style="font-size:10px;color:#f59e0b;margin-top:1px">${s.hints.join('; ')}</div>`:'';
+        const hintsHtml=s.hints.length?`<div style="font-size:10px;color:var(--amber);margin-top:1px">${s.hints.join('; ')}</div>`:'';
         return `<div style="display:flex;align-items:center;gap:6px;padding:3px 0">
           <span style="font-size:10px;font-weight:700;color:var(--text-dim);width:14px">${s.step}</span>
           <span style="font-size:11px;flex:1">${TASK_NAMES[s.task_type]||s.task_type}</span>
@@ -1643,7 +1643,7 @@ async function _showChainRecommend(platform){
           <span style="font-size:9px;color:var(--text-dim)">(${s.sample_count}次)</span>
         </div>${hintsHtml}`;
       }).join('');
-      const hintsHtml=rec.param_hints.length?`<div style="margin-top:6px;padding:6px 8px;background:rgba(251,191,36,.06);border-radius:6px;font-size:10px;color:#f59e0b;line-height:1.5">${rec.param_hints.map(h=>'&#128161; '+h).join('<br>')}</div>`:'';
+      const hintsHtml=rec.param_hints.length?`<div style="margin-top:6px;padding:6px 8px;background:rgba(251,191,36,.06);border-radius:6px;font-size:10px;color:var(--amber);line-height:1.5">${rec.param_hints.map(h=>'&#128161; '+h).join('<br>')}</div>`:'';
       return `<div style="background:var(--bg-main);border-radius:10px;padding:12px;margin-bottom:10px;border:1px solid var(--border)">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
           <div>
@@ -1652,7 +1652,7 @@ async function _showChainRecommend(platform){
           </div>
           <div style="display:flex;align-items:center;gap:6px">
             <span style="font-size:14px;font-weight:700;color:${color}">${rec.expected_success_rate}%</span>
-            <button class="qa-btn" onclick="document.getElementById('chain-rec-overlay')?.remove();_startChainModal('${platform}','${rec.chain_id}')" style="padding:3px 10px;font-size:10px;background:#8b5cf6;color:#fff;border-color:#8b5cf6">&#9654; 启动</button>
+            <button class="qa-btn" onclick="document.getElementById('chain-rec-overlay')?.remove();_startChainModal('${platform}','${rec.chain_id}')" style="padding:3px 10px;font-size:10px;background:var(--violet);color:#fff;border-color:var(--violet)">&#9654; 启动</button>
           </div>
         </div>
         ${rec.description?'<div style="font-size:10px;color:var(--text-dim);margin-bottom:6px">'+rec.description+'</div>':''}
@@ -1662,7 +1662,7 @@ async function _showChainRecommend(platform){
     }).join('');
   }catch(e){
     const body=document.getElementById('rec-body');
-    if(body) body.innerHTML='<span style="color:#ef4444">加载失败: '+(e.message||e)+'</span>';
+    if(body) body.innerHTML='<span style="color:var(--red-strong)">加载失败: '+(e.message||e)+'</span>';
   }
 }
 
@@ -1679,11 +1679,11 @@ function _importChainsModal(platform){
     <textarea id="ci-yaml" rows="10" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-main);color:var(--text);font-size:11px;font-family:monospace;resize:vertical" placeholder="chains:\n  my_chain:\n    name: ...\n    platform: facebook\n    steps:\n      - task_type: ..."></textarea>
     <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
       <input type="file" id="ci-file" accept=".yaml,.yml" style="font-size:11px" onchange="_readImportFile(this)">
-      <label style="font-size:11px;display:flex;align-items:center;gap:4px"><input type="checkbox" id="ci-overwrite" style="accent-color:#8b5cf6"> 覆盖同名</label>
+      <label style="font-size:11px;display:flex;align-items:center;gap:4px"><input type="checkbox" id="ci-overwrite" style="accent-color:var(--violet)"> 覆盖同名</label>
     </div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
       <button class="qa-btn" onclick="this.closest('#chain-import-overlay').remove()" style="padding:6px 16px;font-size:12px">取消</button>
-      <button class="qa-btn" id="ci-btn" onclick="_doImportChains('${platform}')" style="padding:6px 16px;font-size:12px;background:#8b5cf6;color:#fff;border-color:#8b5cf6;font-weight:600">导入</button>
+      <button class="qa-btn" id="ci-btn" onclick="_doImportChains('${platform}')" style="padding:6px 16px;font-size:12px;background:var(--violet);color:#fff;border-color:var(--violet);font-weight:600">导入</button>
     </div>
   </div>`;
 }

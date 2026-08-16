@@ -59,6 +59,80 @@ def system_git_branch():
         return {"branch": "(unknown)", "ahead_of_main": 0, "is_main": False, "error": str(e)}
 
 
+@router.post("/system/nav-click")
+def system_nav_click(body: dict):
+    """导航埋点：控制台菜单/页签点击流水 → logs/nav_usage.jsonl。
+
+    2026-08-14 IA 重组配套：菜单退役从「拍脑袋」升格为「连续数周零点击才许提退役」，
+    这里是那份决策数据的地基。前端 overview.js _navBeacon 每次真实导航打一条；
+    user/role 取自客户端自报（用途是使用度统计，不做权限判定）。
+    """
+    import json as _json
+    import time as _time
+    from pathlib import Path as _Path
+
+    page = str(body.get("page", ""))[:64].strip()
+    if not page:
+        raise HTTPException(status_code=422, detail="page required")
+    rec = {
+        "ts": round(_time.time(), 3),
+        "page": page,
+        "kind": str(body.get("kind", "page"))[:16],
+        "user": str(body.get("user", ""))[:32],
+        "role": str(body.get("role", ""))[:24],
+    }
+    p = _Path(PROJECT_ROOT) / "logs" / "nav_usage.jsonl"
+    try:
+        p.parent.mkdir(exist_ok=True)
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(_json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception as e:  # 埋点绝不打断业务
+        logger.debug("nav-click write failed: %s", e)
+        return {"ok": False}
+    return {"ok": True}
+
+
+@router.get("/system/nav-usage/summary")
+def system_nav_usage_summary(days: int = 28):
+    """导航埋点聚合：近 N 天各菜单/页签点击量、最后使用时间、按类型分布。
+
+    退役决策口径：先看 count=0 的名单（连续观察 ≥4 周），再人工裁决。
+    """
+    import json as _json
+    import time as _time
+    from pathlib import Path as _Path
+
+    days = max(1, min(int(days or 28), 365))
+    p = _Path(PROJECT_ROOT) / "logs" / "nav_usage.jsonl"
+    if not p.exists():
+        return {"days": days, "total": 0, "pages": []}
+    cutoff = _time.time() - days * 86400
+    out: dict = {}
+    total = 0
+    try:
+        with open(p, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rec = _json.loads(line)
+                except Exception:
+                    continue
+                if rec.get("ts", 0) < cutoff:
+                    continue
+                pg = rec.get("page", "")
+                if not pg:
+                    continue
+                total += 1
+                slot = out.setdefault(pg, {"page": pg, "count": 0, "last_ts": 0, "kinds": {}})
+                slot["count"] += 1
+                slot["last_ts"] = max(slot["last_ts"], rec.get("ts", 0))
+                k = rec.get("kind", "page")
+                slot["kinds"][k] = slot["kinds"].get(k, 0) + 1
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"read nav_usage failed: {e}")
+    pages = sorted(out.values(), key=lambda x: -x["count"])
+    return {"days": days, "total": total, "pages": pages}
+
+
 @router.post("/system/force-restart")
 def force_restart():
     """强制重启当前 Worker/Coordinator 进程。"""

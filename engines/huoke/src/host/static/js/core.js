@@ -33,23 +33,25 @@ function _wsUrl(path){
 /* ── i18n 国际化 ── */
 const _i18n={
   zh:{
-    'overview':'总览','devices':'设备管理','tasks':'任务管理','screen-monitor':'屏幕监控',
+    'overview':'总览','devices':'设备管理','tasks':'任务中心','screen-monitor':'屏幕墙',
     'batch-ops':'批量操作','ai-assistant':'AI 助手','cluster':'集群管理','platforms':'平台控制',
     'perf-monitor':'性能监控','screen-record':'录屏管理','script-engine':'脚本执行器',
     'quick-actions':'批量快捷操作','batch-upload':'批量文件上传','scheduled-jobs':'定时任务',
     'data-export':'数据导出','device-assets':'设备资产','ai-script':'AI脚本生成',
     'op-timeline':'操作时间线','sync-mirror':'同步镜像操作','health-report':'健康报告',
-    'tpl-market':'模板市场','visual-workflow':'可视化工作流','multi-screen':'多屏并行操控',
-    'user-mgmt':'用户管理','logout':'退出登录','api-docs':'API 文档',
+    'tpl-market':'模板库','visual-workflow':'可视化画布','multi-screen':'多屏操控',
+    'user-mgmt':'用户与权限','logout':'退出登录','api-docs':'API 文档',
     'system-status':'系统状态','running':'运行正常','online-devices':'在线设备',
     'total-devices':'总设备','total-tasks':'总任务','success':'成功','failed':'失败',
     'running-tasks':'执行中','search-device':'搜索设备…','all-status':'全部状态',
     'online':'在线','offline':'离线','busy':'执行中','compact':'紧凑','standard':'标准',
     'large-card':'大卡片','save':'保存','load':'加载','execute':'执行','clear':'清空',
     'cancel':'取消','confirm':'确认','delete':'删除','create':'创建','refresh':'刷新',
+    'sec-leads':'线索与转化','sec-acquire':'获客作业','sec-devices':'设备与网络',
+    'sec-auto':'自动化','sec-data':'数据与消息','sec-system':'系统',
   },
   en:{
-    'overview':'Overview','devices':'Devices','tasks':'Tasks','screen-monitor':'Screen Monitor',
+    'overview':'Overview','devices':'Devices','tasks':'Tasks','screen-monitor':'Screen Wall',
     'batch-ops':'Batch Ops','ai-assistant':'AI Assistant','cluster':'Cluster','platforms':'Platforms',
     'perf-monitor':'Performance','screen-record':'Recordings','script-engine':'Script Engine',
     'quick-actions':'Quick Actions','batch-upload':'File Upload','scheduled-jobs':'Scheduled Jobs',
@@ -63,6 +65,8 @@ const _i18n={
     'online':'Online','offline':'Offline','busy':'Busy','compact':'Compact','standard':'Standard',
     'large-card':'Large','save':'Save','load':'Load','execute':'Execute','clear':'Clear',
     'cancel':'Cancel','confirm':'Confirm','delete':'Delete','create':'Create','refresh':'Refresh',
+    'sec-leads':'Leads & Conversion','sec-acquire':'Acquisition','sec-devices':'Devices & Network',
+    'sec-auto':'Automation','sec-data':'Data & Messages','sec-system':'System',
   }
 };
 let _curLang=localStorage.getItem('oc-lang')||'zh';
@@ -72,6 +76,7 @@ function toggleLang(){
   localStorage.setItem('oc-lang',_curLang);
   document.getElementById('lang-toggle').textContent=_curLang==='zh'?'中':'EN';
   _applyI18n();
+  if(typeof _i18nWalkApply==='function')_i18nWalkApply();
 }
 function _applyI18n(){
   document.querySelectorAll('[data-i18n]').forEach(el=>{
@@ -80,6 +85,15 @@ function _applyI18n(){
   document.querySelectorAll('[data-i18n-placeholder]').forEach(el=>{
     el.placeholder=t(el.dataset.i18nPlaceholder);
   });
+}
+/* 开页即应用持久化语言（此前只有手动切换才生效，en 用户开页恒中文） */
+if(_curLang!=='zh'){
+  try{
+    _applyI18n();
+    const _lb=document.getElementById('lang-toggle');
+    if(_lb)_lb.textContent='EN';
+    setTimeout(function(){if(typeof _i18nWalkApply==='function')_i18nWalkApply();},0);
+  }catch(e){}
 }
 (function _initLang(){
   const btn=document.getElementById('lang-toggle');
@@ -159,7 +173,7 @@ function _authHeaders(){return _OC_TOKEN?{'Authorization':'Bearer '+_OC_TOKEN}:{
 (function _authGuard(){
   if(!_OC_TOKEN){window.location.href='/login';return;}
   const ui=document.getElementById('user-info');
-  if(ui)ui.textContent=(_OC_USER||'user')+' ('+(_OC_ROLE==='admin'?'管理员':_OC_ROLE==='operator'?'操作员':'只读')+')';
+  if(ui)ui.textContent=(_OC_USER||'user')+' ('+_roleLabel(_OC_ROLE)+')';
 })();
 function doLogout(){
   fetch(_apiUrl('/auth/logout'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:_OC_TOKEN})});
@@ -177,15 +191,15 @@ async function loadUserMgmtPage(){
     list.innerHTML=users.map(u=>`
       <div style="display:flex;align-items:center;justify-content:space-between;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:12px 16px">
         <div><span style="font-weight:600;font-size:13px">${u.username}</span>
-        <span style="margin-left:8px;font-size:10px;padding:2px 8px;border-radius:6px;background:${u.role==='admin'?'#3b82f6':u.role==='operator'?'#22c55e':'#94a3b8'};color:#fff">${u.role==='admin'?'管理员':u.role==='operator'?'操作员':'只读'}</span>
+        <span style="margin-left:8px;font-size:10px;padding:2px 8px;border-radius:6px;background:${u.role==='admin'?'#3b82f6':u.role==='operator'?'#22c55e':u.role==='customer_service'?'#a855f7':'#94a3b8'};color:#fff">${_roleLabel(u.role)}</span>
         <span style="margin-left:8px;font-size:11px;color:var(--text-muted)">${u.display||''}</span></div>
         <div style="display:flex;gap:6px">
           <button class="sb-btn2" onclick="editUserRole('${u.username}')" style="font-size:10px">改角色</button>
           <button class="sb-btn2" onclick="resetUserPass('${u.username}')" style="font-size:10px">重置密码</button>
-          <button class="sb-btn2" onclick="deleteUser('${u.username}')" style="font-size:10px;color:#f87171">删除</button>
+          <button class="sb-btn2" onclick="deleteUser('${u.username}')" style="font-size:10px;color:var(--red)">删除</button>
         </div>
       </div>`).join('');
-  }catch(e){list.innerHTML='<div style="color:#f87171">加载失败:'+e.message+'</div>';}
+  }catch(e){list.innerHTML='<div style="color:var(--red)">加载失败:'+e.message+'</div>';}
 }
 function showAddUserForm(){document.getElementById('add-user-form').style.display='block';}
 async function createUser(){
@@ -225,29 +239,174 @@ async function changeMyPassword(){
     body:JSON.stringify({password:pass})});
   showToast('密码修改成功，下次登录生效','success');
 }
-function showUserMenu(){showPage('user-mgmt');}
+function showUserMenu(){
+  var old=document.getElementById('oc-user-menu');
+  if(old){old.remove();return;}
+  var m=document.createElement('div');
+  m.id='oc-user-menu';
+  m.style.cssText='position:fixed;top:52px;right:16px;z-index:5000;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.45);min-width:190px;padding:6px;font-size:12px';
+  var items=[];
+  items.push('<div style="padding:8px 10px;color:var(--text-muted);border-bottom:1px solid var(--border);margin-bottom:4px"><b style="color:var(--text-main)">'+(_OC_USER||'user')+'</b> · '+_roleLabel(_OC_ROLE)+'</div>');
+  if(_isAdminRole()) items.push('<div class="oc-um-item" onclick="document.getElementById(\'oc-user-menu\').remove();if(typeof navigateToPage===\'function\')navigateToPage(\'user-mgmt\')">&#128101; 用户与权限</div>');
+  items.push('<div class="oc-um-item" style="color:var(--red)" onclick="doLogout()">&#128682; 退出登录</div>');
+  m.innerHTML=items.join('');
+  document.body.appendChild(m);
+  setTimeout(function(){
+    document.addEventListener('click',function h(e){
+      var ui=document.getElementById('user-info');
+      if(!m.contains(e.target)&&e.target!==ui&&!(ui&&ui.contains(e.target))){
+        m.remove();document.removeEventListener('click',h);
+      }
+    });
+  },0);
+}
 
 /* ── Sidebar Section Toggle & Search ── */
 function _toggleSection(el){
   el.classList.toggle('collapsed');
   const grp=el.nextElementSibling;
   if(grp&&grp.classList.contains('nav-group')){grp.classList.toggle('collapsed');}
+  const k=el.dataset.sec;
+  if(k){
+    try{
+      const st=JSON.parse(localStorage.getItem('oc_nav_collapsed')||'{}');
+      st[k]=el.classList.contains('collapsed');
+      localStorage.setItem('oc_nav_collapsed',JSON.stringify(st));
+    }catch(e){}
+  }
+}
+/* 折叠状态跨会话记忆（core.js 在 body 尾加载，侧栏 DOM 已就位） */
+(function _restoreNavCollapse(){
+  let st={};
+  try{st=JSON.parse(localStorage.getItem('oc_nav_collapsed')||'{}');}catch(e){}
+  document.querySelectorAll('.nav-section[data-sec]').forEach(s=>{
+    const k=s.dataset.sec;
+    if(!(k in st))return;
+    const grp=s.nextElementSibling;
+    s.classList.toggle('collapsed',!!st[k]);
+    if(grp&&grp.classList.contains('nav-group'))grp.classList.toggle('collapsed',!!st[k]);
+  });
+})();
+function _roleLabel(role){
+  role=(role||'').toLowerCase();
+  if(role==='admin') return '管理员';
+  if(role==='operator') return '操作员';
+  if(role==='customer_service') return '客服';
+  if(role==='viewer') return '只读';
+  return role||'用户';
+}
+function _isAdminRole(){
+  return (document.documentElement.getAttribute('data-role')||_OC_ROLE||'').toLowerCase()==='admin';
 }
 function _filterNav(q){
   q=q.toLowerCase().trim();
+  const admin=_isAdminRole();
   document.querySelectorAll('.nav-group .nav-item').forEach(it=>{
+    if(!admin && it.closest('[data-admin-only]')) return;
     const txt=(it.textContent||'').toLowerCase();
     const pg=(it.dataset.page||'').toLowerCase();
     const match=!q||txt.includes(q)||pg.includes(q);
     it.classList.toggle('hidden',!match);
+    // 家族子页（fam-child）平时隐藏，只在搜索命中时显形——Ctrl+K 搜「录屏」仍能直达
+    if(it.classList.contains('fam-child')) it.classList.toggle('sr-show',!!q&&match);
   });
   if(q){
-    document.querySelectorAll('.nav-group').forEach(g=>{g.classList.remove('collapsed');});
-    document.querySelectorAll('.nav-section').forEach(s=>{s.classList.remove('collapsed');});
+    document.querySelectorAll('.nav-group').forEach(g=>{
+      if(!admin && g.hasAttribute('data-admin-only')) return;
+      g.classList.remove('collapsed');
+    });
+    document.querySelectorAll('.nav-section').forEach(s=>{
+      if(!admin && s.hasAttribute('data-admin-only')) return;
+      s.classList.remove('collapsed');
+    });
   }
 }
+/* ── Ctrl+K 命令面板（P2）：页面 + 动作 + 客户 三域搜索；「AI 指令」入口收编于此 ── */
+const _CP_ACTIONS=[
+  {label:'AI 指令 · 自然语言控制台',hint:'页面',run:function(){if(typeof navigateToPage==='function')navigateToPage('chat');}},
+  {label:'修复离线设备',hint:'动作',run:function(){if(window.fixAllOffline)fixAllOffline();}},
+  {label:'取消全部运行任务',hint:'动作',run:function(){if(window.cancelAllTasks)cancelAllTasks();}},
+  {label:'投屏大屏 · L2 看板',hint:'新窗口',run:function(){window.open('/static/l2-dashboard.html','_blank');}},
+  {label:'API 文档',hint:'新窗口',run:function(){window.open('/docs','_blank');}},
+  {label:'演示模式 · 示例数据开/关',hint:'动作',run:function(){if(window.toggleDemoMode)toggleDemoMode();}},
+];
+let _cpSel=0,_cpRows=[],_cpLeadTimer=null,_cpLeadRows=[];
+function _cpPages(){
+  const admin=_isAdminRole();
+  const seen=new Set();const out=[];
+  document.querySelectorAll('.nav-item[data-page]').forEach(it=>{
+    if(!admin&&it.closest('[data-admin-only]'))return;
+    const pg=it.dataset.page;
+    if(seen.has(pg))return;
+    seen.add(pg);
+    out.push({label:(it.textContent||'').replace(/^[\u00b7\s]+/,'').trim(),hint:'页面',run:(function(p){return function(){if(typeof navigateToPage==='function')navigateToPage(p);};})(pg)});
+  });
+  return out;
+}
+function _cpRender(q){
+  const list=document.getElementById('oc-cp-list');
+  if(!list)return;
+  q=(q||'').toLowerCase().trim();
+  const rows=[];
+  _cpPages().forEach(r=>{if(!q||r.label.toLowerCase().includes(q))rows.push(r);});
+  _CP_ACTIONS.forEach(r=>{if(!q||r.label.toLowerCase().includes(q))rows.push(r);});
+  (_cpLeadRows||[]).forEach(r=>rows.push(r));
+  _cpRows=rows.slice(0,14);
+  _cpSel=Math.min(_cpSel,Math.max(0,_cpRows.length-1));
+  list.innerHTML=_cpRows.map((r,i)=>'<div class="oc-cp-item'+(i===_cpSel?' sel':'')+'" data-i="'+i+'" onmousedown="event.preventDefault();_cpRun('+i+')">'
+    +'<span>'+r.label+'</span><span class="oc-cp-hint">'+(r.hint||'')+'</span></div>').join('')
+    ||'<div style="padding:14px;color:var(--text-muted);font-size:12px">没有匹配项</div>';
+}
+function _cpRun(i){
+  const r=_cpRows[i];
+  _cpClose();
+  if(r&&r.run){
+    try{if(window._navBeacon)_navBeacon('palette','action');}catch(e){}
+    r.run();
+  }
+}
+function _cpQueryLeads(q){
+  if(_cpLeadTimer)clearTimeout(_cpLeadTimer);
+  if(!q||q.length<2){_cpLeadRows=[];_cpRender(q);return;}
+  _cpLeadTimer=setTimeout(async function(){
+    try{
+      const d=await api('GET','/lead-mesh/leads/search?name_like='+encodeURIComponent(q)+'&limit=6');
+      const rows=((d&&d.results)||[]).map(function(r){
+        const name=r.display_name||r.name||r.peer_name||r.canonical_id||'?';
+        const plat=r.platform?(' · '+r.platform):'';
+        return {label:'客户 · '+name+plat,hint:'档案',run:(function(id){return function(){if(window.lmOpenLeadDossier)lmOpenLeadDossier(id);};})(r.canonical_id)};
+      });
+      const inp=document.getElementById('oc-cp-input');
+      if(inp&&inp.value.trim().toLowerCase()===q.toLowerCase()){_cpLeadRows=rows;_cpRender(q);}
+    }catch(e){}
+  },250);
+}
+function _cpClose(){const o=document.getElementById('oc-cmdpal');if(o)o.remove();}
+function _cpOpen(){
+  if(document.getElementById('oc-cmdpal')){_cpClose();return;}
+  const o=document.createElement('div');
+  o.id='oc-cmdpal';
+  o.innerHTML='<div class="oc-cp-box">'
+    +'<input id="oc-cp-input" placeholder="搜页面 / 动作 / 客户…（Esc 关闭）" autocomplete="off"/>'
+    +'<div id="oc-cp-list"></div>'
+    +'<div class="oc-cp-foot">↑↓ 选择 · Enter 执行 · 客户搜索输入 2 字起</div></div>';
+  o.addEventListener('mousedown',function(e){if(e.target===o)_cpClose();});
+  document.body.appendChild(o);
+  const inp=document.getElementById('oc-cp-input');
+  inp.addEventListener('input',function(){_cpSel=0;_cpLeadRows=[];const q=inp.value;_cpRender(q);_cpQueryLeads(q.trim());});
+  inp.addEventListener('keydown',function(e){
+    if(e.key==='Escape'){e.preventDefault();_cpClose();}
+    else if(e.key==='ArrowDown'){e.preventDefault();_cpSel=Math.min(_cpSel+1,_cpRows.length-1);_cpRender(inp.value);}
+    else if(e.key==='ArrowUp'){e.preventDefault();_cpSel=Math.max(_cpSel-1,0);_cpRender(inp.value);}
+    else if(e.key==='Enter'){e.preventDefault();_cpRun(_cpSel);}
+  });
+  _cpLeadRows=[];
+  _cpRender('');
+  inp.focus();
+}
 document.addEventListener('keydown',e=>{
-  if((e.ctrlKey||e.metaKey)&&e.key==='k'){e.preventDefault();const s=document.getElementById('nav-search');if(s){s.focus();s.select();}}
+  if((e.ctrlKey||e.metaKey)&&e.key==='k'){e.preventDefault();_cpOpen();}
+  if(e.key==='Escape'&&document.getElementById('oc-cmdpal'))_cpClose();
 });
 
 /* ── Toast Notification System ── */
@@ -442,6 +601,175 @@ function _updateThemeIcon(){
   btn.textContent=isDark?'\u{1F319}':'\u{2600}\u{FE0F}';
 }
 _initTheme();
+
+/* ── P4 EN 走译层（AvatarHub 同款架构·2026-08-15）──────────────────
+   词典键=中文原文：zh 态零词典零开销；缺译原样回退永不破版；
+   TreeWalker 全文走译 + MutationObserver 盯动态渲染（页面族页签/页面标题/loader 产出），
+   切回中文用 WeakMap 还原原文。品牌名（智拓 ReachX/BOUNDLESS）不入词典=天然不译。 */
+const _EN_DICT={
+  /* 分组（data-i18n 之外的兜底）与导航项 */
+  '总览':'Overview','我的工作台':'My Desk','待接管队列':'Handoff Queue','客户档案':'Customers',
+  '转化分析':'Conversion','内容工作室':'Content Studio','任务中心':'Tasks','AI 指令':'AI Console',
+  '设备管理':'Devices','屏幕墙':'Screen Wall','设备健康':'Device Health','VPN 管理':'VPN',
+  '代理中心':'Proxies','编排中心':'Orchestration','脚本工房':'Script Studio','定时任务':'Scheduled Jobs',
+  '批量群控':'Batch Control','数据分析':'Analytics','日志与审计':'Logs & Audit','消息与告警':'Alerts & Inbox',
+  '集群管理':'Cluster','备份恢复':'Backup','插件管理':'Plugins','用户与权限':'Users & Roles','API 文档':'API Docs',
+  '退出登录':'Sign out','搜索功能...':'Search...',
+  /* 页面族页签 */
+  '转化漏斗':'Funnel','ROI 面板':'ROI','指挥台':'Command Center','投屏大屏':'Big Screen',
+  '设备列表':'Device List','设备分组':'Groups','设备资产':'Assets',
+  '屏幕监控':'Monitor','多屏操控':'Multi-Screen','录屏管理':'Recordings',
+  '健康监控':'Health','性能监控':'Performance','体检报告':'Report',
+  '工作流列表':'Workflows','可视化画布':'Visual Canvas',
+  '脚本模板':'Templates','AI 生成':'AI Generate','操作回放':'Replay','模板库':'Library',
+  '快捷操作':'Quick Actions','安装应用':'Install APK','文字输入':'Text Input','文件上传':'Upload',
+  '应用管理':'App Manager','同步输入':'Sync Input',
+  '分析总览':'Overview','数据导出':'Export',
+  '系统日志':'System Log','审计日志':'Audit Log','操作时间线':'Timeline',
+  '手机消息':'Phone Inbox','推送渠道':'Push Channels','告警规则':'Alert Rules',
+  /* 页面标题（家族 · 页签 组合，navigateToPage 动态设置） */
+  '转化分析 · 转化漏斗':'Conversion · Funnel','转化分析 · ROI 面板':'Conversion · ROI',
+  '转化分析 · 指挥台':'Conversion · Command Center',
+  '设备管理 · 设备列表':'Devices · List','设备管理 · 设备分组':'Devices · Groups',
+  '设备管理 · 设备资产':'Devices · Assets',
+  '屏幕墙 · 屏幕监控':'Screen Wall · Monitor','屏幕墙 · 多屏操控':'Screen Wall · Multi-Screen',
+  '屏幕墙 · 录屏管理':'Screen Wall · Recordings',
+  '设备健康 · 健康监控':'Device Health · Health','设备健康 · 性能监控':'Device Health · Performance',
+  '设备健康 · 体检报告':'Device Health · Report',
+  '编排中心 · 工作流列表':'Orchestration · Workflows','编排中心 · 可视化画布':'Orchestration · Canvas',
+  '脚本工房 · 脚本模板':'Script Studio · Templates','脚本工房 · AI 生成':'Script Studio · AI Generate',
+  '脚本工房 · 操作回放':'Script Studio · Replay','脚本工房 · 模板库':'Script Studio · Library',
+  '批量群控 · 快捷操作':'Batch · Quick Actions','批量群控 · 安装应用':'Batch · Install APK',
+  '批量群控 · 文字输入':'Batch · Text Input','批量群控 · 文件上传':'Batch · Upload',
+  '批量群控 · 应用管理':'Batch · App Manager','批量群控 · 同步输入':'Batch · Sync Input',
+  '数据分析 · 分析总览':'Analytics · Overview','数据分析 · 数据导出':'Analytics · Export',
+  '日志与审计 · 系统日志':'Logs · System','日志与审计 · 审计日志':'Logs · Audit',
+  '日志与审计 · 操作时间线':'Logs · Timeline',
+  '消息与告警 · 手机消息':'Alerts · Phone Inbox','消息与告警 · 推送渠道':'Alerts · Push Channels',
+  '消息与告警 · 告警规则':'Alerts · Rules',
+  /* 顶栏 / 用户菜单 */
+  '运行正常':'Running','连接中...':'Connecting...','管理员':'Admin','操作员':'Operator',
+  '客服':'Support','只读':'Viewer',
+  /* 总览三区 */
+  '一键操作':'Quick Actions','今日简报':'Daily Brief','更多面板 · 运营洞察与明细':'More Panels · Insights & Details',
+  '在线设备':'Online Devices','任务总数':'Total Tasks','平均电量':'Avg Battery','运行中任务':'Running Tasks',
+  '客服接管队列':'Handoff Queue','真人接客户 · 标成交':'Human takeover · Mark deals',
+  'L2 客户漏斗':'L2 Funnel','投屏看板 · 实时刷':'Big screen · Live',
+  '立即收件箱':'Scan Inbox Now','所有设备 · AI自动回复':'All devices · AI auto-reply',
+  '关注拓客':'Follow & Acquire','进 TikTok · 选国家与数量':'TikTok · Pick geo & volume',
+  '跟进回关':'Follow-backs','检测回关 · AI发送DM':'Detect follow-backs · AI DM',
+  '账号预热':'Account Warmup','刷视频+点赞 · 养号':'Watch + like · Nurture',
+  '修复离线':'Fix Offline','重连所有离线设备':'Reconnect offline devices',
+  '取消全部任务':'Cancel All Tasks','停止所有运行中任务':'Stop all running tasks',
+  '今日刷视频 →':'Watched today →','今日关注 →':'Followed today →','今日私信 →':'DMs today →',
+  'AI自动回复 →':'AI replies →','今日新线索 →':'New leads →','已转化 →':'Converted →',
+  'AI 智能引擎':'AI Engine','LLM 调用总次数':'LLM Calls','缓存命中率':'Cache Hit','AI改写条数':'AI Rewrites',
+  '自动回复条数':'Auto Replies','设备状态':'Device Status','最近任务':'Recent Tasks',
+  '设备效能排行':'Device Ranking','今日运营日报':'Daily Ops Report','近7天活跃趋势':'7-Day Activity',
+  /* 命令面板 / 演示模式 */
+  '搜页面 / 动作 / 客户…（Esc 关闭）':'Search pages / actions / customers… (Esc to close)',
+  '↑↓ 选择 · Enter 执行 · 客户搜索输入 2 字起':'↑↓ select · Enter run · type 2+ chars for customers',
+  '页面':'Page','动作':'Action','档案':'Dossier','新窗口':'New Window','没有匹配项':'No matches',
+  'AI 指令 · 自然语言控制台':'AI Console · natural language',
+  '修复离线设备':'Fix offline devices','取消全部运行任务':'Cancel all running tasks',
+  '投屏大屏 · L2 看板':'Big Screen · L2 board','演示模式 · 示例数据开/关':'Demo mode · sample data on/off',
+  '演示模式 · 页面数字为示例数据':'Demo mode · numbers are samples','退出':'Exit',
+  /* 客服页高频 */
+  '待处理':'Pending','已认领':'Claimed','已完成':'Done','已驳回':'Rejected','刷新':'Refresh',
+  /* 漏斗页 */
+  '引流转化漏斗':'Acquisition Funnel','刷新数据':'Refresh','近7天趋势':'7-Day Trend',
+  '好友通过率':'Accept Rate','请求→DM率':'Request→DM','DM→引流率':'DM→Referral','打招呼发送':'Greetings Sent',
+};
+const _I18N_ORIG=new WeakMap();
+function _walkI18n(root,toEn){
+  try{
+    const base=(root&&root.nodeType===1)?root:document.body;
+    const w=document.createTreeWalker(base,NodeFilter.SHOW_TEXT,null);
+    let n;
+    while((n=w.nextNode())){
+      const p=n.parentElement;
+      if(!p)continue;
+      const tag=p.tagName;
+      if(tag==='SCRIPT'||tag==='STYLE')continue;
+      if(p.closest('[data-no-i18n]'))continue;
+      if(toEn){
+        const t=(n.nodeValue||'').trim();
+        if(!t)continue;
+        const en=_EN_DICT[t];
+        if(en){
+          if(!_I18N_ORIG.has(n))_I18N_ORIG.set(n,n.nodeValue);
+          n.nodeValue=n.nodeValue.replace(t,en);
+        }
+      }else if(_I18N_ORIG.has(n)){
+        n.nodeValue=_I18N_ORIG.get(n);
+      }
+    }
+    base.querySelectorAll('[placeholder],[title]').forEach(el=>{
+      if(el.closest('[data-no-i18n]'))return;
+      ['placeholder','title'].forEach(a=>{
+        const v=el.getAttribute(a);
+        if(toEn){
+          if(!v)return;
+          const en=_EN_DICT[v.trim()];
+          if(en){
+            if(!el.getAttribute('data-i18n-orig-'+a))el.setAttribute('data-i18n-orig-'+a,v);
+            el.setAttribute(a,en);
+          }
+        }else{
+          const o=el.getAttribute('data-i18n-orig-'+a);
+          if(o){el.setAttribute(a,o);el.removeAttribute('data-i18n-orig-'+a);}
+        }
+      });
+    });
+  }catch(e){}
+}
+let _i18nMo=null;
+function _i18nWalkApply(){
+  const toEn=_curLang==='en';
+  _walkI18n(document.body,toEn);
+  if(toEn&&!_i18nMo){
+    _i18nMo=new MutationObserver(function(muts){
+      if(_curLang!=='en')return;
+      muts.forEach(function(m){
+        m.addedNodes&&m.addedNodes.forEach(function(nd){
+          if(nd.nodeType===1)_walkI18n(nd,true);
+          else if(nd.nodeType===3&&nd.parentElement)_walkI18n(nd.parentElement,true);
+        });
+      });
+    });
+    _i18nMo.observe(document.body,{childList:true,subtree:true});
+  }
+}
+window._i18nWalkApply=_i18nWalkApply;
+/* P5 词典取材工具：en 态跑一圈，收集当前 DOM 里仍是中文且不在词典的文本（下批词条的证据端）。
+   控制台执行 __i18nMissing() 即得「频次\t原文」清单；数据串（角色名/文件名）自行甄别不译。 */
+window.__i18nMissing=function(){
+  const seen=new Map();
+  try{
+    const w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,null);
+    let n;
+    while((n=w.nextNode())){
+      const p=n.parentElement;
+      if(!p||p.tagName==='SCRIPT'||p.tagName==='STYLE')continue;
+      if(p.closest('[data-no-i18n]'))continue;
+      const t=(n.nodeValue||'').trim();
+      if(!t||t.length>60)continue;
+      if(!/[\u4e00-\u9fff]/.test(t))continue;
+      if(_EN_DICT[t])continue;
+      seen.set(t,(seen.get(t)||0)+1);
+    }
+  }catch(e){}
+  return Array.from(seen.entries()).sort((a,b)=>b[1]-a[1]).map(([t,c])=>c+'\t'+t);
+};
+
+/* ── P5 图表取色助手：canvas 不认 var()，画图前把令牌解析成实色（跟随当前主题） ── */
+function themeColor(token,fallback){
+  try{
+    const v=getComputedStyle(document.documentElement).getPropertyValue(token).trim();
+    return v||fallback||'#4f7aff';
+  }catch(e){return fallback||'#4f7aff';}
+}
+window.themeColor=themeColor;
 
 let ALIAS={};
 window.WP_NUM = {};       // {device_id: wallpaper_number} 壁纸状态追踪

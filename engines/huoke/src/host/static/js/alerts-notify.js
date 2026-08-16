@@ -174,7 +174,7 @@ async function loadAlertRulesPage(){
           <div style="font-size:10px;color:var(--text-muted)">${r.description||''}</div>
         </div>
         <span style="font-size:9px;padding:2px 6px;border-radius:4px;background:${sevColors[r.severity]||'#666'};color:#fff">${r.severity}</span>
-        ${isCustom?`<button onclick="deleteAlertRule('${r.name}')" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:12px" title="删除">&#10060;</button>`:''}
+        ${isCustom?`<button onclick="deleteAlertRule('${r.name}')" style="background:none;border:none;color:var(--red-strong);cursor:pointer;font-size:12px" title="删除">&#10060;</button>`:''}
       </div>`;
     }).join('')||'<div style="padding:12px;color:var(--text-muted);font-size:11px">暂无规则</div>';
     const hlist=document.getElementById('alert-history-list');

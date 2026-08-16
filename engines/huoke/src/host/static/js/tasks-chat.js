@@ -301,20 +301,20 @@ async function showProxyQualityModal(){
       const tone=d.infra_health_score>=90?'#22c55e':(d.infra_health_score>=70?'#f59e0b':'#ef4444');
       const stTone={ok:'#22c55e',leak:'#ef4444',no_ip:'#ef4444',unverified:'#94a3b8',unknown:'#94a3b8'}[d.current_state]||'#94a3b8';
       const aliasShort=(window.ALIAS&&window.ALIAS[d.device_id])||d.device_id?.substring(0,8)||'?';
-      return `<tr style="border-bottom:1px solid var(--border)"><td style="padding:6px;font-family:monospace">${aliasShort}</td><td style="padding:6px"><span style="color:${stTone}">${d.current_state}</span>${d.circuit_open?' 🚧':''}</td><td style="padding:6px;font-family:monospace;font-size:10px">${d.current_ip||'—'}</td><td style="padding:6px;text-align:right">${d.tasks_total}</td><td style="padding:6px;text-align:right;color:#ef4444">${d.tasks_failed}</td><td style="padding:6px;text-align:right;color:#f59e0b">${d.infra_failed}</td><td style="padding:6px;text-align:right;color:#a78bfa">${d.business_failed}</td><td style="padding:6px;text-align:right;font-weight:600;color:${tone}">${d.infra_health_score}</td><td style="padding:6px;font-size:10px;color:var(--text-muted)">${d.top_error_code||'—'}</td></tr>`;
+      return `<tr style="border-bottom:1px solid var(--border)"><td style="padding:6px;font-family:monospace">${aliasShort}</td><td style="padding:6px"><span style="color:${stTone}">${d.current_state}</span>${d.circuit_open?' 🚧':''}</td><td style="padding:6px;font-family:monospace;font-size:10px">${d.current_ip||'—'}</td><td style="padding:6px;text-align:right">${d.tasks_total}</td><td style="padding:6px;text-align:right;color:var(--red-strong)">${d.tasks_failed}</td><td style="padding:6px;text-align:right;color:var(--amber)">${d.infra_failed}</td><td style="padding:6px;text-align:right;color:var(--violet-soft)">${d.business_failed}</td><td style="padding:6px;text-align:right;font-weight:600;color:${tone}">${d.infra_health_score}</td><td style="padding:6px;font-size:10px;color:var(--text-muted)">${d.top_error_code||'—'}</td></tr>`;
     }).join('');
     document.getElementById('pq-body').innerHTML=`
       <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px;font-size:11px">
         <div><b>设备</b> ${s.devices_total||0}</div>
         <div><b>任务</b> ${s.tasks_total||0}</div>
-        <div style="color:#ef4444"><b>失败</b> ${s.tasks_failed||0}</div>
-        <div style="color:#f59e0b"><b>基建</b> ${s.infra_failed||0}</div>
-        <div style="color:#a78bfa"><b>业务</b> ${s.business_failed||0}</div>
-        <div style="color:#22c55e"><b>ok</b> ${s.ok||0}</div>
-        <div style="color:#ef4444"><b>leak</b> ${s.leak||0}</div>
-        <div style="color:#ef4444"><b>no_ip</b> ${s.no_ip||0}</div>
+        <div style="color:var(--red-strong)"><b>失败</b> ${s.tasks_failed||0}</div>
+        <div style="color:var(--amber)"><b>基建</b> ${s.infra_failed||0}</div>
+        <div style="color:var(--violet-soft)"><b>业务</b> ${s.business_failed||0}</div>
+        <div style="color:var(--green-strong)"><b>ok</b> ${s.ok||0}</div>
+        <div style="color:var(--red-strong)"><b>leak</b> ${s.leak||0}</div>
+        <div style="color:var(--red-strong)"><b>no_ip</b> ${s.no_ip||0}</div>
         <div style="color:#94a3b8"><b>unverified</b> ${s.unverified||0}</div>
-        ${s.circuit_open?`<div style="color:#ef4444"><b>🚧 熔断</b> ${s.circuit_open}</div>`:''}
+        ${s.circuit_open?`<div style="color:var(--red-strong)"><b>🚧 熔断</b> ${s.circuit_open}</div>`:''}
       </div>
       <div style="font-size:11px;margin-bottom:10px;color:var(--text-muted)">错误层级分布: infra=${layerMap.infra||0} · business=${layerMap.business||0} · timing=${layerMap.timing||0} · quota=${layerMap.quota||0} · unknown=${layerMap.unknown||0}</div>
       <table style="width:100%;border-collapse:collapse;font-size:11px">
@@ -322,7 +322,7 @@ async function showProxyQualityModal(){
         <tbody>${rows||'<tr><td colspan="9" style="padding:20px;text-align:center;color:var(--text-muted)">最近 24h 没有任务记录</td></tr>'}</tbody>
       </table>`;
   }catch(e){
-    document.getElementById('pq-body').innerHTML=`<div style="color:#ef4444">加载失败: ${e.message||e}</div>`;
+    document.getElementById('pq-body').innerHTML=`<div style="color:var(--red-strong)">加载失败: ${e.message||e}</div>`;
   }
 }
 
@@ -553,19 +553,19 @@ function _taskRowInner(t,isTrashList){
   const outcomeHtml=_getTaskOutcome(t);
   // P0 — errHtml 也走归因引擎: emoji + 一句话, 跟 outcomeHtml 同款
   const errHtml=(t.status==='failed'&&errAttr&&!outcomeHtml)?
-    `<div style="color:#f87171;font-size:11px;margin-top:2px" title="${errAttr.full.substring(0,200)}">${errAttr.emoji} ${errAttr.hint}</div>`:'';
-  const stuckHtml=(t.status==='pending'&&t.stuck_reason_zh)?`<div style="color:#f59e0b;font-size:11px;margin-top:2px" title="点击「详情」查看完整原因">⏸ ${t.stuck_reason_zh}</div>`:'';
+    `<div style="color:var(--red);font-size:11px;margin-top:2px" title="${errAttr.full.substring(0,200)}">${errAttr.emoji} ${errAttr.hint}</div>`:'';
+  const stuckHtml=(t.status==='pending'&&t.stuck_reason_zh)?`<div style="color:var(--amber);font-size:11px;margin-top:2px" title="点击「详情」查看完整原因">⏸ ${t.stuck_reason_zh}</div>`:'';
   const wh=t.worker_host||t._worker||'';
   const workerHint=wh?`<span style="font-size:9px;color:var(--accent)" title="Worker IP">@${wh}</span>`:'';
   const tid=t.task_id||'';
   let actions='';
   let selCell='';
   if(isTrashList){
-    actions=`<span style="display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap"><button type="button" class="qa-btn" style="font-size:10px;padding:2px 8px" onclick="event.stopPropagation();showTaskDetail('${tid}')">详情</button><button type="button" class="qa-btn" title="恢复到任务列表" style="font-size:10px;padding:2px 6px;color:#22c55e;border-color:#22c55e44" onclick="event.stopPropagation();restoreTaskRecord('${tid}')">恢复</button><button type="button" class="qa-btn" title="从数据库永久删除" style="font-size:10px;padding:2px 6px;color:#f87171;border-color:#f8717144" onclick="event.stopPropagation();eraseTaskRecord('${tid}')">永久删除</button></span>`;
+    actions=`<span style="display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap"><button type="button" class="qa-btn" style="font-size:10px;padding:2px 8px" onclick="event.stopPropagation();showTaskDetail('${tid}')">详情</button><button type="button" class="qa-btn" title="恢复到任务列表" style="font-size:10px;padding:2px 6px;color:var(--green-strong);border-color:#22c55e44" onclick="event.stopPropagation();restoreTaskRecord('${tid}')">恢复</button><button type="button" class="qa-btn" title="从数据库永久删除" style="font-size:10px;padding:2px 6px;color:var(--red);border-color:#f8717144" onclick="event.stopPropagation();eraseTaskRecord('${tid}')">永久删除</button></span>`;
     selCell=`<input type="checkbox" aria-label="选择任务" style="accent-color:var(--accent);cursor:pointer" onclick="event.stopPropagation()" onchange="taskBulkToggle('${tid}',this.checked)" ${_taskBulkSelected.has(tid)?'checked':''} />`;
   }else{
     const delBtn=_taskRecordDeletable(t.status)
-      ?`<button type="button" class="qa-btn" title="移入回收站（可在回收站恢复或永久删除）" style="font-size:10px;padding:2px 6px;color:#f87171;border-color:#f8717144" onclick="event.stopPropagation();deleteTaskRecord('${tid}')">移入回收站</button>`
+      ?`<button type="button" class="qa-btn" title="移入回收站（可在回收站恢复或永久删除）" style="font-size:10px;padding:2px 6px;color:var(--red);border-color:#f8717144" onclick="event.stopPropagation();deleteTaskRecord('${tid}')">移入回收站</button>`
       :'';
     actions=`<span style="display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap"><button type="button" class="qa-btn" style="font-size:10px;padding:2px 8px" onclick="event.stopPropagation();showTaskDetail('${tid}')">详情</button>${delBtn}</span>`;
     selCell=_taskRecordDeletable(t.status)
@@ -814,7 +814,7 @@ async function _aiQuickExec(){
   try{
     const d=await api('POST','/ai/quick-command',{command:cmd});
     if(d.ok){
-      result.innerHTML=`<span style="color:#22c55e">&#9989; ${d.message}</span>`;
+      result.innerHTML=`<span style="color:var(--green-strong)">&#9989; ${d.message}</span>`;
       showToast(d.message,'success');
       setTimeout(()=>{loadTasks().then(()=>_startTaskPoll());},1500);
     }else{
@@ -918,7 +918,7 @@ function _renderFbWarmupCard(r){
   const fallback=r.home_tab_fallback||'';
   const progressPct=target>0?Math.min(100,Math.round(scrolls/target*100)):0;
   const fallbackBadge=(fallback && fallback!=='smart_tap')
-    ? `<span style="display:inline-block;margin-left:6px;padding:1px 6px;border-radius:4px;background:rgba(234,179,8,.18);color:#eab308;font-size:9px">Home回退: ${fallback}</span>`
+    ? `<span style="display:inline-block;margin-left:6px;padding:1px 6px;border-radius:4px;background:rgba(234,179,8,.18);color:var(--gold);font-size:9px">Home回退: ${fallback}</span>`
     : '';
 
   // 失败（home_tab_not_found 等）：强调 hint
@@ -926,7 +926,7 @@ function _renderFbWarmupCard(r){
     return `<div class="detail-row" style="background:rgba(239,68,68,.08);border-radius:10px;padding:12px;border:1px solid rgba(239,68,68,.35)">
       <span class="detail-label">&#128310; 养号档案</span>
       <div style="flex:1;font-size:12px;line-height:1.6">
-        <div><b style="color:#ef4444">脚本中止</b> <code style="font-size:10px;color:#f87171">${r.error_code}</code></div>
+        <div><b style="color:var(--red-strong)">脚本中止</b> <code style="font-size:10px;color:var(--red)">${r.error_code}</code></div>
         <div style="margin-top:6px;color:var(--text-dim);font-size:11px">${r.error_hint||'无额外修复建议'}</div>
       </div>
     </div>`;
@@ -934,7 +934,7 @@ function _renderFbWarmupCard(r){
 
   // 风控中断高亮
   const riskBadge=r.risk_detected
-    ? `<div style="margin-top:8px;padding:6px 10px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);border-radius:6px;color:#ef4444;font-size:11px">&#9888; 风控中断: ${r.risk_detected}</div>`
+    ? `<div style="margin-top:8px;padding:6px 10px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);border-radius:6px;color:var(--red-strong);font-size:11px">&#9888; 风控中断: ${r.risk_detected}</div>`
     : '';
 
   // P1-2: phase 标签 + 迁移提示
@@ -943,10 +943,10 @@ function _renderFbWarmupCard(r){
   const phaseBadge=r.phase?`<span style="display:inline-block;margin-left:6px;padding:1px 7px;border-radius:4px;background:${phaseColors[r.phase]||'#64748b'}22;color:${phaseColors[r.phase]||'#64748b'};font-size:9px;font-weight:600">${phaseLabels[r.phase]||r.phase}</span>`:'';
   const pt=r.phase_transition;
   const transitionBadge=(pt&&pt.changed)
-    ?`<div style="margin-top:6px;padding:5px 9px;background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.32);border-radius:6px;color:#22c55e;font-size:10px">&#127919; phase 迁移: <b>${phaseLabels[pt.from]||pt.from}</b> &rarr; <b>${phaseLabels[pt.to]||pt.to}</b> (${pt.reason||''})</div>`
+    ?`<div style="margin-top:6px;padding:5px 9px;background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.32);border-radius:6px;color:var(--green-strong);font-size:10px">&#127919; phase 迁移: <b>${phaseLabels[pt.from]||pt.from}</b> &rarr; <b>${phaseLabels[pt.to]||pt.to}</b> (${pt.reason||''})</div>`
     :'';
   const cfgSrcBadge=r.config_source==='playbook'
-    ?`<span title="节奏参数来自 config/facebook_playbook.yaml（热加载）" style="display:inline-block;margin-left:4px;padding:1px 5px;border-radius:3px;background:rgba(139,92,246,.14);color:#a78bfa;font-size:9px">playbook</span>`
+    ?`<span title="节奏参数来自 config/facebook_playbook.yaml（热加载）" style="display:inline-block;margin-left:4px;padding:1px 5px;border-radius:3px;background:rgba(139,92,246,.14);color:var(--violet-soft);font-size:9px">playbook</span>`
     :'';
 
   return `<div class="detail-row" style="background:linear-gradient(135deg,rgba(24,119,242,.08),rgba(139,92,246,.05));border-radius:10px;padding:12px;border:1px solid rgba(24,119,242,.28)">
@@ -994,7 +994,7 @@ function _renderFbProfileHuntCard(r){
   const l1Rate=processed>0?((l1/processed)*100).toFixed(1):'0';
   const l2HitRate=l2>0?((matched/l2)*100).toFixed(1):'—';
   const riskBadge=r.risk_interrupted
-    ? `<div style="margin-top:8px;padding:6px 10px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);border-radius:6px;color:#ef4444;font-size:11px">&#9888; 风控中断: ${r.risk_interrupted}</div>`
+    ? `<div style="margin-top:8px;padding:6px 10px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);border-radius:6px;color:var(--red-strong);font-size:11px">&#9888; 风控中断: ${r.risk_interrupted}</div>`
     : '';
   const results=(r.results||[]).slice(0,20);
   const rowsHtml=results.map(it=>{
@@ -1002,7 +1002,7 @@ function _renderFbProfileHuntCard(r){
     const color=it.match?'#22c55e':(it.reason?'#ef4444':'var(--text-muted)');
     const scoreStr=typeof it.score==='number'?it.score.toFixed(0):it.score;
     const stage=it.stage||'-';
-    const note=it.match?(it.action_ok?`<span style="color:#22c55e">${actionLabels[action]||action}&nbsp;&#10004;</span>`:`<span style="color:#f59e0b">动作失败</span>`)
+    const note=it.match?(it.action_ok?`<span style="color:var(--green-strong)">${actionLabels[action]||action}&nbsp;&#10004;</span>`:`<span style="color:var(--amber)">动作失败</span>`)
       :(it.reason?`<span style="color:var(--text-dim);font-size:10px">${it.reason}</span>`:'');
     return `<div style="display:grid;grid-template-columns:18px 1fr 50px 40px 1fr;gap:6px;padding:4px 0;border-bottom:1px dashed var(--border);font-size:11px;align-items:center">
       <span style="color:${color}">${icon}</span>
@@ -1018,7 +1018,7 @@ function _renderFbProfileHuntCard(r){
     <span class="detail-label">&#127919; 画像识别</span>
     <div style="flex:1">
       <div style="font-size:12px;color:var(--text);line-height:1.45">
-        <b>${personaName}</b> · 动作: <span style="color:#a78bfa">${actionLabels[action]||action}</span>
+        <b>${personaName}</b> · 动作: <span style="color:var(--violet-soft)">${actionLabels[action]||action}</span>
       </div>
       <div style="margin-top:8px;display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:11px">
         <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:6px 8px">
@@ -1035,7 +1035,7 @@ function _renderFbProfileHuntCard(r){
         </div>
         <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:6px 8px">
           <div style="color:var(--text-dim);font-size:9px">命中</div>
-          <div style="font-weight:600;color:#22c55e">${matched} <span style="color:var(--text-dim);font-size:10px">(${hitRate}%)</span></div>
+          <div style="font-weight:600;color:var(--green-strong)">${matched} <span style="color:var(--text-dim);font-size:10px">(${hitRate}%)</span></div>
         </div>
       </div>
       <div style="margin-top:6px;color:var(--text-muted);font-size:10px">
@@ -1092,7 +1092,7 @@ async function showTaskDetail(taskId){
       const ageSec=Math.max(0,Math.round(ageMs/1000));
       stepFreshness=ageSec<60?` <span style="font-size:10px;color:var(--text-muted)">${ageSec}s 前</span>`
         :ageSec<3600?` <span style="font-size:10px;color:var(--text-muted)">${Math.round(ageSec/60)} 分钟前</span>`
-        :` <span style="font-size:10px;color:#f59e0b" title="超过 1 小时无步骤刷新, 可能卡死">${Math.round(ageSec/3600)} 小时前 ⚠</span>`;
+        :` <span style="font-size:10px;color:var(--amber)" title="超过 1 小时无步骤刷新, 可能卡死">${Math.round(ageSec/3600)} 小时前 ⚠</span>`;
     }catch(_){}
   }
   const stepText=(typeof businessSafeText==='function')?businessSafeText(t.current_step):t.current_step;
@@ -1126,7 +1126,7 @@ async function showTaskDetail(taskId){
     resultHtml = `<div class="detail-row" style="background:rgba(239,68,68,.08);border-radius:8px;padding:10px;margin:8px 0;border:1px solid rgba(239,68,68,.35)">
       <span class="detail-label">&#128308; 风控冷却</span>
       <div style="flex:1;font-size:11px;line-height:1.6">
-        <div>该设备最近 <b>${c.window_hours}h</b> 内累计 <b style="color:#ef4444">${c.recent_count}</b> 次 FB 风控事件（阈值 ${c.threshold}）。</div>
+        <div>该设备最近 <b>${c.window_hours}h</b> 内累计 <b style="color:var(--red-strong)">${c.recent_count}</b> 次 FB 风控事件（阈值 ${c.threshold}）。</div>
         <div style="color:var(--text-dim);margin-top:4px">建议: 暂停该账号 24h、检查 VPN 出口、或切换到 cold_start 养号预设。等待窗口滑出后可自动恢复。</div>
       </div>
     </div>` + resultHtml;
@@ -1171,7 +1171,7 @@ async function showTaskDetail(taskId){
       <div class="detail-row"><span class="detail-label">已运行</span><span>${elapsedStr}</span></div>
       ${Object.keys(_taskParamsDisplay(params)).length?`<div class="detail-row"><span class="detail-label">参数</span><pre style="font-size:10px;color:var(--text-dim);white-space:pre-wrap;margin:0;flex:1">${JSON.stringify(_taskParamsDisplay(params),null,2)}</pre></div>`:''}
       ${geoGlossary}
-      ${err?`<div class="detail-row"><span class="detail-label">错误</span><span style="color:#f87171;font-size:12px">${err}</span></div>`:''}
+      ${err?`<div class="detail-row"><span class="detail-label">错误</span><span style="color:var(--red);font-size:12px">${err}</span></div>`:''}
       ${(()=>{
         // P1-A: 失败任务挂一键修复按钮（点击调对应 endpoint）
         if(t.status!=='failed'||!err) return '';
@@ -1184,12 +1184,12 @@ async function showTaskDetail(taskId){
       ${resultHtml}
       ${t.status==='failed'?`<div class="detail-row" id="forensics-row"><span class="detail-label">📸 失败证据</span><div id="forensics-panel" style="flex:1;font-size:11px;color:var(--text-dim)">加载中...</div></div>`:''}
       <div style="display:flex;gap:8px;margin-top:20px;flex-wrap:wrap">
-        ${canHunt?`<button class="qa-btn" style="color:#a78bfa;border-color:#8b5cf6;background:rgba(139,92,246,.15);font-weight:600" onclick="_tdLaunchHunt('${taskId}','${t.device_id||''}',${memberCount})">🧠 用这批 ${memberCount} 位成员做画像识别</button>`:''}
+        ${canHunt?`<button class="qa-btn" style="color:var(--violet-soft);border-color:var(--violet);background:rgba(139,92,246,.15);font-weight:600" onclick="_tdLaunchHunt('${taskId}','${t.device_id||''}',${memberCount})">🧠 用这批 ${memberCount} 位成员做画像识别</button>`:''}
         ${canCancel?`<button class="qa-btn" style="color:var(--yellow);border-color:var(--yellow)" onclick="_tdAction('cancel','${taskId}')">⏹ 取消任务</button>`:''}
         ${canRetry?`<button class="qa-btn" style="color:var(--accent);border-color:var(--accent)" onclick="_tdAction('retry','${taskId}')">🔄 重新提交</button>`:''}
-        ${canRestore?`<button class="qa-btn" style="color:#22c55e;border-color:#22c55e" onclick="_tdAction('restore','${taskId}')">♻ 恢复任务</button>`:''}
-        ${canErase?`<button class="qa-btn" style="color:#f87171;border-color:#f87171" onclick="_tdAction('erase','${taskId}')">永久删除</button>`:''}
-        ${canDelete?`<button class="qa-btn" style="color:#f87171;border-color:#f87171" onclick="_tdAction('delete','${taskId}')">🗑 移入回收站</button>`:''}
+        ${canRestore?`<button class="qa-btn" style="color:var(--green-strong);border-color:var(--green-strong)" onclick="_tdAction('restore','${taskId}')">♻ 恢复任务</button>`:''}
+        ${canErase?`<button class="qa-btn" style="color:var(--red);border-color:var(--red)" onclick="_tdAction('erase','${taskId}')">永久删除</button>`:''}
+        ${canDelete?`<button class="qa-btn" style="color:var(--red);border-color:var(--red)" onclick="_tdAction('delete','${taskId}')">🗑 移入回收站</button>`:''}
         <button class="qa-btn" style="margin-left:auto" onclick="document.getElementById('task-detail-modal').remove()">关闭</button>
       </div>
     </div>`;
@@ -1221,7 +1221,7 @@ async function _loadForensicsPanel(taskId){
       const logUrl=`/tasks/${encodeURIComponent(taskId)}/forensics/${encodeURIComponent(s.ts)}/logcat.txt`;
       const tsHuman=s.ts.replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/,'$1-$2-$3 $4:$5:$6 UTC');
       const imgId=`fimg-${i}`;
-      return `<div style="border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:6px"><div style="display:flex;justify-content:space-between;font-weight:600;margin-bottom:4px"><span>📅 ${tsHuman}</span><span style="font-weight:normal;font-size:10px;color:var(--text-muted)">截图 ${cap} · logcat ${lc}</span></div>${m.error?`<div style="color:#f87171;font-size:10px;margin-bottom:4px">${String(m.error).substring(0,200)}</div>`:''}<div style="display:flex;gap:8px;align-items:flex-start"><img id="${imgId}" style="width:120px;height:auto;border:1px solid var(--border);border-radius:3px;cursor:pointer;background:var(--bg-input)" alt="loading..." onclick="this.style.width=this.style.width==='120px'?'auto':'120px';this.style.maxWidth='80vw'"><div style="flex:1;font-size:10px"><a href="javascript:_viewForensicsLog('${taskId}','${s.ts}')" style="color:#22d3ee">📜 查看 logcat</a><br><a href="javascript:_viewForensicsLog('${taskId}','${s.ts}','meta.json')" style="color:#22d3ee">📋 查看 meta.json</a></div></div></div>`;
+      return `<div style="border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:6px"><div style="display:flex;justify-content:space-between;font-weight:600;margin-bottom:4px"><span>📅 ${tsHuman}</span><span style="font-weight:normal;font-size:10px;color:var(--text-muted)">截图 ${cap} · logcat ${lc}</span></div>${m.error?`<div style="color:var(--red);font-size:10px;margin-bottom:4px">${String(m.error).substring(0,200)}</div>`:''}<div style="display:flex;gap:8px;align-items:flex-start"><img id="${imgId}" style="width:120px;height:auto;border:1px solid var(--border);border-radius:3px;cursor:pointer;background:var(--bg-input)" alt="loading..." onclick="this.style.width=this.style.width==='120px'?'auto':'120px';this.style.maxWidth='80vw'"><div style="flex:1;font-size:10px"><a href="javascript:_viewForensicsLog('${taskId}','${s.ts}')" style="color:#22d3ee">📜 查看 logcat</a><br><a href="javascript:_viewForensicsLog('${taskId}','${s.ts}','meta.json')" style="color:#22d3ee">📋 查看 meta.json</a></div></div></div>`;
     }).join('');
     // 异步 fetch 截图 blob (fetch 自动带 X-API-Key)
     snaps.forEach(async (s,i)=>{
@@ -1235,7 +1235,7 @@ async function _loadForensicsPanel(taskId){
       }catch(e){console.warn('[forensics] img load failed',e);}
     });
   }catch(e){
-    panel.innerHTML=`<span style="color:#ef4444">加载证据失败: ${e.message||e}</span>`;
+    panel.innerHTML=`<span style="color:var(--red-strong)">加载证据失败: ${e.message||e}</span>`;
   }
 }
 
@@ -1359,7 +1359,7 @@ async function _tdLaunchHunt(upstreamTaskId, deviceId, memberCount){
         <button onclick="document.getElementById('hunt-launch-modal').remove()" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer">✕</button>
       </div>
       <div style="font-size:12px;color:var(--text-dim);margin-bottom:12px;padding:8px 10px;background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.28);border-radius:8px">
-        将对上游任务的 <b style="color:#a78bfa">${memberCount}</b> 位群成员批量跑 L1+L2 识别，命中目标画像的人可选择自动动作。
+        将对上游任务的 <b style="color:var(--violet-soft)">${memberCount}</b> 位群成员批量跑 L1+L2 识别，命中目标画像的人可选择自动动作。
       </div>
       <div style="display:flex;flex-direction:column;gap:10px;font-size:13px">
         <div style="display:flex;align-items:center;gap:10px"><span style="min-width:90px">目标画像</span>
@@ -1383,7 +1383,7 @@ async function _tdLaunchHunt(upstreamTaskId, deviceId, memberCount){
       </div>
       <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px">
         <button class="qa-btn" onclick="document.getElementById('hunt-launch-modal').remove()">取消</button>
-        <button class="qa-btn" style="background:#8b5cf6;color:#fff;border-color:#8b5cf6;font-weight:600" onclick="_tdLaunchHuntSubmit('${upstreamTaskId}','${deviceId}')">▶ 创建任务</button>
+        <button class="qa-btn" style="background:var(--violet);color:#fff;border-color:var(--violet);font-weight:600" onclick="_tdLaunchHuntSubmit('${upstreamTaskId}','${deviceId}')">▶ 创建任务</button>
       </div>
     </div>`;
   document.body.appendChild(modal);

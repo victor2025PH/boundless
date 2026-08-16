@@ -12,6 +12,8 @@
 import hashlib
 import html
 import logging
+
+from src.host import brand
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -162,7 +164,7 @@ class AlertNotifier:
             zh_esc = html.escape(zh_block)
             en_esc = html.escape(en_block)
             text = (
-                f"{icon} <b>OpenClaw</b> · <code>{et_esc}</code>\n{zh_esc}\n<i>{ts}</i>\n"
+                f"{icon} <b>{brand.LABEL}</b> · <code>{et_esc}</code>\n{zh_esc}\n<i>{ts}</i>\n"
                 f"────────\n{en_esc}\n<i>{ts}</i>"
             )
         else:
@@ -231,7 +233,7 @@ class AlertNotifier:
 
         if not device_id or device_id == "system":
             return (
-                f"{icon} <b>OpenClaw 告警</b> / <b>OpenClaw Alert</b>\n"
+                f"{icon} <b>{brand.alert_title('zh')}</b> / <b>{brand.alert_title('en')}</b>\n"
                 f"范围 / Scope: <code>system</code>\n"
                 f"级别 / Level: <b>{lv}</b>\n"
                 f"内容 / Message:\n{safe_msg}\n"
@@ -251,7 +253,7 @@ class AlertNotifier:
         link_en_esc = html.escape(str(ctx["link_en"]))
 
         return (
-            f"{icon} <b>OpenClaw 告警</b>\n"
+            f"{icon} <b>{brand.alert_title('zh')}</b>\n"
             f"📱 手机编号: <b>{phone_esc}</b> · 槽位 <code>{slot_esc}</code>\n"
             f"🖥 所在电脑: {host_cn_esc}\n"
             f"📡 告警节点: <code>{node_esc}</code>\n"
@@ -260,7 +262,7 @@ class AlertNotifier:
             f"内容: {safe_msg}\n"
             f"时间: {ts}\n"
             f"────────\n"
-            f"{icon} <b>OpenClaw Alert</b>\n"
+            f"{icon} <b>{brand.alert_title('en')}</b>\n"
             f"📱 Phone #: <b>{phone_esc}</b> · slot <code>{slot_esc}</code>\n"
             f"🖥 Host PC: {host_en_esc}\n"
             f"📡 Alert node: <code>{node_esc}</code>\n"

@@ -3,21 +3,25 @@
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse, Response
 
+from src.host import brand
+
 router = APIRouter(tags=["pwa"])
 
 
 @router.get("/manifest.json")
 def pwa_manifest():
     return JSONResponse(content={
-        "name": "OpenClaw 群控管理系统",
-        "short_name": "OpenClaw",
+        "name": brand.app_title(),
+        "short_name": brand.NAME_ZH,
         "start_url": "/dashboard",
         "display": "standalone",
-        "background_color": "#0b1120",
-        "theme_color": "#3b82f6",
+        "background_color": "#080b10",   # AvatarHub VI 底色
+        "theme_color": "#4f7aff",        # AvatarHub VI 强调色
         "icons": [
-            {"src": "/icon-192.svg", "sizes": "192x192", "type": "image/svg+xml"},
-            {"src": "/icon-512.svg", "sizes": "512x512", "type": "image/svg+xml"},
+            {"src": "/static/brand/reachx-256.png", "sizes": "256x256",
+             "type": "image/png"},
+            {"src": "/static/brand/reachx-512.png", "sizes": "512x512",
+             "type": "image/png", "purpose": "any maskable"},
         ],
     }, headers={"Cache-Control": "public, max-age=86400"})
 
@@ -25,10 +29,11 @@ def pwa_manifest():
 @router.get("/icon-192.svg")
 @router.get("/icon-512.svg")
 def pwa_icon():
+    # 智拓品牌图标：深底 + 强调色「智」字（替代旧 "OC"）
     svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-<rect width="512" height="512" rx="80" fill="#1e293b"/>
-<text x="256" y="300" text-anchor="middle" font-size="240" font-weight="700"
-  font-family="system-ui" fill="#3b82f6">OC</text>
+<rect width="512" height="512" rx="96" fill="#10161f"/>
+<text x="256" y="336" text-anchor="middle" font-size="300" font-weight="700"
+  font-family="'PingFang SC','Microsoft YaHei',system-ui" fill="#4f7aff">智</text>
 </svg>"""
     return Response(content=svg, media_type="image/svg+xml",
                     headers={"Cache-Control": "public, max-age=604800"})
@@ -41,7 +46,7 @@ def service_worker():
     # - 数据 API (/cluster/, /lead-mesh/, /auth/): network-first, fallback offline 提示
     # - dashboard / login HTML: 永远 network (不要 cache 旧版界面)
     sw_code = """
-const CACHE_NAME = 'openclaw-v5-phase5';
+const CACHE_NAME = 'reachx-v11-p5';
 const STATIC_ASSETS = ['/manifest.json', '/icon-192.svg', '/icon-512.svg'];
 const STATIC_PREFIXES = ['/static/css/', '/static/js/'];
 const NETWORK_FIRST_PREFIXES = ['/cluster/', '/lead-mesh/', '/auth/'];

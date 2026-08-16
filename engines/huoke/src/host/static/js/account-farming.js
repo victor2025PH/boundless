@@ -64,22 +64,22 @@ const AccountFarming = (() => {
             &#128247; 扫描所有用户名
           </button>
           <button class="qa-btn" onclick="AccountFarming.crossFollowAll()" ${configured<2?'disabled':''}
-            style="${configured>=2?'border-color:#22c55e;color:#22c55e':''}">
+            style="${configured>=2?'border-color:var(--green-strong);color:var(--green-strong)':''}">
             &#128101; 一键互相关注
           </button>
           <button class="qa-btn" onclick="AccountFarming.crossInteractAll()" ${configured<2?'disabled':''}
-            style="${configured>=2?'border-color:#8b5cf6;color:#8b5cf6':''}">
+            style="${configured>=2?'border-color:var(--violet);color:var(--violet)':''}">
             &#10084; 互相点赞观看
           </button>
           <button class="qa-btn" onclick="AccountFarming.crossInteractAll(true)" ${configured<2?'disabled':''}
-            style="${configured>=2?'border-color:#f59e0b;color:#f59e0b':''}">
+            style="${configured>=2?'border-color:var(--amber);color:var(--amber)':''}">
             &#128172; 互相点赞+评论
           </button>
           <button class="qa-btn" onclick="AccountFarming.refresh()">&#8635; 刷新</button>
         </div>
 
         ${configured < 2 ? `
-        <div style="margin-bottom:14px;padding:10px 12px;background:#fef3c7;border-left:4px solid #f59e0b;border-radius:4px;font-size:12px">
+        <div style="margin-bottom:14px;padding:10px 12px;background:#fef3c7;border-left:4px solid var(--amber);border-radius:4px;font-size:12px">
           <strong>提示：</strong>请先「扫描所有用户名」或手动填写下方表格，至少配置 2 台设备的用户名后才能开始互相关注/互动。
         </div>` : ''}
 
@@ -167,7 +167,7 @@ const AccountFarming = (() => {
           style="width:130px;padding:3px 6px;background:var(--bg-main);border:1px solid var(--border);border-radius:4px;color:var(--text-main);font-size:12px"
           onkeydown="if(event.key==='Enter')AccountFarming.saveUsername('${did}')">
         ${uname
-          ? `<span style="color:#22c55e;font-size:11px">&#10003;</span>`
+          ? `<span style="color:var(--green-strong);font-size:11px">&#10003;</span>`
           : `<button class="qa-btn" style="margin-left:4px;padding:2px 6px;font-size:11px" onclick="AccountFarming.scanDevice('${did}')">扫描</button>`}
       </td>
       <td style="padding:8px 10px;text-align:center">
@@ -184,7 +184,7 @@ const AccountFarming = (() => {
         </span>
       </td>
       <td style="padding:8px 10px;text-align:right;color:var(--text-muted)">
-        ${watched}/<span style="color:#22c55e">${followed}</span>/<span style="color:#3b82f6">${dms}</span>
+        ${watched}/<span style="color:var(--green-strong)">${followed}</span>/<span style="color:var(--blue-strong)">${dms}</span>
       </td>
       <td style="padding:8px 10px;text-align:right">
         <span style="color:${algoRaw>=0.5?'#22c55e':algoRaw>=0.25?'#f59e0b':'var(--text-muted)'}">${algoStr}</span>

@@ -108,7 +108,6 @@ const _PAGE_LOADERS={
   'batch-apk':()=>loadBatchApkPage(),
   'batch-text':()=>loadBatchTextPage(),
   'app-manager':()=>loadAppManagerPage(),
-  'phrases':()=>loadPhrasesPage(),
   'notifications':()=>loadNotificationsPage(),
   'perf-monitor':()=>loadPerfMonitor(),
   'screen-record':()=>loadScreenRecordPage(),
@@ -133,6 +132,11 @@ const _PAGE_LOADERS={
   'vpn-manage':()=>loadVpnManagePage(),
   'router-manage':()=>loadRouterManagePage(),
   'roi':()=>loadROIPage(),
+  /* P2 客服页面化：loader 先确保弹层垫片就位（防冷启 hash 导航抢跑），再调 lead-mesh 原函数 */
+  'cs-desk':()=>{_lmEnsurePatched();if(window.lmOpenMyDesk)lmOpenMyDesk();},
+  'cs-inbox':()=>{_lmEnsurePatched();if(window.lmOpenHandoffInbox)lmOpenHandoffInbox('');},
+  'cs-search':()=>{_lmEnsurePatched();if(window.lmOpenLeadSearch)lmOpenLeadSearch();},
+  'cs-command':()=>{_lmEnsurePatched();if(window.lmOpenCommandCenter)lmOpenCommandCenter();},
   'plat-tiktok':()=>{loadPlatformPage('tiktok');if(typeof loadTtOpsPanel==='function')loadTtOpsPanel();},
   'plat-telegram':()=>loadPlatGridPage('telegram'),
   'plat-whatsapp':()=>loadPlatGridPage('whatsapp'),
@@ -147,45 +151,245 @@ const _PAGE_LOADERS={
   'campaigns':()=>{navigateToPage('plat-tiktok');setTimeout(()=>ttTab('farming'),50);},
 };
 let _currentPage='overview';
+let _lastBeaconPage='';
+// 旧页面 hash 兼容：这些页面已融合进 TikTok tab（div 被 ttTab 搬进页签容器复用，勿删）
+const _LEGACY_TT_REDIRECT={'conversations':'conv','leads':'leads','messages':'msg','account-farming':'farming','campaigns':'farming'};
+function _currentRole(){
+  return (document.documentElement.getAttribute('data-role')||localStorage.getItem('oc_role')||'operator').toLowerCase();
+}
+function _navAllowed(pg){
+  const role=_currentRole();
+  if(!role||role==='admin') return true;
+  const navEl=document.querySelector('.nav-item[data-page="'+pg+'"]');
+  return !(navEl && navEl.closest('[data-admin-only]'));
+}
+/* ── 导航埋点：菜单/页签点击流水 → logs/nav_usage.jsonl（退役决策数据地基） ── */
+function _navBeacon(page,kind){
+  try{
+    api('POST','/system/nav-click',{page:page,kind:kind||'page',
+      user:localStorage.getItem('oc_user')||'',
+      role:_currentRole()}).catch(()=>{});
+  }catch(e){}
+}
+window._navBeacon=_navBeacon;
+/* ── 页面族（family）：一个菜单项 + 页内页签条，定义在 sidebar.py NAV_SPEC → window.__NAV ── */
+function _navFam(pg){const N=window.__NAV;return (N&&N.pageFamily&&N.pageFamily[pg])||null;}
+const _FAM_ACTIONS={
+  cc:function(){navigateToPage('cs-command');},  /* 兼容旧引用：指挥台已页面化 */
+  l2:function(){window.open('/static/l2-dashboard.html','_blank');},
+};
+function _famAct(k){_navBeacon('fam:'+k,'action');const f=_FAM_ACTIONS[k];if(f)f();}
+
+/* ── P2 客服页面化：lead-mesh 四弹窗以「页面宿主」渲染（lead-mesh-ui.js 零改动） ──
+   原理：这四个 modal id 被劫持——modal.open 改为把同一份 HTML 渲染进 page-cs-* 容器
+   （内部 getElementById 照常命中，30s 自刷/SSE 全部照旧），modal.close 变 no-op
+   （纯关闭钮由 CSS 隐藏）。其余 lead-mesh 弹窗（客户档案详情等）保持 overlay 不动。 */
+const _LM_PAGE_HOST={
+  'lm-mydesk-modal':'cs-desk',
+  'lm-inbox-modal':'cs-inbox',
+  'lm-search-modal':'cs-search',
+  'lm-cc-modal':'cs-command',
+};
+function _lmShowPage(pageId){
+  /* 轻量切页：只切 DOM 态/标题/hash，不跑 loader（内容随即由当前 modal.open 渲染） */
+  if(_currentPage===pageId)return;
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  const famId=_navFam(pageId);
+  const navEl=document.querySelector('.nav-item:not(.fam-child)[data-page="'+(famId||pageId)+'"]');
+  if(navEl)navEl.classList.add('active');
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  const pe=document.getElementById('page-'+pageId);
+  if(pe)pe.classList.add('active');
+  let title='';
+  if(famId&&window.__NAV){
+    const fam=window.__NAV.families[famId];
+    const tl=(window.__NAV.tabLabel||{})[pageId];
+    if(fam)title=fam.label+((tl&&tl!==fam.label)?' · '+tl:'');
+  }
+  if(!title){
+    const te=navEl?navEl.querySelector('span:last-child'):null;
+    title=te?te.textContent:pageId;
+  }
+  const t=document.getElementById('page-title');if(t)t.textContent=title;
+  _currentPage=pageId;
+  if(famId)_renderFamTabs(pageId);
+  history.replaceState(null,null,'#'+pageId);
+  if(pageId!==_lastBeaconPage){_navBeacon(pageId,'page');_lastBeaconPage=pageId;}
+}
+function _lmEnsurePatched(){
+  /* 幂等：把 PlatShell.modal 换成「页面宿主」版本。cs 页 loader 进场必先调（防冷启
+     hash 导航在 platform-shell.js 就位后、后台 arm 轮询生效前抢跑成 overlay 弹窗）。 */
+  if(!window.PlatShell||!PlatShell.modal||PlatShell.modal.__pagePatched)return;
+  const rawOpen=PlatShell.modal.open,rawClose=PlatShell.modal.close;
+  PlatShell.modal.open=function(id,html,opts){
+    const pageId=_LM_PAGE_HOST[id];
+    if(pageId&&document.getElementById('page-'+pageId)){
+      const stale=document.getElementById(id);
+      if(stale&&!(stale.classList&&stale.classList.contains('lm-page-host')))stale.remove();
+      _lmShowPage(pageId);
+      const host=document.getElementById('page-'+pageId);
+      let box=host.querySelector(':scope > .lm-page-host');
+      if(!box){box=document.createElement('div');box.className='lm-page-host';box.id=id;host.appendChild(box);}
+      box.innerHTML=html;
+      return box;
+    }
+    return rawOpen(id,html,opts);
+  };
+  PlatShell.modal.close=function(id){
+    const el=document.getElementById(id);
+    if(el&&el.classList&&el.classList.contains('lm-page-host'))return; /* 页面模式：关闭无意义 */
+    return rawClose(id);
+  };
+  PlatShell.modal.__pagePatched=true;
+}
+(function _lmPatchModal(){
+  let tries=0;
+  (function arm(){
+    if(!window.PlatShell||!PlatShell.modal){if(tries++<150)setTimeout(arm,200);return;}
+    _lmEnsurePatched();
+  })();
+})();
+
+/* ── P3 演示模式（销售 demo 刚需）：会话级开关，把总览业务 KPI 填成示例数字 ──
+   邀请制·私有化交付的产品，控制台就是 demo——空库全是 0 没法讲故事。
+   设计约束：sessionStorage（关标签页即失效）+ 顶部常驻水印横幅，绝不冒充真数据。 */
+const _DEMO_FILL={
+  'today-watched':'1,284','today-followed':'356','today-dms':'189',
+  'today-autoreplied':'142','today-leads':'47','today-converts':'12',
+  'ai-total-calls':'2,317','ai-cache-rate':'38%','ai-rewrites':'412','ai-auto-replies':'142',
+};
+function demoModeOn(){try{return sessionStorage.getItem('oc_demo')==='1';}catch(e){return false;}}
+function toggleDemoMode(){
+  try{
+    if(demoModeOn()){sessionStorage.removeItem('oc_demo');location.reload();return;}
+    sessionStorage.setItem('oc_demo','1');
+    _navBeacon('demo:on','action');
+    _demoTick();_demoBanner();
+    showToast('演示模式已开启（仅本次会话，页面数字为示例）','info');
+  }catch(e){}
+}
+window.toggleDemoMode=toggleDemoMode;
+function _demoBanner(){
+  if(document.getElementById('oc-demo-banner'))return;
+  const b=document.createElement('div');
+  b.id='oc-demo-banner';
+  b.innerHTML='演示模式 · 页面数字为示例数据<b onclick="toggleDemoMode()">退出</b>';
+  document.body.appendChild(b);
+}
+function _demoTick(){
+  if(!demoModeOn())return;
+  Object.keys(_DEMO_FILL).forEach(id=>{
+    const el=document.getElementById(id);
+    if(el)el.textContent=_DEMO_FILL[id];
+  });
+  const dot=document.getElementById('ai-status-dot');if(dot)dot.style.background='var(--green-strong)';
+  const txt=document.getElementById('ai-status-text');if(txt)txt.textContent='运行中 · 缓存命中良好';
+  setTimeout(_demoTick,4000);  /* 盖过异步 loader 的真实 0 值刷新 */
+}
+(function _demoInit(){
+  try{
+    if(new URLSearchParams(location.search).get('demo')==='1')sessionStorage.setItem('oc_demo','1');
+    if(demoModeOn())setTimeout(()=>{_demoTick();_demoBanner();},800);
+  }catch(e){}
+})();
+
+/* ── P2 总览「更多面板」折叠（记忆在 localStorage） ── */
+function _ovToggleMore(){
+  const body=document.getElementById('ov-more-body');
+  const arrow=document.getElementById('ov-more-arrow');
+  if(!body)return;
+  const collapsed=body.style.display==='none';
+  body.style.display=collapsed?'':'none';
+  if(arrow)arrow.style.transform=collapsed?'':'rotate(-90deg)';
+  try{localStorage.setItem('oc_ov_more',collapsed?'open':'closed');}catch(e){}
+}
+(function _ovRestoreMore(){
+  try{
+    if(localStorage.getItem('oc_ov_more')==='closed'){
+      const body=document.getElementById('ov-more-body');
+      const arrow=document.getElementById('ov-more-arrow');
+      if(body)body.style.display='none';
+      if(arrow)arrow.style.transform='rotate(-90deg)';
+    }
+  }catch(e){}
+})();
+function _renderFamTabs(pg){
+  const N=window.__NAV;if(!N)return;
+  const famId=_navFam(pg);if(!famId)return;
+  const fam=N.families[famId];const pageEl=document.getElementById('page-'+pg);
+  if(!fam||!pageEl)return;
+  let bar=pageEl.querySelector(':scope > .fam-tabs');
+  if(!bar){bar=document.createElement('div');bar.className='fam-tabs';pageEl.prepend(bar);}
+  let html='<span class="fam-tabs-label">'+fam.label+'</span>';
+  (fam.tabs||[]).forEach(t=>{
+    html+='<button type="button" class="fam-tab'+(t.page===pg?' active':'')+'" onclick="navigateToPage(\''+t.page+'\')">'+t.label+'</button>';
+  });
+  (fam.actions||[]).forEach(a=>{
+    html+='<button type="button" class="fam-tab fam-act" onclick="_famAct(\''+a.act+'\')">'+a.label+' &#8599;</button>';
+  });
+  bar.innerHTML=html;
+}
 function navigateToPage(pg){
-  // Tab重定向：这些页面已融合进TikTok tab
-  const _ttTabMap={'conversations':'conv','leads':'leads','messages':'msg','account-farming':'farming','campaigns':'farming'};
-  if(_ttTabMap[pg]){
-    const _ttTarget='plat-tiktok';
-    // 隐藏所有页面，显示TikTok页面
+  if(!_navAllowed(pg)){
+    if(pg!=='overview') navigateToPage('overview');
+    return;
+  }
+  if(_LEGACY_TT_REDIRECT[pg]){
+    // 隐藏所有页面，显示TikTok页面并切到对应 tab
     document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
     document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
     const _ttPageEl=document.getElementById('page-plat-tiktok');
     if(_ttPageEl)_ttPageEl.classList.add('active');
-    const _ttNavEl=document.querySelector('[data-page="plat-tiktok"]');
+    const _ttNavEl=document.querySelector('.nav-item:not(.fam-child)[data-page="plat-tiktok"]');
     if(_ttNavEl)_ttNavEl.classList.add('active');
-    const _ttTitleEl=_ttNavEl?.querySelector('span:last-child');
-    if(_ttTitleEl)document.getElementById('page-title').textContent='TikTok';
-    _currentPage=_ttTarget;
-    setTimeout(()=>ttTab(_ttTabMap[pg]),50);
+    document.getElementById('page-title').textContent='TikTok';
+    _currentPage='plat-tiktok';
+    setTimeout(()=>ttTab(_LEGACY_TT_REDIRECT[pg]),50);
     return;
   }
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
-  const navEl=document.querySelector(`[data-page="${pg}"]`);
+  const famId=_navFam(pg);
+  const navEl=document.querySelector('.nav-item:not(.fam-child)[data-page="'+(famId||pg)+'"]');
   if(navEl)navEl.classList.add('active');
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   const pageEl=document.getElementById('page-'+pg);
   if(pageEl)pageEl.classList.add('active');
-  const titleEl=navEl?.querySelector('span:last-child');
-  if(titleEl)document.getElementById('page-title').textContent=titleEl.textContent;
+  // 标题：家族页 = 「家族名 · 页签名」，普通页 = 菜单文案
+  let title='';
+  if(famId&&window.__NAV){
+    const fam=window.__NAV.families[famId];
+    const tl=(window.__NAV.tabLabel||{})[pg];
+    if(fam)title=fam.label+((tl&&tl!==fam.label)?' · '+tl:'');
+  }
+  if(!title){
+    const titleEl=navEl?.querySelector('span:last-child');
+    title=titleEl?titleEl.textContent:pg;
+  }
+  document.getElementById('page-title').textContent=title;
   _currentPage=pg;
+  _renderFamTabs(pg);
   const loader=_PAGE_LOADERS[pg];
   if(loader)loader();
   else if(pg.startsWith('plat-'))loadPlatformPage(pg.replace('plat-',''));
   history.replaceState(null,null,'#'+pg);
+  if(pg!==_lastBeaconPage){_navBeacon(pg,famId?'tab':'page');_lastBeaconPage=pg;}
 }
 document.querySelectorAll('.nav-item[data-page]').forEach(el=>{
   el.addEventListener('click',()=>navigateToPage(el.dataset.page));
 });
 if(location.hash.length>1){
   const hashPage=location.hash.substring(1);
-  if(document.getElementById('page-'+hashPage))setTimeout(()=>navigateToPage(hashPage),100);
+  if(document.getElementById('page-'+hashPage)||_LEGACY_TT_REDIRECT[hashPage])setTimeout(()=>navigateToPage(hashPage),100);
+}else{
+  _lastBeaconPage='overview';
+  setTimeout(()=>_navBeacon('overview','page'),1200);
 }
+/* 手改地址栏 hash / 浏览器前进后退也能导航（navigateToPage 用 replaceState，不会自触发） */
+window.addEventListener('hashchange',()=>{
+  const pg=location.hash.substring(1);
+  if(!pg||pg===_currentPage)return;
+  if(document.getElementById('page-'+pg)||_LEGACY_TT_REDIRECT[pg])navigateToPage(pg);
+});
 
 /* ── Clock ── */
 function updateClock(){document.getElementById('clock').textContent=new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});}
@@ -312,10 +516,10 @@ async function _loadNodeRole(){
         const summary=parts.length?parts.join(' + '):((ov.total_devices||0)+' \u53f0');
         badge.textContent='\u2601 '+(name||'\u4e3b\u63a7')+' \u00b7 '+summary;
         badge.title='Worker: \u5728\u7ebf/\u5fc3\u8df3\u91cc\u7684\u8bbe\u5907\u6570(\u542b\u6389\u7ebf)\u3002\u672c\u673aUSB: \u4e3b\u63a7\u76f4\u8fde\u3002\u6389\u7ebf\u540e\u5fc3\u8df3\u5df2\u6539\u4e3a\u4ee5 adb \u4e3a\u51c6\u3002';
-        badge.style.cssText='display:inline-block;margin-left:6px;font-size:10px;padding:2px 8px;border-radius:4px;font-weight:500;background:rgba(59,130,246,.15);color:#60a5fa;border:1px solid rgba(59,130,246,.3)';
+        badge.style.cssText='display:inline-block;margin-left:6px;font-size:10px;padding:2px 8px;border-radius:4px;font-weight:500;background:rgba(59,130,246,.15);color:var(--blue-soft);border:1px solid rgba(59,130,246,.3)';
       }catch(e){
         badge.textContent='\u2601 Coordinator';
-        badge.style.cssText='display:inline-block;margin-left:6px;font-size:10px;padding:2px 8px;border-radius:4px;font-weight:500;background:rgba(59,130,246,.15);color:#60a5fa;border:1px solid rgba(59,130,246,.3)';
+        badge.style.cssText='display:inline-block;margin-left:6px;font-size:10px;padding:2px 8px;border-radius:4px;font-weight:500;background:rgba(59,130,246,.15);color:var(--blue-soft);border:1px solid rgba(59,130,246,.3)';
       }
     }else if(role==='worker'){
       const coordUrl=cfg.coordinator_url||'';
@@ -362,8 +566,8 @@ async function loadTrendChart(){
     _chartDevTrend=new Chart(ctx,{type:'line',data:{
       labels:data.labels||[],
       datasets:[
-        {label:'在线',data:data.online||[],borderColor:'#22c55e',backgroundColor:'rgba(34,197,94,.1)',fill:true,tension:.3,pointRadius:1},
-        {label:'总数',data:data.total||[],borderColor:'#3b82f6',backgroundColor:'rgba(59,130,246,.05)',fill:true,tension:.3,pointRadius:1},
+        {label:'在线',data:data.online||[],borderColor:themeColor('--green-strong','#22c55e'),backgroundColor:'rgba(34,197,94,.1)',fill:true,tension:.3,pointRadius:1},
+        {label:'总数',data:data.total||[],borderColor:themeColor('--blue-strong','#3b82f6'),backgroundColor:'rgba(59,130,246,.05)',fill:true,tension:.3,pointRadius:1},
       ]},options:{responsive:true,plugins:{legend:{labels:{color:_chartColors.text,font:{size:10}}}},scales:{
         x:{ticks:{color:_chartColors.text,font:{size:9},maxTicksLimit:8},grid:{color:_chartColors.grid}},
         y:{ticks:{color:_chartColors.text,font:{size:9}},grid:{color:_chartColors.grid},beginAtZero:true}
@@ -381,9 +585,9 @@ async function loadTaskChart(){
     _chartTaskTrend=new Chart(ctx,{type:'line',data:{
       labels:data.labels||[],
       datasets:[
-        {label:'成功',data:data.success||[],borderColor:'#22c55e',backgroundColor:'rgba(34,197,94,.1)',fill:true,tension:.3,pointRadius:1},
-        {label:'失败',data:data.failed||[],borderColor:'#ef4444',backgroundColor:'rgba(239,68,68,.1)',fill:true,tension:.3,pointRadius:1},
-        {label:'总数',data:data.total||[],borderColor:'#3b82f6',backgroundColor:'rgba(59,130,246,.05)',fill:false,tension:.3,pointRadius:1,borderDash:[4,4]},
+        {label:'成功',data:data.success||[],borderColor:themeColor('--green-strong','#22c55e'),backgroundColor:'rgba(34,197,94,.1)',fill:true,tension:.3,pointRadius:1},
+        {label:'失败',data:data.failed||[],borderColor:themeColor('--red-strong','#ef4444'),backgroundColor:'rgba(239,68,68,.1)',fill:true,tension:.3,pointRadius:1},
+        {label:'总数',data:data.total||[],borderColor:themeColor('--blue-strong','#3b82f6'),backgroundColor:'rgba(59,130,246,.05)',fill:false,tension:.3,pointRadius:1,borderDash:[4,4]},
       ]},options:{responsive:true,plugins:{legend:{labels:{color:_chartColors.text,font:{size:10}}}},scales:{
         x:{ticks:{color:_chartColors.text,font:{size:9},maxTicksLimit:8},grid:{color:_chartColors.grid}},
         y:{ticks:{color:_chartColors.text,font:{size:9}},grid:{color:_chartColors.grid},beginAtZero:true}
@@ -502,9 +706,9 @@ async function _loadActivityTrend(){
         datasets: [
           {label:'关注', data:followed, backgroundColor:'rgba(59,130,246,.7)', borderRadius:4, order:2},
           {label:'私信', data:dms, backgroundColor:'rgba(34,197,94,.7)', borderRadius:4, order:2},
-          {label:'_关注线', data:followed, type:'line', borderColor:'#3b82f6', borderWidth:2,
+          {label:'_关注线', data:followed, type:'line', borderColor:themeColor('--blue-strong','#3b82f6'), borderWidth:2,
            pointRadius:3, fill:false, tension:0.3, order:1},
-          {label:'_私信线', data:dms, type:'line', borderColor:'#22c55e', borderWidth:2,
+          {label:'_私信线', data:dms, type:'line', borderColor:themeColor('--green-strong','#22c55e'), borderWidth:2,
            pointRadius:3, fill:false, tension:0.3, order:1},
         ]
       },
@@ -550,9 +754,9 @@ async function _loadFbHealth(){
     const badge=document.getElementById('ov-fb-score-badge');
     if(badge){
       badge.textContent=score+'分';
-      if(score>=80){badge.style.background='rgba(34,197,94,.15)';badge.style.color='#22c55e';}
-      else if(score>=50){badge.style.background='rgba(245,158,11,.15)';badge.style.color='#f59e0b';}
-      else{badge.style.background='rgba(239,68,68,.15)';badge.style.color='#ef4444';}
+      if(score>=80){badge.style.background='rgba(34,197,94,.15)';badge.style.color='var(--green-strong)';}
+      else if(score>=50){badge.style.background='rgba(245,158,11,.15)';badge.style.color='var(--amber)';}
+      else{badge.style.background='rgba(239,68,68,.15)';badge.style.color='var(--red-strong)';}
     }
     // persona 标签
     const ptag=document.getElementById('ov-fb-persona-tag');
@@ -569,7 +773,7 @@ async function _loadFbHealth(){
       const mainRate=total?Math.round(mainN/total*100):0;
       cfgGrid.innerHTML=''
         +'<div style="background:var(--bg-main);border-radius:8px;padding:10px;text-align:center">'
-        +'<div style="font-size:18px;font-weight:700;color:#3b82f6">'+cfg+'/'+total+'</div>'
+        +'<div style="font-size:18px;font-weight:700;color:var(--blue-strong)">'+cfg+'/'+total+'</div>'
         +'<div style="font-size:9px;color:var(--text-muted);margin-top:2px">\u5F15\u6D41\u5DF2\u914D\u7F6E ('+cfgRate+'%)</div></div>'
         +'<div style="background:var(--bg-main);border-radius:8px;padding:10px;text-align:center">'
         +'<div style="font-size:18px;font-weight:700;color:'+(mainRate>=80?'#22c55e':mainRate>=50?'#f59e0b':'#ef4444')+'">'+mainN+'/'+total+'</div>'
@@ -602,10 +806,10 @@ async function _loadFbHealth(){
     if(acts){
       var btns='';
       if(d.unconfigured>0){
-        btns+='<button onclick="typeof fbOpenReferralModal===\'function\'&&fbOpenReferralModal()" style="padding:4px 12px;font-size:10px;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.3);color:#f59e0b;border-radius:6px;cursor:pointer;font-weight:600">\uD83D\uDD17 \u914D\u7F6E\u5F15\u6D41</button>';
+        btns+='<button onclick="typeof fbOpenReferralModal===\'function\'&&fbOpenReferralModal()" style="padding:4px 12px;font-size:10px;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.3);color:var(--amber);border-radius:6px;cursor:pointer;font-weight:600">\uD83D\uDD17 \u914D\u7F6E\u5F15\u6D41</button>';
       }
-      btns+='<button onclick="typeof fbOpenFunnelModal===\'function\'&&fbOpenFunnelModal()" style="padding:4px 12px;font-size:10px;background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.3);color:#60a5fa;border-radius:6px;cursor:pointer;font-weight:600">\uD83D\uDCCA \u5B8C\u6574\u6F0F\u6597</button>';
-      btns+='<button onclick="typeof fbOpenPresetsModal===\'function\'&&fbOpenPresetsModal()" style="padding:4px 12px;font-size:10px;background:rgba(24,119,242,.1);border:1px solid rgba(24,119,242,.3);color:#60a5fa;border-radius:6px;cursor:pointer;font-weight:600">\u26A1 \u6267\u884C\u65B9\u6848</button>';
+      btns+='<button onclick="typeof fbOpenFunnelModal===\'function\'&&fbOpenFunnelModal()" style="padding:4px 12px;font-size:10px;background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.3);color:var(--blue-soft);border-radius:6px;cursor:pointer;font-weight:600">\uD83D\uDCCA \u5B8C\u6574\u6F0F\u6597</button>';
+      btns+='<button onclick="typeof fbOpenPresetsModal===\'function\'&&fbOpenPresetsModal()" style="padding:4px 12px;font-size:10px;background:rgba(24,119,242,.1);border:1px solid rgba(24,119,242,.3);color:var(--blue-soft);border-radius:6px;cursor:pointer;font-weight:600">\u26A1 \u6267\u884C\u65B9\u6848</button>';
       acts.innerHTML=btns;
     }
   }catch(e){
@@ -743,8 +947,8 @@ async function _loadDeviceRanking(){
       return `<tr style="border-bottom:1px solid rgba(255,255,255,.04)">
         <td style="padding:7px 12px;font-weight:600;color:var(--text)">${i+1}. ${alias}</td>
         <td style="padding:7px 12px"><span style="font-size:10px;background:${color}22;color:${color};padding:2px 6px;border-radius:4px">${ph}</span></td>
-        <td style="padding:7px 12px;text-align:center;color:#60a5fa">${d.total_followed}</td>
-        <td style="padding:7px 12px;text-align:center;color:#a78bfa">${d.total_dms}</td>
+        <td style="padding:7px 12px;text-align:center;color:var(--blue-soft)">${d.total_followed}</td>
+        <td style="padding:7px 12px;text-align:center;color:var(--violet-soft)">${d.total_dms}</td>
         <td style="padding:7px 12px;text-align:center;color:${effColor};font-weight:600">${d._eff}%</td>
         <td style="padding:7px 12px;text-align:center;color:var(--text-muted)">${d.sessions_today||0}</td>
       </tr>`;
@@ -775,7 +979,7 @@ function _loadAIStats() {
     const dot = document.getElementById('ai-status-dot');
     const statusText = document.getElementById('ai-status-text');
     if (totalCalls > 0) {
-      if (dot) { dot.style.background = '#4ade80'; }
+      if (dot) { dot.style.background = 'var(--green-soft)'; }
       if (statusText) statusText.textContent = '正常运行中';
     } else {
       if (dot) { dot.style.background = '#94a3b8'; }
@@ -811,7 +1015,7 @@ async function _ovAiExec(){
       // quick-command 不识别，转 /chat
       const d2=await api('POST','/chat',{message:cmd});
       if(result){
-        let html='<span style="color:#22c55e">'+((d2.reply||'').replace(/\n/g,'<br>'))+'</span>';
+        let html='<span style="color:var(--green-strong)">'+((d2.reply||'').replace(/\n/g,'<br>'))+'</span>';
         if(d2.task_ids&&d2.task_ids.length) html+=' <span style="color:var(--text-dim)">('+d2.task_ids.length+' 个任务)</span>';
         if(typeof formatChatTaskHintsHtml==='function') html+=formatChatTaskHintsHtml(d2);
         result.innerHTML=html;
@@ -820,13 +1024,13 @@ async function _ovAiExec(){
       if(result){
         let msg=d.message||'';
         if(d.created) msg+=' (创建 '+d.created+' 个任务)';
-        result.innerHTML='<span style="color:#22c55e">'+(msg||'OK')+'</span>';
+        result.innerHTML='<span style="color:var(--green-strong)">'+(msg||'OK')+'</span>';
       }
     }
     input.value='';
     setTimeout(_loadOpsDashboard,3000);
   }catch(e){
-    if(result) result.innerHTML='<span style="color:#ef4444">'+e.message+'</span>';
+    if(result) result.innerHTML='<span style="color:var(--red-strong)">'+e.message+'</span>';
   }
 }
 
@@ -943,9 +1147,9 @@ function _ttInjectStyles() {
     .tt-dev-stat b{display:block;font-size:14px;font-weight:700;color:#e2e8f0}
     .tt-dev-tags{display:flex;flex-wrap:wrap;gap:4px}
     .tt-dev-tag{font-size:9px;padding:2px 7px;border-radius:4px;background:rgba(255,255,255,.05);color:#94a3b8;font-weight:500}
-    .tt-dev-tag.ok{background:rgba(34,197,94,.1);color:#22c55e}
-    .tt-dev-tag.warn{background:rgba(245,158,11,.1);color:#f59e0b}
-    .tt-dev-tag.hot{background:rgba(239,68,68,.1);color:#f87171}
+    .tt-dev-tag.ok{background:rgba(34,197,94,.1);color:var(--green-strong)}
+    .tt-dev-tag.warn{background:rgba(245,158,11,.1);color:var(--amber)}
+    .tt-dev-tag.hot{background:rgba(239,68,68,.1);color:var(--red)}
     #tt-dev-panel{position:fixed;top:0;right:-480px;width:420px;height:100vh;background:#0b1120;border-left:1px solid rgba(99,102,241,.15);z-index:1000;transition:right .28s cubic-bezier(.4,0,.2,1);overflow-y:auto;padding:0;box-shadow:-8px 0 40px rgba(0,0,0,.6)}
     #tt-dev-panel.open{right:0}
     #tt-dev-panel.shifted{right:360px}
@@ -984,7 +1188,7 @@ function _ttInjectStyles() {
     .ttp-st:hover{background:rgba(255,255,255,.06)}
     .ttp-st b{display:block;font-size:17px;font-weight:700;line-height:1.3}
     .ttp-st span{font-size:10px;color:#64748b}
-    .ttp-primary-btn{width:100%;padding:11px 16px;background:linear-gradient(135deg,#6366f1,#8b5cf6);border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:600;cursor:pointer;text-align:center;transition:.2s;display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:10px}
+    .ttp-primary-btn{width:100%;padding:11px 16px;background:linear-gradient(135deg,#6366f1,var(--violet));border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:600;cursor:pointer;text-align:center;transition:.2s;display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:10px}
     .ttp-primary-btn:hover{filter:brightness(1.1);transform:translateY(-1px)}
     .ttp-primary-btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
     .ttp-cron{font-size:9px;color:rgba(255,255,255,.5);font-weight:400}
@@ -1031,9 +1235,9 @@ function _ttInjectStyles() {
     .ctm-btn{padding:7px 14px;font-size:12px;font-weight:500;border-radius:8px;cursor:pointer;border:1px solid transparent;transition:.15s}
     .ctm-btn:hover{filter:brightness(1.2)}
     .ctm-btn-primary{background:rgba(99,102,241,.12);border-color:rgba(99,102,241,.3);color:#818cf8}
-    .ctm-btn-warn{background:rgba(245,158,11,.08);border-color:rgba(245,158,11,.3);color:#f59e0b}
-    .ctm-btn-purple{background:rgba(139,92,246,.08);border-color:rgba(139,92,246,.3);color:#8b5cf6}
-    .ctm-btn-danger{background:rgba(239,68,68,.08);border-color:rgba(239,68,68,.3);color:#ef4444}
+    .ctm-btn-warn{background:rgba(245,158,11,.08);border-color:rgba(245,158,11,.3);color:var(--amber)}
+    .ctm-btn-purple{background:rgba(139,92,246,.08);border-color:rgba(139,92,246,.3);color:var(--violet)}
+    .ctm-btn-danger{background:rgba(239,68,68,.08);border-color:rgba(239,68,68,.3);color:var(--red-strong)}
     .ctm-add-row{display:flex;gap:6px;margin-bottom:8px;align-items:center}
     .ctm-filter-row{display:flex;gap:6px;align-items:center}
     .ctm-input{background:#1e293b;border:1px solid rgba(255,255,255,.08);border-radius:6px;padding:7px 10px;color:#e2e8f0;font-size:12px;outline:none}
@@ -1047,9 +1251,9 @@ function _ttInjectStyles() {
     .ctm-td-name{color:#e2e8f0;font-weight:500;font-size:12px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .ctm-tag{display:inline-block;font-size:10px;padding:2px 7px;border-radius:8px;font-weight:500;white-space:nowrap}
     .ctm-tag-indigo{background:rgba(99,102,241,.12);color:#818cf8}
-    .ctm-tag-green{background:rgba(34,197,94,.12);color:#22c55e}
-    .ctm-tag-success{background:rgba(34,197,94,.1);color:#22c55e}
-    .ctm-tag-purple{background:rgba(139,92,246,.12);color:#a78bfa}
+    .ctm-tag-green{background:rgba(34,197,94,.12);color:var(--green-strong)}
+    .ctm-tag-success{background:rgba(34,197,94,.1);color:var(--green-strong)}
+    .ctm-tag-purple{background:rgba(139,92,246,.12);color:var(--violet-soft)}
     .ctm-greet-btn{background:rgba(99,102,241,.15);border:1px solid rgba(99,102,241,.3);border-radius:6px;padding:3px 10px;color:#818cf8;font-size:10px;font-weight:500;cursor:pointer;transition:.15s}
     .ctm-greet-btn:hover{background:rgba(99,102,241,.25)}
     .ctm-preview{background:rgba(99,102,241,.06);border:1px solid rgba(99,102,241,.2);border-radius:10px;padding:12px;animation:ttp-scale-in .2s ease}
@@ -1119,8 +1323,8 @@ function _ttInjectStyles() {
     .tt-bb-btn{padding:7px 14px;font-size:12px;font-weight:500;border-radius:8px;cursor:pointer;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.05);color:#e2e8f0;transition:.15s}
     .tt-bb-btn:hover{background:rgba(255,255,255,.1)}
     .tt-bb-primary{background:rgba(99,102,241,.2);border-color:rgba(99,102,241,.4);color:#a5b4fc}
-    .tt-bb-contacts{background:rgba(245,158,11,.1);border-color:rgba(245,158,11,.3);color:#f59e0b}
-    .tt-bb-cancel{background:rgba(239,68,68,.08);border-color:rgba(239,68,68,.2);color:#ef4444}
+    .tt-bb-contacts{background:rgba(245,158,11,.1);border-color:rgba(245,158,11,.3);color:var(--amber)}
+    .tt-bb-cancel{background:rgba(239,68,68,.08);border-color:rgba(239,68,68,.2);color:var(--red-strong)}
 
     /* 保留旧引用兼容 */
     .tt-panel-header{display:none}
@@ -1134,18 +1338,18 @@ function _ttInjectStyles() {
     .tt-lead-row{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(51,65,85,.35)}
     .tt-lead-name{flex:1;font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .tt-lead-score{font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px}
-    .tt-lead-pitch{padding:3px 8px;font-size:11px;background:rgba(34,197,94,.12);color:#22c55e;border:1px solid rgba(34,197,94,.3);border-radius:5px;cursor:pointer}
+    .tt-lead-pitch{padding:3px 8px;font-size:11px;background:rgba(34,197,94,.12);color:var(--green-strong);border:1px solid rgba(34,197,94,.3);border-radius:5px;cursor:pointer}
     /* ── P3: 卡片状态条 ── */
     .tt-dev-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:10px 0 0 10px}
-    .tt-dev-card.state-replied::before{background:#f59e0b;width:4px;box-shadow:0 0 8px #f59e0b80}
-    .tt-dev-card.state-leads::before{background:#f59e0b}
-    .tt-dev-card.state-active::before{background:#22c55e}
+    .tt-dev-card.state-replied::before{background:var(--amber);width:4px;box-shadow:0 0 8px #f59e0b80}
+    .tt-dev-card.state-leads::before{background:var(--amber)}
+    .tt-dev-card.state-active::before{background:var(--green-strong)}
     .tt-dev-card.state-idle::before{background:#94a3b840}
     .tt-dev-card.state-offline::before{background:#ef444450}
     @keyframes tt-replied-pulse{0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,.4)}50%{box-shadow:0 0 0 4px rgba(245,158,11,.1)}}
     .tt-dev-card.state-replied{animation:tt-replied-pulse 2s infinite}
     /* ── P3: 线索 badge ── */
-    .tt-dev-badge{position:absolute;top:7px;right:7px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#ef4444;color:#fff;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;line-height:1;box-shadow:0 2px 6px rgba(239,68,68,.5)}
+    .tt-dev-badge{position:absolute;top:7px;right:7px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--red-strong);color:#fff;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;line-height:1;box-shadow:0 2px 6px rgba(239,68,68,.5)}
     /* ── P3: 紧凑统计行 ── */
     .tt-dev-stat-row{display:flex;gap:10px;margin-bottom:6px;font-size:11px;color:var(--text-muted)}
     .tt-dev-stat-row span{display:flex;align-items:center;gap:2px}
@@ -1166,10 +1370,10 @@ function _ttInjectStyles() {
     /* ── P2: 线索卡左状态条 ── */
     .tt-lp-card{position:relative;padding:12px 12px 12px 16px}
     .tt-lp-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:10px 0 0 10px}
-    .tt-lp-card.st-responded::before{background:#f59e0b}
-    .tt-lp-card.st-qualified::before{background:#22c55e}
-    .tt-lp-card.st-contacted::before{background:#60a5fa}
-    .tt-lp-card.st-converted::before{background:#a78bfa}
+    .tt-lp-card.st-responded::before{background:var(--amber)}
+    .tt-lp-card.st-qualified::before{background:var(--green-strong)}
+    .tt-lp-card.st-contacted::before{background:var(--blue-soft)}
+    .tt-lp-card.st-converted::before{background:var(--violet-soft)}
     /* ── P4: Toast 通知 ── */
     #tt-toast-container{position:fixed;bottom:24px;right:24px;z-index:9900;display:flex;flex-direction:column;gap:8px;pointer-events:none}
     .tt-toast{padding:10px 14px;border-radius:8px;font-size:12px;font-weight:500;pointer-events:none;max-width:300px;box-shadow:0 4px 20px rgba(0,0,0,.5);animation:tt-toast-in .3s cubic-bezier(.4,0,.2,1)}
@@ -1183,9 +1387,9 @@ function _ttInjectStyles() {
     @keyframes tt-new-leads{0%{box-shadow:0 0 0 0 rgba(245,158,11,.5)}50%{box-shadow:0 0 0 5px rgba(245,158,11,.15)}100%{box-shadow:0 0 0 0 rgba(245,158,11,0)}}
     .tt-dev-card.new-leads{animation:tt-new-leads 1.2s ease 2}
     /* ── P4: 自动刷新状态指示 ── */
-    #tt-refresh-dot{width:6px;height:6px;border-radius:50%;background:#22c55e;display:inline-block;margin-left:4px;vertical-align:middle}
+    #tt-refresh-dot{width:6px;height:6px;border-radius:50%;background:var(--green-strong);display:inline-block;margin-left:4px;vertical-align:middle}
     #tt-refresh-dot.stale{background:#94a3b8}
-    #tt-refresh-dot.loading{background:#f59e0b;animation:tt-pulse-dot 1s ease-in-out infinite}
+    #tt-refresh-dot.loading{background:var(--amber);animation:tt-pulse-dot 1s ease-in-out infinite}
     @keyframes tt-pulse-dot{0%,100%{opacity:.4}50%{opacity:1}}
     /* ── P5: 话术预览弹窗 ── */
     #tt-pitch-overlay{position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,.65);backdrop-filter:blur(5px);display:flex;align-items:center;justify-content:center;padding:20px;animation:tt-toast-in .2s ease}
@@ -1199,7 +1403,7 @@ function _ttInjectStyles() {
     .tt-pitch-confirm{padding:8px 18px;font-size:12px;font-weight:600;border-radius:7px;background:rgba(99,102,241,.25);border:1px solid rgba(99,102,241,.4);color:#a5b4fc;cursor:pointer}
     .tt-pitch-confirm:hover{background:rgba(99,102,241,.4)}
     /* ── P6: 健康警告 ── */
-    .tt-dev-card.state-warn-idle::before{background:#f59e0b;animation:tt-warn-pulse 2.5s ease-in-out infinite}
+    .tt-dev-card.state-warn-idle::before{background:var(--amber);animation:tt-warn-pulse 2.5s ease-in-out infinite}
     @keyframes tt-warn-pulse{0%,100%{opacity:.3}50%{opacity:1}}
     /* ── P0: Flow Config Modal (策略卡片 v2) ── */
     #tt-flow-overlay{position:fixed;inset:0;z-index:9600;background:rgba(0,0,0,.72);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;padding:16px}
@@ -1219,13 +1423,13 @@ function _ttInjectStyles() {
     .ttf-suggest b{font-weight:700}
     .ttf-suggest.suggest-warn{background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);color:#fbbf24}
     .ttf-suggest.suggest-info{background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.25);color:#a5b4fc}
-    .ttf-suggest.suggest-good{background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.25);color:#4ade80}
+    .ttf-suggest.suggest-good{background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.25);color:var(--green-soft)}
     .ttf-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(175px,1fr));gap:12px;margin-bottom:16px}
     .ttf-card{background:rgba(255,255,255,.025);border:1.5px solid rgba(255,255,255,.08);border-radius:14px;padding:16px;cursor:pointer;transition:all .2s;position:relative;display:flex;flex-direction:column;gap:6px}
     .ttf-card:hover{border-color:rgba(99,102,241,.4);background:rgba(99,102,241,.04);transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.3)}
     .ttf-card.recommended{border-color:rgba(99,102,241,.45);box-shadow:0 0 0 1px rgba(99,102,241,.12)}
     .ttf-card.selected{border-color:rgba(99,102,241,.7);background:rgba(99,102,241,.1);box-shadow:0 0 0 2px rgba(99,102,241,.2)}
-    .ttf-card-badge{position:absolute;top:-1px;right:12px;font-size:10px;font-weight:700;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;padding:3px 10px;border-radius:0 0 6px 6px;letter-spacing:.03em}
+    .ttf-card-badge{position:absolute;top:-1px;right:12px;font-size:10px;font-weight:700;background:linear-gradient(135deg,#6366f1,var(--violet));color:#fff;padding:3px 10px;border-radius:0 0 6px 6px;letter-spacing:.03em}
     .ttf-card-icon{font-size:26px;line-height:1}
     .ttf-card-name{font-size:15px;font-weight:700;color:var(--text-main)}
     .ttf-card-desc{font-size:12px;color:var(--text-muted);line-height:1.5;min-height:36px}
@@ -1256,9 +1460,9 @@ function _ttInjectStyles() {
     .tts-card{border:1px solid rgba(255,255,255,.07);border-radius:10px;background:rgba(255,255,255,.015);overflow:hidden;transition:all .2s;position:relative}
     .tts-card.enabled{border-color:rgba(99,102,241,.4);background:rgba(99,102,241,.04)}
     .tts-card.enabled::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:10px 0 0 10px}
-    .tts-card.enabled.grp-0::before{background:linear-gradient(180deg,#22c55e,#16a34a)}
-    .tts-card.enabled.grp-1::before{background:linear-gradient(180deg,#60a5fa,#818cf8)}
-    .tts-card.enabled.grp-2::before{background:linear-gradient(180deg,#f59e0b,#ef4444)}
+    .tts-card.enabled.grp-0::before{background:linear-gradient(180deg,var(--green-strong),var(--green-deep))}
+    .tts-card.enabled.grp-1::before{background:linear-gradient(180deg,var(--blue-soft),#818cf8)}
+    .tts-card.enabled.grp-2::before{background:linear-gradient(180deg,var(--amber),var(--red-strong))}
     .tts-card.expanded .tts-params{display:block}
     /* 卡片头部 */
     .tts-head{display:flex;align-items:center;gap:10px;padding:10px 14px 10px 16px;cursor:pointer;user-select:none;transition:background .12s}
@@ -1268,7 +1472,7 @@ function _ttInjectStyles() {
     .tts-name{font-size:14px;font-weight:600;color:var(--text-main);display:flex;align-items:center;gap:6px}
     .tts-desc{font-size:11px;color:var(--text-dim);margin-top:2px;line-height:1.4}
     .tts-time{font-size:13px;font-weight:600;color:var(--text-muted);flex-shrink:0;margin-right:6px;min-width:50px;text-align:right;transition:color .2s}
-    .tts-card.enabled .tts-time{color:#f59e0b}
+    .tts-card.enabled .tts-time{color:var(--amber)}
     /* 开关（替代小圆圈） */
     .tts-switch{width:36px;height:20px;border-radius:10px;background:rgba(255,255,255,.1);border:none;cursor:pointer;position:relative;flex-shrink:0;transition:background .2s;padding:0}
     .tts-switch::after{content:'';position:absolute;left:2px;top:2px;width:16px;height:16px;border-radius:50%;background:rgba(255,255,255,.3);transition:all .2s}
@@ -1295,18 +1499,18 @@ function _ttInjectStyles() {
     .tts-toggle-wrap{flex:1;display:flex;align-items:center;gap:8px}
     .tts-toggle{width:34px;height:18px;border-radius:9px;background:rgba(255,255,255,.1);border:none;cursor:pointer;position:relative;flex-shrink:0;transition:background .2s;padding:0}
     .tts-toggle::after{content:'';position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:rgba(255,255,255,.3);transition:all .2s}
-    .tts-toggle.on{background:#22c55e}
+    .tts-toggle.on{background:var(--green-strong)}
     .tts-toggle.on::after{left:18px;background:#fff}
     .tts-toggle-label{font-size:12px;color:var(--text-muted)}
     /* 风险/影响标记 */
     .tts-risk{font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600;white-space:nowrap;flex-shrink:0}
-    .tts-risk.safe{background:rgba(34,197,94,.08);color:#4ade80;border:1px solid rgba(34,197,94,.2)}
+    .tts-risk.safe{background:rgba(34,197,94,.08);color:var(--green-soft);border:1px solid rgba(34,197,94,.2)}
     .tts-risk.warn{background:rgba(245,158,11,.08);color:#fbbf24;border:1px solid rgba(245,158,11,.25)}
-    .tts-risk.danger{background:rgba(239,68,68,.08);color:#f87171;border:1px solid rgba(239,68,68,.25)}
+    .tts-risk.danger{background:rgba(239,68,68,.08);color:var(--red);border:1px solid rgba(239,68,68,.25)}
     .tts-impact{font-size:10px;color:rgba(148,163,184,.5);margin-top:0;padding-left:88px}
     .ttf-footer{padding:12px 24px 16px;border-top:1px solid rgba(255,255,255,.07);flex-shrink:0}
     .tt-flow-est{font-size:13px;color:var(--text-muted);margin-bottom:10px;text-align:center;min-height:18px}
-    .tt-flow-est b{color:#f59e0b}
+    .tt-flow-est b{color:var(--amber)}
     .ttf-btns{display:flex;gap:8px}
     .tt-flow-save{padding:9px 16px;font-size:12px;border-radius:8px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);color:var(--text-muted);cursor:pointer;transition:all .15s;white-space:nowrap}
     .tt-flow-save:hover{background:rgba(255,255,255,.09);color:var(--text-main)}
@@ -1318,21 +1522,21 @@ function _ttInjectStyles() {
     .tt-flow-exec:disabled{opacity:.45;cursor:not-allowed}
     /* ── P1: Device Role Badge ── */
     .tt-role-badge{display:inline-block;font-size:9px;padding:1px 6px;border-radius:4px;font-weight:600;margin-left:4px;vertical-align:middle}
-    .tt-role-badge.warmup{background:rgba(34,197,94,.12);color:#22c55e;border:1px solid rgba(34,197,94,.28)}
-    .tt-role-badge.follow{background:rgba(59,130,246,.12);color:#60a5fa;border:1px solid rgba(59,130,246,.28)}
+    .tt-role-badge.warmup{background:rgba(34,197,94,.12);color:var(--green-strong);border:1px solid rgba(34,197,94,.28)}
+    .tt-role-badge.follow{background:rgba(59,130,246,.12);color:var(--blue-soft);border:1px solid rgba(59,130,246,.28)}
     .tt-role-badge.full{background:rgba(99,102,241,.12);color:#a5b4fc;border:1px solid rgba(99,102,241,.28)}
     .tt-role-badge.idle{background:rgba(148,163,184,.08);color:#94a3b8;border:1px solid rgba(148,163,184,.2)}
     /* ── P2: Step Progress in Action Result ── */
     .tt-flow-progress{margin-top:8px;font-size:11px}
     .tt-flow-progress-step{display:flex;align-items:center;gap:6px;padding:3px 0;color:var(--text-muted)}
-    .tt-flow-progress-step.done{color:#22c55e}
-    .tt-flow-progress-step.running{color:#f59e0b}
-    .tt-flow-progress-step.fail{color:#f87171}
+    .tt-flow-progress-step.done{color:var(--green-strong)}
+    .tt-flow-progress-step.running{color:var(--amber)}
+    .tt-flow-progress-step.fail{color:var(--red)}
     /* ── P2: 实时进度追踪面板 ── */
     .tt-prog-panel{margin-top:8px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:8px;padding:8px 10px;font-size:11px}
     .tt-prog-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;color:var(--text-muted)}
     .tt-prog-title{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.05em}
-    .tt-prog-cancel{font-size:10px;padding:2px 8px;border:1px solid rgba(239,68,68,.3);border-radius:4px;background:rgba(239,68,68,.08);color:#f87171;cursor:pointer;transition:all .15s}
+    .tt-prog-cancel{font-size:10px;padding:2px 8px;border:1px solid rgba(239,68,68,.3);border-radius:4px;background:rgba(239,68,68,.08);color:var(--red);cursor:pointer;transition:all .15s}
     .tt-prog-cancel:hover{background:rgba(239,68,68,.2)}
     .tt-prog-step{display:flex;align-items:center;gap:7px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.04)}
     .tt-prog-step:last-child{border-bottom:none}
@@ -1341,17 +1545,17 @@ function _ttInjectStyles() {
     .tt-prog-status{font-size:10px;flex-shrink:0}
     .tt-prog-step.st-pending .tt-prog-icon{color:#475569}
     .tt-prog-step.st-pending .tt-prog-status{color:#475569}
-    .tt-prog-step.st-running .tt-prog-icon{color:#f59e0b;animation:tt-spin .8s linear infinite}
+    .tt-prog-step.st-running .tt-prog-icon{color:var(--amber);animation:tt-spin .8s linear infinite}
     .tt-prog-step.st-running .tt-prog-name{color:var(--text-main)}
-    .tt-prog-step.st-running .tt-prog-status{color:#f59e0b}
-    .tt-prog-step.st-completed .tt-prog-icon{color:#22c55e}
+    .tt-prog-step.st-running .tt-prog-status{color:var(--amber)}
+    .tt-prog-step.st-completed .tt-prog-icon{color:var(--green-strong)}
     .tt-prog-step.st-completed .tt-prog-name{color:var(--text-main)}
-    .tt-prog-step.st-completed .tt-prog-status{color:#22c55e}
-    .tt-prog-step.st-failed .tt-prog-icon{color:#f87171}
-    .tt-prog-step.st-failed .tt-prog-status{color:#f87171}
+    .tt-prog-step.st-completed .tt-prog-status{color:var(--green-strong)}
+    .tt-prog-step.st-failed .tt-prog-icon{color:var(--red)}
+    .tt-prog-step.st-failed .tt-prog-status{color:var(--red)}
     @keyframes tt-spin{to{transform:rotate(360deg)}}
     .tt-prog-bar-wrap{margin-top:6px;height:2px;background:rgba(255,255,255,.06);border-radius:2px;overflow:hidden}
-    .tt-prog-bar{height:100%;background:linear-gradient(90deg,var(--accent),#22c55e);border-radius:2px;transition:width .4s ease}
+    .tt-prog-bar{height:100%;background:linear-gradient(90deg,var(--accent),var(--green-strong));border-radius:2px;transition:width .4s ease}
     /* ── P3: 设备卡片流程角色标识 ── */
     .tt-dev-role-strip{display:flex;gap:3px;margin-top:5px;padding-top:5px;border-top:1px solid rgba(255,255,255,.05)}
     .tt-dev-role-icon{font-size:11px;opacity:.55;transition:opacity .15s}
@@ -1385,12 +1589,12 @@ function _ttInjectStyles() {
     .ttg-sel-actions{display:flex;gap:6px;flex-shrink:0}
     .ttg-sel-btn{padding:5px 12px;font-size:12px;border-radius:6px;cursor:pointer;transition:all .15s;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.04);color:var(--text-muted)}
     .ttg-sel-btn:hover{background:rgba(255,255,255,.08);color:var(--text-main)}
-    .ttg-sel-btn.danger{border-color:rgba(248,113,113,.25);color:#f87171}
+    .ttg-sel-btn.danger{border-color:rgba(248,113,113,.25);color:var(--red)}
     .ttg-sel-btn.danger:hover{background:rgba(248,113,113,.1)}
     .ttg-langs{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:10px;padding:0 4px}
     .ttg-lang-label{font-size:12px;font-weight:600;color:var(--text-dim)}
     .ttg-lang-chip{display:inline-flex;align-items:center;gap:5px;padding:4px 12px;border-radius:16px;font-size:12px;cursor:pointer;transition:all .15s;user-select:none;border:1px solid}
-    .ttg-lang-chip.primary{background:rgba(34,197,94,.1);border-color:rgba(34,197,94,.35);color:#4ade80}
+    .ttg-lang-chip.primary{background:rgba(34,197,94,.1);border-color:rgba(34,197,94,.35);color:var(--green-soft)}
     .ttg-lang-chip.optional{background:rgba(255,255,255,.02);border-color:rgba(255,255,255,.08);color:var(--text-muted)}
     .ttg-lang-chip.optional:hover{border-color:rgba(99,102,241,.3);color:#a5b4fc}
     .ttg-lang-chip.optional.active{background:rgba(99,102,241,.1);border-color:rgba(99,102,241,.4);color:#a5b4fc}
@@ -1634,7 +1838,7 @@ function _ttSilentRenderGrid(devices, prev, summary) {
         '<span style="font-size:12px;color:var(--text-main);font-weight:600">' + leadsDevCount + ' 台设备有线索</span>' +
         '<span style="font-size:11px;color:var(--text-muted);margin-left:6px">共 ' + totalLeads + ' 条待处理</span>' +
       '</div>' +
-      '<button onclick="_ttBatchPitchAll(this)" style="padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;background:rgba(245,158,11,.2);border:1px solid rgba(245,158,11,.4);color:#f59e0b;cursor:pointer;white-space:nowrap;flex-shrink:0">💰 批量发话术</button>';
+      '<button onclick="_ttBatchPitchAll(this)" style="padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;background:rgba(245,158,11,.2);border:1px solid rgba(245,158,11,.4);color:var(--amber);cursor:pointer;white-space:nowrap;flex-shrink:0">💰 批量发话术</button>';
   } else if (banner) {
     banner.style.display = 'none';
   }
@@ -1670,7 +1874,7 @@ function _ttShowPitchModal(leadName, previewText, charHint) {
           '</div>' +
           '<textarea class="tt-pitch-textarea" id="tt-pitch-text" oninput="_ttPitchCharCount()" placeholder="输入话术内容...">' + _escHtml(previewText) + '</textarea>' +
           ((!charHint || charHint.configured === false)
-            ? '<div style="font-size:10px;color:#f59e0b;margin-top:6px">⚠ 未配置 TG/WA，话术中无联系方式</div>'
+            ? '<div style="font-size:10px;color:var(--amber);margin-top:6px">⚠ 未配置 TG/WA，话术中无联系方式</div>'
             : '') +
         '</div>' +
         '<div class="tt-pitch-modal-foot">' +
@@ -1768,12 +1972,12 @@ async function _loadTtDeviceGrid() {
     } catch (fe) {
       clearTimeout(timer);
       const msg = fe.name === 'AbortError' ? '请求超时，点击 ⟳ 重试' : fe.message;
-      grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:#f87171;padding:24px;font-size:13px">' + msg + '</div>';
+      grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--red);padding:24px;font-size:13px">' + msg + '</div>';
       _ttGridLoading = false;
       return;
     }
     if (!resp.ok) {
-      grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:#f87171;padding:24px;font-size:13px">HTTP ' + resp.status + '</div>';
+      grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--red);padding:24px;font-size:13px">HTTP ' + resp.status + '</div>';
       _ttGridLoading = false;
       return;
     }
@@ -1827,7 +2031,7 @@ async function _loadTtDeviceGrid() {
         '</div>' +
         '<button onclick="_ttBatchPitchAll(this)" style="padding:6px 14px;font-size:12px;font-weight:600;' +
           'border-radius:6px;background:rgba(245,158,11,.2);border:1px solid rgba(245,158,11,.4);' +
-          'color:#f59e0b;cursor:pointer;white-space:nowrap;flex-shrink:0">💰 批量发话术</button>';
+          'color:var(--amber);cursor:pointer;white-space:nowrap;flex-shrink:0">💰 批量发话术</button>';
     } else if (banner) {
       banner.style.display = 'none';
     }
@@ -1836,7 +2040,7 @@ async function _loadTtDeviceGrid() {
     _ttLoadCardCronStatus();
   } catch (e) {
     const grid2 = document.getElementById('tt-device-grid');
-    if (grid2) grid2.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:#f87171;padding:24px;font-size:13px">\u5F02\u5E38: ' + e.message + '</div>';
+    if (grid2) grid2.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--red);padding:24px;font-size:13px">\u5F02\u5E38: ' + e.message + '</div>';
   }
   _ttGridLoading = false;
 }
@@ -1887,16 +2091,16 @@ async function _ttCheckAllReadiness() {
     const bVpn  = data.blocked_vpn || 0;
     const bAcc  = data.blocked_account || 0;
     const offline = data.offline_count || 0;
-    let html = `<span style="color:#22c55e;font-weight:600">✅ 就绪 ${ready}台</span>`;
-    if (bNet)  html += `&nbsp;&nbsp;<span style="color:#ef4444">❌ 无网络 ${bNet}台</span>`;
-    if (bVpn)  html += `&nbsp;&nbsp;<span style="color:#f59e0b">⚠️ 无VPN ${bVpn}台</span>`;
-    if (bAcc)  html += `&nbsp;&nbsp;<span style="color:#f59e0b">⚠️ 账号异常 ${bAcc}台</span>`;
+    let html = `<span style="color:var(--green-strong);font-weight:600">✅ 就绪 ${ready}台</span>`;
+    if (bNet)  html += `&nbsp;&nbsp;<span style="color:var(--red-strong)">❌ 无网络 ${bNet}台</span>`;
+    if (bVpn)  html += `&nbsp;&nbsp;<span style="color:var(--amber)">⚠️ 无VPN ${bVpn}台</span>`;
+    if (bAcc)  html += `&nbsp;&nbsp;<span style="color:var(--amber)">⚠️ 账号异常 ${bAcc}台</span>`;
     if (offline) html += `&nbsp;&nbsp;<span style="color:var(--text-muted)">○ 离线 ${offline}台</span>`;
     if (bar) bar.innerHTML = html;
     // 刷新卡片（此时缓存已更新，新卡片会显示就绪状态行）
     setTimeout(() => _loadTtDeviceGrid(), 400);
   } catch(e) {
-    if (bar) bar.innerHTML = '<span style="color:#f87171">检测失败: ' + e.message + '</span>';
+    if (bar) bar.innerHTML = '<span style="color:var(--red)">检测失败: ' + e.message + '</span>';
   }
 }
 
@@ -1930,7 +2134,7 @@ function _ttRenderCard(dev, isNew) {
   const badge = leadsCount > 0
     ? '<div class="tt-dev-badge">' + leadsCount + '</div>' : '';
   const repliedBadge = repliedCount > 0
-    ? '<div class="tt-dev-badge" style="background:#f59e0b;right:auto;left:6px;top:6px" title="' + repliedCount + '条有回复线索">&#128276; ' + repliedCount + '</div>'
+    ? '<div class="tt-dev-badge" style="background:var(--amber);right:auto;left:6px;top:6px" title="' + repliedCount + '条有回复线索">&#128276; ' + repliedCount + '</div>'
     : '';
 
   const statItems = [
@@ -1965,8 +2169,8 @@ function _ttRenderCard(dev, isNew) {
     '<span>' + phaseLabel + ' \u00B7 \u7B2C' + (dev.day !== undefined ? dev.day : '-') + '\u5929</span>' +
     '<span id="tt-card-cron-' + safeIdCard + '" class="tt-card-cron"></span>' +
     (dev.configured
-      ? '<span style="color:#22c55e;font-weight:600">\u2713 \u5DF2\u914D\u7F6E</span>'
-      : '<span style="color:#f59e0b">\u672A\u914D\u7F6E</span>') +
+      ? '<span style="color:var(--green-strong);font-weight:600">\u2713 \u5DF2\u914D\u7F6E</span>'
+      : '<span style="color:var(--amber)">\u672A\u914D\u7F6E</span>') +
   '</div>';
 
   // P6: 健康状态细化（在线但今日零活动 = 橙色警告）
@@ -1994,7 +2198,7 @@ function _ttRenderCard(dev, isNew) {
 
 function _ttReadinessRow(r) {
   if (!r) return '';
-  const icon = (ok) => ok ? '<span style="color:#22c55e">✅</span>' : '<span style="color:#ef4444">❌</span>';
+  const icon = (ok) => ok ? '<span style="color:var(--green-strong)">✅</span>' : '<span style="color:var(--red-strong)">❌</span>';
   const passed = r.passed;
   const rowColor = passed ? 'rgba(34,197,94,.08)' : 'rgba(239,68,68,.08)';
   const borderColor = passed ? 'rgba(34,197,94,.2)' : 'rgba(239,68,68,.2)';
@@ -2111,7 +2315,7 @@ function _ttBuildPanel(dev, deviceId) {
       '<input class="tt-ref-input" data-did="' + deviceId + '" data-field="' + app + '" data-ind="' + indId + '" type="text" value="' + val + '" placeholder="' + meta.placeholder + '"' +
         ' onblur="_ttSaveRef(this.dataset.did,this.dataset.field,this.value,this,this.dataset.ind)"' +
         ' onkeydown="if(event.key===\'Enter\')this.blur()">' +
-      (!isBase ? '<button onclick="_ttDelContact(\'' + deviceId + '\',\'' + app + '\',\'' + safeIdAttr + '\',\'' + indId + '\')" style="background:none;border:none;cursor:pointer;color:#ef4444;padding:0 4px;font-size:16px;line-height:1" title="删除此联系方式">×</button>' : '') +
+      (!isBase ? '<button onclick="_ttDelContact(\'' + deviceId + '\',\'' + app + '\',\'' + safeIdAttr + '\',\'' + indId + '\')" style="background:none;border:none;cursor:pointer;color:var(--red-strong);padding:0 4px;font-size:16px;line-height:1" title="删除此联系方式">×</button>' : '') +
     '</div>';
   });
   const algoColor = dev.algo_score >= 60 ? '#22c55e' : dev.algo_score >= 30 ? '#f59e0b' : '#94a3b8';
@@ -2124,13 +2328,13 @@ function _ttBuildPanel(dev, deviceId) {
   // 智能建议：根据设备实际状态给出最优下一步
   let suggestion = '';
   if (!online) {
-    suggestion = '<div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.25);border-radius:6px;padding:8px 10px;font-size:11px;color:#f87171;margin-bottom:12px">⚠ 设备离线，请检查 ADB 连接</div>';
+    suggestion = '<div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.25);border-radius:6px;padding:8px 10px;font-size:11px;color:var(--red);margin-bottom:12px">⚠ 设备离线，请检查 ADB 连接</div>';
   } else if (!hasActivity) {
     suggestion = '<div style="background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.25);border-radius:6px;padding:8px 10px;font-size:11px;color:#818cf8;margin-bottom:12px">📋 今日尚未启动 — 点下方「▶ 启动流程」开始工作</div>';
   } else if (!dev.configured) {
-    suggestion = '<div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.25);border-radius:6px;padding:8px 10px;font-size:11px;color:#f59e0b;margin-bottom:12px">💡 未配置引流账号，AI回复无法自动附加联系方式 — 请在下方填入 TG/WA/IG 等账号</div>';
+    suggestion = '<div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.25);border-radius:6px;padding:8px 10px;font-size:11px;color:var(--amber);margin-bottom:12px">💡 未配置引流账号，AI回复无法自动附加联系方式 — 请在下方填入 TG/WA/IG 等账号</div>';
   } else if ((dev.leads_count || 0) > 0) {
-    suggestion = '<div style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.25);border-radius:6px;padding:8px 10px;font-size:11px;color:#22c55e;margin-bottom:12px">🔥 有 ' + dev.leads_count + ' 条线索待转化 — 建议优先「💰 发话术」</div>';
+    suggestion = '<div style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.25);border-radius:6px;padding:8px 10px;font-size:11px;color:var(--green-strong);margin-bottom:12px">🔥 有 ' + dev.leads_count + ' 条线索待转化 — 建议优先「💰 发话术」</div>';
   }
 
   // 统计格子（可点击展开明细）
@@ -2161,7 +2365,7 @@ function _ttBuildPanel(dev, deviceId) {
       '<div class="ttp-hinfo">' +
         '<div class="ttp-name">' + _escHtml(alias) + '</div>' +
         '<div class="ttp-meta">' + phaseLabel + ' \u00B7 Day ' + (dev.day || '-') + ' \u00B7 ' +
-          (online ? '<span style="color:#22c55e">Online</span>' : '<span style="color:#ef4444">Offline</span>') +
+          (online ? '<span style="color:var(--green-strong)">Online</span>' : '<span style="color:var(--red-strong)">Offline</span>') +
         '</div>' +
       '</div>' +
       '<button class="ttp-close" onclick="_ttCloseDevicePanel()">\u2715</button>' +
@@ -2183,9 +2387,9 @@ function _ttBuildPanel(dev, deviceId) {
       // ── ZONE 1: 今日数据 (紧凑条形)
       '<div class="ttp-zone">' +
         '<div class="ttp-stats">' +
-          '<div class="ttp-st"><b style="color:#60a5fa">' + (dev.sessions_today || 0) + '</b><span>\u{1F4AC} \u4F1A\u8BDD</span></div>' +
+          '<div class="ttp-st"><b style="color:var(--blue-soft)">' + (dev.sessions_today || 0) + '</b><span>\u{1F4AC} \u4F1A\u8BDD</span></div>' +
           '<div class="ttp-st"><b style="color:#818cf8">' + (dev.today_watched || 0) + '</b><span>\u25B6 \u89C6\u9891</span></div>' +
-          '<div class="ttp-st"><b style="color:#22c55e">' + (dev.today_followed || 0) + '</b><span>\u{1F464} \u5173\u6CE8</span></div>' +
+          '<div class="ttp-st"><b style="color:var(--green-strong)">' + (dev.today_followed || 0) + '</b><span>\u{1F464} \u5173\u6CE8</span></div>' +
           '<div class="ttp-st"><b style="color:#f472b6">' + (dev.today_dms || 0) + '</b><span>\u{1F4E8} \u79C1\u4FE1</span></div>' +
           '<div class="ttp-st"><b style="color:' + algoColor + '">' + (dev.algo_score || '-') + '</b><span>\u26A1 \u7B97\u6CD5</span></div>' +
           '<div class="ttp-st"><b style="color:' + leadsColor + '">' + leadsCount + '</b><span>\u2B50 \u7EBF\u7D22</span></div>' +
@@ -2217,14 +2421,14 @@ function _ttBuildPanel(dev, deviceId) {
       // ── ZONE 3: 引流账号 (简洁)
       '<div class="ttp-zone">' +
         '<div class="ttp-zone-title">\u{1F517} \u5F15\u6D41\u8D26\u53F7' +
-          (dev.configured ? ' <span style="color:#22c55e;font-size:10px">\u2713</span>' : '') +
+          (dev.configured ? ' <span style="color:var(--green-strong);font-size:10px">\u2713</span>' : '') +
         '</div>' +
         _refRows +
         '<div id="ref-add-' + safeIdAttr + '" style="margin-top:6px">' +
           '<button onclick="_ttShowAddContact(\'' + deviceId + '\',\'' + safeIdAttr + '\',\'' + indId + '\')" ' +
             'class="ttp-small-btn" style="color:#818cf8;border-color:rgba(99,102,241,.3)">+ \u6DFB\u52A0</button>' +
           ' <button onclick="_ttApplyContactsAll(\'' + deviceId + '\',\'' + indId + '\')" ' +
-            'class="ttp-small-btn" style="color:#f59e0b;border-color:rgba(245,158,11,.3)">\u2197 \u540C\u6B65\u6240\u6709</button>' +
+            'class="ttp-small-btn" style="color:var(--amber);border-color:rgba(245,158,11,.3)">\u2197 \u540C\u6B65\u6240\u6709</button>' +
         '</div>' +
         '<div style="font-size:10px;min-height:1px;margin-top:4px;color:var(--text-muted)" id="' + indId + '"></div>' +
       '</div>' +
@@ -2272,9 +2476,9 @@ async function _ttLoadDeviceTagsPanel(deviceId, safeId) {
   } catch(e) {
     var em = String((e && e.message) || e || '');
     if (em.indexOf('\u8BBE\u5907\u4E0D\u5B58\u5728') >= 0) {
-      el.innerHTML = '<span style="color:#f87171;font-size:11px;line-height:1.4">\u672A\u5728\u53EF\u8FBE Worker \u4E0A\u5B9A\u4F4D\u8BE5\u673A\uFF08\u8282\u70B9\u79BB\u7EBF\u6216\u672A\u8F6C\u53D1\uFF09\uFF0C\u6807\u7B7E\u6682\u4E0D\u53EF\u7528\u3002</span>';
+      el.innerHTML = '<span style="color:var(--red);font-size:11px;line-height:1.4">\u672A\u5728\u53EF\u8FBE Worker \u4E0A\u5B9A\u4F4D\u8BE5\u673A\uFF08\u8282\u70B9\u79BB\u7EBF\u6216\u672A\u8F6C\u53D1\uFF09\uFF0C\u6807\u7B7E\u6682\u4E0D\u53EF\u7528\u3002</span>';
     } else {
-      el.innerHTML = '<span style="color:#ef4444">\u8BFB\u53D6\u5931\u8D25</span>';
+      el.innerHTML = '<span style="color:var(--red-strong)">\u8BFB\u53D6\u5931\u8D25</span>';
     }
   }
 }
@@ -2325,12 +2529,12 @@ async function _ttLoadHealthPanel(deviceId, safeId) {
       '</div>';
     });
     html += '</div></div>';
-    if (d.disconnects_24h > 0) html += '<div style="font-size:10px;color:#f59e0b;margin-top:2px">\u26A0 24h\u5185\u65AD\u8FDE ' + d.disconnects_24h + ' \u6B21</div>';
-    if (d.latency_ms > 500) html += '<div style="font-size:10px;color:#ef4444;margin-top:2px">\u26A0 ADB\u5EF6\u8FDF ' + d.latency_ms + 'ms</div>';
+    if (d.disconnects_24h > 0) html += '<div style="font-size:10px;color:var(--amber);margin-top:2px">\u26A0 24h\u5185\u65AD\u8FDE ' + d.disconnects_24h + ' \u6B21</div>';
+    if (d.latency_ms > 500) html += '<div style="font-size:10px;color:var(--red-strong);margin-top:2px">\u26A0 ADB\u5EF6\u8FDF ' + d.latency_ms + 'ms</div>';
     // 低于阈值时显示修复按钮
     if (total < 60) {
       html += '<div style="margin-top:6px;display:flex;gap:6px">' +
-        '<button class="ttp-small-btn" style="color:#f59e0b;border-color:rgba(245,158,11,.3);flex:1" ' +
+        '<button class="ttp-small-btn" style="color:var(--amber);border-color:rgba(245,158,11,.3);flex:1" ' +
           'onclick="_ttAutoRecover(\'' + deviceId + '\',\'' + safeId + '\')">\u{1F527} \u4E00\u952E\u4FEE\u590D</button>' +
         '<button class="ttp-small-btn" style="color:#818cf8;border-color:rgba(99,102,241,.3)" ' +
           'onclick="_ttLoadHealthPanel(\'' + deviceId + '\',\'' + safeId + '\')">\u21BB</button>' +
@@ -2341,9 +2545,9 @@ async function _ttLoadHealthPanel(deviceId, safeId) {
   } catch(e) {
     var em = String((e && e.message) || e || '');
     if (em.indexOf('\u8BBE\u5907\u4E0D\u5B58\u5728') >= 0) {
-      el.innerHTML = '<span style="color:#f87171;font-size:11px;line-height:1.4">\u672A\u5728\u53EF\u8FBE Worker \u4E0A\u5B9A\u4F4D\u8BE5\u673A\uFF08\u8282\u70B9\u79BB\u7EBF\u6216\u672A\u8F6C\u53D1\uFF09\uFF0C\u5065\u5EB7\u5EA6\u6682\u4E0D\u53EF\u7528\u3002</span>';
+      el.innerHTML = '<span style="color:var(--red);font-size:11px;line-height:1.4">\u672A\u5728\u53EF\u8FBE Worker \u4E0A\u5B9A\u4F4D\u8BE5\u673A\uFF08\u8282\u70B9\u79BB\u7EBF\u6216\u672A\u8F6C\u53D1\uFF09\uFF0C\u5065\u5EB7\u5EA6\u6682\u4E0D\u53EF\u7528\u3002</span>';
     } else {
-      el.innerHTML = '<span style="color:#ef4444">\u52A0\u8F7D\u5931\u8D25</span>';
+      el.innerHTML = '<span style="color:var(--red-strong)">\u52A0\u8F7D\u5931\u8D25</span>';
     }
   }
 }
@@ -2370,7 +2574,7 @@ async function _ttAutoRecover(deviceId, safeId) {
     // 修复后刷新健康评分
     setTimeout(function() { _ttLoadHealthPanel(deviceId, safeId); }, 2000);
   } catch(e) {
-    log.innerHTML = '<div style="margin-top:4px;font-size:11px;color:#ef4444">\u274C ' + e.message + '</div>';
+    log.innerHTML = '<div style="margin-top:4px;font-size:11px;color:var(--red-strong)">\u274C ' + e.message + '</div>';
   }
 }
 
@@ -2555,7 +2759,7 @@ async function _ttLoadLeadsPanel(deviceId, append) {
     // 加载 cron 倒计时（仅首次加载）
     if (!append) _ttLoadCronStatus();
   } catch(e) {
-    if (!append) body.innerHTML = '<div style="color:#f87171;font-size:12px;padding:30px;text-align:center">加载失败<br><small>' + _escHtml(e.message) + '</small></div>';
+    if (!append) body.innerHTML = '<div style="color:var(--red);font-size:12px;padding:30px;text-align:center">加载失败<br><small>' + _escHtml(e.message) + '</small></div>';
   }
 }
 
@@ -2584,7 +2788,7 @@ async function _ttLoadCronStatus() {
       // 倒计时更新
       var _cronTimer = setInterval(function() {
         secs--;
-        if (secs <= 0) { clearInterval(_cronTimer); el.textContent = '⏰ 检查中...'; el.style.color='#22c55e'; return; }
+        if (secs <= 0) { clearInterval(_cronTimer); el.textContent = '⏰ 检查中...'; el.style.color='var(--green-strong)'; return; }
         var m2 = Math.floor(secs/60), s2 = secs%60;
         el.textContent = '⏰ ' + m2 + ':' + String(s2).padStart(2,'0') + ' 后检查';
         el.style.color = secs < 60 ? '#22c55e' : 'rgba(255,255,255,.3)';
@@ -2627,16 +2831,16 @@ function _ttRenderLeadsPanel(el, allLeads, deviceId) {
   if (statsEl) {
     statsEl.innerHTML =
       '<span>总计 <b style="color:var(--text-main)">' + allLeads.length + '</b></span>' +
-      (repliedCount > 0 ? '<span>&#128276; 有回复 <b style="color:#f59e0b">' + repliedCount + '</b></span>' : '') +
-      (needsReplyCount > 0 ? '<span>&#128200; 待跟进 <b style="color:#22c55e">' + needsReplyCount + '</b></span>' : '') +
-      (qualifiedCount > 0 ? '<span>&#11088; 已合格 <b style="color:#a78bfa">' + qualifiedCount + '</b></span>' : '');
+      (repliedCount > 0 ? '<span>&#128276; 有回复 <b style="color:var(--amber)">' + repliedCount + '</b></span>' : '') +
+      (needsReplyCount > 0 ? '<span>&#128200; 待跟进 <b style="color:var(--green-strong)">' + needsReplyCount + '</b></span>' : '') +
+      (qualifiedCount > 0 ? '<span>&#11088; 已合格 <b style="color:var(--violet-soft)">' + qualifiedCount + '</b></span>' : '');
   }
 
   // ── 动态更新"有回复"标签徽章 ──
   var repliedTab = document.querySelector('.tt-lp-tab[data-f="replied"]');
   if (repliedTab) {
     repliedTab.innerHTML = '&#128276; 有回复' + (repliedCount > 0
-      ? ' <span style="background:#f59e0b;color:#000;border-radius:8px;padding:0 5px;font-size:10px;font-weight:700;margin-left:2px">' + repliedCount + '</span>'
+      ? ' <span style="background:var(--amber);color:#000;border-radius:8px;padding:0 5px;font-size:10px;font-weight:700;margin-left:2px">' + repliedCount + '</span>'
       : '');
   }
 
@@ -2680,7 +2884,7 @@ function _ttRenderLeadsPanel(el, allLeads, deviceId) {
           ? '<button onclick="_ttBatchAiReply(\'' + _escHtml(deviceId) + '\')" style="font-size:11px;padding:5px 12px;border-radius:6px;background:rgba(139,92,246,.2);border:1px solid rgba(139,92,246,.4);color:#c4b5fd;cursor:pointer;white-space:nowrap">&#129302; 批量AI回复</button>'
           : '') +
         (needsReplyLeads.length > 0
-          ? '<button onclick="_ttBatchQualify(\'' + _escHtml(deviceId) + '\')" style="font-size:11px;padding:5px 12px;border-radius:6px;background:rgba(34,197,94,.15);border:1px solid rgba(34,197,94,.3);color:#22c55e;cursor:pointer;white-space:nowrap">&#11088; 批量升格</button>'
+          ? '<button onclick="_ttBatchQualify(\'' + _escHtml(deviceId) + '\')" style="font-size:11px;padding:5px 12px;border-radius:6px;background:rgba(34,197,94,.15);border:1px solid rgba(34,197,94,.3);color:var(--green-strong);cursor:pointer;white-space:nowrap">&#11088; 批量升格</button>'
           : '') +
         '<button onclick="_ttAiRescore(this,\'' + _escHtml(deviceId) + '\')" style="font-size:11px;padding:5px 12px;border-radius:6px;background:rgba(99,102,241,.15);border:1px solid rgba(99,102,241,.3);color:#a5b4fc;cursor:pointer;white-space:nowrap">&#129504; AI重评</button>' +
       '</div>';
@@ -2716,7 +2920,7 @@ function _ttRenderLeadsPanel(el, allLeads, deviceId) {
     var border = overridden ? 'rgba(34,197,94,.3)' : (isW03 ? 'rgba(96,165,250,.25)' : 'rgba(255,255,255,.1)');
     var color = overridden ? '#86efac' : (isW03 ? '#93c5fd' : 'var(--text-muted)');
     var icon = overridden ? '&#11088; ' : (isW03 ? '&#127760; ' : '&#128241; ');
-    var nodeTag = isW03 ? '<span style="font-size:7px;background:rgba(96,165,250,.2);color:#60a5fa;border-radius:3px;padding:0 3px;margin-left:2px">W03</span>' : '';
+    var nodeTag = isW03 ? '<span style="font-size:7px;background:rgba(96,165,250,.2);color:var(--blue-soft);border-radius:3px;padding:0 3px;margin-left:2px">W03</span>' : '';
     return '<span style="font-size:8px;padding:1px 5px;border-radius:8px;background:' + bg + ';border:1px solid ' + border + ';color:' + color + ';flex-shrink:0;display:inline-flex;align-items:center;gap:2px">' +
       icon + _escHtml(alias) + nodeTag + '</span>';
   };
@@ -2742,7 +2946,7 @@ function _ttRenderLeadsPanel(el, allLeads, deviceId) {
       // ══ 回复模式：消息气泡 + AI回复为主操作 + intent 徽章 ══
       var msgBubble = lastMsg
         ? '<div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);border-radius:0 8px 8px 8px;padding:8px 10px;margin:6px 0;font-size:12px;color:var(--text-main);line-height:1.5">' +
-            '<div style="font-size:9px;color:#f59e0b;margin-bottom:3px">&#128172; 对方消息</div>' +
+            '<div style="font-size:9px;color:var(--amber);margin-bottom:3px">&#128172; 对方消息</div>' +
             _escHtml(lastMsg.substring(0, 120)) + (lastMsg.length > 120 ? '...' : '') +
           '</div>'
         : '<div style="font-size:11px;color:var(--text-muted);font-style:italic;padding:4px 0">等待下次收件箱检查获取消息...</div>';
@@ -3049,7 +3253,7 @@ async function _ttToggleHistory(btn) {
     btn.dataset.open = '1';
     btn.innerHTML = '&#128172; 收起';
   } catch(e) {
-    container.innerHTML = '<div style="color:#f87171;font-size:11px;padding:8px">加载失败: ' + _escHtml(e.message || '') + '</div>';
+    container.innerHTML = '<div style="color:var(--red);font-size:11px;padding:8px">加载失败: ' + _escHtml(e.message || '') + '</div>';
   } finally {
     btn.disabled = false;
   }
@@ -3084,7 +3288,7 @@ function _ttRenderHistory(el, history) {
         '<div style="font-size:9px;color:var(--text-muted);margin-top:2px;' + (isIn ? '' : 'text-align:right') + '">' +
           icon + ' ' + (msg.action_label || msg.action) +
           (msg.display_time ? ' &nbsp;·&nbsp; ' + _escHtml(msg.display_time) : '') +
-          (msg.intent && isIn ? ' &nbsp;·&nbsp; <span style="color:#f59e0b">' + _escHtml(msg.intent) + '</span>' : '') +
+          (msg.intent && isIn ? ' &nbsp;·&nbsp; <span style="color:var(--amber)">' + _escHtml(msg.intent) + '</span>' : '') +
         '</div>' +
       '</div>';
   });
@@ -3184,12 +3388,12 @@ async function _ttStatDetail(stat, deviceId, el) {
         return '<div style="display:flex;gap:8px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:11px">' +
           '<span style="color:var(--text-muted);flex-shrink:0;width:40px">' + (item.time || '') + '</span>' +
           '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-main)">' + _escHtml(item.label || item.username || item.content || '-') + '</span>' +
-          (item.status ? '<span style="color:#22c55e;font-size:10px;flex-shrink:0">' + item.status + '</span>' : '') +
+          (item.status ? '<span style="color:var(--green-strong);font-size:10px;flex-shrink:0">' + item.status + '</span>' : '') +
         '</div>';
       }).join('') +
     '</div>';
   } catch(e) {
-    detailEl.innerHTML = '<div style="font-size:11px;color:#f87171;padding:4px 0">无法加载: ' + e.message + '</div>';
+    detailEl.innerHTML = '<div style="font-size:11px;color:var(--red);padding:4px 0">无法加载: ' + e.message + '</div>';
   }
 }
 
@@ -3299,7 +3503,7 @@ async function _ttPitchOneLead(leadId, name, deviceId, btn) {
       body: JSON.stringify(body)
     }).then(function(r) { return r.json(); });
     if (r.ok !== false) {
-      if (btn) { btn.textContent = '已发 ✓'; btn.style.color = '#22c55e'; btn.style.borderColor = '#22c55e'; }
+      if (btn) { btn.textContent = '已发 ✓'; btn.style.color = 'var(--green-strong)'; btn.style.borderColor = 'var(--green-strong)'; }
       // 标记该行
       const row = document.getElementById('tt-lead-row-' + leadId);
       if (row) row.style.opacity = '0.6';
@@ -3327,7 +3531,7 @@ async function _ttSaveRef(deviceId, field, value, inputEl, indId) {
       body: JSON.stringify(body)
     });
     if (r.ok) {
-      if (ind) { ind.textContent = '已保存 ✓'; ind.style.color = '#22c55e'; setTimeout(function() { if (ind) ind.textContent = ''; }, 2000); }
+      if (ind) { ind.textContent = '已保存 ✓'; ind.style.color = 'var(--green-strong)'; setTimeout(function() { if (ind) ind.textContent = ''; }, 2000); }
       // 更新缓存（通用联系方式）
       if (window._ttDevicesCache && window._ttDevicesCache[deviceId]) {
         const dev = window._ttDevicesCache[deviceId];
@@ -3342,10 +3546,10 @@ async function _ttSaveRef(deviceId, field, value, inputEl, indId) {
         dev.configured = Object.values(dev.contacts).some(function(v) { return !!v; });
       }
     } else {
-      if (ind) { ind.textContent = '保存失败'; ind.style.color = '#f87171'; }
+      if (ind) { ind.textContent = '保存失败'; ind.style.color = 'var(--red)'; }
     }
   } catch(e) {
-    if (ind) { ind.textContent = '网络错误'; ind.style.color = '#f87171'; }
+    if (ind) { ind.textContent = '网络错误'; ind.style.color = 'var(--red)'; }
   }
 }
 
@@ -3395,7 +3599,7 @@ function _ttCancelAddContact(deviceId, safeId, indId) {
       'style="background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.3);border-radius:5px;padding:4px 12px;color:#818cf8;font-size:11px;cursor:pointer">+ 添加应用</button>' +
     ' <button onclick="_ttApplyContactsAll(\'' + deviceId + '\',\'' + indId + '\')" ' +
       'title="同步到所有设备" ' +
-      'style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);border-radius:5px;padding:4px 12px;color:#f59e0b;font-size:11px;cursor:pointer">\u2197 同步所有</button>';
+      'style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);border-radius:5px;padding:4px 12px;color:var(--amber);font-size:11px;cursor:pointer">\u2197 同步所有</button>';
 }
 
 // 确认添加新联系方式
@@ -3446,7 +3650,7 @@ async function _ttApplyContactsAll(deviceId, indId) {
     const j = r.ok ? await r.json() : null;
     if (r.ok && j && j.ok) {
       const n = j.updated || '?';
-      if (ind) { ind.textContent = '已应用到 ' + n + ' 台设备 ✓'; ind.style.color = '#22c55e'; setTimeout(function() { if (ind) ind.textContent = ''; }, 3000); }
+      if (ind) { ind.textContent = '已应用到 ' + n + ' 台设备 ✓'; ind.style.color = 'var(--green-strong)'; setTimeout(function() { if (ind) ind.textContent = ''; }, 3000); }
       _toast('联系方式已应用到 ' + n + ' 台设备', 'success');
       // 更新本地缓存中所有设备的联系方式
       if (window._ttDevicesCache) {
@@ -3459,11 +3663,11 @@ async function _ttApplyContactsAll(deviceId, indId) {
         });
       }
     } else {
-      if (ind) { ind.textContent = '应用失败'; ind.style.color = '#f87171'; }
+      if (ind) { ind.textContent = '应用失败'; ind.style.color = 'var(--red)'; }
       _toast('应用失败', 'error');
     }
   } catch(e) {
-    if (ind) { ind.textContent = '网络错误'; ind.style.color = '#f87171'; }
+    if (ind) { ind.textContent = '网络错误'; ind.style.color = 'var(--red)'; }
     _toast('网络错误', 'error');
   }
 }
@@ -4246,7 +4450,7 @@ async function _ttOpenFlowConfig(deviceId) {
   var titleEl = document.getElementById('tt-flow-dev-name');
   if (titleEl) {
     if (_ttFlowBatchMode) {
-      titleEl.innerHTML = '批量模式 · <b style="color:#f59e0b">' + _ttFlowBatchCount + '</b> 台在线设备';
+      titleEl.innerHTML = '批量模式 · <b style="color:var(--amber)">' + _ttFlowBatchCount + '</b> 台在线设备';
     } else {
       var alias = dev.alias || deviceId.substring(0, 8);
       var score = dev.algo_score || 0;
@@ -4687,7 +4891,7 @@ function _ttFlowRenderCards() {
       (isSel ? ' selected' : '') +
       '" onclick="_ttFlowApplyPreset(\'' + k + '\')">' +
       (isRec && !isSel ? '<div class="ttf-card-badge">推荐</div>' : '') +
-      (isSel ? '<div class="ttf-card-badge" style="background:linear-gradient(135deg,#22c55e,#16a34a)">已选</div>' : '') +
+      (isSel ? '<div class="ttf-card-badge" style="background:linear-gradient(135deg,var(--green-strong),var(--green-deep))">已选</div>' : '') +
       '<div class="ttf-card-icon">' + emoji + '</div>' +
       '<div class="ttf-card-name">' + label + '</div>' +
       '<div class="ttf-card-desc">' + (p.desc || '') + '</div>' +
@@ -5224,7 +5428,7 @@ async function _ttShowABPanel() {
         var best = a.best_variant || '';
         html += '<div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:12px;margin-bottom:10px">' +
           '<div style="font-size:13px;font-weight:600;color:#e2e8f0;margin-bottom:6px">' + _escHtml(name) +
-            (best ? ' <span style="font-size:10px;color:#22c55e">\u2605 \u6700\u4F18: ' + _escHtml(best) + '</span>' : '') +
+            (best ? ' <span style="font-size:10px;color:var(--green-strong)">\u2605 \u6700\u4F18: ' + _escHtml(best) + '</span>' : '') +
           '</div>';
         Object.keys(vars).forEach(function(vk) {
           var row = vars[vk] || {};
@@ -5233,18 +5437,18 @@ async function _ttShowABPanel() {
           var rate = sent ? Math.round(rep / sent * 1000) / 10 : 0;
           html += '<div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.04)">' +
             '<span style="color:#a5b4fc">' + _escHtml(vk) + '</span>' +
-            '<span style="color:#94a3b8">\u53D1 ' + sent + ' / \u56DE ' + rep + ' <b style="color:#22c55e">' + rate + '%</b></span>' +
+            '<span style="color:#94a3b8">\u53D1 ' + sent + ' / \u56DE ' + rep + ' <b style="color:var(--green-strong)">' + rate + '%</b></span>' +
           '</div>';
         });
         html += '</div>';
       } catch(e2) {
-        html += '<div style="color:#ef4444;font-size:11px">' + _escHtml(name) + ': ' + e2.message + '</div>';
+        html += '<div style="color:var(--red-strong);font-size:11px">' + _escHtml(name) + ': ' + e2.message + '</div>';
       }
     }
     body.innerHTML = html;
   } catch(e) {
     var b = document.getElementById('ab-body');
-    if (b) b.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px">' + e.message + '</div>';
+    if (b) b.innerHTML = '<div style="color:var(--red-strong);text-align:center;padding:40px">' + e.message + '</div>';
   }
 }
 
@@ -5287,8 +5491,8 @@ async function _ttShowWorkerLoad() {
 
     var html = '<div class="cvf-kpi-row" style="grid-template-columns:repeat(3,1fr)">' +
       '<div class="cvf-kpi"><div class="cvf-kpi-num" style="color:#818cf8">' + keys.length + '</div><div class="cvf-kpi-label">Worker \u8282\u70B9</div></div>' +
-      '<div class="cvf-kpi"><div class="cvf-kpi-num" style="color:#60a5fa">' + totalDevices + '</div><div class="cvf-kpi-label">\u603B\u8BBE\u5907</div></div>' +
-      '<div class="cvf-kpi"><div class="cvf-kpi-num" style="color:#f59e0b">' + totalTasks + '</div><div class="cvf-kpi-label">\u6D3B\u8DC3\u4EFB\u52A1</div></div>' +
+      '<div class="cvf-kpi"><div class="cvf-kpi-num" style="color:var(--blue-soft)">' + totalDevices + '</div><div class="cvf-kpi-label">\u603B\u8BBE\u5907</div></div>' +
+      '<div class="cvf-kpi"><div class="cvf-kpi-num" style="color:var(--amber)">' + totalTasks + '</div><div class="cvf-kpi-label">\u6D3B\u8DC3\u4EFB\u52A1</div></div>' +
     '</div>';
 
     html += '<div style="display:grid;gap:8px">';
@@ -5308,8 +5512,8 @@ async function _ttShowWorkerLoad() {
           '<span style="font-size:10px;color:#64748b;margin-left:auto">' + (h.host_ip || '') + ':' + (h.port || 8000) + '</span>' +
         '</div>' +
         '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">' +
-          '<div style="text-align:center"><div style="font-size:16px;font-weight:700;color:#60a5fa">' + devCount + '</div><div style="font-size:9px;color:#64748b">\u8BBE\u5907</div></div>' +
-          '<div style="text-align:center"><div style="font-size:16px;font-weight:700;color:#f59e0b">' + (h.tasks_active||0) + '</div><div style="font-size:9px;color:#64748b">\u4EFB\u52A1</div></div>' +
+          '<div style="text-align:center"><div style="font-size:16px;font-weight:700;color:var(--blue-soft)">' + devCount + '</div><div style="font-size:9px;color:#64748b">\u8BBE\u5907</div></div>' +
+          '<div style="text-align:center"><div style="font-size:16px;font-weight:700;color:var(--amber)">' + (h.tasks_active||0) + '</div><div style="font-size:9px;color:#64748b">\u4EFB\u52A1</div></div>' +
           '<div style="text-align:center"><div style="font-size:16px;font-weight:700;color:' + cpuColor + '">' + Math.round(cpu) + '%</div><div style="font-size:9px;color:#64748b">CPU</div></div>' +
           '<div style="text-align:center"><div style="font-size:16px;font-weight:700;color:' + memColor + '">' + Math.round(mem) + '%</div><div style="font-size:9px;color:#64748b">\u5185\u5B58</div></div>' +
         '</div>' +
@@ -5345,7 +5549,7 @@ async function _ttShowWorkerLoad() {
     body.innerHTML = html;
   } catch(e) {
     var b = document.getElementById('wl-body');
-    if (b) b.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px">' + e.message + '</div>';
+    if (b) b.innerHTML = '<div style="color:var(--red-strong);text-align:center;padding:40px">' + e.message + '</div>';
   }
 }
 
@@ -5381,7 +5585,7 @@ async function _ttShowContactsEnrichedProbe() {
     var html = '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:12px;font-size:11px">' +
       '<span style="color:#94a3b8">\u8017\u65F6 <b style="color:#e2e8f0">' + (r.elapsed_ms != null ? r.elapsed_ms : '-') + '</b> ms</span>' +
       '<span style="padding:3px 10px;border-radius:999px;font-size:10px;font-weight:600;' +
-        (anyOk ? 'background:rgba(34,197,94,.12);color:#4ade80' : 'background:rgba(245,158,11,.12);color:#fbbf24') + '">' +
+        (anyOk ? 'background:rgba(34,197,94,.12);color:var(--green-soft)' : 'background:rgba(245,158,11,.12);color:#fbbf24') + '">' +
         (anyOk ? '\u81F3\u5C11\u4E00\u8282\u70B9\u5DF2\u58F0\u660E enriched' : '\u672A\u53D1\u73B0 enriched\u58F0\u660E\uFF08\u8BF7\u5347\u7EA7 Worker\uFF09') +
       '</span>' +
       '<button type="button" class="ttp-small-btn" style="margin-left:auto" onclick="_ttShowContactsEnrichedProbe()">\u21BB \u5237\u65B0</button>' +
@@ -5392,13 +5596,13 @@ async function _ttShowContactsEnrichedProbe() {
       var st = d.http_status != null ? d.http_status : '\u2014';
       var err = d.error ? String(d.error) : '';
       var paths = d.openapi_paths_with_contact || [];
-      var note = err ? ('<span style="color:#f87171">' + _escHtml(err) + '</span>') : (paths.length
+      var note = err ? ('<span style="color:var(--red)">' + _escHtml(err) + '</span>') : (paths.length
         ? '<span style="opacity:.9">' + paths.slice(0, 5).map(function(p) { return _escHtml(p); }).join('<br>') + (paths.length > 5 ? '<br>\u2026' : '') + '</span>'
         : '\u2014');
       return '<tr>' +
         '<td style="padding:8px 10px;font-weight:600;color:#e2e8f0;vertical-align:top;white-space:nowrap">' + label + '</td>' +
         '<td style="padding:8px 10px;font-size:10px;word-break:break-all;color:#94a3b8;vertical-align:top">' + _escHtml(d.base || '') + '</td>' +
-        '<td style="padding:8px 10px;text-align:center;vertical-align:top">' + (ok ? '<span style="color:#22c55e;font-weight:700">\u2713</span>' : '<span style="color:#f87171;font-weight:700">\u2717</span>') + '</td>' +
+        '<td style="padding:8px 10px;text-align:center;vertical-align:top">' + (ok ? '<span style="color:var(--green-strong);font-weight:700">\u2713</span>' : '<span style="color:var(--red);font-weight:700">\u2717</span>') + '</td>' +
         '<td style="padding:8px 10px;text-align:center;vertical-align:top">' + st + '</td>' +
         '<td style="padding:8px 10px;font-size:10px;color:#64748b;vertical-align:top;line-height:1.45">' + note + '</td>' +
       '</tr>';
@@ -5423,7 +5627,7 @@ async function _ttShowContactsEnrichedProbe() {
   } catch(e) {
     var b = document.getElementById('probe-ce-body');
     if (b) {
-      b.innerHTML = '<div style="color:#f87171;text-align:center;padding:28px;font-size:12px">' + _escHtml(e.message || String(e)) + '</div>' +
+      b.innerHTML = '<div style="color:var(--red);text-align:center;padding:28px;font-size:12px">' + _escHtml(e.message || String(e)) + '</div>' +
         '<div style="text-align:center;margin-top:8px"><button type="button" class="ttp-small-btn" onclick="_ttShowContactsEnrichedProbe()">\u91CD\u8BD5</button></div>';
     }
   }
@@ -5444,7 +5648,7 @@ async function _ttShowConversionFunnel() {
       '<div class="ttp-modal-header">' +
         '<span style="font-size:20px">\u{1F3AF}</span>' +
         '<div class="ttp-modal-title">\u5168\u94FE\u8DEF\u8F6C\u5316\u6F0F\u6597</div>' +
-        '<button class="ttp-small-btn" style="margin-left:auto;margin-right:4px;color:#22c55e;border-color:rgba(34,197,94,.3)" onclick="_ttExportFunnel()" title="\u5BFC\u51FA\u6570\u636E">\u{1F4E5} \u5BFC\u51FA</button>' +
+        '<button class="ttp-small-btn" style="margin-left:auto;margin-right:4px;color:var(--green-strong);border-color:rgba(34,197,94,.3)" onclick="_ttExportFunnel()" title="\u5BFC\u51FA\u6570\u636E">\u{1F4E5} \u5BFC\u51FA</button>' +
         '<button class="ttp-modal-close" onclick="_ttCloseModal()">\u2715</button>' +
       '</div>' +
       '<div class="ttp-modal-body" id="cvf-body" style="min-height:420px">' +
@@ -5466,10 +5670,10 @@ async function _ttShowConversionFunnel() {
     var topConverted = stages[6] ? stages[6].value : 0;
     var overallRate = topWatched > 0 ? (topConverted / topWatched * 100).toFixed(2) : '0';
     var kpiHTML = '<div class="cvf-kpi-row">' +
-      '<div class="cvf-kpi"><div class="cvf-kpi-num" style="color:#8b5cf6">' + topWatched + '</div><div class="cvf-kpi-label">\u603B\u89C6\u9891</div></div>' +
-      '<div class="cvf-kpi"><div class="cvf-kpi-num" style="color:#f59e0b">' + (r.total_dms || 0) + '</div><div class="cvf-kpi-label">\u603B\u79C1\u4FE1</div></div>' +
-      '<div class="cvf-kpi"><div class="cvf-kpi-num" style="color:#22c55e">' + (r.leads_responded || 0) + '</div><div class="cvf-kpi-label">\u5DF2\u56DE\u590D</div></div>' +
-      '<div class="cvf-kpi"><div class="cvf-kpi-num" style="color:#ef4444">' + topConverted + '</div><div class="cvf-kpi-label">\u5DF2\u8F6C\u5316</div></div>' +
+      '<div class="cvf-kpi"><div class="cvf-kpi-num" style="color:var(--violet)">' + topWatched + '</div><div class="cvf-kpi-label">\u603B\u89C6\u9891</div></div>' +
+      '<div class="cvf-kpi"><div class="cvf-kpi-num" style="color:var(--amber)">' + (r.total_dms || 0) + '</div><div class="cvf-kpi-label">\u603B\u79C1\u4FE1</div></div>' +
+      '<div class="cvf-kpi"><div class="cvf-kpi-num" style="color:var(--green-strong)">' + (r.leads_responded || 0) + '</div><div class="cvf-kpi-label">\u5DF2\u56DE\u590D</div></div>' +
+      '<div class="cvf-kpi"><div class="cvf-kpi-num" style="color:var(--red-strong)">' + topConverted + '</div><div class="cvf-kpi-label">\u5DF2\u8F6C\u5316</div></div>' +
       '<div class="cvf-kpi"><div class="cvf-kpi-num" style="color:' + (parseFloat(overallRate) >= 1 ? '#22c55e' : '#f59e0b') + '">' + overallRate + '%</div><div class="cvf-kpi-label">\u603B\u8F6C\u5316\u7387</div></div>' +
     '</div>';
 
@@ -5499,7 +5703,7 @@ async function _ttShowConversionFunnel() {
         '<div class="cvf-section-title">\u{1F4AC} \u5BF9\u8BDD\u6DF1\u5EA6\u7EDF\u8BA1</div>' +
         '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">' +
           '<div class="cvf-mini-kpi">' +
-            '<span style="color:#60a5fa;font-weight:700;font-size:16px">' + convStats.total + '</span>' +
+            '<span style="color:var(--blue-soft);font-weight:700;font-size:16px">' + convStats.total + '</span>' +
             '<span style="font-size:10px;color:#64748b">\u603B\u5BF9\u8BDD</span>' +
           '</div>' +
           '<div class="cvf-mini-kpi">' +
@@ -5507,7 +5711,7 @@ async function _ttShowConversionFunnel() {
             '<span style="font-size:10px;color:#64748b">\u6DF1\u5EA6\u5BF9\u8BDD(\u22655\u8F6E)</span>' +
           '</div>' +
           '<div class="cvf-mini-kpi">' +
-            '<span style="color:#22c55e;font-weight:700;font-size:16px">' + convStats.replied + ' <small style="font-size:10px;color:#64748b">(' + (convStats.reply_rate||0) + '%)</small></span>' +
+            '<span style="color:var(--green-strong);font-weight:700;font-size:16px">' + convStats.replied + ' <small style="font-size:10px;color:#64748b">(' + (convStats.reply_rate||0) + '%)</small></span>' +
             '<span style="font-size:10px;color:#64748b">\u6709\u7528\u6237\u56DE\u590D</span>' +
           '</div>' +
         '</div>' +
@@ -5532,9 +5736,9 @@ async function _ttShowConversionFunnel() {
         var drColor = d.dm_rate >= 20 ? '#22c55e' : d.dm_rate >= 10 ? '#f59e0b' : '#94a3b8';
         devHTML += '<tr>' +
           '<td style="color:#e2e8f0">' + _escHtml(d.alias) + '</td>' +
-          '<td style="text-align:center;color:#8b5cf6">' + d.watched + '</td>' +
-          '<td style="text-align:center;color:#3b82f6">' + d.followed + '</td>' +
-          '<td style="text-align:center;color:#f59e0b">' + d.dms + '</td>' +
+          '<td style="text-align:center;color:var(--violet)">' + d.watched + '</td>' +
+          '<td style="text-align:center;color:var(--blue-strong)">' + d.followed + '</td>' +
+          '<td style="text-align:center;color:var(--amber)">' + d.dms + '</td>' +
           '<td style="text-align:center"><span style="color:' + frColor + ';font-weight:600">' + d.follow_rate + '%</span></td>' +
           '<td style="text-align:center"><span style="color:' + drColor + ';font-weight:600">' + d.dm_rate + '%</span></td>' +
         '</tr>';
@@ -5545,7 +5749,7 @@ async function _ttShowConversionFunnel() {
     body.innerHTML = kpiHTML + funnelHTML + convHTML + devHTML;
   } catch(e) {
     var b = document.getElementById('cvf-body');
-    if (b) b.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px">' + e.message + '</div>';
+    if (b) b.innerHTML = '<div style="color:var(--red-strong);text-align:center;padding:40px">' + e.message + '</div>';
   }
 }
 
@@ -5607,7 +5811,7 @@ function _ttShowBatchHistory() {
         '<div class="ttp-modal-title">\u6279\u91CF\u64CD\u4F5C\u5386\u53F2</div>' +
         '<span id="bh-archive-tag" style="font-size:10px;color:#64748b;margin-left:8px"></span>' +
         '<button class="ttp-small-btn" style="margin-left:auto;margin-right:4px;color:#818cf8;border-color:rgba(99,102,241,.3)" onclick="_ttLoadArchivedLogs()" title="\u52A0\u8F7D\u540E\u7AEF\u5F52\u6863">\u{1F4E6} \u5F52\u6863\u8BB0\u5F55</button>' +
-        '<button class="ttp-small-btn" style="margin-right:4px;color:#ef4444;border-color:rgba(239,68,68,.3)" onclick="localStorage.removeItem(\'tt_batch_logs\');_ttShowBatchHistory()">\u{1F5D1} \u6E05\u7A7A</button>' +
+        '<button class="ttp-small-btn" style="margin-right:4px;color:var(--red-strong);border-color:rgba(239,68,68,.3)" onclick="localStorage.removeItem(\'tt_batch_logs\');_ttShowBatchHistory()">\u{1F5D1} \u6E05\u7A7A</button>' +
         '<button class="ttp-modal-close" onclick="_ttCloseModal()">\u2715</button>' +
       '</div>' +
       '<div class="ttp-modal-body" style="max-height:500px;overflow-y:auto" id="bh-body">' + rows + '</div>' +
@@ -5652,7 +5856,7 @@ async function _ttLoadArchivedLogs() {
     });
     html += '</tbody></table>';
     body.innerHTML = html;
-  } catch(e) { body.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px">' + e.message + '</div>'; }
+  } catch(e) { body.innerHTML = '<div style="color:var(--red-strong);text-align:center;padding:40px">' + e.message + '</div>'; }
 }
 
 // ════════════════════════════════════════════════════════
@@ -5969,7 +6173,7 @@ function _ttGetGeoBar(deviceId) {
     return '<div class="tt-dev-geo-bar" title="上次刷视频地理分布 · ' + ageLabel + '">' +
       '<span style="font-size:9px;color:var(--text-muted)">🌍</span>' +
       flagsHtml +
-      (matchPct > 0 ? '<span style="font-size:9px;color:#22c55e;margin-left:2px">目标' + matchPct + '%</span>' : '') +
+      (matchPct > 0 ? '<span style="font-size:9px;color:var(--green-strong);margin-left:2px">目标' + matchPct + '%</span>' : '') +
     '</div>';
   } catch(e) { return ''; }
 }
@@ -6249,7 +6453,7 @@ function _ttShowReportPanel() {
         '</div>' +
         '<div style="display:flex;gap:8px;margin-bottom:14px">' +
           '<button id="tt-rpt-gen-btn" onclick="_ttGenerateReport()" style="flex:1;padding:10px;font-size:13px;font-weight:600;border-radius:8px;background:rgba(99,102,241,.25);border:1px solid rgba(99,102,241,.4);color:#a5b4fc;cursor:pointer">\u{1F4CA} \u751F\u6210\u65E5\u62A5</button>' +
-          '<button onclick="_ttExportDailyCSV()" style="padding:10px 16px;font-size:12px;font-weight:600;border-radius:8px;background:rgba(34,197,94,.15);border:1px solid rgba(34,197,94,.3);color:#22c55e;cursor:pointer;white-space:nowrap" title="\u5BFC\u51FA\u6240\u6709\u6570\u636E\u7EFC\u5408CSV">\u{1F4E5} \u7EFC\u5408\u5BFC\u51FA</button>' +
+          '<button onclick="_ttExportDailyCSV()" style="padding:10px 16px;font-size:12px;font-weight:600;border-radius:8px;background:rgba(34,197,94,.15);border:1px solid rgba(34,197,94,.3);color:var(--green-strong);cursor:pointer;white-space:nowrap" title="\u5BFC\u51FA\u6240\u6709\u6570\u636E\u7EFC\u5408CSV">\u{1F4E5} \u7EFC\u5408\u5BFC\u51FA</button>' +
         '</div>' +
       '</div>' +
       // 报告内容区
@@ -6300,10 +6504,10 @@ async function _ttGenerateReport() {
       body: JSON.stringify({ start_dt: start.replace('T', ' '), end_dt: end.replace('T', ' '), use_ai: true })
     });
     const data = await r.json();
-    if (!data.ok) { if (body) body.innerHTML = '<div style="color:#f87171;padding:20px;font-size:12px">生成失败: ' + _escHtml(data.error || '未知错误') + '</div>'; return; }
+    if (!data.ok) { if (body) body.innerHTML = '<div style="color:var(--red);padding:20px;font-size:12px">生成失败: ' + _escHtml(data.error || '未知错误') + '</div>'; return; }
     _ttRenderReport(body, data);
   } catch(e) {
-    if (body) body.innerHTML = '<div style="color:#f87171;padding:20px;font-size:12px">请求失败: ' + _escHtml(e.message || e) + '</div>';
+    if (body) body.innerHTML = '<div style="color:var(--red);padding:20px;font-size:12px">请求失败: ' + _escHtml(e.message || e) + '</div>';
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '📊 生成日报'; }
   }
@@ -6366,9 +6570,9 @@ function _ttRenderReport(el, d) {
     var dedup = d.cross_device_dedup || {};
     if (dedup.total_blocks > 0) {
       html += '<div style="display:flex;gap:10px;margin-bottom:16px;padding:8px 12px;background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.15);border-radius:8px">'
-        + '<span style="font-size:11px;color:#f87171">🛡 跨设备拦截: <b>' + dedup.total_blocks + '</b> 次</span>'
+        + '<span style="font-size:11px;color:var(--red)">🛡 跨设备拦截: <b>' + dedup.total_blocks + '</b> 次</span>'
         + '<span style="font-size:11px;color:var(--text-muted)">|</span>'
-        + '<span style="font-size:11px;color:#f87171">保护 Lead: <b>' + (dedup.unique_leads_saved||0) + '</b> 条</span></div>';
+        + '<span style="font-size:11px;color:var(--red)">保护 Lead: <b>' + (dedup.unique_leads_saved||0) + '</b> 条</span></div>';
     }
   })();
 
@@ -6380,9 +6584,9 @@ function _ttRenderReport(el, d) {
       html += '<div style="display:flex;align-items:center;gap:10px;padding:7px 12px;' + (i > 0 ? 'border-top:1px solid rgba(255,255,255,.05)' : '') + '">' +
         '<span style="font-size:10px;color:var(--text-muted);width:16px;flex-shrink:0">' + (i + 1) + '</span>' +
         '<span style="font-size:11px;color:var(--text-main);flex:1">' + _escHtml(dev.alias || dev.device_id.slice(0, 10)) + '</span>' +
-        '<span style="font-size:10px;color:#60a5fa">私信 ' + (dev.dms_sent || 0) + '</span>' +
+        '<span style="font-size:10px;color:var(--blue-soft)">私信 ' + (dev.dms_sent || 0) + '</span>' +
         '<span style="font-size:10px;color:#34d399">关注 ' + (dev.follows || 0) + '</span>' +
-        '<span style="font-size:10px;color:#a78bfa">算法 ' + (dev.algo_score_avg || 0) + '</span>' +
+        '<span style="font-size:10px;color:var(--violet-soft)">算法 ' + (dev.algo_score_avg || 0) + '</span>' +
       '</div>';
     });
     html += '</div>';
@@ -6578,7 +6782,7 @@ window.addEventListener('oc:event', function(ev) {
       '</div>' +
       '<div style="font-size:9px;color:var(--text-muted);margin-top:2px;text-align:right">' +
         '🤖 auto_reply &nbsp;·&nbsp; ' + timeStr +
-        (replyIntent ? ' &nbsp;·&nbsp; <span style="color:#f59e0b">' + _escHtml(replyIntent) + '</span>' : '') +
+        (replyIntent ? ' &nbsp;·&nbsp; <span style="color:var(--amber)">' + _escHtml(replyIntent) + '</span>' : '') +
       '</div>' +
     '</div>';
     var inner = histContainer.querySelector('div');
@@ -6681,10 +6885,10 @@ function _ttUpdateW03Indicator() {
   var el = document.getElementById('tt-w03-indicator');
   if (!el) return;
   el.title = 'W03 已连接，最近事件: ' + new Date().toLocaleTimeString();
-  el.style.background = '#22c55e';
+  el.style.background = 'var(--green-strong)';
   // 2秒后回到常规绿色（保持在线态）
   clearTimeout(el._flashTimer);
-  el._flashTimer = setTimeout(function() { if (el) el.style.background = '#4ade80'; }, 2000);
+  el._flashTimer = setTimeout(function() { if (el) el.style.background = 'var(--green-soft)'; }, 2000);
   // 更新 pill tooltip
   var pill = document.getElementById('tt-w03-pill');
   if (pill) pill.title = 'W03 在线 · 最近活动: ' + new Date().toLocaleTimeString();
@@ -6704,12 +6908,12 @@ async function _ttPollW03Status() {
 
     if (lastActive > 0 && now - lastActive < 5 * 60 * 1000) {
       // 5分钟内有事件 → 绿色活跃
-      el.style.background = '#4ade80';
+      el.style.background = 'var(--green-soft)';
       el.title = 'W03 活跃 · ' + new Date(lastActive).toLocaleTimeString();
       if (pill) pill.title = 'W03 活跃 · ' + new Date(lastActive).toLocaleTimeString();
     } else if (lastActive > 0 && now - lastActive < 30 * 60 * 1000) {
       // 30分钟内有事件 → 黄色（稍久）
-      el.style.background = '#f59e0b';
+      el.style.background = 'var(--amber)';
       el.title = 'W03 闲置 · 最近活动: ' + new Date(lastActive).toLocaleTimeString();
       if (pill) pill.title = 'W03 闲置 · ' + new Date(lastActive).toLocaleTimeString();
     } else {
@@ -6893,8 +7097,8 @@ async function _loadDailyReport() {
       return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border)">
         <span style="font-size:10px;color:var(--text-dim);width:14px">#${i+1}</span>
         <span style="font-size:11px;flex:1">${esc(alias)}</span>
-        <span style="font-size:10px;color:#3b82f6">关${dd.follows||0}</span>
-        <span style="font-size:10px;color:#22c55e">私${dd.dms_sent||0}</span>
+        <span style="font-size:10px;color:var(--blue-strong)">关${dd.follows||0}</span>
+        <span style="font-size:10px;color:var(--green-strong)">私${dd.dms_sent||0}</span>
       </div>`;
     }).join('') : '<div style="font-size:11px;color:var(--text-dim)">暂无设备数据</div>';
 
@@ -6944,7 +7148,7 @@ function _printDailyReport() {
   w.document.write(`<!DOCTYPE html><html><head><title>运营日报</title>
   <style>body{font-family:sans-serif;background:#fff;color:#1e293b;padding:20px;max-width:700px;margin:0 auto;}
   @media print{body{padding:0;}button{display:none!important;}}</style></head>
-  <body><h2 style="text-align:center">📊 OpenClaw 运营日报</h2>
+  <body><h2 style="text-align:center">📊 ${(window.__BRAND&&window.__BRAND.label)||'ReachX'} 运营日报</h2>
   <div id="content">${el.innerHTML}</div>
   <div style="text-align:right;margin-top:16px"><button onclick="window.print()">🖨️ 打印</button></div>
   </body></html>`);
@@ -6991,11 +7195,11 @@ function _ttContactsInit(el) {
 .ct-tbl tr:hover td{background:rgba(99,102,241,.04);}
 .ct-badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;}
 .ct-badge-oc{background:rgba(99,102,241,.15);color:var(--accent);}
-.ct-badge-og{background:rgba(34,197,94,.15);color:#22c55e;}
+.ct-badge-og{background:rgba(34,197,94,.15);color:var(--green-strong);}
 .ct-btn{padding:8px 16px;border-radius:8px;border:none;cursor:pointer;font-size:13px;font-weight:500;transition:.15s;}
 .ct-btn-primary{background:var(--accent);color:#fff;}
 .ct-btn-primary:hover{filter:brightness(1.1);}
-.ct-btn-danger{background:#ef4444;color:#fff;}
+.ct-btn-danger{background:var(--red-strong);color:#fff;}
 .ct-btn-danger:hover{background:#dc2626;}
 .ct-btn-ghost{background:transparent;border:1px solid var(--border);color:var(--text);}
 .ct-btn-ghost:hover{background:rgba(99,102,241,.06);}
@@ -7015,7 +7219,7 @@ function _ttContactsInit(el) {
 .ct-empty{text-align:center;padding:32px;color:var(--text-muted);font-size:14px;}
 .ct-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;}
 .ct-search{width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;margin-bottom:8px;}
-.ct-discover-card{background:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);border-radius:12px;padding:20px;color:#fff;}
+.ct-discover-card{background:linear-gradient(135deg,#6366f1 0%,var(--violet) 100%);border-radius:12px;padding:20px;color:#fff;}
 .ct-discover-card h3{color:#fff;margin:0 0 8px;}
 .ct-discover-card p{opacity:.85;font-size:13px;margin:0 0 16px;line-height:1.5;}
 .ct-discover-opts{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;}
@@ -7437,7 +7641,7 @@ function _ttOpenContactsModal(deviceId) {
       '<div class="ttp-modal-header">' +
         '<span style="font-size:20px">\u{1F4DE}</span>' +
         '<div class="ttp-modal-title">\u901A\u8BAF\u5F55\u7BA1\u7406</div>' +
-        '<button class="ttp-small-btn" style="margin-left:auto;margin-right:4px;color:#22c55e;border-color:rgba(34,197,94,.3)" onclick="_ctmExportCSV()" title="\u5BFC\u51FA\u901A\u8BAF\u5F55">\u{1F4E5} \u5BFC\u51FA</button>' +
+        '<button class="ttp-small-btn" style="margin-left:auto;margin-right:4px;color:var(--green-strong);border-color:rgba(34,197,94,.3)" onclick="_ctmExportCSV()" title="\u5BFC\u51FA\u901A\u8BAF\u5F55">\u{1F4E5} \u5BFC\u51FA</button>' +
         '<button class="ttp-modal-close" onclick="_ttCloseModal()">\u2715</button>' +
       '</div>' +
       '<div class="ttp-modal-body" id="ctm-body">' +
@@ -7507,17 +7711,17 @@ async function _ctmLoadData(deviceId) {
         '</div>' +
         '<div class="ctm-fn-arrow">\u2192</div>' +
         '<div class="ctm-fn-step">' +
-          '<div class="ctm-fn-num" style="color:#22c55e">' + stats.injected + '</div>' +
+          '<div class="ctm-fn-num" style="color:var(--green-strong)">' + stats.injected + '</div>' +
           '<div class="ctm-fn-label">\u5DF2\u6CE8\u5165</div>' +
         '</div>' +
         '<div class="ctm-fn-arrow">\u2192</div>' +
         '<div class="ctm-fn-step">' +
-          '<div class="ctm-fn-num" style="color:#f59e0b">' + numMatched + '<span class="ctm-fn-pct">' + pctMatched + '</span></div>' +
+          '<div class="ctm-fn-num" style="color:var(--amber)">' + numMatched + '<span class="ctm-fn-pct">' + pctMatched + '</span></div>' +
           '<div class="ctm-fn-label">\u5339\u914D APP</div>' +
         '</div>' +
         '<div class="ctm-fn-arrow">\u2192</div>' +
         '<div class="ctm-fn-step">' +
-          '<div class="ctm-fn-num" style="color:#8b5cf6">' + numGreeted + '<span class="ctm-fn-pct">' + pctGreeted + '</span></div>' +
+          '<div class="ctm-fn-num" style="color:var(--violet)">' + numGreeted + '<span class="ctm-fn-pct">' + pctGreeted + '</span></div>' +
           '<div class="ctm-fn-label">\u5DF2\u6253\u62DB\u547C</div>' +
         '</div>' +
       '</div>' +
@@ -7525,8 +7729,8 @@ async function _ctmLoadData(deviceId) {
       // 漏斗进度条
       '<div class="' + progCls + '">' +
         '<div class="ctm-pb-fill" style="width:100%;background:#818cf8" title="\u603B\u8054\u7CFB\u4EBA"></div>' +
-        '<div class="ctm-pb-fill" style="width:' + (fb ? 0 : matchRate) + '%;background:#f59e0b" title="\u5339\u914D APP"></div>' +
-        '<div class="ctm-pb-fill" style="width:' + (fb ? 0 : greetRate) + '%;background:#8b5cf6" title="\u5DF2\u6253\u62DB\u547C"></div>' +
+        '<div class="ctm-pb-fill" style="width:' + (fb ? 0 : matchRate) + '%;background:var(--amber)" title="\u5339\u914D APP"></div>' +
+        '<div class="ctm-pb-fill" style="width:' + (fb ? 0 : greetRate) + '%;background:var(--violet)" title="\u5DF2\u6253\u62DB\u547C"></div>' +
       '</div>' +
 
       // ── 操作栏 ──
@@ -7535,7 +7739,7 @@ async function _ctmLoadData(deviceId) {
         '<button class="ctm-btn ctm-btn-warn" onclick="_ctmBatchAll(\'' + deviceId + '\')">\u{1F4F1} \u5E73\u5747\u5206\u914D</button>' +
         '<button class="ctm-btn ctm-btn-purple" onclick="_ctmDiscover(\'' + deviceId + '\')">\u{1F50D} \u597D\u53CB\u53D1\u73B0</button>' +
         '<button class="ctm-btn ctm-btn-danger" onclick="_ctmClean(\'' + deviceId + '\')">\u{1F5D1} \u6E05\u7406\u6CE8\u5165</button>' +
-        '<button class="ctm-btn" style="color:#06b6d4;border-color:rgba(6,182,212,.3)" onclick="_ctmDedupCheck()">\u{1F50D} \u8DE8\u8BBE\u5907\u53BB\u91CD</button>' +
+        '<button class="ctm-btn" style="color:var(--cyan);border-color:rgba(6,182,212,.3)" onclick="_ctmDedupCheck()">\u{1F50D} \u8DE8\u8BBE\u5907\u53BB\u91CD</button>' +
       '</div>' +
 
       // ── 添加 + 搜索 ──
@@ -7779,7 +7983,7 @@ async function _ctmDedupCheck() {
       return;
     }
     var html = '<div class="ctm-preview" style="max-height:200px;overflow-y:auto">' +
-      '<div style="font-size:12px;font-weight:600;color:#f59e0b;margin-bottom:8px">\u26A0 \u53D1\u73B0 ' + count + ' \u4E2A\u91CD\u590D\u53F7\u7801</div>' +
+      '<div style="font-size:12px;font-weight:600;color:var(--amber);margin-bottom:8px">\u26A0 \u53D1\u73B0 ' + count + ' \u4E2A\u91CD\u590D\u53F7\u7801</div>' +
       '<table class="ctm-table"><thead><tr>' +
         '<th style="text-align:left">\u53F7\u7801</th>' +
         '<th style="text-align:center">\u8BBE\u5907\u6570</th>' +
@@ -7873,7 +8077,7 @@ function _ttOpenAnalysisModal(deviceId) {
           '<button class="anm-tab" onclick="_anmTab(\'ai\')">\u{1F916} AI\u753B\u50CF</button>' +
           '<button class="anm-tab" onclick="_anmTab(\'conv\')">\u{1F4AC} \u5BF9\u8BDD</button>' +
         '</div>' +
-        '<button class="ttp-small-btn" style="color:#22c55e;border-color:rgba(34,197,94,.3);margin-right:4px" onclick="_anmExportCSV()" title="\u5BFC\u51FA\u5F53\u524D\u6570\u636E">\u{1F4E5} \u5BFC\u51FA</button>' +
+        '<button class="ttp-small-btn" style="color:var(--green-strong);border-color:rgba(34,197,94,.3);margin-right:4px" onclick="_anmExportCSV()" title="\u5BFC\u51FA\u5F53\u524D\u6570\u636E">\u{1F4E5} \u5BFC\u51FA</button>' +
         '<button class="ttp-modal-close" onclick="_ttCloseModal()">\u2715</button>' +
       '</div>' +
       '<div class="ttp-modal-body" id="anm-body" style="min-height:400px">' +
@@ -7986,7 +8190,7 @@ async function _anmLoadLeads(deviceId) {
 
     body.innerHTML = funnelHTML + distHTML + '<div style="margin-top:14px;border-top:1px solid rgba(255,255,255,.06);padding-top:14px">' +
       '<div style="font-size:12px;font-weight:600;color:#94a3b8;margin-bottom:8px">\u7EBF\u7D22\u5217\u8868 (' + total + ')</div>' + listHTML + '</div>';
-  } catch(e) { body.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px">\u52A0\u8F7D\u5931\u8D25: ' + e.message + '</div>'; }
+  } catch(e) { body.innerHTML = '<div style="color:var(--red-strong);text-align:center;padding:40px">\u52A0\u8F7D\u5931\u8D25: ' + e.message + '</div>'; }
 }
 
 async function _anmLoadAiProfiles(deviceId) {
@@ -8011,13 +8215,13 @@ async function _anmLoadAiProfiles(deviceId) {
           (p.industry ? '<div style="font-size:11px;color:#94a3b8;margin-bottom:2px">\u{1F3E2} ' + p.industry + '</div>' : '') +
           (p.interests && p.interests.length ? '<div style="font-size:11px;color:#94a3b8;margin-bottom:2px">\u2764\uFE0F ' + p.interests.slice(0,3).join(', ') + '</div>' : '') +
           (p.personality ? '<div style="font-size:11px;color:#94a3b8;margin-bottom:2px">\u{1F3AD} ' + p.personality + '</div>' : '') +
-          (p.suggested_topics && p.suggested_topics.length ? '<div style="font-size:11px;color:#60a5fa;margin-top:4px">\u{1F4AC} ' + p.suggested_topics.slice(0,2).join(', ') + '</div>' : '') +
+          (p.suggested_topics && p.suggested_topics.length ? '<div style="font-size:11px;color:var(--blue-soft);margin-top:4px">\u{1F4AC} ' + p.suggested_topics.slice(0,2).join(', ') + '</div>' : '') +
         '</div>';
-      } catch(e) { html += '<div style="background:rgba(239,68,68,.05);border:1px solid rgba(239,68,68,.15);border-radius:10px;padding:12px;font-size:11px;color:#ef4444">@' + (l.username||'?') + ' \u5206\u6790\u5931\u8D25</div>'; }
+      } catch(e) { html += '<div style="background:rgba(239,68,68,.05);border:1px solid rgba(239,68,68,.15);border-radius:10px;padding:12px;font-size:11px;color:var(--red-strong)">@' + (l.username||'?') + ' \u5206\u6790\u5931\u8D25</div>'; }
     }
     html += '</div>';
     body.innerHTML = html;
-  } catch(e) { body.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px">' + e.message + '</div>'; }
+  } catch(e) { body.innerHTML = '<div style="color:var(--red-strong);text-align:center;padding:40px">' + e.message + '</div>'; }
 }
 
 async function _anmLoadConversations(deviceId) {
@@ -8041,7 +8245,7 @@ async function _anmLoadConversations(deviceId) {
       '<div class="conv-kpi"><div class="conv-kpi-num" style="color:' + rrColor + '">' + (kpi.reply_rate||0) + '%</div><div class="conv-kpi-label">\u56DE\u590D\u7387</div></div>' +
       '<div class="conv-kpi"><div class="conv-kpi-num" style="color:' + qColor + '">' + (kpi.avg_quality||0) + '</div><div class="conv-kpi-label">\u5E73\u5747\u8D28\u91CF</div></div>' +
       '<div class="conv-kpi"><div class="conv-kpi-num" style="color:#818cf8">' + (kpi.avg_rounds||0) + '</div><div class="conv-kpi-label">\u5E73\u5747\u8F6E\u6B21</div></div>' +
-      '<div class="conv-kpi"><div class="conv-kpi-num" style="color:#60a5fa">' + (kpi.total_messages||0) + '</div><div class="conv-kpi-label">\u603B\u6D88\u606F</div></div>' +
+      '<div class="conv-kpi"><div class="conv-kpi-num" style="color:var(--blue-soft)">' + (kpi.total_messages||0) + '</div><div class="conv-kpi-label">\u603B\u6D88\u606F</div></div>' +
     '</div>';
 
     // ── 阶段分布条 ──
@@ -8064,7 +8268,7 @@ async function _anmLoadConversations(deviceId) {
       var qs = c.quality_score || 0;
       var qc = qs >= 60 ? '#22c55e' : qs >= 30 ? '#f59e0b' : '#ef4444';
       var replyTag = c.has_reply
-        ? '<span class="anm-stage-tag" style="background:rgba(34,197,94,.12);color:#22c55e">\u2713 \u5DF2\u56DE\u590D</span>'
+        ? '<span class="anm-stage-tag" style="background:rgba(34,197,94,.12);color:var(--green-strong)">\u2713 \u5DF2\u56DE\u590D</span>'
         : '<span class="anm-stage-tag" style="background:rgba(100,116,139,.12);color:#94a3b8">\u23F3 \u672A\u56DE</span>';
       listHTML += '<div class="anm-lead-card">' +
         '<div style="flex:1;min-width:0">' +
@@ -8081,9 +8285,9 @@ async function _anmLoadConversations(deviceId) {
             '<span style="color:' + qc + '">' + qs + '</span>' +
           '</div>' +
           '<div style="display:flex;gap:3px">' +
-            '<button type="button" class="ttp-small-btn" style="font-size:9px;padding:2px 6px;color:#22c55e" ' +
+            '<button type="button" class="ttp-small-btn" style="font-size:9px;padding:2px 6px;color:var(--green-strong)" ' +
               'onclick=\'_ttConvQaSubmit(' + JSON.stringify(String(c.lead_id||c.username||'')) + ',"good")\'>\u{1F44D}</button>' +
-            '<button type="button" class="ttp-small-btn" style="font-size:9px;padding:2px 6px;color:#ef4444" ' +
+            '<button type="button" class="ttp-small-btn" style="font-size:9px;padding:2px 6px;color:var(--red-strong)" ' +
               'onclick=\'_ttConvQaSubmit(' + JSON.stringify(String(c.lead_id||c.username||'')) + ',"bad")\'>\u{1F44E}</button>' +
           '</div>' +
         '</div>' +
@@ -8096,7 +8300,7 @@ async function _anmLoadConversations(deviceId) {
         '<div style="text-align:center;color:#64748b;font-size:11px">\u{1F9E0} \u52A0\u8F7D\u7B56\u7565\u5206\u6790...</div>' +
       '</div>';
     _loadStrategyAnalysis();
-  } catch(e) { body.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px">' + e.message + '</div>'; }
+  } catch(e) { body.innerHTML = '<div style="color:var(--red-strong);text-align:center;padding:40px">' + e.message + '</div>'; }
 }
 
 async function _ttConvQaSubmit(leadKey, label) {
@@ -8172,7 +8376,7 @@ async function _loadStrategyAnalysis() {
     }
 
     zone.innerHTML = html;
-  } catch(e) { zone.innerHTML = '<div style="color:#ef4444;font-size:11px">\u7B56\u7565\u5206\u6790\u52A0\u8F7D\u5931\u8D25</div>'; }
+  } catch(e) { zone.innerHTML = '<div style="color:var(--red-strong);font-size:11px">\u7B56\u7565\u5206\u6790\u52A0\u8F7D\u5931\u8D25</div>'; }
 }
 
 // 旧函数兼容（保持面板计数加载）
@@ -8185,7 +8389,7 @@ async function _ttPanelCtLoad(deviceId, safeId) {
     const r = await api('GET', '/devices/' + encodeURIComponent(deviceId) + '/contacts?limit=200');
     const list = r.contacts || [];
     const injected = list.filter(c => c.name.startsWith('OC_')).length;
-    if (info) info.innerHTML = '<span style="color:#818cf8">' + list.length + '</span> 联系人 · <span style="color:#22c55e">' + injected + '</span> 已注入 · <span style="color:var(--text-muted)">' + (list.length - injected) + '</span> 原有';
+    if (info) info.innerHTML = '<span style="color:#818cf8">' + list.length + '</span> 联系人 · <span style="color:var(--green-strong)">' + injected + '</span> 已注入 · <span style="color:var(--text-muted)">' + (list.length - injected) + '</span> 原有';
     if (!list.length) {
       el.innerHTML = '<div style="color:var(--text-muted);font-size:11px;padding:8px 0;text-align:center">通讯录为空，请先导入联系人</div>';
       return;
@@ -8204,13 +8408,13 @@ async function _ttPanelCtLoad(deviceId, safeId) {
           '<td style="padding:4px 6px;color:#e2e8f0">' + dname + '</td>' +
           '<td style="padding:4px 6px;color:#94a3b8">' + (c.number || '-') + '</td>' +
           '<td style="padding:4px 4px;text-align:center"><span style="font-size:9px;padding:1px 5px;border-radius:8px;' +
-            (isOC ? 'background:rgba(99,102,241,.15);color:#818cf8' : 'background:rgba(34,197,94,.15);color:#22c55e') +
+            (isOC ? 'background:rgba(99,102,241,.15);color:#818cf8' : 'background:rgba(34,197,94,.15);color:var(--green-strong)') +
             '">' + (isOC ? '注入' : '原有') + '</span></td></tr>';
       }).join('') +
       '</tbody></table></div>' +
       (list.length > 100 ? '<div style="font-size:10px;color:var(--text-muted);text-align:center;margin-top:4px">显示前 100 条 / 共 ' + list.length + ' 条</div>' : '');
   } catch(e) {
-    el.innerHTML = '<div style="color:#ef4444;font-size:11px">读取失败</div>';
+    el.innerHTML = '<div style="color:var(--red-strong);font-size:11px">读取失败</div>';
   }
 }
 
@@ -8226,7 +8430,7 @@ async function _ttPanelCtImport(deviceId, safeId) {
           'style="flex:1;background:rgba(99,102,241,.12);border:1px dashed rgba(99,102,241,.3);border-radius:6px;padding:12px 8px;color:#818cf8;font-size:11px;cursor:pointer;text-align:center;font-weight:500">' +
           '\u{1F4C4} 上传 CSV 文件</button>' +
         '<button onclick="_ttPanelCtBatchAll(\'' + deviceId + '\',\'' + safeId + '\')" ' +
-          'style="flex:1;background:rgba(245,158,11,.08);border:1px dashed rgba(245,158,11,.3);border-radius:6px;padding:12px 8px;color:#f59e0b;font-size:11px;cursor:pointer;text-align:center;font-weight:500">' +
+          'style="flex:1;background:rgba(245,158,11,.08);border:1px dashed rgba(245,158,11,.3);border-radius:6px;padding:12px 8px;color:var(--amber);font-size:11px;cursor:pointer;text-align:center;font-weight:500">' +
           '\u{1F4F1} 平均分配到所有手机</button>' +
       '</div>' +
       '<div style="display:flex;gap:4px;align-items:center">' +
@@ -8377,16 +8581,16 @@ async function _ttPanelAiProfile(deviceId) {
           (p.industry ? '<div style="font-size:10px;color:#94a3b8">\u{1F3E2} ' + p.industry + '</div>' : '') +
           (p.interests && p.interests.length ? '<div style="font-size:10px;color:#94a3b8">\u{2764}\uFE0F ' + p.interests.slice(0,3).join(', ') + '</div>' : '') +
           (p.personality ? '<div style="font-size:10px;color:#94a3b8">\u{1F3AD} ' + p.personality + '</div>' : '') +
-          (p.suggested_topics && p.suggested_topics.length ? '<div style="font-size:10px;color:#60a5fa;margin-top:2px">\u{1F4AC} 建议话题: ' + p.suggested_topics.slice(0,2).join(', ') + '</div>' : '') +
+          (p.suggested_topics && p.suggested_topics.length ? '<div style="font-size:10px;color:var(--blue-soft);margin-top:2px">\u{1F4AC} 建议话题: ' + p.suggested_topics.slice(0,2).join(', ') + '</div>' : '') +
         '</div>';
       } catch(e) {
-        html += '<div style="font-size:10px;color:#ef4444">@' + (lead.username||'?') + ' 分析失败</div>';
+        html += '<div style="font-size:10px;color:var(--red-strong)">@' + (lead.username||'?') + ' 分析失败</div>';
       }
     }
     html += '</div>';
     el.innerHTML = html;
   } catch(e) {
-    el.innerHTML = '<div style="color:#ef4444;font-size:11px">加载线索失败: ' + (e.message||e) + '</div>';
+    el.innerHTML = '<div style="color:var(--red-strong);font-size:11px">加载线索失败: ' + (e.message||e) + '</div>';
   }
 }
 
@@ -8417,7 +8621,7 @@ async function _ttPanelAiChat(deviceId) {
     html += '</div>';
     el.innerHTML = html;
   } catch(e) {
-    el.innerHTML = '<div style="color:#ef4444;font-size:11px">加载失败: ' + (e.message||e) + '</div>';
+    el.innerHTML = '<div style="color:var(--red-strong);font-size:11px">加载失败: ' + (e.message||e) + '</div>';
   }
 }
 

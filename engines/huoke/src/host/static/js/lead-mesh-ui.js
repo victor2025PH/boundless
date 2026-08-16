@@ -127,34 +127,35 @@
     if (!body) return;
     body.innerHTML = '加载中…';
     try {
-      // 拉取所有状态以展示 Tab 计数
-      const stateQs = '';  // 全量拉来分 tab
+      // P3 按页签懒加载：只拉当前页签的列表，四个页签角标走 /handoffs/count 轻量计数
+      // （旧实现一次并发拉 4 个列表共 600 条，只为数长度 + 推导下拉）
       const receiver = _lmInboxState.receiver;
       const recvQs = receiver ? ('&receiver_account_key=' + encodeURIComponent(receiver)) : '';
-      const [p, a, c, r] = await Promise.all([
-        Shell.api.get('/lead-mesh/handoffs?state=pending&limit=200' + recvQs),
-        Shell.api.get('/lead-mesh/handoffs?state=acknowledged&limit=200' + recvQs),
-        Shell.api.get('/lead-mesh/handoffs?state=completed&limit=100' + recvQs),
-        Shell.api.get('/lead-mesh/handoffs?state=rejected&limit=100' + recvQs),
-      ]);
-      const pending = (p && p.handoffs) || [];
-      const ack = (a && a.handoffs) || [];
-      const completed = (c && c.handoffs) || [];
-      const rejected = (r && r.handoffs) || [];
-
       const tab = _lmInboxState.tab;
-      const list = tab === 'pending' ? pending
-                 : tab === 'acknowledged' ? ack
-                 : tab === 'completed' ? completed
-                 : rejected;
+      const tabLimit = (tab === 'pending' || tab === 'acknowledged') ? 200 : 100;
+      const [cPend, cAck, cDone, cRej, listResp, recvResp] = await Promise.all([
+        Shell.api.get('/lead-mesh/handoffs/count?state=pending' + recvQs),
+        Shell.api.get('/lead-mesh/handoffs/count?state=acknowledged' + recvQs),
+        Shell.api.get('/lead-mesh/handoffs/count?state=completed' + recvQs),
+        Shell.api.get('/lead-mesh/handoffs/count?state=rejected' + recvQs),
+        Shell.api.get('/lead-mesh/handoffs?state=' + tab + '&limit=' + tabLimit + recvQs),
+        Shell.api.get('/lead-mesh/receivers?with_load=false').catch(function () { return null; }),
+      ]);
+      const nPending = (cPend && cPend.count) || 0;
+      const nAck = (cAck && cAck.count) || 0;
+      const nDone = (cDone && cDone.count) || 0;
+      const nRej = (cRej && cRej.count) || 0;
+      const list = (listResp && listResp.handoffs) || [];
 
-      // 收集所有 receiver 的 key (去重) 供下拉
+      // 接收方下拉：注册表优先（含当前列表之外的账号），回退当前列表推导
       const receiverSet = new Set();
-      [pending, ack, completed, rejected].forEach(function (arr) {
-        arr.forEach(function (h) {
-          if (h.receiver_account_key) receiverSet.add(h.receiver_account_key);
-        });
+      (((recvResp || {}).receivers) || []).forEach(function (r) {
+        if (r && r.key) receiverSet.add(r.key);
       });
+      list.forEach(function (h) {
+        if (h.receiver_account_key) receiverSet.add(h.receiver_account_key);
+      });
+      if (receiver) receiverSet.add(receiver);
       const receivers = Array.from(receiverSet).sort();
 
       const tabBtn = function (key, label, count, color) {
@@ -195,21 +196,21 @@
         + '  <span style="font-size:12px;color:var(--text-muted)">📬 接收账号:</span>'
         + receiverSelect
         + '  <span style="margin-left:auto;font-size:11px;color:var(--text-dim)">'
-        + '    pending=' + pending.length + ' ack=' + ack.length + ' done=' + completed.length + '</span>'
+        + '    pending=' + nPending + ' ack=' + nAck + ' done=' + nDone + '</span>'
         + '  <button onclick="lmRefreshInbox()" '
-        + '          style="padding:5px 10px;background:rgba(96,165,250,.15);color:#60a5fa;border:1px solid rgba(96,165,250,.4);border-radius:6px;font-size:11px;cursor:pointer">🔄 刷新</button>'
+        + '          style="padding:5px 10px;background:rgba(96,165,250,.15);color:var(--blue-soft);border:1px solid rgba(96,165,250,.4);border-radius:6px;font-size:11px;cursor:pointer">🔄 刷新</button>'
         + '</div>'
         + '<div style="display:flex;margin-bottom:14px;flex-wrap:wrap;gap:4px">'
-        + tabBtn('pending', _STATE_LABEL_ZH.pending, pending.length, _STATE_COLOR.pending)
-        + tabBtn('acknowledged', _STATE_LABEL_ZH.acknowledged, ack.length, _STATE_COLOR.acknowledged)
-        + tabBtn('completed', _STATE_LABEL_ZH.completed, completed.length, _STATE_COLOR.completed)
-        + tabBtn('rejected', _STATE_LABEL_ZH.rejected, rejected.length, _STATE_COLOR.rejected)
+        + tabBtn('pending', _STATE_LABEL_ZH.pending, nPending, _STATE_COLOR.pending)
+        + tabBtn('acknowledged', _STATE_LABEL_ZH.acknowledged, nAck, _STATE_COLOR.acknowledged)
+        + tabBtn('completed', _STATE_LABEL_ZH.completed, nDone, _STATE_COLOR.completed)
+        + tabBtn('rejected', _STATE_LABEL_ZH.rejected, nRej, _STATE_COLOR.rejected)
         + '</div>'
         + '<div style="display:grid;gap:10px;max-height:60vh;overflow-y:auto">'
         + cards
         + '</div>';
     } catch (e) {
-      body.innerHTML = '<div style="color:#ef4444;padding:20px">加载失败: ' + _safe(e.message || e) + '</div>';
+      body.innerHTML = '<div style="color:var(--red-strong);padding:20px">加载失败: ' + _safe(e.message || e) + '</div>';
     }
   }
 
@@ -226,9 +227,9 @@
              + 'style="padding:6px 14px;background:rgba(14,165,233,.15);color:#0ea5e9;border:1px solid rgba(14,165,233,.4);border-radius:6px;font-size:12px;cursor:pointer">👀 已看到</button>'
            : '')
         + '<button onclick="lmHandoffAction(\'' + hid + '\', \'complete\')" '
-        + 'style="padding:6px 14px;background:rgba(34,197,94,.15);color:#22c55e;border:1px solid rgba(34,197,94,.4);border-radius:6px;font-size:12px;cursor:pointer;font-weight:600">✅ 已接上</button>'
+        + 'style="padding:6px 14px;background:rgba(34,197,94,.15);color:var(--green-strong);border:1px solid rgba(34,197,94,.4);border-radius:6px;font-size:12px;cursor:pointer;font-weight:600">✅ 已接上</button>'
         + '<button onclick="lmHandoffAction(\'' + hid + '\', \'reject\')" '
-        + 'style="padding:6px 14px;background:rgba(239,68,68,.1);color:#ef4444;border:1px solid rgba(239,68,68,.3);border-radius:6px;font-size:12px;cursor:pointer">❌ 拒接</button>'
+        + 'style="padding:6px 14px;background:rgba(239,68,68,.1);color:var(--red-strong);border:1px solid rgba(239,68,68,.3);border-radius:6px;font-size:12px;cursor:pointer">❌ 拒接</button>'
         + '</div>'
       : '';
 
@@ -242,20 +243,20 @@
 
     const csButtons = csOutcome
       ? '<span style="font-size:11px;padding:3px 10px;border-radius:6px;background:'
-          + (csOutcome === 'converted' ? 'rgba(34,197,94,.2);color:#22c55e' :
-             csOutcome === 'lost' ? 'rgba(239,68,68,.15);color:#ef4444' :
-             'rgba(245,158,11,.15);color:#f59e0b')
+          + (csOutcome === 'converted' ? 'rgba(34,197,94,.2);color:var(--green-strong)' :
+             csOutcome === 'lost' ? 'rgba(239,68,68,.15);color:var(--red-strong)' :
+             'rgba(245,158,11,.15);color:var(--amber)')
           + '">' + (csOutcome === 'converted' ? '✓ 成交' : csOutcome === 'lost' ? '× 流失' : '⏳ 待跟进') + '</span>'
       : (!csAssigned
         ? '<button onclick="lmCsAssign(\'' + hid + '\')" '
-          + 'style="padding:5px 12px;background:rgba(168,85,247,.15);color:#a855f7;border:1px solid rgba(168,85,247,.4);border-radius:6px;font-size:11px;cursor:pointer;font-weight:600">🙋 我接手</button>'
+          + 'style="padding:5px 12px;background:rgba(168,85,247,.15);color:var(--accent-2);border:1px solid rgba(168,85,247,.4);border-radius:6px;font-size:11px;cursor:pointer;font-weight:600">🙋 我接手</button>'
         : '<span style="font-size:11px;color:var(--text-muted)">已被 <code>' + _safe(csAssigned) + '</code> 接管</span>'
           + '<button onclick="lmCsReply(\'' + hid + '\')" '
-          + 'style="padding:5px 12px;background:rgba(96,165,250,.15);color:#60a5fa;border:1px solid rgba(96,165,250,.4);border-radius:6px;font-size:11px;cursor:pointer">💬 回复 (' + csReplies + ')</button>'
+          + 'style="padding:5px 12px;background:rgba(96,165,250,.15);color:var(--blue-soft);border:1px solid rgba(96,165,250,.4);border-radius:6px;font-size:11px;cursor:pointer">💬 回复 (' + csReplies + ')</button>'
           + '<button onclick="lmCsNote(\'' + hid + '\')" '
           + 'style="padding:5px 12px;background:rgba(251,191,36,.15);color:#fbbf24;border:1px solid rgba(251,191,36,.4);border-radius:6px;font-size:11px;cursor:pointer">📝 备注 (' + csNotes + ')</button>'
           + '<button onclick="lmCsOutcome(\'' + hid + '\')" '
-          + 'style="padding:5px 12px;background:rgba(34,197,94,.15);color:#22c55e;border:1px solid rgba(34,197,94,.4);border-radius:6px;font-size:11px;cursor:pointer;font-weight:600">🏁 标记结果</button>');
+          + 'style="padding:5px 12px;background:rgba(34,197,94,.15);color:var(--green-strong);border:1px solid rgba(34,197,94,.4);border-radius:6px;font-size:11px;cursor:pointer;font-weight:600">🏁 标记结果</button>');
 
     const csRow = !csOutcome || csOutcome
       ? '<div style="display:flex;gap:6px;align-items:center;margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);flex-wrap:wrap">'
@@ -282,7 +283,7 @@
       + '        🕒 ' + _fmtTime(h.created_at) + ' · 聊天 ' + snapCount + ' 轮'
       + '      </div>'
       + '      <details style="margin-top:8px;font-size:12px">'
-      + '        <summary style="cursor:pointer;color:#60a5fa">💬 展开聊天 + 引流内容</summary>'
+      + '        <summary style="cursor:pointer;color:var(--blue-soft)">💬 展开聊天 + 引流内容</summary>'
       + '        <div style="margin-top:8px;padding:10px;background:var(--bg-card);border-radius:6px">'
       + '          <div style="font-size:11px;color:var(--text-dim);margin-bottom:6px">引流话术:</div>'
       + '          <div style="padding:6px 10px;background:rgba(168,85,247,.1);border-radius:4px;font-size:12px;margin-bottom:8px;white-space:pre-wrap">'
@@ -356,7 +357,7 @@
       if (cnt === 0) {
         body.innerHTML = header + '<div style="text-align:center;padding:50px;color:var(--text-dim)">'
           + '✅ 当前没有正在跟进的客户<br>'
-          + '<span style="font-size:12px">去 <a href="javascript:void(0)" onclick="PlatShell.modal.close(\'lm-mydesk-modal\');lmOpenHandoffInbox(\'\')" style="color:#a855f7">📥 待接管队列</a> 接新客户</span>'
+          + '<span style="font-size:12px">去 <a href="javascript:void(0)" onclick="PlatShell.modal.close(\'lm-mydesk-modal\');lmOpenHandoffInbox(\'\')" style="color:var(--accent-2)">📥 待接管队列</a> 接新客户</span>'
           + '</div>';
         return;
       }
@@ -391,9 +392,9 @@
           + (lastReply ? ' · <i>last: "' + _safe((lastReply.text || '').substring(0, 40)) + '..."</i>' : '')
           + '</div>'
           + '<div style="display:flex;gap:6px;flex-wrap:wrap">'
-          + '<button onclick="lmCsReply(\'' + h.handoff_id + '\')" style="padding:5px 12px;background:rgba(96,165,250,.15);color:#60a5fa;border:1px solid rgba(96,165,250,.4);border-radius:6px;font-size:11px;cursor:pointer">💬 回复</button>'
+          + '<button onclick="lmCsReply(\'' + h.handoff_id + '\')" style="padding:5px 12px;background:rgba(96,165,250,.15);color:var(--blue-soft);border:1px solid rgba(96,165,250,.4);border-radius:6px;font-size:11px;cursor:pointer">💬 回复</button>'
           + '<button onclick="lmCsNote(\'' + h.handoff_id + '\')" style="padding:5px 12px;background:rgba(251,191,36,.15);color:#fbbf24;border:1px solid rgba(251,191,36,.4);border-radius:6px;font-size:11px;cursor:pointer">📝 备注</button>'
-          + '<button onclick="lmCsOutcome(\'' + h.handoff_id + '\')" style="padding:5px 12px;background:rgba(34,197,94,.15);color:#22c55e;border:1px solid rgba(34,197,94,.4);border-radius:6px;font-size:11px;cursor:pointer;font-weight:600">🏁 标记结果</button>'
+          + '<button onclick="lmCsOutcome(\'' + h.handoff_id + '\')" style="padding:5px 12px;background:rgba(34,197,94,.15);color:var(--green-strong);border:1px solid rgba(34,197,94,.4);border-radius:6px;font-size:11px;cursor:pointer;font-weight:600">🏁 标记结果</button>'
           + '<button onclick="lmOpenLeadDossier(\'' + _safe(h.canonical_id) + '\')" style="margin-left:auto;padding:5px 10px;background:none;border:1px solid var(--border);color:var(--text-muted);border-radius:6px;font-size:11px;cursor:pointer">🔍 档案</button>'
           + '</div>'
           + '</div>';
@@ -401,7 +402,7 @@
 
       body.innerHTML = header + cards;
     } catch (e) {
-      body.innerHTML = '<div style="color:#ef4444;padding:14px">加载失败: ' + _safe(e.message || e) + '</div>';
+      body.innerHTML = '<div style="color:var(--red-strong);padding:14px">加载失败: ' + _safe(e.message || e) + '</div>';
     }
   }
 
@@ -436,14 +437,14 @@
       let bodyHtml = '<div style="padding:18px 22px;border-bottom:1px solid #334155;display:flex;justify-content:space-between;align-items:center">'
         + '<h3 style="margin:0;font-size:16px;font-weight:600;color:#e2e8f0">' + _safe(title) + '</h3>'
         + '<button data-act="close" style="background:none;border:1px solid #475569;color:#cbd5e1;padding:4px 12px;border-radius:6px;cursor:pointer">关闭 ✕</button>'
-        + '</div><form data-form="1" style="padding:22px"><div data-error style="display:none;margin-bottom:12px;padding:10px 14px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.4);border-radius:8px;color:#f87171;font-size:12px"></div>';
+        + '</div><form data-form="1" style="padding:22px"><div data-error style="display:none;margin-bottom:12px;padding:10px 14px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.4);border-radius:8px;color:var(--red);font-size:12px"></div>';
       fields.forEach(function (f) {
         if (f.type === 'info') {
           bodyHtml += '<div style="font-size:12px;color:#94a3b8;margin-bottom:12px;padding:10px;background:rgba(148,163,184,.06);border-radius:6px">' + (f.html || _safe(f.value || '')) + '</div>';
           return;
         }
         bodyHtml += '<div style="margin-bottom:14px">'
-          + '<label style="display:block;font-size:12px;color:#94a3b8;margin-bottom:6px">' + _safe(f.label) + (f.required ? ' <span style="color:#ef4444">*</span>' : '') + '</label>';
+          + '<label style="display:block;font-size:12px;color:#94a3b8;margin-bottom:6px">' + _safe(f.label) + (f.required ? ' <span style="color:var(--red-strong)">*</span>' : '') + '</label>';
         if (f.type === 'textarea') {
           bodyHtml += '<textarea name="' + _safe(f.name) + '" rows="4" '
             + 'style="width:100%;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:9px 12px;border-radius:8px;font-size:13px;font-family:inherit;resize:vertical">'
@@ -468,7 +469,7 @@
       });
       bodyHtml += '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">'
         + '<button type="button" data-act="cancel" style="padding:9px 18px;background:none;border:1px solid #475569;color:#cbd5e1;border-radius:8px;cursor:pointer;font-size:13px">取消</button>'
-        + '<button type="submit" data-act="submit" style="padding:9px 22px;background:#a855f7;border:none;color:#fff;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600">提交</button>'
+        + '<button type="submit" data-act="submit" style="padding:9px 22px;background:var(--accent-2);border:none;color:#fff;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600">提交</button>'
         + '</div></form>';
       card.innerHTML = bodyHtml;
       overlay.appendChild(card);
@@ -663,7 +664,7 @@
       + '    <button onclick="lmDoSearch()" '
       + '            style="padding:8px 20px;background:#0ea5e9;color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer">搜索</button>'
       + '    <button onclick="lmExportCsv()" '
-      + '            style="padding:8px 14px;background:rgba(34,197,94,.12);color:#22c55e;border:1px solid rgba(34,197,94,.4);border-radius:6px;font-size:12px;cursor:pointer">📥 导出CSV</button>'
+      + '            style="padding:8px 14px;background:rgba(34,197,94,.12);color:var(--green-strong);border:1px solid rgba(34,197,94,.4);border-radius:6px;font-size:12px;cursor:pointer">📥 导出CSV</button>'
       + '  </div>'
       + '  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">'
       + '    <input id="lm-search-tags" placeholder="标签过滤 (逗号分隔)…" style="min-width:130px;padding:6px 10px;background:var(--bg-main);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:12px">'
@@ -725,8 +726,8 @@
         + '<option value="qualified">qualified</option><option value="converted">converted</option><option value="lost">lost</option></select>'
         + '<button onclick="lmBatchAction(\'lifecycle\')" style="padding:4px 10px;font-size:10px;background:#0ea5e920;color:#0ea5e9;border:1px solid #0ea5e940;border-radius:4px;cursor:pointer">推进</button>'
         + '<input id="lm-batch-tag" placeholder="标签名" style="width:80px;padding:4px 6px;font-size:11px;background:var(--bg-main);border:1px solid var(--border);color:var(--text);border-radius:4px">'
-        + '<button onclick="lmBatchAction(\'tag_add\')" style="padding:4px 10px;font-size:10px;background:#22c55e20;color:#22c55e;border:1px solid #22c55e40;border-radius:4px;cursor:pointer">+标签</button>'
-        + '<button onclick="lmBatchAction(\'tag_remove\')" style="padding:4px 10px;font-size:10px;background:#ef444420;color:#ef4444;border:1px solid #ef444440;border-radius:4px;cursor:pointer">-标签</button>'
+        + '<button onclick="lmBatchAction(\'tag_add\')" style="padding:4px 10px;font-size:10px;background:#22c55e20;color:var(--green-strong);border:1px solid #22c55e40;border-radius:4px;cursor:pointer">+标签</button>'
+        + '<button onclick="lmBatchAction(\'tag_remove\')" style="padding:4px 10px;font-size:10px;background:#ef444420;color:var(--red-strong);border:1px solid #ef444440;border-radius:4px;cursor:pointer">-标签</button>'
         + '</div>';
       box.innerHTML = batchBar + '<div style="display:grid;gap:8px">'
         + results.map(function (r) {
@@ -753,7 +754,7 @@
               + '</div></div>';
           }).join('') + '</div>';
     } catch (e) {
-      box.innerHTML = '<div style="color:#ef4444;padding:20px">搜索失败: ' + _safe(e.message || e) + '</div>';
+      box.innerHTML = '<div style="color:var(--red-strong);padding:20px">搜索失败: ' + _safe(e.message || e) + '</div>';
     }
   };
 
@@ -925,7 +926,7 @@
         return '<span style="display:inline-block;padding:4px 10px;background:rgba(96,165,250,.12);border-radius:4px;font-size:11px;margin:2px">'
           + (idPlatformIcon[i.platform] || '🔗') + ' ' + _safe(i.platform)
           + ': <code>' + _safe(i.account_id) + '</code>'
-          + (i.verified ? '' : ' <span style="color:#f59e0b">(soft)</span>')
+          + (i.verified ? '' : ' <span style="color:var(--amber)">(soft)</span>')
           + '</span>';
       }).join('');
 
@@ -946,14 +947,14 @@
         + '    <div style="font-size:18px;font-weight:700">📋 ' + _safe(canonical.primary_name || '(无名)') + '</div>'
         + '    <div style="font-size:11px;color:var(--text-muted);margin-top:2px">'
         + '      <code>' + _safe(canonical.canonical_id) + '</code>'
-        +        (canonical.merged_into ? ' <span style="color:#f59e0b">已合并 → ' + _safe(canonical.merged_into.substring(0, 12)) + '</span>' : '')
+        +        (canonical.merged_into ? ' <span style="color:var(--amber)">已合并 → ' + _safe(canonical.merged_into.substring(0, 12)) + '</span>' : '')
         + (function(){ var sc = (canonical.metadata||{}).lead_score; if(sc==null) return '';
              var c = sc>=70?'#22c55e':sc>=40?'#f59e0b':'#ef4444';
              return ' · <span style="padding:1px 6px;border-radius:10px;font-size:10px;font-weight:700;background:'+c+'20;color:'+c+'">⭐ '+sc+'</span>'; })()
         + '    </div>'
         + '  </div>'
         + '  <div style="display:flex;gap:8px">'
-        + '    <button onclick="lmMergeToSearch(\'' + _safe(canonical.canonical_id) + '\',\'' + _safe(canonical.primary_name || '') + '\')" style="background:rgba(251,191,36,.12);color:#eab308;border:1px solid rgba(251,191,36,.3);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11px">🔗 合并到…</button>'
+        + '    <button onclick="lmMergeToSearch(\'' + _safe(canonical.canonical_id) + '\',\'' + _safe(canonical.primary_name || '') + '\')" style="background:rgba(251,191,36,.12);color:var(--gold);border:1px solid rgba(251,191,36,.3);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11px">🔗 合并到…</button>'
         + '    <button onclick="PlatShell.modal.close(\'lm-dossier-modal\')" style="background:none;border:1px solid var(--border);color:var(--text);padding:4px 10px;border-radius:6px;cursor:pointer">✕</button>'
         + '  </div>'
         + '</div>'
@@ -980,7 +981,7 @@
             bar += '<span style="font-size:9px;color:' + (s===stg ? colors[s] : 'var(--text-dim)') + ';font-weight:' + (s===stg?'700':'400') + '">' + labels[s] + '</span>';
           });
           bar += '</div>';
-          if (stg === 'lost') bar += '<div style="margin-top:4px;font-size:10px;color:#ef4444;font-weight:600">⚠ 已流失</div>';
+          if (stg === 'lost') bar += '<div style="margin-top:4px;font-size:10px;color:var(--red-strong);font-weight:600">⚠ 已流失</div>';
           // lifecycle transitions from journey
           var lcEvents = journey.filter(function(j){ return j.action === 'lifecycle_advanced'; });
           if (lcEvents.length > 0) {
@@ -1096,7 +1097,7 @@
           return h + '</div>';
         })();
     } catch (e) {
-      body.innerHTML = '<div style="color:#ef4444;padding:20px">加载失败: ' + _safe(e.message || e) + '</div>';
+      body.innerHTML = '<div style="color:var(--red-strong);padding:20px">加载失败: ' + _safe(e.message || e) + '</div>';
     }
   };
 
@@ -1259,10 +1260,10 @@
             const atRisk = pct >= 90;
             if (atRisk) atRiskReceivers.push(r.key + '(' + pct + '%)');
             const rowStyle = atRisk
-              ? 'border:1px solid #ef4444;background:rgba(239,68,68,.06);animation:lmPulseRed 2s ease-in-out infinite'
+              ? 'border:1px solid var(--red-strong);background:rgba(239,68,68,.06);animation:lmPulseRed 2s ease-in-out infinite'
               : 'background:var(--bg-main)';
             const nameHtml = atRisk
-              ? '<b style="color:#ef4444">⚠ ' + _safe(r.key) + '</b>'
+              ? '<b style="color:var(--red-strong)">⚠ ' + _safe(r.key) + '</b>'
               : '<code>' + _safe(r.key) + '</code>';
             return ''
               + '<div style="padding:6px 10px;border-radius:4px;margin-bottom:4px;font-size:12px;' + rowStyle + '">'
@@ -1281,7 +1282,7 @@
             .map(function (kv) {
               return '<div style="display:flex;justify-content:space-between;padding:6px 10px;background:var(--bg-main);border-radius:4px;margin-bottom:4px;font-size:12px">'
                 + '<code>' + _safe(kv[0]) + '</code>'
-                + '<span style="color:#f59e0b">' + kv[1] + ' 待/已确认</span></div>';
+                + '<span style="color:var(--amber)">' + kv[1] + ' 待/已确认</span></div>';
             }).join('');
 
       const allChannels = {};
@@ -1301,8 +1302,8 @@
           const rateColor = rate >= 60 ? '#22c55e' : rate >= 30 ? '#f59e0b' : '#ef4444';
           return '<tr>'
             + '<td style="padding:6px 10px"><b>' + _safe(ch) + '</b></td>'
-            + '<td style="padding:6px 10px;color:#f59e0b;text-align:right">' + p + '</td>'
-            + '<td style="padding:6px 10px;color:#22c55e;text-align:right">' + c + '</td>'
+            + '<td style="padding:6px 10px;color:var(--amber);text-align:right">' + p + '</td>'
+            + '<td style="padding:6px 10px;color:var(--green-strong);text-align:right">' + c + '</td>'
             + '<td style="padding:6px 10px;color:' + rateColor + ';text-align:right;font-weight:600">'
             + (resolved > 0 ? rate + '%' : '-')
             + '<span style="color:var(--text-dim);font-size:10px;font-weight:400"> (' + c + '/' + resolved + ')</span>'
@@ -1310,10 +1311,10 @@
         }).join('');
 
       const deadHtml = deadN === 0
-        ? '<div style="color:#22c55e;font-size:12px">✓ 无失败 webhook</div>'
-        : '<div style="color:#ef4444;font-size:12px;margin-bottom:6px">⚠ ' + deadN + ' 条死信</div>'
+        ? '<div style="color:var(--green-strong);font-size:12px">✓ 无失败 webhook</div>'
+        : '<div style="color:var(--red-strong);font-size:12px;margin-bottom:6px">⚠ ' + deadN + ' 条死信</div>'
           + '<button onclick="lmViewDeadLetters()" '
-          + 'style="padding:5px 12px;background:rgba(239,68,68,.12);color:#ef4444;border:1px solid rgba(239,68,68,.3);border-radius:6px;font-size:11px;cursor:pointer">查看 / 重试</button>';
+          + 'style="padding:5px 12px;background:rgba(239,68,68,.12);color:var(--red-strong);border:1px solid rgba(239,68,68,.3);border-radius:6px;font-size:11px;cursor:pointer">查看 / 重试</button>';
 
       // Phase 8b: A 端获客漏斗 (从 /lead-mesh/funnel 拿到)
       const fu = funnel || {};
@@ -1335,7 +1336,7 @@
         ? '<span style="color:var(--text-dim);font-size:11px">暂无</span>'
         : personaEntries.map(function (kv) {
             return '<span style="display:inline-block;padding:2px 8px;background:rgba(96,165,250,.12);'
-              + 'color:#60a5fa;border-radius:10px;font-size:11px;margin-right:6px">'
+              + 'color:var(--blue-soft);border-radius:10px;font-size:11px;margin-right:6px">'
               + _safe(kv[0]) + ': ' + kv[1] + '</span>';
           }).join('');
 
@@ -1366,12 +1367,12 @@
       const dateChipHtml = ff.date
         ? '  <span style="display:inline-flex;align-items:center;gap:4px;'
           + '             padding:3px 8px;background:rgba(245,158,11,.15);'
-          + '             color:#f59e0b;border:1px solid rgba(245,158,11,.4);'
+          + '             color:var(--amber);border:1px solid rgba(245,158,11,.4);'
           + '             border-radius:12px;font-size:11px">'
           + '    📅 ' + _safe(ff.date)
           + '    <button onclick="lmCCSetFilter(\'date\', \'\')" '
           + '            title="清除单日过滤, 回到 ' + ff.days + ' 天窗口"'
-          + '            style="background:none;border:none;color:#f59e0b;'
+          + '            style="background:none;border:none;color:var(--amber);'
           + '                   cursor:pointer;padding:0;font-size:13px;line-height:1">✕</button>'
           + '  </span>'
         : '';
@@ -1396,11 +1397,11 @@
       // 瓶颈可点击: 点 code 跳 blocked peer 子 modal
       const topBlockedHtml = topBlocked
         ? '    <div><span style="color:var(--text-dim)">瓶颈:</span>'
-          + '      <code style="color:#f59e0b;margin-left:4px;cursor:pointer;'
+          + '      <code style="color:var(--amber);margin-left:4px;cursor:pointer;'
           + '                  text-decoration:underline dotted" '
           + '            onclick="lmOpenBlockedPeers(\'' + _safe(topBlocked) + '\')" '
           + '            title="点击查看具体被挡的 peer">' + _safe(topBlocked) + '</code></div>'
-        : '    <div style="color:#22c55e">✓ 无主要瓶颈</div>';
+        : '    <div style="color:var(--green-strong)">✓ 无主要瓶颈</div>';
 
       // Phase 8e: sparkline SVG — 纯 SVG 零依赖
       const series = (timeseries && timeseries.series) || [];
@@ -1432,8 +1433,8 @@
         + '              padding-top:10px;border-top:1px dashed rgba(255,255,255,.08);font-size:11px">'
         + '    <div>'
         + '      <span style="color:var(--text-dim)">via</span>:'
-        + '      <span style="color:#22c55e;margin-left:4px">inline=' + fuInline + '</span>'
-        + '      <span style="color:#60a5fa;margin-left:8px">fallback=' + fuFallback + '</span>'
+        + '      <span style="color:var(--green-strong);margin-left:4px">inline=' + fuInline + '</span>'
+        + '      <span style="color:var(--blue-soft);margin-left:8px">fallback=' + fuFallback + '</span>'
         + (fuUnknown > 0
             ? '      <span style="color:var(--text-dim);margin-left:8px">unknown=' + fuUnknown + '</span>'
             : '')
@@ -1468,7 +1469,7 @@
         + '    <button id="lm-cc-refresh-btn" onclick="lmCCToggleRefresh()" '
         + '            title="' + refreshBtnTitle + '"'
         + '            style="padding:4px 10px;background:rgba(96,165,250,.12);'
-        + '                   color:#60a5fa;border:1px solid rgba(96,165,250,.3);'
+        + '                   color:var(--blue-soft);border:1px solid rgba(96,165,250,.3);'
         + '                   border-radius:6px;font-size:11px;cursor:pointer">'
         +        refreshBtnLabel + '</button>'
         + '    <button onclick="PlatShell.modal.close(\'lm-cc-modal\')" style="background:none;border:1px solid var(--border);color:var(--text);padding:4px 10px;border-radius:6px;cursor:pointer">✕</button>'
@@ -1498,7 +1499,7 @@
         + '    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
         + '      <span style="font-size:13px;color:var(--text-muted)">📬 接收方负载</span>'
         + (atRiskReceivers.length > 0
-            ? '      <span style="font-size:10px;color:#ef4444;font-weight:700">⚠ ' + atRiskReceivers.length + ' 已接近满载</span>'
+            ? '      <span style="font-size:10px;color:var(--red-strong);font-weight:700">⚠ ' + atRiskReceivers.length + ' 已接近满载</span>'
             : '')
         + '    </div>'
         +      (rvRows || '<div style="color:var(--text-dim);font-size:12px">无接收方或无待处理交接</div>')
@@ -1509,7 +1510,7 @@
         + '    <div style="margin-top:14px">'
         + '      <div style="font-size:13px;color:var(--text-muted);margin-bottom:8px">🔧 运维操作</div>'
         + '      <button onclick="lmFlushWebhooks()" '
-        + '              style="padding:6px 12px;background:rgba(96,165,250,.15);color:#60a5fa;border:1px solid rgba(96,165,250,.4);border-radius:6px;font-size:11px;cursor:pointer;margin-right:6px">⚡ 手动 flush webhook</button>'
+        + '              style="padding:6px 12px;background:rgba(96,165,250,.15);color:var(--blue-soft);border:1px solid rgba(96,165,250,.4);border-radius:6px;font-size:11px;cursor:pointer;margin-right:6px">⚡ 手动 flush webhook</button>'
         + '    </div>'
         + '  </div>'
         + '</div>';
@@ -1558,7 +1559,7 @@
         }
       }
     } catch (e) {
-      body.innerHTML = '<div style="color:#ef4444;padding:20px">加载失败: ' + _safe(e.message || e) + '</div>';
+      body.innerHTML = '<div style="color:var(--red-strong);padding:20px">加载失败: ' + _safe(e.message || e) + '</div>';
     }
   };
 
@@ -1697,32 +1698,32 @@
             const persona = p.persona_key || '';
             return ''
               + '<div style="padding:10px 14px;background:var(--bg-main);'
-              + '            border-left:3px solid #f59e0b;border-radius:4px;margin-bottom:6px;'
+              + '            border-left:3px solid var(--amber);border-radius:4px;margin-bottom:6px;'
               + '            display:flex;justify-content:space-between;align-items:center">'
               + '  <div style="flex:1;min-width:0">'
               + '    <div style="font-size:12px">'
-              + '      <code style="color:#60a5fa">' + _safe(cidShort) + '…</code>'
+              + '      <code style="color:var(--blue-soft)">' + _safe(cidShort) + '…</code>'
               + '      <span style="margin-left:10px;color:var(--text-dim);font-size:10px">'
               +          _safe(at) + '</span>'
               + (persona
                   ? '      <span style="margin-left:10px;padding:1px 6px;background:rgba(96,165,250,.12);'
-                    + '                   color:#60a5fa;border-radius:8px;font-size:10px">'
+                    + '                   color:var(--blue-soft);border-radius:8px;font-size:10px">'
                     + _safe(persona) + '</span>'
                   : '')
               + '    </div>'
               + '    <div style="font-size:10px;color:var(--text-dim);margin-top:2px">'
-              + '      被挡次数: <b style="color:#f59e0b">' + p.n_blocked + '</b>'
+              + '      被挡次数: <b style="color:var(--amber)">' + p.n_blocked + '</b>'
               + '    </div>'
               + '  </div>'
               + '  <div style="display:flex;gap:4px">'
               + '    <button onclick="PlatShell.modal.close(\'lm-blocked-peers-modal\');'
               + '                     lmOpenLeadDossier(\'' + _safe(cid) + '\')" '
-              + '            style="padding:4px 10px;background:rgba(96,165,250,.12);color:#60a5fa;'
+              + '            style="padding:4px 10px;background:rgba(96,165,250,.12);color:var(--blue-soft);'
               + '                   border:1px solid rgba(96,165,250,.3);border-radius:4px;'
               + '                   font-size:11px;cursor:pointer">📖 dossier</button>'
               + '    <button onclick="lmAddToBlocklist(\'' + _safe(cid) + '\', \'' + _safe(reason) + '\')" '
               + '            title="加入 blocklist, 后续 A 端 add_friend/greeting 自动 skip"'
-              + '            style="padding:4px 10px;background:rgba(239,68,68,.12);color:#ef4444;'
+              + '            style="padding:4px 10px;background:rgba(239,68,68,.12);color:var(--red-strong);'
               + '                   border:1px solid rgba(239,68,68,.3);border-radius:4px;'
               + '                   font-size:11px;cursor:pointer">🚫 加黑</button>'
               + '  </div>'
@@ -1733,7 +1734,7 @@
         + '  <div>'
         + '    <div style="font-size:16px;font-weight:700">🔍 被挡 peer 列表</div>'
         + '    <div style="font-size:11px;color:var(--text-muted);margin-top:2px">'
-        + '      reason: <code style="color:#f59e0b">' + _safe(reason) + '</code>'
+        + '      reason: <code style="color:var(--amber)">' + _safe(reason) + '</code>'
         + '      · 近 ' + f.days + ' 天 · 共 ' + peers.length + ' 个唯一 peer'
         + '    </div>'
         + '  </div>'
@@ -1744,7 +1745,7 @@
         + rows;
     } catch (e) {
       document.getElementById('lm-bp-body').innerHTML =
-        '<div style="color:#ef4444;padding:20px">加载失败: ' + _safe(e.message || e) + '</div>';
+        '<div style="color:var(--red-strong);padding:20px">加载失败: ' + _safe(e.message || e) + '</div>';
     }
   };
 
@@ -1771,10 +1772,10 @@
       const r = await Shell.api.get('/lead-mesh/webhooks/dead-letters?limit=100');
       const list = (r && r.dead_letters) || [];
       const rows = list.length === 0
-        ? '<div style="text-align:center;padding:40px;color:#22c55e">✓ 没有死信</div>'
+        ? '<div style="text-align:center;padding:40px;color:var(--green-strong)">✓ 没有死信</div>'
         : list.map(function (d) {
             return ''
-              + '<div style="padding:10px 14px;background:var(--bg-main);border-left:3px solid #ef4444;border-radius:6px;margin-bottom:6px">'
+              + '<div style="padding:10px 14px;background:var(--bg-main);border-left:3px solid var(--red-strong);border-radius:6px;margin-bottom:6px">'
               + '  <div style="display:flex;justify-content:space-between;align-items:center">'
               + '    <div style="flex:1;min-width:0">'
               + '      <div style="font-weight:600;font-size:12px">'
@@ -1782,7 +1783,7 @@
               + '      <div style="font-size:10px;color:var(--text-dim);margin-top:2px">' + _safe(d.last_error || '') + '</div>'
               + '    </div>'
               + '    <button onclick="lmRetryDeadLetter(' + d.id + ')" '
-              + '            style="padding:4px 10px;background:rgba(34,197,94,.15);color:#22c55e;border:1px solid rgba(34,197,94,.4);border-radius:4px;font-size:11px;cursor:pointer">🔄 重试</button>'
+              + '            style="padding:4px 10px;background:rgba(34,197,94,.15);color:var(--green-strong);border:1px solid rgba(34,197,94,.4);border-radius:4px;font-size:11px;cursor:pointer">🔄 重试</button>'
               + '  </div>'
               + '</div>';
           }).join('');
@@ -1793,7 +1794,7 @@
         + '</div>'
         + rows;
     } catch (e) {
-      document.getElementById('lm-dead-body').innerHTML = '<div style="color:#ef4444">加载失败</div>';
+      document.getElementById('lm-dead-body').innerHTML = '<div style="color:var(--red-strong)">加载失败</div>';
     }
   };
 
@@ -1841,8 +1842,8 @@
       const alertBanner = atRisk.length === 0
         ? ''
         : ('<div style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.35);'
-            + 'border-left:4px solid #ef4444;padding:8px 12px;margin-bottom:12px;border-radius:4px;'
-            + 'font-size:12px;color:#ef4444">'
+            + 'border-left:4px solid var(--red-strong);padding:8px 12px;margin-bottom:12px;border-radius:4px;'
+            + 'font-size:12px;color:var(--red-strong)">'
             + '⚠ <b>' + atRisk.length + ' 个接收方负载 ≥ 90%</b>: '
             + atRisk.map(function (x) { return _safe(x.key); }).join(', ')
             + ' — 建议启用 backup_key 或上调 daily_cap'
@@ -1862,10 +1863,10 @@
         + '  </div>'
         + '  <div style="display:flex;gap:8px">'
         + '    <button onclick="lmOpenNewReceiverDialog()" '
-        + '            style="padding:6px 14px;background:#22c55e;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer">'
+        + '            style="padding:6px 14px;background:var(--green-strong);color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer">'
         + '      ➕ 新增接收方</button>'
         + '    <button onclick="_lmRenderReceivers()" '
-        + '            style="padding:6px 12px;background:rgba(96,165,250,.15);color:#60a5fa;border:1px solid rgba(96,165,250,.4);border-radius:6px;font-size:11px;cursor:pointer">'
+        + '            style="padding:6px 12px;background:rgba(96,165,250,.15);color:var(--blue-soft);border:1px solid rgba(96,165,250,.4);border-radius:6px;font-size:11px;cursor:pointer">'
         + '      🔄 刷新</button>'
         + '    <button onclick="PlatShell.modal.close(\'lm-receivers-modal\')" '
         + '            style="background:none;border:1px solid var(--border);color:var(--text);padding:4px 10px;border-radius:6px;cursor:pointer">✕</button>'
@@ -1888,7 +1889,7 @@
         + ' 轮转算法 least_loaded; at_cap 时自动跳 backup_key'
         + '</div>';
     } catch (e) {
-      body.innerHTML = '<div style="color:#ef4444;padding:20px">加载失败: ' + _safe(e.message || e) + '</div>';
+      body.innerHTML = '<div style="color:var(--red-strong);padding:20px">加载失败: ' + _safe(e.message || e) + '</div>';
     }
   }
 
@@ -1904,23 +1905,23 @@
       ? ';background:rgba(239,68,68,.06);animation:lmPulseRed 2s ease-in-out infinite'
       : '';
     const pctLabel = atRisk
-      ? '<span style="color:#ef4444;font-weight:700">⚠ ' + pct + '%</span>'
+      ? '<span style="color:var(--red-strong);font-weight:700">⚠ ' + pct + '%</span>'
       : '<span style="color:' + barColor + '">' + pct + '%</span>';
     const statusBadge = enabled
-      ? '<span style="color:#22c55e;font-weight:600">● 启用</span>'
+      ? '<span style="color:var(--green-strong);font-weight:600">● 启用</span>'
       : '<span style="color:#94a3b8">○ 禁用</span>';
     const toggleBtn = enabled
       ? ('<button onclick="lmToggleReceiver(\'' + _safe(r.key) + '\', false)" '
-         + 'style="padding:3px 8px;font-size:11px;background:rgba(245,158,11,.12);color:#f59e0b;border:1px solid rgba(245,158,11,.3);border-radius:4px;cursor:pointer">禁用</button>')
+         + 'style="padding:3px 8px;font-size:11px;background:rgba(245,158,11,.12);color:var(--amber);border:1px solid rgba(245,158,11,.3);border-radius:4px;cursor:pointer">禁用</button>')
       : ('<button onclick="lmToggleReceiver(\'' + _safe(r.key) + '\', true)" '
-         + 'style="padding:3px 8px;font-size:11px;background:rgba(34,197,94,.12);color:#22c55e;border:1px solid rgba(34,197,94,.3);border-radius:4px;cursor:pointer">启用</button>');
+         + 'style="padding:3px 8px;font-size:11px;background:rgba(34,197,94,.12);color:var(--green-strong);border:1px solid rgba(34,197,94,.3);border-radius:4px;cursor:pointer">启用</button>');
     const personaTags = (r.persona_filter || []).slice(0, 2).join(', ') || '所有';
 
     return ''
       + '<tr style="border-bottom:1px solid var(--border)' + rowExtraStyle + '">'
       + '  <td style="padding:8px;cursor:pointer" onclick="lmOpenEditReceiver(\'' + _safe(r.key) + '\')"'
       + '      title="点击编辑">'
-      + '    <b style="color:#60a5fa;text-decoration:underline">' + _safe(r.key) + '</b>'
+      + '    <b style="color:var(--blue-soft);text-decoration:underline">' + _safe(r.key) + '</b>'
       + '    <div style="font-size:10px;color:var(--text-dim)">' + _safe(r.display_name || '') + '</div>'
       + '    <div style="font-size:10px;color:var(--text-dim)">persona: ' + _safe(personaTags) + '</div>'
       + '  </td>'
@@ -1942,7 +1943,7 @@
       + '            style="padding:3px 8px;font-size:11px;background:rgba(14,165,233,.12);color:#0ea5e9;border:1px solid rgba(14,165,233,.3);border-radius:4px;cursor:pointer;margin-right:4px">✏️ 编辑</button>'
       + toggleBtn
       + '    <button onclick="lmDeleteReceiver(\'' + _safe(r.key) + '\')" '
-      + '            style="margin-left:4px;padding:3px 8px;font-size:11px;background:rgba(239,68,68,.12);color:#ef4444;border:1px solid rgba(239,68,68,.3);border-radius:4px;cursor:pointer">🗑</button>'
+      + '            style="margin-left:4px;padding:3px 8px;font-size:11px;background:rgba(239,68,68,.12);color:var(--red-strong);border:1px solid rgba(239,68,68,.3);border-radius:4px;cursor:pointer">🗑</button>'
       + '  </td>'
       + '</tr>';
   }
@@ -2136,7 +2137,7 @@
       }).join('');
       return ''
         + '<div style="margin-bottom:14px">'
-        + '  <div style="font-size:11px;color:var(--text-dim);font-weight:600;margin-bottom:4px;padding:4px 8px;background:rgba(255,255,255,.03);border-left:3px solid #60a5fa;border-radius:0 4px 4px 0">'
+        + '  <div style="font-size:11px;color:var(--text-dim);font-weight:600;margin-bottom:4px;padding:4px 8px;background:rgba(255,255,255,.03);border-left:3px solid var(--blue-soft);border-radius:0 4px 4px 0">'
         + '    📅 ' + _safe(b.label) + ' <span style="color:var(--text-dim);font-weight:400">(' + b.events.length + ' 事件)</span>'
         + '  </div>'
         +    eventsHtml
@@ -2199,16 +2200,16 @@
           + '<td style="padding:6px 8px;font-size:11px;font-family:monospace">' + (m.id || '') + '</td>'
           + '<td style="padding:6px 8px;font-size:11px;font-family:monospace">' + (m.source_canonical_id || '').substr(0, 12) + '…</td>'
           + '<td style="padding:6px 8px;font-size:11px;font-family:monospace">' + (m.target_canonical_id || '').substr(0, 12) + '…</td>'
-          + '<td style="padding:6px 8px;font-size:11px;' + (blocked ? 'color:#f59e0b' : '') + '">' + modeLabel + '</td>'
+          + '<td style="padding:6px 8px;font-size:11px;' + (blocked ? 'color:var(--amber)' : '') + '">' + modeLabel + '</td>'
           + '<td style="padding:6px 8px;font-size:11px">' + ((m.confidence || 0) * 100).toFixed(0) + '%</td>'
           + '<td style="padding:6px 8px;font-size:10px;color:var(--text-muted)">' + reasonsArr.join(', ') + '</td>'
           + '<td style="padding:6px 8px;font-size:11px">' + _fmtTime(m.merged_at) + '</td>'
           + '<td style="padding:6px 8px">'
           + (blocked
-            ? '<span style="font-size:10px;color:#f59e0b">已拦截</span>'
+            ? '<span style="font-size:10px;color:var(--amber)">已拦截</span>'
             : reverted
               ? '<span style="font-size:10px;color:#fbbf24">已撤销</span>'
-              : '<button onclick="lmRevertMerge(' + m.id + ')" style="background:rgba(239,68,68,.12);color:#ef4444;border:1px solid rgba(239,68,68,.3);padding:2px 8px;border-radius:4px;cursor:pointer;font-size:10px">撤销</button>')
+              : '<button onclick="lmRevertMerge(' + m.id + ')" style="background:rgba(239,68,68,.12);color:var(--red-strong);border:1px solid rgba(239,68,68,.3);padding:2px 8px;border-radius:4px;cursor:pointer;font-size:10px">撤销</button>')
           + '</td></tr>';
       }).join('');
 
@@ -2225,15 +2226,15 @@
               + '<td style="padding:5px 8px;font-size:11px">' + _safe(s.target_name||'?') + '</td>'
               + '<td style="padding:5px 8px;font-size:11px">' + (s.name_similarity * 100).toFixed(0) + '%</td>'
               + '<td style="padding:5px 8px;font-size:11px">' + (s.target_identity_count||0) + '</td>'
-              + '<td style="padding:5px 8px;font-size:10px;color:#ef4444">' + (s.reasons||[]).join(', ') + '</td>'
+              + '<td style="padding:5px 8px;font-size:10px;color:var(--red-strong)">' + (s.reasons||[]).join(', ') + '</td>'
               + '<td style="padding:5px 8px;white-space:nowrap">'
-              + '<button onclick="lmRevertMerge(' + s.merge_id + ')" style="background:rgba(239,68,68,.12);color:#ef4444;border:1px solid rgba(239,68,68,.3);padding:2px 8px;border-radius:4px;cursor:pointer;font-size:10px;margin-right:4px">撤销</button>'
-              + '<button onclick="lmMarkMergeSafe(' + s.merge_id + ')" style="background:rgba(34,197,94,.12);color:#22c55e;border:1px solid rgba(34,197,94,.3);padding:2px 8px;border-radius:4px;cursor:pointer;font-size:10px">安全✓</button>'
+              + '<button onclick="lmRevertMerge(' + s.merge_id + ')" style="background:rgba(239,68,68,.12);color:var(--red-strong);border:1px solid rgba(239,68,68,.3);padding:2px 8px;border-radius:4px;cursor:pointer;font-size:10px;margin-right:4px">撤销</button>'
+              + '<button onclick="lmMarkMergeSafe(' + s.merge_id + ')" style="background:rgba(34,197,94,.12);color:var(--green-strong);border:1px solid rgba(34,197,94,.3);padding:2px 8px;border-radius:4px;cursor:pointer;font-size:10px">安全✓</button>'
               + '</td>'
               + '</tr>';
           }).join('');
           suspectsHtml = '<div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border)">'
-            + '<div style="font-size:12px;font-weight:600;color:#ef4444;margin-bottom:8px">⚠️ 可疑合并 (' + suspects.length + ' 条需审核)</div>'
+            + '<div style="font-size:12px;font-weight:600;color:var(--red-strong);margin-bottom:8px">⚠️ 可疑合并 (' + suspects.length + ' 条需审核)</div>'
             + '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:rgba(239,68,68,.06)">'
             + '<th style="text-align:left;padding:5px 8px">ID</th><th style="text-align:left;padding:5px 8px">源名</th>'
             + '<th style="text-align:left;padding:5px 8px">目标名</th><th style="text-align:left;padding:5px 8px">相似度</th>'
@@ -2270,7 +2271,7 @@
         + suspectsHtml;
     } catch (e) {
       document.getElementById('lm-merge-body').innerHTML =
-        '<div style="color:#ef4444">加载失败: ' + (e.message || e) + '</div>';
+        '<div style="color:var(--red-strong)">加载失败: ' + (e.message || e) + '</div>';
     }
   };
 
@@ -2344,11 +2345,11 @@
           return '<div style="padding:8px 12px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center">'
             + '<div><div style="font-size:13px;font-weight:600">' + _safe(l.primary_name || l.display_name || '(无名)') + '</div>'
             + '<code style="font-size:10px;color:var(--text-muted)">' + _safe((l.canonical_id || '').substring(0, 16)) + '</code></div>'
-            + '<button onclick="lmConfirmMerge(\'' + _safe(sourceCid) + '\',\'' + _safe(l.canonical_id) + '\',\'' + _safe(l.primary_name || l.display_name || '') + '\')" style="background:rgba(251,191,36,.15);color:#eab308;border:1px solid rgba(251,191,36,.3);padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px">合并到此</button>'
+            + '<button onclick="lmConfirmMerge(\'' + _safe(sourceCid) + '\',\'' + _safe(l.canonical_id) + '\',\'' + _safe(l.primary_name || l.display_name || '') + '\')" style="background:rgba(251,191,36,.15);color:var(--gold);border:1px solid rgba(251,191,36,.3);padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px">合并到此</button>'
             + '</div>';
         }).join('');
     } catch (e) {
-      container.innerHTML = '<div style="color:#ef4444">搜索失败: ' + _safe(e.message || e) + '</div>';
+      container.innerHTML = '<div style="color:var(--red-strong)">搜索失败: ' + _safe(e.message || e) + '</div>';
     }
   };
 
@@ -2424,19 +2425,19 @@
         + '<div style="font-size:22px;font-weight:700;color:#818cf8">' + (r.active_leads||0) + '</div>'
         + '<div style="font-size:10px;color:var(--text-muted)">活跃 Lead</div></div>'
         + '<div style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:10px;text-align:center">'
-        + '<div style="font-size:22px;font-weight:700;color:#22c55e">' + (r.total_identities||0) + '</div>'
+        + '<div style="font-size:22px;font-weight:700;color:var(--green-strong)">' + (r.total_identities||0) + '</div>'
         + '<div style="font-size:10px;color:var(--text-muted)">总身份数</div></div>'
         + '<div style="background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.3);border-radius:8px;padding:10px;text-align:center">'
-        + '<div style="font-size:22px;font-weight:700;color:#f59e0b">' + (r.cross_platform_leads||0) + '</div>'
+        + '<div style="font-size:22px;font-weight:700;color:var(--amber)">' + (r.cross_platform_leads||0) + '</div>'
         + '<div style="font-size:10px;color:var(--text-muted)">跨平台 Lead</div></div>'
         + '<div style="background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.3);border-radius:8px;padding:10px;text-align:center">'
-        + '<div style="font-size:22px;font-weight:700;color:#3b82f6">' + (r.avg_identities_per_lead||0) + '</div>'
+        + '<div style="font-size:22px;font-weight:700;color:var(--blue-strong)">' + (r.avg_identities_per_lead||0) + '</div>'
         + '<div style="font-size:10px;color:var(--text-muted)">身份/Lead</div></div>'
         + '<div style="background:rgba(168,85,247,.08);border:1px solid rgba(168,85,247,.3);border-radius:8px;padding:10px;text-align:center">'
-        + '<div style="font-size:22px;font-weight:700;color:#a855f7">' + (ms.total||0) + '</div>'
+        + '<div style="font-size:22px;font-weight:700;color:var(--accent-2)">' + (ms.total||0) + '</div>'
         + '<div style="font-size:10px;color:var(--text-muted)">合并 (A' + (ms.auto||0) + '/M' + (ms.manual||0) + '/R' + (ms.reverted||0) + ')</div></div>'
         + '<div style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);border-radius:8px;padding:10px;text-align:center">'
-        + '<div style="font-size:22px;font-weight:700;color:#ef4444">' + (dd.total_blocks||0) + '</div>'
+        + '<div style="font-size:22px;font-weight:700;color:var(--red-strong)">' + (dd.total_blocks||0) + '</div>'
         + '<div style="font-size:10px;color:var(--text-muted)">跨设备拦截 (' + (dd.unique_leads_saved||0) + ' leads)</div></div>'
         + '</div>'; })()
         // K2: Lifecycle funnel
@@ -2516,10 +2517,10 @@
           var contacted = (s.contacted||0)+(s.engaged||0)+(s.qualified||0)+(s.converted||0);
           var engaged = (s.engaged||0)+(s.qualified||0)+(s.converted||0);
           return '<div style="font-size:11px;line-height:1.8">'
-            + '触达率: <b style="color:#3b82f6">' + (contacted/t*100).toFixed(1) + '%</b><br>'
-            + '互动率: <b style="color:#8b5cf6">' + (engaged/t*100).toFixed(1) + '%</b><br>'
-            + '合格率: <b style="color:#22c55e">' + (((s.qualified||0)+(s.converted||0))/Math.max(t,1)*100).toFixed(1) + '%</b><br>'
-            + '转化率: <b style="color:#f59e0b">' + ((s.converted||0)/Math.max(t,1)*100).toFixed(1) + '%</b></div>';
+            + '触达率: <b style="color:var(--blue-strong)">' + (contacted/t*100).toFixed(1) + '%</b><br>'
+            + '互动率: <b style="color:var(--violet)">' + (engaged/t*100).toFixed(1) + '%</b><br>'
+            + '合格率: <b style="color:var(--green-strong)">' + (((s.qualified||0)+(s.converted||0))/Math.max(t,1)*100).toFixed(1) + '%</b><br>'
+            + '转化率: <b style="color:var(--amber)">' + ((s.converted||0)/Math.max(t,1)*100).toFixed(1) + '%</b></div>';
         })()
         + '</div></div>'
         // P2: 阶段停留时长
@@ -2581,7 +2582,7 @@
           var al = r.lifecycle_alerts || [];
           if (!al.length) return '';
           var h = '<div style="margin-top:14px;padding:10px 14px;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.25);border-radius:8px">'
-            + '<div style="font-size:12px;font-weight:600;color:#f59e0b;margin-bottom:6px">⚠️ 漏斗瓶颈告警 (' + al.length + ')</div>';
+            + '<div style="font-size:12px;font-weight:600;color:var(--amber);margin-bottom:6px">⚠️ 漏斗瓶颈告警 (' + al.length + ')</div>';
           al.forEach(function(a) {
             h += '<div style="font-size:11px;color:var(--text-main);margin-bottom:3px">• ' + _safe(a.message || '') + '</div>';
           });
@@ -2593,12 +2594,12 @@
           var leads = sla.leads || [];
           if (!leads.length) return '';
           var h = '<div style="margin-top:14px;padding:10px 14px;background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.2);border-radius:8px">'
-            + '<div style="font-size:12px;font-weight:600;color:#ef4444;margin-bottom:6px">⏰ SLA 超时 (' + sla.at_risk_count + ' 条)</div>';
+            + '<div style="font-size:12px;font-weight:600;color:var(--red-strong);margin-bottom:6px">⏰ SLA 超时 (' + sla.at_risk_count + ' 条)</div>';
           leads.slice(0, 5).forEach(function(l) {
             h += '<div style="font-size:11px;margin-bottom:3px;display:flex;justify-content:space-between">'
               + '<span onclick="lmOpenLeadDossier(\'' + _safe(l.canonical_id) + '\')" style="cursor:pointer;color:var(--text-main);text-decoration:underline">'
               + _safe(l.primary_name || l.canonical_id.substring(0,8)) + '</span>'
-              + '<span style="color:var(--text-dim)">' + _safe(l.stage) + ' · <b style="color:#ef4444">' + (l.dwell_days||'?') + '天</b> (SLA ' + l.sla_days + '天)</span></div>';
+              + '<span style="color:var(--text-dim)">' + _safe(l.stage) + ' · <b style="color:var(--red-strong)">' + (l.dwell_days||'?') + '天</b> (SLA ' + l.sla_days + '天)</span></div>';
           });
           return h + '</div>';
         })()
@@ -2634,10 +2635,10 @@
           if (rf.length) {
             h += '<div style="margin-top:8px;font-size:10px;color:var(--text-muted)">最近失败:</div>';
             rf.forEach(function(f) {
-              h += '<div style="font-size:10px;margin-bottom:2px;color:#ef4444">'
+              h += '<div style="font-size:10px;margin-bottom:2px;color:var(--red-strong)">'
                 + '• #' + f.id + ' ' + _safe(f.event_type) + ' → ' + _safe((f.target_url||'').substring(0,40)) + '…'
                 + ' <span style="color:var(--text-dim)">(' + f.attempt_count + '次)</span>'
-                + (f.status==='dead_letter' ? ' <button onclick="lmRetryDeadLetter(' + f.id + ')" style="font-size:9px;padding:1px 6px;cursor:pointer;background:#ef444420;color:#ef4444;border:1px solid #ef444440;border-radius:3px">重试</button>' : '')
+                + (f.status==='dead_letter' ? ' <button onclick="lmRetryDeadLetter(' + f.id + ')" style="font-size:9px;padding:1px 6px;cursor:pointer;background:#ef444420;color:var(--red-strong);border:1px solid #ef444440;border-radius:3px">重试</button>' : '')
                 + '</div>';
             });
           }
@@ -2647,11 +2648,11 @@
         + (function() {
           var au = r._audit || {};
           var s = au.summary || {};
-          if (!s.has_issues) return '<div style="margin-top:14px;padding:8px 14px;background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.2);border-radius:8px;font-size:11px;color:#22c55e">✅ 数据完整性检查: 无异常</div>';
+          if (!s.has_issues) return '<div style="margin-top:14px;padding:8px 14px;background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.2);border-radius:8px;font-size:11px;color:var(--green-strong)">✅ 数据完整性检查: 无异常</div>';
           var h = '<div style="margin-top:14px;padding:10px 14px;background:rgba(251,146,60,.06);border:1px solid rgba(251,146,60,.2);border-radius:8px">'
             + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
-            + '<div style="font-size:12px;font-weight:600;color:#fb923c">🔍 数据完整性审计</div>'
-            + '<button onclick="lmRunAuditFix()" style="font-size:9px;padding:2px 8px;cursor:pointer;background:#fb923c20;color:#fb923c;border:1px solid #fb923c40;border-radius:3px">自动修复</button></div>';
+            + '<div style="font-size:12px;font-weight:600;color:var(--orange)">🔍 数据完整性审计</div>'
+            + '<button onclick="lmRunAuditFix()" style="font-size:9px;padding:2px 8px;cursor:pointer;background:#fb923c20;color:var(--orange);border:1px solid #fb923c40;border-radius:3px">自动修复</button></div>';
           var checks = [
             {k:'orphan_count', label:'孤儿身份', icon:'👻', color:'#ef4444'},
             {k:'empty_journey_count', label:'无事件 lead', icon:'📭', color:'#f59e0b'},
@@ -2671,7 +2672,7 @@
         })();
     } catch (e) {
       document.getElementById('lm-kpi-body').innerHTML =
-        '<div style="color:#ef4444">加载失败: ' + _safe(e.message || e) + '</div>';
+        '<div style="color:var(--red-strong)">加载失败: ' + _safe(e.message || e) + '</div>';
     }
   };
 

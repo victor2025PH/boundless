@@ -27,7 +27,7 @@ migrate.bat   :: 一键从非标准启动 (uvicorn 直起) 切到 service_wrappe
 
 启动配置：编辑 [`config/launch.env`](config/launch.env)（端口/绑定地址/TLS）。
 
-后台地址：**http://localhost:8000/dashboard** ⚠️ 用 `localhost`，不要用 `192.168.x.x`（详见 RUNBOOK F1）。
+后台地址：**http://localhost:18080/dashboard** ⚠️ 用 `localhost`，不要用 `192.168.x.x`（详见 RUNBOOK F1）。
 
 ---
 
@@ -132,7 +132,7 @@ start.bat
 
 # 验证
 status.bat
-# 浏览器打开 http://localhost:8000/dashboard
+# 浏览器打开 http://localhost:18080/dashboard
 ```
 
 详细启停/重启/故障 → [`docs/SYSTEM_RUNBOOK.md`](docs/SYSTEM_RUNBOOK.md)。
@@ -156,7 +156,7 @@ scripts/ops/setup_autostart.bat
 
 ## API 文档
 
-启动后访问 http://localhost:8000/docs 查看 Swagger 文档。
+启动后访问 http://localhost:18080/docs 查看 Swagger 文档。
 
 **29 个路由模块**涵盖:
 - 设备管理: `/devices/*`

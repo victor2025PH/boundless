@@ -17,6 +17,9 @@ Pillow>=9.0.0
 
 # ── 调度 ──
 croniter>=1.3.0
+# Windows 上 zoneinfo 无系统时区库，smart_scheduler.best_send_time 需要它
+# （缺失时按时区计算的最佳发送时段会静默返回 None）
+tzdata>=2024.1 ; platform_system == "Windows"
 
 # ── 集群 / 监控 ──
 psutil>=5.9.0                 # CPU/内存采集（心跳上报）

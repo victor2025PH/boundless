@@ -71,14 +71,14 @@ async function loadClusterPage(){
               <span style="font-size:10px;padding:1px 6px;border-radius:3px;background:${h.online?'rgba(34,197,94,.12)':'rgba(239,68,68,.12)'};color:${stColor}">${stLabel}</span>
             </div>
             <div style="display:flex;gap:4px">
-              ${h.online?`<button class="dev-btn" style="font-size:10px;padding:2px 8px;color:#60a5fa;border-color:#60a5fa" onclick="restartWorker('${h.host_id}','${h.host_name||h.host_id.substring(0,8)}')">🔄 重启</button>`:''}
-              <button class="dev-btn" style="font-size:10px;padding:2px 8px;color:#f59e0b;border-color:#f59e0b" onclick="updateWorker('${h.host_id}','${h.host_name||h.host_id.substring(0,8)}')">⬆ 更新</button>
+              ${h.online?`<button class="dev-btn" style="font-size:10px;padding:2px 8px;color:var(--blue-soft);border-color:var(--blue-soft)" onclick="restartWorker('${h.host_id}','${h.host_name||h.host_id.substring(0,8)}')">🔄 重启</button>`:''}
+              <button class="dev-btn" style="font-size:10px;padding:2px 8px;color:var(--amber);border-color:var(--amber)" onclick="updateWorker('${h.host_id}','${h.host_name||h.host_id.substring(0,8)}')">⬆ 更新</button>
               <button class="dev-btn" style="font-size:10px;padding:2px 8px;color:var(--red)" onclick="removeHost('${h.host_id}')">✕</button>
             </div>
           </div>
           <!-- IP & 版本 -->
           <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-            <span>🌐 <a href="http://${h.host_ip}:${h.port}" target="_blank" style="color:#60a5fa;text-decoration:none">${h.host_ip}:${h.port}</a></span>
+            <span>🌐 <a href="http://${h.host_ip}:${h.port}" target="_blank" style="color:var(--blue-soft);text-decoration:none">${h.host_ip}:${h.port}</a></span>
             ${(()=>{const pn=polByHost[h.host_id];const r=pn&&pn.reachable_ip;const hip=(h.host_ip||'').trim();return r&&hip&&r!==hip?'<span style="font-size:10px;color:var(--accent)" title="拉取执行策略时实际连通的 IP（与心跳上报可能不同）">探测 '+r+'</span>':'';})()}
             <span>v${h.version||'?'}</span>
             ${hbWarn?'<span style="color:var(--yellow)">⚠ 心跳延迟</span>':''}
@@ -327,12 +327,12 @@ async function clusterExecScript(){
         for(const[did,dr] of Object.entries(info.results||{})){
           html+=`<div style="margin-left:12px;font-size:9px"><code>${did.substring(0,8)}</code>: ${dr.success?'OK':'FAIL'} — ${(dr.output||'').substring(0,80)}</div>`;
         }
-      }else{html+=`<span style="color:#ef4444">${info.error||'失败'}</span>`;}
+      }else{html+=`<span style="color:var(--red-strong)">${info.error||'失败'}</span>`;}
       html+='</div>';
     }
     res.innerHTML=html||'无结果';
     showToast('跨集群脚本执行完成');
-  }catch(e){res.innerHTML=`<span style="color:#ef4444">失败: ${e.message}</span>`;}
+  }catch(e){res.innerHTML=`<span style="color:var(--red-strong)">失败: ${e.message}</span>`;}
 }
 
 

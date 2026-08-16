@@ -71,7 +71,7 @@ function _vpnMgrRenderPool(pool){
           <span style="font-size:12px;font-weight:600">${_esc(c.label||c.remark)}</span>
           ${scoreBadge}
         </div>
-        <button onclick="_vpnMgrDeleteConfig('${c.id}')" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:14px;padding:2px 4px" title="删除">&times;</button>
+        <button onclick="_vpnMgrDeleteConfig('${c.id}')" style="background:none;border:none;color:var(--red-strong);cursor:pointer;font-size:14px;padding:2px 4px" title="删除">&times;</button>
       </div>
       <div style="font-size:9px;color:var(--text-dim);margin-top:4px;font-family:monospace">
         ${_esc(c.protocol)} \u{2192} ${_esc(c.server)}:${c.port} ${connectRate}
@@ -79,7 +79,7 @@ function _vpnMgrRenderPool(pool){
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
         <span style="font-size:10px;color:var(--text-muted)">${c.country?flag+' '+c.country:'\u{1F310} 未设国家'} \u{00B7} ${cnt} 台</span>
         <div style="display:flex;gap:3px">
-          <button class="sb-btn2" onclick="_vpnMgrDeploy('${c.id}')" style="font-size:9px;padding:2px 8px;color:#22c55e;border-color:#22c55e44" title="一键部署到全部设备">\u{1F680}</button>
+          <button class="sb-btn2" onclick="_vpnMgrDeploy('${c.id}')" style="font-size:9px;padding:2px 8px;color:var(--green-strong);border-color:#22c55e44" title="一键部署到全部设备">\u{1F680}</button>
           <button class="sb-btn2" onclick="_vpnMgrAssignConfig('${c.id}','selected')" style="font-size:9px;padding:2px 6px" title="分配给勾选">勾选</button>
           <button class="sb-btn2" onclick="_vpnMgrShowGroupAssign('${c.id}')" style="font-size:9px;padding:2px 6px" title="分配给分组">分组</button>
           <button class="sb-btn2" onclick="_vpnMgrAssignConfig('${c.id}','all')" style="font-size:9px;padding:2px 6px;border-color:#7c3aed44" title="分配给全部">全部</button>
@@ -135,8 +135,8 @@ function _vpnMgrRenderDevices(devices, pool){
       <td style="padding:6px;font-size:10px">${cfgLabel}</td>
       <td style="padding:6px;text-align:center">
         <button class="sb-btn2" onclick="_vpnMgrDevAction('${d.device_id}','check')" style="font-size:9px;padding:1px 6px" title="检查">&#128270;</button>
-        <button class="sb-btn2" onclick="_vpnMgrDevAction('${d.device_id}','start')" style="font-size:9px;padding:1px 6px;color:#22c55e" title="启动">&#9654;</button>
-        <button class="sb-btn2" onclick="_vpnMgrDevAction('${d.device_id}','stop')" style="font-size:9px;padding:1px 6px;color:#ef4444" title="停止">&#9632;</button>
+        <button class="sb-btn2" onclick="_vpnMgrDevAction('${d.device_id}','start')" style="font-size:9px;padding:1px 6px;color:var(--green-strong)" title="启动">&#9654;</button>
+        <button class="sb-btn2" onclick="_vpnMgrDevAction('${d.device_id}','stop')" style="font-size:9px;padding:1px 6px;color:var(--red-strong)" title="停止">&#9632;</button>
       </td>
     </tr>`;
   }
@@ -272,7 +272,7 @@ async function _vpnMgrApplyPool(){
   try{
     const d=await api('POST','/vpn/pool/apply',{});
     if(progBar) progBar.style.width='100%';
-    if(progLabel) progLabel.innerHTML='<span style="color:#22c55e">\u2705 完成</span>';
+    if(progLabel) progLabel.innerHTML='<span style="color:var(--green-strong)">\u2705 完成</span>';
     if(progCount) progCount.textContent=d.connected+'/'+d.total+' 台已连接';
     // 渲染详情
     if(progDetails&&d.results){
@@ -287,7 +287,7 @@ async function _vpnMgrApplyPool(){
     showToast('配置池应用完成: '+d.connected+'/'+d.total+' 已连接','success');
     setTimeout(loadVpnManagePage,2000);
   }catch(e){
-    if(progLabel) progLabel.innerHTML='<span style="color:#ef4444">\u274C '+e.message+'</span>';
+    if(progLabel) progLabel.innerHTML='<span style="color:var(--red-strong)">\u274C '+e.message+'</span>';
   }
 }
 
@@ -320,14 +320,14 @@ async function _vpnMgrImportSub(){
     let msg='\u2705 导入成功: '+d.added+' 个配置';
     if(d.errors) msg+=' ('+d.errors+' 个失败)';
     msg+=' \u00B7 配置池共 '+d.total_in_pool+' 个';
-    if(resultEl) resultEl.innerHTML='<span style="color:#22c55e">'+msg+'</span>';
+    if(resultEl) resultEl.innerHTML='<span style="color:var(--green-strong)">'+msg+'</span>';
     showToast(msg,'success');
     // 清空表单
     document.getElementById('vpn-sub-url').value='';
     document.getElementById('vpn-sub-text').value='';
     await loadVpnManagePage();
   }catch(e){
-    if(resultEl) resultEl.innerHTML='<span style="color:#ef4444">\u274C '+e.message+'</span>';
+    if(resultEl) resultEl.innerHTML='<span style="color:var(--red-strong)">\u274C '+e.message+'</span>';
     showToast('导入失败: '+e.message,'warn');
   }
 }
@@ -469,7 +469,7 @@ async function _vpnMgrSpeedTest(){
     html+='</div>';
     if(resultEl) resultEl.innerHTML=html;
   }catch(e){
-    if(resultEl) resultEl.innerHTML='<span style="color:#ef4444">\u274C 测速失败: '+e.message+'</span>';
+    if(resultEl) resultEl.innerHTML='<span style="color:var(--red-strong)">\u274C 测速失败: '+e.message+'</span>';
   }
   if(btn){btn.disabled=false;btn.textContent='\u{1F4E1} 开始测速';}
 }
@@ -581,7 +581,7 @@ async function _vpnMgrDeploy(configId){
   try{
     const d=await api('POST','/vpn/pool/deploy',{config_id:configId,verify_geo:true});
     if(progBar) progBar.style.width='100%';
-    if(progLabel) progLabel.innerHTML='<span style="color:#22c55e">\u2705 部署完成</span>';
+    if(progLabel) progLabel.innerHTML='<span style="color:var(--green-strong)">\u2705 部署完成</span>';
     if(progCount) progCount.textContent=d.connected+'/'+d.total+' 已连接'+(d.deployed_country?' \u00B7 '+d.deployed_country:'');
     if(progDetails&&d.results){
       let html='';
@@ -597,7 +597,7 @@ async function _vpnMgrDeploy(configId){
     showToast('\u{1F680} 部署完成: '+d.connected+'/'+d.total+' 已连接','success');
     setTimeout(loadVpnManagePage,2000);
   }catch(e){
-    if(progLabel) progLabel.innerHTML='<span style="color:#ef4444">\u274C '+e.message+'</span>';
+    if(progLabel) progLabel.innerHTML='<span style="color:var(--red-strong)">\u274C '+e.message+'</span>';
   }
 }
 
@@ -620,7 +620,7 @@ async function _vpnMgrGeoVerify(){
   try{
     const d=await api('POST','/vpn/geo-verify-all',{});
     if(progBar) progBar.style.width='100%';
-    if(progLabel) progLabel.innerHTML='<span style="color:#22c55e">\u2705 验证完成</span>';
+    if(progLabel) progLabel.innerHTML='<span style="color:var(--green-strong)">\u2705 验证完成</span>';
     if(progCount) progCount.textContent=d.matched+' 匹配 / '+d.mismatched+' 不匹配 / '+d.total+' 总计';
     if(progDetails&&d.results){
       let html='';
@@ -633,7 +633,7 @@ async function _vpnMgrGeoVerify(){
     }
     showToast('Geo-IP: '+d.matched+' \u2705 / '+d.mismatched+' \u274C','success');
   }catch(e){
-    if(progLabel) progLabel.innerHTML='<span style="color:#ef4444">\u274C '+e.message+'</span>';
+    if(progLabel) progLabel.innerHTML='<span style="color:var(--red-strong)">\u274C '+e.message+'</span>';
   }
 }
 

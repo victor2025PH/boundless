@@ -80,10 +80,10 @@ async function batchTask(taskType, params){
       try{
         await api('POST','/tasks',{type:taskType,device_id:d.device_id,params:params||{},batch_id:batchId});
         ok++;done++;
-        details.insertAdjacentHTML('beforeend',`<div style="font-size:11px;color:#22c55e">&#10003; ${alias}</div>`);
+        details.insertAdjacentHTML('beforeend',`<div style="font-size:11px;color:var(--green-strong)">&#10003; ${alias}</div>`);
       }catch(e){
         fail++;done++;
-        details.insertAdjacentHTML('beforeend',`<div style="font-size:11px;color:#ef4444">&#10007; ${alias}: ${(e.message||e+'').substring(0,40)}</div>`);
+        details.insertAdjacentHTML('beforeend',`<div style="font-size:11px;color:var(--red-strong)">&#10007; ${alias}: ${(e.message||e+'').substring(0,40)}</div>`);
       }
       bar.style.width=`${Math.round(done/count*100)}%`;
       countEl.textContent=`${done} / ${count}`;
@@ -92,8 +92,8 @@ async function batchTask(taskType, params){
   }
 
   label.innerHTML=ok
-    ?`<span style="color:#22c55e">&#10003; 已创建 ${ok} 个 <b>${taskName}</b> 任务${fail?'，<span style="color:#ef4444">'+fail+' 个失败</span>':''}</span>`
-    :`<span style="color:#ef4444">&#10007; 全部失败 (${fail} 台)</span>`;
+    ?`<span style="color:var(--green-strong)">&#10003; 已创建 ${ok} 个 <b>${taskName}</b> 任务${fail?'，<span style="color:var(--red-strong)">'+fail+' 个失败</span>':''}</span>`
+    :`<span style="color:var(--red-strong)">&#10007; 全部失败 (${fail} 台)</span>`;
 
   const closeBtn=document.createElement('button');
   closeBtn.className='dev-btn';
@@ -178,7 +178,7 @@ async function runUsbDiagnostics(){
     h+=`<button onclick="this.closest('div[style*=fixed]').remove()" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer">&times;</button></div>`;
     h+=`<div style="font-size:11px;color:var(--text-muted);margin-bottom:12px">${r.adb_version||'ADB版本未知'}</div>`;
 
-    h+=`<div style="font-weight:600;color:#22c55e;margin:12px 0 6px">&#9989; 正常连接 (${r.connected?.length||0})</div>`;
+    h+=`<div style="font-weight:600;color:var(--green-strong);margin:12px 0 6px">&#9989; 正常连接 (${r.connected?.length||0})</div>`;
     if(r.connected?.length){
       h+=`<table style="width:100%;font-size:12px;border-collapse:collapse">`;
       h+=`<tr style="color:var(--text-muted);text-align:left"><th style="padding:4px 8px">序列号</th><th>编号</th><th>型号</th><th>电量</th><th>transport</th></tr>`;
@@ -188,11 +188,11 @@ async function runUsbDiagnostics(){
       h+=`</table>`;
     }
 
-    h+=`<div style="font-weight:600;color:#f59e0b;margin:16px 0 6px">&#9888; USB异常设备 (${r.problem?.length||0})</div>`;
+    h+=`<div style="font-weight:600;color:var(--amber);margin:16px 0 6px">&#9888; USB异常设备 (${r.problem?.length||0})</div>`;
     if(r.problem?.length){
       r.problem.forEach(d=>{
         h+=`<div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);border-radius:8px;padding:10px 12px;margin-bottom:8px">`;
-        h+=`<div style="font-weight:600;font-size:13px">${d.device_id.substring(0,12)} — <span style="color:#f59e0b">${d.status}</span></div>`;
+        h+=`<div style="font-weight:600;font-size:13px">${d.device_id.substring(0,12)} — <span style="color:var(--amber)">${d.status}</span></div>`;
         h+=`<div style="font-size:12px;color:var(--text-muted);margin-top:4px">&#128161; ${d.diagnosis}</div>`;
         h+=`</div>`;
       });
@@ -200,7 +200,7 @@ async function runUsbDiagnostics(){
       h+=`<div style="color:var(--text-muted);font-size:12px">没有USB异常设备</div>`;
     }
 
-    h+=`<div style="font-weight:600;color:#ef4444;margin:16px 0 6px">&#10060; 配置但未检测到 (${r.configured_missing?.length||0})</div>`;
+    h+=`<div style="font-weight:600;color:var(--red-strong);margin:16px 0 6px">&#10060; 配置但未检测到 (${r.configured_missing?.length||0})</div>`;
     if(r.configured_missing?.length){
       r.configured_missing.forEach(d=>{
         h+=`<div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px;padding:10px 12px;margin-bottom:8px">`;
@@ -213,7 +213,7 @@ async function runUsbDiagnostics(){
     }
 
     if(r.usb_tree?.length){
-      h+=`<div style="font-weight:600;color:#06b6d4;margin:16px 0 6px">&#128268; USB 端口映射 (${r.usb_tree.length} 端口)</div>`;
+      h+=`<div style="font-weight:600;color:var(--cyan);margin:16px 0 6px">&#128268; USB 端口映射 (${r.usb_tree.length} 端口)</div>`;
       r.usb_tree.forEach(port=>{
         h+=`<div style="background:rgba(6,182,212,.08);border:1px solid rgba(6,182,212,.25);border-radius:8px;padding:8px 12px;margin-bottom:6px;display:flex;align-items:center;gap:10px">`;
         h+=`<span style="font-size:16px">&#128268;</span>`;
@@ -230,10 +230,10 @@ async function runUsbDiagnostics(){
       const s=r.summary;
       h+=`<div style="margin-top:16px;padding:12px;background:var(--bg-input);border-radius:8px;font-size:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:8px;text-align:center">`;
       h+=`<div><div style="font-size:20px;font-weight:700;color:var(--text-main)">${s.total_configured}</div><div style="color:var(--text-muted)">已配置</div></div>`;
-      h+=`<div><div style="font-size:20px;font-weight:700;color:#22c55e">${s.connected}</div><div style="color:var(--text-muted)">已连接</div></div>`;
-      h+=`<div><div style="font-size:20px;font-weight:700;color:#f59e0b">${s.problem}</div><div style="color:var(--text-muted)">异常</div></div>`;
-      h+=`<div><div style="font-size:20px;font-weight:700;color:#ef4444">${s.missing}</div><div style="color:var(--text-muted)">缺失</div></div>`;
-      h+=`<div><div style="font-size:20px;font-weight:700;color:#06b6d4">${s.usb_ports_active}</div><div style="color:var(--text-muted)">USB端口</div></div>`;
+      h+=`<div><div style="font-size:20px;font-weight:700;color:var(--green-strong)">${s.connected}</div><div style="color:var(--text-muted)">已连接</div></div>`;
+      h+=`<div><div style="font-size:20px;font-weight:700;color:var(--amber)">${s.problem}</div><div style="color:var(--text-muted)">异常</div></div>`;
+      h+=`<div><div style="font-size:20px;font-weight:700;color:var(--red-strong)">${s.missing}</div><div style="color:var(--text-muted)">缺失</div></div>`;
+      h+=`<div><div style="font-size:20px;font-weight:700;color:var(--cyan)">${s.usb_ports_active}</div><div style="color:var(--text-muted)">USB端口</div></div>`;
       h+=`</div>`;
     }
 
@@ -289,7 +289,7 @@ function _intentChipsHtml(r){
   // ★ P1: 解析确认卡 — 当有 targeting 时显示绿色确认条
   const hasTargeting = !!(r.country_desc || r.targeting_desc);
   const confirmBar = hasTargeting
-    ? `<div style="margin-top:5px;padding:4px 8px;border-radius:6px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.2);font-size:10px;color:#4ade80">
+    ? `<div style="margin-top:5px;padding:4px 8px;border-radius:6px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.2);font-size:10px;color:var(--green-soft)">
         ✅ AI 已理解目标人群，将按以上条件过滤
        </div>`
     : '';
@@ -339,7 +339,7 @@ function _monitorChatTasks(bubbleId,taskIds){
               if(r.videos_visited) stats.push(`看${r.videos_visited}个视频`);
             });
             const statStr=stats.length?` · ${stats.join(' · ')}:`:'';
-            statusLine.innerHTML=`<span style="color:#22c55e">✓ 全部 ${done.length} 个任务已完成${statStr}</span>`;
+            statusLine.innerHTML=`<span style="color:var(--green-strong)">✓ 全部 ${done.length} 个任务已完成${statStr}</span>`;
           } else {
             // ★ P3-4: 内联展示每个失败任务的错误原因
             const errLines=failed.map(t=>{
@@ -348,7 +348,7 @@ function _monitorChatTasks(bubbleId,taskIds){
               const dev=(t.device_id||'').substring(0,16);
               return `<div style="font-size:9px;color:#fca5a5;margin-top:2px">✗ ${esc(dev)}: ${esc(String(err).substring(0,80))}</div>`;
             }).join('');
-            statusLine.innerHTML=`<span style="color:#f87171">⚠ ${failCount}/${done.length} 个任务失败</span>${errLines}`;
+            statusLine.innerHTML=`<span style="color:var(--red)">⚠ ${failCount}/${done.length} 个任务失败</span>${errLines}`;
           }
           return;
         } else if(running.length>0){
@@ -443,7 +443,7 @@ function formatChatTaskHintsHtml(r){
   let okCount=0;
   for(const h of hints){
     if(h.error){
-      errParts.push('<div style="font-size:10px;color:#f87171;margin-top:4px">'+escH(h.action||'?')+': '+escH(h.error)+'</div>');
+      errParts.push('<div style="font-size:10px;color:var(--red);margin-top:4px">'+escH(h.action||'?')+': '+escH(h.error)+'</div>');
       continue;
     }
     if(Array.isArray(h.tasks)&&h.tasks.length){
@@ -520,14 +520,14 @@ async function _loadCampaignReadiness(){
     const itHour=(now.getUTCHours()+1)%24;
     const inGolden=itHour>=9&&itHour<=22;
     const tzInfo=inGolden
-      ?`<span style="color:#22c55e">\u{1F7E2} \u610F\u5927\u5229\u73B0\u5728 ${itHour}:00 \u6D3B\u8DC3\u65F6\u6BB5</span>`
-      :`<span style="color:#eab308">\u{1F7E1} \u610F\u5927\u5229\u73B0\u5728 ${itHour}:00 \u975E\u6D3B\u8DC3\u65F6\u6BB5</span>`;
+      ?`<span style="color:var(--green-strong)">\u{1F7E2} \u610F\u5927\u5229\u73B0\u5728 ${itHour}:00 \u6D3B\u8DC3\u65F6\u6BB5</span>`
+      :`<span style="color:var(--gold)">\u{1F7E1} \u610F\u5927\u5229\u73B0\u5728 ${itHour}:00 \u975E\u6D3B\u8DC3\u65F6\u6BB5</span>`;
 
     // VPN 配置池国家匹配
     const hasCountry=d.available_countries?.includes(_campaignCountry);
     const vpnNote=hasCountry
-      ?'<span style="color:#22c55e">\u2705 \u914D\u7F6E\u6C60\u6709 '+_campaignCountry+' \u8282\u70B9</span>'
-      :'<span style="color:#eab308">\u26A0 \u914D\u7F6E\u6C60\u65E0 '+_campaignCountry+' \u8282\u70B9\uFF0C\u5C06\u7528\u5F53\u524D VPN</span>';
+      ?'<span style="color:var(--green-strong)">\u2705 \u914D\u7F6E\u6C60\u6709 '+_campaignCountry+' \u8282\u70B9</span>'
+      :'<span style="color:var(--gold)">\u26A0 \u914D\u7F6E\u6C60\u65E0 '+_campaignCountry+' \u8282\u70B9\uFF0C\u5C06\u7528\u5F53\u524D VPN</span>';
 
     let html=`<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px">
       <div>\u{1F4F1} <b>${s.online}</b>/${s.total} \u5728\u7EBF</div>
@@ -545,7 +545,7 @@ async function _loadCampaignReadiness(){
 
     el.innerHTML=html;
   }catch(e){
-    el.innerHTML='<span style="color:#ef4444">\u274C \u68C0\u6D4B\u5931\u8D25: '+e.message+'</span>';
+    el.innerHTML='<span style="color:var(--red-strong)">\u274C \u68C0\u6D4B\u5931\u8D25: '+e.message+'</span>';
   }
 }
 
@@ -612,8 +612,8 @@ async function _launchCampaign(){
     taskHtml+=`<div style="font-size:11px;font-weight:600;margin-top:4px;margin-bottom:2px">\u{1F33F} \u517B\u53F7\u4EFB\u52A1: ${taskOk}/${Object.keys(tp).length} \u5DF2\u521B\u5EFA</div>`;
 
     if(progLabel) progLabel.innerHTML=d.ok
-      ?`<span style="color:#22c55e">\u2705 \u517B\u53F7\u6218\u5F79\u5DF2\u542F\u52A8</span>`
-      :`<span style="color:#ef4444">\u274C \u542F\u52A8\u5931\u8D25</span>`;
+      ?`<span style="color:var(--green-strong)">\u2705 \u517B\u53F7\u6218\u5F79\u5DF2\u542F\u52A8</span>`
+      :`<span style="color:var(--red-strong)">\u274C \u542F\u52A8\u5931\u8D25</span>`;
     if(progCount) progCount.textContent=`${d.tasks_created} \u53F0\u8BBE\u5907 \u00B7 ${country} \u00B7 ${duration}\u5206\u949F`;
     if(progDetails) progDetails.innerHTML=vpnHtml+taskHtml;
 
@@ -624,7 +624,7 @@ async function _launchCampaign(){
     setTimeout(()=>{try{loadTasks();}catch(e){}},1000);
 
   }catch(e){
-    if(progLabel) progLabel.innerHTML=`<span style="color:#ef4444">\u274C ${e.message}</span>`;
+    if(progLabel) progLabel.innerHTML=`<span style="color:var(--red-strong)">\u274C ${e.message}</span>`;
     showToast('\u542F\u52A8\u5931\u8D25: '+e.message,'warn');
   }
   btn.disabled=false;btn.textContent='\u{1F680} \u542F\u52A8\u517B\u53F7';

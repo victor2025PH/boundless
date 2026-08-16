@@ -98,8 +98,8 @@ function _renderStudioShell() {
 .studio-stat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:20px}
 .studio-stat-card{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;position:relative;overflow:hidden}
 .studio-stat-card::before{content:'';position:absolute;inset:0;opacity:.06;border-radius:12px}
-.studio-stat-card.indigo::before{background:#6366f1}.studio-stat-card.green::before{background:#22c55e}
-.studio-stat-card.amber::before{background:#f59e0b}.studio-stat-card.rose::before{background:#f43f5e}
+.studio-stat-card.indigo::before{background:#6366f1}.studio-stat-card.green::before{background:var(--green-strong)}
+.studio-stat-card.amber::before{background:var(--amber)}.studio-stat-card.rose::before{background:#f43f5e}
 .studio-stat-card.sky::before{background:#38bdf8}
 .studio-stat-num{font-size:28px;font-weight:700;line-height:1.1}
 .studio-stat-label{font-size:11px;color:var(--text-muted);margin-top:4px}
@@ -129,8 +129,8 @@ function _renderStudioShell() {
 .studio-hashtags{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px}
 .studio-hashtag{font-size:10px;padding:2px 7px;border-radius:20px;background:#6366f115;color:#6366f1}
 .studio-review-actions{padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.studio-btn-approve{background:#22c55e;color:#fff;border:none;border-radius:8px;padding:7px 18px;font-size:13px;cursor:pointer;font-weight:600}
-.studio-btn-approve:hover{background:#16a34a}
+.studio-btn-approve{background:var(--green-strong);color:#fff;border:none;border-radius:8px;padding:7px 18px;font-size:13px;cursor:pointer;font-weight:600}
+.studio-btn-approve:hover{background:var(--green-deep)}
 .studio-btn-reject{background:none;border:1px solid var(--border);color:var(--text-muted);border-radius:8px;padding:7px 14px;font-size:13px;cursor:pointer}
 .studio-btn-reject:hover{border-color:#f43f5e;color:#f43f5e}
 .studio-btn-gen{background:#6366f1;color:#fff;border:none;border-radius:8px;padding:8px 20px;font-size:13px;cursor:pointer;font-weight:600}
@@ -139,10 +139,10 @@ function _renderStudioShell() {
 /* ── Jobs Table ── */
 .studio-jobs-table{width:100%;border-collapse:collapse;font-size:12px}
 .studio-jobs-table th{color:var(--text-muted);font-weight:500;padding:6px 10px;text-align:left;border-bottom:1px solid var(--border)}
-.studio-jobs-table td{padding:8px 10px;border-bottom:1px solid var(--border)4d;vertical-align:middle}
+.studio-jobs-table td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:middle}
 .studio-status{padding:2px 8px;border-radius:20px;font-size:10px;font-weight:600}
-.studio-status.generating{background:#f59e0b22;color:#f59e0b}
-.studio-status.ready{background:#22c55e22;color:#22c55e}
+.studio-status.generating{background:#f59e0b22;color:var(--amber)}
+.studio-status.ready{background:#22c55e22;color:var(--green-strong)}
 .studio-status.published{background:#6366f122;color:#6366f1}
 .studio-status.failed{background:#f43f5e22;color:#f43f5e}
 .studio-status.pending{background:#6b728022;color:#9ca3af}
@@ -178,16 +178,16 @@ function _renderStudioShell() {
 .studio-progress-steps{display:flex;align-items:center;gap:0;margin:10px 0;flex-wrap:nowrap;overflow-x:auto}
 .studio-step{display:flex;align-items:center;gap:6px;font-size:11px;white-space:nowrap}
 .studio-step-dot{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;flex-shrink:0;font-weight:700;transition:all .3s}
-.studio-step-dot.done{background:#22c55e;color:#fff}
+.studio-step-dot.done{background:var(--green-strong);color:#fff}
 .studio-step-dot.active{background:#6366f1;color:#fff;animation:studioSpinPulse 1.4s ease-in-out infinite}
 .studio-step-dot.pending{background:var(--bg-input,#1e1e2e);color:var(--text-muted);border:2px solid var(--border)}
 .studio-step-line{width:24px;height:2px;background:var(--border);flex-shrink:0;margin:0 2px}
-.studio-step-line.done{background:#22c55e}
+.studio-step-line.done{background:var(--green-strong)}
 /* ── Active Job Card ── */
 .studio-active-job{background:linear-gradient(135deg,#6366f108,#6366f104);border:1px solid #6366f133;border-radius:12px;padding:14px 16px;margin-bottom:12px;animation:fadeIn .3s}
 .studio-active-job-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
 /* ── Cost Badge ── */
-.studio-cost-badge{display:inline-flex;align-items:center;gap:4px;padding:5px 12px;border-radius:20px;font-size:12px;font-weight:600;background:#f59e0b18;color:#f59e0b;border:1px solid #f59e0b33;margin-top:8px}
+.studio-cost-badge{display:inline-flex;align-items:center;gap:4px;padding:5px 12px;border-radius:20px;font-size:12px;font-weight:600;background:#f59e0b18;color:var(--amber);border:1px solid #f59e0b33;margin-top:8px}
 /* ── Modal / Dialog ── */
 .studio-overlay{position:fixed;inset:0;background:#0009;z-index:1000;display:flex;align-items:center;justify-content:center;animation:fadeIn .15s}
 .studio-dialog{background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:24px;max-width:440px;width:92vw;position:relative;box-shadow:0 20px 60px #0006}
@@ -237,7 +237,7 @@ function _renderStudioShell() {
 .studio-framework-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;max-height:260px;overflow-y:auto}
 .studio-fw-card{border:1px solid var(--border);border-radius:8px;padding:10px;cursor:pointer;transition:all .15s;font-size:11px}
 .studio-fw-card:hover,.studio-fw-card.selected{border-color:#6366f1;background:#6366f115}
-.studio-fw-score{font-size:10px;float:right;color:#f59e0b;font-weight:700}
+.studio-fw-score{font-size:10px;float:right;color:var(--amber);font-weight:700}
 .studio-tone-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
 .studio-tone-btn{padding:10px 6px;border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:11px;text-align:center;transition:all .15s;background:none;color:var(--text-main)}
 .studio-tone-btn:hover,.studio-tone-btn.selected{border-color:#6366f1;background:#6366f115;color:#6366f1}
@@ -318,7 +318,7 @@ async function _studioLoadDash() {
   <div class="studio-stat-card amber">
     <div class="studio-stat-num">${pendingN}</div>
     <div class="studio-stat-label">📋 待审核</div>
-    ${pendingN > 0 ? `<div style="margin-top:8px"><button onclick="studioTab('review')" style="font-size:11px;background:#f59e0b22;color:#f59e0b;border:1px solid #f59e0b44;border-radius:6px;padding:3px 10px;cursor:pointer">立即审核 →</button></div>` : ''}
+    ${pendingN > 0 ? `<div style="margin-top:8px"><button onclick="studioTab('review')" style="font-size:11px;background:#f59e0b22;color:var(--amber);border:1px solid #f59e0b44;border-radius:6px;padding:3px 10px;cursor:pointer">立即审核 →</button></div>` : ''}
   </div>
   <div class="studio-stat-card green">
     <div class="studio-stat-num">${todayJobs.length}</div>
@@ -588,7 +588,7 @@ async function _studioLoadReview() {
       <!-- 批量操作栏 -->
       <div class="studio-batch-bar">
         <span style="flex:1;color:var(--text-muted)">共 <strong style="color:var(--text-main)">${items.length}</strong> 条待处理</span>
-        <button onclick="_studioApproveAll([${allIds.join(',')}])" style="background:#22c55e;color:#fff;border:none;border-radius:8px;padding:6px 16px;font-size:12px;cursor:pointer;font-weight:600">
+        <button onclick="_studioApproveAll([${allIds.join(',')}])" style="background:var(--green-strong);color:#fff;border:none;border-radius:8px;padding:6px 16px;font-size:12px;cursor:pointer;font-weight:600">
           ✅ 全部发布
         </button>
         <button onclick="_studioRejectAll([${allIds.join(',')}])" style="background:none;border:1px solid var(--border);color:var(--text-muted);border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer">
@@ -749,7 +749,7 @@ async function _studioApproveAll(ids) {
   if (!ids || ids.length === 0) return;
   _studioDialog({
     title: '批量发布确认',
-    body: `<div style="font-size:13px">确认发布全部 <strong style="color:#22c55e">${ids.length}</strong> 条内容？<br><span style="font-size:11px;color:var(--text-muted)">将依次调用 ADB 自动发布，请确保设备在线。</span></div>`,
+    body: `<div style="font-size:13px">确认发布全部 <strong style="color:var(--green-strong)">${ids.length}</strong> 条内容？<br><span style="font-size:11px;color:var(--text-muted)">将依次调用 ADB 自动发布，请确保设备在线。</span></div>`,
     confirmText: `✅ 发布全部 ${ids.length} 条`,
     onConfirm: async (ov) => {
       ov.remove();
@@ -925,7 +925,7 @@ async function _studioLoadPersonas() {
     <div style="display:flex;gap:8px">
       ${id !== activePers
         ? `<button class="studio-btn-approve" style="font-size:12px;padding:6px 14px" onclick="_studioSetPersona('${id}',this)">激活</button>`
-        : `<span style="font-size:12px;color:#22c55e;font-weight:600">✅ 已激活</span>`}
+        : `<span style="font-size:12px;color:var(--green-strong);font-weight:600">✅ 已激活</span>`}
       <button onclick="_studioGenForPersona('${id}')" class="studio-btn-gen" style="font-size:12px;padding:6px 14px">✨ 生成</button>
     </div>
   </div>`).join('')}
@@ -1055,7 +1055,7 @@ async function _studioOpenSetupWizard() {
     <button onclick="${s.action};document.querySelector('.studio-dialog-overlay')?.remove()"
       style="font-size:11px;padding:4px 10px;border-radius:6px;background:#6366f115;border:1px solid #6366f144;color:#6366f1;cursor:pointer">前往 →</button>
   </div>`).join('')}
-  ${steps.length === 0 ? '<div style="color:#22c55e;font-weight:600">✅ 所有关键配置已完成！可以开始生成内容了。</div>' : ''}
+  ${steps.length === 0 ? '<div style="color:var(--green-strong);font-weight:600">✅ 所有关键配置已完成！可以开始生成内容了。</div>' : ''}
 </div>`;
 
   await _studioDialog({
@@ -1486,7 +1486,7 @@ function _studioSuggestionCardHTML(s, rank) {
       onclick="_studioPreviewSuggestion('${_escHtml(JSON.stringify(s).replace(/'/g,"\\'"))}')">
       👁 故事板预览
     </button>
-    <button class="studio-sug-btn" style="background:#22c55e22;color:#22c55e"
+    <button class="studio-sug-btn" style="background:#22c55e22;color:var(--green-strong)"
       onclick="_studioAcceptSuggestion('${s.suggestion_id}','${_escHtml(JSON.stringify(s.brief).replace(/'/g,"\\'"))}')">
       🚀 一键生成
     </button>
@@ -1550,7 +1550,7 @@ function _studioStoryboardHTML(sb, brief, platform) {
 <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
   <span style="font-size:12px;font-weight:600">${platIcon} ${platform}</span>
   <span style="font-size:11px;color:var(--text-muted)">${sb.duration}秒 · ${sb.aspect_ratio} · ${scenes.length}个场景</span>
-  <span style="font-size:11px;padding:2px 8px;background:#22c55e22;color:#22c55e;border-radius:10px">🔥 ${sb.framework_name}</span>
+  <span style="font-size:11px;padding:2px 8px;background:#22c55e22;color:var(--green-strong);border-radius:10px">🔥 ${sb.framework_name}</span>
   <span style="font-size:11px;color:var(--text-muted);margin-left:auto">病毒力评分: ${sb.virality_score}/10</span>
 </div>
 <div class="studio-storyboard">${scenesHTML}</div>
@@ -2256,7 +2256,7 @@ function _renderMiniTimeline(studioTL, leadsTL) {
 </svg>
 <div style="display:flex;gap:16px;font-size:11px;color:var(--text-muted);margin-top:6px">
   <span><span style="display:inline-block;width:10px;height:10px;background:#6366f1;border-radius:2px;margin-right:4px"></span>内容发布</span>
-  <span><span style="display:inline-block;width:10px;height:10px;background:#22c55e;border-radius:2px;margin-right:4px"></span>新增 Leads</span>
+  <span><span style="display:inline-block;width:10px;height:10px;background:var(--green-strong);border-radius:2px;margin-right:4px"></span>新增 Leads</span>
 </div>`;
 }
 

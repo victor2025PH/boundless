@@ -40,7 +40,7 @@ const Msg = (() => {
         <textarea rows="2" style="flex:1;background:var(--bg-main);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--text-main);font-size:12px;resize:vertical;font-family:inherit"
           onchange="Msg._update('${type}',${i},this.value)">${_esc(msg)}</textarea>
         <div style="display:flex;flex-direction:column;gap:4px">
-          <button onclick="Msg._remove('${type}',${i})" title="删除" style="background:none;border:1px solid var(--border);border-radius:4px;color:#ef4444;cursor:pointer;padding:2px 6px;font-size:11px">&#128465;</button>
+          <button onclick="Msg._remove('${type}',${i})" title="删除" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--red-strong);cursor:pointer;padding:2px 6px;font-size:11px">&#128465;</button>
           <button onclick="Msg._moveUp('${type}',${i})" title="上移" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--text-muted);cursor:pointer;padding:2px 6px;font-size:11px" ${i===0?'disabled':''}>&#8593;</button>
         </div>
       </div>
@@ -179,7 +179,7 @@ const Msg = (() => {
         <div style="font-size:10px;color:var(--text-muted)">TG: ${_esc(r.telegram)} · WA: ${_esc(r.whatsapp)}</div>
       `;
     } catch(e) {
-      resultEl.style.color = '#ef4444';
+      resultEl.style.color = 'var(--red-strong)';
       resultEl.textContent = '预览失败: ' + e;
     }
   }
@@ -229,12 +229,12 @@ async function _loadAbStats(){
                 <div style="font-weight:600;color:var(--text)">${v.name}${winner?' <span style="font-size:10px;color:#fbbf24">&#128081; 领先</span>':''}</div>
                 <div style="font-size:10px;color:var(--text-dim)">${v.description||v.id}</div>
               </td>
-              <td style="padding:8px 12px;text-align:center;color:#60a5fa">${v.sent}</td>
-              <td style="padding:8px 12px;text-align:center;color:#a78bfa">${v.replied}</td>
+              <td style="padding:8px 12px;text-align:center;color:var(--blue-soft)">${v.sent}</td>
+              <td style="padding:8px 12px;text-align:center;color:var(--violet-soft)">${v.replied}</td>
               <td style="padding:8px 12px;text-align:center;font-weight:700;color:${rateColor}">${v.reply_rate}%</td>
               <td style="padding:8px 12px">
                 <div style="height:6px;background:var(--border);border-radius:3px;width:120px">
-                  <div style="height:100%;width:${barPct}%;background:#3b82f6;border-radius:3px"></div>
+                  <div style="height:100%;width:${barPct}%;background:var(--blue-strong);border-radius:3px"></div>
                 </div>
               </td>
             </tr>`;

@@ -99,7 +99,7 @@ function renderGroups(){
       const alias=ALIAS[did]||did.substring(0,8);
       return `<div style="display:flex;align-items:center;gap:4px;padding:3px 6px;background:rgba(255,255,255,.04);border-radius:4px;font-size:10px">
         <span>${alias}</span>
-        <button onclick="removeDeviceFromGroup('${g.id}','${did}')" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:9px">✕</button>
+        <button onclick="removeDeviceFromGroup('${g.id}','${did}')" style="background:none;border:none;color:var(--red-strong);cursor:pointer;font-size:9px">✕</button>
       </div>`;
     }).join('');
     return `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:14px;border-left:4px solid ${g.color||'#60a5fa'}">
@@ -107,7 +107,7 @@ function renderGroups(){
         <div style="font-size:14px;font-weight:600">${g.name} <span style="font-size:10px;color:var(--text-muted)">(${(g.devices||[]).length} 台)</span></div>
         <div style="display:flex;gap:4px">
           <button class="sb-btn2" onclick="addDeviceToGroup('${g.id}')" style="font-size:9px">+ 添加设备</button>
-          <button class="sb-btn2" onclick="deleteGroup('${g.id}')" style="font-size:9px;color:#ef4444">删除</button>
+          <button class="sb-btn2" onclick="deleteGroup('${g.id}')" style="font-size:9px;color:var(--red-strong)">删除</button>
         </div>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px">${devList||'<span style="font-size:10px;color:var(--text-muted)">无设备</span>'}</div>
@@ -406,7 +406,7 @@ function _updateScrApkRetryUI(r,file){
   const w=document.getElementById('scr-apk-retry-wrap');
   if(!w) return;
   if(_screenApkFailedIds.length&&_screenApkLastFile){
-    w.innerHTML=`<button type="button" class="sb-btn2" onclick="retryScreenApkFailed()" style="margin-top:6px;font-size:10px;color:#f59e0b;border-color:#f59e0b">↻ 仅重试失败 (${_screenApkFailedIds.length} 台)</button>`;
+    w.innerHTML=`<button type="button" class="sb-btn2" onclick="retryScreenApkFailed()" style="margin-top:6px;font-size:10px;color:var(--amber);border-color:var(--amber)">↻ 仅重试失败 (${_screenApkFailedIds.length} 台)</button>`;
   }else w.innerHTML='';
 }
 async function retryScreenApkFailed(){

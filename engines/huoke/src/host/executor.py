@@ -3075,8 +3075,11 @@ def _fb_send_referral_replies(fb, resolved: str,
     retry_iv = float(params.get("retry_interval_sec", 10) or 0)
     fallback_direct_send = bool(params.get("fallback_line_direct_send", True))
     # Phase 12.3: dry_run — 不真发, 只列 matched planned events + 会发什么 template.
+    # cron 侧由 referral_loop 在 off/dry_run 档拦截/注入（见 job_scheduler）；
+    # 这里只忠实执行 params.dry_run。
     dry_run = bool(params.get("dry_run", False))
 
+    from src.host import referral_probe
     from src.host.fb_store import (list_recent_contact_events_by_types,
                                     record_contact_event,
                                     count_contact_events,
@@ -3233,6 +3236,12 @@ def _fb_send_referral_replies(fb, resolved: str,
                           "canonical_id": canonical_id_of_peer})
             except Exception as e:
                 logger.debug("[referral.send] write wa_referral_sent 失败: %s", e)
+            # 每条真实发出即探针（漏斗分母；带 canonical_id + platform 供双键 BI）
+            referral_probe.record(
+                "sent", peer_name=peer_name,
+                canonical_id=canonical_id_of_peer, platform="facebook",
+                line_account_id=line_account_id, device_id=resolved,
+                dry_run=dry_run)
             if line_account_id:
                 try:
                     _lp.mark_dispatch_outcome(
@@ -3506,6 +3515,12 @@ def _fb_check_referral_replies(fb, resolved: str,
       max_messages_per_peer: int = 5  B 侧每个 peer 最多抓最近几条
     """
     import datetime as _dt
+    from src.host import referral_probe
+
+    # dry_run: 只检测/统计/上报，不写 wa_referral_replied（cron 侧由 referral_loop
+    # 在 dry_run 档自动注入；手动 POST 也可显式传）
+    dry_run = bool(params.get("dry_run", False))
+
     hours_back = int(params.get("hours_back", 48) or 48)
     limit = max(1, min(int(params.get("limit", 50) or 50), 500))
     region_override = str(params.get("keyword_region", "") or "").lower()
@@ -3524,7 +3539,7 @@ def _fb_check_referral_replies(fb, resolved: str,
         return True, "", {
             "pending_count": 0, "scanned": 0,
             "replied_now": 0, "no_match": 0,
-            "matches": [],
+            "matches": [], "dry_run": dry_run,
         }
 
     peer_names = [p["peer_name"] for p in pending]
@@ -3599,20 +3614,23 @@ def _fb_check_referral_replies(fb, resolved: str,
         latency_min = (round(latency_sec / 60.0, 2)
                         if latency_sec is not None else None)
         try:
-            record_contact_event(
-                resolved, peer_name, CONTACT_EVT_WA_REFERRAL_REPLIED,
-                meta={
-                    "platform": "facebook",  # TG R2 Q2 cross-repo namespace
-                    "keyword_matched": kw,
-                    "raw_excerpt": text[:200],
-                    "sent_event_id": sent_meta.get("sent_event_id"),
-                    "sent_at": sent_meta.get("sent_at"),
-                    "conv_id": conv.get("conv_id") or "",
-                    "region": peer_region or None,
-                    "latency_seconds": latency_sec,
-                    "latency_min": latency_min,
-                    "matched_by": "agent_a_phase20_1",
-                })
+            # dry_run 档：识别命中照常计数/上报，但不落 wa_referral_replied 事件
+            # （不污染漏斗、不触发 stale 复活 hook）——观察期安全档。
+            if not dry_run:
+                record_contact_event(
+                    resolved, peer_name, CONTACT_EVT_WA_REFERRAL_REPLIED,
+                    meta={
+                        "platform": "facebook",  # TG R2 Q2 cross-repo namespace
+                        "keyword_matched": kw,
+                        "raw_excerpt": text[:200],
+                        "sent_event_id": sent_meta.get("sent_event_id"),
+                        "sent_at": sent_meta.get("sent_at"),
+                        "conv_id": conv.get("conv_id") or "",
+                        "region": peer_region or None,
+                        "latency_seconds": latency_sec,
+                        "latency_min": latency_min,
+                        "matched_by": "agent_a_phase20_1",
+                    })
             replied_now += 1
             matches.append({
                 "peer_name": peer_name,
@@ -3621,9 +3639,22 @@ def _fb_check_referral_replies(fb, resolved: str,
                 "latency_min": latency_min,
                 "excerpt": text[:80],
             })
+            # 每条真实产出即探针（带 canonical_id + platform 供双键 BI）
+            referral_probe.record(
+                "reply", peer_name=peer_name,
+                canonical_id=sent_meta.get("canonical_id") or "",
+                platform="facebook", region=peer_region or "",
+                keyword=kw, latency_min=latency_min,
+                device_id=resolved, dry_run=dry_run,
+                sent_event_id=sent_meta.get("sent_event_id"))
         except Exception as e:
             logger.warning("[referral_replies] 写 wa_referral_replied 失败 "
                             "peer=%s: %s", peer_name, e)
+
+    referral_probe.record(
+        "reply_batch", device_id=resolved, dry_run=dry_run,
+        pending_count=len(pending), scanned=len(inbox_results),
+        replied_now=replied_now, no_match=no_match)
 
     return True, "", {
         "pending_count": len(pending),
@@ -3631,6 +3662,7 @@ def _fb_check_referral_replies(fb, resolved: str,
         "replied_now": replied_now,
         "no_match": no_match,
         "matches": matches,
+        "dry_run": dry_run,
     }
 
 
@@ -3647,6 +3679,7 @@ def _fb_mark_stale_referrals(params: Dict[str, Any]) -> tuple:
       dry_run: bool = False          不写入只统计 (推预览安全)
       limit: int = 500
     """
+    from src.host import referral_probe
     stale_hours = int(params.get("stale_hours", 48) or 48)
     esc_days = int(params.get("escalate_to_dead_days", 7) or 7)
     device_id = (params.get("device_id") or "").strip() or None
@@ -3660,6 +3693,13 @@ def _fb_mark_stale_referrals(params: Dict[str, Any]) -> tuple:
         device_id=device_id,
         dry_run=dry_run,
         limit=limit)
+    if isinstance(stats, dict):
+        stats = {**stats, "dry_run": dry_run}
+    _probe_extra = {k: v for k, v in (stats or {}).items()
+                    if isinstance(v, (int, float, str, bool))
+                    and k not in ("dry_run",)}
+    referral_probe.record("stale_batch", device_id=device_id or "",
+                          dry_run=dry_run, **_probe_extra)
     return True, "", stats
 
 

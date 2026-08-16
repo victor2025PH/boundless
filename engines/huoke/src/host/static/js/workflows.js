@@ -182,7 +182,7 @@ function _workflowRenderJobSummary(){
       <div>计划: <span style="color:var(--text-main)">${cron}</span>（${nextHint}）</div>
       <div>动作: <span style="color:var(--text-main)">${action}</span></div>
       <div>可随时禁用/删除，支持手动安全启动验证。</div>
-      ${paramsErr?`<div style="color:#ef4444">${paramsErr}</div>`:''}
+      ${paramsErr?`<div style="color:var(--red-strong)">${paramsErr}</div>`:''}
     </div>`;
 }
 
@@ -306,14 +306,14 @@ async function loadHealthReport(){
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
         <div class="stat-card blue"><div class="stat-num">${r.summary.total_devices}</div><div class="stat-label">总设备</div></div>
         <div class="stat-card green"><div class="stat-num">${r.summary.online}</div><div class="stat-label">在线</div></div>
-        <div class="stat-card" style="border-top:3px solid #ef4444"><div class="stat-num" style="color:#f87171">${r.summary.offline}</div><div class="stat-label">离线</div></div>
-        <div class="stat-card" style="border-top:3px solid #eab308"><div class="stat-num" style="color:#eab308">${(r.alerts||[]).length}</div><div class="stat-label">告警</div></div>
+        <div class="stat-card" style="border-top:3px solid var(--red-strong)"><div class="stat-num" style="color:var(--red)">${r.summary.offline}</div><div class="stat-label">离线</div></div>
+        <div class="stat-card" style="border-top:3px solid var(--gold)"><div class="stat-num" style="color:var(--gold)">${(r.alerts||[]).length}</div><div class="stat-label">告警</div></div>
       </div>
-      ${r.summary.offline_devices?.length?`<div style="margin-top:8px;font-size:11px;color:#f87171">离线设备: ${r.summary.offline_devices.join(', ')}</div>`:''}
+      ${r.summary.offline_devices?.length?`<div style="margin-top:8px;font-size:11px;color:var(--red)">离线设备: ${r.summary.offline_devices.join(', ')}</div>`:''}
     </div>`;
     if((r.alerts||[]).length){
-      html+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-left:4px solid #ef4444;border-radius:12px;padding:14px">
-        <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:#f87171">&#9888; 告警项目</div>
+      html+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-left:4px solid var(--red-strong);border-radius:12px;padding:14px">
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--red)">&#9888; 告警项目</div>
         ${r.alerts.map(a=>`<div style="font-size:12px;padding:4px 0;color:var(--text-dim)">&bull; ${a}</div>`).join('')}
       </div>`;
     }
@@ -446,12 +446,12 @@ function _renderWfNode(node){
   el.style.cssText=`position:absolute;left:${node.x}px;top:${node.y}px;width:130px;background:var(--bg-main,#0f172a);border:2px solid ${info.color};border-radius:10px;padding:8px;cursor:move;z-index:10;font-size:11px;user-select:none`;
   el.innerHTML=`<div style="font-weight:600;color:${info.color};margin-bottom:4px;display:flex;justify-content:space-between;align-items:center">
     <span>${node.label}</span>
-    <span style="cursor:pointer;font-size:9px;color:#f87171" onclick="event.stopPropagation();_removeWfNode(${node.id})">&times;</span>
+    <span style="cursor:pointer;font-size:9px;color:var(--red)" onclick="event.stopPropagation();_removeWfNode(${node.id})">&times;</span>
   </div>
   <div style="font-size:9px;color:var(--text-muted)">#${node.id}</div>
   <div style="display:flex;justify-content:space-between;margin-top:6px">
-    <div class="wf-port wf-port-in" data-node="${node.id}" style="width:10px;height:10px;background:#22c55e;border-radius:50%;cursor:crosshair" title="输入"></div>
-    <div class="wf-port wf-port-out" data-node="${node.id}" style="width:10px;height:10px;background:#ef4444;border-radius:50%;cursor:crosshair" title="输出"></div>
+    <div class="wf-port wf-port-in" data-node="${node.id}" style="width:10px;height:10px;background:var(--green-strong);border-radius:50%;cursor:crosshair" title="输入"></div>
+    <div class="wf-port wf-port-out" data-node="${node.id}" style="width:10px;height:10px;background:var(--red-strong);border-radius:50%;cursor:crosshair" title="输出"></div>
   </div>`;
 
   let isDragging=false,offX=0,offY=0;
@@ -496,7 +496,7 @@ function _renderWfProps(node){
   });
   h+=`<div style="margin-top:8px;display:flex;gap:4px">
     <button class="sb-btn2" onclick="_startWfConnectUI(${node.id})" style="font-size:10px;flex:1">连接到...</button>
-    <button class="sb-btn2" onclick="_removeWfNode(${node.id})" style="font-size:10px;color:#f87171">删除</button>
+    <button class="sb-btn2" onclick="_removeWfNode(${node.id})" style="font-size:10px;color:var(--red)">删除</button>
   </div>`;
   const edges=_wfEdges.filter(e=>e.from===node.id||e.to===node.id);
   if(edges.length){
@@ -506,7 +506,7 @@ function _renderWfProps(node){
       const otherN=_wfNodes.find(n=>n.id===other);
       h+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-top:2px">
         <span style="font-size:10px">${e.from===node.id?'→':'←'} #${other} ${otherN?otherN.label:''}</span>
-        <span style="cursor:pointer;color:#f87171;font-size:10px" onclick="_removeWfEdge(${e.from},${e.to})">&times;</span></div>`;
+        <span style="cursor:pointer;color:var(--red);font-size:10px" onclick="_removeWfEdge(${e.from},${e.to})">&times;</span></div>`;
     });
   }
   c.innerHTML=h;
@@ -640,9 +640,9 @@ async function loadSavedWorkflows(){
         <span style="font-size:12px">${w.name}</span>
         <div style="display:flex;gap:4px">
           <button class="sb-btn2" onclick="loadWorkflowById('${w.id}')" style="font-size:10px">加载</button>
-          <button class="sb-btn2" onclick="deleteVisualWorkflow('${w.id}')" style="font-size:10px;color:#f87171">删除</button>
+          <button class="sb-btn2" onclick="deleteVisualWorkflow('${w.id}')" style="font-size:10px;color:var(--red)">删除</button>
         </div></div>`).join(''):'<div style="font-size:11px;color:var(--text-muted)">暂无保存的工作流</div>');
-  }catch(e){panel.innerHTML='<div style="color:#f87171">加载失败</div>';}
+  }catch(e){panel.innerHTML='<div style="color:var(--red)">加载失败</div>';}
 }
 
 async function loadWorkflowById(id){

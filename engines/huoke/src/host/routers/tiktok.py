@@ -2645,6 +2645,7 @@ def tiktok_daily_report_export():
     stages = funnel_data.get("stages", [])
     max_val = max((s["value"] for s in stages), default=1) or 1
 
+    from src.host import brand
     stage_rows = "".join(
         f'<tr><td style="padding:6px 12px;color:#666;text-align:right;white-space:nowrap">{s["name"]}</td>'
         f'<td style="padding:6px 8px"><div style="height:20px;width:{max(2,round(s["value"]/max_val*100))}%;'
@@ -2684,7 +2685,7 @@ td{{padding:8px;border-bottom:1px solid #f0f2f5}}
 .ft{{text-align:center;margin-top:20px;font-size:11px;color:#aaa}}
 @media print{{body{{background:white;padding:0}}.sec,.card{{box-shadow:none;border:1px solid #eee}}}}
 </style></head><body>
-<div class="hdr"><h1>&#127914; TikTok 运营战报</h1><p>{today} · OpenClaw 自动化系统</p></div>
+<div class="hdr"><h1>&#127914; TikTok 运营战报</h1><p>{today} · {brand.LABEL} 自动化系统</p></div>
 <div class="grid">
   <div class="card"><div class="val" style="color:#8b5cf6">{total.get("watched",0)}</div><div class="lbl">今日刷视频</div></div>
   <div class="card"><div class="val" style="color:#3b82f6">{total.get("followed_today",total.get("followed",0))}</div><div class="lbl">今日关注</div></div>
@@ -2697,7 +2698,7 @@ td{{padding:8px;border-bottom:1px solid #f0f2f5}}
 <div class="sec"><h2>&#128241; 设备明细</h2>
 <table><thead><tr><th>设备</th><th>阶段</th><th>刷视频</th><th>点赞</th><th>关注</th><th>私信</th><th>算法分</th></tr></thead>
 <tbody>{device_rows}</tbody></table></div>
-<div class="ft">由 OpenClaw 自动生成 · {today} · 如需手动归因请访问后台</div>
+<div class="ft">由 {brand.LABEL} 自动生成 · {today} · 如需手动归因请访问后台</div>
 </body></html>"""
     return HTMLResponse(html)
 

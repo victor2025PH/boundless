@@ -278,9 +278,9 @@ function devCard(d,compact){
   const didShort=did.substring(0,8);
 
   const offlineActions=isOn?'':`<div style="padding:5px 12px;background:rgba(239,68,68,.06);border-top:1px solid rgba(239,68,68,.12);display:flex;gap:4px;align-items:center">
-    <span style="font-size:10px;color:#f87171;flex:1">&#9888; 离线</span>
+    <span style="font-size:10px;color:var(--red);flex:1">&#9888; 离线</span>
     <button class="dev-btn" onclick="event.stopPropagation();diagnoseDev('${did}')" style="font-size:9px;padding:2px 8px;color:#fbbf24;border-color:#fbbf24">诊断</button>
-    <button class="dev-btn" onclick="event.stopPropagation();fixDev('${did}','reconnect')" style="font-size:9px;padding:2px 8px;color:#22c55e;border-color:#22c55e">修复</button>
+    <button class="dev-btn" onclick="event.stopPropagation();fixDev('${did}','reconnect')" style="font-size:9px;padding:2px 8px;color:var(--green-strong);border-color:var(--green-strong)">修复</button>
   </div>`;
 
   const perf=_devicePerfCache[did]||{};
@@ -300,10 +300,10 @@ function devCard(d,compact){
                 lowBat?`⚡ 低电量(${batLvl}%)`:
                 `💾 内存高(${memPct}%)`;
   const perfStrip=isOn?`<div style="padding:4px 16px 6px;display:flex;gap:6px;align-items:center;font-size:9px;color:var(--text-muted)">
-    ${batLvl!==undefined?`<div style="flex:1"><div style="display:flex;justify-content:space-between;margin-bottom:2px"><span style="color:${batColor}">&#128267; ${batLvl}%</span>${perf.charging?'<span style="color:#eab308">&#9889;</span>':''}</div><div style="height:3px;background:var(--bg-input);border-radius:2px;overflow:hidden"><div style="height:100%;width:${batLvl}%;background:${batColor};border-radius:2px"></div></div></div>`:''}
+    ${batLvl!==undefined?`<div style="flex:1"><div style="display:flex;justify-content:space-between;margin-bottom:2px"><span style="color:${batColor}">&#128267; ${batLvl}%</span>${perf.charging?'<span style="color:var(--gold)">&#9889;</span>':''}</div><div style="height:3px;background:var(--bg-input);border-radius:2px;overflow:hidden"><div style="height:100%;width:${batLvl}%;background:${batColor};border-radius:2px"></div></div></div>`:''}
     ${memPct!==undefined?`<span>&#128190; ${memPct}%</span>`:''}
     ${tempStr?`<span>${tempStr}</span>`:''}
-    ${resourceWarn?`<span title="${warnTip}" style="margin-left:auto;padding:1px 5px;border-radius:4px;font-size:8px;font-weight:600;background:rgba(239,68,68,.15);color:#ef4444;cursor:default">⚠</span>`:
+    ${resourceWarn?`<span title="${warnTip}" style="margin-left:auto;padding:1px 5px;border-radius:4px;font-size:8px;font-weight:600;background:rgba(239,68,68,.15);color:var(--red-strong);cursor:default">⚠</span>`:
       score!==undefined?`<span style="margin-left:auto;padding:1px 5px;border-radius:4px;font-size:8px;font-weight:600;background:${score>=80?'rgba(34,197,94,.15)':score>=50?'rgba(234,179,8,.15)':'rgba(239,68,68,.15)'};color:${score>=80?'#22c55e':score>=50?'#eab308':'#ef4444'}">${score}</span>`:''}
   </div>`:'';
 
@@ -338,7 +338,7 @@ function devCard(d,compact){
     <div class="dev-card-bottom">
       <div class="dev-status">
         <span class="status-dot ${isOn?(isBusy?'warn':'ok'):'err'}" style="width:6px;height:6px"></span> ${stText}
-        <span id="stream-ind-${didShort}" style="display:none;margin-left:4px;font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(34,197,94,.15);color:#22c55e" title="实时流活跃">📡</span>
+        <span id="stream-ind-${didShort}" style="display:none;margin-left:4px;font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(34,197,94,.15);color:var(--green-strong)" title="实时流活跃">📡</span>
         <span id="vpn-ind-${didShort}" style="margin-left:4px;font-size:9px;padding:1px 5px;border-radius:3px;background:var(--bg-input);color:var(--text-muted);cursor:pointer" title="点击检查/修复VPN" onclick="event.stopPropagation();_vpnFixDevice('${did}')">VPN?</span>
       </div>
       <div class="dev-actions">
@@ -352,7 +352,7 @@ function devCard(d,compact){
           const dot = wpOutdated?'<span class="wp-dot outdated"></span>':wpOk?'<span class="wp-dot ok"></span>':'';
           return `<button class="${cls}" id="wp-${didShort}" onclick="event.stopPropagation();_deployWallpaperSingle('${did}')" title="${wpTitle}">🖼${dot}</button>`;
         })()}
-        ${isUnset&&!compact?`<button class="dev-btn" style="color:#f59e0b;border-color:#f59e0b;font-weight:600" onclick="event.stopPropagation();_avatarEdit(event,document.getElementById('av-${didShort}'),'${did}')" title="点击分配编号">📋 编号</button>`:''}
+        ${isUnset&&!compact?`<button class="dev-btn" style="color:var(--amber);border-color:var(--amber);font-weight:600" onclick="event.stopPropagation();_avatarEdit(event,document.getElementById('av-${didShort}'),'${did}')" title="点击分配编号">📋 编号</button>`:''}
         ${compact?'':`<button class="dev-btn" onclick="event.stopPropagation();quickCmdDev('${alias||did.substring(0,4)}','养号30分钟')">养号</button>`}
       </div>
     </div>
@@ -482,7 +482,7 @@ async function deployOutdatedWallpapers(){
     }
   }catch(ex){ showToast('补缺壁纸失败: '+ex.message,'error'); }
   finally{
-    if(btn){btn.disabled=false;btn.innerHTML='🖼 补缺壁纸 <span id="wp-outdated-badge" style="display:none;background:#f59e0b;color:#fff;font-size:9px;font-weight:700;padding:0 5px;border-radius:3px;margin-left:4px"></span>';}
+    if(btn){btn.disabled=false;btn.innerHTML='🖼 补缺壁纸 <span id="wp-outdated-badge" style="display:none;background:var(--amber);color:#fff;font-size:9px;font-weight:700;padding:0 5px;border-radius:3px;margin-left:4px"></span>';}
     _updateUnsetCount();
   }
 }
@@ -518,7 +518,7 @@ function _wpStartProgress(jobId, total){
       if(stats) stats.textContent = `${processed}/${total} · ${s.done} 成功${s.failed?' · '+s.failed+' 失败':''} (${pct}%)`;
       if(!s.running){
         clearInterval(_wpPollTimer);
-        if(bar){ bar.style.width='100%'; bar.style.background='#22c55e'; }
+        if(bar){ bar.style.width='100%'; bar.style.background='var(--green-strong)'; }
         if(stats) stats.textContent = `部署完成 ✓  ${s.done} 成功${s.failed?' · '+s.failed+' 失败':''}`;
         await loadAliases(); renderScreens(); _updateUnsetCount();
         setTimeout(()=>{ const p=document.getElementById('wp-progress-panel'); if(p) p.remove(); }, 4000);
@@ -661,10 +661,10 @@ function _renderHealthBar(){
   });
   const total=allDevices.length;
   const parts=[`<span style="color:var(--text-muted)">共 <b style="color:var(--text)">${total}</b> 台</span>`];
-  if(online) parts.push(`<span style="color:#22c55e;font-weight:600">✅ 在线 ${online}台</span>`);
+  if(online) parts.push(`<span style="color:var(--green-strong);font-weight:600">✅ 在线 ${online}台</span>`);
   if(offline) parts.push(`<span style="color:#6b7280;font-weight:600" title="已编号但当前离线">⚫ 离线 ${offline}台</span>`);
-  if(unset) parts.push(`<span style="color:#f59e0b;font-weight:600;cursor:pointer" title="点击前往编号">🟡 未编号 ${unset}台</span>`);
-  if(wpIssue) parts.push(`<span style="color:#ef4444;font-weight:600" title="壁纸编号与设备编号不匹配">🔴 壁纸异常 ${wpIssue}台</span>`);
+  if(unset) parts.push(`<span style="color:var(--amber);font-weight:600;cursor:pointer" title="点击前往编号">🟡 未编号 ${unset}台</span>`);
+  if(wpIssue) parts.push(`<span style="color:var(--red-strong);font-weight:600" title="壁纸编号与设备编号不匹配">🔴 壁纸异常 ${wpIssue}台</span>`);
   bar.innerHTML=parts.join('<span style="color:var(--text-muted);margin:0 6px">|</span>');
 }
 
@@ -762,7 +762,7 @@ async function _refreshDeviceMetaAlerts(){
     const onDevPage=document.getElementById('page-devices')&&document.getElementById('page-devices').classList.contains('active');
     const actions=[];
     if((m.breakdown||{}).stale_alias_keys>0){
-      actions.push(`<button type="button" class="qa-btn" style="margin-top:8px;padding:4px 10px;font-size:11px;border-color:#f59e0b;color:#fbbf24" onclick="_pruneOrphanAliases(false)">修剪别名孤儿</button>`);
+      actions.push(`<button type="button" class="qa-btn" style="margin-top:8px;padding:4px 10px;font-size:11px;border-color:var(--amber);color:#fbbf24" onclick="_pruneOrphanAliases(false)">修剪别名孤儿</button>`);
       actions.push(`<button type="button" class="qa-btn" style="margin-top:8px;margin-left:6px;padding:4px 10px;font-size:11px" onclick="_pruneOrphanAliases(true)">仅预览修剪</button>`);
     }
     if(!onDevPage){
@@ -898,12 +898,12 @@ async function _updateDeviceVpnIndicators(){
         const flag=_getFlag(v.country);
         el.textContent=flag+' VPN ✓';
         el.style.background='rgba(34,197,94,.15)';
-        el.style.color='#22c55e';
+        el.style.color='var(--green-strong)';
         el.title='VPN 已连接'+(v.ip?' · IP: '+v.ip:'')+(v.country?' · '+v.country:'');
       }else{
         el.textContent='VPN ✗';
         el.style.background='rgba(239,68,68,.15)';
-        el.style.color='#ef4444';
+        el.style.color='var(--red-strong)';
         el.title='VPN 未连接，点击修复';
       }
     }
@@ -967,7 +967,7 @@ async function _cleanupGhosts(){
       <div style="display:flex;gap:8px;justify-content:flex-end">
         <button type="button" class="qa-btn" id="cg-cancel">取消</button>
         <button type="button" class="qa-btn" id="cg-refresh" style="border-color:var(--accent);color:var(--accent)">刷新列表</button>
-        <button type="button" class="qa-btn" id="cg-ok" style="border-color:#ef4444;color:#ef4444">确认清理</button>
+        <button type="button" class="qa-btn" id="cg-ok" style="border-color:var(--red-strong);color:var(--red-strong)">确认清理</button>
       </div></div>`;
     document.body.appendChild(m);
     const listEl=m.querySelector('#cg-list');
@@ -1048,7 +1048,7 @@ async function _vpnFixDevice(deviceId){
     const d=await api('POST','/vpn/health/'+deviceId+'/check');
     if(d.connected){
       showToast(short+' VPN 已恢复','success');
-      if(el){el.textContent='VPN ✓';el.style.background='rgba(34,197,94,.15)';el.style.color='#22c55e';}
+      if(el){el.textContent='VPN ✓';el.style.background='rgba(34,197,94,.15)';el.style.color='var(--green-strong)';}
     }else{
       showToast(short+' 重连失败，请上传新 VPN 二维码','warn');
     }
@@ -1072,16 +1072,16 @@ async function _vpnCheckCurrent(){
     const el=document.getElementById('vpn-ind-'+short);
     if(dev&&dev.connected){
       const flag=_getFlag(dev.country);
-      if(st) st.innerHTML='<span style="color:#22c55e">&#9989; VPN 已连接</span>'+(dev.country?' '+flag+' '+dev.country:'')+(dev.ip?' · IP: '+dev.ip:'');
-      if(el){el.textContent=flag+' VPN ✓';el.style.background='rgba(34,197,94,.15)';el.style.color='#22c55e';}
+      if(st) st.innerHTML='<span style="color:var(--green-strong)">&#9989; VPN 已连接</span>'+(dev.country?' '+flag+' '+dev.country:'')+(dev.ip?' · IP: '+dev.ip:'');
+      if(el){el.textContent=flag+' VPN ✓';el.style.background='rgba(34,197,94,.15)';el.style.color='var(--green-strong)';}
     }else{
       const cfg=d.current_config;
       const cfgInfo=cfg?(cfg.protocol||'')+' → '+(cfg.server||''):'无配置';
-      if(st) st.innerHTML='<span style="color:#ef4444">&#10060; VPN 未连接</span> <span style="color:var(--text-muted);font-size:9px">('+cfgInfo+')</span>';
-      if(el){el.textContent='VPN ✗';el.style.background='rgba(239,68,68,.15)';el.style.color='#ef4444';}
+      if(st) st.innerHTML='<span style="color:var(--red-strong)">&#10060; VPN 未连接</span> <span style="color:var(--text-muted);font-size:9px">('+cfgInfo+')</span>';
+      if(el){el.textContent='VPN ✗';el.style.background='rgba(239,68,68,.15)';el.style.color='var(--red-strong)';}
     }
   }catch(e){
-    if(st) st.innerHTML='<span style="color:#ef4444">检测失败: '+e.message+'</span>';
+    if(st) st.innerHTML='<span style="color:var(--red-strong)">检测失败: '+e.message+'</span>';
   }
 }
 
@@ -1102,13 +1102,13 @@ async function _vpnToolUpload(input, scope){
     const r=await fetch(_apiUrl('/vpn/upload-qr'),{method:'POST',body:formData});
     const d=await r.json();
     if(!r.ok){
-      if(st) st.innerHTML='<span style="color:#ef4444">&#10060; '+(d.detail||'解码失败')+'</span>';
+      if(st) st.innerHTML='<span style="color:var(--red-strong)">&#10060; '+(d.detail||'解码失败')+'</span>';
       input.value='';return;
     }
     // 第2步: 用解码出的 URI 进行配置
     await _vpnDoSetup(d.uri, scope);
   }catch(e){
-    if(st) st.innerHTML='<span style="color:#ef4444">&#10060; '+e.message+'</span>';
+    if(st) st.innerHTML='<span style="color:var(--red-strong)">&#10060; '+e.message+'</span>';
   }
   input.value='';
 }
@@ -1150,11 +1150,11 @@ async function _vpnDoSetup(uri, scope){
     try{
       const d=await api('POST','/vpn/batch-setup',body);
       const ok=d.imported||d.success||0;
-      if(st) st.innerHTML=ok?'<span style="color:#22c55e">&#9989; 配置成功</span>'+(d.config_name?' ('+d.config_name+')':'')
-                             :'<span style="color:#ef4444">&#10060; 配置失败</span>';
+      if(st) st.innerHTML=ok?'<span style="color:var(--green-strong)">&#9989; 配置成功</span>'+(d.config_name?' ('+d.config_name+')':'')
+                             :'<span style="color:var(--red-strong)">&#10060; 配置失败</span>';
       if(ok) _vpnCheckCurrent();
     }catch(e){
-      if(st) st.innerHTML='<span style="color:#ef4444">&#10060; '+e.message+'</span>';
+      if(st) st.innerHTML='<span style="color:var(--red-strong)">&#10060; '+e.message+'</span>';
     }
     return;
   }
@@ -1175,7 +1175,7 @@ async function _vpnDoSetup(uri, scope){
     });
     if(!r.ok){
       const err=await r.json().catch(()=>({detail:'请求失败'}));
-      if(progLabel) progLabel.innerHTML='<span style="color:#ef4444">&#10060; '+(err.detail||'失败')+'</span>';
+      if(progLabel) progLabel.innerHTML='<span style="color:var(--red-strong)">&#10060; '+(err.detail||'失败')+'</span>';
       return;
     }
     const reader=r.body.getReader();
@@ -1211,13 +1211,13 @@ async function _vpnDoSetup(uri, scope){
             const el=document.getElementById('vpn-ind-'+ev.short);
             if(el){
               if(ev.connected){
-                el.textContent='VPN ✓';el.style.background='rgba(34,197,94,.15)';el.style.color='#22c55e';
+                el.textContent='VPN ✓';el.style.background='rgba(34,197,94,.15)';el.style.color='var(--green-strong)';
               }else{
-                el.textContent='VPN ✗';el.style.background='rgba(239,68,68,.15)';el.style.color='#ef4444';
+                el.textContent='VPN ✗';el.style.background='rgba(239,68,68,.15)';el.style.color='var(--red-strong)';
               }
             }
           }else if(ev.type==='done'){
-            if(progLabel) progLabel.innerHTML='<span style="color:#22c55e">&#9989; 完成</span>';
+            if(progLabel) progLabel.innerHTML='<span style="color:var(--green-strong)">&#9989; 完成</span>';
             if(progCount) progCount.textContent=ok_count+'/'+total+' 台成功'+(ev.config_name?' · '+ev.config_name:'');
             showToast('VPN: '+ok_count+'/'+total+' 台配置成功','success');
           }
@@ -1225,7 +1225,7 @@ async function _vpnDoSetup(uri, scope){
       }
     }
   }catch(e){
-    if(progLabel) progLabel.innerHTML='<span style="color:#ef4444">&#10060; '+e.message+'</span>';
+    if(progLabel) progLabel.innerHTML='<span style="color:var(--red-strong)">&#10060; '+e.message+'</span>';
   }
 }
 
@@ -1239,7 +1239,7 @@ async function _vpnStartCurrent(){
     showToast('VPN 启动命令已发送','success');
     setTimeout(_vpnCheckCurrent,3000);
   }catch(e){
-    if(st) st.innerHTML='<span style="color:#ef4444">启动失败: '+e.message+'</span>';
+    if(st) st.innerHTML='<span style="color:var(--red-strong)">启动失败: '+e.message+'</span>';
   }
 }
 
@@ -1253,9 +1253,9 @@ async function _vpnStopCurrent(){
     showToast('VPN 已停止');
     const short=modalDeviceId.substring(0,8);
     const el=document.getElementById('vpn-ind-'+short);
-    if(el){el.textContent='VPN ✗';el.style.background='rgba(239,68,68,.15)';el.style.color='#ef4444';}
+    if(el){el.textContent='VPN ✗';el.style.background='rgba(239,68,68,.15)';el.style.color='var(--red-strong)';}
   }catch(e){
-    if(st) st.innerHTML='<span style="color:#ef4444">停止失败: '+e.message+'</span>';
+    if(st) st.innerHTML='<span style="color:var(--red-strong)">停止失败: '+e.message+'</span>';
   }
 }
 
@@ -1277,12 +1277,12 @@ async function _vpnStartAll(){
     const total=d.total||0;
     const ok=Object.values(d.results||{}).filter(v=>v==='OK').length;
     if(progBar) progBar.style.width='100%';
-    if(progLabel) progLabel.innerHTML='<span style="color:#22c55e">&#9989; 完成</span>';
+    if(progLabel) progLabel.innerHTML='<span style="color:var(--green-strong)">&#9989; 完成</span>';
     if(progCount) progCount.textContent=ok+'/'+total+' 台启动成功';
     showToast('VPN 启动: '+ok+'/'+total+' 成功','success');
     setTimeout(_vpnRefreshAll,3000);
   }catch(e){
-    if(progLabel) progLabel.innerHTML='<span style="color:#ef4444">&#10060; '+e.message+'</span>';
+    if(progLabel) progLabel.innerHTML='<span style="color:var(--red-strong)">&#10060; '+e.message+'</span>';
   }
 }
 
@@ -1304,12 +1304,12 @@ async function _vpnStopAll(){
     const total=d.total||0;
     const ok=d.stopped||0;
     if(progBar) progBar.style.width='100%';
-    if(progLabel) progLabel.innerHTML='<span style="color:#22c55e">&#9989; 完成</span>';
+    if(progLabel) progLabel.innerHTML='<span style="color:var(--green-strong)">&#9989; 完成</span>';
     if(progCount) progCount.textContent=ok+'/'+total+' 台已停止';
     showToast('VPN 停止: '+ok+'/'+total,'success');
     setTimeout(_vpnRefreshAll,2000);
   }catch(e){
-    if(progLabel) progLabel.innerHTML='<span style="color:#ef4444">&#10060; '+e.message+'</span>';
+    if(progLabel) progLabel.innerHTML='<span style="color:var(--red-strong)">&#10060; '+e.message+'</span>';
   }
 }
 
@@ -1330,7 +1330,7 @@ async function _vpnRefreshAll(){
     const cfg=d.current_config;
     const cfgInfo=cfg?' · '+(cfg.protocol||'')+' → '+(cfg.server||''):'';
     if(progBar) progBar.style.width='100%';
-    if(progLabel) progLabel.innerHTML='<span style="color:#22c55e">&#9989;</span>';
+    if(progLabel) progLabel.innerHTML='<span style="color:var(--green-strong)">&#9989;</span>';
     if(progCount) progCount.textContent=connected+'/'+total+' 台已连接 VPN'+cfgInfo;
     // 更新全部设备卡片上的 VPN 指示器（含国家旗帜）
     devs.forEach(v=>{
@@ -1339,10 +1339,10 @@ async function _vpnRefreshAll(){
       if(!el) return;
       if(v.connected){
         const flag=_getFlag(v.country);
-        el.textContent=flag+' VPN ✓';el.style.background='rgba(34,197,94,.15)';el.style.color='#22c55e';
+        el.textContent=flag+' VPN ✓';el.style.background='rgba(34,197,94,.15)';el.style.color='var(--green-strong)';
         el.title='VPN 已连接'+(v.ip?' · IP: '+v.ip:'')+(v.country?' · '+v.country:'');
       }else{
-        el.textContent='VPN ✗';el.style.background='rgba(239,68,68,.15)';el.style.color='#ef4444';
+        el.textContent='VPN ✗';el.style.background='rgba(239,68,68,.15)';el.style.color='var(--red-strong)';
         el.title='VPN 未连接，点击修复';
       }
     });
@@ -1350,7 +1350,7 @@ async function _vpnRefreshAll(){
     const allCount=document.getElementById('vpn-scope-all-count');
     if(allCount) allCount.textContent='('+connected+'/'+total+' 在线)';
   }catch(e){
-    if(progLabel) progLabel.innerHTML='<span style="color:#ef4444">检测失败: '+e.message+'</span>';
+    if(progLabel) progLabel.innerHTML='<span style="color:var(--red-strong)">检测失败: '+e.message+'</span>';
   }
 }
 
@@ -1398,10 +1398,13 @@ function openScreenModal(deviceId){
   _zoomLevel=1.0;
   _applyZoom();
   clearAdbTerminal();
-  const clusterDev=_clusterDevices.find(d=>d.device_id===deviceId && d._isCluster);
+  // 集群判定认两本账：_clusterDevices（勾选集群时装载）∪ allDevices 里 loadDevices 并入的 _isCluster 行
+  // ——只查前者时，从 allDevices 进来的 worker 设备会被错当本机、实时流打到本机端点必失败
+  const clusterDev=_clusterDevices.find(d=>d.device_id===deviceId && d._isCluster)
+    ||allDevices.find(d=>d.device_id===deviceId && d._isCluster===true);
   _currentModalIsCluster=!!clusterDev;
   const alias=ALIAS[deviceId]||deviceId.substring(0,12);
-  const hostLabel=clusterDev?` [${clusterDev.host_name}]`:'';
+  const hostLabel=clusterDev&&clusterDev.host_name?` [${clusterDev.host_name}]`:'';
   document.getElementById('modal-title').textContent=alias+hostLabel+' — 点击屏幕操控手机';
   document.getElementById('modal-body').innerHTML='<div class="loading-text">连接中...</div>';
   document.getElementById('screen-modal').classList.add('open');
@@ -1416,11 +1419,14 @@ function openScreenModal(deviceId){
   renderCustomButtons();
   switchRightTab('tools');
   document.addEventListener('keydown',_onModalKey);
-  if(_autoStreamOnOpen&&(_WEBCODECS_OK||(typeof JMuxer!=='undefined'))){
+  const _noStream=(typeof _streamRecentlyFailed==='function')&&_streamRecentlyFailed(deviceId);
+  if(_autoStreamOnOpen&&!_noStream&&(_WEBCODECS_OK||(typeof JMuxer!=='undefined'))){
     setTimeout(()=>{if(modalDeviceId===deviceId) startStreaming();},200);
   }else{
     captureModalScreen();
     startModalAuto();
+    if(typeof _setModalModeBadge==='function') _setModalModeBadge('shot');
+    if(_noStream) showToast('以截图模式监控（该设备实时流此前不可用）。点「实时流」可重试','info',4000,'stream-status');
   }
 }
 
@@ -1580,25 +1586,45 @@ function _attachImgListeners(img){
   });
 }
 
+let _modalScrEtag=null,_modalScrEtagDid=null,_modalScrObjUrl=null,_modalScrBusy=false;
 async function captureModalScreen(){
   if(!modalDeviceId)return;
+  if(_modalScrBusy)return; // 上一帧还在路上，跳过本轮（500ms 轮询下防请求堆积）
   const did=modalDeviceId; // 捕获当前设备ID，防止异步回调时设备已切换
   const body=document.getElementById('modal-body');
+  _modalScrBusy=true;
   try{
-    const ts=Date.now();
-    const prefix=_modalApiPrefix();
-    const url=_apiUrl(`${prefix}/devices/${did}/screenshot?mode=control&t=${ts}`);
-    const img=new Image();
-    img.onload=function(){
-      if(modalDeviceId!==did) return; // 设备已切换，丢弃旧截图，避免覆盖新设备的canvas
-      if(_streamActive) return;       // 流媒体已激活，不覆盖canvas
+    if(_modalScrEtagDid!==did){_modalScrEtag=null;_modalScrEtagDid=did;}
+    const url=_apiUrl(`${_modalApiPrefix()}/devices/${did}/screenshot?mode=control`);
+    const headers={};
+    if(_modalScrEtag&&document.getElementById('modal-scr-img')) headers['If-None-Match']=_modalScrEtag;
+    const resp=await fetch(url,{headers,cache:'no-store'});
+    if(modalDeviceId!==did||_streamActive) return;
+    if(resp.status===304) return; // 画面没变：零载荷、零 DOM 操作
+    if(!resp.ok) throw new Error('HTTP '+resp.status);
+    _modalScrEtag=resp.headers.get('ETag')||null;
+    const blob=await resp.blob();
+    if(modalDeviceId!==did||_streamActive) return;
+    const obj=URL.createObjectURL(blob);
+    let img=document.getElementById('modal-scr-img');
+    if(img&&img.isConnected){
+      img.src=obj; // 原地换帧：不重建 DOM、不重挂监听（旧实现每 500ms 重建一次整个弹窗内容）
+    }else{
+      img=new Image();
+      img.id='modal-scr-img';
+      img.style.cssText='max-width:100%;max-height:74vh;cursor:crosshair;touch-action:none';
+      await new Promise(res=>{img.onload=res;img.onerror=res;img.src=obj;});
+      if(modalDeviceId!==did||_streamActive){URL.revokeObjectURL(obj);return;}
       body.innerHTML='';
       body.appendChild(img);
       _attachImgListeners(img);
-    };
-    img.onerror=function(){
-      if(modalDeviceId!==did) return;
-      if(_streamActive) return;
+    }
+    if(_modalScrObjUrl&&_modalScrObjUrl!==obj)URL.revokeObjectURL(_modalScrObjUrl);
+    _modalScrObjUrl=obj;
+  }catch(e){
+    if(modalDeviceId!==did||_streamActive) return;
+    // 已有画面时保留上一帧；从未出过图才显示占位并稍后重试
+    if(!document.getElementById('modal-scr-img')){
       body.innerHTML='<div style="text-align:center;padding:40px;color:var(--text-muted)">'+
         '<div style="font-size:24px;margin-bottom:8px">&#128247;</div>'+
         '<div style="font-size:14px;font-weight:500;margin-bottom:6px">截屏加载中</div>'+
@@ -1606,10 +1632,8 @@ async function captureModalScreen(){
         '<button class="qa-btn" onclick="captureModalScreen()" style="padding:6px 16px;font-size:12px">&#128260; 重试截屏</button>'+
         '</div>';
       setTimeout(captureModalScreen,3000);
-    };
-    img.src=url;
-    img.style.cssText='max-width:100%;max-height:74vh;cursor:crosshair;touch-action:none';
-  }catch(e){body.innerHTML='<div class="loading-text">截屏失败</div>';}
+    }
+  }finally{_modalScrBusy=false;}
 }
 
 async function sendKey(keycode){
@@ -1932,13 +1956,13 @@ async function loadFileList(path){
         <span class="fb-size">${sz}</span>
         <div class="fb-actions">
           ${!it.is_dir?`<button class="sb-btn2" onclick="event.stopPropagation();fileDownload('${_fbCurrentPath}/${it.name}')" style="font-size:9px;padding:1px 4px" title="下载">&#11015;</button>`:''}
-          <button class="sb-btn2" onclick="event.stopPropagation();fileDelete('${_fbCurrentPath}/${it.name}')" style="font-size:9px;padding:1px 4px;color:#ef4444" title="删除">&#10005;</button>
+          <button class="sb-btn2" onclick="event.stopPropagation();fileDelete('${_fbCurrentPath}/${it.name}')" style="font-size:9px;padding:1px 4px;color:var(--red-strong)" title="删除">&#10005;</button>
         </div>
       </div>`;
     }).join('');
     document.getElementById('fb-status').textContent=`${_fbCurrentPath} (${items.length} 项)`;
   }catch(e){
-    list.innerHTML='<div style="padding:12px;color:#ef4444;font-size:11px">加载失败: '+e.message+'</div>';
+    list.innerHTML='<div style="padding:12px;color:var(--red-strong);font-size:11px">加载失败: '+e.message+'</div>';
     document.getElementById('fb-status').textContent='错误';
   }
 }
@@ -2441,11 +2465,11 @@ async function showNumMgr(initialFilter){
         <span style="font-size:11px;color:var(--text-muted)">号开始</span>
         <button class="qa-btn" onclick="_nmSeqAssign()" style="font-size:11px;height:26px;padding:0 10px">顺序赋号</button>
         <span style="width:1px;height:16px;background:var(--border)"></span>
-        <button class="qa-btn" onclick="_nmClearAll()" style="font-size:11px;height:26px;padding:0 10px;color:#ef4444;border-color:#ef4444">清空</button>
-        <button class="qa-btn" onclick="_nmAutoAssign()" style="font-size:11px;height:26px;padding:0 10px;color:#a78bfa;border-color:#a78bfa" title="按编号段配置自动为未编号设备分配最小可用号">🎯 按段分配</button>
+        <button class="qa-btn" onclick="_nmClearAll()" style="font-size:11px;height:26px;padding:0 10px;color:var(--red-strong);border-color:var(--red-strong)">清空</button>
+        <button class="qa-btn" onclick="_nmAutoAssign()" style="font-size:11px;height:26px;padding:0 10px;color:var(--violet-soft);border-color:var(--violet-soft)" title="按编号段配置自动为未编号设备分配最小可用号">🎯 按段分配</button>
         <span style="flex:1"></span>
-        <button id="nm-fix-btn" class="qa-btn" onclick="_nmFixConflicts()" style="font-size:11px;height:26px;padding:0 10px;display:none;color:#ef4444;border-color:#ef4444">🔧 修复冲突</button>
-        <span id="nm-conflict-warn" style="display:none;font-size:11px;color:#ef4444;font-weight:600">⚠ 有重复编号</span>
+        <button id="nm-fix-btn" class="qa-btn" onclick="_nmFixConflicts()" style="font-size:11px;height:26px;padding:0 10px;display:none;color:var(--red-strong);border-color:var(--red-strong)">🔧 修复冲突</button>
+        <span id="nm-conflict-warn" style="display:none;font-size:11px;color:var(--red-strong);font-weight:600">⚠ 有重复编号</span>
       </div>
       <div class="nm-list" id="nm-list"></div>
       <div class="nm-footer">
@@ -2577,8 +2601,8 @@ function _nmRenderList(){
     const unsetCnt = _nmRows.filter(r=>!r.pendingNum).length;
     const conflictDevs = _nmRows.filter(r=>conflictNums.has(r.pendingNum)).length;
     let txt = `${_nmRows.length} 台`;
-    if(unsetCnt>0) txt += ` · <span style="color:#f59e0b">${unsetCnt} 未编号</span>`;
-    if(conflictDevs>0) txt += ` · <span style="color:#ef4444">${conflictDevs} 冲突</span>`;
+    if(unsetCnt>0) txt += ` · <span style="color:var(--amber)">${unsetCnt} 未编号</span>`;
+    if(conflictDevs>0) txt += ` · <span style="color:var(--red-strong)">${conflictDevs} 冲突</span>`;
     if(!unsetCnt&&!conflictDevs) txt += ' · <span style="color:var(--green)">✓ 编号整洁</span>';
     st.innerHTML = txt;
   }
@@ -2610,9 +2634,9 @@ function _nmRenderList(){
         onkeydown="if(event.key==='Enter')this.blur()">
       <div class="nm-name" title="${r.did}">
         ${r.name}
-        ${!r.pendingNum?'<span style="font-size:9px;background:#f59e0b;color:#fff;padding:0 4px;border-radius:2px;margin-left:4px">未编号</span>':''}
-        ${isConflict?'<span style="font-size:9px;background:rgba(239,68,68,.15);color:#ef4444;padding:0 4px;border-radius:2px;margin-left:4px">重复</span>':''}
-        ${oor?`<span style="font-size:9px;background:rgba(234,179,8,.15);color:#eab308;padding:0 4px;border-radius:2px;margin-left:4px">越界</span>`:''}
+        ${!r.pendingNum?'<span style="font-size:9px;background:var(--amber);color:#fff;padding:0 4px;border-radius:2px;margin-left:4px">未编号</span>':''}
+        ${isConflict?'<span style="font-size:9px;background:rgba(239,68,68,.15);color:var(--red-strong);padding:0 4px;border-radius:2px;margin-left:4px">重复</span>':''}
+        ${oor?`<span style="font-size:9px;background:rgba(234,179,8,.15);color:var(--gold);padding:0 4px;border-radius:2px;margin-left:4px">越界</span>`:''}
       </div>
       <div><span class="nm-worker" style="background:${wkColor}">${r.worker}</span></div>
       <div class="nm-status">

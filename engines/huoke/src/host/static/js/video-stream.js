@@ -178,22 +178,72 @@ let _streamJmuxer=null;
 let _streamDecoder=null;
 let _streamActive=false;
 
+/* ── 实时流能力记忆：某设备 scrcpy 起不来记 6 小时，期间打开弹窗直接走截图模式，
+      不再每次盲试 → 每次报错吓用户；手动点「实时流」= 用户明确要重试，清记忆放行 ── */
+const _STREAM_FAIL_TTL_MS=6*3600*1000;
+let _streamLastErr='';
+function _streamFailKey(did){return 'oc_nostream_'+did;}
+function _streamRecentlyFailed(did){
+  try{
+    const v=localStorage.getItem(_streamFailKey(did));
+    if(!v) return false;
+    if(Date.now()-parseInt(v,10)>_STREAM_FAIL_TTL_MS){localStorage.removeItem(_streamFailKey(did));return false;}
+    return true;
+  }catch(e){return false;}
+}
+function _rememberStreamFail(did){if(did)try{localStorage.setItem(_streamFailKey(did),String(Date.now()));}catch(e){}}
+function _clearStreamFail(did){if(did)try{localStorage.removeItem(_streamFailKey(did));}catch(e){}}
+/** 服务端关闭原因 → 人话（不把 scrcpy 等内部术语抛给用户） */
+function _streamHumanReason(raw){
+  raw=String(raw||'');
+  if(!raw) return '';
+  if(/scrcpy start failed|start failed/i.test(raw)) return '该设备暂时无法建立实时投屏';
+  if(/not found/i.test(raw)) return '设备未注册';
+  if(/resolve/i.test(raw)) return '设备未就绪';
+  if(/init error/i.test(raw)) return '投屏组件初始化失败';
+  return '实时通道暂不可用';
+}
+
+/* ── 弹窗监控模式徽章：实时流/截图模式/连接中 三态一眼可辨，截图态可点击重试实时流 ── */
+function _setModalModeBadge(mode){
+  const b=document.getElementById('ctrl-mode-badge');
+  if(!b) return;
+  const M={
+    live:{t:'\u25CF 实时流',bg:'rgba(34,197,94,.15)',fg:'var(--green-strong)',click:false,tip:'低延迟视频流已建立'},
+    shot:{t:'\u25CE 截图模式 \u00B7 点此试实时流',bg:'rgba(59,130,246,.15)',fg:'var(--blue-soft)',click:true,tip:'定时截图监控中，点击尝试建立实时流'},
+    conn:{t:'\u2026 连接中',bg:'rgba(148,163,184,.15)',fg:'var(--text-muted)',click:false,tip:'正在建立实时流'},
+  }[mode];
+  if(!M){b.style.display='none';return;}
+  b.textContent=M.t;b.title=M.tip;
+  b.style.display='inline-block';b.style.background=M.bg;b.style.color=M.fg;
+  b.style.cursor=M.click?'pointer':'default';
+  b.dataset.click=M.click?'1':'';
+}
+function _modeBadgeClick(){
+  const b=document.getElementById('ctrl-mode-badge');
+  if(!b||!b.dataset.click||_streamActive) return;
+  toggleStreaming();
+}
+
 async function toggleStreaming(){
   if(_streamActive){
     stopStreaming();
   }else{
+    _clearStreamFail(modalDeviceId); // 手动重试：清能力记忆，真试一次
     startStreaming();
   }
 }
 
 async function startStreaming(){
   if(!modalDeviceId){showToast('无设备','warn');return;}
+  _streamLastErr='';
   if(_streamFirstFrameTimer){clearTimeout(_streamFirstFrameTimer);_streamFirstFrameTimer=null;}
   if(_streamWs){try{_streamWs.onclose=null;_streamWs.close();}catch(e){}_streamWs=null;}
   if(_streamDecoder){try{_streamDecoder.destroy();}catch(e){}_streamDecoder=null;}
   stopModalAuto();
   const btn=document.getElementById('stream-toggle');
   if(btn){btn.textContent='连接中...';btn.style.background='var(--accent)';}
+  _setModalModeBadge('conn');
 
   try{
     const body=document.getElementById('modal-body');
@@ -297,6 +347,7 @@ async function startStreaming(){
         stopStreaming(true);
         captureModalScreen();
         startModalAuto();
+        _setModalModeBadge('shot');
         if(btn){btn.textContent='\u25B6 实时流';btn.style.background='var(--bg-input)';}
       },20000);
     };
@@ -306,8 +357,11 @@ async function startStreaming(){
       if(typeof ev.data==='string'){
         try{
           const cfg=JSON.parse(ev.data);
+          if(cfg.error){_streamLastErr=String(cfg.error);}
           if(cfg.type==='config'){
             _streamGotConfig=true;
+            _setModalModeBadge('live');
+            _clearStreamFail(_wsDeviceId); // 流真的建起来了，撤销失败记忆
             if(_streamFirstFrameTimer){clearTimeout(_streamFirstFrameTimer);_streamFirstFrameTimer=null;}
             // ws 是最权威来源（来自 scrcpy 实际分辨率），覆盖 HTTP fallback
             if(typeof _setModalScreenSize==='function')
@@ -355,10 +409,15 @@ async function startStreaming(){
         return;
       }
       if(ev.code===1011){
-        showToast('scrcpy 启动失败，请检查设备连接状态。回退到截图模式','error',4000,'stream-status');
+        // 降级成功≠事故：截图模式接管后用信息级提示，不再红色报错吓用户；
+        // 并记住该设备实时流起不来（6h），下次打开直接截图模式不盲试
+        _rememberStreamFail(_wsDeviceId);
         stopStreaming();
         captureModalScreen();
         startModalAuto();
+        _setModalModeBadge('shot');
+        const why=_streamHumanReason(_streamLastErr||ev.reason);
+        showToast('已用截图模式监控'+(why?'：'+why:'')+'。点「实时流」可重试','info',5000,'stream-status');
         return;
       }
       if(_streamActive&&modalDeviceId&&!_abrChanging&&!_qualityChanging){
@@ -379,6 +438,7 @@ async function startStreaming(){
       stopStreaming(true);
       captureModalScreen();
       startModalAuto();
+      _setModalModeBadge('shot');
       if(btn){btn.textContent='\u25B6 实时流';btn.style.background='var(--bg-input)';}
     };
 
@@ -479,7 +539,7 @@ async function startRecording(){
       _recording=true;
       _recordStart=Date.now();
       const btn=document.getElementById('record-toggle');
-      btn.style.background='#ef4444';btn.style.color='#fff';
+      btn.style.background='var(--red-strong)';btn.style.color='#fff';
       _recordTimer=setInterval(()=>{
         const sec=Math.round((Date.now()-_recordStart)/1000);
         const m=Math.floor(sec/60),s=sec%60;
@@ -494,7 +554,7 @@ async function startRecording(){
     _recording=true;
     _recordStart=Date.now();
     const btn=document.getElementById('record-toggle');
-    btn.style.background='#ef4444';btn.style.color='#fff';
+    btn.style.background='var(--red-strong)';btn.style.color='#fff';
     _recordTimer=setInterval(()=>{
       const sec=Math.round((Date.now()-_recordStart)/1000);
       const m=Math.floor(sec/60),s=sec%60;
@@ -545,7 +605,7 @@ function _startStatsPolling(){
           const devLabel=(typeof ALIAS!=='undefined'&&ALIAS[modalDeviceId])||
                          (modalDeviceId?modalDeviceId.substring(0,8):'?');
           const sizeStr=modalScreenSize?`${modalScreenSize.w}x${modalScreenSize.h}`:'';
-          hud.innerHTML=`<span style="color:#60a5fa;font-weight:700">${devLabel}</span> ${sizeStr}<br>`+
+          hud.innerHTML=`<span style="color:var(--blue-soft);font-weight:700">${devLabel}</span> ${sizeStr}<br>`+
             `FPS: ${s.fps} | ${s.kbps}kbps<br>`+
             `Codec: ${s.codec||'?'} GPU硬解<br>`+
             `Drops: ${s.drops} | Queue: ${s.pending}<br>`+

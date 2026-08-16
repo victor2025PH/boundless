@@ -264,7 +264,7 @@ async function _loadTtHotLeads() {
     _setEl('tt-rev-hot', leads.length + ' 人');
     el.innerHTML = leads.map(lead => _renderHotLeadRow(lead)).join('');
   } catch (e) {
-    el.innerHTML = '<div style="color:#f87171;font-size:12px;padding:8px">加载失败: ' + e.message + '</div>';
+    el.innerHTML = '<div style="color:var(--red);font-size:12px;padding:8px">加载失败: ' + e.message + '</div>';
   }
 }
 
@@ -276,18 +276,18 @@ function _renderHotLeadRow(lead) {
   const statusLabel = { responded: '已回复', qualified: '已合格', converted: '已成交' }[status] || status;
   const statusColor = { responded: '#f59e0b', qualified: '#a78bfa', converted: '#22c55e' }[status] || '#94a3b8';
   const preview = (lead.last_message || (lead.recent_interactions || [])[0]?.content || '').substring(0, 35);
-  const source = lead.source === 'worker03' ? '<span style="font-size:9px;color:#60a5fa;margin-left:4px">W3</span>' : '';
+  const source = lead.source === 'worker03' ? '<span style="font-size:9px;color:var(--blue-soft);margin-left:4px">W3</span>' : '';
   const leadId = lead.lead_id || lead.id || '';
 
   return `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border)">
-    <div style="width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#f97316,#ef4444);display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">🙋</div>
+    <div style="width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#f97316,var(--red-strong));display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">🙋</div>
     <div style="flex:1;min-width:0">
       <div style="font-size:12px;font-weight:600">@${uname}${source} <span style="font-size:9px;color:${statusColor};background:${statusColor}22;padding:1px 5px;border-radius:3px;margin-left:4px">${statusLabel}</span></div>
       <div style="font-size:10px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${preview || '无最近消息'}</div>
     </div>
     <div style="font-size:11px;font-weight:700;color:${scColor};flex-shrink:0">★${score}</div>
     <button onclick="_ttSendReferral('${uname}','${leadId}')"
-      style="padding:3px 10px;font-size:10px;background:linear-gradient(135deg,rgba(34,197,94,.15),rgba(59,130,246,.15));color:#22c55e;border:1px solid rgba(34,197,94,.35);border-radius:5px;cursor:pointer;white-space:nowrap;flex-shrink:0"
+      style="padding:3px 10px;font-size:10px;background:linear-gradient(135deg,rgba(34,197,94,.15),rgba(59,130,246,.15));color:var(--green-strong);border:1px solid rgba(34,197,94,.35);border-radius:5px;cursor:pointer;white-space:nowrap;flex-shrink:0"
       title="发送引流话术">发话术</button>
   </div>`;
 }
@@ -311,8 +311,8 @@ function _ttShowBatchPitchModal(items, onConfirm, title) {
     <div style="background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:6px;padding:8px 10px;margin-bottom:6px">
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
         <span style="font-size:11px;font-weight:700;color:#f1f5f9">@${it.lead}</span>
-        ${it.score ? `<span style="font-size:9px;color:#f59e0b">★${it.score}</span>` : ''}
-        <span style="font-size:9px;color:#60a5fa;margin-left:auto">设备 ${it.device || '?'}</span>
+        ${it.score ? `<span style="font-size:9px;color:var(--amber)">★${it.score}</span>` : ''}
+        <span style="font-size:9px;color:var(--blue-soft);margin-left:auto">设备 ${it.device || '?'}</span>
       </div>
       <div style="font-size:10px;color:#94a3b8;line-height:1.5;word-break:break-all">${it.pitch_preview || '(消息为空)'}</div>
     </div>`).join('');
@@ -331,7 +331,7 @@ function _ttShowBatchPitchModal(items, onConfirm, title) {
           取消
         </button>
         <button id="tt-modal-confirm"
-          style="padding:6px 18px;font-size:12px;background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">
+          style="padding:6px 18px;font-size:12px;background:linear-gradient(135deg,var(--green-strong),var(--green-deep));color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">
           确认发送
         </button>
       </div>
@@ -368,7 +368,7 @@ function _ttShowResultModal(results, pitched, total) {
     return `<div style="display:flex;gap:8px;align-items:center;padding:4px 0;font-size:11px">
       <span style="color:${color};font-weight:700;width:12px">${icon}</span>
       <span style="color:#f1f5f9;flex:1">@${it.lead}</span>
-      <span style="color:#60a5fa;font-size:10px">${it.task_id ? '任务 '+it.task_id : (it.error || '失败')}</span>
+      <span style="color:var(--blue-soft);font-size:10px">${it.task_id ? '任务 '+it.task_id : (it.error || '失败')}</span>
     </div>`;
   }).join('');
 
@@ -379,7 +379,7 @@ function _ttShowResultModal(results, pitched, total) {
     <div style="background:#1e293b;border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:20px;width:min(400px,90vw);max-height:75vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.5)">
       <div style="font-size:14px;font-weight:700;color:#f1f5f9;margin-bottom:4px">发送结果</div>
       <div style="font-size:11px;color:#64748b;margin-bottom:12px">
-        成功 <span style="color:#22c55e;font-weight:700">${pitched}</span> / 共 ${total} 人
+        成功 <span style="color:var(--green-strong);font-weight:700">${pitched}</span> / 共 ${total} 人
       </div>
       <div style="overflow-y:auto;flex:1">${rows}</div>
       <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">
@@ -432,7 +432,7 @@ async function _ttSendReferral(username, leadId) {
         showToast('@' + username + ' 引流话术已发送 ✓', 'success');
         // 乐观更新按钮
         btn.textContent = '✓ 已发';
-        btn.style.color = '#22c55e';
+        btn.style.color = 'var(--green-strong)';
         btn.disabled = true;
         setTimeout(() => _loadTtHotLeads(), 2500);
       } else {
@@ -734,9 +734,9 @@ async function _loadTtRefConfig() {
       clearTimeout(timer);
       const elapsed = ((Date.now()-t0)/1000).toFixed(1);
       if (fe.name === 'AbortError') {
-        el.innerHTML = `<div style="color:#f87171;font-size:11px;padding:8px">超时(${elapsed}s)，点击 ⟳ 重试</div>`;
+        el.innerHTML = `<div style="color:var(--red);font-size:11px;padding:8px">超时(${elapsed}s)，点击 ⟳ 重试</div>`;
       } else {
-        el.innerHTML = `<div style="color:#f87171;font-size:11px;padding:8px">失败(${elapsed}s): ${fe.message} · 点击 ⟳ 重试</div>`;
+        el.innerHTML = `<div style="color:var(--red);font-size:11px;padding:8px">失败(${elapsed}s): ${fe.message} · 点击 ⟳ 重试</div>`;
       }
       return;
     }
@@ -754,7 +754,7 @@ async function _loadTtRefConfig() {
     }
     el.innerHTML = devices.map(d => _renderRefDeviceRow(d)).join('');
   } catch (e) {
-    el.innerHTML = `<div style="color:#f87171;font-size:11px;padding:8px">异常: ${e.message}</div>`;
+    el.innerHTML = `<div style="color:var(--red);font-size:11px;padding:8px">异常: ${e.message}</div>`;
   }
 }
 
@@ -779,9 +779,9 @@ function _renderRefDeviceRow(dev) {
   const fullyConfigured = hasTg && hasWa;
   const partlyConfigured = hasTg || hasWa;
   const statusBadge = fullyConfigured
-    ? '<span style="font-size:9px;color:#22c55e;background:rgba(34,197,94,.12);padding:1px 5px;border-radius:3px">✓ 已配置</span>'
+    ? '<span style="font-size:9px;color:var(--green-strong);background:rgba(34,197,94,.12);padding:1px 5px;border-radius:3px">✓ 已配置</span>'
     : partlyConfigured
-      ? '<span style="font-size:9px;color:#f59e0b;background:rgba(245,158,11,.12);padding:1px 5px;border-radius:3px">⚠ 部分</span>'
+      ? '<span style="font-size:9px;color:var(--amber);background:rgba(245,158,11,.12);padding:1px 5px;border-radius:3px">⚠ 部分</span>'
       : '<span style="font-size:9px;color:#94a3b8;background:rgba(148,163,184,.1);padding:1px 5px;border-radius:3px">未配置</span>';
 
   const tgVal = (dev.telegram || '').replace(/"/g, '&quot;');
@@ -806,7 +806,7 @@ function _renderRefDeviceRow(dev) {
     <div style="min-width:52px;flex-shrink:0">${statusBadge}</div>
     <!-- TG 输入 -->
     <div style="display:flex;align-items:center;gap:4px;flex:1;min-width:0">
-      <span style="font-size:10px;color:#60a5fa;flex-shrink:0">TG</span>
+      <span style="font-size:10px;color:var(--blue-soft);flex-shrink:0">TG</span>
       <input type="text" value="${tgVal}" placeholder="@username"
         style="flex:1;min-width:80px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:4px;padding:3px 6px;color:var(--text-main);font-size:11px;outline:none"
         onblur="_ttAutoSaveRef('${did}','telegram',this.value,this,'${indicatorId}')"
@@ -816,7 +816,7 @@ function _renderRefDeviceRow(dev) {
     </div>
     <!-- WA 输入 -->
     <div style="display:flex;align-items:center;gap:4px;flex:1;min-width:0">
-      <span style="font-size:10px;color:#22c55e;flex-shrink:0">WA</span>
+      <span style="font-size:10px;color:var(--green-strong);flex-shrink:0">WA</span>
       <input type="text" value="${waVal}" placeholder="+639..."
         style="flex:1;min-width:80px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:4px;padding:3px 6px;color:var(--text-main);font-size:11px;outline:none"
         onblur="_ttAutoSaveRef('${did}','whatsapp',this.value,this,'${indicatorId}')"
@@ -838,7 +838,7 @@ async function _ttAutoSaveRef(deviceId, field, value, inputEl, indicatorId) {
   let val = value.trim();
   if (field === 'telegram' && val && !val.startsWith('@')) val = '@' + val;
   if (field === 'whatsapp' && val && !val.startsWith('+')) {
-    inputEl.style.borderColor = '#ef4444';
+    inputEl.style.borderColor = 'var(--red-strong)';
     showToast('WhatsApp 号码必须以 + 开头，例如 +639...', 'warn');
     return;
   }
@@ -850,7 +850,7 @@ async function _ttAutoSaveRef(deviceId, field, value, inputEl, indicatorId) {
 
   try {
     await api('POST', '/tiktok/referral-config', { device_id: deviceId, [field]: val });
-    if (ind) { ind.textContent = '✓ 已存'; ind.style.color = '#22c55e'; }
+    if (ind) { ind.textContent = '✓ 已存'; ind.style.color = 'var(--green-strong)'; }
     inputEl.style.borderColor = 'rgba(34,197,94,.4)';
     setTimeout(() => {
       if (ind) { ind.textContent = ''; ind.style.color = 'transparent'; }
@@ -859,8 +859,8 @@ async function _ttAutoSaveRef(deviceId, field, value, inputEl, indicatorId) {
     // 刷新配置缓存（让后续发话术能用到新配置）
     setTimeout(() => _loadTtRefConfig(), 500);
   } catch (e) {
-    if (ind) { ind.textContent = '✗ 失败'; ind.style.color = '#ef4444'; }
-    inputEl.style.borderColor = '#ef4444';
+    if (ind) { ind.textContent = '✗ 失败'; ind.style.color = 'var(--red-strong)'; }
+    inputEl.style.borderColor = 'var(--red-strong)';
     showToast('保存失败: ' + e.message, 'error');
   }
 }
@@ -914,7 +914,7 @@ function _ttImportCsvModal() {
           预览解析
         </button>
         <button id="tt-csv-confirm" onclick="_ttSubmitCsvImport()"
-          style="padding:6px 18px;font-size:12px;background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">
+          style="padding:6px 18px;font-size:12px;background:linear-gradient(135deg,var(--green-strong),var(--green-deep));color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">
           确认导入
         </button>
       </div>
@@ -960,8 +960,8 @@ async function _ttPreviewCsvImport() {
   if (!text.trim()) { previewEl.textContent = ''; return; }
   const { items, errors } = await _ttParseCsvLines(text);
   let html = '';
-  if (items.length) html += `<span style="color:#22c55e">✓ ${items.length} 条可导入</span>`;
-  if (errors.length) html += `<span style="color:#f59e0b;margin-left:8px">⚠ ${errors.length} 行被跳过</span>`;
+  if (items.length) html += `<span style="color:var(--green-strong)">✓ ${items.length} 条可导入</span>`;
+  if (errors.length) html += `<span style="color:var(--amber);margin-left:8px">⚠ ${errors.length} 行被跳过</span>`;
   previewEl.innerHTML = html;
 }
 
@@ -1034,12 +1034,12 @@ async function _ttRefreshReadiness() {
     const blocked_vpn = r.blocked_vpn || 0;
     const offline = r.offline_count || 0;
     el.innerHTML =
-      `<span style="color:#22c55e">✅ 就绪 ${ready}台</span>` +
-      (blocked_net ? `　<span style="color:#ef4444">❌ 无网络 ${blocked_net}台</span>` : '') +
-      (blocked_vpn ? `　<span style="color:#f59e0b">⚠️ 无VPN ${blocked_vpn}台</span>` : '') +
+      `<span style="color:var(--green-strong)">✅ 就绪 ${ready}台</span>` +
+      (blocked_net ? `　<span style="color:var(--red-strong)">❌ 无网络 ${blocked_net}台</span>` : '') +
+      (blocked_vpn ? `　<span style="color:var(--amber)">⚠️ 无VPN ${blocked_vpn}台</span>` : '') +
       (offline ? `　<span style="color:var(--text-muted)">○ 离线 ${offline}台</span>` : '');
   } catch(e) {
-    el.innerHTML = '<span style="color:#f59e0b">⚠️ 无法获取就绪状态</span>';
+    el.innerHTML = '<span style="color:var(--amber)">⚠️ 无法获取就绪状态</span>';
   }
 }
 

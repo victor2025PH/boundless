@@ -41,7 +41,7 @@ async function _rmShowBackups(routerId){
       ?bList.map(b=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--bg-main);border-radius:6px;margin-bottom:4px;font-size:10px">
           <div><div style="font-family:monospace;color:var(--text-main)">${_rmEsc(b.filename)}</div>
           <div style="color:var(--text-dim)">${_rmEsc(b.created_at_str)} &middot; ${(b.size_bytes/1024).toFixed(1)}KB</div></div>
-          <button class="sb-btn2" style="font-size:9px;padding:2px 8px;color:#f59e0b" onclick="_rmRestoreBackup('${routerId}','${_rmEsc(b.filename)}',this)">回滚</button>
+          <button class="sb-btn2" style="font-size:9px;padding:2px 8px;color:var(--amber)" onclick="_rmRestoreBackup('${routerId}','${_rmEsc(b.filename)}',this)">回滚</button>
         </div>`).join('')
       :'<div style="color:var(--text-dim);font-size:10px;text-align:center;padding:10px">暂无备份</div>';
 
@@ -69,7 +69,7 @@ async function _rmShowBackups(routerId){
         <div>
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
             <span style="font-size:11px;font-weight:600;color:var(--text-muted)">代理轮换历史 (${hList.length}条)</span>
-            ${blList.length?`<button class="sb-btn2" style="font-size:9px;padding:2px 8px;color:#ef4444" onclick="_rmClearBlacklist('${routerId}',this)">清除黑名单(${blList.length})</button>`:''}
+            ${blList.length?`<button class="sb-btn2" style="font-size:9px;padding:2px 8px;color:var(--red-strong)" onclick="_rmClearBlacklist('${routerId}',this)">清除黑名单(${blList.length})</button>`:''}
           </div>
           ${histRows}
         </div>

@@ -491,7 +491,8 @@ async def lifespan(application: FastAPI):
 # App & Middleware
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="OpenClaw Host Task API", version="1.1.0", lifespan=lifespan)
+from src.host import brand as _brand
+app = FastAPI(title=_brand.docs_title(), version=_brand.VERSION, lifespan=lifespan)
 
 # ── CORS (remote access) ──
 _CORS_ORIGINS = os.environ.get("OPENCLAW_CORS_ORIGINS", "")

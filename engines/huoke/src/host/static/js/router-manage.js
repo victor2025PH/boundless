@@ -52,13 +52,13 @@ function _rmRenderHealthBanner(){
   el.innerHTML=`<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
     <span style="font-size:11px;color:var(--text-muted)">🛡️ 代理健康:</span>
     <span style="font-size:13px;font-weight:700;color:${color}">${healthRate}%</span>
-    <span style="font-size:10px;color:#22c55e">✅ 正常: ${h.ok||0}</span>
-    ${h.circuit_open?`<span style="font-size:10px;color:#ef4444">🔴 熔断: ${h.circuit_open}</span>`:''}
-    ${h.fail?`<span style="font-size:10px;color:#eab308">⚠️ 失败: ${h.fail}</span>`:''}
+    <span style="font-size:10px;color:var(--green-strong)">✅ 正常: ${h.ok||0}</span>
+    ${h.circuit_open?`<span style="font-size:10px;color:var(--red-strong)">🔴 熔断: ${h.circuit_open}</span>`:''}
+    ${h.fail?`<span style="font-size:10px;color:var(--gold)">⚠️ 失败: ${h.fail}</span>`:''}
     <button class="sb-btn2" style="font-size:9px;padding:2px 8px;margin-left:auto" onclick="_rmShowHealthPanel()">查看详情</button>
-    <button class="sb-btn2" style="font-size:9px;padding:2px 8px;color:#8b5cf6" onclick="_rmGeoConfigAll(this)">批量地理配置</button>
-    <button class="sb-btn2" style="font-size:9px;padding:2px 8px;color:#f59e0b" onclick="_rmShowProxyScores()">代理评分</button>
-    <button class="sb-btn2" style="font-size:9px;padding:2px 8px;color:#06b6d4" onclick="_rmShowProxyPool()">代理池</button>
+    <button class="sb-btn2" style="font-size:9px;padding:2px 8px;color:var(--violet)" onclick="_rmGeoConfigAll(this)">批量地理配置</button>
+    <button class="sb-btn2" style="font-size:9px;padding:2px 8px;color:var(--amber)" onclick="_rmShowProxyScores()">代理评分</button>
+    <button class="sb-btn2" style="font-size:9px;padding:2px 8px;color:var(--cyan)" onclick="_rmShowProxyPool()">代理池</button>
   </div>`;
 }
 
@@ -89,11 +89,11 @@ function _rmRenderRouters(){
   }
   el.innerHTML=rs.map(r=>{
     const statusDot=r.online
-      ?'<span style="width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block"></span>'
-      :'<span style="width:8px;height:8px;border-radius:50%;background:#ef4444;display:inline-block"></span>';
+      ?'<span style="width:8px;height:8px;border-radius:50%;background:var(--green-strong);display:inline-block"></span>'
+      :'<span style="width:8px;height:8px;border-radius:50%;background:var(--red-strong);display:inline-block"></span>';
     const flag=_rmFlag(r.country);
-    const exitIp=r.current_exit_ip?`<div style="font-size:10px;color:#22c55e;font-family:monospace;margin-top:2px">🌐 ${_rmEsc(r.current_exit_ip)}</div>`:'';
-    const proxySummary=r.proxy_count?`${r.proxy_count}个代理`:'<span style="color:#ef4444">未分配代理</span>';
+    const exitIp=r.current_exit_ip?`<div style="font-size:10px;color:var(--green-strong);font-family:monospace;margin-top:2px">🌐 ${_rmEsc(r.current_exit_ip)}</div>`:'';
+    const proxySummary=r.proxy_count?`${r.proxy_count}个代理`:'<span style="color:var(--red-strong)">未分配代理</span>';
     const devSummary=r.device_count?`${r.device_count}台手机`:'未分配手机';
     return `<div style="background:var(--bg-card);border:1px solid ${r.online?'rgba(34,197,94,0.3)':'var(--border)'};border-radius:12px;padding:14px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
@@ -106,10 +106,10 @@ function _rmRenderRouters(){
           ${exitIp}
         </div>
         <div style="display:flex;gap:4px">
-          <button class="sb-btn2" style="font-size:9px;padding:2px 6px;color:#8b5cf6" onclick="_rmDeployRouter('${r.router_id}')" title="推送Clash配置">🚀</button>
-          <button class="sb-btn2" style="font-size:9px;padding:2px 6px;color:#06b6d4" onclick="_rmCheckRouter('${r.router_id}')" title="检测状态">🔍</button>
+          <button class="sb-btn2" style="font-size:9px;padding:2px 6px;color:var(--violet)" onclick="_rmDeployRouter('${r.router_id}')" title="推送Clash配置">🚀</button>
+          <button class="sb-btn2" style="font-size:9px;padding:2px 6px;color:var(--cyan)" onclick="_rmCheckRouter('${r.router_id}')" title="检测状态">🔍</button>
           <button class="sb-btn2" style="font-size:9px;padding:2px 6px" onclick="_rmEditRouter('${r.router_id}')" title="编辑">✏️</button>
-          <button class="sb-btn2" style="font-size:9px;padding:2px 6px;color:#ef4444" onclick="_rmDeleteRouter('${r.router_id}')" title="删除">×</button>
+          <button class="sb-btn2" style="font-size:9px;padding:2px 6px;color:var(--red-strong)" onclick="_rmDeleteRouter('${r.router_id}')" title="删除">×</button>
         </div>
       </div>
       <div style="display:flex;gap:10px;margin-top:10px;font-size:10px;color:var(--text-muted)">
@@ -121,9 +121,9 @@ function _rmRenderRouters(){
         <button class="sb-btn2" style="font-size:9px;padding:2px 8px" onclick="_rmShowAssignProxy('${r.router_id}')">分配代理</button>
         <button class="sb-btn2" style="font-size:9px;padding:2px 8px" onclick="_rmShowAssignDevice('${r.router_id}')">分配手机</button>
         <button class="sb-btn2" style="font-size:9px;padding:2px 8px" onclick="_rmPreviewClash('${r.router_id}')">预览Clash</button>
-        <button class="sb-btn2" style="font-size:9px;padding:2px 8px;color:#8b5cf6" onclick="_rmGeoConfigRouter('${r.router_id}')">🌍地理配置</button>
-        <button class="sb-btn2" style="font-size:9px;padding:2px 8px;color:#f59e0b" onclick="_rmRotateProxy('${r.router_id}',this)" title="自动轮换到备用代理">🔄轮换代理</button>
-        <button class="sb-btn2" style="font-size:9px;padding:2px 8px;color:#06b6d4" onclick="_rmShowBackups('${r.router_id}')" title="查看配置备份历史">📂备份</button>
+        <button class="sb-btn2" style="font-size:9px;padding:2px 8px;color:var(--violet)" onclick="_rmGeoConfigRouter('${r.router_id}')">🌍地理配置</button>
+        <button class="sb-btn2" style="font-size:9px;padding:2px 8px;color:var(--amber)" onclick="_rmRotateProxy('${r.router_id}',this)" title="自动轮换到备用代理">🔄轮换代理</button>
+        <button class="sb-btn2" style="font-size:9px;padding:2px 8px;color:var(--cyan)" onclick="_rmShowBackups('${r.router_id}')" title="查看配置备份历史">📂备份</button>
       </div>
     </div>`;
   }).join('');
@@ -154,8 +154,8 @@ function _rmRenderProxies(){
     const flag=_rmFlag(p.country);
     const usage=proxyUsage[p.id];
     const usageBadge=usage
-      ?`<span style="font-size:9px;background:rgba(34,197,94,.15);color:#22c55e;padding:1px 5px;border-radius:3px">已分配:${usage.join(',')}</span>`
-      :`<span style="font-size:9px;background:rgba(234,179,8,.15);color:#eab308;padding:1px 5px;border-radius:3px">未分配</span>`;
+      ?`<span style="font-size:9px;background:rgba(34,197,94,.15);color:var(--green-strong);padding:1px 5px;border-radius:3px">已分配:${usage.join(',')}</span>`
+      :`<span style="font-size:9px;background:rgba(234,179,8,.15);color:var(--gold);padding:1px 5px;border-radius:3px">未分配</span>`;
     return `<div style="background:var(--bg-main);border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:6px">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <div style="display:flex;align-items:center;gap:6px">
@@ -163,7 +163,7 @@ function _rmRenderProxies(){
           <span style="font-size:11px;font-weight:600">${_rmEsc(p.label||p.remark)}</span>
           ${usageBadge}
         </div>
-        <button onclick="_rmDeleteProxy('${p.id}')" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:13px">×</button>
+        <button onclick="_rmDeleteProxy('${p.id}')" style="background:none;border:none;color:var(--red-strong);cursor:pointer;font-size:13px">×</button>
       </div>
       <div style="font-size:9px;color:var(--text-dim);font-family:monospace;margin-top:4px">
         ${_rmEsc(p.protocol)} → ${_rmEsc(p.server)}:${p.port}
@@ -327,7 +327,7 @@ function _rmShowAddRouter(){
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end">
         <button class="qa-btn" onclick="this.closest('.rm-overlay').remove()">取消</button>
-        <button class="qa-btn" style="color:#22c55e" onclick="_rmSubmitAddRouter()">确认添加</button>
+        <button class="qa-btn" style="color:var(--green-strong)" onclick="_rmSubmitAddRouter()">确认添加</button>
       </div>
     </div>
   </div>`;
@@ -390,8 +390,8 @@ function _rmShowAddProxy(){
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end">
         <button class="qa-btn" onclick="this.closest('.rm-overlay').remove()">取消</button>
-        <button class="qa-btn" style="color:#8b5cf6" onclick="_rmShowBatchProxy()">批量导入</button>
-        <button class="qa-btn" style="color:#22c55e" onclick="_rmSubmitAddProxy()">确认添加</button>
+        <button class="qa-btn" style="color:var(--violet)" onclick="_rmShowBatchProxy()">批量导入</button>
+        <button class="qa-btn" style="color:var(--green-strong)" onclick="_rmSubmitAddProxy()">确认添加</button>
       </div>
     </div>
   </div>`;
@@ -443,7 +443,7 @@ function _rmShowBatchProxy(){
       <textarea id="rm-batch-text" style="height:200px;font-family:monospace;font-size:11px;background:var(--bg-main);border:1px solid var(--border);border-radius:6px;padding:10px;color:var(--text-main);resize:vertical" placeholder="粘贴代理列表，每行一个&#10;us.proxy.922s5.com:10001:user1:pass1&#10;us.proxy.922s5.com:10002:user2:pass2"></textarea>
       <div style="display:flex;gap:8px;justify-content:flex-end">
         <button class="qa-btn" onclick="this.closest('.rm-overlay').remove()">取消</button>
-        <button class="qa-btn" style="color:#22c55e" onclick="_rmSubmitBatchProxy()">批量导入</button>
+        <button class="qa-btn" style="color:var(--green-strong)" onclick="_rmSubmitBatchProxy()">批量导入</button>
       </div>
     </div>
   </div>`;
@@ -497,7 +497,7 @@ function _rmShowAssignProxy(routerId){
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end">
         <button class="qa-btn" onclick="this.closest('.rm-overlay').remove()">取消</button>
-        <button class="qa-btn" style="color:#22c55e" onclick="_rmSubmitAssignProxy('${routerId}')">确认分配</button>
+        <button class="qa-btn" style="color:var(--green-strong)" onclick="_rmSubmitAssignProxy('${routerId}')">确认分配</button>
       </div>
     </div>
   </div>`;
@@ -537,7 +537,7 @@ async function _rmShowAssignDevice(routerId){
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end">
         <button class="qa-btn" onclick="this.closest('.rm-overlay').remove()">取消</button>
-        <button class="qa-btn" style="color:#22c55e" onclick="_rmSubmitAssignDevice('${routerId}')">确认分配</button>
+        <button class="qa-btn" style="color:var(--green-strong)" onclick="_rmSubmitAssignDevice('${routerId}')">确认分配</button>
       </div>
     </div>
   </div>`;
@@ -565,7 +565,7 @@ async function _rmShowHealthPanel(){
   const rows=devices.map(d=>{
     const matchIcon=d.ip_match?'✅':'❌';
     const cbIcon=d.circuit_open?'🔴熔断':'🟢正常';
-    const failBadge=d.consecutive_fails>0?`<span style="font-size:9px;color:#ef4444">(失败${d.consecutive_fails}次)</span>`:'';
+    const failBadge=d.consecutive_fails>0?`<span style="font-size:9px;color:var(--red-strong)">(失败${d.consecutive_fails}次)</span>`:'';
     return `<tr style="border-bottom:1px solid var(--border)">
       <td style="padding:6px;font-family:monospace;font-size:10px">${_rmEsc(d.device_id.slice(0,12))}</td>
       <td style="padding:6px;font-family:monospace;font-size:10px">${_rmEsc(d.expected_ip||'-')}</td>
@@ -574,7 +574,7 @@ async function _rmShowHealthPanel(){
       <td style="padding:6px;font-size:11px">${cbIcon} ${failBadge}</td>
       <td style="padding:6px">
         <button class="sb-btn2" style="font-size:9px;padding:2px 6px" onclick="_rmCheckDeviceHealth('${d.device_id}',this)">检测</button>
-        ${d.circuit_open?`<button class="sb-btn2" style="font-size:9px;padding:2px 6px;color:#22c55e" onclick="_rmResetCircuit('${d.device_id}',this)">重置熔断</button>`:''}
+        ${d.circuit_open?`<button class="sb-btn2" style="font-size:9px;padding:2px 6px;color:var(--green-strong)" onclick="_rmResetCircuit('${d.device_id}',this)">重置熔断</button>`:''}
       </td>
     </tr>`;
   }).join('');
@@ -591,7 +591,7 @@ async function _rmShowHealthPanel(){
       </div>
       <div style="display:flex;gap:6px">
         <button class="qa-btn" style="font-size:11px" onclick="_rmCheckAllHealth(this)">批量检测</button>
-        <button class="qa-btn" style="font-size:11px;color:#8b5cf6" onclick="_rmGeoConfigAll(this)">批量地理配置</button>
+        <button class="qa-btn" style="font-size:11px;color:var(--violet)" onclick="_rmGeoConfigAll(this)">批量地理配置</button>
         <button onclick="this.closest('.rm-overlay').remove()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px">×</button>
       </div>
     </div>
@@ -770,7 +770,7 @@ async function _rmShowBackups(routerId){
       ?bList.map(b=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--bg-main);border-radius:6px;margin-bottom:4px;font-size:10px">
           <div><div style="font-family:monospace;color:var(--text-main)">${_rmEsc(b.filename)}</div>
           <div style="color:var(--text-dim)">${_rmEsc(b.created_at_str)} &middot; ${(b.size_bytes/1024).toFixed(1)}KB</div></div>
-          <button class="sb-btn2" style="font-size:9px;padding:2px 8px;color:#f59e0b" onclick="_rmRestoreBackup('${routerId}','${_rmEsc(b.filename)}',this)">回滚</button>
+          <button class="sb-btn2" style="font-size:9px;padding:2px 8px;color:var(--amber)" onclick="_rmRestoreBackup('${routerId}','${_rmEsc(b.filename)}',this)">回滚</button>
         </div>`).join('')
       :'<div style="color:var(--text-dim);font-size:10px;text-align:center;padding:10px">暂无备份</div>';
 
@@ -798,7 +798,7 @@ async function _rmShowBackups(routerId){
         <div>
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
             <span style="font-size:11px;font-weight:600;color:var(--text-muted)">代理轮换历史 (${hList.length}条)</span>
-            ${blList.length?`<button class="sb-btn2" style="font-size:9px;padding:2px 8px;color:#ef4444" onclick="_rmClearBlacklist('${routerId}',this)">清除黑名单(${blList.length})</button>`:''}
+            ${blList.length?`<button class="sb-btn2" style="font-size:9px;padding:2px 8px;color:var(--red-strong)" onclick="_rmClearBlacklist('${routerId}',this)">清除黑名单(${blList.length})</button>`:''}
           </div>
           ${histRows}
         </div>
@@ -929,7 +929,7 @@ async function _rmShowProxyPool(){
         :'<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text-dim)">代理池暂无数据，请先同步922S5</td></tr>';
       body.innerHTML=`
         <div style="display:flex;justify-content:space-between;align-items:center">
-          <span style="font-size:11px;color:var(--text-muted)">共 ${r.total||0} 条 &nbsp;·&nbsp; 活跃 <span style="color:#22c55e">${r.ok||0}</span></span>
+          <span style="font-size:11px;color:var(--text-muted)">共 ${r.total||0} 条 &nbsp;·&nbsp; 活跃 <span style="color:var(--green-strong)">${r.ok||0}</span></span>
           <button class="sb-btn2" style="font-size:9px;padding:2px 8px" onclick="_rmShowProxyPool()">← 返回概览</button>
         </div>
         <div style="overflow-y:auto;max-height:55vh">
@@ -946,7 +946,7 @@ async function _rmShowProxyPool(){
           </table>
         </div>`;
     }catch(e){
-      body.innerHTML=`<div style="color:#ef4444;font-size:11px;padding:10px">加载列表失败: ${_rmEsc(e.message)}</div>`;
+      body.innerHTML=`<div style="color:var(--red-strong);font-size:11px;padding:10px">加载列表失败: ${_rmEsc(e.message)}</div>`;
     }
   }
 
@@ -967,7 +967,7 @@ async function _rmShowProxyPool(){
     ).join(' ');
 
     const s5Html=s5&&s5.configured
-      ?`<span style="font-size:10px;color:#06b6d4">💳 922S5 余额: <b>${s5.balance!=null?s5.balance:'--'}</b></span>
+      ?`<span style="font-size:10px;color:var(--cyan)">💳 922S5 余额: <b>${s5.balance!=null?s5.balance:'--'}</b></span>
          <span style="font-size:10px;color:var(--text-dim)">· 池: ${s5.pool_count!=null?s5.pool_count:'--'}</span>`
       :'<span style="font-size:10px;color:var(--text-dim)">922S5 未配置</span>';
 
@@ -977,19 +977,19 @@ async function _rmShowProxyPool(){
       <!-- 统计行 -->
       <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:10px 12px;background:var(--bg-main,#111);border-radius:8px;border:1px solid var(--border)">
         <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
-          <span style="font-size:18px;font-weight:700;color:#06b6d4">${stats.total||0}</span>
+          <span style="font-size:18px;font-weight:700;color:var(--cyan)">${stats.total||0}</span>
           <span style="font-size:9px;color:var(--text-dim)">总代理</span>
         </div>
         <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
-          <span style="font-size:18px;font-weight:700;color:#22c55e">${stats.active||0}</span>
+          <span style="font-size:18px;font-weight:700;color:var(--green-strong)">${stats.active||0}</span>
           <span style="font-size:9px;color:var(--text-dim)">活跃</span>
         </div>
         <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
-          <span style="font-size:18px;font-weight:700;color:#ef4444">${stats.expired||0}</span>
+          <span style="font-size:18px;font-weight:700;color:var(--red-strong)">${stats.expired||0}</span>
           <span style="font-size:9px;color:var(--text-dim)">已过期</span>
         </div>
         ${needsAttn?`<div style="display:flex;flex-direction:column;align-items:center;gap:2px">
-          <span style="font-size:18px;font-weight:700;color:#f59e0b">${needsAttn}</span>
+          <span style="font-size:18px;font-weight:700;color:var(--amber)">${needsAttn}</span>
           <span style="font-size:9px;color:var(--text-dim)">需关注</span>
         </div>`:''}
         <div style="margin-left:auto;display:flex;flex-direction:column;gap:2px;align-items:flex-end">
@@ -1006,21 +1006,21 @@ async function _rmShowProxyPool(){
 
       <!-- 操作按钮 -->
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="sb-btn2" id="_rmpp-sync" style="font-size:10px;padding:4px 14px;color:#06b6d4" onclick="
+        <button class="sb-btn2" id="_rmpp-sync" style="font-size:10px;padding:4px 14px;color:var(--cyan)" onclick="
           const btn=this;btn.disabled=true;btn.textContent='同步中...';
           api('POST','/proxy/pool/sync').then(r=>{
             showToast((r&&r.added!=null?'同步完成，新增 '+r.added+' 条':'同步已触发'),'ok');
             btn.closest('.rm-overlay').remove();_rmShowProxyPool();
           }).catch(e=>{showToast('同步失败: '+e.message,'warn');btn.disabled=false;btn.textContent='同步922S5';})
         ">同步922S5</button>
-        <button class="sb-btn2" id="_rmpp-cleanup" style="font-size:10px;padding:4px 14px;color:#f59e0b" onclick="
+        <button class="sb-btn2" id="_rmpp-cleanup" style="font-size:10px;padding:4px 14px;color:var(--amber)" onclick="
           const btn=this;btn.disabled=true;btn.textContent='清理中...';
           api('POST','/proxy/pool/cleanup').then(r=>{
             showToast((r&&r.removed!=null?'清理完成，移除 '+r.removed+' 条':'清理完成'),'ok');
             btn.closest('.rm-overlay').remove();_rmShowProxyPool();
           }).catch(e=>{showToast('清理失败: '+e.message,'warn');btn.disabled=false;btn.textContent='清理过期';})
         ">清理过期</button>
-        <button class="sb-btn2" style="font-size:10px;padding:4px 14px;color:#8b5cf6" id="_rmpp-list-btn">查看列表</button>
+        <button class="sb-btn2" style="font-size:10px;padding:4px 14px;color:var(--violet)" id="_rmpp-list-btn">查看列表</button>
       </div>
 
       <!-- 手动添加表单 -->
@@ -1034,7 +1034,7 @@ async function _rmShowProxyPool(){
           <input id="_rmpp-country" placeholder="国家代码 (如 US)" maxlength="2" style="background:var(--bg-main,#111);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:10px;color:var(--text-main,#eee);width:100%;box-sizing:border-box;text-transform:uppercase">
         </div>
         <div style="margin-top:8px;display:flex;align-items:center;gap:8px">
-          <button class="sb-btn2" style="font-size:10px;padding:4px 14px;color:#22c55e" id="_rmpp-add-btn">添加代理</button>
+          <button class="sb-btn2" style="font-size:10px;padding:4px 14px;color:var(--green-strong)" id="_rmpp-add-btn">添加代理</button>
           <span id="_rmpp-add-msg" style="font-size:10px;color:var(--text-dim)"></span>
         </div>
       </div>`;
@@ -1050,25 +1050,25 @@ async function _rmShowProxyPool(){
       const password=(overlay.querySelector('#_rmpp-pass').value||'').trim();
       const country=(overlay.querySelector('#_rmpp-country').value||'').trim().toUpperCase();
       const msg=overlay.querySelector('#_rmpp-add-msg');
-      if(!server||!port){msg.style.color='#ef4444';msg.textContent='服务器和端口必填';return;}
+      if(!server||!port){msg.style.color='var(--red-strong)';msg.textContent='服务器和端口必填';return;}
       const btn=overlay.querySelector('#_rmpp-add-btn');
       btn.disabled=true;btn.textContent='添加中...';msg.textContent='';
       try{
         await api('POST','/proxy/pool/add',{server,port,username,password,country,source:'manual'});
-        msg.style.color='#22c55e';msg.textContent='添加成功';
+        msg.style.color='var(--green-strong)';msg.textContent='添加成功';
         ['#_rmpp-server','#_rmpp-port','#_rmpp-user','#_rmpp-pass','#_rmpp-country'].forEach(s=>{overlay.querySelector(s).value='';});
         setTimeout(()=>{overlay.remove();_rmShowProxyPool();},800);
       }catch(e){
         if(e.message&&(e.message.includes('404')||e.message.includes('not found')||e.message.includes('Not Found'))){
-          msg.style.color='#f59e0b';msg.textContent='请通过922S5同步添加';
+          msg.style.color='var(--amber)';msg.textContent='请通过922S5同步添加';
         }else{
-          msg.style.color='#ef4444';msg.textContent='添加失败: '+e.message;
+          msg.style.color='var(--red-strong)';msg.textContent='添加失败: '+e.message;
         }
         btn.disabled=false;btn.textContent='添加代理';
       }
     });
 
   }catch(e){
-    body.innerHTML=`<div style="color:#ef4444;font-size:11px;padding:10px">加载代理池失败: ${_rmEsc(e.message)}</div>`;
+    body.innerHTML=`<div style="color:var(--red-strong);font-size:11px;padding:10px">加载代理池失败: ${_rmEsc(e.message)}</div>`;
   }
 }

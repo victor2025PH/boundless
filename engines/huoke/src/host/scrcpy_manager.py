@@ -29,6 +29,37 @@ from typing import Dict, Optional
 
 log = logging.getLogger(__name__)
 
+_ADB_PATH = None
+
+
+def _adb() -> str:
+    """解析 adb 完整路径——服务进程 PATH 没有 platform-tools，
+    裸 "adb" 在本机 100% FileNotFoundError（实锤：实时流从未建起来过的病根之一）。
+    优先级：devices.yaml 配置(单一真相) → PATH → 常见安装位。"""
+    global _ADB_PATH
+    if _ADB_PATH:
+        return _ADB_PATH
+    p = None
+    try:
+        from .api import get_device_manager, _config_path
+        p = getattr(get_device_manager(_config_path), "adb_path", None)
+        if p and not os.path.exists(p) and p != "adb":
+            p = None
+    except Exception:
+        p = None
+    if not p or p == "adb":
+        import shutil
+        p = shutil.which("adb")
+    if not p:
+        for cand in (r"C:\platform-tools\adb.exe",
+                     os.path.expandvars(r"%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe")):
+            if os.path.exists(cand):
+                p = cand
+                break
+    _ADB_PATH = p or "adb"
+    return _ADB_PATH
+
+
 _SCRCPY_SERVER_JAR = None
 _BASE_PORT = 27200
 _MAX_DEVICES = 32
@@ -178,34 +209,40 @@ class ScrcpySession:
                           self.device_id[:8], e)
                 import traceback
                 log.error("[scrcpy] Traceback:\n%s", traceback.format_exc())
-                self.stop()
+                # 已持有 self._lock，回滚清理走无锁版，避免 self.stop() 二次抢
+                # 非重入 Lock 导致的自死锁（2026-08-13 修复；start 失败是常见路径）
+                self._stop_locked()
                 return False
 
     def stop(self):
         with self._lock:
-            self._running = False
-            for sock_attr in ("_control_socket", "_video_socket"):
-                sock = getattr(self, sock_attr, None)
-                if sock:
-                    try:
-                        sock.close()
-                    except Exception:
-                        pass
-                    setattr(self, sock_attr, None)
-            self.has_control = False
-            if self._process:
+            self._stop_locked()
+
+    def _stop_locked(self):
+        """真正的停止清理。调用方必须已持有 self._lock。"""
+        self._running = False
+        for sock_attr in ("_control_socket", "_video_socket"):
+            sock = getattr(self, sock_attr, None)
+            if sock:
                 try:
-                    self._process.terminate()
-                    self._process.wait(timeout=3)
+                    sock.close()
                 except Exception:
-                    try:
-                        self._process.kill()
-                    except Exception:
-                        pass
-                self._process = None
-            self._kill_device_server()
-            self._remove_forward()
-            log.info("[scrcpy] Session stopped: %s", self.device_id[:8])
+                    pass
+                setattr(self, sock_attr, None)
+        self.has_control = False
+        if self._process:
+            try:
+                self._process.terminate()
+                self._process.wait(timeout=3)
+            except Exception:
+                try:
+                    self._process.kill()
+                except Exception:
+                    pass
+            self._process = None
+        self._kill_device_server()
+        self._remove_forward()
+        log.info("[scrcpy] Session stopped: %s", self.device_id[:8])
 
     def _kill_device_server(self, kill_all: bool = False):
         """Kill scrcpy-server on the device.
@@ -221,7 +258,7 @@ class ScrcpySession:
             else:
                 pattern = f"scid={self._scid}"
             subprocess.run(
-                ["adb", "-s", self.device_id, "shell",
+                [_adb(), "-s", self.device_id, "shell",
                  f"pkill -f '{pattern}' 2>/dev/null || true"],
                 capture_output=True, timeout=3,
             )
@@ -427,7 +464,7 @@ class ScrcpySession:
         # Check remote file hash
         try:
             check = subprocess.run(
-                ["adb", "-s", self.device_id, "shell",
+                [_adb(), "-s", self.device_id, "shell",
                  f"md5sum {remote} 2>/dev/null || md5 {remote} 2>/dev/null || echo ''"],
                 capture_output=True, timeout=8,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -444,7 +481,7 @@ class ScrcpySession:
         # Fall back to size check for speed
         try:
             check2 = subprocess.run(
-                ["adb", "-s", self.device_id, "shell",
+                [_adb(), "-s", self.device_id, "shell",
                  f"ls -l {remote} 2>/dev/null | head -1"],
                 capture_output=True, timeout=5,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -459,7 +496,7 @@ class ScrcpySession:
         # Push needed
         _pushed_devices.discard(self.device_id)
         log.info("[scrcpy] Pushing server to %s (%d bytes)", self.device_id[:8], local_size)
-        cmd = ["adb", "-s", self.device_id, "push", local_path, remote]
+        cmd = [_adb(), "-s", self.device_id, "push", local_path, remote]
         r = subprocess.run(cmd, capture_output=True, timeout=30,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if r.returncode != 0:
@@ -471,7 +508,7 @@ class ScrcpySession:
 
     def _setup_forward(self):
         socket_name = f"scrcpy_{self._scid}"
-        cmd = ["adb", "-s", self.device_id, "forward",
+        cmd = [_adb(), "-s", self.device_id, "forward",
                f"tcp:{self.port}", f"localabstract:{socket_name}"]
         r = subprocess.run(cmd, capture_output=True, timeout=5)
         if r.returncode != 0:
@@ -480,7 +517,7 @@ class ScrcpySession:
     def _remove_forward(self):
         try:
             subprocess.run(
-                ["adb", "-s", self.device_id, "forward", "--remove",
+                [_adb(), "-s", self.device_id, "forward", "--remove",
                  f"tcp:{self.port}"],
                 capture_output=True, timeout=5,
             )
@@ -504,7 +541,7 @@ class ScrcpySession:
             f"video_codec_options=i-frame-interval=2 "
         )
 
-        cmd = ["adb", "-s", self.device_id, "shell", server_cmd]
+        cmd = [_adb(), "-s", self.device_id, "shell", server_cmd]
         self._process = subprocess.Popen(
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -757,7 +794,7 @@ class ScrcpyManager:
             remote = "/data/local/tmp/scrcpy-server.jar"
             local_size = os.path.getsize(server_path)
             check = subprocess.run(
-                ["adb", "-s", device_id, "shell",
+                [_adb(), "-s", device_id, "shell",
                  f"ls -l {remote} 2>/dev/null | head -1"],
                 capture_output=True, timeout=5,
             )
@@ -767,7 +804,7 @@ class ScrcpyManager:
                 return
             log.info("[scrcpy] Pre-pushing server to %s", device_id[:8])
             r = subprocess.run(
-                ["adb", "-s", device_id, "push", server_path, remote],
+                [_adb(), "-s", device_id, "push", server_path, remote],
                 capture_output=True, timeout=30,
             )
             if r.returncode == 0:
@@ -947,13 +984,13 @@ class ScrcpyManager:
         """Auto-detect optimal quality based on connection type."""
         try:
             r = subprocess.run(
-                ["adb", "-s", device_id, "get-state"],
+                [_adb(), "-s", device_id, "get-state"],
                 capture_output=True, timeout=3,
             )
             state = r.stdout.decode().strip()
             if state == "device":
                 tr = subprocess.run(
-                    ["adb", "-s", device_id, "get-devpath"],
+                    [_adb(), "-s", device_id, "get-devpath"],
                     capture_output=True, timeout=3,
                 )
                 devpath = tr.stdout.decode().strip()

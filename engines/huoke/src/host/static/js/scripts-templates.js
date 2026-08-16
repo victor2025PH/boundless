@@ -1,68 +1,6 @@
-/* scripts-templates.js — 脚本与模板: 话术管理、脚本模板引擎、批量快捷操作、批量文件上传、AI脚本生成、操作时间线 */
-/* ── 话术管理 ── */
-let _phrasesData=[];
-async function loadPhrasesPage(){
-  try{
-    _phrasesData=await api('GET','/phrases');
-    renderPhrases();
-  }catch(e){showToast('加载失败','warn');}
-}
-function renderPhrases(){
-  const c=document.getElementById('phrase-groups-container');
-  c.innerHTML=_phrasesData.map(g=>{
-    const items=(g.items||[]).map((t,i)=>`<div style="display:flex;gap:6px;align-items:center;padding:4px 0;border-bottom:1px solid var(--border)">
-      <span style="font-size:12px;flex:1">${t}</span>
-      <button class="sb-btn2" style="font-size:10px;padding:1px 6px" onclick="copyPhrase('${t.replace(/'/g,"\\'")}')">复制</button>
-      <button class="sb-btn2" style="font-size:10px;padding:1px 6px;color:var(--red)" onclick="removePhraseItem('${g.id}',${i})">删</button>
-    </div>`).join('');
-    return `<div style="background:var(--bg-card);border:1px solid var(--border);border-left:4px solid ${g.color};border-radius:10px;padding:14px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <span style="font-size:13px;font-weight:600">${g.name}</span>
-        <div style="display:flex;gap:4px">
-          <button class="sb-btn2" style="font-size:10px;padding:2px 6px" onclick="addPhraseItem('${g.id}')">+话术</button>
-          <button class="sb-btn2" style="font-size:10px;padding:2px 6px;color:var(--red)" onclick="deletePhraseGroup('${g.id}')">删除分组</button>
-        </div>
-      </div>
-      <div>${items||'<div style="font-size:11px;color:var(--text-dim)">暂无话术</div>'}</div>
-    </div>`;
-  }).join('')||'<div style="color:var(--text-dim)">暂无话术分组</div>';
-}
-async function showAddPhraseGroup(){
-  const name=await ocPrompt('新建分组','',{inputPlaceholder:'分组名称'});
-  if(!name) return;
-  api('POST','/phrases',{name,items:[]}).then(()=>loadPhrasesPage()).catch(e=>showToast('创建失败','warn'));
-}
-async function addPhraseItem(gid){
-  const text=await ocPrompt('添加话术','',{inputPlaceholder:'话术内容'});
-  if(!text) return;
-  const g=_phrasesData.find(x=>x.id===gid);
-  if(!g) return;
-  g.items.push(text);
-  try{
-    await api('PUT',`/phrases/${gid}`,{items:g.items});
-    loadPhrasesPage();
-  }catch(e){showToast('添加失败','warn');}
-}
-async function removePhraseItem(gid,idx){
-  const g=_phrasesData.find(x=>x.id===gid);
-  if(!g) return;
-  g.items.splice(idx,1);
-  try{
-    await api('PUT',`/phrases/${gid}`,{items:g.items});
-    loadPhrasesPage();
-  }catch(e){showToast('删除失败','warn');}
-}
-async function deletePhraseGroup(gid){
-  if(!(await ocDialog({title:'删除分组',message:'确认删除此分组？',type:'danger',confirmText:'删除',dangerous:true}))) return;
-  try{
-    await api('DELETE',`/phrases/${gid}`);
-    loadPhrasesPage();
-  }catch(e){showToast('删除失败','warn');}
-}
-function copyPhrase(text){
-  navigator.clipboard.writeText(text).then(()=>showToast('已复制'));
-}
-
+/* scripts-templates.js — 脚本与模板: 脚本模板引擎、批量快捷操作、批量文件上传、AI脚本生成、操作时间线 */
+/* 话术管理已下线（2026-08-14 IA 重组）：页面早已摘出菜单且与获客/私信话术重复，
+   死页 div + 本文件话术块一并移除；后端 /phrases 路由暂留（有数据的老库可用 API 迁移）。 */
 
 /* ── 脚本模板引擎 ── */
 async function loadScriptEnginePage(){
@@ -316,7 +254,7 @@ async function loadUserAuditTimeline(){
       </div>`;
     });
     container.innerHTML=html;
-  }catch(e){container.innerHTML='<div style="color:#f87171">加载失败</div>';}
+  }catch(e){container.innerHTML='<div style="color:var(--red)">加载失败</div>';}
 }
 async function loadOpTimelinePage(){
   const filter=document.getElementById('tl-device-filter');
