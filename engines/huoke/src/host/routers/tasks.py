@@ -435,16 +435,71 @@ def active_tasks_by_device():
 _ERROR_CATS = [
     "vpn_failure", "network_timeout", "ui_not_found",
     "account_limited", "device_offline", "geo_mismatch",
-    "task_timeout", "unknown",
+    "task_timeout", "host_env", "unknown",
 ]
 
 import re as _re_ea
 
 
+# error_classifier（单一真相）code → 面板大类。
+# 2026-08-17 P0-2：此前本文件自维护一套粗正则，与 error_classifier 各判各的——
+# "[WinError 2] 系统找不到指定的文件"（主控机 PATH 缺 adb）在这边落 unknown、
+# 面板对着它开出"重连 VPN"的错药。现在优先吃 classifier 的结构化结论。
+_CODE_TO_CAT = {
+    "host_env_toolchain": "host_env",
+    "host_restart_orphan": "host_env",
+    "proxy_hijack": "vpn_failure",
+    "vpn_no_ip": "vpn_failure",
+    "network_zero": "network_timeout",
+    "adb_timeout": "network_timeout",
+    "adb_offline": "device_offline",
+    "circuit_breaker": "device_offline",
+    "rate_limited": "account_limited",
+    "group_already_joined": "ui_not_found",
+    "group_not_found": "ui_not_found",
+    "vision_join_button_miss": "ui_not_found",
+    "vision_search_bar_miss": "ui_not_found",
+    "sla_timeout": "task_timeout",
+    "task_timeout": "task_timeout",
+}
+
+# 大类 → 责任层（与 tasks-chat.js::_CAT_TO_LAYER 同表，前后端口径一致）。
+# infra=基建/环境失败：预检门禁拦截，不该算业务的锅。
+_CAT_TO_LAYER = {
+    "vpn_failure": "infra", "network_timeout": "infra", "device_offline": "infra",
+    "geo_mismatch": "infra", "host_env": "infra",
+    "account_limited": "quota",
+    "ui_not_found": "business",
+    "task_timeout": "timing",
+    "unknown": "unknown",
+}
+
+# [gate] 结构化前缀：executor 预检失败的错误文本自带门禁名，直读比猜正则可靠
+_GATE_RE = _re_ea.compile(r"^\[gate\]\s*预检未通过\s*\(([a-z_]+)\)", _re_ea.I)
+_GATE_TO_CAT = {"vpn": "vpn_failure", "network": "network_timeout",
+                "geo": "geo_mismatch"}
+
+
 def _classify_error(error_text: str) -> str:
-    """将错误消息分类到7大类型 + unknown。"""
+    """错误消息 → 面板大类。判据优先级：
+    ① error_classifier（单一真相，含主控环境/WinError 识别）
+    ② [gate] 结构化前缀直读
+    ③ 旧正则兜底（向后兼容无前缀的自由文本）"""
     if not error_text:
         return "unknown"
+    try:
+        from ..error_classifier import classify_task_error
+        cls = classify_task_error(error_text) or {}
+        cat = _CODE_TO_CAT.get(cls.get("code") or "")
+        if cat:
+            return cat
+    except Exception:
+        pass
+    m = _GATE_RE.search(error_text)
+    if m:
+        cat = _GATE_TO_CAT.get(m.group(1).lower())
+        if cat:
+            return cat
     _EA_PATTERNS = [
         ("vpn_failure",     r"VPN|vpn|v2ray|V2Ray|重连失败|未连接|not.*connected"),
         ("task_timeout",    r"执行超时|任务.*超时|\d+s\)"),
@@ -522,6 +577,23 @@ def error_analysis(hours: int = 24, include_samples: bool = False):
         if cats:
             ddata["top_category"] = max(cats, key=lambda k: cats[k])
 
+    # ── P0-3 双轨口径：基建/环境失败不算业务的锅（与任务中心 chip-success 同一把尺）──
+    # 2026-08-16 实锤：24h 失败 7/10 全是预检拦截（4 条主控缺 adb + 3 条 VPN），
+    # 混合口径 70% 顶在业务脸上；业务口径实际 0%。
+    infra_failed = sum(n for c, n in categories.items()
+                       if _CAT_TO_LAYER.get(c) == "infra")
+    layers: dict = {}
+    for c, n in categories.items():
+        if n:
+            lay = _CAT_TO_LAYER.get(c, "unknown")
+            layers[lay] = layers.get(lay, 0) + n
+    business_denom = max(total_tasks - infra_failed, 0)
+    business_failed = max(total_failed - infra_failed, 0)
+    business_failure_rate = (
+        round(business_failed / business_denom * 100, 1) if business_denom else 0.0
+    )
+    small_sample = total_tasks < 20
+
     hourly_trend = [
         {"hour": r[0], "failed": r[1], "total": r[2],
          "rate": round(r[1] / r[2] * 100, 1) if r[2] else 0}
@@ -547,15 +619,30 @@ def error_analysis(hours: int = 24, include_samples: bool = False):
                 samples_by_cat.setdefault(cat, []).append(err[:120])
 
     # ── 生成告警 ──
+    # P0-3：失败率告警改用业务口径；基建/环境失败由独立告警承担，
+    # 且业务失败 <2 条不拉警报（小样本抖动不值得一条红横幅）。
     alerts = []
-    if failure_rate > 50:
-        alerts.append({"level": "critical",
-                        "message": f"失败率严重偏高 {failure_rate}%（过去{hours}小时）",
-                        "category": "high_failure_rate"})
-    elif failure_rate > 25:
+    if business_denom > 0 and business_failed >= 2:
+        if business_failure_rate > 50:
+            alerts.append({"level": "critical",
+                           "message": (f"业务失败率严重偏高 {business_failure_rate}%"
+                                       f"（过去{hours}小时，已剔除 {infra_failed} 条基建失败）"),
+                           "category": "high_failure_rate"})
+        elif business_failure_rate > 25:
+            alerts.append({"level": "warning",
+                           "message": (f"业务失败率偏高 {business_failure_rate}%"
+                                       f"（已剔除 {infra_failed} 条基建失败）"),
+                           "category": "high_failure_rate"})
+    if infra_failed >= 3:
         alerts.append({"level": "warning",
-                        "message": f"失败率偏高 {failure_rate}%",
-                        "category": "high_failure_rate"})
+                       "message": (f"基建/环境失败 {infra_failed} 条（VPN/网络/设备/主控环境）"
+                                   "——预检在拦任务，不计业务口径但需要处理"),
+                       "category": "infra_failure"})
+    if categories.get("host_env", 0) >= 2:
+        alerts.append({"level": "critical",
+                       "message": (f"主控环境异常 {categories['host_env']} 次（adb/工具链/服务重启）"
+                                   "——主控机自身问题，所有设备的预检都会失败"),
+                       "category": "host_env"})
     if categories["vpn_failure"] >= 3:
         alerts.append({"level": "critical",
                         "message": f"VPN 连续失败 {categories['vpn_failure']} 次（可能影响所有设备）",
@@ -575,6 +662,16 @@ def error_analysis(hours: int = 24, include_samples: bool = False):
 
     # ── 生成建议 ──
     suggestions = []
+    if categories.get("host_env", 0) > 0:
+        suggestions.append({
+            "priority": "critical" if categories["host_env"] >= 2 else "high",
+            "category": "host_env", "icon": "🧰",
+            "action": ("主控机工具链/环境异常（如 adb 不在 PATH、服务重启中断）——"
+                       "检查 config/devices.yaml 的 adb_path 与 C:\\platform-tools 是否在位；"
+                       "服务启动已自动注入 PATH，若再现请重启服务后重试任务。"
+                       "注意：这类错误重连 VPN 治不了"),
+            "endpoint": None, "method": None,
+        })
     if categories["vpn_failure"] > 0:
         suggestions.append({
             "priority": "high" if categories["vpn_failure"] >= 3 else "medium",
@@ -660,6 +757,15 @@ def error_analysis(hours: int = 24, include_samples: bool = False):
         "total_failed": total_failed,
         "total_tasks": total_tasks,
         "failure_rate": failure_rate,
+        # P0-3 双轨口径（本机维度；worker 明细见 cluster_summary）：
+        # 业务失败率=剔除基建/环境失败后的失败占比，避免"主控缺 adb 的 70%"顶在业务脸上
+        "infra_failed": infra_failed,
+        "business_failed": business_failed,
+        "business_denominator": business_denom,
+        "business_failure_rate": business_failure_rate,
+        "layers": layers,
+        "category_layers": _CAT_TO_LAYER,
+        "small_sample": small_sample,
         "top_category": top_category,
         "categories": categories,
         "hourly_trend": hourly_trend,

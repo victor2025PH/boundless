@@ -1,0 +1,39 @@
+# AI 操盘手目标配置（2026-08-16 P4 MVP；2026-08-17 真机灰度接入）
+#
+# 单一真相：操盘手只管这里点名的设备——不自动发现、不全量接管。
+# 双闸设计：
+#   enabled: false  → tick 直接不干活（总开关，改文件即生效，热加载）
+#   dry_run: true   → 决策 + 审计落库，但不真正下发任务链（演习模式）
+# 真执行必须两个开关都扳，缺一不可。
+#
+# goal 字段说明：
+#   id                            目标唯一标识（进审计表）
+#   platform                      平台（与 task_chains.yaml 的 platform 对齐）
+#   device_ids                    该目标管辖的设备（显式点名）
+#   preferred_chains              链偏好顺序（决策时优先按此序选，缺省按风险升序）
+#   max_chains_per_device_per_day 单设备每天最多由操盘手发起几条链（编排级频控，
+#                                 与执行级 ComplianceGuard 配额是两层，互不替代）
+#   allow_high_risk               是否允许自动执行 risk_level: high 的链
+#                                 （false 时高危链只出「需人工批准」决策，绝不自动跑）
+
+enabled: true
+dry_run: false  # 2026-08-17 演习决策验证正确后扳实弹（灰度=纯养号链，零对外触达）
+tick_interval_minutes: 30  # 自带时钟间隔（下限 5 分钟；改文件热生效）
+
+# 2026-08-17 真机灰度：4 台在线设备全部从未运营（device_states 无记录 =
+# cold_start），操盘手会按 R5 选低风险纯养号链 tt_warmup_only（只刷视频
+# 喂算法，零对外触达）。日频控 2 条/台，高危链一律需人工批准。
+goals:
+  - id: tt_fleet_grayscale
+    platform: tiktok
+    device_ids:
+      - E6FYKRHYS48HZLAM
+      - VSM76PXKH6CMEQQ4
+      - XOM7IFX8EEXKY96T
+      - Z95XK7X8EYIFYL8D
+    preferred_chains: ["tt_warmup_only", "tt_drip_followup", "tt_keyword_first_touch"]
+    max_chains_per_device_per_day: 2
+    allow_high_risk: false
+    # 反馈闭环退避：连续 2 条链失败即停投并报病因（灰度实锤 3 台 VPN 未开，
+    # 阈值设 2 让"VPN疑似"先于"日额度已满"命中，病因显示准确）
+    fail_backoff_threshold: 2

@@ -202,7 +202,7 @@
 
     bar.innerHTML = `
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        <span style="font-size:11px;padding:4px 10px;background:rgba(24,119,242,.15);color:#60a5fa;border-radius:6px;font-weight:600">
+        <span style="font-size:11px;padding:4px 10px;background:rgba(24,119,242,.15);color:var(--blue-soft);border-radius:6px;font-weight:600">
           📘 Facebook 指挥台
         </span>
         ${personaBadge}
@@ -217,22 +217,22 @@
         ${groupDivider}
 
         <!-- ② 数据：漏斗/风控/线索/画像/日报 —— 只看不改的诊断类 -->
-        <button class="qa-btn" onclick="fbOpenFunnelModal()" style="padding:6px 10px;font-size:12px;background:rgba(34,197,94,.15);color:#22c55e">
+        <button class="qa-btn" onclick="fbOpenFunnelModal()" style="padding:6px 10px;font-size:12px;background:rgba(34,197,94,.15);color:var(--green-strong)">
           📊 漏斗
         </button>
-        <button class="qa-btn" onclick="fbOpenRiskModal()" style="padding:6px 10px;font-size:12px;background:rgba(239,68,68,.15);color:#ef4444">
+        <button class="qa-btn" onclick="fbOpenRiskModal()" style="padding:6px 10px;font-size:12px;background:rgba(239,68,68,.15);color:var(--red-strong)">
           🛡️ 风控
         </button>
-        <button class="qa-btn" onclick="fbOpenLeadsModal()" style="padding:6px 10px;font-size:12px;background:rgba(59,130,246,.15);color:#3b82f6">
+        <button class="qa-btn" onclick="fbOpenLeadsModal()" style="padding:6px 10px;font-size:12px;background:rgba(59,130,246,.15);color:var(--blue-strong)">
           🎯 高分线索
         </button>
         <button class="qa-btn" onclick="fbOpenNameHunterCandidates()" style="padding:6px 10px;font-size:12px;background:rgba(14,165,233,.15);color:#38bdf8">
           🔎 点名候选
         </button>
-        <button class="qa-btn" onclick="fbOpenInsightsModal()" style="padding:6px 10px;font-size:12px;background:rgba(139,92,246,.18);color:#a78bfa">
+        <button class="qa-btn" onclick="fbOpenInsightsModal()" style="padding:6px 10px;font-size:12px;background:rgba(139,92,246,.18);color:var(--violet-soft)">
           🧠 画像识别
         </button>
-        <button class="qa-btn" onclick="fbOpenDailyBriefModal()" style="padding:6px 10px;font-size:12px;background:rgba(168,85,247,.15);color:#a855f7">
+        <button class="qa-btn" onclick="fbOpenDailyBriefModal()" style="padding:6px 10px;font-size:12px;background:rgba(168,85,247,.15);color:var(--accent-2)">
           📰 AI 日报
         </button>
         <button class="qa-btn" onclick="fbOpenDedupModal()" style="padding:6px 10px;font-size:12px;background:rgba(251,191,36,.15);color:#fbbf24">
@@ -249,19 +249,19 @@
         ${groupDivider}
 
         <!-- ④ Lead Mesh 交接 / 档案 / 指挥台 (Phase 5.5 新增, 跨 Agent 协同) -->
-        <button class="qa-btn" onclick="lmOpenHandoffInbox()" style="padding:6px 10px;font-size:12px;background:rgba(245,158,11,.15);color:#f59e0b">
+        <button class="qa-btn" onclick="lmOpenHandoffInbox()" style="padding:6px 10px;font-size:12px;background:rgba(245,158,11,.15);color:var(--amber)">
           🤝 接收方工作台
         </button>
         <button class="qa-btn" onclick="lmOpenLeadSearch()" style="padding:6px 10px;font-size:12px;background:rgba(14,165,233,.15);color:#0ea5e9">
           🔍 Lead 档案
         </button>
-        <button class="qa-btn" onclick="lmOpenCommandCenter()" style="padding:6px 10px;font-size:12px;background:rgba(168,85,247,.15);color:#a855f7">
+        <button class="qa-btn" onclick="lmOpenCommandCenter()" style="padding:6px 10px;font-size:12px;background:rgba(168,85,247,.15);color:var(--accent-2)">
           📊 运营指挥台
         </button>
-        <button class="qa-btn" onclick="lmOpenReceiversConfig()" style="padding:6px 10px;font-size:12px;background:rgba(34,197,94,.15);color:#22c55e">
+        <button class="qa-btn" onclick="lmOpenReceiversConfig()" style="padding:6px 10px;font-size:12px;background:rgba(34,197,94,.15);color:var(--green-strong)">
           📬 接收方管理
         </button>
-        <button class="qa-btn" onclick="lmOpenMergeAudit()" style="padding:6px 10px;font-size:12px;background:rgba(251,191,36,.15);color:#eab308">
+        <button class="qa-btn" onclick="lmOpenMergeAudit()" style="padding:6px 10px;font-size:12px;background:rgba(251,191,36,.15);color:var(--gold)">
           🔗 合并审计
         </button>
         <button class="qa-btn" onclick="lmOpenIdentityKPI()" style="padding:6px 10px;font-size:12px;background:rgba(99,102,241,.15);color:#818cf8">
@@ -301,7 +301,7 @@
       const r = await api('GET', `/facebook/insights/stats?hours=${h}`);
       const body = document.getElementById('fb-ins-body');
       if (!body) return;
-      if (!r || !r.ok) { body.innerHTML = '<div style="color:#ef4444">接口返回异常</div>'; return; }
+      if (!r || !r.ok) { body.innerHTML = '<div style="color:var(--red-strong)">接口返回异常</div>'; return; }
       const t = r.totals || {};
       const kpi = [
         ['L1 扫描总数', (t.l1 || 0), '#60a5fa'],
@@ -317,11 +317,11 @@
         </div>
       `).join('');
       const byPersona = (r.by_persona || []).map(p => `
-        <tr><td style="padding:6px 10px">${p.persona_key}</td><td style="text-align:right;padding:6px 10px">${p.l1}</td><td style="text-align:right;padding:6px 10px">${p.l2}</td><td style="text-align:right;padding:6px 10px;color:#22c55e;font-weight:600">${p.matched}</td></tr>
+        <tr><td style="padding:6px 10px">${p.persona_key}</td><td style="text-align:right;padding:6px 10px">${p.l1}</td><td style="text-align:right;padding:6px 10px">${p.l2}</td><td style="text-align:right;padding:6px 10px;color:var(--green-strong);font-weight:600">${p.matched}</td></tr>
       `).join('') || '<tr><td colspan="4" style="padding:8px;color:var(--text-muted);text-align:center">暂无数据</td></tr>';
       const byDev = (r.top_devices || []).slice(0, 10).map(d => {
         const alias = (typeof ALIAS !== 'undefined' ? (ALIAS[d.device_id] || d.device_id.substring(0, 8)) : d.device_id.substring(0, 8));
-        return `<tr><td style="padding:6px 10px">${alias}</td><td style="text-align:right;padding:6px 10px">${d.l1}</td><td style="text-align:right;padding:6px 10px">${d.l2}</td><td style="text-align:right;padding:6px 10px;color:#22c55e">${d.matched}</td></tr>`;
+        return `<tr><td style="padding:6px 10px">${alias}</td><td style="text-align:right;padding:6px 10px">${d.l1}</td><td style="text-align:right;padding:6px 10px">${d.l2}</td><td style="text-align:right;padding:6px 10px;color:var(--green-strong)">${d.matched}</td></tr>`;
       }).join('') || '<tr><td colspan="4" style="padding:8px;color:var(--text-muted);text-align:center">暂无设备数据</td></tr>';
       const costRows = (r.ai_cost || []).map(c => {
         const waitStr = (c.avg_queue_wait_ms != null)
@@ -362,7 +362,7 @@
       `;
     } catch (e) {
       const body = document.getElementById('fb-ins-body');
-      if (body) body.innerHTML = `<div style="color:#ef4444">加载失败: ${e.message || e}</div>`;
+      if (body) body.innerHTML = `<div style="color:var(--red-strong)">加载失败: ${e.message || e}</div>`;
     }
   };
 
@@ -458,16 +458,16 @@
     // 当前兴趣标签
     const topics = (p.interest_topics || []);
     const topicChips = topics.map(function (t, i) {
-      return `<span class="fb-chip" style="display:inline-flex;align-items:center;gap:3px;padding:3px 8px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.25);border-radius:12px;font-size:10px;color:#4ade80">
-        ${t}<button onclick="fbRemoveInterest(${i})" style="background:none;border:none;color:#4ade80;cursor:pointer;font-size:10px;padding:0 2px;opacity:.7">×</button>
+      return `<span class="fb-chip" style="display:inline-flex;align-items:center;gap:3px;padding:3px 8px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.25);border-radius:12px;font-size:10px;color:var(--green-soft)">
+        ${t}<button onclick="fbRemoveInterest(${i})" style="background:none;border:none;color:var(--green-soft);cursor:pointer;font-size:10px;padding:0 2px;opacity:.7">×</button>
       </span>`;
     }).join('');
 
     // 群组关键词
     const keywords = (p.seed_group_keywords || []);
     const keywordChips = keywords.map(function (k, i) {
-      return `<span class="fb-chip" style="display:inline-flex;align-items:center;gap:3px;padding:3px 8px;background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.25);border-radius:12px;font-size:10px;color:#60a5fa">
-        ${k}<button onclick="fbRemoveKeyword(${i})" style="background:none;border:none;color:#60a5fa;cursor:pointer;font-size:10px;padding:0 2px;opacity:.7">×</button>
+      return `<span class="fb-chip" style="display:inline-flex;align-items:center;gap:3px;padding:3px 8px;background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.25);border-radius:12px;font-size:10px;color:var(--blue-soft)">
+        ${k}<button onclick="fbRemoveKeyword(${i})" style="background:none;border:none;color:var(--blue-soft);cursor:pointer;font-size:10px;padding:0 2px;opacity:.7">×</button>
       </span>`;
     }).join('');
 
@@ -501,7 +501,7 @@
             <div style="font-size:10px;color:var(--text-dim);margin-bottom:6px;font-weight:600">⚡ 快速预设</div>
             <div style="display:flex;flex-wrap:wrap;gap:6px">
               ${presetCards}
-              <button onclick="fbCreateNewPersona()" style="padding:6px 12px;border:1px dashed var(--border);border-radius:8px;background:none;cursor:pointer;font-size:11px;color:var(--text-dim);transition:all .15s;display:flex;align-items:center;gap:4px" onmouseover="this.style.borderColor='#22c55e';this.style.color='#22c55e'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-dim)'">
+              <button onclick="fbCreateNewPersona()" style="padding:6px 12px;border:1px dashed var(--border);border-radius:8px;background:none;cursor:pointer;font-size:11px;color:var(--text-dim);transition:all .15s;display:flex;align-items:center;gap:4px" onmouseover="this.style.borderColor='var(--green-strong)';this.style.color='var(--green-strong)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-dim)'">
                 <span>＋</span> 新建
               </button>
             </div>
@@ -542,8 +542,8 @@
             <div>
               <label style="font-size:10px;color:var(--text-dim);font-weight:600;display:block;margin-bottom:6px">🎂 年龄范围: <span id="fb-pb-age-label" style="color:var(--text)">${ageMin} ~ ${ageMax} 岁</span></label>
               <div style="display:flex;align-items:center;gap:8px">
-                <input type="range" id="fb-pb-age-min" min="18" max="70" value="${ageMin}" oninput="fbAgeChange()" style="flex:1;accent-color:#f59e0b">
-                <input type="range" id="fb-pb-age-max" min="18" max="70" value="${ageMax}" oninput="fbAgeChange()" style="flex:1;accent-color:#f59e0b">
+                <input type="range" id="fb-pb-age-min" min="18" max="70" value="${ageMin}" oninput="fbAgeChange()" style="flex:1;accent-color:var(--amber)">
+                <input type="range" id="fb-pb-age-max" min="18" max="70" value="${ageMax}" oninput="fbAgeChange()" style="flex:1;accent-color:var(--amber)">
               </div>
             </div>
           </div>
@@ -558,7 +558,7 @@
             <label style="font-size:10px;color:var(--text-dim);font-weight:600;display:block;margin-bottom:6px">🏷 兴趣标签</label>
             <div id="fb-pb-topics" style="display:flex;flex-wrap:wrap;gap:4px;min-height:24px">
               ${topicChips}
-              <button onclick="fbAddInterestPrompt()" style="padding:3px 8px;background:none;border:1px dashed rgba(34,197,94,.4);border-radius:12px;color:#4ade80;cursor:pointer;font-size:10px;transition:all .12s" onmouseover="this.style.background='rgba(34,197,94,.08)'" onmouseout="this.style.background='none'">✨ 智能推荐</button>
+              <button onclick="fbAddInterestPrompt()" style="padding:3px 8px;background:none;border:1px dashed rgba(34,197,94,.4);border-radius:12px;color:var(--green-soft);cursor:pointer;font-size:10px;transition:all .12s" onmouseover="this.style.background='rgba(34,197,94,.08)'" onmouseout="this.style.background='none'">✨ 智能推荐</button>
             </div>
           </div>
 
@@ -567,7 +567,7 @@
             <label style="font-size:10px;color:var(--text-dim);font-weight:600;display:block;margin-bottom:6px">🔍 群组搜索关键词</label>
             <div id="fb-pb-keywords" style="display:flex;flex-wrap:wrap;gap:4px;min-height:24px">
               ${keywordChips}
-              <button onclick="fbAddKeywordPrompt()" style="padding:3px 8px;background:none;border:1px dashed rgba(59,130,246,.4);border-radius:12px;color:#60a5fa;cursor:pointer;font-size:10px;transition:all .12s" onmouseover="this.style.background='rgba(59,130,246,.08)'" onmouseout="this.style.background='none'">✨ 智能推荐</button>
+              <button onclick="fbAddKeywordPrompt()" style="padding:3px 8px;background:none;border:1px dashed rgba(59,130,246,.4);border-radius:12px;color:var(--blue-soft);cursor:pointer;font-size:10px;transition:all .12s" onmouseover="this.style.background='rgba(59,130,246,.08)'" onmouseout="this.style.background='none'">✨ 智能推荐</button>
             </div>
           </div>
 
@@ -575,7 +575,7 @@
           <div id="fb-pb-stats" style="padding:10px 0;border-top:1px solid rgba(255,255,255,.05)">
             <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
               <span style="font-size:10px;color:var(--text-dim);font-weight:600">📊 效果预览</span>
-              <button onclick="fbLoadPersonaStats()" style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:9px;padding:2px 6px;border-radius:4px;transition:all .12s" onmouseover="this.style.color='#60a5fa'" onmouseout="this.style.color='var(--text-dim)'">刷新</button>
+              <button onclick="fbLoadPersonaStats()" style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:9px;padding:2px 6px;border-radius:4px;transition:all .12s" onmouseover="this.style.color='var(--blue-soft)'" onmouseout="this.style.color='var(--text-dim)'">刷新</button>
             </div>
             <div id="fb-pb-stats-content" style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
               <div style="text-align:center;padding:6px;background:var(--bg-card);border-radius:6px;border:1px solid var(--border)">
@@ -583,15 +583,15 @@
                 <div style="font-size:9px;color:var(--text-dim)">候选人</div>
               </div>
               <div style="text-align:center;padding:6px;background:var(--bg-card);border-radius:6px;border:1px solid var(--border)">
-                <div style="font-size:14px;font-weight:700;color:#22c55e" id="fb-stat-friended">—</div>
+                <div style="font-size:14px;font-weight:700;color:var(--green-strong)" id="fb-stat-friended">—</div>
                 <div style="font-size:9px;color:var(--text-dim)">已加好友</div>
               </div>
               <div style="text-align:center;padding:6px;background:var(--bg-card);border-radius:6px;border:1px solid var(--border)">
-                <div style="font-size:14px;font-weight:700;color:#f59e0b" id="fb-stat-sent">—</div>
+                <div style="font-size:14px;font-weight:700;color:var(--amber)" id="fb-stat-sent">—</div>
                 <div style="font-size:9px;color:var(--text-dim)">已发话术</div>
               </div>
               <div style="text-align:center;padding:6px;background:var(--bg-card);border-radius:6px;border:1px solid var(--border)">
-                <div style="font-size:14px;font-weight:700;color:#a855f7" id="fb-stat-reply-rate">—</div>
+                <div style="font-size:14px;font-weight:700;color:var(--accent-2)" id="fb-stat-reply-rate">—</div>
                 <div style="font-size:9px;color:var(--text-dim)">回复率</div>
               </div>
             </div>
@@ -621,8 +621,8 @@
           <!-- 操作栏 -->
           <div style="padding:10px 0 4px;border-top:1px solid rgba(255,255,255,.05);display:flex;align-items:center;gap:6px;flex-wrap:wrap">
             <button onclick="fbSavePersonaProfile()" style="padding:5px 14px;background:linear-gradient(135deg,#1877f2,#0d6efd);border:none;color:#fff;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;transition:all .12s;box-shadow:0 2px 8px rgba(24,119,242,.3)" onmouseover="this.style.transform='translateY(-1px)'" onmouseout="this.style.transform=''">💾 保存</button>
-            <button onclick="fbClonePersona()" style="padding:5px 10px;background:var(--bg-card);border:1px solid var(--border);color:var(--text-dim);border-radius:6px;cursor:pointer;font-size:10px;transition:all .12s" onmouseover="this.style.borderColor='#22c55e';this.style.color='#22c55e'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-dim)'">📋 克隆</button>
-            <button onclick="fbDeletePersona()" id="fb-pb-delete-btn" style="padding:5px 10px;background:var(--bg-card);border:1px solid var(--border);color:var(--text-dim);border-radius:6px;cursor:pointer;font-size:10px;transition:all .12s;${deleteDisabled}" onmouseover="this.style.borderColor='#ef4444';this.style.color='#ef4444'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-dim)'">🗑 删除</button>
+            <button onclick="fbClonePersona()" style="padding:5px 10px;background:var(--bg-card);border:1px solid var(--border);color:var(--text-dim);border-radius:6px;cursor:pointer;font-size:10px;transition:all .12s" onmouseover="this.style.borderColor='var(--green-strong)';this.style.color='var(--green-strong)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-dim)'">📋 克隆</button>
+            <button onclick="fbDeletePersona()" id="fb-pb-delete-btn" style="padding:5px 10px;background:var(--bg-card);border:1px solid var(--border);color:var(--text-dim);border-radius:6px;cursor:pointer;font-size:10px;transition:all .12s;${deleteDisabled}" onmouseover="this.style.borderColor='var(--red-strong)';this.style.color='var(--red-strong)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-dim)'">🗑 删除</button>
             <button onclick="fbTogglePersonaBuilder()" style="padding:5px 10px;background:var(--bg-card);border:1px solid var(--border);color:var(--text-dim);border-radius:6px;cursor:pointer;font-size:10px;transition:all .12s">收起 ▲</button>
             <span style="flex:1"></span>
             <span style="font-size:9px;color:var(--text-dim)">修改即时生效 · 保存可复用</span>
@@ -891,16 +891,16 @@
     if (topicsEl) {
       var topics = p.interest_topics || [];
       topicsEl.innerHTML = topics.map(function (t, i) {
-        return '<span class="fb-chip" style="display:inline-flex;align-items:center;gap:3px;padding:3px 8px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.25);border-radius:12px;font-size:10px;color:#4ade80">'
-          + t + '<button onclick="fbRemoveInterest(' + i + ')" style="background:none;border:none;color:#4ade80;cursor:pointer;font-size:10px;padding:0 2px;opacity:.7">\u00d7</button></span>';
-      }).join('') + '<button onclick="fbAddInterestPrompt()" style="padding:3px 8px;background:none;border:1px dashed rgba(34,197,94,.4);border-radius:12px;color:#4ade80;cursor:pointer;font-size:10px">\u2728 智能推荐</button>';
+        return '<span class="fb-chip" style="display:inline-flex;align-items:center;gap:3px;padding:3px 8px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.25);border-radius:12px;font-size:10px;color:var(--green-soft)">'
+          + t + '<button onclick="fbRemoveInterest(' + i + ')" style="background:none;border:none;color:var(--green-soft);cursor:pointer;font-size:10px;padding:0 2px;opacity:.7">\u00d7</button></span>';
+      }).join('') + '<button onclick="fbAddInterestPrompt()" style="padding:3px 8px;background:none;border:1px dashed rgba(34,197,94,.4);border-radius:12px;color:var(--green-soft);cursor:pointer;font-size:10px">\u2728 智能推荐</button>';
     }
     if (keywordsEl) {
       var keywords = p.seed_group_keywords || [];
       keywordsEl.innerHTML = keywords.map(function (k, i) {
-        return '<span class="fb-chip" style="display:inline-flex;align-items:center;gap:3px;padding:3px 8px;background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.25);border-radius:12px;font-size:10px;color:#60a5fa">'
-          + k + '<button onclick="fbRemoveKeyword(' + i + ')" style="background:none;border:none;color:#60a5fa;cursor:pointer;font-size:10px;padding:0 2px;opacity:.7">\u00d7</button></span>';
-      }).join('') + '<button onclick="fbAddKeywordPrompt()" style="padding:3px 8px;background:none;border:1px dashed rgba(59,130,246,.4);border-radius:12px;color:#60a5fa;cursor:pointer;font-size:10px">\u2728 智能推荐</button>';
+        return '<span class="fb-chip" style="display:inline-flex;align-items:center;gap:3px;padding:3px 8px;background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.25);border-radius:12px;font-size:10px;color:var(--blue-soft)">'
+          + k + '<button onclick="fbRemoveKeyword(' + i + ')" style="background:none;border:none;color:var(--blue-soft);cursor:pointer;font-size:10px;padding:0 2px;opacity:.7">\u00d7</button></span>';
+      }).join('') + '<button onclick="fbAddKeywordPrompt()" style="padding:3px 8px;background:none;border:1px dashed rgba(59,130,246,.4);border-radius:12px;color:var(--blue-soft);cursor:pointer;font-size:10px">\u2728 智能推荐</button>';
     }
     _fbUpdateCompactSummary();
   }
@@ -1011,7 +1011,7 @@
     if (saveBtn && !saveBtn.querySelector('.fb-dirty-dot')) {
       var dot = document.createElement('span');
       dot.className = 'fb-dirty-dot';
-      dot.style.cssText = 'display:inline-block;width:6px;height:6px;border-radius:50%;background:#f59e0b;margin-left:4px;animation:fb-pulse 1.5s infinite';
+      dot.style.cssText = 'display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--amber);margin-left:4px;animation:fb-pulse 1.5s infinite';
       saveBtn.appendChild(dot);
       // 动画
       if (!document.getElementById('fb-pulse-style')) {
@@ -1175,11 +1175,11 @@
           + '<span style="font-size:13px;text-align:center">' + p.flag + '</span>'
           + '<div style="min-width:0">'
           + '<div style="font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + p.label + (p.source === 'user' ? ' <span style="font-size:7px;color:#c084fc">自建</span>' : '') + '</div>'
-          + '<div style="height:4px;background:rgba(255,255,255,.05);border-radius:2px;margin-top:2px"><div style="height:100%;width:' + barW + '%;background:linear-gradient(90deg,#6366f1,#22c55e);border-radius:2px;transition:width .3s"></div></div>'
+          + '<div style="height:4px;background:rgba(255,255,255,.05);border-radius:2px;margin-top:2px"><div style="height:100%;width:' + barW + '%;background:linear-gradient(90deg,#6366f1,var(--green-strong));border-radius:2px;transition:width .3s"></div></div>'
           + '</div>'
           + '<div style="text-align:right;color:var(--text);font-weight:600">' + (p.targets || 0) + '</div>'
-          + '<div style="text-align:right;color:#22c55e">' + (p.friended || 0) + '</div>'
-          + '<div style="text-align:right;color:#a855f7">' + (p.reply_rate ? (p.reply_rate * 100).toFixed(0) + '%' : '—') + '</div>'
+          + '<div style="text-align:right;color:var(--green-strong)">' + (p.friended || 0) + '</div>'
+          + '<div style="text-align:right;color:var(--accent-2)">' + (p.reply_rate ? (p.reply_rate * 100).toFixed(0) + '%' : '—') + '</div>'
           + '</div>';
       }).join('');
       panel.innerHTML = '<div style="display:grid;grid-template-columns:28px 1fr 48px 48px 48px;gap:4px;padding:0 6px 4px;font-size:8px;color:var(--text-dim)">'
@@ -1250,7 +1250,7 @@
       var bestEl = document.getElementById('fb-pb-best-greeting');
       if (bestEl && r.best_greeting && r.best_greeting.text) {
         bestEl.style.display = 'block';
-        bestEl.innerHTML = '🔥 <b style="color:#4ade80">最佳话术</b> (' + (r.best_greeting.reply_rate * 100).toFixed(0) + '% 回复): <span style="color:var(--text)">' + _escHtml(r.best_greeting.text) + '</span>';
+        bestEl.innerHTML = '🔥 <b style="color:var(--green-soft)">最佳话术</b> (' + (r.best_greeting.reply_rate * 100).toFixed(0) + '% 回复): <span style="color:var(--text)">' + _escHtml(r.best_greeting.text) + '</span>';
       } else if (bestEl) {
         bestEl.style.display = 'none';
       }
@@ -1375,7 +1375,7 @@
       var refs = _fbReferrals || {};
       var devKeys = Object.keys(refs);
       if (!devKeys.length) {
-        _refBadgeHtml = '<div style="font-size:9px;color:#f59e0b;padding:3px 8px;background:rgba(245,158,11,.08);border-radius:4px;margin-bottom:8px">⚠️ 引流账号未配置</div>';
+        _refBadgeHtml = '<div style="font-size:9px;color:var(--amber);padding:3px 8px;background:rgba(245,158,11,.08);border-radius:4px;margin-bottom:8px">⚠️ 引流账号未配置</div>';
         return;
       }
       var first = refs[devKeys[0]] || {};
@@ -1385,7 +1385,7 @@
       var chips = order.map(function (ch) {
         var val = first[ch];
         var ok = val && val.trim();
-        return '<span style="font-size:8px;padding:1px 5px;border-radius:3px;' + (ok ? 'background:rgba(34,197,94,.1);color:#22c55e' : 'background:rgba(239,68,68,.08);color:#ef4444;opacity:.6') + '">' + (_chMeta[ch] || ch) + (ok ? '✓' : '✗') + '</span>';
+        return '<span style="font-size:8px;padding:1px 5px;border-radius:3px;' + (ok ? 'background:rgba(34,197,94,.1);color:var(--green-strong)' : 'background:rgba(239,68,68,.08);color:var(--red-strong);opacity:.6') + '">' + (_chMeta[ch] || ch) + (ok ? '✓' : '✗') + '</span>';
       }).join('');
       _refBadgeHtml = '<div style="display:flex;gap:3px;flex-wrap:wrap;margin-bottom:8px">' + chips + '</div>';
     })();
@@ -1399,9 +1399,9 @@
       var isRecommended = _recommendedCategory && p.category === _recommendedCategory && phaseOk;
       var gateBadge = '';
       if (!phaseOk) {
-        gateBadge = '<span style="position:absolute;top:8px;right:8px;font-size:9px;padding:2px 6px;background:rgba(239,68,68,.15);color:#f87171;border-radius:4px;font-weight:600">⚠ 阶段不匹配</span>';
+        gateBadge = '<span style="position:absolute;top:8px;right:8px;font-size:9px;padding:2px 6px;background:rgba(239,68,68,.15);color:var(--red);border-radius:4px;font-weight:600">⚠ 阶段不匹配</span>';
       } else if (isRecommended) {
-        gateBadge = '<span style="position:absolute;top:8px;right:8px;font-size:9px;padding:2px 6px;background:rgba(34,197,94,.15);color:#22c55e;border-radius:4px;font-weight:600;box-shadow:0 0 8px rgba(34,197,94,.3)">🌟 推荐</span>';
+        gateBadge = '<span style="position:absolute;top:8px;right:8px;font-size:9px;padding:2px 6px;background:rgba(34,197,94,.15);color:var(--green-strong);border-radius:4px;font-weight:600;box-shadow:0 0 8px rgba(34,197,94,.3)">🌟 推荐</span>';
       }
       var cardOpacity = phaseOk ? '1' : '0.55';
       var stepsArr = (p.steps || []).map(function (s) { return s.type.replace('facebook_', '').replace(/_/g,' '); });
@@ -1423,12 +1423,12 @@
             <div style="font-size:10px;color:var(--text-dim);margin-bottom:10px;line-height:1.4">${p.detail}</div>
             <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-bottom:10px">${stepsFlow}</div>
             ${refBadge}
-            ${p.next_hint ? '<div style="font-size:9px;color:#60a5fa;margin-bottom:8px;padding:4px 8px;background:rgba(96,165,250,.08);border-radius:4px;line-height:1.4">💡 '+_escHtml(p.next_hint)+'</div>' : ''}
+            ${p.next_hint ? '<div style="font-size:9px;color:var(--blue-soft);margin-bottom:8px;padding:4px 8px;background:rgba(96,165,250,.08);border-radius:4px;line-height:1.4">💡 '+_escHtml(p.next_hint)+'</div>' : ''}
             <div style="display:flex;justify-content:space-between;align-items:center;padding-top:10px;border-top:1px solid var(--border)">
               <span style="font-size:10px;color:var(--text-dim)">⏱ ≈${p.estimated_minutes}min</span>
-              ${p.today_runs ? '<span style="font-size:9px;padding:1px 6px;background:rgba(96,165,250,.12);color:#60a5fa;border-radius:3px;font-weight:600">今日 '+p.today_runs+' 次</span>' : '<span style="font-size:10px;color:'+p.color+';font-weight:600">📊 '+p.estimated_output+'</span>'}
+              ${p.today_runs ? '<span style="font-size:9px;padding:1px 6px;background:rgba(96,165,250,.12);color:var(--blue-soft);border-radius:3px;font-weight:600">今日 '+p.today_runs+' 次</span>' : '<span style="font-size:10px;color:'+p.color+';font-weight:600">📊 '+p.estimated_output+'</span>'}
               <span style="display:flex;align-items:center;gap:6px">
-                ${p._custom ? '<span onclick="event.stopPropagation();fbDeleteCustomPreset(\''+p.key+'\')" style="font-size:10px;color:#ef4444;cursor:pointer;padding:2px 6px;border-radius:4px;background:rgba(239,68,68,.08)" title="删除">🗑</span>' : '<span onclick="event.stopPropagation();fbSavePresetAs(\''+p.key+'\')" style="font-size:10px;color:#f59e0b;cursor:pointer;padding:2px 6px;border-radius:4px;background:rgba(245,158,11,.08)" title="另存为自定义">⭐</span>'}
+                ${p._custom ? '<span onclick="event.stopPropagation();fbDeleteCustomPreset(\''+p.key+'\')" style="font-size:10px;color:var(--red-strong);cursor:pointer;padding:2px 6px;border-radius:4px;background:rgba(239,68,68,.08)" title="删除">🗑</span>' : '<span onclick="event.stopPropagation();fbSavePresetAs(\''+p.key+'\')" style="font-size:10px;color:var(--amber);cursor:pointer;padding:2px 6px;border-radius:4px;background:rgba(245,158,11,.08)" title="另存为自定义">⭐</span>'}
                 <span style="font-size:12px;color:${p.color};font-weight:700">启动 →</span>
               </span>
             </div>
@@ -1444,8 +1444,8 @@
       if (!items.length) return '';
       var cards = items.map(_renderCard).join('');
       var isRecSection = _recommendedCategory === cat.key;
-      var sectionBorder = isRecSection ? 'border-left:3px solid #22c55e;padding-left:10px' : '';
-      var recLabel = isRecSection ? '<span style="font-size:9px;padding:1px 6px;background:rgba(34,197,94,.15);color:#22c55e;border-radius:3px;font-weight:600;margin-left:4px">适合当前阶段</span>' : '';
+      var sectionBorder = isRecSection ? 'border-left:3px solid var(--green-strong);padding-left:10px' : '';
+      var recLabel = isRecSection ? '<span style="font-size:9px;padding:1px 6px;background:rgba(34,197,94,.15);color:var(--green-strong);border-radius:3px;font-weight:600;margin-left:4px">适合当前阶段</span>' : '';
       return `
         <div style="margin-bottom:16px;${sectionBorder}">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
@@ -1479,7 +1479,7 @@
                 </div>
               </div>
             </div>
-            <button onclick="document.getElementById('fb-presets-modal').remove()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px;width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;transition:all .12s" onmouseover="this.style.background='rgba(239,68,68,.15)';this.style.color='#ef4444'" onmouseout="this.style.background='none';this.style.color='var(--text-muted)'">✕</button>
+            <button onclick="document.getElementById('fb-presets-modal').remove()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px;width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;transition:all .12s" onmouseover="this.style.background='rgba(239,68,68,.15)';this.style.color='var(--red-strong)'" onmouseout="this.style.background='none';this.style.color='var(--text-muted)'">✕</button>
           </div>
 
           <!-- 客群构建器（替代旧版单一下拉） -->
@@ -1492,14 +1492,14 @@
 
         <!-- 方案卡片（按漏斗阶段分区） -->
         <div style="padding:0 24px 20px">
-          ${presetSections || '<div style="color:#f87171;padding:20px;text-align:center">未加载到预设 — 请检查 /facebook/presets</div>'}
+          ${presetSections || '<div style="color:var(--red);padding:20px;text-align:center">未加载到预设 — 请检查 /facebook/presets</div>'}
 
           <div style="padding-top:10px;border-top:1px solid var(--border);font-size:10px;color:var(--text-dim);line-height:1.5;display:flex;align-items:center;gap:12px">
             <span>💡 点击客群面板展开配置 · 修改即时生效</span>
             <span style="margin-left:auto;display:flex;gap:8px;align-items:center">
-              <span style="display:flex;align-items:center;gap:3px"><span style="width:6px;height:6px;border-radius:50%;background:#22c55e"></span>安全</span>
-              <span style="display:flex;align-items:center;gap:3px"><span style="width:6px;height:6px;border-radius:50%;background:#f59e0b"></span>中风险</span>
-              <span style="display:flex;align-items:center;gap:3px"><span style="width:6px;height:6px;border-radius:50%;background:#ef4444"></span>高风险</span>
+              <span style="display:flex;align-items:center;gap:3px"><span style="width:6px;height:6px;border-radius:50%;background:var(--green-strong)"></span>安全</span>
+              <span style="display:flex;align-items:center;gap:3px"><span style="width:6px;height:6px;border-radius:50%;background:var(--amber)"></span>中风险</span>
+              <span style="display:flex;align-items:center;gap:3px"><span style="width:6px;height:6px;border-radius:50%;background:var(--red-strong)"></span>高风险</span>
             </span>
           </div>
         </div>
@@ -1640,19 +1640,19 @@
         <div style="margin-top:10px;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px" id="fb-nh-kpis">
           <div style="background:var(--bg-main);border:1px solid var(--border);border-radius:8px;padding:8px">
             <div style="font-size:10px;color:var(--text-dim)">唯一姓名</div>
-            <div id="fb-nh-kpi-unique" style="font-size:18px;font-weight:700;color:#60a5fa">-</div>
+            <div id="fb-nh-kpi-unique" style="font-size:18px;font-weight:700;color:var(--blue-soft)">-</div>
           </div>
           <div style="background:var(--bg-main);border:1px solid var(--border);border-radius:8px;padding:8px">
             <div style="font-size:10px;color:var(--text-dim)">高置信种子</div>
-            <div id="fb-nh-kpi-high" style="font-size:18px;font-weight:700;color:#22c55e">-</div>
+            <div id="fb-nh-kpi-high" style="font-size:18px;font-weight:700;color:var(--green-strong)">-</div>
           </div>
           <div style="background:var(--bg-main);border:1px solid var(--border);border-radius:8px;padding:8px">
             <div style="font-size:10px;color:var(--text-dim)">需确认</div>
-            <div id="fb-nh-kpi-review" style="font-size:18px;font-weight:700;color:#f59e0b">-</div>
+            <div id="fb-nh-kpi-review" style="font-size:18px;font-weight:700;color:var(--amber)">-</div>
           </div>
           <div style="background:var(--bg-main);border:1px solid var(--border);border-radius:8px;padding:8px">
             <div style="font-size:10px;color:var(--text-dim)">弱种子</div>
-            <div id="fb-nh-kpi-weak" style="font-size:18px;font-weight:700;color:#ef4444">-</div>
+            <div id="fb-nh-kpi-weak" style="font-size:18px;font-weight:700;color:var(--red-strong)">-</div>
           </div>
         </div>
 
@@ -1855,14 +1855,14 @@
           <td style="padding:8px;font-weight:600;color:var(--text)">${_escHtml(x.display_name || '')}</td>
           <td style="padding:8px"><span style="color:${badgeColor(x.status)};font-weight:700">${_escHtml(x.status || '')}</span></td>
           <td style="padding:8px;text-align:right;color:#38bdf8;font-weight:700">${seed}</td>
-          <td style="padding:8px;text-align:right;color:#22c55e;font-weight:700">${prof}</td>
+          <td style="padding:8px;text-align:right;color:var(--green-strong);font-weight:700">${prof}</td>
           <td style="padding:8px;text-align:center;color:${ev.age_37plus_confirmed ? '#22c55e' : '#f59e0b'};font-weight:700">${_escHtml(evidence)}</td>
           <td style="padding:8px;color:var(--text-dim);font-size:11px">${_escHtml(reasons)}</td>
           <td style="padding:8px;color:var(--text-muted);font-size:11px">${_escHtml(x.last_touch_at || x.created_at || '')}</td>
           <td style="padding:8px;text-align:right;white-space:nowrap">
-            <button onclick="fbNameHunterCandidateAction(${Number(x.id) || 0}, 'qualify')" title="人工确认为高匹配" style="padding:4px 7px;border:1px solid rgba(34,197,94,.35);background:rgba(34,197,94,.12);color:#22c55e;border-radius:6px;cursor:pointer;font-size:11px">通过</button>
+            <button onclick="fbNameHunterCandidateAction(${Number(x.id) || 0}, 'qualify')" title="人工确认为高匹配" style="padding:4px 7px;border:1px solid rgba(34,197,94,.35);background:rgba(34,197,94,.12);color:var(--green-strong);border-radius:6px;cursor:pointer;font-size:11px">通过</button>
             <button onclick="fbNameHunterCandidateAction(${Number(x.id) || 0}, 'requeue')" title="重新进入资料预筛" style="padding:4px 7px;border:1px solid rgba(14,165,233,.35);background:rgba(14,165,233,.12);color:#38bdf8;border-radius:6px;cursor:pointer;font-size:11px">重筛</button>
-            <button onclick="fbNameHunterCandidateAction(${Number(x.id) || 0}, 'blocklist')" title="排除该候选" style="padding:4px 7px;border:1px solid rgba(239,68,68,.35);background:rgba(239,68,68,.12);color:#ef4444;border-radius:6px;cursor:pointer;font-size:11px">排除</button>
+            <button onclick="fbNameHunterCandidateAction(${Number(x.id) || 0}, 'blocklist')" title="排除该候选" style="padding:4px 7px;border:1px solid rgba(239,68,68,.35);background:rgba(239,68,68,.12);color:var(--red-strong);border-radius:6px;cursor:pointer;font-size:11px">排除</button>
           </td>
         </tr>`;
       }).join('');
@@ -1872,7 +1872,7 @@
         return `<div style="background:var(--bg-main);border:1px solid var(--border);border-radius:8px;padding:9px">
           <div style="font-size:10px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_escHtml(s.source_ref || 'name_hunter')}</div>
           <div style="display:flex;justify-content:space-between;gap:6px;margin-top:4px">
-            <span style="color:#22c55e;font-weight:700">Q ${Number(s.qualified || 0)}</span>
+            <span style="color:var(--green-strong);font-weight:700">Q ${Number(s.qualified || 0)}</span>
             <span style="color:var(--text-muted)">总 ${Number(s.total || 0)}</span>
             <span style="color:#38bdf8">${Math.round(Number(s.qualified_rate || 0) * 100)}%</span>
           </div>
@@ -1916,7 +1916,7 @@
         </table>`;
     } catch (e) {
       const body = document.getElementById('fb-nh-cand-body');
-      if (body) body.innerHTML = '<div style="color:#ef4444">加载失败: ' + _escHtml(e.message || e) + '</div>';
+      if (body) body.innerHTML = '<div style="color:var(--red-strong)">加载失败: ' + _escHtml(e.message || e) + '</div>';
     }
   };
 
@@ -2002,7 +2002,7 @@
   function _renderField(presetKey, field, spec, persona, prefill) {
     const label = _escHtml(spec.label || field);
     const help = spec.help ? `<div style="font-size:10px;color:var(--text-dim);margin-top:3px;line-height:1.4">${_escHtml(spec.help)}</div>` : '';
-    const required = spec.required ? '<span style="color:#ef4444;margin-left:3px">*</span>' : '';
+    const required = spec.required ? '<span style="color:var(--red-strong);margin-left:3px">*</span>' : '';
     const aiBtn = spec.ai_assist
       ? `<button type="button" data-ai-field="${field}"
             onclick="fbDialogAiSuggest('${presetKey}','${field}')"
@@ -2023,7 +2023,7 @@
       // 多行 textarea；fallback_from=persona.seed_group_keywords 时提示当前 persona 的 seeds
       const ph = _escHtml(spec.placeholder || (personaSeeds || ''));
       const fb = spec.fallback_from === 'persona.seed_group_keywords' && personaSeeds
-        ? `<div style="font-size:10px;color:#60a5fa;margin-top:3px">💡 留空将使用客群默认: ${_escHtml(personaSeeds.split('\n').join(' / '))}</div>`
+        ? `<div style="font-size:10px;color:var(--blue-soft);margin-top:3px">💡 留空将使用客群默认: ${_escHtml(personaSeeds.split('\n').join(' / '))}</div>`
         : '';
       inputHtml = `
         <textarea data-field="${field}" data-type="list_str" rows="${Math.min(Math.max(spec.max||3,2),5)}"
@@ -2058,7 +2058,7 @@
           范围 ${spec.min || 1}–${spec.max || 999}
         </span>`;
     } else {
-      inputHtml = `<div style="color:#f87171;font-size:11px">⚠ 未知字段类型: ${_escHtml(spec.type)}</div>`;
+      inputHtml = `<div style="color:var(--red);font-size:11px">⚠ 未知字段类型: ${_escHtml(spec.type)}</div>`;
     }
     return `
       <div data-field-row="${field}" style="margin-bottom:14px">
@@ -2128,7 +2128,7 @@
     });
     var pop = document.createElement('div');
     pop.id = 'fb-ai-suggest-pop';
-    pop.style.cssText = 'position:fixed;z-index:10001;background:var(--bg-card);border:1px solid #a855f7;'
+    pop.style.cssText = 'position:fixed;z-index:10001;background:var(--bg-card);border:1px solid var(--accent-2);'
       + 'border-radius:10px;padding:12px;max-width:520px;width:92%;box-shadow:0 10px 40px rgba(0,0,0,.5);'
       + 'top:50%;left:50%;transform:translate(-50%,-50%)';
     pop.innerHTML = '<div style="font-size:13px;font-weight:600;margin-bottom:8px;color:#c084fc">'
@@ -2138,9 +2138,9 @@
       + normalized.map(function (c, i) {
         var badge = '';
         if (c.proven && c.reply_rate != null) {
-          badge = '<span style="display:inline-block;margin-left:6px;padding:1px 6px;background:rgba(34,197,94,.12);color:#22c55e;border-radius:3px;font-size:9px;font-weight:600;vertical-align:middle">高回复 ' + (c.reply_rate * 100).toFixed(0) + '%</span>';
+          badge = '<span style="display:inline-block;margin-left:6px;padding:1px 6px;background:rgba(34,197,94,.12);color:var(--green-strong);border-radius:3px;font-size:9px;font-weight:600;vertical-align:middle">高回复 ' + (c.reply_rate * 100).toFixed(0) + '%</span>';
         } else if (c.proven) {
-          badge = '<span style="display:inline-block;margin-left:6px;padding:1px 6px;background:rgba(34,197,94,.12);color:#22c55e;border-radius:3px;font-size:9px;font-weight:600;vertical-align:middle">历史验证</span>';
+          badge = '<span style="display:inline-block;margin-left:6px;padding:1px 6px;background:rgba(34,197,94,.12);color:var(--green-strong);border-radius:3px;font-size:9px;font-weight:600;vertical-align:middle">历史验证</span>';
         }
         return '<div style="padding:8px 10px;background:var(--bg-main);border:1px solid ' + (c.proven ? 'rgba(34,197,94,.3)' : 'var(--border)') + ';'
           + 'border-radius:6px;margin-bottom:6px;font-size:12px;cursor:pointer;line-height:1.5"'
@@ -2184,7 +2184,7 @@
     if (existing) existing.remove();
     var loading = document.createElement('div');
     loading.id = 'fb-ai-suggest-pop';
-    loading.style.cssText = 'position:fixed;z-index:10001;background:var(--bg-card);border:1px solid #a855f7;'
+    loading.style.cssText = 'position:fixed;z-index:10001;background:var(--bg-card);border:1px solid var(--accent-2);'
       + 'border-radius:10px;padding:20px;max-width:520px;width:92%;box-shadow:0 10px 40px rgba(0,0,0,.5);'
       + 'top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;color:#c084fc;font-size:13px';
     loading.textContent = '✨ AI 正在生成个性化文案...';
@@ -2252,7 +2252,7 @@
       var stats = (data && data.stats) || {};
       _fbRenderGLContent(overlay, data, stats);
     } catch (e) {
-      overlay.querySelector('div').innerHTML = '<div style="color:#ef4444;text-align:center;padding:20px">加载失败: ' + _escHtml(e.message || String(e)) + '</div>';
+      overlay.querySelector('div').innerHTML = '<div style="color:var(--red-strong);text-align:center;padding:20px">加载失败: ' + _escHtml(e.message || String(e)) + '</div>';
     }
   };
 
@@ -2269,12 +2269,12 @@
       + '<div style="font-size:22px;font-weight:700;color:var(--text)">' + (stats.total || 0) + '</div></div>'
       + '<div style="padding:10px 14px;background:var(--bg-main);border:1px solid var(--border);border-radius:10px">'
       + '<div style="font-size:9px;color:var(--text-dim)">平均回复率</div>'
-      + '<div style="font-size:22px;font-weight:700;color:#22c55e">' + ((stats.avg_reply_rate || 0) * 100).toFixed(1) + '%</div></div>'
+      + '<div style="font-size:22px;font-weight:700;color:var(--green-strong)">' + ((stats.avg_reply_rate || 0) * 100).toFixed(1) + '%</div></div>'
       + '<div style="padding:10px 14px;background:var(--bg-main);border:1px solid var(--border);border-radius:10px">'
       + '<div style="font-size:9px;color:var(--text-dim);margin-bottom:4px">🏆 最佳话术</div>'
       + ((stats.best_greetings || []).slice(0, 2).map(function (g) {
           return '<div style="font-size:9px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.5">'
-            + '<span style="color:#22c55e;font-weight:600">' + ((g.reply_rate || 0) * 100).toFixed(0) + '%</span> '
+            + '<span style="color:var(--green-strong);font-weight:600">' + ((g.reply_rate || 0) * 100).toFixed(0) + '%</span> '
             + _escHtml((g.text_ja || '').substring(0, 30)) + '</div>';
         }).join('') || '<span style="font-size:9px;color:var(--text-dim)">暂无数据</span>')
       + '</div></div>';
@@ -2291,8 +2291,8 @@
     var toolHtml = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">'
       + '<input id="fb-gl-search" type="text" placeholder="🔍 搜索话术..." value="' + _escAttr(_fbGLSearch) + '" oninput="_fbGLSearchFilter()" style="flex:1;min-width:140px;background:var(--bg-main);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:10px">'
       + '<div style="display:flex;gap:4px">' + sortBtns + '</div>'
-      + '<button onclick="fbAddGreetingPrompt()" style="padding:4px 12px;background:linear-gradient(135deg,#22c55e,#16a34a);border:none;color:#fff;border-radius:6px;cursor:pointer;font-size:10px;font-weight:600">＋ 新增</button>'
-      + '<button onclick="fbAIGenerateGreetings()" style="padding:4px 12px;background:linear-gradient(135deg,#a855f7,#7c3aed);border:none;color:#fff;border-radius:6px;cursor:pointer;font-size:10px;font-weight:600">✨ AI 生成</button>'
+      + '<button onclick="fbAddGreetingPrompt()" style="padding:4px 12px;background:linear-gradient(135deg,var(--green-strong),var(--green-deep));border:none;color:#fff;border-radius:6px;cursor:pointer;font-size:10px;font-weight:600">＋ 新增</button>'
+      + '<button onclick="fbAIGenerateGreetings()" style="padding:4px 12px;background:linear-gradient(135deg,var(--accent-2),#7c3aed);border:none;color:#fff;border-radius:6px;cursor:pointer;font-size:10px;font-weight:600">✨ AI 生成</button>'
       + '</div>';
 
     // ── 表格 ──
@@ -2313,8 +2313,8 @@
         + '</div></td>'
         + '<td style="padding:7px 4px;font-size:10px;text-align:center;color:var(--text-muted)">' + (g.sent_count || 0) + '/' + (g.replied_count || 0) + '</td>'
         + '<td style="padding:7px 4px;text-align:center;white-space:nowrap">'
-        + '<button onclick="fbCopyGreeting(' + g.id + ')" style="font-size:9px;padding:2px 6px;background:none;border:1px solid rgba(96,165,250,.25);color:#60a5fa;border-radius:3px;cursor:pointer;margin-right:2px" title="复制">📋</button>'
-        + '<button onclick="fbDeleteGreeting(' + g.id + ')" style="font-size:9px;padding:2px 6px;background:none;border:1px solid rgba(239,68,68,.25);color:#ef4444;border-radius:3px;cursor:pointer" title="删除">✕</button></td>'
+        + '<button onclick="fbCopyGreeting(' + g.id + ')" style="font-size:9px;padding:2px 6px;background:none;border:1px solid rgba(96,165,250,.25);color:var(--blue-soft);border-radius:3px;cursor:pointer;margin-right:2px" title="复制">📋</button>'
+        + '<button onclick="fbDeleteGreeting(' + g.id + ')" style="font-size:9px;padding:2px 6px;background:none;border:1px solid rgba(239,68,68,.25);color:var(--red-strong);border-radius:3px;cursor:pointer" title="删除">✕</button></td>'
         + '</tr>';
     }).join('');
 
@@ -2403,7 +2403,7 @@
       + '<option value="manual">手动</option><option value="casual">轻松</option><option value="formal">正式</option><option value="warm">温暖</option></select>'
       + '<span style="flex:1"></span>'
       + '<button onclick="document.getElementById(\'fb-gl-add-popup\').remove()" style="padding:5px 12px;background:none;border:1px solid var(--border);color:var(--text-dim);border-radius:6px;cursor:pointer;font-size:10px">取消</button>'
-      + '<button onclick="_fbDoAddGreeting()" style="padding:5px 14px;background:linear-gradient(135deg,#22c55e,#16a34a);border:none;color:#fff;border-radius:6px;cursor:pointer;font-size:10px;font-weight:600">添加</button>'
+      + '<button onclick="_fbDoAddGreeting()" style="padding:5px 14px;background:linear-gradient(135deg,var(--green-strong),var(--green-deep));border:none;color:#fff;border-radius:6px;cursor:pointer;font-size:10px;font-weight:600">添加</button>'
       + '</div></div>';
     popup.addEventListener('click', function (e) { if (e.target === popup) popup.remove(); });
     document.body.appendChild(popup);
@@ -2474,13 +2474,13 @@
       + '<div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:4px">✨ AI 生成话术</div>'
       + '<div style="font-size:9px;color:var(--text-dim);margin-bottom:12px">基于客群 ' + _escHtml(pk) + ' 属性自动生成匹配话术</div>'
       + '<div style="display:flex;gap:8px;margin-bottom:12px">'
-      + '<button onclick="_fbAIGenDo(\'verification_note\')" class="fb-ai-gen-btn" style="flex:1;padding:8px;background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.3);color:#60a5fa;border-radius:8px;cursor:pointer;font-size:11px;font-weight:600;transition:all .12s" onmouseover="this.style.background=\'rgba(59,130,246,.15)\'" onmouseout="this.style.background=\'rgba(59,130,246,.08)\'">📝 生成验证语</button>'
+      + '<button onclick="_fbAIGenDo(\'verification_note\')" class="fb-ai-gen-btn" style="flex:1;padding:8px;background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.3);color:var(--blue-soft);border-radius:8px;cursor:pointer;font-size:11px;font-weight:600;transition:all .12s" onmouseover="this.style.background=\'rgba(59,130,246,.15)\'" onmouseout="this.style.background=\'rgba(59,130,246,.08)\'">📝 生成验证语</button>'
       + '<button onclick="_fbAIGenDo(\'greeting\')" class="fb-ai-gen-btn" style="flex:1;padding:8px;background:rgba(168,85,247,.08);border:1px solid rgba(168,85,247,.3);color:#c084fc;border-radius:8px;cursor:pointer;font-size:11px;font-weight:600;transition:all .12s" onmouseover="this.style.background=\'rgba(168,85,247,.15)\'" onmouseout="this.style.background=\'rgba(168,85,247,.08)\'">💬 生成打招呼</button>'
       + '</div>'
       + '<div id="fb-ai-gen-results" style="min-height:40px"></div>'
       + '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px">'
       + '<button onclick="document.getElementById(\'fb-gl-ai-popup\').remove()" style="padding:5px 12px;background:none;border:1px solid var(--border);color:var(--text-dim);border-radius:6px;cursor:pointer;font-size:10px">关闭</button>'
-      + '<button id="fb-ai-gen-batch-btn" onclick="_fbAIGenBatchAdd()" style="display:none;padding:5px 14px;background:linear-gradient(135deg,#22c55e,#16a34a);border:none;color:#fff;border-radius:6px;cursor:pointer;font-size:10px;font-weight:600">全部入库</button>'
+      + '<button id="fb-ai-gen-batch-btn" onclick="_fbAIGenBatchAdd()" style="display:none;padding:5px 14px;background:linear-gradient(135deg,var(--green-strong),var(--green-deep));border:none;color:#fff;border-radius:6px;cursor:pointer;font-size:10px;font-weight:600">全部入库</button>'
       + '</div></div>';
     popup.addEventListener('click', function (e) { if (e.target === popup) popup.remove(); });
     document.body.appendChild(popup);
@@ -2507,16 +2507,16 @@
         var rr = item.reply_rate;
         return '<div style="display:flex;align-items:center;gap:8px;padding:8px;background:var(--bg-main);border:1px solid var(--border);border-radius:8px;margin-bottom:6px">'
           + '<div style="flex:1;font-size:11px;color:var(--text);line-height:1.4">' + _escHtml(text)
-          + (proven ? ' <span style="font-size:8px;background:rgba(34,197,94,.15);color:#22c55e;padding:1px 4px;border-radius:3px">实证' + (rr ? ' ' + (rr * 100).toFixed(0) + '%' : '') + '</span>' : '')
+          + (proven ? ' <span style="font-size:8px;background:rgba(34,197,94,.15);color:var(--green-strong);padding:1px 4px;border-radius:3px">实证' + (rr ? ' ' + (rr * 100).toFixed(0) + '%' : '') + '</span>' : '')
           + '</div>'
-          + '<button onclick="_fbAIGenAddOne(' + idx + ',this)" style="padding:3px 10px;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3);color:#22c55e;border-radius:5px;cursor:pointer;font-size:9px;font-weight:600;white-space:nowrap">入库</button>'
+          + '<button onclick="_fbAIGenAddOne(' + idx + ',this)" style="padding:3px 10px;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3);color:var(--green-strong);border-radius:5px;cursor:pointer;font-size:9px;font-weight:600;white-space:nowrap">入库</button>'
           + '</div>';
       }).join('');
       results.innerHTML = html || '<div style="text-align:center;padding:12px;color:var(--text-dim);font-size:11px">未能生成，请重试</div>';
       var batchBtn = document.getElementById('fb-ai-gen-batch-btn');
       if (batchBtn && _fbAIGenSuggestions.length > 1) batchBtn.style.display = '';
     } catch (e) {
-      results.innerHTML = '<div style="text-align:center;padding:12px;color:#ef4444;font-size:11px">生成失败: ' + _escHtml(e.message || String(e)) + '</div>';
+      results.innerHTML = '<div style="text-align:center;padding:12px;color:var(--red-strong);font-size:11px">生成失败: ' + _escHtml(e.message || String(e)) + '</div>';
     }
     document.querySelectorAll('.fb-ai-gen-btn').forEach(function (b) { b.style.opacity = ''; b.style.pointerEvents = ''; });
   };
@@ -2533,7 +2533,7 @@
       btn.style.background = 'rgba(34,197,94,.05)';
     } catch (e) {
       btn.textContent = (e.message || '').indexOf('已存在') !== -1 ? '已存在' : '失败';
-      btn.style.color = '#ef4444';
+      btn.style.color = 'var(--red-strong)';
     }
   };
 
@@ -2605,7 +2605,7 @@
     missingFields.forEach(function (field) {
       const row = document.querySelector('[data-field-row="' + field + '"]');
       if (row) {
-        row.style.borderLeft = '3px solid #ef4444';
+        row.style.borderLeft = '3px solid var(--red-strong)';
         row.style.paddingLeft = '8px';
       }
     });
@@ -2677,7 +2677,7 @@
               </div>
             </div>
             <button onclick="document.getElementById('fb-launch-input-dialog').remove()"
-              style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:16px;width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;transition:all .12s" onmouseover="this.style.background='rgba(239,68,68,.15)';this.style.color='#ef4444'" onmouseout="this.style.background='none';this.style.color='var(--text-muted)'">✕</button>
+              style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:16px;width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;transition:all .12s" onmouseover="this.style.background='rgba(239,68,68,.15)';this.style.color='var(--red-strong)'" onmouseout="this.style.background='none';this.style.color='var(--text-muted)'">✕</button>
           </div>
         </div>
 
@@ -2728,7 +2728,7 @@
         if (cnt) cnt.textContent = rec.length;
         // 添加浅色提示，让用户知道这是自动推荐
         var hint = document.createElement('div');
-        hint.style.cssText = 'font-size:9px;color:#a78bfa;margin-top:2px;opacity:.8';
+        hint.style.cssText = 'font-size:9px;color:var(--violet-soft);margin-top:2px;opacity:.8';
         hint.textContent = '✨ 已自动填入推荐文案，可直接使用或点「AI 建议」选择其他';
         ta.parentNode.appendChild(hint);
       }
@@ -2746,7 +2746,7 @@
         var _chMeta = {line: {icon: '💚', zh: 'LINE'}, whatsapp: {icon: '💬', zh: 'WA'}, instagram: {icon: '📷', zh: 'IG'}, telegram: {icon: '✈️', zh: 'TG'}};
         var devCount = Object.keys(_refs).length;
         if (!devCount) {
-          _refStatus.innerHTML = '<span style="color:#f59e0b">⚠️ 尚未配置任何引流账号 — 请先配置再启动引流类任务</span>';
+          _refStatus.innerHTML = '<span style="color:var(--amber)">⚠️ 尚未配置任何引流账号 — 请先配置再启动引流类任务</span>';
           return;
         }
         var firstDev = _refs[Object.keys(_refs)[0]] || {};
@@ -2757,7 +2757,7 @@
           var ok = val && val.trim();
           var isMain = ch === _mainCh;
           var badge = isMain ? '<span style="font-size:7px;padding:0 3px;background:rgba(14,165,233,.2);color:#0ea5e9;border-radius:2px;margin-left:2px;vertical-align:top">推荐</span>' : '';
-          return '<span style="margin-right:6px;' + (ok ? 'color:#22c55e' : (isMain ? 'color:#ef4444;font-weight:600' : 'color:#ef4444')) + '">'
+          return '<span style="margin-right:6px;' + (ok ? 'color:var(--green-strong)' : (isMain ? 'color:var(--red-strong);font-weight:600' : 'color:var(--red-strong)')) + '">'
             + m.icon + ' ' + m.zh + badge + ': ' + (ok ? _escHtml(val.substring(0, 20)) : '未配') + '</span>';
         }).join('');
         var _personaTag = (rr.persona && rr.persona.short_label) ? '<span style="font-size:9px;color:var(--text-dim);margin-left:4px">' + (rr.persona.display_flag || '') + ' ' + rr.persona.short_label + '</span>' : '';
@@ -2807,13 +2807,13 @@
         setTimeout(function () {
           var nb = document.createElement('div');
           nb.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:9999;background:var(--bg-card);'
-            + 'border:1px solid #60a5fa;border-radius:12px;padding:14px 18px;max-width:360px;'
+            + 'border:1px solid var(--blue-soft);border-radius:12px;padding:14px 18px;max-width:360px;'
             + 'box-shadow:0 8px 30px rgba(0,0,0,.4);animation:fadeIn .3s';
-          nb.innerHTML = '<div style="font-size:12px;color:#60a5fa;font-weight:600;margin-bottom:6px">💡 下一步建议</div>'
+          nb.innerHTML = '<div style="font-size:12px;color:var(--blue-soft);font-weight:600;margin-bottom:6px">💡 下一步建议</div>'
             + '<div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;line-height:1.4">' + _escHtml(preset.next_hint) + '</div>'
             + '<div style="display:flex;gap:8px;justify-content:flex-end">'
             + '<button onclick="this.parentNode.parentNode.remove()" style="padding:4px 12px;background:none;border:1px solid var(--border);color:var(--text-muted);border-radius:6px;cursor:pointer;font-size:11px">稍后</button>'
-            + '<button onclick="this.parentNode.parentNode.remove();fbLaunchPresetWithPersona(\'' + _nextKey + '\',' + (_did ? '\'' + _did + '\'' : 'null') + ')" style="padding:4px 14px;background:linear-gradient(135deg,#60a5fa,#3b82f6);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600">立即前往 →</button>'
+            + '<button onclick="this.parentNode.parentNode.remove();fbLaunchPresetWithPersona(\'' + _nextKey + '\',' + (_did ? '\'' + _did + '\'' : 'null') + ')" style="padding:4px 14px;background:linear-gradient(135deg,var(--blue-soft),var(--blue-strong));color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600">立即前往 →</button>'
             + '</div>';
           document.body.appendChild(nb);
           setTimeout(function () { if (nb.parentNode) nb.remove(); }, 15000);
@@ -2896,7 +2896,7 @@
         </div>`;
     }).join('');
     const ovHint = _fbPersonaOverrideKey
-      ? `<div style="font-size:10px;color:#f59e0b;margin-bottom:8px">运行时覆盖: <code>${_fbPersonaOverrideKey}</code> · YAML 默认: <code>${_fbPersonaYamlDefault || '—'}</code></div>`
+      ? `<div style="font-size:10px;color:var(--amber);margin-bottom:8px">运行时覆盖: <code>${_fbPersonaOverrideKey}</code> · YAML 默认: <code>${_fbPersonaYamlDefault || '—'}</code></div>`
       : `<div style="font-size:10px;color:var(--text-dim);margin-bottom:8px">YAML 默认: <code>${_fbPersonaYamlDefault || '—'}</code>（未设运行时覆盖）</div>`;
     const clrBtn = _fbPersonaOverrideKey
       ? `<button type="button" onclick="fbClearPersonaOverride()"
@@ -2917,7 +2917,7 @@
         </div>
         ${ovHint}
         <div style="margin-bottom:10px">${clrBtn}</div>
-        ${list || '<div style="color:#f87171">未加载到客群</div>'}
+        ${list || '<div style="color:var(--red)">未加载到客群</div>'}
       </div>
     `;
   };
@@ -3158,7 +3158,7 @@
           <button onclick="document.getElementById('fb-referral-modal').remove()" style="background:none;border:none;color:var(--text-muted);font-size:22px;cursor:pointer">✕</button>
         </div>
 
-        <div style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:8px 12px;font-size:11px;color:#4ade80;margin-bottom:14px">
+        <div style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:8px 12px;font-size:11px;color:var(--green-soft);margin-bottom:14px">
           💡 ${personaHint}
         </div>
 
@@ -3166,7 +3166,7 @@
         <div id="fb-ref-autofill-bar" style="display:none;margin-bottom:14px;padding:10px 14px;background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.25);border-radius:8px">
           <div style="display:flex;align-items:center;justify-content:space-between">
             <span id="fb-ref-autofill-msg" style="font-size:11px;color:#fbbf24">检测中…</span>
-            <button id="fb-ref-autofill-btn" onclick="fbAutoFillReferrals()" style="display:none;font-size:10px;padding:4px 12px;background:linear-gradient(135deg,#f59e0b,#d97706);color:#fff;border:none;border-radius:5px;cursor:pointer;font-weight:600;white-space:nowrap">⚡ 一键填充</button>
+            <button id="fb-ref-autofill-btn" onclick="fbAutoFillReferrals()" style="display:none;font-size:10px;padding:4px 12px;background:linear-gradient(135deg,var(--amber),#d97706);color:#fff;border:none;border-radius:5px;cursor:pointer;font-weight:600;white-space:nowrap">⚡ 一键填充</button>
           </div>
         </div>
 
@@ -3178,7 +3178,7 @@
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px">
             ${inputBlocks}
           </div>
-          <button onclick="fbSaveReferralBatch()" style="margin-top:10px;background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;border:none;padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer">💾 应用到全部设备</button>
+          <button onclick="fbSaveReferralBatch()" style="margin-top:10px;background:linear-gradient(135deg,var(--green-strong),var(--green-deep));color:#fff;border:none;padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer">💾 应用到全部设备</button>
           <span style="margin-left:10px;font-size:10px;color:var(--text-dim)">只填有值的框；空框不会清除已有配置</span>
         </div>
 
@@ -3259,7 +3259,7 @@
             bar.style.display = 'block';
             bar.style.background = 'rgba(34,197,94,.06)';
             bar.style.borderColor = 'rgba(34,197,94,.25)';
-            msg.style.color = '#4ade80';
+            msg.style.color = 'var(--green-soft)';
             msg.innerHTML = '✅ 全部 <b>' + devCount + '</b> 台设备已配置引流账号';
           }
         } catch (e) {}
@@ -3383,7 +3383,7 @@
               + '<div style="display:flex;align-items:center;gap:8px;font-size:11px;margin-bottom:4px">'
               +   '<code style="min-width:110px;color:var(--text-muted)">' + tid + '</code>'
               +   '<div style="flex:1;background:rgba(96,165,250,.12);border-radius:4px;overflow:hidden;height:14px">'
-              +     '<div style="width:' + w + '%;height:100%;background:linear-gradient(90deg,#60a5fa,#22d3ee)"></div>'
+              +     '<div style="width:' + w + '%;height:100%;background:linear-gradient(90deg,var(--blue-soft),#22d3ee)"></div>'
               +   '</div>'
               +   '<span style="min-width:32px;text-align:right;font-weight:600">' + cnt + '</span>'
               + '</div>';
@@ -3408,7 +3408,7 @@
             const rate = s.rate != null ? ' (' + (s.rate * 100).toFixed(0) + '%)' : '';
             return '<div style="display:flex;justify-content:space-between;padding:8px 12px;background:var(--bg-main);border-radius:6px;border-left:3px solid #1877f2">'
               + '<span style="font-size:12px">' + s.label + '</span>'
-              + '<span style="font-weight:700;color:#60a5fa;font-size:13px">' + s.value + rate + '</span>'
+              + '<span style="font-weight:700;color:var(--blue-soft);font-size:13px">' + s.value + rate + '</span>'
               + '</div>';
           }).join('')
         +   '</div>'
@@ -3425,9 +3425,9 @@
         +       '<span style="font-size:12px">Fallback 路径</span>'
         +       '<span style="font-weight:700;color:' + fbPctColor + ';font-size:13px">' + greetFallback + ' (' + fallbackPct + '%)</span>'
         +     '</div>'
-        +     '<div style="display:flex;justify-content:space-between;padding:8px 12px;background:var(--bg-main);border-radius:6px;border-left:3px solid #a855f7">'
+        +     '<div style="display:flex;justify-content:space-between;padding:8px 12px;background:var(--bg-main);border-radius:6px;border-left:3px solid var(--accent-2)">'
         +       '<span style="font-size:12px">加友后打招呼率</span>'
-        +       '<span style="font-weight:700;color:#a855f7;font-size:13px">' + (rateGreetAfterAdd * 100).toFixed(1) + '% (' + greetSent + '/' + frSent + ')</span>'
+        +       '<span style="font-weight:700;color:var(--accent-2);font-size:13px">' + (rateGreetAfterAdd * 100).toFixed(1) + '% (' + greetSent + '/' + frSent + ')</span>'
         +     '</div>'
         +   '</div>'
         +   '<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">模板命中 Top 5 (A/B 样本)</div>'
@@ -3445,7 +3445,7 @@
       document.getElementById('fb-funnel-body').innerHTML = html;
     } catch (e) {
       document.getElementById('fb-funnel-body').innerHTML =
-        '<div style="color:#ef4444">加载失败: ' + e.message + '</div>';
+        '<div style="color:var(--red-strong)">加载失败: ' + e.message + '</div>';
     }
   };
 
@@ -3467,7 +3467,7 @@
           + (d.cooldown_remaining > 0 ? d.cooldown_remaining + 's' : '✓ 正常') + '</td>'
           + '<td style="padding:8px;font-size:11px;color:var(--text-muted)">'
           + (last.message || '—').substr(0, 40) + '</td>'
-          + '<td style="padding:8px"><button onclick="fbClearRisk(\'' + d.device_id + '\')" style="background:rgba(34,197,94,.15);color:#22c55e;border:1px solid rgba(34,197,94,.4);padding:3px 8px;border-radius:4px;cursor:pointer;font-size:11px">清除</button></td>'
+          + '<td style="padding:8px"><button onclick="fbClearRisk(\'' + d.device_id + '\')" style="background:rgba(34,197,94,.15);color:var(--green-strong);border:1px solid rgba(34,197,94,.4);padding:3px 8px;border-radius:4px;cursor:pointer;font-size:11px">清除</button></td>'
           + '</tr>';
       }).join('');
       document.getElementById('fb-risk-body').innerHTML = ''
@@ -3490,7 +3490,7 @@
         + '</tbody></table>';
     } catch (e) {
       document.getElementById('fb-risk-body').innerHTML =
-        '<div style="color:#ef4444">加载失败: ' + e.message + '</div>';
+        '<div style="color:var(--red-strong)">加载失败: ' + e.message + '</div>';
     }
   };
 
@@ -3524,7 +3524,7 @@
         + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
         + '<h3 style="margin:0">📰 Facebook AI 日报</h3>'
         + '<div style="display:flex;gap:8px">'
-        + '<button onclick="fbRegenerateBrief()" style="background:linear-gradient(135deg,#a855f7,#7c3aed);color:#fff;border:none;padding:5px 12px;border-radius:6px;font-size:11px;cursor:pointer">🔄 重新生成</button>'
+        + '<button onclick="fbRegenerateBrief()" style="background:linear-gradient(135deg,var(--accent-2),#7c3aed);color:#fff;border:none;padding:5px 12px;border-radius:6px;font-size:11px;cursor:pointer">🔄 重新生成</button>'
         + '<button onclick="PlatShell.modal.close(\'fb-brief-modal\')" style="background:none;border:1px solid var(--border);color:var(--text);padding:4px 10px;border-radius:6px;cursor:pointer">✕</button>'
         + '</div></div>'
         + '<div style="background:var(--bg-main);padding:14px;border-radius:8px;line-height:1.6;font-size:13px">'
@@ -3541,7 +3541,7 @@
         document.getElementById('fb-brief-body').innerHTML = ''
           + '<div style="text-align:center;padding:30px">'
           + '<div style="font-size:14px;margin-bottom:14px">尚无日报</div>'
-          + '<button onclick="fbRegenerateBrief()" style="background:linear-gradient(135deg,#a855f7,#7c3aed);color:#fff;border:none;padding:8px 18px;border-radius:8px;cursor:pointer">🔄 立即生成第 1 份</button>'
+          + '<button onclick="fbRegenerateBrief()" style="background:linear-gradient(135deg,var(--accent-2),#7c3aed);color:#fff;border:none;padding:8px 18px;border-radius:8px;cursor:pointer">🔄 立即生成第 1 份</button>'
           + '</div>';
         return;
       }
@@ -3549,7 +3549,7 @@
       document.getElementById('fb-brief-body').innerHTML = renderBody(b.markdown || '', b);
     } catch (e) {
       document.getElementById('fb-brief-body').innerHTML =
-        '<div style="color:#ef4444">加载失败: ' + e.message + '</div>';
+        '<div style="color:var(--red-strong)">加载失败: ' + e.message + '</div>';
     }
   };
 
@@ -3636,7 +3636,7 @@
         : '';
       body.innerHTML = top + body.innerHTML;
     } catch (e) {
-      body.innerHTML = '<div style="color:#ef4444">加载失败: ' + e.message + '</div>';
+      body.innerHTML = '<div style="color:var(--red-strong)">加载失败: ' + e.message + '</div>';
     }
   };
 
@@ -3667,14 +3667,14 @@
       // 趋势 mini chart (text-based)
       const trendHtml = trend.length ? trend.map(function(d) {
         return '<tr><td style="padding:4px 8px;font-size:11px">' + (d.date || '') + '</td>'
-          + '<td style="padding:4px 8px;color:#ef4444">' + (d.blocked || 0) + '</td>'
-          + '<td style="padding:4px 8px;color:#3b82f6">' + (d.claims || 0) + '</td></tr>';
+          + '<td style="padding:4px 8px;color:var(--red-strong)">' + (d.blocked || 0) + '</td>'
+          + '<td style="padding:4px 8px;color:var(--blue-strong)">' + (d.claims || 0) + '</td></tr>';
       }).join('') : '<tr><td colspan="3" style="padding:12px;text-align:center;color:var(--text-muted)">暂无数据</td></tr>';
 
       // Top duplicated peers
       const peersHtml = topPeers.length ? topPeers.map(function(p) {
         return '<tr><td style="padding:4px 8px;font-size:11px">' + (p.peer_name || '') + '</td>'
-          + '<td style="padding:4px 8px;color:#ef4444">' + (p.blocked_count || 0) + '</td>'
+          + '<td style="padding:4px 8px;color:var(--red-strong)">' + (p.blocked_count || 0) + '</td>'
           + '<td style="padding:4px 8px;font-size:10px;color:var(--text-muted)">' + (p.devices || []).map(function(d){return d.substr(0,8);}).join(', ') + '</td></tr>';
       }).join('') : '<tr><td colspan="3" style="padding:12px;text-align:center;color:var(--text-muted)">暂无重复</td></tr>';
 
@@ -3686,16 +3686,16 @@
         // KPI cards
         + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">'
         + '<div style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);border-radius:8px;padding:12px;text-align:center">'
-        + '<div style="font-size:24px;font-weight:700;color:#ef4444">' + (r.friend_requests_blocked || 0) + '</div>'
+        + '<div style="font-size:24px;font-weight:700;color:var(--red-strong)">' + (r.friend_requests_blocked || 0) + '</div>'
         + '<div style="font-size:11px;color:var(--text-muted)">好友请求拦截</div></div>'
         + '<div style="background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.3);border-radius:8px;padding:12px;text-align:center">'
-        + '<div style="font-size:24px;font-weight:700;color:#3b82f6">' + (r.conv_lock_conflicts || 0) + '</div>'
+        + '<div style="font-size:24px;font-weight:700;color:var(--blue-strong)">' + (r.conv_lock_conflicts || 0) + '</div>'
         + '<div style="font-size:11px;color:var(--text-muted)">对话锁冲突</div></div>'
         + '<div style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:12px;text-align:center">'
-        + '<div style="font-size:24px;font-weight:700;color:#22c55e">' + ((cov.coverage_rate || 0) * 100).toFixed(1) + '%</div>'
+        + '<div style="font-size:24px;font-weight:700;color:var(--green-strong)">' + ((cov.coverage_rate || 0) * 100).toFixed(1) + '%</div>'
         + '<div style="font-size:11px;color:var(--text-muted)">事件 CID 覆盖率</div></div>'
         + '<div style="background:rgba(168,85,247,.08);border:1px solid rgba(168,85,247,.3);border-radius:8px;padding:12px;text-align:center">'
-        + '<div style="font-size:24px;font-weight:700;color:#a855f7">' + ((cov.fr_coverage_rate || 0) * 100).toFixed(1) + '%</div>'
+        + '<div style="font-size:24px;font-weight:700;color:var(--accent-2)">' + ((cov.fr_coverage_rate || 0) * 100).toFixed(1) + '%</div>'
         + '<div style="font-size:11px;color:var(--text-muted)">好友请求 CID 覆盖率</div></div>'
         + '</div>'
         // G1: TTL 分布可视化
@@ -3739,12 +3739,12 @@
         + '统计范围: ' + (r.scope_device || 'all') + ' | 近 ' + (r.scope_since_hours || 168) + ' 小时'
         + ' | 事件数: ' + (cov.contact_events_total || 0) + ' | 好友请求数: ' + (cov.friend_requests_total || 0)
         + '</span>'
-        + '<button onclick="fbDedupBackfill()" style="background:rgba(34,197,94,.12);color:#22c55e;border:1px solid rgba(34,197,94,.3);padding:4px 12px;border-radius:6px;cursor:pointer;font-size:11px">🔄 身份回填</button>'
+        + '<button onclick="fbDedupBackfill()" style="background:rgba(34,197,94,.12);color:var(--green-strong);border:1px solid rgba(34,197,94,.3);padding:4px 12px;border-radius:6px;cursor:pointer;font-size:11px">🔄 身份回填</button>'
         + '</div>';
       document.getElementById('fb-dedup-body').innerHTML = html;
     } catch (e) {
       document.getElementById('fb-dedup-body').innerHTML =
-        '<div style="color:#ef4444">加载失败: ' + e.message + '</div>';
+        '<div style="color:var(--red-strong)">加载失败: ' + e.message + '</div>';
     }
   };
 
@@ -3816,12 +3816,12 @@
     }).join('');
 
     var stepsHtml = stepsOk.map(function (s) {
-      return '<span style="padding:2px 8px;background:rgba(34,197,94,.1);color:#22c55e;border-radius:4px;font-size:10px;font-weight:600">\u2713 ' + s.replace(/facebook_/g, '').replace(/_/g, ' ') + '</span>';
+      return '<span style="padding:2px 8px;background:rgba(34,197,94,.1);color:var(--green-strong);border-radius:4px;font-size:10px;font-weight:600">\u2713 ' + s.replace(/facebook_/g, '').replace(/_/g, ' ') + '</span>';
     }).join(' ');
     if (stepsFail.length) {
       stepsHtml += ' ' + stepsFail.map(function (f) {
         var s = typeof f === 'string' ? f : (f.step || '');
-        return '<span style="padding:2px 8px;background:rgba(239,68,68,.1);color:#ef4444;border-radius:4px;font-size:10px;font-weight:600">\u2717 ' + s.replace(/facebook_/g, '').replace(/_/g, ' ') + '</span>';
+        return '<span style="padding:2px 8px;background:rgba(239,68,68,.1);color:var(--red-strong);border-radius:4px;font-size:10px;font-weight:600">\u2717 ' + s.replace(/facebook_/g, '').replace(/_/g, ' ') + '</span>';
       }).join(' ');
     }
 
@@ -3859,7 +3859,7 @@
       + '<div id="fb-result-today-summary" style="margin-top:10px;font-size:10px;color:var(--text-dim)">\uD83D\uDCC8 \u52A0\u8F7D\u4ECA\u65E5\u6C47\u603B\u2026</div>'
       + '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">'
       + '<button onclick="document.getElementById(\'' + closeId + '\').remove()" style="padding:7px 16px;background:none;border:1px solid var(--border);color:var(--text-muted);border-radius:8px;cursor:pointer;font-size:12px">\u5173\u95ED</button>'
-      + '<button onclick="document.getElementById(\'' + closeId + '\').remove();fbOpenFunnelModal()" style="padding:7px 16px;background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.3);color:#60a5fa;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600">\uD83D\uDCCA \u67E5\u770B\u5B8C\u6574\u6F0F\u6597</button>'
+      + '<button onclick="document.getElementById(\'' + closeId + '\').remove();fbOpenFunnelModal()" style="padding:7px 16px;background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.3);color:var(--blue-soft);border-radius:8px;cursor:pointer;font-size:12px;font-weight:600">\uD83D\uDCCA \u67E5\u770B\u5B8C\u6574\u6F0F\u6597</button>'
       + '<button onclick="document.getElementById(\'' + closeId + '\').remove();fbOpenPresetsModal()" style="padding:7px 16px;background:linear-gradient(135deg,#1877f2,#0d6efd);border:none;color:#fff;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600">\u26A1 \u518D\u6B21\u6267\u884C</button>'
       + '</div></div></div>';
 
@@ -3880,10 +3880,10 @@
         el.innerHTML = '<div style="padding:8px 12px;background:var(--bg-main);border:1px solid var(--border);border-radius:8px">'
           + '<div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-bottom:6px">\uD83D\uDCC8 \u4ECA\u65E5\u5168\u91CF\u6C47\u603B (24h)</div>'
           + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;text-align:center">'
-          + '<div><div style="font-size:16px;font-weight:700;color:#3b82f6">' + todaySent + '</div><div style="font-size:9px;color:var(--text-dim)">\u597D\u53CB\u8BF7\u6C42</div></div>'
-          + '<div><div style="font-size:16px;font-weight:700;color:#22c55e">' + todayAccepted + '</div><div style="font-size:9px;color:var(--text-dim)">\u5DF2\u901A\u8FC7</div></div>'
-          + '<div><div style="font-size:16px;font-weight:700;color:#8b5cf6">' + todayDM + '</div><div style="font-size:9px;color:var(--text-dim)">DM \u5BF9\u8BDD</div></div>'
-          + '<div><div style="font-size:16px;font-weight:700;color:#f59e0b">' + todayRef + '</div><div style="font-size:9px;color:var(--text-dim)">\u5F15\u6D41\u6210\u529F</div></div>'
+          + '<div><div style="font-size:16px;font-weight:700;color:var(--blue-strong)">' + todaySent + '</div><div style="font-size:9px;color:var(--text-dim)">\u597D\u53CB\u8BF7\u6C42</div></div>'
+          + '<div><div style="font-size:16px;font-weight:700;color:var(--green-strong)">' + todayAccepted + '</div><div style="font-size:9px;color:var(--text-dim)">\u5DF2\u901A\u8FC7</div></div>'
+          + '<div><div style="font-size:16px;font-weight:700;color:var(--violet)">' + todayDM + '</div><div style="font-size:9px;color:var(--text-dim)">DM \u5BF9\u8BDD</div></div>'
+          + '<div><div style="font-size:16px;font-weight:700;color:var(--amber)">' + todayRef + '</div><div style="font-size:9px;color:var(--text-dim)">\u5F15\u6D41\u6210\u529F</div></div>'
           + '</div></div>';
       } catch (e) {
         var el2 = document.getElementById('fb-result-today-summary');
@@ -3941,8 +3941,8 @@
       var statusColor = fail > 0 ? '#f59e0b' : '#22c55e';
       return '<tr style="border-bottom:1px solid var(--border)">'
         + '<td style="padding:6px 8px;font-size:11px">' + _escHtml(devName) + '</td>'
-        + '<td style="padding:6px 8px;font-size:11px;color:#3b82f6;text-align:center">' + sent + '</td>'
-        + '<td style="padding:6px 8px;font-size:11px;color:#8b5cf6;text-align:center">' + greeted + '</td>'
+        + '<td style="padding:6px 8px;font-size:11px;color:var(--blue-strong);text-align:center">' + sent + '</td>'
+        + '<td style="padding:6px 8px;font-size:11px;color:var(--violet);text-align:center">' + greeted + '</td>'
         + '<td style="padding:6px 8px;font-size:11px;color:' + statusColor + ';text-align:center">' + ok + '/' + (ok + fail) + '</td>'
         + '</tr>';
     }).join('');
@@ -3961,9 +3961,9 @@
       // 聚合指标
       + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">'
       + '<div style="background:var(--bg-main);border-radius:8px;padding:10px;text-align:center"><div style="font-size:20px;font-weight:700;color:#64748b">' + totExtracted + '</div><div style="font-size:9px;color:var(--text-dim)">\u5019\u9009\u63D0\u53D6</div></div>'
-      + '<div style="background:var(--bg-main);border-radius:8px;padding:10px;text-align:center"><div style="font-size:20px;font-weight:700;color:#3b82f6">' + totSent + '</div><div style="font-size:9px;color:var(--text-dim)">\u597D\u53CB\u8BF7\u6C42 (' + rateAccept + '%)</div></div>'
-      + '<div style="background:var(--bg-main);border-radius:8px;padding:10px;text-align:center"><div style="font-size:20px;font-weight:700;color:#8b5cf6">' + totGreeted + '</div><div style="font-size:9px;color:var(--text-dim)">\u6253\u62DB\u547C (' + rateGreet + '%)</div></div>'
-      + '<div style="background:var(--bg-main);border-radius:8px;padding:10px;text-align:center"><div style="font-size:20px;font-weight:700;color:#22c55e">' + totReplied + '</div><div style="font-size:9px;color:var(--text-dim)">\u6536\u4EF6\u5904\u7406</div></div>'
+      + '<div style="background:var(--bg-main);border-radius:8px;padding:10px;text-align:center"><div style="font-size:20px;font-weight:700;color:var(--blue-strong)">' + totSent + '</div><div style="font-size:9px;color:var(--text-dim)">\u597D\u53CB\u8BF7\u6C42 (' + rateAccept + '%)</div></div>'
+      + '<div style="background:var(--bg-main);border-radius:8px;padding:10px;text-align:center"><div style="font-size:20px;font-weight:700;color:var(--violet)">' + totGreeted + '</div><div style="font-size:9px;color:var(--text-dim)">\u6253\u62DB\u547C (' + rateGreet + '%)</div></div>'
+      + '<div style="background:var(--bg-main);border-radius:8px;padding:10px;text-align:center"><div style="font-size:20px;font-weight:700;color:var(--green-strong)">' + totReplied + '</div><div style="font-size:9px;color:var(--text-dim)">\u6536\u4EF6\u5904\u7406</div></div>'
       + '</div>'
       // 设备明细表
       + '<div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-bottom:6px">\u8BBE\u5907\u660E\u7EC6</div>'
@@ -3974,7 +3974,7 @@
       // 操作按钮
       + '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">'
       + '<button onclick="document.getElementById(\'' + closeId + '\').remove()" style="padding:7px 16px;background:none;border:1px solid var(--border);color:var(--text-muted);border-radius:8px;cursor:pointer;font-size:12px">\u5173\u95ED</button>'
-      + '<button onclick="document.getElementById(\'' + closeId + '\').remove();fbOpenFunnelModal()" style="padding:7px 16px;background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.3);color:#60a5fa;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600">\uD83D\uDCCA \u67E5\u770B\u5B8C\u6574\u6F0F\u6597</button>'
+      + '<button onclick="document.getElementById(\'' + closeId + '\').remove();fbOpenFunnelModal()" style="padding:7px 16px;background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.3);color:var(--blue-soft);border-radius:8px;cursor:pointer;font-size:12px;font-weight:600">\uD83D\uDCCA \u67E5\u770B\u5B8C\u6574\u6F0F\u6597</button>'
       + '<button onclick="document.getElementById(\'' + closeId + '\').remove();fbOpenPresetsModal()" style="padding:7px 16px;background:linear-gradient(135deg,#1877f2,#0d6efd);border:none;color:#fff;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600">\u26A1 \u518D\u6B21\u6267\u884C</button>'
       + '</div></div></div>';
   };
@@ -4049,7 +4049,7 @@
       + (paramRows ? '<div style="margin-bottom:14px"><div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-bottom:6px">\u53C2\u6570\u8C03\u6574</div>' + paramRows + '</div>' : '')
       + '<div style="display:flex;gap:8px;justify-content:flex-end;padding-top:12px;border-top:1px solid var(--border)">'
       + '<button onclick="document.getElementById(\'' + closeId + '\').remove()" style="padding:8px 16px;background:none;border:1px solid var(--border);color:var(--text-muted);border-radius:8px;cursor:pointer;font-size:12px">\u53D6\u6D88</button>'
-      + '<button onclick="_fbDoSaveAs(\'' + sourceKey + '\')" style="padding:8px 20px;background:linear-gradient(135deg,#f59e0b,#d97706);border:none;color:#fff;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600">\u2B50 \u4FDD\u5B58</button>'
+      + '<button onclick="_fbDoSaveAs(\'' + sourceKey + '\')" style="padding:8px 20px;background:linear-gradient(135deg,var(--amber),#d97706);border:none;color:#fff;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600">\u2B50 \u4FDD\u5B58</button>'
       + '</div></div></div>';
   };
 

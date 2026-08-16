@@ -3,7 +3,7 @@
 import json
 import logging
 import time
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Header
 
 from src.utils.subprocess_text import run as _sp_run_text
 from src.host.device_registry import DEFAULT_DEVICES_YAML, data_file
@@ -20,12 +20,27 @@ _screenshot_guard = __import__("threading").Lock()
 _SCREENSHOT_TTL = 2.0
 
 
+def _scr_response(jpeg_data: bytes, if_none_match=None):
+    """截图响应统一出口：带 ETag(内容 CRC32)，命中 If-None-Match 回 304 零载荷。
+    前端轮询画面静止时从「每 2s 一整张 JPEG」降为「每 2s 一对请求头」。"""
+    import zlib
+    from fastapi.responses import Response
+    etag = '"%08x"' % (zlib.crc32(jpeg_data) & 0xFFFFFFFF)
+    # isinstance 防御：cluster.py 会把本函数当普通函数直调，
+    # 此时 if_none_match 默认值是 FastAPI 的 Header 对象而非字符串
+    if isinstance(if_none_match, str) and etag in if_none_match:
+        return Response(status_code=304,
+                        headers={"ETag": etag, "Cache-Control": "no-cache"})
+    return Response(content=jpeg_data, media_type="image/jpeg",
+                    headers={"ETag": etag, "Cache-Control": "no-cache"})
+
+
 @router.get("/devices/{device_id}/screenshot")
 def device_screenshot(device_id: str, mode: str = "grid",
-                      max_h: int = 0, quality: int = 0):
+                      max_h: int = 0, quality: int = 0,
+                      if_none_match: str = Header(default=None)):
     """Capture and return a device screenshot as JPEG."""
     import time as _time
-    from fastapi.responses import Response
     from src.device_control.device_manager import get_device_manager
     from ..executor import _resolve_serial_from_config
 
@@ -48,8 +63,7 @@ def device_screenshot(device_id: str, mode: str = "grid",
     now = _time.time()
     cached = _screenshot_cache.get(device_id)
     if cached and (now - cached[0]) < ttl:
-        return Response(content=cached[1], media_type="image/jpeg",
-                        headers={"Cache-Control": "no-cache"})
+        return _scr_response(cached[1], if_none_match)
 
     if device_id not in _screenshot_locks:
         with _screenshot_guard:
@@ -60,15 +74,13 @@ def device_screenshot(device_id: str, mode: str = "grid",
     if not lock.acquire(timeout=5):
         cached = _screenshot_cache.get(device_id)
         if cached:
-            return Response(content=cached[1], media_type="image/jpeg",
-                            headers={"Cache-Control": "no-cache"})
+            return _scr_response(cached[1], if_none_match)
         raise HTTPException(status_code=503, detail="截屏繁忙，请稍后重试")
 
     try:
         cached = _screenshot_cache.get(device_id)
         if cached and (_time.time() - cached[0]) < ttl:
-            return Response(content=cached[1], media_type="image/jpeg",
-                            headers={"Cache-Control": "no-cache"})
+            return _scr_response(cached[1], if_none_match)
 
         png_data = manager.capture_screen(device_id)
         if not png_data:
@@ -87,8 +99,7 @@ def device_screenshot(device_id: str, mode: str = "grid",
             jpeg_data = png_data
 
         _screenshot_cache[device_id] = (_time.time(), jpeg_data)
-        return Response(content=jpeg_data, media_type="image/jpeg",
-                        headers={"Cache-Control": "no-cache"})
+        return _scr_response(jpeg_data, if_none_match)
     finally:
         lock.release()
 

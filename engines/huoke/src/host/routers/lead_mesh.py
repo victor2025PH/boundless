@@ -620,6 +620,15 @@ def api_check_duplicate(canonical_id: str, channel: str, since_days: int = 30):
     return {"is_duplicate": dup is not None, "existing": dup}
 
 
+@router.get("/handoffs/count")
+def api_count_handoffs(state: str = "pending", receiver_account_key: str = ""):
+    """轻量计数（侧栏角标/收件箱页签用）。⚠ 必须注册在 /handoffs/{handoff_id} 之前。"""
+    from src.host.lead_mesh.handoff import count_handoffs
+    return {"state": state,
+            "count": count_handoffs(state=state,
+                                    receiver_account_key=receiver_account_key)}
+
+
 @router.get("/handoffs")
 def api_list_handoffs(state: str = "",
                        receiver_account_key: str = "",

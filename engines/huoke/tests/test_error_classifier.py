@@ -14,6 +14,14 @@ from src.host.error_classifier import classify_task_error
 
 
 @pytest.mark.parametrize("raw, layer, code", [
+    # infra — host_env（主控机自身工具链，2026-08-17 WinError 2 实锤）
+    ("[gate] 预检未通过 (network): 网络检查异常: [WinError 2] 系统找不到指定的文件。",
+     "infra", "host_env_toolchain"),
+    ("网络检查异常: FileNotFoundError: adb",
+     "infra", "host_env_toolchain"),
+    # infra — 服务重启孤儿（task_dispatcher._startup_reap_running_orphans 的 error 文本）
+    ("任务孤儿: server 启动时检测到上一进程未完成的 running 任务 (last_update=2026-08-17T03:08:00Z)",
+     "infra", "host_restart_orphan"),
     # quota
     ("facebook_join_group quota exceeded for []: 3/3 in hourly window",
      "quota", "rate_limited"),
@@ -159,6 +167,24 @@ def test_legacy_vpn_no_ip_still_works():
     # 兜底规则放在 hijack/zero/timeout 之后，匹配到 vpn_no_ip
     assert out["code"] == "vpn_no_ip"
     assert out["fix_action"] == "rotate_ip"
+
+
+def test_host_env_wins_over_gate_network():
+    """2026-08-17: WinError 文本同时带 "[gate] ... (network)" 前缀——
+    host_env 规则必须置顶胜出，否则主控机的锅被安到设备网络头上（vpn_no_ip），
+    面板会开出"重连 VPN"的错药。"""
+    out = classify_task_error(
+        "[gate] 预检未通过 (network): 网络检查异常: [WinError 2] 系统找不到指定的文件。")
+    assert out["code"] == "host_env_toolchain"
+    assert out["layer"] == "infra"
+    assert out["fix_action"] == "", "主控环境问题没有设备侧一键修复，不应给按钮"
+
+
+def test_orphan_reap_text_classified():
+    """服务重启孤儿（startup reap 写入的 error 文本）应归 host_restart_orphan 而非 unknown."""
+    out = classify_task_error("任务孤儿: server 启动时检测到上一进程未完成的 running 任务")
+    assert out["code"] == "host_restart_orphan"
+    assert out["fix_action"] == "smart_retry"
 
 
 def test_get_fix_action_metadata():

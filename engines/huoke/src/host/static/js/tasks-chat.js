@@ -219,6 +219,10 @@ async function eraseSelectedTasksBulk(){
 function _attributeError(text){
   if(!text) return null;
   const t=String(text);
+  // 2026-08-17 主控环境类必须最先（文本常同时带 "[gate] ... network"，
+  // 不置顶会被 vpn_no_ip 吃掉——与 error_classifier.py 顺序保持一致）
+  if(/WinError\s*\d+|系统找不到指定的文件|FileNotFoundError/i.test(t)) return {emoji:'🧰',hint:'主控环境缺 adb/工具链（非设备问题）',tone:'red',full:t,fix_action:''};
+  if(/任务孤儿|server 启动时检测到上一进程/i.test(t))          return {emoji:'♻',hint:'服务重启导致中断（可重试）',tone:'amber',full:t,fix_action:'smart_retry'};
   if(/quota exceeded/i.test(t))                              return {emoji:'⏰',hint:'配额到 (等下个 window)',tone:'amber',full:t,fix_action:'wait_window'};
   // P0-2: 三态网络错误细分（更具体的优先匹配）
   if(/代理路径异常|代理.*被劫持|HTTP=.*'?(301|302|403|418|451)'?/i.test(t)) return {emoji:'🚫',hint:'代理 IP 被劫持/封禁 (建议换 IP)',tone:'red',full:t,fix_action:'rotate_ip'};
@@ -301,20 +305,20 @@ async function showProxyQualityModal(){
       const tone=d.infra_health_score>=90?'#22c55e':(d.infra_health_score>=70?'#f59e0b':'#ef4444');
       const stTone={ok:'#22c55e',leak:'#ef4444',no_ip:'#ef4444',unverified:'#94a3b8',unknown:'#94a3b8'}[d.current_state]||'#94a3b8';
       const aliasShort=(window.ALIAS&&window.ALIAS[d.device_id])||d.device_id?.substring(0,8)||'?';
-      return `<tr style="border-bottom:1px solid var(--border)"><td style="padding:6px;font-family:monospace">${aliasShort}</td><td style="padding:6px"><span style="color:${stTone}">${d.current_state}</span>${d.circuit_open?' 🚧':''}</td><td style="padding:6px;font-family:monospace;font-size:10px">${d.current_ip||'—'}</td><td style="padding:6px;text-align:right">${d.tasks_total}</td><td style="padding:6px;text-align:right;color:#ef4444">${d.tasks_failed}</td><td style="padding:6px;text-align:right;color:#f59e0b">${d.infra_failed}</td><td style="padding:6px;text-align:right;color:#a78bfa">${d.business_failed}</td><td style="padding:6px;text-align:right;font-weight:600;color:${tone}">${d.infra_health_score}</td><td style="padding:6px;font-size:10px;color:var(--text-muted)">${d.top_error_code||'—'}</td></tr>`;
+      return `<tr style="border-bottom:1px solid var(--border)"><td style="padding:6px;font-family:monospace">${aliasShort}</td><td style="padding:6px"><span style="color:${stTone}">${d.current_state}</span>${d.circuit_open?' 🚧':''}</td><td style="padding:6px;font-family:monospace;font-size:10px">${d.current_ip||'—'}</td><td style="padding:6px;text-align:right">${d.tasks_total}</td><td style="padding:6px;text-align:right;color:var(--red-strong)">${d.tasks_failed}</td><td style="padding:6px;text-align:right;color:var(--amber)">${d.infra_failed}</td><td style="padding:6px;text-align:right;color:var(--violet-soft)">${d.business_failed}</td><td style="padding:6px;text-align:right;font-weight:600;color:${tone}">${d.infra_health_score}</td><td style="padding:6px;font-size:10px;color:var(--text-muted)">${d.top_error_code||'—'}</td></tr>`;
     }).join('');
     document.getElementById('pq-body').innerHTML=`
       <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px;font-size:11px">
         <div><b>设备</b> ${s.devices_total||0}</div>
         <div><b>任务</b> ${s.tasks_total||0}</div>
-        <div style="color:#ef4444"><b>失败</b> ${s.tasks_failed||0}</div>
-        <div style="color:#f59e0b"><b>基建</b> ${s.infra_failed||0}</div>
-        <div style="color:#a78bfa"><b>业务</b> ${s.business_failed||0}</div>
-        <div style="color:#22c55e"><b>ok</b> ${s.ok||0}</div>
-        <div style="color:#ef4444"><b>leak</b> ${s.leak||0}</div>
-        <div style="color:#ef4444"><b>no_ip</b> ${s.no_ip||0}</div>
+        <div style="color:var(--red-strong)"><b>失败</b> ${s.tasks_failed||0}</div>
+        <div style="color:var(--amber)"><b>基建</b> ${s.infra_failed||0}</div>
+        <div style="color:var(--violet-soft)"><b>业务</b> ${s.business_failed||0}</div>
+        <div style="color:var(--green-strong)"><b>ok</b> ${s.ok||0}</div>
+        <div style="color:var(--red-strong)"><b>leak</b> ${s.leak||0}</div>
+        <div style="color:var(--red-strong)"><b>no_ip</b> ${s.no_ip||0}</div>
         <div style="color:#94a3b8"><b>unverified</b> ${s.unverified||0}</div>
-        ${s.circuit_open?`<div style="color:#ef4444"><b>🚧 熔断</b> ${s.circuit_open}</div>`:''}
+        ${s.circuit_open?`<div style="color:var(--red-strong)"><b>🚧 熔断</b> ${s.circuit_open}</div>`:''}
       </div>
       <div style="font-size:11px;margin-bottom:10px;color:var(--text-muted)">错误层级分布: infra=${layerMap.infra||0} · business=${layerMap.business||0} · timing=${layerMap.timing||0} · quota=${layerMap.quota||0} · unknown=${layerMap.unknown||0}</div>
       <table style="width:100%;border-collapse:collapse;font-size:11px">
@@ -322,7 +326,7 @@ async function showProxyQualityModal(){
         <tbody>${rows||'<tr><td colspan="9" style="padding:20px;text-align:center;color:var(--text-muted)">最近 24h 没有任务记录</td></tr>'}</tbody>
       </table>`;
   }catch(e){
-    document.getElementById('pq-body').innerHTML=`<div style="color:#ef4444">加载失败: ${e.message||e}</div>`;
+    document.getElementById('pq-body').innerHTML=`<div style="color:var(--red-strong)">加载失败: ${e.message||e}</div>`;
   }
 }
 
@@ -330,6 +334,7 @@ async function showProxyQualityModal(){
  *  保持前后端口径一致，让 dashboard "基建 vs 业务" 跟 fix_action 联动. */
 const _CAT_TO_LAYER={
   vpn_failure:'infra', network_timeout:'infra', device_offline:'infra', geo_mismatch:'infra',
+  host_env:'infra',  // 2026-08-17 主控环境（adb/PATH/服务重启）——基建层，与后端 _CAT_TO_LAYER 同表
   account_limited:'quota',
   ui_not_found:'business',
   task_timeout:'timing',
@@ -553,19 +558,19 @@ function _taskRowInner(t,isTrashList){
   const outcomeHtml=_getTaskOutcome(t);
   // P0 — errHtml 也走归因引擎: emoji + 一句话, 跟 outcomeHtml 同款
   const errHtml=(t.status==='failed'&&errAttr&&!outcomeHtml)?
-    `<div style="color:#f87171;font-size:11px;margin-top:2px" title="${errAttr.full.substring(0,200)}">${errAttr.emoji} ${errAttr.hint}</div>`:'';
-  const stuckHtml=(t.status==='pending'&&t.stuck_reason_zh)?`<div style="color:#f59e0b;font-size:11px;margin-top:2px" title="点击「详情」查看完整原因">⏸ ${t.stuck_reason_zh}</div>`:'';
+    `<div style="color:var(--red);font-size:11px;margin-top:2px" title="${errAttr.full.substring(0,200)}">${errAttr.emoji} ${errAttr.hint}</div>`:'';
+  const stuckHtml=(t.status==='pending'&&t.stuck_reason_zh)?`<div style="color:var(--amber);font-size:11px;margin-top:2px" title="点击「详情」查看完整原因">⏸ ${t.stuck_reason_zh}</div>`:'';
   const wh=t.worker_host||t._worker||'';
   const workerHint=wh?`<span style="font-size:9px;color:var(--accent)" title="Worker IP">@${wh}</span>`:'';
   const tid=t.task_id||'';
   let actions='';
   let selCell='';
   if(isTrashList){
-    actions=`<span style="display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap"><button type="button" class="qa-btn" style="font-size:10px;padding:2px 8px" onclick="event.stopPropagation();showTaskDetail('${tid}')">详情</button><button type="button" class="qa-btn" title="恢复到任务列表" style="font-size:10px;padding:2px 6px;color:#22c55e;border-color:#22c55e44" onclick="event.stopPropagation();restoreTaskRecord('${tid}')">恢复</button><button type="button" class="qa-btn" title="从数据库永久删除" style="font-size:10px;padding:2px 6px;color:#f87171;border-color:#f8717144" onclick="event.stopPropagation();eraseTaskRecord('${tid}')">永久删除</button></span>`;
+    actions=`<span style="display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap"><button type="button" class="qa-btn" style="font-size:10px;padding:2px 8px" onclick="event.stopPropagation();showTaskDetail('${tid}')">详情</button><button type="button" class="qa-btn" title="恢复到任务列表" style="font-size:10px;padding:2px 6px;color:var(--green-strong);border-color:#22c55e44" onclick="event.stopPropagation();restoreTaskRecord('${tid}')">恢复</button><button type="button" class="qa-btn" title="从数据库永久删除" style="font-size:10px;padding:2px 6px;color:var(--red);border-color:#f8717144" onclick="event.stopPropagation();eraseTaskRecord('${tid}')">永久删除</button></span>`;
     selCell=`<input type="checkbox" aria-label="选择任务" style="accent-color:var(--accent);cursor:pointer" onclick="event.stopPropagation()" onchange="taskBulkToggle('${tid}',this.checked)" ${_taskBulkSelected.has(tid)?'checked':''} />`;
   }else{
     const delBtn=_taskRecordDeletable(t.status)
-      ?`<button type="button" class="qa-btn" title="移入回收站（可在回收站恢复或永久删除）" style="font-size:10px;padding:2px 6px;color:#f87171;border-color:#f8717144" onclick="event.stopPropagation();deleteTaskRecord('${tid}')">移入回收站</button>`
+      ?`<button type="button" class="qa-btn" title="移入回收站（可在回收站恢复或永久删除）" style="font-size:10px;padding:2px 6px;color:var(--red);border-color:#f8717144" onclick="event.stopPropagation();deleteTaskRecord('${tid}')">移入回收站</button>`
       :'';
     actions=`<span style="display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap"><button type="button" class="qa-btn" style="font-size:10px;padding:2px 8px" onclick="event.stopPropagation();showTaskDetail('${tid}')">详情</button>${delBtn}</span>`;
     selCell=_taskRecordDeletable(t.status)
@@ -715,8 +720,11 @@ async function loadTasks(){
     if(typeof _syncTaskMap==='function') _syncTaskMap();
     await _syncErrorAnalysisForTaskCenter(trash,cf);
   }catch(e){
-    if(typeof showToast==='function'){
-      showToast('任务列表加载失败: '+(e&&e.message?e.message:String(e)),'error');
+    /* P0-1：网络级失败（后端重启/失联）由全局连接横幅接管——此前 5s 轮询
+       每失败一次弹一条英文红 toast（toast 风暴实锤）。非网络错误照旧弹，
+       但走 'task-load' 组去重，同类只留最新一条。 */
+    if(!(e&&e.isNetwork)&&typeof showToast==='function'){
+      showToast('任务列表加载失败: '+(e&&e.message?e.message:String(e)),'error',5000,'task-load');
     }
   }
   try{await _refreshTrashCountBadge();}catch(_e){}
@@ -814,7 +822,7 @@ async function _aiQuickExec(){
   try{
     const d=await api('POST','/ai/quick-command',{command:cmd});
     if(d.ok){
-      result.innerHTML=`<span style="color:#22c55e">&#9989; ${d.message}</span>`;
+      result.innerHTML=`<span style="color:var(--green-strong)">&#9989; ${d.message}</span>`;
       showToast(d.message,'success');
       setTimeout(()=>{loadTasks().then(()=>_startTaskPoll());},1500);
     }else{
@@ -918,7 +926,7 @@ function _renderFbWarmupCard(r){
   const fallback=r.home_tab_fallback||'';
   const progressPct=target>0?Math.min(100,Math.round(scrolls/target*100)):0;
   const fallbackBadge=(fallback && fallback!=='smart_tap')
-    ? `<span style="display:inline-block;margin-left:6px;padding:1px 6px;border-radius:4px;background:rgba(234,179,8,.18);color:#eab308;font-size:9px">Home回退: ${fallback}</span>`
+    ? `<span style="display:inline-block;margin-left:6px;padding:1px 6px;border-radius:4px;background:rgba(234,179,8,.18);color:var(--gold);font-size:9px">Home回退: ${fallback}</span>`
     : '';
 
   // 失败（home_tab_not_found 等）：强调 hint
@@ -926,7 +934,7 @@ function _renderFbWarmupCard(r){
     return `<div class="detail-row" style="background:rgba(239,68,68,.08);border-radius:10px;padding:12px;border:1px solid rgba(239,68,68,.35)">
       <span class="detail-label">&#128310; 养号档案</span>
       <div style="flex:1;font-size:12px;line-height:1.6">
-        <div><b style="color:#ef4444">脚本中止</b> <code style="font-size:10px;color:#f87171">${r.error_code}</code></div>
+        <div><b style="color:var(--red-strong)">脚本中止</b> <code style="font-size:10px;color:var(--red)">${r.error_code}</code></div>
         <div style="margin-top:6px;color:var(--text-dim);font-size:11px">${r.error_hint||'无额外修复建议'}</div>
       </div>
     </div>`;
@@ -934,7 +942,7 @@ function _renderFbWarmupCard(r){
 
   // 风控中断高亮
   const riskBadge=r.risk_detected
-    ? `<div style="margin-top:8px;padding:6px 10px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);border-radius:6px;color:#ef4444;font-size:11px">&#9888; 风控中断: ${r.risk_detected}</div>`
+    ? `<div style="margin-top:8px;padding:6px 10px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);border-radius:6px;color:var(--red-strong);font-size:11px">&#9888; 风控中断: ${r.risk_detected}</div>`
     : '';
 
   // P1-2: phase 标签 + 迁移提示
@@ -943,10 +951,10 @@ function _renderFbWarmupCard(r){
   const phaseBadge=r.phase?`<span style="display:inline-block;margin-left:6px;padding:1px 7px;border-radius:4px;background:${phaseColors[r.phase]||'#64748b'}22;color:${phaseColors[r.phase]||'#64748b'};font-size:9px;font-weight:600">${phaseLabels[r.phase]||r.phase}</span>`:'';
   const pt=r.phase_transition;
   const transitionBadge=(pt&&pt.changed)
-    ?`<div style="margin-top:6px;padding:5px 9px;background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.32);border-radius:6px;color:#22c55e;font-size:10px">&#127919; phase 迁移: <b>${phaseLabels[pt.from]||pt.from}</b> &rarr; <b>${phaseLabels[pt.to]||pt.to}</b> (${pt.reason||''})</div>`
+    ?`<div style="margin-top:6px;padding:5px 9px;background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.32);border-radius:6px;color:var(--green-strong);font-size:10px">&#127919; phase 迁移: <b>${phaseLabels[pt.from]||pt.from}</b> &rarr; <b>${phaseLabels[pt.to]||pt.to}</b> (${pt.reason||''})</div>`
     :'';
   const cfgSrcBadge=r.config_source==='playbook'
-    ?`<span title="节奏参数来自 config/facebook_playbook.yaml（热加载）" style="display:inline-block;margin-left:4px;padding:1px 5px;border-radius:3px;background:rgba(139,92,246,.14);color:#a78bfa;font-size:9px">playbook</span>`
+    ?`<span title="节奏参数来自 config/facebook_playbook.yaml（热加载）" style="display:inline-block;margin-left:4px;padding:1px 5px;border-radius:3px;background:rgba(139,92,246,.14);color:var(--violet-soft);font-size:9px">playbook</span>`
     :'';
 
   return `<div class="detail-row" style="background:linear-gradient(135deg,rgba(24,119,242,.08),rgba(139,92,246,.05));border-radius:10px;padding:12px;border:1px solid rgba(24,119,242,.28)">
@@ -994,7 +1002,7 @@ function _renderFbProfileHuntCard(r){
   const l1Rate=processed>0?((l1/processed)*100).toFixed(1):'0';
   const l2HitRate=l2>0?((matched/l2)*100).toFixed(1):'—';
   const riskBadge=r.risk_interrupted
-    ? `<div style="margin-top:8px;padding:6px 10px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);border-radius:6px;color:#ef4444;font-size:11px">&#9888; 风控中断: ${r.risk_interrupted}</div>`
+    ? `<div style="margin-top:8px;padding:6px 10px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);border-radius:6px;color:var(--red-strong);font-size:11px">&#9888; 风控中断: ${r.risk_interrupted}</div>`
     : '';
   const results=(r.results||[]).slice(0,20);
   const rowsHtml=results.map(it=>{
@@ -1002,7 +1010,7 @@ function _renderFbProfileHuntCard(r){
     const color=it.match?'#22c55e':(it.reason?'#ef4444':'var(--text-muted)');
     const scoreStr=typeof it.score==='number'?it.score.toFixed(0):it.score;
     const stage=it.stage||'-';
-    const note=it.match?(it.action_ok?`<span style="color:#22c55e">${actionLabels[action]||action}&nbsp;&#10004;</span>`:`<span style="color:#f59e0b">动作失败</span>`)
+    const note=it.match?(it.action_ok?`<span style="color:var(--green-strong)">${actionLabels[action]||action}&nbsp;&#10004;</span>`:`<span style="color:var(--amber)">动作失败</span>`)
       :(it.reason?`<span style="color:var(--text-dim);font-size:10px">${it.reason}</span>`:'');
     return `<div style="display:grid;grid-template-columns:18px 1fr 50px 40px 1fr;gap:6px;padding:4px 0;border-bottom:1px dashed var(--border);font-size:11px;align-items:center">
       <span style="color:${color}">${icon}</span>
@@ -1018,7 +1026,7 @@ function _renderFbProfileHuntCard(r){
     <span class="detail-label">&#127919; 画像识别</span>
     <div style="flex:1">
       <div style="font-size:12px;color:var(--text);line-height:1.45">
-        <b>${personaName}</b> · 动作: <span style="color:#a78bfa">${actionLabels[action]||action}</span>
+        <b>${personaName}</b> · 动作: <span style="color:var(--violet-soft)">${actionLabels[action]||action}</span>
       </div>
       <div style="margin-top:8px;display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:11px">
         <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:6px 8px">
@@ -1035,7 +1043,7 @@ function _renderFbProfileHuntCard(r){
         </div>
         <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:6px 8px">
           <div style="color:var(--text-dim);font-size:9px">命中</div>
-          <div style="font-weight:600;color:#22c55e">${matched} <span style="color:var(--text-dim);font-size:10px">(${hitRate}%)</span></div>
+          <div style="font-weight:600;color:var(--green-strong)">${matched} <span style="color:var(--text-dim);font-size:10px">(${hitRate}%)</span></div>
         </div>
       </div>
       <div style="margin-top:6px;color:var(--text-muted);font-size:10px">
@@ -1092,7 +1100,7 @@ async function showTaskDetail(taskId){
       const ageSec=Math.max(0,Math.round(ageMs/1000));
       stepFreshness=ageSec<60?` <span style="font-size:10px;color:var(--text-muted)">${ageSec}s 前</span>`
         :ageSec<3600?` <span style="font-size:10px;color:var(--text-muted)">${Math.round(ageSec/60)} 分钟前</span>`
-        :` <span style="font-size:10px;color:#f59e0b" title="超过 1 小时无步骤刷新, 可能卡死">${Math.round(ageSec/3600)} 小时前 ⚠</span>`;
+        :` <span style="font-size:10px;color:var(--amber)" title="超过 1 小时无步骤刷新, 可能卡死">${Math.round(ageSec/3600)} 小时前 ⚠</span>`;
     }catch(_){}
   }
   const stepText=(typeof businessSafeText==='function')?businessSafeText(t.current_step):t.current_step;
@@ -1126,7 +1134,7 @@ async function showTaskDetail(taskId){
     resultHtml = `<div class="detail-row" style="background:rgba(239,68,68,.08);border-radius:8px;padding:10px;margin:8px 0;border:1px solid rgba(239,68,68,.35)">
       <span class="detail-label">&#128308; 风控冷却</span>
       <div style="flex:1;font-size:11px;line-height:1.6">
-        <div>该设备最近 <b>${c.window_hours}h</b> 内累计 <b style="color:#ef4444">${c.recent_count}</b> 次 FB 风控事件（阈值 ${c.threshold}）。</div>
+        <div>该设备最近 <b>${c.window_hours}h</b> 内累计 <b style="color:var(--red-strong)">${c.recent_count}</b> 次 FB 风控事件（阈值 ${c.threshold}）。</div>
         <div style="color:var(--text-dim);margin-top:4px">建议: 暂停该账号 24h、检查 VPN 出口、或切换到 cold_start 养号预设。等待窗口滑出后可自动恢复。</div>
       </div>
     </div>` + resultHtml;
@@ -1171,7 +1179,7 @@ async function showTaskDetail(taskId){
       <div class="detail-row"><span class="detail-label">已运行</span><span>${elapsedStr}</span></div>
       ${Object.keys(_taskParamsDisplay(params)).length?`<div class="detail-row"><span class="detail-label">参数</span><pre style="font-size:10px;color:var(--text-dim);white-space:pre-wrap;margin:0;flex:1">${JSON.stringify(_taskParamsDisplay(params),null,2)}</pre></div>`:''}
       ${geoGlossary}
-      ${err?`<div class="detail-row"><span class="detail-label">错误</span><span style="color:#f87171;font-size:12px">${err}</span></div>`:''}
+      ${err?`<div class="detail-row"><span class="detail-label">错误</span><span style="color:var(--red);font-size:12px">${err}</span></div>`:''}
       ${(()=>{
         // P1-A: 失败任务挂一键修复按钮（点击调对应 endpoint）
         if(t.status!=='failed'||!err) return '';
@@ -1184,12 +1192,12 @@ async function showTaskDetail(taskId){
       ${resultHtml}
       ${t.status==='failed'?`<div class="detail-row" id="forensics-row"><span class="detail-label">📸 失败证据</span><div id="forensics-panel" style="flex:1;font-size:11px;color:var(--text-dim)">加载中...</div></div>`:''}
       <div style="display:flex;gap:8px;margin-top:20px;flex-wrap:wrap">
-        ${canHunt?`<button class="qa-btn" style="color:#a78bfa;border-color:#8b5cf6;background:rgba(139,92,246,.15);font-weight:600" onclick="_tdLaunchHunt('${taskId}','${t.device_id||''}',${memberCount})">🧠 用这批 ${memberCount} 位成员做画像识别</button>`:''}
+        ${canHunt?`<button class="qa-btn" style="color:var(--violet-soft);border-color:var(--violet);background:rgba(139,92,246,.15);font-weight:600" onclick="_tdLaunchHunt('${taskId}','${t.device_id||''}',${memberCount})">🧠 用这批 ${memberCount} 位成员做画像识别</button>`:''}
         ${canCancel?`<button class="qa-btn" style="color:var(--yellow);border-color:var(--yellow)" onclick="_tdAction('cancel','${taskId}')">⏹ 取消任务</button>`:''}
         ${canRetry?`<button class="qa-btn" style="color:var(--accent);border-color:var(--accent)" onclick="_tdAction('retry','${taskId}')">🔄 重新提交</button>`:''}
-        ${canRestore?`<button class="qa-btn" style="color:#22c55e;border-color:#22c55e" onclick="_tdAction('restore','${taskId}')">♻ 恢复任务</button>`:''}
-        ${canErase?`<button class="qa-btn" style="color:#f87171;border-color:#f87171" onclick="_tdAction('erase','${taskId}')">永久删除</button>`:''}
-        ${canDelete?`<button class="qa-btn" style="color:#f87171;border-color:#f87171" onclick="_tdAction('delete','${taskId}')">🗑 移入回收站</button>`:''}
+        ${canRestore?`<button class="qa-btn" style="color:var(--green-strong);border-color:var(--green-strong)" onclick="_tdAction('restore','${taskId}')">♻ 恢复任务</button>`:''}
+        ${canErase?`<button class="qa-btn" style="color:var(--red);border-color:var(--red)" onclick="_tdAction('erase','${taskId}')">永久删除</button>`:''}
+        ${canDelete?`<button class="qa-btn" style="color:var(--red);border-color:var(--red)" onclick="_tdAction('delete','${taskId}')">🗑 移入回收站</button>`:''}
         <button class="qa-btn" style="margin-left:auto" onclick="document.getElementById('task-detail-modal').remove()">关闭</button>
       </div>
     </div>`;
@@ -1221,7 +1229,7 @@ async function _loadForensicsPanel(taskId){
       const logUrl=`/tasks/${encodeURIComponent(taskId)}/forensics/${encodeURIComponent(s.ts)}/logcat.txt`;
       const tsHuman=s.ts.replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/,'$1-$2-$3 $4:$5:$6 UTC');
       const imgId=`fimg-${i}`;
-      return `<div style="border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:6px"><div style="display:flex;justify-content:space-between;font-weight:600;margin-bottom:4px"><span>📅 ${tsHuman}</span><span style="font-weight:normal;font-size:10px;color:var(--text-muted)">截图 ${cap} · logcat ${lc}</span></div>${m.error?`<div style="color:#f87171;font-size:10px;margin-bottom:4px">${String(m.error).substring(0,200)}</div>`:''}<div style="display:flex;gap:8px;align-items:flex-start"><img id="${imgId}" style="width:120px;height:auto;border:1px solid var(--border);border-radius:3px;cursor:pointer;background:var(--bg-input)" alt="loading..." onclick="this.style.width=this.style.width==='120px'?'auto':'120px';this.style.maxWidth='80vw'"><div style="flex:1;font-size:10px"><a href="javascript:_viewForensicsLog('${taskId}','${s.ts}')" style="color:#22d3ee">📜 查看 logcat</a><br><a href="javascript:_viewForensicsLog('${taskId}','${s.ts}','meta.json')" style="color:#22d3ee">📋 查看 meta.json</a></div></div></div>`;
+      return `<div style="border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:6px"><div style="display:flex;justify-content:space-between;font-weight:600;margin-bottom:4px"><span>📅 ${tsHuman}</span><span style="font-weight:normal;font-size:10px;color:var(--text-muted)">截图 ${cap} · logcat ${lc}</span></div>${m.error?`<div style="color:var(--red);font-size:10px;margin-bottom:4px">${String(m.error).substring(0,200)}</div>`:''}<div style="display:flex;gap:8px;align-items:flex-start"><img id="${imgId}" style="width:120px;height:auto;border:1px solid var(--border);border-radius:3px;cursor:pointer;background:var(--bg-input)" alt="loading..." onclick="this.style.width=this.style.width==='120px'?'auto':'120px';this.style.maxWidth='80vw'"><div style="flex:1;font-size:10px"><a href="javascript:_viewForensicsLog('${taskId}','${s.ts}')" style="color:#22d3ee">📜 查看 logcat</a><br><a href="javascript:_viewForensicsLog('${taskId}','${s.ts}','meta.json')" style="color:#22d3ee">📋 查看 meta.json</a></div></div></div>`;
     }).join('');
     // 异步 fetch 截图 blob (fetch 自动带 X-API-Key)
     snaps.forEach(async (s,i)=>{
@@ -1235,7 +1243,7 @@ async function _loadForensicsPanel(taskId){
       }catch(e){console.warn('[forensics] img load failed',e);}
     });
   }catch(e){
-    panel.innerHTML=`<span style="color:#ef4444">加载证据失败: ${e.message||e}</span>`;
+    panel.innerHTML=`<span style="color:var(--red-strong)">加载证据失败: ${e.message||e}</span>`;
   }
 }
 
@@ -1359,7 +1367,7 @@ async function _tdLaunchHunt(upstreamTaskId, deviceId, memberCount){
         <button onclick="document.getElementById('hunt-launch-modal').remove()" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer">✕</button>
       </div>
       <div style="font-size:12px;color:var(--text-dim);margin-bottom:12px;padding:8px 10px;background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.28);border-radius:8px">
-        将对上游任务的 <b style="color:#a78bfa">${memberCount}</b> 位群成员批量跑 L1+L2 识别，命中目标画像的人可选择自动动作。
+        将对上游任务的 <b style="color:var(--violet-soft)">${memberCount}</b> 位群成员批量跑 L1+L2 识别，命中目标画像的人可选择自动动作。
       </div>
       <div style="display:flex;flex-direction:column;gap:10px;font-size:13px">
         <div style="display:flex;align-items:center;gap:10px"><span style="min-width:90px">目标画像</span>
@@ -1383,7 +1391,7 @@ async function _tdLaunchHunt(upstreamTaskId, deviceId, memberCount){
       </div>
       <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px">
         <button class="qa-btn" onclick="document.getElementById('hunt-launch-modal').remove()">取消</button>
-        <button class="qa-btn" style="background:#8b5cf6;color:#fff;border-color:#8b5cf6;font-weight:600" onclick="_tdLaunchHuntSubmit('${upstreamTaskId}','${deviceId}')">▶ 创建任务</button>
+        <button class="qa-btn" style="background:var(--violet);color:#fff;border-color:var(--violet);font-weight:600" onclick="_tdLaunchHuntSubmit('${upstreamTaskId}','${deviceId}')">▶ 创建任务</button>
       </div>
     </div>`;
   document.body.appendChild(modal);
@@ -1420,13 +1428,15 @@ async function _tdLaunchHuntSubmit(upstreamTaskId, deviceId){
 const _CAT_LABELS = {
   vpn_failure: 'VPN失败', network_timeout: '网络超时', ui_not_found: 'UI未找到',
   account_limited: '账号限流', device_offline: '设备离线', geo_mismatch: 'IP不匹配',
-  task_timeout: '任务超时', unknown: '其他',
+  task_timeout: '任务超时', host_env: '主控环境', unknown: '其他',
 };
 const _CAT_COLORS = {
   vpn_failure: '#f97316', network_timeout: '#eab308', ui_not_found: '#3b82f6',
   account_limited: '#ef4444', device_offline: '#6b7280', geo_mismatch: '#a855f7',
-  task_timeout: '#fb923c', unknown: '#4b5563',
+  task_timeout: '#fb923c', host_env: '#64748b', unknown: '#4b5563',
 };
+let _eapLastData = null;   // P0-4：最近一次错误分析数据快照（一键复制报障用）
+let _eapLastAction = null; // P0-4：最近一次处置执行结果（面板刷新重渲染后回填建议卡，回执不丢）
 
 async function _loadErrorAnalysis() {
   try {
@@ -1436,10 +1446,16 @@ async function _loadErrorAnalysis() {
 
     const totalFailed = d.total_failed || 0;
     const failureRate = d.failure_rate || 0;
+    /* P0-3 双轨口径：优先展示业务失败率（后端已剔除 VPN/adb/主控环境等基建失败——
+       2026-08-16 实锤 7/10 全是预检拦截，混合口径 70% 顶在业务脸上而业务实际 0%）。
+       旧后端/旧 Worker 无此字段时回退混合口径，行为不破。 */
+    const bizRate = (d.business_failure_rate != null) ? d.business_failure_rate : null;
+    const infraFailed = d.infra_failed || 0;
     const cats = d.categories || {};
     const alerts = d.alerts || [];
     const suggestions = d.suggestions || [];
     const trend = d.hourly_trend || [];
+    _eapLastData = d;
 
     // 隐藏面板：无失败时
     if (totalFailed === 0) { panel.style.display = 'none'; return; }
@@ -1451,11 +1467,20 @@ async function _loadErrorAnalysis() {
     const summaryEl = document.getElementById('eap-summary-text');
     const topCat = d.top_category || 'unknown';
     const topCount = cats[topCat] || 0;
-    if (summaryEl) summaryEl.textContent = '\u8fc7\u53bb24h\uff1a\u4e3b\u8981 ' + (_CAT_LABELS[topCat] || topCat) + ' \xd7' + topCount;
+    if (summaryEl) {
+      let s = '\u8fc7\u53bb24h\uff1a\u4e3b\u8981 ' + (_CAT_LABELS[topCat] || topCat) + ' \xd7' + topCount;
+      if (bizRate != null && infraFailed > 0) s += ' · 基建/环境失败 ' + infraFailed + ' 条不计业务口径';
+      if (d.small_sample) s += ' · 样本 ' + (d.total_tasks || 0) + ' 条仅供参考';
+      summaryEl.textContent = s;
+    }
     const rateEl = document.getElementById('eap-rate');
     if (rateEl) {
-      rateEl.textContent = failureRate + '%';
-      rateEl.style.color = failureRate > 30 ? 'var(--red)' : failureRate > 10 ? '#eab308' : 'var(--green)';
+      const shown = bizRate != null ? bizRate : failureRate;
+      rateEl.textContent = (bizRate != null ? '业务 ' : '') + shown + '%';
+      rateEl.title = bizRate != null
+        ? ('业务失败率（已剔除 ' + infraFailed + ' 条基建/环境失败）· 混合口径 ' + failureRate + '%')
+        : '混合口径失败率';
+      rateEl.style.color = shown > 30 ? 'var(--red)' : shown > 10 ? '#eab308' : 'var(--green)';
     }
     const iconEl = document.getElementById('eap-icon');
     if (iconEl) iconEl.textContent = alerts.some(a => a.level === 'critical') ? '\ud83d\udea8' : '\u26a0\ufe0f';
@@ -1487,26 +1512,31 @@ async function _loadErrorAnalysis() {
         }).join('') || '<div style="color:var(--text-dim);font-size:11px">\u6682\u65e0\u9519\u8bef\u6570\u636e</div>';
     }
 
-    // 渲染修复建议
+    // 渲染修复建议（P0-4：执行按钮带回执——onclick 传 this 做 loading 态，
+    // 建议卡内嵌 .eap-act-res 结果行；面板刷新重渲染时用 _eapLastAction 回填不丢回执）
     const suggEl = document.getElementById('eap-suggestions');
     if (suggEl) {
       suggEl.innerHTML = suggestions.length ? suggestions.map(s => {
         const priColor = s.priority === 'critical' || s.priority === 'high' ? 'var(--red)' : s.priority === 'medium' ? '#eab308' : 'var(--text-dim)';
-        const btnHtml = s.endpoint ? '<button class="qa-btn" onclick="_eapAction(\'' + (s.method||'POST') + '\',\'' + s.endpoint + '\')" style="font-size:10px;padding:2px 8px;margin-top:4px;border-color:' + priColor + ';color:' + priColor + '">\u6267\u884c</button>' : '';
-        return '<div style="background:var(--bg-card);border-radius:6px;padding:7px 9px;margin-bottom:6px;border-left:3px solid ' + priColor + '"><div style="font-size:12px">' + (s.icon || '') + ' ' + esc(s.action) + '</div>' + btnHtml + '</div>';
+        const btnHtml = s.endpoint ? '<button class="qa-btn" onclick="_eapAction(this,\'' + (s.method||'POST') + '\',\'' + s.endpoint + '\')" style="font-size:10px;padding:2px 8px;margin-top:4px;border-color:' + priColor + ';color:' + priColor + '">\u6267\u884c</button>' : '';
+        const hasRes = _eapLastAction && s.endpoint && _eapLastAction.endpoint === s.endpoint && (Date.now() - _eapLastAction.ts) < 600000;
+        const resHtml = '<div class="eap-act-res" data-ep="' + esc(s.endpoint || '') + '" style="font-size:10px;margin-top:4px;color:' + (hasRes ? _eapLastAction.tone : 'var(--text-dim)') + '">' + (hasRes ? esc(_eapLastAction.text) : '') + '</div>';
+        return '<div style="background:var(--bg-card);border-radius:6px;padding:7px 9px;margin-bottom:6px;border-left:3px solid ' + priColor + '"><div style="font-size:12px">' + (s.icon || '') + ' ' + esc(s.action) + '</div>' + btnHtml + resHtml + '</div>';
       }).join('') : '<div style="color:var(--text-dim);font-size:11px">\u65e0\u5efa\u8bae</div>';
     }
 
-    // 渲染 unknown 错误样本
+    // 渲染 unknown 错误样本（P0-2：附一键复制报障；样本清零时把区块收起来）
     const samples = d.samples || {};
     const unknownSamples = samples['unknown'] || [];
-    if (unknownSamples.length > 0) {
-      const unknownEl = document.getElementById('eap-unknown-samples');
-      if (unknownEl) {
+    const unknownEl = document.getElementById('eap-unknown-samples');
+    if (unknownEl) {
+      if (unknownSamples.length > 0) {
         unknownEl.innerHTML = unknownSamples.map(s =>
           `<div style="font-size:10px;color:var(--text-dim);padding:3px 6px;background:var(--bg-card);border-radius:4px;margin-bottom:3px;font-family:monospace">${esc(s)}</div>`
-        ).join('');
+        ).join('') + '<button class="qa-btn" style="font-size:10px;padding:2px 8px;margin-top:2px" onclick="_eapCopyReport()" title="复制 24h 失败构成 + 未识别样本原文，粘给维护者/报障群即可">复制报障信息</button>';
         unknownEl.parentElement.style.display = '';
+      } else {
+        unknownEl.parentElement.style.display = 'none';
       }
     }
 
@@ -1533,12 +1563,79 @@ function _toggleEap() {
   if (_eapOpen) _loadErrorAnalysis();
 }
 
-async function _eapAction(method, endpoint) {
+/* P0-4 处置建议执行回执闭环。此前 fire-and-forget（弹一句"操作已执行"+1.5s 静默刷新），
+   用户不知道 VPN 到底重连成没成；且 /vpn/reconnect-all 端点根本不存在（404）、
+   /devices/batch-reconnect 空 body 422——两颗按钮其实都是坏的，本轮连后端一起修。 */
+async function _eapAction(btn, method, endpoint) {
+  const orig = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '执行中…'; }
+  let text = '', tone = 'var(--green-strong)';
   try {
-    await api(method, endpoint);
-    showToast('\u64cd\u4f5c\u5df2\u6267\u884c', 'success');
-    setTimeout(_loadErrorAnalysis, 1500);
-  } catch(e) { showToast('\u64cd\u4f5c\u5931\u8d25: ' + (e.message || e), 'error'); }
+    // VPN 静默重连是设备上的 UI 自动化，单台 10-30s——超时给足 150s
+    const r = await api(method, endpoint, null, 150000);
+    text = _eapSummarizeAction(endpoint, r);
+    const bad = /失败 [1-9]|reconnect_failed|timeout/.test(JSON.stringify(r || {}));
+    tone = bad ? 'var(--amber)' : 'var(--green-strong)';
+    showToast(text, bad ? 'warn' : 'success', 6000, 'eap-act');
+  } catch (e) {
+    text = '执行失败: ' + (e && e.message ? e.message : e);
+    tone = 'var(--red-strong)';
+    showToast(text, 'error', 6000, 'eap-act');
+  }
+  _eapLastAction = { endpoint: endpoint, text: text, tone: tone, ts: Date.now() };
+  if (btn) { btn.disabled = false; btn.textContent = orig; }
+  const res = document.querySelector('#eap-suggestions .eap-act-res[data-ep="' + (window.CSS && CSS.escape ? CSS.escape(endpoint) : endpoint) + '"]');
+  if (res) { res.textContent = text; res.style.color = tone; }
+  setTimeout(_loadErrorAnalysis, 8000);
+}
+
+/** 把处置端点的响应翻成一句人话回执（按端点形状各自总结，认不出就通用文案）。 */
+function _eapSummarizeAction(endpoint, r) {
+  try {
+    if (endpoint.indexOf('/vpn/reconnect-all') === 0) {
+      return 'VPN：' + (r.already_connected || 0) + ' 台已在线 · 重连成功 ' + (r.reconnected || 0) + ' 台 · 失败 ' + (r.failed || 0) + ' 台（共 ' + (r.total || 0) + ' 台）';
+    }
+    if (endpoint.indexOf('/devices/batch-reconnect') === 0) {
+      if (r.note) return r.note;
+      const n = (r.results || []).length;
+      return '设备重连：' + (r.reconnected || 0) + '/' + n + ' 台已恢复在线';
+    }
+    if (endpoint.indexOf('/tasks/cancel-all') === 0) {
+      return '已取消 ' + (r.cancelled || 0) + ' 个任务（本机 ' + (r.local || 0) + ' · Worker ' + (r.workers || 0) + '）';
+    }
+  } catch (e) {}
+  return '操作已执行';
+}
+
+/** P0-2：一键复制报障信息（24h 构成 + 未识别样本原文），unknown 错误从"看不懂"变"可上报"。 */
+function _eapCopyReport() {
+  const d = _eapLastData || {};
+  const lines = [
+    'ReachX 任务错误报障 · ' + new Date().toLocaleString('zh-CN'),
+    '24h 任务 ' + (d.total_tasks || 0) + ' 条 · 失败 ' + (d.total_failed || 0) + ' 条 · ' +
+      (d.business_failure_rate != null
+        ? ('业务失败率 ' + d.business_failure_rate + '%（基建失败 ' + (d.infra_failed || 0) + ' 条已剔除）')
+        : ('混合失败率 ' + (d.failure_rate || 0) + '%')),
+    '分类: ' + JSON.stringify(d.categories || {}),
+    '责任层: ' + JSON.stringify(d.layers || {}),
+    '未识别样本:'
+  ].concat(((d.samples || {}).unknown) || ['(无)']);
+  const txt = lines.join('\n');
+  const fallbackCopy = function () {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = txt; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); ta.remove();
+      showToast('报障信息已复制到剪贴板', 'success', 3000, 'eap-act');
+    } catch (e) { showToast('复制失败: ' + e, 'error', 4000, 'eap-act'); }
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(txt).then(
+      function () { showToast('报障信息已复制到剪贴板', 'success', 3000, 'eap-act'); },
+      fallbackCopy
+    );
+  } else { fallbackCopy(); }
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

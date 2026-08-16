@@ -102,6 +102,15 @@ class VisionFallback:
         # 720x1600 image, d.click() 打屏外无效)。
         img_w, img_h = self._png_dimensions(screenshot_bytes)
 
+        # 2026-08-16 P1: GUI grounding 评测案例采集（默认关，HUOKE_GROUNDING_COLLECT
+        # 开才写盘；内部异常全吞，绝不影响 grounding 主路径）。给 Tier-1 A/B 攒真实数据。
+        try:
+            from . import grounding_dataset
+            grounding_dataset.maybe_record(
+                target, context, screenshot_bytes, img_w, img_h)
+        except Exception:
+            pass
+
         prompt = self._build_prompt(target, context)
 
         for attempt in range(self.config.max_retries):

@@ -9,9 +9,15 @@ from typing import Optional
 from src.utils.subprocess_text import run as _sp_run_text
 from src.utils.subprocess_text import run_shell
 from src.host.device_registry import PROJECT_ROOT, config_file, scripts_dir, templates_dir
+from .auth import requires_role
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["system"])
+
+# 2026-08-16 P2：脚本工房/模板库端点统一角色闸——admin+operator 可用（页面对这两个
+# 角色可见），客服与未登录一律挡外；X-API-Key 机器调用照 requires_role 第一分支通行
+# （集群协调器跨机转发靠它，各机 OPENCLAW_API_KEY 需一致，与 APK 分发同约定）。
+_OPS_ROLE = Depends(requires_role("admin", "operator"))
 
 
 @router.get("/system/cluster/probe-contacts-enriched")
@@ -57,6 +63,80 @@ def system_git_branch():
         }
     except Exception as e:
         return {"branch": "(unknown)", "ahead_of_main": 0, "is_main": False, "error": str(e)}
+
+
+@router.post("/system/nav-click")
+def system_nav_click(body: dict):
+    """导航埋点：控制台菜单/页签点击流水 → logs/nav_usage.jsonl。
+
+    2026-08-14 IA 重组配套：菜单退役从「拍脑袋」升格为「连续数周零点击才许提退役」，
+    这里是那份决策数据的地基。前端 overview.js _navBeacon 每次真实导航打一条；
+    user/role 取自客户端自报（用途是使用度统计，不做权限判定）。
+    """
+    import json as _json
+    import time as _time
+    from pathlib import Path as _Path
+
+    page = str(body.get("page", ""))[:64].strip()
+    if not page:
+        raise HTTPException(status_code=422, detail="page required")
+    rec = {
+        "ts": round(_time.time(), 3),
+        "page": page,
+        "kind": str(body.get("kind", "page"))[:16],
+        "user": str(body.get("user", ""))[:32],
+        "role": str(body.get("role", ""))[:24],
+    }
+    p = _Path(PROJECT_ROOT) / "logs" / "nav_usage.jsonl"
+    try:
+        p.parent.mkdir(exist_ok=True)
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(_json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception as e:  # 埋点绝不打断业务
+        logger.debug("nav-click write failed: %s", e)
+        return {"ok": False}
+    return {"ok": True}
+
+
+@router.get("/system/nav-usage/summary")
+def system_nav_usage_summary(days: int = 28):
+    """导航埋点聚合：近 N 天各菜单/页签点击量、最后使用时间、按类型分布。
+
+    退役决策口径：先看 count=0 的名单（连续观察 ≥4 周），再人工裁决。
+    """
+    import json as _json
+    import time as _time
+    from pathlib import Path as _Path
+
+    days = max(1, min(int(days or 28), 365))
+    p = _Path(PROJECT_ROOT) / "logs" / "nav_usage.jsonl"
+    if not p.exists():
+        return {"days": days, "total": 0, "pages": []}
+    cutoff = _time.time() - days * 86400
+    out: dict = {}
+    total = 0
+    try:
+        with open(p, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rec = _json.loads(line)
+                except Exception:
+                    continue
+                if rec.get("ts", 0) < cutoff:
+                    continue
+                pg = rec.get("page", "")
+                if not pg:
+                    continue
+                total += 1
+                slot = out.setdefault(pg, {"page": pg, "count": 0, "last_ts": 0, "kinds": {}})
+                slot["count"] += 1
+                slot["last_ts"] = max(slot["last_ts"], rec.get("ts", 0))
+                k = rec.get("kind", "page")
+                slot["kinds"][k] = slot["kinds"].get(k, 0) + 1
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"read nav_usage failed: {e}")
+    pages = sorted(out.values(), key=lambda x: -x["count"])
+    return {"days": days, "total": total, "pages": pages}
 
 
 @router.post("/system/force-restart")
@@ -239,25 +319,50 @@ def _get_scripts_dir():
     return scripts_dir()
 
 
-@router.get("/scripts")
+def _safe_script_name(filename: str) -> str:
+    """设备脚本文件名规范化（2026-08-16 P1）。
+
+    两重护栏，upload/delete/execute/from-template 四个入口共用一个判据：
+      1. 剥掉目录成分防路径穿越——此前 ``scripts_dir / filename`` 直接拼，
+         ``..\\server.py`` 能删/写/读 scripts/ 之外的项目文件；
+      2. 强制 ``.sh`` 白名单——scripts/ 目录混居着 60+ 个项目运维脚本
+         （warmup_vlm.py / smoke_*.py / *.ps1 …），它们不该被 dashboard
+         列出、更不该能被删除或送 adb 执行。设备脚本一律 .sh。
+    """
+    from pathlib import PurePosixPath, PureWindowsPath
+    name = PureWindowsPath(str(filename or "")).name
+    name = PurePosixPath(name).name.strip()
+    if not name or name in {".", ".."}:
+        raise HTTPException(400, "非法文件名")
+    if not name.lower().endswith(".sh"):
+        raise HTTPException(400, "仅支持 .sh 设备脚本（项目运维脚本不在此管理）")
+    return name
+
+
+@router.get("/scripts", dependencies=[_OPS_ROLE])
 def list_scripts():
-    """List uploaded scripts."""
+    """List uploaded device scripts (.sh only).
+
+    2026-08-16：不再 dump 整个 scripts/ 目录——运维脚本(.py/.ps1/.bat)对
+    设备 adb 执行既无意义又危险，从列表源头隐藏（脚本工房与跨集群执行两个
+    消费方同时受益；前端 cluster-ops.js 的 .sh 过滤保留作双保险）。
+    """
     scripts_dir = _get_scripts_dir()
     scripts_dir.mkdir(exist_ok=True)
-    files = sorted(scripts_dir.glob("*"), key=lambda f: f.stat().st_mtime, reverse=True)
+    files = sorted(scripts_dir.glob("*.sh"), key=lambda f: f.stat().st_mtime, reverse=True)
     return {"scripts": [
         {"name": f.name, "size": f.stat().st_size, "ext": f.suffix}
         for f in files if f.is_file()
     ]}
 
 
-@router.post("/scripts/upload")
+@router.post("/scripts/upload", dependencies=[_OPS_ROLE])
 async def upload_script(request: Request):
     """Upload a script file. body: {filename, content}"""
     from ..api import _audit
     scripts_dir = _get_scripts_dir()
     body = await request.json()
-    filename = body.get("filename", "script.sh")
+    filename = _safe_script_name(body.get("filename", "script.sh"))
     content = body.get("content", "")
     if not content:
         raise HTTPException(400, "Empty script")
@@ -269,10 +374,10 @@ async def upload_script(request: Request):
     return {"ok": True, "filename": filename}
 
 
-@router.delete("/scripts/{filename}")
+@router.delete("/scripts/{filename}", dependencies=[_OPS_ROLE])
 def delete_script(filename: str):
     scripts_dir = _get_scripts_dir()
-    path = scripts_dir / filename
+    path = scripts_dir / _safe_script_name(filename)
     if path.exists():
         path.unlink()
     return {"ok": True}
@@ -308,7 +413,7 @@ def _expand_template_vars(content: str, device_id: str, device_index: int = 0,
     return re.sub(r'\{\{(\s*\w+\s*)\}\}', _repl, content)
 
 
-@router.post("/scripts/execute")
+@router.post("/scripts/execute", dependencies=[_OPS_ROLE])
 def execute_script(body: dict):
     """Execute a script on devices with template variable expansion.
     body: {filename, device_ids?, group_id?, type, variables?}"""
@@ -316,7 +421,7 @@ def execute_script(body: dict):
     from src.device_control.device_manager import get_device_manager
 
     scripts_dir = _get_scripts_dir()
-    filename = body.get("filename", "")
+    filename = _safe_script_name(body.get("filename", ""))
     device_ids = body.get("device_ids", [])
     group_id = body.get("group_id", "")
     script_type = body.get("type", "shell")
@@ -409,7 +514,7 @@ def list_script_templates():
     return {"templates": templates}
 
 
-@router.post("/scripts/from-template")
+@router.post("/scripts/from-template", dependencies=[_OPS_ROLE])
 def create_script_from_template(body: dict):
     """Create a script from a template. body: {template_name, custom_name?}"""
     scripts_dir = _get_scripts_dir()
@@ -419,7 +524,7 @@ def create_script_from_template(body: dict):
     tpl = next((t for t in templates_resp["templates"] if t["name"] == template_name), None)
     if not tpl:
         raise HTTPException(404, "Template not found")
-    fname = custom_name or tpl["filename"]
+    fname = _safe_script_name(custom_name or tpl["filename"])
     scripts_dir.mkdir(exist_ok=True)
     with open(scripts_dir / fname, "w", encoding="utf-8") as f:
         f.write(tpl["content"])
@@ -683,7 +788,24 @@ def _get_templates_dir():
     return templates_dir()
 
 
-@router.get("/templates")
+def _safe_template_name(filename: str) -> str:
+    """模板文件名规范化（2026-08-16 P2，与 _safe_script_name 同哲学）。
+
+    修复前 get/delete/import 的 filename 直接拼路径：``..%5C..%5Csecrets.json``
+    可读/删 templates/ 之外的文件（get_template 是任意文件读）。剥目录成分 +
+    强制 .json（模板落盘格式唯一）。
+    """
+    from pathlib import PurePosixPath, PureWindowsPath
+    name = PureWindowsPath(str(filename or "")).name
+    name = PurePosixPath(name).name.strip()
+    if not name or name in {".", ".."}:
+        raise HTTPException(400, "非法文件名")
+    if not name.lower().endswith(".json"):
+        raise HTTPException(400, "非法模板文件名")
+    return name
+
+
+@router.get("/templates", dependencies=[_OPS_ROLE])
 def list_templates():
     """List available templates (scripts + workflows)."""
     import json
@@ -706,10 +828,10 @@ def list_templates():
     return {"templates": templates}
 
 
-@router.post("/templates")
+@router.post("/templates", dependencies=[_OPS_ROLE])
 def create_template(body: dict):
     """Create/share a template. body: {name, type, description, content, tags?, author?}"""
-    import json, uuid
+    import json, re, uuid
     from ..api import _audit
     templates_dir = _get_templates_dir()
     templates_dir.mkdir(exist_ok=True)
@@ -722,45 +844,48 @@ def create_template(body: dict):
         "author": body.get("author", ""),
         "tags": body.get("tags", []),
     }
-    fname = f"{tpl['id']}_{tpl['name']}.json"
+    # 文件名成分只取 name 里的安全字符（防 ..\ 穿越与非法字符落盘）；展示名 tpl['name'] 不动
+    safe_stem = re.sub(r'[^\w\u4e00-\u9fff-]+', "_", tpl["name"])[:60] or "tpl"
+    fname = f"{tpl['id']}_{safe_stem}.json"
     with open(templates_dir / fname, "w", encoding="utf-8") as f:
         json.dump(tpl, f, ensure_ascii=False, indent=2)
     _audit("create_template", detail=str({"name": tpl["name"]}))
     return tpl
 
 
-@router.get("/templates/{filename}")
+@router.get("/templates/{filename}", dependencies=[_OPS_ROLE])
 def get_template(filename: str):
     """Get template content."""
     import json
     templates_dir = _get_templates_dir()
-    path = templates_dir / filename
+    path = templates_dir / _safe_template_name(filename)
     if not path.exists():
         raise HTTPException(404, "Template not found")
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-@router.delete("/templates/{filename}")
+@router.delete("/templates/{filename}", dependencies=[_OPS_ROLE])
 def delete_template(filename: str):
     templates_dir = _get_templates_dir()
-    path = templates_dir / filename
+    path = templates_dir / _safe_template_name(filename)
     if path.exists():
         path.unlink()
     return {"ok": True}
 
 
-@router.post("/templates/{filename}/import")
+@router.post("/templates/{filename}/import", dependencies=[_OPS_ROLE])
 def import_template(filename: str):
     """Import template into scripts or workflows."""
     import json
     templates_dir = _get_templates_dir()
     scripts_dir = _get_scripts_dir()
-    path = templates_dir / filename
+    path = templates_dir / _safe_template_name(filename)
     if not path.exists():
         raise HTTPException(404, "Template not found")
     tpl = json.loads(path.read_text(encoding="utf-8"))
     if tpl.get("type") == "script":
-        script_name = tpl["name"] + ".sh"
+        # 导入名过设备脚本同一把尺（name 来自用户输入，防拼路径穿越）
+        script_name = _safe_script_name(str(tpl.get("name") or "tpl") + ".sh")
         script_path = scripts_dir / script_name
         scripts_dir.mkdir(exist_ok=True)
         with open(script_path, "w", encoding="utf-8") as f:

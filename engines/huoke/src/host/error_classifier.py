@@ -9,6 +9,8 @@
 
 | Layer | Code | 文本片段示例 (regex 见下方 _RULES) |
 |-------|------|-----------------------------------|
+| infra | host_env_toolchain | "[WinError 2] 系统找不到指定的文件" / "FileNotFoundError"（主控机自身工具链） |
+| infra | host_restart_orphan | "任务孤儿" / "server 启动时检测到上一进程"（服务重启中断） |
 | infra | vpn_no_ip | "无法访问外网" / "[gate] 预检未通过 (network)" |
 | infra | adb_offline | "adb offline" / "device not found" |
 | quota | rate_limited | "quota exceeded" / "in hourly window" |
@@ -49,6 +51,17 @@ from typing import Optional
 # 每条 (regex, layer, code, msg, tone, emoji, fix_action)
 # fix_action: 前端 UI 据此渲染「一键修复」按钮，可选值见 _FIX_ACTIONS。
 _RULES: list[tuple[re.Pattern, str, str, str, str, str, str]] = [
+    # ── infra: 主控环境（host-side，必须最先——文本常同时带 "[gate] ... network"，
+    #    不置顶会被下面的 vpn_no_ip 吃掉，把主控机的锅安到设备网络头上）──
+    # 2026-08-17 实锤：服务进程 PATH 缺 adb → 预检全体 "[WinError 2] 系统找不到
+    # 指定的文件"，7 条失败 4 条归 unknown、面板处方却是"重连 VPN"（开错药）。
+    (re.compile(r"WinError\s*\d+|系统找不到指定的文件|FileNotFoundError", re.I),
+     "infra", "host_env_toolchain",
+     "主控环境缺工具链 (adb/PATH，非设备问题)", "red", "🧰", ""),
+    (re.compile(r"任务孤儿|server 启动时检测到上一进程", re.I),
+     "infra", "host_restart_orphan",
+     "服务重启导致任务中断 (可重试)", "amber", "♻", "smart_retry"),
+
     # ── quota / rate limit (最具体先) ──
     (re.compile(r"quota exceeded|in hourly window", re.I),
      "quota", "rate_limited", "配额到 (等下个 window)", "amber", "⏰", "wait_window"),

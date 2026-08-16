@@ -14,7 +14,7 @@ function startMacroRec(){
   _macroSteps=[];
   _macroLastTime=Date.now();
   const btn=document.getElementById('macro-rec-btn');
-  btn.style.background='#ef4444';btn.style.color='#fff';
+  btn.style.background='var(--red-strong)';btn.style.color='#fff';
   btn.textContent='\u25A0 停止录制';
   showToast('宏录制已开始 — 在手机上操作，所有动作将被记录');
 }
@@ -166,13 +166,13 @@ function _startMacroProgressPolling(){
       if(bar){
         bar.classList.add('active');
         bar.style.borderColor='rgba(59,130,246,.3)';bar.style.background='rgba(59,130,246,.05)';
-        bar.innerHTML='<span style="font-size:12px;font-weight:600;color:#3b82f6">\u25B6 宏播放中:</span>'+
+        bar.innerHTML='<span style="font-size:12px;font-weight:600;color:var(--blue-strong)">\u25B6 宏播放中:</span>'+
           Object.entries(r.progress).map(([did,p])=>{
             const alias=ALIAS[did]||did.substring(0,8);
             const pct=p.percent||0;
             return `<span class="anomaly-item info" style="flex-direction:column;align-items:start;gap:2px">
               <span>${alias}: ${p.current_detail||''} (${p.step}/${p.total})${p.paused?' ⏸':''}</span>
-              <div style="width:100%;height:3px;background:rgba(59,130,246,.2);border-radius:2px"><div style="width:${pct}%;height:100%;background:#3b82f6;border-radius:2px"></div></div>
+              <div style="width:100%;height:3px;background:rgba(59,130,246,.2);border-radius:2px"><div style="width:${pct}%;height:100%;background:var(--blue-strong);border-radius:2px"></div></div>
             </span>`;
           }).join('');
       }

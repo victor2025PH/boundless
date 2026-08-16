@@ -479,10 +479,23 @@ class LLMRouter:
         fb_cfg = self.config.get("fallback") or {}
         primary_model = primary_cfg.get("model") or "qwen2.5:7b"
         fallback_model = fb_cfg.get("model") or "claude-haiku-4-5-20251001"
+        compliant_default = primary_model
         if task:
             override = (self.config.get("per_task_override") or {}).get(task) or {}
             primary_model = override.get("primary_model") or primary_model
             fallback_model = override.get("fallback_model") or fallback_model
+        # 合规门禁: 名称含 "uncensored" 的 primary model 默认拒绝 (大小写不敏感),
+        # 仅当环境变量 HUOKE_ALLOW_UNCENSORED=1 (gated 客户 overlay, 见
+        # config/llm_routing.gated.example.yaml) 才放行; 拒绝时回落合规默认
+        # (llm.primary.model) 并记 warning。非 uncensored 模型行为不变。
+        if ("uncensored" in str(primary_model).lower()
+                and os.environ.get("HUOKE_ALLOW_UNCENSORED") != "1"):
+            logger.warning(
+                "[llm_router] task=%s 请求 uncensored 模型 %s 被合规门禁拒绝 "
+                "(HUOKE_ALLOW_UNCENSORED != 1), 回落合规默认 %s",
+                task, primary_model, compliant_default,
+            )
+            primary_model = compliant_default
         return {"primary": primary_model, "fallback": fallback_model}
 
     # -- 主入口 ----------------------------------------------------------

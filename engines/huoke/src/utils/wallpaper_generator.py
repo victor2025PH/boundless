@@ -169,7 +169,8 @@ def generate_wallpaper(number: int,
     draw.line([(line_margin, line_y), (width - line_margin, line_y)],
               fill=(accent_r // 3, accent_g // 3, accent_b // 3), width=1)
 
-    _draw_text_centered(draw, "OpenClaw", font_brand, width,
+    from src.host import brand
+    _draw_text_centered(draw, brand.WALLPAPER_TEXT, font_brand, width,
                         int(height * 0.87), fill=(100, 116, 139))
 
     out_path = os.path.join(out_dir, f"wallpaper_{num_str}.png")
@@ -511,7 +512,8 @@ def _set_device_label(manager, device_id: str, number: int) -> bool:
 
     部分机型上 settings put 偶发慢，使用独立超时，避免继承过短的 connection.timeout_seconds。
     """
-    name = f"OpenClaw-{number:02d}"
+    from src.host import brand
+    name = brand.device_name(number)
     ok1, e1 = manager._run_adb(
         ['shell', 'settings', 'put', 'global', 'device_name', name],
         device_id, timeout=20,

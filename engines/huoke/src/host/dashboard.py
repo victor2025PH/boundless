@@ -8,282 +8,30 @@ OpenClaw Web Dashboard — 一站式控制面板。
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
+from src.host.dashboard_parts.sidebar import SIDEBAR_HTML
+
 router = APIRouter()
 
-DASHBOARD_HTML = r"""<!DOCTYPE html>
+_HEAD_HTML = r"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<meta name="theme-color" content="#0b1120">
+<meta name="theme-color" content="#080b10">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/icon-192.svg" type="image/svg+xml">
+<link rel="icon" href="/static/brand/reachx-256.png" type="image/png">
 <title>OpenClaw 控制中心</title>
-<link rel="stylesheet" href="/static/css/dashboard.css?v=20260418k">
+<link rel="stylesheet" href="/static/css/dashboard.css?v=20260815p4">
+<script>(function(){try{document.documentElement.setAttribute('data-role',(localStorage.getItem('oc_role')||'operator').toLowerCase());}catch(e){}})();</script>
 </head>
 <body>
 
-<aside class="sidebar">
-  <div class="sidebar-logo"><h1>OpenClaw</h1><small>智能群控中心</small></div>
-  <nav class="sidebar-nav">
-    <div class="nav-search"><input id="nav-search" placeholder="搜索功能..." oninput="_filterNav(this.value)"/></div>
+"""
 
-    <!-- 客服中心置顶 (PR-6.5+) — 确保用户第一屏就看到, 不被滚动条吞掉 -->
-    <div class="nav-section" onclick="_toggleSection(this)" data-cs-section="1" style="background:linear-gradient(135deg,rgba(168,85,247,.18),rgba(96,165,250,.18));border-left:3px solid #a855f7">
-      &#129309; 客服中心
-      <span id="cs-pending-badge" style="display:none;margin-left:6px;font-size:10px;padding:1px 6px;background:#ef4444;color:#fff;border-radius:8px;font-weight:600">0</span>
-      <span class="sec-arrow">&#9660;</span>
-    </div>
-    <div class="nav-group" data-cs-group="1">
-      <div class="nav-item" onclick="if(window.lmOpenMyDesk)lmOpenMyDesk()" style="font-weight:600;background:rgba(168,85,247,.08)"><span class="icon">&#128100;</span><span>我的工作台</span></div>
-      <div class="nav-item" onclick="if(window.lmOpenHandoffInbox)lmOpenHandoffInbox('')" style="font-weight:500"><span class="icon">&#128229;</span><span>待接管队列</span></div>
-      <div class="nav-item" onclick="if(window.lmOpenLeadSearch)lmOpenLeadSearch()"><span class="icon">&#128270;</span><span>客户搜索</span></div>
-      <div class="nav-item" onclick="if(window.lmOpenCommandCenter)lmOpenCommandCenter()"><span class="icon">&#128290;</span><span>命令中心</span></div>
-      <div class="nav-item" onclick="window.open('/static/l2-dashboard.html','_blank')"><span class="icon">&#128202;</span><span>L2 客户漏斗看板</span></div>
-    </div>
-
-    <div class="nav-section" onclick="_toggleSection(this)">核心 <span class="sec-arrow">&#9660;</span></div>
-    <div class="nav-group">
-      <div class="nav-item active" data-page="overview"><span class="icon">&#9632;</span><span data-i18n="overview">总览</span></div>
-      <div class="nav-item" data-page="devices"><span class="icon">&#9783;</span><span data-i18n="devices">设备管理</span></div>
-      <div class="nav-item" data-page="chat"><span class="icon">&#9993;</span><span>AI 指令</span></div>
-      <div class="nav-item" data-page="tasks"><span class="icon">&#9881;</span><span data-i18n="tasks">任务中心</span></div>
-      <div class="nav-item" data-page="vpn-manage"><span class="icon">&#128274;</span><span>VPN 管理</span></div>
-      <div class="nav-item" data-page="router-manage"><span class="icon">&#128225;</span><span>代理中心</span></div>
-      <div class="nav-item" data-page="screens"><span class="icon">&#9707;</span><span data-i18n="screen-monitor">屏幕监控</span></div>
-      <div class="nav-item" data-page="multi-screen"><span class="icon">&#128187;</span><span>多屏操控</span></div>
-      <div class="nav-item" data-page="groups"><span class="icon">&#127991;</span><span>设备分组</span></div>
-    </div>
-
-    <div class="nav-section" onclick="_toggleSection(this)">平台 <span class="sec-arrow">&#9660;</span></div>
-    <div class="nav-group">
-      <div class="nav-item" data-page="plat-tiktok"><span class="icon">&#127916;</span><span>TikTok</span></div>
-      <div class="nav-item" data-page="plat-telegram"><span class="icon">&#9992;</span><span>Telegram</span></div>
-      <div class="nav-item" data-page="plat-whatsapp"><span class="icon">&#128172;</span><span>WhatsApp</span></div>
-      <div class="nav-item" data-page="plat-facebook"><span class="icon">&#128101;</span><span>Facebook</span></div>
-      <div class="nav-item" data-page="plat-linkedin"><span class="icon">&#128188;</span><span>LinkedIn</span></div>
-      <div class="nav-item" data-page="plat-instagram"><span class="icon">&#128247;</span><span>Instagram</span></div>
-      <div class="nav-item" data-page="plat-twitter"><span class="icon">&#120143;</span><span>X (Twitter)</span></div>
-    </div>
-
-    <div class="nav-section collapsed" onclick="_toggleSection(this)">自动化 <span class="sec-arrow">&#9660;</span></div>
-    <div class="nav-group collapsed">
-      <div class="nav-item" data-page="workflows"><span class="icon">&#9881;</span><span>工作流</span></div>
-      <div class="nav-item" data-page="visual-workflow"><span class="icon">&#128736;</span><span>可视化工作流</span></div>
-      <div class="nav-item" data-page="script-engine"><span class="icon">&#128221;</span><span>脚本模板</span></div>
-      <div class="nav-item" data-page="ai-script"><span class="icon">&#129302;</span><span>AI脚本生成</span></div>
-      <div class="nav-item" data-page="scheduled-jobs"><span class="icon">&#9200;</span><span>定时任务</span></div>
-      <div class="nav-item" data-page="quick-actions"><span class="icon">&#9889;</span><span>批量快捷操作</span></div>
-      <div class="nav-item" data-page="sync-mirror"><span class="icon">&#128260;</span><span>同步镜像</span></div>
-      <div class="nav-item" data-page="op-replay"><span class="icon">&#9654;</span><span>操作回放</span></div>
-    </div>
-
-    <div class="nav-section collapsed" onclick="_toggleSection(this)">工具 <span class="sec-arrow">&#9660;</span></div>
-    <div class="nav-group collapsed">
-      <div class="nav-item" data-page="batch-apk"><span class="icon">&#128230;</span><span>批量安装APK</span></div>
-      <div class="nav-item" data-page="batch-text"><span class="icon">&#9997;</span><span>批量文字输入</span></div>
-      <div class="nav-item" data-page="batch-upload"><span class="icon">&#128228;</span><span>批量文件上传</span></div>
-      <div class="nav-item" data-page="app-manager"><span class="icon">&#128187;</span><span>应用管理器</span></div>
-      <!-- phrases page removed: duplicate of 获客/messages, no backend implementation -->
-      <div class="nav-item" data-page="screen-record"><span class="icon">&#127909;</span><span>录屏管理</span></div>
-    </div>
-
-
-    <div class="nav-section collapsed" onclick="_toggleSection(this)">数据 <span class="sec-arrow">&#9660;</span></div>
-    <div class="nav-group collapsed">
-      <div class="nav-item" data-page="analytics"><span class="icon">&#128202;</span><span>数据分析</span></div>
-      <div class="nav-item" data-page="roi"><span class="icon">&#128176;</span><span>ROI 面板</span></div>
-      <div class="nav-item" data-page="funnel"><span class="icon">&#128200;</span><span>转化漏斗</span></div>
-      <div class="nav-item" data-page="data-export"><span class="icon">&#128229;</span><span>数据导出</span></div>
-      <div class="nav-item" data-page="op-timeline"><span class="icon">&#128336;</span><span>操作时间线</span></div>
-      <div class="nav-item" data-page="audit"><span class="icon">&#128221;</span><span>审计日志</span></div>
-    </div>
-
-    <div class="nav-section collapsed" onclick="_toggleSection(this)">监控 <span class="sec-arrow">&#9660;</span></div>
-    <div class="nav-group collapsed">
-      <div class="nav-item" data-page="health"><span class="icon">&#9829;</span><span>设备健康</span></div>
-      <div class="nav-item" data-page="health-report"><span class="icon">&#128203;</span><span>健康报告</span></div>
-      <div class="nav-item" data-page="perf-monitor"><span class="icon">&#128200;</span><span>性能监控</span></div>
-      <div class="nav-item" data-page="logs"><span class="icon">&#128220;</span><span>系统日志</span></div>
-      <div class="nav-item" data-page="notifications"><span class="icon">&#128276;</span><span>消息通知</span></div>
-      <div class="nav-item" data-page="alert-rules"><span class="icon">&#9888;</span><span>告警规则</span></div>
-      <div class="nav-item" data-page="device-assets"><span class="icon">&#128179;</span><span>设备资产</span></div>
-    </div>
-
-    <div class="nav-section" onclick="_toggleSection(this)">&#127912; 内容工作室 <span class="sec-arrow">&#9660;</span></div>
-    <div class="nav-group">
-      <div class="nav-item" data-page="studio"><span class="icon">&#127775;</span><span>工作台</span></div>
-    </div>
-
-    <div class="nav-section collapsed" onclick="_toggleSection(this)" data-admin-only="1">系统 <span class="sec-arrow">&#9660;</span></div>
-    <div class="nav-group collapsed" data-admin-only="1">
-      <div class="nav-item" data-page="cluster"><span class="icon">&#9741;</span><span>集群管理</span></div>
-      <div class="nav-item" data-page="notify-center"><span class="icon">&#128276;</span><span>通知中心</span></div>
-      <div class="nav-item" data-page="backup"><span class="icon">&#128190;</span><span>备份恢复</span></div>
-      <div class="nav-item" data-page="plugins"><span class="icon">&#128268;</span><span>插件管理</span></div>
-      <div class="nav-item" data-page="tpl-market"><span class="icon">&#127970;</span><span>模板市场</span></div>
-      <div class="nav-item" data-page="user-mgmt"><span class="icon">&#128101;</span><span>用户管理</span></div>
-      <div class="nav-item" onclick="window.open('/docs','_blank')"><span class="icon">&#128196;</span><span>API 文档</span></div>
-    </div>
-
-    <div class="nav-group">
-      <div class="nav-item" onclick="doLogout()"><span class="icon">&#128682;</span><span>退出登录</span></div>
-    </div>
-
-    <script>
-    /* 待接管 badge 自动更新 — 30 秒一次 */
-    async function _updateCsBadge() {
-      try {
-        const r = await fetch('/lead-mesh/handoffs?state=pending&limit=1', {
-          headers: {'Authorization': 'Bearer ' + (localStorage.getItem('oc_token') || '')}
-        });
-        if (!r.ok) return;
-        const d = await r.json();
-        const list = (d && d.handoffs) || [];
-        // 拉准数: 再调一次拿全 count (limit=200 估足够)
-        const r2 = await fetch('/lead-mesh/handoffs?state=pending&limit=200', {
-          headers: {'Authorization': 'Bearer ' + (localStorage.getItem('oc_token') || '')}
-        });
-        const d2 = await r2.json();
-        const total = ((d2 && d2.handoffs) || []).length;
-        const badges = [
-          document.getElementById('cs-pending-badge'),
-          document.getElementById('ov-cs-pending-badge'),
-        ];
-        const display = total > 0 ? '' : 'none';
-        const text = total > 99 ? '99+' : String(total);
-        badges.forEach(function(b) {
-          if (b) { b.style.display = display; b.textContent = text; }
-        });
-      } catch (e) {}
-    }
-    setInterval(_updateCsBadge, 30000);
-    setTimeout(_updateCsBadge, 1500);  // 启动 1.5s 后第一次拉
-
-    /* Phase-2: SSE 实时事件订阅 + 桌面通知 */
-    (function _subscribeEvents() {
-      try {
-        if (typeof EventSource === 'undefined') return;
-        const es = new EventSource('/lead-mesh/events/stream');
-        es.addEventListener('hello', function (e) {
-          console.log('[SSE] connected', e.data);
-        });
-        es.addEventListener('handoff_assigned', function (e) {
-          try {
-            const d = JSON.parse(e.data);
-            const p = d.payload || {};
-            _toast('🙋 ' + (p.by || '?') + ' 接走客户 ' + (p.peer_name || p.handoff_id.substring(0,8)), '#a855f7');
-            _updateCsBadge();
-            _maybeDesktopNotify('客户被接管', (p.by || '') + ' → ' + (p.peer_name || ''));
-          } catch (err) {}
-        });
-        es.addEventListener('handoff_outcome', function (e) {
-          try {
-            const d = JSON.parse(e.data);
-            const p = d.payload || {};
-            const emoji = p.outcome === 'converted' ? '✅' : p.outcome === 'lost' ? '❌' : '⏳';
-            _toast(emoji + ' ' + (p.by || '?') + ' 标 ' + (p.peer_name || '?') + ' 为 ' + (p.outcome || '?'), '#22c55e');
-            _updateCsBadge();
-          } catch (err) {}
-        });
-        /* Phase-3: 客户回了消息 → 检查是否我接管中, 是则桌面通知 */
-        es.addEventListener('chat_inbound', async function (e) {
-          try {
-            const d = JSON.parse(e.data);
-            const p = d.payload || {};
-            const me = localStorage.getItem('oc_user') || localStorage.getItem('oc_cs_id') || '';
-            if (!me) return;
-            // 异步查我是不是接管中此客户
-            const r = await fetch('/lead-mesh/handoffs/assigned/' + encodeURIComponent(me),
-              { headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('oc_token') || '') } });
-            if (!r.ok) return;
-            const data = await r.json();
-            const isMine = (data.handoffs || []).some(h => h.canonical_id === p.customer_id);
-            if (isMine) {
-              _toast('💬 客户 ' + (p.peer_name || '?') + ' 回了一条 ' + p.content_lang + ' 消息 (' + p.content_len + '字)', '#06b6d4');
-              _maybeDesktopNotify('客户回消息了', (p.peer_name || '客户') + ' · ' + p.channel);
-            }
-          } catch (err) { console.warn('chat_inbound:', err); }
-        });
-        es.onerror = function () {
-          // EventSource 自动重连, 不需要手动处理
-        };
-      } catch (e) { console.warn('[SSE] init failed:', e); }
-    })();
-
-    function _toast(msg, color) {
-      const t = document.createElement('div');
-      t.style.cssText = 'position:fixed;bottom:20px;right:20px;'
-        + 'background:rgba(15,23,42,.95);border:1px solid ' + (color || '#475569')
-        + ';color:' + (color || '#e2e8f0') + ';padding:12px 20px;border-radius:10px;'
-        + 'font-size:13px;z-index:99999;box-shadow:0 8px 30px rgba(0,0,0,.5);'
-        + 'animation:slideInRight .3s ease-out';
-      t.textContent = msg;
-      document.body.appendChild(t);
-      setTimeout(function () { t.remove(); }, 4000);
-    }
-
-    function _maybeDesktopNotify(title, body) {
-      try {
-        if (typeof Notification === 'undefined') return;
-        if (Notification.permission === 'granted') {
-          new Notification(title, { body: body, icon: '/icon-192.svg' });
-        } else if (Notification.permission === 'default') {
-          Notification.requestPermission();
-        }
-      } catch (e) {}
-    }
-
-    /* Phase-5: 注册 service worker (PWA offline 缓存) */
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', function () {
-        navigator.serviceWorker.register('/sw.js', {scope: '/'})
-          .then(function (reg) { console.log('[PWA] sw registered, scope:', reg.scope); })
-          .catch(function (err) { console.warn('[PWA] sw register failed:', err); });
-      });
-    }
-    </script>
-    <script>
-    /* PR-6.5: role-based 菜单显隐. customer_service 只看客服中心 + 总览 */
-    (function applyRoleMenu(){
-      try {
-        const role = (localStorage.getItem('oc_role') || '').toLowerCase();
-        if (role === 'customer_service') {
-          // 隐藏所有 admin-only sections (核心/平台/自动化/数据/监控/系统 等)
-          // 但保留 客服中心 (data-cs-section/data-cs-group) + 总览
-          document.querySelectorAll('.nav-section').forEach(function(s) {
-            const isCs = s.hasAttribute('data-cs-section');
-            if (!isCs) s.style.display = 'none';
-          });
-          document.querySelectorAll('.nav-group').forEach(function(g) {
-            const isCs = g.hasAttribute('data-cs-group');
-            // 保留客服中心 + 退出登录所在的 group
-            const hasLogout = g.querySelector('[onclick*="doLogout"]');
-            if (!isCs && !hasLogout) g.style.display = 'none';
-          });
-          // 保留 总览 nav item (单独, 不隐藏其所在 group 时已隐藏, 单独 reveal 它)
-          const ov = document.querySelector('[data-page="overview"]');
-          if (ov) {
-            ov.style.display = '';
-            const ovGroup = ov.closest('.nav-group');
-            if (ovGroup) {
-              ovGroup.style.display = '';
-              // 隐藏同 group 的其它 item
-              ovGroup.querySelectorAll('.nav-item').forEach(function(it) {
-                if (it !== ov) it.style.display = 'none';
-              });
-            }
-          }
-        }
-      } catch (e) { console.warn('[role menu] apply failed:', e); }
-    })();
-    </script>
-  </nav>
-  <div class="sidebar-footer"><span>OpenClaw v1.2.0</span></div>
-</aside>
-
+# 侧栏已拆至 dashboard_parts/sidebar.py（P4-6 第一刀）
+_MAIN_HTML = r"""
 <div class="toast-container" id="toast-container"></div>
 <div class="main">
   <header class="topbar">
@@ -292,8 +40,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <h2 id="page-title">总览</h2>
       <div class="status-pill"><span class="status-dot ok" id="h-dot"></span><span id="h-status">连接中...</span></div>
       <div id="node-role-badge" style="display:none;margin-left:6px;font-size:10px;padding:2px 8px;border-radius:4px;font-weight:500"></div>
-      <div id="gate-policy-pill" style="display:none;margin-left:6px;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:500;cursor:pointer;border:1px solid var(--border);white-space:nowrap" onclick="_showGatePolicyDetail()" title="任务门禁策略实时状态（点击查看详情并可热加载）"></div>
-      <span id="branch-chip" style="display:none;margin-left:6px;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:500;border:1px solid transparent;white-space:nowrap;cursor:help" title="service 当前 git 分支"></span>
+      <div id="gate-policy-pill" data-admin-only="1" style="display:none;margin-left:6px;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:500;cursor:pointer;border:1px solid var(--border);white-space:nowrap" onclick="_showGatePolicyDetail()" title="任务门禁策略实时状态（点击查看详情并可热加载）"></div>
+      <span id="branch-chip" data-admin-only="1" style="display:none;margin-left:6px;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:500;border:1px solid transparent;white-space:nowrap;cursor:help" title="service 当前 git 分支"></span>
       <span class="kbd" style="margin-left:8px" title="搜索导航">Ctrl+K</span>
     </div>
     <div class="topbar-right">
@@ -305,7 +53,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <button id="lang-toggle" onclick="toggleLang()" style="background:none;border:1px solid var(--border);border-radius:6px;padding:0 6px;cursor:pointer;font-size:11px;color:var(--text);font-weight:600;height:28px" title="中/EN">中</button>
       <div style="position:relative;cursor:pointer;height:28px;display:flex;align-items:center;padding:0 4px" onclick="toggleAlertPanel()">
         <span style="font-size:16px">&#128276;</span>
-        <span id="alert-badge" style="display:none;position:absolute;top:0;right:-2px;background:#ef4444;color:#fff;font-size:8px;font-weight:700;border-radius:50%;width:14px;height:14px;line-height:14px;text-align:center">0</span>
+        <span id="alert-badge" style="display:none;position:absolute;top:0;right:-2px;background:var(--red-strong);color:#fff;font-size:8px;font-weight:700;border-radius:50%;width:14px;height:14px;line-height:14px;text-align:center">0</span>
       </div>
       <span id="clock" style="font-size:11px;font-family:monospace;min-width:60px"></span>
     </div>
@@ -324,7 +72,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         if (!isMain && ahead > 0) label += ' (+' + ahead + ')';
         el.textContent = label;
         el.style.display = 'inline-block';
-        el.style.background = isMain ? '#10b981' : '#f59e0b';
+        el.style.background = isMain ? '#10b981' : 'var(--amber)';
         el.style.color = '#fff';
         el.title = 'Git branch: ' + d.branch + (ahead > 0 ? ' — ' + ahead + ' commits ahead of main' : '');
       })
@@ -346,19 +94,76 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
   <!-- ═══ 总览 ═══ -->
   <div class="page active" id="page-overview">
+    <!-- ══ 三区重构（P2）：①现在要处理什么 ②一键操作 ③今日成果，其余收进「更多面板」 ══ -->
+    <!-- 区① 待办/事故：无事不出现 -->
     <div id="ov-device-alerts" style="display:none;margin-bottom:12px;padding:12px 14px;border-radius:10px;border:1px solid rgba(239,68,68,.45);background:linear-gradient(135deg,rgba(239,68,68,.12),rgba(245,158,11,.08));font-size:12px;line-height:1.5"></div>
+    <!-- 人工升级提醒横幅（出事时第一屏可见） -->
+    <div id="ov-escalation-banner" style="display:none;background:linear-gradient(135deg,#ef444422,#f9731622);border:1px solid #ef444466;border-radius:10px;padding:10px 16px;margin-bottom:14px;align-items:center;justify-content:space-between">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:18px">&#128226;</span>
+        <div>
+          <div style="font-size:13px;font-weight:600;color:var(--red-strong)">有对话需要人工处理</div>
+          <div style="font-size:12px;color:var(--text-muted)" id="ov-esc-detail">-</div>
+        </div>
+      </div>
+      <button class="qa-btn" onclick="navigateToPage('conversations')" style="border-color:var(--red-strong);color:var(--red-strong);white-space:nowrap">查看队列 &rarr;</button>
+    </div>
     <!-- 统计卡片行 - 核心指标 -->
     <div class="stats-row" style="grid-template-columns:repeat(4,1fr)">
       <div class="stat-card blue" style="cursor:pointer" onclick="navigateToPage('devices')"><div class="stat-num" id="s-online">-</div><div class="stat-label">在线设备</div><div style="font-size:10px;color:var(--text-muted);margin-top:4px">/ <span id="s-total">-</span> 总计</div><div id="s-total-breakdown" style="font-size:9px;color:var(--text-dim);margin-top:3px;line-height:1.25" title="本机=主控ADB/配置行；集群=Worker合并"></div><div class="stat-hint">点击查看设备管理 &rarr;</div></div>
-      <div class="stat-card green" style="cursor:pointer" onclick="navigateToPage('tasks')"><div class="stat-num" id="s-tasks">-</div><div class="stat-label">任务总数</div><div style="font-size:10px;margin-top:4px"><span style="color:#4ade80" id="s-success">-</span> 成功 &middot; <span style="color:#f87171" id="s-failed">-</span> 失败</div><div class="stat-hint">点击查看任务管理 &rarr;</div></div>
-      <div class="stat-card purple" style="cursor:pointer" onclick="navigateToPage('health')"><div class="stat-num" id="s-avg-bat" style="color:#a78bfa">-</div><div class="stat-label">平均电量</div><div style="font-size:10px;color:var(--text-muted);margin-top:4px"><span style="color:#fb923c" id="s-low-bat">-</span> 低电量</div><div class="stat-hint">点击查看健康监控 &rarr;</div></div>
+      <div class="stat-card green" style="cursor:pointer" onclick="navigateToPage('tasks')"><div class="stat-num" id="s-tasks">-</div><div class="stat-label">任务总数</div><div style="font-size:10px;margin-top:4px"><span style="color:var(--green-soft)" id="s-success">-</span> 成功 &middot; <span style="color:var(--red)" id="s-failed">-</span> 失败</div><div class="stat-hint">点击查看任务管理 &rarr;</div></div>
+      <div class="stat-card purple" style="cursor:pointer" onclick="navigateToPage('health')"><div class="stat-num" id="s-avg-bat" style="color:var(--violet-soft)">-</div><div class="stat-label">平均电量</div><div style="font-size:10px;color:var(--text-muted);margin-top:4px"><span style="color:var(--orange)" id="s-low-bat">-</span> 低电量</div><div class="stat-hint">点击查看健康监控 &rarr;</div></div>
       <div class="stat-card orange" style="cursor:pointer" onclick="navigateToPage('perf-monitor')"><div class="stat-num" id="s-running" style="color:#22d3ee">-</div><div class="stat-label">运行中任务</div><div style="font-size:10px;color:var(--text-muted);margin-top:4px">内存 <span id="s-avg-mem">-</span> / 高 <span style="color:#f472b6" id="s-high-mem">-</span></div><div class="stat-hint">点击查看性能监控 &rarr;</div></div>
     </div>
-    <!-- 集群探针（与 TikTok 页命令条「探针」同源，总览直达） -->
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin-bottom:14px">
-      <div style="font-size:12px;color:var(--text-muted);line-height:1.45">集群节点 OpenAPI 是否与主控一致（<code style="font-size:11px">contacts/enriched</code>）。Worker 需与主控同版代码后此处为 ✓。</div>
-      <button type="button" class="qa-btn" onclick="typeof _ttShowContactsEnrichedProbe==='function'&&_ttShowContactsEnrichedProbe()" style="padding:6px 14px;font-size:12px;white-space:nowrap">&#128300; 集群探针</button>
+    <!-- 区② 一键操作（P2 上移：最高频入口不该被四个洞察卡压在下面） -->
+    <h3 style="font-size:14px;margin-bottom:10px;color:var(--text-dim)">一键操作</h3>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px;margin-bottom:16px">
+      <!-- 客服中心快捷入口 (高优先级 - 紫色边框突出；P2 起直达待接管页) -->
+      <div class="action-card" onclick="navigateToPage('cs-inbox')" style="border:2px solid var(--accent-2);background:linear-gradient(135deg,rgba(168,85,247,.1),rgba(96,165,250,.05))">
+        <div class="action-icon" style="background:linear-gradient(135deg,var(--accent-2),#6366f1);position:relative">
+          &#128229;
+          <span id="ov-cs-pending-badge" style="display:none;position:absolute;top:-6px;right:-6px;font-size:10px;padding:2px 6px;background:var(--red-strong);color:#fff;border-radius:8px;font-weight:600">0</span>
+        </div>
+        <div class="action-label" style="color:var(--accent-2);font-weight:600">客服接管队列</div>
+        <div class="action-desc">真人接客户 &middot; 标成交</div>
+      </div>
+      <div class="action-card" onclick="window.open('/static/l2-dashboard.html','_blank')" style="border:1px solid rgba(96,165,250,.3)">
+        <div class="action-icon" style="background:linear-gradient(135deg,var(--blue-strong),var(--cyan))">&#128202;</div>
+        <div class="action-label">L2 客户漏斗</div>
+        <div class="action-desc">投屏看板 &middot; 实时刷</div>
+      </div>
+      <div class="action-card" onclick="batchTask('tiktok_check_inbox',{auto_reply:true,max_conversations:20})">
+        <div class="action-icon" style="background:linear-gradient(135deg,var(--cyan),var(--blue-strong))">&#128172;</div>
+        <div class="action-label">立即收件箱</div>
+        <div class="action-desc">所有设备 &middot; AI自动回复</div>
+      </div>
+      <div class="action-card" onclick="navigateToPage('account-farming')">
+        <div class="action-icon" style="background:linear-gradient(135deg,var(--blue-strong),#2dd4bf)">&#128101;</div>
+        <div class="action-label">关注拓客</div>
+        <div class="action-desc">进 TikTok &middot; 选国家与数量</div>
+      </div>
+      <div class="action-card" onclick="batchTask('tiktok_check_and_chat_followbacks',{max_chats:10})">
+        <div class="action-icon" style="background:linear-gradient(135deg,var(--green-strong),var(--green-deep))">&#128640;</div>
+        <div class="action-label">跟进回关</div>
+        <div class="action-desc">检测回关 &middot; AI发送DM</div>
+      </div>
+      <div class="action-card" onclick="batchTask('tiktok_warmup',{watch_seconds:30,do_like:true})" style="border-color:rgba(168,85,247,.3)">
+        <div class="action-icon" style="background:linear-gradient(135deg,var(--violet),#6366f1)">&#127916;</div>
+        <div class="action-label">账号预热</div>
+        <div class="action-desc">刷视频+点赞 &middot; 养号</div>
+      </div>
+      <div class="action-card" onclick="fixAllOffline()" style="border-color:rgba(234,179,8,.3)">
+        <div class="action-icon" style="background:linear-gradient(135deg,var(--gold),var(--amber))">&#128295;</div>
+        <div class="action-label">修复离线</div>
+        <div class="action-desc">重连所有离线设备</div>
+      </div>
+      <div class="action-card" onclick="cancelAllTasks()" style="border-color:rgba(239,68,68,.3)">
+        <div class="action-icon" style="background:linear-gradient(135deg,#6b7280,#4b5563)">&#9209;</div>
+        <div class="action-label">取消全部任务</div>
+        <div class="action-desc">停止所有运行中任务</div>
+      </div>
     </div>
+    <!-- 区③ 今日成果 -->
     <!-- 今日简报 -->
     <div id="ov-daily-briefing" style="background:linear-gradient(135deg,#1e40af22,#7c3aed18);border:1px solid #3b82f644;border-radius:12px;padding:14px 18px;margin-bottom:16px">
       <div style="display:flex;justify-content:space-between;align-items:center">
@@ -374,24 +179,40 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <div id="ops-status-bar" style="font-size:12px;margin-top:6px;display:flex;gap:12px;flex-wrap:wrap"></div>
       <div id="ov-exec-policy" style="font-size:11px;color:var(--text-dim);margin-top:8px;line-height:1.45;display:none;padding:8px 10px;border-radius:8px;background:rgba(99,102,241,.07);border:1px solid rgba(99,102,241,.22)"></div>
     </div>
+    <!-- 今日成效（数据同源 /analytics/today；每格点击直达对应页） -->
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:16px">
+      <div class="stat-card" style="border-left:3px solid var(--violet);cursor:pointer" onclick="navigateToPage('plat-tiktok')" title="进 TikTok 养号"><div class="stat-num" id="today-watched" style="color:var(--violet)">0</div><div class="stat-label">今日刷视频 →</div></div>
+      <div class="stat-card" style="border-left:3px solid var(--blue-strong);cursor:pointer" onclick="navigateToPage('account-farming')" title="进 TikTok 关注拓客"><div class="stat-num" id="today-followed" style="color:var(--blue-strong)">0</div><div class="stat-label">今日关注 →</div></div>
+      <div class="stat-card" style="border-left:3px solid var(--green-strong);cursor:pointer" onclick="navigateToPage('messages')" title="进 TikTok 私信"><div class="stat-num" id="today-dms" style="color:var(--green-strong)">0</div><div class="stat-label">今日私信 →</div></div>
+      <div class="stat-card" style="border-left:3px solid var(--cyan);cursor:pointer" onclick="navigateToPage('conversations')" title="进对话队列"><div class="stat-num" id="today-autoreplied" style="color:var(--cyan)">0</div><div class="stat-label">AI自动回复 →</div></div>
+      <div class="stat-card" style="border-left:3px solid var(--amber);cursor:pointer" onclick="navigateToPage('funnel')" title="看转化漏斗"><div class="stat-num" id="today-leads" style="color:var(--amber)">0</div><div class="stat-label">今日新线索 →</div></div>
+      <div class="stat-card" style="border-left:3px solid var(--green-strong);cursor:pointer" onclick="navigateToPage('conversations')" title="进对话队列"><div class="stat-num" id="today-converts" style="color:var(--green-strong)">0</div><div class="stat-label">已转化 →</div></div>
+    </div>
+    <!-- 更多面板（P2 三区重构）：运营洞察与明细收进可折叠区，折叠状态记忆在 localStorage -->
+    <div class="ov-more" id="ov-more">
+      <div class="ov-more-head" onclick="_ovToggleMore()">
+        <span>更多面板 · 运营洞察与明细</span>
+        <span class="sec-arrow" id="ov-more-arrow">&#9660;</span>
+      </div>
+      <div class="ov-more-body" id="ov-more-body">
     <!-- 2026-05-09 P3-2: 自愈 + 链式任务运维状态 -->
     <div id="ov-heal-chain-bar" style="display:none;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:14px 18px;margin-bottom:16px">
       <div style="font-size:13px;font-weight:600;margin-bottom:10px">&#9889; 自动化运维</div>
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px" id="ov-heal-grid">
         <div style="background:var(--bg-main);border-radius:8px;padding:10px;text-align:center">
-          <div style="font-size:18px;font-weight:700;color:#22c55e" id="heal-total">0</div>
+          <div style="font-size:18px;font-weight:700;color:var(--green-strong)" id="heal-total">0</div>
           <div style="font-size:10px;color:var(--text-muted);margin-top:2px">自愈触发</div>
         </div>
         <div style="background:var(--bg-main);border-radius:8px;padding:10px;text-align:center">
-          <div style="font-size:18px;font-weight:700;color:#4ade80" id="heal-success">0</div>
+          <div style="font-size:18px;font-weight:700;color:var(--green-soft)" id="heal-success">0</div>
           <div style="font-size:10px;color:var(--text-muted);margin-top:2px">成功修复</div>
         </div>
         <div style="background:var(--bg-main);border-radius:8px;padding:10px;text-align:center">
-          <div style="font-size:18px;font-weight:700;color:#60a5fa" id="heal-rate">0%</div>
+          <div style="font-size:18px;font-weight:700;color:var(--blue-soft)" id="heal-rate">0%</div>
           <div style="font-size:10px;color:var(--text-muted);margin-top:2px">自愈率</div>
         </div>
         <div style="background:var(--bg-main);border-radius:8px;padding:10px;text-align:center">
-          <div style="font-size:18px;font-weight:700;color:#a78bfa" id="heal-chains">0</div>
+          <div style="font-size:18px;font-weight:700;color:var(--violet-soft)" id="heal-chains">0</div>
           <div style="font-size:10px;color:var(--text-muted);margin-top:2px">链运行</div>
         </div>
       </div>
@@ -400,7 +221,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <span>重连: <b id="heal-reconnect">0</b></span>
         <span>重试: <b id="heal-retry">0</b></span>
         <span>近1h: <b id="heal-1h">0</b></span>
-        <span>升级隔离: <b id="heal-escalated" style="color:#ef4444">0</b></span>
+        <span>升级隔离: <b id="heal-escalated" style="color:var(--red-strong)">0</b></span>
       </div>
       <div style="margin-top:6px;font-size:11px;color:var(--text-muted);display:none;gap:14px;flex-wrap:wrap" id="heal-effect-row"></div>
       <div id="chain-trend-chart" style="display:none;margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
@@ -412,8 +233,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:11px">
           <label>每小时上限 <input id="hc-max-heals" type="number" min="1" max="20" value="3" style="width:48px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-main);color:var(--text);font-size:11px"></label>
           <label>最低恢复率% <input id="hc-min-rate" type="number" min="5" max="90" value="30" style="width:48px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-main);color:var(--text);font-size:11px"></label>
-          <label style="display:flex;align-items:center;gap:4px"><input id="hc-enabled" type="checkbox" checked style="accent-color:#8b5cf6"> 启用</label>
-          <button class="qa-btn" onclick="_saveHealConfig()" style="padding:3px 10px;font-size:10px;background:#8b5cf6;color:#fff;border-color:#8b5cf6">保存</button>
+          <label style="display:flex;align-items:center;gap:4px"><input id="hc-enabled" type="checkbox" checked style="accent-color:var(--violet)"> 启用</label>
+          <button class="qa-btn" onclick="_saveHealConfig()" style="padding:3px 10px;font-size:10px;background:var(--violet);color:#fff;border-color:var(--violet)">保存</button>
         </div>
       </div>
     </div>
@@ -450,19 +271,19 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       </div>
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px" id="ai-stats-grid">
         <div style="background:var(--bg-main);border-radius:8px;padding:10px;text-align:center">
-          <div style="font-size:18px;font-weight:700;color:#a78bfa" id="ai-total-calls">-</div>
+          <div style="font-size:18px;font-weight:700;color:var(--violet-soft)" id="ai-total-calls">-</div>
           <div style="font-size:10px;color:var(--text-muted);margin-top:2px">LLM 调用总次数</div>
         </div>
         <div style="background:var(--bg-main);border-radius:8px;padding:10px;text-align:center">
-          <div style="font-size:18px;font-weight:700;color:#4ade80" id="ai-cache-rate">-</div>
+          <div style="font-size:18px;font-weight:700;color:var(--green-soft)" id="ai-cache-rate">-</div>
           <div style="font-size:10px;color:var(--text-muted);margin-top:2px">缓存命中率</div>
         </div>
         <div style="background:var(--bg-main);border-radius:8px;padding:10px;text-align:center">
-          <div style="font-size:18px;font-weight:700;color:#60a5fa" id="ai-rewrites">-</div>
+          <div style="font-size:18px;font-weight:700;color:var(--blue-soft)" id="ai-rewrites">-</div>
           <div style="font-size:10px;color:var(--text-muted);margin-top:2px">AI改写条数</div>
         </div>
         <div style="background:var(--bg-main);border-radius:8px;padding:10px;text-align:center">
-          <div style="font-size:18px;font-weight:700;color:#fb923c" id="ai-auto-replies">-</div>
+          <div style="font-size:18px;font-weight:700;color:var(--orange)" id="ai-auto-replies">-</div>
           <div style="font-size:10px;color:var(--text-muted);margin-top:2px">自动回复条数</div>
         </div>
       </div>
@@ -472,75 +293,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <span>预估费用: <span id="ai-cost" style="color:var(--text)">-</span></span>
         <span>错误率: <span id="ai-error-rate" style="color:var(--text)">-</span></span>
       </div>
-    </div>
-    <!-- 一键操作中心 (精简版：仅保留真实有效的批量操作) -->
-    <h3 style="font-size:14px;margin-bottom:10px;color:var(--text-dim)">一键操作</h3>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px;margin-bottom:16px">
-      <!-- 客服中心快捷入口 (高优先级 - 紫色边框突出) -->
-      <div class="action-card" onclick="if(window.lmOpenHandoffInbox)lmOpenHandoffInbox('')" style="border:2px solid #a855f7;background:linear-gradient(135deg,rgba(168,85,247,.1),rgba(96,165,250,.05))">
-        <div class="action-icon" style="background:linear-gradient(135deg,#a855f7,#6366f1);position:relative">
-          &#128229;
-          <span id="ov-cs-pending-badge" style="display:none;position:absolute;top:-6px;right:-6px;font-size:10px;padding:2px 6px;background:#ef4444;color:#fff;border-radius:8px;font-weight:600">0</span>
-        </div>
-        <div class="action-label" style="color:#a855f7;font-weight:600">客服接管队列</div>
-        <div class="action-desc">真人接客户 &middot; 标成交</div>
-      </div>
-      <div class="action-card" onclick="window.open('/static/l2-dashboard.html','_blank')" style="border:1px solid rgba(96,165,250,.3)">
-        <div class="action-icon" style="background:linear-gradient(135deg,#3b82f6,#06b6d4)">&#128202;</div>
-        <div class="action-label">L2 客户漏斗</div>
-        <div class="action-desc">运营看板 &middot; 实时刷</div>
-      </div>
-      <div class="action-card" onclick="batchTask('tiktok_check_inbox',{auto_reply:true,max_conversations:20})">
-        <div class="action-icon" style="background:linear-gradient(135deg,#06b6d4,#3b82f6)">&#128172;</div>
-        <div class="action-label">立即收件箱</div>
-        <div class="action-desc">所有设备 &middot; AI自动回复</div>
-      </div>
-      <div class="action-card" onclick="batchTask('tiktok_follow',{target_country:'italy',max_follows:30})">
-        <div class="action-icon" style="background:linear-gradient(135deg,#3b82f6,#2dd4bf)">&#128101;</div>
-        <div class="action-label">立即关注</div>
-        <div class="action-desc">意大利目标 &middot; 每设备30人</div>
-      </div>
-      <div class="action-card" onclick="batchTask('tiktok_check_and_chat_followbacks',{max_chats:10})">
-        <div class="action-icon" style="background:linear-gradient(135deg,#22c55e,#16a34a)">&#128640;</div>
-        <div class="action-label">跟进回关</div>
-        <div class="action-desc">检测回关 &middot; AI发送DM</div>
-      </div>
-      <div class="action-card" onclick="batchTask('tiktok_warmup',{watch_seconds:30,do_like:true})" style="border-color:rgba(168,85,247,.3)">
-        <div class="action-icon" style="background:linear-gradient(135deg,#8b5cf6,#6366f1)">&#127916;</div>
-        <div class="action-label">账号预热</div>
-        <div class="action-desc">刷视频+点赞 &middot; 养号</div>
-      </div>
-      <div class="action-card" onclick="fixAllOffline()" style="border-color:rgba(234,179,8,.3)">
-        <div class="action-icon" style="background:linear-gradient(135deg,#eab308,#f59e0b)">&#128295;</div>
-        <div class="action-label">修复离线</div>
-        <div class="action-desc">重连所有离线设备</div>
-      </div>
-      <div class="action-card" onclick="cancelAllTasks()" style="border-color:rgba(239,68,68,.3)">
-        <div class="action-icon" style="background:linear-gradient(135deg,#6b7280,#4b5563)">&#9209;</div>
-        <div class="action-label">取消全部任务</div>
-        <div class="action-desc">停止所有运行中任务</div>
-      </div>
-    </div>
-    <!-- 人工升级提醒横幅 -->
-    <div id="ov-escalation-banner" style="display:none;background:linear-gradient(135deg,#ef444422,#f9731622);border:1px solid #ef444466;border-radius:10px;padding:10px 16px;margin-bottom:14px;display:none;align-items:center;justify-content:space-between">
-      <div style="display:flex;align-items:center;gap:10px">
-        <span style="font-size:18px">&#128226;</span>
-        <div>
-          <div style="font-size:13px;font-weight:600;color:#ef4444">有对话需要人工处理</div>
-          <div style="font-size:12px;color:var(--text-muted)" id="ov-esc-detail">-</div>
-        </div>
-      </div>
-      <button class="qa-btn" onclick="navigateToPage('conversations')" style="border-color:#ef4444;color:#ef4444;white-space:nowrap">查看队列 &rarr;</button>
-    </div>
-
-    <!-- 今日 TikTok 运营成果 -->
-    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:16px">
-      <div class="stat-card" style="border-left:3px solid #8b5cf6"><div class="stat-num" id="today-watched" style="color:#8b5cf6">0</div><div class="stat-label">今日刷视频</div></div>
-      <div class="stat-card" style="border-left:3px solid #3b82f6"><div class="stat-num" id="today-followed" style="color:#3b82f6">0</div><div class="stat-label">今日关注</div></div>
-      <div class="stat-card" style="border-left:3px solid #22c55e"><div class="stat-num" id="today-dms" style="color:#22c55e">0</div><div class="stat-label">今日私信</div></div>
-      <div class="stat-card" style="border-left:3px solid #06b6d4"><div class="stat-num" id="today-autoreplied" style="color:#06b6d4">0</div><div class="stat-label">AI自动回复</div></div>
-      <div class="stat-card" style="border-left:3px solid #f59e0b"><div class="stat-num" id="today-leads" style="color:#f59e0b">0</div><div class="stat-label">今日新线索</div></div>
-      <div class="stat-card" style="border-left:3px solid #22c55e;cursor:pointer" onclick="navigateToPage('conversations')"><div class="stat-num" id="today-converts" style="color:#22c55e">0</div><div class="stat-label">已转化 →</div></div>
     </div>
     <!-- P10-A: 自动化任务快速开关 -->
     <div class="card" id="sched-quick-panel" style="margin-bottom:16px">
@@ -624,6 +376,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <canvas id="chart-battery-bar" height="160"></canvas>
       </div>
     </div>
+    <!-- 集群探针（与 TikTok 页命令条「探针」同源；P4-2 下移——诊断工具不占首屏；2026-08-16 加 admin-only：OpenAPI 一致性诊断不该出现在操作员的首屏） -->
+    <div data-admin-only="1" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin-bottom:14px">
+      <div style="font-size:12px;color:var(--text-muted);line-height:1.45">集群节点 OpenAPI 是否与主控一致（<code style="font-size:11px">contacts/enriched</code>）。Worker 需与主控同版代码后此处为 ✓。</div>
+      <button type="button" class="qa-btn" onclick="typeof _ttShowContactsEnrichedProbe==='function'&&_ttShowContactsEnrichedProbe()" style="padding:6px 14px;font-size:12px;white-space:nowrap">&#128300; 集群探针</button>
+    </div>
     <!-- P10-B: 今日运营日报 -->
     <div class="card" id="daily-report-card" style="margin-bottom:16px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
@@ -651,7 +408,15 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         </div>
       </div>
     </div>
+      </div><!-- /ov-more-body -->
+    </div><!-- /ov-more -->
   </div>
+
+  <!-- ═══ 客服工作区（P2 页面化：lead-mesh 弹窗经页面宿主垫片渲染进下列容器，lead-mesh-ui.js 零改动） ═══ -->
+  <div class="page" id="page-cs-desk"></div>
+  <div class="page" id="page-cs-inbox"></div>
+  <div class="page" id="page-cs-search"></div>
+  <div class="page" id="page-cs-command"></div>
 
   <!-- ═══ 设备管理 ═══ -->
   <div class="page" id="page-devices">
@@ -663,7 +428,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       </div>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <span style="font-size:10px;color:var(--text-dim);max-width:220px;line-height:1.3" title="本机=当前主机 ADB/配置；开启集群后「总计」含 Worker 合并行，与 GET /devices/meta 中本机计数可能不同">本机/集群计数说明见各卡片 title</span>
-        <button class="qa-btn" onclick="_cleanupGhosts()" style="padding:6px 12px;font-size:11px;color:#ef4444;border-color:#ef4444">&#128465; 清理离线幽灵</button>
+        <button class="qa-btn" onclick="_cleanupGhosts()" style="padding:6px 12px;font-size:11px;color:var(--red-strong);border-color:var(--red-strong)">&#128465; 清理离线幽灵</button>
         <button class="qa-btn" onclick="autoNumberDevices(false)" style="padding:6px 12px;font-size:11px">自动编号</button>
         <button class="qa-btn" onclick="autoNumberDevices(true)" style="padding:6px 12px;font-size:11px">编号+壁纸</button>
         <button class="qa-btn" onclick="deployAllWallpapers()" style="padding:6px 12px;font-size:11px">&#127912; 壁纸</button>
@@ -706,7 +471,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <input id="ai-quick-input" type="text" placeholder="输入指令，如：所有手机养号30分钟"
           style="flex:1;padding:10px 14px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;outline:none"
           onkeydown="if(event.key==='Enter')_aiQuickExec()">
-        <button onclick="_aiQuickExec()" style="background:linear-gradient(135deg,#3b82f6,#8b5cf6);color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap">执行</button>
+        <button onclick="_aiQuickExec()" style="background:linear-gradient(135deg,var(--blue-strong),var(--violet));color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap">执行</button>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:6px">
         <button class="qa-btn" onclick="_aiQuickSet('所有手机养号30分钟')">&#127793; 养号</button>
@@ -739,7 +504,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
           <button class="chat-chip-btn ph-chip" onclick="fillAndSend('菲律宾评论区互动，关注20-25岁女性评论者')" title="评论区关注女粉">💬 评论区关注</button>
           <button class="chat-chip-btn ph-chip" onclick="fillAndSend('菲律宾关注女性用户50人，年龄20-25岁')" title="批量关注">👥 批量关注</button>
           <button class="chat-chip-btn" onclick="fillAndSend('查看今日日报')" title="查看数据">📊 日报</button>
-          <button class="chat-chip-btn" onclick="fillAndSend('停止所有任务')" title="紧急停止" style="color:#f87171;border-color:rgba(248,113,113,.4)">⛔ 停止</button>
+          <button class="chat-chip-btn" onclick="fillAndSend('停止所有任务')" title="紧急停止" style="color:var(--red);border-color:rgba(248,113,113,.4)">⛔ 停止</button>
         </div>
         <div class="chat-input-area">
           <input type="text" id="chat-input" placeholder="输入中文指令，如：菲律宾女性20-25岁获客剧本 ..." autocomplete="off" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat();}">
@@ -759,11 +524,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
               <div class="growth-kpi-label">今日关注</div>
             </div>
             <div class="growth-kpi">
-              <div id="gk-fans" class="growth-kpi-val" style="color:#22c55e">-</div>
+              <div id="gk-fans" class="growth-kpi-val" style="color:var(--green-strong)">-</div>
               <div class="growth-kpi-label">预估回粉</div>
             </div>
             <div class="growth-kpi">
-              <div id="gk-quota" class="growth-kpi-val" style="color:#f59e0b">-</div>
+              <div id="gk-quota" class="growth-kpi-val" style="color:var(--amber)">-</div>
               <div class="growth-kpi-label">配额剩余</div>
             </div>
           </div>
@@ -771,7 +536,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         </div>
         <div class="chat-hints-header">常用指令</div>
         <div class="hint-list">
-          <div style="font-size:10px;color:#fb923c;font-weight:600;margin-bottom:4px">🇵🇭 菲律宾获客</div>
+          <div style="font-size:10px;color:var(--orange);font-weight:600;margin-bottom:4px">🇵🇭 菲律宾获客</div>
           <div class="hint-item" onclick="fillCmd('菲律宾女性20-25岁获客剧本：养号+直播互动+评论区关注+私信引流')"><span class="hint-cmd">🎬 完整获客剧本</span><span class="hint-desc">— 全流程自动化</span></div>
           <div class="hint-item" onclick="fillCmd('菲律宾直播间评论互动，关注活跃女性观众，20-25岁')"><span class="hint-cmd">📡 直播评论互动</span><span class="hint-desc">— 曝光+关注主播</span></div>
           <div class="hint-item" onclick="fillCmd('菲律宾评论区互动，关注20-25岁女性评论者')"><span class="hint-cmd">💬 评论区关注</span><span class="hint-desc">— 高意向用户池</span></div>
@@ -824,7 +589,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
           <span class="oc-task-toolbar__sep" aria-hidden="true"></span>
           <button type="button" id="task-bulk-delete-btn" class="qa-btn oc-task-btn-warn" disabled onclick="deleteSelectedTasksBulk()" style="font-size:11px" title="将勾选的任务移入回收站">移入所选</button>
           <button type="button" id="task-failed-clear-all-btn" class="qa-btn oc-task-btn-warn" onclick="moveAllFailedDeletableToTrash()" style="display:none;font-size:11px" title="将当前失败列表全部移入回收站（每批最多100条，可多批）">清空失败</button>
-          <button type="button" id="task-bulk-restore-btn" class="qa-btn" disabled onclick="restoreSelectedTasksBulk()" style="display:none;font-size:11px;border-color:#22c55e;color:#22c55e">恢复所选</button>
+          <button type="button" id="task-bulk-restore-btn" class="qa-btn" disabled onclick="restoreSelectedTasksBulk()" style="display:none;font-size:11px;border-color:var(--green-strong);color:var(--green-strong)">恢复所选</button>
           <button type="button" id="task-bulk-erase-btn" class="qa-btn oc-task-btn-warn" disabled onclick="eraseSelectedTasksBulk()" style="display:none;font-size:11px">永久删除所选</button>
         </div>
         <button type="button" class="qa-btn oc-task-toolbar__cancel" onclick="cancelAllTasks()" style="border-color:var(--red);color:var(--red);font-size:11px" title="取消所有运行中/等待中的任务">&#9209; 取消全部运行</button>
@@ -886,14 +651,21 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
   <!-- ═══ 转化漏斗 ═══ -->
   <div class="page" id="page-funnel">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
-      <h3 style="font-size:15px;font-weight:600;color:var(--text)">TikTok 引流转化漏斗</h3>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:8px">
+      <div style="display:flex;align-items:center;gap:12px">
+        <h3 style="font-size:15px;font-weight:600;color:var(--text)">引流转化漏斗</h3>
+        <!-- P4 多平台切换：TikTok=/funnel，Facebook=/facebook/funnel（前端适配层，后端零改动） -->
+        <div style="display:flex;gap:4px">
+          <button class="qa-btn" id="fnl-plat-tiktok" onclick="setFunnelPlat('tiktok')" style="padding:4px 12px;font-size:11px">TikTok</button>
+          <button class="qa-btn" id="fnl-plat-facebook" onclick="setFunnelPlat('facebook')" style="padding:4px 12px;font-size:11px">Facebook</button>
+        </div>
+      </div>
       <button class="qa-btn" onclick="loadFunnel()" style="padding:6px 14px;font-size:12px">刷新数据</button>
     </div>
     <div class="funnel-container" id="funnel-chart">加载中...</div>
     <div class="funnel-stats" id="funnel-stats"></div>
     <div id="funnel-aggregate-stats" style="margin-bottom:16px"></div>
-    <div style="margin-top:24px">
+    <div style="margin-top:24px" id="funnel-daily-wrap">
       <h3 style="font-size:14px;margin-bottom:12px;color:var(--text-dim)">近7天趋势</h3>
       <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px;overflow-x:auto">
         <table class="task-table" style="width:100%"><thead><tr><th>日期</th><th>发现</th><th>关注</th><th>回关</th><th>聊天</th><th>回复</th><th>转化</th></tr></thead><tbody id="funnel-daily"></tbody></table>
@@ -955,22 +727,22 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
           <input type="checkbox" id="auto-refresh-all" onchange="toggleAutoRefreshAll()" style="accent-color:var(--accent);width:13px;height:13px"> 自动刷新
         </label>
         <label style="font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:3px;cursor:pointer">
-          <input type="checkbox" id="show-cluster-devices" checked onchange="toggleClusterDevices()" style="accent-color:#8b5cf6;width:13px;height:13px"> 集群设备
+          <input type="checkbox" id="show-cluster-devices" checked onchange="toggleClusterDevices()" style="accent-color:var(--violet);width:13px;height:13px"> 集群设备
         </label>
         <label style="font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:3px;cursor:pointer" title="关闭时VPN仅在任务运行期间自动重连">
-          <input type="checkbox" id="vpn-auto-reconnect" onchange="toggleVpnAutoReconnect()" style="accent-color:#22c55e;width:13px;height:13px"> VPN自动重连
+          <input type="checkbox" id="vpn-auto-reconnect" onchange="toggleVpnAutoReconnect()" style="accent-color:var(--green-strong);width:13px;height:13px"> VPN自动重连
         </label>
         <select id="scr-host-filter" onchange="filterByHost(this.value)" style="display:none;background:var(--bg-input);color:var(--text-main);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:11px;height:28px">
           <option value="">全部主机</option>
         </select>
         <button class="qa-btn conflict-btn" id="conflict-fix-btn" onclick="fixAllConflicts()" style="display:none;padding:4px 12px;font-size:11px;height:28px">⚠ 重复编号</button>
-        <button class="qa-btn" id="auto-assign-btn" onclick="_quickAutoAssign()" style="display:none;padding:4px 12px;font-size:11px;height:28px;color:#22c55e;border-color:#22c55e">⚡ 自动编号</button>
+        <button class="qa-btn" id="auto-assign-btn" onclick="_quickAutoAssign()" style="display:none;padding:4px 12px;font-size:11px;height:28px;color:var(--green-strong);border-color:var(--green-strong)">⚡ 自动编号</button>
         <span id="active-tasks-badge"></span>
         <button class="qa-btn" id="swap-mode-btn" onclick="toggleSwapMode()" style="padding:4px 12px;font-size:11px;height:28px">⇄ 互换编号</button>
-        <button class="qa-btn" onclick="showNumMgr()" style="padding:4px 12px;font-size:11px;height:28px;color:#a78bfa;border-color:#a78bfa">📋 编号管理</button>
+        <button class="qa-btn" onclick="showNumMgr()" style="padding:4px 12px;font-size:11px;height:28px;color:var(--violet-soft);border-color:var(--violet-soft)">📋 编号管理</button>
         <span style="flex:1"></span>
         <div style="position:relative;display:inline-flex" id="wp-dropdown-wrap">
-          <button id="wp-outdated-btn" class="qa-btn" onclick="deployOutdatedWallpapers()" style="padding:4px 12px;font-size:11px;height:28px;border-radius:6px 0 0 6px">🖼 补缺壁纸 <span id="wp-outdated-badge" style="display:none;background:#f59e0b;color:#fff;font-size:9px;font-weight:700;padding:0 5px;border-radius:3px;margin-left:4px"></span><span id="unset-count-badge" style="display:none;background:#60a5fa;color:#fff;font-size:9px;font-weight:700;padding:0 5px;border-radius:3px;margin-left:2px"></span></button><button class="qa-btn" onclick="toggleWpMenu(event)" style="padding:4px 6px;font-size:10px;height:28px;border-radius:0 6px 6px 0;border-left:1px solid rgba(255,255,255,.12)">&#9660;</button>
+          <button id="wp-outdated-btn" class="qa-btn" onclick="deployOutdatedWallpapers()" style="padding:4px 12px;font-size:11px;height:28px;border-radius:6px 0 0 6px">🖼 补缺壁纸 <span id="wp-outdated-badge" style="display:none;background:var(--amber);color:#fff;font-size:9px;font-weight:700;padding:0 5px;border-radius:3px;margin-left:4px"></span><span id="unset-count-badge" style="display:none;background:var(--blue-soft);color:#fff;font-size:9px;font-weight:700;padding:0 5px;border-radius:3px;margin-left:2px"></span></button><button class="qa-btn" onclick="toggleWpMenu(event)" style="padding:4px 6px;font-size:10px;height:28px;border-radius:0 6px 6px 0;border-left:1px solid rgba(255,255,255,.12)">&#9660;</button>
           <div id="wp-dropdown-menu" style="display:none;position:absolute;top:100%;right:0;margin-top:4px;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;min-width:200px;z-index:999;box-shadow:0 8px 30px rgba(0,0,0,.4);overflow:hidden">
             <div onclick="deployOutdatedWallpapers();toggleWpMenu()" style="padding:10px 14px;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border)" onmouseenter="this.style.background='var(--bg-hover)'" onmouseleave="this.style.background=''" title="仅部署壁纸已过期的设备">🖼 补缺壁纸（推荐）</div>
             <div onclick="quickDeployAllWallpapers();toggleWpMenu()" style="padding:10px 14px;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border)" onmouseenter="this.style.background='var(--bg-hover)'" onmouseleave="this.style.background=''">全部设备一键部署</div>
@@ -1015,7 +787,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="group-toolbar" id="group-toolbar">
       <span class="grp-count" id="grp-count">已选: 0</span>
       <span id="grp-ws-status" style="font-size:11px;color:var(--text-sub);min-width:80px"></span>
-      <span id="grp-latency" style="font-size:11px;color:#22c55e;font-weight:600;min-width:70px"></span>
+      <span id="grp-latency" style="font-size:11px;color:var(--green-strong);font-weight:600;min-width:70px"></span>
       <button class="grp-btn" onclick="groupSelectAll()">全选</button>
       <button class="grp-btn" onclick="groupDeselectAll()">取消全选</button>
       <span style="width:1px;height:20px;background:var(--border)"></span>
@@ -1050,16 +822,16 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <button class="grp-btn" onclick="importMacroJSON()" title="导入宏">&#8679; 导入</button>
       <span style="width:1px;height:20px;background:var(--border)"></span>
       <button class="grp-btn" onclick="quickBatchAddToGroup()" style="color:var(--accent)">&#128193; 批量编组</button>
-      <button class="grp-btn" onclick="batchReconnectSelected()" style="color:#22c55e">&#128268; 批量重连</button>
-      <button class="grp-btn" onclick="batchDeleteSelected()" style="color:#ef4444">&#128465; 批量删除</button>
+      <button class="grp-btn" onclick="batchReconnectSelected()" style="color:var(--green-strong)">&#128268; 批量重连</button>
+      <button class="grp-btn" onclick="batchDeleteSelected()" style="color:var(--red-strong)">&#128465; 批量删除</button>
       <span style="width:1px;height:20px;background:var(--border)"></span>
-      <label class="grp-btn" style="color:#8b5cf6;cursor:pointer;display:inline-flex;align-items:center;gap:4px">
+      <label class="grp-btn" style="color:var(--violet);cursor:pointer;display:inline-flex;align-items:center;gap:4px">
         &#128274; VPN
         <input type="file" accept="image/*" style="display:none" onchange="_vpnGlobalUpload(this)">
       </label>
-      <button class="grp-btn" onclick="_batchQuickTask('tiktok_warmup')" style="color:#22c55e">&#127793; 养号</button>
-      <button class="grp-btn" onclick="_batchQuickTask('tiktok_follow')" style="color:#3b82f6">&#128101; 关注</button>
-      <button class="grp-btn" onclick="_batchQuickTask('tiktok_inbox')" style="color:#06b6d4">&#128229; 收件箱</button>
+      <button class="grp-btn" onclick="_batchQuickTask('tiktok_warmup')" style="color:var(--green-strong)">&#127793; 养号</button>
+      <button class="grp-btn" onclick="_batchQuickTask('tiktok_follow')" style="color:var(--blue-strong)">&#128101; 关注</button>
+      <button class="grp-btn" onclick="_batchQuickTask('tiktok_inbox')" style="color:var(--cyan)">&#128229; 收件箱</button>
     </div>
     <div class="screen-grid" id="screen-grid">加载中...</div>
   </div>
@@ -1117,6 +889,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- ═══ AI 操盘手（2026-08-17 P4.5：内容由 operator.js 全量渲染） ═══ -->
+  <div class="page" id="page-operator"></div>
+
   <!-- ═══ 工作流编排 ═══ -->
   <div class="page" id="page-workflows">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
@@ -1163,7 +938,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <h3 style="font-size:15px;font-weight:600">集群管理</h3>
       <div style="display:flex;gap:8px">
         <button class="dev-btn" onclick="loadClusterPage()">刷新</button>
-        <button class="dev-btn" onclick="_otaPushAll()" style="background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;border:none">&#128228; 一键更新 Worker</button>
+        <button class="dev-btn" onclick="_otaPushAll()" style="background:linear-gradient(135deg,var(--green-strong),var(--green-deep));color:#fff;border:none">&#128228; 一键更新 Worker</button>
         <button class="dev-btn" onclick="showJoinCluster()" style="background:var(--accent);color:#111">加入集群</button>
       </div>
     </div>
@@ -1451,7 +1226,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div id="create-group-form" style="display:none;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:14px">
       <div style="display:flex;gap:10px;align-items:flex-end">
         <div style="flex:1"><label style="font-size:10px;color:var(--text-muted)">分组名称</label><input id="group-name" placeholder="意大利组" style="width:100%;background:var(--bg-input);color:var(--text-main);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:12px;margin-top:4px"></div>
-        <div style="flex:1"><label style="font-size:10px;color:var(--text-muted)">颜色标签</label><input id="group-color" type="color" value="#60a5fa" style="height:34px;border:1px solid var(--border);border-radius:6px;margin-top:4px"></div>
+        <div style="flex:1"><label style="font-size:10px;color:var(--text-muted)">颜色标签</label><input id="group-color" type="color" value="var(--blue-soft)" style="height:34px;border:1px solid var(--border);border-radius:6px;margin-top:4px"></div>
         <button class="qa-btn" onclick="createGroup()" style="padding:6px 16px;font-size:12px;height:34px">创建</button>
         <button class="sb-btn2" onclick="document.getElementById('create-group-form').style.display='none'" style="height:34px">取消</button>
       </div>
@@ -1475,15 +1250,15 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <div style="font-size:11px;color:var(--text-muted);margin-top:4px">总设备</div>
       </div>
       <div class="vpn-stat-card" style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px;text-align:center">
-        <div style="font-size:28px;font-weight:700;color:#22c55e" id="vpn-stat-connected">-</div>
+        <div style="font-size:28px;font-weight:700;color:var(--green-strong)" id="vpn-stat-connected">-</div>
         <div style="font-size:11px;color:var(--text-muted);margin-top:4px">VPN 已连接</div>
       </div>
       <div class="vpn-stat-card" style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px;text-align:center">
-        <div style="font-size:28px;font-weight:700;color:#ef4444" id="vpn-stat-disconnected">-</div>
+        <div style="font-size:28px;font-weight:700;color:var(--red-strong)" id="vpn-stat-disconnected">-</div>
         <div style="font-size:11px;color:var(--text-muted);margin-top:4px">VPN 断开</div>
       </div>
       <div class="vpn-stat-card" style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px;text-align:center">
-        <div style="font-size:28px;font-weight:700;color:#eab308" id="vpn-stat-failed">-</div>
+        <div style="font-size:28px;font-weight:700;color:var(--gold)" id="vpn-stat-failed">-</div>
         <div style="font-size:11px;color:var(--text-muted);margin-top:4px">异常设备</div>
       </div>
     </div>
@@ -1491,11 +1266,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <!-- 快速操作栏 -->
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;align-items:center">
       <button class="qa-btn" onclick="_vpnMgrRefresh()" style="padding:6px 14px;font-size:12px">&#128260; 刷新状态</button>
-      <button class="qa-btn" onclick="_vpnMgrStartAll()" style="padding:6px 14px;font-size:12px;color:#22c55e">&#9654; 全部启动</button>
-      <button class="qa-btn" onclick="_vpnMgrStopAll()" style="padding:6px 14px;font-size:12px;color:#ef4444">&#9632; 全部停止</button>
-      <button class="qa-btn" onclick="_vpnMgrApplyPool()" style="padding:6px 14px;font-size:12px;color:#8b5cf6">&#127793; 按分配启动</button>
-      <button class="qa-btn" onclick="_vpnMgrGeoVerify()" style="padding:6px 14px;font-size:12px;color:#06b6d4">&#127760; Geo-IP 验证</button>
-      <button class="qa-btn" onclick="_vpnMgrInstallV2RayNG()" style="padding:6px 14px;font-size:12px;color:#f59e0b" title="批量安装 V2RayNG APK（需提前将 APK 放入 apk_repo/）">&#128241; 安装 V2RayNG</button>
+      <button class="qa-btn" onclick="_vpnMgrStartAll()" style="padding:6px 14px;font-size:12px;color:var(--green-strong)">&#9654; 全部启动</button>
+      <button class="qa-btn" onclick="_vpnMgrStopAll()" style="padding:6px 14px;font-size:12px;color:var(--red-strong)">&#9632; 全部停止</button>
+      <button class="qa-btn" onclick="_vpnMgrApplyPool()" style="padding:6px 14px;font-size:12px;color:var(--violet)">&#127793; 按分配启动</button>
+      <button class="qa-btn" onclick="_vpnMgrGeoVerify()" style="padding:6px 14px;font-size:12px;color:var(--cyan)">&#127760; Geo-IP 验证</button>
+      <button class="qa-btn" onclick="_vpnMgrInstallV2RayNG()" style="padding:6px 14px;font-size:12px;color:var(--amber)" title="批量安装 V2RayNG APK（需提前将 APK 放入 apk_repo/）">&#128241; 安装 V2RayNG</button>
       <button class="qa-btn" onclick="_vpnMgrExport()" style="padding:6px 14px;font-size:12px;color:var(--text-muted)">&#128229; 导出</button>
       <div style="margin-left:auto;display:flex;align-items:center;gap:6px">
         <label style="font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:4px">
@@ -1515,7 +1290,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
           <span style="font-size:13px;font-weight:600">&#128274; 配置池</span>
           <div style="display:flex;gap:4px">
             <button class="sb-btn2" onclick="_vpnMgrShowAddConfig()" style="font-size:10px">+ 添加</button>
-            <button class="sb-btn2" onclick="_vpnMgrShowImportSub()" style="font-size:10px;color:#8b5cf6">&#128279; 导入订阅</button>
+            <button class="sb-btn2" onclick="_vpnMgrShowImportSub()" style="font-size:10px;color:var(--violet)">&#128279; 导入订阅</button>
           </div>
         </div>
         <!-- 添加配置表单 -->
@@ -1534,7 +1309,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         </div>
         <!-- 订阅导入表单 -->
         <div id="vpn-sub-import-form" style="display:none;background:var(--bg-main);border:1px solid #7c3aed44;border-radius:8px;padding:10px;margin-bottom:10px">
-          <div style="font-size:10px;color:#a78bfa;margin-bottom:6px;font-weight:600">&#128279; 导入订阅 / 批量链接</div>
+          <div style="font-size:10px;color:var(--violet-soft);margin-bottom:6px;font-weight:600">&#128279; 导入订阅 / 批量链接</div>
           <div style="margin-bottom:6px">
             <input id="vpn-sub-url" placeholder="订阅链接 (https://sub.example.com/...)" style="width:100%;padding:6px 8px;background:var(--bg-input);color:var(--text-main);border:1px solid var(--border);border-radius:6px;font-size:11px;font-family:monospace">
           </div>
@@ -1549,7 +1324,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             </label>
           </div>
           <div style="display:flex;gap:6px">
-            <button class="sb-btn2" onclick="_vpnMgrImportSub()" style="background:#8b5cf6;color:#fff;font-size:10px;padding:4px 12px">&#128279; 导入</button>
+            <button class="sb-btn2" onclick="_vpnMgrImportSub()" style="background:var(--violet);color:#fff;font-size:10px;padding:4px 12px">&#128279; 导入</button>
             <button class="sb-btn2" onclick="document.getElementById('vpn-sub-import-form').style.display='none'" style="font-size:10px">取消</button>
           </div>
           <div id="vpn-sub-result" style="font-size:10px;margin-top:4px;color:var(--text-dim)"></div>
@@ -1604,8 +1379,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
           <button class="qa-btn" onclick="_vpnMgrRotateNow(false)" style="padding:4px 12px;font-size:11px">&#128260; 立即轮换(仅分配)</button>
-          <button class="qa-btn" onclick="_vpnMgrRotateNow(true)" style="padding:4px 12px;font-size:11px;color:#22c55e">&#128260; 轮换并应用</button>
-          <button class="qa-btn" onclick="_vpnMgrCreateScheduledRotation()" style="padding:4px 12px;font-size:11px;color:#8b5cf6" title="创建定时任务自动轮换">&#9200; 创建定时任务</button>
+          <button class="qa-btn" onclick="_vpnMgrRotateNow(true)" style="padding:4px 12px;font-size:11px;color:var(--green-strong)">&#128260; 轮换并应用</button>
+          <button class="qa-btn" onclick="_vpnMgrCreateScheduledRotation()" style="padding:4px 12px;font-size:11px;color:var(--violet)" title="创建定时任务自动轮换">&#9200; 创建定时任务</button>
         </div>
         <div id="vpn-rotation-status" style="font-size:10px;color:var(--text-dim)">上次轮换: -</div>
         <!-- 测速 -->
@@ -1635,7 +1410,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <span id="vpn-mgr-prog-count" style="font-size:11px;color:var(--text-muted)"></span>
       </div>
       <div style="height:6px;background:var(--bg-input);border-radius:3px;overflow:hidden">
-        <div id="vpn-mgr-prog-bar" style="height:100%;background:linear-gradient(90deg,#3b82f6,#22c55e);width:0%;transition:width .3s"></div>
+        <div id="vpn-mgr-prog-bar" style="height:100%;background:linear-gradient(90deg,var(--blue-strong),var(--green-strong));width:0%;transition:width .3s"></div>
       </div>
       <div id="vpn-mgr-prog-details" style="margin-top:6px;max-height:120px;overflow-y:auto;font-size:10px;color:var(--text-muted)"></div>
     </div>
@@ -1650,15 +1425,15 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <div style="font-size:11px;color:var(--text-muted);margin-top:4px">路由器总数</div>
       </div>
       <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px;text-align:center">
-        <div style="font-size:28px;font-weight:700;color:#22c55e" id="rm-stat-online">-</div>
+        <div style="font-size:28px;font-weight:700;color:var(--green-strong)" id="rm-stat-online">-</div>
         <div style="font-size:11px;color:var(--text-muted);margin-top:4px">路由器在线</div>
       </div>
       <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px;text-align:center">
-        <div style="font-size:28px;font-weight:700;color:#8b5cf6" id="rm-stat-proxies">-</div>
+        <div style="font-size:28px;font-weight:700;color:var(--violet)" id="rm-stat-proxies">-</div>
         <div style="font-size:11px;color:var(--text-muted);margin-top:4px">代理账号</div>
       </div>
       <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px;text-align:center">
-        <div style="font-size:28px;font-weight:700;color:#06b6d4" id="rm-stat-devices">-</div>
+        <div style="font-size:28px;font-weight:700;color:var(--cyan)" id="rm-stat-devices">-</div>
         <div style="font-size:11px;color:var(--text-muted);margin-top:4px">管理手机</div>
       </div>
     </div>
@@ -1671,12 +1446,12 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <!-- 操作栏 -->
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;align-items:center">
       <button class="qa-btn" onclick="loadRouterManagePage()" style="font-size:12px">&#128260; 刷新</button>
-      <button class="qa-btn" onclick="_rmShowAddRouter()" style="font-size:12px;color:#22c55e">&#43; 添加路由器</button>
-      <button class="qa-btn" onclick="_rmShowAddProxy()" style="font-size:12px;color:#8b5cf6">&#128273; 添加代理账号</button>
-      <button class="qa-btn" onclick="_rmShowBatchProxy()" style="font-size:12px;color:#06b6d4">&#128203; 批量导入代理</button>
-      <button class="qa-btn" onclick="_rmDeployAll()" style="font-size:12px;color:#f59e0b">&#128640; 一键部署全部路由器</button>
+      <button class="qa-btn" onclick="_rmShowAddRouter()" style="font-size:12px;color:var(--green-strong)">&#43; 添加路由器</button>
+      <button class="qa-btn" onclick="_rmShowAddProxy()" style="font-size:12px;color:var(--violet)">&#128273; 添加代理账号</button>
+      <button class="qa-btn" onclick="_rmShowBatchProxy()" style="font-size:12px;color:var(--cyan)">&#128203; 批量导入代理</button>
+      <button class="qa-btn" onclick="_rmDeployAll()" style="font-size:12px;color:var(--amber)">&#128640; 一键部署全部路由器</button>
       <button class="qa-btn" onclick="_rmRefreshStatus()" style="font-size:12px;color:var(--text-muted)">&#127760; 检测所有出口IP</button>
-      <button class="qa-btn" onclick="_rmShowHealthPanel()" style="font-size:12px;color:#ef4444">&#128737; 健康监控</button>
+      <button class="qa-btn" onclick="_rmShowHealthPanel()" style="font-size:12px;color:var(--red-strong)">&#128737; 健康监控</button>
     </div>
 
     <!-- 三栏布局 -->
@@ -1801,17 +1576,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div id="app-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px"></div>
   </div>
 
-  <!-- ═══ 话术管理 ═══ -->
-  <div class="page" id="page-phrases">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-      <h3 style="font-size:15px;font-weight:600">话术管理</h3>
-      <div style="display:flex;gap:8px">
-        <button class="sb-btn2" onclick="showAddPhraseGroup()">+ 新建分组</button>
-        <button class="sb-btn2" onclick="loadPhrasesPage()">刷新</button>
-      </div>
-    </div>
-    <div id="phrase-groups-container" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px"></div>
-  </div>
+  <!-- 话术管理死页已删（2026-08-14 IA 重组）：早已摘出菜单、与获客/私信话术重复 -->
 
   <!-- ═══ 消息通知 ═══ -->
   <div class="page" id="page-notifications">
@@ -2078,13 +1843,14 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <div style="font-size:11px;color:var(--text-dim);margin-bottom:12px">导出当前设备性能快照</div>
         <button class="dev-btn" onclick="exportData('performance')" style="padding:6px 18px">导出CSV</button>
       </div>
-    </div>
-
-    <!-- 数据导出 -->
-    <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
-      <a href="/analytics/export/data?type=devices&format=csv" download class="dev-btn" style="font-size:12px;text-decoration:none">&#128229; 导出设备数据 CSV</a>
-      <a href="/analytics/export/data?type=tasks&format=csv" download class="dev-btn" style="font-size:12px;text-decoration:none">&#128229; 导出任务记录 CSV</a>
-      <a href="/analytics/export/data?type=leads&format=csv" download class="dev-btn" style="font-size:12px;text-decoration:none">&#128229; 导出线索数据 CSV</a>
+      <!-- 2026-08-16 P1 收敛：原页底三个 <a> 直链里「设备/任务」与上方卡片语义重复（只是走
+           /analytics/export/data 老路由），已删；唯一不重复的「线索」升格为第四张卡片，视觉统一。 -->
+      <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:18px;text-align:center">
+        <div style="font-size:28px;margin-bottom:8px">&#127919;</div>
+        <div style="font-size:14px;font-weight:600;margin-bottom:4px">线索数据</div>
+        <div style="font-size:11px;color:var(--text-dim);margin-bottom:12px">导出获客线索明细</div>
+        <a href="/analytics/export/data?type=leads&format=csv" download class="dev-btn" style="padding:6px 18px;font-size:12px;text-decoration:none;display:inline-block">导出CSV</a>
+      </div>
     </div>
   </div>
 
@@ -2243,7 +2009,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <button class="dev-btn" onclick="createTemplate()" style="background:var(--accent);color:#111;padding:6px 14px">发布模板</button>
       </div>
     </div>
-    <div id="tpl-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px"></div>
+    <!-- 2026-08-16 P2 撞名修复：本列表原 id="tpl-list" 与脚本工房模板面板(#tpl-list)重名，
+         getElementById 永远命中 DOM 靠前的工房面板 → 模板市场渲染错位、本页恒空白。 -->
+    <div id="tpl-market-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px"></div>
   </div>
 
   <!-- ═══ 多屏并行操控 ═══ -->
@@ -2280,31 +2048,31 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <button class="sb-btn2" onclick="saveVisualWorkflow()">保存</button>
         <button class="sb-btn2" onclick="loadSavedWorkflows()">加载</button>
         <button class="dev-btn" onclick="executeVisualWorkflow()" style="background:var(--accent);color:#111;padding:5px 12px">执行</button>
-        <button class="sb-btn2" onclick="clearWorkflowCanvas()" style="color:#f87171">清空</button>
+        <button class="sb-btn2" onclick="clearWorkflowCanvas()" style="color:var(--red)">清空</button>
       </div>
     </div>
     <div style="display:flex;gap:10px;height:calc(100vh - 180px)">
       <div id="wf-palette" style="width:180px;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:10px;overflow-y:auto;flex-shrink:0">
         <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:8px">拖拽节点到画布</div>
-        <div class="wf-node-tpl" draggable="true" data-type="adb_cmd" style="background:#1e3a5f;border:1px solid #3b82f6;border-radius:8px;padding:8px;margin-bottom:6px;cursor:grab;font-size:11px">
+        <div class="wf-node-tpl" draggable="true" data-type="adb_cmd" style="background:#1e3a5f;border:1px solid var(--blue-strong);border-radius:8px;padding:8px;margin-bottom:6px;cursor:grab;font-size:11px">
           <span>&#9881; ADB 命令</span></div>
-        <div class="wf-node-tpl" draggable="true" data-type="tap" style="background:#1e3a5f;border:1px solid #3b82f6;border-radius:8px;padding:8px;margin-bottom:6px;cursor:grab;font-size:11px">
+        <div class="wf-node-tpl" draggable="true" data-type="tap" style="background:#1e3a5f;border:1px solid var(--blue-strong);border-radius:8px;padding:8px;margin-bottom:6px;cursor:grab;font-size:11px">
           <span>&#128073; 点击坐标</span></div>
-        <div class="wf-node-tpl" draggable="true" data-type="swipe" style="background:#1e3a5f;border:1px solid #3b82f6;border-radius:8px;padding:8px;margin-bottom:6px;cursor:grab;font-size:11px">
+        <div class="wf-node-tpl" draggable="true" data-type="swipe" style="background:#1e3a5f;border:1px solid var(--blue-strong);border-radius:8px;padding:8px;margin-bottom:6px;cursor:grab;font-size:11px">
           <span>&#128070; 滑动</span></div>
-        <div class="wf-node-tpl" draggable="true" data-type="text_input" style="background:#1e3a5f;border:1px solid #3b82f6;border-radius:8px;padding:8px;margin-bottom:6px;cursor:grab;font-size:11px">
+        <div class="wf-node-tpl" draggable="true" data-type="text_input" style="background:#1e3a5f;border:1px solid var(--blue-strong);border-radius:8px;padding:8px;margin-bottom:6px;cursor:grab;font-size:11px">
           <span>&#9997; 输入文本</span></div>
-        <div class="wf-node-tpl" draggable="true" data-type="delay" style="background:#3a2e1e;border:1px solid #eab308;border-radius:8px;padding:8px;margin-bottom:6px;cursor:grab;font-size:11px">
+        <div class="wf-node-tpl" draggable="true" data-type="delay" style="background:#3a2e1e;border:1px solid var(--gold);border-radius:8px;padding:8px;margin-bottom:6px;cursor:grab;font-size:11px">
           <span>&#9203; 等待延迟</span></div>
-        <div class="wf-node-tpl" draggable="true" data-type="key" style="background:#1e3a5f;border:1px solid #3b82f6;border-radius:8px;padding:8px;margin-bottom:6px;cursor:grab;font-size:11px">
+        <div class="wf-node-tpl" draggable="true" data-type="key" style="background:#1e3a5f;border:1px solid var(--blue-strong);border-radius:8px;padding:8px;margin-bottom:6px;cursor:grab;font-size:11px">
           <span>&#127929; 按键</span></div>
-        <div class="wf-node-tpl" draggable="true" data-type="app_launch" style="background:#1e3b2e;border:1px solid #22c55e;border-radius:8px;padding:8px;margin-bottom:6px;cursor:grab;font-size:11px">
+        <div class="wf-node-tpl" draggable="true" data-type="app_launch" style="background:#1e3b2e;border:1px solid var(--green-strong);border-radius:8px;padding:8px;margin-bottom:6px;cursor:grab;font-size:11px">
           <span>&#128187; 启动App</span></div>
-        <div class="wf-node-tpl" draggable="true" data-type="screenshot" style="background:#1e3b2e;border:1px solid #22c55e;border-radius:8px;padding:8px;margin-bottom:6px;cursor:grab;font-size:11px">
+        <div class="wf-node-tpl" draggable="true" data-type="screenshot" style="background:#1e3b2e;border:1px solid var(--green-strong);border-radius:8px;padding:8px;margin-bottom:6px;cursor:grab;font-size:11px">
           <span>&#128247; 截图</span></div>
-        <div class="wf-node-tpl" draggable="true" data-type="condition" style="background:#3a1e3a;border:1px solid #a855f7;border-radius:8px;padding:8px;margin-bottom:6px;cursor:grab;font-size:11px">
+        <div class="wf-node-tpl" draggable="true" data-type="condition" style="background:#3a1e3a;border:1px solid var(--accent-2);border-radius:8px;padding:8px;margin-bottom:6px;cursor:grab;font-size:11px">
           <span>&#128268; 条件判断</span></div>
-        <div class="wf-node-tpl" draggable="true" data-type="loop" style="background:#3a1e3a;border:1px solid #a855f7;border-radius:8px;padding:8px;margin-bottom:6px;cursor:grab;font-size:11px">
+        <div class="wf-node-tpl" draggable="true" data-type="loop" style="background:#3a1e3a;border:1px solid var(--accent-2);border-radius:8px;padding:8px;margin-bottom:6px;cursor:grab;font-size:11px">
           <span>&#128257; 循环</span></div>
       </div>
       <div style="flex:1;position:relative;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;overflow:hidden">
@@ -2445,7 +2213,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <button class="qa-btn" onclick="Conv.startDailyCampaign()" style="background:var(--accent);color:#fff;border-color:var(--accent)">&#9654; 一键启动今日运营</button>
         <button id="batch-reply-btn" class="qa-btn" onclick="Conv.batchAutoReply()" style="background:rgba(99,102,241,.15);color:#818cf8;border-color:rgba(99,102,241,.4)">&#129302; 批量AI回复</button>
         <button class="qa-btn" onclick="Conv.refresh()">&#8635; 刷新</button>
-        <button class="qa-btn" onclick="Conv.clearEscalations()" style="border-color:#ef4444;color:#ef4444">清空升级队列</button>
+        <button class="qa-btn" onclick="Conv.clearEscalations()" style="border-color:var(--red-strong);color:var(--red-strong)">清空升级队列</button>
       </div>
     </div>
 
@@ -2458,7 +2226,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <div class="metric-card"><div class="metric-label">今日回关</div><div class="metric-value" id="cs-followbacks">-</div></div>
       <div class="metric-card"><div class="metric-label">今日私信</div><div class="metric-value" id="cs-dms">-</div></div>
       <div class="metric-card"><div class="metric-label">AI自动回复</div><div class="metric-value" id="cs-autoreplied">-</div></div>
-      <div class="metric-card"><div class="metric-label">待人工处理</div><div class="metric-value" id="cs-escalated" style="color:#ef4444">-</div></div>
+      <div class="metric-card"><div class="metric-label">待人工处理</div><div class="metric-value" id="cs-escalated" style="color:var(--red-strong)">-</div></div>
     </div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
@@ -2466,7 +2234,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:14px">
         <div style="font-size:13px;font-weight:600;margin-bottom:10px;display:flex;justify-content:space-between">
           <span>&#128226; 升级队列 (需人工处理)</span>
-          <span id="esc-count" style="background:#ef4444;color:#fff;border-radius:10px;padding:0 7px;font-size:11px">0</span>
+          <span id="esc-count" style="background:var(--red-strong);color:#fff;border-radius:10px;padding:0 7px;font-size:11px">0</span>
         </div>
         <div id="escalation-list" style="display:flex;flex-direction:column;gap:8px;max-height:400px;overflow-y:auto">
           <div style="text-align:center;color:var(--text-muted);padding:20px;font-size:12px">暂无需处理的对话 &#128522;</div>
@@ -2597,19 +2365,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- ═══ 引流活动 ═══ -->
-  <div class="page hidden" id="page-campaigns">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-      <div>
-        <h3 style="margin:0;font-size:16px">引流活动管理</h3>
-        <div style="font-size:12px;color:var(--text-muted);margin-top:2px">创建并管理自动化引流活动，AI驱动全流程</div>
-      </div>
-      <button class="sb-btn" onclick="showCreateCampaignModal()">+ 新建活动</button>
-    </div>
-    <div id="campaign-list"></div>
-  </div>
+  <!-- 引流活动死页已删（2026-08-14 IA 重组）：initCampaignsPage 无人调用、页面自始隐藏；
+       #campaigns 旧 hash 仍由 _LEGACY_TT_REDIRECT 跳 TikTok 养号 tab -->
 
-  <!-- 账号养号页面 -->
+  <!-- 账号养号页面（勿删：ttTab('farming') 会把本 div 搬进 TikTok 页签容器复用） -->
   <div class="page" id="page-account-farming"><div style="padding:8px;color:var(--text-muted)">加载中...</div></div>
 
   <!-- ═══ 社交平台控制面板 (通用模板，4个平台共用) ═══ -->
@@ -2747,7 +2506,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
     <!-- 操作按钮 -->
     <div style="display:flex;gap:10px">
-      <button id="campaign-launch-btn" onclick="_launchCampaign()" style="flex:1;padding:12px;background:linear-gradient(135deg,#22c55e,#16a34a);color:#111;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;transition:transform .15s" onmouseenter="this.style.transform='scale(1.02)'" onmouseleave="this.style.transform='scale(1)'">&#128640; 启动养号</button>
+      <button id="campaign-launch-btn" onclick="_launchCampaign()" style="flex:1;padding:12px;background:linear-gradient(135deg,var(--green-strong),var(--green-deep));color:#111;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;transition:transform .15s" onmouseenter="this.style.transform='scale(1.02)'" onmouseleave="this.style.transform='scale(1)'">&#128640; 启动养号</button>
       <button onclick="_createCampaignSchedule()" style="padding:12px 18px;background:var(--bg-input);color:var(--text-main);border:1px solid var(--border);border-radius:10px;font-size:13px;cursor:pointer">&#9200; 创建定时计划</button>
     </div>
 
@@ -2758,7 +2517,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <span id="campaign-prog-count" style="font-size:11px;color:var(--text-muted)"></span>
       </div>
       <div style="height:6px;background:var(--bg-input);border-radius:3px;overflow:hidden;margin-bottom:6px">
-        <div id="campaign-prog-bar" style="height:100%;background:linear-gradient(90deg,#22c55e,#3b82f6);width:0%;transition:width .5s"></div>
+        <div id="campaign-prog-bar" style="height:100%;background:linear-gradient(90deg,var(--green-strong),var(--blue-strong));width:0%;transition:width .5s"></div>
       </div>
       <div id="campaign-prog-details" style="max-height:150px;overflow-y:auto;font-size:10px;color:var(--text-muted)"></div>
     </div>
@@ -2777,7 +2536,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <span id="ctrl-device-info" style="color:var(--text-muted)">-</span>
         <span class="coord" id="ctrl-coord" style="color:var(--accent);font-family:monospace">-</span>
         <span id="ctrl-zoom-level" style="color:var(--text-muted);font-family:monospace">100%</span>
-        <span id="ctrl-status" style="color:#22c55e"></span>
+        <span id="ctrl-mode-badge" onclick="_modeBadgeClick()" style="display:none;padding:1px 8px;border-radius:8px;font-size:10px;font-weight:600"></span>
+        <span id="ctrl-status" style="color:var(--green-strong)"></span>
         <span id="stream-stats" style="color:var(--text-muted);font-family:monospace"></span>
       </div>
     </div>
@@ -2790,7 +2550,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             <button class="sb-btn" onclick="sendKey(3)" title="Home">&#127968;</button>
             <button class="sb-btn" onclick="sendKey(4)" title="Back">&#9194;</button>
             <button class="sb-btn" onclick="sendKey(187)" title="Recent">&#9744;</button>
-            <button class="sb-btn" onclick="wakeAndUnlock()" title="亮屏解锁" style="background:linear-gradient(135deg,#22c55e,#059669);color:#fff">&#128275;</button>
+            <button class="sb-btn" onclick="wakeAndUnlock()" title="亮屏解锁" style="background:linear-gradient(135deg,var(--green-strong),#059669);color:#fff">&#128275;</button>
           </div>
         </div>
         <div class="sb-group" data-open="false">
@@ -2866,7 +2626,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             <button class="sb-btn2" id="record-toggle" onclick="toggleRecording()" title="录屏" style="background:var(--bg-input)">&#9679; 录屏</button>
           </div>
           <!-- 画质切换状态行 -->
-          <div id="quality-status-bar" style="display:none;font-size:10px;margin-bottom:6px;padding:3px 6px;border-radius:4px;background:rgba(239,68,68,.15);color:#ef4444;border:1px solid rgba(239,68,68,.3)">
+          <div id="quality-status-bar" style="display:none;font-size:10px;margin-bottom:6px;padding:3px 6px;border-radius:4px;background:rgba(239,68,68,.15);color:var(--red-strong);border:1px solid rgba(239,68,68,.3)">
             ⚠️ <span id="quality-status-msg"></span>
             <span style="float:right;cursor:pointer;opacity:.6" onclick="document.getElementById('quality-status-bar').style.display='none'">✕</span>
           </div>
@@ -2888,7 +2648,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             <input type="file" id="modal-apk-file" accept=".apk" style="display:none" onchange="var el=document.getElementById('modal-apk-fname');if(el)el.textContent=(this.files[0]&&this.files[0].name)||''"/>
             <button class="sb-btn2" onclick="document.getElementById('modal-apk-file').click()" title="选择 APK 文件">&#128230; 选APK</button>
             <span id="modal-apk-fname" style="font-size:9px;color:var(--text-dim);max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
-            <button class="sb-btn2" onclick="installApkToModalDevice()" style="color:#22c55e" title="仅当前远控设备（需本机直连）">安装</button>
+            <button class="sb-btn2" onclick="installApkToModalDevice()" style="color:var(--green-strong)" title="仅当前远控设备（需本机直连）">安装</button>
           </div>
           <div id="modal-apk-status" style="font-size:9px;color:var(--text-dim);margin-bottom:6px;min-height:14px"></div>
           <!-- Android 键盘快捷键面板 -->
@@ -2910,8 +2670,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
           <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">VPN · 当前设备 <span id="vpn-scope-device" style="color:var(--accent);font-weight:600"></span></div>
           <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px">
             <button class="sb-btn2" onclick="_vpnCheckCurrent()" title="检查当前设备VPN状态">&#128270; 检查</button>
-            <button class="sb-btn2" onclick="_vpnStartCurrent()" title="启动当前设备VPN" style="color:#22c55e">&#9654; 启动</button>
-            <button class="sb-btn2" onclick="_vpnStopCurrent()" title="停止当前设备VPN" style="color:#ef4444">&#9632; 停止</button>
+            <button class="sb-btn2" onclick="_vpnStartCurrent()" title="启动当前设备VPN" style="color:var(--green-strong)">&#9654; 启动</button>
+            <button class="sb-btn2" onclick="_vpnStopCurrent()" title="停止当前设备VPN" style="color:var(--red-strong)">&#9632; 停止</button>
           </div>
           <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px">
             <label class="sb-btn2" style="cursor:pointer;display:inline-flex;align-items:center" title="上传二维码配置本机VPN">
@@ -2922,11 +2682,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
           </div>
           <div id="vpn-tool-status" style="font-size:10px;color:var(--text-dim);min-height:16px;margin-bottom:4px"></div>
           <div style="height:1px;background:var(--border);margin:4px 0"></div>
-          <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">VPN · 全部设备 <span id="vpn-scope-all-count" style="color:#a78bfa"></span></div>
+          <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">VPN · 全部设备 <span id="vpn-scope-all-count" style="color:var(--violet-soft)"></span></div>
           <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px">
             <button class="sb-btn2" onclick="_vpnRefreshAll()" title="刷新全部设备VPN状态" style="border-color:#7c3aed44">&#128260; 刷新状态</button>
-            <button class="sb-btn2" onclick="_vpnStartAll()" title="启动全部设备VPN" style="color:#22c55e;border-color:#7c3aed44">&#9654; 全部启动</button>
-            <button class="sb-btn2" onclick="_vpnStopAll()" title="停止全部设备VPN" style="color:#ef4444;border-color:#7c3aed44">&#9632; 全部停止</button>
+            <button class="sb-btn2" onclick="_vpnStartAll()" title="启动全部设备VPN" style="color:var(--green-strong);border-color:#7c3aed44">&#9654; 全部启动</button>
+            <button class="sb-btn2" onclick="_vpnStopAll()" title="停止全部设备VPN" style="color:var(--red-strong);border-color:#7c3aed44">&#9632; 全部停止</button>
           </div>
           <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px">
             <label class="sb-btn2" style="cursor:pointer;display:inline-flex;align-items:center;border-color:#7c3aed44" title="上传二维码配置全部设备VPN">
@@ -2941,7 +2701,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
               <span id="vpn-prog-count" style="color:var(--text-muted)"></span>
             </div>
             <div style="height:4px;background:var(--bg-input);border-radius:2px;overflow:hidden">
-              <div id="vpn-prog-bar" style="height:100%;background:linear-gradient(90deg,#3b82f6,#22c55e);width:0%;transition:width .3s"></div>
+              <div id="vpn-prog-bar" style="height:100%;background:linear-gradient(90deg,var(--blue-strong),var(--green-strong));width:0%;transition:width .3s"></div>
             </div>
             <div id="vpn-prog-details" style="margin-top:3px;max-height:80px;overflow-y:auto;font-size:9px;color:var(--text-muted)"></div>
           </div>
@@ -2982,10 +2742,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             <span>ADB 终端</span>
             <button class="sb-btn2" onclick="clearAdbTerminal()" style="font-size:9px;padding:1px 6px">清空</button>
           </div>
-          <div id="adb-output" style="flex:1;overflow-y:auto;padding:6px;font-family:monospace;font-size:11px;color:#4ade80;background:#0a0a0a;white-space:pre-wrap;word-break:break-all;min-height:200px"></div>
+          <div id="adb-output" style="flex:1;overflow-y:auto;padding:6px;font-family:monospace;font-size:11px;color:var(--green-soft);background:#0a0a0a;white-space:pre-wrap;word-break:break-all;min-height:200px"></div>
           <div style="display:flex;border-top:1px solid var(--border)">
             <span style="padding:4px 6px;color:var(--accent);font-family:monospace;font-size:12px">$</span>
-            <input id="adb-input" type="text" placeholder="输入 ADB shell 命令..." onkeydown="if(event.key==='Enter')runAdbCmd()" style="flex:1;padding:6px;background:#0a0a0a;border:none;color:#4ade80;font-family:monospace;font-size:12px;outline:none"/>
+            <input id="adb-input" type="text" placeholder="输入 ADB shell 命令..." onkeydown="if(event.key==='Enter')runAdbCmd()" style="flex:1;padding:6px;background:#0a0a0a;border:none;color:var(--green-soft);font-family:monospace;font-size:12px;outline:none"/>
             <button onclick="runAdbCmd()" style="padding:4px 10px;background:var(--accent);color:#111;border:none;cursor:pointer;font-size:11px">&#9654;</button>
           </div>
         </div>
@@ -3005,7 +2765,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
           </div>
           <div style="display:flex;border-top:1px solid var(--border)">
             <input id="ai-input" type="text" placeholder="输入自然语言指令，如: 打开TikTok搜索cooking..." onkeydown="if(event.key==='Enter')sendAiCmd()" style="flex:1;padding:6px;background:#0a0a0a;border:none;color:var(--text-main);font-size:12px;outline:none"/>
-            <button onclick="sendAiCmd()" style="padding:4px 10px;background:#8b5cf6;color:#fff;border:none;cursor:pointer;font-size:11px">&#9654;</button>
+            <button onclick="sendAiCmd()" style="padding:4px 10px;background:var(--violet);color:#fff;border:none;cursor:pointer;font-size:11px">&#9654;</button>
           </div>
         </div>
       </div>
@@ -3015,34 +2775,35 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
 <script src="/static/js/jmuxer.min.js" onerror="window._jmuxerFailed=true"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" onerror="this.onerror=null;this.src='https://unpkg.com/chart.js@4.4.1/dist/chart.umd.min.js'"></script>
-<script src="/static/js/core.js?v=20260501a"></script>
-<script src="/static/js/devices.js?v=20260413a"></script>
-<script src="/static/js/overview.js?v=20260417q"></script>
-<script src="/static/js/video-stream.js?v=20260516a"></script>
-<script src="/static/js/grid-control.js?v=20260419c"></script>
-<script src="/static/js/macros.js?v=20260330g"></script>
-<script src="/static/js/batch-ops.js?v=20260417r"></script>
-<script src="/static/js/tasks-chat.js?v=20260501a"></script>
-<script src="/static/js/analytics.js?v=20260408b"></script>
-<script src="/static/js/cluster-ops.js?v=20260417r"></script>
-<script src="/static/js/alerts-notify.js?v=20260408d"></script>
-<script src="/static/js/platforms.js?v=20260417h"></script>
-<script src="/static/js/device-mgmt.js?v=20260420d"></script>
-<script src="/static/js/scripts-templates.js?v=20260330g"></script>
-<script src="/static/js/workflows.js?v=20260408z"></script>
-<script src="/static/js/system.js?v=20260330g"></script>
-<script src="/static/js/vpn-manage.js?v=20260330h"></script>
-<script src="/static/js/router-manage.js?v=20260411b"></script>
-<script src="/static/js/conversations.js?v=20260404d"></script>
-<script src="/static/js/messages.js?v=20260404a"></script>
-<script src="/static/js/account-farming.js?v=20260404a"></script>
-<script src="/static/js/campaigns.js"></script>
-<script src="/static/js/platform-shell.js?v=20260420c"></script>
-<script src="/static/js/tiktok-ops.js?v=20260417i"></script>
-<script src="/static/js/facebook-ops.js?v=20260430a"></script>
-<script src="/static/js/lead-mesh-ui.js?v=20260426pr66c"></script>
-<script src="/static/js/platform-grid.js?v=20260417a"></script>
-<script src="/static/js/studio.js?v=20260411f"></script>
+<script src="/static/js/core.js?v=20260817p2"></script>
+<script src="/static/js/devices.js?v=20260816p6"></script>
+<script src="/static/js/overview.js?v=20260817p1"></script>
+<script src="/static/js/video-stream.js?v=20260816p6"></script>
+<script src="/static/js/grid-control.js?v=20260816p6"></script>
+<script src="/static/js/macros.js?v=20260816p6"></script>
+<script src="/static/js/batch-ops.js?v=20260816p6"></script>
+<script src="/static/js/tasks-chat.js?v=20260817p2"></script>
+<script src="/static/js/analytics.js?v=20260817p2"></script>
+<script src="/static/js/cluster-ops.js?v=20260816p6"></script>
+<script src="/static/js/alerts-notify.js?v=20260816p6"></script>
+<script src="/static/js/platforms.js?v=20260816p6"></script>
+<script src="/static/js/device-mgmt.js?v=20260816p6"></script>
+<script src="/static/js/scripts-templates.js?v=20260816p6"></script>
+<script src="/static/js/workflows.js?v=20260816p6"></script>
+<script src="/static/js/operator.js?v=20260817p1"></script>
+<script src="/static/js/system.js?v=20260816p6"></script>
+<script src="/static/js/vpn-manage.js?v=20260816p6"></script>
+<script src="/static/js/router-manage.js?v=20260816p6"></script>
+<script src="/static/js/conversations.js?v=20260816p6"></script>
+<script src="/static/js/messages.js?v=20260816p6"></script>
+<script src="/static/js/account-farming.js?v=20260816p6"></script>
+<!-- campaigns.js 已停载（2026-08-14 IA 重组）：死页随 page-campaigns 一并下线，文件留档 -->
+<script src="/static/js/platform-shell.js?v=20260816p6"></script>
+<script src="/static/js/tiktok-ops.js?v=20260816p6"></script>
+<script src="/static/js/facebook-ops.js?v=20260816p6"></script>
+<script src="/static/js/lead-mesh-ui.js?v=20260816p6"></script>
+<script src="/static/js/platform-grid.js?v=20260816p6"></script>
+<script src="/static/js/studio.js?v=20260816p6"></script>
 <script>
 /* 后备加载：确保屏幕监控页面始终能加载设备 */
 setTimeout(async function(){
@@ -3070,16 +2831,18 @@ setTimeout(async function(){
     if(allDevices.length||_clusterDevices.length){
       try{renderScreens();}catch(e){
         console.error('[fallback] renderScreens:',e);
-        grid.innerHTML='<div style="color:#f87171;padding:20px">渲染失败: '+e.message+'<br><a href="#" onclick="location.reload()" style="color:#60a5fa">刷新页面</a></div>';
+        grid.innerHTML='<div style="color:var(--red);padding:20px">渲染失败: '+e.message+'<br><a href="#" onclick="location.reload()" style="color:var(--blue-soft)">刷新页面</a></div>';
       }
     }else{
-      grid.innerHTML='<div style="color:var(--text-muted);padding:20px">未发现设备。请确认手机已连接并刷新页面。<br><a href="#" onclick="location.reload()" style="color:#60a5fa">刷新</a></div>';
+      grid.innerHTML='<div style="color:var(--text-muted);padding:20px">未发现设备。请确认手机已连接并刷新页面。<br><a href="#" onclick="location.reload()" style="color:var(--blue-soft)">刷新</a></div>';
     }
   }catch(e){console.error('[fallback] error:',e);}
 },3000);
 </script>
 </body>
 </html>"""
+
+DASHBOARD_HTML = _HEAD_HTML + SIDEBAR_HTML + "\n" + _MAIN_HTML
 
 
 import hashlib as _hashlib
@@ -3089,9 +2852,21 @@ def dashboard(request: Request):
     from fastapi.responses import Response
 
     from src.openclaw_env import openclaw_port
+    from src.host import brand as _brand
 
     _p = str(openclaw_port())
-    html = DASHBOARD_HTML.replace("@@OC_PORT@@", _p)
+    # 品牌 SSOT 服务期替换（去 OpenClaw → 智拓 ReachX；ETag 在其后计算，自动 cache-bust）
+    html = (DASHBOARD_HTML
+            .replace("@@OC_PORT@@", _p)
+            .replace("<title>OpenClaw 控制中心</title>",
+                     f"<title>{_brand.app_title()}</title>")
+            .replace("<h1>OpenClaw</h1><small>智能群控中心</small>",
+                     f"<h1>{_brand.NAME_ZH} {_brand.NAME_EN}</h1>"
+                     f"<small>{_brand.SUBTITLE_ZH}</small>")
+            .replace("<span>OpenClaw v1.2.0</span>",
+                     f"<span>{_brand.footer()}</span>")
+            .replace("你好！我是 OpenClaw AI 助手。", _brand.ai_greeting())
+            .replace("</head>", _brand.inject_script() + "</head>", 1))
     etag = _hashlib.md5(html.encode("utf-8")).hexdigest()[:16]
     client_etag = request.headers.get("if-none-match", "")
     if client_etag and client_etag.strip('"') == etag:

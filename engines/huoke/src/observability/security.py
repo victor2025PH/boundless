@@ -190,6 +190,12 @@ _SENSITIVE_PATTERNS = [
     (re.compile(r'(sk-[a-zA-Z0-9]{20,})'), r'sk-***REDACTED***'),
     (re.compile(r'(api[_-]?key["\s:=]+)["\']?([a-zA-Z0-9_-]{16,})', re.IGNORECASE),
      r'\1***REDACTED***'),
+    # 2026-08-13: 掩掉日志里对密钥类环境变量的 ${VAR} 引用。引用本身不是机密值，
+    # 但避免日志暴露"用了哪个密钥变量"；纯防御性脱敏，只命中 ${...} shell 风格引用，
+    # 不会误伤真实业务数据。
+    (re.compile(r'\$\{[A-Za-z0-9_]*(?:KEY|SECRET|TOKEN|PASSWORD)[A-Za-z0-9_]*\}',
+                re.IGNORECASE),
+     r'***REDACTED***'),
     (re.compile(r'(password["\s:=]+)["\']?(\S{4,})', re.IGNORECASE),
      r'\1***REDACTED***'),
     (re.compile(r'(bearer\s+)([a-zA-Z0-9._-]{20,})', re.IGNORECASE),

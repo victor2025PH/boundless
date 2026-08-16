@@ -49,6 +49,64 @@ logging.basicConfig(
 log = logging.getLogger("wrapper")
 
 
+_INSTANCE_LOCK_HANDLE = None  # 持有引用防 GC 关句柄（锁随进程死亡自动释放）
+
+
+def acquire_single_instance_lock() -> bool:
+    """同机单实例守卫（2026-08-17 双胞胎守护互杀实锤）。
+
+    2026-08-15 23:51:10 两个 service_wrapper 同秒启动、并存两天：A 的子进程
+    因端口被 B 的 server 占用起不来 → A 走 restart_server → _kill_port_holder
+    把 B 的健康 server 当"残留进程"处决 → B 的守护再反杀回来……60s 冷却下
+    无限乒乓，28 小时内 16 次"神秘重启"、控制台反复 Failed to fetch 全是它。
+    文件独占锁随进程消亡自动释放，比 PID 文件可靠（不会留死锁）。"""
+    global _INSTANCE_LOCK_HANDLE
+    lock_path = LOG_DIR / "service_wrapper.lock"
+    try:
+        f = open(lock_path, "a+", encoding="utf-8")
+        f.seek(0)
+        if sys.platform == "win32":
+            import msvcrt
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            f.truncate(0)
+            f.write(str(os.getpid()))
+            f.flush()
+        except Exception:
+            pass
+        _INSTANCE_LOCK_HANDLE = f
+        return True
+    except OSError:
+        try:
+            f.close()
+        except Exception:
+            pass
+        return False
+
+
+def load_launch_env() -> None:
+    """把 config/launch.env 补进进程环境（已有环境变量优先）——与 server.py 同源，
+    保证 wrapper 无论从 start.ps1 还是手动直起，端口都读同一份配置。"""
+    try:
+        env_file = PROJECT_ROOT / "config" / "launch.env"
+        if not env_file.exists():
+            return
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k = k.strip()
+            v = v.strip().strip('"').strip("'")
+            if k and k not in os.environ:
+                os.environ[k] = v
+    except Exception as e:
+        log.warning("launch.env 加载跳过: %s", e)
+
+
 def find_python() -> str:
     """找到可用的 Python 解释器（排除 WindowsApps 假 python）。"""
     exe = sys.executable
@@ -402,6 +460,19 @@ def main():
     parser.add_argument("--max-restarts", type=int, default=20,
                         help="最大连续重启次数，默认20")
     args = parser.parse_args()
+
+    load_launch_env()
+    if not acquire_single_instance_lock():
+        holder = ""
+        try:
+            holder = (LOG_DIR / "service_wrapper.lock").read_text(encoding="utf-8").strip()
+        except Exception:
+            pass
+        log.error("已有另一个 service_wrapper 在运行%s，拒绝二次启动——"
+                  "双守护会互杀对方的 server（见 acquire_single_instance_lock 注释）。"
+                  "确认要重启请先 stop.bat。",
+                  f"（PID={holder}）" if holder else "")
+        sys.exit(1)
 
     wrapper = ServiceWrapper(
         auto_update=not args.no_auto_update,

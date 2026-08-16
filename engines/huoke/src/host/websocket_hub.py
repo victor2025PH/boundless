@@ -26,6 +26,7 @@ import logging
 import time
 import fnmatch
 import threading
+import zlib
 from typing import Dict, List, Optional, Set
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -188,7 +189,7 @@ class WebSocketHub:
             devices = manager.get_all_devices()
             visible = self._visible_devices
             targets = [d for d in devices
-                       if d.status in ("connected", "online")
+                       if self._dev_status(d) in ("connected", "online")
                        and (not visible or d.device_id in visible)]
             if not targets:
                 return
@@ -197,7 +198,7 @@ class WebSocketHub:
                 try:
                     jpeg = self._fast_capture(manager, device_id)
                     if jpeg:
-                        return device_id, base64.b64encode(jpeg).decode("ascii")
+                        return device_id, jpeg
                 except Exception as e:
                     log.debug("ws推送: 截图采集失败 %s: %s", device_id, e)
                 return None
@@ -211,8 +212,15 @@ class WebSocketHub:
                 for f in as_completed(futs, timeout=4):
                     try:
                         result = f.result(timeout=0.1)
-                        if result:
-                            screenshots[result[0]] = result[1]
+                        if not result:
+                            continue
+                        did, jpeg = result
+                        # 逐设备内容去重：画面没变不推 —— 前端不换帧不闪，还省带宽
+                        h = zlib.crc32(jpeg)
+                        if self._last_push_hash.get("scr:" + did) == h:
+                            continue
+                        self._last_push_hash["scr:" + did] = h
+                        screenshots[did] = base64.b64encode(jpeg).decode("ascii")
                     except Exception as e:
                         log.debug("ws推送: 截图future获取失败: %s", e)
                         continue
@@ -221,6 +229,13 @@ class WebSocketHub:
                                {"screenshots": screenshots})
         except Exception as e:
             log.debug("Screenshot push error: %s", e)
+
+    @staticmethod
+    def _dev_status(d) -> str:
+        """DeviceStatus 枚举/字符串双形态归一——status 从字符串换成枚举后，
+        `d.status in ("connected","online")` 恒假，截图/性能/通知三路推送全体静默熄火。"""
+        s = getattr(d, "status", "")
+        return getattr(s, "value", s) or ""
 
     @staticmethod
     def _fast_capture(manager, device_id):
@@ -242,6 +257,9 @@ class WebSocketHub:
                 ratio = 240 / img.height
                 img = img.resize(
                     (int(img.width * ratio), 240), Image.BILINEAR)
+            if img.mode != "RGB":
+                # screencap 出的是 RGBA，JPEG 编码器不收 → 曾整条推送链静默熄火
+                img = img.convert("RGB")
             buf = BytesIO()
             img.save(buf, format="JPEG", quality=35)
             return buf.getvalue()
@@ -255,12 +273,14 @@ class WebSocketHub:
             from .api import get_device_manager, _config_path
             manager = get_device_manager(_config_path)
             devices = manager.get_all_devices()
-            online = [d for d in devices if d.status in ("connected", "online")]
+            online = [d for d in devices
+                      if self._dev_status(d) in ("connected", "online")]
             perf_data = {}
+            adb = getattr(manager, "adb_path", "adb")
             for d in online[:20]:
                 try:
                     r = _sp_run_text(
-                        ["adb", "-s", d.device_id, "shell",
+                        [adb, "-s", d.device_id, "shell",
                          "dumpsys battery | grep level && "
                          "cat /proc/meminfo | head -3 && "
                          "dumpsys battery | grep temperature"],
@@ -327,13 +347,15 @@ class WebSocketHub:
             from .api import get_device_manager, _config_path, _notification_store
             manager = get_device_manager(_config_path)
             devices = manager.get_all_devices()
-            online = [d for d in devices if d.status in ("connected", "online")]
+            online = [d for d in devices
+                      if self._dev_status(d) in ("connected", "online")]
             import re, time
             new_notifs = []
+            adb = getattr(manager, "adb_path", "adb")
             for d in online[:10]:
                 try:
                     r = _sp_run_text(
-                        ["adb", "-s", d.device_id, "shell", "dumpsys", "notification", "--noredact"],
+                        [adb, "-s", d.device_id, "shell", "dumpsys", "notification", "--noredact"],
                         capture_output=True, timeout=5,
                     )
                     if r.returncode != 0:

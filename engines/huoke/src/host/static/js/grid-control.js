@@ -486,6 +486,15 @@ function setGridSize(sz){
   document.querySelectorAll('.sz-btn').forEach(b=>{b.classList.toggle('active',b.textContent==={sm:'小',md:'中',lg:'大'}[sz]);});
   renderScreens();
 }
+/** 设备 API 前缀单一判定：认 allDevices/_clusterDevices 两本账里的任一 _isCluster 标记 */
+function _devApiPrefix(did){
+  if(!did) return '';
+  const inCluster=(_clusterDevices||[]).some(d=>d.device_id===did&&d._isCluster);
+  const inAll=(typeof allDevices!=='undefined'?allDevices:[]).some(d=>d.device_id===did&&d._isCluster===true);
+  return (inCluster||inAll)?'/cluster':'';
+}
+window._devApiPrefix=_devApiPrefix;
+
 function openMultiStream(){
   const sel=_groupMode?[..._selectedDevices]:allDevices.filter(d=>d.status==='connected'||d.status==='online').slice(0,16).map(d=>d.device_id);
   if(!sel.length){showToast('请先选择设备或进入群控模式','warn');return;}
@@ -519,7 +528,11 @@ function openMultiStream(){
     if(document.getElementById('ms-h264-toggle')?.checked) return;
     msGrid.querySelectorAll('.ms-cell img').forEach(img=>{
       const did=img.dataset.did;
-      if(did) img.src=_apiUrl(`/devices/${did}/screenshot?max_h=360&quality=40&t=${Date.now()}`);
+      if(!did) return;
+      const newSrc=_apiUrl(`${_devApiPrefix(did)}/devices/${did}/screenshot?max_h=360&quality=40&t=${Date.now()}`);
+      const pre=new Image();
+      pre.onload=function(){if(img.isConnected)img.src=newSrc;};
+      pre.src=newSrc;
     });
   },2500);
 }
@@ -545,7 +558,7 @@ function _renderMultiCells(grid,dids,useH264){
         _startMultiH264(did,vid);
       }
     }else{
-      cell.innerHTML=`<img data-did="${did}" src="${_apiUrl('/devices/'+did+'/screenshot?max_h=360&quality=40&t='+Date.now())}" alt="${alias}" onerror="this.outerHTML='<div style=\\'color:#666;text-align:center;padding-top:40%\\'>离线</div>'">`;
+      cell.innerHTML=`<img data-did="${did}" src="${_apiUrl(_devApiPrefix(did)+'/devices/'+did+'/screenshot?max_h=360&quality=40&t='+Date.now())}" alt="${alias}" onerror="this.outerHTML='<div style=\\'color:#666;text-align:center;padding-top:40%\\'>离线</div>'">`;
     }
     const lbl=document.createElement('div');lbl.className='ms-label';lbl.textContent=alias;
     cell.appendChild(lbl);
@@ -555,9 +568,7 @@ function _renderMultiCells(grid,dids,useH264){
 }
 function _startMultiH264(did,el){
   try{
-    const _clDev=_clusterDevices.find(d=>d.device_id===did&&d._isCluster);
-    const _pfx=_clDev?'/cluster':'';
-    const ws=new WebSocket(_wsUrl(`${_pfx}/devices/${did}/stream/ws`));
+    const ws=new WebSocket(_wsUrl(`${_devApiPrefix(did)}/devices/${did}/stream/ws`));
     ws.binaryType='arraybuffer';
     el._msWs=ws;
     if(_WEBCODECS_OK&&el.tagName==='CANVAS'){
@@ -607,34 +618,25 @@ function _closeMultiStream(){
 }
 
 /* ── WebSocket screenshot push handler ── */
+/* 防闪原则：预加载完成后直接换 src（浏览器换已解码图零闪烁），绝不调暗；
+   画面没变（b64 相同）连 src 都不换。WS 推送新鲜时轮询自动让位（见 _smartRefreshScreenshots）。 */
+const _lastShotB64={};
 function _handleScreenshotPush(data){
   if(!data?.screenshots) return;
+  window._lastWsShotTs=Date.now();
   for(const [did,b64] of Object.entries(data.screenshots)){
+    if(_lastShotB64[did]===b64) continue; // 内容没变，不动 DOM
     const img=_scrImgByDid(did);
     if(!img) continue;
+    _lastShotB64[did]=b64;
     const tmp=new Image();
     const src='data:image/jpeg;base64,'+b64;
     tmp.onload=function(){
       if(!img.isConnected) return;
-      // Fade 过渡
-      img.style.transition='opacity 0.2s ease';
-      img.style.opacity='0.7';
-      setTimeout(()=>{
-        img.src=src;
-        img.style.opacity='1';
-      },200);
+      img.style.opacity='1';
+      img.src=src;
     };
     tmp.src=src;
-  }
-  // WS 推送可用时，降低轮询频率
-  if(!window._wsScreenshotsActive){
-    window._wsScreenshotsActive=true;
-    // 当 WS 推送在工作时，将轮询间隔翻倍以节省带宽
-    const cb=document.getElementById('auto-refresh-all');
-    if(cb && cb.checked && allRefreshTimer){
-      clearInterval(allRefreshTimer);
-      allRefreshTimer=setInterval(_smartRefreshScreenshots, _autoRefreshInterval()*2);
-    }
   }
 }
 
@@ -646,6 +648,68 @@ function _thumbParams(){
   if(_gridSize==='sm') return 'max_h=180&quality=30';
   if(_gridSize==='lg') return 'max_h=600&quality=60';
   return 'max_h=360&quality=40';
+}
+
+function _scrImgHtml(d,alias,tp){
+  const src=_apiUrl((d._isCluster?'/cluster':'')+'/devices/'+d.device_id+'/screenshot?'+tp+'&t='+Date.now());
+  // onerror 不再降透明度制造明暗跳：隐藏破图标记待刷，下次成功换帧时恢复
+  return `<img class="scr-img" data-did="${d.device_id}" data-src="${src}" src="${src}" alt="${alias}" loading="lazy" onerror="this.style.opacity='0';this.title='截图暂不可用'">`;
+}
+
+/** 卡片状态签名：签名不变=卡片 DOM 完全不动（增量渲染判据） */
+function _scrCardSig(d){
+  const rec=_recoveryStatus[d.device_id]||{};
+  const perf=_devicePerfCache[d.device_id]||{};
+  return [
+    _scrDevOnlineForApk(d)?1:0,
+    d.usb_issue||'',
+    d.host_name||'',
+    ALIAS[d.device_id]||'',
+    d._isCluster?1:0,
+    rec.recovering?`r${rec.level}-${rec.attempts}`:rec.exhausted?'x':'',
+    d.last_seen&&!_scrDevOnlineForApk(d)?_formatLastSeen(d.last_seen):'',
+    perf.battery_level!==undefined?perf.battery_level:'',
+    _groupMode?1:0,
+    _selectedDevices.has(d.device_id)?1:0,
+  ].join('|');
+}
+
+function _scrCardHtml(d,tp){
+  const isOn=_scrDevOnlineForApk(d);
+  const alias=ALIAS[d.device_id]||d.device_id.substring(0,8);
+  const badgeTxt=_scrBadgeText(alias,d.device_id);
+  const sel=_selectedDevices.has(d.device_id);
+  const gm=_groupMode?' group-mode':'';
+  const sm=sel?' selected':'';
+  const hostTag=d.host_name?`<span style="position:absolute;top:8px;left:50%;transform:translateX(-50%);z-index:5;font-size:9px;background:rgba(59,130,246,.8);color:#fff;padding:1px 6px;border-radius:3px">${d.host_name}</span>`:'';
+  const stCls=isOn?' st-online':' st-offline';
+  return `<div class="scr-card${gm}${sm}${stCls}" data-did="${d.device_id}" onclick="if(!_toggleDeviceSelect('${d.device_id}',event))openScreenModal('${d.device_id}')" oncontextmenu="_showCtxMenu(event,'${d.device_id}')">
+      <input type="checkbox" class="scr-check" ${sel?'checked':''} onclick="_toggleDeviceSelect('${d.device_id}',event)">
+      <span class="scr-badge" style="background:${_badgeColor(badgeTxt,d.device_id)}">${badgeTxt||'?'}</span>
+      ${hostTag}
+      ${_healthBadge(d.device_id,isOn)}
+      ${!isOn?`<div class="scr-fix-bar" style="display:flex">
+        <span>${d.usb_issue?'USB: '+(({'unauthorized':'需授权','offline':'连接异常'})[d.usb_issue]||d.usb_issue):'设备离线'}</span>
+        <button onclick="event.stopPropagation();reconnectDevice('${d.device_id}')">重连</button>
+        <button onclick="event.stopPropagation();diagnoseDev('${d.device_id}')">诊断</button>
+      </div>`:''}
+      ${isOn?_scrImgHtml(d,alias,tp)
+            :d.usb_issue?`<div class="scr-placeholder" style="color:#fbbf24;font-size:12px;flex-direction:column;gap:6px"><span style="font-size:24px">&#9888;</span><span>USB: ${({unauthorized:'请在手机上确认调试授权',offline:'连接异常,请重新插拔',authorizing:'等待授权确认','no permissions':'缺少USB权限'})[d.usb_issue]||d.usb_issue}</span><span style="font-size:10px;margin-top:4px;display:flex;gap:6px"><a href="#" onclick="event.stopPropagation();reconnectDevice('${d.device_id}');return false" style="color:var(--accent)">重连</a><a href="#" onclick="event.stopPropagation();deleteDevice('${d.device_id}');return false" style="color:var(--red-strong)">删除</a></span></div>`
+            :_recoveryStatus[d.device_id]&&_recoveryStatus[d.device_id].recovering&&!_recoveryStatus[d.device_id].exhausted?`<div class="scr-placeholder" style="flex-direction:column;gap:8px"><span style="font-size:22px;animation:spin 1.5s linear infinite">&#x1F504;</span><span style="color:var(--blue-soft);font-weight:600">自动恢复中</span><span style="font-size:11px;color:var(--text-muted)">L${_recoveryStatus[d.device_id].level}/${_recoveryStatus[d.device_id].level_name} (尝试 ${_recoveryStatus[d.device_id].attempts}次)</span><div style="width:60%;height:3px;background:rgba(255,255,255,.1);border-radius:2px;overflow:hidden"><div style="height:100%;background:var(--blue-strong);width:${Math.min(100,(_recoveryStatus[d.device_id].level/5)*100)}%;animation:pulse 1.5s ease-in-out infinite"></div></div></div>`
+            :_recoveryStatus[d.device_id]&&_recoveryStatus[d.device_id].exhausted?`<div class="scr-placeholder" style="flex-direction:column;gap:6px"><span style="font-size:22px">&#x26A0;</span><span style="color:#fbbf24;font-weight:600">需要人工干预</span><span style="font-size:10px;color:var(--text-dim)">自动恢复已用尽</span><span style="font-size:10px;margin-top:4px;display:flex;gap:6px"><a href="#" onclick="event.stopPropagation();reconnectDevice('${d.device_id}');return false" style="color:var(--accent)">重连</a><a href="#" onclick="event.stopPropagation();deleteDevice('${d.device_id}');return false" style="color:var(--red-strong)">删除</a></span></div>`
+            :`<div class="scr-placeholder" style="flex-direction:column;gap:6px"><span>设备离线</span>${d.last_seen?`<span style="font-size:10px;color:var(--text-dim)">最后在线: ${_formatLastSeen(d.last_seen)}</span>`:''}<span style="font-size:10px;margin-top:4px;display:flex;gap:6px"><a href="#" onclick="event.stopPropagation();reconnectDevice('${d.device_id}');return false" style="color:var(--accent)">重连</a><a href="#" onclick="event.stopPropagation();deleteDevice('${d.device_id}');return false" style="color:var(--red-strong)">删除</a></span></div>`}
+      ${_recoveryBanner(d.device_id)}
+      ${isOn?_scrOverlayBar(d):''}
+      <div class="scr-footer">
+        <span class="scr-label"><span class="status-dot ${isOn?'ok':d.usb_issue?'warn':'err'}" style="width:6px;height:6px;${d.usb_issue?'background:#fbbf24':''}"></span>${alias}</span>
+        <span style="display:flex;gap:3px;align-items:center">
+          <span class="scr-vpn-ind" data-did="${d.device_id}" style="font-size:8px;padding:1px 4px;border-radius:3px;background:rgba(100,116,139,.3);color:var(--text-muted)">VPN</span>
+          <button onclick="event.stopPropagation();editDeviceNumber('${d.device_id}')" title="修改编号" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:11px;padding:2px 4px">&#9998;</button>
+          ${!isOn?`<button onclick="event.stopPropagation();deleteDevice('${d.device_id}')" title="删除设备" style="background:none;border:none;color:var(--red-strong);cursor:pointer;font-size:11px;padding:2px 4px">&#128465;</button>`:''}
+          <span class="scr-st">${isOn?'在线':d.usb_issue?'USB异常':'离线'}</span>
+        </span>
+      </div>
+    </div>`;
 }
 
 async function renderScreens(){
@@ -664,7 +728,7 @@ async function renderScreens(){
       cb.checked=true;
       try{await toggleClusterDevices();return;}catch(e){}
     }
-    grid.innerHTML='<div style="color:var(--text-muted)">未检测到设备 — <a href="#" onclick="renderScreens();return false" style="color:var(--accent)">点击重试</a> | <a href="#" onclick="document.getElementById(\'show-cluster-devices\').checked=true;toggleClusterDevices();return false" style="color:#8b5cf6">加载集群设备</a></div>';
+    grid.innerHTML='<div style="color:var(--text-muted)">未检测到设备 — <a href="#" onclick="renderScreens();return false" style="color:var(--accent)">点击重试</a> | <a href="#" onclick="document.getElementById(\'show-cluster-devices\').checked=true;toggleClusterDevices();return false" style="color:var(--violet)">加载集群设备</a></div>';
     window._scrLastPageDidList=[];
     if(typeof _refreshScrApkPreview==='function') _refreshScrApkPreview();
     return;
@@ -699,43 +763,26 @@ async function renderScreens(){
     pager.innerHTML=h;
   }else if(pager){pager.innerHTML='';}
 
-  grid.innerHTML=pageDevs.map(d=>{
-    const isOn=_scrDevOnlineForApk(d);
-    const alias=ALIAS[d.device_id]||d.device_id.substring(0,8);
-    const badgeTxt=_scrBadgeText(alias,d.device_id);
-    const sel=_selectedDevices.has(d.device_id);
-    const gm=_groupMode?' group-mode':'';
-    const sm=sel?' selected':'';
-    const hostTag=d.host_name?`<span style="position:absolute;top:8px;left:50%;transform:translateX(-50%);z-index:5;font-size:9px;background:rgba(59,130,246,.8);color:#fff;padding:1px 6px;border-radius:3px">${d.host_name}</span>`:'';
-    const stCls=isOn?' st-online':' st-offline';
-    return `<div class="scr-card${gm}${sm}${stCls}" data-did="${d.device_id}" onclick="if(!_toggleDeviceSelect('${d.device_id}',event))openScreenModal('${d.device_id}')" oncontextmenu="_showCtxMenu(event,'${d.device_id}')">
-      <input type="checkbox" class="scr-check" ${sel?'checked':''} onclick="_toggleDeviceSelect('${d.device_id}',event)">
-      <span class="scr-badge" style="background:${_badgeColor(badgeTxt,d.device_id)}">${badgeTxt||'?'}</span>
-      ${hostTag}
-      ${_healthBadge(d.device_id,isOn)}
-      ${!isOn?`<div class="scr-fix-bar" style="display:flex">
-        <span>${d.usb_issue?'USB: '+(({'unauthorized':'需授权','offline':'连接异常'})[d.usb_issue]||d.usb_issue):'设备离线'}</span>
-        <button onclick="event.stopPropagation();reconnectDevice('${d.device_id}')">重连</button>
-        <button onclick="event.stopPropagation();diagnoseDev('${d.device_id}')">诊断</button>
-      </div>`:''}
-      ${isOn?`<img class="scr-img" data-did="${d.device_id}" data-src="${_apiUrl((d._isCluster?'/cluster':'')+'/devices/'+d.device_id+'/screenshot?'+tp+'&t='+Date.now())}" src="${_apiUrl((d._isCluster?'/cluster':'')+'/devices/'+d.device_id+'/screenshot?'+tp+'&t='+Date.now())}" alt="${alias}" loading="lazy" onerror="this.style.opacity='0.3'">`
-            :d.usb_issue?`<div class="scr-placeholder" style="color:#fbbf24;font-size:12px;flex-direction:column;gap:6px"><span style="font-size:24px">&#9888;</span><span>USB: ${({unauthorized:'请在手机上确认调试授权',offline:'连接异常,请重新插拔',authorizing:'等待授权确认','no permissions':'缺少USB权限'})[d.usb_issue]||d.usb_issue}</span><span style="font-size:10px;margin-top:4px;display:flex;gap:6px"><a href="#" onclick="event.stopPropagation();reconnectDevice('${d.device_id}');return false" style="color:var(--accent)">重连</a><a href="#" onclick="event.stopPropagation();deleteDevice('${d.device_id}');return false" style="color:#ef4444">删除</a></span></div>`
-            :_recoveryStatus[d.device_id]&&_recoveryStatus[d.device_id].recovering&&!_recoveryStatus[d.device_id].exhausted?`<div class="scr-placeholder" style="flex-direction:column;gap:8px"><span style="font-size:22px;animation:spin 1.5s linear infinite">&#x1F504;</span><span style="color:#60a5fa;font-weight:600">自动恢复中</span><span style="font-size:11px;color:var(--text-muted)">L${_recoveryStatus[d.device_id].level}/${_recoveryStatus[d.device_id].level_name} (尝试 ${_recoveryStatus[d.device_id].attempts}次)</span><div style="width:60%;height:3px;background:rgba(255,255,255,.1);border-radius:2px;overflow:hidden"><div style="height:100%;background:#3b82f6;width:${Math.min(100,(_recoveryStatus[d.device_id].level/5)*100)}%;animation:pulse 1.5s ease-in-out infinite"></div></div></div>`
-            :_recoveryStatus[d.device_id]&&_recoveryStatus[d.device_id].exhausted?`<div class="scr-placeholder" style="flex-direction:column;gap:6px"><span style="font-size:22px">&#x26A0;</span><span style="color:#fbbf24;font-weight:600">需要人工干预</span><span style="font-size:10px;color:var(--text-dim)">自动恢复已用尽</span><span style="font-size:10px;margin-top:4px;display:flex;gap:6px"><a href="#" onclick="event.stopPropagation();reconnectDevice('${d.device_id}');return false" style="color:var(--accent)">重连</a><a href="#" onclick="event.stopPropagation();deleteDevice('${d.device_id}');return false" style="color:#ef4444">删除</a></span></div>`
-            :`<div class="scr-placeholder" style="flex-direction:column;gap:6px"><span>设备离线</span>${d.last_seen?`<span style="font-size:10px;color:var(--text-dim)">最后在线: ${_formatLastSeen(d.last_seen)}</span>`:''}<span style="font-size:10px;margin-top:4px;display:flex;gap:6px"><a href="#" onclick="event.stopPropagation();reconnectDevice('${d.device_id}');return false" style="color:var(--accent)">重连</a><a href="#" onclick="event.stopPropagation();deleteDevice('${d.device_id}');return false" style="color:#ef4444">删除</a></span></div>`}
-      ${_recoveryBanner(d.device_id)}
-      ${isOn?_scrOverlayBar(d):''}
-      <div class="scr-footer">
-        <span class="scr-label"><span class="status-dot ${isOn?'ok':d.usb_issue?'warn':'err'}" style="width:6px;height:6px;${d.usb_issue?'background:#fbbf24':''}"></span>${alias}</span>
-        <span style="display:flex;gap:3px;align-items:center">
-          <span class="scr-vpn-ind" data-did="${d.device_id}" style="font-size:8px;padding:1px 4px;border-radius:3px;background:rgba(100,116,139,.3);color:var(--text-muted)">VPN</span>
-          <button onclick="event.stopPropagation();editDeviceNumber('${d.device_id}')" title="修改编号" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:11px;padding:2px 4px">&#9998;</button>
-          ${!isOn?`<button onclick="event.stopPropagation();deleteDevice('${d.device_id}')" title="删除设备" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:11px;padding:2px 4px">&#128465;</button>`:''}
-          <span class="scr-st">${isOn?'在线':d.usb_issue?'USB异常':'离线'}</span>
-        </span>
-      </div>
-    </div>`;
-  }).join('');
+  // 增量更新：设备集合与顺序未变时，只补丁状态有变化的卡片——
+  // 避免整墙 innerHTML 重建导致所有截图重载、页面白闪、滚动位置丢失（闪烁主因之一）
+  const wantIds=pageDevs.map(d=>d.device_id);
+  const existCards=[...grid.querySelectorAll(':scope > .scr-card')];
+  const sameLayout=existCards.length===wantIds.length&&existCards.every((c,i)=>c.dataset.did===wantIds[i]);
+  if(sameLayout){
+    pageDevs.forEach((d,i)=>{
+      const sig=_scrCardSig(d);
+      const card=existCards[i];
+      if(card.dataset.sig===sig) return; // 状态没变，DOM 一个字节都不动
+      const tmp=document.createElement('div');
+      tmp.innerHTML=_scrCardHtml(d,tp);
+      const fresh=tmp.firstElementChild;
+      if(fresh){fresh.dataset.sig=sig;card.replaceWith(fresh);}
+    });
+  }else{
+    grid.innerHTML=pageDevs.map(d=>_scrCardHtml(d,tp)).join('');
+    const cards=grid.querySelectorAll(':scope > .scr-card');
+    pageDevs.forEach((d,i)=>{if(cards[i])cards[i].dataset.sig=_scrCardSig(d);});
+  }
 
   _initLazyImages();
   _sendVisibleDevices();
@@ -762,7 +809,7 @@ function _scrOverlayBar(d){
     <span class="scr-task-ind" data-did="${d.device_id}" style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;pointer-events:auto" onclick="event.stopPropagation();_showTaskDetail('${d.device_id}')">😴 空闲</span>
     ${apkMini}
     ${batBar}
-    ${host?`<span style="color:#60a5fa">${host}</span>`:''}
+    ${host?`<span style="color:var(--blue-soft)">${host}</span>`:''}
   </div>`;
 }
 
@@ -797,7 +844,7 @@ function _showCtxMenu(e,did){
     <div onclick="_ctxAction('wallpaper','${did}')">🖼️ 部署壁纸</div>
     <hr>
     <div onclick="_ctxAction('detail','${did}')">📋 设备详情</div>
-    <div onclick="_ctxAction('delete','${did}')" style="color:#ef4444">🗑️ 删除设备</div>
+    <div onclick="_ctxAction('delete','${did}')" style="color:var(--red-strong)">🗑️ 删除设备</div>
   `;
   m.style.left=Math.min(e.clientX,window.innerWidth-180)+'px';
   m.style.top=Math.min(e.clientY,window.innerHeight-250)+'px';
@@ -842,6 +889,7 @@ async function _ctxAction(action,did){
   }
 }
 
+const _vpnVerdictStreak={}; // did → {state, n}：卡片颜色翻转需连续两次一致（迟滞），消灭探测边界横跳
 async function _refreshScreenVpnStatus(){
   try{
     const d=await api('GET','/vpn/status');
@@ -852,15 +900,20 @@ async function _refreshScreenVpnStatus(){
         if(v.connected){
           el.textContent='VPN✓';
           el.style.background='rgba(34,197,94,.2)';
-          el.style.color='#22c55e';
+          el.style.color='var(--green-strong)';
         }else{
           el.textContent='VPN✗';
           el.style.background='rgba(239,68,68,.2)';
-          el.style.color='#ef4444';
+          el.style.color='var(--red-strong)';
         }
       }
-      const card=v.device_id?[...document.querySelectorAll('.scr-card[data-did]')].find(c=>c.dataset.did===v.device_id):null;
-      if(card && !v.connected && card.classList.contains('st-online')){
+      if(!vid) continue;
+      const st=_vpnVerdictStreak[vid];
+      if(st&&st.state===!!v.connected) st.n++;
+      else _vpnVerdictStreak[vid]={state:!!v.connected,n:1};
+      const stable=_vpnVerdictStreak[vid].n>=2;
+      const card=[...document.querySelectorAll('.scr-card[data-did]')].find(c=>c.dataset.did===vid);
+      if(card && !v.connected && stable && card.classList.contains('st-online')){
         card.classList.remove('st-online');
         card.classList.add('st-vpn-warn');
       }else if(card && v.connected && card.classList.contains('st-vpn-warn')){
@@ -888,7 +941,7 @@ async function _refreshScreenTaskStatus(){
         const t=devTask[match];
         const label=_TASK_LABELS[t.type]||t.type;
         el.textContent=label;
-        el.style.color='#60a5fa';
+        el.style.color='var(--blue-soft)';
         // 切换为蓝色(执行中)
         if(card){
           card.classList.remove('st-online','st-offline','st-vpn-warn');
@@ -993,6 +1046,18 @@ async function refreshAllScreens(){
   renderScreens();
 }
 
+/** 设备掉线/重连等事件的合并刷新入口：短时间多事件只触发一次重算（增量渲染会只动有变化的卡片） */
+let _scrEventRefreshT=null;
+function refreshScreensSoon(delay){
+  clearTimeout(_scrEventRefreshT);
+  _scrEventRefreshT=setTimeout(async()=>{
+    _scrEventRefreshT=null;
+    try{await loadDevices();}catch(e){}
+    if(typeof _currentPage==='undefined'||_currentPage==='screens'){try{renderScreens();}catch(e){}}
+  },delay||1200);
+}
+window.refreshScreensSoon=refreshScreensSoon;
+
 /** 双通道：对本机所有在线 USB 设备执行 tcpip 5555 + adb connect（需手机与电脑同局域网） */
 async function setupDualChannelAll(){
   if(!(await ocDialog({title:'全部双通道',message:'对当前所有 USB 在线设备开启双通道（tcpip 5555 + Wi‑Fi）？<br>手机需已连 Wi‑Fi 且与电脑同网段。',type:'info',confirmText:'开启',cancelText:'取消'})))return;
@@ -1029,32 +1094,39 @@ async function setupDualChannelOne(deviceId){
     showToast('双通道失败: '+(e.message||e),'error');
   }
 }
+const _scrEtags={};   // did → 上次截图 ETag（条件请求：画面没变服务端回 304 零载荷）
+const _scrObjUrls={}; // did → 在用 objectURL（换帧后释放旧的防内存泄漏）
 function _quickRefreshScreenshots(){
   const tp=_thumbParams();
-  document.querySelectorAll('.scr-img').forEach(img=>{
+  document.querySelectorAll('.scr-img').forEach(async img=>{
     const did=img.dataset.did||img.id.replace('scr-','');
     if(!did||img.dataset._scrPending) return; // 跳过正在加载的
-    const prefix=img.dataset.src&&img.dataset.src.indexOf('/cluster/')>=0?'/cluster':'';
-    const newSrc=_apiUrl(`${prefix}/devices/${did}/screenshot?${tp}&t=${Date.now()}`);
-    const token=Date.now()+'-'+did;
-    img.dataset._scrPending=token;
-    const pre=new Image();
-    pre.onload=function(){
-      if(!img.isConnected||img.dataset._scrPending!==token) return;
-      // Fade 过渡: 淡出→替换→淡入
-      img.style.transition='opacity 0.25s ease';
-      img.style.opacity='0.6';
-      setTimeout(()=>{
-        img.src=newSrc;
-        img.dataset.src=newSrc;
-        img.style.opacity='1';
-        delete img.dataset._scrPending;
-      },250);
-    };
-    pre.onerror=function(){
-      if(img.dataset._scrPending===token) delete img.dataset._scrPending;
-    };
-    pre.src=newSrc;
+    // WS 推送对该设备新鲜时，轮询不碰它（WS 已内容去重，轮询只兜 WS 覆盖不到的设备）
+    if(window._lastWsShotTs&&Date.now()-window._lastWsShotTs<6000&&_lastShotB64[did]) return;
+    const url=_apiUrl(`${_devApiPrefix(did)}/devices/${did}/screenshot?${tp}`);
+    img.dataset._scrPending='1';
+    try{
+      const headers={};
+      if(_scrEtags[did]) headers['If-None-Match']=_scrEtags[did];
+      const resp=await fetch(url,{headers,cache:'no-store'});
+      if(resp.status===304) return; // 画面没变：不动 DOM、不传一字节图片
+      if(!resp.ok) return;          // 失败保留上一帧，不改透明度
+      const et=resp.headers.get('ETag');
+      if(et) _scrEtags[did]=et;
+      const blob=await resp.blob();
+      const obj=URL.createObjectURL(blob);
+      const tmp=new Image();
+      tmp.onload=function(){
+        // 预解码完成后直接换 src 零闪烁；不做调暗过渡
+        if(img.isConnected){img.style.opacity='1';img.src=obj;img.dataset.src=url;}
+        const old=_scrObjUrls[did];
+        if(old&&old!==obj) URL.revokeObjectURL(old);
+        _scrObjUrls[did]=obj;
+      };
+      tmp.onerror=function(){URL.revokeObjectURL(obj);};
+      tmp.src=obj;
+    }catch(e){/* 网络瞬断：保留上一帧 */}
+    finally{delete img.dataset._scrPending;}
   });
 }
 
@@ -1067,7 +1139,7 @@ async function checkAllAnomalies(){
       bar.classList.add('active');
       const typeIcons={captcha:'\u26A0',ban:'\u26D4',login:'\uD83D\uDD11',popup:'\uD83D\uDCAC',network:'\uD83C\uDF10',update:'\u2B06',crash:'\uD83D\uDCA5'};
       const typeNames={captcha:'验证码',ban:'封禁',login:'需登录',popup:'弹窗',network:'网络错误',update:'需更新',crash:'崩溃'};
-      bar.innerHTML='<span style="font-size:12px;font-weight:600;color:#ef4444">\u26A0 发现 '+r.anomalies.length+' 个异常:</span>'+
+      bar.innerHTML='<span style="font-size:12px;font-weight:600;color:var(--red-strong)">\u26A0 发现 '+r.anomalies.length+' 个异常:</span>'+
         r.anomalies.map(a=>{
           const alias=ALIAS[a.device_id]||a.device_id.substring(0,8);
           return `<span class="anomaly-item ${a.severity}">${typeIcons[a.type]||'\u2753'} ${alias}: ${typeNames[a.type]||a.type} (${Math.round(a.confidence*100)}%)</span>`;

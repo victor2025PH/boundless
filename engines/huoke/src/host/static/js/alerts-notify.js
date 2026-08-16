@@ -174,7 +174,7 @@ async function loadAlertRulesPage(){
           <div style="font-size:10px;color:var(--text-muted)">${r.description||''}</div>
         </div>
         <span style="font-size:9px;padding:2px 6px;border-radius:4px;background:${sevColors[r.severity]||'#666'};color:#fff">${r.severity}</span>
-        ${isCustom?`<button onclick="deleteAlertRule('${r.name}')" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:12px" title="删除">&#10060;</button>`:''}
+        ${isCustom?`<button onclick="deleteAlertRule('${r.name}')" style="background:none;border:none;color:var(--red-strong);cursor:pointer;font-size:12px" title="删除">&#10060;</button>`:''}
       </div>`;
     }).join('')||'<div style="padding:12px;color:var(--text-muted);font-size:11px">暂无规则</div>';
     const hlist=document.getElementById('alert-history-list');
@@ -250,59 +250,12 @@ function clearNotifications(){
 function toggleNotifSound(){}
 
 
-/* ── Alert Rules ── */
-let _alertRules=[];
-async function loadAlertRulesPage(){
-  try{
-    const r=await api('GET','/alert-rules');
-    _alertRules=r.rules||[];
-    renderAlertRules();
-  }catch(e){}
-}
-function showAddRuleForm(){document.getElementById('add-rule-form').style.display='block';}
-const _METRIC_LABELS={battery_level:'电量(%)',mem_usage:'内存(%)',battery_temp:'温度(℃)'};
-const _ACTION_LABELS={notify:'仅通知',notify_and_cmd:'通知+命令',cmd:'仅命令'};
-function renderAlertRules(){
-  const container=document.getElementById('alert-rules-list');
-  container.innerHTML=_alertRules.map(r=>{
-    const metricLabel=_METRIC_LABELS[r.metric]||r.metric;
-    const actionLabel=_ACTION_LABELS[r.action]||r.action;
-    const statusColor=r.enabled?'var(--green)':'var(--text-muted)';
-    return `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;justify-content:space-between;align-items:center">
-      <div>
-        <div style="font-size:13px;font-weight:600"><span style="color:${statusColor}">●</span> ${r.name}</div>
-        <div style="font-size:10px;color:var(--text-muted);margin-top:2px">${metricLabel} ${r.operator} ${r.threshold} → ${actionLabel} ${r.action_cmd?'<code style="font-size:9px">'+r.action_cmd+'</code>':''}</div>
-      </div>
-      <div style="display:flex;gap:6px;align-items:center">
-        <label style="font-size:10px;cursor:pointer"><input type="checkbox" ${r.enabled?'checked':''} onchange="toggleAlertRule('${r.id}',this.checked)"/> 启用</label>
-        <button class="sb-btn2" onclick="deleteAlertRule('${r.id}')" style="font-size:9px;color:var(--red)">删除</button>
-      </div>
-    </div>`;
-  }).join('')||'<div style="color:var(--text-muted);font-size:12px">暂无告警规则</div>';
-}
-async function addAlertRule(){
-  try{
-    await api('POST','/alert-rules/add',{
-      name:document.getElementById('ar-name').value,
-      metric:document.getElementById('ar-metric').value,
-      operator:document.getElementById('ar-op').value,
-      threshold:parseFloat(document.getElementById('ar-threshold').value),
-      action:document.getElementById('ar-action').value,
-      action_cmd:document.getElementById('ar-cmd').value,
-    });
-    document.getElementById('add-rule-form').style.display='none';
-    showToast('规则已创建');loadAlertRulesPage();
-  }catch(e){showToast('创建失败','warn');}
-}
-async function toggleAlertRule(id,enabled){
-  const rule=_alertRules.find(r=>r.id===id);
-  if(rule)rule.enabled=enabled;
-  try{await api('POST','/alert-rules',{rules:_alertRules});showToast(enabled?'已启用':'已禁用');}catch(e){}
-}
-async function deleteAlertRule(id){
-  if(!(await ocDialog({title:'删除规则',message:'确认删除此规则？',type:'danger',confirmText:'删除',dangerous:true})))return;
-  try{await api('DELETE','/alert-rules/'+id);loadAlertRulesPage();}catch(e){showToast('删除失败','warn');}
-}
+/* ── Alert Rules（第二套 /alert-rules 实现已移除，2026-08-16）──
+   历史遗留 bug：本段曾重复定义 loadAlertRulesPage / showAddRuleForm / deleteAlertRule，
+   JS 后定义覆盖前定义，把上面那套 observability 版（与 page-alert-rules 的
+   #rules-list / #alert-history-list / #notif-config-display DOM 精确匹配）整个盖掉，
+   转而渲染到 DOM 里根本不存在的 #alert-rules-list → 告警规则列表恒空。
+   删除本段后由 observability 版生效，页面按钮 submitNewRule/evalAlertRules 亦与之配套。 */
 
 /* ── Notification Center ── */
 const _ALL_EVENTS=['device.disconnected','device.reconnected','task.failed','task.completed',

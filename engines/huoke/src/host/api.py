@@ -137,6 +137,13 @@ async def lifespan(application: FastAPI):
     except Exception as e:
         logger.debug("任务策略加载异常，仍启动调度器: %s", e)
         scheduler.start_scheduler(_config_path)
+    # AI 操盘手自带时钟（2026-08-17）：不走 DB 调度器（本部署有意封禁），
+    # 只受 operator_goals.yaml 双闸管辖——enabled=false 时线程空转零成本。
+    try:
+        from src.host.operator_engine import start_operator_clock
+        start_operator_clock()
+    except Exception as e:
+        logger.warning("操盘手时钟启动失败: %s", e)
     if _device_health_monitor_enabled():
         start_monitor(_config_path)
     else:
@@ -491,7 +498,8 @@ async def lifespan(application: FastAPI):
 # App & Middleware
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="OpenClaw Host Task API", version="1.1.0", lifespan=lifespan)
+from src.host import brand as _brand
+app = FastAPI(title=_brand.docs_title(), version=_brand.VERSION, lifespan=lifespan)
 
 # ── CORS (remote access) ──
 _CORS_ORIGINS = os.environ.get("OPENCLAW_CORS_ORIGINS", "")
@@ -599,6 +607,7 @@ from .routers.cluster import router as _cluster_router
 from .routers.tasks import router as _tasks_router
 from .routers.task_params import router as _task_params_router
 from .routers.workflows import router as _workflows_router
+from .routers.operator import router as _operator_router
 from .routers.monitoring import router as _monitoring_router
 from .routers.system import router as _system_router
 from .routers.batch import router as _batch_router
@@ -623,6 +632,7 @@ app.include_router(_cluster_router)
 app.include_router(_tasks_router)
 app.include_router(_task_params_router, dependencies=[Depends(verify_api_key)])
 app.include_router(_workflows_router)
+app.include_router(_operator_router)  # 内部逐端点挂 requires_role(admin/operator)
 app.include_router(_monitoring_router)
 app.include_router(_system_router, dependencies=[Depends(verify_api_key)])
 app.include_router(_batch_router, dependencies=[Depends(verify_api_key)])

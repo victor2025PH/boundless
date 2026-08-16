@@ -34,7 +34,54 @@ function toggleLogAuto(){
 logAutoTimer=setInterval(loadLogs,60000);
 
 /* ── Funnel ── */
+/* P4 多平台漏斗：TikTok（原 /funnel）+ Facebook（/facebook/funnel steps 适配渲染） */
+let _funnelPlat=(function(){try{return localStorage.getItem('oc_funnel_plat')||'tiktok';}catch(e){return 'tiktok';}})();
+function setFunnelPlat(p){
+  _funnelPlat=p;
+  try{localStorage.setItem('oc_funnel_plat',p);}catch(e){}
+  if(window._navBeacon)_navBeacon('funnel:'+p,'action');
+  loadFunnel();
+}
+function _funnelPlatBtns(){
+  ['tiktok','facebook'].forEach(k=>{
+    const b=document.getElementById('fnl-plat-'+k);
+    if(!b)return;
+    const on=k===_funnelPlat;
+    b.style.background=on?'var(--accent)':'';
+    b.style.color=on?'#fff':'';
+    b.style.borderColor=on?'var(--accent)':'';
+  });
+}
+async function _loadFbFunnel(){
+  try{
+    const f=await api('GET','/facebook/funnel?since_hours=168');
+    const steps=f.steps||[];
+    const maxVal=Math.max(...steps.map(s=>s.value||0),1);
+    document.getElementById('funnel-chart').innerHTML=steps.map((s,i)=>{
+      const pct=Math.max((s.value||0)/maxVal*100,2);
+      const rv=s.rate!=null?((s.rate*100).toFixed(1)+'%'):'';
+      return `<div class="funnel-step"><span class="funnel-step-label">${s.label}</span><span class="funnel-step-count">${s.value||0}</span><div class="funnel-bar-wrap"><div class="funnel-bar funnel-colors-${(i%7)+1}" style="width:${pct}%"></div><span class="funnel-bar-label">${pct.toFixed(0)}%</span></div><span class="funnel-rate">${rv}</span></div>`;
+    }).join('')||'<div style="color:var(--text-dim);padding:20px">暂无 Facebook 漏斗数据</div>';
+    const r=f.rates||{};
+    document.getElementById('funnel-stats').innerHTML=`
+      <div class="f-stat"><div class="f-stat-num" style="color:var(--blue-soft)">${((r.accept||0)*100).toFixed(1)}%</div><div class="f-stat-label">好友通过率</div></div>
+      <div class="f-stat"><div class="f-stat-num" style="color:var(--violet-soft)">${((r.request_to_inbox||0)*100).toFixed(1)}%</div><div class="f-stat-label">请求→DM率</div></div>
+      <div class="f-stat"><div class="f-stat-num" style="color:var(--green-strong)">${((r.inbox_to_referral||0)*100).toFixed(1)}%</div><div class="f-stat-label">DM→引流率</div></div>
+      <div class="f-stat"><div class="f-stat-num" style="color:var(--amber)">${f.stage_greetings_sent||0}</div><div class="f-stat-label">打招呼发送</div></div>`;
+    const agg=document.getElementById('funnel-aggregate-stats');
+    if(agg)agg.innerHTML='';
+  }catch(e){
+    document.getElementById('funnel-chart').innerHTML='<div style="color:var(--red-strong);padding:20px">加载失败: '+(e.message||e)+'</div>';
+  }
+}
 async function loadFunnel(){
+  _funnelPlatBtns();
+  const daily=document.getElementById('funnel-daily-wrap');
+  if(_funnelPlat==='facebook'){
+    if(daily)daily.style.display='none';
+    return _loadFbFunnel();
+  }
+  if(daily)daily.style.display='';
   try{
     const f=await api('GET','/funnel?days=30');
     const d=f.funnel||{};
@@ -58,10 +105,10 @@ async function loadFunnel(){
 
     const eng=f.engagement||{};const st=f.status_distribution||{};
     document.getElementById('funnel-stats').innerHTML=`
-      <div class="f-stat"><div class="f-stat-num" style="color:#60a5fa">${(rates.overall_funnel*100||0).toFixed(2)}%</div><div class="f-stat-label">总转化率</div></div>
-      <div class="f-stat"><div class="f-stat-num" style="color:#a78bfa">${(rates.followback_rate*100||0).toFixed(1)}%</div><div class="f-stat-label">回关率</div></div>
+      <div class="f-stat"><div class="f-stat-num" style="color:var(--blue-soft)">${(rates.overall_funnel*100||0).toFixed(2)}%</div><div class="f-stat-label">总转化率</div></div>
+      <div class="f-stat"><div class="f-stat-num" style="color:var(--violet-soft)">${(rates.followback_rate*100||0).toFixed(1)}%</div><div class="f-stat-label">回关率</div></div>
       <div class="f-stat"><div class="f-stat-num" style="color:#fbbf24">${(rates.reply_rate*100||0).toFixed(1)}%</div><div class="f-stat-label">回复率</div></div>
-      <div class="f-stat"><div class="f-stat-num" style="color:#4ade80">${eng.auto_replies_sent||0}</div><div class="f-stat-label">自动回复</div></div>
+      <div class="f-stat"><div class="f-stat-num" style="color:var(--green-soft)">${eng.auto_replies_sent||0}</div><div class="f-stat-label">自动回复</div></div>
       <div class="f-stat"><div class="f-stat-num" style="color:#f472b6">${eng.follow_ups_sent||0}</div><div class="f-stat-label">跟进消息</div></div>
       <div class="f-stat"><div class="f-stat-num" style="color:#22d3ee">${st.new||0}</div><div class="f-stat-label">新线索</div></div>
     `;
@@ -83,9 +130,9 @@ async function loadFunnel(){
     if(statsEl){
       statsEl.innerHTML=`
         <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:12px;padding:12px;background:var(--bg-main);border-radius:8px;border:1px solid var(--border)">
-          <div style="text-align:center"><div style="font-size:20px;font-weight:700;color:#60a5fa">${f.watched||0}</div><div style="font-size:11px;color:var(--text-dim)">总观看</div></div>
-          <div style="text-align:center"><div style="font-size:20px;font-weight:700;color:#22c55e">${f.followed||0}</div><div style="font-size:11px;color:var(--text-dim)">总关注</div></div>
-          <div style="text-align:center"><div style="font-size:20px;font-weight:700;color:#a78bfa">${f.dms_sent||0}</div><div style="font-size:11px;color:var(--text-dim)">总私信</div></div>
+          <div style="text-align:center"><div style="font-size:20px;font-weight:700;color:var(--blue-soft)">${f.watched||0}</div><div style="font-size:11px;color:var(--text-dim)">总观看</div></div>
+          <div style="text-align:center"><div style="font-size:20px;font-weight:700;color:var(--green-strong)">${f.followed||0}</div><div style="font-size:11px;color:var(--text-dim)">总关注</div></div>
+          <div style="text-align:center"><div style="font-size:20px;font-weight:700;color:var(--violet-soft)">${f.dms_sent||0}</div><div style="font-size:11px;color:var(--text-dim)">总私信</div></div>
           <div style="text-align:center"><div style="font-size:20px;font-weight:700;color:#fbbf24">${f.dm_rate_pct||0}%</div><div style="font-size:11px;color:var(--text-dim)">DM转化率</div></div>
           ${agg.cluster?`<div style="text-align:center"><div style="font-size:20px;font-weight:700;color:#22d3ee">${agg.worker_nodes||0}</div><div style="font-size:11px;color:var(--text-dim)">Worker节点</div></div>`:''}
         </div>
@@ -103,10 +150,16 @@ let _wsLoadLogDebounce=null;
 function connectUnifiedWs(){
   if(_unifiedWs && (_unifiedWs.readyState===WebSocket.OPEN || _unifiedWs.readyState===WebSocket.CONNECTING)) return;
   _unifiedWs=new WebSocket(_wsUrl('/ws'));
+  // let 词法绑定不挂 window——grid-control 的 _sendVisibleDevices 认 window._unifiedWs,
+  // 不显式暴露的话「可见设备订阅」永远发不出去（实锤:上线以来从未发出过）
+  window._unifiedWs=_unifiedWs;
   _unifiedWs.onopen=function(){
     document.getElementById('h-status').textContent='实时连接 (WS)';
     document.getElementById('h-dot').className='status-dot ok';
     if(_wsReconnectTimer){clearTimeout(_wsReconnectTimer);_wsReconnectTimer=null;}
+    if(window.OCConn){try{OCConn.wsUp();}catch(e){}}  // P0-1 连接状态机：WS 恢复信号
+    // 连上后补发一次当前可见设备(页面可能在 WS 建立前已渲染)
+    if(typeof _sendVisibleDevices==='function'){try{_sendVisibleDevices();}catch(e){}}
   };
   _unifiedWs.onmessage=function(ev){
     try{ _handleWsPush(JSON.parse(ev.data)); }catch(e){}
@@ -114,6 +167,7 @@ function connectUnifiedWs(){
   _unifiedWs.onclose=function(){
     document.getElementById('h-status').textContent='重连中...';
     document.getElementById('h-dot').className='status-dot warn';
+    if(window.OCConn){try{OCConn.wsDown();}catch(e){}}  // P0-1 连接状态机：WS 掉线信号
     _wsReconnectTimer=setTimeout(connectUnifiedWs, 3000);
   };
   _unifiedWs.onerror=function(){};
@@ -129,7 +183,7 @@ _requestNotifPermission();
 function _browserNotify(title,body,level){
   if('Notification' in window && Notification.permission==='granted'){
     try{
-      const n=new Notification('OpenClaw: '+title,{body:body.replace(/&#\d+;/g,''),icon:'/favicon.ico',tag:'oc-'+Date.now(),silent:false});
+      const n=new Notification(((window.__BRAND&&window.__BRAND.label)||'ReachX')+': '+title,{body:body.replace(/&#\d+;/g,''),icon:'/favicon.ico',tag:'oc-'+Date.now(),silent:false});
       setTimeout(()=>n.close(),8000);
     }catch(e){}
   }
@@ -225,8 +279,8 @@ function _handleWsPush(msg){
         const ctx=document.getElementById('chart-device-trend');if(ctx){
           if(_chartDevTrend)_chartDevTrend.destroy();
           _chartDevTrend=new Chart(ctx,{type:'line',data:{labels:d.device_trend.labels,datasets:[
-            {label:'在线',data:d.device_trend.online,borderColor:'#22c55e',backgroundColor:'rgba(34,197,94,.1)',fill:true,tension:.3,pointRadius:1},
-            {label:'总数',data:d.device_trend.total,borderColor:'#3b82f6',backgroundColor:'rgba(59,130,246,.05)',fill:true,tension:.3,pointRadius:1},
+            {label:'在线',data:d.device_trend.online,borderColor:themeColor('--green-strong','#22c55e'),backgroundColor:'rgba(34,197,94,.1)',fill:true,tension:.3,pointRadius:1},
+            {label:'总数',data:d.device_trend.total,borderColor:themeColor('--blue-strong','#3b82f6'),backgroundColor:'rgba(59,130,246,.05)',fill:true,tension:.3,pointRadius:1},
           ]},options:{responsive:true,plugins:{legend:{labels:{color:_chartColors.text,font:{size:10}}}},scales:{x:{ticks:{color:_chartColors.text,font:{size:9},maxTicksLimit:8},grid:{color:_chartColors.grid}},y:{ticks:{color:_chartColors.text,font:{size:9}},grid:{color:_chartColors.grid},beginAtZero:true}}}});
         }
       }catch(e){}
@@ -236,9 +290,9 @@ function _handleWsPush(msg){
         const ctx=document.getElementById('chart-task-trend');if(ctx){
           if(_chartTaskTrend)_chartTaskTrend.destroy();
           _chartTaskTrend=new Chart(ctx,{type:'line',data:{labels:d.task_trend.labels,datasets:[
-            {label:'成功',data:d.task_trend.success,borderColor:'#22c55e',backgroundColor:'rgba(34,197,94,.1)',fill:true,tension:.3,pointRadius:1},
-            {label:'失败',data:d.task_trend.failed,borderColor:'#ef4444',backgroundColor:'rgba(239,68,68,.1)',fill:true,tension:.3,pointRadius:1},
-            {label:'总数',data:d.task_trend.total,borderColor:'#3b82f6',backgroundColor:'rgba(59,130,246,.05)',fill:false,tension:.3,pointRadius:1,borderDash:[4,4]},
+            {label:'成功',data:d.task_trend.success,borderColor:themeColor('--green-strong','#22c55e'),backgroundColor:'rgba(34,197,94,.1)',fill:true,tension:.3,pointRadius:1},
+            {label:'失败',data:d.task_trend.failed,borderColor:themeColor('--red-strong','#ef4444'),backgroundColor:'rgba(239,68,68,.1)',fill:true,tension:.3,pointRadius:1},
+            {label:'总数',data:d.task_trend.total,borderColor:themeColor('--blue-strong','#3b82f6'),backgroundColor:'rgba(59,130,246,.05)',fill:false,tension:.3,pointRadius:1,borderDash:[4,4]},
           ]},options:{responsive:true,plugins:{legend:{labels:{color:_chartColors.text,font:{size:10}}}},scales:{x:{ticks:{color:_chartColors.text,font:{size:9},maxTicksLimit:8},grid:{color:_chartColors.grid}},y:{ticks:{color:_chartColors.text,font:{size:9}},grid:{color:_chartColors.grid},beginAtZero:true}}}});
         }
       }catch(e){}
@@ -361,19 +415,22 @@ function _handleWsPush(msg){
   if(t==='device.disconnected'){
     const did=msg.data?.device_id;
     const name=ALIAS[did]||did?.substring(0,8)||'?';
-    showToast('设备掉线: '+name, 'warn');
+    // 同 key 覆盖：设备批量抖动时不连环弹窗刷屏
+    showToast('设备掉线: '+name, 'warn', 3000, 'dev-flap');
     _browserNotify('设备掉线','&#9888; '+name+' 已断开连接','warn');
     _flashDeviceCard(did,'#ef4444');
-    setTimeout(()=>{loadDevices();if(_currentPage==='screens')renderScreens();},1000);
+    if(typeof refreshScreensSoon==='function') refreshScreensSoon(1200);
+    else setTimeout(()=>{loadDevices();if(_currentPage==='screens')renderScreens();},1000);
   }
   if(t==='device.reconnected'||t==='device.online'){
     const did2=msg.data?.device_id;
     const name2=ALIAS[did2]||did2?.substring(0,8)||'?';
     const isFirst=msg.data?.first_time;
-    showToast((isFirst?'新设备上线: ':'设备重连: ')+name2, 'success');
+    showToast((isFirst?'新设备上线: ':'设备重连: ')+name2, 'success', 3000, 'dev-flap');
     _browserNotify(isFirst?'新设备上线':'设备重连',name2+' 已连接');
     _flashDeviceCard(did2,'#22c55e');
-    setTimeout(()=>{loadDevices();if(_currentPage==='screens')renderScreens();},1000);
+    if(typeof refreshScreensSoon==='function') refreshScreensSoon(1200);
+    else setTimeout(()=>{loadDevices();if(_currentPage==='screens')renderScreens();},1000);
   }
   if(t==='batch.created'){
     showToast('批量任务已创建: '+(msg.data?.count||'?')+' 个');
@@ -509,31 +566,16 @@ function _updateOpsStatusBar(){
     const el=document.getElementById('ops-status-bar');
     if(!el)return;
     let parts=[];
-    if(running>0) parts.push(`<span style="color:#4ade80">▶ ${running} 个任务运行中</span>`);
+    if(running>0) parts.push(`<span style="color:var(--green-soft)">▶ ${running} 个任务运行中</span>`);
     if(pending>0) parts.push(`<span style="color:#fbbf24">⏳ ${pending} 个等待中</span>`);
-    if(failed>0) parts.push(`<span style="color:#f87171">✗ ${failed} 个失败</span>`);
+    if(failed>0) parts.push(`<span style="color:var(--red)">✗ ${failed} 个失败</span>`);
     if(!parts.length) parts.push('<span style="color:var(--text-dim)">✓ 系统空闲</span>');
     el.innerHTML=parts.join(' &nbsp;·&nbsp; ');
   }catch(e){}
 }
 
-function showToast(msg,type,duration){
-  // Remove existing toasts to prevent stacking
-  document.querySelectorAll('.oc-toast').forEach(el=>el.remove());
-  const t=document.createElement('div');
-  t.className='oc-toast';
-  const colors={
-    'success':'background:#052e16;color:#4ade80;border:1px solid #166534',
-    'error':'background:#2d0a0a;color:#f87171;border:1px solid #7f1d1d',
-    'warn':'background:#1c1206;color:#fbbf24;border:1px solid #92400e',
-  };
-  const style=colors[type]||'background:#1e3a5f;color:#93c5fd;border:1px solid #3b82f6';
-  t.style.cssText='position:fixed;top:70px;right:20px;padding:10px 18px;border-radius:8px;font-size:13px;z-index:9999;animation:msgIn .3s ease;max-width:360px;word-break:break-word;cursor:pointer;'+style;
-  t.innerHTML=msg;
-  t.onclick=()=>t.remove();
-  document.body.appendChild(t);
-  setTimeout(()=>t.remove(),duration||4000);
-}
+/* showToast 旧版已删(2026-08-16)：core.js 的分组版(#toast-container+四色+同组互斥)是唯一实现。
+   此处旧版因脚本加载顺序靠后一直覆盖 core.js 版,导致所有 group 参数静默失效。 */
 
 /* ── Health Dashboard ── */
 async function loadHealthPage(){
@@ -660,11 +702,11 @@ async function _loadRecoveryStats() {
         let html = `
             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px">
                 <div style="text-align:center;padding:12px;background:var(--bg-main);border-radius:8px">
-                    <div style="font-size:22px;font-weight:700;color:#ef4444">${d.total_disconnects}</div>
+                    <div style="font-size:22px;font-weight:700;color:var(--red-strong)">${d.total_disconnects}</div>
                     <div style="font-size:10px;color:var(--text-muted)">总掉线次数</div>
                 </div>
                 <div style="text-align:center;padding:12px;background:var(--bg-main);border-radius:8px">
-                    <div style="font-size:22px;font-weight:700;color:#22c55e">${d.total_recoveries}</div>
+                    <div style="font-size:22px;font-weight:700;color:var(--green-strong)">${d.total_recoveries}</div>
                     <div style="font-size:10px;color:var(--text-muted)">自动恢复次数</div>
                 </div>
                 <div style="text-align:center;padding:12px;background:var(--bg-main);border-radius:8px">
@@ -685,9 +727,9 @@ async function _loadRecoveryStats() {
                     <div style="flex:1;height:6px;background:var(--bg-main);border-radius:3px;overflow:hidden">
                         <div style="height:100%;width:${barWidth}%;background:${dev.recovery_rate>=90?'#22c55e':'#ef4444'};border-radius:3px"></div>
                     </div>
-                    <span style="min-width:30px;text-align:right;color:#ef4444">${dev.disconnects}</span>
+                    <span style="min-width:30px;text-align:right;color:var(--red-strong)">${dev.disconnects}</span>
                     <span style="min-width:20px;text-align:center;color:var(--text-dim)">/</span>
-                    <span style="min-width:30px;color:#22c55e">${dev.recoveries}</span>
+                    <span style="min-width:30px;color:var(--green-strong)">${dev.recoveries}</span>
                     <span style="min-width:40px;text-align:right;font-weight:500;color:${dev.recovery_rate>=90?'#22c55e':'#ef4444'}">${dev.recovery_rate}%</span>
                 </div>`;
             });

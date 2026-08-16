@@ -46,7 +46,15 @@ async function loadClusterPage(){
     const polByHost={};
     (execPol.nodes||[]).forEach(n=>{ if(n&&n.host_id) polByHost[n.host_id]=n; });
     const hosts=overview.hosts||[];
-    document.getElementById('cl-stats-row').innerHTML=`
+    // 2026-08-16: 单机模式（无 worker 注册）下，5 张恒为 0 的统计卡是纯噪音、还容易被误当故障。
+    // 改成一句「单机模式运行中」引导，讲清这不是故障 + 如何组网；组网后自动恢复正常统计卡。
+    const _isStandalone=(overview.total_hosts||0)===0;
+    document.getElementById('cl-stats-row').innerHTML=_isStandalone
+      ? `<div class="stat-card" style="grid-column:1/-1;text-align:left;padding:14px 16px">
+           <div style="font-size:13px;font-weight:600;margin-bottom:4px">单机模式运行中</div>
+           <div style="font-size:11px;color:var(--text-muted);line-height:1.5">本机独立运行，尚未组建多机集群——这不是故障。需要横向扩展（多台机分布式管理设备）时，点右上角「加入集群」把本机接入协调器；下方的跨主机拓扑 / 设备 / 脚本在组网后才会有数据。</div>
+         </div>`
+      : `
       <div class="stat-card"><div class="stat-value">${overview.total_hosts||0}</div><div class="stat-label">主机总数</div></div>
       <div class="stat-card"><div class="stat-value" style="color:var(--green)">${overview.hosts_online||0}</div><div class="stat-label">在线主机</div></div>
       <div class="stat-card"><div class="stat-value">${overview.total_devices||0}</div><div class="stat-label">总设备</div></div>
@@ -71,14 +79,14 @@ async function loadClusterPage(){
               <span style="font-size:10px;padding:1px 6px;border-radius:3px;background:${h.online?'rgba(34,197,94,.12)':'rgba(239,68,68,.12)'};color:${stColor}">${stLabel}</span>
             </div>
             <div style="display:flex;gap:4px">
-              ${h.online?`<button class="dev-btn" style="font-size:10px;padding:2px 8px;color:#60a5fa;border-color:#60a5fa" onclick="restartWorker('${h.host_id}','${h.host_name||h.host_id.substring(0,8)}')">🔄 重启</button>`:''}
-              <button class="dev-btn" style="font-size:10px;padding:2px 8px;color:#f59e0b;border-color:#f59e0b" onclick="updateWorker('${h.host_id}','${h.host_name||h.host_id.substring(0,8)}')">⬆ 更新</button>
+              ${h.online?`<button class="dev-btn" style="font-size:10px;padding:2px 8px;color:var(--blue-soft);border-color:var(--blue-soft)" onclick="restartWorker('${h.host_id}','${h.host_name||h.host_id.substring(0,8)}')">🔄 重启</button>`:''}
+              <button class="dev-btn" style="font-size:10px;padding:2px 8px;color:var(--amber);border-color:var(--amber)" onclick="updateWorker('${h.host_id}','${h.host_name||h.host_id.substring(0,8)}')">⬆ 更新</button>
               <button class="dev-btn" style="font-size:10px;padding:2px 8px;color:var(--red)" onclick="removeHost('${h.host_id}')">✕</button>
             </div>
           </div>
           <!-- IP & 版本 -->
           <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-            <span>🌐 <a href="http://${h.host_ip}:${h.port}" target="_blank" style="color:#60a5fa;text-decoration:none">${h.host_ip}:${h.port}</a></span>
+            <span>🌐 <a href="http://${h.host_ip}:${h.port}" target="_blank" style="color:var(--blue-soft);text-decoration:none">${h.host_ip}:${h.port}</a></span>
             ${(()=>{const pn=polByHost[h.host_id];const r=pn&&pn.reachable_ip;const hip=(h.host_ip||'').trim();return r&&hip&&r!==hip?'<span style="font-size:10px;color:var(--accent)" title="拉取执行策略时实际连通的 IP（与心跳上报可能不同）">探测 '+r+'</span>':'';})()}
             <span>v${h.version||'?'}</span>
             ${hbWarn?'<span style="color:var(--yellow)">⚠ 心跳延迟</span>':''}
@@ -304,7 +312,12 @@ async function _loadClusterScripts(){
   try{
     const [scripts,stats]=await Promise.all([api('GET','/scripts'),api('GET','/cluster/stats')]);
     const sel=document.getElementById('cl-script-sel');
-    if(sel)sel.innerHTML=(scripts.scripts||[]).map(s=>`<option value="${s.name}">${s.name}</option>`).join('')||'<option value="">无脚本</option>';
+    // 2026-08-16 白名单：跨集群脚本执行走 type:'adb'，只有设备 shell 脚本(.sh)是正当用途。
+    // /scripts 端点会把整个 scripts/ 目录 dump 出来（含 warmup_vlm.py / smoke_*.py / *.ps1 /
+    // *.bat 等 60+ 个项目运维脚本）——这些既不该、也无法对设备 adb 执行，暴露出来纯是危险+看不懂。
+    // 只保留 .sh；无则明确提示，而不是让 admin 从一堆开发脚本里瞎选。
+    const safe=(scripts.scripts||[]).filter(s=>/\.sh$/i.test(s.name||''));
+    if(sel)sel.innerHTML=safe.map(s=>`<option value="${s.name}">${s.name}</option>`).join('')||'<option value="">无可用设备脚本（项目运维脚本已隐藏）</option>';
     const tgt=document.getElementById('cl-script-target');
     if(tgt)tgt.innerHTML='<option value="all">全部主机</option>'+
       (stats.hosts||[]).map(h=>`<option value="host:${h.name}">${h.name} (${h.online_devices}台)</option>`).join('');
@@ -327,12 +340,12 @@ async function clusterExecScript(){
         for(const[did,dr] of Object.entries(info.results||{})){
           html+=`<div style="margin-left:12px;font-size:9px"><code>${did.substring(0,8)}</code>: ${dr.success?'OK':'FAIL'} — ${(dr.output||'').substring(0,80)}</div>`;
         }
-      }else{html+=`<span style="color:#ef4444">${info.error||'失败'}</span>`;}
+      }else{html+=`<span style="color:var(--red-strong)">${info.error||'失败'}</span>`;}
       html+='</div>';
     }
     res.innerHTML=html||'无结果';
     showToast('跨集群脚本执行完成');
-  }catch(e){res.innerHTML=`<span style="color:#ef4444">失败: ${e.message}</span>`;}
+  }catch(e){res.innerHTML=`<span style="color:var(--red-strong)">失败: ${e.message}</span>`;}
 }
 
 

@@ -199,6 +199,15 @@ def create_handoff(*, canonical_id: str,
     except Exception:
         pass
 
+    # SSE: 侧栏角标即时更新（events_stream 头部文档早已声明 handoff_pending_changed，此处兑现）
+    try:
+        from .events_stream import emit_event
+        emit_event("handoff_pending_changed",
+                   {"count": count_handoffs(state=STATE_PENDING),
+                    "handoff_id": handoff_id, "channel": channel})
+    except Exception:
+        pass
+
     # Webhook
     if enqueue_webhook:
         try:
@@ -241,6 +250,25 @@ def get_handoff(handoff_id: str) -> Optional[Dict[str, Any]]:
         return d
     except Exception:
         return None
+
+
+def count_handoffs(*, state: str = "pending", receiver_account_key: str = "") -> int:
+    """轻量计数（侧栏角标/收件箱页签用）——替代旧「拉 200 条数长度」的重查询。"""
+    sql = "SELECT COUNT(*) FROM lead_handoffs WHERE 1=1"
+    params: list = []
+    if state:
+        sql += " AND state=?"
+        params.append(state)
+    if receiver_account_key:
+        sql += " AND receiver_account_key=?"
+        params.append(receiver_account_key)
+    try:
+        with _connect() as conn:
+            row = conn.execute(sql, params).fetchone()
+        return int(row[0]) if row else 0
+    except Exception as e:
+        logger.debug("[handoff] count 失败: %s", e)
+        return 0
 
 
 def list_handoffs(*,
@@ -344,6 +372,14 @@ def _transition(handoff_id: str, from_states: tuple,
                related_handoff_id=handoff_id)
         except Exception:
             pass
+    # SSE: 任何状态迁移都会动 pending 计数/列表——推事件让角标与打开中的客服页即时刷新
+    try:
+        from .events_stream import emit_event
+        emit_event("handoff_pending_changed",
+                   {"count": count_handoffs(state=STATE_PENDING),
+                    "handoff_id": handoff_id, "to_state": to_state})
+    except Exception:
+        pass
     return True
 
 

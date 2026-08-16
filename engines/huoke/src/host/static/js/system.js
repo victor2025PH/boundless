@@ -10,10 +10,10 @@ async function loadAnalytics(){
     ]);
     const sum=document.getElementById('ana-summary');
     sum.innerHTML=`
-      <div class="stat-card blue"><div class="stat-num" style="color:#60a5fa">${summary.total}</div><div class="stat-label">总任务</div></div>
-      <div class="stat-card green"><div class="stat-num" style="color:#4ade80">${summary.success}</div><div class="stat-label">成功</div></div>
-      <div class="stat-card" style="border-top:3px solid #ef4444"><div class="stat-num" style="color:#f87171">${summary.failed}</div><div class="stat-label">失败</div></div>
-      <div class="stat-card orange"><div class="stat-num" style="color:#fb923c">${summary.success_rate}%</div><div class="stat-label">成功率</div></div>`;
+      <div class="stat-card blue"><div class="stat-num" style="color:var(--blue-soft)">${summary.total}</div><div class="stat-label">总任务</div></div>
+      <div class="stat-card green"><div class="stat-num" style="color:var(--green-soft)">${summary.success}</div><div class="stat-label">成功</div></div>
+      <div class="stat-card" style="border-top:3px solid var(--red-strong)"><div class="stat-num" style="color:var(--red)">${summary.failed}</div><div class="stat-label">失败</div></div>
+      <div class="stat-card orange"><div class="stat-num" style="color:var(--orange)">${summary.success_rate}%</div><div class="stat-label">成功率</div></div>`;
     const dailyKeys=Object.keys(summary.daily);
     const dailyTotal=dailyKeys.map(k=>summary.daily[k].total);
     const dailySuccess=dailyKeys.map(k=>summary.daily[k].success);
@@ -52,7 +52,7 @@ async function loadAnalytics(){
         <span style="width:18px;font-size:11px;color:var(--text-muted);text-align:right">${i+1}</span>
         <span style="width:60px;font-size:11px;font-weight:600">${alias}</span>
         <div style="flex:1;background:var(--bg-main);border-radius:4px;height:14px;overflow:hidden">
-          <div style="height:100%;width:${barW}%;background:linear-gradient(90deg,#22c55e,#4ade80);border-radius:4px;transition:width .3s"></div>
+          <div style="height:100%;width:${barW}%;background:linear-gradient(90deg,var(--green-strong),var(--green-soft));border-radius:4px;transition:width .3s"></div>
         </div>
         <span style="width:40px;font-size:10px;color:var(--text-muted);text-align:right">${d.rate}%</span>
         <span style="width:50px;font-size:9px;color:var(--text-muted)">${d.success}/${d.total}</span>
@@ -94,20 +94,20 @@ async function loadROIPage(){
     <!-- 顶部三大卡片 -->
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
       <div style="background:linear-gradient(135deg,rgba(96,165,250,.12),rgba(96,165,250,.04));border:1px solid rgba(96,165,250,.2);border-radius:14px;padding:18px">
-        <div style="font-size:12px;color:#60a5fa;font-weight:600;margin-bottom:12px">&#128178; 投入</div>
+        <div style="font-size:12px;color:var(--blue-soft);font-weight:600;margin-bottom:12px">&#128178; 投入</div>
         <div style="display:grid;gap:10px">
-          <div><div style="font-size:22px;font-weight:700;color:#60a5fa">${inv.devices_active||0}</div><div style="font-size:10px;color:var(--text-muted)">活跃设备</div></div>
-          <div><div style="font-size:22px;font-weight:700;color:#60a5fa">${inv.total_hours||0}<span style="font-size:12px;font-weight:400">h</span></div><div style="font-size:10px;color:var(--text-muted)">总运行时长</div></div>
-          <div><div style="font-size:22px;font-weight:700;color:#60a5fa">${inv.tasks_executed||0}</div><div style="font-size:10px;color:var(--text-muted)">任务执行数</div></div>
+          <div><div style="font-size:22px;font-weight:700;color:var(--blue-soft)">${inv.devices_active||0}</div><div style="font-size:10px;color:var(--text-muted)">活跃设备</div></div>
+          <div><div style="font-size:22px;font-weight:700;color:var(--blue-soft)">${inv.total_hours||0}<span style="font-size:12px;font-weight:400">h</span></div><div style="font-size:10px;color:var(--text-muted)">总运行时长</div></div>
+          <div><div style="font-size:22px;font-weight:700;color:var(--blue-soft)">${inv.tasks_executed||0}</div><div style="font-size:10px;color:var(--text-muted)">任务执行数</div></div>
         </div>
       </div>
       <div style="background:linear-gradient(135deg,rgba(74,222,128,.12),rgba(74,222,128,.04));border:1px solid rgba(74,222,128,.2);border-radius:14px;padding:18px">
-        <div style="font-size:12px;color:#4ade80;font-weight:600;margin-bottom:12px">&#128200; 产出</div>
+        <div style="font-size:12px;color:var(--green-soft);font-weight:600;margin-bottom:12px">&#128200; 产出</div>
         <div style="display:grid;gap:10px">
-          <div><div style="font-size:22px;font-weight:700;color:#4ade80">${out.follows_sent||0}</div><div style="font-size:10px;color:var(--text-muted)">发送关注</div></div>
-          <div><div style="font-size:22px;font-weight:700;color:#4ade80">${out.followbacks||0}</div><div style="font-size:10px;color:var(--text-muted)">回关数</div></div>
-          <div><div style="font-size:22px;font-weight:700;color:#4ade80">${out.dms_sent||0}</div><div style="font-size:10px;color:var(--text-muted)">私信发送</div></div>
-          <div><div style="font-size:22px;font-weight:700;color:#4ade80">${out.leads_generated||0}</div><div style="font-size:10px;color:var(--text-muted)">生成线索</div></div>
+          <div><div style="font-size:22px;font-weight:700;color:var(--green-soft)">${out.follows_sent||0}</div><div style="font-size:10px;color:var(--text-muted)">发送关注</div></div>
+          <div><div style="font-size:22px;font-weight:700;color:var(--green-soft)">${out.followbacks||0}</div><div style="font-size:10px;color:var(--text-muted)">回关数</div></div>
+          <div><div style="font-size:22px;font-weight:700;color:var(--green-soft)">${out.dms_sent||0}</div><div style="font-size:10px;color:var(--text-muted)">私信发送</div></div>
+          <div><div style="font-size:22px;font-weight:700;color:var(--green-soft)">${out.leads_generated||0}</div><div style="font-size:10px;color:var(--text-muted)">生成线索</div></div>
         </div>
       </div>
       <div style="background:linear-gradient(135deg,rgba(251,191,36,.12),rgba(251,191,36,.04));border:1px solid rgba(251,191,36,.2);border-radius:14px;padding:18px">
@@ -133,8 +133,8 @@ async function loadROIPage(){
         ${_roiFunnelStep('线索', out.leads_generated||0, '#fbbf24', false)}
       </div>
       <div style="margin-top:12px;display:flex;gap:20px;justify-content:center">
-        <span style="font-size:11px;color:var(--text-muted)">回关率 <b style="color:#4ade80">${out.followback_rate||0}%</b></span>
-        <span style="font-size:11px;color:var(--text-muted)">私信转化 <b style="color:#60a5fa">${out.follows_sent? (out.dms_sent/out.follows_sent*100).toFixed(1) : 0}%</b></span>
+        <span style="font-size:11px;color:var(--text-muted)">回关率 <b style="color:var(--green-soft)">${out.followback_rate||0}%</b></span>
+        <span style="font-size:11px;color:var(--text-muted)">私信转化 <b style="color:var(--blue-soft)">${out.follows_sent? (out.dms_sent/out.follows_sent*100).toFixed(1) : 0}%</b></span>
         <span style="font-size:11px;color:var(--text-muted)">线索转化 <b style="color:#fbbf24">${out.follows_sent? (out.leads_generated/out.follows_sent*100).toFixed(1) : 0}%</b></span>
       </div>
     </div>
@@ -142,15 +142,15 @@ async function loadROIPage(){
     <!-- 效率指标底部 -->
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
       <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center">
-        <div style="font-size:20px;font-weight:700;color:#a78bfa">${inv.devices_active||0}</div>
+        <div style="font-size:20px;font-weight:700;color:var(--violet-soft)">${inv.devices_active||0}</div>
         <div style="font-size:10px;color:var(--text-muted);margin-top:4px">活跃设备</div>
       </div>
       <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center">
-        <div style="font-size:20px;font-weight:700;color:#60a5fa">${inv.tasks_executed? (inv.tasks_executed/7).toFixed(1) : 0}</div>
+        <div style="font-size:20px;font-weight:700;color:var(--blue-soft)">${inv.tasks_executed? (inv.tasks_executed/7).toFixed(1) : 0}</div>
         <div style="font-size:10px;color:var(--text-muted);margin-top:4px">日均任务</div>
       </div>
       <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center">
-        <div style="font-size:20px;font-weight:700;color:#4ade80">${out.followback_rate||0}%</div>
+        <div style="font-size:20px;font-weight:700;color:var(--green-soft)">${out.followback_rate||0}%</div>
         <div style="font-size:10px;color:var(--text-muted);margin-top:4px">回关率</div>
       </div>
       <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center">
@@ -159,7 +159,7 @@ async function loadROIPage(){
       </div>
     </div>`;
   }catch(e){
-    el.innerHTML=`<div style="text-align:center;padding:40px;color:#f87171">加载失败: ${e.message}</div>`;
+    el.innerHTML=`<div style="text-align:center;padding:40px;color:var(--red)">加载失败: ${e.message}</div>`;
     console.error('roi',e);
   }
 }
@@ -363,9 +363,9 @@ async function importBackup(){
     const b64=reader.result.split(',')[1];
     try{
       const r=await api('POST','/system/import-config',{data:b64});
-      result.innerHTML=`<span style="color:#22c55e">恢复成功! 已恢复 ${(r.restored||[]).length} 个文件</span>`;
+      result.innerHTML=`<span style="color:var(--green-strong)">恢复成功! 已恢复 ${(r.restored||[]).length} 个文件</span>`;
       if(r.skipped?.length)result.innerHTML+=`<br><span style="color:var(--text-muted)">跳过: ${r.skipped.join(', ')}</span>`;
-    }catch(e){result.innerHTML=`<span style="color:#ef4444">恢复失败: ${e.message}</span>`;}
+    }catch(e){result.innerHTML=`<span style="color:var(--red-strong)">恢复失败: ${e.message}</span>`;}
   };
   reader.readAsDataURL(file);
 }
@@ -389,18 +389,18 @@ async function loadPluginsPage(){
           <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${p.description||'无描述'}</div>
           ${p.author?`<div style="font-size:10px;color:var(--text-muted);margin-top:1px">作者: ${p.author}</div>`:''}
           ${p.hooks&&p.hooks.length?`<div style="font-size:9px;color:var(--text-muted);margin-top:2px">钩子: ${p.hooks.join(', ')}</div>`:''}
-          ${p.error&&p.error!=='未加载'?`<div style="font-size:10px;color:#f87171;margin-top:2px">错误: ${p.error}</div>`:''}
+          ${p.error&&p.error!=='未加载'?`<div style="font-size:10px;color:var(--red);margin-top:2px">错误: ${p.error}</div>`:''}
         </div>
         <div style="display:flex;gap:6px">
           ${!p.loaded_at?`<button class="dev-btn" onclick="pluginAction('${p.name}','load')" style="font-size:10px;padding:4px 10px">加载</button>`:''}
-          ${p.loaded_at&&!p.enabled?`<button class="dev-btn" onclick="pluginAction('${p.name}','enable')" style="font-size:10px;padding:4px 10px;color:#22c55e;border-color:#22c55e">启用</button>`:''}
+          ${p.loaded_at&&!p.enabled?`<button class="dev-btn" onclick="pluginAction('${p.name}','enable')" style="font-size:10px;padding:4px 10px;color:var(--green-strong);border-color:var(--green-strong)">启用</button>`:''}
           ${p.enabled?`<button class="sb-btn2" onclick="pluginAction('${p.name}','disable')" style="font-size:10px">禁用</button>`:''}
-          ${p.loaded_at?`<button class="sb-btn2" onclick="pluginAction('${p.name}','reload')" style="font-size:10px;color:#eab308">热重载</button>`:''}
-          <button class="sb-btn2" onclick="pluginAction('${p.name}','unload')" style="font-size:10px;color:#f87171">卸载</button>
+          ${p.loaded_at?`<button class="sb-btn2" onclick="pluginAction('${p.name}','reload')" style="font-size:10px;color:var(--gold)">热重载</button>`:''}
+          <button class="sb-btn2" onclick="pluginAction('${p.name}','unload')" style="font-size:10px;color:var(--red)">卸载</button>
         </div>
       </div>`;
     }).join('')||'<div style="color:var(--text-muted);text-align:center;padding:20px">未发现插件。将 .py 文件放入 plugins/ 目录。</div>';
-  }catch(e){list.innerHTML='<div style="color:#f87171">加载失败: '+e.message+'</div>';}
+  }catch(e){list.innerHTML='<div style="color:var(--red)">加载失败: '+e.message+'</div>';}
 }
 
 async function pluginAction(name,action){
@@ -472,7 +472,7 @@ function _renderMsPanels(){
           <button class="sb-btn2" onclick="_msAction('${did}','back')" style="font-size:9px;padding:2px 4px">B</button>
           <button class="sb-btn2" onclick="_msAction('${did}','recents')" style="font-size:9px;padding:2px 4px">R</button>
           <button class="sb-btn2" onclick="openScreenModal('${did}')" style="font-size:9px;padding:2px 4px">&#9881;</button>
-          <button class="sb-btn2" onclick="removeMsPanel('${did}')" style="font-size:9px;padding:2px 4px;color:#f87171">&times;</button>
+          <button class="sb-btn2" onclick="removeMsPanel('${did}')" style="font-size:9px;padding:2px 4px;color:var(--red)">&times;</button>
         </div>
       </div>
       <div style="flex:1;position:relative;min-height:200px;background:#000;cursor:crosshair" id="ms-screen-${did}" onclick="_msTap(event,'${did}')" oncontextmenu="event.preventDefault()">

@@ -15,8 +15,8 @@
 | 当前角色 | **coordinator（主控）** — `config/cluster.yaml::role` |
 | 进程链 | `service_wrapper.py` →（subprocess）→ `server.py` → `uvicorn` → `src.host.api:app` |
 | 默认端口 | **18080**（`src/openclaw_env.py::DEFAULT_OPENCLAW_PORT`） |
-| 当前生效端口 | 看 `OPENCLAW_PORT` 环境变量；本机当前 = `8000` |
-| 后台地址 | **http://localhost:8000/dashboard** ⚠️ 用 `localhost`，不要用 `192.168.x.x`（看 §3 F1） |
+| 当前生效端口 | **18080**（`config/launch.env` 固定；2026-08-17 起 start.ps1 与 `python server.py` 手动直起都会加载它，两种起法不再漂移。8000 是历史读数） |
+| 后台地址 | **http://localhost:18080/dashboard** ⚠️ 用 `localhost`，不要用 `192.168.x.x`（看 §3 F1） |
 | 启停 | 根目录 `start.bat` / `stop.bat` / `status.bat` 三件套 |
 | 主日志 | `logs/openclaw.log`（最完整）+ `logs/host_api.log`（API） |
 | 主 DB | `data/openclaw.db`（SQLite WAL） |
@@ -156,7 +156,7 @@ curl http://127.0.0.1:8000/health
 | **症状** | 浏览器报错 / SYN_SENT / 连接被重置 |
 | **根因 (3 选 1)** | (A) **进程启动时用了 `--host 127.0.0.1` 命令行参数**（最常见，绕过 server.py 默认值，见 F8）<br>(B) 环境变量 `OPENCLAW_HOST=127.0.0.1` 强制 loopback<br>(C) 服务确实在跑但你浏览器用了局域网 IP 访问 |
 | **快速判定** | `status.bat` 输出 [2/5] 看 `bind=` 段：<br>• `bind=127.0.0.1:xxxx (loopback only)` → 是 |
-| **快速修** | 改用 **http://localhost:8000/dashboard**（loopback 仍可访问） |
+| **快速修** | 改用 **http://localhost:18080/dashboard**（loopback 仍可访问） |
 | **永久修** | 1) `stop.bat`；2) `echo %OPENCLAW_HOST%` 看环境变量，若有 127.0.0.1 → `set OPENCLAW_HOST=`；3) `start.bat`（标准方式起 service_wrapper → server.py，server.py 默认 `0.0.0.0`）；4) 重启后 `status.bat` 应显示 `bind=0.0.0.0:xxxx (LAN reachable)` |
 
 #### F2 — 设备 unauthorized
@@ -277,6 +277,8 @@ curl http://127.0.0.1:8000/health
 | 2026-04-26 | 新增 `config/launch.env` 启动配置（OPENCLAW_PORT=8000 持久化）；start.ps1 启动时自动加载 | Claude |
 | 2026-04-26 | 从 uvicorn 直起 (`--host 127.0.0.1 --port 8000`) **迁移到 service_wrapper** 标准启动 → bind 0.0.0.0 LAN 可达 + 健康检查/OTA 恢复 | Claude (migrate.bat) |
 | 2026-04-26 | docs/ 归档分层：archive/ runbook/ dev/ 三子目录（28 个 git mv）+ docs/_INDEX.md 导览 | Claude |
+| 2026-08-17 | 端口单一真相落地：新建 `config/launch.env`（OPENCLAW_PORT=18080），`server.py` 手动直起也加载它（此前只有 start.ps1 加载→两种起法端口漂移，重启即孤儿页）；§0 端口行、F1 快速修同步更新 | Cursor(中枢) |
+| 2026-08-17 | service_wrapper 单实例文件锁（logs/service_wrapper.lock）：二次启动直接拒绝——双守护并存会经 `_kill_port_holder` 互杀对方的 server。注意进程表里每个 venv python 都是「垫片+真身」两条同名进程，属正常，勿当双开 | Cursor(中枢) |
 | 2026-04-26 | 根目录瘦身：DLL → vendor/，旧 *.log → logs/_archive/，孤儿 openclaw.db → data/_archive/，test_*.py → tools/_legacy_tests/，migrate_*.py → scripts/migrations/ | Claude |
 | 2026-04-26 | scripts/ 分层：_archive/ 收纳 60+ 一次性 (w0_/debug_/dump_/_smoke_/test_gemini_) + setup/ 收纳安装脚本 | Claude |
 | 2026-04-26 | README.md 重写顶部"我是..."导览（4 入口） | Claude |

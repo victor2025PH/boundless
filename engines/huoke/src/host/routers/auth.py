@@ -291,29 +291,41 @@ def delete_user(username: str):
 
 @router.get("/login", response_class=HTMLResponse)
 def login_page():
-    """Serve login page."""
-    return _LOGIN_HTML
+    """Serve login page（品牌 SSOT 服务期替换：去 OpenClaw → 智拓 ReachX）。"""
+    from src.host import brand
+    html = (_LOGIN_HTML
+            .replace("<title>OpenClaw 登录</title>",
+                     f"<title>{brand.login_title()}</title>")
+            .replace('<div class="login-logo"><h1>OpenClaw</h1>'
+                     '<p>群控自动化管理系统</p></div>',
+                     f'<div class="login-logo">'
+                     f'<h1>{brand.NAME_ZH} {brand.NAME_EN}</h1>'
+                     f'<p>{brand.SUBTITLE_ZH}</p></div>')
+            .replace("<div class=\"login-footer\">OpenClaw v1.1.0 &copy; 2024-2026</div>",
+                     f'<div class="login-footer">{brand.footer()}</div>'))
+    return html
 
 
 _LOGIN_HTML = """<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<link rel="icon" href="/static/brand/reachx-256.png" type="image/png">
 <title>OpenClaw 登录</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;background:#0b1120;color:#e2e8f0;min-height:100vh;display:flex;align-items:center;justify-content:center}
-.login-card{background:#1e293b;border:1px solid #334155;border-radius:16px;padding:40px;width:380px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","HarmonyOS Sans SC","MiSans","Microsoft YaHei","Segoe UI",sans-serif;background:#080b10;color:#e9eef9;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.login-card{background:#151c29;border:1px solid #232c3d;border-radius:16px;padding:40px;width:380px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
 .login-logo{text-align:center;margin-bottom:24px}
-.login-logo h1{font-size:28px;font-weight:700;background:linear-gradient(135deg,#3b82f6,#8b5cf6);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-.login-logo p{font-size:12px;color:#64748b;margin-top:4px}
+.login-logo h1{font-size:28px;font-weight:700;background:linear-gradient(135deg,#4f7aff,#a855f7);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.login-logo p{font-size:12px;color:#8b96b0;margin-top:4px}
 .form-group{margin-bottom:16px}
-.form-group label{display:block;font-size:12px;color:#94a3b8;margin-bottom:6px}
-.form-group input{width:100%;padding:12px 14px;background:#0f172a;border:1px solid #334155;border-radius:10px;color:#e2e8f0;font-size:14px;outline:none;transition:border .2s}
-.form-group input:focus{border-color:#3b82f6}
-.login-btn{width:100%;padding:12px;background:#3b82f6;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer;transition:all .2s;margin-top:8px}
-.login-btn:hover{background:#2563eb;transform:translateY(-1px)}
-.login-btn:disabled{background:#475569;cursor:wait}
+.form-group label{display:block;font-size:12px;color:#aab4cc;margin-bottom:6px}
+.form-group input{width:100%;padding:12px 14px;background:#10161f;border:1px solid #232c3d;border-radius:10px;color:#e9eef9;font-size:14px;outline:none;transition:border .2s}
+.form-group input:focus{border-color:#4f7aff}
+.login-btn{width:100%;padding:12px;background:#4f7aff;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer;transition:all .2s;margin-top:8px}
+.login-btn:hover{background:#3f63e0;transform:translateY(-1px)}
+.login-btn:disabled{background:#3a4762;cursor:wait}
 .login-error{color:#f87171;font-size:12px;margin-top:8px;text-align:center;display:none}
-.login-footer{text-align:center;margin-top:20px;font-size:11px;color:#475569}
+.login-footer{text-align:center;margin-top:20px;font-size:11px;color:#5b6b8c}
 </style></head><body>
 <div class="login-card">
   <div class="login-logo"><h1>OpenClaw</h1><p>群控自动化管理系统</p></div>
@@ -326,6 +338,12 @@ body{font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;backgroun
   <div class="login-footer">OpenClaw v1.1.0 &copy; 2024-2026</div>
 </div>
 <script>
+/* 2026-08-16 P3：支持 ?next= 回跳（session 失效被 401 拦截送来时，登录后回到原页面
+   而不是丢掉 hash 回总览）。仅接受站内路径（/ 开头且非 //，防 open redirect）。 */
+function _nextUrl(){
+  const n=new URLSearchParams(location.search).get('next')||'';
+  return (n.charAt(0)==='/'&&n.charAt(1)!=='/')?n:'/dashboard';
+}
 async function doLogin(e){
   e.preventDefault();
   const btn=document.getElementById('login-btn');
@@ -341,14 +359,14 @@ async function doLogin(e){
     localStorage.setItem('oc_token',data.token);
     localStorage.setItem('oc_user',data.user||username);
     localStorage.setItem('oc_role',data.role||'operator');
-    window.location.href='/dashboard';
+    window.location.href=_nextUrl();
   }catch(ex){
     err.textContent=ex.message;err.style.display='block';
   }finally{btn.disabled=false;}
 }
 if(localStorage.getItem('oc_token')){
   fetch('/auth/me',{headers:{'Authorization':'Bearer '+localStorage.getItem('oc_token')}})
-    .then(r=>r.json()).then(d=>{if(d.authenticated)window.location.href='/dashboard';});
+    .then(r=>r.json()).then(d=>{if(d.authenticated)window.location.href=_nextUrl();});
 }
 </script></body></html>"""
 

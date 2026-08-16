@@ -87,9 +87,10 @@ def set_notification_config(body: dict):
 def test_notification(body: dict):
     """Send a test notification."""
     from ..alert_notifier import AlertNotifier
+    from src.host import brand
     notifier = AlertNotifier.get()
     notifier.notify("info", "system",
-                    body.get("message", "OpenClaw 测试通知"))
+                    body.get("message", f"{brand.LABEL} 测试通知"))
     return {"ok": True, "message": "测试通知已发送"}
 
 
@@ -103,6 +104,7 @@ def test_telegram(body: dict):
     )
 
     import time
+    from src.host import brand
     notifier = AlertNotifier.get()
     cfg = notifier._config
     tg = cfg.get("telegram", {})
@@ -112,7 +114,7 @@ def test_telegram(body: dict):
     if not has_user_telegram_destination(tg):
         return {"ok": False, "error": "请填写主 Chat ID 或至少一行额外接收方"}
     targets = expand_telegram_notify_targets(tg)
-    msg = body.get("message", f"✅ OpenClaw Telegram 测试\n时间: {time.strftime('%H:%M:%S')}")
+    msg = body.get("message", f"✅ {brand.LABEL} Telegram 测试\n时间: {time.strftime('%H:%M:%S')}")
     errors = []
     for cid in targets:
         try:
@@ -199,5 +201,6 @@ def get_notify_history():
 @notify_router.post("/test")
 def test_notify():
     from ..notification_center import send_notification
-    send_notification("test", "测试通知", "这是一条来自 OpenClaw 的测试通知", "info")
+    from src.host import brand
+    send_notification("test", "测试通知", f"这是一条来自 {brand.LABEL} 的测试通知", "info")
     return {"ok": True, "message": "测试通知已发送"}

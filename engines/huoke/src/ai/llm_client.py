@@ -198,17 +198,22 @@ class UsageStats:
                 "low_quality_responses": self.low_quality_responses,
                 "fallback_triggers": self.fallback_triggers,
                 "avg_latency_ms": round(self.total_latency_ms / live_calls, 1),
-                "p95_latency_ms": round(self.latency_p95_sec() * 1000, 1),
+                # 已持有 self._lock，此处禁止再调 latency_p95_sec()——非重入 Lock 会自死锁
+                "p95_latency_ms": round(self._p95_ms_locked(), 1),
                 "latency_samples": len(self._latency_ring),
             }
+
+    def _p95_ms_locked(self) -> float:
+        """调用方必须已持有 self._lock。最近样本 p95 延迟（ms），样本不足 20 返回 0。"""
+        ring = list(self._latency_ring)
+        if len(ring) < 20:
+            return 0.0
+        return sorted(ring)[int(0.95 * len(ring))]
 
     def latency_p95_sec(self) -> float:
         """2026-05-13: 最近 100 次成功调用的 p95 延迟（秒），样本不足 20 返回 0。"""
         with self._lock:
-            ring = list(self._latency_ring)
-        if len(ring) < 20:
-            return 0.0
-        return sorted(ring)[int(0.95 * len(ring))] / 1000.0
+            return self._p95_ms_locked() / 1000.0
 
     def clear_latency_ring(self) -> None:
         """2026-05-13: 清空延迟样本，让 p95 从头重建。

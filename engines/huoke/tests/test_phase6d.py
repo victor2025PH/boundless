@@ -617,8 +617,27 @@ class TestAPIEndpoints:
     """Verify new API routes are registered."""
 
     def _get_routes(self):
+        # 2026-08-13: 新版 FastAPI 的 include_router 不再把子路由拍平进
+        # app.routes，而是插入 _IncludedRouter 节点（无 .path，真实端点在
+        # original_router.routes 里）。递归收集，兼容旧扁平结构 / _IncludedRouter /
+        # Mount 子路由，避免对 _IncludedRouter 取 .path 抛 AttributeError。
         from src.host.api import app
-        return [r.path for r in app.routes]
+
+        def _walk(routes, acc):
+            for r in routes:
+                p = getattr(r, "path", None)
+                if isinstance(p, str):
+                    acc.add(p)
+                orig = getattr(r, "original_router", None)
+                if orig is not None and getattr(orig, "routes", None):
+                    _walk(orig.routes, acc)
+                sub = getattr(r, "routes", None)
+                if sub:
+                    _walk(sub, acc)
+
+        acc: set = set()
+        _walk(app.routes, acc)
+        return acc
 
     def test_matrix_endpoints(self):
         routes = self._get_routes()

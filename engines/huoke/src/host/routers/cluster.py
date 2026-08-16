@@ -8,7 +8,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket
+from fastapi import (APIRouter, Depends, Header, HTTPException, Request,
+                     WebSocket)
 from .auth import verify_api_key, requires_role
 from src.openclaw_env import DEFAULT_OPENCLAW_PORT
 from src.host.device_registry import DEFAULT_DEVICES_YAML, PROJECT_ROOT, config_file, scripts_dir
@@ -560,11 +561,11 @@ def cluster_remove_host(host_id: str):
 @router.get("/cluster/devices/{device_id}/screenshot",
             )
 def cluster_device_screenshot(device_id: str, max_h: int = 360,
-                              quality: int = 40):
+                              quality: int = 40,
+                              if_none_match: str = Header(default=None)):
     """Proxy screenshot request to the worker that owns the device."""
-    from fastapi.responses import Response as _Resp
     from src.device_control.device_manager import get_device_manager
-    from ..routers.devices_control import device_screenshot
+    from ..routers.devices_control import device_screenshot, _scr_response
 
     target_host = _get_best_worker_url(device_id)
 
@@ -572,7 +573,8 @@ def cluster_device_screenshot(device_id: str, max_h: int = 360,
         manager = get_device_manager(_config_path)
         info = manager.get_device_info(device_id)
         if info:
-            return device_screenshot(device_id, max_h=max_h, quality=quality)
+            return device_screenshot(device_id, max_h=max_h, quality=quality,
+                                     if_none_match=if_none_match)
         raise HTTPException(404, "Device not found in cluster")
 
     url = (f"http://{target_host['ip']}:{target_host['port']}"
@@ -580,9 +582,11 @@ def cluster_device_screenshot(device_id: str, max_h: int = 360,
     try:
         req = urllib.request.Request(url, method="GET")
         jpeg_data = _http(req, timeout=20)
-        return _Resp(content=jpeg_data, media_type="image/jpeg",
-                     headers={"Cache-Control": "no-cache",
-                              "X-Proxied-From": target_host["ip"]})
+        # ETag 在 hub 侧对代理字节统一计算（_scr_response 同一把尺）：
+        # 不依赖 worker 版本，浏览器↔hub 一跳画面没变即 304 零载荷
+        resp = _scr_response(jpeg_data, if_none_match)
+        resp.headers["X-Proxied-From"] = target_host["ip"]
+        return resp
     except Exception as e:
         raise HTTPException(502, f"Screenshot proxy failed: {e}")
 
@@ -963,8 +967,11 @@ def cluster_execute_script(body: dict):
     """Execute a script across all cluster hosts.
     body: {filename, type, target: 'all'|'host:name', variables?}"""
     from ..multi_host import get_cluster_coordinator
+    from .system import _safe_script_name
     coord = get_cluster_coordinator()
-    filename = body.get("filename", "")
+    # 2026-08-16 P2：与本机 /scripts 同一把尺（剥目录防穿越 + .sh 白名单），
+    # 跨集群转发入口不再是白名单的旁路。
+    filename = _safe_script_name(body.get("filename", ""))
     script_type = body.get("type", "adb")
     target = body.get("target", "all")
     variables = body.get("variables", {})
@@ -978,6 +985,13 @@ def cluster_execute_script(body: dict):
     hosts = [h for h in overview.get("hosts", []) if h.get("online")]
     results = {}
 
+    # Worker 侧 /scripts/* 已挂角色闸（2026-08-16 P2），转发必须带 X-API-Key 走机器
+    # 通行分支——各机 OPENCLAW_API_KEY 需一致（与 APK 分发 :428 同约定）。
+    _fwd_headers = {"Content-Type": "application/json"}
+    _fwd_key = os.environ.get("OPENCLAW_API_KEY", "").strip()
+    if _fwd_key:
+        _fwd_headers["X-API-Key"] = _fwd_key
+
     for h in hosts:
         if target.startswith("host:") and h.get("host_name") != target[5:]:
             continue
@@ -990,7 +1004,7 @@ def cluster_execute_script(body: dict):
             upload_url = f"http://{h['host_ip']}:{h['port']}/scripts/upload"
             upload_payload = _json.dumps({"filename": filename, "content": content}).encode()
             req = urllib.request.Request(upload_url, data=upload_payload,
-                                         headers={"Content-Type": "application/json"}, method="POST")
+                                         headers=dict(_fwd_headers), method="POST")
             _http(req, timeout=10)
 
             exec_payload = _json.dumps({
@@ -999,7 +1013,7 @@ def cluster_execute_script(body: dict):
                 "variables": variables,
             }).encode()
             req2 = urllib.request.Request(url, data=exec_payload,
-                                          headers={"Content-Type": "application/json"}, method="POST")
+                                          headers=dict(_fwd_headers), method="POST")
             r = _json.loads(_http(req2, timeout=60).decode())
             results[h.get("host_name", h["host_ip"])] = {
                 "status": "ok", "total": r.get("total", 0), "results": r.get("results", {}),

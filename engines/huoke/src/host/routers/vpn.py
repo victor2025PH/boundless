@@ -203,6 +203,62 @@ def vpn_health_check(device_id: str):
     return result
 
 
+@router.post("/vpn/reconnect-all", dependencies=[Depends(verify_api_key)])
+def vpn_reconnect_all():
+    """一键重连所有已连接设备的 VPN（错误分析面板处置建议的实装）。
+
+    2026-08-17 P0-4 实锤：面板建议卡一直指向本端点，但它此前并不存在——
+    「执行」按钮点了永远 404，用户以为修复动作坏了。语义：
+    已连=跳过（already_connected）；未连=reconnect_vpn_silent（V2RayNG 静默重连）。
+    各设备并行跑（UI 自动化单台 10-30s，串行 4 台会顶穿前端超时）。"""
+    import concurrent.futures as _cf
+    from src.behavior.vpn_manager import check_vpn_status, reconnect_vpn_silent
+
+    manager = get_device_manager(_config_path)
+    try:
+        device_ids = [d.device_id for d in manager.get_connected_devices()]
+    except Exception:
+        device_ids = []
+
+    def _one(did: str) -> dict:
+        try:
+            st = check_vpn_status(did)
+            if st.connected:
+                return {"device_id": did, "state": "already_connected", "ok": True}
+            ok = reconnect_vpn_silent(did)
+            return {"device_id": did,
+                    "state": "reconnected" if ok else "reconnect_failed",
+                    "ok": bool(ok)}
+        except Exception as e:
+            return {"device_id": did, "state": f"error: {e}", "ok": False}
+
+    results: list = []
+    if device_ids:
+        with _cf.ThreadPoolExecutor(max_workers=min(4, len(device_ids))) as ex:
+            futs = {ex.submit(_one, d): d for d in device_ids}
+            try:
+                for fut in _cf.as_completed(futs, timeout=120):
+                    try:
+                        results.append(fut.result())
+                    except Exception as e:
+                        results.append({"device_id": futs.get(fut, "?"),
+                                        "state": f"error: {e}", "ok": False})
+            except _cf.TimeoutError:
+                done_ids = {r["device_id"] for r in results}
+                for did in device_ids:
+                    if did not in done_ids:
+                        results.append({"device_id": did,
+                                        "state": "timeout", "ok": False})
+
+    already = sum(1 for r in results if r["state"] == "already_connected")
+    reconnected = sum(1 for r in results if r["state"] == "reconnected")
+    failed = sum(1 for r in results if not r["ok"])
+    logger.info("[vpn] reconnect-all: total=%d already=%d reconnected=%d failed=%d",
+                len(device_ids), already, reconnected, failed)
+    return {"total": len(device_ids), "already_connected": already,
+            "reconnected": reconnected, "failed": failed, "results": results}
+
+
 @router.get("/vpn/auto-reconnect", dependencies=[Depends(verify_api_key)])
 def vpn_auto_reconnect_status():
     """Get VPN auto-reconnect toggle status."""

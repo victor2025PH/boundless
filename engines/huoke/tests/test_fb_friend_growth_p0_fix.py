@@ -43,10 +43,21 @@ def test_friend_growth_preset_declares_required_inputs():
     assert schema["greeting"]["required"] is True
 
 
-def test_group_hunter_preset_declares_target_groups():
-    p = _preset("group_hunter")
+def test_group_scout_preset_declares_target_groups():
+    # 2026-08-13: group_hunter 已并入 friend_growth（见 routers/facebook.py
+    # FB_FLOW_PRESETS 注释「[已移除] group_hunter」）；「群入口 preset 声明
+    # target_groups 必填」的契约现由 group_scout 承载。
+    p = _preset("group_scout")
     assert "target_groups" in p["needs_input"]
     assert p["input_schema"]["target_groups"]["required"] is True
+
+
+def test_group_hunter_merged_into_friend_growth():
+    """回归护栏：group_hunter 已合并进 friend_growth，不应再作为独立 preset 出现。"""
+    _, presets = _get_validator_and_presets()
+    keys = {p["key"] for p in presets}
+    assert "group_hunter" not in keys
+    assert "friend_growth" in keys
 
 
 def _extract_step_params(preset_key: str) -> dict:
@@ -69,26 +80,21 @@ def test_friend_growth_uses_single_closed_loop_task():
     2026-05-03: member_sources 从 ['mutual_members', 'contributors'] 改为
     ['feed_authors'] — 真机 21 轮迭代证实新版 FB 已关闭非管理员的 Members
     列表入口, 旧两池长期 yielded=0; feed_authors 法从帖子作者抽候选,
-    绕过权限限制. 测试更新到反映此业务转向.
+    绕过权限限制.
+    2026-08-13: preset 现声明 ['general', 'feed_authors']（feed_authors 之外
+    保留 general 作为通用抓取兜底，见 routers/facebook.py 注释），测试同步。
     """
     params = _friend_growth_step_params()
     assert params["steps"] == ["extract_members", "add_friends"]
     assert params["send_greeting_inline"] is True
     assert params["require_outreach_goal"] is True
-    assert params["member_sources"] == ["feed_authors"]
+    assert params["member_sources"] == ["general", "feed_authors"]
 
 
-def test_group_hunter_extracts_by_discovery_and_auto_join():
-    """宽关键词场景必须先发现群组并尝试入群，不能把关键词当精确群名空跑。"""
-    params = _extract_step_params("group_hunter")
-    assert params["broad_keyword"] is True
-    assert params["discover_groups"] is True
-    assert params["auto_join_groups"] is True
-    assert params["join_if_needed"] is True
-    assert params["skip_visited"] is True
-    assert params["max_groups"] > 1
-    assert params["max_groups_to_extract"] == params["max_groups"]
-    assert params["max_members_per_group"] == params["max_members"]
+# 2026-08-13: 原 test_group_hunter_extracts_by_discovery_and_auto_join 已删除——
+# group_hunter 并入 friend_growth 后，其「发现群组 + 自动入群」抽取参数契约由下面的
+# test_friend_growth_closed_loop_discovers_groups_and_auto_joins 在真实 step 上覆盖，
+# 旧用例（针对已不存在的独立 facebook_extract_members 步骤）纯属重复。
 
 
 def test_friend_growth_closed_loop_discovers_groups_and_auto_joins():
@@ -126,13 +132,15 @@ def test_validate_passes_when_all_filled():
 
 def test_validate_target_groups_persona_fallback():
     """target_groups 声明 fallback_from=persona.seed_group_keywords：
-    当 persona 配了 seeds 时即使 body 没传也算已填。"""
+    当 persona 配了 seeds 时即使 body 没传也算已填。
+    2026-08-13: 用 group_scout（needs_input 仅 target_groups）验证兜底，
+    group_hunter 已并入 friend_growth。"""
     validate, _ = _get_validator_and_presets()
-    p = _preset("group_hunter")
+    p = _preset("group_scout")
     missing = validate(p, provided={}, persona_ctx={
         "seed_group_keywords": ["ママ友サークル", "アラフィフ ヨガ"],
     })
-    # group_hunter 只要求 target_groups，已被 persona 兜底
+    # group_scout 只要求 target_groups，已被 persona 兜底
     fields = {m["field"] for m in missing}
     assert "target_groups" not in fields
 

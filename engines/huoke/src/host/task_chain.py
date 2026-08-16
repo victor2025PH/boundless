@@ -61,13 +61,20 @@ def list_chains() -> List[Dict[str, Any]]:
     chains = _load_chains()
     out = []
     for chain_id, cfg in chains.items():
-        out.append({
+        item = {
             "chain_id": chain_id,
             "name": cfg.get("name", chain_id),
             "description": cfg.get("description", ""),
             "platform": cfg.get("platform", ""),
             "steps": cfg.get("steps") or [],
-        })
+        }
+        # 获客剧本库元数据（2026-08-16 P0）：货架展示与筛选用。
+        # 老链缺这些字段即为空，向后兼容——不影响下拉选择的既有消费面。
+        for meta_key in ("scene", "funnel_stage", "risk_level",
+                         "prerequisites", "expected_output", "params_exposed"):
+            if meta_key in cfg:
+                item[meta_key] = cfg[meta_key]
+        out.append(item)
     return out
 
 

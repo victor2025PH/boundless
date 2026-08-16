@@ -746,16 +746,33 @@ def reconnect_device(device_id: str):
 # ── POST /devices/batch-reconnect ──
 
 @router.post("/devices/batch-reconnect")
-def batch_reconnect_devices(body: dict):
-    """Attempt ADB reconnect for multiple devices."""
+def batch_reconnect_devices(body: dict = Body(default=None)):
+    """Attempt ADB reconnect for multiple devices.
+
+    2026-08-17 P0-4：device_ids 改为可选——不带清单/空 body = 重连「已登记但
+    当前离线」的设备。此前空 body 直接 400，错误面板的「批量重连离线设备」
+    建议按钮与 /cluster/batch-reconnect（POST b'{}'）两个调用方全都点了报错。"""
     import subprocess as _sp
     import time
     from src.device_control.device_manager import get_device_manager
 
-    ids = body.get("device_ids", [])
-    if not ids:
-        raise HTTPException(status_code=400, detail="未提供设备列表")
+    ids = (body or {}).get("device_ids", [])
     manager = get_device_manager(_config_path)
+    if not ids:
+        try:
+            all_ids = []
+            for d in manager.get_all_devices():
+                did = (d.get("device_id", "") if isinstance(d, dict)
+                       else getattr(d, "device_id", ""))
+                if did:
+                    all_ids.append(did)
+            connected_now = {x.device_id for x in manager.get_connected_devices()}
+            ids = [i for i in all_ids if i not in connected_now]
+        except Exception:
+            ids = []
+        if not ids:
+            return {"reconnected": 0, "results": [],
+                    "note": "没有离线设备需要重连"}
     adb = getattr(manager, 'adb_path', 'adb')
     results = []
     for did in ids:

@@ -72,15 +72,17 @@ def send_notification(event_type: str, title: str, message: str, level: str = "w
 
     def _do_send():
         import requests
+        from src.host import brand
+        _bp = brand.notify_prefix()
         if not url:
             return
         try:
             if wtype == "dingtalk":
-                payload = {"msgtype": "text", "text": {"content": f"[OpenClaw] {title}\n{message}"}}
+                payload = {"msgtype": "text", "text": {"content": f"{_bp} {title}\n{message}"}}
             elif wtype == "feishu":
-                payload = {"msg_type": "text", "content": {"text": f"[OpenClaw] {title}\n{message}"}}
+                payload = {"msg_type": "text", "content": {"text": f"{_bp} {title}\n{message}"}}
             elif wtype == "slack":
-                payload = {"text": f"*[OpenClaw]* {title}\n{message}"}
+                payload = {"text": f"*{_bp}* {title}\n{message}"}
             else:
                 payload = {"event": event_type, "title": title, "message": message,
                            "level": level, "timestamp": entry["ts"]}
