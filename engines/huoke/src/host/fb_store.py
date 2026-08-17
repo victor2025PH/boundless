@@ -810,6 +810,252 @@ def record_inbox_message(device_id: str, peer_name: str, *,
         return cur.lastrowid
 
 
+def inbox_message_seen_recently(device_id: str, peer_name: str,
+                                message_text: str, *,
+                                window_min: int = 180,
+                                direction: str = "incoming") -> bool:
+    """P0 (2026-08-15) 去重判据: 最近 window_min 分钟内是否已入库同一条消息.
+
+    根因: ``record_inbox_message`` 是裸 INSERT, 重开同一未读会话会把同一条
+    对方消息重复入库 → 重复触发 message_received / 重复回复. Messenger 无
+    稳定 message_id, 故用 (device, peer, 文本) 在时间窗内判重 —— 保守取
+    「完全相同文本」, 避免误杀「对方连发两句一样的话」这种真实重复意图.
+
+    刻意做成**独立查询函数**而非改 ``record_inbox_message`` 签名: 后者被大量
+    测试依赖 (mark_incoming_replied / greeting 归因等), 去重是调用层策略,
+    不应污染写入原语. window_min<=0 直接返回 False (禁用去重).
+    """
+    if not device_id or not peer_name or not (message_text or "").strip():
+        return False
+    if window_min <= 0:
+        return False
+    import datetime as _dt
+    cutoff = (_dt.datetime.utcnow()
+              - _dt.timedelta(minutes=window_min)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM facebook_inbox_messages"
+                " WHERE device_id=? AND peer_name=? AND direction=?"
+                "   AND message_text=? AND seen_at >= ?"
+                " LIMIT 1",
+                (device_id, peer_name, direction, message_text, cutoff),
+            ).fetchone()
+            return row is not None
+    except Exception:
+        logger.debug("[inbox_dedup] 查询失败, 视为未重复", exc_info=True)
+        return False
+
+
+# ─────────────────────────────────────────────────────────────────────
+# P1 (2026-08-15): 会话行预览指纹增量 + thread 身份地基
+# ─────────────────────────────────────────────────────────────────────
+
+def messenger_row_preview_changed(device_id: str, peer_name: str,
+                                  preview_fp: str) -> bool:
+    """预览内容核指纹相对上次记录是否变化（= 该会话有新活动, 应强制打开）。
+
+    语义（刻意保守, 与「未读判定为主门」互补）：
+      * 空指纹 (无内容核信号) → False, 绝不误报变化。
+      * **首见该 peer → False**（首轮召回交给未读判定, 预览指纹只负责捞
+        「后续变化但未读判假阴」的会话, 避免首次运行全量打开）。调用方随后
+        应 update 写入基线指纹。
+      * 已有记录且指纹不同 → True。
+    """
+    if not device_id or not peer_name or not preview_fp:
+        return False
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT last_preview_fp FROM messenger_row_state"
+                " WHERE device_id=? AND peer_name=?",
+                (device_id, peer_name),
+            ).fetchone()
+    except Exception:
+        logger.debug("[row_state] 查询失败", exc_info=True)
+        return False
+    if row is None:
+        return False
+    prev = row["last_preview_fp"] if not isinstance(row, tuple) else row[0]
+    return bool(prev) and prev != preview_fp
+
+
+def update_messenger_row_state(device_id: str, peer_name: str, *,
+                               preview_fp: Optional[str] = None,
+                               mark_opened: bool = False) -> None:
+    """upsert 会话行状态。空 ``preview_fp`` 不覆盖已有指纹（防丢基线）。"""
+    if not device_id or not peer_name:
+        return
+    now = _now_iso()
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM messenger_row_state"
+                " WHERE device_id=? AND peer_name=?",
+                (device_id, peer_name),
+            ).fetchone()
+            if row is not None:
+                sets = ["updated_at=?"]
+                params: list = [now]
+                if preview_fp:
+                    sets.append("last_preview_fp=?")
+                    params.append(preview_fp)
+                if mark_opened:
+                    sets.append("last_opened_at=?")
+                    params.append(now)
+                params += [device_id, peer_name]
+                conn.execute(
+                    "UPDATE messenger_row_state SET " + ", ".join(sets)
+                    + " WHERE device_id=? AND peer_name=?", params)
+            else:
+                conn.execute(
+                    "INSERT INTO messenger_row_state"
+                    " (device_id, peer_name, last_preview_fp,"
+                    "  last_opened_at, updated_at) VALUES (?,?,?,?,?)",
+                    (device_id, peer_name, preview_fp or "",
+                     now if mark_opened else "", now))
+    except Exception:
+        logger.debug("[row_state] 写入失败", exc_info=True)
+
+
+def upsert_thread_map(device_id: str, peer_name: str, thread_token: str,
+                      source: str = "") -> None:
+    """(device, peer) ↔ thread 令牌观测登记（P1 只记录, 身份归属留 P2/P3）。"""
+    if not device_id or not peer_name or not thread_token:
+        return
+    now = _now_iso()
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM messenger_thread_map"
+                " WHERE device_id=? AND peer_name=?",
+                (device_id, peer_name),
+            ).fetchone()
+            if row is not None:
+                conn.execute(
+                    "UPDATE messenger_thread_map SET thread_token=?,"
+                    " source=?, last_seen_at=? WHERE device_id=? AND peer_name=?",
+                    (thread_token, source, now, device_id, peer_name))
+            else:
+                conn.execute(
+                    "INSERT INTO messenger_thread_map"
+                    " (device_id, peer_name, thread_token, source,"
+                    "  first_seen_at, last_seen_at) VALUES (?,?,?,?,?,?)",
+                    (device_id, peer_name, thread_token, source, now, now))
+    except Exception:
+        logger.debug("[thread_map] 写入失败", exc_info=True)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# P3 (2026-08-15): 召回体检 —— 运行快照落库 + 聚合
+# ─────────────────────────────────────────────────────────────────────
+
+# 从 check_messenger_inbox 返回 stats 里抽取的召回信号字段 (缺失默认 0)
+_RECALL_INT_FIELDS = (
+    "conversations_listed", "unread_detected", "unread_processed",
+    "notif_active_peers", "notif_forced", "preview_forced", "notif_offscreen",
+    "search_opened", "search_mismatch", "search_failed",
+    "title_mismatch", "dedup_skipped", "empty_extract", "errors",
+)
+
+
+def record_messenger_recall_run(device_id: str, stats: Dict[str, Any], *,
+                                phase: str = "", preset_key: str = "") -> int:
+    """把一次 check_messenger_inbox 运行的召回信号快照落库 (best-effort)。
+
+    只抽召回相关计数字段; 任何异常静默 (观测不得影响主链)。
+    """
+    if not device_id or not isinstance(stats, dict):
+        return 0
+
+    def _i(k):
+        try:
+            return int(stats.get(k, 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    vals = [_i(k) for k in _RECALL_INT_FIELDS]
+    cols = ", ".join(_RECALL_INT_FIELDS)
+    ph = phase or str(stats.get("phase", "") or "")
+    try:
+        with _connect() as conn:
+            cur = conn.execute(
+                "INSERT INTO messenger_recall_runs"
+                " (device_id, phase, preset_key, " + cols + ")"
+                " VALUES (?,?,?," + ",".join("?" * len(vals)) + ")",
+                [device_id, ph, preset_key, *vals],
+            )
+            return cur.lastrowid or 0
+    except Exception:
+        logger.debug("[recall_run] 写入失败", exc_info=True)
+        return 0
+
+
+def messenger_recall_summary(days: int = 7,
+                             device_id: Optional[str] = None) -> Dict[str, Any]:
+    """聚合近 ``days`` 天的召回运行快照, 返回 totals + 派生率 (纯读)。
+
+    派生率语义 (供体检判词):
+      * ``rescue_rate``: (notif_forced+preview_forced+search_opened) /
+        unread_processed —— 未读判定漏判、靠 P1/P2 信号救回的占比。**越高说明
+        单靠未读判定漏读越多** (即 P1/P2 越有价值 / 未读判定越需加强)。
+      * ``search_mismatch_rate``: search_mismatch / (search_opened+mismatch)
+        —— 搜索误点率, 高则应调低 max_search_opens。
+      * ``title_mismatch_rate``: title_mismatch / unread_processed —— 身份错乱
+        频度, 高则 P3 身份层该做。
+      * ``empty_rate``: empty_extract / unread_processed —— 空读率 (打开了却
+        没提取到文本, 可能是提取启发式或页面状态问题)。
+    """
+    import datetime as _dt
+    cutoff = (_dt.datetime.utcnow() - _dt.timedelta(days=max(days, 0))).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+    totals = {k: 0 for k in _RECALL_INT_FIELDS}
+    runs = 0
+    try:
+        sum_cols = ", ".join("COALESCE(SUM(%s),0)" % k
+                             for k in _RECALL_INT_FIELDS)
+        sql = ("SELECT COUNT(*), " + sum_cols
+               + " FROM messenger_recall_runs WHERE run_at >= ?")
+        params: list = [cutoff]
+        if device_id:
+            sql += " AND device_id=?"
+            params.append(device_id)
+        with _connect() as conn:
+            row = conn.execute(sql, params).fetchone()
+        if row:
+            seq = list(row)
+            runs = int(seq[0] or 0)
+            for i, k in enumerate(_RECALL_INT_FIELDS):
+                totals[k] = int(seq[i + 1] or 0)
+    except Exception:
+        logger.debug("[recall_summary] 查询失败", exc_info=True)
+
+    def _rate(num, den):
+        den = max(int(den), 0)
+        return round(num / den, 4) if den > 0 else 0.0
+
+    processed = totals["unread_processed"]
+    rescued = (totals["notif_forced"] + totals["preview_forced"]
+               + totals["search_opened"])
+    search_attempts = totals["search_opened"] + totals["search_mismatch"]
+    rates = {
+        "rescue_rate": _rate(rescued, processed),
+        "search_mismatch_rate": _rate(totals["search_mismatch"],
+                                      search_attempts),
+        "title_mismatch_rate": _rate(totals["title_mismatch"], processed),
+        "empty_rate": _rate(totals["empty_extract"], processed),
+    }
+    return {
+        "runs": runs,
+        "days": days,
+        "device_id": device_id or "",
+        "totals": totals,
+        "rescued": rescued,
+        "rates": rates,
+    }
+
+
 def count_outgoing_messages_since(device_id: str,
                                   hours: int = 24,
                                   ai_decision: Optional[str] = None) -> int:
