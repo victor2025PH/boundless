@@ -241,12 +241,13 @@ rem [cluster] VCAM_URL preset to the LAN address so a REMOTE lipsync node (e.g. 
 rem   can stream straight to the broadcast hub; 127.0.0.1 also works for local lipsync but the
 rem   LAN IP is harmless there and safer for remote replicas. Restart Hub after changing.
 if not defined VCAM_URL set "VCAM_URL=http://192.168.0.176:7870"
-rem [cluster] Emotion TTS -> .117 (RTX3060, CosyVoice3-0.5B, conda-pack deploy 2026-07-04). Old .1.43 kept for reference.
-if not defined SVC_EMOTION_TTS set "SVC_EMOTION_TTS=http://192.168.0.117:7852"
-rem [cluster] Qwen3-TTS 0.6B -> .117 (Apache-2.0 commercial fallback engine, landed 2026-07-05).
-rem   A/B measured (3060, 4 threads): RTF~2.8, below realtime - NOT the default engine; offline
-rem   render / license-fallback only. Profile tts_engine=qwen3_tts routes here; realtime stays fish (CONV_TTS_ENGINE).
-if not defined SVC_QWEN3_TTS set "SVC_QWEN3_TTS=http://192.168.0.117:7858"
+rem [cluster] Emotion TTS -> .140 (RTX4070, CosyVoice3-0.5B; 2026-08-14 从 .117 迁出——.117 是开发机
+rem   保持干净，本机 7852 已停服+禁自启。.140 有 EmotionTTS 自启任务，clone 实测 OK)。
+if not defined SVC_EMOTION_TTS set "SVC_EMOTION_TTS=http://192.168.0.140:7852"
+rem [cluster] Qwen3-TTS 0.6B：2026-08-14 从 .117 退役（开发机不再跑 TTS）。
+rem   集群暂无替身（140 未部署）。离线批渲染要恢复时再选算力机，不要指回 .117。
+rem   实时对话默认仍是 fish（CONV_TTS_ENGINE），不受此变量影响。
+if not defined SVC_QWEN3_TTS set "SVC_QWEN3_TTS="
 
 rem ========== Interpreter noise gate (calibrated to THIS room, 2026-07-04) ==========
 rem Gate history: BRIO webcam mic measured room floor RMS -44~-49dBFS (fans), so gates were

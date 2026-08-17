@@ -11,6 +11,8 @@
      （无痕/无审查/自动成交…——官网对齐方案 §2 的机器化版本）。
   3) lab 条目审计：status=lab 的能力，claim 文本必须自带「离线」或「实验室」字样，
      防止实验室功能被写成实时能力。
+  4) gated-model 令牌扫描：无审查模型令牌 (gemma4-uncensored) 只许出现在注释行
+     或 *.example* 覆盖文件里；出现在任何「激活」配置面（非 example、非注释）= 红灯。
 
 用法：python tools/claims_lint.py            退出码 0=通过 / 1=违规 / 2=自身故障
       from tools 导入 check() 供 test_phase12 门禁调用。
@@ -40,6 +42,54 @@ def _surface_text(surf: dict) -> tuple:
         m = re.search(r"FEATURE_REGISTRY\s*=\s*\[(.*?)\n\]", text, re.S)
         text = m.group(1) if m else ""
     return label, text
+
+
+# ── 4) gated-model 令牌扫描（compliance）────────────────────────────
+# 无审查模型 (gemma4-uncensored) 是 gated-only：默认禁用，仅准入客户经
+# HUOKE_ALLOW_UNCENSORED=1 + 单独 overlay 启用。因此该令牌只允许出现在
+#   ① 注释行（解释 gated-only 政策），或 ② 文件名含 ".example" 的覆盖示例。
+# 出现在任何「激活」配置面（非 example、非注释的 yaml/json）= 红灯。
+# 扫描面：本引擎根目录顶层配置 + 兄弟引擎 huoke 的 config/（该模型路由配置所在地）。
+# 扩展点：其他引擎的 config 目录加进 _gated_token_scan_paths() 的 dirs 即可。
+_GATED_MODEL_TOKEN = "gemma4-uncensored"
+_CONFIG_SUFFIXES = (".yaml", ".yml", ".json")
+
+
+def _gated_token_scan_paths():
+    dirs = [BASE, BASE.parent / "huoke" / "config"]
+    for d in dirs:
+        if not d.is_dir():
+            continue
+        for p in sorted(d.iterdir()):
+            if (p.is_file() and p.suffix.lower() in _CONFIG_SUFFIXES
+                    and ".example" not in p.name.lower()):
+                yield p
+
+
+def check_gated_model_tokens() -> tuple:
+    """激活配置面禁止裸露无审查模型令牌（注释行豁免）。返回 (violations, oks)。"""
+    violations, oks = [], []
+    scanned = 0
+    for p in _gated_token_scan_paths():
+        scanned += 1
+        text = _read(p)
+        if _GATED_MODEL_TOKEN not in text:
+            continue
+        naked = []
+        for i, ln in enumerate(text.splitlines(), 1):
+            if _GATED_MODEL_TOKEN not in ln:
+                continue
+            # yaml 注释豁免：令牌之前已出现 "#" 视为注释语境（json 无注释，必中）
+            if "#" not in ln.split(_GATED_MODEL_TOKEN, 1)[0]:
+                naked.append(i)
+        if naked:
+            violations.append(
+                f"激活配置 {p.relative_to(BASE.parent)} 出现未门禁的无审查模型令牌"
+                f"「{_GATED_MODEL_TOKEN}」(行 {naked}) —— 该模型仅限 gated overlay"
+                f" + HUOKE_ALLOW_UNCENSORED=1 启用")
+    if not violations:
+        oks.append(f"gated-model 令牌扫描: {scanned} 个激活配置面无裸露「{_GATED_MODEL_TOKEN}」")
+    return violations, oks
 
 
 def check() -> tuple:
@@ -99,6 +149,11 @@ def check() -> tuple:
         else:
             extra = f"（护栏语境提及: {guard_hits}）" if guard_hits else ""
             oks.append(f"营销面 {label} 无过度承诺措辞{extra}")
+
+    # 4) gated-model 令牌扫描（激活配置面不得裸露无审查模型令牌）
+    v_tok, ok_tok = check_gated_model_tokens()
+    violations.extend(v_tok)
+    oks.extend(ok_tok)
     return violations, oks
 
 

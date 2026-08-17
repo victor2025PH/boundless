@@ -58,8 +58,10 @@ except Exception:  # pragma: no cover - 仅在未装 cryptography 时触发
 
 # 厂商默认公钥（32 字节 Ed25519，hex）。真实厂商应用 scripts/license_tool.py
 # 重新生成密钥对并替换此常量，私钥离线保管、切勿入库。
+# 2026-07-19 正式密钥启用（无界科技 BOUNDLESS 厂商密钥）：替换 demo 公钥；
+# 配对私钥在 .117 数据区离线保管（仓外），绝不入库。
 DEFAULT_VENDOR_PUBLIC_KEY_HEX = (
-    "8ad5fff37020ac0bf95a1a9bb415bde58094c2981f0dadc1e9cead5dc7ce6dd0"
+    "e2f94b7b49e9f91cd518a675599ab8f992c0c4b98b921b7fb9bd4dfa9ca0ffe7"
 )
 
 DEFAULT_GRACE_DAYS = 7
