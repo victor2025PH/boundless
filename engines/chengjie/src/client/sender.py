@@ -809,12 +809,17 @@ class TelegramSenderMixin:
         except Exception:
             return False, None
 
-    async def _send_text_guarded(self, chat_id: int, text: str):
+    async def _send_text_guarded(self, chat_id: int, text: str,
+                                 *, reply_to_message_id: Any = None):
         """A 线外发文本核心：过发送前护栏 + 节流 + 记账，返回 ``(ok, sent_message)``。
 
         - ``ok``：是否成功送出（过护栏且未抛；与旧 ``send_message`` 的 bool 语义一致）。
         - ``sent_message``：底层 ``client.send_message`` 的返回（真实 pyrogram 为 ``Message``，
           可取 ``.id``；测试桩/无返回时为 None）。
+
+        ``reply_to_message_id``：带上则发**原生引用回复**（pyrogram 同名参数，None=普通
+        发送，与改动前逐字一致）。引用只是气泡装饰——**peer 预热重试路径刻意不带引用**
+        （被引用消息可能太旧/已撤回，重试目标是「把话发出去」而非「引用发出去」）。
 
         **不**做出站镜像（避免与编排器中心化收件箱回写重复镜像）。
         """
@@ -834,7 +839,14 @@ class TelegramSenderMixin:
             if not self.client:
                 self.logger.error("客户端未初始化")
                 return False, None
-            _sent = await self.client.send_message(chat_id, text)
+            # 仅在真要引用时才带该 kwarg——``None`` 路径逐字保持旧调用形态，避免给
+            # 任何不认 ``reply_to_message_id`` 的底层 client（测试桩/非 pyrogram 实现）
+            # 传意外关键字而整条消息发不出去（引用只是气泡装饰，绝不拖垮普通发送）。
+            if reply_to_message_id is not None:
+                _sent = await self.client.send_message(
+                    chat_id, text, reply_to_message_id=reply_to_message_id)
+            else:
+                _sent = await self.client.send_message(chat_id, text)
             self._postsend_record_count()
             self.logger.info("已发送消息到 %s: %s...", chat_id, text[:50])
             return True, _sent
@@ -869,25 +881,33 @@ class TelegramSenderMixin:
             self._handle_send_exc(e)   # G2 分级急停 + 实施31 TG 告警（best-effort）
             return False, None
 
-    async def send_message(self, chat_id: int, text: str) -> bool:
+    async def send_message(self, chat_id: int, text: str,
+                           *, reply_to_message_id: Any = None) -> bool:
         """A 线主动外发文本（主动问候/唤醒/关怀/编排器受管 worker 都经此）。
 
         Stage M：此前是裸 Pyrogram 调用，绕过 Kill-Switch/反封号/节流——成为旁路风控缺口
         （主动问候经 CompanionWorker.send→本方法 直发）。现统一走与 ``_send_reply`` 同一套发送前
         护栏 + 节流 + 记账。**不**做出站镜像（避免与编排器中心化收件箱回写重复镜像）。
+
+        ``reply_to_message_id``：透传给核心发送，带上则发原生引用回复（默认 None=旧行为）。
         """
-        ok, _ = await self._send_text_guarded(chat_id, text)
+        ok, _ = await self._send_text_guarded(
+            chat_id, text, reply_to_message_id=reply_to_message_id)
         return ok
 
-    async def send_message_return_id(self, chat_id: int, text: str):
+    async def send_message_return_id(self, chat_id: int, text: str,
+                                     *, reply_to_message_id: Any = None):
         """同 ``send_message``，但回传 ``(ok, msg_id)``——``msg_id`` 为发出的**真实**
         ``message.id``（无则空串）。
 
         P4-4：供 companion worker 把已读回执（``UpdateReadHistoryOutbox``）精确绑定到
         对应出站消息行；旧 ``send_message`` 只回 bool、丢弃了 id，导致 companion 手动发送的
         消息无法显示双勾。best-effort：失败/被拦 → ``(False, "")``。
+
+        ``reply_to_message_id``：透传给核心发送，带上则发原生引用回复（默认 None=旧行为）。
         """
-        ok, _sent = await self._send_text_guarded(chat_id, text)
+        ok, _sent = await self._send_text_guarded(
+            chat_id, text, reply_to_message_id=reply_to_message_id)
         return ok, (str(getattr(_sent, "id", "") or "") if ok else "")
 
     async def send_photo(self, chat_id: Any, photo_path: str,

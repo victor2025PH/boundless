@@ -221,7 +221,15 @@ class TelegramCompanionWorker:
         self.state = "running"
         self.detail = ""
 
-    async def send(self, chat_key: str, text: str) -> Dict[str, Any]:
+    async def send(self, chat_key: str, text: str,
+                   *, reply_to: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """发文本；带 ``reply_to`` 时走 Telegram 原生引用回复（``reply_to_message_id``）。
+
+        引用是气泡装饰，其**缺失不得阻断投递**：被引用的 id 解析不出（非数字/太旧）时
+        自动退回普通发送。两层降级——① A 线壳若尚未接 ``reply_to_message_id`` 参数
+        （patch 未同步）则 TypeError 回落无引用；② 编排器端本就有逐级降级探测兜住本
+        worker 的签名，故老编排器调用零影响。
+        """
         if self.client is None:
             raise RuntimeError("A 线 client 未连接")
         target: Any = chat_key
@@ -229,13 +237,35 @@ class TelegramCompanionWorker:
             target = int(chat_key)
         except (TypeError, ValueError):
             target = chat_key
+        _rid: Optional[int] = None
+        _ref = str((reply_to or {}).get("id") or "").strip()
+        if _ref:
+            try:
+                _rid = int(_ref)
+            except (TypeError, ValueError):
+                _rid = None
         # P4-4：取回真实 message.id，让编排器出站回写带 id → 已读回执（双勾）可精确绑定该行。
         # A 线 TelegramClient 暴露 send_message_return_id；缺失（旧壳）时优雅回落只回 bool。
+        # ``_rid`` 为 None（无引用，占绝大多数调用）时**逐字走旧调用形态**——不给底层
+        # 多传 kwarg，零兼容风险；仅真要引用时才带，且 TypeError 回落容旧壳。
         _fn = getattr(self.client, "send_message_return_id", None)
         if _fn is not None:
-            ok, mid = await _fn(target, text)
+            if _rid is not None:
+                try:
+                    ok, mid = await _fn(target, text, reply_to_message_id=_rid)
+                except TypeError:
+                    ok, mid = await _fn(target, text)
+            else:
+                ok, mid = await _fn(target, text)
             return {"delivered": bool(ok), "message_id": str(mid or "")}
-        ok = await self.client.send_message(target, text)
+        if _rid is not None:
+            try:
+                ok = await self.client.send_message(
+                    target, text, reply_to_message_id=_rid)
+            except TypeError:
+                ok = await self.client.send_message(target, text)
+        else:
+            ok = await self.client.send_message(target, text)
         return {"delivered": bool(ok), "message_id": ""}
 
     async def ensure_peer(self, chat_key: str) -> bool:

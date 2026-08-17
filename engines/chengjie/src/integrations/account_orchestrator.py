@@ -865,7 +865,13 @@ class TelegramProtocolWorker:
         except Exception:
             logger.debug("[tg-worker] 历史回填失败", exc_info=True)
 
-    async def send(self, chat_key: str, text: str) -> Dict[str, Any]:
+    async def send(self, chat_key: str, text: str,
+                   *, reply_to: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """发文本；带 ``reply_to`` 时走 Telegram 原生引用回复（``reply_to_message_id``）。
+
+        引用**失败必须回落普通发送**——被引用的消息可能太旧/已撤回/不在本会话，引用只是
+        气泡装饰，不该因它整条消息发不出去（与 WhatsApp/LINE worker 的引用哲学一致）。
+        """
         if self.client is None:
             raise RuntimeError("telegram client 未连接")
         target: Any = chat_key
@@ -873,7 +879,24 @@ class TelegramProtocolWorker:
             target = int(chat_key)
         except (TypeError, ValueError):
             target = chat_key
-        msg = await self.client.send_message(target, text)
+        _rid: Optional[int] = None
+        _ref = str((reply_to or {}).get("id") or "").strip()
+        if _ref:
+            try:
+                _rid = int(_ref)
+            except (TypeError, ValueError):
+                _rid = None
+        msg = None
+        if _rid is not None:
+            try:
+                msg = await self.client.send_message(
+                    target, text, reply_to_message_id=_rid)
+            except Exception:
+                logger.debug("[tg-worker] 引用回复失败，回落普通发送 ref=%s",
+                             _rid, exc_info=True)
+                msg = None
+        if msg is None:
+            msg = await self.client.send_message(target, text)
         return {"delivered": True, "message_id": str(getattr(msg, "id", "") or "")}
 
     async def send_media(self, chat_key: str, *, media_path: str,
