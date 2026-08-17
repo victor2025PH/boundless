@@ -76,7 +76,7 @@ def test_inbox_host_discoverability(inbox_html: str):
     assert "accent" in inbox_html
     assert "card" in inbox_html and "_handleGoalDeepLink" in inbox_html
     assert "cp-goal-drive-draft" in inbox_html
-    assert "cp-goal.js?v=20260805" in inbox_html  # 改 cp-goal.js 必须 bump 缓存戳（本断言随批次前移）
+    assert "cp-goal.js?v=20260813" in inbox_html  # 改 cp-goal.js 必须 bump 缓存戳（本断言随批次前移）
 
 
 def test_goal_form_draft_survival_layer(goal_js: str, inbox_html: str):
@@ -155,10 +155,16 @@ def test_goal_auto_expose_on_customer_tab(inbox_html: str):
 def test_goal_drive_draft_uses_set_directive(inbox_html: str, goal_js: str, draft_js: str):
     """P22：驱动草稿走 setDirective，绝不写 composer（旧版空输入框预填意图原文
     → 误发风险 + 生成引擎根本收不到指令）。
-    P28：opener 已吃 instruction+目标注入 → setDirective 不得再强制切回 reply。"""
+    P28：opener 已吃 instruction+目标注入 → setDirective 不得再强制切回 reply。
+    2026-08-13 钉子收窄：`!ta.value.trim()` 只在 **drive-draft 处理器**内禁用——
+    send-gate 线的「发送被拦后恢复输入框」在别的 handler 里合法使用同一模式，
+    全文级负向钉会把无关线的正当代码误伤成红。"""
     assert "setDirective" in inbox_html
     assert "ta.value=String(intent)" not in inbox_html
-    assert "!ta.value.trim()" not in inbox_html
+    _at = inbox_html.find("cp-goal-drive-draft', function")
+    assert _at >= 0, "drive-draft 宿主监听器不见了"
+    _handler = inbox_html[_at:_at + 2400]
+    assert "!ta.value.trim()" not in _handler   # 处理器内绝不预填 composer
     assert 'this._mode === "opener") this._setMode("reply")' not in draft_js
     assert "_goalBadgeHtml" in draft_js
     assert "goal_applied" in draft_js
@@ -199,6 +205,18 @@ def test_goal_autonomy_copy_honest(goal_js: str):
     assert "_autonomyNote" in goal_js
     assert "bridge_enabled" in goal_js
     assert "inbox.goal.autonomy.auto_note_off" in goal_js
+
+
+def test_goal_autonomy_auto_primary(goal_js: str):
+    """2026-08-12 运营方针「建目标以全自动为主，只观察不作主推」三不变量：
+    ① 表单缺省 auto 且偏好记忆不回放 observe（实录：一次选了只观察被 prefs
+    粘住，之后三个目标全默认 observe → 坐席以为目标功能整体失效）；
+    ② 推荐徽标挂 auto 卡（防「顺手」改回 suggest）；
+    ③ 参与度卡展示序 auto 优先、observe 垫底（后端 autonomy_levels 仅成员集）。"""
+    assert 'prefs.autonomy !== "observe"' in goal_js      # observe 不粘偏好
+    assert '? prefs.autonomy : "auto"' in goal_js          # 缺省回落 auto
+    assert 'const rec = lvl === "auto"' in goal_js         # 推荐徽标在 auto 卡
+    assert "{ auto: 0, suggest: 1, observe: 2 }" in goal_js  # 展示序前端定
 
 
 def test_goal_created_next_hint(goal_js: str):

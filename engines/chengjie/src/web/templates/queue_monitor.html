@@ -250,8 +250,9 @@ window.loadQM = function(){
 };
 
 window.viewAgentConvs = function(agentId){
+  /* ws_filter_agent 全站无读取方（遗留意图键）——跳转本身按「返回工作台」去重处理 */
   try{ sessionStorage.setItem('ws_filter_agent', agentId); }catch(_){}
-  location.href='/workspace';
+  if(!(window.__wsGoHome&&window.__wsGoHome({}))) location.href='/workspace';
 };
 
 window.openReassign = function(fromAgentId, convCount){

@@ -379,6 +379,9 @@ def store_row_to_chat(
         "username": str(row.get("username") or ""),
         "phone": str(row.get("phone") or ""),
         "avatar_url": str(row.get("avatar_url") or ""),
+        # 头像内容指纹（2026-08-16）：前端 _peerAvatarPlan 据此拼 ?v= 穿透 <img> 缓存；
+        # 空=平台无指纹通道（走 avatar_url 路径哈希/无版本，旧行为）。
+        "avatar_fp": str(row.get("avatar_fp") or ""),
         "first_seen": row.get("first_seen") or 0,
         "chat_type": str(row.get("chat_type") or "")
         or infer_chat_type(platform, chat_key),

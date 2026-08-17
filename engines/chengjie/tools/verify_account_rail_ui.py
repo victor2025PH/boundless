@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
-"""账号切换 rail + scoped 账号视角 真浏览器验证（Playwright；2026-07-29 沉淀）。
+"""账号切换 rail/dock + scoped 账号视角 真浏览器验证（Playwright；2026-07-29 沉淀）。
 
 **为什么需要它**：2026-07-29 实录事故——坐席点抽屉里某账号的「查看会话」没有任何
 可感知效果、rail 横滚把大多数账号藏在视口外（「系统里只有 katie」）。修复全部是
 **纯前端行为**（scoped 取数 / 总览下拉 / 溢出箭头 / 点击反馈），静态门禁只能证
 「函数挂了 window」，证不了「点账号真的切到该账号视角」，而模板热更新直上生产。
 故用真浏览器把这些用户级不变量钉住。
+
+**2026-08-16 起双模自适应**：账号顶部状态栏 Account Dock（#acct-dock，跨平台常驻、
+点击即切）上线后为默认形态，旧 rail（#account-chips）在开关关闭部署仍在——工具按
+页面实际形态自动选择选择器（dock 优先），全部不变量语义两模式同一套。
 
 与 ``tools/verify_multiwin_ui.py`` 同族（同一实例 + token 登录 + Playwright），
 只读：不点任何会话行、不发消息、不改配置，只操作筛选层 UI。
@@ -44,8 +48,25 @@ DEFAULT_BASE = "http://127.0.0.1:18799"  # 勿改回 localhost：::1 回退每�
 DEFAULT_DATA_ROOT = "D:/chengjie-instances/zhiliao/data"
 CANDIDATE_PLATFORMS = ["telegram", "whatsapp", "line", "messenger", "web"]
 
-# rail 状态读取（DOM 口径——业务 JS 在 IIFE 内，evaluate 摸不到内部变量）
+# rail/dock 状态读取（DOM 口径——业务 JS 在 IIFE 内，evaluate 摸不到内部变量）。
+# dock 在场优先：chips 额外带 data-aid/data-plat（dock 专有，rail 回空串）。
 _RAIL_JS = """() => {
+  const dock = document.getElementById('acct-dock');
+  if (dock && dock.style.display !== 'none' && document.getElementById('adk-scroll')) {
+    const chips = Array.from(dock.querySelectorAll('#adk-scroll .adk-item:not(.ac-toggle)'))
+      .map(c => ({
+        name: (c.querySelector('.adk-name') || {}).textContent || '',
+        active: c.classList.contains('active'),
+        all: !(c.dataset && c.dataset.plat),
+        ack: c.classList.contains('ac-ack'),
+        title: c.getAttribute('title') || '',
+        aid: (c.dataset && c.dataset.aid) || '',
+        plat: (c.dataset && c.dataset.plat) || '',
+      }));
+    const pick = document.getElementById('ac-pick-btn');
+    return {visible: true, mode: 'dock', chips: chips,
+            pickCount: pick ? parseInt((pick.textContent || '').trim(), 10) : null};
+  }
   const bar = document.getElementById('account-chips');
   if (!bar || bar.style.display === 'none') return {visible: false};
   const chips = Array.from(bar.querySelectorAll('.ac-scroll .acct-chip:not(.ac-toggle)'))
@@ -55,13 +76,27 @@ _RAIL_JS = """() => {
       all: c.classList.contains('ac-all'),
       ack: c.classList.contains('ac-ack'),
       title: c.getAttribute('title') || '',
+      aid: '',
+      plat: '',
     }));
   const pick = document.getElementById('ac-pick-btn');
   return {
     visible: true,
+    mode: 'rail',
     chips: chips,
     pickCount: pick ? parseInt((pick.textContent || '').trim(), 10) : null,
   };
+}"""
+
+# 当前活跃账号 (aid, plat) 提取：dock 用 dataset（title 已人性化/脱敏，不再可解析）；
+# rail 沿用 title 首段约定。plat 仅 dock 可知，rail 回空由调用方回落。
+_ACTIVE_AID_JS = """() => {
+  const d = document.querySelector('#adk-scroll .adk-item.active[data-plat]');
+  if (d) return {aid: (d.dataset && d.dataset.aid) || '', plat: (d.dataset && d.dataset.plat) || ''};
+  const c = document.querySelector('.ac-scroll .acct-chip.active:not(.ac-all)');
+  if (!c) return {aid: '', plat: ''};
+  const t = (c.getAttribute('title') || '').trim();
+  return {aid: (t.split('\\u00b7')[0] || '').trim(), plat: ''};
 }"""
 
 _POP_JS = """() => {
@@ -116,14 +151,22 @@ class Checker:
         return 1 if fails else 0
 
 
+def _plat_chip_count(st: dict, plat: str) -> int:
+    """该平台的可见账号 chips 数（dock=按 data-plat 过滤；rail=全部非聚合 chips）。"""
+    chips = st.get("chips") or []
+    if st.get("mode") == "dock":
+        return len([c for c in chips if c.get("plat") == plat])
+    return len([c for c in chips if not c.get("all")])
+
+
 def _pick_platform(page: Any) -> Tuple[str, dict]:
-    """找一个 rail 会出现的平台（≥2 账号）；数据不足返回 ('', {})。"""
+    """找一个多账号平台（≥2 账号；rail 出现 / dock 中该平台组 ≥2 项）；数据不足返回 ('', {})。"""
     for _ in range(10):   # 等首轮 loadChats 就位（platformStatus 异步到达）
         for plat in CANDIDATE_PLATFORMS:
             page.evaluate(f"window.setPlatFilter('{plat}')")
             page.wait_for_timeout(250)
             st = page.evaluate(_RAIL_JS)
-            if st.get("visible") and len(st.get("chips") or []) >= 2:
+            if st.get("visible") and _plat_chip_count(st, plat) >= 2:
                 return plat, st
         page.wait_for_timeout(1000)
     return "", {}
@@ -150,18 +193,19 @@ def run(base: str, token: str, *, shots: Optional[Path] = None,
             return 1
         page.wait_for_timeout(2000)
 
-        print("== 1. 选中多账号平台 → rail 出现，总览计数与 chips 一致 ==")
+        print("== 1. 选中多账号平台 → 切换条出现，总览计数与 chips 一致 ==")
         plat, st = _pick_platform(page)
         if not plat:
-            print("[SKIP] 无 ≥2 账号的平台（数据不足，rail 不变量无从验证）")
+            print("[SKIP] 无 ≥2 账号的平台（数据不足，切换条不变量无从验证）")
             browser.close()
             return 0
-        # chips 含「全部账号」聚合项；总览计数=账号数（含折叠的仅历史号）
+        mode = st.get("mode") or "rail"
+        # chips 含「全部账号」聚合项；总览计数=账号数（含折叠的仅历史号；dock=跨平台总数）
         n_acct_chips = len([c for c in st["chips"] if not c["all"]])
-        ck.check(f"rail 可见（{plat}）", st.get("visible"))
+        ck.check(f"切换条可见（{plat} / mode={mode}）", st.get("visible"))
         ck.check("「全部账号」chip 存在且默认选中",
                  any(c["all"] and c["active"] for c in st["chips"]))
-        ck.check("总览按钮计数 ≥ rail 可见账号 chips 数",
+        ck.check("总览按钮计数 ≥ 可见账号 chips 数",
                  (st.get("pickCount") or 0) >= n_acct_chips,
                  f"pick={st.get('pickCount')} chips={n_acct_chips}")
 
@@ -181,7 +225,9 @@ def run(base: str, token: str, *, shots: Optional[Path] = None,
         target_name = (pop["rows"][1]["name"] or "").strip()
         try:
             with page.expect_request(lambda r: "account_id=" in r.url, timeout=8000):
-                page.click("#ac-pick-pop .ac-pick-row:nth-child(2)")
+                # 按匹配序取第 2 行（dock 分组模式下拉里穿插 .ac-pick-sec 分组头，
+                # nth-child 会点到分组头；>> nth= 只数命中行，两模式通吃）
+                page.click("#ac-pick-pop .ac-pick-row >> nth=1")
             scoped_fired = True
         except Exception:
             scoped_fired = False
@@ -198,16 +244,20 @@ def run(base: str, token: str, *, shots: Optional[Path] = None,
             page.screenshot(path=str(shots / "rail_account_view.png"))
 
         print("== 4. 点击反馈：重复点击已选中 chip 出脉冲；全部账号重复点出 toast ==")
+        mode2 = st2.get("mode") or "rail"
+        item_sel = ("#adk-scroll .adk-item:not(.ac-toggle)" if mode2 == "dock"
+                    else ".ac-scroll .acct-chip:not(.ac-toggle)")
+        all_sel = ("#adk-scroll .adk-item[data-aid='all']" if mode2 == "dock"
+                   else ".ac-scroll .acct-chip.ac-all")
         idx_active = next(i for i, c in enumerate(st2["chips"]) if c["active"])
-        sel = f".ac-scroll .acct-chip:not(.ac-toggle) >> nth={idx_active}"
-        page.click(sel)
+        page.click(f"{item_sel} >> nth={idx_active}")
         page.wait_for_timeout(200)
         st3 = page.evaluate(_RAIL_JS)
         ck.check("重复点击已选中账号 → 确认脉冲（ac-ack）",
                  any(c.get("ack") for c in (st3.get("chips") or [])))
-        page.click(".ac-scroll .acct-chip.ac-all")     # 切回全部
+        page.click(all_sel)     # 切回全部（dock=全平台聚合视图）
         page.wait_for_timeout(400)
-        page.click(".ac-scroll .acct-chip.ac-all")     # 重复点击 → toast
+        page.click(all_sel)     # 重复点击 → toast
         page.wait_for_timeout(400)
         toast_ok = page.evaluate(
             "() => Array.from(document.querySelectorAll('body > div, .tk-toast'))"
@@ -225,16 +275,22 @@ def run(base: str, token: str, *, shots: Optional[Path] = None,
                  f"active={kb_active.get('name')!r}")
 
         print("== 6. 账号工作记忆：切走平台再回来自动恢复 ==")
-        remembered = kb_active.get("title") or kb_active.get("name")
+        # dock 跨平台：Alt+2 命中的账号可能属别的平台——工作记忆按**该账号的平台**验证；
+        # 后续场景（badge/深链/排序/纯净）全部跟随此平台上下文（plat 就地重绑）。
+        mem_plat = kb_active.get("plat") or plat
+        plat = mem_plat
+        remembered = (kb_active.get("aid") or kb_active.get("title")
+                      or kb_active.get("name"))
         page.evaluate("window.setPlatFilter('all')")
         page.wait_for_timeout(400)
-        page.evaluate(f"window.setPlatFilter('{plat}')")
+        page.evaluate(f"window.setPlatFilter('{mem_plat}')")
         page.wait_for_timeout(800)
         st5 = page.evaluate(_RAIL_JS)
         mem_active = next((c for c in (st5.get("chips") or []) if c["active"]), {})
         ck.check("回到平台后账号视角自动恢复",
                  mem_active and not mem_active.get("all")
-                 and (mem_active.get("title") or mem_active.get("name")) == remembered,
+                 and (mem_active.get("aid") or mem_active.get("title")
+                      or mem_active.get("name")) == remembered,
                  f"restored={mem_active.get('name')!r}")
 
         print("== 7. 会话行账号徽标点击 → 账号视角（且不打开会话） ==")
@@ -273,13 +329,12 @@ def run(base: str, token: str, *, shots: Optional[Path] = None,
                 page.screenshot(path=str(shots / "rail_badge_click.png"))
 
         print("== 8. 视角深链 #plat=&acct= 冷启动恢复 + 切换同步 hash ==")
-        # 从当前 active chip 的 title 取 account_id（chip title 以 id 开头）
-        aid = page.evaluate("""() => {
-          const c = document.querySelector('.ac-scroll .acct-chip.active:not(.ac-all)');
-          if (!c) return '';
-          const t = (c.getAttribute('title') || '').trim();
-          return (t.split('·')[0] || '').trim();
-        }""")
+        # 活跃账号 (aid, plat)：dock 用 dataset；rail 用 title 首段约定。
+        # plat 再次重绑到活跃账号的平台（badge 点击可能已切到别的号）。
+        _pair = page.evaluate(_ACTIVE_AID_JS) or {}
+        aid = _pair.get("aid") or ""
+        if _pair.get("plat"):
+            plat = _pair["plat"]
         if not aid:
             ck.check("深链验收有可用 account_id", False)
         else:
@@ -428,6 +483,58 @@ def run(base: str, token: str, *, shots: Optional[Path] = None,
                              f"hdr={hdr!r} want~={cand.get('name')!r}")
                     if shots:
                         page.screenshot(path=str(shots / "conv_rescue.png"))
+
+                print("== 12. 账号视角纯净 + 头像身份键（2026-08-14 切账号串号防线） ==")
+                page.goto(base + "/workspace", wait_until="domcontentloaded")
+                page.wait_for_function(
+                    "() => typeof window.setAccountFilter === 'function'", timeout=15000)
+                page.wait_for_timeout(2000)
+                page.evaluate(f"window.setPlatFilter('{plat}')")
+                page.wait_for_timeout(300)
+                page.evaluate(f"window.setAccountFilter('{aid}')")
+                # 刻意只等一小拍就断言：渲染口 scope guard 必须在慢请求回来前就保证纯净
+                page.wait_for_timeout(500)
+                purity_js = f"""() => {{
+                  const rows = Array.from(document.querySelectorAll(
+                    '#conv-items .conv-item[data-cid]'));
+                  let total = 0, leak = 0, avaTotal = 0, avaNoKey = 0, avaWrongAcct = 0;
+                  for (const r of rows) {{
+                    const cid = String(r.dataset.cid || '');
+                    const seg = cid.split(':');
+                    if (seg.length >= 3) {{
+                      total++;
+                      if (seg[0] !== '{plat}' || seg[1] !== '{aid}') leak++;
+                    }}
+                    const img = r.querySelector('.conv-avatar img.ava-img');
+                    if (img) {{
+                      avaTotal++;
+                      const k = img.getAttribute('data-avkey') || '';
+                      if (!k) avaNoKey++;
+                      // 代理键携带账号归属：p:/api/platforms/<plat>/<acct>/avatar?...
+                      const m = k.match(/^p:\\/api\\/platforms\\/([^/]+)\\/([^/]+)\\/avatar/);
+                      if (m && decodeURIComponent(m[2]) !== '{aid}') avaWrongAcct++;
+                    }}
+                  }}
+                  return {{total, leak, avaTotal, avaNoKey, avaWrongAcct}};
+                }}"""
+                pur = page.evaluate(purity_js)
+                ck.check("账号视角列表零串号（切换 500ms 内即纯净）",
+                         pur.get("total", 0) >= 0 and pur.get("leak", 0) == 0,
+                         f"{pur!r}")
+                # 快切压力：all → 账号 连续两跳后再验一次（旧实现的竞态窗口）
+                page.evaluate("window.setAccountFilter('all')")
+                page.wait_for_timeout(150)
+                page.evaluate(f"window.setAccountFilter('{aid}')")
+                page.wait_for_timeout(500)
+                pur2 = page.evaluate(purity_js)
+                ck.check("快切（all→账号 连跳）后仍零串号",
+                         pur2.get("leak", 0) == 0, f"{pur2!r}")
+                ck.check("头像 img 全部带身份键 data-avkey（增量刷新依据）",
+                         pur2.get("avaNoKey", 0) == 0, f"{pur2!r}")
+                ck.check("代理头像归属账号与视角一致（零串脸）",
+                         pur2.get("avaWrongAcct", 0) == 0, f"{pur2!r}")
+                if shots:
+                    page.screenshot(path=str(shots / "acct_scope_purity.png"))
 
         browser.close()
     return ck.summary()

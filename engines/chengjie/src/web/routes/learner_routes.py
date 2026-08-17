@@ -65,7 +65,8 @@ def register_learner_routes(app, ctx):
         return domain_ctx, max(1, mmc)
 
     @app.get("/api/learner/stats")
-    async def api_learner_stats(request: Request, _=Depends(_api_auth)):
+    async def api_learner_stats(request: Request, _=Depends(_api_auth),
+                                effect: int = Query(0)):
         learner = _get_learner()
         if not learner:
             # 旧前端兼容：零值 + error 键；新前端认 available/reason
@@ -75,6 +76,16 @@ def register_learner_routes(app, ctx):
         out = learner.stats()
         out["available"] = True
         out["ai_ready"] = learner.ai_ready
+        # 融合 P2：效果回访（近 7 天入库条目真实命中数）——只有 learner 页
+        # 显式带 ?effect=1 才算（todo-summary/徽标等高频轮询保持轻量 stats）。
+        # P3 追加 zero_hit：入库 ≥3 天零命中的淘汰建议（同 gated 路径）。
+        if effect:
+            try:
+                eff = learner.effect_report()
+                eff["zero_hit"] = learner.retirement_candidates()
+                out["effect_7d"] = eff
+            except Exception:
+                pass
         return out
 
     @app.post("/api/learner/run")
@@ -108,13 +119,18 @@ def register_learner_routes(app, ctx):
             raise HTTPException(400, tr(request, "err.learner.feed_query_required"))
         if len(query) > 200:
             raise HTTPException(400, tr(request, "err.learner.feed_query_too_long"))
+        # 融合 P2 溯源：可选来源锚点（case:CASE-xxx / conv:会话id），随草稿落库
+        source_ref = str((body or {}).get("source_ref", "")).strip()[:120]
         domain_ctx, mmc = _learn_params()
         result = await learner.feed_and_learn(
-            query, domain_context=domain_ctx, min_miss_count=mmc)
+            query, domain_context=domain_ctx, min_miss_count=mmc,
+            source_ref=source_ref)
         actor = request.session.get("username", "web_admin")
         if audit_store:
             audit_store.log(actor, "learner_feed",
-                            f"{query[:80]} -> {json.dumps(result, ensure_ascii=False)}")
+                            f"{query[:80]}"
+                            + (f" [{source_ref}]" if source_ref else "")
+                            + f" -> {json.dumps(result, ensure_ascii=False)}")
         return {"ok": True, **result}
 
     @app.get("/api/learner/drafts")

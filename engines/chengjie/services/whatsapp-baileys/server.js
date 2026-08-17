@@ -1325,7 +1325,10 @@ app.use(express.json());
 // 端口被别的程序占着时会把它当自家边车「复用」，症状是能登录却收不到消息、极难排查
 // （后端 sidecar 正是踩过这个坑才加了 /api/desktop/ping，见 backend-launcher
 // classifyBackendIdentity）。旧版本没有该字段 → 壳按「旧版」放行，不影响升级。
-app.get("/health", (_req, res) => res.json({ ok: true, svc: "wa-baileys" }));
+// caps.sticker：send-media 具备原生贴纸分支（Python 侧发贴纸前握手——
+// 老边车没有该分支时会把贴纸掉成 document 附件，探不到 caps 就回退发图片）。
+app.get("/health", (_req, res) =>
+  res.json({ ok: true, svc: "wa-baileys", caps: { sticker: true } }));
 
 app.post("/accounts/restore", async (_req, res) => {
   const restored = await restoreAll();
@@ -1728,7 +1731,12 @@ app.post("/accounts/:id/send-media", async (req, res) => {
       }
       content = { audio: buf, ptt: true, mimetype: "audio/ogg; codecs=opus" };
     } else if (mtype === "video") content = { video: buf, caption };
-    else {
+    else if (mtype === "sticker") {
+      // 2026-08-17 表情包主线：原生 WhatsApp 贴纸（上游规范化管线保证
+      // 512×512 webp，动图为 animated webp——Baileys/WA 原生支持）。
+      // 贴纸无 caption 语义，忽略 caption。
+      content = { sticker: buf };
+    } else {
       content = {
         document: buf,
         fileName: path.basename(mpath),

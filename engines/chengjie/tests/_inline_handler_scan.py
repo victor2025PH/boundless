@@ -54,10 +54,64 @@ def _strip_html_comments(html: str) -> str:
     return re.sub(r"<!--.*?-->", "", html, flags=re.DOTALL)
 
 
+def _strip_js_block_comments(js: str) -> str:
+    """字符串感知地剥 JS 块注释（只剥 /* */，行注释与字符串原样保留）。
+
+    朴素 `re.sub(r"/\\*.*?\\*/")` 会把**字符串里的** `/*` 当注释开口——JS 里
+    `accept:'image/*'` 这类值会与后文任意 `*/` 配成伪注释吞掉中间整段代码。
+    """
+    out = []
+    i, n = 0, len(js)
+    while i < n:
+        c = js[i]
+        if js[i:i + 2] == "/*":
+            j = js.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            i = j
+            continue
+        if c in "\"'`":
+            j = i + 1
+            while j < n:
+                if js[j] == "\\":
+                    j += 2
+                    continue
+                if js[j] == c:
+                    j += 1
+                    break
+                j += 1
+            out.append(js[i:j])
+            i = j
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _strip_js_comments_scoped(html: str) -> str:
+    """只在 <script> 体内剥 JS 块注释；HTML 部分原样保留。
+
+    2026-08-11 实锤盲区：旧实现对**全文**跑 `/\\*.*?\\*/` —— HTML 属性值里的
+    `accept="image/*,audio/*,…"` 在 image[/*] 处开口，与几十 KB 之后的下一个 `*/`
+    配对成伪注释，把中间整段 HTML（含弹窗按钮的 onclick）静默吞掉 → referenced()
+    漏采 → 层①② 对吞噬窗内的哑按钮全盲（connect-alt-btn 死按钮漏判即此，由
+    verify_connect_modal_ui L8h 行为断言抓获）。
+    """
+    out, last = [], 0
+    for m in _SCRIPT.finditer(html):
+        if re.search(r"\bsrc\s*=", m.group(1) or "", re.IGNORECASE):
+            continue
+        body_start, body_end = m.start(2), m.end(2)
+        out.append(html[last:body_start])
+        out.append(_strip_js_block_comments(html[body_start:body_end]))
+        last = body_end
+    out.append(html[last:])
+    return "".join(out)
+
+
 def referenced(html: str) -> set:
     html = _strip_html_comments(html)
-    # 去 JS 块注释里的属性样例
-    html = re.sub(r"/\*.*?\*/", "", html, flags=re.DOTALL)
+    # 去 JS 块注释里的属性样例（scoped + 字符串感知，见 _strip_js_comments_scoped）
+    html = _strip_js_comments_scoped(html)
     names = set()
     for m in list(_HANDLER_ATTR.finditer(html)) + list(_HANDLER_ATTR_SQ.finditer(html)):
         body = _INTERP.sub("", m.group(1))
@@ -226,7 +280,16 @@ def dead_functions(html: str) -> list:
       - 具名 IIFE / 具名函数表达式（`(function NAME(){})()`、`= function NAME(){}`）——
         名字仅供堆栈跟踪，本就不会被再引用。
       - 定义所在行带 `dead-code-allow` 标记（有意保留的待接线/dormant 函数）。
+
+    性能（2026-08-17）：旧实现对每个定义名全文 ``re.findall`` 一次——
+    unified_inbox ~千级函数名 × ~1.5MB 全文 ≈ GB 级重复扫描，生产机负载下曾把
+    本门禁推过 90s 超时预算（gate sweep 里表现为 worker 崩溃/瞬态红）。改为
+    **一次分词建 Counter**：``(?<![\\w$])name(?![\\w$])`` 的命中数 ≡ 按 ``[\\w$]+``
+    最大分词后恰等于 name 的 token 数（两侧字符类完全一致，边界语义一一对应），
+    计数语义零漂移、耗时从分钟级降到秒级。
     """
+    from collections import Counter
+    token_counts = Counter(re.findall(r"[\w$]+", html))
     dead, seen = [], set()
     for pat in _FN_DEF_PATTERNS:
         for m in re.finditer(pat, html):
@@ -248,8 +311,7 @@ def dead_functions(html: str) -> list:
             if "dead-code-allow" in html[ls:le]:
                 seen.add(name)
                 continue
-            cnt = len(re.findall(r"(?<![\w$])" + re.escape(name) + r"(?![\w$])", html))
-            if cnt <= 1:
+            if token_counts.get(name, 0) <= 1:
                 dead.append(name)
             seen.add(name)
     return sorted(dead)

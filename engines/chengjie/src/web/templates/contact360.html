@@ -514,7 +514,7 @@
   C360.openConv=function(convId){
     if(!convId) return;
     try{ sessionStorage.setItem('ws_focus_conv', convId); }catch(_){}
-    location.href='/workspace';
+    if(!(window.__wsGoHome&&window.__wsGoHome({cid:convId}))) location.href='/workspace';
   };
 
   // P41: 互动积分（引用闭包内 CONTACT_ID / esc，必须定义在 IIFE 内；

@@ -156,6 +156,34 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
                     "[AutoDraft] 图片识别补全失败",
                     exc_info=True,
                 )
+        if (
+            _peer_media_type in ("image", "photo", "sticker")
+            and _peer_media_ref
+            and not _peer_media_desc
+        ):
+            # 无兜底：没看懂图就不拟稿、不放行模板自动发。
+            try:
+                from src.ops.delivery_block import report_block
+                report_block(
+                    "vision", reason="enrich_failed",
+                    platform=platform, conversation_id=cid)
+            except Exception:
+                assistant.logger.debug(
+                    "[AutoDraft] vision hold 上报失败", exc_info=True)
+            assistant.logger.warning(
+                "[AutoDraft] 图片未看懂 → 取消本条自动拟稿 cid=%s", cid)
+            try:
+                _ad_store.update_draft_status(
+                    draft_id, status="cancelled",
+                    decided_by="vision_hold",
+                    expected_statuses=("pending", "enriching"),
+                )
+            except Exception:
+                try:
+                    draft_svc.release_enriching_draft(draft_id)
+                except Exception:
+                    pass
+            return
         elif (
             _peer_media_type in ("voice", "audio")
             and _peer_media_ref
@@ -286,6 +314,33 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
                     _peer_media_ref,
                     exc_info=True,
                 )
+        if (
+            _peer_media_type in ("voice", "audio")
+            and _peer_media_ref
+            and not _peer_media_desc
+        ):
+            try:
+                from src.ops.delivery_block import report_block
+                report_block(
+                    "asr", reason="enrich_failed",
+                    platform=platform, conversation_id=cid)
+            except Exception:
+                assistant.logger.debug(
+                    "[AutoDraft] asr hold 上报失败", exc_info=True)
+            assistant.logger.warning(
+                "[AutoDraft] 语音未转写 → 取消本条自动拟稿 cid=%s", cid)
+            try:
+                _ad_store.update_draft_status(
+                    draft_id, status="cancelled",
+                    decided_by="asr_hold",
+                    expected_statuses=("pending", "enriching"),
+                )
+            except Exception:
+                try:
+                    draft_svc.release_enriching_draft(draft_id)
+                except Exception:
+                    pass
+            return
         elif (
             _peer_media_type in ("video", "video_note", "animation", "gif")
             and _peer_media_ref
@@ -975,6 +1030,8 @@ def setup_auto_draft(assistant, draft_svc, web_app):
                 window_sec=_im_cfg["window_sec"],
                 max_wait_sec=_im_cfg["max_wait_sec"],
                 max_texts=_im_cfg["max_texts"],
+                frag_max_wait_sec=_im_cfg["frag_max_wait_sec"],
+                frag_max_texts=_im_cfg["frag_max_texts"],
             )
             assistant.inbox_store.register_new_inbound_cb(_merger.push)
             try:

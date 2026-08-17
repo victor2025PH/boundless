@@ -109,6 +109,22 @@ def peer_media_context(
     if not kind and not desc and not media_ref:
         return {}
 
+    # 已转写语音只标语音块，不标媒体块。A 线 telegram 传 media_type=voice +
+    # 空 desc，旧实现 update 把 _peer_message_is_media 置位却不清陈旧
+    # _media_desc → 8/01 键盘识图驻留 15 天，8/16 语音问新闻被当成夸键盘
+    # （与 protocol_autoreply.media_context_extra 同口径）。
+    if kind == "voice":
+        try:
+            from src.inbox.media_enrich import is_placeholder_only as _ipo
+            transcribed = bool(t) and not _ipo(t)
+        except Exception:
+            transcribed = bool(t)
+        if transcribed:
+            out: Dict[str, Any] = {"_peer_message_is_voice": True}
+            if media_ref:
+                out["_media_ref"] = str(media_ref)
+            return out
+
     out: Dict[str, Any] = {
         "_peer_message_is_media": True,
         "_media_kind": kind or "media",

@@ -100,7 +100,8 @@
 
   function harvestPages() {
     var out = [], seen = {};
-    var links = document.querySelectorAll('.ws-top a[href], #ws-more-menu a[href]');
+    /* 「更多」下拉已删（2026-08-14）：只采顶栏链接；主管看板经后台 Ctrl+K（nav_schema.CMD_EXTRA_ITEMS）可达 */
+    var links = document.querySelectorAll('.ws-top a[href]');
     links.forEach(function (a) {
       var url = a.getAttribute('href') || '';
       if (!url || url.charAt(0) === '#') return;

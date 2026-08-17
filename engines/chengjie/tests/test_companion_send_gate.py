@@ -40,9 +40,11 @@ def test_banned_account_blocked():
 
 def test_warmup_cap_blocks_new_account_burst():
     # 新号当天预热上限 = start_cap(2)；已发 5 → 超限拦截
+    # reason=daily_cap（P3 2026-08-13 更名：旧名 warmup_cap 把满 ramp 后的日常
+    # 额度也说成预热问题；历史数据仍有旧值，分支消费方双认）
     dec = gate_decision({"age_days": 0, "sends_today": 5, "proxy_bound": True})
     assert dec["allowed"] is False
-    assert dec["reason"] == "warmup_cap"
+    assert dec["reason"] == "daily_cap"
     assert dec["recommended_cap"] == 2
 
 

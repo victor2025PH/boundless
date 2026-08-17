@@ -118,11 +118,16 @@ def _cfg_or_none() -> dict:
     return getattr(_CONFIG_MANAGER, "config", None) or {}
 
 
-def _consume_trial_payload(res: dict, license_token: str, voucher: str) -> dict:
+def _consume_trial_payload(res: dict, license_token: str, voucher: str,
+                           extras: Any = None) -> dict:
     """把官网回来的授权/加量凭证就地落地，并把结果并进响应。
 
     刻意**不把明文回传给前端**：授权已写进 license.key、加量已入账，再往浏览器
     送一份只是多一个泄漏面。前端要的只是「成了没有」。
+
+    ``res["applied_license"]``（本次真的落盘了一份授权）与 summarize 的
+    ``activated``（历史上激活过）是两个语义——会员页「同步授权」按前者决定
+    要不要刷新，用后者会无限刷新循环。
     """
     from src.licensing import trial_claim_client as tc
 
@@ -130,8 +135,10 @@ def _consume_trial_payload(res: dict, license_token: str, voucher: str) -> dict:
         try:
             act = apply_license_token(license_token)
             if act.get("ok"):
-                tc.mark_activated(_cfg_or_none())
+                tc.mark_activated(_cfg_or_none(),
+                                  token_sha=tc.token_sha(license_token))
                 res["activated"] = True
+                res["applied_license"] = True
                 res["plan"] = act.get("plan", "")
                 res["quota"] = act.get("quota") or {}
             elif act.get("state") == "expired":
@@ -170,7 +177,76 @@ def _consume_trial_payload(res: dict, license_token: str, voucher: str) -> dict:
         except Exception:  # pragma: no cover
             logger.debug("[trial-claim] 赠量入账异常", exc_info=True)
             res["gift_error"] = "internal"
+
+    # 追加凭证（邀请见面礼/邀请人奖励等）：逐张兑换，quota_store 按 ref 幂等，
+    # duplicate_ref 与成功同样标记「已入账」——绝不重复入账，也绝不反复重试。
+    credited = 0
+    for v in (extras or []):
+        try:
+            from src.licensing.topup_voucher import redeem_topup_voucher
+
+            tok = str((v or {}).get("voucher") or "")
+            ref = str((v or {}).get("ref") or "")
+            if not tok or not ref:
+                continue
+            rd = redeem_topup_voucher(tok)
+            err = str(rd.get("error") or "")
+            if rd.get("ok") or err == "duplicate_ref":
+                chars = int(rd.get("chars") or (v or {}).get("chars") or 0)
+                tc.mark_extra_voucher(ref, chars if rd.get("ok") else 0, _cfg_or_none())
+                if rd.get("ok"):
+                    credited += chars
+                    logger.info("[trial-claim] 追加凭证已入账 ref=%s +%s 字符", ref, chars)
+            elif err == "not_licensed":
+                # 授权还没落地（先到的凭证）：留给下一轮，等 license 激活后再兑。
+                continue
+            else:
+                logger.warning("[trial-claim] 追加凭证兑换失败 ref=%s err=%s", ref, err)
+        except Exception:  # pragma: no cover
+            logger.debug("[trial-claim] 追加凭证异常", exc_info=True)
+    if credited:
+        res["extra_credited_chars"] = credited
     return res
+
+
+#: 用量水位上报的进程内去抖（线程正在飞就不再起新线程；真正的节流在
+#: trial_claim_client.maybe_report_usage 里按状态文件判）。
+_USAGE_BEACON_BUSY = False
+
+#: ops「🎁 邀请裂变」卡的官网聚合缓存（300s TTL，防 ops 轮询把外网当内网打）。
+_REFERRAL_STATS_CACHE: dict = {"ts": 0.0, "data": None}
+
+
+def _spawn_usage_beacon(used_chars: int) -> None:
+    """fire-and-forget 上报本机消耗水位（邀请达标判定的数据源）。
+
+    挂在坐席顶栏额度端点的旁路上：该端点 60s/客户端 一轮，是全站唯一「额度变化
+    就会被路过」的常驻脉搏——不必为水位上报另起后台循环。绝不阻塞请求、绝不抛。
+    """
+    global _USAGE_BEACON_BUSY
+    try:
+        if _USAGE_BEACON_BUSY or used_chars <= 0:
+            return
+        import threading
+
+        from src.licensing import trial_claim_client as tc
+
+        cfg = _cfg_or_none()
+
+        def _run() -> None:
+            global _USAGE_BEACON_BUSY
+            try:
+                tc.maybe_report_usage(used_chars, config=cfg)
+            except Exception:
+                logger.debug("[trial-claim] 用量水位上报失败（忽略）", exc_info=True)
+            finally:
+                _USAGE_BEACON_BUSY = False
+
+        _USAGE_BEACON_BUSY = True
+        threading.Thread(target=_run, name="trial-usage-beacon", daemon=True).start()
+    except Exception:
+        _USAGE_BEACON_BUSY = False
+        logger.debug("[trial-claim] 用量水位线程启动失败（忽略）", exc_info=True)
 
 
 def quota_level(q: dict) -> str:
@@ -209,6 +285,7 @@ def register_license_routes(app, *, api_auth, config_manager=None) -> None:
             q = _quota_snapshot()
             included = int(q.get("included_chars") or 0)
             source = str(q.get("source") or "license")
+            _spawn_usage_beacon(int(q.get("used_chars") or 0))
             return {
                 "ok": True,
                 "visible": bool(included > 0 or source == "local_trial"),
@@ -339,7 +416,11 @@ def register_license_routes(app, *, api_auth, config_manager=None) -> None:
 
     @app.post("/api/admin/license/trial-claim")
     async def api_trial_claim(request: Request):
-        """向官网领取 7 天试用（按本机机器码去重，同一台机器重复领拿回同一单）。"""
+        """向官网领取免费额度（100 万字符 · 按本机机器码去重，重复领拿回同一单）。
+
+        body 可带 ``invite_code``（好友邀请码，选填）——官网 referral 台账据此归因，
+        双方奖励凭证后续经轮询自动入账。
+        """
         api_auth(request)
         import asyncio
 
@@ -350,7 +431,10 @@ def register_license_routes(app, *, api_auth, config_manager=None) -> None:
         except Exception:
             body = {}
         contact = str((body or {}).get("contact") or "")
-        res = await asyncio.to_thread(tc.claim, contact, config=_cfg_or_none(), source="desktop")
+        invite_code = str((body or {}).get("invite_code") or "")
+        res = await asyncio.to_thread(
+            tc.claim, contact, config=_cfg_or_none(), source="desktop",
+            invite_code=invite_code)
         # 去重命中已签发的单子 → 授权当场就在响应里，直接激活，省掉一轮轮询。
         if res.get("ok") and res.get("license"):
             res = _consume_trial_payload(res, res.pop("license", ""), "")
@@ -360,7 +444,11 @@ def register_license_routes(app, *, api_auth, config_manager=None) -> None:
 
     @app.get("/api/admin/license/trial-claim")
     async def api_trial_claim_status(request: Request):
-        """轮询履约进度；授权/加量凭证一旦就绪即当场落地（激活 / 入账）。"""
+        """轮询履约进度；授权/加量/邀请奖励凭证一旦就绪即当场落地（激活 / 入账）。
+
+        存量升级：厂商机对旧规格授权重签后，本端点按 license 内容指纹发现变化并
+        自动重新落盘（``applied_license=True``）——会员页「同步授权」就是打这一发。
+        """
         api_auth(request)
         import asyncio
 
@@ -369,10 +457,71 @@ def register_license_routes(app, *, api_auth, config_manager=None) -> None:
         res = await asyncio.to_thread(tc.poll, config=_cfg_or_none())
         if res.get("ok"):
             res = _consume_trial_payload(
-                res, res.pop("license", ""), res.pop("topup_voucher", ""))
+                res, res.pop("license", ""), res.pop("topup_voucher", ""),
+                res.pop("extra_vouchers", None))
         if res.get("ok") and res.get("claimed"):
             await _maybe_enable_hosted_ai(request.app)
         return res
+
+    @app.get("/api/admin/license/referral")
+    async def api_license_referral(request: Request):
+        """「邀请好友送字符」会员页卡片数据：我的邀请码 / 分享链接 / 进度统计。
+
+        数据源=官网 referral 台账（invite-info），claim 状态在本地。未领取过
+        免费额度 → ``{ok:false, error:not_claimed}``，前端据此引导先注册领取。
+        与其余 trial 端点同款「绝不抛」。
+        """
+        api_auth(request)
+        import asyncio
+
+        from src.licensing import trial_claim_client as tc
+
+        return await asyncio.to_thread(tc.invite_info, config=_cfg_or_none())
+
+    @app.get("/api/admin/referral-stats")
+    async def api_referral_stats(request: Request):
+        """邀请裂变全局聚合（官网台账代理，厂商 ops 看板「🎁 邀请裂变」卡消费）。
+
+        默认关（``licensing.trial.referral_stats.enabled``）——聚合数字是**全站**
+        口径，只有厂商自己的 ops 实例该看；客户实例开了也只会看到别人的总账。
+        官网端点纯计数零 PII；此处 300s TTL 缓存防 ops 轮询打穿外网。绝不抛。
+        """
+        api_auth(request)
+        import asyncio
+        import json as _json
+        import time as _time
+        import urllib.request as _rq
+
+        cfg = ((_cfg_or_none().get("licensing") or {}).get("trial") or {})
+        rs = cfg.get("referral_stats") or {}
+        if not bool(rs.get("enabled", False)):
+            return {"ok": True, "enabled": False}
+        now = _time.time()
+        cached = _REFERRAL_STATS_CACHE.get("data")
+        if cached is not None and now - float(_REFERRAL_STATS_CACHE.get("ts") or 0) < 300:
+            return cached
+        from src.licensing import trial_claim_client as tc
+
+        site = str(rs.get("site_url") or "").rstrip("/") or tc.site_url(_cfg_or_none())
+
+        def _fetch() -> dict:
+            req = _rq.Request(f"{site}/api/trial/referral-stats",
+                              headers={"accept": "application/json"})
+            with _rq.urlopen(req, timeout=10) as resp:
+                return _json.loads(resp.read().decode("utf-8") or "{}")
+
+        try:
+            data = await asyncio.to_thread(_fetch)
+        except Exception:
+            logger.debug("[referral-stats] 官网聚合不可达（忽略）", exc_info=True)
+            return {"ok": False, "enabled": True, "error": "unreachable"}
+        out = {"ok": True, "enabled": True}
+        for k in ("codes", "registered", "qualified", "flagged",
+                  "invitee_rewarded", "inviter_rewarded", "chars_granted"):
+            out[k] = int(data.get(k) or 0)
+        _REFERRAL_STATS_CACHE["ts"] = now
+        _REFERRAL_STATS_CACHE["data"] = out
+        return out
 
     @app.post("/api/admin/license/trial-bind-code")
     async def api_trial_bind_code(request: Request):

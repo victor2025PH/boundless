@@ -279,16 +279,27 @@ def build_deterministic_evaluator(
     return _translate, ts.detect_language
 
 
-def _probe_ollama_model(base_url: str, model: str, timeout: float = 3.0) -> bool:
-    """快速探测 Ollama 端点可达**且模型已就位**（/api/show）。
+def _probe_ollama_model(base_url: str, model: str, timeout: float = 3.0,
+                        api: str = "native") -> bool:
+    """快速探测端点可达**且模型已就位**（native=/api/show；openai=/v1/models）。
 
     避免「端点宕机/模型未拉」时评测把 20 个样本全跑成 forward_failed——
-    那是误导性的 FAIL，正确语义是 skip（资源不可用）。"""
+    那是误导性的 FAIL，正确语义是 skip（资源不可用）。
+    P2-XL：``api="openai"``（vLLM 官方精度部署）改探 /v1/models 且校验模型名在列。"""
     try:
         import json as _json
         import urllib.request as _rq
 
         base = str(base_url or "").strip().rstrip("/")
+        if str(api or "").strip().lower() in ("openai", "openai_compat", "v1"):
+            if not base.endswith("/v1"):
+                base = base + "/v1"
+            with _rq.urlopen(f"{base}/models", timeout=timeout) as r:
+                if not (200 <= r.status < 300):
+                    return False
+                data = _json.loads(r.read().decode("utf-8", "replace"))
+            ids = {str(m.get("id") or "") for m in (data.get("data") or [])}
+            return model in ids if ids else True
         if base.endswith("/v1"):
             base = base[:-3].rstrip("/")
         body = _json.dumps({"name": model}).encode()
@@ -322,10 +333,11 @@ def build_local_mt_evaluator(
     else:
         urls = [u.strip() for u in str(raw_urls).split(",") if u.strip()]
     model = str(mc.get("model") or "").strip()
+    api = str(mc.get("api", "native") or "native")   # P2-XL：openai=vLLM 官方精度部署
     if not urls or not model:
         return None
     if probe:
-        urls = [u for u in urls if _probe_ollama_model(u, model)]
+        urls = [u for u in urls if _probe_ollama_model(u, model, api=api)]
         if not urls:
             return None
     try:
@@ -338,6 +350,7 @@ def build_local_mt_evaluator(
             temperature=0.0,  # 评测可复现；生产不受影响（那边走 build_engines）
             max_tokens=int(mc.get("max_tokens", 1024) or 1024),
             keep_alive=str(mc.get("keep_alive", "30m") or ""),
+            api=api,
         )
     except Exception:
         return None

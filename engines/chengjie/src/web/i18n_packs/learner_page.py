@@ -70,6 +70,14 @@ ZH = {
     "lr2_status_result": "收集 {c} → 生成 {g} → 入库 {s}",
     "lr2_status_scheduled": "自动",
     "lr2_svc_err": "学习服务暂不可用",
+    # ── 页面定位互跳（2026-08-16 融合 P1）：一句话讲清与案例跟进的分工 ──
+    "lr2_pos_body": "本页教 AI 下次答得更好（审核通过的知识影响未来所有会话）；需要人现在接手的风险会话在",
+    "lr2_pos_link": "案例跟进",
+    # ── 融合 P2：草稿溯源 + 效果回访 ──
+    "lr2_src_ref": "来源",
+    "lr2_effect_line": "近 7 天入库 {n} 条知识，被客户问题命中 {h} 次",
+    # ── 融合 P3：零命中淘汰建议 ──
+    "lr2_effect_zero": "{n} 条入库 ≥3 天零命中（考虑改触发词或停用）",
 }
 
 EN = {
@@ -141,4 +149,12 @@ EN = {
     "lr2_status_result": "collected {c} → generated {g} → saved {s}",
     "lr2_status_scheduled": "scheduled",
     "lr2_svc_err": "Learner service unavailable",
+    # -- Page positioning cross-link (2026-08-16 fusion P1) --
+    "lr2_pos_body": "This page teaches the AI to answer better next time (approved knowledge affects all future conversations); at-risk conversations that need a human right now are in",
+    "lr2_pos_link": "Case Follow-ups",
+    # -- Fusion P2: draft traceability + effect follow-up --
+    "lr2_src_ref": "Source",
+    "lr2_effect_line": "Last 7 days: {n} entries ingested, matched customer questions {h} times",
+    # -- Fusion P3: zero-hit retirement advice --
+    "lr2_effect_zero": "{n} entries ingested >=3 days ago with zero hits (consider new triggers or disabling)",
 }

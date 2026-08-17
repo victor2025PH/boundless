@@ -131,6 +131,21 @@ ZH = {
     "cases.close.takeover": "同时暂停本会话 AI 自动回复（转人工接管，空闲后按接管规则自动回流）",
     "cases.close.takeover_ok": "AI 已暂停，人工接管",
     "cases.close.takeover_pending": "⚠ 接管未生效——请到工作台手动暂停该会话",
+    # ── 结案喂料桥（2026-08-16 融合 P1）：结案顺手把客户问题送进学习队列 ──
+    "cases.close.feed": "顺手教 AI：把这个问题送进学习队列（AI 学会后同类问题自动答好）",
+    "cases.close.feed_ph": "要教给 AI 的客户问题（可编辑，2-200 字）",
+    "cases.close.feed_ok": "已送进学习队列，草稿生成后去审核入库",
+    "cases.close.feed_queued": "已入队，AI 恢复后自动生成草稿",
+    "cases.close.feed_dup": "学习队列已有该问题的草稿",
+    "cases.close.feed_fail": "⚠ 喂料失败（结案不受影响，可去学习队列手动入队）",
+    # ── 页顶跨系统待办条（融合 P1）：简洁模式落地页即前门 ──
+    "cases.todo.title": "其他待办",
+    "cases.todo.learn_tip": "有空时教教 AI",
+    "cases.todo.here_hint": "本页＝需要人现在接手的会话",
+    # ── 告警链路引导条（融合 P3）：案例告警报进虚空的自救入口 ──
+    "cases.alertlink.body": "案例告警当前只进站内铃铛，没有外发通道——不盯后台就会漏危机案例",
+    "cases.alertlink.cta": "去接通 →",
+    "cases.alertlink.dismiss": "7 天内不再提示",
 
     # ── 空态教育 + 示例卡 ────────────────────────────────────────────────────
     "cases.empty.sub": "AI 正在持续盯着所有会话，出现下面这些情况时会自动立案：",
@@ -279,6 +294,21 @@ EN = {
     "cases.close.takeover": "Also pause AI auto-reply for this conversation (human takeover; auto re-arms after idle)",
     "cases.close.takeover_ok": "AI paused, human takeover",
     "cases.close.takeover_pending": "⚠ Takeover NOT applied - pause this conversation manually in the workspace",
+    # -- Case-close -> learning-queue feed bridge (2026-08-16 fusion P1) --
+    "cases.close.feed": "Teach the AI: send this question to the learning queue (it will answer similar ones next time)",
+    "cases.close.feed_ph": "Customer question to teach the AI (editable, 2-200 chars)",
+    "cases.close.feed_ok": "Sent to the learning queue - review the draft once generated",
+    "cases.close.feed_queued": "Queued; a draft will be generated once AI is back",
+    "cases.close.feed_dup": "The learning queue already has a draft for this question",
+    "cases.close.feed_fail": "⚠ Feed failed (case is still closed; you can queue it manually on the Learning Queue page)",
+    # -- Cross-system to-do strip at page top (fusion P1) --
+    "cases.todo.title": "Other to-dos",
+    "cases.todo.learn_tip": "teach the AI when you have a moment",
+    "cases.todo.here_hint": "This page = conversations that need a human right now",
+    # -- Alert-link nudge (fusion P3): case alerts currently go nowhere --
+    "cases.alertlink.body": "Case alerts only reach the in-app bell right now - no outbound channel means missed crisis cases",
+    "cases.alertlink.cta": "Connect now →",
+    "cases.alertlink.dismiss": "Hide for 7 days",
 
     # ── Empty-state education + sample card ─────────────────────────────────
     "cases.empty.sub": "AI keeps watching every conversation and opens a case when:",

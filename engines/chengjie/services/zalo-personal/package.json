@@ -1,0 +1,20 @@
+{
+  "name": "zalo-personal-login-service",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Zalo 个人号（zca-js）扫码登录微服务 — 为 telegram-mtproto-ai 提供二维码登录、多账号保活与收发消息（非官方通道，风险自负）",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pino": "^9.0.0",
+    "zca-js": "^2.0.0"
+  }
+}

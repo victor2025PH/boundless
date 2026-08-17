@@ -26,6 +26,15 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 
+def _tc_metric(name: str) -> None:
+    """时间推理/复读守卫埋点（best-effort，绝不影响生成）。"""
+    try:
+        from src.monitoring.metrics_store import get_metrics_store
+        get_metrics_store().record_inbox_draft_event(name)
+    except Exception:
+        pass
+
+
 def trim_stale_history(
     messages: List[Dict[str, Any]],
     *,
@@ -372,6 +381,108 @@ async def generate_persona_reply(
         sm = getattr(tc, "skill_manager", None) if tc is not None else None
     ai = getattr(state, "ai_client", None)
 
+    # ── 时间推理锚点（P0 2026-08-12，实录：智能回复重答 4 天前已答过的问题）──
+    # B 线唯一入口在此判定「待回复的最后一条入站」新鲜度：
+    #   stale_answered（陈旧且已答/我方在单向连发）→ 切开场产线做跟进（reply
+    #     语义此时必然产出「重答旧问题」）；坐席显式指令在场时不切（尊重人的
+    #     明确意图，只保留提示注入）。
+    #   stale_unanswered → 保持 reply，但注入「迟回复要带时间感」提示。
+    #   fresh + 上一条用户消息距今很久 → 注入既有「对方刚回来」提示
+    #     （build_time_gap_hint 措辞，之前因 ts 从不透传而全链休眠）。
+    # 客户端行无 ts 时按 conversation_id 反查 inbox store 的真实时间线
+    # （工作台/cp-draft 只传 {direction,text}，store 才是它们的时间真相；
+    # 结构判定不依赖 ts，桌面 DOM 抓不到时间也能兜住实录事故）。
+    _tc_meta: Dict[str, Any] = {}
+    _time_hint = ""
+    _tccfg: Dict[str, Any] = {}
+    try:
+        from src.inbox.time_context import (
+            build_followup_note,
+            build_late_reply_hint,
+            build_now_anchor_hint,
+            classify_reply_anchor,
+            resolve_time_context_cfg,
+        )
+        _cm_tc = getattr(state, "config_manager", None)
+        _tccfg = resolve_time_context_cfg(getattr(_cm_tc, "config", None) or {})
+        if _tccfg.get("enabled"):
+            _stale_sec = float(_tccfg["stale_after_hours"]) * 3600.0
+            _anchor = classify_reply_anchor(
+                history, stale_after_sec=_stale_sec,
+                min_monologue=int(_tccfg["min_monologue"]))
+            _anchor["source"] = "client"
+            if _anchor["kind"] == "fresh" and not _anchor["ts_known"] \
+                    and _tccfg.get("store_lookup"):
+                _ibx_tc = getattr(state, "inbox_store", None)
+                _cid_tc = str(conversation_id or "").strip()
+                if not _cid_tc and platform and _acct and chat_key:
+                    from src.inbox.normalizer import conv_id as _conv_id_fn
+                    _cid_tc = _conv_id_fn(platform, _acct, str(chat_key))
+                if _ibx_tc is not None and _cid_tc:
+                    try:
+                        _rows_tc = _ibx_tc.list_recent_messages(
+                            _cid_tc, limit=int(_tccfg["store_limit"]))
+                        _a2 = classify_reply_anchor(
+                            _rows_tc, stale_after_sec=_stale_sec,
+                            min_monologue=int(_tccfg["min_monologue"]))
+                        if _a2.get("ts_known"):
+                            _a2["source"] = "store"
+                            _anchor = _a2
+                    except Exception:
+                        logger.debug("[persona_reply] 锚点 store 反查跳过",
+                                     exc_info=True)
+            _tc_meta = {
+                "kind": _anchor["kind"], "ts_known": _anchor["ts_known"],
+                "age_hours": round(float(_anchor["age_sec"]) / 3600.0, 1),
+                "outbound_after": _anchor["outbound_after"],
+                "source": _anchor.get("source") or "client",
+            }
+            if (
+                _anchor["kind"] == "stale_answered"
+                and not str(agent_instruction or "").strip()
+            ):
+                _tc_metric("time_anchor_followup")
+                out = await generate_topic_opener(
+                    app=app, platform=platform, chat_key=chat_key,
+                    history=history, persona_id=persona_id,
+                    target_lang=target_lang,
+                    conversation_id=conversation_id, account_id=_acct,
+                    gloss_lang=gloss_lang,
+                    followup_note=build_followup_note(_anchor),
+                )
+                out["time_anchor"] = dict(_tc_meta, followup=True)
+                return out
+            _hints: List[str] = [build_now_anchor_hint()]
+            if _anchor["kind"] == "stale_unanswered" and _anchor["ts_known"]:
+                _tc_metric("time_anchor_late_hint")
+                _hints.append(build_late_reply_hint(_anchor["age_sec"]))
+            elif (
+                _anchor["kind"] == "fresh"
+                and float(_anchor.get("prev_user_gap_sec") or 0)
+                >= float(_tccfg["return_gap_hours"]) * 3600.0
+            ):
+                from src.inbox.inbound_enrich import build_time_gap_hint
+                _gh = build_time_gap_hint(_anchor["prev_user_gap_sec"])
+                if _gh:
+                    _tc_metric("time_anchor_return_hint")
+                    _hints.append(_gh)
+            _time_hint = "\n".join(h for h in _hints if h)
+    except Exception:
+        logger.debug("[persona_reply] 时间锚点判定跳过", exc_info=True)
+
+    # 驾驶舱 P2（2026-08-13）：交接提醒——刚被人工接管处理过的会话，AI 接回后
+    # 第一批稿要衔接人工说过的内容（防交还后自相矛盾/重新自我介绍的穿帮）。
+    # 与时间锚点共用 extra_hint 单一消费口 → 统一引擎/直连回落/终极兜底三条
+    # 生成路径一处接线全覆盖。TTL 窗判定在 takeover.handback_note 内；异常跳过。
+    try:
+        from src.inbox.takeover import handback_note as _hb_note
+        _ibx_hb = getattr(state, "inbox_store", None)
+        _hb = _hb_note(str(conversation_id or ""), store=_ibx_hb)
+        if _hb:
+            _time_hint = f"{_time_hint}\n{_hb}" if _time_hint else _hb
+    except Exception:
+        logger.debug("[persona_reply] 交接提醒跳过", exc_info=True)
+
     # P1-198 续（2026-08-02）：坐席「客户情绪」人工标注 → 拟稿指令。生效判据
     # （TTL/标签在场）与 NBA 卡「生效中」徽标同源（effective_mood 单一仲裁）；
     # 显式坐席指令优先，标注句仅在余量内追加（merge_agent_instruction）。
@@ -461,6 +572,7 @@ async def generate_persona_reply(
                     account_id=_acct,
                     agent_instruction=str(agent_instruction or "").strip()[:400],
                     inbound_msg_id=str(inbound_msg_id or "").strip(),
+                    extra_hint=_time_hint,
                 )
                 if _res and (_res.get("reply") or "").strip():
                     reply = _res["reply"]
@@ -519,6 +631,10 @@ async def generate_persona_reply(
             _ainst = str(agent_instruction or "").strip()[:400]
             if _ainst:
                 ctx["_agent_instruction"] = _ainst
+            # 时间推理提示（与统一引擎同口径）：直连回落路径也要有时间感，
+            # 否则引擎一异常回落，时间盲就静默复发。
+            if _time_hint:
+                ctx["_topic_switch_hint"] = _time_hint
             # P25（2026-08-05）：直连回落路径此前不注入工作目标——统一引擎一旦
             # 异常回落，目标方向就静默消失。与统一链同一注入口补平，观测元数据
             # 同样透传（chain 仍记 draft：同一产线的降级形态，不是新链）。
@@ -591,10 +707,12 @@ async def generate_persona_reply(
             f"\n【坐席指令——本条必须完成】\n{_ainst}\n"
             if _ainst else ""
         )
+        _time_block = f"\n{_time_hint}\n" if _time_hint else ""
         prompt = (
             "你是温暖、自然、像真人一样的线上陪伴/客服。基于以下对话，草拟我的下一条回复。"
             f"{_lang_hint}"
             f"{_inst_block}"
+            f"{_time_block}"
             "口吻自然口语化，禁止出现「作为AI/作为一个AI/有什么可以帮您」等机器措辞，"
             "只输出回复正文。\n\n对话：\n" + "\n".join(lines) + "\n\n我的回复："
         )
@@ -607,6 +725,61 @@ async def generate_persona_reply(
             reply = None
 
     reply = (reply or "").strip()
+    # ── 出站复读守卫（P0 2026-08-12）：生成稿与我方最近已发消息近重复 → 带
+    # 负样本重生成一次（相似度归一化/阈值与 proactive_variety 生产校准同源）。
+    # 实录：智能回复几乎逐字复读了 4 天前已发出的回答——对方看过的话原样再说
+    # 一遍是最快的穿帮方式。仅统一引擎路径做重写（生产主路径）；直连/兜底路径
+    # 只打标不重写（repeat_risk 透传给调用方与日志）。
+    _repeat_risk = False
+    if reply and _tccfg.get("enabled") and _tccfg.get("repeat_guard"):
+        try:
+            from src.utils.proactive_variety import most_similar
+            _recent_out = [
+                str(m.get("content") or "") for m in (history or [])
+                if isinstance(m, dict) and m.get("role") == "assistant"
+            ][-6:]
+            _thr = float(_tccfg.get("repeat_threshold") or 0.6)
+            _dup = most_similar(reply, _recent_out, threshold=_thr)
+            if _dup:
+                _tc_metric("repeat_guard_hit")
+                if used_unified and sm is not None:
+                    from src.inbox.time_context import build_repeat_rewrite_hint
+                    _res2 = await sm.generate_inbox_draft(
+                        text=last_inbound,
+                        chat_key=chat_key,
+                        platform=platform,
+                        history=history,
+                        persona_id=persona_id,
+                        reply_lang=resolved_lang,
+                        risk_level=risk_level,
+                        media_type=media_type,
+                        media_ref=media_ref,
+                        media_desc=media_desc,
+                        conversation_id=conversation_id,
+                        peer_audio_emotion=peer_audio_emotion,
+                        account_id=_acct,
+                        agent_instruction=str(agent_instruction or "").strip()[:400],
+                        inbound_msg_id=str(inbound_msg_id or "").strip(),
+                        extra_hint=((_time_hint + "\n") if _time_hint else "")
+                        + build_repeat_rewrite_hint(_dup),
+                    )
+                    _r2 = str((_res2 or {}).get("reply") or "").strip()
+                    if _r2:
+                        reply = _r2
+                        _tc_metric("repeat_guard_rewritten")
+                        if most_similar(reply, _recent_out, threshold=_thr):
+                            _repeat_risk = True
+                            _tc_metric("repeat_guard_stuck")
+                    else:
+                        _repeat_risk = True
+                else:
+                    _repeat_risk = True
+                if _repeat_risk:
+                    logger.warning(
+                        "[persona_reply] 复读守卫：生成稿与最近出站雷同且未能改写"
+                        "（conv=%s）", conversation_id or chat_key)
+        except Exception:
+            logger.debug("[persona_reply] 复读守卫跳过", exc_info=True)
     # ★ 情景记忆写回（闭环）：本轮成功生成回复后，按与读取相同的 key 抽取并落库事实，
     # 让全自动/手动产线像 native bot 一样「越聊越记得」。fire-and-forget——绝不阻塞、
     # 失败也不影响回复发送；记忆开关/抽取意图门控仍由 SkillManager 内部既有逻辑把关。
@@ -642,6 +815,10 @@ async def generate_persona_reply(
         # 兜底或旧引擎，如实标 unknown 不编原因）
         "goal_applied": goal_applied or {"injected": False, "reason": "unknown"},
     }
+    if _tc_meta:
+        out["time_anchor"] = _tc_meta
+    if _repeat_risk:
+        out["repeat_risk"] = True
     _t_x0 = time.monotonic()
     translated = await _translate_reply(app, reply, target_lang)
     if translated:
@@ -702,6 +879,7 @@ def build_opener_directive(
     goal_intent: str = "",
     goal_push: str = "",
     goal_title: str = "",
+    followup_note: str = "",
 ) -> str:
     """主动开场生成指令（纯函数，可单测）。
 
@@ -713,7 +891,13 @@ def build_opener_directive(
     且今日力度 soft/direct → 切入点让位给目标的今日推进方向（angle 降为备选，
     记忆跟进也限定「与该方向相关」防两个「优先」打架）；力度 none（今天只
     陪伴）或无目标 → 输出与旧版逐字一致。
+
+    ``followup_note``（P0 2026-08-12 时间推理）：reply 锚点判定为「陈旧已答」
+    切到本产线时的跟进语境（勿重答旧问题/勿复读连发内容），置于指令最前；
+    空串 = 输出与旧版逐字一致（既有断言零回归）。
     """
+    _fu = str(followup_note or "").strip()
+    _fu_head = (_fu + "\n") if _fu else ""
     lang_line = (
         f"必须完全用客户的语言（{reply_lang}）来写正文。"
         if reply_lang and reply_lang != "zh" else "用中文来写正文。"
@@ -740,7 +924,8 @@ def build_opener_directive(
             else "顺着日常话题自然带向这个方向，绝不生硬转折"
         )
         return (
-            "请你主动开启一个新话题，给对方发一条 1-2 句的消息（不是回答对方上一条，"
+            _fu_head
+            + "请你主动开启一个新话题，给对方发一条 1-2 句的消息（不是回答对方上一条，"
             "而是自然地把对话推进到新的方向）。\n"
             + head + f"本条新话题优先服务它——今日推进方向：{_gi}。\n"
             + manner + f"；实在接不上时，退回这个备选切入点：{angle}。\n"
@@ -750,7 +935,8 @@ def build_opener_directive(
             + avoid + lang_line + "只输出这条消息的正文。"
         )
     return (
-        "请你主动开启一个新话题，给对方发一条 1-2 句的消息（不是回答对方上一条，"
+        _fu_head
+        + "请你主动开启一个新话题，给对方发一条 1-2 句的消息（不是回答对方上一条，"
         "而是自然地把对话推进到新的方向）。\n"
         f"今天的切入点参考：{angle}。\n"
         "如果历史或记忆里有对方提过的具体事（爱好/计划/工作/家人/上次聊到的事），"
@@ -773,6 +959,7 @@ async def generate_topic_opener(
     account_id: str = "",
     gloss_lang: str = "",
     agent_instruction: str = "",
+    followup_note: str = "",
 ) -> Dict[str, Any]:
     """生成「主动开启新话题」的开场消息（工坊 opener 模式）。
 
@@ -783,6 +970,9 @@ async def generate_topic_opener(
 
     ``agent_instruction``（P22.1 / P28）：前端可在 opener 态带指令（「开新话题」+
     目标驱动拟稿）；注入 ``_agent_instruction`` 与目标块，不再依赖「强制切 reply」。
+
+    ``followup_note``（P0 2026-08-12）：reply 锚点「陈旧已答」切换而来时的跟进
+    语境（见 time_context.build_followup_note）；空=纯开场旧行为。
     """
     history = list(history or [])
     resolved_lang = (
@@ -873,7 +1063,22 @@ async def generate_topic_opener(
         goal_intent=str(goal_meta.get("intent") or ""),
         goal_push=str(goal_meta.get("push_level") or ""),
         goal_title=str(goal_meta.get("title") or ""),
+        followup_note=followup_note,
     )
+
+    # 当前时刻锚点（P0 2026-08-12）：开场/跟进同样要有时段感（晚上不发
+    # 「早安」体开场）。经 _topic_switch_hint 既有消费口注入；配置同一闸门。
+    try:
+        from src.inbox.time_context import (
+            build_now_anchor_hint,
+            resolve_time_context_cfg,
+        )
+        _cm_tc = getattr(getattr(app, "state", None), "config_manager", None)
+        if resolve_time_context_cfg(
+                getattr(_cm_tc, "config", None) or {}).get("enabled"):
+            ctx["_topic_switch_hint"] = build_now_anchor_hint()
+    except Exception:
+        logger.debug("[persona_reply] opener 时间锚点跳过", exc_info=True)
 
     reply = None
     if sm is not None and getattr(sm, "ai_client", None) is not None:

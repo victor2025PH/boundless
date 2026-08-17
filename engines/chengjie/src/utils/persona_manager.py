@@ -703,10 +703,35 @@ class PersonaManager:
             return ""
         return "\n".join(parts)
 
+    @staticmethod
+    def _honest_identity_active() -> bool:
+        """WP-4 合规模式：``compliance.disclosure.honest_identity`` 实时值。
+
+        经 ``src.compliance.runtime`` 进程级 provider 读实时合并配置（create_app
+        装配时注册，跟随 overlay 热重载）；provider 未注册（单测/legacy 装配）
+        恒 False＝旧行为。绝不抛。
+        """
+        try:
+            from src.compliance.runtime import honest_identity_active
+            return honest_identity_active()
+        except Exception:
+            return False
+
     def _build_constraints_text(self, platform: str = "") -> str:
         """Build the reply constraints block from global_rules.yaml (or fallback to hardcoded)."""
         rules = self._load_global_rules()
-        return self._assemble_constraints(rules.get("reply_constraints", []), platform=platform)
+        constraints = rules.get("reply_constraints", [])
+        # WP-4 诚实身份：剔除身份规避类条目（出厂 anti_bot_response + 运营自写
+        # 「不要自称AI」类）并追加诚实话术条目——只在开关开时生效，判类与追加
+        # 语义见 src/compliance/honest_identity.py。
+        if self._honest_identity_active():
+            try:
+                from src.compliance.honest_identity import (
+                    filter_constraints_for_honesty)
+                constraints = filter_constraints_for_honesty(constraints, True)
+            except Exception:
+                pass
+        return self._assemble_constraints(constraints, platform=platform)
 
     def preview_constraints_text(self, rules_data: Dict[str, Any], platform: str = "") -> str:
         """Preview assembled prompt text from arbitrary rules data (for UI live preview).
@@ -1540,7 +1565,15 @@ class PersonaManager:
         # P1-1（compact 安全网）：full 模式有完整 5 条硬约束，compact 模式至少
         # 保留最核心的 2 条 — 直接答问 + 禁括号标记 — 防配置切到 compact 时
         # 整个底线消失。身份硬锁也保留，因为 AI 身份露馅是转化场景的最大伤害。
+        # WP-4 诚实身份开时 deny_ai/claim_human 按 False 折算（档案数据不动）。
         identity = persona.get("identity", {})
+        if self._honest_identity_active():
+            try:
+                from src.compliance.honest_identity import (
+                    persona_identity_for_prompt)
+                identity = persona_identity_for_prompt(identity, True)
+            except Exception:
+                pass
         if identity.get("deny_ai"):
             reply = identity.get("deny_ai_reply", f"我是{name}")
             lines.append(
@@ -1954,8 +1987,15 @@ class PersonaManager:
                 "换回温柔认真。脏话是玩笑调味，绝不是攻击。"
             )
 
-        # Identity
+        # Identity（WP-4 诚实身份开时 deny_ai/claim_human 按 False 折算，档案不动）
         identity = persona.get("identity", {})
+        if self._honest_identity_active():
+            try:
+                from src.compliance.honest_identity import (
+                    persona_identity_for_prompt)
+                identity = persona_identity_for_prompt(identity, True)
+            except Exception:
+                pass
         if identity.get("deny_ai"):
             reply = identity.get("deny_ai_reply", f"我是{name}")
             # P1-2：身份硬锁 — 旧版只说"当用户问 AI 时回答 X"，模型仍可能在

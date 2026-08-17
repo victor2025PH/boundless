@@ -158,11 +158,25 @@
     <div id="valueWeeklyDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
 
+  <section id="referralGrowthSection" style="display:none;">
+    <h2>🎁 {{ (i18n or {}).get('ov2_s_refg', "邀请裂变（免费额度增长引擎）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_rg_sub', "官网邀请台账全局聚合（发码 → 归因注册 → 消耗达标 → 双向发奖）；licensing.trial.referral_stats 开启，未启用/零流量整卡隐藏") }}</div>
+    <div class="grid" id="referralGrowthKpis"></div>
+    <div id="referralGrowthDetail" style="margin-top:8px;"></div>
+  </section>
+
   <section id="replyLatencySection" style="display:none;">
     <h2>⏱️ {{ (i18n or {}).get('ov2_s_rlat', "回复时延 SLO（客户等了多久才被回 · 24h 首答 p50/p95）") }}</h2>
     <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_rl_sub', "持久库口径：等待段＝连续入站到下一条出站（按首条入站计等待，谁回的都算回）；剔 bot/群聊/系统会话，重启不清零。零流量整卡隐藏") }}</div>
     <div class="grid" id="replyLatencyKpis"></div>
     <div id="replyLatencyDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
+  <section id="entranceSloSection" style="display:none;">
+    <h2>🚪 {{ (i18n or {}).get('ov2_s_eslo', "入口可用性 SLO（坐席到工作台的门 · 7/30 天）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_eslo_sub', "服务端＝边缘看门狗每 5 分钟端到端探公网入口；坐席端＝红条恢复回执（conn_* 埋点，谁的锅一目了然）。看门狗日志缺失整卡隐藏") }}</div>
+    <div class="grid" id="entranceSloKpis"></div>
+    <div id="entranceSloDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
 
   <section id="autoCovSection" style="display:none;">
@@ -178,6 +192,20 @@
     <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_fh_sub', "与机群总览/发送闸门同源（注册表天龄/代理 × 限频/失败 24h × 今日发量 × 资料变更）；分数驱动 recommended_cap 自动降速。零账号整卡隐藏") }}</div>
     <div class="grid" id="fleetHealthKpis"></div>
     <div id="fleetHealthDetail" style="margin-top:8px;overflow-x:auto;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
+  <section id="msgOpsSection" style="display:none;">
+    <h2>🗑️ {{ (i18n or {}).get('ov2_s_msgops', "消息管理审计（谁删了什么 · 撤回成功率）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_mo_sub', "ops_events 台账 7 天窗（双端撤回/仅工作台删除/清空记录/删除会话/回收站恢复全量留痕，软删数据后台保留可追溯）；失败归因分布是「要不要做撤回时限预判」的判据。零操作整卡隐藏") }}</div>
+    <div class="grid" id="msgOpsKpis"></div>
+    <div id="msgOpsDetail" style="margin-top:8px;overflow-x:auto;"></div>
+  </section>
+
+  <section id="uqCharSection" style="display:none;">
+    <h2>🔤 {{ (i18n or {}).get('ov2_uq_title', "字符额度（坐席计量 · 授权池 · 预警超额）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_uq_sub', "读 /api/users/char-usage（仅 master/admin/主管可读）；接口不可读（403/未重启 404）或计量关闭且零消耗 → 整卡隐藏；硬限/授权池当月新字段随后端重启点亮") }}</div>
+    <div class="grid" id="uqCharKpis"></div>
+    <div id="uqCharDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
 
   <section>
@@ -267,13 +295,25 @@
     <div class="grid" id="loginFunnelKpis"></div>
     <div id="loginFunnelDetail"></div>
     <div id="loginFunnelTrend" style="margin-top:8px;"></div>
+    <!-- 登录前半程（2026-08-11）：接入卡点曝光/直达/工单 + 官方开通漏斗（ui-event-trend 14 天口径） -->
+    <div id="loginFunnelBlockers" style="margin-top:8px;"></div>
+  </section>
+
+  <!-- 账号真相（2026-08-17 账号单源收口 P3）：registry × 会话目录对账。
+       metrics 无 accounts_truth（旧后端/registry 不可用）→ 整卡隐藏；幽灵账号 >0 亮黄 -->
+  <section id="acctTruthSection" style="display:none;">
+    <h2>🧾 {{ (i18n or {}).get('ov2_s_atruth', "账号真相（在册 × 会话目录对账）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_at_hint', "口径：在册＝账号注册表；会话目录＝聊天库里出现过的账号。「仅目录」＝幽灵账号。") }}</div>
+    <div class="grid" id="acctTruthKpis"></div>
+    <div id="acctTruthDetail"></div>
   </section>
 
   <!-- 对方机器人守卫（P1 2026-08-03）：SpamBot 空转实锤后的四道防线观测。
        零检出零拦截 → 整卡隐藏；有量即亮（检出的都是真烧钱面）。 -->
   <section id="peerBotSection" style="display:none;">
     <h2>🤖 {{ (i18n or {}).get('ov2_s_botpeer', "对方机器人守卫（检出 / 拦截 / 降档）") }}</h2>
-    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_bp_hint', "确定级（TG 官方 bot 标志/按钮菜单）降 manual；内容疑似（菜单话术/链接刷屏/索取循环）与复读/秒回熔断降 review；每次拦截＝省一次 LLM 调用。误判在收件箱会话里一键覆写「确认真人」。") }}</div>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_bp_hint', "确定级（TG 官方 bot 标志/按钮菜单）降 manual；内容疑似（菜单话术/链接刷屏/索取循环）与复读/秒回熔断降 review；每次拦截＝省一次 LLM 调用。误判在收件箱会话里一键覆写「确认真人」。") }}
+      <a href="/reply-settings#rps-sec-guard">{{ (i18n or {}).get('ov2_bp_settings_link', "⚙️ 开关 / 额度 / 今日豁免 →") }}</a></div>
     <div class="grid" id="peerBotKpis"></div>
     <div id="peerBotDetail"></div>
   </section>
@@ -343,6 +383,14 @@
     <h2>🖼️ {{ (i18n or {}).get('ov2_s_pma', "人设相册（图/视频备货 + 命中）") }}</h2>
     <div class="grid" id="pmaKpis"></div>
     <div id="pmaDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
+  <!-- 表情包（2026-08-17 主线）：备货水位 + 发送/收藏 + sent_as 形态分桶
+       （image 占比高＝目标平台原生贴纸能力缺口）。零备货且零发送整卡隐藏。 -->
+  <section id="stickersSection" style="display:none;">
+    <h2>😊 {{ (i18n or {}).get('ov2_s_stk', "表情包（备货 + 发送形态）") }}</h2>
+    <div class="grid" id="stkKpis"></div>
+    <div id="stkDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
 
   <section id="mconsistSection" style="display:none;">
@@ -448,6 +496,23 @@
     <div id="baziDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
 
+  <section id="temperGuardSection" style="display:none;">
+    <h2>🔥 {{ (i18n or {}).get('ov2_s_temper', "回怼防线（客户辱骂 → 按人设脾气顶回去，非客服腔安抚）") }}</h2>
+    <div class="grid" id="temperGuardKpis"></div>
+    <div id="temperGuardDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
+  {# ui_visibility.group_extract（2026-08-14）：内部工具默认对坐席隐藏，开发者页开启才渲染。
+     loadGroupMembers 对缺 DOM 已 null 安全早退（if(!sec||!kp||!dv) return），Jinja 摘除零风险。 #}
+  {% if (ui_vis or {}).get('group_extract') %}
+  <section id="gmembersSection" style="display:none;">
+    <h2>🧲 {{ (i18n or {}).get('ov2_s_gm', "群成员提取（多号限速拉「发言非管理员」入库 → 每日控量）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_gm_sub', "工具箱：多号进群、限速分批拉群成员入库、每天控量；只读提取，私聊触达是独立步骤。零成员且零任务时整卡隐藏") }}</div>
+    <div class="grid" id="gmembersKpis"></div>
+    <div id="gmembersDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+  {% endif %}
+
   <section id="casesSection" style="display:none;">
     <h2>🗂 {{ (i18n or {}).get('ov2_s_cases', "案例跟进（AI 立案 → 人工处理 → 结案）") }}</h2>
     <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_cs_sub', "AI 判定需要真人跟进的会话：危机 / 要人工 / 怀疑机器人 / 媒体质疑等自动立案；零案例且零流量时整卡隐藏") }}</div>
@@ -519,7 +584,7 @@
        与 #goalDetail 分离（60s 轮询重绘明细不冲掉已展开的清单） #}
     <div style="margin-top:8px;">
       <button id="goalAgendaBtn" onclick="toggleGoalAgenda()" style="display:none;padding:3px 10px;font-size:12px;cursor:pointer;">📋 {{ (i18n or {}).get('ov2_goal_ag_btn', "今日清单") }} <span id="goalAgendaCaret">▸</span></button>
-      <a href="/workspace/goal-report" target="_blank" rel="noopener" id="goalRptLink" style="display:none;margin-left:8px;font-size:12px;">🎯 {{ (i18n or {}).get('ov2_goal_rpt_link', "目标达成报表（账号 × 客户）→") }}</a>
+      <a href="/workspace/goal-report" target="_blank" rel="noopener" id="goalRptLink" data-winname="workspace" onclick="return __openUnique(event,this)" style="display:none;margin-left:8px;font-size:12px;">🎯 {{ (i18n or {}).get('ov2_goal_rpt_link', "目标达成报表（账号 × 客户）→") }}</a>
     </div>
     <div id="goalAgendaWrap" style="display:none;margin-top:8px;"></div>
   </section>
@@ -998,6 +1063,109 @@ async function loadValueWeekly(){
   }
 }
 
+// 🔤 字符额度卡（2026-08-16 用量页 v2 配套）：读 /api/users/char-usage（master/admin/
+// supervisor）。非主管(403)/端点未装载(重启前 404)/异常 → 整卡隐藏；计量关闭且本月
+// 零消耗 → 整卡隐藏（零流量不占版面）。enforce 是重启后才有的新字段——undefined 按
+// 「硬限档位不显示」fail-soft，中间态不破坏卡片其余行。文案经 Jinja 注入 const
+// （本页 script 体禁裸 CJK，故兜底空串；键与模板同批热更新）。
+var UQ_OV_T = {
+  meter: {{ (i18n or {}).get('ov2_uq_meter', '')|tojson }},
+  on: {{ (i18n or {}).get('ov2_uq_on', '')|tojson }},
+  off: {{ (i18n or {}).get('ov2_uq_off', '')|tojson }},
+  enforce_on: {{ (i18n or {}).get('ov2_uq_enforce_on', '')|tojson }},
+  enforce_soft: {{ (i18n or {}).get('ov2_uq_enforce_soft', '')|tojson }},
+  pool: {{ (i18n or {}).get('ov2_uq_pool', '')|tojson }},
+  unlimited: {{ (i18n or {}).get('ov2_uq_unlimited', '')|tojson }},
+  month: {{ (i18n or {}).get('ov2_uq_month', '')|tojson }},
+  alerts: {{ (i18n or {}).get('ov2_uq_alerts', '')|tojson }},
+  top: {{ (i18n or {}).get('ov2_uq_top', '')|tojson }}
+};
+async function loadUsageQuota(){
+  var sec = document.getElementById('uqCharSection');
+  var kp = document.getElementById('uqCharKpis');
+  var dv = document.getElementById('uqCharDetail');
+  if(!sec || !kp || !dv) return;
+  try{
+    const r = await apiFetch('/api/users/char-usage', {credentials:'same-origin'}, {timeoutMs: 20000});
+    if(!r.ok){ sec.style.display='none'; return; }
+    const d = await r.json();
+    if(!d || !d.ok){ sec.style.display='none'; return; }
+    var monthTotal = Number((d.totals||{}).month_total)||0;
+    if(d.enabled===false && monthTotal===0){ sec.style.display='none'; return; }
+    sec.style.display = '';
+    var meterVal = (d.enabled===false) ? UQ_OV_T.off : UQ_OV_T.on;
+    if(typeof d.enforce === 'boolean'){
+      meterVal += ' · ' + (d.enforce ? UQ_OV_T.enforce_on : UQ_OV_T.enforce_soft);
+    }
+    var lic = d.license || {};
+    var poolVal = UQ_OV_T.unlimited;
+    if(lic.available && (Number(lic.included)||0) > 0){
+      var inc = Number(lic.included)||0;
+      var rem = (lic.remaining==null) ? Math.max(0, inc-(Number(lic.used)||0)) : (Number(lic.remaining)||0);
+      poolVal = rem.toLocaleString()+' / '+inc.toLocaleString();
+    }
+    var agents = d.agents || [];
+    var warnN = 0, overN = 0;
+    agents.forEach(function(a){
+      var lvl = String(((a||{}).status||{}).level||'');
+      if(lvl==='warn') warnN++; else if(lvl==='over') overN++;
+    });
+    var kpis = [
+      {label:UQ_OV_T.meter, value:esc(meterVal)},
+      {label:UQ_OV_T.pool, value:esc(poolVal)},
+      {label:UQ_OV_T.month, value:monthTotal.toLocaleString()},
+      {label:UQ_OV_T.alerts, value:warnN+' / '+overN}
+    ];
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+esc(c.label)+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+    }).join('');
+    var top = agents.slice(0, 3).map(function(a){
+      return esc(String((a&&(a.display_name||a.username))||'-'))+' '+(Number((a||{}).used_month)||0).toLocaleString();
+    }).join(' · ');
+    dv.innerHTML = top ? '<div class="muted" style="font-size:12px;">'+esc(UQ_OV_T.top)+': '+top+'</div>' : '';
+  }catch(e){
+    sec.style.display='none';
+  }
+}
+
+// 🎁 邀请裂变卡（2026-08-11 免费额度升级配套）：读 /api/admin/referral-stats
+// （实例侧 300s TTL 代理官网 /api/trial/referral-stats 全局聚合，纯计数零 PII；
+// 配置 licensing.trial.referral_stats 默认关——只有厂商 ops 实例该开）。
+// 未启用 / 不可达 / 零流量 → 整卡隐藏。发码→归因→达标→发奖四段一眼看裂变引擎转速。
+async function loadReferralGrowth(){
+  var sec = document.getElementById('referralGrowthSection');
+  var kp = document.getElementById('referralGrowthKpis');
+  var dv = document.getElementById('referralGrowthDetail');
+  if(!sec || !kp || !dv) return;
+  try{
+    const r = await apiFetch('/api/admin/referral-stats', {credentials:'same-origin'}, {timeoutMs: 20000});
+    if(!r.ok){ sec.style.display='none'; return; }
+    const d = await r.json();
+    if(!d || !d.ok || !d.enabled){ sec.style.display='none'; return; }
+    if(!(Number(d.codes)||0) && !(Number(d.registered)||0)){ sec.style.display='none'; return; }
+    sec.style.display = '';
+    var flagged = Number(d.flagged)||0;
+    var kpis = [
+      {label:window.T('ov2_rg_codes'),      value:fmt(Number(d.codes)||0)},
+      {label:window.T('ov2_rg_registered'), value:fmt(Number(d.registered)||0)},
+      {label:window.T('ov2_rg_qualified'),  value:fmt(Number(d.qualified)||0)},
+      {label:window.T('ov2_rg_invitee'),    value:fmt(Number(d.invitee_rewarded)||0)},
+      {label:window.T('ov2_rg_inviter'),    value:fmt(Number(d.inviter_rewarded)||0)},
+      {label:window.T('ov2_rg_granted'),    value:fmt(Number(d.chars_granted)||0)},
+      {label:window.T('ov2_rg_flagged'),    value:(flagged > 0
+        ? '<span style="color:var(--tk-amber-ink,#d97706);">'+fmt(flagged)+'</span>' : fmt(flagged))},
+    ];
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+    }).join('');
+    dv.innerHTML = '<div class="muted" style="font-size:12px;">'+window.T('ov2_rg_hint')+'</div>';
+  }catch(e){
+    sec.style.display='none';
+  }
+}
+
 // ⏱️ 回复时延 SLO 卡（P1-8 2026-08-09）：读 /api/workspace/metrics 的 reply_latency 段。
 // 「客户等了多久才被回」——「被吞回复等了 11 分钟」事故的量化闭环：修复前
 // 该数字没有任何界面能看见，劣化只能靠客户抱怨发现。零等待段 → 整卡隐藏。
@@ -1062,6 +1230,64 @@ async function loadReplyLatency(){
     }
     dv.innerHTML = (parts.length ? '<div class="muted" style="font-size:12px;">'+parts.join('<br>')+'</div>' : '')
       + '<div class="muted" style="font-size:12px;margin-top:6px;">'+window.T('ov2_rl_hint')+'</div>';
+  }catch(e){
+    sec.style.display='none';
+  }
+}
+
+// 🚪 入口可用性 SLO 卡（P2-1 2026-08-12 可靠性复盘）：读 metrics.entrance_slo。
+// 「坐席到工作台的门有多可用」——8/12 两次红条查岗的量化闭环：服务端探测
+// （边缘看门狗 tick）与坐席端体感（conn_* 回执）双视角并排，差值=客户端侧损耗。
+// 看门狗日志缺失（非 117 部署形态）→ 整卡隐藏。
+async function loadEntranceSlo(){
+  var sec = document.getElementById('entranceSloSection');
+  var kp = document.getElementById('entranceSloKpis');
+  var dv = document.getElementById('entranceSloDetail');
+  if(!sec || !kp || !dv) return;
+  try{
+    const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'}, {timeoutMs: 30000});
+    if(!r.ok){ sec.style.display='none'; return; }
+    const d = await r.json();
+    var es = d.entrance_slo || {};
+    var sv = es.server || {}, cl = es.client || {}, d30 = es.d30 || {};
+    if(!(Number(sv.ticks)||0)){ sec.style.display='none'; return; }
+    sec.style.display = '';
+    function pct(v){ return (v===null||v===undefined) ? '—' : (Number(v).toFixed(2)+'%'); }
+    function availCol(v){
+      v = Number(v)||0;
+      return v >= 99.5 ? 'var(--tk-green-ink,#059669)'
+           : (v >= 98 ? 'var(--tk-amber-ink,#d97706)' : 'var(--tk-red-ink,#dc2626)');
+    }
+    var kpis = [
+      {label:window.T('ov2_es_avail7'),
+       value:'<span style="color:'+availCol(sv.availability_pct)+';">'+pct(sv.availability_pct)+'</span>'},
+      {label:window.T('ov2_es_avail30'),
+       value: (Number(d30.ticks)||0)
+         ? pct(d30.availability_pct)+' <span style="font-size:11px;color:var(--text-tiny);">('+(d30.days_covered||0)+'d)</span>'
+         : '—'},
+      {label:window.T('ov2_es_out7'),
+       value: (Number(sv.outage_count)||0)+' / '+(Number(sv.outage_minutes)||0)+'m'},
+      {label:window.T('ov2_es_cli7'), value: String(Number(cl.episodes)||0)},
+    ];
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+    }).join('');
+    var parts = [];
+    var ba = cl.by_action || {};
+    var segs = [];
+    if(Number(ba.conn_ep_server)||0) segs.push(window.T('ov2_es_cli_server')+' '+ba.conn_ep_server);
+    if(Number(ba.conn_ep_local)||0)  segs.push(window.T('ov2_es_cli_local')+' '+ba.conn_ep_local);
+    if(Number(ba.conn_ep_none)||0)   segs.push(window.T('ov2_es_cli_none')+' '+ba.conn_ep_none);
+    if(segs.length) parts.push(window.T('ov2_es_clisplit')+': '+segs.join(' · '));
+    // 断连段是系统时间戳+分钟数（非用户输入），slice 直拼安全
+    var outs = (sv.outages||[]).slice(-3).map(function(o){
+      return String(o.start||'').slice(5,16)+' '+(Number(o.minutes)||0)+'m'
+        +(o.ongoing ? ' ('+window.T('ov2_es_ongoing')+')' : '');
+    });
+    if(outs.length) parts.push(window.T('ov2_es_recent')+': '+outs.join(' / '));
+    dv.innerHTML = (parts.length ? '<div class="muted" style="font-size:12px;">'+parts.join('<br>')+'</div>' : '')
+      + '<div class="muted" style="font-size:12px;margin-top:6px;">'+window.T('ov2_es_hint')+'</div>';
   }catch(e){
     sec.style.display='none';
   }
@@ -1177,6 +1403,9 @@ async function loadFleetHealth(){
     var lc = d.lifecycle || {};
     var counts = fl.counts || {};
     var lightIc = fl.fleet_light==='green'?'🟢':(fl.fleet_light==='amber'?'🟡':(fl.fleet_light==='red'?'🔴':'⚪'));
+    // P2 2026-08-13 额度双道：顶层 accounts 现随行 quota（used/cap/auto_cap/
+    // reserve，与发送闸门同一 evaluate）+ send_blocks 拦截计数（重启后口径）
+    var _blocks = (d.send_blocks||{});
     var kpis = [
       {label:window.T('ov2_fh_total'), value:fmt(Number(fl.total)||0)},
       {label:window.T('ov2_fh_light'), value:lightIc},
@@ -1185,14 +1414,38 @@ async function loadFleetHealth(){
       {label:window.T('ov2_fh_warming'), value:fmt(Number(lc.warming)||0)},
       {label:window.T('ov2_fh_risk'), value:fmt((Number(lc.restricted)||0)+(Number(lc.banned)||0))},
     ];
+    if(Number(_blocks.total)>0){
+      kpis.push({label:window.T('ov2_fh_blocks'), value:fmt(Number(_blocks.total)||0)});
+      // P4 分道：键尾 |manual = 坐席人工被拦（要处理的痛）；|auto = 自动链让路
+      // （reserve 预期行为）。人工 >0 才占一格 KPI，别拿预期行为刷版面。
+      var _mBlk=0;
+      try{
+        Object.keys(_blocks.by_key||{}).forEach(function(k){
+          if(/\|manual$/.test(k)) _mBlk += Number(_blocks.by_key[k])||0;
+        });
+      }catch(_){}
+      if(_mBlk>0){
+        kpis.push({label:window.T('ov2_fh_blocks_manual'),
+                   value:'<span style="color:var(--th-ink-red8,#991b1b);">'+fmt(_mBlk)+'</span>'});
+      }
+    }
     kp.innerHTML = kpis.map(function(c){
       return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
         '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
     }).join('');
     function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-    // 平台归属：fleet.accounts 只带 account_id，从顶层 accounts（platform/stage）反查
-    var platMap = {};
-    (d.accounts||[]).forEach(function(a){ platMap[String(a.account_id||'')] = String(a.platform||''); });
+    // 平台归属 + 额度：fleet.accounts 只带 account_id，从顶层 accounts 反查
+    var platMap = {}, quotaMap = {};
+    (d.accounts||[]).forEach(function(a){
+      platMap[String(a.account_id||'')] = String(a.platform||'');
+      if(a.quota) quotaMap[String(a.account_id||'')] = a.quota;
+    });
+    function quotaCell(q){
+      if(!q||!Number(q.cap)) return '—';
+      var s = fmt(Number(q.used)||0)+'/'+fmt(Number(q.cap)||0);
+      if(Number(q.reserve)>0) s += ' <span class="muted" style="font-size:11px;">(AI≤'+fmt(Number(q.auto_cap)||0)+')</span>';
+      return s;
+    }
     // 最差在前（fleet_health 已排序）；全绿（无扣分号）→ 健康空态一句话
     var worst = (fl.accounts||[]).filter(function(a){ return String(a.light)!=='green'; }).slice(0,5);
     var html = '';
@@ -1200,18 +1453,30 @@ async function loadFleetHealth(){
       html += '<div class="muted" style="font-size:12px;font-weight:700;margin:4px 0;">'+esc(window.T('ov2_fh_worst_title'))+'</div>'
         + '<table class="tbl" style="width:100%;font-size:13px;"><thead><tr>'
         + '<th>'+window.T('ov2_fh_col_account')+'</th><th>'+window.T('ov2_fh_col_score')+'</th>'
+        + '<th>'+window.T('ov2_fh_col_quota')+'</th>'
         + '<th>'+window.T('ov2_fh_col_cap')+'</th><th>'+window.T('ov2_fh_col_reasons')+'</th></tr></thead><tbody>'
         + worst.map(function(a){
             var ic = a.light==='red'?'🔴':(a.light==='amber'?'🟡':'🟢');
             var acct = (platMap[String(a.account_id||'')]?platMap[String(a.account_id||'')]+':':'')+String(a.account_id||'');
             return '<tr><td>'+esc(acct)+'</td>'
               +'<td>'+ic+' '+fmt(Number(a.score)||0)+'</td>'
+              +'<td>'+quotaCell(quotaMap[String(a.account_id||'')])+'</td>'
               +'<td>'+fmt(Number(a.recommended_cap)||0)+'</td>'
               +'<td style="font-size:12px;">'+esc((a.reasons||[]).slice(0,2).join('；'))+'</td></tr>';
           }).join('')
         + '</tbody></table>';
     } else {
       html += '<div class="muted" style="font-size:12px;">✅ '+esc(window.T('ov2_fh_all_green'))+'</div>';
+      // 全绿也给「额度水位」一行（额度是运营资源，健康≠还有余量）：按占用率取前 3
+      var _qrows = (d.accounts||[]).filter(function(a){ return a.quota&&Number(a.quota.cap)>0; })
+        .sort(function(x,y){ return (Number(y.quota.used)/Number(y.quota.cap))-(Number(x.quota.used)/Number(x.quota.cap)); })
+        .slice(0,3);
+      if(_qrows.length){
+        html += '<div class="muted" style="font-size:12px;margin-top:4px;">'+esc(window.T('ov2_fh_quota_line'))+': '
+          + _qrows.map(function(a){
+              return esc((a.platform?a.platform+':':'')+a.account_id)+' '+quotaCell(a.quota);
+            }).join('、')+'</div>';
+      }
     }
     var lcTxt = Object.keys(lc).map(function(k){ return k+' '+lc[k]; }).join(' / ');
     if(lcTxt) html += '<div class="muted" style="font-size:12px;margin-top:6px;">'+esc(window.T('ov2_fh_lifecycle'))+': '+esc(lcTxt)+'</div>';
@@ -2012,7 +2277,7 @@ async function loadFrontendErrors(){
   if(!kp || !dv) return;
   try{
     const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
-    if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; try{ renderProfilePush(null); }catch(_pp){} try{ renderUiEvents(null); }catch(_ue){} try{ renderDpickFunnel(null); }catch(_df){} try{ renderPersonaOverride(null); }catch(_po){} try{ renderCsrfRejects(null); }catch(_cs){} try{ renderOutboundMirror(null); }catch(_om){} try{ renderPhotoCapability(null); }catch(_pc){} try{ renderLoginFunnel(null); }catch(_lf){} try{ renderPeerBotGuard(null); }catch(_bp){} return; }
+    if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; try{ renderProfilePush(null); }catch(_pp){} try{ renderUiEvents(null); }catch(_ue){} try{ renderDpickFunnel(null); }catch(_df){} try{ renderPersonaOverride(null); }catch(_po){} try{ renderCsrfRejects(null); }catch(_cs){} try{ renderOutboundMirror(null); }catch(_om){} try{ renderPhotoCapability(null); }catch(_pc){} try{ renderLoginFunnel(null); }catch(_lf){} try{ renderPeerBotGuard(null); }catch(_bp){} try{ renderAccountsTruth(null); }catch(_at){} return; }
     const d = await r.json();
     try{ renderProfilePush(d); }catch(_pp){}
     try{ renderUiEvents(d); }catch(_ue){}
@@ -2023,6 +2288,7 @@ async function loadFrontendErrors(){
     try{ renderPhotoCapability(d); }catch(_pc){}
     try{ renderLoginFunnel(d); }catch(_lf){}
     try{ renderPeerBotGuard(d); }catch(_bp){}
+    try{ renderAccountsTruth(d); }catch(_at){}
     var fe = d.frontend_errors || null;
     if(!fe || !(Number(fe.total)||0)){
       opsSetCardLight('fe', '');
@@ -2156,12 +2422,106 @@ function renderLoginFunnel(d){
       + '</table>'
       + '<div class="muted" style="font-size:12px;margin-top:8px;">'+window.T('ov2_js_lf_hint')+'</div>';
   } else {
-    // 暂隐；loadLoginFunnelTrend 若发现耐久数据会再打开
+    // 暂隐；loadLoginFunnelTrend / _loginBlockersRow 若发现耐久数据会再打开
     kp.innerHTML = '';
     dv.innerHTML = '';
     sec.style.display = 'none';
   }
   try{ loadLoginFunnelTrend(!!totStart); }catch(_t){}
+  try{ _loginBlockersRow(); }catch(_b){}
+}
+
+// 🧾 账号真相卡（2026-08-17 账号单源收口 P3）：与 loadFrontendErrors 共享同一次
+// /api/workspace/metrics 响应，读 accounts_truth 段（registry_total / registry_by_status /
+// directory_total / directory_only）。「顶栏 10 个 vs 面板 5 个」那类分裂修完后，
+// 这张卡就是防回归读数：幽灵账号（仅目录）>0 亮黄，持续增长＝有账号绕过注册表收发。
+// status 键是受控枚举（online/connecting/error/offline/logged_out/removed），可直接拼 HTML。
+function renderAccountsTruth(d){
+  var sec = document.getElementById('acctTruthSection');
+  var kp = document.getElementById('acctTruthKpis');
+  var dv = document.getElementById('acctTruthDetail');
+  if(!sec || !kp || !dv) return;
+  var at = (d && d.accounts_truth) || null;
+  var regTot = at ? (Number(at.registry_total)||0) : 0;
+  var dirTot = at ? (Number(at.directory_total)||0) : 0;
+  if(!at || (!regTot && !dirTot)){ sec.style.display='none'; kp.innerHTML=''; dv.innerHTML=''; return; }
+  sec.style.display = '';
+  var ghost = Number(at.history_only != null ? at.history_only : at.directory_only)||0;
+  var desk = Number(at.desktop)||0;
+  opsSetCardLight('atruth', ghost ? 'yellow' : '');
+  var byNames = at.registry_by_status || {};
+  var stStr = Object.keys(byNames).sort().map(function(k){ return k+' '+byNames[k]; }).join(' · ') || '—';
+  var kpis = [
+    {label:window.T('ov2_at_registry'), value:fmt(regTot)},
+    {label:window.T('ov2_at_dir'), value:fmt(dirTot)},
+    {label:window.T('ov2_at_ghost'), value:fmt(ghost), color:(ghost?'var(--amber)':null)},
+    {label:window.T('ov2_at_desktop'), value:fmt(desk)},
+  ];
+  kp.innerHTML = kpis.map(function(c){
+    return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+      '</div><div style="font-size:20px;font-weight:600;margin-top:4px;'+(c.color?('color:'+c.color+';'):'')+'">'+c.value+'</div></div>';
+  }).join('');
+  dv.innerHTML = '<div class="muted" style="font-size:12px;">'+window.T('ov2_at_status')+': '+stStr+'</div>';
+}
+
+// 接入卡点 + 官方开通两行（登录会话漏斗之前的那半程）：读 ui-event-trend 的
+// connect_ / official_setup_ 前缀（beacon 旁路按日落库，重启无损）。卡点信号
+// 2026-08-11 起由接入弹窗埋点供给：不可用卡曝光（平台_方式_原因码归桶）、
+// 「改用 X」直达、「复制处置指引」——「客户接不上号到底卡在哪一环」从翻日志
+// 变成看板常驻行。两前缀都零流量 → 整段静默；有量而登录漏斗全零 → 仍开卡
+// （用户在卡点上全军覆没、压根没走到登录会话，恰是最该被看见的形态）。
+async function _loginBlockersRow(){
+  var el = document.getElementById('loginFunnelBlockers');
+  var sec = document.getElementById('loginFunnelSection');
+  if(!el) return;
+  function agg(d){
+    var o = {};
+    (((d&&d.days)||[])).forEach(function(row){
+      var by = (row&&row.by_action)||{};
+      Object.keys(by).forEach(function(a){ o[a]=(o[a]||0)+(Number(by[a])||0); });
+    });
+    return o;
+  }
+  function sum(o, pre){
+    var n = 0;
+    Object.keys(o).forEach(function(a){ if(a.indexOf(pre)===0) n += o[a]; });
+    return n;
+  }
+  try{
+    const rc = await apiFetch('/api/admin/ui-event-trend?days=14&prefix=connect_', {credentials:'same-origin'});
+    const ro = await apiFetch('/api/admin/ui-event-trend?days=14&prefix=official_setup_', {credentials:'same-origin'});
+    const dc = rc && rc.ok ? await rc.json() : null;
+    const dof = ro && ro.ok ? await ro.json() : null;
+    if((!dc || dc.enabled===false) && (!dof || dof.enabled===false)){ el.innerHTML=''; return; }
+    var ac = agg(dc), ao = agg(dof);
+    var exp = sum(ac,'connect_unavail_'), alt = sum(ac,'connect_alt_click_'), ops = sum(ac,'connect_ops_copy_');
+    var oShown = sum(ao,'official_setup_unavail_shown_'), oWiz = sum(ao,'official_setup_wizard_open_'), oOk = sum(ao,'official_setup_online_');
+    var html = '';
+    if(exp || alt || ops){
+      // 高频卡点 Top3：connect_unavail_<plat>_<mode>_<rc>（rc 含下划线 → 只切前两段）。
+      // rc 直接显示原因码（受众=运维，not_implemented 比译文更好 grep；拼 i18n 键会绕过键门禁）
+      var tops = Object.keys(ac).filter(function(a){ return a.indexOf('connect_unavail_')===0; })
+        .map(function(a){ var p=a.slice('connect_unavail_'.length).split('_'); return {plat:p[0]||'?', mode:p[1]||'?', rc:p.slice(2).join('_')||'?', n:ac[a]}; })
+        .sort(function(x,y){ return y.n-x.n; }).slice(0,3)
+        .map(function(t){ return esc(t.plat+'/'+t.mode+'·'+t.rc)+' ×'+t.n; }).join('　');
+      html += '<div class="muted" style="font-size:12px;">🧱 '+window.T('ov2_js_lf_blk')+': '
+        + window.T('ov2_js_lf_blk_exp')+' <b>'+fmt(exp)+'</b> · '
+        + window.T('ov2_js_lf_blk_alt')+' <b>'+fmt(alt)+'</b> · '
+        + window.T('ov2_js_lf_blk_ops')+' <b>'+fmt(ops)+'</b>'
+        + (tops?('　|　'+window.T('ov2_js_lf_blk_top')+': '+tops):'')
+        + '</div>';
+    }
+    if(oShown || oWiz || oOk){
+      html += '<div class="muted" style="font-size:12px;margin-top:4px;">🪪 '+window.T('ov2_js_lf_off')+': '
+        + window.T('ov2_js_lf_off_shown')+' <b>'+fmt(oShown)+'</b> → '
+        + window.T('ov2_js_lf_off_wiz')+' <b>'+fmt(oWiz)+'</b> → '
+        + window.T('ov2_js_lf_off_ok')+' <b>'+fmt(oOk)+'</b>'
+        + (oShown?('　('+Math.round(oOk*100/oShown)+'%)'):'')
+        + '</div>';
+    }
+    el.innerHTML = html;
+    if(html && sec && sec.style.display==='none') sec.style.display='';
+  }catch(_e){ el.innerHTML=''; }
 }
 
 // 近 7 天接入漏斗曲线：读 /api/admin/login-funnel-trend（需 ops.login_funnel_trend.enabled）。
@@ -2970,9 +3330,23 @@ async function loadPlatformSessions(){
     var unhealthy = ps.unhealthy || [];
     var inboxHealth = ps.inbox_health || {};
     var inboxStalled = ps.inbox_stalled || [];
-    // 有不健康会话（掉线）=红；入站半死 / TG 断网冷却=黄（半死仍可发但收不到）
+    // P1 2026-08-15 messenger-web 盲区修复观测聚合（字段随心跳落 inbox_health 行；
+    // 老 worker 缺键 → 聚合自然为 0/false，不误报）：
+    //   codeStaleN  = 有账号报「磁盘代码晚于进程启动」（改了 server.js 没重启 Node）；
+    //   uforcedN    = 未读驱动强制读取累计触发（E2EE 占位盲区的解药在干活的读数）；
+    //   reqSuspectN = 请求页「零行且无结构证据」连续次数的最大值（≥4 才亮，防抖动）。
+    var codeStaleN = 0, uforcedN = 0, reqSuspectN = 0;
+    Object.keys(inboxHealth).forEach(function(k){
+      var h = inboxHealth[k] || {};
+      if(h.worker_code_stale === true) codeStaleN++;
+      uforcedN += Number(h.unread_forced) || 0;
+      var rs = Number(h.requests_suspect) || 0;
+      if(rs > reqSuspectN) reqSuspectN = rs;
+    });
+    var reqSuspect = reqSuspectN >= 4 ? reqSuspectN : 0;
+    // 有不健康会话（掉线）=红；入站半死 / TG 断网冷却 / 代码半部署 / 请求区可疑=黄
     opsSetCardLight('psess', unhealthy.length ? 'red'
-      : ((inboxStalled.length || tgCdKeys.length) ? 'yellow' : ''));
+      : ((inboxStalled.length || tgCdKeys.length || codeStaleN || reqSuspect) ? 'yellow' : ''));
     var kpis = [
       {label:window.T('ov2_js_ps_total'), value:fmt(Number(ps.total_events)||0)},
       {label:window.T('ov2_js_ps_sessions'), value:fmt(keys.length)},
@@ -2983,6 +3357,24 @@ async function loadPlatformSessions(){
       {label:window.T('ov2_js_ps_tg_cd'),
        value:(tgCdKeys.length ? '🟡 '+tgCdKeys.length : '🟢 0')},
     ];
+    // 盲区修复观测 KPI（零流量不占版面）：强制读取有触发才显示；代码半部署/请求区
+    // 可疑是异常态，出现即显式点名（黄）。
+    if(uforcedN){
+      kpis.push({label:window.T('ov2_js_ps_uforced'), value:'⚪ '+fmt(uforcedN)});
+    }
+    if(codeStaleN){
+      kpis.push({label:window.T('ov2_js_ps_code_stale'), value:'🟠 '+codeStaleN});
+    }
+    if(reqSuspect){
+      kpis.push({label:window.T('ov2_js_ps_req_suspect'), value:'🟡 '+fmt(reqSuspect)});
+    }
+    // 登录放弃率（P1 2026-08-14）：worker 上报 abandoned 的**事件计数**（行本身
+    // 30min TTL 清、计数不清）。放弃多=登录流程有摩擦（窗口慢/步骤不明），是产品
+    // 信号不是故障信号——白点中性显示，零放弃不占版面。
+    var abandonedN = Number(((ps.by_status || {}).abandoned)) || 0;
+    if(abandonedN){
+      kpis.push({label:window.T('ov2_js_ps_abandoned'), value:'⚪ '+fmt(abandonedN)});
+    }
     // P4 漏斗 KPI：半死进入 / 重登 / 恢复（进程累计；有流量才追加，免空卡挤位）
     var funnel = ps.stall_funnel || null;
     if(funnel && (Number(funnel.went)||Number(funnel.relogin)||Number(funnel.recovered))){
@@ -3003,8 +3395,11 @@ async function loadPlatformSessions(){
       // 触发 worker 主机弹交互登录窗，登录成功 worker 自动 push authorized 恢复。
       // 动态行不用 inline onclick（作用域/拼接陷阱），走容器级事件委托 + data 属性。
       var act = '';
-      if(bad && CAN_MANAGE_OPS && k.indexOf('messenger:') === 0){
-        act = '<button class="btn" data-psess-relogin="1" data-plat="messenger"'+
+      // P1（2026-08-14）：whatsapp 也给重登按钮——后端转发 baileys 凭据级
+      // reconnect（无交互窗，多数掉线一键拉活）；messenger 仍是 headed 交互重登。
+      var kPlat = String(k).split(':')[0] || '';
+      if(bad && CAN_MANAGE_OPS && (kPlat === 'messenger' || kPlat === 'whatsapp')){
+        act = '<button class="btn" data-psess-relogin="1" data-plat="'+esc(kPlat)+'"'+
           ' data-lid="'+esc(o.login_id||'')+'" data-acct="'+esc(k.split(':')[1]||'')+'"'+
           ' style="font-size:12px;padding:2px 10px;">'+window.T('ov2_js_ps_relogin')+'</button>';
       }
@@ -3278,6 +3673,52 @@ async function loadPersonaMedia(){
   }
 }
 
+// 😊 表情包卡：读 /api/workspace/metrics 的 stickers（备货水位=持久口径，
+// 发送/收藏=进程口径；sent_as 分桶 image 占比高＝原生贴纸能力缺口——
+// WA 边车未升级 / LINE 自建包为主）。零备货且零发送 → 整卡隐藏。
+async function loadStickers(){
+  var sec = document.getElementById('stickersSection');
+  var kp = document.getElementById('stkKpis');
+  var dv = document.getElementById('stkDetail');
+  if(!sec || !kp || !dv) return;
+  try{
+    const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
+    if(!r.ok){ sec.style.display='none'; return; }
+    const d = await r.json();
+    var s = d.stickers || null;
+    var sends = s ? (Number(s.sends)||0) : 0;
+    var items = s ? (Number(s.stickers)||0) : 0;
+    if(!s || (!sends && !items)){ sec.style.display='none'; return; }
+    sec.style.display = '';
+    var kpis = [
+      {label:window.T('ov2_stk_packs'), value:fmt(Number(s.packs)||0)},
+      {label:window.T('ov2_stk_items'), value:fmt(items)},
+      {label:window.T('ov2_stk_sends'), value:fmt(sends)},
+      {label:window.T('ov2_stk_collects'), value:fmt(Number(s.collects)||0)},
+    ];
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+    }).join('');
+    var rows = [];
+    var by = s.by_platform || {};
+    var plats = Object.keys(by).sort();
+    if(plats.length){
+      rows.push('<div style="font-size:12px;margin-top:4px;">'+window.T('ov2_stk_by_plat')+': '
+        + plats.map(function(k){ return esc(k)+' '+fmt(Number(by[k])||0); }).join(' · ')+'</div>');
+    }
+    var sa = s.by_sent_as || {};
+    var asStk = Number(sa.sticker)||0, asImg = Number(sa.image)||0;
+    if(asStk || asImg){
+      rows.push('<div style="font-size:12px;margin-top:4px;">'+window.T('ov2_stk_sent_as')
+        +': '+window.T('ov2_stk_as_native')+' '+fmt(asStk)+' · '+window.T('ov2_stk_as_image')+' '+fmt(asImg)
+        +(asImg>asStk?' <span class="muted">'+window.T('ov2_stk_fallback_hint')+'</span>':'')+'</div>');
+    }
+    dv.innerHTML = rows.length ? rows.join('')
+      : '<div class="empty">'+window.T('ov2_js_stk_none')+'</div>';
+  }catch(_){ sec.style.display='none'; }
+}
+
 // 🧷 图文一致性卡：读 /api/admin/media-consistency（点名场景供需缺口 + 投诉分类）。
 // 零流量零投诉零备货 → 整卡隐藏（active:false）。
 async function loadMediaConsistency(){
@@ -3528,6 +3969,99 @@ async function loadBazi(){
       + '<div class="muted" style="font-size:12px;margin-top:6px;">'+window.T('ov2_bz_hint')+'</div>';
   }catch(e){
     dv.innerHTML = '<div class="empty">'+window.T('ln_js_033')+e+'</div>';
+  }
+}
+
+// 🔥 回怼防线卡：读 /api/companion/temper/status（复用治理端点，零额外接线）。
+//    零流量 AND 配置出厂默认 → 整卡隐藏；策略被改过（关/强制）即使零流量也显示。
+async function loadTemperGuard(){
+  var sec = document.getElementById('temperGuardSection');
+  var kp = document.getElementById('temperGuardKpis');
+  var dv = document.getElementById('temperGuardDetail');
+  if(!sec || !kp || !dv) return;
+  try{
+    const r = await apiFetch('/api/companion/temper/status', {credentials:'same-origin'});
+    if(r.status === 403){ sec.style.display='none'; return; }
+    const d = await r.json();
+    if(!d || !d.ok){ sec.style.display='none'; return; }
+    var cfg = d.config || {}, s = d.stats || {}, hints = s.hints || {};
+    var comebacks = (Number(hints.gentle)||0)+(Number(hints.sharp)||0)+(Number(hints.feisty)||0);
+    var insults = Number(s.insults)||0;
+    var pristine = (cfg.enabled !== false) && !cfg.force_level;  // 出厂默认
+    if(insults === 0 && comebacks === 0 && pristine){ sec.style.display='none'; return; }
+    sec.style.display = '';
+    var kpis = [
+      {label:window.T('ov2_tp_insults'),   value:fmt(insults)},
+      {label:window.T('ov2_tp_comebacks'), value:fmt(comebacks)},
+      {label:window.T('ov2_tp_sticky'),    value:fmt(Number(s.sticky_hits)||0)},
+      {label:window.T('ov2_tp_deesc'),     value:fmt(Number(s.deescalations)||0)},
+      {label:window.T('ov2_tp_off'),       value:fmt(Number(s.suppressed_off)||0)},
+    ];
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+    }).join('');
+    // 档位分布迷你条：灰绿琥珀红（gentle=温和=绿，避 legacy 蓝；全 var 形式）
+    var segs = [
+      {n:Number(hints.gentle)||0, c:'var(--th-bg-emerald6,#059669)', t:window.T('ov2_tp_lv_gentle')},
+      {n:Number(hints.sharp)||0,  c:'var(--th-bg-amber6,#d97706)',   t:window.T('ov2_tp_lv_sharp')},
+      {n:Number(hints.feisty)||0, c:'var(--th-bg-red6,#dc2626)',     t:window.T('ov2_tp_lv_feisty')},
+    ];
+    var totSeg = segs.reduce(function(a,x){return a+x.n;},0) || 1;
+    var bar = '<div style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin:6px 0;background:var(--tk-surface-2,#eee)">'
+      + segs.map(function(x){ return '<div title="'+x.t+': '+x.n+'" style="width:'+(x.n/totSeg*100)+'%;background:'+x.c+'"></div>'; }).join('')
+      + '</div>';
+    var parts = [];
+    var policy = cfg.force_level
+      ? window.Tf('ov2_tp_policy_forced', {lv: window.T('ov2_tp_lv_'+cfg.force_level) || cfg.force_level})
+      : window.T('ov2_tp_policy_persona');
+    parts.push(window.T('ov2_tp_policy')+': '+policy);
+    parts.push(window.T('ov2_tp_default')+': '+(window.T('ov2_tp_lv_'+(cfg.default_level||'gentle'))||cfg.default_level));
+    if(cfg.profanity === false){ parts.push('<span style="color:var(--tk-amber-ink,#d97706);">'+window.T('ov2_tp_profanity_off')+'</span>'); }
+    if(cfg.enabled === false){ parts.push('<span style="color:var(--tk-amber-ink,#d97706);">'+window.T('ov2_tp_killed')+'</span>'); }
+    if((Number(s.forced)||0) > 0){ parts.push(window.T('ov2_tp_forced')+': '+fmt(Number(s.forced)||0)); }
+    if((Number(s.profanity_capped)||0) > 0){ parts.push(window.T('ov2_tp_capped')+': '+fmt(Number(s.profanity_capped)||0)); }
+    if((Number(s.feud_breaks)||0) > 0){ parts.push('<span style="color:var(--tk-amber-ink,#d97706);">'+window.T('ov2_tp_breaks')+': '+fmt(Number(s.feud_breaks)||0)+'</span>'); }
+    if((Number(s.taunts)||0) > 0){ parts.push(window.T('ov2_tp_taunts')+': '+fmt(Number(s.taunts)||0)); }
+    if((Number(s.platform_capped)||0) > 0){ parts.push(window.T('ov2_tp_pcapped')+': '+fmt(Number(s.platform_capped)||0)); }
+    // Top 被怼人设
+    var byP = s.by_persona || {};
+    var top = Object.keys(byP).map(function(k){return {id:k,n:byP[k]};}).sort(function(a,b){return b.n-a.n;}).slice(0,5);
+    var topLine = top.length ? (window.T('ov2_tp_top')+': '+top.map(function(x){return esc(x.id)+'('+x.n+')';}).join('、')) : '';
+    dv.innerHTML = bar
+      + '<div class="muted" style="font-size:12px;">'+parts.join(' · ')+'</div>'
+      + (topLine ? '<div class="muted" style="font-size:12px;margin-top:6px;">'+topLine+'</div>' : '')
+      + '<div class="muted" style="font-size:12px;margin-top:6px;">'+window.T('ov2_tp_hint')+'</div>';
+  }catch(e){
+    dv.innerHTML = '<div class="empty">'+window.T('ln_js_033')+e+'</div>';
+  }
+}
+
+// 🧲 群成员提取卡：读 /api/workspace/metrics 的 group_members（成员/群/任务；无数据整卡隐藏）。
+async function loadGroupMembers(){
+  var sec = document.getElementById('gmembersSection');
+  var kp = document.getElementById('gmembersKpis');
+  var dv = document.getElementById('gmembersDetail');
+  if(!sec || !kp || !dv) return;
+  try{
+    const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
+    if(r.status === 403){ sec.style.display='none'; return; }
+    const d = await r.json();
+    var gm = d.group_members || null;
+    if(!gm || !gm.active){ sec.style.display='none'; return; }
+    sec.style.display = '';
+    var kpis = [
+      {label:window.T('ov2_gm_members'), value:fmt(Number(gm.members_total)||0)},
+      {label:window.T('ov2_gm_groups'), value:fmt(Number(gm.groups)||0)},
+      {label:window.T('ov2_gm_jobs'), value:fmt(Number(gm.jobs_running)||0)+' / '+fmt(Number(gm.jobs_total)||0)},
+    ];
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+    }).join('');
+    dv.innerHTML = '';
+  }catch(e){
+    sec.style.display='none';
   }
 }
 
@@ -5962,7 +6496,42 @@ async function loadChainFunnel(){
             : '')
         + '</div>';
     }
-    dv.innerHTML = table + attrLine
+    // P3 2026-08-13 档位对比：auto 档有流量才显示（remind vs auto 72h 回复率，
+    // 方向性参考——不同链客群不同，非 A/B 实验，tooltip 已注明）。
+    var modeLine = '';
+    (function(){
+      var bm = d.by_mode || {};
+      var au = bm.auto || {}, rm = bm.remind || {};
+      if(!Number(au.started)) return;
+      function mrate(x){ return (x && x.reply_rate != null)
+        ? (Math.round(Number(x.reply_rate)*100)+'%') : '—'; }
+      modeLine = '<div class="muted" style="font-size:12px;margin-top:6px;" title="'+esc(window.T('ov2_cf_mode_t'))+'">'
+        + '📊 '+window.T('ov2_cf_mode')+': ⚡'+window.T('ov2_cf_mode_auto')+' '+fmt(Number(au.started)||0)
+        + (au.reply_rate!=null?(' · ↩'+mrate(au)):'')
+        + ' ｜ 🔔'+window.T('ov2_cf_mode_remind')+' '+fmt(Number(rm.started)||0)
+        + (rm.reply_rate!=null?(' · ↩'+mrate(rm)):'')
+        + '</div>';
+    })();
+    // P1.5 2026-08-13 行动闭环读数：右栏「采用并拟稿/操作」ui-event 计数（进程口径）
+    // + 自动推进档统计（autorun.auto_step，投料/降级/静默顺延）。零流量不占行。
+    var adoptLine = '';
+    (function(){
+      var ad = d.adoption || {};
+      var keys = Object.keys(ad).sort(function(a,b){ return (ad[b]||0)-(ad[a]||0); });
+      var chips = keys.filter(function(k){ return Number(ad[k])>0; }).slice(0,8)
+        .map(function(k){ return esc(k.replace(/^chain_/,''))+':'+fmt(Number(ad[k])||0); });
+      var au = (d.autorun && d.autorun.auto_step) || {};
+      var auBits = [];
+      if(Number(au.staged)>0) auBits.push(window.T('ov2_cf_auto_staged')+':'+fmt(Number(au.staged)));
+      if(Number(au.fallback_remind)>0) auBits.push(window.T('ov2_cf_auto_fallback')+':'+fmt(Number(au.fallback_remind)));
+      if(Number(au.deferred_quiet)>0) auBits.push(window.T('ov2_cf_auto_quiet')+':'+fmt(Number(au.deferred_quiet)));
+      if(!chips.length && !auBits.length) return;
+      adoptLine = '<div class="muted" style="font-size:12px;margin-top:6px;" title="'+esc(window.T('ov2_cf_adopt_t'))+'">'
+        + '🖱️ '+window.T('ov2_cf_adopt')+': '+(chips.length?chips.join(' · '):'—')
+        + (auBits.length ? (' ｜ ⚡ '+auBits.join(' · ')) : '')
+        + '</div>';
+    })();
+    dv.innerHTML = table + attrLine + modeLine + adoptLine
       + '<div class="muted" style="font-size:12px;margin-top:6px;">'+window.T('ov2_cf_reply_hint')
       + ' · <a href="/workflows">'+window.T('ov2_cf_manage')+'</a></div>';
   }catch(_e){ sec.style.display='none'; }
@@ -6396,6 +6965,69 @@ async function toggleLocalTts(on){
   }
 }
 
+// 🗑️ 消息管理审计卡（2026-08-17 消息管理 P2）：读 /api/admin/msg-ops-stats
+// （ops_events 台账 7 天窗：撤回成败/失败归因、删除/清空/删会话/回收站恢复计数、
+// 最近操作流）。旧后端 404 / 无权限 / 零操作 → 整卡隐藏——「前台删除、后台留痕」
+// 的管理端读数面；失败归因分布决定要不要做「N 分钟内可撤」前端预判。
+async function loadMsgOps(){
+  var sec = document.getElementById('msgOpsSection');
+  var kp = document.getElementById('msgOpsKpis');
+  var dv = document.getElementById('msgOpsDetail');
+  if(!sec || !kp || !dv) return;
+  try{
+    const r = await apiFetch('/api/admin/msg-ops-stats', {credentials:'same-origin'}, {timeoutMs: 20000});
+    if(!r.ok){ sec.style.display='none'; return; }
+    const d = await r.json();
+    var c = d.counts || {};
+    function g(k){ return c[k] || {total:0, ok:0, by_reason:{}}; }
+    var rv = g('msg_revoke');
+    var total = 0;
+    Object.keys(c).forEach(function(k){ total += Number((c[k]||{}).total)||0; });
+    if(total === 0){ sec.style.display='none'; return; }
+    sec.style.display = '';
+    var okRate = (Number(rv.total)||0) > 0 ? Math.round((Number(rv.ok)||0) / Number(rv.total) * 100) + '%' : '—';
+    var kpis = [
+      {label:window.T('ov2_mo_revoke'), value:fmt(Number(rv.total)||0)},
+      {label:window.T('ov2_mo_revoke_ok'), value:okRate},
+      {label:window.T('ov2_mo_del'), value:fmt(Number(g('msg_delete_local').total)||0)},
+      {label:window.T('ov2_mo_clear'), value:fmt(Number(g('conv_clear').total)||0)},
+      {label:window.T('ov2_mo_delconv'), value:fmt(Number(g('conv_delete').total)||0)},
+      {label:window.T('ov2_mo_restore'), value:fmt(Number(g('msg_restore').total)||0)},
+    ];
+    kp.innerHTML = kpis.map(function(x){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+x.label+'</div>'+
+        '<div style="font-size:20px;font-weight:700;">'+x.value+'</div></div>';
+    }).join('');
+    var html = '';
+    var reasons = rv.by_reason || {};
+    var rkeys = Object.keys(reasons);
+    if(rkeys.length){
+      html += '<div class="muted" style="font-size:12px;margin:4px 0;">'+window.T('ov2_mo_fail_reasons')+': '+
+        rkeys.map(function(k){ return esc(k)+' ×'+esc(String(reasons[k])); }).join(' · ')+'</div>';
+    }
+    var rec = d.recent || [];
+    if(rec.length){
+      html += '<div class="muted" style="font-size:12px;margin:6px 0 4px;font-weight:700;">'+window.T('ov2_mo_recent')+'</div>';
+      html += '<table><thead><tr>'+
+        '<th>'+window.T('ov2_mo_col_time')+'</th><th>'+window.T('ov2_mo_col_kind')+'</th>'+
+        '<th>'+window.T('ov2_mo_col_who')+'</th><th>'+window.T('ov2_mo_col_where')+'</th>'+
+        '<th>'+window.T('ov2_mo_col_n')+'</th><th>'+window.T('ov2_mo_col_result')+'</th>'+
+        '</tr></thead><tbody>';
+      rec.forEach(function(ev){
+        var t = ev.ts ? window.wsFmtDateTime(ev.ts) : '—';
+        var kindKey = 'ov2_mo_k_'+String(ev.kind||'');
+        var kind = window.T(kindKey); if(kind===kindKey) kind = esc(String(ev.kind||''));
+        var res = (ev.reason==='ok') ? window.T('ov2_mo_ok') : esc(String(ev.reason||''));
+        html += '<tr><td>'+esc(t)+'</td><td>'+kind+'</td><td>'+esc(String(ev.by||''))+'</td>'+
+          '<td style="font-size:11px;">'+esc(String(ev.cid||''))+'</td>'+
+          '<td>'+esc(String(ev.n||''))+'</td><td>'+res+'</td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    dv.innerHTML = html;
+  }catch(_){ sec.style.display='none'; }
+}
+
 if(CAN_MANAGE_OPS){ var _rb=document.getElementById('recheckBtn'); if(_rb) _rb.style.display=''; }
 // ═══ P2 卡片注册表（单一数据源）═════════════════════════════════════════
 // 分组、页内目录 chips、状态点、折叠记忆、视口懒刷新、隐藏卡清单全部由本表驱动。
@@ -6416,9 +7048,12 @@ var OPS_CARDS = [
   {key:'trend',    group:'boss',    anchor:'anomAI',           loaders:[]},
   {key:'report',   group:'boss',    anchor:'opsReport',        loaders:[loadReport]},
   {key:'value',    group:'boss',    anchor:'valueWeeklyKpis',  loaders:[loadValueWeekly]},
+  {key:'referral', group:'boss',    anchor:'referralGrowthKpis', loaders:[loadReferralGrowth]},
   {key:'rlatency', group:'boss',    anchor:'replyLatencyKpis', loaders:[loadReplyLatency]},
+  {key:'eslo',     group:'boss',    anchor:'entranceSloKpis',  loaders:[loadEntranceSlo]},
   {key:'autocov',  group:'boss',    anchor:'autoCoverageKpis', loaders:[loadAutoCoverage]},
   {key:'fleethp',  group:'boss',    anchor:'fleetHealthKpis',  loaders:[loadFleetHealth]},
+  {key:'msgops',   group:'boss',    anchor:'msgOpsKpis',       loaders:[loadMsgOps]},
   {key:'billing',  group:'boss',    anchor:'billingAnomalies', loaders:[]},
   {key:'incidents',group:'boss',    anchor:'fltKind',          loaders:[loadIncidents]},
   // ── 内容质量 ──
@@ -6442,6 +7077,7 @@ var OPS_CARDS = [
   // ── 媒体与人设 ──
   {key:'vision',   group:'persona', anchor:'visionUsageKpis',  loaders:[loadVisionUsage]},
   {key:'pma',      group:'persona', anchor:'pmaKpis',          loaders:[loadPersonaMedia]},
+  {key:'stk',      group:'persona', anchor:'stkKpis',          loaders:[loadStickers]},
   {key:'mconsist', group:'persona', anchor:'mconsistKpis',     loaders:[loadMediaConsistency]},
   {key:'photocap', group:'persona', anchor:'photoCapKpis',     loaders:[loadFrontendErrors]},
   {key:'dp',       group:'persona', anchor:'deepPersonaKpis',  loaders:[loadDeepPersona]},
@@ -6456,6 +7092,8 @@ var OPS_CARDS = [
   {key:'bubbles',  group:'growth',  anchor:'bubblesKpis',      loaders:[loadReplyBubbles]},
   {key:'rw',       group:'growth',  anchor:'realWorldKpis',    loaders:[loadRealWorld]},
   {key:'bazi',     group:'growth',  anchor:'baziKpis',         loaders:[loadBazi]},
+  {key:'temper',   group:'persona', anchor:'temperGuardKpis',  loaders:[loadTemperGuard]},
+  {key:'gmembers', group:'growth',  anchor:'gmembersKpis',     loaders:[loadGroupMembers]},
   {key:'care',     group:'growth',  anchor:'careKpis',         loaders:[loadCare]},
   {key:'chainfun', group:'growth',  anchor:'chainFunnelKpis',  loaders:[loadChainFunnel]},
   {key:'goal',     group:'growth',  anchor:'goalKpis',         loaders:[loadGoals]},
@@ -6465,6 +7103,7 @@ var OPS_CARDS = [
   {key:'irst',     group:'infra',   anchor:'irstKpis',         loaders:[loadInstanceRestartStatus]},
   {key:'psess',    group:'infra',   anchor:'psessKpis',        loaders:[loadPlatformSessions]},
   {key:'chrdy',    group:'infra',   anchor:'chrdyKpis',        loaders:[loadChannelReadiness]},
+  {key:'atruth',   group:'infra',   anchor:'acctTruthKpis',    loaders:[loadFrontendErrors]},
   {key:'loginfn',  group:'infra',   anchor:'loginFunnelKpis',  loaders:[loadFeTrend]},
   {key:'csrf',     group:'infra',   anchor:'csrfRejectKpis',   loaders:[loadFrontendErrors]},
   {key:'omirror',  group:'infra',   anchor:'outMirrorKpis',    loaders:[loadFrontendErrors]},
@@ -6477,6 +7116,8 @@ var OPS_CARDS = [
   {key:'tenantov', group:'infra',   anchor:'tenantOvKpis',     loaders:[loadTenantOverview]},
   {key:'buried',   group:'quality', anchor:'buriedKpis',       loaders:[loadBuriedConvs]},
   {key:'iso',      group:'infra',   anchor:'isoKpis',          loaders:[loadIsolationHealth]},
+  // 字符额度（2026-08-16 用量页 v2 配套；账务类 → boss 组，追加式登记勿重排上方）
+  {key:'uqchar',   group:'boss',    anchor:'uqCharKpis',       loaders:[loadUsageQuota]},
 ];
 var OPS_CARDS_BY_KEY = {};
 OPS_CARDS.forEach(function(c){ OPS_CARDS_BY_KEY[c.key] = c; });

@@ -61,6 +61,45 @@ def reset_companion_context() -> None:
     _CTX["ai_client"] = None
 
 
+# ── TG 整段历史双向删除（2026-08-17「清空对方设备」）─────────────────────────
+
+async def tg_delete_full_history(client: Any, chat_key: str,
+                                 *, revoke: bool = True) -> Dict[str, Any]:
+    """整段会话历史双向删除：raw ``messages.DeleteHistory(revoke=True)``。
+
+    这是 Telegram 私聊独有的官方能力（连对方设备一起清空整段对话）；
+    pyrogram 2.0.x 没有面向私聊的高层封装（``delete_user_history`` 是超级群
+    踢人清言语义），故走 raw API。两个 TG worker（协议号 / companion）共用
+    本函数——契约漂移只需改一处。语义边界：
+
+    - 仅私聊/普通群（InputPeerUser/InputPeerChat）；超级群/频道是
+      ``channels.deleteHistory`` 语义、对他人无 revoke → 如实
+      ``unsupported_chat_type``（绝不静默降级成只删自己）。
+    - 服务端按 ``offset`` 分页，大会话一次调用删不完 → 循环直到清完
+      （带保险上限防协议异常死循环）。
+    - pyrogram 惰性导入，随本模块「导入零重依赖」约定。
+    """
+    from pyrogram.raw import functions as _raw_fns
+    from pyrogram.raw.types import InputPeerChannel
+
+    target: Any = chat_key
+    try:
+        target = int(chat_key)
+    except (TypeError, ValueError):
+        target = chat_key
+    peer = await client.resolve_peer(target)
+    if isinstance(peer, InputPeerChannel):
+        return {"ok": False, "reason": "unsupported_chat_type"}
+    total = 0
+    for _ in range(200):
+        r = await client.invoke(_raw_fns.messages.DeleteHistory(
+            peer=peer, max_id=0, revoke=bool(revoke)))
+        total += int(getattr(r, "pts_count", 0) or 0)
+        if not int(getattr(r, "offset", 0) or 0):
+            break
+    return {"ok": True, "deleted": total}
+
+
 # ── feature flag ─────────────────────────────────────────────────────────────
 
 def companion_runtime_enabled(config: Optional[Dict[str, Any]]) -> bool:
@@ -254,6 +293,15 @@ class TelegramCompanionWorker:
             raise RuntimeError("A 线 TelegramClient 初始化失败（凭据/session 不可用）")
         # 编排器托管：非阻塞启动（不进入 idle()）
         await self.client.start(block=False)
+        # A 线 TelegramClient.start 内部吞异常（只记日志不 raise）——这里必须
+        # 复核 running 并把原始根因（如 [401 SESSION_REVOKED]）重新抛给编排器：
+        # 编排器据此分类 session_revoked → 注册表落 offline + 健康表 logged_out +
+        # 告警，坐席账号抽屉才能看见「该号已在手机端退出，需重新扫码」。
+        if not getattr(self.client, "running", False):
+            reason = str(getattr(self.client, "last_start_error", "") or "")
+            self.client = None
+            raise RuntimeError(
+                f"A 线 TelegramClient 启动失败：{reason or '未知原因（见日志）'}")
         self.state = "running"
         self.detail = ""
 
@@ -388,6 +436,49 @@ class TelegramCompanionWorker:
             target = chat_key
         await inner.read_chat_history(target)
         return True
+
+    async def delete_messages(self, chat_key: str, message_ids: List[str],
+                              *, revoke: bool = True) -> Dict[str, Any]:
+        """删除若干条消息（2026-08-17 双端撤回，经 A 线内层 pyrogram client）。
+
+        与兄弟 worker ``TelegramProtocolWorker.delete_messages`` 同契约：
+        ``revoke=True``＝对所有人删除；platform_msg_id 即 pyrogram 消息 id。
+        worker 客户端活在 web 线程 loop → 收件箱路由内直接 await 即可（同 loop）。
+        """
+        inner = getattr(self.client, "client", None) if self.client is not None else None
+        if inner is None or not hasattr(inner, "delete_messages"):
+            raise RuntimeError("A 线 client 未连接")
+        target: Any = chat_key
+        try:
+            target = int(chat_key)
+        except (TypeError, ValueError):
+            target = chat_key
+        ids: List[int] = []
+        for i in (message_ids or []):
+            try:
+                ids.append(int(str(i)))
+            except (TypeError, ValueError):
+                continue
+        if not ids:
+            return {"ok": False, "reason": "bad_ids"}
+        n = await inner.delete_messages(target, ids, revoke=bool(revoke))
+        try:
+            n = int(n)
+        except (TypeError, ValueError):
+            n = len(ids)
+        return {"ok": n > 0, "deleted": n}
+
+    async def delete_history(self, chat_key: str,
+                             *, revoke: bool = True) -> Dict[str, Any]:
+        """整段历史双向删除（2026-08-17「清空对方设备」，经 A 线内层 pyrogram）。
+
+        与兄弟 worker ``TelegramProtocolWorker.delete_history`` 同契约，
+        实现共用 ``tg_delete_full_history``（私聊限定，超级群/频道如实拒绝）。
+        """
+        inner = getattr(self.client, "client", None) if self.client is not None else None
+        if inner is None or not hasattr(inner, "resolve_peer"):
+            raise RuntimeError("A 线 client 未连接")
+        return await tg_delete_full_history(inner, chat_key, revoke=revoke)
 
     async def send_chat_action(self, chat_key: str, action: str = "typing") -> bool:
         """挂「正在输入/录音」状态（经 A 线内层 pyrogram client）。"""

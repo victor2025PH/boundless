@@ -25,6 +25,9 @@ import src.integrations.protocol_bridge as pb
 import src.web.routes.unified_inbox_account_routes as uiar
 from src.web.routes.unified_inbox_account_routes import (
     _avatar_disk_paths,
+    _avatar_src_fp,
+    _avatar_src_sidecar,
+    _avatar_versioned_path,
     _clear_proto_avatar_bad,
     _download_and_cache_avatar,
     _mark_proto_avatar_bad,
@@ -55,16 +58,42 @@ def test_avatar_disk_paths_per_platform_isolated(media_root):
 
 
 def test_avatar_disk_paths_sanitizes_traversal(media_root):
-    # account 混入 ../ 与分隔符、chat_key 混入 /.. → 文件名只留字母数字(account 另允 _-)
+    # account 混入 ../ 与分隔符、chat_key 混入 /.. → 文件名只留字母数字(account 另允 _-)；
+    # 2026-08-14 起消毒**有损**时追加原始值 sha1[:8] 后缀（防不同 id 折叠同名——见碰撞用例）
     jpg, none_marker, url_path = _avatar_disk_paths(
         "messenger", "../../etc/passwd", "9/8/7..6")
     assert ".." not in jpg.name
     assert "/" not in jpg.name and "\\" not in jpg.name
-    # account 段保留字母数字 → "etcpasswd"；key 段仅数字 → "9876"
-    assert jpg.name == "etcpasswd_9876.jpg"
+    assert jpg.name.startswith("etcpasswd-") and "_9876-" in jpg.name
     assert ".." not in url_path
     # 产物仍落在受控媒体根内（未逃逸）
     assert str(jpg.resolve()).startswith(str((media_root / "messenger").resolve()))
+
+
+def test_avatar_disk_paths_lossless_ids_keep_legacy_names(media_root):
+    """纯字母数字 id（生产常态：数字账号/线程 id）文件名与旧实现逐字节一致——
+    既有磁盘缓存零迁移、零失效。"""
+    jpg, _, url = _avatar_disk_paths("messenger", "100012345678", "987654")
+    assert jpg.name == "100012345678_987654.jpg"
+    assert url.endswith("/100012345678_987654.jpg")
+
+
+def test_avatar_disk_paths_no_cross_account_collision(media_root):
+    """消毒有损的两个不同账号 id 绝不共享缓存文件（旧实现全剔空 → 同名 → 串脸）。"""
+    a1, _, _ = _avatar_disk_paths("messenger", "абв", "123")
+    a2, _, _ = _avatar_disk_paths("messenger", "где", "123")
+    assert a1.name != a2.name
+    # 空账号 id 也不产生共享的 "_123" 前缀文件
+    a3, _, _ = _avatar_disk_paths("messenger", "", "123")
+    assert a3.name not in (a1.name, a2.name)
+    assert not a3.name.startswith("_")
+
+
+def test_avatar_disk_paths_no_same_account_key_collision(media_root):
+    """同账号下消毒有损的两个不同 chat_key 绝不折叠为同一文件（user.name vs username）。"""
+    k1, _, _ = _avatar_disk_paths("messenger", "acct", "user.name")
+    k2, _, _ = _avatar_disk_paths("messenger", "acct", "username")
+    assert k1.name != k2.name
 
 
 async def test_download_empty_url_writes_none_and_404(media_root):
@@ -103,7 +132,9 @@ async def test_download_success_writes_jpg_and_302(media_root, monkeypatch):
                                             on_outcome=outcomes.append)
     assert isinstance(resp, RedirectResponse)
     assert resp.status_code == 302
-    assert resp.headers["location"] == url_path
+    # 2026-08-16 起 302 目标带版本参数（无 sidecar 时回落 mtime）——同内容同 URL、
+    # 内容换代 URL 换代，浏览器/前端 blob 缓存按最终 URL 失效
+    assert resp.headers["location"].startswith(url_path + "?v=")
     assert jpg.read_bytes() == b"\xff\xd8\xffJPEGBYTES"
     assert not none_marker.exists()      # 成功下载 → 清掉旧负缓存
     assert outcomes == ["fetched"]       # 观测回调：下载成功 → fetched
@@ -183,6 +214,159 @@ def test_avatar_route_wiring_pins_timeout_and_breaker():
     i_cool = route_src.index("_proto_avatar_cooling(platform, account_id)")
     i_cfg = route_src.index("cfg = (config_manager.config")
     assert i_neg < i_cool < i_cfg, "熔断闸位置漂移（应在负缓存后、回源前）"
+
+
+# ── 2026-08-16 头像实时刷新（对方换头像 → 穿透 7 天缓存 + URL 版本失效）─────────
+
+
+def test_avatar_src_fp_path_only_and_stable():
+    """指纹只看直链**路径**：scontent 的 oh/oe token 每轮轮换，query 进指纹会把
+    「没换头像」误判成「换了」→ 每轮穿透缓存回源。"""
+    a = _avatar_src_fp("https://scontent.xx/v/t1.jpg?oh=AAA&oe=111")
+    b = _avatar_src_fp("https://scontent.xx/v/t1.jpg?oh=BBB&oe=222")
+    c = _avatar_src_fp("https://scontent.xx/v/t2.jpg?oh=AAA&oe=111")
+    assert a == b            # token 轮换 → 指纹不变
+    assert a != c            # 路径变（真换头像）→ 指纹变
+    assert _avatar_src_fp("") == ""
+    assert _avatar_src_fp(None) == ""
+    assert len(a) == 12
+
+
+def test_avatar_versioned_path_sidecar_then_mtime_fallback(media_root):
+    jpg, _, url_path = _avatar_disk_paths("messenger", "a", "b")
+    # 无 jpg 无 sidecar → 原样返回（无判据不硬造版本）
+    assert _avatar_versioned_path(url_path, jpg) == url_path
+    # 只有 jpg（legacy 存量图）→ mtime 版本，同文件稳定
+    jpg.write_bytes(b"img")
+    v1 = _avatar_versioned_path(url_path, jpg)
+    assert v1.startswith(url_path + "?v=")
+    assert _avatar_versioned_path(url_path, jpg) == v1
+    # 有 sidecar → sidecar 指纹优先（与下载来源一致，跨机器/跨迁移稳定）
+    _avatar_src_sidecar(jpg).write_text("deadbeef0123", encoding="utf-8")
+    assert _avatar_versioned_path(url_path, jpg) == url_path + "?v=deadbeef0123"
+
+
+async def test_download_with_src_fp_writes_sidecar(media_root, monkeypatch):
+    jpg, none_marker, url_path = _avatar_disk_paths("messenger", "a", "b")
+    _install_fake_httpx(monkeypatch, content=b"img2")
+    fp = _avatar_src_fp("https://scontent.xx/v/new.jpg?oh=x")
+    resp = await _download_and_cache_avatar(
+        "https://scontent.xx/v/new.jpg?oh=x", jpg, none_marker, url_path, src_fp=fp)
+    assert resp.status_code == 302
+    assert resp.headers["location"] == f"{url_path}?v={fp}"
+    assert _avatar_src_sidecar(jpg).read_text(encoding="utf-8") == fp
+
+
+async def test_download_failure_serves_stale_when_cached(media_root, monkeypatch):
+    """陈旧穿透回源失败 → 退回已有旧图（旧头像好过裂图），不 404。"""
+    jpg, none_marker, url_path = _avatar_disk_paths("messenger", "a", "b")
+    jpg.write_bytes(b"old-img")
+    _install_fake_httpx(monkeypatch, raise_exc=RuntimeError("cdn down"))
+    outcomes = []
+    resp = await _download_and_cache_avatar(
+        "https://scontent.xx/v/new.jpg", jpg, none_marker, url_path,
+        on_outcome=outcomes.append)
+    assert resp.status_code == 302
+    assert jpg.read_bytes() == b"old-img"      # 旧图未被破坏
+    assert outcomes == ["error", "stale_served"]
+
+
+async def test_download_empty_url_serves_stale_when_cached(media_root):
+    """messenger 上游瞬态无直链（轮询没缓存到）+ 本地有旧图 → 302 旧图而非 404。"""
+    jpg, none_marker, url_path = _avatar_disk_paths("messenger", "a", "b")
+    jpg.write_bytes(b"old-img")
+    resp = await _download_and_cache_avatar(
+        "", jpg, none_marker, url_path, neg_cache=False)
+    assert resp.status_code == 302
+    assert not none_marker.exists()
+
+
+def test_avatar_route_wiring_pins_staleness_refresh():
+    """接线静态钉（同 test_avatar_route_wiring_pins_timeout_and_breaker 哲学）：
+    ① 缓存命中前必须比对「库内直链指纹 vs sidecar 指纹」（对方换头像 → 穿透回源）；
+    ② 回源下载必须透传 src_fp（否则 sidecar 永不落盘，陈旧检测形同虚设）；
+    ③ 302 目标必须带版本参数（`_avatar_versioned_path`）。"""
+    src = inspect.getsource(uiar)
+    route_src = src[src.index("async def api_platform_avatar"):]
+    assert '"stale_refresh"' in route_src, "缓存命中分支缺指纹分歧穿透"
+    assert "src_fp=_avatar_src_fp(remote_url)" in route_src, "回源缺 src_fp 透传"
+    assert route_src.count("_avatar_versioned_path") >= 1, "302 缺版本参数"
+
+
+# ── 2026-08-16 WA/TG 后台再验证（拉取式平台的「先答后核」）────────────────────
+
+
+def test_avatar_should_revalidate_semantics(media_root, monkeypatch):
+    """纯函数四态：无图不核 / 新图不核 / 老图未核过→核 / 老图刚核过→不核。"""
+    from src.web.routes.unified_inbox_account_routes import (
+        _avatar_reval_marker,
+        _avatar_should_revalidate,
+    )
+    jpg, _, _ = _avatar_disk_paths("whatsapp", "a", "b")
+    marker = _avatar_reval_marker(jpg)
+    now = 1_000_000.0
+    # 无图 → False
+    assert not _avatar_should_revalidate(jpg, marker, now)
+    # 新图（图龄 < TTL）→ False：下载本身就是最新事实
+    jpg.write_bytes(b"img")
+    os.utime(jpg, (now - 60, now - 60))
+    assert not _avatar_should_revalidate(jpg, marker, now)
+    # 老图 + 无 marker → True
+    os.utime(jpg, (now - 7 * 3600, now - 7 * 3600))
+    assert _avatar_should_revalidate(jpg, marker, now)
+    # 老图 + 新 marker（刚核过）→ False
+    marker.write_text("", encoding="utf-8")
+    os.utime(marker, (now - 60, now - 60))
+    assert not _avatar_should_revalidate(jpg, marker, now)
+    # marker 也过期 → 再核
+    os.utime(marker, (now - 7 * 3600, now - 7 * 3600))
+    assert _avatar_should_revalidate(jpg, marker, now)
+
+
+def test_avatar_reval_route_wiring_pins():
+    """接线静态钉：① WA/TG 缓存命中分支必须挂后台再验证 spawn；② TG 下载成功须回写
+    avatar_fp + sidecar；③ WA 下载成功须回写 avatar_fp；④ spawn 前必须先刷 marker
+    （失败也占 TTL，防上游故障期反复回源）。"""
+    src = inspect.getsource(uiar)
+    route_src = src[src.index("async def api_platform_avatar"):]
+    assert "_maybe_spawn_wa_avatar_reval(" in route_src, "WA 缓存命中缺再验证 spawn"
+    tg_src = src[src.index("async def _telegram_peer_avatar"):]
+    assert "_maybe_spawn_tg_avatar_reval(" in tg_src, "TG 缓存命中缺再验证 spawn"
+    assert "_update_avatar_fp(" in tg_src, "TG 下载成功缺 avatar_fp 回写"
+    assert '_update_avatar_fp(request.app, platform, account_id' in route_src, \
+        "WA 下载成功缺 avatar_fp 回写"
+    for fn in ("_maybe_spawn_tg_avatar_reval", "_maybe_spawn_wa_avatar_reval"):
+        body = src[src.index(f"def {fn}"):]
+        body = body[:body.index("\ndef ") if "\ndef " in body else len(body)]
+        i_touch = body.index("_touch_avatar_reval_marker")
+        i_task = body.index("create_task")
+        assert i_touch < i_task, f"{fn}: marker 须在 spawn 前刷新"
+
+
+def test_update_conversation_identity_accepts_avatar_fp(tmp_path):
+    """store 写入口：avatar_fp 落库 + 空值不覆盖（与 avatar_url 同 no-clobber 语义）。"""
+    from src.inbox.store import InboxConversation, InboxStore
+    st = InboxStore(str(tmp_path / "inbox.db"))
+    cid = "whatsapp:a:123"
+    st.upsert_conversation(InboxConversation(
+        conversation_id=cid, platform="whatsapp", account_id="a",
+        chat_key="123", display_name="Tom"))
+    assert st.update_conversation_identity(cid, avatar_fp="fp111")
+    row = st.get_conversation(cid)
+    assert row["avatar_fp"] == "fp111"
+    # 空串/None 不覆盖
+    st.update_conversation_identity(cid, avatar_fp="")
+    st.update_conversation_identity(cid, display_name="Tommy")
+    assert st.get_conversation(cid)["avatar_fp"] == "fp111"
+
+
+def test_store_row_to_chat_carries_avatar_fp():
+    from src.inbox.normalizer import store_row_to_chat
+    row = {"conversation_id": "whatsapp:a:123", "platform": "whatsapp",
+           "account_id": "a", "chat_key": "123", "avatar_fp": "fp222"}
+    chat = store_row_to_chat(row)
+    assert chat["avatar_fp"] == "fp222"
+    assert store_row_to_chat({**row, "avatar_fp": None})["avatar_fp"] == ""
 
 
 def _install_fake_httpx(monkeypatch, content=b"img", raise_exc=None):

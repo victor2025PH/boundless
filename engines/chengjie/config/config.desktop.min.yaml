@@ -74,16 +74,18 @@ inbox:
       min_sec: 8
       max_sec: 20
       adaptive: true
+      # P1 连发/秒回两道地板（2026-08-12，修 198 实录「第 1 条有思考、第 2/3 条
+      # 秒回」）：adaptive 会把「生成/排队耗时」从目标延迟里抵扣——单条语义正确，
+      # 但连发场景抵扣归零后就是背靠背机关枪。min_gap_sec=同会话两条出站最小间隔
+      # （±15% 抖动）；min_residual_sec=抵扣后至少保留的残余延迟（打字气泡有露出
+      # 窗口）。代码默认 0=关（老部署行为不变），种子显式开=「下载即用像真人」。
+      min_gap_sec: 8
+      min_residual_sec: 2
   # 产品基线（A 类，2026-07-31 拍板）：多句分条回复总闸。真发仍逐条由坐席在
   # 发送框 opt-in（气泡 chip），默认开只是让这个选项存在，零风险。
   reply_style:
     bubbles:
       enabled: true
-  # 「AI 下一步」的创建回访任务入口（P1-198 客户拍板，2026-07-31）：与「工作目标」
-  # 的每日行动语义重叠，且会话未关联客户档案时点了建不了任务——桌面版默认关。
-  # 服务器/自建部署代码默认仍开（true）；重新打开删本段或置 true 即可（热重载生效）。
-  next_actions:
-    follow_up_task: false
   # 接管自动接回（2026-08-09 .198/.104 事故沉淀）：坐席手动发一条消息会触发
   # 「接管即静音」（会话切 manual 停 AI，防人机抢话）——此前**没有任何恢复机制**，
   # 实测会话被钉死 manual 27 小时，坐席全程不知道是自己关掉了 AI。本段=桌面版
@@ -214,12 +216,14 @@ platform_login:
     # messenger-web/server.js 的 BROWSER_CHANNEL 注释）。随包 Chromium 的定位是**兜底**：
     # 让没装 Chrome 的机器也能用，装了 Chrome 的机器仍走成功率更高的那条路。
 
-# 首启体验档：桌面装完直接能用（1 万字符 / 48 小时），不要求注册。
+# 首启体验档：桌面装完直接能用（10 万字符尝鲜、无时间窗、用完即止），不要求注册；
+# 注册后经官网领满 100 万（无期限，规格在 chatx_fulfillment.TRIAL_SPEC）。
 # 只在没有授权文件时生效；有正式授权即整段失效（见 config.example.yaml 的详细说明）。
-# enforce 保持 false —— 「注册换正式试用」链路上线前开它会让新装用户用尽即无路可走。
+# enforce=true（2026-08-11 起）：「注册领 100 万」链路已上线，用尽即拦、拦了有出路
+# （注册 / 联系客服 / 邀请好友 / 购买）；不拦的话尝鲜额度形同虚设。
 licensing:
   trial:
     enabled: true
-    enforce: false
-    chars: 10000
-    window_hours: 48
+    enforce: true
+    chars: 100000
+    window_hours: 0          # 0 = 无时间窗，用完即止

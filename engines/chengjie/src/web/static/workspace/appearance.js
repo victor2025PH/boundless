@@ -24,13 +24,41 @@
    * via URL param, see unified_inbox head script). Without a pin, boot-time
    * applyTheme() stomps the param with state.night.mode ('auto' by default) ->
    * "dark shell flashes back to light" race (found 2026-08-10 while probing).
-   * The pin wins inside this window only; tabs without the param keep the
-   * night-mode governance exactly as before. */
-  var URL_THEME_PIN = null;
+   * The pin wins inside this window ONLY -- it must never reach THEME_KEY
+   * (profile-wide channel); leaking it there made a pinned window re-broadcast
+   * dark on every applyTheme and silently revert the admin day/night switch in
+   * a sibling window of the same partition (fixed 2026-08-15, see applyTheme).
+   * The pin is a boot DEFAULT, not a lock: an explicit user pick (setNightMode)
+   * hands this window's theme over to the user and releases the pin right there
+   * (window.cpReleaseThemePin, published by workspace_base head; local fallback
+   * below when this engine runs standalone). Not releasing it = the segmented
+   * control highlight moves and cp_theme is written, yet data-cp-theme never
+   * changes -- exactly the "light/dark does nothing" report (fixed 2026-08-16,
+   * desktop-shell webview loads /workspace?theme=dark).
+   * Always read the pin through currentPin(): caching it in a closure var means
+   * the stale value survives the release, which is the same as never releasing. */
+  /* Release flag lives in sessionStorage on purpose: the pin is window-scoped, so its
+   * release must be too (localStorage is partition-wide -> releasing here would unpin
+   * the shell's other windows as well). Survives reloads of this window, gone on restart. */
+  var PIN_OFF_KEY = 'cp_theme_pin_off';
+  var _urlPin = null;
   try {
     var _utp = new URLSearchParams(location.search).get('theme');
-    if (_utp === 'dark' || _utp === 'light') URL_THEME_PIN = _utp;
+    if (_utp === 'dark' || _utp === 'light') _urlPin = _utp;
+    if (_urlPin && sessionStorage.getItem(PIN_OFF_KEY) === '1') _urlPin = null;
   } catch (_) {}
+  function currentPin() {
+    var wp = window.__cpThemePin;                    /* publisher (workspace_base) is authoritative */
+    if (wp === 'dark' || wp === 'light') return wp;
+    if (wp === null) return null;
+    return _urlPin;                                  /* standalone: no publisher on the page */
+  }
+  function releasePin() {
+    if (typeof window.cpReleaseThemePin === 'function') { window.cpReleaseThemePin(); }
+    else { window.__cpThemePin = null; }
+    _urlPin = null;
+    try { sessionStorage.setItem(PIN_OFF_KEY, '1'); } catch (_) {}
+  }
 
   /* ---- catalog (ids must stay in sync with appearance_prefs.py) ---- */
   var BUNDLES = [
@@ -189,12 +217,18 @@
     html.classList.toggle('ws-anim-off', !state.anim);
   }
   function applyTheme() {
-    var mode = URL_THEME_PIN || (state.night && state.night.mode) || 'auto';
+    /* 写进 THEME_KEY 的必须是**治理值**（night.mode 折算），绝不含 URL 钉：
+       THEME_KEY 是跨窗口共享键，把窗口级的钉写进去 → 每次 applyTheme 都会把它
+       重新广播出去，同 profile 里另一个后台窗口刚点的日/夜在 150ms 内被盖回
+       （2026-08-15 实锤「后台切换白天晚上点了没反应」的根因）。
+       钉只在**本窗口**生效：走页面侧 cpApplyTheme（workspace_base/unified_inbox
+       的 eff() 已「钉优先」），无该钩子时下面 eff 也按钉解析。 */
+    var mode = (state.night && state.night.mode) || 'auto';
     var want = (mode === 'schedule') ? schedEffective() : mode;
     try { localStorage.setItem(THEME_KEY, want); } catch (_) {}
     if (typeof window.cpApplyTheme === 'function') { window.cpApplyTheme(); }
     else {
-      var eff = (want === 'auto') ? (sysDark() ? 'dark' : 'light') : want;
+      var eff = currentPin() || ((want === 'auto') ? (sysDark() ? 'dark' : 'light') : want);
       document.documentElement.setAttribute('data-cp-theme', eff);
     }
   }
@@ -308,7 +342,15 @@
         '<button type="button" class="wsap-mini" data-ap-act="resetAll">' + T('ap.reset_all') + '</button>' +
         '<span class="wsap-sp"></span>' +
         (opts.allLink === false ? '' :
-          '<a class="wsap-link" href="/personal-settings" target="_blank" rel="noopener">' +
+          /* Named-window reuse: land in the ONE admin-backend window instead of
+           * spawning a fresh tab per click (multiwin governance, 2026-08-14).
+           * #appearance hash marks it as a deep link so _win_unique navigates the
+           * already-open admin window instead of focus-only. __openUnique stub is
+           * always defined on workspace pages (_win_unique.html); target=_blank
+           * stays as the degraded-path fallback (popup blocked / desktop shell). */
+          '<a class="wsap-link" href="/personal-settings#appearance" data-winname="admin" ' +
+          'target="_blank" rel="noopener" ' +
+          'onclick="window.WSAppearance&&WSAppearance._bcn&&WSAppearance._bcn(\'theme_all_settings_qp\');return window.__openUnique?window.__openUnique(event,this):true">' +
           T('ap.all_settings') + ' &#8594;</a>') +
       '</div>';
 
@@ -464,13 +506,57 @@
     }
   });
 
+  /* ---- night-mode single write path ----
+   * Every theme entry point (user-menu segmented control, quick panel, settings
+   * page, legacy cpCycleTheme delegate) MUST go through setNightMode: it is the
+   * only writer that keeps state.night.mode + cp_theme + server roaming + all
+   * mounted panels in sync. Raw localStorage('cp_theme') writes get stomped by
+   * this engine on the next applyTheme() -- that was the original two-switcher
+   * conflict this API exists to kill (2026-08-14). */
+  /* 用量埋点（theme_ 前缀）：打在单一写路径上＝分段控件/快捷面板/设置页/legacy
+   * cycle 全入口一网打尽；漫游回拉（pullSrv）与启动装载不经过这里，零噪声。
+   * 读数：/api/admin/ui-event-trend?prefix=theme_（ops.ui_event_trend 开时落库）。 */
+  function bcn(action) {
+    try {
+      navigator.sendBeacon('/api/telemetry/ui-event', new Blob(
+        [JSON.stringify({ page: (location && location.pathname) || '', action: String(action) })],
+        { type: 'application/json' }));
+    } catch (_) {}
+  }
+  function setNightMode(mode) {
+    if (['auto', 'light', 'dark', 'schedule'].indexOf(mode) < 0) return false;
+    /* An explicit pick takes this window over from the boot pin -- release BEFORE the
+     * no-op shortcut below, because "already auto + pinned dark" is precisely the case
+     * where the user sees nothing happen (pin keeps painting dark) yet mode is unchanged. */
+    releasePin();
+    var was = (state.night && state.night.mode) || 'auto';
+    if (was === mode) { applyAll(false); return true; }
+    state.night.mode = mode;
+    save(); applyAll(true); syncAllMounts();
+    bcn('theme_set_' + mode);
+    if (was === 'schedule') toast(T('ap.sched_exit'));
+    return true;
+  }
+  function cycleNight() {
+    var order = ['auto', 'light', 'dark'];
+    var cur = (state.night && state.night.mode) || 'auto';
+    /* schedule counts as position -1 -> next click lands on 'auto' (leaving the
+     * special mode toward the default, with an explicit exit toast) */
+    var next = order[(order.indexOf(cur) + 1) % order.length];
+    setNightMode(next);
+    return next;
+  }
+
   /* ---- public API ---- */
   window.WSAppearance = {
     open: openPop,
     close: closePop,
     mount: function (host, opts) { renderInto(host, opts || {}); },
     get: function () { return clone(state); },
+    setNightMode: setNightMode,
+    cycleNight: cycleNight,
     applyAll: applyAll,
+    _bcn: bcn,          /* 快捷面板内联 onclick 消费（theme_ 埋点），别删 */
     _bundles: BUNDLES,
     _walls: WALLS
   };

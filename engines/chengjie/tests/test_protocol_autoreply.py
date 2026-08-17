@@ -30,8 +30,10 @@ def _row(auto_reply=True, persona_id="zjg"):
 @pytest.fixture(autouse=True)
 def _clear_state():
     pa._last_reply.clear()
+    pa._last_sent.clear()
     yield
     pa._last_reply.clear()
+    pa._last_sent.clear()
 
 
 def _make_send(sink):

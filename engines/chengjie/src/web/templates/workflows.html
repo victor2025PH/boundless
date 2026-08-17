@@ -69,7 +69,7 @@
   [data-theme="dark"] .wf-wrap .badge-failed,[data-cp-theme="dark"] .wf-wrap .badge-failed{background:rgba(248,81,73,.16);color:#f26d5f;}
   [data-theme="dark"] .wf-wrap .badge-chain,[data-cp-theme="dark"] .wf-wrap .badge-chain{background:rgba(127,86,217,.22);color:#c4a7f7;}
   [data-theme="dark"] .wf-wrap .badge-note,[data-cp-theme="dark"] .wf-wrap .badge-note{background:rgba(20,120,110,.22);color:#4dd4c0;}
-  [data-theme="dark"] .wf-wrap .badge-cancelled,[data-cp-theme="dark"] .wf-wrap .badge-cancelled{background:rgba(148,163,184,.14);color:#94a3b8;}
+  [data-theme="dark"] .wf-wrap .badge-cancelled,[data-cp-theme="dark"] .wf-wrap .badge-cancelled{background:rgba(148,163,184,.14);color:var(--th-ink-slate4,#5b6b85);}
   [data-theme="dark"] .wf-wrap .cond-tag,[data-cp-theme="dark"] .wf-wrap .cond-tag{background:rgba(99,102,241,.18);color:#a5b4fc;}
   .exec-step-mini{display:flex;gap:2px;margin-top:4px;}
   .exec-step-dot{width:8px;height:8px;border-radius:50%;background:var(--wf-dot);}
@@ -133,6 +133,11 @@
     <span>⚡ {{ (i18n or {}).get('wf_s001', "工作流管理") }}</span>
     <button class="btn-sm" id="wf-tour-btn" onclick="WF.startTour()">{{ (i18n or {}).get('wf_tour_replay', "▶ 播放引导") }}</button>
   </h2>
+  <!-- P0 2026-08-12 定位说明（认知对齐）：SOP=按时提醒坐席的跟进节奏表，不是自动
+       外发机器人——「启动了客户怎么没收到消息」的期待错位在入口处就说清楚 -->
+  <div style="margin:-8px 0 14px;font-size:12.5px;color:var(--wf-ink-mut);line-height:1.6;">
+    {{ (i18n or {}).get('wf_mode_hint', "跟进 SOP 到点提醒坐席该做什么（工作台弹提示 + 会话右栏 SOP 卡一键转拟稿），不会自动替坐席给客户发消息；建任务/打标签/内部备注类步骤自动执行。") }}
+  </div>
 
   <!-- P2 价值条：近 14 天 SOP 战绩前置（数据=chain-funnel，与监控 tab 同源缓存；
        零启动记录整条隐藏——不给空账面撑门面） -->
@@ -155,99 +160,10 @@
   <div class="wf-tabs">
     <div class="wf-tab active" data-tab="chains" onclick="WF.tab('chains')">🔗 {{ (i18n or {}).get('wf_s003', "工作链") }}</div>
     <div class="wf-tab" data-tab="monitor" onclick="WF.tab('monitor')">📊 {{ (i18n or {}).get('wf_s006', "执行监控") }}</div>
-    <div class="wf-tab" data-tab="actions" onclick="WF.tab('actions')">💡 {{ (i18n or {}).get('wf_s002', "自定义动作") }}</div>
     <div class="wf-tab" data-tab="routing" onclick="WF.tab('routing')">🔀 {{ (i18n or {}).get('wf_s004', "分流路由") }}</div>
   </div>
 
-  <!-- ── 自定义动作 ── -->
-  <div id="panel-actions" class="wf-panel">
-    <div class="wf-section">
-      <h3>💡 {{ (i18n or {}).get('wf_s007', "自定义动作库") }}
-        <button class="btn-sm btn-primary" onclick="WF.showActionForm()">+ {{ (i18n or {}).get('wf_s008', "新建动作") }}</button>
-      </h3>
-      <table class="wf-table">
-        <thead>
-          <tr><th>{{ (i18n or {}).get('wf_s009', "图标") }}</th><th>{{ (i18n or {}).get('dash.ws.col_name', "名称") }}</th><th>{{ (i18n or {}).get('msg_js_1042', "类型") }}</th><th>{{ (i18n or {}).get('wa_s107', "触发条件") }}</th><th>{{ (i18n or {}).get('lr_s013', "排序") }}</th><th>{{ (i18n or {}).get('enable', "启用") }}</th><th>{{ (i18n or {}).get('ov_js_th_action', "操作") }}</th></tr>
-        </thead>
-        <tbody id="actions-tbody">
-          <tr><td colspan="7" class="wf-empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</td></tr>
-        </tbody>
-      </table>
-    </div>
-
-    <!-- 动作表单 -->
-    <div class="wf-section" id="action-form-wrap" style="display:none;">
-      <h3 id="action-form-title">{{ (i18n or {}).get('wf_s008', "新建动作") }}</h3>
-      <div class="form-row">
-        <div class="form-col" style="flex:0 0 60px;"><label>{{ (i18n or {}).get('wf_s009', "图标") }}</label><input id="af-icon" value="💡" style="text-align:center;font-size:18px;"></div>
-        <div class="form-col"><label>{{ (i18n or {}).get('wf_s010', "动作名称") }} *</label><input id="af-name" placeholder="{{ (i18n or {}).get('wf_s011', '例：情感安抚话术') }}"></div>
-        <div class="form-col" style="flex:0 0 140px;">
-          <label>{{ (i18n or {}).get('wf_s012', "动作类型") }}</label>
-          <select id="af-type" onchange="WF.onTypeChange()">
-            <option value="template">{{ (i18n or {}).get('templates', "话术模板") }}</option>
-            <option value="task">{{ (i18n or {}).get('wf_s013', "创建任务") }}</option>
-            <option value="tag">{{ (i18n or {}).get('wf_s014', "添加标签") }}</option>
-            <option value="note">{{ (i18n or {}).get('wf_s015', "内部备注") }}</option>
-            <option value="escalate">{{ (i18n or {}).get('wf_s016', "升级人工") }}</option>
-            <option value="chain">{{ (i18n or {}).get('wf_s017', "触发工作链") }}</option>
-          </select>
-        </div>
-        <div class="form-col" style="flex:0 0 80px;"><label>{{ (i18n or {}).get('wf_s018', "排序（小在前）") }}</label><input id="af-order" type="number" value="0" min="0"></div>
-      </div>
-      <!-- 类型相关配置 -->
-      <div id="af-config-template" class="form-row">
-        <div class="form-col" style="flex:1;">
-          <label>{{ (i18n or {}).get('wf_s019', "话术内容（发送时直接填入输入框）") }}</label>
-          <textarea id="af-tpl-text" rows="3" placeholder="{{ (i18n or {}).get('wf_s020', '输入话术内容…') }}"></textarea>
-        </div>
-        <div class="form-col">
-          <label>{{ (i18n or {}).get('wf_s021', "操作提示（仅坐席可见）") }}</label>
-          <input id="af-hint" placeholder="{{ (i18n or {}).get('wf_s022', '例：情绪低落时使用') }}">
-        </div>
-      </div>
-      <div id="af-config-task" class="form-row" style="display:none;">
-        <div class="form-col"><label>{{ (i18n or {}).get('wf_s023', "任务说明") }}</label><input id="af-task-note" placeholder="{{ (i18n or {}).get('wf_s024', '跟进事项描述') }}"></div>
-        <div class="form-col" style="flex:0 0 130px;"><label>{{ (i18n or {}).get('wf_s025', "到期时长（小时）") }}</label><input id="af-task-due" type="number" value="72" min="1"></div>
-      </div>
-      <div id="af-config-tag" class="form-row" style="display:none;">
-        <div class="form-col"><label>{{ (i18n or {}).get('wf_s026', "标签选项（英文逗号分隔，多个让坐席选）") }}</label><input id="af-tag-opts" placeholder="{{ (i18n or {}).get('wf_s027', '情绪低落') }},{{ (i18n or {}).get('wf_s028', '需要关注') }},{{ (i18n or {}).get('wf_s029', '积极开朗') }}"></div>
-      </div>
-      <div id="af-config-note" class="form-row" style="display:none;">
-        <div class="form-col"><label>{{ (i18n or {}).get('wf_s030', "备注提示") }}</label><input id="af-note-hint" placeholder="{{ (i18n or {}).get('wf_s031', '提示坐席填写内容') }}"></div>
-      </div>
-      <div id="af-config-escalate" class="form-row" style="display:none;">
-        <div class="form-col"><label>{{ (i18n or {}).get('wf_s032', "升级原因（内部记录）") }}</label><input id="af-esc-reason" placeholder="{{ (i18n or {}).get('wf_s033', '例：高风险情绪干预') }}"></div>
-      </div>
-      <div id="af-config-chain" class="form-row" style="display:none;">
-        <div class="form-col"><label>{{ (i18n or {}).get('wf_s034', "工作链 ID（从") }} "{{ (i18n or {}).get('wf_s035', "工作链") }}" {{ (i18n or {}).get('wf_s036', "面板复制）") }}</label><input id="af-chain-id" placeholder="chain_id"></div>
-      </div>
-      <div class="form-row">
-        <div class="form-col">
-          <label>{{ (i18n or {}).get('wf_s037', "触发信号（多选，决定 AI 是否推荐此动作）") }}</label>
-          <div id="af-triggers" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;">
-            <label class="cond-tag"><input type="checkbox" value="any" checked> {{ (i18n or {}).get('wf_s038', "任意场景") }}</label>
-            <label class="cond-tag"><input type="checkbox" value="sentiment_negative"> {{ (i18n or {}).get('wf_s039', "情绪负面") }}</label>
-            <label class="cond-tag"><input type="checkbox" value="silent_3d"> {{ (i18n or {}).get('wf_s040', "沉默3天") }}</label>
-            <label class="cond-tag"><input type="checkbox" value="silent_7d"> {{ (i18n or {}).get('wf_s041', "沉默7天") }}</label>
-            <label class="cond-tag"><input type="checkbox" value="complaint"> {{ (i18n or {}).get('tm_s008', "投诉") }}</label>
-            <label class="cond-tag"><input type="checkbox" value="churn_intent"> {{ (i18n or {}).get('rh_js022', "流失风险") }}</label>
-            <label class="cond-tag"><input type="checkbox" value="churn_intent_high"> {{ (i18n or {}).get('wf_s042', "高流失") }}</label>
-            <label class="cond-tag"><input type="checkbox" value="crisis_signal"> {{ (i18n or {}).get('wf_s043', "危机信号") }}</label>
-            <label class="cond-tag"><input type="checkbox" value="long_conversation"> {{ (i18n or {}).get('wf_s044', "长对话") }}</label>
-            <label class="cond-tag"><input type="checkbox" value="high_engagement"> {{ (i18n or {}).get('wf_s045', "活跃互动") }}</label>
-            <label class="cond-tag"><input type="checkbox" value="intimacy_growing"> {{ (i18n or {}).get('wf_s046', "亲密度成长") }}</label>
-            <label class="cond-tag"><input type="checkbox" value="conversation_closing"> {{ (i18n or {}).get('wf_s047', "即将结束") }}</label>
-          </div>
-        </div>
-      </div>
-      <input type="hidden" id="af-id">
-      <div style="display:flex;gap:8px;margin-top:8px;">
-        <button class="btn-sm btn-primary" onclick="WF.saveAction()">{{ (i18n or {}).get('wf_s048', "保存动作") }}</button>
-        <button class="btn-sm" onclick="WF.cancelForm()">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
-        <span id="af-msg" style="font-size:12px;margin-left:8px;align-self:center;"></span>
-      </div>
-    </div>
-  </div>
+  <!-- （原「自定义动作」tab 已于 2026-08-14 随「AI 下一步」面板整体下线。） -->
 
   <!-- ── 工作链 ── -->
   <div id="panel-chains" class="wf-panel active">
@@ -265,6 +181,21 @@
       <h3 id="chain-form-title">{{ (i18n or {}).get('wf_s050', "新建工作链") }}</h3>
       <div class="form-row">
         <div class="form-col"><label>{{ (i18n or {}).get('wf_s051', "工作链名称") }} *</label><input id="cf-name" placeholder="{{ (i18n or {}).get('wf_s052', '例：沉默客户挽回流程') }}"></div>
+      </div>
+      <!-- P2 2026-08-13 执行档位：remind=到点提醒坐席（默认）/ auto=话术步自动拟稿
+           投料给既有 autosend 管线（需全局 inbox.workflows.auto_advance.enabled +
+           会话为全自动档，四重闸在引擎侧；这里只是链级意愿声明） -->
+      <div class="form-row" style="background:var(--wf-surface-2);border:1px solid var(--wf-bd);border-radius:8px;padding:10px 12px;margin-bottom:12px;">
+        <div class="form-col" style="flex:0 0 200px;">
+          <label>{{ (i18n or {}).get('wf_exec_mode_label', "执行档位") }}</label>
+          <select id="cf-exec-mode">
+            <option value="remind">{{ (i18n or {}).get('wf_exec_mode_remind', "提醒坐席（默认）") }}</option>
+            <option value="auto">{{ (i18n or {}).get('wf_exec_mode_auto', "自动推进（AI 拟稿自动发）") }}</option>
+          </select>
+        </div>
+        <div class="form-col" style="font-size:11px;color:var(--wf-ink-mut);align-self:center;">
+          {{ (i18n or {}).get('wf_exec_mode_hint', "自动推进仅对「话术」步生效，且需系统开启 auto_advance 开关 + 会话处于全自动档；静默时段顺延，生成失败自动降级为提醒。建任务/打标签/备注步两档都自动执行。") }}
+        </div>
       </div>
       <div class="form-row" style="background:var(--wf-surface-2);border:1px solid var(--wf-bd);border-radius:8px;padding:10px 12px;margin-bottom:12px;">
         <div class="form-col" style="flex:0 0 160px;">
@@ -408,106 +339,7 @@ window.WF={
   }
 };
 
-// ── 自定义动作 ──────────────────────────────────────────────────────────────
-var _editingActionId=null;
-var _TYPE_LABELS={template:window.T('templates'),task:window.T('wf_s013'),tag:window.T('wf_s014'),note:window.T('wf_s015'),escalate:window.T('wf_s016'),chain:window.T('wf_s017')};
-var _TYPE_BADGE={template:'badge-template',task:'badge-task',tag:'badge-tag',note:'badge-note',escalate:'badge-escalate',chain:'badge-chain'};
-
-WF.loadActions=function(){
-  apiFetch('/api/workspace/workflow-actions').then(function(r){return r.json();}).then(function(d){
-    var tbody=document.getElementById('actions-tbody');
-    var acts=d.actions||[];
-    if(!acts.length){tbody.innerHTML='<tr><td colspan="7" class="wf-empty">'+window.T('wf_js001')+' — '+window.T('dash.q.clicked')+' "'+window.T('wf_js002')+'" '+window.T('wf_js003')+'</td></tr>';return;}
-    tbody.innerHTML=acts.map(function(a){
-      var conds=[];try{conds=JSON.parse(a.trigger_conditions||'[]');}catch(_){}
-      return '<tr>'
-        +'<td style="font-size:18px;text-align:center;">'+esc(a.icon||'💡')+'</td>'
-        +'<td><strong>'+esc(a.name)+'</strong></td>'
-        +'<td><span class="badge '+(_TYPE_BADGE[a.action_type]||'')+'">'+(esc(_TYPE_LABELS[a.action_type]||a.action_type))+'</span></td>'
-        +'<td style="font-size:11px;">'+conds.map(function(c){return '<span class="cond-tag">'+esc(c)+'</span>';}).join('')+'</td>'
-        +'<td>'+a.sort_order+'</td>'
-        +'<td><label class="toggle-sw"><input type="checkbox"'+(a.enabled?'checked':'')
-          +' onchange="WF.toggleAction(\''+esc(a.action_id)+'\',this.checked)"><span class="toggle-slider"></span></label></td>'
-        +'<td><button class="btn-sm" onclick="WF.editAction(\''+esc(a.action_id)+'\')">'+window.T('edit')+'</button> '
-          +'<button class="btn-sm btn-danger" onclick="WF.delAction(\''+esc(a.action_id)+'\')">'+window.T('delete')+'</button></td>'
-        +'</tr>';
-    }).join('');
-  }).catch(function(){});
-};
-WF.showActionForm=function(act){
-  _editingActionId=act?act.action_id:null;
-  document.getElementById('action-form-title').textContent=act?window.T('wf_js004'):window.T('wf_s008');
-  document.getElementById('af-id').value=act?act.action_id:'';
-  document.getElementById('af-icon').value=act?act.icon:'💡';
-  document.getElementById('af-name').value=act?act.name:'';
-  document.getElementById('af-type').value=act?act.action_type:'template';
-  document.getElementById('af-order').value=act?act.sort_order:0;
-  var cfg=act?act.config:{};
-  document.getElementById('af-tpl-text').value=cfg.template_text||'';
-  document.getElementById('af-hint').value=cfg.hint||'';
-  document.getElementById('af-task-note').value=cfg.note||'';
-  document.getElementById('af-task-due').value=cfg.due_hours||72;
-  document.getElementById('af-tag-opts').value=(cfg.tag_options||[cfg.tag]).filter(Boolean).join(',');
-  document.getElementById('af-note-hint').value=cfg.hint||'';
-  document.getElementById('af-esc-reason').value=cfg.reason||'';
-  document.getElementById('af-chain-id').value=cfg.chain_id||'';
-  // 触发条件
-  var conds=act?JSON.parse(act.trigger_conditions||'["any"]'):['any'];
-  document.querySelectorAll('#af-triggers input').forEach(function(cb){cb.checked=conds.indexOf(cb.value)>=0;});
-  WF.onTypeChange();
-  document.getElementById('action-form-wrap').style.display='block';
-  document.getElementById('action-form-wrap').scrollIntoView({behavior:'smooth'});
-};
-WF.onTypeChange=function(){
-  var t=document.getElementById('af-type').value;
-  ['template','task','tag','note','escalate','chain'].forEach(function(s){
-    document.getElementById('af-config-'+s).style.display=s===t?'flex':'none';
-  });
-};
-WF.editAction=function(id){
-  apiFetch('/api/workspace/workflow-actions').then(function(r){return r.json();}).then(function(d){
-    var act=(d.actions||[]).find(function(a){return a.action_id===id;});
-    if(act)WF.showActionForm(act);
-  });
-};
-WF.cancelForm=function(){document.getElementById('action-form-wrap').style.display='none';};
-WF.saveAction=function(){
-  var t=document.getElementById('af-type').value;
-  var cfg={};
-  if(t==='template'){cfg.template_text=document.getElementById('af-tpl-text').value;cfg.hint=document.getElementById('af-hint').value;}
-  else if(t==='task'){cfg.note=document.getElementById('af-task-note').value;cfg.due_hours=Number(document.getElementById('af-task-due').value);}
-  else if(t==='tag'){var opts=document.getElementById('af-tag-opts').value.split(',').map(function(x){return x.trim();}).filter(Boolean);cfg.tag_options=opts;if(opts.length===1)cfg.tag=opts[0];}
-  else if(t==='note'){cfg.hint=document.getElementById('af-note-hint').value;}
-  else if(t==='escalate'){cfg.reason=document.getElementById('af-esc-reason').value;}
-  else if(t==='chain'){cfg.chain_id=document.getElementById('af-chain-id').value;}
-  var conds=Array.from(document.querySelectorAll('#af-triggers input:checked')).map(function(cb){return cb.value;});
-  var data={
-    action_id:document.getElementById('af-id').value||undefined,
-    icon:document.getElementById('af-icon').value||'💡',
-    name:document.getElementById('af-name').value.trim(),
-    action_type:t, config:cfg,
-    sort_order:Number(document.getElementById('af-order').value)||0,
-    enabled:1,
-    trigger_conditions:JSON.stringify(conds.length?conds:['any']),
-  };
-  if(!data.name){document.getElementById('af-msg').textContent=window.T('psn_js_137');document.getElementById('af-msg').style.color='var(--wf-err)';return;}
-  var url=data.action_id?'/api/workspace/workflow-actions/'+encodeURIComponent(data.action_id):'/api/workspace/workflow-actions';
-  var method=data.action_id?'PUT':'POST';
-  apiFetch(url,{method:method,headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}, {timeoutMs: 60000})
-    .then(function(r){return r.json();}).then(function(d){
-      if(d.ok){document.getElementById('af-msg').textContent=window.T('wa_js_053');document.getElementById('af-msg').style.color='var(--wf-ok)';WF.loadActions();setTimeout(function(){WF.cancelForm();},1000);}
-      else{document.getElementById('af-msg').textContent=window.T('ov_js_save_fail');document.getElementById('af-msg').style.color='var(--wf-err)';}
-    });
-};
-WF.toggleAction=function(id,enabled){
-  apiFetch('/api/workspace/workflow-actions/'+encodeURIComponent(id),{method:'PUT',
-    headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:enabled?1:0})}, {timeoutMs: 60000});
-};
-WF.delAction=function(id){
-  if(!confirm(window.T('wf_js005')))return;
-  apiFetch('/api/workspace/workflow-actions/'+encodeURIComponent(id),{method:'DELETE'}, {timeoutMs: 60000})
-    .then(function(){WF.loadActions();});
-};
+// （原「自定义动作」tab 的 CRUD/预览 JS 已于 2026-08-14 随「AI 下一步」面板整体下线。）
 
 // ── 工作链 ──────────────────────────────────────────────────────────────────
 var _chainSteps=[];
@@ -545,6 +377,7 @@ WF.loadChains=function(){
         return '<div class="wf-chain-card'+(on?'':' off')+'">'
           +'<div class="wf-chain-hd">'
             +'<strong class="wf-chain-nm" title="ID: '+esc(c.chain_id)+'">🔗 '+esc(c.name)+'</strong>'
+            +(c.exec_mode==='auto'?'<span class="wf-run-pill" title="'+window.T('wf_exec_mode_hint')+'">⚡ '+window.T('wf_chain_auto_badge')+'</span>':'')
             +(running?'<span class="wf-run-pill">'+window.Tf('wf_chain_running_n',{n:running})+'</span>':'')
             +replyPill
             +(on?'':'<span class="badge badge-cancelled">'+window.T('wf_chain_disabled')+'</span>')
@@ -599,6 +432,8 @@ WF.showChainForm=function(chain){
   var tc=chain?(chain.trigger_conditions||{}):{};
   document.getElementById('cf-silence-days').value=tc.silence_days||0;
   document.getElementById('cf-churn-high').checked=!!tc.churn_risk_high;
+  var _em=document.getElementById('cf-exec-mode');
+  if(_em)_em.value=(chain&&chain.exec_mode==='auto')?'auto':'remind';
   document.getElementById('chain-form-title').textContent=chain?window.T('wf_js010'):window.T('wf_s050');
   WF.renderSteps();
   document.getElementById('chain-form-wrap').style.display='block';
@@ -620,7 +455,11 @@ WF.renderSteps=function(){
           +'type="number" min="0" placeholder="'+window.T('wf_js009')+'(h)" value="'+(s.delay_hours||0)+'" oninput="_stepField('+i+',\'delay_hours\',Number(this.value))">'
         +'<button class="btn-sm btn-danger" onclick="_delStep('+i+')">×</button>'
       +'</div></div>';
-  }).join('');
+  }).join('')
+  /* P0 2026-08-12：delay_hours 语义按引擎真实行为写死在编辑器旁——「延迟=距上一步
+     完成后等待多久执行本步；首步的延迟从启动时刻起算」。此前占位符只写「延迟(h)」，
+     种子注释与引擎实现的表述又不一致，运营配错节奏只能靠猜。 */
+  +'<div style="font-size:11.5px;color:var(--th-ink-slate5,#64748b);padding:4px 2px 0;">'+window.T('wf_delay_hint')+'</div>';
 };
 window._stepField=function(i,k,v){_chainSteps[i][k]=v;};
 window._delStep=function(i){_chainSteps.splice(i,1);WF.renderSteps();};
@@ -641,6 +480,8 @@ WF.saveChain=function(){
   if(silenceDays>0)trigger.silence_days=silenceDays;
   if(churnHigh)trigger.churn_risk_high=true;
   var data={chain_id:document.getElementById('cf-id').value||undefined,name:name,steps:_chainSteps,trigger_conditions:trigger};
+  var _emEl=document.getElementById('cf-exec-mode');
+  data.exec_mode=(_emEl&&_emEl.value==='auto')?'auto':'remind';
   // 保存必须回传当前 enabled（upsert 缺省按 True——否则编辑一条已停用的链会把它悄悄启用）
   var _cur=data.chain_id?(_chainsCache||[]).find(function(x){return x.chain_id===data.chain_id;}):null;
   if(_cur&&_cur.enabled!==undefined)data.enabled=_cur.enabled?1:0;
@@ -942,7 +783,7 @@ WF.startTour=function(){
 };
 
 // ── 初始加载：默认落「工作链」；#hash 深链 > 上次停留 > 默认 ────────────────
-var _TABS=['actions','chains','routing','monitor'];
+var _TABS=['chains','routing','monitor'];
 var _initTab='chains';
 try{
   var _h=(location.hash||'').replace('#','');

@@ -216,7 +216,7 @@ ok("无深链但有码仍算成功",
 // ── 漏斗事件白名单：与后端 trial_claim_client.FUNNEL_EVENTS 同口径 ──
 //   first-run.js 只从这张表取名——拼错事件名在这里就红，而不是线上数据悄悄丢。
 ok("漏斗事件表齐全", FR_FUNNEL_EVENTS.join(",")
-  === "welcome,claim_submit,claim_ok,claim_skip,gift_open,done");
+  === "welcome,claim_submit,claim_ok,claim_skip,gift_open,done,invite_share");
 ok("漏斗事件名全小写下划线", FR_FUNNEL_EVENTS.every(function (e) {
   return /^[a-z_]+$/.test(e);
 }));

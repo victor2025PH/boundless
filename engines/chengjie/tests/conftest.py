@@ -472,6 +472,28 @@ def _isolated_audit_stores(tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_sticker_store(tmp_path):
+    """表情包存储隔离（2026-08-17，防以后）：sticker_store 的默认 DB 是 CWD 相对
+    ``config/sticker_packs.db``（pytest cwd＝引擎根 → 会写进仓库 config/），落盘根
+    默认在仓库 ``src/web/static/sticker_packs``。与 intent_tags 兜底同款哲学：
+    模块**已被导入**时重定向单例到 tmp/:memory:，用完还原——自设隔离的用例
+    （test_sticker_routes 自己 configure）晚于本处生效，不受影响。"""
+    import sys
+    mod = sys.modules.get("src.inbox.sticker_store")
+    if mod is not None:
+        mod.reset_sticker_store()
+        mod.configure_sticker_store(":memory:")
+        mod.configure_sticker_root(tmp_path / "_t_sticker_packs")
+    try:
+        yield
+    finally:
+        mod = sys.modules.get("src.inbox.sticker_store")
+        if mod is not None:
+            mod.reset_sticker_store()
+            mod.configure_sticker_root(None)
+
+
+@pytest.fixture(autouse=True)
 def _isolated_global_rules(tmp_path):
     """把 ``PersonaManager`` 的 global_rules 落盘路径重定向到每测试独立临时文件。
 

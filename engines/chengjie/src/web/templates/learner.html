@@ -6,6 +6,8 @@
   <div>
     <h1 class="page-title">{{ (i18n or {}).get('lr_s002', "智能学习") }}</h1>
     <p class="page-desc">{{ (i18n or {}).get('lr_s003', "自动收集未命中问题") }} → AI {{ (i18n or {}).get('lr_s004', "生成知识草稿") }} → {{ (i18n or {}).get('lr_s005', "人工审核入库") }}</p>
+    <!-- 页面定位互跳（融合 P1）：一句话讲清与案例跟进的分工，治「两个队列分不清」 -->
+    <p class="page-desc" style="margin-top:.15rem;font-size:.76rem;color:var(--t3)">{{ (i18n or {}).get('lr2_pos_body', "本页教 AI 下次答得更好（审核通过的知识影响未来所有会话）；需要人现在接手的风险会话在") }} <a href="/cases" style="color:var(--p);font-weight:600;text-decoration:none">{{ (i18n or {}).get('lr2_pos_link', "案例跟进") }} →</a></p>
   </div>
   <div style="display:flex;gap:.5rem">
     <button class="btn btn-outline" onclick="loadDrafts()" data-help="btn_refresh">
@@ -185,6 +187,9 @@
 .dup-warn .dup-score{font-size:.72rem;color:var(--t3);margin-left:.3rem}
 .dup-recheck{background:none;border:1px solid var(--bd);border-radius:4px;font-size:.7rem;padding:.15rem .4rem;cursor:pointer;color:var(--t3);margin-left:auto}
 .dup-recheck:hover{border-color:var(--p);color:var(--p)}
+/* 融合 P2：草稿溯源徽章（来源案例/会话） */
+.src-ref{display:inline-flex;align-items:center;font-size:.68rem;padding:.1rem .4rem;border-radius:4px;background:var(--ps);color:var(--p);text-decoration:none;flex-shrink:0;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+a.src-ref:hover{text-decoration:underline}
 </style>
 
 <script>
@@ -227,13 +232,51 @@ function _renderStatusbar(d){
   }else if(d.available===true){
     html+='<div style="color:var(--t3)">'+window.T('lr2_status_never')+'</div>';
   }
+  /* 融合 P2 效果回访行：入库条目近 7 天真实命中（kb_query_log 只读对账）。
+     旧后端无 effect_7d 字段 → 整行不出，零猜测。 */
+  const eff=d.effect_7d;
+  if(eff&&Number(eff.approved_n||0)>0){
+    let effHtml='<b>📈</b> '+window.Tf('lr2_effect_line',{n:eff.approved_n,h:eff.total_hits||0});
+    const tops=(eff.entries||[]).filter(function(x){return Number(x.hits||0)>0;}).slice(0,3);
+    if(tops.length){
+      effHtml+=' · '+tops.map(function(x){return '「'+esc(String(x.title||''))+'」×'+x.hits;}).join(' / ');
+    }
+    html+='<div style="color:var(--t2)">'+effHtml+'</div>';
+  }
+  /* 融合 P3 零命中淘汰建议：入库 ≥3 天、检索日志全窗零命中 → 点名（链到知识库
+     条目自行改词/停用——本页只出建议不做第二个 KB 写入口）。日志不可查时后端
+     返回空数组，本段自然不出。 */
+  const zh=(eff&&eff.zero_hit)||[];
+  if(zh.length){
+    let zHtml='<b>🧹</b> '+window.Tf('lr2_effect_zero',{n:zh.length})+' · '
+      +zh.slice(0,3).map(function(x){
+        return '<a href="/knowledge#entry-'+encodeURIComponent(String(x.entry_id||''))+'" target="_blank" style="color:var(--amber)">「'+esc(String(x.title||''))+'」</a>';
+      }).join(' / ');
+    html+='<div style="color:var(--t3)">'+zHtml+'</div>';
+  }
   if(html){bar.innerHTML=html;bar.style.display='';}
   else{bar.style.display='none';}
 }
 
+/* 融合 P2 溯源徽章：source_ref='case:案号' 链到案例页 / 'conv:会话id' 链到工作台，
+   其他原样文本。运行时由 renderDrafts 模板串调用（非内联 handler，无需挂 window）。 */
+function _srcRefHtml(ref){
+  ref=String(ref||'');
+  if(!ref)return '';
+  const label=window.T('lr2_src_ref');
+  if(ref.indexOf('case:')===0){
+    return '<a class="src-ref" href="/cases" title="'+label+'">🔗 '+esc(ref.slice(5))+'</a>';
+  }
+  if(ref.indexOf('conv:')===0){
+    return '<a class="src-ref" href="/workspace?conv='+encodeURIComponent(ref.slice(5))+'" target="_blank" title="'+label+'">🔗 '+esc(ref.slice(5))+'</a>';
+  }
+  return '<span class="src-ref" title="'+label+'">'+esc(ref)+'</span>';
+}
+
 async function loadStats(){
   try{
-    const r=await apiFetch('/api/learner/stats');
+    /* ?effect=1（融合 P2）：只有本页要效果回访段；徽标/待办条走轻量 stats */
+    const r=await apiFetch('/api/learner/stats?effect=1');
     const d=await r.json();
     window.__learnerStats=d;
     if(d&&d.error&&d.available!==true){
@@ -304,6 +347,7 @@ function renderDrafts(drafts){
         <span class="draft-source source-${d.source}">${src}</span>
         <span class="draft-query">${esc(d.query)}</span>
         <span class="draft-count">${d.hit_count}${window.T('kb_js_174')}</span>
+        ${d.source_ref?_srcRefHtml(d.source_ref):''}
         <span class="conf-badge ${confCls}" title="AI${window.T('lr_s015')}">${confLabel} ${conf}</span>
         ${d.dup_score>0?'<span class="dup-badge" title="'+window.T('lr_js010')+'">⚠ '+window.T('lr_s012')+' '+Math.round(d.dup_score*100)+'%</span>':''}
         ${d.status!=='pending'?'<span class="status-badge status-'+d.status+'">'+(d.status==='approved'?window.T('msg_js_1928'):window.T('draft.tab.rejected'))+'</span>':''}

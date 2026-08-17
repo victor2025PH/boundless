@@ -93,7 +93,16 @@ _INLINE_COLOR_CEILINGS = {
     "_channel_body_whatsapp.html": 8,
     # workflows.html：2026-08-09 暗色收口（页内 --wf-* 变量 + 双开关暗段）随手清掉
     # 最后一处内联 #f8fafc → 0，除名
-    "workspace_base.html": 4,   # 2026-07-29：AI 引导/试用横幅+升级弹窗色彩层已抽类（ws-aiguide-*/ws-aitrial-*/ws-upsell-*）
+    # workspace_base：2026-07-29 抽类后定 4；后加的配额墙弹窗 2×color:#fff 顶爆到 6
+    # 红了 24h+ 无人认领。2026-08-12 清账：#fff→--th-ink-inverse（映射表口径）、
+    # 搜索框白透明玻璃态→color-mix(var(--th-ink-inverse))；余 3 处刻意留台账＝
+    # gs-panel 阴影（box-shadow 主题无关，工具方针豁免映射）+ 维护窗/信息横幅
+    # 渐变端点色×2（深底常量，精确 token 不在映射表；token 化需动 codemod 单源，
+    # 归属后续暗色收口批）。
+    # 2026-08-17 3→4 登记（msgops 线代记，HEAD diff 归因）：+1 横幅动作按钮
+    # 白透明描边/底（rgba(255,255,255,.5)，深色渐变横幅上的常量白，与上行
+    # 「渐变端点色」同判据；owner=横幅线，token 化随暗色收口批一并）。
+    "workspace_base.html": 4,
     "workspace_dashboard.html": 4,  # 2026-07-30 品牌收口：当前行高亮 → color-mix(var(--tk-brand))
     # workspace_usage.html：2026-07-30 品牌收口把图例点 #93c5fd → var(--bl-growth-300) → 0，除名
 }

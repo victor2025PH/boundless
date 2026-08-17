@@ -129,4 +129,23 @@ ok("200 不断言", asserts(200) === false);
   ok(`${s} 给重试且不断言`, acts(s, "").indexOf("fail-retry") >= 0 && asserts(s) === false);
 });
 
+// ── 身份色盘 ≡ 宿主 _acctColor('persona:'+pid)（跨区域同色不变量）──
+ok("discColor 挂在类上", typeof Cls.discColor === "function");
+ok("listRank 挂在类上", typeof Cls.listRank === "function");
+function hostAcctColor(aid) {
+  const PAL = ["#3b82f6", "#06b6d4", "#10b981", "#6366f1",
+    "#0ea5e9", "#14b8a6", "#8b5cf6", "#f59e0b"];
+  const s = String(aid || "default");
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return PAL[h % PAL.length];
+}
+["lin_xiaoyu", "qingzi", "marcus_wei", ""].forEach((pid) => {
+  eq(`discColor(${pid || "empty"}) ≡ host`, Cls.discColor(pid), hostAcctColor("persona:" + pid));
+});
+eq("listRank 生效=0", Cls.listRank("a", "a", "b"), 0);
+eq("listRank 账号=1", Cls.listRank("b", "a", "b"), 1);
+eq("listRank 其余=2", Cls.listRank("c", "a", "b"), 2);
+eq("listRank 空 id 不误判生效", Cls.listRank("", "", ""), 2);
+
 console.log(`cp-persona-failtype.test.js: ${pass} passed`);

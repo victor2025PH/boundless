@@ -18,7 +18,9 @@ import json
 import re
 from typing import Any, Dict, Optional
 
-APPEARANCE_MAX_BYTES = 2048
+# 4096（2026-08-17 Dock P3 由 2048 上调）：appearance JSON 列现在还承载 dock_order
+# 子键（账号坞自定义排序，见 sanitize_dock_order）——多平台多账号 id 会把 blob 撑过旧限。
+APPEARANCE_MAX_BYTES = 4096
 
 _HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 _THEMES = {"brand", "aurora", "starry", "sunset", "graphite", "sakura", "custom"}
@@ -26,6 +28,53 @@ _WALLS = {"flat", "mist", "night", "dusk", "dots"}
 _NIGHT_MODES = {"auto", "light", "dark", "schedule"}
 _RADII = {8, 12, 16, 20}
 _FS_MIN, _FS_MAX = 13, 16
+
+# ---- Dock P3：账号坞自定义排序（dock_order 子键）----------------------------
+# 形状 {"ts": epoch_ms, "plats": {"telegram": ["8244899900", ...], ...}}。
+# 落在 appearance 同一 JSON 列（零迁移零新列）；appearance.js 的整状态推送不带
+# 此键 → 路由层负责从库里已存值 carry-over（见 workspace_prefs 路由），这里只管
+# 「进来的 dock_order 是否值域封闭」。id 集合刻意宽字符集：TG 数字 / LINE U 开头
+# base64ish / 自定义别名都要装得下，但绝不许引号尖括号（该 JSON 会回放进前端）。
+_DOCK_PLAT_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
+_DOCK_AID_RE = re.compile(r"^[A-Za-z0-9_.@:+\-]{1,80}$")
+_DOCK_MAX_PLATS = 8
+_DOCK_MAX_AIDS = 30
+
+
+def sanitize_dock_order(raw: Any) -> Optional[Dict[str, Any]]:
+    """净化账号坞排序偏好；非 dict → None（调用方按非法拒绝）。
+
+    空 plats 是合法值（显式「已清空自定义排序」，与「从未设置」区分开——
+    pull 端见键即采信，跨设备的恢复默认才能传播）。
+    """
+    if not isinstance(raw, dict):
+        return None
+    plats_raw = raw.get("plats")
+    if not isinstance(plats_raw, dict):
+        return None
+    try:
+        ts = int(raw.get("ts") or 0)
+    except (TypeError, ValueError):
+        ts = 0
+    plats: Dict[str, Any] = {}
+    for plat, aids in list(plats_raw.items())[:_DOCK_MAX_PLATS]:
+        if not (isinstance(plat, str) and _DOCK_PLAT_RE.match(plat)):
+            continue
+        if not isinstance(aids, list):
+            continue
+        seen: set = set()
+        clean = []
+        for aid in aids:
+            s = str(aid)
+            if not _DOCK_AID_RE.match(s) or s in seen:
+                continue
+            seen.add(s)
+            clean.append(s)
+            if len(clean) >= _DOCK_MAX_AIDS:
+                break
+        if clean:
+            plats[plat] = clean
+    return {"ts": max(0, ts), "plats": plats}
 
 
 def _hex_or_empty(v: Any) -> str:
@@ -78,6 +127,11 @@ def sanitize_appearance(raw: Any) -> Optional[Dict[str, Any]]:
         "anim": bool(raw.get("anim", True)),
         "ts": max(0, ts),
     }
+    # Dock P3：raw 带 dock_order 且值域合法则透传（appearance 整写不丢排序）；
+    # 非法/缺席都静默不落——appearance 写链的 dock_order 保全由路由层 carry-over 兜底。
+    dk = sanitize_dock_order(raw.get("dock_order")) if "dock_order" in raw else None
+    if dk is not None:
+        out["dock_order"] = dk
     blob = dumps_appearance(out)
     if len(blob.encode("utf-8")) > APPEARANCE_MAX_BYTES:
         return None

@@ -42,6 +42,18 @@ def web_enabled(config: Dict[str, Any]) -> bool:
     return resolve_login_switch(config, "platform_login.messenger.web_enabled")
 
 
+def interactive_login_enabled(config: Dict[str, Any]) -> bool:
+    """表单中继（Form-Relay）交互登录开关——把登录搬进程序内（headless 边车 + 应用侧
+    原生分步表单：账密 / 2FA 码 / E2EE PIN），不再弹独立浏览器窗口、也不靠只读截图。
+
+    默认**关**（含桌面壳）：headless + 由边车把值填进登录页，改变了 Facebook 的自动化
+    判定面，放量前需灰度验证账号不被风控。故刻意**不**进 `_DESKTOP_LOGIN_DEFAULT_ON`——
+    `resolve_login_switch` 在未显式配置时对该路径恒回 False，只有显式
+    `platform_login.messenger.interactive_login: true` 才开启。关闭时全链回落既有
+    headed 窗口 + 截图预览 + 运维指引，逐字节旧行为。"""
+    return resolve_login_switch(config, "platform_login.messenger.interactive_login")
+
+
 # ── HTTP 薄封装（测试可 monkeypatch） ────────────────────────────────────────
 
 async def _post_json(url: str, payload: Dict[str, Any], timeout: float = 20.0) -> Dict[str, Any]:
@@ -58,6 +70,32 @@ async def _get_json(url: str, timeout: float = 20.0) -> Dict[str, Any]:
         r = await client.get(url)
         r.raise_for_status()
         return r.json()
+
+
+def http_error_detail(ex: Exception) -> str:
+    """HTTP 状态异常 → 附带响应体里的 error/reason_code（Node 边车的真实败因）。
+
+    2026-08-15 173 实锤：/send 的 composer-not-found 500 在 Python 侧只留下
+    「Server error '500 Internal Server Error' for url …」——真实原因（渲染超时/
+    需要接受/PIN 浮层）在响应体里被 ``raise_for_status`` 丢弃，排查只能上机翻边车。
+    duck-typed：任何带 ``.response`` 的异常都尝试提取；提取失败原样返回，绝不抛。
+    """
+    base = str(ex)
+    resp = getattr(ex, "response", None)
+    if resp is None:
+        return base
+    try:
+        body = resp.json()
+    except Exception:
+        return base
+    if not isinstance(body, dict):
+        return base
+    detail = str(body.get("error") or "").strip()
+    reason = str(body.get("reason_code") or "").strip()
+    extra = detail
+    if reason and reason not in detail:
+        extra = f"{detail} [{reason}]" if detail else f"[{reason}]"
+    return f"{base} — {extra}" if extra else base
 
 
 def _normalize_status(raw: str) -> str:
@@ -81,7 +119,12 @@ def make_provider(config: Dict[str, Any]):
     async def _provider(request: Any, platform: str, mode: str, account_id: str,
                         ctx: Optional[Dict[str, Any]] = None):
         proxy = (ctx or {}).get("proxy") or {}
+        # 表单中继开关：开 → 告诉边车走无窗口交互模式（offscreen / new_headless），登录页
+        # 由应用侧原生表单驱动；关 → 不带该字段，边车维持既有 headed 弹窗行为（零回归）。
+        interactive = interactive_login_enabled(config)
         payload: Dict[str, Any] = {"account_id": account_id or ""}
+        if interactive:
+            payload["interactive"] = True
         if proxy.get("host"):
             payload["proxy_url"] = proxy.get("url") or ""
         try:
@@ -143,6 +186,52 @@ def make_provider(config: Dict[str, Any]):
             except Exception:  # noqa: BLE001
                 logger.debug("[messenger_web] cancel 调用失败", exc_info=True)
 
+        # 表单中继只读探针：把边车对登录页的分类（login_form/two_factor/e2ee_pin/checkpoint/…）
+        # 翻成「应用此刻该渲染哪一步原生表单」。纯读、失败软回落 wait（绝不阻断登录链）。
+        # 仅在 interactive_login 开启时随 provider 暴露（interactive 已在 _provider 顶部算出）；
+        # 关闭时为 None，路由回 not_supported，前端走既有 headed / 截图预览旧路径。
+
+        async def _relay_step(session: Any) -> Dict[str, Any]:
+            try:
+                res = await _get_json(f"{base}/login/{login_id}/relay-step")
+            except Exception as ex:  # noqa: BLE001
+                logger.debug("[messenger_web] relay-step 调用失败", exc_info=True)
+                return {"status": "pending", "step": "wait", "fields": [],
+                        "error": False, "escalate": False, "code": "",
+                        "qr_image": "", "detail": str(ex)}
+            return {
+                "status": str(res.get("status") or "pending"),
+                "booting": bool(res.get("booting")),
+                "step": str(res.get("step") or "wait"),
+                "fields": list(res.get("fields") or []),
+                "error": bool(res.get("error")),
+                "escalate": bool(res.get("escalate")),
+                "code": str(res.get("code") or ""),
+                "qr_image": str(res.get("qr_image") or ""),
+            }
+
+        async def _relay_submit(session: Any, step: str, values: Dict[str, Any]):
+            # 把应用侧原生表单字段值填回 headless 登录页（边车 fire-and-forget，结果由 poll
+            # / relay_step 观测）。失败一律结构化回落，绝不抛（不阻断登录链）。
+            try:
+                res = await _post_json(
+                    f"{base}/login/{login_id}/relay-submit",
+                    {"step": str(step or ""),
+                     "values": values if isinstance(values, dict) else {}})
+            except Exception as ex:  # noqa: BLE001
+                logger.debug("[messenger_web] relay-submit 调用失败", exc_info=True)
+                return {"ok": False, "reason_code": "service_down", "detail": str(ex)}
+            return {
+                "ok": bool(res.get("ok")),
+                "status": str(res.get("status") or ""),
+                "step": str(res.get("step") or ""),
+                "reason_code": str(res.get("reason_code") or ""),
+                "missing": list(res.get("missing") or []),
+                "submitted": bool(res.get("submitted")),
+                "accepted": bool(res.get("accepted")),
+                "detail": str(res.get("detail") or ""),
+            }
+
         # 措辞注意：Facebook 网页端没有扫码登录，这里绝不能出现「扫码」字样——
         # 方式选择卡明写「不使用二维码」，等待页再冒出「扫码均可」是自相矛盾（实录事故）。
         # instruction_key 供前端取本地化文案（zh/en 同源），raw instruction 仅作后端兜底。
@@ -154,6 +243,12 @@ def make_provider(config: Dict[str, Any]):
             "poll": _poll,
             "cancel": _cancel,
             "state": {"login_id": login_id, "base": base},
+            # 表单中继：开启交互登录时暴露 interactive 能力位 + 只读探针 + 写入端；关闭时
+            # interactive=False、relay_step/relay_submit=None（前端据此走既有 headed / 截图预览
+            # 路径，零行为变化）。
+            "interactive": interactive,
+            "relay_step": _relay_step if interactive else None,
+            "relay_submit": _relay_submit if interactive else None,
         }
 
     return _provider

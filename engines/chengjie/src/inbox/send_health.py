@@ -32,7 +32,8 @@ def classify_fail_reason(reason: str) -> str:
     """把 autosend_failed 的 reason 文本归因到失败类别（纯函数）。"""
     r = str(reason or "").lower()
     if any(k in r for k in ("kill_switch", "canary", "send_gate", "circuit_open",
-                            "quota_hour", "quota_day", "warmup_cap", "health_red", "banned")):
+                            "quota_hour", "quota_day", "warmup_cap", "daily_cap",
+                            "health_red", "banned")):
         return FAIL_GATE
     if any(k in r for k in ("无发言权", "被拉黑", "会话失效", "peer", "blocked by",
                             "userisblocked", "chat not found", "forbidden")):

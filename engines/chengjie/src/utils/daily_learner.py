@@ -29,6 +29,19 @@ _logger = logging.getLogger("ai_chat_assistant.DailyLearner")
 
 LAST_RUN_META_KEY = "learner_last_run"
 
+# 进程内最近构造的学习器（value_report 周报段 peek 用——与 peek_goal_store 同纪律：
+# 消费方只探测既有单例绝不新建，新建会凭空造一个空 drafts 库把「零学习」误报成事实）。
+_LAST_INSTANCE: Optional["DailyLearner"] = None
+
+
+def peek_daily_learner() -> Optional["DailyLearner"]:
+    """进程内既有 DailyLearner 单例；从未构造过 → None（周报段整段省略）。
+
+    生产上 /api/todo-summary（仪表盘/案例页待办条 60s 轮询）与 /api/learner/*
+    都会惰性构造并复用同一实例，peek 在实际部署里必然温热；测试要密闭就显式传参。
+    """
+    return _LAST_INSTANCE
+
 
 def resolve_learner_ai(app=None, telegram_client=None):
     """学习引擎 AI 客户端回落链：telegram 协议客户端 → app.state.ai_client → skill_manager。
@@ -81,6 +94,8 @@ class DailyLearner:
             db_path = Path(kb_db).parent / "knowledge_base.db"
         self._db_path = db_path
         self._ensure_table()
+        global _LAST_INSTANCE
+        _LAST_INSTANCE = self
 
     @property
     def ai_ready(self) -> bool:
@@ -99,6 +114,13 @@ class DailyLearner:
         "ALTER TABLE kb_drafts ADD COLUMN dup_entry_title TEXT DEFAULT ''",
         "ALTER TABLE kb_drafts ADD COLUMN dup_score REAL DEFAULT 0",
     )
+    # 融合 P2（2026-08-16）：溯源 + 效果回访地基——
+    # source_ref＝这条素材由谁触发（case:CASE-xxx / conv:平台会话 id，空=定时采集）；
+    # entry_id＝审核通过后的正式 KB 条目 id（与 kb_query_log.matched_entry_id 对账）。
+    _MIGRATION_TRACE = (
+        "ALTER TABLE kb_drafts ADD COLUMN source_ref TEXT DEFAULT ''",
+        "ALTER TABLE kb_drafts ADD COLUMN entry_id TEXT DEFAULT ''",
+    )
 
     def _ensure_table(self):
         conn = sqlite3.connect(str(self._db_path))
@@ -116,6 +138,14 @@ class DailyLearner:
         # migration: add dup columns
         if "dup_entry_id" not in cols:
             for sql in self._MIGRATION_DUP:
+                try:
+                    conn.execute(sql)
+                except sqlite3.OperationalError:
+                    pass
+            conn.commit()
+        # migration: add traceability columns (source_ref / entry_id)
+        if "source_ref" not in cols:
+            for sql in self._MIGRATION_TRACE:
                 try:
                     conn.execute(sql)
                 except sqlite3.OperationalError:
@@ -334,6 +364,7 @@ class DailyLearner:
                         "example_reply": item.get("example_reply", ""),
                         "ai_reasoning": item.get("reasoning", ""),
                         "confidence": confidence,
+                        "source_ref": str(m.get("source_ref", "") or ""),
                     })
             return drafts
 
@@ -363,14 +394,15 @@ class DailyLearner:
                         "INSERT INTO kb_drafts "
                         "(id,source,query,hit_count,category,title,triggers,"
                         "example_reply,ai_reasoning,status,created_at,confidence,"
-                        "dup_entry_id,dup_entry_title,dup_score) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "dup_entry_id,dup_entry_title,dup_score,source_ref) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (draft_id, d["source"], d["query"], d.get("hit_count", 1),
                          d.get("category", ""), d.get("title", ""),
                          triggers, d.get("example_reply", ""),
                          d.get("ai_reasoning", ""), "pending", now,
                          d.get("confidence", 0),
-                         dup_eid, dup_etitle, dup_score)
+                         dup_eid, dup_etitle, dup_score,
+                         str(d.get("source_ref", "") or "")[:120])
                     )
                     if dup:
                         _logger.info("草稿 %s 疑似重复: KB=%s score=%.2f",
@@ -450,13 +482,17 @@ class DailyLearner:
             return None
 
     async def feed_and_learn(self, query: str, domain_context: str = "",
-                             min_miss_count: int = 2) -> Dict:
+                             min_miss_count: int = 2,
+                             source_ref: str = "") -> Dict:
         """手动喂料：把运营指定的问题入队；AI 可用则当场生成草稿。
 
         人工点名的问题**不过问题样式过滤**（人的判断优先于启发式）；
         重复（已有 pending/approved 同题草稿）直接短路，不烧 LLM。
+        ``source_ref``（融合 P2）＝触发来源锚点（``case:CASE-xxx`` / ``conv:会话id``），
+        随草稿落库供审核人看「这题因为谁学的」；空串=无锚点（旧调用方零变化）。
         """
         q = str(query or "").strip()[:200]
+        ref = str(source_ref or "").strip()[:120]
         if len(q) < 2:
             return {"queued": False, "reason": "too_short"}
 
@@ -477,7 +513,8 @@ class DailyLearner:
         if not self._ai:
             return {"queued": True, "generated": 0, "reason": "ai_unavailable"}
 
-        material = {"source": "manual", "query": q, "count": max(1, int(min_miss_count))}
+        material = {"source": "manual", "query": q,
+                    "count": max(1, int(min_miss_count)), "source_ref": ref}
         drafts = await self.generate_drafts([material], domain_context)
         saved = self.save_drafts(drafts) if drafts else 0
         if saved:
@@ -572,9 +609,12 @@ class DailyLearner:
 
         now = time.strftime("%Y-%m-%dT%H:%M:%S")
         with self._conn() as c:
+            # entry_id 同步落草稿行（融合 P2）：与 kb_query_log.matched_entry_id
+            # 对账的钥匙——「学了有没有用」从此可回访。
             c.execute(
-                "UPDATE kb_drafts SET status='approved', reviewed_by=?, reviewed_at=? WHERE id=?",
-                (operator, now, draft_id)
+                "UPDATE kb_drafts SET status='approved', reviewed_by=?, "
+                "reviewed_at=?, entry_id=? WHERE id=?",
+                (operator, now, str(entry_id or ""), draft_id)
             )
 
         _logger.info("草稿 %s 已审核通过，入库为条目 %s", draft_id, entry_id)
@@ -640,6 +680,134 @@ class DailyLearner:
         if lr:
             out["last_run"] = lr
         return out
+
+    # ── 融合 P2（2026-08-16）：学习效果回访 + 周报窗口 ────────────────
+
+    def effect_report(self, days: int = 7, top_k: int = 5) -> Dict:
+        """入库条目的真实命中回访——「学了有没有用」的读数。
+
+        数据地基＝KB 既有 ``kb_query_log``（每次检索都落 matched_entry_id，
+        7 天滚动保留）——**纯只读，零热路径改动**。命中只可能发生在条目
+        入库之后（matched_entry_id 引用的条目由 approve 创建），故窗口计数
+        即「入库以来命中数」。kb 库不可查/旧库无表一律软失败返回空报告。
+        """
+        days = max(1, int(days))
+        cutoff = time.time() - days * 86400.0
+        cutoff_iso = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(cutoff))
+        out: Dict = {"window_days": days, "approved_n": 0,
+                     "total_hits": 0, "entries": []}
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT id, query, title, entry_id, reviewed_at, source_ref "
+                "FROM kb_drafts WHERE status='approved' AND entry_id != '' "
+                "AND reviewed_at >= ? ORDER BY reviewed_at DESC LIMIT 50",
+                (cutoff_iso,)
+            ).fetchall()
+        out["approved_n"] = len(rows)
+        if not rows:
+            return out
+        hits_by_entry: Dict[str, int] = {}
+        try:
+            with self._kb._conn() as kc:
+                for r in kc.execute(
+                        "SELECT matched_entry_id, COUNT(*) FROM kb_query_log "
+                        "WHERE hit=1 AND matched_entry_id != '' AND ts >= ? "
+                        "GROUP BY matched_entry_id", (cutoff,)).fetchall():
+                    hits_by_entry[str(r[0])] = int(r[1])
+        except Exception:
+            _logger.debug("effect_report kb_query_log 查询失败（忽略）", exc_info=True)
+        entries = []
+        total = 0
+        for r in rows:
+            h = hits_by_entry.get(str(r["entry_id"]), 0)
+            total += h
+            entries.append({
+                "draft_id": r["id"],
+                "title": r["title"] or str(r["query"] or "")[:30],
+                "entry_id": r["entry_id"],
+                "hits": h,
+                "reviewed_at": r["reviewed_at"],
+                "source_ref": r["source_ref"] or "",
+            })
+        entries.sort(key=lambda e: -int(e["hits"]))
+        out["entries"] = entries[:max(1, int(top_k))]
+        out["total_hits"] = total
+        return out
+
+    def retirement_candidates(self, min_age_days: int = 3,
+                              limit: int = 10) -> List[Dict]:
+        """零命中淘汰建议（融合 P3）：入库 ≥min_age_days 且检索日志全窗零命中的条目。
+
+        诚实口径：kb_query_log 只留 7 天，「零命中」的可证窗口＝min(入库至今, 7 天)。
+        两道防冤枉闸：① 日志不可查（旧库无表/KB 挂了）→ 返回空；② 日志**整体
+        零流量**（没人问 ≠ 条目没用，KB 检索没在跑时人人零命中）→ 同样返回空——
+        「不知道」绝不伪装成「零命中」。**只出建议不动数据**：停用/改触发词是
+        /knowledge 页的显式操作，此处不造第二个 KB 写入口（防双源红线）。
+        """
+        age_cut_iso = time.strftime(
+            "%Y-%m-%dT%H:%M:%S",
+            time.localtime(time.time() - max(1, int(min_age_days)) * 86400.0))
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT id, query, title, entry_id, reviewed_at, source_ref "
+                "FROM kb_drafts WHERE status='approved' AND entry_id != '' "
+                "AND reviewed_at <= ? AND reviewed_at != '' "
+                "ORDER BY reviewed_at DESC LIMIT 100",
+                (age_cut_iso,)).fetchall()
+        if not rows:
+            return []
+        hit_ids = set()
+        try:
+            with self._kb._conn() as kc:
+                log_rows = int(kc.execute(
+                    "SELECT COUNT(*) FROM kb_query_log").fetchone()[0] or 0)
+                if log_rows <= 0:
+                    return []   # 零流量窗口：零命中不可证，宁可不出建议
+                for r in kc.execute(
+                        "SELECT DISTINCT matched_entry_id FROM kb_query_log "
+                        "WHERE hit=1 AND matched_entry_id != ''").fetchall():
+                    hit_ids.add(str(r[0]))
+        except Exception:
+            _logger.debug("retirement_candidates 日志不可查（不出建议）", exc_info=True)
+            return []
+        out: List[Dict] = []
+        for r in rows:
+            if str(r["entry_id"]) in hit_ids:
+                continue
+            out.append({
+                "draft_id": r["id"],
+                "title": r["title"] or str(r["query"] or "")[:30],
+                "entry_id": r["entry_id"],
+                "reviewed_at": r["reviewed_at"],
+                "source_ref": r["source_ref"] or "",
+            })
+            if len(out) >= max(1, int(limit)):
+                break
+        return out
+
+    def weekly_window(self, lo: float, hi: float) -> Dict:
+        """[lo, hi) 窗口学习台账（value_report 周报段消费；纯 DB 零 AI）。
+
+        ``coverage_hits``＝入库草稿的 hit_count 合计（这些问题在学会前被客户
+        问过多少次）——「补上的知识缺口有多大」的量化。pending 为当前值
+        （积压没有时间维度）。reviewed_at 为本模块统一的 ISO 格式，串比较安全。
+        """
+        lo_iso = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(float(lo)))
+        hi_iso = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(float(hi)))
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT COUNT(*), COALESCE(SUM(hit_count),0) FROM kb_drafts "
+                "WHERE status='approved' AND reviewed_at >= ? AND reviewed_at < ?",
+                (lo_iso, hi_iso)).fetchone()
+            rejected = c.execute(
+                "SELECT COUNT(*) FROM kb_drafts WHERE status='rejected' "
+                "AND reviewed_at >= ? AND reviewed_at < ?",
+                (lo_iso, hi_iso)).fetchone()[0]
+            pending = c.execute(
+                "SELECT COUNT(*) FROM kb_drafts WHERE status='pending'"
+            ).fetchone()[0]
+        return {"approved": int(row[0]), "coverage_hits": int(row[1] or 0),
+                "rejected": int(rejected), "pending": int(pending)}
 
     # ── A3: Semantic duplicate detection ─────────────────────────────
 

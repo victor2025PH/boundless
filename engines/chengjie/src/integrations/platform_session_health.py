@@ -17,15 +17,29 @@ distinct key 有上限（防脏数据撑爆内存）。
 
 from __future__ import annotations
 
+import logging
 import re
 import threading
 import time
 from typing import Any, Dict, Optional
 
+logger = logging.getLogger("ai_chat_assistant.platform_session_health")
+
 # 视为「不健康」的会话状态（会话不可用于收发）
 UNHEALTHY_STATUSES = frozenset({"expired", "needs_login", "logged_out", "failed"})
 # 视为「健康」的状态
 HEALTHY_STATUSES = frozenset({"authorized"})
+# 「放弃的登录尝试」（登录窗未授权就被关掉，从来不是真实账号）——worker 上报
+# ``abandoned``：刻意**不在** UNHEALTHY_STATUSES 里，因此不进横幅/看门狗/注册表
+# 翻转；记录仍保留（by_status 可观测「坐席放弃了几次登录」）。2026-08-14 事故：
+# 放弃登录曾报 expired → 幽灵 login_id 挂横幅 3+ 小时无人能懂。
+ABANDONED_STATUS = "abandoned"
+
+# 「登录尝试幽灵」TTL：不健康且**从未绑定真实账号**（key 的账号段==临时 login_id，
+# 即上报时 account_id 为空只能拿 login_id 顶位）的记录，超时即清——这类 key 没有
+# 任何可操作语义（横幅显示 msg_xxxx 坐席看不懂、重登按钮也无从指向），旧版 worker
+# 报上来的存量幽灵靠它兜底自愈。真实账号的不健康记录永不在此清理。
+_ORPHAN_LOGIN_TTL_SEC = 30 * 60
 
 _MAX_KEYS = 64
 _SAN_RE = re.compile(r"[^a-zA-Z0-9_\-\.:@]")
@@ -135,6 +149,21 @@ class PlatformSessionHealth:
                               and prev not in UNHEALTHY_STATUSES)
             recovered = (st in HEALTHY_STATUSES
                          and prev in UNHEALTHY_STATUSES)
+            # 晋级清占位（P0 2026-08-14）：login_id 授权成功晋级为真实 account_id
+            # 后，同一次登录早期以 login_id 为 key 挂的占位行（authorizing/expired…）
+            # 就成了永远无人更新的孤儿——不清会以「另一个号」的身份在横幅/看门狗里
+            # 常亮。此前只有 _ORPHAN_LOGIN_TTL_SEC 超时兜底（要等 30 分钟）。
+            if st in HEALTHY_STATUSES:
+                lid = _san(login_id)
+                if lid:
+                    ghost = f"{_san(platform, 24).lower()}:{lid}"
+                    if ghost != key:
+                        # 注意别用 or 短路：会话行/入站健康行要**各自**弹出
+                        g1 = self._sessions.pop(ghost, None) is not None
+                        g2 = self._inbox_health.pop(ghost, None) is not None
+                        if g1 or g2:
+                            logger.info("[session_health] 登录晋级 %s → %s，"
+                                        "清除占位行", ghost, key)
             return {"changed": changed, "went_unhealthy": went_unhealthy,
                     "recovered": recovered, "prev": prev, "status": st}
 
@@ -144,8 +173,36 @@ class PlatformSessionHealth:
             sess = self._sessions.get(self._key(platform, account_id))
             return bool(sess and str(sess.get("status")) in UNHEALTHY_STATUSES)
 
+    def _sweep_login_ghosts_locked(self, now: float) -> None:
+        """清理超龄「登录尝试幽灵」（须持锁调用）。
+
+        判据三合一（缺一不清，宁可漏清不误清）：
+        ① 状态不健康**或 abandoned**（放弃的登录尝试——不进横幅但行仍占 key 槽，
+        _MAX_KEYS=64，反复放弃登录会把槽位吃光挤掉真实账号的登记；放弃率观测走
+        ``by_status`` 事件计数，不依赖行存活）；② key 的账号段 == 记录的 login_id
+        （=上报时 account_id 为空，从未晋级成真实账号——真实账号 key 是数字/平台
+        id，绝不等于 msg_* 临时 id）；③ 持续超 ``_ORPHAN_LOGIN_TTL_SEC``。
+        挂在读路径（横幅快照/看门狗/dump）入口惰性触发，零后台线程。
+        """
+        for key in list(self._sessions.keys()):
+            sess = self._sessions[key]
+            st = str(sess.get("status"))
+            if st not in UNHEALTHY_STATUSES and st != ABANDONED_STATUS:
+                continue
+            lid = str(sess.get("login_id") or "")
+            if not lid or key.partition(":")[2] != lid:
+                continue
+            since = (float(sess.get("unhealthy_since") or 0.0)
+                     or float(sess.get("ts") or 0.0))
+            if since and (now - since) >= _ORPHAN_LOGIN_TTL_SEC:
+                self._sessions.pop(key, None)
+                logger.info("[session_health] 清理登录尝试幽灵 %s（状态 %s 滞留 "
+                            "%d 分钟，从未绑定真实账号）",
+                            key, st, int((now - since) // 60))
+
     def unhealthy_sessions(self) -> Dict[str, Dict[str, Any]]:
         with self._lock:
+            self._sweep_login_ghosts_locked(time.time())
             return {k: dict(v) for k, v in self._sessions.items()
                     if str(v.get("status")) in UNHEALTHY_STATUSES}
 
@@ -160,6 +217,7 @@ class PlatformSessionHealth:
         ts = time.time() if now is None else float(now)
         due: Dict[str, Dict[str, Any]] = {}
         with self._lock:
+            self._sweep_login_ghosts_locked(ts)
             for key, sess in self._sessions.items():
                 if str(sess.get("status")) not in UNHEALTHY_STATUSES:
                     continue
@@ -191,6 +249,13 @@ class PlatformSessionHealth:
         last_inbound_ts: float = 0.0, detail: str = "",
         min_attempts: Optional[int] = None,
         e2ee_ratio: float = -1.0, conv_count: int = 0,
+        pin_state: str = "",
+        pin_heal_attempts: int = -1, pin_heal_ok: int = -1,
+        pin_heal_fail: int = -1,
+        unread_forced_picked: int = -1,
+        worker_code_stale: Optional[bool] = None,
+        worker_code_fp: str = "",
+        requests_suspect_streak: int = -1,
     ) -> Dict[str, Any]:
         """登记一次入站健康心跳（外部 worker 周期 push）。
 
@@ -234,7 +299,14 @@ class PlatformSessionHealth:
         # 支二（要零样本）也漏判，账号一路「零告警」拖着。占位占比作旁证防误报：
         # 真空会话/对端撤回不会大面积占位。
         steady_fail = (att >= thr and fail >= att and ratio_high)
-        stalled = full_fail or placeholder_blind or steady_fail
+        # 支四（P0 2026-08-14，173 实测盲区）：worker 亲证 PIN 浮层在场而 PIN
+        # 缺失/未通过（detail=e2ee_pin_required 只在 detectPinPrompt 确认浮层后
+        # 才携带）→ 无条件半死。前三支全依赖占位比 ≥0.6 / 读取窗全败——173 实测
+        # 占位比 0.39 时 PIN 明明缺失却一路「健康」，stall_since=0 把弹窗/横幅/
+        # 看门狗全闸掉。浮层本身就是确定性证据，不需要统计旁证。
+        raw_detail = str(detail or "")[:300]
+        pin_required = raw_detail == "e2ee_pin_required"
+        stalled = full_fail or placeholder_blind or steady_fail or pin_required
         with self._lock:
             h = self._inbox_health.get(key)
             if h is None:
@@ -252,10 +324,45 @@ class PlatformSessionHealth:
             h["conv_count"] = convs
             stall_kind = ("read_fail" if full_fail
                           else "e2ee_placeholder" if placeholder_blind
-                          else "steady_fail" if steady_fail else "")
+                          else "steady_fail" if steady_fail
+                          else "pin_missing" if pin_required else "")
             h["stall_kind"] = stall_kind
-            raw_detail = str(detail or "")[:300]
             h["detail"] = raw_detail
+            # P1 PIN 自愈观测（2026-08-14）：worker 侧 tryAutoE2eePin 的战绩随心跳
+            # 落行（-1=老 worker 未上报，不写键——dump 消费面据缺键区分「没报」与
+            # 「报了 0」）。「托管 PIN 后有没有真自愈」从翻 sidecar 日志变成看板可读。
+            h["pin_state"] = str(pin_state or "")[:16]
+            try:
+                if int(pin_heal_attempts) >= 0:
+                    h["pin_heal"] = {
+                        "attempts": max(0, int(pin_heal_attempts)),
+                        "ok": max(0, int(pin_heal_ok or 0)),
+                        "fail": max(0, int(pin_heal_fail or 0)),
+                    }
+            except (TypeError, ValueError):
+                pass
+            # P1 2026-08-15 messenger-web 盲区修复观测（缺键=老 worker 未上报，不写——
+            # dump 消费面据缺键区分「没报」与「报了 0」，与 pin_heal 同约定）：
+            # unread_forced   = 未读驱动强制读取触发次数（E2EE 占位预览盲区的解药读数）；
+            # worker_code_*   = worker 代码指纹 + 半部署位（磁盘代码晚于进程启动=改了没
+            #                   重启 Node——「修复写好了没上线」从不可见变成看板可判）；
+            # requests_suspect_streak = 消息请求页「零行且无结构证据」连续次数（区分
+            #                   「真没人来」与「FB 改版读不到」）。
+            try:
+                if int(unread_forced_picked) >= 0:
+                    h["unread_forced"] = max(0, int(unread_forced_picked))
+            except (TypeError, ValueError):
+                pass
+            if worker_code_stale is not None:
+                h["worker_code_stale"] = bool(worker_code_stale)
+            fp = _san(str(worker_code_fp or ""), 16)
+            if fp:
+                h["worker_code_fp"] = fp
+            try:
+                if int(requests_suspect_streak) >= 0:
+                    h["requests_suspect"] = max(0, int(requests_suspect_streak))
+            except (TypeError, ValueError):
+                pass
             h["hint_code"] = derive_inbox_hint(
                 stalled=stalled, detail=raw_detail, stall_kind=stall_kind)
             h["ts"] = now
@@ -310,6 +417,7 @@ class PlatformSessionHealth:
 
     def dump(self) -> Dict[str, Any]:
         with self._lock:
+            self._sweep_login_ghosts_locked(time.time())
             sessions = {k: dict(v) for k, v in sorted(self._sessions.items())}
             unhealthy = [k for k, v in sessions.items()
                          if str(v.get("status")) in UNHEALTHY_STATUSES]
@@ -502,8 +610,72 @@ def ensure_seeded_from_registry() -> int:
         return n
 
 
+def report_session_transition(
+    platform: str, account_id: str, status: str, *,
+    detail: str = "", login_id: str = "",
+) -> Dict[str, Any]:
+    """进程内统一上报会话状态转移（与 ``/api/internal/protocol/session-status``
+    路由同语义的库入口，供编排器等**本进程**调用方使用——不必绕 HTTP 自打自）。
+
+    做三件事（全部 best-effort，绝不抛）：
+    1. 落健康表 ``record``（→ 坐席顶栏/ops 卡/watchdog 升级提醒同一数据源）；
+    2. 注册表持久化：``logged_out/needs_login/expired`` 且注册表 online → offline
+       并落 ``meta.offline_reason="worker:<status>"``（自灭标记——看门狗对 offline
+       账号的持续提醒只认它，与运营主动登出的 ``operator`` 标记区分；健康表是
+       内存态，重启后靠 ``seed_offline_from_registry`` 接续真相）；
+       ``authorized`` 且非 removed → online（重登成功自动归位并清标记）。
+       ``failed`` 刻意不落——可自愈故障，标「已退出」会误导运营手动重登；
+    3. 「进入不健康/恢复」两类转移经 EventBus 发 ``platform_session_alert``
+       （订阅别名 ``platform_session``；rate_key 按 平台:账号 独立限流）。
+
+    返回 ``record`` 的转移结果 dict（changed/went_unhealthy/recovered）。
+    """
+    plat = str(platform or "").lower()
+    acct = str(account_id or "")
+    st = str(status or "").lower()
+    if not plat or not acct or not st:
+        return {"changed": False, "went_unhealthy": False, "recovered": False}
+    trans = get_platform_session_health().record(
+        plat, acct, st, detail=detail, login_id=login_id)
+    try:
+        from src.integrations.account_registry import get_account_registry
+        _reg = get_account_registry()
+        _rst = str((_reg.get(plat, acct) or {}).get("status") or "")
+        if st in ("logged_out", "needs_login", "expired") and _rst == "online":
+            # 自灭型掉线（worker 上报，非运营操作）：翻状态之外落 offline_reason
+            # 标记（merge 不动其他 meta 键）。看门狗对 offline 账号的持续提醒
+            # **只认 worker:* 标记**——没有它，死号在一次转移告警后就永远静音
+            # （2026-08-16 实锤：messenger 号 7/30 崩溃循环自灭，注册表 offline
+            # 被当「运营主动下线」过滤，17 天零提醒）。运营主动登出走
+            # ``_clear_session_creds``，会把标记改写成 ``operator``。
+            _reg.upsert(plat, acct, status="offline",
+                        meta={"offline_reason": f"worker:{st}"},
+                        merge_meta=True)
+        elif st == "authorized" and _rst and _rst not in ("removed", "online"):
+            # 重登成功归位时清掉离线原因标记，下一次自灭从头判定
+            _reg.upsert(plat, acct, status="online",
+                        meta={"offline_reason": ""}, merge_meta=True)
+    except Exception:
+        logger.debug("[session_health] 注册表状态同步失败", exc_info=True)
+    if trans.get("went_unhealthy") or trans.get("recovered"):
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("platform_session_alert", {
+                "platform": plat,
+                "account_id": acct,
+                "login_id": login_id,
+                "status": st,
+                "detail": detail,
+                "recovered": bool(trans.get("recovered")),
+                "rate_key": f"{plat}:{acct}",
+            })
+        except Exception:
+            logger.debug("[session_health] 会话健康告警发布失败", exc_info=True)
+    return trans
+
+
 __all__ = [
     "PlatformSessionHealth", "get_platform_session_health",
-    "ensure_seeded_from_registry",
-    "UNHEALTHY_STATUSES", "HEALTHY_STATUSES",
+    "ensure_seeded_from_registry", "report_session_transition",
+    "UNHEALTHY_STATUSES", "HEALTHY_STATUSES", "ABANDONED_STATUS",
 ]

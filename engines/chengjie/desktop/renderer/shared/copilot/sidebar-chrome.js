@@ -116,14 +116,30 @@
     var panel = typeof opts.panel === "string" ? document.getElementById(opts.panel) : opts.panel;
     var handle = typeof opts.handle === "string" ? document.getElementById(opts.handle) : opts.handle;
     var min = opts.min != null ? opts.min : SIDEBAR_W_MIN;
-    var max = opts.max != null ? opts.max : SIDEBAR_W_MAX;
     var def = opts.defaultWidth != null ? opts.defaultWidth : SIDEBAR_W_DEFAULT;
     var storageKey = opts.storageKey || SIDEBAR_W_KEY;
     var hideWhen = opts.hideWhenCollapsed;
 
+    /* 2026-08-17 「向左拉伸」：默认上限从固定 480 升为动态 min(720px, 45vw)，并给
+       相邻主内容列留 ≥520px 保底（读面板父容器实测宽 - 520，聊天/消息列不被挤残）；
+       显式 opts.max 仍最高优先（调用方自知布局）。每次 apply 现算——拖拽中途、窗口
+       缩放后都取实时上限，存储值超限由 applyPanelWidth 夹紧。 */
+    function _dynMax() {
+      if (opts.max != null) return opts.max;
+      var cap = Math.min(720, Math.round((root.innerWidth || 1280) * 0.45));
+      try {
+        var pe = panel && panel.parentElement;
+        if (pe) {
+          var pw = pe.getBoundingClientRect().width;
+          if (pw > 0) cap = Math.min(cap, Math.round(pw - 520));
+        }
+      } catch (_) {}
+      return Math.max(min, cap);   // 极窄布局下 min(280) 优先于 520 保底（面板要可用）
+    }
+
     function applyWidth(w) {
       if (!panel) return def;
-      return applyPanelWidth(panel, w, min, max, def);
+      return applyPanelWidth(panel, w, min, _dynMax(), def);
     }
 
     function init() {
@@ -133,11 +149,41 @@
       var dragging = false;
       var startX = 0;
       var startW = 0;
+      var bubble = null;
+
+      function _ensureBubble() {
+        if (bubble) return bubble;
+        try {
+          bubble = document.getElementById("ws-cp-w-bubble");
+          if (!bubble) {
+            bubble = document.createElement("div");
+            bubble.id = "ws-cp-w-bubble";
+            bubble.className = "ws-cp-w-bubble";
+            bubble.setAttribute("aria-hidden", "true");
+            (document.body || document.documentElement).appendChild(bubble);
+          }
+        } catch (_) { bubble = null; }
+        return bubble;
+      }
+      function _showBubble(w) {
+        var b = _ensureBubble();
+        if (!b) return;
+        b.textContent = String(w) + "px";
+        b.classList.add("show");
+        try {
+          var r = handle.getBoundingClientRect();
+          b.style.top = Math.max(8, r.top + r.height / 2 - 12) + "px";
+          b.style.left = Math.max(8, r.left - 56) + "px";
+        } catch (_) {}
+      }
+      function _hideBubble() {
+        if (bubble) bubble.classList.remove("show");
+      }
 
       function onMove(e) {
         if (!dragging || !panel) return;
         var dx = startX - (e.clientX || 0);
-        applyWidth(startW + dx);
+        _showBubble(applyWidth(startW + dx));
       }
 
       function onUp() {
@@ -148,6 +194,7 @@
         document.body.style.userSelect = "";
         document.removeEventListener("mousemove", onMove);
         document.removeEventListener("mouseup", onUp);
+        _hideBubble();
         try {
           localStorage.setItem(storageKey, String(parseInt(panel.offsetWidth, 10) || def));
         } catch (_) {}
@@ -274,13 +321,6 @@
       text = s ? s + " · " + pct + "%" : "";
       if (d.pending_advancement || d.needs_confirmation || d.stage_conflict) tone = "warn";
       else if (d.reunion) tone = "danger";
-    } else if (suf === "nba") {
-      var acts = d.actions || [];
-      if (!acts.length) return { text: "", tone: "" };
-      var a0 = acts[0];
-      text = _trunc(a0.name || "", 16);
-      if (a0.action_type === "escalate") tone = "danger";
-      else if (a0.action_type === "template") tone = "ok";
     } else if (suf === "chain") {
       var ex = d.executions || [];
       var run = 0;
@@ -422,7 +462,8 @@
     bulb: '<path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4.9 12c.9.9 1.4 1.9 1.6 3h6.6c.2-1.1.7-2.1 1.6-3A7 7 0 0 0 12 2z"/>',
     alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12" y2="17"/>',
     headphones: '<path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z"/><path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>',
-    volume: '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a9 9 0 0 1 0 14"/>'
+    volume: '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a9 9 0 0 1 0 14"/>',
+    wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>'
   };
 
   function uiIcon(name, size, cls) {

@@ -111,7 +111,11 @@ def _channel_health_snapshot() -> Dict[str, Any]:
 
     ``logged_out``（运营主动登出 / 启动自注册表种子）**不进横幅**——那不是故障，
     收件箱账号 chip 已有「已退出」语义；横幅只催 ``needs_login`` / ``expired`` /
-    ``failed`` 这类「该有人去修」的意外掉线。
+    ``failed`` 这类「该有人去修」的意外掉线。（``abandoned``＝放弃的登录尝试，
+    压根不在不健康集合里，天然不会到这。）
+
+    每条目尽力富集 ``name``（注册表 meta.self_name / label）——红条只写
+    ``messenger:6158…`` 坐席不知道是谁掉线（2026-08-14 实录），有昵称才可操作。
     """
     try:
         from src.integrations.platform_session_health import (
@@ -120,6 +124,12 @@ def _channel_health_snapshot() -> Dict[str, Any]:
         ensure_seeded_from_registry()
         now = time.time()
         items = []
+        reg = None
+        try:
+            from src.integrations.account_registry import get_account_registry
+            reg = get_account_registry()
+        except Exception:
+            reg = None
         for key, sess in get_platform_session_health().unhealthy_sessions().items():
             st = str(sess.get("status") or "")
             if st == "logged_out":
@@ -127,9 +137,18 @@ def _channel_health_snapshot() -> Dict[str, Any]:
             platform, _, account_id = str(key).partition(":")
             since = (float(sess.get("unhealthy_since") or 0.0)
                      or float(sess.get("ts") or 0.0) or now)
+            name = ""
+            if reg is not None and account_id:
+                try:
+                    row = reg.get(platform, account_id) or {}
+                    meta = row.get("meta") or {}
+                    name = str(meta.get("self_name") or row.get("label") or "").strip()
+                except Exception:
+                    name = ""
             items.append({
                 "platform": platform,
                 "account_id": account_id,
+                "name": name[:48],
                 "status": st,
                 "down_min": int(max(0.0, now - since) // 60),
             })
@@ -409,6 +428,26 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
         config = getattr(config_manager, "config", None) or {}
         return build_companion_preflight(config)
 
+    @app.get("/api/setup/deploy-profile")
+    async def api_setup_deploy_profile(request: Request):
+        """部署能力预设档就绪自检（WP-1，只读零网络）。
+
+        「当前档位 + 各能力 开/关/降级」一屏——首启向导与支持排障的单一读面。
+        全部来自合并后 config（含 overlay 与托管 env 注入），零密钥零探活；
+        state 语义见 ``deploy_profile.capability_snapshot``（on/off/degraded）。
+        """
+        api_auth(request)
+        _require_supervisor_or_shell(request)
+        from src.utils.deploy_profile import (
+            active_profile, capability_snapshot, list_profiles)
+        config = getattr(config_manager, "config", None) or {} if config_manager else {}
+        return {
+            "ok": True,
+            "profile": active_profile(config) or None,
+            "available": list_profiles(),
+            "capabilities": capability_snapshot(config),
+        }
+
     @app.get("/api/setup/ai")
     async def api_setup_ai_status(request: Request):
         """AI 大模型配置现状（key 打码回显；供首启向导/接入向导预填）。
@@ -541,21 +580,30 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
         try:
             from src.ai.llm_cost import get_llm_cost
             usage: Dict[str, Dict[str, float]] = {}
+            by_tier: Dict[str, Dict[str, float]] = {}
             for row in (get_llm_cost().dump().get("rows") or []):
-                group = _usage_tier_group(str(row.get("tier") or "default"))
+                raw_tier = str(row.get("tier") or "default")
+                group = _usage_tier_group(raw_tier)
                 g = usage.setdefault(group, {"calls": 0, "tokens": 0, "cost_usd": 0.0,
                                              "latency_ms_sum": 0})
                 g["calls"] += int(row.get("calls") or 0)
                 g["tokens"] += int(row.get("prompt_tokens") or 0) + int(row.get("completion_tokens") or 0)
                 g["cost_usd"] += float(row.get("cost_usd") or 0.0)
                 g["latency_ms_sum"] += int(row.get("latency_ms_sum") or 0)
+                # 原始 tier 行透出（2026-08-13）：分组视图会把 tool/default 并进
+                # primary，读数排障（「vLLM 收到 N 次 vs 看板 M 次」）需要未分组真相。
+                b = by_tier.setdefault(raw_tier, {"calls": 0, "tokens": 0})
+                b["calls"] += int(row.get("calls") or 0)
+                b["tokens"] += int(row.get("prompt_tokens") or 0) + int(row.get("completion_tokens") or 0)
             for g in usage.values():
                 g["latency_avg_ms"] = (
                     int(g["latency_ms_sum"] / g["calls"]) if g["calls"] else 0)
                 g.pop("latency_ms_sum", None)
             out["usage"] = usage
+            out["usage_by_tier"] = by_tier
         except Exception:
             out["usage"] = {}
+            out["usage_by_tier"] = {}
         # 池配置（掩码）+ 运行态
         kp = ((config.get("ai") or {}).get("key_pool")) or {}
         keys_cfg = []
@@ -616,6 +664,11 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
         """
         api_auth(request)
         channels = _channel_health_snapshot()
+        try:
+            from src.ops.delivery_block import seat_banner as _deliv_banner
+            delivery_block = _deliv_banner()
+        except Exception:
+            delivery_block = {"active": False}
         # Phase3: restart cooldown for THIS instance → workbench soft banner
         # (same 60s poll as degrade/chandown; seat-safe, no filesystem paths).
         try:
@@ -646,17 +699,50 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
             return {"ok": True, "degraded": False, "mode": "primary",
                     "primary": primary_mode,
                     "channels": channels, "instance_restart": restart_banner,
-                    "tenant_notice": tenant_notice}
+                    "tenant_notice": tenant_notice,
+                    "delivery_block": delivery_block}
         try:
             snap = ai_client.degradation_snapshot()
         except Exception:
             return {"ok": True, "degraded": False, "mode": "primary",
                     "primary": primary_mode,
                     "channels": channels, "instance_restart": restart_banner,
-                    "tenant_notice": tenant_notice}
+                    "tenant_notice": tenant_notice,
+                    "delivery_block": delivery_block}
         return {"ok": True, **snap, "primary": primary_mode,
                 "channels": channels, "instance_restart": restart_banner,
-                "tenant_notice": tenant_notice}
+                "tenant_notice": tenant_notice,
+                "delivery_block": delivery_block}
+
+    # 「AI 本周替你完成 N 条回复」坐席可读摘要（2026-08-14）。/api/report/weekly 是
+    # 主管专属重报表，普通坐席 403 → 收件箱空态 ROI 行对最该被激励的人反而不显示。
+    # 本端点只出 drafts.sent 一个数字（无明细/无客户内容/无成本字段），与
+    # ai-runtime-status 同一坐席级鉴权；build_weekly_value 是 7 天窗持久库聚合 →
+    # 进程级 1h TTL 缓存 + to_thread（重算每小时最多一次，绝不随前端轮询放大）。
+    _weekly_brief_cache: Dict[str, Any] = {"ts": 0.0, "sent": None}
+
+    @app.get("/api/workspace/ai-weekly-brief")
+    async def api_workspace_ai_weekly_brief(request: Request):
+        api_auth(request)
+        import time as _t
+        now = _t.time()
+        if now - float(_weekly_brief_cache.get("ts") or 0) > 3600:
+            _weekly_brief_cache["ts"] = now   # 失败也进冷却：不对故障聚合连环重试
+            sent = None
+            try:
+                inbox = getattr(request.app.state, "inbox_store", None)
+                if inbox is not None:
+                    import asyncio as _aio
+                    from src.ops.value_report import build_weekly_value
+                    val = await _aio.to_thread(build_weekly_value, inbox)
+                    sent = int((((val or {}).get("this_week") or {})
+                                .get("drafts") or {}).get("sent") or 0)
+            except Exception:
+                sent = None
+            _weekly_brief_cache["sent"] = sent
+        sent = _weekly_brief_cache.get("sent")
+        return {"ok": True, "available": sent is not None,
+                "sent": int(sent or 0)}
 
     @app.post("/api/setup/key-pool")
     async def api_setup_key_pool_save(request: Request):

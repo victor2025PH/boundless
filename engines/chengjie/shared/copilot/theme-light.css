@@ -30,4 +30,11 @@
   --cp-goal-eng: #0284c7;
   --cp-goal-disc: #0d9488;
   --cp-track: #e2e8f0;
+  /* 语义状态 底/描边/文字（2026-08-17）：组件内禁再裸写亮色 hex——
+     暗色主题下浅色实心底=白块，配近白 --cp-text 直接不可读
+     （cp-persona 选中卡实锤事故）。亮色值恒=迁移前字面量（零视觉回归）。 */
+  --cp-ok-bg: #ecfdf5;
+  --cp-warn-bg: #fffbeb;
+  --cp-warn-border: #fde68a;
+  --cp-warn-ink: #b45309;
 }

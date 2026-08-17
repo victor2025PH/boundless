@@ -43,6 +43,7 @@ class _SM:
     _record_media_sent = _SMcls._record_media_sent
     _last_sent_media_scene = _SMcls._last_sent_media_scene
     _inject_scene_state = _SMcls._inject_scene_state
+    _inject_time_grounding = _SMcls._inject_time_grounding
     _record_stage_turn = _SMcls._record_stage_turn
     _MEDIA_SENT_LOG_MAX = _SMcls._MEDIA_SENT_LOG_MAX
     _selfie_persona_for_prompt = _SMcls._selfie_persona_for_prompt

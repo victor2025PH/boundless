@@ -17,6 +17,7 @@ _TYPE_LABELS = {
 
 _STATUS_LABELS = {
     "running": "运行中",
+    "paused": "已暂停",
     "completed": "已完成",
     "failed": "失败",
     "cancelled": "已取消",
@@ -51,12 +52,27 @@ def enrich_execution(row: Dict[str, Any], *, now: Optional[float] = None) -> Dic
         preview.append({
             "index": i,
             "done": i < cur or status in ("completed", "cancelled"),
-            "active": i == cur and status == "running",
+            "active": i == cur and status in ("running", "paused"),
             "action_type": s.get("action_type", "template"),
             "action_label": _TYPE_LABELS.get(s.get("action_type", ""), s.get("action_type", "")),
             "note": str(s.get("note") or s.get("text") or "")[:80],
             "delay_hours": float(s.get("delay_hours") or 0),
         })
+
+    # P1 2026-08-12「采用并拟稿」数据源：最近一次**已发出**的话术建议。
+    # current_step 指向「下一步」，坐席此刻该跟的是它前面最近的对外话术步
+    # （template / 未知类型都会 publish 建议文案；note/tag/task 是内部动作不算）。
+    actionable_note = ""
+    actionable_idx = -1
+    if status in ("running", "paused"):
+        for i in range(min(cur, total) - 1, -1, -1):
+            s = steps[i]
+            a_type = str(s.get("action_type") or "template")
+            note_txt = str(s.get("note") or s.get("text") or "").strip()
+            if a_type not in ("note", "tag", "task") and note_txt:
+                actionable_note = note_txt[:160]
+                actionable_idx = i
+                break
 
     countdown = max(0, int(next_at - ts)) if next_at > ts else 0
     return {
@@ -76,6 +92,10 @@ def enrich_execution(row: Dict[str, Any], *, now: Optional[float] = None) -> Dic
             (cur_step or {}).get("action_type", ""), (cur_step or {}).get("action_type", ""),
         ),
         "current_step_note": str((cur_step or {}).get("note") or (cur_step or {}).get("text") or "")[:120],
+        "actionable_note": actionable_note,
+        "actionable_step_idx": actionable_idx,
+        # P2：链执行档位（remind=提醒坐席 / auto=话术步自动拟稿投料）——前端徽标用
+        "exec_mode": str(row.get("chain_exec_mode") or "remind"),
         "steps_preview": preview,
         "last_result": last_result,
         "context": context,
@@ -121,7 +141,8 @@ def chain_funnel(
     try:
         rows = store._conn.execute(
             """SELECT e.exec_id, e.chain_id, e.conversation_id, e.status, e.started_at,
-                      e.context_json, COALESCE(c.name, '') AS chain_name
+                      e.context_json, COALESCE(c.name, '') AS chain_name,
+                      COALESCE(c.exec_mode, 'remind') AS exec_mode
                FROM workflow_executions e
                LEFT JOIN workflow_chains c ON c.chain_id = e.chain_id
                WHERE e.started_at >= ?
@@ -130,7 +151,8 @@ def chain_funnel(
         ).fetchall()
     except Exception:
         return {"ok": True, "days": days, "reply_window_hours": reply_window_hours,
-                "total": {}, "chains": [], "goal_chain_starts": {}}
+                "total": {}, "chains": [], "goal_chain_starts": {},
+                "by_mode": {}}
 
     def _bucket() -> Dict[str, Any]:
         return {"started": 0, "completed": 0, "failed": 0, "cancelled": 0,
@@ -143,6 +165,11 @@ def chain_funnel(
     attr_mature = 0
     attr_replied = 0
     by_chain: Dict[str, Dict[str, Any]] = {}
+    # P3 2026-08-13：执行档位分组（remind=提醒坐席 / auto=自动拟稿投料）——
+    # 灰度开闸后「自动推进到底有没有人推得好」的直接对比读数。口径诚实标注：
+    # 档位取链**当前**定义（中途切档的历史执行按现值归组）；不同链客群不同，
+    # 对比是方向性参考不是 A/B 实验。
+    by_mode: Dict[str, Dict[str, Any]] = {}
     # J 推荐跟随原料：goal_id → {chain_id: 启动数}（纯 store 数据，不解析目标——
     # 模板归属/推荐比对属 goals 域，由路由层带护栏做，本函数保持零跨域）。
     goal_chain_starts: Dict[str, Dict[str, int]] = {}
@@ -150,8 +177,11 @@ def chain_funnel(
     for r in rows:
         row = dict(r)
         cid = str(row.get("chain_id") or "")
+        mode = str(row.get("exec_mode") or "remind")
         b = by_chain.setdefault(cid, {**_bucket(), "chain_id": cid,
-                                      "chain_name": row.get("chain_name") or cid})
+                                      "chain_name": row.get("chain_name") or cid,
+                                      "exec_mode": mode})
+        m = by_mode.setdefault(mode, _bucket())
         status = str(row.get("status") or "pending")
         attributed = False
         gid = ""
@@ -165,7 +195,7 @@ def chain_funnel(
         if gid:
             gc = goal_chain_starts.setdefault(gid, {})
             gc[cid] = gc.get(cid, 0) + 1
-        for bk in (total, b):
+        for bk in (total, b, m):
             bk["started"] += 1
             if attributed:
                 bk["attributed"] += 1
@@ -187,7 +217,7 @@ def chain_funnel(
             except Exception:
                 replied = False
         if mature:
-            for bk in (total, b):
+            for bk in (total, b, m):
                 bk["mature_n"] += 1
                 if replied:
                     bk["replied_n"] += 1
@@ -206,6 +236,8 @@ def chain_funnel(
     chains = sorted(by_chain.values(), key=lambda x: -x["started"])
     for b in chains:
         b["reply_rate"] = _rate(b)
+    for mb in by_mode.values():
+        mb["reply_rate"] = _rate(mb)
 
     # P1 2026-08-09：每环节执行聚合（workflow_step_log 窗口内 attempts/ok/failed
     # + 链定义里的动作类型与文案摘要）——「链走到哪一环节在损耗」从翻日志变成读数。
@@ -248,6 +280,8 @@ def chain_funnel(
         "reply_window_hours": reply_window_hours,
         "total": total,
         "chains": chains,
+        # P3：档位分组（remind/auto 各一桶，含 reply_rate）——零 auto 流量时只有 remind 桶
+        "by_mode": by_mode,
         # J：推荐跟随原料（路由层消费后从 API 响应中剔除，不对外暴露 goal_id 明细）
         "goal_chain_starts": goal_chain_starts,
     }

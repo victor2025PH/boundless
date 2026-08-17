@@ -28,6 +28,11 @@ function resourcesDir(context) {
 // [包内相对路径, 人话说明, 缺了会怎样]
 const REQUIRED = [
   ["backend", "后端 sidecar 目录", "桌面壳没有后端可拉起，整个 App 打不开工作台"],
+  [
+    "build-info.json",
+    "构建自述（版本/commit/脏文件清单，write-build-info.js 产出）",
+    "舰队巡检无法核对坐席机装的是哪个源码状态——共享树多线并发下发版快照不可追溯（1.0.23 实锤教训）",
+  ],
   // shared/inject 不在 app 目录内（单一事实来源在 repo 根），只能经 extraResources 随包。
   // 包内 require 是从 asar 里跨出来打到 resources/shared/inject（app.asar/inject/../../
   // 与 app.asar/../shared 都落在 resources 下，已用 electron 实测确认可加载）。

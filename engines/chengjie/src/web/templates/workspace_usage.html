@@ -28,19 +28,51 @@
   .ug-spark .col .a{background:var(--bl-growth-600,#0d76d9);border-radius:1px;}
   .ug-legend{display:flex;gap:14px;font-size:12px;color:#475569;margin-top:10px;}
   .ug-dot{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;}
+  /* uq- 用量与额度增补（2026-08-16）：颜色一律复用既有类 / var 无回落写法，勿加色值字面量 */
+  .uq-sub{font-size:12px;font-weight:400;color:var(--th-ink-slate5);margin-left:8px;}
+  .uq-two{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  @media (max-width:720px){.uq-two{grid-template-columns:1fr;}}
+  .uq-big{font-size:24px;font-weight:800;color:var(--th-ink-slate9);margin-top:4px;}
+  .uq-bar{height:6px;border-radius:4px;background:var(--th-bd-slate1);overflow:hidden;margin-top:8px;}
+  .uq-bar i{display:block;height:100%;background:var(--bl-growth-600);}
+  .uq-badge{display:inline-block;border:1px solid var(--th-bd-gray3);border-radius:10px;padding:1px 7px;font-size:11px;color:var(--th-ink-gray7);}
+  .uq-kv{font-size:13px;color:var(--th-ink-gray7);margin-top:6px;}
+  .uq-muted{font-size:12px;color:var(--th-ink-slate5);}
+  .uq-tbl{width:100%;border-collapse:collapse;font-size:13px;}
+  .uq-tbl th{text-align:left;color:var(--th-ink-slate5);border-bottom:1px solid var(--th-bd-gray2);padding:6px 4px;font-weight:600;}
+  .uq-tbl td{padding:6px 4px;border-bottom:1px solid var(--th-bd-slate1);}
 </style>
 {% endblock %}
 {% block content %}
 <div class="ug-wrap">
   <a class="ug-back" href="/workspace/dash">← {{ (i18n or {}).get('wr_s002', "返回今日概览") }}</a>
   <div class="ug-head">
-    <h2>{{ (i18n or {}).get('wu_s001', "用量计量") }}</h2>
+    <h2>{{ (i18n or {}).get('wu_s001', "用量计量") }}<span class="uq-sub">{{ (i18n or {}).get('uq_page_sub', "用量与额度") }}</span></h2>
+    {% if not (usage_self_only | default(false)) %}
     <div style="display:flex;gap:8px;">
       <span class="ug-pill" data-days="7" onclick="ugDays(7,this)">{{ (i18n or {}).get('analytics_period_7d', "近 7 天") }}</span>
       <span class="ug-pill active" data-days="30" onclick="ugDays(30,this)">{{ (i18n or {}).get('analytics_period_30d', "近 30 天") }}</span>
     </div>
+    {% endif %}
   </div>
 
+  {% if (usage_self_only | default(false)) %}
+  <!-- 一页两态·自视图（usage_self_only=true，坐席/观察员）：只看「我的用量」。
+       数据源 /api/workspace/my-usage 在后端未重启前会 404 —— JS 按空态处理，绝不报错。 -->
+  <div class="ug-sec" id="uq-self">
+    <h3>{{ (i18n or {}).get('uq_my_title', "我的用量") }}</h3>
+    <div id="uq-self-empty" class="uq-muted" style="display:none;">{{ (i18n or {}).get('uq_empty_backend', "计量未启用或后端未更新") }}</div>
+    <div id="uq-self-body" style="display:none;">
+      <div class="uq-muted">{{ (i18n or {}).get('uq_col_month', "本月字符") }}</div>
+      <div class="uq-big" id="uq-self-main"></div>
+      <div class="uq-bar"><i id="uq-self-fill" style="width:0%;"></i></div>
+      <div class="uq-kv" id="uq-self-status"></div>
+      <div class="uq-kv" id="uq-self-today"></div>
+      <div class="uq-kv" id="uq-self-cats"></div>
+      <div class="uq-kv uq-muted" id="uq-self-reset"></div>
+    </div>
+  </div>
+  {% else %}
   <div class="ug-lic ok" id="ug-lic" style="display:none;">
     <span style="font-size:1.2rem;">🔑</span>
     <div style="flex:1;">
@@ -56,6 +88,31 @@
 
   <div id="ug-body" style="display:none;">
     <div class="ug-grid" id="ug-cards"></div>
+    <!-- 字符额度（2026-08-16）：左=授权总池（/api/workspace/quota，既有 API）；
+         右=本月团队消耗（/api/users/char-usage，后端未重启前 404 → 该块隐藏）。 -->
+    <div class="ug-sec" id="uq-char" style="display:none;">
+      <!-- v2 硬限徽章：data.enforce 是重启后才有的新字段，undefined → 徽章保持隐藏 -->
+      <h3>{{ (i18n or {}).get('uq_char_title', "字符额度") }} <span class="uq-badge" id="uq-enforce" style="display:none;"></span></h3>
+      <div class="uq-two">
+        <div id="uq-pool" style="display:none;">
+          <div class="uq-muted">{{ (i18n or {}).get('uq_pool', "授权总池") }}</div>
+          <div class="uq-big" id="uq-pool-main"></div>
+          <div class="uq-bar"><i id="uq-pool-fill" style="width:0%;"></i></div>
+          <div class="uq-kv"><span id="uq-pool-sub"></span></div>
+        </div>
+        <div id="uq-team" style="display:none;">
+          <div class="uq-muted">{{ (i18n or {}).get('uq_team_month', "本月团队消耗") }}</div>
+          <div class="uq-big" id="uq-team-main"></div>
+          <div class="uq-kv" id="uq-team-cats"></div>
+        </div>
+      </div>
+      <!-- v2 预计耗尽（license.remaining ÷ 近 7 天团队日均）：remaining/daily 任一缺失
+           （后端未重启）→ 文本 span 保持隐藏；「增购」链接挪到此行常驻醒目位。 -->
+      <div class="uq-kv" id="uq-exhaust-row">
+        <span id="uq-exhaust" style="display:none;"></span>
+        <a class="ug-back" href="/membership">{{ (i18n or {}).get('uq_buy_more', "增购") }} →</a>
+      </div>
+    </div>
     <div class="ug-sec">
       <h3>{{ (i18n or {}).get('wu_s003', "每日用量趋势") }}</h3>
       <div class="ug-spark" id="ug-spark"></div>
@@ -67,6 +124,25 @@
     <div style="font-size:11px;color:var(--th-ink-slate4,#5b6b85);text-align:center;">
       {{ (i18n or {}).get('wu_s006', "口径：消息量") }}={{ (i18n or {}).get('wu_s007', "收发消息条数；AI 调用数") }}={{ (i18n or {}).get('wu_s008', "生成的 AI 草稿数；活跃坐席") }}={{ (i18n or {}).get('wu_s009', "窗口内有处置记录的去重坐席数。") }}
     </div>
+  </div>
+
+  <!-- 分坐席用量（2026-08-16）：/api/users/char-usage 404/agents 空 → 整块隐藏；
+       enabled=false → 只显示「计量未开启」提示行。 -->
+  <div class="ug-sec" id="uq-agents" style="display:none;">
+    <h3>{{ (i18n or {}).get('uq_agents_title', "分坐席用量") }}</h3>
+    <div id="uq-agents-off" class="uq-muted" style="display:none;">{{ (i18n or {}).get('uq_not_enabled', "坐席级计量未开启（usage.agent_chars.enabled）") }}</div>
+    <table class="uq-tbl" id="uq-agents-tbl" style="display:none;">
+      <thead><tr>
+        <th>{{ (i18n or {}).get('uq_col_member', "成员") }}</th>
+        <th>{{ (i18n or {}).get('uq_col_role', "角色") }}</th>
+        <th style="text-align:right;">{{ (i18n or {}).get('uq_col_month', "本月字符") }}</th>
+        <th style="text-align:right;">{{ (i18n or {}).get('uq_col_today', "今日") }}</th>
+        <th style="text-align:right;">{{ (i18n or {}).get('uq_col_quota', "额度") }}</th>
+        <th>{{ (i18n or {}).get('uq_col_pct', "使用率") }}</th>
+        <th>{{ (i18n or {}).get('uq_col_level', "状态") }}</th>
+      </tr></thead>
+      <tbody id="uq-agents-rows"></tbody>
+    </table>
   </div>
 
   <!-- C2-1 计费对账 -->
@@ -94,8 +170,32 @@
     </div>
     <div id="bl-empty" style="color:var(--th-ink-slate4,#5b6b85);font-size:13px;padding:14px 4px;display:none;">{{ (i18n or {}).get('wu_s013', "该账期暂无用量数据。") }}</div>
   </div>
+  {% endif %}
 </div>
 <script>
+// 一页两态开关：路由注入 usage_self_only（.py 未重启的中间态下变量缺席 → default(false)
+// 走主管视图，与旧行为逐字节一致——非主管此时仍被旧路由 307 挡在页外，不会误入）。
+const UQ_SELF = {{ 'true' if (usage_self_only | default(false)) else 'false' }};
+// 文案表由 i18n pack（usage_page.py 的 uq_* 键，与本模板同批热更新）注入；
+// 兜底刻意用空串——本页在「JS 层零裸 CJK」收录名单内，script 体不得含中文字面量。
+const UQ_T = {
+  unlimited: {{ (i18n or {}).get('uq_unlimited', '')|tojson }},
+  pool_unlimited: {{ (i18n or {}).get('uq_pool_unlimited', '')|tojson }},
+  remaining: {{ (i18n or {}).get('uq_pool_remaining', '')|tojson }},
+  level_ok: {{ (i18n or {}).get('uq_level_ok', '')|tojson }},
+  level_warn: {{ (i18n or {}).get('uq_level_warn', '')|tojson }},
+  level_over: {{ (i18n or {}).get('uq_level_over', '')|tojson }},
+  cat_translation: {{ (i18n or {}).get('uq_by_cat_translation', '')|tojson }},
+  cat_tts: {{ (i18n or {}).get('uq_by_cat_tts', '')|tojson }},
+  cat_other: {{ (i18n or {}).get('uq_by_cat_other', '')|tojson }},
+  my_today: {{ (i18n or {}).get('uq_my_today', '')|tojson }},
+  my_reset: {{ (i18n or {}).get('uq_my_reset', '')|tojson }},
+  enforce_on: {{ (i18n or {}).get('uq_enforce_on', '')|tojson }},
+  enforce_soft: {{ (i18n or {}).get('uq_enforce_soft', '')|tojson }},
+  derived_auto: {{ (i18n or {}).get('uq_derived_auto', '')|tojson }},
+  derived_auto_tip: {{ (i18n or {}).get('uq_derived_auto_tip', '')|tojson }},
+  exhaust_text: {{ (i18n or {}).get('uq_exhaust_text', '')|tojson }}
+};
 var UG_DAYS=30;
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function planName(p){return {community:window.T('db_js_007'),basic:window.T('db_js_008'),pro:window.T('db_js_009'),flagship:window.T('db_js_010')}[p]||p||'—';}
@@ -216,9 +316,180 @@ function blLoad(){
 function blCsv(){
   window.open('/api/workspace/billing?format=csv&month='+encodeURIComponent(blMonth()), '_blank');
 }
-(function(){ var el=document.getElementById('bl-month'); if(el&&!el.value){ el.value=blMonth(); } blLoad(); })();
 
-load();
-setInterval(load, 120000);
+// ── 字符额度 / 分坐席用量 / 我的用量（2026-08-16）───────────────────────────
+// fail-soft 铁律：/api/users/char-usage 与 /api/workspace/my-usage 在 .py 重启
+// 装载前 404——一律当「正常态」处理（隐藏对应区块 / 显示中性空态），绝不弹错。
+function uqFmt(n){ n=Number(n||0); return isFinite(n)?n.toLocaleString():'0'; }
+function uqCats(bc){
+  bc=bc||{};
+  var parts=[UQ_T.cat_translation+' '+uqFmt(bc.translation||0),
+             UQ_T.cat_tts+' '+uqFmt(bc.tts||0)];
+  if(bc.other) parts.push(UQ_T.cat_other+' '+uqFmt(bc.other));
+  return parts.join(' · ');
+}
+function uqLevelText(lvl){
+  return lvl==='over'?UQ_T.level_over:(lvl==='warn'?UQ_T.level_warn:(lvl==='unlimited'?UQ_T.unlimited:UQ_T.level_ok));
+}
+function uqSyncCharVis(){
+  var sec=document.getElementById('uq-char'); if(!sec) return;
+  var pool=document.getElementById('uq-pool'), team=document.getElementById('uq-team');
+  var any=(pool&&pool.style.display!=='none')||(team&&team.style.display!=='none');
+  sec.style.display=any?'block':'none';
+}
+function uqLoadPool(){
+  apiFetch('/api/workspace/quota').then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(d){
+    if(!d||!d.ok) return; // 异常快照 → 保持隐藏
+    var el=document.getElementById('uq-pool'); if(!el) return;
+    var main=document.getElementById('uq-pool-main');
+    var sub=document.getElementById('uq-pool-sub');
+    var fill=document.getElementById('uq-pool-fill');
+    var inc=Number(d.included||0);
+    if(d.visible===false || !(inc>0)){
+      main.textContent=UQ_T.pool_unlimited;
+      sub.textContent='';
+      fill.style.width='0%';
+    } else {
+      var used=Number(d.used||0);
+      var rem=(d.remaining==null)?Math.max(0,inc-used):Number(d.remaining);
+      main.textContent=uqFmt(used)+' / '+uqFmt(inc);
+      sub.textContent=UQ_T.remaining+' '+uqFmt(rem);
+      fill.style.width=Math.min(100,Math.round(used/Math.max(1,inc)*100))+'%';
+    }
+    el.style.display='block';
+    uqSyncCharVis();
+  }).catch(function(){});
+}
+function uqLoadTeam(){
+  apiFetch('/api/users/char-usage').then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(d){
+    if(!d||!d.ok) return;
+    var totals=d.totals||{};
+    var team=document.getElementById('uq-team');
+    if(team){
+      document.getElementById('uq-team-main').textContent=uqFmt(totals.month_total||0);
+      document.getElementById('uq-team-cats').textContent=
+        uqCats(totals.by_category)+' · '+UQ_T.my_today+' '+uqFmt(totals.today_total||0);
+      team.style.display='block';
+      uqSyncCharVis();
+    }
+    uqRenderEnforce(d);
+    uqRenderExhaust(d);
+    uqRenderAgents(d);
+  }).catch(function(){}); // 404（后端未重启）→ 团队消耗与分坐席表保持隐藏
+}
+// ── v2（2026-08-16）：enforce / license_month / daily 是后端重启后才有的新字段——
+// undefined 一律按「该项不渲染」fail-soft，绝不影响本区其余内容。
+function uqRenderEnforce(d){
+  var b=document.getElementById('uq-enforce'); if(!b) return;
+  // enabled=false 时不谈拦截档位（计量都没开，「硬限/软提醒」徽章只会误导）——
+  // char-usage 的 enforce 刻意如实回显配置、不与 enabled 联动，联动判断归消费方。
+  if(typeof d.enforce!=='boolean'||d.enabled===false){ b.style.display='none'; return; }
+  b.textContent=d.enforce?UQ_T.enforce_on:UQ_T.enforce_soft;
+  b.style.display='inline-block';
+}
+function uqRenderExhaust(d){
+  var el=document.getElementById('uq-exhaust'); if(!el) return;
+  el.style.display='none';
+  var lic=d.license||{};
+  var daily=d.daily;
+  if(!Array.isArray(daily)||!daily.length) return;        // daily 未上线/为空 → 不渲染
+  if(typeof lic.remaining!=='number'||!isFinite(lic.remaining)) return; // 不限/未知 → 不渲染
+  var sum=0;
+  daily.forEach(function(x){ sum+=Number((x&&x.total)||0); });
+  var avg=sum/daily.length;
+  if(!(avg>0)) return;                                     // 近 7 天零消耗 → 无法外推
+  var daysLeft=lic.remaining/avg;
+  var dt=new Date(Date.now()+daysLeft*86400000);
+  el.textContent=String(UQ_T.exhaust_text||'')
+    .replace('{days}', String(Math.max(0,Math.round(daysLeft))))
+    .replace('{date}', (dt.getMonth()+1)+'-'+dt.getDate());
+  el.style.display='inline';
+}
+function uqRenderAgents(d){
+  var sec=document.getElementById('uq-agents'); if(!sec) return;
+  var off=document.getElementById('uq-agents-off');
+  var tbl=document.getElementById('uq-agents-tbl');
+  if(d.enabled===false){
+    sec.style.display='block';
+    if(off) off.style.display='block';
+    if(tbl) tbl.style.display='none';
+    return;
+  }
+  var rows=d.agents||[];
+  if(!rows.length){ sec.style.display='none'; return; }
+  // v2「AI 自动+未归因（推导）」尾行 = license_month.total − 坐席归因合计。
+  // license_month 未上线（undefined）/available=false/差值≤0 → 整行不渲染。
+  var lm=d.license_month||{};
+  var attributed=Number((d.totals||{}).month_total)||0;
+  var lmTotal=Number(lm.total)||0;
+  var derived=Math.max(0,lmTotal-attributed);
+  var derivedRow='';
+  if(lm.available===true && lmTotal>=attributed && derived>0){
+    derivedRow='<tr><td colspan="2" title="'+esc(UQ_T.derived_auto_tip)+'">'+esc(UQ_T.derived_auto)
+      +'</td><td style="text-align:right;">'+uqFmt(derived)
+      +'</td><td colspan="4" class="uq-muted">—</td></tr>';
+  }
+  document.getElementById('uq-agents-rows').innerHTML=rows.map(function(a){
+    var st=a.status||{};
+    var quota=Number(a.quota||0);
+    var lvl=st.level||(quota>0?'ok':'unlimited');
+    var lvlTxt=uqLevelText(lvl);
+    var pctNum=Number(st.pct||0);
+    var badge=(lvl==='over'||lvl==='warn')?(' <span class="uq-badge">'+lvlTxt+'</span>'):'';
+    var bar=quota>0
+      ?('<div class="uq-bar" style="max-width:120px;margin-top:0;"><i style="width:'+Math.min(100,pctNum)+'%;"></i></div>'
+        +'<span class="uq-muted">'+pctNum+'%</span>'+badge)
+      :('<span class="uq-muted">—</span>');
+    return '<tr><td>'+esc(a.display_name||a.username)+' <span class="uq-muted">@'+esc(a.username)+'</span></td>'
+      +'<td>'+esc(a.role||'')+'</td>'
+      +'<td style="text-align:right;">'+uqFmt(a.used_month||0)+'</td>'
+      +'<td style="text-align:right;">'+uqFmt(a.used_today||0)+'</td>'
+      +'<td style="text-align:right;">'+(quota>0?uqFmt(quota):UQ_T.unlimited)+'</td>'
+      +'<td>'+bar+'</td>'
+      +'<td>'+lvlTxt+'</td></tr>';
+  }).join('')+derivedRow;
+  if(off) off.style.display='none';
+  if(tbl) tbl.style.display='table';
+  sec.style.display='block';
+}
+function uqSelfEmpty(){
+  var e=document.getElementById('uq-self-empty'); if(e) e.style.display='block';
+  var b=document.getElementById('uq-self-body'); if(b) b.style.display='none';
+}
+function uqLoadSelf(){
+  apiFetch('/api/workspace/my-usage').then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(d){
+    if(!d||!d.ok||d.enabled===false){ uqSelfEmpty(); return; }
+    var body=document.getElementById('uq-self-body'); if(!body) return;
+    var e=document.getElementById('uq-self-empty'); if(e) e.style.display='none';
+    body.style.display='block';
+    var st=d.status||{};
+    var quota=Number(d.quota||0);
+    var used=Number(d.month_total||0);
+    document.getElementById('uq-self-main').textContent=
+      uqFmt(used)+' / '+(quota>0?uqFmt(quota):UQ_T.unlimited);
+    var pct=quota>0?Math.min(100,Math.round(used/quota*100)):0;
+    document.getElementById('uq-self-fill').style.width=pct+'%';
+    var lvl=st.level||(quota>0?'ok':'unlimited');
+    document.getElementById('uq-self-status').textContent=
+      (quota>0?((st.pct!=null?st.pct:pct)+'% · '):'')+uqLevelText(lvl);
+    document.getElementById('uq-self-today').textContent=
+      UQ_T.my_today+': '+uqFmt(d.today_total||0);
+    document.getElementById('uq-self-cats').textContent=uqCats(d.by_category);
+    var now=new Date();
+    var reset=new Date(now.getFullYear(), now.getMonth()+1, 1);
+    document.getElementById('uq-self-reset').textContent=
+      UQ_T.my_reset+': '+reset.getFullYear()+'-'+String(reset.getMonth()+1).padStart(2,'0')+'-01';
+  }).catch(function(){ uqSelfEmpty(); }); // 404（后端未重启）/异常 → 中性空态
+}
+
+if (UQ_SELF) {
+  uqLoadSelf();
+} else {
+  (function(){ var el=document.getElementById('bl-month'); if(el&&!el.value){ el.value=blMonth(); } blLoad(); })();
+  load();
+  setInterval(load, 120000);
+  uqLoadPool();
+  uqLoadTeam();
+}
 </script>
 {% endblock %}

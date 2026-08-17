@@ -10,10 +10,12 @@
 体验档因此天然可被绕过（删状态文件即重置），这不是缺陷而是取舍——真正的防滥用在
 签发侧的机器码台账上做（服务端判断"这台机器领过没有"），本地只负责不打扰地计量。
 
-产品意图（运营已定）
-====================
-装完直接能用（1 万字符 / 48 小时），不要求注册；想要完整 7 天再注册。先给价值、再要
-信息，把「还没看到东西就要我填表」这个最大流失点挪走。
+产品意图（运营已定，2026-08-11 升档）
+====================================
+装完直接能用（10 万字符尝鲜、无时间窗、用完即止），不要求注册；注册后领满 100 万
+（官网签发、绑机、无期限）。先给价值、再要信息，把「还没看到东西就要我填表」这个
+最大流失点挪走。尝鲜量用尽后**硬拦**（桌面模式 enforce 默认开）——拦截弹层给三条
+出路：注册领 100 万 / 联系客服 / 购买，「注册换正式额度」链路已上线，拦得住也接得住。
 
 计量复用
 ========
@@ -40,9 +42,11 @@ logger = logging.getLogger(__name__)
 
 STATE_FILENAME = "local_trial.json"
 
-#: 默认赠量（运营口径：够真跑通一条客户消息，不够跑完一天活）
-DEFAULT_CHARS = 10_000
-DEFAULT_WINDOW_HOURS = 48.0
+#: 默认赠量（运营口径 2026-08-11：10 万尝鲜——够真跑几天活、感受到价值，
+#: 大头 100 万在注册领取那一层，由官网台账按机器指纹守）
+DEFAULT_CHARS = 100_000
+#: 0 = 无时间窗（用完即止）。运营拍板：时间窗稀释价值感，额度本身就是闸门。
+DEFAULT_WINDOW_HOURS = 0.0
 
 #: 时钟回拨容忍：小于它按正常时间抖动处理（NTP 校正、休眠唤醒）
 CLOCK_SLACK_SEC = 300.0
@@ -171,6 +175,15 @@ class LocalTrial:
             logger.debug("[local_trial] 状态文件损坏，按未初始化处理", exc_info=True)
         if st is None:
             st = LocalTrialState(chars=self._chars, window_hours=self._window)
+        elif not st.closed:
+            # 存量升档（2026-08-11 赠量 1万→10万 / 去时间窗）：老安装的状态文件里
+            # 固化着旧口径，只靠改默认值升级安装永远拿不到新量。就地放宽——
+            # **只升不降**（chars 取更大值；配置无窗=0 时清掉旧窗），已关闭的不动。
+            # 纯内存视图、确定性重算，无需为此多写一次盘。
+            if self._chars > st.chars:
+                st.chars = self._chars
+            if self._window <= 0.0 and st.window_hours > 0:
+                st.window_hours = 0.0
         self._cache, self._cache_ts = st, time.time()
         return st
 
@@ -284,6 +297,10 @@ def configure_local_trial(
     这一段太脏（会动他们的注释和自定义），故改为：**桌面模式下、且配置里完全没写过
     `licensing.trial` 时，按桌面默认开启**。配置里一旦写了就完全以配置为准
     （包括显式 `enabled: false`），服务器部署没有 AITR_DESKTOP_MODE 也不受影响。
+
+    ``enforce`` 同一套「没写过 → 桌面默认」逻辑（2026-08-11 起桌面默认 **true**）：
+    「注册领 100 万」链路已上线，用尽后拦截弹层给得出出路（注册/客服/邀请/购买），
+    不拦的话 10 万尝鲜量形同虚设。显式 `enforce: false` 仍完全尊重配置。
     """
     global _TRIAL, _ENABLED, _ENFORCE
     c = _cfg(config)
@@ -294,7 +311,8 @@ def configure_local_trial(
         _ENABLED = desktop if unset else bool(c.get("enabled", False))
         if unset and desktop:
             logger.info("[local_trial] 配置未写 licensing.trial，桌面模式按默认开启体验档")
-        _ENFORCE = bool(c.get("enforce", False))
+        _ENFORCE = (desktop if "enforce" not in c
+                    else bool(c.get("enforce", False)))
         if trial is not None:
             _TRIAL = trial
             return _TRIAL
@@ -305,11 +323,13 @@ def configure_local_trial(
             os.path.dirname(os.path.dirname(os.path.dirname(
                 os.path.abspath(__file__)))), "config")
         from src.licensing.machine_bridge import machine_short
+        # window_hours 显式 0（无窗）必须原样生效——不能用 `or` 兜底：
+        # `0 or DEFAULT` 会把「刻意无窗」偷换成默认窗。None/缺失才回默认。
+        _w = c.get("window_hours", DEFAULT_WINDOW_HOURS)
         _TRIAL = LocalTrial(
             os.path.join(base, STATE_FILENAME),
             chars=int(c.get("chars", DEFAULT_CHARS) or DEFAULT_CHARS),
-            window_hours=float(c.get("window_hours", DEFAULT_WINDOW_HOURS)
-                               or DEFAULT_WINDOW_HOURS),
+            window_hours=float(DEFAULT_WINDOW_HOURS if _w is None else _w),
             machine_short=machine_short(),
         )
         return _TRIAL
@@ -321,7 +341,11 @@ def get_local_trial() -> Optional[LocalTrial]:
 
 
 def local_trial_enforced() -> bool:
-    """用尽/过期后是否真的拦。默认关——注册换正式试用的链路上线前开它会把新装用户锁死。"""
+    """用尽/过期后是否真的拦。
+
+    桌面模式默认开（2026-08-11 起）：「注册领 100 万」链路已上线，用尽即有出路
+    （注册 / 客服 / 邀请 / 购买）；服务器部署与显式 `enforce: false` 仍不拦。
+    """
     return bool(_ENABLED and _ENFORCE)
 
 

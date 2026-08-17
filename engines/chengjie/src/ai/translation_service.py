@@ -214,13 +214,30 @@ class TranslationService:
         return detect_language(text)
 
     def engine_matrix(self, target_lang: str = "") -> Dict[str, Any]:
-        """指定目标语的引擎能力矩阵（供前端提前提示主引擎是否兜底）。"""
+        """指定目标语的引擎能力矩阵（供前端提前提示主引擎是否兜底）。
+
+        P1-XM（2026-08-16）：行内附带进程期实测 ``avg_ms``/``ok_rate``
+        （translation_engine_stats 同源，引擎 chips 的健康 tooltip 消费）；
+        无流量的引擎不带这两键（前端不渲染），统计层异常绝不影响矩阵本身。
+        """
         target = normalize_lang(target_lang) or self.default_target_lang
         try:
-            return self._router.describe(target)
+            matrix = self._router.describe(target)
         except Exception:
             return {"target_lang": target, "primary": "none",
                     "effective": "none", "engines": []}
+        try:
+            from src.ai.translation_engine_stats import get_translation_engine_stats
+            stats = {r["engine"]: r
+                     for r in get_translation_engine_stats().dump().get("rows", [])}
+            for row in matrix.get("engines", []):
+                st = stats.get(row.get("engine"))
+                if st and st.get("calls"):
+                    row["avg_ms"] = st.get("avg_latency_ms")
+                    row["ok_rate"] = st.get("success_rate")
+        except Exception:
+            pass
+        return matrix
 
     async def compare_translations(
         self, text: str, *, target_lang: str = "", source_lang: str = "",

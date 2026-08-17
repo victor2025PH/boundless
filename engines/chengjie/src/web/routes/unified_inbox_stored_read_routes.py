@@ -19,6 +19,7 @@ _get_telegram_client / _message_obj），不在本刀范围，随核心 live 集
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime
 
 from fastapi import Depends, HTTPException, Request
@@ -179,9 +180,54 @@ def register_stored_read_routes(app, *, api_auth) -> None:
         except Exception:
             logger.debug("[automation] mode_source 读取失败（忽略）",
                          exc_info=True)
+        # P0 2026-08-12 发送护栏预判搭同一趟便车（额度拦截可见化事故第三课——
+        # 「点了才知道」之前，坐席应该在 composer 上方就看到「额度已用完」）。
+        # 判定与编排器发送护栏同一函数（send_gate_snapshot 内走 send_blocked，
+        # notify=False 不占告警防抖窗）；仅编排器实际拥有的账号才有意义（RPA
+        # 回落路径不受这些护栏约束）。send_gate=None＝无信息，前端不显横幅。
+        send_gate = None
+        try:
+            from src.integrations.account_orchestrator import (
+                get_orchestrator_if_running,
+            )
+            _orch = get_orchestrator_if_running()
+            if _orch is not None and _orch.owns(
+                    str(platform or "").lower(), str(account_id or "default")):
+                from src.inbox.send_gate_status import send_gate_snapshot
+                _cm4 = getattr(request.app.state, "config_manager", None)
+                send_gate = send_gate_snapshot(
+                    str(platform or "").lower(), str(account_id or "default"),
+                    str(chat_key or ""),
+                    config=(getattr(_cm4, "config", None) or {}) if _cm4 else {})
+                # P1：横幅「白名单此客户」按钮的能力位——服务端按 session 角色判
+                # （拒 agent/viewer，与 exempt 端点同闸），前端零角色管道。
+                if send_gate is not None:
+                    try:
+                        _sg_role = str(request.session.get("role", "") or "")
+                    except Exception:
+                        _sg_role = ""
+                    send_gate["can_exempt"] = _sg_role not in ("agent", "viewer")
+        except Exception:
+            logger.debug("[automation] send_gate 快照失败（忽略）", exc_info=True)
+            send_gate = None
+        # P0 2026-08-14 搁置状态搭同一趟便车（cp-conv-ops 持久状态行——「点了搁置
+        # 又跳回原样」事故的读回半边）：0＝未搁置/已到点；前端 feat 探测本字段，
+        # 缺失（旧后端）自动回落 GET /api/workspace/snoozed 权威清单。
+        snooze_until = 0.0
+        try:
+            _sn_store = _inbox_store(request)
+            if _sn_store is not None:
+                _sn_meta = _sn_store.get_conv_meta(cid) or {}
+                snooze_until = float(_sn_meta.get("snooze_until") or 0.0)
+                if snooze_until <= time.time():
+                    snooze_until = 0.0
+        except Exception:
+            logger.debug("[automation] snooze_until 读取失败（忽略）", exc_info=True)
+            snooze_until = 0.0
         return {"ok": True, "conversation_id": cid, "mode": mode,
                 "budget": budget, "account": account, "effective": effective,
-                "mode_source": mode_source, "rearm": rearm}
+                "mode_source": mode_source, "rearm": rearm,
+                "send_gate": send_gate, "snooze_until": snooze_until}
 
     @app.post("/api/unified-inbox/automation")
     async def api_unified_inbox_automation_set(request: Request, _=Depends(api_auth)):
@@ -281,18 +327,24 @@ def register_stored_read_routes(app, *, api_auth) -> None:
     ):
         """peer_bot_guard P2 坐席救济：本会话**今日**不再受每日预算限制。
 
-        Body: ``{platform, account_id, chat_key}``。写台账 relief_day=今天
-        （跨日自动失效，明天回到正常预算）；不清计数（观测口径保留）。
-        等价于坐席人工接管的显式决定，与切档同权限（api_auth）。
+        Body: ``{platform, account_id, chat_key, revoke?: bool}``。
+        默认（豁免）写台账 relief_day=今天（跨日自动失效，明天回到正常预算）；
+        ``revoke: true``（P1 2026-08-12 后悔药）＝撤销今日豁免，预算判定立即
+        恢复。两个方向共用**同一写入口**（勿造第二个端点的红线不变），均不清
+        计数（观测口径保留）。等价于坐席人工接管的显式决定，与切档同权限。
         """
         body = await request.json()
         platform = str(body.get("platform") or "").lower()
         account_id = str(body.get("account_id") or "default")
         chat_key = str(body.get("chat_key") or "")
+        revoke = bool(body.get("revoke"))
         if not platform or not chat_key:
             raise HTTPException(400, tr(request, "err.ws.platform_chatkey_required"))
         store = _inbox_store(request)
         if store is None or not hasattr(store, "set_budget_relief"):
+            raise HTTPException(503, tr(request, "err.ws.inbox_persistence_disabled"))
+        if revoke and not hasattr(store, "clear_budget_relief"):
+            # 旧 store（未重启装载）不认撤销：如实拒绝，别把「没撤」说成「撤了」
             raise HTTPException(503, tr(request, "err.ws.inbox_persistence_disabled"))
         cid = _conv_id(platform, account_id, chat_key)
         from src.inbox.peer_bot_guard import budget_state, today_key
@@ -300,8 +352,14 @@ def register_stored_read_routes(app, *, api_auth) -> None:
             operator = str(request.session.get("username", "web_admin"))
         except Exception:
             operator = "web_admin"
-        store.set_budget_relief(cid, today_key())
-        logger.info("[reply-budget] 救济：今日跳过预算 cid=%s by=%s", cid, operator)
+        if revoke:
+            store.clear_budget_relief(cid)
+            logger.info("[reply-budget] 撤销豁免：恢复预算 cid=%s by=%s",
+                        cid, operator)
+        else:
+            store.set_budget_relief(cid, today_key())
+            logger.info("[reply-budget] 救济：今日跳过预算 cid=%s by=%s",
+                        cid, operator)
         _cm = getattr(request.app.state, "config_manager", None)
         _cfg_root = (getattr(_cm, "config", None) or {}) if _cm else {}
         return {

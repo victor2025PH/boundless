@@ -1,0 +1,1156 @@
+{% extends "base.html" %}
+{% block title %}{{ (i18n or {}).get('em_s001', "情景记忆 ·") }} {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
+{% block page_title %}{{ (i18n or {}).get('episodic', "情景记忆") }}{% endblock %}
+{% block head %}
+<style>
+.em-filters{display:flex;flex-wrap:wrap;gap:.6rem;align-items:flex-end;margin-bottom:1rem}
+/* 排版修正（2026-08-04）：去掉 input 通杀 min-width（曾把「条数」写 90 实渲 200），
+   搜索框单独放宽；行内表单组清掉 .f-grp 纵向底边距，标签收进 .72 档 */
+#em-q{min-width:280px}
+.em-filters .f-grp{margin-bottom:0}
+.em-filters .f-lbl{font-size:.72rem;color:var(--t3);margin-bottom:.3rem;white-space:nowrap}
+#em-source{width:130px}
+#em-limit{width:90px}
+.em-filters select{width:110px}/* 注入筛选组（身份/层级/排序）的缺省宽；em-source 由 ID 规则覆写 */
+@media (max-width:640px){
+  .em-filters{flex-direction:column;align-items:stretch}
+  .em-filters .f-grp{width:100%}
+  #em-q,#em-source,#em-limit{width:100%}
+  .em-filters select,.em-filters input{width:100%}/* 注入 select 同吃满宽（内联宽度已从工厂移除） */
+}
+.table-wrap{overflow-x:auto}
+.em-table{width:100%;border-collapse:collapse;font-size:.82rem}
+.em-table th,.em-table td{padding:.55rem .65rem;border-bottom:1px solid var(--bd);text-align:left;vertical-align:top}
+.em-table th{color:var(--t3);font-weight:600;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em}
+.em-table tr:hover td{background:color-mix(in srgb, var(--p,#1e8cf2) 4%, transparent)}
+.badge-emb{display:inline-block;padding:.1rem .4rem;border-radius:4px;font-size:.65rem;font-weight:600}
+.badge-emb.on{background:rgba(16,185,129,.15);color:var(--green)}
+.badge-emb.off{background:var(--input);color:var(--t3)}
+.badge-src{display:inline-block;padding:.1rem .4rem;border-radius:4px;font-size:.65rem;font-weight:600}
+.badge-src.stated{background:rgba(16,185,129,.15);color:var(--green)}
+.badge-src.inferred{background:rgba(245,158,11,.15);color:var(--amber)}
+.badge-tier{display:inline-block;padding:.1rem .35rem;border-radius:4px;font-size:.6rem;font-weight:700;margin-left:.25rem;text-transform:uppercase}
+.badge-tier.stable{background:color-mix(in srgb, var(--p,#1e8cf2) 15%, transparent);color:var(--p)}
+.badge-tier.stale{background:var(--input);color:var(--t3);text-decoration:line-through}
+.mono{font-family:Consolas,monospace;font-size:.76rem;word-break:break-all}
+.btn-del{background:none;border:none;color:var(--red);cursor:pointer;font-size:.78rem;font-weight:600;padding:.2rem .4rem;border-radius:6px}
+.btn-del:hover{background:var(--rs)}
+.btn-ok{background:none;border:none;color:var(--green);cursor:pointer;font-size:.78rem;font-weight:600;padding:.2rem .4rem;border-radius:6px}
+.btn-ok:hover{background:rgba(16,185,129,.12)}
+.btn-ok:disabled{opacity:.5;cursor:default}
+.cs-grid{display:flex;flex-wrap:wrap;gap:1rem;margin-bottom:.8rem}
+.cs-stat{flex:1;min-width:120px;background:var(--input);border-radius:10px;padding:.7rem .9rem}
+.cs-stat .num{font-size:1.4rem;font-weight:700;color:var(--p)}
+.cs-stat .lb{font-size:.7rem;color:var(--t3);margin-top:.15rem}
+.cs-actor{display:inline-block;padding:.15rem .5rem;border-radius:6px;background:color-mix(in srgb, var(--p,#1e8cf2) 10%, transparent);color:var(--p);font-size:.72rem;margin:.15rem .25rem .15rem 0}
+/* ── 身份化用户列（P0）── */
+.em-user{display:flex;gap:.55rem;align-items:center;cursor:pointer;min-width:0}
+.em-ava{position:relative;width:30px;height:30px;border-radius:50%;flex:0 0 30px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:.8rem;overflow:hidden;user-select:none}
+.em-ava img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .15s}
+.em-uinfo{min-width:0;flex:1}
+.em-l1{display:flex;align-items:center;gap:.35rem;min-width:0}
+.em-name{font-weight:600;font-size:.8rem;color:var(--t);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+.em-name.em-raw{font-family:Consolas,monospace;font-weight:500;font-size:.7rem;color:var(--t2)}
+.em-sub{font-size:.68rem;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:210px;margin-top:.1rem}
+.em-plat{display:inline-block;padding:.05rem .3rem;border-radius:4px;font-size:.58rem;font-weight:700;flex:0 0 auto;letter-spacing:.02em}
+.em-unres{display:inline-block;padding:.05rem .3rem;border-radius:4px;font-size:.6rem;background:var(--input);color:var(--t3);flex:0 0 auto}
+.em-approx{color:var(--amber);font-weight:700;font-size:.75rem;flex:0 0 auto;cursor:help}
+.em-copy{background:none;border:none;color:var(--t3);cursor:pointer;font-size:.74rem;padding:.1rem .3rem;border-radius:4px;opacity:0;transition:opacity .12s;flex:0 0 auto}
+.em-table tr:hover .em-copy{opacity:1}
+.em-copy:hover{background:var(--input);color:var(--t)}
+a.em-open{text-decoration:none;line-height:1;font-weight:700}
+.em-cat{display:inline-block;padding:.08rem .35rem;border-radius:4px;font-size:.62rem;background:color-mix(in srgb, var(--p,#1e8cf2) 8%, transparent);color:var(--p);margin-right:.35rem;vertical-align:1px}
+/* ── P2：视图切换 / 按人分组卡 / 人档抽屉 / 自绘弹窗 / 骨架屏 / 空态 ── */
+.em-seg{display:inline-flex;border:1px solid var(--bd);border-radius:8px;overflow:hidden;flex:0 0 auto}
+.em-seg button{background:var(--card);border:none;color:var(--t2);font-size:.76rem;padding:.42rem .7rem;cursor:pointer}
+.em-seg button.on{background:color-mix(in srgb, var(--p,#1e8cf2) 14%, transparent);color:var(--p);font-weight:600}
+.em-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:.7rem}
+.em-card{background:var(--input);border:1px solid var(--bd);border-radius:12px;padding:.7rem .8rem;cursor:pointer;transition:border-color .12s, transform .12s;min-width:0}
+.em-card:hover{border-color:color-mix(in srgb, var(--p,#1e8cf2) 45%, var(--bd));transform:translateY(-1px)}
+.em-card .em-ava{width:36px;height:36px;flex:0 0 36px;font-size:.95rem}
+.em-card-head{display:flex;gap:.6rem;align-items:center;min-width:0}
+.em-card-meta{font-size:.68rem;color:var(--t3);margin-top:.45rem;display:flex;gap:.6rem;flex-wrap:wrap;align-items:center}
+.em-card-prev{font-size:.74rem;color:var(--t2);margin-top:.4rem;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.45}
+.em-card-badge{display:inline-block;padding:.06rem .4rem;border-radius:99px;font-size:.64rem;font-weight:600;background:color-mix(in srgb, var(--p,#1e8cf2) 12%, transparent);color:var(--p)}
+.em-card-badge.warn{background:rgba(245,158,11,.14);color:var(--amber)}
+.em-grp-hint{font-size:.72rem;color:var(--t3);margin:.1rem 0 .6rem}
+.em-drv-bk{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1200;opacity:0;transition:opacity .15s;pointer-events:none}
+.em-drv-bk.on{opacity:1;pointer-events:auto}
+.em-drv{position:fixed;top:0;right:0;bottom:0;width:min(480px,94vw);background:var(--card);border-left:1px solid var(--bd);z-index:1201;transform:translateX(102%);transition:transform .18s ease-out;display:flex;flex-direction:column;box-shadow:-12px 0 40px rgba(0,0,0,.25)}
+.em-drv.on{transform:translateX(0)}
+.em-drv-hd{padding:.9rem 1rem .7rem;border-bottom:1px solid var(--bd);display:flex;gap:.7rem;align-items:flex-start}
+.em-drv-hd .em-ava{width:44px;height:44px;flex:0 0 44px;font-size:1.1rem}
+.em-drv-x{margin-left:auto;background:none;border:none;color:var(--t3);font-size:1.05rem;cursor:pointer;padding:.2rem .45rem;border-radius:6px;flex:0 0 auto}
+.em-drv-x:hover{background:var(--input);color:var(--t)}
+.em-drv-bd{flex:1;overflow-y:auto;padding:.8rem 1rem 1.2rem}
+.em-drv-sec{margin-bottom:.9rem}
+.em-drv-sec h4{font-size:.72rem;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin:.2rem 0 .45rem;font-weight:600}
+.em-drv-row{border:1px solid var(--bd);border-radius:10px;padding:.55rem .65rem;margin-bottom:.5rem;background:var(--input)}
+.em-drv-row .c{font-size:.8rem;color:var(--t);line-height:1.5;word-break:break-word}
+.em-drv-row .m{display:flex;gap:.45rem;align-items:center;margin-top:.35rem;flex-wrap:wrap;font-size:.66rem;color:var(--t3)}
+.em-drv-row .m .sp{flex:1}
+.em-drv-acts{display:flex;gap:.5rem;flex-wrap:wrap;margin:.2rem 0 .8rem}
+.em-mdl-bk{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1300;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .13s}
+.em-mdl-bk.on{opacity:1;pointer-events:auto}
+.em-mdl{width:min(440px,92vw);background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:1.1rem 1.2rem;box-shadow:0 18px 60px rgba(0,0,0,.35)}
+.em-mdl h3{font-size:.95rem;margin:0 0 .55rem;color:var(--t)}
+.em-mdl .b{font-size:.8rem;color:var(--t2);line-height:1.55;max-height:40vh;overflow-y:auto}
+.em-mdl .q{background:var(--input);border-radius:8px;padding:.5rem .6rem;margin:.5rem 0;font-size:.78rem;color:var(--t)}
+.em-mdl-ft{display:flex;gap:.6rem;justify-content:flex-end;margin-top:.9rem}
+.em-btn-danger{background:var(--red);color:#fff;border:none;border-radius:8px;padding:.45rem .9rem;font-size:.78rem;font-weight:600;cursor:pointer}
+.em-btn-danger:disabled{opacity:.55;cursor:default}
+.em-btn-plain{background:var(--input);color:var(--t2);border:1px solid var(--bd);border-radius:8px;padding:.45rem .9rem;font-size:.78rem;cursor:pointer}
+.em-skel{height:14px;border-radius:6px;background:linear-gradient(90deg,var(--input) 25%,color-mix(in srgb, var(--t3) 18%, var(--input)) 45%,var(--input) 65%);background-size:220% 100%;animation:emShim 1.1s linear infinite}
+@keyframes emShim{from{background-position:200% 0}to{background-position:-40% 0}}
+.em-empty{text-align:center;padding:2.2rem 1rem;color:var(--t3)}
+.em-empty svg{width:34px;height:34px;opacity:.5;margin-bottom:.5rem}
+.em-empty .t1{font-size:.85rem;color:var(--t2);margin-bottom:.25rem}
+.em-empty .t2{font-size:.72rem}
+[data-embedded="1"] #cs-card{display:none!important}
+/* ── P3：演示打码开关 / 摘要行 ── */
+.em-mask-btn{background:var(--input);color:var(--t2);border:1px solid var(--bd);border-radius:8px;padding:.42rem .7rem;font-size:.76rem;cursor:pointer;flex:0 0 auto}
+.em-mask-btn.on{background:rgba(245,158,11,.15);color:var(--amber);border-color:rgba(245,158,11,.4)}
+#em-summary{font-size:.76rem;color:var(--t2);margin:-.2rem 0 .7rem;display:flex;gap:.7rem;flex-wrap:wrap;align-items:center}
+#em-summary .em-card-badge{cursor:pointer}
+@media (max-width:900px){ .em-cards{grid-template-columns:1fr} .em-filters .f-input{min-width:0} #em-q{min-width:180px} }
+</style>
+{% endblock %}
+{% block content %}
+{% set active="episodic" %}
+
+<div class="card fa" id="cs-card">
+  <h2>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+    {{ (i18n or {}).get('em_s002', "记忆校正质量") }}
+    <span style="font-size:.75rem;font-weight:400;color:var(--t2);margin-left:.4rem">{{ (i18n or {}).get('em_s003', "坐席把 AI 推断确认为事实的采纳情况（近") }} <span id="cs-win">30</span> {{ (i18n or {}).get('db_js_012', "天）") }}</span>
+  </h2>
+  <div class="cs-grid" id="cs-grid">
+    <div class="cs-stat"><div class="num" id="cs-confirmed">—</div><div class="lb">{{ (i18n or {}).get('em_s004', "已采纳（确认数）") }}</div></div>
+    <div class="cs-stat" id="cs-pending-card" style="cursor:pointer" title="{{ (i18n or {}).get('em_id_pending_tip', '点击查看全部待确认推断') }}" onclick="emShowPending()"><div class="num" id="cs-pending">—</div><div class="lb">{{ (i18n or {}).get('em_s005', "待确认推断") }} ↓</div></div>
+    <div class="cs-stat"><div class="num" id="cs-rate">—</div><div class="lb">{{ (i18n or {}).get('em_s006', "采纳率（近似）") }}</div></div>
+    <div class="cs-stat"><div class="num" id="cs-total">—</div><div class="lb">{{ (i18n or {}).get('em_s007', "库内 AI 推断累计") }}</div></div>
+  </div>
+  <div id="cs-actors" style="font-size:.78rem;color:var(--t2)"></div>
+  <div id="cs-trend" style="margin-top:.6rem"></div>
+</div>
+
+<div class="card fa">
+  <h2>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
+    {{ (i18n or {}).get('em_s008', "用户长期记忆条目") }}
+    <span style="font-size:.75rem;font-weight:400;color:var(--t2);margin-left:.4rem">{{ (i18n or {}).get('em_s009', "向量检索与关键词融合注入模型时使用") }}</span>
+  </h2>
+  <div class="em-filters">
+    <div class="f-grp">
+      <label class="f-lbl">{{ (i18n or {}).get('em_id_search', "搜索用户 / 记忆内容") }}</label>
+      <input type="text" id="em-q" placeholder="{{ (i18n or {}).get('em_id_ph', '昵称 / 用户名 / 手机号 / 内容关键词 / 用户ID') }}" class="f-input" onkeydown="if(event.key==='Enter')emLoad()">
+    </div>
+    <div class="f-grp">
+      <label class="f-lbl">{{ (i18n or {}).get('psn_js_120', "来源") }}</label>
+      <select id="em-source" class="f-input">
+        <option value="">{{ (i18n or {}).get('rpa_all', "全部") }}</option>
+        <option value="user_stated">{{ (i18n or {}).get('em_s012', "用户明说") }}</option>
+        <option value="ai_inferred">AI {{ (i18n or {}).get('em_s013', "推断") }}</option>
+      </select>
+    </div>
+    <div class="f-grp">
+      <label class="f-lbl">{{ (i18n or {}).get('em_s014', "条数") }}</label>
+      <input type="number" id="em-limit" value="80" min="1" max="500" class="f-input">
+    </div>
+    <button type="button" class="btn btn-p" onclick="emLoad()">{{ (i18n or {}).get('db_s027', "加载") }}</button>
+    {% if user_role in ('master', 'admin') %}
+    <button type="button" class="btn" id="em-backfill-btn" onclick="emBackfill()" title="{{ (i18n or {}).get('em_s015', '为无向量条目调用 embedding 补全') }}">{{ (i18n or {}).get('em_s016', "补全向量") }}</button>
+    <button type="button" class="btn" id="em-bulkdel-btn" onclick="emBulkDelete()" title="{{ (i18n or {}).get('em_bulk_title', '按内容关键词批量删除记忆：先预览数量、确认后删除，全程计入审计') }}" style="color:var(--tk-danger-ink,#dc2626)">{{ (i18n or {}).get('em_bulk_btn', '🧹 按关键词批量删除') }}</button>
+    {% endif %}
+  </div>
+  <p id="em-status" style="font-size:.8rem;color:var(--t2);margin-bottom:.6rem"></p>
+  <div class="table-wrap">
+    <table class="em-table" id="em-table">
+      <thead>
+        <tr>
+          <th style="min-width:210px">{{ (i18n or {}).get('em_id_user', "用户") }}</th>
+          <th>{{ (i18n or {}).get('em_s017', "内容") }}</th>
+          <th style="width:130px">{{ (i18n or {}).get('em_s018', "来源/层级") }}</th>
+          <th style="width:90px">{{ (i18n or {}).get('em_s019', "向量") }}</th>
+          <th style="width:160px">{{ (i18n or {}).get('time', "时间") }}</th>
+          <th style="width:120px">{{ (i18n or {}).get('ov_js_th_action', "操作") }}</th>
+        </tr>
+      </thead>
+      <tbody id="em-body"><tr><td colspan="6" style="padding:2rem;color:var(--t3)">{{ (i18n or {}).get('dash.q.clicked', "点击") }}「{{ (i18n or {}).get('em_s020', "加载」") }}</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const emCanDelete = {{ 'true' if user_role != 'viewer' else 'false' }};
+function _emEsc(s){
+  return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+var _EM_GRADS=[['#f97316','#ef4444'],['#22c55e','#0ea5e9'],['#8b5cf6','#ec4899'],['#0ea5e9','#6366f1'],['#f59e0b','#84cc16'],['#14b8a6','#3b82f6'],['#e11d48','#f97316'],['#6366f1','#14b8a6']];
+var _EM_PLAT={telegram:['TG','#2AABEE'],whatsapp:['WA','#25D366'],line:['LINE','#06C755'],messenger:['MSG','#A334FA']};
+function _emSeed(s){var h=0;s=String(s||'');for(var i=0;i<s.length;i++){h=(h*31+s.charCodeAt(i))>>>0;}return h;}
+function _emShortKey(k){k=String(k||'');return k.length>34?(k.slice(0,20)+'…'+k.slice(-10)):k;}
+function _emAvatar(idn,key){
+  var seedSrc=(idn&&idn.conversation_id)||key||'?';
+  var g=_EM_GRADS[_emSeed(seedSrc)%_EM_GRADS.length];
+  if(_emMaskOn){
+    // 演示打码：化名首字母渐变头像，绝不渲染真实头像 img
+    return '<span class="em-ava" style="background:linear-gradient(135deg,'+g[0]+','+g[1]+')">'+_emEsc(_emMaskLetter(key))+'</span>';
+  }
+  var ch='?';
+  if(idn&&idn.resolved){
+    var nm=idn.name||idn.username||idn.group_name||idn.chat_key||'';
+    ch=nm?String(nm).trim().charAt(0).toUpperCase():'?';
+  }
+  var img='';
+  var url=(idn&&idn.avatar_url)?String(idn.avatar_url):'';
+  if(url&&!(idn.platform==='messenger'&&/(fbcdn|scontent)/i.test(url))){
+    img='<img loading="lazy" alt="" src="'+_emEsc(url)+'" onload="this.style.opacity=1" onerror="this.remove()">';
+  }
+  return '<span class="em-ava" style="background:linear-gradient(135deg,'+g[0]+','+g[1]+')">'+_emEsc(ch)+img+'</span>';
+}
+function _emRowName(it){
+  if(_emMaskOn)return _emMaskFor(it.memory_key||'');
+  var idn=it.identity;
+  if(idn&&idn.resolved){
+    if(idn.name)return idn.name;
+    if(idn.username)return '@'+idn.username;
+    if(idn.kind==='group'&&idn.member_id)return window.T('em_id_member')+' '+idn.member_id;
+    if(idn.chat_key)return idn.chat_key;
+  }
+  return _emShortKey(it.memory_key||'');
+}
+function _emUserCell(it){
+  var key=String(it.memory_key||'');
+  var idn=it.identity;
+  var ava=_emAvatar(idn,key);
+  var plat=idn?String(idn.platform||''):'';
+  var pc=_EM_PLAT[plat];
+  var chip=pc?'<span class="em-plat" style="background:'+pc[1]+'1f;color:'+pc[1]+'">'+pc[0]+'</span>':'';
+  var l1='',sub='';
+  if(_emMaskOn){
+    // 演示打码：化名 + 平台徽标；隐藏用户名/手机号/群名/原始键/跳转/复制
+    var mUnres=(idn&&!idn.resolved)
+      ?'<span class="em-unres">'+_emEsc(window.T('em_id_unresolved'))+'</span>':'';
+    l1='<span class="em-name">'+_emEsc(_emMaskFor(key))+'</span>'+chip+mUnres;
+    if(idn&&idn.resolved&&idn.kind==='group'){
+      sub='<div class="em-sub">'+_emEsc(window.T('em_id_group'))+'</div>';
+    }
+    return '<div class="em-user" data-key="'+_emEsc(key)+'" title="'+_emEsc(window.T('em_id_filter_tip'))+'" onclick="emCellProfile(this)">'
+      +ava+'<div class="em-uinfo"><div class="em-l1">'+l1+'</div>'+sub+'</div></div>';
+  }
+  if(idn&&idn.resolved){
+    var nm=idn.name||(idn.username?'@'+idn.username:'')||idn.phone||idn.chat_key||key;
+    if(idn.kind==='group'&&!idn.name&&idn.member_id){nm=window.T('em_id_member')+' '+idn.member_id;}
+    var approx=idn.approx?'<span class="em-approx" title="'+_emEsc(window.T('em_id_approx_tip'))+'">≈</span>':'';
+    l1='<span class="em-name">'+_emEsc(nm)+'</span>'+approx+chip;
+    if(idn.kind==='group'){
+      sub='<div class="em-sub">'+_emEsc(window.T('em_id_group')+' · '+(idn.group_name||idn.chat_key||''))+'</div>';
+    }else{
+      var s2=idn.username?'@'+idn.username:(idn.phone||'');
+      if(s2&&s2!==nm)sub='<div class="em-sub">'+_emEsc(s2)+'</div>';
+    }
+  }else if(idn){
+    l1='<span class="em-name em-raw">'+_emEsc(_emShortKey(key))+'</span>'
+      +'<span class="em-unres" title="'+_emEsc(window.T('em_id_unresolved_tip'))+'">'+_emEsc(window.T('em_id_unresolved'))+'</span>'+chip;
+  }else{
+    l1='<span class="em-name em-raw">'+_emEsc(_emShortKey(key))+'</span>';
+  }
+  var cellTitle=window.T('em_id_filter_tip')+'\n'+key+'\n#'+it.id;
+  var copyBtn='<button type="button" class="em-copy" data-key="'+_emEsc(key)+'" title="'+_emEsc(window.T('em_id_copy_tip'))+'" onclick="emCopyKey(event,this)">⧉</button>';
+  // 「查记忆 → 跳会话跟进」闭环：已识别行给收件箱深链（原生 <a> 新标签，零 JS 依赖）
+  var openBtn='';
+  if(idn&&idn.resolved&&idn.conversation_id){
+    openBtn='<a class="em-copy em-open" href="/workspace?conv='+encodeURIComponent(idn.conversation_id)+'" target="_blank" rel="noopener" data-winname="workspace" title="'+_emEsc(window.T('em_id_open_conv'))+'" onclick="emStopRow(event);return __openUnique(event,this)">↗</a>';
+  }
+  return '<div class="em-user" data-key="'+_emEsc(key)+'" title="'+_emEsc(cellTitle)+'" onclick="emCellProfile(this)">'
+    +ava+'<div class="em-uinfo"><div class="em-l1">'+l1+'</div>'+sub+'</div>'+openBtn+copyBtn+'</div>';
+}
+function emStopRow(ev){
+  if(ev&&ev.stopPropagation)ev.stopPropagation();
+}
+function emCellProfile(el){
+  var k=(el&&el.dataset)?(el.dataset.key||''):'';
+  if(!k)return;
+  if(typeof emOpenProfile==='function'){emOpenProfile(k);return;}
+  var inp=document.getElementById('em-q');   // 兜底：机件未就绪时退回旧「按键过滤」
+  if(inp){inp.value=k;emLoad();}
+}
+function emCopyKey(ev,btn){
+  if(ev&&ev.stopPropagation)ev.stopPropagation();
+  var k=(btn&&btn.dataset)?(btn.dataset.key||''):'';
+  if(!k)return;
+  _emCopyText(k,btn);
+}
+function _emCopyText(t,btn){
+  function done(ok){
+    if(btn){var old=btn.textContent;btn.textContent=ok?'✓':'✗';setTimeout(function(){btn.textContent=old;},1200);}
+    if(ok){var st=document.getElementById('em-status');if(st)st.textContent=window.T('em_id_copied');}
+  }
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(t).then(function(){done(true);},function(){_emCopyFallback(t,done);});
+  }else{_emCopyFallback(t,done);}
+}
+function _emCopyFallback(t,done){
+  try{
+    var ta=document.createElement('textarea');
+    ta.value=t;ta.style.position='fixed';ta.style.opacity='0';
+    document.body.appendChild(ta);ta.select();
+    var ok=document.execCommand('copy');
+    document.body.removeChild(ta);done(!!ok);
+  }catch(e){done(false);}
+}
+/* ── 相对时间（悬浮显精确时刻）＋「加载更多」分页（P1 前端）──
+   分页能力探测＝响应体是否回显 offset 字段：旧后端（重启前）不回显 →
+   按钮不渲染，绝不出现「点了没反应/误报没有更多」的窗口期。
+   ── P2：按人分组视图 / 人档抽屉 / 自绘弹窗 / 身份筛选与孤儿键清理 ──
+   全部控件 JS 动态创建（零新增内联 handler / 零静态 DOM 依赖）；
+   分组=前端聚合已加载行、抽屉=prefix 精确查询——零新接口零重启。 */
+var _emIds = new Set();      // 已加载行 id（追加去重）
+var _emItems = [];           // 已加载行（累计，含加载更多；分组/筛选共用）
+var _emParams = null;        // 当前查询参数快照（加载更多沿用同条件）
+var _emCanPage = false;      // 后端 offset 能力（响应回显探测）
+var _emViewCur = 'list';     // 当前视图（init 按 URL/localStorage/embedded 定）
+var _emIdnF = '';            // 身份筛选：'' | 'resolved' | 'unresolved'
+var _emDrvKey = '';          // 抽屉当前用户键（空=关闭）
+var _emDrvRows = [];         // 抽屉当前行集（emDel 内容查找用）
+/* ── P3 状态：演示打码（化名渲染，不动数据）/ 质量巡检（层级筛选+排序）── */
+var _emMaskOn = false;       // 演示打码：昵称/头像/键 → 客户 A/B/C 化名
+var _emMaskMap = new Map();  // key → 化名序号（会话内稳定分配）
+var _emTierF = '';           // 层级筛选：'' | raw | stable | stale
+var _emSortCur = 'new';      // 列表排序：new（服务端序）| hits | old
+function _emAgo(ts){
+  try{
+    var d = new Date(ts < 1e12 ? ts * 1000 : ts);
+    var ms = Date.now() - d.getTime();
+    if (isNaN(ms)) return {rel: String(ts), abs: String(ts)};
+    var abs = window.wsFmtDateTime(ts);
+    if (ms < 0) return {rel: abs, abs: abs};
+    var mins = Math.floor(ms / 60000);
+    if (mins < 1) return {rel: window.T('em_id_ago_now'), abs: abs};
+    if (mins < 60) return {rel: window.Tf('em_id_ago_min', {n: mins}), abs: abs};
+    var hrs = Math.floor(mins / 60);
+    if (hrs < 24) return {rel: window.Tf('em_id_ago_hour', {n: hrs}), abs: abs};
+    var days = Math.floor(hrs / 24);
+    if (days < 30) return {rel: window.Tf('em_id_ago_day', {n: days}), abs: abs};
+    return {rel: window.wsFmtDate(ts), abs: abs};
+  }catch(e){ return {rel: String(ts || '—'), abs: String(ts || '')}; }
+}
+function _emRowHtml(it) {
+  var ago = it.created_at ? _emAgo(it.created_at) : null;
+  var tsCell = ago
+    ? '<span title="' + _emEsc(ago.abs) + '" style="cursor:help;color:var(--t2);font-size:.76rem">' + _emEsc(ago.rel) + '</span>'
+    : '—';
+  var emb = it.has_embedding ? '<span class="badge-emb on">'+window.T('em_js002')+'</span>' : '<span class="badge-emb off">'+window.T('em_js003')+'</span>';
+  var srcOn = it.source === 'ai_inferred';
+  var src = srcOn
+    ? '<span class="badge-src inferred">AI '+window.T('em_s013')+'</span>'
+    : '<span class="badge-src stated">'+window.T('em_s012')+'</span>';
+  var tier = '';
+  if (it.tier === 'stable') tier = '<span class="badge-tier stable">'+window.T('em_js004')+'</span>';
+  else if (it.tier === 'stale') tier = '<span class="badge-tier stale">'+window.T('em_js005')+'</span>';
+  var hits = (it.hits && it.hits > 1) ? ' <span style="color:var(--t3);font-size:.65rem">×' + it.hits + '</span>' : '';
+  var cat = (it.category && it.category !== 'general')
+    ? '<span class="em-cat">'+_emEsc(it.category)+'</span>' : '';
+  var op;
+  if (emCanDelete) {
+    var okBtn = srcOn
+      ? '<button type="button" class="btn-ok" data-id="'+it.id+'" onclick="emConfirm(this)" title="'+_emEsc(window.T('em_id_confirm_tip'))+'">'+window.T('em_id_confirm')+'</button>'
+      : '';
+    op = okBtn + '<button type="button" class="btn-del" data-id="'+it.id+'" data-name="'+_emEsc(_emRowName(it))+'" onclick="emDel(this)">'+window.T('delete')+'</button>';
+  } else {
+    op = '<span style="color:var(--t3);font-size:.75rem">—</span>';
+  }
+  return '<tr data-id="' + it.id + '"><td>' + _emUserCell(it) + '</td><td>' + cat + _emEsc(it.content || '') + '</td><td>' + src + tier + hits + '</td><td>' + emb + '</td><td>' + tsCell + '</td><td>' + op + '</td></tr>';
+}
+function _emMoreSync(state) {
+  // state: 'more'=可续载 | 'end'=点过且到底 | 'none'=无需分页
+  var tw = document.querySelector('.table-wrap');
+  var wrap = document.getElementById('em-more-wrap');
+  if (!wrap) {
+    if (!tw || !tw.parentNode) return;
+    wrap = document.createElement('div');
+    wrap.id = 'em-more-wrap';
+    wrap.style.cssText = 'text-align:center;padding:.6rem 0 .1rem';
+    tw.parentNode.insertBefore(wrap, tw.nextSibling);
+  }
+  if (state === 'more' && _emCanPage) {
+    var btn = document.getElementById('em-more-btn');
+    if (!btn) {
+      wrap.innerHTML = '';
+      btn = document.createElement('button');
+      btn.type = 'button';
+      btn.id = 'em-more-btn';
+      btn.className = 'btn';
+      btn.addEventListener('click', emLoadMore);
+      wrap.appendChild(btn);
+    }
+    btn.disabled = false;
+    btn.textContent = window.T('em_id_more');
+  } else if (state === 'end') {
+    wrap.innerHTML = '<span style="font-size:.75rem;color:var(--t3)">' + _emEsc(window.T('em_id_no_more')) + '</span>';
+  } else {
+    wrap.innerHTML = '';
+  }
+}
+function _emLimit() {
+  return parseInt(document.getElementById('em-limit').value || '80', 10) || 80;
+}
+/* ── P2 机件：筛选谓词 / 渲染调度 / 分组 / 抽屉 / 弹窗 / 注入控件 ── */
+function _emIdnPass(it){
+  if(!_emIdnF) return true;
+  if(!it || !it.identity) return false;   // 富化缺席时无法判身份，两档筛选都不纳
+  return _emIdnF==='resolved' ? !!it.identity.resolved : !it.identity.resolved;
+}
+/* ── P3 机件：化名 / 层级筛选 / 排序 / 通用批量删除 ── */
+function _emMaskFor(key){
+  key=String(key||'');
+  if(!_emMaskMap.has(key))_emMaskMap.set(key,_emMaskMap.size);
+  var i=_emMaskMap.get(key);
+  var x=(i<26)?String.fromCharCode(65+i)
+    :String.fromCharCode(65+Math.floor(i/26)-1)+String.fromCharCode(65+(i%26));
+  return window.Tf('em_id_mask_name',{x:x});
+}
+function _emMaskLetter(key){
+  var m=_emMaskFor(key).match(/[A-Z]+/);
+  return m?m[0].charAt(0):'?';
+}
+function _emTierPass(it){
+  if(!_emTierF)return true;
+  return String((it&&it.tier)||'raw')===_emTierF;
+}
+function _emRowPass(it){
+  return _emIdnPass(it)&&_emTierPass(it);
+}
+function _emSortRows(rows){
+  if(_emSortCur==='hits'){
+    return rows.slice().sort(function(a,b){
+      return ((b.hits||1)-(a.hits||1))
+        ||String(b.created_at||'').localeCompare(String(a.created_at||''));
+    });
+  }
+  if(_emSortCur==='old'){
+    return rows.slice().sort(function(a,b){
+      return String(a.created_at||'').localeCompare(String(b.created_at||''));
+    });
+  }
+  return rows;   // new = 服务端 created_at DESC 原序
+}
+function _emBatchDelete(victims,title,bodyText){
+  if(!victims.length)return;
+  _emModal({
+    title:title,
+    body:'<div>'+_emEsc(bodyText)+'</div>',
+    ok:window.T('delete'),
+    onOk:async function(prog){
+      for(var i=0;i<victims.length;i++){
+        try{await apiFetch('/api/episodic-memory/'+victims[i].id,{method:'DELETE'},{timeoutMs:60000});}catch(e){}
+        if(prog)prog(i+1,victims.length);
+      }
+      emLoad();csLoad();
+    }
+  });
+}
+function emCleanupStale(){
+  var v=_emItems.filter(_emRowPass).filter(function(x){return String((x&&x.tier)||'')==='stale';});
+  _emBatchDelete(v,window.T('em_id_cleanup_stale'),window.Tf('em_id_cleanup_stale_body',{n:v.length}));
+}
+function emToggleMask(){
+  _emMaskOn=!_emMaskOn;
+  try{localStorage.setItem('em_mask',_emMaskOn?'1':'');}catch(e){}
+  _emMaskSync();
+  _emRender();
+  _emSumRender();
+  if(_emDrvOpen())_emDrvRender();
+}
+function _emMaskSync(){
+  var b=document.getElementById('em-mask-btn');
+  if(b)b.className='em-mask-btn'+(_emMaskOn?' on':'');
+}
+/* ── 管理者摘要行（后端 /summary 能力探测：旧后端 404 → 整行隐藏）── */
+var _emSumData=null;
+async function _emSumLoad(){
+  try{
+    var res=await apiFetch('/api/episodic-memory/summary?days=7&top=3');
+    if(!res.ok)return;
+    var d=await res.json();
+    if(!d||d.ok!==true)return;
+    _emSumData=d;
+    _emSumRender();
+  }catch(e){}
+}
+function _emSumRender(){
+  var d=_emSumData; if(!d)return;
+  var bar=document.querySelector('.em-filters');
+  if(!bar||!bar.parentNode)return;
+  var el=document.getElementById('em-summary');
+  if(!el){
+    el=document.createElement('div'); el.id='em-summary';
+    bar.parentNode.insertBefore(el,bar);
+    el.addEventListener('click',function(e){
+      var chip=(e.target&&e.target.closest)?e.target.closest('[data-emsum-key]'):null;
+      if(chip)emOpenProfile(chip.getAttribute('data-emsum-key')||'');
+    });
+  }
+  var line=window.Tf('em_id_sum_line',{d:d.window_days||7,n:d.new_count||0,u:d.new_users||0});
+  var tops=(d.top||[]).map(function(t){
+    var nm=_emRowName({identity:t.identity,memory_key:t.memory_key});
+    return '<span class="em-card-badge" data-emsum-key="'+_emEsc(t.memory_key||'')+'" title="'+_emEsc(window.T('em_id_filter_tip'))+'">'+_emEsc(nm)+' · '+(t.count||0)+'</span>';
+  }).join('');
+  el.innerHTML='<span>'+_emEsc(line)+'</span>'
+    +(tops?'<span style="color:var(--t3)">'+_emEsc(window.T('em_id_sum_top'))+':</span>'+tops:'');
+}
+function _emEmptyHtml(){
+  return '<div class="em-empty">'
+    +'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 2a7 7 0 00-7 7c0 2 .9 3.5 2 4.7.8.9 1 1.6 1 2.3v1h8v-1c0-.7.2-1.4 1-2.3 1.1-1.2 2-2.7 2-4.7a7 7 0 00-7-7z"/><path d="M9 21h6"/></svg>'
+    +'<div class="t1">'+_emEsc(window.T('em_js001'))+'</div>'
+    +'<div class="t2">'+_emEsc(window.T('em_id_empty_hint'))+'</div></div>';
+}
+function _emStatusLine(){
+  var st=document.getElementById('em-status'); if(!st)return;
+  var total=_emItems.length;
+  var line=window.T('wa_js_019')+' '+total+' '+window.T('dash.items');
+  if(_emItems.some(function(x){return x&&x.identity;})){
+    var nid=_emItems.filter(function(x){return x&&x.identity&&x.identity.resolved;}).length;
+    line+=' · '+window.T('em_id_resolved_n')+' '+nid+'/'+total;
+  }
+  if(_emIdnF||_emTierF){
+    var shown=_emItems.filter(_emRowPass).length;
+    line+=' · '+window.Tf('em_id_shown',{n:shown});
+  }
+  st.textContent=line;
+}
+function _emGroupsWrap(){
+  var gw=document.getElementById('em-groups');
+  if(!gw){
+    var tw=document.querySelector('.table-wrap');
+    if(!tw||!tw.parentNode)return null;
+    gw=document.createElement('div');
+    gw.id='em-groups';
+    gw.style.display='none';
+    gw.addEventListener('click',function(e){
+      var card=(e.target&&e.target.closest)?e.target.closest('.em-card'):null;
+      if(card&&card.dataset&&card.dataset.key)emOpenProfile(card.dataset.key);
+    });
+    tw.parentNode.insertBefore(gw,tw.nextSibling);
+  }
+  return gw;
+}
+function _emRender(){
+  var tw=document.querySelector('.table-wrap');
+  var gw=_emGroupsWrap();
+  if(_emViewCur==='group'){
+    if(tw)tw.style.display='none';
+    if(gw){gw.style.display='';_emRenderGroups();}
+  }else{
+    if(tw)tw.style.display='';
+    if(gw)gw.style.display='none';
+    _emRenderTable();
+  }
+  _emStatusLine();
+  _emCleanupSync();
+}
+function _emRenderTable(){
+  var body=document.getElementById('em-body'); if(!body)return;
+  var rows=_emSortRows(_emItems.filter(_emRowPass));
+  if(!rows.length){
+    body.innerHTML='<tr><td colspan="6">'+_emEmptyHtml()+'</td></tr>';
+    return;
+  }
+  body.innerHTML=rows.map(_emRowHtml).join('');
+}
+function _emBuildGroups(){
+  var map=new Map();
+  for(var i=0;i<_emItems.length;i++){
+    var it=_emItems[i];
+    if(!it||!_emRowPass(it))continue;
+    var k=String(it.memory_key||'');
+    var g=map.get(k);
+    if(!g){g={key:k,idn:null,rows:[],latest:'',pending:0,cats:{}};map.set(k,g);}
+    g.rows.push(it);
+    if(it.identity&&(!g.idn||(!g.idn.resolved&&it.identity.resolved)))g.idn=it.identity;
+    var ca=String(it.created_at||''); if(ca>g.latest)g.latest=ca;
+    if(it.source==='ai_inferred')g.pending++;
+    var c=String(it.category||'general'); g.cats[c]=(g.cats[c]||0)+1;
+  }
+  var arr=Array.from(map.values());
+  arr.sort(function(a,b){return a.latest<b.latest?1:(a.latest>b.latest?-1:0);});
+  return arr;
+}
+function _emCardHtml(g){
+  var name=_emRowName({identity:g.idn,memory_key:g.key});
+  var pc=(g.idn&&_EM_PLAT[g.idn.platform])||null;
+  var chip=pc?'<span class="em-plat" style="background:'+pc[1]+'1f;color:'+pc[1]+'">'+pc[0]+'</span>':'';
+  var unres=(g.idn&&!g.idn.resolved)?'<span class="em-unres">'+_emEsc(window.T('em_id_unresolved'))+'</span>':'';
+  var sub='';
+  if(g.idn&&g.idn.resolved){
+    if(g.idn.kind==='group')sub=window.T('em_id_group')+' · '+(g.idn.group_name||'');
+    else sub=(g.idn.username?'@'+g.idn.username:'')||g.idn.phone||'';
+  }
+  if(_emMaskOn)sub=(g.idn&&g.idn.resolved&&g.idn.kind==='group')?window.T('em_id_group'):'';
+  var ago=g.latest?_emAgo(g.latest):null;
+  var cats=Object.keys(g.cats).filter(function(c){return c!=='general';}).slice(0,3)
+    .map(function(c){return '<span class="em-cat">'+_emEsc(c)+'</span>';}).join('');
+  var prev=g.rows.length?String(g.rows[0].content||''):'';
+  return '<div class="em-card" data-key="'+_emEsc(g.key)+'" title="'+_emEsc(window.T('em_id_filter_tip'))+'">'
+    +'<div class="em-card-head">'+_emAvatar(g.idn,g.key)
+    +'<div style="min-width:0;flex:1"><div class="em-l1"><span class="em-name">'+_emEsc(name)+'</span>'+chip+unres+'</div>'
+    +(sub?'<div class="em-sub">'+_emEsc(sub)+'</div>':'')+'</div>'
+    +'<span class="em-card-badge">'+_emEsc(window.Tf('em_id_person_n',{n:g.rows.length}))+'</span></div>'
+    +(prev?'<div class="em-card-prev">'+_emEsc(prev)+'</div>':'')
+    +'<div class="em-card-meta">'
+    +(g.pending?'<span class="em-card-badge warn">'+_emEsc(window.Tf('em_id_pending_n',{n:g.pending}))+'</span>':'')
+    +cats+(ago?'<span title="'+_emEsc(ago.abs)+'">'+_emEsc(ago.rel)+'</span>':'')
+    +'</div></div>';
+}
+function _emRenderGroups(){
+  var gw=_emGroupsWrap(); if(!gw)return;
+  var arr=_emBuildGroups();
+  if(!arr.length){gw.innerHTML=_emEmptyHtml();return;}
+  gw.innerHTML='<div class="em-grp-hint">'
+    +_emEsc(window.Tf('em_id_group_hint',{n:_emItems.length}))
+    +' · '+_emEsc(window.Tf('em_id_persons_n',{n:arr.length}))+'</div>'
+    +'<div class="em-cards">'+arr.map(_emCardHtml).join('')+'</div>';
+}
+function _emSkeletonShow(){
+  if(_emViewCur==='group'){
+    var gw=_emGroupsWrap();
+    if(gw)gw.innerHTML='<div class="em-cards">'+new Array(7).join(
+      '<div class="em-card"><div class="em-skel" style="width:55%"></div>'
+      +'<div class="em-skel" style="width:85%;margin-top:.6rem"></div>'
+      +'<div class="em-skel" style="width:70%;margin-top:.4rem"></div></div>')+'</div>';
+  }else{
+    var body=document.getElementById('em-body');
+    if(body)body.innerHTML=new Array(7).join(
+      '<tr><td><div class="em-skel" style="width:80%"></div></td><td><div class="em-skel"></div></td>'
+      +'<td><div class="em-skel" style="width:70%"></div></td><td><div class="em-skel" style="width:50%"></div></td>'
+      +'<td><div class="em-skel" style="width:60%"></div></td><td><div class="em-skel" style="width:40%"></div></td></tr>');
+  }
+}
+/* ── 自绘确认弹窗（替代原生 confirm；批量操作带进度行）── */
+var _emMdlOnOk=null;
+function _emModal(o){
+  var bk=document.getElementById('em-mdl-bk');
+  if(!bk){
+    bk=document.createElement('div'); bk.id='em-mdl-bk'; bk.className='em-mdl-bk';
+    bk.innerHTML='<div class="em-mdl"><h3 id="em-mdl-t"></h3><div class="b" id="em-mdl-b"></div>'
+      +'<div id="em-mdl-prog" style="font-size:.74rem;color:var(--t3);margin-top:.5rem"></div>'
+      +'<div class="em-mdl-ft"><button type="button" class="em-btn-plain" id="em-mdl-no"></button>'
+      +'<button type="button" class="em-btn-danger" id="em-mdl-ok"></button></div></div>';
+    document.body.appendChild(bk);
+    bk.addEventListener('click',function(e){if(e.target===bk)_emModalClose();});
+    var noB=document.getElementById('em-mdl-no');
+    if(noB)noB.addEventListener('click',_emModalClose);
+    var okB=document.getElementById('em-mdl-ok');
+    if(okB)okB.addEventListener('click',async function(){
+      if(!_emMdlOnOk){_emModalClose();return;}
+      var fn=_emMdlOnOk;
+      this.disabled=true; if(noB)noB.disabled=true;
+      try{
+        await fn(function(done,total){
+          var p=document.getElementById('em-mdl-prog');
+          if(p)p.textContent=window.Tf('em_id_working',{done:done,total:total});
+        });
+      }catch(e){}
+      this.disabled=false; if(noB)noB.disabled=false;
+      _emModalClose();
+    });
+  }
+  var t=document.getElementById('em-mdl-t'); if(t)t.textContent=o.title||'';
+  var b=document.getElementById('em-mdl-b'); if(b)b.innerHTML=o.body||'';
+  var p=document.getElementById('em-mdl-prog'); if(p)p.textContent='';
+  var no=document.getElementById('em-mdl-no'); if(no){no.textContent=window.T('cancel');no.disabled=false;}
+  var ok=document.getElementById('em-mdl-ok'); if(ok){ok.textContent=o.ok||window.T('confirm');ok.disabled=false;}
+  _emMdlOnOk=o.onOk||null;
+  bk.classList.add('on');
+}
+function _emModalClose(){
+  var bk=document.getElementById('em-mdl-bk');
+  if(bk)bk.classList.remove('on');
+  _emMdlOnOk=null;
+}
+function _emFindItem(id){
+  id=String(id);
+  for(var i=0;i<_emItems.length;i++){if(String(_emItems[i].id)===id)return _emItems[i];}
+  for(var j=0;j<_emDrvRows.length;j++){if(String(_emDrvRows[j].id)===id)return _emDrvRows[j];}
+  return null;
+}
+/* ── 人档抽屉：一个客户的全部记忆（prefix 精确查询 + 客户端全等过滤）── */
+function _emDrvEls(){
+  var bk=document.getElementById('em-drv-bk');
+  var pn=document.getElementById('em-drv');
+  if(!bk){
+    bk=document.createElement('div'); bk.id='em-drv-bk'; bk.className='em-drv-bk';
+    bk.addEventListener('click',_emDrvClose);
+    document.body.appendChild(bk);
+  }
+  if(!pn){
+    pn=document.createElement('div'); pn.id='em-drv'; pn.className='em-drv';
+    document.body.appendChild(pn);
+  }
+  return {bk:bk,pn:pn};
+}
+function _emDrvOpen(){
+  var pn=document.getElementById('em-drv');
+  return !!(pn&&pn.classList.contains('on'));
+}
+function emOpenProfile(key){
+  key=String(key||''); if(!key)return;
+  var els=_emDrvEls();
+  _emDrvKey=key; _emDrvRows=[];
+  els.pn.innerHTML='<div class="em-drv-hd"><div style="flex:1"><div class="em-skel" style="width:55%"></div></div>'
+    +'<button type="button" class="em-drv-x" id="em-drv-x">✕</button></div>'
+    +'<div class="em-drv-bd"><div class="em-skel" style="margin-bottom:.6rem"></div><div class="em-skel" style="width:72%"></div></div>';
+  var x=document.getElementById('em-drv-x'); if(x)x.addEventListener('click',_emDrvClose);
+  els.bk.classList.add('on'); els.pn.classList.add('on');
+  _emDrvReload();
+}
+async function _emDrvReload(){
+  var key=_emDrvKey; if(!key)return;
+  try{
+    var q=new URLSearchParams({prefix:key,limit:'500'});
+    var res=await apiFetch('/api/episodic-memory?'+q.toString());
+    if(_emDrvKey!==key)return;
+    if(!res.ok){_emDrvErr(res.status);return;}
+    var d=await res.json();
+    if(_emDrvKey!==key)return;
+    _emDrvRows=(d.items||[]).filter(function(x){return String((x||{}).memory_key||'')===key;});
+    _emDrvRender();
+  }catch(e){if(_emDrvKey===key)_emDrvErr(e);}
+}
+function _emDrvErr(e){
+  var els=_emDrvEls();
+  els.pn.innerHTML='<div class="em-drv-hd"><div style="flex:1;color:var(--red);font-size:.8rem">'
+    +_emEsc(window.T('ov_js_req_fail')+': '+e)+'</div>'
+    +'<button type="button" class="em-drv-x" id="em-drv-x">✕</button></div>';
+  var x=document.getElementById('em-drv-x'); if(x)x.addEventListener('click',_emDrvClose);
+}
+function _emDrvRowHtml(r,personName){
+  var srcOn=r.source==='ai_inferred';
+  var chips=srcOn
+    ?'<span class="badge-src inferred">AI '+window.T('em_s013')+'</span>'
+    :'<span class="badge-src stated">'+window.T('em_s012')+'</span>';
+  var tier='';
+  if(r.tier==='stable')tier='<span class="badge-tier stable">'+window.T('em_js004')+'</span>';
+  else if(r.tier==='stale')tier='<span class="badge-tier stale">'+window.T('em_js005')+'</span>';
+  var ago=r.created_at?_emAgo(r.created_at):null;
+  var t=ago?'<span title="'+_emEsc(ago.abs)+'" style="cursor:help">'+_emEsc(ago.rel)+'</span>':'';
+  var acts='';
+  if(emCanDelete){
+    acts=(srcOn?'<button type="button" class="btn-ok" data-id="'+r.id+'" onclick="emConfirm(this)">'+window.T('em_id_confirm')+'</button>':'')
+      +'<button type="button" class="btn-del" data-id="'+r.id+'" data-name="'+_emEsc(personName||'')+'" onclick="emDel(this)">'+window.T('delete')+'</button>';
+  }
+  return '<div class="em-drv-row"><div class="c">'+_emEsc(r.content||'')+'</div>'
+    +'<div class="m">'+chips+tier+t+'<span class="sp"></span>'+acts+'</div></div>';
+}
+function _emDrvRender(){
+  var els=_emDrvEls(); var key=_emDrvKey; var rows=_emDrvRows;
+  var idn=null,i;
+  for(i=0;i<rows.length;i++){var c1=rows[i].identity;if(c1){idn=c1;if(c1.resolved)break;}}
+  if(!idn){for(i=0;i<_emItems.length;i++){if(String(_emItems[i].memory_key||'')===key&&_emItems[i].identity){idn=_emItems[i].identity;break;}}}
+  var name=_emRowName({identity:idn,memory_key:key});
+  var pc=(idn&&_EM_PLAT[idn.platform])||null;
+  var chip=pc?'<span class="em-plat" style="background:'+pc[1]+'1f;color:'+pc[1]+'">'+pc[0]+'</span>':'';
+  var unres=(idn&&!idn.resolved)?'<span class="em-unres">'+_emEsc(window.T('em_id_unresolved'))+'</span>':'';
+  var approx=(idn&&idn.approx)?'<span class="em-approx" title="'+_emEsc(window.T('em_id_approx_tip'))+'">≈</span>':'';
+  var sub='';
+  if(idn&&idn.resolved){
+    if(idn.kind==='group')sub=window.T('em_id_group')+' · '+(idn.group_name||idn.chat_key||'');
+    else sub=(idn.username?'@'+idn.username:'')||idn.phone||'';
+  }
+  if(_emMaskOn)sub=(idn&&idn.resolved&&idn.kind==='group')?window.T('em_id_group'):'';
+  var pend=rows.filter(function(r){return r.source==='ai_inferred';});
+  var stats=window.Tf('em_id_person_n',{n:rows.length})
+    +(pend.length?' · '+window.Tf('em_id_pending_n',{n:pend.length}):'');
+  var ds=rows.map(function(r){return String(r.created_at||'');}).filter(Boolean).sort();
+  var span=ds.length?window.Tf('em_id_drawer_span',{a:(window.wsFmtDate(ds[0])||ds[0]),b:(window.wsFmtDate(ds[ds.length-1])||ds[ds.length-1])}):'';
+  var convA=(!_emMaskOn&&idn&&idn.resolved&&idn.conversation_id)
+    ?'<a class="btn" style="font-size:.72rem;padding:.3rem .6rem;text-decoration:none" href="/workspace?conv='+encodeURIComponent(idn.conversation_id)+'" target="_blank" rel="noopener" data-winname="workspace" onclick="return __openUnique(event,this)">'+_emEsc(window.T('em_id_open_conv'))+' ↗</a>':'';
+  var batchB=(emCanDelete&&pend.length)
+    ?'<button type="button" class="btn" id="em-drv-batch" style="font-size:.72rem;padding:.3rem .6rem;color:var(--green)">'+_emEsc(window.T('em_id_batch_ok'))+' ('+pend.length+')</button>':'';
+  var copyB=_emMaskOn?'':'<button type="button" class="em-btn-plain" id="em-drv-copy" style="font-size:.72rem;padding:.3rem .6rem">'+_emEsc(window.T('em_id_copy_tip'))+'</button>';
+  var byCat={};
+  rows.forEach(function(r){
+    var c=(r.category&&r.category!=='general')?String(r.category):window.T('em_id_uncat');
+    (byCat[c]=byCat[c]||[]).push(r);
+  });
+  var secs=Object.keys(byCat).map(function(c){
+    return '<div class="em-drv-sec"><h4>'+_emEsc(c)+' · '+byCat[c].length+'</h4>'
+      +byCat[c].map(function(r){return _emDrvRowHtml(r,name);}).join('')+'</div>';
+  }).join('');
+  if(!rows.length)secs=_emEmptyHtml();
+  els.pn.innerHTML=
+    '<div class="em-drv-hd">'+_emAvatar(idn,key)
+    +'<div style="flex:1;min-width:0">'
+    +'<div class="em-l1"><span class="em-name" style="max-width:240px;font-size:.92rem">'+_emEsc(name)+'</span>'+approx+chip+unres+'</div>'
+    +(sub?'<div class="em-sub" style="max-width:300px">'+_emEsc(sub)+'</div>':'')
+    +'<div style="font-size:.68rem;color:var(--t3);margin-top:.3rem">'+_emEsc(stats)+(span?' · '+_emEsc(span):'')+'</div>'
+    +(_emMaskOn?'':'<div style="font-size:.62rem;color:var(--t3);margin-top:.25rem;font-family:Consolas,monospace;word-break:break-all">'+_emEsc(key)+'</div>')
+    +'</div><button type="button" class="em-drv-x" id="em-drv-x" title="'+_emEsc(window.T('close'))+'">✕</button></div>'
+    +'<div class="em-drv-bd"><div class="em-drv-acts">'+convA+batchB+copyB+'</div>'+secs+'</div>';
+  var x=document.getElementById('em-drv-x'); if(x)x.addEventListener('click',_emDrvClose);
+  var cp=document.getElementById('em-drv-copy'); if(cp)cp.addEventListener('click',function(){_emCopyText(key,cp);});
+  var bb=document.getElementById('em-drv-batch');
+  if(bb)bb.addEventListener('click',function(){
+    _emModal({
+      title:window.T('em_id_batch_ok'),
+      body:'<div>'+_emEsc(window.Tf('em_id_batch_ok_body',{n:pend.length}))+'</div>',
+      ok:window.T('confirm'),
+      onOk:async function(prog){
+        for(var k2=0;k2<pend.length;k2++){
+          try{await apiFetch('/api/episodic-memory/'+pend[k2].id+'/confirm',{method:'POST'},{timeoutMs:60000});}catch(e){}
+          if(prog)prog(k2+1,pend.length);
+        }
+        emLoad(); csLoad(); _emDrvReload();
+      }
+    });
+  });
+}
+function _emDrvClose(){
+  var bk=document.getElementById('em-drv-bk');
+  var pn=document.getElementById('em-drv');
+  if(bk)bk.classList.remove('on');
+  if(pn)pn.classList.remove('on');
+  _emDrvKey='';
+}
+/* ── 孤儿键批量清理（身份筛选=未识别时出现；逐条 DELETE 各自落审计）── */
+function _emCleanupSync(){
+  // 两个批量清理按钮都按「当前筛选可见」计数——所删即所见
+  var cb=document.getElementById('em-cleanup-btn');
+  if(cb){
+    var n=_emItems.filter(_emRowPass).filter(function(x){return x&&x.identity&&!x.identity.resolved;}).length;
+    var show=(_emIdnF==='unresolved'&&n>0);
+    cb.style.display=show?'':'none';
+    if(show)cb.textContent=window.T('em_id_cleanup')+' ('+n+')';
+  }
+  var sb=document.getElementById('em-stale-btn');
+  if(sb){
+    var m=_emItems.filter(_emRowPass).filter(function(x){return String((x&&x.tier)||'')==='stale';}).length;
+    var show2=(_emTierF==='stale'&&m>0);
+    sb.style.display=show2?'':'none';
+    if(show2)sb.textContent=window.T('em_id_cleanup_stale')+' ('+m+')';
+  }
+}
+function emCleanupUnresolved(){
+  var v=_emItems.filter(_emRowPass).filter(function(x){return x&&x.identity&&!x.identity.resolved;});
+  _emBatchDelete(v,window.T('em_id_cleanup'),window.Tf('em_id_cleanup_body',{n:v.length}));
+}
+/* ── 视图切换 / 身份筛选控件（JS 注入，零静态 DOM）── */
+function emSetView(v){
+  _emViewCur=(v==='group')?'group':'list';
+  try{localStorage.setItem('em_view',_emViewCur);}catch(e){}
+  _emSegSync();
+  _emRender();
+}
+function _emSegSync(){
+  var seg=document.getElementById('em-seg'); if(!seg)return;
+  var bs=seg.querySelectorAll('button');
+  for(var i=0;i<bs.length;i++){bs[i].className=(bs[i].dataset.v===_emViewCur)?'on':'';}
+}
+function _emSelGrp(id,labelText,opts,onChange){
+  // 小工厂：往筛选条注入一个带标签的 select（P3 起复用）
+  var g=document.createElement('div'); g.className='f-grp';
+  var lb=document.createElement('label'); lb.className='f-lbl'; lb.textContent=labelText;
+  var sel=document.createElement('select'); sel.id=id; sel.className='f-input';/* 宽度走页内 CSS，别写内联（窄屏 media 覆不掉内联） */
+  opts.forEach(function(o){
+    var op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; sel.appendChild(op);
+  });
+  sel.addEventListener('change',function(){onChange(sel.value);});
+  g.appendChild(lb); g.appendChild(sel);
+  return g;
+}
+function _emInjectControls(){
+  var bar=document.querySelector('.em-filters'); if(!bar)return;
+  if(!document.getElementById('em-seg')){
+    var seg=document.createElement('div'); seg.className='em-seg'; seg.id='em-seg';
+    [['group',window.T('em_id_view_group')],['list',window.T('em_id_view_list')]].forEach(function(p){
+      var b=document.createElement('button'); b.type='button'; b.dataset.v=p[0]; b.textContent=p[1];
+      b.addEventListener('click',function(){emSetView(p[0]);});
+      seg.appendChild(b);
+    });
+    var g1=document.createElement('div'); g1.className='f-grp'; g1.appendChild(seg);
+    bar.insertBefore(g1,bar.firstChild);
+  }
+  var srcSel=document.getElementById('em-source');
+  var anchor=(srcSel&&srcSel.closest)?srcSel.closest('.f-grp'):null;
+  if(!document.getElementById('em-idn-filter')){
+    var g2=_emSelGrp('em-idn-filter',window.T('em_id_idn_filter'),
+      [['',window.T('em_id_idn_all')],['resolved',window.T('em_id_idn_ok')],['unresolved',window.T('em_id_unresolved')]],
+      function(v){_emIdnF=v;_emRender();});
+    if(anchor&&anchor.parentNode===bar){anchor.insertAdjacentElement('afterend',g2);}
+    else{bar.appendChild(g2);}
+  }
+  if(!document.getElementById('em-tier-filter')){
+    var g3=_emSelGrp('em-tier-filter',window.T('em_id_tier'),
+      [['',window.T('em_id_idn_all')],['raw',window.T('em_id_tier_raw')],['stable',window.T('em_id_tier_stable')],['stale',window.T('em_id_tier_stale')]],
+      function(v){_emTierF=v;_emRender();});
+    var idnGrp=document.getElementById('em-idn-filter');
+    var a2=(idnGrp&&idnGrp.closest)?idnGrp.closest('.f-grp'):null;
+    if(a2&&a2.parentNode===bar){a2.insertAdjacentElement('afterend',g3);}
+    else{bar.appendChild(g3);}
+  }
+  if(!document.getElementById('em-sort')){
+    var g4=_emSelGrp('em-sort',window.T('em_id_sort'),
+      [['new',window.T('em_id_sort_new')],['hits',window.T('em_id_sort_hits')],['old',window.T('em_id_sort_old')]],
+      function(v){_emSortCur=v;_emRender();});
+    var tierGrp=document.getElementById('em-tier-filter');
+    var a3=(tierGrp&&tierGrp.closest)?tierGrp.closest('.f-grp'):null;
+    if(a3&&a3.parentNode===bar){a3.insertAdjacentElement('afterend',g4);}
+    else{bar.appendChild(g4);}
+  }
+  if(!document.getElementById('em-mask-btn')){
+    var mb=document.createElement('button');
+    mb.type='button'; mb.id='em-mask-btn'; mb.className='em-mask-btn';
+    mb.textContent=window.T('em_id_mask');
+    mb.title=window.T('em_id_mask_tip');
+    mb.addEventListener('click',emToggleMask);
+    bar.appendChild(mb);
+  }
+  if(emCanDelete&&!document.getElementById('em-cleanup-btn')){
+    var cb=document.createElement('button');
+    cb.type='button'; cb.id='em-cleanup-btn'; cb.className='em-btn-danger'; cb.style.display='none';
+    cb.addEventListener('click',emCleanupUnresolved);
+    bar.appendChild(cb);
+  }
+  if(emCanDelete&&!document.getElementById('em-stale-btn')){
+    var sb=document.createElement('button');
+    sb.type='button'; sb.id='em-stale-btn'; sb.className='em-btn-danger'; sb.style.display='none';
+    sb.addEventListener('click',emCleanupStale);
+    bar.appendChild(sb);
+  }
+  _emSegSync();
+  _emMaskSync();
+}
+document.addEventListener('keydown',function(e){
+  if(e.key!=='Escape')return;
+  var mb=document.getElementById('em-mdl-bk');
+  if(mb&&mb.classList.contains('on')){_emModalClose();return;}
+  if(_emDrvOpen())_emDrvClose();
+});
+async function emLoad() {
+  const qv = document.getElementById('em-q').value.trim();
+  const limit = _emLimit();
+  const st = document.getElementById('em-status');
+  const source = document.getElementById('em-source').value;
+  if (st) st.textContent = window.T('dash.loading');
+  _emIds = new Set();
+  _emItems = [];
+  _emCanPage = false;
+  _emSkeletonShow();
+  try {
+    const q = new URLSearchParams({ limit: String(limit) });
+    if (qv) { q.set('q', qv); q.set('prefix', qv); }
+    if (source) q.set('source', source);
+    _emParams = q;
+    const res = await apiFetch('/api/episodic-memory?' + q.toString());
+    if (!res.ok) { if (st) st.textContent = window.T('ln_js_036')+' ' + res.status; return; }
+    const d = await res.json();
+    const items = d.items || [];
+    _emCanPage = (typeof d.offset !== 'undefined');
+    items.forEach(function(x){
+      if (x && x.id != null && !_emIds.has(x.id)) { _emIds.add(x.id); _emItems.push(x); }
+    });
+    _emRender();
+    _emMoreSync(items.length >= limit ? 'more' : 'none');
+  } catch (e) {
+    if (st) st.textContent = window.T('ov_js_req_fail')+': ' + e;
+  }
+}
+async function emLoadMore() {
+  if (!_emParams || !_emCanPage) return;
+  var btn = document.getElementById('em-more-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    var q = new URLSearchParams(_emParams);
+    q.set('offset', String(_emItems.length));
+    const res = await apiFetch('/api/episodic-memory?' + q.toString());
+    if (!res.ok) { _emMoreSync('more'); return; }
+    const d = await res.json();
+    var got = (d.items || []).length;
+    var fresh = (d.items || []).filter(function(x){ return x && x.id != null && !_emIds.has(x.id); });
+    fresh.forEach(function(x){ _emIds.add(x.id); _emItems.push(x); });
+    _emRender();
+    _emMoreSync((got >= _emLimit() && fresh.length) ? 'more' : 'end');
+  } catch (e) {
+    _emMoreSync('more');
+  }
+}
+function emShowPending() {
+  var sel = document.getElementById('em-source');
+  if (sel) sel.value = 'ai_inferred';
+  var inp = document.getElementById('em-q');
+  if (inp) inp.value = '';
+  emLoad();
+  var tgt = (_emViewCur === 'group') ? document.getElementById('em-groups') : document.getElementById('em-table');
+  if (tgt && tgt.scrollIntoView) tgt.scrollIntoView({behavior:'smooth', block:'start'});
+}
+async function emConfirm(btn) {
+  var id = (btn&&btn.dataset)?(btn.dataset.id||''):'';
+  if (!id) return;
+  btn.disabled = true;
+  try {
+    const res = await apiFetch('/api/episodic-memory/' + id + '/confirm', { method: 'POST' }, {timeoutMs: 60000});
+    if (!res.ok) { alert(window.T('em_id_confirm_fail')+' ' + res.status); btn.disabled = false; return; }
+    emLoad();
+    csLoad();
+    if (_emDrvOpen()) _emDrvReload();
+  } catch (e) { alert(e); btn.disabled = false; }
+}
+function emDel(btn) {
+  var id = (btn&&btn.dataset)?(btn.dataset.id||''):'';
+  if (!id) return;
+  var name = (btn&&btn.dataset)?(btn.dataset.name||''):'';
+  var it = _emFindItem(id);
+  var b = '';
+  if (name) b += '<div style="font-weight:600;margin-bottom:.2rem">'+_emEsc(name)+' <span style="color:var(--t3);font-weight:400">#'+_emEsc(id)+'</span></div>';
+  if (it && it.content) b += '<div class="q">'+_emEsc(it.content)+'</div>';
+  b += '<div>'+_emEsc(window.T('em_id_del_hint'))+'</div>';
+  _emModal({
+    title: window.T('em_id_del_title'),
+    body: b,
+    ok: window.T('delete'),
+    onOk: async function(){
+      var res = await apiFetch('/api/episodic-memory/' + id, { method: 'DELETE' }, {timeoutMs: 60000});
+      if (!res.ok) {
+        var st = document.getElementById('em-status');
+        if (st) st.textContent = window.T('inbox.toast.del_fail')+' ' + res.status;
+        return;
+      }
+      emLoad();
+      csLoad();
+      if (_emDrvOpen()) _emDrvReload();
+    }
+  });
+}
+// ── 按内容关键词批量删除（2026-08-04：人设「删除不干净」事故链的记忆清理配套）──
+// 语义注意：走 /api/episodic-memory/bulk-delete，按**内容/记忆键 LIKE** 匹配
+// （刻意不做昵称→身份联合解析——批量删除按身份误扩面比按内容漏删更危险）；
+// 来源筛选生效；先 dry_run 预览数量、confirm 后真删，服务端逐条审计。
+async function emBulkDelete() {
+  const qv = document.getElementById('em-q').value.trim();
+  const st = document.getElementById('em-status');
+  if (!qv) { if (st) st.textContent = window.T('em_bulk_need_q'); return; }
+  const source = document.getElementById('em-source').value;
+  const btn = document.getElementById('em-bulkdel-btn');
+  if (btn) btn.disabled = true;
+  try {
+    const body = {q: qv, dry_run: true, limit: 500};
+    if (source) body.source = source;
+    const r = await apiFetch('/api/episodic-memory/bulk-delete', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const d = await r.json().catch(function(){ return {}; });
+    if (!r.ok || d.ok === false) {
+      if (st) st.textContent = window.T('em_js008') + ' ' + (d.detail || r.status);
+      return;
+    }
+    const n = d.matched || 0;
+    if (!n) { if (st) st.textContent = window.Tf('em_bulk_none', {q: qv}); return; }
+    if (!confirm(window.Tf('em_bulk_confirm', {n: String(n), q: qv}))) return;
+    const r2 = await apiFetch('/api/episodic-memory/bulk-delete', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(Object.assign({}, body, {dry_run: false})),
+    });
+    const d2 = await r2.json().catch(function(){ return {}; });
+    if (!r2.ok || d2.ok === false) {
+      if (st) st.textContent = window.T('em_js008') + ' ' + (d2.detail || r2.status);
+      return;
+    }
+    if (st) st.textContent = window.Tf('em_bulk_done', {n: String(d2.deleted || 0)});
+    emLoad();
+  } catch (e) {
+    if (st) st.textContent = window.T('ln_js_036') + ' ' + e;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function emBackfill() {
+  const lim = document.getElementById('em-limit').value || 20;
+  const st = document.getElementById('em-status');
+  const btn = document.getElementById('em-backfill-btn');
+  if (btn) btn.disabled = true;
+  st.textContent = window.T('em_js007');
+  try {
+    const pfx = document.getElementById('em-q').value.trim();
+    const q = new URLSearchParams({ limit: String(lim) });
+    if (pfx) q.set('prefix', pfx);
+    const res = await fetch('/api/episodic-memory/backfill?' + q.toString(), { method: 'POST' });
+    const d = await res.json().catch(function() { return {}; });
+    function _detailMsg(obj) {
+      var x = obj && obj.detail;
+      if (x == null) return '';
+      if (typeof x === 'string') return x;
+      if (Array.isArray(x)) return x.map(function(e) { return (e && e.msg) || ''; }).filter(Boolean).join('; ');
+      return String(x);
+    }
+    if (!res.ok) {
+      st.textContent = window.T('em_js008')+' ' + res.status + (_detailMsg(d) ? ' ' + _detailMsg(d) : '');
+      return;
+    }
+    if (d.ok === false) { st.textContent = window.T('em_js009') + (d.error || 'unknown'); return; }
+    st.textContent = window.T('em_js010')+' ' + (d.processed || 0) + ' '+window.T('em_js011')+' ' + (d.updated || 0) + ' '+window.T('dash.items');
+    emLoad();
+  } catch (e) { st.textContent = window.T('ov_js_req_fail')+': ' + e; }
+  finally { if (btn) btn.disabled = false; }
+}
+async function csLoad() {
+  try {
+    const res = await apiFetch('/api/episodic-memory/correction-stats?days=30');
+    if (!res.ok) return;
+    const d = await res.json();
+    document.getElementById('cs-confirmed').textContent = d.confirmed != null ? d.confirmed : '—';
+    document.getElementById('cs-pending').textContent = d.pending_inferred != null ? d.pending_inferred : '—';
+    document.getElementById('cs-total').textContent = d.total_inferred != null ? d.total_inferred : '—';
+    document.getElementById('cs-rate').textContent = ((d.adoption_rate || 0) * 100).toFixed(1) + '%';
+    document.getElementById('cs-win').textContent = d.window_days || 30;
+    var actors = d.by_actor || [];
+    var box = document.getElementById('cs-actors');
+    if (actors.length) {
+      box.innerHTML = window.T('em_js012') + actors.map(function(a) {
+        return '<span class="cs-actor">' + (a.actor || '?').replace(/</g, '&lt;') + ' · ' + a.count + '</span>';
+      }).join('');
+    } else {
+      box.innerHTML = '<span style="color:var(--t3)">'+window.T('em_js013')+' ' + (d.window_days || 30) + ' '+window.T('em_js014')+'</span>';
+    }
+    // 每日确认量趋势（迷你柱）
+    var trend = d.trend || [];
+    var tbox = document.getElementById('cs-trend');
+    if (trend.length) {
+      var maxc = Math.max.apply(null, trend.map(function(t) { return t.count; }));
+      tbox.innerHTML = '<div style="font-size:.7rem;color:var(--t3);margin-bottom:.25rem">'+window.T('em_js015')+'</div>'
+        + '<div style="display:flex;align-items:flex-end;gap:3px;height:42px">'
+        + trend.map(function(t) {
+            var h = maxc ? Math.max(3, Math.round(t.count / maxc * 40)) : 3;
+            return '<div title="' + t.date + ': ' + t.count + ' '+window.T('dash.items')+'" style="width:10px;height:' + h + 'px;background:var(--p);border-radius:2px 2px 0 0;opacity:.75"></div>';
+          }).join('')
+        + '</div>';
+    } else {
+      tbox.innerHTML = '';
+    }
+  } catch (e) { /* 看板失败不阻断主表 */ }
+}
+document.addEventListener('DOMContentLoaded', function() {
+  var _sp = new URLSearchParams(window.location.search);
+  var _urlQ = _sp.get('q');
+  if (_urlQ) {
+    var _inp = document.getElementById('em-q');
+    if (_inp) _inp.value = _urlQ;
+  }
+  // 视图初始化：URL ?view= → localStorage → embedded 默认列表 / 整页默认按人分组
+  var _emb = (document.documentElement.getAttribute('data-embedded') === '1');
+  var _v = _sp.get('view') || '';
+  if (_v !== 'group' && _v !== 'list') {
+    try { _v = localStorage.getItem('em_view') || ''; } catch (e) { _v = ''; }
+  }
+  if (_v !== 'group' && _v !== 'list') _v = _emb ? 'list' : 'group';
+  _emViewCur = _v;
+  try { _emMaskOn = (localStorage.getItem('em_mask') === '1'); } catch (e) { _emMaskOn = false; }
+  _emInjectControls();
+  emLoad();
+  csLoad();
+  _emSumLoad();
+});
+</script>
+{% endblock %}

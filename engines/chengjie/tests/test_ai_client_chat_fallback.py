@@ -1,8 +1,9 @@
 """主对话 LLM 容灾（ai.fallback）：云主模型不可达/熔断开路 → 本地模型出真话。
 
 背景：聊天生成原是 DeepSeek 云单点，断网/云故障时只剩 canned 占位句
-（「在的，请您稍等一下～」）。本地兜底后由 LAN Ollama 出真话；兜底自身失败
-仍回 canned —— 行为最差不劣于旧链。本文件不触网（假 AsyncOpenAI 注入）。
+（「在的，请您稍等一下～」）。本地兜底后由 LAN Ollama 出真话。
+2026-08-15 起全链失败**不再回罐头句**（「可以不回复，不能乱回复」——8/13、
+8/15 两起罐头客服腔刷屏事故）：返回 None＝本轮不回复。本文件不触网。
 """
 from __future__ import annotations
 
@@ -96,11 +97,14 @@ async def test_primary_down_falls_to_local():
     assert primary.calls == 2          # 主链两次尝试后才轮到兜底
     assert fb.calls == 1
     assert c._fb_calls == 1 and c._fb_ok == 1
-    # 兜底调用带上了主链同款 messages（人设/上下文不丢）+ 目标语钉子在末位
+    # 兜底调用带上了主链同款 messages（人设/上下文不丢）+ 目标语钉子并入首位 system
+    # （2026-08-15 起：Qwen3 系模板拒绝非打头 system，钉子不再作末位独立消息）
     assert fb.last_kw["model"] == "qwen-local"
     assert {"role": "user", "content": "在吗"} in fb.last_kw["messages"]
-    assert fb.last_kw["messages"][-1]["role"] == "system"
-    assert fb.last_kw["messages"][-1]["content"].startswith("Reply strictly in")
+    _msgs = fb.last_kw["messages"]
+    assert _msgs[0]["role"] == "system" and "Reply strictly in" in _msgs[0]["content"]
+    assert all(m["role"] != "system" for m in _msgs[1:])
+    assert _msgs[-1]["role"] == "user"
 
 
 async def test_breaker_open_goes_straight_to_local():
@@ -115,32 +119,34 @@ async def test_breaker_open_goes_straight_to_local():
     assert fb.calls == 1
 
 
-async def test_breaker_open_without_fallback_keeps_canned():
+async def test_breaker_open_without_fallback_returns_none():
+    """熔断开路且无本地兜底 → None＝本轮不回复（罐头兜底已移除）。"""
     primary = _FakeChatClient(reply="不该被调用")
     c = _client(primary, None)
     c._cb_enabled = True
     c._cb_open_until = time.time() + 60
     out = await c._generate_reply_openai_compat("在吗", context={"reply_lang": "zh"})
-    assert out in AIClient._FALLBACK_REPLIES
+    assert out is None
     assert primary.calls == 0
 
 
-async def test_local_also_down_returns_canned():
+async def test_local_also_down_returns_none():
+    """主链+本地全灭 → None，绝不再出「在的，有什么可以帮您的？」式罐头句。"""
     primary = _FakeChatClient(fail=True)
     fb = _FakeChatClient(fail=True)
     c = _client(primary, fb)
     out = await c._generate_reply_openai_compat("在吗", context={"reply_lang": "zh"})
-    assert out in AIClient._FALLBACK_REPLIES
+    assert out is None
     assert fb.calls == 1
     assert c._fb_calls == 1 and c._fb_ok == 0
 
 
-async def test_local_empty_reply_returns_canned():
+async def test_local_empty_reply_returns_none():
     primary = _FakeChatClient(fail=True)
     fb = _FakeChatClient(reply="")
     c = _client(primary, fb)
     out = await c._generate_reply_openai_compat("在吗", context={"reply_lang": "zh"})
-    assert out in AIClient._FALLBACK_REPLIES
+    assert out is None
     assert c._fb_calls == 1 and c._fb_ok == 0
 
 
@@ -192,7 +198,11 @@ def test_init_parses_fallback_config(monkeypatch):
     fb_kw = built[-1]
     assert fb_kw["base_url"] == "http://176:11434/v1"
     assert fb_kw["max_retries"] == 0
-    assert c._fb_extra_body == {"options": {"think": False}}
+    assert c._fb_extra_body == {
+        "options": {"think": False},
+        # 2026-08-15 主链 27B@64k 换代：vLLM 直答档随 think:false 一并下发
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
     # Ollama 端点（:11434）→ 走原生 /api/chat（keep_alive/think 才被尊重）
     assert c._fb_native_base == "http://176:11434"
     assert c._fb_keep_alive == "30m" and c._fb_timeout == 33.0
@@ -214,6 +224,49 @@ def test_init_parses_fallback_config(monkeypatch):
     assert c4._fb_client is not None and c4._fb_native_base is None
 
 
+def test_coalesce_system_head_folds_trailing_pin():
+    """2026-08-15 实锤回归钉：末位语言钉子（system）在 Qwen3 系模板下 400
+    「System message must be at the beginning」→ local_only 客户整轮无回复。
+    合并后：单条打头 system、内容全保留、非 system 顺序不变。"""
+    from src.ai.ai_client import AIClient
+    msgs = [
+        {"role": "system", "content": "人设+记忆"},
+        {"role": "user", "content": "你好"},
+        {"role": "assistant", "content": "嗨"},
+        {"role": "user", "content": "在吗"},
+        {"role": "system", "content": "Reply strictly in Chinese only."},
+    ]
+    out = AIClient._coalesce_system_head(msgs)
+    assert [m["role"] for m in out] == ["system", "user", "assistant", "user"]
+    assert "人设+记忆" in out[0]["content"]
+    assert "Reply strictly in Chinese" in out[0]["content"]
+    assert out[0]["content"].index("人设+记忆") < out[0]["content"].index("Reply strictly")
+    assert out[-1]["content"] == "在吗"
+
+
+def test_coalesce_system_head_noop_when_already_normal():
+    from src.ai.ai_client import AIClient
+    normal = [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}]
+    assert AIClient._coalesce_system_head(normal) == normal
+    no_sys = [{"role": "user", "content": "u"}]
+    assert AIClient._coalesce_system_head(no_sys) == no_sys
+    assert AIClient._coalesce_system_head([]) == []
+
+
+def test_coalesce_system_head_folds_mid_conversation_system():
+    """任何未来的中途 system 注入（提示/守卫）同样被收口，不再依赖模板宽容。"""
+    from src.ai.ai_client import AIClient
+    msgs = [
+        {"role": "system", "content": "A"},
+        {"role": "user", "content": "u1"},
+        {"role": "system", "content": "B"},
+        {"role": "user", "content": "u2"},
+    ]
+    out = AIClient._coalesce_system_head(msgs)
+    assert [m["role"] for m in out] == ["system", "user", "user"]
+    assert out[0]["content"] == "A\n\nB"
+
+
 async def test_fallback_uses_native_api_chat_when_ollama(monkeypatch):
     """_fb_native_base 设定时兜底走原生 /api/chat（带 keep_alive），不走 /v1 客户端。"""
     primary = _FakeChatClient(fail=True)
@@ -232,7 +285,10 @@ async def test_fallback_uses_native_api_chat_when_ollama(monkeypatch):
     out = await c._generate_reply_openai_compat("在吗", context={"reply_lang": "zh"})
     assert out == "原生口出话"
     assert fb.calls == 0                       # /v1 客户端未被打
-    assert seen["messages"][-1]["role"] == "system"   # 语言钉子仍然带上
+    # 语言钉子仍然带上——2026-08-15 起并入首位 system（Qwen3 系模板拒非打头 system）
+    assert seen["messages"][0]["role"] == "system"
+    assert "Reply strictly in" in seen["messages"][0]["content"]
+    assert all(m["role"] != "system" for m in seen["messages"][1:])
     assert c._fb_ok == 1
 
 
@@ -353,5 +409,9 @@ async def test_fallback_trims_long_history_before_send(monkeypatch):
     # max_tokens 默认 1024 > num_ctx 700 → 预算走 512 下限
     budget = max(512, budget)
     assert sum(AIClient._estimate_msg_tokens(m["content"]) for m in sent) <= budget
-    assert sent[-1]["content"].startswith("Reply strictly in")
+    # 结构不变量（2026-08-15 契约）：system 只在首位（Qwen3 系模板安全）；
+    # 极限预算下 last-resort 可截空 system 尾部（钉子牺牲换出话）——钉子存在性
+    # 由常规预算用例（primary_down / native_api_chat）钉住，此处不重复要求。
+    assert sent[0]["role"] == "system"
+    assert all(m["role"] != "system" for m in sent[1:])
     assert any(m.get("content") == "最新消息" for m in sent)

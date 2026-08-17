@@ -595,6 +595,37 @@ def make_message(
 
 _WA_PHONE_RE = re.compile(r"^\d{6,20}$")  # WhatsApp 私聊 chat_key 即 E.164 裸号（6~20 位）
 
+# 「绝不可能是人名」的状态/导航文案黑名单（2026-08-14，修「好友名单显示 Active now」）。
+# 覆盖：在线状态（Active now / Active 3m ago / 在线 / 刚刚活跃 / 3 分钟前活跃）、
+# 输入中（typing… / 正在输入）、导航标签（Message requests / 消息请求）、未读标记、
+# 列表头（Chats · 3 unread）。锚定整行（^…$）+ 词形收紧（active 后必须跟 now/时间量），
+# 「Active Fitness Club」「Online Shop PH」这类真名不误伤。
+# ⚠ 跨语言契约：与 services/messenger-web/server.js::DIRTY_NAME_RE **逐字一致**，
+# 由 tests/test_peer_name_sanitizer.py 抽取比对 + 金标样本双向钉住；改任何一侧先跑门禁。
+_DIRTY_NAME_PATTERN = (
+    r"^(?:[·•]|回复？|是否跟进？|在线|在线状态|刚刚活跃|昨天活跃"
+    r"|(?:\d+\s*(?:分钟|小时|天|周)前)?活跃|正在输入.*|对方正在输入.*|typing.*|online"
+    r"|active(?:\s+(?:now|today|yesterday))?"
+    r"|active\s+\d+\s*(?:m|min|mins|minutes?|h|hr|hrs|hours?|d|days?|w|weeks?)?(?:\s+ago)?"
+    r"|消息请求|message\s+requests?|未读消息.*|unread\s+messages?.*"
+    r"|chats?\s*[·•].*|聊天\s*[·•].*)$"
+)
+_DIRTY_NAME_RE = re.compile(_DIRTY_NAME_PATTERN, re.IGNORECASE)
+
+
+def sanitize_peer_name(name: Any) -> str:
+    """清洗 peer 显示名：状态/导航/列表头文案不是名字，归一为空串。
+
+    空串语义＝「诚实缺名」：调用方回落链（通讯录补名 → 裸 chat_key）接手，
+    且 store 的 upsert CASE 护栏保证空串**绝不覆盖**库里已有真名——脏名从
+    「覆盖真名」降级为「无操作」。纯函数，worker 侧（server.js DIRTY_NAME_RE）
+    与服务端共用同一 pattern（防绕过：老版本 worker / 其他平台边车同样被兜住）。
+    """
+    s = str(name or "").strip()
+    if not s or _DIRTY_NAME_RE.match(s):
+        return ""
+    return s
+
 
 def enrich_ingest_identity(
     platform: str, chat_key: str, name: str = "",
@@ -611,11 +642,15 @@ def enrich_ingest_identity(
       号码，补齐 Telegram 之外平台的信息面板）；群聊 / 其他平台 → 空。
 
     入参 ``contact_name`` 由调用方（有 store 的路由）查好传入，保持本函数纯净、可离线单测。
+
+    2026-08-14 起来显名/通讯录名都先过 ``sanitize_peer_name``：状态文案（"Active now"/
+    "Active 3m ago"/"消息请求"…）被 DOM 侧误抓成名字时在此归零 → 走 backfilled/raw
+    回落，脏名绝不落 display_name（fail-closed 服务端兜底，不依赖 worker 版本）。
     """
     platform = str(platform or "").strip().lower()
     chat_key = str(chat_key or "").strip()
-    name = str(name or "").strip()
-    contact_name = str(contact_name or "").strip()
+    name = sanitize_peer_name(name)
+    contact_name = sanitize_peer_name(contact_name)
     is_group = str(chat_type or "").strip().lower() == "group"
     if name and name != chat_key:
         display_name, outcome = name, "named"
@@ -673,6 +708,19 @@ def tg_message_payload(
         text = annotate_inbound_emoji(str(text))
     date = getattr(message, "date", None)
     ts = date.timestamp() if hasattr(date, "timestamp") else 0
+    # 2026-08-17 文件体验 P0/P0.1：文档原名 + 体积进 source（卡片显示「report.pdf ·
+    # 1.2 MB」；下载端点用原名另存）。体积走 tg_media_file_size（document/video/
+    # audio 同源），取不到就不写，前端不渲染尺寸行。
+    _src: Optional[Dict[str, Any]] = None
+    _doc = getattr(message, "document", None)
+    _fn = str(getattr(_doc, "file_name", "") or "").strip() if _doc is not None else ""
+    _sz = tg_media_file_size(message)
+    if _fn or _sz:
+        _src = {}
+        if _fn:
+            _src["file_name"] = _fn
+        if _sz > 0:
+            _src["file_size"] = _sz
     return make_message(
         platform="telegram", account_id=str(account_id), chat_key=str(chat_id),
         name=str(name), text=str(text), ts=ts,
@@ -680,6 +728,7 @@ def tg_message_payload(
         direction="out" if getattr(message, "outgoing", False) else "in",
         media_type=media_type, media_ref=media_ref,
         username=ident["username"], phone=ident["phone"],
+        source=_src,
     )
 
 
@@ -815,6 +864,30 @@ async def collect_tg_dialog_history(
     if chat is None:
         return None
     return chat, msgs
+
+
+# Telegram「会话已死」错误特征：这些 401 不是网络抖动，重试永远不会好，唯一出路是
+# 重新登录（实锤：2026-08-11 坐席机主号被「终止所有会话」踢下线，同步按钮只报笼统
+# 的「同步聊天记录失败」，坐席连点 4 次无从知道该去重新登录）。
+# 刻意不含 USER_DEACTIVATED：它会与「对方账号注销」的 INPUT_USER_DEACTIVATED 撞子串，
+# 且账号被注销/封禁不是「重新登录」能解决的，误提示比不提示更糟。
+_TG_SESSION_DEAD_MARKS = (
+    "SESSION_REVOKED", "SESSION_EXPIRED", "AUTH_KEY_UNREGISTERED",
+    "AUTH_KEY_INVALID", "AUTH_KEY_DUPLICATED", "KEY IS NOT REGISTERED",
+)
+
+
+def tg_error_kind(text: Any) -> str:
+    """把 Telegram RPC 异常文本归类成机器可读 kind（前端据此给可行动的提示）。
+
+    当前只识别一类：``session_revoked``＝该账号登录会话已失效（被吊销/过期/在别处
+    登出），需要重新登录。其余返回空串＝按普通错误处理。纯函数，供账号级历史同步/
+    单会话深度回填/全量深同步三条链的 ``state=error`` 落状态时统一分类。
+    """
+    t = str(text or "").upper()
+    if any(mark in t for mark in _TG_SESSION_DEAD_MARKS):
+        return "session_revoked"
+    return ""
 
 
 async def sync_telegram_history(

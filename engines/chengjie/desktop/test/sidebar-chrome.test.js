@@ -55,10 +55,7 @@ ok("chain fail", sc.pillMetaFromCpLoaded(
   { ok: true, panelId: "ws-cp-chain", data: { executions: [{ status: "failed" }, { status: "failed" }] } },
   { t, tf }
 ).text.indexOf("2") >= 0);
-ok("nba empty", sc.pillMetaFromCpLoaded(
-  { ok: true, panelId: "ws-cp-nba", data: { actions: [] } },
-  { t, tf }
-).text === "");
+// （原 nba pill 用例已于 2026-08-14 随「AI 下一步」面板整体下线删除）
 
 // ── tabBadgeFromPillMeta ─────────────────────────────────────────────────────
 ok("tab badge draft warn→reply", sc.tabBadgeFromPillMeta({ text: "x", tone: "warn" }, "ws-cp-draft").tab === "reply");
@@ -141,4 +138,4 @@ ok("decorate fills svg", _icEl.innerHTML.indexOf("<svg") === 0);
 ok("decorate sets idempotent flag", _icEl.__icDone === 1);
 
 console.log("sidebar-chrome.test.js: " + pass + " passed");
-if (pass < 33) process.exit(1);
+if (pass < 32) process.exit(1);

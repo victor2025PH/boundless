@@ -158,6 +158,61 @@ def test_state_file_is_atomic_json(tmp_path):
     assert not list(tmp_path.glob("*.tmp")), "临时文件必须被 replace 掉"
 
 
+# ── 存量升档（2026-08-11 赠量 1万→10万 / 去时间窗）────────────────────────────
+
+def test_legacy_state_upgrades_in_place(tmp_path):
+    """老安装的状态文件固化着旧口径（1 万 / 48h）——运营上调后必须就地升档，
+    否则升级安装永远拿不到新量（只升不降；无窗配置清掉旧窗）。"""
+    p = tmp_path / "local_trial.json"
+    p.write_text(json.dumps({
+        "first_seen": 1000.0, "last_seen": 2000.0, "machine": "ab12cd34",
+        "chars": 10_000, "window_hours": 48.0, "closed": False,
+    }), encoding="utf-8")
+    t = lt.LocalTrial(str(p), chars=100_000, window_hours=0.0, machine_short="ab12cd34")
+    st = t.state()
+    assert st.chars == 100_000, "存量 chars 必须升到新默认"
+    assert st.window_hours == 0.0, "配置无窗时旧 48h 窗必须清掉"
+    snap = t.snapshot(used_chars=50_000, now=1000.0 + 100 * 3600)   # 远超旧 48h 窗
+    assert snap["active"] is True and snap["expired"] is False
+    assert snap["chars_left"] == 50_000
+
+
+def test_legacy_upgrade_never_downgrades(tmp_path):
+    """反向保护：存量比配置更宽（运营手工放宽过）→ 绝不往低改。"""
+    p = tmp_path / "local_trial.json"
+    p.write_text(json.dumps({
+        "first_seen": 1000.0, "last_seen": 2000.0, "machine": "x",
+        "chars": 500_000, "window_hours": 0.0, "closed": False,
+    }), encoding="utf-8")
+    st = lt.LocalTrial(str(p), chars=100_000, window_hours=0.0, machine_short="x").state()
+    assert st.chars == 500_000
+
+
+def test_closed_legacy_state_is_not_upgraded(tmp_path):
+    """已关闭（注册换正式额度）的体验档不复活——升档不是重开后门。"""
+    p = tmp_path / "local_trial.json"
+    p.write_text(json.dumps({
+        "first_seen": 1000.0, "last_seen": 2000.0, "machine": "x",
+        "chars": 10_000, "window_hours": 48.0, "closed": True,
+    }), encoding="utf-8")
+    st = lt.LocalTrial(str(p), chars=100_000, window_hours=0.0, machine_short="x").state()
+    assert st.closed is True and st.chars == 10_000
+
+
+def test_config_window_zero_survives_parsing(tmp_path):
+    """显式 `window_hours: 0`（无窗）必须原样生效——`0 or DEFAULT` 那类兜底
+    会把「刻意无窗」偷换成默认窗（首版实现踩过的坑，钉住）。"""
+    lt.configure_local_trial(
+        {"licensing": {"trial": {"enabled": True, "chars": 5000, "window_hours": 0}}},
+        config_dir=str(tmp_path))
+    t = lt.get_local_trial()
+    assert t is not None
+    t.begin(now=1000.0)
+    snap = t.snapshot(now=1000.0 + 365 * 86400)   # 一年后
+    assert snap["expired"] is False, "无窗体验档永不按时间过期"
+    assert snap["window_hours"] == 0.0
+
+
 # ── lic_id 隔离 ────────────────────────────────────────────────────────────
 
 def test_lic_id_is_namespaced():
@@ -178,14 +233,26 @@ def test_disabled_by_default():
     assert lt.local_trial_enforced() is False
 
 
-def test_enforce_is_independent_of_global_enforce():
+def test_enforce_is_independent_of_global_enforce(monkeypatch):
     """共用 licensing.enforce 会让开了它的存量客户顺带锁死新装用户。"""
+    monkeypatch.delenv("AITR_DESKTOP_MODE", raising=False)   # 服务器态：无桌面默认
     cfg = {"licensing": {"enforce": True, "trial": {"enabled": True}}}
     lt.configure_local_trial(cfg, trial=object())
     assert lt.local_trial_enforced() is False, "全局 enforce 不该传染到体验档"
     cfg["licensing"]["trial"]["enforce"] = True
     lt.configure_local_trial(cfg, trial=object())
     assert lt.local_trial_enforced() is True
+
+
+def test_desktop_default_enforce_on_when_unset(monkeypatch):
+    """桌面模式下「没写过 enforce」按默认开（2026-08-11：注册领 100 万链路已上线，
+    用尽即拦、拦了有出路）；显式 false 仍是明确的关闭意愿，不被顶掉。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    lt.configure_local_trial({"licensing": {"trial": {"enabled": True}}}, trial=object())
+    assert lt.local_trial_enforced() is True, "桌面模式未写 enforce → 默认硬拦"
+    lt.configure_local_trial(
+        {"licensing": {"trial": {"enabled": True, "enforce": False}}}, trial=object())
+    assert lt.local_trial_enforced() is False, "显式 false 必须被尊重"
 
 
 # ── 与额度闸门的接线 ───────────────────────────────────────────────────────
@@ -305,8 +372,9 @@ def test_trial_disabled_means_zero_io(tmp_path):
 def test_desktop_seed_config_enables_the_trial():
     """产品决策落在**随包种子**里：桌面装完就有体验档，服务器部署不受影响。
 
-    这条把决策与文件绑死——有人顺手改掉种子里的开关，功能会静默消失（默认关），
-    没有这个门禁不会有任何东西变红。
+    这条把决策与文件绑死（2026-08-11 运营口径：10 万尝鲜 · 无时间窗 · 用尽硬拦）
+    ——有人顺手改掉种子里的开关，功能会静默消失/口径漂移，没有这个门禁
+    不会有任何东西变红。
     """
     import yaml
     from pathlib import Path
@@ -314,12 +382,14 @@ def test_desktop_seed_config_enables_the_trial():
     cfg = yaml.safe_load(seed.read_text(encoding="utf-8")) or {}
     trial = ((cfg.get("licensing") or {}).get("trial") or {})
     assert trial.get("enabled") is True, "桌面种子必须开启首启体验档"
-    assert int(trial.get("chars") or 0) > 0
-    assert float(trial.get("window_hours") or 0) > 0
-    # enforce 必须保持关：「注册换正式试用」链路上线前开它 = 用尽即无路可走
-    assert trial.get("enforce") is False, (
-        "注册换正式试用的链路上线前，桌面种子不得开 enforce —— "
-        "否则新装用户 48 小时后被锁死且无处求助"
+    assert int(trial.get("chars") or 0) == 100_000, "尝鲜量=10 万（运营 2026-08-11 拍板）"
+    assert float(trial.get("window_hours") or 0) == 0, (
+        "免费额度按量不按时：无时间窗，用完即止（时间窗稀释价值感）")
+    # enforce 必须开：「注册领 100 万」链路已上线，用尽即拦、拦了有出路
+    # （注册 / 联系客服 / 邀请好友 / 购买）；不拦的话尝鲜额度形同虚设。
+    assert trial.get("enforce") is True, (
+        "免费档升级后桌面种子必须开 enforce —— 出路链路（注册领 100 万/客服/邀请）"
+        "已上线，不拦等于额度虚设"
     )
 
 
@@ -338,7 +408,8 @@ def test_upgrade_install_still_gets_the_trial(monkeypatch, tmp_path):
     t = configure_local_trial({}, config_dir=str(tmp_path))  # 整个 licensing 段缺失
     assert t is not None, "桌面模式 + 配置未写 → 应按默认开启"
     snap = t.snapshot()
-    assert snap["included"] == 10_000 and snap["window_hours"] == 48.0
+    assert snap["included"] == 100_000 and snap["window_hours"] == 0.0
+    assert lt.local_trial_enforced() is True, "桌面默认档含 enforce（用尽即拦）"
     reset_local_trial()
 
 

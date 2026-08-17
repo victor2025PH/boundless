@@ -156,15 +156,20 @@ def register_desktop_routes(app, *, api_auth) -> None:
             tm = out_.pop("timings", None)
             tm = tm if isinstance(tm, dict) else {}
             try:
+                _ta = out_.get("time_anchor") or {}
                 logger.info(
                     "[smart_reply] mode=%s ok=%s gloss=%s instr=%s ms=%d "
-                    "gen=%s xlate=%s gloss_ms=%s path=%s conv=%s",
+                    "gen=%s xlate=%s gloss_ms=%s path=%s anchor=%s conv=%s",
                     mode, "1" if out_.get("ok") else "0",
                     "1" if out_.get("gloss") else "0",
                     "1" if instruction else "0",
                     int((time.monotonic() - _t0) * 1000),
                     tm.get("gen_ms", "-"), tm.get("xlate_ms", "-"),
                     tm.get("gloss_ms", "-"), tm.get("gen_path", "-"),
+                    (f"{_ta.get('kind')}"
+                     + ("+followup" if _ta.get("followup") else "")
+                     + (f"@{_ta.get('source')}" if _ta.get("source") else ""))
+                    if _ta else "-",
                     conversation_id or f"{platform}:{account_id}:{chat_key}")
             except Exception:
                 pass

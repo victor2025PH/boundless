@@ -31,9 +31,11 @@ from src.web.routes.unified_inbox_sla import (
     _sla_detail,
 )
 from src.web.appearance_prefs import (
+    APPEARANCE_MAX_BYTES,
     dumps_appearance,
     loads_appearance,
     sanitize_appearance,
+    sanitize_dock_order,
 )
 from src.web.web_i18n import tr
 
@@ -115,8 +117,27 @@ def register_workspace_prefs_routes(app, *, api_auth) -> None:
             ap = sanitize_appearance(body.get("appearance"))
             if ap is None:
                 raise HTTPException(400, tr(request, "err.ws.appearance_invalid"))
+            # Dock P3 carry-over：appearance.js 的整状态推送不带 dock_order（它不管排序），
+            # 直接覆盖会把账号坞自定义排序抹掉——本次写入若缺该子键，从库里已存值搬运保全。
+            if "dock_order" not in ap:
+                cur = loads_appearance(prefs.get("appearance"))
+                if isinstance(cur.get("dock_order"), dict):
+                    ap["dock_order"] = cur["dock_order"]
             prefs = inbox.set_agent_appearance(
                 agent["agent_id"], dumps_appearance(ap))
+        # Dock P3：账号坞自定义排序独立写键（body 顶层 dock_order）。语义＝只改 appearance
+        # JSON 里的 dock_order 子键，其余外观键原样保留（与 appearance 整写互为镜像的合并向）。
+        # 空 plats 合法（显式清空，跨设备传播「恢复默认」）；非法载荷 400。
+        if "dock_order" in body:
+            dk = sanitize_dock_order(body.get("dock_order"))
+            if dk is None:
+                raise HTTPException(400, tr(request, "err.ws.dock_order_invalid"))
+            cur = loads_appearance(prefs.get("appearance"))
+            cur["dock_order"] = dk
+            blob = dumps_appearance(cur)
+            if len(blob.encode("utf-8")) > APPEARANCE_MAX_BYTES:
+                raise HTTPException(400, tr(request, "err.ws.dock_order_invalid"))
+            prefs = inbox.set_agent_appearance(agent["agent_id"], blob)
         prefs = dict(prefs)
         prefs["appearance"] = loads_appearance(prefs.get("appearance"))
         return {"ok": True, "prefs": prefs}

@@ -62,6 +62,32 @@ test("不误报：认不出的页面归 unknown，不硬凑一个原因", () => 
   assert.equal(classifyLoginPage(sig({})), STAGE.UNKNOWN);
 });
 
+test("DOM 兜底：messenger.com 根路径登录页（URL 无 /login 但有账密框）→ login_form", () => {
+  // 2026-08-13 canary 实测：未登录时 goto messenger.com 落在根路径，URL 无 /login 标记，
+  // 只靠 URL 会误判 unknown → 中继流永远停在 wait。hasLoginForm 兜住。
+  assert.equal(
+    classifyLoginPage(sig({ url: "https://www.messenger.com/", hasLoginForm: true })),
+    STAGE.LOGIN_FORM);
+});
+
+test("DOM 兜底：已完整登录（c_user+xs 双全）即便残留账密框也不判 login_form", () => {
+  assert.equal(
+    classifyLoginPage(sig({ url: "https://www.messenger.com/", hasLoginForm: true,
+      hasCUser: true, hasXs: true })),
+    STAGE.UNKNOWN);
+});
+
+test("DOM 兜底优先级：更具体的段（2FA/检查点/错误框/E2EE）仍压过 hasLoginForm", () => {
+  // 有账密框但 URL 是检查点 → 检查点（更具体、可操作）
+  assert.equal(
+    classifyLoginPage(sig({ url: "https://www.facebook.com/checkpoint/x", hasLoginForm: true })),
+    STAGE.CHECKPOINT);
+  // 有账密框但挂着错误框 → 密码错（更可操作）
+  assert.equal(
+    classifyLoginPage(sig({ url: "https://www.messenger.com/", hasLoginForm: true, hasErrorBox: true })),
+    STAGE.PASSWORD_ERROR);
+});
+
 test("已完整登录（c_user + xs 都有）不该被判成二因子", () => {
   assert.equal(
     classifyLoginPage(sig({ url: "https://www.messenger.com/", hasCUser: true, hasXs: true })),
@@ -80,6 +106,40 @@ test("E2EE PIN：URL 关键词或页面文案命中（半死态重登路径）",
       url: "https://www.messenger.com/",
       hasCUser: true, hasXs: true,
       pageText: "Enter your PIN to restore encrypted chats",
+    })),
+    STAGE.E2EE_PIN);
+});
+
+test("E2EE PIN：纯加密线程 URL 不是 PIN 证据（P4 2026-08-15 boot 误报实锤）", () => {
+  // 重启恢复落在上次打开的加密会话页：URL /e2ee/t/<数字> 含裸 "e2ee"，旧判据
+  // 把正常会话页误分类成 e2ee_pin → tryAutoE2eePin 空转 + 坐席看到误导性
+  // 「请填 PIN」提示码。纯线程路径 + 无 PIN 文案 = 已登录正常态，归 unknown。
+  assert.equal(
+    classifyLoginPage(sig({
+      url: "https://www.messenger.com/e2ee/t/1054679137531045/",
+      hasCUser: true, hasXs: true,
+    })),
+    STAGE.UNKNOWN);
+  // 线程页上叠了真 PIN 浮层：URL 判据被豁免，但文案判据必须兜住
+  assert.equal(
+    classifyLoginPage(sig({
+      url: "https://www.messenger.com/e2ee/t/1054679137531045/",
+      hasCUser: true, hasXs: true,
+      pageText: "输入你的 PIN 以恢复端到端加密聊天",
+    })),
+    STAGE.E2EE_PIN);
+  // 具体标记（encryption_pin 等）叠在线程 URL 查询串上仍算证据（豁免只针对裸 e2ee）
+  assert.equal(
+    classifyLoginPage(sig({
+      url: "https://www.messenger.com/e2ee/t/999?entrypoint=encryption_pin",
+      hasCUser: true, hasXs: true,
+    })),
+    STAGE.E2EE_PIN);
+  // 非线程的 e2ee 流程页（如 /e2ee/restore）不受豁免影响
+  assert.equal(
+    classifyLoginPage(sig({
+      url: "https://www.messenger.com/e2ee/restore",
+      hasCUser: true, hasXs: true,
     })),
     STAGE.E2EE_PIN);
 });

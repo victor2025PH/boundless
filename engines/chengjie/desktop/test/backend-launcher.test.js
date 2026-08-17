@@ -18,6 +18,9 @@ function ok(name, cond) {
 const APP_DIR = "/repo/desktop"; // 假定 desktop 目录；其上级=仓库根 /repo
 const REPO = path.resolve(APP_DIR, "..");
 
+// 确定性：宿主机若恰好设了部署档 env，会污染下方「默认 cloud_light」断言
+delete process.env.AITR_DEPLOY_PROFILE;
+
 // ── ① 显式关闭 → null（用户自管，零回归）────────────────────────────────────
 ok(
   "spawn.enabled=false → null",
@@ -49,6 +52,20 @@ ok("bundled command", bundled.command === binPath);
 ok("bundled 无dataDir cwd=dirname", bundled.cwd === path.dirname(binPath));
 ok("bundled 桌面模式标记", bundled.env && bundled.env.AITR_DESKTOP_MODE === "1");
 ok("bundled 无dataDir 不重定向数据", bundled.env && !bundled.env.AITR_DATA_DIR);
+// WP-1：打包态默认 cloud_light 部署档；外部 env 显式设置时尊重之（可覆盖）
+ok("bundled 默认部署档 cloud_light",
+  bundled.env.AITR_DEPLOY_PROFILE === "cloud_light");
+process.env.AITR_DEPLOY_PROFILE = "custom_x";
+try {
+  const bundledCustom = resolveBackendSpawn({
+    config: {}, isPackaged: true, resourcesPath: "/Resources",
+    appDir: APP_DIR, platform: "win32", exists: (p) => p === binPath,
+  });
+  ok("bundled 部署档可被外部 env 覆盖",
+    bundledCustom.env.AITR_DEPLOY_PROFILE === "custom_x");
+} finally {
+  delete process.env.AITR_DEPLOY_PROFILE;
+}
 
 // 发布态 + dataDir → cwd/env 指向可写数据根（核心：config 落可写区）
 const DATA = path.join("/Users/me/AppData", "data");

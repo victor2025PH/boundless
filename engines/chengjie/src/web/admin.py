@@ -32,6 +32,12 @@ _TEMPLATE_DIR = Path(__file__).parent / "templates"
 # auto_reload 作为构造参数会 TypeError，改为构造后直接设到 Jinja2 Environment。
 templates = Jinja2Templates(directory=str(_TEMPLATE_DIR))
 templates.env.auto_reload = True
+# 模板热更新的运行时兜底（2026-08-17 `){#` 事故第三层防线）：坏保存落盘时供应
+# 最后一版好模板 + CRITICAL 限流日志，替代整页 500；冷启动就坏仍照旧抛。
+# 详见 src/web/template_guard.py 的取舍说明；门禁 tests/test_template_guard.py。
+from src.web.template_guard import install_template_guard  # noqa: E402
+
+install_template_guard(templates.env)
 
 # ── 模型显示名映射（UI 层展示，不影响实际 API 调用）─────────────
 _MODEL_DISPLAY_MAP: dict = {
@@ -741,11 +747,12 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     config_manager.on_reload(_apply_branding_globals)
 
     from src.web.web_i18n import get_translations
+    from src.web.i18n_packs import UI_LANGS  # UI 语言白名单单一事实源（xlate P3）
 
     @app.middleware("http")
     async def inject_i18n(request: Request, call_next):
         lang = request.query_params.get("lang") or request.cookies.get("ui_lang", "zh")
-        if lang not in ("zh", "en", "vi"):
+        if lang not in UI_LANGS:
             lang = "zh"
         request.state.ui_lang = lang
         request.state.i18n = get_translations(lang)
@@ -856,6 +863,17 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
                 getattr(config_manager, "config", None)).items():
             context.setdefault(_k, _v)
 
+        # ── 内部功能界面显隐(ui_visibility 单源，2026-08-14)────────
+        # 模板消费 ui_vis.{manual_console,group_extract,matrix_nav,group_show,
+        # team_collab,ai_settings}（缺省全 False=隐藏；开发者页 /developer 按键
+        # 开启走 overlay 热重载）。
+        try:
+            from src.web.ui_visibility import resolve_ui_visibility
+            context.setdefault("ui_vis", resolve_ui_visibility(
+                getattr(config_manager, "config", None)))
+        except Exception:
+            context.setdefault("ui_vis", {})
+
         # ── 档位徽章(P3)：仅 feature_gate 开启时出现在顶栏,默认部署零变化 ──
         try:
             from src.licensing.feature_gate import effective_plan as _fg_plan
@@ -936,7 +954,7 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         resp = RedirectResponse(request.headers.get("referer", "/"), status_code=303)
         resp.set_cookie("ui_lang", lang, max_age=365 * 86400)
         # 语言跟人走：登录用户切换语言时落库个人偏好，下次任意设备登录自动套用。
-        if lang in ("zh", "en", "vi"):
+        if lang in UI_LANGS:
             try:
                 _uname = request.session.get("username", "")
                 if _uname:
@@ -1057,6 +1075,10 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     # 主管专属端点仍由各路由内部 _is_supervisor 守卫。
     app.state.api_auth = _api_auth
     app.state.require_role = _require_role
+    # P2（2026-08-16 管理面改造）：暴露用户存储——路由层能力守卫（按人权限覆写
+    # resolve_user_perm）与坐席额度闸（check_request_quota 查 monthly_char_quota）
+    # 都要按登录身份查 web_users 行；缺失时守卫一律 fail-open（宁可漏拦不误伤）。
+    app.state.user_store = user_store
 
     _PATH_TO_PAGE = {
         "/": "dash", "/templates": "tpl", "/templates/update": "tpl",
@@ -1175,6 +1197,40 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         import logging as _log_mb
 
         _log_mb.getLogger("admin").warning("membership 路由注册失败", exc_info=True)
+
+    # ── WP-2：首启向导 /welcome（onboarding.enabled 基线关；关=页面与 API 全 404）──
+    try:
+        from src.web.routes.welcome_routes import register_welcome_routes
+
+        register_welcome_routes(
+            app, templates=templates, page_auth=_page_auth,
+            api_auth=_api_auth, config_manager=config_manager,
+            user_store=user_store)
+    except Exception:
+        import logging as _log_onb
+
+        _log_onb.getLogger("admin").warning("welcome 路由注册失败", exc_info=True)
+
+    # ── WP-4：合规只读导出（危机转介计数 + 开关回显；写入面在危机处置链打点）──
+    try:
+        from src.web.routes.compliance_routes import register_compliance_routes
+
+        register_compliance_routes(
+            app, api_auth=_api_auth, config_manager=config_manager)
+    except Exception:
+        import logging as _log_cmp
+
+        _log_cmp.getLogger("admin").warning("compliance 路由注册失败", exc_info=True)
+    # 合规开关的进程级读取面（persona_manager prompt 组装等消费点惰性读；
+    # provider 指向实时合并配置=跟随 overlay 热重载；失败=开关恒关，零风险）
+    try:
+        from src.compliance.runtime import set_config_provider
+
+        set_config_provider(
+            lambda: getattr(config_manager, "config", None) or {})
+    except Exception:
+        pass
+
 
     # ── C1-1 白标品牌设置 API ──────────────────────────────
     try:
@@ -1300,7 +1356,20 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     except Exception:
         import logging as _log_ccap
 
-        _log_ccap.getLogger("admin").warning("companion capability 看板路由注册失败", exc_info=True)
+        _log_ccap.getLogger(__name__).warning(
+            "companion capability routes 注册失败", exc_info=True)
+
+    # ── 被骂回怼治理 API（/api/companion/temper/*）────────────────────
+    try:
+        from src.web.routes.temper_routes import register_temper_routes
+
+        register_temper_routes(
+            app, api_auth=_api_auth, config_manager=config_manager)
+    except Exception:
+        import logging as _log_temper
+
+        _log_temper.getLogger(__name__).warning(
+            "temper 治理路由注册失败", exc_info=True)
 
     # 系统状态/指标/reactivation dry-run/审计热力图 已抽到 routes/monitoring_routes.py（批 G2-①）
     # （register_monitoring_routes 在 _admin_ctx + kb_store 就绪后调用，见下方 learner 注册附近）
@@ -1506,6 +1575,28 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         import logging as _log_pm
         _log_pm.getLogger("admin").debug("Persona media 路由注册跳过", exc_info=True)
 
+    # ── 表情包（贴纸）：包/条目管理 + 收藏入包 + 官方包播种 + 跨平台发送 ──
+    try:
+        from src.web.routes.sticker_routes import register_sticker_routes
+        register_sticker_routes(
+            app, auth_dep=_api_auth, audit_store=audit_store,
+            config_manager=config_manager
+        )
+    except Exception:
+        import logging as _log_stk
+        _log_stk.getLogger("admin").debug("表情包路由注册跳过", exc_info=True)
+
+    # ── Telegram 群成员提取（工具箱）：多号限速拉群成员入库 + 每日配额 ──
+    try:
+        from src.web.routes.group_members_routes import register_group_members_routes
+        register_group_members_routes(
+            app, auth_dep=_api_auth, audit_store=audit_store,
+            config_manager=config_manager, page_auth=_page_auth,
+        )
+    except Exception:
+        import logging as _log_gm
+        _log_gm.getLogger("admin").debug("Telegram 群成员提取路由注册跳过", exc_info=True)
+
     # ── 营销目标（marketing goals）：会话级工作目标 CRUD + settle-on-read 视图 ──
     try:
         from src.web.routes.goal_routes import register_goal_routes
@@ -1530,6 +1621,15 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     except Exception:
         import logging as _log_fc
         _log_fc.getLogger("admin").warning("功能总览路由注册失败", exc_info=True)
+
+    # ── 内部功能界面显隐（2026-08-14）：桌面壳 ui-flags + 开发者页写开关 ──
+    try:
+        from src.web.routes.ui_visibility_routes import register_ui_visibility_routes
+        register_ui_visibility_routes(
+            app, auth_dep=_api_auth, config_manager=config_manager)
+    except Exception:
+        import logging as _log_uiv
+        _log_uiv.getLogger("admin").warning("ui_visibility 路由注册失败", exc_info=True)
 
     @app.get("/personas", response_class=HTMLResponse)
     async def personas_page(request: Request, _=Depends(_page_auth)):
@@ -3306,6 +3406,21 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         import logging as _log_dr
         _log_dr.getLogger("admin").debug("草稿/绩效路由注册跳过", exc_info=True)
 
+    # ── WP-3：老板日报 /workspace/boss（任意登录角色；数据=value_report 日/周窗）──
+    # 独立注册块：不与上方草稿链装配连坐（store 缺席时端点自答 available:false）。
+    # 注意 _unified_inbox_page_auth 定义在上方局部作用域（~L3300），本块必须留在
+    # 它之后——挪去文件前部会 NameError 被 try 静默吞掉（2026-08-17 首版实错）。
+    try:
+        from src.web.routes.boss_routes import register_boss_routes
+
+        register_boss_routes(
+            app, page_auth=_unified_inbox_page_auth, api_auth=_api_auth,
+            templates=templates, config_manager=config_manager)
+    except Exception:
+        import logging as _log_boss
+
+        _log_boss.getLogger("admin").warning("boss 路由注册失败", exc_info=True)
+
     # ── P29: 实时队列看板页面 ──────────────────────────────────────
     @app.get("/workspace/queue")
     async def _ws_queue_monitor(request: Request):
@@ -3462,6 +3577,50 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         import logging as _log_rps
 
         _log_rps.getLogger("admin").debug("自动回复设置路由注册跳过", exc_info=True)
+
+    # ── 双面板融合 API（能力注册表 / 驾驶权互斥锁，P0 2026-08-13）──
+    try:
+        from src.web.routes.surface_fusion_routes import (
+            register_surface_fusion_routes,
+        )
+
+        register_surface_fusion_routes(
+            app,
+            api_auth=_api_auth,
+            config_manager=config_manager,
+        )
+    except Exception:
+        import logging as _log_sf
+
+        _log_sf.getLogger("admin").debug("双面板融合路由注册跳过", exc_info=True)
+
+    # ── 会话级接管 API（一键接管/交还，驾驶舱 P0 2026-08-13）──
+    try:
+        from src.web.routes.takeover_routes import register_takeover_routes
+
+        register_takeover_routes(
+            app,
+            api_auth=_api_auth,
+            config_manager=config_manager,
+        )
+    except Exception:
+        import logging as _log_tko
+
+        _log_tko.getLogger("admin").debug("会话接管路由注册跳过", exc_info=True)
+
+    # ── 驾驶舱 API（介入优先级队列聚合，cockpit P1 2026-08-13）──
+    try:
+        from src.web.routes.cockpit_routes import register_cockpit_routes
+
+        register_cockpit_routes(
+            app,
+            api_auth=_api_auth,
+            config_manager=config_manager,
+        )
+    except Exception:
+        import logging as _log_ck
+
+        _log_ck.getLogger("admin").debug("驾驶舱路由注册跳过", exc_info=True)
 
     return app
 

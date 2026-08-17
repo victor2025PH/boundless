@@ -298,8 +298,12 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
 
         qr_url = qr_image = instruction = instruction_key = prov_reason = ""
         poll_fn = cancel_fn = submit_fn = submit_code_fn = resend_code_fn = None
+        relay_step_fn = relay_submit_fn = None
+        interactive = False
         provider_state = None
         init_status = init_detail = ""
+        cred_source = ""
+        retry_after_sec = -1
         provider = get_login_provider(platform, mode)
         if provider is not None:
             try:
@@ -320,10 +324,18 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                 submit_fn = info.get("submit_password")
                 submit_code_fn = info.get("submit_code")
                 resend_code_fn = info.get("resend_code")
+                relay_step_fn = info.get("relay_step")
+                relay_submit_fn = info.get("relay_submit")
+                interactive = bool(info.get("interactive"))
                 provider_state = info.get("state")
                 prov_reason = str(info.get("reason_code") or "")
                 init_status = str(info.get("status") or "")
                 init_detail = str(info.get("detail") or "")
+                cred_source = str(info.get("cred_source") or "")
+                try:
+                    retry_after_sec = int(info.get("retry_after_sec", -1))
+                except Exception:
+                    retry_after_sec = -1
             except Exception:
                 logger.debug("登录 provider[%s:%s] 失败（回落设备端指引）",
                              platform, mode, exc_info=True)
@@ -336,9 +348,11 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
             proxy_id=cfg_proxy_id, fingerprint_id=fingerprint_id,
             provider_state=provider_state, poll_fn=poll_fn, cancel_fn=cancel_fn,
             submit_fn=submit_fn, submit_code_fn=submit_code_fn,
-            resend_code_fn=resend_code_fn,
+            resend_code_fn=resend_code_fn, relay_step_fn=relay_step_fn,
+            relay_submit_fn=relay_submit_fn,
             initial_status=init_status, reason_code=prov_reason,
             detail=init_detail,
+            cred_source=cred_source, retry_after_sec=retry_after_sec,
         )
         _funnel(sess, "started")
         if sess.qr_image or sess.qr_url:
@@ -362,7 +376,7 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                     get_proxy_pool().assign(cfg_proxy_id, f"{platform}:{account_id}")
             except Exception:
                 logger.debug("账号注册表 upsert 失败", exc_info=True)
-        return {
+        out = {
             "ok": True,
             "login_id": sess.login_id,
             "mode": sess.mode,
@@ -374,7 +388,19 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
             "instruction": sess.instruction,
             "instruction_key": sess.instruction_key,
             "reason_code": sess.reason_code,
+            # start 即失败时把 detail 一并回（否则前端只有归因码没有技术详情可折叠）
+            "detail": sess.detail,
+            # 表单中继能力位：true ⇒ 前端走应用内原生分步表单（headless 边车，不弹窗）；
+            # false ⇒ 既有 headed 窗口 + 截图预览路径。默认 false（interactive_login 默认关）。
+            "interactive": interactive,
+            # 会话剩余秒数：前端画二维码有效期条（纯展示；过期判定仍在服务端）
+            "expires_in": sess.remaining_sec(),
         }
+        if sess.cred_source:
+            # cred_invalid 处置元信息：前端据此倒计时自愈（hosted）/亮修正表单（self）
+            out["cred_source"] = sess.cred_source
+            out["retry_after_sec"] = int(sess.retry_after_sec)
+        return out
 
     @app.get("/api/platforms/{platform}/login/{login_id}/status")
     async def api_platform_login_status(platform: str, login_id: str, request: Request):
@@ -386,8 +412,15 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                     "detail": tr(request, "err.login.session_expired")}
         if sess.status in ("authorized", "failed"):
             # 终态早退绕过 provider poll，原因码只能从会话读（poll 时已落 sess）
-            return {"ok": True, "status": sess.status, "pin": "",
+            _out = {"ok": True, "status": sess.status, "pin": "",
                     "reason_code": sess.reason_code, "detail": sess.detail}
+            if sess.cred_source:
+                _out["cred_source"] = sess.cred_source
+                _out["retry_after_sec"] = int(sess.retry_after_sec)
+            elif sess.retry_after_sec >= 0:
+                # rate_limited（FloodWait）等与凭据来源无关的等待秒数：前端画倒计时
+                _out["retry_after_sec"] = int(sess.retry_after_sec)
+            return _out
         if sess.is_expired():
             sess.status = "expired"
             # 会话耗尽 TTL 也是一次失败结局，此前**一次都没记进漏斗**——于是「发起 20 次、
@@ -410,6 +443,19 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                 if rc:
                     # 只在非空时落：failed 是终态，原因码不应被后续轮询的空值抹掉
                     sess.reason_code = rc
+                # cred_invalid 处置元信息与 reason_code 同生命周期（非空才落，终态不抹）
+                if res.get("cred_source"):
+                    sess.cred_source = str(res.get("cred_source") or "")
+                    try:
+                        sess.retry_after_sec = int(res.get("retry_after_sec", -1))
+                    except Exception:
+                        sess.retry_after_sec = -1
+                elif "retry_after_sec" in res:
+                    # 无凭据来源的等待秒数（rate_limited/FloodWait）：同样落会话供终态早退回读
+                    try:
+                        sess.retry_after_sec = int(res.get("retry_after_sec", -1))
+                    except Exception:
+                        sess.retry_after_sec = -1
                 # hint_code 与之相反——它是**可来回变的实时态**（用户从 2FA 页退回登录页
                 # 就该跟着清掉），故空值也照落，绝不粘住旧提示误导坐席。
                 sess.hint_code = str(res.get("hint_code") or "")
@@ -417,6 +463,10 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                     _funnel(sess, "qr_shown")
                 if st == "pin_needed":
                     _funnel(sess, "pin_issued")
+                elif st == "scanned":
+                    # Telegram 扫码确认：「scanned 有量而 authorized 近零」＝扫码后
+                    # 的 DC 迁移链坏了（2026-08-14 事故形态），漏斗必须能看见这一段
+                    _funnel(sess, "scanned")
                 elif st == "authorized":
                     _funnel(sess, "authorized")
                 elif st == "failed":
@@ -426,14 +476,21 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                 poll_qr = str(res.get("qr_url") or sess.qr_url)
                 if poll_qr and not sess.qr_url:
                     sess.qr_url = poll_qr
-                return {"ok": True, "status": st,
-                        "detail": str(res.get("detail") or ""),
-                        "pin": str(res.get("pin") or ""),
-                        "reason_code": sess.reason_code,
-                        "hint_code": sess.hint_code,
-                        "qr_url": poll_qr,
-                        "qr_image": str(res.get("qr_image") or "")
-                        or _login_qr_data_url(poll_qr)}
+                _pout = {"ok": True, "status": st,
+                         "detail": str(res.get("detail") or ""),
+                         "pin": str(res.get("pin") or ""),
+                         "reason_code": sess.reason_code,
+                         "hint_code": sess.hint_code,
+                         "qr_url": poll_qr,
+                         "qr_image": str(res.get("qr_image") or "")
+                         or _login_qr_data_url(poll_qr),
+                         "expires_in": sess.remaining_sec()}
+                if sess.cred_source:
+                    _pout["cred_source"] = sess.cred_source
+                    _pout["retry_after_sec"] = int(sess.retry_after_sec)
+                elif sess.retry_after_sec >= 0:
+                    _pout["retry_after_sec"] = int(sess.retry_after_sec)
+                return _pout
             except Exception:
                 # poll 是登录链路的心跳，静默失败会让整条链路查无实据
                 logger.warning("provider poll 失败", exc_info=True)
@@ -454,7 +511,8 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
             logger.debug("登录状态轮询失败", exc_info=True)
         return {"ok": True, "status": sess.status, "pin": "", "reason_code": "",
                 "instruction": sess.instruction,
-                "instruction_key": sess.instruction_key}
+                "instruction_key": sess.instruction_key,
+                "expires_in": sess.remaining_sec()}
 
     @app.post("/api/platforms/{platform}/login/{login_id}/password")
     async def api_platform_login_password(platform: str, login_id: str, request: Request):
@@ -572,6 +630,91 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
             logger.debug("provider resend_code 失败", exc_info=True)
             return {"ok": False, "status": sess.status,
                     "detail": tr(request, "err.login.code_resend_failed")}
+
+    @app.get("/api/platforms/{platform}/login/{login_id}/relay-step")
+    async def api_platform_login_relay_step(platform: str, login_id: str, request: Request):
+        """表单中继（Form-Relay）只读探针：登录页此刻该渲染哪一步应用内原生表单
+        （credentials / twofactor / e2ee_pin / checkpoint / done / wait）。
+
+        仅交互登录（provider 提供 relay_step_fn，即 interactive_login 开启）时可用；否则回
+        reason_code=not_supported，前端走既有 headed / 截图预览路径。纯读、零副作用；探针
+        异常一律软回落 wait，绝不阻断登录链。文案走结构化 reason_code + 前端本地化，路由不
+        内联任何 CJK。"""
+        api_auth(request)
+        sess = get_login_manager().get(login_id)
+        if sess is None:
+            return {"ok": True, "status": "expired", "step": "wait", "fields": [],
+                    "error": False, "escalate": False, "code": "",
+                    "detail": tr(request, "err.login.session_expired")}
+        if sess.relay_step_fn is None:
+            return {"ok": False, "status": sess.status, "step": "wait", "fields": [],
+                    "error": False, "escalate": False, "code": "",
+                    "reason_code": "not_supported", "detail": ""}
+        try:
+            res = sess.relay_step_fn(sess)
+            if inspect.isawaitable(res):
+                res = await res
+            res = res or {}
+        except Exception:
+            logger.debug("provider relay_step 失败", exc_info=True)
+            return {"ok": True, "status": sess.status, "step": "wait", "fields": [],
+                    "error": False, "escalate": False, "code": ""}
+        return {
+            "ok": True,
+            "status": str(res.get("status") or sess.status),
+            "booting": bool(res.get("booting")),
+            "step": str(res.get("step") or "wait"),
+            "fields": list(res.get("fields") or []),
+            "error": bool(res.get("error")),
+            "escalate": bool(res.get("escalate")),
+            "code": str(res.get("code") or ""),
+            "qr_image": str(res.get("qr_image") or ""),
+        }
+
+    @app.post("/api/platforms/{platform}/login/{login_id}/relay-submit")
+    async def api_platform_login_relay_submit(platform: str, login_id: str, request: Request):
+        """表单中继写入端：把应用内原生表单字段值（账密 / 2FA 码 / E2EE PIN）填回登录页。
+
+        body：``{"step": "credentials|twofactor|e2ee_pin", "values": {...}}``。fire-and-forget
+        ——边车填完即回，真正结果（→ 2FA / 密码错 / 授权）由 relay-step / status 轮询观测；
+        本路由**不**改 sess.status（避免用填页当刻的过渡态覆盖轮询的权威判定）。仅交互登录
+        （provider 提供 relay_submit_fn）时可用，否则 reason_code=not_supported。文案走结构化
+        reason_code + 前端本地化，路由不内联 CJK。"""
+        api_auth(request)
+        sess = get_login_manager().get(login_id)
+        if sess is None:
+            return {"ok": False, "status": "expired",
+                    "detail": tr(request, "err.login.session_expired")}
+        if sess.relay_submit_fn is None:
+            return {"ok": False, "status": sess.status,
+                    "reason_code": "not_supported", "detail": ""}
+        body: Dict[str, Any] = {}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        step = str((body or {}).get("step") or "")
+        values = (body or {}).get("values") or {}
+        if not isinstance(values, dict):
+            values = {}
+        try:
+            res = sess.relay_submit_fn(sess, step, values)
+            if inspect.isawaitable(res):
+                res = await res
+            res = res or {}
+        except Exception:
+            logger.debug("provider relay_submit 失败", exc_info=True)
+            return {"ok": False, "status": sess.status, "reason_code": "submit_failed"}
+        return {
+            "ok": bool(res.get("ok")),
+            "status": str(res.get("status") or sess.status),
+            "step": str(res.get("step") or step),
+            "reason_code": str(res.get("reason_code") or ""),
+            "missing": list(res.get("missing") or []),
+            "submitted": bool(res.get("submitted")),
+            "accepted": bool(res.get("accepted")),
+            "detail": str(res.get("detail") or ""),
+        }
 
     @app.post("/api/platforms/{platform}/login/{login_id}/cancel")
     async def api_platform_login_cancel(platform: str, login_id: str, request: Request):

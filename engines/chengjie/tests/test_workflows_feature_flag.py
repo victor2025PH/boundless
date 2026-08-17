@@ -4,9 +4,9 @@
 flag 语义不变量：
 - **默认开**（键缺失 / config_manager 缺失 / 读取异常）——出货默认零行为变化；
 - 关闭时链域端点（列链/CRUD/种子/执行列表/漏斗/会话执行/取消/启动）一律 403；
-- NBA 下一步动作推荐 / 自定义动作端点**不受影响**（独立能力面），仅
-  execute-action 的「启动工作链」分支软拒（该端点还服务 task/tag/note，不能整口 403）；
 - 关闭只拦「新动作」：语义上在途执行不中断（Runner 不受闸，此处按路由面回归）。
+（原「NBA 面不受影响 / execute-action 链分支软拒」不变量已随「AI 下一步」面板
+ 2026-08-14 整体下线删除——那些端点不复存在。）
 
 C2 goal_id 透传不变量：
 - start-chain 带 goal_id → 落 workflow_executions.context_json（漏斗归因地基）；
@@ -85,7 +85,7 @@ def test_default_on_with_explicit_true(tmp_path):
     assert r.status_code == 200 and r.json()["ok"] is True
 
 
-# ── flag 关：链域全 403，NBA 面不受影响 ───────────────────────────────────
+# ── flag 关：链域全 403 ────────────────────────────────────────────────────
 
 def test_off_blocks_all_chain_endpoints(tmp_path):
     c = _client(tmp_path, cfg=_OFF)
@@ -96,32 +96,6 @@ def test_off_blocks_all_chain_endpoints(tmp_path):
             r = c.request(method, path, json=body)
         assert r.status_code == 403, f"{method} {path} 应 403，实际 {r.status_code}"
         assert r.json().get("detail"), f"{method} {path} 403 须带 i18n detail"
-
-
-def test_off_keeps_nba_surface_alive(tmp_path):
-    c = _client(tmp_path, cfg=_OFF)
-    assert c.get("/api/workspace/workflow-actions").status_code == 200
-    r = c.get("/api/workspace/conv/tg:a:c1/next-actions")
-    assert r.status_code == 200 and r.json()["ok"] is True
-
-
-def test_off_execute_action_chain_branch_soft_rejects(tmp_path):
-    """execute-action 还服务 task/tag/note——链分支软拒（200 + ok:False），不整口 403；
-    且绝不能真的把链启动起来。"""
-    c = _client(tmp_path, cfg=_OFF)
-    store = c.app.state.inbox_store
-    ensure_starter_chains(store)
-    cid = STARTER_CHAINS[0]["chain_id"]
-    r = c.post("/api/workspace/conv/tg:a:c9/execute-action",
-               json={"action_type": "chain", "config": {"chain_id": cid}})
-    assert r.status_code == 200
-    d = r.json()
-    assert d["ok"] is False and d.get("error")
-    assert store.list_chain_executions(conversation_id="tg:a:c9") == []
-    # 非链动作同请求形状仍可用（tag 分支不受闸）
-    r2 = c.post("/api/workspace/conv/tg:a:c9/execute-action",
-                json={"action_type": "tag", "config": {"tag": "重点客户"}})
-    assert r2.status_code == 200 and r2.json()["ok"] is True
 
 
 # ── C2：start-chain goal_id 透传 ───────────────────────────────────────────
@@ -326,7 +300,7 @@ def test_membership_matrix_label_bilingual():
 # ── E2：档位试算矩阵（全档扫一遍，锁得住/放得开/文案对） ────────────────────
 
 def test_plan_sweep_workflow_lock_matrix(tmp_path):
-    """community/basic 锁、pro/flagship 放；NBA 面任何档位都不受影响。
+    """community/basic 锁、pro/flagship 放。
     单 client 热切 config（feature_gate 每请求现读配置，无缓存假设）。"""
     from src.licensing.feature_gate import PLAN_ORDER, plan_rank
     c = _client(tmp_path, cfg=_lic_cfg("community"))
@@ -335,7 +309,6 @@ def test_plan_sweep_workflow_lock_matrix(tmp_path):
         expect = 200 if plan_rank(plan) >= plan_rank("pro") else 403
         got = c.get("/api/workspace/workflow-chains").status_code
         assert got == expect, f"{plan}: 期望 {expect} 实际 {got}"
-        assert c.get("/api/workspace/workflow-actions").status_code == 200, plan
 
 
 def test_plan_sweep_gate_snapshot_row_coherent():

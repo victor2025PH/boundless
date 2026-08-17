@@ -22,8 +22,18 @@
     background:var(--tk-surface);border-right:1px solid var(--tk-border);
     transition:width .16s ease;}
   .wsb-nav{flex:1;overflow-y:auto;padding:10px 8px 4px;}
-  .wsb-sec{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
-    color:var(--tk-text-muted);opacity:.75;padding:12px 10px 5px;white-space:nowrap;}
+  .wsb-sec{font-size:11.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--tk-text-muted);padding:12px 10px 5px;white-space:nowrap;}
+  /* 分组折叠（2026-08-16）：完整模式组头=真按钮（Enter/Space 原生可达）；
+     开合与后台壳侧栏共用 localStorage sb_groups_v1（两壳状态一致）。 */
+  .wsb-sec-btn{cursor:pointer;display:flex;align-items:center;gap:5px;width:100%;
+    background:none;border:none;font-family:inherit;text-align:left;}
+  .wsb-sec-btn:hover{color:var(--tk-text);}
+  .wsb-sec-btn:focus-visible{outline:2px solid var(--tk-brand);outline-offset:-2px;border-radius:6px;}
+  .wsb-sec-lbl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;}
+  .wsb-sec-chev{flex-shrink:0;opacity:.7;transition:transform .16s;}
+  .wsb-sec-btn[aria-expanded="false"] .wsb-sec-chev{transform:rotate(-90deg);}
+  .wsb-grp-items.grp-closed{display:none;}
   .wsb-nav a{display:flex;align-items:center;gap:9px;padding:7px 10px;margin:1px 0;
     border-radius:var(--tk-radius-sm);color:var(--tk-text);text-decoration:none;
     font-size:13px;line-height:1.35;white-space:nowrap;transition:background .12s,color .12s;}
@@ -57,13 +67,18 @@
   .wsb-side.collapsed .wsb-foot{flex-direction:column;}
   .wsb-side.collapsed .wsb-mode{flex:none;padding:6px;}
   .wsb-side.collapsed .wsb-collapse svg{transform:rotate(180deg);}
-  /* 折叠态分组之间留一道分隔，替代被隐藏的分组标题 */
+  /* 折叠态分组之间留一道分隔，替代被隐藏的分组标题（简洁模式=裸 a；完整模式=容器内首项） */
   .wsb-side.collapsed .wsb-sec + a{margin-top:8px;border-top:1px solid var(--tk-border);
     padding-top:10px;border-radius:0;}
+  .wsb-side.collapsed .wsb-sec + .wsb-grp-items > a:first-child{margin-top:8px;
+    border-top:1px solid var(--tk-border);padding-top:10px;border-radius:0;}
+  /* 图标轨下分组折叠让位：图标必须全部可见 */
+  .wsb-side.collapsed .wsb-grp-items{display:block!important;}
   /* ── 窄屏：让位给正文（顶栏导航与 Ctrl+K 命令面板仍可达）── */
   @media (max-width:1024px){ .wsb-side{width:52px;}
     .wsb-side .wsb-nav a > span,.wsb-side .wsb-lock,
     .wsb-side .wsb-mode span,.wsb-side .wsb-sec{display:none;}
+    .wsb-side .wsb-grp-items{display:block!important;}
     .wsb-side .wsb-nav a{justify-content:center;padding:8px 0;}
     .wsb-side .wsb-foot{flex-direction:column;} .wsb-side .wsb-mode{flex:none;padding:6px;} }
   @media (max-width:768px){ .wsb-side{display:none;} }
@@ -122,15 +137,24 @@
       {%- if not (it.master_only and user_role != 'master') %}{{ wsb_item(it) }}{% endif %}
     {%- endfor %}
   {% else %}
+    {#- 完整模式分组可折叠(2026-08-16):组头=真按钮,项包进 .wsb-grp-items;
+        开合记忆与后台壳共用 sb_groups_v1,含当前页的组强制展开。 -#}
     {%- for grp in (nav_groups or []) %}
     {%- if not grp.get('master_only') or user_role == 'master' %}
-    <div class="wsb-sec">{{ (i18n or {}).get(grp.label_key, grp.label_zh) }}</div>
+    {%- set _gid = grp.get('label_key') or ('grp' ~ loop.index) %}
+    <button type="button" class="wsb-sec wsb-sec-btn" data-grp="{{ _gid }}" aria-expanded="true" aria-controls="wsbgrp-{{ _gid }}"
+            title="{% if grp.get('note_key') %}{{ (i18n or {}).get(grp.note_key, grp.get('note_zh','')) }} · {% endif %}{{ (i18n or {}).get('nav_grp_toggle_hint', '点击折叠/展开分组') }}">
+      <span class="wsb-sec-lbl">{{ (i18n or {}).get(grp.label_key, grp.label_zh) }}</span>
+      <svg class="wsb-sec-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11"><polyline points="6 9 12 15 18 9"/></svg>
+    </button>
+    <div class="wsb-grp-items" id="wsbgrp-{{ _gid }}">
     {%- for it in grp['items'] %}
       {%- if it == '__domain_pages__' %}{{ wsb_domain(false) }}
       {%- elif it.master_only and user_role != 'master' %}
       {%- else %}{{ wsb_item(it) }}
       {%- endif %}
     {%- endfor %}
+    </div>
     {%- endif %}
     {%- endfor %}
   {% endif %}
@@ -167,6 +191,23 @@
   btn.addEventListener('click', function(){
     var on = el.classList.toggle('collapsed');
     try{ localStorage.setItem(KEY, on ? '1' : '0'); }catch(_){}
+  });
+  /* 分组折叠（完整模式）：与后台壳侧栏共用 sb_groups_v1（两壳状态一致）；
+     含当前激活页的组强制展开。图标轨/窄屏下 CSS 兜底强制可见。 */
+  var GKEY = 'sb_groups_v1';
+  function gst(){ try{ return JSON.parse(localStorage.getItem(GKEY)||'{}')||{}; }catch(_){ return {}; } }
+  el.querySelectorAll('.wsb-sec-btn[data-grp]').forEach(function(gbtn){
+    var body = document.getElementById('wsbgrp-' + gbtn.dataset.grp);
+    if(!body) return;
+    if(gst()[gbtn.dataset.grp] === 1 && !body.querySelector('.active')){
+      body.classList.add('grp-closed'); gbtn.setAttribute('aria-expanded','false');
+    }
+    gbtn.addEventListener('click', function(){
+      var closed = body.classList.toggle('grp-closed');
+      gbtn.setAttribute('aria-expanded', closed ? 'false' : 'true');
+      var s = gst(); s[gbtn.dataset.grp] = closed ? 1 : 0;
+      try{ localStorage.setItem(GKEY, JSON.stringify(s)); }catch(_){}
+    });
   });
 })();
 </script>

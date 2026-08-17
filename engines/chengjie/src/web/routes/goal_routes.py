@@ -434,7 +434,10 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         if deadline_days <= 0:
             deadline_days = float(tmpl.get("default_days") or 14)
         deadline_days = max(1.0, min(deadline_days, 180.0))
-        autonomy = str(body.get("autonomy") or "suggest")
+        # 缺省档＝auto（2026-08-12 运营方针：建目标以全自动推进为主；
+        # observe 是每目标的显式选择，不作缺省）。UI 总是显式带 autonomy，
+        # 这里兜的是裸 API/脚本调用。
+        autonomy = str(body.get("autonomy") or "auto")
         try:
             priority = int(body.get("priority") or 1)
         except (TypeError, ValueError):
@@ -800,7 +803,8 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             chat_key=chat_key, template=template_id,
             title=str(body.get("title") or "")[:120],
             params=body.get("params") if isinstance(body.get("params"), dict) else {},
-            autonomy=str(body.get("autonomy") or "suggest"),
+            # 缺省档＝auto（与批量建目标同口径，2026-08-12 全自动为主）
+            autonomy=str(body.get("autonomy") or "auto"),
             priority=int(body.get("priority") or 1),
             deadline_days=deadline_days,
             created_by=actor,
@@ -812,8 +816,34 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             get_goal_stats().record_created()
         except Exception:
             pass
-        return {"ok": True,
-                "goal": _refreshed_view(svc, store, goal, lang=_lang(request))}
+        # P3 2026-08-13 建目标即挂推荐链（inbox.workflows.goal_auto_attach 默认关；
+        # 五重闸在 helper 内：auto 档 × 模板有推荐 × 链在且启用 × 无在途）。
+        # best-effort：挂链失败绝不影响建目标本身；成功 → 目标时间线 chain_started
+        # 回写（与手动 start-chain 路由同口径）+ 响应带 auto_attached_chain
+        # （cp-goal 据此把推荐行直接渲染成「已挂上 ✓」，不再出按钮）。
+        attached = None
+        try:
+            from src.inbox.workflow_starter import maybe_auto_attach_chain
+            attached = maybe_auto_attach_chain(
+                getattr(request.app.state, "inbox_store", None),
+                _cfg_root(),
+                conversation_id=str(goal.get("conversation_id") or ""),
+                goal_id=str(goal.get("goal_id") or ""),
+                goal_template=str(goal.get("template") or ""),
+                goal_autonomy=str(goal.get("autonomy") or ""),
+            )
+            if attached:
+                svc.record_chain_event(
+                    _cfg_root(), _config_path(),
+                    str(goal.get("conversation_id") or ""),
+                    "chain_started", str(attached.get("name") or ""))
+        except Exception:
+            logger.debug("goal auto-attach skipped", exc_info=True)
+        out = {"ok": True,
+               "goal": _refreshed_view(svc, store, goal, lang=_lang(request))}
+        if attached:
+            out["auto_attached_chain"] = attached
+        return out
 
     # ── 动态路径（后注册）────────────────────────────────────────────────────
     @app.get("/api/goals/{goal_id}")

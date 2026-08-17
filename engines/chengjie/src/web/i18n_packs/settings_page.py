@@ -24,6 +24,12 @@ ZH = {
     "set_js_020": "已保存并生效",
     "set_js_021": "项）",
     "set_js_022": "确定还原到上次保存的版本？未保存的修改将丢失。",
+    # 提示词编辑器脏标记(2026-08-16)：任一输入偏离已保存值时点亮
+    "set_dirty": "● 有未保存的修改",
+    # ui_visibility.ai_settings 关（缺省）时简洁模式的空态指路（2026-08-16）
+    "set_uiv_empty_t": "本页配置已收纳到开发者工具",
+    "set_uiv_empty_d": "AI 提示词 & 行为配置、人工客服转接属于「配一次就不动」的底层项，已从日常页面收起。需要修改请打开",
+    "set_uiv_empty_d2": "「内部功能显隐」里打开「AI 与转接设置」，本页即恢复。",
     "set_js_023": "当前已配置",
     "set_js_024": "名客服（请用",
     "set_js_025": "视图改表格）。精简模式下保存不会用上方单用户名覆盖该列表。",
@@ -433,6 +439,10 @@ EN = {
     "set_js_020": "Saved and effective",
     "set_js_021": "items)",
     "set_js_022": "Restore to the last saved version? Unsaved changes will be lost.",
+    "set_dirty": "● Unsaved changes",
+    "set_uiv_empty_t": "These settings moved to Developer tools",
+    "set_uiv_empty_d": "The AI prompt & behaviour and Human escalation cards are set-once, low-level options, so they are kept out of the day-to-day page. To change them open",
+    "set_uiv_empty_d2": "and turn on \"AI & escalation settings\" under \"Internal feature visibility\" — this page comes right back.",
     "set_js_023": "Currently configured",
     "set_js_024": "agents (please use",
     "set_js_025": "view to edit the table). In compact mode, saving won't overwrite this list with the single username above.",

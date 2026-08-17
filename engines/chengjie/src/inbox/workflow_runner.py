@@ -35,10 +35,16 @@ class WorkflowRunner:
         inbox_store: Any,
         contacts_store: Any = None,
         goal_event_hook: Any = None,
+        auto_step_hook: Any = None,
     ) -> None:
         self._store = inbox_store
         self._contacts = contacts_store
         self._goal_hook = goal_event_hook
+        # P2 2026-08-13：链自动推进 hook（workflow_auto_step.make_auto_step_hook，
+        # 功能关时为 None＝零开销旧行为）。仅对「exec_mode=auto 链的 template 步」
+        # 咨询；verdict 语义：remind=旧提醒行为 / defer=静默窗顺延（不执行不记账）/
+        # auto=拟稿任务已调度（本步按已执行推进，detail=auto_draft）。
+        self._auto_step_hook = auto_step_hook
 
     def _record_goal_event(self, conv_id: str, kind: str, detail: str) -> None:
         """best-effort 回写，绝不影响链主流程。"""
@@ -71,9 +77,28 @@ class WorkflowRunner:
                 logger.debug("WorkflowRunner 单条执行失败", exc_info=True)
         return processed
 
-    def auto_start_chains(self, *, now: Optional[float] = None) -> int:
-        """P44+P35：根据链 trigger_conditions 自动启动（沉默/流失）。"""
+    def auto_start_chains(
+        self, *, now: Optional[float] = None, max_per_day: int = 0,
+    ) -> int:
+        """P44+P35：根据链 trigger_conditions 自动启动（沉默/流失）。
+
+        ``max_per_day``（P2 2026-08-13）：每日自动开链预算（DB 口径跨重启稳，
+        0=不限=旧行为）——运营给链配上 silence_days 的那一刻起这就是「对沉默
+        客户群发开链」的总闸门，没预算的自动化是事故温床。"""
         now = now or time.time()
+        budget_left: Optional[int] = None
+        if max_per_day > 0 and hasattr(self._store, "count_auto_started_chains_since"):
+            lt = time.localtime(now)
+            day_start = time.mktime(
+                (lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
+            try:
+                started_today = int(
+                    self._store.count_auto_started_chains_since(day_start))
+            except Exception:
+                started_today = 0
+            budget_left = max(0, int(max_per_day) - started_today)
+            if budget_left <= 0:
+                return 0
         chains = self._store.list_workflow_chains()
         started = 0
         for chain in chains:
@@ -91,6 +116,11 @@ class WorkflowRunner:
                 continue
             candidates = self._find_chain_candidates(silence_days, churn_only, now)
             for cid in candidates:
+                if budget_left is not None and started >= budget_left:
+                    logger.info(
+                        "WorkflowRunner 自动开链达每日预算（%d），本轮止步",
+                        max_per_day)
+                    return started
                 if self._store.has_running_chain(cid, chain["chain_id"]):
                     continue
                 self._store.start_chain_execution(
@@ -141,7 +171,41 @@ class WorkflowRunner:
             return False
 
         step = steps[step_idx]
-        result = self._execute_step(conv_id, step, ex)
+
+        # P2 自动推进：auto 档链的话术步先问 hook（闸/预算/静默窗都在 hook 内）。
+        # defer＝顺延到静默窗后，不执行不落账（步没发生）；auto＝拟稿任务已调度，
+        # 本步按已执行推进（提醒 toast 由异步任务按真实结果发：成功=「已自动拟稿」、
+        # 失败=经典「该跟进了」降级——绝不静默丢拍）。
+        result: Optional[Dict[str, Any]] = None
+        if (self._auto_step_hook is not None
+                and str(step.get("action_type") or "template") == "template"
+                and str(chain.get("exec_mode") or "remind") == "auto"):
+            try:
+                verdict = self._auto_step_hook(conv_id, step, ex) or {}
+            except Exception:
+                verdict = {}
+            act = str(verdict.get("action") or "remind")
+            if act == "defer":
+                until = float(verdict.get("until") or 0)
+                if until <= now:
+                    until = now + 3600.0
+                self._store.update_workflow_execution(
+                    exec_id,
+                    current_step=step_idx,
+                    next_step_at=until,
+                    last_result={"action_type": "template", "ok": True,
+                                 "detail": "deferred_quiet"},
+                    context_json=self._load_context(ex),
+                )
+                return False
+            if act == "auto":
+                result = {
+                    "action_type": "template", "ok": True,
+                    "detail": "auto_draft",
+                    "text": str(step.get("note") or step.get("text") or ""),
+                }
+        if result is None:
+            result = self._execute_step(conv_id, step, ex)
 
         # P1 2026-08-09：环节执行落账（成功/失败/重试各一行）——每环节转化率的
         # 数据地基；此前只有 last_result_json（新步覆盖旧步）无从聚合。绝不阻塞推进。
@@ -264,9 +328,9 @@ class WorkflowRunner:
             tag = str(step.get("tag") or note or "").strip()
             if tag:
                 try:
-                    # 与 execute-action 路由同一写入口（组内互斥 + 情绪组落
-                    # arbitration 列）——旧版裸 append 会让「情绪低落」「积极开朗」
-                    # 并存，「当前情绪」读数取决于数组顺序。
+                    # 打标签唯一写入口（组内互斥 + 情绪组落 arbitration 列）——
+                    # 旧版裸 append 会让「情绪低落」「积极开朗」并存，
+                    # 「当前情绪」读数取决于数组顺序。
                     from src.inbox.effective_mood import apply_mood_tag
                     apply_mood_tag(self._store, conv_id, tag, by="workflow")
                     result["tag"] = tag

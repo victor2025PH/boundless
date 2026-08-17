@@ -52,6 +52,9 @@ DATAS = [
     # 完整 example 仍随包：供参考 + 非桌面模式回落种子。
     (REPO / "config" / "config.desktop.min.yaml", "config"),
     (REPO / "config" / "config.example.yaml", "config"),
+    # WP-1：部署能力预设档（cloud_light 等；纯 YAML，门禁保证零内网 IP）。
+    # launcher 注入 AITR_DEPLOY_PROFILE 后，首启由 ConfigManager 播种进 overlay。
+    (REPO / "config" / "profiles", "config/profiles"),
 ]
 
 # 集团底座 platform/ 下被引擎**按文件路径**加载的瘦模块。它们在引擎目录之外，

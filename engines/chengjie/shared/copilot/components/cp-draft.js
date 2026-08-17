@@ -67,6 +67,9 @@
       .bdg.goal { cursor:help; }
       .bdg.goal.on { background:rgba(15,157,117,.14); color:var(--cp-ok,#0f9d75); }
       .bdg.goal.off { background:rgba(217,119,6,.14); color:var(--cp-warn,#92400e); }
+      /* observe 档＝刻意配置（只跟踪不注入），中性灰——琥珀会被读成「有问题」
+         （P2 2026-08-13，坐席实录「观察档 未注入」被当故障上报的纠偏） */
+      .bdg.goal.observe { background:var(--cp-surface-2,#f8fafc); color:var(--cp-text-dim,#64748b); border:1px solid var(--cp-border,#e2e8f0); }
       .reply { font-size:var(--cp-fs,13px); color:var(--cp-text,#1e293b); line-height:1.5; white-space:pre-wrap; }
       .tr { margin-top:5px; padding-top:5px; border-top:1px dashed var(--cp-border,#e2e8f0);
             font-size:var(--cp-fs-sm,12px); color:var(--cp-text-dim,#475569); white-space:pre-wrap; }
@@ -548,6 +551,14 @@
       let lab = this.t(key);
       if (!lab || lab === key || String(lab).indexOf("cp.draft.") === 0) {
         lab = this.t("cp.draft.goal_skipped");
+      }
+      /* observe 档＝刻意配置（只跟踪不注入）：中性徽章 + 人话 tooltip 讲清
+         「为什么没注入 + 想注入去哪改」——琥珀+黑话曾被坐席当故障上报
+         （2026-08-12 实录「观察档 未注入」工单）。其余跳过原因维持警示色。 */
+      if (reason === "observe") {
+        const otip = [ga.title, this.t("cp.draft.goal_observe_t")]
+          .filter(Boolean).join("\n");
+        return `<span class="bdg goal observe" title="${esc(otip)}">${this.ic("target", 11)} ${esc(lab)}</span>`;
       }
       const tip = [ga.title, reason, ga.hold_reason].filter(Boolean).join(" · ");
       return `<span class="bdg goal off" title="${esc(tip)}">${this.ic("target", 11)} ${esc(lab)}</span>`;

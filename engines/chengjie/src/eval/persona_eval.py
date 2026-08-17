@@ -87,6 +87,81 @@ def evaluate_persona_consistency(
     }
 
 
+# ── WP-4 合规模式双轨评测（2026-08-17）───────────────────────────────────────
+# honest_identity（compliance.disclosure.honest_identity）开启时守卫语义分叉：
+# AI 如实自认必须放行、其余违规（客服腔/禁语）照抓。每条金标同时断言**两种模式**
+# 的预期——只测诚实模式会漏「默认模式回归」（参数缺省漂移成 True 之类），
+# 只测默认模式则开关一开就没有任何评测覆盖（规格点名的 CI 分叉坑）。
+#
+# 金标字段：reply / deny_ai / forbidden / expect_default（默认模式应判违规？）/
+# expect_honest（诚实模式应判违规？）/ note。
+_HONEST_MODE_GOLDEN: List[Dict[str, Any]] = [
+    # 身份如实回答：默认模式抓（deny_ai 语义），诚实模式必须放行
+    {"reply": "嗯，我是AI助理，人工团队随时可以接入。你刚才的问题我帮你查了。",
+     "deny_ai": True, "forbidden": [],
+     "expect_default": True, "expect_honest": False, "note": "中文如实自认"},
+    {"reply": "Yes, I'm an AI assistant — a human team can step in anytime.",
+     "deny_ai": True, "forbidden": [],
+     "expect_default": True, "expect_honest": False, "note": "英文如实自认"},
+    {"reply": "作为AI，我会尽量把这件事讲清楚。",
+     "deny_ai": True, "forbidden": ["作为AI"],
+     "expect_default": True, "expect_honest": False,
+     "note": "身份类禁语（人设模板自带「作为AI」）在诚实模式一并豁免"},
+    # 客服腔：与身份无关，两种模式都必须抓（诚实模式不放松其他护栏）
+    {"reply": "有什么可以帮您的吗？", "deny_ai": True,
+     "forbidden": ["有什么可以帮您"],
+     "expect_default": True, "expect_honest": True, "note": "客服腔两模式都抓"},
+    # 正常陪聊：两种模式都干净（含否定句豁免——「我才不是AI啦」不算自曝）
+    {"reply": "哈哈我才不是AI啦，我就是打字快而已。", "deny_ai": True,
+     "forbidden": [],
+     "expect_default": False, "expect_honest": False, "note": "否定句两模式都放行"},
+    {"reply": "今天加班到九点，累瘫了，你吃了吗？", "deny_ai": True,
+     "forbidden": ["有什么可以帮您"],
+     "expect_default": False, "expect_honest": False, "note": "日常闲聊两模式都干净"},
+]
+
+
+def evaluate_honest_identity_mode(
+    golden: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """诚实身份双模式评测：逐金标断言 默认/诚实 两种守卫预期。
+
+    passed = 全部金标两个方向都符合预期，且诚实模式放行的回复经 sanitize
+    逐字节原样（放行=真放行，不许「不算违规但仍被剥了字」）。
+    """
+    from src.utils.persona_guard import find_violations, sanitize
+
+    rows = golden if golden is not None else _HONEST_MODE_GOLDEN
+    failures: List[Dict[str, Any]] = []
+    for s in rows:
+        persona = {
+            "speaking": {"forbidden_phrases": list(s.get("forbidden") or [])},
+            "identity": {"deny_ai": bool(s.get("deny_ai"))},
+        }
+        reply = str(s.get("reply") or "")
+        got_default = bool(find_violations(reply, persona))
+        got_honest = bool(
+            find_violations(reply, persona, honest_identity=True))
+        ok = (got_default == bool(s.get("expect_default"))
+              and got_honest == bool(s.get("expect_honest")))
+        if ok and not s.get("expect_honest"):
+            cleaned, _ = sanitize(reply, persona, honest_identity=True)
+            if cleaned != reply:
+                ok = False
+        if not ok:
+            failures.append({
+                "reply": reply, "note": s.get("note"),
+                "got_default": got_default, "got_honest": got_honest,
+                "expect_default": bool(s.get("expect_default")),
+                "expect_honest": bool(s.get("expect_honest")),
+            })
+    return {
+        "summary": {"total": len(rows), "failures": len(failures)},
+        "failures": failures,
+        "passed": not failures,
+    }
+
+
 def format_persona_report(report: Dict[str, Any]) -> str:
     m = report["summary"]
     lines = [
@@ -109,4 +184,5 @@ def format_persona_report(report: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-__all__ = ["evaluate_persona_consistency", "format_persona_report"]
+__all__ = ["evaluate_persona_consistency", "evaluate_honest_identity_mode",
+           "format_persona_report"]

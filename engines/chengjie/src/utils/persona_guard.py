@@ -79,11 +79,21 @@ _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _SENT_PUNCT_RE = re.compile(r"[。！？!?\n]")
 
 
-def collect_forbidden(persona: Dict[str, Any]) -> Dict[str, Any]:
+def collect_forbidden(
+    persona: Dict[str, Any], *, honest_identity: bool = False
+) -> Dict[str, Any]:
     """从人设 dict 抽取守卫所需的禁用项。
 
     ``retired_terms``（2026-08-04）＝撤销旧设定的锚词（仅结构化条目提供，
     legacy 纯文案条目无锚词=不参与守卫）；异常一律空列表，绝不拖垮守卫。
+
+    ``honest_identity``（WP-4 合规模式，2026-08-17）＝``compliance.disclosure.
+    honest_identity`` 开时由调用方传 True：(a) ``deny_ai`` 按 False 处理——
+    「自曝 AI 身份」不再算违规（客户直问「你是 AI 吗」的如实回答不得被剥）；
+    (b) ``forbidden_phrases`` 里**身份类**条目（「作为AI」「我是语言模型」这类
+    会剥掉诚实承认的短语）一并豁免——判类复用 ``_AI_SELF_ID_PATTERNS`` 单一
+    口径，防第二套正则漂移；非身份类禁语（客服腔等）照常生效。默认 False =
+    行为与旧版逐字节一致。
     """
     speaking = (persona or {}).get("speaking") or {}
     identity = (persona or {}).get("identity") or {}
@@ -92,12 +102,15 @@ def collect_forbidden(persona: Dict[str, Any]) -> Dict[str, Any]:
         for p in (speaking.get("forbidden_phrases") or [])
         if str(p).strip()
     ]
+    if honest_identity:
+        phrases = [p for p in phrases if not _matches_ai_self_id(p)]
     try:
         from src.utils.persona_retired import retired_guard_terms
         retired = retired_guard_terms(persona)
     except Exception:
         retired = []
-    return {"phrases": phrases, "deny_ai": bool(identity.get("deny_ai")),
+    deny_ai = bool(identity.get("deny_ai")) and not honest_identity
+    return {"phrases": phrases, "deny_ai": deny_ai,
             "retired_terms": retired}
 
 
@@ -136,11 +149,13 @@ def matches_ai_self_identity(text: str) -> List[str]:
     return _matches_ai_self_id(str(text or ""))
 
 
-def find_violations(text: str, persona: Dict[str, Any]) -> List[str]:
+def find_violations(
+    text: str, persona: Dict[str, Any], *, honest_identity: bool = False
+) -> List[str]:
     """返回 ``text`` 中命中的违规片段清单（空 = 合规）。"""
     if not text:
         return []
-    fb = collect_forbidden(persona)
+    fb = collect_forbidden(persona, honest_identity=honest_identity)
     hits = _matches_phrase(_norm(text), fb["phrases"])
     if fb["deny_ai"]:
         hits.extend(_matches_ai_self_id(text))
@@ -171,19 +186,23 @@ def _sentence_violates(sentence: str, fb: Dict[str, Any]) -> bool:
     return False
 
 
-def sanitize(text: str, persona: Dict[str, Any]) -> Tuple[str, List[str]]:
+def sanitize(
+    text: str, persona: Dict[str, Any], *, honest_identity: bool = False
+) -> Tuple[str, List[str]]:
     """剥离违规句，返回 ``(清洁文本, 命中清单)``。
 
     - 无禁用项或无命中 → 原样返回（命中清单为空）。
     - 有命中 → 删掉含违规片段的整句，保留其余；
     - 若删光（整段都违规）→ 先尝试 inline 抹掉禁用短语；仍空则回退原文（绝不返回空）。
+    - ``honest_identity=True``（WP-4 合规模式）→ 身份类检测整体豁免，其余照常
+      （语义见 :func:`collect_forbidden`）。
     """
     if not text:
         return text, []
-    fb = collect_forbidden(persona)
+    fb = collect_forbidden(persona, honest_identity=honest_identity)
     if not fb["phrases"] and not fb["deny_ai"] and not fb.get("retired_terms"):
         return text, []
-    violations = find_violations(text, persona)
+    violations = find_violations(text, persona, honest_identity=honest_identity)
     if not violations:
         return text, []
     kept = [s for s in _split_sentences(text) if not _sentence_violates(s, fb)]

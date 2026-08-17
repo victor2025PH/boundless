@@ -1,6 +1,6 @@
 "use strict";
 
-const { app, BrowserWindow, ipcMain, session, clipboard, Menu, Notification, shell, dialog, nativeImage } = require("electron");
+const { app, BrowserWindow, ipcMain, session, clipboard, Menu, Notification, shell, dialog, nativeImage, powerMonitor } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { spawn, exec } = require("child_process");
@@ -61,7 +61,11 @@ const CONFIG_PATH = resolveConfigPath();
 
 function loadConfig() {
   try {
-    return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
+    // ⚠ 必须剥 BOM 再 parse（2026-08-15 173 实锤）：运维用 PowerShell 5.1
+    // `Set-Content -Encoding UTF8` 改 config.json 会带 UTF-8 BOM，裸 JSON.parse 直接抛
+    // → 回落内置默认（token=admin）→ 托管版启动时 maybeRotateManagedToken 见默认令牌
+    // 即轮换并把**内存里的默认配置整份写回**——用户的账号/标签/开关全部被静默清空。
+    return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8").replace(/^\uFEFF/, ""));
   } catch (e) {
     return {
       backend: { base_url: "http://127.0.0.1:18799", token: "admin" },
@@ -73,6 +77,19 @@ function loadConfig() {
 }
 
 let config = loadConfig();
+
+// 出厂默认值迁移（2026-08-14）：userData/config.json 是首启种子、升级保留——产品级
+// 改名（统一收件箱 → AI 工作台 → 人工操作台）会被老副本的旧出厂值永久顶住（lianbei 升 1.0.31 实锤）。
+// 只迁「等于旧出厂默认」的值（用户显式自定义过的标签不动），幂等，写失败不阻断启动。
+(function migrateFactoryDefaults() {
+  try {
+    const ui = config && config.unified_inbox;
+    if (ui && (ui.label === "统一收件箱" || ui.label === "AI 工作台")) {
+      ui.label = "人工操作台";
+      fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+    }
+  } catch (e) { /* 迁移失败保持旧名，不影响启动 */ }
+})();
 
 // 托管版（managed edition）：客户拿到的是「我们预置好 AI、按字符卖额度」的成品，
 // 首启向导里绝不该出现「配置 AI 模型」「后台访问令牌」这类自建/开发者概念——客户
@@ -223,7 +240,7 @@ async function backendTranslate(text, targetLang) {
 }
 
 // 批量翻译对齐辅助（纯函数,与注入调度器共用同一实现,已单测）。
-const { alignBatchResponse: _alignBatchResponse } = require("../shared/inject/translate-scheduler.js");
+const { alignBatchResponse: _alignBatchResponse } = require("./shared/inject/translate-scheduler.js");
 
 /** 批量翻译（主进程发起）：一次往返译整批,返回「与输入等长、按序对齐」的 string[]。
  *  复用后端 /api/unified-inbox/translate-batch（服务端 gather + 信号量,与单条同一 TranslationService）。 */
@@ -310,6 +327,38 @@ ipcMain.handle("desktop:config", () => ({
   ...config,
   whatsapp_user_agent: chromeLikeUserAgent(process.versions.chrome),
 }));
+
+// ui_visibility 服务端旗标（GET /api/desktop/ui-flags，端点免鉴权）。renderer 是
+// file:// 源且后端默认不回 CORS 头 → 只能由主进程代取（backendGet 同款理由）。
+// 2.5s 超时快败：后端未起时不拖慢壳启动，renderer 侧按 fail-open 走本地配置。
+ipcMain.handle("desktop:ui-flags", async () => {
+  const { base_url } = config.backend || {};
+  if (!base_url) return null;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 2500);
+  try {
+    const r = await fetch(`${base_url.replace(/\/+$/, "")}/api/desktop/ui-flags`, { signal: ctrl.signal });
+    return r.ok ? await r.json() : null;
+  } catch (e) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+});
+
+// 工作台分区的 Service Worker 外科清除（2026-08-15 117 实锤）：分区里残留的旧版 SW
+// 会把 /workspace 导航整个吞掉挂死（无 dom-ready 无 did-fail-load，遮罩钉死「正在载入
+// 工作台…」），而 SW 只在页面成功导航时才自更新——导航被它自己吞了就永远升不了级，
+// 形成自锁，只能从进程侧清存储。由 renderer 的装载看门狗在导航长期静默时调用。
+ipcMain.handle("desktop:clear-workspace-sw", async () => {
+  try {
+    const ses = session.fromPartition("persist:backend-workspace");
+    await ses.clearStorageData({ storages: ["serviceworkers", "cachestorage"] });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
 
 /** 后端可达性探针（主进程发起，规避 webview/renderer 的 CSP/CORS）。
  *  /login 无需鉴权即返回 200；任何 HTTP 响应都代表后端可达。用于「后端未起→自动重连」。 */
@@ -410,6 +459,53 @@ ipcMain.handle("desktop:trial-funnel", async (_e, body) => {
     return await backendPost("/api/admin/license/trial-funnel", body || {});
   } catch (e) {
     return { ok: false, error: "network" };
+  }
+});
+
+// 壳层 UI 交互埋点 → 后端 /api/telemetry/ui-event（进程计数 + ops.ui_event_trend 按日落库）。
+// 首个用例＝副驾双实现退役读数（cpshell_* 前缀：🧪 手动切换 / iframe 看门狗回退与恢复）——
+// 「原生 aside 何时可删」从拍脑袋变成看 /api/admin/ui-event-trend?prefix=cpshell_。
+//
+// P1 增量（2026-08-13 舰队遥测实测坐实）：纯 fire-and-forget 有个结构性盲区——
+// 冷启动窗的事件（iframe 回退/启动闸门等待，恰是最需要观测的那批）发出时后端
+// 还没起来，POST 必失败 → 事件永久丢失。198 上 7 天 cpshell_ 读数为零就是这么来的：
+// 不是没发生，是信使死在了它要报告的那场事故里。改为「失败进内存队列、后端就绪
+// 后补发」：容量 200 丢最旧、30s 重试、逐条清空；队列只活在内存（App 退出即弃，
+// 刻意不落盘——埋点丢一次会话可接受，写盘反而引入新故障面）。
+const _uiEvtQueue = [];
+let _uiEvtFlushTimer = null;
+
+function _scheduleUiEvtFlush() {
+  if (_uiEvtFlushTimer) return;
+  _uiEvtFlushTimer = setInterval(async () => {
+    if (!_uiEvtQueue.length) {
+      clearInterval(_uiEvtFlushTimer);
+      _uiEvtFlushTimer = null;
+      return;
+    }
+    try {
+      // 首条成功＝后端已就绪，顺势逐条清空；中途再断则留队下一轮
+      while (_uiEvtQueue.length) {
+        await backendPost("/api/telemetry/ui-event", _uiEvtQueue[0]);
+        _uiEvtQueue.shift();
+      }
+    } catch (e) { /* 后端仍未就绪：下一轮再试 */ }
+  }, 30000);
+}
+
+ipcMain.handle("desktop:ui-event", async (_e, body) => {
+  const b = body || {};
+  const payload = {
+    page: String(b.page || "desktop-shell"),
+    action: String(b.action || ""),
+  };
+  try {
+    return await backendPost("/api/telemetry/ui-event", payload);
+  } catch (e) {
+    if (_uiEvtQueue.length >= 200) _uiEvtQueue.shift();
+    _uiEvtQueue.push(payload);
+    _scheduleUiEvtFlush();
+    return { ok: false, error: "queued" };
   }
 });
 
@@ -1002,27 +1098,6 @@ ipcMain.handle("desktop:rel-sync", async (_e, { contact_id, mode }) => {
   }
 });
 
-// P2 共享组件:NBA(conv 级端点)
-ipcMain.handle("desktop:nba-list", async (_e, { conversation_id }) => {
-  try {
-    const cid = String(conversation_id || "");
-    if (!cid) return { ok: false, error: "missing conversation_id" };
-    return await backendGet(`/api/workspace/conv/${encodeURIComponent(cid)}/next-actions`);
-  } catch (e) {
-    return { ok: false, error: String(e) };
-  }
-});
-
-ipcMain.handle("desktop:nba-exec", async (_e, { conversation_id, action_id, action_type, config }) => {
-  try {
-    return await backendPost(`/api/workspace/conv/${encodeURIComponent(String(conversation_id || ""))}/execute-action`, {
-      action_id: action_id || "", action_type: action_type || "", config: config || {},
-    });
-  } catch (e) {
-    return { ok: false, error: String(e) };
-  }
-});
-
 // P2 共享组件:协作上下文 / 工作链执行(conv 级端点)
 ipcMain.handle("desktop:collab-context", async (_e, { conversation_id }) => {
   try {
@@ -1268,6 +1343,190 @@ ipcMain.handle("desktop:set-title", (_e, title) => {
   return { ok: true };
 });
 
+// 收件箱 webview 分区。target=_blank 默认弹窗走壳的 default session，没有这里的
+// 登录 cookie → 管理台 HTML 被 _api_auth 打成 {"detail":"Unauthorized"}（Chromium
+// JSON 预览，菜单栏仍是本应用）。弹窗必须复用这个分区才能带上已登录态。
+const BACKEND_WORKSPACE_PARTITION = "persist:backend-workspace";
+
+function backendOrigin() {
+  try {
+    return new URL((config.backend || {}).base_url || "http://127.0.0.1:18799").origin;
+  } catch (e) {
+    return "http://127.0.0.1:18799";
+  }
+}
+
+function isBackendUrl(url) {
+  try {
+    const u = new URL(String(url || ""));
+    return (u.protocol === "http:" || u.protocol === "https:") && u.origin === backendOrigin();
+  } catch (e) {
+    return false;
+  }
+}
+
+function bindBackendPopupLogin(win, intendedUrl) {
+  const token = String(((config.backend || {}).token) || "");
+  if (!token) return;
+  let attempted = false;
+  win.webContents.on("did-finish-load", () => {
+    if (attempted) return;
+    let u;
+    try { u = new URL(win.webContents.getURL()); } catch (e) { return; }
+    if (u.pathname !== "/login" && u.pathname !== "/login/") return;
+    attempted = true;
+    let next = "/";
+    try {
+      const dest = new URL(intendedUrl);
+      next = dest.pathname + dest.search || "/";
+    } catch (e) { /* keep / */ }
+    if (!String(next).startsWith("/")) next = "/";
+    const js =
+      "(function(){try{" +
+      "var n=" + JSON.stringify(next) + ";" +
+      "fetch('/login',{method:'POST'," +
+      "headers:{'Content-Type':'application/x-www-form-urlencoded'}," +
+      "body:'auth_token='+encodeURIComponent(" + JSON.stringify(token) + ")," +
+      "credentials:'same-origin'})" +
+      ".then(function(){location.replace(n);})" +
+      ".catch(function(){location.replace(n);});" +
+      "}catch(e){}})();";
+    win.webContents.executeJavaScript(js).catch(() => {});
+  });
+}
+
+// ── 后台弹窗窗口唯一性（2026-08-14，修「后台管理/坐席工作台越点越多」回归）─────────
+// 壳内 window.open 没有浏览器的命名窗口寻址语义：_win_unique.html 的 Electron 分支只兜
+// 「/workspace 的 BC 交接」，admin 入口与探活 miss 的 workspace 都落到这里——旧实现每次
+// new BrowserWindow ＝ 点一次多一个原生窗。改为按槽位去重复用（与 _win_unique 三槽同构）：
+//   workspace（精确 /workspace 坐席收件箱）/ wsub（/workspace/* 子页）/ admin（后台壳其余页）
+// 已有窗口 → 聚焦复用；深链(?/#)或换页才导航；admin 槽的裸 "/" 泛入口只聚焦不重载
+// （后台多为列表/编辑页，硬拉回首页会丢编辑现场——与 _win_unique 浏览器侧同语义）。
+const backendPopupWins = new Map(); // slot → BrowserWindow
+
+function backendPopupSlot(url) {
+  let p = "/";
+  try { p = (new URL(String(url)).pathname || "/").replace(/\/+$/, "") || "/"; } catch (e) { /* keep "/" */ }
+  if (p === "/workspace") return "workspace";
+  if (p.indexOf("/workspace/") === 0) return "wsub";
+  return "admin";
+}
+
+function reuseBackendPopup(slot, url) {
+  const win = backendPopupWins.get(slot);
+  if (!win || win.isDestroyed()) return null;
+  try {
+    const u = new URL(String(url));
+    const wantPath = (u.pathname || "/").replace(/\/+$/, "") || "/";
+    const deep = !!(u.search || u.hash);
+    let curPath = "";
+    try { curPath = (new URL(win.webContents.getURL()).pathname || "/").replace(/\/+$/, "") || "/"; } catch (e) { curPath = ""; }
+    const genericAdminHome = slot === "admin" && wantPath === "/" && !deep;
+    if (!genericAdminHome && (deep || curPath !== wantPath)) win.loadURL(url);
+    if (win.isMinimized()) win.restore();
+    win.focus();
+    return win;
+  } catch (e) {
+    return null; // 复用失败回落新开，绝不吞点击
+  }
+}
+
+function openBackendPopup(url) {
+  const slot = backendPopupSlot(url);
+  const reused = reuseBackendPopup(slot, url);
+  if (reused) return reused;
+  const child = new BrowserWindow({
+    width: 1100,
+    height: 800,
+    title: "智聊",
+    webPreferences: {
+      partition: BACKEND_WORKSPACE_PARTITION,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false,
+    },
+  });
+  try {
+    if (fs.existsSync(DEFAULT_BRAND_ICON)) child.setIcon(DEFAULT_BRAND_ICON);
+  } catch (e) { /* 图标缺失不阻断 */ }
+  backendPopupWins.set(slot, child);
+  child.on("closed", () => {
+    if (backendPopupWins.get(slot) === child) backendPopupWins.delete(slot);
+  });
+  // 弹窗里再点后台 target=_blank 链接（如后台侧栏「坐席工作台」）同走本唯一性收敛
+  child.webContents.setWindowOpenHandler(makeBackendPopupHandler());
+  wireEditContextMenu(child.webContents);   // 后台弹窗（admin/workspace 子页）同享右键编辑菜单
+  bindBackendPopupLogin(child, url);
+  child.loadURL(url);
+  return child;
+}
+
+function makeBackendPopupHandler() {
+  return ({ url }) => {
+    if (!isBackendUrl(url)) return { action: "allow" };
+    setImmediate(() => {
+      try { openBackendPopup(url); } catch (e) {
+        console.log("[popup] open failed: " + ((e && e.message) || e));
+      }
+    });
+    return { action: "deny" };
+  };
+}
+
+// ── 系统右键菜单（composer 批 2026-08-17）────────────────────────────────────
+// Electron 默认不弹任何右键菜单：坐席在聊天输入框右键「粘贴」一直没反应（浏览器端
+// 访问同页不受影响）。给壳内全部 webContents（主窗 chrome / 官方页与工作台 webview /
+// 后台弹窗）统一挂原生编辑菜单：可编辑区=剪贴板全套（粘贴走标准 DOM paste 事件 →
+// 工作台既有「粘贴截图暂存媒体」链零改动直通）；选中文本=复制；链接=复制链接；
+// 图片=复制图片。动作用显式 webContents 方法而非 role（role 依赖焦点窗语义，
+// webview 场景会打错目标）；按 editFlags 置灰，绝不出现「点了没反应」的死项。
+function wireEditContextMenu(wc) {
+  if (!wc || wc.__cxCtxMenuWired) return;
+  wc.__cxCtxMenuWired = true;
+  wc.on("context-menu", (_e, params) => {
+    try {
+      const p = params || {};
+      const ef = p.editFlags || {};
+      const items = [];
+      if (p.isEditable) {
+        let clipHasImage = false;
+        try { clipHasImage = clipboard.availableFormats().some((f) => String(f).indexOf("image/") === 0); } catch (err) { /* ignore */ }
+        items.push(
+          { label: "撤销", enabled: !!ef.canUndo, click: () => wc.undo() },
+          { label: "重做", enabled: !!ef.canRedo, click: () => wc.redo() },
+          { type: "separator" },
+          { label: "剪切", enabled: !!ef.canCut, click: () => wc.cut() },
+          { label: "复制", enabled: !!ef.canCopy, click: () => wc.copy() },
+          { label: clipHasImage ? "粘贴图片" : "粘贴", enabled: !!ef.canPaste, click: () => wc.paste() },
+          { label: "粘贴为纯文本", enabled: !!ef.canPaste, click: () => wc.pasteAndMatchStyle() },
+          { type: "separator" },
+          { label: "全选", enabled: !!ef.canSelectAll, click: () => wc.selectAll() },
+        );
+      } else if (p.selectionText && p.selectionText.trim()) {
+        items.push({ label: "复制", click: () => wc.copy() });
+      }
+      if (p.linkURL) {
+        if (items.length) items.push({ type: "separator" });
+        items.push({ label: "复制链接地址", click: () => clipboard.writeText(p.linkURL) });
+      }
+      if (p.mediaType === "image" && p.srcURL) {
+        if (items.length) items.push({ type: "separator" });
+        items.push({ label: "复制图片", click: () => { try { wc.copyImageAt(p.x, p.y); } catch (err) { /* ignore */ } } });
+      }
+      if (!items.length) return; // 空白处右键保持无菜单（与主流聊天软件一致）
+      Menu.buildFromTemplate(items).popup();
+    } catch (err) {
+      console.log("[ctxmenu] popup failed: " + ((err && err.message) || err));
+    }
+  });
+  // 探测位：工作台页面据此区分「新壳（原生菜单已接管）/ 旧壳（出一次性 Ctrl+V 指路）」；
+  // 官方页/后台页不消费该全局，注入无副作用。页面 preventDefault 的自绘菜单区
+  // （消息行/会话行）不会触发本事件，双菜单无叠加面。
+  wc.on("dom-ready", () => {
+    wc.executeJavaScript("try{window.__cxNativeCtxMenu=1}catch(e){};0").catch(() => {});
+  });
+}
+
 async function createWindow() {
   for (const acc of config.accounts || []) {
     await applyProxyForAccount(acc);
@@ -1312,9 +1571,13 @@ async function createWindow() {
   win.webContents.on("will-attach-webview", (_e, webPreferences) => {
     webPreferences.sandbox = false;
   });
+  win.webContents.setWindowOpenHandler(makeBackendPopupHandler());
+  wireEditContextMenu(win.webContents);   // 主窗 chrome（首跑向导等原生输入件）
   win.webContents.on("did-attach-webview", (_e, wc) => {
     console.log("[diag] webview attached");
     bindWhatsappWebviewUa(wc);
+    wireEditContextMenu(wc);   // 官方页 + 工作台 webview：右键粘贴的主战场
+    wc.setWindowOpenHandler(makeBackendPopupHandler());
     wc.on("did-finish-load", () => console.log("[diag] webview page loaded"));
     wc.on("did-fail-load", (_e2, code, desc) =>
       console.log(`[diag] webview load FAILED ${code} ${desc}`));
@@ -1379,7 +1642,7 @@ function buildChineseMenu() {
             const bi = await resolveBrand();
             const ver = displayVersion();
             const detail =
-              `Telegram / WhatsApp / Messenger / LINE · 统一收件箱 + 业务助手\n\n` +
+              `Telegram / WhatsApp / Messenger / LINE · 人工操作台 + 业务助手\n\n` +
               `版本 v${ver}  ·  Electron ${process.versions.electron}  ·  Chromium ${process.versions.chrome}\n` +
               `${bi.company} · ${bi.website}`;
             const res = await dialog.showMessageBox(w, {
@@ -1408,8 +1671,195 @@ function buildChineseMenu() {
   return Menu.buildFromTemplate(template);
 }
 
-/** 手动「检查更新」：dev 说明不检查；发布态调 electron-updater 并给出可读反馈。
- *  与后台自动更新共用 autoDownload=true——发现新版即后台下载、下次重启生效。 */
+// ── 更新与公告通知中心（P0 2026-08-14）─────────────────────────────────────
+// 决策纯函数在 update-notify.js（Node 直跑可测）；这里只做 IO：updater 事件、
+// 公告 HTTP 拉取（含本地缓存）、已读/稍后状态落盘、向 renderer 广播当前通知。
+// 旧行为（更新下载完只写日志、下次重启才生效）升级为：横幅 +「立即重启更新」一键完成。
+const updateNotify = require("./update-notify.js");
+
+function _noticeStatePath() { return path.join(app.getPath("userData"), "shell-notices.json"); }
+function _annCachePath() { return path.join(app.getPath("userData"), "announcements-cache.json"); }
+function _loadJsonSoft(p, fallback) {
+  try { return JSON.parse(fs.readFileSync(p, "utf-8")); } catch (e) { return fallback; }
+}
+
+let _noticeState = null; // { read_ids: [], update_snoozed_until: ms }
+function _getNoticeState() {
+  if (!_noticeState) {
+    const raw = _loadJsonSoft(_noticeStatePath(), {}) || {};
+    _noticeState = {
+      read_ids: Array.isArray(raw.read_ids) ? raw.read_ids.map(String) : [],
+      update_snoozed_until: Number(raw.update_snoozed_until) || 0,
+    };
+  }
+  return _noticeState;
+}
+function _saveNoticeState() {
+  try {
+    fs.mkdirSync(path.dirname(_noticeStatePath()), { recursive: true });
+    fs.writeFileSync(_noticeStatePath(), JSON.stringify(_getNoticeState(), null, 2), "utf-8");
+  } catch (e) { /* 已读状态丢失最多重看一次横幅，不阻断 */ }
+}
+
+let _updateInfo = { phase: "idle", version: "", percent: 0 };
+let _feed = null; // 懒加载：首次访问读本地缓存（离线也有上次内容）；{items, minSupportedVersion}
+
+function _getFeed() {
+  if (_feed === null) {
+    _feed = updateNotify.normalizeFeed(_loadJsonSoft(_annCachePath(), null));
+  }
+  return _feed;
+}
+function _getAnnouncements() { return _getFeed().items; }
+
+function currentShellNotice() {
+  const st = _getNoticeState();
+  const feed = _getFeed();
+  return updateNotify.pickNotice({
+    update: _updateInfo,
+    announcements: feed.items,
+    // 强制升级线只对打包态生效：dev 跑源码没有 updater，横幅催了也无路可走
+    minSupportedVersion: app.isPackaged ? feed.minSupportedVersion : "",
+    appVersion: app.getVersion(),
+    readIds: st.read_ids,
+    snoozedUntil: st.update_snoozed_until,
+    now: Date.now(),
+  });
+}
+function broadcastShellNotice() {
+  const n = currentShellNotice();
+  for (const w of BrowserWindow.getAllWindows()) {
+    try { w.webContents.send("desktop:shell-notice", n); } catch (e) { /* 窗口正在销毁等，忽略 */ }
+  }
+}
+
+/** 公告源：更新源同域（publish url + announcements.json），config.updates.announcements_url 可覆写。 */
+function _announcementsUrl() {
+  try {
+    const cfgUrl = ((config || {}).updates || {}).announcements_url;
+    if (cfgUrl) return String(cfgUrl);
+  } catch (e) { /* config 未就绪按默认 */ }
+  try {
+    const pub = require("./package.json").build.publish[0].url;
+    return pub.replace(/\/+$/, "") + "/announcements.json";
+  } catch (e) { return ""; }
+}
+
+async function refreshAnnouncements() {
+  const url = _announcementsUrl();
+  if (!url) return;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 10000);
+  try {
+    const r = await fetch(url, { signal: ctl.signal, cache: "no-store" });
+    if (!r.ok) return;
+    _feed = updateNotify.normalizeFeed(await r.json());
+    try {
+      fs.writeFileSync(_annCachePath(), JSON.stringify({
+        items: _feed.items, min_supported_version: _feed.minSupportedVersion,
+      }, null, 2), "utf-8");
+    } catch (e) { /* 缓存写失败不影响本次展示 */ }
+    broadcastShellNotice();
+    // 触线客户端别干等 4h 定时器：强制升级横幅出现的同时立刻查一轮更新，
+    // 让「已停止支持 → 下载中 → 一键重启」尽快推进（runUpdateCheck 自带 busy 防重入）。
+    if (app.isPackaged && _updateInfo.phase === "idle"
+        && updateNotify.forcedUpgradeActive(app.getVersion(), _feed.minSupportedVersion)) {
+      runUpdateCheck("min-supported");
+    }
+  } catch (e) {
+    /* 公告拉取失败静默：非关键链路，下轮定时器/下次启动自然重试 */
+  } finally { clearTimeout(timer); }
+}
+
+ipcMain.handle("desktop:shell-notice", () => currentShellNotice());
+ipcMain.handle("desktop:notice-ack", (_e, args) => {
+  const a = args || {};
+  const st = _getNoticeState();
+  if (a.action === "read" && a.id) {
+    const id = String(a.id);
+    if (!st.read_ids.includes(id)) st.read_ids.push(id);
+    if (st.read_ids.length > 200) st.read_ids = st.read_ids.slice(-200); // 防无限增长
+    _saveNoticeState();
+  } else if (a.action === "snooze") {
+    st.update_snoozed_until = updateNotify.nextSnooze(Date.now(), a.hours);
+    _saveNoticeState();
+  }
+  return currentShellNotice(); // 回传新状态：renderer 原地渲染下一条（或隐藏）
+});
+ipcMain.handle("desktop:notice-open", async (_e, id) => {
+  const item = _getAnnouncements().find((x) => x.id === String(id || ""));
+  const link = (item && item.link) || "";
+  if (!/^https:\/\//i.test(link)) return { ok: false }; // 只放行 https，公告数据不可执行本地任何东西
+  try { await shell.openExternal(link); return { ok: true }; } catch (e) { return { ok: false }; }
+});
+ipcMain.handle("desktop:update-restart", () => {
+  const u = _getUpdater();
+  if (!u || _updateInfo.phase !== "downloaded") return { ok: false, error: "not_ready" };
+  // isSilent=false 让 NSIS 走静默安装参数由 updater 默认处理；forceRunAfter=true 装完自动拉起。
+  // setImmediate：先把 IPC 应答送回 renderer（按钮已进「正在重启…」态），再触发退出流程。
+  setImmediate(() => {
+    try { u.quitAndInstall(false, true); } catch (e) { console.log(`[updater] quitAndInstall: ${String((e && e.message) || e)}`); }
+  });
+  return { ok: true };
+});
+
+/** updater 单例：手动检查与后台自动检查共用同一实例与事件接线（旧实现两处各自
+ *  require + 配置，事件只挂在自动链上——手动触发的下载完成横幅收不到）。
+ *
+ * ⚠ disableDifferentialDownload=true（2026-07-29 实机事故）：0.2.6→0.2.7 在测试机上
+ * 差分下载**卡死在 0 字节**——blockmap（235KB）下来了，随后 temp-*.exe 建出来就再无进展，
+ * 用户端表现为「一直不更新，问题还在」。整包 216MB 直下反而稳（LAN/公网都实测过）。
+ * 差分省的那点流量，换不来「更新链路静默失效」的代价。
+ */
+let _updater;
+function _getUpdater() {
+  if (_updater !== undefined) return _updater;
+  _updater = null;
+  if (!app.isPackaged) return _updater;
+  try {
+    const { autoUpdater } = require("electron-updater");
+    autoUpdater.autoDownload = true;
+    autoUpdater.disableDifferentialDownload = true;
+    autoUpdater.on("error", (e) => console.log(`[updater] ${String((e && e.message) || e)}`));
+    autoUpdater.on("update-available", (info) => {
+      _updateInfo = { phase: "downloading", version: String((info && info.version) || ""), percent: 0 };
+      broadcastShellNotice();
+    });
+    autoUpdater.on("download-progress", (p) => {
+      const pct = Math.round((p && p.percent) || 0);
+      console.log(`[updater] 下载中 ${pct}%`);
+      // 每 +10% 才广播一次：216MB 整包的 progress 事件很密，逐条推 IPC 纯属噪音
+      if (_updateInfo.phase === "downloading" && pct >= (_updateInfo.percent || 0) + 10) {
+        _updateInfo.percent = pct;
+        broadcastShellNotice();
+      }
+    });
+    autoUpdater.on("update-downloaded", (info) => {
+      console.log("[updater] 更新已下载，横幅提示一键重启");
+      _updateInfo = { phase: "downloaded", version: String((info && info.version) || _updateInfo.version), percent: 100 };
+      broadcastShellNotice();
+    });
+    _updater = autoUpdater;
+  } catch (e) {
+    console.log(`[updater] 不可用：${String((e && e.message) || e)}`);
+  }
+  return _updater;
+}
+
+let _updCheckBusy = false;
+async function runUpdateCheck(reason) {
+  const u = _getUpdater();
+  if (!u || _updCheckBusy) return null;
+  _updCheckBusy = true;
+  try {
+    return await u.checkForUpdates();
+  } catch (e) {
+    console.log(`[updater] check(${reason}) failed: ${String((e && e.message) || e)}`);
+    return null;
+  } finally { _updCheckBusy = false; }
+}
+
+/** 手动「检查更新」：dev 说明不检查；已就绪直接给「立即重启更新」；否则真查一轮。 */
 async function checkForUpdatesManual(win) {
   const ver = app.getVersion(); // semver：仅用于与更新源比对
   const shown = displayVersion(); // 展示串（内测 1.001）
@@ -1421,25 +1871,33 @@ async function checkForUpdatesManual(win) {
     });
     return;
   }
-  let autoUpdater;
-  try {
-    ({ autoUpdater } = require("electron-updater"));
-  } catch (e) {
+  const u = _getUpdater();
+  if (!u) {
     await dialog.showMessageBox(win, {
       type: "error", title: "检查更新", message: "更新组件不可用",
-      detail: String((e && e.message) || e), buttons: ["好的"], noLink: true,
+      detail: "请从官网重新下载安装包。", buttons: ["好的"], noLink: true,
     });
     return;
   }
+  if (_updateInfo.phase === "downloaded") {
+    const res = await dialog.showMessageBox(win, {
+      type: "info", title: "检查更新", message: `新版本 v${_updateInfo.version} 已就绪`,
+      detail: "重启即完成更新（约 30 秒，不影响账号与聊天记录）。",
+      buttons: ["立即重启更新", "稍后"], defaultId: 0, cancelId: 1, noLink: true,
+    });
+    if (res.response === 0) {
+      setImmediate(() => { try { u.quitAndInstall(false, true); } catch (e) { /* 失败下次重启仍会装 */ } });
+    }
+    return;
+  }
   try {
-    autoUpdater.autoDownload = true;
-    autoUpdater.disableDifferentialDownload = true; // 见 setupAutoUpdate 的原因说明
-    const r = await autoUpdater.checkForUpdates();
+    const r = await runUpdateCheck("manual");
     const latest = r && r.updateInfo && r.updateInfo.version;
     if (latest && latest !== ver) {
       await dialog.showMessageBox(win, {
         type: "info", title: "检查更新", message: `发现新版本 v${latest}`,
-        detail: "更新正在后台下载，下次重启自动生效。", buttons: ["好的"], noLink: true,
+        detail: "正在后台下载，完成后窗口顶部会出现「立即重启更新」提示，点一下即可完成。",
+        buttons: ["好的"], noLink: true,
       });
     } else {
       await dialog.showMessageBox(win, {
@@ -1456,27 +1914,91 @@ async function checkForUpdatesManual(win) {
 }
 
 /** 自动更新（仅发布态；dev 跳过。失败不阻断启动）。需 package.json::build.publish 指向真实更新源。
- *
- * ⚠ disableDifferentialDownload=true（2026-07-29 实机事故）：0.2.6→0.2.7 在测试机上
- * 差分下载**卡死在 0 字节**——blockmap（235KB）下来了，随后 temp-*.exe 建出来就再无进展，
- * 用户端表现为「一直不更新，问题还在」。整包 216MB 直下反而稳（LAN/公网都实测过）。
- * 差分省的那点流量，换不来「更新链路静默失效」的代价。
- */
+ *  节奏：启动即查 + 每 4h 定期复查 + 睡眠唤醒补查（旧实现只在启动查一次——
+ *  桌面壳常驻数天不重启，坐席永远等不到「下次启动」）。 */
 function setupAutoUpdate() {
   if (!app.isPackaged) return;
+  runUpdateCheck("boot");
+  const t = setInterval(() => runUpdateCheck("interval"), 4 * 60 * 60 * 1000);
+  if (t.unref) t.unref();
   try {
-    const { autoUpdater } = require("electron-updater");
-    autoUpdater.autoDownload = true;
-    autoUpdater.disableDifferentialDownload = true;
-    autoUpdater.on("error", (e) => console.log(`[updater] ${String((e && e.message) || e)}`));
-    autoUpdater.on("download-progress", (p) =>
-      console.log(`[updater] 下载中 ${Math.round((p && p.percent) || 0)}%`));
-    autoUpdater.on("update-downloaded", () => console.log("[updater] 更新已下载，下次重启生效"));
-    autoUpdater.checkForUpdatesAndNotify().catch((e) =>
-      console.log(`[updater] check failed: ${String((e && e.message) || e)}`));
+    let lastResume = 0;
+    powerMonitor.on("resume", () => {
+      const now = Date.now();
+      if (now - lastResume < 5 * 60 * 1000) return; // 连续唤醒去抖
+      lastResume = now;
+      setTimeout(() => runUpdateCheck("resume"), 15000); // 给网络恢复留缓冲
+    });
+  } catch (e) { /* powerMonitor 异常不阻断：定时器仍在 */ }
+}
+
+/** 公告轮询（dev 也跑：公告展示链路不依赖打包态，便于开发期直接验证）。 */
+function setupAnnouncements() {
+  refreshAnnouncements();
+  const t = setInterval(refreshAnnouncements, 6 * 60 * 60 * 1000);
+  if (t.unref) t.unref();
+}
+
+// ── 版本遥测心跳（P1 2026-08-14）───────────────────────────────────────────
+// 复用官网既有 /api/telemetry 匿名回执端点（白名单 schema：未知字段服务端一律丢弃）：
+// 每台安装每 24h 报一次 {kind:"chatx_heartbeat", manifest_version=当前版本, anon_id}。
+// 运营价值＝「版本分布 / 多少台还卡旧版」有真读数——强制升级 min_supported_version
+// 划线之前先看这张表，不再盲划。anon_id 是本机随机 uuid（userData 下落盘复用），
+// 不含账号/主机名/路径任何可识别信息；config.updates.telemetry=false 一键全关。
+function _telemetryUrl() {
+  try {
+    const cfg = (config || {}).updates || {};
+    if (cfg.telemetry === false) return "";
+    if (cfg.telemetry_url) return String(cfg.telemetry_url);
+  } catch (e) { /* config 未就绪按默认 */ }
+  try {
+    const pub = require("./package.json").build.publish[0].url; // https://bd2026.cc/downloads
+    return pub.replace(/\/downloads\/?$/, "") + "/api/telemetry";
+  } catch (e) { return ""; }
+}
+function _anonId() {
+  const p = path.join(app.getPath("userData"), "telemetry-id.txt");
+  try {
+    const v = fs.readFileSync(p, "utf-8").trim();
+    if (/^[0-9a-f-]{16,64}$/i.test(v)) return v;
+  } catch (e) { /* 首次运行无文件 */ }
+  const id = require("crypto").randomUUID();
+  try {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, id, "utf-8");
+  } catch (e) { /* 写失败=下次换新 id，只影响装机数去重精度 */ }
+  return id;
+}
+async function sendVersionBeacon() {
+  const url = _telemetryUrl();
+  if (!url) return;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 10000);
+  try {
+    await fetch(url, {
+      method: "POST",
+      signal: ctl.signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        schema: 1,
+        ts: new Date().toISOString(),
+        kind: "chatx_heartbeat", // 服务端 kind 限长 16，本串 15
+        manifest_version: app.getVersion(),
+        channel: "stable",
+        platform: `${process.platform}-${process.arch}`,
+        anon_id: _anonId(),
+      }),
+    });
   } catch (e) {
-    console.log(`[updater] 不可用：${String((e && e.message) || e)}`);
-  }
+    /* 遥测失败静默：观测链路绝不反噬主功能 */
+  } finally { clearTimeout(timer); }
+}
+function setupVersionTelemetry() {
+  if (!app.isPackaged) return; // dev 跑源码不上报，防开发机刷脏版本分布
+  const t0 = setTimeout(sendVersionBeacon, 60 * 1000); // 启动 60s 后发：避开开机网络抖动
+  if (t0.unref) t0.unref();
+  const t = setInterval(sendVersionBeacon, 24 * 60 * 60 * 1000);
+  if (t.unref) t.unref();
 }
 
 // 单实例锁（双实例竞态根治）：多开桌面壳会各自 backendManager.start() → 各自探活后
@@ -1524,6 +2046,8 @@ if (!_gotSingleInstanceLock) {
     sidecars.startAll(config).catch((e) => console.log(`[sidecar] start error: ${e}`));
     createWindow();
     setupAutoUpdate();
+    setupAnnouncements();
+    setupVersionTelemetry();
   });
 }
 

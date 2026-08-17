@@ -167,14 +167,43 @@ async def test_never_raises_on_engine_exception():
 
 
 @pytest.mark.asyncio
-async def test_fallback_kept_when_no_cjk_conflict():
-    """非 CJK 冲突（英文文本→法语目标）保持旧回落语义：失败发原文，绝不阻塞。"""
+async def test_no_cjk_conflict_failure_also_holds():
+    """无兜底纪律（2026-08-17 老板拍板）：非 CJK 冲突的翻译失败**同样 HOLD 不发**
+    ——旧「失败发原文」语义拆除（发客户看不懂/未真译的文本＝静默替代品）。"""
     ts = _FakeTS(_FakeRes("", ok=False, error="provider_unavailable"), detect="en")
     store = _FakeStore(language="fr")
     out = await translate_outbound_text(
         {"conversation_id": "x1", "text": "Hello there my friend"},
         translation_service=ts, store=store, source_lang="zh")
-    assert out == "Hello there my friend"
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_engine_exception_no_conflict_also_holds():
+    """引擎异常（非 CJK 冲突）→ HOLD（无兜底纪律），不再发原文。"""
+    class _Boom:
+        async def translate(self, *a, **k):
+            raise RuntimeError("engine down")
+
+    ts = _Boom()
+    ts.detect_language = lambda t: "en"
+    store = _FakeStore(language="fr")
+    out = await translate_outbound_text(
+        {"conversation_id": "x1", "text": "Hello there my friend"},
+        translation_service=ts, store=store, source_lang="zh")
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_emoji_only_text_passes_without_translation():
+    """纯 emoji/符号（无可译内容）→ 原样放行：这是无操作不是兜底，
+    严格 HOLD 化后若不放行，「👍」会被引擎回显再被 degraded 判定误拦。"""
+    ts = _FakeTS(_FakeRes("👍", ok=True), detect="")
+    store = _FakeStore(language="en")
+    out = await translate_outbound_text(
+        {"conversation_id": "x1", "text": "👍👍!!"},
+        translation_service=ts, store=store, source_lang="zh")
+    assert out == "👍👍!!"
 
 
 @pytest.mark.asyncio
@@ -360,4 +389,69 @@ async def test_translate_uses_voted_language_over_stale_store_value():
         {"conversation_id": "x1", "text": "我也在家呀"},
         translation_service=ts, store=store, source_lang="zh")
     assert out == "我也在家呀"     # 判 zh→zh 同语，跳过翻译（不再 garble 成英文）
+    assert ts.calls == []
+
+
+# ── 末尾入站 burst 强证据层（2026-08-15，Wisley 实锤：翻译端推翻生成端） ────────
+
+from src.inbox.outbound_translate import current_inbound_burst_lang  # noqa: E402
+
+
+class TestCurrentInboundBurstLang:
+    def test_incident_replay_trailing_zh_wins(self):
+        # 事故复刻：历史窗口英文占多数，客户末条发中文「记录了」——
+        # 多数决仍判 en，burst 层必须判 zh（强证据：CJK ≥2）
+        msgs = [
+            _in("thanks for the update my friend"),
+            _out("You're welcome! Let me know anytime."),
+            _in("that sounds great, appreciate it"),
+            _out("Sure thing!"),
+            _in("记录了"),
+        ]
+        assert vote_language(msgs, detect=detect_language) == "en"
+        assert current_inbound_burst_lang(msgs) == "zh"
+
+    def test_burst_stops_at_outbound(self):
+        # 出站之前的旧入站不属于本轮 burst：末段只有英文 → en
+        msgs = [_in("你好呀朋友们"), _out("hi"), _in("okay let's continue in english")]
+        assert current_inbound_burst_lang(msgs) == "en"
+
+    def test_trailing_outbound_means_no_burst(self):
+        # 末条是我们自己发的（如主动触达后）→ 无 burst，回落多数决
+        msgs = [_in("你好呀朋友"), _out("在忙吗？")]
+        assert current_inbound_burst_lang(msgs) == ""
+
+    def test_weak_evidence_returns_blank(self):
+        # 「ok」emoji 等中性/弱证据绝不构成 burst（防孤立短词翻转目标语言）
+        assert current_inbound_burst_lang([_in("ok")]) == ""
+        assert current_inbound_burst_lang([_in("😊👍")]) == ""
+
+    def test_media_placeholder_does_not_break_burst(self):
+        msgs = [_in("记录了这件事情"), _in("[图片]")]
+        assert current_inbound_burst_lang(msgs) == "zh"
+
+    def test_empty_and_garbage_safe(self):
+        assert current_inbound_burst_lang([]) == ""
+        assert current_inbound_burst_lang([None, "x", 3]) == ""
+
+
+@pytest.mark.asyncio
+async def test_translate_burst_overrides_stale_majority():
+    """端到端事故复刻：中文草稿 + 历史多数 en + 末条入站中文 → 必须跳过翻译发中文。
+
+    修复前：_conv_language 判 en → 中文草稿被整段翻成英文发出（生成端被翻译端推翻）。
+    """
+    ts = _FakeTS(_FakeRes("Noted!"), detect="zh")
+    store = _VoteStore(
+        recent=[
+            _in("thanks for the update my friend"),
+            _out("You're welcome! Let me know anytime."),
+            _in("that sounds great, appreciate it"),
+            _in("记录了"),
+        ],
+        language="en")
+    out = await translate_outbound_text(
+        {"conversation_id": "x1", "text": "好的，我记下啦～"},
+        translation_service=ts, store=store, source_lang="zh")
+    assert out == "好的，我记下啦～"   # 目标=burst zh == 源 zh → 不翻译
     assert ts.calls == []

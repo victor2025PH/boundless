@@ -39,6 +39,59 @@ function detectPlatform(hostname) {
   return "unknown";
 }
 
+// ── 气泡时间提取（P0 时间推理，2026-08-12）────────────────────────────────────
+// 智能回复/回流此前只抓 {direction,text}，后端时间推理全盲（实录：重答 4 天前
+// 已答过的问题）。三个纯解析器统一纪律：**宁缺勿错**——解析不确定一律返回 0
+// （后端按「无时间」走结构判定；错的时间比没有时间毒得多）。
+
+// 数字型时间（attr 值）：秒或毫秒 epoch → 秒；超出 2000-01-01..now+2天 视为脏值。
+function parseEpochLike(v, nowSec) {
+  const n = Number(String(v == null ? "" : v).trim());
+  if (!isFinite(n) || n <= 0) return 0;
+  const sec = n > 1e12 ? Math.floor(n / 1000) : Math.floor(n);
+  const now = Number(nowSec) > 0 ? Number(nowSec) : Math.floor(Date.now() / 1000);
+  if (sec < 946684800 || sec > now + 172800) return 0;
+  return sec;
+}
+
+// 日期字符串（title/datetime attr）：交给 Date.parse（ISO/英文月名可靠），
+// 失败剥逗号重试一次；本地化月名（非英文 UI）解析不了 → 0。
+function parseDateTitle(s, nowSec) {
+  const str = String(s || "").trim();
+  if (!str) return 0;
+  let t = Date.parse(str);
+  if (isNaN(t)) t = Date.parse(str.replace(/,/g, " "));
+  if (isNaN(t)) return 0;
+  return parseEpochLike(Math.floor(t / 1000), nowSec);
+}
+
+// WhatsApp `data-pre-plain-text`："[21:43, 8/8/2026] 名字: "。日/月次序随系统
+// locale 变化（8/12 可能是 8月12日 也可能是 12月8日）——两种解释都合法且落点
+// 不同时返回 0；仅在无歧义（某段 >12 / 两段相等 / 四位年打头）时给值。
+function parseWaPrePlain(s, nowSec) {
+  const m = String(s || "").match(
+    /\[(\d{1,2}):(\d{2})[^0-9\]]*[, ]\s*(\d{1,4})[\/.\-](\d{1,2})[\/.\-](\d{1,4})\]/
+  );
+  if (!m) return 0;
+  const hh = +m[1], mm = +m[2];
+  if (hh > 23 || mm > 59) return 0;
+  const a = +m[3], b = +m[4], c = +m[5];
+  let y = 0, mo = 0, d = 0;
+  if (a >= 1000) {              // Y/M/D（年打头，无歧义）
+    y = a; mo = b; d = c;
+  } else {
+    y = c < 100 ? c + 2000 : c;
+    if (a > 12 && b <= 12) { d = a; mo = b; }        // 只能是 D/M
+    else if (b > 12 && a <= 12) { mo = a; d = b; }   // 只能是 M/D
+    else if (a === b) { d = a; mo = b; }             // 同值，次序无所谓
+    else return 0;                                    // 真歧义：宁缺勿错
+  }
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return 0;
+  const t = new Date(y, mo - 1, d, hh, mm, 0, 0).getTime();
+  if (isNaN(t)) return 0;
+  return parseEpochLike(Math.floor(t / 1000), nowSec);
+}
+
 // djb2 字符串散列 → 稳定短 id（通用档无原生 msg_id 时的 mid 兜底，使 PUSHED 去重可用）。
 function _hash(s) {
   let h = 5381;
@@ -150,6 +203,18 @@ function makeGenericProfile(cfg) {
       }
       return null;
     },
+    ts(b) {
+      if (!b) return 0;
+      const now = Math.floor(Date.now() / 1000);
+      // 现代 web 端最可靠的是 <time datetime="ISO">（X/IG 均用）；无则试 epoch attr。
+      const timeEl = b.querySelector && b.querySelector("time[datetime]");
+      if (timeEl) {
+        const v = parseDateTitle(timeEl.getAttribute("datetime"), now);
+        if (v) return v;
+      }
+      return parseEpochLike(
+        _firstAttr(b, ["data-timestamp", "data-time", "data-ts"]), now);
+    },
   };
 }
 
@@ -243,6 +308,17 @@ const _telegram = {
     if (audio && audio.getAttribute("src")) return { kind: "voice", url: audio.src };
     return null;
   },
+  ts(bubble) {
+    // tweb（web.telegram.org/k）气泡自带 data-timestamp（unix 秒）——首选；
+    // 回落 .time/.time-inner 的 title 全量日期串（英文 UI 下 Date.parse 可解）。
+    const now = Math.floor(Date.now() / 1000);
+    const byAttr = parseEpochLike(
+      _firstAttr(bubble, ["data-timestamp", "data-time"]), now);
+    if (byAttr) return byAttr;
+    const t = bubble.querySelector &&
+      bubble.querySelector(".time-inner[title], .time[title]");
+    return t ? parseDateTitle(t.getAttribute("title"), now) : 0;
+  },
 };
 
 const _whatsapp = {
@@ -320,6 +396,12 @@ const _whatsapp = {
     const audio = bubble.querySelector("audio[src]");
     if (audio && audio.getAttribute("src")) return { kind: "voice", url: audio.src };
     return null;
+  },
+  ts(bubble) {
+    const now = Math.floor(Date.now() / 1000);
+    const el = (bubble.querySelector && bubble.querySelector("[data-pre-plain-text]"))
+      || (bubble.closest && bubble.closest("[data-pre-plain-text]"));
+    return el ? parseWaPrePlain(el.getAttribute("data-pre-plain-text"), now) : 0;
   },
 };
 
@@ -455,4 +537,7 @@ function selectorHealth(profile, doc) {
   selectorHealth,
   BUILTIN_PROFILES,
   OVERLAYABLE_KEYS,
+  parseEpochLike,
+  parseDateTitle,
+  parseWaPrePlain,
 });

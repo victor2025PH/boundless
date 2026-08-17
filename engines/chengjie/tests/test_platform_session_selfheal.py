@@ -313,6 +313,43 @@ def test_relogin_route_account_id_fallback(monkeypatch):
     assert calls["url"] == "http://svc/accounts/100/relogin"
 
 
+def test_relogin_route_whatsapp_reconnect(monkeypatch):
+    """P1（2026-08-14）：whatsapp 走 baileys 凭据级 reconnect（编排器自愈同端点）。
+    响应无 status 字段时从 already/reconnecting 布尔位推导，运营能看懂发生了什么。"""
+    import src.integrations.messenger_web_login as mgw
+    import src.integrations.whatsapp_baileys_login as wbl
+    calls = {}
+
+    async def _fake(url, payload, timeout=20.0):
+        calls["url"] = url
+        return {"ok": True, "reconnecting": True}
+
+    monkeypatch.setattr(mgw, "_post_json", _fake)
+    monkeypatch.setattr(wbl, "service_base_url", lambda cfg: "http://wa-svc")
+    c = TestClient(_ops_app())
+    r = c.post("/api/admin/platform-sessions/relogin", json={
+        "platform": "whatsapp", "account_id": "8613800000000"})
+    assert r.status_code == 200, r.text
+    assert calls["url"] == "http://wa-svc/accounts/8613800000000/reconnect"
+    assert r.json()["status"] == "reconnecting"
+
+
+def test_relogin_route_whatsapp_already_online(monkeypatch):
+    import src.integrations.messenger_web_login as mgw
+    import src.integrations.whatsapp_baileys_login as wbl
+
+    async def _fake(url, payload, timeout=20.0):
+        return {"ok": True, "already": True}
+
+    monkeypatch.setattr(mgw, "_post_json", _fake)
+    monkeypatch.setattr(wbl, "service_base_url", lambda cfg: "http://wa-svc")
+    c = TestClient(_ops_app())
+    r = c.post("/api/admin/platform-sessions/relogin", json={
+        "platform": "whatsapp", "account_id": "8613800000000"})
+    assert r.status_code == 200
+    assert r.json()["status"] == "already"
+
+
 def test_relogin_route_validations():
     c = TestClient(_ops_app())
     assert c.post("/api/admin/platform-sessions/relogin",
@@ -578,3 +615,120 @@ def test_worker_send_verified_false_still_delivered(monkeypatch):
     res = asyncio.run(
         MessengerWebWorker({"account_id": "100"}, {}).send("555", "hi"))
     assert res["delivered"] is True
+
+
+# ── 7) 自灭型 offline 账号的持续提醒（2026-08-16 messenger 17 天零提醒事故修） ──
+# 注册表 offline 现分两档：meta.offline_reason=worker:*（自灭——worker push 翻
+# 状态时落标，**继续催**，重登/删号自然停催）/ operator（运营主动登出，
+# _clear_session_creds 落标）或无标记（历史存量，来历不明）→ 静默维持旧行为。
+
+
+def _registry():
+    from src.integrations.account_registry import get_account_registry
+    return get_account_registry()
+
+
+def test_watchdog_reminds_worker_dead_offline_account():
+    """自灭标记的 offline 号：一次转移告警后仍持续升级提醒（事故核心修复——
+    修复前 offline 一律被当「运营主动下线」，死号 17 天零提醒）。"""
+    _registry().upsert("messenger", "100", mode="web", status="offline",
+                       meta={"offline_reason": "worker:expired"},
+                       merge_meta=True)
+    s = _store()
+    s.record("messenger", "100", "expired", detail="cookie invalidated")
+    t0 = s.dump()["sessions"]["messenger:100"]["unhealthy_since"]
+    wd = _watchdog()
+    wd._check_platform_sessions(now=t0 + 3600)
+    evs = _events()
+    assert len(evs) == 1
+    assert evs[0]["data"]["reminder"] is True
+    assert evs[0]["data"]["account_id"] == "100"
+
+
+def test_watchdog_silent_for_operator_offline_account():
+    """operator 标记（运营主动登出）→ 与无标记同语义：不催。"""
+    _registry().upsert("messenger", "100", mode="web", status="offline",
+                       meta={"offline_reason": "operator"}, merge_meta=True)
+    s = _store()
+    s.record("messenger", "100", "logged_out")
+    t0 = s.dump()["sessions"]["messenger:100"]["unhealthy_since"]
+    _watchdog()._check_platform_sessions(now=t0 + 86400)
+    assert _events() == []
+
+
+def test_seeded_dead_account_reminds_after_restart(monkeypatch):
+    """重启剧本端到端：健康表全空（=刚重启）→ 看门狗自种子 → 自灭号发提醒。
+
+    修复前该链在两处断：① 种子只挂 web 读路径，看门狗可能先于任何页面访问跑；
+    ② 就算种上，_session_expected_online 对 offline 一律 False。"""
+    import src.integrations.platform_session_health as psh
+    monkeypatch.setattr(psh, "_SEEDED", False, raising=False)
+    _registry().upsert("messenger", "100", mode="web", status="offline",
+                       meta={"offline_reason": "worker:crash_loop"},
+                       merge_meta=True)
+    wd = _watchdog()
+    # 不往健康表 record——看门狗内的 ensure_seeded_from_registry 必须自己把
+    # 注册表 offline 行接续进来（unhealthy_since=注册表 updated_at≈刚才）
+    wd._check_platform_sessions(now=time.time() + 3600)
+    evs = _events()
+    assert len(evs) == 1
+    d = evs[0]["data"]
+    assert d["reminder"] is True and d["account_id"] == "100"
+    assert d["status"] == "logged_out"   # 种子行的状态语义
+
+
+def test_session_status_push_stamps_worker_reason_and_clears_on_auth():
+    """路由写点：online 号被 push logged_out → offline + worker: 标记；
+    authorized 归位 → online + 标记清空（下一次自灭从头判定）。"""
+    from src.web.routes.unified_inbox_account_routes import (
+        register_account_routes,
+    )
+    reg = _registry()
+    reg.upsert("messenger", "300", mode="web", status="online")
+    app = FastAPI()
+    register_account_routes(app, api_auth=lambda request: None,
+                            config_manager=None)
+    c = TestClient(app)
+    c.post("/api/internal/protocol/session-status", json={
+        "platform": "messenger", "account_id": "300", "status": "logged_out"})
+    row = reg.get("messenger", "300")
+    assert row["status"] == "offline"
+    assert row["meta"].get("offline_reason") == "worker:logged_out"
+    c.post("/api/internal/protocol/session-status", json={
+        "platform": "messenger", "account_id": "300", "status": "authorized"})
+    row = reg.get("messenger", "300")
+    assert row["status"] == "online"
+    assert row["meta"].get("offline_reason") == ""
+
+
+def test_logout_endpoint_stamps_operator_reason(monkeypatch):
+    """运营登出写点：/logout → offline + operator 标记。哪怕 Node push 先一步
+    落了 worker: 标记也要被改回——两种到达顺序结果一致（竞态收敛断言）。"""
+    import src.web.routes.unified_inbox_account_routes as rt
+
+    class _FakeOrch:
+        async def stop_account(self, key):
+            return True
+
+    monkeypatch.setattr(rt, "get_orchestrator", lambda cfg=None: _FakeOrch())
+    monkeypatch.setattr(rt, "ensure_builtin_workers", lambda cfg=None: None)
+    import src.integrations.messenger_web_login as mgw
+
+    async def _fake_post(url, payload, timeout=20.0):
+        return {"ok": True}
+
+    monkeypatch.setattr(mgw, "_post_json", _fake_post)
+    reg = _registry()
+    reg.upsert("messenger", "400", mode="web", status="offline",
+               meta={"offline_reason": "worker:logged_out",
+                     "session_string": "s"}, merge_meta=True)
+    app = FastAPI()
+    rt.register_account_routes(app, api_auth=lambda request: None,
+                               config_manager=None)
+    c = TestClient(app)
+    r = c.post("/api/accounts/messenger/400/logout")
+    assert r.status_code == 200, r.text
+    row = reg.get("messenger", "400")
+    assert row["status"] == "offline"
+    assert row["meta"].get("offline_reason") == "operator"
+    assert "session_string" not in row["meta"]   # 凭据仍被清（原语义不回退）

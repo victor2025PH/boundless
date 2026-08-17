@@ -189,3 +189,106 @@ def test_deliver_delay_platform_override_applies_to_telegram(monkeypatch):
         "platform_overrides": {"telegram": {"min_sec": 7, "max_sec": 7}}})
     _run(s.run_prereply_humanize(33, text="回复文本"))
     assert sum(s for k, s in events if k == "sleep") == pytest.approx(7.0)
+
+
+# ── P2b A 线连发间隔地板（min_gap_sec，2026-08-12 实测 4.1s 双发后补）─────────
+
+
+def test_gap_floor_pads_when_recent_send(monkeypatch):
+    """账本里 6s 前刚发过一条 → 本条延迟被垫到 ≥ 10×0.85−6 = 2.5s（基础只有 1s）。"""
+    events = []
+
+    async def _fast_sleep(_s):
+        events.append(("sleep", _s))
+
+    monkeypatch.setattr(asyncio, "sleep", _fast_sleep)
+    s = _sender(None, events, deliver_delay={
+        "min_sec": 1, "max_sec": 1, "min_gap_sec": 10})
+    import time as _t
+    s._conv_last_sent = {"55": _t.time() - 6.0}
+    _run(s.run_prereply_humanize(55, text="回复文本"))
+    total = sum(x for k, x in events if k == "sleep")
+    assert 2.5 <= total <= 5.5      # 10×[0.85,1.15] − 6
+
+
+def test_gap_floor_no_prev_send_not_padded(monkeypatch):
+    """账本无本会话记录（进程内首条出站）→ 不垫，只有基础延迟。"""
+    events = []
+
+    async def _fast_sleep(_s):
+        events.append(("sleep", _s))
+
+    monkeypatch.setattr(asyncio, "sleep", _fast_sleep)
+    s = _sender(None, events, deliver_delay={
+        "min_sec": 1, "max_sec": 1, "min_gap_sec": 10})
+    _run(s.run_prereply_humanize(56, text="回复文本"))
+    assert sum(x for k, x in events if k == "sleep") == pytest.approx(1.0)
+
+
+def test_gap_floor_disabled_by_default(monkeypatch):
+    """未配 min_gap_sec（默认 0）→ 旧行为（刚发过也不垫）。"""
+    events = []
+
+    async def _fast_sleep(_s):
+        events.append(("sleep", _s))
+
+    monkeypatch.setattr(asyncio, "sleep", _fast_sleep)
+    s = _sender(None, events, deliver_delay={"min_sec": 1, "max_sec": 1})
+    import time as _t
+    s._conv_last_sent = {"57": _t.time() - 1.0}
+    _run(s.run_prereply_humanize(57, text="回复文本"))
+    assert sum(x for k, x in events if k == "sleep") == pytest.approx(1.0)
+
+
+def test_gap_floor_postsleep_recheck_pads_concurrent_send(monkeypatch):
+    """并发窗对账（02:40 实测 gap=4.1s 双发的直接解）：本条睡前账本为空 →
+    sleep 期间同会话另一条在途回复落地（账本被刷新）→ 睡醒后必须补垫到
+    间隔，且垫付期续挂「正在输入」。"""
+    events = []
+    import time as _t
+    s = _sender(None, events, deliver_delay={
+        "min_sec": 1, "max_sec": 1, "min_gap_sec": 10})
+
+    async def _fast_sleep(x):
+        events.append(("sleep", x))
+        # 首次 sleep（基础延迟）期间模拟并发回复落地：刷新账本＝4s 前发出
+        if not getattr(s, "_conv_last_sent", None):
+            s._conv_last_sent = {"58": _t.time() - 4.0}
+
+    monkeypatch.setattr(asyncio, "sleep", _fast_sleep)
+    _run(s.run_prereply_humanize(58, text="回复文本"))
+    total = sum(x for k, x in events if k == "sleep")
+    # 基础 1s + 垫付 (10×[0.85,1.15]−4 ∈ [4.5,7.5]) → [5.5, 8.5]
+    assert 5.5 <= total <= 8.5
+    # 垫付段有续挂打字气泡（在基础延迟的 typing 之外至少再挂一次）
+    assert sum(1 for e in events if e[0] == "typing") >= 2
+
+
+def test_gap_floor_postsleep_no_change_no_double_pad(monkeypatch):
+    """账本在 sleep 期间**没变**（就是睡前那条旧记录）→ 不重掷抖动、不双垫。"""
+    events = []
+
+    async def _fast_sleep(_s):
+        events.append(("sleep", _s))
+
+    monkeypatch.setattr(asyncio, "sleep", _fast_sleep)
+    s = _sender(None, events, deliver_delay={
+        "min_sec": 1, "max_sec": 1, "min_gap_sec": 10})
+    import time as _t
+    s._conv_last_sent = {"59": _t.time() - 6.0}
+    _run(s.run_prereply_humanize(59, text="回复文本"))
+    total = sum(x for k, x in events if k == "sleep")
+    # 只有睡前那一次垫付（fake sleep 不走真实时钟，若双垫总额会到 [5,11]）
+    assert 2.5 <= total <= 5.5
+
+
+def test_postsend_mirror_records_conv_ledger(monkeypatch):
+    """发送记账点写账本：_postsend_mirror_and_record 后账本有该会话时间戳。"""
+    events = []
+    s = _sender(None, events, deliver_delay={"min_sec": 0, "max_sec": 0})
+    s._mirror_out_row = lambda *a, **k: None
+    s._record_contact_out = lambda *a, **k: None
+    import time as _t
+    t0 = _t.time()
+    s._postsend_mirror_and_record(60, "hello")
+    assert s._conv_last_sent["60"] >= t0

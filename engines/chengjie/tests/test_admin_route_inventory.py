@@ -427,7 +427,9 @@ _BASELINE = """
 /api/reply-logic	POST
 /api/reply-settings	GET
 /api/reply-settings	POST
+/api/reply-settings/budget-today	GET
 /api/reply-settings/explain	GET
+/api/reply-settings/follow-slider	POST
 /api/report/daily	GET
 /api/report/weekly	GET
 /api/rollback	POST
@@ -485,6 +487,8 @@ _BASELINE = """
 /api/platforms/{platform}/modes	GET
 /api/platforms/{platform}/login/start	POST
 /api/platforms/{platform}/login/{login_id}/status	GET
+/api/platforms/{platform}/login/{login_id}/relay-step	GET
+/api/platforms/{platform}/login/{login_id}/relay-submit	POST
 /api/platforms/{platform}/login/{login_id}/cancel	POST
 /api/proxies	GET
 /api/proxies	POST
@@ -537,8 +541,10 @@ _BASELINE = """
 /api/platforms/{platform}/{account_id}/message-op	POST
 /api/platforms/{platform}/{account_id}/group-members	GET
 /api/unified-inbox/send-media	POST
+/api/unified-inbox/media-download	GET
 /api/unified-inbox/send-voice	POST
 /api/unified-inbox/send-voice-status	GET
+/api/unified-inbox/send-gate/exempt	POST
 /api/unified-inbox/send-caps	GET
 /api/workspace/quota	GET
 /api/desktop/ping	GET
@@ -560,6 +566,9 @@ _BASELINE = """
 /api/desktop/outbound/rewrite	POST
 /api/desktop/outbound/stats	GET
 /api/desktop/fingerprint	GET
+/api/desktop/ui-flags	GET
+/api/developer/ui-visibility	GET
+/api/developer/ui-visibility	POST
 /api/telegram/log-tail	GET
 /api/telegram/recent-contacts	GET
 /api/telegram/settings	GET
@@ -585,6 +594,7 @@ _BASELINE = """
 /api/unified-inbox/why-no-reply	GET
 /api/unified-inbox/warmup-review	POST
 /api/unified-inbox/reply-budget/relief	POST
+/api/unified-inbox/messenger/e2ee-pin	POST
 /api/unified-inbox/chats	GET
 /api/unified-inbox/history	GET
 /api/unified-inbox/kb-search	GET
@@ -593,6 +603,7 @@ _BASELINE = """
 /api/unified-inbox/profile	GET
 /api/unified-inbox/templates	GET
 /api/unified-inbox/send	POST
+/api/unified-inbox/tg-join-chat	POST
 /api/unified-inbox/stored-chats	GET
 /api/unified-inbox/outreach/batch	GET
 /api/unified-inbox/outreach/execute	POST
@@ -606,6 +617,8 @@ _BASELINE = """
 /api/unified-inbox/default-reply-lang	GET
 /api/unified-inbox/default-reply-lang	POST
 /api/unified-inbox/default-reply-lang/all	GET
+/api/unified-inbox/agent-lang	GET
+/api/unified-inbox/agent-lang	POST
 /api/unified-inbox/translate	POST
 /api/unified-inbox/translate-compare	POST
 /api/unified-inbox/translate-document	POST
@@ -620,6 +633,7 @@ _BASELINE = """
 /api/workspace/claim/release	POST
 /api/workspace/claim/renew	POST
 /api/workspace/claims	GET
+/api/workspace/entrances	GET
 /api/workspace/glossary	GET
 /api/workspace/glossary	POST
 /api/workspace/typing	POST
@@ -628,13 +642,7 @@ _BASELINE = """
 /api/workspace/contact/{contact_id}/follow-up	POST
 /api/workspace/contact/{contact_id}/tasks	GET
 /api/workspace/contact/{contact_id}/timeline	GET
-/api/workspace/conv/{conversation_id}/next-actions	GET
-/api/workspace/conv/{conversation_id}/execute-action	POST
 /api/workspace/conv/{conversation_id}/start-chain	POST
-/api/workspace/workflow-actions	GET
-/api/workspace/workflow-actions	POST
-/api/workspace/workflow-actions/{action_id}	PUT
-/api/workspace/workflow-actions/{action_id}	DELETE
 /api/workspace/workflow-chains	GET
 /api/workspace/workflow-chains	POST
 /api/workspace/workflow-chains/seed	POST
@@ -661,6 +669,10 @@ _BASELINE = """
 /api/workspace/chain-funnel	GET
 /api/workspace/conv/{conversation_id}/chain-executions	GET
 /api/workspace/chain-executions/{exec_id}/cancel	POST
+/api/workspace/chain-executions/{exec_id}/pause	POST
+/api/workspace/chain-executions/{exec_id}/resume	POST
+/api/workspace/chain-executions/{exec_id}/skip-step	POST
+/api/workspace/chain-executions/{exec_id}/retry	POST
 /api/workspace/conv/{conversation_id}/mention-suggestions	GET
 /api/workspace/conv/{conversation_id}/collab-context	GET
 /api/workspace/contact/{contact_id}/collab-context	GET
@@ -691,11 +703,13 @@ _BASELINE = """
 /api/setup/ai	GET
 /api/setup/ai-key	POST
 /api/setup/ai-primary	POST
+/api/setup/deploy-profile	GET
 /api/setup/cloud-credentials	GET
 /api/setup/key-pool	POST
 /api/setup/features	GET
 /api/setup/features/toggle	POST
 /api/workspace/ai-runtime-status	GET
+/api/workspace/ai-weekly-brief	GET
 /api/workspace/hosted-quota	GET
 /api/companion/proactive/preview	GET
 /api/companion/capabilities	GET
@@ -927,6 +941,11 @@ _BASELINE = """
 /users/create	POST
 /users/delete/{user_id}	POST
 /users/update/{user_id}	POST
+/users/quota/{user_id}	POST
+/users/perms/{user_id}	POST
+/api/users/{user_id}/perms	GET
+/api/users/char-usage	GET
+/api/workspace/my-usage	GET
 /whatsapp-rpa	GET
 /api/workspace/ab-tests	GET,POST
 /api/workspace/ab-tests/{test_id}/results	GET
@@ -1303,6 +1322,172 @@ _ADDITIONS_2026_08_10_PHONE_CODE = """
 /api/platforms/{platform}/login/{login_id}/resend-code	POST
 """
 _BASELINE += _ADDITIONS_2026_08_10_PHONE_CODE
+
+# 2026-08-12 Telegram 群成员提取（工具箱）：多号限速拉群成员入库 + 每日配额（group_members_routes）。
+_ADDITIONS_2026_08_12_TG_MEMBERS = """
+/api/tg-members/jobs	POST
+/api/tg-members/jobs	GET
+/api/tg-members/jobs/{job_id}	GET
+/api/tg-members/jobs/{job_id}/stop	POST
+/api/tg-members/groups	GET
+/api/tg-members/members	GET
+/api/tg-members/members/export	GET
+/api/tg-members/quota	GET
+/api/tg-members/account-groups	GET
+/tools/tg-members	GET
+"""
+_BASELINE += _ADDITIONS_2026_08_12_TG_MEMBERS
+
+# 2026-08-12 被骂回怼治理（temper_routes）：治理配置读写 + 每人设生效档位 +
+# 回怼诊断器 dry-run（「为什么没怼」运营自查，只读零副作用）。
+_ADDITIONS_2026_08_12_TEMPER = """
+/api/companion/temper/status	GET
+/api/companion/temper/config	POST
+/api/companion/temper/dry-run	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_12_TEMPER
+
+# 2026-08-13 双面板融合 P0（surface_fusion_routes）：能力注册表（workspace ×
+# native 双面板状态 + 桥接目标）+ 驾驶权互斥锁读/切（防「工作台自动链 ×
+# 原生页」双发的机制层；owner=native 时 AutosendWorker 让位）。
+_ADDITIONS_2026_08_13_SURFACE_FUSION = """
+/api/surface/capabilities	GET
+/api/surface/pilot	GET,POST
+"""
+_BASELINE += _ADDITIONS_2026_08_13_SURFACE_FUSION
+
+# 2026-08-13 驾驶舱 P0（takeover_routes）：会话级一键接管/交还——档位切 manual
+# （AI 全停）+ 在途草稿取消 + 会话标签，打包成一个坐席动作；active/status 供
+# 会话头按钮与超时提醒消费。
+_ADDITIONS_2026_08_13_TAKEOVER = """
+/api/takeover/active	GET
+/api/takeover/status	GET
+/api/takeover/start	POST
+/api/takeover/end	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_13_TAKEOVER
+
+# 2026-08-13 驾驶舱 P1（cockpit）：介入优先级队列页 + 聚合 API（四源：接管超时/
+# 需人工/客户在等/草稿待审，去重排序 30s 缓存；KPI 与账号健康复用既有端点不重造）。
+_ADDITIONS_2026_08_13_COCKPIT = """
+/workspace/cockpit	GET
+/api/cockpit/overview	GET
+"""
+_BASELINE += _ADDITIONS_2026_08_13_COCKPIT
+
+# 2026-08-14 驾驶舱 P2（resolve）：「已处理」摘「需人工」标签的唯一清除出口
+# （标签无自动过期语义，上线首日实测 12～34 天陈尸卡占屏）。overview 同批加
+# caps 特性探测位（模板热更先于重启的中间态，前端见不到 caps 不渲染按钮）。
+_ADDITIONS_2026_08_14_COCKPIT_RESOLVE = """
+/api/cockpit/resolve	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_14_COCKPIT_RESOLVE
+
+# 2026-08-16 会话删除（boss 直接需求）：工作台删除单会话全部本地数据（全表硬删
+# + 防复活墓碑，真实新消息自动解除回显；拒 agent/viewer）。账号删除的连带清库
+# 走既有 /api/accounts/*/remove 的 body 扩展（purge_data），不新增端点。
+_ADDITIONS_2026_08_16_CONV_DELETE = """
+/api/unified-inbox/conversations/delete	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_16_CONV_DELETE
+
+# 2026-08-17 官方级消息管理（boss「与官方一致的会话/消息管理」）：会话置顶（服务端
+# 落库，全坐席共见）+ 清空聊天记录（仅工作台，supervisor+）+ 消息「仅工作台删除」
+# 软删/恢复（undo 服务端退路）+ 能力探测 meta（feat 特性探测：旧后端 404 → 前端
+# 新 UI 整体不挂；平台撤回能力单一事实源）。双端撤回复用既有
+# /api/platforms/{platform}/{account_id}/message-op（已扩 telegram/line），不新增端点。
+_ADDITIONS_2026_08_17_MSG_OPS = """
+/api/unified-inbox/conversations/pin	POST
+/api/unified-inbox/conversations/clear	POST
+/api/unified-inbox/messages/delete	POST
+/api/unified-inbox/messages/restore	POST
+/api/unified-inbox/message-ops/meta	GET
+"""
+_BASELINE += _ADDITIONS_2026_08_17_MSG_OPS
+
+# 2026-08-17 消息管理 P2（审计可视化 + 回收站）：软删消息列表（supervisor+，配
+# restore 端点=误删/误清空的主管级找回）+ 删除/撤回审计读数（ops_events 台账 →
+# ops-overview「消息管理审计」卡：计数/撤回成功率/失败归因/最近操作流）。
+_ADDITIONS_2026_08_17_MSG_OPS_P2 = """
+/api/unified-inbox/messages/deleted	GET
+/api/admin/msg-ops-stats	GET
+"""
+_BASELINE += _ADDITIONS_2026_08_17_MSG_OPS_P2
+
+# 2026-08-16 WP-2 首启向导（welcome_routes）：/welcome 五步向导页 + 聚合读面 +
+# 进度持久化 + 自动化档位护栏写。onboarding.enabled 基线关 → 页面与 API 全 404
+# （路由仍注册，闸在处理器内——「无此页」语义，老实例零可见变化）。
+_ADDITIONS_2026_08_16_WELCOME = """
+/welcome	GET
+/api/onboarding/status	GET
+/api/onboarding/state	POST
+/api/onboarding/automation-tier	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_16_WELCOME
+
+# 2026-08-17 WP-4 合规只读导出（compliance_routes）：危机转介计数（SB 243 年报
+# 数字）+ 合规开关回显。写入面在危机处置链打点（record_crisis_referral），
+# 本端点只读零副作用。
+_ADDITIONS_2026_08_17_COMPLIANCE = """
+/api/admin/crisis-referrals	GET
+"""
+_BASELINE += _ADDITIONS_2026_08_17_COMPLIANCE
+
+# 2026-08-17 WP-3 老板日报（boss_routes）：/workspace/boss 页（任意登录角色，
+# 零工程黑话的钱/时间视角）+ 日账/周账/趋势/省时聚合（300s TTL）+ 周报 Markdown
+# 导出（WS-3 案例采写素材）。口径=value_report 持久库（日窗=滚动 24h）。
+_ADDITIONS_2026_08_17_BOSS = """
+/workspace/boss	GET
+/api/workspace/boss-value	GET
+/api/workspace/boss-export.md	GET
+"""
+_BASELINE += _ADDITIONS_2026_08_17_BOSS
+
+# 2026-08-17 账号真相闭环 P1/P2：软删账号恢复（removed→offline 可重登，与 remove
+# 同权限；此前误删只能改库）+ 按账号批量清未读（历史/已退出号存量未读清账，
+# 与逐会话 mark-read 同一 last_read_ts 水位机制，永不回弹）。
+_ADDITIONS_2026_08_17_ACCT_TRUTH = """
+/api/accounts/{platform}/{account_id}/restore	POST
+/api/unified-inbox/mark-account-read	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_17_ACCT_TRUTH
+
+# 2026-08-17 历史账号治理 P0：彻底删除历史账号（store 级会话数据全清 +
+# 注册表残行硬删；仅 offline/removed/history_only 可删，活跃号/config 常驻号/
+# 内置合成号 409）。抽屉「历史 / 已退出账号」分区 ⋯ 菜单消费；与 /remove
+# （软删在册号）语义互补——remove+purge 之后留下的「已移除 · 0 会话」死行
+# 由本路由收尾。
+_ADDITIONS_2026_08_17_ACCT_PURGE = """
+/api/accounts/{platform}/{account_id}/purge-history	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_17_ACCT_PURGE
+
+# 2026-08-17 历史账号治理 P1：删除前体量预估（GET 同路径零副作用——会话/消息数
+# + purgeable 判定，与 POST 共用 _purge_history_blocked 单点）+ JSONL 导出
+# （资产保全「先备份再删」；任意账号可导=备份语义，manager 权限 + account_export 审计）。
+_ADDITIONS_2026_08_17_ACCT_PURGE_P1 = """
+/api/accounts/{platform}/{account_id}/purge-history	GET
+/api/accounts/{platform}/{account_id}/export-history	GET
+"""
+_BASELINE += _ADDITIONS_2026_08_17_ACCT_PURGE_P1
+
+# 2026-08-17 表情包（贴纸）主线（sticker_routes）：包/条目管理 + 收藏入站贴纸 +
+# 官方包播种 + 跨平台发送（TG/WA 原生贴纸、LINE 官方商店贴纸原生、其余图片回退，
+# 响应带 sent_as）。feature flag inbox.stickers.enabled 默认关。
+_ADDITIONS_2026_08_17_STICKERS = """
+/api/stickers/status	GET
+/api/stickers/packs	GET
+/api/stickers/packs	POST
+/api/stickers/packs/{pack_id}	PATCH
+/api/stickers/packs/{pack_id}	DELETE
+/api/stickers/packs/{pack_id}/items	GET
+/api/stickers/packs/{pack_id}/items	POST
+/api/stickers/packs/{pack_id}/items/{sid}	DELETE
+/api/stickers/collect	POST
+/api/stickers/seed-official	POST
+/api/unified-inbox/send-sticker	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_17_STICKERS
 
 
 def _parse_baseline():

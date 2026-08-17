@@ -163,11 +163,32 @@ def fleet_overview(
         sigs.append(sig)
         stage = lifecycle_stage(sig, status, warmup_ramp_days=ramp)
         lifecycle[stage] = lifecycle.get(stage, 0) + 1
+        # P2 2026-08-13 额度双道随行（闸门启用时）：used/cap/auto_cap/reserve
+        # 与发送护栏同一 evaluate——机群卡显示的数就是闸门比较的数。None=闸门未启用。
+        quota = None
+        try:
+            from src.skills.companion_send_gate import evaluate, gate_enabled
+            if gate_enabled(config):
+                _dm = evaluate(sig, config, origin="manual")
+                _da = evaluate(sig, config, origin="auto")
+                quota = {
+                    "used": int(sig.get("sends_today") or 0),
+                    "cap": int(_dm.get("recommended_cap") or 0),
+                    "auto_cap": int(_da.get("auto_cap") or 0),
+                    "reserve": int(_dm.get("reserve_for_manual") or 0),
+                    # daily_cap=现名 / warmup_cap=历史值，双认（P3 更名兼容）
+                    "auto_blocked": bool(
+                        not _da.get("allowed", True)
+                        and _da.get("reason") in ("daily_cap", "warmup_cap")),
+                }
+        except Exception:
+            quota = None
         detail.append({
             "platform": str(platform or "").lower(),
             "account_id": str(account_id or ""),
             "stage": stage,
             "profile_churn_7d": int(sig.get("profile_churn_7d") or 0),
+            "quota": quota,
         })
 
     fleet = aggregate_fleet(sigs, config)

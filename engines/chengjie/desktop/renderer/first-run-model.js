@@ -18,11 +18,11 @@ var FR_STRINGS = {
     lang_follow: "跟随系统",
     token_label: "后台访问令牌（默认 admin）",
     btn_next: "下一步",
-    btn_claim_start: "领取完整版",
+    btn_claim_start: "免费领 100 万字符",
     btn_enter: "进入工作台",
     celebrate_title: "可以开始了",
-    celebrate_sub_claimed: "7 天完整版已激活。额度随时可在顶栏徽章查看。",
-    celebrate_sub_skipped: "体验额度已就绪。随时可在「会员中心」领取完整版或加客服加量。",
+    celebrate_sub_claimed: "免费 100 万字符已激活。剩余额度随时可在顶栏徽章查看；用完可在「会员中心」邀请好友、联系客服或购买。",
+    celebrate_sub_skipped: "体验额度已就绪。随时可在「会员中心」领取免费 100 万字符或加客服加量。",
     celebrate_sub_gift: "绑定码已就绪——发给客服核销后 10 万字符自动到账。",
     step_welcome: "欢迎",
     step_claim: "领取",
@@ -52,28 +52,29 @@ var FR_STRINGS = {
     result_warn_sub: "AI Key 已保存但未验证通过。进入后可在后台「接入向导 → AI 大模型」重测。",
     already_configured: "已检测到 AI 配置，无需重复填写。",
     trial_title: "已为你开启体验额度",
-    trial_sub: "装完即可直接用，无需注册。额度与剩余时间随时可在顶栏徽章和「会员中心」查看。",
+    trial_sub: "装完即可直接用，无需注册。剩余额度随时可在顶栏徽章和「会员中心」查看。",
     trial_chars: "可用字符",
     trial_hours: "有效时长",
     trial_hours_unit: "小时",
     btn_start: "开始使用",
-    // ── 注册领 7 天（P2）──
-    claim_title: "留个联系方式，免费领 7 天完整版",
-    // 「2.5 万」而非「25000」：上方额度格用 frFormatChars 出的是「1 万」，
+    // ── 注册领免费额度（P2；2026-08-11 起 100 万字符 · 无期限）──
+    claim_title: "留个联系方式，免费领 100 万字符",
+    // 「100 万」而非「1000000」：上方额度格用 frFormatChars 出的是「10 万」，
     // 同一屏两种数字写法看着像两个人写的（视觉验收所见）。
-    claim_sub: "7 天不限渠道 · 2.5 万字符，绑定本机使用。填 Telegram 用户名或手机号即可，不用注册账号、不填邮箱。",
+    claim_sub: "100 万字符 · 不限渠道 · 无期限，绑定本机使用。填 Telegram 用户名或手机号即可，不用注册账号、不填邮箱。",
     claim_ph: "@你的Telegram用户名 或 手机号",
+    invite_ph: "邀请码（选填，好友给你的 ZL-XXXXXX，双方各得 10 万）",
     btn_claim: "免费领取",
     btn_skip_claim: "先不领，直接开始",
     claim_need_contact: "填一下联系方式，客服才能找到你",
     claim_sending: "正在提交…",
     claim_waiting: "已提交，正在签发…（通常 1 分钟内完成，好了自动生效，可先开始使用）",
     claim_slow: "已提交。签发通常 1 分钟内，好了会自动生效——你可以先开始使用，稍后在「会员中心」查看额度。",
-    claim_ok: "已激活：7 天完整版 · 25000 字符",
+    claim_ok: "已激活：免费 100 万字符已到账",
     claim_fail: "领取失败",
     claim_no_fp: "读不到本机标识，无法绑定授权。可先直接开始使用，稍后在「会员中心」重试。",
     claim_network: "连不上服务器。可先直接开始使用，稍后在「会员中心」重试。",
-    claim_exhausted: "这台机器的免费试用已经用过了。可在「会员中心」购买，或联系客服。",
+    claim_exhausted: "这台机器的免费额度已经领过了。可在「会员中心」邀请好友、联系客服或购买。",
     // ── 加客服领 10 万字符 ──
     gift_title: "再领 10 万字符",
     gift_sub: "把下面这串码发给客服，核销后额度自动到账——不用你再回来操作。",
@@ -94,11 +95,11 @@ var FR_STRINGS = {
     lang_follow: "System default",
     token_label: "Backend token (default admin)",
     btn_next: "Next",
-    btn_claim_start: "Claim full version",
+    btn_claim_start: "Claim 1,000,000 free characters",
     btn_enter: "Enter workspace",
     celebrate_title: "You're ready",
-    celebrate_sub_claimed: "Your 7-day full version is active. Check remaining quota anytime from the top-bar badge.",
-    celebrate_sub_skipped: "Your starter allowance is ready. Claim the full version or top up via support anytime from Membership.",
+    celebrate_sub_claimed: "Your 1,000,000 free characters are active. Check the remaining quota anytime from the top-bar badge; when it runs out, invite friends, ask support, or purchase from Membership.",
+    celebrate_sub_skipped: "Your starter allowance is ready. Claim 1,000,000 free characters or top up via support anytime from Membership.",
     celebrate_sub_gift: "Your bind code is ready — send it to support and 100,000 characters credit automatically.",
     step_welcome: "Welcome",
     step_claim: "Claim",
@@ -129,15 +130,16 @@ var FR_STRINGS = {
     already_configured: "An AI configuration was detected — nothing to fill in.",
     trial_title: "Your starter allowance is ready",
     trial_sub: "Works right after install — no signup needed. You can check the remaining "
-      + "quota and time any time from the top-bar badge or the membership center.",
+      + "quota any time from the top-bar badge or the membership center.",
     trial_chars: "Characters",
     trial_hours: "Valid for",
     trial_hours_unit: "hours",
     btn_start: "Start using",
-    claim_title: "Leave a contact, get 7 days free",
-    claim_sub: "7 days, all channels, 25,000 characters — bound to this machine. "
+    claim_title: "Leave a contact, claim 1,000,000 free characters",
+    claim_sub: "1,000,000 characters, all channels, no expiry — bound to this machine. "
       + "A Telegram handle or phone number is enough; no account, no email.",
     claim_ph: "@your_telegram or phone number",
+    invite_ph: "Invite code (optional, ZL-XXXXXX from a friend — you both get 100,000)",
     btn_claim: "Claim for free",
     btn_skip_claim: "Skip, just start",
     claim_need_contact: "Add a contact so support can reach you",
@@ -145,14 +147,14 @@ var FR_STRINGS = {
     claim_waiting: "Submitted, issuing… (usually within a minute, activates itself — you can start now)",
     claim_slow: "Submitted. Issuing usually finishes within a minute and activates itself — "
       + "start using the app now; check your quota later in Membership.",
-    claim_ok: "Activated: 7-day full version · 25,000 characters",
+    claim_ok: "Activated: 1,000,000 free characters credited",
     claim_fail: "Claim failed",
     claim_no_fp: "Can't read this machine's ID, so the licence can't be bound. "
       + "Start using the app for now and retry from the membership center.",
     claim_network: "Can't reach the server. Start using the app for now and retry "
       + "from the membership center.",
-    claim_exhausted: "This machine has already used its free trial. You can purchase "
-      + "from the membership center or contact support.",
+    claim_exhausted: "This machine has already claimed its free quota. Invite friends, "
+      + "contact support, or purchase from the membership center.",
     gift_title: "Get 100,000 more characters",
     gift_sub: "Send the code below to support. Once they redeem it the quota lands "
       + "automatically — you don't have to come back.",
@@ -355,7 +357,9 @@ function frResultView(saveView, lang) {
 
 // 首启漏斗事件白名单（与后端 trial_claim_client.FUNNEL_EVENTS 同口径）。
 // 单列成表：first-run.js 只从这里取名，拼错事件名在单测就会红，而不是数据悄悄丢。
-var FR_FUNNEL_EVENTS = ["welcome", "claim_submit", "claim_ok", "claim_skip", "gift_open", "done"];
+// invite_share 属会员页邀请卡（web 侧），列在此处只为与后端白名单保持同一张表。
+var FR_FUNNEL_EVENTS = ["welcome", "claim_submit", "claim_ok", "claim_skip", "gift_open",
+  "done", "invite_share"];
 
 // 是否弹向导。默认「只弹一次」。权威完成态有两处：
 //   ① localStorage 旗标（快路径，同步可读）

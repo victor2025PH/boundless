@@ -73,6 +73,11 @@ def _cmd_issue(args: argparse.Namespace) -> int:
         payload["included_chars"] = int(args.chars)
     if args.trial:
         payload["trial"] = True
+    # WP-8 换机重签：绑定机器指纹（省略 = 不绑机；`*` = 站点授权不限机器）。
+    # 客户在新机跑 `python -m platform.licensing.machine_id`（或桌面端会员中心
+    # 显示的机器码）把指纹发来，厂商用同 lic_id + 新指纹重签即完成换绑。
+    if getattr(args, "machine", ""):
+        payload["machine"] = args.machine.strip()
     token = issue_license(payload, priv_hex)
     if args.out:
         Path(args.out).write_text(token, encoding="utf-8")
@@ -145,6 +150,8 @@ def main() -> int:
     i.add_argument("--chars", default="0",
                    help="含翻译/TTS 字符额度（0=不限；试用授权配合 --trial 用）")
     i.add_argument("--trial", action="store_true", help="标记为试用授权")
+    i.add_argument("--machine", default="",
+                   help="绑定机器指纹（换机重签用；省略=不绑机，*=站点授权）")
     i.add_argument("--out", default="", help="授权码输出路径（默认打印）")
     i.set_defaults(func=_cmd_issue)
 

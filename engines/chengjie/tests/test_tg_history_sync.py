@@ -285,3 +285,100 @@ def test_tg_history_sync_state_helpers():
     r._tg_hist_update(aid, state="done")
     assert r._tg_hist_try_start(aid) is True        # 完成后可再次启动
     r._TG_HIST_SYNC.pop(aid, None)
+
+
+# ── 「会话已死」错误分类（2026-08-13：198 坐席机主号被「终止所有会话」实锤） ──
+# 吊销后同步只报笼统的「同步聊天记录失败」，坐席连点 4 次无从知道该去重新登录。
+# tg_error_kind 把这类 401 归 session_revoked，三条同步链（账号级/深度回填/全量）
+# 落 state=error 时统一携带，前端据此给「请重新登录」的可行动提示。
+
+
+def test_tg_error_kind_session_dead_variants():
+    revoked = ('Telegram says: [401 SESSION_REVOKED] - The authorization has '
+               'been invalidated, because of the user terminating all sessions '
+               '(caused by "messages.GetDialogs")')
+    assert pb.tg_error_kind(revoked) == "session_revoked"
+    assert pb.tg_error_kind("[401 AUTH_KEY_UNREGISTERED]") == "session_revoked"
+    assert pb.tg_error_kind("[401 SESSION_EXPIRED]") == "session_revoked"
+    assert pb.tg_error_kind("[406 AUTH_KEY_DUPLICATED]") == "session_revoked"
+    assert pb.tg_error_kind(
+        "The key is not registered in the system") == "session_revoked"
+    # 生产调用形态是直接传异常对象（tg_error_kind(exc)）
+    assert pb.tg_error_kind(RuntimeError("SESSION_REVOKED")) == "session_revoked"
+
+
+def test_tg_error_kind_not_misfired():
+    assert pb.tg_error_kind("") == ""
+    assert pb.tg_error_kind(None) == ""
+    assert pb.tg_error_kind("FloodWait of 30 seconds") == ""
+    assert pb.tg_error_kind("Connection reset by peer") == ""
+    # 对方账号注销（INPUT_USER_DEACTIVATED）≠ 本账号会话死——重新登录救不了，
+    # 误提示比不提示更糟（分类器刻意不收 USER_DEACTIVATED 族）
+    assert pb.tg_error_kind("[400 INPUT_USER_DEACTIVATED]") == ""
+
+
+def test_tg_history_sync_error_kind_reset_on_restart():
+    """再次启动必须清掉上一轮的 error/error_kind（防陈旧 kind 污染新一轮快照）。"""
+    from src.web.routes import unified_inbox_account_routes as r
+    aid = "state_test_error_kind"
+    r._TG_HIST_SYNC.pop(aid, None)
+    assert r._tg_hist_try_start(aid) is True
+    r._tg_hist_update(aid, state="error", error="[401 SESSION_REVOKED] x",
+                      error_kind="session_revoked", finished_at=1.0)
+    assert r.tg_history_sync_snapshot(aid)["error_kind"] == "session_revoked"
+    assert r._tg_hist_try_start(aid) is True
+    snap = r.tg_history_sync_snapshot(aid)
+    assert snap["error"] == "" and snap["error_kind"] == ""
+    r._TG_HIST_SYNC.pop(aid, None)
+
+
+def test_start_tg_history_sync_marks_session_revoked():
+    """吊销全链路：get_dialogs 抛 401 SESSION_REVOKED → 后台 _run 落
+    state=error + error_kind=session_revoked（前端轮询据此提示重新登录）。"""
+    import asyncio
+    import threading
+    import time as _time
+    from src.web.routes import unified_inbox_account_routes as r
+
+    loop = asyncio.new_event_loop()
+    t = threading.Thread(target=loop.run_forever, daemon=True)
+    t.start()
+
+    class _RevokedPyro:
+        """鸭子类型对齐 _extract_pyro 判据（.loop + .get_chat）。"""
+
+        def __init__(self, lp):
+            self.loop = lp
+
+        async def get_chat(self, *a, **k):
+            raise AssertionError("not used")
+
+        async def get_dialogs(self, limit=100):
+            raise RuntimeError(
+                "Telegram says: [401 SESSION_REVOKED] - The authorization has "
+                "been invalidated, because of the user terminating all sessions")
+            yield  # noqa: E501  # 不可达——只为让本方法成为 async generator（对齐 pyrogram 形态）
+
+    aid = "revoked_e2e_acct"
+    r._TG_HIST_SYNC.pop(aid, None)
+    app = types.SimpleNamespace(state=types.SimpleNamespace(
+        telegram_client=_RevokedPyro(loop)))
+    try:
+        res = r.start_tg_history_sync(
+            app, object(), aid, dialogs_limit=5, per_chat=5)
+        assert res.get("started") is True
+        snap: dict = {}
+        deadline = _time.time() + 5
+        while _time.time() < deadline:
+            snap = r.tg_history_sync_snapshot(aid)
+            if snap.get("state") == "error":
+                break
+            _time.sleep(0.05)
+        assert snap.get("state") == "error"
+        assert snap.get("error_kind") == "session_revoked"
+        assert "SESSION_REVOKED" in str(snap.get("error") or "")
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        t.join(timeout=3)
+        loop.close()
+        r._TG_HIST_SYNC.pop(aid, None)

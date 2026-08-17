@@ -674,7 +674,7 @@ if (typeof document !== "undefined" && document.addEventListener) {
             wvs.forEach((wv) => { try { wv.reload(); n++; } catch (e) { /* 忽略单个失败 */ } });
             if (toolsMsg) {
               toolsMsg.textContent = n ? "已重载 " + n + " 个内嵌页（注入将重拉选择器）"
-                : "无内嵌官方页（当前为统一收件箱模式）";
+                : "无内嵌官方页（当前为人工操作台模式）";
               toolsMsg.style.color = "#7f8c8d";
             }
           });

@@ -7,6 +7,15 @@
   GET  /users   POST /users/create  POST /users/update/{user_id}  POST /users/delete/{user_id}
   GET  /api/sessions   POST /api/sessions/{jti}/revoke   POST /api/sessions/revoke-all
 
+团队角色分层 + 坐席字符额度（2026-08-16 增）：
+  POST /users/quota/{user_id}       —— 设置坐席月度字符额度（master/admin，层级守卫）
+  GET  /api/users/char-usage        —— 团队字符用量总览（master/admin/supervisor）
+  GET  /api/workspace/my-usage      —— 当前登录坐席「我的用量」（任意登录角色）
+
+L3 按人权限覆写（2026-08-16 第二批增）：
+  GET  /api/users/{user_id}/perms   —— 读取目标用户能力权限三态（同层级守卫）
+  POST /users/perms/{user_id}       —— 写入覆写 {allow:[],deny:[]}（同层级守卫 + 审计）
+
 依赖通过 register 传入（闭包 + 单例）；模块级常量（templates / ROLE_*）直接 import，
 减少参数穿线。
 """
@@ -14,11 +23,28 @@
 from __future__ import annotations
 
 import hmac
+import time
 
 from fastapi import Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from src.utils.web_user_store import ROLE_ADMIN, ROLE_AGENT, ROLE_MASTER, ROLE_LABELS
+from src.utils.agent_char_usage import (
+    agent_chars_enabled,
+    agent_quota_status,
+    ensure_store_for_read,
+)
+from src.utils.web_user_store import (
+    PERM_REGISTRY,
+    ROLE_ADMIN,
+    ROLE_AGENT,
+    ROLE_LABELS,
+    ROLE_MASTER,
+    ROLE_SUPERVISOR,
+    assignable_roles,
+    can_manage_target,
+    default_perm_allowed,
+    parse_perms,
+)
 from src.web.login_redirect import resolve_post_login_dest, safe_next_path
 from src.web.web_i18n import tr
 
@@ -42,6 +68,15 @@ def register_auth_user_routes(
         # 运维令牌直登仍走 `/`（见 token 分支），肌肉记忆与应急排查不改。
         if role == ROLE_AGENT:
             return "/workspace"
+        # WP-2 首启向导直达：onboarding.enabled 且未完成 → 非坐席首登落 /welcome
+        # （显式 ?next= 深链仍最优先——resolve_post_login_dest 只在无 next 时用本默认；
+        #  flag 关 / 已完成 / 任何异常 → welcome_pending 恒 False，登录流程零变化）。
+        try:
+            from src.utils.onboarding_state import welcome_pending
+            if welcome_pending(getattr(config_manager, "config", None) or {}):
+                return "/welcome"
+        except Exception:
+            pass
         if role in (ROLE_ADMIN, ROLE_MASTER):
             return "/workspace/dash"
         return "/"
@@ -53,6 +88,33 @@ def register_auth_user_routes(
             "has_users": user_store.user_count() > 0,
             "next": nxt,
         }
+
+    # ── 角色分层守卫（谁能管谁 / 谁能发什么角色，判定在 web_user_store 单点）──
+    def _actor_role(request: Request) -> str:
+        return str(request.session.get("role", "") or "")
+
+    def _guard_target(request: Request, target_role: str) -> None:
+        """操作者层级不足以管理目标账号 → 403（角色变更/禁用/删除/设额度共用）。"""
+        if not can_manage_target(_actor_role(request), str(target_role or "")):
+            raise HTTPException(403, tr(request, "err.team.cannot_manage"))
+
+    def _users_page_ctx(request: Request, *, msg: str = "", msg_ok: bool = True) -> dict:
+        actor = _actor_role(request)
+        return {
+            "users": user_store.list_users(),
+            "role_labels": ROLE_LABELS,
+            "msg": msg,
+            "msg_ok": msg_ok,
+            "actor_role": actor,
+            "assignable_roles_ctx": [
+                (r, ROLE_LABELS.get(r, r)) for r in assignable_roles(actor)
+            ],
+        }
+
+    def _runtime_config():
+        """闭包 config_manager 的实时配置（防 None / 非 dict）。"""
+        cfg = getattr(config_manager, "config", None)
+        return cfg if isinstance(cfg, dict) else None
 
     # ── 登录 / 登出 ───────────────────────────────────────────
     @app.get("/login", response_class=HTMLResponse)
@@ -237,34 +299,29 @@ def register_auth_user_routes(
     @app.get("/users", response_class=HTMLResponse)
     async def users_page(request: Request):
         require_role(request, "users")
-        users = user_store.list_users()
-        return templates.TemplateResponse(request, "users.html", {
-            "users": users, "role_labels": ROLE_LABELS, "msg": ""
-        })
+        return templates.TemplateResponse(
+            request, "users.html", _users_page_ctx(request))
 
     @app.post("/users/create")
     async def users_create(request: Request, username: str = Form(...),
-                           password: str = Form(...), role: str = Form("viewer"),
+                           password: str = Form(...), role: str = Form("agent"),
                            display_name: str = Form("")):
         require_role(request, "users")
+        # 分层：只能发自己层级以下的角色（master 也不得再造 master）
+        if role not in assignable_roles(_actor_role(request)):
+            raise HTTPException(403, tr(request, "err.team.role_not_allowed"))
         ajax = "application/json" in request.headers.get("accept", "")
         if len(password) < 6:
             if ajax:
                 return {"ok": False, "detail": tr(request, "su_js_003")}
-            users = user_store.list_users()
-            return templates.TemplateResponse(request, "users.html", {
-                "users": users, "role_labels": ROLE_LABELS,
-                "msg": "密码至少 6 位", "msg_ok": False
-            })
+            return templates.TemplateResponse(request, "users.html", _users_page_ctx(
+                request, msg="密码至少 6 位", msg_ok=False))
         result = user_store.create_user(username, password, role, display_name)
         if not result:
             if ajax:
                 return {"ok": False, "detail": tr(request, "err.auth.user_exists_or_bad_role", username=username)}
-            users = user_store.list_users()
-            return templates.TemplateResponse(request, "users.html", {
-                "users": users, "role_labels": ROLE_LABELS,
-                "msg": f"创建失败：用户名 '{username}' 已存在或角色无效", "msg_ok": False
-            })
+            return templates.TemplateResponse(request, "users.html", _users_page_ctx(
+                request, msg=f"创建失败：用户名 '{username}' 已存在或角色无效", msg_ok=False))
         if audit_store:
             audit_store.log(request.session.get("username", ""), "create_user", username)
         if ajax:
@@ -273,15 +330,30 @@ def register_auth_user_routes(
 
     @app.post("/users/update/{user_id}")
     async def users_update(user_id: int, request: Request, role: str = Form(None),
-                           password: str = Form(None), enabled: str = Form(None)):
+                           password: str = Form(None), enabled: str = Form(None),
+                           monthly_char_quota: int = Form(None),
+                           quota_alert_pct: int = Form(None)):
         require_role(request, "users")
+        target = user_store.get_user_by_id(user_id)
+        if not target:
+            raise HTTPException(404, tr(request, "err.team.user_not_found"))
+        if str(target.get("role") or "") == ROLE_MASTER:
+            # master 行受保护：任何人（含 master 自己）不得经此端点改动
+            raise HTTPException(403, tr(request, "err.team.master_protected"))
+        _guard_target(request, str(target.get("role") or ""))
         kw = {}
         if role:
+            if role not in assignable_roles(_actor_role(request)):
+                raise HTTPException(403, tr(request, "err.team.role_not_allowed"))
             kw["role"] = role
         if password:
             kw["password"] = password
         if enabled is not None:
             kw["enabled"] = enabled == "1"
+        if monthly_char_quota is not None:
+            kw["monthly_char_quota"] = monthly_char_quota
+        if quota_alert_pct is not None:
+            kw["quota_alert_pct"] = quota_alert_pct
         user_store.update_user(user_id, **kw)
         if audit_store:
             audit_store.log(request.session.get("username", ""), "update_user", str(user_id))
@@ -297,12 +369,109 @@ def register_auth_user_routes(
     @app.post("/users/delete/{user_id}")
     async def users_delete(user_id: int, request: Request):
         require_role(request, "users")
+        target = user_store.get_user_by_id(user_id)
+        if not target:
+            raise HTTPException(404, tr(request, "err.team.user_not_found"))
+        _guard_target(request, str(target.get("role") or ""))
         ok = user_store.delete_user(user_id)
         if audit_store and ok:
             audit_store.log(request.session.get("username", ""), "delete_user", str(user_id))
         if "application/json" in request.headers.get("accept", ""):
             return {"ok": ok, "detail": "" if ok else "无法删除（主帐号不可删除）"}
         return RedirectResponse("/users", status_code=303)
+
+    # ── 坐席月度字符额度（0 = 不限；层级守卫与角色变更同一判定）─────────
+    @app.post("/users/quota/{user_id}")
+    async def users_set_quota(user_id: int, request: Request,
+                              monthly_quota: int = Form(...),
+                              alert_pct: int = Form(None)):
+        require_role(request, "users")
+        target = user_store.get_user_by_id(user_id)
+        if not target:
+            raise HTTPException(404, tr(request, "err.team.user_not_found"))
+        _guard_target(request, str(target.get("role") or ""))
+        kw = {"monthly_char_quota": max(0, int(monthly_quota or 0))}
+        if alert_pct is not None:
+            kw["quota_alert_pct"] = alert_pct
+        user_store.update_user(user_id, **kw)
+        updated = user_store.get_user_by_id(user_id) or {}
+        if audit_store:
+            audit_store.log(
+                request.session.get("username", ""), "set_quota",
+                f"{target.get('username')}={kw['monthly_char_quota']}")
+        return {
+            "ok": True,
+            "quota": int(updated.get("monthly_char_quota") or 0),
+            "alert_pct": int(updated.get("quota_alert_pct") or 80),
+        }
+
+    # ── L3 按人权限覆写（读/写同一层级守卫；判定单点在 web_user_store）─────
+    def _perm_rows(role: str, perms_json) -> list:
+        """把目标用户的覆写状态展开成编辑器行（顺序=PERM_REGISTRY 定义序）。
+
+        契约（users.html perm-modal 消费，勿改字段名）：
+        [{key, domain, default: bool（角色默认允不允许）, state: inherit|allow|deny}]
+        """
+        overrides = parse_perms(perms_json)
+        rows = []
+        for key, meta in PERM_REGISTRY.items():
+            if key in overrides["deny"]:
+                state = "deny"
+            elif key in overrides["allow"]:
+                state = "allow"
+            else:
+                state = "inherit"
+            rows.append({
+                "key": key,
+                "domain": str(meta.get("domain") or ""),
+                "default": default_perm_allowed(role, key),
+                "state": state,
+            })
+        return rows
+
+    @app.get("/api/users/{user_id}/perms")
+    async def api_user_perms(user_id: int, request: Request):
+        """读取目标用户能力权限三态（master/admin，层级守卫与角色变更同一判定）。"""
+        require_role(request, "users")
+        target = user_store.get_user_by_id(user_id)
+        if not target:
+            raise HTTPException(404, tr(request, "err.team.user_not_found"))
+        _guard_target(request, str(target.get("role") or ""))
+        role = str(target.get("role") or "")
+        return {"ok": True, "role": role,
+                "perms": _perm_rows(role, target.get("perms_json"))}
+
+    @app.post("/users/perms/{user_id}")
+    async def users_set_perms(user_id: int, request: Request):
+        """写入 L3 覆写（JSON {"allow": [], "deny": []}；双空=清除回纯继承）。"""
+        require_role(request, "users")
+        target = user_store.get_user_by_id(user_id)
+        if not target:
+            raise HTTPException(404, tr(request, "err.team.user_not_found"))
+        _guard_target(request, str(target.get("role") or ""))
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        if not isinstance(body, dict):
+            raise HTTPException(400, tr(request, "err.team.bad_perms"))
+        allow = body.get("allow") if body.get("allow") is not None else []
+        deny = body.get("deny") if body.get("deny") is not None else []
+        if not isinstance(allow, list) or not isinstance(deny, list):
+            raise HTTPException(400, tr(request, "err.team.bad_perms"))
+        if not user_store.set_user_perms(user_id, allow, deny):
+            # 未注册键 / allow∩deny 冲突 / 行不存在——store 整单拒绝零写入
+            raise HTTPException(400, tr(request, "err.team.bad_perms"))
+        updated = user_store.get_user_by_id(user_id) or {}
+        overrides = parse_perms(updated.get("perms_json"))
+        if audit_store:
+            audit_store.log(
+                request.session.get("username", ""), "set_perms",
+                f"{target.get('username')} allow={sorted(overrides['allow'])} "
+                f"deny={sorted(overrides['deny'])}")
+        return {"ok": True,
+                "perms": _perm_rows(str(updated.get("role") or ""),
+                                    updated.get("perms_json"))}
 
     # ── 会话管理 API ─────────────────────────────────────────
     @app.get("/api/sessions")
@@ -324,6 +493,12 @@ def register_auth_user_routes(
         current_jti = request.session.get("jti", "")
         if jti == current_jti:
             raise HTTPException(400, tr(request, "err.auth.cannot_kick_self"))
+        if _actor_role(request) != ROLE_MASTER:
+            # admin 不得踢 master/admin 的会话（与 can_manage_target 同层级语义）
+            target = next(
+                (s for s in user_store.list_sessions() if s.get("jti") == jti), None)
+            if target and str(target.get("role") or "") in (ROLE_MASTER, ROLE_ADMIN):
+                raise HTTPException(403, tr(request, "err.team.cannot_manage"))
         user_store.revoke_session(jti)
         actor = request.session.get("username", "")
         if audit_store:
@@ -335,13 +510,175 @@ def register_auth_user_routes(
         """撤销除自己外的所有 session"""
         require_role(request, "users")
         current_jti = request.session.get("jti", "")
+        actor_is_master = _actor_role(request) == ROLE_MASTER
         sessions = user_store.list_sessions()
         revoked = 0
         for s in sessions:
-            if s["jti"] != current_jti:
-                user_store.revoke_session(s["jti"])
-                revoked += 1
+            if s["jti"] == current_jti:
+                continue
+            if not actor_is_master and str(s.get("role") or "") in (ROLE_MASTER, ROLE_ADMIN):
+                continue  # admin 批量踢时静默跳过 master/admin 会话，只计真正踢掉的
+            user_store.revoke_session(s["jti"])
+            revoked += 1
         actor = request.session.get("username", "")
         if audit_store and revoked:
             audit_store.log(actor, "revoke_all_sessions", f"revoked={revoked}")
         return {"ok": True, "revoked": revoked}
+
+    # ── 团队字符用量（用户管理页统计条 + 每卡用量行的唯一数据源）─────────
+    _USAGE_VIEW_ROLES = {ROLE_MASTER, ROLE_ADMIN, ROLE_SUPERVISOR}
+
+    @app.get("/api/users/char-usage")
+    async def api_users_char_usage(request: Request):
+        """团队字符用量总览（master/admin/supervisor）。
+
+        契约（并行 agent 消费，勿改字段名）：
+        {ok, enabled, month, license{available,included,used,remaining,topup_chars,
+        enforce,source}, totals{month_total,today_total,by_category},
+        agents[{id,username,display_name,role,enabled,quota,alert_pct,used_month,
+        used_today,by_category,status,has_overrides}]}，agents 按 used_month 降序、
+        含零用量用户。
+
+        第二批扩展（workspace_usage.html 消费，字段名钉死勿改）：
+        - enforce: bool —— usage.agent_chars.enforce（缺省 False；enabled 关时也
+          如实回显配置值，是否联动由消费方决定）；
+        - license_month: {available, total, by_category} —— 授权池**当月**口径
+          （区别于 license.used 的历史累计）；quota store 未建 → available=False 全零；
+        - daily: 坐席账本近 7 天逐日序列（store.daily_series(7)；store 缺 → []）。
+        """
+        # 角色闸先于 require_auth：agent/viewer 拿明确 403 而非被页面闸 303 回工作台
+        role = _actor_role(request)
+        if role and role not in _USAGE_VIEW_ROLES:
+            raise HTTPException(403, tr(request, "err.perm.supervisor_required"))
+        require_auth(request)
+        cfg = _runtime_config()
+        store = ensure_store_for_read(cfg)
+        month_map = store.month_totals() if store is not None else {}
+        day_map = store.day_totals() if store is not None else {}
+        try:
+            from src.licensing.quota_store import check_license_quota
+            q = check_license_quota()
+            lic_id = str(q.get("lic_id") or "default")
+            license_info = {
+                "available": True,
+                "included": int(q.get("included") or 0),
+                "used": int(q.get("used") or 0),
+                "remaining": (int(q["remaining"]) if q.get("remaining") is not None else None),
+                "topup_chars": int(q.get("topup_chars") or 0),
+                "enforce": bool(q.get("enforce")),
+                "source": str(q.get("source") or ""),
+            }
+        except Exception:
+            lic_id = ""
+            license_info = {
+                "available": False, "included": 0, "used": 0, "remaining": None,
+                "topup_chars": 0, "enforce": False, "source": "",
+            }
+        # 授权池「当月」口径（license.used 是历史累计，月报表要的是本月增量）。
+        # 诚实局限：LicenseQuotaStore 只有 usage()（历史累计+today）与
+        # usage_history(months)（按月合计、无分桶）——当月总数取 usage_history(1)
+        # 尾项（month==当月才算，否则 0）；**当月分桶拿不到**（usage().by_category
+        # 是历史累计口径，混进来会虚高），by_category 恒空 dict，消费方只用 total。
+        license_month = {"available": False, "total": 0, "by_category": {}}
+        if lic_id:
+            try:
+                from src.licensing.quota_store import get_license_quota_store
+                lic_store = get_license_quota_store()
+                if lic_store is not None:
+                    hist = lic_store.usage_history(lic_id, 1)
+                    cur_month = time.strftime("%Y-%m", time.gmtime())
+                    n = 0
+                    if hist and str(hist[-1].get("month") or "") == cur_month:
+                        n = int(hist[-1].get("chars") or 0)
+                    license_month = {"available": True, "total": n, "by_category": {}}
+            except Exception:
+                license_month = {"available": False, "total": 0, "by_category": {}}
+        month_total = 0
+        today_total = 0
+        by_category: dict = {}
+        for slot in month_map.values():
+            month_total += int(slot.get("total") or 0)
+            for cat, n in (slot.get("by_category") or {}).items():
+                by_category[cat] = by_category.get(cat, 0) + int(n or 0)
+        for n in day_map.values():
+            today_total += int(n or 0)
+        agents = []
+        for u in user_store.list_users():
+            uname = str(u.get("username") or "")
+            slot = month_map.get(uname) or {}
+            used_month = int(slot.get("total") or 0)
+            quota = int(u.get("monthly_char_quota") or 0)
+            agents.append({
+                "id": u.get("id"),
+                "username": uname,
+                "display_name": u.get("display_name") or uname,
+                "role": u.get("role"),
+                "enabled": bool(u.get("enabled")),
+                "quota": quota,
+                "alert_pct": int(u.get("quota_alert_pct") or 80),
+                "used_month": used_month,
+                "used_today": int(day_map.get(uname) or 0),
+                "by_category": dict(slot.get("by_category") or {}),
+                "status": agent_quota_status(used_month, quota),
+                # L3 覆写在身（users.html「已覆写」徽章 / 用量页标记共用）
+                "has_overrides": bool(u.get("perms_json")),
+            })
+        agents.sort(key=lambda a: -a["used_month"])
+        # usage.agent_chars.enforce（缺省 False）：额度「超了拦不拦」的部署级开关，
+        # 执法在 translate/voice/send 路由（另一条线），此处只如实回显供面板判色。
+        _usage_cfg = (cfg or {}).get("usage") if isinstance(cfg, dict) else None
+        _ac_cfg = (_usage_cfg or {}).get("agent_chars") if isinstance(_usage_cfg, dict) else None
+        enforce = bool(_ac_cfg.get("enforce", False)) if isinstance(_ac_cfg, dict) else False
+        return {
+            "ok": True,
+            "enabled": agent_chars_enabled(cfg),
+            "enforce": enforce,
+            "month": time.strftime("%Y-%m", time.gmtime()),
+            "license": license_info,
+            "license_month": license_month,
+            "totals": {
+                "month_total": month_total,
+                "today_total": today_total,
+                "by_category": by_category,
+            },
+            "daily": (store.daily_series(7) if store is not None else []),
+            "agents": agents,
+        }
+
+    @app.get("/api/workspace/my-usage")
+    async def api_workspace_my_usage(request: Request):
+        """当前登录坐席「我的用量」（任意登录角色；坐席 API 白名单含本前缀）。
+
+        契约（并行 agent 消费，勿改字段名）：{ok, enabled, username, quota,
+        alert_pct, month_total, today_total, by_category, status, month}。
+        """
+        # 走 API choke point（_api_auth）：agent 白名单放行 /api/workspace 前缀；
+        # 页面闸 require_auth 会把 agent 303 回 /workspace，不适用于 JSON API。
+        _api_auth = getattr(request.app.state, "api_auth", None)
+        if callable(_api_auth):
+            _api_auth(request)
+        else:  # 极端回落（测试 stub app 无 choke point）
+            require_auth(request)
+        username = str(request.session.get("username") or "")
+        cfg = _runtime_config()
+        store = ensure_store_for_read(cfg)
+        usage = {"month_total": 0, "today_total": 0, "by_category": {}}
+        if store is not None and username:
+            usage = store.usage_for(username)
+        user = user_store.get_user(username) if username else None
+        # 令牌直登（admin 不在 web_users 表）→ quota=0 不限
+        quota = int((user or {}).get("monthly_char_quota") or 0)
+        alert_pct = int((user or {}).get("quota_alert_pct") or 80)
+        month_total = int(usage.get("month_total") or 0)
+        return {
+            "ok": True,
+            "enabled": agent_chars_enabled(cfg),
+            "username": username,
+            "quota": quota,
+            "alert_pct": alert_pct,
+            "month_total": month_total,
+            "today_total": int(usage.get("today_total") or 0),
+            "by_category": dict(usage.get("by_category") or {}),
+            "status": agent_quota_status(month_total, quota),
+            "month": time.strftime("%Y-%m", time.gmtime()),
+        }

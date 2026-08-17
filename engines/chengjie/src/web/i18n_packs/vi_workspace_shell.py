@@ -6,8 +6,8 @@
 """
 
 VI = {
-    # ── 语言切换 ──
-    "lang_toggle": "中文",
+    # ── 语言切换（xlate P3：wsToggleLang 升级五语选择器，标签改中性「语言」）──
+    "lang_toggle": "Ngôn ngữ",
     "lang_switch_label": "Chuyển ngôn ngữ",
     # ── 侧栏导航 (nav.py) ──
     "section_workbench": "Bàn làm việc",
@@ -31,6 +31,7 @@ VI = {
     "base.pill.sla_urgent": "Khẩn cấp",
     "base.pill.sla_normal": "Cần xử lý",
     "base.pill.l4": "Xác nhận trước gửi",
+    "base.login.pill": "Đăng nhập",
     "base.um.status": "Trạng thái của tôi",
     "base.presence.online": "🟢 Trực tuyến",
     "base.presence.busy": "🟡 Bận",

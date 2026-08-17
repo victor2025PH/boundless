@@ -445,6 +445,31 @@ def get_last_provider() -> str:
         return _last_provider
 
 
+def _record_rewrite_cost(ep: Dict[str, Any], usage: Dict[str, Any],
+                         t0: float, *, openai_shape: bool) -> None:
+    """口语化改写记入 llm_cost（tier=``colloquial``），best-effort 绝不抛。
+
+    2026-08-13 内测读数盲区补全：这条链 httpx 直连不经 ai_client，出话分布
+    看板此前完全看不见它——「vLLM 收到 N 次请求 vs 看板只记 1 次」的主要缺口。
+    """
+    try:
+        from src.ai.llm_cost import get_llm_cost
+        if openai_shape:
+            pt = int((usage or {}).get("prompt_tokens") or 0)
+            ct = int((usage or {}).get("completion_tokens") or 0)
+        else:  # Ollama 原生 /api/chat 顶层字段
+            pt = int((usage or {}).get("prompt_eval_count") or 0)
+            ct = int((usage or {}).get("eval_count") or 0)
+        get_llm_cost().record(
+            model=str(ep.get("model") or "colloquial"),
+            prompt_tokens=pt, completion_tokens=ct,
+            tier="colloquial",
+            latency_ms=int((time.monotonic() - t0) * 1000),
+        )
+    except Exception:
+        pass
+
+
 async def _rewrite_via_endpoint(
     ep: Dict[str, Any], system: str, user: str, *,
     temperature: float, max_tokens: int = 240,
@@ -460,11 +485,15 @@ async def _rewrite_via_endpoint(
     ]
     base = ep["base_url"]
     to = httpx.Timeout(ep["timeout_sec"], connect=3.0)
+    t0 = time.monotonic()
     if base.endswith("/v1"):
         headers = {"Authorization": f"Bearer {ep['api_key']}"}
         payload: Dict[str, Any] = {
             "model": ep["model"], "messages": messages,
             "temperature": temperature, "max_tokens": max_tokens,
+            # vLLM(Qwen3 系)直答档：改写链打 173:8001(chatx=Qwen3.6-27B) 时思考档会吃满
+            # timeout_sec 预算；enable_thinking=False 保 0.3-0.9s 快改写。Ollama /v1 忽略。
+            "chat_template_kwargs": {"enable_thinking": False},
         }
         async with httpx.AsyncClient(timeout=to) as hc:
             resp = await hc.post(
@@ -472,7 +501,10 @@ async def _rewrite_via_endpoint(
             resp.raise_for_status()
             data = resp.json()
         msg = ((data.get("choices") or [{}])[0].get("message") or {})
-        return (msg.get("content") or "").strip() or None
+        out = (msg.get("content") or "").strip() or None
+        if out:
+            _record_rewrite_cost(ep, data.get("usage") or {}, t0, openai_shape=True)
+        return out
     payload = {
         "model": ep["model"], "messages": messages,
         "stream": False, "think": False,
@@ -486,7 +518,10 @@ async def _rewrite_via_endpoint(
         resp = await hc.post(base + "/api/chat", json=payload)
         resp.raise_for_status()
         data = resp.json()
-    return ((data.get("message") or {}).get("content") or "").strip() or None
+    out = ((data.get("message") or {}).get("content") or "").strip() or None
+    if out:
+        _record_rewrite_cost(ep, data, t0, openai_shape=False)
+    return out
 
 
 # ── 守卫计数器（P2 2026-08-11：「改写了多少、拒了多少、为什么拒」看板化）──────

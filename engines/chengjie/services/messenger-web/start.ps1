@@ -55,14 +55,28 @@ $env:MSG_RESTORE_HEADLESS = "1"
 $env:MSG_RESTORE_ON_BOOT = "1"
 # 入站轮询间隔（毫秒）；0 关闭入站同步
 $env:MSG_POLL_MS = "4000"
+# 未读驱动强制读取（2026-08-15 P0，默认开）：E2EE 会话密钥未恢复时左栏预览永远是
+# 加密占位 → 「预览变化」检测器对新消息全盲（实锤丢 2 条客户消息）。行级未读标记 /
+# 全局未读+新鲜占位行 → 强制进线程读一次（共享 MSG_MAX_OPENS 预算、每线程 10min
+# 冷却）。关闭：MSG_UNREAD_FORCE=0；细调 MSG_UNREAD_FORCE_COOLDOWN_MS /
+# MSG_UNREAD_FORCE_CAP / MSG_UNREAD_FRESH_MS（默认值在 server.js）。
+# 手发出站实时回流（2026-08-16，默认开）：运营在手机 App/原生网页手发的消息，
+# 预览变成非自发的 "你:/You:" → 进线程镜像进统一收件箱（≈一个 poll tick 内可见；
+# 旧行为要等客户回复才顺路回流、首条被水位基线吞掉＝坐席端隐形）。
+# 关闭：MSG_MANUAL_OUT_SYNC=0；单轮镜像导航上限 MSG_MANUAL_OUT_CAP（默认 2，
+# 追加在候选队尾，真实客户入站永远优先用 MSG_MAX_OPENS 预算）。
 # 首连历史回填：登录后对最近 N 个会话各回填末尾若干条历史（0 关闭）。
 # P1 起真实生效：每 tick 回填 1 条线程 → POST /api/internal/protocol/thread-history
 # （Python 侧只对空会话落库=重启幂等；历史不触发 AI/SSE/未读）。
 $env:MSG_BACKFILL = "20"
 $env:MSG_SYNC = "1"
-# P1 目录同步 / 拉更早（默认值在 server.js，通常无需改）：
-#   MSG_DIR_SYNC_EVERY=75    会话占位推送周期（tick 数，≈5min；首轮全量+指纹去重）
+# P1 目录同步 / 拉更早（其余默认值在 server.js）：
+#   MSG_DIR_SYNC_EVERY      会话占位推送周期（tick 数；server.js 默认 75≈5min）
 #   MSG_DIR_SYNC_MIN_MS=30000 两次推送最小间隔（防抖）
+# 2026-08-16 提速到 8 tick（≈32s）：对方改名/换头像要近实时反映到坐席端——目录推送
+# 是唯一把「名字 + 头像直链」刷进库的链路（头像陈旧检测也吃这里的 avatar_url 指纹）。
+# 指纹去重 + MIN_MS 防抖仍在：列表没变化时提频只是空转哈希比对，不产生推送/导航。
+$env:MSG_DIR_SYNC_EVERY = "8"
 #   MSG_BURST_MAX=6          一次变更最多补报的对端连发条数
 #   MSG_INBOX_HEALTH_EVERY=15 入站健康心跳周期（tick 数，≈60s）
 # 入站媒体落地目录（对齐 whatsapp-baileys）：进线程读到图片/视频等媒体气泡时，用浏览器会话

@@ -161,6 +161,11 @@ telegram:
     enabled: false
     max_merge: 3               # 一次最多吸收几条连发消息
     max_age_sec: 45            # 只吸收入队 ≤N 秒的消息（太老的按独立消息处理）
+    # 生成前安静窗（2026-08-12）：入队后先等对方「说完」再生成——等待期对方
+    # 补话则生成前零成本让位（不烧 LLM），安静后把该会话未答连发合并成一条输入。
+    pregen_quiet_sec: 0        # 常规句安静窗秒数；0=关闭整段（默认关）
+    pregen_frag_quiet_sec: 0   # ≤2 字碎片（逐字打）的安静窗（缺省=quiet 的 2 倍）
+    pregen_max_wait_sec: 20    # 总等待封顶（对方一直打字也不无限等）
 
 # ── Telegram 语音消息接收转录（ASR）────────────────────────────────────────
 # 对方发语音条 → 下载 OGG → Whisper 转文字 → 传给 AI 回复
@@ -1435,6 +1440,10 @@ ai:
   #   api_key: ollama
   #   timeout: 120        # 首次载入大模型可到 ~60s，留足；连接失败 5s 快败
   #   think: false        # qwen3 思考系防慢答；instruct 系无感
+  #   # 无兜底纪律（2026-08-17）：chat_fallback=false → 云主链失败不本地顶班出话
+  #   # （不回消息 + 主机弹窗「AI 不可用」+ ERROR 日志），端点仍服务口语化/工具
+  #   # 改写与 ai.primary=local* 主链身份（那些是指定链路非兜底）。默认 true=旧行为。
+  #   chat_fallback: true
 
   # ── 分级路由（可选，默认关）：按会话分级差异化调用参数（P5-4）────────────
   # 选档顺序（P4）：context.ai_tier（调用方显式注入，永远优先）→ 会员权益自动进档
@@ -1498,6 +1507,7 @@ companion:
     inject_chat: true        # 写入聊天 prompt 内部事实块
     proactive_hook: true     # 暴雨/雷暴/极端气温时给主动开场种子
     scene_filter: true       # 生图/场景轮换避开高置信天气冲突（沙滩×暴雨等）
+    greeting_inject: true    # 早晚安/温和问候附「人设城市真实天气」素材行（daily_brief；随父开关）
   # ── 用户侧时钟（P2，默认关）──────────────────────────────────────────────
   # 主动触达此前全部锚定**服务器**时区（UTC+8），而客户遍布多时区 → 「早安」发到对方
   # 半夜。开启后按会话推断客户时区（src/companion/user_clock.py），择时/安静时段改按
@@ -1649,6 +1659,29 @@ companion:
     # 72h/会话频控 + 缓存超 24h 视同无货（旧闻不当「今天」说）。需与 enabled 同开。
     proactive:
       enabled: false
+  # 被骂回怼（2026-08-12，src/companion/temper.py）：客户无端辱骂时按人设脾气
+  # 顶回去而非客服腔安抚（陪伴场景「被骂还赔笑」＝当场穿帮）。A/B 两链
+  # （原生 bot + 收件箱全自动/人审草稿）同一注入点。
+  # 力度四档：off 不怼（商务顾问类）/ gentle 委屈+立边界 / sharp 阴阳嘲讽
+  # 不带脏字 / feisty 直接骂回去可带脏字。
+  # 每个人设的档位配在人设文件顶层 temper 字段（Studio 可编辑，热重载 ~3s）
+  # ——这里刻意不做 per-persona 映射表，防两处源真相打架；本段只是治理层。
+  # ⚠ enabled 默认 true（与「新子系统默认 false」约定分叉）：该行为 2026-08-12
+  # 已在生产无闸运行并验证，加闸目的是「能关能调」，默认 false 会静默关掉
+  # 运营已在用的行为。危机红线（crisis safety net）优先级恒高于本模块。
+  temper:
+    enabled: true            # kill switch：false=整块不跑，回 global_rules 共情旧行为
+    force_level: ""          # 全员强制档：feisty=「骂人都必须怼」/ gentle=全员软怼 /
+                             #   off=全员禁怼（仍记观测数）；空=按人设各自的 temper 字段
+    default_level: gentle    # 没配 temper 字段的人设兜底档
+    profanity: true          # false=feisty 封顶为 sharp（不降凶只去脏，平台风控收紧时用）
+    sticky_window_sec: 600   # 骂战粘性窗：精确命中后窗口内的变体骂法继续保持怼的姿态
+    max_rounds: 4            # 连怼熔断：同场骂战陪怼超过 N 轮 → 冷处理收场（真人不会
+                             #   无限对轰；掉价+机器感+烧 token）。0=永不熔断
+    taunt_response: true     # 激将接梗：「你太没脾气了/你倒是骂我啊」不是骂战，像真人
+                             #   一样拽回去/俏皮反将（绝不上钩开骂、绝不客服腔）；false=关
+    platform_caps: {}        # 平台风险封顶（压过 force）：如 {messenger: sharp} 把网页
+                             #   RPA 平台的最高档压到硬怼——被举报封号风险高的平台用
   proactive_topic:
     enabled: false           # 总开关（默认关）
     dry_run: false           # 灰度：只计划不真发（先看 preview + 试发采样确认无误再关）
@@ -1943,6 +1976,15 @@ companion:
       enabled: false
       timeout_sec: 12          # 单次核对上限，超时放行
       kinds: [selfie, video, photo]  # 只核人像类；物体图已有 image_gate 的 subject_match 后验
+    # 【媒体拟人节奏】（P3，2026-08-12，**默认关**）相册/自拍等媒体短路路径在文本
+    #   humanize 序列**之前**发出 → 客户点名要图时 <1s 秒发照片（实录 0.8s）——真人翻
+    #   相册挑图至少要几秒，秒发图与秒回文字是同一种机器指纹。开启后媒体出站前补一段
+    #   随机「挑图/上传」等待（A 线等待期挂「正在发送照片」气泡）。区间刻意压短：生成
+    #   链出图本身已耗时数秒，这里只补时间感。true=用默认区间；也可 {enabled,min_sec,max_sec}。
+    # media_pacing:
+    #   enabled: true
+    #   min_sec: 2.5
+    #   max_sec: 6.5
     # 【出图多样性 / 真人感】治「每张头位置、表情都一样」（PuLID 从正面定妆照锁脸 +
     #   固定种子 + prompt 恒『看镜头』三重叠加把构图钉死，像证件照连拍）。开启后每次出图
     #   随机取一组「取景/头部姿态/视线/表情/写实质感」修饰词注入 prompt，并给种子掺 salt →
@@ -2037,6 +2079,17 @@ companion:
   # 根因已在 persona_now 幂等修复，本守卫作出站第二道防线（句级剥离，可关）。
   world_clock_guard:
     enabled: true
+  # Telegram 群成员提取（工具箱能力）：多号进群 → 限速分批拉「群里发过言且非管理员」的
+  #   成员入库（去重）→ 每日控量（因为拉太多也聊不完，配额=下游触达产能倒推）。
+  #   提取是只读调用（GetParticipants/GetHistory，低危）；真正高危的私聊触达是后续独立步骤
+  #   （不在本模块，且要人工闸）。建库始终开，但**提取行为受本开关门控**（默认关）。
+  #   ⚠ 合规：抓群成员 + 冷触达属 Telegram ToS 灰区，务必配合「剔管理员/限速/可退订」护栏。
+  group_members:
+    enabled: false               # 总开关（默认关；开启走 config.local.yaml overlay）
+    daily_cap_per_account: 200   # 每号每天最多新入库多少人（=该号下游一天能聊完的量级）
+    scan_limit: 3000             # 「发过言的人」的实现口径：回扫多少条群历史消息取发言人
+    group_daily_cap: 0           # 每群每天入库上限（0=不限；多号并行按分片数均摊，防单群被薅太狠太扎眼）
+    global_daily_cap: 0          # 全系统每天入库上限（0=不限；= 下游总触达产能的硬顶）
   # 命理技能（八字/运势陪聊，对标 AuraMate「灵体对话」形态）：聊到算命/运势时把命盘
   #   摘要作为**内部参考**注入 prompt，由 LLM 以当前人设口吻自然展开（不切报告腔、不短路）；
   #   缺生辰则顺势自然采集（年/月/日/时辰/公历农历，AI 复述确认后自动落库 episodic user_stated，
@@ -2266,6 +2319,16 @@ vision:
   # 入站视频抽帧理解（ffmpeg 均匀抽 N 帧拼宫格 → 走 VisionClient 同一瓶颈）
   video_frames: 4
   # video_prompt: "…"   # 可选，覆盖默认中文视频概述 prompt
+  # 多图直喂（2026-08-15）：帧列表逐张进 VLM（qwen*-vl 原生多图），比宫格清晰；
+  # 失败自动回落宫格路径（增强不是替代）。Ollama 端点自动走原生 /api/chat 并带
+  # options.num_ctx（qwen3-vl 在 Ollama 上每图 ~1039 token 地板、客户端缩图无效，
+  # /v1 兼容层不认 num_ctx——4 图 4244 tokens 就会超默认 4096 而 400）；
+  # 非 Ollama 的 /v1 端点（vLLM 等）仍走多图 content。
+  video_multi_image: false
+  video_frames_multi: 4      # 多图专用帧数（独立于宫格 video_frames）
+  video_frame_dim: 640       # 多图每帧最长边像素
+  video_multi_num_ctx: 8192  # 原生口上下文（~1039 token/图 × 帧数 + prompt）
+  # video_prompt_multi: "…"  # 可选，覆盖多图默认 prompt
   # 与 Ollama 并存时可用 zhipu_api_key 专存智谱 key（api_key 可填 ollama）
   # zhipu_api_key: ""
   # zhipu_model: glm-4v-flash
@@ -2324,21 +2387,28 @@ skills:
 # 意图识别配置
 intent:
   # 关键词匹配 (优先级从高到低)
+  # 2026-08-16 业务意图词整体收窄（zhiliao 近 30 天 1829 条入站回放：被劫进业务意图的
+  # 消息 6.3%，其中「问题」62 条 ~100% 闲聊误伤、「怎么样/状态/情况」25 条 100% 误伤；
+  # 每次误劫还触发「话题切换→清空上下文」二次伤害）。收窄原则：
+  # ① 删日常语文高频词（问题/怎么样/状态/情况/价格/价钱/不爽/通道/渠道/试试/试验）；
+  # ② 删英文子串雷（order⊂ordered、rate⊂grateful、issue⊂tissue、test⊂latest、
+  #    channel⊂YouTube channel）——匹配是纯子串包含，短英文词必炸；
+  # ③ 保留业务特异词（订单/单号/多少钱/费率/报价/投诉/进度…），真业务照常路由；
+  #    被删词的消息落聊天意图由 AI 带上下文正常接话，不哑火。
   keywords:
     greeting: ["你好", "您好", "hello", "hi", "在吗", "在？", "有人吗"]
-    order_query: ["订单", "下单", "查单", "单号", "订单号", "order", "查询订单"]
-    price_check: ["价格", "价钱", "多少钱", "费率", "rate", "价格表", "报价"]
-    status_check: ["状态", "情况", "怎么样了", "进度", "status", "怎么样"]
-    channel_info: ["通道", "渠道", "channel", "有哪些通道", "通道状态"]
-    complaint: ["投诉", "抱怨", "问题", "不爽", "不满意", "complaint", "issue"]
+    order_query: ["订单", "下单", "查单", "单号", "订单号", "查询订单"]
+    price_check: ["多少钱", "费率", "价格表", "报价"]
+    status_check: ["进度", "status"]
+    channel_info: ["有哪些通道", "通道状态"]
+    complaint: ["投诉", "抱怨", "不满意", "complaint"]
     small_talk: ["天气", "聊天", "聊会", "有空吗", "无聊", "干吗呢"]
-    test: ["测试", "test", "试验", "试试", "camille"]
+    test: ["测试", "camille"]
 
-  # 正则表达式模式
+  # 正则表达式模式（price_check/channel_info 两条宽正则同批删除：语义已被 keywords
+  # 覆盖，留着会把刚删的宽词从正则口再放回来）
   patterns:
     order_query: ["订单\\s*[：:](.*)", "订单号\\s*[：:](.*)"]
-    price_check: ["(多少钱|价格|费率|rate).*"]
-    channel_info: ["(通道|渠道|channel).*"]
 
 # 回复模板配置
 templates:
@@ -2507,6 +2577,12 @@ inbox:
   #   enabled: true
   # db_path: config/inbox.db         # 可选：自定义 db 位置（相对路径基于 config_path）
 
+  # 账号顶部状态栏 Account Dock（2026-08-16）：全平台账号头像排在工作台顶部，点击即切
+  # 该账号的会话列表（复用账号视角状态机：深链/记忆/scoped 取数全继承）。
+  # 视图层缺省=开（账号总数<2 自动隐藏，单账号部署零影响）；关闭=显式置 false。
+  account_dock:
+    enabled: true
+
   # Telegram 历史自动补缺口（2026-08-02）：实时镜像只覆盖服务在线时段——停机/断线
   # 窗口漏掉的消息不会自己回来。开启后看门狗给「到期」账号自动跑一轮账号级云端同步
   # （get_dialogs + 每会话近 per_chat 条，按 MTProto 消息 id 去重落库；不触发自动回复/
@@ -2518,6 +2594,27 @@ inbox:
     dialogs: 100                     # 每轮覆盖最近 N 个云端会话（上限 500）
     per_chat: 100                    # 每会话回填最近 N 条（上限 100）
     max_accounts_per_tick: 1         # 每轮巡检最多触发几个账号（多账号错峰）
+
+  # 表情包（贴纸）主线（2026-08-17）：坐席从输入区表情面板发贴纸。
+  # 官方包（/api/stickers/seed-official 播种）+ 自建包（上传/收藏入站贴纸）。
+  # 平台映射：Telegram 原生贴纸（动图走 GIF 动画）；WhatsApp 原生贴纸（Node 边车
+  # 升级后，未升级自动回退图片）；LINE 官方商店贴纸原生、自建贴纸按图片发；
+  # Messenger 等其余平台按图片发。响应带 sent_as，前端会提示回退形态。
+  stickers:
+    enabled: false                   # 新子系统默认关；生产在 config.local.yaml 开
+    max_packs: 50                    # 表情包数量上限
+    max_per_pack: 200                # 单包贴纸数量上限
+
+  # 出站媒体体积上限（MB，P3 2026-08-17）：send-media 服务端流式落盘按平台限流，
+  # 前端经 send-caps.media_max_mb 同源预检。未配置一律 25（旧行为）。
+  # Telegram/LINE 协议上限远高于此，按运维带宽/磁盘预算放开即可。
+  media:
+    limits_mb:
+      default: 25
+      telegram: 200
+      whatsapp: 64
+      line: 100
+      messenger: 25
   # 后台 ingest 轮询（RPA/兜底路径的坐席可见延迟由它决定；协议号 TG/Baileys 走事件直写不受影响）：
   #   realtime_poll_sec      空闲档间隔，默认 10（<=0 = 禁用后台轮询）
   #   realtime_busy_poll_sec 忙碌档间隔，默认 2.5——最近 60s 内有新入站时用快档，安静自动退回空闲档
@@ -2576,8 +2673,6 @@ inbox:
   #   • 只拦「新动作」（列链/建链/导种子/启动/取消/看漏斗）；**在途执行不中断**——
   #     WorkflowRunner 刻意不受此闸（运行中的客户跟进不因打包开关被悄悄掐断；
   #     要停用先在 /workflows 逐条取消再关）；
-  #   • NBA 下一步动作推荐/自定义动作不受影响（独立能力面），仅其中「启动工作链」
-  #     动作分支同步拦截；
   #   • 配置读取失败按启用处理（不是安全闸门，异常时不应打死已出货模块）。
   workflows:
     enabled: true
@@ -2586,6 +2681,24 @@ inbox:
     # （report.enabled 闸，常年关）＝坐席点「启动工作链」后步骤永不推进。
     # 置 false = 冻结链推进（定义/启动照常，只是不走步）。
     autorun: true
+    # ── P2 2026-08-13 链自动推进（exec_mode=auto 链的话术步自动拟稿）────────
+    # 默认关。开启后：链在管理页选了「自动推进」档 && 会话是全自动(auto_ai)
+    # && 非静默时段 → 话术步到点自动按 SOP 指令拟稿，落成 L2 草稿交给既有
+    # autosend 管线投递（deliver 双重 opt-in / 风控 / 出站翻译 / 发送幂等 /
+    # 拟人节奏 / send-gate 配额全部继承，链层不自建发送）。生成失败或会话
+    # 无入站上下文 → 自动降级为经典「该跟进了」提醒 toast（人接手，绝不丢拍）。
+    # 提醒档（remind，默认）行为与本开关无关。
+    auto_advance:
+      enabled: false
+      quiet_start: 23     # 静默窗起（本地时；窗内到点的自动步顺延到窗后+抖动）
+      quiet_end: 8        # 静默窗止；start==end 视为不启用窗
+      max_per_tick: 3     # 每 tick(60s) 最多自动拟稿数（防 LLM 齐射拖垮循环）
+      max_per_day: 30     # 每日自动拟稿总预算（DB 口径，跨重启稳）
+    # 条件自动开链（链 trigger_conditions 配了 silence_days / churn_risk_high
+    # 时的每小时扫描）每日预算：0=不限（旧行为）。这是「对沉默客户群发开链」
+    # 的总闸门——没预算的自动化是事故温床。
+    auto_start:
+      max_per_day: 30
 
   # ── E2 自动草稿生成（Auto-Draft Pipeline）──────────────────────
   # ⭐ 对方机器人守卫：识别「聊天对方是 bot / 自动应答」并停掉 AI 自动回复，
@@ -2603,7 +2716,7 @@ inbox:
     repeat_streak_n: 3        # 对方连续 N 条相同内容触发熔断（0=关闭该项）
     instant_reply_sec: 3.0    # 「秒回」窗口秒数
     instant_repeat_n: 2       # 秒回×同文连续 N 次触发熔断（0=关闭该项）
-    daily_reply_budget: 40    # 单会话每日自动回复**轮次**封顶（0=不限）。P2 2026-08-04：
+    daily_reply_budget: 500   # 单会话每日自动回复**轮次**封顶（0=不限）。P2 2026-08-04：
                               # 分子=自动链轮次（A线直回/B线自动投递拟稿；台账 peer_reply_ledger），
                               # 坐席手发/人审通过/主动触达不占额；触顶后真人会话软停转 review
                               # 拟稿人审（收件箱出横幅可当日救济），已判定 bot 或超 2 倍硬顶全停
@@ -2612,6 +2725,26 @@ inbox:
     heuristics: true          # P1 启发式疑似评分（菜单话术/链接刷屏/媒体索取循环/名字），
                               #   检测结果持久化到会话（收件箱 🤖 徽章 + 证据），可一键覆写
     suspect_threshold: 0.6    # 疑似分 ≥ 此值 → 本条不自动回 + 会话降 review（0=只算分不动作）
+  # ── 回复生成「时间推理」（P0 2026-08-12）─────────────────────────────
+  # 实录：客户 8/8 提问当晚已被回答、此后 4 天沉默，坐席 8/12 点「智能回复」
+  # 得到一条**重新回答 4 天前问题**、且与旧回答近逐字雷同的稿子。本护栏在
+  # B 线唯一入口（persona_reply：auto-draft/工坊/replybus/桌面浮钮全经它）做：
+  # ① 锚点新鲜度判定——最后入站「陈旧且已答」→ 自动切开场产线做跟进（绝不
+  #    重答）；「陈旧未答」→ 注入迟回复时间感提示；客户端行无 ts 时按
+  #    conversation_id 反查 inbox store 真实时间线，结构判定（我方连发独白）
+  #    零时间戳也能兜住；② 当前时刻锚点注入（晚上不再产早安体）；③ 生成稿与
+  # 最近出站近重复 → 带负样本重写一次（阈值与 proactive_variety 生产校准同源）。
+  # 这是出站正确性守卫（与 media_promise_guard 同族），默认开。
+  time_context:
+    enabled: true             # false = 一键回旧行为（全部三项停用）
+    stale_after_hours: 6      # 最后入站超过此时长即「陈旧」（与时间断层提示同刻度）
+    min_monologue: 6          # 零 ts 时结构判定门槛：锚点后我方连发 ≥N 条＝已答独白。
+                              #   必须 > reply_split.max_parts（逐句分条一条回复≤5 气泡），
+                              #   否则刚答完一条分条回复就会被误判成连发独白
+    return_gap_hours: 6       # fresh 锚点下「对方隔了很久刚回来」提示的间隔门槛
+    store_lookup: true        # 客户端行无 ts 时反查 inbox store 补时间真相
+    repeat_guard: true        # 生成稿 vs 最近出站近重复 → 重写一次；仍雷同打 repeat_risk
+    repeat_threshold: 0.6     # 归一化相似度阈值（proactive_variety 同源，生产语料校准）
   # 当新入站消息到达时，自动分析风险并生成 AI 回复草稿，供坐席审批。
   # 草稿风险映射：low→L2（自动发送）/ medium→L3（需审批）/ high→L4（拦截）。
   auto_draft:
@@ -2718,34 +2851,37 @@ inbox:
   # 文本短句分条（bubble）：投递侧把换行/短句拆成多条发出（翻译后拆；orch_only
   # 防与 RPA human_pacing 双重切碎）。默认关。详见 config.yaml::inbox.reply_style.bubbles。
   # 节奏铁律（2026-08-09）：条间隔 = 思考抖动(gap_sec_lo..hi) + 下一条长度×真人手速
-  # （CJK per_char_sec / 英文 latin_per_char_sec——不配后者英文打字耗时会被加权刻度
-  # 低估 ~4 倍＝英语客户看到机关枪）；total_budget_sec 把整组间隔总和封顶（等比压缩
-  # 保节奏形状）；holdout_pct 让一部分回合「一口气说完」＝打破恒定拆条模式
+  # （CJK per_char_sec / 英文 latin_per_char_sec——旧版不配后者英文打字耗时会被加权
+  # 刻度低估 ~4 倍＝英语客户看到机关枪）；total_budget_sec 把整组间隔总和封顶（等比
+  # 压缩保节奏形状）；holdout_pct 让一部分回合「一口气说完」＝打破恒定拆条模式
   # （客户实锤会质疑「why always 2 parts」）+ 天然回复率 A/B 对照组。
+  # 出厂缺省（2026-08-14 换挡「5-10 秒时代」，与 reply_split DEFAULT_* 同值）：
+  # 思考 3-8s / CJK 0.22 / 拉丁 0.15(≈80wpm) / 单顶 12s / 总预算 40s（手动链防
+  # 前端 60s 超时护栏）——典型一条条间自然落 5-10s，不配下面各键即得该档。
   # reply_style:
   #   bubbles:
   #     enabled: true
   #     per_sentence: true        # 每句一条（关=按 max_chars 句界打包成段）
   #     max_parts: 5
   #     holdout_pct: 0.35         # 35% 回合折叠成自然单段（多样性+对照组）
-  #     gap_sec_lo: 2
-  #     gap_sec_hi: 6
-  #     per_char_sec: 0.10        # CJK 手速：10 字/秒 ≈ 真人熟练手机输入
-  #     latin_per_char_sec: 0.06  # 英文手速（不配=沿用加权刻度旧行为）
-  #     max_gap_sec: 20           # 单个条间隔封顶
-  #     total_budget_sec: 75      # 整组条间隔总和封顶（0=不封）
+  #     gap_sec_lo: 3.0           # 条间思考停顿下界（出厂即 3.0）
+  #     gap_sec_hi: 8.0           # 上界（出厂即 8.0）
+  #     per_char_sec: 0.22        # CJK 手速（出厂即 0.22；要更快用设置页「迅捷」预设）
+  #     latin_per_char_sec: 0.15  # 英文手速（出厂即 0.15；显式 0=旧加权刻度语义）
+  #     max_gap_sec: 12           # 单个条间隔封顶（出厂即 12；慢热人设可放宽 20）
+  #     total_budget_sec: 40      # 整组条间隔总和封顶（出厂即 40；0=不封）
   #     orch_only: true
 
-  # ── 「AI 下一步」动作卡（P37 / P1-198）─────────────────────────
-  # 坐席在工作台右栏给会话打「客户情绪/跟进状态」标签、创建任务、升级人工等。
+  # ── 情绪标注转向（P1-198 续，2026-08-02）────────────────────────
+  # （原「AI 下一步」动作卡已于 2026-08-14 整体下线；本段保留——情绪标签仍可经
+  #   工作链 tag 步/批量打标写入，仲裁与消费链 src/inbox/effective_mood.py 照常。
+  #   配置路径 inbox.next_actions.mood_steering 刻意不改名，存量 overlay 零迁移。）
+  # 坐席/工作链标「情绪低落/积极开朗」后，在时效窗内引导 AI——拟稿语气放柔、
+  # 主动触达降为温和问候、营销目标当日让路、语音安抚加权。不对称覆写：「低落」
+  # 全链更谨慎；「开朗」只调语气，绝不解锁被机器负面/危机信号压住的推进闸门；
+  # 危机安全网永远最高优先。
+  # 默认开是安全的：需要对单个会话显式动作才触发，未标注的会话零行为变化。
   next_actions:
-    follow_up_task: true      # false = 不推荐「创建回访任务」（与工作目标语义重叠、
-                              #   或会话无 contact 档案时可部署级关闭）
-    # 情绪标注转向（P1-198 续，2026-08-02）：坐席标「情绪低落/积极开朗」后，在
-    # 时效窗内引导 AI——拟稿语气放柔、主动触达降为温和问候、营销目标当日让路、
-    # 语音安抚加权。不对称覆写：「低落」全链更谨慎；「开朗」只调语气，绝不解锁
-    # 被机器负面/危机信号压住的推进闸门；危机安全网永远最高优先。
-    # 默认开是安全的：需要坐席对单个会话显式动作才触发，未标注的会话零行为变化。
     mood_steering:
       enabled: true
       ttl_hours: 24           # 人工标注生效时长（小时）；过期自动回落机器情绪分析
@@ -2841,6 +2977,15 @@ inbox:
       min_sec: 8              # 拟人默认；想「装完即秒回」的旧行为把两者都设 0 即可
       max_sec: 20
       adaptive: true          # 长回复等更久、短回复更快，比固定区间更像真人
+      # P1 连发/秒回两道地板（2026-08-12，修实录「第 1 条有思考、第 2/3 条秒回」；
+      # 默认 0=关。两键都住本块 → 跟随滑杆的 A 线/协议链整块继承、设置页可改热更）：
+      # min_gap_sec      同一会话两条出站间最小间隔（秒）。adaptive 把「队列排队」当
+      #                  已耗时全额抵扣对单条是对的，但连续两条出站之间必有真人打字
+      #                  间隔——本地板与抵扣正交，只看「距上一条出站多久」，±15% 抖动。
+      # min_residual_sec adaptive 抵扣发生后至少保留的残余延迟（秒）——生成耗时吃掉
+      #                  全部目标时不再 0 秒秒发，打字气泡有露出窗口。
+      # min_gap_sec: 8
+      # min_residual_sec: 2
     # 并行投递（2026-08-09，默认关）：拟人延迟+分条间隔让单条投递可占数十秒～
     # 2 分钟；串行循环下并发会话互相排队（客户 B 苦等客户 A 的「思考时间」）。
     # 开启后按会话分组并发：同会话保序串行（顺序/防双发不变量不动），跨会话
@@ -2954,13 +3099,45 @@ translation:
       min_chars: 12                  # 低于此长度不咨询统计层（短文本统计不可靠）
   # P56：多翻译引擎（按 order 故障转移；首个可用且非空者获胜，AI 兜底）
   engines:
-    order: ["ai"]                    # 可选 ollama_mt/ai/deepl/google，如 ["ollama_mt", "ai"]
+    # 可选内置名：ollama_mt/ai/deepl/google/microsoft/youdao/baidu；
+    # custom 段里的任意名字（OpenAI 兼容通用线）写进 order 即参战。
+    # 例：["ollama_mt", "gemini_flash", "qwen_mt", "youdao", "baidu", "microsoft", "ai"]
+    order: ["ai"]
     timeout_sec: 8
     deepl:
       api_key: ""                    # 填则启用 DeepL（缺 key 自动跳过）
       pro: false                     # true=api.deepl.com（Pro），false=api-free.deepl.com
     google:
       api_key: ""                    # 填则启用 Google Translate v2（缺 key 自动跳过）
+    # ── P0-XL1（2026-08-16）：更多云端线路（全部可选，缺 key 自动跳过；
+    #    前端引擎面板只显示 order 里配置了的线路，不摆灰按钮）──
+    microsoft:
+      api_key: ""                    # Azure Translator 订阅 key（NMT 最低字符单价备份线）
+      region: ""                     # 多服务资源填区域（如 eastasia）；全局资源留空
+    youdao:
+      app_key: ""                    # 有道智云应用 key（中英电商语料 + 低价）
+      app_secret: ""
+    baidu:
+      app_id: ""                     # 百度翻译开放平台 APPID（低价中英备份线）
+      secret: ""
+    # 通用 OpenAI 兼容线：一段配置 = 一条线路，名字写进 order 即参战（零代码扩容）。
+    # api_key 为空 = 该线路隐藏；LAN 免鉴权端点随便填非空值（如 "none"）。
+    custom: {}
+    #  gemini_flash:                 # Google Gemini（OpenAI 兼容层，性价比高 + 语种广）
+    #    label: "Gemini Flash"
+    #    base_url: https://generativelanguage.googleapis.com/v1beta/openai
+    #    model: gemini-2.5-flash
+    #    api_key: ""
+    #  qwen_mt:                      # 阿里 Qwen-MT（翻译专用模型，亚洲语对强）
+    #    label: "Qwen-MT"
+    #    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    #    model: qwen-mt-turbo
+    #    api_key: ""
+    #    raw_mode: true              # Qwen-MT 契约：原文直送 + translation_options
+    #    payload_extra:
+    #      translation_options:
+    #        source_lang: "auto"
+    #        target_lang: "{target_name}"   # 占位符：{target_lang}/{source_lang}/{target_name}/{source_name}
     # 本地/局域网 Ollama 上的专用 MT 模型（默认适配腾讯 Hunyuan-MT 官方 prompt：
     # zh↔xx 用中文指令、xx↔xx 用英文指令）。零 API 成本、亚秒延迟；缺 base_url/model
     # 自动跳过。仅覆盖 Hunyuan-MT 模型卡内语种，集外目标语自动让位下一引擎。
@@ -3188,6 +3365,21 @@ platform_login:
       seed_chats_max: 200      # 好友数超过此值只同步名单、不建会话占位（防列表噪音）
       pace_seconds: 0.35       # 会话每翻一页歇一下，温和拉取
       first_delay_seconds: 45  # A 线首轮延迟（避开启动风暴，但不必等满一个周期）
+  messenger:
+    # 服务器托管登录（web mode）总开关走 resolve_login_switch / _DESKTOP_LOGIN_DEFAULT_ON
+    # （桌面壳默认开，无需在此显式声明 web_enabled）。
+    # ── 表单中继（Form-Relay）交互登录：把登录搬进「程序内」 ──────────────────────
+    # 开 → messenger-web 边车 headless 起浏览器（不再弹独立浏览器窗口），登录页由应用侧
+    #   原生分步表单驱动（账密 / 2FA 验证码 / E2EE PIN），只有不可预测的安全检查点
+    #   （checkpoint）回落只读截图预览。桌面壳与远程浏览器坐席体验一致，且无截图直播的
+    #   输入法 / 坐标 / 帧延迟问题。
+    # ⚠ 默认关（含桌面壳）：改变了 Facebook 的自动化判定面，且需配套「应用内原生表单」前端
+    #   才可用——单开本开关而前端未就绪会让登录无从操作。放量前须灰度验证账号不被风控；关时
+    #   全链逐字节回落既有 headed 窗口 + 截图预览 + 运维指引。本开关热重载不生效——须重启实例。
+    # 窗口模式由边车 env MSG_INTERACTIVE_WINDOW 选（非 config）：offscreen（默认＝离屏 headed，
+    #   无可见窗口 + 最强反检测，桌面壳用）/ new_headless（--headless=new，无显示器服务器用）/
+    #   headless（经典无头，对照组）/ headed（可见窗口，调试逃生门）。
+    interactive_login: false
   line:
     # ── LINE 协议号媒体收发（2026-07-31 补齐「LINE 只能收发文字」的缺口）────────
     # ⚠ 本节改动**须重启实例**才生效（worker 持有构造时的 config 引用，且出站能力在
@@ -3253,6 +3445,10 @@ companion_send_gate:
   target_cap: 15        # 养熟后的单号日发上限
   warmup_start_cap: 2   # 新号第 0 天的日发上限（须 ≤ target_cap）
   warmup_ramp_days: 14  # 从 start 爬升到 target 的天数
+  # 人工预留额度（P1 2026-08-12）：自动外发（主动问候/L2 全自动/关怀）在
+  # cap - N 即让路，最后 N 条名额专供坐席人工回复——防「主动批量烧光额度、
+  # 客户在等人工却发不出」的优先级倒挂。0=关（自动/人工同额度，旧行为）。
+  reserve_for_manual: 0
 
 # ── G1 全局 Kill-Switch（反封号护栏：紧急停发总闸）──────────────────
 # 运营发现封号潮/内容事故时，一键（毫秒级）冻结自动发送，与上面的预热闸门正交
@@ -3262,6 +3458,28 @@ companion_send_gate:
 #   - 置位：POST   /api/ops/kill-switch  {scope?, reason?, ttl_sec?}（scope 缺省 global）
 #   - 解除：DELETE /api/ops/kill-switch  {scope?}
 #   - 查看：GET    /api/ops/kill-switch
+# ── 内部功能界面显隐（2026-08-14）───────────────────────────────
+# 七个内部/运维向界面默认对坐席隐藏；开发者工具页（/developer，密码闸）按键
+# 独立开启（写 config.local.yaml overlay，热重载生效）。藏而不废：只藏入口与
+# 渲染，URL/API 不封（与真机矩阵 simple 导航同哲学）。单源判定
+# src/web/ui_visibility.py；桌面壳经 GET /api/desktop/ui-flags 消费。
+ui_visibility:
+  manual_console: false   # 人工操作台：桌面壳内嵌官方网页版页签条 + 网页「打开官方网页版」入口
+  group_extract: false    # 群成员提取：收件箱链接卡 / ops-overview 卡 / 副驾 cp-tg-members 组件
+  matrix_nav: false       # 真机矩阵导航：侧栏组 / 命令面板矩阵项（页面 URL 仍可直达）
+  group_show: false       # 群脉导播台：侧栏「真机矩阵」组内项 + 命令面板项（与 matrix_nav 同关时整组消失；页面 URL 仍可直达）
+  team_collab: false      # 团队协作：副驾协作注解卡（web 收件箱右栏 + 桌面副驾双宿主，保 DOM 加 hidden）
+  # AI 与转接设置：/settings 的「AI 提示词 & 行为配置」+「人工客服转接」两张卡
+  # 与侧栏「人工转接」项。提示词只管**未绑人设**的会话（Telegram 主线 / 官网聊天），
+  # 收件箱与三端 RPA 走 persona 体系不受其影响；human_escalation 多数部署没启用。
+  # 藏后 /settings 与深链 #prompt / #escalation 仍可直达（深链会就地揭示该卡）。
+  ai_settings: false
+  # 驾驶舱：工作台顶栏「驾驶舱」入口（介入队列 + 一键接管/交还）。主动作「接管」
+  # 要跳原生页，而原生页整条链已随 manual_console 隐藏，故一并藏；队列那四个信号
+  # （超时未回/情绪差/待审草稿/风控）在收件箱筛选与草稿队列各有既有入口，不丢能力。
+  # 页面 /workspace/cockpit 与 /api/cockpit/overview 仍可直达。
+  cockpit: false
+
 ops:
   kill_switch:
     db_path: config/runtime_flags.db   # 紧急停发状态持久化（SQLite）
@@ -3279,6 +3497,12 @@ ops:
     step: 5                            # auto_health 每轮最多扩入的新号数
     hold_hours: 24                     # auto_health 绿灯需连续稳定的小时数（watchdog 用）
     red_rate_threshold: 0.1            # 机群红灯率超此值则不推进扩面
+
+  # ── 老板日报省时换算（WP-3 2026-08）────────────────────────────────
+  # /workspace/boss「折算省下人工」= AI 真发回复条数 × 每条人工均时（分钟）。
+  # 这是销售话术数字——按客户团队实情调（客服团队常见 2-5 分钟/条）。
+  value_report:
+    manual_minutes_per_reply: 3
 
   # ── LAN GPU 显存水位（ops-overview 卡）────────────────────────────
   # 各 Ollama 主机 /api/ps 聚合（30s TTL），口径=Ollama 管理的模型显存
@@ -3368,29 +3592,39 @@ ops:
 licensing:
   enforce: false                      # 预留：true 时过期降级只读（当前未生效）
   # key_path: config/license.key      # 授权码路径（默认 config/license.key）
-  # ── 首启体验档（P2：装完直接能用，不要求注册）─────────────────────
-  # 只在**完全没有授权文件**时生效：给一小笔本地字符额度 + 一个时间窗，让新装用户
-  # 先跑通一条真实客户消息，再引导注册换完整试用。用量记进同一个 license_quota.db
-  # （lic_id 形如 local:ab12cd34），会员页/ops 读同一口径。
+  # ── 首启体验档（P2：装完直接能用，不要求注册；2026-08-11 升档）──────
+  # 只在**完全没有授权文件**时生效：给一笔本地尝鲜字符额度（默认 10 万、无时间窗、
+  # 用完即止），让新装用户先真跑几天活，再引导注册领满 100 万（官网签发、绑机、
+  # 无期限，规格单源在 src/licensing/chatx_fulfillment.py::TRIAL_SPEC）。
+  # 用量记进同一个 license_quota.db（lic_id 形如 local:ab12cd34），会员页/ops 读同一口径。
   #
   # 它**不是**签名授权：本地签发就得把厂商私钥塞进安装包，所以体验档刻意不进
   # LicenseManager 语义，也因此天然可绕过（删 config/local_trial.json 即重置）。
-  # 这是取舍而非缺陷——赠量刻意很小，真正的防滥用在签发侧按机器码去重。
+  # 这是取舍而非缺陷——尝鲜量有限，真正的大额度（100 万）在签发侧按机器码去重。
   #
   # enforce 独立于上面的 licensing.enforce：那个是给正式客户「过期只读」用的，
   # 共用会让开了 enforce 的存量客户顺带把新装用户也锁死。
-  # ⚠️ 在「注册换正式试用」的链路上线前不要开 enforce，否则用尽即无路可走。
+  # 桌面模式（AITR_DESKTOP_MODE=1）下「没写过」的 enabled/enforce 都按默认开——
+  # 「注册领 100 万」链路已上线，用尽即拦、拦了有出路（注册/客服/邀请/购买）。
+  # 服务器部署（无该 env）不受影响，默认关。
   trial:
-    enabled: false                    # 默认关；桌面随包种子 config.desktop.min.yaml 里开
-    enforce: false                    # true = 用尽/过窗后真的拦（默认只提醒）
-    chars: 10000                      # 赠送字符数
-    window_hours: 48                  # 时间窗（小时）
-    # ── 注册换正式试用（P2）───────────────────────────────────────
-    # 首启向导「注册领 7 天」打的官网地址。链路：客户端按机器码建单 →
+    enabled: false                    # 服务器基线默认关；桌面种子 config.desktop.min.yaml 里开
+    enforce: false                    # true = 用尽/过窗后真的拦；桌面模式「没写过」默认 true
+    chars: 100000                     # 尝鲜字符数（注册后领满 100 万走官网签发）
+    window_hours: 0                   # 时间窗（小时）；0 = 无窗，用完即止
+    # ── 注册领免费额度（P2；2026-08-11 起 100 万字符 · 无期限）──────
+    # 首启向导 / 会员中心「注册领取」打的官网地址。链路：客户端按机器码建单 →
     # 厂商机（私钥离线，scripts/fulfill_trial.py）签发 → 客户端轮询取回并自动
     # 落盘激活。改这里只在自建/私有化部署时需要，公版走默认官网。
     # site_url: https://bd2026.cc
     #
+    # ── 邀请裂变聚合读数（**只在厂商 ops 实例开**）────────────────
+    # ops-overview「🎁 邀请裂变」卡的数据开关：代理官网 /api/trial/referral-stats
+    # 全局聚合（发码/归因注册/消耗达标/发奖，纯计数零 PII，实例侧 300s 缓存）。
+    # 聚合是**全站**口径——客户实例开了也只会看到别人的总账，故默认关。
+    # referral_stats:
+    #   enabled: false
+    #   site_url: https://bd2026.cc         # 缺省沿用上面的 site_url
     # ── 履约端存活监控（**只在厂商机开**）─────────────────────────
     # 签发链上唯一的单点是厂商机：它不跑，用户点了「免费领取」就永远停在
     # 「正在签发」——客户端不报错、台账只多一条 pending，整条链静默失效。
@@ -3508,10 +3742,22 @@ health_watchdog:
   interval_sec: 300                   # 巡检周期（秒）
   queue_threshold: 200                # 草稿队列积压告警阈值
   alert_on_warn: false                # true=黄灯(warn)也告警；默认仅红灯(fail)告警
+  # 四域真活探针（2026-08-17 无兜底纪律规则 8）：对 tts/translate/vision/asr 周期
+  # 「真干活」（真合成含 magic 校验/真翻译/真识图/真转写），连败 fail_strikes 次
+  # → 主机弹窗 + host_alert webhook；恢复补绿窗。health 200 不算活（8/16 index
+  # worker CPU 爬行全天、健康探针全绿零告警实锤）。默认关：探针打真 GPU 推理，
+  # Lite/无 LAN 引擎的部署会假阳刷屏；算力齐备的部署 overlay 开。
+  true_probe:
+    enabled: false
+    interval_min: 10                  # 真实探测间隔（分钟；watchdog tick 内节流）
+    fail_strikes: 2                   # 连败几次才告警（吸收单次冷载/抖动）
   billing_interval_sec: 3600          # E3 计费异常巡检周期（秒，比健康巡检稀疏；超席位/超额→billing_alert）
   incident_retention_days: 30         # 已关闭运维事件保留天数（每日清理一次，防表膨胀；<=0 关闭清理）
   weekly_report_enabled: false        # H1 运营周报自动外发（默认关；开后每周经 ops_report 事件推送，需在「告警渠道」订阅 ops_report）
   weekly_interval_sec: 604800         # 周报推送周期（秒，默认 7 天）
+  daily_report_enabled: false         # WP-3 老板日报自动外发（默认关；同 ops_report 通道 period=daily，
+                                      # 数据=/workspace/boss 同源日账；零流量日不推空报）
+  daily_interval_sec: 86400           # 日报推送周期（秒，默认 24h）
   # 授权字符额度水位提醒（P4c，默认开）：check_license_quota（含加量包合计口径）
   # 用量 ≥ warn_pct →「即将用尽」；触顶（quota_exceeded）→「已用尽」升级提醒并指路
   # 会员中心 → 兑换加量包；兑换/换新授权回落后补恢复通知。经 host_alert 出口
@@ -3521,6 +3767,14 @@ health_watchdog:
     enabled: true
     warn_pct: 85                      # 临近提醒阈值（用量百分比）
     interval_min: 360                 # 重提间隔（6h；恢复自动停）
+  # 人工接管超时提醒（驾驶舱 P0，默认开）：坐席「一键接管」会话后忘了交还——
+  # 接管期间该客户的 AI 完全停发＝没人管。超过 after_min 分钟首提（EventBus
+  # takeover_alert，告警渠道订阅别名 takeover），之后每 interval_min 一条；
+  # 交还即自动静默。没有进行中的接管时零开销零噪音。
+  takeover_remind:
+    enabled: true
+    after_min: 120                    # 接管多久未交还开始提醒（分钟）
+    interval_min: 60                  # 重提间隔（分钟）
   # 本地兜底「长期顶班」升级提醒（默认开）：云端主模型持续不可用、由 ai.fallback 本地
   # 模型代答超过 after_min 分钟 → 主机弹窗再提醒，之后每 interval_min 一条（恢复自动停）。
   fallback_duty_remind:
@@ -3580,6 +3834,13 @@ health_watchdog:
     min_age_hours: 24                 # 稿龄超过此值才算「积压」
     min_count: 3                      # 超龄条数达此值才告警（避免把日常波动当事故）
     interval_min: 240                 # 重提间隔（4h）；队列清空自动补发恢复通知
+  # 账号真相真幽灵（默认开；P4b 2026-08-17）：会话库有、注册表没有（剔除 web 工作台）。
+  # 桌面镜像（tg-desktop）在册不算；已登出未读被 summary 清零，不在本检查范围。
+  # 一条绕过登记写会话就是接入链缺口。订阅：告警渠道加 accounts_truth 别名。
+  accounts_truth_remind:
+    enabled: true
+    min_count: 1                      # 真幽灵条数达此值才告警（默认 1＝零容忍泄漏）
+    interval_min: 240                 # 重提间隔（4h）；清零自动补发恢复通知
   # 常备扫描循环停摆巡检（P4 2026-08-09）：目标结算/提醒扫描 + 工作链推进两条
   # bootstrap 常备循环的心跳（app.state.goal_scan_state / workflow_autorun_state）
   # 停走即告警——两者都曾挂在 report.enabled 闸死的调度器上静默从未运行。
@@ -3638,6 +3899,16 @@ health_watchdog:
     enabled: true
     after_min: 20                     # stalled 持续多久后首提（给自愈/抖动留窗）
     interval_min: 240                 # 重提间隔（4h）；恢复（真读到内容）自动停
+  # Messenger 注册表×sidecar 会话对账（P2 2026-08-13，默认开）：注册表期望在线
+  # （online）的号在 messenger-web /accounts 里没有会话＝重启后恢复失败/会话被清。
+  # 这类账号**零事件零心跳**——上面两条巡检（要状态事件/要入站心跳）都看不见，
+  # 实测烂了多日无告警。sidecar 探活失败/清单拉取失败一律跳过（别误归因）；
+  # offline 号（运营登出/从未登录）不催，由收件箱 chip 与 tools/diagnose_messenger.py
+  # 提示。经 platform_session_alert 外发（订阅别名 platform_session）。
+  messenger_restore_remind:
+    enabled: true
+    after_min: 30                     # sidecar 缺席持续多久后首提
+    interval_min: 240                 # 重提间隔（4h）；恢复自动清零并补恢复通知
   # 账号接入链路停摆（默认开；2026-07-25 LINE 协议扫码 100% 失败烂了多日的第二半）：
   # 那次建了 login_funnel_stats 并在 ops 卡标 stalled，但看板得有人打开——登录链路坏掉时
   # 通常没人正盯着运营总览。本项把同一判据（某 platform:mode 发起 ≥min_started 次、
@@ -3682,6 +3953,16 @@ health_watchdog:
     fresh_min: 60                     # 最近一次失败须在此窗口内（防陈旧信号误报）
     after_min: 30                     # 持续挂死多久后首提
     interval_min: 240                 # 重提间隔（4h）
+  # 本地主链保险（2026-08-15，算力本地化配套）：ai.primary=local|local_only 时周期
+  # 探测本地主链端点（ai.fallback.base_url 的 /v1/models）；连续失败达标 → 写 overlay
+  # ai.primary=cloud（保注释）+ 热重建 + 告警（webhook 别名 ai_primary_guard）。
+  # **单向只降不升**：恢复后只发通知，切回 local* 归集群模式执行器/人工。
+  # cloud 档天然不动作（与模式执行器「停 :8001 前先切 cloud」的顺序契约不打架）。
+  ai_primary_guard:
+    enabled: true
+    fail_streak: 2                    # 连续失败 tick 数（每 tick 内已自带一次复核双探）
+    min_span_sec: 240                 # 首败到触发的最小跨度（防单点抖动）
+    probe_timeout_sec: 4              # 单次探测超时
 
 # ============ 学习队列（每日自动学习）============
 # 素材来源：KB 未命中(问题样式过滤后) / 负反馈 / 弱命中；每 24h 自动跑一轮，
@@ -3690,3 +3971,42 @@ kb_learner:
   # 未命中问题达到该次数才进入学习素材。FAQ 客服域建议 2（同样的问题会被反复问）；
   # 陪伴/低频域可降为 1（配合入池的问题样式过滤，不会被闲聊灌爆）。
   min_miss_count: 2
+
+# ============ 双面板融合（surface fusion，P0 2026-08-13）============
+# 同一账号的两个操作面：workspace＝统一收件箱（sidecar 自动化）；native＝桌面壳
+# 内嵌官方网页标签（注入辅助）。开启后按「驾驶权互斥锁」防双发：owner=native 的
+# 账号工作台自动链让位（AutosendWorker L2 + protocol_autoreply 协议直发链，
+# 后者是本独立包 deliver=false 默认档下的自动发送主力）；切换走
+# POST /api/surface/pilot。默认关（零行为变更）。已策划平台：messenger /
+# telegram / whatsapp。
+surface_fusion:
+  enabled: false
+
+# ============ 首启向导（WP-2 2026-08）============
+# /welcome 五步向导（授权 → 渠道 → 人设 → 自动化档位 → 测试消息），串既有能力
+# 不重写任何底层实现。关闭时页面与 /api/onboarding/* 一律 404（老实例零可见变化）。
+# 桌面新装经 cloud_light 预设档在首启播种为 true；进度存实例数据根
+# welcome_onboarding.json（中断可续，完成后登录不再自动进入）。
+onboarding:
+  enabled: false
+
+# ============ 合规模式（WP-4 2026-08）============
+# 对应法规：EU AI Act 第 50 条（首次交互披露）/ 加州 SB 243（披露+危机协议公示+
+# 年报转介计数）/ 纽约 GBL §1700。披露义务属运营方（deployer）——本产品提供工具，
+# 开关由运营方按属地法规自行开启（基线全 false=零行为变化）。
+# 映射与责任划分见 docs/智聊合规能力说明_EUAIAct50_SB243_NY1700_2026-08.md。
+compliance:
+  disclosure:
+    # 系统级披露：每会话首条 AI 出站前置一段披露语（按会话语言取内置多语模板，
+    # zh/en/es/pt/id/th/vi/ja/ko），此后该会话永不重发（持久防重，重启不重发）。
+    notice: false
+    # 对话内如实承认：客户直问「你是 AI 吗」时如实回答——(a) persona_guard 的
+    # 「AI 自曝剥离」放行；(b) 全局规则身份规避类条目剔除并替换为诚实话术条目；
+    # (c) 人设 identity.deny_ai/claim_human 在 prompt 侧按 False 处理。
+    # 与 notice 独立：多数 B 端开 notice 不开本项（法规只要求不误导，不要求自认）。
+    honest_identity: false
+    # 可选：披露语整条覆写（支持 {url} 占位；留空用内置多语模板）
+    text: ""
+  # 运营方《危机干预协议》公示页 URL（SB 243 公示义务；配置后随披露语带出，
+  # 官网模板页见 website /compliance/crisis-protocol）
+  crisis_protocol_url: ""

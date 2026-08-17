@@ -171,8 +171,10 @@ def register_monitoring_routes(app, ctx):
                         / "knowledge_base.db")
                     state._daily_learner = learner
                 if learner is not None:
-                    out["learner_pending"] = len(
-                        learner.list_drafts(status="pending") or [])
+                    # stats() 是全表 COUNT——旧口径 len(list_drafts()) 受默认
+                    # limit=50 封顶，积压超 50 时待办条/徽标失真（2026-08-16 修）
+                    out["learner_pending"] = int(
+                        (learner.stats() or {}).get("pending") or 0)
             except Exception:
                 pass
 

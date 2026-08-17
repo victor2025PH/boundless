@@ -261,6 +261,37 @@ class AccountRegistry:
         except Exception:
             pass
 
+    def delete_row(self, platform: str, account_id: str) -> bool:
+        """硬删注册表行（历史账号治理 P0，2026-08-17）。
+
+        与 ``remove()``（软删＝status 置 removed、行保留）互补：本方法把行从
+        ``platform_accounts`` 物理删除，专供「彻底删除历史账号」链路
+        （``/api/accounts/{pl}/{aid}/purge-history``）在清完会话数据后收尾——
+        否则 removed 残行会在账号面板历史区留下「已移除 · 0 会话」死行。
+        状态门禁（仅 offline/removed 可删）由路由层把关，注册表原语保持单一职责。
+        返回是否真的删掉了一行；附带回收自身头像 + 归还凭据池容量
+        （与 ``remove()`` 同一 best-effort 收尾，重复调用无害）。
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM platform_accounts WHERE platform=? AND account_id=?",
+                (str(platform or "").lower(), str(account_id or "")),
+            )
+            self._conn.commit()
+            deleted = bool(cur.rowcount)
+        if deleted:
+            try:
+                from src.integrations.account_self_profile import cleanup_avatar
+                cleanup_avatar(platform, account_id)
+            except Exception:
+                pass
+            try:
+                from src.integrations.credpool_bridge import release_for_account_bg
+                release_for_account_bg(platform, account_id)
+            except Exception:
+                pass
+        return deleted
+
 
 def parse_persona_ids(meta: Optional[Dict[str, Any]]) -> List[str]:
     """账号 meta → 绑定的人设 id 列表（容忍历史存储形态）。

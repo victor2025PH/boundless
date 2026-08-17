@@ -156,7 +156,7 @@ def test_goal_help_terms_point_to_the_card():
     """usage 必须给出到卡的点击路径（「找不到」的直接解药）。"""
     for key in ("work_goal", "work_plan"):
         usage = HELP_TERMS[key]["usage"]
-        assert "客户&关系" in usage and "工作目标" in usage, f"词条 {key} 的 usage 未给出点击路径"
+        assert "客户关系" in usage and "工作目标" in usage, f"词条 {key} 的 usage 未给出点击路径"
     assert "工作目标" in HELP_TERMS["marketing_goal"]["usage"], \
         "营销目标词条应把人指到坐席端那张可操作的卡"
 

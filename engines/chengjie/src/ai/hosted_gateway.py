@@ -345,6 +345,18 @@ _swap_lock = threading.Lock()
 _last_swap_ts = 0.0
 
 
+def swap_retry_after_sec() -> int:
+    """距下次允许「举报废凭据换新组」还剩几秒（0＝现在就可以）。
+
+    给登录失败响应的 ``retry_after_sec`` 用：前端拿它画倒计时并到点自动重试，
+    替代旧文案「等约 2 分钟后点刷新」让用户自己掐表。只读快照，不推进冷却。
+    """
+    with _swap_lock:
+        elapsed = time.time() - _last_swap_ts
+    remain = SWAP_COOLDOWN_SEC - elapsed
+    return max(0, int(remain + 0.999)) if remain > 0 else 0
+
+
 def report_invalid_and_refetch(
     cfg: Dict[str, Any], bad_api_id: str, *, fetch: Optional[Fetch] = None,
 ) -> Optional[Tuple[str, str]]:

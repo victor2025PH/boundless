@@ -122,3 +122,38 @@ def test_ingest_writes_contact_id_when_resolver_registered(tmp_path):
     assert meta is not None
     assert meta["contact_id"] == "contact-xyz"
     store.close()
+
+
+# ── 客户语言列的方向卫生（2026-08-15，messenger Wisley 实锤） ──────────────────
+
+def test_outbound_mirror_does_not_pollute_conversation_language(tmp_path):
+    """出站镜像绝不覆盖客户语言列。
+
+    事故机制：客户全程中文（language=zh），AI 英文译文经出站镜像回流 ingest，
+    normalize_chat 把 chat.language 取自末条消息（=我们自己的 en）→ 客户语言列
+    被钉成 en → 出站翻译永远瞄准英文（自锁）。修复＝direction=out 时降级
+    unknown，store 的 CASE 护栏保住已存真值。
+    """
+    store = InboxStore(tmp_path / "inbox.db")
+    # 1) 客户中文入站 → 会话语言 zh
+    ingest_collected_chats(store, [_chat(
+        language="zh",
+        last_message={"text": "你好呀", "ts": 110, "direction": "in",
+                      "language": "zh", "source": {"id": "m1"}},
+    )])
+    assert store.get_conversation("whatsapp:wa-a:room")["language"] == "zh"
+    # 2) 我们的英文回复镜像（旧行为会把列改成 en）
+    ingest_collected_chats(store, [_chat(
+        language="en", last_ts=120,
+        last_message={"text": "Hello there my friend", "ts": 120,
+                      "direction": "out", "language": "en", "source": {"id": "m2"}},
+    )])
+    assert store.get_conversation("whatsapp:wa-a:room")["language"] == "zh"
+    # 3) 客户真的切换语言（入站英文）→ 照常更新
+    ingest_collected_chats(store, [_chat(
+        language="en", last_ts=130,
+        last_message={"text": "let's speak english", "ts": 130,
+                      "direction": "in", "language": "en", "source": {"id": "m3"}},
+    )])
+    assert store.get_conversation("whatsapp:wa-a:room")["language"] == "en"
+    store.close()

@@ -192,6 +192,59 @@ def _account_status_map(request: Request) -> Dict[tuple, str]:
     return out
 
 
+# 内置工作台号：会话库几乎必有、从不走账号注册表，不算「绕过注册表写会话」的幽灵。
+_SYNTHETIC_PLATFORMS = frozenset({"web"})
+
+
+def is_synthetic_account(platform: str, account_id: str = "") -> bool:
+    """内置/占位账号（web 工作台等）——目录有、注册表无，不是接入泄漏。"""
+    return str(platform or "").strip().lower() in _SYNTHETIC_PLATFORMS
+
+
+def directory_ghost_keys(
+    directory: Dict[tuple, Any],
+    registry_keys: Any,
+) -> List[tuple]:
+    """真幽灵键：会话库有、注册表没有、且不是内置工作台号。
+
+    P4 之后 ``tg-desktop`` 这类 ``mode=desktop`` 号已在注册表，不会进这里；
+    这里剩下的才是「有账号绕过注册表在收发」的泄漏信号。
+    """
+    keys = set(registry_keys or [])
+    out: List[tuple] = []
+    for k in (directory or {}):
+        pl, aid = str((k[0] if k else "") or ""), str((k[1] if k and len(k) > 1 else "") or "")
+        if (pl, aid) in keys or is_synthetic_account(pl, aid):
+            continue
+        out.append((pl, aid))
+    return out
+
+
+def _registry_active_map(request: Request) -> Dict[tuple, Dict[str, str]]:
+    """注册表**活跃但可能无运行通道**的账号 → ``{(platform, account_id): {mode, label}}``。
+
+    P4（2026-08-17 幽灵账号收编）：``_account_status_map`` 只收 offline/removed 两态，
+    而 ``mode="desktop"`` 的桌面壳镜像账号（如 tg-desktop，经 ``/api/desktop/ingest``
+    首见即登记、status=online）**没有 worker、不进 platform_status**——三层桶都接不住，
+    在 accounts_summary 里坠成 ``history_only`` 幽灵；同时 ops「账号真相」卡读注册表
+    全量说 ghost=0，两个面互相打架。本 map 把「在册活跃」全量交给 summary 分类器，
+    由它按「是否已在 platform_status」决定要不要补桶（desktop / registered）。
+    查不到一律空 map（回落旧行为：这类号继续按 history_only 展示，不比修前更糟）。
+    """
+    out: Dict[tuple, Dict[str, str]] = {}
+    try:
+        from src.integrations.account_registry import get_account_registry
+        for a in (get_account_registry().list() or []):   # 默认不含 removed
+            if str(a.get("status") or "") == "offline":
+                continue   # 已登出走 _account_status_map 的 logged_out 桶
+            key = (str(a.get("platform") or ""), str(a.get("account_id") or ""))
+            out[key] = {"mode": str(a.get("mode") or ""),
+                        "label": str(a.get("label") or "")}
+    except Exception:
+        return {}
+    return out
+
+
 def _read_from_store_enabled(request: Request) -> bool:
     """A1 读路径开关：``config.inbox.read_from_store``。
 
@@ -219,6 +272,7 @@ def _collect_chats_from_store(
     before_ts: Optional[float] = None,
     platform: str = "",
     account_id: str = "",
+    include_hidden: bool = False,
 ) -> List[Dict[str, Any]]:
     """A1 读路径：直接从 InboxStore（持久事实源）读会话列表，映射回 chat dict 形状。
 
@@ -228,7 +282,11 @@ def _collect_chats_from_store(
     ``before_ts``：十期游标分页——只取 last_ts 更旧的会话（「加载更多」）。
     ``platform`` / ``account_id``：scoped 过滤直透 store（非空才生效、可组合）——
     前端全局列表只拿最近 top100，点开单账号看老会话必须按需查库，此处是唯一入口。
-    返回 None 表示 store 不可用（调用方回落实时聚合）。
+    ``include_hidden``（历史账号只读视角 P0，2026-08-17）：已退出(offline)账号的
+    会话默认整批跳过（聊天页语义）；抽屉「查看会话」的账号历史视角需要看到它们
+    → True 时不再跳过，行带 ``read_only=True``（composer 端上锁死；发送路由对
+    dead 账号本就有 409 兜底）。**只应在 account_id scoped 请求下开启**，全局
+    列表口径不变。返回 None 表示 store 不可用（调用方回落实时聚合）。
     """
     store = _inbox_store(request)
     if store is None:
@@ -239,6 +297,19 @@ def _collect_chats_from_store(
     convs = store.list_conversations(
         limit=min(200, max(1, limit * 4)), before_ts=before_ts,
         platform=platform, account_id=account_id)
+    # 置顶恒在首屏（2026-08-17 官方级消息管理）：top-N 时间窗截断对置顶会话不适用
+    # ——老客户被新流量挤出窗口后「置顶」就名存实亡。仅首页（无 before_ts 游标）
+    # 合并缺席的置顶行；分页页语义不变（置顶已在首页展示过）。best-effort。
+    if before_ts is None:
+        try:
+            pinned_rows = store.list_pinned_conversations(
+                platform=platform, account_id=account_id) or []
+        except Exception:
+            pinned_rows = []
+        if pinned_rows:
+            _seen = {str(c.get("conversation_id") or "") for c in convs}
+            convs = [r for r in pinned_rows
+                     if str(r.get("conversation_id") or "") not in _seen] + convs
     out: List[Dict[str, Any]] = []
     for c in convs:
         cid = str(c.get("conversation_id") or "")
@@ -249,13 +320,15 @@ def _collect_chats_from_store(
             mc = 0
         key = (str(c.get("platform") or ""), str(c.get("account_id") or "default"))
         st = acct_status.get(key, "")
-        if st == "offline":
+        if st == "offline" and not include_hidden:
             continue  # 历史在 store，重登后同路径自动回显
         out.append(store_row_to_chat(
             c, automation_mode=mode, message_count=mc,
             account_label=lmap.get(key),
-            # read_only 专指「软删只读历史」语义（前端据此归入已移除 tab）
-            read_only=(st == "removed"),
+            # read_only 专指「软删只读历史」语义（前端据此归入已移除 tab）；
+            # include_hidden（账号历史视角）下 offline 行同样置只读——已退出
+            # 账号发不出消息，端上必须一致锁死 composer。
+            read_only=(st == "removed" or (include_hidden and st == "offline")),
             account_status=st,
             can_send=(False if st else None),
         ))
@@ -397,9 +470,18 @@ def _thread_messages_from_store(
     if store is None:
         return None
     try:
-        rows = store.list_recent_messages(
-            conversation_id, limit=limit, before_ts=before_ts,
-        )
+        # include_deleted=False（2026-08-17）：UI 线程读路径过滤「仅工作台删除」的
+        # 软删行；业务口径消费方（回复时延/replied-after 护栏）走默认参不受影响。
+        # 旧 store（未升级）无此形参 → TypeError 回落旧签名，行为兼容。
+        try:
+            rows = store.list_recent_messages(
+                conversation_id, limit=limit, before_ts=before_ts,
+                include_deleted=False,
+            )
+        except TypeError:
+            rows = store.list_recent_messages(
+                conversation_id, limit=limit, before_ts=before_ts,
+            )
     except Exception:
         logger.debug("store thread 读取失败（已忽略）", exc_info=True)
         return None

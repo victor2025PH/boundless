@@ -72,7 +72,7 @@
         render(d);
       }).catch(function(){ document.getElementById('el-list').innerHTML='<span class="tk-fail">'+window.T('rpa_load_failed')+'</span>'; });
     },
-    go:function(cid){ try{ sessionStorage.setItem('ws_focus_conv', cid); }catch(_){ } location.href='/workspace'; }
+    go:function(cid){ try{ sessionStorage.setItem('ws_focus_conv', cid); }catch(_){ } if(!(window.__wsGoHome&&window.__wsGoHome({cid:cid}))) location.href='/workspace'; }
   };
   EL.load(); setInterval(EL.load, 60000);
 })();

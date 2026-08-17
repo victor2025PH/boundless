@@ -78,6 +78,24 @@ class SendCountStore:
             ).fetchone()
         return int((row[0] if row else 0) or 0)
 
+    def nth_oldest_since(
+        self, account_key: str, since_ts: float, n: int,
+    ) -> Optional[float]:
+        """窗口内第 ``n`` 老（1-indexed）的发送时间戳；不足 ``n`` 条 → None。
+
+        供「日额度何时释放空位」预估（滚动 24h 窗：第 k 老的记录过期时刻 =
+        其 ts + 24h）。只读，不影响计数路径。
+        """
+        if n < 1:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT ts FROM account_sends WHERE account_key=? AND ts>=? "
+                "ORDER BY ts ASC LIMIT 1 OFFSET ?",
+                (str(account_key), float(since_ts), int(n) - 1),
+            ).fetchone()
+        return float(row[0]) if row else None
+
     def _prune_locked(self, before_ts: float) -> None:
         try:
             self._conn.execute("DELETE FROM account_sends WHERE ts<?", (float(before_ts),))
@@ -192,6 +210,41 @@ class AutoReplyLimiter:
                 self._fails[account_key] = 0
                 return True
             return False
+
+    def quota_frees_at(
+        self, account_key: str, cap: int, now: Optional[float] = None,
+    ) -> Optional[float]:
+        """日额度（滚动 24h 窗）预计**首个空位**的释放时刻。
+
+        ``day_used >= cap`` 时：窗口内第 ``day_used - cap + 1`` 老的发送记录
+        过期（ts + 24h）即腾出一个名额。未超限 / cap<=0 / 无数据 → None。
+        与 ``_counts`` 同数据源（store 优先、内存 deque 兜底），保证「预计
+        释放时刻」与「拦不拦」用的是同一份计数。
+        """
+        now = now if now is not None else time.time()
+        cap = int(cap or 0)
+        if cap <= 0:
+            return None
+        with self._lock:
+            _hour, day = self._counts(account_key, now)
+            k = day - cap + 1
+            if k <= 0:
+                return None
+            ts: Optional[float] = None
+            if self._store is not None:
+                try:
+                    ts = self._store.nth_oldest_since(account_key, now - _DAY, k)
+                except Exception:
+                    logger.debug("[limiter] nth_oldest_since 失败，降级内存",
+                                 exc_info=True)
+                    ts = None
+            if ts is None:
+                dq = self._sends.get(account_key)
+                if dq:
+                    self._prune(dq, now)
+                    if len(dq) >= k:
+                        ts = dq[k - 1]   # deque 按 append 时序天然升序
+            return (float(ts) + _DAY) if ts is not None else None
 
     def snapshot(
         self, account_key: str, now: Optional[float] = None,

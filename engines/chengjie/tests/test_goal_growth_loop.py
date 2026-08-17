@@ -3028,11 +3028,13 @@ class TestAuthorizedOffers:
         assert allowlist_texts({"claims": "坏形状"}) == []
 
     def test_production_catalog_authorizes_only_real_trial(self):
-        """出厂目录只授权客户端真给得出的 7 天；14 天属 AvatarHub 线不得混入。
+        """出厂目录只授权客户端真给得出的事实；按天试用已不存在，不得再授权。
 
-        14 天试用来自 website/lib/avatarhub-pricing.ts 的 trial 档，而本目录
-        刻意只收公开货架的 ChatX/LingoX——把 14 填进 free_days 等于授权苏婉
-        承诺这两个产品没有的试用（比守卫误剥更贵的事故）。
+        2026-08-11 免费档升级：按天试用（旧 7 天档）→ 100 万字符 · 无期限。
+        目录 free_days 必须清空——否则苏婉还在承诺一个已下线的「免费试用 7 天」
+        （比守卫误剥更贵的事故：客户装完发现根本没有按天试用）。14 天试用属
+        AvatarHub 线，同样不得混入。字符量类事实（「免费 100 万字符」）不含
+        天/周/月单位，守卫的 freebie 模式天然不抓，无需授权也不会被剥。
         """
         from pathlib import Path
 
@@ -3047,13 +3049,16 @@ class TestAuthorizedOffers:
             (Path(__file__).resolve().parents[1] / "config"
              / "site_catalog.yaml").read_text(encoding="utf-8")) or {}
         days = authorized_free_days(cat)
-        assert 7 in days, "客户端真有的 7 天试用必须登记，否则真事实被守卫剥掉"
-        assert 14 not in days, "14 天试用属 AvatarHub 线，本目录不得授权"
+        assert days == [], "免费档已无按天试用：free_days 必须留空，别再授权 7/14 天"
         allow = allowlist_texts(cat)
+        assert any("100 万字符" in t for t in allow), "新免费档事实必须登记进 texts"
         kw = {"allowed_texts": allow, "allowed_free_days": days}
-        assert sanitize_offer_claims("可以先免费试用 7 天", **kw)[1] == 0
+        # 旧 7 天话术现在是编的 → 必须被剥（正是本次升级要防的穿帮）
+        assert sanitize_offer_claims("可以先免费试用 7 天", **kw)[1] == 1
         assert sanitize_offer_claims("免费试用 14 天", **kw)[1] == 1
         assert sanitize_offer_claims("给你打个8折", **kw)[1] == 1
+        # 字符量类事实不触发时长/折扣模式，原样放行
+        assert sanitize_offer_claims("注册就能免费领 100 万字符", **kw)[1] == 0
 
     def test_offer_guard_replaces_all_promise_reply(self):
         """整条就是一句承诺 → 换合规话术（回退原文＝没守，正是事故形态）。"""

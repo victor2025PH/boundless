@@ -177,21 +177,80 @@ def vote_language(
     return max(scores.items(), key=lambda kv: kv[1])[0]
 
 
+def current_inbound_burst_lang(
+    messages: List[Dict[str, Any]], *, max_msgs: int = 6,
+) -> str:
+    """「客户此刻在说什么语言」——末尾连续入站段（burst）的强证据语言（纯函数）。
+
+    多数决（``vote_language``）天生滞后：客户刚切换语言的那一轮强证据会被历史多数
+    压过——生成端（lang_policy 强证据立即跟随）已按新语言拟稿，翻译端却按旧窗口
+    多数把它整段翻回去，**两个脑子打架且翻译端永远赢**。2026-08-15 messenger 实锤
+    （Wisley 会话）：老板发中文「记录了」，草稿正确生成中文，出站翻译按窗口多数
+    en 把它翻成英文发出。
+
+    口径与 lang_policy 对齐：只取**末尾连续入站**消息（撞到出站即停——更早的入站
+    属于上一轮对话，归多数决管），**由新到旧逐条**判级（``classify_evidence``），
+    返回第一条强证据消息的语言——与生成端「当条强证据立即跟随」同拍。**刻意不拼接
+    整个 burst 再判**：混排拼接会让 detect 按字符多数稀释掉最新那条的切换信号
+    （「英文长句 + 记录了」拼起来判 en，恰好复刻要修的病）。中性/弱证据（emoji、
+    「ok」、孤立短拉丁）跳过继续往前找；整段无强证据返回 ""，调用方回落多数决
+    ——语言稳定性与 garble 护栏语义不受影响。
+
+    入参 ``messages`` 按 ts 升序（``list_recent_messages`` 契约）。
+    """
+    if not messages:
+        return ""
+    try:
+        from src.ai.lang_policy import EvidenceStrength, classify_evidence
+    except Exception:  # pragma: no cover - 极端导入失败按无证据处理
+        return ""
+    scanned = 0
+    for m in reversed(messages):
+        if not isinstance(m, dict):
+            continue
+        if str(m.get("direction") or "in") == "out":
+            break
+        text = str(m.get("text") or "").strip()
+        # 纯媒体占位（[语音]/[图片]）不构成语言证据，但也不打断 burst
+        if not text or (text.startswith("[") and text.endswith("]") and " " not in text):
+            continue
+        scanned += 1
+        try:
+            lang, strength = classify_evidence(text)
+        except Exception:  # pragma: no cover - 单条检测失败跳过不阻断
+            logger.debug("[outbound_translate] burst 单条判级失败", exc_info=True)
+            lang, strength = "", ""
+        if lang and strength == EvidenceStrength.STRONG:
+            return normalize_target(lang)
+        if scanned >= max(1, int(max_msgs)):
+            break
+    return ""
+
+
 def _conv_language(store: Any, conversation_id: str, *, detect: Any = None) -> str:
     """best-effort 取会话客户语言。
 
-    优先用最近入站消息**加权多数决**（需 ``detect`` 且 store 能取近窗消息）——比
-    ``conversations.language`` 单值更抗「偶发一条外语消息翻转会话语言」。多数决无样本
-    /不可用时回落 ``conversations.language`` 持久值（旧行为）。失败 → ""。
+    三层：① 末尾入站 burst 强证据（客户**此刻**在说什么——与生成端 lang_policy
+    「强证据立即跟随」同拍，防翻译端拿历史多数推翻生成端的正确选择）→ ② 最近
+    入站**加权多数决**（抗「偶发一条外语消息翻转会话语言」）→ ③ 回落
+    ``conversations.language`` 持久值（旧行为）。失败 → ""。
     """
     if store is None or not conversation_id:
         return ""
-    # 加权多数决（新增主路径）
     if detect is not None and hasattr(store, "list_recent_messages"):
         try:
             recent = store.list_recent_messages(
                 conversation_id, limit=_LANG_VOTE_WINDOW) or []
+            burst = current_inbound_burst_lang(recent)
             voted = vote_language(recent, detect=detect)
+            if burst and voted and burst != voted:
+                # 客户刚切换语言、历史多数还没跟上——正是本层存在的意义，留痕便于归因
+                logger.info(
+                    "[outbound_translate] burst 语言覆盖多数决 conv=%s burst=%s voted=%s",
+                    conversation_id, burst, voted,
+                )
+            if burst:
+                return burst
             if voted:
                 return voted
         except Exception:
@@ -279,6 +338,27 @@ def _gate_record(outcome: str, *, conversation_id: str = "", target: str = "") -
         logger.debug("[outbound_translate] 硬闸埋点失败", exc_info=True)
 
 
+def _report_block_safe(cid: str, target: str, reason: str) -> None:
+    """HOLD → delivery_block 上报（弹窗+主机错误日志，best-effort 绝不抛）。"""
+    try:
+        from src.ops.delivery_block import report_block
+        report_block(
+            "translate", reason=str(reason or "hold")[:120],
+            conversation_id=cid, detail=f"target={target}")
+    except Exception:
+        logger.debug("[outbound_translate] delivery_block 上报失败", exc_info=True)
+
+
+# 无可译内容（纯 emoji/标点/数字/空白，无任何文字系统字符）→ 翻译是无操作，
+# 直接放行不算兜底（严格 HOLD 化后若不放行，「👍」会被引擎原样回显再被
+# degraded 判定误拦）。字母表覆盖：拉丁(含扩展)/西里尔/阿拉伯/泰/希伯来/
+# 天城文/CJK/假名/谚文。
+_TRANSLATABLE_RE = re.compile(
+    r"[A-Za-z\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF"
+    r"\u0600-\u06FF\u0900-\u097F\u0E00-\u0E7F\u3040-\u30FF"
+    r"\u4E00-\u9FFF\uF900-\uFAFF\uAC00-\uD7AF]")
+
+
 def parse_outbound_lang_gate_cfg(config: Any) -> Dict[str, Any]:
     """读 ``inbox.l2_autosend.lang_gate`` → ``{enabled}``。**默认开**。
 
@@ -336,6 +416,8 @@ async def translate_outbound_text(
     cid = str(item.get("conversation_id") or "")
     if not text or translation_service is None:
         return text
+    if not _TRANSLATABLE_RE.search(text):
+        return text  # 纯 emoji/符号/数字：无可译内容，放行（非兜底，是无操作）
 
     # 会话目标语言用「最近入站消息加权多数决」（detect 取自同一 translation_service，
     # 与入站落库检测同源），比 conversations.language 单值抗偶发外语翻转。
@@ -376,38 +458,34 @@ async def translate_outbound_text(
             text, target_lang=target, source_lang=eff_source, style=style,
         )
     except Exception:
-        if cjk_conflict:
-            logger.warning(
-                "[outbound_translate] 翻译调用失败且文本含CJK、目标=%s → HOLD 不发 conv=%s",
-                target, cid, exc_info=True)
-            _gate_record("held", conversation_id=cid, target=target)
-            return None
-        logger.warning("[outbound_translate] 翻译调用失败，发原文 conv=%s", cid, exc_info=True)
-        return text
+        # 无兜底纪律（2026-08-17 老板拍板）：翻译失败一律 HOLD 不发——旧「非 CJK
+        # 冲突回落发原文」拆除（发客户看不懂的原文＝静默替代品，掩盖翻译链故障）。
+        logger.warning(
+            "[outbound_translate] 翻译调用失败 → HOLD 不发（无兜底纪律）"
+            "target=%s conv=%s", target, cid, exc_info=True)
+        _gate_record("held", conversation_id=cid, target=target)
+        _report_block_safe(cid, target, "translate_exception")
+        return None
 
     translated = str(getattr(res, "translated_text", "") or "")
     provider = str(getattr(res, "provider", "") or "")
     err = str(getattr(res, "error", "") or "")
     ok = bool(getattr(res, "ok", False))
 
-    # 失败 / 空 / 与原文相同（provider=identity/none 或未真译）/ 译文仍**实质性**含 CJK：
-    #   - 冲突态 → HOLD（None）：identity 回显正是 198 泄漏的机制，绝不能当译文发；
-    #   - 非冲突态 → 回落原文（旧行为），不记录无意义副行。
-    # 译文残留判定同用 cjk_substantial：好译文保留「村BA」这类专名引用不算失败
-    # （旧口径 contains_cjk 会把带专名的合格译文误 HOLD）。
+    # 失败 / 空 / 与原文相同（provider=identity/none 或未真译）/ 译文仍**实质性**含 CJK
+    # → 一律 HOLD 不发（2026-08-17 无兜底纪律：旧「非冲突态回落原文」拆除——发
+    # 客户看不懂/未真译的文本＝静默替代品）。identity 回显正是 198 泄漏的机制。
+    # 译文残留判定同用 cjk_substantial：好译文保留「村BA」这类专名引用不算失败。
     degraded = (not ok or not translated or translated == text
                 or (cjk_conflict and cjk_substantial(translated)))
     if degraded:
-        if cjk_conflict:
-            logger.warning(
-                "[outbound_translate] CJK→%s 翻译不可用(provider=%s err=%s) → HOLD 不发 conv=%s",
-                target, provider or "-", err or "-", cid)
-            _gate_record("held", conversation_id=cid, target=target)
-            return None
-        if err:
-            logger.debug("[outbound_translate] 译文降级 conv=%s provider=%s err=%s",
-                         cid, provider, err)
-        return text
+        logger.warning(
+            "[outbound_translate] 译文不可用(provider=%s err=%s) → HOLD 不发"
+            "（无兜底纪律）target=%s conv=%s",
+            provider or "-", err or "-", target, cid)
+        _gate_record("held", conversation_id=cid, target=target)
+        _report_block_safe(cid, target, err or "translate_degraded")
+        return None
 
     if cjk_conflict and gate_only:
         # 硬闸救回（仅 gate_only 计数）：常规翻译模式下 CJK→客户语言是设计内的

@@ -18,8 +18,11 @@ window.WS_I18N = {{ i18n|default({})|tojson }};
 {% endif %}
 window.WS_I18N = window.WS_I18N || {};   /* 外链包意外未达时 T() 回落键名，不抛错 */
 window.WS_LANG = window.WS_LANG || "{{ ui_lang|default('zh') }}";
-window.WS_LOCALE = window.WS_LOCALE || "{{ 'zh-CN' if (ui_lang|default('zh')) == 'zh' else ('vi-VN' if (ui_lang|default('zh')) == 'vi' else 'en-US') }}";
-window.wsDateLocale = function(){ return window.WS_LOCALE || (window.WS_LANG==='en'?'en-US':(window.WS_LANG==='vi'?'vi-VN':'zh-CN')); };
+/* locale 映射表驱动（xlate P3）：加 UI 语言改下一行与 i18n_packs.UI_LOCALES 两处即可。
+   （用 JS 注释而非 Jinja 注释——本文件头部纪律：script 内不写 Jinja 定界符，
+   否则 test_template_inline_js_syntax 的掩码器不剥注释定界符会把它当坏 JS。） */
+window.WS_LOCALE = window.WS_LOCALE || "{{ {'zh':'zh-CN','en':'en-US','vi':'vi-VN','th':'th-TH','id':'id-ID'}.get(ui_lang|default('zh'), 'en-US') }}";
+window.wsDateLocale = function(){ if(window.WS_LOCALE) return window.WS_LOCALE; var m={zh:'zh-CN',en:'en-US',vi:'vi-VN',th:'th-TH',id:'id-ID'}; return m[window.WS_LANG]||'zh-CN'; };
 window.wsFmtDate = function(ts, opts){
   if(ts==null||ts==='') return '';
   var d=new Date(ts<1e12?ts*1000:ts);
@@ -38,7 +41,53 @@ window.T = function(k, fb){ var v = window.WS_I18N && window.WS_I18N[k]; return 
 /* Tf：带占位符插值的 T —— Tf(key,{tag}) 把译文里的 {tag} 全替为值。
    用 split/join 全局替换（免正则转义），各语言只存一句含 {x} 的完整文案，杜绝字符串拼接。 */
 window.Tf = function(k, vars){ var s = window.T(k); if(vars){ for(var p in vars){ if(Object.prototype.hasOwnProperty.call(vars,p)){ s = s.split('{'+p+'}').join(String(vars[p])); } } } return s; };
-window.wsToggleLang = function(){ var c=window.WS_LANG||'zh'; var n=(c==='zh')?'en':(c==='en')?'vi':'zh'; location.href='/set_lang?lang='+n; };
+/* 语言切换（xlate P3 升级）：三语循环 → 就地五语选择器。所有调用点（顶栏 pill /
+   用户菜单 / 各页兜底）零改动自动升级；语言名用其母语自称（选择器惯例，刻意不随
+   UI 语言翻译——zh 自称用 unicode 转义写，守住共享 partial 零裸 CJK 门禁）。
+   th/id 标 β=覆盖渐进（en 底回落）。异常一律回落旧式循环，绝不让切换入口失效。 */
+window.WS_UI_LANGS = window.WS_UI_LANGS || [
+  ['zh','\u4e2d\u6587'], ['en','English'], ['vi','Ti\u1ebfng Vi\u1ec7t'], ['th','\u0e44\u0e17\u0e22 (\u03b2)'], ['id','Bahasa Indonesia (\u03b2)']
+];
+window.wsToggleLang = function(ev){
+  try{
+    var old=document.getElementById('ws-lang-menu');
+    if(old){ old.parentNode.removeChild(old); return; }
+    var cur=window.WS_LANG||'zh';
+    var box=document.createElement('div'); box.id='ws-lang-menu';
+    box.style.cssText='position:fixed;z-index:10050;background:var(--tk-surface,#fff);color:var(--tk-text,#16223a);border:1px solid var(--tk-border,#d7dce3);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.18);padding:4px;min-width:172px;font-size:13px;';
+    var langs=window.WS_UI_LANGS||[];
+    for(var i=0;i<langs.length;i++){
+      (function(code,label){
+        var a=document.createElement('div');
+        a.textContent=(code===cur?'✓ ':'')+label;
+        a.style.cssText='padding:7px 12px;border-radius:7px;cursor:pointer;white-space:nowrap;'+(code===cur?'font-weight:700;':'');
+        a.onmouseenter=function(){ a.style.background='rgba(125,125,125,.14)'; };
+        a.onmouseleave=function(){ a.style.background=''; };
+        a.onclick=function(){ location.href='/set_lang?lang='+code; };
+        box.appendChild(a);
+      })(langs[i][0], langs[i][1]);
+    }
+    document.body.appendChild(box);
+    var e=ev||window.event;
+    var anchor=e&&e.target&&e.target.closest?e.target.closest('a,button'):null;
+    var r=anchor?anchor.getBoundingClientRect():null;
+    var bw=box.offsetWidth||172, bh=box.offsetHeight||190;
+    var x=r?Math.min(Math.max(8,r.left), window.innerWidth-bw-8):(window.innerWidth-bw)/2;
+    var y=r?((r.bottom+bh+8<window.innerHeight)?(r.bottom+6):(r.top-bh-6)):(window.innerHeight/2-bh/2);
+    box.style.left=Math.round(x)+'px'; box.style.top=Math.round(Math.max(8,y))+'px';
+    setTimeout(function(){
+      document.addEventListener('click', function _c(evt){
+        if(!box.contains(evt.target)){
+          if(box.parentNode) box.parentNode.removeChild(box);
+          document.removeEventListener('click',_c,true);
+        }
+      }, true);
+    },0);
+  }catch(_){
+    var c=window.WS_LANG||'zh'; var n=(c==='zh')?'en':(c==='en')?'vi':'zh';
+    location.href='/set_lang?lang='+n;
+  }
+};
 (function(){
   function apply(root){
     root=root||document;

@@ -112,10 +112,54 @@ def test_poll_surfaces_license_once_then_stops(state_file):
     first = tc.poll(fetch=site)
     assert first["license"] == "LIC.TOKEN"
 
-    tc.mark_activated()  # 路由激活成功后会调它
+    # 路由激活成功后会带内容指纹调它（新契约）
+    tc.mark_activated(token_sha=tc.token_sha("LIC.TOKEN"))
     second = tc.poll(fetch=site)
-    assert "license" not in second, "已激活就别再把授权在网络上搬来搬去"
+    assert "license" not in second, "已激活且内容没变，就别再把授权在网络上搬来搬去"
     assert second["activated"] is True
+
+
+def test_poll_resurfaces_license_when_content_changes(state_file):
+    """存量升级重签：官网上的 license 内容变了（sha 失配）→ 必须重新回传落盘。
+
+    这是「免费档 25k/7天 → 100 万/无期限」存量升级的客户端拉取通道——
+    没有它，老用户的授权 payload 永远固化在旧规格。
+    """
+    site = FakeSite(status={"ok": True, "status": "issued", "license": "LIC.OLD"})
+    tc.claim("@bob", fetch=site)
+    assert tc.poll(fetch=site)["license"] == "LIC.OLD"
+    tc.mark_activated(token_sha=tc.token_sha("LIC.OLD"))
+    assert "license" not in tc.poll(fetch=site)
+
+    site.status_resp = {"ok": True, "status": "issued", "license": "LIC.UPGRADED"}
+    again = tc.poll(fetch=site)
+    assert again["license"] == "LIC.UPGRADED", "内容变化必须重新落盘（升级重签）"
+    tc.mark_activated(token_sha=tc.token_sha("LIC.UPGRADED"))
+    assert "license" not in tc.poll(fetch=site)
+
+
+def test_poll_self_heals_legacy_state_without_sha(state_file):
+    """旧版状态文件只有 activated_at 没有 license_sha（升级安装）——
+    poll 应把 license 再交给路由重放一次（幂等落盘）以补录指纹，而不是永久压制
+    （压制 = 老用户永远收不到升级重签）。"""
+    site = FakeSite(status={"ok": True, "status": "issued", "license": "LIC.TOKEN"})
+    tc.claim("@bob", fetch=site)
+    st = tc.load_state()
+    st["activated_at"] = 123
+    st.pop("license_sha", None)
+    tc.save_state(st)
+    assert tc.poll(fetch=site)["license"] == "LIC.TOKEN"
+
+
+def test_mark_activated_clears_exhausted_flag(state_file):
+    """升级重签后旧「已用尽」痕迹不再成立——留着会让向导/会员页继续说『用完了』。"""
+    site = FakeSite()
+    tc.claim("@bob", fetch=site)
+    tc.mark_expired()
+    assert tc.summarize(tc.load_state())["exhausted"] is True
+    tc.mark_activated(token_sha="abc")
+    s = tc.summarize(tc.load_state())
+    assert s["exhausted"] is False and s["activated"] is True
 
 
 def test_poll_surfaces_voucher_once(state_file):
@@ -145,6 +189,99 @@ def test_summary_never_leaks_credentials(state_file):
     assert "license" not in saved and "topup_voucher" not in saved, \
         "本地状态文件只记进度，凭证归 license.key / 额度库"
     assert "license" not in tc.summarize(saved)
+
+
+# ── 邀请码 / 追加凭证 / 用量水位（2026-08-11 邀请裂变）──────────────────────
+
+def test_claim_passes_invite_code_only_when_given(state_file):
+    site = FakeSite()
+    tc.claim("@bob", invite_code=" zl-abc234 ", fetch=site)
+    _m, _u, body = site.calls[0]
+    assert body["invite_code"] == "ZL-ABC234", "邀请码随建单上送（规整大写）"
+    assert tc.load_state().get("invited_by") == "ZL-ABC234"
+
+
+def test_claim_without_invite_code_sends_no_field(state_file):
+    site = FakeSite()
+    tc.claim("@bob", fetch=site)
+    assert "invite_code" not in site.calls[0][2]
+
+
+def test_poll_filters_extra_vouchers_by_done_refs(state_file):
+    """追加凭证（邀请奖励）按本地已入账 ref 过滤；入账后不再回传。"""
+    site = FakeSite(status={"ok": True, "status": "issued", "extra_vouchers": [
+        {"ref": "refwel-r1", "voucher": "V1", "chars": 100_000, "note": "referral-welcome"},
+        {"ref": "refearn-r2", "voucher": "V2", "chars": 100_000},
+    ]})
+    tc.claim("@bob", fetch=site)
+    first = tc.poll(fetch=site)
+    assert [v["ref"] for v in first["extra_vouchers"]] == ["refwel-r1", "refearn-r2"]
+
+    tc.mark_extra_voucher("refwel-r1", 100_000)
+    second = tc.poll(fetch=site)
+    assert [v["ref"] for v in second["extra_vouchers"]] == ["refearn-r2"]
+
+    tc.mark_extra_voucher("refearn-r2", 100_000)
+    third = tc.poll(fetch=site)
+    assert "extra_vouchers" not in third
+    assert tc.load_state().get("extra_chars_total") == 200_000
+
+
+def test_invite_info_requires_claim(state_file):
+    assert tc.invite_info(fetch=FakeSite())["error"] == "not_claimed"
+
+
+def test_invite_info_fetches_and_caches_code(state_file):
+    def fetch(url, method, body):
+        assert "/api/trial/invite-info" in url
+        assert "claim_id=tc_1" in url and "fingerprint=A1B2-C3D4-E5F6-0789" in url
+        return {"ok": True, "code": "ZL-XYZ234", "share_url": "https://x/dl?ref=ZL-XYZ234",
+                "invitee_bonus": 100_000, "inviter_bonus": 100_000,
+                "stats": {"registered": 2}}
+    tc.claim("@bob", fetch=FakeSite())
+    r = tc.invite_info(fetch=fetch)
+    assert r["ok"] and r["code"] == "ZL-XYZ234"
+    assert tc.load_state().get("invite_code") == "ZL-XYZ234"
+
+
+def test_usage_report_is_throttled(state_file):
+    """水位上报挂在额度端点旁路：不节流就是每 60s 一发外呼。"""
+    calls = []
+
+    def fetch(url, method, body):
+        calls.append(body)
+        return {"ok": True}
+
+    tc.claim("@bob", fetch=FakeSite())
+    assert tc.maybe_report_usage(500, fetch=fetch, now=1000)["reported"] == 500
+    # 涨幅不足 / 间隔不足 → skip
+    assert tc.maybe_report_usage(900, fetch=fetch, now=1200)["skipped"] is True
+    assert tc.maybe_report_usage(1600, fetch=fetch, now=1300)["skipped"] is True
+    # 涨幅够 + 间隔够 → 报
+    assert tc.maybe_report_usage(1600, fetch=fetch, now=1700)["reported"] == 1600
+    # 水位回退（换库/清账）不报——单调只增
+    assert tc.maybe_report_usage(100, fetch=fetch, now=9999)["skipped"] is True
+    assert len(calls) == 2
+    assert calls[0]["claim_id"] == "tc_1" and calls[0]["used_chars"] == 500
+
+
+def test_usage_report_fires_immediately_on_qualify_threshold(state_file):
+    """首次跨过邀请达标门（1 万字符）必须立即上报——那正是对方在等的信号，
+    按常规节流窗最多会迟到 10 分钟。"""
+    calls = []
+
+    def fetch(url, method, body):
+        calls.append(body)
+        return {"ok": True}
+
+    tc.claim("@bob", fetch=FakeSite())
+    tc.maybe_report_usage(9_800, fetch=fetch, now=1000)
+    r = tc.maybe_report_usage(10_050, fetch=fetch, now=1010)   # 间隔仅 10s、涨幅仅 250
+    assert r.get("reported") == 10_050, "跨过达标门要豁免节流"
+
+
+def test_usage_report_requires_claim(state_file):
+    assert tc.maybe_report_usage(5000, fetch=FakeSite())["error"] == "not_claimed"
 
 
 # ── 绑定码 ─────────────────────────────────────────────────────────────────
@@ -185,7 +322,8 @@ def test_funnel_rejects_unknown_event(state_file):
 def test_funnel_event_names_match_desktop_catalog():
     """与桌面壳 FR_FUNNEL_EVENTS 同口径（两边各有一张表，靠这条钉住不漂移）。"""
     assert tc.FUNNEL_EVENTS == {
-        "welcome", "claim_submit", "claim_ok", "claim_skip", "gift_open", "done"}
+        "welcome", "claim_submit", "claim_ok", "claim_skip", "gift_open", "done",
+        "invite_share"}
 
 
 def test_funnel_treats_204_empty_body_as_success(state_file):

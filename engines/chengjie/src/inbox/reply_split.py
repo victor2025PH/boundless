@@ -30,6 +30,29 @@ _LONG_DIGIT_RE = re.compile(r"\d{8,}")
 _CJK_CHAR_RE = re.compile(r"[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]")
 _LATIN_CHAR_WEIGHT = 0.25
 
+# ── 条间节奏「时代缺省」（2026-08-14 两步收口，173 实录「第 2/3 条机关枪」）──
+# 第一步先修英文手速刻度错用（加权刻度 0.03×0.25=0.0075s/字符≈1600 字符/分钟，
+# 英文打字分量趋近 0）；第二步按运营拍板把**典型条间隔整体抬到 5–10 秒量级**。
+# 模型＝ min(max_gap, max(lo, uniform(lo,hi)×0.55 + 下一条打字耗时))，设计要点：
+# 让「思考+打字」自然落进 5–10s，而不是靠地板/封顶硬夹——恒 lo（节拍器）与
+# 恒触顶都是另一种机器味。为此两个手速必须同步抬到真人刻度（旧 CJK 0.03s/字
+# ＝每秒 33 字属超人手速，中文打字分量趋近 0，光抬 lo/hi 会让地板恒生效）：
+#   - CJK 0.22s/字 ≈ 270 字/分钟（快手打字员）：18 字中文泡打字 ≈ 4s；
+#   - 拉丁 0.15s/字符 ≈ 80wpm：40 字符英文泡打字 ≈ 6s。
+# 叠加思考分量 uniform(3,8)×0.55 = 1.65–4.4s 后，典型泡（中文 12–25 字 /
+# 英文 20–60 字符）条间隔自然落在 5–10s，短句略快、长句触 12s 封顶——分布
+# 有方差、地板极少绑定。总预算 40s 是 SLA 软顶：手动链在 HTTP 请求内同步等待
+# 全部条间隔（前端 60s abort），4 间隔 ×12s 封顶=48s+发送往返会贴线，40s 预算
+# 等比压缩保节奏形状；典型 2 间隔（和 ~14s）永不触发。
+# 显式配置永远优先（含 0）；要回旧「机关枪时代」行为按 rapid 预设（0.8/2.5/6）。
+# reply_pacing_settings.FIELDS 的同名 default 必须与此同值（门禁钉住）。
+DEFAULT_GAP_SEC_LO = 3.0
+DEFAULT_GAP_SEC_HI = 8.0
+DEFAULT_PER_CHAR_SEC = 0.22
+DEFAULT_LATIN_PER_CHAR_SEC = 0.15
+DEFAULT_MAX_GAP_SEC = 12.0
+DEFAULT_TOTAL_BUDGET_SEC = 40.0
+
 # 句子边界：CJK 句末标点后天然可断；拉丁 .!? 只在后随空白时算句界
 # （防 3.5 / example.com / U.S. 之类被误切）。句中逗号/空格**绝不**再作硬切点
 # ——切不出句界就整句保留，宁可长一条也不把一句话说一半。
@@ -173,17 +196,19 @@ def parse_bubbles_cfg(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
             v = int(default)
         return max(lo, min(hi, v))
 
-    gap_lo = max(0.0, _f("gap_sec_lo", 0.8))
-    gap_hi = max(gap_lo, _f("gap_sec_hi", 2.5))
-    # latin_per_char_sec（2026-08-09）：非 CJK 字符的独立手速；None=沿用
-    # per_char_sec×0.25 加权刻度（零行为变更锚）。见 typing_time_sec docstring。
+    gap_lo = max(0.0, _f("gap_sec_lo", DEFAULT_GAP_SEC_LO))
+    gap_hi = max(gap_lo, _f("gap_sec_hi", DEFAULT_GAP_SEC_HI))
+    # latin_per_char_sec（2026-08-09 引入 / 2026-08-14 缺省落地）：非 CJK 字符的
+    # 独立手速。缺省从 None（沿用 per_char_sec×0.25 加权刻度＝英文机关枪根因）
+    # 改为 DEFAULT_LATIN_PER_CHAR_SEC；显式配置（含 0）永远优先。
+    # 见「时代缺省」常量块与 typing_time_sec docstring。
     latin_raw = bubbles.get("latin_per_char_sec")
-    latin_pcs: Optional[float]
+    latin_pcs: float
     try:
         latin_pcs = (max(0.0, min(2.0, float(latin_raw)))
-                     if latin_raw is not None else None)
+                     if latin_raw is not None else DEFAULT_LATIN_PER_CHAR_SEC)
     except (TypeError, ValueError):
-        latin_pcs = None
+        latin_pcs = DEFAULT_LATIN_PER_CHAR_SEC
     # P3 随机保留组：0..0.5——本可分条的消息按此概率强制整段（干净因果对照，
     # 与 bubbles 组比 3 天回复率）；0=不留对照（默认）。
     holdout = min(0.5, max(0.0, _f("holdout_pct", 0.0)))
@@ -203,14 +228,17 @@ def parse_bubbles_cfg(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
         "min_total_chars": _i("min_total_chars", 24, lo=0, hi=500),
         "gap_sec_lo": gap_lo,
         "gap_sec_hi": gap_hi,
-        "per_char_sec": max(0.0, _f("per_char_sec", 0.03)),
+        "per_char_sec": max(0.0, _f("per_char_sec", DEFAULT_PER_CHAR_SEC)),
         "latin_per_char_sec": latin_pcs,
-        # 条间延迟封顶（2026-08-04）：旧硬编码 6s 使「人设手速慢」在条间被一刀切
-        # 截断（60 字中文按真人手速要 5-8s+ 打字）；默认仍 6=零行为变更，运营可放宽。
-        "max_gap_sec": max(1.0, min(60.0, _f("max_gap_sec", 6.0))),
-        # 条间隔序列总预算（秒；0=关，默认关）：所有条间隔之和超预算 → 等比例压缩
-        # （保节奏形状），压缩后仍有 0.6s 地板。防 per_sentence 5 条×20s 拖满 80s。
-        "total_budget_sec": max(0.0, min(300.0, _f("total_budget_sec", 0.0))),
+        # 条间延迟封顶（2026-08-04 引入 / 2026-08-14 随 5–10s 换挡抬到 12）：
+        # 长泡（中文 40 字+/英文 60 字符+）打字分量会顶到这里，是 SLA 硬顶。
+        "max_gap_sec": max(1.0, min(60.0, _f("max_gap_sec", DEFAULT_MAX_GAP_SEC))),
+        # 条间隔序列总预算（秒；0=关）：所有条间隔之和超预算 → 等比例压缩
+        # （保节奏形状），压缩后仍有 0.6s 地板。2026-08-14 起默认 40：5–10s 换挡
+        # 后手动链（HTTP 请求内同步等待，前端 60s abort）4 间隔×12s 封顶会贴线，
+        # 40s 预算是防超时护栏；典型 2 间隔（和 ~14s）永不触发。
+        "total_budget_sec": max(0.0, min(
+            300.0, _f("total_budget_sec", DEFAULT_TOTAL_BUDGET_SEC))),
         "skip_groups": bool(bubbles.get("skip_groups", True)),
         "orch_only": bool(bubbles.get("orch_only", True)),
     }
@@ -250,6 +278,22 @@ def collapse_paragraphs(text: str) -> str:
         else:
             out += " " + ln
     return out
+
+
+def strip_blank_lines(text: str) -> str:
+    """剔除行间**空行**（纯函数，绝不抛）：非空行原样保留（仅去行首尾空白），
+    行序不变；单行/空文本仅 strip 后返回。
+
+    与 ``collapse_paragraphs`` 的分工：collapse 折成**一个段落**（bubbles 关、
+    单段落合同的出口护栏）；本函数只收「段1+空行+段2」的文章式排版——bubbles
+    开时多行是投递层拆条的合法形态（换行保留），但空行不许流出生成层
+    （2026-08-15 拍板「段落之间不要有空行，要链接在一起」）。拆条侧
+    ``splitlines`` 本就忽略空白行，此收口对投递节奏零影响。
+    """
+    raw = str(text or "").strip()
+    if not raw or "\n" not in raw:
+        return raw
+    return "\n".join(ln.strip() for ln in raw.splitlines() if ln.strip())
 
 
 def looks_like_group_chat(platform: str, chat_key: str) -> bool:
@@ -450,20 +494,19 @@ def split_reply_parts(
 def inter_part_delay_sec(
     next_text: str,
     *,
-    gap_sec_lo: float = 0.8,
-    gap_sec_hi: float = 2.5,
-    per_char_sec: float = 0.03,
+    gap_sec_lo: float = DEFAULT_GAP_SEC_LO,
+    gap_sec_hi: float = DEFAULT_GAP_SEC_HI,
+    per_char_sec: float = DEFAULT_PER_CHAR_SEC,
     latin_per_char_sec: Optional[float] = None,
-    max_gap_sec: float = 6.0,
+    max_gap_sec: float = DEFAULT_MAX_GAP_SEC,
     rng: Optional[random.Random] = None,
 ) -> float:
     """条间延迟 = 基础思考抖动 + 下一条长度×打字速率（Stephanie2 简化版）。
 
-    打字分量走 ``typing_time_sec``：默认加权刻度（CJK=1.0/其它=0.25，旧行为锚）；
-    ``latin_per_char_sec`` 显式给出时英文按真实手速计（加权刻度会把英文打字
-    耗时低估 ~4 倍，英语客户看到的条间仍是机关枪）。封顶 ``max_gap_sec``
-    （默认 6=旧行为；运营可放宽让慢热人设的条间节奏跟上手速）。
-    ``rng`` 可注入以便测试确定性。
+    打字分量走 ``typing_time_sec``：``latin_per_char_sec=None`` 时非 CJK 按
+    加权刻度（CJK=1.0/其它=0.25，历史行为锚——会把英文打字耗时低估 ~4 倍，
+    生产链一律从 ``parse_bubbles_cfg`` 显式透传真实手速）。封顶 ``max_gap_sec``。
+    签名缺省与「时代缺省」常量同源（5–10s 量级）。``rng`` 可注入以便测试确定性。
     """
     lo = max(0.0, float(gap_sec_lo))
     hi = max(lo, float(gap_sec_hi))
@@ -480,12 +523,12 @@ def inter_part_delay_sec(
 def plan_bubble_gaps(
     parts: List[str],
     *,
-    gap_sec_lo: float = 0.8,
-    gap_sec_hi: float = 2.5,
-    per_char_sec: float = 0.03,
+    gap_sec_lo: float = DEFAULT_GAP_SEC_LO,
+    gap_sec_hi: float = DEFAULT_GAP_SEC_HI,
+    per_char_sec: float = DEFAULT_PER_CHAR_SEC,
     latin_per_char_sec: Optional[float] = None,
-    max_gap_sec: float = 6.0,
-    total_budget_sec: float = 0.0,
+    max_gap_sec: float = DEFAULT_MAX_GAP_SEC,
+    total_budget_sec: float = DEFAULT_TOTAL_BUDGET_SEC,
     min_gap_floor: float = 0.6,
     rng: Optional[random.Random] = None,
 ) -> List[float]:

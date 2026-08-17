@@ -89,6 +89,42 @@ def tod_conflicts_with_hour(tod: str, hour: Any) -> bool:
     return 6 <= h < 17
 
 
+# ── 配文时刻词守卫（2026-08-12 实锤）──────────────────────────────────────
+# 凌晨 3 点发图，配文却是「下午的阳光刚好」——图可以是旧照（freshness=old 口径
+# 允许），但**现在时态的时刻词**与发送时刻硬冲突＝当场穿帮。只认高置信显式
+# 时刻词（早上/中午/下午/阳光正好…×深夜；凌晨/深夜/晚安…×白天），过去指涉
+# （「上次下午拍的」）由词表天然放过大半，误杀代价只是回落中性配文，可接受。
+_CAP_DAY_RE = re.compile(
+    r"早上|早晨|清晨|上午|中午|下午|晌午|阳光|陽光|太阳|太陽|"
+    r"\b(?:morning|noon|afternoon|sunshine|sunny)\b",
+    re.IGNORECASE)
+_CAP_NIGHT_RE = re.compile(
+    r"凌晨|深夜|半夜|夜里|夜裡|晚安|夜景|月亮|月光|"
+    r"\b(?:midnight|late\s+night|good\s*night|moonlight)\b",
+    re.IGNORECASE)
+
+
+def caption_tod_conflict(caption: Any, hour: Any) -> bool:
+    """固定配文里的显式时刻词与当前小时是否硬冲突（纯函数）。
+
+    与 ``tod_conflicts_with_hour`` 同分带：深夜 22-6 拦「白天词」配文、
+    白天 6-17 拦「深夜词」配文、17-22 傍晚不判。无时刻词/判不了小时=不冲突。
+    冲突时调用方应弃用该固定配文回落中性文案（图还发，只是话别说错）。
+    """
+    c = str(caption or "")
+    if not c:
+        return False
+    try:
+        h = int(hour)
+    except (TypeError, ValueError):
+        return False
+    if h >= 22 or h < 6:
+        return bool(_CAP_DAY_RE.search(c))
+    if 6 <= h < 17:
+        return bool(_CAP_NIGHT_RE.search(c))
+    return False
+
+
 def _tag_value(row: Optional[Dict[str, Any]], prefix: str) -> str:
     for t in (row or {}).get("tags") or []:
         ts = str(t or "")
@@ -153,6 +189,45 @@ def is_info_question(text: Any) -> bool:
     if not _QUESTION_RE.search(t):
         return False
     return not _MEDIA_REQ_RE.search(t)
+
+
+# ── 邀约/否定守卫（2026-08-12 实锤）─────────────────────────────────────────
+# 「出来喝咖啡」是**邀约**——客户约你出门，不是要看咖啡照片；触发词"咖啡"命中
+# 关键词池 → 凌晨 3 点甩出一张白天咖啡馆照＝已读乱回+穿帮双杀（实录）。同理
+# 「一起去看电影吧」「请你喝奶茶」都是社交动作，发图答非所问。否定句（「别再
+# 发图了」）更是明确拒收。两类都让关键词池让路，交正常 LLM 答话（回应邀约本身）。
+# 保守词表：邀约词必须是「共同行动」语义（出来/一起/约/请你/去不去…），单独
+# 提到名词（「我在喝咖啡」）不拦——运营配触发词的本意就是这类分享场景。
+# 显式求图动词优先放行：「出来玩之前先发张照片看看」仍是要图。
+_INVITE_RE = re.compile(
+    r"出[来來去]|一起|[约約](?:你|我|个|個|吗|嗎|不|[会會])?|"
+    r"[请請]你|带[你我]|陪我|"
+    r"去不去|来不来|來不來|要不要(?!看)|走不走|"
+    r"咱们去|我们去|我們去|见面|見面|"
+    r"\b(?:let'?s|join\s+me|come\s+(?:out|with|over)|wanna\s+go|"
+    r"meet\s+(?:up|me))\b",
+    re.IGNORECASE)
+_MEDIA_DECLINE_RE = re.compile(
+    r"[别別不][要再发發]?[发發传傳](?:图|圖|照|了)?|[别別]乱[发發]|"
+    r"[发發]什么[发發]|够了|夠了|"
+    r"\b(?:stop|don'?t)\s+send(?:ing)?\b",
+    re.IGNORECASE)
+
+
+def is_invite_or_decline(text: Any) -> bool:
+    """客户消息是「邀约/拒收」语境 → True＝关键词池应让路（发图答非所问）。
+
+    显式求图动词（``_MEDIA_REQ_RE``）优先——「出来玩前先发张自拍看看」仍要图；
+    但拒收类（别发了）即使句里带"发"字也拦（词面重叠由否定表自身消化）。
+    """
+    t = normalize_text(text)
+    if not t:
+        return False
+    if _MEDIA_DECLINE_RE.search(t):
+        return True
+    if _MEDIA_REQ_RE.search(t):
+        return False
+    return bool(_INVITE_RE.search(t))
 
 
 def _triggers_hit(triggers: Sequence[Any], text_norm: str) -> bool:
@@ -266,6 +341,9 @@ def select_media(
     # 信息性提问不劫持：疑问句且无求图动词 → 关键词池让路（见 is_info_question）。
     if keyword and is_info_question(text):
         keyword = []
+    # 邀约/拒收不劫持：「出来喝咖啡」是约人不是要图（见 is_invite_or_decline）。
+    if keyword and is_invite_or_decline(text):
+        keyword = []
     pool = keyword if keyword else (generic if generic_ok else [])
     from_generic = not keyword
     if not pool:
@@ -334,6 +412,9 @@ def explain_match(
     info_q = bool(keyword) and is_info_question(text)
     if info_q:
         keyword = []  # 与 select_media 同口径：预览不骗人
+    invite = bool(keyword) and is_invite_or_decline(text)
+    if invite:
+        keyword = []
     if keyword:
         pool, cands = POOL_KEYWORD, keyword
     elif generic_ok and generic:
@@ -440,5 +521,6 @@ __all__ = [
     "POOL_KEYWORD", "POOL_GENERIC", "POOL_NONE",
     "normalize_text", "select_media", "explain_match", "pick_media", "caption_for",
     "scene_class_of", "tod_conflicts_with_hour", "row_tod", "row_scene_class",
-    "row_file_key", "series_of", "is_info_question",
+    "row_file_key", "series_of", "is_info_question", "is_invite_or_decline",
+    "caption_tod_conflict",
 ]

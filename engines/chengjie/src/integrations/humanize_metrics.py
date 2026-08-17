@@ -23,7 +23,7 @@ _PACING_LOCK = threading.Lock()
 _PACING: Dict[str, Dict[str, float]] = {}
 _PACING_FIELDS = (
     "count", "adaptive_count", "sum_delay", "sum_target", "sum_elapsed",
-    "max_delay", "last_delay",
+    "max_delay", "last_delay", "floored_count",
 )
 
 
@@ -67,6 +67,10 @@ def record_pacing(path: str, result: Any) -> None:
             row["count"] += 1
             if is_adaptive:
                 row["adaptive_count"] += 1
+            # P1（2026-08-12）：残余/连发地板兜住的次数——「秒回修复是否真在
+            # 生效」的直接读数（floored_count 恒 0 + 配置>0 ＝地板没被踩到/没接上）。
+            if bool(getattr(result, "floored", False)):
+                row["floored_count"] += 1
             row["sum_delay"] += delay
             row["sum_target"] += target
             row["sum_elapsed"] += elapsed

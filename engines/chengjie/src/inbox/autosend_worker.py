@@ -26,6 +26,7 @@ import asyncio
 import logging
 import random
 import time
+from dataclasses import replace
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -98,6 +99,7 @@ class AutosendWorker:
         fresh_guard_cfg: Optional[Dict[str, Any]] = None,
         work_schedule_provider: Optional[Callable[[], Dict[str, Any]]] = None,
         catchup_regenerate_cb: Optional[Callable[..., bool]] = None,
+        pilot_guard: Optional[Callable[[str, str], bool]] = None,
     ) -> None:
         cfg = config or {}
         # deliver_only=True：本实例**只**作「人工通过→真投递」的载体，自动轮询循环
@@ -157,6 +159,13 @@ class AutosendWorker:
         # （见 humanize.compute_pacing_delay），否则 uniform(min,max)。原始块整体留存，
         # 交由 compute_pacing_delay 统一解析（单一装配点，与原生 A 线回复共用）。
         self._deliver_delay_block: Dict[str, Any] = dict(cfg.get("deliver_delay") or {})
+        # P1（2026-08-12）：同会话连发最小间隔地板的进程内账本
+        # {conversation_id: 最近一次成功出站 ts}。修「第 2/3 条秒回」：串行/并行队列里
+        # 后续草稿的 adaptive 抵扣把排队等待算成已耗时 → 延迟归零 → 同一客户收到
+        # 背靠背机关枪。地板只看「距本会话上一条出站多久」（deliver_delay.min_gap_sec，
+        # 默认 0=关），与抵扣正交。进程内即可：跨重启的首条本就有全额延迟。
+        self._last_conv_sent: Dict[str, float] = {}
+        self.total_gap_floored: int = 0
         # 并行投递（2026-08-09，默认关）：拟人节奏上线后单条投递可占 30-54s 延迟
         # + 至多 75s 分条间隔，串行循环下并发会话互相排队。开启后按会话分组并发
         # （同会话保序），见 _deliver_parallel。max_concurrent 夹 [1,8] 防误配。
@@ -237,6 +246,12 @@ class AutosendWorker:
         # 活动信号而非唯一草稿数；复班后自然归零增长）
         self.total_skipped_off_hours: int = 0
         self.total_catchup_regenerated: int = 0  # 复班补觉：作废陈稿并重拟的条数
+        self.total_skipped_pilot: int = 0  # 驾驶权在原生面板而取消的 L2 数（surface_fusion）
+
+        # 驾驶权互斥锁 guard（surface_fusion P0，2026-08-13，默认不注入=零行为变更）：
+        # (platform, account_id) -> bool。True＝该账号自动化持有者是「原生面板」，
+        # 工作台自动链让位（取消草稿防双发，人工链不受此闸）。判定 fail-open。
+        self._pilot_guard: Optional[Callable[[str, str], bool]] = pilot_guard
 
         # 出站近重复守卫（2026-08-02）：与最近出站（DB 镜像 + 进程级在途登记表）比对，
         # 命中即静默跳过——防「客户连发多条 → 两次独立生成互不知情 → 同义双发」。
@@ -443,31 +458,73 @@ class AutosendWorker:
                 k: dict(v) for k, v in self._platform_humanize.items()},
         }
 
+    def _note_conv_sent(self, conversation_id: str) -> None:
+        """登记本会话一次成功出站（min_gap_sec 地板的判据；自动/人工链同账本）。
+
+        账本有界：超 512 条时剔除 1h 前的旧条目（地板只关心几十秒尺度，1h 前
+        的记录对判定恒为「间隔已够」，删了语义不变）。
+        """
+        conv = str(conversation_id or "")
+        if not conv:
+            return
+        now = time.time()
+        self._last_conv_sent[conv] = now
+        if len(self._last_conv_sent) > 512:
+            cutoff = now - 3600.0
+            self._last_conv_sent = {
+                k: v for k, v in self._last_conv_sent.items() if v >= cutoff}
+
+    def _since_conv_sent(self, conversation_id: str) -> Optional[float]:
+        """距本会话上一条出站的秒数；进程内无记录 → None（首条不垫地板）。"""
+        ts = self._last_conv_sent.get(str(conversation_id or ""))
+        if not ts:
+            return None
+        return max(0.0, time.time() - ts)
+
     def _pick_deliver_delay(
         self, text: str = "", elapsed_sec: float = 0.0, persona_id: str = "",
-        platform: str = "",
+        platform: str = "", conversation_id: str = "",
     ) -> float:
         """按 deliver_delay 配置取本次拟人延迟（秒）。统一走 resolve_pacing：
         先合并覆写层（人设 > 平台 > 全局，见 humanize._apply_scoped_overrides）；
         adaptive=false→uniform(min,max)（旧行为）；adaptive=true→按回复内容长度/
         激活度估时并扣除 ``elapsed_sec`` 已耗时。未配置/非法 → 0。
+        P1（2026-08-12）：再过同会话连发地板 ``min_gap_sec``（见 apply_min_gap_floor
+        ——adaptive 把队列等待当已耗时抵扣对单条是对的，但连续两条出站之间必有
+        真人打字间隔；地板与抵扣正交，默认 0=关）。
         顺带按 平台/人设 分维记录节奏观测（best-effort；路径
-        ``autosend/{platform|-}/{persona|-}``，旧单段格式的前端解析已兼容两代）。"""
-        from src.inbox.humanize import resolve_pacing
+        ``autosend/{platform|-}/{persona|-}``，旧单段格式的前端解析已兼容两代；
+        记录的是**过完地板的最终延迟**——校准参数要看真实等待分布）。"""
+        from src.inbox.humanize import (
+            apply_min_gap_floor,
+            resolve_min_gap_sec,
+            resolve_pacing,
+        )
         r = resolve_pacing(
             self._deliver_delay_block, text=text, elapsed_sec=elapsed_sec,
             persona_id=persona_id, platform=platform)
+        delay = r.delay
+        gap = resolve_min_gap_sec(
+            self._deliver_delay_block, platform=platform, persona_id=persona_id)
+        if gap > 0 and conversation_id:
+            delay, floored = apply_min_gap_floor(
+                delay,
+                since_last_send_sec=self._since_conv_sent(conversation_id),
+                min_gap_sec=gap)
+            if floored:
+                self.total_gap_floored += 1
+                r = replace(r, delay=delay, floored=True)
         try:
             from src.integrations.humanize_metrics import record_pacing
             record_pacing(
                 f"autosend/{platform or '-'}/{persona_id or '-'}", r)
         except Exception:
             pass
-        return r.delay
+        return delay
 
     async def _run_humanize(
         self, platform: str, account_id: str, chat_key: str,
-        *, text: str = "", elapsed_sec: float = 0.0,
+        *, text: str = "", elapsed_sec: float = 0.0, conversation_id: str = "",
     ) -> None:
         """投递前拟人序列：已读 → 静默思考 → 打字续挂 → 投递（委托 humanize 协作器）。
 
@@ -513,7 +570,8 @@ class AutosendWorker:
 
         await run_presend_humanization(
             delay=self._pick_deliver_delay(
-                text, elapsed_sec, persona_id=_pid, platform=platform),
+                text, elapsed_sec, persona_id=_pid, platform=platform,
+                conversation_id=conversation_id),
             action="typing",
             mark_read=_mr,
             typing=_tp,
@@ -563,6 +621,33 @@ class AutosendWorker:
                 cached[key] = False
         return {"original_text": original_text} if cached[key] else {}
 
+    def _apply_compliance_disclosure(self, conversation_id: str, text: str) -> str:
+        """WP-4 系统级披露（compliance.disclosure.notice，基线关）：每会话首条
+        AI 出站前置披露语（持久防重，键=conversation_id）。
+
+        自动链与人工通过链共用本方法（两路措辞/时机绝不漂移）。放在出站翻译
+        **之后**调用——披露语按会话语言取内置模板，再过翻译层反而混语。语音
+        分支用翻译前原文合成（_send_cb_kwargs 透传 original_text），披露只落
+        文本面、克隆声绝不念出。开关关/provider 未注册/任何异常 → 原样返回。
+        """
+        try:
+            from src.compliance.disclosure import apply_disclosure
+            from src.compliance.runtime import runtime_config
+
+            lang_hint = ""
+            try:
+                from src.inbox.outbound_translate import peer_language_hint
+                _st = getattr(self._svc, "_store", None)
+                if _st is not None and conversation_id:
+                    lang_hint = peer_language_hint(_st, conversation_id) or ""
+            except Exception:
+                lang_hint = ""
+            out, _applied = apply_disclosure(
+                runtime_config(), conversation_id, text, lang_hint=lang_hint)
+            return out
+        except Exception:
+            return text
+
     async def deliver_human_approved(self, draft: Dict[str, Any]) -> Dict[str, Any]:
         """把**人工通过**的 inbox 草稿真投递到平台（2026-07-29 修「通过≠发送」断链）。
 
@@ -592,18 +677,21 @@ class AutosendWorker:
                     _tx = await self._translate_callback(item)
                 except Exception:
                     logger.warning(
-                        "[AutosendWorker] 人工通过出站翻译异常，发原文 conv=%s",
+                        "[AutosendWorker] 人工通过出站翻译回调异常 → HOLD 不发 conv=%s",
                         item["conversation_id"], exc_info=True)
-                # None = 翻译回调的 HOLD 信号（文本含 CJK 而客户语言非 CJK 且翻译
-                # 不可用，见 outbound_translate.translate_outbound_text）——发中文
-                # 给外语客户=人设穿帮，走投递失败链（审计+坐席铃铛），别发原文。
+                    _tx = None
+                # None = HOLD（无兜底纪律 2026-08-17：翻译失败一律不发原文，
+                # 回调内部已收口全部失败面；回调自身异常同按 HOLD）。走投递
+                # 失败链（审计+坐席铃铛），翻译链恢复后人工/重试补投。
                 if _tx is None:
                     raise RuntimeError(
-                        "translate_hold: 出站翻译不可用且文本语言与客户语言冲突，已拦截")
+                        "translate_hold: 出站翻译不可用，已拦截（无兜底纪律，不发原文）")
                 if _tx:
                     if _tx != send_text:
                         self.total_translated += 1
                     send_text = _tx
+            send_text = self._apply_compliance_disclosure(
+                item["conversation_id"], send_text)
             res = await send_cb(
                 item["platform"], item["account_id"], item["chat_key"],
                 send_text, **self._send_cb_kwargs(item["text"], send_cb),
@@ -616,6 +704,9 @@ class AutosendWorker:
                 raise RuntimeError(str(
                     res.get("error") or res.get("blocked") or "send not ok"))
             self.total_human_delivered += 1
+            # 人工通过也进同一账本：坐席刚发过 → 紧随的自动稿同样要垫连发地板
+            # （对客户视角「谁按的发送」不重要，背靠背两条出站一样露馅）。
+            self._note_conv_sent(item["conversation_id"])
             logger.info(
                 "[AutosendWorker] 人工通过草稿已投递 draft=%s conv=%s",
                 item["draft_id"], item["conversation_id"])
@@ -794,10 +885,9 @@ class AutosendWorker:
         _dup_token = 0  # 出站登记 token（失败撤销用），须在 try 外初始化
         try:
             # 出站翻译：投递前把 AI 中文回复译成客户语言（补「全自动聊天翻译」闭环）。
-            # 一般不阻塞投递（回调内部异常/不可译回落原文）；唯一例外＝回调返回
-            # None（HOLD：文本含 CJK 而客户语言非 CJK 且翻译不可用）→ 按投递失败
-            # 处理（进重试队列，翻译引擎恢复后自动补投）——发中文给外语客户是
-            # 人设事故，比这条消息迟到更糟（2026-07-31 198 实锤）。
+            # 无兜底纪律（2026-08-17）：需要翻译而翻译失败＝HOLD 不发（回调内部
+            # 已把全部失败面收成 None；此处回调**自身抛异常**同样按 HOLD 处理，
+            # 旧「异常发原文」拆除）→ 按投递失败进重试队列，翻译链恢复后自动补投。
             send_text = str(item.get("text", ""))
             if self._translate_callback is not None:
                 _tx = send_text
@@ -805,11 +895,12 @@ class AutosendWorker:
                     _tx = await self._translate_callback(item)
                 except Exception:
                     logger.warning(
-                        "[AutosendWorker] 出站翻译异常，发原文 conv=%s",
+                        "[AutosendWorker] 出站翻译回调异常 → HOLD 不发 conv=%s",
                         item.get("conversation_id", "?"), exc_info=True)
+                    _tx = None
                 if _tx is None:
                     raise RuntimeError(
-                        "translate_hold: 出站翻译不可用且文本语言与客户语言冲突，已拦截")
+                        "translate_hold: 出站翻译不可用，已拦截（无兜底纪律，不发原文）")
                 if _tx:
                     if _tx != send_text:
                         self.total_translated += 1
@@ -857,7 +948,8 @@ class AutosendWorker:
             _created = float(item.get("created_ts") or 0)
             _elapsed = max(0.0, time.time() - _created) if _created > 0 else 0.0
             await self._run_humanize(
-                _plat, _acc, _ck, text=send_text, elapsed_sec=_elapsed)
+                _plat, _acc, _ck, text=send_text, elapsed_sec=_elapsed,
+                conversation_id=_conv_id_g)
             # 延迟后二次过期复查（fresh_guard 同闸门，2026-08-05）：拟人延迟
             # 现可配 30-60s，而 _process_batch 的过期检查跑在延迟**之前**——
             # 整个延迟窗口原本不设防：客户此间插话，旧稿照发＝答非所问，
@@ -911,6 +1003,7 @@ class AutosendWorker:
                         exc_info=True)
             # original_text 透传（签名探测一次并缓存）：语音分支须用翻译前原文
             # 判定+合成；旧 4 参回调（含测试桩）不受影响。
+            send_text = self._apply_compliance_disclosure(_conv_id_g, send_text)
             _send_kw: Dict[str, Any] = self._send_cb_kwargs(
                 str(item.get("text", "")))
             res = await self._send_callback(
@@ -928,6 +1021,7 @@ class AutosendWorker:
                 raise RuntimeError(str(
                     res.get("error") or res.get("blocked") or "send not ok"))
             self.total_delivered += 1
+            self._note_conv_sent(_conv_id_g)
             if int(item.get("_attempt", 0)) > 0:
                 self.total_retry_recovered += 1
             try:   # P4 埋点：AI 承接（该会话首条自动回复投递成功，进程内每会话一次）
@@ -1116,6 +1210,34 @@ class AutosendWorker:
                         exc_info=True)
                 self.total_skipped_blocked += 1
                 continue
+            # 驾驶权互斥锁（surface_fusion P0，2026-08-13，默认关）：该账号的
+            # 自动化持有者是「原生面板」→ 工作台自动链让位，取消本稿防双发
+            # （语义与 send_blocked 同族：cancel 防堆积；切回 workspace 托管后
+            # 新草稿照常自动发）。人工通过走 deliver_human_approved 不经本闸。
+            # 判定 fail-open：guard 异常一律放行——锁故障绝不闸死自动回复。
+            if self._send_callback is not None and self._pilot_guard is not None:
+                _pg_block = False
+                try:
+                    _pg_block = bool(self._pilot_guard(
+                        str(d.get("platform") or ""),
+                        str(d.get("account_id") or "default")))
+                except Exception:
+                    logger.debug(
+                        "[AutosendWorker] 驾驶权判定异常（放行）", exc_info=True)
+                if _pg_block:
+                    try:
+                        _store_pg = getattr(self._svc, "_store", None)
+                        if _store_pg is not None and hasattr(
+                                _store_pg, "update_draft_status"):
+                            _store_pg.update_draft_status(
+                                draft_id, status="cancelled",
+                                decided_by="pilot_native")
+                    except Exception:
+                        logger.debug(
+                            "[AutosendWorker] 取消原生托管账号草稿失败 draft_id=%s",
+                            draft_id, exc_info=True)
+                    self.total_skipped_pilot += 1
+                    continue
             # 工作时间闸（inbox.work_schedule，2026-08-04，默认关）：账号休息中
             # → 草稿**留 pending 不处置**（不 resolve 不取消——复班后自动接续
             # 投递/补觉重拟），危机消息（severe/elevated）在判定内穿透照发。
@@ -1389,6 +1511,9 @@ class AutosendWorker:
                 self._typing_callback is not None and self._typing_enabled),
             "total_skipped_blocked": self.total_skipped_blocked,  # 因会话发送封禁跳过取消数
             "total_skipped_mode": self.total_skipped_mode,  # 因会话被降级(接管)取消的 L2 数
+            # 驾驶权互斥锁（surface_fusion）：owner=native 让位取消的 L2 数
+            "total_skipped_pilot": self.total_skipped_pilot,
+            "pilot_guard_wired": self._pilot_guard is not None,
             "recoverable": self._recoverable,
             "retry_pending": len(self._retry_queue),
             "total_retry_scheduled": self.total_retry_scheduled,
@@ -1401,6 +1526,10 @@ class AutosendWorker:
             "dup_guard_enabled": bool(self._dup_guard_cfg.get("enabled")),
             "total_superseded": self.total_superseded,  # 新入站过期守卫跳过数
             "fresh_guard_enabled": bool(self._fresh_guard_cfg.get("enabled")),
+            # P1 连发地板（2026-08-12）：min_gap_sec 抬升过延迟的次数——
+            # 「第 2/3 条秒回」修复是否真在生效，零流量即可判（恒 0 + 配置>0
+            # ＝没有连发场景或链没接上）。
+            "total_gap_floored": self.total_gap_floored,
             # 并行投递（2026-08-09）：开关/并发上限/走过并行分发的批次数——
             # 「配置开了没生效」零流量即可判（enabled=false 而运营以为开了）。
             "parallel_deliver": {

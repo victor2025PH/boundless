@@ -176,6 +176,9 @@ async def start_assistant(assistant):
             # ★ 每人设「相册/媒体」注册表（图/视频 + 触发词；始终开启，供相册后台/回复链读写）
             assistant._init_persona_media_store()
 
+            # ★ Telegram 群成员提取库（成员去重 + 提取任务/进度；始终建库，行为受 flag 门控）
+            assistant._init_group_members_store()
+
             # ★ FateX（问衍）产品独立库：生辰画像结构化行（与主库物理分离，账号隔离）
             assistant._init_fatex_store()
 

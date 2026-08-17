@@ -32,14 +32,15 @@ import logging
 from fastapi import HTTPException, Request
 from fastapi.responses import Response
 
+from src.web.i18n_packs import UI_LANGS, UI_LOCALES  # 白名单/locale 单一事实源（xlate P3）
 from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
 
 _MAX_KEYS = 800
 _MIN_PREFIX_LEN = 4
-_LANGS = ("zh", "en", "vi")
-_LOCALES = {"zh": "zh-CN", "en": "en-US", "vi": "vi-VN"}
+_LANGS = UI_LANGS
+_LOCALES = UI_LOCALES
 
 # (lang, fp) → 已构建的整包响应字节。词典代际更替后旧键无人再引用，cap 兜底防积累。
 _BUNDLE_CACHE: dict = {}

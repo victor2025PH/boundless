@@ -1936,8 +1936,13 @@
       const prefs = this._loadPrefs();
       const daysVal = (this._formUsePrefDays && prefs.deadline_days > 0)
         ? prefs.deadline_days : (tmpl.default_days || 14);
-      const curAuto = AUTONOMY.indexOf(this._formAutonomy) >= 0 ? this._formAutonomy
-        : (AUTONOMY.indexOf(prefs.autonomy) >= 0 ? prefs.autonomy : "suggest");
+      // 全自动为主（2026-08-12 运营方针）：缺省 auto；偏好记忆只回放 suggest/auto
+      // ——observe 是「这个目标先看看」的一次性选择，不许粘成后续所有目标的默认
+      // （实录：一次选了只观察，之后三个目标全默认 observe → 坐席以为功能没生效）
+      const prefAuto = (AUTONOMY.indexOf(prefs.autonomy) >= 0
+        && prefs.autonomy !== "observe") ? prefs.autonomy : "auto";
+      const curAuto = AUTONOMY.indexOf(this._formAutonomy) >= 0
+        ? this._formAutonomy : prefAuto;
       this._formAutonomy = curAuto;
       const aNote = this._autonomyNoteFull(curAuto);
       const prefNote = (this._formUsePrefDays && prefs.deadline_days > 0)
@@ -2010,16 +2015,22 @@
         `<div class="gl-hint">${esc(this.t("inbox.goal.form.arc_hint"))}</div></div>`;
     }
 
-    /* AI 参与度三张单选卡（点选走 pick_autonomy，DOM 级切换不重渲染表单） */
+    /* AI 参与度三张单选卡（点选走 pick_autonomy，DOM 级切换不重渲染表单）。
+       展示序＝auto 优先、observe 垫底（2026-08-12 全自动为主：推荐徽标随迁 auto，
+       只观察降为末位进阶选项；后端 autonomy_levels 只作成员集，展示序前端定）。 */
     _autonomyCardsHtml(cur) {
       const esc = (s) => this.esc(s);
-      const levels = (this._templates && this._templates.autonomy_levels
+      const raw = (this._templates && this._templates.autonomy_levels
         && this._templates.autonomy_levels.length)
         ? this._templates.autonomy_levels : AUTONOMY;
+      const rank = { auto: 0, suggest: 1, observe: 2 };
+      const levels = raw.slice().sort((a, b) =>
+        (rank[String(a)] == null ? 9 : rank[String(a)])
+        - (rank[String(b)] == null ? 9 : rank[String(b)]));
       return `<div class="gl-auto-cards" role="radiogroup">` + levels.map((l) => {
         const lvl = String(l);
         const sel = lvl === cur;
-        const rec = lvl === "suggest"
+        const rec = lvl === "auto"
           ? `<span class="gl-scen-rec">${esc(this.t("inbox.goal.form.recommended"))}</span>` : "";
         return `<div class="gl-auto-card${sel ? " sel" : ""}" data-act="pick_autonomy"` +
           ` data-lvl="${esc(lvl)}" role="radio" aria-checked="${sel ? "true" : "false"}">` +
@@ -2436,7 +2447,7 @@
         this._formDraft = {
           v: 1, cid: this._draftCid(), tid: "profile_discovery", ts: Date.now(),
           params: { slots: slots.join(","), note: note },
-          days: "", autonomy: this._formAutonomy || "suggest",
+          days: "", autonomy: this._formAutonomy || "auto",
           unlockSel: "", tierSel: "", labelTouched: false,
         };
         _beacon("goal_switch_discovery");
@@ -2744,7 +2755,7 @@
       if (res && res.ok && res.data && res.data.ok !== false) {
         this._savePrefs({
           template: this._formTid,
-          autonomy: body.autonomy || "suggest",
+          autonomy: body.autonomy || "auto",
           deadline_days: body.deadline_days || 0,
         });
         this._formOpen = false;
@@ -2753,10 +2764,22 @@
         this._clearDraftStore(ctx.conversationId);
         this._formBaseline = null;
         // 一次性「接下来会发生什么」提示（按所选自治档如实说明，消除「建完然后呢」断崖）
-        this._createdHintAutonomy = String(body.autonomy || "suggest");
+        this._createdHintAutonomy = String(body.autonomy || "auto");
         this._createdHintTid = String(this._formTid || "");
-        this._chainReco = null;
-        this._loadChainReco();   // fire-and-forget：查到配套链后原位补一行推荐
+        // P3 2026-08-13：后端开了 goal_auto_attach 且已自动挂上推荐链 →
+        // 直接渲染「已挂上 ✓」（再出启动按钮会撞 chain_already_running 409）；
+        // 未自动挂（开关关/无推荐/闸未过）→ 旧行为：查推荐补按钮行。
+        const att = res.data.auto_attached_chain;
+        if (att && att.chain_id) {
+          this._chainReco = {
+            chain: { chain_id: String(att.chain_id), name: String(att.name || att.chain_id) },
+            state: "started", err: "",
+          };
+          _beacon("goal_chain_auto_attached");
+        } else {
+          this._chainReco = null;
+          this._loadChainReco();   // fire-and-forget：查到配套链后原位补一行推荐
+        }
         _beacon("goal_create_ok");
         _beacon("goal_create_ok_" + String(this._formTid || ""));  // 每模板漏斗
         this.emit("cp-goal-changed", { action: "create", conversationId: ctx.conversationId });

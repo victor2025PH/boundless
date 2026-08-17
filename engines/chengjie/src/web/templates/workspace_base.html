@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="{{ 'zh-CN' if (ui_lang|default('zh')) == 'zh' else 'en' }}" data-theme="light">
+<html lang="{{ {'zh':'zh-CN','en':'en','vi':'vi','th':'th','id':'id'}.get(ui_lang|default('zh'), 'en') }}" data-theme="light">
 <head>
 <meta charset="utf-8">
 <!-- interactive-widget：软键盘弹出时收缩布局视口（Chromium 108+），fixed 底栏/输入条不被键盘盖住；其它浏览器安全忽略 -->
@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="/static/brand/brand.css?v=20260730a">
 <link rel="stylesheet" href="/static/brand/brand-fonts.css?v=20260730a"><!-- 品牌拉丁字 @font-face 单一源（与 login/setup 同一份，勿再内联重复定义） -->
 <link rel="stylesheet" href="/static/brand/brand-lockup.css">
-<link rel="stylesheet" href="/static/theme-tokens.css?v=20260804b">
+<link rel="stylesheet" href="/static/theme-tokens.css?v=20260816a">
 <link rel="stylesheet" href="/static/brand/th-brand-bridge.css?v=20260730a"><!-- 必须排在 theme-tokens 之后：把 --th-*-brand* 后置覆盖为品牌智连蓝 -->
 {% include "_i18n_bootstrap.html" %}
 {% include "_api_fetch.html" %}
@@ -22,28 +22,111 @@
    尽早内联执行以避免首屏闪白。 */
 (function(){
   var KEY='cp_theme';
-  try{ var u=new URLSearchParams(location.search).get('theme'); if(u==='dark'||u==='light') localStorage.setItem(KEY,u); }catch(_){}
+  /* ?theme=dark|light ＝ 嵌入端**窗口级**主题钉（桌面壳 webview 深色专属）。两条不变量：
+     ① 只许作用于本窗口：写进 localStorage(cp_theme) 就把它升成整个 profile 的共享
+     治理值，而被钉窗口每次 applyTheme 又会把它写回去 → 同 profile 里另一个后台
+     窗口刚切的日/夜被瞬间盖回（壳的管理台弹窗与 webview 同 persist:backend-workspace
+     分区），表现＝「后台日/夜滑块点了没反应」（2026-08-15 实锤，改前 150ms 内即回滚）。
+     ② 钉是**初始默认、不是锁**：用户在被钉窗口里显式选档（用户菜单三档 / 外观面板
+     夜间档 / 调色盘轮换）＝接管本窗口主题，钉当场释放（cpReleaseThemePin）。不释放的
+     后果＝分段控件高亮会动、cp_theme 也真写了，但 data-cp-theme 一动不动，坐席看到
+     的就是「亮色/暗色点了没反应」（2026-08-16 实锤：桌面壳 webview 走 ?theme=dark）。
+     钉由 window.__cpThemePin 传给子模板/引擎，三处读者一律「钉优先、不落盘」，且必须
+     **每次求值时读 window.__cpThemePin**——缓存进闭包变量 = 释放后旧值还在 = 等于没释放。 */
+  /* 释放标记刻意用 sessionStorage（不是 localStorage）：钉是窗口级的，释放也必须是
+     窗口级的——localStorage 是整个分区共享，一个窗口点了亮色会连带解掉壳里其它窗口
+     的钉（又变成「深色壳里白聊天」）。sessionStorage 跨本窗口的刷新/站内跳转都在，
+     关窗/重启壳即回到钉住的出厂默认。 */
+  var PIN_OFF='cp_theme_pin_off';
+  var PIN=null;
+  try{ var u=new URLSearchParams(location.search).get('theme'); if(u==='dark'||u==='light') PIN=u; }catch(_){}
+  try{ if(PIN&&sessionStorage.getItem(PIN_OFF)==='1') PIN=null; }catch(_){}
+  window.__cpThemePin=PIN;
+  /* 钉的唯一释放入口（appearance.js 单一写路径也调它，别再各自清）。幂等。
+     语义＝「本窗口的主题已由用户接管」，故**无钉时也落标记**：同窗口之后再跳到带钉
+     URL（壳内导航）不该把用户刚做的选择又盖回去。两个调用方必须同口径，否则
+     「有钉才记」与「一律记」会漂成两套行为。 */
+  window.cpReleaseThemePin=window.cpReleaseThemePin||function(){
+    window.__cpThemePin=null;
+    try{ sessionStorage.setItem(PIN_OFF,'1'); }catch(_){}
+  };
+  function curPin(){ var wp=window.__cpThemePin; return (wp==='dark'||wp==='light')?wp:null; }
   /* embed=1：iframe 内嵌模式（坐席台「管理工作链」抽屉等）——隐藏顶栏 chrome 只留正文；
      尽早置属性避免先渲染顶栏再消失的闪烁 */
   try{ if(new URLSearchParams(location.search).get('embed')==='1') document.documentElement.setAttribute('data-ws-embed','1'); }catch(_){}
   function pref(){ try{ return localStorage.getItem(KEY)||'auto'; }catch(_){ return 'auto'; } }
   function sysDark(){ try{ return window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches; }catch(_){ return false; } }
-  function eff(){ var p=pref(); return p==='auto'?(sysDark()?'dark':'light'):p; }
+  function eff(){ var wp=curPin(); if(wp) return wp; var p=pref(); return p==='auto'?(sysDark()?'dark':'light'):p; }
   window.cpEffTheme=window.cpEffTheme||eff;
-  /* 主题标签＝「偏好 · 当前生效」：auto 偏好下系统在深色时，用户点了「自动」以为是
-     白天模式——生效态不可见就会「切了却看不出变化」。三处（点击/初始/系统切换）同步。 */
-  window.cpSyncThemeLbl=window.cpSyncThemeLbl||function(){
-    var lb=document.getElementById('ws-theme-lbl'); if(!lb||!window.T) return;
-    var p=pref(), e=eff();
-    var effTxt=window.T(e==='dark'?'base.theme.dark':'base.theme.light');
-    lb.textContent=(p==='auto')?(window.T('base.theme.auto')+' · '+effTxt):effTxt;
-  };
   window.cpApplyTheme=window.cpApplyTheme||function(){ document.documentElement.setAttribute('data-cp-theme', eff()); };
-  window.cpCycleTheme=window.cpCycleTheme||function(){ var o=['auto','light','dark'],p=pref(),i=o.indexOf(p); try{ localStorage.setItem(KEY,o[(i+1)%3]); }catch(_){} window.cpApplyTheme(); window.cpSyncThemeLbl(); };
+  /* ── 主题写入单一入口（2026-08-14 双开关合并）────────────────────────────
+     一切主题修改必须走 WSAppearance.setNightMode（引擎负责 state+cp_theme+漫游+
+     各挂载面板同步）；引擎未就绪（defer 未跑完/异常）才走裸 localStorage 兜底。
+     裸写 cp_theme 而不写引擎 state ＝ 下次 applyTheme() 被引擎按 night.mode 盖回
+     ——正是本次要消灭的「两个开关打架」病根，别再新增第二条写路径。 */
+  window.cpSetTheme=window.cpSetTheme||function(m){
+    try{
+      /* 显式选档先释放 URL 钉：被钉窗口里不释放＝画面永远是钉住那档＝「点了没反应」 */
+      window.cpReleaseThemePin&&window.cpReleaseThemePin();
+      if(window.WSAppearance&&window.WSAppearance.setNightMode){ window.WSAppearance.setNightMode(m); }
+      else if(m==='auto'||m==='light'||m==='dark'){ try{ localStorage.setItem(KEY,m); }catch(_){} window.cpApplyTheme(); }
+    }catch(_){}
+    window.cpSyncThemeSeg&&window.cpSyncThemeSeg();
+  };
+  /* theme_ 用量埋点（改档本体在引擎 setNightMode 内埋；这里只补深链入口点击）。
+     内联 onclick 消费 → 必须挂 window。 */
+  window.__thmBcn=window.__thmBcn||function(a){
+    try{
+      navigator.sendBeacon('/api/telemetry/ui-event', new Blob(
+        [JSON.stringify({page:(location&&location.pathname)||'', action:String(a)})],
+        {type:'application/json'}));
+    }catch(_){}
+  };
+  window.cpCycleTheme=window.cpCycleTheme||function(){
+    window.cpReleaseThemePin&&window.cpReleaseThemePin();
+    if(window.WSAppearance&&window.WSAppearance.cycleNight){ window.WSAppearance.cycleNight(); }
+    else { var o=['auto','light','dark'],p=pref(),i=o.indexOf(p); try{ localStorage.setItem(KEY,o[(i+1)%3]); }catch(_){} window.cpApplyTheme(); }
+    window.cpSyncThemeSeg&&window.cpSyncThemeSeg();
+  };
+  /* 用户菜单三态分段控件同步：高亮当前偏好档 + auto/定时档补一行「当前生效」+
+     定时窗提示。真相取引擎 state（night.mode 含 schedule），引擎缺席回落 LS blob，
+     再回落 cp_theme。只在菜单打开/点击后调用，无常驻轮询。 */
+  window.cpSyncThemeSeg=window.cpSyncThemeSeg||function(){
+    var seg=document.getElementById('ws-theme-seg'); if(!seg) return;
+    var mode=null, night=null;
+    try{ if(window.WSAppearance&&window.WSAppearance.get){ night=window.WSAppearance.get().night||null; if(night) mode=night.mode; } }catch(_){}
+    if(!mode){ try{ var raw=localStorage.getItem('ws_appearance_v1'); if(raw){ var j=JSON.parse(raw); if(j&&j.v===1&&j.night&&j.night.mode){ night=j.night; mode=j.night.mode; } } }catch(_){} }
+    if(!mode) mode=pref();
+    seg.querySelectorAll('button[data-mode]').forEach(function(b){ b.classList.toggle('on', b.getAttribute('data-mode')===mode); });
+    var T=window.T||function(k){return k;};
+    var effEl=document.getElementById('ws-theme-eff');
+    if(effEl){
+      var e=eff(), effTxt=T(e==='dark'?'base.theme.dark':'base.theme.light');
+      effEl.textContent=(mode==='auto'||mode==='schedule')?(T('base.theme.now')+effTxt):'';
+    }
+    var sc=document.getElementById('ws-theme-sched');
+    if(sc){
+      if(mode==='schedule'){
+        var hm=function(m){ m=((m%1440)+1440)%1440; var h=Math.floor(m/60),mm=m%60; return (h<10?'0':'')+h+':'+(mm<10?'0':'')+mm; };
+        var st=(night&&night.start!=null)?night.start:1320, en=(night&&night.end!=null)?night.end:480;
+        /* 文本只写 span——sc.textContent 整写会抹掉旁边的「改时间」链接 */
+        var tx=document.getElementById('ws-theme-sched-txt');
+        var msg=T('base.theme.sched_on')+' '+hm(st)+'\u2013'+hm(en);
+        if(tx) tx.textContent=msg; else sc.textContent=msg;
+        sc.style.display='flex';
+      } else { sc.style.display='none'; }
+    }
+  };
   window.cpApplyTheme();
-  try{ if(window.matchMedia){ window.matchMedia('(prefers-color-scheme:dark)').addEventListener('change',function(){ if(pref()==='auto'){ window.cpApplyTheme(); window.cpSyncThemeLbl(); } }); } }catch(_){}
+  try{ if(window.matchMedia){ window.matchMedia('(prefers-color-scheme:dark)').addEventListener('change',function(){ if(pref()==='auto'){ window.cpApplyTheme(); window.cpSyncThemeSeg&&window.cpSyncThemeSeg(); } }); } }catch(_){}
 })();
 </script>
+<!-- 外观引擎升为全工作台装载（2026-08-14）：夜间定时/漫游此前只在收件箱生效，
+     其它工作台页裸写 cp_theme 会被引擎盖回。引擎在无挂载点的页面只做主题治理
+     （CSS 变量对无消费方页面无副作用）。unified_inbox 自己的那份 script 标签已
+     移除（继承本页，重复装载会双跑 IIFE）。改本文件或 appearance.js 记得双戳
+     （?v= + ui-build.txt）。 -->
+<script src="/static/workspace/appearance.js?v=20260816a" defer></script>
 <style>
   /* 品牌拉丁字 @font-face 已收口到 /static/brand/brand-fonts.css（见上方 <link>，
      与 login.html / setup.html 共用同一份定义）——勿在此处重新内联，否则
@@ -99,7 +182,7 @@
     --tk-surface-2:#1e2026;
     --tk-border:#26272e;
     --tk-text:#ececf0;
-    --tk-text-muted:#a0a3ab;
+    --tk-text-muted:#b4b8c0;  /* 2026-08-16 暗色提亮：卡面 7.0→8.9，与 base.html --t2 新值同档 */
     --tk-brand:var(--bl-growth-400,#54a7f5);  /* 暗底提亮：品牌智连蓝 400 */
     --tk-brand-2:#22d3ee;
     --tk-cyan:#22d3ee;
@@ -188,14 +271,6 @@
   .ws-nav{display:flex;align-items:center;gap:6px;flex-shrink:0;}
   .ws-nav a{color:#fff;text-decoration:none;font-size:13px;padding:5px 10px;border-radius:7px;white-space:nowrap;}
   .ws-nav a:hover{background:rgba(255,255,255,.12);}
-  .ws-more-wrap{position:relative;flex-shrink:0;}
-  .ws-more-btn{color:#fff;font-size:13px;padding:5px 10px;border-radius:7px;cursor:pointer;white-space:nowrap;border:1px solid rgba(255,255,255,.28);user-select:none;}
-  .ws-more-btn:hover{background:rgba(255,255,255,.12);}
-  .ws-more-menu{display:none;position:absolute;top:38px;left:0;min-width:160px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.16);z-index:9999;padding:6px;}
-  .ws-more-menu.show{display:block;}
-  .ws-more-menu a{display:block;color:#374151;text-decoration:none;font-size:13px;padding:7px 10px;border-radius:7px;white-space:nowrap;}
-  .ws-more-menu a:hover{background:#f3f4f6;}
-  .ws-more-grp{font-size:11px;color:#9ca3af;font-weight:600;padding:8px 10px 3px;margin-top:4px;border-top:1px solid #f1f1f4;letter-spacing:.02em;}
   /* 用户菜单：头像+名字下拉，收纳 状态/今日/设置/退出 */
   /* 档位徽章（P4b）：深色顶栏上的小 pill，配色按档位区分（与 base.html plan-badge 同族） */
   .ws-plan-pill{display:inline-flex;align-items:center;height:24px;padding:0 9px;border-radius:12px;font-size:11.5px;font-weight:700;white-space:nowrap;flex-shrink:0;text-decoration:none;border:1px solid rgba(255,255,255,.22);color:#e2e8f0;background:rgba(255,255,255,.08);}
@@ -218,6 +293,14 @@
   .ws-um-div{height:1px;background:#eef2f7;margin:6px 2px;}
   .ws-um-item{display:block;color:#374151;text-decoration:none;font-size:13px;padding:8px 10px;border-radius:8px;cursor:pointer;}
   .ws-um-item:hover{background:#f3f4f6;}
+  /* 主题三态分段控件（用户菜单内；菜单底恒为白，配色跟菜单不跟 --tk-*） */
+  .ws-theme-seg{display:flex;gap:4px;background:#f1f3f7;border-radius:9px;padding:3px;margin:4px 8px 6px;}
+  .ws-theme-seg button{flex:1 1 0;border:0;background:transparent;color:#64748b;font-size:12px;padding:5px 4px;border-radius:7px;cursor:pointer;white-space:nowrap;transition:background .12s,color .12s;}
+  .ws-theme-seg button:hover{color:#334155;background:rgba(255,255,255,.7);}
+  .ws-theme-seg button.on{background:#fff;color:var(--bl-growth-600,#0d76d9);font-weight:600;box-shadow:0 1px 3px rgba(15,23,42,.14);}
+  .ws-theme-eff{font-weight:400;letter-spacing:0;color:#94a3b8;font-size:11px;margin-left:auto;}
+  .ws-theme-sched{font-size:11.5px;color:#b45309;background:#fef3c7;border-radius:7px;padding:5px 10px;margin:0 8px 6px;display:flex;align-items:center;gap:8px;}
+  .ws-theme-sched a{color:inherit;font-weight:600;text-decoration:underline;margin-left:auto;white-space:nowrap;}
   .ws-um-danger{color:#b91c1c;}
   .ws-um-danger:hover{background:#fee2e2;}
   @media (max-width:1280px){ .ws-brand .brand-lockup__surface{display:none;} .ws-brand .brand-lockup__sep{display:none;} .ws-funnel,.ws-agents{display:none;} }
@@ -225,6 +308,34 @@
   /* embed=1（坐席台抽屉 iframe 等内嵌宿主）：隐藏顶栏 chrome，正文全高 */
   html[data-ws-embed="1"] .ws-top{display:none!important;}
   html[data-ws-embed="1"] .ws-body{height:100vh!important;}
+  /* ── 桌面壳页内标签条（P2 2026-08-14）───────────────────────────────────
+     仅桌面壳 webview（inbox-preload 暴露 __chatxShell 且壳 state.strip=true）由 JS
+     点亮：壳竖栏经 stripReady 握手后让位，账号标签条视觉上移到本工作台状态栏之下
+     （老板要求）。纯浏览器 / 旧壳：永远 hidden，零影响。渲染脚本见 </header> 后。 */
+  #cx-shell-strip{display:flex;align-items:center;gap:6px;height:34px;padding:0 10px;
+    overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;
+    background:var(--tk-surface,#fff);border-bottom:1px solid var(--tk-border,#e5e7eb);}
+  #cx-shell-strip[hidden]{display:none!important;}
+  html[data-ws-embed="1"] #cx-shell-strip{display:none!important;}
+  /* 标签条可见时正文让出 34px（.ws-body 恒按 52px 顶栏算高，不减会溢出滚动） */
+  html.cx-strip-on .ws-body{height:calc(100vh - 52px - 34px);}
+  .cxs-tab{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border-radius:12px;
+    flex:0 0 auto;font-size:12px;color:var(--tk-text,#0f172a);border:1px solid transparent;
+    cursor:pointer;user-select:none;white-space:nowrap;text-decoration:none;}
+  .cxs-tab:hover{background:var(--tk-surface-2,#f1f5f9);}
+  .cxs-tab.cur{background:var(--tk-brand,#2563eb);color:#fff;font-weight:600;cursor:default;}
+  .cxs-dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;}
+  .cxs-health{width:6px;height:6px;border-radius:50%;flex:0 0 auto;}
+  .cxs-health.on{background:var(--tk-emerald,#10b981);}
+  .cxs-health.warn{background:var(--tk-amber,#f59e0b);}
+  .cxs-health.off{background:var(--tk-danger,#ef4444);}
+  .cxs-health.idle{background:var(--tk-text-muted,#94a3b8);opacity:.5;}
+  .cxs-assist{font-size:10px;line-height:1;padding:2px 5px;border-radius:7px;
+    background:rgba(245,158,11,.15);color:var(--tk-amber-ink,#b45309);}
+  .cxs-tab.cur .cxs-assist{background:rgba(255,255,255,.22);color:#fff;}
+  .cxs-badge{min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:var(--tk-danger,#ef4444);
+    color:#fff;font-size:10px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;}
+  .cxs-badge[hidden]{display:none!important;}
   /* 左侧导航（opt-in，见 _ws_sidebar.html）：只在开了侧栏的页面改变 .ws-body 的
      布局语义，收件箱等未开启的页面仍是原来的单块满高容器，零影响。 */
   .ws-body.ws-has-side{display:flex;}
@@ -370,10 +481,8 @@
     #gs-wrap{display:none !important;}
     .ws-nav{gap:2px;}
     .ws-nav a{padding:6px 8px;}
-    .ws-nav a .ws-nav-lbl,
-    .ws-more-btn .ws-nav-lbl{display:none;}
+    .ws-nav a .ws-nav-lbl{display:none;}
     .ws-nav a.ws-nav-ic{display:inline-flex;align-items:center;justify-content:center;min-width:34px;}
-    .ws-more-btn{padding:6px 8px;min-width:34px;text-align:center;border-color:rgba(255,255,255,.2);}
     .ws-pill{padding:0 7px;gap:0;}
     .ws-lang-pill span:not([data-ui-icon]),.ws-pwa-pill span:not([data-ui-icon]){display:none;}
     .ws-brand .brand-lockup__name{max-width:4.5em;overflow:hidden;text-overflow:ellipsis;}
@@ -459,6 +568,22 @@
 <script>
 (function(){
   var _f=window.fetch;
+  var _loginShown=false;
+  function _wsShowLoginPill(){
+    // 任一 /api/ 请求 401 ＝ 未登录/会话过期 → 点亮顶栏「登录」按钮（带 next 回跳）。
+    // 页面级鉴权会把未登录访问整页重定向到 /login，这里兜的是「页面开着、会话中途失效」。
+    if(_loginShown) return;
+    var a=document.getElementById('ws-login-pill');
+    if(!a){
+      // 401 可能早于 <body> 解析完成（head 内其它脚本发请求）→ DOM 就绪后重试一次
+      if(document.readyState==='loading')
+        document.addEventListener('DOMContentLoaded', _wsShowLoginPill, {once:true});
+      return;
+    }
+    _loginShown=true;
+    try{ a.href='/login?next='+encodeURIComponent(location.pathname+location.search); }catch(_){ }
+    a.style.display='inline-flex';
+  }
   window.fetch=function(url,opts){
     opts=opts||{};
     var m=(opts.method||'GET').toUpperCase();
@@ -470,13 +595,23 @@
         else{opts.headers['X-CSRF-Token']=t[1]}
       }
     }
-    return _f.call(this,url,opts);
+    var p=_f.call(this,url,opts);
+    p.then(function(r){
+      try{
+        if(r && r.status===401){
+          var path='';
+          try{ path=new URL((typeof url==='string')?url:((url&&url.url)||''), location.origin).pathname; }catch(_){ }
+          if(path.indexOf('/api/')===0) _wsShowLoginPill();
+        }
+      }catch(_){ }
+    }, function(){ /* 网络错误另有横幅处理，这里只关心 401 */ });
+    return p;
   };
 })();
 </script>
 <script src="/static/workspace/crm-widgets.js?v=20260702a"></script>
 <!-- 三期：⌘K 命令面板（页面导航/会话跳转/动作；自包含模块，样式自注入） -->
-<script src="/static/workspace/cmdk.js?v=20260720j"></script>
+<script src="/static/workspace/cmdk.js?v=20260814a"></script>
 <!-- PWA（Phase 1）：把工作台做成可安装的原生官网（独立窗口 + 离线壳）。-->
 <link rel="manifest" href="/manifest.webmanifest">
 <script>
@@ -555,38 +690,26 @@
     <a href="/workspace" id="nav-inbox" class="ws-nav-ic" style="display:inline-flex;align-items:center;gap:5px;" data-i18n-title="base.nav.chat" title="聊天"><span data-ui-icon="chat" data-size="13"></span><span class="ws-nav-lbl" data-i18n="base.nav.chat">聊天</span></a>
     <a href="/workspace/contacts" class="ws-nav-ic" data-i18n-title="base.nav.contacts" title="客户" style="display:inline-flex;align-items:center;gap:5px;"><span data-ui-icon="users" data-size="13"></span><span class="ws-nav-lbl" data-i18n="base.nav.contacts">客户</span></a>
     <a href="/workspace/dash" class="ws-nav-ic" data-i18n-title="base.nav.overview" title="概览" style="display:inline-flex;align-items:center;gap:5px;"><span data-ui-icon="chart" data-size="13"></span><span class="ws-nav-lbl" data-i18n="base.nav.overview">概览</span></a>
-    <div class="ws-more-wrap">
-      <span class="ws-more-btn" id="ws-more-btn" onclick="_wsToggleMore(event)" data-i18n-title="base.nav.more" title="更多"><span data-ui-icon="more" data-size="13"></span><span class="ws-nav-lbl" data-i18n="base.nav.more">更多</span></span>
-      <div class="ws-more-menu" id="ws-more-menu">
-        <a href="/workspace/tasks" data-i18n="base.nav.tasks">待办</a>
-        <a href="/workspace/drafts" id="ws-drafts-link" data-i18n="base.nav.drafts" data-i18n-title="base.nav.drafts_t" title="待你审核的 AI 回复草稿">草稿审批</a>
-        <a href="/workspace/templates" data-i18n="base.nav.templates" data-i18n-title="base.nav.templates_t" title="回复模板库">模板库</a>
-        <div class="ws-more-grp" id="ws-grp-ops" style="display:none;" data-i18n="base.grp.ops">运营监控</div>
-        <a href="/workspace/queue" id="ws-queue-link" style="display:none;" data-i18n="base.nav.queue" data-i18n-title="base.nav.queue_t" title="实时运营队列看板（主管）">队列</a>
-        <a href="/workspace/agent-perf" id="ws-perf-link" style="display:none;" data-i18n="base.nav.perf" data-i18n-title="base.nav.perf_t" title="坐席绩效看板（主管）">绩效</a>
-        <a href="/workspace/goal-report" id="ws-goalrpt-link" style="display:none;" data-i18n="base.nav.goalrpt" data-i18n-title="base.nav.goalrpt_t" title="目标达成报表（主管）">目标报表</a>
-        <div class="ws-more-grp" id="ws-grp-quality" style="display:none;" data-i18n="base.grp.quality">质量</div>
-        <a href="/workspace/ai-quality" id="ws-aiq-link" style="display:none;" data-i18n="base.nav.aiq" data-i18n-title="base.nav.aiq_t" title="AI 回复质量看板（主管）">AI 质量</a>
-        <div class="ws-more-grp" id="ws-grp-biz" style="display:none;" data-i18n="base.grp.biz">经营</div>
-        <a href="/workspace/roi" id="ws-roi-link" style="display:none;" data-i18n="base.nav.roi" data-i18n-title="base.nav.roi_t" title="经营 ROI 看板（老板/主管）">ROI 看板</a>
-        <a href="/workspace/usage" id="ws-usage-link" style="display:none;" data-i18n="base.nav.usage" data-i18n-title="base.nav.usage_t" title="用量计量看板（老板/主管）">用量</a>
-        <div class="ws-more-grp" data-i18n="base.grp.boundless">无界产品族</div>
-        <a href="{{ brand_hub_url|default('https://bd2026.cc/brand') }}" target="_blank" rel="noopener noreferrer" style="display:flex;align-items:center;gap:5px;"><span data-i18n="base.nav.brand_hub">了解更多产品</span><span data-ui-icon="arrow-up-right" data-size="12" style="display:inline-flex;opacity:.75;"></span></a>
-        <div class="ws-more-grp" id="ws-grp-config" style="display:none;" data-i18n="base.grp.config">配置与上线</div>
-        <a href="/workspace/channels" id="ws-channels-link" style="display:none;" data-i18n="base.nav.channels" data-i18n-title="base.nav.channels_t" title="渠道中心：四渠道账号与自动化配置（主管）">渠道中心</a>
-        <a href="/workspace/setup" id="ws-setup-link" style="display:none;" data-i18n="base.nav.setup" data-i18n-title="base.nav.setup_t" title="渠道接入向导（主管）">接入向导</a>
-        <a href="/workspace/kb-start" id="ws-kbstart-link" style="display:none;" data-i18n="base.nav.kbstart" data-i18n-title="base.nav.kbstart_t" title="知识库冷启动（主管）">知识库起步</a>
-        <a href="/workspace/workflows" id="ws-workflow-link" style="display:none;" data-i18n="base.nav.workflows" data-i18n-title="base.nav.workflows_t" title="工作流 / 路由规则配置">工作流</a>
-        <a href="/workspace/golive" id="ws-golive-link" style="display:none;" data-i18n="base.nav.golive" data-i18n-title="base.nav.golive_t" title="上线自检清单（主管）">上线自检</a>
-      </div>
-    </div>
+    {#- 驾驶舱入口（ui_visibility.cockpit，2026-08-16 起默认隐藏）：该页主动作是
+        一键接管/交还，而接管要跳原生页、原生页整条链已随 manual_console 关闭
+        ——人工那套藏了，这个跟着藏。**缺键即隐藏**（与 manual_console 同款
+        fail-hidden）：模板热更新先于重启上线，此时进程里还没有 cockpit 键，
+        按钮就该已经不见，而不是等重启。藏而不废：/workspace/cockpit 与
+        /api/cockpit/overview 照旧可达，开发者页开该键即恢复本入口。 -#}
+    {% if (ui_vis or {}).get('cockpit') %}
+    <a href="/workspace/cockpit" class="ws-nav-ic" data-i18n-title="ck.nav" title="驾驶舱" style="display:inline-flex;align-items:center;gap:5px;"><span data-ui-icon="zap" data-size="13"></span><span class="ws-nav-lbl" data-i18n="ck.nav">驾驶舱</span></a>
+    {% endif %}
+    {#- 「更多」下拉已删（2026-08-14）：全部条目在后台管理侧栏/命令面板或页面内
+        既有入口可达（待办=顶栏跟进药丸+后台Ctrl+K、草稿=收件箱草稿队列按钮、
+        接入向导/工作流=收件箱内嵌、上线自检=概览页引导卡、渠道=后台真机矩阵组、
+        主管看板=后台命令面板 nav_schema CMD_EXTRA_ITEMS）。 -#}
   </nav>
   <!-- P39: 全局搜索 -->
   <div id="gs-wrap" style="position:relative;display:flex;align-items:center;">
     <span data-ui-icon="search" data-size="14" style="position:absolute;left:9px;opacity:.55;pointer-events:none;"></span>
     <input id="gs-input" placeholder="全局搜索…" data-i18n-placeholder="base.search_ph" style="
-      width:180px;height:26px;border:1px solid rgba(255,255,255,.25);border-radius:13px;
-      background:rgba(255,255,255,.12);color:var(--th-ink-inverse,#fff);font-size:12px;padding:0 10px 0 28px;
+      width:180px;height:26px;border:1px solid color-mix(in srgb, var(--th-ink-inverse,#fff) 25%, transparent);border-radius:13px;
+      background:color-mix(in srgb, var(--th-ink-inverse,#fff) 12%, transparent);color:var(--th-ink-inverse,#fff);font-size:12px;padding:0 10px 0 28px;
       outline:none;transition:width .2s;" onfocus="this.style.width='240px'" onblur="if(!this.value)this.style.width='180px'"
       oninput="_gsOnInput(this.value)" onkeydown="_gsKey(event)">
     <div id="gs-panel" style="display:none;position:absolute;top:32px;left:0;width:340px;background:var(--th-bg-surface,#fff);
@@ -616,6 +739,14 @@
   <a class="ws-pwa-pill" id="ws-pwa-install" data-i18n-title="base.pwa.install_t" title="安装为桌面应用（独立窗口 + 开机可启）"
      style="display:none;align-items:center;gap:4px;height:26px;padding:0 10px;border-radius:13px;">
     <span data-ui-icon="download" data-size="13"></span><span class="ws-nav-lbl" data-i18n="base.pwa.install">安装App</span>
+  </a>
+  <!-- 登录入口：默认隐藏；任一 /api/ 请求返回 401（未登录 / 会话过期）即点亮（head 内 fetch
+       包装器 _wsShowLoginPill），点击带 next 回跳当前页。修「登录失效后满页报错却找不到登录入口」。 -->
+  <a class="ws-login-pill" id="ws-login-pill" href="/login"
+     data-i18n-title="base.login.pill_t" title="尚未登录或登录已过期 · 点击前往登录页"
+     style="display:none;align-items:center;gap:4px;height:26px;padding:0 12px;border-radius:13px;
+     background:var(--th-bg-surface,#fff);color:var(--tk-brand,#2563eb);font-weight:600;font-size:12px;text-decoration:none;">
+    <span data-ui-icon="key" data-size="13"></span><span data-i18n="base.login.pill">登录</span>
   </a>
   <!-- 语言切换：顶栏常驻可见按钮（此前仅藏于用户菜单，不易发现）。点击整页切 中⇄英（/set_lang），全站含 copilot 组件随之重渲。 -->
   <a class="ws-lang-pill" id="ws-lang-pill" onclick="window.wsToggleLang&&window.wsToggleLang()"
@@ -652,8 +783,20 @@
       <div class="ws-um-info" id="ws-funnel" data-i18n-title="base.um.funnel_t" title="今日 web 漏斗">—</div>
       <div class="ws-um-info" id="ws-agents-online" data-i18n-title="base.um.agents_t" title="在线坐席">—</div>
       <div class="ws-um-div"></div>
-      <a class="ws-um-item" id="ws-theme-toggle" data-i18n-title="base.um.theme_t" title="日间 / 夜间 / 跟随系统 三态切换"
-         onclick="window.cpCycleTheme&&window.cpCycleTheme()" style="display:flex;align-items:center;gap:6px;"><span data-ui-icon="contrast" data-size="14"></span><span><span data-i18n="base.um.theme">主题配色：</span><span id="ws-theme-lbl"></span></span></a>
+      <!-- 主题分段控件（2026-08-14 双开关合并）：三档所见即所得替代旧「点击循环」；
+           写路径统一走 cpSetTheme→WSAppearance.setNightMode（勿再裸写 cp_theme）。
+           定时模式由「全部外观设置」开启，激活时三档全灭 + 下方提示行点亮。 -->
+      <div class="ws-um-sec" style="display:flex;align-items:center;gap:6px;"><span data-ui-icon="contrast" data-size="12"></span><span data-i18n="base.um.appearance">主题配色</span><span class="ws-theme-eff" id="ws-theme-eff"></span></div>
+      <div class="ws-theme-seg" id="ws-theme-seg" role="group" data-i18n-title="base.um.theme_seg_t" title="跟随系统 / 亮色 / 暗色">
+        <button type="button" data-mode="auto" onclick="window.cpSetTheme&&window.cpSetTheme('auto')" data-i18n="base.theme.auto">跟随系统</button>
+        <button type="button" data-mode="light" onclick="window.cpSetTheme&&window.cpSetTheme('light')" data-i18n="base.theme.light">亮色</button>
+        <button type="button" data-mode="dark" onclick="window.cpSetTheme&&window.cpSetTheme('dark')" data-i18n="base.theme.dark">暗色</button>
+      </div>
+      <!-- 定时提示行：文本写进 span（cpSyncThemeSeg 只动 span，别再 sc.textContent 整写
+           ——会把「改时间」链接一起抹掉）；「改时间」与「全部外观设置」同一深链同一窗口复用。 -->
+      <div class="ws-theme-sched" id="ws-theme-sched" style="display:none;" data-i18n-title="base.theme.sched_on_t" title="定时切换由「全部外观设置」管理；点击上方任一档退出定时"><span id="ws-theme-sched-txt"></span><a id="ws-theme-sched-edit" href="/personal-settings#appearance" target="_blank" rel="noopener" data-winname="admin" onclick="window.__thmBcn&&window.__thmBcn('theme_sched_edit');return __openUnique(event,this)" data-i18n="base.theme.sched_edit">改时间</a></div>
+      <a class="ws-um-item" id="ws-appearance-link" href="/personal-settings#appearance" target="_blank" rel="noopener" data-winname="admin" onclick="window.__thmBcn&&window.__thmBcn('theme_all_settings');return __openUnique(event,this)"
+         data-i18n-title="base.um.appearance_all_t" title="壁纸 / 气泡色 / 夜间定时 / 字号 / 圆角 / 动画（在管理后台窗口打开）" style="display:flex;align-items:center;gap:6px;"><span data-ui-icon="spark" data-size="14"></span><span data-i18n="ap.all_settings">全部外观设置</span></a>
       <a class="ws-um-item" id="ws-prefs-btn" data-i18n="base.um.prefs" data-i18n-title="base.um.prefs_t" title="告警阈值 / 免打扰 / 消息提示音 / 弹窗"
          onclick="document.getElementById('ws-user-menu').classList.remove('show')" style="display:flex;align-items:center;gap:6px;"><span data-ui-icon="gear" data-size="14"></span><span data-i18n="base.um.prefs">告警 / 通知设置</span></a>
       <a class="ws-um-item" id="ws-lang-toggle" onclick="window.wsToggleLang&&window.wsToggleLang()" data-i18n-title="base.um.lang_t" title="切换语言 / Switch language" style="display:flex;align-items:center;gap:6px;"><span data-ui-icon="globe" data-size="14"></span><span data-i18n="lang_toggle">English</span></a>
@@ -662,6 +805,77 @@
     </div>
   </div>
 </header>
+{#- 桌面壳页内标签条（P2 2026-08-14）：数据=壳 pushShellState（preload postMessage 中继 +
+    getState 快照兜底），渲染成功回报 stripReady → 壳竖栏让位。渲染条件三重闸：
+    ① __chatxShell.stripReady 存在（旧壳无此方法 → 不渲染，壳竖栏照旧=零重复导航）；
+    ② state.strip===true 且 enabled!==false；③ embedded 非空（只剩收件箱时条无意义，
+    壳侧 rail-solo 同语义）。任一不满足 → hidden + 不发 stripReady，竖栏兜底。
+    第四重闸（ui_visibility.manual_console，2026-08-14）：人工操作台默认对坐席隐藏——
+    整块不渲染（壳收不到 stripReady 会走竖栏兜底，竖栏本身由壳按 /api/desktop/ui-flags
+    同键隐藏；两端同源一个开关）。 -#}
+{% if (ui_vis or {}).get('manual_console') %}
+<div id="cx-shell-strip" hidden></div>
+<script>
+(function(){
+  'use strict';
+  var sh=window.__chatxShell;
+  if(!sh || typeof sh.stripReady!=='function') return;   // 非桌面壳 / 旧壳（无 P2 能力）
+  var readySent=false;
+  var PLAT_COLOR={telegram:'#2aabee',whatsapp:'#25d366',messenger:'#a334fa',instagram:'#e1306c',zalo:'#0068ff',x:'#111827',line:'#06c755'};
+  function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+  // health 词表与壳 railBadge dot 同源同义；查表（勿拼键，键覆盖门禁可 grep）
+  var HEALTH_I18N={on:'inbox.acct.web_inj_on',warn:'inbox.acct.web_inj_warn',off:'inbox.acct.web_inj_off',idle:'inbox.acct.web_inj_idle'};
+  function render(st){
+    var bar=document.getElementById('cx-shell-strip');
+    if(!bar) return;
+    var tabs=(st && st.strip===true && st.enabled!==false && Array.isArray(st.embedded)) ? st.embedded : [];
+    if(!tabs.length){
+      bar.hidden=true; bar.innerHTML='';
+      document.documentElement.classList.remove('cx-strip-on');
+      return;
+    }
+    var html='<span class="cxs-tab cur" title="'+esc(window.T('base.cxstrip.inbox_t'))+'">'+
+      esc(window.T('base.cxstrip.inbox'))+'<span class="cxs-badge" id="cx-strip-badge" hidden></span></span>';
+    tabs.forEach(function(t){
+      if(!t || !t.id) return;
+      var pl=String(t.platform||'');
+      var hcls=({on:1,warn:1,off:1,idle:1})[String(t.health)] ? String(t.health) : 'idle';
+      html+='<span class="cxs-tab" data-cxs-id="'+esc(t.id)+'" data-cxs-plat="'+esc(pl)+'" '+
+        'title="'+esc(window.T('base.cxstrip.open_t'))+'">'+
+        '<span class="cxs-dot" style="background:'+(PLAT_COLOR[pl]||'var(--tk-text-muted,#94a3b8)')+'"></span>'+
+        esc(t.label||pl)+
+        '<span class="cxs-health '+hcls+'" title="'+esc(window.T(HEALTH_I18N[hcls]))+'"></span>'+
+        (t.assist?'<span class="cxs-assist" title="'+esc(window.T('base.cxstrip.assist_t'))+'">'+esc(window.T('base.cxstrip.assist'))+'</span>':'')+
+        '</span>';
+    });
+    bar.innerHTML=html; bar.hidden=false;
+    document.documentElement.classList.add('cx-strip-on');
+    if(typeof window.__cxStripBadgeLast==='number') window.__cxStripSetBadge(window.__cxStripBadgeLast);
+    if(!readySent){ readySent=true; try{ sh.stripReady(); }catch(_){ } }
+  }
+  // 点击=切壳标签（事件委托，零内联 handler）：shell_tab_id 精确点名，壳侧已开标签直切
+  document.addEventListener('click',function(e){
+    var el=e.target && e.target.closest ? e.target.closest('.cxs-tab[data-cxs-id]') : null;
+    if(!el) return;
+    try{ sh.openEmbedded(el.getAttribute('data-cxs-plat')||'',{shell_tab_id:el.getAttribute('data-cxs-id')||''}); }catch(_){ }
+  });
+  window.addEventListener('message',function(e){
+    var d=e && e.data;
+    if(e.source!==window || !d || d.type!=='chatx-shell-state') return;   // 只认本窗（preload 中继）
+    render(d.state||null);
+  });
+  // 未读徽标：unified_inbox 未读聚合处调用（与壳 rail 徽标同一口径同一时机）；
+  // 重渲染会毁掉旧节点 → 记住末值，render 后回填
+  window.__cxStripSetBadge=function(n){
+    n=Number(n)||0; window.__cxStripBadgeLast=n;
+    var b=document.getElementById('cx-strip-badge'); if(!b) return;
+    b.textContent=n>99?'99+':String(n); b.hidden=!(n>0);
+  };
+  // 启动快照兜底（防「状态先推、本脚本后跑」错过事件）
+  try{ if(typeof sh.getState==='function') render(sh.getState()); }catch(_){ }
+})();
+</script>
+{% endif %}
 {% if ai_key_missing %}
 <!-- P0-1 A3：AI Key 未配置引导条（仅主管渲染；关闭记 localStorage，配好后服务端不再渲染） -->
 <div id="ws-aiguide" class="ws-aiguide-tone" style="display:none;align-items:center;gap:10px;padding:8px 14px;font-size:13px;">
@@ -852,6 +1066,11 @@ function _wsAiTrialDismiss(){
     <span id="ws-chandown-text"></span>
     <span id="ws-chandown-detail" style="opacity:.85"></span>
   </span>
+  <!-- P0（2026-08-14）：红条内嵌一键重登（当前仅 messenger 网页会话支持；由
+       _renderChanDown 按首条异常通道显隐）。无权限（403）就地提示找管理员。 -->
+  <button id="ws-chandown-relogin" type="button" style="display:none;flex:0 0 auto;
+      padding:3px 10px;border:1px solid rgba(255,255,255,.5);border-radius:6px;
+      background:rgba(255,255,255,.14);color:inherit;font-size:12px;cursor:pointer;"></button>
 </div>
 <!-- 实例刚重启冷却条（Phase3）：连环 restart 是「加载超时」主因；冷却窗内温和预期管理，
      勿催坐席狂刷。数据随同一 60s 轮询（ai-runtime-status.instance_restart）。 -->
@@ -872,6 +1091,65 @@ function _wsAiTrialDismiss(){
   <a id="ws-expiry-renew" href="#" target="_blank" rel="noopener" class="ws-expiry-cta"
      style="display:none;flex:0 0 auto;border-radius:7px;padding:3px 12px;font-size:12px;font-weight:600;text-decoration:none;">{{ i18n.get('ws.expiry.renew', '立即续费') }}</a>
 </div>
+<!-- 无兜底纪律红条（2026-08-17）：delivery_block 近窗有拦截 → 坐席看见「AI 不可用」
+     而不是客户已收到替代品。数据随同一 60s 轮询（ai-runtime-status.delivery_block）。 -->
+<div id="ws-delivblock" style="display:none;align-items:center;gap:10px;padding:6px 14px;
+     background:linear-gradient(90deg,var(--th-bg-red9,#7f1d1d),var(--th-bg-red8,#991b1b));color:var(--th-ink-red2,#fecaca);font-size:12.5px;">
+  <span style="flex:0 0 auto;">⛔</span>
+  <span style="flex:1 1 auto;line-height:1.5;">
+    <span id="ws-delivblock-text" data-i18n="ws.delivblock.text">{{ i18n.get('ws.delivblock.text', 'AI 链路失败，本条未自动回复。请按主机弹窗检修，修好后到待发队列一键放行。') }}</span>
+    <span id="ws-delivblock-detail" style="opacity:.85"></span>
+  </span>
+</div>
+<!-- 坐席字符额度预警条（2026-08-16 uqw-*，自包含 IIFE，独立于上方各条与多窗口协调器）：
+     任意登录角色轮询 /api/workspace/my-usage（首查延迟 10s、之后每 600s），仅 status.level=
+     warn/over 才出条（复用 ws-expiry 两个既有类，零新增色值）；恢复 ok / 接口 404（后端
+     未重启）/未登录 → 隐藏，连续 3 次失败停止轮询不刷屏。点击开 /workspace/usage。 -->
+<div id="uqw-bar" class="ws-expiry-warn" style="display:none;align-items:center;gap:10px;padding:6px 14px;font-size:12.5px;cursor:pointer;">
+  <span id="uqw-text" style="flex:1 1 auto;line-height:1.5;"></span>
+  <span style="flex:0 0 auto;font-weight:600;text-decoration:underline;">{{ i18n.get('uq_warnbar_cta', '点击查看') }}</span>
+</div>
+<script>
+(function(){
+  var bar = document.getElementById('uqw-bar');
+  if(!bar || !window.apiFetch) return;
+  var TEXT = {{ i18n.get('uq_warnbar_text', '字符额度已用 {pct}%（{used}/{quota}）')|tojson }};
+  var fails = 0, timer = null;
+  function _set(want){
+    if(window.wsBanner){ window.wsBanner.set('uqw-bar', want); }
+    else{ bar.style.display = want ? 'flex' : 'none'; }
+  }
+  async function _tick(){
+    try{
+      var r = await window.apiFetch('/api/workspace/my-usage', {credentials:'same-origin'}, {timeoutMs: 10000});
+      if(!r.ok) throw new Error('http ' + r.status);
+      var d = await r.json();
+      fails = 0;
+      var st = (d && d.status) || {};
+      var lvl = String(st.level || '');
+      var quota = Number((d && d.quota) || 0);
+      var warn = !!(d && d.ok && d.enabled !== false && quota > 0 && (lvl === 'warn' || lvl === 'over'));
+      if(!warn){ _set(false); return; }
+      var used = Number(d.month_total || 0);
+      var pct = (st.pct != null) ? Number(st.pct) : Math.round(used / quota * 100);
+      var t = document.getElementById('uqw-text');
+      if(t) t.textContent = String(TEXT).replace('{pct}', String(pct))
+        .replace('{used}', used.toLocaleString()).replace('{quota}', quota.toLocaleString());
+      bar.classList.toggle('ws-expiry-danger', lvl === 'over');
+      bar.classList.toggle('ws-expiry-warn', lvl !== 'over');
+      _set(true);
+    }catch(_e){
+      // 404（后端未重启）/401（未登录）/网络异常 → 收条；连续 3 次停止轮询不刷屏
+      fails += 1;
+      _set(false);
+      if(fails >= 3 && timer){ clearInterval(timer); timer = null; }
+    }
+  }
+  if(window.wsBanner) window.wsBanner.register('uqw-bar', 15, 'flex');
+  bar.addEventListener('click', function(){ location.href = '/workspace/usage'; });
+  setTimeout(function(){ _tick(); timer = setInterval(_tick, 600000); }, 10000);
+})();
+</script>
 <!-- 前端版本陈旧提醒（P2-1，2026-07-29）：坐席工作台常开数天，模板热更新只对刷新后的页面
      生效——旧标签页跑旧 JS 是「已修复的问题坐席还在踩」的根因（当日实录：账号切换条修复后
      旧标签页仍显示旧行为）。静态 /static/workspace/ui-build.txt 首行 token 为单一版本源：
@@ -943,6 +1221,57 @@ function _wsAiTrialDismiss(){
     s = String(s || '');
     return s.length > 12 ? (s.slice(0, 10) + '…') : s;
   }
+  var _chanReloginBusy = false;
+  function _chanLabel(s){
+    // P0（2026-08-14）：有昵称显示昵称（红条写 messenger:6158… 坐席不知道是谁掉线）
+    var nm = String((s && s.name) || '').trim();
+    return String((s && s.platform) || '?') + ':' + (nm || _acctShort(s && s.account_id));
+  }
+  function _wireChanRelogin(first){
+    var btn = document.getElementById('ws-chandown-relogin');
+    if(!btn) return;
+    // messenger（headed 交互重登）/ whatsapp（baileys 凭据级 reconnect，P1
+    // 2026-08-14 扩展）且有真实 account_id 才亮按钮；其余平台隐藏。
+    var plat = String((first && first.platform) || '');
+    var acct = String((first && first.account_id) || '');
+    if((plat !== 'messenger' && plat !== 'whatsapp') || !acct){
+      btn.style.display = 'none'; return;
+    }
+    btn.textContent = window.T('ws.chandown.relogin_btn');
+    btn.style.display = '';
+    btn.disabled = false;
+    btn.onclick = async function(){
+      if(_chanReloginBusy) return;
+      _chanReloginBusy = true;
+      btn.disabled = true;
+      btn.textContent = '…';
+      var det = document.getElementById('ws-chandown-detail');
+      try{
+        var r = await window.apiFetch('/api/admin/platform-sessions/relogin', {
+          method: 'POST', credentials: 'same-origin',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({platform: plat, account_id: acct}),
+        }, {timeoutMs: 65000});
+        if(r.status === 403){
+          if(det) det.textContent = ' ' + window.T('ws.chandown.relogin_denied');
+        }else if(r.ok){
+          if(det) det.textContent = ' ' + window.T('ws.chandown.relogin_ok');
+        }else{
+          var msg = 'http ' + r.status;
+          try{ var j = await r.json(); if(j && j.detail) msg = String(j.detail).slice(0, 120); }catch(_e){}
+          if(det) det.textContent = ' ' + window.Tf('ws.chandown.relogin_fail', {err: msg});
+        }
+      }catch(e){
+        var det2 = document.getElementById('ws-chandown-detail');
+        if(det2) det2.textContent = ' ' + window.Tf('ws.chandown.relogin_fail',
+          {err: String((e && e.message) || e).slice(0, 120)});
+      }finally{
+        _chanReloginBusy = false;
+        btn.disabled = false;
+        btn.textContent = window.T('ws.chandown.relogin_btn');
+      }
+    };
+  }
   function _renderChanDown(ch){
     var bar = document.getElementById('ws-chandown');
     if(!bar) return;
@@ -953,13 +1282,12 @@ function _wsAiTrialDismiss(){
     if(t) t.textContent = window.Tf('ws.chandown.text',
       {plat: String(first.platform || '?'), n: String(first.down_min != null ? first.down_min : '?')});
     var det = document.getElementById('ws-chandown-detail');
-    if(det){
-      var names = list.map(function(s){
-        return String(s.platform || '?') + ':' + _acctShort(s.account_id);
-      }).join(' · ');
+    if(det && !_chanReloginBusy){
+      var names = list.map(_chanLabel).join(' · ');
       det.textContent = ' ' + window.Tf('ws.chandown.hint',
         {count: String(ch.count || list.length), list: names});
     }
+    _wireChanRelogin(first);
     window.wsBanner.set('ws-chandown', true);
   }
   // Phase4: shared soft-cool flag for inbox loadThread adaptive timeout/retry.
@@ -1025,6 +1353,26 @@ function _wsAiTrialDismiss(){
     }
     window.wsBanner.set('ws-expiry', true);
   }
+  function _renderDelivBlock(db){
+    var bar = document.getElementById('ws-delivblock');
+    if(!bar) return;
+    if(!(db && db.active)){ window.wsBanner.set('ws-delivblock', false); return; }
+    var text = document.getElementById('ws-delivblock-text');
+    var detail = document.getElementById('ws-delivblock-detail');
+    if(text) text.textContent = window.T('ws.delivblock.text');
+    var domains = Object.keys(db.by_domain || {});
+    var names = domains.map(function(d){
+      var k = 'ws.delivblock.d.' + d;
+      var lab = window.T(k);
+      return (lab && lab !== k) ? lab : d;
+    }).filter(Boolean);
+    if(detail){
+      detail.textContent = names.length
+        ? (' ' + window.Tf('ws.delivblock.detail', {domains: names.join('、')}))
+        : '';
+    }
+    window.wsBanner.set('ws-delivblock', true);
+  }
   function _scheduleAiDegradePoll(ms){
     if(_pollTimer){ clearInterval(_pollTimer); _pollTimer = null; }
     _pollTimer = setInterval(_wsAiDegradePoll, ms);
@@ -1034,7 +1382,8 @@ function _wsAiTrialDismiss(){
     var chan = document.getElementById('ws-chandown');
     var cool = document.getElementById('ws-restartcool');
     var expy = document.getElementById('ws-expiry');
-    if(!bar && !chan && !cool && !expy) return;
+    var deliv = document.getElementById('ws-delivblock');
+    if(!bar && !chan && !cool && !expy && !deliv) return;
     try{
       var r = await window.apiFetch('/api/workspace/ai-runtime-status',
         {credentials:'same-origin'}, {timeoutMs: 10000});
@@ -1053,6 +1402,7 @@ function _wsAiTrialDismiss(){
       _renderChanDown(d && d.channels);
       _renderRestartCool(d && d.instance_restart);
       _renderExpiry(d && d.tenant_notice);
+      _renderDelivBlock(d && d.delivery_block);
       // Faster refresh while cooling so banner/timeout adaptive clear sooner
       _scheduleAiDegradePoll((d && d.instance_restart && d.instance_restart.cooldown_active) ? 30000 : 60000);
     }catch(_){
@@ -1064,6 +1414,7 @@ function _wsAiTrialDismiss(){
         window.wsBanner.set('ws-chandown', false);
         window.wsBanner.set('ws-restartcool', false);
         window.wsBanner.set('ws-expiry', false);
+        window.wsBanner.set('ws-delivblock', false);
         try{
           window.__wsRestartCoolLocal = Date.now() + 180000;
         }catch(_e){}
@@ -1076,11 +1427,9 @@ function _wsAiTrialDismiss(){
 })();
 </script>
 <script>
-function _wsToggleMore(e){ e.stopPropagation(); var m=document.getElementById('ws-more-menu'); if(m) m.classList.toggle('show'); }
-function _wsToggleUser(e){ e.stopPropagation(); var m=document.getElementById('ws-user-menu'); if(m) m.classList.toggle('show'); }
-document.addEventListener('DOMContentLoaded',function(){ try{ window.cpSyncThemeLbl&&window.cpSyncThemeLbl(); }catch(_){} });
+function _wsToggleUser(e){ e.stopPropagation(); var m=document.getElementById('ws-user-menu'); if(m){ m.classList.toggle('show'); if(m.classList.contains('show')){ try{ window.cpSyncThemeSeg&&window.cpSyncThemeSeg(); }catch(_){} } } }
+document.addEventListener('DOMContentLoaded',function(){ try{ window.cpSyncThemeSeg&&window.cpSyncThemeSeg(); }catch(_){} });
 document.addEventListener('click',function(e){
-  var m=document.getElementById('ws-more-menu'); if(m && !e.target.closest('.ws-more-wrap')) m.classList.remove('show');
   var u=document.getElementById('ws-user-menu'); if(u && !e.target.closest('.ws-user-wrap')) u.classList.remove('show');
 });
 </script>
@@ -1244,6 +1593,55 @@ document.addEventListener('click',function(e){
   // 分级（ok/low/out）由服务端算（license_routes.quota_level）——顶栏、会员中心、
   // 首启向导三处共用同一套阈值，前端各写一份必然漂移。
   var quotaPill=document.getElementById('ws-quota');
+  // 用尽拦截弹层（2026-08-11）：额度 out 时弹一次三出路（邀请/客服/购买）——
+  // 拦截本身发生在 402（翻译/AI 拟稿停摆），这层是把「为什么停了 + 怎么恢复」
+  // 主动讲给人听，而不是等坐席撞红色报错。每会话只弹一次，可关闭。
+  var _quotaWallUp=false;
+  function _maybeQuotaWall(lv){
+    if(lv!=='out' || _quotaWallUp) return;
+    try{ if(sessionStorage.getItem('ws_quota_wall_v1')) return; }catch(e){}
+    _quotaWallUp=true;
+    try{ sessionStorage.setItem('ws_quota_wall_v1','1'); }catch(e){}
+    var isMaster={{ 'true' if user_role == 'master' else 'false' }};
+    var ov=document.createElement('div');
+    ov.id='ws-quota-wall';
+    ov.style.cssText='position:fixed;inset:0;z-index:9998;background:rgba(10,14,26,.55);'
+      +'display:flex;align-items:center;justify-content:center;backdrop-filter:blur(2px)';
+    var btnCss='display:block;width:100%;box-sizing:border-box;text-align:center;'
+      +'padding:10px 14px;border-radius:9px;font-size:14px;font-weight:600;'
+      +'text-decoration:none;margin-top:10px;border:1px solid var(--bd,#e5e7eb)';
+    var inner='<div style="font-size:16px;font-weight:800;margin-bottom:6px">'
+      +window.T('ws.quotawall.title')+'</div>'
+      +'<div style="font-size:12.5px;color:var(--t2,#667);line-height:1.65">'
+      +window.T(isMaster?'ws.quotawall.body':'ws.quotawall.agent_hint')+'</div>';
+    if(isMaster){
+      inner+='<a href="/membership#mb-invite" style="'+btnCss
+        +';background:var(--blue,#3b82f6);color:var(--th-ink-inverse,#fff);border-color:transparent">'
+        +window.T('ws.quotawall.invite')+'</a>'
+        +'<a href="/membership#mb-cs" style="'+btnCss+';color:var(--t1,#111)">'
+        +window.T('ws.quotawall.cs')+'</a>'
+        +'<a href="/membership#mb-buy" style="'+btnCss+';color:var(--t1,#111)">'
+        +window.T('ws.quotawall.buy')+'</a>';
+    } else {
+      inner+='<a href="/membership" style="'+btnCss
+        +';background:var(--blue,#3b82f6);color:var(--th-ink-inverse,#fff);border-color:transparent">'
+        +window.T('ws.quotawall.view')+'</a>';
+    }
+    inner+='<button type="button" id="ws-quota-wall-later" style="'+btnCss
+      +';background:transparent;color:var(--t2,#667);border-color:transparent;cursor:pointer">'
+      +window.T('ws.quotawall.later')+'</button>';
+    var box=document.createElement('div');
+    box.style.cssText='width:380px;max-width:90vw;background:var(--card,#fff);'
+      +'color:var(--t1,#111);border:1px solid var(--bd,#e5e7eb);border-radius:14px;'
+      +'padding:20px 22px;box-shadow:0 18px 48px rgba(0,0,0,.28)';
+    box.innerHTML=inner;
+    ov.appendChild(box);
+    document.body.appendChild(ov);
+    function _close(){ try{ if(ov.parentNode) ov.parentNode.removeChild(ov); }catch(e){} }
+    var later=box.querySelector('#ws-quota-wall-later');
+    if(later) later.addEventListener('click', _close);
+    ov.addEventListener('click', function(ev){ if(ev.target===ov) _close(); });
+  }
   function _compactNum(n){
     var v=Number(n||0);
     if(v>=1e6) return (v/1e6).toFixed(v>=1e7?0:1).replace(/\.0$/,'')+'M';
@@ -1255,6 +1653,7 @@ document.addEventListener('click',function(e){
     apiFetch('/api/workspace/quota').then(function(r){return r.json();}).then(function(d){
       if(!d||!d.ok||!d.visible){ quotaPill.style.display='none'; return; }
       var lv=String(d.level||'ok');
+      _maybeQuotaWall(lv);
       quotaPill.className='ws-pill quota'+(lv==='out'?' quota-out':(lv==='low'?' quota-low':''));
       var isTrial=(d.source==='local_trial');
       var lb=window.T(isTrial?'base.pill.quota_trial':'base.pill.quota');
@@ -1437,7 +1836,7 @@ document.addEventListener('click',function(e){
     if(btn){
       var row=e.target.closest('.ws-drill-item'); var cid=row&&row.getAttribute('data-cid'); if(!cid) return;
       var act=btn.getAttribute('data-act');
-      if(act==='open'){ try{ sessionStorage.setItem('ws_focus_conv',cid); }catch(_){ } if(typeof window.__wsFocusConv==='function'){ _toggleSlaPanel(false); window.__wsFocusConv(cid); } else { location.href='/workspace'; } return; }
+      if(act==='open'){ try{ sessionStorage.setItem('ws_focus_conv',cid); }catch(_){ } if(typeof window.__wsFocusConv==='function'){ _toggleSlaPanel(false); window.__wsFocusConv(cid); } else if(!(window.__wsGoHome&&window.__wsGoHome({cid:cid}))){ location.href='/workspace'; } return; }
       if(act==='claim'){
         btn.disabled=true; btn.textContent='…';
         apiFetch('/api/workspace/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversation_id:cid})}, {timeoutMs: 60000})
@@ -1495,7 +1894,7 @@ document.addEventListener('click',function(e){
     escBadge.addEventListener('click',function(){
       if(!_escItems.length){ location.href='/workspace/dash'; return; }
       try{ sessionStorage.setItem('ws_focus_conv', _escItems[0].conversation_id); }catch(_){ }
-      location.href='/workspace';
+      if(!(window.__wsGoHome&&window.__wsGoHome({cid:_escItems[0].conversation_id}))) location.href='/workspace';
     });
   }
   refreshEsc(); setInterval(refreshEsc, 30000);
@@ -1628,35 +2027,8 @@ document.addEventListener('click',function(e){
     }
     if(MY_IS_SUP){
       refreshL4();
-      var _gl=document.getElementById('ws-golive-link');
-      if(_gl) _gl.style.display='block';  // P2-1: 上线自检仅主管可见
-      var _sl=document.getElementById('ws-setup-link');
-      if(_sl) _sl.style.display='block';  // P1-1: 接入向导仅主管可见
-      var _chl=document.getElementById('ws-channels-link');
-      if(_chl) _chl.style.display='block';  // 渠道中心仅主管可见
-      var _ksl=document.getElementById('ws-kbstart-link');
-      if(_ksl) _ksl.style.display='block';  // P1-2: 知识库冷启动仅主管可见
-      var _rl=document.getElementById('ws-roi-link');
-      if(_rl) _rl.style.display='block';  // P0-3: ROI 看板仅主管/老板可见
-      var _aql=document.getElementById('ws-aiq-link');
-      if(_aql) _aql.style.display='block';  // P3-1: AI 质量看板仅主管可见
-      var _ul=document.getElementById('ws-usage-link');
-      if(_ul) _ul.style.display='block';  // C0-2: 用量看板仅主管/老板可见
-      var _pl=document.getElementById('ws-perf-link');
-      if(_pl) _pl.style.display='block';
-      // P0 2026-08-09: 目标达成报表仅主管可见；按端点探测显隐——模板热更新先于
-      // 进程重启上生产，路由未装载时(404)不亮死链接，重启后自动出现（零二次改动）
-      var _grl=document.getElementById('ws-goalrpt-link');
-      if(_grl){
-        fetch('/api/goals/report/accounts?days=7').then(function(r){
-          if(r.status!==404) _grl.style.display='block';
-        }).catch(function(){});
-      }
-      var _ql=document.getElementById('ws-queue-link');
-      if(_ql) _ql.style.display='block';  // P29: 队列看板仅主管可见
-      var _wfl=document.getElementById('ws-workflow-link');
-      if(_wfl) _wfl.style.display='block';  // P37: 工作流配置仅主管可见
-      ['ws-grp-ops','ws-grp-quality','ws-grp-biz','ws-grp-config'].forEach(function(gid){ var ge=document.getElementById(gid); if(ge) ge.style.display='block'; });
+      // 「更多」菜单已删（2026-08-14）：主管看板入口收口到后台管理（侧栏 + Ctrl+K
+      // 命令面板，见 nav_schema.CMD_EXTRA_ITEMS）；此处只剩「回管理后台」链接显隐。
       var _adm=document.getElementById('ws-admin-link'); if(_adm) _adm.style.display='block';  // P1.3：主管可从工作台回管理后台
     }
   }).catch(function(){});
@@ -1669,8 +2041,6 @@ document.addEventListener('click',function(e){
     apiFetch('/api/drafts/risk-summary').then(function(r){return r.json();}).then(function(d){
       if(!d||!d.ok) return;
       var l4=(d.by_level&&d.by_level['L4'])||0;
-      var l3=(d.by_level&&d.by_level['L3'])||0;
-      var high=l4+l3;
       var sla=(d.sla_overdue&&d.sla_overdue>0)?d.sla_overdue:0;
       if(_l4Badge){
         if(!l4){ _l4Badge.style.display='none'; }
@@ -1682,14 +2052,8 @@ document.addEventListener('click',function(e){
         }
         _l4PulsePrev=l4;
       }
-      // 草稿审批链接显示待审总数 + SLA 告警
-      var _dl=document.getElementById('ws-drafts-link');
-      if(_dl){
-        var label=window.T('base.nav.drafts');
-        if(high) label+='('+high+')';
-        if(sla) _dl.innerHTML=label+' <span style="display:inline-flex;align-items:center;gap:2px;vertical-align:middle;">'+_ui('clock',11)+sla+'</span>';
-        else _dl.textContent=label;
-      }
+      // 「更多」菜单已删（2026-08-14）：ws-drafts-link 不复存在，待审总数/SLA 由
+      // 顶栏 L4 角标 + toast 承担，草稿队列入口在收件箱内。
       // 首次加载只同步基线 + 已在上面更新顶栏角标，不弹 toast（避免开页即把历史积压一次性弹出）；
       // 之后仅当计数「真正新增」时才 loud toast（仅主管，增量触发）。
       if(!_l4Inited){
@@ -1798,6 +2162,7 @@ document.addEventListener('click',function(e){
               var _cid=_asg.conversation_id||'';
               if(_cid && typeof window.__wsFocusConv==='function'){ window.__wsFocusConv(_cid); return; }
               if(_cid){ try{ sessionStorage.setItem('ws_focus_conv',_cid); }catch(_){} }
+              if(window.__wsGoHome&&window.__wsGoHome({cid:_cid})) return;
               if(location.pathname.indexOf('/workspace')!==0 || location.pathname!=='/workspace') location.href='/workspace';
             };
           }
@@ -1836,6 +2201,7 @@ document.addEventListener('click',function(e){
               _cnEl.onclick=function(){
                 if(typeof window.__wsFocusConv==='function'){ window.__wsFocusConv(_cn.conversation_id); return; }
                 try{ sessionStorage.setItem('ws_focus_conv',_cn.conversation_id); }catch(_){}
+                if(window.__wsGoHome&&window.__wsGoHome({cid:_cn.conversation_id})) return;
                 if(location.pathname!=='/workspace') location.href='/workspace';
               };
             }
@@ -1857,7 +2223,7 @@ document.addEventListener('click',function(e){
             _acEl.style.cursor='pointer';
             _acEl.onclick=function(){
               try{ sessionStorage.setItem('ws_focus_conv',_ac.conversation_id); }catch(_){}
-              location.href='/workspace';
+              if(!(window.__wsGoHome&&window.__wsGoHome({cid:_ac.conversation_id}))) location.href='/workspace';
             };
           }
         }
@@ -1870,7 +2236,7 @@ document.addEventListener('click',function(e){
           _sapEl.style.cursor='pointer';
           _sapEl.onclick=function(){
             try{ sessionStorage.setItem('ws_focus_conv',_sap.conversation_id); }catch(_){}
-            location.href='/workspace';
+            if(!(window.__wsGoHome&&window.__wsGoHome({cid:_sap.conversation_id}))) location.href='/workspace';
           };
         }
       }
@@ -1885,6 +2251,17 @@ document.addEventListener('click',function(e){
       if(msg && msg.type==='stage_reunion' && msg.data){
         CRMW.toast(window.Tf('base.sse.stage_reunion',{stage:(msg.data.stage_label||'')}),'#be185d','heart');
       }
+      // P3 2026-08-17：AI 回复额度触顶 → 中央弹窗（服务端每会话每日至多一次
+      // + __wsBudgetPop 内按会话×日 localStorage 去抖；重连重放缓冲窗内静默）。
+      // 其余 bot_peer 判定（Tier0/复读/秒回）刻意不弹——已有收件箱徽章/webhook。
+      // P3.1：同一过滤口顺带入铃铛（离线/跨班次补看弹窗错过的触顶）；add 不看
+      // settle 窗——_COALESCE_TYPES 已含本类型，重放合并沿用旧时戳不复活未读。
+      if(msg && msg.type==='bot_peer_alert' && msg.data && msg.data.reason==='daily_budget'){
+        if(window.__wsNotif) window.__wsNotif.add(msg);
+        if(!_sseSettling()){
+          try{ if(window.__wsBudgetPop) window.__wsBudgetPop(msg.data); }catch(_){}
+        }
+      }
       // P47：工作链终态通知
       if(msg && msg.type==='workflow_execution_failed' && msg.data){
         CRMW.toast(window.Tf('base.sse.wf_failed',{name:(msg.data.chain_name||'')}),'#ef4444','x');
@@ -1897,7 +2274,7 @@ document.addEventListener('click',function(e){
           _wsEl.style.cursor='pointer';
           _wsEl.onclick=function(){
             try{ sessionStorage.setItem('ws_focus_conv',_ws.conversation_id); }catch(_){}
-            location.href='/workspace';
+            if(!(window.__wsGoHome&&window.__wsGoHome({cid:_ws.conversation_id}))) location.href='/workspace';
           };
         }
       }
@@ -1910,6 +2287,7 @@ document.addEventListener('click',function(e){
           _gdEl.onclick=function(){
             if(typeof window.__wsFocusConv==='function'){ window.__wsFocusConv(_gd.conversation_id); return; }
             try{ sessionStorage.setItem('ws_focus_conv',_gd.conversation_id); }catch(_){}
+            if(window.__wsGoHome&&window.__wsGoHome({cid:_gd.conversation_id})) return;
             if(location.pathname!=='/workspace') location.href='/workspace';
           };
         }
@@ -1931,7 +2309,7 @@ document.addEventListener('click',function(e){
             _qaEl.style.cursor='pointer';
             _qaEl.onclick=function(){
               try{ sessionStorage.setItem('ws_focus_conv',_qa.conversation_id); }catch(_){}
-              location.href='/workspace';
+              if(!(window.__wsGoHome&&window.__wsGoHome({cid:_qa.conversation_id}))) location.href='/workspace';
             };
           }
         }
@@ -1952,7 +2330,7 @@ document.addEventListener('click',function(e){
               _toastEl.style.cursor='pointer';
               _toastEl.onclick=function(){
                 try{ sessionStorage.setItem('ws_focus_conv',_d.conversation_id); }catch(_){}
-                location.href='/workspace';
+                if(!(window.__wsGoHome&&window.__wsGoHome({cid:_d.conversation_id}))) location.href='/workspace';
               };
             }
           }
@@ -2005,7 +2383,7 @@ document.addEventListener('click',function(e){
   var _notifications = [];
   // 复发型告警（升级/会话SLA/草稿SLA/队列/异常）会被反复推送（轮询+重连重发）。
   // 这些按「类型+会话」合并：同一会话只保留最新一条，避免铃铛堆几十条同义告警。
-  var _COALESCE_TYPES={ escalation:1, sla_alert:1, draft_sla_breach:1, draft_backlog_summary:1, queue_alert:1, anomaly_alert:1 };
+  var _COALESCE_TYPES={ escalation:1, sla_alert:1, draft_sla_breach:1, draft_backlog_summary:1, queue_alert:1, anomaly_alert:1, bot_peer_alert:1 };
   function _coalesceKey(n){
     if(!n||!_COALESCE_TYPES[n.type]) return null;
     var d=n.data||{};
@@ -2044,6 +2422,7 @@ document.addEventListener('click',function(e){
     escalation:     { iconName:'bell', bg:'#ede9fe', label:window.T('base.notif.type_escalation'), accent:'#7c3aed' },
     conv_note:      { iconName:'users', bg:'#ede9fe', label:window.T('base.notif.type_conv_note'), accent:'#7c3aed' },
     goal_completed_alert:{ iconName:'star', bg:'#fef9c3', label:window.T('base.notif.type_goal_done'), accent:'#ca8a04' },
+    bot_peer_alert: { iconName:'pause', bg:'#fee2e2', label:window.T('base.notif.type_budget_hit'), accent:'#dc2626' },
   };
   // 群组动态：inbox_message 且会话类型为群组/频道 → 折叠展示、不计未读、不打扰
   function _isGroup(n){
@@ -2090,6 +2469,11 @@ document.addEventListener('click',function(e){
       sub = window.Tf('base.notif.mention_sub',{name:(d.agent_name||d.agent_id||'?'),text:(d.body||'').slice(0,40)});
     } else if(n.type==='goal_completed_alert'){
       sub = window.Tf('base.notif.goal_done_sub',{name:(d.contact_name||d.chat_key||'?'),title:(d.title||d.template_name||'').slice(0,40)});
+    } else if(n.type==='bot_peer_alert'){
+      var _bp=d.budget||{};
+      var _bn=d.display_name||d.username||d.chat_key||'?';
+      var _bk=_bp.relieved?'base.notif.budget_sub_relieved':(_bp.hard?'base.notif.budget_sub_hard':'base.notif.budget_sub_soft');
+      sub = window.Tf(_bk,{name:_bn,used:(_bp.used!=null?_bp.used:'?'),limit:(_bp.limit!=null?_bp.limit:'?')});
     }
     return '<div class="ws-notif-item'+(unread?' unread':'')+'" style="border-left-color:'+(meta.accent||'transparent')+';" onclick="window.__wsNotif.click(\''+esc(JSON.stringify(n).replace(/'/g,'\\'+"'"))+'\')">'
       +'<div class="ws-notif-icon" style="background:'+meta.bg+'">'+(typeof uiIcon==='function'?uiIcon(meta.iconName||'pin',14):'')+'</div>'
@@ -2108,6 +2492,7 @@ document.addEventListener('click',function(e){
     conversation_assigned:'assign', draft_reassigned:'assign',
     sla_alert:'alert', draft_sla_breach:'alert', escalation:'alert',
     anomaly_alert:'alert', queue_alert:'alert',
+    bot_peer_alert:'alert',
   };
   function _nfMatch(n){
     if(_nfMode==='all') return true;
@@ -2240,26 +2625,48 @@ document.addEventListener('click',function(e){
     if(_notifications.length!==before){ _updateBadge(); if(_open) _renderNotif(); }
   }
 
+  // 弹窗「今日继续」成功不打开会话 → 铃铛不能还写「已暂停」。
+  // 标 relieved 留审计痕迹（比直接删更诚实）；打开会话仍走 _dismissConv。
+  function _markBudgetRelieved(cid){
+    if(!cid) return;
+    var changed=false;
+    for(var i=0;i<_notifications.length;i++){
+      var n=_notifications[i], d=(n&&n.data)||{};
+      if(n.type!=='bot_peer_alert') continue;
+      if(String(d.conversation_id||'')!==String(cid)) continue;
+      d.budget=d.budget||{};
+      if(d.budget.relieved) continue;
+      d.budget.relieved=true;
+      n.data=d;
+      changed=true;
+    }
+    if(changed && _open) _renderNotif();
+  }
+  document.addEventListener('aitr:budget-relieved', function(e){
+    try{ _markBudgetRelieved(e&&e.detail&&e.detail.conversation_id); }catch(_){}
+  });
+
   // 导出：供 SSE handler 调用 addNotif
   window.__wsNotif = {
     add: _addNotif,
     dismissConv: _dismissConv,
+    markBudgetRelieved: _markBudgetRelieved,
     click: function(jsonStr){
       try{
         var n = JSON.parse(jsonStr);
         var d = n.data || {};
         // 新消息/升级/SLA/转派/@提及 → 定位会话：已在收件箱直接选中，否则跳回工作台
-        if((n.type==='inbox_message'||n.type==='escalation'||n.type==='sla_alert'||n.type==='conversation_assigned'||n.type==='conv_note'||n.type==='goal_completed_alert') && d.conversation_id){
+        if((n.type==='inbox_message'||n.type==='escalation'||n.type==='sla_alert'||n.type==='conversation_assigned'||n.type==='conv_note'||n.type==='goal_completed_alert'||n.type==='bot_peer_alert') && d.conversation_id){
           if(typeof window.__wsFocusConv==='function'){ window.__wsFocusConv(d.conversation_id); _toggle(); return; }
           try{ sessionStorage.setItem('ws_focus_conv', d.conversation_id); }catch(_){}
-          location.href='/workspace';
+          if(!(window.__wsGoHome&&window.__wsGoHome({cid:d.conversation_id}))) location.href='/workspace';
         } else if(n.type==='conversation_assigned'){
           // 批量转派（无单一会话）→ 回工作台看「我的」
-          if(location.pathname!=='/workspace') location.href='/workspace';
+          if(!(window.__wsGoHome&&window.__wsGoHome({})) && location.pathname!=='/workspace') location.href='/workspace';
         } else if(n.type==='draft_sla_breach'||n.type==='draft_backlog_summary'||n.type==='draft_reassigned'){
           location.href='/workspace/drafts';
         } else if(n.type==='sla_alert'){
-          location.href='/workspace';
+          if(!(window.__wsGoHome&&window.__wsGoHome({}))) location.href='/workspace';
         }
       }catch(_){}
       _toggle();
@@ -2354,10 +2761,10 @@ window.__wsNotify = (function(){
     var body=String(d.preview||d.text||'');
     var go=function(){
       var cid=d.conversation_id||'';
-      // 已在工作台收件箱 → 直接定位该会话；其它页 → 存焦点并跳回工作台
+      // 已在工作台收件箱 → 直接定位该会话；其它页 → 交接给既有坐席窗口或跳回工作台
       if(typeof window.__wsFocusConv==='function'){ window.__wsFocusConv(cid); return; }
       try{ sessionStorage.setItem('ws_focus_conv', cid); }catch(_){}
-      location.href='/workspace';
+      if(!(window.__wsGoHome&&window.__wsGoHome({cid:cid}))) location.href='/workspace';
     };
     if(mode==='toast'){ _toastGo(title, body, go); return; }
     if(mode==='desktop'){ if(!_desktop('💬 '+title, body, go)) _toastGo(title, body, go); return; }
@@ -2635,6 +3042,172 @@ window.__wsMultiWin = (function(){
     var wrap=document.getElementById('gs-wrap');
     if(_panel&&wrap&&!wrap.contains(e.target)) _panel.style.display='none';
   });
+})();
+</script>
+<!-- ── 中央模态 __wsModal（P3 2026-08-17）──────────────────────────────────
+     预算触顶弹窗 / 收件箱「解除上限」确认共用的一套模态设计语言，替代原生
+     confirm()——桌面壳里原生框标题带 telegram-ai-desktop 工程名，观感硬伤。
+     API：window.__wsModal.open({tone:'danger'|'warn', icon, title, big, lead,
+     points:[], note, buttons:[{label, tone:'danger'|'warn'|'ghost', focus,
+     onClick, keepOpen}], onClose})。约定：
+     · 单实例，新弹窗顶掉旧的；Esc / 点背板 = 关闭（onClose 兜底回调）；
+     · 默认焦点只落 focus:true 的**安全**按钮——绝不默认聚焦「解除保护」类
+       危险主键，防坐席正在别处打字时回车误触；
+     · prefers-reduced-motion 下无进场动画。 -->
+<style>
+#ws-modal-back{position:fixed;inset:0;z-index:99980;display:none;align-items:center;justify-content:center;background:rgba(15,23,42,.55);backdrop-filter:blur(2px);}
+#ws-modal-back.on{display:flex;}
+.wsm-card{width:min(460px,calc(100vw - 48px));background:var(--tk-surface,#fff);color:var(--tk-text,#0f172a);border:1px solid var(--tk-border,rgba(148,163,184,.35));border-radius:14px;box-shadow:0 18px 50px rgba(2,6,23,.35);overflow:hidden;animation:wsmIn .18s ease-out;}
+@keyframes wsmIn{from{transform:scale(.96);opacity:0;}to{transform:scale(1);opacity:1;}}
+.wsm-bar{height:4px;}
+.wsm-bar.danger{background:var(--tk-danger,#e11d48);}
+.wsm-bar.warn{background:var(--tk-amber,#f59e0b);}
+.wsm-body{padding:18px 20px 4px;display:flex;gap:14px;align-items:flex-start;}
+.wsm-ic{flex:none;width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;}
+.wsm-ic.danger{background:rgba(225,29,72,.12);}
+.wsm-ic.warn{background:rgba(245,158,11,.14);}
+.wsm-tit{font-size:15px;font-weight:800;line-height:1.4;margin:2px 0 6px;}
+.wsm-big{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums;margin:2px 0 4px;}
+.wsm-big.danger{color:var(--tk-danger-ink,#b91c1c);}
+.wsm-big.warn{color:var(--tk-amber-ink,#92400e);}
+.wsm-lead{font-size:13px;line-height:1.6;}
+.wsm-points{margin:8px 0 0;padding:0;list-style:none;font-size:12.5px;line-height:1.7;color:var(--tk-text-muted,#64748b);}
+.wsm-points li{display:flex;gap:7px;align-items:flex-start;}
+.wsm-points li::before{content:'•';flex:none;font-weight:700;}
+.wsm-note{margin-top:8px;font-size:12.5px;line-height:1.65;color:var(--tk-text-muted,#64748b);background:var(--tk-surface-2,rgba(148,163,184,.1));border-radius:8px;padding:8px 10px;}
+.wsm-btns{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;padding:14px 20px 18px;}
+.wsm-btn{appearance:none;border-radius:9px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;border:1px solid transparent;text-decoration:none;display:inline-flex;align-items:center;line-height:1.2;}
+.wsm-btn.ghost{background:transparent;color:var(--tk-text,#0f172a);border-color:var(--tk-border,rgba(148,163,184,.45));}
+.wsm-btn.ghost:hover{background:var(--tk-surface-2,rgba(148,163,184,.12));}
+.wsm-btn.warn{background:#d97706;color:#fff;}
+.wsm-btn.warn:hover{background:#b45309;}
+.wsm-btn.danger{background:#dc2626;color:#fff;}
+.wsm-btn.danger:hover{background:#b91c1c;}
+@media (prefers-reduced-motion: reduce){.wsm-card{animation:none;}}
+</style>
+<div id="ws-modal-back" role="presentation"></div>
+<script>
+(function(){
+  var back=document.getElementById('ws-modal-back');
+  if(!back) return;
+  var _onClose=null;
+  function _wsmEsc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+  function _escKey(e){ if(e.key==='Escape'){ e.stopPropagation(); close(); } }
+  function close(){
+    back.classList.remove('on');
+    back.innerHTML='';
+    document.removeEventListener('keydown',_escKey,true);
+    var cb=_onClose; _onClose=null;
+    if(cb){ try{ cb(); }catch(_){ } }
+  }
+  function open(opt){
+    opt=opt||{};
+    close();
+    var tone=(opt.tone==='warn')?'warn':'danger';
+    var card=document.createElement('div');
+    card.className='wsm-card';
+    card.setAttribute('role','alertdialog');
+    card.setAttribute('aria-modal','true');
+    /* 图标走 ui_icons.js 注册表（emoji 棘轮：控件位一律 SVG）；registry 缺席时
+       色圈留空降级，不回落 emoji 字面量 */
+    var icHtml='';
+    try{ if(typeof uiIcon==='function') icHtml=uiIcon(opt.icon||'alert',22); }catch(_){ }
+    card.innerHTML='<div class="wsm-bar '+tone+'"></div>'
+      +'<div class="wsm-body">'
+      +'<div class="wsm-ic '+tone+'">'+icHtml+'</div>'
+      +'<div style="flex:1;min-width:0;">'
+      +'<div class="wsm-tit">'+_wsmEsc(opt.title||'')+'</div>'
+      +(opt.big?'<div class="wsm-big '+tone+'">'+_wsmEsc(opt.big)+'</div>':'')
+      +(opt.lead?'<div class="wsm-lead">'+_wsmEsc(opt.lead)+'</div>':'')
+      +((opt.points&&opt.points.length)?('<ul class="wsm-points">'+opt.points.map(function(p){return '<li><span>'+_wsmEsc(p)+'</span></li>';}).join('')+'</ul>'):'')
+      +(opt.note?'<div class="wsm-note">'+_wsmEsc(opt.note)+'</div>':'')
+      +'</div></div>';
+    var row=document.createElement('div');
+    row.className='wsm-btns';
+    (opt.buttons||[]).forEach(function(b){
+      var el=document.createElement('button');
+      el.type='button';
+      el.className='wsm-btn '+(b.tone||'ghost');
+      el.textContent=String(b.label||'');
+      if(b.focus) el.setAttribute('data-wsm-focus','1');
+      el.addEventListener('click',function(ev){
+        if(b.onClick){ try{ b.onClick(ev); }catch(_){ } }
+        if(!b.keepOpen) close();
+      });
+      row.appendChild(el);
+    });
+    card.appendChild(row);
+    back.innerHTML='';
+    back.appendChild(card);
+    back.classList.add('on');
+    _onClose=(typeof opt.onClose==='function')?opt.onClose:null;
+    back.onclick=function(ev){ if(ev.target===back) close(); };
+    document.addEventListener('keydown',_escKey,true);
+    var f=card.querySelector('[data-wsm-focus]')||card.querySelector('.wsm-btn.ghost')||card.querySelector('.wsm-btn');
+    if(f){ try{ f.focus(); }catch(_){ } }
+  }
+  window.__wsModal={open:open,close:close};
+
+  /* ── 预算触顶中央弹窗（peer_bot_guard daily_budget → SSE bot_peer_alert）──
+     服务端每会话每日至多一次；本地再按 会话×日 localStorage 去抖（SSE 重连
+     重放 / 多页并存）。「查看会话」走 __wsFocusConv / __wsGoHome 既有习语
+     （勿裸 location.href='/workspace'——nav 去重 ratchet 门禁点名）。 */
+  function _budgetDayKey(){
+    var t=new Date();
+    return String(t.getFullYear())+('0'+(t.getMonth()+1)).slice(-2)+('0'+t.getDate()).slice(-2);
+  }
+  function _reliefFromPop(d){
+    apiFetch('/api/unified-inbox/reply-budget/relief',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({platform:d.platform,account_id:d.account_id||'default',chat_key:d.chat_key})
+    }).then(function(r){
+      return r.json().catch(function(){return {};}).then(function(j){
+        if(!r.ok||j.ok===false) throw 0;
+        return j;
+      });
+    }).then(function(){
+      try{ CRMW.toast(window.T('inbox.budget.relief_ok'),'#16a34a'); }catch(_){ }
+      try{ document.dispatchEvent(new CustomEvent('aitr:budget-relieved',{detail:{conversation_id:String(d.conversation_id||'')}})); }catch(_){ }
+    }).catch(function(){
+      try{ CRMW.toast(window.T('inbox.budget.relief_fail'),'#dc2626'); }catch(_){ }
+    });
+  }
+  window.__wsBudgetPop=function(d){
+    try{
+      d=d||{};
+      var cid=String(d.conversation_id||'');
+      if(!cid) return;
+      var lsk='aitr.bpop.'+cid+'.'+_budgetDayKey();
+      try{
+        if(localStorage.getItem(lsk)==='1') return;
+        localStorage.setItem(lsk,'1');
+      }catch(_){ }
+      var bud=d.budget||{};
+      var limit=parseInt(bud.limit,10)||0;
+      var used=(bud.used!=null)?(parseInt(bud.used,10)||0):limit;
+      var hard=!!bud.hard;
+      var name=String(d.display_name||d.username||cid);
+      var btns=[];
+      if(d.platform&&d.chat_key){
+        btns.push({label:window.T('inbox.budget.relief_btn'),tone:'warn',onClick:function(){ _reliefFromPop(d); }});
+      }
+      btns.push({label:window.T('inbox.budget.pop_view_btn'),tone:'ghost',onClick:function(){
+        try{ sessionStorage.setItem('ws_focus_conv',cid); }catch(_){ }
+        if(typeof window.__wsFocusConv==='function'){ window.__wsFocusConv(cid); return; }
+        if(!(window.__wsGoHome&&window.__wsGoHome({cid:cid}))) location.href='/workspace';
+      }});
+      btns.push({label:window.T('inbox.budget.pop_later_btn'),tone:'ghost',focus:true});
+      open({
+        tone:'danger', icon:'pause',
+        title:window.T('inbox.budget.pop_title'),
+        big:(limit?(used+' / '+limit):''),
+        lead:window.Tf('inbox.budget.pop_lead',{name:name,used:used,limit:limit}),
+        note:window.T(hard?'inbox.budget.pop_hard_note':'inbox.budget.pop_soft_note'),
+        buttons:btns
+      });
+      try{ if(window.__wsNotify&&window.__wsNotify.beep) window.__wsNotify.beep(false); }catch(_){ }
+    }catch(_){ }
+  };
 })();
 </script>
 <main class="ws-body{% if ws_sidebar %} ws-has-side{% endif %}">

@@ -18,6 +18,13 @@
 
 ## 架构
 
+> **2026-08-11 双栏融合**：左侧竖排账号 rail 已改为 **stage 顶部标签条**（浏览器心智：
+> 收件箱=常驻首标签+未读徽标，内嵌官方网页=按需标签，健康点内联）。只剩收件箱一个标签时
+> 标签条整条自动隐藏（`rail-solo`），桌面与网页版零差异；「打开官方网页版」入口下沉到
+> 收件箱页**账号抽屉**的账号溢出菜单（经 `renderer/inbox-preload.js` 反向桥
+> `window.__chatxShell` 驱动壳；未读徽标与标签/注入健康状态经同一桥双向流动）。
+> 下文 ASCII 图中的「rail」概念不变，仅方位从左栏变为顶部标签条。
+
 ```
 rail 标签：
   [📥 统一收件箱]  ── webview ── 后台 /workspace（session cookie 鉴权，token 自动登录）
@@ -95,6 +102,7 @@ npm start        # 或 npm run dev 打开 DevTools
 1. 后端未起就启动桌面 → 收件箱显示「正在等待后台启动并自动重连…」；再起后端 → **自动连上**（无需点重试）。
 2. 收件箱首屏不出现 `/login` 闪屏，直接进 `/workspace`（token 自动登录生效）。
 3. 左侧 rail：Telegram/WhatsApp 为内嵌 Tab；若配了 Messenger/LINE 账号，显示「↪收件箱」dim 入口，点击切到收件箱（不开死页）。
+   （若 `embedded_official_pages` 开启且 Messenger 可内嵌：标签带 **人工** 副标 + 顶栏诚实条——本页只人工聊/翻译，全自动必须用统一收件箱 + messenger-web 服务器登录，与官方网页登录无关。）
 4. 切到 Telegram Tab 扫码登录 → 消息下出现「点击翻译」、右下角「🤖 智能回复」可用。
 5. Telegram Tab 选中一个会话 → 右栏头部 📥「在收件箱打开」→ 切到收件箱并定位到**同一会话**。
 6. rail 底部「➕新增」→ 选 Telegram/WhatsApp → 立刻出现新内嵌 Tab 并激活，可在其中扫码登录第二个号。

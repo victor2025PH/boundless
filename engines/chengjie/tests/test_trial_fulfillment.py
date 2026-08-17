@@ -49,6 +49,20 @@ def test_trial_payload_shape():
     assert p["lic_id"] == "trial-A1B2C3D4", "lic_id 取指纹短码，一机一份额度池"
     assert p["trial"] is True
     assert p["included_chars"] == TRIAL_SPEC["included_chars"]
+    assert "exp" not in p, "免费档无期限：days=0 不写 exp（用完即止，不按时间过期）"
+
+
+def test_free_tier_spec_is_pinned():
+    """商业口径钉死（2026-08-11 运营拍板）：免费档 = 100 万字符 · 无期限。
+
+    改这两个数字 = 改对外承诺（官网文案/首启向导/销售话术白名单全都要联动），
+    不该在一次顺手的重构里静默漂移。
+    """
+    assert TRIAL_SPEC["included_chars"] == 1_000_000
+    assert TRIAL_SPEC["days"] == 0
+    # 显式 days 覆盖仍可用（私有化部署要按天试用时的逃生口）
+    p = build_trial_payload(customer="@bob", machine="A1B2-C3D4-E5F6-0789",
+                            days=7, now=1_000_000)
     assert (p["exp"] - 1_000_000) // 86400 == 7
 
 
@@ -81,7 +95,8 @@ def test_issued_trial_verifies_active_on_bound_machine(keys):
                         public_key_hex=keys["public_hex"]).status()
     assert st.state == "active"
     assert st.plan == TRIAL_SPEC["plan"]
-    assert st.days_left is not None and 5 <= st.days_left <= 7
+    assert st.days_left is None, "无期限免费档没有剩余天数"
+    assert st.included_chars == TRIAL_SPEC["included_chars"]
 
 
 def test_trial_bound_to_other_machine_is_invalid(keys):
@@ -145,6 +160,58 @@ def test_plan_license_work_partitions_and_skips_done():
     assert [c["id"] for c in ok] == ["1"]
     # 脏指纹必须进 rejected 堆：留在 pending 里会每轮重试、永远堵在队头。
     assert [c["id"] for c in bad] == ["2"]
+
+
+# ── 存量升级重签（免费档 25k/7天 → 100 万/无期限）───────────────────────────
+
+def test_plan_upgrade_work_selects_only_stale_issued():
+    fp = "A1B2-C3D4-E5F6-0789"
+    base = {"status": "issued", "has_license": True, "fingerprint": fp,
+            "product": "chatx"}
+    rows = [
+        # 旧 25k 单 → 该升
+        dict(base, id="old_chars", license_chars=25_000, license_exp=0),
+        # 旧 7 天单（额度已够但带期限，而当前规格无期限）→ 该升
+        dict(base, id="old_exp", license_chars=1_000_000,
+             license_exp=1_800_000_000),
+        # 已是新规格 → 不动（幂等的关键）
+        dict(base, id="fresh", license_chars=1_000_000, license_exp=0),
+        # 官网旧版没给解码字段 → 信息不足不盲签
+        dict(base, id="no_meta", license_chars=None, license_exp=None),
+        # 其它产品线 / 非 issued / 脏指纹 / 没授权在身 → 都不动
+        dict(base, id="other_product", product="lingox",
+             license_chars=25_000, license_exp=0),
+        dict(base, id="still_pending", status="pending",
+             license_chars=25_000, license_exp=0),
+        dict(base, id="bad_fp", fingerprint="garbage",
+             license_chars=25_000, license_exp=0),
+        dict(base, id="no_license", has_license=False,
+             license_chars=25_000, license_exp=0),
+    ]
+    picked = [c["id"] for c in _ft.plan_upgrade_work(rows)]
+    assert picked == ["old_chars", "old_exp"]
+
+
+def test_plan_upgrade_work_respects_explicit_spec():
+    """spec 可注入（--days/--chars 覆盖场景）：按天规格下旧 exp 单不算过期口径。"""
+    fp = "A1B2-C3D4-E5F6-0789"
+    row = {"id": "x", "status": "issued", "has_license": True, "fingerprint": fp,
+           "product": "chatx", "license_chars": 25_000, "license_exp": 1_800_000_000}
+    # 目标规格 25k/7 天（与现状一致）→ 不升
+    assert _ft.plan_upgrade_work([row], spec_chars=25_000, spec_days=7) == []
+    # 目标规格 100 万/无期限 → 升
+    assert [c["id"] for c in _ft.plan_upgrade_work(
+        [row], spec_chars=1_000_000, spec_days=0)] == ["x"]
+
+
+# ── 邀请发奖凭证 ref（幂等键）───────────────────────────────────────────────
+
+def test_referral_refs_are_deterministic():
+    wel1, earn1 = _ft.referral_refs("r_abc")
+    wel2, earn2 = _ft.referral_refs("r_abc")
+    assert (wel1, earn1) == (wel2, earn2), "重签必须落在同一个兑换幂等键上"
+    assert wel1 != earn1, "见面礼与邀请奖励是两笔账，ref 不能撞"
+    assert "r_abc" in wel1 and "r_abc" in earn1
 
 
 def test_backlog_age_surfaces_stalled_fulfiller():

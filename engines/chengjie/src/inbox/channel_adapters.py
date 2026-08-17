@@ -402,6 +402,12 @@ class MessengerInboxAdapter:
         except ChannelSendError:
             raise
         except Exception as ex:
+            # 边车有响应体（HTTP 5xx）≠ 服务不可达：透传真实败因（reason_code：
+            # render_timeout/needs_accept/e2ee_pin_prompt…），坐席 toast 直接可读
+            # ——2026-08-15 173 事故里这行只显示裸 500，误导排查方向。
+            from src.integrations.messenger_web_login import http_error_detail
+            if getattr(ex, "response", None) is not None:
+                raise ChannelSendError(502, http_error_detail(ex))
             raise ChannelSendError(503, f"Messenger 网页服务不可达: {ex}")
         # 未送达判定收严：ok/delivered/sent 任一显式 False 都算失败（防「composer 未清空」
         # 的静默丢消息被当成功；Node 现也会对该情形回 HTTP 502，双保险）。
@@ -786,6 +792,7 @@ def status_via_adapters(
 async def send_via_adapters(
     request: Any, platform: str, account_id: str, chat_key: str, text: str,
     adapters: List[ChannelAdapter], *, reply_to: Any = None, mentions: Any = None,
+    origin: str = "auto",
 ) -> Dict[str, Any]:
     """按 platform 路由到对应适配器投递；未知平台抛 ChannelSendError(400)。
 
@@ -794,8 +801,14 @@ async def send_via_adapters(
 
     P4-5B：``reply_to``={id,from_me,participant,text} 携带原生引用回复上下文，仅经编排器
     worker 的协议发送路径生效（WhatsApp）；RPA/官方 API 适配器不支持则忽略（向后兼容）。
+
+    ``origin``（P1 2026-08-12 人工预留额度）：``manual``=人工路径（收件箱发送路由/
+    人工通过投递链显式传入）走完整日额度；缺省 ``auto``=自动链在
+    ``cap - reserve_for_manual`` 让路。仅经编排器路径生效；RPA 回落适配器不受
+    该额度闸约束（enforcement 面不在本函数扩大）。
     """
     platform = str(platform or "").lower()
+    _origin = str(origin or "auto")
     try:
         from src.integrations.account_orchestrator import get_orchestrator
         orch = get_orchestrator()
@@ -805,11 +818,17 @@ async def send_via_adapters(
                 try:
                     return await orch.send(
                         platform, account_id, chat_key, text,
-                        reply_to=reply_to, mentions=mentions)
+                        reply_to=reply_to, mentions=mentions, origin=_origin)
                 except TypeError:
-                    # 旧签名（无 mentions kwarg）→ 回落，保持向后兼容
-                    return await orch.send(
-                        platform, account_id, chat_key, text, reply_to=reply_to)
+                    # 旧签名（无 origin/mentions kwarg，测试假编排器常见）→ 逐级回落
+                    try:
+                        return await orch.send(
+                            platform, account_id, chat_key, text,
+                            reply_to=reply_to, mentions=mentions)
+                    except TypeError:
+                        return await orch.send(
+                            platform, account_id, chat_key, text,
+                            reply_to=reply_to)
             except ChannelSendError:
                 raise
             except Exception as ex:  # noqa: BLE001

@@ -28,4 +28,10 @@
   --cp-goal-eng: #38bdf8;
   --cp-goal-disc: #2dd4bf;
   --cp-track: #26272e;
+  /* 语义状态 底/描边/文字：暗色取半透明 tint（贴深底不发白块），
+     文字取亮档（语义=同等强调度而非同色值，与 --cp-ok/--cp-warn 同哲学） */
+  --cp-ok-bg: rgba(56, 211, 159, .14);
+  --cp-warn-bg: rgba(245, 185, 69, .12);
+  --cp-warn-border: rgba(245, 185, 69, .38);
+  --cp-warn-ink: #f5b945;
 }

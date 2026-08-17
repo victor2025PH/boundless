@@ -14,11 +14,16 @@ from src.utils.duel_bench_status import (
 
 
 def test_read_trend_skips_bad_lines(tmp_path):
+    # ts 锚 now（时间炸弹加固）：本测试不带 days 窗暂不受日历影响，但若将来
+    # read_trend 加默认窗，硬日期会静默变成第二颗 duel 型炸弹——统一锚 now。
+    from datetime import datetime
+    day = datetime.now().strftime("%Y-%m-%d")
     p = tmp_path / "t.jsonl"
     p.write_text(
-        '{"ts":"2026-07-28T01:00:00","defects_per_100_turns":1}\n'
-        'not-json\n'
-        '{"ts":"2026-07-28T02:00:00","defects_per_100_turns":2}\n',
+        json.dumps({"ts": f"{day}T01:00:00", "defects_per_100_turns": 1})
+        + "\nnot-json\n"
+        + json.dumps({"ts": f"{day}T02:00:00", "defects_per_100_turns": 2})
+        + "\n",
         encoding="utf-8")
     rows = read_trend(p)
     assert len(rows) == 2
@@ -73,14 +78,25 @@ def test_build_status_with_artifacts(tmp_path):
     (duel / "LAST_RUN.json").write_text(json.dumps({
         "exit_code": 1, "over_budget": True, "defects": 1,
     }), encoding="utf-8")
+    # 时间戳锚定 now（时间炸弹修复，2026-08-12）：原硬编码 2026-07-27/28 在
+    # build_status 的 14 天窗（read_trend days=14）里走到 2026-08-11 整体出窗
+    # → points==0 自爆，红挂 sweep 两天无人认领（与谁的改动都无关）。
+    # 锚 now-2d/-1d 后与日历永久解耦；direction=better 需要 旧10→新5 的顺序。
+    from datetime import datetime, timedelta
+    d0 = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%dT02:10:00")
+    d1 = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%dT02:10:00")
     (duel / "duel_trend.jsonl").write_text(
-        '{"ts":"2026-07-27T02:10:00","defects_per_100_turns":10,"scenarios":2}\n'
-        '{"ts":"2026-07-28T02:10:00","defects_per_100_turns":5,"scenarios":2}\n',
+        json.dumps({"ts": d0, "defects_per_100_turns": 10, "scenarios": 2})
+        + "\n"
+        + json.dumps({"ts": d1, "defects_per_100_turns": 5, "scenarios": 2})
+        + "\n",
         encoding="utf-8")
+    s0 = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%dT07:10:00")
+    s1 = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%dT07:11:00")
     (evald / "duel_semantic_trend.jsonl").write_text(
-        '{"ts":"2026-07-28T07:10:00","mode":"corpus","passed":true}\n'
-        '{"ts":"2026-07-28T07:11:00","mode":"llm","passed":true,'
-        '"sycophancy_recall":1.0}\n',
+        json.dumps({"ts": s0, "mode": "corpus", "passed": True}) + "\n"
+        + json.dumps({"ts": s1, "mode": "llm", "passed": True,
+                      "sycophancy_recall": 1.0}) + "\n",
         encoding="utf-8")
     st = build_status(tmp_path)
     assert st["active"] is True

@@ -142,6 +142,13 @@ class TestCreate:
         assert g["today"] is not None and g["today"]["intent"]
         assert g["today"]["status"] == "planned"
 
+    def test_create_default_autonomy_is_auto(self):
+        """缺省档＝auto（2026-08-12 运营方针「全自动为主」）：不带 autonomy
+        建目标落 auto——observe 只能是显式选择，绝不当缺省。"""
+        client, _ = _build_client()
+        g = _create(client).json()["goal"]
+        assert g["autonomy"] == "auto"
+
     def test_create_splits_chat_key_with_colon(self):
         client, _ = _build_client()
         g = _create(client, conv="telegram:a1:room:5").json()["goal"]
@@ -299,7 +306,8 @@ class TestUpdate:
                         json={"autonomy": "bogus", "title": "T2"})
         assert r.status_code == 200
         g = r.json()["goal"]
-        assert g["title"] == "T2" and g["autonomy"] == "suggest"   # 非法值被忽略
+        # 非法值被忽略，保持创建时的缺省档 auto（2026-08-12 起缺省=auto）
+        assert g["title"] == "T2" and g["autonomy"] == "auto"
 
     def test_update_404(self):
         client, _ = _build_client()

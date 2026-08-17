@@ -18,7 +18,7 @@ from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
 
-_SUPERVISOR_ROLES = {"master", "admin"}
+_SUPERVISOR_ROLES = {"master", "admin", "supervisor"}
 
 
 def _session_agent(request: Request) -> Dict[str, str]:

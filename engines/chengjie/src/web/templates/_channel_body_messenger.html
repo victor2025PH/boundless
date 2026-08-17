@@ -152,7 +152,7 @@ body:has(.mr-page.monitor-mode) .wrap{padding:.65rem .85rem 1.5rem}
 .mr-device-pick{position:absolute;z-index:4;left:.58rem;top:2.55rem;width:17px;height:17px;accent-color:var(--p)}
 .mr-screen{position:relative;aspect-ratio:9/16;background:linear-gradient(180deg,#111827,#050816);display:flex;align-items:center;justify-content:center;overflow:hidden;min-height:374px}
 .mr-screen img{width:100%;height:100%;object-fit:contain;display:block;background:#070b13}
-.mr-screen::before{content:'{{ (i18n or {}).get('msg_s469', "截图加载中") }}';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#64748b;font-size:.76rem;font-weight:850;background:#070b13}
+.mr-screen::before{content:'{{ (i18n or {}).get('msg_s469', "截图加载中") }}';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:.76rem;font-weight:850;background:#070b13}
 .mr-screen.has-image::before,.mr-screen.has-placeholder::before{display:none}
 .mr-screen-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:.35rem;color:var(--t3);font-size:.78rem;padding:1rem;min-height:260px}
 .mr-device-no{position:absolute;z-index:2;left:.55rem;top:.5rem;min-width:34px;height:30px;padding:0 .45rem;border-radius:7px;background:#facc15;color:#111827;font-weight:900;font-size:.94rem;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 18px rgba(0,0,0,.28)}
@@ -284,7 +284,7 @@ body:has(.mr-page.monitor-mode) .wrap{padding:.65rem .85rem 1.5rem}
 .err-panel-list{overflow:auto;padding:8px}
 .err-item{padding:10px;border-bottom:1px solid rgba(51,65,85,.5);font-size:12px;color:#cbd5e1}
 .err-item:last-child{border-bottom:0}
-.err-item .ts{color:#64748b;font-size:10px;margin-bottom:4px}
+.err-item .ts{color:#94a3b8;font-size:10px;margin-bottom:4px}
 .err-item .msg{color:#fca5a5;font-family:ui-monospace,monospace;word-break:break-all}
 .err-item .ctx{color:#94a3b8;font-size:11px;margin-top:4px}
 /* 确认对话框 */
@@ -1482,7 +1482,7 @@ body:has(.mr-page.monitor-mode) .wrap{padding:.65rem .85rem 1.5rem}
   .pe-row:last-child{margin-bottom:0}
   .pe-field{display:flex;flex-direction:column;gap:6px}
   .pe-field label{font-size:13px;color:#cbd5e1;font-weight:600}
-  .pe-field .pe-hint{font-size:11px;color:#64748b;margin-top:-2px}
+  .pe-field .pe-hint{font-size:11px;color:#94a3b8;margin-top:-2px}
   .pe-field input,.pe-field textarea,.pe-field select{background:#1e293b;border:1px solid #334155;color:#f1f5f9;padding:10px 12px;border-radius:8px;font-size:14px;font-family:inherit;transition:.16s;width:100%;box-sizing:border-box}
   .pe-field input:focus,.pe-field textarea:focus,.pe-field select:focus{outline:none;border-color:var(--tk-brand,#1e8cf2);background:#1a2438;box-shadow:0 0 0 3px rgba(30,140,242,0.15)}
   .pe-field input:disabled{opacity:0.55;cursor:not-allowed;background:#0f172a}

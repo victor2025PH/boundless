@@ -184,6 +184,7 @@
     'ws-aidegrade':  function(){ return window.T ? window.T('ws.banner.name.aidegrade')  : 'ai'; },
     'ws-restartcool':function(){ return window.T ? window.T('ws.banner.name.restartcool'): 'maintenance'; },
     'ws-expiry':     function(){ return window.T ? window.T('ws.banner.name.expiry')     : 'expiry'; },
+    'ws-delivblock': function(){ return window.T ? window.T('ws.banner.name.delivblock') : 'ai-unavailable'; },
     'ws-aiguide':    function(){ return window.T ? window.T('ws.banner.name.aiguide')    : 'setup'; },
     'ws-aitrial':    function(){ return window.T ? window.T('ws.banner.name.aitrial')    : 'trial'; }
   };
@@ -241,6 +242,7 @@
   window.wsBanner.register('conn-banner',    100, 'block');
   window.wsBanner.register('ws-chandown',     80, 'flex');
   window.wsBanner.register('ws-aidegrade',    60, 'flex');
+  window.wsBanner.register('ws-delivblock',   70, 'flex');
   window.wsBanner.register('ws-restartcool',  40, 'flex');
   window.wsBanner.register('ws-expiry',       35, 'flex');
   window.wsBanner.register('ws-uibuild',      30, 'flex');

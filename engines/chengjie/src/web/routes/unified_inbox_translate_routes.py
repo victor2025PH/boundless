@@ -15,9 +15,12 @@ import logging
 import os
 from typing import Optional
 
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request
 
 from src.ai.translation_service import normalize_lang
+from src.utils.agent_char_usage import check_request_quota, record_request_chars
+from src.web.web_i18n import tr
+from src.web.routes.unified_inbox_auth import _session_agent
 from src.web.routes.unified_inbox_services import (
     _DEFAULT_LANG_KEY,
     _REPLY_LANG_KEY,
@@ -32,6 +35,49 @@ from src.web.routes.unified_inbox_services import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ── P1（2026-08-16）：坐席级「我的语言」偏好 ─────────────────────────────────
+# 前端 _agentLang() 的服务端层（解析序：本偏好 > UI 语言 en > 浏览器语言 > zh）。
+# 身份取会话 session（_session_agent；无 SessionMiddleware 回落 "agent"＝单坐席
+# 部署共享一份，语义正确）。键：inbox.agent_lang.{agent_id}；lang="" = 清除。
+# 语种白名单与前端翻译目标集（_XL_TARGETS）同源，防任意串进 KV。
+_AGENT_LANG_KEY = "inbox.agent_lang"
+_AGENT_LANG_ALLOWED = {"zh", "en", "th", "vi", "id", "ja", "ko", "ru", "es", "pt"}
+
+
+def _perm_ok(request: Request, perm: str) -> bool:
+    """按登录坐席判能力权限（P2 管理面改造：perms_json 按人覆写，master 恒 True）。
+
+    懒 import：``resolve_user_perm`` 由并行批次在 web_user_store 落地，模块未就绪
+    （ImportError）/ user_store 未暴露 / 未登录（token 链）/ 任何异常 → **一律放行**
+    （fail-open：权限守卫绝不能因装配时序把翻译/发送主链打挂）。
+    """
+    try:
+        from src.utils.web_user_store import resolve_user_perm
+        us = getattr(request.app.state, "user_store", None)
+        sess = request.session
+        uname = str(sess.get("username") or "")
+        role = str(sess.get("role") or "")
+        if us is None or not uname:
+            return True
+        return resolve_user_perm(us, uname, role, perm)
+    except Exception:
+        return True
+
+
+def _deny_capability(request: Request, perm: str) -> None:
+    """能力未授予 → 403（i18n 文案）；放行则无副作用。"""
+    if not _perm_ok(request, perm):
+        raise HTTPException(403, tr(request, "err.perm.capability_denied"))
+
+
+def _enforce_agent_quota(request: Request) -> None:
+    """坐席字符额度硬闸（enforce 开才可能拦；fail-open 语义在 check_request_quota 内）。"""
+    q = check_request_quota(request)
+    if not q["allowed"]:
+        raise HTTPException(403, tr(
+            request, "err.quota.agent_chars_exhausted",
+            used=q["used"], quota=q["quota"]))
 
 
 async def _do_document_translation(
@@ -145,6 +191,11 @@ def register_translate_routes(app, *, api_auth) -> None:
         ``"auto"`` 无法解析（客户语言 unknown）时返回 resolved_target="" 且不翻译，
         前端据此回落「按原文发送」。
         """
+        # 能力权限 + 坐席额度闸（2026-08-16）：手动翻译主入口，拦在 svc.translate
+        # 之前——额度耗尽还烧一次引擎纯属浪费；translate-batch（视口懒翻）/后台
+        # enrich 刻意不闸（那些不是坐席主动消费，闸了=「看历史消息」也会被拒）。
+        _deny_capability(request, "ai.translate")
+        _enforce_agent_quota(request)
         body = await request.json()
         text = str(body.get("text") or "")
         target_lang = str(body.get("target_lang") or "zh").strip()
@@ -183,6 +234,12 @@ def register_translate_routes(app, *, api_auth) -> None:
             style=style,
             engine=engine,
         )
+        # 坐席字符计量归因（2026-08-16）：只接**手动翻译主入口**——translate-batch
+        # （视口懒翻，打开长会话即被动触发）与后台 enrich 刻意不接，那些不是坐席的
+        # 主动消费，记进个人额度会把「看历史消息」变成扣费动作。len(text) 与授权池
+        # record_license_chars 同口径；开关默认关 / 未登录 / 异常均零副作用。
+        if result.ok:
+            record_request_chars(request, "translation", len(text))
         # P4-B：入站显示翻译（客户→坐席）按日聚合，供经理看板量化「常驻双语」成本/语言分布。
         # 仅计 purpose=inbound_display；命中翻译记忆缓存的不计（非新增 API 成本，与 record 语义一致）。
         if str(body.get("purpose") or "").strip() == "inbound_display":
@@ -196,12 +253,41 @@ def register_translate_routes(app, *, api_auth) -> None:
                         ibx.record_inbound_xlate(failed=1)
             except Exception:
                 logger.debug("[translate] 入站翻译漏斗记账失败（忽略）", exc_info=True)
-        return {
+        resp = {
             "ok": result.ok,
             "resolved_target": target_lang,
             "pref_engine": engine,
             "translation": result.to_dict(),
         }
+        # P0-XL3（2026-08-16）反译回显：body.back=true 时把译文再译回源语言，
+        # 坐席在「先预览再发」里对照确认「发出去的外语到底说了什么」。
+        # - 反译目标 = 正向翻译探测出的源语言（服务端单一真相，前端不猜）；
+        # - 反译走 failover 缺省序（本机首位是零成本本地 HY-MT），刻意不带会话
+        #   首选引擎——校验轨要独立于被校验的那条线才有对照价值；
+        # - 刻意不计坐席字符额度（校验辅助不是消费，计了=劝退使用）；
+        # - 任何失败只降级 back.ok=false，绝不影响正向翻译结果（fail-open）。
+        if bool(body.get("back")) and result.ok and (result.translated_text or "").strip():
+            back_target = normalize_lang(
+                getattr(result, "source_lang", "") or source_lang or "")
+            if back_target and back_target != "unknown" and back_target != target_lang:
+                try:
+                    bres = await svc.translate(
+                        result.translated_text, target_lang=back_target,
+                        source_lang=target_lang, style=style,
+                    )
+                    resp["back"] = {
+                        "ok": bool(bres.ok),
+                        "text": (bres.translated_text or "") if bres.ok else "",
+                        "engine": str(getattr(bres, "provider", "") or ""),
+                        "target_lang": back_target,
+                    }
+                except Exception:
+                    resp["back"] = {"ok": False, "text": "", "engine": "",
+                                    "target_lang": back_target, "error": "back_failed"}
+            else:
+                resp["back"] = {"ok": False, "text": "", "engine": "",
+                                "target_lang": back_target, "error": "no_source_lang"}
+        return resp
 
     @app.post("/api/unified-inbox/translate-batch")
     async def api_unified_inbox_translate_batch(request: Request, _=Depends(api_auth)):
@@ -424,6 +510,39 @@ def register_translate_routes(app, *, api_auth) -> None:
         ok = ibx.set_app_setting(key, lang, updated_by=updated_by)
         return {"ok": bool(ok), "scope": scope, "lang": lang}
 
+    @app.get("/api/unified-inbox/agent-lang")
+    async def api_unified_inbox_get_agent_lang(request: Request, _=Depends(api_auth)):
+        """P1：读当前坐席的「我的语言」偏好（服务端持久，换机/清缓存不丢）。
+
+        身份取会话 session（无 SessionMiddleware 部署回落共享 "agent"）。
+        ``lang=""`` = 未设置（前端回落浏览器语言推导）。
+        """
+        ibx = _inbox_store(request)
+        if ibx is None:
+            return {"ok": False, "error": "inbox_unavailable"}
+        agent = str(_session_agent(request).get("agent_id") or "agent")
+        lang = normalize_lang(ibx.get_app_setting(f"{_AGENT_LANG_KEY}.{agent}"))
+        if lang not in _AGENT_LANG_ALLOWED:
+            lang = ""
+        return {"ok": True, "agent_id": agent, "lang": lang}
+
+    @app.post("/api/unified-inbox/agent-lang")
+    async def api_unified_inbox_set_agent_lang(request: Request, _=Depends(api_auth)):
+        """P1：设置/清除当前坐席「我的语言」。body：``{lang}``（``""`` = 清除）。
+
+        语种限白名单（与前端翻译目标集同源）；写入随 ``updated_by=agent_id`` 留痕。
+        """
+        body = await request.json()
+        lang = normalize_lang(str(body.get("lang") or "").strip())
+        if lang and lang not in _AGENT_LANG_ALLOWED:
+            return {"ok": False, "error": "bad_lang"}
+        ibx = _inbox_store(request)
+        if ibx is None:
+            return {"ok": False, "error": "inbox_unavailable"}
+        agent = str(_session_agent(request).get("agent_id") or "agent")
+        ok = ibx.set_app_setting(f"{_AGENT_LANG_KEY}.{agent}", lang, updated_by=agent)
+        return {"ok": bool(ok), "agent_id": agent, "lang": lang}
+
     @app.get("/api/unified-inbox/translation-engines")
     async def api_unified_inbox_translation_engines(
         request: Request, target_lang: str = "zh", _=Depends(api_auth)
@@ -439,6 +558,8 @@ def register_translate_routes(app, *, api_auth) -> None:
         body：``{text, target_lang?(支持 auto), source_lang?, style?, platform?, account_id?, chat_key?}``。
         不写缓存/记忆；坐席择优后仍走 ``/translate`` 或 ``/send`` 正常落库。
         """
+        # 对照选译=坐席主动消费（一次点击打全部引擎），同受 ai.translate 能力闸
+        _deny_capability(request, "ai.translate")
         body = await request.json()
         text = str(body.get("text") or "")
         target_lang = str(body.get("target_lang") or "zh").strip()
@@ -464,6 +585,28 @@ def register_translate_routes(app, *, api_auth) -> None:
             text, target_lang=target_lang, source_lang=source_lang, style=style,
         )
         cands = data.get("candidates") or []
+        # P1-XF（2026-08-16）智能融合：fuse=true → 成功候选交 LLM 择优合成一条
+        # 「融合译文」（Chimera 思路）。闸门/回落语义全在 translation_fusion 模块；
+        # 不过闸 → fusion.ok=false 带原因，前端不出卡，对照功能本身零影响。
+        if bool(body.get("fuse")):
+            try:
+                from src.ai.translation_fusion import fuse_compare_candidates
+                data["fusion"] = await fuse_compare_candidates(
+                    svc, text=text, candidates=cands,
+                    source_lang=str(data.get("source_lang") or source_lang or ""),
+                    target_lang=target_lang,
+                )
+            except Exception:
+                data["fusion"] = {"ok": False, "reason": "fusion_error"}
+        # 坐席字符计量归因（2026-08-16）：对照选译一次点击=每个引擎各译一遍，
+        # 真实消耗是 len(text)×成功引擎数（失败候选没产出译文不计），与单引擎
+        # /translate 的 len(text) 口径同源——只是乘上真实的引擎次数。
+        # 融合成功再计一次 len(text)（多一次 LLM 编辑调用，同口径）。
+        _ok_engines = sum(1 for c in cands if c.get("ok"))
+        if (data.get("fusion") or {}).get("ok"):
+            _ok_engines += 1
+        if _ok_engines > 0:
+            record_request_chars(request, "translation", len(text) * _ok_engines)
         return {
             "ok": any(c.get("ok") for c in cands),
             "resolved_target": target_lang,
@@ -477,6 +620,8 @@ def register_translate_routes(app, *, api_auth) -> None:
         body：``{text, target_lang?(支持 auto), source_lang?, style?, engine?, platform?, account_id?, chat_key?}``。
         逐段复用 ``/translate`` 同一 TranslationService（缓存/术语/F+ 会话首选引擎），按原排版重组。
         """
+        # 文档整篇翻译=坐席主动消费（体量还大），同受 ai.translate 能力闸
+        _deny_capability(request, "ai.translate")
         body = await request.json()
         text = str(body.get("text") or "")
         target_lang = str(body.get("target_lang") or "zh").strip()
@@ -500,10 +645,15 @@ def register_translate_routes(app, *, api_auth) -> None:
 
         from src.ai.document_translate import DocumentTranslateService
         svc = DocumentTranslateService(_get_translation_service(request))
-        return await svc.translate_document(
+        _doc_res = await svc.translate_document(
             text, target_lang=target_lang, source_lang=source_lang,
             style=style, engine=engine,
         )
+        # 坐席字符计量归因（2026-08-16）：源文本就在手上，按 len(text) 记——与
+        # /translate 同口径（整篇成功才记；分段部分失败时 ok=False 不记，宁少勿多）。
+        if _doc_res.get("ok"):
+            record_request_chars(request, "translation", len(text))
+        return _doc_res
 
     @app.post("/api/unified-inbox/translate-document-file")
     async def api_unified_inbox_translate_document_file(request: Request, _=Depends(api_auth)):
@@ -515,6 +665,11 @@ def register_translate_routes(app, *, api_auth) -> None:
         body：``{file_b64, filename, target_lang?(支持 auto), source_lang?, style?, engine?,
                 platform?, account_id?, chat_key?}``。复用 TranslationService（F+ 引擎/术语/缓存）。
         """
+        # 上传文档翻译同受 ai.translate 能力闸。坐席字符计量刻意**不记**：源文本
+        # 藏在 docx/xlsx/pdf 二进制里，端点拿到的 stats 只有分段计数（total/
+        # translated）没有字符数，路由层无法可靠还原源文本长度——宁可少记不虚记
+        # （SSE stream 路径的翻译更是发生在另一个 GET 长连接里，身份归因也断）。
+        _deny_capability(request, "ai.translate")
         import base64
 
         body = await request.json()
@@ -655,6 +810,8 @@ def register_translate_routes(app, *, api_auth) -> None:
     @app.post("/api/unified-inbox/translate-image")
     async def api_unified_inbox_translate_image(request: Request, _=Depends(api_auth)):
         """P58：图片 OCR → 翻译。前端传 base64 图片，返回逐字 OCR 文本 + 译文。"""
+        # 图片翻译=坐席主动消费（OCR+翻译双烧），同受 ai.translate 能力闸
+        _deny_capability(request, "ai.translate")
         import os as _os
 
         from src.ai.image_translate import (
@@ -696,9 +853,16 @@ def register_translate_routes(app, *, api_auth) -> None:
                 _get_translation_service(request),
                 build_vision_ocr_fn(vision_cfg, vision_cfg),
             )
-            return await svc.translate_image(
+            _img_res = await svc.translate_image(
                 path, target_lang=target_lang, source_lang=source_lang, style=style,
             )
+            # 坐席字符计量归因（2026-08-16）：真正送进翻译引擎的是 OCR 出的
+            # 文本（响应自带 ocr_text），按其长度记——与 /translate 的
+            # 「源文本长度」同口径；OCR 失败/无文字（ok=False）不记。
+            if _img_res.get("ok"):
+                record_request_chars(
+                    request, "translation", len(str(_img_res.get("ocr_text") or "")))
+            return _img_res
         finally:
             try:
                 _os.remove(path)

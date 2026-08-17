@@ -1085,6 +1085,19 @@ async def run_autosend_image(
             pass
         cap = media_caption(row, _cap_lang, fallback="")
         cap_src = "registry" if cap else ""
+        # 时刻词守卫（2026-08-12，与 A 线 skill_manager 同口径）：固定配文里
+        # 「下午的阳光」类现在时态时刻词与发送时刻硬冲突 → 弃用回落下层配文链。
+        if cap:
+            try:
+                from src.companion.persona_media import caption_tod_conflict
+                import datetime as _dt_cap
+                if caption_tod_conflict(cap, _dt_cap.datetime.now().hour):
+                    logger.info(
+                        "[image_autosend] 注册配文时刻词冲突，回落 id=%s",
+                        row.get("id"))
+                    cap, cap_src = "", ""
+            except Exception:
+                pass
         if not cap:
             # 相册条目无运营配文（如 auto 定妆照）→ LLM 按当前对话写配文 → 固定配文。
             # freshness=old：相册图是「之前拍的」，配文不得写「刚拍的」。

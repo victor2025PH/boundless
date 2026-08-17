@@ -126,8 +126,14 @@ function resolveBackendSpawn(o) {
       // 管道后是**块缓冲**——启动猛刷一波后，零星日志攒不满 8KB 就不落
       // backend.log（198 排障时日志"断流"100 分钟，热重载完成行全憋在缓冲里）。
       // 行缓冲让 backend.log 实时可读，代价可忽略（日志量本就不大）。
+      // WP-1 纯云起步档：打包桌面默认 cloud_light 部署档。后端只在「本次 config
+      // 为全新播种」时才把 config/profiles/cloud_light.yaml 写进 overlay
+      // （ConfigManager._ensure_deploy_profile 双闸），升级安装/老用户零影响；
+      // 外部 process.env 显式设了别的档位则尊重之（spawn 时 resolved.env 覆盖
+      // process.env，故这里必须自带回读）。
       const env = Object.assign(
-        { AITR_DESKTOP_MODE: "1", PYTHONUNBUFFERED: "1" },
+        { AITR_DESKTOP_MODE: "1", PYTHONUNBUFFERED: "1",
+          AITR_DEPLOY_PROFILE: process.env.AITR_DEPLOY_PROFILE || "cloud_light" },
         o.appVersion ? { AITR_APP_VERSION: String(o.appVersion) } : {},
         exists(seedDir) ? { AITR_SEED_DATA_DIR: seedDir } : {},
         electronNodeEnv(o.execPath),

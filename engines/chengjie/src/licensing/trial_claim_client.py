@@ -1,10 +1,15 @@
-"""客户端 ←→ 官网试用台账的桥接（P2 最后一段）。
+"""客户端 ←→ 官网试用台账的桥接（P2 最后一段；2026-08-11 扩容 + 邀请裂变）。
 
 整条链里本模块负责客户这一端：
 
-    首启向导「注册领 7 天」→ claim(联系方式) → 官网按机器码建单
+    首启向导「注册领 100 万字符」→ claim(联系方式, 邀请码?) → 官网按机器码建单
     → poll() 轮询 → 厂商机签好后取回 license → 本地验签落盘激活
-    → 「加客服领 10 万字符」→ bind_code() 出深链 → 客服核销 → poll() 取回加量凭证入账
+    → 「联系客服申请字符」→ bind_code() 出深链 → 客服核销 → poll() 取回加量凭证入账
+    → 邀请好友：invite_info() 取我的邀请码/进度；好友注册带码 → 官网 referral 台账
+      → 双方奖励凭证经 poll() 的 extra_vouchers 自动入账
+    → 免费档扩容后的存量升级：厂商机对 issued 台账重签 → poll() 发现 license 内容
+      变化（sha 指纹比对）→ 重新落盘激活（用量累计不清零）
+    → maybe_report_usage() 节流上报本机消耗水位（邀请达标判定的唯一数据源）
 
 设计取舍：
 
@@ -18,6 +23,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -31,6 +37,19 @@ logger = logging.getLogger(__name__)
 DEFAULT_SITE = "https://bd2026.cc"
 STATE_FILENAME = "trial_claim.json"
 HTTP_TIMEOUT = 12
+
+#: 用量水位上报节流：至少涨这么多字符且距上次这么久才打一发（旁路，绝不能变成高频外呼）
+USAGE_REPORT_MIN_DELTA = 1_000
+USAGE_REPORT_MIN_INTERVAL_SEC = 600
+
+
+def token_sha(token: str) -> str:
+    """license 内容指纹（短 sha）。存量升级重签后官网返回的 token 变化，
+    靠它判断「这份授权我落盘过没有」——刻意不存 token 原文（少一个泄漏面）。"""
+    return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()[:16]
+
+
+_token_sha = token_sha  # 模块内部旧名兼容
 
 #: 注入点：(url, method, body) -> dict。测试与离线环境替换此函数即可。
 Fetch = Callable[[str, str, Optional[dict]], Dict[str, Any]]
@@ -134,8 +153,12 @@ def summarize(state: Dict[str, Any]) -> Dict[str, Any]:
 # ── 三个动作 ───────────────────────────────────────────────────────────────
 
 def claim(contact: str, *, config: Optional[dict] = None, source: str = "desktop",
-          fetch: Optional[Fetch] = None) -> Dict[str, Any]:
-    """向官网领取试用。已领过（本地有单号）则直接回既有单，不重复建单。"""
+          invite_code: str = "", fetch: Optional[Fetch] = None) -> Dict[str, Any]:
+    """向官网领取免费额度。已领过（本地有单号）则直接回既有单，不重复建单。
+
+    ``invite_code``：好友邀请码（选填）。只在**新建单**时随请求带上——官网按
+    指纹去重命中旧单时不会二次归因（被邀请人必须是新机器，防刷口径的一部分）。
+    """
     f = fetch or _http
     state = load_state(config)
     if state.get("claim_id"):
@@ -148,8 +171,12 @@ def claim(contact: str, *, config: Optional[dict] = None, source: str = "desktop
         return {"ok": False, "error": "no_fingerprint"}
 
     c = normalize_contact(contact)
-    resp = f(f"{site_url(config)}/api/trial/claim", "POST",
-             {"fingerprint": fp, "contact": c, "source": source, "product": "chatx"})
+    body: Dict[str, Any] = {"fingerprint": fp, "contact": c,
+                            "source": source, "product": "chatx"}
+    code = str(invite_code or "").strip().upper()
+    if code:
+        body["invite_code"] = code[:24]
+    resp = f(f"{site_url(config)}/api/trial/claim", "POST", body)
     if not resp.get("ok"):
         return {"ok": False, "error": str(resp.get("error") or "claim_failed")}
 
@@ -161,10 +188,14 @@ def claim(contact: str, *, config: Optional[dict] = None, source: str = "desktop
         "status": str(resp.get("status") or "pending"),
         "created_at": int(time.time()),
     }
+    if code:
+        state["invited_by"] = code
     save_state(state, config)
-    logger.info("[trial-claim] 已建单 %s（指纹 %s，去重=%s）",
-                state["claim_id"], fp, bool(resp.get("deduped")))
+    logger.info("[trial-claim] 已建单 %s（指纹 %s，去重=%s，邀请码=%s）",
+                state["claim_id"], fp, bool(resp.get("deduped")), code or "-")
     out = {"ok": True, "deduped": bool(resp.get("deduped")), **summarize(state)}
+    if resp.get("referral"):
+        out["referral"] = str(resp["referral"])
     # 去重命中一条早已签发的单子 → 授权当场就在响应里，不必再等一轮轮询。
     if resp.get("license"):
         out["license"] = str(resp["license"])
@@ -195,11 +226,27 @@ def poll(*, config: Optional[dict] = None, fetch: Optional[Fetch] = None) -> Dic
     save_state(state, config)
 
     out: Dict[str, Any] = {"ok": True, **summarize(state)}
-    # 已激活的就不再回传 license，省得每次轮询都在网络上搬运一份可用授权。
-    if resp.get("license") and not state.get("activated_at"):
-        out["license"] = str(resp["license"])
+    # license 回传两种情形：① 还没激活过；② **内容变了**（存量升级重签——sha 指纹
+    # 与上次落盘的不一致）。已激活且内容没变就不搬运，省得每次轮询都在网络上运一份可用授权。
+    lic = str(resp.get("license") or "")
+    if lic:
+        sha = _token_sha(lic)
+        if not state.get("activated_at") or sha != str(state.get("license_sha") or ""):
+            out["license"] = lic
     if resp.get("topup_voucher") and not state.get("topup_redeemed_at"):
         out["topup_voucher"] = str(resp["topup_voucher"])
+    # 邀请奖励等追加凭证（extra_vouchers）：按本地已入账 ref 过滤后交给路由层兑换。
+    done = set(state.get("voucher_refs_done") or [])
+    extras = []
+    for v in (resp.get("extra_vouchers") or []):
+        ref = str((v or {}).get("ref") or "")
+        tok = str((v or {}).get("voucher") or "")
+        if ref and tok and ref not in done:
+            extras.append({"ref": ref, "voucher": tok,
+                           "chars": int((v or {}).get("chars") or 0),
+                           "note": str((v or {}).get("note") or "")})
+    if extras:
+        out["extra_vouchers"] = extras
     return out
 
 
@@ -228,7 +275,10 @@ def bind_code(*, config: Optional[dict] = None, fetch: Optional[Fetch] = None) -
 #: 首启向导漏斗事件白名单（与桌面壳 first-run-model.js 的 FR_FUNNEL_EVENTS 同口径）。
 #: 收口在客户端这层：路由只透传，事件名不在表内直接拒——官网 /api/track 是全站
 #: 通用事件流水，别让任意字符串顺着桌面壳灌进去。
-FUNNEL_EVENTS = {"welcome", "claim_submit", "claim_ok", "claim_skip", "gift_open", "done"}
+#: invite_share（2026-08-11 邀请裂变）＝会员页复制邀请码/分享链接；与官网侧
+#: invite_landing（落地页横幅曝光，官网自记）合成邀请漏斗的头两段。
+FUNNEL_EVENTS = {"welcome", "claim_submit", "claim_ok", "claim_skip", "gift_open",
+                 "done", "invite_share"}
 
 
 def funnel(event: str, *, config: Optional[dict] = None,
@@ -261,12 +311,101 @@ def funnel(event: str, *, config: Optional[dict] = None,
     return {"ok": True}
 
 
-def mark_activated(config: Optional[dict] = None) -> None:
+def mark_activated(config: Optional[dict] = None, *, token_sha: str = "") -> None:
+    """记录「这份授权已落盘」。``token_sha`` 是 license 内容指纹——存量升级重签后
+    官网会返回新 token，poll 靠比对它决定要不要重新落盘；同时清掉 exhausted 旧痕
+    （升级后的授权已经是新额度，旧「已用尽」标记不再成立）。"""
     state = load_state(config)
     if state:
         state["activated_at"] = int(time.time())
         state["status"] = "issued"
+        if token_sha:
+            state["license_sha"] = str(token_sha)
+        state.pop("exhausted", None)
         save_state(state, config)
+
+
+def mark_extra_voucher(ref: str, chars: int, config: Optional[dict] = None) -> None:
+    """记一笔追加凭证（邀请奖励等）已入账——poll 据此不再重复回传同一 ref。"""
+    r = str(ref or "").strip()
+    if not r:
+        return
+    state = load_state(config)
+    if state:
+        done = list(state.get("voucher_refs_done") or [])
+        if r not in done:
+            done.append(r)
+            state["voucher_refs_done"] = done[-200:]
+            state["extra_chars_total"] = int(state.get("extra_chars_total") or 0) \
+                + max(0, int(chars or 0))
+            save_state(state, config)
+
+
+def invite_info(*, config: Optional[dict] = None,
+                fetch: Optional[Fetch] = None) -> Dict[str, Any]:
+    """取「我的邀请码 + 邀请进度」（会员页邀请卡数据源）。
+
+    需要已领取（有 claim_id）——邀请奖励要有授权可入账；未领取返回
+    ``{ok: False, error: not_claimed}``，前端据此引导先注册领取。
+    """
+    f = fetch or _http
+    state = load_state(config)
+    cid = str(state.get("claim_id") or "")
+    fp = str(state.get("fingerprint") or "")
+    if not cid or not fp:
+        return {"ok": False, "error": "not_claimed"}
+    resp = f(f"{site_url(config)}/api/trial/invite-info?claim_id={cid}&fingerprint={fp}",
+             "GET", None)
+    if not resp.get("ok"):
+        return {"ok": False, "error": str(resp.get("error") or "network")}
+    if resp.get("code"):
+        state["invite_code"] = str(resp["code"])
+        save_state(state, config)
+    out = dict(resp)
+    out["ok"] = True
+    return out
+
+
+def maybe_report_usage(used_chars: int, *, config: Optional[dict] = None,
+                       fetch: Optional[Fetch] = None,
+                       now: Optional[float] = None) -> Dict[str, Any]:
+    """节流上报本机消耗水位到官网（邀请达标判定的唯一数据源）。
+
+    旁路语义：任何失败只回错误码绝不抛；挂在额度端点的后台线程上，节流窗
+    （≥1000 字符增量且 ≥10 分钟）保证不会变成高频外呼。首次跨过达标门
+    （REFERRAL_QUALIFY_CHARS）立即上报——那正是对方在等的信号。
+    """
+    state = load_state(config)
+    cid = str(state.get("claim_id") or "")
+    fp = str(state.get("fingerprint") or "")
+    if not cid or not fp:
+        return {"ok": False, "error": "not_claimed"}
+    used = max(0, int(used_chars or 0))
+    last_val = int(state.get("usage_reported_chars") or 0)
+    last_ts = int(state.get("usage_reported_at") or 0)
+    now_ts = int(now if now is not None else time.time())
+    if used <= last_val:
+        return {"ok": True, "skipped": True}
+    try:
+        from src.licensing.chatx_fulfillment import REFERRAL_QUALIFY_CHARS
+        qualify = int(REFERRAL_QUALIFY_CHARS)
+    except Exception:
+        qualify = 10_000
+    crossed = last_val < qualify <= used
+    first = last_ts <= 0 and last_val <= 0     # 从未上报过：先把基线建起来
+    if not first and not crossed and (
+            used - last_val < USAGE_REPORT_MIN_DELTA
+            or now_ts - last_ts < USAGE_REPORT_MIN_INTERVAL_SEC):
+        return {"ok": True, "skipped": True}
+    f = fetch or _http
+    resp = f(f"{site_url(config)}/api/trial/usage-beacon", "POST",
+             {"claim_id": cid, "fingerprint": fp, "used_chars": used})
+    if isinstance(resp, dict) and resp.get("ok") is False:
+        return {"ok": False, "error": str(resp.get("error") or "network")}
+    state["usage_reported_chars"] = used
+    state["usage_reported_at"] = now_ts
+    save_state(state, config)
+    return {"ok": True, "reported": used}
 
 
 def mark_expired(config: Optional[dict] = None) -> None:

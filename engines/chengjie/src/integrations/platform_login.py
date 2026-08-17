@@ -48,14 +48,18 @@ SUPPORTED_PLATFORMS = (
 # phone＝服务端协议登录的第二形态（号码+短信码，与 protocol 的扫码并列）；默认关、次要选项。
 MODES = ("protocol", "web", "device", "official", "phone")
 MODE_LABELS: Dict[str, str] = {
-    "protocol": "协议多开",
+    # 2026-08-11 用户化改名：旧名「协议多开」是机制黑话，坐席视角这就是「扫码登录」
+    # （Telegram=官方关联设备 / WhatsApp=Baileys / LINE=okline，都是扫码起号）。
+    # 「多开/省资源」的卖点由 desc + caps 徽片承载，标题只回答「我要怎么登录」。
+    "protocol": "扫码登录",
     "web": "网页扫码",
     "device": "真机 / 模拟器",
     "official": "官方 API 接入",
     "phone": "手机号 + 验证码",
 }
 MODE_DESC: Dict[str, str] = {
-    "protocol": "服务端协议直连，单机可挂大量账号，最省资源（推荐）",
+    # 「（推荐）」从 desc 里拿掉——推荐语义由绿色「推荐」徽标承载，文案里再写一遍是双源
+    "protocol": "服务端协议直连，单机可挂大量账号，最省资源",
     "web": "隔离浏览器 + 平台网页二维码，兼容好、更像真人",
     "device": "在真机 / 模拟器上完成官方 App 登录，最稳妥，账号数受设备数限制",
     "official": "平台官方开放接口，最合规稳定；凭证在接入向导里配置，无需扫码",
@@ -299,6 +303,11 @@ class LoginSession:
     detail: str = ""
     # failed 的机器可读原因（provider poll 落此，供 status 早退分支继续吐给前端本地化）
     reason_code: str = ""
+    # cred_invalid 处置元信息（Telegram 两 provider 下发；其余平台恒缺省）：
+    # cred_source=hosted|pool|self；retry_after_sec=换发冷却剩余秒（-1=不适用）。
+    # 前端据此倒计时自动重试 / 亮自填修正表单，替代「用户自己判断凭据是谁配的」。
+    cred_source: str = ""
+    retry_after_sec: int = -1
     # 实时提示码（**非终态**，与 reason_code 同一套词汇）：托管登录里「此刻页面在要什么」
     # （two_factor / checkpoint / password_error）。两个用途：前端出实时指引；会话按 TTL
     # 过期时当归因——那条早退分支不再 poll provider，没有它就只能记一句笼统超时。
@@ -318,12 +327,25 @@ class LoginSession:
     submit_fn: Optional[Callable[..., Any]] = None   # 两步验证云密码提交（Telegram protocol/phone）
     submit_code_fn: Optional[Callable[..., Any]] = None  # 手机号登录：提交短信/App 验证码
     resend_code_fn: Optional[Callable[..., Any]] = None  # 手机号登录：重发验证码
+    # 表单中继（Form-Relay，Messenger 交互登录）：只读探针「登录页此刻该渲染哪一步原生表单」。
+    # provider 仅在开启 interactive_login 时提供；其余平台/关闭时为 None（路由据此回 not_supported）。
+    relay_step_fn: Optional[Callable[..., Any]] = None
+    # 表单中继写入端：把应用侧原生表单字段值（账密 / 2FA 码 / PIN）填回登录页。签名
+    # (session, step, values)。同 relay_step_fn 仅交互登录开启时提供。
+    relay_submit_fn: Optional[Callable[..., Any]] = None
 
     def is_expired(self) -> bool:
         age = time.time() - self.created_at
         if self.status in HOLD_STATES:
             return age > HOLD_MAX_SEC
         return age > (self.ttl_sec or TTL_SEC)
+
+    def remaining_sec(self) -> int:
+        """距会话过期还剩几秒（与 is_expired 同一套口径；HOLD 态按 HOLD_MAX_SEC 算）。
+        供前端画二维码有效期条——只读展示，绝不参与过期判定（判定仍以 is_expired 为准）。"""
+        age = time.time() - self.created_at
+        cap = HOLD_MAX_SEC if self.status in HOLD_STATES else (self.ttl_sec or TTL_SEC)
+        return max(0, int(cap - age))
 
 
 class LoginManager:
@@ -366,9 +388,13 @@ class LoginManager:
         submit_fn: Optional[Callable[..., Any]] = None,
         submit_code_fn: Optional[Callable[..., Any]] = None,
         resend_code_fn: Optional[Callable[..., Any]] = None,
+        relay_step_fn: Optional[Callable[..., Any]] = None,
+        relay_submit_fn: Optional[Callable[..., Any]] = None,
         initial_status: str = "",
         reason_code: str = "",
         detail: str = "",
+        cred_source: str = "",
+        retry_after_sec: int = -1,
     ) -> LoginSession:
         with self._lock:
             self._gc_locked()
@@ -403,6 +429,8 @@ class LoginManager:
                 submit_fn=submit_fn,
                 submit_code_fn=submit_code_fn,
                 resend_code_fn=resend_code_fn,
+                relay_step_fn=relay_step_fn,
+                relay_submit_fn=relay_submit_fn,
             )
             # phone_code 等开局即进入等待态（已发验证码 / 已失败）：别让前端对着
             # pending 空转一轮 poll 才看见真相。
@@ -413,6 +441,9 @@ class LoginManager:
                 sess.reason_code = str(reason_code)
             if detail:
                 sess.detail = str(detail)
+            if cred_source:
+                sess.cred_source = str(cred_source)
+                sess.retry_after_sec = int(retry_after_sec)
             self._sessions[sid] = sess
             return sess
 

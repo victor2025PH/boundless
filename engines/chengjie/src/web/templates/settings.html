@@ -18,6 +18,14 @@
 /* 简洁模式（值班/看店视角）只保留「AI 提示词」与「人工转接」两张卡——此前顶部引导
    文案如此声称、模板却全量渲染（名不符实）；!important 压过 fc/diag 卡的探针内联样式 */
 .set-simple-hide{display:none!important}
+/* ui_visibility.ai_settings 关（缺省）→ 藏「AI 提示词 & 行为配置」与「人工客服转接」
+   两张卡（2026-08-16 老板实录：日常用不到、也没启用，摆在坐席页只增噪音）。
+   保 DOM 只加 class：卡内 JS（savePrompt / he-* 初始化）按 id 取元素，删 DOM 会炸；
+   URL/API 照旧可用（藏而不废），开发者工具开该键即回归。 */
+.set-uiv-hide{display:none!important}
+.set-uiv-empty{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);
+  padding:1.15rem 1.35rem;font-size:.84rem;color:var(--t2);line-height:1.7}
+.set-uiv-empty strong{color:var(--t)}
 /* hash 深链定位高亮（#license / #escalation …）：短暂描边引导视线 */
 .acc-target-hl{outline:2px solid var(--p);outline-offset:2px;box-shadow:0 0 0 5px var(--ps)}
 .acc-sub{font-size:.75rem;color:var(--t2);margin-top:.1rem}
@@ -32,13 +40,15 @@
 .f-row:last-child{margin-bottom:0}
 .f-lbl{display:flex;align-items:center;gap:.35rem;font-size:.78rem;font-weight:600;
   color:var(--t2);margin-bottom:.3rem}
-.f-lbl .badge-opt{font-size:.62rem;padding:.08rem .4rem;border-radius:10px;
-  background:var(--bd);color:var(--t3);font-weight:500;margin-left:auto}
+/* badge-opt 2026-08-16：原 --t3 on --bd 实测 4.2:1 低于 AA + .62rem 过小 → 换面提字 */
+.f-lbl .badge-opt{font-size:.68rem;padding:.1rem .45rem;border-radius:10px;
+  background:var(--input);border:1px solid var(--bd);color:var(--t2);font-weight:500;margin-left:auto}
 .f-inp{width:100%;padding:.5rem .8rem;border:1.5px solid var(--bd);border-radius:9px;
   font-size:.85rem;font-family:inherit;background:var(--input);color:var(--t);
   outline:none;transition:all .2s}
 .f-inp:focus{border-color:var(--p);box-shadow:0 0 0 3px var(--ps)}
-.f-hint{font-size:.71rem;color:var(--t3);margin-top:.25rem;line-height:1.4}
+/* f-hint 2026-08-16：.71rem(11.4px)×暗灰是「说明文字看不清」主诉，提档 .78rem */
+.f-hint{font-size:.78rem;color:var(--t3);margin-top:.25rem;line-height:1.5}
 .f-check-row{display:flex;align-items:center;gap:.5rem;font-size:.84rem;margin-bottom:.6rem}
 .f-check-row input{accent-color:var(--p);width:15px;height:15px}
 /* save bar */
@@ -46,6 +56,9 @@
   padding-top:.75rem;border-top:1px solid var(--bd)}
 .save-result{font-size:.8rem;flex:1}
 .save-result.ok{color:var(--green)}.save-result.err{color:var(--red)}
+/* 提示词编辑器（2026-08-16 修缮）：保存条黏底常驻可见（长提示词滚动时不丢按钮）+ 脏标记 */
+#body-prompt .save-bar{position:sticky;bottom:0;background:var(--card);z-index:2;padding-bottom:.5rem}
+.prompt-dirty{font-size:.74rem;color:var(--amber);font-weight:600;white-space:nowrap}
 /* 人工转接：客服表格 */
 .he-agents-wrap{margin:.5rem 0}
 .he-agents-table{width:100%;border-collapse:collapse;font-size:.78rem}
@@ -112,7 +125,14 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
 {% block content %}
 {% set active="settings" %}
 
-{% if ui_mode == 'simple' %}
+{# ui_visibility.ai_settings：AI 提示词卡 + 人工转接卡的显隐（缺省 False=藏）。
+   键**不在场**（旧后端／模板热更先于重启的中间态）同样按藏处理——藏是本批的目的，
+   模板热更即生效不必等重启窗；那段窗口里 developer.html 的开关行还没上线（`_k in _uiv`
+   守卫 + 后端拒未知键），逃生门＝深链 /settings#prompt、/settings#escalation
+   （下面的 hash 处理会**就地揭示**被藏的卡），故不构成「已藏却无处可开」。 #}
+{% set _uiv_ai = (ui_vis or {}).get('ai_settings') %}
+
+{% if ui_mode == 'simple' and _uiv_ai %}
 <div class="simple-guide" style="background:linear-gradient(135deg,var(--th-bg-brand06,rgba(91,124,246,.06)),var(--th-bg-grn06,rgba(16,185,129,.06)));border:1px solid var(--th-bd-brand15,rgba(91,124,246,.15));border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:flex-start;gap:.6rem;max-width:min(920px,96vw)">
   <span style="font-size:1.1rem;flex-shrink:0;margin-top:.1rem">⚙️</span>
   <div>
@@ -124,7 +144,9 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
 <script>if(localStorage.getItem('_guide_settings')==='1')document.querySelector('.simple-guide').style.display='none';</script>
 {% endif %}
 
-<p class="settings-tg-hint" style="font-size:.8rem;color:var(--t2);margin:0 0 .85rem;line-height:1.55;max-width:min(920px,96vw)">
+{# 「私聊不在本页」是 AI 提示词卡的配套说明（"本页"指那张卡）——卡藏了它就无指涉，
+   一并收起；私聊开关本就在开发者工具里，空态卡直接指路。 #}
+<p class="settings-tg-hint{% if not _uiv_ai %} set-uiv-hide{% endif %}" style="font-size:.8rem;color:var(--t2);margin:0 0 .85rem;line-height:1.55;max-width:min(920px,96vw)">
   <strong style="color:var(--t)">{{ (i18n or {}).get('set_s007', "私聊") }}</strong>{{ (i18n or {}).get('set_s008', "不在本页。请打开侧边栏") }} <a href="/developer" style="color:var(--p);font-weight:600">{{ (i18n or {}).get('developer', "开发者工具") }}</a>（{{ (i18n or {}).get('set_s009', "需开发者密码）") }}→ {{ (i18n or {}).get('wa_js_016', "展开") }}「<strong>Bot {{ (i18n or {}).get('set_s010', "行为配置") }}</strong>」→ {{ (i18n or {}).get('set_s011', "勾选") }}「<strong>{{ (i18n or {}).get('set_s012', "私聊消息") }}</strong>」{{ (i18n or {}).get('set_s013', "并点") }}「{{ (i18n or {}).get('set_s014', "保存 Bot 配置」") }}。{{ (i18n or {}).get('set_s015', "勾选后才会像群聊一样处理私聊；取消勾选则只对私聊自动回复引导语。") }}
 </p>
 
@@ -358,9 +380,9 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
       };
       apiFetch('/api/admin/branding',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({values:values})}, {timeoutMs: 60000})
         .then(function(r){return r.json();}).then(function(d){
-          if(d&&d.ok){ res.textContent='✓ '+window.T('set_js_003'); res.style.color='#16a34a'; }
-          else { res.textContent=window.T('ov_js_save_fail_e')+((d&&d.detail)||window.T('inbox.voice.unknown_err')); res.style.color='#dc2626'; }
-        }).catch(function(){ res.textContent=window.T('set_js_004'); res.style.color='#dc2626'; });
+          if(d&&d.ok){ res.textContent='✓ '+window.T('set_js_003'); res.style.color='var(--green)'; }
+          else { res.textContent=window.T('ov_js_save_fail_e')+((d&&d.detail)||window.T('inbox.voice.unknown_err')); res.style.color='var(--red)'; }
+        }).catch(function(){ res.textContent=window.T('set_js_004'); res.style.color='var(--red)'; });
     };
     load();
   })();
@@ -462,10 +484,10 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
           if(d&&d.ok){
             var tip=(d.search_hints&&d.search_hints.length)?(' · CmdK: '+d.search_hints.join(' / ')):'';
             res.textContent='✓ '+window.T('set_js_011')+' '+d.conversations+' · '+window.T('set_js_005')+' '+d.messages+' · '+window.T('db_js_021')+' '+d.draft_audits+'）'+tip;
-            res.style.color='#16a34a'; refresh();
+            res.style.color='var(--green)'; refresh();
           }
-          else { res.textContent=window.T('set_js_012')+((d&&d.detail)||window.T('rpa_unknown')); res.style.color='#dc2626'; }
-        }).catch(function(){ g('demo-seed-btn').disabled=false; res.textContent=window.T('set_js_013'); res.style.color='#dc2626'; });
+          else { res.textContent=window.T('set_js_012')+((d&&d.detail)||window.T('rpa_unknown')); res.style.color='var(--red)'; }
+        }).catch(function(){ g('demo-seed-btn').disabled=false; res.textContent=window.T('set_js_013'); res.style.color='var(--red)'; });
     };
     window.demoClear=function(){
       if(!confirm(window.T('set_js_014')+' demo: '+window.T('set_js_015'))) return;
@@ -474,16 +496,16 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
       apiFetch('/api/admin/demo/clear',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}, {timeoutMs: 60000})
         .then(function(r){return r.json();}).then(function(d){
           g('demo-clear-btn').disabled=false;
-          if(d&&d.ok){ res.textContent='✓ '+window.T('set_js_017'); res.style.color='#16a34a'; refresh(); }
-          else { res.textContent=window.T('set_js_018')+((d&&d.detail)||window.T('rpa_unknown')); res.style.color='#dc2626'; }
-        }).catch(function(){ g('demo-clear-btn').disabled=false; res.textContent=window.T('set_js_019'); res.style.color='#dc2626'; });
+          if(d&&d.ok){ res.textContent='✓ '+window.T('set_js_017'); res.style.color='var(--green)'; refresh(); }
+          else { res.textContent=window.T('set_js_018')+((d&&d.detail)||window.T('rpa_unknown')); res.style.color='var(--red)'; }
+        }).catch(function(){ g('demo-clear-btn').disabled=false; res.textContent=window.T('set_js_019'); res.style.color='var(--red)'; });
     };
     refresh();
   })();
   </script>
 
-  <!-- ══ AI 提示词 & 行为配置 ═══════════════════════════════════ -->
-  <div class="acc">
+  <!-- ══ AI 提示词 & 行为配置（ui_visibility.ai_settings，缺省藏）═══════════ -->
+  <div class="acc{% if not _uiv_ai %} set-uiv-hide{% endif %}">
     <div class="acc-hd open" onclick="toggleAcc(this)">
       <div class="acc-hd-icon" style="background:linear-gradient(135deg,#f97316,#ea580c)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
@@ -509,8 +531,8 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
           </div>
         </div>
       </div>
-      <div class="f-hint" style="margin-bottom:1rem;padding:.6rem .8rem;background:var(--ps);border-radius:8px;border:1px solid var(--p);line-height:1.6">
-        <strong>{{ (i18n or {}).get('set_s047', "这里控制 Telegram AI 的") }}「{{ (i18n or {}).get('set_s048', "大脑」") }}</strong> — {{ (i18n or {}).get('set_s049', "修改后保存即刻生效，无需重启。") }}<br>
+      <div class="f-hint" style="margin-bottom:1rem;padding:.6rem .8rem;background:var(--ps);border-radius:8px;border:1px solid var(--p);line-height:1.6;color:var(--t2);font-size:.8rem">
+        <strong style="color:var(--t)">{{ (i18n or {}).get('set_s047', "这里控制 Telegram AI 的") }}「{{ (i18n or {}).get('set_s048', "大脑」") }}</strong> — {{ (i18n or {}).get('set_s049', "修改后保存即刻生效，无需重启。") }}<br>
         {{ (i18n or {}).get('set_s050', "通道话术模板请在") }} <a href="/knowledge" style="color:var(--p);font-weight:600">{{ (i18n or {}).get('knowledge', "知识库") }}</a> {{ (i18n or {}).get('set_s051', "中编辑，这里控制 Telegram AI 的总体人格和回复规则。") }}
       </div>
 
@@ -539,12 +561,12 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
       <div class="f-row">
         <label class="f-lbl" data-help="system_prompt">{{ (i18n or {}).get('set_s060', "系统提示词（System Prompt）") }}</label>
         <div style="display:flex;gap:.35rem;flex-wrap:wrap;margin-bottom:.4rem">
-          <button class="btn btn-s" style="font-size:.7rem;padding:.15rem .55rem;border-radius:6px" onclick="jumpToSection('{{ (i18n or {}).get('psn_th_role', "角色") }}')">{{ (i18n or {}).get('psn_th_role', "角色") }}</button>
-          <button class="btn btn-s" style="font-size:.7rem;padding:.15rem .55rem;border-radius:6px" onclick="jumpToSection('{{ (i18n or {}).get('set_s061', "多语言") }}')">{{ (i18n or {}).get('set_s061', "多语言") }}</button>
-          <button class="btn btn-s" style="font-size:.7rem;padding:.15rem .55rem;border-radius:6px" onclick="jumpToSection('{{ (i18n or {}).get('set_s062', "回复原则") }}')">{{ (i18n or {}).get('set_s062', "回复原则") }}</button>
-          <button class="btn btn-s" style="font-size:.7rem;padding:.15rem .55rem;border-radius:6px" onclick="jumpToSection('{{ (i18n or {}).get('set_s063', "言简意赅") }}')">{{ (i18n or {}).get('set_s063', "言简意赅") }}</button>
-          <button class="btn btn-s" style="font-size:.7rem;padding:.15rem .55rem;border-radius:6px" onclick="jumpToSection('{{ (i18n or {}).get('set_s064', "人设与风格") }}')">{{ (i18n or {}).get('set_s065', "人设风格") }}</button>
-          <button class="btn btn-s" style="font-size:.7rem;padding:.15rem .55rem;border-radius:6px" onclick="jumpToSection('{{ (i18n or {}).get('set_s066', "订单状态") }}')">{{ (i18n or {}).get('set_s067', "订单规则") }}</button>
+          <button class="btn btn-s" style="font-size:.74rem;padding:.22rem .6rem;border-radius:6px" onclick="jumpToSection('{{ (i18n or {}).get('psn_th_role', "角色") }}')">{{ (i18n or {}).get('psn_th_role', "角色") }}</button>
+          <button class="btn btn-s" style="font-size:.74rem;padding:.22rem .6rem;border-radius:6px" onclick="jumpToSection('{{ (i18n or {}).get('set_s061', "多语言") }}')">{{ (i18n or {}).get('set_s061', "多语言") }}</button>
+          <button class="btn btn-s" style="font-size:.74rem;padding:.22rem .6rem;border-radius:6px" onclick="jumpToSection('{{ (i18n or {}).get('set_s062', "回复原则") }}')">{{ (i18n or {}).get('set_s062', "回复原则") }}</button>
+          <button class="btn btn-s" style="font-size:.74rem;padding:.22rem .6rem;border-radius:6px" onclick="jumpToSection('{{ (i18n or {}).get('set_s063', "言简意赅") }}')">{{ (i18n or {}).get('set_s063', "言简意赅") }}</button>
+          <button class="btn btn-s" style="font-size:.74rem;padding:.22rem .6rem;border-radius:6px" onclick="jumpToSection('{{ (i18n or {}).get('set_s064', "人设与风格") }}')">{{ (i18n or {}).get('set_s065', "人设风格") }}</button>
+          <button class="btn btn-s" style="font-size:.74rem;padding:.22rem .6rem;border-radius:6px" onclick="jumpToSection('{{ (i18n or {}).get('set_s066', "订单状态") }}')">{{ (i18n or {}).get('set_s067', "订单规则") }}</button>
         </div>
         <textarea class="f-inp" id="prompt-system_prompt" rows="18"
           style="resize:vertical;font-family:'Cascadia Code','Consolas','Courier New',monospace;font-size:.82rem;min-height:360px;line-height:1.6;white-space:pre-wrap"
@@ -558,14 +580,15 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
       </div>
       <div class="save-bar">
         <span class="save-result" id="save-res-prompt"></span>
+        <span class="prompt-dirty" id="prompt-dirty" hidden>{{ (i18n or {}).get('set_dirty', "● 有未保存的修改") }}</span>
         <button class="btn btn-s btn-sm" onclick="resetPrompt()">{{ (i18n or {}).get('wa_s066', "还原") }}</button>
         <button class="btn btn-p btn-sm" onclick="savePrompt()">{{ (i18n or {}).get('set_s072', "保存提示词") }}</button>
       </div>
     </div>
   </div>
 
-  <!-- ══ 人工客服转接（阶段 A + B1） ═══════════════════════════ -->
-  <div class="acc">
+  <!-- ══ 人工客服转接（阶段 A + B1；ui_visibility.ai_settings，缺省藏）═══════ -->
+  <div class="acc{% if not _uiv_ai %} set-uiv-hide{% endif %}">
     <div class="acc-hd" onclick="toggleAcc(this)">
       <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-amber5,#f59e0b),var(--th-bg-amber6,#d97706))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
@@ -977,6 +1000,19 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
     </div>
   </div>
 
+  {# 空态：两张卡都藏了（简洁模式下本页会整页空白，坐席会以为页面坏了）。
+     完整模式仍有一堆其它卡，不必出空态。 #}
+  {% if not _uiv_ai and ui_mode == 'simple' %}
+  <div class="set-uiv-empty">
+    <strong>{{ (i18n or {}).get('set_uiv_empty_t', "本页配置已收纳到开发者工具") }}</strong>
+    <div style="margin-top:.35rem">
+      {{ (i18n or {}).get('set_uiv_empty_d', "AI 提示词 & 行为配置、人工客服转接属于「配一次就不动」的底层项，已从日常页面收起。需要修改请打开") }}
+      <a href="/developer" style="color:var(--p);font-weight:600">{{ (i18n or {}).get('developer', "开发者工具") }}</a>（{{ (i18n or {}).get('set_s009', "需开发者密码）") }}
+      → {{ (i18n or {}).get('set_uiv_empty_d2', "「内部功能显隐」里打开「AI 与转接设置」，本页即恢复。") }}
+    </div>
+  </div>
+  {% endif %}
+
 </div>
 
 <script>
@@ -1042,6 +1078,29 @@ function _updateCharCount(){
 }
 if(_promptEl){ _promptEl.addEventListener('input', _updateCharCount); _updateCharCount(); }
 
+/* ── 未保存脏标记（2026-08-16）：名称/风格/提示词任一偏离已保存值即点亮；
+     保存成功或还原后熄灭。防「改了没保存就切页」的静默丢失。 ── */
+const _dirtyEl = document.getElementById('prompt-dirty');
+let _savedAiName = null, _savedReplyStyle = null;
+function _promptSnapshot(){
+  const n = document.getElementById('prompt-ai_name'), s = document.getElementById('prompt-reply_style');
+  _savedAiName = n ? n.value : null; _savedReplyStyle = s ? s.value : null;
+}
+function _syncPromptDirty(){
+  if(!_dirtyEl) return;
+  const n = document.getElementById('prompt-ai_name'), s = document.getElementById('prompt-reply_style');
+  const dirty = (_promptEl && _promptEl.value !== _originalPrompt) ||
+                (n && _savedAiName !== null && n.value !== _savedAiName) ||
+                (s && _savedReplyStyle !== null && s.value !== _savedReplyStyle);
+  _dirtyEl.hidden = !dirty;
+}
+_promptSnapshot();
+['prompt-ai_name','prompt-reply_style'].forEach(function(id){
+  const el = document.getElementById(id);
+  if(el){ el.addEventListener('input', _syncPromptDirty); el.addEventListener('change', _syncPromptDirty); }
+});
+if(_promptEl){ _promptEl.addEventListener('input', _syncPromptDirty); }
+
 async function savePrompt(){
   const resEl = document.getElementById('save-res-prompt');
   resEl.textContent = window.T('ov_js_saving'); resEl.className = 'save-result';
@@ -1058,6 +1117,7 @@ async function savePrompt(){
     const d = await r.json();
     if(!r.ok){ resEl.textContent = window.T('ov_js_save_fail_e')+(d.detail||window.T('inbox.voice.unknown_err')); resEl.className='save-result err'; return; }
     _originalPrompt = _promptEl.value;
+    _promptSnapshot(); _syncPromptDirty();
     resEl.textContent = '✓ '+window.T('set_js_020')+'（' + d.updated.length + ' '+window.T('set_js_021'); resEl.className='save-result ok';
     setTimeout(()=>{ resEl.textContent=''; }, 5000);
   }catch(e){ resEl.textContent = window.T('tg_js_011')+e.message; resEl.className='save-result err'; }
@@ -1080,6 +1140,7 @@ function resetPrompt(){
   if(confirm(window.T('set_js_022'))){
     _promptEl.value = _originalPrompt;
     _updateCharCount();
+    _syncPromptDirty();
   }
 }
 
@@ -1637,6 +1698,11 @@ document.addEventListener('DOMContentLoaded', function(){
     if(!Object.prototype.hasOwnProperty.call(map, key)) return;
     const body = document.getElementById(map[key]);
     if(!body) return;
+    /* 藏而不废：#prompt / #escalation 被 ui_visibility.ai_settings 藏起来时，
+       显式深链＝有人就是要这张卡（会员中心/文档/书签），就地揭示它——否则
+       「URL 不封」只是口号（点进来一片空白，比 404 更迷惑）。 */
+    const hidden = body.closest('.set-uiv-hide');
+    if(hidden) hidden.classList.remove('set-uiv-hide');
     const hd = body.previousElementSibling;
     if(!body.classList.contains('open') && hd && typeof toggleAcc === 'function'){
       toggleAcc(hd);

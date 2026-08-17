@@ -25,12 +25,166 @@
    待机，见该文件 v2 注释）。iframe 内嵌（AI Studio 等）不参与，防止把宿主页当
    命名窗口劫持。 */
 (function(){
-  /* 兜底桩先行：任何环境下两个函数都可调（onclick 引用它们，缺定义会抛 ReferenceError
+  /* 兜底桩先行：任何环境下这些函数都可调（onclick 引用它们，缺定义会抛 ReferenceError
      触发 dead-click 红条）。降级环境（iframe / 桌面壳）保持桩＝一律走链接默认行为。 */
   window.__openUniqueUrl = function(){ return false; };
   window.__openUnique = function(){ return true; };
+  window.__wsGoHome = function(){ return false; };
 
   if (window.top !== window) return;   /* iframe 内嵌（AI Studio 等）不参与命名与复用 */
+
+  /* ── 「返回工作台」去重（P1-③ 2026-08-11，修「还是会出现两个坐席工作台」实录）────
+     入口收敛（上方 P0-A）只管「从后台/看板点进来」那个方向；反方向一直漏着：子页
+     （报表/任务/客户档案/渠道中心…按设计落在 aitr_wsub 辅助窗）里的「返回工作台」
+     链接、顶栏「聊天」标签、SSE toast / 铃铛点击的 location.href='/workspace' 兜底，
+     全是**原地导航**——辅助窗被就地变成第二个坐席工作台（协调器只能把旧的降为待机，
+     窗口本身留着，遥测 mw.takeover_auto/reclaim 全由此来）。
+
+     语义＝「别处已有活跃坐席就交给它，没有才把本窗导航过去」：
+     ① 已在坐席页：有 cid 走站内切会话，否则交回默认行为；
+     ② PWA 应用窗：保持 08-03「本窗原地导航」语义（app 窗自己就是首选坐席容器）；
+     ③ opener 直连：wsub 由坐席窗口开出（同组、同源句柄）→ 直接 focus + postMessage
+        切会话，零延迟零探活；
+     ④ BC 探活（跨组/壳内通用）：250ms 内有主控坐席应答 → cid 经 open-conv 送达对方，
+        本窗留在原页 + toast 提示切换（浏览器不允许替用户聚焦别组窗口，明说）；
+        无应答 → 本窗原地导航成为唯一坐席（旧行为，极端竞态由协调器兜底）。
+     消费面：window.__wsGoHome(opts) 程序化入口（SSE toast / 铃铛 / 子页 JS），外加
+     下方的**委托点击拦截器**——任何同标签导航到 /workspace 的 <a> 自动走同一条链，
+     新增返回链接零接线自动获益（这一族裸链接正是逐页手写导致漏网的根源）。 */
+  function _isAppWin(){
+    try {
+      return !!(window.matchMedia
+        && (window.matchMedia('(display-mode: standalone)').matches
+            || window.matchMedia('(display-mode: minimal-ui)').matches
+            || window.matchMedia('(display-mode: window-controls-overlay)').matches));
+    } catch(_) { return false; }
+  }
+  function _notifySwitched(){
+    var msg = (typeof window.T === 'function')
+      ? window.T('base.winuniq.switched') : 'base.winuniq.switched';
+    try { if (window.CRMW && window.CRMW.toast) { window.CRMW.toast(msg); return; } } catch(_) {}
+    try {   /* base.html 外壳无 CRMW → 自带极简提示条（3.2s 自散） */
+      var el = document.createElement('div');
+      el.textContent = msg;
+      el.style.cssText = 'position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99991;'
+        + 'background:var(--tk-surface,#fff);color:var(--tk-text,#0f172a);'
+        + 'border:1px solid var(--tk-border,#e5e6ea);border-radius:999px;'
+        + 'box-shadow:0 8px 28px rgba(15,27,45,.18);padding:8px 18px;font-size:12.5px;';
+      (document.body || document.documentElement).appendChild(el);
+      setTimeout(function(){ try { el.remove(); } catch(_) {} }, 3200);
+    } catch(_) {}
+  }
+  /* 坐席「在场心跳」（P2 冻结标签页补丁）：__wsMultiWin 的主控位记录
+     aitr.mw.primary::/workspace 由主控坐席每 5s 续租、15s 过期——被 Chrome 内存节省器
+     冻结的坐席页答不了 BC ping（定时器/事件全暂停），但冻结前的心跳还躺在 localStorage
+     里。探活 miss 时读它：心跳新鲜＝坐席「在但没应上」（忙/刚冻结），再等一轮而不是
+     立刻双开；两轮都静默且心跳仍新鲜 → 视同在场（frozen），宁可提示切换也不制造第二个
+     坐席（键名/15s 与 workspace_base.html::__wsMultiWin 的 K_PRIMARY/STALE_MS 是跨文件
+     契约，静态门禁钉住）。 */
+  function _seatLikelyAlive(){
+    try {
+      var rec = JSON.parse(localStorage.getItem('aitr.mw.primary::/workspace') || 'null');
+      return !!(rec && rec.id && (Date.now() - (rec.ts || 0)) < 15000);
+    } catch(_) { return false; }
+  }
+  /* 耐心探活：done(verdict) — 'hit'＝活坐席应答（open-conv 已送，_bcHandoff 已派发
+     aitr:ws-handoff）｜'frozen'＝两轮静默但心跳新鲜（视同在场，调用方自行派发事件）
+     ｜'none'＝确无坐席。返回 false＝BC 不可用，调用方走默认路径。 */
+  function _probeSeat(url, done){
+    return _bcHandoff(url, {
+      allowPlain: true,
+      hit: function(){ done('hit'); },
+      miss: function(){
+        if (!_seatLikelyAlive()) { done('none'); return; }
+        var again = _bcHandoff(url, {
+          allowPlain: true,
+          waitMs: 800,
+          hit: function(){ done('hit'); },
+          miss: function(){ done(_seatLikelyAlive() ? 'frozen' : 'none'); }
+        });
+        if (!again) done('none');
+      }
+    });
+  }
+  function _emitHandoff(cid, extra){
+    try {
+      var d = extra || {};
+      d.cid = String(cid || '');
+      window.dispatchEvent(new CustomEvent('aitr:ws-handoff', {detail: d}));
+    } catch(_) {}
+  }
+  function _goHome(opts){
+    try {
+      opts = opts || {};
+      var cid = String(opts.cid || '');
+      var url = String(opts.url || '') || ('/workspace' + (cid ? ('?conv=' + encodeURIComponent(cid)) : ''));
+      if (_pathOf(location.pathname) === '/workspace') {
+        if (cid && typeof window.__wsFocusConv === 'function') {
+          try { window.__wsFocusConv(cid); return true; } catch(_) {}
+        }
+        return false;             /* 已在坐席页：交回调用方（默认＝原地重载） */
+      }
+      if (_isAppWin()) { _navWithFeedback(url); return true; }
+      try {                       /* ③ opener 直连 */
+        var op = window.opener;
+        if (op && !op.closed) {
+          var opPath = null;      /* null＝跨源读不到（opener 去了外站）→ 走探活 */
+          try { opPath = _pathOf(op.location.pathname || ''); } catch(_) { opPath = null; }
+          if (opPath === '/workspace') {
+            try { op.focus(); } catch(_) {}
+            if (cid) _tryHandoff(op, url);   /* ack 站内切会话；未 ack 350ms 导航兜底 */
+            _emitHandoff(cid, {opener: true});   /* toast 统一走中央监听 */
+            return true;
+          }
+        }
+      } catch(_) {}
+      var took = _probeSeat(url, function(verdict){   /* ④ 耐心探活（allowPlain） */
+        if (verdict === 'none') { _navWithFeedback(url); return; }
+        if (verdict === 'frozen') _emitHandoff(cid, {frozen: true});
+        /* 'hit'：事件已由 _bcHandoff 派发，中央监听出 toast，本窗留在原页 */
+      });
+      if (took) return true;
+      _navWithFeedback(url);      /* BC 不可用（极老内核）→ 旧行为原地导航 */
+      return true;
+    } catch(_) { return false; }
+  }
+  /* 真导航前点亮 _loading_overlay 的跨页遮罩（若在）：拦截器抢在它的 L2 捕获监听
+     之前 preventDefault（见下），慢链路导航反馈由这里补回——「留在原页」不亮遮罩、
+     「真的走」才亮，语义各归各。 */
+  function _navWithFeedback(url){
+    try { if (typeof window.__blLoadShow === 'function') window.__blLoadShow(); } catch(_) {}
+    location.href = url;
+  }
+  window.__wsGoHome = _goHome;
+  /* 中央交接提示（P2 收口「点了像没反应」）：BC 交接命中/冻结在场都会派发
+     aitr:ws-handoff——此前只有 cases 页自己监听 toast，其余入口页静默（用户以为点击
+     无效再点一次＝窗口翻倍诱因）。中央监听统一出 toast；自带提示的页面（cases）置
+     window.__aitrWsHandoffToastOwned=true 声明「我自己渲染」，中央让行防双弹。
+     _notifySwitched 仅此一个调用点（单一渲染路径，静态门禁钉住）。 */
+  window.addEventListener('aitr:ws-handoff', function(){
+    if (window.__aitrWsHandoffToastOwned) return;
+    _notifySwitched();
+  });
+  /* 委托拦截器：仅左键、无修饰键、无 target/download、站内精确 /workspace（含 ?/#）。
+     **捕获相位**且本 include 位于 <head>（先于 body 顶部的 _loading_overlay 注册）→
+     preventDefault 先落地，遮罩的 L2「跨页导航先亮」捕获监听按 defaultPrevented 让行
+     ——否则「留在原页」也会亮 15s 全屏加载遮罩（真浏览器门禁 8b 抓过的实锤）。
+     带内联 onclick 的入口（__openUnique 族均配 target=_blank）由 target 检查天然放行。 */
+  document.addEventListener('click', function(ev){
+    try {
+      if (ev.defaultPrevented) return;
+      if (ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey) return;
+      var a = (ev.target && ev.target.closest) ? ev.target.closest('a[href]') : null;
+      if (!a || a.hasAttribute('download')) return;
+      var tgt = (a.getAttribute('target') || '').toLowerCase();
+      if (tgt && tgt !== '_self') return;
+      var href = a.getAttribute('href') || '';
+      if (href !== '/workspace' && href.indexOf('/workspace?') !== 0
+          && href.indexOf('/workspace#') !== 0) return;
+      var p = _deepLinkParts(href) || {};
+      if (_goHome({cid: p.cid || '', url: href})) ev.preventDefault();
+    } catch(_) {}
+  }, true);
   /* 桌面壳（Electron webview，UA 含 Electron/，壳 webview 开了 allowpopups）：
      壳内 window.open 不是「找同名标签页」而是真弹一个原生子窗口，命名寻址语义
      不存在——旧版在此整体退出（每点一次会话深链弹一个新壳窗）。2026-08-09 起
@@ -47,9 +201,13 @@
           if (kind === 'admin') return false;
           var path0 = (url.split('#')[0].split('?')[0].replace(/\/+$/, '')) || '/';
           if (path0 !== '/workspace') return false;
-          if (!/[?&](?:conv|focus)=/.test(url)) return false;
-          return _bcHandoff(url, {
-            miss: function(){ try { window.open(url, '_blank'); } catch(_) {} }
+          /* 会话深链与普通 /workspace 入口都先走耐心探活（2026-08-11 起普通入口也
+             覆盖——此前普通入口 return false 走默认 _blank，每点一次弹一个新壳窗）；
+             确无坐席才回落 window.open 弹壳窗（壳内既有语义，零回归）。
+             toast 统一走中央 aitr:ws-handoff 监听（自带提示的页面置 owned 旗标让行）。 */
+          return _probeSeat(url, function(verdict){
+            if (verdict === 'none') { try { window.open(url, '_blank'); } catch(_) {} return; }
+            if (verdict === 'frozen') _emitHandoff((_deepLinkParts(url) || {}).cid || '', {frozen: true});
           });
         } catch(_) { return false; }
       };
@@ -63,13 +221,7 @@
      app 窗内主入口改「本窗原地导航」＝与桌面壳同语义：管理后台/坐席工作台在同一个
      有任务栏图标的窗口里互切；仅 wsub 子页深链维持 _blank 落浏览器（子页挤占本窗
      会顶掉聊天/后台现场，浏览器标签页反而是更好的去处）。 */
-  var APP_WIN = false;
-  try {
-    APP_WIN = !!(window.matchMedia
-      && (window.matchMedia('(display-mode: standalone)').matches
-          || window.matchMedia('(display-mode: minimal-ui)').matches
-          || window.matchMedia('(display-mode: window-controls-overlay)').matches));
-  } catch(_) {}
+  var APP_WIN = _isAppWin();
   var HOST = location.host;
   function _name(slot){ return 'aitr_' + slot + '::' + HOST; }
   function _pathOf(url){
@@ -153,17 +305,19 @@
     var ch = null;
     try { ch = new BroadcastChannel('aitr_ws_bridge::' + location.host); } catch(_) { return false; }
     var p = _deepLinkParts(url);
-    if (!p) { try { ch.close(); } catch(_) {} return false; }
+    /* allowPlain（P1-③）：无深链参数也允许纯探活判重（「返回工作台」/普通入口）——
+       pong 即别处有活跃坐席，无需送 open-conv（对方本来就开着工作台） */
+    if (!p && !cbs.allowPlain) { try { ch.close(); } catch(_) {} return false; }
     var token = 'bc' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     var done = false;
     ch.onmessage = function(ev){
       var d = ev && ev.data;
       if (done || !d || d.aitr !== 'ws-pong' || d.token !== token) return;
       done = true;
-      try { ch.postMessage({aitr: 'open-conv', token: token, cid: p.cid, mid: p.mid, flag: p.flag, caseId: p.caseId}); } catch(_) {}
+      if (p) { try { ch.postMessage({aitr: 'open-conv', token: token, cid: p.cid, mid: p.mid, flag: p.flag, caseId: p.caseId}); } catch(_) {} }
       try { ch.close(); } catch(_) {}
       try { if (cbs.hit) cbs.hit(); } catch(_) {}
-      try { window.dispatchEvent(new CustomEvent('aitr:ws-handoff', {detail: {cid: p.cid}})); } catch(_) {}
+      try { window.dispatchEvent(new CustomEvent('aitr:ws-handoff', {detail: {cid: p ? p.cid : ''}})); } catch(_) {}
     };
     try { ch.postMessage({aitr: 'ws-ping', token: token}); }
     catch(_) { try { ch.close(); } catch(_) {} return false; }
@@ -172,19 +326,22 @@
       done = true;
       try { ch.close(); } catch(_) {}
       try { if (cbs.miss) cbs.miss(); } catch(_) {}
-    }, 250);
+    }, (cbs.waitMs > 0 ? cbs.waitMs : 250));   /* waitMs：耐心探活第二轮放宽窗口 */
     return true;
   }
 
-  /* 浏览器形态包装：刚开出的空白命名窗（本组无工作台）→ 先 BC 探别组，
-     命中关掉空白窗交接；无应答导航空白窗为唯一工作台。 */
+  /* 浏览器形态包装：刚开出的空白命名窗（本组无工作台）→ 先耐心探别组，
+     活坐席/冻结在场都关掉空白窗交接（toast 走中央监听），确无坐席才把空白窗
+     导航成唯一工作台。普通 /workspace 入口与深链同判重。 */
   function _tryBcHandoff(w, url){
-    return _bcHandoff(url, {
-      hit: function(){ try { w.close(); } catch(_) {} },
-      miss: function(){
+    return _probeSeat(url, function(verdict){
+      if (verdict === 'none') {
         try { w.location.replace(url); } catch(_) { try { w.location.href = url; } catch(_) {} }
         try { w.focus(); } catch(_) {}
+        return;
       }
+      try { w.close(); } catch(_) {}
+      if (verdict === 'frozen') _emitHandoff((_deepLinkParts(url) || {}).cid || '', {frozen: true});
     });
   }
 
@@ -218,9 +375,9 @@
       } catch(_) { cur = null; }
       var deep = url.indexOf('?') >= 0 || url.indexOf('#') >= 0;
       if (cur === '') {
-        /* 新开的空白窗＝本组内没有该命名窗口。工作台会话深链先试跨组交接
-           （别组可能已开着工作台），250ms 无应答才把这个空白窗导航成新工作台 */
-        if (slot === 'workspace' && deep && _tryBcHandoff(w, url)) return true;
+        /* 新开的空白窗＝本组内没有该命名窗口。坐席工作台（深链与普通入口都算）
+           先试跨组交接（别组可能已开着工作台），250ms 无应答才把空白窗导航成新工作台 */
+        if (slot === 'workspace' && _tryBcHandoff(w, url)) return true;
         /* replace 导航，避免 about:blank 留在该标签页的历史里 */
         try { w.location.replace(url); } catch(_) { w.location.href = url; }
       } else if (cur === null) {

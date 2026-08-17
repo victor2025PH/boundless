@@ -229,7 +229,7 @@ def test_unified_counter_feeds_signals_and_gate():
         # 无 registry → age_days 缺省视为 0（新号）→ 预热上限 2，已发 3 → 拦截
         dec = evaluate(sig, cfg)
         assert dec["allowed"] is False
-        assert dec["reason"] == "warmup_cap"
+        assert dec["reason"] == "daily_cap"   # P3 更名（旧 warmup_cap）
     finally:
         reset_autoreply_limiter()
 

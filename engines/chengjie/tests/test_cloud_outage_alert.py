@@ -74,7 +74,10 @@ async def test_runtime_key_failure_alerts(monkeypatch):
     seen = _capture_notifications(monkeypatch)
     c = _client(Exception("Error code: 402 - Insufficient Balance"))
     out = await c._generate_reply_openai_compat("在吗", context={"reply_lang": "zh"})
-    assert out  # canned 兜底仍出话
+    # 2026-08-15 罐头占位句移除（「可以不回复，不能乱回复」）+ 08-17 无兜底纪律：
+    # 全链失败＝不出话（None）——旧断言「canned 兜底仍出话」与现设计相反，
+    # 本测试的核心价值（key 失效告警必响、标签可读）在下方断言，保持不变。
+    assert out is None
     assert len(seen["keyfail"]) == 1
     label, detail = seen["keyfail"][0]
     assert label == "deepseek-chat @ api.deepseek.com"  # 可读标签而非 openai_compatible

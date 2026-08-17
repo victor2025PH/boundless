@@ -25,12 +25,33 @@ import logging
 import time
 
 from fastapi import Depends, HTTPException, Request
+from src.utils.agent_char_usage import record_request_chars
 from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
 
+
+def _perm_ok(request: Request, perm: str) -> bool:
+    """按登录坐席判能力权限（P2 管理面改造：perms_json 按人覆写，master 恒 True）。
+
+    懒 import：``resolve_user_perm`` 由并行批次在 web_user_store 落地，模块未就绪
+    （ImportError）/ user_store 未暴露 / 未登录（token 链）/ 任何异常 → **一律放行**
+    （fail-open；本文件多线共用，本批只接 /translate 一处，勿扩散）。
+    """
+    try:
+        from src.utils.web_user_store import resolve_user_perm
+        us = getattr(request.app.state, "user_store", None)
+        sess = request.session
+        uname = str(sess.get("username") or "")
+        role = str(sess.get("role") or "")
+        if us is None or not uname:
+            return True
+        return resolve_user_perm(us, uname, role, perm)
+    except Exception:
+        return True
+
 # 主管角色集（与 unified_inbox_routes 保持一致）
-_SUPERVISOR_ROLES = {"master", "admin"}
+_SUPERVISOR_ROLES = {"master", "admin", "supervisor"}
 
 # J2：意图 → 模板场景映射（与 template_seeds.py 的 scene 枚举对应）
 _INTENT_TO_SCENE: dict = {
@@ -526,6 +547,9 @@ def register_drafts_routes(app, *, api_auth):
         降级时返回原文（带 fallback 标记）。
         返回：{ok, translated, source_lang, target_lang, fallback, draft_id}
         """
+        # 能力权限（2026-08-16）：草稿翻译=坐席主动消费翻译能力，同受 ai.translate 闸
+        if not _perm_ok(request, "ai.translate"):
+            raise HTTPException(403, tr(request, "err.perm.capability_denied"))
         svc = _get_draft_service(request)
         draft = svc.get_draft(draft_id)
         if draft is None:
@@ -560,6 +584,10 @@ def register_drafts_routes(app, *, api_auth):
             )
             translated = str(result.translated_text if hasattr(result, "translated_text")
                              else result.get("translated_text", draft_text))
+            # 坐席字符计量归因（2026-08-16）：真翻译成功才记（源文本=草稿正文，
+            # 与 /translate 的 len(text) 同口径）；无 ok 属性的旧结果形状按成功记。
+            if getattr(result, "ok", True):
+                record_request_chars(request, "translation", len(draft_text))
             return {
                 "ok": True,
                 "draft_id": draft_id,
@@ -1090,6 +1118,43 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             metrics["scheduled_reporter"] = {"running": False}
 
+        # P3 账号真相观测（2026-08-17）：账号名录规模趋势——已退出/已移除/仅历史号
+        # 异常增长（频繁掉配对、误删）在这里先看见，而不是等坐席报「对不上号」。
+        # directory_only=会话库有、注册表没有的号（含 config 来源活跃号的恒定底数，
+        # 看趋势不看绝对值）。失败静默：观测键绝不拖垮 metrics 主体。
+        try:
+            from src.integrations.account_registry import get_account_registry
+            _inb = getattr(request.app.state, "inbox_store", None)
+            _reg_rows = get_account_registry().list(include_removed=True) or []
+            _by_st: dict = {}
+            _reg_keys = set()
+            for _r in _reg_rows:
+                _st = str(_r.get("status") or "unknown")
+                _by_st[_st] = _by_st.get(_st, 0) + 1
+                _reg_keys.add((str(_r.get("platform") or ""),
+                               str(_r.get("account_id") or "")))
+            _directory = (_inb.account_directory()
+                          if _inb is not None
+                          and hasattr(_inb, "account_directory") else {})
+            from src.web.routes.unified_inbox_aggregate import directory_ghost_keys
+            _ghosts = directory_ghost_keys(_directory, _reg_keys)
+            _desktop = sum(
+                1 for _r in _reg_rows
+                if str(_r.get("mode") or "") == "desktop"
+                and str(_r.get("status") or "") != "removed")
+            metrics["accounts_truth"] = {
+                "registry_total": len(_reg_rows),
+                "registry_by_status": _by_st,
+                "directory_total": len(_directory),
+                # directory_only 保留旧键（趋势不断档）；history_only 剔除 web 工作台
+                # 后才是真幽灵——与 accounts_summary 的 history_only 同口径。
+                "directory_only": len(_ghosts),
+                "history_only": len(_ghosts),
+                "desktop": _desktop,
+            }
+        except Exception:
+            pass
+
         # InboxStore 草稿统计
         try:
             inbox = getattr(request.app.state, "inbox_store", None)
@@ -1157,6 +1222,15 @@ def register_metrics_route(app, *, api_auth):
         try:
             from src.ai.spoken_style_bridge import stats as _spoken_style_stats
             metrics["spoken_style"] = _spoken_style_stats()
+        except Exception:
+            pass
+
+        # 发送护栏拦截（P2 2026-08-13）：真实发送尝试被 Kill-Switch/金丝雀/授权/
+        # 反封号闸门拦下的进程口径计数（预判/横幅轮询 notify=False 不计——读路径
+        # 不污染）；键带 |manual/|auto 后缀（额度族）供「谁在被拦」分道观测。
+        try:
+            from src.integrations.shared.send_guard import block_stats_snapshot
+            metrics["send_gate_blocks"] = block_stats_snapshot()
         except Exception:
             pass
 
@@ -1412,6 +1486,13 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # 无兜底纪律拦截计数（语音/翻译/识图/转写/聊天失败未发出）
+        try:
+            from src.ops.delivery_block import snapshot as _deliv_snap
+            metrics["delivery_block"] = _deliv_snap()
+        except Exception:
+            pass
+
         # 出站语言硬闸（P1-198）：held/rescued/no_target_sent + 最近事件
         try:
             from src.inbox.outbound_lang_stats import get_outbound_lang_stats
@@ -1508,6 +1589,29 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # 表情包（贴纸）观测（2026-08-17）：发送/收藏进程口径 + sent_as 分桶
+        # （image 占比高＝目标平台原生能力缺口：WA 边车未升级 / LINE 自建包为主）。
+        # 备货水位走 store counts（持久口径）；零流量时 sends=0，ops 卡自行隐藏。
+        try:
+            from src.inbox.sticker_stats import get_sticker_stats
+            _stk = get_sticker_stats().dump()
+            from src.inbox.sticker_store import get_sticker_store
+            _sst = get_sticker_store()
+            if _sst is not None:
+                _stk.update(_sst.counts())
+            metrics["stickers"] = _stk
+        except Exception:
+            pass
+
+        # Telegram 群成员提取观测（成员/群/任务；active=false 时 ops 卡整卡隐藏）
+        try:
+            from src.companion.group_members_store import get_group_members_store
+            _gms = get_group_members_store()
+            if _gms is not None:
+                metrics["group_members"] = _gms.stats()
+        except Exception:
+            pass
+
         # 回复时延 SLO（P1-8 2026-08-09）：首答 p50/p95 + 零回复率，inbox 持久库
         # 口径（重启不清零），进程级 300s TTL 缓存防 ops 轮询逐次全扫消息表。
         try:
@@ -1517,6 +1621,17 @@ def register_metrics_route(app, *, api_auth):
                 _rl = reply_latency_snapshot(_rl_store)
                 if _rl:
                     metrics["reply_latency"] = _rl
+        except Exception:
+            pass
+
+        # 入口可用性 SLO（P1-7 2026-08-12 可靠性复盘）：服务端＝边缘看门狗 7 天
+        # tick 可用率+断连段；坐席端＝conn_* 断连回执（P0-2 恢复时刻补发）。两视角
+        # 差值=客户端侧损耗。300s TTL 纯读软失败，看门狗日志缺失时 server 为空骨架。
+        try:
+            from src.ops.entrance_slo import entrance_slo_snapshot
+            _slo = entrance_slo_snapshot()
+            if _slo:
+                metrics["entrance_slo"] = _slo
         except Exception:
             pass
 
@@ -1564,6 +1679,20 @@ def register_metrics_route(app, *, api_auth):
                 get_platform_session_health,
             )
             metrics["platform_sessions"] = get_platform_session_health().dump()
+        except Exception:
+            pass
+
+        # Messenger 双道就绪度（P2 2026-08-13）：注册表×sidecar×配置闸门的
+        # 「人工收发 / 全自动」第一阻塞原因判定——与 tools/diagnose_messenger.py
+        # 共用 evaluate_messenger_readiness 同一纯函数（60s TTL 共享探针，
+        # watchdog 的 not_restored 对账同源）。
+        try:
+            from src.integrations.messenger_readiness_collect import (
+                collect_messenger_readiness,
+            )
+            _mr_cm = getattr(request.app.state, "config_manager", None)
+            metrics["messenger_readiness"] = collect_messenger_readiness(
+                getattr(_mr_cm, "config", None) or {})
         except Exception:
             pass
 
@@ -1934,6 +2063,28 @@ def register_metrics_route(app, *, api_auth):
                 _gauge("ws_persona_media_by_type", pm.get("video", 0),
                        labels='type="video"')
 
+            # 贴纸：发送/收藏（进程口径）+ 备货水位（包/张，持久口径）
+            stk = metrics.get("stickers") or {}
+            if stk:
+                _gauge("ws_sticker_sends_total", stk.get("sends", 0),
+                       "Sticker sends (process counter)")
+                _gauge("ws_sticker_collects_total", stk.get("collects", 0),
+                       "Inbound stickers collected into packs")
+                _gauge("ws_sticker_packs", stk.get("packs", 0),
+                       "Sticker packs enabled")
+                _gauge("ws_sticker_items", stk.get("stickers", 0),
+                       "Stickers enabled (all packs)")
+
+            # 群成员提取库水位（成员/群/运行中任务）
+            gm = metrics.get("group_members") or {}
+            if gm:
+                _gauge("ws_group_members_total", gm.get("members_total", 0),
+                       "Telegram group members extracted (total)")
+                _gauge("ws_group_members_groups", gm.get("groups", 0),
+                       "Distinct groups with extracted members")
+                _gauge("ws_group_members_jobs_running", gm.get("jobs_running", 0),
+                       "Group member extraction jobs running")
+
             # 回复时延 SLO（24h 窗：p50/p95/零回复——市场可承诺数字的机器可读面）
             rl = (metrics.get("reply_latency") or {}).get("d1") or {}
             if rl.get("episodes"):
@@ -1943,6 +2094,12 @@ def register_metrics_route(app, *, api_auth):
                        "First-reply latency p95 over last 24h (seconds)")
                 _gauge("ws_reply_unanswered_24h", rl.get("unanswered", 0),
                        "Inbound bursts unanswered past grace over last 24h")
+
+            # 发送护栏拦截（P2 2026-08-13；零拦截不出行，与 cases 同口径）
+            _sgb = metrics.get("send_gate_blocks") or {}
+            if _sgb.get("total"):
+                _gauge("ws_send_gate_blocked_total", _sgb.get("total", 0),
+                       "Send attempts blocked by the send guard (process lifetime)")
 
             # 案例中心（立案/结案/升级/告警；来源分布走 dump_prom 的 label 行）
             cs = metrics.get("cases") or {}
@@ -2047,6 +2204,29 @@ def register_telemetry_route(app, *, api_auth):
             except Exception:
                 pass
         return {"ok": True}
+
+    @app.get("/api/workspace/entrances")
+    async def api_workspace_entrances(request: Request, _=Depends(api_auth)):
+        """入口清单（P1-5 2026-08-12 可靠性复盘）：断连横幅「切换备用入口」的数据源。
+
+        读 ``web_admin.entrance_alternates``（overlay 配置的绝对 base URL 列表，如
+        LAN 直连地址 + 公网域名）。前端页面加载时取一次并落 localStorage——断连
+        期间本接口本就不可达，缓存才是断连时刻的真数据源。未配置返回空表＝
+        横幅不出切换链接（租户实例零污染：他们的 overlay 没有这个键）。
+        只回显 http(s) 绝对地址，防配置手误把奇怪字符串塞进 <a href>。
+        """
+        try:
+            cm = getattr(request.app.state, "config_manager", None)
+            raw_cfg = (getattr(cm, "config", None) or {}) if cm else {}
+            alts = (raw_cfg.get("web_admin") or {}).get("entrance_alternates") or []
+            out = []
+            for u in alts:
+                s = str(u or "").strip().rstrip("/")
+                if s.startswith(("http://", "https://")) and len(s) < 200:
+                    out.append(s)
+            return {"entrances": out[:4]}
+        except Exception:
+            return {"entrances": []}
 
 
 def register_glossary_route(app, *, api_auth):

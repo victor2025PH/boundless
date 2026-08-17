@@ -33,6 +33,7 @@ class _SM:
     _get_selfie_cap = _SMcls._get_selfie_cap
     _selfie_upsell_text = _SMcls._selfie_upsell_text
     _try_send_selfie_media = _SMcls._try_send_selfie_media
+    _media_presend_pacing = _SMcls._media_presend_pacing
     _selfie_persona_for_prompt = _SMcls._selfie_persona_for_prompt
     _selfie_album_key = _SMcls._selfie_album_key
     _get_persona_name_for_context = _SMcls._get_persona_name_for_context
@@ -233,6 +234,99 @@ async def test_try_send_selfie_media_no_image_returns_false():
     ok = await sm._try_send_selfie_media(
         {"_send_photo_to_chat": _fake_send}, 1, "", "hi")
     assert ok is False
+
+
+# ── P3 媒体拟人节奏（media_pacing，2026-08-12）────────────────────────────
+# 实录：客户「出来喝咖啡」→ 0.8s 相册图落地（媒体短路在文本 humanize 之前裸发）。
+# 契约：默认关（零休眠，行为不变）；开启后随机等待落在 [min,max]、分段 ≤4s、
+# 等待期挂「正在发送照片」action；action 抛错退化纯等待不阻塞发图。
+
+
+@pytest.mark.asyncio
+async def test_media_pacing_off_by_default_no_sleep():
+    sm = _SM(selfie_cfg=_ON)   # 未配 media_pacing → 默认关
+    slept = []
+
+    async def _fs(d):
+        slept.append(d)
+
+    await sm._media_presend_pacing({}, 1, _sleep=_fs)
+    assert slept == []
+
+
+@pytest.mark.asyncio
+async def test_media_pacing_enabled_sleeps_in_range_with_action():
+    cfg = dict(_ON)
+    cfg["media_pacing"] = {"enabled": True, "min_sec": 5, "max_sec": 9}
+    sm = _SM(selfie_cfg=cfg)
+    slept, actions = [], []
+
+    async def _fs(d):
+        slept.append(float(d))
+
+    async def _act(chat_id):
+        actions.append(chat_id)
+
+    await sm._media_presend_pacing({"_send_media_action": _act}, 7, _sleep=_fs)
+    total = sum(slept)
+    assert 5.0 <= total <= 9.0
+    assert all(s <= 4.0 for s in slept)     # 分段 ≤4s（气泡 ~5s 过期要续挂）
+    assert len(actions) == len(slept)       # 每段等待前都挂了一次 action
+    assert actions[0] == 7
+
+
+@pytest.mark.asyncio
+async def test_media_pacing_bool_true_uses_defaults():
+    cfg = dict(_ON)
+    cfg["media_pacing"] = True
+    sm = _SM(selfie_cfg=cfg)
+    slept = []
+
+    async def _fs(d):
+        slept.append(float(d))
+
+    await sm._media_presend_pacing({}, 1, _sleep=_fs)
+    assert 2.5 <= sum(slept) <= 6.5
+
+
+@pytest.mark.asyncio
+async def test_media_pacing_action_failure_degrades_to_silent_wait():
+    cfg = dict(_ON)
+    cfg["media_pacing"] = {"enabled": True, "min_sec": 6, "max_sec": 6}
+    sm = _SM(selfie_cfg=cfg)
+    slept, boom = [], []
+
+    async def _fs(d):
+        slept.append(float(d))
+
+    async def _bad(chat_id):
+        boom.append(1)
+        raise RuntimeError("action down")
+
+    await sm._media_presend_pacing({"_send_media_action": _bad}, 1, _sleep=_fs)
+    assert abs(sum(slept) - 6.0) < 0.01     # 等待照常走完
+    assert boom == [1]                       # 抛错一次后不再重试
+
+
+@pytest.mark.asyncio
+async def test_try_send_selfie_media_runs_pacing_before_send():
+    """汇口契约：`_try_send_selfie_media` 发送前必过 `_media_presend_pacing`
+    （7 个媒体调用点都从这里受益；挪走调用点先红）。"""
+    sm = _SM(selfie_cfg=_ON)
+    order = []
+
+    async def _pacing(user_context, chat_id, **kw):
+        order.append("pacing")
+
+    async def _fake_send(chat_id, path, caption):
+        order.append("send")
+        return True
+
+    sm._media_presend_pacing = _pacing
+    ok = await sm._try_send_selfie_media(
+        {"_send_photo_to_chat": _fake_send}, 1, "/tmp/x.png", "hi")
+    assert ok is True
+    assert order == ["pacing", "send"]
 
 
 @pytest.mark.asyncio

@@ -235,7 +235,7 @@ async def test_pool_cooldown_skips_dead_key(monkeypatch):
     assert cooling.calls == 0 and good.calls == 1
 
 
-async def test_all_pool_dead_falls_to_local_then_canned(monkeypatch):
+async def test_all_pool_dead_falls_to_local_then_none(monkeypatch):
     _silence_notifications(monkeypatch)
     primary = _FakeChatClient(fail=Exception("boom"))
     dead = _FakeChatClient(fail=Exception("also boom"))
@@ -247,12 +247,12 @@ async def test_all_pool_dead_falls_to_local_then_canned(monkeypatch):
     out = await c._generate_reply_openai_compat("hi", context={"reply_lang": "zh"})
     assert out == "本地兜底"
     assert dead.calls == 1 and local.calls == 1
-    # 全链尽失 → canned
+    # 全链尽失 → None＝本轮不回复（2026-08-15 罐头兜底移除，不能乱回复）
     dead2 = _FakeChatClient(fail=Exception("x"))
     c2 = _client(_FakeChatClient(fail=Exception("boom")))
     c2._pool_entries = [_pool_entry("dead", dead2)]
     out2 = await c2._generate_reply_openai_compat("hi", context={"reply_lang": "zh"})
-    assert out2  # canned 占位仍出话
+    assert out2 is None
 
 
 async def test_breaker_open_uses_pool_before_local(monkeypatch):

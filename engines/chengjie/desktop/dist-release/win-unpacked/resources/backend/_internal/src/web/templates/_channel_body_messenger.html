@@ -1,0 +1,2060 @@
+{# 渠道中心·Messenger 正文（原 messenger_rpa.html head+content 整体迁移；由 workspace_channels.html include）#}
+<style>
+html:has(.mr-page),body:has(.mr-page){overflow-x:hidden;max-width:100vw}
+body:has(.mr-page) .wrap{max-width:none;width:100%;padding:1rem 1.2rem 2rem}
+body:has(.mr-page.monitor-mode) .wrap{padding:.65rem .85rem 1.5rem}
+.mr-page{display:flex;flex-direction:column;gap:1rem;min-width:0;overflow-x:hidden}
+.mr-page.monitor-mode{gap:.6rem}
+.mr-head{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin-bottom:.1rem}
+.mr-title{display:flex;align-items:center;gap:.65rem;min-width:0}
+.mr-status-dot{width:11px;height:11px;border-radius:999px;background:var(--t3);box-shadow:0 0 10px currentColor;flex-shrink:0}
+.mr-title h1{font-size:1.25rem;line-height:1.2;margin:0;color:var(--t)}
+.mr-sub{font-size:.8rem;color:var(--t3);margin-top:.18rem}
+.mr-head-actions{display:flex;gap:.45rem;align-items:center;flex-wrap:wrap}
+.mr-pill{display:inline-flex;align-items:center;gap:.35rem;min-height:24px;padding:.18rem .55rem;border:1px solid var(--bd);border-radius:999px;background:var(--input);color:var(--t2);font-size:.74rem;font-weight:700;white-space:nowrap}
+.mr-pill.ok{background:var(--gs);color:var(--green);border-color:rgba(16,185,129,.25)}
+.mr-pill.warn{background:var(--as);color:var(--amber);border-color:rgba(245,158,11,.25)}
+.mr-pill.danger{background:var(--rs);color:var(--red);border-color:rgba(239,68,68,.25)}
+.mr-tabs{display:flex;gap:.35rem;padding:.25rem;border:1px solid var(--bd);border-radius:10px;background:var(--input);overflow-x:auto;scrollbar-width:thin}
+.mr-tab{border:0;background:transparent;color:var(--t2);font-family:inherit;font-size:.82rem;font-weight:700;padding:.55rem .8rem;border-radius:8px;cursor:pointer;white-space:nowrap;transition:.16s}
+.mr-tab:hover{background:rgba(99,102,241,.08);color:var(--t)}
+.mr-tab.active{background:var(--card);color:var(--p);box-shadow:var(--s0)}
+/* B6-P7 修正版：base.html 已提供外层主菜单，messenger-rpa 顶部 tab 升级为更专业横向 nav */
+.mr-tabs{position:sticky;top:0;z-index:50;backdrop-filter:blur(6px);background:rgba(15,23,42,.85)}
+.mr-tab{display:inline-flex;align-items:center;gap:.4rem;position:relative}
+.mr-tab.active::after{content:'';position:absolute;left:18%;right:18%;bottom:-4px;height:2px;background:var(--p);border-radius:2px}
+.mr-page.monitor-mode .mr-head{align-items:center;margin-bottom:0}
+.mr-page.monitor-mode .mr-title h1{font-size:1.05rem}
+.mr-page.monitor-mode .mr-sub{font-size:.7rem;margin-top:.05rem}
+.mr-page.monitor-mode .mr-head-actions .mr-pill{min-height:22px;font-size:.68rem}
+.mr-page.monitor-mode .mr-head-actions .btn{padding:.3rem .62rem;font-size:.72rem;min-height:28px}
+.mr-page.monitor-mode .mr-kpis{display:none}
+.mr-page.monitor-mode .mr-kpi{display:flex;align-items:center;gap:.34rem;min-width:126px;padding:.38rem .58rem;border-radius:7px}
+.mr-page.monitor-mode .mr-kpi-value{font-size:.92rem;line-height:1}
+.mr-page.monitor-mode .mr-kpi-label{margin:0;font-size:.64rem;white-space:nowrap}
+.mr-page.monitor-mode .mr-tabs{padding:.16rem;border-radius:8px}
+.mr-page.monitor-mode .mr-tab{font-size:.74rem;padding:.36rem .62rem;border-radius:6px}
+.mr-kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:.75rem}
+.mr-kpi{border:1px solid var(--bd);border-radius:8px;background:var(--input);padding:.8rem .85rem;min-width:0}
+.mr-kpi-value{display:block;font-size:1.45rem;line-height:1.1;font-weight:850;color:var(--t);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mr-kpi-label{display:block;margin-top:.25rem;font-size:.72rem;color:var(--t3);font-weight:700}
+.mr-view{display:none}
+.mr-view.active{display:block}
+.mr-grid{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(320px,.9fr);gap:1rem}
+.mr-grid.accounts-layout{grid-template-columns:minmax(0,1fr)}
+.mr-grid.accounts-layout.advanced-mode{grid-template-columns:minmax(0,1.45fr) minmax(320px,.9fr)}
+.mr-grid.equal{grid-template-columns:repeat(2,minmax(0,1fr))}
+.mr-grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}
+{# P2-1（2026-08-02）：mr-panel 卡片族已整体迁到共享 rpa-card（_rpa_shared_styles），
+   本页不再定义卡片外壳；mr-grid 用 gap 控距 → rpa-card 自带下边距在网格内归零。
+   账号设备池原 chromeless 特例（transparent 无边框）随迁移并入统一卡片观感。 #}
+.mr-grid>.rpa-card{margin-bottom:0;min-width:0}
+.mr-view#view-accounts .rpa-card .rpa-card-head{margin-bottom:.5rem}
+.mr-toolbar{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap}
+.mr-stack{display:flex;flex-direction:column;gap:.75rem}
+.mr-row{display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding:.62rem 0;border-bottom:1px solid var(--bd)}
+.mr-row:last-child{border-bottom:none}
+.mr-name{font-weight:800;color:var(--t);font-size:.84rem;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mr-muted{color:var(--t3);font-size:.74rem}
+.mr-note{color:var(--t2);font-size:.78rem;line-height:1.55}
+.mr-empty{text-align:center;color:var(--t3);padding:2rem 1rem;font-size:.86rem}
+.mr-scroll{max-height:560px;overflow:auto;padding-right:.2rem}
+.mr-scroll.tall{max-height:680px}
+.mr-view#view-accounts #accounts-list.mr-scroll.tall{max-height:calc(100vh - 205px);min-height:620px;overflow:auto}
+.mr-scroll.short{max-height:360px}
+.mr-table{width:100%;border-collapse:collapse;font-size:.78rem}
+.mr-table th{text-align:left;color:var(--t3);font-weight:800;border-bottom:1px solid var(--bd);padding:.55rem .45rem;white-space:nowrap}
+.mr-table td{border-bottom:1px solid var(--bd);padding:.58rem .45rem;vertical-align:top;color:var(--t2)}
+.mr-table tr:last-child td{border-bottom:none}
+.mr-field-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.75rem}
+.mr-field-grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}
+.mr-field{display:flex;flex-direction:column;gap:.28rem;min-width:0}
+.mr-field label{font-size:.72rem;color:var(--t3);font-weight:800}
+.mr-check{display:flex;align-items:center;gap:.45rem;color:var(--t2);font-size:.8rem;font-weight:700}
+.mr-check input{width:16px;height:16px;accent-color:var(--p)}
+.mr-textarea{min-height:320px;font-family:Consolas,'JetBrains Mono',monospace;font-size:.78rem;line-height:1.45;resize:vertical}
+.mr-json-small{min-height:150px}
+.mr-split{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,.8fr);gap:1rem}
+.mr-appr-row{border:1px solid var(--bd);border-left:3px solid var(--amber);border-radius:8px;background:var(--input);padding:.78rem;margin-bottom:.65rem}
+.mr-appr-row.sent{border-left-color:var(--p)}
+.mr-appr-row.approved{border-left-color:var(--green)}
+.mr-appr-row.rejected{border-left-color:var(--red)}
+.mr-appr-meta{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;color:var(--t3);font-size:.72rem;margin-bottom:.45rem}
+.mr-appr-meta .push{margin-left:auto}
+.mr-peer,.mr-reply{white-space:pre-wrap;word-break:break-word;line-height:1.55}
+.mr-peer{color:var(--t);font-size:.86rem}
+.mr-reply{margin-top:.55rem;background:var(--card);border:1px solid var(--bd);border-radius:7px;padding:.58rem .65rem;color:var(--t2);font-size:.84rem}
+.mr-edit{margin-top:.55rem;min-height:82px;font-size:.84rem;resize:vertical}
+.mr-actions{display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.55rem}
+.mr-actions .btn,.mr-toolbar .btn{padding:.38rem .72rem;font-size:.76rem}
+.mr-badge{display:inline-flex;align-items:center;justify-content:center;min-height:20px;padding:.12rem .45rem;border-radius:999px;background:var(--input);border:1px solid var(--bd);font-size:.7rem;color:var(--t2);font-weight:800;white-space:nowrap}
+.mr-badge.pending{background:var(--as);color:var(--amber);border-color:rgba(245,158,11,.25)}
+.mr-badge.sent,.mr-badge.high,.mr-badge.online{background:var(--gs);color:var(--green);border-color:rgba(16,185,129,.25)}
+.mr-badge.approved,.mr-badge.mid{background:var(--ps);color:var(--p);border-color:rgba(99,102,241,.25)}
+.mr-badge.rejected,.mr-badge.low,.mr-badge.offline{background:var(--rs);color:var(--red);border-color:rgba(239,68,68,.25)}
+.mr-badge.paused,.mr-badge.warn{background:var(--as);color:var(--amber);border-color:rgba(245,158,11,.25)}
+.mr-account{display:grid;grid-template-columns:minmax(160px,1fr) auto minmax(220px,1fr) auto;gap:.75rem;align-items:center;padding:.7rem 0;border-bottom:1px solid var(--bd)}
+.mr-account:last-child{border-bottom:none}
+.mr-account-actions{display:flex;gap:.35rem;justify-content:flex-end;flex-wrap:wrap}
+.mr-funnel-row{display:grid;grid-template-columns:112px minmax(0,1fr) 44px;align-items:center;gap:.5rem;margin:.45rem 0}
+.mr-funnel-label{color:var(--t2);font-size:.74rem;text-align:right}
+.mr-bar{height:13px;background:var(--input);border:1px solid var(--bd);border-radius:999px;overflow:hidden}
+.mr-bar-fill{height:100%;background:linear-gradient(90deg,var(--p),var(--green));border-radius:999px;min-width:2px}
+.mr-bar-fill.loss{background:linear-gradient(90deg,var(--amber),var(--red))}
+.mr-persona-card{border:1px solid var(--bd);border-radius:8px;background:var(--input);padding:.75rem;display:flex;flex-direction:column;gap:.45rem}
+.mr-persona-top{display:flex;align-items:center;justify-content:space-between;gap:.5rem}
+.mr-strategy-hero{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.65rem;margin-bottom:.85rem}
+.mr-strategy-card{border:1px solid var(--bd);border-radius:8px;background:var(--input);padding:.7rem .75rem;min-width:0}
+.mr-strategy-card b{display:block;color:var(--t);font-size:1.12rem;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mr-strategy-card span{display:block;margin-top:.22rem;color:var(--t3);font-size:.68rem;font-weight:850}
+.mr-flow{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:.42rem;margin:.75rem 0}
+.mr-flow-step{border:1px solid var(--bd);border-radius:8px;background:var(--input);padding:.55rem .5rem;min-height:62px}
+.mr-flow-step strong{display:block;color:var(--t);font-size:.76rem;line-height:1.25}
+.mr-flow-step span{display:block;margin-top:.22rem;color:var(--t3);font-size:.66rem;line-height:1.35;word-break:break-word}
+.mr-sim-grid{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:.75rem}
+.mr-sim-result{border:1px solid rgba(99,102,241,.25);border-radius:8px;background:rgba(99,102,241,.07);padding:.7rem;min-height:142px}
+.mr-score-line{display:grid;grid-template-columns:92px minmax(0,1fr) 42px;gap:.45rem;align-items:center;margin:.32rem 0}
+.mr-score-line span{color:var(--t3);font-size:.68rem;font-weight:850;text-align:right}
+.mr-score-line b{color:var(--t2);font-size:.7rem;text-align:right}
+.mr-stage-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.55rem}
+.mr-state-card{border:1px solid var(--bd);border-radius:8px;background:var(--input);padding:.62rem;min-width:0}
+.mr-state-card.active{border-color:rgba(99,102,241,.45);background:rgba(99,102,241,.07)}
+.mr-state-card .mr-note{margin-top:.35rem}
+.mr-code{font-family:Consolas,'JetBrains Mono',monospace;font-size:.75rem;color:var(--p);background:var(--input);border:1px solid var(--bd);border-radius:6px;padding:.08rem .35rem}
+.mr-binding-card{border:1px solid var(--bd);border-radius:8px;background:var(--input);padding:.75rem;display:flex;flex-direction:column;gap:.6rem}
+.mr-binding-top{display:flex;align-items:flex-start;justify-content:space-between;gap:.75rem}
+.mr-binding-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.55rem}
+.mr-device-toolbar{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap;margin-bottom:.55rem;padding:.42rem .5rem;border:1px solid var(--bd);border-radius:8px;background:rgba(15,23,42,.82);backdrop-filter:blur(10px)}
+.mr-view#view-accounts .mr-device-toolbar{position:sticky;top:.25rem;z-index:20}
+.mr-device-toolbar select{width:auto;min-width:158px;max-width:260px}
+.mr-device-toolbar.primary{justify-content:space-between}
+.mr-device-toolbar .mr-toolbar-left,.mr-device-toolbar .mr-toolbar-right{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap}
+.mr-seg{display:inline-flex;gap:.12rem;padding:.12rem;border:1px solid var(--bd);border-radius:8px;background:var(--card)}
+.mr-seg button{border:0;background:transparent;color:var(--t2);font:inherit;font-size:.72rem;font-weight:800;padding:.3rem .52rem;border-radius:6px;cursor:pointer}
+.mr-seg button.active{background:var(--p);color:#fff}
+.mr-advanced-only{display:none!important}
+.advanced-mode .mr-advanced-only{display:revert!important}
+.advanced-mode button.mr-advanced-only,.advanced-mode .btn.mr-advanced-only,.advanced-mode .mr-seg.mr-advanced-only{display:inline-flex!important}
+.advanced-mode .rpa-card.mr-advanced-only{display:block!important}
+.mr-selection-bar{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap;margin-bottom:.75rem;padding:.55rem .65rem;border:1px solid rgba(99,102,241,.28);border-radius:8px;background:rgba(99,102,241,.09)}
+.mr-selection-bar .push{margin-left:auto}
+.mr-view#view-accounts .mr-selection-bar{position:fixed;left:calc(var(--sw, 0px) + 1rem);right:1rem;bottom:1rem;z-index:4700;margin:0;padding:.65rem .75rem;background:rgba(15,23,42,.96);box-shadow:var(--s2);backdrop-filter:blur(14px)}
+.mr-view#view-accounts .mr-selection-bar .mr-pill{background:rgba(99,102,241,.22);color:#dbeafe}
+.mr-device-wall{display:grid;grid-template-columns:repeat(auto-fill,minmax(256px,1fr));gap:.82rem;align-items:start}
+.mr-device-wall.compact{grid-template-columns:repeat(auto-fill,minmax(204px,1fr))}
+.mr-device-wall.large{grid-template-columns:repeat(auto-fill,minmax(318px,1fr))}
+.mr-device-card{position:relative;overflow:hidden;border:1px solid var(--bd);border-radius:8px;background:#0b1220;min-height:374px;box-shadow:var(--s0);transition:border .16s,transform .16s,box-shadow .16s}
+.mr-device-card:hover{border-color:rgba(99,102,241,.65);transform:translateY(-1px);box-shadow:var(--s1)}
+.mr-device-card.selected{border-color:var(--p);box-shadow:0 0 0 2px rgba(99,102,241,.28)}
+.mr-device-card.online{border-color:rgba(16,185,129,.45)}
+.mr-device-card.warn{border-color:rgba(245,158,11,.62);box-shadow:0 0 0 1px rgba(245,158,11,.12)}
+.mr-device-card.offline{border-color:rgba(239,68,68,.42)}
+.mr-device-pick{position:absolute;z-index:4;left:.58rem;top:2.55rem;width:17px;height:17px;accent-color:var(--p)}
+.mr-screen{position:relative;aspect-ratio:9/16;background:linear-gradient(180deg,#111827,#050816);display:flex;align-items:center;justify-content:center;overflow:hidden;min-height:374px}
+.mr-screen img{width:100%;height:100%;object-fit:contain;display:block;background:#070b13}
+.mr-screen::before{content:'{{ (i18n or {}).get('msg_s469', "截图加载中") }}';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#64748b;font-size:.76rem;font-weight:850;background:#070b13}
+.mr-screen.has-image::before,.mr-screen.has-placeholder::before{display:none}
+.mr-screen-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:.35rem;color:var(--t3);font-size:.78rem;padding:1rem;min-height:260px}
+.mr-device-no{position:absolute;z-index:2;left:.55rem;top:.5rem;min-width:34px;height:30px;padding:0 .45rem;border-radius:7px;background:#facc15;color:#111827;font-weight:900;font-size:.94rem;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 18px rgba(0,0,0,.28)}
+.mr-device-role{position:absolute;z-index:2;right:.55rem;top:.5rem;padding:.12rem .45rem;border-radius:5px;background:color-mix(in srgb, var(--p,#1e8cf2) 88%, transparent);color:#fff;font-size:.66rem;font-weight:900}
+.mr-device-bottom{position:absolute;left:0;right:0;bottom:0;z-index:2;background:linear-gradient(180deg,rgba(2,6,23,0) 0%,rgba(2,6,23,.58) 18%,rgba(2,6,23,.94) 54%,rgba(2,6,23,.99));padding:3.55rem .66rem .62rem;color:#fff}
+.mr-device-line{display:flex;align-items:center;justify-content:space-between;gap:.45rem;min-width:0}
+.mr-device-title{font-size:.84rem;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mr-device-sub{margin-top:.22rem;color:#cbd5e1;font-size:.68rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mr-device-chips{display:flex;gap:.25rem;flex-wrap:wrap;margin-top:.45rem}
+.mr-device-chips .mr-chip:nth-child(n+4){display:none}
+.advanced-mode .mr-device-chips .mr-chip:nth-child(n+4){display:inline-flex}
+.mr-chip{display:inline-flex;align-items:center;gap:.2rem;border-radius:5px;padding:.08rem .32rem;font-size:.62rem;font-weight:850;background:rgba(100,116,139,.42);color:#cbd5e1;border:1px solid rgba(148,163,184,.22)}
+.mr-chip.ok{background:rgba(16,185,129,.2);color:#86efac;border-color:rgba(16,185,129,.3)}
+.mr-chip.warn{background:rgba(245,158,11,.2);color:#fcd34d;border-color:rgba(245,158,11,.3)}
+.mr-chip.bad{background:rgba(239,68,68,.2);color:#fca5a5;border-color:rgba(239,68,68,.3)}
+.mr-battery{display:inline-flex;align-items:center;gap:.22rem}
+.mr-battery-bar{width:28px;height:8px;border:1px solid rgba(226,232,240,.45);border-radius:2px;padding:1px;background:rgba(15,23,42,.72)}
+.mr-battery-fill{height:100%;border-radius:1px;background:#22c55e}
+.mr-battery-fill.mid{background:#f59e0b}
+.mr-battery-fill.low{background:#ef4444}
+.mr-status-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:.35rem;margin-bottom:.55rem;border:1px solid var(--bd);border-radius:8px;background:rgba(30,41,59,.74);padding:.4rem .48rem}
+.mr-status-tile{border:0;border-right:1px solid rgba(148,163,184,.18);border-radius:0;background:transparent;padding:.1rem .58rem;min-width:0}
+.mr-status-tile:last-child{border-right:0}
+.mr-status-tile b{display:block;color:var(--t);font-size:.95rem;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mr-status-tile span{display:block;margin-top:.18rem;color:var(--t3);font-size:.66rem;font-weight:800}
+.mr-cap-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.6rem;margin-bottom:.8rem}
+.mr-cap{border:1px solid var(--bd);border-radius:8px;background:var(--input);padding:.65rem .7rem;min-width:0}
+.mr-cap b{display:block;color:var(--t);font-size:.92rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mr-cap span{display:block;margin-top:.2rem;color:var(--t3);font-size:.68rem;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mr-cap.ok{border-color:rgba(16,185,129,.34);background:var(--gs)}
+.mr-cap.warn{border-color:rgba(245,158,11,.34);background:var(--as)}
+.mr-cap.off{opacity:.72}
+.mr-audio-test{border:1px solid var(--bd);border-radius:8px;background:var(--input);padding:.75rem;margin-top:.75rem}
+.mr-audio-result{margin-top:.55rem;min-height:38px;border:1px dashed var(--bd);border-radius:7px;padding:.55rem;color:var(--t2);font-size:.76rem;word-break:break-word}
+.mr-device-actions{display:flex;gap:.32rem;margin-top:.55rem;flex-wrap:wrap}
+.mr-device-actions .btn{padding:.34rem .58rem;font-size:.7rem;background:rgba(15,23,42,.92);border-color:rgba(148,163,184,.25);color:#e2e8f0;min-height:30px}
+.mr-device-actions .btn-primary{background:var(--p);border-color:var(--p);color:#fff}
+.mr-device-suggestion{margin-top:.42rem;border:1px solid rgba(245,158,11,.28);border-radius:6px;background:rgba(245,158,11,.12);color:#fde68a;font-size:.66rem;font-weight:850;padding:.24rem .38rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mr-pool-alert{border:1px solid rgba(245,158,11,.35);background:rgba(245,158,11,.1);border-radius:8px;padding:.55rem .65rem;color:var(--amber);font-size:.75rem;font-weight:800;margin-bottom:.65rem}
+.mr-pool-alert button{margin-left:.5rem;padding:.22rem .48rem;font-size:.68rem}
+.mr-drawer-mask{position:fixed;inset:0;background:rgba(2,6,23,.58);z-index:4800;display:none}
+.mr-drawer-mask.show{display:block}
+.mr-device-drawer{position:fixed;top:0;right:0;bottom:0;width:min(520px,96vw);z-index:4810;background:var(--card);border-left:1px solid var(--bd);box-shadow:var(--s2);transform:translateX(102%);visibility:hidden;transition:transform .2s ease,visibility 0s linear .2s;display:flex;flex-direction:column}
+.mr-device-drawer.show{transform:translateX(0);visibility:visible;transition:transform .2s ease}
+.mr-drawer-head{display:flex;align-items:flex-start;justify-content:space-between;gap:.8rem;padding:1rem;border-bottom:1px solid var(--bd)}
+.mr-drawer-body{padding:1rem;overflow:auto;display:flex;flex-direction:column;gap:.85rem}
+.mr-drawer-screen{border:1px solid var(--bd);border-radius:8px;background:#050816;overflow:hidden;aspect-ratio:9/16;max-height:560px;align-self:center;width:min(100%,315px)}
+.mr-drawer-screen img{width:100%;height:100%;object-fit:contain;display:block;cursor:crosshair}
+.mr-drawer-screen{position:relative}
+.mr-tap-marker{position:absolute;width:22px;height:22px;border:2px solid var(--bl-growth-400,#54a7f5);border-radius:50%;background:color-mix(in srgb, var(--bl-growth-400,#54a7f5) 22%, transparent);transform:translate(-50%,-50%);pointer-events:none;animation:tapPulse .55s ease forwards}
+@keyframes tapPulse{from{opacity:1;scale:.7}to{opacity:0;scale:1.8}}
+.mr-drawer-actions{display:flex;gap:.45rem;flex-wrap:wrap}
+.mr-drawer-tabs{display:flex;gap:.2rem;border:1px solid var(--bd);border-radius:8px;background:var(--input);padding:.16rem}
+.mr-drawer-tabs button{flex:1;border:0;background:transparent;color:var(--t2);font:inherit;font-weight:900;font-size:.74rem;padding:.42rem .3rem;border-radius:6px;cursor:pointer}
+.mr-drawer-tabs button.active{background:var(--p);color:#fff}
+.mr-drawer-tab{display:none}
+.mr-drawer-tab.active{display:flex;flex-direction:column;gap:.75rem}
+.mr-drawer-section{border:1px solid var(--bd);border-radius:8px;background:var(--input);overflow:hidden}
+.mr-drawer-section>summary{cursor:pointer;padding:.65rem .75rem;font-weight:900;color:var(--t);list-style:none}
+.mr-drawer-section>summary::-webkit-details-marker{display:none}
+.mr-drawer-section-body{padding:0 .75rem .75rem}
+.mr-conflict-list{display:flex;flex-direction:column;gap:.45rem}
+.mr-conflict-item{border:1px solid rgba(245,158,11,.28);border-radius:7px;background:rgba(245,158,11,.08);padding:.5rem .58rem;color:var(--t2);font-size:.75rem}
+.mr-lead-toolbar{display:grid;grid-template-columns:minmax(180px,1fr) 126px 132px 136px auto;gap:.45rem;align-items:center}
+.mr-lead-kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:.5rem;margin-bottom:.75rem}
+.mr-lead-kpi{border:1px solid var(--bd);border-radius:8px;background:var(--input);padding:.58rem .65rem;min-width:0}
+.mr-lead-kpi b{display:block;color:var(--t);font-size:1rem;line-height:1.1}
+.mr-lead-kpi span{display:block;margin-top:.18rem;color:var(--t3);font-size:.66rem;font-weight:850;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mr-lead-kpi.hot{border-color:rgba(16,185,129,.32);background:var(--gs)}
+.mr-lead-kpi.warn{border-color:rgba(245,158,11,.32);background:var(--as)}
+.mr-lead-card{border:1px solid var(--bd);border-left:3px solid transparent;border-radius:8px;background:var(--input);padding:.68rem;display:grid;grid-template-columns:64px minmax(0,1fr) 158px;gap:.68rem;align-items:start;margin-bottom:.55rem;transition:border .16s,background .16s,box-shadow .16s}
+.mr-lead-card.active{border-color:rgba(99,102,241,.55);box-shadow:0 0 0 1px rgba(99,102,241,.25)}
+.mr-lead-card.priority-high{border-left-color:var(--green)}
+.mr-lead-card.priority-mid{border-left-color:var(--amber)}
+.mr-lead-card.priority-low{border-left-color:rgba(148,163,184,.35)}
+.mr-score{width:50px;height:50px;border-radius:8px;border:1px solid var(--bd);display:flex;align-items:center;justify-content:center;font-weight:900;font-size:1rem;background:var(--card)}
+.mr-score.high{color:var(--green);border-color:rgba(16,185,129,.35);background:var(--gs)}
+.mr-score.mid{color:var(--amber);border-color:rgba(245,158,11,.35);background:var(--as)}
+.mr-score.low{color:var(--t3)}
+.mr-lead-top{display:flex;align-items:center;gap:.45rem;min-width:0;flex-wrap:wrap}
+.mr-lead-title{font-weight:850;color:var(--t);font-size:.86rem;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mr-lead-meta{display:flex;gap:.38rem;flex-wrap:wrap;margin-top:.28rem;color:var(--t3);font-size:.7rem}
+.mr-lang-badge{display:inline-flex;align-items:center;gap:.2rem;padding:.06rem .35rem;border-radius:5px;border:1px solid var(--bd2);cursor:pointer;font-size:.68rem;transition:border-color .15s,background .15s;user-select:none}
+.mr-lang-badge:hover{border-color:var(--p);color:var(--p)}
+.mr-lang-badge.locked{border-color:#059669;background:rgba(5,150,105,.12);color:#059669;font-weight:600}
+.mr-lang-badge.locked:hover{background:rgba(239,68,68,.12);border-color:#dc2626;color:#dc2626}
+.mr-lead-line{color:var(--t2);font-size:.76rem;line-height:1.45;margin-top:.35rem;word-break:break-word}
+.mr-lead-side{display:flex;flex-direction:column;align-items:flex-start;gap:.32rem;min-width:0}
+.mr-risk-list{display:flex;gap:.25rem;flex-wrap:wrap;margin-top:.38rem}
+.mr-risk-list span{font-size:.66rem;border:1px solid var(--bd);border-radius:5px;padding:.08rem .32rem;color:var(--t3);background:var(--card)}
+.mr-evidence{display:flex;gap:.28rem;flex-wrap:wrap;margin-top:.45rem}
+.mr-evidence span{font-size:.68rem;border:1px solid var(--bd);border-radius:999px;padding:.08rem .35rem;color:var(--t3);background:var(--card)}
+.mr-detail-hero{position:sticky;top:0;z-index:2;border:1px solid rgba(99,102,241,.28);border-radius:8px;background:var(--card);padding:.75rem;margin-bottom:.35rem;box-shadow:var(--s0)}
+.mr-detail-hero-main{display:flex;justify-content:space-between;align-items:flex-start;gap:.75rem}
+.mr-detail-hero h3{margin:0;color:var(--t);font-size:1rem;line-height:1.25}
+.mr-detail-hero .mr-actions{margin-top:.6rem}
+.mr-next-action{border:1px solid var(--bd);border-radius:8px;background:var(--input);padding:.62rem .68rem;color:var(--t2);font-size:.78rem;line-height:1.5;margin-top:.6rem}
+.mr-quick-actions{display:flex;gap:.35rem;flex-wrap:wrap;margin-top:.58rem}
+.mr-quick-actions .btn{padding:.34rem .58rem;font-size:.72rem}
+.mr-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.55rem}
+.mr-detail-cell{border:1px solid var(--bd);border-radius:7px;background:var(--input);padding:.52rem .58rem;min-width:0}
+.mr-detail-label{font-size:.66rem;color:var(--t3);font-weight:800;margin-bottom:.18rem}
+.mr-detail-value{font-size:.82rem;color:var(--t);font-weight:800;word-break:break-word}
+.mr-handoff-box{border:1px solid var(--bd);border-left:3px solid var(--p);border-radius:8px;background:var(--input);padding:.7rem;margin-top:.7rem}
+.mr-mini-table{width:100%;border-collapse:collapse;font-size:.72rem;margin-top:.45rem}
+.mr-mini-table th,.mr-mini-table td{border-bottom:1px solid var(--bd);padding:.42rem .35rem;text-align:left;vertical-align:top;color:var(--t2)}
+.mr-mini-table th{color:var(--t3);font-weight:850;white-space:nowrap}
+.mr-history-row{border-bottom:1px solid var(--bd);padding:.5rem 0}
+.mr-history-row:last-child{border-bottom:none}
+.mr-toast{position:fixed;right:1.2rem;bottom:1.2rem;z-index:5000;max-width:480px;padding:.75rem .9rem;border:1px solid var(--bd);border-radius:10px;background:var(--card);box-shadow:var(--s2);color:var(--t);font-size:.82rem;display:none;line-height:1.55}
+.mr-toast.show{display:block;animation:fadeUp .18s ease}
+.mr-toast.ok{border-color:rgba(16,185,129,.45);border-left:3px solid #10b981}
+.mr-toast.err{border-color:rgba(239,68,68,.45);border-left:3px solid #ef4444}
+.mr-toast.warn{border-color:rgba(245,158,11,.45);border-left:3px solid #f59e0b}
+.mr-toast.info{border-color:rgba(59,130,246,.45);border-left:3px solid #3b82f6}
+.mr-toast .tx-close{float:right;cursor:pointer;color:var(--t3);margin-left:10px;font-size:14px;line-height:1}
+.mr-toast .tx-close:hover{color:var(--t)}
+.mr-toast .tx-icon{display:inline-block;margin-right:6px}
+/* 错误历史铃铛 */
+.err-bell{position:fixed;right:1.2rem;bottom:5rem;z-index:4999;width:42px;height:42px;border-radius:50%;background:#1e293b;border:1px solid #334155;color:#cbd5e1;cursor:pointer;display:none;align-items:center;justify-content:center;font-size:18px;box-shadow:var(--s2);transition:.16s}
+.err-bell:hover{background:#334155;color:#fff}
+.err-bell.has-errs{display:flex}
+.err-bell .badge{position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:2px 6px;border-radius:10px;min-width:18px;text-align:center;line-height:1.2}
+.err-panel{position:fixed;right:1.2rem;bottom:8rem;z-index:5001;width:420px;max-height:60vh;background:#0f172a;border:1px solid #334155;border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,0.5);display:none;flex-direction:column}
+.err-panel.show{display:flex}
+.err-panel-head{padding:10px 14px;border-bottom:1px solid #334155;display:flex;align-items:center;justify-content:space-between;font-weight:600;color:#f1f5f9;font-size:13px}
+.err-panel-head button{background:transparent;border:1px solid #334155;color:#cbd5e1;padding:4px 8px;border-radius:6px;cursor:pointer;font-size:11px}
+.err-panel-head button:hover{background:#1e293b}
+.err-panel-list{overflow:auto;padding:8px}
+.err-item{padding:10px;border-bottom:1px solid rgba(51,65,85,.5);font-size:12px;color:#cbd5e1}
+.err-item:last-child{border-bottom:0}
+.err-item .ts{color:#64748b;font-size:10px;margin-bottom:4px}
+.err-item .msg{color:#fca5a5;font-family:ui-monospace,monospace;word-break:break-all}
+.err-item .ctx{color:#94a3b8;font-size:11px;margin-top:4px}
+/* 确认对话框 */
+.cfm-mask{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9998;display:none;align-items:center;justify-content:center;backdrop-filter:blur(2px)}
+.cfm-mask.show{display:flex}
+.cfm-card{background:#0f172a;border:1px solid #334155;border-radius:12px;width:min(440px,92vw);padding:24px;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+.cfm-card h3{margin:0 0 8px;color:#f1f5f9;font-size:16px}
+.cfm-card .cfm-msg{color:#cbd5e1;font-size:13px;line-height:1.6;margin-bottom:18px}
+.cfm-card .cfm-actions{display:flex;gap:8px;justify-content:flex-end}
+.cfm-card .cfm-btn{padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;border:1px solid #334155;background:#1e293b;color:#cbd5e1;transition:.16s}
+.cfm-card .cfm-btn:hover{background:#334155;color:#fff}
+.cfm-card .cfm-btn.primary{background:var(--tk-brand,#1e8cf2);border-color:var(--tk-brand,#1e8cf2);color:#fff}
+.cfm-card .cfm-btn.primary:hover{background:var(--bl-growth-600,#0d76d9)}
+.cfm-card .cfm-btn.danger{background:#ef4444;border-color:#ef4444;color:#fff}
+.cfm-card .cfm-btn.danger:hover{background:#dc2626}
+@media(max-width:1180px){
+  .mr-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .mr-grid,.mr-grid.equal,.mr-grid.three,.mr-split{grid-template-columns:1fr}
+  .mr-lead-toolbar{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .mr-lead-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .mr-account{grid-template-columns:minmax(0,1fr) auto}
+  .mr-account .mr-note{grid-column:1/-1}
+  .mr-account-actions{grid-column:1/-1;justify-content:flex-start}
+}
+/* ── Settings sub-tabs ─────────────────────────── */
+.st-bar{display:flex;gap:.25rem;padding:.25rem;border:1px solid var(--bd);border-radius:10px;background:var(--input);overflow-x:auto;scrollbar-width:thin;margin-bottom:.9rem}
+.st-tab{border:0;background:transparent;color:var(--t2);font-family:inherit;font-size:.8rem;font-weight:700;padding:.45rem .75rem;border-radius:7px;cursor:pointer;white-space:nowrap;transition:.15s;display:flex;align-items:center;gap:.32rem}
+.st-tab:hover{background:rgba(99,102,241,.08);color:var(--t)}
+.st-tab.active{background:var(--card);color:var(--p);box-shadow:var(--s0)}
+.st-dot{width:7px;height:7px;border-radius:999px;background:var(--red);opacity:0;flex-shrink:0;transition:.15s}
+.st-tab.has-danger .st-dot{opacity:1}
+.st-pane{display:none}
+.st-pane.active{display:block}
+/* ── Unsaved banner ─────────────────────────────── */
+.st-unsaved{display:flex;align-items:center;gap:.65rem;padding:.5rem .8rem;border:1px solid rgba(245,158,11,.4);border-radius:8px;background:rgba(245,158,11,.06);color:var(--amber);font-size:.8rem;font-weight:700;margin-bottom:.8rem}
+.st-unsaved span{flex:1}
+.st-unsaved .btn-discard{background:none;border:none;color:var(--amber);cursor:pointer;font-size:.8rem;text-decoration:underline;padding:0;opacity:.8}
+/* ── Danger banner ──────────────────────────────── */
+.mr-danger-banner{padding:.45rem .7rem;border-radius:7px;border:1px solid rgba(239,68,68,.35);background:rgba(239,68,68,.07);color:var(--red);font-size:.78rem;font-weight:600;margin-bottom:.6rem;display:none}
+.mr-danger-banner.visible{display:block}
+.danger-label::before{content:'⚠ ';color:var(--red)}
+/* ── Mode cards (reply_mode) ────────────────────── */
+.mode-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem;margin-top:.3rem}
+.mode-card{border:1px solid var(--bd);border-radius:8px;padding:.65rem .55rem;cursor:pointer;text-align:center;transition:.15s;background:var(--input);user-select:none}
+.mode-card:hover{border-color:var(--p)}
+.mode-card.active{border-color:var(--p);background:rgba(99,102,241,.08);box-shadow:0 0 0 1px rgba(99,102,241,.18)}
+.mode-card b{display:block;font-size:.82rem;margin-bottom:.22rem;color:var(--t)}
+.mode-card small{font-size:.7rem;color:var(--t3);line-height:1.4}
+/* ── Duration display ───────────────────────────── */
+.dur-display{font-size:.73rem;color:var(--p);font-weight:700;margin-top:.22rem;min-height:.9rem}
+/* ── Probability slider ─────────────────────────── */
+.prob-row{display:flex;align-items:center;gap:.65rem;margin-top:.35rem}
+.prob-row input[type=range]{flex:1;accent-color:var(--p);height:4px}
+.prob-val{font-size:.8rem;color:var(--p);font-weight:700;min-width:40px;text-align:right}
+.prob-note{font-size:.73rem;color:var(--t3);margin-top:.25rem}
+/* ── Tooltip ────────────────────────────────────── */
+.mr-tip{cursor:help;color:var(--t3);font-size:.75rem;user-select:none;margin-left:.18rem}
+/* ── Settings health strip ──────────────────────── */
+.st-health{display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;padding:.42rem .75rem;border:1px solid var(--bd);border-radius:8px;background:var(--input);margin-bottom:.7rem;font-size:.74rem;font-weight:700;color:var(--t2)}
+.st-health-dot{width:8px;height:8px;border-radius:999px;flex-shrink:0;box-shadow:0 0 7px currentColor;transition:background .4s}
+.st-h-sep{opacity:.25;user-select:none}
+.st-h-item{display:flex;align-items:center;gap:.28rem}
+.st-h-item.ok{color:var(--green)}.st-h-item.warn{color:var(--amber)}.st-h-item.danger{color:var(--red)}
+/* ── Preset dropdown ────────────────────────────── */
+.st-bar-right{margin-left:auto;display:flex;gap:.3rem;align-items:center}
+.st-preset-wrap{position:relative}
+.st-icon-btn{border:1px solid var(--bd);background:transparent;color:var(--t2);font-family:inherit;font-size:.78rem;font-weight:700;padding:.38rem .6rem;border-radius:7px;cursor:pointer;white-space:nowrap;transition:.15s;line-height:1}
+.st-icon-btn:hover{border-color:var(--p);color:var(--p);background:rgba(99,102,241,.06)}
+.st-icon-btn.active{border-color:var(--p);color:var(--p);background:rgba(99,102,241,.1)}
+.st-preset-drop{position:absolute;top:calc(100% + 7px);right:0;z-index:120;width:300px;background:var(--card);border:1px solid var(--bd);border-radius:10px;box-shadow:var(--s2);padding:.5rem;display:none}
+.st-preset-drop.open{display:block}
+.st-preset-item{border:1px solid var(--bd);border-radius:8px;padding:.6rem .7rem;cursor:pointer;margin-bottom:.38rem;transition:.15s;background:var(--input)}
+.st-preset-item:last-child{margin-bottom:0}
+.st-preset-item:hover{border-color:var(--p);background:rgba(99,102,241,.06)}
+.st-preset-item b{display:block;font-size:.82rem;color:var(--t);margin-bottom:.18rem}
+.st-preset-item small{font-size:.7rem;color:var(--t3);line-height:1.45}
+/* ── Quick search ───────────────────────────────── */
+.st-search-box{display:none;align-items:center;gap:.35rem;margin-bottom:.75rem}
+.st-search-box.open{display:flex}
+.st-search-box input{flex:1;border:1px solid var(--p);background:var(--input);color:var(--t);font-family:inherit;font-size:.8rem;padding:.4rem .7rem;border-radius:7px;outline:none}
+.st-search-box input:focus{box-shadow:0 0 0 2px rgba(99,102,241,.22)}
+.st-search-stat{font-size:.72rem;color:var(--t3);white-space:nowrap}
+.st-hl{outline:2px solid var(--amber);outline-offset:2px;border-radius:4px}
+@keyframes hlFade{from{outline-color:var(--amber)}to{outline-color:var(--p)}}
+.st-hl-anim{animation:hlFade 1.2s ease forwards}
+@media(min-width:1181px){
+  .mr-view#view-accounts .mr-status-strip{grid-template-columns:repeat(5,minmax(128px,1fr))}
+}
+@media(max-width:720px){
+  body:has(.mr-page) .wrap{padding:.75rem .75rem 2rem}
+  .mr-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .mr-field-grid,.mr-field-grid.three{grid-template-columns:1fr}
+  .mr-view#view-accounts .rpa-card-head{flex-wrap:wrap}
+  .mr-view#view-accounts .rpa-card-head .mr-toolbar{width:100%;justify-content:flex-start}
+  .mr-lead-toolbar{grid-template-columns:1fr}
+  .mr-lead-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .mr-binding-grid{grid-template-columns:1fr}
+  .mr-detail-grid{grid-template-columns:1fr}
+  .mr-strategy-hero{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .mr-flow{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .mr-sim-grid,.mr-stage-grid{grid-template-columns:1fr}
+  .mr-status-strip{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .mr-cap-strip{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .mr-device-toolbar select{max-width:100%}
+  .mr-view#view-accounts .mr-selection-bar{left:.75rem;right:.75rem;bottom:.75rem}
+  .mr-device-wall,.mr-device-wall.compact,.mr-device-wall.large{grid-template-columns:1fr}
+  .mr-device-card,.mr-screen{min-height:430px}
+  .mr-device-drawer{left:0!important;right:auto!important;width:100vw!important;max-width:none!important}
+  .mr-device-drawer.show{transform:none!important}
+  .mr-drawer-screen{width:min(100%,300px);max-height:430px}
+  .mr-lead-card{grid-template-columns:1fr}
+  .mr-score{width:100%;height:44px}
+  .mr-head-actions{width:100%}
+}
+/* ── 统一 4 平台 Hero 视觉对齐 ───────────────────────────── */
+.mr-page .rpa-hero{margin-bottom:.7rem}
+.mr-page.monitor-mode .rpa-hero{padding:.7rem 1rem}
+.mr-page.monitor-mode .rpa-hero .rpa-hero-name{font-size:.92rem}
+.mr-page.monitor-mode .rpa-hero .rpa-kpi-n{font-size:1.05rem}
+/* mr-tabs 视觉跟 .st-bar 对齐 */
+.mr-tabs{display:flex;gap:.25rem;padding:0;border:none;border-bottom:2px solid var(--bd);background:transparent;backdrop-filter:none;border-radius:0;flex-wrap:wrap;position:sticky;top:0;z-index:50}
+.mr-tab{padding:.55rem 1.15rem;border:none;background:transparent;color:var(--t2);font-size:.875rem;font-weight:600;border-radius:8px 8px 0 0;border-bottom:2px solid transparent;margin-bottom:-2px;cursor:pointer;transition:all .15s;box-shadow:none}
+.mr-tab:hover{color:var(--t);background:var(--input)}
+.mr-tab.active{color:var(--p);border-bottom:2px solid var(--p);background:var(--card);box-shadow:none}
+.mr-tab.active::after{display:none}
+</style>
+{# 统一 RPA 组件库（4 平台共用）#}
+{% include "_rpa_shared_styles.html" %}
+{# 统一 RPA JS 工具库 #}
+{% include "_rpa_shared_scripts.html" %}
+<div class="mr-page">
+  {# ══ Hero（统一 4 平台样式）══ #}
+  <div class="rpa-hero">
+    <div class="rpa-hero-avatar theme-messenger">
+      <svg viewBox="0 0 24 24" fill="#fff"><path d="M12 2C6.477 2 2 6.145 2 11.259c0 2.913 1.454 5.512 3.726 7.21V22l3.405-1.869c.91.252 1.872.388 2.869.388 5.523 0 10-4.145 10-9.259S17.523 2 12 2zm.997 12.467l-2.546-2.715-4.97 2.715 5.467-5.804 2.61 2.715 4.905-2.715-5.466 5.804z"/></svg>
+    </div>
+    <div class="rpa-hero-info">
+      <div class="rpa-hero-name">
+        <span class="rpa-status-dot neutral" id="mr-status-dot"></span>
+        <span>{{ (i18n or {}).get('msg_s001', "Messenger RPA 运营台") }}</span>
+      </div>
+      <div class="rpa-hero-sub" id="mr-status-text">{{ (i18n or {}).get('msg_s002', "正在读取运行状态…") }}</div>
+    </div>
+    {# P1-1 KPI 首排统一：共享概念（AI 已发 / 待处理，chc_kpi_*）按四页标准顺序在前，
+       平台特色位（高价值/在线账号/最近运行/LINE 转化）缀后；元素 id 不变=JS 零改动 #}
+    <div class="rpa-kpi-row">
+      <div class="rpa-kpi"><span class="rpa-kpi-n" id="kpi-sent">0</span><span class="rpa-kpi-l">24h {{ (i18n or {}).get('chc_kpi_sent', "AI 已发") }}</span></div>
+      <div class="rpa-kpi"><span class="rpa-kpi-n amber" id="kpi-pending">0</span><span class="rpa-kpi-l">{{ (i18n or {}).get('chc_kpi_pending', "待处理") }}</span></div>
+      <div class="rpa-kpi"><span class="rpa-kpi-n green" id="kpi-high">0</span><span class="rpa-kpi-l">{{ (i18n or {}).get('msg_s005', "高价值") }}</span></div>
+      <div class="rpa-kpi"><span class="rpa-kpi-n" id="kpi-online" style="color:var(--th-ink-violet5,#6d28d9)">0/0</span><span class="rpa-kpi-l">{{ (i18n or {}).get('msg_s006', "在线账号") }}</span></div>
+      <div class="rpa-kpi"><span class="rpa-kpi-n" id="kpi-runs">0</span><span class="rpa-kpi-l">{{ (i18n or {}).get('msg_s007', "最近运行") }}</span></div>
+      <div class="rpa-kpi"><span class="rpa-kpi-n" id="kpi-line">--</span><span class="rpa-kpi-l">{{ (i18n or {}).get('msg_s008', "LINE 转化") }}</span></div>
+    </div>
+    {# 「管理账号」入口收敛到上方平台连接卡（2026-07-29） #}
+  </div>
+
+  {# P1-3 控制条统一（chc_act_*）：触发 → 暂停时长 → 暂停 → 恢复 → 手动发送，
+     与 LINE/WA 同序同词；按钮 id 不变=JS 零改动，时长 select 由 pauseAll 读取 #}
+  <div style="display:flex;gap:.5rem;align-items:center;margin-bottom:.7rem;flex-wrap:wrap">
+    <button class="btn-p" id="btn-trigger">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      {{ (i18n or {}).get('chc_act_trigger', "立即触发一轮") }}
+    </button>
+    <select id="mr-pause-select" class="f-inp" style="width:auto;padding:.45rem .7rem;font-size:.82rem">
+      <option value="300">{{ (i18n or {}).get('chc_act_pause_5m', "暂停 5 分钟") }}</option>
+      <option value="900">{{ (i18n or {}).get('chc_act_pause_15m', "暂停 15 分钟") }}</option>
+      <option value="1800">{{ (i18n or {}).get('chc_act_pause_30m', "暂停 30 分钟") }}</option>
+      <option value="3600">{{ (i18n or {}).get('chc_act_pause_1h', "暂停 1 小时") }}</option>
+      <option value="10800">{{ (i18n or {}).get('chc_act_pause_3h', "暂停 3 小时") }}</option>
+    </select>
+    <button class="btn-sec" id="btn-pause">⏸ {{ (i18n or {}).get('chc_act_pause', "暂停") }}</button>
+    <button class="btn-sec" id="btn-resume" style="display:none">▶ {{ (i18n or {}).get('chc_act_resume', "立即恢复") }}</button>
+    <button class="btn-sec" id="btn-send-manual" title="{{ (i18n or {}).get('msg_s013', "主动给指定会话发送一条消息（入队，runner 自动处理）") }}" onclick="mrOpenSendManual()">✉ {{ (i18n or {}).get('chc_act_send_manual', "手动发送") }}</button>
+  </div>
+
+  <!-- P28: 手动发送模态框 -->
+  <div id="mr-send-modal" style="display:none;position:fixed;inset:0;background:var(--th-bg-scrim55,rgba(0,0,0,.55));z-index:1000;align-items:center;justify-content:center" onclick="if(event.target===this)mrCloseSendManual()">
+    <div style="background:var(--card);border:1px solid var(--bd2);border-radius:14px;padding:1.4rem 1.6rem;width:min(460px,92vw);box-shadow:0 12px 40px rgba(0,0,0,.3)">
+      <div style="display:flex;align-items:center;gap:.7rem;margin-bottom:1rem">
+        <strong style="font-size:1rem">{{ (i18n or {}).get('msg_s014', "手动发送消息") }}</strong>
+        <button onclick="mrCloseSendManual()" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:1.2rem;color:var(--t3)">✕</button>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:.6rem">
+        <label style="font-size:.8rem;color:var(--t2);display:flex;flex-direction:column;gap:.25rem">
+          Chat Key <span style="font-size:.72rem;color:var(--t3)">{{ (i18n or {}).get('msg_s015', "(必填，例：messenger_rpa:name:Alice)") }}</span>
+          <input id="mr-sm-chat-key" class="f-inp" type="text" placeholder="messenger_rpa:name:Alice">
+        </label>
+        <label style="font-size:.8rem;color:var(--t2);display:flex;flex-direction:column;gap:.25rem">
+          {{ (i18n or {}).get('msg_s461', '对方显示名') }} <span style="font-size:.72rem;color:var(--t3)">{{ (i18n or {}).get('msg_s016', "(可选，便于查询)") }}</span>
+          <input id="mr-sm-peer-name" class="f-inp" type="text" placeholder="Alice">
+        </label>
+        <label style="font-size:.8rem;color:var(--t2);display:flex;flex-direction:column;gap:.25rem">
+          {{ (i18n or {}).get('msg_s462', '消息内容') }} <span style="font-size:.72rem;color:var(--t3)">{{ (i18n or {}).get('msg_s017', "(必填)") }}</span>
+          <textarea id="mr-sm-text" class="f-inp" rows="3" style="resize:vertical" placeholder="{{ (i18n or {}).get('msg_s018', "你好，这是一条手动发送的消息") }}"></textarea>
+        </label>
+        <div id="mr-sm-msg" style="font-size:.78rem;min-height:1.2em"></div>
+        <div style="display:flex;gap:.5rem;justify-content:flex-end">
+          <button class="btn-sec btn-sm" onclick="mrCloseSendManual()">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
+          <button class="btn-p btn-sm" id="mr-sm-submit" onclick="mrSubmitSendManual()">{{ (i18n or {}).get('msg_s019', "入队发送") }}</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# P1-2 五段式统一词表（chc_tab_*）：公共段 监控·待审·配置·运维 按标准顺序在前，
+     平台特有 Tab（客户线索/人设策略/账号设备）保留原词条缀尾；data-tab 内部名不变=零 JS 改动 #}
+  <div class="mr-tabs" role="tablist">
+    <button class="mr-tab active" data-tab="overview" role="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>{{ (i18n or {}).get('chc_tab_monitor', "监控") }}</button>
+    <button class="mr-tab" data-tab="approvals" role="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>{{ (i18n or {}).get('chc_tab_pending', "待审") }}</button>
+    <button class="mr-tab" data-tab="settings" role="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>{{ (i18n or {}).get('chc_tab_config', "配置") }}</button>
+    <button class="mr-tab" data-tab="runs" role="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg>{{ (i18n or {}).get('chc_tab_ops', "运维") }}</button>
+    <button class="mr-tab" data-tab="funnel" role="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/></svg>{{ (i18n or {}).get('chc_tab_funnel', "漏斗") }}</button>
+    <button class="mr-tab" data-tab="leads" role="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>{{ (i18n or {}).get('msg_s021', "客户线索") }}</button>
+    <button class="mr-tab" data-tab="personas" role="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/><circle cx="18.5" cy="7" r="2.5" fill="currentColor" opacity=".45"/></svg>{{ (i18n or {}).get('msg_s022', "人设策略") }}</button>
+    <button class="mr-tab" data-tab="accounts" role="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>{{ (i18n or {}).get('msg_s023', "账号设备") }}</button>
+  </div>
+
+  {# P2-1 换壳滩头（监控 view 4 卡）：mr-panel → 共享 rpa-card 族；元素 id 全部保留=JS 零改动。
+     标题+副标题写法与 LINE/TG 同构（title 内嵌小字 span）；本页自研漏斗改名「引流漏斗」与
+     共享 Journey 漏斗（漏斗 Tab）语义分家。 #}
+  <section class="mr-view active" id="view-overview">
+    <div class="mr-grid">
+      <div class="rpa-card">
+        <div class="rpa-card-head">
+          <div class="rpa-card-icon blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/></svg></div>
+          <div class="rpa-card-title" title="{{ (i18n or {}).get('msg_funnel_diversion_t', 'Messenger→LINE 引流阶段漏斗（本页自有口径）；跨平台客户旅程漏斗见「漏斗」Tab') }}">{{ (i18n or {}).get('msg_funnel_diversion', "引流漏斗") }}
+            <span id="funnel-total" style="font-size:.72rem;color:var(--t3);margin-left:.5rem;font-weight:400">{{ (i18n or {}).get('msg_s027', "等待数据") }}</span></div>
+          <div class="actions mr-toolbar" id="funnel-rates" style="margin-left:auto"></div>
+        </div>
+        <div id="funnel-bars"><div class="mr-empty">{{ (i18n or {}).get('rpa_loading', "加载中...") }}</div></div>
+      </div>
+      <div class="rpa-card">
+        <div class="rpa-card-head">
+          <div class="rpa-card-icon green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></div>
+          <div class="rpa-card-title">{{ (i18n or {}).get('msg_s028', "今日动作") }}
+            <span style="font-size:.72rem;color:var(--t3);margin-left:.5rem;font-weight:400">{{ (i18n or {}).get('msg_s029', "用于判断系统是否在正确推进") }}</span></div>
+        </div>
+        <div class="mr-stack">
+          <div class="mr-row"><span class="mr-name">{{ (i18n or {}).get('msg_s030', "待审批 SLA") }}</span><span id="overview-sla" class="mr-pill">--</span></div>
+          <div class="mr-row"><span class="mr-name">{{ (i18n or {}).get('msg_s031', "人设默认值") }}</span><span id="overview-persona" class="mr-pill">--</span></div>
+          <div class="mr-row"><span class="mr-name">{{ (i18n or {}).get('msg_s032', "线索规则") }}</span><span id="overview-lead-rule" class="mr-pill">--</span></div>
+          <div class="mr-row"><span class="mr-name">{{ (i18n or {}).get('msg_s033', "客服 LINE") }}</span><span id="overview-line-id" class="mr-pill">{{ (i18n or {}).get('dash.m.not_configured', "未配置") }}</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="mr-grid equal">
+      <div class="rpa-card">
+        <div class="rpa-card-head">
+          <div class="rpa-card-icon amber"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26"/></svg></div>
+          <div class="rpa-card-title">{{ (i18n or {}).get('msg_s034', "高价值线索") }}
+            <span style="font-size:.72rem;color:var(--t3);margin-left:.5rem;font-weight:400">{{ (i18n or {}).get('msg_s035', "优先由人工客服接管") }}</span></div>
+          <div class="actions" style="margin-left:auto"><button class="btn" data-goto="leads">{{ (i18n or {}).get('view_all', "查看全部") }}</button></div>
+        </div>
+        <div id="overview-leads" class="mr-scroll short"><div class="mr-empty">{{ (i18n or {}).get('rpa_loading', "加载中...") }}</div></div>
+      </div>
+      <div class="rpa-card">
+        <div class="rpa-card-head">
+          <div class="rpa-card-icon purple"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg></div>
+          <div class="rpa-card-title">{{ (i18n or {}).get('msg_s036', "最近运行") }}
+            <span style="font-size:.72rem;color:var(--t3);margin-left:.5rem;font-weight:400">{{ (i18n or {}).get('msg_s037', "展示最近 RPA 决策和失败点") }}</span></div>
+          <div class="actions" style="margin-left:auto"><button class="btn" data-goto="runs">{{ (i18n or {}).get('msg_s038', "数据中心") }}</button></div>
+        </div>
+        <div id="overview-runs" class="mr-scroll short"><div class="mr-empty">{{ (i18n or {}).get('rpa_loading', "加载中...") }}</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="mr-view" id="view-accounts">
+    <div class="mr-grid accounts-layout" id="accounts-layout">
+      <div class="rpa-card">
+        <div class="rpa-card-head">
+          <div class="rpa-card-icon blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg></div>
+          <div class="rpa-card-title">{{ (i18n or {}).get('msg_s039', "账号设备池") }}
+            <span id="accounts-summary" style="font-size:.72rem;color:var(--t3);margin-left:.5rem;font-weight:400">{{ (i18n or {}).get('msg_s040', "读取中") }}</span></div>
+        </div>
+        <div class="mr-device-toolbar primary" id="pool-toolbar">
+          <div class="mr-toolbar-left">
+            <div class="mr-seg" aria-label="{{ (i18n or {}).get('msg_s041', "设备筛选") }}">
+              <button type="button" class="active" data-pool-filter="all">{{ (i18n or {}).get('rpa_all', "全部") }}</button>
+              <button type="button" data-pool-filter="issue">{{ (i18n or {}).get('msg_s042', "需处理") }}</button>
+              <button type="button" data-pool-filter="unbound">{{ (i18n or {}).get('psn_sf_unbound', "未绑定") }}</button>
+              <button type="button" data-pool-filter="online">{{ (i18n or {}).get('dash.pr.online', "在线") }}</button>
+              <button type="button" class="mr-advanced-only" data-pool-filter="offline">{{ (i18n or {}).get('dash.pr.offline', "离线") }}</button>
+              <button type="button" class="mr-advanced-only" data-pool-filter="vpn">VPN</button>
+              <button type="button" class="mr-advanced-only" data-pool-filter="task">{{ (i18n or {}).get('msg_s043', "任务") }}</button>
+            </div>
+            <select id="pool-host-filter" title="{{ (i18n or {}).get('msg_s044', "按主机筛选") }}">
+              <option value="all">{{ (i18n or {}).get('msg_s045', "全部主机") }}</option>
+            </select>
+            <span class="mr-muted" id="mobile-auto-sync">{{ (i18n or {}).get('msg_s046', "mobile-auto 同步中") }}</span>
+          </div>
+          <div class="mr-toolbar-right">
+            <button class="btn" id="btn-pool-select-visible">{{ (i18n or {}).get('msg_s047', "全选可见") }}</button>
+            <button class="btn mr-advanced-only" id="btn-pool-repair-offline">{{ (i18n or {}).get('msg_s048', "修复离线") }}</button>
+            <button class="btn mr-advanced-only" id="btn-pool-check-vpn">{{ (i18n or {}).get('msg_s049', "检查 VPN") }}</button>
+            <label class="mr-check" style="font-size:.72rem"><input type="checkbox" id="pool-auto-refresh" checked>{{ (i18n or {}).get('msg_s050', "自动刷新") }}</label>
+            <label class="mr-check" style="font-size:.72rem"><input type="checkbox" id="pool-advanced-mode">{{ (i18n or {}).get('msg_s051', "高级模式") }}</label>
+            <div class="mr-seg mr-advanced-only" aria-label="{{ (i18n or {}).get('msg_s052', "卡片尺寸") }}">
+              <button type="button" data-pool-size="compact">{{ (i18n or {}).get('msg_s053', "小") }}</button>
+              <button type="button" class="active" data-pool-size="normal">{{ (i18n or {}).get('inbox.xls.zh', "中") }}</button>
+              <button type="button" data-pool-size="large">{{ (i18n or {}).get('msg_s054', "大屏") }}</button>
+            </div>
+          </div>
+        </div>
+        <div class="mr-selection-bar" id="pool-selection-bar" style="display:none">
+          <span class="mr-pill" id="pool-selected-count">{{ (i18n or {}).get('msg_s055', "已选 0") }}</span>
+          <button class="btn" id="btn-pool-clear">{{ (i18n or {}).get('logs_clear', "清空") }}</button>
+          <span class="push"></span>
+          <button class="btn btn-primary" id="btn-pool-run">{{ (i18n or {}).get('msg_s056', "批量执行") }}</button>
+          <button class="btn" id="btn-pool-pause">{{ (i18n or {}).get('msg_s057', "批量暂停") }}</button>
+          <button class="btn" id="btn-pool-resume">{{ (i18n or {}).get('msg_s058', "批量恢复") }}</button>
+        </div>
+        <div id="accounts-list" class="mr-scroll tall"><div class="mr-empty">{{ (i18n or {}).get('rpa_loading', "加载中...") }}</div></div>
+      </div>
+      <div class="rpa-card mr-advanced-only">
+        <div class="rpa-card-head">
+          <div class="rpa-card-icon purple"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg></div>
+          <div class="rpa-card-title">{{ (i18n or {}).get('msg_s059', "跨账号协调") }}
+            <span id="coord-summary" style="font-size:.72rem;color:var(--t3);margin-left:.5rem;font-weight:400">{{ (i18n or {}).get('msg_s040', "读取中") }}</span></div>
+        </div>
+        <div id="coord-list" class="mr-scroll short"><div class="mr-empty">{{ (i18n or {}).get('rpa_loading', "加载中...") }}</div></div>
+        <div class="rpa-sect-div"></div>
+        <div class="rpa-card-head">
+          <div class="rpa-card-icon green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg></div>
+          <div class="rpa-card-title">{{ (i18n or {}).get('msg_s060', "手机/账号/人设绑定") }}
+            <span id="bindings-summary" style="font-size:.72rem;color:var(--t3);margin-left:.5rem;font-weight:400">{{ (i18n or {}).get('msg_s040', "读取中") }}</span></div>
+          <div class="actions" style="margin-left:auto"><button class="btn btn-primary" id="btn-save-bindings">{{ (i18n or {}).get('msg_s061', "保存绑定") }}</button></div>
+        </div>
+        <div id="bindings-list" class="mr-scroll tall"><div class="mr-empty">{{ (i18n or {}).get('rpa_loading', "加载中...") }}</div></div>
+      </div>
+    </div>
+
+    <!-- ── P1-E3: 紧急停发应急工具（默认折叠，应急时一展开就能用）── -->
+    <details class="rpa-card" id="emergency-stop-panel" style="margin-top:1rem;border-color:rgba(239,68,68,.35)">
+      <summary style="cursor:pointer;font-weight:600;color:var(--th-ink-red5,#b91c1c);font-size:.95rem;padding:.6rem .75rem;list-style:revert">
+        {{ (i18n or {}).get('msg_s446', '🚨 应急工具：紧急停发某 chat（即刻生效，重启不丢）') }}
+      </summary>
+      <div style="padding:.75rem;display:grid;gap:.7rem">
+        <div style="font-size:.74rem;color:var(--mt);line-height:1.55">
+          <b>{{ (i18n or {}).get('msg_s062', "使用场景") }}</b>{{ (i18n or {}).get('msg_s447', '：客户被反复刷屏 / 错误回复 / 舆情应急。一键写永久黑名单') }}
+          {{ (i18n or {}).get('msg_s448', '+ 设短期内存 cooldown（默认 30 分钟）。30 分钟后内存 cooldown 自然失效，') }}
+          {{ (i18n or {}).get('msg_s449', '但永久黑名单仍在；运营点&ldquo;解除&rdquo;才完全放行。') }}
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem">
+          <label style="display:flex;flex-direction:column;gap:.2rem">
+            <span style="font-size:.7rem;color:var(--mt)">{{ (i18n or {}).get('msg_s063', "账号 ID（如 vwnj_test）") }}</span>
+            <input id="es-account-id" placeholder="account_id" autocomplete="off" />
+          </label>
+          <label style="display:flex;flex-direction:column;gap:.2rem">
+            <span style="font-size:.7rem;color:var(--mt)">{{ (i18n or {}).get('msg_s064', "Chat 名（peer 显示名）") }}</span>
+            <input id="es-chat-name" placeholder="{{ (i18n or {}).get('msg_s065', "如 Yunshan Zan") }}" autocomplete="off" />
+          </label>
+        </div>
+        <label style="display:flex;flex-direction:column;gap:.2rem">
+          <span style="font-size:.7rem;color:var(--mt)">{{ (i18n or {}).get('msg_s066', "原因（写明白便于审计追溯）") }}</span>
+          <input id="es-reason" placeholder="{{ (i18n or {}).get('msg_s067', "如：客户投诉刷屏 / OCR 误识死循环 / 风控触发") }}" autocomplete="off" />
+        </label>
+        <div style="display:flex;gap:.5rem;align-items:flex-end">
+          <label style="flex:1;display:flex;flex-direction:column;gap:.2rem">
+            <span style="font-size:.7rem;color:var(--mt)">{{ (i18n or {}).get('msg_s068', "内存 cooldown 秒数（默认 1800s = 30 分钟）") }}</span>
+            <input id="es-self-skip-sec" type="number" value="1800" min="0" max="86400" />
+          </label>
+          <button class="btn" id="btn-emergency-stop"
+                  style="background:var(--th-bg-red6,#dc2626);color:var(--th-ink-inverse,#fff);border-color:var(--th-bd-red6,#dc2626);font-weight:600;flex:0 0 auto">
+            {{ (i18n or {}).get('msg_s450', '🚨 立即停发') }}
+          </button>
+        </div>
+        <div style="border-top:1px solid var(--bd);padding-top:.5rem">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.4rem">
+            <span style="font-size:.78rem;color:var(--mt)">{{ (i18n or {}).get('msg_s069', "当前已停发列表（仅当前账号）") }}</span>
+            <button class="btn" id="btn-emergency-refresh"
+                    style="font-size:.7rem;padding:.2rem .55rem">{{ (i18n or {}).get('refresh', "刷新") }}</button>
+          </div>
+          <div id="emergency-stop-list" style="font-size:.75rem;max-height:240px;overflow:auto">
+            <div class="mr-empty" style="padding:.4rem">{{ (i18n or {}).get('msg_s451', '填账号 ID 后点&ldquo;刷新&rdquo;查看') }}</div>
+          </div>
+        </div>
+      </div>
+    </details>
+  </section>
+
+  <section class="mr-view" id="view-personas">
+    <div style="background:var(--th-bg-brand08,rgba(91,124,246,.08));border:1px solid var(--th-bd-brand20,rgba(91,124,246,.2));border-radius:10px;padding:.6rem 1rem;margin-bottom:.9rem;font-size:.82rem;display:flex;align-items:center;gap:.7rem">
+      <span>🎭</span>
+      <span>{{ (i18n or {}).get('msg_s070', "人设统一管理入口已迁移至 ") }}<a href="/personas" style="color:var(--p);font-weight:600">{{ (i18n or {}).get('msg_s071', "人设工作室（/personas）") }}</a>{{ (i18n or {}).get('msg_s072', "，支持全渠道（Telegram / Messenger / WhatsApp）账号人设路由查看与编辑。此处仅保留 Messenger 策略状态视图。") }}</span>
+    </div>
+    <div class="mr-strategy-hero" id="strategy-hero">
+      <div class="mr-strategy-card"><b>--</b><span>{{ (i18n or {}).get('msg_s073', "策略账号") }}</span></div>
+      <div class="mr-strategy-card"><b>--</b><span>{{ (i18n or {}).get('msg_s074', "自动队列") }}</span></div>
+      <div class="mr-strategy-card"><b>--</b><span>{{ (i18n or {}).get('msg_s075', "会话状态") }}</span></div>
+      <div class="mr-strategy-card"><b>--</b><span>{{ (i18n or {}).get('msg_s076', "平均健康度") }}</span></div>
+    </div>
+    <!-- 自动策略运行流：改为可折叠，默认收起 -->
+    <details class="rpa-card" style="padding:0;margin-bottom:0">
+      <summary style="padding:14px 16px;cursor:pointer;display:flex;align-items:center;gap:8px;list-style:none;border-radius:8px;font-weight:600;color:var(--t2)">
+        <span style="font-size:13px">{{ (i18n or {}).get('msg_s077', "📖 系统工作原理（点击展开）") }}</span>
+        <span style="margin-left:auto;font-size:.72rem;color:var(--t3);font-weight:400">{{ (i18n or {}).get('msg_s078', "客户消息 → 识别 → 阶段 → 账号 → 人设 → 回复") }}</span>
+      </summary>
+      <div style="padding:0 16px 16px">
+        <div class="mr-flow">
+          <div class="mr-flow-step"><strong>{{ (i18n or {}).get('msg_s079', "消息进入") }}</strong><span>{{ (i18n or {}).get('msg_s080', "Webhook / RPA 扫描 / 模拟消息") }}</span></div>
+          <div class="mr-flow-step"><strong>{{ (i18n or {}).get('msg_s081', "识别客户") }}</strong><span>{{ (i18n or {}).get('msg_s082', "语言、客户类型、风险意图") }}</span></div>
+          <div class="mr-flow-step"><strong>{{ (i18n or {}).get('msg_s083', "阶段判断") }}</strong><span>{{ (i18n or {}).get('msg_s084', "破冰、需求、异议、报价、跟进") }}</span></div>
+          <div class="mr-flow-step"><strong>{{ (i18n or {}).get('msg_s085', "选择账号") }}</strong><span>{{ (i18n or {}).get('msg_s086', "语言、类型、健康度、负载、连续性评分") }}</span></div>
+          <div class="mr-flow-step"><strong>{{ (i18n or {}).get('psn_select_persona', "选择人设") }}</strong><span>{{ (i18n or {}).get('msg_s087', "匹配语言、客户类型、账号绑定") }}</span></div>
+          <div class="mr-flow-step"><strong>{{ (i18n or {}).get('msg_s088', "生成回复") }}</strong><span>{{ (i18n or {}).get('msg_s089', "注入记忆摘要，避免重复事实") }}</span></div>
+        </div>
+        <div class="mr-toolbar" style="margin-top:12px">
+          <button class="btn" id="btn-refresh-strategy">{{ (i18n or {}).get('msg_s090', "🔄 刷新策略状态") }}</button>
+          <button class="btn" id="btn-toggle-persona-json">{{ (i18n or {}).get('msg_s091', "🔧 高级 JSON") }}</button>
+        </div>
+      </div>
+    </details>
+
+    <!-- 客户阶段分布（保留）-->
+    <div class="rpa-card" style="margin-top:1rem">
+      <div class="rpa-card-head">
+        <div class="rpa-card-icon blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></div>
+        <div class="rpa-card-title">{{ (i18n or {}).get('msg_s092', "客户阶段分布") }}
+          <span style="font-size:.72rem;color:var(--t3);margin-left:.5rem;font-weight:400">{{ (i18n or {}).get('msg_s093', "来自会话状态机的实时阶段统计") }}</span></div>
+      </div>
+      <div id="strategy-stage-funnel"><div class="mr-empty">{{ (i18n or {}).get('rpa_loading', "加载中...") }}</div></div>
+    </div>
+
+    <div class="mr-grid" style="margin-top:1rem">
+      <div class="rpa-card">
+        <div class="rpa-card-head">
+          <div class="rpa-card-icon purple"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></div>
+          <div class="rpa-card-title">{{ (i18n or {}).get('msg_s094', "已加载人设") }}
+            <span style="font-size:.72rem;color:var(--t3);margin-left:.5rem;font-weight:400">{{ (i18n or {}).get('msg_s095', "PersonaManager 当前 profile 状态 · 编辑请前往人设工作室") }}</span></div>
+          <div class="actions" style="margin-left:auto;display:flex;gap:8px">
+            <button class="btn btn-primary" id="btn-open-chat-binding-mgr" style="background:var(--th-bg-emerald5,#10b981);border-color:var(--th-bd-emerald5,#10b981)" title="{{ (i18n or {}).get('msg_s097', "给每个 chat 单独指定人设 / 批量绑定") }}">{{ (i18n or {}).get('msg_s096', "🎭 单聊绑定") }}</button>
+            <a href="/personas" class="btn btn-primary" style="text-decoration:none">{{ (i18n or {}).get('msg_s098', "✏️ 编辑人设") }}</a>
+          </div>
+        </div>
+        <div id="persona-preview" class="mr-stack"><div class="mr-empty">{{ (i18n or {}).get('rpa_loading', "加载中...") }}</div></div>
+      </div>
+      <div class="rpa-card">
+        <div class="rpa-card-head">
+          <div class="rpa-card-icon green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/></svg></div>
+          <div class="rpa-card-title">{{ (i18n or {}).get('msg_s099', "会话状态机") }}
+            <span style="font-size:.72rem;color:var(--t3);margin-left:.5rem;font-weight:400">{{ (i18n or {}).get('msg_s100', "阶段、记忆摘要、最近话题、已使用人设事实") }}</span></div>
+        </div>
+        <div id="strategy-states" class="mr-stack mr-scroll tall"><div class="mr-empty">{{ (i18n or {}).get('rpa_loading', "加载中...") }}</div></div>
+      </div>
+    </div>
+  </section>
+
+  {# P2-1 换壳（线索 view 2 卡）：mr-panel → rpa-card；id 全保留=JS 零改动 #}
+  <section class="mr-view" id="view-leads">
+    <div class="mr-grid">
+      <div class="rpa-card">
+        <div class="rpa-card-head">
+          <div class="rpa-card-icon amber"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg></div>
+          <div class="rpa-card-title">{{ (i18n or {}).get('msg_s101', "客户线索池") }}
+            <span id="leads-summary" style="font-size:.72rem;color:var(--t3);margin-left:.5rem;font-weight:400">{{ (i18n or {}).get('msg_s040', "读取中") }}</span></div>
+        </div>
+        {# 筛选工具栏独立成行（P2-1 修复：宽 grid 工具栏塞 flex 卡头会把标题压成竖排）#}
+        <div class="mr-lead-toolbar">
+            <input id="lead-search" placeholder="{{ (i18n or {}).get('msg_s102', "搜索客户、账号、摘要") }}">
+            <select id="lead-filter">
+              <option value="all">{{ (i18n or {}).get('msg_s103', "全部任务") }}</option>
+              <option value="unassigned">{{ (i18n or {}).get('msg_s104', "待分配") }}</option>
+              <option value="due">{{ (i18n or {}).get('msg_s105', "到期跟进") }}</option>
+              <option value="active">{{ (i18n or {}).get('msg_s106', "跟进中") }}</option>
+              <option value="ready">{{ (i18n or {}).get('msg_s107', "可转人工") }}</option>
+              <option value="pending">{{ (i18n or {}).get('msg_s108', "有待审") }}</option>
+              <option value="missing_line">{{ (i18n or {}).get('msg_s109', "缺 LINE") }}</option>
+              <option value="high">{{ (i18n or {}).get('msg_s110', "高价值") }}</option>
+              <option value="mid">{{ (i18n or {}).get('msg_s111', "中等") }}</option>
+              <option value="low">{{ (i18n or {}).get('msg_s112', "低优先级") }}</option>
+            </select>
+            <select id="lead-status-filter">
+              <option value="all">{{ (i18n or {}).get('psn_all_status', "全部状态") }}</option>
+              <option value="new">{{ (i18n or {}).get('msg_s113', "新线索") }}</option>
+              <option value="assigned">{{ (i18n or {}).get('msg_s114', "已分配") }}</option>
+              <option value="in_progress">{{ (i18n or {}).get('msg_s106', "跟进中") }}</option>
+              <option value="line_sent">{{ (i18n or {}).get('msg_s115', "已发 LINE") }}</option>
+              <option value="line_added">{{ (i18n or {}).get('msg_s116', "已加 LINE") }}</option>
+              <option value="converted">{{ (i18n or {}).get('inbox.stat.done', "已成交") }}</option>
+              <option value="lost">{{ (i18n or {}).get('msg_s117', "已流失") }}</option>
+            </select>
+            <select id="lead-sort">
+              <option value="priority">{{ (i18n or {}).get('msg_s118', "按处理优先级") }}</option>
+              <option value="recent">{{ (i18n or {}).get('msg_s119', "按最近活跃") }}</option>
+              <option value="score">{{ (i18n or {}).get('msg_s120', "按线索分") }}</option>
+              <option value="duration">{{ (i18n or {}).get('msg_s121', "按聊天时长") }}</option>
+            </select>
+            <button class="btn" id="btn-refresh-leads">{{ (i18n or {}).get('msg_s122', "刷新线索") }}</button>
+        </div>
+        <div id="lead-crm-summary" class="mr-lead-kpis">
+          <div class="mr-lead-kpi"><b>--</b><span>{{ (i18n or {}).get('msg_s104', "待分配") }}</span></div>
+          <div class="mr-lead-kpi"><b>--</b><span>{{ (i18n or {}).get('msg_s105', "到期跟进") }}</span></div>
+          <div class="mr-lead-kpi"><b>--</b><span>{{ (i18n or {}).get('msg_s107', "可转人工") }}</span></div>
+          <div class="mr-lead-kpi"><b>--</b><span>{{ (i18n or {}).get('msg_s115', "已发 LINE") }}</span></div>
+          <div class="mr-lead-kpi"><b>--</b><span>{{ (i18n or {}).get('msg_s116', "已加 LINE") }}</span></div>
+          <div class="mr-lead-kpi"><b>--</b><span>{{ (i18n or {}).get('msg_s123', "需补配置") }}</span></div>
+        </div>
+        <!-- B3: 批量人设绑定工具栏 -->
+        <div style="display:flex;gap:6px;padding:8px 0;border-bottom:1px solid #2a3142;align-items:center;flex-wrap:wrap">
+          <span style="font-size:12px;color:var(--th-ink-slate4,#5b6b85)">{{ (i18n or {}).get('msg_s124', "🎭 批量人设:") }}</span>
+          <button class="btn" id="btn-bulk-bind-persona" style="font-size:12px;padding:4px 8px" title="{{ (i18n or {}).get('msg_s126', "勾选下方 chat 后批量绑定一个人设") }}">{{ (i18n or {}).get('msg_s125', "批量绑定选中") }}</button>
+          <button class="btn" id="btn-bulk-bind-all-account" style="font-size:12px;padding:4px 8px" title="{{ (i18n or {}).get('msg_s128', "为某账号下所有 chat 统一指定一个人设") }}">{{ (i18n or {}).get('msg_s127', "账号级批量绑定") }}</button>
+          <button class="btn" id="btn-clear-bulk-checks" style="font-size:12px;padding:4px 8px">{{ (i18n or {}).get('msg_s129', "清除选中") }}</button>
+          <span class="mr-muted" id="bulk-checks-count" style="font-size:11px;margin-left:auto">{{ (i18n or {}).get('msg_s130', "已选 0 个") }}</span>
+        </div>
+        <div id="leads-list" class="mr-scroll tall"><div class="mr-empty">{{ (i18n or {}).get('rpa_loading', "加载中...") }}</div></div>
+      </div>
+      <div class="rpa-card">
+        <div class="rpa-card-head">
+          <div class="rpa-card-icon green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg></div>
+          <div class="rpa-card-title">{{ (i18n or {}).get('msg_s131', "人工客服交接档案") }}
+            <span id="lead-detail-summary" style="font-size:.72rem;color:var(--t3);margin-left:.5rem;font-weight:400">{{ (i18n or {}).get('msg_s132', "选择一条线索查看") }}</span></div>
+        </div>
+        <div id="lead-detail" class="mr-scroll tall"><div class="mr-empty">{{ (i18n or {}).get('msg_s133', "点击左侧线索查看完整交接信息") }}</div></div>
+      </div>
+    </div>
+  </section>
+
+  {# P2-1 换壳（待审 view 2 卡）：mr-panel → rpa-card；id 全保留=JS 零改动 #}
+  <section class="mr-view" id="view-approvals">
+    <div class="mr-grid">
+      <div class="rpa-card">
+        <div class="rpa-card-head">
+          <div class="rpa-card-icon amber"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
+          <div class="rpa-card-title">{{ (i18n or {}).get('msg_s134', "审批队列") }}
+            <span style="font-size:.72rem;color:var(--t3);margin-left:.5rem;font-weight:400">{{ (i18n or {}).get('msg_s135', "批准后会通过手机真实发送") }}</span></div>
+          <div class="actions mr-toolbar" style="margin-left:auto">
+            <label class="mr-check"><input type="checkbox" id="bulk-all">{{ (i18n or {}).get('msg_s136', "全选 pending") }}</label>
+            <button class="btn btn-primary" id="btn-bulk-approve" disabled>{{ (i18n or {}).get('draft.bulk.approve', "批量批准") }}</button>
+            <button class="btn" id="btn-bulk-reject" disabled>{{ (i18n or {}).get('msg_s137', "批量驳回") }}</button>
+          </div>
+        </div>
+        <div id="approvals-list" class="mr-scroll tall"><div class="mr-empty">{{ (i18n or {}).get('rpa_loading', "加载中...") }}</div></div>
+      </div>
+      <div class="rpa-card">
+        <div class="rpa-card-head">
+          <div class="rpa-card-icon green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></div>
+          <div class="rpa-card-title">{{ (i18n or {}).get('msg_s138', "质检提示") }}
+            <span style="font-size:.72rem;color:var(--t3);margin-left:.5rem;font-weight:400">{{ (i18n or {}).get('msg_s139', "重点看语言、人设、是否过早索要隐私") }}</span></div>
+        </div>
+        <div class="mr-stack">
+          <div class="mr-row"><span class="mr-name">{{ (i18n or {}).get('msg_s140', "待审批") }}</span><span id="qc-pending" class="mr-pill">0</span></div>
+          <div class="mr-row"><span class="mr-name">{{ (i18n or {}).get('msg_s141', "已批准待发") }}</span><span id="qc-approved" class="mr-pill">0</span></div>
+          <div class="mr-row"><span class="mr-name">{{ (i18n or {}).get('msg_s142', "24h 已发") }}</span><span id="qc-sent" class="mr-pill">0</span></div>
+          <div class="mr-row"><span class="mr-name">{{ (i18n or {}).get('msg_s143', "空回复占位") }}</span><span id="qc-empty" class="mr-pill">0</span></div>
+        </div>
+        <div style="height:.8rem"></div>
+        <div class="mr-note">
+          {{ (i18n or {}).get('msg_s452', '审批区保留人工把关能力。测试稳定后可以在策略配置中切换 reply_mode 为自动发送，但高分线索和首次 LINE 引导仍建议先走质检。') }}
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="mr-view" id="view-runs">
+    <!-- B6-P4: 数据中心 — 4 视角看板（P2-1 换壳：mr-panel → rpa-card） -->
+    <div class="rpa-card">
+      <div class="rpa-card-head">
+        <div class="rpa-card-icon blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg></div>
+        <div class="rpa-card-title">{{ (i18n or {}).get('msg_s025', "数据中心") }}
+          <span style="font-size:.72rem;color:var(--t3);margin-left:.5rem;font-weight:400">{{ (i18n or {}).get('msg_s144', "从运行、成本、A/B 效果、账号活跃 4 个角度量化系统表现") }}</span></div>
+        <div class="actions" style="margin-left:auto"><button class="btn" id="btn-refresh-runs">{{ (i18n or {}).get('msg_s145', "🔄 全部刷新") }}</button></div>
+      </div>
+
+      <!-- sub-tab nav -->
+      <div class="dc-bar" style="display:flex;gap:6px;border-bottom:1px solid var(--bd);padding:0 0 0 4px;margin-bottom:14px">
+        <button class="dc-tab active" data-dc="runs">{{ (i18n or {}).get('msg_s146', "📋 运行记录") }}</button>
+        <button class="dc-tab" data-dc="history">{{ (i18n or {}).get('msg_s147', "💬 聊天历史") }}</button>
+        <button class="dc-tab" data-dc="cost">{{ (i18n or {}).get('msg_s148', "💰 成本看板") }}</button>
+        <button class="dc-tab" data-dc="variants">{{ (i18n or {}).get('msg_s149', "🧪 A/B 人设效果") }}</button>
+        <button class="dc-tab" data-dc="accounts-active">{{ (i18n or {}).get('msg_s150', "📱 账号活跃") }}</button>
+        <button class="dc-tab" data-dc="health">{{ (i18n or {}).get('msg_s151', "🔧 健康指标") }}</button>
+      </div>
+
+      <!-- pane: 运行记录（保留原 #runs-table）-->
+      <div class="dc-pane active" data-dc-pane="runs">
+        <div style="font-size:.73rem;color:var(--t3);margin-bottom:8px">{{ (i18n or {}).get('msg_s152', "最近 80 条 step 事件（打开聊天 / 生成 / 发送 / 跳过等）") }}</div>
+        <div id="runs-table"><div class="mr-empty">{{ (i18n or {}).get('rpa_loading', "加载中...") }}</div></div>
+      </div>
+
+      <!-- pane: 聊天历史 (P9-D) -->
+      <div class="dc-pane" data-dc-pane="history" style="display:none">
+        <div style="font-size:.73rem;color:var(--t3);margin-bottom:10px">{{ (i18n or {}).get('msg_s153', "跨联系人全文检索 + 意图分布统计（覆盖 30 天 / 上限 5 万条历史）") }}</div>
+        <div style="display:flex;gap:.6rem;align-items:center;margin-bottom:14px;flex-wrap:wrap">
+          <input id="mr-hist-q" type="text" placeholder="{{ (i18n or {}).get('msg_s154', "🔍 检索聊天历史关键词…") }}"
+                 style="flex:1;min-width:220px;padding:.5rem .75rem;background:var(--card);border:1px solid var(--bd);border-radius:8px;font-size:.85rem;color:var(--t)">
+          <select id="mr-hist-q-intent" style="padding:.5rem .65rem;background:var(--card);border:1px solid var(--bd);border-radius:8px;font-size:.8rem;color:var(--t2)">
+            <option value="">{{ (i18n or {}).get('ov_all_intents', "全部意图") }}</option>
+            <option value="purchase">{{ (i18n or {}).get('rpa_intent_purchase', "购买") }}</option>
+            <option value="support">{{ (i18n or {}).get('rpa_intent_support', "售后") }}</option>
+            <option value="inquiry">{{ (i18n or {}).get('rpa_intent_inquiry', "咨询") }}</option>
+            <option value="greeting">{{ (i18n or {}).get('rpa_intent_greeting', "问候") }}</option>
+            <option value="general">{{ (i18n or {}).get('rpa_intent_general', "通用") }}</option>
+          </select>
+        </div>
+        <div id="mr-hist-results" style="display:none;max-height:380px;overflow-y:auto;border:1px solid var(--bd);border-radius:8px;margin-bottom:18px"></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <h3 style="margin:0;font-size:.95rem;color:var(--t)">{{ (i18n or {}).get('msg_s155', "📊 意图分布") }}</h3>
+          <div style="display:flex;gap:.3rem">
+            <button class="btn btn-xs rpa-win-btn" data-h="24">24h</button>
+            <button class="btn btn-xs rpa-win-btn active" data-h="168">7d</button>
+            <button class="btn btn-xs rpa-win-btn" data-h="720">30d</button>
+          </div>
+        </div>
+        <div id="mr-intent-body" style="padding:.4rem 0">{{ (i18n or {}).get('rpa_loading', "加载中…") }}</div>
+      </div>
+
+      <!-- pane: 成本看板 -->
+      <div class="dc-pane" data-dc-pane="cost" style="display:none">
+        <div style="font-size:.73rem;color:var(--t3);margin-bottom:8px">{{ (i18n or {}).get('msg_s156', "LLM token 消耗与估算成本（实时）") }}</div>
+        <div id="dc-cost-summary" class="mr-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:14px"></div>
+        <div id="dc-cost-table"><div class="mr-empty">{{ (i18n or {}).get('rpa_loading', "加载中...") }}</div></div>
+      </div>
+
+      <!-- pane: A/B 人设效果 -->
+      <div class="dc-pane" data-dc-pane="variants" style="display:none">
+        <div style="font-size:.73rem;color:var(--t3);margin-bottom:8px">{{ (i18n or {}).get('msg_s157', "不同人设的发送 / 跳过 / 拒绝率对比 — 用于回答\"哪个人设转化更好\"") }}</div>
+        <div id="dc-variants-table"><div class="mr-empty">{{ (i18n or {}).get('rpa_loading', "加载中...") }}</div></div>
+      </div>
+
+      <!-- pane: 账号活跃 -->
+      <div class="dc-pane" data-dc-pane="accounts-active" style="display:none">
+        <div style="font-size:.73rem;color:var(--t3);margin-bottom:8px">{{ (i18n or {}).get('msg_s158', "每个 Messenger 账号今日发送 / 拒绝 / 健康度 — 用于回答\"哪个号在干活\"") }}</div>
+        <div id="dc-accounts-active"><div class="mr-empty">{{ (i18n or {}).get('rpa_loading', "加载中...") }}</div></div>
+      </div>
+
+      <!-- pane: 健康指标 (P11 messenger_rpa metrics) -->
+      <div class="dc-pane" data-dc-pane="health" style="display:none">
+        <div style="font-size:.73rem;color:var(--t3);margin-bottom:8px">
+          {{ (i18n or {}).get('msg_s453', 'messenger_rpa 关键事件计数 — self_overlap 拦截 / cache 命中 / XML 兜底 / 状态自愈 等。') }}
+          {{ (i18n or {}).get('msg_s454', '左列累计、右列最近 1 小时窗口（趋势退化告警依据）。') }}
+        </div>
+        <!-- P2++G2 (2026-05-04) sticker decision tile：高亮 modality_* 类 hint -->
+        <div id="dc-sticker-metrics" style="margin-bottom:14px"></div>
+        <div id="dc-health-metrics"><div class="mr-empty">{{ (i18n or {}).get('rpa_loading', "加载中...") }}</div></div>
+      </div>
+    </div>
+  </section>
+
+  {# P2-2 漏斗 Tab（跨平台 Journey 漏斗，共享 partial；与监控页自有「引流漏斗」口径分家。
+     partial 内 id 全为 rpa-funnel-*，与本页 funnel-* 零撞名；懒加载 init 见文末 script #}
+  <section class="mr-view" id="view-funnel">
+    {% include "_rpa_shared_funnel.html" %}
+  </section>
+
+  <style>
+    .dc-tab{background:transparent;border:0;border-bottom:2px solid transparent;color:var(--t2);padding:10px 16px;cursor:pointer;font-size:13px;font-weight:600;transition:.16s;border-radius:0}
+    .dc-tab:hover{color:var(--t);background:rgba(30,140,242,0.05)}
+    .dc-tab.active{color:var(--tk-brand,#1e8cf2);border-bottom-color:var(--tk-brand,#1e8cf2)}
+    .dc-pane{animation:dcFade .2s ease-out}
+    @keyframes dcFade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+    .dc-card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:14px}
+    .dc-card .lbl{font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}
+    .dc-card .val{font-size:20px;font-weight:700;color:var(--t)}
+    .dc-card .sub{font-size:11px;color:var(--t3);margin-top:4px}
+    .dc-bar-cell{display:inline-block;height:8px;background:var(--tk-brand,#1e8cf2);border-radius:2px;vertical-align:middle;margin-right:6px;min-width:2px}
+  </style>
+
+  <section class="mr-view" id="view-settings">
+    <!-- Live health strip -->
+    <div class="st-health" id="st-health-strip">
+      <span class="st-health-dot" id="st-hdot" style="background:var(--t3);color:var(--t3)"></span>
+      <span id="st-hstate" style="color:var(--t2)">{{ (i18n or {}).get('msg_s040', "读取中") }}</span>
+      <span class="st-h-sep">·</span>
+      <span class="st-h-item" id="st-hlast">{{ (i18n or {}).get('msg_s159', "上次扫描 --") }}</span>
+      <span class="st-h-sep">·</span>
+      <span class="st-h-item" id="st-hiv">{{ (i18n or {}).get('msg_s160', "间隔 --") }}</span>
+      <span class="st-h-sep">·</span>
+      <span class="st-h-item" id="st-hempty">{{ (i18n or {}).get('msg_s161', "空跑 --") }}</span>
+      <span class="st-h-sep" id="st-hlang-sep" style="display:none">·</span>
+      <span class="st-h-item ok" id="st-hlang" style="display:none"></span>
+      <span class="st-h-sep" id="st-htarget-sep" style="display:none">·</span>
+      <span class="st-h-item warn" id="st-htarget" style="display:none"></span>
+    </div>
+    <!-- Settings sub-tab nav -->
+    <div class="st-bar" id="settings-subtabs">
+      <button class="st-tab active" data-st="automation"><span class="st-dot"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>{{ (i18n or {}).get('msg_s162', "自动化") }}</button>
+      <button class="st-tab" data-st="dialog"><span class="st-dot"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>{{ (i18n or {}).get('msg_s163', "对话风格") }}</button>
+      <button class="st-tab" data-st="voice"><span class="st-dot"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>{{ (i18n or {}).get('msg_tab_voice', "语音") }}</button>
+      <button class="st-tab" data-st="conversion"><span class="st-dot"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>{{ (i18n or {}).get('msg_s164', "客户转化") }}</button>
+      <button class="st-tab" data-st="ops"><span class="st-dot"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>{{ (i18n or {}).get('msg_s165', "运维诊断") }}</button>
+      <div class="st-bar-right">
+        <button class="st-icon-btn" id="btn-settings-search" title="{{ (i18n or {}).get('msg_s166', "快速搜索配置项 (Ctrl+F)") }}">🔍</button>
+        <div class="st-preset-wrap">
+          <button class="st-icon-btn" id="btn-settings-preset" title="{{ (i18n or {}).get('msg_s168', "一键加载场景预设") }}">{{ (i18n or {}).get('msg_s167', "🎛 预设") }}</button>
+          <div class="st-preset-drop" id="st-preset-drop">
+            <div class="st-preset-item" data-preset="aggressive"><b>{{ (i18n or {}).get('msg_s169', "🚀 激进模式") }}</b><small>{{ (i18n or {}).get('msg_s170', "15s 扫描 · 2分钟冷却 · 每轮 3 条 · 随机语音 40%") }}<br>{{ (i18n or {}).get('msg_s171', "适合高峰期主动运营") }}</small></div>
+            <div class="st-preset-item" data-preset="balanced"><b>{{ (i18n or {}).get('msg_s172', "⚖️ 平衡模式（推荐）") }}</b><small>{{ (i18n or {}).get('msg_s173', "30s 扫描 · 5分钟冷却 · 每轮 2 条 · 仅对方发语音时才语音") }}<br>{{ (i18n or {}).get('msg_s174', "适合日常稳定运营") }}</small></div>
+            <div class="st-preset-item" data-preset="conservative"><b>{{ (i18n or {}).get('msg_s175', "🐢 保守模式") }}</b><small>{{ (i18n or {}).get('msg_s176', "60s 扫描 · 10分钟冷却 · 每轮 1 条 · 纯文字回复") }}<br>{{ (i18n or {}).get('msg_s177', "适合低风险维护期") }}</small></div>
+            <div class="st-preset-item" data-preset="debug"><b>{{ (i18n or {}).get('msg_s178', "🔬 调试模式") }}</b><small>{{ (i18n or {}).get('msg_s179', "审批模式 · 每轮 1 条 · 强制回收件箱 · 短间隔") }}<br>{{ (i18n or {}).get('msg_s180', "适合测试新人设或配置") }}</small></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Quick search bar (hidden until activated) -->
+    <div class="st-search-box" id="st-search-box">
+      <input type="text" id="st-search-input" placeholder="{{ (i18n or {}).get('msg_s181', "搜索配置项… 如 冷却 / 语言 / 语音概率") }}" autocomplete="off">
+      <span class="st-search-stat" id="st-search-stat"></span>
+      <button class="st-icon-btn" id="btn-search-close" style="padding:.3rem .5rem">✕</button>
+    </div>
+    <!-- Unsaved changes banner -->
+    <div id="settings-unsaved" class="st-unsaved" style="display:none">
+      <span>{{ (i18n or {}).get('msg_s182', "● 有未保存的改动") }}</span>
+      <button class="btn btn-primary" style="padding:.32rem .75rem;font-size:.78rem" onclick="saveConfig().catch(e=>toast(e.message,'err'));return false">{{ (i18n or {}).get('msg_s183', "保存配置") }}</button>
+      <button class="btn-discard" onclick="reloadAllSettings();return false">{{ (i18n or {}).get('msg_s184', "放弃修改") }}</button>
+    </div>
+
+    <!-- Pane 1: 自动化与节奏 -->
+    <div class="st-pane active" id="st-automation">
+      <div class="mr-grid">
+        <div class="rpa-card">
+          <div class="rpa-card-head"><div class="rpa-card-icon green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M18.36 6.64a9 9 0 11-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg></div><div class="rpa-card-title">{{ (i18n or {}).get('msg_s185', "服务开关 & 回复模式") }}
+            <span style="font-size:.72rem;color:var(--t3);margin-left:.5rem;font-weight:400">{{ (i18n or {}).get('msg_s186', "自动回复总控与决策方式") }}</span></div></div>
+          <div class="mr-field-grid">
+            <label class="mr-check"><input type="checkbox" id="cfg-enabled">{{ (i18n or {}).get('msg_s187', " 启用 Messenger RPA 自动回复") }}</label>
+            <label class="mr-check"><input type="checkbox" id="cfg-autostart">{{ (i18n or {}).get('msg_s188', " 进程启动后自动运行") }}</label>
+          </div>
+          <div class="mr-field" style="margin-top:.7rem">
+            <label>{{ (i18n or {}).get('msg_s189', "回复决策模式 ") }}<span class="mr-tip" title="{{ (i18n or {}).get('msg_s190', "审批=人工确认后发，自动=AI直接发，只读=仅扫描") }}">ⓘ</span></label>
+            <div class="mode-cards" id="reply-mode-cards">
+              <div class="mode-card" data-mode="approve"><b>{{ (i18n or {}).get('msg_s191', "🔍 审批模式") }}</b><small>{{ (i18n or {}).get('msg_s192', "AI草稿，人工确认后发送") }}</small></div>
+              <div class="mode-card" data-mode="auto"><b>{{ (i18n or {}).get('msg_s193', "🤖 自动模式") }}</b><small>{{ (i18n or {}).get('msg_s194', "AI直接发，高速响应") }}</small></div>
+              <div class="mode-card" data-mode="off"><b>{{ (i18n or {}).get('msg_s195', "👁️ 只读模式") }}</b><small>{{ (i18n or {}).get('msg_s196', "只扫描，不回复") }}</small></div>
+            </div>
+            <input type="hidden" id="cfg-reply-mode" value="approve">
+            <div class="mr-note" style="margin-top:.4rem">{{ (i18n or {}).get('msg_reply_mode_note', "设备链自动化档位（auto=自动回复 / approve=生成后人审 / off=只收不回），独立于聊天坐席的会话档位与 AI 值守总闸——单个客户的档位请到") }}<a href="/workspace">{{ (i18n or {}).get('msg_reply_mode_note_link', "聊天坐席") }}</a>{{ (i18n or {}).get('msg_reply_mode_note_tail', "调整") }}</div>
+            <div class="badge b-a" id="mr-cap-note" style="display:none;margin-top:.35rem;white-space:normal"></div>
+          </div>
+          <div class="mr-field" style="margin-top:.65rem">
+            <label for="cfg-start-mode">{{ (i18n or {}).get('msg_s197', "扫描起点 ") }}<span class="mr-tip" title="{{ (i18n or {}).get('msg_s198', "手机停在某聊天页时如何处理：智能=直接使用，强制=先回收件箱") }}">ⓘ</span></label>
+            <select id="cfg-start-mode">
+              <option value="smart_current_thread">{{ (i18n or {}).get('msg_s199', "智能保留 — 当前页即目标直接使用") }}</option>
+              <option value="force_chats">{{ (i18n or {}).get('msg_s200', "强制回收件箱 — 每次从列表重新扫") }}</option>
+            </select>
+          </div>
+          <div class="mr-field">
+            <label for="cfg-max-inbox">{{ (i18n or {}).get('msg_s201', "每轮最多处理对话数") }}</label>
+            <input id="cfg-max-inbox" type="number" min="1" max="20">
+            <div class="mr-note">{{ (i18n or {}).get('msg_s202', "建议 1-3，过高导致单轮超时") }}</div>
+          </div>
+        </div>
+        <div class="rpa-card">
+          <div class="rpa-card-head"><div class="rpa-card-icon blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div><div class="rpa-card-title">{{ (i18n or {}).get('msg_s203', "轮询节奏 & 冷却") }}
+            <span style="font-size:.72rem;color:var(--t3);margin-left:.5rem;font-weight:400">{{ (i18n or {}).get('msg_s204', "自适应扫描频率与对话冷却") }}</span></div></div>
+          <div class="mr-field-grid">
+            <div class="mr-field">
+              <label for="cfg-interval">{{ (i18n or {}).get('msg_s205', "基础扫描间隔（秒） ") }}<span class="mr-tip" title="{{ (i18n or {}).get('msg_s206', "正常状态下每隔多少秒扫一次收件箱") }}">ⓘ</span></label>
+              <input id="cfg-interval" type="number" min="2" max="300">
+              <div class="dur-display" id="dur-interval"></div>
+            </div>
+            <div class="mr-field">
+              <label for="cfg-min-interval">{{ (i18n or {}).get('msg_s207', "忙时最快间隔（秒）") }}</label>
+              <input id="cfg-min-interval" type="number" min="1" max="60">
+              <div class="mr-note">{{ (i18n or {}).get('msg_s208', "有未读时的最短等待") }}</div>
+            </div>
+            <div class="mr-field">
+              <label for="cfg-max-interval">{{ (i18n or {}).get('msg_s209', "闲时最大间隔（秒）") }}</label>
+              <input id="cfg-max-interval" type="number" min="10" max="600">
+              <div class="dur-display" id="dur-max-interval"></div>
+            </div>
+            <div class="mr-field">
+              <label for="cfg-backoff">{{ (i18n or {}).get('msg_s210', "空闲退避倍率 ") }}<span class="mr-tip" title="{{ (i18n or {}).get('msg_s211', "每次空跑后间隔乘以此倍率，直到 max_interval") }}">ⓘ</span></label>
+              <input id="cfg-backoff" type="number" min="1.0" max="3.0" step="0.05">
+            </div>
+            <div class="mr-field" style="grid-column:1/-1">
+              <label for="cfg-cooldown">{{ (i18n or {}).get('msg_s212', "同一对话回复冷却 ") }}<span class="mr-tip" title="{{ (i18n or {}).get('msg_s213', "发送后多少秒内不再自动回复同一个人，防止刷屏") }}">ⓘ</span></label>
+              <input id="cfg-cooldown" type="number" min="0" max="86400">
+              <div class="dur-display" id="dur-cooldown"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- 目标白名单 DANGER ZONE -->
+      <div class="rpa-card" style="margin-top:1rem">
+        <div class="rpa-card-head">
+          <div class="rpa-card-icon amber"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg></div>
+          <div class="rpa-card-title">{{ (i18n or {}).get('msg_s214', "聊天目标白名单 ") }}<span class="mr-pill danger" id="target-danger-pill" style="display:none">{{ (i18n or {}).get('msg_s215', "⚠ 限制中") }}</span>
+            <span style="font-size:.72rem;color:var(--t3);margin-left:.5rem;font-weight:400">{{ (i18n or {}).get('msg_s216', "留空 = 回复所有人 · 非空 = 只处理名单内联系人，其余全部跳过") }}</span></div>
+        </div>
+        <div class="mr-danger-banner" id="run-target-banner">
+          ⚠️ <b>{{ (i18n or {}).get('msg_s217', "目标已限定") }}</b>{{ (i18n or {}).get('msg_s463', '：系统当前只会处理下方名单中的联系人，其他所有人的未读消息将被跳过！如需回复所有人，请清空 run_once 字段。') }}
+        </div>
+        <div class="mr-field-grid">
+          <div class="mr-field" style="grid-column:1/-1">
+            <label for="cfg-run-targets" class="danger-label">{{ (i18n or {}).get('msg_s218', "本轮限定联系人（调试用，逗号分隔）") }}</label>
+            <input id="cfg-run-targets" type="text" placeholder="{{ (i18n or {}).get('msg_s219', "留空 = 不限制；非空则只回复这些人") }}">
+          </div>
+          <div class="mr-field" style="grid-column:1/-1">
+            <label for="cfg-targets">{{ (i18n or {}).get('msg_s220', "长期白名单（逗号分隔，留空不限）") }}</label>
+            <input id="cfg-targets" type="text">
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:1rem">
+        <button class="btn btn-primary" id="btn-save-config">{{ (i18n or {}).get('msg_s221', "💾 保存自动化配置") }}</button>
+      </div>
+    </div>
+
+    <!-- Pane 2: 对话风格 -->
+    <div class="st-pane" id="st-dialog">
+      <div class="mr-grid">
+        <div class="rpa-card">
+          <div class="rpa-card-head"><div class="rpa-card-icon blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg></div><div class="rpa-card-title">{{ (i18n or {}).get('msg_s222', "语言控制") }}
+            <span style="font-size:.72rem;color:var(--t3);margin-left:.5rem;font-weight:400">{{ (i18n or {}).get('msg_s223', "控制 AI 回复所用语言") }}</span></div></div>
+          <div class="mr-field-grid">
+            <div class="mr-field" style="grid-column:1/-1">
+              <label for="cfg-force-lang">{{ (i18n or {}).get('msg_s224', "🔒 强制回复语言 ") }}<span class="mr-tip" title="{{ (i18n or {}).get('msg_s225', "设置后忽略所有检测，所有回复强制使用此语言。可彻底解决中日混语问题") }}">ⓘ</span></label>
+              <select id="cfg-force-lang">
+                <option value="">{{ (i18n or {}).get('msg_s226', "不强制（跟随语言检测结果）") }}</option>
+                <option value="ja">{{ (i18n or {}).get('msg_s227', "🇯🇵 日本語") }}</option>
+                <option value="zh">{{ (i18n or {}).get('msg_s228', "🇨🇳 中文") }}</option>
+                <option value="en">🇬🇧 English</option>
+                <option value="ko">🇰🇷 한국어</option>
+              </select>
+              <div class="mr-note">{{ (i18n or {}).get('msg_s229', "推荐：日语用户群体设为 ja，彻底防止中日混语") }}</div>
+            </div>
+            <div class="mr-field">
+              <label for="cfg-default-lang">{{ (i18n or {}).get('msg_s230', "检测失败时默认语言") }}</label>
+              <select id="cfg-default-lang">
+                <option value="zh">{{ (i18n or {}).get('dash.lang.zh', "中文") }}</option>
+                <option value="ja">{{ (i18n or {}).get('dash.lang.ja', "日语") }}</option>
+                <option value="en">{{ (i18n or {}).get('dash.lang.en', "英语") }}</option>
+                <option value="ko">{{ (i18n or {}).get('dash.lang.ko', "韩语") }}</option>
+                <option value="auto">{{ (i18n or {}).get('dash.lb.auto', "自动") }}</option>
+              </select>
+            </div>
+            <div class="mr-field">
+              <label for="cfg-language">{{ (i18n or {}).get('msg_s231', "语言对齐策略") }}</label>
+              <select id="cfg-language">
+                <option value="auto">{{ (i18n or {}).get('msg_s232', "auto — 跟随用户语言") }}</option>
+                <option value="off">{{ (i18n or {}).get('msg_s233', "off — 交给人设决定") }}</option>
+                <option value="english_fallback_only">{{ (i18n or {}).get('msg_s234', "仅英文兜底") }}</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="rpa-card">
+          <div class="rpa-card-head"><div class="rpa-card-icon purple"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div><div class="rpa-card-title">{{ (i18n or {}).get('msg_s235', "对话行为") }}
+            <span style="font-size:.72rem;color:var(--t3);margin-left:.5rem;font-weight:400">{{ (i18n or {}).get('msg_s236', "AI 人设、记忆与安全守卫") }}</span></div></div>
+          <div class="mr-field-grid">
+            <div class="mr-field" style="grid-column:1/-1">
+              <label for="cfg-companion">{{ (i18n or {}).get('msg_s237', "对话模式") }}</label>
+              <select id="cfg-companion">
+                <option value="true">{{ (i18n or {}).get('msg_s238', "陪护模式（companion）— 深度情感陪伴") }}</option>
+                <option value="false">{{ (i18n or {}).get('msg_s239', "客服模式 — 标准问答响应") }}</option>
+              </select>
+            </div>
+            <label class="mr-check"><input type="checkbox" id="cfg-suppress-identity">{{ (i18n or {}).get('msg_s240', " 隐藏 AI 身份（防止说出\"我是AI\"）") }}</label>
+            <label class="mr-check"><input type="checkbox" id="cfg-disable-memory">{{ (i18n or {}).get('msg_s241', " 关闭跨轮情景记忆") }}</label>
+            <label class="mr-check"><input type="checkbox" id="cfg-pre-self-guard">{{ (i18n or {}).get('msg_s242', " 生成前校验最后一条是否自己发出") }}</label>
+            <label class="mr-check"><input type="checkbox" id="cfg-stale-peer-guard">{{ (i18n or {}).get('msg_s243', " 防止重复读取上一条客户消息") }}</label>
+            <label class="mr-check"><input type="checkbox" id="cfg-title-vision">{{ (i18n or {}).get('msg_s244', " 标题缺失时用 Vision 视觉校验") }}</label>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:1rem">
+        <button class="btn btn-primary" id="btn-save-dialog">{{ (i18n or {}).get('msg_s245', "💾 保存对话配置") }}</button>
+      </div>
+    </div>
+
+    <!-- Pane 3: 语音能力 -->
+    <div class="st-pane" id="st-voice">
+      <div class="rpa-card">
+        <div class="rpa-card-head">
+          <div class="rpa-card-icon green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></div>
+          <div class="rpa-card-title">{{ (i18n or {}).get('msg_s246', "多模态能力中心") }}
+            <span id="media-summary" style="font-size:.72rem;color:var(--t3);margin-left:.5rem;font-weight:400">{{ (i18n or {}).get('msg_s040', "读取中") }}</span></div>
+          <button class="btn btn-primary" id="btn-save-media">{{ (i18n or {}).get('msg_s247', "💾 保存媒体配置") }}</button>
+        </div>
+        <div class="mr-cap-strip" id="media-cap-strip"></div>
+        <!-- 语音触发策略 (NEW) -->
+        <div style="border:1px solid rgba(99,102,241,.28);border-radius:8px;padding:.8rem;margin:.4rem 0 .85rem;background:rgba(99,102,241,.04)">
+          <div style="font-size:.82rem;font-weight:700;color:var(--t);margin-bottom:.65rem">{{ (i18n or {}).get('msg_s248', "🎙️ 语音回复触发策略") }}</div>
+          <div class="mr-field-grid">
+            <div class="mr-field">
+              <label for="voice-trigger">{{ (i18n or {}).get('msg_s249', "触发模式 ") }}<span class="mr-tip" title="{{ (i18n or {}).get('msg_s250', "决定什么时候发语音回复") }}">ⓘ</span></label>
+              <select id="voice-trigger">
+                <option value="when_peer_voice">{{ (i18n or {}).get('msg_s251', "仅当对方发语音时才回语音") }}</option>
+                <option value="random">{{ (i18n or {}).get('msg_s252', "按概率随机（语音/文字混合）") }}</option>
+                <option value="always">{{ (i18n or {}).get('msg_s253', "始终发送语音") }}</option>
+              </select>
+            </div>
+            <div class="mr-field">
+              <label for="voice-max-chars">{{ (i18n or {}).get('msg_s254', "单条 TTS 最长字符数") }}</label>
+              <input id="voice-max-chars" type="number" min="50" max="500" placeholder="220">
+            </div>
+            <div class="mr-field" id="voice-prob-field" style="grid-column:1/-1;display:none">
+              <label>{{ (i18n or {}).get('msg_s255', "语音发送概率 ") }}<span class="mr-tip" title="{{ (i18n or {}).get('msg_s256', "100次回复中约有多少次以语音形式发送，其余发文字") }}">ⓘ</span></label>
+              <div class="prob-row">
+                <input type="range" id="voice-probability" min="0" max="100" step="5" value="35">
+                <span class="prob-val" id="voice-prob-val">35%</span>
+              </div>
+              <div class="prob-note" id="voice-prob-note">{{ (i18n or {}).get('msg_s257', "每 100 次回复中约 35 次语音，65 次文字") }}</div>
+            </div>
+          </div>
+        </div>
+        <div class="mr-field-grid">
+          <div class="mr-field"><label for="media-policy">{{ (i18n or {}).get('msg_s258', "媒体处理策略") }}</label>
+            <select id="media-policy"><option value="ai">{{ (i18n or {}).get('msg_s259', "AI 识别后回复") }}</option><option value="ack_and_approve">{{ (i18n or {}).get('msg_s260', "先确认再审批") }}</option><option value="ack_only">{{ (i18n or {}).get('msg_s261', "只确认收到") }}</option></select></div>
+          <div class="mr-field"><label for="media-emoji-style">{{ (i18n or {}).get('msg_s262', "表情/贴纸策略") }}</label>
+            <select id="media-emoji-style"><option value="natural">{{ (i18n or {}).get('msg_s263', "自然回应") }}</option><option value="conservative">{{ (i18n or {}).get('msg_s264', "保守回应") }}</option></select></div>
+          <label class="mr-check"><input type="checkbox" id="media-include-links">{{ (i18n or {}).get('msg_s265', "链接也走媒体策略") }}</label>
+          <label class="mr-check"><input type="checkbox" id="media-image-enabled">{{ (i18n or {}).get('msg_s266', "启用图片理解") }}</label>
+          <div class="mr-field"><label for="media-image-timeout">{{ (i18n or {}).get('msg_s267', "图片理解超时秒数") }}</label><input id="media-image-timeout" type="number" min="1" max="60"></div>
+          <label class="mr-check"><input type="checkbox" id="voice-input-enabled">{{ (i18n or {}).get('msg_s268', "启用语音转写（ASR）") }}</label>
+          <label class="mr-check"><input type="checkbox" id="voice-prefer-transcribe">{{ (i18n or {}).get('msg_s269', "语音优先转写再回复") }}</label>
+          <div class="mr-field"><label for="voice-capture-mode">{{ (i18n or {}).get('msg_s270', "语音抓取模式") }}</label>
+            <select id="voice-capture-mode">
+              <option value="helper_session">{{ (i18n or {}).get('msg_s271', "内部音频桥自动播放") }}</option>
+              <option value="helper_app">{{ (i18n or {}).get('msg_s272', "内部音频桥只录音") }}</option>
+              <option value="run_as">{{ (i18n or {}).get('msg_s273', "run-as 调试") }}</option>
+              <option value="screenrecord">{{ (i18n or {}).get('msg_s274', "播放录屏采集") }}</option>
+              <option value="external_file">{{ (i18n or {}).get('msg_s275', "外部音频文件") }}</option>
+              <option value="ack_only">{{ (i18n or {}).get('msg_s261', "只确认收到") }}</option>
+            </select></div>
+          <div class="mr-field"><label for="voice-asr-backend">{{ (i18n or {}).get('msg_s276', "ASR 识别引擎") }}</label>
+            <select id="voice-asr-backend"><option value="faster_whisper">{{ (i18n or {}).get('msg_s277', "本机 faster-whisper") }}</option><option value="openai">{{ (i18n or {}).get('msg_s278', "线上 OpenAI 兼容") }}</option><option value="disabled">{{ (i18n or {}).get('ov_js_disable', "关闭") }}</option></select></div>
+          <div class="mr-field"><label for="voice-asr-model">{{ (i18n or {}).get('msg_s279', "ASR 模型") }}</label><input id="voice-asr-model" type="text" placeholder="base / whisper-1"></div>
+          <div class="mr-field"><label for="voice-asr-language">{{ (i18n or {}).get('msg_s280', "ASR 识别语言") }}</label><input id="voice-asr-language" type="text" placeholder="auto / ja / zh / en"></div>
+          <div class="mr-field"><label for="voice-timeout">{{ (i18n or {}).get('msg_s281', "语音转写超时（秒）") }}</label><input id="voice-timeout" type="number" min="5" max="120"></div>
+          <div class="mr-field"><label for="voice-output-enabled">{{ (i18n or {}).get('msg_s282', "语音输出") }}</label>
+            <select id="voice-output-enabled"><option value="false">{{ (i18n or {}).get('msg_s283', "暂不开启") }}</option><option value="true">{{ (i18n or {}).get('msg_s284', "实验开启") }}</option></select></div>
+          <div class="mr-field"><label for="voice-output-mode">{{ (i18n or {}).get('msg_s285', "TTS 发送策略") }}</label>
+            <select id="voice-output-mode"><option value="approval_only">{{ (i18n or {}).get('msg_s286', "只生成试听进审批") }}</option><option value="text_plus_voice">{{ (i18n or {}).get('msg_s287', "文字先发，语音待发") }}</option><option value="auto_voice">{{ (i18n or {}).get('msg_s288', "实验自动语音") }}</option></select></div>
+          <div class="mr-field"><label for="voice-tts-backend">{{ (i18n or {}).get('msg_s289', "TTS 引擎") }}</label>
+            <select id="voice-tts-backend"><option value="edge_tts">{{ (i18n or {}).get('msg_s290', "本机 edge-tts") }}</option><option value="pyttsx3">{{ (i18n or {}).get('msg_s291', "本机 Windows SAPI") }}</option><option value="openai">{{ (i18n or {}).get('msg_s278', "线上 OpenAI 兼容") }}</option><option value="voice_clone_command">{{ (i18n or {}).get('msg_s292', "自有音色命令") }}</option><option value="disabled">{{ (i18n or {}).get('ov_js_disable', "关闭") }}</option></select></div>
+          <div class="mr-field"><label for="voice-tts-voice">{{ (i18n or {}).get('msg_s293', "TTS 声音") }}</label><input id="voice-tts-voice" type="text" placeholder="zh-CN-XiaoxiaoNeural / alloy"></div>
+          <div class="mr-field"><label for="voice-tts-max">{{ (i18n or {}).get('msg_s294', "单条语音最长秒数") }}</label><input id="voice-tts-max" type="number" min="3" max="60"></div>
+          <label class="mr-check"><input type="checkbox" id="voice-profile-enabled">{{ (i18n or {}).get('msg_s295', "启用自有音色") }}</label>
+          <label class="mr-check"><input type="checkbox" id="voice-profile-consent">{{ (i18n or {}).get('msg_s296', "确认仅使用本人/已授权声音") }}</label>
+          <div class="mr-field"><label for="voice-profile-speaker">{{ (i18n or {}).get('msg_s297', "自有音色 ID") }}</label><input id="voice-profile-speaker" type="text" placeholder="my_voice"></div>
+          <div class="mr-field"><label for="voice-profile-ref">{{ (i18n or {}).get('msg_s298', "参考音频路径") }}</label><input id="voice-profile-ref" type="text" placeholder="D:\\voice\\my_voice.wav"></div>
+          <div class="mr-field full"><label for="voice-profile-command">{{ (i18n or {}).get('msg_s299', "自有音色命令模板") }}</label><input id="voice-profile-command" type="text" placeholder="python tools/glm_tts_infer.py --text {text} --ref {reference_audio} --out {out}"></div>
+          <label class="mr-check"><input type="checkbox" id="voice-text-summary">{{ (i18n or {}).get('msg_s300', "语音回复同时保留文字摘要") }}</label>
+          <label class="mr-check"><input type="checkbox" id="voice-night-quiet">{{ (i18n or {}).get('msg_s301', "夜间不自动发语音") }}</label>
+        </div>
+        <div class="mr-grid equal" style="margin-top:.8rem">
+          <div class="mr-audio-test">
+            <div class="mr-field"><label for="asr-test-path">{{ (i18n or {}).get('msg_s302', "ASR 测试音频路径") }}</label><input id="asr-test-path" type="text" placeholder="D:\\path\\voice.mp3"></div>
+            <div class="mr-actions"><button class="btn" id="btn-test-asr">{{ (i18n or {}).get('msg_s303', "测试语音转写") }}</button></div>
+            <div class="mr-audio-result" id="asr-test-result">{{ (i18n or {}).get('msg_s304', "等待测试") }}</div>
+          </div>
+          <div class="mr-audio-test">
+            <div class="mr-field"><label for="tts-test-text">{{ (i18n or {}).get('msg_s305', "TTS 试听文本") }}</label><textarea id="tts-test-text" class="mr-json-small" placeholder="{{ (i18n or {}).get('msg_s306', "こんにちは、写真ありがとう。") }}"></textarea></div>
+            <div class="mr-actions"><button class="btn" id="btn-test-tts">{{ (i18n or {}).get('msg_s307', "生成试听") }}</button></div>
+            <div class="mr-audio-result" id="tts-test-result">{{ (i18n or {}).get('msg_s308', "等待生成") }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pane 4: 客户转化 -->
+    <div class="st-pane" id="st-conversion">
+      <div class="rpa-card">
+        <div class="rpa-card-head">
+          <div class="rpa-card-icon amber"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg></div>
+          <div class="rpa-card-title">{{ (i18n or {}).get('msg_s309', "客户筛选与 LINE 引导") }}
+            <span style="font-size:.72rem;color:var(--t3);margin-left:.5rem;font-weight:400">{{ (i18n or {}).get('msg_s310', "面向日本 37-60 岁女性高价值客户") }}</span></div>
+          <div class="actions" style="margin-left:auto"><button class="btn btn-primary" id="btn-save-conversion">{{ (i18n or {}).get('msg_s311', "💾 保存转化配置") }}</button></div>
+        </div>
+        <div class="mr-field-grid">
+          <label class="mr-check"><input type="checkbox" id="lead-enabled">{{ (i18n or {}).get('msg_s312', "启用线索评分") }}</label>
+          <div class="mr-field"><label for="lead-country">{{ (i18n or {}).get('msg_s313', "目标国家") }}</label><input id="lead-country" type="text" value="JP"></div>
+          <div class="mr-field"><label for="lead-gender">{{ (i18n or {}).get('msg_s314', "目标性别") }}</label><input id="lead-gender" type="text" value="female"></div>
+          <div class="mr-field"><label for="lead-language">{{ (i18n or {}).get('msg_s315', "目标语言") }}</label><input id="lead-language" type="text" value="ja"></div>
+          <div class="mr-field"><label for="lead-age-min">{{ (i18n or {}).get('msg_s316', "年龄下限") }}</label><input id="lead-age-min" type="number" min="18" max="90"></div>
+          <div class="mr-field"><label for="lead-age-max">{{ (i18n or {}).get('msg_s317', "年龄上限") }}</label><input id="lead-age-max" type="number" min="18" max="90"></div>
+          <div class="mr-field"><label for="lead-min-score">{{ (i18n or {}).get('msg_s318', "发 LINE 最低分") }}</label><input id="lead-min-score" type="number" min="0" max="100"></div>
+          <div class="mr-field"><label for="lead-min-turns">{{ (i18n or {}).get('msg_s319', "发 LINE 前最少轮次") }}</label><input id="lead-min-turns" type="number" min="1" max="50"></div>
+          <div class="mr-field"><label for="lead-age-turns">{{ (i18n or {}).get('msg_s320', "询问年龄最少轮次") }}</label><input id="lead-age-turns" type="number" min="1" max="30"></div>
+          <div class="mr-field"><label for="lead-budget-turns">{{ (i18n or {}).get('msg_s321', "预算话题最少轮次") }}</label><input id="lead-budget-turns" type="number" min="1" max="50"></div>
+          <div class="mr-field"><label for="lead-low-score">{{ (i18n or {}).get('msg_s322', "低优先级分数线") }}</label><input id="lead-low-score" type="number" min="0" max="100"></div>
+          <div class="mr-field"><label for="lead-stop-turns">{{ (i18n or {}).get('msg_s323', "低价值静默轮次") }}</label><input id="lead-stop-turns" type="number" min="1" max="20"></div>
+          <div class="mr-field" style="grid-column:1/-1"><label for="lead-line-id">{{ (i18n or {}).get('msg_s324', "人工客服 LINE ID") }}</label><input id="lead-line-id" type="text" placeholder="@your_line_id"></div>
+          <div class="mr-field" style="grid-column:1/-1"><label for="lead-template">{{ (i18n or {}).get('msg_s455', 'LINE 引导话术模板（可用 {LINE_ID}）') }}</label><textarea id="lead-template" class="mr-json-small"></textarea></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pane 5: 运维诊断（B6-P1 重做：4 张状态卡 + 5 段守卫/冷却/分层 + 原始配置）-->
+    <div class="st-pane" id="st-ops">
+      <!-- 1. 实时状态卡 -->
+      <div class="rpa-card">
+        <div class="rpa-card-head">
+          <div class="rpa-card-icon blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
+          <div class="rpa-card-title">{{ (i18n or {}).get('msg_s325', "实时运行状态") }}
+            <span style="font-size:.72rem;color:var(--t3);margin-left:.5rem;font-weight:400">{{ (i18n or {}).get('msg_s326', "来自 /status API · 每 20s 自动刷新") }}</span></div>
+          <div class="actions" style="margin-left:auto"><button class="btn" id="btn-ops-refresh-status" type="button">{{ (i18n or {}).get('inbox.acct.refresh', "🔄 刷新") }}</button></div>
+        </div>
+        <div id="ops-status-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">
+          <div class="mr-empty" style="grid-column:1/-1">{{ (i18n or {}).get('rpa_loading', "加载中...") }}</div>
+        </div>
+      </div>
+
+      <!-- 2. 熔断守卫 -->
+      <details class="rpa-card" open style="padding:0">
+        <summary style="padding:14px 16px;cursor:pointer;font-weight:600;display:flex;align-items:center;gap:8px;list-style:none">
+          {{ (i18n or {}).get('msg_s464', '🚨 熔断守卫') }} <span style="margin-left:auto;font-size:.72rem;color:var(--t3);font-weight:400">{{ (i18n or {}).get('msg_s327', "防止疯狂回复 / 视觉误路 / 错发") }}</span>
+        </summary>
+        <div style="padding:0 16px 16px">
+          <div style="font-size:12px;color:var(--th-ink-red5,#b91c1c);background:var(--th-bg-red08,rgba(239,68,68,.08));border:1px solid var(--th-bd-red20,rgba(239,68,68,.2));padding:8px 12px;border-radius:6px;margin-bottom:12px">
+            {{ (i18n or {}).get('msg_s456', '🔴 危险参数 — 改错会导致系统不发消息或反复发消息。仅在排查事故时调整。') }}
+          </div>
+          <div class="mr-field-grid">
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s328', "启用 runaway_guard ") }}<span class="mr-tip" title="{{ (i18n or {}).get('msg_s329', "检测短时间内连续发送过多 / 重复消息后熔断") }}">ⓘ</span></label>
+              <select id="ops-runaway-enabled"><option value="true">{{ (i18n or {}).get('enable', "启用") }}</option><option value="false">{{ (i18n or {}).get('disable', "禁用") }}</option></select></div>
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s330', "窗口期（秒）") }}</label><input id="ops-runaway-window" type="number" min="30" max="3600" placeholder="{{ (i18n or {}).get('msg_s331', "默认 600") }}"></div>
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s332', "窗口内最大发送数") }}</label><input id="ops-runaway-max-sends" type="number" min="1" max="50" placeholder="{{ (i18n or {}).get('msg_s333', "默认 5") }}"></div>
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s334', "硬天花板（永不超过）") }}</label><input id="ops-runaway-hard" type="number" min="1" max="100" placeholder="{{ (i18n or {}).get('msg_s335', "默认 8") }}"></div>
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s336', "熔断后冷却（秒）") }}</label><input id="ops-runaway-cooldown" type="number" min="60" max="86400" placeholder="{{ (i18n or {}).get('msg_s331', "默认 600") }}"></div>
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s337', "启用序列重复检测") }}</label><select id="ops-runaway-seq"><option value="true">{{ (i18n or {}).get('enable', "启用") }}</option><option value="false">{{ (i18n or {}).get('disable', "禁用") }}</option></select></div>
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s338', "最多连续自重复次数") }}</label><input id="ops-runaway-seq-max" type="number" min="2" max="20" placeholder="{{ (i18n or {}).get('msg_s339', "默认 3") }}"></div>
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s340', "重叠率阈值 (0-1)") }}</label><input id="ops-runaway-seq-overlap" type="number" min="0" max="1" step="0.05" placeholder="{{ (i18n or {}).get('msg_s341', "默认 0.8") }}"></div>
+          </div>
+          <div style="border-top:1px solid var(--bd);margin:14px 0;padding-top:14px">
+            <div class="mr-field-grid">
+              <div class="mr-field"><label>{{ (i18n or {}).get('msg_s342', "启用 vision_misroute_guard ") }}<span class="mr-tip" title="{{ (i18n or {}).get('msg_s343', "OCR 把 chat A 误读成 chat B 时的保护") }}">ⓘ</span></label>
+                <select id="ops-vmg-enabled"><option value="true">{{ (i18n or {}).get('enable', "启用") }}</option><option value="false">{{ (i18n or {}).get('disable', "禁用") }}</option></select></div>
+              <div class="mr-field"><label>{{ (i18n or {}).get('msg_s344', "误路冷却（秒）") }}</label><input id="ops-vmg-cooldown" type="number" min="30" max="3600" placeholder="{{ (i18n or {}).get('msg_s345', "默认 300") }}"></div>
+              <div class="mr-field"><label>{{ (i18n or {}).get('msg_s346', "仅 sticky 时检查") }}</label>
+                <select id="ops-vmg-only-sticky"><option value="false">{{ (i18n or {}).get('msg_s347', "所有场景") }}</option><option value="true">{{ (i18n or {}).get('msg_s348', "仅 sticky 模式") }}</option></select></div>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <!-- 3. 冷却节奏 -->
+      <details class="rpa-card" style="padding:0;margin-top:12px">
+        <summary style="padding:14px 16px;cursor:pointer;font-weight:600;display:flex;align-items:center;gap:8px;list-style:none">
+          {{ (i18n or {}).get('msg_s465', '⏱ 冷却节奏') }} <span style="margin-left:auto;font-size:.72rem;color:var(--t3);font-weight:400">{{ (i18n or {}).get('msg_s349', "每 chat / 每发送的冷却限速") }}</span>
+        </summary>
+        <div style="padding:0 16px 16px">
+          <div class="mr-field-grid">
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s350', "启用 sticky_thread（粘性会话）") }}</label>
+              <select id="ops-sticky-enabled"><option value="true">{{ (i18n or {}).get('enable', "启用") }}</option><option value="false">{{ (i18n or {}).get('disable', "禁用") }}</option></select></div>
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s351', "发送后粘性冷却（秒）") }}</label><input id="ops-sticky-cooldown" type="number" min="0" max="3600" placeholder="{{ (i18n or {}).get('msg_s352', "默认 90") }}"></div>
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s353', "启用 hash 早退 ") }}<span class="mr-tip" title="{{ (i18n or {}).get('msg_s354', "hash 一致时跳过整轮") }}">ⓘ</span></label>
+              <select id="ops-sticky-hash"><option value="true">{{ (i18n or {}).get('enable', "启用") }}</option><option value="false">{{ (i18n or {}).get('disable', "禁用") }}</option></select></div>
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s355', "强制全检周期（n 次空跑后）") }}</label><input id="ops-sticky-fullcheck" type="number" min="1" max="100" placeholder="{{ (i18n or {}).get('msg_s335', "默认 8") }}"></div>
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s356', "每 chat 每小时上限 ") }}<span class="mr-tip" title="{{ (i18n or {}).get('msg_s358', "单 chat 每小时最多发几条 — 防刷屏") }}">ⓘ</span></label><input id="ops-hourly-cap" type="number" min="0" max="200" placeholder="{{ (i18n or {}).get('msg_s357', "默认 30") }}"></div>
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s359', "自方消息冷却（秒）") }}</label><input id="ops-self-skip" type="number" min="0" max="3600" placeholder="{{ (i18n or {}).get('msg_s360', "默认 60") }}"></div>
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s361', "垃圾消息冷却（秒）") }}</label><input id="ops-spam-cooldown" type="number" min="0" max="3600" placeholder="{{ (i18n or {}).get('msg_s362', "默认 3600") }}"></div>
+          </div>
+        </div>
+      </details>
+
+      <!-- 4. 模型分层 & 速率学习 -->
+      <details class="rpa-card" style="padding:0;margin-top:12px">
+        <summary style="padding:14px 16px;cursor:pointer;font-weight:600;display:flex;align-items:center;gap:8px;list-style:none">
+          {{ (i18n or {}).get('msg_s466', '🎚 模型分层 & 速率学习') }} <span style="margin-left:auto;font-size:.72rem;color:var(--t3);font-weight:400">{{ (i18n or {}).get('msg_s363', "AI 成本与节奏自适应") }}</span>
+        </summary>
+        <div style="padding:0 16px 16px">
+          <div class="mr-field-grid">
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s364', "启用 ai.tiers ") }}<span class="mr-tip" title="{{ (i18n or {}).get('msg_s365', "按消息复杂度自动选模型 — 高级关键词走 GPT/高级模型，低优先级走轻量模型") }}">ⓘ</span></label>
+              <select id="ops-ai-tiers-enabled"><option value="true">{{ (i18n or {}).get('enable', "启用") }}</option><option value="false">{{ (i18n or {}).get('disable', "禁用") }}</option></select></div>
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s366', "高级关键词（逗号分隔）") }}</label><input id="ops-ai-premium-kw" placeholder="{{ (i18n or {}).get('msg_s367', "重要、紧急、谈判") }}"></div>
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s368', "低级关键词（逗号分隔）") }}</label><input id="ops-ai-low-kw" placeholder="{{ (i18n or {}).get('msg_s369', "hi、嗯、好的") }}"></div>
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s370', "低优先级阈值（命中分）") }}</label><input id="ops-ai-low-threshold" type="number" min="1" max="10" placeholder="{{ (i18n or {}).get('msg_s371', "默认 2") }}"></div>
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s372', "高级阈值（命中分）") }}</label><input id="ops-ai-premium-threshold" type="number" min="1" max="10" placeholder="{{ (i18n or {}).get('msg_s371', "默认 2") }}"></div>
+          </div>
+          <div style="border-top:1px solid var(--bd);margin:14px 0;padding-top:14px">
+            <div class="mr-field-grid">
+              <div class="mr-field"><label>{{ (i18n or {}).get('msg_s373', "启用 pace_learning ") }}<span class="mr-tip" title="{{ (i18n or {}).get('msg_s374', "学习对方平均回复节奏，匹配人类化响应间隔") }}">ⓘ</span></label>
+                <select id="ops-pace-enabled"><option value="true">{{ (i18n or {}).get('enable', "启用") }}</option><option value="false">{{ (i18n or {}).get('disable', "禁用") }}</option></select></div>
+              <div class="mr-field"><label>{{ (i18n or {}).get('msg_s375', "最少样本数") }}</label><input id="ops-pace-samples" type="number" min="1" max="100" placeholder="{{ (i18n or {}).get('msg_s333', "默认 5") }}"></div>
+              <div class="mr-field"><label>{{ (i18n or {}).get('msg_s376', "节流倍数") }}</label><input id="ops-pace-throttle" type="number" min="0.5" max="10" step="0.1" placeholder="{{ (i18n or {}).get('msg_s377', "默认 1.5") }}"></div>
+              <div class="mr-field"><label>{{ (i18n or {}).get('msg_s378', "阻止倍数（彻底跳过）") }}</label><input id="ops-pace-block" type="number" min="1" max="20" step="0.1" placeholder="{{ (i18n or {}).get('msg_s379', "默认 3.0") }}"></div>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <!-- 5. 信用积分 -->
+      <details class="rpa-card" style="padding:0;margin-top:12px">
+        <summary style="padding:14px 16px;cursor:pointer;font-weight:600;display:flex;align-items:center;gap:8px;list-style:none">
+          {{ (i18n or {}).get('msg_s467', '💳 信用积分') }} <span style="margin-left:auto;font-size:.72rem;color:var(--t3);font-weight:400">{{ (i18n or {}).get('msg_s380', "每 chat 信用 → 黑名单 / 低分静默") }}</span>
+        </summary>
+        <div style="padding:0 16px 16px">
+          <div class="mr-field-grid">
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s381', "启用 credit_policy") }}</label>
+              <select id="ops-credit-enabled"><option value="true">{{ (i18n or {}).get('enable', "启用") }}</option><option value="false">{{ (i18n or {}).get('disable', "禁用") }}</option></select></div>
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s382', "黑名单分数线 ") }}<span class="mr-tip" title="{{ (i18n or {}).get('msg_s384', "低于此分进入黑名单，永不发送") }}">ⓘ</span></label><input id="ops-credit-blacklist" type="number" placeholder="{{ (i18n or {}).get('msg_s383', "默认 -100") }}"></div>
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s385', "低分阈值") }}</label><input id="ops-credit-low" type="number" placeholder="{{ (i18n or {}).get('msg_s386', "默认 -50") }}"></div>
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s387', "发送失败减分 (Δ)") }}</label><input id="ops-credit-fail" type="number" placeholder="{{ (i18n or {}).get('msg_s388', "默认 -5") }}"></div>
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s389', "恢复加分 (Δ)") }}</label><input id="ops-credit-recover" type="number" placeholder="{{ (i18n or {}).get('msg_s390', "默认 +1") }}"></div>
+            <div class="mr-field"><label>{{ (i18n or {}).get('msg_s391', "升级减分 (Δ)") }}</label><input id="ops-credit-escalate" type="number" placeholder="{{ (i18n or {}).get('msg_s392', "默认 -20") }}"></div>
+          </div>
+        </div>
+      </details>
+
+      <!-- 6. 高级：原始配置（折叠） -->
+      <details class="rpa-card" style="padding:0;margin-top:12px">
+        <summary style="padding:14px 16px;cursor:pointer;font-weight:600;display:flex;align-items:center;gap:8px;list-style:none;color:var(--t2)">
+          {{ (i18n or {}).get('msg_s468', '📄 原始配置（高级）') }}<span style="margin-left:auto;font-size:.72rem;color:var(--t3);font-weight:400">{{ (i18n or {}).get('msg_s393', "只读 · 展示当前生效的 raw cfg") }}</span>
+        </summary>
+        <div style="padding:0 16px 16px">
+          <textarea id="config-raw" class="mr-textarea" spellcheck="false" readonly style="min-height:240px"></textarea>
+        </div>
+      </details>
+
+      <!-- P28: 手动发送队列 -->
+      <div class="rpa-card" id="mr-sendq-card" style="margin-top:12px">
+        <div class="rpa-card-head">
+          <div class="rpa-card-icon purple"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></div>
+          <div class="rpa-card-title">{{ (i18n or {}).get('msg_s457', '手动发送队列') }}
+            <span id="mr-sendq-count" style="font-size:.72rem;color:var(--t3);margin-left:.5rem;font-weight:400"></span></div>
+          <div class="actions" style="margin-left:auto;display:flex;gap:6px;align-items:center">
+            <label style="font-size:.75rem;display:flex;align-items:center;gap:4px">
+              <input type="checkbox" id="mr-sendq-include-done" onchange="loadMrSendQueue()"> {{ (i18n or {}).get('msg_s458', '含已完成') }}
+            </label>
+            <button class="btn" style="font-size:.72rem;padding:.25rem .55rem" onclick="loadMrSendQueue()">{{ (i18n or {}).get('refresh', "刷新") }}</button>
+            <button class="btn btn-primary" style="font-size:.72rem;padding:.25rem .55rem" onclick="mrOpenSendManual()">{{ (i18n or {}).get('msg_s394', "+ 新建") }}</button>
+          </div>
+        </div>
+        <div id="mr-sendq-body" style="font-size:.82rem;padding:0 16px 12px">
+          <div class="mr-empty" style="padding:1rem">{{ (i18n or {}).get('rpa_loading', "加载中…") }}</div>
+        </div>
+      </div>
+
+      <!-- 保存按钮（sticky 底部） -->
+      <div style="margin-top:14px;padding:12px 16px;background:rgba(15,23,42,.6);border:1px solid var(--bd);border-radius:8px;display:flex;align-items:center;gap:12px;position:sticky;bottom:0;z-index:5">
+        <span style="font-size:12px;color:var(--t3);flex:1">{{ (i18n or {}).get('msg_s395', "⚠ 这些是事故级参数，保存前请确认理解每项含义") }}</span>
+        <button class="btn" type="button" id="btn-ops-reset-defaults" title="{{ (i18n or {}).get('msg_s397', "把所有 ops 字段重置为系统推荐值") }}">{{ (i18n or {}).get('msg_s396', "↺ 推荐值") }}</button>
+        <button class="btn btn-primary" type="button" id="btn-ops-save" style="background:var(--th-bg-emerald5,#10b981);border-color:var(--th-bd-emerald5,#10b981)">{{ (i18n or {}).get('msg_s398', "💾 保存运维配置") }}</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div id="mr-toast" class="mr-toast"></div>
+
+<!-- B6-P6: 离线红条 / 错误铃铛 / 错误面板 / 确认对话框 -->
+<div id="offline-banner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:6000;background:var(--th-bg-red5,#ef4444);color:var(--th-ink-inverse,#fff);text-align:center;padding:8px;font-size:13px;font-weight:600;box-shadow:0 2px 8px rgba(0,0,0,.3)">
+  {{ (i18n or {}).get('msg_s459', '⚠ 网络已断开 — 部分功能不可用，请检查网络后刷新') }}
+</div>
+
+<button id="err-bell" class="err-bell" title="{{ (i18n or {}).get('msg_s399', "查看错误历史") }}" onclick="document.getElementById('err-panel').classList.toggle('show')">
+  🔔<span id="err-bell-badge" class="badge">0</span>
+</button>
+
+<div id="err-panel" class="err-panel">
+  <div class="err-panel-head">
+    <span>{{ (i18n or {}).get('msg_s400', "⚠ 错误历史（最近 50 条）") }}</span>
+    <span>
+      <button onclick="window.errLog.clear()">{{ (i18n or {}).get('logs_clear', "清空") }}</button>
+      <button onclick="document.getElementById('err-panel').classList.remove('show')">{{ (i18n or {}).get('ov_js_disable', "关闭") }}</button>
+    </span>
+  </div>
+  <div id="err-panel-list" class="err-panel-list"></div>
+</div>
+
+<div id="cfm-mask" class="cfm-mask">
+  <div class="cfm-card">
+    <h3 id="cfm-title">{{ (i18n or {}).get('msg_s401', "请确认") }}</h3>
+    <div id="cfm-msg" class="cfm-msg"></div>
+    <div class="cfm-actions">
+      <button id="cfm-cancel" class="cfm-btn">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
+      <button id="cfm-ok" class="cfm-btn primary">{{ (i18n or {}).get('rpa_fn_ack', "确认") }}</button>
+    </div>
+  </div>
+</div>
+<div id="mr-drawer-mask" class="mr-drawer-mask"></div>
+<aside id="mr-device-drawer" class="mr-device-drawer" aria-hidden="true">
+  <div class="mr-drawer-head">
+    <div>
+      <h2 class="rpa-card-title" id="drawer-title" style="margin:0">{{ (i18n or {}).get('msg_s402', "设备详情") }}</h2>
+      <div id="drawer-sub" style="font-size:.73rem;color:var(--t3);margin-top:.2rem">{{ (i18n or {}).get('msg_s403', "选择一台设备查看") }}</div>
+    </div>
+    <button class="btn" id="btn-close-drawer">{{ (i18n or {}).get('ov_js_disable', "关闭") }}</button>
+  </div>
+  <div class="mr-drawer-body" id="drawer-body"></div>
+</aside>
+
+{# P2-3：主脚本已外迁 static/messenger/messenger_rpa.js（原样搬迁，全局语义不变）。
+   改 JS 记得 bump ?v= 缓存戳 + scripts/bump_ui_build.py（双戳纪律）。 #}
+<script src="/static/messenger/messenger_rpa.js?v=20260802c"></script>
+
+<!-- B6-P0++: 人设编辑 modal（重做版：更大 + 更专业 + 字段分组 + event delegation）-->
+<style>
+  #persona-edit-modal{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.75);z-index:9999;display:none;justify-content:center;align-items:center;padding:24px;backdrop-filter:blur(4px)}
+  #persona-edit-modal.show{display:flex}
+  #persona-edit-modal-card{background:#0f172a;border:1px solid #334155;border-radius:14px;width:min(1100px,96vw);max-height:92vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.6)}
+  #persona-edit-modal-header{display:flex;align-items:center;justify-content:space-between;padding:18px 24px;border-bottom:1px solid #334155;background:linear-gradient(180deg,rgba(45,108,223,0.05),transparent)}
+  #persona-edit-modal-header h2{margin:0;color:#f1f5f9;font-size:20px;font-weight:700;display:flex;align-items:center;gap:10px}
+  #persona-edit-modal-header .sub{font-size:13px;color:#94a3b8;margin-top:6px}
+  #persona-edit-modal-close{background:transparent;border:1px solid #334155;color:#94a3b8;font-size:16px;width:36px;height:36px;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:.16s}
+  #persona-edit-modal-close:hover{background:#1e293b;color:#f1f5f9;border-color:#475569}
+  #persona-edit-modal-body{padding:24px;overflow:auto;flex:1}
+  #persona-edit-modal-footer{padding:16px 24px;border-top:1px solid #334155;background:rgba(15,23,42,0.95);display:flex;gap:12px;justify-content:flex-end;align-items:center}
+  .pe-section{margin-bottom:24px;padding-bottom:20px;border-bottom:1px solid rgba(51,65,85,0.5)}
+  .pe-section:last-child{border-bottom:0;margin-bottom:0;padding-bottom:0}
+  .pe-section-title{font-size:13px;font-weight:700;color:var(--tk-brand,#1e8cf2);margin-bottom:14px;text-transform:uppercase;letter-spacing:.05em;display:flex;align-items:center;gap:8px}
+  .pe-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:14px}
+  .pe-row:last-child{margin-bottom:0}
+  .pe-field{display:flex;flex-direction:column;gap:6px}
+  .pe-field label{font-size:13px;color:#cbd5e1;font-weight:600}
+  .pe-field .pe-hint{font-size:11px;color:#64748b;margin-top:-2px}
+  .pe-field input,.pe-field textarea,.pe-field select{background:#1e293b;border:1px solid #334155;color:#f1f5f9;padding:10px 12px;border-radius:8px;font-size:14px;font-family:inherit;transition:.16s;width:100%;box-sizing:border-box}
+  .pe-field input:focus,.pe-field textarea:focus,.pe-field select:focus{outline:none;border-color:var(--tk-brand,#1e8cf2);background:#1a2438;box-shadow:0 0 0 3px rgba(30,140,242,0.15)}
+  .pe-field input:disabled{opacity:0.55;cursor:not-allowed;background:#0f172a}
+  .pe-field textarea{resize:vertical;min-height:90px;line-height:1.6}
+  .pe-field textarea.pe-large{min-height:140px}
+  .pe-tag{display:inline-block;padding:2px 8px;font-size:10px;background:rgba(30,140,242,0.15);color:var(--bl-growth-300,#8bc4f8);border-radius:4px;margin-left:6px;font-weight:500}
+  #persona-edit-modal-footer .btn{padding:10px 18px;font-size:14px;font-weight:600;border-radius:8px;cursor:pointer;border:1px solid #334155;background:#1e293b;color:#cbd5e1;transition:.16s}
+  #persona-edit-modal-footer .btn:hover{background:#334155;color:#f1f5f9}
+  #persona-edit-modal-footer .btn.btn-primary{background:#10b981;border-color:#10b981;color:white}
+  #persona-edit-modal-footer .btn.btn-primary:hover{background:#059669;border-color:#059669}
+</style>
+
+<div id="persona-edit-modal">
+  <div id="persona-edit-modal-card">
+    <div id="persona-edit-modal-header">
+      <div>
+        <h2>{{ (i18n or {}).get('msg_s404', "🎭 编辑人设") }}</h2>
+        <div class="sub">{{ (i18n or {}).get('msg_s405', "配置 AI 在哪些场景用什么风格回复 · 保存后立即对所有相关 chat 生效") }}</div>
+      </div>
+      <button id="persona-edit-modal-close" type="button" title="{{ (i18n or {}).get('ov_js_disable', "关闭") }}">✕</button>
+    </div>
+    <div id="persona-edit-modal-body">
+      <div id="persona-form">
+        <!-- 段落 1: 基础信息 -->
+        <div class="pe-section">
+          <div class="pe-section-title">{{ (i18n or {}).get('msg_s406', "📝 基础信息") }}</div>
+          <div class="pe-row">
+            <div class="pe-field">
+              <label>{{ (i18n or {}).get('msg_s407', "人设 ID ") }}<span class="pe-tag">{{ (i18n or {}).get('msg_s408', "不可修改") }}</span></label>
+              <input id="persona-form-id" disabled>
+              <div class="pe-hint">{{ (i18n or {}).get('msg_s409', "系统内部唯一标识，新建时填写") }}</div>
+            </div>
+            <div class="pe-field">
+              <label>{{ (i18n or {}).get('dash.ws.name_ph', "显示名称") }}</label>
+              <input id="persona-form-name" placeholder="{{ (i18n or {}).get('msg_s410', "例：小灵 / 佐藤拓海 / 小乐") }}">
+              <div class="pe-hint">{{ (i18n or {}).get('msg_s411', "AI 自我介绍时用的名字") }}</div>
+            </div>
+          </div>
+          <div class="pe-row">
+            <div class="pe-field">
+              <label>{{ (i18n or {}).get('msg_s412', "使用语言") }}</label>
+              <select id="persona-form-language">
+                <option value="auto">{{ (i18n or {}).get('msg_s413', "自动跟随用户语言") }}</option>
+                <option value="zh">{{ (i18n or {}).get('dash.lang.zh', "中文") }}</option>
+                <option value="ja">{{ (i18n or {}).get('dash.lang.ja', "日语") }}</option>
+                <option value="en">{{ (i18n or {}).get('dash.lang.en', "英语") }}</option>
+                <option value="ko">{{ (i18n or {}).get('dash.lang.ko', "韩语") }}</option>
+              </select>
+              <div class="pe-hint">{{ (i18n or {}).get('msg_s414', "AI 回复用什么语言") }}</div>
+            </div>
+            <div class="pe-field">
+              <label>{{ (i18n or {}).get('msg_s415', "客户类型 ") }}<span class="pe-tag">{{ (i18n or {}).get('msg_s416', "可选") }}</span></label>
+              <input id="persona-form-customer-type" placeholder="{{ (i18n or {}).get('msg_s417', "例：lead / support / casual / 高价值") }}">
+              <div class="pe-hint">{{ (i18n or {}).get('msg_s418', "用于自动匹配，留空也可以") }}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 段落 2: 行为风格 -->
+        <div class="pe-section">
+          <div class="pe-section-title">{{ (i18n or {}).get('msg_s419', "💬 说话风格") }}</div>
+          <div class="pe-field">
+            <label>{{ (i18n or {}).get('msg_s420', "风格提示词 ") }}<span class="pe-tag">{{ (i18n or {}).get('msg_s421', "告诉 AI 怎么说话") }}</span></label>
+            <textarea id="persona-form-style" class="pe-large" placeholder="{{ (i18n or {}).get('msg_s422', "例：你是自然的 Messenger 私聊对象，不是客服机器人。优先短句、口语、像真人聊天。&#10;&#10;用户很短时只回一小句；用户认真倾诉时先接住情绪，再轻问一个问题。") }}"></textarea>
+            <div class="pe-hint">{{ (i18n or {}).get('msg_s423', "越具体越好，建议 3-5 行；将作为 system prompt 一部分") }}</div>
+          </div>
+        </div>
+
+        <!-- 段落 3: 专属客户 + 禁用词 -->
+        <div class="pe-section">
+          <div class="pe-section-title">{{ (i18n or {}).get('msg_s424', "🎯 匹配规则与禁忌") }}</div>
+          <div class="pe-row">
+            <div class="pe-field">
+              <label>{{ (i18n or {}).get('msg_s425', "专属客户 ") }}<span class="pe-tag">{{ (i18n or {}).get('msg_s416', "可选") }}</span></label>
+              <input id="persona-form-match-names" placeholder="{{ (i18n or {}).get('msg_s426', "例：Victor Zan, Alice, 田中太郎") }}">
+              <div class="pe-hint">{{ (i18n or {}).get('msg_s427', "命中这些 chat 名字时自动用此人设；多个用逗号分隔") }}</div>
+            </div>
+            <div class="pe-field">
+              <label>{{ (i18n or {}).get('psn_js_176', "禁用词 ") }}<span class="pe-tag">{{ (i18n or {}).get('msg_s428', "AI 永远不会说") }}</span></label>
+              <input id="persona-form-forbidden" placeholder="{{ (i18n or {}).get('msg_s429', "例：作为AI, 有什么可以帮您, 请问有什么需要") }}">
+              <div class="pe-hint">{{ (i18n or {}).get('msg_s430', "硬约束，多个用逗号分隔；常用于过滤客服腔") }}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 段落 4: 背景设定 -->
+        <div class="pe-section">
+          <div class="pe-section-title">{{ (i18n or {}).get('msg_s431', "📋 背景设定") }}</div>
+          <div class="pe-field">
+            <label>{{ (i18n or {}).get('msg_s432', "AI 知道的事实 ") }}<span class="pe-tag">{{ (i18n or {}).get('msg_s433', "每行一条") }}</span></label>
+            <textarea id="persona-form-facts" class="pe-large" placeholder="{{ (i18n or {}).get('msg_s434', "例：&#10;52 岁，居住东京港区&#10;软件工程师，离婚 5 年&#10;爱好：健身、高尔夫、旅行&#10;有个 25 岁的孩子在美国读研") }}"></textarea>
+            <div class="pe-hint">{{ (i18n or {}).get('msg_s435', "建议 5-10 条；AI 会自然引用但不会全部背出") }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="persona-edit-modal-footer">
+      <span style="margin-right:auto;font-size:12px;color:var(--th-ink-slate5,#64748b)">{{ (i18n or {}).get('msg_s436', "💡 修改后立即生效，无需重启") }}</span>
+      <button id="btn-cancel-persona-form" type="button" class="btn">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
+      <button id="btn-save-persona-form" type="button" class="btn btn-primary">{{ (i18n or {}).get('msg_s437', "💾 保存修改") }}</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// 人设编辑 modal 全局 event delegation（修 handler 注册时 modal 不存在的 bug）
+(function(){
+  document.addEventListener('click', function(e) {
+    const t = e.target;
+    if (!t || !t.id) {
+      // 点 modal 背景关闭
+      if (t && t.id !== 'persona-edit-modal' && t.closest && t.closest('#persona-edit-modal-card')) return;
+    }
+    // 关闭按钮
+    if (t.id === 'persona-edit-modal-close' || t.id === 'btn-cancel-persona-form') {
+      e.preventDefault();
+      const m = document.getElementById('persona-edit-modal');
+      if (m) m.classList.remove('show');
+      if (window.state) window.state.editingPersonaId = '';
+      return;
+    }
+    // 点 modal 背景关闭
+    if (t.id === 'persona-edit-modal') {
+      e.preventDefault();
+      t.classList.remove('show');
+      if (window.state) window.state.editingPersonaId = '';
+      return;
+    }
+    // 保存按钮
+    if (t.id === 'btn-save-persona-form') {
+      e.preventDefault();
+      if (typeof window.savePersonaForm === 'function') {
+        window.savePersonaForm().catch(err => {
+          if (window.toast) window.toast(err.message || window.T('ov_js_save_fail'), 'err');
+          else alert(window.T('ov_js_save_fail')+': ' + (err.message || err));
+        });
+      } else {
+        alert('savePersonaForm '+window.T('msg_js_2048'));
+      }
+      return;
+    }
+  }, false);
+  // ESC 关闭 modal
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      const m = document.getElementById('persona-edit-modal');
+      if (m && m.classList.contains('show')) {
+        m.classList.remove('show');
+        if (window.state) window.state.editingPersonaId = '';
+      }
+    }
+  });
+})();
+</script>
+
+<!-- B6-P0: 单聊人设管理 modal -->
+<div id="chat-binding-mgr-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;justify-content:center;align-items:center">
+  <div style="background:var(--th-bg-slate9,#0f172a);border:1px solid var(--th-bd-slate7,#334155);border-radius:12px;padding:20px;max-width:900px;width:90%;max-height:85vh;overflow:auto;box-shadow:0 10px 40px rgba(0,0,0,0.5)">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--th-bd-slate7,#334155)">
+      <div>
+        <h2 style="margin:0;color:var(--th-ink-slate1,#f1f5f9);font-size:18px">{{ (i18n or {}).get('msg_s438', "🎭 单聊人设管理") }}</h2>
+        <div style="font-size:12px;color:var(--th-ink-slate4,#5b6b85);margin-top:4px">{{ (i18n or {}).get('msg_s439', "运营手动指定 chat → reply_profile（覆盖自动匹配，立即生效）") }}</div>
+      </div>
+      <button class="btn" id="btn-close-chat-binding-mgr" style="font-size:20px;padding:4px 10px">✕</button>
+    </div>
+
+    <!-- 工具栏 -->
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center;padding:10px;background:var(--th-bg-blue08,rgba(45,108,223,0.08));border-radius:8px">
+      <input id="chat-binding-search" placeholder="{{ (i18n or {}).get('msg_s440', "🔍 搜 chat 名") }}" style="flex:1;min-width:200px;padding:6px 10px;background:var(--th-bg-inkpanel,#1a1f2e);color:var(--th-ink-slate3,#cbd5e1);border:1px solid var(--th-bd-slate7,#334155);border-radius:4px;font-size:13px">
+      <select id="chat-binding-filter-account" style="padding:6px 10px;background:var(--th-bg-inkpanel,#1a1f2e);color:var(--th-ink-slate3,#cbd5e1);border:1px solid var(--th-bd-slate7,#334155);border-radius:4px;font-size:13px">
+        <option value="">{{ (i18n or {}).get('msg_s441', "所有账号") }}</option>
+      </select>
+      <button class="btn" id="btn-binding-mgr-refresh" style="font-size:12px">{{ (i18n or {}).get('inbox.acct.refresh', "🔄 刷新") }}</button>
+    </div>
+
+    <!-- 批量操作 -->
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center;padding:8px 10px;background:var(--th-bg-grn05,rgba(16,185,129,0.05));border-left:3px solid var(--th-bd-emerald5,#10b981);border-radius:4px">
+      <span style="font-size:12px;color:var(--th-ink-emerald5,#047857);font-weight:600">{{ (i18n or {}).get('msg_s442', "🔧 批量:") }}</span>
+      <button class="btn" id="btn-binding-mgr-bulk-bind" style="font-size:12px">{{ (i18n or {}).get('msg_s125', "批量绑定选中") }}</button>
+      <button class="btn" id="btn-binding-mgr-bind-all-account" style="font-size:12px">{{ (i18n or {}).get('msg_s443', "账号下全部绑定") }}</button>
+      <button class="btn" id="btn-binding-mgr-clear-checks" style="font-size:12px">{{ (i18n or {}).get('msg_s129', "清除选中") }}</button>
+      <span class="mr-muted" id="binding-mgr-checks-count" style="font-size:11px;margin-left:auto">{{ (i18n or {}).get('msg_s130', "已选 0 个") }}</span>
+    </div>
+
+    <!-- chat 列表 -->
+    <div id="chat-binding-mgr-list" style="max-height:50vh;overflow:auto">
+      <div class="mr-empty">{{ (i18n or {}).get('rpa_loading', "加载中...") }}</div>
+    </div>
+
+    <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--th-bd-slate7,#334155);font-size:11px;color:var(--th-ink-slate5,#64748b)">
+      {{ (i18n or {}).get('msg_s460', '💡 提示：列表来自最近活跃 chat（客户线索）。选下拉立即生效，无需保存。') }}
+    </div>
+  </div>
+</div>
+
+<script>
+// B6-P0: 单聊人设管理 modal handlers
+(function(){
+  const modal = document.getElementById('chat-binding-mgr-modal');
+  if (!modal) return;
+  const btnOpen = document.getElementById('btn-open-chat-binding-mgr');
+  const btnClose = document.getElementById('btn-close-chat-binding-mgr');
+  const btnRefresh = document.getElementById('btn-binding-mgr-refresh');
+  const btnBulkBind = document.getElementById('btn-binding-mgr-bulk-bind');
+  const btnBindAcc = document.getElementById('btn-binding-mgr-bind-all-account');
+  const btnClearChecks = document.getElementById('btn-binding-mgr-clear-checks');
+  const searchInput = document.getElementById('chat-binding-search');
+  const filterAccount = document.getElementById('chat-binding-filter-account');
+  const listEl = document.getElementById('chat-binding-mgr-list');
+  const checksCountEl = document.getElementById('binding-mgr-checks-count');
+
+  let _bindingMgrLeads = [];
+  let _bindingMgrBindings = {};
+
+  function open() {
+    modal.style.display = 'flex';
+    refresh();
+  }
+  function close() { modal.style.display = 'none'; }
+
+  async function refresh() {
+    listEl.innerHTML = '<div class="mr-empty">'+window.T('msg_js_1047')+'...</div>';
+    try {
+      const [leadsR, bindingsR] = await Promise.all([
+        apiFetch('/api/messenger-rpa/leads?limit=200', {credentials:'same-origin'}).then(r => r.json()),
+        apiFetch('/api/messenger-rpa/chat-persona-bindings', {credentials:'same-origin'}).then(r => r.json()),
+      ]);
+      _bindingMgrLeads = leadsR.items || [];
+      _bindingMgrBindings = {};
+      (bindingsR.bindings || []).forEach(b => {
+        _bindingMgrBindings[`${b.chat_name}|${b.account_id || ''}`] = b.reply_profile_id;
+      });
+      // 填充账号 filter
+      const accounts = [...new Set(_bindingMgrLeads.map(l => l.account_id || '').filter(Boolean))].sort();
+      filterAccount.innerHTML = '<option value="">'+window.T('msg_s441')+'</option>' +
+        accounts.map(a => `<option value="${a}">${a}</option>`).join('');
+      render();
+    } catch(e) {
+      listEl.innerHTML = `<div class="mr-empty" style="color:var(--th-ink-red5,#b91c1c)">${window.T('msg_js_1925')}: ${e.message}</div>`;
+    }
+  }
+
+  function render() {
+    const search = (searchInput.value || '').toLowerCase().trim();
+    const acctFilter = filterAccount.value || '';
+    const profiles = (((window.state || {}).personas || {}).reply_profiles || {}).profiles || [];
+
+    let leads = _bindingMgrLeads;
+    if (search) leads = leads.filter(l => (l.chat_name || '').toLowerCase().includes(search));
+    if (acctFilter) leads = leads.filter(l => (l.account_id || '') === acctFilter);
+
+    if (!leads.length) {
+      listEl.innerHTML = '<div class="mr-empty">'+window.T('msg_js_2049')+'）</div>';
+      return;
+    }
+
+    // 用 table 替代 flex —— 列宽明确，文字不会被挤竖排
+    listEl.innerHTML = `
+      <table style="width:100%;border-collapse:collapse;table-layout:fixed">
+        <colgroup>
+          <col style="width:40px">
+          <col style="width:auto">
+          <col style="width:140px">
+          <col style="width:200px">
+          <col style="width:60px">
+        </colgroup>
+        <thead>
+          <tr style="background:var(--th-bg-inkpanel,#1a1f2e);color:var(--th-ink-slate4,#5b6b85);font-size:11px;text-align:left">
+            <th style="padding:8px"></th>
+            <th style="padding:8px">Chat ${window.T('msg_js_2064')}</th>
+            <th style="padding:8px">${window.T('ov_js_th_account')}</th>
+            <th style="padding:8px">${window.T('msg_js_1752')}</th>
+            <th style="padding:8px;text-align:center">${window.T('ov_js_th_status')}</th>
+          </tr>
+        </thead>
+        <tbody>
+        ${leads.map(l => {
+          const chatName = l.chat_name || l.chat_key || '';
+          const accountId = l.account_id || '';
+          const key = `${chatName}|${accountId}`;
+          const bound = _bindingMgrBindings[key] || '';
+          const opts = ['<option value="">['+window.T('msg_js_1858')+']</option>']
+            .concat(profiles.map(p => `<option value="${p.id}" ${bound === p.id ? 'selected' : ''}>${p.id}</option>`))
+            .join('');
+          const safeName = chatName.replace(/"/g, '&quot;');
+          return `<tr style="border-bottom:1px solid var(--th-bd-slate8,#1e293b);height:48px">
+            <td style="padding:8px;text-align:center"><input type="checkbox" class="binding-mgr-check" data-chat-name="${safeName}" data-account-id="${accountId}" style="width:16px;height:16px;cursor:pointer"></td>
+            <td style="padding:8px;color:var(--th-ink-slate1,#f1f5f9);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${safeName}">${chatName}</td>
+            <td style="padding:8px;font-size:11px;color:var(--th-ink-slate4,#5b6b85);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${accountId || '--'}">${accountId || '<i style=&quot;color:#64748b&quot;>'+window.T('msg_js_2050')+'</i>'}<br><span style="color:var(--th-ink-slate5,#64748b);font-size:10px">${l.score || 0}${window.T('msg_js_1982')} · ${l.reply_lang || '--'}</span></td>
+            <td style="padding:8px"><select class="binding-mgr-select" data-chat-name="${safeName}" data-account-id="${accountId}" style="width:100%;font-size:12px;padding:5px 8px;background:var(--th-bg-inkpanel,#1a1f2e);color:var(--th-ink-slate3,#cbd5e1);border:1px solid var(--th-bd-slate7,#334155);border-radius:4px;cursor:pointer">${opts}</select></td>
+            <td style="padding:8px;text-align:center">${bound ? '<span class="mr-badge sent" style="font-size:10px;white-space:nowrap">'+window.T('dash.stage.BONDED')+'</span>' : '<span class="mr-muted" style="font-size:10px;white-space:nowrap">'+window.T('dash.lb.auto')+'</span>'}</td>
+          </tr>`;
+        }).join('')}
+        </tbody>
+      </table>`;
+
+    // 绑定 select change
+    listEl.querySelectorAll('.binding-mgr-select').forEach(sel => {
+      sel.addEventListener('change', async () => {
+        const chatName = sel.dataset.chatName;
+        const accountId = sel.dataset.accountId || '';
+        const newProfile = sel.value;
+        try {
+          if (!newProfile) {
+            await apiFetch(`/api/messenger-rpa/chat-persona-bindings/${encodeURIComponent(chatName)}?account_id=${encodeURIComponent(accountId)}`, {method:'DELETE', credentials:'same-origin'}, {timeoutMs: 60000});
+          } else {
+            await apiFetch(`/api/messenger-rpa/chat-persona-bindings/${encodeURIComponent(chatName)}`, {
+              method:'PUT', credentials:'same-origin',
+              headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({reply_profile_id:newProfile, account_id:accountId}),
+            }, {timeoutMs: 60000});
+          }
+          if (window.toast) window.toast(window.Tf('msg_js_p79',{c:chatName,x:newProfile ? window.Tf('msg_js_p80',{p:newProfile}) : window.T('psn_js_086')}));
+          refresh();
+        } catch(e) { alert(window.T('psn_js_030')+': ' + e.message); }
+      });
+    });
+
+    listEl.querySelectorAll('.binding-mgr-check').forEach(c => {
+      c.addEventListener('change', updateChecksCount);
+    });
+    updateChecksCount();
+  }
+
+  function updateChecksCount() {
+    const n = listEl.querySelectorAll('.binding-mgr-check:checked').length;
+    if (checksCountEl) checksCountEl.textContent = window.Tf('msg_js_p69',{n:n});
+  }
+
+  async function bulkBindSelected() {
+    const checks = [...listEl.querySelectorAll('.binding-mgr-check:checked')];
+    if (!checks.length) return alert(window.T('msg_js_2051')+' chat');
+    const profiles = (window.state || {}).pmProfiles || (((window.state || {}).personas || {}).reply_profiles || {}).profiles || [];
+    const profileId = prompt(`${window.T('msg_js_1837')} ${checks.length} ${window.T('msg_js_1838')}。\n${window.T('msg_s416')}:\n${profiles.map(p => '  - ' + (p.id||p.name)).join('\n')}\n\n${window.T('inbox.prompt.title')} reply_profile_id（${window.T('msg_js_1839')} = ${window.T('psn_js_086')}）:`, (profiles[0] && (profiles[0].id||profiles[0].name)) || '');
+    if (profileId === null) return;
+    const bindings = checks.map(c => ({chat_name: c.dataset.chatName, account_id: c.dataset.accountId || '', reply_profile_id: profileId.trim()}));
+    try {
+      if (!profileId.trim()) {
+        for (const b of bindings) {
+          await apiFetch(`/api/messenger-rpa/chat-persona-bindings/${encodeURIComponent(b.chat_name)}?account_id=${encodeURIComponent(b.account_id)}`, {method:'DELETE', credentials:'same-origin'}, {timeoutMs: 60000});
+        }
+      } else {
+        await apiFetch('/api/messenger-rpa/chat-persona-bindings/batch', {
+          method:'POST', credentials:'same-origin',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({bindings}),
+        }, {timeoutMs: 60000});
+      }
+      if (window.toast) window.toast(window.T('msg_js_2069'));
+      refresh();
+    } catch(e) { alert(window.T('msg_js_2052')+': ' + e.message); }
+  }
+
+  async function bindAllAccount() {
+    const accounts = [...new Set(_bindingMgrLeads.map(l => l.account_id || '').filter(Boolean))];
+    if (!accounts.length) return alert(window.T('msg_js_2053'));
+    const profiles = (window.state || {}).pmProfiles || (((window.state || {}).personas || {}).reply_profiles || {}).profiles || [];
+    const accountId = prompt(`${window.T('msg_js_2065')}:\n${accounts.map(a => '  - ' + a).join('\n')}`, accounts[0]);
+    if (!accountId) return;
+    const profileId = prompt(`${window.T('msg_js_2045')} "${accountId}" ${window.T('msg_js_2046')}:\n${profiles.map(p => '  - ' + (p.id||p.name)).join('\n')}`, (profiles[0] && (profiles[0].id||profiles[0].name)) || '');
+    if (!profileId) return;
+    const target = _bindingMgrLeads.filter(l => (l.account_id || '') === accountId);
+    if (!(await confirm2(window.Tf('msg_js_p81',{a:accountId,n:target.length,p:profileId})))) return;
+    const bindings = target.map(l => ({chat_name: l.chat_name || l.chat_key || '', account_id: accountId, reply_profile_id: profileId})).filter(b => b.chat_name);
+    try {
+      const r = await apiFetch('/api/messenger-rpa/chat-persona-bindings/batch', {
+        method:'POST', credentials:'same-origin',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({bindings}),
+      }, {timeoutMs: 60000}).then(r => r.json());
+      if (window.toast) window.toast(window.Tf('msg_js_p82',{a:accountId,x:r.applied,t:r.total_in_request}));
+      refresh();
+    } catch(e) { alert(window.T('msg_js_2054')+': ' + e.message); }
+  }
+
+  if (btnOpen) btnOpen.addEventListener('click', open);
+  if (btnClose) btnClose.addEventListener('click', close);
+  if (btnRefresh) btnRefresh.addEventListener('click', refresh);
+  if (btnBulkBind) btnBulkBind.addEventListener('click', bulkBindSelected);
+  if (btnBindAcc) btnBindAcc.addEventListener('click', bindAllAccount);
+  if (btnClearChecks) btnClearChecks.addEventListener('click', () => {
+    listEl.querySelectorAll('.binding-mgr-check').forEach(c => c.checked = false);
+    updateChecksCount();
+  });
+  if (searchInput) searchInput.addEventListener('input', () => render());
+  if (filterAccount) filterAccount.addEventListener('change', () => render());
+  // 点 modal 背景关闭
+  modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+})();
+
+// ── P28: 手动发送队列 ────────────────────────────────────
+const _SQ_STATUS_LABEL={queued:window.T('ov_js_dob_pending'),processing:window.T('msg_js_2055'),sent:window.T('ov_js_dob_sent'),failed:window.T('rpa_js_st_failed'),cancelled:window.T('rpa_js_st_cancelled')};
+const _SQ_STATUS_COLOR={queued:'#92400e',processing:'#1e3a8a',sent:'#166534',failed:'#7f1d1d',cancelled:'#374151'};
+const _SQ_STATUS_BG={queued:'#fde68a',processing:'#bfdbfe',sent:'#bbf7d0',failed:'#fecaca',cancelled:'#e5e7eb'};
+
+async function loadMrSendQueue(){
+  const body=document.getElementById('mr-sendq-body');
+  const countEl=document.getElementById('mr-sendq-count');
+  if(!body) return;
+  // IIFE 内的 esc 在顶层够不着（本函数须顶层供内联 onclick 调）——本地定义，防队列有内容时渲染即 ReferenceError
+  const esc=(s)=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const done=document.getElementById('mr-sendq-include-done')?.checked?1:0;
+  try{
+    const r=await apiFetch('/api/messenger-rpa/send-queue?limit=50&include_done='+done);
+    const d=await r.json();
+    if(!d.items||!d.items.length){
+      body.innerHTML='<div class="mr-empty" style="padding:1rem">'+window.T('msg_js_2056')+'</div>';
+      countEl.textContent='';
+      return;
+    }
+    countEl.textContent='（'+d.count+' '+window.T('dash.items')+'）';
+    body.innerHTML=d.items.map(it=>{
+      const st=it.status||'queued';
+      const lab=_SQ_STATUS_LABEL[st]||st;
+      const bg=_SQ_STATUS_BG[st]||'#e5e7eb';
+      const col=_SQ_STATUS_COLOR[st]||'#374151';
+      const canCancel=(st==='queued');
+      return `<div style="border:1px solid var(--bd);border-radius:8px;padding:10px 12px;margin-bottom:8px;background:var(--input)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+          <span style="font-weight:600;font-size:.82rem">${esc(it.peer_name||it.chat_key)}</span>
+          <span style="font-size:.7rem;padding:.1rem .4rem;border-radius:6px;background:${bg};color:${col}">${lab}</span>
+        </div>
+        <div style="font-size:.76rem;color:var(--t2);margin-bottom:4px;white-space:pre-wrap">${esc(it.text)}</div>
+        <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap">
+          <span style="font-size:.68rem;color:var(--t3)">#${it.id} · ${window.wsFmtDateTime(it.ts,{hour12:false})}${it.error?' · <span style="color:var(--th-ink-red5,#b91c1c)">'+esc(it.error)+'</span>':''}</span>
+          ${canCancel?`<button class="btn" style="font-size:.68rem;padding:.15rem .45rem;margin-left:auto" onclick="mrCancelSendItem(${it.id})">${window.T('ov_js_cancel')}</button>`:''}
+        </div>
+      </div>`;
+    }).join('');
+  }catch(e){ body.innerHTML='<div style="color:var(--red);font-size:.78rem">'+window.T('rpa_load_failed')+': '+esc(String(e))+'</div>'; }
+}
+
+async function mrCancelSendItem(id){
+  if(!confirm(window.T('msg_js_2057')+' #'+id+'？')) return;
+  try{
+    const r=await apiFetch('/api/messenger-rpa/send-queue/'+id+'/cancel',{method:'POST'}, {timeoutMs: 60000});
+    if(!r.ok){ const t=await r.json(); alert(window.T('msg_js_2058')+': '+(t.detail||r.status)); return; }
+    loadMrSendQueue();
+  }catch(e){ alert(window.T('ov_js_req_fail')+': '+e); }
+}
+
+function mrOpenSendManual(){
+  const m=document.getElementById('mr-send-modal');
+  m.style.display='flex';
+  document.getElementById('mr-sm-chat-key').value='';
+  document.getElementById('mr-sm-peer-name').value='';
+  document.getElementById('mr-sm-text').value='';
+  document.getElementById('mr-sm-msg').textContent='';
+  document.getElementById('mr-sm-msg').style.color='';
+  setTimeout(()=>document.getElementById('mr-sm-chat-key').focus(),80);
+}
+function mrCloseSendManual(){
+  document.getElementById('mr-send-modal').style.display='none';
+}
+async function mrSubmitSendManual(){
+  const chatKey=document.getElementById('mr-sm-chat-key').value.trim();
+  const peerName=document.getElementById('mr-sm-peer-name').value.trim();
+  const text=document.getElementById('mr-sm-text').value.trim();
+  const msgEl=document.getElementById('mr-sm-msg');
+  const btn=document.getElementById('mr-sm-submit');
+  if(!chatKey){ msgEl.textContent='chat_key '+window.T('msg_js_2059'); msgEl.style.color='var(--red)'; return; }
+  if(!text){ msgEl.textContent=window.T('msg_js_2060'); msgEl.style.color='var(--red)'; return; }
+  btn.disabled=true; msgEl.textContent=window.T('msg_js_2061')+'…'; msgEl.style.color='var(--t2)';
+  try{
+    const r=await apiFetch('/api/messenger-rpa/send-manual',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({chat_key:chatKey,peer_name:peerName,text})}, {timeoutMs: 60000});
+    const d=await r.json();
+    if(!r.ok){ msgEl.textContent=window.T('rpa_js_st_failed')+': '+(d.detail||r.status); msgEl.style.color='var(--red)'; btn.disabled=false; return; }
+    msgEl.textContent=window.T('msg_js_2062')+' #'+d.item_id; msgEl.style.color='var(--green)';
+    setTimeout(()=>{ mrCloseSendManual(); loadMrSendQueue(); }, 900);
+  }catch(e){ msgEl.textContent=window.T('msg_js_2063')+': '+e; msgEl.style.color='var(--red)'; }
+  btn.disabled=false;
+}
+
+// 切换到 ops tab 时自动加载发送队列（经 window 间接层包装；主 IIFE 内点击
+// 绑定统一走 window.setSettingsTab，故此处替换对 tab 点击真实生效）
+const _origSetSettingsTab = window.setSettingsTab;
+if (typeof _origSetSettingsTab === 'function') {
+  window.setSettingsTab = function(stId) {
+    _origSetSettingsTab(stId);
+    if (stId === 'ops') loadMrSendQueue();
+  };
+}
+
+// ── P6-A: Messenger 对话语言锁定 ──────────────────────────────
+const _MSGR_LANG_OPTIONS = [
+  {v:'zh',l:'🇨🇳 zh ('+window.T('dash.lang.zh')+')'},{v:'en',l:'🇺🇸 en ('+window.T('dash.lang.en')+')'},{v:'de',l:'🇩🇪 de ('+window.T('dash.lang.de')+')'},
+  {v:'ja',l:'🇯🇵 ja ('+window.T('dash.lang.ja')+')'},{v:'ko',l:'🇰🇷 ko ('+window.T('dash.lang.ko')+')'},{v:'fr',l:'🇫🇷 fr ('+window.T('dash.lang.fr')+')'},
+  {v:'es',l:'🇪🇸 es ('+window.T('dash.lang.es')+')'},{v:'ru',l:'🇷🇺 ru ('+window.T('dash.lang.ru')+')'},{v:'ar',l:'🇸🇦 ar ('+window.T('dash.lang.ar')+')'},
+  {v:'hi',l:'🇮🇳 hi ('+window.T('dash.lang.hi')+')'},{v:'it',l:'🇮🇹 it ('+window.T('dash.lang.it')+')'},{v:'pt',l:'🇧🇷 pt ('+window.T('dash.lang.pt')+')'},
+];
+
+function _msgrRemoveLangPopover() {
+  document.querySelectorAll('.mr-lang-popover').forEach(el => el.remove());
+}
+
+async function msgrLangLockPrompt(evt, chatKey, currentLang) {
+  evt.stopPropagation();
+  _msgrRemoveLangPopover();
+  const anchor = evt.currentTarget;
+  const pop = document.createElement('div');
+  pop.className = 'mr-lang-popover';
+  pop.style.cssText = 'position:fixed;z-index:9999;background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:.65rem .75rem;box-shadow:0 8px 24px rgba(0,0,0,.35);min-width:180px';
+  const rect = anchor.getBoundingClientRect();
+  pop.style.left = Math.min(rect.left, window.innerWidth - 200) + 'px';
+  pop.style.top = (rect.bottom + 4) + 'px';
+  pop.innerHTML = `<div style="font-size:.75rem;font-weight:600;color:var(--t);margin-bottom:.4rem">🔒 ${window.T('msg_js_2066')} · ${esc(chatKey.split(':').pop()||chatKey)}</div>
+    <select id="mr-lp-sel" style="width:100%;padding:.3rem .4rem;background:var(--input);border:1px solid var(--bd2);border-radius:5px;font-size:.78rem;color:var(--t);margin-bottom:.45rem">
+      ${_MSGR_LANG_OPTIONS.map(o=>`<option value="${o.v}"${o.v===currentLang?' selected':''}>${o.l}</option>`).join('')}
+    </select>
+    <div style="display:flex;gap:.35rem">
+      <button id="mr-lp-ok" class="btn btn-p btn-xs" style="flex:1">${window.T('msg_js_2067')}</button>
+      <button id="mr-lp-cancel" class="btn btn-xs">${window.T('ov_js_cancel')}</button>
+    </div>`;
+  document.body.appendChild(pop);
+  const close = () => pop.remove();
+  pop.querySelector('#mr-lp-cancel').onclick = close;
+  pop.querySelector('#mr-lp-ok').onclick = async () => {
+    const lang = pop.querySelector('#mr-lp-sel').value;
+    close();
+    await _msgrSetLang(chatKey, lang);
+  };
+  setTimeout(() => document.addEventListener('click', close, {once: true}), 50);
+}
+
+async function msgrLangUnlock(evt, chatKey) {
+  evt.stopPropagation();
+  if (!confirm(window.Tf('msg_js_p83',{c:chatKey.split(':').pop()||chatKey}))) return;
+  await _msgrSetLang(chatKey, null);
+}
+
+async function _msgrSetLang(chatKey, lang) {
+  try {
+    const r = await apiFetch('/api/messenger-rpa/chat-lang-lock', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({chat_key: chatKey, lang: lang || null}),
+    }, {timeoutMs: 60000});
+    const d = await r.json();
+    if (!r.ok || !d.ok) { alert(window.T('ov_js_op_fail')+': ' + (d.detail || d.error || r.status)); return; }
+    const msg = lang ? window.Tf('msg_js_p84',{c:chatKey.split(':').pop()||chatKey,l:lang}) : window.Tf('msg_js_p85',{c:chatKey.split(':').pop()||chatKey});
+    if (typeof showToast === 'function') showToast(msg, 'ok'); else alert(msg);
+    if (typeof refreshLeads === 'function') refreshLeads();
+  } catch(e) { alert(window.T('draft.net_err')+': ' + e); }
+}
+
+// ── 回复模式封顶提示：inbox.auto_draft.platform_modes 若把 messenger 封顶（壳层注入 window.__chcPlatformCaps），
+//    在 RPA 档位下方如实提示「这里选 auto 也按封顶档执行」。DOMContentLoaded 后读取，兼容壳层脚本在 body 之后执行。
+(function(){
+  function applyMrCapNote(){
+    var cap=String((window.__chcPlatformCaps||{})['messenger']||'');
+    var el=document.getElementById('mr-cap-note');
+    if(!el||!cap) return;
+    el.textContent=window.Tf('msg_reply_mode_cap',{mode:cap});
+    el.style.display='';
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',applyMrCapNote);
+  else applyMrCapNote();
+})();
+
+// ── P2-2 漏斗 Tab 懒加载（共享 Journey 漏斗；与 WA waEnsureFunnelInit 同模式）：
+//    点击才 init，60s 轮询由组件自管；Messenger 在 contacts 体系有独立渠道，scope 默认本渠道。
+(function(){
+  var inited=false;
+  function ensureFunnel(){
+    if(inited) return; inited=true;
+    if(window.rpa && window.rpa.funnel) window.rpa.funnel.init({intervalSec:60, defaultScope:'messenger'});
+  }
+  var t=document.querySelector('.mr-tab[data-tab="funnel"]');
+  if(t) t.addEventListener('click', ensureFunnel);
+  if(document.getElementById('view-funnel') &&
+     document.getElementById('view-funnel').classList.contains('active')) ensureFunnel();
+})();
+</script>

@@ -416,6 +416,8 @@ class HealthWatchdog:
         incident_retention_days: float = 30.0,
         weekly_report_enabled: bool = False,
         weekly_interval_sec: float = 604800.0,
+        daily_report_enabled: bool = False,
+        daily_interval_sec: float = 86400.0,
     ) -> None:
         self._app = app
         self._config_manager = config_manager
@@ -434,6 +436,12 @@ class HealthWatchdog:
         self._weekly_interval = max(3600.0, float(weekly_interval_sec))
         self._last_weekly_ts = time.time()
         self.total_weekly_reports: int = 0
+        # WP-3 老板日报推送（默认关；同 ops_report 通道、period="daily" 标记）。
+        # _last_daily_ts 同周报初始化为「现在」——首份日报在启动一天后才发，防重启刷屏。
+        self._daily_enabled = bool(daily_report_enabled)
+        self._daily_interval = max(3600.0, float(daily_interval_sec))
+        self._last_daily_ts = time.time()
+        self.total_daily_reports: int = 0
         # 默认只对 fail（red）告警；warn 噪音大，可显式开
         self._alert_on_warn = bool(alert_on_warn)
         self._stop_evt = asyncio.Event()
@@ -490,6 +498,13 @@ class HealthWatchdog:
         self._colloquial_down_since: float = 0.0
         self._colloquial_alerted: bool = False
         self._colloquial_last_remind: float = 0.0
+        # 本地主链保险（2026-08-15，与中枢 176 顺序契约配套的我方半边）：
+        # ai.primary=local* 而本地 vLLM 连续探测失败 → 单向热切 cloud + 告警；
+        # 恢复只发通知不自动升（切回归中枢执行器「起+暖机后切回」步骤）。
+        self._apg_fail_count: int = 0
+        self._apg_first_fail_ts: float = 0.0
+        self._apg_switched: bool = False
+        self.total_ai_primary_guard_switches: int = 0
         # 缺口自动入库：稀疏节流（默认 1h 一轮）+ 每日预算
         self._last_auto_stock_ts: float = 0.0
         self._auto_stock_day: str = ""
@@ -519,11 +534,29 @@ class HealthWatchdog:
         self._db_alerted: bool = False
         self._db_last_remind: float = 0.0
         self.total_draft_backlog_alerts: int = 0
+        # 账号真相真幽灵巡检（2026-08-17 P4b）：会话库有、注册表没有、且不是
+        # web 工作台。desktop 镜像号在册，不算泄漏；已登出未读被 summary 清零，
+        # 原「历史未读」告警永远不响——改盯这个泄漏面。
+        self._at_alerted: bool = False
+        self._at_last_remind: float = 0.0
+        self.total_accounts_truth_alerts: int = 0
         # 入站漏球巡检（P0 2026-08-05）：客户最后一句无回复且**无草稿** → 拟稿链
         # 丢球（draft_backlog 只看「有稿没人处理」，这里补「压根没稿」的盲区）。
         self._ui_alerted: bool = False
         self._ui_last_remind: float = 0.0
         self.total_unanswered_inbound_alerts: int = 0
+        # 回复额度触顶聚合巡检（P1 2026-08-12）：逐会话 bot_peer_alert 只在首次
+        # 拦截各响一次，「多个会话同日触顶」这个**面**级信号（预算配小/撞 bot 波）
+        # 此前无人聚合（见 _check_reply_budget）。
+        self._rb_alerted: bool = False
+        self._rb_last_remind: float = 0.0
+        self.total_reply_budget_alerts: int = 0
+        # 坐席字符额度水位聚合巡检（2026-08-16）：warn（达 quota_alert_pct）/
+        # over（超额）两桶聚合外发（见 _check_agent_quota）；未开 usage.agent_chars
+        # 计量的部署恒静默，故父开关默认开无噪音风险。
+        self._aq_alerted: bool = False
+        self._aq_last_remind: float = 0.0
+        self.total_agent_quota_alerts: int = 0
         # 被埋会话巡检（P0-198，2026-08-04）：归档着却有未读入站＝客户在等，而工作台
         # 所有默认视图都看不见它（见 _check_buried_conversations）。
         self._bc_alerted: bool = False
@@ -731,6 +764,13 @@ class HealthWatchdog:
         except Exception:
             logger.debug("平台会话持续掉线巡检异常（已忽略）", exc_info=True)
 
+        # 人工接管超时提醒（驾驶舱 P0 2026-08-13）：坐席接管会话后忘了交还——
+        # 接管期间该客户的 AI 全停＝没人管，超时必须有人被点名。
+        try:
+            self._check_takeover_overdue()
+        except Exception:
+            logger.debug("接管超时巡检异常（已忽略）", exc_info=True)
+
         # 内嵌网页端选择器持续失配（2026-08-10）：登录态好着、页面也在，但注入脚本抓
         # 不到气泡/输入框＝官方改版了。与上面「会话不健康」正交（那个重登、这个改选择器）。
         try:
@@ -744,6 +784,13 @@ class HealthWatchdog:
             self._check_inbox_read_stall()
         except Exception:
             logger.debug("入站半死态巡检异常（已忽略）", exc_info=True)
+
+        # Messenger 注册表×sidecar 会话对账（P2 2026-08-13）：期望在线的号在 sidecar
+        # 无会话（重启恢复失败/会话被清）→ 上面两条巡检都看不见（零事件零心跳），单独对账。
+        try:
+            self._check_messenger_not_restored()
+        except Exception:
+            logger.debug("messenger 会话对账巡检异常（已忽略）", exc_info=True)
 
         # 常备扫描循环停摆（P4 2026-08-09）：目标结算/提醒 + 工作链推进的心跳
         # 停走即告警——两者都曾挂死调度器静默从未运行，这类病不许再靠人发现。
@@ -783,6 +830,26 @@ class HealthWatchdog:
             self._check_draft_backlog()
         except Exception:
             logger.debug("草稿积压巡检异常（已忽略）", exc_info=True)
+
+        # 账号真相真幽灵：会话库有、注册表没有（剔除 web 工作台 / 桌面镜像）
+        try:
+            self._check_accounts_truth()
+        except Exception:
+            logger.debug("账号真相巡检异常（已忽略）", exc_info=True)
+
+        # 回复额度触顶聚合：多个会话同日烧穿预算＝系统性状况（额度配小/bot 波次），
+        # 逐会话告警看不出「面」；含 near（≥80%）计数给提前量
+        try:
+            self._check_reply_budget()
+        except Exception:
+            logger.debug("回复额度巡检异常（已忽略）", exc_info=True)
+
+        # 坐席字符额度水位：路由层 enforce 闸默认关（软提醒先行），运营对「谁快用满/
+        # 谁已超额」的唯一主动信号就是这条聚合告警——没有它，软提醒期=没人知道
+        try:
+            self._check_agent_quota()
+        except Exception:
+            logger.debug("坐席字符额度巡检异常（已忽略）", exc_info=True)
 
         # 入站漏球：最后一条是客户消息、既没回也没拟稿——draft_backlog 只覆盖
         # 「有稿没人处理」，这里补「压根没稿」的盲区（2026-08-05 实锤：客户 22:27
@@ -843,6 +910,20 @@ class HealthWatchdog:
             self._check_colloquial_llm()
         except Exception:
             logger.debug("口语化 LLM 巡检异常（已忽略）", exc_info=True)
+
+        # 四域真活探针（2026-08-17 无兜底纪律规则 8）：真合成/真翻译/真识图/真转写。
+        # health 200 不算活——8/16 index CPU 爬行全天断档零告警的机制化收口。
+        try:
+            self._check_true_probes()
+        except Exception:
+            logger.debug("真活探针巡检异常（已忽略）", exc_info=True)
+
+        # 本地主链保险（2026-08-15）：local_only 语义下 vLLM 猝死＝全站 canned 且
+        # 绝不回落云端——中枢执行器救不回来的窗口由本检查单向热切 cloud 兜住。
+        try:
+            self._check_ai_primary_guard()
+        except Exception:
+            logger.debug("本地主链保险巡检异常（已忽略）", exc_info=True)
 
         # 备货缺口自动入库（Phase5）：高频短句缺口达标自动进台词库（守卫+每日预算），
         # 夜间计划任务渲染兜底——「看缺口→补台词」不再需要人。
@@ -982,6 +1063,12 @@ class HealthWatchdog:
             self._maybe_weekly_report()
         except Exception:
             logger.debug("运营周报生成异常（已忽略）", exc_info=True)
+
+        # WP-3：老板日报自动外发（每日节流一次，默认关；与周报同通道不冲突）。
+        try:
+            self._maybe_daily_report()
+        except Exception:
+            logger.debug("运营日报生成异常（已忽略）", exc_info=True)
 
     def _license_quota(self) -> Dict[str, Any]:
         try:
@@ -1412,9 +1499,17 @@ class HealthWatchdog:
         """会话键（``platform:account_id``）对应的账号是否仍被期望在线。
 
         判据取注册表 ``status``（持久事实——不受 Node push 与本地登出操作的到达顺序
-        影响）：只有 ``online`` 才是「编排器会去拉起、掉了就该有人修」的号。已登出
-        （offline）/已删除（无记录）的号编排器根本不会拉起（``desired_accounts`` 只收
-        online），催也无从下手。注册表读不出来 → 返回 True，不因巡检自身故障漏报真掉线。
+        影响）：``online`` 是「编排器会去拉起、掉了就该有人修」的号。已删除（无记录/
+        removed）的号编排器根本不会拉起（``desired_accounts`` 只收 online），催也无从
+        下手。注册表读不出来 → 返回 True，不因巡检自身故障漏报真掉线。
+
+        ``offline`` 分两档（2026-08-16，messenger 号自灭 17 天零提醒的事故修）：
+        - ``meta.offline_reason`` 以 ``worker:`` 开头＝**自灭型掉线**（cookie 失效/
+          风控/崩溃循环放弃，由 session-status push 或 ``report_session_transition``
+          翻状态时落标）——没人决定退役它，属「该有人修」，**继续催**；重新登录
+          （authorized 归位清标记）或删除账号即自然停催。
+        - ``operator``（运营主动登出，``_clear_session_creds`` 落标）或**无标记**
+          （历史存量行，来历不明——宁静默不误催）→ 不催，维持旧行为。
         """
         plat, _, acct = key.partition(":")
         if not plat or not acct:
@@ -1424,7 +1519,15 @@ class HealthWatchdog:
             row = get_account_registry().get(plat, acct)
         except Exception:
             return True
-        return bool(row) and str(row.get("status") or "") == "online"
+        if not row:
+            return False
+        status = str(row.get("status") or "")
+        if status == "online":
+            return True
+        if status == "offline":
+            reason = str((row.get("meta") or {}).get("offline_reason") or "")
+            return reason.startswith("worker:")
+        return False
 
     def _check_inject_health(self, *, now: Optional[float] = None) -> None:
         """内嵌网页端「选择器持续失配」提醒（2026-08-10）。
@@ -1509,8 +1612,12 @@ class HealthWatchdog:
             return
         try:
             from src.integrations.platform_session_health import (
-                get_platform_session_health,
+                ensure_seeded_from_registry, get_platform_session_health,
             )
+            # 种子化自给（2026-08-16）：健康表是进程内存态，重启后离线号靠注册表
+            # 种子接续——此前种子只挂在 web 读路径上惰性触发，看门狗若先于任何
+            # 页面访问跑到这里会对「重启前就死了的号」失明。幂等，进程内只种一次。
+            ensure_seeded_from_registry()
             store = get_platform_session_health()
         except Exception:
             return
@@ -1542,6 +1649,64 @@ class HealthWatchdog:
                 "rate_key": f"{key}:remind",
             })
             self.total_platform_session_reminders += 1
+
+    def _check_takeover_overdue(self, *, now: Optional[float] = None) -> None:
+        """人工接管超时提醒（驾驶舱 P0，2026-08-13）。
+
+        「一键接管」把会话切 manual、AI 全停——坐席处理完**忘了交还**时，该客户
+        从此没人管（AI 停着、人以为完事了），必须有升级式提醒点名。
+        配置 ``health_watchdog.takeover_remind.{enabled,after_min,interval_min}``
+        （默认开，2h 首提 / 之后每 1h 一条）。只对**进行中**接管提醒；交还即
+        自动静默（节流表按 conversation_id 清理）。fail-open：注册表读取异常
+        本轮跳过。提醒经 EventBus ``takeover_alert``（订阅别名 ``takeover``），
+        rate_key 按会话区分，多个超时接管互不挤限流窗。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        tr_cfg = (((cfg.get("health_watchdog") or {}).get("takeover_remind"))
+                  or {}) if isinstance(cfg, dict) else {}
+        if not tr_cfg.get("enabled", True):
+            return
+        after_sec = max(300.0, float(tr_cfg.get("after_min", 120) or 120) * 60.0)
+        interval_sec = max(600.0, float(
+            tr_cfg.get("interval_min", 60) or 60) * 60.0)
+        try:
+            from src.inbox.takeover import list_active, overdue_takeovers
+            overdue = overdue_takeovers(after_sec, now=now)
+            active_ids = {str(e.get("conversation_id") or "")
+                          for e in list_active()}
+        except Exception:
+            logger.debug("接管注册表读取失败（本轮跳过）", exc_info=True)
+            return
+        ts = time.time() if now is None else float(now)
+        # 节流表（进程内）：交还/消失的会话清掉，防表无限长；重启丢状态最坏
+        # 多提醒一次，可接受。
+        reminded: Dict[str, float] = getattr(self, "_takeover_reminded", None) or {}
+        reminded = {k: v for k, v in reminded.items() if k in active_ids}
+        self._takeover_reminded = reminded
+        if not overdue:
+            return
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            bus = get_event_bus()
+        except Exception:
+            return
+        for e in overdue:
+            cid = str(e.get("conversation_id") or "")
+            if not cid:
+                continue
+            last = reminded.get(cid, 0.0)
+            if last and (ts - last) < interval_sec:
+                continue
+            reminded[cid] = ts
+            bus.publish("takeover_alert", {
+                "conversation_id": cid,
+                "platform": str(e.get("platform") or ""),
+                "by": str(e.get("by") or ""),
+                "elapsed_min": int(float(e.get("elapsed_sec") or 0) // 60),
+                "rate_key": f"{cid}:takeover_remind",
+            })
+            self.total_takeover_reminders = getattr(
+                self, "total_takeover_reminders", 0) + 1
 
     def _check_inbox_read_stall(self, *, now: Optional[float] = None) -> None:
         """入站「半死态」升级提醒（P0，2026-08-04 Messenger 黑洞事故直接解药）。
@@ -1608,6 +1773,121 @@ class HealthWatchdog:
                 "rate_key": f"{key}:inbox_stall",
             })
             self.total_inbox_read_stall_reminders += 1
+
+    def _check_messenger_not_restored(self, *, now: Optional[float] = None) -> None:
+        """注册表期望在线（online）的 Messenger 账号在 sidecar 无会话 → 升级提醒。
+
+        盲区背景（P2 2026-08-13，实测账号烂了多日无告警）：
+        ``_check_platform_sessions`` 要「不健康状态**事件**」、``_check_inbox_read_stall``
+        要「入站**心跳**」——一个从未 push 过任何事件的账号（sidecar 重启后恢复失败/
+        会话被清）在两条巡检里都是隐形的。本检查直接对账
+        「注册表 online × sidecar /accounts」差集（经 messenger_readiness_collect 的
+        60s TTL 共享探针，与 /api/workspace/metrics.messenger_readiness 同源同判定）。
+
+        零误报边界：sidecar 探活失败 / 账号清单拉取失败一律跳过本轮（那是另一类
+        故障，别误归因成「账号丢了」；状态不清零防抖）；注册表 offline（运营登出/
+        从未登录）不催——与 ``_session_expected_online`` 同哲学，产品面（收件箱
+        chip / tools/diagnose_messenger.py）负责提示它。恢复（重新出现在 sidecar）
+        对**告警过的**账号补恢复通知并清零。
+        配置 ``health_watchdog.messenger_restore_remind.{enabled,after_min,interval_min}``
+        （默认开，30min 首提 / 4h 重提）。
+        """
+        ts = time.time() if now is None else float(now)
+        cfg = getattr(self._config_manager, "config", None) or {}
+        sr = (((cfg.get("health_watchdog") or {}).get("messenger_restore_remind"))
+              or {}) if isinstance(cfg, dict) else {}
+        if not sr.get("enabled", True):
+            return
+        try:
+            from src.integrations.messenger_readiness_collect import (
+                collect_messenger_readiness,
+            )
+            snap = collect_messenger_readiness(cfg, now=ts)
+        except Exception:
+            return
+        # 状态惰性初始化（测试用 __new__ 绕开 __init__ 的既有惯例友好）
+        first = getattr(self, "_msgr_missing_first_seen", None)
+        if first is None:
+            first = {}
+            self._msgr_missing_first_seen = first
+        last_remind = getattr(self, "_msgr_missing_last_remind", None)
+        if last_remind is None:
+            last_remind = {}
+            self._msgr_missing_last_remind = last_remind
+        alerted = getattr(self, "_msgr_missing_alerted", None)
+        if alerted is None:
+            alerted = set()
+            self._msgr_missing_alerted = alerted
+
+        if not (snap.get("sources") or {}).get("sidecar_reachable"):
+            return  # sidecar 自身故障：不对账、不清状态（防误归因/防抖）
+        if not (snap.get("gates") or {}).get("web_effective"):
+            first.clear()
+            last_remind.clear()
+            alerted.clear()
+            return
+
+        after_sec = max(60.0, float(sr.get("after_min", 30) or 30) * 60.0)
+        interval_sec = max(600.0, float(sr.get("interval_min", 240) or 240) * 60.0)
+
+        missing_now = set()
+        for a in snap.get("accounts") or []:
+            aid = str(a.get("account_id") or "")
+            if not aid or a.get("in_sidecar") or not a.get("in_registry"):
+                continue
+            if str(a.get("registry_status") or "") != "online":
+                continue
+            missing_now.add(aid)
+
+        def _bus():
+            from src.integrations.shared.event_bus import get_event_bus
+            return get_event_bus()
+
+        # 恢复：只对告警过的账号补恢复通知（未告警的抖动恢复不发，防噪）
+        for aid in list(first):
+            if aid in missing_now:
+                continue
+            if aid in alerted:
+                try:
+                    _bus().publish("platform_session_alert", {
+                        "platform": "messenger",
+                        "account_id": aid,
+                        "status": "restored",
+                        "recovered": True,
+                        "detail": "sidecar 会话已恢复（此前注册表期望在线但无会话）",
+                        "rate_key": f"messenger:{aid}:not_restored:recover",
+                    })
+                except Exception:
+                    pass
+            first.pop(aid, None)
+            last_remind.pop(aid, None)
+            alerted.discard(aid)
+
+        for aid in sorted(missing_now):
+            since = first.setdefault(aid, ts)
+            if (ts - since) < after_sec:
+                continue
+            prev = float(last_remind.get(aid) or 0.0)
+            if prev and (ts - prev) < interval_sec:
+                continue
+            try:
+                _bus().publish("platform_session_alert", {
+                    "platform": "messenger",
+                    "account_id": aid,
+                    "status": "not_restored",
+                    "reminder": True,
+                    "down_minutes": int((ts - since) // 60),
+                    "detail": "注册表期望在线，但 messenger-web 服务器浏览器没有该账号"
+                              "会话（多为重启后恢复失败/会话被清）。到统一收件箱对它"
+                              "「重新登录」（服务器完整流程）。",
+                    "rate_key": f"messenger:{aid}:not_restored",
+                })
+            except Exception:
+                continue
+            last_remind[aid] = ts
+            alerted.add(aid)
+            self.total_messenger_restore_reminders = getattr(
+                self, "total_messenger_restore_reminders", 0) + 1
 
     #: `decided_by` 里属「系统自动」的值——统计人工通过时必须排除
     _HD_SYSTEM_DECIDERS = frozenset({
@@ -1946,6 +2226,306 @@ class HealthWatchdog:
             "%d 条处于班表扣留/复班宽限）",
             len(stale), min_age_h, oldest_h, by_level, uncovered,
             already_replied, off_hours_held)
+
+    def _check_accounts_truth(self, *, now: Optional[float] = None) -> None:
+        """会话库有、注册表没有的真幽灵账号 → 主动轰人（P4b 2026-08-17）。
+
+        原方案「已登出账号未读积压」被否决：``_accounts_summary_list`` 对
+        logged_out/removed **强制 unread=0**（不可回复的未读不亮灯），那条告警
+        永远不会响。桌面镜像（tg-desktop）在注册表、有自己的 tag，也不该当幽灵。
+
+        本检查只盯**真泄漏**：``directory_ghost_keys``（目录 − 注册表 − web 工作台）。
+        ≥ min_count（默认 1）即报——一条绕过注册表写会话就是接入链缺口。
+        配置 ``health_watchdog.accounts_truth_remind.{enabled,min_count,interval_min}``。
+        订阅别名 ``accounts_truth``。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        br = (((cfg.get("health_watchdog") or {}).get("accounts_truth_remind"))
+              or {}) if isinstance(cfg, dict) else {}
+        if not br.get("enabled", True):
+            return
+        store = self._inbox()
+        if store is None or not hasattr(store, "account_directory"):
+            return
+        min_count = max(1, int(br.get("min_count", 1) or 1))
+        ts = float(now if now is not None else time.time())
+        try:
+            directory = store.account_directory() or {}
+            from src.integrations.account_registry import get_account_registry
+            rows = get_account_registry().list(include_removed=True) or []
+            reg_keys = {(str(r.get("platform") or ""), str(r.get("account_id") or ""))
+                        for r in rows}
+            from src.web.routes.unified_inbox_aggregate import directory_ghost_keys
+            ghosts = directory_ghost_keys(directory, reg_keys)
+        except Exception:
+            logger.debug("账号真相巡检取数失败（忽略）", exc_info=True)
+            return
+
+        if len(ghosts) < min_count:
+            if self._at_alerted and not ghosts:
+                try:
+                    from src.integrations.shared.event_bus import get_event_bus
+                    get_event_bus().publish("accounts_truth_alert", {
+                        "recovered": True,
+                        "rate_key": "accounts_truth:recovered",
+                    })
+                    logger.info("HealthWatchdog 发出账号真相幽灵恢复通知")
+                except Exception:
+                    logger.debug("accounts_truth recovery 发布失败（忽略）", exc_info=True)
+                self._at_alerted = False
+                self._at_last_remind = 0.0
+            return
+
+        interval_sec = max(600.0, float(br.get("interval_min", 240) or 240) * 60.0)
+        if self._at_alerted and ts - self._at_last_remind < interval_sec:
+            return
+
+        samples = [f"{p}:{a}" for p, a in ghosts[:8]]
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("accounts_truth_alert", {
+                "ghost_count": len(ghosts),
+                "samples": samples,
+                "reminder": bool(self._at_alerted),
+                "rate_key": "accounts_truth:remind",
+            })
+        except Exception:
+            logger.debug("accounts_truth alert 发布失败（忽略）", exc_info=True)
+            return
+        self._at_alerted = True
+        self._at_last_remind = ts
+        self.total_accounts_truth_alerts += 1
+        logger.warning(
+            "账号真相：%d 个会话库账号不在注册表（样本 %s）——有接入链在绕过登记写会话",
+            len(ghosts), samples,
+        )
+
+    def _check_reply_budget(self, *, now: Optional[float] = None) -> None:
+        """回复额度触顶聚合巡检（P1 2026-08-12，webhook 别名 ``reply_budget``）。
+
+        逐会话的 ``bot_peer_alert`` 在**首次拦截**时已各响一次（每会话每日至多
+        一次）；本检查补「面」的信号：**多个**会话同日触顶＝系统性状况——预算
+        配小了 / 撞上 bot 波次 / 某账号被围攻，属运维调参/排班问题，与逐会话
+        事件互补而非重复。payload 随带 ``near_count``（≥80% 接近额度的会话数，
+        与设置页「接近」chip / 收件箱预警横幅同源 ``budget_flags.near``）作提前
+        量，但 near 本身**不触发**告警（预警不该比事故更响）。
+
+        判定与设置页「今日额度状态」同一数据源（``list_reply_budget_today`` ×
+        ``budget_flags``）——看板显示什么、告警就数什么，永不分叉。
+        配置 ``health_watchdog.reply_budget_remind.{enabled,min_count,
+        interval_min}``（默认开：≥3 会话触顶才响、4h 重提、触顶清零补恢复
+        通知）。守卫整体关闭/额度=0 → **静默复位**不发恢复——「把守卫关了」
+        不是「处理完了」，谎报恢复比不报更糟。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        br = (((cfg.get("health_watchdog") or {}).get("reply_budget_remind"))
+              or {}) if isinstance(cfg, dict) else {}
+        if not br.get("enabled", True):
+            return
+        store = self._inbox()
+        if store is None or not hasattr(store, "list_reply_budget_today"):
+            return
+        from src.inbox.peer_bot_guard import budget_flags, parse_cfg, today_key
+        guard = parse_cfg(cfg)
+        ts = float(now if now is not None else time.time())
+        if not (guard.get("enabled")
+                and int(guard.get("daily_reply_budget") or 0) > 0):
+            self._rb_alerted = False
+            self._rb_last_remind = 0.0
+            return
+        try:
+            rows = store.list_reply_budget_today(today_key(ts), limit=200) or []
+        except Exception:
+            logger.debug("回复额度巡检取数失败（忽略）", exc_info=True)
+            return
+        exhausted: List[Dict[str, Any]] = []
+        hard_count = 0
+        near_count = 0
+        for r in rows:
+            flags = budget_flags(r.get("used"), r.get("relieved"), guard)
+            if flags["exhausted"]:
+                exhausted.append({
+                    "title": str(r.get("display_name") or r.get("chat_key")
+                                 or r.get("conversation_id") or ""),
+                    "used": flags["used"],
+                })
+                if flags["hard_stopped"]:
+                    hard_count += 1
+            elif flags["near"]:
+                near_count += 1
+
+        min_count = max(1, int(br.get("min_count", 3) or 3))
+        if len(exhausted) < min_count:
+            # 恢复通知的诚实前提：触顶真清零（豁免/跨日）。仅降到阈值以下不发。
+            if self._rb_alerted and not exhausted:
+                try:
+                    from src.integrations.shared.event_bus import get_event_bus
+                    get_event_bus().publish("reply_budget_alert", {
+                        "recovered": True,
+                        "rate_key": "reply_budget:recovered",
+                    })
+                    logger.info("HealthWatchdog 发出回复额度恢复通知")
+                except Exception:
+                    logger.debug("reply_budget recovery 发布失败（忽略）",
+                                 exc_info=True)
+                self._rb_alerted = False
+                self._rb_last_remind = 0.0
+            return
+
+        interval_sec = max(600.0, float(br.get("interval_min", 240) or 240) * 60.0)
+        if self._rb_alerted and ts - self._rb_last_remind < interval_sec:
+            return
+
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("reply_budget_alert", {
+                "exhausted_count": len(exhausted),
+                "hard_count": hard_count,
+                "near_count": near_count,
+                "budget_limit": int(guard.get("daily_reply_budget") or 0),
+                # rows 本就按 used 降序 → 前 3 个就是烧得最凶的
+                "samples": exhausted[:3],
+                "reminder": bool(self._rb_alerted),
+                "rate_key": "reply_budget:remind",
+            })
+        except Exception:
+            logger.debug("reply_budget alert 发布失败（忽略）", exc_info=True)
+            return
+        self._rb_alerted = True
+        self._rb_last_remind = ts
+        self.total_reply_budget_alerts += 1
+        logger.warning(
+            "回复额度触顶聚合：%d 个会话今日烧穿预算 %d 轮（硬停 %d、"
+            "接近额度另有 %d）",
+            len(exhausted), int(guard.get("daily_reply_budget") or 0),
+            hard_count, near_count)
+
+    def _check_agent_quota(self, *, now: Optional[float] = None,
+                           user_store: Any = None) -> None:
+        """坐席月度字符额度水位聚合巡检（2026-08-16，webhook 别名 ``agent_quota``）。
+
+        为什么需要它：路由层的 enforce 硬闸本批**默认关**（软提醒先行）——软提醒
+        期运营对「谁快用满 / 谁已超额」没有任何主动信号，只能等坐席自己去「我的
+        用量」看（和 draft_backlog「看板要有人开才有用」同病）。本检查把水位升级
+        为主动外发：达到用户行 ``quota_alert_pct``（缺省 80）进 **warn 桶**、超额
+        （>100%）进 **over 桶**，任一桶非空发一条聚合事件（逐用户告警＝噪音；
+        「N 人接近/超额」才是运维要的排额度信号）。
+
+        判定口径与 users 页 / 我的用量完全同源（``agent_quota_status`` 单一纯函数
+        + ``month_totals`` 同一账本），看板显示什么、告警就数什么。全部回落后补
+        一次恢复通知（照抄 draft_backlog 家族的 recovered 语义；月初账本自然清零
+        即自动恢复）。配置 ``health_watchdog.agent_quota_remind.{enabled,
+        interval_min}``（默认开、6h 重提）——父开关默认开可接受：整个检查先被
+        ``agent_chars_enabled`` 闸住，未开计量的部署恒静默零噪音。
+
+        ``user_store`` 形参供单测注入；生产走 ``app.state.user_store``（admin.py
+        已暴露，与 draft_service 同取法），拿不到 → 静默（旧装配/裸测试 app）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        br = (((cfg.get("health_watchdog") or {}).get("agent_quota_remind"))
+              or {}) if isinstance(cfg, dict) else {}
+        if not br.get("enabled", True):
+            return
+        from src.utils.agent_char_usage import (
+            agent_chars_enabled,
+            agent_quota_status,
+            ensure_store_for_read,
+        )
+        if not agent_chars_enabled(cfg if isinstance(cfg, dict) else None):
+            return  # 未开坐席计量 → 恒静默（本检查存在的前提是账本在记）
+        us = user_store
+        if us is None:
+            us = getattr(getattr(self._app, "state", self._app), "user_store", None)
+        if us is None or not hasattr(us, "list_users"):
+            return  # user_store 未暴露（旧装配/测试 app）→ 静默不猜
+        store = ensure_store_for_read(cfg)
+        if store is None:
+            return
+        ts = float(now if now is not None else time.time())
+        try:
+            totals = store.month_totals() or {}
+            users = us.list_users() or []
+        except Exception:
+            logger.debug("坐席额度巡检取数失败（忽略）", exc_info=True)
+            return
+
+        warn: List[Dict[str, Any]] = []
+        over: List[Dict[str, Any]] = []
+        for u in users:
+            try:
+                quota = int(u.get("monthly_char_quota") or 0)
+            except (TypeError, ValueError):
+                quota = 0
+            if quota <= 0:
+                continue  # 不限额的用户无水位语义（master 通常在此列）
+            uname = str(u.get("username") or "")
+            if not uname:
+                continue
+            used = int((totals.get(uname) or {}).get("total") or 0)
+            st = agent_quota_status(used, quota)
+            try:
+                alert_pct = int(u.get("quota_alert_pct") or 80)
+            except (TypeError, ValueError):
+                alert_pct = 80
+            alert_pct = min(100, max(1, alert_pct))
+            entry = {"username": uname, "used": st["used"],
+                     "quota": st["quota"], "pct": st["pct"]}
+            if st["level"] == "over":
+                over.append(entry)
+            elif st["pct"] >= alert_pct:
+                warn.append(entry)
+
+        if not warn and not over:
+            # 恢复通知：全部回落（调额/月初账本自然清零）才发，且只发给告过警的
+            if self._aq_alerted:
+                try:
+                    from src.integrations.shared.event_bus import get_event_bus
+                    get_event_bus().publish("agent_quota_alert", {
+                        "recovered": True,
+                        "rate_key": "agent_quota:recovered",
+                    })
+                    logger.info("HealthWatchdog 发出坐席字符额度恢复通知")
+                except Exception:
+                    logger.debug("agent_quota recovery 发布失败（忽略）",
+                                 exc_info=True)
+                self._aq_alerted = False
+                self._aq_last_remind = 0.0
+            return
+
+        interval_sec = max(600.0, float(br.get("interval_min", 360) or 360) * 60.0)
+        if self._aq_alerted and ts - self._aq_last_remind < interval_sec:
+            return
+
+        # 桶内按用量占比降序（formatter 取前几个当 Top 明细），上限 8 防 payload 膨胀
+        warn.sort(key=lambda e: e["pct"], reverse=True)
+        over.sort(key=lambda e: e["pct"], reverse=True)
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            from src.utils.agent_char_usage import _month_str
+            get_event_bus().publish("agent_quota_alert", {
+                "month": _month_str(ts),
+                "warn_count": len(warn),
+                "over_count": len(over),
+                "warn": warn[:8],
+                "over": over[:8],
+                "reminder": bool(self._aq_alerted),
+                "rate_key": "agent_quota:remind",
+            })
+        except Exception:
+            logger.debug("agent_quota alert 发布失败（忽略）", exc_info=True)
+            return
+        self._aq_alerted = True
+        self._aq_last_remind = ts
+        self.total_agent_quota_alerts += 1
+        # 日志=本机唯一保证在的持久告警通道（webhook 可能 0 通道），与
+        # draft_backlog 同款落一行供实弹验证与事后追溯。
+        logger.warning(
+            "坐席字符额度水位：%d 人已超额、%d 人达到提醒线（enforce 硬闸当前%s，"
+            "超额明细 %s）",
+            len(over), len(warn),
+            "开启" if bool((((cfg.get("usage") or {}).get("agent_chars") or {})
+                            if isinstance(cfg, dict) else {}).get("enforce")) else "关闭（软提醒）",
+            [(e["username"], e["pct"]) for e in over[:3]])
 
     def _check_buried_conversations(self, *, now: Optional[float] = None) -> None:
         """归档着、却有未读入站的会话 → 主动轰人（P0-198）。
@@ -2804,6 +3384,26 @@ class HealthWatchdog:
         )
         if not due:
             return
+        # ── 救援链活性（2026-08-14 事故：7852 掉线 9h 无自愈——Boot/Watchdog
+        # 两个计划任务都 Disabled，而告警只说「掉线」，运维默认看门狗会拉）。
+        # 只在 kind=down 且真的要发告警时才探（subprocess ×2，已被 due 限流）；
+        # 只读不 /Change——恢复任务是运维决策（代码模式期间停用可能是刻意的）。
+        rescue_broken: list = []
+        if kind == "down":
+            try:
+                from src.ai.avatar_voice_rescue import (
+                    broken_rescue_tasks, probe_rescue_tasks,
+                    resolve_rescue_task_names)
+                rescue_broken = broken_rescue_tasks(
+                    probe_rescue_tasks(resolve_rescue_task_names(
+                        cfg if isinstance(cfg, dict) else {})))
+            except Exception:
+                rescue_broken = []
+            if rescue_broken:
+                logger.warning(
+                    "AvatarHub 7852 掉线且救援计划任务已停用/缺失：%s"
+                    "——自动拉起不会发生，需人工恢复任务",
+                    ", ".join(rescue_broken))
         try:
             from src.integrations.shared.event_bus import get_event_bus
             get_event_bus().publish("avatar_voice_alert", {
@@ -2815,6 +3415,9 @@ class HealthWatchdog:
                 "fail_streak": int(sig.get("fail_streak") or 0),
                 "down_minutes": int(down_sec // 60),
                 "reminder": bool(self._avatar_alerted),
+                # 救援链断裂清单（空=正常/未知）：formatter 据此把
+                # 「等看门狗」的默认指引换成「救援链已死，需人工恢复」
+                "rescue_broken": rescue_broken,
                 # 独立限流键：首提/重提不与其他事件挤 1h 窗
                 "rate_key": "avatar_voice:remind",
             })
@@ -3448,6 +4051,205 @@ class HealthWatchdog:
         self._colloquial_alerted = True
         self._colloquial_last_remind = ts
         self.total_colloquial_llm_reminders += 1
+
+    def _probe_local_primary(self, base_url: str, timeout_sec: float) -> bool:
+        """GET ``<base>/v1/models`` 探本地主链（vLLM/OpenAI 兼容）。True=活。"""
+        base = str(base_url or "").strip().rstrip("/")
+        if not base:
+            return False
+        if not base.endswith("/v1"):
+            base = base + "/v1"
+        try:
+            import urllib.request
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            req = urllib.request.Request(base + "/models")
+            with opener.open(req, timeout=max(1.0, float(timeout_sec))) as r:
+                return int(getattr(r, "status", 0) or 0) == 200
+        except Exception:
+            return False
+
+    def _check_true_probes(self, *, now: Optional[float] = None) -> None:
+        """四域真活探针（2026-08-17 无兜底纪律规则 8）。
+
+        对 tts/translate/vision/asr 周期性**真干活**（真合成含 magic bytes 校验 /
+        真翻译 / 真识图 / 真转写），连续 ``fail_strikes``（默认 2）次失败 →
+        notify_host（主机弹窗 + EventBus host_alert → webhook + ERROR 日志），
+        恢复补绿窗。health 200 不算活——8/16 index worker CPU 爬行全天、健康
+        探针全绿零告警的机制化收口。
+
+        配置 ``health_watchdog.true_probe.{enabled,interval_min,fail_strikes}``
+        （example 默认关——探针打真推理，Lite/无 LAN 引擎的部署会假阳；
+        本机 overlay 开）。tick 在线程池里跑，阻塞 HTTP 安全；四域串行、
+        单域超时 ≤45s，interval_min 控制真实探测频率（默认 10min）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        if not isinstance(cfg, dict):
+            return
+        tp = ((cfg.get("health_watchdog") or {}).get("true_probe")) or {}
+        if not isinstance(tp, dict) or not tp.get("enabled", False):
+            return
+        ts = float(now if now is not None else time.time())
+        interval_sec = max(120.0, float(tp.get("interval_min", 10) or 10) * 60.0)
+        if ts - getattr(self, "_tp_last_run", 0.0) < interval_sec:
+            return
+        self._tp_last_run = ts
+        fail_strikes = max(1, int(tp.get("fail_strikes", 2) or 2))
+        try:
+            from src.ops.true_probe import (
+                build_probe_specs,
+                next_strike_state,
+                run_probe,
+            )
+        except Exception:
+            return
+        specs = build_probe_specs(cfg)
+        if not specs:
+            return
+        state = getattr(self, "_tp_state", {})
+        _round: List[str] = []
+        for spec in specs:
+            domain = str(spec.get("domain") or "")
+            ok, detail = run_probe(spec)
+            _round.append(f"{domain}={'ok' if ok else 'FAIL'}")
+            state, action = next_strike_state(
+                state, domain, ok, fail_strikes=fail_strikes, now=ts)
+            if ok:
+                logger.debug("[true_probe] %s ok (%s)", domain, detail)
+            else:
+                logger.warning("[true_probe] %s FAIL (%s) strike=%s",
+                               domain, detail,
+                               (state.get(domain) or {}).get("fails"))
+            if action == "alert":
+                try:
+                    from src.utils.host_alert import notify_host
+                    notify_host(
+                        f"真活探针失败｜{domain}",
+                        (f"{domain} 连续 {fail_strikes} 次真活探针失败"
+                         f"（{detail}）。该域链路按无兜底纪律将拒发并弹窗，"
+                         f"请立即检查对应引擎。"),
+                        key=f"probe:{domain}", cooldown_sec=600.0)
+                except Exception:
+                    logger.debug("[true_probe] 告警外发失败", exc_info=True)
+            elif action == "recovered":
+                try:
+                    from src.utils.host_alert import notify_host
+                    notify_host(
+                        f"真活探针恢复｜{domain}",
+                        f"{domain} 真活探针已恢复正常（{detail}）。",
+                        key=f"probe_ok:{domain}", cooldown_sec=60.0)
+                except Exception:
+                    logger.debug("[true_probe] 恢复通知失败", exc_info=True)
+        self._tp_state = state
+        # 轮次摘要恒 INFO：探针本身也要可观测——全 ok 时若只有 DEBUG，
+        # 运维无法从 INFO 日志区分「都健康」与「探针根本没跑」（首夜实测盲区）。
+        logger.info("[true_probe] 轮次完成 %s", " ".join(_round))
+
+    def _check_ai_primary_guard(self, *, now: Optional[float] = None) -> None:
+        """本地主链保险（2026-08-15，`REPLY_from_zhongshu_20260815` 约定的我方半边）。
+
+        语义：``ai.primary ∈ {local, local_only}`` 时探测本地主链端点
+        （``ai.fallback.base_url`` 的 /v1/models）；同 tick 双探皆失败计一次 fail，
+        连续 ``fail_streak``（默认 2）次且首败距今 ≥ ``min_span_sec``（默认 240s）
+        → 写 overlay ``ai.primary=cloud``（set_overlay_flag 保注释）+ 尽力热重建
+        AI 运行时 + EventBus ``ai_primary_guard_alert``。**单向只降不升**：切回
+        local_only 归中枢执行器（起 :8001+暖机后切回）；端点恢复只发一次恢复
+        通知提示可切回，绝不自动升。与执行器轮换不打架：他们停 :8001 **前**已把
+        智聊切 cloud → 本检查在 cloud 档天然不动作。fail-open：任何内部异常绝不
+        改配置。配置 ``health_watchdog.ai_primary_guard.{enabled,fail_streak,
+        min_span_sec,probe_timeout_sec}``（默认 开/2/240/4）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        if not isinstance(cfg, dict):
+            return
+        gcfg = ((cfg.get("health_watchdog") or {}).get("ai_primary_guard")) or {}
+        if not gcfg.get("enabled", True):
+            return
+        ai_cfg = cfg.get("ai") or {}
+        primary = str(ai_cfg.get("primary") or "cloud").strip().lower()
+        fb = ai_cfg.get("fallback") or {}
+        base_url = str(fb.get("base_url") or "").strip()
+        ts = float(now if now is not None else time.time())
+        probe_to = float(gcfg.get("probe_timeout_sec", 4) or 4)
+
+        if primary not in ("local", "local_only") or not base_url:
+            # cloud 档 / 未配本地端点：只负责「已降级后的恢复通知」，其余状态归零
+            if (self._apg_switched and base_url
+                    and self._probe_local_primary(base_url, probe_to)):
+                try:
+                    from src.integrations.shared.event_bus import get_event_bus
+                    get_event_bus().publish("ai_primary_guard_alert", {
+                        "recovered": True,
+                        "base_url": base_url,
+                        "rate_key": "ai_primary_guard:recovered",
+                    })
+                    logger.info(
+                        "本地主链已恢复可用（保险早前已切 cloud）——待执行器/人工切回 local_only")
+                except Exception:
+                    logger.debug("ai_primary_guard recovery 发布失败（已忽略）",
+                                 exc_info=True)
+                self._apg_switched = False
+            self._apg_fail_count = 0
+            self._apg_first_fail_ts = 0.0
+            return
+
+        ok = self._probe_local_primary(base_url, probe_to)
+        if not ok:
+            # 同 tick 复核一次：单次 TCP 抖动/瞬时重启不算失败
+            ok = self._probe_local_primary(base_url, probe_to)
+        if ok:
+            self._apg_fail_count = 0
+            self._apg_first_fail_ts = 0.0
+            return
+
+        self._apg_fail_count += 1
+        if self._apg_first_fail_ts <= 0.0:
+            self._apg_first_fail_ts = ts
+        streak_need = max(1, int(gcfg.get("fail_streak", 2) or 2))
+        span_need = max(0.0, float(gcfg.get("min_span_sec", 240) or 240))
+        if (self._apg_fail_count < streak_need
+                or (ts - self._apg_first_fail_ts) < span_need):
+            return
+
+        cm = self._config_manager
+        if cm is None or not hasattr(cm, "set_overlay_flag"):
+            return
+        try:
+            ok_w, msg = cm.set_overlay_flag("ai.primary", "cloud")
+        except Exception:
+            logger.warning("ai_primary_guard 写 overlay 异常（本轮放弃）", exc_info=True)
+            return
+        if not ok_w:
+            logger.warning("ai_primary_guard 写 overlay 失败：%s", msg)
+            return
+        # 尽力热重建（失败不致命：config 热重载 ~30s 也会把 cloud 档装进活体）
+        try:
+            import asyncio as _aio
+            loop = _aio.get_running_loop()
+            from src.web.routes.unified_inbox_setup_routes import reload_ai_runtime
+            loop.create_task(reload_ai_runtime(self._app, cm))
+        except Exception:
+            logger.debug("ai_primary_guard 热重建调度失败（等待配置热重载兜底）",
+                         exc_info=True)
+        down_min = int((ts - self._apg_first_fail_ts) // 60)
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("ai_primary_guard_alert", {
+                "from_mode": primary,
+                "base_url": base_url,
+                "fail_count": int(self._apg_fail_count),
+                "down_minutes": down_min,
+                "rate_key": "ai_primary_guard:switched",
+            })
+        except Exception:
+            logger.debug("ai_primary_guard alert 发布失败（已忽略）", exc_info=True)
+        logger.warning(
+            "本地主链保险触发：%s 连续 %d 次探测失败（原档 %s）→ ai.primary 已切 cloud"
+            "（单向；恢复切回归中枢执行器）",
+            base_url, self._apg_fail_count, primary)
+        self._apg_switched = True
+        self._apg_fail_count = 0
+        self._apg_first_fail_ts = 0.0
+        self.total_ai_primary_guard_switches += 1
 
     def _log_triage_path(self, lt: Dict[str, Any]) -> Optional[str]:
         """决定巡检的日志路径：配置覆写 > 本实例 logging.file > None（跳过）。"""
@@ -4559,6 +5361,78 @@ class HealthWatchdog:
             logger.debug("ops_report 发布失败（已忽略）", exc_info=True)
         return report
 
+    # ── WP-3 老板日报推送（2026-08-17；数据面=value_report 日窗，通道=ops_report）──
+
+    def _build_daily_report(self, *, now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+        """日报数据面：AI 价值日账（build_daily_value）+ 省时头条。
+
+        与周报同通道、``period="daily"`` 标记（formatter 据此换「日报」标题）。
+        store 缺席 / 装配失败 / **零流量日**一律 None——半夜刚装的实例天天推
+        「全 0」日报＝老板直接屏蔽告警群，空报比没报更伤。
+        """
+        store = self._inbox()
+        if store is None:
+            return None
+        try:
+            from src.ops.value_report import (
+                build_daily_value, estimate_saved_minutes,
+                resolve_minutes_per_reply)
+            v = build_daily_value(store, now=now)
+        except Exception:
+            logger.debug("日报价值段装配失败（已忽略）", exc_info=True)
+            return None
+        if not v:
+            return None
+        today = v.get("today") or {}
+        d = today.get("drafts") or {}
+        o = today.get("outreach") or {}
+        tr = today.get("traffic") or {}
+        if not any((int(tr.get("messages_out") or 0),
+                    int(tr.get("messages_in") or 0),
+                    int(d.get("created") or 0),
+                    int(o.get("sent") or 0))):
+            return None
+        cm = self._config_manager
+        cfg = getattr(cm, "config", None)
+        if not isinstance(cfg, dict):
+            cfg = cm if isinstance(cm, dict) else {}
+        headline: List[str] = []
+        sent = int(d.get("sent") or 0)
+        if sent:
+            saved_h = round(
+                estimate_saved_minutes(today, resolve_minutes_per_reply(cfg))
+                / 60.0, 1)
+            headline.append(
+                f"AI 经审核发出 {sent} 条回复，折算省约 {saved_h} 小时人工")
+        return {
+            "period": "daily",
+            "days": 1,
+            "headline": headline,
+            "value_lines": list(v.get("text_lines") or [])[:6],
+        }
+
+    def _maybe_daily_report(self, *, now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+        if not self._daily_enabled:
+            return None
+        ts = float(now if now is not None else time.time())
+        if self._last_daily_ts and (ts - self._last_daily_ts) < self._daily_interval:
+            return None
+        # 节流戳在构建**之前**推进（与周报刻意不同）：零流量日若不推进，
+        # 每个 5min 巡检 tick 都会重扫消息表白算一次日账——日报非告警，
+        # 偶发失败等明天补班即可，不值得每 tick 重试。
+        self._last_daily_ts = ts
+        report = self._build_daily_report(now=ts)
+        if report is None:
+            return None
+        self.total_daily_reports += 1
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("ops_report", report)
+            logger.info("HealthWatchdog 发出运营日报")
+        except Exception:
+            logger.debug("ops_report(daily) 发布失败（已忽略）", exc_info=True)
+        return report
+
     def _inbox(self):
         return getattr(getattr(self._app, "state", self._app), "inbox_store", None)
 
@@ -4621,6 +5495,7 @@ class HealthWatchdog:
             "total_orchestrator_worker_alerts": self.total_orchestrator_worker_alerts,
             "total_memory_key_drift_alerts": self.total_memory_key_drift_alerts,
             "total_weekly_reports": self.total_weekly_reports,
+            "total_daily_reports": self.total_daily_reports,
             "total_cloud_balance_alerts": self.total_cloud_balance_alerts,
             "total_license_quota_alerts": self.total_license_quota_alerts,
             "total_fallback_duty_reminders": self.total_fallback_duty_reminders,
@@ -4632,6 +5507,7 @@ class HealthWatchdog:
             "total_inbox_read_stall_reminders": self.total_inbox_read_stall_reminders,
             # P0 2026-08-05：入站漏球（客户最后一句无回复且无草稿）告警次数
             "total_unanswered_inbound_alerts": self.total_unanswered_inbound_alerts,
+            "total_accounts_truth_alerts": self.total_accounts_truth_alerts,
             "last_check_ts": self.last_check_ts,
             "last_light": self.last_light,
         }

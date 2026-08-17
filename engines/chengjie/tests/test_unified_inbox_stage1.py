@@ -1329,12 +1329,6 @@ def test_workflow_routes_slice20_registers_contract():
                 continue
             live.add((getattr(r, "path", ""), m))
     expected = {
-        ("/api/workspace/conv/{conversation_id}/next-actions", "GET"),
-        ("/api/workspace/conv/{conversation_id}/execute-action", "POST"),
-        ("/api/workspace/workflow-actions", "GET"),
-        ("/api/workspace/workflow-actions", "POST"),
-        ("/api/workspace/workflow-actions/{action_id}", "PUT"),
-        ("/api/workspace/workflow-actions/{action_id}", "DELETE"),
         ("/api/workspace/workflow-chains", "GET"),
         ("/api/workspace/workflow-chains", "POST"),
         ("/api/workspace/workflow-chains/seed", "POST"),

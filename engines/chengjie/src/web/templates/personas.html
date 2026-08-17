@@ -1143,6 +1143,19 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
     <div class="field-row"><label>{{ (i18n or {}).get('psn_pf_quirks','癖好') }}</label><input id="pe-pf-quirks" type="text"></div>
     <div class="field-row"><label>{{ (i18n or {}).get('psn_pf_humor','幽默感') }}</label><input id="pe-pf-humor" type="text"></div>
     <div class="field-row"><label>{{ (i18n or {}).get('psn_pf_temperament','性情') }}</label><input id="pe-pf-temperament" type="text"></div>
+    <!-- 被骂回怼档位（2026-08-12，人设顶层 temper 字段）：客户无端辱骂时这个人设怎么回应。
+         唯一写入口——运维总览的治理卡只读展示不改人设。四档色彩：灰/蓝/琥珀/红。 -->
+    <div class="field-row">
+      <label>{{ (i18n or {}).get('psn_pf_temper','被骂时') }} <span style="font-size:.7rem;color:var(--t2)">{{ (i18n or {}).get('psn_pf_temper_hint','客户无端辱骂你本人时的回应姿态（对方先动口才触发；道歉/开玩笑会自动收手）') }}</span></label>
+      <div class="opt-cards" id="tp-cards">
+        <div class="opt-card" data-val="off" onclick="_selTemper(this)"><span class="oc-ico">😶</span><span class="oc-lbl">{{ (i18n or {}).get('psn_pf_temper_off','不怼') }}</span></div>
+        <div class="opt-card" data-val="gentle" onclick="_selTemper(this)"><span class="oc-ico">🥺</span><span class="oc-lbl">{{ (i18n or {}).get('psn_pf_temper_gentle','软怼') }}</span></div>
+        <div class="opt-card" data-val="sharp" onclick="_selTemper(this)"><span class="oc-ico">😏</span><span class="oc-lbl">{{ (i18n or {}).get('psn_pf_temper_sharp','硬怼') }}</span></div>
+        <div class="opt-card" data-val="feisty" onclick="_selTemper(this)"><span class="oc-ico">🔥</span><span class="oc-lbl">{{ (i18n or {}).get('psn_pf_temper_feisty','对轰') }}</span></div>
+      </div>
+      <input type="hidden" id="pe-temper" value="">
+      <div id="pe-temper-example" class="pf-hint" style="margin-top:.35rem;font-style:italic"></div>
+    </div>
     <div id="pe-bio-status" class="pf-bio-row"></div>
     <!-- I4 线：长传记检索自测（I1 契约 /bio-doc/search；未入库/旧后端 404/403 整块隐藏）-->
     <details id="pe-bio-probe" style="display:none">
@@ -1210,6 +1223,8 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
         </div>
         <div class="field-row"><label>{{ (i18n or {}).get('psn_voice_id','音色 / Voice ID') }}</label><input id="pe-vp-voice" type="text" placeholder="zh-CN-XiaoxiaoNeural"></div>
       </div>
+      <!-- 克隆绑定锁提示：voice_profile.backend ∈ 克隆家族时显示（_vpSyncBackendUi 托管） -->
+      <div id="pe-vp-clone-hint" style="display:none;font-size:.74rem;color:var(--th-ink-amber7,#b45309);margin-top:.5rem;line-height:1.5">🔒 {{ (i18n or {}).get('psn_vp_clone_bound','该人设已绑定克隆音色（由收件箱的语音登记弹层写入）。改成其他选项＝不再用克隆声；改动后请先试听确认再保存。') }}</div>
       <div style="font-size:.74rem;color:var(--t2);margin-top:.5rem;line-height:1.5">💡 {{ (i18n or {}).get('psn_voice_hint','留空则继承域级默认人设的语音设置') }}</div>
       <!-- 音色体检（只读）：夜间探针 voice_similarity 最新读数（声纹/自然度/日期） -->
       <div id="pe-vq-row" style="font-size:.74rem;color:var(--t2);margin-top:.55rem;border-top:1px solid var(--bd);padding-top:.55rem;line-height:1.5">
@@ -1599,6 +1614,35 @@ function _clearDrawerDirty() {
   document.querySelectorAll('.ddot').forEach(function(dd){ dd.classList.remove('show'); });
 }
 
+// ── 被骂回怼档位（人设顶层 temper 字段）─────────────────────────────────────
+// 例句预览：Show don't tell——「阴阳嘲讽拉满」十人十解，一句例句零歧义。
+function _temperExample(lv){
+  var map = {
+    off:    window.T('psn_pf_temper_ex_off'),
+    gentle: window.T('psn_pf_temper_ex_gentle'),
+    sharp:  window.T('psn_pf_temper_ex_sharp'),
+    feisty: window.T('psn_pf_temper_ex_feisty')
+  };
+  var ink = {off:'var(--th-ink-slate6,#475569)', gentle:'var(--th-ink-emerald6,#047857)', sharp:'var(--th-ink-amber6,#92400e)', feisty:'var(--th-ink-red6,#b91c1c)'}[lv] || 'var(--th-ink-slate6,#475569)';
+  var el = document.getElementById('pe-temper-example');
+  if(!el) return;
+  var txt = map[lv] || '';
+  el.textContent = txt;
+  el.style.color = ink;
+}
+function _selTemper(el){
+  _selOpt(el, 'pe-temper', 'tp-cards');
+  _temperExample(el.dataset.val);
+}
+function _setTemperCard(lv){
+  var v = String(lv||'').toLowerCase();
+  if(['off','gentle','sharp','feisty'].indexOf(v) < 0) v = '';   // 未配置=不预选
+  var hid = document.getElementById('pe-temper'); if(hid) hid.value = v;
+  var cards = document.getElementById('tp-cards');
+  if(cards){ cards.querySelectorAll('.opt-card').forEach(function(c){ c.classList.toggle('sel', c.dataset.val === v); }); }
+  _temperExample(v);
+}
+
 // ── Option cards ──────────────────────────────────────────────────────────────
 function _selOpt(el, hiddenId, cardsId) {
   document.getElementById(cardsId).querySelectorAll('.opt-card').forEach(c => c.classList.remove('sel'));
@@ -1766,7 +1810,7 @@ async function _cloneProfile(pid) {
     document.getElementById('pe-forbidden-phrases').value = (spk.forbidden_phrases || []).join(', ');
     document.getElementById('pe-openers').value = (spk.openers || []).join(', ');
     const vp = p.voice_profile || {};
-    document.getElementById('pe-vp-backend').value = vp.backend || '';
+    _vpSyncBackendUi(vp.backend || '');
     document.getElementById('pe-vp-voice').value = vp.voice || '';
     _loadVoiceQuality();   // 克隆=新档（无 pid）→ 体检行回空态，防残留上一人设读数
     document.getElementById('pe-delete-btn').style.display = 'none';
@@ -3505,6 +3549,37 @@ function _gotoScan() {
   if (inp) inp.focus();
 }
 
+// ── 语音 backend 防覆盖（2026-08-14）────────────────────────────────────────
+// 克隆登记（收件箱语音弹层 /api/voice/enroll）写回的 backend（avatar_clone 等）
+// 不在下拉的静态 option 里：直接 select.value=xxx 会落空 → 保存把 backend 顶成
+// ''＝克隆绑定被静默解除（与 gender 下拉同病，见 _pfSetGender 的先例）。
+// 修法同款：装载时动态补 option；克隆后端另出锁提示行 + 保存前改选确认。
+var _VP_CLONE_BACKENDS = {avatar_clone: 1, voice_clone_lan: 1, minicpm_clone: 1, voice_clone_command: 1};
+var _vpLoadedBackend = '';   // 装载时的 backend（保存护栏判「是否从克隆改走」）
+function _vpToggleCloneHint(backend) {
+  var hint = document.getElementById('pe-vp-clone-hint');
+  if (hint) hint.style.display = _VP_CLONE_BACKENDS[String(backend || '')] ? 'block' : 'none';
+}
+function _vpSyncBackendUi(backend) {
+  var val = String(backend || '');
+  _vpLoadedBackend = val;
+  var sel = document.getElementById('pe-vp-backend');
+  if (sel) {
+    if (val && !Array.prototype.some.call(sel.options, function (o) { return o.value === val; })) {
+      var opt = document.createElement('option');
+      opt.value = val;
+      opt.textContent = (_VP_CLONE_BACKENDS[val] ? window.T('psn_vp_clone_label') + ' · ' : '') + val;
+      sel.appendChild(opt);
+    }
+    sel.value = val;
+  }
+  _vpToggleCloneHint(val);
+}
+(function () {
+  var sel = document.getElementById('pe-vp-backend');
+  if (sel) sel.addEventListener('change', function () { _vpToggleCloneHint(sel.value); });
+})();
+
 function _fillDrawerFields(p) {
   // 换档案装载：清掉上一个人设的删除提示横幅与排查残余（防串味）
   try { _showRemovedBanner([]); } catch (e) {}
@@ -3527,7 +3602,7 @@ function _fillDrawerFields(p) {
   document.getElementById('pe-openers').value = (spk.openers || []).join(', ');
   document.getElementById('pe-deny-ai').checked = !!(ident.deny_ai || p.deny_ai);
   document.getElementById('pe-claim-human').checked = !!(ident.claim_human || p.claim_human);
-  document.getElementById('pe-vp-backend').value = vp.backend || '';
+  _vpSyncBackendUi(vp.backend || '');
   document.getElementById('pe-vp-voice').value = vp.voice || '';
   _fillProfileTabFields(p, _persObj);
   _loadVoiceQuality();
@@ -3607,6 +3682,8 @@ function _fillProfileTabFields(p, persObj) {
   _pfSetVal('pe-pf-quirks', persObj ? persObj.quirks : '');
   _pfSetVal('pe-pf-humor', persObj ? persObj.humor : '');
   _pfSetVal('pe-pf-temperament', persObj ? persObj.temperament : '');
+  // 被骂回怼档位：顶层 temper 优先，回落 personality.temper（与后端 persona_temper 同序）
+  _setTemperCard((p && p.temper) || (persObj && persObj.temper) || '');
   _pfUpdateCounts();
 }
 
@@ -3694,6 +3771,10 @@ function _collectProfileTabPatch() {
     if (v || _pfNonEmpty(origSub)) persOut[pair[1]] = v;
   });
   if (Object.keys(persOut).length) patch.personality = persOut;
+  // 被骂回怼档位：人设顶层 temper 字段（与 personality 平级）。空=不出键（继承
+  // 全局 default_level）；有值 or 原来有值才出键——避免给从没配过的人设凭空写字段。
+  var _tp = _pfStr('pe-temper');
+  if (_tp || _pfNonEmpty(_pfOrig('temper'))) patch.temper = _tp;
   return patch;
 }
 
@@ -3834,6 +3915,20 @@ async function saveProfile() {
       saveBtn.innerHTML = window.T('psn_js_139');
     }
   }
+
+  // ── 语音组合护栏（2026-08-14）：明显错配在保存前拦，别等线上合成才炸 ──
+  // ① openai + *Neural（Edge 音色）＝确定性错配 → 硬拦；
+  // ② edge_tts + 非 Neural 自由文本＝大概率无效（会回落默认声）→ confirm 放行；
+  // ③ 装载时是克隆后端、现在改走别家 → confirm（防手滑解绑克隆声，撤销成本高）。
+  var _vpB = (document.getElementById('pe-vp-backend') || {}).value || '';
+  var _vpV = ((document.getElementById('pe-vp-voice') || {}).value || '').trim();
+  if (_vpB === 'openai' && /neural$/i.test(_vpV)) {
+    _toast(window.T('psn_vp_bad_combo_openai'), 'err'); _restoreBtn(false); return;
+  }
+  if (_vpB === 'edge_tts' && _vpV && !/neural$/i.test(_vpV)
+      && !confirm(window.T('psn_vp_bad_combo_edge'))) { _restoreBtn(false); return; }
+  if (_vpLoadedBackend && _VP_CLONE_BACKENDS[_vpLoadedBackend] && _vpB !== _vpLoadedBackend
+      && !confirm(window.T('psn_vp_clone_unbind_confirm'))) { _restoreBtn(false); return; }
 
   var tags = (document.getElementById('pe-tags').value || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
   var fps = (document.getElementById('pe-forbidden-phrases').value || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean);

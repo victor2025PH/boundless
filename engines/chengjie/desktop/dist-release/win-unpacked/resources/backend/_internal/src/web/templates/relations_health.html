@@ -1,0 +1,862 @@
+{% extends "base.html" %}
+{% block title %}{{ (i18n or {}).get('rh_s001', "流失预警 ·") }} {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
+{% block page_title %}{{ (i18n or {}).get('relations_health', "流失预警") }}{% endblock %}
+{% block head %}
+<style>
+/* ── 布局骨架 ─────────────────────────────────────────── */
+.rh-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:.6rem;margin-bottom:1rem}
+.rh-kpi{background:var(--input);border:1px solid var(--bd);border-radius:10px;padding:.6rem .8rem}
+.rh-kpi .v{font-size:1.35rem;font-weight:700;color:var(--t);line-height:1.2}
+.rh-kpi .l{font-size:.7rem;color:var(--t3);margin-top:.15rem}
+.rh-kpi.amber .v{color:var(--amber)}
+.rh-kpi.red .v{color:var(--red)}
+.rh-kpi.purple .v{color:#a855f7}
+.rh-kpi.green .v{color:var(--green)}
+.rh-kpi.sk .v{color:transparent;background:var(--bd);border-radius:4px;animation:rhsk 1.2s ease-in-out infinite;width:2.4rem;height:1.35rem}
+@keyframes rhsk{0%,100%{opacity:.45}50%{opacity:1}}
+.rh-banner{border-radius:10px;padding:.6rem .9rem;font-size:.8rem;margin-bottom:.9rem;border:1px solid var(--bd)}
+.rh-banner.info{background:color-mix(in srgb, var(--p,#1e8cf2) 8%, transparent);color:var(--t);border-color:color-mix(in srgb, var(--p,#1e8cf2) 30%, transparent)}
+.rh-banner.warn{background:rgba(245,158,11,.1);color:var(--t);border-color:rgba(245,158,11,.35)}
+.rh-guide-card{text-align:center;padding:2.6rem 1rem;border:1px dashed var(--bd);border-radius:12px;margin:.4rem 0 1rem}
+.rh-guide-tt{font-size:1rem;font-weight:700;color:var(--t);margin-bottom:.5rem}
+.rh-guide-bd{font-size:.82rem;color:var(--t2);max-width:560px;margin:0 auto .6rem;line-height:1.7}
+.rh-guide-meta{font-size:.72rem;color:var(--t3);margin-bottom:1rem}
+/* ── 标签页 / 过滤器 ──────────────────────────────────── */
+.rh-toolbar{display:flex;flex-wrap:wrap;gap:.8rem;align-items:flex-end;margin-bottom:.7rem}
+.rh-tabs{display:inline-flex;background:var(--input);border:1px solid var(--bd);border-radius:9px;padding:3px;gap:2px}
+.rh-tab{border:0;background:none;color:var(--t2);font-size:.78rem;font-weight:600;padding:.32rem .8rem;border-radius:7px;cursor:pointer}
+.rh-tab.active{background:var(--card);color:var(--p);box-shadow:0 1px 4px rgba(0,0,0,.18)}
+.rh-filters{display:flex;flex-wrap:wrap;gap:.6rem;align-items:flex-end}
+/* 排版修正（2026-08-04）：行内表单组清掉 .f-grp 纵向底边距，标签收进 .72 档 */
+.rh-filters .f-grp{margin-bottom:0}
+.rh-filters .f-lbl{font-size:.72rem;color:var(--t3);margin-bottom:.3rem;white-space:nowrap}
+#rh-risk{width:130px}
+#rh-minintim{width:100px}
+#rh-limit,#rh-lite-days,#rh-lite-limit{width:90px}
+@media (max-width:640px){
+  .rh-toolbar{flex-direction:column;align-items:stretch}/* tabs 与筛选各占整行，防筛选被挤进 tabs 旁的余宽 */
+  .rh-filters{flex-direction:column;align-items:stretch}
+  .rh-filters .f-grp{width:100%}
+  #rh-risk,#rh-minintim,#rh-limit,#rh-lite-days,#rh-lite-limit{width:100%}
+}
+/* ── 今日必挽 ─────────────────────────────────────────── */
+.rh-focus-wrap{margin:.2rem 0 1rem}
+.rh-focus-head{font-size:.78rem;font-weight:700;color:var(--amber);margin-bottom:.45rem;letter-spacing:.03em}
+.rh-focus{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:.6rem}
+.rh-fcard{border:1px solid rgba(245,158,11,.35);background:rgba(245,158,11,.06);border-radius:10px;padding:.6rem .7rem;display:flex;flex-direction:column;gap:.3rem}
+.rh-fcard.pay{border-color:rgba(168,85,247,.45);background:rgba(168,85,247,.08)}
+.rh-fname{font-size:.85rem;font-weight:700;color:var(--t);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rh-fmeta{font-size:.7rem;color:var(--t2)}
+.rh-freason{font-size:.7rem;color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rh-fbtn{align-self:flex-start;margin-top:.15rem}
+/* ── 表格 ─────────────────────────────────────────────── */
+.table-wrap{overflow-x:auto}
+.rh-table{width:100%;border-collapse:collapse;font-size:.82rem}
+.rh-table th,.rh-table td{padding:.55rem .65rem;border-bottom:1px solid var(--bd);text-align:left;vertical-align:top}
+.rh-table th{color:var(--t3);font-weight:600;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em}
+.rh-table tr:hover td{background:color-mix(in srgb, var(--p,#1e8cf2) 4%, transparent)}
+.rh-table tr.var td{background:rgba(239,68,68,.05)}
+.rh-table tr.payvar td{background:rgba(168,85,247,.07)}
+.rh-table tr.rh-drow td,.rh-table tr.rh-drow:hover td{background:var(--input)}
+.rh-score{font-size:1.05rem;font-weight:700;color:var(--t)}
+.rh-cname{font-weight:600;color:var(--t)}
+.rh-noname{color:var(--t3);font-weight:400}
+.rh-csub{font-size:.7rem;color:var(--t3);margin-top:.1rem}
+.rh-hint{font-size:.72rem;color:var(--t2);margin-top:.2rem}
+.rh-dbox{font-size:.78rem;color:var(--t2);padding:.15rem .2rem;line-height:1.7}
+.rh-dline{margin:.1rem 0}
+.mono{font-family:Consolas,monospace;font-size:.72rem;word-break:break-all}
+.rh-sk{height:.9rem;border-radius:4px;background:var(--bd);animation:rhsk 1.2s ease-in-out infinite}
+.rh-legend{display:flex;gap:1rem;flex-wrap:wrap;font-size:.68rem;color:var(--t3);margin:.15rem 0 .55rem}
+.rh-legend .lg::before{content:"";display:inline-block;width:.7rem;height:.7rem;border-radius:3px;margin-right:.3rem;vertical-align:-1px}
+.rh-legend .lg.payvar::before{background:rgba(168,85,247,.45)}
+.rh-legend .lg.var::before{background:rgba(239,68,68,.4)}
+.rh-lite-note{font-size:.74rem;color:var(--t3);margin:.1rem 0 .6rem;line-height:1.6}
+/* ── 徽章（沿用旧语义色） ─────────────────────────────── */
+.badge-rl{display:inline-block;padding:.12rem .45rem;border-radius:4px;font-size:.65rem;font-weight:700}
+.badge-rl.healthy{background:rgba(16,185,129,.15);color:var(--green)}
+.badge-rl.watch{background:color-mix(in srgb, var(--p,#1e8cf2) 15%, transparent);color:var(--p)}
+.badge-rl.at_risk,.badge-rl.medium{background:rgba(245,158,11,.15);color:var(--amber)}
+.badge-rl.critical,.badge-rl.high{background:rgba(239,68,68,.15);color:var(--red)}
+.badge-grade{display:inline-block;width:1.5rem;text-align:center;border-radius:4px;font-weight:700;font-size:.72rem;background:var(--input);color:var(--t2)}
+.badge-var{display:inline-block;padding:.1rem .35rem;border-radius:4px;font-size:.62rem;font-weight:700;background:rgba(239,68,68,.15);color:var(--red);margin-left:.3rem}
+.badge-trend{display:inline-block;padding:.1rem .4rem;border-radius:4px;font-size:.68rem;font-weight:600}
+.badge-trend.rising{background:rgba(239,68,68,.12);color:var(--red)}
+.badge-trend.falling{background:rgba(16,185,129,.12);color:var(--green)}
+.badge-trend.stable{background:var(--input);color:var(--t2)}
+.badge-churn{display:inline-block;padding:.1rem .4rem;border-radius:4px;font-size:.68rem;background:rgba(245,158,11,.12);color:var(--amber)}
+.badge-pay{display:inline-block;padding:.1rem .4rem;border-radius:4px;font-size:.66rem;font-weight:700;background:rgba(16,185,129,.14);color:var(--green)}
+.badge-tier{display:inline-block;padding:.1rem .4rem;border-radius:4px;font-size:.62rem;font-weight:700;background:rgba(168,85,247,.16);color:#a855f7;margin-left:.25rem;text-transform:uppercase}
+.badge-lapsed{display:inline-block;padding:.08rem .35rem;border-radius:4px;font-size:.6rem;font-weight:700;background:rgba(239,68,68,.16);color:var(--red);margin-left:.25rem}
+.badge-recent{display:inline-block;padding:.08rem .35rem;border-radius:4px;font-size:.6rem;font-weight:600;background:rgba(16,185,129,.12);color:var(--green);margin-left:.25rem}
+.rh-act{background:none;border:1px solid var(--p);color:var(--p);cursor:pointer;font-size:.72rem;font-weight:600;padding:.2rem .55rem;border-radius:6px}
+.rh-act:hover{background:color-mix(in srgb, var(--p,#1e8cf2) 8%, transparent)}
+.rh-act-ghost{border-color:var(--bd);color:var(--t2)}
+.rh-reasons{color:var(--t3);font-size:.74rem}
+/* ── 话术弹窗 ─────────────────────────────────────────── */
+.rh-modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:900;display:none;align-items:center;justify-content:center}
+.rh-modal-bg.open{display:flex}
+.rh-modal{background:var(--card);border-radius:12px;padding:1.25rem;max-width:520px;width:92%;box-shadow:0 8px 32px rgba(0,0,0,.2)}
+.rh-modal h3{margin:0 0 .5rem;font-size:1rem}
+.rh-modal textarea{width:100%;min-height:110px;resize:vertical;font-family:inherit;font-size:.9rem;padding:.55rem;border:1px solid var(--bd);border-radius:8px;background:var(--input);color:var(--t)}
+.rh-modal-meta{font-size:.76rem;color:var(--t2);margin:.5rem 0}
+.rh-modal-hint{font-size:.7rem;color:var(--t3);margin:.4rem 0 0;line-height:1.5}
+.rh-modal-actions{display:flex;gap:.5rem;justify-content:flex-end;margin-top:.75rem}
+/* ── 管理工具（回填诊断） ─────────────────────────────── */
+.rh-backfill{margin:1rem 0 .2rem;border:1px solid var(--bd);border-radius:8px;padding:.4rem .65rem;font-size:.8rem}
+.rh-backfill summary{cursor:pointer;color:var(--t3);font-weight:600;font-size:.74rem}
+.rh-bf-body{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem;margin-top:.55rem}
+.rh-bf-actions{display:flex;align-items:center;gap:.35rem;margin-left:auto}
+</style>
+{% endblock %}
+{% block content %}
+{% set active="relations_health" %}
+
+<div class="card fa">
+  <h2>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+    {{ (i18n or {}).get('rh_s002', "流失预警榜") }}
+    <span style="font-size:.75rem;font-weight:400;color:var(--t2);margin-left:.4rem">{{ (i18n or {}).get('rh_s003', "谁在降温 · 该唤醒谁 · 发现") }}→{{ (i18n or {}).get('rh_s004', "生成话术") }}→{{ (i18n or {}).get('rh_s005', "发送闭环") }}</span>
+  </h2>
+
+  <div class="rh-kpis" id="rh-kpis"></div>
+  <div class="rh-banner" id="rh-banner" style="display:none"></div>
+  <div id="rh-guide" style="display:none"></div>
+
+  <div id="rh-main" style="display:none">
+    <div class="rh-toolbar">
+      <div class="rh-tabs" id="rh-tabs" style="display:none">
+        <button type="button" class="rh-tab" id="rh-tab-full" onclick="rhSwitchTab('full')">{{ (i18n or {}).get('rh2_tab_full', "全量榜 · 跨平台旅程") }}</button>
+        <button type="button" class="rh-tab" id="rh-tab-lite" onclick="rhSwitchTab('lite')">{{ (i18n or {}).get('rh2_tab_lite', "轻量榜 · 收件箱信号") }}</button>
+      </div>
+      <div class="rh-filters" id="rh-filters-full">
+        <div class="f-grp">
+          <label class="f-lbl">{{ (i18n or {}).get('ap_s087', "风险等级") }}</label>
+          <select id="rh-risk" class="f-input">
+            <option value="">{{ (i18n or {}).get('rpa_all', "全部") }}</option>
+            <option value="critical">{{ (i18n or {}).get('rh_s006', "危机") }}</option>
+            <option value="at_risk">{{ (i18n or {}).get('ov_js_th_risk', "风险") }}</option>
+            <option value="watch">{{ (i18n or {}).get('rh_s007', "观察") }}</option>
+            <option value="healthy">{{ (i18n or {}).get('db_js_018', "健康") }}</option>
+          </select>
+        </div>
+        <div class="f-grp"><label class="f-lbl">{{ (i18n or {}).get('rh_s008', "最低亲密度") }}</label><input type="number" id="rh-minintim" value="0" min="0" max="100" class="f-input"></div>
+        <div class="f-grp"><label class="f-lbl">{{ (i18n or {}).get('rh_s009', "榜单条数") }}</label><input type="number" id="rh-limit" value="30" min="1" max="100" class="f-input"></div>
+        <button type="button" class="btn btn-p" onclick="rhRefresh()">{{ (i18n or {}).get('dash.refresh', "刷新") }}</button>
+      </div>
+      <div class="rh-filters" id="rh-filters-lite" style="display:none">
+        <div class="f-grp"><label class="f-lbl">{{ (i18n or {}).get('rh2_lite_days', "沉默 ≥ (天)") }}</label><input type="number" id="rh-lite-days" value="7" min="1" max="60" class="f-input"></div>
+        <div class="f-grp"><label class="f-lbl">{{ (i18n or {}).get('rh_s009', "榜单条数") }}</label><input type="number" id="rh-lite-limit" value="50" min="1" max="200" class="f-input"></div>
+        <button type="button" class="btn btn-p" onclick="rhRefresh()">{{ (i18n or {}).get('dash.refresh', "刷新") }}</button>
+      </div>
+    </div>
+    <p id="rh-status" style="font-size:.78rem;color:var(--t2);margin-bottom:.6rem"></p>
+
+    <div class="rh-focus-wrap" id="rh-focus-wrap" style="display:none">
+      <div class="rh-focus-head">🔥 {{ (i18n or {}).get('rh2_focus_title', "今日必挽") }}</div>
+      <div class="rh-focus" id="rh-focus"></div>
+    </div>
+
+    <div id="rh-full-sec">
+      <div class="rh-legend">
+        <span class="lg payvar">{{ (i18n or {}).get('rh2_legend_payvar', "紫底 = 付费客户正在流失（最优先挽回）") }}</span>
+        <span class="lg var">{{ (i18n or {}).get('rh2_legend_var', "红底 = 高价值关系正在流失") }}</span>
+      </div>
+      <div class="table-wrap">
+        <table class="rh-table">
+          <thead>
+            <tr>
+              <th style="width:90px">{{ (i18n or {}).get('db_js_018', "健康") }}</th>
+              <th style="min-width:130px">{{ (i18n or {}).get('rh2_col_customer', "客户") }}</th>
+              <th style="width:64px">{{ (i18n or {}).get('rh_s014', "沉默天") }}</th>
+              <th style="width:120px">{{ (i18n or {}).get('rh2_col_signal', "信号") }}</th>
+              <th style="width:110px">{{ (i18n or {}).get('rh_s015', "付费") }}</th>
+              <th>{{ (i18n or {}).get('rh2_col_risk_advice', "风险原因与建议") }}</th>
+              <th style="width:150px">{{ (i18n or {}).get('ov_js_th_action', "操作") }}</th>
+            </tr>
+          </thead>
+          <tbody id="rh-body"></tbody>
+        </table>
+      </div>
+      <details class="rh-backfill" id="rh-backfill">
+        <summary>{{ (i18n or {}).get('rh2_admin_tools', "管理工具") }} · {{ (i18n or {}).get('rh_s010', "跨域归档诊断 ·") }} contact_id {{ (i18n or {}).get('rh_s011', "回填命中率") }}</summary>
+        <div class="rh-bf-body">
+          <span id="rh-bf-status" style="font-size:.78rem;color:var(--t2)">—</span>
+          <div class="rh-bf-actions">
+            <label class="f-lbl" style="margin:0 .3rem 0 .6rem">{{ (i18n or {}).get('rh_s012', "扫描上限") }}</label>
+            <input type="number" id="rh-bf-limit" value="200" min="1" max="2000" class="f-input" style="width:90px">
+            <button type="button" class="btn" onclick="rhBackfill(true)">{{ (i18n or {}).get('as_js054', "评估") }}(dry-run)</button>
+            <button type="button" class="btn btn-p" onclick="rhBackfill(false)">{{ (i18n or {}).get('rh_s013', "执行回填") }}</button>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <div id="rh-lite-sec" style="display:none">
+      <p class="rh-lite-note">{{ (i18n or {}).get('rh2_lite_note', "轻量榜直接读收件箱信号（沉默时长 / 投诉·流失关键词 / 质检分），即开即用；跨平台身份归并、亲密度与付费信号在全量榜。") }}</p>
+      <div class="table-wrap">
+        <table class="rh-table">
+          <thead>
+            <tr>
+              <th style="min-width:150px">{{ (i18n or {}).get('rh2_col_customer', "客户") }}</th>
+              <th style="width:100px">{{ (i18n or {}).get('ov_js_th_risk', "风险") }}</th>
+              <th style="width:70px">{{ (i18n or {}).get('rh_s014', "沉默天") }}</th>
+              <th>{{ (i18n or {}).get('rh2_col_last_reason', "最近消息 / 原因") }}</th>
+              <th style="width:110px">{{ (i18n or {}).get('ov_js_th_action', "操作") }}</th>
+            </tr>
+          </thead>
+          <tbody id="rh-lite-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 唤醒话术试运行审核（reactivation dry_run）——2026-08-02 自仪表盘工程明细归位：
+     唤醒沉默客户的样本审核属于本页「发现→生成话术→发送闭环」工作流的试运行侧。
+     无样本整卡隐藏（reactivation 未开 dry_run 的部署零噪音）；👎 与关怀审核共享
+     全局黑名单（进程内，重启清空）。 -->
+<div class="card fa" id="rh-dry-card" style="display:none">
+  <h2>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+    {{ (i18n or {}).get('db_s025', "待审核话术") }}
+    <span style="font-size:.75rem;font-weight:400;color:var(--t2);margin-left:.4rem">{{ (i18n or {}).get('cs2_samples_sub', "AI 到点会这么说——👎 的话术会进全局黑名单，避免以后出现雷同表达") }}</span>
+    <div class="actions">
+      <span id="rh-dry-count" style="font-size:.75rem;color:var(--t3)"></span>
+      <button type="button" class="btn btn-s btn-xs" onclick="rhDryLoad(true)">{{ (i18n or {}).get('dash.refresh', "刷新") }}</button>
+    </div>
+  </h2>
+  <div id="rh-dry-list" style="display:flex;flex-direction:column;gap:.4rem"></div>
+</div>
+
+<div class="rh-modal-bg" id="rh-modal-bg" onclick="if(event.target===this)rhCloseModal()">
+  <div class="rh-modal" role="dialog">
+    <h3>{{ (i18n or {}).get('rh_s018', "重逢开场草稿") }}</h3>
+    <div class="rh-modal-meta" id="rh-modal-queue" style="display:none;color:var(--amber);font-weight:600"></div>
+    <div class="rh-modal-meta" id="rh-modal-meta"></div>
+    <div class="rh-modal-meta" id="rh-modal-inbox" style="display:none"></div>
+    <textarea id="rh-modal-draft" placeholder="{{ (i18n or {}).get('ov_js_generating', '生成中…') }}"></textarea>
+    <p class="rh-modal-hint">{{ (i18n or {}).get('rh2_draft_hint', "复制话术后到对应渠道发送；发出后点「标记已发」记录冷却，避免重复打扰。") }}</p>
+    <div class="rh-modal-actions">
+      <button type="button" class="btn" id="rh-next-btn" style="display:none;margin-right:auto" onclick="rhNextFocus()">{{ (i18n or {}).get('rh2_next_one', "下一位") }} →</button>
+      <button type="button" class="btn" onclick="rhCloseModal()">{{ (i18n or {}).get('close', "关闭") }}</button>
+      <button type="button" class="btn" id="rh-copy-btn" onclick="rhCopy()">{{ (i18n or {}).get('wa_js_098', "复制") }}</button>
+      <button type="button" class="btn btn-p" id="rh-send-btn" style="display:none" onclick="rhSendDirect()">{{ (i18n or {}).get('rh2_send_direct', "直接发送") }}</button>
+      <button type="button" class="btn btn-p" id="rh-sent-btn" onclick="rhMarkSent()">{{ (i18n or {}).get('as_s071', "标记已发") }}</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ── 状态 ─────────────────────────────────────────────── */
+let _rhPendingJid=null;
+let _rhPendingConv=null;   /* RH-P2：当前话术目标会话 {platform,account_id,chat_key} */
+let _rhSendInFlight=false;
+let _rhCap=null;
+let _rhTab='full';
+let _rhFullLoaded=false,_rhLiteLoaded=false;
+const _rhDetailCache={};
+let _rhFocusQueue=[];   /* RH-P3：必挽工作队列 [{jid,name}]（rhRenderFocus 填充） */
+let _rhFocusDone={};    /* 本页会话内已处理 journey → 「下一位」自动跳过 */
+function _rhConvParts(cid){
+  var p=String(cid||'').split(':');
+  if(p.length<3)return null;
+  return {platform:p[0],account_id:p[1],chat_key:p.slice(2).join(':')};
+}
+
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+function rlBadge(rl){return '<span class="badge-rl '+esc(rl)+'">'+({critical:window.T('rh_s006'),at_risk:window.T('ov_js_th_risk'),watch:window.T('rh_s007'),healthy:window.T('db_js_018'),high:window.T('rh_s006'),medium:window.T('ov_js_th_risk')}[rl]||esc(rl))+'</span>';}
+function trendBadge(t){
+  if(!t)return '<span style="color:var(--t3)">—</span>';
+  var lbl={rising:window.T('rh_js001')+'↑',falling:window.T('rh_js002')+'↓',stable:window.T('rh_js003')+'→'}[t]||esc(t);
+  return '<span class="badge-trend '+esc(t)+'">'+lbl+'</span>';
+}
+function churnCell(ib){
+  if(!ib||!ib.churn_risk)return '<span style="color:var(--t3)">—</span>';
+  return '<span class="badge-churn" title="'+esc(ib.last_intent||'')+'">'+esc(ib.churn_risk)+'</span>';
+}
+function payCell(mb){
+  if(!mb)return '<span style="color:var(--t3)">—</span>';
+  var out='';
+  if(mb.is_payer){
+    var rd=mb.recent_days||30;
+    var tip=window.T('rh_js004')+rd+window.T('wa_s158')+' '+esc(mb.currency||'')+' '+(mb.ltv_recent||0);
+    out+='<span class="badge-pay" title="'+tip+'">'+esc(mb.currency||'')+' '+(mb.ltv||0)+'</span>';
+    if(mb.lapsed){
+      out+='<span class="badge-lapsed" title="'+window.T('rh_js005')+rd+window.T('rh_js006')+'">'+window.T('rh_js007')+'</span>';
+    }else if((mb.ltv_recent||0)>0){
+      out+='<span class="badge-recent" title="'+window.T('em_js013')+rd+window.T('rh_js008')+'">+'+(mb.ltv_recent||0)+'</span>';
+    }
+  }
+  if(mb.is_member && mb.tier && mb.tier!=='free'){
+    out+='<span class="badge-tier">'+esc(mb.tier)+'</span>';
+  }
+  return out||'<span style="color:var(--t3)">—</span>';
+}
+
+/* ── 骨架 / 错误 / KPI ────────────────────────────────── */
+function rhSkeleton(body,cols){
+  var row='<tr><td colspan="'+cols+'"><div class="rh-sk"></div></td></tr>';
+  body.innerHTML=row+row+row;
+}
+function rhTableError(body,cols,retryFn,status){
+  body.innerHTML='<tr><td colspan="'+cols+'" style="padding:1.6rem;text-align:center">'
+    +'<div style="color:var(--red);font-size:.82rem;margin-bottom:.6rem">'+window.T('rh2_err_load')+(status?' (HTTP '+status+')':'')+'</div>'
+    +'<button type="button" class="btn" onclick="'+retryFn+'()">'+window.T('rh2_retry')+'</button></td></tr>';
+}
+function rhKpiHtml(list){
+  return list.map(function(k){
+    return '<div class="rh-kpi '+(k.cls||'')+'"><div class="v">'+k.v+'</div><div class="l">'+k.l+'</div></div>';
+  }).join('');
+}
+function rhKpiSkeleton(){
+  var el=document.getElementById('rh-kpis');
+  el.innerHTML='<div class="rh-kpi sk"><div class="v">0</div><div class="l">&nbsp;</div></div>'.repeat(4);
+}
+function rhRenderKpisFull(d,items){
+  var atrisk=items.filter(function(x){return x.risk_level==='at_risk'||x.risk_level==='critical';}).length;
+  var payvar=items.filter(function(x){var m=x.monetization;return m&&(m.is_payer||m.is_member)&&(x.risk_level==='at_risk'||x.risk_level==='critical');}).length;
+  var lapsed=items.filter(function(x){var m=x.monetization;return m&&m.lapsed;}).length;
+  document.getElementById('rh-kpis').innerHTML=rhKpiHtml([
+    {l:window.T('rh2_kpi_scanned'),v:(d&&d.scanned)||0},
+    {l:window.T('rh2_kpi_listed'),v:items.length},
+    {l:window.T('rh2_kpi_atrisk'),v:atrisk,cls:atrisk?'amber':''},
+    {l:window.T('rh2_kpi_payer_risk'),v:payvar,cls:payvar?'purple':''},
+    {l:window.T('rh2_kpi_lapsed'),v:lapsed,cls:lapsed?'red':''}
+  ]);
+}
+function rhRenderKpisLite(d,items){
+  document.getElementById('rh-kpis').innerHTML=rhKpiHtml([
+    {l:window.T('rh2_kpi_listed'),v:items.length},
+    {l:window.T('rh2_kpi_lite_high'),v:(d&&d.high_count)||0,cls:(d&&d.high_count)?'red':''},
+    {l:window.T('rh2_kpi_lite_med'),v:(d&&d.medium_count)||0,cls:(d&&d.medium_count)?'amber':''}
+  ]);
+}
+/* RH-P2：挽回率 KPI（endpoint 未装载/未启用 → 静默不出卡，绝不报错） */
+async function rhLoadWinback(){
+  try{
+    const res=await apiFetch('/api/relations/winback-stats?days=30&reply_window_days=7');
+    if(!res.ok)return;
+    const d=await res.json();
+    if(!d||!d.ok)return;
+    var el=document.getElementById('rh-kpis');if(!el)return;
+    var old=document.getElementById('rh-kpi-winback');if(old)old.remove();
+    var v=(d.rate!=null)?Math.round(d.rate*100)+'%':'—';
+    var tip=window.Tf('rh2_winback_tip',{d:d.days,s:d.sent,r:d.replied,p:d.pending});
+    el.insertAdjacentHTML('beforeend',
+      '<div class="rh-kpi'+((d.rate!=null&&d.rate>0)?' green':'')+'" id="rh-kpi-winback" title="'+esc(tip)+'">'
+      +'<div class="v">'+v+'</div><div class="l">'+esc(window.T('rh2_kpi_winback'))+'</div></div>');
+  }catch(e){}
+}
+
+/* ── 能力探测（三态入口） ─────────────────────────────── */
+async function rhProbe(){
+  document.getElementById('rh-guide').style.display='none';
+  document.getElementById('rh-banner').style.display='none';
+  rhKpiSkeleton();
+  try{
+    const res=await apiFetch('/api/relations/capability');
+    if(res.status===404){
+      /* 旧进程尚未装载 capability 端点（模板热更新先于重启生效）：
+         直接探轻量榜数据源，能通就按 lite 跑，页面绝不留死等。 */
+      try{
+        const probe=await apiFetch('/api/workspace/churn-risks?silence_days=7&limit=1');
+        if(probe.ok){
+          _rhCap={ok:true,mode:'lite',lite_available:true,board_registered:false,
+                  reactivation_registered:false,contacts_enabled:false,
+                  pending_restart:true,cold_start:false,contact_count:null};
+          rhApply();return;
+        }
+      }catch(e){}
+      rhGuide('none');return;
+    }
+    if(!res.ok){rhGuide('probe');return;}
+    _rhCap=await res.json();
+    rhApply();
+  }catch(e){rhGuide('probe');}
+}
+function rhApply(){
+  const cap=_rhCap||{};
+  const hasFull=!!cap.board_registered, hasLite=!!cap.lite_available;
+  if(!hasFull&&!hasLite){rhGuide('none');return;}
+  _rhFullLoaded=false;_rhLiteLoaded=false;
+  document.getElementById('rh-guide').style.display='none';
+  document.getElementById('rh-main').style.display='';
+  document.getElementById('rh-tabs').style.display=(hasFull&&hasLite)?'':'none';
+  var bn=document.getElementById('rh-banner');bn.style.display='none';
+  if(!hasFull&&cap.pending_restart){bn.className='rh-banner warn';bn.textContent=window.T('rh2_pending_restart');bn.style.display='';}
+  else if(!hasFull&&hasLite){bn.className='rh-banner info';bn.textContent=window.T('rh2_lite_only_hint');bn.style.display='';}
+  else if(cap.cold_start){bn.className='rh-banner info';bn.textContent=window.Tf('rh2_coldstart',{n:cap.contact_count||0});bn.style.display='';}
+  var t=hasFull?'full':'lite';
+  if(hasFull&&hasLite&&cap.cold_start)t='lite';
+  if(hasFull&&hasLite){
+    try{var s=localStorage.getItem('rh_tab');if(s==='full'||s==='lite')t=s;}catch(e){}
+  }
+  rhSwitchTab(t);
+  if(hasFull)rhBackfillStatus();
+}
+function rhGuide(kind){
+  document.getElementById('rh-main').style.display='none';
+  document.getElementById('rh-kpis').innerHTML='';
+  var title,body;
+  if(kind==='probe'){title=window.T('rh2_probe_fail');body='';}
+  else{
+    title=window.T('rh2_guide_title');
+    body=(_rhCap&&_rhCap.pending_restart)?window.T('rh2_pending_restart'):window.T('rh2_guide_body');
+  }
+  var g=document.getElementById('rh-guide');
+  g.innerHTML='<div class="rh-guide-card"><div class="rh-guide-tt">'+esc(title)+'</div>'
+    +(body?'<div class="rh-guide-bd">'+esc(body)+'</div>':'')
+    +'<div class="rh-guide-meta mono">contacts.enabled</div>'
+    +'<button type="button" class="btn btn-p" onclick="rhProbe()">'+window.T('rh2_retry')+'</button></div>';
+  g.style.display='';
+}
+
+/* ── 标签页 ───────────────────────────────────────────── */
+function rhSwitchTab(t){
+  _rhTab=(t==='lite')?'lite':'full';
+  try{localStorage.setItem('rh_tab',_rhTab);}catch(e){}
+  var full=_rhTab==='full';
+  document.getElementById('rh-tab-full').className='rh-tab'+(full?' active':'');
+  document.getElementById('rh-tab-lite').className='rh-tab'+(full?'':' active');
+  document.getElementById('rh-full-sec').style.display=full?'':'none';
+  document.getElementById('rh-lite-sec').style.display=full?'none':'';
+  document.getElementById('rh-filters-full').style.display=full?'':'none';
+  document.getElementById('rh-filters-lite').style.display=full?'none':'';
+  if(!full)document.getElementById('rh-focus-wrap').style.display='none';
+  if(full&&!_rhFullLoaded)rhLoad(0);
+  else if(!full&&!_rhLiteLoaded)rhLoadLite();
+}
+function rhRefresh(){if(_rhTab==='full')rhLoad(1);else rhLoadLite();}
+
+/* ── 全量榜 ───────────────────────────────────────────── */
+async function rhLoad(force){
+  _rhFullLoaded=true;
+  const risk=document.getElementById('rh-risk').value;
+  const minIntim=document.getElementById('rh-minintim').value||0;
+  const limit=document.getElementById('rh-limit').value||30;
+  const body=document.getElementById('rh-body');
+  const st=document.getElementById('rh-status');
+  st.textContent=window.T('dash.loading');
+  rhSkeleton(body,7);
+  try{
+    const q=new URLSearchParams({limit:String(limit),min_intimacy:String(minIntim),scan:'400'});
+    if(risk)q.set('risk',risk);
+    if(force)q.set('force','1');
+    const res=await apiFetch('/api/relations/health-board?'+q.toString());
+    if(!res.ok){
+      st.textContent=window.T('rh2_err_load')+' (HTTP '+res.status+')';
+      rhTableError(body,7,'rhRefresh',res.status);
+      rhRenderKpisFull(null,[]);return;
+    }
+    const d=await res.json();
+    const items=d.items||[];
+    rhRenderKpisFull(d,items);
+    rhRenderFocus(items);
+    rhLoadWinback();
+    var sortDesc=(d.payer_sort_priority?window.T('rh_js014')+' + ':'')+window.T('rh_js015')+' + '+window.T('rh_js016');
+    if(d.inbox_sort_tiebreak)sortDesc+=' + inbox '+window.T('rh_js017')+' tie-break';
+    st.textContent=window.Tf('rh2_loaded_meta',{n:items.length,m:d.scanned||0})+' · '+window.T('set_s243')+'「'+sortDesc+'」'+window.T('lr_s013')+(d.cached?' '+window.T('rh2_cache_tag'):'');
+    if(!items.length){body.innerHTML='<tr><td colspan="7" style="padding:2rem;color:var(--t3);text-align:center">'+window.T('rh2_empty_full')+'</td></tr>';return;}
+    body.innerHTML=items.map(rhFullRow).join('');
+  }catch(e){st.textContent=window.T('ov_js_req_fail')+': '+e;rhTableError(body,7,'rhRefresh','');}
+}
+function rhFullRow(it){
+  var ib=it.inbox||null,mb=it.monetization||null;
+  var canDraft=(it.action==='reactivate'||it.action==='schedule_care'||it.risk_level==='at_risk'||it.risk_level==='critical');
+  var payAtRisk=mb&&(mb.is_payer||mb.is_member)&&(it.risk_level==='at_risk'||it.risk_level==='critical');
+  var rowCls=payAtRisk?'payvar':(it.value_at_risk?'var':'');
+  var nm=it.contact_name||'';
+  var ops='';
+  if(canDraft&&_rhCap&&_rhCap.reactivation_registered){
+    ops+='<button type="button" class="rh-act" data-jid="'+esc(it.journey_id)+'" onclick="rhDraft(this)">'+window.T('rh_s004')+'</button> ';
+  }else if(canDraft){
+    ops+='<span style="color:var(--t3);font-size:.7rem" title="'+window.T('rh2_draft_na')+'">—</span> ';
+  }
+  ops+='<button type="button" class="rh-act rh-act-ghost" data-jid="'+esc(it.journey_id)+'" onclick="rhToggleDetail(this)">'+window.T('rh2_detail')+'</button>';
+  if(ib&&ib.conversation_id){
+    /* RH-P3：跨域富集已带 conversation_id → 一键跳到坐席工作台该会话 */
+    ops+=' <button type="button" class="rh-act rh-act-ghost" data-cid="'+esc(ib.conversation_id)+'" onclick="rhOpenConv(this)">'+window.T('rh2_open_conv')+'</button>';
+  }
+  return '<tr class="'+rowCls+'">'+
+    '<td><div class="rh-score">'+it.score+'</div><div>'+rlBadge(it.risk_level)+' <span class="badge-grade">'+esc(it.grade)+'</span></div></td>'+
+    '<td><div class="rh-cname">'+(nm?esc(nm):'<span class="rh-noname">'+window.T('rh2_no_name')+'</span>')+'</div>'+
+      '<div class="rh-csub">'+(it.intimacy_score!=null?window.T('wa_js_083')+' '+it.intimacy_score:'')+
+      (it.bond_name?' · <span title="'+window.T('rh_js018')+' Lv'+it.bond_level+(it.bond_progress!=null?' · '+window.T('msg_js_2013')+Math.round(it.bond_progress*100)+'%':'')+'">'+esc(it.bond_name)+' Lv'+it.bond_level+'</span>':'')+'</div></td>'+
+    '<td>'+(it.days_since_last_msg!=null?it.days_since_last_msg:'∞')+'</td>'+
+    '<td>'+trendBadge(ib?ib.emotion_trend:'')+' '+churnCell(ib)+'</td>'+
+    '<td>'+payCell(mb)+'</td>'+
+    '<td class="rh-reasons">'+(it.reasons||[]).map(esc).join('; ')+
+      (it.value_at_risk?'<span class="badge-var">'+window.T('rh_js011')+'</span>':'')+
+      (payAtRisk?'<span class="badge-var" style="background:var(--th-bg-pur16,rgba(168,85,247,.16));color:var(--th-ink-purple5,#7e22ce)">'+window.T('rh_js013')+'</span>':'')+
+      '<div class="rh-hint">'+esc(it.action_hint||'')+'</div></td>'+
+    '<td>'+ops+'</td></tr>';
+}
+function rhRenderFocus(items){
+  var wrap=document.getElementById('rh-focus-wrap'),el=document.getElementById('rh-focus');
+  var seen={},cand=[];
+  function push(x){if(!seen[x.journey_id]){seen[x.journey_id]=1;cand.push(x);}}
+  items.forEach(function(x){var m=x.monetization;if(m&&(m.is_payer||m.is_member)&&(x.risk_level==='at_risk'||x.risk_level==='critical'))push(x);});
+  items.forEach(function(x){if(x.risk_level==='critical')push(x);});
+  items.forEach(function(x){if(x.value_at_risk)push(x);});
+  cand=cand.slice(0,5);
+  _rhFocusQueue=cand.map(function(x){return {jid:String(x.journey_id),name:x.contact_name||''};});
+  if(!cand.length||_rhTab!=='full'){wrap.style.display='none';return;}
+  el.innerHTML=cand.map(function(x){
+    var m=x.monetization||null;
+    var pay=m&&(m.is_payer||m.is_member);
+    var nm=x.contact_name||window.T('rh2_no_name');
+    var btn='';
+    if(_rhCap&&_rhCap.reactivation_registered){
+      btn='<button type="button" class="rh-act rh-fbtn" data-jid="'+esc(x.journey_id)+'" onclick="rhDraft(this)">'+window.T('rh_s004')+'</button>';
+    }
+    return '<div class="rh-fcard'+(pay?' pay':'')+'">'+
+      '<div class="rh-fname">'+esc(nm)+'</div>'+
+      '<div class="rh-fmeta">'+rlBadge(x.risk_level)+' '+(pay?payCell(m):'')+' · '+window.T('rh_s014')+' '+(x.days_since_last_msg!=null?x.days_since_last_msg:'∞')+'</div>'+
+      '<div class="rh-freason" title="'+esc((x.reasons||[]).join('; '))+'">'+esc((x.reasons||[])[0]||'')+'</div>'+btn+'</div>';
+  }).join('');
+  wrap.style.display='';
+}
+
+/* ── 轻量榜（收件箱信号，contacts 未启用/冷启动期的即用数据源） ── */
+async function rhLoadLite(){
+  _rhLiteLoaded=true;
+  const body=document.getElementById('rh-lite-body');
+  const st=document.getElementById('rh-status');
+  const days=document.getElementById('rh-lite-days').value||7;
+  const lim=document.getElementById('rh-lite-limit').value||50;
+  st.textContent=window.T('dash.loading');
+  rhSkeleton(body,5);
+  try{
+    const res=await apiFetch('/api/workspace/churn-risks?silence_days='+encodeURIComponent(days)+'&limit='+encodeURIComponent(lim));
+    if(!res.ok){st.textContent=window.T('rh2_err_load')+' (HTTP '+res.status+')';rhTableError(body,5,'rhRefresh',res.status);return;}
+    const d=await res.json();
+    const items=d.items||[];
+    rhRenderKpisLite(d,items);
+    st.textContent=window.Tf('rh2_lite_loaded_meta',{n:items.length,d:d.silence_days||days});
+    if(!items.length){body.innerHTML='<tr><td colspan="5" style="padding:2rem;color:var(--t3);text-align:center">'+window.T('rh2_empty_lite')+'</td></tr>';return;}
+    var now=Date.now()/1000;
+    body.innerHTML=items.map(function(it){
+      var silent=it.last_ts?Math.max(0,Math.floor((now-it.last_ts)/86400)):'∞';
+      return '<tr>'+
+        '<td><div class="rh-cname">'+(it.display_name?esc(it.display_name):'<span class="rh-noname">'+window.T('rh2_no_name')+'</span>')+'</div>'+
+          '<div class="rh-csub">'+esc(it.platform||'')+'</div></td>'+
+        '<td>'+rlBadge(it.risk_level)+' <span style="font-size:.7rem;color:var(--t3)" title="'+window.T('rh2_score_word')+'">'+(it.risk_score||0)+'</span></td>'+
+        '<td>'+silent+'</td>'+
+        '<td class="rh-reasons">'+(it.reasons||[]).map(esc).join('; ')+'</td>'+
+        '<td><button type="button" class="rh-act" data-cid="'+esc(it.conversation_id)+'" onclick="rhOpenConv(this)">'+window.T('rh2_open_conv')+'</button></td></tr>';
+    }).join('');
+  }catch(e){st.textContent=window.T('ov_js_req_fail')+': '+e;rhTableError(body,5,'rhRefresh','');}
+}
+function rhOpenConv(el){
+  var cid=el.getAttribute('data-cid')||'';
+  if(!cid)return;
+  var url='/workspace?conv='+encodeURIComponent(cid);
+  /* 复用/聚焦唯一工作台窗口；helper 不可用（弹窗拦截等）回落旧 _blank 行为 */
+  if(window.__openUniqueUrl && window.__openUniqueUrl(url,'workspace')) return;
+  window.open(url,'_blank');
+}
+
+/* ── 行内详情（单人健康卡抽屉行） ─────────────────────── */
+async function rhToggleDetail(btn){
+  var tr=btn.closest('tr');if(!tr)return;
+  var next=tr.nextElementSibling;
+  if(next&&next.classList.contains('rh-drow')){next.remove();return;}
+  var jid=btn.getAttribute('data-jid')||'';
+  var drow=document.createElement('tr');drow.className='rh-drow';
+  drow.innerHTML='<td colspan="7"><div class="rh-dbox">'+window.T('dash.loading')+'</div></td>';
+  tr.parentNode.insertBefore(drow,tr.nextSibling);
+  var d=_rhDetailCache[jid];
+  if(!d){
+    try{
+      var r=await apiFetch('/api/relations/health/'+encodeURIComponent(jid));
+      if(r.ok){d=await r.json();_rhDetailCache[jid]=d;}
+    }catch(e){}
+  }
+  var box=drow.querySelector('.rh-dbox');if(!box)return;
+  if(!d){box.textContent=window.T('rh2_detail_fail');return;}
+  box.innerHTML=rhDetailHtml(d,jid);
+}
+function rhDetailHtml(d,jid){
+  var parts=[];
+  var bd=d.bond;
+  if(bd&&bd.level){
+    var bseg='💞 '+esc(bd.name)+' Lv'+bd.level;
+    if(!bd.is_max&&bd.progress!=null)bseg+=' ('+window.T('msg_js_2013')+Math.round(bd.progress*100)+'%)';
+    if(bd.milestones&&bd.milestones.length)bseg+=' · '+esc(bd.milestones[bd.milestones.length-1].label);
+    parts.push(bseg);
+  }
+  var mb=d.monetization;
+  if(mb&&(mb.is_payer||mb.is_member)){
+    var seg='💎 '+window.T('rh_js012');
+    if(mb.is_payer)seg+=' · LTV '+esc(mb.currency||'')+' '+(mb.ltv||0);
+    if(mb.is_payer)seg+=' · '+window.T('em_js013')+(mb.recent_days||30)+window.T('wa_s158')+' '+esc(mb.currency||'')+' '+(mb.ltv_recent||0);
+    if(mb.lapsed)seg+=' · ⚠️'+window.T('rh_js007');
+    if(mb.is_member&&mb.tier&&mb.tier!=='free')seg+=' · '+esc(mb.tier);
+    parts.push(seg);
+  }
+  var ib=d.inbox;
+  if(ib){
+    var iseg=[];
+    var trend={rising:window.T('rh_js019')+'↑',falling:window.T('rh_js020')+'↓',stable:window.T('rh_js021')+'→'}[ib.emotion_trend]||'';
+    if(trend)iseg.push(trend);
+    if(ib.churn_risk)iseg.push(window.T('rh_js022')+':'+esc(ib.churn_risk));
+    if(ib.last_intent)iseg.push(window.T('inbox.ai.intent')+':'+esc(ib.last_intent));
+    if(ib.summary)iseg.push(window.T('rpa_js_summary')+':'+esc(ib.summary));
+    if(iseg.length)parts.push('📥 '+iseg.join(' · '));
+  }
+  var html='<div class="rh-dline mono">journey '+esc(jid)+'</div>';
+  if(parts.length)html+='<div class="rh-dline">'+parts.join('<br>')+'</div>';
+  return html;
+}
+
+/* ── 重逢话术弹窗 ─────────────────────────────────────── */
+/* RH-P3：必挽队列辅助——线性推进（跳过已处理与当前；队尾回补队首一轮，不循环） */
+function rhQueueNext(cur){
+  if(!_rhFocusQueue.length)return null;
+  var idx=-1;
+  for(var j=0;j<_rhFocusQueue.length;j++){if(_rhFocusQueue[j].jid===cur){idx=j;break;}}
+  for(var i=(idx>=0?idx+1:0);i<_rhFocusQueue.length;i++){
+    var c=_rhFocusQueue[i];
+    if(!_rhFocusDone[c.jid]&&c.jid!==cur)return c;
+  }
+  for(var k=0;k<(idx>=0?idx:0);k++){
+    var c2=_rhFocusQueue[k];
+    if(!_rhFocusDone[c2.jid]&&c2.jid!==cur)return c2;
+  }
+  return null;
+}
+function rhUpdateQueueUi(cur){
+  var qm=document.getElementById('rh-modal-queue');
+  var nb=document.getElementById('rh-next-btn');
+  var idx=-1;
+  for(var j=0;j<_rhFocusQueue.length;j++){if(_rhFocusQueue[j].jid===cur){idx=j;break;}}
+  if(qm){
+    if(idx>=0){qm.textContent='🔥 '+window.Tf('rh2_queue_pos',{i:idx+1,n:_rhFocusQueue.length});qm.style.display='';}
+    else{qm.style.display='none';qm.textContent='';}
+  }
+  if(nb)nb.style.display=rhQueueNext(cur)?'':'none';
+}
+function rhNextFocus(){
+  var nxt=rhQueueNext(_rhPendingJid);
+  if(!nxt){
+    if(typeof showToast==='function')showToast(window.T('rh2_queue_done'));
+    var nb=document.getElementById('rh-next-btn');if(nb)nb.style.display='none';
+    return;
+  }
+  rhDraftFor(nxt.jid);
+}
+function rhDraft(el){rhDraftFor(el.getAttribute('data-jid'));}
+async function rhDraftFor(jid){
+  if(!jid)return;
+  _rhPendingJid=jid;
+  _rhPendingConv=null;
+  document.getElementById('rh-modal-meta').textContent='journey '+jid+' · '+window.T('ov_js_generating');
+  document.getElementById('rh-modal-draft').value='';
+  document.getElementById('rh-sent-btn').disabled=true;
+  var sb0=document.getElementById('rh-send-btn');if(sb0){sb0.style.display='none';sb0.disabled=false;sb0.textContent=window.T('rh2_send_direct');}
+  var ibx=document.getElementById('rh-modal-inbox');ibx.style.display='none';ibx.textContent='';
+  document.getElementById('rh-modal-bg').classList.add('open');
+  rhUpdateQueueUi(jid);
+  apiFetch('/api/relations/health/'+encodeURIComponent(jid)).then(function(r){return r.ok?r.json():null;}).then(function(d){
+    if(!d)return;
+    var html=rhDetailHtml(d,jid);
+    if(html){ibx.innerHTML=html;ibx.style.display='block';}
+    /* RH-P2：解析可发送会话 → 亮「直接发送」（解析不到＝保持复制流，零打扰） */
+    _rhPendingConv=(d.inbox&&d.inbox.conversation_id)?_rhConvParts(d.inbox.conversation_id):null;
+    var sb=document.getElementById('rh-send-btn');
+    if(sb&&_rhPendingConv)sb.style.display='';
+  }).catch(function(){});
+  try{
+    const res=await apiFetch('/api/reactivation/'+encodeURIComponent(jid)+'/draft-reunion',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}, {timeoutMs: 60000});
+    if(!res.ok){
+      document.getElementById('rh-modal-meta').textContent=window.T('dash.task_fail_generic')+' (HTTP '+res.status+')';
+      return;
+    }
+    const d=await res.json();
+    document.getElementById('rh-modal-draft').value=d.draft_text||'';
+    document.getElementById('rh-modal-meta').textContent=
+      window.T('wa_js_083')+' '+(d.intimacy_score!=null?Math.round(d.intimacy_score):'?')+
+      ' · '+window.T('rh_s014')+' '+(d.silent_days||0)+' '+window.T('rh_js024')+' '+(d.funnel_stage||'')+' · '+window.T('draft.q.lang_match')+' '+(d.draft_lang||'');
+    document.getElementById('rh-sent-btn').disabled=false;
+  }catch(e){document.getElementById('rh-modal-meta').textContent=window.T('ov_js_req_fail')+': '+e;}
+}
+function rhCloseModal(){_rhPendingJid=null;_rhPendingConv=null;document.getElementById('rh-modal-bg').classList.remove('open');}
+/* RH-P2：页内直发——经统一收件箱发送链（幂等 client_msg_id），成功后自动「标记已发」记冷却 */
+async function rhSendDirect(){
+  if(_rhSendInFlight)return;
+  var conv=_rhPendingConv;
+  var txt=(document.getElementById('rh-modal-draft').value||'').trim();
+  if(!conv){if(typeof showToast==='function')showToast(window.T('rh2_send_na'));return;}
+  if(!txt)return;
+  var btn=document.getElementById('rh-send-btn');
+  _rhSendInFlight=true;
+  if(btn){btn.disabled=true;btn.textContent=window.T('rh2_sending');}
+  try{
+    var cmid='rh-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
+    var res=await apiFetch('/api/unified-inbox/send',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({platform:conv.platform,account_id:conv.account_id,chat_key:conv.chat_key,text:txt,client_msg_id:cmid})},{timeoutMs:60000});
+    if(!res.ok){
+      var msg='';try{var eb=await res.json();msg=(eb&&(eb.detail||eb.error))||'';}catch(e2){}
+      if(typeof showToast==='function')showToast(window.T('rh2_send_fail')+' (HTTP '+res.status+')'+(msg?' · '+msg:''));
+      return;
+    }
+    if(typeof showToast==='function')showToast(window.T('rh2_sent_ok'),'ok');
+    await rhMarkSent();
+  }catch(e){
+    if(typeof showToast==='function')showToast(window.T('rh2_send_fail')+': '+e);
+  }finally{
+    _rhSendInFlight=false;
+    if(btn){btn.disabled=false;btn.textContent=window.T('rh2_send_direct');}
+  }
+}
+function rhCopy(){
+  var ta=document.getElementById('rh-modal-draft');
+  var txt=ta.value||'';
+  function done(){if(typeof showToast==='function')showToast(window.T('rh2_copied'),'ok');}
+  function fallback(){
+    ta.select();
+    try{document.execCommand('copy');done();}
+    catch(e){if(typeof showToast==='function')showToast(window.T('rh2_copy_fail'));}
+  }
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(txt).then(done,fallback);}
+  else{fallback();}
+}
+async function rhMarkSent(){
+  if(!_rhPendingJid)return;
+  const btn=document.getElementById('rh-sent-btn');btn.disabled=true;
+  try{
+    const res=await apiFetch('/api/reactivation/'+encodeURIComponent(_rhPendingJid)+'/mark-sent',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}, {timeoutMs: 60000});
+    if(!res.ok){alert(window.T('inbox.conv.mark_fail')+' '+res.status);return;}
+    /* RH-P3：记账 + 必挽队列自动接续——发完直接带出下一位，不必回榜单再找 */
+    _rhFocusDone[_rhPendingJid]=1;
+    var nxt=rhQueueNext(_rhPendingJid);
+    rhLoad(1);
+    if(nxt){rhDraftFor(nxt.jid);}
+    else{rhCloseModal();}
+  }catch(e){alert(e);}finally{btn.disabled=false;}
+}
+
+/* ── 管理工具：contact_id 回填诊断 ────────────────────── */
+function rhRenderBackfill(r){
+  var el=document.getElementById('rh-bf-status');
+  if(!r){el.textContent=window.T('rh_js025')+' '+window.T('rh_js026')+' '+window.T('rh_js027');return;}
+  var trig=r.trigger==='startup'?window.T('rh_js028'):window.T('ov_manual');
+  var pct=Math.round((r.hit_rate||0)*100);
+  el.innerHTML=window.T('rh_js029')+' ('+trig+(r.dry_run?' · dry-run':'')+'): '+window.T('as_s057')+' <strong>'+(r.scanned||0)+
+    '</strong> · '+window.T('db_js_094')+' <strong>'+(r.resolved||0)+'</strong> ('+pct+'%) · '+window.T('rh_js030')+' <strong>'+(r.written||0)+'</strong>';
+}
+async function rhBackfillStatus(){
+  var el=document.getElementById('rh-bf-status');
+  try{
+    const res=await apiFetch('/api/relations/backfill-status');
+    if(!res.ok){el.textContent='HTTP '+res.status;return;}
+    const d=await res.json();
+    rhRenderBackfill(d.result);
+  }catch(e){el.textContent=window.T('ov_js_req_fail');}
+}
+async function rhBackfill(dryRun){
+  var el=document.getElementById('rh-bf-status');
+  var lim=document.getElementById('rh-bf-limit').value||200;
+  if(!dryRun && !confirm(window.T('rh_js031')+' '+lim+' '+window.T('rh_js032')+' contact_id? '+window.T('rh_js033')))return;
+  el.textContent=dryRun?window.T('rh_js034'):window.T('rh_js035');
+  try{
+    const q=new URLSearchParams({dry_run:String(dryRun),limit:String(lim)});
+    const res=await fetch('/api/relations/backfill-run?'+q.toString(),{method:'POST'});
+    if(!res.ok){el.textContent=window.T('rpa_js_st_failed')+' '+res.status;return;}
+    const d=await res.json();
+    rhRenderBackfill(d.result);
+  }catch(e){el.textContent=window.T('ov_js_req_fail')+': '+e;}
+}
+
+/* ── 唤醒话术试运行审核（reactivation dry_run，自仪表盘归位 2026-08-02）──
+   与主动关怀页 cs-samples 同范式：有样本才显示整卡；👍👎 走既有反馈端点，
+   dislike 进全局黑名单。i18n 全部复用既有键（db_s025/db_js_092/053/054/055 等）。 */
+var _rhDryShown=[];
+function _rhDryItem(s){
+  var ts=s.ts||0;
+  var tsLabel=s.ts_iso?window.wsFmtDateTime(ts,{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'-';
+  var silent=(s.silent_days!=null&&s.silent_days.toFixed)?s.silent_days.toFixed(1):(s.silent_days||0);
+  return '<div data-ts="'+ts+'" style="padding:.5rem .55rem;background:var(--input);border-radius:6px;border-left:3px solid var(--t3)">'
+    +'<div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;font-size:.7rem;color:var(--t3)">'
+    +'<span><b style="color:var(--t)">'+esc(s.chat_name||'?')+'</b></span>'
+    +'<span>· '+tsLabel+'</span>'
+    +'<span>· '+window.T('ov_js_th_silent')+' '+silent+'d</span>'
+    +'<span>· '+window.T('rpa_js_intimacy')+' '+Math.round(s.intimacy||0)+'</span>'
+    +'<span>· '+esc(s.lang||'')+'</span>'
+    +'<span style="margin-left:auto">'
+    +'<button type="button" class="btn btn-s btn-xs" onclick="rhDryFb(this,'+ts+',\'like\')" style="padding:.15rem .5rem">👍</button>'
+    +'<button type="button" class="btn btn-s btn-xs" onclick="rhDryFb(this,'+ts+',\'dislike\')" style="padding:.15rem .5rem">👎</button>'
+    +'</span></div>'
+    +'<div style="margin-top:.4rem;font-size:.78rem;line-height:1.45;color:var(--t)">'+esc(s.reply_text||'')+'</div></div>';
+}
+function _rhDryRender(){
+  var card=document.getElementById('rh-dry-card'),list=document.getElementById('rh-dry-list'),cnt=document.getElementById('rh-dry-count');
+  if(!card||!list)return;
+  if(!_rhDryShown.length){card.style.display='none';return;}
+  card.style.display='';
+  if(cnt)cnt.textContent='('+_rhDryShown.length+')';
+  list.innerHTML=_rhDryShown.map(_rhDryItem).join('')
+    +'<div><button type="button" class="btn btn-s btn-xs" style="margin-top:.3rem;padding:.2rem .8rem" onclick="rhDryMore()">'+window.T('db_js_092')+' (+20)</button></div>';
+}
+async function rhDryLoad(reset){
+  if(reset)_rhDryShown=[];
+  try{
+    const r=await apiFetch('/api/reactivation/dry-run-samples?limit=20',{credentials:'same-origin'});
+    if(!r.ok)return;
+    const d=await r.json();
+    _rhDryShown=d.samples||[];
+    _rhDryRender();
+  }catch(e){}
+}
+async function rhDryMore(){
+  var earliest=_rhDryShown.length?_rhDryShown[_rhDryShown.length-1].ts:0;
+  if(!earliest)return;
+  try{
+    const r=await apiFetch('/api/reactivation/dry-run-samples?limit=20&before_ts='+earliest,{credentials:'same-origin'});
+    if(!r.ok)return;
+    const d=await r.json();
+    var more=d.samples||[];
+    if(!more.length){
+      var list=document.getElementById('rh-dry-list');
+      if(list){
+        var btn=list.querySelector('button[onclick="rhDryMore()"]');
+        if(btn)btn.outerHTML='<span style="color:var(--t3);font-size:.7rem">'+window.T('db_js_053')+'</span>';
+      }
+      return;
+    }
+    _rhDryShown=_rhDryShown.concat(more);
+    _rhDryRender();
+  }catch(_){}
+}
+async function rhDryFb(btn,ts,verdict){
+  var wrap=btn.closest('div[data-ts]');
+  var btns=btn.parentElement;
+  if(btns){btns.querySelectorAll('button').forEach(function(b){b.disabled=true;});}
+  var csrf=(document.cookie.match(/csrf_token=([^;]+)/)||[])[1]||'';
+  try{
+    const r=await apiFetch('/api/reactivation/dry-run-feedback',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
+      credentials:'same-origin',
+      body:JSON.stringify({sample_ts:ts,verdict:verdict}),
+    },{timeoutMs:60000});
+    if(r.ok){
+      if(btns){
+        var tip=verdict==='dislike'
+          ?(window.T('db_js_054')+' 👎 · '+window.T('db_js_055'))
+          :(window.T('db_js_054')+' 👍');
+        btns.innerHTML='<span style="color:'+(verdict==='like'?'var(--green)':'var(--amber)')+';font-size:.65rem">'+tip+'</span>';
+      }
+      if(wrap){wrap.style.opacity='.55';wrap.style.borderLeftColor=verdict==='dislike'?'var(--amber)':'var(--green)';}
+    }else if(btns){
+      btns.querySelectorAll('button').forEach(function(b){b.disabled=false;});
+    }
+  }catch(_){
+    if(btns){btns.querySelectorAll('button').forEach(function(b){b.disabled=false;});}
+  }
+}
+
+document.addEventListener('DOMContentLoaded',function(){rhProbe();rhDryLoad(true);});
+</script>
+{% endblock %}

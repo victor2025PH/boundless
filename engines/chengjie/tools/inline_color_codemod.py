@@ -61,10 +61,13 @@ _E = [
     # 用在白底卡片上（2.6:1，WCAG AA 要 4.5）。覆写值统一 #5b6b85 ——即 base.html
     # --t3 与工作台壳 --tk-text-muted 的同批收口值（白面 5.4/浅灰面 4.95），
     # 全站"次级文字"三套体系同色。深底部件用的是 slate3/slate1（常量），不受影响。
-    ("ink", "#94a3b8", "--th-ink-slate4", "#8a8f97", "#5b6b85"),
-    ("ink", "#64748b", "--th-ink-slate5", "#a0a3ab"),
-    ("ink", "#6b7280", "--th-ink-gray5", "#a0a3ab"),
-    ("ink", "#9ca3af", "--th-ink-gray4", "#8a8f97", "#5b6b85"),
+    # 暗值提亮（2026-08-16 暗色可读性收口）：slate4/gray4 跟 base.html --t3 新值
+    # #9aa0aa（卡面 6.7）、slate5/gray5 跟 --t2 新值 #b4b8c0（卡面 8.9）——
+    # 三套次级文字体系（--t*/--th-ink-*/--tk-text-muted）保持同档，勿单独回调。
+    ("ink", "#94a3b8", "--th-ink-slate4", "#9aa0aa", "#5b6b85"),
+    ("ink", "#64748b", "--th-ink-slate5", "#b4b8c0"),
+    ("ink", "#6b7280", "--th-ink-gray5", "#b4b8c0"),
+    ("ink", "#9ca3af", "--th-ink-gray4", "#9aa0aa", "#5b6b85"),
     ("ink", "#cbd5e1", "--th-ink-slate3", None),  # 亮色下已用于深底部件，常量
     ("ink", "#d1d5db", "--th-ink-gray3", None),
     ("ink", "#f1f5f9", "--th-ink-slate1", None),  # 深底部件上的浅字，常量
@@ -212,11 +215,13 @@ _E = [
     ("bg", "#fff5f5", "--th-bg-red50", "rgba(248,81,73,.1)"),
     ("bg", "#fef2f2", "--th-bg-red50tw", "rgba(248,81,73,.1)"),
     # ── bd：边框 ──
-    ("bd", "#d1d5db", "--th-bd-gray3", "#30313a"),
-    ("bd", "#e5e7eb", "--th-bd-gray2", "#26272e"),
+    # 暗值随 base.html --bd/--bd2 提亮（2026-08-16）：#26272e→#30333c、#30313a→#3b3f4a
+    # （原对卡面 1.35:1，输入框/卡片轮廓在暗色下几乎不可见）。
+    ("bd", "#d1d5db", "--th-bd-gray3", "#3b3f4a"),
+    ("bd", "#e5e7eb", "--th-bd-gray2", "#30333c"),
     ("bd", "#f1f5f9", "--th-bd-slate1", "rgba(236,236,240,.1)"),
-    ("bd", "#cbd5e1", "--th-bd-slate3", "#30313a"),
-    ("bd", "#e2e8f0", "--th-bd-slate2", "#30313a"),
+    ("bd", "#cbd5e1", "--th-bd-slate3", "#3b3f4a"),
+    ("bd", "#e2e8f0", "--th-bd-slate2", "#3b3f4a"),
     ("bd", "#334155", "--th-bd-slate7", None),
     ("bd", "#1e293b", "--th-bd-slate8", None),
     ("bd", "#dc2626", "--th-bd-red6", "#f85149"),

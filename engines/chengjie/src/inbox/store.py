@@ -659,6 +659,9 @@ _MIGRATIONS = [
     "ALTER TABLE workflow_executions ADD COLUMN next_step_at REAL NOT NULL DEFAULT 0",
     "ALTER TABLE workflow_executions ADD COLUMN last_result_json TEXT NOT NULL DEFAULT ''",
     "CREATE INDEX IF NOT EXISTS idx_wf_exec_due ON workflow_executions(status, next_step_at)",
+    # P2 2026-08-13：链执行档位 remind=到点提醒坐席（默认，旧行为）/ auto=话术步
+    # 自动拟稿投料给既有 autosend 管线（另有全局开关+会话 auto_ai 双重 opt-in）
+    "ALTER TABLE workflow_chains ADD COLUMN exec_mode TEXT NOT NULL DEFAULT 'remind'",
     # DD1: 关系阶段缓存（P43 进阶检测）
     "ALTER TABLE conversation_meta ADD COLUMN rel_stage_cached TEXT NOT NULL DEFAULT ''",
     # P46: 关系阶段人工确认
@@ -945,6 +948,40 @@ _MIGRATIONS = [
     # /api/platforms/messenger/{acct}/request-action 代理 worker。纯加法缺省 0/空。
     "ALTER TABLE conversations ADD COLUMN is_request INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE conversations ADD COLUMN request_category TEXT NOT NULL DEFAULT ''",
+    # 会话删除墓碑（2026-08-16 坐席「删除会话」能力）：本地删除后，目录同步
+    # （upsert_protocol_chats 占位）与历史回填（thread-history）不得把它复活；
+    # 真实**新消息**入库（ingest_message/ingest_batch）命中即自动解除——客户
+    # 再开口必须回显，宁可复活也绝不丢客户消息。行数量级=坐席删过的会话数（小）。
+    """CREATE TABLE IF NOT EXISTS conversation_tombstones (
+        conversation_id TEXT PRIMARY KEY,
+        platform        TEXT NOT NULL DEFAULT '',
+        account_id      TEXT NOT NULL DEFAULT '',
+        chat_key        TEXT NOT NULL DEFAULT '',
+        deleted_at      REAL NOT NULL DEFAULT 0,
+        deleted_by      TEXT NOT NULL DEFAULT ''
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_tombstones_acct"
+    " ON conversation_tombstones(platform, account_id)",
+    # 头像内容指纹（2026-08-16 头像实时刷新统一通道）：与 avatar_url（直链，多个
+    # 前端面直接当 <img src> 消费）**分离**——WA/TG 等拉取式平台的来源指纹
+    # （profilePictureUrl 路径 / TG big_file_unique_id）不是 URL，塞进 avatar_url
+    # 会在 cockpit/episodic/care_schedule 变裂图。前端据此拼 ?v= 版本参数穿透
+    # <img> 缓存；写入口=update_conversation_identity(avatar_fp=)，由头像代理
+    # 后台再验证器维护。纯加法缺省空。
+    "ALTER TABLE conversations ADD COLUMN avatar_fp TEXT NOT NULL DEFAULT ''",
+    # 官方级消息管理 P0/P1（2026-08-17，boss「与官方一致的会话/消息管理」需求）：
+    # ① 会话置顶——服务端落库（此前仅群组 localStorage 置顶，换电脑/清缓存即丢）。
+    #    语义＝工作台全局（全坐席共见，与标签/认领同域）；pinned_at=置顶时刻
+    #    （置顶区内排序键），0=未置顶。
+    "ALTER TABLE conversation_meta ADD COLUMN pinned_at REAL NOT NULL DEFAULT 0",
+    "CREATE INDEX IF NOT EXISTS idx_conv_meta_pinned ON conversation_meta(pinned_at)",
+    # ② 消息「仅工作台删除」＝行级软删（deleted_at>0 → UI 读路径不可见，数据保留
+    #    +deleted_by 留痕＝前台消失、后台可审计）。与 revoked（平台侧双端撤回，
+    #    气泡灰墓碑仍可见）语义**刻意分开**；业务口径（回复时延 SLO / replied-after
+    #    护栏等走 list_recent_messages 默认参）刻意不过滤——坐席清理自己视图
+    #    不改变「客户收到过回复」的事实。
+    "ALTER TABLE messages ADD COLUMN deleted_at REAL NOT NULL DEFAULT 0",
+    "ALTER TABLE messages ADD COLUMN deleted_by TEXT NOT NULL DEFAULT ''",
 ]
 
 
@@ -1373,6 +1410,15 @@ class InboxStore:
             return False
         mid = _message_pk(msg.conversation_id, msg.platform_msg_id, msg.text, msg.ts)
         with self._lock:
+            # 删除墓碑闸：与 ingest_batch 同判据（消息 ts 晚于删除时刻＝真实新
+            # 消息 → 解除墓碑照常入库；否则按已删历史跳过）。
+            _tomb = self._conn.execute(
+                "SELECT deleted_at FROM conversation_tombstones"
+                " WHERE conversation_id=?", (msg.conversation_id,)).fetchone()
+            if _tomb is not None:
+                if float(msg.ts or 0) <= float(_tomb[0] or 0):
+                    return False
+                self._clear_tombstone_locked(msg.conversation_id)
             cur = self._conn.execute(
                 """
                 INSERT OR IGNORE INTO messages
@@ -1421,6 +1467,22 @@ class InboxStore:
         # 只有它能驱动「归档会话自动复活」，见 _unarchive_on_inbound 的判据说明。
         _new_inbound_ts = 0.0
         with self._lock:
+            # 删除墓碑闸（2026-08-16）：本方法同时服务实时入站（ingest_incoming/
+            # web_chat）与**历史重放**（telegram 实时聚合旁路 re-ingest 会话末条、
+            # ingest_thread 历史同步）——无差别放行会让删除的会话在下一轮聚合就
+            # 复活。判据＝批内最新消息 ts 是否**晚于删除时刻**：历史消息必然早于
+            # 删除时刻（保持死亡）；真实新消息必然晚于（解除墓碑照常入库，客户
+            # 再开口绝不丢）。实时链全部携带新鲜 ts（messenger-web 四处 postIngest
+            # 均 Date.now()、WA/TG 用平台真值），ts=0 的只有历史回填路径。
+            _tomb = self._conn.execute(
+                "SELECT deleted_at FROM conversation_tombstones"
+                " WHERE conversation_id=?", (conv.conversation_id,)).fetchone()
+            if _tomb is not None:
+                _newest = max((float(m.ts or 0) for m in (msgs or [])
+                               if m.conversation_id), default=0.0)
+                if _newest <= float(_tomb[0] or 0):
+                    return 0
+                self._clear_tombstone_locked(conv.conversation_id)
             # P4 埋点：upsert 前按主键探测是否「新会话首次入库」（PK 查询微秒级）
             _tele_new_conv = self._conn.execute(
                 "SELECT 1 FROM conversations WHERE conversation_id=? LIMIT 1",
@@ -1842,12 +1904,22 @@ class InboxStore:
                     f"WHERE conversation_id IN ({marks})", cids,
                 ).fetchall():
                     keep_unread[str(row[0])] = int(row[1] or 0)
+        # 防复活墓碑（2026-08-16）：坐席删过的会话，目录占位不得重建——否则
+        # 侧栏还挂着的线程每 ~5min 全量推送一次，删除等于没删。真实新消息
+        # 走 ingest 链自动解除墓碑，不经此口。
+        dead = self.tombstoned_subset([
+            f"{platform}:{account_id}:"
+            f"{str(r.get('jid') or r.get('chat_key') or '').strip()}"
+            for r in rows if isinstance(r, dict)
+        ])
         n = 0
         for r in rows:
             if not isinstance(r, dict):
                 continue
             ck = str(r.get("jid") or r.get("chat_key") or "").strip()
             if not ck:
+                continue
+            if dead and f"{platform}:{account_id}:{ck}" in dead:
                 continue
             name = (str(r.get("name") or "").strip()
                     or self.get_protocol_contact_name(platform, account_id, ck)
@@ -1869,6 +1941,211 @@ class InboxStore:
             self.upsert_conversation(conv)
             n += 1
         return n
+
+    # ── 会话删除 + 防复活墓碑（2026-08-16 坐席删除能力）─────────────────────
+    # 语义分工：
+    # - delete_conversation_data＝**单会话**硬删（全部含 conversation_id 列的表）
+    #   + 落墓碑——账号仍在线时目录同步每 ~5min 全量推侧栏，没有墓碑删了就复活；
+    # - purge_account_conversations＝**账号级**清库（删除账号时勾选），刻意**不**落
+    #   墓碑：账号删除后 worker 已停不会有目录推送；同号将来重新登录＝「等下次
+    #   登录再加载」语义，首连全量同步该把会话重新灌回来。
+    # - 真实新消息（ingest_message/ingest_batch）自动解除墓碑：客户再开口必须
+    #   回显（宁可复活也绝不丢消息）；目录占位/历史回填不算「开口」。
+
+    def is_conversation_tombstoned(self, conversation_id: str) -> bool:
+        cid = str(conversation_id or "")
+        if not cid:
+            return False
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM conversation_tombstones WHERE conversation_id=?",
+                (cid,)).fetchone()
+        return row is not None
+
+    def tombstoned_subset(self, conversation_ids: List[str]) -> set:
+        """批量墓碑查询（目录同步每轮 ≤200 行，一次 IN 查询不逐行打点）。"""
+        cids = [str(c) for c in (conversation_ids or []) if c]
+        if not cids:
+            return set()
+        out: set = set()
+        with self._lock:
+            for i in range(0, len(cids), 400):
+                chunk = cids[i:i + 400]
+                marks = ",".join("?" * len(chunk))
+                for row in self._conn.execute(
+                    f"SELECT conversation_id FROM conversation_tombstones "
+                    f"WHERE conversation_id IN ({marks})", chunk,
+                ).fetchall():
+                    out.add(str(row[0]))
+        return out
+
+    def _clear_tombstone_locked(self, conversation_id: str) -> None:
+        """真实新消息落库时解除墓碑（须持锁调用；先点查后删，无墓碑零写放大）。"""
+        hit = self._conn.execute(
+            "SELECT 1 FROM conversation_tombstones WHERE conversation_id=?",
+            (conversation_id,)).fetchone()
+        if hit is not None:
+            self._conn.execute(
+                "DELETE FROM conversation_tombstones WHERE conversation_id=?",
+                (conversation_id,))
+
+    def _conversation_tables_locked(self) -> List[str]:
+        """含 conversation_id 列的用户表（结构发现式，防新表漏删；须持锁调用）。
+
+        排除口径与 P3-198 合并迁移一致：FTS 内部表（messages_fts_ad 触发器随
+        messages 删除自动同步）、sqlite 内部表、迁移记账表；墓碑表自身另行管理。
+        """
+        tables: List[str] = []
+        for t in self._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall():
+            name = str(t[0])
+            if name.startswith(("messages_fts", "sqlite_", "schema_migrations")):
+                continue
+            if name == "conversation_tombstones":
+                continue
+            try:
+                cols = {str(c[1]) for c in
+                        self._conn.execute(f"PRAGMA table_info({name})")}
+            except Exception:
+                continue
+            if "conversation_id" in cols:
+                tables.append(name)
+        return tables
+
+    def delete_conversation_data(
+        self, conversation_id: str, *, deleted_by: str = "",
+        tombstone: bool = True,
+    ) -> Dict[str, int]:
+        """硬删单会话的全部本地数据，返回 ``{表名: 删除行数}``（含 0 行的表省略）。
+
+        - 全表结构发现式清除（messages 的 FTS 行由 ``messages_fts_ad`` 触发器同步）；
+        - ``tombstone=True``（默认）落防复活墓碑——账号在线时目录同步/历史回填
+          不再重建占位；真实新消息自动解除（见 ingest_message）。
+        - 单事务：中途失败整体回滚，绝不留半删状态。
+        """
+        cid = str(conversation_id or "")
+        if not cid:
+            return {}
+        deleted: Dict[str, int] = {}
+        with self._lock:
+            # 墓碑字段取会话行真值（行已缺失时按 cid 三段式解析兜底）
+            row = self._conn.execute(
+                "SELECT platform, account_id, chat_key FROM conversations "
+                "WHERE conversation_id=?", (cid,)).fetchone()
+            if row is not None:
+                plat, acct, ck = (str(row[0] or ""), str(row[1] or ""),
+                                  str(row[2] or ""))
+            else:
+                parts = cid.split(":", 2)
+                plat = parts[0] if len(parts) > 0 else ""
+                acct = parts[1] if len(parts) > 1 else ""
+                ck = parts[2] if len(parts) > 2 else ""
+            try:
+                for t in self._conversation_tables_locked():
+                    cur = self._conn.execute(
+                        f"DELETE FROM {t} WHERE conversation_id=?", (cid,))
+                    if cur.rowcount:
+                        deleted[t] = int(cur.rowcount)
+                if tombstone:
+                    self._conn.execute(
+                        "INSERT OR REPLACE INTO conversation_tombstones"
+                        " (conversation_id, platform, account_id, chat_key,"
+                        "  deleted_at, deleted_by) VALUES (?,?,?,?,?,?)",
+                        (cid, plat, acct, ck, self._now(),
+                         str(deleted_by or "")[:64]))
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return deleted
+
+    def purge_account_conversations(
+        self, platform: str, account_id: str, *, deleted_by: str = "",
+    ) -> Dict[str, int]:
+        """账号级清库：删除该账号全部会话相关数据（删除账号勾选「同时清除聊天数据」）。
+
+        按 ``platform:account_id:`` **精确前缀**（substr 等长比较，非 LIKE——
+        account_id 经上游消毒不含冒号，前缀带尾冒号不会误伤 "1" vs "12"）清全表，
+        连带清掉该账号的历史墓碑（同号重登＝全新开始，首连同步全量回灌）。
+        返回 ``{表名: 删除行数}``。
+        """
+        plat = str(platform or "").lower()
+        acct = str(account_id or "")
+        if not plat or not acct:
+            return {}
+        prefix = f"{plat}:{acct}:"
+        plen = len(prefix)
+        deleted: Dict[str, int] = {}
+        with self._lock:
+            try:
+                for t in self._conversation_tables_locked():
+                    cur = self._conn.execute(
+                        f"DELETE FROM {t} WHERE substr(conversation_id, 1, ?) = ?",
+                        (plen, prefix))
+                    if cur.rowcount:
+                        deleted[t] = int(cur.rowcount)
+                cur = self._conn.execute(
+                    "DELETE FROM conversation_tombstones"
+                    " WHERE platform=? AND account_id=?", (plat, acct))
+                if cur.rowcount:
+                    deleted["conversation_tombstones"] = int(cur.rowcount)
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        logger.info("[InboxStore] 账号数据清除 %s:%s by=%s -> %s",
+                    plat, acct, deleted_by or "?", deleted)
+        return deleted
+
+    def count_account_data(self, platform: str, account_id: str) -> Dict[str, int]:
+        """账号级数据体量（历史账号治理 P1，2026-08-17）：``{conversations, messages}``。
+
+        消费方＝「彻底删除」确认弹窗的体量预估（GET purge-history 预览）与导出
+        meta 行。消息数走 ``conversation_id IN (会话子查询)``——吃 idx_msg_conv_ts
+        索引，避免 purge 同款 substr 前缀在大消息表上全表扫（预览每次打开确认框
+        都会跑，purge 是一次性破坏操作，两者性能预算不同）。代价是孤儿消息
+        （会话行已删、消息残留）不计入预估——展示口径可接受，真实删除行数以
+        POST 返回的 ``purged_rows`` 为准。
+        """
+        plat = str(platform or "").lower()
+        acct = str(account_id or "")
+        if not plat or not acct:
+            return {"conversations": 0, "messages": 0}
+        with self._lock:
+            c = self._conn.execute(
+                "SELECT COUNT(*) FROM conversations"
+                " WHERE platform=? AND account_id=?", (plat, acct)).fetchone()
+            m = self._conn.execute(
+                "SELECT COUNT(*) FROM messages WHERE conversation_id IN ("
+                "SELECT conversation_id FROM conversations"
+                " WHERE platform=? AND account_id=?)", (plat, acct)).fetchone()
+        return {"conversations": int((c or [0])[0] or 0),
+                "messages": int((m or [0])[0] or 0)}
+
+    def iter_account_history(self, platform: str, account_id: str):
+        """按会话遍历该账号全部历史（导出 JSONL 用）：yield ``(conv_dict, [msg_dict…])``。
+
+        锁纪律：先持锁快照会话清单，随后**逐会话**短持锁取消息——绝不把锁横跨
+        整个流式下载周期（慢客户端拖住全店写入是不可接受的）。会话按 last_ts
+        升序、消息按 ts 升序，导出文件天然按时间线可读。消息含软删行
+        （``deleted_at`` 原样带出）——导出是资产保全口径，本地删除不改变事实。
+        """
+        plat = str(platform or "").lower()
+        acct = str(account_id or "")
+        if not plat or not acct:
+            return
+        with self._lock:
+            convs = [dict(r) for r in self._conn.execute(
+                "SELECT * FROM conversations WHERE platform=? AND account_id=?"
+                " ORDER BY last_ts ASC", (plat, acct)).fetchall()]
+        for conv in convs:
+            cid = str(conv.get("conversation_id") or "")
+            with self._lock:
+                msgs = [dict(r) for r in self._conn.execute(
+                    "SELECT * FROM messages WHERE conversation_id=?"
+                    " ORDER BY ts ASC", (cid,)).fetchall()]
+            yield conv, msgs
 
     # ── 读取（unified_inbox 路由调用）──────────────────────────
 
@@ -1909,10 +2186,13 @@ class InboxStore:
             extra = " AND c.platform = ?"
             params.append(str(platform))
         params.append(limit)
+        # JOIN messages 过滤「仅工作台删除」的软删行（2026-08-17）——FTS 索引行
+        # 不随软删清除（软删可恢复），检索出口统一按 deleted_at 兜住。
         sql = f"""
             SELECT f.message_id, f.conversation_id, f.text, f.ts, f.direction,
                    c.platform, c.display_name, 'fts5' AS fts_mode
             FROM messages_fts f
+            JOIN messages m ON m.message_id = f.message_id AND m.deleted_at = 0
             LEFT JOIN conversations c ON c.conversation_id = f.conversation_id
             WHERE messages_fts MATCH ?{extra}
             ORDER BY rank
@@ -1938,7 +2218,7 @@ class InboxStore:
                    c.platform, c.display_name, 'like' AS fts_mode
             FROM messages m
             LEFT JOIN conversations c ON c.conversation_id = m.conversation_id
-            WHERE m.text LIKE ?{extra}
+            WHERE m.text LIKE ?{extra} AND m.deleted_at = 0
             ORDER BY m.ts DESC
             LIMIT ?
         """
@@ -2097,6 +2377,27 @@ class InboxStore:
             out[(str(r["platform"] or ""), str(r["account_id"] or ""))] = int(r["n"] or 0)
         return out
 
+    def account_directory(self) -> Dict[Tuple[str, str], Dict[str, float]]:
+        """全库账号名录：``(platform, account_id) -> {count, last_ts}``。
+
+        供「账号真相单源」（``accounts_summary``）枚举**仅历史**账号——不在
+        platform_status、也不在注册表、只活在会话库里的号，也要进账号管理面板
+        对账（顶部 dock「历史 N」与抽屉历史分区同源消费）。单条 GROUP BY，
+        结果量级=账号数（个位~十位），无分页需求。
+        """
+        sql = ("SELECT platform, account_id, COUNT(*) AS n, "
+               "COALESCE(MAX(last_ts), 0) AS t FROM conversations "
+               "GROUP BY platform, account_id")
+        with self._lock:
+            rows = self._conn.execute(sql).fetchall()
+        out: Dict[Tuple[str, str], Dict[str, float]] = {}
+        for r in rows:
+            out[(str(r["platform"] or ""), str(r["account_id"] or ""))] = {
+                "count": int(r["n"] or 0),
+                "last_ts": float(r["t"] or 0.0),
+            }
+        return out
+
     def get_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
             row = self._conn.execute(
@@ -2166,6 +2467,30 @@ class InboxStore:
             self._conn.commit()
         return new_read
 
+    def mark_account_read(self, platform: str, account_id: str) -> int:
+        """按账号批量推已读水位（P2 账号真相闭环，2026-08-17）：该账号全部会话
+        ``last_read_ts`` 推到各自 ``last_ts``（含 @我 旗标清零）。
+
+        场景＝「历史 / 已退出账号」的存量未读清账：这些号只查档不可回复，灰色
+        角标长期挂着就是新的视觉噪音；一键清掉，语义与逐会话 mark_conversation_read
+        完全一致（同一水位机制，永不回弹）。水位仍单调：只动 ``last_ts > 水位``
+        的行，已覆盖的行不无谓 bump updated_at。返回实际推进的行数。
+        """
+        pl = str(platform or "").strip()
+        aid = str(account_id or "").strip()
+        if not pl or not aid:
+            return 0
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE conversations SET last_read_ts=last_ts, "
+                "mentioned_unread=0, updated_at=? "
+                "WHERE platform=? AND account_id=? "
+                "AND last_ts > COALESCE(last_read_ts, 0)",
+                (self._now(), pl, aid),
+            )
+            self._conn.commit()
+            return int(cur.rowcount or 0)
+
     def effective_unread(self, row: Dict[str, Any]) -> int:
         """由会话行派生「有效未读」：已读水位覆盖到末条 → 0，否则用同步来的 unread。
 
@@ -2189,8 +2514,9 @@ class InboxStore:
         username: Optional[str] = None,
         phone: Optional[str] = None,
         avatar_url: Optional[str] = None,
+        avatar_fp: Optional[str] = None,
     ) -> bool:
-        """回填/更新会话 peer 身份（真实昵称 / username / 电话 / 头像 URL）。
+        """回填/更新会话 peer 身份（真实昵称 / username / 电话 / 头像 URL / 头像指纹）。
 
         仅更新显式传入（非 None）的字段；``display_name`` 沿用与 ingest 同口径的
         优先级护栏——真实昵称（非空且不等于裸 chat_key）才落，且不用空/裸号码把已存
@@ -2220,6 +2546,9 @@ class InboxStore:
         if avatar_url is not None and str(avatar_url).strip():
             sets.append("avatar_url = ?")
             params.append(str(avatar_url).strip())
+        if avatar_fp is not None and str(avatar_fp).strip():
+            sets.append("avatar_fp = ?")
+            params.append(str(avatar_fp).strip())
         if not sets:
             return False
         sets.append("updated_at = ?")
@@ -2468,6 +2797,67 @@ class InboxStore:
             self._conn.commit()
         return True
 
+    def clear_budget_relief(self, conversation_id: str) -> bool:
+        """撤销豁免（P1 2026-08-12）：清 relief_day，预算判定立即恢复。
+
+        误点「今日继续」此前无后悔药（只能等跨日自然失效）。幂等：无行/
+        本就未豁免同样返回 True——终态一致即成功。计数不动（观测口径保留）。
+        """
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            return False
+        with self._lock:
+            self._conn.execute(
+                "UPDATE peer_reply_ledger SET relief_day = '', updated_at = ? "
+                "WHERE conversation_id = ?",
+                (self._now(), cid),
+            )
+            self._conn.commit()
+        return True
+
+    def list_reply_budget_today(
+        self, day: str, *, limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """当日预算台账批量行（设置页「今日额度状态」表数据源；只读）。
+
+        取 ``day=当日``（今天有自动链轮次）或 ``relief_day=当日``（已豁免）的
+        台账行，LEFT JOIN conversations 出显示名与 (platform, account_id,
+        chat_key) 三元组——设置页豁免按钮复用收件箱同一 relief 端点，正需要
+        这三元组。``used`` 的跨日清零口径与 get_auto_reply_ledger 一致
+        （day 非当日按 0）；按 used 降序。会话行缺失（台账孤儿）仍返回，
+        三元组为空串——调用方如实展示、豁免按钮不亮。
+        """
+        d = str(day or "").strip()
+        if not d:
+            return []
+        lim = max(1, min(200, int(limit or 50)))
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT l.conversation_id,
+                          CASE WHEN l.day = ? THEN l.auto_replies ELSE 0 END
+                            AS used,
+                          l.relief_day,
+                          c.platform, c.account_id, c.chat_key,
+                          c.display_name, c.chat_type
+                     FROM peer_reply_ledger l
+                     LEFT JOIN conversations c
+                       ON c.conversation_id = l.conversation_id
+                    WHERE l.day = ? OR l.relief_day = ?
+                    ORDER BY used DESC, l.updated_at DESC
+                    LIMIT ?""",
+                (d, d, d, lim),
+            ).fetchall()
+        return [{
+            "conversation_id": str(r["conversation_id"] or ""),
+            "used": int(r["used"] or 0),
+            "relieved": str(r["relief_day"] or "") == d,
+            "platform": str(r["platform"] or ""),
+            "account_id": str(r["account_id"] or ""),
+            "chat_key": str(r["chat_key"] or ""),
+            "display_name": str(r["display_name"] or ""),
+            "chat_type": str(r["chat_type"] or ""),
+        } for r in rows]
+
     def list_messages(self, conversation_id: str, *, limit: int = 50) -> List[Dict[str, Any]]:
         limit = max(1, min(500, int(limit or 50)))
         with self._lock:
@@ -2629,6 +3019,135 @@ class InboxStore:
             self._conn.commit()
         return True
 
+    # ── 官方级消息管理（2026-08-17）：仅工作台软删 / 恢复 / 清空 ─────────────
+
+    def _recompute_conv_preview_locked(self, conversation_id: str) -> None:
+        """会话预览重算（调用方已持锁）：last_text/last_ts 对齐最新一条未软删消息。
+
+        删掉末条后列表预览不能继续显示已删内容（预览撒谎比没有预览更糟）；
+        无可见消息 → last_text 清空、last_ts **保留**（会话不因清空跳到列表底部，
+        与官方「清空聊天记录后会话留在原位」语义一致）。
+        """
+        row = self._conn.execute(
+            "SELECT text, ts FROM messages WHERE conversation_id = ?"
+            " AND deleted_at = 0 ORDER BY ts DESC LIMIT 1",
+            (conversation_id,)).fetchone()
+        if row is not None:
+            self._conn.execute(
+                "UPDATE conversations SET last_text = ?, last_ts = ?, updated_at = ?"
+                " WHERE conversation_id = ?",
+                (str(row["text"] or ""), float(row["ts"] or 0), self._now(),
+                 conversation_id))
+        else:
+            self._conn.execute(
+                "UPDATE conversations SET last_text = '', updated_at = ?"
+                " WHERE conversation_id = ?",
+                (self._now(), conversation_id))
+
+    def delete_messages_local(
+        self, conversation_id: str, message_ids: List[str], *,
+        deleted_by: str = "",
+    ) -> int:
+        """把若干消息标为「仅工作台删除」（软删，deleted_at>0）。返回实际标记条数。
+
+        - 只影响 UI 读路径（thread include_deleted=False / 全文检索）；业务统计
+          刻意不滤（见列迁移注释）；
+        - 幂等：已软删的行不重复计数；数据保留 + deleted_by 留痕（审计语义）；
+        - 收尾重算会话预览。
+        """
+        cid = str(conversation_id or "").strip()
+        ids = [str(i) for i in (message_ids or []) if str(i or "").strip()]
+        if not cid or not ids:
+            return 0
+        now = self._now()
+        by = str(deleted_by or "")[:64]
+        n = 0
+        with self._lock:
+            for i in range(0, len(ids), 400):
+                chunk = ids[i:i + 400]
+                ph = ",".join("?" * len(chunk))
+                cur = self._conn.execute(
+                    f"UPDATE messages SET deleted_at = ?, deleted_by = ?"
+                    f" WHERE conversation_id = ? AND deleted_at = 0"
+                    f" AND message_id IN ({ph})",
+                    [now, by, cid, *chunk])
+                n += int(cur.rowcount or 0)
+            if n:
+                self._recompute_conv_preview_locked(cid)
+            self._conn.commit()
+        return n
+
+    def restore_messages_local(
+        self, conversation_id: str, message_ids: List[str],
+    ) -> int:
+        """撤销「仅工作台删除」（软删行复原）。返回实际恢复条数。
+
+        撤销 toast 的服务端退路：删除先真提交、撤销再真恢复——比「延迟提交」
+        更稳（跨窗口/跨刷新一致，不依赖前端定时器活着）。
+        """
+        cid = str(conversation_id or "").strip()
+        ids = [str(i) for i in (message_ids or []) if str(i or "").strip()]
+        if not cid or not ids:
+            return 0
+        n = 0
+        with self._lock:
+            for i in range(0, len(ids), 400):
+                chunk = ids[i:i + 400]
+                ph = ",".join("?" * len(chunk))
+                cur = self._conn.execute(
+                    f"UPDATE messages SET deleted_at = 0, deleted_by = ''"
+                    f" WHERE conversation_id = ? AND deleted_at > 0"
+                    f" AND message_id IN ({ph})",
+                    [cid, *chunk])
+                n += int(cur.rowcount or 0)
+            if n:
+                self._recompute_conv_preview_locked(cid)
+            self._conn.commit()
+        return n
+
+    def clear_conversation_messages(
+        self, conversation_id: str, *, deleted_by: str = "",
+    ) -> int:
+        """清空会话聊天记录（仅工作台）：全部未删消息批量软删。返回清空条数。
+
+        会话行/标签/认领/AI 记忆全部保留——只清消息视图；客户设备上的对话
+        不受影响（与「删除会话」的硬删+墓碑语义分开）。
+        """
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            return 0
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE messages SET deleted_at = ?, deleted_by = ?"
+                " WHERE conversation_id = ? AND deleted_at = 0",
+                (self._now(), str(deleted_by or "")[:64], cid))
+            n = int(cur.rowcount or 0)
+            if n:
+                self._recompute_conv_preview_locked(cid)
+            self._conn.commit()
+        return n
+
+    def list_deleted_messages(
+        self, conversation_id: str, *, limit: int = 200,
+    ) -> List[Dict[str, Any]]:
+        """回收站（2026-08-17 P2）：该会话「仅工作台删除」的消息，新删在前。
+
+        supervisor 审计/恢复视图用（配 ``restore_messages_local`` 即一键找回，
+        误清空也能整体恢复）；只回显示所需字段，``deleted_by`` 留痕随行。
+        """
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            return []
+        lim = max(1, min(int(limit or 200), 500))
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT message_id, direction, text, ts, media_type,"
+                " deleted_at, deleted_by FROM messages"
+                " WHERE conversation_id = ? AND deleted_at > 0"
+                " ORDER BY deleted_at DESC, ts DESC LIMIT ?",
+                (cid, lim)).fetchall()
+        return [dict(r) for r in rows]
+
     def mark_outbound_read_upto(
         self, conversation_id: str, max_platform_msg_id: int,
     ) -> int:
@@ -2743,22 +3262,28 @@ class InboxStore:
         *,
         limit: int = 50,
         before_ts: Optional[float] = None,
+        include_deleted: bool = True,
     ) -> List[Dict[str, Any]]:
         """取会话**最近** limit 条（可用 before_ts 游标向更早翻页），返回 ts 升序。
 
         与 list_messages（取最旧 limit 条）相反，用于时间线展示与分页加载。
+        ``include_deleted``（2026-08-17）：默认 True＝旧行为（业务口径——回复时延 /
+        replied-after 护栏等消费方**必须**看到软删行，本地删除不改变事实）；
+        UI 线程读路径显式传 False 过滤「仅工作台删除」的消息。
         """
         limit = max(1, min(500, int(limit or 50)))
+        del_sql = "" if include_deleted else " AND deleted_at = 0"
         with self._lock:
             if before_ts is not None:
                 rows = self._conn.execute(
-                    "SELECT * FROM messages WHERE conversation_id = ? AND ts < ? "
+                    f"SELECT * FROM messages WHERE conversation_id = ?{del_sql} AND ts < ? "
                     "ORDER BY ts DESC LIMIT ?",
                     (conversation_id, float(before_ts), limit),
                 ).fetchall()
             else:
                 rows = self._conn.execute(
-                    "SELECT * FROM messages WHERE conversation_id = ? ORDER BY ts DESC LIMIT ?",
+                    f"SELECT * FROM messages WHERE conversation_id = ?{del_sql} "
+                    "ORDER BY ts DESC LIMIT ?",
                     (conversation_id, limit),
                 ).fetchall()
         return [dict(r) for r in reversed(rows)]
@@ -3765,6 +4290,18 @@ class InboxStore:
         source_kind = str(draft.get("source_kind") or "inbox")
         source_id = str(draft.get("source_id") or "")
         now = self._now()
+        # created_at 代龄语义（2026-08-13 修「全自动永久哑火」死锁）：inbox 草稿按
+        # 会话固定 source_id upsert，旧实现冲突分支从不刷新 created_at → 行龄永远
+        # 钉在该会话**第一次**拟稿时刻；fresh_guard 拿它判「入站晚于拟稿」，会话里
+        # 只要出现过第二条不同文本的入站，之后每一版新稿投递前都被判「过期」作废
+        # （坐席机实录：刚生成 1 秒的新稿「草稿龄=118411.5s」）→ 自动回复整链断。
+        # 语义收口：调用方**显式传 created_at**（=真的重新生成了一代内容）才刷新；
+        # 不传（overlay 元数据回写 / resolve 状态同步等）冲突时保持原值，
+        # SLA/稿龄/积压巡检口径不受影响。
+        try:
+            _created_explicit = float(draft.get("created_at") or 0)
+        except (TypeError, ValueError):
+            _created_explicit = 0.0
         draft_id = str(draft.get("draft_id") or "")
         if not draft_id:
             draft_id = (
@@ -3800,6 +4337,8 @@ class InboxStore:
                     decided_at = excluded.decided_at,
                     sent_at = excluded.sent_at,
                     error = excluded.error,
+                    created_at = CASE WHEN ? > 0
+                        THEN excluded.created_at ELSE reply_drafts.created_at END,
                     updated_at = excluded.updated_at,
                     trace_id = CASE WHEN reply_drafts.trace_id = '' OR reply_drafts.trace_id IS NULL
                                THEN excluded.trace_id ELSE reply_drafts.trace_id END
@@ -3817,7 +4356,8 @@ class InboxStore:
                     str(draft.get("status") or "pending"),
                     str(draft.get("decided_by") or ""), float(draft.get("decided_at") or 0),
                     float(draft.get("sent_at") or 0), str(draft.get("error") or ""),
-                    now, now, str(draft.get("trace_id") or ""),
+                    (_created_explicit or now), now, str(draft.get("trace_id") or ""),
+                    _created_explicit,
                 ),
             )
             self._conn.commit()
@@ -7108,6 +7648,47 @@ class InboxStore:
         except Exception:
             return []
 
+    def archived_conversation_ids(self) -> List[str]:
+        """全部已归档会话 id（驾驶舱等待队列的排除集；走 idx_conv_meta_archived）。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT conversation_id FROM conversation_meta WHERE archived = 1"
+            ).fetchall()
+        return [str(r["conversation_id"]) for r in rows]
+
+    def list_tagged_conversations(
+        self, tag: str, *, limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """带某标签的**未归档**会话（驾驶舱介入队列用，last_ts 降序）。
+
+        LIKE 预筛（conv_tags 是 JSON 数组文本）+ Python 侧 json 精确复核——
+        防「需人工」命中「不需人工确认」这类子串假阳性。返回 conversations
+        行（含 name/platform/last_ts 展示字段）+ ``conv_tags`` 附带列。
+        """
+        t = str(tag or "").strip()
+        if not t:
+            return []
+        lim = max(1, min(300, int(limit or 100)))
+        sql = (
+            "SELECT c.*, m.conv_tags AS conv_tags FROM conversation_meta m "
+            "JOIN conversations c ON c.conversation_id = m.conversation_id "
+            "WHERE m.archived = 0 AND m.conv_tags LIKE ? "
+            "ORDER BY c.last_ts DESC LIMIT ?"
+        )
+        with self._lock:
+            rows = self._conn.execute(sql, (f"%{t}%", lim)).fetchall()
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            try:
+                tags = json.loads(d.get("conv_tags") or "[]")
+            except Exception:
+                tags = []
+            if t in tags:
+                d["conv_tags"] = tags
+                out.append(d)
+        return out
+
     def set_conv_tags(self, conversation_id: str, tags: List[str]) -> bool:
         """T1：覆写会话标签列表；如 conversation_meta 行不存在则插入。"""
         cid = str(conversation_id or "").strip()
@@ -7433,18 +8014,21 @@ class InboxStore:
         return result
 
     def list_conv_tags_map(self, conversation_ids: List[str]) -> Dict[str, Dict[str, Any]]:
-        """T1：批量获取会话标签+归档状态+搁置到点（用于列表渲染）。
+        """T1：批量获取会话标签+归档状态+搁置到点+置顶（用于列表渲染）。
 
-        返回 {conv_id: {"tags": [...], "archived": bool, "snooze_until": float}}。
+        返回 {conv_id: {"tags": [...], "archived": bool, "snooze_until": float,
+        "pinned_at": float}}。
         ``snooze_until`` 为重浮的 epoch 秒（0=未搁置）；前端据此在「超时/待接管」视图
         隐藏已搁置会话并渲染 header 搁置态（读时不做「是否已到点」判定，交前端按 now 比较）。
+        ``pinned_at``（2026-08-17）＝置顶时刻（0=未置顶），前端置顶恒排列表顶部。
         """
         if not conversation_ids:
             return {}
         placeholders = ",".join("?" * len(conversation_ids))
         with self._lock:
             rows = self._conn.execute(
-                f"SELECT conversation_id, conv_tags, archived, snooze_until FROM conversation_meta"
+                f"SELECT conversation_id, conv_tags, archived, snooze_until, pinned_at"
+                f" FROM conversation_meta"
                 f" WHERE conversation_id IN ({placeholders})",
                 conversation_ids,
             ).fetchall()
@@ -7458,8 +8042,56 @@ class InboxStore:
                 "tags": tags,
                 "archived": bool(r["archived"]),
                 "snooze_until": float(r["snooze_until"] or 0),
+                "pinned_at": float(r["pinned_at"] or 0),
             }
         return result
+
+    # ── 会话置顶（2026-08-17，官方级消息管理 P0）────────────────────────────
+
+    def set_conversation_pinned(self, conversation_id: str, pinned: bool) -> float:
+        """置顶/取消置顶会话（工作台全局语义，全坐席共见）。
+
+        返回新 pinned_at（0.0=已取消置顶）。conversation_meta 行不存在时自动补
+        （全列带默认值，最小 INSERT 安全）。
+        """
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            return 0.0
+        ts = self._now() if pinned else 0.0
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO conversation_meta (conversation_id, pinned_at, updated_at)
+                   VALUES (?,?,?)
+                   ON CONFLICT(conversation_id) DO UPDATE SET
+                     pinned_at  = excluded.pinned_at,
+                     updated_at = excluded.updated_at""",
+                (cid, ts, self._now()))
+            self._conn.commit()
+        return ts
+
+    def list_pinned_conversations(
+        self, *, platform: str = "", account_id: str = "",
+    ) -> List[Dict[str, Any]]:
+        """全部置顶会话（conversations 行 + pinned_at），置顶时间倒序，上限 100。
+
+        列表首页「置顶恒可见」的数据源——top-N 时间窗截断对置顶会话不适用
+        （老客户被新流量挤出窗口后置顶就名存实亡）。scoped 过滤与
+        :meth:`list_conversations` 同口径。
+        """
+        sql = ("SELECT c.*, m.pinned_at AS pinned_at FROM conversation_meta m"
+               " JOIN conversations c ON c.conversation_id = m.conversation_id"
+               " WHERE m.pinned_at > 0")
+        params: List[Any] = []
+        if platform:
+            sql += " AND c.platform = ?"
+            params.append(platform)
+        if account_id:
+            sql += " AND c.account_id = ?"
+            params.append(account_id)
+        sql += " ORDER BY m.pinned_at DESC LIMIT 100"
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
 
     # ── V1: 坐席协作注解（Phase 25） ─────────────────────────────────────
     def add_conv_note(
@@ -7963,51 +8595,9 @@ class InboxStore:
             self._conn.commit()
 
 
-    # ── AA1: 自定义动作 / 工作链 CRUD（Phase 37） ─────────────────────────
-
-    def list_workflow_actions(self) -> List[Dict[str, Any]]:
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM workflow_actions ORDER BY sort_order ASC, created_at ASC"
-            ).fetchall()
-        return [dict(r) for r in rows]
-
-    def upsert_workflow_action(self, data: Dict[str, Any]) -> str:
-        import uuid as _uuid
-        action_id = str(data.get("action_id") or _uuid.uuid4())
-        now = time.time()
-        with self._lock:
-            self._conn.execute(
-                """INSERT INTO workflow_actions
-                   (action_id, name, action_type, config_json, icon, enabled, sort_order, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?)
-                   ON CONFLICT(action_id) DO UPDATE SET
-                     name=excluded.name, action_type=excluded.action_type,
-                     config_json=excluded.config_json, icon=excluded.icon,
-                     enabled=excluded.enabled, sort_order=excluded.sort_order,
-                     updated_at=excluded.updated_at""",
-                (
-                    action_id,
-                    str(data.get("name") or ""),
-                    str(data.get("action_type") or "template"),
-                    json.dumps(data.get("config") or {}, ensure_ascii=False),
-                    str(data.get("icon") or "💡"),
-                    1 if data.get("enabled", True) else 0,
-                    int(data.get("sort_order") or 0),
-                    float(data.get("created_at") or now),
-                    now,
-                ),
-            )
-            self._conn.commit()
-        return action_id
-
-    def delete_workflow_action(self, action_id: str) -> bool:
-        with self._lock:
-            cur = self._conn.execute(
-                "DELETE FROM workflow_actions WHERE action_id = ?", (action_id,)
-            )
-            self._conn.commit()
-        return cur.rowcount > 0
+    # ── AA1: 工作链 CRUD（Phase 37；「自定义动作」CRUD 已于 2026-08-14 随
+    #    「AI 下一步」面板整体下线——workflow_actions 表刻意保留不 DROP，
+    #    存量部署数据无损，只是不再有读写方） ─────────────────────────────
 
     def list_workflow_chains(self) -> List[Dict[str, Any]]:
         with self._lock:
@@ -8020,21 +8610,28 @@ class InboxStore:
         import uuid as _uuid
         chain_id = str(data.get("chain_id") or _uuid.uuid4())
         now = time.time()
+        # P2 执行档位白名单：未知值一律落 remind（提醒档永远是安全侧）
+        exec_mode = str(data.get("exec_mode") or "remind").strip().lower()
+        if exec_mode not in ("remind", "auto"):
+            exec_mode = "remind"
         with self._lock:
             self._conn.execute(
                 """INSERT INTO workflow_chains
-                   (chain_id, name, steps_json, trigger_conditions, enabled, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?)
+                   (chain_id, name, steps_json, trigger_conditions, enabled,
+                    exec_mode, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?)
                    ON CONFLICT(chain_id) DO UPDATE SET
                      name=excluded.name, steps_json=excluded.steps_json,
                      trigger_conditions=excluded.trigger_conditions,
-                     enabled=excluded.enabled, updated_at=excluded.updated_at""",
+                     enabled=excluded.enabled, exec_mode=excluded.exec_mode,
+                     updated_at=excluded.updated_at""",
                 (
                     chain_id,
                     str(data.get("name") or ""),
                     json.dumps(data.get("steps") or [], ensure_ascii=False),
                     json.dumps(data.get("trigger_conditions") or {}, ensure_ascii=False),
                     1 if data.get("enabled", True) else 0,
+                    exec_mode,
                     float(data.get("created_at") or now),
                     now,
                 ),
@@ -8096,7 +8693,8 @@ class InboxStore:
     def get_workflow_execution(self, exec_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
             row = self._conn.execute(
-                """SELECT we.*, wc.name as chain_name, wc.steps_json
+                """SELECT we.*, wc.name as chain_name, wc.steps_json,
+                          wc.exec_mode AS chain_exec_mode
                    FROM workflow_executions we
                    LEFT JOIN workflow_chains wc ON wc.chain_id = we.chain_id
                    WHERE we.exec_id = ?""",
@@ -8105,10 +8703,13 @@ class InboxStore:
         return dict(row) if row else None
 
     def has_running_chain(self, conversation_id: str, chain_id: str) -> bool:
+        # paused 计入「在途」：暂停的链再叠一条同款＝两条互相打架；坐席该恢复
+        # 或取消，而不是并开第二条（自动触发扫描同判据，防暂停期重复开链）。
         with self._lock:
             row = self._conn.execute(
                 """SELECT 1 FROM workflow_executions
-                   WHERE conversation_id = ? AND chain_id = ? AND status = 'running' LIMIT 1""",
+                   WHERE conversation_id = ? AND chain_id = ?
+                     AND status IN ('running', 'paused') LIMIT 1""",
                 (conversation_id, chain_id),
             ).fetchone()
         return row is not None
@@ -8164,15 +8765,149 @@ class InboxStore:
             self._conn.commit()
 
     def complete_workflow_execution(self, exec_id: str, *, status: str = "completed") -> None:
-        self.update_workflow_execution(exec_id, status=status, next_step_at=0)
+        # P1 2026-08-12：终态保留 current_step——通用 update 口的 current_step 是
+        # 缺省 0 的位置参数，旧实现把 failed 行的「失败在第几步」清零（人工重试 /
+        # 监控定位都读它）。终态行的位置是事实，不能顺手抹掉。
+        ex = self.get_workflow_execution(exec_id) or {}
+        self.update_workflow_execution(
+            exec_id, current_step=int(ex.get("current_step") or 0),
+            status=status, next_step_at=0)
 
     def cancel_workflow_execution(self, exec_id: str) -> bool:
-        """P47：取消运行中的工作链执行。"""
+        """P47：取消工作链执行（running / paused 均可——暂停的链也得能收尾，
+        否则「先暂停再想取消」会卡死在暂停态）。"""
         ex = self.get_workflow_execution(exec_id)
-        if not ex or ex.get("status") != "running":
+        if not ex or ex.get("status") not in ("running", "paused"):
             return False
         self.complete_workflow_execution(exec_id, status="cancelled")
         return True
+
+    # ── P1 2026-08-12：执行操作补齐（暂停/恢复/跳步/重试）──────────────────
+    # 均为专用 SQL：绝不走 update_workflow_execution 通用口（它的 current_step/
+    # next_step_at 是无条件覆写的位置参数，误用会把步进度清零）。
+    # 状态机：running ⇄ paused（pause/resume）；running →(skip)→ running|completed；
+    # failed →(retry)→ running。所有 WHERE 都带状态守卫=并发下幂等安全。
+
+    def pause_workflow_execution(self, exec_id: str) -> bool:
+        """暂停运行中的链。暂停时刻记 context_json.paused_at——恢复按
+        「时钟停走」平移等待（见 resume）。"""
+        ex = self.get_workflow_execution(exec_id)
+        if not ex or ex.get("status") != "running":
+            return False
+        try:
+            ctx = json.loads(ex.get("context_json") or "{}")
+        except Exception:
+            ctx = {}
+        now = time.time()
+        ctx["paused_at"] = now
+        with self._lock:
+            c = self._conn.execute(
+                "UPDATE workflow_executions SET status='paused', context_json=?,"
+                " updated_at=? WHERE exec_id=? AND status='running'",
+                (json.dumps(ctx, ensure_ascii=False), now, exec_id),
+            )
+            self._conn.commit()
+            return c.rowcount > 0
+
+    def resume_workflow_execution(self, exec_id: str) -> bool:
+        """恢复暂停的链。「时钟停走」语义：next_step_at 平移暂停时长——
+        暂停 2 天再恢复，不会让积压的步骤立刻连发（SOP 节奏以人恢复的时点
+        重新起算）。next_step_at=0（stuck 兜底口径）不平移。"""
+        ex = self.get_workflow_execution(exec_id)
+        if not ex or ex.get("status") != "paused":
+            return False
+        now = time.time()
+        try:
+            ctx = json.loads(ex.get("context_json") or "{}")
+        except Exception:
+            ctx = {}
+        paused_at = 0.0
+        try:
+            paused_at = float(ctx.pop("paused_at", 0) or 0)
+        except (TypeError, ValueError):
+            paused_at = 0.0
+        next_at = float(ex.get("next_step_at") or 0)
+        if next_at > 0 and paused_at > 0:
+            next_at += max(0.0, now - paused_at)
+        with self._lock:
+            c = self._conn.execute(
+                "UPDATE workflow_executions SET status='running', next_step_at=?,"
+                " context_json=?, updated_at=? WHERE exec_id=? AND status='paused'",
+                (next_at, json.dumps(ctx, ensure_ascii=False), now, exec_id),
+            )
+            self._conn.commit()
+            return c.rowcount > 0
+
+    def skip_workflow_step(self, exec_id: str) -> bool:
+        """跳过**即将执行**的一步（current_step 指向的那步）。语义与「该步刚
+        完成」完全一致：再下一步按其 delay_hours 从现在起算；跳过的是最后一步
+        → 整链 completed。只允许 running（暂停中先恢复，语义才不歧义）。"""
+        ex = self.get_workflow_execution(exec_id)
+        if not ex or ex.get("status") != "running":
+            return False
+        try:
+            steps = json.loads(ex.get("steps_json") or "[]")
+        except Exception:
+            steps = []
+        cur = int(ex.get("current_step") or 0)
+        now = time.time()
+        next_idx = cur + 1
+        if next_idx >= len(steps):
+            self.complete_workflow_execution(exec_id, status="completed")
+            changed = True
+        else:
+            try:
+                delay_h = float(steps[next_idx].get("delay_hours") or 0)
+            except (TypeError, ValueError):
+                delay_h = 0.0
+            next_at = now + delay_h * 3600 if delay_h > 0 else now
+            with self._lock:
+                c = self._conn.execute(
+                    "UPDATE workflow_executions SET current_step=?, next_step_at=?,"
+                    " last_result_json=?, updated_at=?"
+                    " WHERE exec_id=? AND status='running'",
+                    (next_idx, next_at,
+                     json.dumps({"action_type": "skip", "ok": True,
+                                 "detail": "skipped_by_agent",
+                                 "skipped_step": cur}, ensure_ascii=False),
+                     now, exec_id),
+                )
+                self._conn.commit()
+                changed = c.rowcount > 0
+        if changed:
+            # 跳过如实进环节账本（漏斗 by_step 可见「这环节被人跳了几次」）
+            step = steps[cur] if 0 <= cur < len(steps) else {}
+            self.log_workflow_step(
+                exec_id=exec_id, chain_id=str(ex.get("chain_id") or ""),
+                conversation_id=str(ex.get("conversation_id") or ""),
+                step_idx=cur,
+                action_type=str(step.get("action_type") or "template"),
+                ok=True, detail="skipped:agent", now=now)
+        return changed
+
+    def retry_workflow_execution(self, exec_id: str) -> bool:
+        """失败链人工重试：失败步原位重跑——status 回 running、next_step_at=now、
+        清该步 step_retries 计数（引擎自动重试预算重新计满）。只允许 failed。
+        依赖 complete_workflow_execution 保留 current_step（失败位置）。"""
+        ex = self.get_workflow_execution(exec_id)
+        if not ex or ex.get("status") != "failed":
+            return False
+        now = time.time()
+        try:
+            ctx = json.loads(ex.get("context_json") or "{}")
+        except Exception:
+            ctx = {}
+        retries = ctx.get("step_retries") or {}
+        retries.pop(str(int(ex.get("current_step") or 0)), None)
+        ctx["step_retries"] = retries
+        with self._lock:
+            c = self._conn.execute(
+                "UPDATE workflow_executions SET status='running', next_step_at=?,"
+                " context_json=?, updated_at=? WHERE exec_id=? AND status='failed'",
+                (now, json.dumps(ctx, ensure_ascii=False), now, exec_id),
+            )
+            self._conn.commit()
+            return c.rowcount > 0
 
     def log_workflow_step(
         self,
@@ -8251,6 +8986,7 @@ class InboxStore:
         with self._lock:
             rows = self._conn.execute(
                 f"""SELECT we.*, wc.name as chain_name, wc.steps_json,
+                           wc.exec_mode AS chain_exec_mode,
                            c.display_name, c.platform
                    FROM workflow_executions we
                    LEFT JOIN workflow_chains wc ON wc.chain_id = we.chain_id
@@ -8263,6 +8999,36 @@ class InboxStore:
                 params,
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def count_auto_started_chains_since(self, since_ts: float) -> int:
+        """P2：窗口内**条件自动启动**的执行数（context_json 带 "auto": true 标记，
+        auto_start_chains 落的）——每日自动开链预算的数据口径（跨重启稳）。绝不抛。"""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT COUNT(*) FROM workflow_executions"
+                    " WHERE started_at >= ? AND context_json LIKE '%\"auto\": true%'",
+                    (float(since_ts),),
+                ).fetchone()
+            return int(row[0] or 0)
+        except Exception:
+            logger.debug("count_auto_started_chains_since failed", exc_info=True)
+            return 0
+
+    def count_workflow_auto_drafts_since(self, since_ts: float) -> int:
+        """P2：窗口内链自动步投料的草稿数（source_id 前缀 'wf:'）——每日自动拟稿
+        预算的数据口径。绝不抛。"""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT COUNT(*) FROM reply_drafts"
+                    " WHERE created_at >= ? AND source_id LIKE 'wf:%'",
+                    (float(since_ts),),
+                ).fetchone()
+            return int(row[0] or 0)
+        except Exception:
+            logger.debug("count_workflow_auto_drafts_since failed", exc_info=True)
+            return 0
 
     _META_PATCH_COLUMNS = frozenset({
         "rel_stage_cached", "rel_stage_pending", "rel_stage_pending_ts",

@@ -1,0 +1,116 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "boundless://platform/licensing/ledger/ledger_import.schema.json",
+  "title": "Boundless 集团统一授权台账 · 归一化导入格式 v1",
+  "description": "两套授权系统（engines/avatarhub、engines/chengjie）的发放记录归一化导出格式。由 tools/license_ledger/export_*.py 生成，供 website/scripts/ledger-import-licenses.mjs 导入集团账本（website 侧 SQLite）。约定：records[*].source_system 必须与顶层 source_system 一致（draft-07 无法表达跨字段约束，由导入方校验）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "source_system", "exported_at", "records"],
+  "properties": {
+    "version": {
+      "const": 1,
+      "description": "导出格式版本，当前固定为 1"
+    },
+    "source_system": {
+      "enum": ["avatarhub", "chengjie"],
+      "description": "来源系统"
+    },
+    "exported_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "导出时刻，ISO8601"
+    },
+    "records": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/record" },
+      "description": "归一化授权记录列表；数据源缺失时允许为空数组"
+    }
+  },
+  "definitions": {
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_system",
+        "source_key",
+        "product_id",
+        "sku_id",
+        "plan",
+        "edition",
+        "seats",
+        "customer_name",
+        "customer_contact",
+        "machine_fingerprint",
+        "issued_at",
+        "expires_at",
+        "status",
+        "raw"
+      ],
+      "properties": {
+        "source_system": {
+          "enum": ["avatarhub", "chengjie"],
+          "description": "来源系统（与顶层一致）"
+        },
+        "source_key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "该系统内唯一键。avatarhub：授权序列号 lic_id / code:<兑换码> / trial:<指纹>；chengjie：payload.lic_id / token:<sha256 前 16 位>。同一 source_system 内唯一，是集团账本 upsert 的幂等键之一"
+        },
+        "product_id": {
+          "anyOf": [
+            { "enum": ["huansheng", "huanyan", "huanying", "tongchuan", "tongyi", "zhiliao", "zhituo"] },
+            { "type": "null" }
+          ],
+          "description": "七产品矩阵 id；两套授权载荷均不含产品标识，无法可靠映射时为 null（原始 edition/plan 保留在同名字段与 raw）"
+        },
+        "sku_id": {
+          "type": ["string", "null"],
+          "description": "platform/licensing/sku_registry.json 的 sku_id；无法可靠映射时为 null"
+        },
+        "plan": {
+          "type": ["string", "null"],
+          "description": "原始套餐名。chengjie：community|basic|pro|flagship；avatarhub 无 plan 概念，恒 null"
+        },
+        "edition": {
+          "type": ["string", "null"],
+          "description": "原始版本名。avatarhub：trial|standard|pro（enterprise 引擎侧按 pro 签发）；chengjie 无 edition 概念，恒 null"
+        },
+        "seats": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "席位数。avatarhub：激活记录=1（一次激活占一座），未激活兑换码=该码总座位数；chengjie：payload.seats，0 表示不限（保留 0，不转 null）"
+        },
+        "customer_name": {
+          "type": ["string", "null"],
+          "description": "客户名。avatarhub 取 licensee（注意：官网自动履约会把联系方式写进 licensee）；chengjie 取 payload.sub"
+        },
+        "customer_contact": {
+          "type": ["string", "null"],
+          "description": "联系方式。两套引擎侧台账均无独立联系方式字段，通常为 null"
+        },
+        "machine_fingerprint": {
+          "type": ["string", "null"],
+          "description": "机器指纹（avatarhub：XXXX-XXXX-XXXX-XXXX 展示指纹，'*' 为站点授权）；chengjie 不绑机，恒 null"
+        },
+        "issued_at": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "签发时间 ISO8601；原始时间无法解析时为 null（原值在 raw）"
+        },
+        "expires_at": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "到期时间 ISO8601；null 含义为「永久授权（原值 0/缺省）或未知（如未激活兑换码尚未起算）」，可由 raw 区分"
+        },
+        "status": {
+          "enum": ["active", "expired", "revoked", "trial", "unknown"],
+          "description": "导出时刻的归一化状态。判定优先级：revoked（命中吊销/码停用）> expired（有到期且已过，含宽限期内）> trial（试用授权）> active；无法判定（如未激活兑换码）为 unknown"
+        },
+        "raw": {
+          "type": "object",
+          "description": "原始记录原样保留（含 kind 标注来源子类）。注意：chengjie 侧出于安全仅保留解码后的 payload 与 token 哈希，不含可直接激活的完整授权码"
+        }
+      }
+    }
+  }
+}

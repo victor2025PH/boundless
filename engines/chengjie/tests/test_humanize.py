@@ -10,9 +10,11 @@ import asyncio
 import pytest
 
 from src.inbox.humanize import (
+    apply_min_gap_floor,
     compute_pacing_delay,
     estimate_thinking_delay,
     resolve_following_delay_block,
+    resolve_min_gap_sec,
     resolve_pacing,
     run_presend_humanization,
 )
@@ -482,6 +484,104 @@ class TestResolvePacing:
         excited = compute_pacing_delay(
             blk, text="嗯嗯我在的，你慢慢说，我一直都在", arousal=0.95, rng=_norng)
         assert calm >= excited
+
+
+# ── P1 连发/秒回两道地板（2026-08-12，修 198 实录「第 2/3 条秒回」） ──────────
+# min_residual_sec：adaptive 抵扣**发生后**至少保留的残余延迟（打字气泡露出窗口）；
+# min_gap_sec：同会话两条出站间的最小间隔（与抵扣正交的连发地板）。
+# 两者默认 0=关（旧行为），行为契约钉在这里——改语义先红。
+
+_ADAPT = {"min_sec": 0, "max_sec": 30, "adaptive": True,
+          "base_sec": 2.0, "per_char_sec": 0.1, "jitter": 0}
+
+
+class TestMinResidualFloor:
+    def test_floors_when_elapsed_eats_target(self):
+        blk = dict(_ADAPT, min_residual_sec=2.5)
+        # 已耗时远超目标 → 原语义归零；残余下限兜住 2.5s 且标记 floored
+        r = resolve_pacing(blk, text="短", arousal=0.5, elapsed_sec=100.0, rng=_norng)
+        assert r.delay == pytest.approx(2.5) and r.floored is True
+
+    def test_no_floor_when_raw_above_residual(self):
+        blk = dict(_ADAPT, min_residual_sec=0.5)
+        # target=2.4，已耗 1.0 → raw=1.4 > 0.5 → 不垫、不标记
+        r = resolve_pacing(blk, text="四个字啊", arousal=0.5, elapsed_sec=1.0, rng=_norng)
+        assert r.delay == pytest.approx(1.4, abs=1e-6) and r.floored is False
+
+    def test_no_floor_without_elapsed(self):
+        # 未发生抵扣（elapsed=0）→ 残余下限不介入（首条目标延迟本就完整）
+        blk = dict(_ADAPT, min_residual_sec=10.0)
+        r = resolve_pacing(blk, text="四个字啊", arousal=0.5, rng=_norng)
+        assert r.delay == pytest.approx(2.4, abs=1e-6) and r.floored is False
+
+    def test_non_adaptive_ignores_residual(self):
+        # 非自适应从不抵扣 → 无此洞，残余键不改变行为
+        blk = {"min_sec": 5, "max_sec": 5, "adaptive": False, "min_residual_sec": 30}
+        r = resolve_pacing(blk, elapsed_sec=100.0, rng=_norng)
+        assert r.delay == 5.0 and r.floored is False
+
+    def test_default_zero_keeps_old_behavior(self):
+        r = resolve_pacing(_ADAPT, text="短", arousal=0.5, elapsed_sec=100.0, rng=_norng)
+        assert r.delay == 0.0 and r.floored is False
+
+    def test_bad_value_treated_as_off(self):
+        blk = dict(_ADAPT, min_residual_sec="oops")
+        r = resolve_pacing(blk, text="短", arousal=0.5, elapsed_sec=100.0, rng=_norng)
+        assert r.delay == 0.0 and r.floored is False
+
+
+class TestMinGapResolveAndFloor:
+    def test_resolve_default_and_bad_values(self):
+        assert resolve_min_gap_sec(None) == 0.0
+        assert resolve_min_gap_sec({}) == 0.0
+        assert resolve_min_gap_sec({"min_gap_sec": "x"}) == 0.0
+        assert resolve_min_gap_sec({"min_gap_sec": -3}) == 0.0
+        assert resolve_min_gap_sec({"min_gap_sec": 12}) == 12.0
+
+    def test_resolve_scoped_overrides(self):
+        blk = {"min_gap_sec": 10,
+               "platform_overrides": {"line": {"min_gap_sec": 20}},
+               "persona_overrides": {"p1": {"min_gap_sec": 5}}}
+        assert resolve_min_gap_sec(blk) == 10.0
+        assert resolve_min_gap_sec(blk, platform="line") == 20.0
+        # 人设 > 平台（与 resolve_pacing 同一覆写层级）
+        assert resolve_min_gap_sec(blk, platform="line", persona_id="p1") == 5.0
+
+    def test_first_send_not_floored(self):
+        # 进程内首条出站（since=None）→ 地板不介入
+        d, floored = apply_min_gap_floor(
+            0.0, since_last_send_sec=None, min_gap_sec=15, rng=_norng)
+        assert d == 0.0 and floored is False
+
+    def test_recent_send_floors_delay(self):
+        # 3s 前刚发过、目标间隔 15s（_norng 消抖动）→ 需再等 12s
+        d, floored = apply_min_gap_floor(
+            0.0, since_last_send_sec=3.0, min_gap_sec=15, rng=_norng)
+        assert d == pytest.approx(12.0) and floored is True
+
+    def test_gap_already_satisfied(self):
+        d, floored = apply_min_gap_floor(
+            0.0, since_last_send_sec=30.0, min_gap_sec=15, rng=_norng)
+        assert d == 0.0 and floored is False
+
+    def test_existing_delay_larger_than_required_wins(self):
+        # 原延迟 20s 已覆盖 12s 缺口 → 保持原值不标记
+        d, floored = apply_min_gap_floor(
+            20.0, since_last_send_sec=3.0, min_gap_sec=15, rng=_norng)
+        assert d == 20.0 and floored is False
+
+    def test_zero_gap_disabled(self):
+        d, floored = apply_min_gap_floor(
+            1.0, since_last_send_sec=0.0, min_gap_sec=0, rng=_norng)
+        assert d == 1.0 and floored is False
+
+    def test_jitter_bounds(self):
+        # 抖动 ±15%：required ∈ [gap*0.85-since, gap*1.15-since]
+        lo, _ = apply_min_gap_floor(
+            0.0, since_last_send_sec=0.0, min_gap_sec=10, rng=lambda a, b: a)
+        hi, _ = apply_min_gap_floor(
+            0.0, since_last_send_sec=0.0, min_gap_sec=10, rng=lambda a, b: b)
+        assert lo == pytest.approx(8.5) and hi == pytest.approx(11.5)
 
 
 class TestPersonaOverrides:

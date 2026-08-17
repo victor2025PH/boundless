@@ -37,6 +37,8 @@ OPS_ROUTES_PY = sc.REPO / "src" / "web" / "routes" / "ops_overview_routes.py"
 _CONTRACT = {
     "/login/start": "网页登录发起（connect 弹窗 + provider start）",
     "/login/:P/status": "登录轮询（connect 弹窗每 2.5s poll）",
+    "/login/:P/relay-step": "表单中继只读探针（交互登录：登录页此刻该渲染哪一步原生表单）",
+    "/login/:P/relay-submit": "表单中继写入端（交互登录：把原生表单字段值填回登录页）",
     "/login/:P/cancel": "取消登录（关窗 / 换码前拆旧会话）",
     "/accounts/:P/relogin": "断线重连（ops 卡 / 账号 rail / workspace_channels 三处入口）",
 }

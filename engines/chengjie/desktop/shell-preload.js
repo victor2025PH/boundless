@@ -18,6 +18,11 @@ contextBridge.exposeInMainWorld("shell", {
   // 这里同步暴露给向导（与 forceFirstRun 同款，向导渲染那刻就要用）。
   managedEdition: process.env.AITR_MANAGED_EDITION === "1",
   getConfig: () => ipcRenderer.invoke("desktop:config"),
+  // ui_visibility 服务端旗标（manual_console 等）：必须经主进程取——renderer 是 file://
+  // 源、后端无 CORS 头，直接 fetch 会被拦（2026-08-15 实锤）。后端未起时返回 null。
+  uiFlags: () => ipcRenderer.invoke("desktop:ui-flags"),
+  // 工作台分区旧 SW 吞导航挂死时的外科清除（配合 renderer 装载看门狗）
+  clearWorkspaceSw: () => ipcRenderer.invoke("desktop:clear-workspace-sw"),
   applyWhatsappUa: (args) => ipcRenderer.invoke("desktop:apply-whatsapp-ua", args),
   backendHealth: () => ipcRenderer.invoke("desktop:backend-health"),
   backendSpawnStatus: () => ipcRenderer.invoke("desktop:backend-spawn-status"),
@@ -31,6 +36,8 @@ contextBridge.exposeInMainWorld("shell", {
   trialBindCode: () => ipcRenderer.invoke("desktop:trial-bind-code"),
   // 首启漏斗埋点（fire-and-forget；主进程 → 本地后端 → 官网 /api/track）
   trialFunnel: (body) => ipcRenderer.invoke("desktop:trial-funnel", body),
+  // 壳层 UI 交互埋点（fire-and-forget → 后端 ui-event；副驾退役读数等）
+  uiEvent: (body) => ipcRenderer.invoke("desktop:ui-event", body),
   // 仅放行客服深链（t.me / wa.me），白名单在主进程侧
   openExternal: (url) => ipcRenderer.invoke("desktop:open-external", url),
   setupTestAi: (body) => ipcRenderer.invoke("desktop:setup-test-ai", body),
@@ -57,8 +64,6 @@ contextBridge.exposeInMainWorld("shell", {
   relDowngrade: (args) => ipcRenderer.invoke("desktop:rel-downgrade", args),
   relReunion: (args) => ipcRenderer.invoke("desktop:rel-reunion", args),
   relSync: (args) => ipcRenderer.invoke("desktop:rel-sync", args),
-  nbaList: (args) => ipcRenderer.invoke("desktop:nba-list", args),
-  nbaExec: (args) => ipcRenderer.invoke("desktop:nba-exec", args),
   collabContext: (args) => ipcRenderer.invoke("desktop:collab-context", args),
   chainExecutions: (args) => ipcRenderer.invoke("desktop:chain-executions", args),
   chainCancel: (args) => ipcRenderer.invoke("desktop:chain-cancel", args),
@@ -118,4 +123,15 @@ contextBridge.exposeInMainWorld("shell", {
   // D1 校验覆写文件（解析/被忽略字段反馈）。
   validateSelectors: () => ipcRenderer.invoke("desktop:validate-selectors"),
   setWindowTitle: (title) => ipcRenderer.invoke("desktop:set-title", title),
+  // ── 壳级通知条（更新就绪 / 官方公告，P0 2026-08-14）────────────────────
+  // 当前该显示的一条通知（主进程 update-notify.pickNotice 决策）
+  shellNotice: () => ipcRenderer.invoke("desktop:shell-notice"),
+  // 已读/稍后：{action:"read",id} 或 {action:"snooze",hours?}；回传新通知态
+  noticeAck: (args) => ipcRenderer.invoke("desktop:notice-ack", args),
+  // 公告「查看详情」：链接白名单（https）在主进程侧校验
+  noticeOpen: (id) => ipcRenderer.invoke("desktop:notice-open", id),
+  // 更新已就绪时一键重启安装（quitAndInstall，装完自动拉起）
+  updateRestart: () => ipcRenderer.invoke("desktop:update-restart"),
+  // 主进程推送的通知态变化（下载进度/就绪/新公告）
+  onShellNotice: (cb) => ipcRenderer.on("desktop:shell-notice", (_e, notice) => { try { cb(notice); } catch (err) { /* 渲染回调异常不断桥 */ } }),
 });

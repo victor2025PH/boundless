@@ -257,6 +257,9 @@
           + head
           + '<input id="fr-contact" type="text" placeholder="' + frEsc(t("claim_ph")) + '" '
           + 'style="' + INPUT_STYLE + ';margin-bottom:10px" />'
+          + '<input id="fr-invite" type="text" placeholder="' + frEsc(t("invite_ph")) + '" '
+          + 'autocomplete="off" spellcheck="false" '
+          + 'style="' + INPUT_STYLE + ';margin-bottom:10px;font-size:12.5px" />'
           + '<div id="fr-claim-msg" style="font-size:12.5px;line-height:1.6;margin-bottom:10px;min-height:0"></div>'
           + '<div id="fr-claim-acts" style="display:flex;gap:10px">'
           + '<button id="fr-claim" style="' + BTN_PRIMARY + ';flex:1">' + t("btn_claim") + "</button>"
@@ -268,6 +271,7 @@
         var msg = card.querySelector("#fr-claim-msg");
         var acts = card.querySelector("#fr-claim-acts");
         var input = card.querySelector("#fr-contact");
+        var inviteInp = card.querySelector("#fr-invite");
         var claimBtn = card.querySelector("#fr-claim");
         card.querySelector("#fr-trial-go").addEventListener("click", function () {
           beacon("claim_skip");
@@ -290,6 +294,7 @@
             + (managed ? t("btn_next") : t("btn_start")) + "</button>";
           acts.innerHTML = html;
           try { input.style.display = "none"; } catch (e) {}
+          try { if (inviteInp) inviteInp.style.display = "none"; } catch (e) {}
           if (v.phase === "exhausted" || v.phase === "fail") {
             var pitch = card.querySelector("#fr-claim-pitch");
             if (pitch) pitch.style.display = "none";
@@ -331,7 +336,12 @@
           claimBtn.disabled = true;
           say("info", t("claim_sending"));
           beacon("claim_submit");
-          var p = shell.trialClaim ? shell.trialClaim({ contact: contact })
+          var inviteCode = "";
+          try { inviteCode = String((inviteInp && inviteInp.value) || "").trim(); } catch (e) {}
+          var p = shell.trialClaim
+            ? shell.trialClaim(inviteCode
+              ? { contact: contact, invite_code: inviteCode }
+              : { contact: contact })
             : Promise.resolve({ ok: false, error: "unsupported" });
           p.then(function (r) {
             var v = window.frClaimResultView ? window.frClaimResultView(r, state.lang)

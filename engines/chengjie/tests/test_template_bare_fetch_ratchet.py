@@ -43,6 +43,9 @@ _BARE_FETCH_CEILINGS = {
     # 独立整页（布局链无 _api_fetch.html）+ 实时通话链自带 signal 的超时包装——
     # 结构性豁免：为一处迁移给独立页挂统一层，收益低于回归风险，刻意保留。
     "voice_call.html": 1,
+    # 群成员提取管理台：独立自包含页（不 extends base.html、无 _api_fetch.html include），
+    # 全页仅 api() 一处原生 fetch（同源 + 内建 CSRF 头 + JSON 解析）。同 voice_call 结构性豁免。
+    "tg_members.html": 1,
 }
 
 

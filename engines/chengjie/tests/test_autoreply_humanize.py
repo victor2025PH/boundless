@@ -10,8 +10,10 @@ from src.integrations import protocol_autoreply as pa
 @pytest.fixture(autouse=True)
 def _clear_state():
     pa._last_reply.clear()
+    pa._last_sent.clear()
     yield
     pa._last_reply.clear()
+    pa._last_sent.clear()
 
 
 # ── 营业时段 ──────────────────────────────────────────────────────────────
@@ -210,6 +212,72 @@ async def test_run_autoreply_follow_false_stays_instant():
         risk_fn=lambda t: "low", now=1000, sleep=_sleep)
     assert res["sent"] is True
     assert slept == []   # follow:false → 空节奏 → 0 延迟
+
+
+# ── P2 连发间隔地板（min_gap_sec，2026-08-12）────────────────────────────
+
+_GAP_CFG = {"protocol_autoreply": {"enabled": True},
+            "inbox": {"l2_autosend": {"deliver_delay": {
+                "min_sec": 1, "max_sec": 1, "adaptive": False,
+                "min_gap_sec": 10}}}}
+
+
+async def _run_gap(cfg, text, now, slept):
+    async def _send(**kw):
+        pass
+
+    async def _sleep(d):
+        slept.append(float(d))
+
+    return await pa.run_autoreply(
+        _payload(text), registry=_Reg(), cfg=cfg, generate=_gen, send=_send,
+        risk_fn=lambda t: "low", now=now, sleep=_sleep)
+
+
+@pytest.mark.asyncio
+async def test_gap_floor_first_send_not_padded():
+    """首条没有「上一条发出」参照 → 不垫，等基础延迟即可。"""
+    slept = []
+    res = await _run_gap(_GAP_CFG, "在吗", 1000.0, slept)
+    assert res["sent"] is True
+    assert 0.5 <= sum(slept) <= 1.5   # 只有基础 1s，无地板垫付
+
+
+@pytest.mark.asyncio
+async def test_gap_floor_pads_second_send_to_same_chat():
+    """同会话第二条距上条发出 6s（< min_gap_sec=10）→ 补等到 ~10s（±15% 抖动）。"""
+    slept1, slept2 = [], []
+    r1 = await _run_gap(_GAP_CFG, "在吗", 1000.0, slept1)
+    assert r1["sent"] is True
+    # now=1006：过 5s AUTO_COOLDOWN，距上条 send_ts(1000) 6s < 10s 地板
+    r2 = await _run_gap(_GAP_CFG, "还在吗", 1006.0, slept2)
+    assert r2["sent"] is True
+    # required = 10×[0.85,1.15] − 6 ∈ [2.5, 5.5]，必大于基础 1s
+    assert 2.5 <= sum(slept2) <= 5.5
+
+
+@pytest.mark.asyncio
+async def test_gap_floor_far_apart_not_padded():
+    """距上条发出已超过间隔 → 地板不介入，仍是基础延迟。"""
+    slept1, slept2 = [], []
+    await _run_gap(_GAP_CFG, "在吗", 1000.0, slept1)
+    slept2.clear()
+    r2 = await _run_gap(_GAP_CFG, "还在吗", 1030.0, slept2)   # 30s 后
+    assert r2["sent"] is True
+    assert 0.5 <= sum(slept2) <= 1.5
+
+
+@pytest.mark.asyncio
+async def test_gap_floor_off_by_default():
+    """未配 min_gap_sec（默认 0）→ 连发行为与旧版一致（只有基础延迟）。"""
+    cfg = {"protocol_autoreply": {"enabled": True},
+           "inbox": {"l2_autosend": {"deliver_delay": {
+               "min_sec": 1, "max_sec": 1, "adaptive": False}}}}
+    slept1, slept2 = [], []
+    await _run_gap(cfg, "在吗", 1000.0, slept1)
+    r2 = await _run_gap(cfg, "还在吗", 1006.0, slept2)
+    assert r2["sent"] is True
+    assert 0.5 <= sum(slept2) <= 1.5
 
 
 # ── 接管摘标 ──────────────────────────────────────────────────────────────

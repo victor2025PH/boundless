@@ -1,0 +1,2 @@
+[console_scripts]
+okline = okline.__main__:main

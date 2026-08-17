@@ -262,6 +262,35 @@
       </div>
 
       <div style="height:1px;background:var(--bd);margin:1rem 0"></div>
+
+      <!-- 👁️ 内部功能显隐（ui_visibility，2026-08-14）：内部/运维界面默认对
+           坐席隐藏，此处按键开启（即点即存，写 overlay 热生效）。单源判定
+           src/web/ui_visibility.py；桌面壳经 GET /api/desktop/ui-flags 消费。 -->
+      <div class="f-row">
+        <div class="f-lbl">👁️ {{ (i18n or {}).get('dv_uiv_title', "内部功能显隐") }}</div>
+        <div class="f-hint">{{ (i18n or {}).get('dv_uiv_sub', "以下内部/运维界面默认对坐席隐藏，按需开启（写 config.local.yaml 热生效免重启；隐藏只藏入口与渲染，URL/API 不封）。") }}</div>
+        <div style="display:flex;flex-direction:column;gap:.5rem;margin:.5rem 0">
+          {% set _uiv = ui_vis or {} %}
+          {# 只渲染运行中进程认识的键（`_k in _uiv`）：模板热更新先于重启上线，
+             新键的开关行提前渲染会「点了报 404 未知键」——按键在场再显示。 #}
+          {% for _k in ['manual_console', 'group_extract', 'matrix_nav', 'group_show', 'team_collab', 'ai_settings', 'cockpit'] if _k in _uiv %}
+          <label style="display:flex;align-items:flex-start;gap:.55rem;cursor:pointer">
+            <input type="checkbox" id="dvuiv-{{ _k }}" style="margin-top:.2rem"
+                   {% if _uiv.get(_k) %}checked{% endif %}
+                   onchange="dvUivToggle('{{ _k }}', this)">
+            <span>
+              <b style="font-size:.85rem">{{ (i18n or {}).get('dv_uiv_k_' + _k, _k) }}</b>
+              <span class="ai-pill" id="dvuiv-pill-{{ _k }}" style="margin-left:.4rem">{{ (i18n or {}).get('dv_uiv_on' if _uiv.get(_k) else 'dv_uiv_off', '') }}</span>
+              <br><span style="font-size:.75rem;color:var(--t2)">{{ (i18n or {}).get('dv_uiv_k_' + _k + '_d', '') }}</span>
+            </span>
+          </label>
+          {% endfor %}
+        </div>
+        <div class="f-hint">{{ (i18n or {}).get('dv_uiv_note_desktop', "「人工操作台」桌面壳形态需重启壳应用后完全生效；网页侧刷新即生效。") }}</div>
+        <div class="save-bar"><span class="save-result" id="dvuiv-res"></span></div>
+      </div>
+
+      <div style="height:1px;background:var(--bd);margin:1rem 0"></div>
       {% set vp = voice_ai.get('voice_profile', {}) if voice_ai else {} %}
       <div class="f-row">
         <div class="f-lbl">
@@ -695,23 +724,23 @@ async function switchAiPreset(kind){
   const presets = {
     local: {
       mode: 'local',
-      /* 176(5090) 与 ai.fallback 兜底同栈同模型（旧值 192.168.0.184 是网段迁移前的死主机）；
-         timeout 120 覆盖冷载 ~30-60s，热答秒级 */
-      base_url: 'http://192.168.0.176:11434/v1',
-      model: 'qwen3:30b-a3b-instruct-2507-q4_K_M',
-      embedding_model: '',
-      temperature: '0.8',
+      /* 2026-08-16 校正：本地主链统一指 173 常驻 chatx（Qwen3.6-27B-abl-awq，vLLM 7x24
+         常暖、热答 ~2s）——旧值 176:11434 qwen3:30b(17G) 违反集群显存纪律（176 兼任
+         MT/嵌入/视觉），且与 ai.primary/ai.fallback 的本地链（同为 173 chatx）分叉。 */
+      base_url: 'http://192.168.0.173:8001/v1',
+      model: 'chatx',
+      temperature: '0.7',
       max_tokens: '2048',
-      timeout: '120',
+      timeout: '60',
     },
     deepseek: {
       mode: 'deepseek',
       base_url: 'https://api.deepseek.com/v1',
-      model: 'deepseek-chat',
-      embedding_model: '',
+      /* deepseek-chat 是旧别名（服务端现路由到 v4-flash）；写现役模型名防别名哪天下线 */
+      model: 'deepseek-v4-flash',
       temperature: '0.7',
       max_tokens: '2048',
-      timeout: '60',
+      timeout: '40',
     },
   };
   const p = presets[kind];
@@ -719,7 +748,8 @@ async function switchAiPreset(kind){
   document.getElementById('ai-mode').value = p.mode;
   document.getElementById('ai-base_url').value = p.base_url;
   document.getElementById('ai-model').value = p.model;
-  document.getElementById('ai-embedding_model').value = p.embedding_model;
+  /* 刻意不碰 ai-embedding_model：预设曾把它填空再整段保存 → 服务端空值保护白名单
+     不含该键，bge-m3 被清空=记忆向量/语义闸门静默失效。嵌入配置与主链模式正交。 */
   document.getElementById('ai-temperature').value = p.temperature;
   document.getElementById('ai-max_tokens').value = p.max_tokens;
   document.getElementById('ai-timeout').value = p.timeout;
@@ -969,6 +999,34 @@ async function dvccProbe(){
   res.textContent = window.T('dv_cc_js_probing'); res.className = 'save-result';
   await dvccLoad(true);
   res.textContent = '';
+}
+
+// ── 内部功能显隐（ui_visibility）：即点即存，失败回滚勾选态 ──
+async function dvUivToggle(key, el){
+  const res = document.getElementById('dvuiv-res');
+  const want = !!el.checked;
+  el.disabled = true;
+  if(res){ res.textContent = window.T('ov_js_saving'); res.className = 'save-result'; }
+  try{
+    const r = await apiFetch('/api/developer/ui-visibility', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({key: key, visible: want}),
+    }, {timeoutMs: 30000});
+    const d = await r.json();
+    if(!r.ok || !d.ok){
+      el.checked = !want;
+      if(res){ res.textContent = window.T('dv_uiv_js_fail') + '：' + (d.detail || ''); res.className = 'save-result err'; }
+      return;
+    }
+    const pill = document.getElementById('dvuiv-pill-' + key);
+    if(pill) pill.textContent = window.T(want ? 'dv_uiv_on' : 'dv_uiv_off');
+    if(res){ res.textContent = window.T('dv_uiv_js_saved'); res.className = 'save-result ok'; setTimeout(()=>{ res.textContent = ''; }, 4000); }
+  }catch(e){
+    el.checked = !want;
+    if(res){ res.textContent = window.T('dv_uiv_js_fail') + '：' + e.message; res.className = 'save-result err'; }
+  }finally{
+    el.disabled = false;
+  }
 }
 
 (function(){

@@ -99,6 +99,17 @@ def build_membership_snapshot(config: dict, user_store=None) -> Dict[str, Any]:
         )
     except Exception:
         out["shop"] = {"url": shop_url, "offer": ""}
+    # 合规能力引用件（WP-4）：运营方公示页优先（compliance.crisis_protocol_url），
+    # 未配置 → 厂商官网模板页（licensing.trial.site_url 同源，缺省 bd2026.cc）。
+    try:
+        from src.compliance import crisis_protocol_url as _cpu
+        from src.licensing.trial_claim_client import site_url as _vendor_site
+        out["compliance"] = {
+            "protocol_url": _cpu(config)
+            or f"{_vendor_site(config)}/compliance/crisis-protocol",
+        }
+    except Exception:
+        out["compliance"] = {"protocol_url": ""}
     seats_used = None
     try:
         if user_store is not None:

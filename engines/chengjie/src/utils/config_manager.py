@@ -137,6 +137,11 @@ class ConfigManager:
         # stderr（198 的 err 日志乱码行就是它）。热重载**功能一直是好的**，
         # 只是完全不可见——排障时被误判成「热重载没跑」，浪费一轮复现。
         self.logger = logging.getLogger("ai_chat_assistant.ConfigManager")
+        # WP-1：本次进程是否刚做过 config 全新播种（_ensure_seeded 真拷贝）。
+        # 必须在 config_path 解析**之前**置默认——解析过程可能把它翻 True。
+        # 它是 _ensure_deploy_profile 的闸门之一：预设档只应用在「全新安装」，
+        # 升级安装/既有配置的机器（含生产双实例）永不被触碰。
+        self._seeded_fresh = False
         self.config_path = Path(config_path) if config_path else self._get_default_config_path()
         self.config: Dict[str, Any] = {}
         self._quota_rules_cache: Optional[Dict[str, Any]] = None
@@ -237,6 +242,7 @@ class ConfigManager:
             if ex and ex.exists():
                 import shutil
                 shutil.copyfile(str(ex), str(target))
+                self._seeded_fresh = True   # 全新安装标记（deploy profile 播种闸门）
                 self.logger.warning("配置不存在，已从内置种子播种到可写目录: %s ← %s", target, ex.name)
             else:
                 self.logger.warning("配置不存在且无内置 example，可写目录仍缺 config: %s", target)
@@ -401,6 +407,10 @@ class ConfigManager:
             # 下方会 validation-fail 提前 return False（main.py 忽略返回值继续跑），
             # 挂在成功路径末尾等于桌面态永不执行。
             self._ensure_baseline()
+
+            # WP-1：部署能力预设档首启播种（AITR_DEPLOY_PROFILE + 全新播种双闸；
+            # 同样必须在 _validate_config 之前——理由同上）。
+            self._ensure_deploy_profile()
 
             # 打包/自包含部署：用 AITR_WEB_* 覆盖 web_admin.{host,port,auth_token}，
             # 使后端「serve 的端口/令牌」与桌面壳 renderer「talk 的 base_url/token」强一致，
@@ -599,6 +609,42 @@ class ConfigManager:
                 self.logger.warning("产品基线补齐写入失败（忽略，功能保持关闭）")
         except Exception as exc:
             self.logger.warning("产品基线补齐异常（忽略）: %s", exc)
+
+    def _ensure_deploy_profile(self) -> None:
+        """部署能力预设档首启播种（WP-1 纯云起步档，2026-08）。
+
+        ``AITR_DEPLOY_PROFILE=<name>``（桌面壳 launcher 打包态注入 cloud_light，
+        独立 VM 可手动设）时，把 ``config/profiles/<name>.yaml`` 深合并进
+        config.local.yaml overlay（``save_overlay_patch``＝ruamel 保注释写入）。
+
+        三道闸，缺一不应用：
+        - env 显式声明（生产双实例/开发态无此 env → 本方法恒 no-op）；
+        - 本次 config 为**全新播种**（``_seeded_fresh``）——升级安装/既有配置的
+          机器永不被覆写，用户对任何键表达过的选择都保留；
+        - 合并视图尚无同名 ``deploy.profile`` 标记（幂等：同进程内热重载会再进
+          load()，标记挡住二次落盘）。
+        - 永不抛：预设缺失/坏档=按无预设跑（load_profile 已软失败返回空）。
+        """
+        try:
+            name = (os.environ.get("AITR_DEPLOY_PROFILE") or "").strip().lower()
+            if not name or not self._seeded_fresh:
+                return
+            from src.utils.deploy_profile import active_profile, load_profile
+            if active_profile(self.config) == name:
+                return
+            patch = load_profile(name)
+            if not patch:
+                self.logger.warning(
+                    "部署预设档 %r 缺失或解析失败（忽略，按无预设跑）", name)
+                return
+            if self.save_overlay_patch(patch):
+                self.logger.info(
+                    "部署预设档已播种进 overlay: %s（顶层键: %s）",
+                    name, ", ".join(sorted(map(str, patch))))
+            else:
+                self.logger.warning("部署预设档写入失败（忽略）: %s", name)
+        except Exception as exc:
+            self.logger.warning("部署预设档播种异常（忽略）: %s", exc)
 
     def _overlay_path(self) -> Path:
         """凭证 overlay 路径：主配置同目录下的 config.local.yaml。"""

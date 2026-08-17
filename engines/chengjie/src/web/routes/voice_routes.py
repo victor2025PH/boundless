@@ -34,9 +34,31 @@ from typing import Any, Dict, Optional
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
+from src.utils.agent_char_usage import record_named_chars, record_request_chars
 from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
+
+
+def _perm_ok(request: Request, perm: str) -> bool:
+    """按登录坐席判能力权限（P2 管理面改造：perms_json 按人覆写，master 恒 True）。
+
+    懒 import：``resolve_user_perm`` 由并行批次在 web_user_store 落地，模块未就绪
+    （ImportError）/ user_store 未暴露 / 未登录（token 链）/ 任何异常 → **一律放行**
+    （fail-open：权限守卫绝不能因装配时序把语音试听链打挂）。
+    """
+    try:
+        from src.utils.web_user_store import resolve_user_perm
+        us = getattr(request.app.state, "user_store", None)
+        sess = request.session
+        uname = str(sess.get("username") or "")
+        role = str(sess.get("role") or "")
+        if us is None or not uname:
+            return True
+        return resolve_user_perm(us, uname, role, perm)
+    except Exception:
+        return True
+
 
 _TTS_PREVIEW_DIR = Path("tmp_tts_preview")
 _TTS_PREVIEW_TTL_SEC = 600  # files older than 10 min are cleaned up
@@ -444,6 +466,18 @@ def register_voice_routes(app, api_auth, config_manager=None):
         if len(text) > 400:
             raise HTTPException(400, "text too long (max 400 chars)")
 
+        # 能力权限 + 坐席额度闸（2026-08-16）：拦在合成/后台派发之前——额度耗尽
+        # 还烧一次 GPU 克隆纯属浪费；后台 job 模式同样在提交时拦（与授权额度检查
+        # 同哲学）。enforce 默认关=软提醒先行，fail-open 语义在 check_request_quota 内。
+        if not _perm_ok(request, "chat.send_voice"):
+            raise HTTPException(403, tr(request, "err.perm.capability_denied"))
+        from src.utils.agent_char_usage import check_request_quota
+        _aq = check_request_quota(request)
+        if not _aq["allowed"]:
+            raise HTTPException(403, tr(
+                request, "err.quota.agent_chars_exhausted",
+                used=_aq["used"], quota=_aq["quota"]))
+
         # P0-4/C3：字符额度用尽且 licensing.enforce 开 → 402 + i18n（试听同样耗额度）
         # 后台模式下配额检查同样在**提交时**同步执行（提交即检查，任务里不再重复）。
         from src.licensing.quota_store import check_license_quota
@@ -452,6 +486,17 @@ def register_voice_routes(app, api_auth, config_manager=None):
 
         # 提交路径顺手清理过期 job（与轮询路径同口径；纯内存操作，不影响响应）
         _cleanup_tts_jobs()
+
+        # 坐席字符计量归因（2026-08-16）：成功判定在 _run_tts_preview / 后台 job 里
+        # （核心段刻意不带 request）——身份与配置在**派发时**捕获，成功处按捕获值
+        # 落账（record_named_chars 与 record_request_chars 同守卫：默认关零副作用）。
+        # 无 SessionMiddleware 的装配（测试裸 app）读 session 会抛断言 → 兜空串。
+        try:
+            _uq_user = str(request.session.get("username") or "")
+        except Exception:
+            _uq_user = ""
+        _uq_cfg = getattr(
+            getattr(request.app.state, "config_manager", None), "config", None)
 
         if bool(body.get("background")):
             running = sum(1 for e in _TTS_JOBS.values()
@@ -475,6 +520,8 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 if rv.get("ok"):
                     entry["status"] = "done"
                     entry["result"] = rv
+                    # 试听真合成成功记 tts 字符（后台 job 无 request，用派发时捕获值）
+                    record_named_chars(_uq_user, "tts", len(text), config=_uq_cfg)
                 else:
                     # 失败文案与同步路径完全一致（rv 的 error 字段原样透出）；
                     # reason=可行动分类，轮询路由据此补本地化 message
@@ -488,6 +535,10 @@ def register_voice_routes(app, api_auth, config_manager=None):
             return {"ok": True, "job_id": job_id}
 
         rv = await _run_tts_preview(body, text)
+        # 坐席字符计量归因（2026-08-16）：同步路径试听合成成功才记（len(text) 与
+        # 授权池 record_license_chars 同口径）；失败/异常不记。
+        if rv.get("ok"):
+            record_request_chars(request, "tts", len(text))
         # 失败分类 → 本地化人话（additive：error 原样保留，老前端零感知）
         if not rv.get("ok") and rv.get("reason"):
             _msg = _voice_fail_message(request, str(rv.get("reason")))

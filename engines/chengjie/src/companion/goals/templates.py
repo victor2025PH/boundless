@@ -16,8 +16,11 @@ from typing import Any, Dict, List, Optional
 
 # 目标生命周期状态（store/routes/UI 共用词表）
 GOAL_STATUSES = ("active", "paused", "done", "failed", "expired", "cancelled")
-# 自治档位：observe=只看不动（注入零推进）；suggest=注入草稿/回复链（默认）；
+# 自治档位：observe=只看不动（注入零推进）；suggest=注入草稿/回复链；
 # auto=另可搭主动触达桥（companion.goals.bridge，仅 auto_ai 会话）。
+# 缺省档＝auto（2026-08-12 运营方针「全自动为主」，见 goal_routes 建目标缺省
+# 与 cp-goal 表单缺省/推荐徽标）；本元组是**成员集**，顺序不承载展示语义
+# （UI 展示序在 cp-goal._autonomyCardsHtml 前端定，test_goal_routes 钉此顺序）。
 AUTONOMY_LEVELS = ("observe", "suggest", "auto")
 # 今日意图的推进力度
 PUSH_LEVELS = ("none", "soft", "direct")

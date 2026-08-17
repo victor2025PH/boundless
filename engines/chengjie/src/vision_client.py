@@ -351,11 +351,130 @@ class VisionClient:
         if not data_url:
             self.logger.warning("图片转 base64 失败或文件过大")
             return None
-        model = self.config.get("model", "llava")
         default_prompt = (
             "请简要描述图中与聊天/文字相关的内容；若是聊天截图，说明最后一条对方消息大意。"
         )
         text_prompt = (prompt or self.config.get("prompt") or default_prompt).strip()
+        content = [
+            {"type": "image_url", "image_url": {"url": data_url}},
+            {"type": "text", "text": text_prompt},
+        ]
+        return self._openai_vision_request(
+            content, allow_empty_failover=allow_empty_failover)
+
+    def describe_images_sync(
+        self, image_paths: List[str], prompt: Optional[str] = None,
+        *, allow_empty_failover: bool = False,
+    ) -> Optional[str]:
+        """多图同请求（同一段视频按时间序抽出的帧列表等）。
+
+        仅 OpenAI 兼容后端支持（qwen*-vl 原生多图）；zhipu 云兜底不支持 →
+        返回 None，调用方回落宫格单图路径。每帧按 ``vision.video_frame_dim``
+        （默认 640）独立缩放——比宫格把 N 帧挤进一张图清晰，且 4×640 约 3k
+        tokens，收在 Ollama /v1 默认 n_ctx=4096 内（2026-08-15 实测 6×768=6322
+        tokens 会 400 超窗；/v1 兼容层不认 options.num_ctx，只能客户端收敛预算）。
+        <2 张有效帧不值得走多图，返回 None。
+        """
+        if self._backend != "openai" or not self._oa_endpoints:
+            return None
+        try:
+            frame_dim = int(self.config.get("video_frame_dim", 640) or 640)
+        except Exception:
+            frame_dim = 640
+        data_urls: List[str] = []
+        for p in list(image_paths or []):
+            du = _image_to_data_url(str(p), max_dim=frame_dim, force_jpeg=True)
+            if du:
+                data_urls.append(du)
+        if len(data_urls) < 2:
+            return None
+        text_prompt = (prompt or self.config.get("prompt") or "请描述这组图片。").strip()
+        # Ollama 端点（:11434）走原生 /api/chat：它认 options.num_ctx——qwen3-vl 在
+        # Ollama 上每图有 ~1039 token 的地板（客户端缩图无效，2026-08-15 实测 4 图
+        # 4244 > 默认 n_ctx 4096），/v1 兼容层又不认 options，原生口是唯一解。
+        # 非 Ollama 的 /v1 端点（vLLM 等）仍走 SDK 多图 content。逐端点按健康序尝试。
+        healthy = [(u, c) for u, c in self._oa_endpoints if not _url_cooling(u)]
+        cooling = [(u, c) for u, c in self._oa_endpoints if _url_cooling(u)]
+        raws = [du.split("base64,", 1)[1] for du in data_urls]
+        for url, cli in healthy + cooling:
+            root = url[:-3].rstrip("/") if url.endswith("/v1") else url.rstrip("/")
+            try:
+                if ":11434" in root:
+                    out = self._ollama_native_images_request(
+                        root, raws, text_prompt)
+                else:
+                    content: List[dict] = [
+                        {"type": "image_url", "image_url": {"url": du}}
+                        for du in data_urls
+                    ]
+                    content.append({"type": "text", "text": text_prompt})
+                    resp = cli.chat.completions.create(
+                        model=self.config.get("model", "llava"),
+                        messages=[{"role": "user", "content": content}],
+                        max_tokens=int(self.config.get("max_tokens") or 300),
+                        temperature=0,
+                    )
+                    out = None
+                    if resp and getattr(resp, "choices", None):
+                        c0 = getattr(resp.choices[0].message, "content", None)
+                        out = c0.strip() if isinstance(c0, str) else None
+            except Exception as e:
+                _mark_url_bad(url)
+                self.logger.warning("Vision 多图端点 %s 调用失败(切换下一端点): %s",
+                                    url, e)
+                continue
+            if out and out.strip():
+                return out.strip()[:2000]
+            # 多图空答不换端点（同模型大概率同样空）——直接交调用方回落宫格
+            return None
+        return None
+
+    def _ollama_native_images_request(
+        self, root: str, images_b64: List[str], prompt: str,
+    ) -> Optional[str]:
+        """Ollama 原生 /api/chat 多图请求（options.num_ctx 生效；keep_alive 刻意
+        不带——请求会继承模型当前驻留设置，不覆写 176 侧的常驻钉决策）。"""
+        import httpx
+        try:
+            num_ctx = int(self.config.get("video_multi_num_ctx", 8192) or 8192)
+        except Exception:
+            num_ctx = 8192
+        payload = {
+            "model": self.config.get("model", "llava"),
+            "messages": [{"role": "user", "content": prompt,
+                          "images": list(images_b64)}],
+            "stream": False,
+            "options": {
+                "num_ctx": num_ctx,
+                "temperature": 0,
+                "num_predict": int(self.config.get("max_tokens") or 300),
+            },
+        }
+        timeout = float(self.config.get("timeout", 120))
+        r = httpx.post(root + "/api/chat", json=payload,
+                       timeout=httpx.Timeout(timeout, connect=5.0))
+        r.raise_for_status()
+        data = r.json()
+        out = ((data.get("message") or {}).get("content") or "").strip()
+        return out or None
+
+    async def describe_images(
+        self, image_paths: List[str], prompt: Optional[str] = None,
+        *, allow_empty_failover: bool = False,
+    ) -> Optional[str]:
+        """异步封装：线程池执行多图同步调用（与 describe_image 同模式）。"""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: self.describe_images_sync(
+                image_paths, prompt, allow_empty_failover=allow_empty_failover),
+        )
+
+    def _openai_vision_request(
+        self, content: List[dict], *, allow_empty_failover: bool = False,
+    ) -> Optional[str]:
+        """单/多图共用的端点循环：健康优先→冷却殿后→空答按开关最多换 1 端点。"""
+        model = self.config.get("model", "llava")
         # 健康端点在前，冷却中的殿后（全冷却时仍会硬试，避免全灭期彻底不服务）
         healthy = [(u, c) for u, c in self._oa_endpoints if not _url_cooling(u)]
         cooling = [(u, c) for u, c in self._oa_endpoints if _url_cooling(u)]
@@ -366,15 +485,7 @@ class VisionClient:
             try:
                 resp = cli.chat.completions.create(
                     model=model,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "image_url", "image_url": {"url": data_url}},
-                                {"type": "text", "text": text_prompt},
-                            ],
-                        }
-                    ],
+                    messages=[{"role": "user", "content": content}],
                     max_tokens=int(self.config.get("max_tokens") or 300),
                     # 识图是抽取任务不是创作任务：贪心解码保确定性（2026-07-26 实锤：
                     # 默认采样温度下同图偶发漏抄 Name 等字段——同图同 prompt 应同答）。
@@ -385,11 +496,11 @@ class VisionClient:
                 self.logger.warning("Vision 端点 %s 调用失败(切换下一端点): %s", url, e)
                 continue
             if resp and getattr(resp, "choices", None) and len(resp.choices) > 0:
-                content = getattr(resp.choices[0].message, "content", None)
-                if content and isinstance(content, str) and content.strip():
+                out = getattr(resp.choices[0].message, "content", None)
+                if out and isinstance(out, str) and out.strip():
                     if empty_failover_used:
                         _record_vision_label("empty_failover_rescued")
-                    return content.strip()[:2000]
+                    return out.strip()[:2000]
             # 端点通但模型空答：默认保持旧语义直接返回（同模型换端点大概率同样空，
             # 别白烧第二块 GPU）；empty_failover 开且后面还有端点时最多换 1 个端点再试
             # ——空答也可能是端点瞬时负载/截断，LAN 双活下挽回成本可控。空答不算端点
@@ -511,6 +622,13 @@ class VisionClient:
 
         if (txt or "").strip():
             return txt.strip(), dbg
+
+        # 无兜底纪律硬闸（2026-08-17 老板拍板）：vision.no_cloud_fallback=true 时
+        # 智谱云回落**结构性关闭**——此前只靠 overlay 清空 zhipu_api_key 软死，
+        # 谁贴回一把 key 兜底就复活（土地雷）。开闸后失败如实返 None，
+        # 由调用方按「没看懂图就不装懂」处置（跳过自动回复 + delivery_block）。
+        if bool(merged.get("no_cloud_fallback") or gv.get("no_cloud_fallback")):
+            return None, f"{dbg}|no_cloud_fallback"
 
         creds = _zhipu_credentials(gv, merged)
         if not creds:

@@ -36,6 +36,16 @@ window」，扫不出「两个标签页之间的互斥/自动交接到底成不�
      window.open 命名寻址够不到组外 → Chrome 落成标签页＝「点坐席工作台变网页版」，
      2026-08-03 实测）；wsub 子页深链维持默认放行。CDP 不支持 display-mode 仿真，
      用 init script 垫 matchMedia 激活 _win_unique 的 APP_WIN 分支。
+  8. 「返回工作台」去重（P1-③ 2026-08-11 + P2 耐心探活/中央提示）：
+     子页（辅助窗）里点顶栏「聊天」/ 调 __wsGoHome —— 别处有活跃坐席 → 本窗**留在
+     原页**不变身第二个坐席（BC 探活交接，总窗口数不增），且必须出 toast 提示切换
+     （中央 aitr:ws-handoff 监听——静默会诱导用户再点＝窗口翻倍）；坐席冻结仿真
+     （心跳新鲜但 BC 静默，写假 aitr.mw.primary 记录）→ 同样留在原页（耐心探活两轮
+     后视同在场，绝不双开）；心跳清除（坐席真没了）→ 本窗**原地导航**成为唯一坐席
+     （同样不新开窗口）。
+
+  注：场景 4 前会先关掉场景 1-3 的两个坐席窗——P1-③ 起普通 /workspace 入口也走
+  BC 探活判重，留着它们「首开命名窗口」会被正确交接掉（那正是场景 8 要测的行为）。
 
 注意：``127.0.0.1`` 在部分 Chromium 环境不可达，默认用 ``localhost``。
 token 从实例数据根读取，**绝不打印**。
@@ -45,6 +55,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time as _time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -211,6 +222,13 @@ def run(base: str, token: str, *, shots: Optional[Path] = None,
         ck.check("窗口2 退回待机", _wait_standby(t2, want=True)["isStandby"] is True)
         ck.check("窗口2 出待机细条", t2.evaluate(_STATE_JS)["pillVisible"] is True)
 
+        # 场景 1-3 的坐席窗到此使命完成，先关掉：P1-③ 起普通 /workspace 入口也走
+        # BC 探活判重，留着它们，场景 4 的「首开命名窗口」会被正确交接掉（不再新开）
+        # ——那是场景 8 的专属断言，这里保持场景 4-6 测命名窗口机制的干净前提。
+        t1.close()
+        t2.close()
+        _time.sleep(0.6)   # 等 pagehide 释放主控位/关闭落定（此刻 ctx 无页面可 wait）
+
         print("== 4. 管理后台入口：命名窗口复用（再点不再新开标签页） ==")
         ta = ctx.new_page()
         ta.goto(base + "/", wait_until="domcontentloaded")
@@ -304,6 +322,69 @@ def run(base: str, token: str, *, shots: Optional[Path] = None,
         ck.check("app 窗：wsub 子页深链维持默认放行（false）",
                  pw.evaluate("window.__openUniqueUrl('/workspace/tasks','workspace')") is False)
         ctx2.close()
+
+        print("== 8. 「返回工作台」去重：辅助窗不再变身第二个坐席（P1-③ + P2） ==")
+        # 8a. 坐席在位：子页（辅助窗）点顶栏「聊天」→ BC 探活命中 → 本窗留在原页，
+        #     总窗口数不增（旧行为＝原地导航成第二个坐席，正是本次事故根源）；
+        #     且必须出 toast（中央 aitr:ws-handoff 监听——静默＝用户以为没点上再点一次）
+        n8 = len(ctx.pages)
+        sub_url_before = wsub.url
+        toasts0 = wsub.evaluate("document.querySelectorAll('.tk-toast').length")
+        wsub.bring_to_front()
+        try:
+            wsub.locator("#nav-inbox").click(timeout=8000)
+        except Exception:
+            pass   # 点不到让下面的断言如实变红
+        wsub.wait_for_timeout(1200)   # 覆盖 250ms 探活窗 + toast 渲染
+        ck.check("坐席在位：辅助窗留在原页（不变身第二个坐席）",
+                 wsub.url == sub_url_before, f"url={wsub.url}")
+        ck.check("坐席在位：总窗口数不增", len(ctx.pages) == n8,
+                 f"pages={len(ctx.pages)}")
+        toasts1 = wsub.evaluate("document.querySelectorAll('.tk-toast').length")
+        ck.check("坐席在位：交接出 toast 提示（点了不是没反应）", toasts1 >= toasts0 + 1,
+                 f"toasts {toasts0} -> {toasts1}")
+        _seat_path3 = wpop.url.split("#")[0].split("?")[0].rstrip("/")
+        ck.check("坐席专窗仍是唯一坐席（/workspace）",
+                 _seat_path3.endswith("/workspace"), f"url={wpop.url}")
+        ck.check("程序化入口 __wsGoHome 同语义（返回 true=已接手）",
+                 wsub.evaluate("window.__wsGoHome({})") is True)
+        wsub.wait_for_timeout(600)
+        ck.check("程序化入口：辅助窗仍在原页", wsub.url == sub_url_before,
+                 f"url={wsub.url}")
+        if shots:
+            wsub.screenshot(path=str(shots / "mw_gohome_stay_put.png"))
+        # 8b. 坐席关闭 + 冻结仿真（P2）：心跳新鲜但 BC 静默（Chrome 内存节省器冻结的
+        #     坐席答不了 ping）→ 耐心探活两轮后视同在场：留在原页 + 提示，绝不双开
+        wpop.close()
+        _time.sleep(0.6)
+        wsub.evaluate(
+            "localStorage.setItem('aitr.mw.primary::/workspace',"
+            " JSON.stringify({id:'ghost-frozen-sim', ts: Date.now()}))")
+        n8b = len(ctx.pages)
+        try:
+            wsub.locator("#nav-inbox").click(timeout=8000)
+        except Exception:
+            pass
+        wsub.wait_for_timeout(1900)   # 覆盖 250ms + 800ms 两轮探活 + 决策
+        ck.check("坐席冻结仿真：辅助窗留在原页（心跳新鲜不双开）",
+                 wsub.url == sub_url_before, f"url={wsub.url}")
+        ck.check("坐席冻结仿真：总窗口数不增", len(ctx.pages) == n8b,
+                 f"pages={len(ctx.pages)}")
+        # 8c. 心跳清除（坐席真没了）→ 再点「聊天」→ 本窗原地导航成为唯一坐席（不新开）
+        wsub.evaluate("localStorage.removeItem('aitr.mw.primary::/workspace')")
+        try:
+            wsub.locator("#nav-inbox").click(timeout=8000)
+        except Exception:
+            pass
+        try:
+            wsub.wait_for_url("**/workspace", timeout=8000)
+        except Exception:
+            pass
+        _sub_path = wsub.url.split("#")[0].split("?")[0].rstrip("/")
+        ck.check("坐席已关：辅助窗原地导航成为唯一坐席",
+                 _sub_path.endswith("/workspace"), f"url={wsub.url}")
+        ck.check("坐席已关：总窗口数不增（原地导航而非新开）",
+                 len(ctx.pages) == n8b, f"pages={len(ctx.pages)}")
 
         browser.close()
     return ck.summary()

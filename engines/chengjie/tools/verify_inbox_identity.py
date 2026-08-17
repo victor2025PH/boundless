@@ -5,7 +5,7 @@
 「以哪个人设 · 哪个号」在回。会话级人设覆写（``inbox.persona_conv_override``）
 在出站链 / ``/api/persona/effective`` / 右栏 ``cp-persona`` 早已接好，而回复区
 ``#identity-bar`` 曾长期只读账号级 ``accountMeta``——i18n 键
-``inbox.ident.bar_conv``（「以 X（本会话覆写） · Y 回复」）从未被引用。
+``inbox.ident.chip_conv``（身份条「仅此会话」chip）从未被引用。
 修完后若不钉住，下一次「为了省一次请求」把异步校正删掉，回归是**静默的**：
 条还在、看起来也正常，只是会话覆写时又说错人。
 
@@ -20,12 +20,12 @@ SKIP exit 0）。**不写生产覆写**——会话级覆写路径用 Playwright
     python tools/verify_inbox_identity.py --self-proof # 探测器自证（必红才算过）
 
 覆盖的不变量：
-  0. 源码接线：``_identBarUpgrade`` + ``inbox.ident.bar_conv`` + ``conv_override``
+  0. 源码接线：``_identBarUpgrade`` + ``inbox.ident.chip_conv`` + ``conv_override``
      仍被引用（不依赖实例在线；防键再次变孤儿）。
   1. 有人设徽章的已读会话 → 身份条可见、非 warn、文案不含覆写标记。
   2. 无人设点的已读会话 → 身份条 warn（若实例无此类会话则 SKIP）。
   3. 打开后空闲轮询窗内 ``/api/persona/effective`` **不再增量请求**（TTL 缓存）。
-  4. route 注入 ``tier=conv_override`` → 文案含覆写标记（中或英）。
+  4. route 注入 ``tier=conv_override`` → 出现覆写 chip / 人话标记（中或英）。
   5. route 注入 HTTP 400 → 保留同步账号级结果（不崩、不空、无覆写标记）。
   6. 打开会话后 ``#identity-bar`` 必须 ``display:flex``（常驻，不是 hover 才显）。
   7. **切换即时性**（2026-07-30 第二批）：``cp-persona-changed``（ok）后身份条须在
@@ -60,20 +60,26 @@ IDLE_CACHE_SEC = 8.0
 ENGINE_ROOT = Path(__file__).resolve().parents[1]
 INBOX_TEMPLATE = ENGINE_ROOT / "src" / "web" / "templates" / "unified_inbox.html"
 
-_OVERRIDE_MARKERS = ("本会话覆写", "this-chat override")
+_OVERRIDE_MARKERS = (
+    "仅此会话", "this chat only",
+    "本会话覆写", "this-chat override",  # 旧括号句式,防未刷新页
+)
 
 _BAR_JS = """() => {
   const bar = document.getElementById('identity-bar');
   if (!bar) return {absent: true};
   const st = getComputedStyle(bar);
   const txt = ((bar.querySelector('.ib-txt') || {}).textContent || '').trim();
+  const chip = ((bar.querySelector('.ib-chip') || {}).textContent || '').trim();
   return {
     absent: false,
     display: st.display,
     h: Math.round(bar.getBoundingClientRect().height),
     visible: st.display !== 'none' && bar.offsetParent !== null && bar.getBoundingClientRect().height > 0,
     warn: bar.classList.contains('warn'),
+    override: bar.classList.contains('override'),
     text: txt,
+    chip: chip,
     title: bar.getAttribute('title') || '',
   };
 }"""
@@ -142,13 +148,14 @@ class Checker:
 
 
 def check_source_wiring(ck: Checker) -> None:
-    """不依赖实例：防 bar_conv / upgrade 再次变孤儿。"""
+    """不依赖实例：防 chip_conv / upgrade 再次变孤儿。"""
     print("== 0. 源码接线（静态）==")
     if not INBOX_TEMPLATE.exists():
         ck.check("unified_inbox.html 存在", False, str(INBOX_TEMPLATE))
         return
     src = INBOX_TEMPLATE.read_text(encoding="utf-8")
-    ck.check("源码引用 inbox.ident.bar_conv", "inbox.ident.bar_conv" in src)
+    ck.check("源码引用 inbox.ident.chip_conv", "inbox.ident.chip_conv" in src)
+    ck.check("源码渲染覆写 chip", "ib-chip" in src)
     ck.check("源码定义 _identBarUpgrade", "function _identBarUpgrade" in src)
     ck.check("upgrade 识别 conv_override",
              "conv_override" in src and "_identBarPersonaHtml" in src)
@@ -166,11 +173,30 @@ def check_source_wiring(ck: Checker) -> None:
     ck.check("行 diff 签名含 eff_persona",
              bool(_re.search(r"_convItemSig[\s\S]{0,1600}eff_persona", src)))
     ck.check("覆写 title 键已引用", "inbox.ident.row_override_t" in src)
+    ck.check("行徽章覆写绿点 class", "classList.toggle('ov'" in src or 'classList.toggle("ov"' in src)
+    ck.check("跳转转化埋点", "ident_bar_jump_bind" in src)
+    ck.check("转化按会话键对账",
+             "function _identJumpNoteConvert" in src and "_identJumpKey" in src)
+    ck.check("身份条跳转示能（ib-go）", 'class="ib-go"' in src)
 
 
 def _has_override_marker(text: str) -> bool:
     t = text or ""
     return any(m in t for m in _OVERRIDE_MARKERS)
+
+
+def _has_override_signal(bar: dict) -> bool:
+    """chip / .override 类 / 文案标记 任一即可——新呈现以 chip 为准。"""
+    if not bar:
+        return False
+    if bar.get("override") or (bar.get("chip") or "").strip():
+        return True
+    blob = " ".join([
+        bar.get("text") or "",
+        bar.get("chip") or "",
+        bar.get("title") or "",
+    ])
+    return _has_override_marker(blob)
 
 
 def _wait_bar(page: Any, *, timeout_ms: int = 8000) -> dict:
@@ -304,6 +330,22 @@ def run(base: str, token: str, *, headed: bool = False,
         t0 = time.time()
         while time.time() - t0 < 5.0 and len(hits) < 1:
             page.wait_for_timeout(100)
+        # ⚠ 量法坑（2026-08-15 实锤）：打开会话是一次「请求突发」——身份条
+        # （?platform= 三元组）+ cp-persona + cp-draft（?conversation_id=）各打一发，
+        # 彼此相隔可达 ~1s。旧量法在**首个**请求落地即开计空闲窗，突发的尾巴
+        # 落进窗内被误判成「TTL 缓存失效」。先等突发收敛（2.5s 无新请求，上限 10s）
+        # 再开窗。不会掩真 bug：若缓存真坏（轮询每 3s 重打），收敛永远等不到，
+        # 空闲窗内照样有增量、检查照样红。
+        settle_t0 = time.time()
+        last_n = len(hits)
+        last_change = time.time()
+        while time.time() - settle_t0 < 10.0:
+            page.wait_for_timeout(200)
+            if len(hits) != last_n:
+                last_n = len(hits)
+                last_change = time.time()
+            elif time.time() - last_change >= 2.5:
+                break
         after_open = len(hits)
         page.wait_for_timeout(int(IDLE_CACHE_SEC * 1000))
         after_idle = len(hits)
@@ -357,20 +399,22 @@ def run(base: str, token: str, *, headed: bool = False,
         if not row:
             ck.skip("覆写文案", "无已读有人设会话可开")
         else:
-            # 等异步 upgrade 替换同步文案
+            # 等异步 upgrade 替换同步文案（chip 在 .ib-txt 外，用 signal 而非整句括号）
             ok_ov = False
             text_ov = ""
+            bar_ov: dict = {}
             for _ in range(40):
-                b = page.evaluate(_BAR_JS)
-                text_ov = b.get("text") or ""
-                if mock_name in text_ov and _has_override_marker(text_ov):
+                bar_ov = page.evaluate(_BAR_JS)
+                text_ov = bar_ov.get("text") or ""
+                if mock_name in text_ov and _has_override_signal(bar_ov):
                     ok_ov = True
                     break
                 page.wait_for_timeout(150)
             ck.check("覆写态文案含 mock 人设名", mock_name in text_ov,
                      f"text={text_ov!r}")
-            ck.check("覆写态文案含覆写标记", ok_ov or _has_override_marker(text_ov),
-                     f"text={text_ov!r}")
+            ck.check("覆写态出现 chip / override 标记",
+                     ok_ov or _has_override_signal(bar_ov),
+                     f"text={text_ov!r} chip={bar_ov.get('chip')!r}")
             ck.check("覆写态非 warn",
                      page.evaluate(_BAR_JS).get("warn") is False)
 
@@ -463,7 +507,8 @@ def run(base: str, token: str, *, headed: bool = False,
                          ok_fresh, f"text={fresh!r}")
                 if ok_fresh:
                     ck.check("即时校正带覆写标记",
-                             _has_override_marker(fresh), f"text={fresh!r}")
+                             _has_override_signal(b),
+                             f"text={fresh!r} chip={b.get('chip')!r}")
                 page.unroute("**/api/persona/effective*")
 
         browser.close()
@@ -517,7 +562,8 @@ def run(base: str, token: str, *, headed: bool = False,
                       document.querySelectorAll(
                         '#conv-items .conv-persona-badge').forEach(b => {
                         out.push({t: (b.textContent || '').trim(),
-                                  title: b.getAttribute('title') || ''});
+                                  title: b.getAttribute('title') || '',
+                                  ov: b.classList.contains('ov')});
                       });
                       return {hit: out.find(x => x.title.indexOf(name) >= 0) || null,
                               sample: out.slice(0, 6)};
@@ -535,6 +581,8 @@ def run(base: str, token: str, *, headed: bool = False,
                 ck.check("行徽章 title 带覆写标记",
                          _has_override_marker(hit.get("title") or ""),
                          f"title={hit.get('title')!r}")
+                ck.check("行徽章带覆写绿点", bool(hit.get("ov")),
+                         f"ov={hit.get('ov')!r}")
                 ck.check("行徽章短名取自覆写人设",
                          (hit.get("t") or "") == row_name[0],
                          f"text={hit.get('t')!r}")

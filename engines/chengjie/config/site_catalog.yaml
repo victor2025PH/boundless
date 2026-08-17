@@ -59,23 +59,29 @@ offers: []
 # 承诺时还会换成「我这边不能私自给折扣」——真有试用却这么答＝对客户说谎，且正好
 # 发生在「能不能先试试」这个成交必经的异议上。
 #
-# ⚠ 只填**客户端真给得出**的：客户端首启向导「注册领 7 天完整版 · 2.5 万字符」
-#   （renderer/first-run-model.js 的 claim_sub/claim_ok；每台机器一次，绑本机）。
-# ⚠ 官网 OrderPanel 那个「14 天免费试用」属 **AvatarHub/FaceX 线**
-#   （website/lib/avatarhub-pricing.ts 的 trial 档），gated 线本目录刻意不收 →
-#   **不要**往 free_days 里加 14，否则等于授权苏婉承诺一个这两个产品没有的试用。
+# ⚠ 只填**客户端真给得出**的（2026-08-11 免费档升级后的事实口径）：
+#   装机即用 10 万字符尝鲜（无需注册）；首启向导/会员中心「注册领免费额度」＝
+#   100 万字符 · 无期限（每台机器一次，绑本机）；邀请好友注册双方各得 10 万字符
+#   （好友真实用满 1 万字符后邀请方到账）；更多字符可联系客服申请。
+# ⚠ 免费档已改为「按量、无期限」——**不再存在任何按天数计的免费试用**，
+#   free_days 必须留空：LLM 说「免费试用 7 天/14 天」都是编的，守卫照剥。
+#   官网 OrderPanel 那个「14 天免费试用」属 AvatarHub/FaceX 线，同样不得混入。
 claims:
-  # 授权免费时长（天）。守卫按天数比对而非按措辞：登记 7 → 「7 天」「一周」放行，
-  # 「14 天」「一个月」照剥。改动即时生效（目录 mtime 热加载，无需重启）。
-  free_days: [7]
+  # 授权免费时长（天）。守卫按天数比对而非按措辞。当前产品事实：免费额度按字符量
+  # 计（100 万，无期限），没有按天试用 → 留空=任何「免费 N 天」承诺照剥。
+  # 改动即时生效（目录 mtime 热加载，无需重启）。
+  free_days: []
   # texts 同时也是「客户数」类社会证明的白名单（P15）：守卫会剥「已有500家在用」
   # 这类带数字的临场发挥；官网案例页真有的数据写进 texts（含数字原样），LLM
   # 说到时即放行。没登记 = 任何具体客户数都按编的处理。
   texts:
-    - 注册领 7 天完整版 · 2.5 万字符，绑定本机使用
-    - 7 days, all channels, 25,000 characters — bound to this machine
-    - 装完即用，无需注册，体验额度在顶栏徽章和会员中心随时可查
-    - Works right after install — no signup needed
+    - 注册领免费额度：100 万字符 · 无期限，绑定本机使用
+    - 免费 100 万字符，用完可邀请好友、联系客服申请或购买
+    - Register to claim 1,000,000 free characters — no expiry, bound to this machine
+    - 装完即用，无需注册，10 万字符尝鲜额度在顶栏徽章和会员中心随时可查
+    - Works right after install — no signup needed, 100,000 starter characters included
+    - 邀请好友注册，双方各得 10 万字符
+    - Invite a friend — you both get 100,000 characters
 
 # offers:
 #   - id: entry-trial-2608

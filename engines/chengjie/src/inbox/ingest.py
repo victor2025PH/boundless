@@ -125,13 +125,22 @@ def _msg_from_obj(
 
 
 def _conv_from_chat(chat: Dict[str, Any]) -> InboxConversation:
+    # 「客户语言」列只接受**入站**证据：normalize_chat 把 chat["language"] 取自末条
+    # 消息且不分方向，出站镜像（AI 译文/外语人设文案）会把**我们自己说的语言**写进
+    # 客户语言列——2026-08-15 messenger 实锤：中文客户的会话被自己的英文回复镜像
+    # 反复钉成 en，出站翻译于是永远瞄准英文，形成自锁。方向为 out 时降级 unknown，
+    # store.upsert_conversation 的 CASE 护栏（unknown 不覆盖）会保住已存的真值。
+    lang = str(chat.get("language") or "unknown")
+    _lm = chat.get("last_message")
+    if isinstance(_lm, dict) and str(_lm.get("direction") or "in") == "out":
+        lang = "unknown"
     return InboxConversation(
         conversation_id=str(chat.get("conversation_id") or ""),
         platform=str(chat.get("platform") or ""),
         account_id=str(chat.get("account_id") or "default"),
         chat_key=str(chat.get("chat_key") or ""),
         display_name=str(chat.get("name") or ""),
-        language=str(chat.get("language") or "unknown"),
+        language=lang,
         last_text=str(chat.get("last_msg") or ""),
         last_ts=float(chat.get("last_ts") or 0),
         unread=int(chat.get("unread") or 0),

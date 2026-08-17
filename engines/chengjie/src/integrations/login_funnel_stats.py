@@ -62,9 +62,16 @@ _REASON_CODES = frozenset({
     # 处置各不相同（改号 / 换号 / 去 App 注册 / 重输 / 重发），绝不能压成 login_failed。
     "phone_invalid", "phone_banned", "phone_unoccupied",
     "code_invalid", "code_expired",
+    # Telegram 扫码后 DC 迁移/令牌导入失败（2026-08-14 实锤：跨区账号扫码即败，
+    # 此前被吞成 expired → 前端自动换码无限循环）。与 tg_unreachable 分开：迁移失败
+    # 发生在「初始 DC 通、目标 DC 不通/握手超时」，处置是重试连接而非配代理。
+    "dc_migrate_failed",
 })
 
-_STAGES = ("started", "qr_shown", "pin_issued", "authorized", "failed")
+# scanned＝用户已扫码（Telegram MigrateTo/Success 只在客户端确认后出现）。
+# 「scanned 有量而 authorized 近零」＝扫码后的 DC 迁移链坏了——正是 2026-08-14
+# 198 事故的形态；没有这一段，漏斗只能看到「started 很多、失败原因不明」。
+_STAGES = ("started", "qr_shown", "scanned", "pin_issued", "authorized", "failed")
 
 
 def _san_key(platform: str, mode: str) -> str:
@@ -157,6 +164,8 @@ class LoginFunnelStats:
                     "key": key,
                     "started": f["started"],
                     "qr_shown": f["qr_shown"],
+                    # 旧进程升级途中 row 可能缺 scanned 键（_slot 建行按当时 _STAGES）
+                    "scanned": f.get("scanned", 0),
                     "pin_issued": f["pin_issued"],
                     "authorized": f["authorized"],
                     "failed": f["failed"],

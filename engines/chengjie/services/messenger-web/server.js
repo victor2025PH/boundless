@@ -39,14 +39,60 @@ import path from "path";
 import fs from "fs";
 import { chromium } from "playwright";
 import { classifyLoginPage, actionableCode, STAGE, isE2eePinText } from "./login_classify.js";
+import { relayStepFromStage, sanitizeSubmit, fillPlanFor, RELAY_STEP } from "./login_relay.js";
+import { resolveLaunch } from "./login_window.js";
 import {
   synthMsgId, parseReactionFromAria, isUnsentPreview, isUnsentTombstone,
-  classifyInboxHint, adaptiveReqEvery, canOpenThread, normalizePin, autoPinGate,
+  classifyInboxHint, resolveInboxHint, pinHealBump, adaptiveReqEvery, canOpenThread, normalizePin, autoPinGate,
+  warmBackfillBatch, sendFastPathEligible, composerTextMatches,
   parseMsgAria, threadReadSample,
   normalizeRequestAction, REQUEST_ACTION_LABELS,
+  matchQuotedTarget, msgrPaletteTarget, reactAriaCandidates,
+  pickUnreadForced, classifyRequestsScan, sentRingPush, sentRingHit, echoTextHit,
+  classifyComposerBlock, pickManualOutMirror,
 } from "./msg_ops.js";
+import {
+  parseCurrentUserInitialData, pickSelfAvatar, summarizeCandidates,
+  nextSelfProfileRecaptureMs,
+} from "./self_profile.js";
+import crypto from "crypto";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// ── worker 代码版本指纹（P0 2026-08-15，「半部署」盲区解药）─────────────────────
+// 实锤：server.js 的 E2EE PIN 自愈修复 08-15 00:17 已落盘，但在跑进程是 08-14 08:27
+// 启动的——磁盘代码 ≠ 在跑代码，且没有任何观测面能看见这个分叉（Python 实例重启
+// 与本 Node worker 重启是两个独立动作，极易只做前者）。/health 与 /accounts 现在
+// 自报 boot_ts + 代码指纹 + code_stale（=核心文件 mtime 晚于进程启动），看板/巡检
+// 一眼可判「写好的修复到底上没上」。指纹只在启动算一次；stale 探测每次现算（stat
+// 两个文件，微秒级）。任何异常回落安全值——观测面绝不影响业务。
+const WORKER_BOOT_TS = Date.now();
+// 指纹集合必须覆盖**全部**运行时装载的自家模块（P4 实锤：首版只含 server.js+
+// msg_ops.js，login_classify.js 的修复上线后指纹纹丝不动——半部署探测器自己
+// 留了半部署盲区）。新增模块文件时同步补这里。
+const _CORE_FILES = [
+  fileURLToPath(import.meta.url),
+  ...["msg_ops.js", "login_classify.js", "login_relay.js", "login_window.js", "self_profile.js"]
+    .map((f) => path.join(path.dirname(fileURLToPath(import.meta.url)), f)),
+];
+const WORKER_CODE_FP = (() => {
+  try {
+    const h = crypto.createHash("sha1");
+    for (const f of _CORE_FILES) h.update(fs.readFileSync(f));
+    return h.digest("hex").slice(0, 12);
+  } catch (_) { return ""; }
+})();
+function workerCodeInfo() {
+  let stale = false;
+  try {
+    stale = _CORE_FILES.some((f) => fs.statSync(f).mtimeMs > WORKER_BOOT_TS + 2000);
+  } catch (_) { stale = false; }
+  return {
+    boot_ts: Math.floor(WORKER_BOOT_TS / 1000),
+    code_fp: WORKER_CODE_FP,
+    code_stale: stale,
+  };
+}
 const SESSIONS_DIR = process.env.MSG_SESSIONS_DIR || path.join(__dirname, "sessions");
 const PORT = Number(process.env.PORT || 8791);
 const logger = pino({ level: process.env.LOG_LEVEL || "info" });
@@ -73,6 +119,11 @@ const POLL_MS = Number(process.env.MSG_POLL_MS || 4000);
 // P1 之前这是个从未被使用的死配置；现在真实接线——baseline 建立后逐条（每 tick 1 条）
 // readThreadTail 读末尾消息推给 Python /thread-history（空会话幂等，历史不惊动 AI）。
 const MSG_BACKFILL = Number(process.env.MSG_BACKFILL || 20);
+// 预热提速：重启/首连后回填期，一个 poll tick 串行读几条线程（非并发，不制造风控尖峰），
+// 把「E2EE 会话逐条解密」的稀疏窗口从 ~N×POLL 压到 ~N/batch×POLL。默认 3；设 1 = 逐字节旧
+// 行为（每 tick 1 条）。条间小憩 GAP_MS 防速限。_polling 再入闸保证 tick 变长不与下一 tick 重叠。
+const BACKFILL_WARM_BATCH = Number(process.env.MSG_BACKFILL_WARM_BATCH || 3);
+const BACKFILL_WARM_GAP_MS = Math.max(0, Number(process.env.MSG_BACKFILL_WARM_GAP_MS || 600));
 // 是否轮询「消息请求」文件夹（陌生人首次来讯落这里；默认开）。
 const MSG_REQUESTS = String(process.env.MSG_REQUESTS ?? "1") !== "0";
 // 「进线程读正文」权威模式（默认开）：列表预览仅当变更探测器；一旦某会话有变更，进线程按
@@ -82,6 +133,30 @@ const MSG_REQUESTS = String(process.env.MSG_REQUESTS ?? "1") !== "0";
 const MSG_READ_THREAD = String(process.env.MSG_READ_THREAD ?? "1") !== "0";
 // 每轮最多进线程读取的会话数（限流，避免大量导航像 bot / 触发风控）。
 const MSG_MAX_OPENS = Number(process.env.MSG_MAX_OPENS || 5);
+// 未读驱动强制读取（P0 2026-08-15）：预览指纹不变但有未读证据（行级未读标记 /
+// 全局未读+新鲜加密占位行）→ 强制进线程读一次。解「E2EE 占位预览永不变化 → 客户
+// 新消息隐形丢失」盲区（当晚实锤丢 2 条），顺带覆盖「客户逐字重发同一句」盲区；
+// 打开线程同时给 E2EE PIN 就地自愈一次机会。强制候选排在常规候选之后、共享
+// MSG_MAX_OPENS 总预算（总导航量不增），另有单轮上限与每线程冷却。"0" 关。
+const MSG_UNREAD_FORCE = String(process.env.MSG_UNREAD_FORCE ?? "1") !== "0";
+// 同一线程两次强制读取的最小间隔（默认 10min——密钥未恢复的 E2EE 线程读不出正文，
+// 不设冷却会每 4s 反复导航=风控敞口；每条新客户消息重新点亮未读，最多一个冷却窗后重试）。
+const MSG_UNREAD_FORCE_COOLDOWN_MS = Math.max(
+  60 * 1000, Number(process.env.MSG_UNREAD_FORCE_COOLDOWN_MS || 10 * 60 * 1000));
+// 单轮最多强制读取条数（叠加在 MSG_MAX_OPENS 预算内）。
+const MSG_UNREAD_FORCE_CAP = Math.max(1, Number(process.env.MSG_UNREAD_FORCE_CAP || 2));
+// fresh_placeholder 级（弱证据兜底）认定「行相对时间新鲜」的窗口。
+const MSG_UNREAD_FRESH_MS = Math.max(
+  60 * 1000, Number(process.env.MSG_UNREAD_FRESH_MS || 30 * 60 * 1000));
+// 手机/原生页手发出站实时回流（2026-08-16）：预览变成 "你:/You:" 且**非本 worker
+// 自发**（自发经 isSelfEcho/镜像环拦下）→ 进线程镜像该出站进统一收件箱。旧行为
+// 是直接跳过——运营在手机 App 里手发的消息要等客户回复触发下次读线程才回流，
+// 首条更是被水位线基线吞掉＝坐席端永久隐形（实录：老板手机聊单坐席全程看不见）。
+// "0" 关（回旧行为）。
+const MSG_MANUAL_OUT_SYNC = String(process.env.MSG_MANUAL_OUT_SYNC ?? "1") !== "0";
+// 单轮最多为「镜像手发出站」进线程的条数（追加在候选队尾＝优先级最低，仍受
+// MSG_MAX_OPENS 总预算约束——真实客户入站永远先行）。
+const MSG_MANUAL_OUT_CAP = Math.max(1, Number(process.env.MSG_MANUAL_OUT_CAP || 2));
 // 消息请求（陌生人首讯）是否也进线程读全文（默认开）。真号联调确认「打开≠接受」——仅导航读取
 // 不会接受/移出请求箱；读到全文 → 人设化首复更准；读不到（E2EE 不可读）→ 回落列表预览逻辑
 // （占位=加密横幅非真消息，仍按旧行为跳过，不入库脏数据）。
@@ -384,15 +459,17 @@ async function postInboxHealth(entry) {
   entry._lastUnread = unread; // /accounts 观测用
   const cs = entry._convStats || { count: 0, ph: 0 };
   const e2eeRatio = cs.count > 0 ? cs.ph / cs.count : -1;
-  let hint = classifyInboxHint({
-    unread, readAttempts: win.length, readFails: fails,
-    e2eeRatio, convCount: cs.count,
+  // P0（2026-08-14，173 实测盲区）：PIN 缺失/未通过是确定性证据（_pinState 只在
+  // detectPinPrompt 亲证浮层在场后置位），resolveInboxHint 让它**独立**出精确码——
+  // 旧写法 `if (hint && pinState…)` 被 classifyInboxHint 的占位比 ≥0.6 闸住，173
+  // 占位比 0.39 时 PIN 明明缺失却全程零提示，坐席只看到泛泛「通道离线」。
+  const hint = resolveInboxHint({
+    baseHint: classifyInboxHint({
+      unread, readAttempts: win.length, readFails: fails,
+      e2eeRatio, convCount: cs.count,
+    }),
+    pinState: entry._pinState,
   });
-  // P3：确认过 PIN 浮层在场而 PIN 缺失/未通过 → 升格为精确提示码（运维一眼知道
-  // 缺的是 PIN 而非泛泛的「重登」；配好 PIN 下一拍即自愈）。
-  if (hint && (entry._pinState === "missing" || entry._pinState === "failed")) {
-    hint = "e2ee_pin_required";
-  }
   entry._inboxHintCode = hint; // /accounts 出网（前端热区 ACTIVE 时先把字段备好）
   await postJson(PY_INBOX_HEALTH_URL, {
     platform: "messenger",
@@ -411,6 +488,19 @@ async function postInboxHealth(entry) {
     // P2：半死态产品码（detail 携带——路由热区 ACTIVE 时不改 Python 形参，
     // 运维/日志仍可读；正式字段等路由放开后升格）。
     detail: hint || "",
+    // P1 PIN 自愈观测（2026-08-14）：状态 + 尝试/成败计数随心跳落 Python 健康行
+    //（老 worker 不带这些键 → Python 侧按未知处理，不误报）。
+    pin_state: String(entry._pinState || ""),
+    pin_heal_attempts: Number((entry._pinHeal || {}).attempts || 0),
+    pin_heal_ok: Number((entry._pinHeal || {}).ok || 0),
+    pin_heal_fail: Number((entry._pinHeal || {}).fail || 0),
+    // P0 2026-08-15 未读驱动强制读取（附加字段，Python 侧未消费前按未知键忽略）：
+    // 触发计数 + worker 代码指纹/半部署位——「改了 server.js 没重启 Node」在心跳可见。
+    unread_forced_picked: Number((entry._unreadForceStats || {}).picked || 0),
+    worker_code_fp: WORKER_CODE_FP,
+    worker_code_stale: workerCodeInfo().code_stale,
+    // P2 2026-08-15：请求页可疑空转 streak（区分「真没人来」与「改版读不到」）
+    requests_suspect_streak: Number(entry._reqSuspectStreak || 0),
     ts: Math.floor(Date.now() / 1000),
   });
 }
@@ -450,7 +540,7 @@ async function postDirectory(entry, convs, { force = false } = {}) {
     // 名字位是状态行（"Active now"/"在线"）或列表头（"Chats · N unread"）＝整行
     // 被误抓——落进目录就是脏占位名（生产实锤 3 条），跳过；该线程有真消息时
     // ingest 链路会带真名建会话，宁缺勿脏。
-    if (STATUS_LINE_RE.test(c.name) || /unread|未读|^Chats\b|^聊天\b/i.test(c.name)) continue;
+    if (DIRTY_NAME_RE.test(c.name) || /unread|未读|^Chats\b|^聊天\b/i.test(c.name)) continue;
     rows.push({
       jid: String(c.key),
       name: String(c.name || ""),
@@ -493,7 +583,16 @@ async function backfillStep(entry) {
     // 回填队列无 preview 可判 → 按占位宽松处理（空读=skip 不入窗；锁死旧线程在
     // 回填里大量出现，把它们记失败会在启动后立刻把窗口打成全败）。成功仍入窗。
     recordThreadRead(entry, tail, { key: item.key });
-    if (!Array.isArray(tail) || !tail.length) return;
+    if (!Array.isArray(tail) || !tail.length) {
+      // E2EE 冷启动读空（Labyrinth 尚未解密该线程）：进一次性重试队列——主队排空后再补读
+      // 一轮（那时解密多半已跟上）。每线程最多重试一次（_retried 钉死），绝不循环。
+      if (!item._retried) {
+        item._retried = true;
+        if (!entry._backfillRetry) entry._backfillRetry = [];
+        entry._backfillRetry.push(item);
+      }
+      return;
+    }
     const nowSec = Math.floor(Date.now() / 1000);
     await postJson(PY_THREAD_HISTORY_URL, {
       platform: "messenger",
@@ -545,6 +644,16 @@ const E2EE_PLACEHOLDER_RE = /端到端加密|end-to-end encrypt|无法显示消�
 // 回一句"这听起来像全名"）。用于：① 选预览时跳过 ② 名字位若命中状态词说明整行被误抓→弃用该行。
 const STATUS_LINE_RE = /^(在线|活跃|刚刚活跃|在线状态|正在输入.*|对方正在输入.*|active(\s+now)?|online|typing.*)$/i;
 
+// 「绝不可能是人名」的脏名黑名单（2026-08-14，修「好友名单显示 Active now」事故）：
+// STATUS_LINE_RE 只挡严格的 "Active now"，挡不住 "Active 3m ago"/"Active yesterday"，
+// 而 "Message request(s)" 此前完全零过滤——DOM 改版后这些行会排到 gridcell 第一行，
+// 旧「name = lines[0]」直接把它们当昵称入库并覆盖真名。本正则是**取名/目录/入库**
+// 三处共用的名字校验superset（STATUS_LINE_RE 仍保留给「预览/消息正文」语义）。
+// ⚠ 跨语言契约：pattern 与 src/integrations/protocol_bridge.py::_DIRTY_NAME_PATTERN
+// **逐字一致**，由 tests/test_peer_name_sanitizer.py 抽取比对 + 金标样本钉住；
+// 改这里必须同步改 Python 侧并跑该门禁。
+const DIRTY_NAME_RE = /^(?:[·•]|回复？|是否跟进？|在线|在线状态|刚刚活跃|昨天活跃|(?:\d+\s*(?:分钟|小时|天|周)前)?活跃|正在输入.*|对方正在输入.*|typing.*|online|active(?:\s+(?:now|today|yesterday))?|active\s+\d+\s*(?:m|min|mins|minutes?|h|hr|hrs|hours?|d|days?|w|weeks?)?(?:\s+ago)?|消息请求|message\s+requests?|未读消息.*|unread\s+messages?.*|chats?\s*[·•].*|聊天\s*[·•].*)$/i;
+
 // ── 自回声抑制（根治「自己回自己的消息」死循环）───────────────────────────────
 // 轮询只能从「列表预览」推断新消息，没有 msg_id/方向/时间戳。本方一发出回复，该回复就成为
 // 该会话的最新预览 → 下一轮被误判为「新入站」→ 再次自动回复 → 死循环。前缀正则(你：/You:)不
@@ -570,21 +679,90 @@ function recordSent(entry, key, text) {
   entry.sentLog.push({ key: String(key), norm: normPreview(text), ts: Date.now() });
   const cutoff = Date.now() - SENT_ECHO_TTL_MS;
   entry.sentLog = entry.sentLog.filter((e) => e.ts >= cutoff).slice(-100);
+  // P3 2026-08-15 镜像自发环（无 TTL、按条数封顶）：sentLog 的 10min TTL 对
+  // 「发送后很久才被首次读取」的线程（E2EE 占位线程常态）失效——自己发的消息
+  // 会被 mirrorManualOutbound 误当人工消息以新时间戳重灌，进而污染 Python 出站
+  // 近重复守卫的 180s 窗（生产实锤：把 AI 对客户新问题的回复静默拦掉）。
+  if (!entry.mirrorSentRing) entry.mirrorSentRing = new Map();
+  sentRingPush(entry.mirrorSentRing, key, normPreview(text));
 }
 
-// 某预览是否吻合近期本方发出的消息（截断/前缀无关：取前 24 字，任一为另一前缀即判吻合）。
+// 某预览是否吻合近期本方发出的消息。比对核心收口到 msg_ops.echoTextHit（与镜像
+// 自发环同一判据）：全串相等，或双方 ≥16 字且 24 字前缀互为前缀（预览截断容错）。
+// ⚠ 短文本只认全等——2026-08-16 实锤：刚发「在」，客户 10 分钟窗内回「在吗」，
+// 旧的无条件前缀匹配把它判成回声 → 跳过+推进 seen，客户消息永久隐形（线程
+// 发送后停在打开态=永无未读标记，未读兜底也救不了）。
 function isSelfEcho(entry, key, preview) {
   if (!entry || !entry.sentLog || !entry.sentLog.length) return false;
   const np = normPreview(preview);
   if (!np) return false;
   const cutoff = Date.now() - SENT_ECHO_TTL_MS;
-  const a = np.slice(0, 24);
   for (const e of entry.sentLog) {
     if (e.ts < cutoff || e.key !== String(key)) continue;
-    const b = e.norm.slice(0, 24);
-    if (a && b && (e.norm.startsWith(a) || np.startsWith(b))) return true;
+    if (echoTextHit(np, e.norm)) return true;
   }
   return false;
+}
+
+// ── 驾驶舱 P2（2026-08-13）：人工出站回流 ────────────────────────────────────
+// 坐席在**原生 messenger.com 页**手动发的消息此前只活在 FB 侧——工作台看不见，
+// 交还 AI 后引擎不知道人说过什么（交接失忆，双面分工方案 v2 的已知断点）。
+// 本函数在**既有 tail 读取**上顺路镜像 direction:"out"（零新增导航/零新副作用）：
+//   - 水位线基线：每会话首次观察只建水位不上报——sidecar 重启后 sentLog（内存态）
+//     已清空，tail 里的历史出站多为编排器早已镜像过的 AI 消息，重灌＝重复行；
+//   - 自发回声跳过：sentLog 命中（sidecar 自己发的，编排器已镜像）不重复上报；
+//     同文撞车误判＝宁缺勿重，可接受；
+//   - E2EE 占位/撤回墓碑跳过；找不到水位（窗口滑出）保守只报最后一条（与入站
+//     burst 同哲学）；synthMsgId 稳定 id，python 端 INSERT OR IGNORE 二次兜底。
+// 诚实边界（2026-08-16 起分两档）：
+//   - 普通读取（客户回复触发等）：捕获时机＝下一次进线程读，人工消息在该客户
+//     消息**之前**入库，AI 拟稿历史完整；不为镜像实时性新增导航成本。
+//   - manualTrigger（预筛发现非自发的 "你:/You:" 预览、专门为镜像进线程）：
+//     手发后 ~一个 poll tick 内即回流（≈4-10s），首次观察也允许镜像**触发那条**
+//     （取件决策收口 msg_ops.pickManualOutMirror——文本须与触发预览吻合，
+//     重启前历史绝不连带）。
+async function mirrorManualOutbound(entry, chatKey, tail, opts = {}) {
+  try {
+    if (!Array.isArray(tail) || !tail.length) return;
+    if (!entry._outMirrorMark) entry._outMirrorMark = new Map();
+    const key = String(chatKey);
+    const outs = tail.filter((m) => m && m.direction === "out"
+      && (m.text || m.media_ref)
+      && !(m.text && !m.media_ref && (E2EE_PLACEHOLDER_RE.test(m.text)
+        || isUnsentTombstone(m.text))));
+    if (!outs.length) return;
+    const sigOf = (m) => `${normPreview(m.text)}|${m.media_ref || ""}|${m.ts}`;
+    const { fresh, newMark } = pickManualOutMirror(outs, {
+      mark: entry._outMirrorMark.get(key),
+      sigOf,
+      normOf: (m) => normPreview(m.text || ""),
+      rowPreviewNorm: String(opts.rowPreviewNorm || ""),
+      manualTrigger: !!opts.manualTrigger,
+      burstMax: MSG_BURST_MAX,
+    });
+    if (newMark) entry._outMirrorMark.set(key, newMark);
+    for (const m of fresh) {
+      if (isSelfEcho(entry, key, m.text || "")) continue; // sidecar 自发，编排器已镜像
+      // P3 2026-08-15：无 TTL 自发环二次核对——sentLog 10min TTL 过期后，服务
+      // 自己发的消息在迟到的首读里会伪装成「人工消息」（ts=now 重灌 → 污染出站
+      // 近重复守卫窗，实锤拦掉 AI 对新问题的回复）。环按条数封顶，重启丢失无害
+      // （水位线基线本就防重启重灌）。
+      if (sentRingHit(entry.mirrorSentRing, key, normPreview(m.text || ""))) continue;
+      const mid = stampMsgId(entry, key, m);
+      try {
+        await postIngest({
+          platform: "messenger", account_id: entry.accountId, chat_key: key,
+          // 行昵称透传：手发到「全新线程」时 Python 侧靠它把会话建成真名而非裸 id
+          //（净化在服务端 sanitize_peer_name，脏名会被拦）。
+          name: String(opts.rowName || ""), text: m.text || "",
+          media_type: m.media_type || "", media_ref: m.media_ref || "",
+          ts: Math.floor(Date.now() / 1000), msg_id: mid,
+          direction: "out", is_request: false, request_category: "",
+        });
+        bumpOp(entry, "manual_out_mirrored");
+      } catch (_) { /* best-effort：镜像失败绝不影响入站主流程 */ }
+    }
+  } catch (_) { /* 镜像是增强，绝不抛 */ }
 }
 
 // ── 进线程读正文：解析每条消息的无障碍标签 → 权威方向 + 发送者 + 全文 ─────────────
@@ -899,40 +1077,78 @@ async function snapshot(page) {
   }
 }
 
-/** best-effort 读取账号自身昵称/头像（供 self_profile 富集）。 */
+/** best-effort 读取账号自身昵称/头像（供 self_profile 富集）。
+ *
+ *  页内只做**有界的候选收集**，「哪张才是自己的脸」交给 self_profile.js 的纯函数判定
+ *  （可 node --test 直跑）。头像选取是 fail-closed 的：认不出就交空，绝不再退回
+ *  「任意 img / 任意 fbcdn 图」——那条兜底 2026-08-15 实锤把**会话对端**的头像写成了
+ *  账号自身头像（Calixa Lopez 的号挂着 Micah Bindo 的脸），且被 URL 指纹去重永久固化。
+ *  账号卡缺头像只是少信息，挂错脸是错信息（运营据此判断这号绑的是谁）。 */
 async function readSelfProfile(page) {
-  const out = { name: "", avatarUrl: "" };
+  const out = { name: "", avatarUrl: "", strategy: "", reason: "" };
   try {
-    const info = await page.evaluate(() => {
-      // 主源：FB 页面标配的 CurrentUserInitialData 内嵌 JSON（含 NAME/USER_ID，
-      // 多年稳定）。旧实现抓「页面第一个 img[alt]」——那多半是**某个会话对方**的头像，
-      // 自己的昵称因此恒空（账号卡分不清绑的是谁的根因之一）。
-      let name = "";
+    const raw = await page.evaluate(() => {
+      // 自身身份唯一权威源：FB 页面标配的 CurrentUserInitialData 内嵌 JSON（NAME/USER_ID，
+      // 多年稳定）。DOM 上任何可见文字/图片都可能属于对端，不能当自身身份用。
+      const slices = [];
       try {
         for (const s of document.querySelectorAll("script")) {
           const t = s.textContent || "";
           const i = t.indexOf("CurrentUserInitialData");
           if (i < 0) continue;
-          const m = t.slice(i, i + 2000).match(/"NAME"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-          if (m) {
-            try { name = JSON.parse('"' + m[1] + '"'); } catch (_) { name = m[1]; }
-            if (name) break;
-          }
+          slices.push(t.slice(i, i + 2000));
+          if (slices.length >= 4) break;
         }
       } catch (_) {}
-      // 头像兜底：优先 FB CDN 真头像，退而任意 img[alt]（旧行为）。
-      let avatarUrl = "";
-      const cdn = document.querySelector('img[alt][src*="fbcdn"], img[alt][src*="scontent"]');
-      const img = cdn || document.querySelector("image, img[alt]");
-      if (img) {
-        avatarUrl = img.getAttribute("src") || img.getAttribute("xlink:href") || "";
-        if (!name) name = img.getAttribute("alt") || "";
-      }
-      return { name, avatarUrl };
+      // 候选图（含 SVG <image>）：带上 alt、尺寸、**祖先链属性**——判定要用的全部证据。
+      // 祖先链而非只取 href：实测这版页面头像 alt 全空、也没有 /me/ 链接，自身身份的
+      // 唯一痕迹是账号菜单按钮的 aria-label（role/aria 都得带上，见 self_profile.js）。
+      const cands = [];
+      try {
+        for (const el of document.querySelectorAll("img, image")) {
+          if (cands.length >= 40) break;
+          const src = el.getAttribute("src") || el.getAttribute("xlink:href")
+            || el.getAttribute("href") || "";
+          if (!src || src.startsWith("data:")) continue;
+          const chain = [];
+          let p = el;
+          for (let hop = 0; p && hop < 8; hop++) {
+            chain.push({
+              tag: p.tagName,
+              role: (p.getAttribute && p.getAttribute("role")) || "",
+              aria: (p.getAttribute && p.getAttribute("aria-label")) || "",
+              href: (p.getAttribute && p.getAttribute("href")) || "",
+            });
+            p = p.parentElement;
+          }
+          let w = Number(el.naturalWidth) || 0;
+          let h = Number(el.naturalHeight) || 0;
+          if (!w || !h) {
+            try {
+              const r = el.getBoundingClientRect();
+              w = w || Math.round(r.width);
+              h = h || Math.round(r.height);
+            } catch (_) {}
+          }
+          cands.push({ src, alt: el.getAttribute("alt") || "", w, h, chain });
+        }
+      } catch (_) {}
+      return { slices, cands };
     });
-    if (info) {
-      out.name = String(info.name || "");
-      out.avatarUrl = String(info.avatarUrl || "");
+    const ident = parseCurrentUserInitialData(raw && raw.slices);
+    const pick = pickSelfAvatar(raw && raw.cands, {
+      selfName: ident.name, selfId: ident.userId,
+    });
+    out.name = ident.name;
+    out.avatarUrl = pick.url;
+    out.strategy = pick.strategy;
+    out.reason = pick.reason;
+    if (!pick.url) {
+      // 认不出时留下证据（有界摘要，不打完整签名 URL）——下次调选择器靠这个而不是猜。
+      logger.debug({
+        reason: pick.reason, selfName: ident.name, selfId: ident.userId,
+        candidates: summarizeCandidates(raw && raw.cands),
+      }, "self avatar unresolved (fail-closed, will retry on recapture)");
     }
   } catch (_) {}
   return out;
@@ -955,7 +1171,7 @@ const BROWSER_CHANNEL = process.env.MSG_BROWSER_CHANNEL ?? "chrome";
 /** 浏览器启动参数（一号一代理 + 反自动化检测）。
  *  Facebook/Meta 会检测自动化浏览器（navigator.webdriver、AutomationControlled、
  *  HeadlessChrome UA 等），命中即登录后一导航就作废会话弹回登录页 → 必须 stealth。 */
-function launchOptions(proxyUrl, channel = BROWSER_CHANNEL, headless = HEADLESS) {
+function launchOptions(proxyUrl, channel = BROWSER_CHANNEL, headless = HEADLESS, extraArgs = []) {
   const opts = {
     headless: headless,
     locale: LOCALE,
@@ -966,6 +1182,8 @@ function launchOptions(proxyUrl, channel = BROWSER_CHANNEL, headless = HEADLESS)
       "--disable-features=IsolateOrigins,site-per-process",
       "--no-default-browser-check",
       "--no-first-run",
+      // 交互登录窗口模式的附加参数（离屏定位 / --headless=new），由 resolveLaunch 决定。
+      ...(Array.isArray(extraArgs) ? extraArgs : []),
     ],
     ignoreDefaultArgs: ["--enable-automation"],
   };
@@ -990,16 +1208,16 @@ function isChannelUnavailable(err) {
 
 /** 起持久化上下文：优先真 Chrome 通道，机器没装 Chrome 才回落捆绑 Chromium。
  *  headless 由调用方按「交互登录 vs restore/恢复」决定（见 startLogin）。 */
-async function launchPersistent(userDataDir, proxyUrl, headless = HEADLESS) {
+async function launchPersistent(userDataDir, proxyUrl, headless = HEADLESS, extraArgs = []) {
   try {
     return await chromium.launchPersistentContext(
-      userDataDir, launchOptions(proxyUrl, BROWSER_CHANNEL, headless));
+      userDataDir, launchOptions(proxyUrl, BROWSER_CHANNEL, headless, extraArgs));
   } catch (e) {
     if (!BROWSER_CHANNEL || !isChannelUnavailable(e)) throw e;
     logger.warn({ e: String(e), channel: BROWSER_CHANNEL },
       "channel unavailable on this host → falling back to bundled chromium (weaker stealth)");
     return await chromium.launchPersistentContext(
-      userDataDir, launchOptions(proxyUrl, "", headless));
+      userDataDir, launchOptions(proxyUrl, "", headless, extraArgs));
   }
 }
 
@@ -1142,6 +1360,9 @@ async function tryAutoE2eePin(loginId, entry, page) {
   if (isLoginForm) return false;
   entry._pinTries = (entry._pinTries || 0) + 1;
   entry._pinLastTs = Date.now();
+  // P1 观测（2026-08-14）：尝试/成败此前只进日志——「托管 PIN 后有没有真自愈」
+  // 要翻 sidecar 日志才知道。计数经 /accounts + 心跳出网，纯函数推进可单测。
+  entry._pinHeal = pinHealBump(entry._pinHeal, "attempt");
   try {
     const input = page.locator(
       'input[type="password"]:visible, input[inputmode="numeric"]:visible, '
@@ -1150,6 +1371,7 @@ async function tryAutoE2eePin(loginId, entry, page) {
     if (!(await input.count())) {
       logger.warn({ loginId }, "e2ee pin prompt visible but no input located");
       entry._pinState = "failed";
+      entry._pinHeal = pinHealBump(entry._pinHeal, "fail");
       return false;
     }
     await input.click({ timeout: 3000 });
@@ -1169,6 +1391,7 @@ async function tryAutoE2eePin(loginId, entry, page) {
       logger.info({ loginId, tries: entry._pinTries },
         "e2ee recovery pin accepted (device keys restored)");
       entry._pinState = "ok";
+      entry._pinHeal = pinHealBump(entry._pinHeal, "ok");
       // 密钥恢复后旧样本全部失真：清读取窗 + 占位统计——否则本拍心跳会据「恢复前
       // 的高占位比例」误报一次半死（placeholder_blind 支），要等下一次列表读取
       // （最长 60s）才自愈。清零后即按恢复后的真实读取重新积累。
@@ -1179,10 +1402,12 @@ async function tryAutoE2eePin(loginId, entry, page) {
     logger.warn({ loginId, tries: entry._pinTries },
       "e2ee pin attempt did not clear the prompt (wrong pin / new layout?)");
     entry._pinState = "failed";
+    entry._pinHeal = pinHealBump(entry._pinHeal, "fail");
     return false;
   } catch (e) {
     logger.warn({ e: String((e && e.message) || e), loginId }, "auto e2ee pin failed");
     entry._pinState = "failed";
+    entry._pinHeal = pinHealBump(entry._pinHeal, "fail");
     return false;
   }
 }
@@ -1250,7 +1475,11 @@ async function readConversations(page) {
       await page.goto(MESSENGER_URL, { waitUntil: "domcontentloaded", timeout: 15000 });
       await page.waitForTimeout(1500);
     }
-    const rows = await page.$$eval(SEL_CONV_LINKS, (els) => {
+    const rows = await page.$$eval(SEL_CONV_LINKS, (els, re) => {
+      // 正则以 source 串传入（$$eval 回调在浏览器上下文执行，闭不到 Node 常量）
+      const DIRTY = new RegExp(re.dirty, "i");
+      const OUTBOUND = new RegExp(re.outbound, "i");
+      const TIME_ROW = /^[·•]?\s*\d+\s*(分钟?|小时|天|周|月|年|min|m|h|d|w|mo|y)\b/i;
       const seen = new Set();
       const out = [];
       for (const a of els) {
@@ -1274,23 +1503,37 @@ async function readConversations(page) {
         const text = ((row.innerText || a.innerText || "") + "").trim();
         if (!text) continue; // 跳过空文本（当前打开会话的头部锚点）
         const lines = text.split("\n").map((s) => s.trim()).filter(Boolean);
-        const name = lines[0] || "";
-        // 预览 = 名字之后第一行「非分隔符/非相对时间/非行动标签」。
+        // 名字 = **首个非脏行**（2026-08-14 修「Active now 当昵称」）：DOM 改版后
+        // 状态行（Active 3m ago）/导航行（Message request）可能排到第一行，旧
+        // 「lines[0] 即名字」直接把它们当昵称。脏行/时间行/未读标记/出站前缀一律
+        // 跳过；全部命中 → name 空串（诚实缺名，服务端回落通讯录名/chat_key）。
+        let nameIdx = -1;
+        for (let i = 0; i < lines.length; i++) {
+          const l = lines[i];
+          if (DIRTY.test(l) || TIME_ROW.test(l) || OUTBOUND.test(l)
+              || /^(未读消息|Unread message)/i.test(l)) continue;
+          nameIdx = i;
+          break;
+        }
+        const name = nameIdx >= 0 ? lines[nameIdx] : "";
+        // 预览 = 名字之外第一行「非分隔符/非相对时间/非行动标签/非状态行」。
         // rel = 第一个相对时间行（"3m"/"·1d"/"2 小时"）——P1 目录同步用它换算会话
         // 排序时间（认不出 → 0 占位沉底，绝不猜）。时间行判定先于预览判定，
         // 且补上纯 "m"（旧正则只认 min，"3m" 理论上可能漏进预览）。
+        // 注意：出站前缀行（"你: ok"）**必须保留**为预览候选——下游靠
+        // OUTBOUND_PREVIEW_RE 识别「本方已回」跳过，滤掉会误开线程。
         let preview = "";
         let rel = "";
         let unread = false;
-        for (let i = 1; i < lines.length; i++) {
+        for (let i = 0; i < lines.length; i++) {
+          if (i === nameIdx) continue;
           const l = lines[i];
           if (/^(未读消息|Unread message)/i.test(l)) { unread = true; continue; }
-          if (/^[·•]?\s*\d+\s*(分钟?|小时|天|周|月|年|min|m|h|d|w|mo|y)\b/i.test(l)) {
+          if (TIME_ROW.test(l)) {
             if (!rel) rel = l.replace(/^[·•]\s*/, "");
             continue;
           }
-          if (l === "·" || l === "回复？" || l === "是否跟进？" ||
-              /^(在线|活跃|刚刚活跃|在线状态|正在输入|对方正在输入|active(\s+now)?|online|typing)/i.test(l)) continue;
+          if (DIRTY.test(l)) continue;
           if (!preview) preview = l;
         }
         // 头像抓取（冗余兜底，防单一选择器随 messenger 改版失配 → 头像整片丢）：
@@ -1311,7 +1554,7 @@ async function readConversations(page) {
         out.push({ key, name, preview, avatar, rel, unread });
       }
       return out.slice(0, 200);
-    });
+    }, { dirty: DIRTY_NAME_RE.source, outbound: OUTBOUND_PREVIEW_RE.source });
     return rows || [];
   } catch (e) {
     logger.debug({ e }, "readConversations failed");
@@ -1334,7 +1577,12 @@ const MSG_SPAM_EVERY = Math.max(0, Number(process.env.MSG_SPAM_EVERY ?? 4));
 async function scrapeRequestRows(page) {
   try {
     return await page.$$eval(
-      'a[href*="/requests/t/"], a[href*="/e2ee/requests/t/"]', (els) => {
+      'a[href*="/requests/t/"], a[href*="/e2ee/requests/t/"]', (els, re) => {
+        // 与 readConversations 同款取名护栏（2026-08-14）：请求区此前连预览级状态词
+        // 过滤都没有，"Message request"/"Active 3m ago" 直接当昵称是本区最高发。
+        const DIRTY = new RegExp(re.dirty, "i");
+        const OUTBOUND = new RegExp(re.outbound, "i");
+        const TIME_ROW = /^[·•]?\s*\d+\s*(分钟?|小时|天|周|月|年|min|m|h|d|w|mo|y)\b/i;
         const seen = new Set();
         const out = [];
         for (const a of els) {
@@ -1351,12 +1599,23 @@ async function scrapeRequestRows(page) {
           const text = ((row.innerText || a.innerText || "") + "").trim();
           if (!text) continue;
           const lines = text.split("\n").map((s) => s.trim()).filter(Boolean);
-          const name = lines[0] || "";
-          let preview = "";
-          for (let i = 1; i < lines.length; i++) {
+          let nameIdx = -1;
+          for (let i = 0; i < lines.length; i++) {
             const l = lines[i];
-            if (l === "·" || l === "未读消息：" || l === "未读消息:" ||
-                /^\d+\s*(分钟?|小时|天|周|月|年|min|h|d|w|mo|y)/.test(l)) continue;
+            if (DIRTY.test(l) || TIME_ROW.test(l) || OUTBOUND.test(l)
+                || /^(未读消息|Unread message)/i.test(l)) continue;
+            nameIdx = i;
+            break;
+          }
+          const name = nameIdx >= 0 ? lines[nameIdx] : "";
+          let preview = "";
+          for (let i = 0; i < lines.length; i++) {
+            if (i === nameIdx) continue;
+            const l = lines[i];
+            // 「未读消息：<正文>」承载真实内容（下游 PREVIEW_PREFIX_RE 剥前缀），
+            // 必须保留为预览；裸「未读消息」标记则落入 DIRTY 跳过。
+            if (/^(未读消息|Unread message)[:：]\s*\S/i.test(l)) { preview = l; break; }
+            if (TIME_ROW.test(l) || DIRTY.test(l)) continue;
             preview = l;
             break;
           }
@@ -1366,7 +1625,7 @@ async function scrapeRequestRows(page) {
           out.push({ key, name, preview, avatar });
         }
         return out.slice(0, 100);
-      });
+      }, { dirty: DIRTY_NAME_RE.source, outbound: OUTBOUND_PREVIEW_RE.source });
   } catch (_) {
     return [];
   }
@@ -1418,9 +1677,15 @@ async function readRequests(reqPage, entry = null) {
     // 风控封禁探测（放在等待之后，确保 SPA 已渲染错误页文案）：命中 → 立刻返回 blocked，
     // 绝不再切 tab / 等待 / 点开，交由调用方进入退避冷却。
     if (await isRequestsBlocked(reqPage)) {
-      return { blocked: true, rows: [] };
+      return { blocked: true, rows: [], structSeen: true };
     }
     await reqPage.waitForTimeout(1200);
+    // 结构证据（P2 2026-08-15）：页面是否渲染出请求页骨架（子 tab / 标题 / 空态文案）。
+    // 「零行 + 有骨架」＝文件夹真的空；「零行 + 无骨架」＝改版/漂移可疑（classifyRequestsScan）。
+    const structSeen = await reqPage.evaluate(() => {
+      const t = (document.body && document.body.innerText) || "";
+      return /可能认识|You may know|垃圾信息|\bSpam\b|消息请求|Message requests?|没有消息请求|No message requests?/i.test(t);
+    }).catch(() => false);
     // ① 默认视图＝「可能认识」
     const mayKnow = await scrapeRequestRows(reqPage);
     // ② 切「垃圾信息」子 tab 抓 spam（就地换列表）；抓完切回，避免详情态残留。
@@ -1445,10 +1710,11 @@ async function readRequests(reqPage, entry = null) {
     // spam key 优先归 spam（防同一线程在两 tab 都出现时误判为可自动回）
     for (const r of mayKnow) { if (!spamKeys.has(r.key)) out.push(norm(r, "general")); }
     for (const r of spam) out.push(norm(r, "spam"));
-    return { blocked: false, rows: out };
+    return { blocked: false, rows: out, structSeen };
   } catch (e) {
     logger.debug({ e }, "readRequests failed");
-    return { blocked: false, rows: [] };
+    // 导航/求值异常＝无结构证据 → 上游按 suspect 计（与「真空文件夹」区分）
+    return { blocked: false, rows: [], structSeen: false };
   }
 }
 
@@ -1458,6 +1724,9 @@ async function readRequests(reqPage, entry = null) {
 async function pollInbound(entry) {
   if (!MSG_SYNC || !PY_INGEST_URL || !entry.accountId || entry.status !== "authorized") return;
   if (entry._polling) return;
+  // P3：写操作（send/react）进行中 → 本 tick 礼让（轮询是只读 $$eval 不抢焦点，
+  // 但 entry.page 上的 DOM 读在写操作 hover/导航期间多为白读；下个 tick 自然补上）。
+  if (entry._opLock) return;
   entry._polling = true;
   entry._readUsed = false;   // 本轮是否读过线程（用过 readPage）→ 决定 finally 是否回收读页
   try {
@@ -1500,6 +1769,23 @@ async function pollInbound(entry) {
           requests = res.rows;
           if (requests.length) entry._reqEmptyStreak = 0;
           else entry._reqEmptyStreak = (entry._reqEmptyStreak || 0) + 1;
+          // P2 2026-08-15 空转判别：零行分「真空（有页面骨架）」与「可疑（无任何
+          // 结构证据=漂移/导航失败）」。suspect 连续累计，rows/empty_ok 即清零；
+          // streak 每 8 次 warn 一条（节流），读数经 /accounts + 心跳出网。
+          const scan = classifyRequestsScan({
+            blocked: false, rowCount: requests.length,
+            structSeen: !!res.structSeen,
+          });
+          if (scan === "suspect") {
+            entry._reqSuspectStreak = (entry._reqSuspectStreak || 0) + 1;
+            if (entry._reqSuspectStreak % 8 === 1) {
+              logger.warn(
+                { accountId: entry.accountId, streak: entry._reqSuspectStreak },
+                "requests folder scan suspect (no rows, no structural evidence)");
+            }
+          } else {
+            entry._reqSuspectStreak = 0;
+          }
           if (entry._reqBlockStreak) {
             logger.info(
               { accountId: entry.accountId },
@@ -1535,6 +1821,7 @@ async function pollInbound(entry) {
 
     // ── 主列表会话：变更探测 → 权威「进线程读正文」───────────────────────────────
     const candidates = [];
+    const manualOutCands = []; // 手发出站镜像候选（优先级最低，见下方装配）
     for (const c of convs) {
       const preview = (c.preview || "").trim();
       if (!preview) continue;
@@ -1555,21 +1842,86 @@ async function pollInbound(entry) {
         continue;
       }
       if (isSelfEcho(entry, c.key, preview)
-          || OUTBOUND_PREVIEW_RE.test(preview)
-          || STATUS_LINE_RE.test(_nm) || STATUS_LINE_RE.test(preview)
+          || DIRTY_NAME_RE.test(_nm) || STATUS_LINE_RE.test(preview)
           || (normPreview(preview) === normPreview(_nm) && normPreview(_nm))) {
         entry.seen.set(c.key, sig);
+        continue;
+      }
+      // "你:/You:" 出站预览（2026-08-16 分流）：本 worker 自发已被上面 isSelfEcho
+      // 拦下（发送时同步 recordSent），走到这里的出站预览＝**别的登录端手发**
+      // （手机 App / 原生网页）。旧行为直接跳过 → 手发消息在坐席端隐形（要等客户
+      // 回复才顺路回流，首条还会被水位基线吞掉）。现改为：进线程镜像回流
+      //（manualOut 候选，优先级最低）；镜像环二次核对防旧自发漏网误灌。
+      if (OUTBOUND_PREVIEW_RE.test(preview)) {
+        if (MSG_MANUAL_OUT_SYNC
+            && !sentRingHit(entry.mirrorSentRing, c.key, normPreview(preview))) {
+          manualOutCands.push({ c, sig, manualOut: true });
+        } else {
+          entry.seen.set(c.key, sig);
+        }
         continue;
       }
       // 有变更且疑似对端 → 候选（含 E2EE 占位预览：列表读不到，但进线程能读到正文）。
       candidates.push({ c, sig });
     }
 
+    // ── P0 未读驱动强制读取（2026-08-15，E2EE 占位盲区解药）───────────────────
+    // 预览指纹是唯一变更触发源 → E2EE 占位预览永不变化 → 客户新消息隐形（当晚实锤：
+    // 侧栏未读=2 挂 30+ 分钟、read_attempts 纹丝不动、两条真实消息丢失）。这里把
+    // 「有未读证据但没进常规候选」的线程追加到候选**尾部**（低于真 sig 变化的优先级、
+    // 共享 MSG_MAX_OPENS 预算=总导航量不增），走完全同一条 读取→自愈→ingest 管线；
+    // 读不出正文也给 readThreadTail 内的 E2EE PIN 就地自愈一次机会。
+    if (MSG_UNREAD_FORCE && !firstPass && MSG_READ_THREAD) {
+      if (!entry._unreadForceLog) entry._unreadForceLog = new Map();
+      const forcedPicks = pickUnreadForced(convs, {
+        candidateKeys: new Set(candidates.map((x) => x.c.key)),
+        attemptLog: entry._unreadForceLog,
+        now: Date.now(),
+        globalUnread: Number(entry._lastUnread || 0),
+        cooldownMs: MSG_UNREAD_FORCE_COOLDOWN_MS,
+        cap: MSG_UNREAD_FORCE_CAP,
+        freshMs: MSG_UNREAD_FRESH_MS,
+        placeholderRe: E2EE_PLACEHOLDER_RE,
+        relToTs: parseRelativeTime,
+      });
+      for (const p of forcedPicks) {
+        const c = convs.find((x) => x && x.key === p.key);
+        if (!c) continue;
+        entry._unreadForceLog.set(p.key, Date.now());
+        // 冷却账本有界化：只留最近 64 条（会话数级别，防长跑泄漏）
+        while (entry._unreadForceLog.size > 64) {
+          entry._unreadForceLog.delete(entry._unreadForceLog.keys().next().value);
+        }
+        if (!entry._unreadForceStats) {
+          entry._unreadForceStats = { picked: 0, row_unread: 0, fresh_placeholder: 0 };
+        }
+        entry._unreadForceStats.picked += 1;
+        entry._unreadForceStats[p.why] = (entry._unreadForceStats[p.why] || 0) + 1;
+        const sig = `${c.key}:${(c.preview || "").trim().slice(0, 160)}`;
+        candidates.push({ c, sig, forced: p.why });
+        logger.info({ accountId: entry.accountId, key: p.key, why: p.why },
+          "unread-forced read queued");
+      }
+    }
+
+    // ── 手发出站镜像候选装配（2026-08-16）───────────────────────────────────
+    // 追加在队尾＝真实入站/未读兜底永远先用 MSG_MAX_OPENS 预算；单轮
+    // MSG_MANUAL_OUT_CAP 封顶；没排上的不推进 seen → 预览指纹仍算「有变更」，
+    // 下轮自然重试，不丢。
+    if (MSG_MANUAL_OUT_SYNC && !firstPass && MSG_READ_THREAD && manualOutCands.length) {
+      for (const mo of manualOutCands.slice(0, MSG_MANUAL_OUT_CAP)) {
+        candidates.push(mo);
+        bumpOp(entry, "manual_out_reads");
+        logger.info({ accountId: entry.accountId, key: mo.c.key },
+          "manual-out mirror read queued");
+      }
+    }
+
     if (!firstPass && MSG_READ_THREAD) {
       // 进线程按无障碍标签读**方向权威 + 全文 + 真实发送者**，据「最后一条对端消息」上报；
       // 本方出站永不推进 lastInboundSig → 从根上杜绝自回复。每轮限流 MSG_MAX_OPENS。
       let opened = 0;
-      for (const { c, sig } of candidates) {
+      for (const { c, sig, manualOut } of candidates) {
         if (opened >= MSG_MAX_OPENS) break; // 超额留待下轮（seen 未推进→自然重试）
         opened++;
         // 副作用清单：inbound 允许开线程（「正在处理」）；见 canOpenThread。
@@ -1582,6 +1934,13 @@ async function pollInbound(entry) {
         entry.seen.set(c.key, sig); // 已成功读取（含空）→ 推进变更基线
         // P2：表情 / 撤回墓碑（不二次导航）
         try { await processThreadOps(entry, c.key, tail); } catch (_) { /* best-effort */ }
+        // 驾驶舱 P2：人工出站回流（顺路镜像，先于下方入站上报——AI 拟稿历史才完整）
+        // manualOut 触发的读取带触发预览（首观察也能镜像触发那条，见 pickManualOutMirror）。
+        await mirrorManualOutbound(entry, c.key, tail, {
+          manualTrigger: !!manualOut,
+          rowPreviewNorm: normPreview((c.preview || "").trim()),
+          rowName: (c.name || "").trim(),
+        });
         // 只在**整段会话的最后一条**是对端消息时才回：若最后一条是本方发出（我们已回过），
         // 绝不回；这也确定性杜绝了「回自己」——本方出站永远不会成为待回的 last。
         const last = tail.length ? tail[tail.length - 1] : null;
@@ -1676,7 +2035,7 @@ async function pollInbound(entry) {
       const _nm = (c.name || "").trim();
       // 噪声护栏（请求本是入站，出站/自回声一般不命中，保留防御）→ 推进 seen 跳过
       if (OUTBOUND_PREVIEW_RE.test(preview) || isSelfEcho(entry, c.key, preview)
-          || STATUS_LINE_RE.test(_nm) || STATUS_LINE_RE.test(preview)
+          || DIRTY_NAME_RE.test(_nm) || STATUS_LINE_RE.test(preview)
           || (normPreview(preview) === normPreview(_nm) && normPreview(_nm))) {
         entry.seen.set(c.key, sig);
         continue;
@@ -1752,9 +2111,25 @@ async function pollInbound(entry) {
         }
       }
     }
-    // P1 首连回填推进：每 tick 消化 1 条（20 条 ≈ 80s 内完成）。
+    // P1 首连回填推进 + 预热提速：每 tick 串行消化一小批（batch 条，非并发），把稀疏窗口
+    // 压短（20 条 batch=3 ≈ 7 tick）。串行复用同一 readPage、条间 GAP 小憩，导航形态与逐条
+    // 一致、只是更密；_polling 再入闸保证本 tick 变长不与下一 tick 重叠。设 batch=1 即旧行为。
     if (!firstPass && entry._backfillQueue && entry._backfillQueue.length) {
-      try { await backfillStep(entry); } catch (_) { /* 单条失败不影响轮询 */ }
+      const batch = warmBackfillBatch(entry._backfillQueue.length, BACKFILL_WARM_BATCH);
+      for (let i = 0; i < batch && entry._backfillQueue && entry._backfillQueue.length; i++) {
+        try { await backfillStep(entry); } catch (_) { /* 单条失败不影响轮询 */ }
+        if (i < batch - 1 && BACKFILL_WARM_GAP_MS > 0) {
+          await new Promise((r) => setTimeout(r, BACKFILL_WARM_GAP_MS));
+        }
+      }
+    } else if (!firstPass && entry._backfillQueue && !entry._backfillQueue.length
+               && entry._backfillRetry && entry._backfillRetry.length) {
+      // 主队排空 → 换入「E2EE 读空重试队」补读一轮（backfillStep 里 _retried 钉死单次，
+      // 重试仍空读则彻底放弃交实时链路）。到这里离首读已隔主队整个排空期，解密多半已跟上。
+      entry._backfillQueue = entry._backfillRetry;
+      entry._backfillRetry = null;
+      logger.info({ accountId: entry.accountId,
+                    n: entry._backfillQueue.length }, "backfill retry queued");
     }
     // 高频刷新 cookie 快照（xs 会轮换）：每 2 轮≈8s 存一次。此前 60s 一次 → 崩溃/被强杀时快照
     // 常滞后于已轮换的 xs，自愈 restore 灌回过期 xs 即登出。8s 窗口内 xs 几乎不会已失效。
@@ -1833,6 +2208,79 @@ function stopPolling(entry) {
     clearInterval(entry.pollTimer);
     entry.pollTimer = null;
   }
+  // 自身资料重采定时器跟着轮询一起收：stopPolling 是全部 7 个会话拆除点（放弃登录 /
+  // 崩溃自愈 / 重登 / cancel / logout / 优雅退出）的共同出口，挂在这里＝零新增调用点
+  // 全覆盖，不会漏下一个指向已关闭 page 的定时器。
+  clearSelfProfileTimer(entry);
+}
+
+// ── 自身资料周期重采 ────────────────────────────────────────────────────────
+// 此前 Messenger 侧**只在登录/恢复那一刻采一次**（WhatsApp 早有 scheduleSelfProfileRecapture），
+// 于是手机上换了头像本机永远不知道——2026-08-15 实锤那张错脸就是这样挂了两个多月。
+// 两档节奏（判据是纯函数 nextSelfProfileRecaptureMs）：
+//   - 还没拿到头像 → 按 RETRY_MS 短周期补采。登录瞬间页面常停在某个会话上、自身头像
+//     不在 DOM 里，fail-closed 交空属正常态，过一会儿就有；
+//   - 已拿到 → 按 EVERY_MS 长周期对齐手机侧改动。
+// 变化才 postStatus(authorized, "profile-refresh") —— Python 的 session-status 端点对每次
+// authorized push 都会 enrich_from_fields，故无需 Python 侧改动即贯通到 registry meta.self_*。
+// FB CDN 头像直链带轮换签名参数 → URL 每次都不同 → 重采即重下（一张几十 KB 的小图），
+// 这也是唯一能让「手机换了头像」传导过来的口径：URL 比对在签名轮换下本就无鉴别力。
+// 置 MSG_SELF_PROFILE_EVERY_MS=0 可整体关掉，行为回到旧的「只采一次」。
+const SELF_PROFILE_EVERY_MS = Math.max(0,
+  Number(process.env.MSG_SELF_PROFILE_EVERY_MS ?? 6 * 3600 * 1000));
+const SELF_PROFILE_RETRY_MS = Math.max(0,
+  Number(process.env.MSG_SELF_PROFILE_RETRY_MS ?? 3 * 60 * 1000));
+
+function clearSelfProfileTimer(entry) {
+  if (entry && entry.selfProfileTimer) {
+    clearTimeout(entry.selfProfileTimer);
+    entry.selfProfileTimer = null;
+  }
+}
+
+/** 重采一次自身昵称/头像；有变化才上报。绝不抛（观测/身份链不得影响收发）。 */
+async function recaptureSelfProfile(loginId, entry) {
+  if (!entry || entry.status !== "authorized" || !entry.page) return;
+  // 让路：轮询与写操作（send/react）都在用 entry.page，此刻读多为白读且会互相干扰。
+  // 下个周期自然补上——重采是慢节奏工作，没有任何抢占的理由。
+  if (entry._polling || entry._opLock) return;
+  try { if (entry.page.isClosed && entry.page.isClosed()) return; } catch (_) { return; }
+  const prof = await readSelfProfile(entry.page);
+  if (!prof.name && !prof.avatarUrl) return;   // 全空＝这轮没读到，保留既有值
+  const changed = (!!prof.name && prof.name !== entry.name)
+    || (!!prof.avatarUrl && prof.avatarUrl !== entry.avatarUrl);
+  // 空值不覆盖非空（与 Python 侧 merge_self_profile_meta 同语义）：一次读空不该把
+  // 已有身份擦掉。
+  if (prof.name) entry.name = prof.name;
+  if (prof.avatarUrl) entry.avatarUrl = prof.avatarUrl;
+  if (!changed) return;
+  logger.info({
+    loginId, accountId: entry.accountId,
+    name: entry.name, strategy: prof.strategy,
+  }, "self profile recaptured (changed) → push profile-refresh");
+  postStatus(loginId, entry, "authorized", "profile-refresh").catch(() => {});
+}
+
+/** 排下一次重采（自递归 setTimeout：间隔随「有没有头像」自适应，比 setInterval 贴切）。 */
+function scheduleSelfProfileRecapture(loginId, entry) {
+  if (!entry) return;
+  clearSelfProfileTimer(entry);
+  const delay = nextSelfProfileRecaptureMs(
+    { hasAvatar: !!entry.avatarUrl },
+    { everyMs: SELF_PROFILE_EVERY_MS, retryMs: SELF_PROFILE_RETRY_MS },
+  );
+  if (!delay) return;
+  entry.selfProfileTimer = setTimeout(() => {
+    entry.selfProfileTimer = null;
+    recaptureSelfProfile(loginId, entry)
+      .catch(() => {})
+      .finally(() => {
+        // 会话还在册才续排（拆除后不复活；sessions 换了 entry 说明已重建，由新 entry 自己排）
+        if (sessions.get(loginId) === entry && entry.status === "authorized") {
+          scheduleSelfProfileRecapture(loginId, entry);
+        }
+      });
+  }, delay);
 }
 
 /** 页面级登录校验：真正进了收件箱（无登录表单、且有收件箱骨架）才算数。
@@ -1869,9 +2317,14 @@ async function promoteIfLoggedIn(loginId, entry) {
     entry._loggedIn = true;
     try {
       let prof = await readSelfProfile(entry.page);
-      if (!prof.name) {
+      if (!prof.name || !prof.avatarUrl) {
         // P1：restore 时页面常停在上次的线程 URL，CurrentUserInitialData 脚本可能
         // 不在该文档流里 → 昵称恒空（账号卡分不清绑的是谁的另一半根因）。回首页再试一次。
+        //
+        // ⚠ 条件必须同时看头像（2026-08-15）：昵称改由 CurrentUserInitialData 取得后
+        // `!prof.name` 几乎恒假，这个重试分支等于死代码；而头像 fail-closed 后正是
+        // 「停在会话页 → 自身头像不在 DOM 里 → 空」最需要回首页的那一档。首页（收件箱
+        // 列表）本就是轮询期望的落点，导航过去无副作用。
         try {
           await entry.page.goto(MESSENGER_URL,
             { waitUntil: "domcontentloaded", timeout: 15000 });
@@ -1889,6 +2342,7 @@ async function promoteIfLoggedIn(loginId, entry) {
     if (_srt) { clearTimeout(_srt); _slowRetryTimers.delete(loginId); }
     await saveCookies(loginId, entry.context); // 落盘会话级 cookie，扛住重启
     startPolling(entry);
+    scheduleSelfProfileRecapture(loginId, entry); // 头像没采到 → 短周期补；采到了 → 长周期跟手机改动
     postStatus(loginId, entry, "authorized", "connected").catch(() => {});
     return true;
   } catch (e) {
@@ -1944,8 +2398,12 @@ function scheduleRecovery(loginId) {
   }
   // 还没登录成功就被关掉：headed 模式下坐席直接点窗口右上角的 X 是最自然的放弃方式，
   // 而 close 事件与真崩溃长得一模一样。这时重新弹窗毫无意义——没人在等它，只会骚扰
-  // （关一次弹一次）。置 expired 收摊，profile 是空壳一并清掉；坐席想登随时可重新发起。
-  // 只有 authorized 会话才值得自愈：那是在收发消息的生产会话，掉了必须救回来。
+  // （关一次弹一次）。本地置 expired 收摊（前端登录轮询契约），profile 是空壳一并清掉；
+  // 坐席想登随时可重新发起。只有 authorized 会话才值得自愈：那是在收发消息的生产会话。
+  // ⚠ 对 Python 侧上报 **abandoned** 而非 expired（2026-08-14 事故）：放弃的登录窗
+  // 从来不是真实账号，报 expired 会让临时 login_id（msg_xxx）以「不健康」挂进坐席
+  // 顶栏红条几小时——坐席看不懂也无从处理。abandoned 不在 UNHEALTHY_STATUSES，
+  // 天然不进横幅/看门狗/注册表翻转，仅留 by_status 计数（可观测放弃率）。
   const cur0 = sessions.get(loginId);
   if (cur0 && cur0.status !== "authorized") {
     logger.info({ loginId, status: cur0.status },
@@ -1954,7 +2412,7 @@ function scheduleRecovery(loginId) {
     cur0.status = "expired";
     sessions.delete(loginId);
     purgeProfile(loginId);
-    postStatus(loginId, cur0, "expired", "login window closed before authorization").catch(() => {});
+    postStatus(loginId, cur0, "abandoned", "login window closed before authorization").catch(() => {});
     return;
   }
   const now = Date.now();
@@ -1992,12 +2450,20 @@ function scheduleRecovery(loginId) {
   }, delay);
 }
 
-async function startLogin(loginId, proxyUrl, isRestore = false) {
+async function startLogin(loginId, proxyUrl, isRestore = false, interactive = false) {
   const userDataDir = path.join(SESSIONS_DIR, loginId);
-  // 交互登录 headed（要人工过 2FA）；restore / 开机恢复 / 崩溃自愈已授权会话走
-  // RESTORE_HEADLESS（默认无头）——它们已持久化 cookie，无需人工介入。
-  const headless = isRestore ? RESTORE_HEADLESS : HEADLESS;
-  const context = await launchPersistent(userDataDir, proxyUrl, headless);
+  // 窗口模式决策收拢到 login_window.resolveLaunch（纯函数 + 回归网）：非交互 / restore 逐字节
+  // 保持旧行为（headed / RESTORE_HEADLESS）；交互登录（Form-Relay）走 offscreen（默认＝无可见
+  // 窗口 + headed 反检测）/ new_headless / headless，由 env MSG_INTERACTIVE_WINDOW 选。
+  const launch = resolveLaunch({
+    interactive, isRestore,
+    headlessEnv: HEADLESS, restoreHeadlessEnv: RESTORE_HEADLESS,
+    interactiveMode: process.env.MSG_INTERACTIVE_WINDOW,
+  });
+  const headless = launch.headless;
+  logger.info({ loginId, mode: launch.mode, headless, interactive, isRestore },
+    "login browser launching");
+  const context = await launchPersistent(userDataDir, proxyUrl, headless, launch.args);
   // 崩溃自愈：context 意外关闭 → 自动重启（正常退出由 _shuttingDown 拦掉）。
   context.on("close", () => scheduleRecovery(loginId));
   await applyStealth(context);
@@ -2071,8 +2537,18 @@ async function startLogin(loginId, proxyUrl, isRestore = false) {
             pageText = await page.evaluate(() =>
               ((document.body && document.body.innerText) || "").slice(0, 800));
           } catch (_) { pageText = ""; }
-          lastStage = classifyLoginPage({ url, hasCUser, hasXs, hasErrorBox, pageText });
+          // 表单中继关键信号：DOM 上是否有账密输入框。messenger.com 未登录落根路径（URL 无
+          // /login 标记），只靠 URL classifyLoginPage 会误判 unknown → 中继流永远停 wait
+          // （2026-08-13 canary 捕获）。用 tryAutoE2eePin 同款字段名判据（多年稳定）。
+          let hasLoginForm = false;
+          try {
+            hasLoginForm = await page.evaluate(() =>
+              !!document.querySelector('input[name="email"], input[name="pass"]'));
+          } catch (_) { hasLoginForm = false; }
+          lastStage = classifyLoginPage({ url, hasCUser, hasXs, hasErrorBox, pageText, hasLoginForm });
           entry.hintCode = actionableCode(lastStage);
+          // 表单中继只读探针（/login/:id/relay-step）复用这份缓存，不重复抓页。
+          entry.lastStage = lastStage;
           const sig = `${url}|${hasCUser}|${hasXs}|${lastStage}`;
           if (sig !== lastSig) {
             lastSig = sig;
@@ -2266,6 +2742,152 @@ async function readbackLastOutgoing(page, text, timeoutMs = 5000) {
   }
 }
 
+/** 每账号 DOM 写操作互斥锁（P3 双面板融合 2026-08-13）。
+ *
+ *  背景：send 与出站表情（/react）都在 **entry.page** 上做「导航 + hover + 键入」，
+ *  两个写操作并发＝互踩焦点/导航（send 打字打到一半被 react 的 hover 拽走）。此前只有
+ *  send 一个写操作、天然无并发；/react 落地后必须串行。轮询（只读 $$eval，不抢焦点）
+ *  不进锁，只在写操作进行中礼让跳过本 tick（见 pollInbound 顶部）。
+ *
+ *  语义：等待队列 FIFO-ish；**fail-open**——等锁超时（90s）就不带锁继续（回到今天的
+ *  无锁行为），绝不让锁故障把发送闸死。释放走 try/finally 保证。 */
+/** 富交互出站结果计数（P5 双面板融合 2026-08-13）：react/quote 是脆 DOM 操作，
+ *  FB 改版即碎——把成败按原因累计进每账号 op_stats（/accounts 暴露），让选择器漂移
+ *  在读数上可见（与 inject_health/prerender_miss 同哲学），不必等坐席报障。进程级，
+ *  重启清零；best-effort，绝不抛。 */
+function bumpOp(entry, key, reason) {
+  try {
+    if (!entry._opStats) {
+      entry._opStats = {
+        react_ok: 0, react_fail: {}, quote_applied: 0, quote_degraded: 0,
+        manual_out_mirrored: 0, manual_out_reads: 0,
+      };
+    }
+    const s = entry._opStats;
+    if (key === "react_ok") s.react_ok++;
+    else if (key === "react_fail") s.react_fail[reason || "unknown"] =
+      (s.react_fail[reason || "unknown"] || 0) + 1;
+    else if (key === "manual_out_mirrored") s.manual_out_mirrored =
+      (s.manual_out_mirrored || 0) + 1;
+    else if (key === "manual_out_reads") s.manual_out_reads =
+      (s.manual_out_reads || 0) + 1;
+    else if (key === "quote_applied") s.quote_applied++;
+    else if (key === "quote_degraded") s.quote_degraded++;
+  } catch (_) { /* 计数失败绝不影响主流程 */ }
+}
+
+async function acquireAccountOp(entry, name) {
+  const t0 = Date.now();
+  while (entry._opLock) {
+    if (Date.now() - t0 > 90000) {
+      logger.warn({ name }, "account op lock wait timeout → proceeding WITHOUT lock (fail-open)");
+      return () => {};
+    }
+    await entry._opLock.catch(() => {});
+  }
+  let release;
+  entry._opLock = new Promise((resolve) => {
+    release = () => { entry._opLock = null; resolve(); };
+  });
+  entry._opLockName = name;
+  return release;
+}
+
+/** 按被引用/被回应文本定位线程内的**消息行元素**（P3 校准重构 2026-08-13）。
+ *
+ *  关键教训（真机校准实锤）：`div[role="row"].innerText` 混入时间戳/发送者/表情 chip，
+ *  纯文本匹配必败（target_not_found）。改用本仓**久经考验**的抽取路径——`[role="log"]`
+ *  下 aria-label 命中 `MSG_ARIA_RE` 的节点，`parseMsgAria` 抽出干净的 {direction,text}
+ *  （与 readbackLastOutgoing/readThreadTail 同源）。定位仍交纯函数 matchQuotedTarget
+ *  （宁缺勿滥、歧义弃权）。
+ *
+ *  DOM↔Node 边界：evaluate 内给每个消息行容器（上溯到 role=row）打 data-cx-mi 序号 +
+ *  回传 aria 串；Node 侧 parseMsgAria 解析（复用已测解析器，evaluate 内不能引模块常量）→
+ *  matchQuotedTarget 得下标 → `page.$([data-cx-mi=i])` 取真元素（供 Playwright 真 hover）。
+ *  返回 {handle, rowsFound, sampleTexts}（诊断字段供失败可观测/选择器漂移排查）。 */
+async function locateRowByText(page, wantText) {
+  let arias = [];
+  try {
+    arias = await page.evaluate(() => {
+      const region = document.querySelector('[role="log"]') || document.body;
+      const MSG = /(消息由.*发送于|Message sent )/i;
+      const out = [];
+      let i = 0;
+      for (const e of Array.from(region.querySelectorAll("[aria-label]"))) {
+        if (!MSG.test(e.getAttribute("aria-label") || "")) continue;
+        let box = e;
+        for (let k = 0; k < 5 && box.parentElement; k++) {
+          if (box.getAttribute && box.getAttribute("role") === "row") break;
+          box = box.parentElement;
+        }
+        try { box.setAttribute("data-cx-mi", String(i)); } catch (_) { /* readonly? skip */ }
+        out.push({ i, aria: e.getAttribute("aria-label") || "" });
+        i++;
+      }
+      return out;
+    });
+  } catch (_) { arias = []; }
+  const texts = arias.map((a) => {
+    const p = parseMsgAria(a.aria);
+    return (p && p.text) ? p.text : "";
+  });
+  const idx = matchQuotedTarget(texts, wantText);
+  const sampleTexts = texts.filter((t) => t).slice(-6);
+  let handle = null;
+  if (idx >= 0) {
+    handle = await page.$(`[data-cx-mi="${arias[idx].i}"]`).catch(() => null);
+  }
+  // 清 data-cx-mi（取到 handle 后立即清，元素不脱离；失败也清，绝不留脏属性）
+  await page.evaluate(() => {
+    document.querySelectorAll("[data-cx-mi]").forEach((e) => e.removeAttribute("data-cx-mi"));
+  }).catch(() => {});
+  return { handle, rowsFound: arias.length, sampleTexts };
+}
+
+/** 引用回复（P2 双面板融合 2026-08-13，best-effort + degrade-safe）：在打开的线程里
+ *  按被引用文本定位目标气泡 → hover 出操作条 → 点「回复」，让 composer 进入引用态，
+ *  之后 send 路由正常 type+Enter 即以引用形式发出。**绝不阻断发送**：任一步失败一律
+ *  返回 false，调用方走普通发送（引用是增强、不是前提）。 */
+async function tryQuoteTarget(page, quotedText) {
+  const loc = await locateRowByText(page, quotedText).catch(() => null);
+  if (!loc || !loc.handle) {
+    logger.warn({ rowsFound: loc && loc.rowsFound },
+      "quote: target row not located (aria-based)");
+    return false;
+  }
+  const row = loc.handle;
+  try {
+    await row.scrollIntoViewIfNeeded().catch(() => {});
+    await row.hover();
+    await page.waitForTimeout(200);
+  } catch (_) { return false; }
+  // 悬停后行内出现操作条；「回复」按钮中英 aria 兼容，行内找不到再全页兜底一次
+  const SEL_REPLY = '[aria-label="回复"], [aria-label="Reply"], '
+    + 'div[role="button"][aria-label*="回复"], div[role="button"][aria-label*="Reply"]';
+  let btn = await row.$(SEL_REPLY).catch(() => null);
+  if (!btn) btn = await page.$(SEL_REPLY).catch(() => null);
+  if (!btn) return false;
+  // hover-reveal 的操作条会淡入/重定位——先 hover 按钮本身把它钉稳，再给足超时点击
+  // （校准实锤：1500ms 对刚淡入的工具条 not-stable 超时；4000ms + 预 hover 稳定命中）
+  if (!(await clickRevealed(page, btn, 4000))) return false;
+  await page.waitForTimeout(250);
+  return true;
+}
+
+/** 点击 hover 淡入的工具条按钮（react/reply 共用）：先 hover 按钮把动画钉稳、再点。
+ *  淡入/重定位期 Playwright 判 not-stable → 直接 click 会在紧超时下 TimeoutError。 */
+async function clickRevealed(page, btn, timeoutMs) {
+  try {
+    await btn.scrollIntoViewIfNeeded().catch(() => {});
+    await btn.hover().catch(() => {});
+    await page.waitForTimeout(250);
+    await btn.click({ timeout: timeoutMs || 4000 });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 /** 轮询等待 composer 清空（发出成功的确定性信号）。发送后 Messenger 通常瞬间清空，
  *  但慢网/重渲染下可能滞后；轮询避免把「慢」误判成「没发出去」。返回是否已清空。 */
 async function waitComposerCleared(page, timeoutMs = 3000) {
@@ -2348,7 +2970,7 @@ app.use(express.json());
 // `svc` 是**身份**字段（与 wa-baileys 同款）：桌面壳据它区分「自家边车」与「占了同一
 // 端口的别家服务」。只看 ok:true 会把外来服务当自己的用 —— 后端 sidecar 正是踩过这个
 // 坑才加了 /api/desktop/ping。旧版本没有该字段 → 壳按「旧版」放行，不影响升级。
-app.get("/health", (_req, res) => res.json({ ok: true, svc: "messenger-web" }));
+app.get("/health", (_req, res) => res.json({ ok: true, svc: "messenger-web", ...workerCodeInfo() }));
 
 // 联调用：查看轮询最近检测到的入站消息（核验入站链路，不依赖主程序）。
 app.get("/debug/inbound", (_req, res) => res.json({ recent: RECENT_INBOUND }));
@@ -2362,6 +2984,98 @@ app.get("/debug/requests", async (req, res) => {
     if (!entry.reqPage || entry.reqPage.isClosed()) entry.reqPage = await entry.context.newPage();
     const rr = await readRequests(entry.reqPage, entry);
     res.json({ requests: rr.rows, blocked: rr.blocked });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+/** 自身头像取证探针（只读、不导航）：把「判定要用的全部证据」一次性打出来。
+ *
+ *  存在理由：2026-08-15 事故里错脸能长期存活，根子是没人能看见「页面上到底有哪些
+ *  候选、自己那张凭什么认出来」——只能靠猜选择器，猜错了还是静默。实测这版
+ *  messenger.com 上所有头像 `alt` 全为空，光看 img 属性永远认不出自己；证据在
+ *  **祖先链**（role/aria-label/href）与**页内脚本**（viewer 自身头像 URI）里。
+ *  FB 改版后先打这个端点，再动 self_profile.js 的判据。 */
+app.get("/debug/self-profile", async (req, res) => {
+  const id = String(req.query.id || "");
+  const entry = id ? sessions.get(id)
+    : [...sessions.values()].find((e) => e.status === "authorized");
+  if (!entry || entry.status !== "authorized") {
+    return res.status(404).json({ error: "no authorized session" });
+  }
+  try {
+    const raw = await entry.page.evaluate(() => {
+      const out = { url: location.href, cands: [], scripts: [] };
+      const slices = [];
+      try {
+        for (const s of document.querySelectorAll("script")) {
+          const t = s.textContent || "";
+          const i = t.indexOf("CurrentUserInitialData");
+          if (i < 0) continue;
+          slices.push(t.slice(i, i + 2000));
+          if (slices.length >= 4) break;
+        }
+      } catch (_) {}
+      out.slices = slices;
+      // 候选图 + 祖先链证据（tag/role/aria-label/href/data-visualcompletion）
+      try {
+        for (const el of document.querySelectorAll("img, image")) {
+          if (out.cands.length >= 25) break;
+          const src = el.getAttribute("src") || el.getAttribute("xlink:href")
+            || el.getAttribute("href") || "";
+          if (!src || src.startsWith("data:")) continue;
+          if (!/fbcdn|fna\.fbcdn/.test(src)) continue;   // 表情/静态图不占额度
+          const chain = [];
+          let p = el;
+          for (let hop = 0; p && hop < 8; hop++) {
+            chain.push({
+              tag: p.tagName,
+              role: p.getAttribute && p.getAttribute("role") || "",
+              aria: p.getAttribute && p.getAttribute("aria-label") || "",
+              href: p.getAttribute && p.getAttribute("href") || "",
+              vc: p.getAttribute && p.getAttribute("data-visualcompletion") || "",
+            });
+            p = p.parentElement;
+          }
+          let w = Number(el.naturalWidth) || 0;
+          let h = Number(el.naturalHeight) || 0;
+          try {
+            const r = el.getBoundingClientRect();
+            w = w || Math.round(r.width);
+            h = h || Math.round(r.height);
+          } catch (_) {}
+          out.cands.push({
+            src: src.slice(0, 150), alt: el.getAttribute("alt") || "", w, h, chain,
+          });
+        }
+      } catch (_) {}
+      // 页内脚本：viewer 自身头像常在初始数据 blob 里（profile_picture.uri 等）
+      try {
+        let hits = 0;
+        for (const s of document.querySelectorAll("script")) {
+          if (hits >= 6) break;
+          const t = s.textContent || "";
+          for (const kw of ["profile_picture", "profilePicLarge", "profilePicture"]) {
+            const i = t.indexOf(kw);
+            if (i < 0) continue;
+            out.scripts.push({ kw, around: t.slice(Math.max(0, i - 120), i + 400) });
+            hits++;
+            break;
+          }
+        }
+      } catch (_) {}
+      return out;
+    });
+    res.json({
+      url: raw.url,
+      ident: parseCurrentUserInitialData(raw.slices),
+      pick: pickSelfAvatar(raw.cands, (() => {
+        const it = parseCurrentUserInitialData(raw.slices);
+        return { selfName: it.name, selfId: it.userId };
+      })()),
+      cands: raw.cands,
+      scripts: raw.scripts,
+    });
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }
@@ -2705,6 +3419,48 @@ app.post("/accounts/:id/e2ee-pin", async (req, res) => {
   res.json({ ok: true, login_id: loginId, pin_set: true });
 });
 
+// P0（2026-08-14 必答弹窗配套）：立即验证所存 PIN——「所存即所验」。
+// 只有页面正挂着 PIN 浮层时才能真验（输入→浮层消失=通过）；浮层不在场无从验证，
+// 如实回 prompt:false（PIN 已武装，下次浮层出现由自愈钩子自动输入）。刻意**不主动
+// 导航**去钓浮层（零标已读副作用纪律，与 maybeAutoPinSelfHeal 同款克制）。
+// 返回 {verified: true|false|null, prompt, state}——null=本次无法当场判定。
+app.post("/accounts/:id/e2ee-pin/verify", async (req, res) => {
+  const want = String(req.params.id || "");
+  let entry = sessions.get(want) || null;
+  if (!entry) {
+    for (const e of sessions.values()) {
+      if (String(e.accountId || "") === want) { entry = e; break; }
+    }
+  }
+  if (!entry || !entry.page) {
+    return res.json({ ok: true, verified: null, prompt: false, state: "offline" });
+  }
+  const loginId = entry._loginId || "";
+  if (!getE2eePin(loginId)) {
+    return res.json({ ok: true, verified: false, prompt: false, state: "missing" });
+  }
+  try {
+    const prompt = await detectPinPrompt(entry.page);
+    if (!prompt) {
+      return res.json({
+        ok: true, verified: null, prompt: false,
+        state: String(entry._pinState || ""),
+      });
+    }
+    // 人工显式验证 → 重置尝试预算（绝不因旧失败计数把这次显式请求闸掉）
+    entry._pinTries = 0;
+    entry._pinLastTs = 0;
+    const healed = await tryAutoE2eePin(loginId, entry, entry.page).catch(() => false);
+    return res.json({
+      ok: true, verified: !!healed, prompt: true,
+      state: String(entry._pinState || ""),
+    });
+  } catch (e) {
+    logger.debug({ e: String((e && e.message) || e), loginId }, "e2ee pin verify failed");
+    return res.json({ ok: true, verified: null, prompt: false, state: "error" });
+  }
+});
+
 // 优雅关闭端点（Windows 强杀不触发信号处理 → 用它先刷盘再退出，防登录丢失）。
 app.post("/shutdown", async (_req, res) => {
   res.json({ ok: true });
@@ -2741,6 +3497,9 @@ app.post("/login/start", async (req, res) => {
   try {
     const loginId = newLoginId();
     const proxyUrl = (req.body && req.body.proxy_url) || "";
+    // 表单中继（Form-Relay）交互登录：Python 侧仅在 interactive_login 开启时下发 interactive:true。
+    // → startLogin 走无窗口模式（offscreen / new_headless），登录页由应用侧原生表单驱动。
+    const interactive = !!(req.body && req.body.interactive);
     // P3：接号时可顺带托管 E2EE 恢复 PIN（可选）——首登若撞「恢复加密聊天」浮层
     // 立即自动输入，接号 SOP 里不再依赖运营记得手动处理那一屏。非法 PIN 静默忽略
     // （登录流程照走，只是少了自动恢复；/accounts/:id/e2ee-pin 随时可补）。
@@ -2760,8 +3519,9 @@ app.post("/login/start", async (req, res) => {
       status: "pending", booting: true, qrImage: "", accountId: "",
       name: "", avatarUrl: "", createdAt: Date.now(),
       proxyUrl: proxyUrl || "", seen: new Map(), pollTimer: null,
+      interactive,
     });
-    startLogin(loginId, proxyUrl).then(() => {
+    startLogin(loginId, proxyUrl, false, interactive).then(() => {
       if (!_cancelledBoots.delete(loginId)) return;
       const cur = sessions.get(loginId);
       if (!cur) return;
@@ -2825,6 +3585,131 @@ app.get("/login/:id/status", async (req, res) => {
   });
 });
 
+// 表单中继（Form-Relay）只读探针：把登录页此刻的分类段翻成「应用该渲染哪一步原生表单」
+// （credentials / twofactor / e2ee_pin / checkpoint / done / wait）。复用看门狗每 1.5s 缓存的
+// entry.lastStage —— 刻意不在本 handler 里重新抓页：那会与看门狗抢同一 page、徒增延迟、还可能
+// 读到过渡态。纯读、零副作用；headed / 截图预览旧路径与 headless 交互新路径都能读它，是否走
+// 中继链由前端 + 默认关的开关决定，与本端点是否存在无关。截图仅在需要回落（checkpoint / 认不出
+// 等待）时随包带出，常规账密 / 2FA 步走原生表单不背截图流量。
+app.get("/login/:id/relay-step", (req, res) => {
+  const entry = sessions.get(req.params.id);
+  if (!entry) {
+    return res.json({ status: "expired", booting: false, step: "wait",
+                      fields: [], error: false, escalate: false, code: "", qr_image: "" });
+  }
+  const authorized = entry.status === "authorized";
+  // 冷启中（占位 entry 无 page）/ 首个看门狗 tick 之前：lastStage 为 undefined → 归 wait。
+  const rs = relayStepFromStage(entry.lastStage, { authorized });
+  const needShot = !authorized && (rs.escalate || rs.step === "wait");
+  res.json({
+    status: entry.status || "pending",
+    booting: !!(entry.booting && !entry.page),
+    step: rs.step,
+    fields: rs.fields,
+    error: rs.error,
+    escalate: rs.escalate,
+    code: rs.code,
+    qr_image: needShot ? String(entry.qrImage || "") : "",
+  });
+});
+
+// 表单中继填页：按计划把字段值填进登录页（多重 :visible 选择器回落，仿 tryAutoE2eePin）。
+// 返回 {filled, notFound}——任一字段全落空即 notFound 命中，调用方据此结构化失败回落，绝不
+// 盲填错框。逐字延迟输入（delay:70）走拟人节奏，与既有 PIN 输入同风格。
+async function relayFillFields(page, plan, values) {
+  const filled = [];
+  const notFound = [];
+  for (const f of (plan.fields || [])) {
+    if (!(f.name in values)) continue;
+    const sel = (f.selectors || []).map((s) => `${s}:visible`).join(", ");
+    try {
+      const loc = page.locator(sel).first();
+      if (!(await loc.count())) { notFound.push(f.name); continue; }
+      await loc.click({ timeout: 3000 });
+      await loc.fill("", { timeout: 3000 }).catch(() => {});
+      await loc.type(String(values[f.name]), { delay: 70, timeout: 15000 });
+      filled.push(f.name);
+    } catch (_) {
+      notFound.push(f.name);
+    }
+  }
+  return { filled, notFound };
+}
+
+// 提交：先试计划里的 CSS 选择器，全落空再按可见按钮文案兜底（多语，仿 tryAutoE2eePin），
+// 最后回车兜底。任一成功即返回 true。
+async function relayClickSubmit(page, plan) {
+  for (const s of (plan.submit || [])) {
+    try {
+      const b = page.locator(`${s}:visible`).first();
+      if (await b.count()) { await b.click({ timeout: 3000 }); return true; }
+    } catch (_) {}
+  }
+  try {
+    const b = page.locator('div[role="button"], button')
+      .filter({ hasText: /^(继续|登录|登錄|確認|确认|提交|完成|Continue|Log In|Login|Submit|Confirm|Done|Next)$/i })
+      .first();
+    if (await b.count()) { await b.click({ timeout: 3000 }); return true; }
+  } catch (_) {}
+  try { await page.keyboard.press("Enter"); return true; } catch (_) {}
+  return false;
+}
+
+// 表单中继写入端：把应用侧原生表单的字段值填进 headless 登录页并提交。fire-and-forget——
+// 填完即回，真正的结果（→2FA / 密码错 / 授权）由看门狗 1.5s 内重分类、前端轮询 relay-step
+// 观测。服务端复核当前步骤（页面可能已跳步），不匹配即回当前步骤让前端重同步，绝不错填。
+// 交互登录（interactive_login）开启时才由 Python 侧经此下发；关闭时 relay_submit_fn=None。
+app.post("/login/:id/relay-submit", async (req, res) => {
+  const entry = sessions.get(req.params.id);
+  if (!entry) return res.json({ ok: false, status: "expired", reason_code: "expired" });
+  if (entry.status === "authorized") {
+    return res.json({ ok: true, status: "authorized", submitted: false });
+  }
+  if (entry.booting && !entry.page) {
+    return res.json({ ok: false, status: entry.status || "pending", reason_code: "booting" });
+  }
+  const step = String((req.body && req.body.step) || "");
+  const values = (req.body && typeof req.body.values === "object" && req.body.values) || {};
+  // 复核：页面可能已从账密跳到 2FA（缓存 lastStage 每 1.5s 刷新）。不匹配即回当前步骤，
+  // 前端重渲对应表单——把 email 填进 2FA 页毫无意义且危险。
+  const cur = relayStepFromStage(entry.lastStage, { authorized: false });
+  if (cur.step !== step) {
+    return res.json({ ok: false, reason_code: "step_changed", step: cur.step,
+                      fields: cur.fields, error: cur.error, escalate: cur.escalate });
+  }
+  const clean = sanitizeSubmit(step, values);
+  if (!clean.accepts) return res.json({ ok: false, reason_code: "not_fillable", step });
+  if (!clean.ok) return res.json({ ok: false, reason_code: "missing_fields", missing: clean.missing, step });
+  try {
+    if (step === RELAY_STEP.E2EE_PIN) {
+      // 委托既有 PIN 自动输入机（gate/retry/cooldown/校验 + 更全选择器全在里面）：
+      // 存 PIN → 触发。用户显式提交＝一次全新尝试，清退避计数。
+      const s0 = loadSecrets(req.params.id);
+      s0.e2ee_pin = clean.values.pin;
+      saveSecrets(req.params.id, s0);
+      entry._pinTries = 0;
+      const accepted = await tryAutoE2eePin(req.params.id, entry, entry.page).catch(() => false);
+      return res.json({ ok: true, submitted: true, accepted: !!accepted, step });
+    }
+    const plan = fillPlanFor(step);
+    if (!plan) return res.json({ ok: false, reason_code: "not_fillable", step });
+    const fr = await relayFillFields(entry.page, plan, clean.values);
+    if (fr.notFound.length) {
+      // 字段选择器全落空＝页面结构变了 / 步骤已变：交前端回落截图预览，绝不盲提交。
+      return res.json({ ok: false, reason_code: "field_not_found",
+                        not_found: fr.notFound, filled: fr.filled, step });
+    }
+    await relayClickSubmit(entry.page, plan);
+    logger.info({ loginId: req.params.id, step, filled: fr.filled }, "relay-submit filled + submitted");
+    return res.json({ ok: true, submitted: true, filled: fr.filled, step });
+  } catch (e) {
+    logger.warn({ e: String((e && e.message) || e), loginId: req.params.id, step },
+      "relay-submit failed");
+    return res.json({ ok: false, reason_code: "submit_failed", step,
+                      detail: String((e && e.message) || e) });
+  }
+});
+
 app.post("/login/:id/cancel", async (req, res) => {
   const entry = sessions.get(req.params.id);
   if (entry) {
@@ -2871,18 +3756,96 @@ app.get("/accounts", (_req, res) => {
         e2ee_ratio: (e._convStats && e._convStats.count)
           ? (e._convStats.ph / e._convStats.count) : -1,
         conv_count: Number((e._convStats && e._convStats.count) || 0),
+        // 预热观测：首连回填队列剩余（空读不出 info 日志，暴露这里才能看见静默排空进度）
+        backfill_left: Array.isArray(e._backfillQueue) ? e._backfillQueue.length : 0,
         requests_blocked_until: Math.floor((e._reqBlockedUntil || 0) / 1000),
         requests_every: Number(e._reqEveryEffective || MSG_REQ_EVERY),
         requests_empty_streak: Number(e._reqEmptyStreak || 0),
+        // P2 2026-08-15：零行且无结构证据的连续次数（>0 持续增长=请求页漂移/读不到，
+        // 与 empty_streak「真没人来」区分）
+        requests_suspect_streak: Number(e._reqSuspectStreak || 0),
         // P3 E2EE 自动恢复观测：PIN 是否已托管 + 最近一次自动输入的结局
         //（""=没撞过浮层 / ok / failed / missing）。PIN 明文绝不出网。
         e2ee_pin_set: !!getE2eePin(id),
         e2ee_pin_state: String(e._pinState || ""),
+        // P1 自愈战绩：尝试/成败计数 + 时刻（「托管了 PIN 有没有真自愈」不再翻日志）
+        pin_heal: e._pinHeal
+          || { attempts: 0, ok: 0, fail: 0, last_ts: 0, last_ok_ts: 0 },
+        // 富交互出站结果计数（P5）：react/quote 脆 DOM 操作的成败读数（选择器漂移可见）
+        op_stats: e._opStats || {
+          react_ok: 0, react_fail: {}, quote_applied: 0, quote_degraded: 0,
+          manual_out_mirrored: 0, manual_out_reads: 0,
+        },
+        // P0 2026-08-15 未读驱动强制读取观测：picked=触发次数（按证据级分桶）。
+        // 长期 picked 增长但入站不增 → E2EE 密钥仍未恢复（配合 pin_heal 读数定位）。
+        unread_forced: e._unreadForceStats
+          || { picked: 0, row_unread: 0, fresh_placeholder: 0 },
       });
     }
   }
-  res.json({ accounts });
+  // worker 段：boot_ts / code_fp / code_stale（磁盘代码晚于进程启动=改了没重启）。
+  res.json({ accounts, worker: workerCodeInfo() });
 });
+
+/** composer 缺席时的页面探针快照（诊断用，best-effort 绝不抛）。
+ *  字段与 msg_ops.classifyComposerBlock 的判据一一对应。 */
+async function probeComposerBlockers(page) {
+  let info = {};
+  try {
+    info = await page.evaluate(() => ({
+      url: String(location.href || "").slice(0, 120),
+      composerCount: document.querySelectorAll(
+        'div[role="textbox"][contenteditable="true"]').length,
+      hasLog: !!document.querySelector('[role="log"]'),
+      acceptSeen: Array.from(document.querySelectorAll('div[role="button"],button,span'))
+        .some((el) => /^(接受|Accept)$/.test(
+          (((el.innerText || el.textContent) || "") + "").trim())),
+      loginForm: !!document.querySelector('input[name="pass"], input[name="email"]'),
+    }));
+  } catch (e) {
+    info = { evalFailed: String((e && e.message) || e).slice(0, 80) };
+  }
+  try { info.pinPrompt = await detectPinPrompt(page); } catch (_) { info.pinPrompt = false; }
+  return info;
+}
+
+/** send / send-media 共用：首轮等不到 composer 时的恢复一击 + 终局诊断。
+ *
+ * 2026-08-15 173 实锤：新建 E2EE 线程首开（+浏览器刚重启首次导航）SPA 渲染可超
+ * 「2s 稳定 + 10s 等待」预算 → 旧代码直接 500 且**不留任何日志**（/send 里唯一
+ * 静默的 5xx 分支），坐席手发与 L2 自动稿双双丢失，排查只能靠后端截断的 httpx 文本。
+ * 恢复动作全部发生在「输入任何文字之前」，绝无重复发送风险：
+ *   重新导航 → 稳定期 → PIN 自愈（已托管才动手）→ 补点「接受」→ 再等一轮。
+ * 返回 { box, accepted, reason, probe }：box 空＝调用方应 500，reason/probe 供
+ * 响应体（Python 侧会把 reason_code 带进投递失败日志）与边车 error 日志。
+ */
+async function recoverComposerOnce(entry, page, jid) {
+  logger.warn({ jid }, "send: composer not found in first wait -> re-navigating once");
+  try {
+    await page.goto(`${MESSENGER_URL}t/${jid}`, {
+      waitUntil: "domcontentloaded", timeout: 20000,
+    });
+  } catch (_) {}
+  await page.waitForTimeout(2000);
+  try {
+    if (getE2eePin(entry._loginId || "") && await detectPinPrompt(page)) {
+      entry._pinPromptSeen = true;
+      await tryAutoE2eePin(entry._loginId || "", entry, page).catch(() => false);
+      await page.waitForTimeout(1000);
+    }
+  } catch (_) {}
+  const accepted = await clickAcceptRequest(page);
+  if (accepted) await page.waitForTimeout(2000);
+  const box = await page.waitForSelector(SEL_COMPOSER, { timeout: 10000 }).catch(() => null);
+  if (box) {
+    logger.info({ jid, accepted }, "send: composer recovered after re-navigation");
+    return { box, accepted, reason: "", probe: null };
+  }
+  const probe = await probeComposerBlockers(page);
+  const reason = classifyComposerBlock(probe);
+  logger.error({ jid, reason, probe }, "send: composer not found after recovery");
+  return { box: null, accepted, reason, probe };
+}
 
 app.post("/accounts/:id/send", async (req, res) => {
   const entry = findByAccount(req.params.id);
@@ -2894,13 +3857,22 @@ app.post("/accounts/:id/send", async (req, res) => {
   if (!jid || !text) {
     return res.status(400).json({ ok: false, error: "jid and text required" });
   }
+  // P3：send 进每账号写操作互斥（与 /react 串行；等锁超时 fail-open 回无锁旧行为）
+  const _opRelease = await acquireAccountOp(entry, "send");
   try {
+    const t0 = Date.now();
     const page = entry.page;
-    await page.goto(`${MESSENGER_URL}t/${jid}`, {
-      waitUntil: "domcontentloaded", timeout: 20000,
-    });
-    // settle：请求线程会先乐观渲染输入框、再换成「接受」栏，须等 UI 稳定再判定。
-    await page.waitForTimeout(2000);
+    // 同线程快路：页面已停在目标线程（连续给同一客户发消息的常态；发送后页面本就留在
+    // 线程上）→ 跳过整页重导航 + 2s settle（实测省 ~3-5s/条）。composer 存在性仍由下方
+    // waitForSelector 统一把关；PIN 浮层探测/接受栏处理照走，行为面不变。
+    const fastPath = sendFastPathEligible(page.url(), jid);
+    if (!fastPath) {
+      await page.goto(`${MESSENGER_URL}t/${jid}`, {
+        waitUntil: "domcontentloaded", timeout: 20000,
+      });
+      // settle：请求线程会先乐观渲染输入框、再换成「接受」栏，须等 UI 稳定再判定。
+      await page.waitForTimeout(2000);
+    }
     // E2EE 半死自愈（2026-08-10 .198 事故）：加密线程缺设备密钥时会挂「输入恢复 PIN」浮层，
     // 此时 composer 可能仍在但发出去对端收不到（回读锚不到气泡＝verified:false 的真因）。
     // 发送前若探到浮层且已配 PIN → 先输 PIN 恢复密钥，再走正常发送。已配 PIN 才动手，闸门限次。
@@ -2914,12 +3886,23 @@ app.post("/accounts/:id/send", async (req, res) => {
       }
     }
     // 先处理「接受」——有此按钮即消息请求，须先接受才可回复（回复即接受，符合获客策略）。
-    const accepted = await clickAcceptRequest(page);
+    let accepted = await clickAcceptRequest(page);
     if (accepted) await page.waitForTimeout(2000);
     // 只认真正的消息输入框（aria-label「发消息给…」/ Message…），排除搜索框等。
-    const box = await page.waitForSelector(SEL_COMPOSER, { timeout: 10000 }).catch(() => null);
+    let box = await page.waitForSelector(SEL_COMPOSER, { timeout: 10000 }).catch(() => null);
     if (!box) {
-      return res.status(500).json({ ok: false, error: "composer not found (thread may need manual accept)" });
+      // 首轮没等到 ≠ 发不了：重新导航再等一轮（新 E2EE 线程首开渲染慢的主救济），
+      // 仍无 → 探针分类 + error 日志 + reason_code 出网（此前该分支静默 500）。
+      const rec = await recoverComposerOnce(entry, page, jid);
+      accepted = accepted || rec.accepted;
+      box = rec.box;
+      if (!box) {
+        return res.status(500).json({
+          ok: false, delivered: false, accepted,
+          reason_code: rec.reason,
+          error: `composer not found (${rec.reason || "unknown"})`,
+        });
+      }
     }
     // 记录自发文本（在真正尝试发送前即记）——即使后续 verify 偶发误判，也确保轮询能识别
     // 并跳过这条自发消息的回声，杜绝「自己回自己」。幂等：重试不重复记（recordSent 去重）。
@@ -2930,10 +3913,44 @@ app.post("/accounts/:id/send", async (req, res) => {
     });
     if (!entry._lastOutboundId) entry._lastOutboundId = new Map();
     entry._lastOutboundId.set(String(jid), outMsgId);
+    // 引用回复（P2 双面板融合）：body.quoted.text 命中可见气泡 → 进引用态再发。
+    // best-effort + degrade-safe：定位不到/任何步骤失败即普通发送，绝不阻断（引用是
+    // 增强不是前提）。在 type 之前执行，让 composer 先进引用态。
+    const quoted = req.body && req.body.quoted;
+    let quoteApplied = false;
+    if (quoted && quoted.text) {
+      try { quoteApplied = await tryQuoteTarget(page, String(quoted.text)); }
+      catch (_) { quoteApplied = false; }
+      bumpOp(entry, quoteApplied ? "quote_applied" : "quote_degraded");
+      if (!quoteApplied) {
+        logger.warn({ jid }, "send: quote target not located → sending without quote (degraded)");
+      }
+    }
     // 一次输入+回车+校验清空的原子尝试；返回是否确认发出（composer 清空）。
+    // 长文本（>80 字且不含换行）混合输入提速：先逐字敲一小段建立输入态，剩余整段
+    // insertText（≈粘贴，人类常见行为；20ms/字逐敲 200 字要 4s）。按 Enter 前必须过
+    // composerTextMatches 完整性闸门——insertText 没进编辑器状态就清空回退整段逐字，
+    // 宁可慢也绝不让「内容截断」出站。含换行文本保持旧路径（type 的 \n 语义另有含义）。
+    const typeIntoComposer = async () => {
+      if (text.length > 80 && !text.includes("\n")) {
+        await box.type(text.slice(0, 20), { delay: 20 });
+        await page.keyboard.insertText(text.slice(20));
+        await page.waitForTimeout(150);
+        let cur = "";
+        try {
+          cur = await page.$eval(SEL_COMPOSER,
+            (el) => ((el.innerText || el.textContent || "") + "").trim());
+        } catch (_) { cur = ""; }
+        if (composerTextMatches(cur, text)) return;
+        logger.warn({ jid }, "send: insertText integrity check failed → falling back to full typing");
+        await page.keyboard.press("Control+a").catch(() => {});
+        await page.keyboard.press("Backspace").catch(() => {});
+      }
+      await box.type(text, { delay: 20 });
+    };
     const attemptSend = async () => {
       await box.click();
-      await box.type(text, { delay: 20 });
+      await typeIntoComposer();
       await page.keyboard.press("Enter");
       return await waitComposerCleared(page, 3000);
     };
@@ -2949,6 +3966,12 @@ app.post("/accounts/:id/send", async (req, res) => {
       } catch (_) { stillHasOurText = false; }
       if (stillHasOurText) {
         logger.warn({ jid }, "send: composer not cleared → retrying once");
+        // 重试前先清空残留（否则 attemptSend 再 type 一遍＝叠成双份文本发出——潜在老 bug）
+        try {
+          await box.click();
+          await page.keyboard.press("Control+a");
+          await page.keyboard.press("Backspace");
+        } catch (_) {}
         sent = await attemptSend();
       }
     }
@@ -2978,11 +4001,154 @@ app.post("/accounts/:id/send", async (req, res) => {
       logger.warn({ jid }, "send: composer cleared but readback did not find our bubble "
         + "(treating as delivered, verified=false)");
     }
+    // 发送耗时观测：fast=同线程快路是否命中；线上「发送慢」从体感变成可读数
+    logger.info({ jid, ms: Date.now() - t0, fast: fastPath, len: text.length,
+                  verified: !!rb.found, quoted: quoteApplied }, "send ok");
     res.json({ ok: true, delivered: true, message_id: outMsgId, accepted, sent: true,
-      verified: !!rb.found });
+      verified: !!rb.found, quoted: quoteApplied });
   } catch (e) {
     logger.error({ e }, "send failed");
     res.status(500).json({ ok: false, delivered: false, error: String(e) });
+  } finally {
+    _opRelease();
+  }
+});
+
+// 出站表情回应（P3 双面板融合 2026-08-13）：给某条消息挂 Messenger 默认面板表情。
+// body { jid, emoji, target_text, target_id? }。
+//
+// 设计（与引用回复同族的 best-effort，但语义相反——引用失败仍发消息，表情失败就是
+// 失败，如实回 ok:false 让坐席看到，绝不静默装成功）：
+// ① 面板白名单先拦（msgrPaletteTarget：😂→😆 归一、🙏 等面板外 → unsupported_emoji，
+//    绝不硬点「更多表情」网格）；
+// ② 目标定位复用引用回复同一纯函数 matchQuotedTarget（宁缺勿滥、歧义弃权 →
+//    target_not_found）——Messenger 无 wamid，只能按文本锚定；
+// ③ 与 send 同过每账号写操作互斥锁（hover/点击与打字互踩是本锁的存在理由）；
+// ④ picker 点击双轨：先按面板字符 textContent 精确匹配，不中按 aria 名称候选
+//    （reactAriaCandidates 中英词表）兜底；都不中 → Esc 收场 + palette_not_found。
+app.post("/accounts/:id/react", async (req, res) => {
+  const entry = findByAccount(req.params.id);
+  if (!entry || !entry.page) {
+    return res.status(404).json({ ok: false, error: "account not connected" });
+  }
+  const jid = String((req.body && req.body.jid) || "");
+  const emoji = String((req.body && req.body.emoji) || "");
+  const targetText = String((req.body && req.body.target_text) || "");
+  if (!jid || !emoji || !targetText) {
+    return res.status(400).json({ ok: false, reason: "missing_field" });
+  }
+  const palette = msgrPaletteTarget(emoji);
+  if (!palette) {
+    return res.status(400).json({ ok: false, reason: "unsupported_emoji" });
+  }
+  const _opRelease = await acquireAccountOp(entry, "react");
+  try {
+    const page = entry.page;
+    // 同线程快路径与 send 同款；不在目标线程才整页导航
+    if (!sendFastPathEligible(page.url(), jid)) {
+      await page.goto(`${MESSENGER_URL}t/${jid}`, {
+        waitUntil: "domcontentloaded", timeout: 20000,
+      });
+      await page.waitForTimeout(2000);
+    }
+    // 定位目标气泡（aria-based，宁缺勿滥：未命中/歧义 → 如实失败 + 诊断字段供校准）
+    const loc = await locateRowByText(page, targetText);
+    if (!loc.handle) {
+      bumpOp(entry, "react_fail", "target_not_found");
+      return res.json({ ok: false, reason: "target_not_found",
+        rows_found: loc.rowsFound, sample: loc.sampleTexts });
+    }
+    const row = loc.handle;
+    await row.scrollIntoViewIfNeeded().catch(() => {});
+    await row.hover();
+    await page.waitForTimeout(250);
+    // 悬停出操作条 → 「添加心情/React」按钮（行内优先，全页兜底一次）
+    const SEL_REACT_BTN = '[aria-label="添加心情"], [aria-label="React"], '
+      + 'div[role="button"][aria-label*="心情"], div[role="button"][aria-label*="React"]';
+    let btn = await row.$(SEL_REACT_BTN).catch(() => null);
+    if (!btn) btn = await page.$(SEL_REACT_BTN).catch(() => null);
+    if (!btn) {
+      bumpOp(entry, "react_fail", "react_ui_not_found");
+      return res.json({ ok: false, reason: "react_ui_not_found" });
+    }
+    // hover-reveal 工具条淡入/重定位 → 先 hover 钉稳再点（校准实锤：紧超时直点会
+    // TimeoutError not-stable）；点不动如实记 react_btn_unclickable，不静默成功
+    if (!(await clickRevealed(page, btn, 4000))) {
+      bumpOp(entry, "react_fail", "react_btn_unclickable");
+      return res.json({ ok: false, reason: "react_btn_unclickable" });
+    }
+    await page.waitForTimeout(350);
+    // picker：FB reaction 面板实测＝role=menu 里一排 <img alt="<emoji>">，alt 是**去 VS16**
+    // 的 emoji 字符（❤ 而非 ❤️），且**愤怒用 😡 而非 😠**（真机校准 2026-08-13 实锤）。
+    // 故按「VS16 归一后的 alt 目标集」精确匹配，其次 aria/alt 名称候选兜底；命中即点其
+    // 可点祖先。失败回传 sample 供后续校准。altTargets 在 Node 侧算好传入。
+    const altTargets = (() => {
+      const strip = (s) => String(s || "").replace(/\uFE0F/g, "");
+      const out = [strip(palette)];
+      if (strip(palette) === strip("😠")) out.push("😡");  // FB 愤怒 alt=😡
+      return out;
+    })();
+    const pick = await page.evaluate((args) => {
+      const { altTargets, ariaNames } = args;
+      const strip = (s) => String(s || "").replace(/\uFE0F/g, "");
+      const roots = [
+        document.querySelector('[role="menu"]'),
+        document.querySelector('[role="dialog"]'),
+        document.querySelector('[role="tooltip"]'),
+      ].filter(Boolean);
+      const scope = roots[0] || document.body;
+      const cand = Array.from(scope.querySelectorAll(
+        '[role="button"], [role="menuitem"], [role="option"], [role="img"], img[alt], [aria-label]'));
+      const clickable = (el) => {
+        let n = el;
+        for (let i = 0; i < 4 && n; i++) {
+          const r = n.getAttribute && n.getAttribute("role");
+          if (r === "button" || r === "menuitem" || r === "option") return n;
+          n = n.parentElement;
+        }
+        return el;
+      };
+      // ① alt/text 归一后精确命中目标 emoji（面板主路径）
+      for (const el of cand) {
+        const alt = strip(el.getAttribute("alt") || "");
+        const txt = strip((el.textContent || "").trim());
+        if (altTargets.includes(alt) || (txt && altTargets.includes(txt))) {
+          clickable(el).click();
+          return { clicked: true };
+        }
+      }
+      // ② aria/alt/title 名称候选（like/love/大心…）兜底
+      const attrs = (el) => ([
+        el.getAttribute("aria-label") || "", el.getAttribute("alt") || "",
+        el.getAttribute("title") || "",
+      ].join(" ")).toLowerCase();
+      for (const el of cand) {
+        const a = attrs(el);
+        if (a && ariaNames.some((n) => a.includes(n))) { clickable(el).click(); return { clicked: true }; }
+      }
+      const sample = cand.slice(0, 20).map((el) => ({
+        role: el.getAttribute("role") || el.tagName,
+        aria: (el.getAttribute("aria-label") || "").slice(0, 30),
+        alt: (el.getAttribute("alt") || "").slice(0, 30),
+        text: (el.textContent || "").trim().slice(0, 12),
+      }));
+      return { clicked: false, sample, scopeRole: scope.getAttribute && scope.getAttribute("role") };
+    }, { altTargets, ariaNames: reactAriaCandidates(palette).map((s) => s.toLowerCase()) });
+    if (!pick.clicked) {
+      await page.keyboard.press("Escape").catch(() => {});
+      bumpOp(entry, "react_fail", "palette_not_found");
+      return res.json({ ok: false, reason: "palette_not_found",
+        picker_scope: pick.scopeRole, picker_sample: pick.sample });
+    }
+    await page.waitForTimeout(250);
+    bumpOp(entry, "react_ok");
+    logger.info({ jid, emoji: palette }, "react ok");
+    res.json({ ok: true, emoji: palette });
+  } catch (e) {
+    logger.error({ e }, "react failed");
+    res.status(500).json({ ok: false, reason: "react_error", error: String(e) });
+  } finally {
+    _opRelease();
   }
 });
 
@@ -3079,11 +4245,21 @@ app.post("/accounts/:id/send-media", async (req, res) => {
       waitUntil: "domcontentloaded", timeout: 20000,
     });
     await page.waitForTimeout(2000);
-    const accepted = await clickAcceptRequest(page);
+    let accepted = await clickAcceptRequest(page);
     if (accepted) await page.waitForTimeout(2000);
-    const box = await page.waitForSelector(SEL_COMPOSER, { timeout: 10000 }).catch(() => null);
+    let box = await page.waitForSelector(SEL_COMPOSER, { timeout: 10000 }).catch(() => null);
     if (!box) {
-      return res.status(500).json({ ok: false, error: "composer not found (thread may need manual accept)" });
+      // 与文本 send 同款救济：重导航一轮 + 探针分类（此前同样是静默 500 分支）。
+      const rec = await recoverComposerOnce(entry, page, jid);
+      accepted = accepted || rec.accepted;
+      box = rec.box;
+      if (!box) {
+        return res.status(500).json({
+          ok: false, delivered: false, accepted,
+          reason_code: rec.reason,
+          error: `composer not found (${rec.reason || "unknown"})`,
+        });
+      }
     }
     await attachAndSend(page, mediaPath, mediaType, caption);
     // 记录自发（含 caption）→ 轮询自回声抑制；无 caption 记媒体占位。

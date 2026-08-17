@@ -348,12 +348,30 @@ class AIClient(LoggerMixin):
         think_flag = ai_config.get("think")
         if think_flag is False:
             self._oa_extra_body["options"] = {"think": False}
+            # vLLM(Qwen3 系)直答档：chat_template_kwargs 由 vLLM OpenAI 服务端消费
+            # （enable_thinking=False=零思考 token，2026-08-15 主链 27B@64k 换代配套）；
+            # Ollama /v1 与云端点对未知字段一律忽略，同发无副作用。
+            self._oa_extra_body["chat_template_kwargs"] = {"enable_thinking": False}
             # Auto-detect Ollama native endpoint: use /api/chat to properly honor think:false
             # (Ollama /v1/ compat endpoint ignores think flag in some versions)
             _root = raw_base[:-3] if raw_base.endswith("/v1") else raw_base
             if ai_config.get("ollama_native", True) and (":11434" in _root or "/ollama" in _root.lower()):
                 self._ollama_native_base = _root.rstrip("/")
                 self.logger.info("Ollama native /api/chat mode enabled: %s", self._ollama_native_base)
+        # DeepSeek v4 系（flash/pro）是混合推理模型：思维链**默认开启**且与正文共享
+        # max_tokens 预算——复杂 prompt 的长思考会把正文挤成空（finish=length、
+        # content 0 字、预算全在 reasoning_tokens），客户端只认 content → 「AI 返回
+        # 空响应」×2 → 拦发弹窗。这就是 2026-08-17 全天「空响应」事故的根因
+        # （8/4 起累计 139 次，此前一直被本地兜底静默遮蔽）。陪聊/客服场景直答
+        # 质量足够：官方参数 thinking.disabled 实测 0 推理 token、更快更省。
+        # 要重新开思维链：ai.reasoning: true（届时必须同步调大 ai.max_tokens，
+        # 给思考留预算）。仅对 deepseek-v4* 下发——该字段 DeepSeek 强校验
+        # （布尔值会 422），其他 OpenAI 兼容端点不见得认识，宁窄勿宽。
+        if ("deepseek" in raw_base.lower()
+                and str(self.model or "").lower().startswith("deepseek-v4")
+                and not ai_config.get("reasoning")):
+            self._oa_extra_body["thinking"] = {"type": "disabled"}
+            self.logger.info("DeepSeek v4 思维链已关闭（ai.reasoning: true 可开启）")
         # 主链为 Ollama 时可显式配 ai.num_ctx 扩上下文窗（默认 0=不下发，行为不变）
         try:
             self._oa_num_ctx = max(0, int(ai_config.get("num_ctx") or 0))
@@ -405,6 +423,13 @@ class AIClient(LoggerMixin):
         self._fb_extra_body = {}
         self._fb_native_base = None
         fb_cfg = ai_config.get("fallback") or {}
+        # 无兜底纪律（2026-08-17 老板拍板）：``ai.fallback.chat_fallback: false`` =
+        # 云主链失败**不许**本地顶班出话（宁可不回 + 弹窗），端点配置保留——
+        # ``_local_tool_chat``（口语化改写等工具调用）与 ``ai.primary=local*``
+        # 主链身份不受本键影响（那些是指定链路，不是兜底替代品）。
+        self._fb_chat_fallback_enabled = bool(
+            (fb_cfg or {}).get("chat_fallback", True)
+        ) if isinstance(fb_cfg, dict) else True
         if isinstance(fb_cfg, dict) and fb_cfg.get("enabled") and str(fb_cfg.get("base_url") or "").strip():
             fb_base = str(fb_cfg.get("base_url")).strip().rstrip("/")
             if not fb_base.endswith("/v1"):
@@ -421,7 +446,12 @@ class AIClient(LoggerMixin):
             self._fb_model = str(fb_cfg.get("model") or "").strip()
             # 兜底默认按 think:false 处理（qwen3 思考系模型防慢答；instruct 系无感）
             if fb_cfg.get("think", False) is False:
-                self._fb_extra_body = {"options": {"think": False}}
+                self._fb_extra_body = {
+                    "options": {"think": False},
+                    # vLLM(Qwen3 系)直答档（ai.primary=local* 时本块即主链）：
+                    # enable_thinking=False 消灭思考 token；非 vLLM 端点忽略未知字段。
+                    "chat_template_kwargs": {"enable_thinking": False},
+                }
             # keep_alive：断云期让兜底模型驻留显存——只有第一个用户吃冷载（实测 ~27s），
             # 后续热答秒级。Ollama 的 /v1 兼容层**不认** keep_alive/think（实测 0.31 直接忽略），
             # 故 Ollama 端点（:11434）改走原生 /api/chat（与主链 _ollama_native_chat 同策略）。
@@ -440,10 +470,10 @@ class AIClient(LoggerMixin):
 
         # ── P1：本地优先 / 全本地模式（自托管 + 隐私敏感客户）───────────────────
         # ``ai.primary``：
-        #   cloud（默认）：完全维持既有行为——云主链 → 备用池 → 本地兜底 → canned。
+        #   cloud（默认）：云主链 → 备用池 → 本地兜底 → 全灭则本轮不回复。
         #   local        ：**本地模型即主链**；本地失败仍可回落云端（可用性优先）。
         #   local_only   ：本地模型即主链，且**绝不把用户内容发往云端**（严格隐私）；
-        #                  本地失败 → canned 占位（宁可不出话，也不泄数据）。
+        #                  本地失败 → 本轮不回复（宁可沉默，也不泄数据/乱回复）。
         #
         # 覆盖面如实声明（别把它讲成「全链数据不出本地」）：本键只管**主对话链**，
         # 即数据量最大的那条。嵌入 / 视觉 / 翻译各有自己的端点配置（本部署本就是
@@ -760,7 +790,7 @@ class AIClient(LoggerMixin):
         """OpenAI 兼容（Ollama）对话生成，与 generate_reply 行为对齐（熔断、重试、兜底）。"""
         _fb_lang = (context or {}).get("reply_lang", "zh")
         # 本地优先模式（P1）：本地端点齐备即可出话——全本地部署常**根本没配云端 key**，
-        # 此时 _oa_client 为 None，若照旧早退就会在试本地之前先回 canned。
+        # 此时 _oa_client 为 None，若照旧早退就会在试本地之前先放弃回复。
         _local_primary = bool(
             self._primary_mode in ("local", "local_only")
             and self._fb_client and self._fb_model
@@ -774,7 +804,7 @@ class AIClient(LoggerMixin):
         if self._cb_enabled and self._cb_open_until > 0:
             now = time.time()
             if now < self._cb_open_until:
-                # 开路：跳过主模型。有本地兜底则由下方兜底出真话，否则维持 canned 占位。
+                # 开路：跳过主模型。有本地兜底则由下方兜底出真话，否则本轮不回复。
                 _cb_blocked = True
                 self.logger.warning("AI 熔断开路中，跳过 API 调用 request_id=%s", (context or {}).get("request_id") or "n/a")
             elif not self._cb_half_open:
@@ -862,21 +892,21 @@ class AIClient(LoggerMixin):
             if local_reply:
                 return local_reply
             if self._primary_mode == "local_only":
-                # 严格隐私：绝不把用户内容发往云端 —— 宁可出 canned 占位，也不泄数据。
+                # 严格隐私：绝不把用户内容发往云端 —— 宁可不回复，也不泄数据/乱回复。
                 self.logger.warning(
-                    "本地主模型失败且 local_only（不回落云端）→ canned request_id=%s",
+                    "本地主模型失败且 local_only（不回落云端）→ 本轮不回复 request_id=%s",
                     request_id or "n/a")
                 return self._fallback_reply(_fb_lang)
             if not self._oa_client:
                 self.logger.warning(
-                    "本地主模型失败且未配置云端主链 → canned request_id=%s",
+                    "本地主模型失败且未配置云端主链 → 本轮不回复 request_id=%s",
                     request_id or "n/a")
                 return self._fallback_reply(_fb_lang)
             self.logger.warning(
                 "本地主模型失败 → 回落云端主链 request_id=%s", request_id or "n/a")
         if _cb_blocked:
             # 熔断开路：主模型免打扰（保住冷却窗口语义）。降级链＝备用云 Key（质量同级）
-            # → 本地兜底 → canned，逐级尝试。
+            # → 本地兜底，逐级尝试；全灭＝本轮不回复。
             pool_reply = await self._try_key_pool_chat(
                 messages, use_temperature, use_max_tokens, context, request_id,
                 skip_quality_check=_skip_quality_check,
@@ -895,6 +925,12 @@ class AIClient(LoggerMixin):
             try:
                 pt: int = 0
                 ct: int = 0
+                # 空响应诊断三元组（2026-08-17 事故观测收口：以前只有一句
+                # 「AI 返回空响应」，finish_reason/推理 token 明明在响应里却没记，
+                # 定位「思维链耗光预算」这种结构性问题要靠人肉复现）。
+                _fin: Any = None
+                _rtoks: Any = None
+                _rc_len: int = 0
                 if self._ollama_native_base:
                     reply, pt, ct = await self._ollama_native_chat(
                         messages=messages,
@@ -921,6 +957,10 @@ class AIClient(LoggerMixin):
                         if not reply:
                             _extra = getattr(_msg, "model_extra", None) or {}
                             reply = (_extra.get("reasoning") or "").strip()
+                            # DeepSeek 系思维链落在 reasoning_content（与上面的
+                            # reasoning 是两个字段）。**刻意不拿它当回复**——那是
+                            # 内心独白，漏给客户比不回复更糟；只记长度供诊断。
+                            _rc_len = len(str(_extra.get("reasoning_content") or ""))
                         # 非 stop 收尾（length=截断 / content_filter 等）此前完全静默——
                         # 2026-07-26 出过一条 5 字符残句发到线上，事后无从判断是模型
                         # 自己停的还是被截断。只记日志不改行为。
@@ -935,6 +975,9 @@ class AIClient(LoggerMixin):
                         if u:
                             pt = getattr(u, "prompt_tokens", 0) or 0
                             ct = getattr(u, "completion_tokens", 0) or 0
+                            _rtoks = getattr(
+                                getattr(u, "completion_tokens_details", None),
+                                "reasoning_tokens", None)
                     except Exception:
                         pass
                 try:
@@ -995,7 +1038,12 @@ class AIClient(LoggerMixin):
                         except Exception:
                             pass
                     return reply
-                self.logger.warning("AI 返回空响应")
+                # finish=length 且推理 token 占满 = 思维链耗光 max_tokens 预算
+                # （非网络/密钥问题）——带上三元组，下次这类问题看一行日志即定位。
+                self.logger.warning(
+                    "AI 返回空响应 (finish=%s completion_tokens=%s reasoning_tokens=%s "
+                    "reasoning_content_len=%s attempt=%s request_id=%s)",
+                    _fin, ct, _rtoks, _rc_len, attempt + 1, request_id or "n/a")
                 if self._cb_enabled:
                     self._cb_window.append(False)
                     self._maybe_trip_circuit()
@@ -1238,6 +1286,25 @@ class AIClient(LoggerMixin):
         """
         if not (self._fb_client and self._fb_model):
             return None
+        # 会话号推导（弹窗/红条要能指到具体会话，「会话 -」没有可操作性）：
+        # 优先 context 显式键；A 线 request_id=「chatid_msgid」可取前缀，B 线 r-uuid 不猜。
+        _c = context or {}
+        _cid = str(_c.get("chat_key") or _c.get("conversation_id") or "")
+        _rid = str(request_id or "")
+        if not _cid and "_" in _rid and not _rid.startswith("r-"):
+            _cid = _rid.rsplit("_", 1)[0]
+        if not as_primary and not getattr(self, "_fb_chat_fallback_enabled", True):
+            # 无兜底纪律：兜底身份被禁用 → 不出话 + 弹窗 + 主机错误日志。
+            # （as_primary=本地就是指定主链，不属兜底，不受此闸约束。）
+            try:
+                from src.ops.delivery_block import report_block
+                report_block(
+                    "chat", reason="cloud_failed_no_fallback",
+                    platform=str(_c.get("platform") or ""), conversation_id=_cid,
+                    detail=f"request_id={_rid or 'n/a'}")
+            except Exception:
+                self.logger.debug("delivery_block 上报失败", exc_info=True)
+            return None
         use_fb_model = str(model_override or "").strip() or self._fb_model
         self._fb_calls += 1
         t0 = time.time()
@@ -1252,6 +1319,12 @@ class AIClient(LoggerMixin):
                     "role": "system",
                     "content": f"Reply strictly in {_lang_name} only. Never mix in any other language.",
                 })
+            # Qwen3 系模板强制 system 只能打头（2026-08-15 主链换 27B 当晚实锤：
+            # 末位语言钉子触发 400 "System message must be at the beginning" →
+            # local_only 语义下客户整轮无回复）。把全部 system 合并进首位——
+            # 内容一条不丢、相对顺序保留，任何模板都合法；钉子的「末位近因」
+            # 优势由 27B 更强的指令跟随 + 下游语言守卫补偿。
+            fb_messages = self._coalesce_system_head(fb_messages)
             # 上下文预算裁剪（num_ctx 的客户端保险）：预算 = num_ctx - 出话预留 - 模板余量。
             # 超预算时丢最旧历史（保 system 人设 + 最近轮次），绝不让整包被 400 拒掉。
             _ctx_budget = max(512, (self._fb_num_ctx or 8192) - int(max_tokens) - 128)
@@ -1361,6 +1434,27 @@ class AIClient(LoggerMixin):
         cjk = sum(1 for ch in s if ord(ch) >= 0x2E80)
         other = len(s) - cjk
         return cjk + (other + 2) // 3 + 8
+
+    @staticmethod
+    def _coalesce_system_head(
+        messages: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """把散落各处的 system 消息合并成**首位单条**（严格模板兼容化）。
+
+        Qwen3 系（vLLM chat template）拒绝非打头的 system；本函数把所有 system
+        的文本按原相对顺序用空行拼接进第一条，非 system 消息原序保留。
+        0 条 system 或「恰 1 条且已在首位」时原样返回（零拷贝语义不变）。
+        """
+        if not messages:
+            return messages
+        sys_idx = [i for i, m in enumerate(messages)
+                   if (m or {}).get("role") == "system"]
+        if not sys_idx or (len(sys_idx) == 1 and sys_idx[0] == 0):
+            return messages
+        sys_txts = [str(messages[i].get("content") or "") for i in sys_idx]
+        merged = "\n\n".join(t for t in sys_txts if t.strip())
+        rest = [m for m in messages if (m or {}).get("role") != "system"]
+        return [{"role": "system", "content": merged}] + rest
 
     @classmethod
     def _trim_messages_to_budget(
@@ -1659,7 +1753,7 @@ class AIClient(LoggerMixin):
         _skip_quality_check: bool = False,
     ) -> Optional[str]:
         """
-        生成回复（含重试与兜底：失败时返回友好提示而非 None）
+        生成回复（含重试与兜底；主链/备用池/本地兜底全部失败 → 返回 None＝本轮不回复）
 
         strategy_overrides 可包含 temperature / max_tokens / context_rounds
         以覆盖实例默认值，实现按策略差异化调用。
@@ -1897,18 +1991,6 @@ class AIClient(LoggerMixin):
                 f"窗口失败率 {rate * 100:.0f}%（{fails}/{len(self._cb_window)}），"
                 f"开路 {self._cb_open_seconds:.0f}s")
 
-    _FALLBACK_REPLIES = [
-        "在的，请您稍等一下～",
-        "收到，马上为您处理。",
-        "好的亲，稍等我看一下～",
-        "您好，请稍等片刻～",
-        "收到啦，这就帮您查看。",
-    ]
-    _FALLBACK_REPLIES_EN = [
-        "Got it, please hold on a moment~",
-        "Received, let me check for you right away.",
-    ]
-
     @staticmethod
     def _has_chinese_japanese_mixing(reply: str) -> bool:
         """Detect alternating Chinese/Japanese sentences in one reply.
@@ -1990,13 +2072,12 @@ class AIClient(LoggerMixin):
             return True
         return False
 
-    def _single_paragraph_mode(self, context: Optional[Dict[str, Any]]) -> bool:
-        """聊天回复是否须收成**一个段落**（2026-08-08）。
+    def _chat_reply_surface(self, context: Optional[Dict[str, Any]]) -> bool:
+        """context 是否聊天回复出口（陪伴域或 RPA 聊天链）＝回复格式治理适用面。
 
-        判据与 ``_build_context_prompt`` 的「回复格式」合同完全同源：
-        陪伴域或 RPA 聊天链（合同注入面）且投递层 bubbles **未开**（多行不会被
-        拆成独立消息，只会呈现为一条消息里的多段）→ True。
-        工具型调用（``chat()``，context=None）天然 False，不误伤结构化输出。
+        与 ``_build_context_prompt`` 的「回复格式」合同注入面同判据。
+        工具型调用（``chat()``，context=None/空）恒 False——抽取/摘要等
+        结构化多行输出零触碰。
         """
         if not isinstance(context, dict) or not context:
             return False
@@ -2005,11 +2086,24 @@ class AIClient(LoggerMixin):
             if not isinstance(_cfg, dict):
                 return False
             _ch = str(context.get("channel") or "").lower()
-            if not (
+            return (
                 effective_domain_name(_cfg) == "conversion"
                 or _ch in ("whatsapp_rpa", "messenger_rpa", "line_rpa")
-            ):
-                return False
+            )
+        except Exception:
+            return False
+
+    def _single_paragraph_mode(self, context: Optional[Dict[str, Any]]) -> bool:
+        """聊天回复是否须收成**一个段落**（2026-08-08）。
+
+        判据与 ``_build_context_prompt`` 的「回复格式」合同完全同源：
+        聊天回复出口（``_chat_reply_surface``）且投递层 bubbles **未开**（多行
+        不会被拆成独立消息，只会呈现为一条消息里的多段）→ True。
+        """
+        if not self._chat_reply_surface(context):
+            return False
+        try:
+            _cfg = (self.config.config or {}) if self.config else {}
             from src.inbox.reply_split import parse_bubbles_cfg
             return not bool(parse_bubbles_cfg(_cfg).get("enabled"))
         except Exception:
@@ -2018,21 +2112,33 @@ class AIClient(LoggerMixin):
     def _shape_single_paragraph(
         self, reply: Optional[str], context: Optional[Dict[str, Any]]
     ) -> Optional[str]:
-        """单段落硬护栏：合同要求一段话时，把 LLM 惯性写出的多行折成单段。
+        """回复形态出口护栏（绝不抛）——聊天出口两档，工具型调用零触碰：
 
-        prompt 合同是软约束——历史窗口里的旧两段式回复就是现成 few-shot，
-        换合同后模型仍会偶发换行；此护栏保证出口形态与合同一致。绝不抛。
+        - 单段落合同（bubbles 关）：把 LLM 惯性写出的多行折成单段——prompt
+          合同是软约束，历史窗口里的旧两段式回复就是现成 few-shot，换合同后
+          模型仍会偶发换行。
+        - 多行合同（bubbles 开，2026-08-15 拍板）：换行保留（投递层按行/句
+          拆条），但**段落间空行一律剔除**——空行是 LLM 的文章排版惯性，
+          拆条侧本就忽略空行，坐席在回复台/输入框看到的却是「段1+空行+段2」
+          的文章体。
         """
-        if not reply or not self._single_paragraph_mode(context):
+        if not reply or not self._chat_reply_surface(context):
             return reply
         try:
-            from src.inbox.reply_split import collapse_paragraphs
-            collapsed = collapse_paragraphs(reply)
-            if collapsed and collapsed != reply:
+            from src.inbox.reply_split import collapse_paragraphs, strip_blank_lines
+            if self._single_paragraph_mode(context):
+                collapsed = collapse_paragraphs(reply)
+                if collapsed and collapsed != reply:
+                    self.logger.debug(
+                        "single-paragraph guard collapsed reply (%d -> %d chars)",
+                        len(reply), len(collapsed))
+                return collapsed or reply
+            stripped = strip_blank_lines(reply)
+            if stripped and stripped != reply:
                 self.logger.debug(
-                    "single-paragraph guard collapsed reply (%d -> %d chars)",
-                    len(reply), len(collapsed))
-            return collapsed or reply
+                    "blank-line guard stripped reply (%d -> %d chars)",
+                    len(reply), len(stripped))
+            return stripped or reply
         except Exception:
             return reply
 
@@ -2125,28 +2231,24 @@ class AIClient(LoggerMixin):
             self.logger.warning("Language guard correction failed: %s", e)
         return reply
 
-    def _fallback_reply(self, lang: str = "zh") -> str:
-        import random
+    def _fallback_reply(self, lang: str = "zh") -> Optional[str]:
+        """全链失败（主链/备用池/本地兜底都没出话）→ 返回 None＝本轮不回复。
+
+        2026-08-15 起罐头占位句移除（运营裁决「可以不回复，不能乱回复」）：
+        「在的，有什么可以帮您的？」这类客服腔在陪聊人设会话里是一眼穿帮的
+        乱回复（8/13 local_only+173 宕机 → 三平台批量罐头刷屏；8/15 脏话被
+        云端过滤成空响应 → 同句复发）。消费面对空回复语义早已闭环：A 线
+        None＝不发送（与冷却吞没同路径）、B 线空稿＝不建稿、主动触达空文案
+        ＝跳过本轮。metrics 计数保留＝「全链失败」观测口径不变。
+        """
         try:
             from src.monitoring.metrics_store import get_metrics_store
             get_metrics_store().record_fallback_reply()
         except Exception:
             pass
-        if lang and lang != "zh":
-            return random.choice(self._FALLBACK_REPLIES_EN)
-        try:
-            from src.utils.kb_store import KnowledgeBaseStore
-            from pathlib import Path
-            if hasattr(self, '_config_path') and self._config_path:
-                _kb_db = Path(self._config_path).parent / "knowledge_base.db"
-                if _kb_db.exists():
-                    kb = KnowledgeBaseStore(_kb_db)
-                    reply = kb.get_fallback("global")
-                    if reply:
-                        return reply
-        except Exception:
-            pass
-        return random.choice(self._FALLBACK_REPLIES)
+        self.logger.warning(
+            "AI 全链失败：本轮不回复（罐头兜底已移除，lang=%s）", lang or "zh")
+        return None
 
     def set_domain_pack(self, system_prompt: str = "", terminology: dict = None, context_supplements: dict = None):
         """Apply domain pack overrides for prompts, terminology, and context supplements.
@@ -2724,8 +2826,15 @@ class AIClient(LoggerMixin):
                     "轻松地确认一下（例如「刚才语音有点听不清，你是想说…吗？」），"
                     "只确认这一次，语气自然不要道歉过度。"
                 )
-        # 入站媒体（WhatsApp / Telegram 收件箱 / Messenger 等多端共用）
-        if context.get("_peer_message_is_media"):
+        # 入站媒体（WhatsApp / Telegram 收件箱 / Messenger 等多端共用）。
+        # 防御：已转写语音（_peer_message_is_voice 在场）由上方【语音消息】块叙述，
+        # 此处再按媒体块渲染要么复述要么「暂无法识别」自相矛盾——正常入口已不再为
+        # 转写语音置 _peer_message_is_media（protocol_autoreply 2026-08-16），这里兜
+        # 历史路径/多路径叠置（WA runner 语音分支等）。
+        if context.get("_peer_message_is_media") and not (
+            str(context.get("_media_kind") or "").strip().lower() == "voice"
+            and context.get("_peer_message_is_voice")
+        ):
             _mkind = context.get("_media_kind") or "media"
             _mdesc = (context.get("_media_desc") or "").strip()
             _kind_hint = {
@@ -3376,7 +3485,8 @@ class AIClient(LoggerMixin):
                     "【回复格式——像真人发消息（最高优先级）】\n"
                     "你在用手机聊天，不是写文章。每行会被拆成独立消息发出去。\n"
                     "规则：\n"
-                    "- 每行 1 句话，10-30 字。用真正的换行隔开（不是写 \\n 字符）。\n"
+                    "- 每行 1 句话，10-30 字。用真正的换行隔开（不是写 \\n 字符），"
+                    "行与行之间**不要留空行**。\n"
                     f"- 一次回复 1-{_max_lines} 行就够了，不要超过 {_max_lines} 行。\n"
                     "- 行数要自然变化：简短回应就 1 行，有内容才多行——"
                     "别每条回复都固定拆成同样的行数。\n"
@@ -4027,6 +4137,7 @@ class AIClient(LoggerMixin):
                 self.logger.debug("spoken variant split skipped", exc_info=True)
 
         # 真人感文本层 L3：出口清洁（剥情绪/副语言标记；未启用=原样返回，零成本）
+        _pre_l34_reply = reply
         if reply:
             try:
                 from src.ai.spoken_style_bridge import clean_reply_text as _ss_clean
@@ -4048,6 +4159,15 @@ class AIClient(LoggerMixin):
                 )
             except Exception:
                 pass
+
+        # 形态收口兜底（2026-08-15）：L3 剥标记可能留下空行（标记独占一行时
+        # sub 后剩空行）、L4 改写可能重新分段——**仅当 L3/L4 真改动了文本**才
+        # 对最终文本重走出口形态护栏。未改动（两层关闭/无事可做）时零触碰，
+        # 保住「未请求口语分叉 → with_intent 零行为变化」的分层契约
+        # （test_spoken_variant 钉住）；改动过的文本口语版哈希本就已失配，
+        # 重整形不新增任何回退面。
+        if reply and reply != _pre_l34_reply:
+            reply = self._shape_single_paragraph(reply, enhanced_context)
 
         return reply
 

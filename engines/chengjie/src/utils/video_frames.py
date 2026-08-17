@@ -99,6 +99,55 @@ def _grab_frame(video_path: str, ts: float, out_path: str) -> bool:
         return False
 
 
+def _frame_points(dur: float, n: int) -> List[float]:
+    """抽帧时间点：避开纯黑首尾帧（8%~92% 区间均匀分布）；时长未知时从 0 起每秒 1 帧。
+
+    montage（宫格单图）与 frames_list（多图直喂）共用同一取点逻辑——两条路径
+    看到的必须是同一批画面，否则 A/B 对比与回落语义都失真。
+    """
+    n = max(1, int(n))
+    if dur > 0:
+        if n == 1:
+            return [dur * 0.5]
+        lo, hi = dur * 0.08, dur * 0.92
+        step = (hi - lo) / (n - 1)
+        return [lo + i * step for i in range(n)]
+    return [float(i) for i in range(n)]
+
+
+def extract_frames_list(
+    video_path: str,
+    out_dir: str,
+    *,
+    frames: int = 4,
+) -> Optional[Tuple[List[str], float]]:
+    """抽 ``frames`` 帧（与宫格同一取点逻辑）存为 ``out_dir/fN.jpg`` **独立文件列表**。
+
+    供多图 VLM（一次请求多张 image_url，每帧全分辨率）使用；返回
+    ``(frame_paths_按时间序, duration_sec)``，失败/一帧未得返回 None。
+    不做缩放（VisionClient 发送前按 video_frame_dim 统一重编码）；
+    ``out_dir`` 由调用方创建并负责清理。软失败不抛。
+    """
+    if not ffmpeg_available():
+        logger.warning("[video_frames] ffmpeg/ffprobe 不可用，跳过视频抽帧")
+        return None
+    dur = _probe_duration(video_path)
+    out = Path(out_dir)
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return None
+    paths: List[str] = []
+    for i, ts in enumerate(_frame_points(dur, frames)):
+        fp = out / f"f{i}.jpg"
+        if _grab_frame(video_path, ts, str(fp)):
+            paths.append(str(fp))
+    if not paths:
+        logger.warning("[video_frames] 未抽到任何帧: %s", video_path)
+        return None
+    return (paths, dur)
+
+
 def extract_frames_montage(
     video_path: str,
     out_path: str,
@@ -111,7 +160,7 @@ def extract_frames_montage(
 
     返回 ``(montage_path, duration_sec, n_frames)``；失败返回 None。
 
-    抽帧点避开纯黑首尾帧（取 8%~92% 区间均匀分布）；时长未知时从 0 起每秒 1 帧。
+    抽帧点取自 ``_frame_points``（与 extract_frames_list 同一批画面）。
     """
     if not ffmpeg_available():
         logger.warning("[video_frames] ffmpeg/ffprobe 不可用，跳过视频抽帧")
@@ -123,16 +172,7 @@ def extract_frames_montage(
         return None
 
     dur = _probe_duration(video_path)
-    n = max(1, int(frames))
-    if dur > 0:
-        if n == 1:
-            points = [dur * 0.5]
-        else:
-            lo, hi = dur * 0.08, dur * 0.92
-            step = (hi - lo) / (n - 1)
-            points = [lo + i * step for i in range(n)]
-    else:
-        points = [float(i) for i in range(n)]
+    points = _frame_points(dur, frames)
 
     tmpdir = Path(tempfile.mkdtemp(prefix="vframes_"))
     frame_files: List[str] = []
@@ -177,6 +217,6 @@ def extract_frames_montage(
 
 
 __all__ = [
-    "ffmpeg_available", "extract_frames_montage",
+    "ffmpeg_available", "extract_frames_montage", "extract_frames_list",
     "has_audio_stream", "extract_audio_wav",
 ]

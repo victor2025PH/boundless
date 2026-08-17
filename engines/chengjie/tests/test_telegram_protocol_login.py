@@ -180,3 +180,109 @@ def test_poll_short_circuits_on_password_needed(tmp_path):
     login.client = object()  # 若真去 invoke 会 AttributeError → 证明没走网络分支
     res = asyncio.run(login.poll())
     assert res["status"] == "password_needed"
+
+
+# ── _migrate loop 亲和性（2026-08-14 跨区扫码 DC 迁移事故回归钉）──────────────
+# 根因：pyrogram sync.py 把 Client 公开方法从 web 线程调度到主 loop 执行，
+# Session（ping_task/recv_task）因此活在主 loop；_migrate 直接操作 Session 内部
+# （不在包装范围），若在 web loop 裸 await session.stop() → 「attached to a
+# different loop」。契约＝_migrate 必须在 session.loop 上执行整段迁移。
+
+
+class _MigrateStorage:
+    def __init__(self, sink):
+        self._sink = sink
+
+    async def dc_id(self, *_a):
+        self._sink.append(("storage.dc_id", asyncio.get_running_loop()))
+
+    async def test_mode(self, *_a):
+        self._sink.append(("storage.test_mode", asyncio.get_running_loop()))
+        return False
+
+    async def auth_key(self, *_a):
+        self._sink.append(("storage.auth_key", asyncio.get_running_loop()))
+
+
+class _MigrateSession:
+    def __init__(self, loop, sink):
+        self.loop = loop
+        self._sink = sink
+
+    async def stop(self):
+        self._sink.append(("session.stop", asyncio.get_running_loop()))
+
+    async def start(self):
+        self._sink.append(("session.start", asyncio.get_running_loop()))
+
+
+class _FakeAuth:
+    def __init__(self, *_a, **_kw):
+        pass
+
+    async def create(self):
+        return b"fake-auth-key"
+
+
+def _run_migrate_with_session_loop(tmp_path, monkeypatch, *, cross_loop: bool):
+    """在独立线程 loop 上放一个假 session，验证 _migrate 的执行落点。"""
+    import threading
+    import pyrogram.session as pysess
+
+    sink: list = []
+    sess_loop_box: dict = {}
+
+    def _thread_loop():
+        loop = asyncio.new_event_loop()
+        sess_loop_box["loop"] = loop
+        asyncio.set_event_loop(loop)
+        loop.run_forever()
+
+    t = threading.Thread(target=_thread_loop, daemon=True)
+    t.start()
+    while "loop" not in sess_loop_box:
+        pass
+    sess_loop = sess_loop_box["loop"]
+
+    login = tpl.TelegramQrLogin(1, "h", str(tmp_path))
+    client = _FakeClient()
+    client.storage = _MigrateStorage(sink)
+    login.client = client
+
+    # 新 Session 构造也要发生在 session loop 上（sink 记录构造点由 start() 代表）
+    monkeypatch.setattr(pysess, "Auth", _FakeAuth)
+    monkeypatch.setattr(
+        pysess, "Session",
+        lambda *_a, **_kw: _MigrateSession(sess_loop, sink))
+
+    try:
+        if cross_loop:
+            client.session = _MigrateSession(sess_loop, sink)
+            asyncio.run(login._migrate(5))
+            expect = sess_loop
+        else:
+            async def _same_loop():
+                here = asyncio.get_running_loop()
+                client.session = _MigrateSession(here, sink)
+                await login._migrate(5)
+                return here
+            expect = asyncio.run(_same_loop())
+    finally:
+        sess_loop.call_soon_threadsafe(sess_loop.stop)
+        t.join(timeout=5)
+
+    steps = [s for s, _ in sink]
+    assert steps == ["session.stop", "storage.dc_id", "storage.test_mode",
+                     "storage.auth_key", "session.start"]
+    for step, loop in sink:
+        assert loop is expect, f"{step} 落在了错误的 loop 上"
+
+
+def test_migrate_marshals_to_session_loop(tmp_path, monkeypatch):
+    """跨 loop 场景：session 活在别的 loop → 迁移整段必须调度过去执行。"""
+    _run_migrate_with_session_loop(tmp_path, monkeypatch, cross_loop=True)
+
+
+def test_migrate_same_loop_runs_direct(tmp_path, monkeypatch):
+    """同 loop 场景（单测/主线程运行）：直连执行，行为与旧实现一致。"""
+    _run_migrate_with_session_loop(tmp_path, monkeypatch, cross_loop=False)

@@ -26,7 +26,11 @@ if sys.platform == "win32":
 # 添加项目根目录到Python路径
 sys.path.insert(0, str(Path(__file__).parent))
 
-from src.client.telegram_client import TelegramClient
+# P3-2（2026-08-12 可靠性复盘）：TelegramClient 顶层 import 已移除——它是死代码
+# （构造点在 bootstrap/services.py::setup_telegram_clients，人家自己函数内 import），
+# 却把 pyrogram 的 ~5s import（raw.types 生成为主，-X importtime 实测 6.98s 链）
+# 提前到进程启动第 0 秒、挡在一切之前。移除后该成本落回 telegram_clients 阶段，
+# boot phases 归因变诚实，也为将来 web-first 排序解锁 runway。
 from src.ai.ai_client import AIClient
 from src.skills.skill_manager import SkillManager
 from src.utils.config_manager import ConfigManager
@@ -205,7 +209,10 @@ class AIChatAssistant:
             except Exception as _hg:
                 self.logger.debug("托管网关跳过: %s", _hg)
             self.ai_client = AIClient(self.config)
-            await self.ai_client.initialize()
+            # defer_probe（P3-1 2026-08-12）：启动连接探针后台化——boot phases 实测
+            # 它是 init 段最大单项（4.3s），而本处从不消费 initialize() 的返回值；
+            # 后台任务保留原有日志/坏 key 告警。reload_ai_runtime 仍走阻塞探针。
+            await self.ai_client.initialize(defer_probe=True)
             self.logger.info("AI客户端初始化成功")
             # 语音口语化 LLM 档（voice_colloquial_llm）复用主 AIClient 的 ai.fallback 本地端点
             # 做 rewrite_local——注入已初始化实例（否则其懒加载会建未初始化的空 client → 恒回落规则档）。
@@ -741,6 +748,22 @@ class AIChatAssistant:
                 self.logger.info("✅ 每人设相册/媒体注册表就绪（persona_media.db）")
         except Exception:
             self.logger.warning("每人设相册/媒体注册表初始化失败（已忽略）", exc_info=True)
+
+    def _init_group_members_store(self) -> None:
+        """装配 Telegram 群成员提取库（DB 落 config/group_members.db；始终建库，行为受 flag 门控）。
+
+        成员库（去重成员 + 提取任务/进度）落库；后台 API（``/api/tg-members/*``）与提取编排读写
+        同一份 store。DB 路径随 config 目录 → 双实例天然隔离，且避免与 :memory: 单测串味。
+        提取行为本身受 ``companion.group_members.enabled`` 总闸（默认关）——建库 ≠ 开功能。
+        """
+        try:
+            from src.companion.group_members_store import configure_group_members_store
+            _cfg_dir = Path(self.config.config_path).parent
+            store = configure_group_members_store(_cfg_dir / "group_members.db")
+            if store is not None:
+                self.logger.info("✅ Telegram 群成员提取库就绪（group_members.db）")
+        except Exception:
+            self.logger.warning("Telegram 群成员提取库初始化失败（已忽略）", exc_info=True)
 
     def _init_fatex_store(self) -> None:
         """装配 FateX（问衍）产品独立数据库（fatex.db，与主库物理分离）。

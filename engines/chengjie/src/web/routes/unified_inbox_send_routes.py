@@ -28,6 +28,7 @@ from fastapi import Depends, HTTPException, Request
 
 from src.ai.translation_service import normalize_lang
 from src.inbox.channel_adapters import ChannelSendError, send_via_adapters
+from src.utils.agent_char_usage import check_request_quota, record_request_chars
 from src.inbox.normalizer import conv_id as _conv_id
 from src.inbox.outbound_translate import contains_cjk, lang_is_cjk
 from src.web.routes.unified_inbox_aggregate import _INBOX_ADAPTERS
@@ -42,6 +43,54 @@ from src.web.routes.unified_inbox_services import (
 from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
+
+
+def _perm_ok(request: Request, perm: str) -> bool:
+    """按登录坐席判能力权限（P2 管理面改造：perms_json 按人覆写，master 恒 True）。
+
+    懒 import：``resolve_user_perm`` 由并行批次在 web_user_store 落地，模块未就绪
+    （ImportError）/ user_store 未暴露 / 未登录（token 链）/ 任何异常 → **一律放行**
+    （fail-open：权限守卫绝不能因装配时序把发送主链打挂）。
+    """
+    try:
+        from src.utils.web_user_store import resolve_user_perm
+        us = getattr(request.app.state, "user_store", None)
+        sess = request.session
+        uname = str(sess.get("username") or "")
+        role = str(sess.get("role") or "")
+        if us is None or not uname:
+            return True
+        return resolve_user_perm(us, uname, role, perm)
+    except Exception:
+        return True
+
+
+def _deny_capability(request: Request, perm: str) -> None:
+    """能力未授予 → 403（i18n 文案）；放行则无副作用。"""
+    if not _perm_ok(request, perm):
+        raise HTTPException(403, tr(request, "err.perm.capability_denied"))
+
+
+# ── 出站媒体体积上限（P3 2026-08-17：25MB 硬编码 → 按平台/配置）────────────
+# inbox.media.limits_mb: {default: 25, telegram: 200, whatsapp: 64, ...}
+# 未配置回落 25（旧行为）；夹 [1, 2048] 防误配。前端经 send-caps.media_max_mb
+# 拿到同一数字做上传前预检（两端同源，不各写一套）。
+_MEDIA_CAP_DEFAULT_MB = 25
+
+
+def _media_cap_mb(config: Dict[str, Any], platform: str) -> int:
+    """该平台的出站媒体体积上限（MB）：limits_mb.{platform} → .default → 25。"""
+    try:
+        lim = (((config or {}).get("inbox") or {}).get("media") or {}) \
+            .get("limits_mb") or {}
+        v = lim.get(str(platform or "").lower())
+        if v is None:
+            v = lim.get("default")
+        n = int(v) if v is not None else _MEDIA_CAP_DEFAULT_MB
+        return max(1, min(2048, n))
+    except Exception:
+        return _MEDIA_CAP_DEFAULT_MB
+
 
 # P1-3（2026-08-11）：语音合成期「正在录音」气泡的 fire-and-forget 任务强引用集
 # （create_task 对任务仅弱引用，防 GC 吞任务——与 voice_routes._TTS_JOBS 同教训）。
@@ -107,6 +156,106 @@ def _raise_if_account_blocked(request: Request, platform: str, account_id: str) 
         raise HTTPException(409, tr(request, "err.inbox.account_offline"))
 
 
+# ── 发送护栏可见化（P0 2026-08-12，修「额度拦截被包成 ok:true 静默吞掉」）────
+# 编排器护栏（Kill-Switch / 金丝雀 / 授权 / 反封号闸门）拦截时返回
+# {delivered:false, blocked:reason} 而不抛错——那是给自动链「不记冷却、择机
+# 重试」的契约；人工发送路由此前原样透传 → 前端只认 ok → 坐席点了毫无反应。
+# 此处三件套：① 预检（fail-open，省一次翻译/TTS 合成）② 结果判定 ③ 统一 409
+# detail（code=send_blocked + 人话原因 + 额度数字 + 预计释放时刻）。
+# 预判/应答与护栏共用 send_gate_snapshot（同一判定函数），绝不另算一套。
+
+
+def _result_undelivered(result: Any) -> str:
+    """适配器/编排器返回体的未送达判定：``blocked``（护栏拦截）/``failed``
+    （worker 显式报 delivered=False）/``""``（正常）。只认显式 False——
+    无 delivered 键的历史返回体（如 LINE 入队 {queued:true}）不受影响。"""
+    if not isinstance(result, dict):
+        return ""
+    if result.get("blocked"):
+        return "blocked"
+    if result.get("delivered") is False:
+        return "failed"
+    return ""
+
+
+def _send_blocked_exc(
+    request: Request, platform: str, account_id: str, chat_key: str,
+    reason: str = "", snap: Any = None,
+) -> HTTPException:
+    """护栏拦截 → 409 HTTPException（code=send_blocked，供前端分型渲染）。
+
+    detail 结构与语言错配/近重复守卫同族：{code, message, reason, quota?,
+    frees_at?}。message 按拦因族谱出人话（额度/红灯/急停/放量/授权/会话掉线）。
+    """
+    from src.inbox.send_gate_status import blocked_reason_key, send_gate_snapshot
+    if snap is None:
+        try:
+            _cm = getattr(request.app.state, "config_manager", None)
+            snap = send_gate_snapshot(
+                platform, account_id, chat_key,
+                config=(getattr(_cm, "config", None) or {}) if _cm else {})
+        except Exception:
+            snap = None
+    snap = snap if isinstance(snap, dict) else {}
+    reason = str(reason or snap.get("reason") or "")
+    quota = snap.get("quota") if isinstance(snap.get("quota"), dict) else {}
+    used = int(quota.get("used") or 0)
+    cap = int(quota.get("cap") or 0)
+    frees_at = snap.get("frees_at")
+    fam = blocked_reason_key(reason)
+    if fam == "quota" and cap > 0:
+        message = tr(request, "err.inbox.send_blocked_quota", used=used, cap=cap)
+    else:
+        message = tr(request, f"err.inbox.send_blocked_{fam}", reason=reason)
+    detail: Dict[str, Any] = {
+        "code": "send_blocked", "reason": reason, "message": message,
+    }
+    if cap > 0:
+        detail["used"], detail["cap"] = used, cap
+    if frees_at:
+        detail["frees_at"] = float(frees_at)
+    logger.warning(
+        "[send] guard=send_blocked 护栏拦截已显式回执 conv=%s reason=%s used=%s cap=%s",
+        _conv_id(platform, account_id, chat_key), reason, used, cap)
+    return HTTPException(409, detail)
+
+
+def _send_gate_exc(
+    request: Request, platform: str, account_id: str, chat_key: str,
+    *, owned: Any = None,
+) -> Any:
+    """发送前预检：护栏会拦 → 返回待抛的 409（调用方自理幂等释放等收尾）；
+    放行/预检自身故障 → None（fail-open，预检坏了绝不拦发送）。
+
+    仅当编排器实际拥有该账号（enforcement 所在路径）才预检——RPA 回落路径
+    此前不受这些护栏约束，预检若无条件拦就是扩大执法面（行为变更），只做
+    反馈修复不做这个。"""
+    try:
+        if owned is None:
+            from src.integrations.account_orchestrator import (
+                get_orchestrator_if_running,
+            )
+            _orch = get_orchestrator_if_running()
+            owned = bool(_orch and _orch.owns(platform, account_id))
+        if not owned:
+            return None
+        from src.inbox.send_gate_status import send_gate_snapshot
+        _cm = getattr(request.app.state, "config_manager", None)
+        snap = send_gate_snapshot(
+            platform, account_id, chat_key,
+            config=(getattr(_cm, "config", None) or {}) if _cm else {})
+        if not snap or not snap.get("blocked"):
+            return None
+        return _send_blocked_exc(
+            request, platform, account_id, chat_key,
+            reason=str(snap.get("reason") or ""), snap=snap)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.debug("[send] 护栏预检自身故障（放行交编排器兜底）", exc_info=True)
+        return None
+
+
 def _rpa_auto_voice_enabled(request: Request, platform: str, account_id: str) -> bool:
     """RPA 会话是否配置了**设备端**语音输出（``voice_output.enabled``）。
 
@@ -156,7 +305,7 @@ def _rpa_auto_voice_enabled(request: Request, platform: str, account_id: str) ->
 
 async def _deliver_bubble_parts(
     request: Request, platform: str, account_id: str, chat_key: str,
-    parts, adapters, *, reply_to, bcfg,
+    parts, adapters, *, reply_to, bcfg, origin: str = "manual",
 ):
     """把多条气泡按拟人节奏逐条发出（P1.5 手动路径分条）。
 
@@ -194,7 +343,8 @@ async def _deliver_bubble_parts(
         if i > 0:
             # 条间「想（静默）→ 打字（挂正在输入续挂）」：与 autosend/A 线同一
             # 节奏模型——客户视角是同一个人设在打字，不该因入口不同而两种手感。
-            _gap = _gaps[i - 1] if i - 1 < len(_gaps) else 0.8
+            # 兜底 3.0＝gap_sec_lo 时代缺省：规划器异常时整组不至于回到机关枪
+            _gap = _gaps[i - 1] if i - 1 < len(_gaps) else 3.0
             try:
                 from src.integrations.humanize_metrics import (
                     record_bubble_gap as _rbg_manual,
@@ -225,6 +375,7 @@ async def _deliver_bubble_parts(
             res = await send_via_adapters(
                 request, platform, account_id, chat_key, part, adapters,
                 reply_to=(reply_to if i == 0 else None), mentions=None,
+                origin=origin,
             )
         except Exception:
             if sent == 0:
@@ -232,6 +383,18 @@ async def _deliver_bubble_parts(
             logger.warning(
                 "[send] 气泡分条中途失败，已发 %d/%d platform=%s",
                 sent, len(parts), platform)
+            break
+        # P0 2026-08-12：护栏拦截/显式未送达是**数据形态**的失败（编排器不抛），
+        # 不能计入已发——首条即拦时把结果交给外层统一转 409/502（幂等释放也在
+        # 外层），中途被拦按「已发算数、剩余丢弃」旧语义收口。
+        if _result_undelivered(res):
+            if sent == 0:
+                first_result = res
+            else:
+                logger.warning(
+                    "[send] 气泡分条中途被拦/未送达，已发 %d/%d (%s)",
+                    sent, len(parts),
+                    str(res.get("blocked") or res.get("error") or "")[:80])
             break
         if i == 0:
             first_result = res
@@ -263,7 +426,15 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         text = str(body.get("text") or "").strip()
         if not chat_key or not text:
             raise HTTPException(400, tr(request, "err.inbox.chat_text_empty"))
+        # 能力权限（2026-08-16）：发文字受 chat.send_text 闸；文字本身不耗字符
+        # 额度，刻意不加 check_request_quota（额度只管翻译/TTS 这类算力消耗）。
+        _deny_capability(request, "chat.send_text")
         _raise_if_account_blocked(request, platform, account_id)
+        # 护栏预检（P0 2026-08-12）：额度/急停拦截在这里就 409 显式回执——
+        # 省掉后面的翻译调用，且此时幂等键尚未占位、无需释放。fail-open。
+        _gate_ex = _send_gate_exc(request, platform, account_id, chat_key)
+        if _gate_ex is not None:
+            raise _gate_ex
 
         # P0 幂等键（2026-07-29 多开/双击防双发）：前端每次提交带 client_msg_id，
         # 同 (会话, id) 在 TTL 窗口内重复提交按「已发送」应答但不再真发；
@@ -324,6 +495,11 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                     style="chat", engine=_pref_engine,
                 )
                 if res.ok and (res.translated_text or "").strip():
+                    # 坐席字符计量归因（2026-08-16）：出站预翻译成功=坐席主动
+                    # 消费了一次翻译，按**源文本**长度记（original_text；此处
+                    # text 即将被译文覆写，与 /translate 的 len(text) 同口径）。
+                    record_request_chars(
+                        request, "translation", len(original_text))
                     text = res.translated_text.strip()
                     translation_info = res.to_dict()
                 elif not res.ok:
@@ -503,9 +679,11 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 except Exception:
                     pass
             else:
+                # origin="manual"（P1 2026-08-12）：坐席人工发送用完整日额度，
+                # 不受 reserve_for_manual 让路口径影响（那是给自动链的）。
                 result = await send_via_adapters(
                     request, platform, account_id, chat_key, text, _INBOX_ADAPTERS,
-                    reply_to=_reply_to, mentions=_mentions,
+                    reply_to=_reply_to, mentions=_mentions, origin="manual",
                 )
         except ChannelSendError as ex:
             _dedup.release(_dedup_scope, _client_msg_id)  # 失败释放：同 id 重试可再发
@@ -513,6 +691,19 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         except Exception:
             _dedup.release(_dedup_scope, _client_msg_id)
             raise
+        # P0 2026-08-12：编排器把护栏拦截/未送达当**数据**返回（自动链契约），
+        # 人工路由必须在此翻译成显式失败——此前包成 ok:true，坐席点了毫无反应，
+        # 还连带打了接管标/首响归属（什么都没发出去，会话却被切 manual）。
+        _undeliv = _result_undelivered(result)
+        if _undeliv:
+            _dedup.release(_dedup_scope, _client_msg_id)
+            if _undeliv == "blocked":
+                raise _send_blocked_exc(
+                    request, platform, account_id, chat_key,
+                    reason=str(result.get("blocked") or ""))
+            raise HTTPException(502, tr(
+                request, "err.inbox.send_not_delivered",
+                msg=str(result.get("error") or result.get("error_kind") or "")))
         cid = (result.get("conversation_id") if isinstance(result, dict) else None) \
             or _conv_id(platform, account_id, chat_key)
         _mark_send(cid)
@@ -583,6 +774,51 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             "bubbles": _bubbles_info,
         }
 
+    @app.post("/api/unified-inbox/send-gate/exempt")
+    async def api_unified_inbox_send_gate_exempt(
+        request: Request, _=Depends(page_auth),
+    ):
+        """把当前会话客户加入发送闸门白名单（P1 2026-08-12 管理员直达出路）。
+
+        composer 护栏横幅的「白名单此客户」按钮 → 本端点 → overlay 保注释写入
+        ``companion_send_gate.exempt_peers``（热生效，~秒级）。白名单只豁免
+        **限额**（quota 道）；Kill-Switch/授权/金丝雀不受影响（急停不许旁路）。
+
+        角色闸：拒 agent/viewer（与账号管理写口同排除法哲学——绝不误伤
+        master/admin 与桌面壳 Bearer「主人」，只拦明确的低权限坐席/观察员）。
+        """
+        try:
+            _role = str(request.session.get("role", "") or "")
+        except Exception:
+            _role = ""
+        if _role in ("agent", "viewer"):
+            raise HTTPException(403, tr(request, "err.perm.supervisor_required"))
+        body = await request.json()
+        chat_key = str(body.get("chat_key") or "").strip()
+        if not chat_key:
+            raise HTTPException(400, tr(request, "err.ws.field_required",
+                                        field="chat_key"))
+        cm = getattr(request.app.state, "config_manager", None)
+        if cm is None or not hasattr(cm, "set_overlay_flag"):
+            raise HTTPException(503, tr(request, "err.inbox.gate_exempt_cfg_na"))
+        cfg = getattr(cm, "config", None) or {}
+        from src.skills.companion_send_gate import peer_exempt
+        peers = [str(x) for x in (
+            (cfg.get("companion_send_gate") or {}).get("exempt_peers") or [])]
+        if peer_exempt(cfg, chat_key):
+            return {"ok": True, "already": True, "count": len(peers)}
+        peers.append(chat_key)
+        ok, msg = cm.set_overlay_flag("companion_send_gate.exempt_peers", peers)
+        if not ok:
+            raise HTTPException(500, tr(request, "err.inbox.gate_exempt_failed",
+                                        msg=str(msg or "")))
+        _agent = _session_agent(request)
+        logger.info(
+            "[send-gate] 白名单新增 peer=%s platform=%s by=%s（共 %d 条，overlay 已热生效）",
+            chat_key, str(body.get("platform") or ""),
+            _agent.get("agent_id") or "?", len(peers))
+        return {"ok": True, "count": len(peers)}
+
     @app.post("/api/unified-inbox/send-media")
     async def api_unified_inbox_send_media(request: Request, _=Depends(page_auth)):
         """M6⑥：坐席从收件箱发送媒体（图片/语音/视频/文件）。
@@ -599,18 +835,46 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         upload = form.get("file")
         if not chat_key or upload is None or not getattr(upload, "filename", ""):
             raise HTTPException(400, tr(request, "err.inbox.file_chat_empty"))
+        # 能力权限（2026-08-16）：发媒体受 chat.send_media 闸（媒体不耗字符额度）
+        _deny_capability(request, "chat.send_media")
         _raise_if_account_blocked(request, platform, account_id)
 
         from src.integrations.account_orchestrator import get_orchestrator
         orch = get_orchestrator()
         if not orch.owns_media(platform, account_id):
             raise HTTPException(501, tr(request, "err.inbox.media_unsupported"))
+        # 护栏预检（P0 2026-08-12）：此时尚未读文件/落盘/占幂等位，被拦零清理
+        _gate_ex = _send_gate_exc(
+            request, platform, account_id, chat_key, owned=True)
+        if _gate_ex is not None:
+            raise _gate_ex
 
-        data = await upload.read()
-        if not data:
+        # P3 2026-08-17：体积上限按平台/配置（默认仍 25MB）+ **流式落盘**——
+        # 旧实现 upload.read() 把整个文件读进内存做 len() 校验，上限放宽到
+        # 100MB+ 后每次上传都是一记内存尖峰；改为读头部验魔数、其余按 1MB
+        # 分块直写目的文件，峰值内存恒定，超限中途即停（删残件 + 413）。
+        _cap_mb = _media_cap_mb(
+            (getattr(getattr(request.app.state, "config_manager", None),
+                     "config", None) or {}), platform)
+        head = await upload.read(64 * 1024)
+        if not head:
             raise HTTPException(400, tr(request, "err.inbox.empty_file"))
-        if len(data) > 25 * 1024 * 1024:
-            raise HTTPException(413, tr(request, "err.inbox.file_too_large"))
+
+        # P0 2026-08-17：出站内容守卫——危险扩展名黑名单 + magic bytes 与
+        # 扩展名大类一致性（媒体产物验证纪律的出站版：伪装件在上传口拦下，
+        # 而不是让平台 API 在发送侧晦涩失败）。魔数只看前 16 字节，head 足够。
+        from src.inbox.media_guard import validate_outbound_media
+        _mg = validate_outbound_media(str(upload.filename or ""), head)
+        if not _mg["ok"]:
+            _mg_key = {
+                "ext_forbidden": "err.inbox.media_ext_forbidden",
+                "executable_content": "err.inbox.media_exec_content",
+            }.get(str(_mg["reason"]), "err.inbox.media_magic_mismatch")
+            logger.info(
+                "[send-media] 内容守卫拒绝 file=%s reason=%s detected=%s",
+                str(upload.filename or "")[:80], _mg["reason"],
+                _mg["detected"] or "?")
+            raise HTTPException(415, tr(request, _mg_key))
 
         # P0 幂等键（与文本 send 同口径；置于全部校验之后、真发送之前）
         from src.inbox.send_dedup import get_send_dedup
@@ -623,17 +887,79 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 _dedup_scope, _client_msg_id[:16])
             return {"ok": True, "duplicate": True}
 
-        from src.integrations.protocol_bridge import save_outbound_media
-        local, url, mtype = save_outbound_media(
-            platform, account_id, upload.filename, data)
+        import secrets as _secrets
+        from src.integrations.protocol_bridge import (
+            media_paths, media_type_from_ext,
+        )
+        _ext = os.path.splitext(str(upload.filename or ""))[1] or ".bin"
+        mtype = media_type_from_ext(_ext)
+        _dest, url = media_paths(
+            platform, f"out_{account_id}_{_secrets.token_hex(6)}", _ext)
+        local = str(_dest)
+        _cap_bytes = _cap_mb * 1024 * 1024
+        _size = 0
+        _overflow = False
+        try:
+            with open(_dest, "wb") as _fh:
+                _fh.write(head)
+                _size = len(head)
+                while True:
+                    _chunk = await upload.read(1024 * 1024)
+                    if not _chunk:
+                        break
+                    _size += len(_chunk)
+                    if _size > _cap_bytes:
+                        _overflow = True
+                        break
+                    _fh.write(_chunk)
+        except Exception as ex:  # noqa: BLE001
+            _dedup.release(_dedup_scope, _client_msg_id)
+            try:
+                os.remove(local)
+            except Exception:
+                pass
+            raise HTTPException(502, tr(request, "err.inbox.media_send_failed", err=ex))
+        if _overflow:
+            _dedup.release(_dedup_scope, _client_msg_id)
+            try:
+                os.remove(local)
+            except Exception:
+                pass
+            raise HTTPException(413, tr(
+                request, "err.inbox.file_too_large_mb", mb=_cap_mb))
+
+        # P0 2026-08-17：文档无配文 → 用原始文件名作收件箱镜像文本（气泡/会话
+        # 预览显示「report.pdf」而非空行；只影响坐席台可读文本，不发给客户）。
+        _inbox_text = None
+        if mtype == "document" and not caption.strip():
+            _inbox_text = os.path.basename(str(upload.filename or "")) or None
         _send_agent = _session_agent(request)
         try:
-            res = await orch.send_media(
-                platform, account_id, chat_key,
-                media_path=local, media_url=url, media_type=mtype, caption=caption)
+            try:
+                res = await orch.send_media(
+                    platform, account_id, chat_key,
+                    media_path=local, media_url=url, media_type=mtype,
+                    caption=caption, inbox_text=_inbox_text, origin="manual")
+            except TypeError:
+                # 旧签名（无 origin/inbox_text kwarg，测试假编排器常见）→ 回落
+                res = await orch.send_media(
+                    platform, account_id, chat_key,
+                    media_path=local, media_url=url, media_type=mtype,
+                    caption=caption)
         except Exception as ex:  # noqa: BLE001
             _dedup.release(_dedup_scope, _client_msg_id)  # 失败释放：同 id 重试可再发
             raise HTTPException(502, tr(request, "err.inbox.media_send_failed", err=ex))
+        # P0 2026-08-12：拦截/未送达显式回执（同文本路由；防 ok:true 静默吞）
+        _undeliv = _result_undelivered(res)
+        if _undeliv:
+            _dedup.release(_dedup_scope, _client_msg_id)
+            if _undeliv == "blocked":
+                raise _send_blocked_exc(
+                    request, platform, account_id, chat_key,
+                    reason=str(res.get("blocked") or ""))
+            raise HTTPException(502, tr(
+                request, "err.inbox.send_not_delivered",
+                msg=str(res.get("error") or res.get("error_kind") or "")))
         cid = _conv_id(platform, account_id, chat_key)
         try:
             ibx = _inbox_store(request)
@@ -648,6 +974,33 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         except Exception:
             logger.debug("record_agent_send(media) 失败", exc_info=True)
         return {"ok": True, "result": res, "media_ref": url, "media_type": mtype}
+
+    @app.get("/api/unified-inbox/media-download")
+    async def api_unified_inbox_media_download(
+            request: Request, ref: str = "", name: str = "",
+            _=Depends(page_auth)):
+        """P0 2026-08-17：媒体显式下载（Content-Disposition: attachment）。
+
+        ``/static`` 直链的落盘名是 ``out_<acct>_<hex>.ext`` 乱码名、且浏览器
+        对图片/PDF 倾向内联预览——坐席「另存给主管」没有可靠入口。本端点把
+        ``protocol_media`` 根内的文件以「消息里的原始文件名 + 强制下载」回给
+        浏览器。只服务该根内文件：realpath 容纳检查防路径穿越（本机代码根是
+        目录联接，realpath 口径与 static_asset_paths 教训对齐）。
+        """
+        from src.inbox.media_guard import (
+            resolve_contained_path, safe_download_name)
+        from src.integrations.protocol_bridge import (
+            protocol_media_root, static_media_ref_to_path)
+        cand = static_media_ref_to_path(str(ref or ""))
+        if not cand:
+            raise HTTPException(404, tr(request, "err.inbox.media_not_found"))
+        path = resolve_contained_path(str(protocol_media_root()), cand)
+        if not path or not os.path.isfile(path):
+            raise HTTPException(404, tr(request, "err.inbox.media_not_found"))
+        from fastapi.responses import FileResponse
+        fname = safe_download_name(name, fallback=os.path.basename(path))
+        return FileResponse(
+            path, filename=fname, media_type="application/octet-stream")
 
     @app.post("/api/unified-inbox/send-voice")
     async def api_unified_inbox_send_voice(request: Request, _=Depends(page_auth)):
@@ -670,6 +1023,16 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             raise HTTPException(400, tr(request, "err.inbox.chat_text_empty"))
         if len(text) > 1000:
             raise HTTPException(400, tr(request, "err.inbox.text_too_long_voice"))
+        # 能力权限 + 坐席额度闸（2026-08-16）：选点在 ``_dedup.reserve`` **之前**
+        # ——此时幂等键尚未占位、对账表尚未登记，被拦零清理（拦在 reserve 之后
+        # 就得补 release + record_failed 两处收尾）；同时天然拦在 TTS 合成之前，
+        # 额度耗尽不再烧 GPU。enforce 默认关=软提醒先行，fail-open 在函数内。
+        _deny_capability(request, "chat.send_voice")
+        _aq = check_request_quota(request)
+        if not _aq["allowed"]:
+            raise HTTPException(403, tr(
+                request, "err.quota.agent_chars_exhausted",
+                used=_aq["used"], quota=_aq["quota"]))
         _raise_if_account_blocked(request, platform, account_id)
 
         # P0 幂等键（与文本 send 同口径；语音双发还烧双份 TTS/GPU，更值得拦）
@@ -699,6 +1062,14 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             _dedup.release(_dedup_scope, _client_msg_id)
             _vst.record_failed(_dedup_scope, _client_msg_id, "voice_unsupported")
             raise HTTPException(501, tr(request, "err.inbox.voice_unsupported"))
+        # 护栏预检（P0 2026-08-12）：拦在 TTS 合成之前——额度已满还烧一次
+        # GPU 克隆纯属浪费；对账表记 send_blocked（超时对账端点不再谎报 sent）。
+        _gate_ex = _send_gate_exc(
+            request, platform, account_id, chat_key, owned=True)
+        if _gate_ex is not None:
+            _dedup.release(_dedup_scope, _client_msg_id)
+            _vst.record_failed(_dedup_scope, _client_msg_id, "send_blocked")
+            raise _gate_ex
 
         # P1-3：合成期给客户挂「正在录音」气泡（TG/WA 支持；LINE/Messenger 协议
         # 无此能力，orch 内部自会返 False）。一次 action ~5s 过期：合成前 + 合成后
@@ -766,6 +1137,8 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 logger.debug("[inbox/voice-send] 试听产物复制失败（回落合成）",
                              exc_info=True)
             else:
+                # 坐席字符计量：复用试听产物分支**不记账**——这份音频在 tts-test
+                # 时已计过，这里再记＝同一段文字双计（伪 result.ok=True 勿当真合成）。
                 voice_ctx = {
                     "persona_id": _meta.get("resolved_persona_id") or "",
                     "persona_source": "preview_reuse",
@@ -918,6 +1291,11 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             except Exception:
                 logger.debug("[inbox/voice-send] 质量闸门异常（忽略）", exc_info=True)
 
+            # 坐席字符计量归因（2026-08-16）：**真合成**成功（过质量闸门）才记 tts
+            # 字符；上方复用试听产物分支刻意跳过不记账——已在 tts-test 计过，重复
+            # 记＝双计。len(text) 与授权池同口径；开关默认关/未登录/异常零副作用。
+            record_request_chars(request, "tts", len(text))
+
         # 转 OGG/Opus，使其在 Telegram/WhatsApp 呈现为"语音消息"（ffmpeg 缺失则原样发）
         _vst.record_stage(_dedup_scope, _client_msg_id, "convert")
         _fire_voice_recording_action(orch, platform, account_id, chat_key)
@@ -957,15 +1335,39 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         _voice_sender_name = persona_display_name(voice_ctx.get("persona_id"))
         _t_send0 = _time.monotonic()
         try:
-            res = await orch.send_media(
-                platform, account_id, chat_key,
-                media_path=local, media_url=url, media_type="voice", caption=caption,
-                inbox_text=text, sender_name=_voice_sender_name)
+            try:
+                res = await orch.send_media(
+                    platform, account_id, chat_key,
+                    media_path=local, media_url=url, media_type="voice",
+                    caption=caption, inbox_text=text,
+                    sender_name=_voice_sender_name, origin="manual")
+            except TypeError:
+                # 旧签名（无 origin kwarg，测试假编排器常见）→ 回落
+                res = await orch.send_media(
+                    platform, account_id, chat_key,
+                    media_path=local, media_url=url, media_type="voice",
+                    caption=caption, inbox_text=text,
+                    sender_name=_voice_sender_name)
         except Exception as ex:  # noqa: BLE001
             _dedup.release(_dedup_scope, _client_msg_id)  # 失败释放：重试可再发
             _vo_record(False, "deliver_failed")
             _vst.record_failed(_dedup_scope, _client_msg_id, "deliver_failed")
             raise HTTPException(502, tr(request, "err.inbox.voice_send_failed", err=ex))
+        # P0 2026-08-12：拦截/未送达显式回执——此前被拦仍 _vo_record(True) +
+        # record_sent，超时对账端点会对坐席谎报「已发出」。
+        _undeliv = _result_undelivered(res)
+        if _undeliv:
+            _dedup.release(_dedup_scope, _client_msg_id)
+            _reason_tag = "send_blocked" if _undeliv == "blocked" else "deliver_failed"
+            _vo_record(False, _reason_tag)
+            _vst.record_failed(_dedup_scope, _client_msg_id, _reason_tag)
+            if _undeliv == "blocked":
+                raise _send_blocked_exc(
+                    request, platform, account_id, chat_key,
+                    reason=str(res.get("blocked") or ""))
+            raise HTTPException(502, tr(
+                request, "err.inbox.send_not_delivered",
+                msg=str(res.get("error") or res.get("error_kind") or "")))
         _send_ms = int((_time.monotonic() - _t_send0) * 1000)
         _vo_record(True)
         cid = _conv_id(platform, account_id, chat_key)
@@ -1116,4 +1518,9 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             # 前端 tooltip 可按码出更具体的解释；空串=无特殊限制
             "caps_reason": caps_reason,
             "bubbles": _bubbles_on, "bubbles_max_parts": _bubbles_max,
+            # P3 2026-08-17：该平台出站媒体体积上限（MB）——前端上传前预检与
+            # 服务端 413 同源（_media_cap_mb），不再各写一套 25MB 常量。
+            "media_max_mb": _media_cap_mb(
+                (getattr(getattr(request.app.state, "config_manager", None),
+                         "config", None) or {}), plat),
         }

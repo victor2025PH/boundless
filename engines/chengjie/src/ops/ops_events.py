@@ -138,6 +138,35 @@ class OpsEventStore:
                         "ok": ok, "failed": max(0, total - ok)})
         return out
 
+    def reason_summary(self, kinds: List[str], *, days: int = 7) -> Dict[str, Dict[str, Any]]:
+        """近 N 天指定 kind 集合的 ``{kind: {total, ok, by_reason}}``。
+
+        消息管理审计卡口径（2026-08-17 P2）：``reason='ok'`` 计成功，其余 reason
+        逐值分桶——撤回失败归因分布（no_worker/service_error/超时限被平台拒…）
+        直接可读，是「要不要加 N 分钟内可撤前端预判」的判据数据。
+        """
+        ks = [str(k) for k in (kinds or []) if k]
+        if not ks:
+            return {}
+        ph = ",".join("?" * len(ks))
+        since = time.time() - float(days) * _DAY
+        q = (f"SELECT kind, reason, COUNT(*) AS n FROM ops_events"
+             f" WHERE ts>=? AND kind IN ({ph}) GROUP BY kind, reason")
+        with self._lock:
+            rows = self._conn.execute(q, [since, *ks]).fetchall()
+        out: Dict[str, Dict[str, Any]] = {}
+        for r in rows:
+            kind = str(r["kind"])
+            n = int(r["n"] or 0)
+            reason = str(r["reason"] or "") or "unknown"
+            ent = out.setdefault(kind, {"total": 0, "ok": 0, "by_reason": {}})
+            ent["total"] += n
+            if reason == "ok":
+                ent["ok"] += n
+            else:
+                ent["by_reason"][reason] = int(ent["by_reason"].get(reason, 0)) + n
+        return out
+
     def summary(self, *, account_id: str = "", days: int = 7) -> Dict[str, Any]:
         """近 N 天各类事件计数（「号健康史」概览：paused/banned/… 各几次）。"""
         since = time.time() - float(days) * _DAY

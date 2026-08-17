@@ -122,13 +122,6 @@
     async syncContactStage({ contactId, mode }) {
       return this._post(`/api/workspace/contact/${encodeURIComponent(contactId)}/relationship-stage/sync`, { mode: mode || "to_contact" });
     }
-    async getNextActions({ conversationId: cid }) {
-      if (!cid) return { ok: false, error: "missing conversationId" };
-      return this._get(`/api/workspace/conv/${encodeURIComponent(cid)}/next-actions`);
-    }
-    async executeAction({ conversationId: cid, action_id, action_type, config }) {
-      return this._post(`/api/workspace/conv/${encodeURIComponent(cid)}/execute-action`, { action_id, action_type, config: config || {} });
-    }
     async listPersonas() {
       return this._get(`/api/personas/profiles`);
     }
@@ -166,12 +159,41 @@
       if (!cid) return { ok: false, error: "missing conversationId" };
       return this._get(`/api/workspace/conv/${encodeURIComponent(cid)}/collab-context`);
     }
+    // ── 内部注解（P1-4 第二刀：cp-collab notes 子分区。读走 collab-context 自带的
+    //    recent_notes 零新读端点，这里只补写入口；编辑/删除有作者权限闸，v1 留在网页端）──
+    async addConvNote({ conversationId: cid, body, mentions }) {
+      return this._post(`/api/workspace/conv/${encodeURIComponent(cid)}/notes`,
+        { body: body || "", mentions: mentions || [] });
+    }
+    // ── 知识库 / 快捷回复（P1-4：收编桌面原生 aside 的 kb/tpl 卡进统一 App；
+    //    web 原生右栏走 composer 的 / 指令面板与 KB 自动推荐浮层，不在右栏重复）──
+    async kbSearch({ q, platform, intent, limit }) {
+      return this._get(`/api/unified-inbox/kb-search?q=${encodeURIComponent(q || "")}` +
+        `&platform=${encodeURIComponent(platform || "")}&intent=${encodeURIComponent(intent || "")}` +
+        `&limit=${encodeURIComponent(limit || 6)}`);
+    }
+    async replyTemplates() {
+      return this._get(`/api/unified-inbox/templates`);
+    }
     async getChainExecutions({ conversationId: cid, limit }) {
       if (!cid) return { ok: false, error: "missing conversationId" };
       return this._get(`/api/workspace/conv/${encodeURIComponent(cid)}/chain-executions?limit=${encodeURIComponent(limit || 8)}`);
     }
     async cancelChainExecution({ execId }) {
       return this._post(`/api/workspace/chain-executions/${encodeURIComponent(execId)}/cancel`, {});
+    }
+    /* P1 2026-08-12 执行操作四件套（按钮由后端 caps.exec_ops 门控，旧后端不出现） */
+    async pauseChainExecution({ execId }) {
+      return this._post(`/api/workspace/chain-executions/${encodeURIComponent(execId)}/pause`, {});
+    }
+    async resumeChainExecution({ execId }) {
+      return this._post(`/api/workspace/chain-executions/${encodeURIComponent(execId)}/resume`, {});
+    }
+    async skipChainStep({ execId }) {
+      return this._post(`/api/workspace/chain-executions/${encodeURIComponent(execId)}/skip-step`, {});
+    }
+    async retryChainExecution({ execId }) {
+      return this._post(`/api/workspace/chain-executions/${encodeURIComponent(execId)}/retry`, {});
     }
     async listWorkflowChains() {
       return this._get(`/api/workspace/workflow-chains`);
@@ -211,6 +233,37 @@
     // AI 对话分析（风险预判 + 阶梯话术 + 摘要）。两端 iframe 同源直达。
     async analyze({ text, messages, chat }) {
       return this._post(`/api/unified-inbox/analyze`, { text: text || "", messages: messages || [], chat: chat || {} });
+    }
+    // —— 会话运维（P1-4 2026-08-12，统一 App cp-conv-ops 用；网页原生右栏走宿主内联实现同一批端点）——
+    async getAutomation({ platform, accountId, chatKey }) {
+      return this._get(`/api/unified-inbox/automation?platform=${encodeURIComponent(platform || "")}` +
+        `&account_id=${encodeURIComponent(accountId || "default")}&chat_key=${encodeURIComponent(chatKey || "")}`);
+    }
+    async setAutomationMode({ platform, accountId, chatKey, mode, confirmGroup }) {
+      const body = { platform: platform || "", account_id: accountId || "default",
+        chat_key: chatKey || "", mode: mode };
+      if (confirmGroup) body.confirm_group = true;
+      return this._post(`/api/unified-inbox/automation`, body);
+    }
+    async automationStats({ platform, accountId, chatKey }) {
+      return this._get(`/api/unified-inbox/automation-stats?platform=${encodeURIComponent(platform || "")}` +
+        `&account_id=${encodeURIComponent(accountId || "default")}&chat_key=${encodeURIComponent(chatKey || "")}`);
+    }
+    async archiveConversation({ conversationId, archived }) {
+      return this._post(`/api/workspace/conv/${encodeURIComponent(conversationId)}/archive`,
+        { archived: archived !== false });
+    }
+    async snoozeConversation({ conversationId, minutes }) {
+      return this._post(`/api/workspace/conversation/${encodeURIComponent(conversationId)}/snooze`,
+        { minutes: minutes });
+    }
+    // P0 搁置可见化（2026-08-14）：取消搁置 + 搁置清单读回（cp-conv-ops 持久状态行用；
+    // listSnoozed 是旧后端缺 automation.snooze_until 搭便车字段时的回落读回路径）
+    async unsnoozeConversation({ conversationId }) {
+      return this._post(`/api/workspace/conversation/${encodeURIComponent(conversationId)}/unsnooze`, {});
+    }
+    async listSnoozed() {
+      return this._get(`/api/workspace/snoozed`);
     }
     // —— 账号管理（Phase 2，两端共用）——
     async listAccounts() {
@@ -338,6 +391,26 @@
       const r = await fetch("/api/voice/enroll", { method: "POST", headers: _writeHeaders(), body: fd });
       return await r.json();
     }
+    // —— 单次翻译工具（工具箱 cp-xlate-tools，2026-08-17）：与收件箱「对话翻译」
+    //    弹层同一批端点（unified_inbox_translate_routes），零后端改动。
+    //    body 契约见各端点 docstring；auto 目标语需带会话三元组（组件侧负责）。
+    async xlateImage({ imageB64, targetLang }) {
+      return this._post(`/api/unified-inbox/translate-image`,
+        { image_b64: imageB64, target_lang: targetLang });
+    }
+    async xlateVoice({ audioB64, targetLang }) {
+      return this._post(`/api/unified-inbox/translate-voice`,
+        { audio_b64: audioB64, target_lang: targetLang });
+    }
+    async xlateCompare(body) {
+      return this._post(`/api/unified-inbox/translate-compare`, body || {});
+    }
+    async xlateDocument(body) {
+      return this._post(`/api/unified-inbox/translate-document`, body || {});
+    }
+    async xlateDocumentFile(body) {
+      return this._post(`/api/unified-inbox/translate-document-file`, body || {});
+    }
   }
 
   // —— 桌面适配器:经 window.shell IPC ——
@@ -363,15 +436,6 @@
     async syncContactStage({ contactId, mode }) {
       const s = this._shell();
       return s.relSync ? s.relSync({ contact_id: contactId, mode: mode || "to_contact" }) : { ok: false };
-    }
-    async getNextActions({ conversationId: cid }) {
-      if (!cid) return { ok: false, error: "missing conversationId" };
-      const s = this._shell();
-      return s.nbaList ? s.nbaList({ conversation_id: cid }) : { ok: false, error: "shell.nbaList 未暴露" };
-    }
-    async executeAction({ conversationId: cid, action_id, action_type, config }) {
-      const s = this._shell();
-      return s.nbaExec ? s.nbaExec({ conversation_id: cid, action_id, action_type, config: config || {} }) : { ok: false };
     }
     async listPersonas() {
       const s = this._shell();
@@ -427,6 +491,23 @@
     async cancelChainExecution({ execId }) {
       const s = this._shell();
       return s.chainCancel ? s.chainCancel({ exec_id: execId }) : { ok: false };
+    }
+    /* P1 执行操作：壳桥未升级 → 软失败（按钮本就依赖 caps，走到这里是兜底） */
+    async pauseChainExecution({ execId }) {
+      const s = this._shell();
+      return s.chainPause ? s.chainPause({ exec_id: execId }) : { ok: false, error: "shell.chainPause 未暴露" };
+    }
+    async resumeChainExecution({ execId }) {
+      const s = this._shell();
+      return s.chainResume ? s.chainResume({ exec_id: execId }) : { ok: false, error: "shell.chainResume 未暴露" };
+    }
+    async skipChainStep({ execId }) {
+      const s = this._shell();
+      return s.chainSkipStep ? s.chainSkipStep({ exec_id: execId }) : { ok: false, error: "shell.chainSkipStep 未暴露" };
+    }
+    async retryChainExecution({ execId }) {
+      const s = this._shell();
+      return s.chainRetry ? s.chainRetry({ exec_id: execId }) : { ok: false, error: "shell.chainRetry 未暴露" };
     }
     async listWorkflowChains() {
       const s = this._shell();
@@ -578,6 +659,28 @@
     async voiceEnroll(payload) {
       const s = this._shell();
       return s.voiceEnroll ? s.voiceEnroll(payload || {}) : { ok: false, error: "shell.voiceEnroll 未暴露" };
+    }
+    // —— 单次翻译工具：桌面原生 aside 走 IPC（未暴露=软失败保接口对齐；
+    //    统一 App iframe 场景实际用 Web 适配器，不经这里）——
+    async xlateImage(args) {
+      const s = this._shell();
+      return s.xlateImage ? s.xlateImage(args || {}) : { ok: false, error: "shell.xlateImage 未暴露" };
+    }
+    async xlateVoice(args) {
+      const s = this._shell();
+      return s.xlateVoice ? s.xlateVoice(args || {}) : { ok: false, error: "shell.xlateVoice 未暴露" };
+    }
+    async xlateCompare(body) {
+      const s = this._shell();
+      return s.xlateCompare ? s.xlateCompare(body || {}) : { ok: false, error: "shell.xlateCompare 未暴露" };
+    }
+    async xlateDocument(body) {
+      const s = this._shell();
+      return s.xlateDocument ? s.xlateDocument(body || {}) : { ok: false, error: "shell.xlateDocument 未暴露" };
+    }
+    async xlateDocumentFile(body) {
+      const s = this._shell();
+      return s.xlateDocumentFile ? s.xlateDocumentFile(body || {}) : { ok: false, error: "shell.xlateDocumentFile 未暴露" };
     }
   }
 

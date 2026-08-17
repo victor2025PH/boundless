@@ -14,7 +14,16 @@
    - 模块关(inbox.workflows.enabled=false → 后端 403)时整卡自动隐藏(与 cp-goal 同模式);
    - 选择器目标感知:当前会话有活跃工作目标且模板命中 GOAL_CHAIN_REC → 对应种子链
      置顶 + 「推荐」徽标,启动时带 goal_id 落执行归因(goals 关/无目标/桌面壳 → 无徽标,
-     纯增强零依赖)。 */
+     纯增强零依赖)。
+   P0/P1 增量(2026-08-12,「零使用」复盘——4 条种子链 0 次启动的根因是认知错位+断层):
+   - 定位说明恒在:SOP 只按时提醒坐席,绝不自动替坐席给客户发消息(mode_hint 行 +
+     empty_lead 诚实化)——「启动了怎么客户没动静」的期待错位从源头消除;
+   - 「采用并拟稿」CTA:running/paused 卡展示最近一次已发出的话术建议
+     (后端 actionable_note),一键经 cp-goal-drive-draft 既有宿主链(web 收件箱 +
+     app 模式两端都已监听,零宿主改动) → setDirective → 自动生成草稿——
+     「提醒」变「行动」;
+   - 暂停/恢复/跳步/重试:按后端 caps.exec_ops 显隐(旧后端未重启 → 无 caps →
+     按钮不出现,绝不「点了 404」);跳步带确认;失败一键重试。 */
 (function (root) {
   const Base = root.CopilotShared && root.CopilotShared.CpPanelBase;
   if (!Base) { console.error("cp-chain-exec: CpPanelBase 未加载"); return; }
@@ -45,6 +54,21 @@
      改映射去那里。旧缓存混态（sidebar-chrome 未刷新）→ 空表＝无推荐徽标软降级。 */
   const GOAL_CHAIN_REC = (root.CopilotShared && root.CopilotShared.GOAL_CHAIN_REC) || {};
 
+  /* UI 漏斗埋点（与 cp-goal 同通道同姿势；埋点永不阻断） */
+  function _beacon(action) {
+    try {
+      const body = JSON.stringify({
+        page: (root.location && root.location.pathname) || "/workspace",
+        action: String(action || "").slice(0, 64),
+      });
+      if (typeof root.navigator !== "undefined" && root.navigator.sendBeacon) {
+        root.navigator.sendBeacon(
+          "/api/telemetry/ui-event",
+          new Blob([body], { type: "application/json" }));
+      }
+    } catch (_e) { /* ignore */ }
+  }
+
   class CpChainExec extends Base {
     constructor() {
       super();
@@ -57,6 +81,8 @@
       this._busy = false;        // 启动在途防双击
       this._openExecs = {};      // 步骤明细抽屉开合（exec_id → bool）
       this._goalRec = null;      // C1：{cid, goalId, chainId} 活跃目标推荐缓存（按会话）
+      this._execOps = false;     // P1：后端 caps.exec_ops（暂停/跳步/重试端点已装载）
+      this._opErr = null;        // P1：{id, msg} 单卡操作失败提示（下次成功/刷新即清）
     }
 
     emptyText() { return this.t("cp.chain.empty"); }
@@ -131,7 +157,17 @@
       .stp-delay { flex:0 0 auto; font-size:10px; padding:0 5px; border-radius:99px;
                    background:var(--cp-track,#e2e8f0); color:var(--cp-text-dim,#64748b); }
       .stp-note { flex:1 1 auto; min-width:0; color:var(--cp-text-dim,#64748b); overflow-wrap:anywhere; }
-      .stp-more { font-size:10px; color:var(--cp-text-tiny,#94a3b8); padding:2px 0; }`;
+      .stp-more { font-size:10px; color:var(--cp-text-tiny,#94a3b8); padding:2px 0; }
+      .mode-hint { font-size:10px; color:var(--cp-text-tiny,#94a3b8); line-height:1.4;
+                   margin-bottom:var(--cp-gap-xs,4px); }
+      .todo { display:flex; gap:6px; align-items:center; margin-top:4px; padding:5px 7px;
+              border-radius:6px; background:var(--cp-accent-weak,rgba(79,70,229,.08)); }
+      .todo-tx { flex:1 1 auto; min-width:0; font-size:var(--cp-fs-tiny,11px);
+                 color:var(--cp-text,#374151); overflow:hidden; text-overflow:ellipsis;
+                 white-space:nowrap; }
+      .todo button { flex:0 0 auto; }
+      .bdg.paused { background:color-mix(in srgb,var(--cp-warn,#d97706) 14%,transparent);
+                    color:var(--cp-warn,#d97706); }`;
     }
 
     async fetchData(ctx) {
@@ -146,6 +182,7 @@
         this._busy = false;
         this._openExecs = {};
         this._goalRec = null;
+        this._opErr = null;
       }
       const res = await this._client.getChainExecutions({ conversationId: cid, limit: 8 });
       // C3：模块关（后端 403）→ 整卡隐藏（与 cp-goal 同模式：关闭 ≠ 报错）。
@@ -155,6 +192,8 @@
         return { ok: false, __forbidden: true };
       }
       this._hideCard(false);
+      // P1 能力位：暂停/跳步/重试端点已装载才显操作按钮（旧后端无 caps=隐藏）
+      this._execOps = !!(res && res.caps && res.caps.exec_ops);
       return res;
     }
 
@@ -172,6 +211,8 @@
         if (!this._pickOpen) html += this._renderEmpty();
         return html;
       }
+      // P0 定位说明恒在：SOP=按时提醒人跟进，不自动发消息（期待错位的源头治理）
+      html += `<div class="mode-hint">${this.esc(this.t("cp.chain.mode_hint"))}</div>`;
       html += execs.map((ex) => this._renderExec(ex)).join("");
       if (!this._pickOpen) {
         html += `<div class="ft"><button data-act="start_pick">${this.esc(this.t("cp.chain.start_btn"))}</button>` +
@@ -225,8 +266,10 @@
           const preview = String(first.note || first.text || "").slice(0, 40);
           const rec = (recId && c.chain_id === recId)
             ? `<span class="pk-n pk-rec" title="${esc(this.t("cp.chain.rec_hint"))}">\u2605 ${esc(this.t("cp.chain.rec_badge"))}</span>` : "";
+          const autoBdg = c.exec_mode === "auto"
+            ? `<span class="pk-n pk-rec" title="${esc(this.t("cp.chain.auto_badge_hint"))}">\u26A1 ${esc(this.t("cp.chain.auto_badge"))}</span>` : "";
           return `<div class="pk-row" data-act="start_run" data-id="${esc(c.chain_id)}" role="button">` +
-            `<div class="pk-nm"><span class="nm">${esc(c.name || c.chain_id)}</span>` + rec +
+            `<div class="pk-nm"><span class="nm">${esc(c.name || c.chain_id)}</span>` + rec + autoBdg +
             `<span class="pk-n">${esc(this.t("cp.chain.pick_steps", { n: steps.length }))}</span></div>` +
             (preview ? `<div class="pk-d">${esc(preview)}</div>` : "") + `</div>`;
         }).join("");
@@ -245,6 +288,7 @@
       const status = String(ex.status || "pending");
       const bdgCls = status === "running" ? "run"
         : status === "completed" ? "ok"
+        : status === "paused" ? "paused"
         : status === "failed" ? "fail" : "";
       const cls = "exec" + (status === "failed" ? " failed" : "");
 
@@ -276,6 +320,12 @@
       const last = (ex.last_result && ex.last_result.text)
         ? `<div class="last" title="${esc(ex.last_result.text)}">${esc(String(ex.last_result.text).slice(0, 80))}</div>` : "";
 
+      // P1 行动闭环：最近已发出的话术建议 + 「采用并拟稿」（宿主拟稿链见 onAction）
+      const todo = ((status === "running" || status === "paused") && ex.actionable_note)
+        ? `<div class="todo"><span class="todo-tx" title="${esc(ex.actionable_note)}">📌 ${esc(String(ex.actionable_note).slice(0, 64))}</span>` +
+          `<button class="primary" data-act="drive_draft" data-id="${esc(ex.exec_id)}">${esc(this.t("cp.chain.drive_btn"))}</button></div>`
+        : "";
+
       // 步骤明细抽屉（steps_preview 已带全量前 8 步，纯前端零请求）
       const hasSteps = (ex.steps_preview || []).length > 0;
       const open = hasSteps && !!this._openExecs[ex.exec_id];
@@ -284,17 +334,37 @@
           (open ? `\u25BE ${esc(this.t("cp.chain.steps_hide"))}` : `\u25B8 ${esc(this.t("cp.chain.steps_show"))}`) +
           `</button>` : "";
       const drawer = open ? this._renderSteps(ex) : "";
-      const cancel = status === "running"
-        ? `<button data-act="cancel" data-id="${esc(ex.exec_id)}">${esc(this.t("cp.common.cancel"))}</button>` : "";
-      const foot = (drawerBtn || cancel)
+      // 操作组：caps.exec_ops（后端已装载新端点）才出暂停/恢复/跳步/重试；
+      // 取消按旧行为恒在 running（paused 的取消也需新后端，同 caps 门控）
+      const ops = [];
+      const eid = esc(ex.exec_id);
+      if (this._execOps) {
+        if (status === "running") {
+          ops.push(`<button data-act="skip" data-id="${eid}">${esc(this.t("cp.chain.skip_btn"))}</button>`);
+          ops.push(`<button data-act="pause" data-id="${eid}">${esc(this.t("cp.chain.pause_btn"))}</button>`);
+        } else if (status === "paused") {
+          ops.push(`<button class="primary" data-act="resume" data-id="${eid}">${esc(this.t("cp.chain.resume_btn"))}</button>`);
+        } else if (status === "failed") {
+          ops.push(`<button data-act="retry" data-id="${eid}">${esc(this.t("cp.chain.retry_btn"))}</button>`);
+        }
+      }
+      if (status === "running" || (this._execOps && status === "paused")) {
+        ops.push(`<button data-act="cancel" data-id="${eid}">${esc(this.t("cp.common.cancel"))}</button>`);
+      }
+      const opErr = (this._opErr && this._opErr.id === ex.exec_id)
+        ? `<div class="pk-err">${esc(this.t("cp.chain.op_fail", { msg: this._opErr.msg }))}</div>` : "";
+      const foot = (drawerBtn || ops.length)
         ? `<div class="acts" style="justify-content:space-between;align-items:center;">` +
-          `<span>${drawerBtn}</span><span>${cancel}</span></div>` : "";
+          `<span>${drawerBtn}</span><span style="display:flex;gap:4px;">${ops.join("")}</span></div>` : "";
 
+      const autoBdg = (ex.exec_mode === "auto")
+        ? `<span class="bdg" title="${esc(this.t("cp.chain.auto_badge_hint"))}">\u26A1 ${esc(this.t("cp.chain.auto_badge"))}</span>` : "";
       return `<div class="${cls}">` +
         `<div class="hd"><span class="name" title="${esc(ex.chain_name || "")}">${esc(ex.chain_name || "")}</span>` +
+        autoBdg +
         `<span class="bdg${bdgCls ? " " + bdgCls : ""}">${esc(ex.status_label || status)}</span></div>` +
         (segs ? `<div class="trk">${segs}</div>` : "") +
-        meta + note + last + drawer + foot +
+        meta + note + todo + last + drawer + opErr + foot +
         `</div>`;
     }
 
@@ -374,6 +444,14 @@
         }
         return;
       }
+      if (act === "drive_draft") {
+        this._driveDraft(el);
+        return;
+      }
+      if (act === "pause" || act === "resume" || act === "skip" || act === "retry") {
+        await this._execOp(act, el);
+        return;
+      }
       if (act !== "cancel") return;
       const execId = el.getAttribute("data-id");
       if (!execId) return;
@@ -386,6 +464,61 @@
       } catch (e) { ok = false; }
       this.emit("cp-action-done", { action_type: "chain_cancel", ok });
       this.refresh();
+    }
+
+    /* P1「采用并拟稿」：把最近已发出的话术建议包成坐席指令，走 cp-goal-drive-draft
+       既有宿主链（web 收件箱 + app 模式两端都监听：setDirective → 自动生成草稿）。
+       事件名带 goal 是历史命名，语义早已是通用「驱动拟稿」通道（英雄卡/缺口 chip/
+       本卡共用）——复用=零宿主改动，且两端表面自动同权。 */
+    _driveDraft(el) {
+      const eid = (el && el.getAttribute("data-id")) || "";
+      const execs = (this._d && this._d.executions) || [];
+      const ex = execs.find((x) => x && x.exec_id === eid);
+      const note = String((ex && ex.actionable_note) || "").trim();
+      if (!ex || !note) return;
+      let text = this.t("cp.chain.drive_instruction",
+        { chain: String(ex.chain_name || ""), text: note,
+          n: (parseInt(ex.actionable_step_idx, 10) || 0) + 1 });
+      if (!text || String(text).indexOf("cp.chain.") === 0) text = note;
+      this.emit("cp-goal-drive-draft", {
+        intent: note,
+        instruction: String(text),
+        pushLevel: "soft",
+        label: String(ex.chain_name || ""),
+        source: "chain",
+      });
+      _beacon("chain_drive_draft");
+    }
+
+    /* P1 执行操作（暂停/恢复/跳步/重试）：同构薄壳——client 方法缺失（桌面壳
+       桥未升级）→ 单卡就地报错不炸面板；成功 → cp-action-done + 整卡刷新。 */
+    async _execOp(act, el) {
+      const eid = (el && el.getAttribute("data-id")) || "";
+      if (!eid || this._busy) return;
+      if (act === "skip" && typeof confirm === "function"
+          && !confirm(this.t("cp.chain.skip_confirm"))) return;
+      const method = { pause: "pauseChainExecution", resume: "resumeChainExecution",
+        skip: "skipChainStep", retry: "retryChainExecution" }[act];
+      const fn = this._client && this._client[method];
+      if (typeof fn !== "function") {
+        this._opErr = { id: eid, msg: "client outdated" };
+        this._rerender();
+        return;
+      }
+      this._busy = true;
+      if (el) el.disabled = true;
+      let res = null;
+      try { res = await this._client[method]({ execId: eid }); } catch (_e) { res = null; }
+      this._busy = false;
+      if (res && res.ok) {
+        this._opErr = null;
+        _beacon("chain_op_" + act);
+        this.emit("cp-action-done", { action_type: "chain_" + act, ok: true });
+        this.refresh();
+        return;
+      }
+      this._opErr = { id: eid, msg: String((res && res.error) || "network error").slice(0, 120) };
+      this._rerender();
     }
 
     /* C1：读当前会话活跃工作目标 → 推荐种子链。软失败设计：goals 模块关(403)/

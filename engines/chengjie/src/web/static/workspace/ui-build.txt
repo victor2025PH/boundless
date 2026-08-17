@@ -1,3 +1,432 @@
-20260811-0330
+20260817-1756
 # 前端构建戳(单一版本源):首行 token 即版本。任何工作台前端批次(模板/静态资源)
 # 落地时把首行改成新值 —— workspace_base 的陈旧页提醒轮询此文件,变了就请坐席刷新。
+# 20260817-1756: 贴纸面板首开体验——「最近」为空且用户未显式选 tab 时自动落到
+# 第一个包(刚播种/新坐席不再对着空网格);sticker-panel.js ?v=20260817c。
+# 官方包已播种上线(小圆脸10张+LINE三包120张, smoke_sticker_seed ALL PASS)。
+# 20260817-1755: 业务助手 P3——①App(iframe) 模式补齐收纳轨+飞层: 宿主 tabs 当图标轨
+# (显隐收口 .is-app 形态类, 替代 _wsEnableApp 内联写法), 切页走既有 postMessage
+# set-tab 桥零 iframe 改动; ] 不再降级; ②悬浮窗拖拽改 pointer capture(修丢
+# pointerup「窗粘光标」)+双击标题栏收回(拖后 350ms 防误触); css ?v=20260817p。
+# 20260817-1748: 预算横幅「今日继续」也广播 aitr:budget-relieved（多标签铃铛/
+# 横幅同清；弹窗路径原先已广播）。
+# 20260817-1745: 业务助手 P2 单卡撕出——回复工坊/翻译工具卡头悬停出撕出按钮,
+# 撕出=搬同一节点进悬浮小窗(拖动/右下角缩放/几何 localStorage);原位留虚线回收
+# chip;面板收轨/隐藏撕出窗独立存活(懒加载沉睡豁免);空态 need-conv 窗出说明不串
+# 旧客户;窄屏/App 自动收回不忘布局;刷新按记忆恢复。css ?v=20260817n。
+# 20260817-1740: 预算铃铛二次优化——①_NF_BUCKET 补 bot_peer_alert→alert（否则
+# 「告警」chip 把触顶藏进 other）；②soft/hard/relieved 三档副文案；③弹窗
+# 「今日继续」广播 aitr:budget-relieved 后铃铛就地改写 relieved（不打开会话
+# 也不再写「已暂停」）。.py SSE/notif 准入仍随本窗重启装载。
+# 20260817-1715: 历史账号治理 P1——①彻底删除确认带体量预估(GET purge-history 预览,
+# purgeable=false 弹确认前诚实拦);②历史行 ⋯ 菜单新增「导出记录」(JSONL blob 下载,
+# 旧后端 404 给维护窗提示);③历史分区「清全部未读(N)」一键清账(逐号串行 mark-account-read,
+# 部分失败如实分账)。后端 GET x2 随下个重启窗装载,前端全程 404 诚实降级。
+# 20260817-1705: 业务助手 P1 收纳轨飞层——轨上点页签滑出预览(复用同一 DOM 不克隆);
+# 同页再点/📌/] 钉住 expanded; Esc/外点收回轨; 飞层不持久化; 隐藏态把手徽章;
+# App iframe 跳过飞层。css ?v=20260817k。
+# 20260817-1653: 表情包+文件收发二次优化收口——双戳刷新(sticker-panel ?v=20260817b
+# 已挂);本戳只保证 freshness 新于本线模板/静态落盘。
+# 20260817-1652: 预算触顶进铃铛历史(P3.1)——workspace_base 通知中心 _TYPE_META/
+# sub/点击跳会话/_COALESCE_TYPES 增 bot_peer_alert(仅 daily_budget,服务端
+# _notif_content_ok 准入随重启窗装载);i18n base.notif.type_budget_hit/budget_sub。
+# 20260817-1645: 表情包+文件收发二次优化——①文件卡片补体积(source.file_size,
+# TG 入站 .py 随重启窗;前端缺字段不渲染「0 B」)+视频悬停下载角标(与图同口径,
+# 仅 protocol_media);②下载/打开/收藏控件改 uiIcon(download/arrow-up-right/plus),
+# 去掉模板 \u2b07 压住 emoji 棘轮;③贴纸面板搜索(当前包客户端滤 emoji_tag/
+# keywords)+悬停放大预览(fixed, reduced-motion 关缩放)+管理弹层拖拽上传/
+# 逐张进度(i/n, 单张失败不拖死整批)+重命名(PATCH 已有)+包条/关闭改 SVG。
+# sticker-panel.js/css ?v=20260817b; i18n inbox.stk.search_*/rename/drop_*/
+# uploading_n/cap_* zh+en。
+# 20260817-1555: 业务助手 P0 打磨——修 CSS max-width 480 夹死拖宽;空态说明书补 CTA
+# (客户关系/试试翻译);工具箱通用/会话分组;语音卡空态收起;页签扳手图标;
+# 首次收纳/隐藏一次性提示;拖宽宽度气泡;中文键盘】;双戳 20260817j。
+# 20260817-1530: 业务助手面板四形态收口——DOM 提升(#info-sidebar 升为 chat-panel 直接
+# 子级,未选会话/切平台不再蒸发) + 状态机 expanded/rail(44px 收纳轨)/hidden(右缘把手
+# 唤回) + 空态三页签说明书卡(翻译等通用工具空态可用) + 拖宽上限 480→min(720,45vw)
+# (sidebar-chrome 双树同步,双击手柄复位为既有能力) + 快捷键 ]/Shift+]。
+# css ?v=20260817i / sidebar-chrome ?v=20260817i(unified_inbox + app.html 双树)。
+# 20260817-1520: 历史账号治理 P0——①抽屉「历史/已退出」分区排版重构: 可折叠分组头
+# (计数+存量未读, localStorage 记忆)+行卡三层结构(身份行/元信息/独立动作行,
+# 1 主 CTA+查看+⋯菜单), 状态胶囊语义分层(已退出=琥珀/已移除=灰/仅历史=虚线);
+# ②「查看会话」死意图修复: 历史号点开进「只读历史视角」(_histView 独立状态机,
+# 绕开 chip 回落; include_hidden scoped 取数; 列表顶部常驻横幅带 重登/恢复/退出);
+# ③彻底删除: 行 ⋯ 菜单「彻底删除」双确认→POST purge-history(旧后端 404 诚实提示,
+# .py 侧随下个重启窗口生效); 舰队摘要「历史」格可点直达分区; css ?v=20260817h。
+# 20260817-1435: 表情包+文件收发批——①表情面板双 tab(表情|表情包): 外挂组件
+# sticker-panel.js/css(?v=20260817a)包装 wsEmojiOpen 注入, flag(inbox.stickers.enabled,
+# zhiliao overlay 已开)关闭/路由未装载(.py 随下个重启窗)时零 UI; 贴纸网格/最近使用/
+# 包切换条/管理弹层(建包/批量上传/删)/官方包导入(LINE 免费贴纸 ID 包 ×3); 发送=
+# POST send-sticker(TG 原生贴纸/动图 GIF, WA 边车握手原生 webp 否则图片回退,
+# LINE 商店贴纸 okline 原生, 其余图片回退; sent_as=image 出「已按图片发出」toast);
+# 入站贴纸悬停「＋收藏」(data-stk-collect 委托, html[data-stk-on] CSS 门控)。
+# ②文件体验 P0: 文档气泡卡片化(图标+原名+扩展名+打开/下载双动作, 下载走
+# media-download 保原名; 原名=source.file_name(TG 入站 .py 已带)→正文→归档名);
+# 图片悬停下载角标(仅 protocol_media 归档图); 贴纸气泡 128px 透明底。③媒体多文件
+# 队列(≤6 件逐件上传, caption 只挂首件)+XHR 真进度(上传 %→投递中 per-item 进度条)
+# +取消(abort 无双发面)+粘贴/拖拽多文件全收+体积上限随 send-caps.media_max_mb
+# (服务端 413 同源, 平台可配 inbox.media.limits_mb, .py 流式落盘随重启窗)。
+# 预览条 #media-preview-bar 改 _renderMediaBar 全动态渲染(mpb-thumb/name/meta/
+# status 旧静态节点删除); i18n 新 pack sticker_panel.py(inbox.stk.*/inbox.file.*
+# zh+en, 刻意避开热区 inbox_workspace.py)。新浏览器门禁 tools/verify_sticker_ui.py
+# 已挂 gate_sweep -Full; 静态门禁 27 绿 + i18n 314 绿 + 贴纸后端 39 绿。
+# 20260817-1420: AI 回复额度批(老板拍板 40→500 + 触顶可见化三件套)——①额度全线 500:
+# 代码默认/设置页 spec(同步门禁自动钉)/example/desktop.internal 200→500/zhiliao overlay
+# 显式 500(13:26 热合并已生效, 硬停=2x=1000/near=400); ②横幅三级视觉: near=琥珀预警/
+# soft=红色警报(状态跃迁闪烁 3 次即归稳+图标呼吸, 防告警疲劳刻意不常闪)/hard=实底红,
+# 进度胶囊+用量条常驻, prefers-reduced-motion 全禁, 跃迁埋点 budget_banner_*;
+# ③中央模态 __wsModal(workspace_base 通用组件, 替代原生 confirm——桌面壳原生框带
+# telegram-ai-desktop 工程名): 收件箱「今日继续」确认改结构化弹窗(标题+导语+三要点+
+# 取消默认焦点), 组件缺席回落原生; ④触顶弹窗 __wsBudgetPop: SSE bot_peer_alert
+# (reason=daily_budget)→工作台任意页中央弹窗(服务端每会话每日一次+本地会话×日去抖+
+# 重放缓冲窗静默), 「今日继续」直投 relief 端点, 「查看会话」走 __wsFocusConv/__wsGoHome
+# 习语, aitr:budget-relieved 广播→收件箱即时清横幅。.py 侧(默认 500/alert payload
+# 三元组+budget 段/SSE 白名单)随下个重启窗装载——弹窗在装载前不触发, 中间态自洽。
+# 新门禁: test_budget_alert_popup(8 例)+test_templates_jinja_compile(全站真编译,
+# 13:32 事故沉淀)均已进 gate_sweep。i18n inbox.budget.pop_*/relief_* zh+en。
+# 20260817-1350: 生产止血(跨线)——额度横幅样式块 `reduce){#budget-banner` 的 `){#`
+# 被 Jinja 读成注释起始符且永不闭合 → unified_inbox 整个编译失败=工作台 500
+# (13:32 起热更新在线事故窗); 修法=开括号后加空格拆记号, CSS 语义不变, 并留 Jinja
+# 注释说明防回归。同批: toggleKbdHelp 补进 window 暴露块(哑按钮门禁抓出)。
+# 20260817-1345: 人设绑定面板+身份条呈现层升级(绑定语义零改动)——①暗色不可读
+# P0 修复: cp-persona 8 处裸亮色 hex 令牌化(新 --cp-ok-bg/--cp-warn-{bg,border,ink}
+# 两主题各取值; 暗色下选中卡曾白字压浅绿底对比度~1.05:1 完全不可读); ②人设身份
+# 色盘首字头像(组件 _pcolor 与宿主 _acctColor('persona:'+pid) 逐字节同构, 列表卡/
+# 生效横幅/底部身份条三处同色=同人); ③列表稳定分区(生效者最前>账号默认>其余保
+# 配置原序)+同名 ·id 消歧+卡片 title 全名+🎙 tooltip+空态「去人设工坊创建」CTA+
+# 键盘可达(tabindex/Enter/Space/focus-visible/aria-selected); ④tier 徽章 hover
+# 人话解释(cp.persona.tier.*.tip ×5 zh+en); ⑤生效横幅左缘按层着色(覆写=绿/
+# legacy=琥珀)+人设头像; ⑥底部身份条: 人设名加粗(哨兵法保 i18n 语序)+整条可点击
+# 直达工具箱人设卡(_identBarJump, 键盘可达)+覆写态左缘绿签+hover 反馈
+# (inbox.ident.bar_jump_t zh+en)。cp-persona/cp-i18n ?v=20260817b、theme css
+# ?v=20260817b、unified-inbox.css ?v=20260817g; 双树已 copy 同步。
+# 20260817-1335: composer P2——①发送按钮状态机: 在途「发送中…」+成功「✓ 已发送」绿底
+# 1.2s 复位(dataset.flash 令牌防与「翻译中/确认发送」新态互踩, 入口清令牌=旧定时器
+# 失配即弃); 失败路径维持既有 hint+气泡重发不变。②键盘快捷键速查浮层(reply-tools
+# 尾部低权重键盘图标, 复用 rt-pop 家族+外点白名单; Tab 采草稿/斜杠/Ctrl+V 贴图/
+# Alt+1..9 集中可见)。③埋点 cmpz_*(draft_restore=草稿真被接住/ctxhint=旧壳右键
+# 触达/keys_open=速查打开)进 ui-event-trend, 两周后可裁决。④「表情面板搜索」撤单:
+# 现役 emoji-picker-element 自带搜索/分类/最近使用, 无需重复建设。
+# i18n inbox.msg.sent_flash/inbox.keys.* zh+en。
+# 20260817-1310: composer 批同批补丁——切会话即取消编辑态(_editTarget 从不随切会话
+# 清理是存量缺陷; 草稿回填落地后若不清, 「A 编辑中→切 B→发送」会把 A 的旧消息改写成
+# B 的草稿内容, 故切会话=放弃编辑, 编辑中文本刻意不入草稿库)。
+# 20260817-1300: composer 批(老板需求「输入框右键粘贴+官方级体验」)——①会话级输入
+# 草稿幸存: selectChat 此前从不动 reply-ta(A 打半句切 B 文字跟过去=错发风险, 切回
+# 也丢), 现切会话存/取交换(sessionStorage TTL 24h, per-tab 与 cp-goal 同决策)+逐键
+# debounce 快照+2s 巡检兜程序化写入(发送清框/模板/cp-fill 零调用点耦合); 会话行出
+# amber「[草稿]」标(进 _convItemSig, 当前打开行不标)。②输入框 title 提示隐藏能力
+# (Ctrl+V 贴图/Tab 采用/斜杠指令)。③旧桌面壳右键无菜单一次性 Ctrl+V 指路 toast
+# (仅壳桥在+__cxNativeCtxMenu 缺席; 浏览器原生菜单不拦零提示)。④壳侧 main.js
+# wireEditContextMenu 原生右键编辑菜单(主窗/webview/后台弹窗全覆盖, editFlags 置灰,
+# 粘贴走 DOM paste 事件=贴图直通 _stageMedia; 随下个桌面包发版生效)。
+# i18n inbox.reply.tips_t/convdraft.marker*/ctx.shell_hint zh+en。
+# 媒体多文件粘贴刻意不做: 与在途「inbox media P0 文件上传 UX」线撞区, 让位合流。
+# 20260817-0705: 消息多选前置勾选框(老板实录「选择消息前面要加一个对号」)——
+# 选择模式(.msgsel-on)每行左侧常驻空心圆勾选框, 选中=蓝底对号(Telegram 式);
+# 纯 CSS 跟随既有 .msg-selected 类, keyed-diff 重渲由 _msgSelSync 描回类名即恢复,
+# 零 JS 改动; 多选本就支持(点击逐条切换+「选我发出的」), 本批补视觉可供性。
+# unified-inbox.css ?v=20260817f。
+# 20260817-0657: 清空记录「双向删除」(both_sides)——TG 私聊清空弹窗出可选勾选
+# 「同时删除对方设备上的记录」(能力经 meta clear_remote_platforms 探测, 旧后端/
+# 群聊/他平台不出勾选=旧行为零漂移); 勾选后先远端后本地, 远端失败工作台一条不动
+# 并出 reason 人话(i18n inbox.ctx.clear_both*/inbox.msgops.r.* zh+en)。_appConfirm
+# 加通用 checkboxLabel 选项(有勾选项时 resolve {ok,checked}, 无则维持布尔零改动)。
+# .py 侧(msgops 路由 both_sides+审计 conv_clear_remote/编排器 delete_history/
+# TG 双 worker raw messages.DeleteHistory 分页)随下个重启窗装载; 装载前旧后端
+# meta 无新键→勾选不出现, 中间态自洽。门禁 test_inbox_msg_ops 33 绿。
+# 20260817-0656: WP-3 老板日报 /workspace/boss 新页(任意登录角色; 大数字+7日趋势+
+# 一句话解读, 词条零工程黑话 i18n bp_* zh+en 有门禁扫描; 空态诚实; 导出周报
+# Markdown=/api/workspace/boss-export.md)。数据=value_report 新日窗(滚动24h,
+# 7日窗平铺==周窗守恒有门禁)+省时系数 ops.value_report.manual_minutes_per_reply。
+# .py 侧(boss_routes/value_report 扩展+WP-4 rider 三处: 危机计数/守卫传参/披露
+# B线+协议链)随下个重启窗装载。日报推送为 rider(health_watchdog 他线在编,让路)。
+# 20260817-0555: 无兜底工作台红条 ws-delivblock（近 30min delivery_block）。
+# 20260817-0535: 账号真相卡加「桌面镜像」KPI（与真幽灵分开）；inbox.acct.desk_tag/
+# reg_tag 补 en。watchdog accounts_truth 盯会话库有、注册表没有的真泄漏。
+# 20260817-0532: WP-4 合规模式配置层——membership 页尾「合规能力」引用行(服务端拼链:
+# 运营 compliance.crisis_protocol_url 优先/缺省厂商站模板页, i18n mb_compliance_*
+# zh+en); 引擎侧 compliance.* 开关(基线全关)/披露/危机转介计数/诚实身份双面分叉
+# 全在 .py(随下个重启窗装载, 未装载=开关不存在=零变化); 官网新增
+# /compliance/crisis-protocol 双语模板页(website 侧另行发版)。热区接线
+# (skill_manager 披露+计数/autosend 披露/守卫传参)为 rider, 见 docs/实施34 §4。
+# 20260817-0505: ops-overview 新增「🧾 账号真相」卡(infra 组, 紧邻接入漏斗):
+# 读 /api/workspace/metrics.accounts_truth(在册/会话目录/仅目录幽灵/状态分布),
+# 幽灵>0 亮黄; 无数据(旧后端/registry 不可用)整卡隐藏。共享 loadFrontendErrors
+# 同一次 metrics 响应, 零新增请求。i18n ov2_s_atruth/ov2_at_* zh+en。
+# 20260817-0455: 账号真相 P1/P2 操作闭环——抽屉「历史/已退出账号」行长出动作按钮:
+# 已退出=「重新登录」(messenger 走 ops relogin 链/其余重扫码, 与在册离线行同链路);
+# 已移除=「恢复」(POST /api/accounts/{p}/{a}/restore removed→offline, 刷新后自然
+# 长出重登按钮; 恢复≠重登, 两步语义分开); 有存量未读=「清未读」(POST
+# /api/unified-inbox/mark-account-read 批量水位, 与逐会话已读同机制永不回弹)。
+# 新 JS restoreAcct/markAcctRead(与 reloginMessengerAcct 同 top-level 作用域,
+# _acctFetch/_acctBtnBusy/_acctOpFail 统一口径); 埋点 acct_hist_restore/
+# acct_hist_clear_unread。i18n inbox.acct.hist_restore*/hist_clear* zh+en。
+# 服务端三件(restore 路由/mark_account_read/metrics.accounts_truth)随下个重启窗
+# 装载; 旧后端点按钮=404/失败 toast, 不破坏既有查看链。
+# 20260817-0410: 账号真相单源 P0(老板实录「顶部 10 个 vs 账号管理 5 个」对不上号)——
+# ①服务端 accounts_summary(store.account_directory 全库名录 × platform_status ×
+# 注册表, /chats 响应新键; logged_out/removed 未读恒 0, history_only 存量未读如实;
+# .py 随下个重启窗装载, 前端特性探测回落客户端推导); ②dock/rail「仅历史」号无条件
+# 折叠(去掉「有未读不折叠」例外=事故根因), 存量未读汇总进「历史 N」chip 灰角标
+# (绝不用红色 attn 口径); ③抽屉舰队摘要第 5 格「历史」(与 dock 同源, 0 个隐藏)+
+# 底部「历史/已退出账号」只读分区(状态 tag 仅历史/已退出/已移除 + 会话数/最近活跃/
+# 灰未读 +「查看会话」直达); ④_historyAccounts() 单一消费口=dock chip/摘要格/抽屉
+# 分区三处数字必然一致。i18n inbox.acct.hist_* zh+en; 门禁: 前端接线 20 绿 +
+# accounts_summary 7 绿 + i18n 311 绿(1 红=sibling 回收站 toLocale, 非本批)。
+# 20260817-0405: Account Dock P2——①同平台组内拖拽排序(HTML5 DnD, localStorage
+# ws_adk_order 按平台分桶; _adkCollect 稳定重排=钉住的按序、未登记保默认序; 右键菜单
+# 动态出「恢复默认排序」); ②hover 卡「最近活动」行(allChats 客户端聚合最新会话
+# 时间+对象+摘要, top-N 窗口外冷号按设计不出行); ③账号徽标实时化(SSE _patchChatInList
+# 乐观 +1 / _clearUnread 乐观扣减 unreadByAccount, 下轮 loadChats 服务端数字对账
+# 覆盖)。unified-inbox.css ?v=20260817e。验证: 静态门禁 325 绿 + rail 33/33 +
+# 密度 19/19 + P2 动态 8/8(tmp_p2_verify)。
+# 20260817-0355: 业务助手宽屏常显(老板需求「业务助手需要一直显示」)——>768px(浏览器/
+# 1280px 桌面壳)右栏只开不关: toggleInfoSidebar 宽屏拒关+「助手」开关按钮 CSS 隐藏
+# (没有关闭入口就没有「误关后找不回」); syncWsCopilot 同 cid 早退路径补 ensure-show
+# (只碰可见性类不重喂 context, 防打断契约不破); 窄屏(≤768px 全宽覆盖式)保留原切换。
+# matchMedia 窄→宽迁移兜底自动展开。unified-inbox.css ?v=20260817d。
+# 20260817-0330: Account Dock P1——①账号 chip 右键菜单(只看未读/复制直达链/账号管理,
+# 复用消息线 _ctxOpen 通用菜单零新弹层族); ②hover 详情卡 .adk-hv(320ms 延迟,只读
+# pointer-events:none, 在线/人设/今日会话/未读/需人工; 触屏与菜单/总览开启时不出);
+# ③Alt+1-9 首用引导 toast(localStorage ws_adk_kbd_hint 一次性)。css ?v=20260817c。
+# 20260817-0210: 官方级消息管理 P0/P1(老板需求「与官方一致的会话/消息功能」)——
+# ①会话右键菜单+行内 ⋯(置顶/已读/认领/搁置/标签/归档/清空记录/删除会话);置顶服务端
+# 落库(conversation_meta.pinned_at, 全坐席共见)+置顶恒排顶部+📌 徽标; ②消息右键菜单
+# (复制/引用/选择/删除仅工作台/撤回双端)+多选浮条(选我发出的/复制/批删/批撤);
+# ③「仅工作台删除」=messages 软删(deleted_at, 可 undo 恢复; 业务口径刻意不滤);
+# 「撤回」扩 telegram(pyrogram revoke)/line(unsend), WA 沿用; 服务端强制只撤自己消息;
+# ④全链 feat 探测 GET /api/unified-inbox/message-ops/meta——旧后端 404=新 UI 整体
+# 不挂(热更中间态自洽), 平台撤回能力单一事实源; SSE conversation_pinned/
+# conversation_deleted/messages_deleted 多窗口同步; ops_events 留痕(msg_revoke/
+# msg_delete_local/conv_clear)。.py 侧(store 迁移/msgops 路由/编排器 delete_messages)
+# 随下个重启窗装载。unified-inbox.css ?v=20260817b
+# 20260817-0140: 业务助手工具箱重组(老板需求)——①语音克隆/人设绑定(+App 端知识库)
+# 自「回复台」迁「工具箱」: 回复台聚焦拟稿单一任务, panel-manifest 为 SSOT(卡序
+# convops→xlate→voice→kb(app)→persona→analysis, 两端 HTML 同步); 折叠记忆键不变,
+# 坐席偏好无缝; App 深链 focus-voice 跟迁 tools。②新共享组件 cp-xlate-tools(两端
+# 工具箱「翻译工具」卡): 单次翻译四件套 图片OCR/语音转写/多线路对照(含 AI 融合)/
+# 文档整篇(粘贴+txt+docx/xlsx/pdf 上传, cookie 态 SSE 进度、token 态自动退化同步档,
+# 译后文件 fetch(blob) 下载防 token 宿主 401), 直连收件箱同一批 translate-* 端点
+# (零后端改动); 弱会话依赖(App no-ctx 豁免可用), auto 目标语=有会话交服务端解析/
+# 无会话回落界面语言; 「对话翻译」弹层四按钮保留为第二入口。③一次性搬家提示条
+# (两端, localStorage cp_moved_hint_v1)+翻译卡 NEW 角标(首见 7 天, cp_xlate_new_ts)
+# +空态文案更新; 埋点 cp-tool-used→cptool_*(web)。copilot-client 增 xlate* 五方法
+# (Desktop 桩对齐); cp-i18n ?v=20260817a / copilot-client ?v=20260817a /
+# cp-xlate-tools ?v=20260817a(两端宿主), 双树已 copy-shared。
+# 附带修: Account Dock(0055 批)四个内联 handler(_adkPick/_adkAll/_adkKey/_adkNudge)
+# 漏挂 window=哑按钮已上生产, 哑按钮门禁抓出, 本批补进全局暴露块。
+# 20260817-0055: 账号顶部状态栏 Account Dock(老板指名: 所有账号排顶部、点击即切该号会话)
+# ——#acct-dock 常驻顶栏之下(跨平台账号头像 32px+平台角标+在线点+灰/红分级未读, ≤6 号
+# 全员显名, >6 号非选中收文字), 点击=复用 rail 状态机(setPlatFilter{acct}/setAccountFilter,
+# 深链/记忆/scoped/纯净守卫零改动全继承); 旧 rail 让位隐藏(关 dock 即复原);
+# 总览下拉升级跨平台分组(行数=计数+1 不变量沿用); Alt+1..9/确认脉冲/toast 语义照旧;
+# 高度让位走壳标签条同款(body.adk-on 时 .inbox-root 减 --adk-h, 桌面 48px/窄屏 44px);
+# 埋点 iflt_acct_dock_pick/_all; i18n inbox.dock.aria zh+en; ws_adk_seen 回访预热骨架。
+# 开关: 模板缺省=开(热更即上线); ctx account_dock_enabled(.py 随下个重启窗)+
+# overlay inbox.account_dock.enabled:false 可关。unified-inbox.css ?v=20260817a
+# 20260816-2340: WP-2 首启向导 /welcome 新页(五步: 授权→渠道→人设→自动化档位→测试
+# 消息; onboarding.enabled 基线关=页面/API 全 404, 生产两实例零可见变化; cloud_light
+# 预设档播种 true=桌面新装默认见到)。复用面: persona_create_wizard 模态整件寄生
+# (pp-modal 壳样式宿主自带)、/api/setup/channels 深链 /workspace/setup?channel=、
+# /api/admin/license(+activate)、/api/unified-inbox/send(chat_key='me' 收藏消息)。
+# 新 i18n pack 段 onb_wz_*(zh+en); 新门禁 tests/test_onboarding_welcome.py(16 例)+
+# tools/verify_onboarding_ui.py(38 断言, 已挂 gate_sweep -Full)。登录落地: 非坐席
+# 首登且向导未完成 → /welcome(显式 ?next= 深链仍最优先; .py 侧随下个重启窗装载)。
+# 20260816-2110: 翻译策略收敛(老板拍板: 不做云采购/只本地部署/坐席不暴露引擎选择/
+# 一个多语种最强模型)——①坐席端引擎选择面整体收掉: 引擎行+chips 隐藏(_XL_ENGINE_
+# PICKER_UI=false 闸, id 契约保留), 对照弹窗「记住引擎」钉选入口移除(_rememberConvEngine
+# 对缺席 checkbox null 安全=恒 failover); ②模型换代评测裁决: 现役 hy-mt2-7b-official
+# vs 176 上预备的 HY-MT1.5-7B:Q4_K_M 宽语料(50 样本 29 语对)A/B——挑战者 char 0.603
+# vs 0.712 / sem 0.926 vs 0.938 / 语义救援 15 vs 3, 全线落后(社区 Q4 量化损伤或
+# prompt 契约漂移), **不切换**; 现役即集群多语种最优, 评测后已将挑战者从 5090 显存
+# 卸载(keep_alive:0)。评测产物 %TEMP%\hymt15eval\(baseline|challenger).json。
+# P0/P1 引擎扩容后端保留为休眠能力(零配置=零行为, 不采购即不启用)。
+# 20260816-2050: ui_visibility 第七键 cockpit——工作台顶栏「驾驶舱」入口默认对坐席隐藏
+# (老板决定: 人工操作台那套藏了, 驾驶舱跟着藏——该页主动作是一键接管/交还, 接管要跳
+# 原生页而原生页整条链已随 manual_console 关闭, 页面价值只剩半截; 队列的四个信号
+# 需人工/客户在等/草稿待审/接管超时在收件箱筛选与草稿队列各有既有入口, 不因藏本页失联)。
+# 闸门刻意 fail-hidden(缺键即隐藏): 模板热更先于重启, 中间态里进程还不认识 cockpit 键,
+# 按钮此刻就该不见而不是等重启(与 ai_settings 的缺键回落显示语义相反, 别照抄)。
+# 藏而不废: /workspace/cockpit 与 /api/cockpit/overview 照旧可达, 开发者页开该键即恢复。
+# 用量裁决: cockpit_usage_report 顶部打「入口已隐藏」横幅——此后零点击是「进不来」
+# 不是「没人用」, 重开该键后须把 CK_EPOCH_DAY 挪到重开日重新计窗。
+# 20260816-2040: ui_visibility 第六键 ai_settings——「AI 与转接设置」页的「AI 提示词 &
+# 行为配置」+「人工客服转接」两张卡与侧栏「人工转接」项默认对坐席隐藏(老板实录: 日常
+# 用不到、human_escalation 本机 enabled:false 从未启用; 提示词只管未绑人设的会话——
+# Telegram 主线/官网聊天, 收件箱与三端 RPA 走 persona 体系不受其影响)。藏而不废:
+# /settings 与深链 #prompt / #escalation 仍可直达, 且深链会**就地揭示**那张卡(否则
+# 「URL 不封」只是口号); 简洁模式两卡全藏时出空态指路开发者工具, 完整模式其余卡不动。
+# 侧栏项按 **path** 剔除(escalation 与「系统设置」共用 key="settings", 按 key 剔会
+# 连坐掉整个 /settings 入口, 门禁钉住)。开关在 /developer「内部功能显隐」。
+# 两卡的藏**模板热更即生效**(缺键也按藏算——藏是本批目的, 不等重启窗); .py 侧
+# (ui_visibility 键 / nav_schema 的侧栏 path 过滤 / developer 开关行)随下个重启窗
+# 装载, 那段窗口里想改提示词走深链 /settings#prompt(会就地揭示那张卡)。
+# i18n set_uiv_empty_*/dv_uiv_k_ai_settings* zh+en;
+# 门禁 tests/test_ui_visibility.py(新增 8 例)。
+# 20260816-2015: 翻译 P1-XF/XT/XI/XM——①智能融合: 多线路对照带 fuse=1, 成功候选交
+# LLM 编辑择优合成「融合译文」置顶卡(闸门=语言完整性+置信地板 0.5+不低于最佳候选
+# -0.15, 不过闸无卡 fail-soft; 同质候选 unanimous 不融合; translation_fusion.py 新模块,
+# AIEngine.bare_chat 单一裸通道供 translate/融合复用); ②语气分段(自然/正式/亲切/促单):
+# 仅出站路径消费(预览/对照 body.style), LLM 线 build_chat_tone 单一口径+DeepL prefer_*
+# formality, raw_mode/NMT 线 supports_tone=false 经矩阵下发; 客户端缓存键含语气维度;
+# ③图片翻译粘贴/拖拽(弹层或图译面板打开时接管, 不抢 composer 粘贴; 三入口共用
+# _imgXlateFile); ④引擎 chips tooltip 带进程期实测 ~ms(engine_matrix join 引擎统计,
+# 零流量不带键); 埋点 xlt_tone_*/xlt_fuse_pick/xlt_back_shown/xlt_img_paste/xlt_img_drop。
+# .py 侧(fusion 模块/compare fuse 参数/tone 口径/矩阵统计)随下个重启窗装载;
+# 前端对旧后端全 fail-soft(无 fusion 键=无卡, style 参数旧后端按 faithful 处理)。
+# i18n inbox.xl.tone_*/fuse_* zh+en; 门禁 tests/test_translation_fusion.py(16 例)。
+# 20260816-1955: 头像/名字实时刷新泛化到全平台——①conversations.avatar_fp 新列
+# (WA/TG 下载与后台再验证回写内容指纹, chats API 携带); ②_peerAvatarPlan 版本参数
+# 泛化(messenger 走直链路径哈希不变, 其余平台有 avatar_fp 即拼 &v=→fp 变=头像重建
+# +缓存失效); ③_mergePeerIdentity 合并 avatar_fp; ④服务端 WA/TG「先答后核」后台
+# 再验证(缓存命中秒回 302, 图龄≥6h 后台回源比对 WA profilePictureUrl 路径/TG
+# big_file_unique_id, 变了才重下+回写 fp; .reval marker+in-flight 双节流);
+# ⑤LINE _peer_ident_cache 加 TTL(正 6h/负 10min, 改名换头像随下条入站自愈);
+# IG/Zalo 边车无 peer 头像字段, 维持首字母兜底。.py 侧随下个重启窗装载, 前端对
+# 旧后端 fail-soft(无 avatar_fp 字段=旧行为)。
+# 20260816-1940: 翻译引擎矩阵扩容 P0-XL——①引擎下拉动态化(服务端矩阵驱动名单+label,
+# 配置新增线路含 custom 通用线前端零改动出现; 记住的引擎掉线单回「自动」)+引擎线路
+# chips(人话标签+健康点 绿/琥珀/灰, 点选与下拉同链路, addEventListener 零内联);
+# ②「先预览再发」反译回显(#xl-back-chk 默认开随 prefs 持久化, /translate body.back=1
+# 服务端反译目标=正向探测源语, 走 failover 缺省序=本地线零成本, 失败静默不占位);
+# ③标签消费点全部换 _xlEngLabelOf(动态注册表+静态映射兜底)。.py 侧(OpenAICompat/
+# Microsoft/Youdao/Baidu 四引擎类+build_engines 扩容+describe 带 label+back 参数)
+# 随下个重启窗装载; 前端对旧后端全 fail-soft(矩阵无 label 走静态映射, back 键缺席=不渲染)。
+# i18n inbox.xl.back_*/eng_chip_*/engsub_* zh+en; 门禁 tests/test_translation_engines_p0.py(19 例)。
+# 20260816-0958: 后台美化可读性批——①暗色 token 提亮(base --t2 #b4b8c0/--t3 #9aa0aa/
+# --bd 提档/--sb-txt .5→.72 等 + th-ink 灰阶与 th-bd 暗值(codemod 表源)+ tk-text-muted;
+# 对比度门禁新增「暗色提亮地板」组钉住不回退); ②侧栏分组折叠(完整模式组头=真按钮,
+# localStorage sb_groups_v1 后台/工作台两壳共用, 含激活页的组强制展开, 收起组待办徽标
+# syncGrpRollups 上卷组头, 60px 轨/窄屏 CSS 兜底强制可见; i18n nav_grp_toggle_hint zh+en);
+# ③设置页修缮(f-hint .71→.78rem/badge-opt 换面修 4.2:1 违规/蓝横幅提字/提示词保存条
+# sticky+未保存脏标记 set_dirty/JS #16a34a·#dc2626→var); ④.s-num tabular-nums +
+# 共享 .banner/.empty-state 组件类; ⑤whatsapp 灰字→tk-text-muted、workflows 暗规则→
+# th-ink-slate4、messenger 暗面板常量提亮、personas 内联琥珀→th-ink-amber7(ratchet 回 0);
+# theme-tokens.css ?v=20260816a(5 处引用点)。规范沉淀 .cursor/rules/admin-theme.mdc
+# 20260816-0935: 对话翻译 P3——UI 语言表驱动 N 语化: ①i18n_packs 加 EXTRA_LANGS/
+# UI_LANGS/UI_LOCALES 单一事实源(collect_all 泛化收集, collect_packs 三元组契约不破),
+# web_i18n 合并视图表驱动(_merge_views; 热重载失败仍保旧字典), admin 中间件/set_lang/
+# web_user_store/bundle 路由四处白名单散点收口消费同一表; ②th/id 翻译域词包
+# (th_inbox_xlate/id_inbox_xlate, 各 ~115 键, 机翻底稿运营可复核热更; en 底回落);
+# ③语言切换 wsToggleLang 三语循环→就地五语选择器(_i18n_bootstrap 自包含, 所有调用点
+# 零改动升级; th/id 标 β; lang_toggle 语义改中性「语言/Language/Ngôn ngữ」);
+# WS_LOCALE/wsDateLocale/workspace_base <html lang> 表驱动补 th/id; ④门禁
+# test_i18n_extra_langs(子集/占位符/合并视图/三元组兼容/白名单自洽, 加语言零改测试)。
+# 注: 中间件白名单是 .py, th/id 的 UI 接受随下个重启窗生效(选择器点了 th/id 在此前
+# 会回落 zh, 无害); zh/en/vi 全程不受影响。
+# 20260816-0932: 案例×学习融合 P3——learner 页零命中淘汰建议行(防冤枉双闸:日志
+# 不可查/零流量都不出建议)、cases 页告警接通引导条(仅 verdict=no_channel 现身,
+# 7 天 dismiss)+空态学习引导(复用待办条快照零新请求)、裁决 CLI
+# tools/fusion_adoption_report.py(ctdo_ 纪元 2026-08-16,喂料采纳率分母=同窗结案数)。
+# .py 侧(retirement_candidates/stats zero_hit)与 P2 批同车等重启窗。
+# 20260816-0905: 案例×学习融合 P2——学习草稿溯源(cases 结案桥带 case: 锚点/驾驶舱
+# offerFeed 带 conv: 锚点/learner 页来源徽章+效果回访行 effect=1)、cases 待办条+喂料
+# 采纳度埋点(prefix=ctdo_)、base.html 三徽标收敛 /api/todo-summary 单请求(顺带修演练
+# 残影计入与 50 封顶两处口径)。.py 侧(kb_drafts 迁移/feed 透传/effect_report/周报
+# learner 段)待下个重启窗装载,前端全部对旧后端向后兼容。
+# 20260816-0850: 对话翻译 P2——①vi 界面语言补翻译域词包 vi_inbox_xlate(~115 键:
+# 弹层/管理弹窗/langwarn/dash.lang 语言名; 通用键已在 vi_workspace_shell, VI 跨包
+# fail-fast 实锤拦了一次重复); 配套: workspace_base <html lang> 补 vi 映射,
+# _agentLang「显式非默认 UI 语言」层泛化(WS_LANG en/vi 都算强信号, 替代只认 en 的特例);
+# 门禁 test_i18n_vi_xlate_pack(VI⊆ZH 子集不变量全 vi pack 生效+占位符对齐+回落自证)。
+# ②裁决闭环: tools/xlate_usage_report.py(纪元 2026-08-17, 五问判词+样本闸门+ETA;
+# 上线日门禁点击噪声经 quarantine_pre_epoch 隔离, verify_xlate_ui 改 context 级吞
+# beacon 根治污染)。③视觉: .xl-quick 迁 var(--tk-emerald) 令牌; 门禁新增 405x844
+# 窄屏段, 首跑即抓存量缺陷——右锚弹层在 405px 向左溢出 153px 半屏被裁 → ≤480px
+# 改 fixed 底部抽屉(bottom:64px 让开移动平台条, 与筛选抽屉同约定)。(0910 批含此修)
+# unified-inbox.css ?v=20260816d
+# 20260816-0805: 对话翻译弹层 P1——①信息架构重排: 方向卡片(.xl-dir-card 两行=核心)+
+# 20260816-0805: 对话翻译弹层 P1——①信息架构重排: 方向卡片(.xl-dir-card 两行=核心)+
+# 「发送方式」分段(一击直发/先预览再发, 状态载体仍是隐藏 #xlate-out-preview 保 id 契约)+
+# 「高级」<details>折叠(引擎/我的语言/运营默认收进去, 弹层首屏从 7 区降到 4 区);
+# ②智能建议: #xl-conv-hint 双模式——会话语言已知≠坐席语言且双向全关 → 「客户在用X聊天,
+# 一键开启 X⇄Y?」(按钮走 _xlateSuggestAccept→quick-on, 埋点归因区分); ③坐席级「我的语言」:
+# GET/POST /api/unified-inbox/agent-lang(服务端 session 身份, KV inbox.agent_lang.{agent},
+# 白名单+归一化; .py 随下个重启窗装载)+前端特性探测 fail-soft(404=行隐藏, 装载后自动出现),
+# _agentLang 解析序加服务端层(srv>ui-en>浏览器>html>zh); ④埋点 xlt_*(quick_on/off/suggest_
+# shown/accept/preview_on/off/mgr_open/agent_lang_set)→ui-event-trend 可裁决; 新内联 handler
+# 三枚已登记 window 导出清单; i18n inbox.xl.adv/sendmode/mode_*/mylang_*/suggest* zh+en;
+# unified-inbox.css ?v=20260816b(.xl-dir-card/.xl-seg/.xl-adv/.xl-hint-btn)
+# 20260816-0755: 案例×学习融合 P1——/cases 页顶跨系统待办条(todo-summary 同源)、
+# 结案弹窗「顺手教 AI」喂料桥(复用 /api/learner/feed, 结案成功才喂)、learner 页定位互跳;
+# monitoring_routes learner_pending 改 stats() 全表口径(.py 待下个重启窗装载)。
+# 20260816-0725: 对话翻译弹层 P0 修活(坐席实录三报障)——①「一键开启」升级真两态开关:
+# 开=对方消息→坐席语言(_agentLang: UI 语言 en 显式>浏览器语言>html lang>zh, 收敛 9 处硬编码 zh)
+# +我的消息→自动(客户语言), 再点=双向关; 任何状态点击都有 toast+状态胶囊 pop 反馈, 按钮
+# data-i18n 属性随态换键。②方向文案消歧:「收到/发送」→「对方消息/我的消息」(zh; en 原本无歧义)。
+# ③同语诚实提示 #xl-conv-hint: 客户语言==目标语时说明「同语省译、他语仍翻」替代静默跳过。
+# ④「管理」弹窗修活: 两节各带「新增/修改」编辑行(平台/账号候选取 platformStatus, 不再强依赖
+# 选中会话), 选中会话时显示「当前会话生效」链胶囊(账号>平台>全局命中层); _saveReplyLangDefault
+# 并入 _saveDefaultLangFor。i18n inbox.xl.quick_*/toast_*/same_hint+inbox.dlm.* zh+en;
+# unified-inbox.css ?v=20260816a(.xl-quick.on/.rt-xl-status.flash/.dlm-editor/.dlm-eff/.xl-conv-hint)
+# 20260816-0700: messenger 头像/名字实时刷新——_peerAvatarPlan 给 messenger 代理 URL 拼
+# 直链路径指纹版本参数(&v=, 对方换头像→目录同步刷 avatar_url→key 变→头像重建+缓存失效);
+# 服务端 .src sidecar 指纹比对穿透 7 天磁盘缓存+302 带 ?v=(.py 随下个重启窗生效);
+# worker MSG_DIR_SYNC_EVERY 75→8(≈32s 目录同步, 名字/头像直链近实时进库, 需重启 worker)。
+# 20260816-0340: developer「AI 模式切换」预设卡排雷——本地预设 176:11434 qwen3:30b(违显存纪律
+# 且与 ai.primary/fallback 本地链分叉)改指 173 chatx; 云端预设 deepseek-chat(旧别名)改现役
+# deepseek-v4-flash、timeout 对齐现值 40; 预设不再清空 ai-embedding_model(旧行为整段保存会把
+# bge-m3 抹掉=记忆向量/语义闸门静默失效, /api/settings/save 空值白名单不含该键)。纯模板热生效。
+# 20260816-0313: 管理面改造 P2——users.html 按人权限编辑器(四能力三态覆写+已覆写徽章);
+# workspace_usage.html v2(硬限徽章×enabled 联动/AI 自动推导行/预计耗尽+增购);
+# ops_overview「字符额度」卡; workspace_base 额度预警条(uqw-bar, warn/over 才显示,
+# 3 连败停轮询)。新字段(enforce/license_month/daily/perms)待重启装载, 前端全 fail-soft。
+# 20260816-0221: 管理面改造批次——侧栏 7→8 组(新「用量与计费」组/策略效果归位数据洞察/
+# 四主管看板收编/分组一句话定位 title/数据概览→今日概览/变现营收→客户营收);
+# /workspace/usage 一页两态(主管=团队字符额度英雄区+分坐席表, 坐席=我的用量);
+# users.html 统计条+角色全量下拉(重启前 default 回落)+每卡用量行+额度弹窗+删除逐字确认。
+# 新 API(char-usage/my-usage/quota)待重启装载, 模板已 404 容错; nav 分组变化也随重启生效。
+# 20260816-0050: 修用户菜单「亮色/暗色」点了没反应——根因=URL 主题钉(?theme=dark, 桌面壳 renderer 给嵌入 /workspace 强制加)被当成锁: 三处 eff() 一律钉优先, 于是点击后 cp_theme 真写了/分段高亮真动了/埋点真 +1, 但 data-cp-theme 与 cp-theme-css 一动不动(probe 实锤: 无钉窗口 light/dark/auto 全生效, ?theme=dark 窗口 cp_attr 恒 dark); 现改「钉=初始默认不是锁」: 显式选档(cpSetTheme/cpCycleTheme/引擎 setNightMode 含 was==mode 空切档)当场释放钉(唯一入口 window.cpReleaseThemePin), 释放标记走 sessionStorage(窗口级, 用 localStorage 会连带解掉同分区别的窗口的钉=又回「深色壳里白聊天」), 关窗/重启壳回到钉住的默认; 三处读者改为每次求值读 window.__cpThemePin(缓存进闭包变量=释放后旧值还在=等于没释放, unified_inbox 的 var PIN 就是这么坏的); appearance.js ?v=20260816a 双消费方(workspace_base+personal_settings)
+# 20260815-2350: 修「后台切换白天/晚上点了没反应」——根因=URL 主题钉(?theme=dark, 桌面壳 webview 与后台弹窗同 persist:backend-workspace 分区共享 localStorage)被写进跨窗口共享键 cp_theme, 被钉窗口每次 applyTheme 又广播一遍 → 后台滑块刚切的档 150ms 内被盖回(实锤 probe: dark→light→dark); 现三处读者一律「钉优先、不落盘」: workspace_base 头部解析成窗口级 window.__cpThemePin(不再 setItem)、unified_inbox 同源消费(标签也显钉住档, 不再谎报「跟随系统」)、appearance.js applyTheme 只把 night.mode 治理值写 cp_theme(钉只影响本窗口 data-cp-theme); appearance.js ?v=20260815a 双消费方
+# 20260815-0335: 「全自动托管」HostBridge 开关整体下线(app.html autopilot-bar+桌面镜像+桌面原生 aside cp-auto-bar+renderer autopilot 函数族+cp.app.auto_* i18n 键)——与收件箱「🚀 全自动」档(auto_ai+受控出站队列 D4b)功能重复: 同为「会话打开时自动回复」, 但绕过服务端 send-gate/kill-switch/预算/审计, 两开同会话必双发; 全自动唯一入口=会话自动化档位下拉; cp-i18n ?v=20260815a 双宿主; 开着的桌面壳 iframe 由本戳陈旧横幅提醒刷新
+# 20260815-0320: ui_visibility 补漏——App 模式副驾宿主(shared/copilot/app.html+桌面镜像)的「群成员提取」链接卡 2026-08-14 首批漏接显隐闸门一直常显; 现改静态 hidden 打底+ui-flags group_extract=true 才揭示(fail-hidden, 与网页收件箱 Jinja 摘除同语义; collab 卡维持 fail-open 语义不动); 纯静态文件热生效, 开着的桌面壳 iframe 由本戳陈旧横幅提醒刷新
+# 20260815-0210: D 批手发语言错配警示条 #lang-warn-bar——外语会话打中文(≥4 汉字且占比≥40%)且未开出站翻译 → composer 上方黄条警示(不拦发送)+「开启自动翻译」一键修复(与手选下拉「自动」同 _onXlateChange 单写路径)+✕ 本会话免扰(会话期); 决策纯函数 _langWarnCheck 挂 window 供门禁直测; 埋点 langwarn_shown/fix/dismiss; 门禁 tools/verify_composer_langwarn.py(33 断言, chats route mock 零生产写入); i18n inbox.langwarn.* zh+en; unified-inbox.css ?v=20260815b
+# 20260815-0140: messenger 盲区修复观测进 ops 平台会话卡——「盲区强制读取(次)」(unread_forced 心跳聚合, 零流量不占版面)+「worker 代码待重启」🟠(磁盘代码晚于 Node 进程启动=改了没重启, 半部署首次可见)+「请求区读取可疑」🟡(零行且无页面骨架连续≥4=FB 改版读不到, 与「真没人来」区分); 三态并入卡黄灯; i18n ov2_js_ps_uforced/code_stale/req_suspect zh+en; .py(record_inbox_health 四新键+路由透传)与 Node(unread-forced read/classifyRequestsScan/code_fp)已随 01:06 Node 重启部分生效, Python 侧随下个重启窗
+# 20260815-0100: C 批会话行严格双行等高——tags/suggest/risk 三个条件行收编进预览行行内 chip 带(.conv-line2-chips, 风控>建议>标签×2+N)+meta 徽章横排(.conv-meta-badges); renderConvList 增量 diff 分支整体收编为整行重建(与 _buildConvItemDom 单一构建器, 修四类漂移缺陷: risk-blocked/acct-out 类丢失/标签配色不走 _tagChipHtml/群聊·请求·已退出 chip 更新后消失/goalMark 丢失); _convItemSig 补 account_status/is_request 维度; _syncHandlerBadge 指向新徽章排; unified-inbox.css ?v=20260815a
+# 20260815-0020: 通道离线自愈 P1——ops 平台会话卡加「登录放弃(次)」KPI(by_status.abandoned 事件计数, 零放弃不占版面)+whatsapp 掉线行也给「重新登录」(后端转发 baileys 凭据级 reconnect, 契约 already/reconnecting); 工作台红条重登按钮同步放开 whatsapp; abandoned 孤儿行并入 30min TTL 清扫(防反复放弃吃光 64 key 槽, 放弃率计数不受影响); .py(relogin whatsapp 分支/TTL 扩展)随下个重启窗生效
+# 20260815-0010: 消息分条节奏换挡 5-10s——reply_split「时代缺省」常量块(思考 3-8s/中日韩 0.22/拉丁 0.15/单顶 12s/总预算 40s=手动链防前端 60s 超时护栏), 三预设连带重标(natural=时代缺省/cautious 5-12/rapid 回旧档 0.8-2.5), 三链规划器异常兜底 0.8→3.0; /reply-settings 估算行兜底值+手速/预算提示文案同步(rps_bub_speed_hint/budget_hint zh+en); .py 随下个重启窗生效
+# 20260815-0000: 内部功能显隐 ui_visibility——人工操作台/群成员提取/真机矩阵/团队协作四项默认对坐席隐藏, /developer「内部功能显隐」卡三开关+团队协作开关控制; 消费面=workspace_base cx-shell-strip Jinja 闸/unified_inbox 群提卡+团队协作卡+官方网页版入口 JS 闸/ops_overview 群提段/nav_schema 真机矩阵组+命令面板/app.html 运行时 ui-flags/desktop renderer EMBEDDED_ON 服务端压制; 新端点 GET /api/desktop/ui-flags(免鉴权只回布尔)+GET/POST /api/developer/ui-visibility(dev 解锁); .py(路由注册/admin 注入/nav 过滤)随下个重启窗生效
+# 20260814-2359: 通道离线红条可行动化 P0——快照富集昵称(注册表 self_name/label, 红条不再只写 messenger:6158…)+红条内嵌「重新登录」按钮(仅 messenger+真实 account_id 亮, 403 就地提示找管理员, 反馈写回横幅)；配套后端: 放弃登录上报 abandoned(不进不健康集合)+登录尝试幽灵 30min TTL(修 173 实录: 放弃的登录窗以 expired 挂红条 3h 无人能懂)
+# 20260814-2358: 语音克隆试听 P1/P2——降级预览(试听失败态加「先用系统通用音色听文本」按钮, __system__ 哨兵绕过 hub 人设层, 产物显式标注非克隆声)+引擎健康前置(vcm 弹层打开后台探 avatar-status, 7852 明确不可达才亮「维护中」黄条, 预期管理提前到录音前; 失败/未启用静默不误报)
+# 20260814-2355: 切账号串号/串头像三防线——renderConvList 渲染口 scope guard(不匹配视角的行就地剔除+acct.scope_leak 埋点)；头像身份键 data-avkey 进 _convItemSig(身份变了增量重建, _syncConvAvatar 同步字首/渐变底)；头像失败缓存改 120s TTL(Messenger 渐进补齐首 404 不再永久灰)；后端 _avatar_disk_paths 消毒防碰撞(sha1 后缀, 纯字母数字 id 零迁移, .py 随下个重启窗)；门禁 verify_account_rail_ui 场景 12(33/33)+test_messenger_avatar 碰撞用例
+# 20260814-2350: 引用回复功能整体下线(老板拍板)——unified_inbox 气泡「引用」按钮不再渲染(_canReply=false 单点闸)；根因=发送链多个静默降级点+镜像无条件渲染引用条→「坐席见引用、客户端没有」(173 实录)；恢复前置=quote_applied 回执落地
+# 20260814-2340: 消息分条节奏 P0-bub——/reply-settings 新卡「💬 消息分条节奏」(feat:"bub" 特性探测, 旧后端整卡隐藏)：启停/条间停顿 lo-hi/单间隔封顶+估算行, 高级折叠(逐句/max_parts/中英手速/总预算)；修 173 实录「第 2/3 条机关枪」——reply_split 拉丁手速出厂 0.08s/字符(旧 None 低估英文打字 4 倍), 九键进 FIELDS 白名单全 hot, 三预设连带条间档位；i18n rps_bub_* zh+en
+# 20260814-2320: 「AI 下一步」面板整体下线（运营决策）——三宿主(收件箱右栏/桌面壳/PWA app)+workflows 管理页动作 tab/预览全移除；cp-next-actions.js 双树删除；/next-actions /execute-action /workflow-actions 路由+推荐器+store CRUD 下线(workflow_actions 表保留不 DROP)；情绪词表/merge_mood_tag 迁 effective_mood.py(mood_steering 照常, 配置路径不变)；cp.nba.*/inbox.nba.*/h_nba i18n 键回收, hero 卡改「关系与目标」；cp-i18n ?v=20260814d 双宿主+双树镜像
+# 20260814-2310: 语音克隆试听失败可行动化 P0——vcm 弹层试听失败消费后端 reason→message 本地化人话(引擎维护 vs 登记不完整分开说)+「已绑定不受影响」安抚行+🔁 重试按钮(data-act=vcm-audition-retry 走既有委托)；personas 语音卡防覆盖(克隆 backend 动态补 option+锁提示+改选/错配组合保存确认, psn_vp_*)；watchdog avatar_voice_alert 附救援任务停用清单(rescue_broken→webhook 指引改「先恢复计划任务」)
+# 20260814-2255: 搁置可见化 P0——cp-conv-ops 持久搁置状态行(🌙 已搁置至 HH:MM+取消搁置, 替代 2.5s 一闪)+语义微文案(搁置≠停 AI)+死路收口(缺方法/缺 cid 禁用带 tooltip, 失败显示服务端具体原因)+埋点 cpops_*；client 补 unsnooze/listSnoozed；automation GET 搭便车 snooze_until(.py 随下个重启窗, 组件有 listSnoozed 回落零断档)。cp-conv-ops ?v=20260814a/client ?v=20260814a/cp-i18n ?v=20260814c 双宿主+双树镜像
+# 20260814-1550: 桌面壳页内标签条 P2——「AI 工作台」全面改名「人工操作台」（壳 rail/关于/config/诚实条）；workspace_base 头部下新增 cx-shell-strip（数据=壳 pushShellState, stripReady 握手后壳竖栏让位=「账号状态栏移到工作台状态栏下面」，纯浏览器/旧壳零变化）；未读徽标与壳 rail 同源喂 __cxStripSetBadge；i18n base.cxstrip.* zh+en；boot-invariants 新增 ⑯ 强 4 断言
+# 20260814-1545: AI 下一步 P2——workflows 管理页动作表单「所见即所得」预览(嵌真 <cp-next-actions> 组件+stub client 喂表单现值, 预览=线上零漂移)；组件加 no-beacon 预览守卫(管理页曝光/点击不污染 nba_* 裁决计数)；cfg 收集单源化 WF._collectCfg(save/preview 共用)。cp-next-actions.js ?v=20260814c 三宿主+双树镜像
+# 20260814-1510: 驾驶舱 P4 头像回填——telegram/whatsapp 无稳定直链会话经既有代理端点 /api/platforms/{plat}/{acct}/avatar 懒加载(受控并发≤2+5s超时+页面级缓存, 失败字母底留守绝不裂图/绝不 <img src> 直连防连接池饿死)；后端聚合器透传寻址三元组 account_id/chat_key/chat_type(直传+去重合并+conv_info 补齐三层)；门禁 verify_cockpit_ui 扩 11b 组(桩 PNG→blob/桩 404→自摘)共 54 断言
+# 20260814-1445: 主题 P3——theme_ 用量埋点打在 setNightMode 单一写路径(全入口一网打尽/漫游回拉零噪声)+深链入口三处(菜单全部设置/改时间/快捷面板 theme_all_settings_qp)；后台滑块保双位诚实语义但离开 auto/定时档绝不静默(toast 内嵌一键「恢复跟随系统」admThemeAuto, 定时档用 ap.sched_exit 同口径)；toggleTheme 三写提取 _admThemeWrite 共享(auto 时旧键 theme 存解析生效值)。appearance.js ?v=20260814b 双消费方。裁决读数 /api/admin/ui-event-trend?prefix=theme_
+# 20260814-1425: 驾驶舱 P3 人话化+身份卡+学习队列打通——中文时长(2 天 23 小时)/客户（尾号 xxxx）+@username 兜底/字母底头像(坏图自摘,messenger fbcdn 不试)/原话引用气泡(客户说/AI 已拟好草稿,接管卡 detail=接管人归 why 行)/平台品牌名圆点/账号健康「状态未知」折叠/空态学习队列引流行/resolve 后喂料确认(POST /api/learner/feed)；后端聚合器透传 avatar_url/username/last_text；门禁 verify_cockpit_ui 扩到 50 断言
+# 20260814-1330: AI 下一步 P1——推荐区收起态(默认露 2 张, escalate 永不折叠, 展开随会话)+全入口埋点 nba_*(expose/draft_intent/fill_template/exec_x/note_save/more_expand → ui_event_trend)；裁决 CLI tools/nba_usage_report.py(纪元 2026-08-14, 静态话术去留/折叠阈值/快捷区常驻三问)。cp-next-actions.js/cp-i18n.js ?v=20260814b 双宿主+双树镜像
+# 20260814-1310: 主题 P2 收尾——修 #appearance 锚点从未生效（宿主 id=ps-appearance，补滚动+到达高亮+hashchange 监听）；定时提示行加「改时间」直达（文本落 span 防 textContent 抹链接，display:flex）；后台 toggleTheme 换 View Transition 淡切+统一走 _admThemeApply 双写（尊重 anim/reduced-motion 双闸）；工作台引擎侧淡切经查上批已内建（applyAll(true)）零改动
+# 20260814-1235: 1140 批次收尾——主题分段控件激活色 #2563eb 裸写→var(--bl-growth-600,#0d76d9)（legacy_blue 棘轮回绿，品牌色阶固定不随主题翻转，恒白菜单底下稳定）
+# 20260814-1220: AI 下一步三段式重构——定位副标题(与工作目标分工一句话)+情绪状态单行合并+推荐/快捷操作分区；template 卡主按钮换「按此意图拟稿」(cp-goal-drive-draft 既有链, LLM 跟会话语言)、静态话术降次按钮；内置卡 name/hint/reason 全量 EN 本地化(BUILTIN_ACTION_I18N/REASON_I18N)；follow_up_task 缺省随 companion.goals 联动(显式配置最高优先)。cp-next-actions.js/cp-i18n.js ?v=20260814a 双宿主+双树镜像
+# 20260814-1155: 驾驶舱 P2 收口——空态 ROI 行（/api/workspace/ai-weekly-brief 1h 缓存，端点缺席/零流量整行不渲染）+ 真浏览器门禁 tools/verify_cockpit_ui.py（route-mock 零副作用，已挂 gate_sweep -Full）+ 埋点裁决 CLI tools/cockpit_usage_report.py（ck_* 纪元 2026-08-14，两周后可裁决）
+# 20260814-1140: 主题双开关合并——用户菜单三态分段控件（auto/light/dark 所见即所得+定时提示行）取代旧点击循环；写路径统一 WSAppearance.setNightMode；appearance.js 升 workspace_base 全工作台装载（?v=20260814a）；管理后台 base.html 桥接 cp_theme（storage 跨页跟切+toggleTheme 反向写回 blob/漫游）；「全部外观设置」经 __openUnique 复用 admin 窗直达 /personal-settings#appearance
+# 20260814-1120: 周报激励芯片改打坐席可读轻端点 /api/workspace/ai-weekly-brief（服务端 1h TTL；旧后端 404 回落主管周报）——普通坐席空态 ROI 也能看到「本周 AI 替你发出 N 条」
+# 20260814-1105: 驾驶舱 P0/P1 整版重构——KPI 单口径（全部由介入队列推导，去掉与 dashboard 打架的第二套账）+ 首次引导条 + 分类筛选 chips + >3 天旧信号折叠「历史积压」+「已处理」摘需人工标签（caps 特性探测，旧后端自动隐藏）+ 会话可读名兜底 + wsConfirm/wsToast 统一 + 账号健康人话状态
+# 20260814-1035: 后台管理/坐席工作台窗口唯一性回归修复——收件箱「后台管理」按钮接 __openUnique（浏览器命名窗口复用）+ 壳 main.js 弹窗按槽位去重复用（desktop 侧随下次发版生效）
+# 20260814-1030: 顶栏「更多」下拉整体删除（全部条目页面内既有入口/后台可达；孤儿的五个主管看板收进后台 Ctrl+K 命令面板 nav_schema.CMD_EXTRA_ITEMS）；cmdk.js 采集选择器同步去掉 #ws-more-menu
+# 20260814-1010: 批次三优化二轮——待回复趋势升=琥珀预警色（css ?v=20260814b）+ 趋势 aria-label + kpiSnap 脏检查 + 周报芯片小时级缓存（重端点不随 5min 轮询）
+# 20260814-0935: 批次三美化——今日概览 KPI 趋势箭头（本机逐日快照，仅全部视角；unified-inbox.css ?v=20260814a）+ 空态 ROI 行加「本周 AI 替你发出 N 条」（/api/report/weekly value 段，403 静默）
+# 20260814-0910: 会话列表标题「所有对话」→「AI+人工会话」（与桌面壳「AI 工作台/官方平台·人工」命名体系对齐）
+# 20260814-0500: PIN 弹窗加「忘记 PIN？」官方重置路径指引（展开埋点 msgrpin_forgot）
+# 20260814-0455: PIN 弹窗改打坐席可达端点 /api/unified-inbox/messenger/e2ee-pin（admin 族对 agent 角色恒 403）+ verify 链 90s 超时
+# 20260814-0420: 登录可靠性 P0——Messenger E2EE PIN 必答弹窗（实测验证回执+4h snooze）+ TG 扫码后失败显式报错停自动换码 + dc_migrate_failed/FloodWait 倒计时文案
+# 20260813-1620: 驾驶舱 P2——系统标签语义色 chip（需人工=红/人工接管中=琥珀，显示层 i18n）+ 驾驶舱卡未读徽章（unified-inbox.css ?v=20260813b）
+# 20260813-1530: 驾驶舱 P1——/workspace/cockpit 新页（介入优先级队列+接管在场+账号健康）+ 顶栏「驾驶舱」入口
+# 20260813-1445: 驾驶舱 P0——会话头「接管/交还」按钮（档位+草稿取消+跳原生页一键打包；旧后端 404 自动隐藏）
+# 20260813-1440: 双面板融合 P3——Messenger 气泡挂「表情回应+引用」动作（面板与 sidecar 白名单同源）+ Telegram 挂「引用」+ 能力图例更新（输入中为唯一原生页独有）
+# 20260813-1415: 双面板融合 P2——Messenger 引用回复端到端（能力对照浮层图例更新：引用回复两边都支持）
+# 20260813-1400: 接入向导 P2 视觉批——失败卡倒计时环形进度（随秒排空）+ 三视图 160ms 入场过渡 + 步骤条 err/warn 跟随变色（reduced-motion 全豁免）
+# 20260813-1350: 接入向导 P1 体验批——等待期阶段叙事 + 风险贴士折叠「进阶建议」+ 成功态「开始接待」CTA + 手机号快捷区号片（+852 等）
+# 20260813-1310: 双面板融合 P1——会话头「能力对照」浮层（工作台 vs 原生页双列）+ 原生按钮 tooltip 动态列原生独有能力
+# 20260813-1305: 接入向导失败态 UX P0——cred_invalid 失败卡（hosted 倒计时自愈/self 修正表单/一键上报诊断短码）+ 失败遮罩终结转圈报错并存 + 手机号字段级错误
+# 20260813-1235: 双面板融合 P0——会话头「原生页打开」深链 + 驾驶权徽章（surface_fusion 默认关=徽章隐藏；深链仅桌面壳内显示）
+# 20260813-1200: TG 同步失败可行动化——session_revoked 显式提示「请重新登录」（三条同步链）
+# 20260813-0312: Messenger 应用内登录（表单中继）前端接线 connect-qr-view + connect_relay.js（interactive_login 默认关，惰性）
+# 20260813-0136: chain SOP P3（goal 自动挂链 ✓ 态 + ops 档位对比行）
+# 20260813-0130: Messenger Path2 assist-only 诚实（platform-caps + conv-ops 不装绿）

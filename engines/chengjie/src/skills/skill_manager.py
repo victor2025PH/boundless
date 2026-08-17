@@ -215,7 +215,8 @@ def _guard_offer_claims(
     定价是官网权限，LLM 编出来的折扣兑现不了——承诺类事故比链接越纪律更贵。
     白名单＝当日在效授权活动文案（``_goal_cta.offer_texts``，P13 目录里运营
     真授权过的那几条）+ 授权免费时长（``offer_free_days``，目录 claims 段——
-    客户端真有的「注册领 7 天」不该被当成编的剥掉）；婉拒语气（「暂时没有
+    客户端真给得出的按天试用才登记；2026-08-11 免费档改按字符量后该表已清空，
+    「免费试用 N 天」一律按编的剥）；婉拒语气（「暂时没有
     折扣」）刻意放行。整条都是承诺则换成合规话术。开关
     ``companion.goals.offer_guard.enabled``（默认开）。无目标会话由
     ``service.catalog_guard_facts`` 供同一份白名单（见调用点注释）。
@@ -311,6 +312,27 @@ def _guard_outbound_claims(
             logger.debug("%s[goal-claim-guard] 守卫异常，保留原回复",
                          log_prefix, exc_info=True)
         return reply
+
+
+# 轮级入站信号键（媒体/语音/重复/提示类）：语义只属**当前这条消息**，绝不跨轮驻留。
+# 2026-08-16 实锤事故：_line_merge_keys 合并「只写不清」→ 8/01 键盘照片的识图描述随
+# _media_desc 驻留 user_context 15 天；8/16 一条语音消息把 _peer_message_is_media 置位
+# （语音不写 desc），prompt 遂把陈年键盘当「对方刚发来的媒体」喂给模型 → 客户问
+# 「聊聊今天的新闻」、AI 答「诶这个键盘挺酷的嘛」。会话级粘性键（channel/account_id/
+# 亲密度/画像等）不在此列，保持原粘性语义。
+_TURN_SIGNAL_KEYS = (
+    "_is_repeated_message", "_prev_reply_for_repeat",
+    "_peer_message_is_voice", "_voice_duration", "_voice_lang_suspect",
+    "_spoken_variant_request",
+    "_peer_message_is_media", "_media_kind", "_media_desc", "_media_ref",
+    "_inbox_peer_kind", "_inbound_short_hint", "_topic_switch_hint",
+)
+
+
+def clear_turn_signal_keys(user_context: Dict[str, Any]) -> None:
+    """新一轮入站合并前清掉上一轮的瞬态信号（纯函数，见 _TURN_SIGNAL_KEYS 注释）。"""
+    for _k in _TURN_SIGNAL_KEYS:
+        user_context.pop(_k, None)
 
 
 class SkillManager(LoggerMixin):
@@ -442,23 +464,7 @@ class SkillManager(LoggerMixin):
             self.logger.warning("危机事件库初始化失败（将禁用审计）: %s", _ce_err)
             self._crisis_store = None
 
-        self._ai_fallback_replies = (
-            self.config.config.get('reply', {}).get('ai_fallback_replies', [])
-            if hasattr(self.config, 'config') else []
-        ) or [
-            # "在的，请您稍等一下～", "收到，马上为您处理。", "好的亲，稍等我看一下～",
-        ]
-
         self.logger.info("Skill管理器初始化")
-
-    def _get_kb_store(self):
-        """获取 KB 实例（与 Skill 共用 kb_registry 单例 + 种子迁移）。"""
-        try:
-            from src.utils.kb_registry import get_kb_store
-            return get_kb_store(self.config, require_exists=False)
-        except Exception as e:
-            self.logger.warning("KB 话术加载失败: %s", e)
-            return None
 
     def _kb_store_if_exists(self):
         """仅当 knowledge_base.db 已存在时返回共享实例（不仅为副作用新建空库）。"""
@@ -468,14 +474,6 @@ class SkillManager(LoggerMixin):
         except Exception as e:
             self.logger.debug("KB 侧载失败: %s", e)
             return None
-
-    def _get_ai_fallback_reply(self) -> str:
-        kb = self._get_kb_store()
-        if kb:
-            reply = kb.get_fallback("global")
-            if reply:
-                return reply
-        return random.choice(self._ai_fallback_replies)
 
     def _load_strategies_from_config(self) -> None:
         """�?config_manager 加载策略配置（独�?YAML 文件，自动迁�?+ mtime ���新）"""
@@ -918,6 +916,9 @@ class SkillManager(LoggerMixin):
                 # _try_send_selfie_media 读到 None → 图生成了也发不出（静默回落文字）。
                 "account_id",
             )
+            # 瞬态轮级信号先清再合并（2026-08-16 键盘实锤：只写不清＝陈年媒体描述
+            # 跨轮驻留，见模块级 _TURN_SIGNAL_KEYS 注释）——本轮 context 带了才写回。
+            clear_turn_signal_keys(user_context)
             for _mk in _line_merge_keys:
                 if _mk in context and context[_mk] is not None:
                     user_context[_mk] = context[_mk]
@@ -2252,8 +2253,10 @@ class SkillManager(LoggerMixin):
                     timeout=45.0
                 )
             except asyncio.TimeoutError:
-                self.logger.warning(f"{log_prefix}�€�?{intent} 执�超时�?45s），返回兜底回�")
-                reply = self._get_ai_fallback_reply()
+                self.logger.warning(f"{log_prefix}技能 {intent} 执行超时（>45s）→ 本轮不回复")
+                # 2026-08-15：超时不再回罐头兜底句（「可以不回复，不能乱回复」）；
+                # None＝本轮不回复，A 线消费面与冷却吞没同路径（不发送、不记回复账）。
+                reply = None
             _elapsed_ms = int((time.time() - _t0) * 1000)
 
             # 5b. 相似度�测：如果回�与上条重复度 >65%，强指令重试
@@ -2509,6 +2512,7 @@ class SkillManager(LoggerMixin):
         account_id: str = "",
         agent_instruction: str = "",
         inbound_msg_id: str = "",
+        extra_hint: str = "",
     ) -> Optional[Dict[str, Any]]:
         """收件箱草稿生成的「统一规则引擎」（单一事实源）。
 
@@ -2530,6 +2534,10 @@ class SkillManager(LoggerMixin):
 
         ``agent_instruction``（P22）：坐席显式指令进 ``_agent_instruction`` 高权重块；
         空=旧行为（全自动路径不受影响）。
+
+        ``extra_hint``（P0 2026-08-12 时间推理）：调用方（persona_reply 锚点判定）
+        产出的语境提示（当前时刻锚点/迟回复/复读重写指令），追加进
+        ``_topic_switch_hint`` 既有消费口；空=旧行为。
 
         返回 ``{"reply": str, "intent": str}``；无法生成时返回 ``None``（调用方回落）。
         """
@@ -2744,6 +2752,11 @@ class SkillManager(LoggerMixin):
                 self.logger.debug("%s陪伴关系跳过", log_prefix, exc_info=True)
 
             # 3b. 入站媒体 / 短消息 / 多语言切换（Telegram 收件箱与 RPA 对齐）
+            # 先清上一轮残留：user_context 是持久 dict，而 enrich 只在「本轮有
+            # hints」时才覆盖本键（A 线在 process_message 消费后 pop，B 线此前
+            # 从不 pop）→ 本轮无 hints 时上一稿的语境提示会跨轮泄漏；下方 3b1b
+            # 每轮必写时间锚点，不清则无限堆积进持久 context。
+            user_context.pop("_topic_switch_hint", None)
             try:
                 from src.inbox.inbound_enrich import apply_inbound_enrichments
                 apply_inbound_enrichments(
@@ -2758,6 +2771,17 @@ class SkillManager(LoggerMixin):
                 )
             except Exception:
                 self.logger.debug("%s入站 enrich 跳过", log_prefix, exc_info=True)
+
+            # 3b1b. 时间推理提示（P0 2026-08-12，persona_reply 锚点判定产物）：
+            # 当前时刻锚点/迟回复时间感/复读重写指令，追加进 _topic_switch_hint
+            # 单一消费口（在 enrich 之后追加，不覆盖其语言/断层等既有提示）。
+            _xh = str(extra_hint or "").strip()
+            if _xh:
+                _prev_hint = str(
+                    user_context.get("_topic_switch_hint") or "").strip()
+                user_context["_topic_switch_hint"] = (
+                    f"{_prev_hint}\n{_xh}" if _prev_hint else _xh)
+                _metric("time_hint_active")
 
             # 3b2. 发图协同 hint（文图一致性第一防线）：对方这条在要照片（或短肯定
             # 接受了上一轮的照片 offer）时，给草稿 LLM 讲清楚投递语义——图发成功则
@@ -4254,7 +4278,16 @@ class SkillManager(LoggerMixin):
             persona = None
         try:
             from src.utils.persona_guard import sanitize
-            cleaned, violations = sanitize(out, persona or {})
+            # WP-4 诚实身份（compliance.disclosure.honest_identity，基线关）：
+            # 开启时 AI 如实自认不再被剥（客服腔/禁语照剥）。flag 经进程级
+            # provider 读实时配置；任何异常按关处理，守卫行为零风险。
+            try:
+                from src.compliance.runtime import honest_identity_active
+                _honest = honest_identity_active()
+            except Exception:
+                _honest = False
+            cleaned, violations = sanitize(out, persona or {},
+                                           honest_identity=_honest)
             if violations:
                 # 日志说实话（2026-07-20）：sanitize 删光会回退原文（绝不返回空），
                 # 此时并没有剥离任何内容——旧日志一律喊「已剥离」造成排查误导。
@@ -4353,6 +4386,18 @@ class SkillManager(LoggerMixin):
             hotline = str(_wb.get("crisis_resources", "") or "")
             level = str(user_context.get("_wellbeing_crisis_level", "") or "")
 
+            # WP-4 危机转介持久计数（SB 243 年报数字；record 绝不抛不阻塞处置）
+            def _referral(kind: str) -> None:
+                try:
+                    from src.compliance.crisis_referrals import (
+                        record_crisis_referral)
+                    record_crisis_referral(kind)
+                except Exception:
+                    pass
+
+            if level == "severe":
+                _referral("severe_detected")
+
             harmful = detect_harmful_reply(reply)
             if harmful:
                 self.logger.error(
@@ -4360,6 +4405,7 @@ class SkillManager(LoggerMixin):
                     log_prefix, harmful[:3],
                 )
                 user_context["_wellbeing_safety_override"] = True
+                _referral("safe_reply_override")
                 return safe_fallback_reply(level or "severe", hotline=hotline)
 
             if (
@@ -4371,6 +4417,7 @@ class SkillManager(LoggerMixin):
                 self.logger.warning(
                     "%s[wellbeing] severe 危机补附求助资源", log_prefix,
                 )
+                _referral("resource_appended")
                 return reply.rstrip() + f"\n如果你愿意，也可以找人聊聊：{hotline}。"
             return reply
         except Exception:
@@ -5043,6 +5090,17 @@ class SkillManager(LoggerMixin):
                     _wx["silent_hours"] = round(float(silent_hours or 0.0), 1)
                     _wx["gap_bucket"] = _gapb
                     return _wx
+                # 平常天气也给事实（2026-08-16 聊真实世界 P1）：checkin 切入角里
+                # 「聊聊窗外的天气」此前只有方向没有值——非强信号时把人设城市的
+                # 真实天气拼进 directive（不改变开场主题选择；软失败含无此绑定的
+                # 轻量调用方；soft 情绪档保持克制不带素材）。
+                if _gate != "soft":
+                    try:
+                        _wl = self._checkin_weather_line(contact_key or key)
+                        if _wl and str(_topic.get("directive") or ""):
+                            _topic["directive"] = str(_topic["directive"]) + _wl
+                    except Exception:
+                        pass
             return _topic
         except Exception:
             return empty
@@ -5088,6 +5146,47 @@ class SkillManager(LoggerMixin):
         except Exception:
             self.logger.debug("weather opener skipped", exc_info=True)
             return {}
+
+    def _ritual_weather_line(self, contact_key: str, slot: str) -> str:
+        """每日仪式问候的「真实天气」素材行（companion.weather.greeting_inject）。
+
+        「从天气/窗外说起」的切入角此前只有方向没有事实——反编造钉子会正确拦住
+        LLM 编数值，问候只能落在安全壳（2026-08-16 聊真实世界 P1）。软失败：
+        关闭/缺人设坐标/取数失败一律返回 ""，问候主流程零改变。
+        """
+        try:
+            _cfg = self.config.config if hasattr(self.config, "config") else (
+                self.config if isinstance(self.config, dict) else {})
+            _wcfg = (_cfg.get("companion", {}) or {}).get("weather") or {}
+            if not (isinstance(_wcfg, dict) and _wcfg.get("enabled")):
+                return ""  # 便宜闸门：关着就不碰 PersonaManager 单例
+            from src.companion.daily_brief import ritual_weather_line
+            from src.utils.persona_manager import PersonaManager
+            pm = PersonaManager.get_instance()
+            persona, _ = pm.get_persona_with_tier(str(contact_key or ""), "")
+            return ritual_weather_line(persona, _cfg, slot=slot)
+        except Exception:
+            self.logger.debug("ritual weather line skipped", exc_info=True)
+            return ""
+
+    def _checkin_weather_line(self, contact_key: str) -> str:
+        """温和问候的「真实天气」素材行——与 ``_weather_opener``（暴雨/极端气温
+        强信号才把天气当**开场主题**）互补：平常天气也给真实值，喂给「从窗外/
+        天气说起」的切入角（2026-08-16 聊真实世界 P1）。软失败同上。"""
+        try:
+            _cfg = self.config.config if hasattr(self.config, "config") else (
+                self.config if isinstance(self.config, dict) else {})
+            _wcfg = (_cfg.get("companion", {}) or {}).get("weather") or {}
+            if not (isinstance(_wcfg, dict) and _wcfg.get("enabled")):
+                return ""
+            from src.companion.daily_brief import checkin_weather_line
+            from src.utils.persona_manager import PersonaManager
+            pm = PersonaManager.get_instance()
+            persona, _ = pm.get_persona_with_tier(str(contact_key or ""), "")
+            return checkin_weather_line(persona, _cfg)
+        except Exception:
+            self.logger.debug("checkin weather line skipped", exc_info=True)
+            return ""
 
     def _life_beat_opener(
         self, contact_key: str, *, gate: str = "", record: bool = True,
@@ -5218,6 +5317,16 @@ class SkillManager(LoggerMixin):
                 card_line = self._ritual_daily_card_line(memory_key)
                 if card_line:
                     directive += card_line
+            except Exception:
+                pass
+        # 真实天气素材（companion.weather.greeting_inject，2026-08-16 聊真实世界 P1）：
+        # 早晚安从「只有切入角方向」升级为「方向 + 人设城市当地真实值」。
+        # 软失败（含无此绑定的轻量调用方）：任何异常不阻断问候主流程。
+        if gate != "soft":
+            try:
+                wline = self._ritual_weather_line(contact_key, s)
+                if wline:
+                    directive += wline
             except Exception:
                 pass
         if str(stage or "").strip().lower() in ("initial", "warming"):
@@ -5707,6 +5816,7 @@ class SkillManager(LoggerMixin):
         """
         user_context.pop("_variety_hint", None)
         user_context.pop("_daily_topics_hint", None)
+        user_context.pop("_temper_hint", None)
         try:
             cfg = self.config.config if hasattr(self.config, "config") else {}
             if not isinstance(cfg, dict):
@@ -5770,7 +5880,9 @@ class SkillManager(LoggerMixin):
         # ② 今日话题包（冷场素材）
         try:
             from src.companion.daily_topics import (
+                build_no_topics_hint,
                 build_topics_hint,
+                is_news_question,
                 last_offered,
                 note_offered,
                 parse_topics_cfg,
@@ -5786,6 +5898,8 @@ class SkillManager(LoggerMixin):
                     or user_context.get("conversation_id")
                     or user_context.get("user_id")
                     or "") or "_"
+                # 直球新闻问句 → 强指令（弱指令实测被 LLM 忽略答「没什么新闻」）
+                _news_ask = is_news_question(text)
                 if should_offer_topics(
                         text, last_offered(_key),
                         cooldown_hours=tcfg["cooldown_hours"]):
@@ -5795,13 +5909,163 @@ class SkillManager(LoggerMixin):
                         persona_words, k=tcfg["pick_k"],
                         cache_path=tcfg["cache_path"],
                         variety_key=_key if _key != "_" else "")
+                    def _news_metric(_name: str) -> None:
+                        try:
+                            from src.monitoring.metrics_store import (
+                                get_metrics_store,
+                            )
+                            get_metrics_store().record_inbox_draft_event(_name)
+                        except Exception:
+                            pass
+
                     if _topics:
-                        _th = build_topics_hint(_topics, lang=_lang)
+                        _th = build_topics_hint(
+                            _topics, lang=_lang, direct_ask=_news_ask)
                         if _th:
                             user_context["_daily_topics_hint"] = _th
                             note_offered(_key)
+                            if _news_ask:
+                                _news_metric("news_direct_ask")
+                    elif _news_ask:
+                        # 直球问新闻但缓存无货（冷启动/feeds 全败）→ 诚实兜底，
+                        # 防 LLM 徒手编新闻或敷衍「没什么新闻」两个方向都穿帮。
+                        user_context["_daily_topics_hint"] = (
+                            build_no_topics_hint(_lang))
+                        _news_metric("news_ask_no_stock")
         except Exception:
             self.logger.debug("daily_topics 注入跳过", exc_info=True)
+        # ③ 被骂回应（人设脾气分级，2026-08-12）：客服腔安抚是陪伴场景穿帮点。
+        # 粘性窗（同日补）：词表精确命中开窗，窗口内后续带敌意的变体骂法
+        # （逐词打地鼠永远有漏网）继续保持怼的姿态；对方收手立即清窗。
+        # 治理层（同日 P0）：companion.temper（总开关/force 全员强制/default
+        # 兜底/脏字闸/粘性窗时长），生效档位单一判定链在 resolve_temper_level；
+        # enabled=false ＝ kill switch，整块不跑（回 global_rules 旧行为）。
+        # P2（2026-08-13）：连怼熔断（_insult_streak 超 max_rounds → 冷处理
+        # 收场，真人不无限对轰）+ 激将接梗（「你太没脾气了」不是骂战，拽回去
+        # 而非客服腔）+ 平台封顶（platform_caps 风险护栏，压过 force）。
+        try:
+            from src.companion.temper import (
+                apply_platform_cap,
+                build_feud_break_hint,
+                build_taunt_hint,
+                build_temper_hint,
+                detect_insult,
+                detect_taunt,
+                is_de_escalation,
+                looks_hostile,
+                parse_temper_cfg,
+                record_deescalation,
+                record_feud_break,
+                record_hint,
+                record_insult,
+                record_platform_capped,
+                record_sticky_hit,
+                record_suppressed_off,
+                record_taunt,
+                resolve_temper_level,
+            )
+            _tcfg = parse_temper_cfg(cfg)
+            if _tcfg["enabled"]:
+                _now_t = time.time()
+                _via_sticky = False
+                _taunt = False
+                _hit = detect_insult(text)
+                if _hit:
+                    record_insult()
+                elif is_de_escalation(text):
+                    if user_context.pop("_insult_ts", None):
+                        record_deescalation()
+                    user_context.pop("_insult_streak", None)
+                else:
+                    _last_t = float(user_context.get("_insult_ts") or 0)
+                    if (_last_t
+                            and (_now_t - _last_t)
+                            <= _tcfg["sticky_window_sec"]
+                            and looks_hostile(text)):
+                        _hit = True
+                        _via_sticky = True
+                        record_sticky_hit()
+                    elif _tcfg["taunt_response"] and detect_taunt(text):
+                        _taunt = True
+
+                def _resolve_persona_level():
+                    """人设查找 + 判定链 + 平台封顶（hit/taunt 两分支共用）。"""
+                    _persona = None
+                    _pid = ""
+                    try:
+                        _pid = str(
+                            user_context.get("account_persona_id")
+                            or "").strip()
+                        if _pid:
+                            from src.utils.persona_manager import (
+                                PersonaManager,
+                            )
+                            _persona = PersonaManager.get_instance(
+                            ).get_persona_by_id(_pid)
+                    except Exception:
+                        _persona = None
+                    _lv = resolve_temper_level(_tcfg, _persona)
+                    _cap = apply_platform_cap(
+                        _lv["level"],
+                        str(user_context.get("platform") or ""),
+                        _tcfg["platform_caps"])
+                    if _cap["capped"]:
+                        record_platform_capped()
+                    return _pid, _lv, _cap["level"], _cap["capped"]
+
+                if _hit:
+                    # 窗口外的新精确命中＝新一场骂战，轮数从头计
+                    _prev_ts = float(user_context.get("_insult_ts") or 0)
+                    if (_prev_ts and not _via_sticky
+                            and (_now_t - _prev_ts)
+                            > _tcfg["sticky_window_sec"]):
+                        user_context.pop("_insult_streak", None)
+                    user_context["_insult_ts"] = _now_t
+                    _streak = int(
+                        user_context.get("_insult_streak") or 0) + 1
+                    user_context["_insult_streak"] = _streak
+                    _pid_t, _lv, _eff_level, _pcapped = (
+                        _resolve_persona_level())
+                    if _eff_level == "off":
+                        record_suppressed_off()
+                        self.logger.info(
+                            "[temper] 命中辱骂但档位 off 不注入 persona=%s",
+                            _pid_t or "-")
+                    elif (_tcfg["max_rounds"] > 0
+                            and _streak > _tcfg["max_rounds"]):
+                        _th2 = build_feud_break_hint(_lang)
+                        if _th2:
+                            user_context["_temper_hint"] = _th2
+                            record_feud_break()
+                            self.logger.info(
+                                "[temper] 连怼熔断（第 %d 轮 > %d）冷处理 "
+                                "persona=%s", _streak,
+                                _tcfg["max_rounds"], _pid_t or "-")
+                    else:
+                        _th2 = build_temper_hint(_eff_level, _lang)
+                        if _th2:
+                            user_context["_temper_hint"] = _th2
+                            record_hint(
+                                _eff_level, persona_id=_pid_t,
+                                forced=(_lv["source"] == "force"),
+                                capped=bool(_lv["profanity_capped"]))
+                            self.logger.info(
+                                "[temper] 被骂回应注入 level=%s source=%s "
+                                "sticky=%s streak=%d pcap=%s persona=%s",
+                                _eff_level, _lv["source"], _via_sticky,
+                                _streak, _pcapped, _pid_t or "-")
+                elif _taunt:
+                    _pid_t, _lv, _eff_level, _pcapped = (
+                        _resolve_persona_level())
+                    _th3 = build_taunt_hint(_eff_level, _lang)
+                    if _th3:
+                        user_context["_temper_hint"] = _th3
+                        record_taunt()
+                        self.logger.info(
+                            "[temper] 激将接梗注入 level=%s persona=%s",
+                            _eff_level, _pid_t or "-")
+        except Exception:
+            self.logger.debug("temper 注入跳过", exc_info=True)
 
     def _inject_bazi_context(
         self, user_context: Dict[str, Any], text: str,
@@ -6783,6 +7047,18 @@ class SkillManager(LoggerMixin):
         # 文案池。**不**回落全局 caption（那是「刚拍」口径——注册相册是备货旧照，
         # 「刚拍的～」配同一张图反复出现是实录穿帮点）。
         cap = caption_for(row, _lang, fallback="")
+        # 时刻词守卫（2026-08-12 实锤）：固定配文写死「下午的阳光」这类现在时态
+        # 时刻词，凌晨 3 点原样发出＝当场穿帮。冲突 → 弃固定配文回落中性文案。
+        try:
+            from src.companion.persona_media import caption_tod_conflict
+            import datetime as _dt_cap
+            if cap and caption_tod_conflict(cap, _dt_cap.datetime.now().hour):
+                self.logger.info(
+                    "[persona_media] 配文时刻词与当前小时冲突，回落中性配文 "
+                    "pid=%s id=%s", pid, row.get("id"))
+                cap = ""
+        except Exception:
+            pass
         if not cap:
             from src.ai.companion_selfie import selfie_stage_text
             cap = str(scfg.get("caption_album") or "") or selfie_stage_text(
@@ -6906,8 +7182,8 @@ class SkillManager(LoggerMixin):
         2026-07-15 复盘（A2）：Stage A 出图失败此前直接 return 固定模板——绕过
         LLM 也绕过全部质量机制（自称"林小雨"、一字不差复读、吞掉用户原话题
         "吃饭了吗"三连穿帮同源于此）。对齐 Stage B 的既有设计：设 hint + 返回
-        None，让 LLM 带着约束自然回应（回答原话题 + 婉转带过拍照不便），
-        模板只在 LLM 也不可用时经 ai_fallback_replies 兜底。
+        None，让 LLM 带着约束自然回应（回答原话题 + 婉转带过拍照不便）；
+        LLM 也不可用时按全链失败纪律本轮不回复（2026-08-15 罐头兜底已移除）。
         """
         user_context["_media_coherence_hint"] = (
             "对方想要照片/图片，但这一轮系统发不出任何照片。回复时不要答应"
@@ -8314,30 +8590,29 @@ class SkillManager(LoggerMixin):
                     "%s[promise_guard] 异步兑现成功：承诺的自拍已送达 user=%s",
                     log_prefix, user_id_str)
             else:
-                # 台阶补偿：承诺已出口、图没出来 → 主动圆场（语言对齐），
-                # 远期软承诺（"改天补"）不在守卫打击面，诚实闭环。
+                # 无兜底纪律（2026-08-17 老板拍板）：兑现失败**不再补台阶话术**
+                # （「手机抽风改天补」类圆场句拆除）——静默 + 弹窗「AI 不可用」
+                # + ERROR 上报主机，坐席人工接管该会话的兑现。
                 try:
-                    from src.ai.companion_selfie import selfie_stage_text
-                    _lang = str(user_context.get("reply_lang") or "")
-                    _pname = self._get_persona_name_for_context(user_context) or ""
-                    comp = selfie_stage_text(
-                        "promise_fail", _lang, persona_name=_pname)
-                    send_text = user_context.get("_send_to_chat")
-                    if comp and callable(send_text):
-                        await send_text(chat_id, comp)
-                        user_context["last_reply"] = (
-                            str(user_context.get("last_reply") or "")
-                            + " " + comp)[:500]
+                    from src.ops.delivery_block import report_block
+                    report_block(
+                        "vision", reason="promise_fulfill_failed",
+                        platform=str(user_context.get("platform") or "telegram"),
+                        conversation_id=str(
+                            user_context.get("_context_store_key")
+                            or user_id_str),
+                        detail="承诺的自拍未能生成/送达，未发任何圆场话术")
                 except Exception:
-                    self.logger.debug("promise fulfill补偿发送失败", exc_info=True)
+                    self.logger.debug(
+                        "promise fulfill delivery_block 上报失败", exc_info=True)
                 try:
                     from src.inbox.image_autosend import record_promise_event
                     record_promise_event("fulfill_failed")
                 except Exception:
                     pass
-                self.logger.info(
-                    "%s[promise_guard] 异步兑现失败已补台阶文本 user=%s",
-                    log_prefix, user_id_str)
+                self.logger.warning(
+                    "%s[promise_guard] 异步兑现失败 → 静默（无兜底纪律，"
+                    "不补台阶话术）user=%s", log_prefix, user_id_str)
             try:
                 _sk = str(
                     user_context.get("_context_store_key") or user_id_str)
@@ -8378,6 +8653,52 @@ class SkillManager(LoggerMixin):
         except Exception:
             return False
 
+    async def _media_presend_pacing(
+        self, user_context: Dict[str, Any], chat_id: Any, *,
+        _sleep=None,
+    ) -> None:
+        """媒体出站前的「翻相册挑图/上传」拟人延迟（P3，2026-08-12 实测秒发图后加）。
+
+        实录（03:03 zhiliao）：客户说「出来喝咖啡」→ **0.8s** 后相册图落地——文本链
+        有完整 humanize 序列（思考→正在输入→发送），媒体 Stage 0 短路在它**之前**，
+        一直裸发。真人翻相册挑图至少要几秒，秒发照片与秒回文字是同一种机器指纹。
+        配置 ``companion.selfie.media_pacing``：``false``/缺省=关（**代码默认关**，与
+        min_gap/min_residual 同约定——行为变更经种子/overlay 显式开）；``true``=默认
+        区间；``{enabled, min_sec, max_sec}`` 可调。区间刻意压短（默认 2.5~6.5s）——
+        生成链出图本身已耗时数秒，这里只补「挑/传」的时间感，不叠大延迟。
+        等待期每 ~4s 续挂「正在发送照片」chat action（A 线注入 ``_send_media_action``，
+        气泡 ~5s 过期；无回调=纯静默等待）。任何异常直接放行（节奏是增强不是闸门）。
+        """
+        try:
+            cfg = (self._selfie_cfg() or {}).get("media_pacing")
+            if isinstance(cfg, dict):
+                enabled = bool(cfg.get("enabled", True))
+                lo = float(cfg.get("min_sec", 2.5) or 0.0)
+                hi = float(cfg.get("max_sec", 6.5) or 0.0)
+            elif isinstance(cfg, bool):
+                enabled, lo, hi = cfg, 2.5, 6.5
+            else:
+                enabled, lo, hi = False, 2.5, 6.5
+            if not enabled or hi <= 0:
+                return
+            if lo > hi:
+                lo, hi = hi, lo
+            import random as _rnd
+            delay = _rnd.uniform(max(0.0, lo), hi)
+            sleep_fn = _sleep or asyncio.sleep
+            action = user_context.get("_send_media_action")
+            while delay > 0:
+                if callable(action):
+                    try:
+                        await action(chat_id)
+                    except Exception:
+                        action = None   # 回调坏了不再重试，退化纯等待
+                step = min(4.0, delay)
+                await sleep_fn(step)
+                delay -= step
+        except Exception:
+            self.logger.debug("[media_pacing] 拟人延迟失败（放行）", exc_info=True)
+
     async def _try_send_selfie_media(
         self, user_context: Dict[str, Any], chat_id: Any,
         image_path: str, caption: str, *,
@@ -8391,6 +8712,8 @@ class SkillManager(LoggerMixin):
         """
         if not image_path and not media_url:
             return False
+        # P3 拟人「挑图」延迟（配置门控，默认关；所有 7 个媒体调用点的单一汇口）
+        await self._media_presend_pacing(user_context, chat_id)
         _mt = "video" if str(media_type or "").lower() == "video" else "image"
         # ① 编排器受管媒体 worker（需 platform+account+chat_key 且 owns_media）
         try:
@@ -9572,7 +9895,9 @@ class GreetingSkill(Skill):
         except Exception as e:
             self.logger.warning(f"AI生成问候回复失败: {e}")
 
-        return self._kb_fallback('greeting', lang=_lang)
+        # 2026-08-15：AI 失败不再落罐头兜底（可以不回复，不能乱回复）。
+        # skip_ai 秒回路径不受影响——那是刻意设计的即答，不是失败掩饰。
+        return None
 
 
 class ComplaintSkill(Skill):
@@ -9595,7 +9920,8 @@ class ComplaintSkill(Skill):
         except Exception as e:
             self.logger.warning(f"AI生成投诉处理回复失败: {e}")
 
-        return self._kb_fallback('complaint', lang=_lang)
+        # 2026-08-15：AI 失败不再落罐头兜底（可以不回复，不能乱回复）。
+        return None
 
 
 class SmallTalkSkill(Skill):
@@ -9623,7 +9949,8 @@ class SmallTalkSkill(Skill):
         except Exception as e:
             self.logger.warning(f"AI生成闲聊回复失败: {e}")
 
-        return self._kb_fallback('small_talk', lang=_lang)
+        # 2026-08-15：AI 失败不再落罐头兜底（可以不回复，不能乱回复）。
+        return None
 
 
 class TestSkill(Skill):
@@ -9651,7 +9978,8 @@ class TestSkill(Skill):
         r = self._kb_reply('test_reply')
         if r:
             return r
-        return self._kb_fallback('test')
+        # 2026-08-15：AI 失败且无 KB 模板 → 不回复（可以不回复，不能乱回复）。
+        return None
 
 
 # 供测试与外部统一从 skill_manager 导入（实现仍在 domains.payment.skills.enhanced_quota_config）

@@ -369,6 +369,63 @@ def test_xlate_agent_feel_row_renders_and_registered():
         assert act in inbox, f"收件箱埋点缺分桶 {act}"
 
 
+def test_group_members_card_renders_and_registered():
+    """🧲 群成员提取卡三件套（section / loader / 注册表）+ 零流量藏卡不变量。"""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1]
+           / "src" / "web" / "templates" / "ops_overview.html").read_text(
+               encoding="utf-8")
+    assert 'id="gmembersSection"' in src
+    assert "async function loadGroupMembers()" in src
+    assert "/api/workspace/metrics" in src
+    assert "anchor:'gmembersKpis'" in src
+    assert "if(!gm || !gm.active){ sec.style.display='none'; return; }" in src
+
+
+# ── 「😊 表情包」卡（2026-08-17 表情包主线：备货/发送形态读数面）──
+
+def test_sticker_card_renders_and_registered():
+    """卡片三件套（section / loader / 注册表）+ 数据源 + 零流量隐藏惯例。
+
+    与 value 卡同款不变量：三者少任何一件都是静默缺陷。sent_as 分桶是本卡
+    存在理由——image 回退占比高＝目标平台原生贴纸能力缺口（WA 边车未升级 /
+    LINE 自建包为主），没有它回退只能翻日志。
+    """
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1]
+           / "src" / "web" / "templates" / "ops_overview.html").read_text(
+               encoding="utf-8")
+    assert 'id="stickersSection"' in src
+    assert "async function loadStickers()" in src
+    assert "d.stickers" in src                       # 数据源（metrics 段）
+    assert "anchor:'stkKpis'" in src                 # 卡片注册表登记
+    # 零备货且零发送 → 整卡隐藏惯例
+    assert "if(!s || (!sends && !items)){ sec.style.display='none'; return; }" in src
+
+
+def test_sticker_card_i18n_keys_bilingual():
+    from src.web.i18n_packs.ops_sticker_card import EN, ZH
+
+    keys = ("ov2_s_stk", "ov2_stk_packs", "ov2_stk_items", "ov2_stk_sends",
+            "ov2_stk_collects", "ov2_stk_by_plat", "ov2_stk_sent_as",
+            "ov2_stk_as_native", "ov2_stk_as_image", "ov2_stk_fallback_hint",
+            "ov2_js_stk_none")
+    for k in keys:
+        assert ZH.get(k), k
+        assert EN.get(k), k
+
+
+def test_group_members_card_i18n_bilingual():
+    from src.web.i18n_packs.group_members import EN, ZH
+
+    keys = ("ov2_s_gm", "ov2_gm_sub", "ov2_gm_members", "ov2_gm_groups", "ov2_gm_jobs")
+    for k in keys:
+        assert k in ZH and ZH[k], f"ZH 缺 {k}"
+        assert k in EN and EN[k], f"EN 缺 {k}"
+
+
 def test_value_weekly_card_renders_and_registered():
     """卡片三件套必须齐：section 声明 / loader 读 value 段 / 注册表登记。
 
@@ -401,6 +458,76 @@ def test_value_weekly_i18n_keys_bilingual():
         assert EN.get(k), k
 
 
+# ── 「🧾 账号真相」卡（2026-08-17 账号单源收口 P3：registry × 会话目录对账）──
+
+def test_accounts_truth_card_renders_and_registered():
+    """卡片三件套（section / 渲染函数 / 注册表）+ 共享 metrics 分发链两分支 + 隐藏惯例。
+
+    与 value 卡同款不变量：三者少任何一件都是静默缺陷。这张卡是「顶栏 vs 面板
+    账号数分裂」修复后的防回归读数面——幽灵账号（仅目录）持续增长＝有账号绕过
+    注册表在收发。
+    """
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1]
+           / "src" / "web" / "templates" / "ops_overview.html").read_text(
+               encoding="utf-8")
+    assert 'id="acctTruthSection"' in src
+    assert "function renderAccountsTruth(d)" in src
+    assert "d.accounts_truth" in src              # 数据源（共享 /api/workspace/metrics）
+    assert "anchor:'acctTruthKpis'" in src        # 卡片注册表登记
+    assert "ov2_at_desktop" in src                # 桌面镜像 KPI（与真幽灵分开）
+    # 共享分发链两分支都要接：正常响应 + 403（无主管权限时清卡不留 loading）
+    assert "renderAccountsTruth(d)" in src
+    assert "renderAccountsTruth(null)" in src
+    # 无数据（旧后端/registry 不可用/全零）整卡隐藏的站内惯例
+    assert "if(!at || (!regTot && !dirTot)){ sec.style.display='none'" in src
+
+
+def test_accounts_truth_i18n_keys_bilingual():
+    from src.web.i18n_packs.ops_overview_page import EN, ZH
+
+    keys = ("ov2_s_atruth", "ov2_at_registry", "ov2_at_dir",
+            "ov2_at_ghost", "ov2_at_desktop", "ov2_at_status", "ov2_at_hint")
+    for k in keys:
+        assert ZH.get(k), k
+        assert EN.get(k), k
+
+
+# ── 「🎁 邀请裂变」卡（2026-08-11 免费额度升级配套：官网 referral 台账聚合 → ops 可见）──
+
+def test_referral_growth_card_renders_and_registered():
+    """卡片三件套（section / loader / 注册表）+ 数据源 + 未启用/零流量隐藏惯例。
+
+    与 value 卡同款不变量：三者少任何一件都是静默缺陷。这张卡是「免费 100 万 +
+    邀请裂变」增长引擎唯一的厂商侧读数面——没有它，裂变跑没跑起来只能去翻官网
+    控制台。
+    """
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1]
+           / "src" / "web" / "templates" / "ops_overview.html").read_text(
+               encoding="utf-8")
+    assert 'id="referralGrowthSection"' in src
+    assert "async function loadReferralGrowth()" in src
+    assert "/api/admin/referral-stats" in src            # loader 数据源（实例代理）
+    assert "anchor:'referralGrowthKpis'" in src          # 卡片注册表登记
+    # 未启用（配置默认关）与零流量都必须整卡隐藏
+    assert "if(!d || !d.ok || !d.enabled){ sec.style.display='none'; return; }" in src
+    assert "if(!(Number(d.codes)||0) && !(Number(d.registered)||0)){ sec.style.display='none'; return; }" in src
+
+
+def test_referral_growth_i18n_keys_bilingual():
+    from src.web.i18n_packs.ops_overview_page import EN, ZH
+
+    keys = ("ov2_s_refg", "ov2_rg_sub", "ov2_rg_codes", "ov2_rg_registered",
+            "ov2_rg_qualified", "ov2_rg_invitee", "ov2_rg_inviter",
+            "ov2_rg_granted", "ov2_rg_flagged", "ov2_rg_hint")
+    for k in keys:
+        assert ZH.get(k), k
+        assert EN.get(k), k
+
+
 # ── 「⏱️ 回复时延 SLO」卡（2026-08-09 P1-8 消费面：reply_latency 聚合 → ops 可见） ──
 
 def test_reply_latency_card_renders_and_registered():
@@ -428,6 +555,123 @@ def test_reply_latency_i18n_keys_bilingual():
     keys = ("ov2_s_rlat", "ov2_rl_sub", "ov2_rl_eps", "ov2_rl_p50",
             "ov2_rl_p95", "ov2_rl_unans", "ov2_rl_unans_short",
             "ov2_rl_p95_7d", "ov2_rl_buckets", "ov2_rl_byplat", "ov2_rl_hint")
+    for k in keys:
+        assert ZH.get(k), k
+        assert EN.get(k), k
+
+
+def test_entrance_slo_card_renders_and_registered():
+    """入口可用性卡三件套（section / loader / 注册表）+ 数据源 + 无数据隐藏惯例。
+
+    P2-1（2026-08-12 可靠性复盘）：8/12 两次红条查岗的量化闭环——服务端探测与
+    坐席端 conn_* 回执双视角并排，差值=客户端侧损耗。三件套少任何一件都是
+    静默缺陷（与 rlatency 卡同款不变量）。
+    """
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1]
+           / "src" / "web" / "templates" / "ops_overview.html").read_text(
+               encoding="utf-8")
+    assert 'id="entranceSloSection"' in src
+    assert "async function loadEntranceSlo()" in src
+    assert "d.entrance_slo" in src                   # loader 数据源（metrics 段）
+    assert "anchor:'entranceSloKpis'" in src         # 卡片注册表登记
+    # 无探测数据（非 117 部署形态/日志缺失）→ 整卡隐藏惯例
+    assert "if(!(Number(sv.ticks)||0)){ sec.style.display='none'; return; }" in src
+
+
+def test_entrance_slo_i18n_keys_bilingual():
+    from src.web.i18n_packs.ops_overview_page import EN, ZH
+
+    keys = ("ov2_s_eslo", "ov2_eslo_sub", "ov2_es_avail7", "ov2_es_avail30",
+            "ov2_es_out7", "ov2_es_cli7", "ov2_es_clisplit",
+            "ov2_es_cli_server", "ov2_es_cli_local", "ov2_es_cli_none",
+            "ov2_es_recent", "ov2_es_ongoing", "ov2_es_hint")
+    for k in keys:
+        assert ZH.get(k), k
+        assert EN.get(k), k
+
+
+def test_entrance_slo_metrics_wired():
+    """metrics 接线钉住：drafts_routes 必须把 entrance_slo 并进 /api/workspace/metrics
+    （卡片的唯一数据源；接线丢了卡片会静默消失而不是报错）。"""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1]
+           / "src" / "web" / "routes" / "drafts_routes.py").read_text(
+               encoding="utf-8")
+    assert "from src.ops.entrance_slo import entrance_slo_snapshot" in src
+    assert 'metrics["entrance_slo"]' in src
+
+
+# ── 「🔤 字符额度」卡（2026-08-16 用量页 v2 配套：char-usage 聚合 → ops 可见）──
+
+def test_usage_quota_card_renders_and_registered():
+    """卡片三件套（section / loader / 注册表）+ 数据源 + 隐藏惯例 + 新字段容错。
+
+    与 value 卡同款不变量：三者少任何一件都是静默缺陷。额外钉两条本卡特有约束：
+    ① 非主管(403)/端点未装载(重启前 404)与「计量关闭且零消耗」都必须整卡隐藏
+    （零流量不占版面）；② enforce 是后端重启后才有的新字段——typeof 判定缺席时，
+    中间态会把 undefined 渲染进计量状态行。
+    """
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1]
+           / "src" / "web" / "templates" / "ops_overview.html").read_text(
+               encoding="utf-8")
+    assert 'id="uqCharSection"' in src
+    assert "async function loadUsageQuota()" in src
+    assert "/api/users/char-usage" in src               # loader 数据源
+    assert "anchor:'uqCharKpis'" in src                 # P2 卡片注册表登记
+    # 计量关闭且零消耗 → 整卡隐藏（零流量惯例；403/404 由 !r.ok 分支覆盖）
+    assert "if(d.enabled===false && monthTotal===0){ sec.style.display='none'; return; }" in src
+    # enforce 新字段 undefined 容错（重启前只显示开/关，不显示硬限档位）
+    assert "typeof d.enforce === 'boolean'" in src
+
+
+def test_usage_quota_i18n_keys_bilingual():
+    from src.web.i18n_packs.ops_overview_page import EN, ZH
+
+    keys = ("ov2_uq_title", "ov2_uq_sub", "ov2_uq_meter", "ov2_uq_on", "ov2_uq_off",
+            "ov2_uq_enforce_on", "ov2_uq_enforce_soft", "ov2_uq_pool",
+            "ov2_uq_unlimited", "ov2_uq_month", "ov2_uq_alerts", "ov2_uq_top")
+    for k in keys:
+        assert ZH.get(k), k
+        assert EN.get(k), k
+
+
+# ── 「🗑️ 消息管理审计」卡（2026-08-17 消息管理 P2：前台删除、后台留痕的读数面）──
+
+def test_msg_ops_card_renders_and_registered():
+    """卡片三件套（section / loader / 注册表）+ 数据源 + 隐藏惯例。
+
+    与 value 卡同款不变量：三者少任何一件都是静默缺陷。本卡额外钉：
+    ① 旧后端 404 / 非主管 403 → `!r.ok` 整卡隐藏（模板热更先于重启的中间态自洽）；
+    ② 零操作整卡隐藏（审计卡没数据就别占版面）。
+    """
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1]
+           / "src" / "web" / "templates" / "ops_overview.html").read_text(
+               encoding="utf-8")
+    assert 'id="msgOpsSection"' in src
+    assert "async function loadMsgOps()" in src
+    assert "/api/admin/msg-ops-stats" in src            # loader 数据源
+    assert "anchor:'msgOpsKpis'" in src                 # P2 卡片注册表登记
+    assert "if(total === 0){ sec.style.display='none'; return; }" in src
+
+
+def test_msg_ops_card_i18n_keys_bilingual():
+    from src.web.i18n_packs.ops_msg_ops_card import EN, ZH
+
+    keys = ("ov2_s_msgops", "ov2_mo_sub", "ov2_mo_revoke", "ov2_mo_revoke_ok",
+            "ov2_mo_del", "ov2_mo_clear", "ov2_mo_delconv", "ov2_mo_restore",
+            "ov2_mo_fail_reasons", "ov2_mo_recent", "ov2_mo_col_time",
+            "ov2_mo_col_kind", "ov2_mo_col_who", "ov2_mo_col_where",
+            "ov2_mo_col_n", "ov2_mo_col_result", "ov2_mo_ok",
+            "ov2_mo_k_msg_revoke", "ov2_mo_k_msg_delete_local",
+            "ov2_mo_k_conv_clear", "ov2_mo_k_conv_delete",
+            "ov2_mo_k_msg_restore")
     for k in keys:
         assert ZH.get(k), k
         assert EN.get(k), k

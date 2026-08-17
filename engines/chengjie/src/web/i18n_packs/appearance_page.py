@@ -9,6 +9,8 @@ unified_inbox.html（表情按钮/面板宿主）、personal_settings.html（页
 ZH = {
     "nav_personal_settings": "个人设置",
     "err.ws.appearance_invalid": "外观设置格式不合法，已拒绝保存",
+    # Dock P3：账号坞排序同步（/api/workspace/prefs 的 dock_order 键校验）
+    "err.ws.dock_order_invalid": "账号排序数据格式不合法，已拒绝保存",
     # ── 快捷面板 / 设置页共用 ──
     "ap.pop.title": "主题配色",
     "ap.pop.roam": "设置跟随账号漫游：本机立即生效，其他设备登录后自动同步",
@@ -44,6 +46,7 @@ ZH = {
     "ap.reset_all": "恢复全部默认",
     "ap.all_settings": "全部外观设置",
     "ap.saved": "外观已保存",
+    "ap.sched_exit": "已退出夜间定时模式",
     "ap.fs.hint": "仅影响聊天气泡内文字",
     "ap.emoji.btn": "表情",
     "ap.emoji.tip": "插入表情（最近使用会自动记住）",
@@ -63,6 +66,8 @@ ZH = {
 EN = {
     "nav_personal_settings": "Personal Settings",
     "err.ws.appearance_invalid": "Invalid appearance payload; changes were rejected",
+    # Dock P3: account dock order sync (dock_order key on /api/workspace/prefs)
+    "err.ws.dock_order_invalid": "Invalid account order payload; changes were rejected",
     "ap.pop.title": "Appearance",
     "ap.pop.roam": "Roams with your account: applies here instantly, syncs to your other devices",
     "ap.sec.theme": "Chat theme",
@@ -97,6 +102,7 @@ EN = {
     "ap.reset_all": "Reset all",
     "ap.all_settings": "All appearance settings",
     "ap.saved": "Appearance saved",
+    "ap.sched_exit": "Night schedule turned off",
     "ap.fs.hint": "Affects chat bubble text only",
     "ap.emoji.btn": "Emoji",
     "ap.emoji.tip": "Insert emoji (recents are remembered)",

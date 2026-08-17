@@ -158,29 +158,48 @@ def build_issue_payload(
     return payload
 
 
-# ── 注册试用（P2）：官网 claim → 厂商机签发 → 客户端 activate ─────────────────
+# ── 注册免费档（P2 → 2026-08-11 升级为「注册领 100 万字符」）─────────────────
 #
-# 试用不是一笔 SKU 销售，但它的 payload 口径同样必须只有一个来源，否则「试用到底给什么」
-# 会散落在脚本里各写一遍。规格集中在此：
+# 官网 claim → 厂商机签发 → 客户端 activate。免费档不是一笔 SKU 销售，但它的 payload
+# 口径同样必须只有一个来源，否则「免费档到底给什么」会散落在脚本里各写一遍。规格集中在此：
 #
-#  · plan=pro —— 试用要展示的是核心价值（翻译套件 + AI 自动发 + 知识库）。给 basic
+#  · plan=pro —— 免费档要展示的是核心价值（翻译套件 + AI 自动发 + 知识库）。给 basic
 #    会让评估者看不到 AI 自动发；给 flagship 则把陪伴/RPA 这类溢价能力也送出去，
-#    转化时降级反而难受。
+#    转化时降级反而难受。转化杠杆是**字符量**（用完即止），不锁功能。
 #  · channels=全渠道 —— 评估期本来就要挨个平台试，被渠道卡住等于让人无法评估。
+#  · days=0 —— **无期限**（不写 exp）。2026-08-11 运营拍板：免费档从「7 天 · 2.5 万」
+#    升级为「100 万字符 · 用完即止」——100 万本身够用很久，时间窗反而稀释价值感；
+#    用尽后由额度闸门硬拦（quota_store，签名授权 included>0 天然强制），
+#    出路＝邀请好友 / 联系客服申请 / 购买。
 #  · grace_days=0 —— **必须显式写 0**。默认宽限 7 天，而 grace 状态同样算 licensed
-#    （见 LicenseStatus.licensed），不写就把「7 天试用」变成实际 14 天。
-#  · machine=<机器指纹> —— 绑机，防「一份试用发给一群人」。
+#    （见 LicenseStatus.licensed）；无期限档虽然用不到 exp，保留 0 防止将来有人
+#    重新设 days 时把「N 天」悄悄变成「N+7 天」。
+#  · machine=<机器指纹> —— 绑机，防「一份免费档发给一群人」。
+#
+# 存量升级：已按旧规格（25_000 / 7 天）签出的试用授权 payload 已固化，**不会自动变大**
+# ——由 fulfill_trial.py 的 upgrade pass 对 issued 台账重签（同 lic_id，用量累计不清零），
+# 客户端经会员页/轮询按「license 指纹变化」重新落盘激活。
 TRIAL_SPEC: Dict[str, Any] = {
     "plan": "pro",
     "seats": 2,
     "channels": list(ALL_CHANNELS),
-    "days": 7,
-    "included_chars": 25_000,
+    "days": 0,
+    "included_chars": 1_000_000,
     "product_id": "zhiliao",
 }
 
-#: 加客服送额度的默认赠量（与官网 TRIAL_GIFT_CHARS 同口径，此处为厂商机兜底默认）
+#: 加客服送额度的默认赠量（与官网 TRIAL_GIFT_CHARS 同口径，此处为厂商机兜底默认）。
+#: 客服核销时可按用户情况在控制台改量（bind_chars 优先，见 gift_chars_for）——
+#: 「联系客服申请更多字符」的弹性给量走的就是这条链。
 TRIAL_GIFT_CHARS = 100_000
+
+#: 邀请裂变（P2 referral）：被邀请人注册成功的见面礼 / 邀请人在被邀请人真实消耗
+#: 达标后的奖励。厂商机兜底默认——官网侧同名 env 可覆盖（两边对齐）。
+REFERRAL_INVITEE_CHARS = 100_000
+REFERRAL_INVITER_CHARS = 100_000
+#: 邀请人奖励的达标门：被邀请人真实消耗 ≥ 此数才给邀请人发奖——挡「批量注册
+#: 即弃的女巫账号」，同时顺手激励邀请人帮好友把产品用起来。
+REFERRAL_QUALIFY_CHARS = 10_000
 
 
 def build_trial_payload(

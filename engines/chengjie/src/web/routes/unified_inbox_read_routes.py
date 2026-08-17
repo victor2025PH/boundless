@@ -42,6 +42,7 @@ from src.web.routes.unified_inbox_aggregate import (
     _is_protocol_account,
     _overlay_store_identity,
     _read_from_store_enabled,
+    _registry_active_map,
     _store_conv_as_chat,
     _thread_messages_from_store,
 )
@@ -397,6 +398,94 @@ def _unread_aggregate_maps(store: Any) -> tuple[Dict[str, int], Dict[str, int]]:
     return by_acct, by_plat
 
 
+def _accounts_summary_list(
+    platform_status: Dict[str, Any],
+    status_map: Dict[tuple, str],
+    directory: Dict[tuple, Dict[str, float]],
+    unread_map: Dict[str, int],
+    attn_map: Dict[str, int],
+    registry_active: Optional[Dict[tuple, Dict[str, str]]] = None,
+) -> List[Dict[str, Any]]:
+    """账号真相单源（P0 2026-08-17）：dock「历史 N」与抽屉历史分区共同消费的全库账号名录。
+
+    背景实录：顶部 dock 显示 10 个账号、管理抽屉只有 5 个——dock 从会话窗口反推出
+    「幽灵号」而抽屉只读 platform_status，两边各算一套。本函数把四层账号一次收拢：
+
+    - **已接入**（platform_status）：``paired=True``，status 按 running/state 归一为
+      online / connecting / error / offline；
+    - **注册表非活跃**（``_account_status_map``）：offline → ``logged_out``（可重登）、
+      removed → ``removed``（软删只读）；
+    - **注册表活跃但无运行通道**（``_registry_active_map``，P4 幽灵收编）：
+      ``mode="desktop"`` → ``desktop``（桌面壳镜像号：消息经桌面端同步，刻意无云端
+      worker——此前坠成 history_only 幽灵，与 ops「账号真相」卡的注册表口径打架）；
+      其余 → ``registered``（在册但 worker 未接管，如 state=stopped 的滞留行）；
+    - **仅历史**（会话库出现过、上三处都没有）：``history_only``——修后这才是
+      真幽灵（绕过注册表在写会话），ops 卡 ghost 数与这里终于同一口径。
+
+    unread/attn 沿用上游**已剔除 dead 账号**的聚合 map——logged_out/removed 恒为 0
+    （不可回复的未读不亮灯），desktop/registered/history_only 的存量未读如实带出
+    （前端展示为灰色汇总角标，绝不与在线号的红色 attn 混淆）。conv_count/last_ts
+    来自全库名录，paired 账号同样带上（抽屉卡片/hover 富化可直接用）。纯函数，零 I/O。
+    """
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+
+    def _row(pl: str, aid: str, status: str, paired: bool,
+             label: str = "") -> Dict[str, Any]:
+        key = f"{pl}:{aid}"
+        d = (directory or {}).get((pl, aid)) or {}
+        dead = status in ("logged_out", "removed")
+        row = {
+            "platform": pl, "account_id": aid,
+            "status": status, "paired": paired,
+            "unread": 0 if dead else int((unread_map or {}).get(key, 0) or 0),
+            "attn": 0 if dead else int((attn_map or {}).get(key, 0) or 0),
+            "conv_count": int(d.get("count") or 0),
+            "last_ts": float(d.get("last_ts") or 0.0),
+        }
+        if label:
+            row["label"] = label
+        return row
+
+    for v in (platform_status or {}).values():
+        if not isinstance(v, dict):
+            continue
+        pl = str(v.get("platform") or "web")
+        aid = str(v.get("account_id") or "default")
+        if (pl, aid) in seen:
+            continue
+        seen.add((pl, aid))
+        if bool(v.get("running")):
+            st = "online"
+        else:
+            state = str(v.get("state") or "")
+            st = ("connecting" if state == "starting"
+                  else "error" if state == "error" else "offline")
+        out.append(_row(pl, aid, st, True))
+    for (pl, aid), reg_st in (status_map or {}).items():
+        p, a = str(pl or "web"), str(aid or "default")
+        if (p, a) in seen:
+            continue
+        seen.add((p, a))
+        out.append(_row(p, a, "logged_out" if reg_st == "offline" else "removed",
+                        False))
+    for (pl, aid), info in (registry_active or {}).items():
+        p, a = str(pl or "web"), str(aid or "default")
+        if (p, a) in seen:
+            continue
+        seen.add((p, a))
+        mode = str((info or {}).get("mode") or "")
+        out.append(_row(p, a, "desktop" if mode == "desktop" else "registered",
+                        False, label=str((info or {}).get("label") or "")))
+    for (pl, aid) in (directory or {}):
+        p, a = str(pl or "web"), str(aid or "default")
+        if (p, a) in seen:
+            continue
+        seen.add((p, a))
+        out.append(_row(p, a, "history_only", False))
+    return out
+
+
 def _enrich_platform_status_value(
     platform_status: Dict[str, Any], store: Any,
     *, unread_by_account: Optional[Dict[str, int]] = None,
@@ -544,6 +633,8 @@ def _enrich_chat_list(request: Request, chats: List[Dict[str, Any]], *, config_m
                 c["archived"] = meta2.get("archived", False)
                 # P0-companion：搁置到点（epoch 秒，0=未搁置）→ 前端「超时/待接管」视图隐藏 + header 搁置态
                 c["snooze_until"] = meta2.get("snooze_until", 0)
+                # 2026-08-17 官方级消息管理：置顶时刻（0=未置顶）→ 前端置顶恒排顶部 + 📌 徽标
+                c["pinned_at"] = meta2.get("pinned_at", 0)
     except Exception:
         logger.debug("会话列表 tags 加载失败（已忽略）", exc_info=True)
 
@@ -645,7 +736,7 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
     @app.get("/api/unified-inbox/chats")
     async def api_unified_inbox_chats(
         request: Request, limit: int = 30, before_ts: float = 0,
-        platform: str = "", account_id: str = "",
+        platform: str = "", account_id: str = "", include_hidden: int = 0,
     ):
         api_auth(request)
         # scoped 过滤参数规范化：platform 小写（store 落库口径即小写平台名）、
@@ -653,6 +744,11 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
         platform = str(platform or "").strip().lower()
         account_id = str(account_id or "").strip()
         scoped = bool(platform or account_id)
+        # 历史账号只读视角（P0 2026-08-17）：已退出(offline)账号会话默认服务端
+        # 过滤，抽屉「查看会话」需要看到 → include_hidden=1 放行（行带 read_only）。
+        # **仅 account_id scoped 请求可开**：全局列表口径不变（防已退出号历史
+        # 污染活跃工作台）。响应带 hidden_included=true 供前端特性探测旧后端。
+        want_hidden = bool(include_hidden) and bool(account_id)
 
         # ── 十期：游标分页页（before_ts>0）——仅 store 有历史分页语义 ──
         # live 聚合是各平台「最近 N 条」快照，翻不出更旧的；分页页直接 store 读，
@@ -662,7 +758,8 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
             limit = max(5, min(100, int(limit or 30)))
             older = _collect_chats_from_store(
                 request, limit=limit, before_ts=float(before_ts),
-                platform=platform, account_id=account_id)
+                platform=platform, account_id=account_id,
+                include_hidden=want_hidden)
             older = older or []
             _enrich_chat_list(request, older, config_manager=config_manager)
             oldest = min((float(c.get("last_ts") or 0) for c in older), default=0.0)
@@ -688,7 +785,8 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
         if scoped:
             slimit = max(5, min(200, int(limit or 30)))
             scoped_chats = _collect_chats_from_store(
-                request, limit=slimit, platform=platform, account_id=account_id)
+                request, limit=slimit, platform=platform, account_id=account_id,
+                include_hidden=want_hidden)
             if scoped_chats is not None:
                 _enrich_chat_list(request, scoped_chats, config_manager=config_manager)
                 oldest = min((float(c.get("last_ts") or 0) for c in scoped_chats),
@@ -707,6 +805,9 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
                     "ok": True, "ts": time.time(), "chats": scoped_chats,
                     "has_more": has_more, "oldest_ts": oldest or None,
                     "scope": {"platform": platform, "account_id": account_id},
+                    # 特性探测标记：前端历史视角据此区分「后端已放行隐藏行」vs
+                    # 「旧后端忽略了参数」（后者对已退出号给诚实空态而非装无会话）
+                    "hidden_included": want_hidden,
                 }
 
         limit = max(5, min(100, int(limit or 30)))
@@ -762,6 +863,19 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
                 attn_by_account=attn_by_account)
         except Exception:
             logger.debug("[chats] platform_status 价值信息富集失败", exc_info=True)
+        # P0（2026-08-17）账号真相单源：dock「历史 N」/抽屉历史分区同源消费；
+        # 失败回空列表（前端特性探测：无此字段/空 → 回落客户端窗口推导）。
+        accounts_summary: List[Dict[str, Any]] = []
+        try:
+            accounts_summary = _accounts_summary_list(
+                platform_status,
+                _account_status_map(request) or {},
+                (store.account_directory() if store is not None
+                 and hasattr(store, "account_directory") else {}),
+                unread_by_account, attn_by_account,
+                registry_active=_registry_active_map(request) or {})
+        except Exception:
+            logger.debug("[chats] 账号名录聚合失败", exc_info=True)
         return {
             "ok": True,
             "ts": time.time(),
@@ -773,6 +887,8 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
             "unread_by_platform": unread_by_platform,
             "unread_by_account": unread_by_account,
             "attn_by_account": attn_by_account,
+            # P0 账号名录（全库口径；空列表=聚合失败，前端回落客户端推导）
+            "accounts_summary": accounts_summary,
         }
 
     @app.post("/api/unified-inbox/mark-read")
@@ -817,6 +933,107 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
             return {"ok": False, "conversation_id": cid}
         return {"ok": True, "conversation_id": cid, "last_read_ts": water}
 
+    @app.post("/api/unified-inbox/mark-account-read")
+    async def api_unified_inbox_mark_account_read(request: Request):
+        """按账号批量清未读（P2 账号真相闭环，2026-08-17）。
+
+        场景＝历史/已退出账号的存量未读清账（抽屉历史行「清未读」按钮）：这些号
+        只查档不可回复，灰色角标长期挂着变成新噪音。与逐会话 mark-read 同一水位
+        机制（store.mark_account_read 批量推 last_read_ts），永不回弹。
+        在册在线号同样可用（语义无害：把该号全部会话标记已读）。
+        body: ``{platform, account_id}``。
+        """
+        api_auth(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        platform = str((body or {}).get("platform") or "").lower().strip()
+        account_id = str((body or {}).get("account_id") or "").strip()
+        if not platform or not account_id:
+            raise HTTPException(400, tr(request, "err.ws.field_required",
+                                        field="platform/account_id"))
+        store = _inbox_store(request)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        try:
+            n = store.mark_account_read(platform, account_id)
+        except Exception:
+            logger.debug("[inbox] mark-account-read 失败 %s:%s",
+                         platform, account_id, exc_info=True)
+            return {"ok": False, "platform": platform,
+                    "account_id": account_id}
+        return {"ok": True, "platform": platform, "account_id": account_id,
+                "marked": n}
+
+    @app.post("/api/unified-inbox/conversations/delete")
+    async def api_unified_inbox_conversation_delete(request: Request):
+        """删除单个会话的全部本地数据（消息/草稿/分析/升级记录等，2026-08-16）。
+
+        - 硬删 + 防复活墓碑：账号在线时目录同步每 ~5min 全量推侧栏占位，无墓碑
+          删了就复活；对方**再发新消息**自动解除墓碑回显（绝不丢客户消息）。
+        - 只删本机工作台数据，**不动平台侧**（手机/官方端的线程原样保留）。
+        - 破坏性操作：拒 agent/viewer（与账号管理写口同一排除法——误删客户
+          聊天记录不可恢复）；master/admin/桌面壳 Bearer 放行。
+        - body: ``{conversation_id}`` 或 ``{platform, account_id, chat_key}``。
+        """
+        api_auth(request)
+        try:
+            role = str(request.session.get("role", "") or "")
+        except Exception:
+            role = ""
+        if role in ("agent", "viewer"):
+            raise HTTPException(403, tr(request, "err.perm.supervisor_required"))
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        cid = str((body or {}).get("conversation_id") or "").strip()
+        if not cid:
+            platform = str((body or {}).get("platform") or "").lower()
+            account_id = str((body or {}).get("account_id") or "default")
+            chat_key = str((body or {}).get("chat_key") or "").strip()
+            if not platform or not chat_key:
+                raise HTTPException(400, tr(request, "err.ws.field_required",
+                                            field="conversation_id"))
+            cid = conv_id(platform, account_id, chat_key)
+        store = _inbox_store(request)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        try:
+            actor = str(request.session.get("username", "") or "") or "api"
+        except Exception:
+            actor = "api"
+        try:
+            deleted = store.delete_conversation_data(cid, deleted_by=actor)
+        except Exception:
+            logger.error("[inbox] 会话删除失败 cid=%s", cid, exc_info=True)
+            raise HTTPException(500, tr(request, "err.svc.inbox_not_ready"))
+        logger.info("[inbox] 会话已删除 cid=%s by=%s rows=%s", cid, actor, deleted)
+        # 运维台账（90 天可追溯）：谁删了哪个会话、清掉多少行。best-effort。
+        try:
+            from src.ops.ops_events import get_ops_event_store
+            _oes = get_ops_event_store()
+            if _oes is not None:
+                _plat = cid.split(":", 1)[0]
+                _oes.record(
+                    platform=_plat, account_id=cid.split(":", 2)[1]
+                    if cid.count(":") >= 2 else "", kind="conv_delete",
+                    reason="ok", detail=f"cid={cid};by={actor};"
+                    f"rows={sum(deleted.values())}")
+        except Exception:
+            logger.debug("[inbox] 会话删除审计落账失败（忽略）", exc_info=True)
+        # 多窗口同步（2026-08-17）：删除广播 SSE——另一窗口的坐席不该继续对着
+        # 已删除的会话打字。best-effort，失败不影响删除结果。
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("conversation_deleted", {
+                "conversation_id": cid, "by": actor})
+        except Exception:
+            logger.debug("[inbox] conversation_deleted 事件发布失败", exc_info=True)
+        return {"ok": True, "conversation_id": cid, "deleted": deleted,
+                "total_rows": int(sum(deleted.values()))}
+
     @app.get("/api/unified-inbox/thread")
     async def api_unified_inbox_thread(
         request: Request,
@@ -825,6 +1042,7 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
         chat_key: str = "",
         limit: int = 50,
         before_ts: float = 0,
+        history: int = 0,
     ):
         api_auth(request)
         platform = str(platform or "").lower()
@@ -836,11 +1054,13 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
         before = float(before_ts or 0) or None
 
         cid = conv_id(platform, account_id, chat_key)
-        # 已登出：聊天页不开放线程（历史在 store，同号重登后同一 cid 可读）
+        # 已登出：聊天页不开放线程（历史在 store，同号重登后同一 cid 可读）。
+        # ``history=1``（历史账号只读视角 P0，2026-08-17）＝显式选择进只读查档
+        # → 放行读取；写侧不受影响（发送路由对 dead 账号自有 409 兜底）。
         try:
             _st = (_account_status_map(request) or {}).get(
                 (platform, account_id), "")
-            if _st == "offline":
+            if _st == "offline" and not history:
                 raise HTTPException(
                     409, tr(request, "err.inbox.account_offline"))
         except HTTPException:

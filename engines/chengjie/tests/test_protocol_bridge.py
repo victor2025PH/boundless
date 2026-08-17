@@ -519,6 +519,20 @@ def test_tg_message_payload_carries_media():
     assert p["media_ref"].endswith("acc1_9.jpg")
 
 
+def test_tg_message_payload_carries_document_name_and_size():
+    """文件卡片要原名+体积：source.file_name / source.file_size 必须从 document 带出。"""
+    msg = _FakeMsg(_FakeChat(5, title="X"), text="", mid="9", ts=1)
+    msg.document = types.SimpleNamespace(file_name="report.pdf", file_size=2048)
+    p = pb.tg_message_payload(msg, "acc1", media_type="document")
+    assert p["source"]["file_name"] == "report.pdf"
+    assert p["source"]["file_size"] == 2048
+    # 无 document / 体积未知 → 不写空 source（前端按缺字段处理，不渲染「0 B」）
+    bare = pb.tg_message_payload(
+        _FakeMsg(_FakeChat(6, title="Y"), text="hi", mid="1", ts=1), "acc1")
+    assert not (bare.get("source") or {}).get("file_name")
+    assert not (bare.get("source") or {}).get("file_size")
+
+
 def test_media_paths_creates_dir_and_url(tmp_path, monkeypatch):
     monkeypatch.setattr(pb, "protocol_media_root", lambda: tmp_path / "pm")
     dest, url = pb.media_paths("telegram", "acc1_9", ".jpg")

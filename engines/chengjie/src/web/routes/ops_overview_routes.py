@@ -1387,7 +1387,7 @@ def register_ops_overview_routes(app, ctx) -> None:
         if not ident:
             raise HTTPException(400, tr(request, "err.ws.field_required",
                                         field="login_id/account_id"))
-        if platform != "messenger":
+        if platform not in ("messenger", "whatsapp"):
             raise HTTPException(400, tr(request, "err.psess.relogin_unsupported",
                                         platform=platform))
         from src.integrations.messenger_web_login import (
@@ -1396,9 +1396,22 @@ def register_ops_overview_routes(app, ctx) -> None:
         )
         config = getattr(config_manager, "config", None) or {}
         try:
-            res = await _post_json(
-                f"{service_base_url(config)}/accounts/{ident}/relogin", {},
-                timeout=60.0)
+            if platform == "whatsapp":
+                # P1（2026-08-14）：WA 走 baileys 的凭据级 reconnect（编排器自愈
+                # 同一端点，契约 404/already/reconnecting）——WA 登录是扫码制，
+                # 没有 messenger 那种 headed 交互窗；凭据真死时 reconnect 链会把
+                # needs_login 推回健康表，运营再走登录页扫码。按钮语义＝
+                # 「先试自动拉活」，多数掉线（网络抖动/进程重启）到此为止。
+                from src.integrations.whatsapp_baileys_login import (
+                    service_base_url as wa_base_url,
+                )
+                res = await _post_json(
+                    f"{wa_base_url(config)}/accounts/{ident}/reconnect", {},
+                    timeout=30.0)
+            else:
+                res = await _post_json(
+                    f"{service_base_url(config)}/accounts/{ident}/relogin", {},
+                    timeout=60.0)
         except Exception as ex:  # worker 不可达/profile 不存在等，如实回给运营
             raise HTTPException(502, tr(request, "err.rpa.op_failed",
                                         op="relogin", err=str(ex)))
@@ -1424,26 +1437,19 @@ def register_ops_overview_routes(app, ctx) -> None:
         except Exception:
             logger.debug("platform_session_relogin 漏斗计数失败（已忽略）",
                          exc_info=True)
-        return {"ok": True, "login_id": str((res or {}).get("login_id") or ident),
-                "status": str((res or {}).get("status") or "pending")}
+        res = res or {}
+        # WA reconnect 契约无 status 字段，从 already/reconnecting 布尔位推导
+        status = str(res.get("status") or "")
+        if not status:
+            status = ("already" if res.get("already")
+                      else "reconnecting" if res.get("reconnecting") else "pending")
+        return {"ok": True, "login_id": str(res.get("login_id") or ident),
+                "status": status}
 
-    @app.post("/api/admin/platform-sessions/e2ee-pin")
-    async def api_platform_session_e2ee_pin(request: Request,
-                                            _=Depends(api_write("manage_ops"))):
-        """P3 入站半死自愈：给某 Messenger 账号托管 E2EE 恢复 PIN。
-
-        转发给 worker（``/accounts/:id/e2ee-pin``），worker 落 sessions 机密 sidecar
-        （不入库、不出网明文）。托管后，进程重启/崩溃自愈撞到「恢复加密聊天」PIN 浮层
-        会自动输入 → 「登录态在、消息读不到」的半死态从「等人重登」变成无人值守自愈。
-        ``pin=""`` 清除托管。当前仅 messenger 网页模式。
-        """
+    async def _e2ee_pin_impl(request: Request, body: dict):
+        """e2ee-pin 托管的共享实现（admin 端点与坐席端点同一条逻辑，绝不各写一套）。"""
         from fastapi import HTTPException
         from src.web.web_i18n import tr
-        try:
-            body = await request.json()
-        except Exception:
-            body = {}
-        body = body if isinstance(body, dict) else {}
         platform = str(body.get("platform") or "").strip().lower()
         ident = (str(body.get("login_id") or "").strip()
                  or str(body.get("account_id") or "").strip())
@@ -1473,6 +1479,19 @@ def register_ops_overview_routes(app, ctx) -> None:
         except Exception as ex:
             raise HTTPException(502, tr(request, "err.rpa.op_failed",
                                         op="e2ee-pin", err=str(ex)))
+        verified = None
+        prompt_seen = False
+        if pin and bool(body.get("verify")):
+            try:
+                vres = await _post_json(
+                    f"{service_base_url(config)}/accounts/{ident}/e2ee-pin/verify",
+                    {}, timeout=45.0)
+                if isinstance(vres, dict):
+                    verified = vres.get("verified")
+                    prompt_seen = bool(vres.get("prompt"))
+            except Exception:
+                # 实测环节挂了不推翻「托管已落盘」——verified=null 如实交前端。
+                logger.debug("e2ee-pin verify 转发失败（已忽略）", exc_info=True)
         if audit_store is not None:
             try:
                 actor = "api"
@@ -1487,7 +1506,52 @@ def register_ops_overview_routes(app, ctx) -> None:
                 logger.debug("platform_session_e2ee_pin 审计写入失败（已忽略）",
                              exc_info=True)
         return {"ok": True, "login_id": str((res or {}).get("login_id") or ident),
-                "pin_set": bool((res or {}).get("pin_set"))}
+                "pin_set": bool((res or {}).get("pin_set")),
+                "verified": verified, "prompt": prompt_seen}
+
+    @app.post("/api/admin/platform-sessions/e2ee-pin")
+    async def api_platform_session_e2ee_pin(request: Request,
+                                            _=Depends(api_write("manage_ops"))):
+        """P3 入站半死自愈：给某 Messenger 账号托管 E2EE 恢复 PIN（管理面）。
+
+        转发给 worker（``/accounts/:id/e2ee-pin``），worker 落 sessions 机密 sidecar
+        （不入库、不出网明文）。托管后，进程重启/崩溃自愈撞到「恢复加密聊天」PIN 浮层
+        会自动输入 → 「登录态在、消息读不到」的半死态从「等人重登」变成无人值守自愈。
+        ``pin=""`` 清除托管。当前仅 messenger 网页模式。
+
+        ``verify: true``（2026-08-14 必答弹窗配套）：设置成功后顺路打 worker 的
+        ``/accounts/:id/e2ee-pin/verify``——页面此刻挂着 PIN 浮层就当场实测输入，
+        响应多带 ``verified``（true=实测通过 / false=实测被拒=PIN 错 / null=当下
+        无浮层无法实测，已武装待自愈）与 ``prompt``。verify 环节 best-effort：
+        它挂了不连累「托管已落盘」这个既成事实（verified=null 如实回）。
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        return await _e2ee_pin_impl(request, body if isinstance(body, dict) else {})
+
+    @app.post("/api/unified-inbox/messenger/e2ee-pin")
+    async def api_inbox_messenger_e2ee_pin(request: Request):
+        """坐席可达的 E2EE PIN 托管入口（2026-08-14 必答弹窗事故配套）。
+
+        知道恢复 PIN 的人是坐席本人，但坐席角色被 ``_agent_api_allowed`` 钉在
+        ``/api/unified-inbox*`` 四族——admin 端点对最需要它的人恒 403，弹窗形同虚设。
+        此别名走 ``api_auth``（任意登录用户），与 admin 端点共享同一实现，差异仅：
+        **只许设置不许清除**（``pin=""`` 解除自愈武装属运维决策，仍走 manage_ops）。
+        提供错 PIN 无危害（页面实测被拒即回 verified=false，不落任何持久损伤）。
+        """
+        from fastapi import HTTPException
+        from src.web.web_i18n import tr
+        api_auth(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        if not str(body.get("pin") or "").strip():
+            raise HTTPException(403, tr(request, "err.psess.pin_clear_admin_only"))
+        return await _e2ee_pin_impl(request, body)
 
     @app.get("/admin/ops", response_class=HTMLResponse)
     async def ops_overview_page(request: Request, _=Depends(page_auth)):

@@ -94,11 +94,11 @@ inbox:
   # 对方机器人守卫：确定级降 manual、复读/秒回熔断降 review、单会话日预算
   peer_bot_guard:
     enabled: true
-    # 内测/演示档预算放宽（2026-08-04 198 实锤：默认 40 轮在高强度试聊场景
-    # 一下午就触顶——双账号互测 + 手发混聊烧得更快）。预算语义 P2 起＝
-    # 「自动链回复轮次/日」（人工手发不再挤占）；触顶后真人会话软停转
-    # 人审拟稿 + 收件箱出横幅可救济，不再静默哑火。正式租户用默认 40。
-    daily_reply_budget: 200
+    # 2026-08-17：全线统一 500（代码默认已同步 500）——40/200 在高强度试聊
+    # 与长陪聊场景反复触顶（2026-08-04 198 实锤 + 2026-08-17 老板实录 40/40），
+    # 真人客户永远打不满 500，预算回归「对面也是 LLM」的保险丝定位；触顶后
+    # 真人会话软停转人审拟稿（硬停=2×=1000），收件箱横幅/触顶弹窗可当日救济。
+    daily_reply_budget: 500
   l2_autosend:
     enabled: true
     deliver: true
@@ -307,11 +307,11 @@ telegram:
   group_reply:
     mode: mention_or_keyword
     follow_window_minutes: 3
-  reply_humanize:
-    thinking_delay:
-      min_sec: 2
-      max_sec: 9
-      adaptive: true
+  # reply_humanize.thinking_delay 刻意不配（2026-08-12）：未配值时 A 线思考延迟
+  # 自动跟随设置页「回复节奏」滑杆（humanize.resolve_following_delay_block 单一
+  # 判定），三条发送链一个滑杆管到底。此前种子钉死 2-9s → 坐席拖滑杆对 A 线
+  # 不生效（198 实录「改了没变化」根因）。要独立节奏请在设置页看链路自检说明，
+  # 或显式配 min_sec/max_sec（>0 即覆写）。门禁 test_reply_settings 钉住本约定。
   voice_reply:
     enabled: true
     trigger: when_peer_voice
@@ -334,6 +334,9 @@ telegram:
     text_first:
       # 对方发语音在等语音条：40s 预算内不落文字占位
       budget_sec: 40
+      # 2026-08-16 老板裁定：宁可不发消息也不发「嗯嗯我在，稍等哈～」类垫场句
+      # → 占位关闭（与代码默认一致，此处显式声明）；语音失败仍补发完整真回复
+      filler: false
   reply_logic:
     follow_up:
       lookback_count: 10
@@ -542,6 +545,12 @@ companion:
       album_dir: config/persona_albums
       album_fallback: true
       default_album_key: lin_xiaoyu
+    # 媒体拟人节奏（P3，2026-08-12）：相册图秒发（实录 0.8s）=机器指纹；
+    # 出站前补随机「挑图」等待 + A 线挂「正在发送照片」气泡。
+    media_pacing:
+      enabled: true
+      min_sec: 2.5
+      max_sec: 6.5
 
 # ── 语音识别（冻结包无本地模型：主走 176 GPU ASR，备走 140 AvatarHub Whisper）─
 # _lan_seed: LAN 不可达时主转写切官网网关 /audio/transcriptions（设备令牌），回内网还原
@@ -616,7 +625,7 @@ licensing:
     enabled: true
     plan_override: flagship
   shop_url: https://bd2026.cc/order
-  # 内测机不做字符计量：关闭本地体验档（出厂默认 10k 字符 / 48 小时）。
+  # 内测机不做字符计量：关闭本地体验档（出厂默认 10 万字符尝鲜 / 无时间窗）。
   # configure_local_trial 尊重显式 enabled:false（不被桌面默认开启顶掉）；无签名授权时
   # check_license_quota 走「included=0＝不限」分支，record_license_chars 直接零 IO，
   # 「字符额度已用尽」host_alert 也随之不再触发。内测放开、正式包不带本段（各自 overlay）。
@@ -667,22 +676,6 @@ contacts:
 line_rpa:
   media_enrich:
     enabled: true
-
-reply:
-  # 扩池 12 条并混入无语气词版本（原 5 条被高频复用看穿模板感）
-  ai_fallback_replies:
-  - 来啦来啦，等我一下下～
-  - 收到收到，马上回你！
-  - 嗯嗯我在，稍等哈～
-  - 在的在的，等我组织下语言～
-  - 好嘞，这就来～
-  - 稍等，我看下你说的
-  - 唔，让我想想怎么说
-  - 在呢，刚在忙别的，马上
-  - 等我几秒，打字中
-  - 嗯？我看看
-  - 哈，你等我下
-  - 手头有点事，很快回你
 
 personas:
   doc_import:

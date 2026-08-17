@@ -1,9 +1,9 @@
 <!DOCTYPE html>
 <!-- 单一前端 App 壳(三层架构 §6)。唯一一份业务 UI,网页与桌面壳 iframe 共用。
      入口参数:?theme=light|dark · ?cid=<conversation_id> · #token=<bearer>
-     驱动:postMessage({type:'cp-context', conversationId, chatKey, platform, accountId, caps?, customer?, autopilotOn?}) 由宿主壳喂入会话。
+     驱动:postMessage({type:'cp-context', conversationId, chatKey, platform, accountId, caps?, customer?}) 由宿主壳喂入会话。
      宿主指令:postMessage({type:'cp-cmd', cmd:'focus-draft'|'focus-voice'|'set-tab', tab?}) 供壳浮钮深链。
-     回吐宿主:cp-ready / cp-fill / cp-send / cp-autopilot。
+     回吐宿主:cp-ready / cp-fill / cp-send。
      单一来源 shared/copilot/,网页挂 /copilot/app.html。 -->
 <html lang="zh" data-cp-theme="light">
 <head>
@@ -11,8 +11,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Copilot</title>
   <link rel="stylesheet" href="/copilot/tokens.css" />
-  <link rel="stylesheet" href="/copilot/theme-dark.css" />
-  <link rel="stylesheet" href="/copilot/theme-light.css" />
+  <link rel="stylesheet" href="/copilot/theme-dark.css?v=20260817b" />
+  <link rel="stylesheet" href="/copilot/theme-light.css?v=20260817b" />
   <style>
     html, body { margin: 0; height: 100%; background: var(--cp-bg, #f8fafc); }
     body { font-family: 'Inter','PingFang SC','Microsoft YaHei',system-ui,sans-serif;
@@ -28,16 +28,20 @@
                padding: 0 0 0 0; position: sticky; top: 0; background: var(--cp-bg, #f8fafc); z-index: 2; }
     .cp-tab { flex: 1; font: inherit; font-size: 12px; cursor: pointer; padding: 8px 0; border: none;
               background: transparent; color: var(--cp-text-dim, #64748b); border-bottom: 2px solid transparent;
-              transition: color .15s, border-color .15s; white-space: nowrap; }
+              transition: color .15s, border-color .15s; white-space: nowrap;
+              display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 0; overflow: hidden; }
+    .cp-tab:hover { color: var(--cp-text, #1e293b); }
     .cp-tab.active { color: var(--cp-accent, #6366f1); border-bottom-color: var(--cp-accent, #6366f1); font-weight: 600; }
+    .cp-tab-ic { display: inline-flex; align-items: center; flex-shrink: 0; opacity: .85; }
+    .cp-tab.active .cp-tab-ic { opacity: 1; }
+    /* tab 状态圆点（P2，与网页 ws-cp-tab-badge 同构）：草稿高风险=红、关系冲突/链失败=按 tone */
+    .cp-tab-badge { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+                    background: var(--cp-danger, #dc2626); font-size: 0; line-height: 0; flex-shrink: 0; }
+    .cp-tab-badge:empty { display: none; }
+    .cp-tab-badge.warn { background: var(--cp-warn, #d97706); }
+    .cp-tab-badge.accent { background: var(--cp-accent, #6366f1); }
     .cp-sec { display: none; flex-direction: column; gap: var(--cp-gap, 10px); }
     .cp-sec.active { display: flex; }
-    /* 全自动托管开关(仅宿主声明 caps.autopilot 时显示) */
-    .cp-auto-bar { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px;
-                   background: var(--cp-bg-soft, #f1f5f9); border: 1px solid var(--cp-border, #e2e8f0); font-size: 12px; }
-    .cp-auto-bar label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
-    .cp-auto-status { margin-left: auto; font-size: 11px; color: var(--cp-text-tiny, #94a3b8); }
-    .cp-auto-status.on { color: var(--cp-accent, #6366f1); font-weight: 600; }
     /* AI 对话分析 */
     .cp-analyze-btn { font: inherit; font-size: 12px; cursor: pointer; padding: 6px 10px; border-radius: 8px;
                       border: 1px solid var(--cp-accent, #6366f1); background: var(--cp-accent, #6366f1); color: #fff; }
@@ -79,9 +83,90 @@
     .cp-card.collapsed .cp-card-chev { transform: rotate(-45deg); }
     .cp-card-bd { padding: 10px 12px; }
     .cp-card.collapsed .cp-card-bd { display: none; }
+    /* ── 空态卡（P0 2026-08-12）：无会话时 tabs 仍常显可点，各 tab 出各自引导，
+         替代旧「等待会话上下文…」一行灰字（被误读成死按钮的根因之一） ── */
+    .cp-empty-card { display: none; }
+    .cp-app.no-ctx .cp-empty-card { display: flex; flex-direction: column; align-items: center; gap: 7px;
+      text-align: center; padding: 30px 14px; border: 1px dashed var(--cp-border, #e2e8f0);
+      border-radius: 12px; background: var(--cp-surface, #fff); }
+    .cp-empty-card .cp-empty-ic { color: var(--cp-text-tiny, #94a3b8); opacity: .8; }
+    .cp-empty-card .ttl { font-size: 13px; font-weight: 700; color: var(--cp-text, #1e293b); }
+    .cp-empty-card .sub { font-size: 12px; line-height: 1.7; max-width: 250px; color: var(--cp-text-dim, #64748b); }
+    /* 无会话时隐藏业务卡（内容都是空壳），只留空态引导（账号管理已出滚动流：tabs 行入口 + 空态 CTA） */
+    .cp-app.no-ctx .cp-sec > .cp-card { display: none; }
+    /* 翻译工具卡弱会话依赖（2026-08-17 工具箱重组）：无会话也可用，豁免 no-ctx 隐藏 */
+    .cp-app.no-ctx .cp-sec > .cp-card[data-cp-card="xlate"] { display: block; }
+    /* 回复台一次性搬家提示（语音/人设/知识库迁工具箱）：localStorage 记忆，点掉即走 */
+    .cp-moved-hint { display: flex; align-items: center; gap: 7px; padding: 6px 10px;
+      font-size: 11px; line-height: 1.5; color: var(--cp-text-dim, #64748b);
+      background: var(--cp-bg-soft, #f1f5f9); border: 1px dashed var(--cp-border, #e2e8f0);
+      border-radius: 8px; }
+    .cp-moved-hint[hidden] { display: none; }
+    .cp-moved-hint .mh-txt { flex: 1; min-width: 0; }
+    .cp-moved-hint button { font: inherit; font-size: 11px; cursor: pointer; flex-shrink: 0;
+      border: 1px solid var(--cp-border, #e2e8f0); background: var(--cp-surface, #fff);
+      color: var(--cp-text, #1e293b); border-radius: 6px; padding: 2px 8px; }
+    .cp-moved-hint button:hover { border-color: var(--cp-accent, #6366f1); color: var(--cp-accent, #6366f1); }
+    /* 空态能力橱窗（P2 2026-08-12）：数据单源 /copilot/cp-capabilities.js——把「还没选会话」
+       的空白第一屏变成差异化能力曝光（AI 拟稿/人审出站/知识库/关系画像/语音克隆）。 */
+    .cp-empty-showcase { display: flex; flex-direction: column; gap: 7px; text-align: left;
+      width: 100%; max-width: 260px; margin-top: 12px; padding-top: 12px;
+      border-top: 1px dashed var(--cp-border, #e2e8f0); }
+    .cp-empty-showcase:empty { display: none; }
+    .cp-empty-showcase .sc-head { font-size: 11px; font-weight: 700; letter-spacing: .02em;
+      color: var(--cp-text-dim, #64748b); }
+    .cp-empty-showcase .sc-item { display: flex; flex-direction: column; gap: 1px; }
+    .cp-empty-showcase .sc-item b { font-size: 12px; color: var(--cp-text, #1e293b); }
+    .cp-empty-showcase .sc-item span { font-size: 11px; line-height: 1.55; color: var(--cp-text-dim, #64748b); }
+    /* ── 账号管理出滚动流（P0.2 2026-08-12）：全局资源回全局层——tabs 行常驻小图标
+         （掉线红点）+ 整幅覆盖层，不再以卡片住在三个 tab 的滚动流里（「每个 tab 都有
+         账号管理」的直诉根因）。宿主自带账号入口（?hostAccounts=1 / caps.accountsEntry）
+         时图标自动隐藏，空态 CTA 仍可打开本层（永不做死按钮）。 ── */
+    .cp-tabs-tool { flex: 0 0 auto; position: relative; border: none; background: transparent;
+                    cursor: pointer; padding: 6px 10px; color: var(--cp-text-dim, #64748b);
+                    display: inline-flex; align-items: center; font: inherit; }
+    .cp-tabs-tool[hidden] { display: none; }   /* display:inline-flex 会盖掉 hidden 的 UA 样式，须显式钉回 */
+    .cp-tabs-tool:hover { color: var(--cp-accent, #6366f1); }
+    .cp-acct-dot { position: absolute; top: 4px; right: 5px; width: 7px; height: 7px;
+                   border-radius: 50%; background: var(--cp-danger, #dc2626); }
+    .cp-acct-layer { display: none; flex: 1; min-height: 0; flex-direction: column;
+                     background: var(--cp-bg, #f8fafc); }
+    body.acct-open .cp-acct-layer { display: flex; }
+    body.acct-open .cp-app { display: none; }
+    .cp-acct-layer-hd { display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+                        border-bottom: 1px solid var(--cp-border, #e2e8f0); flex-shrink: 0; }
+    .cp-acct-layer-hd .ttl { font-size: 12px; font-weight: 700; color: var(--cp-text, #1e293b); }
+    .cp-acct-back { font: inherit; font-size: 12px; cursor: pointer; border: 1px solid var(--cp-border, #e2e8f0);
+                    background: var(--cp-surface, #fff); color: var(--cp-text, #1e293b);
+                    border-radius: 7px; padding: 3px 10px; }
+    .cp-acct-back:hover { border-color: var(--cp-accent, #6366f1); color: var(--cp-accent, #6366f1); }
+    .cp-acct-layer-bd { flex: 1; min-height: 0; overflow-y: auto; padding: var(--cp-gap, 10px); }
+    .cp-empty-acct-btn { font: inherit; font-size: 12px; cursor: pointer; padding: 6px 14px;
+                         border-radius: 8px; border: 1px solid var(--cp-border, #e2e8f0);
+                         background: var(--cp-surface, #fff); color: var(--cp-text, #1e293b); }
+    .cp-empty-acct-btn:hover { border-color: var(--cp-accent, #6366f1); color: var(--cp-accent, #6366f1); }
+    .cp-empty-acct-btn.primary { background: var(--cp-accent, #6366f1); border-color: transparent;
+                                 color: #fff; font-weight: 600; }
+    /* 执行结果 snackbar（cp-action-done 反馈）：桌面 iframe / 独立 PWA 宿主没有
+       unified_inbox 那套 _toast 出口，失败原因（如「会话未关联客户档案」）此前被
+       静默吞掉＝坐席眼里的「点了没反应」（2026-08-13 坐席机实锤）。本壳自带出口。 */
+    #cp-app-toast { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%) translateY(6px);
+                    max-width: 86%; padding: 7px 14px; border-radius: 8px; z-index: 60;
+                    background: var(--cp-ok, #0f9d75); color: #fff; font-size: 12px; line-height: 1.5;
+                    box-shadow: 0 4px 16px rgba(0, 0, 0, .28); opacity: 0; pointer-events: none;
+                    transition: opacity .18s ease, transform .18s ease; }
+    #cp-app-toast.show { opacity: .97; transform: translateX(-50%) translateY(0); }
+    #cp-app-toast.err { background: var(--cp-danger, #dc2626); }
+    /* tab 切换 150ms 渐入（reduced-motion 尊重系统偏好）；卡片展开同款（display 翻转重触发动画） */
+    @media (prefers-reduced-motion: no-preference) {
+      .cp-sec.active { animation: cpSecIn .15s ease-out; }
+      .cp-card-bd { animation: cpSecIn .15s ease-out; }
+      @keyframes cpSecIn { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+    }
   </style>
-  <script src="/copilot/i18n/cp-i18n.js?v=20260809c"></script>
-  <script src="/copilot/client/copilot-client.js?v=20260805e"></script>
+  <script src="/copilot/i18n/cp-i18n.js?v=20260817e"></script>
+  <script src="/copilot/cp-capabilities.js?v=20260812a"></script>
+  <script src="/copilot/client/copilot-client.js?v=20260817a"></script>
   <script>
   /* 宿主级 CSRF + Bearer 兜底（与 workspace_base 同款补丁思路，2026-07-31/08-01）：
      copilot-client 的方法已自带鉴权，但个别组件（如 cp-goal 的 _api）直接裸 fetch
@@ -115,17 +200,19 @@
     };
   })();
   </script>
-  <script src="/copilot/sidebar-chrome.js?v=20260808b"></script>
+  <script src="/copilot/sidebar-chrome.js?v=20260817j"></script>
   <script src="/copilot/components/cp-panel-base.js?v=20260808b"></script>
-  <script src="/copilot/components/cp-rel-stage.js?v=20260808b"></script>
-  <script src="/copilot/components/cp-next-actions.js?v=20260808b"></script>
-  <script src="/copilot/components/cp-persona.js?v=20260808b"></script>
-  <script src="/copilot/components/cp-collab.js?v=20260801a"></script>
-  <script src="/copilot/components/cp-goal.js?v=20260805a"></script>
-  <script src="/copilot/components/cp-chain-exec.js?v=20260809a"></script>
-  <script src="/copilot/components/cp-draft.js?v=20260808b"></script>
-  <script src="/copilot/components/cp-accounts.js?v=20260731f"></script>
+  <script src="/copilot/components/cp-rel-stage.js?v=20260812a"></script>
+  <script src="/copilot/components/cp-conv-ops.js?v=20260814a"></script>
+  <script src="/copilot/components/cp-kb.js?v=20260812a"></script>
+  <script src="/copilot/components/cp-persona.js?v=20260817d"></script>
+  <script src="/copilot/components/cp-collab.js?v=20260812a"></script>
+  <script src="/copilot/components/cp-goal.js?v=20260813b"></script>
+  <script src="/copilot/components/cp-chain-exec.js?v=20260813a"></script>
+  <script src="/copilot/components/cp-draft.js?v=20260813a"></script>
+  <script src="/copilot/components/cp-accounts.js?v=20260812c"></script>
   <script src="/copilot/components/cp-voice.js?v=20260808b"></script>
+  <script src="/copilot/components/cp-xlate-tools.js?v=20260817a"></script>
 </head>
 <body>
   <!-- 陈旧前端提醒（2026-07-31「切换失败」事故收尾）：iframe App 不在 workspace_base
@@ -146,60 +233,62 @@
             style="flex:0 0 auto;border:none;background:transparent;color:inherit;opacity:.65;
                    cursor:pointer;padding:2px 6px;display:inline-flex;align-items:center;"></button>
   </div>
-  <div class="cp-tabs" id="cp-tabs" hidden>
-    <button type="button" class="cp-tab active" data-tab="reply" data-cp-i18n="cp.app.tab_reply">回复台</button>
-    <button type="button" class="cp-tab" data-tab="customer" data-cp-i18n="cp.app.tab_customer">客户&关系</button>
-    <button type="button" class="cp-tab" data-tab="tools" data-cp-i18n="cp.app.tab_tools">工具箱</button>
+  <!-- tabs 常显（2026-08-12 P0）：无会话也可点，切到哪个 tab 就看到哪个 tab 的空态引导 -->
+  <!-- P2（2026-08-12）：tab 图标+徽章与网页右栏同构——图标/badge 是独立 span，
+       data-cp-i18n 只挂文字 span（applyI18n 按 textContent 覆盖，挂 button 会清掉图标） -->
+  <div class="cp-tabs" id="cp-tabs">
+    <button type="button" class="cp-tab active" data-tab="reply"><span class="cp-tab-ic" data-cp-ic="msg"></span><span data-cp-i18n="cp.app.tab_reply">回复台</span><span class="cp-tab-badge" id="cp-app-tab-badge-reply"></span></button>
+    <button type="button" class="cp-tab" data-tab="customer"><span class="cp-tab-ic" data-cp-ic="heart"></span><span data-cp-i18n="cp.app.tab_customer">客户关系</span><span class="cp-tab-badge" id="cp-app-tab-badge-customer"></span></button>
+    <button type="button" class="cp-tab" data-tab="tools"><span class="cp-tab-ic" data-cp-ic="link"></span><span data-cp-i18n="cp.app.tab_tools">工具箱</span><span class="cp-tab-badge" id="cp-app-tab-badge-tools"></span></button>
+    <button type="button" class="cp-tabs-tool" id="cp-acct-open" data-cp-i18n-title="cp.app.acct_btn_t"
+            title="账号管理（全局：登录 / 启停 / 自动回复）" aria-label="账号管理">
+      <span data-cp-ic="users"></span><span class="cp-acct-dot" id="cp-acct-dot" hidden></span>
+    </button>
   </div>
-  <div class="cp-app" id="cp-app">
-    <h4 style="display:flex;align-items:center;gap:5px;"><span data-cp-ic="users"></span><span data-cp-i18n="cp.app.h_accounts">账号管理</span></h4>
-    <cp-accounts id="accounts"></cp-accounts>
-    <div class="cp-app-empty" id="cp-app-empty" data-cp-i18n="cp.app.empty">等待会话上下文…</div>
-
+  <div class="cp-app no-ctx" id="cp-app">
+    <!-- （原「AI 下一步」英雄卡已于 2026-08-14 按运营决策整体下线。） -->
     <!-- 💬 回复 -->
     <div class="cp-sec" data-tab="reply" id="sec-reply">
-      <div class="cp-auto-bar" id="autopilot-bar" hidden>
-        <label data-cp-i18n-title="cp.app.auto_title" title="开启后：当前会话收到客户消息会自动生成并发送回复（低风险才自动发，命中风控转人工）">
-          <input type="checkbox" id="autopilot-toggle" />
-          <span data-cp-i18n="cp.app.auto_label">全自动托管</span>
-        </label>
-        <span class="cp-auto-status" id="autopilot-status" data-cp-i18n="cp.app.auto_off">已关闭</span>
+      <div class="cp-empty-card">
+        <span class="cp-empty-ic" data-cp-ic="spark"></span>
+        <span class="ttl" data-cp-i18n="cp.app.empty_title">还没有选中会话</span>
+        <span class="sub" data-cp-i18n="cp.app.empty_reply">第 2 步：从左侧选择一个会话——AI 回复草稿就会出现在这里。语音克隆、人设绑定与知识库在「工具箱」页签。</span>
+        <button type="button" class="cp-empty-acct-btn" data-acct-cta data-cp-i18n="cp.app.empty_cta_accounts">管理账号</button>
+        <div class="cp-empty-showcase" id="cp-empty-showcase"></div>
+      </div>
+      <!-- 2026-08-17 工具箱重组一次性提示：语音/人设/知识库迁 tools（localStorage 记忆） -->
+      <div class="cp-moved-hint" id="cp-moved-hint" hidden>
+        <span class="mh-txt" data-cp-i18n="cp.app.moved_hint">语音克隆、人设绑定与知识库已移至「工具箱」页签</span>
+        <button type="button" id="cp-moved-go" data-cp-i18n="cp.app.moved_hint_go">去工具箱</button>
+        <button type="button" id="cp-moved-x" aria-label="✕">✕</button>
       </div>
       <section class="cp-card" data-cp-card="draft">
         <button type="button" class="cp-card-hd" data-cp-toggle="draft">
-          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="spark"></span><span data-cp-i18n="cp.app.h_draft">回复草稿</span></span>
+          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="spark"></span><span data-cp-i18n="cp.app.h_draft">回复工坊</span></span>
           <span class="cp-card-pill" id="cpp-draft"></span><span class="cp-card-chev" aria-hidden="true"></span>
         </button>
         <div class="cp-card-bd"><cp-draft id="draft" persona contrast pin></cp-draft></div>
       </section>
-      <section class="cp-card collapsed" data-cp-card="voice">
-        <button type="button" class="cp-card-hd" data-cp-toggle="voice">
-          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="mic"></span><span data-cp-i18n="cp.app.h_voice">语音克隆</span></span>
-          <span class="cp-card-chev" aria-hidden="true"></span>
-        </button>
-        <div class="cp-card-bd"><cp-voice id="voice"></cp-voice></div>
-      </section>
-      <section class="cp-card collapsed" data-cp-card="persona">
-        <button type="button" class="cp-card-hd" data-cp-toggle="persona">
-          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="user"></span><span data-cp-i18n="cp.app.h_persona">人设绑定</span></span>
-          <span class="cp-card-pill" id="cpp-persona"></span><span class="cp-card-chev" aria-hidden="true"></span>
-        </button>
-        <div class="cp-card-bd"><cp-persona id="persona"></cp-persona></div>
-      </section>
     </div>
 
-    <!-- 客户&关系 -->
+    <!-- 客户关系 -->
     <div class="cp-sec" data-tab="customer" id="sec-customer">
+      <div class="cp-empty-card">
+        <span class="cp-empty-ic" data-cp-ic="heart"></span>
+        <span class="ttl" data-cp-i18n="cp.app.empty_title">还没有选中会话</span>
+        <span class="sub" data-cp-i18n="cp.app.empty_customer">选中会话后，这里显示客户信息、关系阶段、工作目标与跟进 SOP。</span>
+        <button type="button" class="cp-empty-acct-btn" data-acct-cta data-cp-i18n="cp.app.empty_cta_accounts">管理账号</button>
+      </div>
       <section class="cp-card" data-cp-card="customer">
         <button type="button" class="cp-card-hd" data-cp-toggle="customer">
-          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="user"></span><span data-cp-i18n="cp.app.h_customer">客户档案</span></span>
+          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="user"></span><span data-cp-i18n="cp.app.h_customer">客户信息</span></span>
           <span class="cp-card-chev" aria-hidden="true"></span>
         </button>
         <div class="cp-card-bd"><div id="customer-box" class="cp-analyze-box"></div></div>
       </section>
       <section class="cp-card collapsed" data-cp-card="relstage">
         <button type="button" class="cp-card-hd" data-cp-toggle="relstage">
-          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="heart"></span><span data-cp-i18n="cp.app.h_rel">关系阶段</span></span>
+          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="heart"></span><span data-cp-i18n="cp.app.h_rel">关系进展</span></span>
           <span class="cp-card-pill" id="cpp-relstage"></span><span class="cp-card-chev" aria-hidden="true"></span>
         </button>
         <div class="cp-card-bd"><cp-rel-stage id="relstage"></cp-rel-stage></div>
@@ -222,23 +311,78 @@
         </button>
         <div class="cp-card-bd"><cp-chain-exec id="chain"></cp-chain-exec></div>
       </section>
+      <!-- P1-4 第二刀：notes 属性开启组件内建注解子分区（与网页「团队协作」卡对齐，
+           解锁同名收敛）；网页原生右栏的 cp-collab 不带该属性=继续用宿主内联注解，零重复 -->
       <section class="cp-card collapsed" data-cp-card="collab">
         <button type="button" class="cp-card-hd" data-cp-toggle="collab">
-          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="users"></span><span data-cp-i18n="cp.app.h_collab">协作上下文</span></span>
+          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="users"></span><span data-cp-i18n="cp.app.h_collab">团队协作</span></span>
           <span class="cp-card-pill" id="cpp-collab"></span><span class="cp-card-chev" aria-hidden="true"></span>
         </button>
-        <div class="cp-card-bd"><cp-collab id="collab"></cp-collab></div>
+        <div class="cp-card-bd"><cp-collab id="collab" notes></cp-collab></div>
       </section>
     </div>
 
     <!-- 工具箱 -->
     <div class="cp-sec" data-tab="tools" id="sec-tools">
-      <section class="cp-card" data-cp-card="nba">
-        <button type="button" class="cp-card-hd" data-cp-toggle="nba">
-          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="zap"></span><span data-cp-i18n="cp.app.h_nba">下一步建议</span></span>
-          <span class="cp-card-pill" id="cpp-nba"></span><span class="cp-card-chev" aria-hidden="true"></span>
+      <div class="cp-empty-card">
+        <span class="cp-empty-ic" data-cp-ic="zap"></span>
+        <span class="ttl" data-cp-i18n="cp.app.empty_title">还没有选中会话</span>
+        <span class="sub" data-cp-i18n="cp.app.empty_tools">选中会话后，这里提供下一步行动建议等辅助工具。</span>
+        <button type="button" class="cp-empty-acct-btn" data-acct-cta data-cp-i18n="cp.app.empty_cta_accounts">管理账号</button>
+      </div>
+      <!-- 会话运维（P1-4 2026-08-12）：装配对齐网页工具箱——档位状态/暂停全自动/搁置/归档。
+           「下一步建议」已升英雄卡（跨 tab 常驻，见 #cp-app 顶部），工具箱由本卡补位。 -->
+      <section class="cp-card" data-cp-card="convops">
+        <button type="button" class="cp-card-hd" data-cp-toggle="convops">
+          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="folder"></span><span data-cp-i18n="cp.app.h_convops">会话</span></span>
+          <span class="cp-card-chev" aria-hidden="true"></span>
         </button>
-        <div class="cp-card-bd"><cp-next-actions id="nba"></cp-next-actions></div>
+        <div class="cp-card-bd"><cp-conv-ops id="convops"></cp-conv-ops></div>
+      </section>
+      <!-- 2026-08-17 工具箱重组：单次翻译四件套（图片/语音/对照/文档）共享组件——
+           与收件箱「对话翻译」弹层同一批端点；弱会话依赖（no-ctx 豁免，见 head CSS）。 -->
+      <section class="cp-card" data-cp-card="xlate">
+        <button type="button" class="cp-card-hd" data-cp-toggle="xlate">
+          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="route"></span><span data-cp-i18n="cp.app.h_xlate">翻译工具</span></span>
+          <span class="cp-card-pill" id="cpp-xlate"></span><span class="cp-card-chev" aria-hidden="true"></span>
+        </button>
+        <div class="cp-card-bd"><cp-xlate-tools id="xlate"></cp-xlate-tools></div>
+      </section>
+      <!-- 2026-08-17 工具箱重组：语音克隆/人设绑定/知识库自回复台迁入（低频工具与配置
+           归工具箱，回复台聚焦拟稿）；卡内组件与折叠记忆键不变，坐席折叠偏好无缝延续。 -->
+      <section class="cp-card collapsed" data-cp-card="voice">
+        <button type="button" class="cp-card-hd" data-cp-toggle="voice">
+          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="mic"></span><span data-cp-i18n="cp.app.h_voice">语音克隆 / 发送</span></span>
+          <span class="cp-card-chev" aria-hidden="true"></span>
+        </button>
+        <div class="cp-card-bd"><cp-voice id="voice"></cp-voice></div>
+      </section>
+      <!-- P1-4 第二刀：知识库/快捷回复收编（桌面原生 aside 的 kb/tpl 两卡合一，退役前置；
+           web 原生右栏刻意不挂——composer 的 / 指令面板与 KB 自动推荐已承担同职能） -->
+      <section class="cp-card collapsed" data-cp-card="kb">
+        <button type="button" class="cp-card-hd" data-cp-toggle="kb">
+          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="book"></span><span data-cp-i18n="cp.app.h_kb">知识库 / 快捷回复</span></span>
+          <span class="cp-card-chev" aria-hidden="true"></span>
+        </button>
+        <div class="cp-card-bd"><cp-kb id="kb"></cp-kb></div>
+      </section>
+      <section class="cp-card collapsed" data-cp-card="persona">
+        <button type="button" class="cp-card-hd" data-cp-toggle="persona">
+          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="user"></span><span data-cp-i18n="cp.app.h_persona">人设绑定</span></span>
+          <span class="cp-card-pill" id="cpp-persona"></span><span class="cp-card-chev" aria-hidden="true"></span>
+        </button>
+        <div class="cp-card-bd"><cp-persona id="persona"></cp-persona></div>
+      </section>
+      <!-- 2026-08-12 群成员提取入口（App 模式）：静态链接卡开管理台 /tools/tg-members。
+           不带 data-cp-card（非组件面板，只是链接入口）→ 不进 panel-manifest 装配门禁。
+           ui_visibility.group_extract（2026-08-15 补漏）：静态 hidden 打底（fail-hidden，
+           与网页收件箱 Jinja 摘除同语义；2026-08-14 首批只藏了 collab、本卡漏接线一直显示），
+           下方 ui-flags 拉到 group_extract=true 才揭示；端点探不到＝保持藏（内部工具藏比露安全）。
+           注意勿加内联 display（cp-stale 踩过：内联样式压过 UA [hidden] 规则 → 藏不住）。 -->
+      <section class="cp-card" id="cp-tgm-entry" style="padding:12px;" hidden>
+        <div class="cp-card-ttl" style="margin-bottom:6px;"><span class="cp-card-ic" data-cp-ic="link"></span>群成员提取</div>
+        <div style="font-size:12px;color:var(--cp-text-tiny,#9ca3af);line-height:1.5;margin-bottom:8px;">多号进群 → 限速拉「发言且非管理员」的人入库 → 每日控量。只读提取；私聊触达是独立步骤。</div>
+        <a href="/tools/tg-members" target="_blank" rel="noopener" style="display:inline-block;text-decoration:none;padding:6px 12px;border-radius:8px;background:var(--cp-accent,#1e8cf2);color:#fff;font-size:13px;">🧲 打开管理台</a>
       </section>
       <!-- 2026-08-01 运营决策：「AI 对话分析」卡下线隐藏（与网页收件箱同批）——切到工具页签就自动烧一次 LLM，
            产出与回复工坊/消息流重复。恢复＝去掉 hidden 属性（runAnalyze 入口守卫按 hidden 联动）。保留 DOM 防接线断裂。 -->
@@ -253,6 +397,20 @@
         </div>
       </section>
     </div>
+
+  </div>
+  <!-- 账号管理（2026-08-12 P0.2 出滚动流）：全局资源回全局层。前一版「沉底折叠卡」
+       仍让三个 tab 各看到一份账号管理（卡挂在 tab 分区外＝每个 tab 都渲染，坐席读不出
+       「全局」pill 的语义，只觉得重复）。现改整幅覆盖层：入口＝tabs 行常驻图标（掉线
+       红点）+ 空态「管理账号」CTA；宿主自带账号入口（?hostAccounts=1 / caps.accountsEntry）
+       时图标自动隐藏；Esc / 返回 / 切 tab 均可退出。 -->
+  <div class="cp-acct-layer" id="cp-acct-layer">
+    <div class="cp-acct-layer-hd">
+      <button type="button" class="cp-acct-back" id="cp-acct-back" data-cp-i18n="cp.app.acct_back">← 返回</button>
+      <span class="ttl" data-cp-i18n="cp.app.h_accounts">账号管理</span>
+      <span class="cp-card-pill" data-cp-i18n="cp.app.pill_global">全局</span>
+    </div>
+    <div class="cp-acct-layer-bd"><cp-accounts id="accounts" hide-title></cp-accounts></div>
   </div>
   <script>
     (function () {
@@ -263,6 +421,24 @@
       function T(k, vars) { return CPS.t ? CPS.t(k, vars) : k; }
       try { document.documentElement.setAttribute("lang", LANG === "en" ? "en" : "zh-CN"); } catch (_) {}
       if (CPS.applyI18n) CPS.applyI18n(document);
+      // 空态能力橱窗：数据单源 cp-capabilities.js（与桌面原生空态同一份）；
+      // 文件缺席/加载失败静默——空态引导文案仍在，橱窗只是增强
+      try {
+        if (typeof capabilityShowcase === "function") {
+          var _scWrap = document.getElementById("cp-empty-showcase");
+          var _scItems = capabilityShowcase() || [];
+          if (_scWrap && _scItems.length) {
+            var _scEn = LANG === "en";
+            var _scHtml = '<div class="sc-head">' + esc(
+              typeof showcaseHeadline === "function" ? showcaseHeadline(_scEn ? "en" : "zh") : "") + "</div>";
+            _scItems.forEach(function (it) {
+              _scHtml += '<div class="sc-item"><b>' + esc(_scEn && it.title_en ? it.title_en : it.title) +
+                "</b><span>" + esc(_scEn && it.desc_en ? it.desc_en : it.desc) + "</span></div>";
+            });
+            _scWrap.innerHTML = _scHtml;
+          }
+        }
+      } catch (_) { /* 静默：橱窗是空态增强，绝不阻断 App 启动 */ }
       // 主题
       var theme = qs.get("theme") === "dark" ? "dark" : "light";
       document.documentElement.setAttribute("data-cp-theme", theme);
@@ -272,13 +448,67 @@
       if (token && window.CopilotShared) window.CopilotShared.setAuthToken(token);
 
       var client = window.CopilotShared ? window.CopilotShared.createCopilotClient() : null;
-      var emptyEl = document.getElementById("cp-app-empty");
-      var tabsEl = document.getElementById("cp-tabs");
-      // 账号管理:全局面板,不依赖会话,直接挂 client 触发加载
-      var accEl = document.getElementById("accounts");
-      if (accEl && client) accEl.client = client;
+      var appEl = document.getElementById("cp-app");
+
+      // ── 账号管理全局层（P0.2）：宿主协商 + 懒加载 + 掉线红点 ──
+      // 组件懒挂 client（打开层才拉列表）；红点走独立轻量探针（120s），失败静默不动 UI。
+      var HOST_ACCTS = qs.get("hostAccounts") === "1";   // 宿主自带账号入口（如网页工作台左栏抽屉）
+      var acctOpenBtn = document.getElementById("cp-acct-open");
+      function syncAcctEntry() { if (acctOpenBtn) acctOpenBtn.hidden = !!HOST_ACCTS; }
+      syncAcctEntry();
+      function openAcct() {
+        var el = document.getElementById("accounts");
+        if (el && client) { if (!el.client) el.client = client; else el.reload(); }
+        document.body.classList.add("acct-open");
+      }
+      function closeAcct() {
+        if (!document.body.classList.contains("acct-open")) return;
+        document.body.classList.remove("acct-open");
+        refreshAcctBadge();   // 刚在层里加号/启停过 → 红点与空态 CTA 立即对齐
+      }
+      document.addEventListener("click", function (e) {
+        var t = e.target;
+        if (!t || !t.closest) return;
+        if (t.closest("#cp-acct-open") || t.closest("[data-acct-cta]")) { openAcct(); return; }
+        if (t.closest("#cp-acct-back")) closeAcct();
+      });
+      document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeAcct(); });
+      var _acctInfo = { count: -1, offline: 0 };   // count=-1：未知（未登录/探针失败）不动 UI
+      function applyAcctBadge() {
+        var dot = document.getElementById("cp-acct-dot");
+        if (dot) dot.hidden = !(_acctInfo.offline > 0);
+        if (acctOpenBtn) {
+          acctOpenBtn.title = _acctInfo.offline > 0
+            ? T("cp.app.acct_offline_t", { n: _acctInfo.offline }) : T("cp.app.acct_btn_t");
+        }
+        // 空态 CTA 升级：0 账号 → 主按钮「第 1 步：添加平台账号」（起点动线不因卡片移除而丢）
+        Array.prototype.forEach.call(document.querySelectorAll("[data-acct-cta]"), function (b) {
+          if (_acctInfo.count === 0) {
+            b.classList.add("primary");
+            b.textContent = T("cp.app.empty_cta_accounts_first");
+          } else if (_acctInfo.count > 0) {
+            b.classList.remove("primary");
+            b.textContent = T("cp.app.empty_cta_accounts") +
+              (_acctInfo.offline > 0 ? " · " + T("cp.app.acct_offline_t", { n: _acctInfo.offline }) : "");
+          }
+        });
+      }
+      async function refreshAcctBadge() {
+        if (!client || !client.listAccounts) return;
+        try {
+          var d = await client.listAccounts();
+          var accs = (d && d.accounts) || [];
+          _acctInfo.count = accs.length;
+          _acctInfo.offline = accs.filter(function (a) {
+            return !a.running && (a.status || "unknown") === "offline";
+          }).length;
+        } catch (_e) { return; }
+        applyAcctBadge();
+      }
+      refreshAcctBadge();
+      setInterval(refreshAcctBadge, 120000);
       // 业务面板登记
-      var panels = ["draft", "persona", "collab", "relstage", "nba", "chain", "voice", "goal"]
+      var panels = ["draft", "persona", "collab", "relstage", "chain", "voice", "goal", "convops", "kb", "xlate"]
         .map(function (id) {
           var el = document.getElementById(id);
           if (el) el.client = client;
@@ -308,18 +538,41 @@
         })
         .catch(function () { /* 静默：无 bundle = 无目标卡 */ });
 
+      // ── 内部功能显隐（ui_visibility，2026-08-14）：团队协作卡默认对坐席隐藏，
+      // 开发者页开启才显示。运行时按 GET /api/desktop/ui-flags 判定（App 是静态壳
+      // 无 Jinja）；端点缺席/异常＝保持可见（旧后端兼容，fail-open 不丢功能）。
+      // 保 DOM 只加 hidden：panel 登记/pill 接线不受影响。
+      // 群成员提取链接卡（#cp-tgm-entry）方向相反：静态 hidden 打底、flags 说开才揭示
+      // （fail-hidden——纯链接卡藏起零风险；collab 是既有功能面板，藏丢功能才 fail-open）。
+      fetch("/api/desktop/ui-flags", { credentials: "same-origin" })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          if (!d || !d.ok || !d.flags) return;
+          if (!d.flags.team_collab) {
+            var sec = document.querySelector('[data-cp-card="collab"]');
+            if (sec) sec.hidden = true;
+          }
+          if (d.flags.group_extract) {
+            var tgm = document.getElementById("cp-tgm-entry");
+            if (tgm) tgm.hidden = false;
+          }
+        })
+        .catch(function () { /* 静默：探不到=旧后端，维持可见 */ });
+
       var CURRENT = null; // 当前会话上下文
       var sc = (window.CopilotShared && window.CopilotShared.sidebarChrome) || {};
       var tabCtrl = sc.createTabController ? sc.createTabController({
         tabSelector: ".cp-tab",
         sectionSelector: ".cp-sec",
         onChange: function (tab) {
+          closeAcct();   // 账号层打开时点 tab＝回业务面板（tabs 常显，天然的退出口）
           if (tab === "tools" && CURRENT) runAnalyze();
           if (tab === "customer" && CURRENT) renderCustomer();
         },
       }) : null;
       function setTab(tab) {
         if (tabCtrl) return tabCtrl.setTab(tab);
+        closeAcct();   // 无 tabCtrl 的回落路径同样要能退出账号层
         var active = sc.normalizeTab ? sc.normalizeTab(tab) : tab || "reply";
         Array.prototype.forEach.call(document.querySelectorAll(".cp-tab"), function (b) {
           b.classList.toggle("active", b.dataset.tab === active);
@@ -336,11 +589,34 @@
       // ── 可折叠卡片：折叠态记忆 + 卡头图标/pill（与网页 unified_inbox 同源 sidebar-chrome.createCardController）──
       var cardCtrl = sc.createCardController ? sc.createCardController({
         storageKey: "cp_app_cards_v1",
-        defaultCollapsed: { voice: 1, persona: 1, relstage: 1, collab: 1, chain: 1 },
+        defaultCollapsed: { voice: 1, persona: 1, relstage: 1, collab: 1, chain: 1, kb: 1 },
       }) : null;
       if (cardCtrl) { cardCtrl.bindClicks(document.getElementById("cp-app")); cardCtrl.apply(); }
       if (sc.decorateCardIcons) sc.decorateCardIcons(document, 14);
-      var PILL_BY_PANEL = { draft: "cpp-draft", relstage: "cpp-relstage", collab: "cpp-collab", nba: "cpp-nba", chain: "cpp-chain", persona: "cpp-persona" };
+      // ── 工具箱重组（2026-08-17）：翻译工具卡 NEW 角标（首见起 7 天）+ 回复台一次性搬家提示 ──
+      try {
+        var xnPill = document.getElementById("cpp-xlate");
+        if (xnPill) {
+          var xnKey = "cp_xlate_new_ts", xnTs = Number(localStorage.getItem(xnKey) || 0);
+          if (!xnTs) { xnTs = Date.now(); localStorage.setItem(xnKey, String(xnTs)); }
+          if (Date.now() - xnTs < 7 * 86400 * 1000) xnPill.textContent = "NEW";
+        }
+      } catch (_) { /* 角标是增强，localStorage 不可用时静默 */ }
+      try {
+        var mvHint = document.getElementById("cp-moved-hint");
+        if (mvHint && !localStorage.getItem("cp_moved_hint_v1")) {
+          mvHint.hidden = false;
+          var _mvDone = function () {
+            try { localStorage.setItem("cp_moved_hint_v1", "1"); } catch (_e) {}
+            mvHint.hidden = true;
+          };
+          var mvGo = document.getElementById("cp-moved-go");
+          if (mvGo) mvGo.addEventListener("click", function () { _mvDone(); setTab("tools"); });
+          var mvX = document.getElementById("cp-moved-x");
+          if (mvX) mvX.addEventListener("click", _mvDone);
+        }
+      } catch (_) { /* 提示是增强，绝不阻断启动 */ }
+      var PILL_BY_PANEL = { draft: "cpp-draft", relstage: "cpp-relstage", collab: "cpp-collab", chain: "cpp-chain", persona: "cpp-persona" };
       var PILL_TONES = ["pill-accent", "pill-ok", "pill-warn", "pill-danger"];
       function pillT(key, vars) {
         var zh = { guard_high: "高风险", guard_medium: "中风险", draft_ready: "已生成", chain_failed: "{n} 失败", chain_running: "{n} 运行中" };
@@ -361,6 +637,16 @@
         PILL_TONES.forEach(function (c) { pel.classList.remove(c); });
         if (m.text && m.tone) pel.classList.add("pill-" + m.tone);
       });
+      // P2：tab 状态圆点——复用 sidebar-chrome 现成基建（监听 cp-data-loaded：
+      // 草稿高风险→回复台红点、关系冲突→客户关系、SOP 失败/运行中→客户关系）
+      if (sc.initDesktopTabBadges) {
+        sc.initDesktopTabBadges({
+          badgeReply: "cp-app-tab-badge-reply",
+          badgeCustomer: "cp-app-tab-badge-customer",
+          badgeTools: "cp-app-tab-badge-tools",
+          translate: pillT,
+        });
+      }
 
       // chat_key 回退:conversation_id = platform:account:chat_key,取第 2 个冒号后整体
       function chatKeyFrom(cid) {
@@ -378,6 +664,22 @@
             window.parent.postMessage(Object.assign({ type: type }, extra || {}), "*");
           }
         } catch (_) {}
+      }
+      // 执行类动作结果反馈出口（元素懒建；样式见 head 内 #cp-app-toast）
+      var _cpToastTimer = null;
+      function cpToast(msg, isErr) {
+        if (!msg) return;
+        var el = document.getElementById("cp-app-toast");
+        if (!el) {
+          el = document.createElement("div");
+          el.id = "cp-app-toast";
+          document.body.appendChild(el);
+        }
+        el.textContent = String(msg);
+        el.classList.toggle("err", !!isErr);
+        el.classList.add("show");
+        if (_cpToastTimer) clearTimeout(_cpToastTimer);
+        _cpToastTimer = setTimeout(function () { el.classList.remove("show"); }, isErr ? 4200 : 2000);
       }
 
       // ── cp-fill / cp-send:本壳无 composer → 桥给宿主父窗口 ──
@@ -415,33 +717,21 @@
           if (dr) dr.scrollIntoView({ behavior: "smooth", block: "nearest" });
         } catch (_) {}
       });
-      // 跨面板联动刷新(沿用原协议)
-      document.addEventListener("cp-action-done", function () {
+      // 会话运维状态变化 → 桥给宿主（网页宿主刷会话列表；归档/搁置后行状态才对得上）
+      document.addEventListener("cp-convops-changed", function (e) {
+        post("cp-convops-changed", { kind: ((e && e.detail) || {}).kind || "" });
+      });
+      // 跨面板联动刷新(沿用原协议) + 执行结果反馈（对齐网页宿主 P1-198：
+      // ok→轻提示；fail→优先显示服务端如实报的原因，而不是笼统「执行失败」）
+      document.addEventListener("cp-action-done", function (e) {
+        var d = (e && e.detail) || {};
+        if (d.ok) cpToast(T("cp.app.exec_ok"));
+        else cpToast(d.error ? String(d.error) : T("cp.app.exec_fail"), true);
         var rel = document.getElementById("relstage"); if (rel && rel.context) rel.refresh && rel.refresh();
         var chain = document.getElementById("chain"); if (chain && chain.context) chain.refresh && chain.refresh();
       });
-      document.addEventListener("cp-rel-changed", function () {
-        var nba = document.getElementById("nba");
-        if (nba && nba.context) nba.refresh && nba.refresh();
-      });
       document.addEventListener("cp-persona-changed", function () {
         var rel = document.getElementById("relstage"); if (rel && rel.context) rel.refresh && rel.refresh();
-      });
-
-      // ── 全自动托管(仅宿主声明能力时显示;行为由宿主 HostBridge 落地)──
-      var autoBar = document.getElementById("autopilot-bar");
-      var autoToggle = document.getElementById("autopilot-toggle");
-      var autoStatus = document.getElementById("autopilot-status");
-      function setAutoUi(on) {
-        if (autoToggle) autoToggle.checked = !!on;
-        if (autoStatus) {
-          autoStatus.textContent = on ? T("cp.app.auto_on") : T("cp.app.auto_off");
-          autoStatus.classList.toggle("on", !!on);
-        }
-      }
-      if (autoToggle) autoToggle.addEventListener("change", function () {
-        setAutoUi(autoToggle.checked);
-        post("cp-autopilot", { on: autoToggle.checked });
       });
 
       // ── AI 对话分析:同源取历史 → 调 analyze(与网页同一后端端点)──
@@ -556,13 +846,19 @@
           accountId: (ctx && ctx.accountId) || "",
           customer: (ctx && ctx.customer) || null,
         };
-        if (emptyEl) emptyEl.hidden = true;
-        if (tabsEl) tabsEl.hidden = false;
-        // 能力:宿主声明 autopilot 才显示托管开关
+        if (appEl) appEl.classList.remove("no-ctx");
+        // 能力协商：accountsEntry=宿主自带账号入口（网页工作台左栏抽屉等）
+        // → 隐藏本面板 tabs 行的账号图标，避免同屏双入口。
+        // （2026-08-15 「全自动托管」HostBridge 开关整体下线：与收件箱「🚀 全自动」档
+        //   auto_ai+受控出站队列功能重复且绕过服务端 send-gate/kill-switch，两开同会话
+        //   还会双发；caps.autopilot 不再消费，全自动唯一入口=会话自动化档位。）
         var caps = (ctx && ctx.caps) || {};
-        if (autoBar) autoBar.hidden = !caps.autopilot;
-        if (caps.autopilot) setAutoUi(!!ctx.autopilotOn);
-        var panelCtx = { conversationId: cid, chatKey: ck, platform: CURRENT.platform, accountId: CURRENT.accountId };
+        if (caps.accountsEntry) { HOST_ACCTS = true; syncAcctEntry(); }
+        var panelCtx = {
+          conversationId: cid, chatKey: ck,
+          platform: CURRENT.platform, accountId: CURRENT.accountId,
+          caps: caps
+        };
         panels.forEach(function (el) { if (el) el.context = panelCtx; });
         if (tabCtrl && tabCtrl.getTab() === "tools") runAnalyze();
         if (tabCtrl && tabCtrl.getTab() === "customer") renderCustomer();
@@ -573,6 +869,7 @@
       function handleCmd(m) {
         var cmd = m && m.cmd;
         if (cmd === "set-tab") { setTab(m.tab || "reply"); return; }
+        if (cmd === "open-accounts") { openAcct(); return; }   // 宿主深链（壳头部图标可转发到此）
         if (cmd === "focus-draft") {
           setTab("reply");
           var el = document.getElementById("draft");
@@ -582,9 +879,13 @@
           return;
         }
         if (cmd === "focus-voice") {
-          setTab("reply");
+          setTab("tools");   // 2026-08-17 工具箱重组：语音卡已迁 tools，深链跟着走
           var v = document.getElementById("voice");
-          try { v.scrollIntoView({ behavior: "smooth", block: "center" }); } catch (_) {}
+          try {
+            var vc = document.querySelector('[data-cp-card="voice"]');
+            if (vc) vc.classList.remove("collapsed");
+            v.scrollIntoView({ behavior: "smooth", block: "center" });
+          } catch (_) {}
           return;
         }
       }

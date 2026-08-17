@@ -128,7 +128,7 @@ class TestBuildAutosendCallbacks:
         monkeypatch.setattr(autosend_helpers, "autosend_image", _false)
         monkeypatch.setattr(autosend_helpers, "autosend_voice", _false)
 
-        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters):
+        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters, **kw):
             return {"ok": True, "delivered_as": "text", "echo": text}
         import src.inbox.channel_adapters as _ca
         monkeypatch.setattr(_ca, "send_via_adapters", _fake_send_via)
@@ -159,7 +159,7 @@ class TestBuildAutosendCallbacks:
         monkeypatch.setattr(autosend_helpers, "autosend_voice", _fake_voice)
         monkeypatch.setattr(autosend_helpers, "autosend_image", _false)
 
-        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters):
+        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters, **kw):
             return {"ok": True, "delivered_as": "text", "echo": text}
         import src.inbox.channel_adapters as _ca
         monkeypatch.setattr(_ca, "send_via_adapters", _fake_send_via)
@@ -181,7 +181,7 @@ class TestPromiseGuardDeliver:
     """出站媒体承诺守卫在 deliver 编排的接线：兑现优先 → 撤回兜底。"""
 
     def _patch_common(self, monkeypatch):
-        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters):
+        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters, **kw):
             return {"ok": True, "delivered_as": "text", "echo": text}
         import src.inbox.channel_adapters as _ca
         monkeypatch.setattr(_ca, "send_via_adapters", _fake_send_via)
@@ -397,7 +397,7 @@ class TestReplyBubblesDeliver:
     def test_orch_splits_newlines_into_parts(self, monkeypatch):
         sent = []
 
-        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters):
+        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters, **kw):
             sent.append(text)
             return {"ok": True, "delivered_as": "text", "echo": text}
 
@@ -431,7 +431,7 @@ class TestReplyBubblesDeliver:
         """orch_only：RPA 不拥有账号 → 整段单发，留给 human_pacing。"""
         sent = []
 
-        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters):
+        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters, **kw):
             sent.append(text)
             return {"ok": True, "delivered_as": "text", "echo": text}
 
@@ -455,7 +455,7 @@ class TestReplyBubblesDeliver:
     def test_group_chat_skipped(self, monkeypatch):
         sent = []
 
-        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters):
+        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters, **kw):
             sent.append(text)
             return {"ok": True, "delivered_as": "text", "echo": text}
 
@@ -485,7 +485,7 @@ class TestReplyBubblesDeliver:
                 rows.append(dict(kw, cid=cid))
                 return 1
 
-        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters):
+        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters, **kw):
             return {"ok": True, "delivered_as": "text", "echo": text}
         import src.inbox.channel_adapters as _ca
         monkeypatch.setattr(_ca, "send_via_adapters", _fake_send_via)
@@ -533,7 +533,7 @@ class TestReplyBubblesDeliver:
                 rows.append(dict(kw, cid=cid))
                 return 1
 
-        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters):
+        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters, **kw):
             sent.append(text)
             return {"ok": True, "delivered_as": "text", "echo": text}
         import src.inbox.channel_adapters as _ca
@@ -567,7 +567,7 @@ class TestReplyBubblesDeliver:
         """holdout_pct=0（基线默认）：random 再小也不进保留组，正常分条。"""
         sent = []
 
-        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters):
+        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters, **kw):
             sent.append(text)
             return {"ok": True, "delivered_as": "text", "echo": text}
         import src.inbox.channel_adapters as _ca
@@ -597,7 +597,7 @@ class TestReplyBubblesDeliver:
     def test_partial_failure_keeps_sent(self, monkeypatch):
         sent = []
 
-        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters):
+        async def _fake_send_via(shim, platform, account_id, chat_key, text, adapters, **kw):
             sent.append(text)
             if len(sent) >= 2:
                 return {"ok": False, "error": "boom"}

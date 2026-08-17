@@ -1,0 +1,670 @@
+{% extends "workspace_base.html" %}
+{% block title %}{{ (i18n or {}).get('ck.title', "驾驶舱") }}{% endblock %}
+{% block head %}
+<style>
+  /* 令牌驱动（--tk-*，日/夜自适配）。三色语言：红=需介入 / 黄=人工接管中 / 蓝=AI 在跑。 */
+  .ck-wrap{height:100%;display:flex;flex-direction:column;background:var(--tk-bg);}
+  .ck-bar{padding:12px 18px;background:var(--tk-surface);border-bottom:1px solid var(--tk-border);display:flex;gap:12px;align-items:center;flex-wrap:wrap;color:var(--tk-text);}
+  .ck-bar a.back{font-size:12px;color:var(--tk-brand);text-decoration:none;}
+  .ck-bar .t{font-weight:700;font-size:15px;}
+  .ck-bar .sub{font-size:12px;color:var(--tk-text-muted);}
+  .ck-btn{border:1px solid var(--tk-border);background:var(--tk-surface);color:var(--tk-text);border-radius:7px;padding:5px 11px;font-size:12px;cursor:pointer;}
+  .ck-btn:hover{background:var(--tk-surface-2);}
+  .ck-btn.primary{background:var(--tk-brand);border-color:var(--tk-brand);color:#fff;}
+  .ck-btn.primary:hover{filter:brightness(1.08);}
+  /* 首次引导条（可关） */
+  .ck-hint{display:flex;gap:10px;align-items:center;margin:10px 18px 0;padding:9px 14px;border-radius:10px;font-size:12px;line-height:1.6;color:var(--tk-text);background:color-mix(in srgb, var(--tk-brand) 8%, var(--tk-surface));border:1px solid color-mix(in srgb, var(--tk-brand) 30%, transparent);}
+  .ck-hint .tx{flex:1;min-width:0;}
+  /* KPI 带 */
+  .ck-kpis{display:flex;gap:10px;padding:14px 18px 6px;flex-wrap:wrap;}
+  .ck-kpi{flex:1;min-width:130px;background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:12px;padding:12px 14px;box-shadow:var(--tk-shadow);}
+  .ck-kpi .n{font-size:26px;font-weight:800;line-height:1.1;color:var(--tk-text);}
+  /* 「等最久的客户」是中文时长串（如「2 天 23 小时」），字号让位可读性 */
+  #ck-k-oldest{font-size:18px;padding-top:6px;}
+  .ck-kpi .l{font-size:12px;color:var(--tk-text-muted);margin-top:3px;}
+  .ck-kpi.hot .n{color:var(--tk-danger-ink);}
+  .ck-kpi.warm .n{color:var(--tk-warn-ink);}
+  .ck-kpi.dim .n{color:var(--tk-text-muted);}
+  .ck-kpi.click{cursor:pointer;}
+  .ck-kpi.click:hover{border-color:var(--tk-brand);}
+  /* 主区双栏 */
+  .ck-main{flex:1;display:flex;gap:14px;padding:10px 18px 18px;overflow:hidden;}
+  .ck-q{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:12px;overflow:hidden;}
+  .ck-q-h{padding:10px 14px 8px;border-bottom:1px solid var(--tk-border);font-size:13px;color:var(--tk-text);}
+  .ck-q-h .tt{display:flex;gap:8px;align-items:center;font-weight:700;}
+  /* 分类筛选 chips（点 KPI/点 chip 同一套过滤） */
+  .ck-fchips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;}
+  .ck-fchip{border:1px solid var(--tk-border);background:var(--tk-surface);color:var(--tk-text-muted);border-radius:999px;padding:2px 10px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;}
+  .ck-fchip:hover{border-color:var(--tk-brand);color:var(--tk-text);}
+  .ck-fchip.on{background:var(--tk-brand);border-color:var(--tk-brand);color:#fff;}
+  .ck-q-list{flex:1;overflow-y:auto;padding:10px 12px;}
+  .ck-card{border:1px solid var(--tk-border);border-left-width:4px;border-radius:10px;padding:10px 12px;margin-bottom:8px;background:var(--tk-surface);display:flex;gap:12px;align-items:stretch;}
+  .ck-card.p1{border-left-color:var(--tk-danger);}
+  .ck-card.p2{border-left-color:var(--tk-orange);}
+  .ck-card.p3{border-left-color:var(--tk-amber);}
+  .ck-card.p4{border-left-color:var(--tk-border);}
+  .ck-card .body{flex:1;min-width:0;}
+  .ck-card .row1{display:flex;gap:7px;align-items:center;flex-wrap:wrap;}
+  .ck-card .nm{font-weight:700;font-size:13.5px;color:var(--tk-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:240px;}
+  .ck-card .why{font-size:12px;color:var(--tk-text-muted);margin-top:5px;line-height:1.5;}
+  /* 客户原话引用（身份卡 P3）：正体+气泡感，比斜体灰线更像「他说了这句」 */
+  .ck-card .dt{font-size:12px;color:var(--tk-text);margin-top:5px;padding:5px 9px;border-radius:8px;background:var(--tk-surface-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;}
+  .ck-card .dt .pv{color:var(--tk-text-muted);margin-right:4px;}
+  /* 头像：真头像盖在字母底上，加载失败自动露底（onerror 移除 img） */
+  .ck-ava{position:relative;width:36px;height:36px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:13px;overflow:hidden;user-select:none;}
+  .ck-ava img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
+  .ck-card .side{flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;justify-content:space-between;gap:8px;}
+  .ck-card .wait{text-align:right;line-height:1.15;}
+  .ck-card .wait .wn{font-size:17px;font-weight:800;color:var(--tk-text);}
+  .ck-card.p1 .wait .wn,.ck-card.p2 .wait .wn{color:var(--tk-danger-ink);}
+  .ck-card.p3 .wait .wn{color:var(--tk-warn-ink);}
+  .ck-card .wait .wl{display:block;font-size:10px;color:var(--tk-text-muted);}
+  .ck-kind{display:inline-block;font-size:10px;font-weight:700;border-radius:5px;padding:1px 6px;white-space:nowrap;}
+  .ck-kind.k1{background:color-mix(in srgb, var(--tk-danger) 14%, transparent);color:var(--tk-danger-ink);}
+  .ck-kind.k2{background:color-mix(in srgb, var(--tk-orange) 14%, transparent);color:var(--tk-warn-ink);}
+  .ck-kind.k3{background:color-mix(in srgb, var(--tk-amber) 16%, transparent);color:var(--tk-warn-ink);}
+  .ck-kind.k4{background:var(--tk-surface-2);color:var(--tk-text-muted);}
+  .ck-plat{display:inline-block;font-size:10px;font-weight:600;border-radius:5px;padding:1px 6px;background:var(--tk-surface-2);color:var(--tk-text-muted);}
+  .ck-plat i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:4px;}
+  .ck-unread{display:inline-block;font-size:10px;font-weight:700;border-radius:5px;padding:1px 6px;background:color-mix(in srgb, var(--tk-danger) 12%, transparent);color:var(--tk-danger-ink);}
+  .ck-acts{display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;}
+  .ck-acts a{text-decoration:none;}
+  .ck-empty{padding:36px 16px;text-align:center;color:var(--tk-text-muted);}
+  .ck-empty .big{font-size:15px;font-weight:700;color:var(--tk-ok-ink);margin-bottom:6px;}
+  /* 历史积压折叠区 */
+  .ck-stale-h{display:flex;gap:8px;align-items:center;cursor:pointer;padding:8px 4px 2px;font-size:12px;font-weight:700;color:var(--tk-text-muted);user-select:none;}
+  .ck-stale-h:hover{color:var(--tk-text);}
+  .ck-stale-h .ar{display:inline-block;transition:transform .15s ease;}
+  .ck-stale-h.open .ar{transform:rotate(90deg);}
+  .ck-stale-sub{font-size:11px;color:var(--tk-text-muted);padding:0 4px 8px;}
+  #ck-stale-list .ck-card{opacity:.82;}
+  /* 加载骨架屏 */
+  .ck-skel{border:1px solid var(--tk-border);border-radius:10px;height:64px;margin-bottom:8px;background:linear-gradient(90deg,var(--tk-surface) 25%,var(--tk-surface-2) 42%,var(--tk-surface) 60%);background-size:220% 100%;animation:ckSkel 1.1s linear infinite;}
+  @keyframes ckSkel{from{background-position:180% 0;}to{background-position:-40% 0;}}
+  @media (prefers-reduced-motion:reduce){.ck-skel{animation:none;background:var(--tk-surface-2);}.ck-stale-h .ar{transition:none;}}
+  /* 右栏 */
+  .ck-rail{width:290px;flex-shrink:0;display:flex;flex-direction:column;gap:12px;overflow-y:auto;}
+  .ck-box{background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:12px;padding:10px 12px;}
+  .ck-box .h{font-weight:700;font-size:12px;color:var(--tk-text);margin-bottom:7px;display:flex;gap:6px;align-items:center;}
+  .ck-box .h .hs{margin-left:auto;font-weight:500;font-size:11px;color:var(--tk-text-muted);}
+  .ck-tk-row{display:flex;gap:7px;align-items:center;font-size:12px;color:var(--tk-text);padding:4px 0;border-bottom:1px dashed var(--tk-border);}
+  .ck-tk-row:last-child{border-bottom:none;}
+  .ck-tk-row .who{color:var(--tk-text-muted);font-size:11px;}
+  .ck-acct-row{display:flex;gap:7px;align-items:center;font-size:12px;color:var(--tk-text);padding:4px 0;}
+  .ck-acct-more{font-size:11px;color:var(--tk-text-muted);padding:5px 0 2px;cursor:pointer;user-select:none;}
+  .ck-acct-more:hover{color:var(--tk-text);}
+  .ck-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;background:var(--tk-border);}
+  .ck-dot.ok{background:var(--tk-emerald);} .ck-dot.warn{background:var(--tk-amber);} .ck-dot.bad{background:var(--tk-danger);}
+  .ck-muted{font-size:12px;color:var(--tk-text-muted);}
+  .ck-srcwarn{font-size:11px;color:var(--tk-warn-ink);padding:4px 18px;}
+  @media (max-width:900px){ .ck-rail{display:none;} }
+</style>
+{% endblock %}
+{% block content %}
+<div class="ck-wrap">
+  <div class="ck-bar">
+    <a class="back" href="/workspace">← {{ (i18n or {}).get('ck.back', "工作台") }}</a>
+    <span class="t">{{ (i18n or {}).get('ck.title', "驾驶舱") }}</span>
+    <span class="sub">{{ (i18n or {}).get('ck.sub', "谁需要人、按优先级排好——处理完一个划掉一个") }}</span>
+    <span style="margin-left:auto;" class="ck-muted" id="ck-age"></span>
+    <button class="ck-btn" onclick="CK.load(true)">{{ (i18n or {}).get('ck.refresh', "刷新") }}</button>
+  </div>
+  <div class="ck-hint" id="ck-hint" style="display:none;">
+    <span>💡</span>
+    <span class="tx">{{ (i18n or {}).get('ck.hint', "AI 正在自动接待所有会话，这页只列需要真人的：「接管」＝AI 停手你来聊，「交还 AI」＝你聊完 AI 继续，「去处理」＝打开完整对话。") }}</span>
+    <button class="ck-btn" onclick="CK.dismissHint()">{{ (i18n or {}).get('ck.hint.dismiss', "知道了") }}</button>
+  </div>
+  <div class="ck-kpis">
+    <div class="ck-kpi hot click" onclick="CK.setFilter('')"><div class="n" id="ck-k-queue">–</div><div class="l">{{ (i18n or {}).get('ck.kpi.queue', "需介入") }}</div></div>
+    <div class="ck-kpi warm"><div class="n" id="ck-k-takeover">–</div><div class="l">{{ (i18n or {}).get('ck.kpi.takeover', "接管中") }}</div></div>
+    <div class="ck-kpi"><div class="n" id="ck-k-oldest">–</div><div class="l">{{ (i18n or {}).get('ck.kpi.oldest', "最久等待") }}</div></div>
+    <div class="ck-kpi dim click" onclick="CK.toggleStale()"><div class="n" id="ck-k-stale">–</div><div class="l">{{ (i18n or {}).get('ck.kpi.stale', "历史积压") }}</div></div>
+  </div>
+  <div class="ck-srcwarn" id="ck-srcwarn" style="display:none;"></div>
+  <div class="ck-main">
+    <div class="ck-q">
+      <div class="ck-q-h">
+        <div class="tt">{{ (i18n or {}).get('ck.q.title', "介入队列") }} <span class="ck-muted" id="ck-q-n"></span>
+          <span style="margin-left:auto;font-weight:500;" class="ck-muted">{{ (i18n or {}).get('ck.auto_note', "每 30 秒自动刷新") }}</span></div>
+        <div class="ck-fchips" id="ck-fchips" style="display:none;"></div>
+      </div>
+      <div class="ck-q-list">
+        <div id="ck-q-list"><div class="ck-skel"></div><div class="ck-skel"></div><div class="ck-skel"></div></div>
+        <div class="ck-stale-h" id="ck-stale-h" style="display:none;" onclick="CK.toggleStale()"><span class="ar">▸</span><span id="ck-stale-t"></span></div>
+        <div class="ck-stale-sub" id="ck-stale-sub" style="display:none;">{{ (i18n or {}).get('ck.stale.sub', "超过 3 天的旧信号——处理完点「已处理」清掉，别让它一直占屏") }}</div>
+        <div id="ck-stale-list" style="display:none;"></div>
+      </div>
+    </div>
+    <div class="ck-rail">
+      <div class="ck-box"><div class="h">{{ (i18n or {}).get('ck.rail.takeover', "接管在场") }}</div><div id="ck-rail-tk" class="ck-muted">…</div></div>
+      <div class="ck-box"><div class="h">{{ (i18n or {}).get('ck.rail.acct', "账号健康") }}<span class="hs" id="ck-acct-sum"></span></div><div id="ck-rail-acct" class="ck-muted">…</div></div>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  /* 服务端渲染 i18n 注入本地词表（不依赖 window.T——本页自足） */
+  var L={
+    qEmpty: {{ (i18n or {}).get('ck.q.empty', "一切正常，AI 在岗 ✓")|tojson }},
+    qEmptySub: {{ (i18n or {}).get('ck.q.empty_sub', "没有需要人工介入的会话；有红点会第一时间排到这里")|tojson }},
+    emptyRoi: {{ (i18n or {}).get('ck.empty.roi', "本周 AI 已替你自动发出 {n} 条回复")|tojson }},
+    emptyLearner: {{ (i18n or {}).get('ck.empty.learner', "学习队列有 {n} 条 AI 知识草稿等你审核")|tojson }},
+    emptyLearnerGo: {{ (i18n or {}).get('ck.empty.learner_go', "去审核 →")|tojson }},
+    ageM: {{ (i18n or {}).get('ck.age.m', "{m} 分钟")|tojson }},
+    ageH: {{ (i18n or {}).get('ck.age.h', "{h} 小时 {m} 分")|tojson }},
+    ageD: {{ (i18n or {}).get('ck.age.d', "{d} 天 {h} 小时")|tojson }},
+    said: {{ (i18n or {}).get('ck.card.said', "客户说：")|tojson }},
+    draftPrefix: {{ (i18n or {}).get('ck.card.draft_prefix', "AI 已拟好草稿：")|tojson }},
+    tkBy: {{ (i18n or {}).get('ck.card.tk_by', "接管人：")|tojson }},
+    media: {
+      image: {{ (i18n or {}).get('ck.media.image', "[图片]")|tojson }},
+      voice: {{ (i18n or {}).get('ck.media.voice', "[语音]")|tojson }},
+      video: {{ (i18n or {}).get('ck.media.video', "[视频]")|tojson }},
+      file: {{ (i18n or {}).get('ck.media.file', "[文件]")|tojson }},
+      other: {{ (i18n or {}).get('ck.media.other', "[附件]")|tojson }}
+    },
+    acctUnknown: {{ (i18n or {}).get('ck.rail.acct_unknown', "另有 {n} 个账号未上报状态")|tojson }},
+    feedConfirm: {{ (i18n or {}).get('ck.feed.confirm', "顺手教 AI？把客户这句话送进学习队列，AI 学会后下次能自动回答：「{q}」")|tojson }},
+    feedOkBtn: {{ (i18n or {}).get('ck.feed.ok_btn', "送进学习队列")|tojson }},
+    feedDone: {{ (i18n or {}).get('ck.feed.done', "已送进学习队列，AI 生成草稿后可去审核入库")|tojson }},
+    qFail: {{ (i18n or {}).get('ck.q.fail', "队列加载失败，稍后自动重试")|tojson }},
+    qFilterEmpty: {{ (i18n or {}).get('ck.q.filter_empty', "这一类当前没有卡")|tojson }},
+    filterAll: {{ (i18n or {}).get('ck.filter.all', "全部")|tojson }},
+    srcErr: {{ (i18n or {}).get('ck.src.error', "部分信号源异常（{list}）——队列可能不全")|tojson }},
+    kinds: {
+      takeover_overdue: {{ (i18n or {}).get('ck.kind.takeover_overdue', "接管超时")|tojson }},
+      needs_human: {{ (i18n or {}).get('ck.kind.needs_human', "需人工")|tojson }},
+      waiting: {{ (i18n or {}).get('ck.kind.waiting', "客户在等")|tojson }},
+      draft_pending: {{ (i18n or {}).get('ck.kind.draft_pending', "草稿待审")|tojson }}
+    },
+    why: {
+      takeover_overdue: {{ (i18n or {}).get('ck.why.takeover_overdue', "人工接管已 {age} 未交还——完成后记得交还 AI")|tojson }},
+      needs_human: {{ (i18n or {}).get('ck.why.needs_human', "AI 判断需要真人处理（高风险 / 生成失败 / 配额触顶等）")|tojson }},
+      waiting: {{ (i18n or {}).get('ck.why.waiting', "客户说了最后一句，已等 {age} 没人回")|tojson }},
+      draft_pending: {{ (i18n or {}).get('ck.why.draft_pending', "AI 草稿已拟好，等人审核 {age}")|tojson }}
+    },
+    anon: {{ (i18n or {}).get('ck.card.anon', "客户（尾号 {tail}）")|tojson }},
+    waitLabel: {{ (i18n or {}).get('ck.wait.label', "已持续")|tojson }},
+    staleTitle: {{ (i18n or {}).get('ck.stale.title', "历史积压（{n}）")|tojson }},
+    flagMore: {{ (i18n or {}).get('ck.flag.more', "同时命中")|tojson }},
+    actOpen: {{ (i18n or {}).get('ck.act.open', "去处理")|tojson }},
+    unread: {{ (i18n or {}).get('ck.unread', "未读")|tojson }},
+    actTake: {{ (i18n or {}).get('ck.act.take', "接管")|tojson }},
+    actBack: {{ (i18n or {}).get('ck.act.back', "交还 AI")|tojson }},
+    actResolve: {{ (i18n or {}).get('ck.act.resolve', "已处理")|tojson }},
+    resolveConfirm: {{ (i18n or {}).get('ck.resolve.confirm', "把「需人工」标记从该会话摘掉？表示你已处理完或不需要再跟进。")|tojson }},
+    resolved: {{ (i18n or {}).get('ck.resolved', "已清除「需人工」标记")|tojson }},
+    confirmTake: {{ (i18n or {}).get('tko.confirm_take', "接管本会话？AI 将立即停止自动回复（在途草稿会被取消），直到你交还。")|tojson }},
+    confirmBack: {{ (i18n or {}).get('tko.confirm_back', "交还本会话给 AI？将恢复接管前的自动化档位。")|tojson }},
+    took: {{ (i18n or {}).get('tko.took', "已接管，AI 已让位——完成后记得交还")|tojson }},
+    returned: {{ (i18n or {}).get('tko.returned', "已交还 AI（人工接管 {min} 分钟）")|tojson }},
+    opFail: {{ (i18n or {}).get('tko.failed', "操作失败，请重试")|tojson }},
+    tkNone: {{ (i18n or {}).get('ck.rail.tk_none', "当前没有人工接管中的会话")|tojson }},
+    tkStats: {{ (i18n or {}).get('ck.rail.tk_stats', "累计接管 {n} 次 · 平均 {min} 分钟")|tojson }},
+    acctSum: {{ (i18n or {}).get('ck.rail.acct_sum', "{ok} 在线 · {bad} 异常")|tojson }},
+    acctFail: {{ (i18n or {}).get('ck.rail.acct_fail', "账号数据暂不可用")|tojson }},
+    acctEmpty: {{ (i18n or {}).get('ck.rail.acct_empty', "暂无在册账号")|tojson }},
+    st: {
+      ok: {{ (i18n or {}).get('ck.st.ok', "在线")|tojson }},
+      bad: {{ (i18n or {}).get('ck.st.bad', "异常")|tojson }},
+      warn: {{ (i18n or {}).get('ck.st.warn', "状态未知")|tojson }}
+    }
+  };
+  var STALE_SEC=72*3600;                       /* 与 waiting 源 72h 窗同刻度：超过即归「历史积压」 */
+  var HINT_KEY='aitr.ck.hint.v1';
+  var KIND_ORDER=['takeover_overdue','needs_human','waiting','draft_pending'];
+  function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+  function fmt(tpl,vars){ return String(tpl).replace(/\{(\w+)\}/g, function(_,k){ return (vars&&vars[k]!=null)?vars[k]:''; }); }
+  function beacon(action){
+    try{
+      var body=JSON.stringify({page:'/workspace/cockpit', action:String(action||'')});
+      navigator.sendBeacon('/api/telemetry/ui-event', new Blob([body],{type:'application/json'}));
+    }catch(_){}
+  }
+  /* 人话时长（P3）：「2d23h」是工程师缩写，中文会话统一「2 天 23 小时」分级 */
+  function fmtAge(sec){
+    sec=Math.max(0, Math.floor(sec||0));
+    if(sec<3600) return fmt(L.ageM,{m:Math.floor(sec/60)});
+    if(sec<86400) return fmt(L.ageH,{h:Math.floor(sec/3600), m:Math.floor(sec%3600/60)});
+    return fmt(L.ageD,{d:Math.floor(sec/86400), h:Math.floor(sec%86400/3600)});
+  }
+  /* 确认/回执统一走壳层组件（__wsConfirm / wsToast），缺席时退原生——绝不静默 */
+  function cfm(msg, okText){
+    if(window.__wsConfirm) return window.__wsConfirm({message:msg, okText:okText||''});
+    return Promise.resolve(window.confirm(msg));
+  }
+  function notify(msg, ok){
+    if(typeof window.wsToast==='function'){ window.wsToast(msg, ok?'check':'alert'); }
+    else{ alert(msg); }
+  }
+  /* cid → 尾号（displayName / 字母头像共用） */
+  function cidTail(cid){
+    cid=String(cid||'');
+    var key=cid, parts=cid.split(':');
+    if(parts.length>=3) key=parts.slice(2).join(':');
+    return key.replace(/[^0-9A-Za-z]/g,'').slice(-4)||key.slice(-4)||'?';
+  }
+  /* 会话可读名：真名 > @username > 「客户（尾号 xxxx）」——绝不裸摆机器 id */
+  function displayName(name, cid, username){
+    var nm=String(name||''); cid=String(cid||'');
+    if(nm && nm!==cid) return nm;
+    var un=String(username||'');
+    if(un) return '@'+un.replace(/^@/,'');
+    return fmt(L.anon,{tail:cidTail(cid)});
+  }
+  /* 头像（P3 身份卡）：字母底色按 cid 稳定哈希（同一客户永远同色）；
+     有可用头像 URL 盖 <img>，加载失败 onerror 自摘露出字母底。
+     Messenger 的 fbcdn/scontent 直链会过期 → 不试直接走字母（与收件箱同守卫）。
+     P4：无稳定直链时走头像代理端点（telegram=pyrogram 下载/whatsapp=baileys/
+     messenger=Node 直链回源，服务端落 /static 缓存 7 天+负缓存+熔断）——
+     **受控加载**（并发 ≤2 + 5s 超时 + 页面级结果缓存），绝不 <img src> 直连代理：
+     收件箱 2026-08-05 实锤——端点服务端挂死时几行会话就占满同源 6 连接，整页饿死。 */
+  var AVA_COLORS=['#e05561','#d78f3d','#4f9d69','#3d8bd7','#8a6fd1','#c95fa3','#5aa8a0','#7d8a4a'];
+  var AVA_PROXY={telegram:1,whatsapp:1,messenger:1};
+  var _avCache={};              /* proxyUrl -> objectURL | 'fail'（失败不重试，30s 轮询重渲染零回源） */
+  var _avQ=[]; var _avBusy=0; var _avRaf=0;
+  function _avScan(){
+    if(_avRaf) return;
+    _avRaf=requestAnimationFrame(function(){
+      _avRaf=0;
+      var imgs=document.querySelectorAll('img[data-av]');
+      for(var i=0;i<imgs.length;i++){
+        var el=imgs[i], u=el.getAttribute('data-av');
+        el.removeAttribute('data-av');
+        var c=_avCache[u];
+        if(c==='fail'){ el.remove(); }
+        else if(c){ el.src=c; }
+        else{ _avQ.push([u, el]); }
+      }
+      _avPump();
+    });
+  }
+  function _avPump(){
+    while(_avBusy<2 && _avQ.length){
+      _avBusy++;
+      (function(job){
+        var u=job[0], el=job[1];
+        var ctl=(typeof AbortController!=='undefined')?new AbortController():null;
+        var tmo=ctl?setTimeout(function(){ try{ctl.abort();}catch(e){} },5000):0;
+        fetch(u,{signal:ctl?ctl.signal:undefined}).then(function(r){
+          if(!r.ok) throw new Error('http');
+          return r.blob();
+        }).then(function(b){
+          var obj=URL.createObjectURL(b);
+          _avCache[u]=obj;
+          if(el.isConnected) el.src=obj; else el.remove();
+        }).catch(function(){
+          _avCache[u]='fail';
+          el.remove();
+        }).finally(function(){
+          if(tmo) clearTimeout(tmo);
+          _avBusy--; _avPump();
+        });
+      })(_avQ.shift());
+    }
+  }
+  function _avProxyUrl(it){
+    var pl=String(it.platform||'').toLowerCase();
+    if(!AVA_PROXY[pl]) return '';
+    var acct=String(it.account_id||''), ck=String(it.chat_key||'');
+    if(!acct || !ck) return '';
+    var grp=(pl==='whatsapp' && String(it.chat_type||'')==='group')?'&chat_type=group':'';
+    return '/api/platforms/'+encodeURIComponent(pl)+'/'+encodeURIComponent(acct)
+      +'/avatar?chat_key='+encodeURIComponent(ck)+grp;
+  }
+  function avaHtml(it){
+    var cid=String(it.conversation_id||'');
+    var h=0; for(var i=0;i<cid.length;i++){ h=(h*31+cid.charCodeAt(i))>>>0; }
+    var bg=AVA_COLORS[h%AVA_COLORS.length];
+    var nm=String(it.name||'');
+    var letter=(nm && nm!==cid)?nm.trim().charAt(0).toUpperCase():cidTail(cid).slice(-2);
+    var url=String(it.avatar_url||'');
+    var pl=String(it.platform||'').toLowerCase();
+    var usable=url && !(pl==='messenger' && /(fbcdn|scontent)/i.test(url));
+    var img='';
+    if(usable){
+      img='<img loading="lazy" alt="" src="'+esc(url)+'" onerror="this.remove()">';
+    }else{
+      var proxy=_avProxyUrl(it);
+      if(proxy){
+        img='<img alt="" data-av="'+esc(proxy)+'">';
+        _avScan();   /* rAF 在调用方插入 DOM 之后触发，零调用方接线 */
+      }
+    }
+    return '<span class="ck-ava" style="background:'+bg+'">'+esc(letter)+img+'</span>';
+  }
+  /* 平台识别：品牌色圆点 + 正式名（telegram → ● Telegram）；未知平台原样透传 */
+  var PLAT={telegram:['#2AABEE','Telegram'],'tg-desktop':['#2AABEE','Telegram'],
+            whatsapp:['#25D366','WhatsApp'],messenger:['#A334FA','Messenger'],
+            line:['#06C755','LINE'],instagram:['#E1306C','Instagram'],zalo:['#0068FF','Zalo']};
+  /* 媒体类型归一（P5 引用补齐占位）：后端透传原始 media_type，展示层收敛到五档 */
+  var MEDIA_KIND={image:'image',photo:'image',picture:'image',sticker:'image',
+                  voice:'voice',audio:'voice',ptt:'voice',
+                  video:'video',animation:'video',
+                  file:'file',document:'file'};
+  function platChip(p){
+    p=String(p||'').toLowerCase();
+    if(!p) return '';
+    var m=PLAT[p]||['var(--tk-text-muted)', p];
+    return '<span class="ck-plat"><i style="background:'+m[0]+'"></i>'+esc(m[1])+'</span>';
+  }
+  /* 状态 */
+  var _data=null;        /* 最近一次 overview 响应 */
+  var _caps={};          /* 后端能力位（旧后端无 resolve → 不渲染「已处理」） */
+  var _filter='';        /* ''=全部，否则按 kind 过滤 */
+  var _staleOpen=false;
+  var _activeTk={};      /* 接管中的会话集合（卡片动作是「接管」还是「交还」） */
+  var _roiN=-1, _roiTs=0;/* 空态 ROI：-1=未取/不可用；小时级缓存（数字变化极慢） */
+  /* 学习队列状态（P3 打通）：5min 缓存；旧后端/未装 KB 一律 available=false 全静默 */
+  var _learn={ts:0, available:false, pending:0};
+
+  function loadLearner(cb){
+    if(Date.now()-_learn.ts<300000){ if(cb)cb(); return; }
+    _learn.ts=Date.now();
+    apiFetch('/api/learner/stats').then(function(r){
+      if(!r.ok) throw new Error('http');
+      return r.json();
+    }).then(function(d){
+      _learn.available=!!(d && d.available!==false && !d.error);
+      _learn.pending=(d && (d.pending|0))||0;
+      /* 装载竞态兜底：init 预取与空态渲染并发时，缓存命中回调拿到的还是
+         默认空值——真值到位后无条件补画一次（元素不在场时是 no-op） */
+      paintLearnerLink();
+      if(cb)cb();
+    }).catch(function(){ _learn.available=false; _learn.pending=0; });
+  }
+  function paintLearnerLink(){
+    var el=document.getElementById('ck-empty-learn');
+    if(el && _learn.available && _learn.pending>0){
+      el.innerHTML='📚 '+esc(fmt(L.emptyLearner,{n:_learn.pending}))
+        +' <a href="/learner" style="color:var(--tk-brand);">'+esc(L.emptyLearnerGo)+'</a>';
+    }
+  }
+
+  function loadRoi(){
+    /* 只在空态可见时才拉；端点缺席（旧后端 404）/无权限/零流量一律静默不占位 */
+    if(Date.now()-_roiTs<3600000){ paintRoi(); return; }
+    _roiTs=Date.now();
+    apiFetch('/api/workspace/ai-weekly-brief').then(function(r){
+      if(!r.ok) throw new Error('http');
+      return r.json();
+    }).then(function(d){
+      _roiN=(d&&d.available)?(d.sent|0):-1;
+      paintRoi();
+    }).catch(function(){ _roiN=-1; });
+  }
+  function paintRoi(){
+    var el=document.getElementById('ck-empty-roi');
+    if(el&&_roiN>0) el.innerHTML='🤖 '+esc(fmt(L.emptyRoi,{n:_roiN}));
+  }
+
+  function kindChip(k){
+    var cls={takeover_overdue:'k1',needs_human:'k2',waiting:'k3',draft_pending:'k4'}[k]||'k4';
+    return '<span class="ck-kind '+cls+'">'+esc(L.kinds[k]||k)+'</span>';
+  }
+  function isStale(it){
+    /* takeover_overdue 永远算新鲜：接管 3 天没交还是最该炸的漏球，不是积压 */
+    return it.kind!=='takeover_overdue' && Number(it.age_sec||0)>STALE_SEC;
+  }
+  function card(it){
+    var p='p'+(it.priority||4);
+    var extra=(it.flags||[]).filter(function(f){return f!==it.kind;});
+    var extraHtml=extra.length?('<span class="ck-muted" style="font-size:10px;">'+esc(L.flagMore)+': '+extra.map(function(f){return esc(L.kinds[f]||f);}).join(' / ')+'</span>'):'';
+    var cid=String(it.conversation_id||'');
+    var isTk=!!_activeTk[cid];
+    var tkBtn=isTk
+      ? '<button class="ck-btn" onclick="CK.handback(\''+esc(cid)+'\')">'+esc(L.actBack)+'</button>'
+      : '<button class="ck-btn" onclick="CK.take(\''+esc(cid)+'\')">'+esc(L.actTake)+'</button>';
+    var resolveBtn=(_caps.resolve && (it.flags||[]).indexOf('needs_human')>=0)
+      ? '<button class="ck-btn" onclick="CK.resolve(\''+esc(cid)+'\')">✓ '+esc(L.actResolve)+'</button>':'';
+    var age=fmtAge(it.age_sec);
+    /* 原话引用（P3 身份卡）：客户末条 💬 / AI 草稿 🤖，接管卡的 detail 是接管人
+       ——原话另走 last_text，接管人并进 why 行 */
+    var quote='';
+    if(it.kind==='draft_pending'){
+      if(it.detail) quote='<div class="dt"><span class="pv">🤖 '+esc(L.draftPrefix)+'</span>'+esc(it.detail)+'</div>';
+    }else{
+      var q=(it.kind==='takeover_overdue')?String(it.last_text||''):String(it.detail||'');
+      if(q){ quote='<div class="dt"><span class="pv">💬 '+esc(L.said)+'</span>“'+esc(q)+'”</div>'; }
+      else if(it.quote_media){
+        /* 纯媒体末条（P5 引用补齐）：本地化占位，不带引号——不是原话 */
+        var mk=MEDIA_KIND[String(it.quote_media).toLowerCase()]||'other';
+        quote='<div class="dt"><span class="pv">💬 '+esc(L.said)+'</span>'+esc(L.media[mk]||L.media.other)+'</div>';
+      }
+    }
+    var why=fmt(L.why[it.kind]||'',{age:age});
+    if(it.kind==='takeover_overdue' && it.detail) why+=' · '+L.tkBy+it.detail;
+    return '<div class="ck-card '+p+'">'
+      +avaHtml(it)
+      +'<div class="body">'
+        +'<div class="row1">'
+          +'<span class="nm">'+esc(displayName(it.name, cid, it.username))+'</span>'
+          +platChip(it.platform)
+          +kindChip(it.kind)
+          +((it.unread|0)>0?('<span class="ck-unread">'+esc(L.unread)+' '+(it.unread|0)+'</span>'):'')
+          +extraHtml+'</div>'
+        +quote
+        +'<div class="why">'+esc(why)+'</div>'
+      +'</div>'
+      +'<div class="side">'
+        +'<div class="wait"><span class="wn">'+esc(age)+'</span><span class="wl">'+esc(L.waitLabel)+'</span></div>'
+        +'<div class="ck-acts">'+resolveBtn+tkBtn
+          +'<a class="ck-btn primary" href="/workspace?conv='+encodeURIComponent(cid)+'">'+esc(L.actOpen)+'</a>'
+        +'</div>'
+      +'</div></div>';
+  }
+  function renderChips(fresh){
+    var el=document.getElementById('ck-fchips');
+    var counts={};
+    fresh.forEach(function(it){ counts[it.kind]=(counts[it.kind]||0)+1; });
+    /* 当前过滤的类别消失了 → 自动回「全部」（防幽灵筛选） */
+    if(_filter && !counts[_filter]) _filter='';
+    if(!fresh.length){ el.style.display='none'; return; }
+    var html='<span class="ck-fchip'+(_filter===''?' on':'')+'" onclick="CK.setFilter(\'\')">'+esc(L.filterAll)+' '+fresh.length+'</span>';
+    KIND_ORDER.forEach(function(k){
+      if(!counts[k]) return;
+      html+='<span class="ck-fchip'+(_filter===k?' on':'')+'" onclick="CK.setFilter(\''+k+'\')">'+esc(L.kinds[k])+' '+counts[k]+'</span>';
+    });
+    el.innerHTML=html; el.style.display='';
+  }
+  function render(){
+    var d=_data||{};
+    var items=d.items||[];
+    var fresh=items.filter(function(it){return !isStale(it);});
+    var stale=items.filter(isStale);
+    /* KPI（单口径：全部由本快照推导，不再拉 dashboard 的第二套账） */
+    document.getElementById('ck-k-queue').textContent=String(fresh.length);
+    var oldest=0; fresh.forEach(function(it){ oldest=Math.max(oldest, Number(it.age_sec||0)); });
+    document.getElementById('ck-k-oldest').textContent=fresh.length?fmtAge(oldest):'–';
+    document.getElementById('ck-k-stale').textContent=String(stale.length);
+    document.getElementById('ck-q-n').textContent=fresh.length?('('+fresh.length+')'):'';
+    renderChips(fresh);
+    var el=document.getElementById('ck-q-list');
+    var shown=_filter?fresh.filter(function(it){return it.kind===_filter;}):fresh;
+    if(!fresh.length){
+      el.innerHTML='<div class="ck-empty"><div class="big">'+esc(L.qEmpty)+'</div><div>'+esc(L.qEmptySub)+'</div>'
+        +'<div id="ck-empty-roi" style="margin-top:10px;font-size:12px;color:var(--tk-ok-ink);"></div>'
+        +'<div id="ck-empty-learn" style="margin-top:6px;font-size:12px;"></div></div>';
+      loadRoi();
+      loadLearner(paintLearnerLink); paintLearnerLink();
+    }else if(!shown.length){
+      el.innerHTML='<div class="ck-empty">'+esc(L.qFilterEmpty)+'</div>';
+    }else{
+      el.innerHTML=shown.map(card).join('');
+    }
+    /* 历史积压折叠区（>3 天旧信号：可见但不占主屏） */
+    var sh=document.getElementById('ck-stale-h'), ss=document.getElementById('ck-stale-sub'), sl=document.getElementById('ck-stale-list');
+    if(stale.length){
+      sh.style.display=''; sh.classList.toggle('open', _staleOpen);
+      document.getElementById('ck-stale-t').textContent=fmt(L.staleTitle,{n:stale.length});
+      ss.style.display=_staleOpen?'':'none';
+      sl.style.display=_staleOpen?'':'none';
+      if(_staleOpen) sl.innerHTML=stale.map(card).join('');
+    }else{
+      sh.style.display='none'; ss.style.display='none'; sl.style.display='none'; _staleOpen=false;
+    }
+    /* 信号源健康（空队列时也要报——「队列是空的」和「源挂了看不见」必须可区分） */
+    var bad=Object.keys(d.sources||{}).filter(function(k){return d.sources[k]!=='ok';});
+    var w=document.getElementById('ck-srcwarn');
+    if(bad.length){ w.textContent=fmt(L.srcErr,{list:bad.join(', ')}); w.style.display=''; }
+    else w.style.display='none';
+  }
+  function renderTakeover(tk){
+    tk=tk||{}; var act=tk.active||[]; var st=tk.stats||{};
+    _activeTk={};
+    act.forEach(function(e){ _activeTk[String(e.conversation_id||'')]=true; });
+    document.getElementById('ck-k-takeover').textContent=String(act.length);
+    var el=document.getElementById('ck-rail-tk');
+    /* 零流量不摆「累计 0 次 · 平均 0 分钟」——空数字比没有更显眼地说「没人用」 */
+    var stats=(st.started|0)>0?('<div class="ck-muted" style="margin-top:6px;">'+esc(fmt(L.tkStats,{n:st.started||0,min:Math.round((st.avg_duration_sec||0)/60)}))+'</div>'):'';
+    if(!act.length){ el.innerHTML=esc(L.tkNone)+stats; return; }
+    el.innerHTML=act.map(function(e){
+      var cid=String(e.conversation_id||'');
+      var plat=cid.split(':',1)[0]||'';
+      return '<div class="ck-tk-row"><span class="ck-dot warn"></span>'
+        +platChip(plat)
+        +'<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+esc(cid)+'">'+esc(displayName('', cid))+'</span>'
+        +'<span class="who">'+esc(e.by||'')+' · '+fmtAge(e.elapsed_sec)+'</span>'
+        +'<a class="ck-btn" style="padding:1px 7px;font-size:11px;" href="/workspace?conv='+encodeURIComponent(cid)+'">→</a>'
+      +'</div>';
+    }).join('')+stats;
+  }
+  function renderAccounts(d){
+    var el=document.getElementById('ck-rail-acct');
+    var sum=document.getElementById('ck-acct-sum');
+    var rows=(d&&(d.accounts||d.fleet||[]))||[];
+    if(!rows.length){ el.innerHTML=esc(L.acctEmpty); sum.textContent=''; return; }
+    var nOk=0, nBad=0, main=[], unknown=[];
+    rows.slice(0,40).forEach(function(a){
+      var st=String(a.status||a.lifecycle||'').toLowerCase();
+      var cls=(st==='active'||st==='online'||st==='ok')?'ok':((st==='banned'||st==='restricted'||st==='offline')?'bad':'warn');
+      if(cls==='ok') nOk++; else if(cls==='bad') nBad++;
+      var row='<div class="ck-acct-row"><span class="ck-dot '+cls+'"></span>'
+        +platChip(a.platform)
+        +'<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+esc(a.account_id||'')+'">'+esc(a.label||a.account_id||'')+'</span>'
+        +'<span class="ck-muted" title="'+esc(st)+'">'+esc(L.st[cls]||'')+'</span></div>';
+      /* 「状态未知」折叠成一行（满屏灰点没有信息量还制造焦虑）；在线/异常永远直列 */
+      if(cls==='warn') unknown.push(row); else main.push(row);
+    });
+    var html=main.slice(0,20).join('');
+    if(unknown.length){
+      html+='<div class="ck-acct-more" onclick="CK.toggleAcctUnknown()">'+esc(fmt(L.acctUnknown,{n:unknown.length}))+' <span id="ck-acct-un-ar">▸</span></div>'
+        +'<div id="ck-acct-un" style="display:none;">'+unknown.join('')+'</div>';
+    }
+    el.innerHTML=html;
+    sum.textContent=fmt(L.acctSum,{ok:nOk,bad:nBad});
+  }
+  var CK={
+    load: function(force){
+      apiFetch('/api/cockpit/overview'+(force?'?force=1':'')).then(function(r){return r.json();}).then(function(d){
+        if(!d||!d.ok) throw new Error('bad');
+        _data=d; _caps=(d.caps&&typeof d.caps==='object')?d.caps:{};
+        renderTakeover(d.takeover);   /* 先建接管集，卡片动作才判得对 */
+        render();
+        var age=document.getElementById('ck-age');
+        if(age&&d.generated_at&&typeof window.wsFmtTime==='function'){ age.textContent=window.wsFmtTime(d.generated_at); }
+      }).catch(function(){
+        document.getElementById('ck-q-list').innerHTML='<div class="ck-empty">'+esc(L.qFail)+'</div>';
+      });
+      apiFetch('/api/accounts/fleet-health').then(function(r){return r.json();}).then(renderAccounts)
+        .catch(function(){ document.getElementById('ck-rail-acct').innerHTML=esc(L.acctFail); });
+    },
+    setFilter: function(k){
+      _filter=String(k||'');
+      if(_data) render();
+      beacon('ck_filter_'+(_filter||'all'));
+    },
+    toggleStale: function(){
+      _staleOpen=!_staleOpen;
+      if(_data) render();
+      if(_staleOpen){
+        var sh=document.getElementById('ck-stale-h');
+        if(sh&&sh.scrollIntoView) sh.scrollIntoView({block:'nearest'});
+      }
+      beacon('ck_stale_'+(_staleOpen?'open':'close'));
+    },
+    dismissHint: function(){
+      try{ localStorage.setItem(HINT_KEY,'1'); }catch(_){}
+      var h=document.getElementById('ck-hint'); if(h) h.style.display='none';
+      beacon('ck_hint_dismiss');
+    },
+    take: function(cid){
+      cfm(L.confirmTake, L.actTake).then(function(ok){
+        if(!ok) return;
+        apiFetch('/api/takeover/start',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({conversation_id:cid})}).then(function(r){
+            if(!r.ok) throw new Error('http '+r.status);
+            beacon('ck_take'); notify(L.took, true); CK.load(true);
+          }).catch(function(){ notify(L.opFail, false); });
+      });
+    },
+    handback: function(cid){
+      cfm(L.confirmBack, L.actBack).then(function(ok){
+        if(!ok) return;
+        apiFetch('/api/takeover/end',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({conversation_id:cid})}).then(function(r){
+            if(!r.ok) throw new Error('http '+r.status);
+            return r.json();
+          }).then(function(d){
+            beacon('ck_handback');
+            notify(fmt(L.returned,{min:Math.round(((d&&d.duration_sec)||0)/60)}), true);
+            CK.load(true);
+          }).catch(function(){ notify(L.opFail, false); });
+      });
+    },
+    resolve: function(cid){
+      /* 处理前抓客户原话（load(true) 会重渲染，事后取不到）——喂料用 */
+      var q='';
+      try{
+        ((_data&&_data.items)||[]).some(function(it){
+          if(String(it.conversation_id||'')===String(cid) && it.kind!=='draft_pending'){
+            q=String(it.detail||it.last_text||'').trim(); return true;
+          }
+          return false;
+        });
+      }catch(_){}
+      cfm(L.resolveConfirm, L.actResolve).then(function(ok){
+        if(!ok) return;
+        apiFetch('/api/cockpit/resolve',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({conversation_id:cid})}).then(function(r){
+            if(!r.ok) throw new Error('http '+r.status);
+            beacon('ck_resolve'); notify(L.resolved, true); CK.load(true);
+            CK.offerFeed(q, cid);
+          }).catch(function(){ notify(L.opFail, false); });
+      });
+    },
+    /* P3 打通学习队列：处理完顺手把客户问题喂进去（可跳过；学习后台不可用全静默）。
+       契约＝POST /api/learner/feed {query}（2..200 字），审核仍在 /learner 页。
+       融合 P2：可选第二参 srcCid → source_ref='conv:会话id' 溯源（旧后端忽略该字段）。 */
+    offerFeed: function(q, srcCid){
+      q=String(q||'').trim();
+      if(!_learn.available || q.length<4 || q.length>200) return;
+      cfm(fmt(L.feedConfirm,{q:(q.length>40?(q.slice(0,40)+'…'):q)}), L.feedOkBtn).then(function(ok){
+        if(!ok){ beacon('ck_feed_skip'); return; }
+        var payload={query:q};
+        if(srcCid) payload.source_ref='conv:'+String(srcCid).slice(0,110);
+        apiFetch('/api/learner/feed',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify(payload)}).then(function(r){
+            if(!r.ok) throw new Error('http '+r.status);
+            beacon('ck_feed_ok'); notify(L.feedDone, true);
+          }).catch(function(){ notify(L.opFail, false); });
+      });
+    },
+    toggleAcctUnknown: function(){
+      var el=document.getElementById('ck-acct-un'), ar=document.getElementById('ck-acct-un-ar');
+      if(!el) return;
+      var open=el.style.display==='none';
+      el.style.display=open?'':'none';
+      if(ar) ar.textContent=open?'▾':'▸';
+      beacon('ck_acct_unknown_'+(open?'open':'close'));
+    }
+  };
+  window.CK=CK;
+  try{ if(!localStorage.getItem(HINT_KEY)){ document.getElementById('ck-hint').style.display=''; } }catch(_){}
+  beacon('ck_open');
+  CK.load(false);
+  loadLearner();   /* 预取学习队列可用性：首次点「已处理」时喂料判定已就绪 */
+  setInterval(function(){ if(!document.hidden) CK.load(false); }, 30000);
+})();
+</script>
+{% endblock %}

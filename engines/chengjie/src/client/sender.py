@@ -15,6 +15,8 @@ from src.client import daily_stats
 # A1 text-first 占位句内置池（config reply.ai_fallback_replies 缺席时的兜底备货——
 # 2026-07-26 实锤：实例配置池为空 → 硬编码单句「稍等我一下哈～」4 分钟连发 3 次，
 # 触发出站复读告警，真人不会这样说话）。
+# ⚠ 2026-08-16 起占位句默认关闭（text_first.filler 默认 False，老板裁定「宁可
+# 不发消息也不发垫场句」）；本池仅在运营显式开 filler: true 且配置池为空时使用。
 _TF_FILLER_DEFAULTS = (
     "稍等我一下哈～",
     "等我一下下哈～",
@@ -413,6 +415,20 @@ class TelegramSenderMixin:
         except Exception:
             pass
 
+    async def _send_upload_photo_action(self, chat_id) -> None:
+        """挂「正在发送照片」状态（best-effort，约 5s 自动过期）。
+
+        媒体版打字气泡：相册/自拍出站前的拟人挑图等待期间客户看得到动静
+        （skill_manager ``_media_presend_pacing`` 经 ``_send_media_action`` 消费）。
+        """
+        if chat_id is None:
+            return
+        try:
+            from pyrogram.enums import ChatAction
+            await self.client.send_chat_action(chat_id, ChatAction.UPLOAD_PHOTO)
+        except Exception:
+            pass
+
     async def run_prereply_humanize(
         self, chat_id, *, text: str = "", elapsed_sec: float = 0.0,
     ) -> None:
@@ -465,12 +481,30 @@ class TelegramSenderMixin:
             _pr = resolve_pacing(
                 _block, text=text, elapsed_sec=elapsed_sec,
                 persona_id=_pid, platform="telegram")
-            try:
-                from src.integrations.humanize_metrics import record_pacing
-                record_pacing(f"native_tg/{_pid or '-'}", _pr)
-            except Exception:
-                pass
             delay = _pr.delay
+            # P2b 连发间隔地板（2026-08-12，A 线实测 4.1s 双发后补齐）：与 B 线
+            # worker / 协议链同一对纯函数。A 线的特殊性＝interject 撕稿重来会造出
+            # **多个并发在途回复**（各睡各的延迟先后落地）——预先算地板时对方还没
+            # 发出、账本是空的，所以除了睡前预检，睡醒后还要**再对账一次**（见下）。
+            _gap = 0.0
+            _floored = False
+            _ck = str(chat_id)
+            try:
+                from src.inbox.humanize import (
+                    apply_min_gap_floor,
+                    resolve_min_gap_sec,
+                )
+                _gap = resolve_min_gap_sec(
+                    _block, platform="telegram", persona_id=_pid)
+            except Exception:
+                _gap = 0.0
+            _ledger = getattr(self, "_conv_last_sent", None)
+            _prev_pre = _ledger.get(_ck) if _ledger else None
+            if _gap > 0 and _prev_pre is not None:
+                delay, _floored = apply_min_gap_floor(
+                    delay,
+                    since_last_send_sec=max(0.0, time.time() - _prev_pre),
+                    min_gap_sec=_gap)
 
             async def _mr():
                 await self._mark_peer_read(chat_id)
@@ -483,6 +517,36 @@ class TelegramSenderMixin:
                 mark_read=_mr, typing=_tp, sleep=asyncio.sleep,
                 typing_lead_sec=resolve_typing_lead(
                     _block, text=text, persona_id=_pid, platform="telegram"))
+            # 睡醒后对账（并发窗兜底）：**只在账本于本次 sleep 期间被刷新**（同会话
+            # 另一条在途回复真的落地了）时补垫——账本没变就不重掷抖动（否则同一次
+            # 间隔会因两次随机数不同被小额双垫）。这是 02:40 实测 gap=4.1s 双发的
+            # 直接解：两条回复都在 humanize sleep 里，谁先醒谁发，后醒的必须看见
+            # 先发的那条。垫付期边垫边续挂「正在输入」（气泡 ~5s 过期，4s 一续），
+            # 封顶一个完整间隔。
+            if _gap > 0:
+                _ledger = getattr(self, "_conv_last_sent", None)
+                _prev = _ledger.get(_ck) if _ledger else None
+                if _prev is not None and _prev != _prev_pre:
+                    _pad, _f2 = apply_min_gap_floor(
+                        0.0,
+                        since_last_send_sec=max(0.0, time.time() - _prev),
+                        min_gap_sec=_gap)
+                    if _f2 and _pad > 0:
+                        _floored = True
+                        _pad = min(_pad, _gap)
+                        while _pad > 0:
+                            await self._send_typing_action(chat_id)
+                            _step = min(4.0, _pad)
+                            await asyncio.sleep(_step)
+                            _pad -= _step
+            if _floored:
+                from dataclasses import replace as _dc_replace
+                _pr = _dc_replace(_pr, floored=True)
+            try:
+                from src.integrations.humanize_metrics import record_pacing
+                record_pacing(f"native_tg/{_pid or '-'}", _pr)
+            except Exception:
+                pass
         except Exception:
             self.logger.debug("[prereply_humanize] 失败（忽略）", exc_info=True)
 
@@ -553,6 +617,20 @@ class TelegramSenderMixin:
         （与 B 线 ``send_media(inbox_text=…)`` 同口径）；而 contacts 时间线是纯文本，
         preview 保留标记才有表意。
         """
+        # P2b 连发地板账本（2026-08-12）：每会话最近一次**成功发出**时刻。只在
+        # 真发成功后落点（interject 撕稿/发送失败不占位），供 run_prereply_humanize
+        # 的睡前预检 + 睡醒对账两处消费。软上限防长跑撑爆。
+        try:
+            _led = getattr(self, "_conv_last_sent", None)
+            if _led is None:
+                _led = {}
+                self._conv_last_sent = _led
+            _led[str(chat_id)] = time.time()
+            if len(_led) > 4096:
+                for _k in sorted(_led, key=_led.get)[:2048]:
+                    _led.pop(_k, None)
+        except Exception:
+            pass
         self._mirror_out_row(
             chat_id, preview if mirror_text is None else mirror_text,
             msg_id=msg_id, media_type=media_type, media_ref=media_ref)
@@ -709,6 +787,34 @@ class TelegramSenderMixin:
                     persona_name=self._persona_display_name())
             except Exception:
                 pass
+            # WP-4 rider ① 系统级披露（compliance.disclosure.notice，基线关）：
+            # 每会话首条 AI 出站前置披露语，持久防重键=conv_id（与 B 线 autosend /
+            # 协议线同键空间——任一条线先披露过，其余线不再重复）。刻意放在
+            # 质量管道之后（披露语是系统文案，不过改写/复读检测），且只挂文本
+            # 发送口（克隆声绝不念披露语；语音先行的会话由首条文本回复补披露，
+            # 标记只在真应用时才烧）。分块发送天然只中首块（首块烧标记后
+            # 同回复后续块查标记即跳过）。任何异常＝原样发送，绝不阻断回复。
+            try:
+                from src.compliance.disclosure import apply_disclosure
+                from src.compliance.runtime import runtime_config
+                from src.inbox.normalizer import conv_id as _dc_conv_id
+                _dc_cid = _dc_conv_id(
+                    "telegram",
+                    str(getattr(self, "account_id", "default") or "default"),
+                    str(original_message.chat.id))
+                _dc_lh = ""
+                try:
+                    from src.inbox.outbound_translate import peer_language_hint
+                    from src.integrations.protocol_bridge import get_inbox_store
+                    _dc_store = get_inbox_store()
+                    if _dc_store is not None:
+                        _dc_lh = peer_language_hint(_dc_store, _dc_cid) or ""
+                except Exception:
+                    _dc_lh = ""
+                _out_text, _ = apply_disclosure(
+                    runtime_config(), _dc_cid, _out_text, lang_hint=_dc_lh)
+            except Exception:
+                self.logger.debug("[披露] 注入异常（原样发送）", exc_info=True)
             _rt = self._reply_to_message_id_for_send(original_message)
             send_kw: Dict[str, Any] = dict(
                 chat_id=original_message.chat.id,
@@ -1629,7 +1735,12 @@ class TelegramSenderMixin:
                 return await _voice_flow()   # 旧行为：直等全流程
 
             async def _send_filler():
-                if not bool(_tf.get("filler", True)):
+                # 2026-08-16 起默认关（老板裁定：宁可不发消息，也不发「嗯嗯我在，
+                # 稍等哈～」类垫场句——8/16 22:23 生产实录被点名为兜底复读）。
+                # 超预算改为静默等语音；语音最终失败仍补发完整真回复文字
+                # （_send_fallback_text，那是真内容不受此开关影响）。
+                # 显式配 text_first.filler: true 可恢复旧占位行为。
+                if not bool(_tf.get("filler", False)):
                     return
                 # 占位句复用 reply.ai_fallback_replies（现成的"在场感"话术池，
                 # 措辞不硬承诺语音——语音失败改发文字也不算食言）；配置池空
@@ -1661,60 +1772,60 @@ class TelegramSenderMixin:
                 await self._send_reply(original_message, _txt)
 
             async def _send_fallback_text():
-                # 诚实回落（2026-08-02）：text-first 兜底=语音已确定失败，但调用方
-                # 早拿到 True（编排接管），同步路径的改写够不到这里 → 兜底文字
-                # 自己剥语音承诺/补台阶，防「语音这就来～」原样打字发出。
-                _fb_text = reply_text
+                # 无兜底纪律（2026-08-17 老板拍板，docs/实施33 v2）：语音失败**不再**
+                # 自动改发文字——宁可不回消息，也不发替代品（旧「诚实回落改写+补发
+                # 完整文字」路径整体拆除）。处置＝回复原文转工作台待发队列（内容不丢，
+                # 修好后坐席一键放行）+ 主机弹窗「AI 不可用」+ ERROR 日志上报。
+                _chat_id = str(getattr(
+                    getattr(original_message, "chat", None), "id", "") or "")
+                _acct = str(getattr(self, "account_id", "") or "default")
+                _cid = ""
+                _queued = False
                 try:
-                    from src.ai.voice_honest_fallback import (
-                        apply_voice_failure_fallback,
-                        honest_fallback_enabled,
-                        resolve_fallback_lang,
-                    )
-                    if honest_fallback_enabled(raw_cfg):
-                        _peer_txt = str(
-                            getattr(original_message, "text", None)
-                            or getattr(original_message, "caption", None) or "")
-                        _new_txt, _chg = apply_voice_failure_fallback(
-                            reply_text, _peer_txt,
-                            lang=resolve_fallback_lang(reply_text))
-                        if _chg and _new_txt.strip():
-                            _fb_text = _new_txt
-                            self.logger.info(
-                                "[voice_reply] 诚实回落改写（text-first 兜底）"
-                                "reason=%s",
-                                (fail_state or {}).get("reason")
-                                or "synth_failed")
-                            # 语音欠账登记（voice_iou，默认关）：与同步路径同
-                            # 判据——改写确实发生且客户点名要过语音才记。
-                            try:
-                                from src.client.voice_iou import (
-                                    parse_iou_cfg as _iou_cfg_fn2,
-                                    record_iou as _iou_rec,
-                                )
-                                from src.ai.outbound_promise_guard import (
-                                    wants_media as _iou_wm,
-                                )
-                                _iou_chat = str(getattr(
-                                    getattr(original_message, "chat", None),
-                                    "id", "") or "")
-                                if (_iou_chat
-                                        and _iou_wm(_peer_txt) == "voice"
-                                        and _iou_cfg_fn2(raw_cfg)["enabled"]):
-                                    _iou_rec(
-                                        _iou_chat,
-                                        str((voice_ctx or {}).get(
-                                            "persona_id") or ""))
-                                    self.logger.info(
-                                        "[voice_iou] 欠账登记 chat=%s",
-                                        _iou_chat)
-                            except Exception:
-                                self.logger.debug(
-                                    "[voice_iou] 欠账登记失败（忽略）",
-                                    exc_info=True)
+                    from src.inbox.normalizer import conv_id as _conv_id
+                    _cid = _conv_id("telegram", _acct, _chat_id)
                 except Exception:
-                    _fb_text = reply_text
-                await self._send_reply(original_message, _fb_text)
+                    _cid = f"telegram:{_acct}:{_chat_id}"
+                try:
+                    from src.integrations.protocol_bridge import get_inbox_store
+                    _ibx = get_inbox_store()
+                    if _ibx is not None and str(reply_text or "").strip():
+                        import time as _t
+                        import uuid as _u
+                        _ibx.upsert_draft({
+                            "draft_id": f"voiceblock:{_u.uuid4().hex[:12]}",
+                            "conversation_id": _cid,
+                            "platform": "telegram",
+                            "account_id": _acct,
+                            "chat_key": _chat_id,
+                            "source_kind": "voice_blocked",
+                            "source_id": f"{_cid}:{int(_t.time())}",
+                            "peer_text": str(
+                                getattr(original_message, "text", None)
+                                or getattr(original_message, "caption", None)
+                                or "")[:500],
+                            "draft_text": str(reply_text or ""),
+                            "risk_level": "low",
+                            "autopilot_level": "L1",
+                            "status": "pending",
+                            "created_at": _t.time(),
+                        })
+                        _queued = True
+                except Exception:
+                    self.logger.warning(
+                        "[voice_reply] 语音失败回复转待发队列失败", exc_info=True)
+                try:
+                    from src.ops.delivery_block import report_block
+                    report_block(
+                        "voice",
+                        reason=str((fail_state or {}).get("reason")
+                                   or "synth_failed"),
+                        platform="telegram",
+                        conversation_id=_cid,
+                        queued_draft=_queued)
+                except Exception:
+                    self.logger.debug(
+                        "[voice_reply] delivery_block 上报失败", exc_info=True)
 
             import asyncio as _aio
             _vt = _aio.create_task(_voice_flow())
@@ -1780,12 +1891,14 @@ class TelegramSenderMixin:
             except Exception:
                 ok = False
             if not ok:
-                logger.info("[voice_reply] text-first：语音最终失败 → 补发完整文字")
+                logger.info(
+                    "[voice_reply] text-first：语音最终失败 → 交失败处置回调"
+                    "（无兜底纪律：拦截+待发+弹窗，不自动改发文字）")
                 try:
                     await send_fallback_text()
                 except Exception:
                     logger.warning(
-                        "[voice_reply] text-first 文字兜底发送失败", exc_info=True)
+                        "[voice_reply] text-first 失败处置回调异常", exc_info=True)
 
         _t = _aio.create_task(_watch())
         TelegramSenderMixin._tf_bg_tasks.add(_t)

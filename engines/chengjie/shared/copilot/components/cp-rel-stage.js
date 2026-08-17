@@ -50,7 +50,14 @@
                 border-radius:99px; font-size:var(--cp-fs-tiny,11px);
                 background:var(--cp-accent-weak,rgba(79,70,229,.1)); color:var(--cp-accent,#4f46e5); }
       .foot { display:flex; justify-content:flex-end; margin-top:var(--cp-gap-sm,6px); }
-      button.warn { color:var(--cp-warn,#d97706); }`;
+      button.warn { color:var(--cp-warn,#d97706); }
+      /* 旅程（漏斗）子分区：陪聊进展（关系阶段）之外的「生意走到哪」维度——
+         与网页「关系进展」卡的旅程子分区对齐；响应无 journey 字段（contacts 未启用/
+         老后端）整段不渲染 */
+      .jsec { margin-top:8px; padding-top:8px; border-top:1px dashed var(--cp-border,#e2e8f0);
+              display:flex; align-items:center; gap:8px; }
+      .jlbl { font-size:var(--cp-fs-tiny,11px); font-weight:600; color:var(--cp-text-dim,#64748b); }
+      .jval { font-size:var(--cp-fs-sm,12px); font-weight:600; color:var(--cp-accent,#4f46e5); }`;
     }
 
     async fetchData(ctx) {
@@ -126,6 +133,13 @@
       const foot = (d.confirmed_stage && d.confirmed_stage !== "initial")
         ? `<div class="foot"><button class="warn" data-act="downgrade">${esc(this.t("cp.rel.downgrade"))}</button></div>` : "";
 
+      // P1-5：旅程（漏斗）子分区——payload 带 journey 才渲染（老后端/contacts 关=缺省无痕）
+      const jv = d.journey && (d.journey.funnel_stage_label || d.journey.funnel_stage);
+      const journey = jv
+        ? `<div class="jsec"><span class="jlbl">${esc(this.t("cp.rel.journey"))}</span>` +
+          `<span class="jval">${esc(jv)}</span></div>`
+        : "";
+
       return (
         banner +
         `<div class="hdr"><span class="cur">${esc(d.display_stage_label || d.stage_label || "—")}</span>` +
@@ -136,6 +150,7 @@
         `<span>${esc(intim)}</span></div>` +
         contactHint +
         (!banner && d.advancement_ready ? `<div class="rbadge">${esc(this.t("cp.rel.adv_ready"))}</div>` : "") +
+        journey +
         foot
       );
     }

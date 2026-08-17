@@ -29,6 +29,13 @@ logger = logging.getLogger(__name__)
 
 # 每会话最近一次自动回复：key=platform:account_id:chat_key → (last_inbound_text, ts)
 _last_reply: Dict[str, tuple] = {}
+# 每会话最近一次**成功发出**时刻：key → send_ts（P2 连发间隔地板，2026-08-12）。
+# 与 _last_reply 语义不同：那是「最近处理的入站」占位（生成期即被覆写，发送失败也留痕），
+# 连发地板要对照的是「上一条真的发出去多久了」——只在 send 成功后落点。
+# 已知边界（刻意不解）：两条入站并发在途时本表还没有第一条的 send_ts，地板兜不住
+# 乱序/并发窗口——那是调度序问题，不是节奏问题；串行多轮快问快答才是目标场景。
+_last_sent: Dict[str, float] = {}
+_LAST_SENT_CAP = 4096
 AUTO_COOLDOWN_SEC = 5.0  # 同会话两次自动发的最小间隔，防刷屏/回环
 # 同文入站去重窗口：窗口内相同文本/media_ref 判 duplicate；超时后允许再回
 # （客户催一句「你在干嘛」是正常聊天，不能永久静默）。
@@ -307,6 +314,27 @@ async def run_autoreply(
         except Exception:
             logger.debug("[protocol-autoreply] inbox_mode_fn 检查失败（忽略）", exc_info=True)
 
+    # 双面板融合驾驶权锁（surface_fusion，2026-08-13 第二批）：该账号自动化持有者
+    # 是「原生面板」→ 本直发链让位（与上方 automation_mode 同族的归属判定）。
+    # P0 只闸了 AutosendWorker，但 ChatX 独立包默认档（l2_autosend.deliver=false）
+    # 下**本链才是自动发送主力**——不闸这里，owner=native 时照发＝锁不闭合。
+    # 开关/owner 判定都在 autosend_blocked 内（fusion 未开恒 False），fail-open：
+    # 锁故障绝不闸死自动回复。刻意不打「需人工」标签——原生面正在处理，非故障。
+    try:
+        from src.integrations.surface_fusion import (
+            autosend_blocked as _sf_blocked,
+            note_pilot_yield as _sf_note_yield,
+        )
+        if _sf_blocked(cfg, platform, account_id):
+            _sf_note_yield(platform, account_id, "a_line")  # 让位观测（P4）
+            logger.info(
+                "[protocol-autoreply] surface pilot=native yield %s:%s:%s",
+                platform, account_id, chat_key,
+            )
+            return _result("pilot_native", inbound=text)
+    except Exception:
+        logger.debug("[protocol-autoreply] 驾驶权判定失败（放行）", exc_info=True)
+
     # License 到期硬阻断（Sprint2）：enforce 开且授权失效(只读) → 决策期早退，不生成不发。
     # 默认 enforce=false → 恒放行，零破坏；fail-open。
     try:
@@ -461,6 +489,30 @@ async def run_autoreply(
                 elapsed_sec=(max(0.0, time.time() - ts) if now is None else 0.0),
                 persona_id=persona_id, platform=platform)
             d = _pr.delay
+            # P2 连发间隔地板（2026-08-12，与 B 线 worker 同一对纯函数）：距上一条
+            # **成功发出**不足 min_gap_sec 时补等待（±15% 抖动）。快问快答场景每条
+            # 回复的 adaptive 延迟大多被生成耗时抵扣光（残余 ~2s），5s AUTO_COOLDOWN
+            # 只丢弃不排队——没有本地板就是「机关枪式连发」。键随 deliver_delay 块
+            # 继承（跟随滑杆/own 显式配均可），未配=0=关。失败静默（节奏是增强）。
+            try:
+                from src.inbox.humanize import (
+                    apply_min_gap_floor,
+                    resolve_min_gap_sec,
+                )
+                _gap = resolve_min_gap_sec(
+                    _pace_block, platform=platform, persona_id=persona_id)
+                _prev_sent = _last_sent.get(key)
+                if _gap > 0 and _prev_sent is not None:
+                    _nowf = time.time() if now is None else ts
+                    d, _floored = apply_min_gap_floor(
+                        d, since_last_send_sec=max(0.0, _nowf - _prev_sent),
+                        min_gap_sec=_gap)
+                    if _floored:
+                        from dataclasses import replace as _dc_replace
+                        _pr = _dc_replace(_pr, delay=d, floored=True)
+            except Exception:
+                logger.debug(
+                    "[protocol-autoreply] 连发地板解析失败（忽略）", exc_info=True)
             try:
                 from src.integrations.humanize_metrics import record_pacing
                 record_pacing(
@@ -522,6 +574,11 @@ async def run_autoreply(
     # 发送成功后用「发送时刻」刷新冷却基准 + 记账号配额/闭合熔断
     send_ts = ts if now is not None else time.time()
     _last_reply[key] = (dedup_text, send_ts)
+    # P2 连发地板账本：只记成功发出（失败不占位，下条不背无谓等待）。软上限防长跑撑爆。
+    _last_sent[key] = send_ts
+    if len(_last_sent) > _LAST_SENT_CAP:
+        for _k in sorted(_last_sent, key=_last_sent.get)[:_LAST_SENT_CAP // 2]:
+            _last_sent.pop(_k, None)
     if limiter is not None:
         limiter.record_sent(account_key, send_ts)
         limiter.record_success(account_key)
@@ -640,6 +697,44 @@ def tag_needs_human(store: Any, payload: Dict[str, Any]) -> bool:
         return False
 
 
+def media_context_extra(
+    *,
+    media_type: str,
+    media_ref: str,
+    media_desc: str = "",
+    text: str = "",
+) -> Dict[str, Any]:
+    """入站媒体 → prompt 上下文标记（纯函数，2026-08-16 键盘实锤后收口）。
+
+    - 语音且转写成功（``text`` 已是真实内容而非 ``[语音]`` 占位）→ 只标
+      ``_peer_message_is_voice``（ai_client 走【语音消息】口语化提示块）。
+      **不**标 ``_peer_message_is_media``：媒体块对无 desc 的语音会注入
+      「内容暂无法识别请追问」（与转写文本自相矛盾）；若 user_context 里还驻留
+      陈旧 ``_media_desc``，更会把旧图片当"对方刚发来的媒体"喂给模型——
+      8/01 的键盘照片描述驻留 15 天，8/16 客户语音问新闻、AI 夸键盘。
+    - 其余（图片/视频/贴纸/转写失败的语音…）→ 媒体块标记照旧。
+    """
+    _mk = str(media_type or "").strip().lower() or "media"
+    if _mk == "voice":
+        _t = str(text or "").strip()
+        try:
+            from src.inbox.media_enrich import is_placeholder_only as _ipo
+            transcribed = bool(_t) and not _ipo(_t)
+        except Exception:
+            transcribed = bool(_t)
+        if transcribed:
+            return {"_peer_message_is_voice": True}
+    out: Dict[str, Any] = {
+        "_peer_message_is_media": True,
+        "_media_kind": _mk,
+        "_inbox_peer_kind": _mk,
+        "_media_ref": str(media_ref),
+    }
+    if media_desc:
+        out["_media_desc"] = media_desc
+    return out
+
+
 def build_reply_hook(app: Any) -> Callable[[Dict[str, Any]], Awaitable[None]]:
     """生产接线：从 app.state 取 skill_manager/config/orchestrator，返回异步 hook。"""
 
@@ -662,44 +757,71 @@ def build_reply_hook(app: Any) -> Callable[[Dict[str, Any]], Awaitable[None]]:
             sm = getattr(tc, "skill_manager", None) if tc is not None else None
         if sm is None or not hasattr(sm, "process_message"):
             return None
-        # 媒体识别补全（2026-07 补坑）：对方发来图片/语音/视频（含无 caption 的纯媒体，
-        # 此时 text 是 [图片]/[语音] 占位或空）→ 用共享识别层把它变成可喂 AI 的文本，
-        # 与 Telegram A 线、收件箱全自动草稿链同一口径。识别失败软降级回原 text，绝不阻断。
+        # 媒体识别补全：对方发来图片/语音/视频 → 共享识别层变成可喂 AI 的文本。
+        # 无兜底纪律（2026-08-17）：图片/语音识别失败＝不生成（宁可不回，不装懂）。
         media_desc = ""
         if media_ref:
             try:
                 from src.inbox.media_enrich import (
                     enrich_inbound_media_text, is_placeholder_only,
                 )
-                if not text or is_placeholder_only(text):
-                    _tc = getattr(app.state, "telegram_client", None)
-                    _vtr = getattr(_tc, "voice_transcriber", None) if _tc is not None else None
-                    _enriched, media_desc = await enrich_inbound_media_text(
-                        media_type=media_type, media_ref=media_ref,
-                        caption=("" if is_placeholder_only(text) else text),
-                        config=_cfg(), voice_transcriber=_vtr,
-                    )
-                    if _enriched and _enriched.strip():
-                        text = _enriched.strip()
-                        # 识别结果回写收件箱消息行（与全自动草稿链 update_message_text 同口径）：
-                        # 让坐席台/时间线/媒体卡看到"[图片内容] …/转写"而非裸 [图片] 占位。
-                        # best-effort + only_if_empty=True，绝不踩掉已有真实内容、失败不影响回复。
-                        if media_desc:
-                            try:
-                                _store = getattr(app.state, "inbox_store", None)
-                                if _store is not None:
-                                    from src.inbox.normalizer import conv_id
-                                    _store.update_message_text(
-                                        conv_id(platform, account_id, chat_key),
-                                        text=text, media_ref=media_ref,
-                                        only_if_empty=True,
-                                    )
-                            except Exception:
-                                logger.debug(
-                                    "[protocol-autoreply] 识别结果回写收件箱失败（忽略）",
-                                    exc_info=True)
+                _tc = getattr(app.state, "telegram_client", None)
+                _vtr = getattr(_tc, "voice_transcriber", None) if _tc is not None else None
+                _enriched, media_desc = await enrich_inbound_media_text(
+                    media_type=media_type, media_ref=media_ref,
+                    caption=("" if is_placeholder_only(text) else text),
+                    config=_cfg(), voice_transcriber=_vtr,
+                )
+                if _enriched and _enriched.strip():
+                    text = _enriched.strip()
+                    # 识别结果回写收件箱消息行（与全自动草稿链 update_message_text 同口径）：
+                    # 让坐席台/时间线/媒体卡看到"[图片内容] …/转写"而非裸 [图片] 占位。
+                    # best-effort + only_if_empty=True，绝不踩掉已有真实内容、失败不影响回复。
+                    if media_desc:
+                        try:
+                            _store = getattr(app.state, "inbox_store", None)
+                            if _store is not None:
+                                from src.inbox.normalizer import conv_id
+                                _store.update_message_text(
+                                    conv_id(platform, account_id, chat_key),
+                                    text=text, media_ref=media_ref,
+                                    only_if_empty=True,
+                                )
+                        except Exception:
+                            logger.debug(
+                                "[protocol-autoreply] 识别结果回写收件箱失败（忽略）",
+                                exc_info=True)
             except Exception:
-                logger.debug("[protocol-autoreply] 媒体识别补全失败（回落原文本）", exc_info=True)
+                logger.debug("[protocol-autoreply] 媒体识别补全失败", exc_info=True)
+        _mt_l = str(media_type or "").strip().lower()
+        if media_ref and _mt_l in ("image", "photo", "sticker") and not media_desc:
+            try:
+                from src.ops.delivery_block import report_block
+                from src.inbox.normalizer import conv_id as _vcid
+                report_block(
+                    "vision", reason="enrich_failed", platform=platform,
+                    conversation_id=_vcid(platform, account_id, chat_key))
+            except Exception:
+                logger.debug("[protocol-autoreply] vision hold 上报失败",
+                             exc_info=True)
+            logger.warning(
+                "[protocol-autoreply] 图片未看懂 → 跳过自动回复 %s:%s:%s",
+                platform, account_id, chat_key)
+            return None
+        if media_ref and _mt_l in ("voice", "audio") and not media_desc:
+            try:
+                from src.ops.delivery_block import report_block
+                from src.inbox.normalizer import conv_id as _acid
+                report_block(
+                    "asr", reason="enrich_failed", platform=platform,
+                    conversation_id=_acid(platform, account_id, chat_key))
+            except Exception:
+                logger.debug("[protocol-autoreply] asr hold 上报失败",
+                             exc_info=True)
+            logger.warning(
+                "[protocol-autoreply] 语音未转写 → 跳过自动回复 %s:%s:%s",
+                platform, account_id, chat_key)
+            return None
         # N 线 核心1：复用共享 companion_context 装配标准上下文（与 A 线同一套）。
         # 记忆/情绪由 skill_manager 内部按 platform+user_id+chat_id 注入；
         # 此处保证平台/会话标识 + 人设一致（协议线默认私聊）。
@@ -716,13 +838,24 @@ def build_reply_hook(app: Any) -> Callable[[Dict[str, Any]], Awaitable[None]]:
                   "account_id": account_id}
         # 让 ai_client 多模态 prompt 知道"这是媒体消息 + 识别摘要"（与 inbound_enrich 同字段口径）
         if media_ref:
-            _extra["_peer_message_is_media"] = True
-            _mk = str(media_type or "").strip().lower() or "media"
-            _extra["_media_kind"] = _mk
-            _extra["_inbox_peer_kind"] = _mk
-            if media_desc:
-                _extra["_media_desc"] = media_desc
-            _extra["_media_ref"] = str(media_ref)
+            _extra.update(media_context_extra(
+                media_type=media_type, media_ref=media_ref,
+                media_desc=media_desc, text=text))
+        # 驾驶舱 P2（2026-08-13）：交接提醒——A 线自有对话历史**不含**人工在
+        # 原生页说的话，这条提醒是它交还后唯一的连续性信号。经 _line_merge_keys
+        # 白名单进 user_context 的 _topic_switch_hint 消费口；偶发被入站 enrich
+        # 的同键提示覆盖＝可接受（丢一次提醒，不丢功能）。异常静默不阻断生成。
+        try:
+            from src.inbox.normalizer import conv_id as _mk_cid
+            from src.inbox.takeover import handback_note as _hb_note
+            _hb = _hb_note(
+                _mk_cid(platform, account_id, chat_key),
+                store=getattr(app.state, "inbox_store", None),
+            )
+            if _hb:
+                _extra["_topic_switch_hint"] = _hb
+        except Exception:
+            logger.debug("[protocol-autoreply] 交接提醒跳过", exc_info=True)
         ctx = build_companion_context(
             platform=platform,
             chat_id=chat_key,
@@ -803,6 +936,26 @@ def build_reply_hook(app: Any) -> Callable[[Dict[str, Any]], Awaitable[None]]:
                     return {"delivered": True, "delivered_as": "voice"}
         except Exception:
             logger.debug("[protocol-autoreply] 语音尝试失败，回落文本", exc_info=True)
+        # WP-4 系统级披露（compliance.disclosure.notice，基线关）：每会话首条
+        # AI 出站前置披露语（持久防重，键=conv_id）。刻意放在语言闸之后（披露语
+        # 已是客户语言，不再过翻译）、语音分支之后（克隆声绝不念披露语；语音
+        # 先行的会话由首条文本回复补披露——标记只在真应用时才烧）。
+        try:
+            from src.compliance.disclosure import apply_disclosure
+            from src.inbox.normalizer import conv_id as _conv_id_fn
+            _dc_cid = _conv_id_fn(platform, account_id, chat_key)
+            _dc_lh = ""
+            try:
+                from src.inbox.outbound_translate import peer_language_hint
+                _dc_st = getattr(app.state, "inbox_store", None)
+                if _dc_st is not None:
+                    _dc_lh = peer_language_hint(_dc_st, _dc_cid) or ""
+            except Exception:
+                _dc_lh = ""
+            text, _ = apply_disclosure(cfg or {}, _dc_cid, text, lang_hint=_dc_lh)
+        except Exception:
+            logger.debug("[protocol-autoreply] 披露注入异常（原样发送）",
+                         exc_info=True)
         # N 线 核心3：发送前反封号闸门（A/B 两线共用 companion_send_gate；默认关→零破坏）。
         # 拦截 → 抛错，交由 run_autoreply 既有熔断/转人工处理。
         # exempt_peers 白名单（2026-07-22）：测试号免限额，联调不再与养号策略打架。

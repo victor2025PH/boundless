@@ -155,6 +155,12 @@ _EMITTED_ALERTS = [
     ("platform_session", "platform_session_alert",
      {"platform": "messenger", "account_id": "10008900", "login_id": "msg_x",
       "status": "needs_login", "detail": "cookies expired", "recovered": False}),
+    # 2026-08-14：telegram 手机端退出（编排器拉起撞 SESSION_REVOKED →
+    # report_session_transition 上报 logged_out；此前该故障被磨成泛化 unhealthy 静默）
+    ("platform_session", "platform_session_alert",
+     {"platform": "telegram", "account_id": "8244899900",
+      "status": "logged_out", "detail": "[401 SESSION_REVOKED] ...",
+      "recovered": False, "rate_key": "telegram:8244899900"}),
     # P0 2026-08-04：入站半死态（health_watchdog._check_inbox_read_stall →
     # 登录在线但侧栏有未读、进线程读取持续全失败＝看得到读不到，E2EE 卡 Loading 实锤）
     ("platform_session", "platform_session_alert",
@@ -162,6 +168,19 @@ _EMITTED_ALERTS = [
       "status": "inbox_stalled", "reminder": True, "down_minutes": 45,
       "unread": 5, "detail": "看得到未读(5)却读不到内容：进线程读取连续失败 5/5",
       "rate_key": "messenger:61584070255403:inbox_stall"}),
+    # 驾驶舱 P0 2026-08-13：人工接管超时（health_watchdog._check_takeover_overdue →
+    # 坐席接管会话后忘交还，接管期该客户 AI 全停＝没人管）
+    ("takeover", "takeover_alert",
+     {"conversation_id": "telegram:tg1:5433982810", "platform": "telegram",
+      "by": "agent01", "elapsed_min": 135,
+      "rate_key": "telegram:tg1:5433982810:takeover_remind"}),
+    # P2 2026-08-13：注册表期望在线但 sidecar 无会话（health_watchdog.
+    # _check_messenger_not_restored → 重启恢复失败/会话被清，零事件零心跳的盲区对账）
+    ("platform_session", "platform_session_alert",
+     {"platform": "messenger", "account_id": "10008900",
+      "status": "not_restored", "reminder": True, "down_minutes": 35,
+      "detail": "注册表期望在线，但 messenger-web 服务器浏览器没有该账号会话",
+      "rate_key": "messenger:10008900:not_restored"}),
     # 2026-07-12：主机级关键告警镜像（host_alert.notify_host → EventBus；
     # 云端 Key 失效/云端不可达/余额不足的远程副本，机主不在算力机前也能收到）
     ("host_alert", "host_alert",
@@ -231,6 +250,43 @@ _EMITTED_ALERTS = [
       "reminder": False, "rate_key": "draft_backlog:remind"}),
     ("draft_backlog", "draft_backlog_alert",
      {"recovered": True, "rate_key": "draft_backlog:recovered"}),
+    ("accounts_truth", "accounts_truth_alert",
+     {"ghost_count": 2, "samples": ["telegram:leak1", "whatsapp:leak2"],
+      "reminder": False, "rate_key": "accounts_truth:remind"}),
+    ("accounts_truth", "accounts_truth_alert",
+     {"recovered": True, "rate_key": "accounts_truth:recovered"}),
+    # 回复额度触顶聚合（peer_bot_guard P1）：多会话同日烧穿预算＝系统性状况；
+    # 告警态（含 near 提前量 + 用量样本）+ 恢复态各过一遍
+    ("reply_budget", "reply_budget_alert",
+     {"exhausted_count": 3, "hard_count": 1, "near_count": 2,
+      "budget_limit": 40,
+      "samples": [{"title": "无界科技 BOUNDELESS", "used": 74},
+                  {"title": "阿龙", "used": 41}],
+      "reminder": False, "rate_key": "reply_budget:remind"}),
+    ("reply_budget", "reply_budget_alert",
+     {"recovered": True, "rate_key": "reply_budget:recovered"}),
+    # 坐席字符额度水位聚合（2026-08-16 health_watchdog._check_agent_quota）：
+    # warn（达用户行 quota_alert_pct 提醒线）/ over（超额）两桶；enforce 硬闸
+    # 默认关（软提醒先行），这条告警是软提醒期的唯一主动信号。告警态 + 恢复态各过一遍
+    ("agent_quota", "agent_quota_alert",
+     {"month": "2026-08", "warn_count": 1, "over_count": 1,
+      "warn": [{"username": "zuoxi02", "used": 8400, "quota": 10000, "pct": 84}],
+      "over": [{"username": "zuoxi01", "used": 12050, "quota": 10000, "pct": 121}],
+      "reminder": False, "rate_key": "agent_quota:remind"}),
+    ("agent_quota", "agent_quota_alert",
+     {"recovered": True, "rate_key": "agent_quota:recovered"}),
+    # AI 对聊提醒（P0-6 2026-08-09 加的发布点：health_watchdog._check_mutual_chat
+    # 聚合一条、绝不拦截）。formatter/别名/严重度表当时全齐、唯漏本表——完整性
+    # 门禁红了两天成「无主既有红」，2026-08-12 补登记。payload 形状与真实
+    # publish 一致（conversations 条目=mutual_chat_monitor 扫描行，formatter 消费
+    # conversation_id/n_in/n_out/managed_peer）。
+    ("ai_mutual_chat", "ai_mutual_chat_alert",
+     {"conversations": [
+         {"conversation_id": "telegram:8438080491:7654321098",
+          "n_in": 66, "n_out": 61, "managed_peer": True},
+         {"conversation_id": "telegram:7654321098:8438080491",
+          "n_in": 61, "n_out": 66, "managed_peer": False}],
+      "window_hours": 24, "rate_key": "ai_mutual_chat"}),
     # 被埋会话（归档着却有未读＝客户在等而工作台看不见）：告警态 + 恢复态各过一遍
     ("buried_conv", "buried_conv_alert",
      {"buried_count": 2, "total_unread": 7, "oldest_hours": 51.2,
@@ -283,6 +339,11 @@ _EMITTED_ALERTS = [
     ("colloquial_llm", "colloquial_llm_alert",
      {"down_minutes": 45, "fail_streak": 5, "reminder": False,
       "rate_key": "colloquial_llm:remind"}),
+    # 本地主链保险（2026-08-15）：local* 档 vLLM 连续探测失败 → 单向热切 cloud
+    ("ai_primary_guard", "ai_primary_guard_alert",
+     {"from_mode": "local_only", "base_url": "http://192.168.0.173:8001/v1",
+      "fail_count": 2, "down_minutes": 5,
+      "rate_key": "ai_primary_guard:switched"}),
     # 入站漏球（P0 2026-08-05：客户最后一句既没被回也没拟稿——draft_backlog 只看
     # 「有稿没人处理」，「压根没稿」此前零信号）：告警态 + 恢复态各过一遍
     ("unanswered_inbound", "unanswered_inbound_alert",

@@ -92,10 +92,135 @@ def _mirror_to_event_bus(title: str, message: str, key: str) -> None:
         pass
 
 
-def notify_host(title: str, message: str, *, key: str = "", cooldown_sec: float = 1800.0) -> bool:
-    """告警出口：日志 + EventBus 镜像 + （仅算力机）非阻塞弹窗。
+# ── Toast 通知（2026-08-17 弹窗美化）───────────────────────────────────
+# Windows 通知中心 Toast 替代上古 MessageBoxW：品牌图标 + 结构化文案（标题/正文/
+# 技术行三层）+ 可点按钮（protocol 激活直开工作台）+ 通知中心自动留存历史
+# （旧弹窗点「确定」即消失、无处回看）。失败/超时自动回落 MessageBoxW 保底可见；
+# HOST_ALERT_TOAST=0 一键回旧弹窗。零 pip 依赖：powershell -EncodedCommand 调
+# WinRT ToastNotificationManager（AppId 借 PowerShell 的开始菜单注册身份）。
+
+_TOAST_APP_ID = (
+    "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}"
+    "\\WindowsPowerShell\\v1.0\\powershell.exe"
+)
+
+
+def _toast_enabled() -> bool:
+    try:
+        return os.environ.get("HOST_ALERT_TOAST", "1").strip().lower() not in (
+            "0", "false", "off", "no")
+    except Exception:
+        return True
+
+
+def _toast_icon_uri() -> str:
+    """品牌图标（best-effort）：引擎内置 ChatX logo；缺失则不带图标。"""
+    try:
+        from pathlib import Path
+        p = (Path(__file__).resolve().parents[2]
+             / "src" / "web" / "static" / "brand" / "chatx.png")
+        if p.is_file():
+            return p.as_uri()
+    except Exception:
+        pass
+    return ""
+
+
+def _xml_escape(s: str, *, attr: bool = False) -> str:
+    out = str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    if attr:
+        out = out.replace('"', "&quot;").replace("'", "&apos;")
+    return out
+
+
+def _toast_script(title: str, message: str, *, attribution: str = "",
+                  open_url: str = "") -> str:
+    """构造弹 Toast 的 PowerShell 脚本（纯函数，可测）。
+
+    - scenario=reminder + 常驻按钮：不自动消失，对齐旧 MessageBox「必须看到」语义
+      （但非阻塞、不抢焦点）；
+    - open_url 非空 → 点击 toast 本体或「打开工作台」按钮经 protocol 激活开浏览器；
+    - attribution 行放技术码（domain:reason·会话·时间），工程师排查用，不占正文。
+    """
+    xml_parts = ['<toast scenario="reminder"']
+    if open_url:
+        xml_parts.append(
+            f' activationType="protocol" launch="{_xml_escape(open_url, attr=True)}"')
+    xml_parts.append('><visual><binding template="ToastGeneric">')
+    _icon = _toast_icon_uri()
+    if _icon:
+        xml_parts.append(
+            f'<image placement="appLogoOverride" hint-crop="circle" '
+            f'src="{_xml_escape(_icon, attr=True)}"/>')
+    xml_parts.append(f"<text>{_xml_escape(title)}</text>")
+    # 正文换行转 &#10;（LoadXml 后还原为真换行，ToastGeneric 按行渲染）
+    xml_parts.append(f"<text>{_xml_escape(message).replace(chr(10), '&#10;')}</text>")
+    if attribution:
+        xml_parts.append(
+            f'<text placement="attribution">{_xml_escape(attribution)}</text>')
+    xml_parts.append("</binding></visual><actions>")
+    if open_url:
+        xml_parts.append(
+            f'<action content="打开工作台" activationType="protocol" '
+            f'arguments="{_xml_escape(open_url, attr=True)}"/>')
+    xml_parts.append(
+        '<action content="知道了" activationType="system" arguments="dismiss"/>')
+    xml_parts.append("</actions>")
+    xml_parts.append('<audio src="ms-winsoundevent:Notification.Default"/>')
+    xml_parts.append("</toast>")
+    xml = "".join(xml_parts)
+    ps_xml = xml.replace("'", "''")  # PowerShell 单引号串内转义
+    return (
+        "$ErrorActionPreference='Stop';"
+        "[Windows.UI.Notifications.ToastNotificationManager, "
+        "Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null;"
+        "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, "
+        "ContentType=WindowsRuntime] | Out-Null;"
+        "$doc = New-Object Windows.Data.Xml.Dom.XmlDocument;"
+        f"$doc.LoadXml('{ps_xml}');"
+        "$t = New-Object Windows.UI.Notifications.ToastNotification($doc);"
+        "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("
+        f"'{_TOAST_APP_ID}').Show($t);"
+    )
+
+
+def _show_toast(title: str, message: str, *, attribution: str = "",
+                open_url: str = "") -> bool:
+    """弹一个 Toast；成败以子进程退出码为准（失败由调用方回落 MessageBox）。"""
+    try:
+        import base64 as _b64
+        import subprocess
+        script = _toast_script(title, message,
+                               attribution=attribution, open_url=open_url)
+        enc = _b64.b64encode(script.encode("utf-16-le")).decode("ascii")
+        # 只用 CREATE_NO_WINDOW 压掉黑框；**别加 -WindowStyle Hidden**——
+        # 两者叠加实测让 PS 卡 20+ 秒（单用 NO_WINDOW 0.9s，二分实锤 2026-08-17）。
+        proc = subprocess.Popen(
+            ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", enc],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=0x08000000,  # CREATE_NO_WINDOW
+        )
+        try:
+            # 30s：PS 首次调用有「Preparing modules for first use」冷启动
+            # （实测 >15s，暖机后 ~3s）；杀早了 toast 根本没来得及 Show。
+            return proc.wait(timeout=30) == 0
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            return False
+    except Exception:
+        return False
+
+
+def notify_host(title: str, message: str, *, key: str = "", cooldown_sec: float = 1800.0,
+                open_url: str = "", attribution: str = "") -> bool:
+    """告警出口：日志 + EventBus 镜像 + （仅算力机）非阻塞弹窗（Toast→MessageBox）。
 
     同 key 冷却窗内只提醒一次；返回是否本次实际提醒。绝不抛异常。
+    ``open_url``：Toast 点击/按钮打开的链接（如工作台）；``attribution``：技术码行
+    （domain:reason·会话·时间），Toast 小字显示，日志与 webhook 追加在正文尾。
     """
     try:
         k = (key or title or "").strip() or "host_alert"
@@ -104,16 +229,26 @@ def notify_host(title: str, message: str, *, key: str = "", cooldown_sec: float 
             if now - _last_alert.get(k, 0.0) < max(0.0, cooldown_sec):
                 return False
             _last_alert[k] = now
-        _logger.warning("[HOST ALERT] %s | %s", title, message)
-        _mirror_to_event_bus(title, message, k)
+        _full = f"{message}\n{attribution}" if attribution else str(message)
+        _logger.warning("[HOST ALERT] %s | %s", title, _full.replace("\n", " ¦ "))
+        _mirror_to_event_bus(title, _full, k)
         if popups_suppressed():
             return True
         if sys.platform == "win32":
             def _popup():
                 try:
+                    if _toast_enabled() and _show_toast(
+                            str(title), str(message),
+                            attribution=str(attribution or ""),
+                            open_url=str(open_url or "")):
+                        return
+                except Exception:
+                    pass
+                try:
                     import ctypes
                     # MB_ICONWARNING(0x30) | MB_SETFOREGROUND(0x10000) | MB_TOPMOST(0x40000)
-                    ctypes.windll.user32.MessageBoxW(0, str(message), str(title), 0x30 | 0x10000 | 0x40000)
+                    _mb = str(message) + (("\n\n" + str(attribution)) if attribution else "")
+                    ctypes.windll.user32.MessageBoxW(0, _mb, str(title), 0x30 | 0x10000 | 0x40000)
                 except Exception:
                     pass
             threading.Thread(target=_popup, name="host_alert_popup", daemon=True).start()

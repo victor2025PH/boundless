@@ -1000,12 +1000,18 @@ def build_autosend_typing_cb(assistant, *, always: bool = False):
     return _typing
 
 
-def build_autosend_callbacks(assistant, web_app, deliver_enabled):
+def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
+                             origin: str = "auto"):
     """构造 AutosendWorker 的 (send_callback, translate_callback)。
 
     从 main.py initialize() 原样抽出（行为不变）。deliver 编排「按需发图→语音→
     文本/桌面受控出站」三级投递；deliver_enabled=False 时 send_cb=None（仅 DB
     标记+审计，不发客户）。translate_cb 见 build_autosend_translate_cb。
+
+    ``origin``（P1 2026-08-12 人工预留额度）：人工通过草稿的投递链传 ``manual``
+    （坐席明示决定，额度与手动发送端点同待遇——用满 recommended_cap）；
+    缺省 ``auto``＝L2 自动链在 ``cap - reserve_for_manual`` 让路。只影响文本
+    主路的额度道；图/语音子链维持 auto 口径（保守：宁少发不超发）。
     """
     send_cb = None
     if deliver_enabled:
@@ -1017,6 +1023,7 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled):
         _send_adapters = _dia()
         _send_shim = _SNS(app=web_app)
         _assistant_ref = assistant
+        _send_origin = str(origin or "auto")
 
         async def _try_autosend_voice(platform, account_id, chat_key, text,
                                       sent_text=None):
@@ -1380,6 +1387,7 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled):
                     return _send_via(
                         _send_shim, platform, account_id,
                         chat_key, _txt, _send_adapters,
+                        origin=_send_origin,
                     )
                 if (_orch_owns and _wl is not None
                         and _wl.is_running()):
@@ -1503,8 +1511,9 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled):
                 if _i > 0:
                     # 条间节奏 = 想（静默）+ 打下一条（挂「正在输入」续挂，
                     # >5s 间隔气泡不断续）——与首条前的拟人序列同一节奏模型。
+                    # 兜底 3.0＝gap_sec_lo 时代缺省（规划器异常不回机关枪）
                     _gap = (_gaps[_i - 1]
-                            if _i - 1 < len(_gaps) else 0.8)
+                            if _i - 1 < len(_gaps) else 3.0)
                     try:
                         from src.integrations.humanize_metrics import (
                             record_bubble_gap as _rbg,

@@ -178,10 +178,10 @@
   --th-bd-blue2d:#2d6cdf;
 }
 [data-theme="dark"],[data-cp-theme="dark"]{
-  --th-ink-slate4:#8a8f97;
-  --th-ink-slate5:#a0a3ab;
-  --th-ink-gray5:#a0a3ab;
-  --th-ink-gray4:#8a8f97;
+  --th-ink-slate4:#9aa0aa;
+  --th-ink-slate5:#b4b8c0;
+  --th-ink-gray5:#b4b8c0;
+  --th-ink-gray4:#9aa0aa;
   --th-ink-slate6:#c9ccd3;
   --th-ink-gray7:#d7d9de;
   --th-ink-slate7:#d7d9de;
@@ -275,11 +275,11 @@
   --th-bg-gray100:rgba(236,236,240,.08);
   --th-bg-red50:rgba(248,81,73,.1);
   --th-bg-red50tw:rgba(248,81,73,.1);
-  --th-bd-gray3:#30313a;
-  --th-bd-gray2:#26272e;
+  --th-bd-gray3:#3b3f4a;
+  --th-bd-gray2:#30333c;
   --th-bd-slate1:rgba(236,236,240,.1);
-  --th-bd-slate3:#30313a;
-  --th-bd-slate2:#30313a;
+  --th-bd-slate3:#3b3f4a;
+  --th-bd-slate2:#3b3f4a;
   --th-bd-red6:#f85149;
   --th-bd-red2:rgba(248,81,73,.35);
   --th-bd-amber2:rgba(227,179,65,.35);

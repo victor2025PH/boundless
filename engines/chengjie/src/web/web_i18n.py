@@ -25,7 +25,7 @@ _TRANSLATIONS = {
         "brand.sidebar": "无界 · 智聊",
         "brand.company": "无界科技",
         "brand.login_subtitle_default": "管理控制台",
-        "dashboard": "数据概览",
+        "dashboard": "今日概览",
         "templates": "话术模板",
         "channels": "通道管理",
         "channels_status": "通道状态",
@@ -54,7 +54,7 @@ _TRANSLATIONS = {
         "crisis_audit": "危机审计",
         "care": "主动关怀",
         "relations_health": "流失预警",
-        "monetization": "变现营收",
+        "monetization": "客户营收",
         "ai_studio": "AI 工作室",
         "viewer_badge": "只读",
         "viewer_badge_title": "当前账号为只读观察员，无法修改配置",
@@ -289,7 +289,9 @@ _TRANSLATIONS = {
         "rvc.btn_hang": "挂断",
         # ── 工作台壳·通知中心 + SSE 事件文案 + 全局搜索（P1 i18n step③-J）──
         # ── 工作台壳·剩余 JS 块（漏斗/在线/合并待审/授权/L4 草稿，J4）──
-        "lang_toggle": "English",
+        # xlate P3：wsToggleLang 从「循环切换」升级为「五语选择器」，标签随之从
+        # 「下一语言名」改为中性的「语言」（旧语义在 5 语下会误导）。
+        "lang_toggle": "语言",
         # ── Case 面板正文（③-S5：cases.html 静态 + JS 动态串）──
         "cases_title": "案例跟进",
         "cases_guide_title": "操作说明",
@@ -850,7 +852,7 @@ _TRANSLATIONS = {
         "brand.sidebar": "Boundless · ChatX",
         "brand.company": "Boundless",
         "brand.login_subtitle_default": "Admin Console",
-        "dashboard": "Overview",
+        "dashboard": "Today Overview",
         "templates": "Templates",
         "channels": "Channels",
         "channels_status": "Channel Status",
@@ -879,7 +881,7 @@ _TRANSLATIONS = {
         "crisis_audit": "Crisis Audit",
         "care": "Proactive Care",
         "relations_health": "Churn Alerts",
-        "monetization": "Monetization",
+        "monetization": "Customer Revenue",
         "ai_studio": "AI Studio",
         "viewer_badge": "Read-only",
         "viewer_badge_title": "This account is a read-only viewer and cannot modify configuration",
@@ -1081,7 +1083,7 @@ _TRANSLATIONS = {
         "rvc.btn_hang": "Hang up",
         # ── Workspace shell · notification center + SSE event copy + global search (P1 i18n step③-J) ──
         # ── Workspace shell · remaining JS blocks (funnel/online/merge-review/license/L4 drafts, J4) ──
-        "lang_toggle": "中文",
+        "lang_toggle": "Language",
         # ── Case panel body (③-S5: cases.html static + dynamic JS) ──
         "cases_title": "Case Follow-ups",
         "cases_guide_title": "How it works",
@@ -1641,18 +1643,31 @@ DEFAULT_LANG = "zh"
 # ── i18n packs 合并（P4 词条治理机制化,见 src/web/i18n_packs/__init__.py）────
 # 新增词条一律进按域拆分的 pack 文件;本单体字典只承载存量。消费方(get_translations
 # /t/tr)一律读合并视图 _MERGED,对模板/JS 词表/路由文案完全透明。
+# xlate P3（2026-08-16）：扩展语言由 EXTRA_LANGS 表驱动（vi/th/id…），每语 = en 底 +
+# 该语 override；加语言不再改本文件。
+def _merge_views(base: dict, pzh: dict, pen: dict, extras: dict,
+                 extra_langs: tuple) -> dict:
+    """单体 + packs → 各语言合并视图（纯合并，不做 IO/收集）。"""
+    zh = {**base["zh"], **pzh}
+    en = {**base["en"], **pen}
+    out = {"zh": zh, "en": en}
+    for lg in extra_langs:
+        out[lg] = {**en, **((extras or {}).get(lg) or {})}
+    return out
+
+
 def _build_merged(base: dict) -> dict:
-    """单体 + packs → 合并字典。vi = en 底 + VI 覆盖；packs 失败时 fail-safe。"""
+    """单体 + packs → 合并字典。packs 失败时 fail-safe（单体 + 空覆盖的扩展语）。"""
     try:
-        from src.web.i18n_packs import collect_packs
-        pzh, pen, pvi = collect_packs()
-        zh = {**base["zh"], **pzh}
-        en = {**base["en"], **pen}
-        return {"zh": zh, "en": en, "vi": {**en, **pvi}}
+        from src.web.i18n_packs import EXTRA_LANGS, collect_all
+        pzh, pen, extras = collect_all()
+        return _merge_views(base, pzh, pen, extras, EXTRA_LANGS)
     except Exception as exc:
         _logger.warning("i18n packs 合并失败（仅用单体字典）: %s", exc)
-        en = base.get("en") or {}
-        return {**base, "vi": dict(en)}
+        # 表本身取不到时用字面量兜底——扩展语言键必须存在（消费方按 UI_LANGS 取）
+        return _merge_views(
+            {"zh": base.get("zh") or {}, "en": base.get("en") or {}},
+            {}, {}, {}, ("vi", "th", "id"))
 
 
 _MERGED = _build_merged(_TRANSLATIONS)
@@ -1696,19 +1711,20 @@ def _maybe_reload() -> None:
     _next_check_ts = now + 2.0
 
     # ── pack 目录变化 → 仅重收集 packs 并重建合并视图（不 exec 单体）──
+    # ⚠ 与 _build_merged 的 fail-safe 语义不同：这里失败必须**保留旧合并视图**
+    # （收集抛错时降级成单体视图会让全部 pack 键当场变裸键名——比旧字典糟得多）。
     pm = _packs_mtime()
     if pm != _packs_loaded_mtime:
         with _RELOAD_LOCK:
             if pm != _packs_loaded_mtime:
                 try:
-                    from src.web.i18n_packs import collect_packs
-                    pzh, pen, pvi = collect_packs(force_reload=True)
-                    zh = {**_TRANSLATIONS["zh"], **pzh}
-                    en = {**_TRANSLATIONS["en"], **pen}
-                    _MERGED = {"zh": zh, "en": en, "vi": {**en, **pvi}}
+                    from src.web.i18n_packs import EXTRA_LANGS, collect_all
+                    pzh, pen, extras = collect_all(force_reload=True)
+                    _MERGED = _merge_views(_TRANSLATIONS, pzh, pen, extras, EXTRA_LANGS)
                     _packs_loaded_mtime = pm
-                    _logger.info("i18n packs 热重载完成（+%d/+%d/+%d 键）",
-                                 len(pzh), len(pen), len(pvi))
+                    _logger.info("i18n packs 热重载完成（+%d/+%d 键，扩展语 %s）",
+                                 len(pzh), len(pen),
+                                 {lg: len(v) for lg, v in extras.items()})
                 except Exception as exc:
                     _logger.warning("i18n packs 热重载失败（保留旧字典）: %s", exc)
 

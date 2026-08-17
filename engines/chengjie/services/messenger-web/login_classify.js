@@ -47,6 +47,13 @@ const E2EE_PIN_URL_MARKERS = [
   "encrypted_backup", "encryption_pin", "device_password", "secret_conversation",
   "e2ee", "key_change", "restore_chat",
 ];
+// 裸 "e2ee" 标记的例外（P4 2026-08-15 生产实锤）：**普通加密线程** URL 就是
+// /e2ee/t/<数字>——重启恢复落在上次打开的线程页时，URL 判据把「平平无奇的加密
+// 会话」误分类成 e2ee_pin（boot 日志 stage=e2ee_pin 但页面零 PIN 浮层，
+// tryAutoE2eePin 空转、坐席登录流看到误导性「请填 PIN」提示码）。纯线程路径
+// 剔除 URL 判据；真 PIN 浮层叠在线程页上时靠 pageText 文案判据兜住（分类器
+// 与 detectPinPrompt 共用 E2EE_PIN_TEXT_RE，后者另有输入框在场的 AND 约束）。
+const PLAIN_E2EE_THREAD_RE = /\/e2ee\/t\/\d+/;
 const E2EE_PIN_TEXT_RE =
   /输入.*PIN|Enter your PIN|encryption PIN|加密.*PIN|设备密码|device password|恢复.*加密|Restore.*encrypted/i;
 
@@ -71,6 +78,10 @@ export function isE2eePinText(text) {
  * @param {boolean} sig.hasXs       cookie xs 是否已下发
  * @param {boolean} sig.hasErrorBox 登录表单上是否挂着错误框
  * @param {string}  [sig.pageText]  可选：页面可见文本片段（E2EE PIN 文案兜底）
+ * @param {boolean} [sig.hasLoginForm] 可选：DOM 上是否有账密输入框（input[name=email]/[name=pass]）。
+ *                  表单中继关键信号：messenger.com 未登录时落在根路径 https://www.messenger.com/，
+ *                  URL 不带 /login 标记，但页面就是登录表单——只靠 URL 标记会误判 unknown，
+ *                  中继流据此永远停在 wait（2026-08-13 canary 实测捕获）。
  * @returns {string} STAGE.*
  */
 export function classifyLoginPage(sig) {
@@ -79,6 +90,7 @@ export function classifyLoginPage(sig) {
   const hasXs = !!(sig && sig.hasXs);
   const hasErrorBox = !!(sig && sig.hasErrorBox);
   const pageText = String((sig && sig.pageText) || "");
+  const hasLoginForm = !!(sig && sig.hasLoginForm);
 
   if (TWO_FACTOR_MARKERS.some((m) => url.includes(m))) return STAGE.TWO_FACTOR;
   if (url.includes(CHECKPOINT_MARKER)) return STAGE.CHECKPOINT;
@@ -86,12 +98,23 @@ export function classifyLoginPage(sig) {
   // 卡在第二因子。URL 认不出改版新页面时，这条仍然成立（不依赖任何页面结构）。
   if (hasCUser && !hasXs) return STAGE.TWO_FACTOR;
   // E2EE PIN：完整会话 cookie 已有，但仍卡在设备密钥页（半死态重登关键路径）。
-  if (E2EE_PIN_URL_MARKERS.some((m) => url.includes(m)) || E2EE_PIN_TEXT_RE.test(pageText)) {
+  // 只豁免裸 "e2ee" 标记撞上纯加密线程路径（/e2ee/t/<数字>=正常会话页）的组合；
+  // 具体标记（encryption_pin/encrypted_backup…）即使叠在线程 URL 查询串上仍算
+  // 证据。线程页上的真 PIN 浮层另有 pageText 文案判据兜住。
+  const urlPinHit = E2EE_PIN_URL_MARKERS.some((m) =>
+    url.includes(m) && !(m === "e2ee" && PLAIN_E2EE_THREAD_RE.test(url)));
+  if (urlPinHit || E2EE_PIN_TEXT_RE.test(pageText)) {
     return STAGE.E2EE_PIN;
   }
   // 错误框不限定 URL：messenger.com 根路径也直接渲染登录表单（URL 里没有 /login）。
   if (hasErrorBox) return STAGE.PASSWORD_ERROR;
+  // URL 命中登录页族（原有判据，保持逐字节不变）。
   if (LOGIN_FORM_MARKERS.some((m) => url.includes(m))) return STAGE.LOGIN_FORM;
+  // DOM 兜底：页面真有账密输入框且尚未完整登录（c_user+xs 未双全）→ 就是登录表单。
+  // 这条专治 messenger.com 根路径登录页（URL 无 /login 标记）——headed 流靠人眼无所谓，
+  // 但表单中继必须认出它才渲得出账密表单。login_form 非 actionable（actionableCode 回 ''），
+  // 故对既有 headed 流的 hint_code / 失败归因零影响，只解锁中继流。
+  if (hasLoginForm && !(hasCUser && hasXs)) return STAGE.LOGIN_FORM;
   return STAGE.UNKNOWN;
 }
 

@@ -114,6 +114,15 @@ def register_workspace_pages_routes(
         # （坐席能看见「Messenger 已降为人审」，不再疑惑为何不自动回）。
         ctx["platform_mode_caps"] = {}
         ctx["platform_draft_skips"] = []
+        # P1-5（2026-08-12）：统一 App 右栏灰度默认档——overlay 置
+        # inbox.copilot.app_default: true 即全员默认加载统一 App 右栏（与桌面壳同源）。
+        # 个人 🧪 手动选择（localStorage）压过运营默认；?app=0 深链是灰度期排障回退口。
+        # 缺省 False＝现状不变；机制先行，开闸是运营决策（读数见 ui-event cpapp_* 埋点）。
+        ctx["copilot_app_default"] = False
+        # P0 账号顶部状态栏 Account Dock（2026-08-16 老板指名）：视图层缺省=开——模板对
+        # ctx 缺席也按开渲染（模板热更先于重启的中间态可用）；overlay
+        # inbox.account_dock.enabled: false 可整体关闭（随重启生效）。
+        ctx["account_dock_enabled"] = True
         try:
             if config_manager is not None:
                 _cfg = config_manager.config or {}
@@ -131,6 +140,11 @@ def register_workspace_pages_routes(
                 }
                 ctx["platform_draft_skips"] = sorted(
                     str(x).lower() for x in (_ad.get("skip_platforms") or []))
+                _cp = (_cfg.get("inbox", {}) or {}).get("copilot", {}) or {}
+                ctx["copilot_app_default"] = bool(_cp.get("app_default"))
+                _adk = (_cfg.get("inbox", {}) or {}).get("account_dock", {}) or {}
+                if "enabled" in _adk:
+                    ctx["account_dock_enabled"] = bool(_adk.get("enabled"))
         except Exception:
             pass
         # P0-1 A3：token 直登（桌面默认 admin）绕过 /setup 时 AI Key 仍为空/占位 →
@@ -164,6 +178,21 @@ def register_workspace_pages_routes(
 
     @app.get("/workspace", response_class=HTMLResponse)
     async def workspace_page(request: Request, _=Depends(page_auth)):
+        # WP-2/WP-5 首启直达（2026-08-17）：向导启用且未完成 → 非坐席 303 /welcome。
+        # 桌面壳 webview 走 token 会话不经 /login（登录落地钩子够不着它），把
+        # 「装完自动拉起 → 直达向导」做成后端语义 = 桌面/网页双端同享、零壳代码。
+        # 生产老实例 onboarding.enabled=false → welcome_pending 恒 False = 零变化。
+        # ⚠ agent 角色必须豁免：其页面白名单只有 /workspace*，重定向它 =
+        # /welcome 又被鉴权弹回 /workspace 的往返死循环。
+        try:
+            from src.utils.onboarding_state import welcome_pending
+            from src.utils.web_user_store import ROLE_AGENT
+            if (str(request.session.get("role") or "") != ROLE_AGENT
+                    and welcome_pending(
+                        getattr(config_manager, "config", None) or {})):
+                return RedirectResponse("/welcome", status_code=303)
+        except Exception:
+            pass                    # 向导判定任何异常绝不影响工作台可达
         return templates.TemplateResponse(request, "unified_inbox.html", _page_ctx(request))
 
     @app.get("/unified-inbox")
@@ -182,6 +211,12 @@ def register_workspace_pages_routes(
     @app.get("/workspace/dash", response_class=HTMLResponse)
     async def workspace_dash_page(request: Request, _=Depends(page_auth)):
         return templates.TemplateResponse(request, "workspace_dashboard.html", _page_ctx(request))
+
+    @app.get("/workspace/cockpit", response_class=HTMLResponse)
+    async def workspace_cockpit_page(request: Request, _=Depends(page_auth)):
+        # 驾驶舱（cockpit P1 2026-08-13）：介入优先级队列 + 接管在场 + 账号健康。
+        # 与 /workspace/dash 分工：dash=看数（经营/绩效），cockpit=行动（现在该管谁）。
+        return templates.TemplateResponse(request, "cockpit.html", _page_ctx(request))
 
     @app.get("/workspace/escalations", response_class=HTMLResponse)
     async def workspace_escalations_page(request: Request, _=Depends(page_auth)):
@@ -339,7 +374,9 @@ def register_workspace_pages_routes(
 
     @app.get("/workspace/usage", response_class=HTMLResponse)
     async def workspace_usage_page(request: Request, _=Depends(page_auth)):
-        # C0-2：用量计量看板（主管/老板专属；非主管回落今日概览）
-        if not _is_supervisor(request):
-            return RedirectResponse("/workspace/dash", status_code=307)
-        return templates.TemplateResponse(request, "workspace_usage.html", _page_ctx(request))
+        # C0-2 → 一页两态（2026-08-16）：主管看团队全量视图；坐席/观察员不再 307
+        # 弹走，改看「我的用量」自视图——个人字符额度是坐席的切身信息，藏着只会
+        # 变成「额度快用完了却没人告诉我」。视图分叉由模板按 usage_self_only 渲染。
+        ctx = _page_ctx(request)
+        ctx["usage_self_only"] = not _is_supervisor(request)
+        return templates.TemplateResponse(request, "workspace_usage.html", ctx)

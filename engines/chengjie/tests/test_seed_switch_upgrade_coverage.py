@@ -51,6 +51,11 @@ _EXEMPT: Dict[str, str] = {
     "licensing.trial.enabled":
         "自带同款桌面默认机制（local_trial.configure_local_trial：桌面态且配置"
         "「从未写过」licensing.trial 时按桌面默认开）——本类修法的最早先例",
+    "licensing.trial.enforce":
+        "同上机制（local_trial.configure_local_trial：『enforce 没写过 → 桌面默认』，"
+        "2026-08-11 起桌面默认 true——「注册领 100 万」链路上线后用尽即拦才有意义；"
+        "显式 enforce:false 仍完全尊重）。升级安装不写该键也按桌面默认拿到，"
+        "种子显式写 true 只为交付承诺文档化",
     "companion.proactive_topic.cold_start.enabled":
         "代码默认已 True：outbound_gate._DEFAULTS['enabled']=True，且 "
         "resolve_cold_start_cfg 在配置整段缺失时（None/{}/无 cold_start 节）一律回落"

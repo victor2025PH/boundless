@@ -343,24 +343,24 @@ HELP_TERMS: dict = {
         "en": "Work Goal",
         "desc": "为一段客户关系设定的推进目标：选模板（付费解锁/会员订阅/关系推进/沉默唤回/获客转化…）+ 期限 + 自治档，AI 按里程碑弧线（多数模板 4 段）分天推进，每天出一次「今日拍」。也叫「工作计划」，管理端与配置里叫「营销目标」——三个说法是同一个东西。需管理员开启 companion.goals.enabled，未开启时整卡不出现",
         "desc_en": "A progress goal set for one customer relationship: pick a template (paid unlock / subscription / relationship / reactivation / acquire-and-convert…) plus a deadline and an autonomy level, and the AI advances it day by day along a milestone arc (4 segments in most templates), producing one daily beat. Also called the \"work plan\"; the admin side and config call it \"marketing goal\" — all three are the same thing. Requires companion.goals.enabled; the whole card is hidden while it is off",
-        "usage": "坐席工作台 → 选中会话 → 右栏「客户&关系」→「工作目标」卡",
-        "usage_en": "Agent Workspace → select a conversation → right rail \"Customer & Relations\" → the \"Work Goal\" card"
+        "usage": "坐席工作台 → 选中会话 → 右栏「客户关系」→「工作目标」卡",
+        "usage_en": "Agent Workspace → select a conversation → right rail \"Customer\" → the \"Work Goal\" card"
     },
     "work_plan": {
         "zh": "工作计划",
         "en": "Work Plan",
         "desc": "「工作目标」的口语叫法，指的是同一张卡：给这段关系定推进目标与期限，AI 按里程碑分天推进并每天出「今日拍」。管理端与配置里同一子系统叫「营销目标」",
         "desc_en": "The colloquial name for the \"work goal\" — the very same card: set a progress goal and deadline for this relationship, and the AI advances it along milestones with a daily beat. The admin side and config call the same subsystem the \"marketing goal\"",
-        "usage": "坐席工作台 → 选中会话 → 右栏「客户&关系」→「工作目标」卡",
-        "usage_en": "Agent Workspace → select a conversation → right rail \"Customer & Relations\" → the \"Work Goal\" card"
+        "usage": "坐席工作台 → 选中会话 → 右栏「客户关系」→「工作目标」卡",
+        "usage_en": "Agent Workspace → select a conversation → right rail \"Customer\" → the \"Work Goal\" card"
     },
     "marketing_goal": {
         "zh": "营销目标",
         "en": "Marketing Goal",
         "desc": "同一子系统在管理端与配置里的名字（配置键 companion.goals，运营总览的「营销目标」卡是只读读数：进行中/今日拍/让路/注入/终态）。坐席端那张可操作的卡叫「工作目标」，运营口语里也叫「工作计划」",
         "desc_en": "The admin-side and config name for the same subsystem (config key companion.goals; the Ops Overview \"marketing goals\" card is read-only telemetry: active / beats / holds / injections / outcomes). The card agents actually operate is called the \"work goal\", also spoken of as the \"work plan\"",
-        "usage": "只读读数看运营总览的「营销目标」卡；要建目标/改目标去坐席工作台 → 右栏「客户&关系」→「工作目标」卡",
-        "usage_en": "For read-only numbers see the \"marketing goals\" card on Ops Overview; to create or change a goal use Agent Workspace → right rail \"Customer & Relations\" → the \"Work Goal\" card"
+        "usage": "只读读数看运营总览的「营销目标」卡；要建目标/改目标去坐席工作台 → 右栏「客户关系」→「工作目标」卡",
+        "usage_en": "For read-only numbers see the \"marketing goals\" card on Ops Overview; to create or change a goal use Agent Workspace → right rail \"Customer\" → the \"Work Goal\" card"
     },
     "goal_beat_today": {
         "zh": "今日拍",

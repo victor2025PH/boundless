@@ -36,7 +36,16 @@
 .nav-plat.active{background:var(--accent);color:#fff;}
 .nav-plat.disconnected{opacity:.42;}
 .nav-plat.disconnected:hover{opacity:.85;}
-.nav-badge{position:absolute;top:3px;right:3px;background:#ef4444;color:#fff;border-radius:8px;font-size:11px;font-weight:700;min-width:15px;height:15px;display:flex;align-items:center;justify-content:center;padding:0 3px;border:1.5px solid #17181d;pointer-events:none;font-variant-numeric:tabular-nums;}
+/* P0（2026-08-12）徽标修复：① 锚点从 3px/3px（压住 28px 图标右上角，"99+" 三字符时
+   与图标叠字）改为 -3px/-2px 向外溢出（rail 64px 宽、图标块 44px，两侧各 10px 余量，
+   .nav-rail overflow:visible 不裁）；② 字号 11→10 + 收字距，"99+" 不再撑破胶囊；
+   ③ 语义分级与账号 chip 同源：默认中性灰=普通未读，.attn=需人工才警报红——
+   红色只在「需要人」时出现，恢复它的动作含义。
+   ⚠ #64748b 灰底 / #17181d 描边是**刻意硬编码**（勿「修」成 --tk-*）：rail 是主题不变的
+   恒深色面（.nav-rail 渐变不随 data-cp-theme 翻转），而 --tk-* 令牌随页面主题走——套令牌
+   会让亮色主题下的徽标拿到「为白底设计的值」，反而错。 */
+.nav-badge{position:absolute;top:-3px;right:-2px;background:#64748b;color:#fff;border-radius:999px;font-size:10px;font-weight:700;min-width:16px;height:15px;display:flex;align-items:center;justify-content:center;padding:0 4px;border:1.5px solid #17181d;pointer-events:none;font-variant-numeric:tabular-nums;letter-spacing:-.2px;line-height:1;}
+.nav-badge.attn{background:var(--tk-danger,#ef4444);}
 .nav-status-dot{position:absolute;bottom:4px;right:5px;width:9px;height:9px;border-radius:50%;border:1.6px solid #17181d;pointer-events:none;}
 .nav-status-dot.on{background:var(--green);}
 .nav-status-dot.off{background:var(--red);}
@@ -72,8 +81,8 @@
 .plat-pause-note{flex-shrink:0;padding:7px 14px;background:rgba(217,119,6,.12);border-bottom:1px solid var(--border);font-size:11px;color:var(--tk-warn-ink);line-height:1.6;}
 .plat-pause-note b{font-weight:700;}
 .list-header{padding:12px 14px 8px;border-bottom:1px solid var(--border);flex-shrink:0;transition:padding .2s ease;}
-.list-title{font-size:15px;font-weight:700;color:var(--text-main);margin-bottom:10px;display:flex;align-items:center;gap:6px;}
-.list-title-main{display:inline-flex;align-items:center;gap:6px;min-width:0;flex:1;white-space:nowrap;}
+.list-title{font-size:15px;font-weight:700;color:var(--text-main);margin-bottom:10px;display:flex;align-items:center;gap:4px;}
+.list-title-main{display:inline-flex;align-items:center;gap:5px;min-width:0;flex:1;white-space:nowrap;}
 .list-title-main #list-title-text{overflow:hidden;text-overflow:ellipsis;min-width:0;}
 .list-plat-ic{display:none;align-items:center;line-height:0;flex-shrink:0;}
 .list-plat-dot{display:none;width:7px;height:7px;border-radius:50%;flex-shrink:0;}
@@ -259,6 +268,9 @@
 .sla-chip{font-size:11px;font-weight:700;border-radius:6px;padding:1px 5px;}
 .sla-chip.warn{background:var(--bdg-warn-bg);color:var(--bdg-warn-ink);}
 .sla-chip.crit{background:var(--bdg-danger-bg);color:var(--bdg-danger-ink);}
+/* P3（2026-08-11）：crit 超 72h＝「历史欠账」降灰——等待无上界时沉睡死会话永远 crit，
+   整列红墙让红色失去告急语义（与服务端 rail 聚合 _ATTN_LOOKBACK_SEC 同界线）。 */
+.sla-chip.stale{background:rgba(148,163,184,.16);color:var(--text-sub);}
 /* P23: 批量操作 */
 .batch-toggle{font-size:11px;cursor:pointer;color:var(--text-sub);padding:2px 7px;border:1px solid var(--border);border-radius:6px;background:var(--bg-elev);margin-left:auto;}
 .batch-toggle.active{background:color-mix(in srgb, var(--accent,#1e8cf2) 12%, transparent);color:var(--accent);border-color:color-mix(in srgb, var(--accent,#1e8cf2) 35%, transparent);}
@@ -390,6 +402,10 @@
 /* 2026-08-04 默认出站色按拍板从 135° 渐变(#3b82f6→#2563eb)收为纯色 #2563eb：
    渐变浅端白字实测 3.68:1 不达 WCAG AA，且同一句话两端对比度不一致；纯色 5.17:1。 */
 .msg-row.out .msg-bubble{background:var(--bbl-out-bg,var(--bl-growth-600,#2563eb));color:var(--ofg);border-bottom-right-radius:4px;box-shadow:0 2px 6px color-mix(in srgb,var(--bbl-out-bg,var(--bl-growth-600,#2563eb)) 24%,transparent);}
+/* 2026-08-12 正文 linkify：链接继承气泡文字色（出站蓝底白字上默认链接蓝不可读），
+   下划线保持「可点」示能；长 URL 允许任意断行防撑破气泡。 */
+.msg-bubble a.msg-link{color:inherit;text-decoration:underline;text-underline-offset:2px;word-break:break-all;}
+.msg-bubble a.msg-link:hover{opacity:.82;}
 /* P4-2 引用回复条（气泡内正文上方）：左竖线 + 发言人 + 摘要单行省略 */
 .msg-quote{border-left:3px solid color-mix(in srgb, var(--accent,#1e8cf2) 60%, transparent);padding:2px 8px;margin-bottom:5px;border-radius:4px;background:rgba(15,23,42,.05);font-size:12px;line-height:1.4;display:flex;flex-direction:column;gap:1px;overflow:hidden;}
 .msg-quote-sender{font-weight:700;color:var(--accent);font-size:11px;}
@@ -440,11 +456,28 @@
    定位锚点——缺了它们会锚到视口、整体画在屏幕上沿之外（点了「知识」等按钮看似无响应）。 */
 .reply-bar-wrap{position:relative;background:var(--bg-panel);border-top:1px solid var(--border);padding:10px 16px;flex-shrink:0;}
 /* 身份可视化：回复区身份条（以哪个人设·哪个号回复）——细高度低饱和，与 reply-bar 视觉衔接 */
-.identity-bar{display:flex;align-items:center;gap:6px;margin:0 0 6px;padding:3px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-soft);font-size:11px;color:var(--text-sub);line-height:1.4;}
+.identity-bar{display:flex;align-items:center;gap:6px;margin:0 0 6px;padding:3px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-soft);font-size:11px;color:var(--text-sub);line-height:1.4;cursor:pointer;transition:border-color .12s ease,background-color .12s ease;}
+.identity-bar:hover{border-color:var(--tk-brand,#1e8cf2);}
+.identity-bar:focus-visible{outline:2px solid var(--tk-brand,#1e8cf2);outline-offset:1px;}
 .identity-bar .ib-dot{width:6px;height:6px;border-radius:50%;flex:0 0 auto;background:var(--text-tiny);}
 .identity-bar .ib-txt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.identity-bar.warn{border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.10);color:var(--tk-warn-ink,#b45309);cursor:help;}
+.identity-bar .ib-txt b{font-weight:700;color:var(--text-main);}
+.identity-bar .ib-chip{flex:none;font-size:10px;line-height:1.2;padding:1px 6px;border-radius:999px;background:rgba(16,185,129,.14);color:var(--tk-emerald,#10b981);font-weight:600;}
+/* 跳转示能：静止态右缘弱化「›」，hover 点亮——没有它零点击分不清「没需求 / 没发现」 */
+.identity-bar .ib-go{margin-left:auto;flex:none;font-weight:700;color:var(--text-tiny);transition:color .12s ease;}
+.identity-bar:hover .ib-go{color:var(--tk-brand,#1e8cf2);}
+/* 会话级覆写态：左缘绿签（与右栏人设卡「本会话覆写」同语义色，非全条换色防喧宾夺主） */
+.identity-bar.override{border-left:3px solid var(--tk-emerald,#10b981);}
+.identity-bar.warn{border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.10);color:var(--tk-warn-ink,#b45309);}
 .identity-bar.warn .ib-dot{background:#f59e0b;}
+/* D 批（2026-08-15）：手发语言错配警示条——外语会话打中文且未开出站翻译时出现。
+   与 identity-bar.warn 同视觉族；带「开启自动翻译」修复入口 + 本会话免扰 ✕。 */
+.lang-warn-bar{display:flex;align-items:center;gap:8px;margin:0 0 6px;padding:4px 10px;border:1px solid rgba(245,158,11,.45);border-radius:8px;background:rgba(245,158,11,.10);font-size:11px;color:var(--tk-warn-ink,#b45309);line-height:1.4;}
+.lang-warn-bar .lw-txt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.lang-warn-bar .lw-fix{flex:0 0 auto;border:1px solid rgba(245,158,11,.55);border-radius:6px;background:var(--bg-panel);color:var(--tk-warn-ink,#b45309);font-size:11px;font-weight:600;padding:2px 8px;cursor:pointer;}
+.lang-warn-bar .lw-fix:hover{background:rgba(245,158,11,.18);}
+.lang-warn-bar .lw-x{flex:0 0 auto;cursor:pointer;font-weight:700;opacity:.65;padding:0 2px;}
+.lang-warn-bar .lw-x:hover{opacity:1;}
 .reply-bar{display:flex;gap:8px;align-items:flex-end;}
 .reply-textarea{flex:1;border:1px solid var(--border);border-radius:10px;padding:9px 12px;font-size:13px;resize:none;line-height:1.4;font-family:inherit;outline:none;max-height:120px;min-height:44px;transition:border-color .15s;background:var(--bg-panel);color:var(--text-main);}
 .reply-textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb, var(--accent,#1e8cf2) 15%, transparent);}
@@ -469,9 +502,12 @@
 /* 翻译弹层：标题 + 绿色一键开启 + 分区排版 */
 .xl-pop-hd{font-size:13px;font-weight:700;color:var(--text-main);margin:0 0 8px;display:flex;align-items:center;gap:5px;}
 .xl-quick-row{display:flex;gap:8px;align-items:center;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--border);}
-.xl-quick{flex:1;font:inherit;font-size:12px;font-weight:600;cursor:pointer;padding:7px 10px;border:1px solid transparent;border-radius:8px;background:#0f9d75;color:#fff;transition:background .15s;}
-.xl-quick:hover{background:#0c8a66;}
+.xl-quick{flex:1;font:inherit;font-size:12px;font-weight:600;cursor:pointer;padding:7px 10px;border:1px solid transparent;border-radius:8px;background:var(--tk-emerald,#0f9d75);color:#fff;transition:background .15s,color .15s,border-color .15s,filter .15s;}
+.xl-quick:hover{filter:brightness(.92);}
 .xl-quick-row .tiny-btn{padding:7px 12px;}
+/* P0（2026-08-16）：一键开关两态——on 态换成描边胶囊感，点击语义=关闭 */
+.xl-quick.on{background:var(--xl-accent-bg);color:var(--xl-accent-strong);border-color:var(--xl-accent-border);}
+.xl-quick.on:hover{background:var(--xl-accent-bg);border-color:var(--xl-accent);filter:brightness(1.04);}
 .rt-pop-wrap{position:relative;display:inline-flex;align-items:center;gap:6px;}
 .rt-pop{position:absolute;bottom:calc(100% + 8px);left:0;z-index:60;min-width:300px;background:var(--bg-elev);border:1px solid var(--border);border-radius:10px;box-shadow:0 -6px 24px rgba(15,23,42,.14);padding:10px;display:none;}
 .rt-pop.show{display:block;}
@@ -481,6 +517,10 @@
 .rt-xl-status{font-size:11px;font-weight:600;color:var(--text-tiny);white-space:nowrap;padding:2px 9px;border-radius:999px;border:1px solid var(--btn-border);background:var(--bg-soft);transition:background .12s,border-color .12s,color .12s;}
 .rt-xl-status:hover{border-color:var(--xl-accent);}
 .rt-xl-status.on{color:var(--xl-accent-strong);background:var(--xl-accent-bg);border-color:var(--xl-accent-border);}
+/* P0（2026-08-16）：设置变更即时反馈——状态胶囊 pop 一下（reduced-motion 豁免） */
+.rt-xl-status.flash{animation:xlStatusPop .55s ease;}
+@keyframes xlStatusPop{0%{transform:scale(1);}35%{transform:scale(1.18);box-shadow:0 0 0 5px color-mix(in srgb,var(--accent,#2563eb) 20%,transparent);}100%{transform:scale(1);box-shadow:none;}}
+@media (prefers-reduced-motion: reduce){.rt-xl-status.flash{animation:none;}}
 /* 弹层内双向翻译条改为竖向铺开、去渐变背景以贴合白底弹层 */
 .rt-pop .xlate-bar{background:transparent;border:0;padding:0;gap:8px;}
 .reply-preview{margin-top:7px;border:1px solid var(--xl-info-border);background:var(--xl-info-bg);border-radius:8px;padding:8px;font-size:12px;color:var(--xl-info-text);white-space:pre-wrap;display:none;}
@@ -529,6 +569,41 @@
 .dlm-clear{border:1px solid var(--btn-border);border-radius:6px;background:var(--bg-elev);color:var(--text-sub);font-size:11px;padding:2px 8px;cursor:pointer;flex-shrink:0;}
 .dlm-clear:hover{border-color:#ef4444;color:#ef4444;}
 .dlm-empty{color:var(--text-tiny);font-size:12px;padding:10px 0;line-height:1.6;}
+/* P0-5（2026-08-16）：管理弹窗修活——生效链胶囊 + 就地「新增/修改」编辑行 */
+.dlm-sec-sub{font-size:11px;color:var(--text-sub);margin-bottom:8px;}
+.dlm-eff{font-size:11px;font-weight:600;color:var(--xl-accent-strong);background:var(--xl-accent-bg);border:1px solid var(--xl-accent-border);border-radius:8px;padding:3px 8px;margin:0 0 8px;display:inline-block;}
+.dlm-editor{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px;margin-top:8px;background:var(--bg-soft);border:1px dashed var(--xl-accent-border);border-radius:10px;}
+.dlm-editor select{font-size:11px;padding:3px 6px;border:1px solid var(--btn-border);border-radius:7px;background:var(--bg-panel);color:var(--text-main);max-width:150px;}
+.dlm-editor .tiny-btn:disabled{opacity:.5;cursor:not-allowed;}
+.dlm-add-lbl{font-size:11px;font-weight:700;color:var(--text-sub);flex-basis:100%;}
+/* P0-2（2026-08-16）：同语诚实提示——客户语言==入站目标语时说明「为什么没在翻」；
+   P1 复用同容器做「智能建议」（客户语言≠坐席语言且未开翻译 → 一键建议） */
+.xl-conv-hint{margin:0 0 8px;font-size:11px;line-height:1.5;color:var(--text-sub);background:var(--bg-soft);border:1px dashed var(--xl-accent-border);border-radius:8px;padding:5px 8px;}
+.xl-hint-btn{font:inherit;font-size:11px;font-weight:700;cursor:pointer;margin-left:4px;padding:2px 10px;border:1px solid var(--xl-accent-border);border-radius:999px;background:var(--xl-accent-bg);color:var(--xl-accent-strong);}
+.xl-hint-btn:hover{border-color:var(--xl-accent);}
+/* ── P1（2026-08-16）弹层信息架构：方向卡片 + 发送方式分段 + 高级折叠 ────────── */
+.xl-dir-card{display:flex;flex-direction:column;gap:8px;padding:9px 10px;background:var(--bg-soft);border:1px solid var(--border);border-radius:10px;}
+.xl-dir-card .xlate-dir{justify-content:space-between;}
+.xl-dir-card .xlate-dir .xlate-sel{min-width:132px;}
+.xl-sendmode-row{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:11px;color:var(--text-sub);}
+.xl-sendmode-lbl{font-weight:700;color:var(--text-tiny);white-space:nowrap;}
+.xl-seg{display:inline-flex;border:1px solid var(--btn-border);border-radius:8px;overflow:hidden;background:var(--bg-soft);}
+.xl-seg-btn{font:inherit;font-size:11px;font-weight:600;cursor:pointer;padding:4px 10px;border:0;background:transparent;color:var(--text-sub);white-space:nowrap;}
+.xl-seg-btn+.xl-seg-btn{border-left:1px solid var(--btn-border);}
+.xl-seg-btn.on{background:var(--xl-accent-bg);color:var(--xl-accent-strong);font-weight:700;}
+details.xl-adv{margin-top:8px;border-top:1px dashed var(--border);padding-top:6px;}
+details.xl-adv>summary{cursor:pointer;font-size:11px;font-weight:700;color:var(--text-tiny);letter-spacing:.3px;list-style:none;display:flex;align-items:center;gap:4px;user-select:none;}
+details.xl-adv>summary::-webkit-details-marker{display:none;}
+details.xl-adv>summary::before{content:'▸';font-size:10px;transition:transform .15s;}
+details.xl-adv[open]>summary::before{transform:rotate(90deg);}
+details.xl-adv .xlate-dir{margin-top:7px;}
+details.xl-adv .xl-default-row{border-top:0;padding-top:0;}
+/* P2（2026-08-16）窄屏（≤480px 桌面壳档）：翻译弹层从右锚气泡改为底部抽屉——
+   右锚 min-width 300 在 405px 视口向左溢出 153px（真浏览器门禁实锤半屏被裁，
+   存量缺陷）；bottom:64px 让开 56px 移动平台条 + 8px 间隙（与筛选抽屉同约定）。 */
+@media (max-width:480px){
+  #xlate-pop{position:fixed;left:8px;right:8px;bottom:64px;min-width:0;max-height:calc(100vh - 140px);overflow:auto;}
+}
 /* 单次翻译工具分区：小标题 + 2×2 网格，主次清晰、不再挤成乱行 */
 .xl-tools{margin-top:10px;padding-top:10px;border-top:1px solid var(--border);}
 .xl-tools-lbl{display:block;font-size:11px;font-weight:700;color:var(--text-tiny);letter-spacing:.3px;margin-bottom:6px;}
@@ -726,6 +801,8 @@
 .conv-acct-badge .cab-dot{width:5px;height:5px;border-radius:50%;}
 /* 身份可视化：会话条人设徽章（账号徽章同族更小号）+ 未绑人设黄色警示点（会话条/账号 chip 共用） */
 .conv-persona-badge{display:inline-flex;align-items:center;font-size:10px;padding:0 5px;line-height:14px;border-radius:999px;font-weight:600;vertical-align:middle;margin-left:3px;max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.conv-persona-badge.ov{padding-left:4px;}
+.conv-persona-badge.ov::before{content:"";width:5px;height:5px;border-radius:50%;flex:none;margin-right:3px;background:var(--tk-emerald,#10b981);box-shadow:0 0 0 1.5px rgba(16,185,129,.22);}
 .conv-nopersona-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#f59e0b;box-shadow:0 0 0 2px rgba(245,158,11,.22);vertical-align:middle;margin-left:4px;flex:0 0 auto;cursor:help;}
 /* P2: 会话条悬浮快捷操作（认领/归档/标签）——hover 才显示，避免常态拥挤 */
 .conv-quick{position:absolute;right:8px;bottom:6px;display:none;gap:5px;z-index:3;}
@@ -758,8 +835,13 @@
 /* P1-2: AI 值守姿态（workspace 全局，主管专属）——专家级 autosend 配置收敛成三档一键开关
    一期美化：由列表头整行收敛为标题行「状态胶囊 + 弹层」，弹层内沿用原 standby-bar 结构 */
 .standby-wrap{position:relative;display:inline-flex;flex-shrink:0;}
-.standby-pill{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);background:var(--bg-soft);color:var(--text-sub);font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;cursor:pointer;white-space:nowrap;transition:border-color .15s,color .15s;}
+.standby-pill{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--border);background:var(--bg-soft);color:var(--text-sub);font-size:11px;font-weight:700;padding:3px 7px;border-radius:999px;cursor:pointer;white-space:nowrap;transition:border-color .15s,color .15s;}
 .standby-pill:hover{border-color:var(--accent);color:var(--text-main);}
+/* P1 自适应降级（2026-08-12）：标题装不下时 JS（_fitTitleRow）给胶囊挂 .compact —— 只剩彩点，
+   点色携带档位语义，文案进 tooltip/aria-label；点稍放大补偿可视性，点击热区靠 padding 保住。 */
+.standby-pill.compact{padding:4px 7px;gap:0;}
+.standby-pill.compact .standby-pill-lbl{display:none;}
+.standby-pill.compact .standby-pill-dot{width:9px;height:9px;}
 .standby-pill-dot{width:7px;height:7px;border-radius:50%;background:var(--text-tiny);flex-shrink:0;transition:background .15s;}
 .standby-pill[data-mode="suggest"] .standby-pill-dot{background:var(--tk-brand,#3b82f6);}
 .standby-pill[data-mode="suggest"]{border-color:color-mix(in srgb, var(--accent,#1e8cf2) 40%, transparent);color:var(--accent);}
@@ -841,9 +923,14 @@
 .draft-block-hint{font-size:11px;line-height:1.5;color:var(--bdg-danger-ink);background:var(--bdg-danger-bg);border-radius:6px;padding:4px 7px;margin:4px 0 2px;}
 .tiny-btn.is-suggested{border-color:var(--green);color:var(--green);font-weight:700;}
 
-/* 右侧业务助手侧栏（与桌面端 copilot 同源组件，默认选中会话后展开） */
-.info-sidebar{width:300px;min-width:280px;max-width:480px;flex-shrink:0;border-left:1px solid var(--border);background:var(--bg-panel);display:none;flex-direction:column;overflow:hidden;position:relative;}
+/* 右侧业务助手侧栏（与桌面端 copilot 同源组件）。
+   2026-08-17 四形态：宽屏 expanded / rail / hidden（状态机 _cpApplyPanelMode）；
+   顶部「助手」开关宽屏隐藏——收展入口改在面板头部 + 右缘把手，避免双入口打架；
+   窄屏（≤768px 全宽覆盖式）保留按钮与切换。
+   max-width 与 sidebar-chrome 动态上限对齐（min(720,45vw)）；旧 480 会把向左拉伸卡死。 */
+.info-sidebar{width:300px;min-width:280px;max-width:min(720px,45vw);flex-shrink:0;border-left:1px solid var(--border);background:var(--bg-panel);display:none;flex-direction:column;overflow:hidden;position:relative;}
 .info-sidebar.show{display:flex;}
+@media(min-width:769px){ #info-toggle-btn{display:none !important;} }
 .ws-sidebar-resize{position:absolute;left:0;top:0;bottom:0;width:5px;cursor:col-resize;z-index:3;touch-action:none;}
 .ws-sidebar-resize:hover,.ws-sidebar-resize.dragging{background:color-mix(in srgb,var(--accent) 28%,transparent);}
 .ws-cp-head{padding:10px 14px;font-size:14px;font-weight:700;color:var(--text-main);border-bottom:1px solid var(--border);flex-shrink:0;background:var(--bg-soft);}
@@ -859,10 +946,15 @@
 .ws-cp-body{flex:1;overflow-y:auto;scrollbar-width:thin;}
 .ws-cp-sec{display:none;padding:12px 12px 16px;}
 .ws-cp-sec.active{display:block;}
+/* tab 切换 150ms 渐入（2026-08-12 P0，与 shared/copilot/app.html 同款；尊重系统减动效偏好） */
+@media (prefers-reduced-motion: no-preference){
+  .ws-cp-sec.active{animation:wsCpSecIn .15s ease-out;}
+  @keyframes wsCpSecIn{from{opacity:0;transform:translateY(3px);}to{opacity:1;transform:none;}}
+}
 .ws-cp-sec h4{font-size:11px;font-weight:700;color:var(--text-tiny);text-transform:uppercase;letter-spacing:.5px;margin:16px 0 8px;display:flex;align-items:center;gap:5px;}
 .ws-cp-sec h4:first-child{margin-top:0;}
 .ws-cp-sec cp-draft,.ws-cp-sec cp-voice,.ws-cp-sec cp-persona,
-.ws-cp-sec cp-rel-stage,.ws-cp-sec cp-collab,.ws-cp-sec cp-next-actions,.ws-cp-sec cp-chain-exec{display:block;margin-bottom:4px;}
+.ws-cp-sec cp-rel-stage,.ws-cp-sec cp-collab,.ws-cp-sec cp-chain-exec{display:block;margin-bottom:4px;}
 .info-section{border-bottom:1px solid var(--border);padding:10px 14px;}
 .info-section-title{font-size:11px;font-weight:700;color:var(--text-tiny);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;}
 .info-row{display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;}
@@ -935,8 +1027,6 @@
 .conv-goal-mark .ui-ic{display:block;}
 :root[data-cp-theme="dark"] .goal-af-chip:not(.on){border-color:rgba(148,163,184,.22);}
 :root[data-cp-theme="dark"] .goal-af-chip:not(.on):hover{background:rgba(148,163,184,.10);}
-/* 把 NBA 组件外框压平融入英雄卡（组件外观由 CSS 变量控制，置为透明/无内边距） */
-.cp-hero-nba{display:block;padding:0 10px 10px;--cp-surface:transparent;--cp-border:transparent;--cp-gap:0;--cp-radius:0;}
 /* 卡内子分区（关系卡并旅程 / 协作卡并注解）：虚线分隔 + 小节标题 */
 .cp-subsec{margin-top:10px;border-top:1px dashed var(--border);padding-top:8px;}
 .cp-subsec-ttl{font-size:11px;font-weight:700;color:var(--text-tiny);letter-spacing:.4px;margin-bottom:6px;display:flex;align-items:center;gap:5px;}
@@ -1522,6 +1612,21 @@ button.fleet-cell:disabled{cursor:default;}
 @media (prefers-reduced-motion:reduce){
   .connect-mode-opt.disabled.cfg:hover .connect-mode-unavail-cue{transform:none;}
 }
+/* 规划中（not_implemented）三档视觉的第三档：比「有条件不可用」（斜纹=修好就能用）
+   更安静——功能不存在，不该用「坏了」的视觉喊叫；低饱和让位给能用的卡。 */
+.connect-mode-opt.disabled.planned{opacity:.6;background:none;}
+.connect-mode-opt.disabled.planned:hover{border-color:var(--border);background:none;box-shadow:none;transform:none;}
+.connect-mode-opt.disabled.planned .connect-mode-lock{color:var(--text-tiny);}
+/* 说明卡标题行的原因短徽：默认危险色（block 级卡点），warn/规划中走琥珀 */
+.connect-unavail-chip{display:inline-flex;align-items:center;margin-left:8px;padding:1px 8px;border-radius:999px;font-size:10.5px;font-weight:700;letter-spacing:.2px;white-space:nowrap;background:color-mix(in srgb, var(--red,#dc2626) 12%, transparent);color:var(--tk-danger-ink,#b91c1c);border:1px solid color-mix(in srgb, var(--red,#dc2626) 25%, transparent);}
+.connect-unavail-chip.warn{background:color-mix(in srgb, var(--warn,#d97706) 14%, transparent);color:var(--tk-warn-ink,#b45309);border-color:color-mix(in srgb, var(--warn,#d97706) 30%, transparent);}
+/* 二维码有效期条（qr 形态；视觉语言对齐 PIN 倒计时条）：品牌色走秒，末 30s 转琥珀 */
+.connect-qr-ttlbar{height:3px;border-radius:999px;background:var(--bg-soft);margin:8px auto 0;max-width:236px;overflow:hidden;}
+.connect-qr-ttlbar i{display:block;height:100%;width:100%;border-radius:999px;background:var(--pc,var(--accent,#1e8cf2));transition:width 1s linear;}
+.connect-qr-ttlbar i.low{background:var(--warn,#d97706);}
+@media (prefers-reduced-motion:reduce){
+  .connect-qr-ttlbar i{transition:none;}
+}
 .connect-mode-desc{font-size:11.5px;color:var(--text-sub);line-height:1.5;margin-top:2px;}
 /* 账号配置（代理 + 指纹），仿截图分区 */
 .cfg-section{border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px;text-align:left;}
@@ -1707,7 +1812,7 @@ button.fleet-cell:disabled{cursor:default;}
 .msg-row.out .vp-more:hover{background:color-mix(in srgb,var(--ofg) 18%,transparent);color:var(--ofg);}
 
 /* ===== Phase 14: 会话标签 ===== */
-.conv-tags-row{display:flex;flex-wrap:wrap;gap:3px;margin-top:3px;}
+/* （.conv-tags-row 已随 C 批行等高化下线——标签收编进 .conv-line2-chips 行内带） */
 /* 一期美化：普通标签改中性灰（品牌蓝只留给选中/主操作，语义色 tk-* 不变） */
 .conv-tag-chip{display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:600;background:rgba(148,163,184,.16);color:var(--text-sub);line-height:1.5;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .conv-group-tag{display:inline-block;padding:0 5px;border-radius:6px;font-size:11px;font-weight:700;background:rgba(148,163,184,.2);color:var(--tk-text-muted);vertical-align:middle;line-height:15px;margin-left:2px;}
@@ -1720,9 +1825,18 @@ button.fleet-cell:disabled{cursor:default;}
 .acct-out-banner{display:flex;align-items:center;gap:10px;margin:0 10px 6px;padding:7px 12px;border-radius:9px;font-size:12.5px;line-height:1.5;}
 .acct-out-banner.warn{background:color-mix(in srgb,#f59e0b 14%,var(--bg-panel,#fff));border:1px solid color-mix(in srgb,#f59e0b 38%,transparent);color:var(--th-ink-amber7,#92400e);}
 .acct-out-banner.removed{background:var(--th-bg-red1,#fee2e2);border:1px solid color-mix(in srgb,#dc2626 30%,transparent);color:var(--th-ink-red7,#b91c1c);}
+/* Messenger 陌生人「消息请求」引导条：品牌蓝 info 调（非故障非警告——是「新客户来了」的正面信息） */
+.acct-out-banner.info{background:color-mix(in srgb,var(--tk-brand,#1e8cf2) 10%,var(--bg-panel,#fff));border:1px solid color-mix(in srgb,var(--tk-brand,#1e8cf2) 35%,transparent);color:var(--bdg-info-ink,#0b64b7);}
 .acct-out-banner .aob-txt{flex:1 1 auto;min-width:0;}
 .acct-out-banner .aob-btn{flex:0 0 auto;border:1px solid color-mix(in srgb,#b45309 45%,transparent);background:var(--bg-panel,#fff);color:var(--th-ink-amber7,#92400e);border-radius:7px;padding:3px 12px;font-size:12px;font-weight:600;cursor:pointer;transition:background .12s,color .12s;}
 .acct-out-banner .aob-btn:hover{background:color-mix(in srgb,#f59e0b 18%,var(--bg-panel,#fff));}
+/* info 条里的按钮跟随品牌蓝；danger（拒绝/删除）红调醒目防误点 */
+.acct-out-banner.info .aob-btn{border-color:color-mix(in srgb,var(--tk-brand,#1e8cf2) 45%,transparent);color:var(--bdg-info-ink,#0b64b7);}
+.acct-out-banner.info .aob-btn:hover{background:color-mix(in srgb,var(--tk-brand,#1e8cf2) 15%,var(--bg-panel,#fff));}
+.acct-out-banner .aob-btn.danger{border-color:color-mix(in srgb,#dc2626 45%,transparent);color:var(--tk-danger-ink,#b91c1c);}
+.acct-out-banner .aob-btn.danger:hover{background:color-mix(in srgb,#dc2626 12%,var(--bg-panel,#fff));}
+/* 会话行「新客户请求」chip：翠绿正面调（区别于琥珀「已退出」/红「风控」——这是好消息） */
+.conv-req-chip{display:inline-block;padding:0 5px;border-radius:6px;font-size:11px;font-weight:700;background:color-mix(in srgb,var(--tk-emerald,#10b981) 18%,transparent);color:var(--tk-ok-ink,#15803d);vertical-align:middle;line-height:15px;margin-left:2px;white-space:nowrap;}
 .conv-tag-chip.archived{background:var(--bg-soft);color:#64748b;}
 /* ===== P1 会话列表美化：图标 / 语义标签 / KPI 卡色调 / 行高稳定 ===== */
 .ui-ic{display:inline-block;vertical-align:middle;flex:0 0 auto;}
@@ -1734,6 +1848,12 @@ button.fleet-cell:disabled{cursor:default;}
 .gs-ic{display:inline-flex;align-items:center;color:var(--text-sub);}
 .conv-quick .cq-btn .ui-ic{pointer-events:none;}
 /* 标签语义配色：危机/负面暖色跳出，成交/正向绿，意向紫（用主题 ink token，明暗自适应） */
+/* 驾驶舱 P2 系统标签语义色：需人工=红（attn）/ 人工接管中=琥珀（tko）——
+   「谁在开车」三色语言经语义 chip 进列表（刻意不加第四条左缘色条，见模板 _TK_RE 注释） */
+.conv-tag-chip.tk-attn,.tag-strip-chip.tk-attn,.hdr-tag-chip.tk-attn{background:rgba(225,29,72,.16);color:var(--tk-danger-ink,#e11d48);}
+.conv-tag-chip.tk-tko,.tag-strip-chip.tk-tko,.hdr-tag-chip.tk-tko{background:rgba(245,158,11,.20);color:var(--tk-warn-ink,#d97706);font-weight:700;}
+.tag-color-dot.tk-attn{background:var(--tk-danger-ink,#e11d48);}
+.tag-color-dot.tk-tko{background:var(--tk-warn-ink,#d97706);}
 .conv-tag-chip.tk-crisis,.tag-strip-chip.tk-crisis,.hdr-tag-chip.tk-crisis{background:rgba(225,29,72,.16);color:var(--tk-danger-ink,#e11d48);}
 .conv-tag-chip.tk-neg,.tag-strip-chip.tk-neg,.hdr-tag-chip.tk-neg{background:rgba(245,158,11,.16);color:var(--tk-warn-ink,#d97706);}
 .conv-tag-chip.tk-deal,.tag-strip-chip.tk-deal,.conv-tag-chip.tk-pos,.tag-strip-chip.tk-pos,.hdr-tag-chip.tk-deal,.hdr-tag-chip.tk-pos{background:rgba(16,185,129,.16);color:var(--tk-ok-ink,#059669);}
@@ -1751,6 +1871,10 @@ button.fleet-cell:disabled{cursor:default;}
 .today-stat.wait{color:var(--tk-warn-ink);}
 .today-stat.done{color:var(--tk-ok-ink);}
 .today-stat .ts-ic{position:absolute;top:5px;right:6px;opacity:.45;pointer-events:none;line-height:0;color:currentColor;}
+/* 批次三：KPI 趋势箭头（本机逐日快照，仅全部视角展示）——中性色，红只留给「需人工」 */
+.today-stat .ts-trend{position:absolute;top:4px;left:6px;font-size:10px;font-weight:700;line-height:1;color:var(--text-sub);opacity:.85;pointer-events:auto;}
+/* 待回复上升=工作量预警（琥珀，与「人工」chip 同族）；下降/其他卡保持中性 */
+.today-stat .ts-trend.warn{color:var(--tk-warn-ink);opacity:1;}
 /* 行高稳定：固定元信息列宽 + 统一最小行高，chip 叠加不再抖动 */
 .conv-meta{min-width:50px;}
 .conv-item{min-height:62px;}
@@ -1768,8 +1892,8 @@ button.fleet-cell:disabled{cursor:default;}
 .today-stat.clickable:focus-visible,.group-sec-head:focus-visible,.standby-pill:focus-visible,
 .standby-opt:focus-visible,.ce-cta:focus-visible,.ftab-more-item:focus-visible,.lhc-expand:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
 .search-input:focus-visible{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb, var(--accent,#1e8cf2) 18%, transparent);}
-/* 自动派单：建议你接管（仅当 suggested_agent 指向当前坐席且未认领时显示）*/
-.conv-suggest-row{margin-top:3px;}
+/* 自动派单：建议你接管（仅当 suggested_agent 指向当前坐席且未认领时显示；
+   容器行 .conv-suggest-row 已随 C 批下线，chip 长在 .conv-line2-chips） */
 .conv-suggest-chip{display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border-radius:6px;font-size:11px;font-weight:600;background:rgba(16,185,129,.14);color:#047857;border:1px solid rgba(16,185,129,.3);line-height:1.5;}
 :root[data-cp-theme="dark"] .conv-suggest-chip{color:#34d399;}
 /* B-2 风控可视：命中风控转人工的会话在列表高亮（背景着色，避开左侧账号色条/选中条）+ 琥珀风险 chip */
@@ -1935,10 +2059,12 @@ button.fleet-cell:disabled{cursor:default;}
   }
   .mob-plat-item.active{background:rgba(255,255,255,.1);color:#fff;}
   .mob-plat-item.disconnected{opacity:.45;}
+  /* 与桌面 .nav-badge 同语义：灰=未读、红=需人工（.attn） */
   .mob-plat-item .mob-badge{
     position:absolute;top:2px;right:2px;min-width:14px;height:14px;padding:0 3px;border-radius:7px;
-    background:#ef4444;color:#fff;font-size:9px;font-weight:700;line-height:14px;text-align:center;font-variant-numeric:tabular-nums;
+    background:#64748b;color:#fff;font-size:9px;font-weight:700;line-height:14px;text-align:center;font-variant-numeric:tabular-nums;
   }
+  .mob-plat-item .mob-badge.attn{background:var(--tk-danger,#ef4444);}
   .mob-plat-item .mob-dot{position:absolute;bottom:4px;right:6px;width:6px;height:6px;border-radius:50%;}
   .mob-plat-item .mob-dot.ok{background:#22c55e;}
   .mob-plat-item .mob-dot.warn{background:#f59e0b;}
@@ -2350,7 +2476,9 @@ button.ftab-more-item{border:none;background:none;width:100%;text-align:left;fon
 .connect-phone-view,.connect-code-view{max-width:320px;margin:0 auto;text-align:left;}
 .connect-phone-label{display:block;font-size:12px;line-height:1.45;color:var(--ink-slate5,#64748b);margin:0 0 8px;}
 :root[data-cp-theme="dark"] .connect-phone-label{color:var(--ink-slate5,#94a3b8);}
-.connect-phone-input,.connect-code-input{width:100%;box-sizing:border-box;font-size:16px;letter-spacing:.02em;}
+/* color/background 显式成对（input 主题配对门禁）：HTML 里虽恒与 .cfg-input 组合，
+   但组合是脆弱前提——谁改掉 class 列表就复现「深色下输入不可见」；token 与 cfg-input 同源 */
+.connect-phone-input,.connect-code-input{width:100%;box-sizing:border-box;font-size:16px;letter-spacing:.02em;color:var(--text-main);background:var(--bg-elev);}
 .connect-code-input{font-variant-numeric:tabular-nums;letter-spacing:.18em;text-align:center;font-weight:600;}
 .connect-code-view .connect-actions{display:flex;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:wrap;}
 #connect-code-resend{border:0;background:none;padding:0 8px 0 0;min-width:7.5em;font-size:12px;color:var(--accent);cursor:pointer;}
@@ -2367,6 +2495,34 @@ button.ftab-more-item{border:none;background:none;width:100%;text-align:left;fon
 @keyframes connect-live-dot{0%,100%{opacity:1;}50%{opacity:.35;}}
 .connect-live-badge::before{content:'';display:inline-block;width:5px;height:5px;border-radius:50%;background:currentColor;margin-right:4px;animation:connect-live-dot 1.6s ease-in-out infinite;}
 .connect-hosted-note{font-size:11px;color:var(--text-sub);line-height:1.6;margin:-6px auto 10px;max-width:340px;}
+/* 表单中继（应用内登录）：无窗口交互登录时本页直接渲染的原生分步表单（connect_relay.js） */
+.connect-relay-view{max-width:340px;margin:6px auto 4px;text-align:left;}
+.connect-relay-form{display:flex;flex-direction:column;gap:10px;}
+.connect-relay-hint{font-size:12px;line-height:1.55;color:var(--text-sub);}
+.connect-relay-error{font-size:12px;line-height:1.5;padding:8px 11px;border-radius:9px;
+  color:var(--danger,#dc2626);border:1px solid color-mix(in srgb,var(--danger,#dc2626) 35%,transparent);
+  background:color-mix(in srgb,var(--danger,#dc2626) 10%,transparent);}
+.connect-relay-field{display:flex;flex-direction:column;gap:4px;}
+.connect-relay-label{font-size:11.5px;font-weight:600;color:var(--text-sub);}
+.connect-relay-input{width:100%;box-sizing:border-box;padding:9px 11px;font-size:13px;
+  border:1px solid var(--border);border-radius:9px;background:var(--bg-soft,#f9fafb);color:var(--text);
+  transition:border-color .15s,box-shadow .15s;}
+.connect-relay-input:focus{outline:none;border-color:var(--accent,#6b8af8);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--accent,#6b8af8) 16%,transparent);}
+.connect-relay-submit{margin-top:2px;padding:9px 14px;font-size:13px;font-weight:600;cursor:pointer;
+  border:0;border-radius:9px;background:var(--accent,#6b8af8);color:#fff;}
+.connect-relay-submit:hover{filter:brightness(1.06);}
+.connect-relay-submit:disabled{opacity:.55;cursor:default;filter:none;}
+.connect-relay-prep{display:flex;flex-direction:column;align-items:center;gap:9px;padding:14px 8px;
+  font-size:12px;color:var(--text-sub);text-align:center;}
+.connect-relay-spin{width:20px;height:20px;border-radius:50%;border:2px solid var(--border);
+  border-top-color:var(--accent,#6b8af8);animation:connect-relay-spin .8s linear infinite;}
+@keyframes connect-relay-spin{to{transform:rotate(360deg);}}
+.connect-relay-checkpoint{display:flex;flex-direction:column;gap:9px;align-items:center;text-align:center;}
+.connect-relay-shot{max-width:100%;border-radius:10px;border:1px solid var(--border);}
+.connect-relay-msg{padding:12px 8px;text-align:center;font-size:13px;font-weight:600;}
+.connect-relay-msg.ok{color:var(--green,#16a34a);}
+.connect-relay-msg.expired{color:var(--text-sub);}
 /* 错误详情原文（模板内联样式给的 --text-tiny 亮色 4.47:1 差一线；本文件晚于
    模板 <style> 加载，同特异性覆盖即可，不动热区模板）。 */
 .connect-err-body{color:var(--text-sub);}
@@ -2445,11 +2601,19 @@ button.ftab-more-item{border:none;background:none;width:100%;text-align:left;fon
    只许降不许升（tools/verify_inbox_density.py，实测独占一行要吃 ~39px），故实际接线
    走紧凑内联档；上方设计块的全宽档样式保留，供将来窄栏/移动布局复用。 */
 .list-pane-seg.inline{flex:0 0 auto;margin-bottom:0;}
-.list-pane-seg.inline .lp-opt{flex:0 0 auto;padding:3px 10px;font-size:11.5px;}
-/* 会话段计数与标题旁 #total-badge 语义重复 → 内联档只保留「联系人」段徽章 */
-.list-pane-seg.inline #lp-badge-conv{display:none;}
+.list-pane-seg.inline .lp-opt{flex:0 0 auto;padding:3px 7px;font-size:11.5px;}
+/* P0 标题行减负（2026-08-12）：内联档隐藏段内 13px 小图标——有文字标签时图标纯冗余，
+   省下的 ~36px 让「所有对话」标题在主管视图（值守胶囊在场）不再坍缩成单字。
+   窄屏（≤768）列表栏全宽、预算充裕，图标恢复显示。 */
+.list-pane-seg.inline .lp-opt .ui-ic{display:none;}
+/* 内联档两个段徽章都不显示（2026-08-12）：会话数已并入标题 tooltip（updateTotalBadge），
+   联系人总数在打开联系人面板后首行盘点条（_renderContactsSummary）即见——tab 徽章是
+   信息型盘点数而非待办数，为「所有对话」标题在主管视图完整显示让出 ~24px。
+   全宽档（窄屏/未来布局）徽章保留。 */
+.list-pane-seg.inline .lp-badge{display:none;}
 @media(max-width:768px){
   .list-pane-seg.inline .lp-opt{padding:7px 9px;font-size:12px;}
+  .list-pane-seg.inline .lp-opt .ui-ic{display:inline-flex;}
 }
 /* 进场只淡入+微位移，不动画高度（面板在 flex 列里，高度动画会抖动兄弟节点） */
 .contacts-panel{animation:cpPaneIn .16s ease;}
@@ -2500,3 +2664,417 @@ html.ws-wall-on .msg-area .msg-ts{
 /* 外观快捷面板 / 表情选择器样式在 /static/workspace/appearance.css（独立文件：
    收件箱与 /personal-settings 两页共用同一份，防双份漂移）。本文件只保留
    msg-area 壁纸/动画/服务文案遮罩这些「聊天页专属」的部分（见上方）。 */
+
+/* ═════ P0 收敛（2026-08-11）：主筛选行单行横滚 + 「需人工」一等公民 + 目标议程入菜单 ═════
+   结构配套（unified_inbox.html filter-tabs 区）：.filter-tabs-primary.p0r = 新结构标记
+   （.ftab-scroll 滚动区 + 右侧固定「更多」）；旧结构不带 p0r 完全不受影响 ——
+   模板热更新窗口内新旧两态各自成立，任何中间保存不破版。 */
+.filter-tabs-primary.p0r{flex-wrap:nowrap;}
+.ftab-scroll{display:flex;align-items:center;gap:4px;flex:1 1 auto;min-width:0;overflow-x:auto;scrollbar-width:none;}
+.ftab-scroll::-webkit-scrollbar{display:none;}
+.ftab-scroll .ftab{flex:0 0 auto;}
+/* 右/左缘还有内容 → 对应侧渐隐遮罩暗示（JS _syncFtabOverflow 维护 .has-ovf-r/.has-ovf-l）。
+   这是议程行旧病（nowrap+藏滚动条+零暗示 → 被裁的 chip 等于不存在）的反面实现；
+   P2 补左缘：滚过去之后左边也有被藏的 chip，同样要有暗示。 */
+.ftab-scroll.has-ovf-r{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 22px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 22px),transparent);}
+.ftab-scroll.has-ovf-l{-webkit-mask-image:linear-gradient(90deg,transparent,#000 22px);mask-image:linear-gradient(90deg,transparent,#000 22px);}
+.ftab-scroll.has-ovf-l.has-ovf-r{-webkit-mask-image:linear-gradient(90deg,transparent,#000 22px,#000 calc(100% - 22px),transparent);mask-image:linear-gradient(90deg,transparent,#000 22px,#000 calc(100% - 22px),transparent);}
+.filter-tabs-primary.p0r .ftab-more-wrap{flex:0 0 auto;}
+.filter-tabs-primary.p0r .ftab-more-menu{left:auto;right:0;}
+/* 「需人工」＝警报语义（与账号 rail .ac-unread.attn 同色阶）：计数红底白字、chip 微红描边；
+   0 条时整枚 display:none（JS _updateFilterCounts 控制），不占版面不示众。 */
+.ftab[data-f="attn"]{border-color:color-mix(in srgb,var(--tk-danger,#ef4444) 38%,transparent);}
+.ftab[data-f="attn"] .ftab-n{background:var(--tk-danger,#ef4444);color:#fff;}
+.ftab[data-f="attn"].active{background:color-mix(in srgb,var(--tk-danger,#ef4444) 13%,transparent);color:var(--tk-danger-ink,#b91c1c);border-color:color-mix(in srgb,var(--tk-danger,#ef4444) 55%,transparent);}
+.ftab[data-f="attn"].active .ftab-n{background:var(--tk-danger,#ef4444);color:#fff;}
+/* 目标议程组进「更多」菜单的上下文样式：覆写其独立行时代的 margin / nowrap 横滚 */
+.ftab-more-menu .goal-agenda-filters{margin:4px 0 0;padding:6px 12px 6px;border-top:1px dashed var(--border);flex-wrap:wrap;overflow:visible;max-width:230px;}
+.gaf-menu-label{width:100%;font-size:10px;color:var(--text-tiny);padding-bottom:2px;}
+/* 本周成果迁入右侧空态「今日概览」卡（成就展示不是筛选）：原 margin-left:auto 是议程行右对齐用的 */
+.ce-today .goal-af-wins{margin-left:0;display:inline-block;margin-top:8px;}
+/* 标题行窄窗防溢出：标题文字先让位（已有省略号规则），分段控件/多选按钮不被压扁 */
+.list-title{min-width:0;}
+.list-pane-seg.inline,.batch-toggle{flex-shrink:0;}
+
+/* ═════ P1（2026-08-11）：「更多」菜单升格统一筛选面板 + 会话行窄屏压平 ═════
+   面板＝分组（状态/目标推进/标签/排序）+ 组内计数 + 即点即生效（沿用原单击语义，无暂存层）+
+   面板内点击不自动关闭（多维连选，见 toggleFtabMore 外点关闭器）。旧 id 全保留。 */
+.ftab-more-menu.fpanel{min-width:238px;max-width:min(320px,calc(100vw - 24px));padding-top:4px;}
+.fp-sec{width:100%;box-sizing:border-box;font-size:10px;color:var(--text-tiny);padding:7px 12px 3px;border-top:1px dashed var(--border);margin-top:3px;}
+.fp-sec.first{border-top:none;margin-top:0;padding-top:3px;}
+.fp-chips{display:flex;flex-wrap:wrap;gap:4px;padding:2px 12px 7px;}
+.fp-chip{font:inherit;font-size:11px;line-height:1.4;padding:3px 9px;border-radius:20px;cursor:pointer;border:1px solid var(--border);color:var(--text-sub);background:transparent;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;}
+.fp-chip:hover{background:var(--bg-soft);}
+.fp-chip.active{background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);border-color:color-mix(in srgb,var(--accent) 35%,transparent);font-weight:600;}
+.fp-chip .t-cnt{background:rgba(148,163,184,.22);border-radius:8px;padding:0 4px;font-size:10px;font-variant-numeric:tabular-nums;}
+/* sticky：窄屏抽屉内容可滚，底栏钉在抽屉底缘（「完成/清空」不许沉到折叠线以下） */
+.fp-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 12px 8px;border-top:1px solid var(--border);margin-top:4px;background:var(--bg-elev);border-radius:0 0 10px 10px;position:sticky;bottom:0;}
+.fp-foot .fp-clear{font-size:11px;color:var(--accent);cursor:pointer;background:none;border:none;padding:2px 4px;font-family:inherit;}
+.fp-foot .fp-done{font-size:11px;font-weight:700;border:1px solid transparent;background:var(--accent);color:#fff;border-radius:8px;padding:3px 12px;cursor:pointer;font-family:inherit;}
+/* 窄屏＝底部抽屉：右锚下拉换成固定底部面板（更大触控面 + 拇指可达；外点关闭语义不变） */
+@media(max-width:768px){
+  /* bottom:64px＝让开移动端底部平台切换条（.mob-plat-bar 56px + 8px 间隙）——8px 时抽屉底栏
+     （清空/完成）整条沉在平台条底下，渲染了也看不见（2026-08-11 截图实锤）。 */
+  .filter-tabs-primary.p0r .ftab-more-menu{position:fixed;left:8px;right:8px;bottom:64px;top:auto;max-height:60vh;overflow-y:auto;z-index:80;border-radius:14px;box-shadow:0 -6px 28px rgba(0,0,0,.28);}
+  .ftab-more-menu .ftab-more-item{padding:9px 14px;font-size:12.5px;}
+  .fp-chip{padding:6px 11px;font-size:12px;}
+}
+/* 会话行窄屏压平：右侧元信息（时间/处理者/未读/SLA）竖排改横排——405px 实测竖排一行吃 ~90px+，
+   压平后行高回归 62px 基线，同屏多露约 1/3 行。宽屏布局零变化。 */
+@media(max-width:768px){
+  .conv-meta{flex-direction:row;align-items:center;gap:4px;min-width:0;}
+  .conv-time{margin-bottom:0;}
+}
+
+/* ═════ C 批（2026-08-15）：会话行严格双行等高 ═════
+   行高忽高忽低的根源＝body 里 tags/suggest/risk 三个条件行（各 +21~22px，可叠加到
+   ~127px）+ meta 列徽章竖向堆叠（最多 4 枚 ≈ 70px）。收编后：第 2 行 = 预览（弹性
+   省略）+ 行内 chip 带（风控/建议接管/标签×2+N）；meta = 时间 + 徽章横排。所有行
+   回归 62px 基线，contain-intrinsic-size 的 62px 估高从「常错」变「恒准」（长列表
+   滚动锚点不再跳）。ratchet 见 tools/verify_inbox_density.py 的等高断言。 */
+.conv-preview-row{display:flex;align-items:center;gap:4px;min-width:0;margin-top:2px;}
+.conv-preview-row .conv-preview{flex:1 1 auto;margin-top:0;min-width:40px;}
+.conv-line2-chips{display:inline-flex;align-items:center;gap:3px;flex:0 0 auto;max-width:52%;overflow:hidden;}
+.conv-line2-chips>*{white-space:nowrap;flex:0 1 auto;}
+.conv-meta-badges{display:flex;align-items:center;justify-content:flex-end;gap:3px;}
+
+/* ═════ P2（2026-08-11）：chip 规格统一 + 窄屏触控 + 标签库抽屉化 ═════
+   六个 chip 家族（.ftab/.goal-af-chip/.fp-chip/.tag-strip-chip/.sv-chip/.fs-chip）此前是
+   6 种内边距 × 4 种圆角 × 3 种激活态画法的沉积层——统一为一套度量（min-height 24 /
+   3px 10px / 全圆角 / 11.5px）+ 一套激活态（accent 14% 染底 + accent 字 + 35% 描边）。
+   描边刻意随宿主表面（主行透明底、面板带边），不强行拉平；「需人工」的 danger 变体
+   经属性选择器（0,3,0）特异性天然压过本块，警报语义不受影响。 */
+.ftab,.goal-af-chip,.fp-chip,.tag-strip-chip,.sv-chip,.fs-chip{box-sizing:border-box;min-height:24px;padding:3px 10px;border-radius:999px;font-size:11.5px;line-height:1.4;display:inline-flex;align-items:center;gap:4px;}
+.ftab.active,.goal-af-chip.on,.fp-chip.active,.tag-strip-chip.active,.sv-chip.active{background:color-mix(in srgb,var(--accent,#1e8cf2) 14%,transparent);color:var(--accent);border-color:color-mix(in srgb,var(--accent,#1e8cf2) 35%,transparent);font-weight:600;}
+/* 计数徽标同规格（.ftab-n 为准）：tag-strip / 面板内联标签的 .t-cnt 对齐 */
+.tag-strip-chip .t-cnt,.fp-chip .t-cnt{background:rgba(148,163,184,.22);border-radius:999px;padding:0 4px;font-size:10px;min-width:15px;text-align:center;line-height:15px;font-variant-numeric:tabular-nums;font-weight:700;}
+/* 窄屏触控：chip 视觉高 24→30px；主行 chips 另加透明热区（±5px，纯纵向——横向相邻仅 4px 间隙
+   会互抢），30+10=40px 有效触控高。面板/strip 的 chips 会换行，纵向有邻居故不加热区。 */
+@media(max-width:768px){
+  .ftab,.goal-af-chip,.fp-chip,.tag-strip-chip{min-height:30px;padding:6px 12px;font-size:12px;}
+  .ftab{position:relative;}
+  .ftab::after{content:"";position:absolute;left:-1px;right:-1px;top:-5px;bottom:-5px;}
+  /* 标签库下拉窄屏抽屉化：与筛选面板同款底部固定（此前仍是顶部锚定的旧下拉，
+     筛选面板已是底部抽屉 → 同一入口两种形态的体验分裂）。64px 让开平台条同前。 */
+  .filter-tabs-primary.p0r .tag-filter-dropdown{position:fixed;left:8px;right:8px;bottom:64px;top:auto;max-height:60vh;overflow-y:auto;z-index:81;border-radius:14px;box-shadow:0 -6px 28px rgba(0,0,0,.28);}
+  .tfd-item{padding:10px 16px;font-size:13px;}
+}
+
+/* ===== P0 账号顶部状态栏 Account Dock（2026-08-16，账号 rail 的升维视图）=====
+   「所有账号排到顶部、点击即切该号会话」——位置=顶栏（含壳标签条）之下、.inbox-root 之上，
+   跨平台常驻。数据与状态机全复用 rail（platform_status 聚合 + setPlatFilter/setAccountFilter）；
+   徽标(.ac-unread 同规格)/仅历史标(.ac-ghost-tag)/确认脉冲(acAck)/步进箭头(.ac-nav)复用 rail
+   单源家族，勿另造第七套 chip 规格。高度让位走壳标签条同款模式（body.adk-on 时 .inbox-root
+   减 --adk-h；壳标签条 cx-strip-on 的 .ws-body 让位在上一层，两层正交互不影响）。 */
+:root{--adk-h:48px;}
+.acct-dock{position:relative;display:flex;align-items:center;gap:6px;height:var(--adk-h);box-sizing:border-box;padding:0 8px;background:var(--bg-panel);border-bottom:1px solid var(--border);}
+body.adk-on .inbox-root{height:calc(100% - var(--adk-h));}
+html[data-ws-embed="1"] .acct-dock{display:none!important;}
+html[data-ws-embed="1"] body.adk-on .inbox-root{height:100%;}
+.adk-scroll{display:flex;align-items:center;gap:6px;flex:1 1 auto;min-width:0;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;padding:4px 2px;}
+.adk-scroll::-webkit-scrollbar{display:none;}
+.adk-scroll.has-more{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 22px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 22px),transparent);}
+.adk-scroll.has-less{-webkit-mask-image:linear-gradient(90deg,transparent,#000 22px);mask-image:linear-gradient(90deg,transparent,#000 22px);}
+.adk-scroll.has-more.has-less{-webkit-mask-image:linear-gradient(90deg,transparent,#000 22px,#000 calc(100% - 22px),transparent);mask-image:linear-gradient(90deg,transparent,#000 22px,#000 calc(100% - 22px),transparent);}
+.acct-dock.sc-less .ac-nav.left{display:inline-flex;}
+.acct-dock.sc-more .ac-nav.right{display:inline-flex;}
+.acct-dock .ac-tools{display:flex;align-items:center;gap:4px;flex:0 0 auto;padding-left:8px;border-left:1px solid var(--border);}
+.adk-sep{width:1px;height:22px;background:var(--border);flex:0 0 auto;margin:0 2px;}
+.adk-item{position:relative;display:inline-flex;align-items:center;gap:8px;height:38px;padding:2px 10px 2px 3px;border-radius:999px;border:1px solid transparent;background:transparent;cursor:pointer;flex:0 0 auto;max-width:220px;transition:background .15s,border-color .15s,box-shadow .15s;}
+.adk-item:hover{background:var(--bg-soft);border-color:var(--border);}
+.adk-item:active{transform:scale(.97);}
+.adk-item.active{background:color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 12%,transparent);border-color:color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 60%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 26%,transparent);}
+.adk-item.ac-ack{animation:acAck .5s ease-out 1;}
+.adk-item.ac-ghost{opacity:.62;border-style:dashed;border-color:var(--border);}
+.adk-item.ac-ghost.active{opacity:.92;}
+.adk-item.ac-toggle{border:1px dashed var(--border);padding:2px 10px;font-size:12px;color:var(--text-sub);height:32px;}
+.adk-item.ac-toggle.active{color:var(--accent);border-color:var(--accent);}
+.adk-av{position:relative;width:32px;height:32px;border-radius:50%;flex:0 0 auto;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:14px;line-height:1;user-select:none;}
+.adk-av img{width:100%;height:100%;object-fit:cover;border-radius:50%;}
+.adk-av.off{filter:grayscale(.55);opacity:.8;}
+.adk-av-all{background:color-mix(in srgb,var(--accent,#6b8af8) 15%,transparent);color:var(--accent,#6b8af8);}
+.adk-plat{position:absolute;right:-3px;bottom:-3px;width:15px;height:15px;border-radius:50%;background:var(--bg-panel);display:flex;align-items:center;justify-content:center;line-height:0;box-shadow:0 0 0 1.5px var(--bg-panel);}
+.adk-plat svg{width:12px;height:12px;display:block;border-radius:3px;}
+.adk-st{position:absolute;left:-1px;bottom:-1px;width:9px;height:9px;border-radius:50%;background:var(--text-tiny,#94a3b8);box-shadow:0 0 0 2px var(--bg-panel,#fff);}
+.adk-st.on{background:var(--green,#22c55e);}
+.adk-txt{display:flex;flex-direction:column;justify-content:center;min-width:0;max-width:136px;gap:1px;}
+.adk-name{font-size:12.5px;font-weight:600;color:var(--text-main);line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.adk-item.active .adk-name{color:color-mix(in srgb,var(--pc,var(--accent,#6b8af8)) 72%,var(--text-main));}
+.adk-sub{font-size:10.5px;color:var(--text-sub);line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:3px;}
+.adk-item .ac-unread{background:color-mix(in srgb,var(--text-sub,#64748b) 82%,transparent);color:#fff;border-radius:999px;font-size:10px;padding:0 5px;min-width:16px;text-align:center;line-height:15px;font-variant-numeric:tabular-nums;flex:0 0 auto;}
+.adk-item .ac-unread.attn{background:var(--red,#ef4444);}
+.adk-item .conv-nopersona-dot{margin-left:0;}
+/* 拥挤降密（>6 账号）：非选中项收起文字列、未读徽标改浮角标（textContent 仍在 DOM，a11y/工具可读） */
+.acct-dock.adk-tight .adk-item:not(.active):not(.ac-toggle) .adk-txt{display:none;}
+.acct-dock.adk-tight .adk-item:not(.active):not(.ac-toggle){padding:2px 4px 2px 3px;}
+.acct-dock.adk-tight .adk-item:not(.active):not(.ac-toggle) .ac-unread{position:absolute;top:-4px;right:-4px;z-index:2;box-shadow:0 0 0 2px var(--bg-panel);}
+.adk-skel{display:flex;align-items:center;gap:10px;padding:0 6px;}
+.adk-skel-av{width:32px;height:32px;border-radius:50%;background:var(--bg-soft);flex:0 0 auto;}
+/* 总览下拉平台分组头（dock 跨平台模式；rail 单平台模式无此元素） */
+.ac-pick-sec{display:flex;align-items:center;gap:5px;padding:8px 9px 3px;font-size:10.5px;font-weight:700;color:var(--text-sub);letter-spacing:.4px;}
+.ac-pick-sec svg{border-radius:3px;flex:0 0 auto;}
+:root[data-cp-theme="dark"] .adk-item:hover{border-color:rgba(148,163,184,.35);}
+@media (prefers-reduced-motion:reduce){.adk-item.ac-ack{animation:none;}.adk-item:active{transform:none;}}
+@media (max-width:768px){
+  :root{--adk-h:44px;}
+  .acct-dock{padding:0 6px;}
+  .adk-item{height:34px;gap:6px;}
+  .adk-av{width:28px;height:28px;font-size:12px;}
+  .adk-plat{width:13px;height:13px;}
+  .adk-plat svg{width:10px;height:10px;}
+  .adk-txt{max-width:104px;}
+  /* 移动端会话全屏（chat-panel fixed 覆盖）时 dock 让位，避免背景滚动错位 */
+  body.mob-chat-open .acct-dock{display:none;}
+  body.mob-chat-open.adk-on .inbox-root{height:100%;}
+}
+
+/* ===== 官方级消息管理（2026-08-17）：右键菜单 / 置顶徽标 / 消息多选 ===== */
+.ws-ctx-menu{position:fixed;z-index:100000;min-width:196px;max-width:288px;
+  background:var(--card-bg,#1c1d22);border:1px solid var(--card-bd,rgba(255,255,255,.09));
+  border-radius:10px;box-shadow:0 10px 32px rgba(0,0,0,.45);padding:5px;user-select:none;}
+.ws-ctx-item{display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:7px;
+  font-size:13px;color:var(--text-main,#e5e7eb);cursor:pointer;line-height:1.35;white-space:nowrap;}
+.ws-ctx-item:hover{background:var(--th-hover,rgba(255,255,255,.06));}
+.ws-ctx-item.danger{color:var(--tk-danger-ink,#f87171);}
+.ws-ctx-item.disabled{opacity:.42;cursor:not-allowed;}
+.ws-ctx-item.disabled:hover{background:transparent;}
+.ws-ctx-item .wci-ic{display:inline-flex;width:16px;justify-content:center;opacity:.85;flex:none;}
+.ws-ctx-sep{height:1px;margin:4px 6px;background:var(--card-bd,rgba(255,255,255,.08));}
+/* Account Dock P1：hover 详情卡（纯只读信息面；z 低于右键菜单，两者互斥由 JS 保证） */
+.adk-hv{position:fixed;z-index:99990;min-width:208px;max-width:300px;
+  background:var(--card-bg,#1c1d22);border:1px solid var(--card-bd,rgba(255,255,255,.09));
+  border-radius:10px;box-shadow:0 10px 32px rgba(0,0,0,.45);padding:10px 12px;
+  pointer-events:none;user-select:none;}
+.adk-hv-head{display:flex;align-items:center;gap:9px;min-width:0;}
+.adk-hv-av{width:30px;height:30px;border-radius:50%;flex:none;display:inline-flex;
+  align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;overflow:hidden;}
+.adk-hv-av img{width:100%;height:100%;object-fit:cover;border-radius:50%;}
+.adk-hv-t{min-width:0;display:flex;flex-direction:column;gap:1px;}
+.adk-hv-name{font-size:13px;font-weight:600;color:var(--text-main,#e5e7eb);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.adk-hv-plat{font-size:11px;color:var(--text-tiny,#8b93a7);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.adk-hv-rows{display:flex;flex-wrap:wrap;gap:4px 6px;margin-top:8px;}
+.adk-hv-chip{display:inline-flex;align-items:center;gap:4px;font-size:11px;line-height:1;
+  padding:4px 7px;border-radius:999px;color:var(--text-sub,#b8bfce);
+  background:var(--th-hover,rgba(255,255,255,.06));white-space:nowrap;}
+.adk-hv-chip.on{color:var(--tk-ok-ink,#34d399);}
+.adk-hv-chip.off{color:var(--text-tiny,#8b93a7);}
+.adk-hv-chip.attn{color:var(--tk-danger-ink,#f87171);}
+/* P2：hover 卡「最近活动」行（allChats 客户端聚合，零后端） */
+.adk-hv-recent{margin-top:8px;padding-top:8px;border-top:1px solid var(--card-bd,rgba(255,255,255,.08));
+  font-size:11px;line-height:1.45;color:var(--text-sub,#b8bfce);
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+/* P2：dock 拖拽排序（同平台组内重排；HTML5 DnD，触屏不触发） */
+.adk-item.adk-drag{opacity:.45;}
+.adk-item.adk-drop-l{box-shadow:inset 3px 0 0 0 var(--accent,#6366f1);}
+.adk-item.adk-drop-r{box-shadow:inset -3px 0 0 0 var(--accent,#6366f1);}
+/* 置顶徽标：官方语义——📌 长在 meta 徽标带最前，不加行高不加分组标题 */
+.conv-pin-badge{display:inline-flex;color:var(--text-tiny,#8b93a7);opacity:.92;vertical-align:-1px;}
+/* 消息多选：选中气泡描边 + 行手型；操作条为悬浮胶囊（不动线程布局） */
+.msgsel-on .msg-row{cursor:pointer;}
+.msg-row.msg-selected .msg-bubble{outline:2px solid var(--th-accent,#3b82f6);outline-offset:1px;}
+/* 前置勾选框（Telegram 式）：选择模式下每行左侧常驻空心圆、选中=蓝底对号。
+   纯 CSS 跟随 .msg-selected 类——keyed-diff 重渲后 _msgSelSync 描回类名即自动恢复，零 JS。 */
+.msgsel-on .msg-row{position:relative;padding-left:34px;}
+.msgsel-on .msg-row::before{content:'';position:absolute;left:6px;top:50%;margin-top:-10px;
+  width:20px;height:20px;border-radius:50%;box-sizing:border-box;
+  border:2px solid color-mix(in srgb,var(--text-tiny,#8b93a7) 75%,transparent);
+  background:var(--bg-elev,transparent);transition:background .12s,border-color .12s;}
+.msgsel-on .msg-row:hover::before{border-color:var(--th-accent,#3b82f6);}
+.msgsel-on .msg-row.msg-selected::before{background:var(--th-accent,#3b82f6);border-color:var(--th-accent,#3b82f6);}
+.msgsel-on .msg-row.msg-selected::after{content:'✓';position:absolute;left:6px;top:50%;margin-top:-10px;
+  width:20px;height:20px;display:flex;align-items:center;justify-content:center;
+  color:#fff;font-size:13px;font-weight:700;line-height:1;pointer-events:none;}
+.msgsel-bar{position:fixed;left:50%;transform:translateX(-50%);bottom:84px;z-index:9998;
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;
+  background:var(--card-bg,#1c1d22);border:1px solid var(--card-bd,rgba(255,255,255,.1));
+  border-radius:12px;padding:8px 12px;box-shadow:0 8px 28px rgba(0,0,0,.4);
+  font-size:12.5px;color:var(--text-main,#e5e7eb);max-width:min(92vw,560px);}
+.msgsel-bar .msb-btn{background:transparent;border:1px solid var(--card-bd,rgba(255,255,255,.18));
+  color:inherit;border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer;white-space:nowrap;}
+.msgsel-bar .msb-btn:hover{background:var(--th-hover,rgba(255,255,255,.07));}
+.msgsel-bar .msb-btn.danger{color:var(--tk-danger-ink,#f87171);
+  border-color:color-mix(in srgb, var(--tk-danger-ink,#f87171) 40%, transparent);}
+.msgsel-bar .msb-btn:disabled{opacity:.4;cursor:not-allowed;}
+
+/* ── 消息管理 P2（2026-08-17）：回收站弹层 + 多选快捷键提示 ─────────────── */
+.mo-rc-mask{position:fixed;inset:0;background:rgba(8,12,20,.52);z-index:1300;display:flex;align-items:center;justify-content:center;}
+.mo-rc-card{width:min(560px,calc(100vw - 48px));max-height:72vh;display:flex;flex-direction:column;background:var(--bg-elev,#fff);border:1px solid var(--border,#e2e8f0);border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,.28);overflow:hidden;}
+.mo-rc-head{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;padding:12px 14px 8px;border-bottom:1px solid var(--border,#e2e8f0);}
+.mo-rc-title{font-weight:700;font-size:14px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-main,#111);}
+.mo-rc-sub{flex-basis:100%;font-size:11.5px;color:var(--text-sub,#64748b);line-height:1.5;}
+.mo-rc-x{border:none;background:transparent;color:var(--text-sub,#64748b);font-size:16px;line-height:1;cursor:pointer;padding:2px 6px;flex:none;}
+.mo-rc-list{flex:1;overflow-y:auto;padding:6px 10px;min-height:80px;}
+.mo-rc-row{display:flex;align-items:flex-start;gap:8px;padding:8px 6px;border-bottom:1px solid var(--line-soft,#f1f5f9);}
+.mo-rc-row:last-child{border-bottom:none;}
+.mo-rc-dir{flex:none;font-size:10.5px;font-weight:600;border-radius:5px;padding:1px 6px;margin-top:2px;background:var(--bg-soft,#f1f5f9);color:var(--text-sub,#64748b);}
+.mo-rc-dir.out{background:color-mix(in srgb,var(--accent,#1e8cf2) 14%,transparent);color:var(--tk-brand,#1e8cf2);}
+.mo-rc-body{flex:1;min-width:0;}
+.mo-rc-txt{font-size:12.5px;line-height:1.5;color:var(--text-main,#111);word-break:break-word;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
+.mo-rc-meta{font-size:11px;color:var(--text-tiny,#94a3b8);margin-top:2px;}
+.mo-rc-btn{flex:none;border:1px solid var(--btn-border,#d8dee9);background:var(--bg-soft,#f8fafc);color:var(--text-med,#334155);border-radius:7px;padding:3px 10px;font-size:12px;font-weight:600;cursor:pointer;}
+.mo-rc-btn:hover{border-color:var(--accent,#1e8cf2);color:var(--tk-brand,#1e8cf2);}
+.mo-rc-btn:disabled{opacity:.5;cursor:default;}
+.mo-rc-btn.all{width:100%;padding:7px 10px;}
+.mo-rc-empty{padding:26px 0;text-align:center;font-size:12.5px;color:var(--text-sub,#64748b);}
+.mo-rc-foot{padding:8px 10px;border-top:1px solid var(--border,#e2e8f0);}
+.mo-rc-foot:empty{display:none;}
+.msgsel-keys{font-size:11px;color:var(--text-tiny,#94a3b8);margin-left:6px;white-space:nowrap;}
+
+/* ===== 历史 / 已退出账号分区（历史账号治理 P0，2026-08-17）=====
+   排版原则：与在册卡同构的「身份行 → 元信息 → 动作行」分层，按钮绝不进 head
+   单行 flex（旧版把状态胶囊 + 最多 3 个按钮塞进 head，408px 抽屉下文字列被挤成
+   竖排断行——「排版混乱」的直接根因）。状态语义分层配色：已退出=琥珀（可救）、
+   已移除=中性灰（只读定案）、桌面/在册=品牌淡蓝、仅历史=低饱和。 */
+.acct-hist-head{display:flex;align-items:center;gap:8px;width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:10px;background:var(--bg-elev);cursor:pointer;color:var(--text-main);font-size:13px;font-weight:700;text-align:left;transition:border-color .15s;}
+.acct-hist-head:hover{border-color:color-mix(in srgb,var(--accent) 45%,transparent);}
+.acct-hist-head:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+.acct-hist-head .acct-hist-ic{display:flex;color:var(--text-sub);flex:0 0 auto;}
+.acct-hist-ttl{flex:1;min-width:0;display:flex;align-items:center;gap:7px;white-space:nowrap;overflow:hidden;}
+.acct-hist-n{display:inline-flex;align-items:center;justify-content:center;min-width:18px;padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--text-sub) 15%,transparent);color:var(--text-sub);font-size:11px;line-height:17px;font-weight:700;font-variant-numeric:tabular-nums;}
+.acct-hist-head .ac-unread{background:color-mix(in srgb,var(--text-sub,#64748b) 82%,transparent);color:#fff;border-radius:999px;font-size:10px;padding:0 5px;min-width:16px;text-align:center;line-height:15px;font-variant-numeric:tabular-nums;flex:0 0 auto;}
+.acct-hist-chev{margin-left:auto;flex:0 0 auto;color:var(--text-sub);display:flex;transition:transform .18s;transform:rotate(-90deg);}
+.acct-hist-chev.open{transform:rotate(0deg);}
+.acct-hist-group .acct-plat-sub{margin:8px 2px;}
+/* 历史行卡：紧凑分层；head 不可点（无 hover 高亮），动作独立成行；
+   盖掉 .acct-card.off 的红渍渐变——历史号是存档不是告警，红色留给在册离线故障 */
+.acct-card.acct-hist-row{padding:10px 12px;background:var(--bg-elev);}
+.acct-hist-row .acct-card-head{cursor:default;margin:0 0 2px;padding:0;}
+.acct-hist-row .acct-card-head:hover{background:transparent;}
+.acct-hist-row .acct-actions{margin-top:8px;gap:6px;}
+.acct-hist-row .acct-btn{padding:5px 10px;font-size:11.5px;}
+.acct-hist-row .ac-unread{background:color-mix(in srgb,var(--text-sub,#64748b) 82%,transparent);color:#fff;border-radius:999px;font-size:10px;padding:0 5px;min-width:16px;text-align:center;line-height:15px;font-variant-numeric:tabular-nums;flex:0 0 auto;margin-right:2px;}
+/* 状态胶囊语义分层（.acct-pill 基座之上按态取色） */
+.acct-pill.hist-out{color:var(--tk-warn-ink,#b45309);background:color-mix(in srgb,var(--warn,#f59e0b) 15%,transparent);}
+.acct-pill.hist-removed{color:var(--text-sub);background:color-mix(in srgb,var(--text-sub) 13%,transparent);}
+.acct-pill.hist-only{color:var(--text-sub);background:color-mix(in srgb,var(--text-sub) 9%,transparent);border:1px dashed color-mix(in srgb,var(--text-sub) 30%,transparent);}
+.acct-pill.hist-reg{color:var(--accent);background:color-mix(in srgb,var(--accent) 11%,transparent);}
+/* 已退出主 CTA＝琥珀（可救、不紧急）——红色 .reconnect 留给在册离线故障号 */
+.acct-hist-row .acct-btn.hist-relogin{flex:1 1 auto;border-color:color-mix(in srgb,var(--warn,#f59e0b) 45%,transparent);color:var(--tk-warn-ink,#b45309);background:color-mix(in srgb,var(--warn,#f59e0b) 12%,transparent);font-weight:600;}
+.acct-hist-row .acct-btn.hist-relogin:hover{background:color-mix(in srgb,var(--warn,#f59e0b) 20%,transparent);border-color:var(--warn,#f59e0b);color:var(--tk-warn-ink,#b45309);}
+.acct-hist-row .acct-btn.primary{flex:1 1 auto;}
+
+/* ===== 只读历史视角横幅（会话列表顶部，进入视角时点亮）===== */
+.hist-view-banner{display:none;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--warn,#f59e0b) 9%,var(--bg-panel));color:var(--text-main);font-size:12px;line-height:1.45;}
+.hist-view-banner.show{display:flex;}
+.hist-view-banner.tone-neutral{background:color-mix(in srgb,var(--text-sub) 8%,var(--bg-panel));}
+.hist-view-banner .hvb-ic{display:flex;color:var(--tk-warn-ink,#b45309);flex:0 0 auto;}
+.hist-view-banner.tone-neutral .hvb-ic{color:var(--text-sub);}
+.hist-view-banner .hvb-txt{flex:1;min-width:0;}
+.hist-view-banner .hvb-name{font-weight:700;}
+.hist-view-banner .hvb-hint{display:block;color:var(--text-sub);font-size:11px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.hist-view-banner .hvb-btn{flex:0 0 auto;display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:7px;border:1px solid var(--border);background:var(--bg-elev);color:var(--text-sub);font-size:11.5px;cursor:pointer;white-space:nowrap;transition:border-color .15s,color .15s;}
+.hist-view-banner .hvb-btn:hover{border-color:var(--accent);color:var(--accent);}
+
+/* ===== 业务助手面板形态体系（2026-08-17 四形态：expanded / rail / hidden + 空态说明书） =====
+   DOM 已提升：#info-sidebar 与 #chat-empty/#chat-content 平级（chat-panel 行布局），
+   未选会话/切平台时面板不再随会话容器蒸发。宽屏可见性由 mode-* 类驱动（JS 状态机
+   单写入点），.show 仅保留窄屏覆盖式语义；形态与宽度均 localStorage 记忆。 */
+@media(min-width:769px){
+  .chat-panel{flex-direction:row;}
+  .info-sidebar{display:flex;transition:width .18s ease;}
+  .info-sidebar:has(>.ws-sidebar-resize.dragging){transition:none;}   /* 拖宽时禁动画防迟滞 */
+  .info-sidebar.mode-hidden{display:none;}
+  .info-sidebar.mode-rail{width:44px !important;min-width:44px !important;}
+  .info-sidebar.mode-rail .ws-cp-head,
+  .info-sidebar.mode-rail .ws-sidebar-resize{display:none !important;}
+  .info-sidebar.mode-rail:not(.mode-flyout) .ws-cp-flyout-pane{display:none;}
+  .info-sidebar.mode-rail.mode-flyout{overflow:visible;z-index:56;}
+  .info-sidebar.mode-rail.mode-flyout .ws-cp-flyout-pane{
+    display:flex;flex-direction:column;position:fixed;z-index:55;
+    width:320px;max-width:min(360px,40vw);
+    background:var(--bg-panel);border:1px solid var(--border);border-right:none;
+    border-radius:12px 0 0 12px;box-shadow:-8px 0 28px rgba(0,0,0,.18);
+    overflow:hidden;animation:cp-fly-in .16s ease-out;
+  }
+  .info-sidebar.mode-rail.mode-flyout .ws-cp-fly-bar{display:flex;}
+  /* 飞层正文：native=强显 ws-cp-body；App(iframe)=iframe 本体（body 保持 App 的内联隐藏） */
+  .info-sidebar.mode-rail.mode-flyout:not(.is-app) .ws-cp-body{display:flex !important;flex-direction:column;flex:1;min-height:0;overflow-y:auto;}
+  .info-sidebar.is-app.mode-rail.mode-flyout .ws-cp-appwrap:not([hidden]){display:block;flex:1;min-height:0;}
+  .info-sidebar.mode-rail .ws-cp-tabs{flex-direction:column;align-items:center;gap:10px;padding:10px 0 0;border-bottom:none;background:transparent;}
+  .info-sidebar.mode-rail .ws-cp-tab{flex:0 0 auto;width:32px;height:32px;padding:0;border-radius:9px;border-bottom:2px solid transparent;position:relative;overflow:visible;justify-content:center;}
+  .info-sidebar.mode-rail .ws-cp-tab span[data-i18n]{display:none;}   /* 轨态只留图标+徽章 */
+  .info-sidebar.mode-rail .ws-cp-tab.active{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent);}
+  .info-sidebar.mode-rail .ws-cp-tab-badge{position:absolute;top:-5px;right:-5px;}
+}
+@media(prefers-reduced-motion:reduce){ .info-sidebar{transition:none;} .info-sidebar.mode-rail.mode-flyout .ws-cp-flyout-pane{animation:none;} }
+@keyframes cp-fly-in{from{opacity:0;transform:translateX(12px);}to{opacity:1;transform:none;}}
+/* 飞层：expanded 时 display:contents 让子节点继续参与侧栏 flex（不打乱头/页签/正文顺序） */
+.ws-cp-flyout-pane{display:contents;}
+.ws-cp-fly-bar{display:none;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);flex:0 0 auto;}
+.ws-cp-fly-title{flex:1;min-width:0;font-size:13px;font-weight:700;color:var(--text-main);}
+.ws-cp-fly-pin,.ws-cp-fly-close{width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--border);border-radius:8px;background:var(--bg-soft);color:var(--text-sub);cursor:pointer;padding:0;transition:color .15s,border-color .15s;}
+.ws-cp-fly-pin:hover,.ws-cp-fly-close:hover{color:var(--accent);border-color:var(--accent);}
+.ws-cp-fly-scrim{position:absolute;inset:0;z-index:50;border:0;padding:0;margin:0;background:rgba(15,23,42,.16);cursor:default;}
+.chat-panel.cp-flyout-open{position:relative;overflow:visible;}
+.ws-cp-handle-dot{position:absolute;top:8px;left:50%;transform:translateX(-50%);width:7px;height:7px;border-radius:50%;background:var(--red,#ef4444);box-shadow:0 0 0 2px var(--bg-panel);}
+.ws-cp-handle-dot[hidden]{display:none !important;}
+/* ===== P2 单卡撕出：悬浮小窗（搬同一节点；原位留回收 chip）===== */
+.ws-cp-float{position:fixed;z-index:64;display:flex;flex-direction:column;min-width:280px;min-height:220px;max-width:96vw;max-height:92vh;background:var(--bg-panel);border:1px solid var(--border);border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,.28);overflow:hidden;resize:both;}
+.ws-cp-float-bar{display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--border);background:var(--bg-soft);cursor:move;user-select:none;touch-action:none;flex:0 0 auto;}
+.ws-cp-float-ttl{flex:1;min-width:0;font-size:12.5px;font-weight:700;color:var(--text-main);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ws-cp-float-dock{width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--border);border-radius:7px;background:var(--bg-elev);color:var(--text-sub);cursor:pointer;padding:0;flex:0 0 auto;transition:color .15s,border-color .15s;}
+.ws-cp-float-dock:hover{color:var(--accent);border-color:var(--accent);}
+.ws-cp-float-bd{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;padding:8px;}
+.ws-cp-float-bd .cp-card{margin:0;border:none;border-radius:0;background:transparent;}
+.ws-cp-float-bd .cp-card-hd{cursor:default;}
+.ws-cp-float-bd .cp-card-chev,.ws-cp-float-bd .cp-tear-btn{display:none !important;}
+.ws-cp-float-bd .cp-card.collapsed .cp-card-bd{display:block;}
+.ws-cp-float-note{display:none;padding:14px 12px;font-size:12px;line-height:1.55;color:var(--text-sub);}
+.ws-cp-float.cp-empty .ws-cp-float-note{display:block;}
+.ws-cp-float.cp-empty .ws-cp-float-bd{display:none;}
+.ws-cp-float.cp-flash{animation:cp-float-flash .9s ease-out;}
+@keyframes cp-float-flash{0%{box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 70%,transparent),0 18px 50px rgba(0,0,0,.28);}100%{box-shadow:0 18px 50px rgba(0,0,0,.28);}}
+/* 卡头撕出按钮：常态隐形，悬停卡头才现（低频动作不占常驻视觉位） */
+.cp-tear-btn{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:6px;color:var(--text-tiny);opacity:0;flex:0 0 auto;transition:opacity .12s,color .12s;}
+.cp-card-hd:hover .cp-tear-btn,.cp-tear-btn:focus-visible{opacity:.8;}
+.cp-tear-btn:hover{color:var(--accent);opacity:1;}
+/* 原位回收 chip：虚线框提示「卡片去了哪、怎么回来」 */
+.cp-tear-ph{display:flex;align-items:center;gap:6px;margin-bottom:10px;padding:8px 10px;border:1px dashed var(--border);border-radius:10px;font-size:11.5px;color:var(--text-sub);cursor:pointer;transition:border-color .15s,color .15s;}
+.cp-tear-ph:hover{border-color:var(--accent);color:var(--accent);}
+@media(max-width:768px){.cp-tear-btn{display:none !important;}}
+@media(prefers-reduced-motion:reduce){.ws-cp-float.cp-flash{animation:none;}}
+/* App(iframe) 模式宿主 tabs：轨态=图标轨（露出），非轨态=iframe 自带页签（藏）。
+   全宽度生效（窄屏也要藏，故不能进 min-width 媒体块）；替代 _wsEnableApp 旧内联写法。 */
+.info-sidebar.is-app:not(.mode-rail) .ws-cp-tabs{display:none !important;}
+/* 收纳轨底部控件（仅 rail 形态显示；margin-top:auto 沉底） */
+.ws-cp-rail-acts{display:none;}
+.info-sidebar.mode-rail .ws-cp-rail-acts{display:flex;flex-direction:column;align-items:center;gap:8px;margin-top:auto;padding:8px 0 10px;}
+.ws-cp-rail-btn{width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--border);border-radius:9px;background:var(--bg-soft);color:var(--text-sub);cursor:pointer;padding:0;transition:color .15s,border-color .15s;}
+.ws-cp-rail-btn:hover{color:var(--accent);border-color:var(--accent);}
+/* 右缘唤回把手：hidden 形态唯一的常驻入口（「永远有回来的路」），JS 控显 */
+.ws-cp-edge-handle{position:fixed;right:0;top:50%;transform:translateY(-50%);z-index:60;display:none;flex-direction:column;align-items:center;justify-content:center;width:22px;height:64px;padding:0;border:1px solid var(--border);border-right:none;border-radius:10px 0 0 10px;background:var(--bg-panel);color:var(--text-sub);cursor:pointer;opacity:.55;transition:opacity .15s,color .15s;}
+.ws-cp-edge-handle:hover{opacity:1;color:var(--accent);}
+/* 拖宽实时宽度气泡（sidebar-chrome 拖拽中创建） */
+.ws-cp-w-bubble{position:fixed;z-index:80;display:none;padding:2px 7px;border-radius:6px;font-size:11px;font-variant-numeric:tabular-nums;background:var(--tk-surface,var(--bg-elev));color:var(--tk-text,var(--text-main));border:1px solid var(--tk-border,var(--border));pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,.18);}
+.ws-cp-w-bubble.show{display:block;}
+/* 首次收纳/隐藏一次性提示（防「又消失了」工单） */
+.ws-cp-mode-tip{position:fixed;right:52px;top:50%;transform:translateY(-50%);z-index:70;max-width:228px;padding:8px 11px;border-radius:10px;font-size:12px;line-height:1.45;background:var(--bg-panel);color:var(--text-main);border:1px solid var(--border);box-shadow:0 6px 20px rgba(0,0,0,.22);opacity:0;pointer-events:none;transition:opacity .2s;}
+.ws-cp-mode-tip.show{opacity:1;}
+.ws-cp-mode-tip.near-handle{right:28px;}
+@media(prefers-reduced-motion:reduce){.ws-cp-mode-tip{transition:none;}}
+.cp-tool-group{font-size:11px;font-weight:700;color:var(--text-tiny);letter-spacing:.04em;margin:12px 2px 6px;}
+.cp-tool-group:first-of-type{margin-top:2px;}
+.info-sidebar.cp-empty-mode .cp-tool-group.cp-need-conv-lbl{display:none;}
+/* 头部「收起为轨」窄屏无意义（窄屏无轨态）；✕（彻底隐藏）在窄屏等价关闭覆盖层 */
+@media(max-width:768px){ #ws-cp-collapse-btn{display:none !important;} }
+/* ===== 空态全局模式（未选会话）：三页签说明书卡点亮，会话依赖卡收起 ===== */
+.cp-guide-card{display:none;}
+.info-sidebar.cp-empty-mode .cp-guide-card{display:block;}
+.info-sidebar.cp-empty-mode .cp-card[data-cp-need-conv],
+.info-sidebar.cp-empty-mode .cp-tear-ph[data-cp-need-conv],
+.info-sidebar.cp-empty-mode .cp-hero,
+.info-sidebar.cp-empty-mode #ws-cp-moved-hint{display:none !important;}
+#ws-cp-empty-note{overflow-y:auto;}   /* App(iframe) 模式空态说明块（JS 控显） */
+.cp-guide-bd{display:flex;flex-direction:column;gap:8px;padding:12px;}
+.cp-guide-ttl{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:700;color:var(--text-main);}
+.cp-guide-steps{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px;font-size:12px;line-height:1.55;color:var(--text-sub);}
+.cp-guide-note{font-size:11px;color:var(--text-tiny);border-top:1px dashed var(--border);padding-top:8px;}
+.cp-guide-cta{align-self:flex-start;padding:7px 14px;font-size:12px;}
+/* 窄屏覆盖式：DOM 提升后侧栏改为绝对覆盖（旧实现靠 flex 挤占 100% 宽挤走消息列）；
+   chat-panel 在窄屏是 position:fixed，absolute 即锚定其内。面板头部 ✕ 可关。 */
+@media(max-width:768px){
+  .info-sidebar{position:absolute;inset:0;z-index:6;}
+  .info-sidebar.mode-rail,.info-sidebar.mode-hidden{width:100% !important;}
+}

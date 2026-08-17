@@ -218,6 +218,20 @@ async def _video_visual_desc(
         frames = int(vision_config.get("video_frames", 4) or 4)
     except Exception:
         frames = 4
+    # 多图直喂（2026-08-15，vision.video_multi_image 默认关）：帧列表逐张独立分辨率
+    # 进 VLM（qwen*-vl 原生多图），比宫格把 N 帧挤进一张图精细；帧数走独立旋钮
+    # video_frames_multi（默认 4）——多图 token 预算必须收在 Ollama /v1 默认
+    # n_ctx=4096 内（4×640≈3k tokens），盲目跟随 video_frames 提帧会 400 超窗。
+    # 任何失败静默回落下方宫格路径——多图是增强不是替代。
+    if vision_config.get("video_multi_image"):
+        try:
+            frames_multi = int(vision_config.get("video_frames_multi", 4) or 4)
+        except Exception:
+            frames_multi = 4
+        desc = await _video_visual_desc_multi(
+            video_path, loop, vision_config, frames=frames_multi)
+        if desc:
+            return desc
     montage_path = str(Path(video_path).with_suffix(".montage.jpg"))
     try:
         res = await loop.run_in_executor(
@@ -252,6 +266,57 @@ async def _video_visual_desc(
             Path(montage_path).unlink(missing_ok=True)
         except Exception:
             pass
+
+
+async def _video_visual_desc_multi(
+    video_path: str, loop, vision_config: Dict[str, Any], *, frames: int,
+) -> Optional[str]:
+    """多图直喂路径：抽帧列表 → VisionClient.describe_images（仅 OpenAI 兼容端）。
+
+    返回 None＝调用方回落宫格；本函数自身软失败，绝不抛。帧临时目录自清理。
+    """
+    try:
+        from src.utils.video_frames import extract_frames_list
+        from src.vision_client import VisionClient as _VC
+    except Exception:
+        return None
+    import shutil
+    import tempfile
+    tmpdir = tempfile.mkdtemp(prefix="vmulti_")
+    try:
+        res = await loop.run_in_executor(
+            None,
+            lambda: extract_frames_list(video_path, tmpdir, frames=frames),
+        )
+        if not res:
+            return None
+        paths, _dur = res
+        if len(paths) < 2:
+            return None
+        v_prompt = (
+            vision_config.get("video_prompt_multi")
+            or (f"以下 {len(paths)} 张图片是同一段视频按时间先后顺序均匀抽取的帧"
+                "（第一张最早、最后一张最晚）。请综合各帧，用中文简要描述这段视频的"
+                "主要内容、画面里的人/物/场景、正在发生的事及其变化；"
+                "若有文字/商品/价格也一并读出。不要逐帧罗列，直接给整体概述。")
+        )
+        cli = _VC(dict(vision_config))
+        if not cli.initialize():
+            return None
+        text = await cli.describe_images(paths, prompt=v_prompt)
+        if text and text.strip():
+            logger.info(
+                "[inbound_video] 画面解析成功(多图直喂) frames=%s len=%s",
+                len(paths), len(text),
+            )
+            return text.strip()[:1600]
+        logger.info("[inbound_video] 多图直喂空答/失败，回落宫格路径")
+        return None
+    except Exception:
+        logger.warning("[inbound_video] 多图直喂异常，回落宫格路径", exc_info=True)
+        return None
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 async def _video_audio_understand(

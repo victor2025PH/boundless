@@ -350,7 +350,7 @@
       }).join('')) : '<span style="color:var(--tk-text-muted);font-size:13px;">'+T('dash.agent_frt.empty')+'</span>';
     }).catch(function(){ body.innerHTML='<span class="tk-fail">'+T('dash.load_fail')+'</span>'; });
   }
-  function goConv(cid){ try{ sessionStorage.setItem('ws_focus_conv', cid); }catch(_){ } location.href='/workspace'; }
+  function goConv(cid){ try{ sessionStorage.setItem('ws_focus_conv', cid); }catch(_){ } if(!(window.__wsGoHome&&window.__wsGoHome({cid:cid}))) location.href='/workspace'; }
   function closeDetail(){ document.getElementById('db-modal').style.display='none'; }
   function agentReport(ev, agent){ if(ev){ ev.stopPropagation(); ev.preventDefault(); }
     window.location='/api/workspace/daily-report.csv?days='+curDays()+'&agent='+encodeURIComponent(agent||''); }

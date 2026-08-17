@@ -1,0 +1,79 @@
+# ── 能力预设档：cloud_light（纯云起步档，WP-1 2026-08）─────────────────────────
+#
+# 目标机器：无局域网 GPU 拓扑的普通 Windows 机（陌生客户初装 / 独立演示 VM）。
+# 语义：把「零 GPU 部署该关掉的 LAN 依赖」显式钉进配置——example/种子的代码默认
+# 大多本就是关，但默认值会漂移、运营实验会留残值；本档把拓扑选择变成可检视的事实。
+#
+# 应用方式（不是运行时 merge 层，是首启一次性播种）：
+#   进程启动带 AITR_DEPLOY_PROFILE=cloud_light 且本次 config.yaml 为全新播种
+#   → ConfigManager._ensure_deploy_profile 把本文件深合并进 config.local.yaml
+#   overlay（ruamel 保注释写入），并以 deploy.profile 标记防重。
+#   升级安装 / 已有配置的机器**永不**被应用（用户已表达过的选择不被覆写）。
+#   手动应用：把本文件内容自行合并进实例 overlay 即可（纯 YAML，无代码路径）。
+#
+# 铁律（tests/test_deploy_profiles.py 门禁）：
+#   · 本目录任何预设文件不得出现内网 IP（192.168.* / 10.* / 172.16-31.*）；
+#   · feature_registry 里 reason=lan/infra 的 C 类键必须在本档显式为 false；
+#   · 本档合并进 example 基线后，LAN 探针决策函数必须全部静默（零常驻红灯）。
+
+deploy:
+  profile: cloud_light
+
+# ── 语音：克隆链关（AvatarHub 是 LAN 集群），TTS 后端仅 edge_tts（云神经声，零 GPU）──
+avatar_voice:
+  enabled: false
+realtime_voice:
+  enabled: false
+speech_emotion:
+  enabled: false
+# 语音接收转录整体关（本地 ASR 依赖已被桌面包显式排除；云 ASR 由运营后续自配）
+voice_recognition:
+  enabled: false
+telegram:
+  voice_reply:
+    backend: edge_tts
+
+# ── 视觉：无 LAN 端点（仅当运营自配云 key 时才识图；enabled 保持代码默认=关）──
+vision:
+  base_urls: []
+
+# ── 嵌入：不配 → 记忆召回退关键词、语义去重退 hash（既有软降级，零阻断）──
+ai:
+  embedding_base_url: ""
+  embedding_base_urls: []
+  # 本地 LLM 容灾关：兜底端点是 LAN Ollama，客户机白付超时
+  fallback:
+    enabled: false
+
+# ── 翻译：云引擎序（AI 主链即翻译引擎；本地 MT 不配自动跳过）──
+translation:
+  engines:
+    order: ["ai"]
+    ollama_mt:
+      base_url: ""
+      base_urls: []
+
+# ── LAN 出图 / 相册链（ComfyUI 是 LAN 后端，相册备货属运营内容）──
+companion:
+  selfie:
+    enabled: false
+
+# ── 运维探针：LAN/自有 Key 巡检类全关（探不到 = 看板恒 unknown / 告警噪声）──
+ops:
+  gpu_watermark:
+    enabled: false
+  cloud_credentials:
+    enabled: false
+
+# ── RPA（需安卓真机 / adb 基础设施，云起步档不带）──
+line_rpa:
+  enabled: false
+messenger_rpa:
+  enabled: false
+whatsapp_rpa:
+  enabled: false
+
+# ── 首启向导（WP-2）：新装客户默认见到 /welcome 五步向导；生产老实例（不经
+#    本档播种）保持基线 false 零打扰。完成后登录不再自动进入，页面仍可访问。──
+onboarding:
+  enabled: true

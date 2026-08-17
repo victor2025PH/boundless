@@ -37,6 +37,7 @@ param(
 $ErrorActionPreference = 'Continue'
 $engineRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $engineRoot
+$sweepStart = Get-Date
 
 if (-not $NoSyntaxScan) {
     Write-Output '=== [0/2] dirty .py syntax preflight (warn-only) ==='
@@ -72,6 +73,10 @@ for p, e in bad:
 }
 
 $gates = @(
+    # 全站模板 Jinja 编译冒烟（2026-08-17 `){#` 事故沉淀）：任一模板编译失败=对应页
+    # 热更新下此刻就是 500（unified_inbox=整个坐席台）。秒级、零上下文，放最前先爆。
+    # 手跑同口径：python tools/template_compile_check.py
+    'tests/test_template_jinja_compile.py',
     'tests/test_inbox_inline_handlers_exported.py',
     'tests/test_rpa_inline_handlers_exposed.py',
     # 哑图标门禁（2026-08-08）：图标名引用必须能在 ui_icons.js 注册表解析 + uiIcon 定义唯一
@@ -87,6 +92,13 @@ $gates = @(
     'tests/test_static_js_free_capture.py',
     'tests/test_template_inline_js_syntax.py',
     'tests/test_template_jinja_comment_trap.py',
+    # 全站模板真编译门禁（2026-08-17 事故沉淀）：comment-trap 抓「注释被静默吞段」
+    # 形态，这条用生产同款 Environment 真编译抓「解析失败=页面 500」形态（当日实锤：
+    # 额度横幅 CSS 写出 `){#` → unified_inbox 编译失败 → 工作台 500 十八分钟）。
+    'tests/test_templates_jinja_compile.py',
+    # 预算触顶「触发时可见」链路（2026-08-17）：默认 500 + spec 同步 + alert payload
+    # 三元组/budget 段 + SSE 白名单 + 中央弹窗/结构化确认弹窗接线 + i18n 双语。
+    'tests/test_budget_alert_popup.py',
     'tests/test_channel_page_render_integrity.py',
     'tests/test_template_inline_color_ratchet.py',
     # 主题调色板 WCAG 对比度契约（2026-08-04 白天模式可读性收口）：白天模式的
@@ -109,6 +121,11 @@ $gates = @(
     # token）；③ 全站模板 <style> 按**继承链**解析（--t1 跨页掩护 209 处两轮清零；
     # 静态资产松度经 tools/audit_template_var_links.py 实证零暴露）。
     'tests/test_input_theme_contrast.py',
+    # URL 主题钉的两条不变量（静态一层；行为侧在 -Full 的 verify_theme_pin_isolation.py，
+    # 实例没起时它 SKIP，而这三个读者全是热更新直上生产）：钉不许落进跨窗口共享键
+    # cp_theme（2026-08-15「后台点了没反应」），且钉是初始默认不是锁——显式选档必须
+    # 当场释放、释放标记只许进 sessionStorage（2026-08-16「亮色/暗色点了没反应」）。
+    'tests/test_theme_pin_window_local.py',
     # 「忘 bump」探测：坐席前端面 mtime 比 ui-build.txt 新即红（修法 scripts/bump_ui_build.py；
     # 中批红=诚实状态，由收口方 bump）
     'tests/test_ui_build_freshness.py',
@@ -139,6 +156,11 @@ $gates = @(
     # source-of-truth. Closes the hand-maintained-table drift for good.
     'tests/test_alert_delivery_e2e.py',
     'tests/test_duel_bench_status.py',
+    # Fixture time bombs (2026-08-12): hardcoded calendar dates written into
+    # *trend* data fixtures self-detonate when the consumer's now-anchored
+    # window slides past them (duel_bench blew on 08-11 with NOBODY's change =
+    # unowned red for two days). Anchor fixture dates to datetime.now().
+    'tests/test_fixture_time_bombs.py',
     # CWD 相对路径风险（生产进程 CWD = 实例数据根，非引擎根）：被服务静态资产/
     # 代码根资源用相对路径 → 本地一切正常、只在真实部署才错位。2026-07-29 实锤：
     # 自身头像写进 <数据根>/src/web/static/... → 永久 404（且指纹去重不重下）。
@@ -232,8 +254,94 @@ if ($prodUp) {
     Write-Output '  [sweep] production instance online -> BelowNormal + workers capped at 4'
 }
 $nWorkers = if ($prodUp) { '4' } else { 'auto' }
-python -m pytest @gates -n $nWorkers -q --tb=line --timeout=90 --timeout-method=thread
+# Tee stdout so the red-ledger below can parse FAILED lines; stderr stays
+# untouched (PS5.1 wraps piped stderr into red ErrorRecords = console noise).
+python -m pytest @gates -n $nWorkers -q --tb=line --timeout=90 --timeout-method=thread | Tee-Object -Variable sweepLines
 $code = $LASTEXITCODE
+
+# --- transient-red auto-requeue (2026-08-12 evening) -------------------------
+# Sweeps on the shared tree scan files WHILE sibling lines are mid-save; twice
+# today a half-written file turned a gate red for exactly one scan (ui-build
+# freshness + fixture time-bomb at 21:08 - both green on manual re-run minutes
+# later, but they still cost a triage round and polluted the red ledger).
+# A red that heals on immediate re-run is TRANSIENT: re-run just the failed
+# gate FILES once, serial, and let the SECOND pass be authoritative - a real
+# red stays red on pass 2 (mixed files re-prove their real reds too), and the
+# ledger below reads the authoritative pass. No FAILED lines parsed (collection
+# error / hang) => no re-run, first verdict stands honestly.
+if ($code -ne 0) {
+    $failedFiles = @($sweepLines | ForEach-Object { "$_" } |
+        Where-Object { $_ -match '^FAILED\s+\S' } |
+        ForEach-Object { (($_ -replace '^FAILED\s+', '').Split(' ')[0].Split(':')[0]).Trim() } |
+        Sort-Object -Unique |
+        Where-Object { $_ -and (Test-Path (Join-Path $engineRoot $_)) })
+    if ($failedFiles.Count -gt 0) {
+        Write-Output ''
+        Write-Output ("--- transient check: re-running {0} failed gate file(s) once (mid-save scans heal; real reds stay red) ---" -f $failedFiles.Count)
+        python -m pytest @failedFiles -q --tb=line --timeout=90 --timeout-method=thread | Tee-Object -Variable rerunLines
+        if ($LASTEXITCODE -eq 0) {
+            Write-Output '  re-run GREEN: first-pass reds were transient (sibling mid-save scan); verdict flips to green.'
+            $code = 0
+            $script:transientHealed = $true
+        } else {
+            Write-Output '  re-run still RED: reds are real (not mid-save transients).'
+        }
+        $sweepLines = $rerunLines   # red ledger below reads the authoritative pass
+    }
+}
+
+# --- shared red ledger (2026-08-12) -----------------------------------------
+# Root cause of the "5 pre-existing reds" era (08-11..12): every line's wrap-up
+# said "other owners, pre-existing" and nobody claimed a fix - reds had no AGE
+# and no owner anywhere, so they just sat (one was a fixture time bomb that
+# NOBODY broke). This ledger pins first-seen per failed gate test in the shared
+# .ops state dir, prints age on every sweep, and names >48h reds as unclaimed
+# debt. Scope = the [1/2] gate list only (same deterministic set for every
+# line); -Full extras never enter the ledger. Entries auto-clear when their
+# test goes green. Fail-open: a missing/corrupt ledger never breaks the sweep.
+$ledgerPath = 'D:\chengjie-instances\.ops\gate_reds.json'
+try {
+    $curReds = @($sweepLines | ForEach-Object { "$_" } |
+        Where-Object { $_ -match '^FAILED\s+\S' } |
+        ForEach-Object { ($_ -replace '^FAILED\s+', '').Split(' ')[0].Trim() } |
+        Sort-Object -Unique)
+    $ledger = @{}
+    if (Test-Path $ledgerPath) {
+        $rawLedger = Get-Content $ledgerPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        foreach ($pp in $rawLedger.PSObject.Properties) { $ledger[$pp.Name] = [string]$pp.Value }
+    }
+    # fixed = test file ran in this sweep and its entry is no longer red
+    foreach ($k in @($ledger.Keys)) {
+        $kFile = $k.Split(':')[0]
+        if (($gates -contains $kFile) -and (-not ($curReds -contains $k))) {
+            $ledger.Remove($k) | Out-Null
+        }
+    }
+    $nowIso = (Get-Date).ToString('s')
+    foreach ($r in $curReds) {
+        if (-not $ledger.ContainsKey($r)) { $ledger[$r] = $nowIso }
+    }
+    $opsDir = Split-Path -Parent $ledgerPath
+    if (Test-Path $opsDir) {
+        ($ledger | ConvertTo-Json) | Set-Content -Path $ledgerPath -Encoding UTF8
+    }
+    if ($curReds.Count -gt 0) {
+        Write-Output ''
+        Write-Output '--- red ledger: first-seen age per failed gate (shared .ops state) ---'
+        foreach ($r in $curReds) {
+            $ageTxt = '   new'
+            $tag = ''
+            if ($ledger.ContainsKey($r)) {
+                $ageH = ((Get-Date) - [datetime]$ledger[$r]).TotalHours
+                $ageTxt = ('{0,6:N1} h' -f [math]::Round($ageH, 1))
+                if ($ageH -gt 48) { $tag = '   <<< UNCLAIMED >48h: fix it, or claim it on the intent board (agent_probe -Intent)' }
+            }
+            Write-Output ('  {0}  {1}{2}' -f $ageTxt, $r, $tag)
+        }
+    }
+} catch {
+    Write-Output ('  (red ledger unavailable, sweep unaffected: {0})' -f $_.Exception.Message)
+}
 
 if ($Full) {
     Write-Output ''
@@ -271,6 +379,18 @@ if ($Full) {
     Write-Output ''
     Write-Output '=== -Full: multi-window coordinator, real browser (tools\verify_multiwin_ui.py) ==='
     python (Join-Path $engineRoot 'tools\verify_multiwin_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Cockpit page (2026-08-14 P0/P1 revamp): KPI single-source (fresh/stale split,
+    # takeover-overdue exempt from backlog fold), first-visit hint memory, category
+    # filter chips with self-heal, caps feature-probe (old backend w/o resolve =>
+    # zero "Done" buttons), empty-state ROI line, readable-name fallback (raw cid
+    # never on screen). All data faces are route-mocked in the browser (resolve POST
+    # intercepted = zero production writes; sendBeacon stubbed = zero telemetry
+    # pollution). Missing playwright / unreachable instance => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: cockpit page, real browser (tools\verify_cockpit_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_cockpit_ui.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 
     # Account rail scoped view (2026-07-29 incident class): "click account X, see
@@ -342,6 +462,44 @@ if ($Full) {
     Write-Output ''
     Write-Output '=== -Full: inbox identity bar, real browser (tools\verify_inbox_identity.py) ==='
     python (Join-Path $engineRoot 'tools\verify_inbox_identity.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Composer language-mismatch warning bar (2026-08-15 D batch). Foreign-language
+    # conversation + agent types Chinese + outbound translation off => Chinese goes
+    # out verbatim. #lang-warn-bar warns (never blocks send) with a one-click
+    # "enable auto-translate" fix reusing the _onXlateChange single write path.
+    # Truth table of _langWarnCheck is tested in a real browser; behavior section
+    # route-mocks chats language=en (zero production writes). Missing playwright /
+    # unreachable instance => static source wiring only, SKIP-equivalent exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: composer language-mismatch warning, real browser (tools\verify_composer_langwarn.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_composer_langwarn.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Sticker panel (2026-08-17 sticker-pack mainline). sticker-panel.js is an
+    # EXTERNAL static component (wraps wsEmojiOpen, injects the Emoji|Stickers
+    # tabs, all clicks via data-attr delegation) - template static gates cannot
+    # see delegated handlers living in an external JS file, and static assets
+    # hot-serve straight to production. Proves: assets loaded, emoji popover
+    # still opens (no regression), flag ON => tabs injected + grid/CTA + manage
+    # modal open/close, flag OFF => NO tabs injected (feature truly dark), zero
+    # ReferenceError. Read-only: opens panels only, never sends a sticker.
+    # Missing playwright / unreachable instance => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: sticker panel, real browser (tools\verify_sticker_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_sticker_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Conversation-translation popover P0 (2026-08-16): quick toggle is a real
+    # two-state switch (agent-language inbound + auto outbound, click again = off),
+    # _agentLang locale resolution (vi-VN browser -> vi), same-language honesty
+    # hint, and the defaults manager modal (inline editors + effective-chain pills,
+    # no selected-conversation dependency). Behavior route-mocks chats language
+    # (zero production writes). Missing playwright / unreachable => static wiring
+    # only, SKIP-equivalent exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: conversation translation popover P0, real browser (tools\verify_xlate_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_xlate_ui.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 
     # Voice "more" menu + one-click clone-bind modal (2026-08-03). Browser <audio>
@@ -478,6 +636,22 @@ if ($Full) {
     python (Join-Path $engineRoot 'tools\verify_brand_ui.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 
+    # Unified copilot App shell (2026-08-12 P0-P2 accounts/assembly/polish series).
+    # Default surface of the desktop shell right panel + target of web app-mode
+    # rollout; pure frontend hot-reloaded straight to production. Pins the three
+    # bug classes only a real browser catches from this series: hero crushed to
+    # 2px (flex min-height:auto=0 under overflow:hidden - DOM-presence gates are
+    # blind to geometry), hidden attr overridden by display:inline-flex (accounts
+    # icon "hidden" yet visible), applyI18n textContent-overwrite eating in-button
+    # icons. Also: accounts overlay open/close, hostAccounts negotiation, tab
+    # switching closes the overlay, no raw cp.* i18n keys. Read-only (fake cid
+    # probe renders err/empty skeletons; never generates/sends/archives).
+    # Missing playwright / unreachable instance / no token => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: unified copilot app shell, real browser (tools\verify_copilot_app_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_copilot_app_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
     # Copilot write-channel CSRF credential (2026-07-31 persona-switch incident).
     # The write path used to depend on a host-page fetch patch + the Referer header;
     # any privacy setting / proxy stripping Referer killed every copilot write with a
@@ -532,6 +706,38 @@ if ($Full) {
     python (Join-Path $engineRoot 'tools\verify_goal_form_ui.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 
+    # /welcome first-run wizard (WP-2 2026-08-16): five-step state machine +
+    # persona_create_wizard modal hosted on a non-personas page + resume/skip
+    # persistence + send-to-self payload contract (chat_key='me'). All lifecycle
+    # behavior static gates cannot see; same fixture style as verify_goal_form_ui
+    # (file:// page, offline-rendered Jinja content, fake fetch, zero instance
+    # dependency). Missing playwright => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: welcome onboarding wizard, fixture browser (tools\verify_onboarding_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_onboarding_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Messenger 应用内登录（表单中继）渲染器 (2026-08-13): connect_relay.js 的 render 薄壳——
+    # form 态同步骤不清屏（登录表单被 2.5s 轮询清空是致命 UX，cp-goal 草稿幸存事故同类）、
+    # data-relay-field 收值、2FA/密码错/成功各态、driveTick 编排（注入 stub fetchJson）。
+    # 同 verify_goal_form_ui.py 的夹具风格（file:// 内联组件、假 fetch、零实例依赖）。
+    # 缺 playwright => SKIP exit 0。
+    Write-Output ''
+    Write-Output '=== -Full: messenger relay login renderer, fixture browser (tools\verify_relay_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_relay_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # 接入向导失败态自愈 (P0 2026-08-13): cred_invalid 失败卡——hosted 倒计时归零
+    # **自动重试**（封顶 2 轮转 exhausted）、self 就地修正表单、诊断短码渲染、
+    # phone_* 字段级错误、手机号链归零只解锁**绝不自动重发短信**、失败遮罩无转圈
+    # （「转圈+报错并存」回归钉）。两个状态机的协同静态门禁证不了；telegram 的
+    # modes/start/cancel/preflight/diag-upload 全 page.route 合成——零真实登录、
+    # 零池容量消耗。实例不可达 => 静态接线仍守，浏览器段 SKIP exit 0。
+    Write-Output ''
+    Write-Output '=== -Full: connect wizard fail-state self-heal, real browser (tools\verify_connect_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_connect_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
     # Goal outcomes report page (P2 2026-08-09): KPI/matrix/trend/heat rendering,
     # per-row send modal, checkbox batch bar, outreach preview (stops before real
     # send), deep-link filter presets, 403 disabled guidance. Live instance +
@@ -541,6 +747,22 @@ if ($Full) {
     Write-Output ''
     Write-Output '=== -Full: goal outcomes report page, real browser (tools\verify_goal_report_ui.py) ==='
     python (Join-Path $engineRoot 'tools\verify_goal_report_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # URL theme-pin window isolation (2026-08-15 incident). `?theme=dark` pins ONE
+    # embedded webview; cp_theme is the profile-WIDE governance key. Leaking the pin
+    # into cp_theme made the pinned window re-broadcast dark on every applyTheme and
+    # revert the admin day/night switch within ~150ms in a sibling window of the same
+    # partition -- reported as "the backend day/night toggle does nothing", while the
+    # click handler fired, telemetry counted it, and every single-page gate stayed
+    # green. The defect only exists with two windows sharing localStorage, and the
+    # three readers (workspace_base head, unified_inbox head, appearance.js) all
+    # hot-reload straight to production, so it needs a real two-tab browser gate.
+    # Read-only: two logged-in tabs, one theme-toggle click, DOM/localStorage reads.
+    # Missing playwright / unreachable instance / no token => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: URL theme-pin window isolation, real browser (tools\verify_theme_pin_isolation.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_theme_pin_isolation.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 
     # cp-voice state machine (P0 2026-08-05): preview clear/regenerate/stale-guard,
@@ -602,6 +824,47 @@ if ($Full) {
     Write-Output '=== -Full: setup wizard deeplink + reach strip, real browser (tools\verify_setup_wizard_ui.py) ==='
     python (Join-Path $engineRoot 'tools\verify_setup_wizard_ui.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Shell-fusion page half (2026-08-11 rail fusion). The desktop rail became a
+    # top tab strip; "open official web app" sank into the account drawer, unread
+    # badge + tab/inject-health state flow through the inbox-preload bridge. The
+    # page half (bridge-detect render / click drives bridge / state push rewrites
+    # entry semantics / pure-browser zero-change) is hot-reloaded template JS no
+    # static gate can prove; the shell half is pinned by desktop boot-invariants.
+    # Bridge is STUBBED (works with no real shell present); read-only otherwise.
+    # Missing playwright / unreachable instance => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: shell-fusion drawer entry + state push, real browser (tools\verify_shell_fusion_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_shell_fusion_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+}
+
+# --- shared sweep record (2026-08-12 evening) --------------------------------
+# preflight consumes this as ADVISORY context ("what did the gate face look
+# like last time anyone swept?") before a tree-loading restart. Deliberately
+# NOT a GO/NO-GO input: a red here may be another line's ledgered debt - the
+# red ledger already tracks ownership/age; blocking B's restart on A's red
+# would be overreach. Fail-open: a broken record never breaks the sweep.
+try {
+    $recPath = 'D:\chengjie-instances\.ops\last_sweep.json'
+    if (Test-Path (Split-Path -Parent $recPath)) {
+        $passedN = 0
+        foreach ($l in $sweepLines) {
+            if ("$l" -match '(\d+) passed') { $passedN = [int]$matches[1] }
+        }
+        $rec = [ordered]@{
+            ts               = (Get-Date).ToString('s')
+            verdict          = if ($code -eq 0) { 'green' } else { 'red' }
+            passed           = $passedN
+            failed           = @($curReds | Where-Object { $_ })
+            transient_healed = [bool]$script:transientHealed
+            full             = [bool]$Full
+            duration_sec     = [int]((Get-Date) - $sweepStart).TotalSeconds
+        }
+        ($rec | ConvertTo-Json) | Set-Content -Path $recPath -Encoding UTF8
+    }
+} catch {
+    Write-Output ('  (sweep record unavailable, sweep unaffected: {0})' -f $_.Exception.Message)
 }
 
 if ($code -eq 0) {

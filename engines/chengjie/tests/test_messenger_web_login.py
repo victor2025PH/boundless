@@ -46,6 +46,121 @@ def test_maybe_register_gating():
         pl._PROVIDERS.pop(pl._pkey("messenger", "web"), None)
 
 
+def test_interactive_login_flag_default_off():
+    # 安全底线：交互登录默认关（含桌面壳），只认显式配置。
+    assert mgw.interactive_login_enabled({}) is False
+    assert mgw.interactive_login_enabled(
+        {"platform_login": {"messenger": {"interactive_login": True}}}) is True
+
+
+def test_provider_relay_gated_by_flag(monkeypatch):
+    """表单中继钩子必须被 interactive_login 门控：关 → interactive False + 钩子 None。"""
+    async def fake_post(url, payload, timeout=20.0):
+        if url.endswith("/login/start"):
+            return {"login_id": "msg_relay", "qr_image": "", "status": "pending"}
+        return {"ok": True}
+    monkeypatch.setattr(mgw, "_post_json", fake_post)
+
+    async def run(cfg):
+        provider = mgw.make_provider(cfg)
+        return await provider(None, "messenger", "web", "")
+
+    off = asyncio.run(run({"platform_login": {"messenger": {"web_url": "http://x"}}}))
+    assert off.get("interactive") is False
+    assert off.get("relay_step") is None
+    assert off.get("relay_submit") is None
+
+    on = asyncio.run(run({"platform_login": {"messenger": {
+        "web_url": "http://x", "interactive_login": True}}}))
+    assert on.get("interactive") is True
+    assert callable(on.get("relay_step"))
+    assert callable(on.get("relay_submit"))
+
+
+def test_provider_relay_step_and_submit_call_sidecar(monkeypatch):
+    """开启交互登录时，relay_step/relay_submit 打到正确的 sidecar 端点、透传 step+values。"""
+    seen = {"get": None, "post": None}
+
+    async def fake_post(url, payload, timeout=20.0):
+        if url.endswith("/login/start"):
+            return {"login_id": "msg_relay", "qr_image": "", "status": "pending"}
+        seen["post"] = (url, payload)
+        return {"ok": True, "submitted": True, "step": "credentials"}
+
+    async def fake_get(url, timeout=20.0):
+        seen["get"] = url
+        return {"status": "pending", "step": "credentials",
+                "fields": ["email", "password"], "booting": False}
+
+    monkeypatch.setattr(mgw, "_post_json", fake_post)
+    monkeypatch.setattr(mgw, "_get_json", fake_get)
+
+    async def run():
+        provider = mgw.make_provider({"platform_login": {"messenger": {
+            "web_url": "http://x", "interactive_login": True}}})
+        info = await provider(None, "messenger", "web", "")
+        step = await info["relay_step"](None)
+        assert step["step"] == "credentials"
+        assert step["fields"] == ["email", "password"]
+        sub = await info["relay_submit"](None, "credentials",
+                                         {"email": "a@b.com", "password": "pw"})
+        assert sub["ok"] is True and sub["submitted"] is True
+
+    asyncio.run(run())
+    assert seen["get"].endswith("/login/msg_relay/relay-step")
+    assert seen["post"][0].endswith("/login/msg_relay/relay-submit")
+    assert seen["post"][1]["step"] == "credentials"
+    assert seen["post"][1]["values"]["email"] == "a@b.com"
+
+
+def test_start_payload_carries_interactive_when_enabled(monkeypatch):
+    """交互登录开启 → /login/start 带 interactive:true（边车据此走无窗口模式）；
+    关闭 → 不带该字段（边车维持既有 headed 弹窗，零回归）。"""
+    seen = {"start_payload": None}
+
+    async def fake_post(url, payload, timeout=20.0):
+        if url.endswith("/login/start"):
+            seen["start_payload"] = dict(payload)
+            return {"login_id": "msg_x", "qr_image": "", "status": "pending"}
+        return {"ok": True}
+
+    monkeypatch.setattr(mgw, "_post_json", fake_post)
+
+    async def run(cfg):
+        provider = mgw.make_provider(cfg)
+        await provider(None, "messenger", "web", "acc1")
+        return seen["start_payload"]
+
+    p_on = asyncio.run(run({"platform_login": {"messenger": {
+        "web_url": "http://x", "interactive_login": True}}}))
+    assert p_on.get("interactive") is True
+
+    seen["start_payload"] = None
+    p_off = asyncio.run(run({"platform_login": {"messenger": {"web_url": "http://x"}}}))
+    assert "interactive" not in p_off
+
+
+def test_provider_relay_step_soft_fallback(monkeypatch):
+    """relay-step 探针异常 → 软回落 wait（绝不抛，不阻断登录链）。"""
+    async def fake_post(url, payload, timeout=20.0):
+        return {"login_id": "msg_relay", "qr_image": "", "status": "pending"}
+
+    async def boom(url, timeout=20.0):
+        raise RuntimeError("sidecar down")
+
+    monkeypatch.setattr(mgw, "_post_json", fake_post)
+    monkeypatch.setattr(mgw, "_get_json", boom)
+
+    async def run():
+        provider = mgw.make_provider({"platform_login": {"messenger": {
+            "web_url": "http://x", "interactive_login": True}}})
+        info = await provider(None, "messenger", "web", "")
+        step = await info["relay_step"](None)
+        assert step["step"] == "wait"
+
+    asyncio.run(run())
+
+
 def test_provider_flow_authorized(monkeypatch):
     # 伪造 Node/Playwright 微服务的 HTTP 响应
     async def fake_post(url, payload, timeout=20.0):

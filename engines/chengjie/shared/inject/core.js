@@ -501,6 +501,11 @@ function createInject(host, deps) {
   function bubblePeerId(bubble) {
     try { return PROFILE.peerId ? PROFILE.peerId(bubble) : ""; } catch (e) { return ""; }
   }
+  // 气泡真实时间（P0 时间推理）：档案无 ts 提取器/解析不确定 → 0（宁缺勿错，
+  // 后端对无 ts 行走结构判定，绝不猜时间）。
+  function bubbleTs(bubble) {
+    try { return (PROFILE.ts && PROFILE.ts(bubble)) || 0; } catch (e) { return 0; }
+  }
 
   let _diagAt = 0;
   function ingestDiag(bubbles) {
@@ -543,7 +548,9 @@ function createInject(host, deps) {
       text,
       direction: PROFILE.isOut(bubble) ? "out" : "in",
       msg_id: String(mid),
-      ts: Math.floor(Date.now() / 1000),
+      // 优先气泡真实时间——旧实现恒用抓取时刻，历史消息回流后在库里被抹平成
+      // 「刚刚」（实录：8/8 的消息落库成 8/12 21:15），时间推理/回访判定全失真。
+      ts: bubbleTs(bubble) || Math.floor(Date.now() / 1000),
     });
   }
 
@@ -667,9 +674,31 @@ function createInject(host, deps) {
     for (const b of bubbles) {
       const text = bubbleVisibleText(b);
       if (!text) continue;
-      out.push({ direction: PROFILE.isOut(b) ? "out" : "in", text });
+      const row = { direction: PROFILE.isOut(b) ? "out" : "in", text };
+      // 带上气泡真实时间（抓不到不带=旧行为）：后端时间推理靠它区分
+      // 「刚收到的消息」和「四天前已答过的旧消息」。
+      const ts = bubbleTs(b);
+      if (ts > 0) row.ts = ts;
+      out.push(row);
     }
     return out;
+  }
+
+  // 当前会话 peer（智能回复浮钮用）：与 maybeReportActiveChat 同一套判定，
+  // 点击时现算（活跃聊天可能刚切换，_lastChatPeer 只作兜底）。
+  function currentPeerKey() {
+    try {
+      const bs = Array.from(document.querySelectorAll(PROFILE.bubble)).filter(isContentBubble);
+      for (let i = bs.length - 1; i >= 0; i--) {
+        const p = bubblePeerId(bs[i]);
+        if (p) return String(p);
+      }
+      if (PROFILE.conversationPeerId) {
+        const p2 = PROFILE.conversationPeerId();
+        if (p2) return String(p2);
+      }
+    } catch (e) { /* 判定失败走兜底 */ }
+    return _lastChatPeer || "";
   }
 
   function fillComposer(text) {
@@ -785,8 +814,12 @@ function createInject(host, deps) {
       tx.textContent = "生成中…";
       try {
         const messages = collectRecentMessages(12);
+        // chat_key/account_id 必带（2026-08-12 实锤：不带 → 后端统一规则引擎
+        // 因 chat_key 为空整体弃用、退化 direct 路径，时间推理/记忆/规则栈全丢，
+        // 日志侧 conv=telegram:: 无法归因）。
         const res = await call("smartReply", {
           messages, platform: PLATFORM, persona_id: CURRENT_PERSONA, target_lang: REPLY_LANG,
+          chat_key: currentPeerKey(), account_id: ACCOUNT_ID,
         }, null);
         if (res && res.ok && res.reply) fillComposer(res.translated || res.reply);
       } finally {

@@ -15,7 +15,10 @@ WorkflowRunner 现状语义，种子取值两义下都合理）。
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+import logging
+from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 # 话术类步骤的 note 写成「方向指令+示例」而非逐字稿：消费端是 LLM Copilot 预填
 # （reply-suggest 拿 workflow_text 当生成种子），指令式文本对不同客户泛化更好。
@@ -97,6 +100,72 @@ GOAL_CHAIN_REC: Dict[str, str] = {
 }
 
 _VALID_STEP_TYPES = {"template", "task", "tag", "note", "escalate"}
+
+
+def goal_auto_attach_enabled(cfg_root: Any) -> bool:
+    """``inbox.workflows.goal_auto_attach``（默认关）——建目标即自动挂推荐链。"""
+    try:
+        if not isinstance(cfg_root, dict):
+            return False
+        wf = ((cfg_root.get("inbox") or {}).get("workflows") or {})
+        return bool(wf.get("goal_auto_attach", False))
+    except Exception:
+        return False
+
+
+def maybe_auto_attach_chain(
+    store: Any,
+    cfg_root: Any,
+    *,
+    conversation_id: str,
+    goal_id: str,
+    goal_template: str,
+    goal_autonomy: str,
+) -> Optional[Dict[str, str]]:
+    """P3 2026-08-13：建目标即自动挂上模板推荐的跟进 SOP 链（目标定方向 →
+    SOP 保执行，一步到位）。返回 ``{"chain_id","name"}``；未挂 → None。绝不抛。
+
+    五重闸（全过才挂——挂链会产生提醒/自动步，绝不能变成建目标的隐形副作用）：
+    1. ``inbox.workflows.goal_auto_attach``（默认关）+ workflows 模块可用；
+    2. 目标 autonomy == auto（suggest/observe 是「人主导」的明示选择，不代挂）；
+    3. 模板在 GOAL_CHAIN_REC 有高置信推荐（relationship_*/custom 诚实无推荐）；
+    4. 推荐链真实存在且 enabled（种子未导入/被停用 → 不挂不造）；
+    5. 同会话同链无在途执行（has_running_chain 含 paused）。
+    归因与手动「推荐」入口同口径：context 带 goal_id → 漏斗推荐跟随率/归因组
+    回复率自动计入。goal_events 的 chain_started 回写由调用方（路由层）负责——
+    与 start-chain 路由同一 helper，本函数保持零 goals 域依赖。
+    """
+    try:
+        if not goal_auto_attach_enabled(cfg_root):
+            return None
+        from src.web.routes.unified_inbox_workflow_routes import (
+            workflows_disabled_reason_cfg,
+        )
+        if workflows_disabled_reason_cfg(cfg_root):
+            return None
+        if str(goal_autonomy or "") != "auto":
+            return None
+        chain_id = GOAL_CHAIN_REC.get(str(goal_template or ""), "")
+        if not chain_id or store is None:
+            return None
+        chain = store.get_workflow_chain(chain_id)
+        if not chain or not chain.get("enabled"):
+            return None
+        conv = str(conversation_id or "").strip()
+        if not conv or store.has_running_chain(conv, chain_id):
+            return None
+        store.start_chain_execution(
+            chain_id, conv,
+            {"agent": "goal_auto_attach", "goal_id": str(goal_id or "")},
+            schedule_first_step=True,
+        )
+        logger.info("[goal-auto-attach] 目标 %s 自动挂上推荐链 %s conv=%s",
+                    goal_id, chain_id, conv)
+        return {"chain_id": chain_id,
+                "name": str(chain.get("name") or chain_id)}
+    except Exception:
+        logger.debug("maybe_auto_attach_chain failed", exc_info=True)
+        return None
 
 
 def ensure_starter_chains(store: Any) -> Dict[str, List[str]]:

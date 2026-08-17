@@ -141,7 +141,8 @@ async def test_human_deliver_translate_hold_returns_error():
 
 
 @pytest.mark.asyncio
-async def test_translate_exception_falls_back_to_original():
+async def test_translate_exception_holds_no_original_send():
+    """无兜底纪律（2026-08-17）：翻译回调异常＝HOLD 不发——旧「异常发原文」拆除。"""
     sent = []
 
     async def _translate_cb(item):
@@ -157,8 +158,8 @@ async def test_translate_exception_falls_back_to_original():
         translate_callback=_translate_cb,
     )
     await w._tick()
-    assert sent == ["你好呀~"]        # 异常回落原文
-    assert w.total_delivered == 1     # 投递未被阻塞
+    assert sent == []                 # 一个字都没发出（不发原文）
+    assert w.total_delivered == 0     # 走投递失败链（重试/审计），不算成功
 
 
 def test_status_snapshot_exposes_translate_fields():

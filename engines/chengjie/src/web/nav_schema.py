@@ -7,7 +7,8 @@ base.html 的完整/简洁两种模式、命令面板(Ctrl+K)页面项、渠道�
 结构:
 - NAV_ICONS: 图标名 → 内联 SVG(品牌图标仅用于渠道组,其余为线性图标)
 - NAV_ITEMS: 菜单项定义(label_key 指向 web_i18n,label_zh 为兜底文案)
-- NAV_GROUPS_FULL: 完整模式分组(按任务流:工作台/真机矩阵/AI/洞察/合规/系统/支持)
+- NAV_GROUPS_FULL: 完整模式分组(按任务流:工作台/真机矩阵/AI/洞察/用量计费/合规/
+  系统/支持;每组 note_key/note_zh=一句话定位,渲染为分组标题悬浮提示)
 - SIMPLE_CORE / SIMPLE_MORE: 简洁模式主区与折叠区(引用 item id;定位=值班/看店
   日常,运维/分析/矩阵类只在完整模式)
 - MATRIX_ITEM_IDS → nav_matrix_items: 真机矩阵五页(总览+四渠道)。简洁模式侧栏
@@ -163,8 +164,8 @@ NAV_ITEMS = {
                                label_zh="策略效果", help="nav_strategy_analytics",
                                cmd_keys="strategy analytics 策略 效果"),
     "dash": dict(key="dash", path="/", icon="grid", label_key="dashboard",
-                 label_zh="数据概览", help="nav_dashboard",
-                 cmd_keys="dashboard home 首页 概览 仪表盘"),
+                 label_zh="今日概览", help="nav_dashboard",
+                 cmd_keys="dashboard home 首页 概览 仪表盘 数据概览 今日概览 today"),
     # 运营总览（/admin/ops）2026-08-02 补入侧栏：此前只有简洁模式仪表盘的快捷
     # 入口卡能到——信息密度最高的 ops 卡片页没有常驻导航，是历代内容被迫堆进
     # 仪表盘的根因之一。
@@ -180,9 +181,9 @@ NAV_ITEMS = {
                    label_key="rpa_fn_title", label_zh="运营漏斗", help="nav_funnel",
                    cmd_keys="funnel 漏斗 转化 运营漏斗 conversion journey"),
     "monetization": dict(feature="monetization", key="monetization", path="/monetization", icon="dollar",
-                         label_key="monetization", label_zh="变现营收",
+                         label_key="monetization", label_zh="客户营收",
                          help="nav_monetization",
-                         cmd_keys="monetization revenue 变现 营收 订阅"),
+                         cmd_keys="monetization revenue 变现 营收 订阅 客户营收 变现营收 customer"),
     "crisis_audit": dict(key="crisis_audit", path="/crisis-audit", icon="alert-triangle",
                          badge="badge-crisis", label_key="crisis_audit", label_zh="危机审计",
                          help="nav_crisis_audit", cmd_keys="crisis 危机 审计 风险"),
@@ -197,6 +198,34 @@ NAV_ITEMS = {
     "membership": dict(key="membership", path="/membership", icon="wallet",
                        master_only=True, label_key="mb_nav", label_zh="会员中心",
                        cmd_keys="membership plan 会员 档位 套餐 授权 升级 license"),
+    # ── 用量与计费组（2026-08-16 管理面改造）：用量看板从命令面板孤儿升格为
+    #    「用量与额度」正式入口——「用了多少/还剩多少」此前实际存在但不可发现，
+    #    是本次改造要修的第一主诉。页面在工作台壳（/workspace/usage），主管闸
+    #    在页面路由自身；当前窗口打开（见下方主管看板注释，同一决策）。
+    "usage_center": dict(key="", path="/workspace/usage", icon="grid",
+                         label_key="nav_usage_center", label_zh="用量与额度",
+                         cmd_keys="用量 额度 计量 消耗 余额 字符 对账 账单 usage quota "
+                                  "chars balance metering billing 用量看板 用量与额度"),
+    # ── 主管四看板（2026-08-16 收编）：原 CMD_EXTRA_ITEMS 孤儿页（2026-08-14
+    #    顶栏「更多」删除后仅命令面板可达）→ 数据洞察组正式入口。路由自带主管闸
+    #    （非主管 302 回工作台）；不标 simple＝完整模式（配置/运维视角）才渲染。
+    #    四看板与用量页刻意无 target/winname（2026-08-16 老板点名：桌面壳里
+    #    _blank 会弹独立壳窗＝「弹出面板」，且 /workspace/* 子页不在壳内
+    #    __openUniqueUrl 的复用范围、每点必新弹——改与其他洞察面板一致在当前
+    #    窗口打开。坐席工作台 workspace 条目不在此列：坐席窗独立+BC 探活去重
+    #    是多窗治理主线的刻意设计，勿顺手「统一」掉）。
+    "ws_queue": dict(key="", path="/workspace/queue", icon="pulse",
+                     label_key="nav_ws_queue", label_zh="运营队列看板",
+                     cmd_keys="队列 运营队列 实时队列 排队 queue backlog"),
+    "ws_perf": dict(key="", path="/workspace/agent-perf", icon="bar-chart",
+                    label_key="nav_ws_perf", label_zh="坐席绩效看板",
+                    cmd_keys="绩效 坐席绩效 考核 perf performance agent"),
+    "ws_aiq": dict(key="", path="/workspace/ai-quality", icon="radar",
+                   label_key="nav_ws_aiq", label_zh="AI 质量看板",
+                   cmd_keys="AI质量 质量 回复质量 quality aiq ai-quality"),
+    "ws_roi": dict(key="", path="/workspace/roi", icon="dollar",
+                   label_key="nav_ws_roi", label_zh="ROI 看板",
+                   cmd_keys="ROI 经营 投产比 营收 roi revenue"),
     "diff": dict(key="diff", path="/diff", icon="git", label_key="diff", label_zh="版本对比",
                  help="nav_diff", cmd_keys="diff 对比 版本"),
     "logs": dict(key="logs", path="/logs", icon="terminal", label_key="logs",
@@ -238,31 +267,51 @@ CMD_EXTRA_ITEMS = {
                       label_zh="工作目标（工作计划）", help="work_goal",
                       cmd_keys="工作目标 工作计划 营销目标 目标 计划 推进 里程碑 今日拍 "
                                "goal goals plan milestone agenda"),
+    # ── 工作台主管看板五页：2026-08-14 曾因顶栏「更多」删除收进命令面板当孤儿；
+    #    2026-08-16 管理面改造全部升格正式侧栏入口——四看板进「数据洞察」组、
+    #    用量看板升级为「用量与计费·用量与额度」（见 NAV_ITEMS），此处不再重复。
 }
 
 DOMAIN_SENTINEL = "__domain_pages__"
 
 # ── 完整模式分组 ─────────────────────────────────────────────────────────────
+# 2026-08-16 管理面改造：7 组 → 8 组，每组带一句话定位（note_key/note_zh →
+# base.html 分组标题 title 悬浮），防止分类语义再度漂移。要点：
+# - 「看数」只住数据洞察（策略效果自 AI 与知识移入；主管四看板收编）；
+# - 新组「用量与计费」＝资源与钱（用量与额度 + 会员中心），与「客户营收」
+#   （客户付给你的钱，留数据洞察）刻意分开；
+# - 系统管理仍 master_only；用户管理页自身权限已放宽 admin（页面路由另判）。
 NAV_GROUPS_FULL = [
     # 域动态页哨兵在「工作台」组尾：支付域渠道/汇率等属日常业务面；且哨兵不能
     # 单独成组——无域包的部署会渲染出空分组标题。
     dict(label_key="section_workbench", label_zh="工作台",
+         note_key="section_note_workbench", note_zh="今天要处理的事",
          items=["workspace", "cases", "care", "relations_health", DOMAIN_SENTINEL]),
     # 真机矩阵（原「渠道自动化」，2026-08-03 更名）：矩阵总览 + 四渠道 + 群脉导播
     # ——群脉指挥的就是同一批矩阵账号，归组随矩阵。
     dict(label_key="section_channels", label_zh="真机矩阵",
+         note_key="section_note_channels", note_zh="渠道与设备运维",
          items=["rpa_overview", "telegram", "line_rpa", "messenger_rpa",
                 "whatsapp_rpa", "group_show"]),
     dict(label_key="section_ai_kb", label_zh="AI 与知识",
-         items=["personas", "reply_settings", "knowledge", "learner",
-                "episodic", "strategies", "strategy_analytics"]),
+         note_key="section_note_ai_kb", note_zh="教 AI 怎么说话",
+         items=["personas", "reply_settings", "strategies", "knowledge",
+                "learner", "episodic"]),
     dict(label_key="section_insights", label_zh="数据洞察",
-         items=["dash", "ops", "analytics", "funnel", "monetization"]),
+         note_key="section_note_insights", note_zh="只看数，不改配置",
+         items=["dash", "ops", "analytics", "funnel", "strategy_analytics",
+                "monetization", "ws_queue", "ws_perf", "ws_aiq", "ws_roi"]),
+    dict(label_key="section_usage_billing", label_zh="用量与计费",
+         note_key="section_note_usage_billing", note_zh="资源花到哪、还剩多少",
+         items=["usage_center", "membership"]),
     dict(label_key="section_compliance", label_zh="安全合规",
+         note_key="section_note_compliance", note_zh="出了事怎么查",
          items=["crisis_audit", "audit"]),
     dict(label_key="section_system", label_zh="系统管理", master_only=True,
-         items=["users", "settings", "membership", "diff", "logs", "developer"]),
+         note_key="section_note_system", note_zh="配置这套系统",
+         items=["users", "settings", "diff", "logs", "developer"]),
     dict(label_key="section_support", label_zh="支持",
+         note_key="section_note_support", note_zh="帮助与个性化",
          items=["personal_settings", "help"]),
 ]
 
@@ -273,7 +322,10 @@ NAV_GROUPS_FULL = [
 # 危机审计刻意留在折叠区：红色徽标是简洁模式用户唯一的危机可见通道，安全项不藏。
 SIMPLE_CORE = ["workspace", "cases", "care", "knowledge", DOMAIN_SENTINEL,
                "reply_settings", "escalation"]
-SIMPLE_MORE = ["dash", "learner", "crisis_audit", "personal_settings", "help"]
+# usage_center 进折叠区（2026-08-16）：全角色默认简洁模式，老板要的「用量/余额」
+# 必须在简洁模式可达；折叠区尺寸棘轮 ≤6，本项恰好用满——再加需先精简。
+SIMPLE_MORE = ["dash", "usage_center", "learner", "crisis_audit",
+               "personal_settings", "help"]
 
 # 真机矩阵成员（简洁模式上下文导航用：深链进矩阵页时侧栏就地渲染本组，保住
 # 组内互切与当前页高亮；base.html 与 _ws_sidebar.html 经 nav_matrix_items 消费）。
@@ -372,32 +424,91 @@ def feature_for_page_path(path: str):
     return None
 
 
+def _apply_ui_visibility(ctx: dict, config: dict) -> dict:
+    """ui_visibility 导航显隐键（缺省即关=隐藏）→ 全导航面剔除对应项。
+
+    - matrix_nav 关 → 剔真机矩阵五项（侧栏完整模式组 / 简洁上下文导航
+      nav_matrix_items / 命令面板）；
+    - group_show 关 → 剔群脉导播台（同面；2026-08-16 前它在 matrix_nav 关时
+      留守组内，「真机矩阵」组标题因此一直显示）。
+    - ai_settings 关 → 剔简洁模式「人工转接」项（深链 /settings#escalation，
+      该卡片本身也被藏 → 入口留着＝点进去空页）。
+    两键全关 → 组内无真实项，整组消失（防空标题）。URL 刻意不封（藏而不废，
+    与 simple=True 深链哲学一致）；判定异常回落「隐藏」——内部功能读不到
+    配置时藏起来比露出来安全。
+
+    ⚠ 剔除按 **key 或 path** 两个维度：escalation 与「系统设置」共用
+    ``key="settings"``（它就是那页的深链），只能靠 path 区分，按 key 剔会把
+    完整模式的系统设置项一起干掉。
+    """
+    flags = {}
+    try:
+        from src.web.ui_visibility import resolve_ui_visibility
+        flags = resolve_ui_visibility(config)
+    except Exception:
+        flags = {}
+    hidden_ids = set()
+    hidden_paths = set()
+    if not flags.get("matrix_nav", False):
+        hidden_ids |= set(MATRIX_ITEM_IDS)
+    if not flags.get("group_show", False):
+        hidden_ids.add("group_show")
+    if not flags.get("ai_settings", False):
+        hidden_paths.add(NAV_ITEMS["escalation"]["path"])
+    if not (hidden_ids or hidden_paths):
+        return ctx
+
+    def _hidden(it):
+        return (it.get("key") in hidden_ids) or (it.get("path") in hidden_paths)
+
+    def _drop_hidden(items):
+        return [it for it in items
+                if it == DOMAIN_SENTINEL
+                or not (isinstance(it, dict) and _hidden(it))]
+
+    groups = []
+    for g in ctx["nav_groups"]:
+        kept = _drop_hidden(g["items"])
+        if any(i for i in kept if i != DOMAIN_SENTINEL):
+            groups.append(dict(g, items=kept))
+    return dict(
+        ctx,
+        nav_groups=groups,
+        nav_simple_core=_drop_hidden(ctx["nav_simple_core"]),
+        nav_simple_more=_drop_hidden(ctx["nav_simple_more"]),
+        nav_matrix_items=([] if set(MATRIX_ITEM_IDS) & hidden_ids
+                          else ctx["nav_matrix_items"]),
+        nav_cmd_items=_drop_hidden(ctx["nav_cmd_items"]),
+    )
+
+
 def get_nav_context(config: dict = None) -> dict:
     """供 admin.py _enrich_context 与渲染类测试注入模板上下文。
 
-    不传 config / 档位闸门关 / 无锁定项 → 返回静态全量(进程内单例,零变化);
-    传 config 且有锁定功能 → 侧栏视图锁定项带 locked=True 注解(锁标渲染),
-    命令面板视图直接隐藏锁定项。视图每次重建(列表极小,开销可忽略),
-    feature_gate 侧异常一律回落全量。
+    不传 config → 返回静态全量(进程内单例,零变化——渲染类测试/无配置场景
+    保持全量可见)；传 config → 依次套两层过滤：
+    ① feature_gate 锁定项(侧栏 locked 注解/命令面板隐藏，gate 关或异常回落全量)；
+    ② ui_visibility.matrix_nav / group_show / ai_settings(缺省隐藏真机矩阵五项、
+      群脉导播台与简洁模式「人工转接」项，开发者页按键开启后回归)。
+    视图每次重建(列表极小,开销可忽略)。
     """
     if config is None:
         return _NAV_CONTEXT
+    ctx = _NAV_CONTEXT
     try:
         from src.licensing.feature_gate import gate_enabled, locked_features
-        if not gate_enabled(config):
-            return _NAV_CONTEXT
-        locked = set(locked_features(config))
+        locked = set(locked_features(config)) if gate_enabled(config) else set()
     except Exception:
-        return _NAV_CONTEXT
-    if not locked:
-        return _NAV_CONTEXT
-    groups = [dict(g, items=_mark_locked(g["items"], locked))
-              for g in _NAV_CONTEXT["nav_groups"]]
-    return dict(
-        _NAV_CONTEXT,
-        nav_groups=groups,
-        nav_simple_core=_mark_locked(_NAV_CONTEXT["nav_simple_core"], locked),
-        nav_simple_more=_mark_locked(_NAV_CONTEXT["nav_simple_more"], locked),
-        nav_matrix_items=_mark_locked(_NAV_CONTEXT["nav_matrix_items"], locked),
-        nav_cmd_items=_drop_locked(_NAV_CONTEXT["nav_cmd_items"], locked),
-    )
+        locked = set()
+    if locked:
+        groups = [dict(g, items=_mark_locked(g["items"], locked))
+                  for g in ctx["nav_groups"]]
+        ctx = dict(
+            ctx,
+            nav_groups=groups,
+            nav_simple_core=_mark_locked(ctx["nav_simple_core"], locked),
+            nav_simple_more=_mark_locked(ctx["nav_simple_more"], locked),
+            nav_matrix_items=_mark_locked(ctx["nav_matrix_items"], locked),
+            nav_cmd_items=_drop_locked(ctx["nav_cmd_items"], locked),
+        )
+    return _apply_ui_visibility(ctx, config)

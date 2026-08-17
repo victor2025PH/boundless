@@ -948,6 +948,8 @@ class DraftService:
                         templates_store=self._store,
                         automation_mode=automation_mode,
                     )
+                    # 与主拟稿同口径：显式代龄，防同会话行沿用旧 created_at（见下）。
+                    _greet_draft.setdefault("created_at", time.time())
                     _greet_id = self._store.upsert_draft(_greet_draft)
                     logger.info("R1 auto_greeting draft=%s conv=%s lang=%s", _greet_id, conv_id, _lang)
                     return _greet_id
@@ -995,6 +997,10 @@ class DraftService:
                 "risk_reasons": analysis.get("risk_reasons") or [],
                 "autopilot_level": autopilot,
                 "status": _status,
+                # 显式刷新代龄：同会话幂等键是对同一行 upsert，不带它重拟稿会沿用
+                # 第一代 created_at → fresh_guard 把每版新稿都判成「入站晚于拟稿」
+                # 作废 → 全自动永久哑火（2026-08-13 坐席机实锤）。
+                "created_at": time.time(),
                 "trace_id": _trace_id,
             })
             # Q2: 草稿创建后即时计算质量评分（亚毫秒，不阻塞流程）

@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="/static/brand/brand.css?v=20260730a">
 <link rel="stylesheet" href="/static/brand/brand-fonts.css?v=20260730a">
 <link rel="stylesheet" href="/static/brand/brand-lockup.css">
-<link rel="stylesheet" href="/static/theme-tokens.css?v=20260804b">
+<link rel="stylesheet" href="/static/theme-tokens.css?v=20260816a">
 <link rel="stylesheet" href="/static/brand/th-brand-bridge.css?v=20260730a"><!-- 必须排在 theme-tokens 之后：把 --th-*-brand* 后置覆盖为品牌智连蓝 -->
 {% include "_i18n_bootstrap.html" %}
 {% include "_api_fetch.html" %}
@@ -89,8 +89,13 @@
    （bg/surface/border/text 同工作台，强调色统一到品牌智连蓝 --bl-growth 系），两壳同观感。 */
 [data-theme="dark"]{
   --bg:#0f1014; --card:#17181d; --nav:rgba(15,16,20,.98); --input:#1e2026;
-  --t:#ececf0; --t2:#a0a3ab; --t3:#85888f;
-  --bd:#26272e; --bd2:#30313a;
+  /* 暗色可读性提亮（2026-08-16，「说明文字与背景太接近」实录收口）：
+     --t2 卡面 7.0→8.9、--t3 卡面 5.0→6.7 / 输入面 4.6→6.2；
+     --bd 对卡面原仅 1.35:1（输入框边界几乎不可见）→ 与 --bd2 各提一档。
+     同批联动：codemod 表 --th-ink-slate4/5、gray4/5 与 --th-bd-gray2/3、slate2/3
+     暗值、工作台 --tk-text-muted 暗值——三套体系同档，别只改一处。 */
+  --t:#ececf0; --t2:#b4b8c0; --t3:#9aa0aa;
+  --bd:#30333c; --bd2:#3b3f4a;
   /* 暗底提亮一档（同工作台暗色 --tk-brand → --bl-growth-400）；--pd 再亮一档 */
   --p:var(--bl-growth-400,#54a7f5); --pd:var(--bl-growth-300,#8bc4f8); --ps:rgba(84,167,245,.16);
   --blue:#58a6ff; --violet:#a78bfa;  /* 暗底提亮，对齐 theme-tokens 暗色号；--accent 随 --p 自动跟随无需重声明 */
@@ -103,9 +108,11 @@
   --s0:0 1px 3px rgba(0,0,0,.5); --s1:0 4px 12px rgba(0,0,0,.6); --s2:0 12px 32px rgba(0,0,0,.8);
   --p-ink:#0f1014;  /* 暗色主色是浅蓝，其上文字用近黑（7.5:1）而非白（2.55:1） */
   /* 侧栏暗色＝原先写死的那套值照搬（几档相近的灰度归并为 dim/txt/hi 三级）；
-     dim 档 .3 实测仅 2.7:1（分组标签/状态行看不清）→ .48（4.9:1），2026-08-04 收口 */
+     dim 档 .3 实测仅 2.7:1（分组标签/状态行看不清）→ .48（4.9:1），2026-08-04 收口；
+     2026-08-16 全档再提亮：txt .5→.72（5.3→约9:1）/ dim .48→.62（约7:1）/ hi .85→.92
+     ——50% 白做菜单主文字整条侧栏观感发灰，是「字看不清」实录主诉之一。 */
   --sb-bg:rgba(19,20,24,.98); --sb-bd:rgba(255,255,255,.06);
-  --sb-txt:rgba(255,255,255,.5); --sb-txt-hi:rgba(255,255,255,.85); --sb-txt-dim:rgba(255,255,255,.48);
+  --sb-txt:rgba(255,255,255,.72); --sb-txt-hi:rgba(255,255,255,.92); --sb-txt-dim:rgba(255,255,255,.62);
   --sb-hover:rgba(255,255,255,.07);
   --sb-active-bg:linear-gradient(135deg,rgba(30,140,242,.28),rgba(139,92,246,.18));
   --sb-active-txt:#fff; --sb-dot-off:rgba(255,255,255,.16);
@@ -126,8 +133,23 @@ body{font-family:var(--bl-font-sans,'Montserrat','Inter','PingFang SC','Microsof
 /* 品牌字在 brand-lockup.css 里写死 #fff（为深色侧栏设计）；白天模式改跟侧栏文字色 */
 .sidebar .sb-brand .brand-lockup__line--single{color:var(--sb-txt-hi)}
 .sb-nav{flex:1;padding:.6rem .55rem;overflow-y:auto}
-.sb-sec{font-size:.68rem;font-weight:700;color:var(--sb-txt-dim);padding:.75rem .75rem .3rem;letter-spacing:.08em;text-transform:uppercase;cursor:default;user-select:none;pointer-events:none;border-top:1px solid var(--sb-bd);margin-top:.6rem;padding-top:.85rem}
+.sb-sec{font-size:.72rem;font-weight:700;color:var(--sb-txt-dim);padding:.75rem .75rem .3rem;letter-spacing:.08em;text-transform:uppercase;cursor:default;user-select:none;pointer-events:none;border-top:1px solid var(--sb-bd);margin-top:.6rem;padding-top:.85rem}
 .sb-sec:first-child{border-top:none;margin-top:0;padding-top:.75rem}
+/* ── 分组折叠（2026-08-16）：完整模式分组头=真按钮（Enter/Space 原生可达）。
+   简洁模式与矩阵上下文组仍是纯 .sb-sec 标签，不受影响。 */
+.sb-sec-btn{pointer-events:auto;cursor:pointer;display:flex;align-items:center;gap:.35rem;width:100%;background:none;border:none;border-top:1px solid var(--sb-bd);font-family:inherit;text-align:left;transition:color .18s}
+.sb-sec-btn:hover{color:var(--sb-txt)}
+.sb-sec-btn:focus-visible{outline:2px solid var(--p);outline-offset:-2px;border-radius:6px}
+.sb-sec-lbl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-sec-chev{flex-shrink:0;opacity:.7;transition:transform .18s}
+.sb-sec-btn[aria-expanded="false"] .sb-sec-chev{transform:rotate(-90deg)}
+.sb-grp-items.grp-closed{display:none}
+/* 组头徽标：仅组收起且组内有待办时由 syncGrpRollups 点亮（折叠不藏待办） */
+.sb-sec-btn[aria-expanded="true"] .sb-grp-badge{display:none!important}
+/* 60px 图标轨：分组折叠让位（图标必须全部可见），组头退化为分隔点 */
+.sidebar.collapsed .sb-grp-items{display:block!important}
+.sidebar.collapsed .sb-sec-chev,.sidebar.collapsed .sb-grp-badge{display:none!important}
+.sidebar.collapsed .sb-sec-btn{pointer-events:none}
 .sb-nav a{display:flex;align-items:center;gap:.55rem;padding:.58rem .75rem;border-radius:9px;color:var(--sb-txt);text-decoration:none;font-size:.86rem;font-weight:500;transition:all .18s;margin-bottom:2px}
 .sb-nav a:hover{background:var(--sb-hover);color:var(--sb-txt-hi)}
 .sb-nav a.active{background:var(--sb-active-bg);color:var(--sb-active-txt);font-weight:600;box-shadow:inset 3px 0 0 var(--p)}
@@ -276,8 +298,19 @@ body{font-family:var(--bl-font-sans,'Montserrat','Inter','PingFang SC','Microsof
 .stat-card{text-align:center;padding:1.4rem 1rem}
 .s-icon{width:50px;height:50px;border-radius:14px;display:flex;align-items:center;justify-content:center;margin:0 auto .9rem}
 .s-icon svg{width:24px;height:24px;color:#fff}
-.s-num{font-size:2rem;font-weight:800;line-height:1;background:var(--g);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-.s-lbl{font-size:.78rem;color:var(--t3);margin-top:.35rem}
+/* KPI 数字（2026-08-16）：tabular-nums 等宽数字防轮询刷新时跳动，微收字距更挺 */
+.s-num{font-size:2rem;font-weight:800;line-height:1;background:var(--g);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.s-lbl{font-size:.78rem;color:var(--t3);margin-top:.35rem;font-weight:500}
+/* ── 共享横幅/空态（2026-08-16 组件收敛）：新页面提示横幅与空态一律用这组类，
+   别再逐页手写内联渐变横幅（用法与禁则见 .cursor/rules/admin-theme.mdc）。 ── */
+.banner{display:flex;gap:.7rem;align-items:flex-start;padding:.7rem 1rem;border-radius:10px;font-size:.82rem;line-height:1.65;color:var(--t2);border:1px solid var(--bd);background:var(--input);margin-bottom:1rem}
+.banner strong{color:var(--t)}
+.banner-info{background:var(--ps);border-color:color-mix(in srgb,var(--p) 45%,transparent)}
+.banner-warn{background:var(--as);border-color:color-mix(in srgb,var(--amber) 40%,transparent)}
+.banner-danger{background:var(--rs);border-color:color-mix(in srgb,var(--red) 40%,transparent)}
+.empty-state{text-align:center;padding:2.2rem 1rem;color:var(--t3);font-size:.85rem}
+.empty-state .es-ico{font-size:1.6rem;display:block;margin-bottom:.45rem;opacity:.85}
+.empty-state .es-hint{font-size:.76rem;margin-top:.3rem}
 /* ── Grid ───────────────────────────────── */
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:1.2rem}
 .g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1.2rem}
@@ -588,16 +621,27 @@ code{background:var(--input);padding:.15rem .45rem;border-radius:5px;font-size:.
       {%- endfor %}
     </details>
   {% else %}
-    {#- 完整模式:结构来自 nav_schema.NAV_GROUPS_FULL -#}
+    {#- 完整模式:结构来自 nav_schema.NAV_GROUPS_FULL。
+        分组可折叠(2026-08-16):组头=真按钮(键盘可达),项包进 .sb-grp-items;
+        开合记忆 localStorage(sb_groups_v1),含当前页的组强制展开,
+        收起组的待办徽标由 syncGrpRollups 上卷到组头。 -#}
     {%- for grp in nav_groups %}
     {%- if not grp.get('master_only') or user_role == 'master' %}
-    <div class="sb-sec">{{ (i18n or {}).get(grp.label_key, grp.label_zh) }}</div>
+    {%- set _gid = grp.get('label_key') or ('grp' ~ loop.index) %}
+    <button type="button" class="sb-sec sb-sec-btn" data-grp="{{ _gid }}" aria-expanded="true" aria-controls="sbgrp-{{ _gid }}" onclick="toggleNavGroup(this)"
+            title="{% if grp.get('note_key') %}{{ (i18n or {}).get(grp.note_key, grp.get('note_zh','')) }} · {% endif %}{{ (i18n or {}).get('nav_grp_toggle_hint', '点击折叠/展开分组') }}">
+      <span class="sb-sec-lbl">{{ (i18n or {}).get(grp.label_key, grp.label_zh) }}</span>
+      <span class="sb-badge sb-grp-badge"></span>
+      <svg class="sb-sec-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="6 9 12 15 18 9"/></svg>
+    </button>
+    <div class="sb-grp-items" id="sbgrp-{{ _gid }}">
     {%- for it in grp['items'] %}
       {%- if it == '__domain_pages__' %}{{ nav_domain(false) }}
       {%- elif it.master_only and user_role != 'master' %}
       {%- else %}{{ nav_item(it) }}
       {%- endif %}
     {%- endfor %}
+    </div>
     {%- endif %}
     {%- endfor %}
   {% endif %}
@@ -851,10 +895,80 @@ document.addEventListener('keydown',function(e){
     if(dest){e.preventDefault();window.location.href=dest;return}
   }
 });
-/* Theme */
-function toggleTheme(){const h=document.documentElement,n=h.getAttribute('data-theme')==='dark'?'light':'dark';h.setAttribute('data-theme',n);localStorage.setItem('theme',n)}
-/* 默认暗色（与工作台一致的深色现代风）；用户手动切亮色仍尊重其选择 */
-(function(){const s=localStorage.getItem('theme');document.documentElement.setAttribute('data-theme',(s==='light'||s==='dark')?s:'dark')})();
+/* Theme —— 2026-08-14 起与工作台主题合流：
+   读优先级 cp_theme（工作台/外观引擎写的「已解析偏好」，schedule 档由引擎折成 light/dark）
+   → 旧版 'theme' 键 → 默认暗色。auto 档跟随系统。
+   toggleTheme 三写：data-theme（本页）+ 'theme'（旧键兼容）+ cp_theme + ws_appearance_v1
+   blob（night.mode + ts，storage 事件让开着的工作台标签页即时跟切，POST prefs 让漫游同步；
+   引擎侧 pullSrv 按 ts 比较，ts 打新即不被服务端旧值盖回）。 */
+function _admThemePref(){
+  try{var c=localStorage.getItem('cp_theme');if(c==='auto'||c==='light'||c==='dark')return c;}catch(_){}
+  try{var s=localStorage.getItem('theme');if(s==='light'||s==='dark')return s;}catch(_){}
+  return 'dark';
+}
+function _admThemeApply(){
+  var p=_admThemePref(),e=p;
+  if(p==='auto'){try{e=(window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches)?'dark':'light';}catch(_){e='dark';}}
+  document.documentElement.setAttribute('data-theme',e);
+  /* data-cp-theme 同步给个人设置页的实时预览等 cp-* 消费方（无消费方页面无副作用） */
+  document.documentElement.setAttribute('data-cp-theme',e);
+}
+/* 外观引擎钩子：/personal-settings 挂 appearance.js，换档时引擎调 cpApplyTheme——
+   同页 localStorage 写不触发 storage 事件，没有这个钩子后台 chrome 就不会即时跟切。 */
+window.cpApplyTheme=_admThemeApply;
+/* 三写共享入口（toggleTheme / admThemeAuto 共用）：m ∈ auto|light|dark。
+   cp_theme 存偏好原值；旧键 'theme' 只认 light/dark → 存解析后的生效值喂老读者。
+   应用统一走 _admThemeApply（data-theme + data-cp-theme 双写），View Transition
+   淡切与工作台引擎 applyAll(true) 同款——尊重外观「动画」开关 + reduced-motion。 */
+function _admThemeWrite(m){
+  var eff=m;
+  if(m==='auto'){try{eff=(window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches)?'dark':'light';}catch(_){eff='dark';}}
+  try{localStorage.setItem('theme',eff);}catch(_){}
+  try{localStorage.setItem('cp_theme',m);}catch(_){}
+  var anim=true;
+  try{
+    var raw=localStorage.getItem('ws_appearance_v1');
+    var j=null; try{j=raw?JSON.parse(raw):null;}catch(_){j=null;}
+    if(!j||j.v!==1) j={v:1,theme:'brand',out:'',in:'',wall:'flat',radius:16,fs:13,night:{mode:'auto',start:1320,end:480},anim:true,ts:0};
+    if(!j.night||typeof j.night!=='object') j.night={mode:'auto',start:1320,end:480};
+    j.night.mode=m; j.ts=Date.now(); anim=(j.anim!==false);
+    localStorage.setItem('ws_appearance_v1',JSON.stringify(j));
+    fetch('/api/workspace/prefs',{method:'POST',credentials:'same-origin',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({appearance:j})}).catch(function(){});
+  }catch(_){}
+  var rm=false; try{rm=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;}catch(_){}
+  if(anim&&!rm&&document.startViewTransition){ try{ document.startViewTransition(_admThemeApply); return; }catch(_){} }
+  _admThemeApply();
+}
+function _admThemeBcn(a){
+  try{ navigator.sendBeacon('/api/telemetry/ui-event', new Blob(
+    [JSON.stringify({page:location.pathname,action:String(a)})],{type:'application/json'})); }catch(_){}
+}
+/* toast 内「恢复跟随系统」的落点（运行时字符串拼出的 handler → 必须顶层全局） */
+function admThemeAuto(){
+  _admThemeWrite('auto'); _admThemeBcn('theme_adm_restore_auto');
+  try{ showToast(window.T('base.theme.adm_auto_ok','已恢复跟随系统'),'ok',2500); }catch(_){}
+}
+function toggleTheme(){
+  /* 滑块语义＝显式固定亮/暗（双位控件不装三态）；但从 auto/定时档切走**绝不静默**：
+     auto → toast 说明已固定 + 内嵌一键「恢复跟随系统」；定时档 → ap.sched_exit
+     口径与工作台分段控件一致（定时回路在个人设置，不塞进滑块）。 */
+  var prev=null;
+  try{var raw=localStorage.getItem('ws_appearance_v1');var j=raw?JSON.parse(raw):null;if(j&&j.v===1&&j.night&&j.night.mode)prev=j.night.mode;}catch(_){}
+  if(!prev)prev=_admThemePref();
+  var n=document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark';
+  _admThemeWrite(n); _admThemeBcn('theme_adm_flip');
+  if(prev==='auto'){
+    var msg=window.T(n==='dark'?'base.theme.adm_pinned_dark':'base.theme.adm_pinned_light');
+    try{ showToast(msg+' <a href="javascript:void 0" onclick="admThemeAuto()" style="color:inherit;font-weight:600;text-decoration:underline;">'+window.T('base.theme.adm_restore','恢复跟随系统')+'</a>','info',6000); }catch(_){}
+  } else if(prev==='schedule'){
+    try{ showToast(window.T('ap.sched_exit','已退出夜间定时模式'),'info',4000); }catch(_){}
+  }
+}
+_admThemeApply();
+/* 工作台标签页改主题 → 本页即时跟切（storage 只读不回写，无循环） */
+window.addEventListener('storage',function(e){ if(e&&(e.key==='cp_theme'||e.key==='ws_appearance_v1')) _admThemeApply(); });
+try{ if(window.matchMedia){ window.matchMedia('(prefers-color-scheme:dark)').addEventListener('change',function(){ if(_admThemePref()==='auto') _admThemeApply(); }); } }catch(_){}
 /* Sidebar */
 function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sb-overlay').classList.toggle('open')}
 function closeSidebar(){document.getElementById('sidebar').classList.remove('open');document.getElementById('sb-overlay').classList.remove('open')}
@@ -882,6 +996,43 @@ window.addEventListener('resize',function(){
   else if(localStorage.getItem('sb_collapsed')==='1'){document.querySelector('.main').style.marginLeft='60px'}
   else{document.querySelector('.main').style.marginLeft=''}
 });
+/* ── 分组折叠（完整模式，2026-08-16）──
+   状态：localStorage sb_groups_v1 = {分组key: 1=收起}；与工作台壳 _ws_sidebar 共用同键（两壳一致）。
+   不变量：含当前激活页的组强制展开；收起组的待办徽标经 syncGrpRollups 上卷到组头（折叠不藏待办）；
+   60px 图标轨下折叠失效（CSS 兜底 display:block!important）。 */
+function _sbGrpState(){try{return JSON.parse(localStorage.getItem('sb_groups_v1')||'{}')||{}}catch(_){return{}}}
+function toggleNavGroup(btn){
+  var gid=btn.dataset.grp,body=document.getElementById('sbgrp-'+gid);
+  if(!body)return;
+  var closed=body.classList.toggle('grp-closed');
+  btn.setAttribute('aria-expanded',closed?'false':'true');
+  var st=_sbGrpState();st[gid]=closed?1:0;
+  try{localStorage.setItem('sb_groups_v1',JSON.stringify(st))}catch(_){}
+  syncGrpRollups();
+}
+window.toggleNavGroup=toggleNavGroup;
+function syncGrpRollups(){
+  document.querySelectorAll('.sb-sec-btn[data-grp]').forEach(function(btn){
+    var body=document.getElementById('sbgrp-'+btn.dataset.grp);
+    var badge=btn.querySelector('.sb-grp-badge');
+    if(!body||!badge)return;
+    var n=0;
+    body.querySelectorAll('.sb-badge.has-count').forEach(function(b){
+      var v=parseInt(b.textContent,10);n+=isNaN(v)?1:v;
+    });
+    if(n>0&&body.classList.contains('grp-closed')){badge.textContent=n>99?'99+':n;badge.classList.add('has-count')}
+    else{badge.classList.remove('has-count')}
+  });
+}
+window.syncGrpRollups=syncGrpRollups;
+(function(){
+  var st=_sbGrpState();
+  document.querySelectorAll('.sb-sec-btn[data-grp]').forEach(function(btn){
+    var gid=btn.dataset.grp,body=document.getElementById('sbgrp-'+gid);
+    if(!body)return;
+    if(st[gid]===1&&!body.querySelector('.active')){body.classList.add('grp-closed');btn.setAttribute('aria-expanded','false')}
+  });
+})();
 /* Nav badges — fetch counts once on load */
 (function(){
   function setBadge(id,n){
@@ -893,17 +1044,17 @@ window.addEventListener('resize',function(){
       if(n>0){el.textContent=n>99?'99+':n;el.classList.add('has-count')}
       else{el.classList.remove('has-count')}
     });
+    if(window.syncGrpRollups)window.syncGrpRollups();  /* 收起组的组头徽标随子项徽标联动 */
   }
-  apiFetch('/api/cases/active',{credentials:'same-origin'}).then(r=>r.json()).then(d=>{
-    var open=0;
-    if(d.cases){d.cases.forEach(function(c){if(!c.closed)open++})}
-    setBadge('badge-cases',open);
-  }).catch(()=>{});
-  apiFetch('/api/learner/drafts?status=pending',{credentials:'same-origin'}).then(r=>r.json()).then(d=>{
-    setBadge('badge-learner',(d.drafts||[]).length);
-  }).catch(()=>{});
-  apiFetch('/api/crisis-events?only_unhandled=true&limit=1',{credentials:'same-origin'}).then(r=>r.json()).then(d=>{
-    setBadge('badge-crisis',d.unhandled_total||0);
+  /* 融合 P2（2026-08-16）：案例/学习/危机三徽标收敛为一次 /api/todo-summary
+     （与仪表盘待办条、案例页待办条同源同口径）——原先三请求各拉一遍全量列表；
+     顺带修正两处口径：案例数不再计入演练残影（collect_case_rows 默认排除）、
+     学习数走全表 COUNT 不受 limit=50 封顶。null=子系统不可用 → 不动该徽标。 */
+  apiFetch('/api/todo-summary',{credentials:'same-origin'}).then(r=>r.json()).then(d=>{
+    if(!d||d.ok!==true)return;
+    if(d.cases_open!=null)setBadge('badge-cases',Number(d.cases_open)||0);
+    if(d.learner_pending!=null)setBadge('badge-learner',Number(d.learner_pending)||0);
+    if(d.crisis_unhandled!=null)setBadge('badge-crisis',Number(d.crisis_unhandled)||0);
   }).catch(()=>{});
   /* 真机矩阵徽标(待审+未确认告警) + 渠道在线状态点 — 单请求覆盖四平台;
      60s 轮询保持新鲜,页签不可见时暂停,回到前台立即刷新。

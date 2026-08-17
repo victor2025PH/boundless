@@ -239,11 +239,15 @@ def test_nightly_trend_row_handles_zero_turns():
 # ── 趋势报表 ─────────────────────────────────────────────────────────────
 def test_trend_report_reads_and_skips_bad_lines(tmp_path):
     from scripts.duel_trend_report import read_trend
+    # ts 锚 now（时间炸弹加固）：本调用不带 days 窗暂不受日历影响，但 CLI 主路
+    # 是带 --days 调的——硬日期夹具在口径漂移时会静默自爆，统一锚 now。
+    from datetime import datetime
+    day = datetime.now().strftime("%Y-%m-%d")
     p = tmp_path / "t.jsonl"
-    p.write_text('{"ts":"2026-07-28T01:00:00","defects":1}\n'
-                 '{not json\n'
-                 '\n'
-                 '{"ts":"2026-07-28T02:00:00","defects":2}\n', encoding="utf-8")
+    p.write_text(json.dumps({"ts": f"{day}T01:00:00", "defects": 1})
+                 + "\n{not json\n\n"
+                 + json.dumps({"ts": f"{day}T02:00:00", "defects": 2})
+                 + "\n", encoding="utf-8")
     rows = read_trend(p)
     assert len(rows) == 2, "坏行必须跳过而不是丢掉整条趋势线"
     assert read_trend(tmp_path / "nope.jsonl") == []

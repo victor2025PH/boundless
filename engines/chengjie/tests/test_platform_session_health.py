@@ -75,6 +75,88 @@ def test_store_unknown_session_is_healthy():
     assert _store().is_unhealthy("messenger", "nobody") is False
 
 
+def test_inbox_health_blindspot_observability_fields():
+    """P1 2026-08-15 盲区修复观测：unread_forced / worker_code_* /
+    requests_suspect 随心跳落行；**缺省（老 worker 未上报）不写键**——
+    dump 消费面据缺键区分「没报」与「报了 0」（与 pin_heal 同约定）。"""
+    s = _store()
+    # 老 worker：不带新字段 → 行里不出现新键
+    s.record_inbox_health("messenger", "acc1", unread=0)
+    h1 = s.inbox_health()["messenger:acc1"]
+    assert "unread_forced" not in h1
+    assert "worker_code_stale" not in h1
+    assert "worker_code_fp" not in h1
+    assert "requests_suspect" not in h1
+    # 新 worker：上报即落行（含 0 值——「报了 0」是有效读数）
+    s.record_inbox_health(
+        "messenger", "acc1", unread=0,
+        unread_forced_picked=0, worker_code_stale=False,
+        worker_code_fp="2fe7f8944723", requests_suspect_streak=0)
+    h2 = s.inbox_health()["messenger:acc1"]
+    assert h2["unread_forced"] == 0
+    assert h2["worker_code_stale"] is False
+    assert h2["worker_code_fp"] == "2fe7f8944723"
+    assert h2["requests_suspect"] == 0
+    # 值更新 + 半部署位翻转 + 指纹消毒（非法字符剥离）
+    s.record_inbox_health(
+        "messenger", "acc1", unread=1,
+        unread_forced_picked=7, worker_code_stale=True,
+        worker_code_fp="ab<script>12", requests_suspect_streak=9)
+    h3 = s.inbox_health()["messenger:acc1"]
+    assert h3["unread_forced"] == 7
+    assert h3["worker_code_stale"] is True
+    assert h3["worker_code_fp"] == "abscript12"
+    assert h3["requests_suspect"] == 9
+    # dump 透传（ops 卡消费口径）
+    d = s.dump()["inbox_health"]["messenger:acc1"]
+    assert d["unread_forced"] == 7 and d["worker_code_stale"] is True
+
+
+def test_endpoint_passes_blindspot_fields():
+    """路由透传契约：worker 心跳带新键 → 落行；缺键 → 不写（老 worker 兼容）。"""
+    c = _client()
+    r = c.post("/api/internal/protocol/inbox-health", json={
+        "platform": "messenger", "account_id": "777",
+        "unread": 2, "read_attempts": 1, "read_fails": 0,
+        "unread_forced_picked": 3, "worker_code_stale": True,
+        "worker_code_fp": "deadbeef1234", "requests_suspect_streak": 5,
+    })
+    assert r.status_code == 200 and r.json()["ok"] is True
+    h = _store().inbox_health()["messenger:777"]
+    assert h["unread_forced"] == 3
+    assert h["worker_code_stale"] is True
+    assert h["worker_code_fp"] == "deadbeef1234"
+    assert h["requests_suspect"] == 5
+    # 老 worker 心跳（无新键）不清已有值、也不误写 False/0
+    c.post("/api/internal/protocol/inbox-health", json={
+        "platform": "messenger", "account_id": "888", "unread": 0,
+    })
+    h2 = _store().inbox_health()["messenger:888"]
+    assert "worker_code_stale" not in h2 and "unread_forced" not in h2
+
+
+def test_login_promotion_clears_placeholder_row():
+    """晋级清占位（P0 2026-08-14）：登录早期以 login_id 顶位 key 挂的占位行，在
+    同一 login_id 携真实 account_id 报 authorized 时立即清除——不清会以「另一个号」
+    的身份在横幅/看门狗常亮，此前只有 30 分钟 TTL 兜底。"""
+    s = _store()
+    # 登录初期：account_id 未知，worker 以 login_id 顶位上报（路由 acct or login_id）
+    s.record("messenger", "msg_abc123", "expired",
+             detail="login pending", login_id="msg_abc123")
+    assert s.is_unhealthy("messenger", "msg_abc123") is True
+    s.record_inbox_health("messenger", "msg_abc123", unread=3,
+                          read_attempts=3, read_fails=3)
+    # 授权成功：同 login_id 晋级为真实账号 → 占位行（会话+入站健康）当场清除
+    s.record("messenger", "100", "authorized", login_id="msg_abc123")
+    d = s.dump()
+    assert "messenger:msg_abc123" not in d["sessions"]
+    assert "messenger:msg_abc123" not in s.inbox_health()
+    assert d["sessions"]["messenger:100"]["status"] == "authorized"
+    # 无 login_id / login_id==key 的常规上报不受影响
+    s.record("messenger", "200", "authorized")
+    assert s.dump()["sessions"]["messenger:200"]["status"] == "authorized"
+
+
 def test_store_dump_and_prom():
     s = _store()
     s.record("messenger", "100", "expired", detail="crash-loop")

@@ -1,7 +1,7 @@
 {
   "name": "telegram-ai-desktop",
-  "version": "1.0.23",
-  "displayVersion": "1.023",
+  "version": "1.0.38",
+  "displayVersion": "1.038",
   "private": true,
   "description": "桌面壳：嵌官方 web 客户端 + 注入点击翻译/智能回复（对接本仓库 FastAPI 后端）",
   "main": "main.js",
@@ -18,14 +18,14 @@
     "smoke:upgrade": "python build/smoke_upgrade.py",
     "stage:internal": "python build/stage_internal_assets.py",
     "smoke:internal": "python build/smoke_internal.py",
-    "predist": "node copy-shared.js && node test/renderer-boot-invariants.test.js && node test/outbound-wiring.test.js && node test/package-layout.test.js && python build/check_backend_freshness.py && python build/stage_internal_assets.py && python build/smoke_backend.py && python build/smoke_internal.py",
+    "predist": "node copy-shared.js && node build/write-build-info.js && node test/renderer-boot-invariants.test.js && node test/outbound-wiring.test.js && node test/package-layout.test.js && python build/check_backend_freshness.py && python build/stage_internal_assets.py && python build/smoke_backend.py && python build/smoke_internal.py",
     "dist": "electron-builder",
-    "predist:win": "node copy-shared.js && node test/renderer-boot-invariants.test.js && node test/outbound-wiring.test.js && node test/package-layout.test.js && python build/check_backend_freshness.py && python build/stage_internal_assets.py && python build/smoke_backend.py && python build/smoke_internal.py",
+    "predist:win": "node copy-shared.js && node build/write-build-info.js && node test/renderer-boot-invariants.test.js && node test/outbound-wiring.test.js && node test/package-layout.test.js && python build/check_backend_freshness.py && python build/stage_internal_assets.py && python build/smoke_backend.py && python build/smoke_internal.py",
     "dist:win": "electron-builder --win",
     "dist:win:fresh": "npm run build:backend && npm run dist:win",
-    "predist:mac": "node copy-shared.js",
+    "predist:mac": "node copy-shared.js && node build/write-build-info.js",
     "dist:mac": "electron-builder --mac",
-    "test": "node test/inject-status.test.js && node test/scan-perf.test.js && node test/copilot-capabilities.test.js && node test/acceptance-preview.test.js && node test/account-utils.test.js && node test/media-format.test.js && node test/webview-ua.test.js && node test/profiles.test.js && node test/fingerprint.test.js && node test/backend-launcher.test.js && node test/sidecar-launcher.test.js && node test/health-panel.test.js && node test/brand-util.test.js && node test/sidebar-chrome.test.js && node test/first-run-model.test.js && node test/token-util.test.js && node test/copilot-client-csrf.test.js && node test/cp-persona-failtype.test.js && node test/translate-scheduler.test.js && node test/bubble-model.test.js && node test/human-pace.test.js && node test/webmulti.test.js && node test/outbound-pace.test.js && node test/outbound-wiring.test.js && node test/extension-vendor-sync.test.js && node test/platform-caps.test.js && node test/renderer-boot-invariants.test.js && node test/package-layout.test.js"
+    "test": "node test/inject-status.test.js && node test/scan-perf.test.js && node test/copilot-capabilities.test.js && node test/acceptance-preview.test.js && node test/account-utils.test.js && node test/media-format.test.js && node test/webview-ua.test.js && node test/profiles.test.js && node test/fingerprint.test.js && node test/backend-launcher.test.js && node test/sidecar-launcher.test.js && node test/health-panel.test.js && node test/brand-util.test.js && node test/sidebar-chrome.test.js && node test/first-run-model.test.js && node test/token-util.test.js && node test/copilot-client-csrf.test.js && node test/cp-persona-failtype.test.js && node test/translate-scheduler.test.js && node test/bubble-model.test.js && node test/human-pace.test.js && node test/webmulti.test.js && node test/outbound-pace.test.js && node test/outbound-wiring.test.js && node test/extension-vendor-sync.test.js && node test/platform-caps.test.js && node test/renderer-boot-invariants.test.js && node test/backend-popup-unique.test.js && node test/package-layout.test.js && node test/thread-url.test.js && node test/update-notify.test.js"
   },
   "devDependencies": {
     "electron": "^31.0.0",
@@ -50,6 +50,10 @@
       "!build/**"
     ],
     "extraResources": [
+      {
+        "from": "build/build-info.json",
+        "to": "build-info.json"
+      },
       {
         "from": "build/backend-dist",
         "to": "backend",

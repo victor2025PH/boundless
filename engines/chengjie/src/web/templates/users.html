@@ -12,11 +12,21 @@
 .u-avatar.master{background:var(--g)}
 .u-avatar.admin{background:linear-gradient(135deg,#10b981,#059669)}
 .u-avatar.viewer{background:linear-gradient(135deg,#6b7280,#4b5563)}
+.u-avatar.supervisor,.u-avatar.agent{background:var(--p)}
 .u-name{font-weight:700;font-size:.95rem}
 .u-sub{font-size:.75rem;color:var(--t3)}
 .u-meta{display:grid;grid-template-columns:1fr 1fr;gap:.4rem;font-size:.8rem;color:var(--t2);margin-bottom:.8rem}
 .u-meta span{background:var(--input);padding:.3rem .5rem;border-radius:6px}
 .u-actions{display:flex;gap:.4rem;flex-wrap:wrap}
+.u-stats{display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1rem}
+.u-stats span{background:var(--input);padding:.4rem .7rem;border-radius:8px;font-size:.78rem;color:var(--t3)}
+.u-stats b{color:var(--t);font-size:.92rem;margin-left:.3rem}
+.u-usage{margin-bottom:.8rem}
+.u-usage-hd{display:flex;align-items:center;gap:.45rem;font-size:.74rem;color:var(--t3);margin-bottom:.3rem}
+.u-usage-txt{color:var(--t2);font-weight:600}
+.u-usage-badge:empty{display:none}
+.u-usage-bar{height:4px;border-radius:2px;background:var(--input);overflow:hidden}
+.u-usage-bar i{display:block;height:100%;width:0;background:var(--p);border-radius:2px;transition:width .3s}
 .create-card{border:2px dashed var(--bd2);background:transparent;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:200px;cursor:pointer;transition:.2s}
 .create-card:hover{border-color:var(--p);background:var(--ps)}
 .create-card svg{width:32px;height:32px;color:var(--t3);margin-bottom:.5rem}
@@ -26,10 +36,24 @@
 .modal-bg.show{display:flex}
 .modal{background:var(--card);border-radius:16px;padding:1.5rem;width:90%;max-width:400px;box-shadow:var(--s2)}
 .modal h3{font-size:1.05rem;font-weight:700;margin-bottom:1rem}
+/* L3 按人权限覆写编辑器（行由 JS 渲染；只用既有主题变量，零新色值） */
+.perm-row{display:flex;align-items:center;gap:.5rem;padding:.45rem 0;border-bottom:1px solid var(--bd);font-size:.82rem}
+.perm-row:last-child{border-bottom:0}
+.perm-dom{flex-shrink:0;font-size:.68rem;padding:.12rem .4rem;border-radius:6px;background:var(--input);color:var(--t3)}
+.perm-name{flex:1;color:var(--t)}
+.perm-eff{font-size:.72rem;color:var(--t3);white-space:nowrap}
+.perm-row select{padding:.2rem .4rem;font-size:.76rem;border:1px solid var(--bd);border-radius:6px;background:var(--card);color:var(--t);cursor:pointer}
 </style>
 {% endblock %}
 {% block content %}
 {% set active="users" %}
+{# 可分配角色：重启前路由尚未注入 assignable_roles_ctx → 回落现状两项（admin/viewer）；
+   重启后按操作者层级出全量（master→4 项 / admin→3 项）。 #}
+{% set assignable_roles_list = assignable_roles_ctx | default([
+    ('admin', (i18n or {}).get('role_admin', '管理员（编辑权限）')),
+    ('viewer', (i18n or {}).get('us_s014', '只读观察员'))
+]) %}
+{% set assignable_role_vals = assignable_roles_list | map('first') | list %}
 
 {% if ui_mode == 'simple' %}
 <div style="background:linear-gradient(135deg,var(--th-bg-amber08,rgba(245,158,11,.08)),var(--th-bg-red06,rgba(239,68,68,.06)));border:1px solid var(--th-bd-amber20,rgba(245,158,11,.2));border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:center;gap:.6rem">
@@ -49,6 +73,14 @@
   </div>
 </div>
 
+<!-- ── 团队统计条（本月字符/授权池两格由 /api/users/char-usage 回填，失败保持 —）── -->
+<div class="u-stats fa">
+  <span>{{ (i18n or {}).get('tq_stat_members', "成员总数") }}<b>{{ users|length }}</b></span>
+  <span>{{ (i18n or {}).get('tq_stat_enabled', "已启用") }}<b>{{ users|selectattr('enabled')|list|length }}</b></span>
+  <span>{{ (i18n or {}).get('tq_stat_month_chars', "本月团队字符") }}<b id="tq-stat-month">—</b></span>
+  <span>{{ (i18n or {}).get('tq_stat_pool_left', "授权池剩余") }}<b id="tq-stat-pool">—</b></span>
+</div>
+
 <div class="u-grid">
   {% for u in users %}
   <div class="u-card {{ 'disabled' if not u.enabled }} fa" id="user-{{ u.id }}">
@@ -58,18 +90,34 @@
         <div class="u-name">{{ u.display_name or u.username }}</div>
         <div class="u-sub">@{{ u.username }} · <span class="role-label">{{ (i18n or {}).get('role_' ~ u.role, role_labels.get(u.role, u.role)) }}</span></div>
       </div>
+      {% if u.role != 'master' and u.perms_json %}<span class="badge b-p perm-badge" style="margin-left:auto" title="{{ (i18n or {}).get('tq_perm_title', '按人权限覆写') }}">{{ (i18n or {}).get('tq_perm_overridden', "已覆写") }}</span>{% endif %}
       {% if not u.enabled %}<span class="badge b-r dis-badge" style="margin-left:auto">{{ (i18n or {}).get('psn_disabled', "已禁用") }}</span>{% endif %}
     </div>
     <div class="u-meta">
       <span>{{ (i18n or {}).get('dash.btn.create', "创建") }}: {{ u.created_at[:10] if u.created_at else '-' }}</span>
       <span>{{ (i18n or {}).get('login_btn', "登录") }}: {{ u.last_login[:10] if u.last_login else '从未' }}</span>
     </div>
+    <!-- 本月用量行：/api/users/char-usage 回填后显示；端点未装载（重启前）保持隐藏 -->
+    <div class="u-usage" data-user="{{ u.username }}" style="display:none">
+      <div class="u-usage-hd">
+        <span>{{ (i18n or {}).get('tq_month_usage', "本月用量") }}</span>
+        <span class="u-usage-txt">—</span>
+        <span class="u-usage-badge"></span>
+      </div>
+      <div class="u-usage-bar"><i></i></div>
+    </div>
     {% if u.role != 'master' %}
     <div class="u-actions">
       <select onchange="updateRole({{ u.id }},this)" style="padding:.25rem .5rem;font-size:.78rem;border:1px solid var(--bd);border-radius:6px;background:var(--card);color:var(--t);cursor:pointer">
-        <option value="admin" {{ 'selected' if u.role=='admin' }} data-help="role_admin">{{ (i18n or {}).get('db_js_076', "管理员") }}</option>
-        <option value="viewer" {{ 'selected' if u.role=='viewer' }} data-help="role_viewer">{{ (i18n or {}).get('us_s004', "观察员") }}</option>
+        {% if u.role not in assignable_role_vals %}
+        <option value="{{ u.role }}" selected>{{ (i18n or {}).get('role_' ~ u.role, role_labels.get(u.role, u.role)) }}</option>
+        {% endif %}
+        {% for rv, rl in assignable_roles_list %}
+        <option value="{{ rv }}" {{ 'selected' if u.role==rv }} data-help="role_{{ rv }}">{{ (i18n or {}).get('role_' ~ rv, rl) }}</option>
+        {% endfor %}
       </select>
+      <button class="btn btn-s btn-xs" onclick="openQuotaModal({{ u.id }},'{{ u.username }}')">{{ (i18n or {}).get('tq_quota_btn', "额度") }}</button>
+      <button class="btn btn-s btn-xs" onclick="openPermModal({{ u.id }},'{{ u.username }}')">{{ (i18n or {}).get('tq_perm_btn', "权限") }}</button>
       <button class="btn btn-s btn-xs toggle-btn" onclick="toggleEnabled({{ u.id }},{{ 'false' if u.enabled else 'true' }},this)">{{ (i18n or {}).get('disable', '禁用') if u.enabled else (i18n or {}).get('enable', '启用') }}</button>
       <button class="btn btn-d btn-xs" data-help="btn_delete" onclick="deleteUser({{ u.id }},'{{ u.username }}')">{{ (i18n or {}).get('delete', "删除") }}</button>
     </div>
@@ -123,8 +171,9 @@
       <div class="f-grp">
         <label class="f-lbl">{{ (i18n or {}).get('psn_th_role', "角色") }}</label>
         <select name="role">
-          <option value="admin">{{ (i18n or {}).get('role_admin', "管理员（编辑权限）") }}</option>
-          <option value="viewer">{{ (i18n or {}).get('us_s014', "只读观察员") }}</option>
+          {% for rv, rl in assignable_roles_list %}
+          <option value="{{ rv }}" {{ 'selected' if rv=='agent' }}>{{ (i18n or {}).get('role_' ~ rv, rl) }}</option>
+          {% endfor %}
         </select>
       </div>
       <div style="display:flex;gap:.5rem;margin-top:1rem">
@@ -135,13 +184,75 @@
   </div>
 </div>
 
+<!-- Quota modal（月度字符额度，0=不限） -->
+<div class="modal-bg" id="quota-modal" onclick="if(event.target===this)this.classList.remove('show')">
+  <div class="modal">
+    <h3>{{ (i18n or {}).get('tq_quota_title', "设置月度字符额度") }} · <span id="quota-modal-user"></span></h3>
+    <form id="quota-form" onsubmit="saveQuota(event)">
+      <input type="hidden" name="uid" value="">
+      <div class="f-grp">
+        <label class="f-lbl">{{ (i18n or {}).get('tq_quota_btn', "额度") }}</label>
+        <input type="number" name="monthly_quota" min="0" step="1000" value="0" required>
+      </div>
+      <p style="font-size:.75rem;color:var(--t3);margin:.2rem 0 0">{{ (i18n or {}).get('tq_quota_hint', "0 = 不限；额度按 UTC 自然月计，每月 1 日自动重置。") }}</p>
+      <div style="display:flex;gap:.5rem;margin-top:1rem">
+        <button type="submit" class="btn btn-p">{{ (i18n or {}).get('save', "保存") }}</button>
+        <button type="button" class="btn btn-s" onclick="document.getElementById('quota-modal').classList.remove('show')">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Perm modal（L3 按人权限覆写；行由 JS 从 GET /api/users/{id}/perms 渲染，
+     端点未装载（重启前）→ openPermModal 直接 toast 提示、不开弹窗） -->
+<div class="modal-bg" id="perm-modal" onclick="if(event.target===this)this.classList.remove('show')">
+  <div class="modal">
+    <h3>{{ (i18n or {}).get('tq_perm_title', "按人权限覆写") }} · <span id="perm-modal-user"></span></h3>
+    <form id="perm-form" onsubmit="savePerms(event)">
+      <div id="perm-list"></div>
+      <p style="font-size:.75rem;color:var(--t3);margin:.4rem 0 0">{{ (i18n or {}).get('tq_perm_hint', "覆写只对该账号生效；「继承默认」跟随角色权限。") }}</p>
+      <div style="display:flex;gap:.5rem;margin-top:1rem">
+        <button type="submit" class="btn btn-p">{{ (i18n or {}).get('save', "保存") }}</button>
+        <button type="button" class="btn btn-s" onclick="document.getElementById('perm-modal').classList.remove('show')">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <script>
-const ROLE_MAP={admin:window.T('role_admin'),viewer:window.T('us_s014')};
+/* 词条来自 i18n_packs/team_page.py（与模板同批落盘）；script 密封页禁 CJK
+   fallback（test_sealed_pages_no_cjk_in_own_scripts），故兜底用英文。 */
+const TQ={
+  unlimited: {{ (i18n or {}).get('tq_unlimited', 'Unlimited') | tojson }},
+  delConfirm: {{ (i18n or {}).get('tq_js_del_confirm', 'Danger: type the username {name} to confirm deletion') | tojson }},
+  delMismatch: {{ (i18n or {}).get('tq_js_del_mismatch', 'Username mismatch, cancelled') | tojson }},
+  quotaSaved: {{ (i18n or {}).get('tq_js_quota_saved', 'Quota saved') | tojson }},
+  lvOver: {{ (i18n or {}).get('tq_lv_over', 'Over') | tojson }},
+  lvWarn: {{ (i18n or {}).get('tq_lv_warn', 'Near limit') | tojson }},
+  permName: {
+    'chat.send_text': {{ (i18n or {}).get('tq_perm_send_text', 'Send text') | tojson }},
+    'chat.send_media': {{ (i18n or {}).get('tq_perm_send_media', 'Send images/media') | tojson }},
+    'chat.send_voice': {{ (i18n or {}).get('tq_perm_send_voice', 'Voice synthesis & send') | tojson }},
+    'ai.translate': {{ (i18n or {}).get('tq_perm_translate', 'Manual translation') | tojson }}
+  },
+  permDomain: {
+    'chat': {{ (i18n or {}).get('tq_perm_domain_chat', 'Chat') | tojson }},
+    'ai': {{ (i18n or {}).get('tq_perm_domain_ai', 'AI') | tojson }}
+  },
+  permInherit: {{ (i18n or {}).get('tq_perm_inherit', 'Inherit default') | tojson }},
+  permAllow: {{ (i18n or {}).get('tq_perm_allow', 'Override: allow') | tojson }},
+  permDeny: {{ (i18n or {}).get('tq_perm_deny', 'Override: deny') | tojson }},
+  permInhAllow: {{ (i18n or {}).get('tq_perm_inherit_allow', 'Inherited: allowed') | tojson }},
+  permInhDeny: {{ (i18n or {}).get('tq_perm_inherit_deny', 'Inherited: denied') | tojson }},
+  permSaved: {{ (i18n or {}).get('tq_perm_saved', 'Permissions saved') | tojson }},
+  permLoadFail: {{ (i18n or {}).get('tq_perm_load_fail', 'Permissions API not ready (pending service restart)') | tojson }},
+  overridden: {{ (i18n or {}).get('tq_perm_overridden', 'Overridden') | tojson }}
+};
 async function updateRole(uid,sel){
   var fd=new FormData();fd.append('role',sel.value);
   try{var r=await apiFetch('/users/update/'+uid,{method:'POST',body:fd,headers:{'Accept':'application/json'}},{timeoutMs:60000});
     var d=await r.json();
-    if(d.ok){showToast(window.T('us_js001'),'ok');var c=document.getElementById('user-'+uid);if(c){var lb=c.querySelector('.role-label');if(lb)lb.textContent=ROLE_MAP[sel.value]||sel.value}}
+    if(r.ok&&d.ok){showToast(window.T('us_js001'),'ok');var c=document.getElementById('user-'+uid);if(c){var lb=c.querySelector('.role-label');if(lb)lb.textContent=sel.options[sel.selectedIndex].text}}
     else showToast(d.detail||window.T('inbox.toast.update_fail'),'err');
   }catch(e){showToast(window.T('draft.net_err'),'err')}
 }
@@ -150,7 +261,7 @@ async function toggleEnabled(uid,enable,btn){
   btnLoading(btn,true);
   try{var r=await apiFetch('/users/update/'+uid,{method:'POST',body:fd,headers:{'Accept':'application/json'}},{timeoutMs:60000});
     var d=await r.json();
-    if(d.ok){showToast(enable?window.T('ov_js_enabled'):window.T('psn_disabled'),'ok');
+    if(r.ok&&d.ok){showToast(enable?window.T('ov_js_enabled'):window.T('psn_disabled'),'ok');
       var c=document.getElementById('user-'+uid);
       if(c){c.classList.toggle('disabled',!enable);
         var db=c.querySelector('.dis-badge');
@@ -163,10 +274,13 @@ async function toggleEnabled(uid,enable,btn){
   finally{btnLoading(btn,false)}
 }
 async function deleteUser(uid,uname){
+  var typed=prompt(TQ.delConfirm.replace('{name}',uname));
+  if(typed===null)return;
+  if(typed!==uname){showToast(TQ.delMismatch,'err');return}
   if(!await confirmAction(window.T('us_js002')+' '+uname+'?',{okText:window.T('delete')}))return;
   try{var r=await apiFetch('/users/delete/'+uid,{method:'POST',body:new FormData(),headers:{'Accept':'application/json'}},{timeoutMs:60000});
     var d=await r.json();
-    if(d.ok){showToast(window.T('kb_js_041')+' '+uname,'ok');var c=document.getElementById('user-'+uid);if(c){c.style.transition='all .3s';c.style.opacity='0';c.style.transform='scale(.9)';setTimeout(function(){c.remove()},300)}}
+    if(r.ok&&d.ok){showToast(window.T('kb_js_041')+' '+uname,'ok');var c=document.getElementById('user-'+uid);if(c){c.style.transition='all .3s';c.style.opacity='0';c.style.transform='scale(.9)';setTimeout(function(){c.remove()},300)}}
     else showToast(d.detail||window.T('inbox.toast.del_fail'),'err');
   }catch(e){showToast(window.T('draft.net_err'),'err')}
 }
@@ -175,10 +289,128 @@ async function createUser(e){
   var btn=form.querySelector('.btn-p');btnLoading(btn,true);
   try{var r=await apiFetch('/users/create',{method:'POST',body:fd,headers:{'Accept':'application/json'}},{timeoutMs:60000});
     var d=await r.json();
-    if(d.ok){showToast(window.T('us_js003'),'ok');document.getElementById('create-modal').classList.remove('show');setTimeout(function(){location.reload()},600)}
+    if(r.ok&&d.ok){showToast(window.T('us_js003'),'ok');document.getElementById('create-modal').classList.remove('show');setTimeout(function(){location.reload()},600)}
     else showToast(d.detail||window.T('kb_js_086'),'err');
   }catch(e){showToast(window.T('draft.net_err'),'err')}
   finally{btnLoading(btn,false)}
+}
+
+/* ── 团队字符用量（统计条 + 每卡用量行；端点 404=重启前中间态，整块保持隐藏）── */
+var _tqAgents={};
+function fmtChars(n){n=n||0;try{return n.toLocaleString()}catch(e){return String(n)}}
+async function loadCharUsage(){
+  try{
+    var r=await apiFetch('/api/users/char-usage',{headers:{'Accept':'application/json'}});
+    if(!r.ok)return;
+    var d=await r.json();
+    if(!d||!d.ok)return;
+    var mEl=document.getElementById('tq-stat-month');
+    if(mEl)mEl.textContent=fmtChars((d.totals||{}).month_total||0);
+    var lic=d.license||{};
+    var pEl=document.getElementById('tq-stat-pool');
+    if(pEl)pEl.textContent=!lic.available?'—':((lic.included||0)<=0?TQ.unlimited:fmtChars(lic.remaining==null?0:lic.remaining));
+    _tqAgents={};
+    (d.agents||[]).forEach(function(a){_tqAgents[a.username]=a});
+    document.querySelectorAll('.u-usage').forEach(function(el){
+      var a=_tqAgents[el.getAttribute('data-user')];
+      if(!a)return;
+      var st=a.status||{};
+      el.style.display='';
+      var q=st.quota||0;
+      el.querySelector('.u-usage-txt').textContent=fmtChars(st.used||0)+' / '+(q>0?fmtChars(q):TQ.unlimited);
+      el.querySelector('.u-usage-bar i').style.width=(q>0?Math.min(100,st.pct||0):0)+'%';
+      var b=el.querySelector('.u-usage-badge');
+      if(st.level==='over'||st.level==='warn'){b.textContent=(st.level==='over'?TQ.lvOver:TQ.lvWarn);b.className='u-usage-badge badge b-r'}
+      else{b.textContent='';b.className='u-usage-badge'}
+    });
+  }catch(e){/* 额度观测失败不影响用户管理主功能 */}
+}
+function openQuotaModal(uid,uname){
+  var f=document.getElementById('quota-form');
+  f.uid.value=uid;
+  document.getElementById('quota-modal-user').textContent='@'+uname;
+  var a=_tqAgents[uname];
+  f.monthly_quota.value=a?(a.quota||0):0;
+  document.getElementById('quota-modal').classList.add('show');
+}
+async function saveQuota(e){
+  e.preventDefault();
+  var f=e.target;
+  var btn=f.querySelector('.btn-p');btnLoading(btn,true);
+  var fd=new FormData();fd.append('monthly_quota',f.monthly_quota.value||'0');
+  try{
+    var r=await apiFetch('/users/quota/'+f.uid.value,{method:'POST',body:fd,headers:{'Accept':'application/json'}},{timeoutMs:60000});
+    var d=await r.json().catch(function(){return {}});
+    if(r.ok&&d.ok){showToast(TQ.quotaSaved,'ok');document.getElementById('quota-modal').classList.remove('show');loadCharUsage()}
+    else showToast((d&&d.detail)||window.T('ov_js_op_fail'),'err');
+  }catch(ex){showToast(window.T('draft.net_err'),'err')}
+  finally{btnLoading(btn,false)}
+}
+
+/* ── L3 按人权限覆写编辑器（先取数成功才开弹窗；端点 404=重启前中间态 → 只 toast）── */
+var _permUid=0;
+function _permEffText(state,def){
+  if(state==='allow')return TQ.permAllow;
+  if(state==='deny')return TQ.permDeny;
+  return def?TQ.permInhAllow:TQ.permInhDeny;
+}
+function _permRowHtml(p){
+  var st=p.state||'inherit';
+  var def=!!p['default'];
+  function opt(v,label){return '<option value="'+v+'"'+(st===v?' selected':'')+'>'+label+'</option>'}
+  return '<div class="perm-row" data-key="'+p.key+'" data-def="'+(def?'1':'0')+'">'
+    +'<span class="perm-dom">'+(TQ.permDomain[p.domain]||p.domain||'')+'</span>'
+    +'<span class="perm-name">'+(TQ.permName[p.key]||p.key)+'</span>'
+    +'<span class="perm-eff">'+_permEffText(st,def)+'</span>'
+    +'<select onchange="permSelChanged(this)">'+opt('inherit',TQ.permInherit)+opt('allow',TQ.permAllow)+opt('deny',TQ.permDeny)+'</select>'
+    +'</div>';
+}
+function permSelChanged(sel){
+  var row=sel.closest('.perm-row');if(!row)return;
+  var eff=row.querySelector('.perm-eff');
+  if(eff)eff.textContent=_permEffText(sel.value,row.getAttribute('data-def')==='1');
+}
+async function openPermModal(uid,uname){
+  var d=null;
+  try{
+    var r=await apiFetch('/api/users/'+uid+'/perms',{headers:{'Accept':'application/json'}},{timeoutMs:20000});
+    if(r.ok)d=await r.json().catch(function(){return null});
+  }catch(e){}
+  if(!d||!d.ok||!Array.isArray(d.perms)){showToast(TQ.permLoadFail,'err');return}
+  _permUid=uid;
+  document.getElementById('perm-modal-user').textContent='@'+uname;
+  document.getElementById('perm-list').innerHTML=d.perms.map(_permRowHtml).join('');
+  document.getElementById('perm-modal').classList.add('show');
+}
+async function savePerms(e){
+  e.preventDefault();
+  var btn=e.target.querySelector('.btn-p');btnLoading(btn,true);
+  var allow=[],deny=[];
+  document.querySelectorAll('#perm-list .perm-row').forEach(function(row){
+    var v=(row.querySelector('select')||{}).value,k=row.getAttribute('data-key');
+    if(v==='allow')allow.push(k);else if(v==='deny')deny.push(k);
+  });
+  try{
+    var r=await apiFetch('/users/perms/'+_permUid,
+      {method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},
+       body:JSON.stringify({allow:allow,deny:deny})},{timeoutMs:60000});
+    var d=await r.json().catch(function(){return {}});
+    if(r.ok&&d.ok){
+      showToast(TQ.permSaved,'ok');
+      document.getElementById('perm-modal').classList.remove('show');
+      _syncPermBadge(_permUid,allow.length+deny.length>0);
+    }else showToast((d&&d.detail)||window.T('ov_js_op_fail'),'err');
+  }catch(ex){showToast(window.T('draft.net_err'),'err')}
+  finally{btnLoading(btn,false)}
+}
+function _syncPermBadge(uid,has){
+  var c=document.getElementById('user-'+uid);if(!c)return;
+  var b=c.querySelector('.perm-badge');
+  if(has&&!b){
+    var s=document.createElement('span');s.className='badge b-p perm-badge';
+    s.style.marginLeft='auto';s.textContent=TQ.overridden;
+    var hd=c.querySelector('.u-hd');if(hd)hd.insertBefore(s,hd.querySelector('.dis-badge'));
+  }else if(!has&&b)b.remove();
 }
 
 /* ── 会话管理 ─────────────────────────────── */
@@ -226,6 +458,6 @@ async function revokeAllSessions(){
     loadSessions();
   }catch(ex){showToast(window.T('ov_js_op_fail'),'err');}
 }
-document.addEventListener('DOMContentLoaded',loadSessions);
+document.addEventListener('DOMContentLoaded',function(){loadSessions();loadCharUsage()});
 </script>
 {% endblock %}

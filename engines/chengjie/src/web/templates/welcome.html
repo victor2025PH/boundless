@@ -1,0 +1,564 @@
+{% extends "base.html" %}
+{% block title %}{{ (i18n or {}).get('onb_wz_title', '首启向导') }}{% endblock %}
+{% block page_title %}{{ (i18n or {}).get('onb_wz_title', '首启向导') }}{% endblock %}
+
+{% block content %}
+<style>
+/* ── 首启向导（WP-2）。变量随 base.html 主题（--bg/--bd/--t/--t2/--accent）。── */
+.onb-wrap{max-width:780px;margin:0 auto;padding:.4rem 0 3rem}
+.onb-sub{color:var(--t2);font-size:.85rem;margin:.2rem 0 1.1rem}
+.onb-steps{display:flex;gap:.35rem;list-style:none;padding:0;margin:0 0 1.2rem;flex-wrap:wrap}
+.onb-steps li{flex:1;min-width:110px;text-align:center;font-size:.74rem;color:var(--t2);
+  padding:.45rem .3rem;border:1px solid var(--bd);border-radius:9px;background:var(--bg);
+  position:relative;user-select:none}
+.onb-steps li .n{display:inline-flex;width:18px;height:18px;border-radius:50%;
+  align-items:center;justify-content:center;font-size:.68rem;font-weight:700;
+  border:1px solid var(--bd);margin-right:.3rem;vertical-align:-3px}
+.onb-steps li.cur{border-color:var(--accent,#5b7cf6);color:var(--t);font-weight:600}
+.onb-steps li.cur .n{background:var(--accent,#5b7cf6);color:#fff;border-color:transparent}
+.onb-steps li.ok{color:var(--t)}
+.onb-steps li.ok .n{background:rgba(52,211,153,.16);color:#059669;border-color:transparent}
+.onb-steps li.skip .n{background:var(--bd);color:var(--t2);border-color:transparent}
+.onb-panel{display:none;border:1px solid var(--bd);border-radius:14px;background:var(--bg);
+  padding:1.1rem 1.2rem 1rem}
+.onb-panel.cur{display:block}
+.onb-panel h3{margin:.1rem 0 .35rem;font-size:1rem}
+.onb-hint{color:var(--t2);font-size:.8rem;margin:.1rem 0 .8rem}
+.onb-body{min-height:120px}
+.onb-foot{display:flex;justify-content:space-between;gap:.5rem;margin-top:1rem;
+  padding-top:.75rem;border-top:1px solid var(--bd)}
+.onb-foot .r{display:flex;gap:.5rem}
+.onb-btn{padding:.5rem 1rem;border-radius:9px;border:1px solid var(--bd);cursor:pointer;
+  background:var(--bg);color:var(--t);font:inherit;font-size:.85rem}
+.onb-btn:hover{border-color:var(--accent,#5b7cf6)}
+.onb-btn.pri{background:var(--accent,#5b7cf6);border-color:transparent;color:#fff;font-weight:600}
+.onb-btn.pri:disabled{opacity:.55;cursor:default}
+.onb-btn.ghost{border-color:transparent;color:var(--t2)}
+.onb-chip{display:inline-block;font-size:.72rem;font-weight:600;padding:.14rem .55rem;
+  border-radius:999px;margin-right:.4rem}
+.onb-chip.ok{background:rgba(52,211,153,.14);color:#059669}
+.onb-chip.warn{background:rgba(251,191,36,.16);color:#b45309}
+.onb-chip.miss{background:rgba(248,113,113,.14);color:#dc2626}
+.onb-row{display:flex;align-items:center;gap:.6rem;padding:.5rem .6rem;border:1px solid var(--bd);
+  border-radius:10px;margin-bottom:.45rem;font-size:.84rem}
+.onb-row .grow{flex:1;min-width:0}
+.onb-input{width:100%;box-sizing:border-box;padding:.55rem .7rem;border:1px solid var(--bd);
+  border-radius:9px;background:var(--bg2,var(--bg));color:var(--t);font:inherit;font-size:.85rem}
+.onb-note{font-size:.78rem;color:var(--t2);margin-top:.5rem}
+.onb-note.ok{color:#059669}
+.onb-note.err{color:#dc2626}
+.onb-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:.6rem}
+.onb-card{border:1px solid var(--bd);border-radius:12px;padding:.8rem .85rem;cursor:pointer}
+.onb-card:hover{border-color:var(--accent,#5b7cf6)}
+.onb-card.sel{border-color:var(--accent,#5b7cf6);box-shadow:0 0 0 2px color-mix(in srgb, var(--accent,#5b7cf6) 22%, transparent)}
+.onb-card b{display:block;font-size:.88rem;margin-bottom:.25rem}
+.onb-card p{margin:0;font-size:.75rem;color:var(--t2);line-height:1.45}
+.onb-fin{text-align:center;padding:1.6rem 0 .6rem}
+.onb-fin .mark{font-size:2.4rem}
+/* persona_create_wizard.js 复用的模态壳（personas.html 同款，welcome 宿主自带一份） */
+.pp-modal-ov{display:none;position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,.45);align-items:center;justify-content:center}
+.pp-modal-ov.open{display:flex}
+.pp-modal{width:min(520px,92vw);max-height:80vh;display:flex;flex-direction:column;background:var(--bg);border:1px solid var(--bd);border-radius:14px;box-shadow:0 18px 60px rgba(0,0,0,.4);overflow:hidden}
+.pp-modal-hd{display:flex;align-items:flex-start;justify-content:space-between;padding:.95rem 1.1rem .65rem}
+.pp-modal-ttl{font-size:1rem;font-weight:700;color:var(--t)}
+.pp-modal-sub{font-size:.74rem;color:var(--t2);margin-top:.15rem}
+.pp-modal-x{background:transparent;border:none;color:var(--t2);font-size:1rem;cursor:pointer;padding:.1rem .35rem;border-radius:6px}
+.pp-modal-x:hover{background:var(--bd);color:var(--t)}
+.pp-modal-foot{display:flex;justify-content:space-between;gap:.5rem;padding:.7rem 1.1rem;border-top:1px solid var(--bd)}
+</style>
+
+<div class="onb-wrap">
+  <p class="onb-sub">{{ (i18n or {}).get('onb_wz_subtitle', '五步跑通：激活授权 → 绑渠道 → 挑人设 → 选自动化档位 → 发一条测试消息。每步都可跳过、可回退，中断后再进来会接着走。') }}</p>
+
+  <ol class="onb-steps" id="onb-steps">
+    <li data-step="license"><span class="n">1</span>{{ (i18n or {}).get('onb_wz_step_license', '授权') }}</li>
+    <li data-step="channel"><span class="n">2</span>{{ (i18n or {}).get('onb_wz_step_channel', '渠道') }}</li>
+    <li data-step="persona"><span class="n">3</span>{{ (i18n or {}).get('onb_wz_step_persona', '人设') }}</li>
+    <li data-step="automation"><span class="n">4</span>{{ (i18n or {}).get('onb_wz_step_automation', '自动化') }}</li>
+    <li data-step="test_message"><span class="n">5</span>{{ (i18n or {}).get('onb_wz_step_test', '测试消息') }}</li>
+  </ol>
+
+  <!-- ① 授权 / 试用 -->
+  <section class="onb-panel" id="onb-p-license">
+    <h3>{{ (i18n or {}).get('onb_wz_lic_title', '① 授权 / 试用状态') }}</h3>
+    <p class="onb-hint">{{ (i18n or {}).get('onb_wz_lic_hint', '已有授权码可直接粘贴激活；没有也可以先用首装体验额度往下走。') }}</p>
+    <div class="onb-body">
+      <div id="onb-lic-state">{{ (i18n or {}).get('onb_wz_loading', '加载中…') }}</div>
+      <div style="display:flex;gap:.5rem;margin-top:.8rem">
+        <input class="onb-input" id="onb-lic-token" style="flex:1"
+               placeholder="{{ (i18n or {}).get('onb_wz_lic_paste_ph', '粘贴授权码（可选）') }}">
+        <button class="onb-btn" id="onb-lic-activate" onclick="onbActivate()">{{ (i18n or {}).get('onb_wz_lic_activate', '激活') }}</button>
+      </div>
+      <div class="onb-note" id="onb-lic-note"></div>
+      <div class="onb-note" id="onb-lic-cta"></div>
+    </div>
+    <div class="onb-foot">
+      <span></span>
+      <div class="r">
+        <button class="onb-btn ghost" onclick="onbSkip()">{{ (i18n or {}).get('onb_wz_skip', '先跳过') }}</button>
+        <button class="onb-btn pri" onclick="onbNext()">{{ (i18n or {}).get('onb_wz_next', '下一步') }}</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ② 渠道接入 -->
+  <section class="onb-panel" id="onb-p-channel">
+    <h3>{{ (i18n or {}).get('onb_wz_ch_title', '② 绑一个聊天渠道') }}</h3>
+    <p class="onb-hint">{{ (i18n or {}).get('onb_wz_ch_hint', '点「去接入」会打开渠道接入向导（新标签页）；扫码/填凭证完成后回到这里点「刷新」。') }}</p>
+    <div class="onb-body">
+      <div id="onb-ch-list">{{ (i18n or {}).get('onb_wz_loading', '加载中…') }}</div>
+      <button class="onb-btn" style="margin-top:.4rem" onclick="onbRefreshChannels()">{{ (i18n or {}).get('onb_wz_refresh', '刷新') }}</button>
+    </div>
+    <div class="onb-foot">
+      <button class="onb-btn ghost" onclick="onbPrev()">{{ (i18n or {}).get('onb_wz_prev', '上一步') }}</button>
+      <div class="r">
+        <button class="onb-btn ghost" onclick="onbSkip()">{{ (i18n or {}).get('onb_wz_skip', '先跳过') }}</button>
+        <button class="onb-btn pri" onclick="onbNext()">{{ (i18n or {}).get('onb_wz_next', '下一步') }}</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ③ 人设模板 -->
+  <section class="onb-panel" id="onb-p-persona">
+    <h3>{{ (i18n or {}).get('onb_wz_ps_title', '③ 挑一个 AI 人设') }}</h3>
+    <p class="onb-hint">{{ (i18n or {}).get('onb_wz_ps_hint', '从内置模板（陪聊/商务/客服/导师/导购）快速建一个人设；之后随时可在「人设工作室」细调。') }}</p>
+    <div class="onb-body">
+      <div id="onb-ps-state">{{ (i18n or {}).get('onb_wz_loading', '加载中…') }}</div>
+      <div style="display:flex;gap:.5rem;margin-top:.8rem">
+        <button class="onb-btn pri" id="onb-ps-open" onclick="onbOpenPersonaWizard()">{{ (i18n or {}).get('onb_wz_ps_create', '从模板新建人设') }}</button>
+        <button class="onb-btn" onclick="onbOpenStudio()">{{ (i18n or {}).get('onb_wz_ps_studio', '打开人设工作室') }}</button>
+      </div>
+      <div class="onb-note" id="onb-ps-note"></div>
+    </div>
+    <div class="onb-foot">
+      <button class="onb-btn ghost" onclick="onbPrev()">{{ (i18n or {}).get('onb_wz_prev', '上一步') }}</button>
+      <div class="r">
+        <button class="onb-btn ghost" onclick="onbSkip()">{{ (i18n or {}).get('onb_wz_skip', '先跳过') }}</button>
+        <button class="onb-btn pri" onclick="onbNext()">{{ (i18n or {}).get('onb_wz_next', '下一步') }}</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ④ 自动化档位 -->
+  <section class="onb-panel" id="onb-p-automation">
+    <h3>{{ (i18n or {}).get('onb_wz_au_title', '④ AI 自动化档位') }}</h3>
+    <p class="onb-hint">{{ (i18n or {}).get('onb_wz_au_hint', '决定客户消息进来后 AI 做到哪一步。选保守档随时可以再升；全自动发送有服务端护栏兜底。') }}</p>
+    <div class="onb-body">
+      <div class="onb-cards" id="onb-au-cards">
+        <div class="onb-card" data-tier="manual" onclick="onbPickTier('manual')">
+          <b>{{ (i18n or {}).get('onb_wz_au_manual', '🙋 全人工') }}</b>
+          <p>{{ (i18n or {}).get('onb_wz_au_manual_d', 'AI 不出手，所有消息由坐席亲自回复。') }}</p>
+        </div>
+        <div class="onb-card" data-tier="review" onclick="onbPickTier('review')">
+          <b>{{ (i18n or {}).get('onb_wz_au_review', '📝 AI 拟稿，人审后发') }}</b>
+          <p>{{ (i18n or {}).get('onb_wz_au_review_d', 'AI 先写好草稿，坐席点「通过」才发出。最常用的稳妥档。') }}</p>
+        </div>
+        <div class="onb-card" data-tier="auto_ai" onclick="onbPickTier('auto_ai')">
+          <b>{{ (i18n or {}).get('onb_wz_au_auto', '🚀 全自动') }}</b>
+          <p>{{ (i18n or {}).get('onb_wz_au_auto_d', 'AI 直接回复客户；出站安全闸与额度护栏仍然在场。') }}</p>
+        </div>
+      </div>
+      <div style="margin-top:.7rem">
+        <button class="onb-btn pri" id="onb-au-apply" onclick="onbApplyTier()" disabled>{{ (i18n or {}).get('onb_wz_au_apply', '应用此档位') }}</button>
+      </div>
+      <div class="onb-note" id="onb-au-note"></div>
+    </div>
+    <div class="onb-foot">
+      <button class="onb-btn ghost" onclick="onbPrev()">{{ (i18n or {}).get('onb_wz_prev', '上一步') }}</button>
+      <div class="r">
+        <button class="onb-btn ghost" onclick="onbSkip()">{{ (i18n or {}).get('onb_wz_skip', '先跳过') }}</button>
+        <button class="onb-btn pri" onclick="onbNext()">{{ (i18n or {}).get('onb_wz_next', '下一步') }}</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ⑤ 发测试消息 -->
+  <section class="onb-panel" id="onb-p-test_message">
+    <h3>{{ (i18n or {}).get('onb_wz_ts_title', '⑤ 发一条测试消息') }}</h3>
+    <p class="onb-hint">{{ (i18n or {}).get('onb_wz_ts_hint', '发到你自己账号的「收藏消息」（Saved Messages），不打扰任何客户——发出即证明整条链路通了。') }}</p>
+    <div class="onb-body">
+      <div id="onb-ts-accwrap">
+        <select class="onb-input" id="onb-ts-account"></select>
+      </div>
+      <textarea class="onb-input" id="onb-ts-text" rows="2" style="margin-top:.55rem"></textarea>
+      <div style="margin-top:.55rem">
+        <button class="onb-btn pri" id="onb-ts-send" onclick="onbSendTest()">{{ (i18n or {}).get('onb_wz_ts_send', '发送测试消息') }}</button>
+      </div>
+      <div class="onb-note" id="onb-ts-note"></div>
+    </div>
+    <div class="onb-foot">
+      <button class="onb-btn ghost" onclick="onbPrev()">{{ (i18n or {}).get('onb_wz_prev', '上一步') }}</button>
+      <div class="r">
+        <button class="onb-btn ghost" onclick="onbSkip()">{{ (i18n or {}).get('onb_wz_skip', '先跳过') }}</button>
+        <button class="onb-btn pri" onclick="onbNext()">{{ (i18n or {}).get('onb_wz_finish', '完成向导') }}</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 完成页 -->
+  <section class="onb-panel" id="onb-p-finish">
+    <div class="onb-fin">
+      <div class="mark">🎉</div>
+      <h3>{{ (i18n or {}).get('onb_wz_fin_title', '配置完成！') }}</h3>
+      <p class="onb-hint">{{ (i18n or {}).get('onb_wz_fin_body', '去工作台开始接待客户吧。这里的每一项之后都能在对应设置页里再调整。') }}</p>
+      <a class="onb-btn pri" href="/workspace" style="text-decoration:none;display:inline-block">{{ (i18n or {}).get('onb_wz_fin_workspace', '进入工作台') }}</a>
+      <div class="onb-note" id="onb-fin-note"></div>
+    </div>
+  </section>
+</div>
+
+<script src="/static/js/persona_create_wizard.js?v=20260816a"></script>
+<script>
+(function () {
+  'use strict';
+  var STEPS = ['license', 'channel', 'persona', 'automation', 'test_message'];
+  var ST = { idx: 0, status: null, tier: '', licOk: false, chReady: 0, psCount: 0,
+             auApplied: false, tsSent: false, finished: false };
+
+  function T(k) { return window.T ? window.T(k) : k; }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function el(id) { return document.getElementById(id); }
+  function note(id, msg, cls) {
+    var n = el(id);
+    if (!n) return;
+    n.textContent = msg || '';
+    n.className = 'onb-note' + (cls ? ' ' + cls : '');
+  }
+  async function jfetch(url, opts) {
+    var r = await fetch(url, opts);
+    var d = null;
+    try { d = await r.json(); } catch (e) { d = null; }
+    return { ok: r.ok, status: r.status, data: d };
+  }
+  function postJson(url, body) {
+    return jfetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                         body: JSON.stringify(body || {}) });
+  }
+  // 进度持久化（fire-and-forget：状态写失败不阻塞向导本身）
+  function markStep(step, patch) {
+    var body = { step: step };
+    for (var k in patch) { if (Object.prototype.hasOwnProperty.call(patch, k)) body[k] = patch[k]; }
+    return postJson('/api/onboarding/state', body).catch(function () {});
+  }
+
+  // ── 步进 ──────────────────────────────────────────────────────────────
+  function renderStepper() {
+    var lis = document.querySelectorAll('#onb-steps li');
+    var stateSteps = (ST.status && ST.status.state && ST.status.state.steps) || {};
+    for (var i = 0; i < lis.length; i++) {
+      var li = lis[i];
+      var sid = li.getAttribute('data-step');
+      var entry = stateSteps[sid] || {};
+      li.className = '';
+      if (entry.done) li.className = 'ok';
+      else if (entry.skipped) li.className = 'skip';
+      if (!ST.finished && STEPS[ST.idx] === sid) li.className += (li.className ? ' ' : '') + 'cur';
+    }
+  }
+  function showPanel(id) {
+    var panels = document.querySelectorAll('.onb-panel');
+    for (var i = 0; i < panels.length; i++) panels[i].classList.remove('cur');
+    var p = el('onb-p-' + id);
+    if (p) p.classList.add('cur');
+  }
+  function gotoStep(i) {
+    ST.idx = Math.max(0, Math.min(STEPS.length - 1, i));
+    var sid = STEPS[ST.idx];
+    showPanel(sid);
+    renderStepper();
+    if (sid === 'license') loadLicense();
+    else if (sid === 'channel') loadChannels();
+    else if (sid === 'persona') loadPersonas();
+    else if (sid === 'automation') loadAutomation();
+    else if (sid === 'test_message') loadTest();
+  }
+  function stepResult() {
+    var sid = STEPS[ST.idx];
+    if (sid === 'license') return ST.licOk;
+    if (sid === 'channel') return ST.chReady > 0;
+    if (sid === 'persona') return ST.psCount > 0;
+    if (sid === 'automation') return ST.auApplied;
+    if (sid === 'test_message') return ST.tsSent;
+    return false;
+  }
+  function onbNext() {
+    var sid = STEPS[ST.idx];
+    var ok = stepResult();
+    markStep(sid, ok ? { done: true, skipped: false } : { skipped: true });
+    var entry = stepEntry(sid);
+    entry.done = ok; entry.skipped = !ok;
+    if (ST.idx >= STEPS.length - 1) return finishWizard();
+    gotoStep(ST.idx + 1);
+  }
+  function onbSkip() {
+    var sid = STEPS[ST.idx];
+    markStep(sid, { skipped: true, done: false });
+    var entry = stepEntry(sid);
+    entry.done = false; entry.skipped = true;
+    if (ST.idx >= STEPS.length - 1) return finishWizard();
+    gotoStep(ST.idx + 1);
+  }
+  function onbPrev() { if (ST.idx > 0) gotoStep(ST.idx - 1); }
+  function stepEntry(sid) {
+    if (!ST.status) ST.status = {};
+    if (!ST.status.state) ST.status.state = { steps: {} };
+    if (!ST.status.state.steps) ST.status.state.steps = {};
+    if (!ST.status.state.steps[sid]) ST.status.state.steps[sid] = {};
+    return ST.status.state.steps[sid];
+  }
+  function finishWizard() {
+    ST.finished = true;
+    postJson('/api/onboarding/state', { completed: true }).catch(function () {});
+    showPanel('finish');
+    renderStepper();
+  }
+
+  // ── ① 授权 ────────────────────────────────────────────────────────────
+  async function loadLicense() {
+    var box = el('onb-lic-state');
+    if (!box) return;
+    var r = await jfetch('/api/admin/license');
+    var d = (r.data || {});
+    var q = d.quota || {};
+    var licensed = !!d.licensed;
+    var trialing = !!d.trial || String(q.source || '') === 'local_trial';
+    ST.licOk = licensed || (trialing && !q.trial_expired);
+    var html = '';
+    if (licensed) {
+      html += '<span class="onb-chip ok">' + esc(T('onb_wz_lic_licensed')) + '</span>';
+      html += '<span style="font-size:.84rem">' + esc(T('onb_wz_lic_plan')) + ' ' + esc(d.plan || '-') + '</span>';
+    } else if (trialing && !q.trial_expired) {
+      html += '<span class="onb-chip warn">' + esc(T('onb_wz_lic_trial')) + '</span>';
+      if (q.trial_hours_left != null) {
+        html += '<span style="font-size:.84rem">' + esc(window.Tf ? window.Tf('onb_wz_lic_hours_left', { n: Math.max(0, Math.round(q.trial_hours_left)) }) : '') + '</span>';
+      }
+    } else {
+      html += '<span class="onb-chip miss">' + esc(T('onb_wz_lic_missing')) + '</span>';
+    }
+    box.innerHTML = html;
+    var cta = el('onb-lic-cta');
+    var links = (ST.status && ST.status.links) || {};
+    if (cta) {
+      cta.innerHTML = (!licensed && links.trial_url)
+        ? '<a href="' + esc(links.trial_url) + '" target="_blank" rel="noopener">' + esc(T('onb_wz_lic_trial_cta')) + '</a>'
+        : '';
+    }
+  }
+  async function onbActivate() {
+    var input = el('onb-lic-token');
+    var tok = input ? input.value.trim() : '';
+    if (!tok) { note('onb-lic-note', T('onb_wz_lic_paste_ph'), 'err'); return; }
+    note('onb-lic-note', T('onb_wz_loading'));
+    var r = await postJson('/api/admin/license/activate', { token: tok });
+    if (r.data && r.data.ok) {
+      note('onb-lic-note', T('onb_wz_lic_activated'), 'ok');
+      loadLicense();
+    } else {
+      var detail = (r.data && (r.data.detail || r.data.error)) || ('HTTP ' + r.status);
+      note('onb-lic-note', T('onb_wz_lic_act_fail') + ' ' + detail, 'err');
+    }
+  }
+
+  // ── ② 渠道 ────────────────────────────────────────────────────────────
+  async function loadChannels() {
+    var box = el('onb-ch-list');
+    if (!box) return;
+    box.textContent = T('onb_wz_loading');
+    var r = await jfetch('/api/setup/channels');
+    var d = r.data || {};
+    var chans = d.channels || [];
+    ST.chReady = Number(d.ready_count || 0);
+    if (!chans.length) { box.textContent = T('onb_wz_ch_none'); return; }
+    var html = '';
+    for (var i = 0; i < chans.length; i++) {
+      var c = chans[i];
+      var ready = !!c.ready;
+      html += '<div class="onb-row">'
+        + '<span class="onb-chip ' + (ready ? 'ok' : 'warn') + '">'
+        + esc(ready ? T('onb_wz_ch_ready') : T('onb_wz_ch_not_ready')) + '</span>'
+        + '<span class="grow">' + esc(c.name || c.id) + '</span>'
+        + '<button class="onb-btn" data-onb-ch="' + esc(c.id) + '">'
+        + esc(T('onb_wz_ch_open')) + '</button>'
+        + '</div>';
+    }
+    box.innerHTML = html;
+  }
+  function onbRefreshChannels() { loadChannels(); }
+
+  // ── ③ 人设 ────────────────────────────────────────────────────────────
+  async function loadPersonas() {
+    var box = el('onb-ps-state');
+    if (!box) return;
+    var r = await jfetch('/api/personas/profiles');
+    var list = (r.data && (r.data.profiles || r.data.items)) || [];
+    window._allProfiles = list; // 喂给 persona_create_wizard 的 ID 查重护栏
+    ST.psCount = list.length;
+    box.innerHTML = '<span class="onb-chip ' + (list.length ? 'ok' : 'warn') + '">'
+      + esc(window.Tf ? window.Tf('onb_wz_ps_count', { n: list.length }) : '') + '</span>';
+  }
+  function onbOpenPersonaWizard() {
+    if (window.PSWizard && window.PSWizard.open) window.PSWizard.open();
+    else note('onb-ps-note', T('onb_wz_err'), 'err');
+  }
+  function onbOpenStudio() { window.open('/personas', '_blank'); }
+  // persona_create_wizard 创建成功后回调的宿主钩子（personas.html 里是刷新列表；
+  // 这里 = 刷新计数 + 顺手把本步标记完成）
+  function loadProfileList() {
+    loadPersonas().then(function () {
+      if (ST.psCount > 0) {
+        note('onb-ps-note', T('onb_wz_ps_created'), 'ok');
+        markStep('persona', { done: true, skipped: false });
+        stepEntry('persona').done = true;
+        renderStepper();
+      }
+    });
+  }
+  function openNewProfile() { window.open('/personas', '_blank'); }
+  function _toast(msg) { note('onb-ps-note', msg, 'ok'); }
+
+  // ── ④ 自动化档位 ──────────────────────────────────────────────────────
+  function loadAutomation() {
+    var mode = (ST.status && ST.status.automation && ST.status.automation.mode) || '';
+    if (!ST.tier && (mode === 'manual' || mode === 'review' || mode === 'auto_ai')) {
+      onbPickTier(mode);
+      note('onb-au-note', T('onb_wz_au_current') + ' ' + mode);
+    }
+  }
+  function onbPickTier(t) {
+    ST.tier = t;
+    var cards = document.querySelectorAll('#onb-au-cards .onb-card');
+    for (var i = 0; i < cards.length; i++) {
+      cards[i].classList.toggle('sel', cards[i].getAttribute('data-tier') === t);
+    }
+    var btn = el('onb-au-apply');
+    if (btn) btn.disabled = false;
+  }
+  async function onbApplyTier() {
+    if (!ST.tier) return;
+    var btn = el('onb-au-apply');
+    if (btn) btn.disabled = true;
+    note('onb-au-note', T('onb_wz_loading'));
+    var r = await postJson('/api/onboarding/automation-tier', { tier: ST.tier });
+    if (btn) btn.disabled = false;
+    var d = r.data || {};
+    if (d.ok) {
+      ST.auApplied = true;
+      var extra = (d.warns && d.warns.length) ? (' ' + d.warns.join('；')) : '';
+      note('onb-au-note', T('onb_wz_au_applied') + extra, 'ok');
+      markStep('automation', { done: true, skipped: false, data: { tier: ST.tier } });
+      stepEntry('automation').done = true;
+      renderStepper();
+    } else {
+      var why = '';
+      if (d.blocked && d.blocked.length) {
+        for (var i = 0; i < d.blocked.length; i++) why += (why ? '；' : '') + d.blocked[i].reason;
+      }
+      note('onb-au-note', T('onb_wz_au_blocked') + (why ? ' ' + why : ''), 'err');
+    }
+  }
+
+  // ── ⑤ 测试消息 ────────────────────────────────────────────────────────
+  function loadTest() {
+    var sel = el('onb-ts-account');
+    var txt = el('onb-ts-text');
+    if (txt && !txt.value) txt.value = T('onb_wz_ts_default_text');
+    if (!sel) return;
+    var accounts = (ST.status && ST.status.accounts) || [];
+    sel.innerHTML = '';
+    if (!accounts.length) {
+      var o0 = document.createElement('option');
+      o0.value = ''; o0.textContent = T('onb_wz_ts_no_account');
+      sel.appendChild(o0);
+      return;
+    }
+    for (var i = 0; i < accounts.length; i++) {
+      var a = accounts[i];
+      var o = document.createElement('option');
+      o.value = a.platform + '|' + a.account_id;
+      o.textContent = a.label + (a.online ? '' : ' (offline)');
+      sel.appendChild(o);
+    }
+  }
+  async function onbSendTest() {
+    var sel = el('onb-ts-account');
+    var txt = el('onb-ts-text');
+    var v = sel ? sel.value : '';
+    if (!v) { note('onb-ts-note', T('onb_wz_ts_no_account'), 'err'); return; }
+    var parts = v.split('|');
+    var body = {
+      platform: parts[0],
+      account_id: parts[1],
+      chat_key: 'me',
+      text: (txt && txt.value.trim()) || T('onb_wz_ts_default_text'),
+      client_msg_id: 'onb-' + Date.now().toString(36),
+    };
+    var btn = el('onb-ts-send');
+    if (btn) btn.disabled = true;
+    note('onb-ts-note', T('onb_wz_loading'));
+    var r = await postJson('/api/unified-inbox/send', body);
+    if (btn) btn.disabled = false;
+    if (r.data && (r.data.ok || r.data.sent)) {
+      ST.tsSent = true;
+      note('onb-ts-note', T('onb_wz_ts_sent'), 'ok');
+      markStep('test_message', { done: true, skipped: false });
+      stepEntry('test_message').done = true;
+      renderStepper();
+    } else {
+      var detail = (r.data && (r.data.detail || r.data.error)) || ('HTTP ' + r.status);
+      note('onb-ts-note', T('onb_wz_ts_fail') + ' ' + detail, 'err');
+    }
+  }
+
+  // ── 启动：读状态 → 断点续走 ───────────────────────────────────────────
+  async function boot() {
+    var r = await jfetch('/api/onboarding/status');
+    ST.status = (r.data && r.data.ok) ? r.data : { state: { steps: {} } };
+    var steps = (ST.status.state && ST.status.state.steps) || {};
+    if (ST.status.state && ST.status.state.completed) {
+      ST.finished = true;
+      showPanel('finish');
+      note('onb-fin-note', T('onb_wz_completed_note'));
+      renderStepper();
+      return;
+    }
+    var resume = 0;
+    for (var i = 0; i < STEPS.length; i++) {
+      var e = steps[STEPS[i]] || {};
+      if (!e.done && !e.skipped) { resume = i; break; }
+      resume = i;
+    }
+    gotoStep(resume);
+  }
+
+  // 渠道行「去接入」事件委托（动态行不用内联 handler，规避拼接键脆弱模式）
+  var chList = el('onb-ch-list');
+  if (chList) {
+    chList.addEventListener('click', function (ev) {
+      var b = ev.target && ev.target.closest ? ev.target.closest('[data-onb-ch]') : null;
+      if (!b) return;
+      window.open('/workspace/setup?channel=' + encodeURIComponent(b.getAttribute('data-onb-ch')), '_blank');
+    });
+  }
+
+  // 内联 onclick 引用的函数必须全局可达（哑按钮门禁 + 热更新即生产纪律）
+  window.onbNext = onbNext;
+  window.onbPrev = onbPrev;
+  window.onbSkip = onbSkip;
+  window.onbActivate = onbActivate;
+  window.onbRefreshChannels = onbRefreshChannels;
+  window.onbOpenPersonaWizard = onbOpenPersonaWizard;
+  window.onbOpenStudio = onbOpenStudio;
+  window.onbPickTier = onbPickTier;
+  window.onbApplyTier = onbApplyTier;
+  window.onbSendTest = onbSendTest;
+  window.loadProfileList = loadProfileList;
+  window.openNewProfile = openNewProfile;
+  window._toast = _toast;
+
+  boot();
+})();
+</script>
+{% endblock %}

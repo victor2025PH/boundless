@@ -65,9 +65,11 @@
     .row .sub { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b); }
     .badge { font-size:var(--cp-fs-tiny,11px); padding:1px 7px; border-radius:10px;
              background:var(--cp-surface-2,#f1f5f9); color:var(--cp-text-dim,#64748b); }
-    .badge.on { background:rgba(47,158,110,.18); color:#2f9e6e; }
-    .badge.off { background:rgba(120,130,150,.18); color:#8a9bb0; }
-    .badge.pending { background:rgba(255,176,32,.2); color:#c98a14; }
+    /* P2：状态语义色收口 --cp-* token（在线=ok 绿 / 掉线=中性灰 / 登录中=warn 琥珀），
+       日夜主题自适配；头像渐变池是 categorical 色池刻意保留（legacy-blue 棘轮已登记） */
+    .badge.on { background:color-mix(in srgb,var(--cp-ok,#2f9e6e) 18%,transparent); color:var(--cp-ok,#2f9e6e); }
+    .badge.off { background:color-mix(in srgb,var(--cp-text-tiny,#8a9bb0) 18%,transparent); color:var(--cp-text-tiny,#8a9bb0); }
+    .badge.pending { background:color-mix(in srgb,var(--cp-warn,#c98a14) 20%,transparent); color:var(--cp-warn,#c98a14); }
     .add { margin-top:10px; border-top:1px dashed var(--cp-border,#e2e8f0); padding-top:10px; }
     .add .field { display:flex; align-items:center; gap:6px; margin-bottom:6px; }
     .add label { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b); flex:0 0 56px; }
@@ -78,7 +80,7 @@
     .qr img { width:180px; height:180px; background:#fff; border-radius:8px; padding:6px; }
     .qr .inst { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b); margin-top:6px; white-space:pre-wrap; }
     .qr .st { font-size:var(--cp-fs-sm,12px); margin-top:6px; }
-    .qr .st.ok { color:#2f9e6e; }
+    .qr .st.ok { color:var(--cp-ok,#2f9e6e); }
     .qr .st.fail { color:var(--cp-danger,#dc2626); }
     .qr .pin { margin-top:10px; }
     .qr .pin-label { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b); }
@@ -97,9 +99,9 @@
     .audit .it .tx { font-size:var(--cp-fs-sm,12px); margin-top:2px; white-space:pre-wrap; word-break:break-word; }
     .rb { font-size:var(--cp-fs-tiny,11px); padding:1px 6px; border-radius:8px;
             background:var(--cp-surface-2,#f1f5f9); color:var(--cp-text-dim,#64748b); }
-    .rb.sent { background:rgba(47,158,110,.18); color:#2f9e6e; }
+    .rb.sent { background:color-mix(in srgb,var(--cp-ok,#2f9e6e) 18%,transparent); color:var(--cp-ok,#2f9e6e); }
     .rb.handoff { background:rgba(220,38,38,.16); color:var(--cp-danger,#dc2626); }
-    .live { font-size:var(--cp-fs-tiny,11px); color:#2f9e6e; margin-left:auto; }`;
+    .live { font-size:var(--cp-fs-tiny,11px); color:var(--cp-ok,#2f9e6e); margin-left:auto; }`;
 
   class CpAccounts extends HTMLElement {
     constructor() {
@@ -139,6 +141,10 @@
       const accs = (d && d.accounts) || [];
       // P5：脱敏开关随 /api/accounts 下发（缺省 true，与 web 端口径一致）
       this._maskPhone = !(d && d.mask_phone === false);
+      // P0（2026-08-12）：管理权限随 /api/accounts 下发（服务端排除法拒 agent/viewer，
+      // 与告警渠道 _ALERT_CFG_DENY_ROLES 同哲学）。fail-open：老后端缺字段＝可管理（旧行为），
+      // 只有显式 false 才收起管理按钮——坐席看得到账号状态，动不了启停/配置。
+      this._canManage = !(d && d.viewer_can_manage === false);
       this._render(accs);
     }
 
@@ -146,14 +152,19 @@
       this._accounts = accs || [];
       const rows = accs.map((a) => this._rowHtml(a)).join("") ||
         `<div class="empty">${this._esc(T("cp.acct.empty"))}</div>`;
+      // hide-title：宿主已有自己的卡头/标题（如 app.html 账号管理层头）时消掉组件内重复标题行
+      const ttl = this.hasAttribute("hide-title") ? "" : `<span class="t">${this._esc(T("cp.acct.title"))}</span>`;
+      // 管理面（设置/告警渠道/添加账号）只给有管理权限的角色；体检/日志/刷新是只读诊断，全员可见
+      const mng = this._canManage !== false;
       this._wrap().innerHTML =
-        `<div class="head"><span class="t">${this._esc(T("cp.acct.title"))}</span>` +
+        `<div class="head">${ttl}` +
         `<button data-act="health">${this._esc(T("cp.acct.health"))}</button>` +
-        `<button data-act="settings">${this._esc(T("cp.acct.settings"))}</button>` +
-        `<button data-act="webhooks">${this._esc(T("cp.acct.webhooks"))}</button>` +
+        (mng ? `<button data-act="settings">${this._esc(T("cp.acct.settings"))}</button>` : "") +
+        (mng ? `<button data-act="webhooks">${this._esc(T("cp.acct.webhooks"))}</button>` : "") +
         `<button data-act="audit">${this._esc(T("cp.acct.audit_btn"))}</button>` +
         `<button data-act="refresh">${this._esc(T("cp.common.refresh"))}</button>` +
-        `<button class="primary" data-act="add">${this._esc(T("cp.acct.add"))}</button></div>` +
+        (mng ? `<button class="primary" data-act="add">${this._esc(T("cp.acct.add"))}</button>` : "") +
+        `</div>` +
         `<div class="list">${rows}</div>` +
         `<div class="form"></div>`;
     }
@@ -206,10 +217,11 @@
       const stCls = st === "online" ? "on" : (st === "pending" ? "pending" : "off");
       const stTxt = STATUS_KEY[st] ? T(STATUS_KEY[st]) : st;
       const mode = MODE_KEY[a.mode] ? T(MODE_KEY[a.mode]) : (a.mode || "");
-      // 仅 protocol 号可由编排器启停 + 切 7×24 自动回复（web/device 由各自宿主或手机负责）
+      // 仅 protocol 号可由编排器启停 + 切 7×24 自动回复（web/device 由各自宿主或手机负责）；
+      // 启停/自动开关属管理动作，低权限角色（agent/viewer）只读不给按钮
       const p = this._esc(a.platform);
       const id = this._esc(a.account_id);
-      const ctrl = a.mode === "protocol"
+      const ctrl = (a.mode === "protocol" && this._canManage !== false)
         ? `<button data-act="toggle-auto" class="${a.auto_reply ? "primary" : ""}" data-p="${p}" data-a="${id}" data-v="${a.auto_reply ? "1" : "0"}">${this._esc(a.auto_reply ? T("cp.acct.auto_on") : T("cp.acct.auto_off"))}</button>` +
           `<button data-act="adv" data-p="${p}" data-a="${id}">${this._esc(T("cp.acct.adv"))}</button>` +
           `<button data-act="start" data-p="${p}" data-a="${id}">${this._esc(T("cp.acct.start"))}</button>` +
@@ -231,6 +243,14 @@
     }
 
     _onAction(act, el) {
+      // P0（2026-08-12）危险操作两步确认：停止（账号下线漏接客户）与「开」自动回复
+      // （AI 开始自动发消息）必须再点一次才生效——按钮原地变确认态 4s，超时自动还原。
+      // 「关」自动回复/启动是安全方向，不拦。误触即事故 → 误触可反悔。
+      if ((act === "stop" || (act === "toggle-auto" && el.getAttribute("data-v") !== "1")) &&
+          el.getAttribute("data-armed") !== "1") {
+        this._armConfirm(el, act);
+        return;
+      }
       if (act === "refresh") return this.reload();
       if (act === "audit") return this._renderAudit();
       if (act === "health") return this._renderHealth();
@@ -255,6 +275,21 @@
     _findAccount(platform, account_id) {
       return (this._accounts || []).find(
         (a) => a.platform === platform && a.account_id === account_id) || null;
+    }
+
+    _armConfirm(el, act) {
+      el.setAttribute("data-armed", "1");
+      el.dataset.origText = el.textContent;
+      el.dataset.origCls = el.className;
+      el.textContent = T(act === "stop" ? "cp.acct.confirm_stop" : "cp.acct.confirm_auto_on");
+      el.classList.add("danger");
+      setTimeout(() => {
+        // 4s 内没点第二次 → 还原（列表若已 reload 重渲，旧节点脱离文档，自然作废）
+        if (!el.isConnected || el.getAttribute("data-armed") !== "1") return;
+        el.removeAttribute("data-armed");
+        el.textContent = el.dataset.origText || "";
+        el.className = el.dataset.origCls || "";
+      }, 4000);
     }
 
     _renderOverride(el) {
@@ -318,7 +353,7 @@
         const d = await this._client.setAccountOverride({ platform, account_id, override });
         if (msg) {
           msg.textContent = (d && d.ok) ? T("cp.acct.saved_refresh") : T("cp.common.save_fail");
-          msg.style.color = (d && d.ok) ? "#2f9e6e" : "var(--cp-danger,#dc2626)";
+          msg.style.color = (d && d.ok) ? "var(--cp-ok,#2f9e6e)" : "var(--cp-danger,#dc2626)";
         }
         setTimeout(() => this.reload(), 700);
       } catch (e) {
@@ -653,7 +688,7 @@
         const d = await this._client.setAutoReplyWebhooks(this._whCollect());
         if (msg) {
           msg.textContent = (d && d.ok) ? T("cp.acct.wh_saved", { count: d.count }) : T("cp.common.save_fail");
-          msg.style.color = (d && d.ok) ? "#2f9e6e" : "var(--cp-danger,#dc2626)";
+          msg.style.color = (d && d.ok) ? "var(--cp-ok,#2f9e6e)" : "var(--cp-danger,#dc2626)";
         }
       } catch (e) {
         if (msg) { msg.textContent = T("cp.common.save_fail"); msg.style.color = "var(--cp-danger,#dc2626)"; }
@@ -680,7 +715,7 @@
         if (msg) {
           msg.textContent = (d && d.ok) ? T("cp.acct.wh_test_ok")
             : T("cp.acct.wh_test_fail", { err: (d && d.error) || T("cp.acct.wh_unreachable") });
-          msg.style.color = (d && d.ok) ? "#2f9e6e" : "var(--cp-danger,#dc2626)";
+          msg.style.color = (d && d.ok) ? "var(--cp-ok,#2f9e6e)" : "var(--cp-danger,#dc2626)";
         }
       } catch (e) {
         if (msg) { msg.textContent = T("cp.acct.wh_test_fail_simple"); msg.style.color = "var(--cp-danger,#dc2626)"; }
@@ -741,7 +776,7 @@
         const d = await this._client.setAutoReplyConfig(patch);
         if (msg) {
           msg.textContent = (d && d.ok) ? T("cp.acct.saved") : T("cp.common.save_fail");
-          msg.style.color = (d && d.ok) ? "#2f9e6e" : "var(--cp-danger,#dc2626)";
+          msg.style.color = (d && d.ok) ? "var(--cp-ok,#2f9e6e)" : "var(--cp-danger,#dc2626)";
         }
       } catch (e) {
         if (msg) { msg.textContent = T("cp.common.save_fail"); msg.style.color = "var(--cp-danger,#dc2626)"; }

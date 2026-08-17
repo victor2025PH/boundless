@@ -63,15 +63,35 @@ from typing import Any, List, Optional, Tuple
 DEFAULT_BASE = "http://127.0.0.1:18799"  # 勿改回 localhost：Windows 下先试 ::1 而服务只听 IPv4，每个新连接吃 ~2s 回退超时（2026-08-01 实测 16ms vs 2070ms）
 DEFAULT_DATA_ROOT = "D:/chengjie-instances/zhiliao/data"
 
-# 量测视口固定，否则高度不可比（换宽度会改变筛选 tab 的换行行数）
+# 量测视口固定，否则高度不可比（换宽度会改变筛选 tab 的换行行数）。
+# 2026-08-11 起为双档：宽屏 1440×900（原有全部不变量）+ 窄屏 390×844（P0-P2 收敛的
+# ratchet：单行筛选 / 会话行压平 / 抽屉让开平台条——没有门禁这些会被悄悄退化，
+# 正是列表头当年「加一行没人发现」的同类病）。
 VIEWPORT = {"width": 1440, "height": 900}
+NARROW_VIEWPORT = {"width": 390, "height": 844}
 
 # ── 高度预算天花板（只许降不许升）─────────────────────────────────────
 # 2026-07-30 实测 @1440x900：列表头（无筛选）180px、composer 139px。
 # 留 ~15px 余量吸收字体/平台差异，但小于「新增一行」的代价（约 25px）——
 # 于是「有人加了一行」必然破线，而「字体差 1px」不会误报。
-LIST_HEADER_MAX = 196
+# 2026-08-11 P0 收敛后重校准：目标议程行迁入更多菜单 + 主筛选行单行化 → 实测 119px，
+# 天花板 196 → 134（119+15）。谁再往列表头塞一行，这里先红。
+LIST_HEADER_MAX = 134
 COMPOSER_MAX = 152
+# ── 窄屏档天花板（390×844；2026-08-11 P3 首校准，同样只降不升）────────────
+# ftab 行：单行 30px chip ≈ 40px，换行成两行会跳到 ~70px+ → 46 干净分界；
+# 会话行：压平（横排 meta）实测 ~62-66px，竖排退化会回 ~90px+ → 74 干净分界。
+NARROW_LIST_HEADER_MAX = 149   # 2026-08-11 首校准实测 134px（+15 余量，同宽屏口径）
+NARROW_FTAB_ROW_MAX = 46
+# 2026-08-15 C 批行等高化后重校准：实测 62px（条件行收编进行内 chip 带后恒定）。
+# 74 → 68：任何一个条件行长回独立行＝+21px → 83px 必破线；字体差 1-2px 不误报。
+NARROW_CONV_ROW_MAX = 68
+# ── 宽屏会话行等高断言（2026-08-15 C 批新增）─────────────────────────
+# 行高忽高忽低本身就是缺陷（视觉节奏破碎 + contain-intrinsic-size 62px 估高失准
+# → 长列表滚动锚点跳动）。C 批把 tags/suggest/risk 三个条件行收编进第 2 行行内
+# chip 带、meta 徽章横排后，所有行应等高 62px。spread=最高行-最低行。
+WIDE_CONV_ROW_MAX = 68
+CONV_ROW_SPREAD_MAX = 2
 
 # 「可见但空」扫描的良性命中登记：装饰件 / 分隔线 / 拖拽把手本就无内容。
 # 新增豁免必须写清原因（对齐仓内 _ACCEPTED_DUP_IDS 的登记文化）。
@@ -141,9 +161,14 @@ _SNAP_JS = """() => {
 _COMPOSER_JS = """() => {
   const wrap = document.querySelector('.reply-bar-wrap');
   if (!wrap) return {absent: true};
+  // AI 草稿卡是「动态内容」不是布局 chrome：打开的已读会话恰好有待审草稿时
+  // 它会占 ~100px（2026-08-14 实测 102px 导致 246>152 假阳性红）。预算 ratchet
+  // 的靶子是静态布局膨胀，故草稿卡高度单独上报、从预算口径中剔除。
+  const draft = document.getElementById('cdraft-bar');
   return {
     absent: false,
     total: wrap.offsetHeight,
+    draft_h: draft ? draft.offsetHeight : 0,
     rows: [...wrap.children].map(el => ({
       id: el.id || '', h: el.offsetHeight,
       disp: getComputedStyle(el).display,
@@ -171,6 +196,31 @@ def read_token(data_root: str) -> str:
         if tok:
             return tok
     return ""
+
+
+_NARROW_JS = """() => {
+  const h = (el) => el ? Math.round(el.getBoundingClientRect().height) : null;
+  return {
+    hdr_h: h(document.querySelector('.list-header')),
+    ftab_h: h(document.getElementById('ftab-scroll')),
+    row_h: h(document.querySelector('#conv-items .conv-item')),
+  };
+}"""
+
+_DRAWER_JS = """() => {
+  const m = document.getElementById('ftab-more-menu');
+  if (!m || !m.classList.contains('show')) return {open: false};
+  const r = m.getBoundingClientRect();
+  const f = m.querySelector('.fp-foot');
+  const fr = f ? f.getBoundingClientRect() : null;
+  return {
+    open: true, vh: window.innerHeight,
+    menu_bottom: Math.round(r.bottom),
+    foot_h: fr ? Math.round(fr.height) : 0,
+    foot_bottom: fr ? Math.round(fr.bottom) : -1,
+    foot_visible: !!fr && fr.height > 20 && fr.top >= 0 && fr.bottom <= window.innerHeight - 50,
+  };
+}"""
 
 
 class Checker:
@@ -311,6 +361,38 @@ def run(base: str, token: str, *, shots: Optional[Path] = None,
             ck.check("列表面板无「占位却无内容」的元素", not items,
                      _fmt_waste(items))
 
+        # ── 6b. 会话行等高（宽屏）：C 批 ratchet ─────────────────────────
+        # ⚠ 量法坑（2026-08-15 实锤）：.conv-item 带 content-visibility:auto，
+        # 屏外行的 getBoundingClientRect 返回的是浏览器「记忆尺寸」占位值
+        # （首帧布局时的估高，可比真实高 20px），不是真实布局高——直接量会把
+        # 71/104 行误报成 82px。测量前逐行强制 content-visibility:visible
+        # 让全列表真实排版（一次性测量场景，量完即弃，不影响生产页性能）。
+        print("== 6b. 会话行等高（宽屏 1440x900）==")
+        rh = page.evaluate("""() => new Promise(res => {
+          const rows = [...document.querySelectorAll('#conv-items .conv-item')];
+          rows.forEach(el => { el.style.contentVisibility = 'visible'; });
+          requestAnimationFrame(() => requestAnimationFrame(() => {
+            const hs = rows
+              .map(el => Math.round(el.getBoundingClientRect().height))
+              .filter(h => h > 0);
+            rows.forEach(el => { el.style.contentVisibility = ''; });
+            if (!hs.length) return res({n: 0});
+            res({n: hs.length, min: Math.min(...hs), max: Math.max(...hs)});
+          }));
+        })""")
+        if not rh.get("n"):
+            ck.skip("会话行等高", "列表为空")
+        elif baseline:
+            print(f"     [baseline] rows={rh['n']}  min={rh['min']}px  max={rh['max']}px")
+        else:
+            ck.check("所有会话行高不超上限",
+                     rh["max"] <= WIDE_CONV_ROW_MAX,
+                     f"max={rh['max']}px <= {WIDE_CONV_ROW_MAX}px（n={rh['n']}）")
+            ck.check("会话行等高（无条件行撑高个别行）",
+                     rh["max"] - rh["min"] <= CONV_ROW_SPREAD_MAX,
+                     f"spread={rh['max'] - rh['min']}px <= {CONV_ROW_SPREAD_MAX}px"
+                     f"（min={rh['min']} max={rh['max']} n={rh['n']}）")
+
         # ── 7. composer：预算 + 扫描（只开已读会话，零副作用）─────────
         print("== 7. composer：预算 + 扫描（只打开已读会话）==")
         opened = page.evaluate("""() => {
@@ -327,19 +409,73 @@ def run(base: str, token: str, *, shots: Optional[Path] = None,
             if comp.get("absent"):
                 ck.skip("composer 预算/扫描", "会话未打开或 .reply-bar-wrap 缺失")
             else:
+                chrome_h = comp["total"] - int(comp.get("draft_h") or 0)
                 if baseline:
-                    print(f"     [baseline] composer_total={comp['total']}px")
+                    print(f"     [baseline] composer_total={comp['total']}px"
+                          f"  chrome={chrome_h}px  draft_bar={comp.get('draft_h', 0)}px")
                     for r in comp["rows"]:
                         if r["h"]:
                             print(f"        h={r['h']:<5} {r['disp']:<8} #{r['id']}")
                 else:
-                    ck.check("composer 未超预算", comp["total"] <= COMPOSER_MAX,
-                             f"{comp['total']}px <= {COMPOSER_MAX}px")
+                    ck.check("composer 未超预算（剔除动态草稿卡）",
+                             chrome_h <= COMPOSER_MAX,
+                             f"chrome {chrome_h}px <= {COMPOSER_MAX}px"
+                             f"（total {comp['total']}px 含 draft_bar {comp.get('draft_h', 0)}px）")
                 w2 = page.evaluate(_WASTE_JS, {"sel": ".reply-bar-wrap", "allow": allow})
                 ck.check("composer 内无「占位却无内容」的元素",
                          not w2.get("items"), _fmt_waste(w2.get("items") or []))
             if shots:
                 page.screenshot(path=str(shots / "inbox_density.png"))
+
+        # ── 8. 窄屏档（390×844）：P0-P2 收敛成果的 ratchet ────────────────
+        # 独立 context（视口是量测前提）；一次性搜索提示 toast 会盖住抽屉底缘的
+        # 量测区（2026-08-11 实测踩过）→ 先写 seen 键压掉。任何环境异常整段 SKIP。
+        print("== 8. 窄屏档（390x844）：单行筛选 / 行压平 / 抽屉可达 ==")
+        try:
+            nctx = browser.new_context(viewport=NARROW_VIEWPORT)
+            nctx.request.post(base + "/login", form={"auth_token": token})
+            npg = nctx.new_page()
+            npg.goto(base + "/workspace", wait_until="domcontentloaded")
+            npg.evaluate("try{localStorage.setItem('ws_search_mode_hint_seen','1')}catch(e){}")
+            npg.wait_for_function("() => typeof window.setPlatFilter === 'function'",
+                                  timeout=20000)
+            npg.wait_for_timeout(3000)
+            snap = npg.evaluate(_NARROW_JS)
+            if baseline:
+                print(f"     [baseline] narrow header={snap['hdr_h']}px  "
+                      f"ftab_row={snap['ftab_h']}px  conv_row={snap['row_h']}px")
+            else:
+                ck.check("窄屏列表头未超预算",
+                         snap["hdr_h"] is not None and snap["hdr_h"] <= NARROW_LIST_HEADER_MAX,
+                         f"{snap['hdr_h']}px <= {NARROW_LIST_HEADER_MAX}px")
+            ck.check("主筛选行保持单行（横滚不换行）",
+                     snap["ftab_h"] is not None and snap["ftab_h"] <= NARROW_FTAB_ROW_MAX,
+                     f"{snap['ftab_h']}px <= {NARROW_FTAB_ROW_MAX}px")
+            if snap["row_h"] is None:
+                ck.skip("会话行压平", "列表为空")
+            else:
+                ck.check("会话行右列已压平（meta 横排）",
+                         snap["row_h"] <= NARROW_CONV_ROW_MAX,
+                         f"{snap['row_h']}px <= {NARROW_CONV_ROW_MAX}px")
+            # 抽屉可达：面板底缘让开 56px 平台条 + 底栏「清空/完成」在视口内
+            # （2026-08-11 实锤：bottom:8px 时底栏渲染了但整条沉在平台条底下）
+            npg.click("#ftab-more-btn")
+            npg.wait_for_timeout(500)
+            dsnap = npg.evaluate(_DRAWER_JS)
+            if not dsnap.get("open"):
+                ck.skip("抽屉可达", "筛选面板未打开（按钮缺失或脚本异常）")
+            else:
+                ck.check("抽屉底缘让开移动端平台条",
+                         dsnap["menu_bottom"] <= dsnap["vh"] - 52,
+                         f"menu_bottom={dsnap['menu_bottom']} vh={dsnap['vh']}（平台条 56px）")
+                ck.check("抽屉底栏（清空/完成）在视口内可见",
+                         dsnap["foot_visible"] is True,
+                         f"foot_bottom={dsnap['foot_bottom']} foot_h={dsnap['foot_h']}")
+            if shots:
+                npg.screenshot(path=str(shots / "inbox_density_narrow.png"))
+            nctx.close()
+        except Exception as e:  # noqa: BLE001
+            ck.skip("窄屏档", f"环境异常：{str(e)[:80]}")
 
         browser.close()
     if baseline:

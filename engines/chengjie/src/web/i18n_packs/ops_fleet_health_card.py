@@ -25,6 +25,11 @@ ZH = {
     "ov2_fh_lifecycle": "生命周期",
     "ov2_fh_churn": "改资料热点（7 天 ≥3 次）",
     "ov2_fh_all_green": "全部账号健康，无风控信号",
+    # P2 2026-08-13 额度双道 + 拦截计数（人工预留额度可视化）
+    "ov2_fh_col_quota": "今日发量（滚动24h）",
+    "ov2_fh_blocks": "护栏拦截·重启后",
+    "ov2_fh_blocks_manual": "其中人工被拦",
+    "ov2_fh_quota_line": "额度水位",
 }
 
 EN = {
@@ -45,4 +50,9 @@ EN = {
     "ov2_fh_lifecycle": "Lifecycle",
     "ov2_fh_churn": "Profile-churn hotspots (≥3 in 7d)",
     "ov2_fh_all_green": "All accounts healthy, no risk signals",
+    # P2 2026-08-13 dual-lane quota + block counter (manual-reserve visibility)
+    "ov2_fh_col_quota": "Sends today (rolling 24h)",
+    "ov2_fh_blocks": "Guard blocks (since boot)",
+    "ov2_fh_blocks_manual": "…manual sends blocked",
+    "ov2_fh_quota_line": "Quota levels",
 }

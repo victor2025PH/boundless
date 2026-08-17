@@ -7,12 +7,15 @@ import random
 import pytest
 
 from src.inbox.reply_split import (
+    DEFAULT_MAX_GAP_SEC,
+    DEFAULT_TOTAL_BUDGET_SEC,
     collapse_paragraphs,
     inter_part_delay_sec,
     looks_like_group_chat,
     parse_bubbles_cfg,
     should_split_for_delivery,
     split_reply_parts,
+    strip_blank_lines,
 )
 
 
@@ -59,6 +62,40 @@ def test_collapse_emoji_boundary_gets_space():
 def test_collapse_multiline_cjk_mixed():
     out = collapse_paragraphs("嗯嗯\n我在呢\n怎么啦？")
     assert out == "嗯嗯，我在呢，怎么啦？"
+
+
+# ── strip_blank_lines（段落间空行剔除，2026-08-15）──────────────────────────────
+
+def test_strip_blank_lines_single_line_and_empty_unchanged():
+    assert strip_blank_lines("就一句话") == "就一句话"
+    assert strip_blank_lines("  就一句话  ") == "就一句话"
+    assert strip_blank_lines("") == ""
+    assert strip_blank_lines(None) == ""
+
+
+def test_strip_blank_lines_removes_blanks_keeps_line_structure():
+    """截图实锤形态：英文三段（空行隔开）→ 三行相邻，换行本身保留（拆条合同）。"""
+    text = (
+        "Ah, fair point—the name does give it away.\n\n"
+        "But trust me, my Mandarin's rusty.\n\n\n"
+        "What about you—where are you based?"
+    )
+    out = strip_blank_lines(text)
+    assert "\n\n" not in out
+    assert out == (
+        "Ah, fair point—the name does give it away.\n"
+        "But trust me, my Mandarin's rusty.\n"
+        "What about you—where are you based?"
+    )
+
+
+def test_strip_blank_lines_whitespace_only_lines_dropped():
+    assert strip_blank_lines("第一行\n   \t \n第二行") == "第一行\n第二行"
+
+
+def test_strip_blank_lines_no_blanks_untouched():
+    text = "哈哈真的假的\n我还以为你忘了呢"
+    assert strip_blank_lines(text) == text
 
 
 def test_parse_bubbles_cfg_defaults_and_clamp():
@@ -168,8 +205,8 @@ def test_should_split_gates():
 
 
 def test_parse_bubbles_cfg_max_gap_default_and_clamp():
-    # 默认 6.0=旧行为锚；可配放宽；夹界 [1,60]
-    assert parse_bubbles_cfg({})["max_gap_sec"] == 6.0
+    # 默认 12.0=5-10s 时代缺省（留呼吸头）；可配放宽；夹界 [1,60]
+    assert parse_bubbles_cfg({})["max_gap_sec"] == DEFAULT_MAX_GAP_SEC
     wide = parse_bubbles_cfg({"inbox": {"reply_style": {"bubbles": {
         "max_gap_sec": 20}}}})
     assert wide["max_gap_sec"] == 20.0
@@ -181,29 +218,29 @@ def test_parse_bubbles_cfg_max_gap_default_and_clamp():
     assert hi["max_gap_sec"] == 60.0
 
 
-def test_inter_part_delay_default_capped_at_six():
-    # 默认封顶 6s（行为不变锚）：长文本 × 高打字耗时也不越 6
+def test_inter_part_delay_default_capped_at_max_gap():
+    # 默认封顶 DEFAULT_MAX_GAP_SEC（12s）：长文本 × 高打字耗时也不越顶
     d = inter_part_delay_sec(
         "很长的一条中文消息" * 10, gap_sec_lo=2.0, gap_sec_hi=2.0,
         per_char_sec=0.5, rng=None)
-    assert d <= 6.0
+    assert d <= DEFAULT_MAX_GAP_SEC
 
 
 def test_inter_part_delay_max_gap_lets_slow_persona_breathe():
-    # 放宽 max_gap_sec 后，慢手速的打字时间不再被 6s 一刀切
+    # 放宽 max_gap_sec 后，慢手速的打字时间不再被默认顶一刀切
     class _R:
         def uniform(self, a, b):
             return a
 
     text = "六十个字的中文长句" * 6      # 加权长度 54
     fast = inter_part_delay_sec(
-        text, gap_sec_lo=2.0, gap_sec_hi=2.0, per_char_sec=0.15,
+        text, gap_sec_lo=2.0, gap_sec_hi=2.0, per_char_sec=0.25,
         rng=_R())
     slow = inter_part_delay_sec(
-        text, gap_sec_lo=2.0, gap_sec_hi=2.0, per_char_sec=0.15,
+        text, gap_sec_lo=2.0, gap_sec_hi=2.0, per_char_sec=0.25,
         max_gap_sec=20.0, rng=_R())
-    assert fast == 6.0                   # 旧顶
-    assert slow == pytest.approx(2.0 * 0.55 + 54 * 0.15)  # 9.2s，真实打字时长
+    assert fast == DEFAULT_MAX_GAP_SEC   # 被默认顶截断（54*0.25=13.5 > 12）
+    assert slow == pytest.approx(2.0 * 0.55 + 54 * 0.25)  # 14.6s，真实打字时长
 
 
 def test_inter_part_delay_typing_component_weighted_for_latin():
@@ -402,16 +439,50 @@ def test_parse_bubbles_cfg_new_pacing_keys():
     b = parse_bubbles_cfg(cfg)
     assert b["latin_per_char_sec"] == pytest.approx(0.06)
     assert b["total_budget_sec"] == pytest.approx(75.0)
-    # 缺省=None/0（零行为变更锚）
+    # 缺省（2026-08-14 起）：拉丁手速有出厂真值——旧 None（沿用加权刻度）把
+    # 英文打字耗时低估 ~4 倍＝173「第 2/3 条机关枪」根因；预算键缺省 40s
+    # ＝手动链防前端 60s 超时护栏（典型 2 间隔永不触发）
+    from src.inbox.reply_split import DEFAULT_LATIN_PER_CHAR_SEC
     d = parse_bubbles_cfg({})
-    assert d["latin_per_char_sec"] is None
-    assert d["total_budget_sec"] == 0.0
-    # 非法/越界回落
+    assert d["latin_per_char_sec"] == pytest.approx(DEFAULT_LATIN_PER_CHAR_SEC)
+    assert d["total_budget_sec"] == pytest.approx(DEFAULT_TOTAL_BUDGET_SEC)
+    # 非法回落出厂值（不再回 None）；负预算夹到 0（显式 0=关预算仍可表达）
     bad = parse_bubbles_cfg({"inbox": {"reply_style": {"bubbles": {
         "latin_per_char_sec": "x", "total_budget_sec": -5,
     }}}})
-    assert bad["latin_per_char_sec"] is None
+    assert bad["latin_per_char_sec"] == pytest.approx(DEFAULT_LATIN_PER_CHAR_SEC)
     assert bad["total_budget_sec"] == 0.0
+    # 显式 0（运营明确要旧加权刻度语义的极限值）必须被尊重，不被出厂值顶掉
+    zero = parse_bubbles_cfg({"inbox": {"reply_style": {"bubbles": {
+        "latin_per_char_sec": 0,
+    }}}})
+    assert zero["latin_per_char_sec"] == 0.0
+
+
+def test_default_latin_rate_slows_english_machine_gun():
+    """出厂缺省下英文条间隔显著高于旧 None 行为（173 事故的回归钉）。"""
+    from src.inbox.reply_split import DEFAULT_LATIN_PER_CHAR_SEC
+    d = parse_bubbles_cfg({})
+    kw = dict(gap_sec_lo=d["gap_sec_lo"], gap_sec_hi=d["gap_sec_hi"],
+              per_char_sec=d["per_char_sec"], max_gap_sec=d["max_gap_sec"])
+    # 40 字符英文句（≈8 词）：旧 None → 打字分量 0.3s；新缺省 → 3.2s
+    new_gap = inter_part_delay_sec(
+        "a" * 40, latin_per_char_sec=d["latin_per_char_sec"],
+        rng=_FixedRng(), **kw)
+    old_gap = inter_part_delay_sec(
+        "a" * 40, latin_per_char_sec=None, rng=_FixedRng(), **kw)
+    assert new_gap == pytest.approx(min(
+        d["max_gap_sec"],
+        d["gap_sec_lo"] * 0.55 + 40 * DEFAULT_LATIN_PER_CHAR_SEC))
+    assert new_gap - old_gap > 2.0
+    # 纯中文文本几乎不受影响（仅标点/空格按拉丁速率计）
+    zh_new = inter_part_delay_sec(
+        "今天真的好累呀想早点休息", latin_per_char_sec=d["latin_per_char_sec"],
+        rng=_FixedRng(), **kw)
+    zh_old = inter_part_delay_sec(
+        "今天真的好累呀想早点休息", latin_per_char_sec=None,
+        rng=_FixedRng(), **kw)
+    assert zh_new == pytest.approx(zh_old)
 
 
 # ── 2026-08-09：plan_bubble_gaps（条间隔预排 + 序列总预算等比压缩）──────────────

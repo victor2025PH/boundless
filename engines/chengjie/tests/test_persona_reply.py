@@ -474,7 +474,8 @@ class _FakeSMUnified(_FakeSM):
                                    risk_level="", media_type="", media_ref="",
                                    media_desc="", channel="inbox",
                                    conversation_id="", peer_audio_emotion=None,
-                                   account_id="", agent_instruction=""):
+                                   account_id="", agent_instruction="",
+                                   inbound_msg_id="", extra_hint=""):
         # ⚠ 签名必须与真 SkillManager.generate_inbox_draft 同步：漂移会让
         # persona_reply 的统一引擎调用 TypeError 被吞、静默回落直连——本替身
         # 曾漏 agent_instruction（P22 加参后），本文件两例红到 2026-08-01 才被发现。
@@ -484,6 +485,7 @@ class _FakeSMUnified(_FakeSM):
             "risk_level": risk_level,
             "history_len": len(history or []),
             "agent_instruction": agent_instruction,
+            "extra_hint": extra_hint,
         })
         return {"reply": f"[统一]{text}", "intent": "unified_intent"}
 

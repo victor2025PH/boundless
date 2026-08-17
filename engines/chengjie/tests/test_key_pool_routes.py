@@ -343,6 +343,9 @@ def test_workspace_base_wires_degrade_bar():
     assert 'id="ws-expiry"' in src
     assert "ws.expiry.expiring" in src and "ws.expiry.expired" in src
     assert "tenant_notice" in src
+    assert 'id="ws-delivblock"' in src
+    assert "_renderDelivBlock" in src
+    assert "delivery_block" in src
 
 
 # ── AIClient.pool_status ─────────────────────────────────────────

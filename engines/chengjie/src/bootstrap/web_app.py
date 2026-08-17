@@ -365,16 +365,19 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                             # 人工通过专用真发回调：deliver=false 时自动链 _send_cb=None，
                             # 但坐席点「通过」是人的明示决定（手动发送端点本就不受 deliver
                             # 约束），必须能真发——否则「AI 拟稿 + 人审后发」这个最谨慎档位
-                            # 里发送按钮空转。deliver=true 时两者是同一个回调，不重复构建。
-                            _human_send_cb = _send_cb
-                            if not _deliver:
-                                try:
-                                    _human_send_cb, _ = build_autosend_callbacks(
-                                        assistant, web_app, True)
-                                except Exception:
-                                    _human_send_cb = None
-                                    assistant.logger.debug(
-                                        "人工通过真发回调构建失败", exc_info=True)
+                            # 里发送按钮空转。
+                            # P1 2026-08-12：人工链一律独立构建 origin="manual"——
+                            # 人工预留额度（reserve_for_manual）下，坐席通过的草稿与
+                            # 手动发送同待遇（用满额度），不再与自动链共享让路口径；
+                            # 构建失败回落共享自动链回调（能力不丢，只丢 manual 待遇）。
+                            try:
+                                _human_send_cb, _ = build_autosend_callbacks(
+                                    assistant, web_app, True, origin="manual")
+                            except Exception:
+                                _human_send_cb = _send_cb
+                                assistant.logger.debug(
+                                    "人工通过真发回调构建失败（回落自动链回调）",
+                                    exc_info=True)
                             # 拟人已读回执 + 打字状态：仅真投递模式需要（DB-only 不碰平台）。
                             # always=True：开关（mark_read_before_reply / typing_indicator）
                             # 由 worker 运行时自持（apply_humanize_flags 可热更）——这里只
@@ -439,6 +442,26 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                                         getattr(_cm, "config", None) or {})
                                 except Exception:
                                     return {}
+                            # 驾驶权互斥锁 guard（surface_fusion P0，默认关）：
+                            # 闭包活读 config 根（与 _ws_provider 同因）——overlay
+                            # 开关/切换驾驶权免重启即时生效；判定 fail-open 在模块内。
+                            def _pilot_guard(platform, account_id,
+                                             _cm=assistant.config):
+                                try:
+                                    from src.integrations.surface_fusion import (
+                                        autosend_blocked,
+                                        note_pilot_yield,
+                                    )
+                                    blocked = autosend_blocked(
+                                        getattr(_cm, "config", None) or {},
+                                        platform, account_id)
+                                    if blocked:
+                                        # 让位观测（P4）：与 A 线同一读数面
+                                        note_pilot_yield(
+                                            platform, account_id, "autosend")
+                                    return blocked
+                                except Exception:
+                                    return False
                             _as_worker = AutosendWorker(
                                 draft_service=draft_svc,
                                 config=_merged_as_cfg,
@@ -451,6 +474,7 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                                 dup_guard_cfg=_dup_guard_cfg,
                                 fresh_guard_cfg=_fresh_guard_cfg,
                                 work_schedule_provider=_ws_provider,
+                                pilot_guard=_pilot_guard,
                             )
                             web_app.state.autosend_worker = _as_worker
                             # C3：注册 L2 事件驱动钩子，新草稿落库时立即唤醒
@@ -511,7 +535,8 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                                 from src.inbox.autosend_helpers import (
                                     build_autosend_callbacks as _bac,
                                 )
-                                _hs_cb, _htr_cb = _bac(assistant, web_app, True)
+                                _hs_cb, _htr_cb = _bac(
+                                    assistant, web_app, True, origin="manual")
                                 if _hs_cb is not None:
                                     _do_worker = _AW(
                                         draft_service=draft_svc,
@@ -640,6 +665,8 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                                 incident_retention_days=float(_hw_cfg.get("incident_retention_days", 30)),
                                 weekly_report_enabled=bool(_hw_cfg.get("weekly_report_enabled", False)),
                                 weekly_interval_sec=float(_hw_cfg.get("weekly_interval_sec", 604800)),
+                                daily_report_enabled=bool(_hw_cfg.get("daily_report_enabled", False)),
+                                daily_interval_sec=float(_hw_cfg.get("daily_interval_sec", 86400)),
                             )
                             web_app.state.health_watchdog = _hw
                             asyncio.ensure_future(_hw.run())

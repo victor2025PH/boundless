@@ -699,9 +699,15 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
         block=False（N 线 核心4，编排器托管）：连接+装处理器+起消息处理任务后即返回，
         由外部事件循环（编排器监督循环）保活，便于按账号生命周期 start/stop。
         """
+        # 启动失败根因暴露口：本方法历史上把所有启动异常吞成一行 error 日志，
+        # SESSION_REVOKED（手机端登出）这类需要人重新扫码的确定性故障被磨成
+        # 编排器侧的泛化 "unhealthy"。这里把原始异常文本存下来，companion worker
+        # 在 start 后检查 running=False 时取它重新抛给编排器分类。
+        self.last_start_error = ""
         try:
             if not self.client:
                 self.logger.error("Telegram客户端未初始化")
+                self.last_start_error = "client not initialized"
                 return
 
             self.logger.info("启动Telegram客户端...")
@@ -709,6 +715,7 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
             # 处理授权
             if not await self._handle_authorization():
                 self.logger.error("授权失败，无法启动")
+                self.last_start_error = "authorization failed"
                 return
 
             # 设置消息处理器
@@ -778,6 +785,7 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     await asyncio.sleep(1)
 
         except Exception as e:
+            self.last_start_error = str(e)
             self.logger.error(f"启动Telegram客户端失败: {e}")
 
     async def stop(self):
@@ -1232,41 +1240,31 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
             return False
 
     async def _get_image_content(self, image_path: str) -> Optional[str]:
-        """
-        方案 A：优先 Vision（Ollama→智谱链）解析图片，失败则兜底 OCR。
-        返回图中内容的文字描述，供下游 AI 使用。
+        """Vision 单轨识图。失败返 None，**不再**回落 OCR（无兜底纪律）。
+
+        OCR 是替代品：看不清画面却用残缺文字硬聊＝8/16 串台同病。调用方
+        拿到 None 必须跳过自动回复，不得装懂。
         """
         path = Path(image_path)
         if not path.exists() or not path.is_file():
             return None
+        if not self._vision_usable():
+            return None
         vision_config = self.config.get("vision", {})
-        if self._vision_usable():
-            try:
-                text, tag = await VisionClient.describe_image_with_ollama_zhipu_fallback(
-                    vision_config,
-                    vision_config,
-                    str(path),
-                    prompt=vision_config.get("prompt"),
+        try:
+            text, tag = await VisionClient.describe_image_with_ollama_zhipu_fallback(
+                vision_config,
+                vision_config,
+                str(path),
+                prompt=vision_config.get("prompt"),
+            )
+            if text and text.strip():
+                self.logger.info(
+                    f"Vision 解析成功 ({tag})，长度 {len(text)} 字符"
                 )
-                if text and text.strip():
-                    self.logger.info(
-                        f"Vision 解析成功 ({tag})，长度 {len(text)} 字符"
-                    )
-                    return text.strip()[:2000]
-            except Exception as e:
-                self.logger.warning(f"Vision 解析失败，回退 OCR: {e}")
-        # 2. 兜底 OCR
-        if self.image_recognizer:
-            try:
-                lang = self.config.get('image_recognition', {}).get('language', 'zh')
-                recognized = await self.image_recognizer.recognize_image(str(path), lang)
-                if not (recognized and recognized.strip()) and lang == 'zh':
-                    recognized = await self.image_recognizer.recognize_image(str(path), 'en')
-                if recognized and recognized.strip():
-                    self.logger.info(f"OCR 兜底成功，长度 {len(recognized)} 字符")
-                    return recognized.strip()[:2000]
-            except Exception as e:
-                self.logger.warning(f"OCR 兜底失败: {e}")
+                return text.strip()[:2000]
+        except Exception as e:
+            self.logger.warning(f"Vision 解析失败（不回落 OCR）: {e}")
         return None
 
     async def _download_video_file(self, message: Message) -> Optional[Path]:
@@ -1385,8 +1383,8 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
         结果供 AI 使用，从而能回复「看到了」并概括图中内容。
         历史按时间倒序（最新在前），会跳过无图消息，对带图消息逐个尝试 OCR，最多试 3 条带图消息。
         """
-        if not self.client or not (self._vision_usable() or self.image_recognizer):
-            self.logger.debug("群内最近图 跳过: 未初始化 client 或 Vision/OCR")
+        if not self.client or not self._vision_usable():
+            self.logger.debug("群内最近图 跳过: 未初始化 client 或 Vision")
             return None
         try:
             tried = 0
@@ -2005,12 +2003,12 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     daily_stats.bump("voice_in")
                     text = "[语音消息 - 识别功能未启用]"
 
-            # 有说明文字但带图时：Vision 为主、OCR 兜底，把图内容给 AI
+            # 有说明文字但带图时：Vision 单轨，失败不回落 OCR
             has_image = bool(message.photo or (message.document and message.document.mime_type and
                                message.document.mime_type.startswith('image/')))
-            if text and has_image and (self._vision_usable() or self.image_recognizer):
+            if text and has_image and self._vision_usable():
                 try:
-                    self.logger.info(f"收到带图消息 [{chat_title}/{username}]，解析图中内容（Vision/OCR）...")
+                    self.logger.info(f"收到带图消息 [{chat_title}/{username}]，解析图中内容（Vision）...")
                     image_file = await self._download_image_file(message)
                     if image_file:
                         try:
@@ -2027,11 +2025,11 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 except Exception as e:
                     self.logger.warning(f"带图消息下载/解析异常: {e}")
 
-            # 处理图片消息（如果没有文本且不是语音消息）— Vision 为主、OCR 兜底
+            # 处理图片消息（如果没有文本且不是语音消息）— Vision 单轨
             if not text and (message.photo or message.document):
-                if self._vision_usable() or self.image_recognizer:
+                if self._vision_usable():
                     try:
-                        self.logger.info(f"收到图片消息 [{chat_title}/{username}]，解析图中内容（Vision/OCR）...")
+                        self.logger.info(f"收到图片消息 [{chat_title}/{username}]，解析图中内容（Vision）...")
                         image_file = await self._download_image_file(message)
                         if not image_file:
                             text = "[图片消息 - 下载失败]"
@@ -2062,7 +2060,7 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                         self.logger.error(f"处理图片消息失败: {e}")
                         text = "[图片消息 - 处理异常]"
                 else:
-                    self.logger.info(f"收到图片消息 [{chat_title}/{username}]（Vision/OCR 均未启用）")
+                    self.logger.info(f"收到图片消息 [{chat_title}/{username}]（Vision 未启用）")
                     text = "[图片消息 - 识别功能未启用]"
 
             # 处理视频 / 视频圆点 / GIF：抽帧+音轨（含带 caption 的视频，Phase5）
@@ -2147,9 +2145,14 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     self.message_queue.put_nowait(msg_data)
                     # 插话吸收：登记该会话最新入站时间（仅入队成功才记——队满
                     # 丢弃的消息永远不会被处理，据它中止在途回复会让客户两头落空）
+                    # + 未答文本登记（生成前安静窗的合并原料；仅纯文本类会入表）
                     try:
-                        from src.client.interject_absorb import note_inbound
+                        from src.client.interject_absorb import (
+                            note_inbound, note_inbound_text)
                         note_inbound(message.chat.id, msg_data['_enq_ts'])
+                        note_inbound_text(
+                            message.chat.id, msg_data['_enq_ts'],
+                            msg_data.get('text'))
                     except Exception:
                         pass
                 except asyncio.QueueFull:
@@ -2445,6 +2448,77 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 sender_name=(_peer_name if _mirror_is_group else ''),
             )
 
+            # ── 无兜底纪律（2026-08-17）：语音没听懂就不装懂────────────────
+            # 转写失败/下载失败时旧行为把「[语音消息 - 转录失败]」占位喂给 LLM
+            # 继续回——AI 对着听不懂的语音硬聊＝掩盖型兜底（与识图串台同病）。
+            # 现在：镜像照常（坐席可回放原音人工处理）→ 故障类弹窗+ERROR 上报
+            # → 跳过自动回复。「识别功能未启用」属运营配置不弹窗，仅日志+跳过。
+            if _media_type == "voice" and str(text or "").startswith("[语音消息 - "):
+                _asr_reason = str(text or "")[len("[语音消息 - "):].rstrip("]")
+                if "未启用" not in _asr_reason:
+                    try:
+                        from src.ops.delivery_block import report_block
+                        _ab_acct = str(
+                            getattr(self, "account_id", "") or "default")
+                        try:
+                            from src.inbox.normalizer import (
+                                conv_id as _ab_conv_id,
+                            )
+                            _ab_cid = _ab_conv_id(
+                                "telegram", _ab_acct, str(chat_id))
+                        except Exception:
+                            _ab_cid = f"telegram:{_ab_acct}:{chat_id}"
+                        report_block(
+                            "asr", reason=_asr_reason, platform="telegram",
+                            conversation_id=_ab_cid)
+                    except Exception:
+                        self.logger.debug(
+                            "[asr] delivery_block 上报失败", exc_info=True)
+                self.logger.warning(
+                    "[asr] 语音未转写成功（%s）→ 跳过自动回复（无兜底纪律），"
+                    "坐席可在工作台回放原音 chat=%s", _asr_reason, chat_id)
+                return
+
+            # ── 无兜底纪律：没看懂图就不装懂 ────────────────────────────
+            # 图片入站必须有 Vision 描述才自动回。caption  alone / 解析失败占位
+            # 都不够——对着看不见的图硬聊＝8/16 键盘串台同病。镜像已落收件箱，
+            # 坐席可看原图人工处理。
+            if _media_type == "image":
+                _vision_ok = bool(_ocr) or str(text or "").startswith("[图片内容]")
+                _vision_off = str(text or "").startswith("[图片消息 - 识别功能未启用]")
+                if _vision_off or not self._vision_usable():
+                    self.logger.warning(
+                        "[vision] 识图未启用 → 跳过自动回复 chat=%s", chat_id)
+                    return
+                if not _vision_ok:
+                    _vr = "no_desc"
+                    _t = str(text or "")
+                    if _t.startswith("[图片消息 - "):
+                        _vr = _t[len("[图片消息 - "):].rstrip("]")
+                    try:
+                        from src.ops.delivery_block import report_block
+                        _vb_acct = str(
+                            getattr(self, "account_id", "") or "default")
+                        try:
+                            from src.inbox.normalizer import (
+                                conv_id as _vb_conv_id,
+                            )
+                            _vb_cid = _vb_conv_id(
+                                "telegram", _vb_acct, str(chat_id))
+                        except Exception:
+                            _vb_cid = f"telegram:{_vb_acct}:{chat_id}"
+                        report_block(
+                            "vision", reason=_vr, platform="telegram",
+                            conversation_id=_vb_cid)
+                    except Exception:
+                        self.logger.debug(
+                            "[vision] delivery_block 上报失败",
+                            exc_info=True)
+                    self.logger.warning(
+                        "[vision] 图片未看懂（%s）→ 跳过自动回复（无兜底纪律），"
+                        "坐席可在工作台看原图 chat=%s", _vr, chat_id)
+                    return
+
             # ── 对方机器人守卫（P0 2026-08-03，SpamBot 空转实锤修复）────────
             # 私聊实时路径此前从不看 from_user.is_bot / reply_markup（群路径反而
             # 有闸）→ AI 跟按钮 bot 80 秒空转 8 轮。放在镜像**之后**：入站照常
@@ -2622,6 +2696,63 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
             _VOICE_PREFIX = "[语音转录] "
             ai_text = text[len(_VOICE_PREFIX):] if text.startswith(_VOICE_PREFIX) else text
 
+            # ── 生成前安静窗 + 未答连发合并（interject_absorb，pregen_quiet_sec=0
+            # 默认关）：客户还在连发（逐字打/分段打）时不急着生成——等安静窗；
+            # 等待期又来新消息 → 生成前零成本让位（旧行为是生成完再丢弃＝白烧
+            # LLM）；安静达成 → 把该会话全部未答文本碎片感知合并成一条输入，
+            # 新闻问句/辱骂检测/multi_message 指令都跑在合并后的全文上。
+            # 仅私聊纯文本；任何异常回退单条旧行为。──────────────────────
+            try:
+                from src.client.interject_absorb import (
+                    STALE_TOLERANCE_SEC as _pg_tol,
+                    drain_pending_texts as _pg_drain,
+                    latest_inbound_ts as _pg_latest,
+                    merge_pending_entries as _pg_merge,
+                    parse_interject_cfg as _pg_cfg_fn,
+                    pregen_quiet_for as _pg_quiet_for,
+                )
+                _pg_cfg = _pg_cfg_fn(
+                    self.config.config if hasattr(self.config, "config") else {})
+                _pg_quiet = _pg_quiet_for(text, _pg_cfg) \
+                    if _pg_cfg["enabled"] and not _is_group else 0.0
+                if _pg_quiet > 0.0:
+                    _pg_my_ts = float(message_data.get('_enq_ts') or 0.0)
+                    _pg_start = time.time()
+                    _pg_max = float(_pg_cfg["pregen_max_wait_sec"] or 0.0)
+                    _pg_yield = False
+                    while True:
+                        _pg_now = time.time()
+                        _pg_last = _pg_latest(chat_id)
+                        if _pg_last > _pg_my_ts + _pg_tol:
+                            _pg_yield = True     # 对方补话 → 让位给新任务
+                            break
+                        if (_pg_now - max(_pg_last, _pg_my_ts) >= _pg_quiet
+                                or _pg_now - _pg_start >= _pg_max):
+                            break
+                        await asyncio.sleep(0.5)
+                    if _pg_yield:
+                        self.logger.info(
+                            "[interject] 生成前对方补话，本条让位给最新消息 "
+                            "chat=%s（未烧 LLM）", chat_id)
+                        return
+                    if _pg_my_ts > 0.0:
+                        _pg_entries = _pg_drain(chat_id, _pg_my_ts)
+                        if _pg_entries:
+                            # 单条也登记——生成期间被过期中止时 requeue 还回
+                            # 注册表，下一任务的合并才能带上这条（否则丢失）
+                            message_data['_ij_burst_entries'] = _pg_entries
+                        if len(_pg_entries) > 1:
+                            _pg_text = _pg_merge(_pg_entries)
+                            if _pg_text:
+                                ai_text = _pg_text
+                                self.logger.info(
+                                    "[interject] 生成前合并 %d 条未答连发 "
+                                    "chat=%s（碎片拼句）",
+                                    len(_pg_entries), chat_id)
+            except Exception:
+                self.logger.debug(
+                    "[interject] 生成前安静窗异常（按单条处理）", exc_info=True)
+
             # 调用Skill管理器处理消息，传递上下文分析结果、图片 OCR、机器人消息、群名、request_id、情绪、发群消息回调（供 gxp 代发命令等）
             _sm_context = {
                 'chat_id': chat_id,
@@ -2638,6 +2769,8 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 '_trigger_path': message_data.get('_trigger_path'),
                 '_send_to_chat': self.send_message,
                 '_send_photo_to_chat': self.send_photo,
+                # P3 媒体拟人节奏（2026-08-12）：挑图等待期挂「正在发送照片」气泡
+                '_send_media_action': self._send_upload_photo_action,
                 '_record_gxp_cmd': self.record_gxp_command,
                 '_i18n': self.i18n,
                 '_event_tracker': self.event_tracker,
@@ -3037,56 +3170,82 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
 
             # 如果有回复，发送消息（言简意赅：长回复可分条发送）
             if reply_final and not _voice_sent:
-                # 诚实回落（2026-08-02 实录 21:38：TTS 失败后「语音这就来～」原样
-                # 打字发出=空头支票）：本轮语音尝试过且失败 → 出站前剥语音承诺/
-                # 断言句，客户点名要语音时补一句诚实台阶。改写后的 reply_final
-                # 自然流入下游分条/整段发送与上下文记录，无需另改。
+                # 无兜底纪律（2026-08-17 老板拍板，docs/实施33 v2）：本轮语音
+                # **尝试过且失败** → 不再改发文字（旧「诚实回落改写+文字替发」
+                # 拆除）。处置＝回复转工作台待发 + 主机弹窗 + ERROR 上报；并照
+                # interject 中止同款善后：撤销 dup_guard 乐观登记 + 回滚冷却
+                # 记账（未发出的回复不得占冷却位/进 last_reply——幻影回复）。
+                # 注意本分支只拦「语音尝试过且失败」；语音未触发的普通文字回复
+                # 不在此列（那是正文不是替代品）。
                 if _voice_fail_state.get("synth_failed"):
+                    _vb_acct = str(getattr(self, "account_id", "") or "default")
+                    _vb_cid = f"telegram:{_vb_acct}:{chat_id}"
                     try:
-                        from src.ai.voice_honest_fallback import (
-                            apply_voice_failure_fallback,
-                            honest_fallback_enabled,
-                            resolve_fallback_lang,
+                        from src.inbox.normalizer import conv_id as _vb_conv_id
+                        _vb_cid = _vb_conv_id(
+                            "telegram", _vb_acct, str(chat_id))
+                    except Exception:
+                        pass
+                    _vb_queued = False
+                    try:
+                        from src.integrations.protocol_bridge import (
+                            get_inbox_store as _vb_store_fn,
                         )
-                        _vhf_cfg = (self.config.config
-                                    if hasattr(self.config, "config") else {})
-                        if honest_fallback_enabled(_vhf_cfg):
-                            _vhf_new, _vhf_chg = apply_voice_failure_fallback(
-                                reply_final, ai_text,
-                                lang=resolve_fallback_lang(
-                                    reply_final or ai_text))
-                            if _vhf_chg and _vhf_new.strip():
-                                self.logger.info(
-                                    "[voice_reply] 诚实回落改写 reason=%s",
-                                    _voice_fail_state.get("reason")
-                                    or "synth_failed")
-                                reply_final = _vhf_new
-                                # 语音欠账登记（voice_iou，默认关）：台阶话许了
-                                # 「回头补给你」→ 只在客户点名要过语音时记账，
-                                # 下一回合语音链恢复即强制补发兑现。
-                                try:
-                                    from src.ai.outbound_promise_guard import (
-                                        wants_media as _iou_wm,
-                                    )
-                                    from src.client.voice_iou import (
-                                        parse_iou_cfg as _iou_cfg_fn,
-                                        record_iou as _iou_rec,
-                                    )
-                                    if (_iou_wm(ai_text) == "voice"
-                                            and _iou_cfg_fn(_vhf_cfg)["enabled"]):
-                                        _iou_rec(str(message.chat.id),
-                                                 _eff_persona_id or "")
-                                        self.logger.info(
-                                            "[voice_iou] 欠账登记 chat=%s",
-                                            message.chat.id)
-                                except Exception:
-                                    self.logger.debug(
-                                        "[voice_iou] 欠账登记失败（忽略）",
-                                        exc_info=True)
+                        _vb_store = _vb_store_fn()
+                        if _vb_store is not None and reply_final.strip():
+                            import uuid as _vb_uuid
+                            _vb_store.upsert_draft({
+                                "draft_id":
+                                    f"voiceblock:{_vb_uuid.uuid4().hex[:12]}",
+                                "conversation_id": _vb_cid,
+                                "platform": "telegram",
+                                "account_id": _vb_acct,
+                                "chat_key": str(chat_id),
+                                "source_kind": "voice_blocked",
+                                "source_id": f"{_vb_cid}:{int(time.time())}",
+                                "peer_text": str(ai_text or "")[:500],
+                                "draft_text": reply_final,
+                                "risk_level": "low",
+                                "autopilot_level": "L1",
+                                "status": "pending",
+                                "created_at": time.time(),
+                            })
+                            _vb_queued = True
+                    except Exception:
+                        self.logger.warning(
+                            "[voice_reply] 语音失败回复转待发队列失败",
+                            exc_info=True)
+                    try:
+                        from src.ops.delivery_block import report_block
+                        report_block(
+                            "voice",
+                            reason=str(_voice_fail_state.get("reason")
+                                       or "synth_failed"),
+                            platform="telegram",
+                            conversation_id=_vb_cid,
+                            queued_draft=_vb_queued)
                     except Exception:
                         self.logger.debug(
-                            "[voice_reply] 诚实回落改写失败（发原文）",
+                            "[voice_reply] delivery_block 上报失败",
                             exc_info=True)
+                    if _dg_reg_token:
+                        try:
+                            from src.inbox.outbound_dup_guard import (
+                                outbound_registry as _vb_dg_reg,
+                            )
+                            _vb_dg_reg.unregister(_dg_reg_cid, _dg_reg_token)
+                        except Exception:
+                            pass
+                    try:
+                        if _acct_snap is not None and \
+                                self.skill_manager.rollback_reply_accounting(
+                                    _acct_snap):
+                            self.logger.info(
+                                "[voice_reply] 已回滚未发出回复的冷却记账 "
+                                "chat=%s", chat_id)
+                    except Exception:
+                        pass
+                    return
 
                 # ── 插话吸收·过期中止关口（interject_absorb，默认关）────────
                 # 生成的 4-8 秒里客户又补了话 → 本条回复按旧输入写成，发出去就是
@@ -3147,6 +3306,18 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                                 self.logger.info(
                                     "[interject] 已回滚未发出回复的冷却记账 "
                                     "chat=%s", chat_id)
+                        except Exception:
+                            pass
+                        # 2026-08-12：生成前合并消费过的未答文本还回注册表——
+                        # 本条回复没发出，那些消息仍是「未答」，下一任务照样合并
+                        try:
+                            _ij_burst = message_data.get('_ij_burst_entries')
+                            if _ij_burst:
+                                from src.client.interject_absorb import (
+                                    requeue_texts as _ij_requeue,
+                                )
+                                _ij_requeue(chat_id, _ij_burst)
+                                message_data['_ij_burst_entries'] = None
                         except Exception:
                             pass
                         return True
@@ -3263,8 +3434,9 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     _bubbles_interrupted = False
                     for i, chunk in enumerate(chunks):
                         if i > 0:
+                            # 兜底 3.0＝gap_sec_lo 时代缺省（规划器异常不回机关枪）
                             _gap_bub = (_gaps_bub[i - 1]
-                                        if i - 1 < len(_gaps_bub) else 0.8)
+                                        if i - 1 < len(_gaps_bub) else 3.0)
                             try:
                                 from src.integrations.humanize_metrics import (
                                     record_bubble_gap as _rbg_bub,

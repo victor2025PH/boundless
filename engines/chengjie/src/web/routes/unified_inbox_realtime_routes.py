@@ -56,6 +56,10 @@ _SSE_EVENT_TYPES = frozenset({
     "typing",
     "peer_typing",
     "message_op",
+    # 2026-08-17 官方级消息管理：置顶/会话删除/消息软删（含恢复与清空）的多窗口同步
+    "conversation_pinned",
+    "conversation_deleted",
+    "messages_deleted",
     "anomaly_alert",
     "sla_alert",
     "conv_note",
@@ -76,12 +80,20 @@ _SSE_EVENT_TYPES = frozenset({
     "ops_report",
     # P0 2026-08-09：营销目标达成（goals.notify 扫描器发布）——工作台 toast + 铃铛
     "goal_completed_alert",
+    # P3 2026-08-17：peer_bot_guard 判定告警（服务端每会话每日至多一次）。
+    # 前端只消费 reason=daily_budget → 触顶中央弹窗（workspace_base __wsBudgetPop），
+    # 修「预算熔断发生时坐席不开着那个会话就零感知」的盲区；其余 reason 前端暂忽略。
+    "bot_peer_alert",
 })
 
 # 写入 app.state.notif_queue 的重要事件类型
 _NOTIF_EVENT_TYPES = frozenset({
     "inbox_message", "draft_sla_breach", "draft_reassigned",
     "conversation_assigned",
+    # P3.1 2026-08-17：预算触顶进铃铛历史（离线/跨班次坐席补看弹窗错过的触顶）。
+    # 内容级准入在 _notif_content_ok——bot_peer_alert 只收 reason=daily_budget
+    # （Tier0/复读/秒回判定已有收件箱 🤖 徽章 + webhook，进铃铛=噪音）。
+    "bot_peer_alert",
     # P0-协作闭环（2026-08-01）：@提及注解进通知历史——此前被 @ 的坐席只有
     # 「正开着同一会话」才收到 toast，跨班次/离线的提及等于丢失。读取侧按
     # 会话坐席过滤（batch_notif_routes），非被 @ 者的铃铛历史不出现别人的提及。
@@ -101,7 +113,25 @@ _NOTIF_EVENT_TYPES = frozenset({
 # 复发型告警：按「类型+会话」在 notif_queue 内合并，仅保留最新一条（避免历史堆叠）
 _COALESCE_NOTIF_TYPES = frozenset({
     "escalation", "sla_alert", "draft_sla_breach", "queue_alert", "anomaly_alert",
+    # 预算触顶按会话合并：SSE 每个新连接会把 recent_events 重放一遍经过
+    # _maybe_push_notif（本队列无 conv_note 式幂等），coalesce 保最新一条
+    # 即天然去重；跨日再触顶也只留最新（昨天的触顶已无行动价值）。
+    "bot_peer_alert",
 })
+
+
+def _notif_content_ok(evt: dict) -> bool:
+    """铃铛队列的内容级准入（类型白名单之上的第二道闸，纯函数可门禁）。
+
+    bot_peer_alert 是混合语义事件（Tier0/复读/秒回/预算共用一个类型）——
+    只有 ``reason=daily_budget``（预算触顶）值得进坐席铃铛历史：它有明确
+    的当场行动（今日继续/改人审跟进），其余判定属身份标注，收件箱徽章与
+    webhook 已覆盖。其他类型一律放行（维持旧行为）。
+    """
+    if (evt or {}).get("type") != "bot_peer_alert":
+        return True
+    data = evt.get("data") or {}
+    return str(data.get("reason") or "") == "daily_budget"
 
 
 def _edge_pick(items: list, seen: set) -> list:
@@ -297,6 +327,8 @@ def register_realtime_routes(app, *, api_auth) -> None:
             """
             etype = evt.get("type")
             if etype not in _NOTIF_EVENT_TYPES:
+                return
+            if not _notif_content_ok(evt):
                 return
             nq: list = getattr(request.app.state, "notif_queue", None)
             if nq is None:

@@ -323,6 +323,50 @@
   <div id="ov-cap-body" style="margin-top:.45rem;font-size:.76rem;line-height:1.5;color:var(--muted)">{{ (i18n or {}).get('rpa_loading','载入中…') }}</div>
 </div>
 
+<!-- 🔥 被骂回怼治理（companion.temper，2026-08-12）：客户无端辱骂时按人设脾气顶回去。
+     本卡管全局策略（总开关/全员强制/兜底档/脏字闸）+ 每人设生效档位总览 + 回怼诊断器；
+     人设各自的档位在人设工作室「档案→性格补充」编辑（唯一写入口，防双头写）。 -->
+<div id="ov-temper-card" style="margin-top:.6rem;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:.6rem .85rem">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem">
+    <div style="font-weight:600;font-size:.82rem">🔥 {{ (i18n or {}).get('ov_tp_title','被骂回怼治理') }} <span id="ov-tp-status" style="font-weight:400;color:var(--muted);font-size:.72rem"></span></div>
+    <button id="ov-tp-refresh" style="font-size:.72rem;padding:.18rem .6rem;border:1px solid var(--bd);border-radius:6px;background:transparent;color:inherit;cursor:pointer" title="{{ (i18n or {}).get('ov_tp_sub','客户无端辱骂时按人设脾气顶回去（对方先动口才怼；道歉/开玩笑立刻收手；轻度调侃不算骂）。力度四档：不怼/软怼/硬怼不带脏/对轰可带脏') }}">{{ (i18n or {}).get('refresh','刷新') }}</button>
+  </div>
+  <div style="margin-top:.45rem;display:flex;flex-wrap:wrap;gap:.35rem;align-items:center;font-size:.74rem">
+    <button id="ov-tp-kill" style="font-size:.7rem;padding:.14rem .55rem;border:1px solid var(--bd);border-radius:6px;background:transparent;color:inherit;cursor:pointer">…</button>
+    <span style="color:var(--bd2)">|</span>
+    <span style="color:var(--muted);font-size:.7rem">{{ (i18n or {}).get('ov_tp_policy_label','全局策略：') }}</span>
+    <span id="ov-tp-policy" style="display:inline-flex;gap:.25rem;flex-wrap:wrap">
+      <button class="ov-tp-force" data-force="" style="font-size:.7rem;padding:.12rem .55rem;border:1px solid var(--bd);border-radius:6px;background:transparent;color:inherit;cursor:pointer" title="{{ (i18n or {}).get('ov_tp_policy_persona_title','各人设按自己的 temper 字段来（人设工作室可调）') }}">{{ (i18n or {}).get('ov_tp_policy_persona','按人设') }}</button>
+      <button class="ov-tp-force" data-force="feisty" style="font-size:.7rem;padding:.12rem .55rem;border:1px solid var(--th-bd-red6,#dc2626);border-radius:6px;background:transparent;color:var(--th-ink-red6,#b91c1c);cursor:pointer" title="{{ (i18n or {}).get('ov_tp_policy_feisty_title','骂人都必须怼：无视人设逐个设置，全员按「对轰·可带脏」回击') }}">🔥 {{ (i18n or {}).get('ov_tp_policy_force_feisty','全员必怼') }}</button>
+      <button class="ov-tp-force" data-force="gentle" style="font-size:.7rem;padding:.12rem .55rem;border:1px solid var(--th-bg-emerald6,#059669);border-radius:6px;background:transparent;color:var(--th-ink-emerald6,#047857);cursor:pointer" title="{{ (i18n or {}).get('ov_tp_policy_gentle_title','全员按「软怼·立边界」：委屈+边界，不升级对骂') }}">{{ (i18n or {}).get('ov_tp_policy_force_gentle','全员软怼') }}</button>
+      <button class="ov-tp-force" data-force="off" style="font-size:.7rem;padding:.12rem .55rem;border:1px solid var(--bd2);border-radius:6px;background:transparent;color:var(--t3);cursor:pointer" title="{{ (i18n or {}).get('ov_tp_policy_off_title','全员禁怼：被骂只走共情路径（观测计数仍记录）') }}">{{ (i18n or {}).get('ov_tp_policy_force_off','全员禁怼') }}</button>
+    </span>
+    <span style="color:var(--bd2)">|</span>
+    <label style="display:inline-flex;align-items:center;gap:.25rem;color:var(--muted);font-size:.7rem">{{ (i18n or {}).get('ov_tp_default_label','未配置人设兜底') }}
+      <select id="ov-tp-default" style="font-size:.7rem;padding:.14rem .3rem;background:var(--input);border:1px solid var(--bd2);border-radius:6px;color:var(--t)">
+        <option value="gentle">{{ (i18n or {}).get('ov_tp_lv_gentle','软怼·立边界') }}</option>
+        <option value="sharp">{{ (i18n or {}).get('ov_tp_lv_sharp','硬怼·不带脏') }}</option>
+        <option value="feisty">{{ (i18n or {}).get('ov_tp_lv_feisty','对轰·可带脏') }}</option>
+        <option value="off">{{ (i18n or {}).get('ov_tp_lv_off','不怼') }}</option>
+      </select>
+    </label>
+    <label style="display:inline-flex;align-items:center;gap:.25rem;color:var(--muted);font-size:.7rem" title="{{ (i18n or {}).get('ov_tp_profanity_title','关掉＝对轰档自动降为「硬怼·不带脏」：凶劲不减只去脏字（平台风控收紧时用）') }}">
+      <input type="checkbox" id="ov-tp-profanity" style="accent-color:var(--th-ink-red6,#b91c1c)"> {{ (i18n or {}).get('ov_tp_profanity','允许脏字') }}
+    </label>
+  </div>
+  <div id="ov-tp-personas" style="margin-top:.45rem;font-size:.72rem;line-height:1.8;color:var(--muted)">{{ (i18n or {}).get('rpa_loading','载入中…') }}</div>
+  <div style="margin-top:.5rem;border-top:1px dashed var(--bd);padding-top:.45rem">
+    <div style="font-weight:600;font-size:.74rem;color:var(--t)">🔍 {{ (i18n or {}).get('ov_tp_diag_head','回怼诊断器') }} <span style="font-weight:400;color:var(--t3);font-size:.68rem">{{ (i18n or {}).get('ov_tp_diag_sub','贴一句客户消息，看会不会怼、按谁的档位怼、为什么——不发消息不写状态') }}</span></div>
+    <div style="display:flex;flex-wrap:wrap;gap:.3rem;margin-top:.35rem;align-items:center">
+      <input id="ov-tp-diag-text" placeholder="{{ (i18n or {}).get('ov_tp_diag_ph','例：你是个大傻子') }}" style="flex:3 1 220px;font-size:.72rem;padding:.22rem .45rem;background:var(--input);border:1px solid var(--bd2);border-radius:6px;color:var(--t)">
+      <select id="ov-tp-diag-persona" style="flex:1 1 130px;font-size:.72rem;padding:.22rem .3rem;background:var(--input);border:1px solid var(--bd2);border-radius:6px;color:var(--t)"><option value="">{{ (i18n or {}).get('ov_tp_diag_any','（不指定人设）') }}</option></select>
+      <input id="ov-tp-diag-conv" placeholder="{{ (i18n or {}).get('ov_tp_diag_conv_ph','会话ID（选填）platform:account:chat') }}" style="flex:2 1 180px;font-size:.72rem;padding:.22rem .45rem;background:var(--input);border:1px solid var(--bd2);border-radius:6px;color:var(--t)">
+      <button id="ov-tp-diag-btn" style="font-size:.72rem;padding:.22rem .7rem;border:1px solid var(--bd);border-radius:6px;background:transparent;color:inherit;cursor:pointer">{{ (i18n or {}).get('ov_tp_diag_btn','诊断') }}</button>
+    </div>
+    <div id="ov-tp-diag-out" style="display:none;margin-top:.4rem;font-size:.72rem;line-height:1.7;color:var(--muted);background:var(--input);border:1px solid var(--bd2);border-radius:6px;padding:.45rem .6rem"></div>
+  </div>
+</div>
+
 <!-- P0-5 D8：反封号护栏运营面板（G1 Kill-Switch 三级急停 + G3 金丝雀放量；调既有 /api/ops/* 管理路由，写操作需 manage_ops 权限） -->
 <div id="ov-og-card" style="margin-top:.6rem;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:.6rem .85rem">
   <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem">
@@ -1873,6 +1917,130 @@ async function ovRefreshCapabilities(){
   }catch(e){ if(body){ body.textContent=window.T('ov_js_board_req_fail'); } }
 }
 
+/* ── 🔥 被骂回怼治理（companion.temper）───────────────────────────────
+   全局策略读写 /api/companion/temper/status|config；诊断器 dry-run 只读。
+   档位色彩语义全站统一：off=灰 gentle=蓝 sharp=琥珀 feisty=红。 */
+// 档位色彩语义（全站统一）：off=灰 / gentle=绿(温和) / sharp=琥珀 / feisty=红。
+// 全部走 var(--th-*,#fallback)——fallback 恒等 theme-tokens.css :root 亮值（门禁钉）；
+// 半透明底用 color-mix(var(...) N%,transparent)，绝不裸写 hex/rgba（暗色不翻转）。
+var _tpLevelMeta = {
+  off:    {ink:'var(--th-ink-slate6,#475569)',  bd:'var(--th-ink-slate6,#475569)',  bg:'transparent'},
+  gentle: {ink:'var(--th-ink-emerald6,#047857)',bd:'var(--th-bg-emerald6,#059669)', bg:'color-mix(in srgb, var(--th-bg-emerald6,#059669) 12%, transparent)'},
+  sharp:  {ink:'var(--th-ink-amber6,#92400e)',  bd:'var(--th-bg-amber6,#d97706)',   bg:'color-mix(in srgb, var(--th-bg-amber6,#d97706) 12%, transparent)'},
+  feisty: {ink:'var(--th-ink-red6,#b91c1c)',    bd:'var(--th-bd-red6,#dc2626)',     bg:'color-mix(in srgb, var(--th-bg-red6,#dc2626) 12%, transparent)'}
+};
+function _tpLevelName(lv){
+  return window.T({off:'ov_tp_lv_off',gentle:'ov_tp_lv_gentle',sharp:'ov_tp_lv_sharp',feisty:'ov_tp_lv_feisty'}[lv]||'ov_tp_lv_gentle');
+}
+function _tpChip(lv, label){
+  var m=_tpLevelMeta[lv]||_tpLevelMeta.gentle;
+  return '<span style="display:inline-block;font-size:.68rem;padding:.08rem .45rem;margin:.08rem .12rem;border:1px solid '+m.bd+';border-radius:5px;background:'+m.bg+';color:'+m.ink+'">'+rpa.esc(label)+'</span>';
+}
+function _tpSrcName(src){
+  return window.T({force:'ov_tp_js_src_force',persona:'ov_tp_js_src_persona',default:'ov_tp_js_src_default'}[src]||'ov_tp_js_src_default');
+}
+function ovTpRender(d){
+  var cfg=d.config||{};
+  var st=document.getElementById('ov-tp-status');
+  if(st){
+    var s=d.stats||{}, hints=s.hints||{};
+    var total=(hints.gentle||0)+(hints.sharp||0)+(hints.feisty||0);
+    st.textContent = window.Tf('ov_tp_js_stat',{ins:(s.insults||0), n:total})
+      + (cfg.enabled ? '' : ' · '+window.T('ov_tp_js_disabled_badge'));
+  }
+  var kill=document.getElementById('ov-tp-kill');
+  if(kill){
+    kill.textContent = cfg.enabled ? '🟢 '+window.T('ov_tp_js_kill_on') : '⚪ '+window.T('ov_tp_js_kill_off');
+    kill.title = window.T('ov_tp_js_kill_title');
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('#ov-tp-policy .ov-tp-force'),function(b){
+    var active = String(cfg.force_level||'')===String(b.getAttribute('data-force')||'');
+    b.style.fontWeight = active?'700':'400';
+    b.style.boxShadow = active?'inset 0 0 0 1.2px currentColor':'none';
+  });
+  var sel=document.getElementById('ov-tp-default');
+  if(sel){ sel.value = cfg.default_level||'gentle'; }
+  var pf=document.getElementById('ov-tp-profanity');
+  if(pf){ pf.checked = !!cfg.profanity; }
+  var box=document.getElementById('ov-tp-personas');
+  if(box){
+    var rows=(d.personas||[]);
+    if(!rows.length){ box.textContent=window.T('ov_tp_js_no_personas'); }
+    else{
+      var head='<span style="color:var(--t3)">'+window.T('ov_tp_personas_head')+'</span> ';
+      box.innerHTML = head + rows.map(function(p){
+        var extra = (p.source==='force'?' ⚡':'') + (p.profanity_capped?' ✂':'');
+        return '<a href="/personas" style="text-decoration:none" title="'+rpa.esc(p.id)+' · '+_tpSrcName(p.source)+'">'
+          + _tpChip(p.level, p.name+' '+_tpLevelName(p.level)+extra) + '</a>';
+      }).join('');
+    }
+    var dsel=document.getElementById('ov-tp-diag-persona');
+    if(dsel && dsel.options.length<=1){
+      rows.forEach(function(p){
+        var o=document.createElement('option'); o.value=p.id; o.textContent=p.name+' ('+p.id+')';
+        dsel.appendChild(o);
+      });
+    }
+  }
+}
+async function ovTpRefresh(){
+  var box=document.getElementById('ov-tp-personas');
+  try{
+    var d=await rpa.get('/api/companion/temper/status');
+    if(!d||!d.ok){ if(box){ box.textContent=window.T('ov_tp_js_load_fail'); } return; }
+    ovTpRender(d);
+  }catch(e){ if(box){ box.textContent=window.T('ov_tp_js_load_fail'); } }
+}
+async function ovTpWrite(patch){
+  try{
+    var r=await rpa.post('/api/companion/temper/config', patch);
+    var d=await r.json();
+    if(!r.ok){ alert(window.T('ov_tp_js_save_fail')+(d&&d.detail||'')); return; }
+    ovTpRender(d);
+    if(window.rpa&&rpa.toast){ rpa.toast(window.T('ov_tp_js_saved')); }
+  }catch(e){ alert(window.T('ov_tp_js_save_fail')+e); }
+}
+async function ovTpDiag(){
+  var out=document.getElementById('ov-tp-diag-out');
+  var text=(document.getElementById('ov-tp-diag-text').value||'').trim();
+  if(!text){ return; }
+  var pid=document.getElementById('ov-tp-diag-persona').value||'';
+  var conv=(document.getElementById('ov-tp-diag-conv').value||'').trim();
+  out.style.display=''; out.textContent=window.T('rpa_loading');
+  try{
+    var body={text:text};
+    if(conv){ body.conversation_id=conv; } else if(pid){ body.persona_id=pid; }
+    var r=await rpa.post('/api/companion/temper/dry-run', body);
+    var d=await r.json();
+    if(!r.ok){ out.textContent=window.T('ov_tp_js_load_fail')+' '+(d&&d.detail||''); return; }
+    var V={inject:'🔥 '+window.T('ov_tp_js_v_inject'), inject_if_sticky:'🟡 '+window.T('ov_tp_js_v_sticky'),
+           clear_window:'🕊 '+window.T('ov_tp_js_v_clear'), suppressed_off:'⚪ '+window.T('ov_tp_js_v_off'),
+           taunt_banter:'😏 '+window.T('ov_tp_js_v_taunt'),
+           none:'💬 '+window.T('ov_tp_js_v_none'), disabled:'⛔ '+window.T('ov_tp_js_v_disabled')};
+    var chk=d.checks||{};
+    var mark=function(b){ return b?'✅':'—'; };
+    var html='<div style="font-weight:600;color:var(--t)">'+(V[d.verdict]||rpa.esc(d.verdict||''))+'</div>'
+      +'<div>'+window.T('ov_tp_js_chk')+' '
+      + mark(chk.insult)+' '+window.T('ov_tp_js_chk_insult')+' · '
+      + mark(chk.hostile)+' '+window.T('ov_tp_js_chk_hostile')+' · '
+      + mark(chk.deescalation)+' '+window.T('ov_tp_js_chk_deesc')+' · '
+      + mark(chk.taunt)+' '+window.T('ov_tp_js_chk_taunt')+'</div>';
+    var pn=(d.persona&&d.persona.id)?(d.persona.name||d.persona.id):window.T('ov_tp_diag_any');
+    html+='<div>'+window.T('ov_tp_js_level')+' '+_tpChip(d.level,_tpLevelName(d.level))
+      +' <span style="color:var(--t3)">('+_tpSrcName(d.source)
+      +(d.profanity_capped?' · '+window.T('ov_tp_js_capped'):'')
+      +(d.platform_capped?' · '+window.T('ov_tp_js_pcapped'):'')
+      +' · '+rpa.esc(pn)
+      +((d.persona&&d.persona.id&&!d.persona.found)?' '+window.T('ov_tp_js_persona_missing'):'')
+      +')</span></div>';
+    if(d.hint_preview){
+      html+='<div style="margin-top:.25rem;color:var(--t3)">'+window.T('ov_tp_js_hint_preview')+'</div>'
+        +'<div style="white-space:pre-wrap;color:var(--t2,var(--t))">'+rpa.esc(d.hint_preview)+'</div>';
+    }
+    out.innerHTML=html;
+  }catch(e){ out.textContent=window.T('ov_tp_js_load_fail')+' '+e; }
+}
+
 document.addEventListener('DOMContentLoaded', function(){
   rpa.restoreTabFromHash();
   document.getElementById('ov-interval').addEventListener('change', ovScheduleRefresh);
@@ -1915,6 +2083,31 @@ document.addEventListener('DOMContentLoaded', function(){
   var _cadBtn = document.getElementById('ov-cap-advice-btn');
   if(_cadBtn){ _cadBtn.addEventListener('click', function(){ ovCapAdvice(false); }); }
   ovRefreshCapabilities();
+  // 🔥 被骂回怼治理：首屏拉一次 + 手动刷新；策略按钮即点即写（危险档二次确认）
+  var _tpR=document.getElementById('ov-tp-refresh');
+  if(_tpR){ _tpR.addEventListener('click', ovTpRefresh); }
+  var _tpK=document.getElementById('ov-tp-kill');
+  if(_tpK){ _tpK.addEventListener('click', function(){
+    var on=_tpK.textContent.indexOf('🟢')>=0;
+    if(on && !confirm(window.T('ov_tp_js_kill_confirm'))) return;
+    ovTpWrite({enabled:!on});
+  }); }
+  Array.prototype.forEach.call(document.querySelectorAll('#ov-tp-policy .ov-tp-force'),function(b){
+    b.addEventListener('click', function(){
+      var f=b.getAttribute('data-force')||'';
+      if(f==='feisty' && !confirm(window.T('ov_tp_js_force_confirm'))) return;
+      ovTpWrite({force_level:f});
+    });
+  });
+  var _tpD=document.getElementById('ov-tp-default');
+  if(_tpD){ _tpD.addEventListener('change', function(){ ovTpWrite({default_level:_tpD.value}); }); }
+  var _tpP=document.getElementById('ov-tp-profanity');
+  if(_tpP){ _tpP.addEventListener('change', function(){ ovTpWrite({profanity:_tpP.checked}); }); }
+  var _tpDg=document.getElementById('ov-tp-diag-btn');
+  if(_tpDg){ _tpDg.addEventListener('click', ovTpDiag); }
+  var _tpDt=document.getElementById('ov-tp-diag-text');
+  if(_tpDt){ _tpDt.addEventListener('keydown', function(ev){ if(ev.key==='Enter'){ ovTpDiag(); } }); }
+  ovTpRefresh();
   // 🛡 P0-5 D8：反封号护栏面板（kill-switch / canary，首屏拉一次 + 手动刷新）
   var _ogR=document.getElementById('ov-og-refresh');
   if(_ogR){ _ogR.addEventListener('click', ovOgRefresh); }

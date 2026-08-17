@@ -213,6 +213,14 @@ class AccountOrchestrator:
             m.last_error = ""
             m.restarts = 0
             m.backoff_until = 0.0
+            # telegram 协议/伴聊 worker 的 start 成功＝pyrogram 真连上（授权有效），
+            # 回报健康表：若此前被标 logged_out（手机端退出），重扫后编排器拉起
+            # 即自动转「已恢复」（清坐席离线提示 + 发恢复通知）。其他平台的
+            # worker start 成功不代表登录态（如 messenger 边车），不在此上报。
+            if platform == "telegram":
+                self._report_session_health(
+                    platform, account_id, "authorized",
+                    detail="orchestrator start ok")
             return True
         except Exception as ex:  # noqa: BLE001
             m.state = "error"
@@ -220,7 +228,34 @@ class AccountOrchestrator:
             m.restarts += 1
             self._schedule_backoff(m)
             logger.debug("[orchestrator] 启动账号失败 %s", key, exc_info=True)
+            # 会话已死（SESSION_REVOKED/AUTH_KEY_UNREGISTERED…＝手机端退出/被吊销）
+            # 是确定性故障：重试救不回来，必须人重新扫码。上报健康表+注册表落
+            # offline+告警，坐席账号抽屉据此显示「已退出，点重连重新扫码」——
+            # 修「手机上退了号、系统这边毫无提示」的静默盲区。
+            if platform == "telegram":
+                try:
+                    from src.integrations.protocol_bridge import tg_error_kind
+                    if tg_error_kind(str(ex)) == "session_revoked":
+                        self._report_session_health(
+                            platform, account_id, "logged_out",
+                            detail=str(ex)[:200])
+                except Exception:  # noqa: BLE001
+                    logger.debug("[orchestrator] 会话死因分类失败 %s", key,
+                                 exc_info=True)
             return False
+
+    def _report_session_health(self, platform: str, account_id: str,
+                               status: str, *, detail: str = "") -> None:
+        """把账号登录态转移上报健康表（best-effort，绝不影响拉起主流程）。"""
+        try:
+            from src.integrations.platform_session_health import (
+                report_session_transition,
+            )
+            report_session_transition(platform, account_id, status,
+                                      detail=detail)
+        except Exception:  # noqa: BLE001
+            logger.debug("[orchestrator] 会话健康上报失败 %s:%s",
+                         platform, account_id, exc_info=True)
 
     async def _stop_account(self, key: str) -> None:
         m = self._managed.get(key)
@@ -398,10 +433,59 @@ class AccountOrchestrator:
                          platform, account_id, chat_key, action, exc_info=True)
             return False
 
+    async def delete_messages(
+        self, platform: str, account_id: str, chat_key: str,
+        message_ids: List[str], *, revoke: bool = True,
+    ) -> Dict[str, Any]:
+        """删除该会话的若干条消息（2026-08-17 官方级消息管理：双端撤回）。
+
+        ``revoke=True``＝「对所有人删除」（TG delete_messages(revoke=True) /
+        LINE unsend）。刻意**不过** send_blocked 护栏：撤回不是外发内容，
+        与 mark_read 同理——冻结期坐席仍应能撤回发错的消息（只减暴露不增）。
+        无运行中 worker / worker 无该能力 → ``{"ok": False, "reason": "no_worker"}``
+        （不抛——调用方按 reason 给坐席人话提示）。
+        """
+        m = self._managed.get(account_key(platform, account_id))
+        w = m.worker if (m is not None and m.state == "running") else None
+        if w is None or not hasattr(w, "delete_messages"):
+            return {"ok": False, "reason": "no_worker"}
+        try:
+            res = await w.delete_messages(
+                chat_key, list(message_ids or []), revoke=bool(revoke))
+            return res if isinstance(res, dict) else {"ok": bool(res)}
+        except Exception as exc:
+            logger.warning("[orchestrator] delete_messages 失败 %s:%s chat=%s: %s",
+                           platform, account_id, chat_key, exc)
+            return {"ok": False, "reason": str(exc)[:200] or "error"}
+
+    async def delete_history(
+        self, platform: str, account_id: str, chat_key: str, *,
+        revoke: bool = True,
+    ) -> Dict[str, Any]:
+        """整段会话历史删除（2026-08-17「清空对方设备」）：当前仅 TG worker 有该能力。
+
+        与 ``delete_messages`` 同语义：刻意**不过** send_blocked 护栏（删除只减
+        暴露不增）；无运行中 worker / worker 无该能力（含 default 主账号会话）
+        → ``{"ok": False, "reason": "no_worker"}``（不抛——调用方按 reason 给
+        坐席人话提示）。
+        """
+        m = self._managed.get(account_key(platform, account_id))
+        w = m.worker if (m is not None and m.state == "running") else None
+        if w is None or not hasattr(w, "delete_history"):
+            return {"ok": False, "reason": "no_worker"}
+        try:
+            res = await w.delete_history(chat_key, revoke=bool(revoke))
+            return res if isinstance(res, dict) else {"ok": bool(res)}
+        except Exception as exc:
+            logger.warning("[orchestrator] delete_history 失败 %s:%s chat=%s: %s",
+                           platform, account_id, chat_key, exc)
+            return {"ok": False, "reason": str(exc)[:200] or "error"}
+
     async def send_media(
         self, platform: str, account_id: str, chat_key: str, *,
         media_path: str, media_url: str, media_type: str, caption: str = "",
         inbox_text: Optional[str] = None, sender_name: str = "",
+        origin: str = "auto", mirror_media_type: str = "",
     ) -> Dict[str, Any]:
         """经 worker 发送媒体，并把出站媒体消息回写收件箱线程（media_ref 用 /static URL）。
 
@@ -412,14 +496,20 @@ class AccountOrchestrator:
         ``sender_name``（P1-3，2026-08-02）：出站媒体行的「谁的音色/人设」显示名——仅回写
         收件箱（经 ``source`` 落 ``messages.sender_name``，坐席语音气泡显示徽标），不发给
         客户；空串＝不带（旧行为）。
+
+        ``mirror_media_type``（2026-08-17 表情包主线）：收件箱镜像行的 media_type 覆写——
+        发送形态与展示形态分叉时用（TG 动图贴纸经 ``animation``(GIF) 发出，工作台气泡
+        仍按 ``sticker`` 渲染 webp）；空串＝跟随 ``media_type``（旧行为）。
         """
         # Stage M：编排器发送入口统一护栏（Kill-Switch + 反封号闸门）——富媒体与文本同守。
+        # origin（P1 2026-08-12）：manual=坐席人工路径用满额度；auto=自动链让路
+        # 人工预留额度（companion_send_gate.reserve_for_manual）。
         _blk, _reason = send_blocked(
             platform, account_id, config=self._config, registry=self._registry,
-            chat_key=str(chat_key or ""))
+            chat_key=str(chat_key or ""), origin=str(origin or "auto"))
         if _blk:
-            logger.warning("[orchestrator] 媒体发送被护栏拦截 %s:%s (%s)",
-                           platform, account_id, _reason)
+            logger.warning("[orchestrator] 媒体发送被护栏拦截 %s:%s (%s, origin=%s)",
+                           platform, account_id, _reason, origin)
             return {"delivered": False, "blocked": _reason}
         m = self._managed.get(account_key(platform, account_id))
         if not (m is not None and m.state == "running"
@@ -465,7 +555,7 @@ class AccountOrchestrator:
             emit_incoming(make_message(
                 platform=platform, account_id=account_id, chat_key=chat_key,
                 text=_itext, direction="out", msg_id=_mid,
-                media_type=media_type, media_ref=media_url,
+                media_type=(mirror_media_type or media_type), media_ref=media_url,
                 source=({"sender_name": str(sender_name)}
                         if sender_name else None),
             ))
@@ -477,21 +567,26 @@ class AccountOrchestrator:
         self, platform: str, account_id: str, chat_key: str, text: str,
         *, reply_to: Optional[Dict[str, Any]] = None,
         mentions: Optional[Any] = None,
+        origin: str = "auto",
     ) -> Dict[str, Any]:
         """经受管 worker 发送，并把出站消息回写收件箱线程。
 
         P4-5B：``reply_to`` 携带原生引用回复上下文——若 worker 的 send 支持该 kwarg
         （WhatsApp 协议 worker）则透传发原生引用；否则退回普通发送（TypeError 兜底）。
         引用摘要一并写进出站消息的 source.reply_to，使本端气泡也渲染引用条。
+
+        ``origin``（P1 2026-08-12 人工预留额度）：``manual``=坐席人工路径（收件箱
+        发送路由/人工通过草稿投递）用完整日额度；缺省 ``auto``=自动链（主动问候/
+        唤醒/关怀/L2 autosend）在 ``cap - reserve_for_manual`` 即让路。
         """
         # Stage M：编排器发送入口统一护栏（Kill-Switch + 反封号闸门）——所有经编排器的
         # 外发（主动问候/唤醒/关怀/接管）都从这里走，旁路发送不再绕过急停与反封号。
         _blk, _reason = send_blocked(
             platform, account_id, config=self._config, registry=self._registry,
-            chat_key=str(chat_key or ""))
+            chat_key=str(chat_key or ""), origin=str(origin or "auto"))
         if _blk:
-            logger.warning("[orchestrator] 发送被护栏拦截 %s:%s (%s)",
-                           platform, account_id, _reason)
+            logger.warning("[orchestrator] 发送被护栏拦截 %s:%s (%s, origin=%s)",
+                           platform, account_id, _reason, origin)
             return {"delivered": False, "blocked": _reason}
         m = self._managed.get(account_key(platform, account_id))
         if not (m is not None and m.state == "running"
@@ -911,7 +1006,8 @@ class TelegramProtocolWorker:
         except Exception:
             logger.debug("[tg-worker] 历史回填失败", exc_info=True)
 
-    async def send(self, chat_key: str, text: str) -> Dict[str, Any]:
+    async def send(self, chat_key: str, text: str,
+                   *, reply_to: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if self.client is None:
             raise RuntimeError("telegram client 未连接")
         target: Any = chat_key
@@ -919,7 +1015,17 @@ class TelegramProtocolWorker:
             target = int(chat_key)
         except (TypeError, ValueError):
             target = chat_key
-        msg = await self.client.send_message(target, text)
+        # 引用回复（P3 双面板融合 2026-08-13）：此前无 reply_to 形参 → 编排器签名探测
+        # 降级到裸发＝引用被静默丢弃（平台注册表曾如实标 quote_reply workspace=none）。
+        # TG 的 platform_msg_id 就是 pyrogram 消息 id → 原生 reply_to_message_id；
+        # id 解析不了（异常形态）→ 降级普通发送，绝不阻断。
+        kw: Dict[str, Any] = {}
+        if reply_to and reply_to.get("id"):
+            try:
+                kw["reply_to_message_id"] = int(str(reply_to.get("id")))
+            except (TypeError, ValueError):
+                pass
+        msg = await self.client.send_message(target, text, **kw)
         return {"delivered": True, "message_id": str(getattr(msg, "id", "") or "")}
 
     async def send_media(self, chat_key: str, *, media_path: str,
@@ -938,6 +1044,13 @@ class TelegramProtocolWorker:
             msg = await self.client.send_voice(target, media_path, caption=caption)
         elif kind == "video":
             msg = await self.client.send_video(target, media_path, caption=caption)
+        elif kind == "sticker":
+            # 2026-08-17 表情包主线：webp → Telegram 原生贴纸（pyrogram 2.0.106
+            # 的 send_sticker 无 caption 形参——贴纸本就无配文语义，忽略 caption）。
+            msg = await self.client.send_sticker(target, media_path)
+        elif kind == "animation":
+            # 动图贴纸在 TG 走 GIF 动画（animated webp 无视频贴纸语义，GIF 观感最好）
+            msg = await self.client.send_animation(target, media_path, caption=caption)
         else:
             msg = await self.client.send_document(target, media_path, caption=caption)
         return {"delivered": True, "message_id": str(getattr(msg, "id", "") or "")}
@@ -974,6 +1087,48 @@ class TelegramProtocolWorker:
         act = ChatAction.RECORD_AUDIO if str(action) == "record_audio" else ChatAction.TYPING
         await self.client.send_chat_action(target, act)
         return True
+
+    async def delete_messages(self, chat_key: str, message_ids: List[str],
+                              *, revoke: bool = True) -> Dict[str, Any]:
+        """删除若干条消息（2026-08-17 双端撤回）：pyrogram ``delete_messages``。
+
+        ``revoke=True``＝对所有人删除（TG 私聊自己的消息基本无时限；群聊受权限
+        限制，平台拒绝时如实回传）。platform_msg_id 即 pyrogram 消息 id（int）。
+        """
+        if self.client is None:
+            raise RuntimeError("telegram client 未连接")
+        target: Any = chat_key
+        try:
+            target = int(chat_key)
+        except (TypeError, ValueError):
+            target = chat_key
+        ids: List[int] = []
+        for i in (message_ids or []):
+            try:
+                ids.append(int(str(i)))
+            except (TypeError, ValueError):
+                continue
+        if not ids:
+            return {"ok": False, "reason": "bad_ids"}
+        n = await self.client.delete_messages(target, ids, revoke=bool(revoke))
+        try:
+            n = int(n)
+        except (TypeError, ValueError):
+            n = len(ids)
+        return {"ok": n > 0, "deleted": n}
+
+    async def delete_history(self, chat_key: str,
+                             *, revoke: bool = True) -> Dict[str, Any]:
+        """整段会话历史双向删除（2026-08-17「清空对方设备」）。
+
+        实现共用 ``telegram_companion_worker.tg_delete_full_history``（raw
+        ``messages.DeleteHistory(revoke=True)``，TG 私聊独有官方能力；
+        超级群/频道如实 ``unsupported_chat_type``）。
+        """
+        if self.client is None:
+            raise RuntimeError("telegram client 未连接")
+        from src.integrations.telegram_companion_worker import tg_delete_full_history
+        return await tg_delete_full_history(self.client, chat_key, revoke=revoke)
 
     async def stop(self) -> None:
         try:
@@ -1221,13 +1376,27 @@ class MessengerWebWorker:
         # Node 侧现以 HTTP 502 + {ok:false, delivered:false} 如实上报「发送未确认」
         # （composer 未清空＝多半没发出）。_post_json 对非 2xx 抛错 → 归一为未送达，
         # 绝不把「没发出去」当成功（此前恒 delivered=True → 静默丢消息）。
+        payload: Dict[str, Any] = {"jid": chat_key, "text": text}
+        # 引用回复（P2 双面板融合 2026-08-13）：把被引用消息文本下发给 Node 做 DOM 引用
+        # （Messenger web 无 wamid，只能按文本定位气泡）。此前 reply_to 收了却丢弃＝
+        # 「接了线没接通」。Node 侧 best-effort + degrade-safe：定位不到就普通发送。
+        if reply_to and reply_to.get("text"):
+            payload["quoted"] = {
+                "text": str(reply_to.get("text") or ""),
+                "id": str(reply_to.get("id") or ""),
+            }
         try:
             res = await _post_json(
                 f"{self._base()}/accounts/{self.account_id}/send",
-                {"jid": chat_key, "text": text},
+                payload,
             )
         except Exception as ex:  # noqa: BLE001
-            return {"delivered": False, "error": f"messenger send failed: {ex}"}
+            # 附带边车响应体里的真实败因（reason_code：render_timeout/needs_accept/
+            # e2ee_pin_prompt…）——裸 httpx 文本只有状态码，2026-08-15 173 事故
+            # 排查为此绕了一整圈。
+            from src.integrations.messenger_web_login import http_error_detail
+            return {"delivered": False,
+                    "error": f"messenger send failed: {http_error_detail(ex)}"}
         res = res or {}
         # 双重口径：ok 或 delivered 任一显式为 False，或 sent 显式为 False，都判未送达。
         delivered = (res.get("ok", True) is not False
@@ -1522,7 +1691,9 @@ class LineProtocolWorker:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self.state = "stopped"
         self.detail = ""
-        # peer mid → (显示名, 头像 URL) 缓存（含 ("","")=已查过无，避免每条消息重复打 getContactsV2）
+        # peer mid → (显示名, 头像 URL, 缓存时刻) 缓存（含 ("","")=已查过无，避免每条消息
+        # 重复打 getContactsV2）。带 TTL（2026-08-16 统一实时刷新）：正结果 6h / 空结果
+        # 10min——对方改名/换头像后，下条入站消息即触发重查自愈，而不是钉死到 worker 重启。
         self._peer_ident_cache: Dict[str, tuple] = {}
         # chat_key → 该会话末条**入站** msg id（LINE 的已读回执要带「读到哪条」）
         self._last_in_msg_id: Dict[str, str] = {}
@@ -1658,7 +1829,8 @@ class LineProtocolWorker:
             rows.append({"jid": str(mid), "name": name})
             # 预热缓存：首条消息进来时不必再打 getContactsV2，名字/头像当场就有
             if name or avatar:
-                self._peer_ident_cache.setdefault(str(mid), (name, avatar))
+                self._peer_ident_cache.setdefault(
+                    str(mid), (name, avatar, time.time()))
         return rows
 
     def _fetch_group_rows(self, client: Any, limit: int) -> List[Dict[str, Any]]:
@@ -1788,8 +1960,14 @@ class LineProtocolWorker:
             return "", ""
         cached = self._peer_ident_cache.get(mid)
         if cached is not None:
-            _record_line_identity("cache_hit")
-            return cached
+            c_name, c_avatar = cached[0], cached[1]
+            c_ts = float(cached[2]) if len(cached) > 2 else 0.0
+            # TTL：正结果 6h / 空结果 10min（改名换头像随下条入站自愈；无 ts 的
+            # legacy 条目按过期处理，一次重查后带上时间戳）
+            ttl = 6 * 3600 if (c_name or c_avatar) else 600
+            if c_ts and (time.time() - c_ts) < ttl:
+                _record_line_identity("cache_hit")
+                return c_name, c_avatar
         name, avatar = "", ""
         try:
             from okline import Contact
@@ -1807,7 +1985,7 @@ class LineProtocolWorker:
         except Exception:
             logger.debug("[line-worker] peer 身份解析失败 mid=%s", mid, exc_info=True)
             name, avatar = "", ""
-        self._peer_ident_cache[mid] = (name, avatar)
+        self._peer_ident_cache[mid] = (name, avatar, time.time())
         _record_line_identity("resolved" if name else "miss")
         return name, avatar
 
@@ -1915,6 +2093,55 @@ class LineProtocolWorker:
         except Exception:
             mid = ""
         return {"delivered": True, "message_id": mid}
+
+    async def send_line_sticker(
+        self, chat_key: str, package_id: str, sticker_id: str,
+    ) -> Dict[str, Any]:
+        """发 LINE 官方商店贴纸（2026-08-17 表情包主线）：okline 原生
+        ``send_sticker(to, packageId, stickerId)``——纯 ID 消息，不经 OBS 上传，
+        不受 ``platform_login.line.media.outbound`` 媒体开关约束（它管的是
+        自有文件上传链路，商店贴纸与发文本同级）。
+
+        镜像回写由调用方（sticker_routes）负责——本方法与 ``send`` 同层，只管投递。
+        """
+        if self.client is None:
+            raise RuntimeError("line client 未连接")
+        res = await self._api_call(
+            self.client.send_sticker, str(chat_key),
+            str(package_id), str(sticker_id))
+        mid = ""
+        try:
+            if isinstance(res, dict):
+                mid = str(res.get("id") or "")
+        except Exception:
+            mid = ""
+        return {"delivered": True, "message_id": mid}
+
+    async def delete_messages(self, chat_key: str, message_ids: List[str],
+                              *, revoke: bool = True) -> Dict[str, Any]:
+        """撤回若干条自己发出的消息（2026-08-17）：okline ``unsend_message``。
+
+        LINE 只有「unsend＝对所有人撤回」一种语义（约 24h 时限，超时服务端拒绝）
+        —— ``revoke`` 形参仅为编排器统一签名，False 也走 unsend。逐条调用
+        （okline 无批量口），单条失败不阻断其余。
+        """
+        if self.client is None:
+            raise RuntimeError("line client 未连接")
+        ok_n = 0
+        last_err = ""
+        for mid in (message_ids or []):
+            mid = str(mid or "").strip()
+            if not mid:
+                continue
+            try:
+                await self._api_call(self.client.unsend_message, mid)
+                ok_n += 1
+            except Exception as exc:  # noqa: BLE001
+                last_err = str(exc)[:120]
+                logger.debug("[line-worker] unsend 失败 msg=%s", mid, exc_info=True)
+        if ok_n <= 0:
+            return {"ok": False, "reason": last_err or "unsend_failed"}
+        return {"ok": True, "deleted": ok_n}
 
     async def stop(self) -> None:
         self.state = "stopped"

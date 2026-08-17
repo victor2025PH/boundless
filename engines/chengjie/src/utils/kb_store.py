@@ -638,18 +638,18 @@ class KnowledgeBaseStore:
                 pass
         return reply
 
-    def get_fallback(self, intent: str) -> str:
+    def get_fallback(self, intent: str) -> Optional[str]:
         """
         获取兜底话术：先按意图查 {intent}_fallback，未找到则查 global_fallback。
-        最终兜底返回硬编码安全字符串（仅此一处保留硬编码）。
+
+        2026-08-15 起不再有硬编码最终兜底（曾是「在的，有什么可以帮您的？」——
+        8/13、8/15 两起「AI 全链失败 → 客服腔罐头刷屏」事故的唯一文案源头）。
+        运营没配模板 → 返回 None，调用方按「本轮不回复」处理。
         """
         reply = self.get_direct_reply(f"{intent}_fallback")
         if reply:
             return reply
-        reply = self.get_direct_reply("global_fallback")
-        if reply:
-            return reply
-        return "在的，有什么可以帮您的？"
+        return self.get_direct_reply("global_fallback")
 
     def get_reply_mode(self, template_key: str) -> str:
         """获取指定 template_key 的 reply_mode"""

@@ -271,6 +271,45 @@ python ../../platform/spoken_style/smoke_test.py  # 包本体冒烟 26 项（异
  （drafts_routes 接线）；灰度复盘 CLI `python tools/spoken_style_obs.py`（只读：外语
  污染扫描 + 中文会话出站长度/语气词分布按灰度分界对比，多实例数据根自动发现）。
 
+**收件箱筛选区去噪主线**（2026-08-11 P0-P4，修实录「红框里按钮太多、还显示不全，
+不知道点哪」——405px 桌面壳下筛选区堆到 7 行占掉 196px 首屏，首屏只剩 6-7 条会话）：
+```bash
+python -m pytest tests/test_inbox_filter_usage_report.py -q --tb=line
+python tools/verify_inbox_density.py        # 17/17，含 390x844 窄屏档
+python tools/inbox_filter_usage_report.py   # 只读裁决（2026-08-25 起样本足）
+```
+预期：全绿。改 `unified_inbox.html` 筛选区 / `unified-inbox.css` chip 段前先读这九条：
+① **「需人工」chip 与 rail 徽标同口径**：前端 `_STALE_ATTN_SEC = 72*3600` 必须与服务端
+ `_ATTN_LOOKBACK_SEC` 同值——crit SLA 半边过 72h 窗，needs-human **标签**半边刻意
+ 不设窗（标签是人显式打的，不该自动过期）。**任一常量改动必须同改另一处**，否则
+ rail 说 7 条、chip 说 33 条，坐席不知道信谁（上线前实况就是 33 vs 7）。crit 超 72h
+ 渲染中性灰 `.sla-chip.stale`，红色只留给真紧急——全红＝没有重点。
+② **主筛选行单行横滚**：`.filter-tabs-primary.p0r` 必须 `flex-wrap:nowrap`（退回 wrap
+ 就是 7 行堆叠的老病）；左右溢出暗示靠 `.has-ovf-l/-r` 渐隐，`_syncFtabOverflow`
+ 必须两端都判（只判右侧时左边滚出去的 chip 毫无痕迹）。
+③ **面板＝二级筛选唯一入口**（状态/目标议程/标签/排序四组）：即点即生效，**只有外点
+ 才关**——别再在 `setFilter` 里调 `_closeFtabMore`（连选多个条件时面板每次自关＝退回
+ 旧体验）；目标议程/标签/排序的 **DOM id 必须保留**，计数回填与 `_syncPanelUi` 靠它们。
+ 主行滚出视野的条件（如「我的」）必须在面板里有镜像入口 + 计入 `_FTAB_MORE`（否则
+ 筛选生效而入口不可见＝坐席以为坏了）。
+④ **chip 规格单源**：六家族（ftab / goal-af / fp-chip / tag-strip / sla / badge）共用一份
+ 度量与 active 处理；`attn` 危险色靠属性选择器特异度存活。别再造第七套尺寸。
+⑤ **窄屏抽屉 `bottom:64px`**：让开 56px 移动平台条 + 8px 间隙——8px 曾把「清空/完成」
+ footer 埋在平台条下（静态门禁看不见，截图 QA 才抓到）；标签库下拉同为底部抽屉
+ （一个抽屉一个顶部锚定＝同一手势两种去处）。
+⑥ **内联 onclick 调的函数必须挂 window**：本区一天内两次实锤（`_uiBeacon` /
+ `_closeFtabMore` 定义在 IIFE 内 → 点击抛 ReferenceError）。模板热更新直上生产，
+ 写完立刻补 `window.x = x`，别等哑按钮门禁。
+⑦ **`resetAllFilters` 必须清 `_goalAgendaFilter`**：否则「清空筛选」后可见条件全清、
+ 目标议程还在暗处滤（幽灵筛选，坐席只会觉得列表数据丢了）。
+⑧ **埋点前缀 `iflt_`**：新增筛选入口一律带 beacon，否则该入口**无法参与裁决**（标签
+ strip / 原生排序 / 存视图三处就是事后补的）；`inbox_filter_usage_report.IFLT_EPOCH_DAY`
+ 是观察窗起点——**零点击本身是证据**，所以不能拿「数据首见日」当起点；改分桶要同步
+ 更新该常量。裁决口径与样本闸门全在该 CLI，别在看板里另算一套。
+⑨ 发布纪律：css `?v=` + `ui-build.txt` **双戳**；密度 ratchet 天花板**只降不升**
+ （当前 header 134 / 窄屏 149 / 单行 ftab 46 / 扁平会话行 74）。窄屏会话行 flatten
+ 后首屏 6-7 → 9 条，这是本主线的净收益，别让新徽标把它吃回去。
+
 **A 线「被吞回复」补答/回滚主线**（2026-08-09，修 198↔104 实录「回复等了 11 分钟」三连）：
 ```bash
 python -m pytest tests/test_reply_swallow_fix.py tests/test_message_dedup.py \
@@ -305,10 +344,41 @@ AI/人工——SLO 是客户体验口径）→ `/api/workspace/metrics.reply_lat
 `ov2_s_rlat`/`ov2_rl_*` zh+en，零流量整卡隐藏）。「零回复」＝入站超宽限
 （600s）无任何出站——与轮询兜底 TTL 同刻度，修复回归时此数先涨。
 
+**回复额度守卫「设置页收口」主线**（P0 2026-08-12 已上线 zhiliao：peer_bot_guard 的
+配置/救济/观测三合一进 `/reply-settings`「🛡️ 回复额度守卫」卡，此前配置只能改 YAML、
+豁免只在收件箱触顶横幅；方案 `docs/REPLY_BUDGET_SETTINGS_PLAN.md`。P1（并行线交付：
+spec 扩到全部 8 键→高级折叠可编辑、`budget_flags.near`≥80% 预警、watchdog 聚合告警
+别名 `reply_budget` 带恢复通知、豁免撤销同端点 revoke）已随 2026-08-12 22:55 窗内
+重启装载，只读互验 4/4（meta 8 键/缺省值/budget-today 行级 near）；回归命令追加
+`tests/test_reply_budget_watchdog.py`）：
+```bash
+python -m pytest tests/test_reply_settings.py tests/test_peer_bot_guard_budget.py \
+ tests/test_reply_budget_route.py -q --tb=line
+```
+预期：全绿。关键不变量（改 `peer_bot_guard.budget_flags` / 设置页守卫卡 /
+budget-today 端点前先读）：
+① **状态位语义单点**＝`peer_bot_guard.budget_flags`（纯函数）：`budget_state`（收件箱
+ 横幅/relief API）与 `GET /api/reply-settings/budget-today`（设置页「今日额度状态」表）
+ 都由它推导——两个消费面绝不各算一套（exhausted/hard_stopped 语义分叉＝坐席看到的
+ 与拦截行为对不上，比没有列表更糟）。
+② **`daily_reply_budget=0`＝不限额**（evaluate 的 `budget>0` 闸 + `budget_flags.enabled`），
+ **不是全拦**——门禁 `test_budget_flags_zero_budget_means_unlimited` 钉死。设置页 spec
+ 白名单刻意 clamp [5,500]：0 只许 YAML 配（防运营把 0 当全拦/把全拦当 0 误设；0 时
+ 触顶判定与收件箱横幅整体熄灭）。
+③ **豁免（今日继续）单写入口**＝`POST /api/unified-inbox/reply-budget/relief`——收件箱
+ 横幅与设置页列表共用同一端点（列表端点逐行回传 platform/account_id/chat_key 三元组
+ 正是为直投它），勿造第二个豁免写入口。
+④ **旧后端兼容＝feat 特性探测**：守卫字段挂 `feat:"guard"`（GET 快照 meta 缺键 → 整卡
+ 隐藏+收集/回填全跳过）——模板热更先于重启上线的中间态必须自洽；关总开关走
+ confirm+审计（防轰炸防线整组失守，2026-08-03 实录 80 秒 78 轮空转）。
+⑤ 台账批量口径＝`store.list_reply_budget_today`（LEFT JOIN conversations；used 跨日清零
+ 与 get_auto_reply_ledger 同口径；台账孤儿行如实回空三元组=前端豁免按钮不亮）。
+
 **多开治理 / 防双发主线**（2026-07-29，修「同一坐席开两个窗口 → 客户收到两条一样的话」）：
 ```bash
 python -m pytest tests/test_draft_resolve_concurrency.py tests/test_multiwin_p2.py \
- tests/test_live_drill_guards.py tests/test_settings_overlay_persistence.py -q --tb=line
+ tests/test_live_drill_guards.py tests/test_settings_overlay_persistence.py \
+ tests/test_workspace_home_nav_dedup.py tests/test_multiwin_review.py -q --tb=line
 ```
 预期：全绿。三层防线（服务端兜底优先——前端协调只管同一浏览器，管不了第二台电脑）：
 ① **草稿处置原子闸门**：`update_draft_status` 带 `WHERE status IN ('pending','enriching')`，
@@ -337,6 +407,30 @@ python -m pytest tests/test_draft_resolve_concurrency.py tests/test_multiwin_p2.
  将来若多进程负载均衡需改共享存储）。③ 只负责同一浏览器内的体验（少噪音、少误操作）。
  跨进程互斥若将来真要做，数据地基已在：presence 心跳携窗口指纹 → `AgentCoordinator`
  按坐席聚合 `windows/standby_windows`（进程内 TTL 90s）。
+④ **「返回工作台」去重**（P1-③ 2026-08-11，修老板实录「还会出现两个智聊坐席工作台」；
+ 遥测 mw.takeover_auto/reclaim 坐实同 profile 双坐席，源头＝子页/辅助窗的裸
+ `location.href='/workspace'`（顶栏「聊天」/「← 返回工作台」/SSE toast/铃铛兜底）把 wsub
+ 辅助窗原地导航成第二个坐席）：`_win_unique.html::__wsGoHome`＝「别处有活跃坐席就交接
+ （opener 直连 → BC 探活 250ms，cid 经 open-conv 送达 + toast `base.winuniq.switched`），
+ 没有才本窗原地导航」；消费面＝捕获相位委托拦截器（同标签 `<a href="/workspace">` 零接线
+ 自动获益）+ workspace_base 全部 SSE/铃铛兜底 + 四个子页 JS 跳转。三条硬不变量：
+ ① 拦截器必须**捕获相位**且 _win_unique 保持在 <head>（先于 body 顶部 _loading_overlay
+ 注册）——否则「留在原页」也会点亮 15s 全屏加载遮罩（真浏览器门禁 8b 实锤）；真导航一律走
+ `_navWithFeedback`（先 `__blLoadShow` 再跳，保住慢链路 L2 反馈）；② 普通 /workspace 入口
+ 与深链同走 BC 判重（`_bcHandoff` allowPlain；桌面壳普通入口不再每点弹一个新壳窗）；
+ ③ 新增裸 `/workspace` JS 导航由静态 ratchet `tests/test_workspace_home_nav_dedup.py` 点名，
+ 行为由 `tools/verify_multiwin_ui.py` 场景 8（47 断言，场景 4 前先关坐席窗——普通入口探活
+ 后「首开」前提变了）钉住。PWA 应用窗维持 08-03 原地导航语义（app 窗自己是首选坐席容器）。
+ **P2 增量**（同日）：① 耐心探活——探活 miss 先读坐席「在场心跳」（__wsMultiWin 主控位
+ `aitr.mw.primary::/workspace`，5s 续租/15s 过期，键名跨文件契约有门禁）：心跳新鲜＝坐席
+ 在忙/被 Chrome 内存节省器冻结（冻结页答不了 BC ping，此前唯一漏判面），再等一轮
+ （waitMs 800）；两轮静默且心跳仍新鲜 → 视同在场（frozen）提示切换，绝不双开。
+ ② 交接 toast 中央化——`aitr:ws-handoff` 统一由 _win_unique 中央监听渲染
+ （`_notifySwitched` 单一调用点有门禁），自带提示的页面置 `__aitrWsHandoffToastOwned`
+ 让行（cases）；修掉「入口页交接成功但静默＝用户以为没点上再点一次」的窗口翻倍诱因。
+ ③ 验收周读 CLI `python tools/multiwin_review.py`（只读、多实例数据根、修复日切段判词：
+ 修复后 takeover_auto+reclaim 归零＝坐实；门禁 tests/test_multiwin_review.py）。
+ ops goalRptLink 已接 winname 复用辅助窗。
 **乐观锁**（防长编辑表单丢更新）：`persona_manager.profile_rev` 通用内容指纹 → 人设档案 /
  全局规则 / 意图关键词三处 `GET 回 rev → PUT 带 expected_rev → 不一致 409 → 前端确认后免键覆盖`。
  判据＝**整文档替换才需要**；字段级 patch 端点（`/api/settings/save`）刻意**不**加，
@@ -1566,6 +1660,10 @@ by_batch 分布与主计数同一 bot 剔除 SQL——首跑曾 159 vs 157 口�
   **不要**把 watchdog 当「改完代码必重启」；
 - **攒批重启**：多项改动合一次重启，别每改一行重启一次（2026-07-12 / 2026-07-22 曾连环重启 →
   坐席端反复撞「加载超时」红屏——前端虽已有自动退避重连自愈，但窗口本身应尽量少出现）；
+- **重启窗口**（2026-08-12 可靠性复盘 P0-3）：非紧急批次收敛到每日三窗
+  **04:00 / 12:30 / 22:30（±45min）**——账本基线平均 8.4 次重启/天、88% 为开发批次，
+  每次都是坐席 15-30s 断窗。`restart_preflight` 窗外会提示下一窗时间（仅提醒不拦截）；
+  紧急修复 / watchdog 自愈不受窗口限制。
 - 多 agent 并发**必须 worktree 隔离**（见 Git workflow），只有负责生产机的那条线才碰常驻服务。
 
 ### Git workflow
@@ -1793,7 +1891,16 @@ FLAP、内联按钮写了函数没挂 window 暴露块经热更新**直接上生
    维护：前端接线全套 + i18n 契约 + 共享组件双树同步/主题 token + 路由契约；
    `-Full` 追加全量回归）。当日两例跨线 bug（哑按钮、暗色 token 缺口）都是甲改
    乙扫出来的——门禁互验是共享树上唯一可靠的「代码评审」。别人文件红了先报告，
-   别在对方活跃编辑窗内默默替改。
+   别在对方活跃编辑窗内默默替改。**红灯账本**（2026-08-12 加，「5 个既有红互相
+   指认 other owners 挂了 24h+ 无人修」事故沉淀）：sweep 自动把每个失败门禁的
+   首见时间记进 `D:\chengjie-instances\.ops\gate_reds.json` 并在输出里带 age，
+   **>48h 亮 `UNCLAIMED` 点名**——看到点名就三选一：修掉 / 按台账语义登记留债 /
+   意向板认领；绿了自动销账。**瞬态红自动复跑**（同日晚加）：sweep 与 sibling
+   保存并发时会扫到半写文件（当日两例实锤：ui-build 新鲜度/时间炸弹门禁各红了
+   恰好一轮）——第一轮有红时 sweep 自动把失败门禁**文件**串行复跑一次，第二轮
+   为权威（自愈=verdict 转绿并注明 transient；仍红=真红），账本只记权威轮。
+   夹具时间炸弹（硬日期跌出 now 窗自爆，duel 实锤）有专项门禁
+   `tests/test_fixture_time_bombs.py`：trend 夹具日期一律锚 now。
 5. **前端批次双戳**（2026-07-29 账号 rail 事故沉淀）：模板/CSS/i18n 热更新后，
    **开着的旧标签页仍跑旧 JS**。每批前端落地必须同时改两处——
    `src/web/static/workspace/ui-build.txt` 首行（陈旧页横幅轮询此文件）+ 相关

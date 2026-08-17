@@ -19,7 +19,16 @@ ZH = {
     "base.pill.quota_tip": "已用 {used} / 含 {included}",
     "base.pill.quota_tip_hours": "体验档还剩 {h} 小时",
     "base.pill.quota_tip_out": "额度已用尽：翻译与 AI 草稿会暂停，收件箱与手动发送不受影响",
-    "base.pill.quota_tip_expired": "体验档已到期：翻译与 AI 草稿会暂停；注册可换 7 天完整试用",
+    "base.pill.quota_tip_expired": "体验档已到期：翻译与 AI 草稿会暂停；注册可领免费 100 万字符",
+    # ── 用尽拦截弹层（2026-08-11 免费额度升级：拦得住也要接得住——三条出路并排）──
+    "ws.quotawall.title": "字符额度已用尽",
+    "ws.quotawall.body": "翻译与 AI 拟稿已暂停；收件箱与手动发送不受影响。马上恢复：",
+    "ws.quotawall.invite": "🎁 邀请好友领字符（免费）",
+    "ws.quotawall.cs": "💬 联系客服申请",
+    "ws.quotawall.buy": "🚀 购买 / 升级",
+    "ws.quotawall.later": "稍后再说",
+    "ws.quotawall.agent_hint": "请联系你的管理员处理额度；恢复前翻译与 AI 拟稿会暂停。",
+    "ws.quotawall.view": "查看额度详情",
 }
 
 EN = {
@@ -32,5 +41,16 @@ EN = {
     "base.pill.quota_tip_out": "Quota exhausted: translation and AI drafts pause; "
                                "inbox and manual sending keep working",
     "base.pill.quota_tip_expired": "Starter allowance expired: translation and AI drafts "
-                                   "pause; register to get the full 7-day trial",
+                                   "pause; register to claim 1,000,000 free characters",
+    # ── Quota-exhausted wall (2026-08-11 free-quota upgrade: three ways out) ──
+    "ws.quotawall.title": "Character quota used up",
+    "ws.quotawall.body": "Translation and AI drafting are paused; the inbox and manual "
+                         "sending keep working. Get going again:",
+    "ws.quotawall.invite": "🎁 Invite friends (free characters)",
+    "ws.quotawall.cs": "💬 Ask support",
+    "ws.quotawall.buy": "🚀 Buy / upgrade",
+    "ws.quotawall.later": "Later",
+    "ws.quotawall.agent_hint": "Ask your admin to top up the quota; translation and AI "
+                               "drafting stay paused until then.",
+    "ws.quotawall.view": "View quota details",
 }

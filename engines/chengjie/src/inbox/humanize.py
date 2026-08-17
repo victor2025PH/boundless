@@ -209,6 +209,7 @@ class PacingResult:
     arousal: Optional[float]  # 回复激活度（自适应时用；None=未知/不适用）
     adaptive: bool        # 是否自适应模式
     enabled: bool         # 该延迟配置是否启用（max_sec>0）
+    floored: bool = False  # min_residual_sec 残余下限是否兜住了本次（观测用）
 
 
 def resolve_following_delay_block(
@@ -264,6 +265,10 @@ def resolve_pacing(
     - ``adaptive=false`` → ``uniform(min,max)``（不扣 elapsed）。
     - ``adaptive=true`` → 按长度 + 回复激活度估目标，再扣已耗时 ``max(0, 目标-已耗)``；
       ``arousal`` 未给则自动从 ``text`` 估（回复自身激活度，语义正确）。
+    - ``min_residual_sec``（P1，2026-08-12）：adaptive 抵扣**发生后**（elapsed>0）
+      至少保留的残余延迟。修「生成/排队耗时 ≥ 目标 → 抵扣归零 → 秒回且无打字
+      气泡」：残余 ≥ 该值时打字气泡也有露出窗口（配 ≥ DEFAULT_MIN_TYPING_DELAY_SEC
+      才会真挂）。默认 0＝旧行为；只作用于 adaptive 分支（非自适应从不抵扣，无此洞）。
     """
     b = _apply_scoped_overrides(block, platform=platform, persona_id=persona_id)
     _rng = rng or random.uniform
@@ -294,8 +299,16 @@ def resolve_pacing(
         el = max(0.0, float(elapsed_sec or 0.0))
     except (TypeError, ValueError):
         el = 0.0
-    delay = max(0.0, target - el) if el > 0 else target
-    return PacingResult(delay, target, el, arousal, True, True)
+    try:
+        residual = max(0.0, float(b.get("min_residual_sec", 0) or 0))
+    except (TypeError, ValueError):
+        residual = 0.0
+    if el > 0:
+        raw = max(0.0, target - el)
+        delay = max(residual, raw)
+        return PacingResult(delay, target, el, arousal, True, True,
+                            floored=residual > 0 and raw < residual)
+    return PacingResult(target, target, el, arousal, True, True)
 
 
 def compute_pacing_delay(
@@ -315,6 +328,67 @@ def compute_pacing_delay(
     return resolve_pacing(
         block, text=text, arousal=arousal, elapsed_sec=elapsed_sec,
         persona_id=persona_id, platform=platform, rng=rng).delay
+
+
+def resolve_min_gap_sec(
+    block: Optional[Dict[str, Any]],
+    *,
+    platform: str = "",
+    persona_id: str = "",
+) -> float:
+    """解析「同会话连发最小间隔」秒数（``min_gap_sec``，覆写层级同 resolve_pacing）。
+
+    与延迟块同居一个配置块（``deliver_delay.min_gap_sec``）＝随
+    ``apply_deliver_delay`` 热更、随「跟随滑杆」语义被 A 线/协议链整块继承。
+    解析失败/未配置 → 0（关闭，旧行为）。
+    """
+    b = _apply_scoped_overrides(block, platform=platform, persona_id=persona_id)
+    try:
+        return max(0.0, float(b.get("min_gap_sec", 0) or 0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def apply_min_gap_floor(
+    delay: float,
+    *,
+    since_last_send_sec: Optional[float],
+    min_gap_sec: float,
+    rng: Optional[Callable[[float, float], float]] = None,
+) -> "tuple[float, bool]":
+    """同会话连发最小间隔地板（P1，2026-08-12，纯函数）。返回 ``(delay, floored)``。
+
+    修的洞（198 实录「第 2/3 条秒回」的机制）：B 线草稿在队列里排队，adaptive 把
+    「排队等待」当已耗时全额抵扣 → 第 2 条起延迟恒 0，对同一客户背靠背秒回。
+    抵扣语义对**单条**是对的（客户确实已经等了那么久），但真人**连续两条出站**
+    之间必有打字间隔——本地板只看「距本会话上一条出站多久」，与抵扣正交：
+    ``延迟 = max(原延迟, 目标间隔 - 距上次出站秒数)``。
+
+    - ``since_last_send_sec=None``（本会话进程内首条出站）→ 不垫（首条的节奏由
+      delay 本身负责，地板只管「连发」）；
+    - ``min_gap_sec<=0`` → 关闭（默认，旧行为）；
+    - 目标间隔带 ±15% 抖动（``rng`` 可注入）——地板经常被踩到时（客户连发轰炸），
+      恒定 N 秒一条是节拍器，不是人。
+    """
+    try:
+        base = max(0.0, float(delay or 0.0))
+    except (TypeError, ValueError):
+        base = 0.0
+    try:
+        gap = float(min_gap_sec or 0.0)
+    except (TypeError, ValueError):
+        gap = 0.0
+    if gap <= 0 or since_last_send_sec is None:
+        return base, False
+    try:
+        since = max(0.0, float(since_last_send_sec))
+    except (TypeError, ValueError):
+        return base, False
+    _rng = rng or random.uniform
+    required = gap * _rng(0.85, 1.15) - since
+    if required > base:
+        return required, True
+    return base, False
 
 
 MarkReadFn = Callable[[], Awaitable[Any]]

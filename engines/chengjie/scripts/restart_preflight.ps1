@@ -207,6 +207,37 @@ if ($inWin) {
     Write-Output '  emergency fixes / watchdog self-heal exempt - this note never blocks GO.'
 }
 
+# --- advisory: last gate sweep (shared .ops record; informational, never NO-GO) ---
+# A restart loads the whole tree; "what did the gate face look like last time
+# anyone swept?" is context the operator should see. Deliberately advisory:
+# a red sweep may be another line's ledgered debt (red ledger tracks age/owner);
+# blocking this line's restart on that would be overreach.
+Write-Output ''
+Write-Output '--- advisory: last gate sweep (shared .ops record) ---'
+$swPath = 'D:\chengjie-instances\.ops\last_sweep.json'
+if (Test-Path $swPath) {
+    try {
+        $sw = Get-Content $swPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $swAgeH = ((Get-Date) - [datetime]$sw.ts).TotalHours
+        $swLine = ('  {0:N1} h ago  {1}  ({2} passed{3}{4})' -f [math]::Round($swAgeH, 1),
+            ([string]$sw.verdict).ToUpper(), $sw.passed,
+            $(if ($sw.full) { ', full' } else { '' }),
+            $(if ($sw.transient_healed) { ', transient-healed' } else { '' }))
+        Write-Output $swLine
+        if (("$($sw.verdict)" -eq 'red') -and @($sw.failed).Count -gt 0) {
+            @($sw.failed) | Select-Object -First 5 | ForEach-Object { Write-Output ('    red: ' + $_) }
+            Write-Output '    (ownership/age in the red ledger; a sibling debt does not block YOUR restart)'
+        }
+        if ($swAgeH -gt 12) {
+            Write-Output '  record is >12h old - consider a fresh gate_sweep before loading the tree.'
+        }
+    } catch {
+        Write-Output ('  (sweep record unreadable: {0})' -f $_.Exception.Message)
+    }
+} else {
+    Write-Output '  (no sweep record yet - gate_sweep writes it from 2026-08-12 on)'
+}
+
 # --- verdict ---
 Write-Output ''
 if ($fails.Count -eq 0) {

@@ -205,7 +205,7 @@ async def send_telegram_voice(
         send_kw["reply_to_message_id"] = int(reply_to_message_id)
 
     try:
-        msg = await client.send_voice(**send_kw)
+        msg = await _invoke_on_client_loop(client, send_kw)
         logger.info(
             "[voice_sender] sent voice chat_id=%s file=%s dur=%s",
             chat_id, Path(ogg_path).name, duration,
@@ -221,3 +221,35 @@ async def send_telegram_voice(
                 Path(ogg_path).unlink(missing_ok=True)
             except Exception:
                 pass
+
+
+# 语音上传必须跑在 client 自己的 loop 上（2026-08-16 实锤修复）：
+# pyrogram 上传走独立媒体 session，session 内部 run_in_executor 的 Future 绑定
+# session 创建时所在的 loop——跨 loop await 直接
+# 「Task got Future attached to a different loop」（8/13 主动语音 6 次、8/16 A 线
+# 分条语音 1 次，均在合成成功后死于上传）。文本 send_message 走主 session 恰好
+# 同 loop 所以从不复现，语音是唯一撞上媒体 session loop 亲和的路径。
+# 同 loop 时零开销直等（旧行为）；跨 loop 时经 run_coroutine_threadsafe 封送到
+# client.loop（与本仓 web 路由/头像下载的既有跨 loop 惯例同款）。
+_CROSS_LOOP_SEND_TIMEOUT_SEC = 180.0
+
+
+async def _invoke_on_client_loop(client: Any, send_kw: dict) -> Any:
+    client_loop = getattr(client, "loop", None)
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+    if (
+        client_loop is not None
+        and running is not None
+        and client_loop is not running
+        and getattr(client_loop, "is_running", lambda: False)()
+    ):
+        logger.info(
+            "[voice_sender] cross-loop send → marshalled to client loop")
+        fut = asyncio.run_coroutine_threadsafe(
+            client.send_voice(**send_kw), client_loop)
+        return await asyncio.wait_for(
+            asyncio.wrap_future(fut), timeout=_CROSS_LOOP_SEND_TIMEOUT_SEC)
+    return await client.send_voice(**send_kw)

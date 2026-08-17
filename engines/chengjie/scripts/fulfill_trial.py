@@ -3,14 +3,22 @@
 
 补齐 P2 试用链最后一环。整条链：
 
-    客户端「注册领 7 天」→ POST /api/trial/claim（官网按机器码去重建台账）
+    客户端「注册领免费额度」→ POST /api/trial/claim（官网按机器码去重建台账）
     → **本脚本**（厂商机轮询待办 → 本地私钥签发 → 回填官网）
     → 客户端轮询 /api/trial/claim-status 拿到 license → 落盘激活
 
-两条队列，一次 pass 都走：
+四条队列，一次 pass 都走：
 
-  1. ``status=pending``   → 签 7 天试用授权（绑机器指纹）
-  2. ``needs_topup=1``    → 客服已核销绑定码 → 签「加客服送 10 万字符」加量凭证
+  1. ``status=pending``   → 签免费档授权（TRIAL_SPEC：100 万字符 · 无期限 · 绑机器指纹）
+  2. ``needs_topup=1``    → 客服已核销绑定码 → 签「联系客服申请字符」加量凭证（默认 10 万，
+                            客服核销时可改量）
+  3. ``status=issued``    → **存量升级重签**（2026-08-11 免费档 25k/7天 → 100 万/无期限）：
+                            旧规格授权 payload 已固化不会自己变大，对台账里额度低于当前
+                            TRIAL_SPEC 或带有效期的 issued 单重签（同 lic_id，用量累计
+                            不清零），客户端按「license 内容变化」自动重新落盘激活。
+  4. ``referrals due``    → 邀请裂变发奖：被邀请人注册成功 → 见面礼凭证；被邀请人真实
+                            消耗达标（官网按 usage-beacon 水位判定）→ 邀请人奖励凭证。
+                            ref 均由 referral_id 确定性派生（幂等，重签不重复入账）。
 
 安全口径与 fulfill_chatx.py 一致：私钥只经 ``--priv`` 从本机文件读，绝不上 VPS、
 绝不写进日志/台账。本地审计流水只记 claim_id / 指纹短码 / 额度 / 到期，不记凭证本身。
@@ -49,6 +57,8 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 from src.licensing.chatx_fulfillment import (  # noqa: E402
+    REFERRAL_INVITEE_CHARS,
+    REFERRAL_INVITER_CHARS,
     TRIAL_GIFT_CHARS,
     TRIAL_SPEC,
     build_trial_payload,
@@ -96,6 +106,51 @@ def plan_license_work(claims: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]
             continue  # 已有授权，等官网自己翻状态；不重复签
         (ok if valid_fingerprint(c.get("fingerprint", "")) else bad).append(c)
     return ok, bad
+
+
+def plan_upgrade_work(
+    claims: List[Dict[str, Any]],
+    *,
+    spec_chars: Optional[int] = None,
+    spec_days: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """从 issued 队列挑出「按旧规格签的、该升级重签」的单（纯函数，幂等）。
+
+    判据（官网 admin 列表带回的解码字段）：
+      - ``license_chars`` < 当前 TRIAL_SPEC 额度（旧 25k 单）；或
+      - 当前规格无期限（days<=0）而旧授权带 ``license_exp``（旧 7 天单）。
+    重签后 license_chars == spec 且无 exp → 不再命中 = 天然幂等。
+    只动本产品（chatx）、指纹合法、真有授权在身的 issued 单；解码字段缺失
+    （旧版官网未升级）一律**跳过**——信息不足宁可不动，别对着盲区重签。
+    """
+    want_chars = int(TRIAL_SPEC["included_chars"] if spec_chars is None else spec_chars)
+    want_days = int(TRIAL_SPEC["days"] if spec_days is None else spec_days)
+    out: List[Dict[str, Any]] = []
+    for c in claims or []:
+        if str(c.get("status") or "") != "issued" or not c.get("has_license"):
+            continue
+        if str(c.get("product") or "chatx") != "chatx":
+            continue
+        if not valid_fingerprint(c.get("fingerprint", "")):
+            continue
+        lc = c.get("license_chars")
+        le = c.get("license_exp")
+        if lc is None:
+            continue  # 官网未升级，读不到解码字段——不盲签
+        needs = int(lc or 0) < want_chars or (want_days <= 0 and int(le or 0) > 0)
+        if needs:
+            out.append(c)
+    return out
+
+
+def referral_refs(referral_id: str) -> Tuple[str, str]:
+    """邀请发奖凭证的兑换幂等键：(被邀请人见面礼, 邀请人奖励)。
+
+    与 ``topup_ref`` 同一铁律——由 referral_id 确定性派生、不带时间戳：
+    回填失败重签必须落在同一个 ref 上，客户端才只入账一次。
+    """
+    rid = str(referral_id or "").strip()
+    return f"refwel-{rid}", f"refearn-{rid}"
 
 
 def oldest_pending_minutes(claims: List[Dict[str, Any]], *, now: Optional[float] = None) -> int:
@@ -166,7 +221,8 @@ def run_once(site: str, key: str, priv_hex: str, *, days: Optional[int] = None,
              limit: int = 100, dry_run: bool = False, log=print) -> Dict[str, int]:
     """跑一轮：签发待办试用 + 签发待办加量。返回各项计数。"""
     base = site.rstrip("/")
-    stat = {"issued": 0, "rejected": 0, "topup": 0, "failed": 0, "backlog_min": 0}
+    stat = {"issued": 0, "rejected": 0, "topup": 0, "upgraded": 0,
+            "referral": 0, "failed": 0, "backlog_min": 0}
 
     # ① 试用授权
     resp = _http(f"{base}/api/admin/trial-claims?status=pending&limit={limit}", key=key)
@@ -226,6 +282,75 @@ def run_once(site: str, key: str, priv_hex: str, *, days: Optional[int] = None,
         except Exception as e:
             log(f"  ! {c['id']} 加量签发失败: {e}")
             stat["failed"] += 1
+
+    # ③ 存量升级重签（免费档扩容后，把旧规格 issued 单换成当前 TRIAL_SPEC）。
+    # 官网未升级（列表不带 license_chars 解码字段）时 plan_upgrade_work 恒空 = 本段静默。
+    try:
+        resp3 = _http(f"{base}/api/admin/trial-claims?status=issued&limit={limit}", key=key)
+        for c in plan_upgrade_work(list(resp3.get("claims") or [])):
+            try:
+                payload = build_trial_payload(
+                    customer=c.get("contact") or "", machine=c["fingerprint"],
+                    claim_id=c["id"], days=days, chars=chars)
+                token = issue_license(payload, priv_hex)
+                log(f"  ↑ {c['id']} 升级重签 {c.get('license_chars')}→"
+                    f"{payload['included_chars']} 字符（{payload['lic_id']}，用量不清零）")
+                if not dry_run:
+                    _http(f"{base}/api/admin/trial-claims", method="POST", key=key,
+                          body={"id": c["id"], "license": token, "status": "issued"})
+                    _audit("upgrade", claim=c["id"], lic_id=payload["lic_id"],
+                           fp=c["fingerprint"], chars=payload["included_chars"],
+                           prev_chars=c.get("license_chars"))
+                stat["upgraded"] += 1
+            except Exception as e:
+                log(f"  ! {c['id']} 升级重签失败: {e}")
+                stat["failed"] += 1
+    except Exception as e:
+        # 旧版官网可能没有该查询能力：升级腿失败不拖累主签发链。
+        log(f"  ! 升级队列不可用（官网版本旧？）: {e}")
+
+    # ④ 邀请裂变发奖（官网 referral 台账判定资格：注册成功=见面礼、消耗达标=邀请人奖励；
+    # 本脚本只按 due 清单签凭证并回填）。旧版官网无此端点 → 静默跳过。
+    try:
+        resp4 = _http(f"{base}/api/admin/referrals?due=1&limit={limit}", key=key)
+    except Exception:
+        resp4 = None
+    if resp4 and resp4.get("ok"):
+        for r in list(resp4.get("due") or []):
+            rid = str(r.get("id") or "")
+            wel_ref, earn_ref = referral_refs(rid)
+            try:
+                body: Dict[str, Any] = {"id": rid}
+                if r.get("invitee_due"):
+                    n1 = int(r.get("invitee_chars") or REFERRAL_INVITEE_CHARS)
+                    fp8 = str(r.get("invitee_fingerprint") or "").replace("-", "")[:8] or "unknown"
+                    body["invitee_voucher"] = issue_topup_voucher(
+                        priv_hex, chars=n1, ref=wel_ref,
+                        lic_id=f"trial-{fp8}", customer=r.get("invitee_contact") or "",
+                        note="referral-welcome")
+                    body["invitee_chars"] = n1
+                if r.get("inviter_due"):
+                    n2 = int(r.get("inviter_chars") or REFERRAL_INVITER_CHARS)
+                    fp8 = str(r.get("inviter_fingerprint") or "").replace("-", "")[:8] or "unknown"
+                    body["inviter_voucher"] = issue_topup_voucher(
+                        priv_hex, chars=n2, ref=earn_ref,
+                        lic_id=f"trial-{fp8}", customer=r.get("inviter_contact") or "",
+                        note="referral-reward")
+                    body["inviter_chars"] = n2
+                if len(body) == 1:
+                    continue
+                log(f"  ✓ referral {rid} 发奖"
+                    f"{' 见面礼' if 'invitee_voucher' in body else ''}"
+                    f"{' 邀请奖励' if 'inviter_voucher' in body else ''}")
+                if not dry_run:
+                    _http(f"{base}/api/admin/referrals", method="POST", key=key, body=body)
+                    _audit("referral", referral=rid,
+                           invitee=bool(body.get("invitee_voucher")),
+                           inviter=bool(body.get("inviter_voucher")))
+                stat["referral"] += 1
+            except Exception as e:
+                log(f"  ! referral {rid} 发奖失败: {e}")
+                stat["failed"] += 1
 
     return stat
 
@@ -290,8 +415,15 @@ def self_test(site: str, key: str, console_key: str = "", log=print) -> int:
         st = LicenseManager(license_token=tokens["real"], public_key_hex=pub).status()
         check(st.state == "active", f"      本机验签 active (实际 {st.state})")
         check(st.plan == TRIAL_SPEC["plan"], f"      plan={TRIAL_SPEC['plan']} (实际 {st.plan})")
-        check(st.days_left is not None and 5 <= st.days_left <= 7,
-              f"      剩余 {st.days_left} 天（7 天档，grace 不得叠加）")
+        want_days = int(TRIAL_SPEC["days"] or 0)
+        if want_days > 0:
+            check(st.days_left is not None and want_days - 2 <= st.days_left <= want_days,
+                  f"      剩余 {st.days_left} 天（{want_days} 天档，grace 不得叠加）")
+        else:
+            check(st.days_left is None,
+                  f"      无期限档不应有剩余天数（实得 {st.days_left}）")
+        check(st.included_chars == TRIAL_SPEC["included_chars"],
+              f"      免费额度 {st.included_chars}（规格 {TRIAL_SPEC['included_chars']}）")
     if tokens.get("foreign") and real_fp:
         st2 = LicenseManager(license_token=tokens["foreign"], public_key_hex=pub).status()
         check(st2.state == "invalid", f"      异机授权被拒 (实际 {st2.state})")
@@ -336,8 +468,10 @@ def main(argv=None) -> int:
     ap.add_argument("--priv", default="", help="厂商 Ed25519 私钥文件（hex）")
     ap.add_argument("--once", action="store_true", help="只跑一轮后退出（cron 用）")
     ap.add_argument("--interval", type=int, default=60, help="守护模式轮询间隔秒（默认 60）")
-    ap.add_argument("--days", type=int, default=None, help="试用天数（默认 7）")
-    ap.add_argument("--chars", type=int, default=None, help="试用字符额度（默认 25000）")
+    ap.add_argument("--days", type=int, default=None,
+                    help=f"授权天数（默认 {TRIAL_SPEC['days']}；0=无期限）")
+    ap.add_argument("--chars", type=int, default=None,
+                    help=f"免费字符额度（默认 {TRIAL_SPEC['included_chars']}）")
     ap.add_argument("--gift", type=int, default=TRIAL_GIFT_CHARS, help="加客服赠量（默认 10 万）")
     ap.add_argument("--limit", type=int, default=100, help="单轮最多处理条数")
     ap.add_argument("--dry-run", action="store_true", help="只签不回填，用于演练")
@@ -373,9 +507,11 @@ def main(argv=None) -> int:
                          gift=args.gift, limit=args.limit, dry_run=args.dry_run)
         except Exception as e:
             print(f"  ! 本轮失败: {e}", file=sys.stderr)
-            return {"issued": 0, "rejected": 0, "topup": 0, "failed": 1, "backlog_min": 0}
-        if s["issued"] or s["topup"] or s["rejected"] or s["failed"]:
-            print(f"  → 签发 {s['issued']} / 加量 {s['topup']} / 驳回 {s['rejected']} / 失败 {s['failed']}")
+            return {"issued": 0, "rejected": 0, "topup": 0, "upgraded": 0,
+                    "referral": 0, "failed": 1, "backlog_min": 0}
+        if any(s.get(k) for k in ("issued", "topup", "upgraded", "referral", "rejected", "failed")):
+            print(f"  → 签发 {s['issued']} / 加量 {s['topup']} / 升级 {s.get('upgraded', 0)}"
+                  f" / 邀请发奖 {s.get('referral', 0)} / 驳回 {s['rejected']} / 失败 {s['failed']}")
         return s
 
     if args.once:

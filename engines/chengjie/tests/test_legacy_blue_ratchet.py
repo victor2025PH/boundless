@@ -97,6 +97,12 @@ _TAILWIND_CEILINGS = {
     # `_toast(...,'#2563eb')` 接管恢复 toast 的信息蓝——与本台账 crm-widgets.js
     # 「toast 语义调色板 info:[...]」同构判据＝语义留；该线在途（.py 待重启装载），
     # owner 若改用 toast 色板常量可回收本处 +1。
+    # 2026-08-17 15→16（msgops 线按 HEAD diff 归因后代记，owner=acct-dock 线）：
+    # `_toast(window.T('inbox.dock.kbd_hint'),'#2563eb')` 键盘提示 toast 信息蓝——
+    # 与上一条 08-10 接管体检线同构判据（toast info 语义色）＝语义留；owner 在途，
+    # 若改用 toast 色板常量可回收本处 +1。
+    # 2026-08-17 额度批回收 1：预算救济 toast 成功色从 var(--th-bg-blue6,#2563eb)
+    # 改语义绿 #16a34a（toast 色板常量口径），16 → 15。
     "src/web/templates/unified_inbox.html": 15,
     # 10 转 3 留 7 → P2-3（2026-08-02）主 IIFE 外迁 static/messenger/messenger_rpa.js
     # 带走 JS 侧 3 处（在下方 JS 条目续记），模板余 4：KPI 卡色 2 + 选择条 on-indigo 1 +

@@ -302,6 +302,51 @@ def register_reply_settings_routes(
             out["work_schedule"] = None
         return out
 
+    @app.get("/api/reply-settings/budget-today")
+    async def api_reply_settings_budget_today(
+        request: Request, _=Depends(api_auth),
+    ):
+        """回复额度守卫「今日额度状态」列表（只读，P0-guard 2026-08-12）。
+
+        rows 按当日自动链轮次降序（上限 50），逐行带 (platform, account_id,
+        chat_key) 三元组——前端豁免按钮直接投 **收件箱既有** relief 端点
+        （POST /api/unified-inbox/reply-budget/relief），本页不造第二个写入口。
+        exhausted/hard_stopped 语义与收件箱横幅同源（peer_bot_guard.
+        budget_flags）。``guard`` 段＝parse_cfg 全量解析值（高级参数只读展示）。
+        store 缺席（收件箱持久化未启）/旧 store 无列表方法 → available=false
+        + 空表，如实降级不装死。
+        """
+        from src.inbox.peer_bot_guard import budget_flags, parse_cfg, today_key
+        guard = parse_cfg(getattr(config_manager, "config", None) or {})
+        day = today_key()
+        out = {"ok": True, "day": day, "available": False,
+               "guard": guard, "rows": []}
+        try:
+            from src.web.routes.unified_inbox_services import _inbox_store
+            store = _inbox_store(request)
+        except Exception:
+            store = None
+        if store is None or not hasattr(store, "list_reply_budget_today"):
+            return out
+        try:
+            raw = store.list_reply_budget_today(day, limit=50) or []
+        except Exception:
+            logger.debug("读当日预算台账失败（如实降级）", exc_info=True)
+            return out
+        out["available"] = True
+        for r in raw:
+            flags = budget_flags(r.get("used"), r.get("relieved"), guard)
+            out["rows"].append({
+                "conversation_id": str(r.get("conversation_id") or ""),
+                "platform": str(r.get("platform") or ""),
+                "account_id": str(r.get("account_id") or ""),
+                "chat_key": str(r.get("chat_key") or ""),
+                "title": str(r.get("display_name") or r.get("chat_key")
+                             or r.get("conversation_id") or ""),
+                **flags,
+            })
+        return out
+
     @app.post("/api/reply-settings")
     async def api_reply_settings_save(request: Request, _=Depends(api_auth)):
         try:
@@ -400,4 +445,63 @@ def register_reply_settings_routes(
 
         snap = build_snapshot(getattr(config_manager, "config", None) or {})
         snap.update({"applied_live": live, "needs_restart": pending})
+        return _snapshot_extras(snap, request)
+
+    # 一键「改为跟随滑杆」（P0，2026-08-12）：链路自检卡对「独立配置节奏」
+    # （黄档 diverged）与「follow:false 秒回」（红档）的收敛动作——把该链独立键
+    # 写成 {min_sec:0, max_sec:0, follow:true}，经 humanize.resolve_following_delay_block
+    # 单一判定即恢复跟随本页滑杆。语义要点：
+    # - 显式带 follow:true：overlay 与桌面种子是深合并，若存量有 follow:false，
+    #   只写 0/0 会合并成「显式秒回」而不是跟随——三键一起写才是完整语义；
+    # - 这是一次性迁移动作不是旋钮，刻意不进 FIELDS 白名单（进了就变成常驻表单项，
+    #   与「减少旋钮」的页面方针相反）；审计走同一 reply_settings_audit.jsonl；
+    # - 两个键运行时按消息现读 config → 保存后对新消息即时生效，无需重启。
+    _FOLLOW_TARGETS = {
+        "native_tg": "telegram.reply_humanize.thinking_delay",
+        "protocol": "protocol_autoreply.delay",
+    }
+
+    @app.post("/api/reply-settings/follow-slider")
+    async def api_reply_settings_follow_slider(
+        request: Request, _=Depends(api_auth),
+    ):
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        chain = str((body or {}).get("chain") or "").strip()
+        base_path = _FOLLOW_TARGETS.get(chain)
+        if not base_path:
+            return {"ok": False, "errors": [{
+                "field": "chain", "code": "bad_enum",
+                "message": tr(request, "rps_err_bad_value", field="chain")}]}
+
+        cfg = getattr(config_manager, "config", None) or {}
+        node = cfg
+        for part in base_path.split("."):
+            node = node.get(part, {}) if isinstance(node, dict) else {}
+        old_block = dict(node) if isinstance(node, dict) else {}
+
+        flat = {base_path + ".min_sec": 0, base_path + ".max_sec": 0,
+                base_path + ".follow": True}
+        saver = getattr(config_manager, "save_overlay_patch", None)
+        ok = saver(nested_patch(flat)) if callable(saver) else False
+        if not ok:
+            return {"ok": False, "errors": [{
+                "field": "", "code": "save_failed",
+                "message": tr(request, "rps_err_save_failed")}]}
+
+        actor = str((body or {}).get("actor") or "").strip()
+        if not actor:
+            try:
+                actor = str(request.session.get("username") or "web")
+            except Exception:
+                actor = "web"
+        _append_audit(
+            config_manager, actor=actor, changes=flat,
+            old_values={base_path + "." + k: old_block.get(k)
+                        for k in ("min_sec", "max_sec", "follow")})
+
+        snap = build_snapshot(getattr(config_manager, "config", None) or {})
+        snap.update({"applied_live": sorted(flat), "needs_restart": []})
         return _snapshot_extras(snap, request)
