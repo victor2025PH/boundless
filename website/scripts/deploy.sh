@@ -33,8 +33,76 @@ fail() { echo "[deploy ERROR] $*" >&2; }
 
 log "1/7 backup current -> $(basename "$BAK")"
 tar -czf "$BAK" -C "$APP_DIR" --exclude=node_modules --exclude=.next .
-# 仅保留最近 5 份备份
-ls -1t "$PARENT/${NAME}-bak-"*.tar.gz 2>/dev/null | tail -n +6 | xargs -r rm -f
+
+# 备份轮转（替代「仅留最近 5 份」）：
+#   · 始终保留最新 KEEP_BACKUP_RECENT 份（默认 5）——与旧策略同日回滚深度对齐，覆盖当日连打；
+#   · 近 KEEP_BACKUP_DAYS 个日历日各留当日最新 1 份（默认 7）——避免一天打满 N 次后
+#     把前几天的可回滚点全部挤掉（此前运维快照里 5 份备份全是同一天）；
+#   · 总数硬顶 KEEP_BACKUP_MAX（默认 12），超出时优先丢掉更旧的「日报底」。
+prune_backups() {
+  local keep_recent="${KEEP_BACKUP_RECENT:-5}"
+  local keep_days="${KEEP_BACKUP_DAYS:-7}"
+  local max_total="${KEEP_BACKUP_MAX:-12}"
+  local -a files=()
+  local f base day age today_s day_s
+  today_s="$(date +%s)"
+
+  while IFS= read -r f; do
+    [ -n "$f" ] && files+=("$f")
+  done < <(ls -1t "$PARENT/${NAME}-bak-"*.tar.gz 2>/dev/null || true)
+  [ "${#files[@]}" -eq 0 ] && return 0
+
+  declare -A keep=()
+  declare -A day_kept=()
+  local i=0
+  for f in "${files[@]}"; do
+    if [ "$i" -lt "$keep_recent" ]; then keep["$f"]=1; fi
+    i=$((i + 1))
+  done
+
+  for f in "${files[@]}"; do
+    base="$(basename "$f")"
+    # ${NAME}-bak-YYYYMMDD-HHMMSS.tar.gz
+    if [[ "$base" =~ ^${NAME}-bak-([0-9]{8})- ]]; then
+      day="${BASH_REMATCH[1]}"
+    else
+      continue
+    fi
+    day_s="$(date -d "$day" +%s 2>/dev/null || echo "")"
+    [ -n "$day_s" ] || continue
+    age=$(( (today_s - day_s) / 86400 ))
+    if [ "$age" -ge 0 ] && [ "$age" -lt "$keep_days" ] && [ -z "${day_kept[$day]:-}" ]; then
+      day_kept["$day"]=1
+      keep["$f"]=1
+    fi
+  done
+
+  # 硬顶：超出 max_total 时，从最旧文件开始删（但跳过最新 keep_recent，保证快速回滚点）
+  local -a kept_sorted=()
+  for f in "${files[@]}"; do
+    [ -n "${keep[$f]:-}" ] && kept_sorted+=("$f")
+  done
+  if [ "${#kept_sorted[@]}" -gt "$max_total" ]; then
+    local drop=$(( ${#kept_sorted[@]} - max_total ))
+    # kept_sorted 按时间新→旧；从尾部丢掉，但保护前 keep_recent
+    local idx
+    for ((idx=${#kept_sorted[@]}-1; idx>=keep_recent && drop>0; idx--)); do
+      unset "keep[${kept_sorted[$idx]}]"
+      drop=$((drop - 1))
+    done
+  fi
+
+  local removed=0
+  for f in "${files[@]}"; do
+    if [ -z "${keep[$f]:-}" ]; then
+      rm -f "$f"
+      removed=$((removed + 1))
+    fi
+  done
+  local kept=$(( ${#files[@]} - removed ))
+  log "backup prune: kept $kept (recent≤$keep_recent + daily floor ${keep_days}d, max $max_total), removed $removed"
+}
+prune_backups
 
 rollback() {
   fail "deploy failed — rolling back from $(basename "$BAK")"

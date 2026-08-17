@@ -1,0 +1,482 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "platform/licensing 授权/收款 — 主要端点 request/response 契约",
+  "description": "字段契约与 license_client.py / LICENSE_CONTRACT.md 一一对应，依据智控王 license_server.py 只读盘点(validate L423 / activate L454 / heartbeat L512 / quota L1057 / payment/create L1274 / order/status L1552)。所有 response 在服务端不可达或返回 4xx/5xx 时由瘦客户端统一收敛为 {available:false, error:...}(服务端无需返回该形态)。业务层结果看 success 字段：available=true 且 success=false 是正常业务拒绝，不是降级。",
+  "definitions": {
+    "degraded_response": {
+      "type": "object",
+      "description": "任一端点不可达/出错时瘦客户端的统一降级返回（绝不抛异常）",
+      "properties": {
+        "available": {
+          "const": false,
+          "description": "false 表示本次调用没有拿到可用业务应答，调用方按 LICENSE_CONTRACT.md §4 优雅退化"
+        },
+        "error": {
+          "type": "string",
+          "description": "失败摘要（如 'HTTP 500'、超时、连接被拒）"
+        },
+        "detail": {
+          "type": "string",
+          "description": "可选：HTTP 错误响应体前 300 字符（服务端业务拒绝时内含其 {success:false, message} JSON）"
+        }
+      },
+      "required": ["available", "error"]
+    },
+    "validate": {
+      "request": {
+        "type": "object",
+        "description": "POST /api/license/validate — 只验不激活（不绑机、不发 token）",
+        "properties": {
+          "license_key": {
+            "type": "string",
+            "description": "卡密（服务端统一转大写后校验）"
+          }
+        },
+        "required": ["license_key"]
+      },
+      "response": {
+        "type": "object",
+        "description": "成功应答（卡密无效时 success=false 且可能无 data，HTTP 仍为 200）",
+        "properties": {
+          "available": {
+            "const": true,
+            "description": "由瘦客户端 setdefault 填入，表示 HTTP 面可达"
+          },
+          "success": {
+            "type": "boolean",
+            "description": "卡密是否有效可用"
+          },
+          "message": {
+            "type": "string",
+            "description": "人类可读结果说明"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "level": {
+                "type": "string",
+                "description": "会员等级键：bronze/silver/gold/diamond/star/king"
+              },
+              "levelName": {
+                "type": "string",
+                "description": "等级展示名（如 黃金大師）"
+              },
+              "levelIcon": {
+                "type": "string",
+                "description": "等级图标 emoji"
+              },
+              "durationDays": {
+                "type": "integer",
+                "description": "卡密时长（天），终身卡为 36500"
+              },
+              "durationType": {
+                "type": "string",
+                "description": "时长类型：week/month/quarter/year/lifetime"
+              },
+              "status": {
+                "type": "string",
+                "description": "卡密状态（如 unused/used/disabled）"
+              }
+            }
+          }
+        },
+        "required": ["success"]
+      }
+    },
+    "activate": {
+      "request": {
+        "type": "object",
+        "description": "POST /api/license/activate — 激活卡密并绑定机器，签发 JWT；用户不存在则按 machine_id 自动建档",
+        "properties": {
+          "license_key": {
+            "type": "string",
+            "description": "卡密"
+          },
+          "machine_id": {
+            "type": "string",
+            "description": "机器指纹（用户身份与设备绑定的主键）"
+          },
+          "device_id": {
+            "type": "string",
+            "description": "可选：设备 ID（同一 machine 下细分设备）"
+          },
+          "email": {
+            "type": "string",
+            "description": "可选：邮箱（首次建档时落库）"
+          },
+          "invite_code": {
+            "type": "string",
+            "description": "可选：邀请码（激活即挂邀请关系，影响后续返傭）"
+          }
+        },
+        "required": ["license_key", "machine_id"]
+      },
+      "response": {
+        "type": "object",
+        "description": "成功应答（激活失败时 success=false，HTTP 200）",
+        "properties": {
+          "available": {
+            "const": true,
+            "description": "由瘦客户端 setdefault 填入"
+          },
+          "success": {
+            "type": "boolean",
+            "description": "激活是否成功"
+          },
+          "message": {
+            "type": "string",
+            "description": "结果说明"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "token": {
+                "type": "string",
+                "description": "JWT（HS256）——后续 heartbeat/quota/sync_usage 的凭证"
+              },
+              "userId": {
+                "type": "string",
+                "description": "服务端用户 ID"
+              },
+              "level": {
+                "type": "string",
+                "description": "激活后的会员等级键"
+              },
+              "levelName": {
+                "type": "string",
+                "description": "等级展示名"
+              },
+              "levelIcon": {
+                "type": "string",
+                "description": "等级图标 emoji"
+              },
+              "expiresAt": {
+                "type": ["string", "null"],
+                "description": "会员到期时间（ISO 8601）"
+              },
+              "quotas": {
+                "type": "object",
+                "description": "该等级配额表（tg_accounts/daily_messages/ai_calls/devices/groups/...，-1 表示无限）"
+              },
+              "features": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "该等级解锁的功能位列表"
+              }
+            }
+          }
+        },
+        "required": ["success"]
+      }
+    },
+    "heartbeat": {
+      "request": {
+        "type": "object",
+        "description": "POST /api/license/heartbeat — 心跳续签。token 与 machine_id 至少给一个（token 优先，其内含 user/machine）",
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "可选：现持 JWT；无效/过期返回 401（瘦客户端降级为 available=false）"
+          },
+          "machine_id": {
+            "type": "string",
+            "description": "可选：无 token 时按机器指纹定位用户"
+          },
+          "usage": {
+            "type": "object",
+            "description": "可选：本次心跳附带的用量快照，服务端原样存入 heartbeats 表"
+          }
+        }
+      },
+      "response": {
+        "type": "object",
+        "description": "成功应答；会员已过期时 success=false 且 data.isExpired=true（HTTP 200，非降级）",
+        "properties": {
+          "available": {
+            "const": true,
+            "description": "由瘦客户端 setdefault 填入"
+          },
+          "success": {
+            "type": "boolean",
+            "description": "true=心跳成功且会员未过期"
+          },
+          "message": {
+            "type": "string",
+            "description": "结果说明（心跳成功 / 會員已過期）"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "token": {
+                "type": "string",
+                "description": "续签后的新 JWT（每次心跳轮换）"
+              },
+              "userId": {
+                "type": "string",
+                "description": "用户 ID"
+              },
+              "level": {
+                "type": "string",
+                "description": "当前会员等级键（无会员时 bronze）"
+              },
+              "levelName": {
+                "type": "string",
+                "description": "等级展示名"
+              },
+              "levelIcon": {
+                "type": "string",
+                "description": "等级图标 emoji"
+              },
+              "expiresAt": {
+                "type": ["string", "null"],
+                "description": "会员到期时间（ISO 8601），null=未开通/终身另见 is_lifetime"
+              },
+              "isExpired": {
+                "type": "boolean",
+                "description": "会员是否已过期——过期时调用方应锁付费能力并引导续费"
+              },
+              "quotas": {
+                "type": "object",
+                "description": "当前等级配额表"
+              },
+              "features": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "当前等级功能位"
+              }
+            }
+          }
+        },
+        "required": ["success"]
+      }
+    },
+    "quota": {
+      "request": {
+        "type": "object",
+        "description": "GET /api/user/quota — 无 body；凭 Authorization: Bearer {token} 头（缺失/无效返回 401 → 瘦客户端降级）",
+        "properties": {}
+      },
+      "response": {
+        "type": "object",
+        "description": "成功应答",
+        "properties": {
+          "available": {
+            "const": true,
+            "description": "由瘦客户端 setdefault 填入"
+          },
+          "success": {
+            "type": "boolean",
+            "description": "查询是否成功"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "level": {
+                "type": "string",
+                "description": "会员等级键"
+              },
+              "quotas": {
+                "type": "object",
+                "description": "等级配额上限表（daily_messages/ai_calls/tg_accounts/...，-1 表示无限）"
+              },
+              "usage": {
+                "type": "object",
+                "description": "今日已用量",
+                "properties": {
+                  "messagesSent": {
+                    "type": "integer",
+                    "description": "今日已发消息数"
+                  },
+                  "aiCallsUsed": {
+                    "type": "integer",
+                    "description": "今日已用 AI 调用数"
+                  },
+                  "tgAccountsUsed": {
+                    "type": "integer",
+                    "description": "已占用 TG 账号数"
+                  }
+                }
+              },
+              "remaining": {
+                "type": "object",
+                "description": "今日剩余额度（-1 表示无限）",
+                "properties": {
+                  "dailyMessages": {
+                    "type": "integer",
+                    "description": "剩余可发消息数"
+                  },
+                  "aiCalls": {
+                    "type": "integer",
+                    "description": "剩余 AI 调用数"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required": ["success"]
+      }
+    },
+    "create_payment": {
+      "request": {
+        "type": "object",
+        "description": "POST /api/payment/create — 下单。⚠ 服务端 orders/coupons 表 schema 漂移未修复前（LICENSE_CONTRACT.md §6①），本端点（尤其带 coupon_code）可能 500",
+        "properties": {
+          "product_id": {
+            "type": "string",
+            "description": "服务端产品 ID，格式 {level}_{duration}（如 gold_month）；与 boundless sku_id 的映射见 LICENSE_CONTRACT.md §5"
+          },
+          "payment_method": {
+            "type": "string",
+            "description": "支付方式，当前主通道 usdt（TRC20）；服务端缺省也是 usdt",
+            "default": "usdt"
+          },
+          "machine_id": {
+            "type": "string",
+            "description": "可选：机器指纹（与 user_id 至少给一个，用于把订单挂到用户）"
+          },
+          "user_id": {
+            "type": "string",
+            "description": "可选：服务端用户 ID（优先于 machine_id）"
+          },
+          "coupon_code": {
+            "type": "string",
+            "description": "可选：优惠券码（服务端统一转大写；percent 按比例折价，否则按面额直减）"
+          }
+        },
+        "required": ["product_id", "payment_method"]
+      },
+      "response": {
+        "type": "object",
+        "description": "成功应答",
+        "properties": {
+          "available": {
+            "const": true,
+            "description": "由瘦客户端 setdefault 填入"
+          },
+          "success": {
+            "type": "boolean",
+            "description": "下单是否成功"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "orderId": {
+                "type": "string",
+                "description": "订单号（TGO+时间戳+随机 hex），也是 USDT 转账备注 memo"
+              },
+              "product": {
+                "type": "object",
+                "description": "回显产品信息：id/level/levelName/levelIcon/duration/durationDays/originalPrice/price"
+              },
+              "discount": {
+                "type": "number",
+                "description": "优惠券折减金额（无券为 0）"
+              },
+              "amount": {
+                "type": "number",
+                "description": "应付金额（折后，currency 计价）"
+              },
+              "currency": {
+                "type": "string",
+                "description": "计价币种，当前固定 CNY（USDT 金额见 usdt 字段）"
+              },
+              "status": {
+                "type": "string",
+                "description": "订单初始状态，固定 pending"
+              },
+              "expiresIn": {
+                "type": "integer",
+                "description": "订单有效期（秒），当前 1800（30 分钟）"
+              },
+              "usdt": {
+                "type": "object",
+                "description": "payment_method=usdt 时才有：转账指引",
+                "properties": {
+                  "amount": {
+                    "type": "number",
+                    "description": "应转 USDT 数量（按服务端设置的 usdt_rate 折算，保留 2 位）"
+                  },
+                  "network": {
+                    "type": "string",
+                    "description": "链路，固定 TRC20"
+                  },
+                  "address": {
+                    "type": "string",
+                    "description": "收款 USDT 地址（服务端设置项 usdt_trc20_address）"
+                  },
+                  "rate": {
+                    "type": "number",
+                    "description": "CNY/USDT 汇率（服务端设置项 usdt_rate）"
+                  },
+                  "memo": {
+                    "type": "string",
+                    "description": "转账备注=orderId，用于对账识别"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required": ["success"]
+      }
+    },
+    "order_status": {
+      "request": {
+        "type": "object",
+        "description": "GET /api/order/status?order_id= — 查询串参数，无 body、无认证",
+        "properties": {
+          "order_id": {
+            "type": "string",
+            "description": "下单返回的 orderId"
+          }
+        },
+        "required": ["order_id"]
+      },
+      "response": {
+        "type": "object",
+        "description": "成功应答（订单不存在返回 404 → 瘦客户端降级为 available=false）",
+        "properties": {
+          "available": {
+            "const": true,
+            "description": "由瘦客户端 setdefault 填入"
+          },
+          "success": {
+            "type": "boolean",
+            "description": "查询是否成功"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "orderId": {
+                "type": "string",
+                "description": "订单号"
+              },
+              "status": {
+                "type": "string",
+                "description": "订单状态：pending（待支付）/ paid（已支付，回调已处理）"
+              },
+              "productName": {
+                "type": "string",
+                "description": "产品展示名（等级名+时长名，如 黃金大師月卡）"
+              },
+              "amount": {
+                "type": "number",
+                "description": "订单应付金额（final_price）"
+              },
+              "paidAt": {
+                "type": ["string", "null"],
+                "description": "支付时间；未支付为 null"
+              },
+              "licenseKey": {
+                "type": ["string", "null"],
+                "description": "支付回调成功后服务端生成并回填的卡密（TGAI-PAY-*）；未支付为 null"
+              }
+            }
+          }
+        },
+        "required": ["success"]
+      }
+    }
+  }
+}

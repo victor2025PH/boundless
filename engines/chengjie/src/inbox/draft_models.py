@@ -73,6 +73,8 @@ class UnifiedDraft:
     risk_reasons: List[str] = field(default_factory=list)
     autopilot_level: str = ""
     translated_preview: str = ""
+    # 来源痕迹（P6：人设试聊草稿 trace_id=ptest:<persona_id>，工作台据此打来源徽标）
+    trace_id: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -95,6 +97,7 @@ class UnifiedDraft:
             "risk_reasons": list(self.risk_reasons),
             "autopilot_level": self.autopilot_level,
             "translated_preview": self.translated_preview,
+            "trace_id": self.trace_id,
         }
 
 

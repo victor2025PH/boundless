@@ -567,6 +567,26 @@ async function downloadWaMedia(entry, msg) {
   }
 }
 
+/** LID→PN 解析（Baileys 7）。优先用 key 上的 *Alt(PN) 字段(消息自带、零成本)；缺失时(对端
+ *  隐藏号码)退到 signalRepository 的 LID 映射存储 getPNForLID(命中持久映射/缓存即得真实号)。
+ *  返回裸号码字符串或 null(调用方回落 LID 本地部分)。全程 best-effort、绝不抛——LID 解析失败
+ *  最多让会话键回落到 LID，绝不能拖垮消息入站主路径。仅对 @lid 且无 *Alt 才查 store，
+ *  故常见(号码可见)场景零额外开销。 */
+async function lidToPnLocal(entry, lidJid, altJid) {
+  const alt = String(altJid || "");
+  if (alt.endsWith("@s.whatsapp.net")) return alt.split("@")[0];
+  try {
+    const store = entry?.sock?.signalRepository?.lidMapping;
+    if (store && typeof store.getPNForLID === "function" && lidJid) {
+      const pn = await store.getPNForLID(lidJid);
+      if (pn && String(pn).endsWith("@s.whatsapp.net")) return String(pn).split("@")[0];
+    }
+  } catch (e) {
+    logger.debug({ e, lidJid }, "getPNForLID fallback failed");
+  }
+  return null;
+}
+
 /** 把一条 Baileys 入站消息 push 到 Python（skipEmpty=true 时跳过无文本无媒体，用于历史回填降噪）。 */
 async function pushWaMessage(entry, msg, skipEmpty) {
   if (!msg || !msg.message) return false;
@@ -574,7 +594,10 @@ async function pushWaMessage(entry, msg, skipEmpty) {
   if (!jid) return false;
   const isGroup = jid.endsWith("@g.us");
   if (isGroup && !WA_SYNC_GROUPS) return false; // 群聊接入关闭 → 回到只私聊
-  if (!isGroup && !jid.endsWith("@s.whatsapp.net")) return false; // 广播/状态等跳过
+  // Baileys 7.x LID：私聊 remoteJid 可能是 @lid（WhatsApp 隐藏号标识）或 @s.whatsapp.net，两者都收；
+  // 旧代码只认 @s.whatsapp.net → @lid 私聊被整条丢弃（正是升级前「连着却收不到消息」的病根）。
+  // 仍跳过广播/状态（@broadcast、status@broadcast 等）。
+  if (!isGroup && !jid.endsWith("@s.whatsapp.net") && !jid.endsWith("@lid")) return false;
   // fromMe：手机端/其他关联设备自己发的消息 → 镜像为出站，使会话线程两头一致。
   // 与 Python 编排器发送后的出站回写用同一 wamid 去重（INSERT OR IGNORE），不会重复。
   const fromMe = !!(msg.key && msg.key.fromMe);
@@ -583,7 +606,14 @@ async function pushWaMessage(entry, msg, skipEmpty) {
   const replyTo = extractReplyTo(msg);
   if (skipEmpty && !text && !media.media_ref) return false;
   const ts = Number(msg.messageTimestamp || 0) || Math.floor(Date.now() / 1000);
-  const chatKey = jid.split("@")[0];
+  // LID→PN（Baileys 7）：私聊若 remoteJid 是 @lid（隐藏号标识），会话 chat_key 优先解析成真实号码，
+  // 保持会话身份稳定、能与通讯录/号码补名对上，且避免「同一人有时按号码有时按 LID 建两条会话」的分裂。
+  // 解析顺序：key.remoteJidAlt(自带 PN) → signalRepository LID 映射存储 → 回落 lid 本地部分。
+  let chatKey = jid.split("@")[0];
+  if (!isGroup && jid.endsWith("@lid")) {
+    const pnLocal = await lidToPnLocal(entry, jid, msg.key && msg.key.remoteJidAlt);
+    if (pnLocal) chatKey = pnLocal;
+  }
   // 缓存该会话「最近一条对端入站消息 key」——供 /read 已读回执用（readMessages 需完整
   // key：remoteJid + id + 群 participant）。仅缓存对端消息（fromMe 是自己发的，无需已读）。
   if (!fromMe && msg.key && msg.key.id) {
@@ -603,7 +633,18 @@ async function pushWaMessage(entry, msg, skipEmpty) {
     // 群会话名=群主题
     name = (await groupName(entry, jid)) || chatKey;
     if (!fromMe) {
-      senderId = String((msg.key && msg.key.participant) || "");
+      // Baileys 7：群内 participant 可能是 @lid；优先解析真实号码(participantAlt 自带 → LID 映射存储)，
+      // 使发言人 id 稳定、能与通讯录对上（都取不到才回落 participant 本身）。
+      const part = String((msg.key && msg.key.participant) || "");
+      const partAlt = String((msg.key && msg.key.participantAlt) || "");
+      if (partAlt.endsWith("@s.whatsapp.net")) {
+        senderId = partAlt;
+      } else if (part.endsWith("@lid")) {
+        const pnLocal = await lidToPnLocal(entry, part, partAlt);
+        senderId = pnLocal ? `${pnLocal}@s.whatsapp.net` : part;
+      } else {
+        senderId = part;
+      }
       senderName = String(msg.pushName || "") ||
         (senderId.split("@")[0] || "");
     }
@@ -651,14 +692,18 @@ async function buildAgent(proxyUrl) {
 async function startLogin(loginId, proxyUrl) {
   const authDir = path.join(SESSIONS_DIR, loginId);
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
-  const { version } = await fetchLatestBaileysVersion();
+  const { version, isLatest } = await fetchLatestBaileysVersion();
+  logger.info({ loginId, waWebVersion: (version || []).join("."), isLatest },
+    "WA socket negotiated WhatsApp Web version");
   const agent = await buildAgent(proxyUrl);
 
   const sock = makeWASocket({
     version,
     auth: state,
     printQRInTerminal: false,
-    logger: pino({ level: "silent" }),
+    // 诊断：socket 内部日志默认 silent（生产降噪）；排查掉线时用 WA_SOCK_LOG_LEVEL=debug 起服务，
+    // 即可看到 Baileys 的 stream:error / connection close 的真实原因码（401/428/440/515…）。
+    logger: pino({ level: process.env.WA_SOCK_LOG_LEVEL || "silent" }),
     agent,
     fetchAgent: agent,
     // P0：首连拉全量历史（会话列表 + 更深历史），配合 messaging-history.set 落库
@@ -819,6 +864,14 @@ async function startLogin(loginId, proxyUrl) {
           lastDisconnect.error.output &&
           lastDisconnect.error.output.statusCode) ||
         0;
+      // 诊断：始终记录掉线真实原因码 + 报文（此前只在少数分支记 → 卡在连接/被踢线时看不到根因）。
+      // 常见码：401 loggedOut(设备解绑) / 403 forbidden(风控封) / 428 connectionClosed /
+      //         440 connectionReplaced(同号另一处登录挤掉) / 515 restartRequired / 408 timedOut。
+      const _reason = String(
+        (lastDisconnect && lastDisconnect.error && (lastDisconnect.error.message || lastDisconnect.error)) || "");
+      logger.warn(
+        { loginId, accountId: entry.accountId || "", code, status: entry.status, reason: _reason },
+        "WA connection closed");
       if (code === DisconnectReason.restartRequired) {
         // 登录成功后 Baileys 要求重启 socket —— 重新拉起以维持连接（沿用同一代理）
         startLogin(loginId, entry.proxyUrl).catch((e) =>

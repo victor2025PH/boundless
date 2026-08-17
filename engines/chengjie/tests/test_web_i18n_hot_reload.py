@@ -16,12 +16,19 @@ import src.web.web_i18n as W
 
 @pytest.fixture(autouse=True)
 def _preserve_i18n_state():
-    """保存/恢复模块级状态，防测试替换的 mini 字典污染全局。"""
+    """保存/恢复模块级状态，防测试替换的 mini 字典污染全局。
+
+    P4 起模块还持有合并视图 ``_MERGED`` 与 pack 基线 ``_packs_loaded_mtime``——
+    热重载会用 mini 字典重建 _MERGED,若不一并恢复,后续测试文件读到的
+    get_translations() 就是被污染的 mini 视图(全量跑大面积假红)。
+    """
     saved = (W._TRANSLATIONS, W._SRC_PATH, W._loaded_mtime,
-             W._next_check_ts, W._last_err_mtime)
+             W._next_check_ts, W._last_err_mtime,
+             W._MERGED, W._packs_loaded_mtime)
     yield
     (W._TRANSLATIONS, W._SRC_PATH, W._loaded_mtime,
-     W._next_check_ts, W._last_err_mtime) = saved
+     W._next_check_ts, W._last_err_mtime,
+     W._MERGED, W._packs_loaded_mtime) = saved
 
 
 def _mini_src(zh_greet: str) -> str:

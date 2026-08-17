@@ -10,6 +10,7 @@ API 端点（register_drafts_routes — main.py 调用）：
   POST /api/drafts/{draft_id}/resolve       — 带 L4 拦截 + 审计的统一处置（B2）
   POST /api/drafts/{draft_id}/force-override — 主管强制放行 L4 草稿（B2）
   POST /api/drafts/bulk-autosend            — 批量触发所有 L2 草稿自动发送（B2）
+  POST /api/drafts/persona-test             — 人设试聊回复存入人工审批队列（绝不自动发送）
 
 页面路由（register_drafts_page_routes — admin.py 调用）：
   GET  /workspace/drafts         — 草稿审批工作台（坐席/主管均可，L4 需主管放行）
@@ -522,6 +523,132 @@ def register_drafts_routes(app, *, api_auth):
             "succeeded": succeeded,
             "failed": failed,
             "errors": errors[:10],
+        }
+
+    @app.post("/api/drafts/persona-test")
+    async def api_drafts_persona_test(request: Request, _=Depends(api_auth)):
+        """人设试聊 → 存草稿：把试聊抽屉（/api/chat/test 预览）里满意的回复
+        写进**既有草稿审批队列**，由坐席在 /workspace/drafts 人工审核后经既有链路发送。
+
+        Body: {conversation_id: str, text: str, persona_id?: str, peer_text?: str}
+        本端点只落库，绝不新建发送路径、绝不自动发送。
+        风险评估与 DraftService.auto_generate_draft 同一条路径（quick_analyze +
+        keyword_risk_level 取 max，再 risk_to_autopilot），保证同一风控口径。
+        """
+        svc = _get_draft_service(request)  # draft_service 未挂载 → 503
+        store = getattr(request.app.state, "inbox_store", None)
+        if store is None:
+            store = getattr(svc, "_store", None)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(400, tr(request, "err.req.bad_body"))
+        conversation_id = str(body.get("conversation_id") or "").strip()
+        text = str(body.get("text") or "").strip()
+        persona_id = str(body.get("persona_id") or "").strip()
+        peer_text = str(body.get("peer_text") or "")
+        if not conversation_id:
+            raise HTTPException(400, tr(request, "err.ws.field_required", field="conversation_id"))
+        if not text:
+            raise HTTPException(400, tr(request, "err.ws.field_required", field="text"))
+        if len(text) > 2000:
+            raise HTTPException(400, tr(request, "err.rpa.message_too_long"))
+
+        # 会话存在性以 conversations 主表为准（get_conversation：单条 SELECT *，
+        # 与批量版 get_conversations_for_ids 同表同列，单 id 场景更直接）。
+        # 绝不能拿 conversation_meta（get_conv_meta）当 404 依据：那是 I1 智能分析
+        # 元数据表，只有分析管线跑过的会话才有行，普通刚 ingest/upsert 的有效会话
+        # 查它返回 None，会被误判成 404；且它也没有 account_id/chat_key/display_name。
+        try:
+            conv = store.get_conversation(conversation_id)
+        except Exception:
+            conv = None
+        if conv is None:
+            raise HTTPException(
+                404,
+                tr(request, "err.draft.ptest_conv_not_found",
+                   "会话不存在，请先在统一收件箱确认"),
+            )
+
+        try:
+            import uuid as _uuid
+            from src.ai.chat_assistant_service import quick_analyze
+            from src.inbox.drafts import _max_risk, keyword_risk_level, risk_to_autopilot
+
+            # 风险评估：与 auto_generate_draft 完全同一条路径（规则层，<1ms 无 LLM）
+            analysis = quick_analyze(text)
+            risk_level = _max_risk(
+                analysis.get("risk_level", "low"),
+                keyword_risk_level(text),
+            )
+            # automation_mode 硬编码 "review"：人设试聊草稿永远走人工审批，
+            # 绝不能落进 L2 自动投递批次（review 模式只产 L1/L3/L4）。
+            autopilot = risk_to_autopilot(risk_level, "review")
+
+            draft: dict = {
+                "source_kind": "inbox",
+                # 独立幂等键：绝不用裸 conv_id 作 source_id——那是 auto_generate_draft
+                # 的每会话幂等键（uq_drafts_source 冲突合并），复用会与自动草稿互相覆盖。
+                "source_id": "ptest_" + _uuid.uuid4().hex,
+                "conversation_id": conversation_id,
+                "platform": str(conv.get("platform") or ""),
+                "account_id": str(conv.get("account_id") or "default"),
+                "chat_key": str(conv.get("chat_key") or ""),
+                "chat_name": str(conv.get("display_name") or ""),
+                "peer_text": peer_text,
+                "draft_text": text,
+                "draft_lang": analysis.get("language", "zh"),
+                "risk_level": risk_level,
+                "risk_reasons": analysis.get("risk_reasons") or [],
+                "autopilot_level": autopilot,
+                "status": "pending",
+            }
+            if persona_id:
+                # trace_id 为 reply_drafts 既有字段，此处用作来源标记
+                # （表内无专门 origin 列；S3 全链路查询也能按它检索到试聊草稿）
+                draft["trace_id"] = f"ptest:{persona_id}"
+            else:
+                # 可选增强：无 persona_id 时照 auto_generate_draft 的 S3 写法继承
+                # 会话 trace_id。conv_meta 只有分析管线跑过的会话才有行，
+                # 故仅 best-effort 取值，绝不作为会话存在性/404 依据。
+                try:
+                    _cm = store.get_conv_meta(conversation_id) or {}
+                    _tid = str(_cm.get("trace_id") or "")
+                    if _tid:
+                        draft["trace_id"] = _tid
+                except Exception:
+                    pass
+            draft_id = store.upsert_draft(draft)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.debug("persona-test 存草稿失败: %s", e, exc_info=True)
+            raise HTTPException(500, tr(request, "err.rpa.op_failed",
+                                        op="persona_test_draft", err=e))
+
+        # 审计（best-effort，照本文件 kb-archive 端点的写法直写 record_draft_audit）
+        try:
+            store.record_draft_audit(
+                draft_id,
+                autopilot_level=autopilot,
+                action="persona_test_draft",
+                agent_id=_session_agent_id(request) or "persona_test",
+                reason=(f"persona_id={persona_id}" if persona_id else "persona_test"),
+                risk_level=risk_level,
+                conversation_id=conversation_id,
+            )
+        except Exception:
+            pass
+
+        return {
+            "ok": True,
+            "draft_id": draft_id,
+            "risk_level": risk_level,
+            "autopilot_level": autopilot,
+            "review_url": "/workspace/drafts",
         }
 
     @app.get("/api/drafts/{draft_id}")

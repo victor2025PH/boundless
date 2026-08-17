@@ -1408,14 +1408,12 @@ html.fx-warp .star-wrap {
   height: 0;
   overflow: hidden;
 }
-/* 波浪形状层：底色 + 描边 + 流光 + 玻璃光都在这里，一起被湍流置换成有机波浪；
- * 双尺度形变 = feTurbulence 细波纹（随音乐加深）× blob 圆角低频大形变（纯 CSS 缓慢蠕变） */
+/* 形状层：底色 + 描边 + 流光 + 玻璃光（标准胶囊；湍流波浪已下线） */
 .bl-enter-btn .siri-shape {
   position: absolute;
   inset: 0;
   z-index: -1;
   pointer-events: none;
-  filter: url(#bl-btn-wave);
 }
 .bl-enter-btn .siri-blob {
   position: absolute;
@@ -1423,12 +1421,10 @@ html.fx-warp .star-wrap {
   /* 0.74：WebKit 对滤镜层的合成比 Chromium 淡一档（实测截图），提高底色保双引擎文字对比度 */
   background: rgba(7, 10, 24, 0.74);
   border: 1px solid rgba(148, 210, 255, 0.32);
-  border-radius: 52% 48% 44% 56% / 58% 44% 56% 42%;
+  border-radius: 9999px;
   box-shadow: 0 0 24px rgba(34, 211, 238, 0.15), inset 0 0 18px rgba(34, 211, 238, 0.06);
   transition: background 0.35s ease, box-shadow 0.35s ease, border-color 0.35s ease;
-  animation:
-    bl-blob-morph 11s ease-in-out infinite,
-    bl-breathe 3.2s ease-in-out 4.6s infinite;
+  animation: bl-breathe 3.2s ease-in-out 4.6s infinite;
 }
 /* blob 低频形变：四角圆角在三组有机比例间缓慢游走（blob/ring/glass 同参同相 → 轮廓同步） */
 @keyframes bl-blob-morph {
@@ -1502,7 +1498,7 @@ html.fx-warp .star-wrap {
 .bl-enter-btn .siri-ring {
   position: absolute;
   inset: -2px;
-  border-radius: 52% 48% 44% 56% / 58% 44% 56% 42%;
+  border-radius: 9999px;
   padding: 2.5px;
   -webkit-mask:
     linear-gradient(#fff 0 0) content-box,
@@ -1511,7 +1507,6 @@ html.fx-warp .star-wrap {
   mask-composite: exclude;
   overflow: hidden;
   pointer-events: none;
-  animation: bl-blob-morph 11s ease-in-out infinite;
 }
 .bl-enter-btn .siri-ring .flow {
   position: absolute;
@@ -1543,13 +1538,12 @@ html.fx-warp .star-wrap {
 .bl-enter-btn .siri-glass {
   position: absolute;
   inset: 0;
-  border-radius: 52% 48% 44% 56% / 58% 44% 56% 42%;
+  border-radius: 9999px;
   overflow: hidden;
   pointer-events: none;
   background:
     radial-gradient(130px 90px at var(--mx) var(--my), rgba(186, 230, 253, 0.24), transparent 62%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02) 42%, transparent 60%);
-  animation: bl-blob-morph 11s ease-in-out infinite;
 }
 
 /* 交互升档：hover 光效提速，按压（充能）全部光效冲到最亮最快 */
@@ -1571,7 +1565,7 @@ html.fx-warp .star-wrap {
 .bl-enter-btn[data-charging="1"] .siri-ring .flow {
   animation-duration: 1.4s;
 }
-/* 能量扩散环:两圈从按钮轮廓向外荡开 */
+/* 能量扩散环:两圈从按钮轮廓向外荡开（标准胶囊） */
 .bl-enter-btn .ring {
   position: absolute;
   inset: 0;

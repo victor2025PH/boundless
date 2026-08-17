@@ -77,11 +77,11 @@ try {
     if (!ignored(text)) consoleErrors.push(`pageerror: ${text}`);
   });
 
-  // 钉死实验桶保证确定性：auto_enter=a 防自动进入抢时序；btn_shape=a 保证波浪层可见（DOM 结构检查基准）
+  // 钉死实验桶保证确定性：auto_enter=a 防自动进入抢时序；btn_shape=b 与现行胶囊定稿一致
   await page.addInitScript(() => {
     try {
       localStorage.setItem('ab_intro_auto_enter', 'a');
-      localStorage.setItem('ab_intro_btn_shape', 'a');
+      localStorage.setItem('ab_intro_btn_shape', 'b');
     } catch {}
   });
 
@@ -114,7 +114,7 @@ try {
 
   // ---------- 检查 1：DOM 结构 ----------
   {
-    // siri-shape/siri-blob/bl-wave-defs：波浪形变层（湍流滤镜 + blob 底面）
+    // Siri 胶囊光效层（波浪湍流滤镜已下线）
     const required = [
       '.siri-halo',
       '.siri-shape',
@@ -122,7 +122,6 @@ try {
       '.siri-ring',
       '.siri-ring .flow',
       '.siri-glass',
-      '.bl-wave-defs filter feDisplacementMap',
       '.label',
       '.arrow',
     ];

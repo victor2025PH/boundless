@@ -73,7 +73,10 @@ deploy/instances/
 ├─ start_zhiliao.ps1          ← 智聊实例启动（防呆：config 缺失即报错，绝不自动建/覆盖）
 ├─ start_tongyi.ps1           ← 通译实例启动（同上）
 ├─ stop_instance.ps1          ← 按实例停止（防呆：验明端口持有者是引擎 main.py 才杀进程树）
-├─ status_instances.ps1       ← 双实例健康探测（端口 + HTTP + 数据目录体检）
+├─ status_instances.ps1       ← 双实例健康探测（端口 + HTTP + 数据目录体检；数据根自动探测见脚本头注）
+├─ watchdog_instances.ps1     ← 双实例探活自愈（实施29；DOWN 即拉起/假活三轮强制重启/外占只告警；
+│                                装成 \Boundless\Boundless-chengjie-watchdog 每 5 分钟，S4U 账户 session 0，
+│                                开机与宕机 ≤1 节拍自恢复，经 /api/ops/alert 告警）
 ├─ verify_instance.ps1        ← 生产验收一键校验（只读；HTTP/品牌/health/数据根/授权；-Json/-WhatIf）
 ├─ migrate_117.ps1            ← .117 生产迁移编排骨架（缺省 -DryRun；破坏性动作不入脚本，见 §11）
 ├─ migrate_117_runbook.md     ← .117 生产迁移作战手册（分阶段时序 + 回滚点 + 应急速查，见 §11）
@@ -94,7 +97,9 @@ deploy/instances/
 
 > 数据根也可以放仓库外（如 `D:\chengjie-instances\zhiliao`）：启动脚本传
 > `-DataDir <数据根>` 即可（缺省仍是本目录 `<实例>\data`，向后兼容）；
-> `status_instances.ps1` 相应传 `-ZhiliaoData` / `-TongyiData`。初始化步骤不变，
+> `status_instances.ps1` / `watchdog_instances.ps1` 无参即可——实施29 起自动探测数据根
+> （参数 > 运行中进程的 AITR_DATA_DIR > 生产缺省 `D:\chengjie-instances\<实例>\data` >
+> 仓库缺省），`-ZhiliaoData` / `-TongyiData` 仅在探测不适用时显式指定。初始化步骤不变，
 > 只是把 §3 里的 `$data` 换成目标目录。
 
 ## 3. 初始化
@@ -168,7 +173,8 @@ powershell -ExecutionPolicy Bypass -File D:\workspace\boundless\deploy\instances
 | 预检 | `powershell -ExecutionPolicy Bypass -File deploy\instances\preflight_instance.ps1 [-DataDir <数据根>] [-Ports 18899,18887]`（退出码 0=可拉起 1=有 FAIL） |
 | 启动智聊 | `powershell -ExecutionPolicy Bypass -File deploy\instances\start_zhiliao.ps1 [-DataDir <数据根>]` |
 | 启动通译 | `powershell -ExecutionPolicy Bypass -File deploy\instances\start_tongyi.ps1 [-DataDir <数据根>]` |
-| 健康检查 | `powershell -ExecutionPolicy Bypass -File deploy\instances\status_instances.ps1`（`-Json` 供监控；退出码 0=全 GO 1=部分 2=全 DOWN；数据根不在缺省位置加 `-ZhiliaoData`/`-TongyiData`） |
+| 健康检查 | `powershell -ExecutionPolicy Bypass -File deploy\instances\status_instances.ps1`（`-Json` 供监控；退出码 0=全 GO 1=部分 2=全 DOWN；数据根自动探测：参数>进程>生产缺省>仓库缺省，异形部署才需 `-ZhiliaoData`/`-TongyiData`） |
+| 探活自愈 | `powershell -ExecutionPolicy Bypass -File deploy\instances\watchdog_instances.ps1 [-NoSelfHeal]`（生产由计划任务 `\Boundless\Boundless-chengjie-watchdog` 每 5 分钟跑；DOWN 即幂等拉起、假活连续 3 轮才 stop+start、端口被外占只告警绝不清杀；动作/失败经 `/api/ops/alert` 告警） |
 | 停止 | `powershell -ExecutionPolicy Bypass -File deploy\instances\stop_instance.ps1 -Instance tongyi`（或 `zhiliao`；防呆=只停「持有实例端口且命令行含 main.py」的进程树，幂等）。也可走 `deploy\deploy.ps1 -Action down -Only chengjie_zhiliao -Force`（stack.json 已登记，条目默认 enabled=false，需 `-Only` 显式点名） |
 
 启动脚本防呆行为（两个 start 脚本一致）：

@@ -270,7 +270,7 @@ _LEGACY_DATE_MARKERS = (
 # 选三个仅出现在导航、且简洁/完整模式都在的标签做断言（避开 ai_studio/whatsapp 等仅完整模式项）。
 _CHROME_NAV_BILINGUAL = [
     ("主动关怀", "Proactive Care"),
-    ("情景记忆", "Episodic Memory"),
+    ("AI 记忆", "AI Memory"),
     ("危机审计", "Crisis Audit"),
 ]
 
@@ -278,8 +278,13 @@ _CHROME_NAV_BILINGUAL = [
 @pytest.mark.parametrize("lang", ["zh", "en"])
 def test_admin_chrome_nav_localized(auth_client, lang):
     """③-S3：共享外壳（base.html via /cases）侧栏导航随 ?lang= 真切换——
-    zh 出中文标签、en 出英文标签且不残留对应中文（证明硬编码 span 已收口到 i18n key）。"""
+    zh 出中文标签、en 出英文标签且不残留对应中文（证明硬编码 span 已收口到 i18n key）。
+    TERM_DICT/tour 等双语 inline 数据在 <script> 内（客户端按 WS_LANG 切换），
+    与既有 CJK 门禁同规则：剥离 script 后再断言可见 HTML。"""
+    import re as _re
+
     html = auth_client.get(f"/cases?lang={lang}").text
+    html = _re.sub(r"<script[\s\S]*?</script>", "", html, flags=_re.I)
     for zh_label, en_label in _CHROME_NAV_BILINGUAL:
         if lang == "zh":
             assert zh_label in html, f"zh 缺导航标签 {zh_label!r}"

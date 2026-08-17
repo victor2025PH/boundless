@@ -112,6 +112,16 @@ if (Test-Path $lic) {
     $chain += "set `"LICENSE_KEY=`""
     Write-Host "[start-$InstanceId] 未见实例授权文件（$lic），按社区模式/共享文件回落启动" -ForegroundColor Yellow
 }
+# 实施31：显式注入告警密钥/基址（ops_alert 推「号被风控/封号/熔断」到集团 TG 中继）。
+$ingestKey = [Environment]::GetEnvironmentVariable('EVENT_INGEST_KEY', 'Machine')
+if ($ingestKey) {
+    $chain += "set `"EVENT_INGEST_KEY=$ingestKey`""
+    Write-Host "[start-$InstanceId] 注入 EVENT_INGEST_KEY（告警联动就绪；掩码 …$($ingestKey.Substring([Math]::Max(0,$ingestKey.Length-4)))）"
+} else {
+    Write-Host "[start-$InstanceId] 未见机器级 EVENT_INGEST_KEY，反封号告警将只落日志（不影响接待）" -ForegroundColor Yellow
+}
+$syncBase = [Environment]::GetEnvironmentVariable('PERSONA_SYNC_BASE', 'Machine')
+if ($syncBase) { $chain += "set `"PERSONA_SYNC_BASE=$syncBase`"" }
 $chain += "python `"$EngineDir\main.py`" > `"$out`" 2> `"$err`""
 $cmdline = 'cmd.exe /c ' + ($chain -join ' && ')
 

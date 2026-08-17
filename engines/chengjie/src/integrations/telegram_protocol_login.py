@@ -70,6 +70,25 @@ def protocol_enabled(config: Dict[str, Any]) -> bool:
     return bool(tg.get("protocol_enabled", False))
 
 
+def _is_password_needed(ex: Exception) -> bool:
+    """判定异常是否为「账号开启两步验证，需云密码」（SESSION_PASSWORD_NEEDED）。
+
+    不硬 import pyrogram.errors.SessionPasswordNeeded（跨版本类路径可能变），按类名
+    + 错误串双判，稳。
+    """
+    if type(ex).__name__ == "SessionPasswordNeeded":
+        return True
+    return "SESSION_PASSWORD_NEEDED" in str(ex).upper()
+
+
+def _is_bad_password(ex: Exception) -> bool:
+    """判定异常是否为「两步验证密码错误」（PASSWORD_HASH_INVALID）——保持可重试。"""
+    name = type(ex).__name__
+    if name in ("PasswordHashInvalid", "BadRequest"):
+        return "PASSWORD_HASH_INVALID" in str(ex).upper() or name == "PasswordHashInvalid"
+    return "PASSWORD_HASH_INVALID" in str(ex).upper()
+
+
 # ── 登录状态机（真实 pyrogram 调用，全程降级保护） ───────────────────────────
 
 class TelegramQrLogin:
@@ -83,7 +102,7 @@ class TelegramQrLogin:
         self.session_name = f"tg_login_{secrets.token_hex(6)}"
         self.proxy = proxy or None
         self.client: Any = None
-        self.status = "pending"      # pending|authorized|expired|failed
+        self.status = "pending"      # pending|password_needed|authorized|expired|failed
         self.account_id = ""
         self.phone = ""
         self.qr_url = ""
@@ -126,7 +145,9 @@ class TelegramQrLogin:
         return self.result()
 
     async def poll(self) -> Dict[str, Any]:
-        if self.status in ("authorized", "failed", "expired"):
+        # password_needed 是稳定的等待态：不再打 ExportLoginToken（会一直抛
+        # SESSION_PASSWORD_NEEDED），停在此态等 submit_password。
+        if self.status in ("authorized", "failed", "expired", "password_needed"):
             return self.result()
         try:
             from pyrogram.raw.functions.auth import ExportLoginToken
@@ -134,10 +155,41 @@ class TelegramQrLogin:
                 api_id=self.api_id, api_hash=self.api_hash, except_ids=[]))
             await self._advance(r)
         except Exception as ex:  # noqa: BLE001
-            # 多为 token 过期 / 网络抖动 → 标记过期让前端刷新
-            self.status = "expired"
-            self.detail = str(ex)
-            logger.debug("[tg_protocol_login] poll 失败", exc_info=True)
+            if _is_password_needed(ex):
+                # 扫码已确认，但账号开了两步验证 → 进入等待云密码态（不算失败/过期）
+                self.status = "password_needed"
+                self.detail = "该账号已开启两步验证，请输入云密码完成登录"
+                logger.info("[tg_protocol_login] 扫码已确认，等待两步验证云密码")
+            else:
+                # 多为 token 过期 / 网络抖动 → 标记过期让前端刷新
+                self.status = "expired"
+                self.detail = str(ex)
+                logger.debug("[tg_protocol_login] poll 失败", exc_info=True)
+        return self.result()
+
+    async def submit_password(self, password: str) -> Dict[str, Any]:
+        """两步验证：提交云密码完成登录（SRP 校验走 pyrogram 高层 check_password）。
+
+        仅在 status==password_needed 时有效。密码错误保持 password_needed 可重试；
+        成功则走与扫码成功一致的收尾（导出 session_string、抽身份、落盘、置 authorized）。
+        """
+        if self.status != "password_needed":
+            return self.result()
+        if not password:
+            self.detail = "云密码为空"
+            return self.result()
+        try:
+            user = await self.client.check_password(password)
+            await self._finish_with_user(user)
+        except Exception as ex:  # noqa: BLE001
+            if _is_bad_password(ex):
+                self.detail = "云密码错误，请重新输入"
+                logger.info("[tg_protocol_login] 两步验证密码错误，可重试")
+            else:
+                self.status = "failed"
+                self.detail = f"两步验证失败：{ex}"
+                logger.debug("[tg_protocol_login] check_password 失败", exc_info=True)
+                await self._safe_disconnect()
         return self.result()
 
     async def cancel(self) -> None:
@@ -176,18 +228,27 @@ class TelegramQrLogin:
         await self.client.session.start()
 
     async def _finish(self, success: Any) -> None:
+        # 二维码令牌直接成功（无两步验证）路径：从 authorization 抽 user 收尾。
+        await self._finish_with_user(success.authorization.user)
+
+    async def _finish_with_user(self, user: Any) -> None:
+        """统一收尾：token 成功 与 两步验证成功 共用（抽身份 + 导出 session_string + 落盘）。"""
         try:
-            user = success.authorization.user
             self.account_id = str(getattr(user, "id", "") or "")
-            self.phone = str(getattr(user, "phone_number", "") or "")
+            self.phone = str(
+                getattr(user, "phone_number", "") or getattr(user, "phone", "") or "")
             # P1：从授权返回的 user 抽取自身昵称/用户名（纯函数，无副作用；flag 在写入时判定）
             try:
                 from src.integrations.account_self_profile import extract_self_profile
                 self.self_profile = extract_self_profile(user)
             except Exception:  # noqa: BLE001
                 self.self_profile = {}
-            await self.client.storage.user_id(user.id)
-            await self.client.storage.is_bot(False)
+            # check_password 已在内部设过 storage.user_id/is_bot；token 成功路径需显式设。
+            try:
+                await self.client.storage.user_id(user.id)
+                await self.client.storage.is_bot(False)
+            except Exception:  # noqa: BLE001
+                logger.debug("[tg_protocol_login] 写 storage user_id 失败（忽略）", exc_info=True)
             self.status = "authorized"
             self.detail = ""
             # N2：趁连接未断导出 session_string（A 线可 in-memory 启动，抗文件 session DC 迁移不稳）
@@ -249,30 +310,40 @@ def make_provider(config: Dict[str, Any], sessions_dir: str = _DEFAULT_SESSIONS_
         login = TelegramQrLogin(api_id, api_hash, sessions_dir, proxy=proxy)
         await login.start()
 
+        def _persist_if_authorized(res: Dict[str, Any]) -> None:
+            """扫码/两步验证成功即把账号落注册表（幂等；供编排器重启后拉起）。"""
+            if res.get("status") != "authorized" or not res.get("account_id"):
+                return
+            try:
+                _meta = {"session_name": login.session_name, "phone": login.phone}
+                # N2：有 session_string 则一并存（A 线优先 in-memory 启动；见 telegram_client）
+                if getattr(login, "session_string", ""):
+                    _meta["session_string"] = login.session_string
+                # P1 身份化：flag 开启则把自身昵称/用户名一并落 meta.self_*（头像待该号
+                # 后续被 telegram_client 拉起时补齐，见 account_self_profile.enrich_from_user）
+                try:
+                    from src.integrations.account_self_profile import (
+                        self_profile_enabled,
+                    )
+                    if self_profile_enabled(config) and getattr(login, "self_profile", None):
+                        _meta.update(login.self_profile)
+                except Exception:  # noqa: BLE001
+                    logger.debug("[tg_protocol_login] self_profile 合并失败（忽略）", exc_info=True)
+                get_account_registry().upsert(
+                    "telegram", res["account_id"], mode="protocol",
+                    status="online", meta=_meta,
+                )
+            except Exception:  # noqa: BLE001
+                logger.debug("[tg_protocol_login] 注册表写入失败", exc_info=True)
+
         async def _poll(session: Any) -> Dict[str, Any]:
             res = await login.poll()
-            if res.get("status") == "authorized" and res.get("account_id"):
-                try:
-                    _meta = {"session_name": login.session_name, "phone": login.phone}
-                    # N2：有 session_string 则一并存（A 线优先 in-memory 启动；见 telegram_client）
-                    if getattr(login, "session_string", ""):
-                        _meta["session_string"] = login.session_string
-                    # P1 身份化：flag 开启则把自身昵称/用户名一并落 meta.self_*（头像待该号
-                    # 后续被 telegram_client 拉起时补齐，见 account_self_profile.enrich_from_user）
-                    try:
-                        from src.integrations.account_self_profile import (
-                            self_profile_enabled,
-                        )
-                        if self_profile_enabled(config) and getattr(login, "self_profile", None):
-                            _meta.update(login.self_profile)
-                    except Exception:  # noqa: BLE001
-                        logger.debug("[tg_protocol_login] self_profile 合并失败（忽略）", exc_info=True)
-                    get_account_registry().upsert(
-                        "telegram", res["account_id"], mode="protocol",
-                        status="online", meta=_meta,
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.debug("[tg_protocol_login] 注册表写入失败", exc_info=True)
+            _persist_if_authorized(res)
+            return res
+
+        async def _submit_password(session: Any, password: str) -> Dict[str, Any]:
+            res = await login.submit_password(password)
+            _persist_if_authorized(res)
             return res
 
         async def _cancel(session: Any) -> None:
@@ -282,6 +353,7 @@ def make_provider(config: Dict[str, Any], sessions_dir: str = _DEFAULT_SESSIONS_
             "qr_url": login.qr_url,
             "instruction": "用手机 Telegram：设置 → 设备 → 关联桌面设备，扫描二维码。",
             "poll": _poll,
+            "submit_password": _submit_password,
             "cancel": _cancel,
             "state": login,
         }

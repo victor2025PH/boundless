@@ -4,6 +4,8 @@ import { AlertTriangle, ArrowRight, Inbox, KeyRound, ReceiptText, ScrollText, Sp
 import { getStats } from "@/lib/ledger";
 import { getOpportunityStats, listOpportunities, productLabel } from "@/lib/opportunities";
 import { readIntroFunnel, readIntroExperiments } from "@/lib/intro-funnel";
+import { getStripeSetupStatus, readReconcileHealth } from "@/lib/payment-health";
+import { getPaymentSettings } from "@/lib/payment-settings";
 import { getConsoleSessionUser } from "@/lib/console-auth";
 import { roleAtLeast } from "@/lib/console-users";
 import {
@@ -34,7 +36,7 @@ const ROADMAP = [
 // 开场页 A/B 实验 → 人话（与 IntroCover 的 abVariant 实验 id 一一对应）
 const INTRO_EXPERIMENT_LABELS: Record<string, { name: string; variants: Record<string, string> }> = {
   intro_auto_enter: { name: "自动进入（无操作 12s）", variants: { a: "对照·不自动", b: "自动进入" } },
-  intro_btn_shape: { name: "进入按钮形状", variants: { a: "有机波浪（现行）", b: "标准胶囊（对照）" } },
+  intro_btn_shape: { name: "进入按钮形状（已定稿胶囊）", variants: { a: "有机波浪（已下线）", b: "标准胶囊（现行）" } },
 };
 
 const QUICK_LINKS = [
@@ -55,6 +57,14 @@ export default async function ConsoleOverviewPage() {
   const topOpportunities = listOpportunities({ limit: 5 });
   const introFunnel = await readIntroFunnel(7);
   const introExperiments = await readIntroExperiments(7);
+  const reconcile = await readReconcileHealth(7);
+  const paySettings = await getPaymentSettings();
+  const stripeSetup = await getStripeSetupStatus({ lastAgoMin: reconcile.lastAgoMin });
+  const payLights = [
+    { label: "银行卡通道", on: paySettings.card.enabled, note: paySettings.card.enabled ? "已启用" : "未启用" },
+    { label: "Stripe Secret", on: !!process.env.STRIPE_SECRET_KEY, note: "STRIPE_SECRET_KEY" },
+    { label: "Webhook 对账", on: !!process.env.STRIPE_WEBHOOK_SECRET, note: "STRIPE_WEBHOOK_SECRET" },
+  ];
   const empty = stats.orders === 0 && stats.leads === 0 && stats.licenses === 0 && stats.customers === 0;
 
   // headline 数字已由 getStats 排除测试数据；testCount>0 时副文案追加「+N 测试」提示存在感。
@@ -345,6 +355,13 @@ export default async function ConsoleOverviewPage() {
             <div className="grid gap-2 text-xs lg:grid-cols-2">
               {introExperiments.experiments.map((exp) => {
                 const meta = INTRO_EXPERIMENT_LABELS[exp.experiment];
+                const d = exp.decision;
+                const verdictCls =
+                  d.verdict === "favor_a" || d.verdict === "favor_b"
+                    ? "text-emerald-300"
+                    : d.verdict === "tie"
+                      ? "text-slate-300"
+                      : "text-amber-200/90";
                 return (
                   <div key={exp.experiment} className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
                     <p className="mb-1.5 font-medium text-slate-300">{meta?.name ?? exp.experiment}</p>
@@ -363,12 +380,105 @@ export default async function ConsoleOverviewPage() {
                         </li>
                       ))}
                     </ul>
+                    <p className={`mt-2 leading-relaxed ${verdictCls}`}>
+                      {d.verdict === "favor_a" || d.verdict === "favor_b"
+                        ? `✓ ${d.reason}`
+                        : d.verdict === "tie"
+                          ? `· ${d.reason}`
+                          : `⏳ ${d.reason}`}
+                    </p>
                   </div>
                 );
               })}
             </div>
           </div>
         )}
+      </Card>
+
+      <Card className={reconcile.totals.amount_mismatch + reconcile.totals.order_not_found > 0 ? "border-rose-500/40" : ""}>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <SectionTitle>支付对账健康（近 {reconcile.days} 天）</SectionTitle>
+          <span className="text-[11px] text-slate-500">
+            双通道：webhook 实时到账 · 每日 04:10 巡检兜底（<Code>stripe-reconcile</Code>）
+          </span>
+        </div>
+        <div className="grid gap-4 lg:grid-cols-3">
+          <div className="space-y-2">
+            {payLights.map((l) => (
+              <div key={l.label} className="flex items-center justify-between text-xs">
+                <span className="flex items-center gap-2 text-slate-400">
+                  <span className={`h-2 w-2 rounded-full ${l.on ? "bg-emerald-400" : "bg-slate-600"}`} />
+                  {l.label}
+                </span>
+                <span className={l.on ? "text-emerald-300" : "text-slate-500"}>{l.on ? "✓" : l.note}</span>
+              </div>
+            ))}
+            <p className="pt-1 text-[11px] leading-relaxed text-slate-500">
+              三灯全绿 = 卡支付双重对账在岗；配置指引见 /admin/payment。
+              {stripeSetup.ready
+                ? ` 就绪 ${stripeSetup.done}/${stripeSetup.total}。`
+                : ` 就绪 ${stripeSetup.done}/${stripeSetup.total}（差 ${stripeSetup.total - stripeSetup.done} 步）。`}
+            </p>
+            {!stripeSetup.ready && (
+              <ol className="mt-2 list-decimal space-y-1.5 pl-4 text-[11px] leading-relaxed text-amber-200/85">
+                {stripeSetup.steps
+                  .filter((s) => !s.ok && s.id !== "cron_fresh")
+                  .map((s) => (
+                    <li key={s.id}>
+                      <span className="font-medium text-amber-100">{s.label}</span> — {s.hint}
+                    </li>
+                  ))}
+              </ol>
+            )}
+          </div>
+          <div className="lg:col-span-2">
+            {reconcile.runs === 0 ? (
+              <p className="text-xs text-slate-500">
+                暂无巡检记录 —— cron 每日 04:10 首跑后此处出现趋势（未配置 Stripe 时巡检自动空转，无害）。
+              </p>
+            ) : (
+              <div className="space-y-2 text-xs">
+                <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
+                  <span className="text-slate-400">
+                    运行 <b className="tabular-nums text-slate-200">{reconcile.runs}</b> 次
+                  </span>
+                  <span className="text-slate-400">
+                    最近一次{" "}
+                    <b className="tabular-nums text-slate-200">
+                      {reconcile.lastAgoMin != null && reconcile.lastAgoMin < 90
+                        ? `${reconcile.lastAgoMin} 分钟前`
+                        : reconcile.lastRun?.t.slice(0, 16).replace("T", " ")}
+                    </b>
+                    {reconcile.lastAgoMin != null && reconcile.lastAgoMin > 26 * 60 && (
+                      <span className="ml-1.5 text-amber-300">⚠ 超 26h 未跑，检查 cron</span>
+                    )}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {(
+                    [
+                      ["巡检补账", reconcile.totals.settled, reconcile.totals.settled > 0 ? "text-amber-300" : "text-slate-200"],
+                      ["webhook 已处理", reconcile.totals.already, "text-emerald-300"],
+                      ["金额不符", reconcile.totals.amount_mismatch, reconcile.totals.amount_mismatch > 0 ? "text-rose-300" : "text-slate-200"],
+                      ["孤儿 session", reconcile.totals.order_not_found, reconcile.totals.order_not_found > 0 ? "text-rose-300" : "text-slate-200"],
+                    ] as const
+                  ).map(([label, n, cls]) => (
+                    <span key={label} className="rounded-lg border border-slate-800 bg-slate-950/50 px-2.5 py-1">
+                      <span className="text-slate-500">{label}</span>{" "}
+                      <b className={`tabular-nums ${cls}`}>{n}</b>
+                    </span>
+                  ))}
+                </div>
+                {reconcile.totals.settled > 0 && (
+                  <p className="leading-relaxed text-amber-200/80">
+                    ⚠ 巡检补过账说明 webhook 有漏投递：最近补账 {reconcile.recovered.slice(-5).join("、")}
+                    ，建议检查 Stripe 后台 webhook 投递状态。
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
       </Card>
 
       <div>

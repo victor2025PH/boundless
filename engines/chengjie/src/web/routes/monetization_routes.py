@@ -119,6 +119,30 @@ def register_monetization_routes(app, *, api_auth, config_manager=None) -> None:
             "recent_tx": store.recent_tx(limit=20),
         }
 
+    @app.get("/api/monetize/kpi")
+    async def api_monetize_kpi(request: Request, days: float = 30, _=Depends(api_auth)):
+        """变现 KPI 轻端点（P4）：仅 4 个标量，无明细，供漏斗页/仪表盘小卡片安全消费。
+
+        与 /monetization 页面同权（master/admin；viewer 403）——overview 带 top_spenders/
+        recent_tx 明细且未对齐页面权限，轻卡片一律走本端点。
+        """
+        rr = getattr(request.app.state, "require_role", None)
+        if callable(rr):
+            rr(request, "monetization")
+        store = _store(request)
+        now = time.time()
+        d = max(1.0, min(float(days or 30), 365.0))
+        rev = store.revenue_summary(since=now - d * _DAY, until=now)
+        return {
+            "ok": True,
+            "enabled": bool(_mon_cfg().get("enabled", False)),
+            "window_days": d,
+            "revenue_total": rev.get("total", 0.0),
+            "tx_count": rev.get("count", 0),
+            "currency": rev.get("currency", "USD"),
+            "active_subscriptions": store.active_subscription_count(now=now),
+        }
+
     @app.get("/api/monetize/catalog")
     async def api_monetize_catalog(request: Request, _=Depends(api_auth)):
         """价目目录（合并 config 覆盖后的有效目录）。"""

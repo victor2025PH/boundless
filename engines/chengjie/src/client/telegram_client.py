@@ -163,6 +163,10 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
         self._active_tasks: int = 0
         self.user_info: Optional[User] = None
         self._session_reply_ts: Dict[str, float] = {}  # (chat_id:user_id) -> 我们最后回复该用户的时间戳
+        # 回复逻辑闸门状态（UI「回复逻辑」页：冷却/最大连续回复；与 _session_reply_ts 同 key 格式。
+        # 不复用 _session_reply_ts 做冷却——它受 session_window.enabled 开关控制，关了就不写）。
+        self._auto_reply_ts: Dict[str, float] = {}  # (chat_id:user_id) -> 上次自动回复时间戳
+        self._auto_reply_streak: Dict[str, int] = {}  # (chat_id:user_id) -> 连续自动回复计数
         self._last_send_wallclock: float = 0.0  # 全局上次 send_message 时间，用于 min_interval
         self._boot_timestamp: float = time.time()  # 启动时间戳，用于跳过启动前的旧消息
         # (chat_id, message_id) 去重 + per-chat 串行锁（2026-07-15 三连发语音事故修复：
@@ -799,6 +803,33 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
 
             except Exception as e:
                 self.logger.error(f"处理群组消息失败: {e}")
+
+        # 编辑消息（UI「回复逻辑」页 ignore_edited 开关，缺省=忽略）：pyrogram 的
+        # 编辑更新走独立的 on_edited_message，不进上面的 on_message handler。
+        # 开关关（ignore_edited=false）时把编辑消息转投给对应的现有 handler——
+        # 其内部 _msg_dedup.claim 按 (chat_id, message_id) 去重，原始版已处理过的
+        # 消息编辑后重投会被去重挡下（handler 自带 debug 日志）：编辑重投最多生效一次。
+        @self.client.on_edited_message(filters.private | filters.group)
+        async def handle_edited_message(client, message: Message):
+            try:
+                from src.client.reply_logic_gates import should_ignore_edited
+                _rl_cfg = self.config.get('telegram', {}).get('reply_logic', {})
+                if should_ignore_edited(
+                        _rl_cfg, getattr(message, 'edit_date', None)):
+                    self.logger.debug(
+                        "[编辑消息] 忽略（ignore_edited=on）chat=%s mid=%s",
+                        getattr(getattr(message, 'chat', None), 'id', None),
+                        getattr(message, 'id', 0))
+                    return
+                _ctype = getattr(getattr(message, 'chat', None), 'type', None)
+                _ctype_name = (getattr(_ctype, 'name', None)
+                               or str(_ctype or '')).upper()
+                if 'PRIVATE' in _ctype_name:
+                    await handle_private_message(client, message)
+                else:
+                    await handle_group_message(client, message)
+            except Exception as e:
+                self.logger.error("处理编辑消息失败: %s", e)
 
         # P4-4 已读回执：companion 镜像开启时，注册原始更新处理器——对端读了我们发的消息
         # （UpdateReadHistoryOutbox / 频道版）→ 把镜像进收件箱的出站消息升级为「已读」，
@@ -1904,6 +1935,46 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     text=ai_text)
             except Exception:
                 pass
+            # ── 回复逻辑闸门（UI「回复逻辑」页：冷却 + 最大连续回复；每条消息重读
+            # config → 保存即生效）。私聊/群/轮询兜底三条入站路径都汇到本函数，
+            # 闸门对三者统一生效。放在 process_message 之前 → 被拦时不白跑 LLM。──
+            from src.client.reply_logic_gates import (
+                consecutive_limit_reached,
+                cooldown_remaining,
+            )
+            _rl_cfg = self.config.get('telegram', {}).get('reply_logic', {})
+            _rl_key = f"{chat_id}:{user_id}"
+            _rl_now = time.time()
+            _rl_last = self._auto_reply_ts.get(_rl_key)
+            _cd_left = cooldown_remaining(_rl_cfg, _rl_last, _rl_now)
+            if _cd_left > 0:
+                self.logger.info(
+                    "[回复逻辑] 冷却中，跳过自动回复 chat=%s user=%s 剩余 %.0f 秒",
+                    chat_id, user_id, _cd_left)
+                # 结构化拦截计数（UI 今日统计权威口径；lazy import + 静默双保险，
+                # 统计失败绝不影响回复链路）
+                try:
+                    from src.client.gate_stats import bump as _gate_bump
+                    _gate_bump("cooldown")
+                except Exception:
+                    pass
+                return
+            _rl_hit, _rl_eff = consecutive_limit_reached(
+                _rl_cfg, self._auto_reply_streak.get(_rl_key, 0), _rl_last, _rl_now)
+            if _rl_eff != self._auto_reply_streak.get(_rl_key, 0):
+                # 静默超复位窗口 → 生效计数已归零，落地回字典（防陈旧计数粘住）
+                self._auto_reply_streak[_rl_key] = _rl_eff
+            if _rl_hit:
+                self.logger.info(
+                    "[回复逻辑] 连续自动回复已达上限(%d 条)，暂停回复 chat=%s user=%s"
+                    "（静默 30 分钟后自动复位）",
+                    _rl_eff, chat_id, user_id)
+                try:
+                    from src.client.gate_stats import bump as _gate_bump
+                    _gate_bump("streak")
+                except Exception:
+                    pass
+                return
             reply_text = await self.skill_manager.process_message(
                 text=ai_text,
                 user_id=user_id,

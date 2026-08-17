@@ -15,10 +15,11 @@
  * middleware / app / lib 任何一层均可安全引用。
  */
 
-/** 高风险产品的独立注册域（与主站不同注册域、不同主体、互不链接）。 */
-export const ISOLATED_DOMAIN = "13x.lol";
+/** 高风险产品的独立注册域（与主站不同注册域、不同主体、互不链接）。
+ *  2026-07-19 迁移：原 13x.lol → ai2026.co（历史记录见 docs/实施10_合规隔离_13xlol_*）。 */
+export const ISOLATED_DOMAIN = "ai2026.co";
 
-export const ISOLATED_SITE_URL = process.env.NEXT_PUBLIC_ISOLATED_URL || "https://13x.lol";
+export const ISOLATED_SITE_URL = process.env.NEXT_PUBLIC_ISOLATED_URL || "https://ai2026.co";
 
 export type Visibility = "public" | "gated";
 
