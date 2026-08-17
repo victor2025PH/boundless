@@ -1,5 +1,10 @@
 ﻿<#
-  setup_machine_mesh.ps1 — 五机网状 SSH + 开发目录 + 壁纸
+  setup_machine_mesh.ps1 — 五机网状 SSH + 开发目录 + 壁纸（历史脚本，写于通译机时代）
+  NOTE (2026-08-05 v2): 命名已改版（machines.json v2），壁纸/哨兵改走
+    tools\make_machine_wallpapers.py + tools\deploy_hud.ps1；
+    SSH 配置下发用 render_ssh_config.ps1 + remote_merge_ssh_config.ps1 +
+    cleanup_legacy_ssh_hosts.ps1；对账 machines_lint.py。
+  本脚本仅在「新机器首次入网」时用于铺密钥/工作目录；其壁纸段引用旧文件名已失效（会自动跳过）。
   用法（在通译机 117）:
     powershell -File tools\setup_machine_mesh.ps1
     powershell -File tools\setup_machine_mesh.ps1 -SkipClone

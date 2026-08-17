@@ -176,7 +176,10 @@ def load_mode_ctx() -> dict:
     预算刻度=cluster_map vram_budget（services + mode_services[当前模式]）。
     watch_ports 覆盖让「模式内预期停机」的端口不再被判 svcdown——板/哨兵/执行器三方判据同源。"""
     out = {"mode": "", "zh": "", "accent": NEON_VIOLET, "since_str": "", "switching": False,
-           "progress": "", "chips": {}, "watch_ports": {}, "budget": {}}
+           "progress": "", "chips": {}, "watch_ports": {}, "budget": {},
+           "prog_done": 0, "prog_total": 0, "prog_note": "",
+           "warm_pending": 0, "warm_failed": 0, "warm_note": "",
+           "posture_err": 0, "posture_warn": 0, "posture_top": ""}
     try:
         st = json.loads(MODE_STATE.read_text(encoding="utf-8"))
         out["mode"] = str(st.get("mode") or "")
@@ -185,6 +188,29 @@ def load_mode_ctx() -> dict:
         p = st.get("progress") or {}
         if p:
             out["progress"] = f"{p.get('done', '?')}/{p.get('total', '?')}"
+            out["prog_done"] = int(p.get("done") or 0)
+            out["prog_total"] = int(p.get("total") or 0)
+            _cur = p.get("current") or {}
+            out["prog_note"] = str(_cur.get("note") or _cur.get("kind") or "")[:38]
+        # 快切改造（2026-08-15）：切换同步段收口即完成，重型引擎转后台暖机——
+        # 绶带/大字牌带「暖机中 n 步」，全集群壁纸肉眼可见装载还没完
+        w = st.get("warming") or {}
+        if w:
+            out["warm_pending"] = int(w.get("pending") or 0)
+            out["warm_failed"] = len(w.get("failed") or [])
+            _ln = w.get("lanes") or {}
+            out["warm_note"] = "、".join(
+                f"{m} 余{(v or {}).get('remaining', '?')}" for m, v in _ln.items())[:38]
+    except Exception:
+        pass
+    try:
+        # P0 姿态巡检徽章（2026-08-13）：slo_watch 10min 巡出的漂移上绶带——「模式=声明,
+        # 声明≠现实曾静默 1.5 天」的可见性收口。30min 龄闸=巡检停摆不拿旧结论装健康。
+        po = json.loads((MODE_STATE.parent / "cluster_posture.json").read_text(encoding="utf-8"))
+        if time.time() - float(po.get("ts") or 0) < 1800 and not po.get("skip"):
+            out["posture_err"] = len(po.get("errors") or [])
+            out["posture_warn"] = len(po.get("warns") or [])
+            out["posture_top"] = str((po.get("errors") or po.get("warns") or [""])[0])[:46]
     except Exception:
         pass
     try:
@@ -707,6 +733,48 @@ def collect() -> dict:
             "hist": load_history(30), "events": recent_events(4)}
 
 
+def draw_mode_plate(base: Image.Image, mode: dict, s: float) -> None:
+    """v6 模式大字牌（2026-08-14）：壁纸左下角常驻——隔着房间读得出当前档；
+    切换中变琥珀并带 done/total 进度底条+当前步人话。独立层 alpha_composite（v3 教训）。"""
+    W, H = base.size
+    zh = str(mode.get("zh") or mode.get("mode") or "")
+    switching = bool(mode.get("switching"))
+    if not zh and not switching:
+        return
+    mac = tuple(mode.get("accent") or NEON_VIOLET)
+    col = (232, 179, 65) if switching else mac
+    x, y = int(28 * s), H - int(120 * s)
+    w, h = int(302 * s), int(90 * s)
+    frac = 1.0
+    if switching:
+        frac = max(0.04, min(1.0, (mode.get("prog_done") or 0) / max(1, mode.get("prog_total") or 1)))
+    layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    ld = ImageDraw.Draw(layer)
+    ld.rounded_rectangle((x, y, x + w, y + h), radius=int(12 * s),
+                         fill=(*INK_900, 150), outline=(*col, 95), width=max(1, int(s)))
+    ld.rounded_rectangle((x + int(4 * s), y + h - int(6 * s),
+                          x + int(4 * s) + int((w - int(8 * s)) * frac), y + h - int(2 * s)),
+                         radius=int(2 * s), fill=(*col, 205))
+    base.alpha_composite(layer)
+    d2 = ImageDraw.Draw(base)
+    d2.text((x + int(16 * s), y + int(15 * s)), "算力模式 · COMPUTE MODE",
+            font=font(F_MED, int(11 * s)), fill=(150, 156, 176, 220), anchor="lm")
+    if switching:
+        big = f"切换中 {mode.get('progress') or ''}"
+        sub = str(mode.get("prog_note") or "")[:26]
+    elif mode.get("warm_pending"):
+        big = zh
+        sub = f"暖机中 {mode['warm_pending']} 步 {str(mode.get('warm_note') or '')}"[:26]
+    else:
+        big = zh
+        sub = f"since {str(mode.get('since_str') or '')[5:16]}" if mode.get("since_str") else ""
+    d2.text((x + int(16 * s), y + int(46 * s)), big,
+            font=font(F_BLACK, int(29 * s)), fill=(*col, 255), anchor="lm")
+    if sub:
+        d2.text((x + int(16 * s), y + int(74 * s)), sub,
+                font=font(F_MED, int(12 * s)), fill=(150, 156, 176, 210), anchor="lm")
+
+
 def render_board(ctx: dict, base_path: Path, out_path: Path, self_id: str = "") -> None:
     """在一张身份壁纸上渲一块实况板。self_id 非空 = 该机视角：本机行高亮 + 页脚本机身份。"""
     rows = ctx["rows"]
@@ -765,27 +833,63 @@ def render_board(ctx: dict, base_path: Path, out_path: Path, self_id: str = "") 
     mac = tuple(mode.get("accent") or NEON_VIOLET)
     rb_y, rb_h = y0 + int(54 * s), int(24 * s)
     _rb_layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
-    ImageDraw.Draw(_rb_layer).rounded_rectangle(
+    _rbd = ImageDraw.Draw(_rb_layer)
+    _rbd.rounded_rectangle(
         (x0 + int(18 * s), rb_y, x0 + pw - int(18 * s), rb_y + rb_h),
         radius=int(6 * s), fill=(*mac, 26), outline=(*mac, 110), width=max(1, int(s)))
+    # v6-lite（2026-08-14）：切换中在绶带内画真实进度填充（done/total）——全集群壁纸肉眼
+    # 可见「变阵走到第几步」；仍走独立层 alpha_composite（v3 白条纹教训）。
+    if mode.get("switching") and mode.get("prog_total"):
+        _frac = max(0.04, min(1.0, mode["prog_done"] / max(1, mode["prog_total"])))
+        _rbd.rounded_rectangle(
+            (x0 + int(18 * s), rb_y,
+             x0 + int(18 * s) + int((pw - int(36 * s)) * _frac), rb_y + rb_h),
+            radius=int(6 * s), fill=(232, 179, 65, 52))
+    # v6-lite：面板左缘模式色导光条——隔着房间一眼认出当前档（智聊青/直播品红/编程绿）
+    _rbd.rounded_rectangle(
+        (x0 + int(4 * s), y0 + int(54 * s), x0 + int(8 * s), y0 + ph - int(14 * s)),
+        radius=int(2 * s), fill=(*mac, 120))
     base.alpha_composite(_rb_layer)
     d = ImageDraw.Draw(base)
     f_rb = font(F_BOLD, int(14 * s))
     if mode.get("switching"):
-        rb_txt = f"算力模式 · 切换中 {mode.get('progress') or ''}…"
+        rb_txt = f"算力模式 · 切换中 {mode.get('progress') or ''}"
+        if mode.get("prog_note"):
+            rb_txt += f"：{mode['prog_note']}"
         rb_c = (232, 179, 65)
+    elif mode.get("mode") and mode.get("warm_pending"):
+        # 快切改造：同步段已收口（模式已生效），重型引擎还在后台装载
+        rb_txt = (f"算力模式 · {mode.get('zh') or mode['mode']} · 暖机中 "
+                  f"{mode['warm_pending']} 步" + (f"（{mode['warm_note']}）" if mode.get("warm_note") else ""))
+        rb_c = (222, 60, 70) if mode.get("warm_failed") else (232, 179, 65)
+        if mode.get("warm_failed"):
+            rb_txt += f" · 失败 {mode['warm_failed']} 步"
     elif mode.get("mode"):
         rb_txt = f"算力模式 · {mode.get('zh') or mode['mode']}（{mode['mode']}）"
         rb_c = mac
     else:
         rb_txt = "算力模式 · 未初始化（等首次切换落账）"
         rb_c = (150, 156, 176)
+    # P0 姿态徽章（2026-08-13）：漂移压过模式常态文案——「声明≠现实」必须在每张桌面上刺眼
+    if not mode.get("switching") and mode.get("mode") and mode.get("posture_err"):
+        rb_txt = (f"算力模式 · {mode.get('zh') or mode['mode']} · 姿态失守 "
+                  f"{mode['posture_err']} 项：{mode.get('posture_top') or ''}")
+        rb_c = (222, 60, 70)
+    elif not mode.get("switching") and mode.get("mode") and mode.get("posture_warn"):
+        rb_txt += f" · 姿态观察 {mode['posture_warn']} 项"
+        rb_c = (232, 179, 65)
     leds.append((int(x0 + 32 * s), int(rb_y + rb_h / 2), int(4 * s), rb_c))
     d.text((x0 + int(44 * s), rb_y + rb_h / 2), rb_txt, font=f_rb, fill=(*rb_c, 250), anchor="lm")
     since = str(mode.get("since_str") or "")
     if since and not mode.get("switching"):
         d.text((x0 + pw - int(26 * s), rb_y + rb_h / 2), f"切换于 {since[5:16]}",
                font=font(F_MED, int(12.5 * s)), fill=(150, 156, 176, 210), anchor="rm")
+    # v6 左下角模式大字牌（独立层；失败不拖累整板）
+    try:
+        draw_mode_plate(base, mode, s)
+        d = ImageDraw.Draw(base)
+    except Exception:
+        pass
 
     # ---- 六机行 ----
     f_zh = font(F_BOLD, int(20 * s))

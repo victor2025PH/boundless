@@ -16,9 +16,10 @@
 - **register_task.ps1** — 在本机注册哨兵分钟任务（wscript run_hidden.vbs 隐窗壳 +
   3 分钟执行上限防 nvidia-smi 卡死冻结整板）。
 - **run_hidden.vbs** — 零闪窗启动壳（交互任务直指 powershell.exe 每分钟弹黑框的解法）。
-- **modes.json** — **集群算力模式 SSOT**（chatx 智聊 ⇄ face 换脸/直播）：每模式的
-  执行步骤（引擎起停 / Ollama 钉卸 / 远端计划任务 / NLLB 卸载回载）、每机角色 chip、
-  哨兵 watch_ports 覆盖、不变量（绝不卸载清单）。详见文件头注。
+- **modes.json** — **集群算力模式 SSOT**（chatx 智聊 ⇄ face 换脸/直播 ⇄ code 编程，
+  2026-08-14 起互斥三模式）：每模式的执行步骤（引擎起停 / Ollama 钉卸 / 远端泊车唤醒 /
+  WSL vLLM 起停 / NLLB 卸载回载）、每机角色 chip、zh/accent（HUD/壁纸/控制台配色文案
+  全数据驱动，增删模式零改前端）、哨兵 watch_ports 覆盖、不变量（绝不卸载清单）。详见文件头注。
 - **deploy_hud.ps1** — 六机部署：（可选 `-GitPull` 让有仓的节点先 `git pull`）→ 覆盖
   `C:\Users\Public\boundless-hud\` → 按台账+当前模式生成 config.json → 重注册任务。
 
@@ -32,7 +33,7 @@
 壁纸模板生成器 `tools/make_machine_wallpapers.py`（模板底图 → `brand-assets/05_backgrounds/machines/`）
 本就在 git，产物 PNG 随本次一并入库（部署脚本的壁纸源，缺了 git pull 部署链就断）。
 
-## 算力模式切换（chatx ⇄ face）
+## 算力模式切换（chatx ⇄ face ⇄ code 互斥三模式）
 
 执行器挂在 Hub（`engines/avatarhub` 的 `hub_routes/cluster_mode.py`）：
 

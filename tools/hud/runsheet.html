@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>展演提词卡 · BOUNDLESS</title>
+<style>
+/* P3 展演收官（2026-08-09）：主持人活体提词卡——跟随 tour 幕次（/api/tour 轮询），
+   大字显示「当前幕说什么/做什么/翻车怎么办」+ 下一幕预览。演示日的可靠性件：
+   主持人瞥一眼手机就知道下一步，不背流程。与 tour.html（控制台）互补，可另开一屏。
+   全离线零外链；色板同源。 */
+:root{
+  --ink-950:#05060F; --ink-900:#0A0C1B; --ink-800:#11132A;
+  --neon-cyan:#22D3EE; --neon-violet:#8B5CF6; --neon-pink:#EC4899;
+  --st-ok:#2EC27E; --amber:#E8B341; --red:#DE3C46;
+  --txt:#EEF0F8; --txt2:#A6ACBE; --mut:#969CB0; --faint:#7A8096;
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{background:linear-gradient(180deg,var(--ink-950),var(--ink-900) 60%,var(--ink-950));
+  color:var(--txt);font-family:"Noto Sans SC","Microsoft YaHei",system-ui,sans-serif;
+  min-height:100vh;padding:18px 18px 30px;user-select:none}
+#hd{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--faint);letter-spacing:1px}
+#hd .sp{flex:1}
+#conn{width:9px;height:9px;border-radius:50%;background:var(--red);box-shadow:0 0 8px var(--red)}
+#conn.on{background:var(--st-ok);box-shadow:0 0 8px var(--st-ok)}
+#stage{margin-top:12px;border:1.5px solid var(--ac,#22D3EE);border-radius:18px;
+  background:rgba(17,19,42,.7);padding:18px 20px 20px;box-shadow:0 0 30px var(--acg,rgba(34,211,238,.2))}
+#num{font-size:13px;font-weight:700;color:var(--ac,#22D3EE);letter-spacing:2px}
+#name{font-size:30px;font-weight:900;padding:2px 0 4px;
+  background:linear-gradient(92deg,var(--ac,#22D3EE),var(--neon-violet));
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.blk{padding:12px 0 2px}
+.lb{font-size:12px;font-weight:700;letter-spacing:1px;padding-bottom:4px}
+.lb.say{color:var(--neon-cyan)} .lb.do{color:var(--amber)} .lb.fb{color:var(--red)}
+.tx{font-size:18px;line-height:1.55;color:var(--txt)}
+.tx.q::before{content:"「";color:var(--faint)} .tx.q::after{content:"」";color:var(--faint)}
+.tx.fb{font-size:15px;color:var(--txt2)}
+#nav{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+#nav button{border:1px solid rgba(34,211,238,.4);border-radius:14px;padding:15px 0;
+  background:rgba(34,211,238,.08);color:var(--neon-cyan);font-size:16px;font-weight:900;cursor:pointer}
+#nav button:active{transform:scale(.97)}
+#next{margin-top:12px;border:1px solid rgba(139,92,246,.28);border-radius:14px;
+  background:rgba(10,12,27,.6);padding:11px 15px;font-size:13px;color:var(--mut)}
+#next b{color:var(--neon-violet)}
+#dots{display:flex;gap:6px;justify-content:center;margin-top:14px}
+#dots i{width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,.16)}
+#dots i.on{background:var(--neon-cyan);box-shadow:0 0 8px var(--neon-cyan)}
+#screens{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;justify-content:center}
+#screens .s{font-size:11.5px;font-weight:700;border-radius:9px;padding:3px 9px;
+  border:1px solid rgba(255,255,255,.14);color:var(--faint)}
+#screens .s.on{color:var(--st-ok);border-color:rgba(46,194,126,.5);background:rgba(46,194,126,.08)}
+#screens .s.off{color:var(--red);border-color:rgba(222,60,70,.4)}
+#screens .s b{color:var(--neon-cyan);font-weight:700;margin-left:3px}
+</style>
+</head>
+<body>
+<div id="hd"><span>展演提词卡 · 跟随全场幕次</span><span class="sp"></span>
+  <span id="live">—</span><span id="conn"></span></div>
+<div id="screens"></div>
+<div id="stage">
+  <div id="num">—</div><div id="name">连接中…</div>
+  <div class="blk"><div class="lb say">主持人说</div><div class="tx q" id="say"></div></div>
+  <div class="blk"><div class="lb do">主持人做</div><div class="tx" id="do"></div></div>
+  <div class="blk"><div class="lb fb">如果翻车</div><div class="tx fb" id="fb"></div></div>
+</div>
+<div id="nav"><button id="prev">‹ 上一幕</button><button id="next2">下一幕 ›</button></div>
+<div id="next">下一幕：<b id="nx"></b></div>
+<div id="dots"></div>
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+/* 八幕剧本（与 hud_server TOUR_STEPS / 方案 §三 同源）：说/做/翻车 三件套 */
+const ACTS=[
+  {ac:"#22D3EE",say:"欢迎来到无界智控机房，这里的六台电脑，会听、会看、会说话。",
+   do:"手机点「欢迎开场」，或直接说「小界，欢迎客人」。",fb:"—（待客常态，无需操作）"},
+  {ac:"#22D3EE",say:"注意六块屏——它们此刻同频呼吸着同一套系统，不是六张壁纸。",
+   do:"等一道青紫波纹按顺序扫过六屏，末屏浮出欢迎横幅。",fb:"波纹没出：遥控再点一次「欢迎开场」。"},
+  {ac:"#EC4899",say:"我不碰键盘鼠标——隔空取物。",
+   do:"掌心对屏悬停唤醒 → 捏合提取机器卡 → 挥手切到星座视图。",
+   fb:"手势不灵：鼠标点行/拖动，或说「小界，切到星座」，效果一样。"},
+  {ac:"#8B5CF6",say:"它还能听懂我说话。",
+   do:"说「小界」唤醒 → 「集群体检」听它汇报 → 「把韵声放大」。",
+   fb:"识别错了：屏幕下方字幕带显示听到的字，念一遍圆场，或用手势。"},
+  {ac:"#E8B341",say:"您也来试试——掏出手机扫这个码，十秒变成这台机器的眼睛或嘴。",
+   do:"访客扫码进 /join → 选角色（机位/扬声器/魔杖）→ 星座升起一颗署名卫星。",
+   fb:"现场网络慢：用预先入列好的备用手机顶位。"},
+  {ac:"#EC4899",say:"最后——我隔空把换脸引擎，从一台机器丢到另一台。",
+   do:"捏取换脸芯片拖到脸备 → 武装(玫红卡) → 正对镜头竖拇指点火 → 说「撤销」收回。",
+   fb:"不敢碰真集群：demo 模式假点火，画面一样炫（无真实副作用）。"},
+  {ac:"#22D3EE",say:"这就是一间会听、会看、会说话的机房。谢谢各位。",
+   do:"双手下压，或点「谢幕」——全场缓缓调暗，∞ 标呼吸。",fb:"—"},
+];
+const NAMES=["常态","欢迎","手势","语音","手机","点火","谢幕"];
+const FLEET=[["zhongshu","中枢"],["yunsheng","韵声"],["shengbei","声备"],
+             ["lianbei","脸备"],["tingxie","听写"],["kouxing","口型"]];
+const MODE_ICON={gesture:"手",voice:"音",phone:"机"};
+let cur=0,pinNeed=false;
+function paintScreens(scr){
+  scr=scr||{};
+  $("screens").innerHTML=FLEET.map(([id,zh])=>{
+    const s=scr[id];
+    const badge=s&&s.modes&&s.modes.length?("<b>"+s.modes.map(m=>MODE_ICON[m]||"").join("")+"</b>"):"";
+    return `<span class="s ${s?"on":"off"}">${zh}${s?"✓":"✗"}${badge}</span>`;
+  }).join("");
+}
+function paint(){
+  const a=ACTS[cur];
+  $("stage").style.setProperty("--ac",a.ac);
+  $("stage").style.setProperty("--acg",a.ac+"33");
+  $("num").textContent="第 "+cur+" 幕 / 共 6";
+  $("name").textContent=NAMES[cur];
+  $("say").textContent=a.say; $("do").textContent=a.do; $("fb").textContent=a.fb;
+  $("nx").textContent=cur<6?("第"+(cur+1)+"幕 "+NAMES[cur+1]):"（已到谢幕）";
+  $("live").textContent="第"+cur+"幕 "+NAMES[cur];
+  $("dots").innerHTML=NAMES.map((_,i)=>`<i class="${i===cur?"on":""}"></i>`).join("");
+}
+async function pull(){
+  try{
+    const d=await (await fetch("/api/tour",{cache:"no-store"})).json();
+    pinNeed=!!d.pin_required;
+    if(d.tour&&d.tour.step!==cur){ cur=d.tour.step; paint(); }
+    paintScreens(d.screens);
+    $("conn").classList.add("on");
+  }catch(_){ $("conn").classList.remove("on"); }
+}
+async function go(step){
+  const body={step};
+  if(pinNeed) body.pin=localStorage.hudTourPin||"";
+  try{ const d=await (await fetch("/api/tour",{method:"POST",body:JSON.stringify(body)})).json();
+    if(d.ok){ cur=d.tour.step; paint(); } }catch(_){/**/}
+}
+$("prev").onclick=()=>go("prev");
+$("next2").onclick=()=>go("next");
+paint(); pull(); setInterval(pull,2000);
+</script>
+</body>
+</html>

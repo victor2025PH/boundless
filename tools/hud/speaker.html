@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>扬声器 · BOUNDLESS</title>
+<style>
+/* P3 手机角色·扬声器（2026-08-08）：这台手机=选定机器的「嘴」。
+   声源：SSE 快照的 ctx.voice（小界应答 TTS）+ 新告警提示音（WebAudio 合成，零资产）。
+   关页即离列；心跳给 hud_server 注册表（星座金色卫星的数据源）。 */
+:root{--ink-950:#05060F;--ink-900:#0A0C1B;--gold:#E8B341;--neon-cyan:#22D3EE;
+  --neon-violet:#8B5CF6;--st-ok:#2EC27E;--red:#DE3C46;
+  --txt:#EEF0F8;--txt2:#A6ACBE;--mut:#969CB0;--faint:#7A8096}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{background:linear-gradient(180deg,var(--ink-950),var(--ink-900) 60%,var(--ink-950));
+  color:var(--txt);font-family:"Noto Sans SC","Microsoft YaHei",system-ui,sans-serif;
+  min-height:100vh;padding:30px 20px;user-select:none;text-align:center;
+  display:flex;flex-direction:column;align-items:center;gap:14px}
+#orb{width:120px;height:120px;border-radius:50%;margin-top:6vh;position:relative;
+  border:3px solid var(--gold);box-shadow:0 0 30px rgba(232,179,65,.45);
+  background:radial-gradient(circle,rgba(232,179,65,.35),transparent 70%)}
+#orb.play{animation:pulse .9s ease-in-out infinite}
+@keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.1)}}
+#orb::after{content:"嘴";position:absolute;inset:0;display:flex;align-items:center;
+  justify-content:center;font-size:34px;font-weight:900;color:var(--gold)}
+h1{font-size:20px;font-weight:900}
+h1 b{color:var(--gold)}
+#st{font-size:13px;color:var(--txt2)}
+#last{font-size:14px;color:var(--txt2);max-width:88vw;line-height:1.7;min-height:44px}
+#last b{color:var(--neon-violet)}
+.row{display:flex;gap:10px;padding-top:8px}
+.row button{border:1px solid rgba(139,92,246,.4);border-radius:13px;padding:12px 20px;
+  background:rgba(17,19,42,.75);color:var(--txt);font-size:15px;font-weight:700;cursor:pointer}
+.row button.on{border-color:var(--gold);color:var(--gold);background:rgba(232,179,65,.12)}
+#unlock{border-color:var(--st-ok);color:var(--st-ok);background:rgba(46,194,126,.10)}
+#ft{margin-top:auto;font-size:11.5px;color:var(--faint);line-height:1.7}
+#conn{position:fixed;top:14px;right:16px;width:9px;height:9px;border-radius:50%;
+  background:var(--red);box-shadow:0 0 8px var(--red)}
+#conn.on{background:var(--st-ok);box-shadow:0 0 8px var(--st-ok)}
+</style>
+</head>
+<body>
+<span id="conn"></span>
+<div id="orb"></div>
+<h1>我是「<b id="mname">—</b>」的扬声器</h1>
+<div id="st">等待声音事件…</div>
+<div id="last"></div>
+<div class="row">
+  <button id="unlock">点我开嗓（解锁音频）</button>
+  <button id="ding" class="on">告警提示音 开</button>
+</div>
+<div id="ft">小界的应答从这里出声 · 新告警会「叮」一声<br>
+关掉本页即离列 · 不采集任何数据 · 建议插电常亮</div>
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const P=new URLSearchParams(location.search);
+const FOR=P.get("for")||"yunsheng";
+const ZH={zhongshu:"中枢",yunsheng:"韵声",shengbei:"声备",lianbei:"脸备",tingxie:"听写",kouxing:"口型"};
+$("mname").textContent=ZH[FOR]||FOR;
+let unlocked=false,dingOn=true,played=0,lastTts=null,lastEvKeys=null,actx=null;
+$("unlock").onclick=async()=>{  /* 移动端自动播放限制：一次交互解锁 AudioContext+Audio */
+  actx=new (window.AudioContext||window.webkitAudioContext)();
+  await actx.resume();
+  const a=new Audio(); a.muted=true;
+  try{ await a.play(); }catch(_){/* 有 AudioContext 就够 */}
+  unlocked=true; $("unlock").style.display="none";
+  $("st").textContent="已开嗓 · 等待声音事件…";
+  try{ await navigator.wakeLock.request("screen"); }catch(_){/* 不支持则提示常亮 */}
+};
+$("ding").onclick=()=>{ dingOn=!dingOn;
+  $("ding").textContent="告警提示音 "+(dingOn?"开":"关");
+  $("ding").classList.toggle("on",dingOn); };
+function ding(){  /* 零资产提示音：双音短「叮」 */
+  if(!actx||!dingOn) return;
+  const t=actx.currentTime;
+  [[880,0],[1320,.09]].forEach(([f,dt])=>{
+    const o=actx.createOscillator(),g=actx.createGain();
+    o.frequency.value=f; o.connect(g); g.connect(actx.destination);
+    g.gain.setValueAtTime(.0001,t+dt); g.gain.exponentialRampToValueAtTime(.22,t+dt+.02);
+    g.gain.exponentialRampToValueAtTime(.0001,t+dt+.35);
+    o.start(t+dt); o.stop(t+dt+.4); });
+}
+function beat(){ try{ fetch("/api/roles/beat",{method:"POST",
+  body:JSON.stringify({sid:FOR,role:"speaker",batt:null})}); }catch(_){/**/} }
+const es=new EventSource("/api/stream");
+es.onmessage=e=>{
+  let c; try{ c=JSON.parse(e.data); }catch(_){ return; }
+  $("conn").classList.add("on");
+  const v=c.voice||{};
+  if(unlocked&&v.phase==="result"&&v.tts&&v.seq!==lastTts){
+    lastTts=v.seq; played++;
+    $("last").innerHTML="<b>小界</b>　"+(v.say||"").replace(/[<>&]/g,"");
+    $("st").textContent=`已播 ${played} 条`;
+    $("orb").classList.add("play");
+    const a=new Audio(v.tts);
+    a.onended=()=>$("orb").classList.remove("play");
+    a.play().catch(()=>$("orb").classList.remove("play"));
+  }
+  /* 新告警提示音：在燃未确认键集合出现新成员才响（与 HUD glitch 判据同思路） */
+  const keys=new Set((c.events||[]).filter(x=>x.state==="firing"&&!x.ack&&x.key).map(x=>x.key));
+  if(lastEvKeys!==null){
+    for(const k of keys) if(!lastEvKeys.has(k)){ ding(); break; }
+  }
+  lastEvKeys=keys;
+};
+es.onerror=()=>$("conn").classList.remove("on");
+beat(); setInterval(beat,20000);
+</script>
+</body>
+</html>

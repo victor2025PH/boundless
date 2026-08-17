@@ -15,7 +15,7 @@
 param(
     [ValidateSet('', 'avatarhub', 'chengjie', 'huoke', 'website')]
     [string]$Engine = '',           # 空 = 全部；website = kpi_weekly 所属段（Boundless-website-*）
-    [string[]]$Tasks = @(),         # 空 = 全部任务类型；可选 uploader/purge/export/grants_sync/kpi_weekly（逗号分隔亦可）
+    [string[]]$Tasks = @(),         # 空 = 全部任务类型；可选 uploader/purge/export/grants_sync/config_snapshot/kpi_weekly（逗号分隔亦可）
     [switch]$Execute                # 缺省 WhatIf 演练；-Execute 才 Unregister-ScheduledTask
 )
 
@@ -27,8 +27,8 @@ $TaskPath = '\Boundless\'
 function Say([string]$msg) { Write-Host "[uninstall_tasks] $msg" }
 
 $Tasks = @($Tasks | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $_ })
-$bad = @($Tasks | Where-Object { $_ -notin @('uploader', 'purge', 'export', 'grants_sync', 'kpi_weekly') })
-if ($bad.Count) { Say "错误: 未知任务类型 $($bad -join ', ')（可选 uploader/purge/export/grants_sync/kpi_weekly）"; exit 1 }
+$bad = @($Tasks | Where-Object { $_ -notin @('uploader', 'purge', 'export', 'grants_sync', 'config_snapshot', 'kpi_weekly') })
+if ($bad.Count) { Say "错误: 未知任务类型 $($bad -join ', ')（可选 uploader/purge/export/grants_sync/config_snapshot/kpi_weekly）"; exit 1 }
 
 $prefix = if ($Engine) { "Boundless-$Engine-" } else { 'Boundless-' }
 

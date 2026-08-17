@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>入列 · BOUNDLESS</title>
+<style>
+/* P3 手机万能外设（2026-08-08）：角色总入口——一台手机=一台机器的一个器官。
+   色板与 hud.html 同源；全离线零外链；新角色（扬声器/魔杖/遥控/监看）走本服务，
+   摄像头/麦克风类角色（手势站）跳中继 :7879（既有 https 证书链）。 */
+:root{
+  --ink-950:#05060F; --ink-900:#0A0C1B; --ink-800:#11132A;
+  --neon-cyan:#22D3EE; --neon-violet:#8B5CF6; --neon-pink:#EC4899;
+  --st-ok:#2EC27E; --amber:#E8B341; --gold:#E8B341;
+  --txt:#EEF0F8; --txt2:#A6ACBE; --mut:#969CB0; --faint:#7A8096;
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{background:linear-gradient(180deg,var(--ink-950),var(--ink-900) 60%,var(--ink-950));
+  color:var(--txt);font-family:"Noto Sans SC","Microsoft YaHei",system-ui,sans-serif;
+  min-height:100vh;padding:26px 18px 40px;user-select:none;text-align:center}
+#mark{font-size:64px;font-weight:900;line-height:1;
+  background:linear-gradient(92deg,var(--neon-cyan),var(--neon-violet));
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  animation:breathe 4s ease-in-out infinite}
+@keyframes breathe{0%,100%{opacity:.72}50%{opacity:1}}
+h1{font-size:19px;font-weight:900;letter-spacing:2px;padding:6px 0 2px}
+#sub{font-size:12.5px;color:var(--faint);padding-bottom:16px}
+.sec{font-size:12px;color:var(--faint);letter-spacing:2px;padding:14px 0 8px;text-align:left}
+#machines{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+#machines button{border:1px solid rgba(139,92,246,.35);border-radius:12px;padding:9px 14px;
+  background:rgba(17,19,42,.7);color:var(--txt2);font-size:14.5px;font-weight:700;cursor:pointer}
+#machines button.cur{border-color:var(--neon-cyan);color:var(--neon-cyan);
+  background:rgba(34,211,238,.12)}
+#roles{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding-top:6px}
+.role{position:relative;border:1.5px solid var(--rc,#666);border-radius:16px;
+  background:rgba(17,19,42,.78);padding:16px 12px 13px;text-align:left;color:var(--txt);
+  cursor:pointer;transition:transform .12s ease;display:block;text-decoration:none}
+.role:active{transform:scale(.96)}
+.role .rt{font-size:17px;font-weight:900;color:var(--rc)}
+.role .rd{font-size:12px;color:var(--mut);padding-top:4px;line-height:1.55}
+.role .rq{position:absolute;top:10px;right:12px;font-size:10.5px;color:var(--faint)}
+#ft{padding-top:22px;font-size:11.5px;color:var(--faint);line-height:1.7;text-align:left}
+</style>
+</head>
+<body>
+<div id="mark">∞</div>
+<h1>加入集群</h1>
+<div id="sub">一台手机 = 一台机器的一个器官 · 全程局域网不出内网</div>
+
+<div class="sec">第一步 · 你要成为哪台机器的外设</div>
+<div id="machines"></div>
+
+<div class="sec">第二步 · 选角色（角色即租约，切换=重新进入）</div>
+<div id="roles"></div>
+
+<div id="ft">
+手势站走安全通道（首次会有证书确认，一路允许即可）；
+扬声器/魔杖关掉页面即离列，不留任何东西在手机上。<br>
+监看与遥控只读不采集。隐私：摄像头/麦克风数据仅内存流转、不落盘、不出集群。
+</div>
+
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const P=new URLSearchParams(location.search);
+const MACHINES=[["zhongshu","中枢"],["yunsheng","韵声"],["shengbei","声备"],
+                ["lianbei","脸备"],["tingxie","听写"],["kouxing","口型"]];
+let cur=P.get("for")||"yunsheng";
+function hub(){ return location.hostname; }
+/* 角色卡：href 现算（跟随选中的机器）；手势站跳中继 :7879（https 证书链既有） */
+const ROLES=[
+  {t:"手势站",c:"#EC4899",q:"眼睛",d:"手机镜头变这台机的手势眼睛：挥手隔空操作大屏",
+   href:m=>`https://${hub()}:7879/station?for=${m}`},
+  {t:"扬声器",c:"#E8B341",q:"嘴",d:"小界的应答与告警提示音从这台手机出声",
+   href:m=>`/speaker?for=${m}`},
+  {t:"魔杖",c:"#8B5CF6",q:"指挥棒",d:"挥动手机，大屏上的光标跟着走（需允许方向传感器）",
+   href:m=>`/wand?for=${m}`},
+  {t:"监看",c:"#969CB0",q:"口袋屏",d:"只看不采集：这台机的实况板装进口袋",
+   href:m=>`/hud?machine=${m}`},
+  {t:"展演遥控",c:"#22D3EE",q:"指挥",d:"主持人专用：切幕/署名/开演预检",
+   href:_=>`/tour`},
+];
+function render(){
+  $("machines").innerHTML=MACHINES.map(([id,zh])=>
+    `<button class="${id===cur?"cur":""}" data-m="${id}">${zh}</button>`).join("");
+  $("roles").innerHTML=ROLES.map((r,i)=>
+    `<a class="role" style="--rc:${r.c}" href="${r.href(cur)}" data-r="${r.t}">
+      <span class="rq">${r.q}</span><span class="rt">${r.t}</span>
+      <div class="rd">${r.d}</div></a>`).join("");
+}
+$("machines").addEventListener("click",e=>{
+  const b=e.target.closest("button"); if(b){ cur=b.dataset.m; render(); }
+});
+$("roles").addEventListener("click",e=>{
+  const a=e.target.closest(".role");
+  if(a) navigator.sendBeacon&&navigator.sendBeacon("/api/stat",
+    JSON.stringify({k:"phone_role",m:cur,v:a.dataset.r,src:"phone"}));
+});
+render();
+</script>
+</body>
+</html>

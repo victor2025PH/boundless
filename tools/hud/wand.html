@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>魔杖 · BOUNDLESS</title>
+<style>
+/* P3 手机角色·魔杖（2026-08-08 彩蛋，埋点定去留）：陀螺仪→大屏光标。
+   iOS 13+ 要 HTTPS+用户手势 requestPermission；本页走 http 内网——iOS 用户会在
+   权限步被浏览器拦（诚实提示换安卓或走 https 中继域）；Android 直接可用。 */
+:root{--ink-950:#05060F;--ink-900:#0A0C1B;--neon-violet:#8B5CF6;--neon-cyan:#22D3EE;
+  --st-ok:#2EC27E;--red:#DE3C46;--amber:#E8B341;
+  --txt:#EEF0F8;--txt2:#A6ACBE;--mut:#969CB0;--faint:#7A8096}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{background:linear-gradient(180deg,var(--ink-950),var(--ink-900) 60%,var(--ink-950));
+  color:var(--txt);font-family:"Noto Sans SC","Microsoft YaHei",system-ui,sans-serif;
+  min-height:100vh;padding:30px 20px;user-select:none;text-align:center;
+  display:flex;flex-direction:column;align-items:center;gap:14px}
+#pad{width:min(78vw,300px);height:min(78vw,300px);border-radius:22px;margin-top:4vh;
+  border:1.5px solid rgba(139,92,246,.5);background:rgba(17,19,42,.7);position:relative}
+#dot{position:absolute;width:16px;height:16px;border-radius:50%;background:var(--neon-violet);
+  box-shadow:0 0 12px var(--neon-violet);left:50%;top:50%;transform:translate(-50%,-50%)}
+h1{font-size:20px;font-weight:900}
+h1 b{color:var(--neon-violet)}
+#st{font-size:13px;color:var(--txt2);min-height:20px}
+.row{display:flex;gap:10px}
+.row button{border:1px solid rgba(139,92,246,.45);border-radius:13px;padding:12px 20px;
+  background:rgba(17,19,42,.75);color:var(--txt);font-size:15px;font-weight:700;cursor:pointer}
+#go{border-color:var(--st-ok);color:var(--st-ok);background:rgba(46,194,126,.10)}
+#ft{margin-top:auto;font-size:11.5px;color:var(--faint);line-height:1.7}
+</style>
+</head>
+<body>
+<div id="pad"><div id="dot"></div></div>
+<h1>我是「<b id="mname">—</b>」屏上的魔杖</h1>
+<div id="st">把手机指向大屏中心，点「启用」校准</div>
+<div class="row">
+  <button id="go">启用魔杖（校准）</button>
+</div>
+<div id="ft">挥动手机 · 大屏光标跟着走 · 关页即离列<br>
+仅传姿态角，不采集任何画面或声音</div>
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const P=new URLSearchParams(location.search);
+const FOR=P.get("for")||"yunsheng";
+const ZH={zhongshu:"中枢",yunsheng:"韵声",shengbei:"声备",lianbei:"脸备",tingxie:"听写",kouxing:"口型"};
+$("mname").textContent=ZH[FOR]||FOR;
+let b0=null,g0=null,last=0,x=.5,y=.5;
+function onOri(e){
+  if(e.beta==null||e.gamma==null) return;
+  if(b0===null){ b0=e.beta; g0=e.gamma; }
+  /* 相对校准零点映射到 0..1（±25° 满行程），20fps 节流 POST */
+  x=Math.max(0,Math.min(1,.5+(e.gamma-g0)/50));
+  y=Math.max(0,Math.min(1,.5+(e.beta-b0)/50));
+  $("dot").style.left=(x*100)+"%"; $("dot").style.top=(y*100)+"%";
+  const now=Date.now();
+  if(now-last<50) return;
+  last=now;
+  fetch("/api/wand",{method:"POST",body:JSON.stringify({sid:FOR,x,y})}).catch(()=>{});
+}
+$("go").onclick=async()=>{
+  b0=g0=null;
+  try{
+    if(typeof DeviceOrientationEvent!=="undefined"
+       &&typeof DeviceOrientationEvent.requestPermission==="function"){
+      const p=await DeviceOrientationEvent.requestPermission();   /* iOS 13+：必须用户手势内 */
+      if(p!=="granted"){ $("st").textContent="传感器权限被拒（iOS 需 https，建议用安卓机）"; return; }
+    }
+    addEventListener("deviceorientation",onOri);
+    $("st").textContent="魔杖已启用 · 大屏找紫色光点";
+    $("go").textContent="重新校准（指向屏幕中心再按）";
+    try{ await navigator.wakeLock.request("screen"); }catch(_){/**/}
+    navigator.sendBeacon&&navigator.sendBeacon("/api/stat",
+      JSON.stringify({k:"phone_role",m:FOR,v:"魔杖",src:"phone"}));
+    setInterval(()=>fetch("/api/roles/beat",{method:"POST",
+      body:JSON.stringify({sid:FOR,role:"wand"})}).catch(()=>{}),20000);
+    fetch("/api/roles/beat",{method:"POST",body:JSON.stringify({sid:FOR,role:"wand"})});
+  }catch(e){ $("st").textContent="启用失败："+String(e).slice(0,60); }
+};
+</script>
+</body>
+</html>

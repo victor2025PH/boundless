@@ -19,7 +19,7 @@ function Decode-Result([int64]$code) {
     switch ($code) {
         0          { return '成功' }
         1          { return '失败（退出码 1：本轮有失败，看日志）' }
-        2          { return '失败（退出码 2：配置错误——缺密钥/python/node/数据根，看日志首行）' }
+        2          { return '失败（退出码 2：配置错误——缺密钥/python/node/git/数据根/配置目录，看日志首行）' }
         3          { return '失败（退出码 3：chengjie 双实例守门，README §3）' }
         267009     { return '正在运行' }                     # 0x41301
         267011     { return '尚未运行过' }                   # 0x41303

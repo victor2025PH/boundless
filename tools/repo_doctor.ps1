@@ -121,6 +121,19 @@ if (Test-Path $syncPy) {
   }
 }
 
+# L 六机台账对账（machines_lint 文件级：台账↔cluster_map↔SSH生成物↔本机config↔壁纸产物；
+#   刻意不带 --remote——门禁不因某台节点关机而拒推，远端一致性由值班手动跑）
+$mlint = Join-Path $root 'tools/machines_lint.py'
+$py = 'D:\Miniconda3\python.exe'
+if ((Test-Path $mlint) -and (Test-Path $py)) {
+  $mlOut = & $py $mlint 2>&1
+  if ($LASTEXITCODE -eq 0) { Line 'OK' 'machines_lint: roster/ssh-config/wallpapers in sync' }
+  else {
+    Line 'FAIL' 'machines_lint RED (machines.json vs cluster_map/ssh-config/wallpapers drift)'
+    $mlOut | Select-String '\[RED\]' | Select-Object -First 5 | ForEach-Object { Write-Output ('      ' + $_.Line) }
+  }
+} else { Line 'WARN' 'machines_lint skipped (script or python missing)' }
+
 Write-Output '----------------------------------------------------------'
 Write-Output ("SUMMARY: FAIL=$fail  WARN=$warn   tracked=" + ((git ls-files | Measure-Object).Count))
 if ($fail -gt 0) { Write-Output 'DOCTOR: RED (fix FAILs before release)'; exit 1 }

@@ -297,11 +297,20 @@ def llm_reply(machine_id: str, messages: list) -> tuple[str, str]:
 
 
 # ---------------- TTS ----------------
+# [P0 抗停机 2026-08-14] 语音回执不许因算力模式失声：code 编程模式会停掉 fish_tts(:7855)，
+# 而小界的嗓子全走 Fish——「切到编程模式」说完系统从此哑巴（确认/完成播报全没，实锤断点）。
+# 三级降级：① Fish 在线合成（成功顺手落盘缓存）→ ② 磁盘缓存（同一句话说过一次=永远会说，
+# 音色一致）→ ③ Windows SAPI 离线机械音（陌生句子也不失声）。缓存键=文本 sha1，LRU 留 200 条。
 
-def tts_wav(text: str) -> bytes | None:
-    text = (text or "").strip()
-    if not text:
-        return None
+TTS_CACHE_DIR = Path(r"C:\Users\Public\boundless-hud\tts_cache")
+
+
+def _tts_cache_path(text: str) -> Path:
+    import hashlib
+    return TTS_CACHE_DIR / (hashlib.sha1(text.encode("utf-8")).hexdigest()[:24] + ".wav")
+
+
+def _tts_fish(text: str) -> bytes | None:
     try:
         body = json.dumps({"text": text[:280], "language": "zh", "return_base64": True}).encode("utf-8")
         req = urllib.request.Request(f"{FISH}/v1/tts", data=body, method="POST")
@@ -312,6 +321,64 @@ def tts_wav(text: str) -> bytes | None:
         return base64.b64decode(b64) if b64 else None
     except Exception:
         return None
+
+
+def _tts_sapi(text: str) -> bytes | None:
+    """SAPI 兜底（System.Speech 落临时 wav）：文本经 base64 隧道防引号剥层（O9 先例）。"""
+    import subprocess
+    import tempfile
+    tmp = Path(tempfile.gettempdir()) / f"xj_sapi_{int(time.time() * 1000)}.wav"
+    t64 = base64.b64encode(text.encode("utf-16-le")).decode("ascii")
+    ps = ("Add-Type -AssemblyName System.Speech;"
+          "$t=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('" + t64 + "'));"
+          "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer;"
+          "$s.SetOutputToWaveFile('" + str(tmp) + "');$s.Speak($t);$s.Dispose()")
+    try:
+        subprocess.run(["powershell", "-NoProfile", "-Command", ps], timeout=20,
+                       capture_output=True,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        wav = tmp.read_bytes() if tmp.exists() else None
+        return wav if wav and len(wav) > 1000 else None
+    except Exception:
+        return None
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def _tts_cache_prune(limit: int = 200) -> None:
+    try:
+        files = sorted(TTS_CACHE_DIR.glob("*.wav"), key=lambda p: p.stat().st_mtime)
+        for p in files[:-limit]:
+            p.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def tts_wav(text: str) -> bytes | None:
+    text = (text or "").strip()
+    if not text:
+        return None
+    cp = _tts_cache_path(text[:280])
+    wav = _tts_fish(text)
+    if wav:
+        try:
+            TTS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            cp.write_bytes(wav)
+            _tts_cache_prune()
+        except Exception:
+            pass
+        return wav
+    try:
+        if cp.exists():
+            import os
+            os.utime(cp)   # LRU touch：常用回执别被裁剪
+            return cp.read_bytes()
+    except Exception:
+        pass
+    return _tts_sapi(text[:120])
 
 
 # ---------------- HTTP ----------------

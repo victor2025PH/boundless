@@ -1,10 +1,11 @@
-# 五机 SSH 网状 + GPU 服务探活
+﻿# 六机 SSH 网状 + GPU 服务探活（服务清单由 deploy/machines.json 生成，不再手抄——2026-08-05 v2）
 [CmdletBinding()]
 param()
 $ErrorActionPreference = 'Continue'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$Machines = (Get-Content (Join-Path $Root 'deploy\machines.json') -Raw -Encoding UTF8 | ConvertFrom-Json).machines
-$Hub = 'http://192.168.0.176:9000'
+$Data = Get-Content (Join-Path $Root 'deploy\machines.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$Machines = $Data.machines
+$Hub = ('http://{0}:{1}' -f $Data.hub.ip, $Data.hub.port)
 
 Write-Host "=== SSH mesh ===" -ForegroundColor Cyan
 $sshOk = 0; $sshFail = 0
@@ -21,13 +22,18 @@ foreach ($m in $Machines) {
 }
 
 Write-Host "`n=== GPU / service health (from this host) ===" -ForegroundColor Cyan
-$urls = @(
-  @{ n = 'Hub 幻声'; u = "$Hub/health" },
-  @{ n = 'Faceswap 幻颜节点'; u = 'http://192.168.0.104:8000/health' },
-  @{ n = 'STT 通传节点'; u = 'http://192.168.0.140:7854/health' },
-  @{ n = 'EmotionTTS 通译'; u = 'http://192.168.0.117:7852/health' },
-  @{ n = 'Qwen3TTS 通译'; u = 'http://192.168.0.117:7858/health' }
-)
+# Hub 聚合健康 + 各非中枢机的服务 /health（中枢本机服务由 Hub /health 内部聚合，
+# 且部分只绑 127.0.0.1，从局域网直探会误报——2026-08-05 实锤 :7900）
+$urls = @(@{ n = ('Hub ' + ($Machines | Where-Object { $_.ip -eq $Data.hub.ip } | Select-Object -First 1).zh); u = "$Hub/health" })
+foreach ($m in $Machines) {
+  if ($m.ip -eq $Data.hub.ip) { continue }
+  foreach ($svc in @($m.services)) {
+    $parts = ([string]$svc) -split ':'
+    if ($parts.Count -lt 2) { continue }
+    $path = if ($parts[0] -like 'ollama*') { '/api/version' } else { '/health' }
+    $urls += @{ n = ('{0} {1}' -f $m.zh, $parts[0]); u = ('http://{0}:{1}{2}' -f $m.ip, $parts[1], $path) }
+  }
+}
 $svcOk = 0; $svcFail = 0
 foreach ($x in $urls) {
   try {

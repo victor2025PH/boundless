@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>展演遥控 · BOUNDLESS</title>
+<style>
+/* P0 展演骨架（2026-08-08）：主持人手机遥控页。
+   色板与 hud.html 同源（ink+neon，契约对账）；全离线零外链；只发 T0 呈现动词。 */
+:root{
+  --ink-950:#05060F; --ink-900:#0A0C1B; --ink-800:#11132A;
+  --neon-cyan:#22D3EE; --neon-violet:#8B5CF6; --neon-pink:#EC4899;
+  --st-ok:#2EC27E; --amber:#E8B341; --red:#DE3C46;
+  --txt:#EEF0F8; --txt2:#A6ACBE; --mut:#969CB0; --faint:#7A8096;
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{background:linear-gradient(180deg,var(--ink-950),var(--ink-900) 60%,var(--ink-950));
+  color:var(--txt);font-family:"Noto Sans SC","Microsoft YaHei",system-ui,sans-serif;
+  min-height:100vh;padding:18px 16px 40px;user-select:none}
+h1{font-size:22px;font-weight:900;letter-spacing:1px;
+  background:linear-gradient(90deg,var(--neon-cyan),var(--neon-violet));
+  -webkit-background-clip:text;background-clip:text;color:transparent;display:inline-block}
+#hd{display:flex;align-items:center;gap:10px;padding-bottom:4px}
+#hd .sp{flex:1}
+#conn{width:9px;height:9px;border-radius:50%;background:var(--red);box-shadow:0 0 8px var(--red)}
+#conn.on{background:var(--st-ok);box-shadow:0 0 8px var(--st-ok)}
+#now{font-size:13px;color:var(--txt2);padding:2px 0 6px}
+#now b{color:var(--neon-cyan)}
+#screens{display:flex;flex-wrap:wrap;gap:6px;padding-bottom:12px}
+#screens .s{font-size:11px;font-weight:700;border-radius:9px;padding:3px 8px;
+  border:1px solid rgba(255,255,255,.14);color:var(--faint)}
+#screens .s.on{color:var(--st-ok);border-color:rgba(46,194,126,.5);background:rgba(46,194,126,.08)}
+#screens .s.off{color:var(--red);border-color:rgba(222,60,70,.4)}
+#screens .s b{color:var(--neon-cyan);margin-left:3px}
+.sec{font-size:12.5px;color:var(--faint);letter-spacing:2px;padding:16px 0 8px}
+#scenes{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.sc{position:relative;border:1px solid rgba(139,92,246,.35);border-radius:14px;
+  background:rgba(17,19,42,.75);padding:15px 12px 12px;text-align:left;color:var(--txt);
+  font-size:16.5px;font-weight:700;line-height:1.35;cursor:pointer;transition:transform .12s ease}
+.sc small{display:block;font-size:11.5px;font-weight:400;color:var(--mut);padding-top:3px}
+.sc .n{font-size:11px;color:var(--faint);font-variant-numeric:tabular-nums}
+.sc:active{transform:scale(.96)}
+.sc.cur{border-color:var(--neon-cyan);background:rgba(34,211,238,.12);
+  box-shadow:0 0 18px rgba(34,211,238,.25)}
+.sc.hold::after{content:"候";position:absolute;top:8px;right:9px;font-size:10.5px;font-weight:700;
+  color:var(--amber);border:1px solid var(--amber);border-radius:8px;padding:1px 6px}
+#navrow{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding-top:10px}
+#navrow button{border:1px solid rgba(34,211,238,.45);border-radius:14px;padding:16px 0;
+  background:rgba(34,211,238,.10);color:var(--neon-cyan);font-size:18px;font-weight:900;cursor:pointer}
+#navrow button:active{transform:scale(.96)}
+#vrow{display:flex;gap:8px}
+#visitor{flex:1;border:1px solid rgba(139,92,246,.4);border-radius:12px;background:rgba(5,6,15,.6);
+  color:var(--txt);font-size:15px;padding:11px 12px;outline:none}
+#visitor::placeholder{color:var(--faint)}
+#vsave{border:1px solid var(--neon-violet);border-radius:12px;background:rgba(139,92,246,.14);
+  color:var(--neon-violet);font-size:14px;font-weight:700;padding:0 18px;cursor:pointer}
+#pinrow{display:none;gap:8px;padding-top:8px}
+#pinrow.on{display:flex}
+#pin{flex:1;border:1px solid rgba(232,179,65,.5);border-radius:12px;background:rgba(5,6,15,.6);
+  color:var(--amber);font-size:15px;padding:10px 12px;outline:none;letter-spacing:4px}
+#pf{border:1px solid rgba(139,92,246,.28);border-radius:14px;background:rgba(10,12,27,.7);
+  padding:12px 14px;min-height:44px}
+.pfi{display:flex;gap:9px;align-items:baseline;font-size:14px;padding:3.5px 0}
+.pfi .d{width:8px;height:8px;border-radius:50%;flex:none;align-self:center}
+.pfi .nm{font-weight:700;flex:none}
+.pfi .nt{color:var(--txt2);font-size:12.5px}
+#pfbtn{margin-top:10px;width:100%;border:1px solid rgba(46,194,126,.5);border-radius:12px;
+  padding:12px 0;background:rgba(46,194,126,.10);color:var(--st-ok);font-size:15px;font-weight:700;cursor:pointer}
+#toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:rgba(10,12,27,.95);
+  border:1px solid rgba(139,92,246,.5);border-radius:14px;padding:9px 18px;font-size:14px;
+  color:var(--txt2);display:none;white-space:nowrap;z-index:9}
+#ft{padding-top:22px;font-size:11.5px;color:var(--faint);line-height:1.7}
+</style>
+</head>
+<body>
+<div id="hd"><h1>展演遥控</h1><span class="sp"></span><span id="conn"></span></div>
+<div id="now">当前：<b id="nowtxt">连接中…</b></div>
+<div id="screens"></div>
+
+<div class="sec">访客署名（开场横幅用，可留空）</div>
+<div id="vrow">
+  <input id="visitor" maxlength="24" placeholder="如：星辰科技 王总一行">
+  <button id="vsave">保存</button>
+</div>
+<div id="pinrow"><input id="pin" type="password" maxlength="16" placeholder="遥控 PIN"></div>
+
+<div class="sec">幕次（点即切，全场六屏同步）</div>
+<div id="scenes"></div>
+<div id="navrow">
+  <button id="prev">‹ 上一幕</button>
+  <button id="next">下一幕 ›</button>
+</div>
+
+<div class="sec">开演前预检</div>
+<div id="pf"><div class="pfi"><span class="nt">还没跑过 · 点下方按钮</span></div></div>
+<button id="pfbtn">跑一遍预检</button>
+<a href="/runsheet" style="display:block;margin-top:12px;text-align:center;text-decoration:none;
+  border:1px solid rgba(139,92,246,.4);border-radius:14px;padding:13px 0;
+  background:rgba(139,92,246,.10);color:#8B5CF6;font-size:15px;font-weight:700">
+  打开提词卡（跟随幕次 · 建议另开一屏）›</a>
+
+<div id="toast"></div>
+<div id="ft">遥控只切换呈现层幕次（T0），不含任何运维动作；
+运维动词一律走控制台/ops_gateway 白名单。<br>
+幕 5（点火）随 P2 上线——当前切过去只亮幕次章，由主持人口播衔接。
+幕 3 语音已上线：对着演示位麦克风说「小界」唤醒。</div>
+
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+/* 幕次表与服务端 TOUR_STEPS 同源（契约对账）；hold=候场（P1/P2 上线后解除） */
+const SCENES=[
+  {n:0,t:"常态回归",s:"结束/中止展演，回集群实况"},
+  {n:1,t:"欢迎开场",s:"六屏波纹接力 + 欢迎横幅"},
+  {n:2,t:"手势演示",s:"掌心唤醒 · 提取 · 放大 · 挥扫"},
+  {n:3,t:"语音指挥",s:"「小界」唤醒 · 体检 · 问答"},
+  {n:4,t:"手机入列",s:"访客扫码 · 卫星升空"},
+  {n:5,t:"隔空点火",s:"武装-刷脸-点火（P2 上线）",hold:1},
+  {n:6,t:"谢幕",s:"全场调暗 · 品牌呼吸"},
+];
+let cur=-1,pinNeed=false;
+const FLEET=[["zhongshu","中枢"],["yunsheng","韵声"],["shengbei","声备"],
+             ["lianbei","脸备"],["tingxie","听写"],["kouxing","口型"]];
+const MODE_ICON={gesture:"手",voice:"音",phone:"机"};
+function toast(s){const t=$("toast");t.textContent=s;t.style.display="block";
+  clearTimeout(t._h);t._h=setTimeout(()=>t.style.display="none",2200);}
+function paintScreens(scr){
+  scr=scr||{};
+  $("screens").innerHTML=FLEET.map(([id,zh])=>{
+    const s=scr[id];
+    const b=s&&s.modes&&s.modes.length?("<b>"+s.modes.map(m=>MODE_ICON[m]||"").join("")+"</b>"):"";
+    return `<span class="s ${s?"on":"off"}">${zh}${s?"✓":"✗"}${b}</span>`;
+  }).join("");
+}
+function renderScenes(){
+  $("scenes").innerHTML=SCENES.map(x=>
+    `<button class="sc${x.n===cur?" cur":""}${x.hold?" hold":""}" data-n="${x.n}">
+      <span class="n">第${x.n}幕</span><br>${x.t}<small>${x.s}</small></button>`).join("");
+}
+async function pull(){
+  try{
+    const d=await (await fetch("/api/tour",{cache:"no-store"})).json();
+    pinNeed=!!d.pin_required;
+    $("pinrow").classList.toggle("on",pinNeed);
+    paintScreens(d.screens);
+    if(d.tour){
+      cur=d.tour.step;
+      $("nowtxt").textContent=`第${d.tour.step}幕 · ${d.tour.name}`+
+        (d.tour.visitor?` ｜ 署名「${d.tour.visitor}」`:"");
+      renderScenes();
+    }
+    $("conn").classList.add("on");
+  }catch(_){ $("conn").classList.remove("on"); $("nowtxt").textContent="失联 · 重试中"; }
+}
+async function post(step,extra){
+  const body=Object.assign({step},extra||{});
+  if(pinNeed) body.pin=localStorage.hudTourPin=$("pin").value||localStorage.hudTourPin||"";
+  try{
+    const r=await fetch("/api/tour",{method:"POST",body:JSON.stringify(body)});
+    if(r.status===401){ toast("PIN 不对"); $("pinrow").classList.add("on"); return; }
+    const d=await r.json();
+    if(d.ok){ cur=d.tour.step; renderScenes();
+      $("nowtxt").textContent=`第${d.tour.step}幕 · ${d.tour.name}`;
+      toast(`已切到 第${d.tour.step}幕 ${d.tour.name}`); }
+    else toast("失败："+(d.error||"未知"));
+  }catch(_){ toast("网络失败，再点一次"); }
+}
+$("scenes").addEventListener("click",e=>{
+  const b=e.target.closest(".sc"); if(b) post(+b.dataset.n);
+});
+$("prev").onclick=()=>post("prev");
+$("next").onclick=()=>post("next");
+$("vsave").onclick=()=>{ post(cur<0?0:cur,{visitor:$("visitor").value}); toast("署名已保存"); };
+$("pfbtn").onclick=async()=>{
+  $("pfbtn").textContent="预检中…";
+  try{
+    const d=await (await fetch("/api/preflight",{cache:"no-store"})).json();
+    const col={ok:"#2EC27E",warn:"#DE3C46",info:"#E8B341"};
+    $("pf").innerHTML=(d.checks||[]).map(c=>
+      `<div class="pfi"><span class="d" style="background:${col[c.level]};box-shadow:0 0 6px ${col[c.level]}"></span>
+       <span class="nm">${c.name}</span><span class="nt">${c.note}</span></div>`).join("")
+      +`<div class="pfi"><span class="nt">${d.ok?"✓ 可以开演":"✗ 有红牌——先处理再开演"}</span></div>`;
+  }catch(_){ $("pf").innerHTML='<div class="pfi"><span class="nt">预检接口失败</span></div>'; }
+  $("pfbtn").textContent="再跑一遍预检";
+};
+if(localStorage.hudTourPin) $("pin").value=localStorage.hudTourPin;
+renderScenes(); pull(); setInterval(pull,2500);
+</script>
+</body>
+</html>
