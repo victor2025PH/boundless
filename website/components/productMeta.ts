@@ -35,6 +35,18 @@ export const PRODUCT_OPTICAL_SCALE: Partial<Record<ProductKey, number>> = {
   facex: 1.03,
 };
 
+// 每款图标的主色（"r,g,b" 字符串，取自玻璃 3D 图标的视觉主导色），
+// 供辉光 drop-shadow / 拖尾光迹 / 出生涟漪等 UI 效果按产品配色，提升识别度。
+export const PRODUCT_GLOW: Record<ProductKey, string> = {
+  reachx: "251,146,60", // 靶心+飞镖：橙
+  chatx: "217,70,239", // 对话气泡+星芒：紫红
+  facex: "96,165,250", // 面具：蓝
+  voicex: "167,139,250", // 麦克风：紫
+  livex: "232,121,249", // 播放键：品红
+  lingox: "56,189,248", // 地球+环绕箭头：天蓝
+  voxx: "249,115,22", // 耳机+话筒：橙红
+};
+
 // 拥有独立落地页的产品线（zh 路径；en 为 /en 前缀）。矩阵卡片优先跳落地页，
 // 没有落地页的产品仍回退到首页锚点。
 export const PRODUCT_LANDING: Partial<Record<ProductKey, string>> = {

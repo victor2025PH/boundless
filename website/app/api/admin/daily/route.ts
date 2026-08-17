@@ -16,7 +16,7 @@ async function notifyAdmins(theme: string, text: string) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) return;
   const chats = await getAdminChats();
-  const msg = `📝 今日 AI 选题草稿（待审核）\n主题：${theme}\n\n${text}\n\n👉 到后台 ${SITE_URL}/admin 一键发布或编辑`;
+  const msg = `🔒 管理员 · 仅你可见\n📝 今日 AI 选题草稿（待审核）\n主题：${theme}\n\n${text}\n\n👉 到后台 ${SITE_URL}/admin 一键发布或编辑`;
   await Promise.allSettled(
     chats.map((chat) =>
       fetch(`https://api.telegram.org/bot${token}/sendMessage`, {

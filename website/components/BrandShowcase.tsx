@@ -1,7 +1,8 @@
 "use client";
 
 import Image from "next/image";
-import { useReducedMotion } from "framer-motion";
+import { useEffect, useState, type CSSProperties } from "react";
+import { useReducedMotionSafe } from "@/components/fx/useReducedMotionSafe";
 import { useLang } from "@/components/LanguageContext";
 import Reveal from "@/components/fx/Reveal";
 import { track } from "@/lib/track";
@@ -18,7 +19,7 @@ import {
 } from "@/lib/brand";
 import { CATEGORY_UI } from "@/lib/categoryUi";
 import { localePath } from "@/lib/site";
-import { PRODUCT_IMG, PRODUCT_ANCHOR, PRODUCT_LANDING, PRODUCT_OPTICAL_SCALE } from "@/components/productMeta";
+import { PRODUCT_IMG, PRODUCT_ANCHOR, PRODUCT_LANDING, PRODUCT_OPTICAL_SCALE, PRODUCT_GLOW } from "@/components/productMeta";
 
 /** 品牌家族展示带：无界公司主标 + 三系七产品 LOGO 星阵。
  *  与下方 ProductMatrix（详细目录卡片）分工不同——这里是品牌形象「全家福」：
@@ -48,6 +49,7 @@ function ProductTile({
   breakLabel,
   cat,
   float,
+  landed,
 }: {
   keyName: ProductKey;
   idx: number;
@@ -55,6 +57,8 @@ function ProductTile({
   breakLabel: string;
   cat: CategoryKey;
   float: boolean;
+  /** 开场页冲越交接：true 时图标按序「落位」（缩放弹入 + 产品主色辉光闪现） */
+  landed: boolean;
 }) {
   const accent = CATEGORY_UI[cat];
   const p = BRAND.products[keyName];
@@ -75,7 +79,17 @@ function ProductTile({
         <span
           className={`pointer-events-none absolute inset-0 rounded-full opacity-0 blur-xl transition duration-500 group-hover:opacity-100 ${accent.glow}`}
         />
-        <span className="relative inline-grid place-items-center" style={optical !== 1 ? { transform: `scale(${optical})` } : undefined}>
+        <span
+          className={`relative inline-grid place-items-center${landed ? " bl-land" : ""}`}
+          style={
+            {
+              ...(optical !== 1 ? { transform: `scale(${optical})` } : {}),
+              ...(landed
+                ? { "--land-delay": `${PRODUCT_ORDER.indexOf(keyName) * 95}ms`, "--land-glow": PRODUCT_GLOW[keyName] }
+                : {}),
+            } as CSSProperties
+          }
+        >
           <Image
             src={PRODUCT_IMG[keyName]}
             alt={`${p.zh} ${p.en}`}
@@ -108,10 +122,26 @@ function ProductTile({
 
 export default function BrandShowcase() {
   const { lang } = useLang();
-  const reduced = useReducedMotion();
+  // 水合安全版：float 切换 animate-float 类名，SSR/首帧必须一致
+  const reduced = useReducedMotionSafe();
   const c = COPY[lang];
   const pitch = FAMILY_PITCH[lang];
   const float = !reduced;
+
+  /* 开场页冲越交接的「落位」终点：开场里喷涌的七款 LOGO，在冲越瞬间（bl-intro-entered）
+   * 依次弹入品牌全家福的对应图标位——把开场动效的叙事收进正文，形成完整闭环。
+   * 仅本会话确实展示了开场页时才武装监听；reduced-motion 下 CSS 侧动画为 none。 */
+  const [landed, setLanded] = useState(false);
+  useEffect(() => {
+    let introPending = false;
+    try {
+      introPending = !sessionStorage.getItem("bl-intro-seen");
+    } catch {}
+    if (!introPending) return;
+    const onEnter = () => setLanded(true);
+    window.addEventListener("bl-intro-entered", onEnter, { once: true });
+    return () => window.removeEventListener("bl-intro-entered", onEnter);
+  }, []);
 
   return (
     <section id="family" className="relative overflow-hidden py-24">
@@ -196,6 +226,7 @@ export default function BrandShowcase() {
                         breakLabel={c.breakLabel}
                         cat={cat}
                         float={float}
+                        landed={landed}
                       />
                     ))}
                   </div>

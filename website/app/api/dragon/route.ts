@@ -30,9 +30,10 @@ const COOKIE = "bl_vid";
 /** Chrome 对 cookie 寿命的上限约 400 天 */
 const COOKIE_MAX_AGE = 399 * 86400;
 
-/** 仅非生产环境：x-dragon-now 头模拟"现在"，供七日流程自动化回归（生产无此后门） */
+/** 时间模拟后门（x-dragon-now 头）：dev 默认开；生产构建需显式 DRAGON_TEST_CLOCK=1
+ *  （本地可用 next start 跑全量回归——比 dev server 稳定；线上不设该变量即无后门） */
 function nowOf(req: NextRequest): number {
-  if (process.env.NODE_ENV !== "production") {
+  if (process.env.NODE_ENV !== "production" || process.env.DRAGON_TEST_CLOCK === "1") {
     const h = Number(req.headers.get("x-dragon-now"));
     if (Number.isFinite(h) && h > 0) return h;
   }

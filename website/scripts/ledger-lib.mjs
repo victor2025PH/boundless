@@ -1,4 +1,5 @@
-// 集团账本 CLI 共享库（纯 JS，供 scripts/ledger-backfill.mjs、ledger-import-licenses.mjs 直接 node 运行）。
+// 集团账本 CLI 共享库（纯 JS，供 scripts/ledger-backfill.mjs、ledger-import-licenses.mjs、
+// ledger-link-customers.mjs 直接 node 运行）。
 //
 // ⚠️ 本文件是 website/lib/ledger.ts 的纯 JS 等价实现（DDL / upsert 语义 / ID 规范 /
 // inferProductId 与 TS 版一一对应）。修改任何一侧的表结构、upsert 语义或映射逻辑时，
@@ -10,7 +11,7 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import Database from "better-sqlite3";
 
-export const LEDGER_SCHEMA_VERSION = 4;
+export const LEDGER_SCHEMA_VERSION = 6;
 
 // ── ID 规范（与 lib/ids.ts 一致）───────────────────────────────────
 const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -270,6 +271,27 @@ CREATE INDEX IF NOT EXISTS idx_opplog_customer ON opportunities_log(customer_id)
 CREATE INDEX IF NOT EXISTS idx_opplog_status ON opportunities_log(status);
 `;
 
+// ── 表结构（schema v5：渠道账号台账 channel_accounts）───────────────
+// ⚠️ 与 website/lib/ledger.ts 中的 DDL_V5 逐字一致，修改必须同步！
+const DDL_V5 = `
+CREATE TABLE IF NOT EXISTS channel_accounts (
+  id TEXT PRIMARY KEY,
+  platform TEXT NOT NULL CHECK(platform IN ('telegram','whatsapp','messenger','line','web','other')),
+  label TEXT NOT NULL,
+  handle TEXT,
+  instance TEXT NOT NULL DEFAULT 'none' CHECK(instance IN ('zhiliao','tongyi','avatarhub','huoke','website','none')),
+  purpose TEXT NOT NULL DEFAULT '其他' CHECK(purpose IN ('总机接待','交付服务','测试','投放专号','其他')),
+  holder TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','paused','revoked','pending')),
+  session_ref TEXT,
+  notes TEXT,
+  created_at TEXT,
+  updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_channel_accounts_platform ON channel_accounts(platform);
+CREATE INDEX IF NOT EXISTS idx_channel_accounts_status ON channel_accounts(status);
+`;
+
 /** 打开账本 DB（WAL / busy_timeout 5000 / 自动建表迁移），与 lib/ledger.ts::getLedgerDb 等价。 */
 export function openLedgerDb(dbPath) {
   const file = path.resolve(dbPath || resolveLedgerDbPath());
@@ -283,11 +305,20 @@ export function openLedgerDb(dbPath) {
   return db;
 }
 
+// ⚠️ 与 website/lib/ledger.ts 的 migrateV6 逐字一致（is_test 标记列，条件式 ALTER 幂等）。
+function migrateV6(d) {
+  const hasCol = (t, c) => d.prepare(`PRAGMA table_info(${t})`).all().some((x) => x.name === c);
+  for (const t of ["customers", "orders", "leads", "licenses"]) {
+    if (!hasCol(t, "is_test")) d.exec(`ALTER TABLE ${t} ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0`);
+  }
+  d.exec("CREATE INDEX IF NOT EXISTS idx_orders_is_test ON orders(is_test)");
+}
+
 function migrate(db) {
   db.exec("CREATE TABLE IF NOT EXISTS meta (\n  key TEXT PRIMARY KEY,\n  value TEXT\n);");
   const row = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get();
   const current = row ? Number(row.value) || 0 : 0;
-  const migrations = [(d) => d.exec(DDL_V1), (d) => d.exec(DDL_V2), (d) => d.exec(DDL_V3), (d) => d.exec(DDL_V4)];
+  const migrations = [(d) => d.exec(DDL_V1), (d) => d.exec(DDL_V2), (d) => d.exec(DDL_V3), (d) => d.exec(DDL_V4), (d) => d.exec(DDL_V5), migrateV6];
   if (current >= migrations.length) return;
   const run = db.transaction(() => {
     for (let i = current; i < migrations.length; i++) migrations[i](db);
@@ -516,6 +547,8 @@ export function upsertLicenseRow(row, db) {
 }
 
 // ── 身份匹配 / 自动归属 / 审计（与 ledger.ts 语义一致）──────────────
+export const IDENTITY_KINDS = ["contact", "tg", "email", "phone", "fingerprint"];
+
 export function normIdentityValue(kind, value) {
   const v = String(value ?? "").trim();
   if (kind === "contact" || kind === "email") return v.toLowerCase().replace(/\s+/g, "");
@@ -544,6 +577,59 @@ export function writeAudit(a, db) {
     "INSERT INTO audit (id, ts, actor, action, entity, entity_id, detail) VALUES (@id, @ts, @actor, @action, @entity, @entity_id, @detail)"
   ).run(row);
   return row;
+}
+
+/** 建客户主档（cust_ ULID + audit customer.create）。与 lib/ledger.ts::createCustomer
+ *  语义一致（修改必须同步）；mjs 侧无连接单例，db 必须显式传入。 */
+export function createCustomer(input = {}, db, actor = "system") {
+  const id = newId("cust");
+  const t = nowIso();
+  const rowValues = {
+    id,
+    display_name: s(input.display_name),
+    primary_contact: s(input.primary_contact),
+    tg_user_id: s(input.tg_user_id),
+    source: s(input.source),
+    notes: s(input.notes),
+    created_at: t,
+    updated_at: t,
+  };
+  const tx = db.transaction(() => {
+    db.prepare(
+      `INSERT INTO customers (id, display_name, primary_contact, tg_user_id, source, notes, created_at, updated_at)
+       VALUES (@id, @display_name, @primary_contact, @tg_user_id, @source, @notes, @created_at, @updated_at)`
+    ).run(rowValues);
+    writeAudit({ actor, action: "customer.create", entity: "customer", entity_id: id, detail: rowValues }, db);
+  });
+  tx();
+  return rowValues;
+}
+
+/** 给客户挂身份标识（幂等）。同 (kind,value) 已属于其他客户时不抢占，返回冲突信息。
+ *  与 lib/ledger.ts::attachIdentity 语义一致（修改必须同步）。 */
+export function attachIdentity(customerId, kind, value, db, actor = "system") {
+  if (!IDENTITY_KINDS.includes(kind)) throw new TypeError(`attachIdentity: bad kind ${kind}`);
+  const v = normIdentityValue(kind, value);
+  if (!v) throw new TypeError("attachIdentity: empty value");
+  const tx = db.transaction(() => {
+    const existing = db.prepare("SELECT customer_id FROM identities WHERE kind = ? AND value = ?").get(kind, v);
+    if (existing) {
+      if (existing.customer_id === customerId) return { ok: true, existed: true };
+      return { ok: false, existed: true, conflictCustomerId: existing.customer_id };
+    }
+    db.prepare("INSERT INTO identities (customer_id, kind, value, created_at) VALUES (?, ?, ?, ?)").run(
+      customerId,
+      kind,
+      v,
+      nowIso()
+    );
+    writeAudit(
+      { actor, action: "identity.attach", entity: "customer", entity_id: customerId, detail: { kind, value: v } },
+      db
+    );
+    return { ok: true, existed: false };
+  });
+  return tx();
 }
 
 export function ensureCustomerForOrder(orderKey, db) {

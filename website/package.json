@@ -12,7 +12,10 @@
     "assets:robot": "node scripts/robot-capture.mjs",
     "assets:teaser": "node scripts/robot-teaser.mjs",
     "verify:dragon": "node scripts/robot-dragon.mjs",
-    "smoke:prod": "node scripts/robot-prodsmoke.mjs"
+    "smoke:prod": "node scripts/robot-prodsmoke.mjs",
+    "qa:intro-motion": "node scripts/qa-intro-motion.mjs",
+    "qa:intro-button": "node scripts/qa-intro-button.mjs",
+    "qa:intro": "node scripts/qa-intro-motion.mjs && node scripts/qa-intro-button.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",

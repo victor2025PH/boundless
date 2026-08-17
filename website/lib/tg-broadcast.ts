@@ -1,6 +1,6 @@
 import { readFile } from "fs/promises";
 import path from "path";
-import { TELEGRAM_CHANNEL, TELEGRAM_GROUP, BOT_URL, CONTACT_URL, siteUtmLink, miniappUtmLink } from "./site";
+import { TELEGRAM_CHANNEL, TELEGRAM_GROUP, BOT_URL, SITE_URL, siteUtmLink, miniappUtmLink } from "./site";
 import { buildOverviewPost } from "./catalog-posts";
 
 export type BroadcastTarget = "channel" | "group" | "both";
@@ -23,16 +23,21 @@ interface SiteButton {
   label?: string;
 }
 
+const SITE_HOST = SITE_URL.replace(/^https?:\/\//, "").replace(/\/$/, "");
+
 function richButtons(medium: string, campaign: string, site?: SiteButton) {
+  /* 客服走 bot 深链（t.me 域内零确认弹窗）：bot 秒回欢迎 = 客服先开口，转人工有兜底通知 */
+  const csPayload = `cs_${(campaign || medium).replace(/[^A-Za-z0-9_-]/g, "")}`.slice(0, 64);
   return {
     inline_keyboard: [
       [
-        { text: site?.label ?? "🌐 官网", url: siteUtmLink(medium, campaign, site?.path ?? "/") },
+        /* 官网是外链，平台确认弹窗关不掉——文案带域名，让弹窗内容与按钮一致，降低戒备 */
+        { text: site?.label ?? `🌐 官网 ${SITE_HOST}`, url: siteUtmLink(medium, campaign, site?.path ?? "/") },
         { text: "📱 小程序", url: miniappUtmLink(campaign) },
       ],
       [
         { text: "🤖 机器人", url: BOT_URL },
-        { text: "👤 客服", url: CONTACT_URL },
+        { text: "👤 客服", url: `${BOT_URL}?start=${csPayload}` },
       ],
     ],
   };

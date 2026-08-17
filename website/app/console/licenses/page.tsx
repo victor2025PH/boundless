@@ -17,6 +17,8 @@ import {
   Pager,
   SystemBadge,
   Td,
+  TestBadge,
+  TestFilterToggle,
   filterInputCls,
   fmtDateTime,
 } from "../parts";
@@ -36,7 +38,7 @@ const EXPIRING_CHOICES = [
 export default function LicensesPage({
   searchParams,
 }: {
-  searchParams: { source_system?: string; status?: string; expiring_days?: string; offset?: string };
+  searchParams: { source_system?: string; status?: string; expiring_days?: string; offset?: string; test?: string };
 }) {
   const me = getConsoleSessionUser();
   if (!me) return null;
@@ -45,15 +47,19 @@ export default function LicensesPage({
   const status = searchParams.status?.trim() || undefined;
   const expiringRaw = searchParams.expiring_days?.trim() || undefined;
   const expiringDays = expiringRaw ? Number(expiringRaw) : undefined;
+  const showTest = searchParams.test === "1";
   const offset = Math.max(0, Number(searchParams.offset) || 0);
 
-  const { rows, total } = listLicenses({
+  const baseFilter = {
     sourceSystem,
     status,
     expiringInDays: Number.isFinite(expiringDays) ? expiringDays : undefined,
-    limit: LIMIT,
-    offset,
-  });
+  };
+  const { rows, total } = listLicenses({ ...baseFilter, limit: LIMIT, offset, includeTest: showTest });
+  // 当前筛选条件下的测试数据条数 = 含测试 total − 不含测试 total（limit:1 仅取计数）
+  const testCount = showTest
+    ? total - listLicenses({ ...baseFilter, limit: 1 }).total
+    : listLicenses({ ...baseFilter, limit: 1, includeTest: true }).total - total;
 
   const customerOptions: CustomerOption[] = listCustomers({ limit: 500 }).rows.map((c) => ({
     id: c.id,
@@ -67,7 +73,7 @@ export default function LicensesPage({
     }
   }
 
-  const filters = { source_system: sourceSystem, status, expiring_days: expiringRaw };
+  const filters = { source_system: sourceSystem, status, expiring_days: expiringRaw, test: showTest ? "1" : undefined };
   const hasFilter = !!(sourceSystem || status || expiringRaw);
 
   return (
@@ -105,12 +111,20 @@ export default function LicensesPage({
             </option>
           ))}
         </select>
+        {showTest && <input type="hidden" name="test" value="1" />}
         <FilterSubmit />
         {hasFilter && (
           <Link href="/console/licenses" className="text-xs text-slate-500 hover:text-slate-300">
             清除
           </Link>
         )}
+        <TestFilterToggle
+          basePath="/console/licenses"
+          params={{ source_system: sourceSystem, status, expiring_days: expiringRaw }}
+          showTest={showTest}
+          testCount={testCount}
+          className="ml-auto"
+        />
       </form>
 
       {rows.length === 0 ? (
@@ -141,6 +155,7 @@ export default function LicensesPage({
                   <span className="font-mono text-xs text-slate-200" title={l.id}>
                     {l.source_key}
                   </span>
+                  {l.is_test === 1 && <TestBadge className="ml-2 align-middle" />}
                 </Td>
                 <Td className="text-xs text-slate-300">
                   {[l.product_id, l.plan, l.edition].filter(Boolean).join(" / ") || "—"}

@@ -11,11 +11,11 @@ import {
   useScroll,
   useMotionTemplate,
   useMotionValue,
-  useReducedMotion,
   AnimatePresence,
   type Variants,
   type MotionValue,
 } from "framer-motion";
+import { useReducedMotionSafe } from "@/components/fx/useReducedMotionSafe";
 import { Activity } from "lucide-react";
 import { useLang } from "./LanguageContext";
 import { track } from "@/lib/track";
@@ -28,6 +28,7 @@ import {
   type LoongCeremonyDetail,
   type LoongTeaserDetail,
 } from "@/lib/loong-events";
+import { attnActive, DOCK_EVENT, type DockDetail } from "@/lib/dock";
 import {
   NewsHologram,
   DemonEmbers,
@@ -37,9 +38,15 @@ import {
   type EyeExpr,
 } from "./forms/formShared";
 import { LoongForm } from "./forms/LoongForm";
+import { EveBot } from "./forms/EveBot";
+import { DemonForm } from "./forms/DemonForm";
+import { SKIN, type Skin } from "./forms/formShared";
 
-export type { BotMode } from "./forms/formShared";
+export type { BotMode, Skin } from "./forms/formShared";
+export { SKIN } from "./forms/formShared";
 export { LoongForm };
+export { EveBot } from "./forms/EveBot";
+export { DemonForm } from "./forms/DemonForm";
 
 /**
  * 无界科技 · 会飞的 AI 机器人（EveBot）。
@@ -59,851 +66,6 @@ const BOT_H = 176;
  * 机器人下缘 160px > 154px，静止时避让弹簧不再持续发力（原 bottom-24 恒被推挤）。
  */
 const HOME = { right: 24, bottom: 160 };
-
-/**
- * 身体解剖常量（容器坐标系）。
- * 肩位 = 蛋形身体上缘（≈65px）下方 5~13px，手臂自然垂在身体两侧，
- * 修复原先臂根挂在头部高度形成的“兔耳”观感。
- */
-const ANATOMY = {
-  /** 臂根挂载点距容器顶部 */
-  armTop: 70,
-  /** 臂根距容器左/右内边距 */
-  armInset: 19,
-  /** 左臂肩关节旋转原点（臂 SVG 内坐标） */
-  shoulderLeft: "16px 8px",
-  /** 右臂肩关节旋转原点（镜像后臂 SVG 内坐标） */
-  shoulderRight: "2px 8px",
-} as const;
-
-/** 头颈之间的能量光束 */
-const NeuralNeck = ({ color }: { color: string }) => (
-  <motion.div
-    className="absolute left-1/2 top-[25%] -translate-x-1/2 w-3 h-10 z-10 overflow-hidden pointer-events-none"
-    animate={{ opacity: 1, height: 28 }}
-    transition={{ duration: 0.4 }}
-  >
-    <div className="w-full h-full flex flex-col items-center justify-center">
-      <div className="w-[1px] h-full transition-colors duration-1000" style={{ backgroundColor: `${color}4D`, boxShadow: `0 0 5px ${color}` }} />
-    </div>
-  </motion.div>
-);
-
-
-/** 花瓣形手臂。渐变 id 按侧+皮肤唯一，避免重复 SVG id；皮肤切换时换渐变色 */
-const EveArm = ({ side, stops = ["#ffffff", "#eef2ff", "#dbeafe"], edge = "white" }: { side: "left" | "right"; stops?: [string, string, string]; edge?: string }) => {
-  const gid = `eve-arm-grad-${side}-${stops[0].replace("#", "")}`;
-  return (
-    <svg width="18" height="64" viewBox="0 0 18 64" fill="none" className="drop-shadow-sm" style={{ transform: side === "right" ? "scaleX(-1)" : undefined }}>
-      <defs>
-        <linearGradient id={gid} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor={stops[0]} />
-          <stop offset="40%" stopColor={stops[1]} />
-          <stop offset="100%" stopColor={stops[2]} />
-        </linearGradient>
-      </defs>
-      <path d="M16 2C16 2 4 10 4 28C4 50 12 60 16 62C17 62.5 18 60 18 56C18 56 18 10 16 2Z" fill={`url(#${gid})`} />
-      <path d="M16 2C16 2 4 10 4 28C4 50 12 60 16 62" stroke={edge} strokeWidth="0.5" strokeOpacity="0.8" fill="none" />
-      <path d="M16 2C16 2 4 10 4 28C4 50 12 60 16 62C17 62.5 18 60 18 56C18 56 18 10 16 2Z" stroke="rgba(0,0,0,0.05)" strokeWidth="0.5" />
-    </svg>
-  );
-};
-
-/**
- * 五指布局：每根手指由 3 节指骨组成（近节/中节/远节），远节在恶魔态收成尖爪。
- * x=指根在掌缘的横向位置；splay=张开角；len=长度系数；w=粗细系数。
- */
-const HAND_FINGERS = [
-  { x: 4.5, splay: -34, len: 0.8, w: 0.9 }, // 小指
-  { x: 8.6, splay: -15, len: 0.95, w: 1 },
-  { x: 12, splay: 1, len: 1.06, w: 1.05 }, // 中指最长
-  { x: 15.5, splay: 17, len: 0.93, w: 1 },
-  { x: 18.7, splay: 41, len: 0.68, w: 1.2 }, // 拇指：短、粗、外展
-] as const;
-
-/** 单根手指的展开动画：随 custom 索引错峰弹出（挥手时从掌心逐根舒展） */
-const fingerVariants: Variants = {
-  hidden: { scaleY: 0.1, opacity: 0 },
-  shown: (i: number) => ({
-    scaleY: 1,
-    opacity: 1,
-    transition: { delay: 0.2 + i * 0.055, type: "spring", stiffness: 420, damping: 20 },
-  }),
-};
-
-/** 掌心出现动画 */
-const palmVariants: Variants = {
-  hidden: { scale: 0.35, opacity: 0 },
-  shown: { scale: 1, opacity: 1, transition: { delay: 0.08, type: "spring", stiffness: 320, damping: 20 } },
-};
-
-/** 单节指骨（圆角胶囊）。用底部内阴影表现“关节褶皱”而非整圈描边，让三节读起来是连着的手指；demon 远节收成尖爪 */
-const Phalanx = ({ bottom, w, h, seg, claw, clawColor, crease }: { bottom: number; w: number; h: number; seg: string; claw?: boolean; clawColor?: string; crease: string }) => (
-  <div
-    className="absolute left-1/2"
-    style={{
-      bottom,
-      width: w,
-      height: h,
-      marginLeft: -w / 2,
-      background: seg,
-      borderRadius: claw ? "50% 50% 42% 42%" : `${w / 2}px ${w / 2}px ${w / 2.6}px ${w / 2.6}px`,
-      clipPath: claw ? "polygon(50% 0%, 100% 58%, 80% 100%, 20% 100%, 0% 58%)" : undefined,
-      boxShadow: `inset 0 -1.5px 1.5px ${crease}, inset 0 1px 1px rgba(255,255,255,0.12)`,
-    }}
-  >
-    {claw && clawColor && (
-      <span className="absolute left-1/2 top-[-1.5px] h-2 w-2 -translate-x-1/2 rounded-full" style={{ background: clawColor, boxShadow: `0 0 5px ${clawColor}` }} />
-    )}
-  </div>
-);
-
-/** 一根三节指骨手指：近节→中节→远节(爪)，指骨间轻微重叠+关节褶皱，读起来是“三个模块”的一根手指 */
-const HandFinger = ({ i, spec, tone }: { i: number; spec: (typeof HAND_FINGERS)[number]; tone: HandTone }) => {
-  const L = spec.len;
-  const W = spec.w;
-  const proxH = 9 * L;
-  const midH = 7 * L;
-  const distH = 6 * L;
-  const overlap = 1.4; // 指骨轻微交叠，关节相连不散
-  return (
-    <motion.div
-      custom={i}
-      variants={fingerVariants}
-      className="absolute"
-      style={{ left: spec.x, bottom: 11, width: 0, height: proxH + midH + distH - overlap * 2, transformOrigin: "50% 100%", rotate: spec.splay }}
-    >
-      <Phalanx bottom={0} w={6 * W} h={proxH} seg={tone.seg} crease={tone.crease} />
-      <Phalanx bottom={proxH - overlap} w={5.2 * W} h={midH} seg={tone.seg} crease={tone.crease} />
-      <Phalanx bottom={proxH + midH - overlap * 2} w={4.4 * W} h={distH} seg={tone.segTip} crease={tone.crease} claw={tone.claw} clawColor={tone.clawGlow} />
-    </motion.div>
-  );
-};
-
-type HandTone = { seg: string; segTip: string; crease: string; palm: string; claw: boolean; clawGlow?: string };
-
-const HAND_TONE: Record<Skin, HandTone> = {
-  normal: {
-    seg: "linear-gradient(to top, #cfe6fb, #ffffff)",
-    segTip: "linear-gradient(to top, #d8eefe, #ffffff)",
-    crease: "rgba(80,110,150,0.28)",
-    palm: "radial-gradient(circle at 38% 30%, #ffffff 0%, #e0f2fe 60%, #cffafe 100%)",
-    claw: false,
-  },
-  demon: {
-    seg: "linear-gradient(to top, #23131c, #55303f)",
-    segTip: "linear-gradient(to top, #180c12, #40202e)",
-    crease: "rgba(0,0,0,0.5)",
-    palm: "radial-gradient(circle at 38% 30%, #4a2836 0%, #2a1620 62%, #180c12 100%)",
-    claw: true,
-    clawGlow: "#f43f5e",
-  },
-  loong: {
-    seg: "linear-gradient(to top, #f0d190, #fff8e4)",
-    segTip: "linear-gradient(to top, #e8bc62, #f7dfa0)",
-    crease: "rgba(170,120,30,0.3)",
-    palm: "radial-gradient(circle at 38% 30%, #fffbef 0%, #ffedbc 60%, #f0d190 100%)",
-    claw: true,
-    clawGlow: "#f5c542",
-  },
-};
-
-/** 三节指骨关节手/爪（挥手时出现在左臂末端），配色随皮肤 */
-const EveHand = ({ skin = "normal" }: { skin?: Skin }) => {
-  const tone = HAND_TONE[skin];
-  return (
-    <div className="relative h-[34px] w-6 drop-shadow-sm">
-      {HAND_FINGERS.map((spec, i) => (
-        <HandFinger key={i} i={i} spec={spec} tone={tone} />
-      ))}
-      <motion.div
-        variants={palmVariants}
-        className="absolute bottom-0 h-[14px] w-[17px]"
-        style={{
-          left: 3.5,
-          borderRadius: "46% 46% 48% 48%",
-          background: tone.palm,
-          boxShadow: `inset -1px -1.5px 3px rgba(0,0,0,0.18), 0 1px 3px rgba(0,0,0,0.1), 0 0 0 0.5px ${tone.crease}`,
-        }}
-      />
-    </div>
-  );
-};
-
-/**
- * 腕部动画：招手时手掌以腕关节为轴左右摆动（±20° 左右），
- * 大臂只负责一次性抬起，双关节运动比原先整臂 -140° 甩动自然得多。
- * 手掌基础角 -76° 抵消大臂 +76° 抬起，保证五指全球朝上。
- */
-const handWrapperVariants = (reduced: boolean): Variants => ({
-  hidden: { opacity: 0, scale: 0.3, rotate: -76, transition: { duration: 0.22 } },
-  shown: {
-    opacity: 1,
-    scale: 1,
-    rotate: reduced ? -76 : [-76, -56, -90, -58, -86, -68, -76],
-    transition: {
-      opacity: { duration: 0.15 },
-      scale: { type: "spring", stiffness: 300, damping: 18 },
-      rotate: reduced
-        ? { duration: 0.3 }
-        : { delay: 0.5, duration: 1.6, repeat: Infinity, repeatDelay: 0.35, ease: "easeInOut" },
-    },
-  },
-});
-
-
-/** 数码眼：横纹发光屏，支持多种表情形变。tilt=内低外高的“怒”倾角（恶魔皮肤用）、screen=屏底色 */
-const DigitalEye = ({ expression, color, tilt = 0, screen = "#001020" }: { expression: EyeExpr; color: string; tilt?: number; screen?: string }) => {
-  const variants: Record<string, { scaleY: number; scaleX: number; borderRadius: string; height: string }> = {
-    normal: { scaleY: 1, scaleX: 1, borderRadius: "50%", height: "16px" },
-    blink: { scaleY: 0.1, scaleX: 1.1, borderRadius: "50%", height: "16px" },
-    happy: { scaleY: 0.6, scaleX: 1.1, borderRadius: "50% 50% 20% 20%", height: "16px" },
-    focused: { scaleY: 0.7, scaleX: 0.9, borderRadius: "30%", height: "14px" },
-    scanning: { scaleY: 1.1, scaleX: 0.8, borderRadius: "50%", height: "18px" },
-    scared: { scaleY: 1.3, scaleX: 0.7, borderRadius: "40%", height: "20px" },
-    wink: { scaleY: 0.1, scaleX: 1.1, borderRadius: "50%", height: "16px" },
-  };
-  return (
-    <motion.div
-      className="relative w-6 overflow-hidden transition-colors duration-1000"
-      style={{ backgroundColor: screen, boxShadow: `0 0 5px ${color}80`, border: `1px solid ${color}40`, rotate: tilt }}
-      animate={variants[expression === "wink" ? "blink" : expression]}
-      transition={{ type: "spring", stiffness: 300, damping: 20 }}
-    >
-      <motion.div className="absolute inset-0 bg-black" initial={{ opacity: 0 }} animate={{ opacity: expression === "happy" ? 1 : 0 }} style={{ clipPath: "polygon(0% 50%, 100% 50%, 100% 100%, 0% 100%)" }} />
-      {expression === "scanning" && <motion.div className="absolute inset-0 bg-white/50 h-[2px]" animate={{ top: ["0%", "100%", "0%"] }} transition={{ duration: 1, repeat: Infinity, ease: "linear" }} />}
-      <div className="absolute inset-0 flex flex-col justify-center gap-[1px] opacity-90">
-        {[...Array(5)].map((_, i) => (
-          <div key={i} className="w-full h-[2px] transition-colors duration-1000" style={{ backgroundColor: color, boxShadow: `0 0 2px ${color}`, opacity: 1 - Math.abs(2 - i) * 0.25 }} />
-        ))}
-      </div>
-      <div className="absolute inset-0 blur-sm transition-colors duration-1000" style={{ backgroundColor: `${color}40` }} />
-    </motion.div>
-  );
-};
-
-
-/** 皮肤：normal=默认冰蓝 IP；demon=隐藏彩蛋恶魔形态；loong=龙珠彩蛋「祥龙金鳞」（均纯外观） */
-export type Skin = "normal" | "demon" | "loong";
-
-/**
- * 皮肤配色表：恶魔态只换“皮”（配色 + 装饰件），骨架/动画/交互全部复用。
- * eyeColors 供眼睛/光束/推进器/光池取色轮换；body/head 为躯干与头壳的材质。
- */
-export const SKIN: Record<Skin, {
-  eyeColors: string[];
-  eyeScreen: string;
-  eyeTilt: number;
-  body: string;
-  bodyShadow: string;
-  head: string;
-  headHi: string;
-  armStops: [string, string, string];
-}> = {
-  normal: {
-    eyeColors: ["#22d3ee", "#8b5cf6", "#06b6d4", "#a855f7", "#38bdf8"],
-    eyeScreen: "#001020",
-    eyeTilt: 0,
-    body: "radial-gradient(circle at 30% 50%, #ffffff 0%, #ecfeff 50%, #cffafe 100%)",
-    bodyShadow: "inset -5px -5px 15px rgba(0,0,0,0.05), inset 5px 5px 15px rgba(255,255,255,1), 0 10px 25px rgba(0,0,0,0.1)",
-    head: "radial-gradient(circle at 50% 10%, #ffffff 0%, #ecfeff 60%, #cffafe 100%)",
-    headHi: "rgba(255,255,255,0.6)",
-    armStops: ["#ffffff", "#eef2ff", "#dbeafe"],
-  },
-  demon: {
-    eyeColors: ["#ef4444", "#f43f5e", "#dc2626", "#fb7185", "#e11d48"],
-    eyeScreen: "#12040a",
-    eyeTilt: 12,
-    body: "radial-gradient(circle at 30% 42%, #3b2230 0%, #23131c 55%, #140a10 100%)",
-    bodyShadow: "inset -5px -5px 15px rgba(0,0,0,0.45), inset 4px 4px 14px rgba(190,40,70,0.3), 0 10px 28px rgba(190,20,50,0.3)",
-    head: "radial-gradient(circle at 50% 12%, #4a2836 0%, #281521 60%, #160b12 100%)",
-    headHi: "rgba(255,120,150,0.35)",
-    armStops: ["#3f2433", "#291923", "#150c12"],
-  },
-  /** 祥龙金鳞：暖金白瓷 + 金瞳偶闪青光（青金 = 品牌东方龙配色），龙珠彩蛋集齐解锁 */
-  loong: {
-    eyeColors: ["#f5c542", "#ffd75e", "#eab308", "#38bdf8", "#fbbf24"],
-    eyeScreen: "#180f02",
-    eyeTilt: 0,
-    body: "radial-gradient(circle at 30% 50%, #fffbe8 0%, #ffedb8 55%, #f3d488 100%)",
-    bodyShadow: "inset -5px -5px 15px rgba(160,110,20,0.18), inset 5px 5px 15px rgba(255,255,255,0.95), 0 10px 28px rgba(240,180,60,0.35)",
-    head: "radial-gradient(circle at 50% 10%, #fffdf4 0%, #ffeec2 60%, #f3d488 100%)",
-    headHi: "rgba(255,255,255,0.7)",
-    armStops: ["#fff6dc", "#ffe9b0", "#f0cf85"],
-  },
-};
-
-/** 恶魔犄角：一对深色弯角带红色轮廓光，从头壳顶部两侧探出（仅恶魔皮肤） */
-const DemonHorns = ({ color }: { color: string }) => (
-  <div className="pointer-events-none absolute -top-3 left-1/2 z-20 -translate-x-1/2" style={{ width: 72, height: 22 }}>
-    {(["left", "right"] as const).map((side) => (
-      <svg
-        key={side}
-        width="20"
-        height="24"
-        viewBox="0 0 20 24"
-        fill="none"
-        className="absolute top-0"
-        style={{ [side]: 6, transform: side === "right" ? "scaleX(-1)" : undefined } as React.CSSProperties}
-      >
-        <path d="M15 24C7 21 3 13 4 4C4 4 9 6 13 11C16 15 16 20 15 24Z" fill="#1a0d13" stroke={color} strokeOpacity="0.55" strokeWidth="1" />
-        <path d="M12 20C8 17 6 12 6.5 7C9 9 11 12 12 15Z" fill={color} fillOpacity="0.25" />
-      </svg>
-    ))}
-  </div>
-);
-
-/** 祥龙鹿角：一对分叉金鹿角（龙有九似「角似鹿」），从头壳顶两侧探出（仅祥龙皮肤） */
-const LoongAntlers = ({ color }: { color: string }) => (
-  <div className="pointer-events-none absolute -top-4 left-1/2 z-20 -translate-x-1/2" style={{ width: 78, height: 26 }}>
-    {(["left", "right"] as const).map((side) => (
-      <svg
-        key={side}
-        width="26"
-        height="28"
-        viewBox="0 0 26 28"
-        fill="none"
-        className="absolute top-0"
-        style={{ [side]: 4, transform: side === "right" ? "scaleX(-1)" : undefined } as React.CSSProperties}
-      >
-        <path d="M20 28 C14 22 10 15 11 6 C11 6 14 8 16 12 C18 16 19 22 20 28 Z" fill="#f7dfa0" stroke="#caa14e" strokeWidth="1" />
-        <path d="M12 14 C9 11 7 8 7 4 C10 6 12 9 13 12 Z" fill="#f7dfa0" stroke="#caa14e" strokeWidth="0.8" />
-        <path d="M15 20 C13 17 11 15 9 14 C10 17 12 20 14 22 Z" fill="#f7dfa0" stroke="#caa14e" strokeWidth="0.8" opacity="0.9" />
-        <path d="M18 24 C15 20 13 14 13.5 8" stroke={color} strokeOpacity="0.5" strokeWidth="0.8" fill="none" />
-      </svg>
-    ))}
-  </div>
-);
-
-/** 恶魔獠牙：眼屏下缘两颗小尖牙（仅恶魔皮肤） */
-const DemonFangs = () => (
-  <div className="pointer-events-none absolute bottom-[3px] left-1/2 z-30 flex -translate-x-1/2 gap-3">
-    {[0, 1].map((i) => (
-      <span key={i} className="block h-[6px] w-[4px] bg-white" style={{ clipPath: "polygon(0 0, 100% 0, 50% 100%)", filter: "drop-shadow(0 1px 1px rgba(0,0,0,0.3))" }} />
-    ))}
-  </div>
-);
-
-
-/**
- * 左臂姿态表（角度符号：正 = 顺时针 = 左臂向外张开）。
- * 挥手仅抬到 +76°（指尖约在胸口高度），满足“招手时手臂也要低”。
- */
-const leftArmVariants: Variants = {
-  idle_base: { x: 0, y: 0, rotate: 7 },
-  idle_scan: { x: 0, y: 0, rotate: 7 },
-  idle_wave: { x: -2, y: -2, rotate: 76, transition: { type: "spring", stiffness: 170, damping: 15 } },
-  idle_dance: { x: -7, y: -4, rotate: [6, 44, 6], transition: { rotate: { repeat: Infinity, duration: 0.4 } } },
-  idle_news: { x: -1, y: 0, rotate: 12 },
-  idle_spin: { x: 0, y: 0, rotate: 7 },
-  flying: { x: -3, y: 6, rotate: 42 },
-  falling: { x: -12, y: -13, rotate: 124 },
-};
-
-/** 右臂姿态表（镜像）：挥手时轻微外张作配重，重心不歪 */
-const rightArmVariants: Variants = {
-  idle_base: { x: 0, y: 0, rotate: -7 },
-  idle_scan: { x: 0, y: 0, rotate: -7 },
-  idle_wave: { x: 2, y: 1, rotate: -13 },
-  idle_dance: { x: 7, y: -4, rotate: [-6, -44, -6], transition: { rotate: { repeat: Infinity, duration: 0.4, delay: 0.2 } } },
-  idle_news: { x: 1, y: 0, rotate: -12 },
-  idle_spin: { x: 0, y: 0, rotate: -7 },
-  flying: { x: 3, y: 6, rotate: -42 },
-  falling: { x: 12, y: -13, rotate: -124 },
-};
-
-/** 呼吸微摆生效的姿态：待机类动作时手臂随身体轻晃 ±1.6°，静态也是“活”的 */
-const SWAY_MODES = new Set<BotMode>(["idle_base", "idle_scan", "idle_news", "idle_spin"]);
-
-/** 手臂呼吸微摆（嵌套节点实现，避免与姿态弹簧在同一元素上打架） */
-const armSwayVariants = (side: "left" | "right"): Variants => ({
-  sway: {
-    rotate: side === "left" ? [1.6, -1.6, 1.6] : [-1.6, 1.6, -1.6],
-    transition: { repeat: Infinity, duration: 2.5, ease: "easeInOut" },
-  },
-  still: { rotate: 0, transition: { duration: 0.35 } },
-});
-
-
-type EveBotProps = {
-  mode: BotMode;
-  isHovered: boolean;
-  newsText: string;
-  newsCta: string;
-  scrollTilt: MotionValue<number>;
-  flightRotate: MotionValue<number>;
-  gazeX: MotionValue<number>;
-  gazeY: MotionValue<number>;
-  squashY: MotionValue<number>;
-  shadowOpacity: MotionValue<number>;
-  onNewsCta: () => void;
-  reduced: boolean;
-  /** 低配挡位（html[data-fx="low"]，与全站背景特效同一判定）：裁剪常驻装饰动画 */
-  lowFx?: boolean;
-  /** 皮肤：normal | demon（隐藏彩蛋，纯外观） */
-  skin?: Skin;
-};
-
-/** 机器人本体：头 / 颈 / 蛋形身体 / 双臂（左臂带五指手掌）/ 推进器光焰 / 悬浮光池。
- *  已导出：/robot-stage 素材舞台页复用同一实现，保证站内外 IP 形象一致。 */
-export const EveBot: React.FC<EveBotProps> = ({ mode, isHovered, newsText, newsCta, scrollTilt, flightRotate, gazeX, gazeY, squashY, shadowOpacity, onNewsCta, reduced, lowFx = false, skin = "normal" }) => {
-  const theme = SKIN[skin];
-  const isDemon = skin === "demon";
-  const isLoong = skin === "loong";
-  const [eyeExpression, setEyeExpression] = useState<EyeExpr>("normal");
-  const [eyeColor, setEyeColor] = useState(theme.eyeColors[0]);
-  const [spinRotation, setSpinRotation] = useState(0);
-  const [wink, setWink] = useState(false);
-  const waving = mode === "idle_wave";
-  /* 着陆回弹的挤压-拉伸：Y 压缩时 X 反向微胖，卡通物理更可信 */
-  const squashX = useTransform(squashY, (v) => 1 + (1 - v) * 0.55);
-  const swayOn = !reduced && !lowFx && SWAY_MODES.has(mode);
-
-  /* 眼睛霓虹色轮换（随皮肤切换取色池；页面隐藏时暂停；低配挡放慢一倍减少重绘） */
-  useEffect(() => {
-    const colors = theme.eyeColors;
-    let i = 0;
-    setEyeColor(colors[0]);
-    const t = setInterval(() => {
-      if (document.hidden) return;
-      i = (i + 1) % colors.length;
-      setEyeColor(colors[i]);
-    }, lowFx ? 8000 : 4000);
-    return () => clearInterval(t);
-  }, [lowFx, theme]);
-
-  /* 表情状态机 + 待机随机眨眼 */
-  useEffect(() => {
-    if (isHovered) return setEyeExpression("happy");
-    if (mode === "falling") return setEyeExpression("scared");
-    if (mode === "flying") return setEyeExpression("focused");
-    if (mode === "idle_scan") return setEyeExpression("scanning");
-    if (mode === "idle_wave" || mode === "idle_dance") return setEyeExpression("happy");
-    if (mode === "idle_news") return setEyeExpression("focused");
-    let alive = true;
-    const blinkLoop = () => {
-      if (!alive) return;
-      if (mode === "idle_base" && !isHovered) {
-        setEyeExpression("blink");
-        setTimeout(() => setEyeExpression("normal"), 150);
-      }
-      setTimeout(blinkLoop, 2000 + Math.random() * 3000);
-    };
-    const timer = setTimeout(blinkLoop, 2000);
-    return () => {
-      alive = false;
-      clearTimeout(timer);
-    };
-  }, [mode, isHovered]);
-
-  /* 挥手时眨一次单眼（启用原先闲置的 wink 表情） */
-  useEffect(() => {
-    if (!waving || reduced) return;
-    const t1 = setTimeout(() => setWink(true), 750);
-    const t2 = setTimeout(() => setWink(false), 950);
-    return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-      setWink(false);
-    };
-  }, [waving, reduced]);
-
-  useEffect(() => {
-    if (mode === "idle_spin") setSpinRotation((p) => p + 360);
-  }, [mode]);
-
-  return (
-    <motion.div
-      className="relative w-32 h-44 flex flex-col items-center justify-center [transform-style:preserve-3d]"
-      style={{ rotateX: scrollTilt, rotate: flightRotate }}
-      animate={{ rotateY: spinRotation }}
-      transition={{ rotateY: { duration: 1, ease: "backOut" } }}
-    >
-      {/* 着陆回弹层：只承担挤压-拉伸，与姿态变体解耦 */}
-      <motion.div className="relative w-full h-full [transform-style:preserve-3d]" style={{ scaleY: squashY, scaleX: squashX, transformOrigin: "50% 86%" }}>
-        <motion.div
-          className="relative w-full h-full flex flex-col items-center justify-center [transform-style:preserve-3d]"
-          variants={buildBodyVariants(reduced)}
-          animate={mode === "idle_spin" ? undefined : mode}
-          transition={{ type: "spring", stiffness: 100, damping: 20 }}
-        >
-          <NewsHologram active={mode === "idle_news"} text={newsText} cta={newsCta} color={eyeColor} onCta={onNewsCta} />
-          {/* 余烬粒子：恶魔=红火星，祥龙=金瑞粉（同一组件换色） */}
-          {(isDemon || isLoong) && !lowFx && !reduced && <DemonEmbers color={eyeColor} />}
-          <motion.div
-            className={`relative z-30 w-[4.4rem] h-[3.2rem] rounded-[50%_50%_45%_45%] shadow-[inset_0_-2px_6px_rgba(0,0,0,0.15),0_5px_15px_rgba(0,0,0,0.1)] ${isDemon || isLoong ? "overflow-visible" : "overflow-hidden"} flex items-center justify-center`}
-            style={{ background: theme.head }}
-            animate={{ y: mode === "idle_dance" ? -2 : -8 }}
-          >
-            {isDemon && <DemonHorns color={eyeColor} />}
-            {isLoong && <LoongAntlers color={eyeColor} />}
-            <div className="absolute top-1 left-1/4 w-1/2 h-1/2 rounded-full blur-[2px]" style={{ backgroundColor: theme.headHi }} />
-            <div className="w-[88%] h-[75%] bg-black rounded-[45%_45%_50%_50%] flex items-center justify-center gap-3 relative shadow-[inset_0_0_10px_rgba(255,255,255,0.15)] overflow-hidden border border-zinc-800/50 mt-1">
-              {/* 眼神跟随：整对眼睛朝鼠标方向微移（MotionValue 直驱，零重渲染） */}
-              <motion.div className="flex gap-3" style={{ x: gazeX, y: gazeY }}>
-                <DigitalEye expression={wink ? "wink" : eyeExpression} color={eyeColor} tilt={theme.eyeTilt} screen={theme.eyeScreen} />
-                <DigitalEye expression={eyeExpression} color={eyeColor} tilt={-theme.eyeTilt} screen={theme.eyeScreen} />
-              </motion.div>
-              {isDemon && <DemonFangs />}
-            </div>
-          </motion.div>
-          <NeuralNeck color={eyeColor} />
-          <div className="relative z-20 w-[4rem] h-[5.5rem] mt-[-10px]">
-            <div className="w-full h-full relative overflow-hidden" style={{ background: theme.body, borderRadius: "30% 30% 50% 50% / 20% 20% 80% 80%", boxShadow: theme.bodyShadow }}>
-              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[90%] h-5 to-transparent rounded-b-full opacity-40 blur-[1px]" style={{ backgroundImage: `linear-gradient(to bottom, ${isDemon ? "#7f1d2e" : isLoong ? "#f5c542" : "#a5f3fc"}, transparent)` }} />
-              <div className="absolute top-[45%] left-1/2 -translate-x-1/2 w-8 h-8 flex items-center justify-center opacity-100">
-                <div className="w-2 h-2 rounded-full animate-pulse transition-colors duration-1000" style={{ backgroundColor: eyeColor, boxShadow: `0 0 10px ${eyeColor}` }} />
-                <div className="absolute w-full h-[1px] bg-black/5 top-1/2 -translate-y-1/2" />
-                <div className="absolute h-full w-[1px] bg-black/5 left-1/2 -translate-x-1/2" />
-              </div>
-            </div>
-          </div>
-          {/* 左臂（屏幕左侧 = 机器人右手）：朝页面内容方向挥手，不会被视口右缘裁切 */}
-          <motion.div
-            className="absolute z-10"
-            style={{ left: ANATOMY.armInset, top: ANATOMY.armTop, transformOrigin: ANATOMY.shoulderLeft }}
-            variants={leftArmVariants}
-            animate={mode}
-          >
-            <motion.div style={{ transformOrigin: ANATOMY.shoulderLeft }} variants={armSwayVariants("left")} animate={swayOn ? "sway" : "still"}>
-              <EveArm side="left" stops={theme.armStops} />
-              <motion.div
-                className="eve-hand absolute"
-                style={{ left: 4, top: 40, transformOrigin: "12px 22px" }}
-                variants={handWrapperVariants(reduced)}
-                initial="hidden"
-                animate={waving ? "shown" : "hidden"}
-              >
-                <EveHand skin={skin} />
-              </motion.div>
-            </motion.div>
-          </motion.div>
-          {/* 右臂：挥手时仅轻微外张配重 */}
-          <motion.div
-            className="absolute z-10"
-            style={{ right: ANATOMY.armInset, top: ANATOMY.armTop, transformOrigin: ANATOMY.shoulderRight }}
-            variants={rightArmVariants}
-            animate={mode}
-          >
-            <motion.div style={{ transformOrigin: ANATOMY.shoulderRight }} variants={armSwayVariants("right")} animate={swayOn ? "sway" : "still"}>
-              <EveArm side="right" stops={theme.armStops} />
-            </motion.div>
-          </motion.div>
-          {/* 推进器：用 framer 的 x 居中而非 translate 类（会被 transform 动画覆盖，存量bug） */}
-          <motion.div className="absolute top-[88%] left-[49%] -z-10" style={{ x: "-50%" }} animate={{ opacity: mode === "flying" || mode === "idle_dance" ? 0.8 : 0.4, scaleY: mode === "flying" ? 1.5 : 0.8 }}>
-            <div className="w-6 h-12 rounded-full blur-[6px] transition-colors duration-1000" style={{ background: `linear-gradient(to top, transparent, ${eyeColor}, white)` }} />
-          </motion.div>
-        </motion.div>
-      </motion.div>
-      {/* 悬浮光池：机身辉光在“地面”的反射（深色页面上用光而非阴影表达高度），
-          呼吸节奏与身体 2.5s 浮动同步，飞行/拖拽越远越暗；低配/reduced 静态化 */}
-      <motion.div className="pointer-events-none absolute left-1/2 top-[97%] -z-20 -translate-x-1/2" style={{ opacity: shadowOpacity }}>
-        <motion.div
-          className="h-3 w-16 rounded-[50%] blur-[6px] transition-colors duration-1000"
-          style={{ background: `radial-gradient(ellipse at center, ${eyeColor}55 0%, ${eyeColor}18 55%, transparent 75%)` }}
-          animate={reduced || lowFx ? { scaleX: 1, opacity: 0.8 } : { scaleX: [1, 0.82, 1], opacity: [0.9, 0.55, 0.9] }}
-          transition={reduced || lowFx ? undefined : { repeat: Infinity, duration: 2.5, ease: "easeInOut" }}
-        />
-      </motion.div>
-    </motion.div>
-  );
-};
-
-/** 蝠翼展开状态机：folded=收拢（蝠群飞行/未揭示）→ snap=落地弹簧展开（过冲带颤）→ loop=常态扇动 */
-type WingPhase = "folded" | "snap" | "loop";
-
-/**
- * 蝠翼：膜翼带三段翼骨，翼根在肩部。
- * 对称关键：静态镜像 scaleX(-1) 放在外层包裹节点（framer 只动内层），
- * 否则 framer 写 transform 时会清掉镜像（存量 bug 同类：右翼从未真正镜像过）。
- * 内层左右用同一份扇动参数，经外层镜像后天然左右对称。
- * phase 驱动“展翼仪式”：变身/蝠群落地时从收拢态弹簧展开一次，再接扇动循环。
- */
-const DemonWing = ({ side, glow, flap, phase = "loop" }: { side: "left" | "right"; glow: string; flap: boolean; phase?: WingPhase }) => (
-  <div
-    className="absolute top-[44px]"
-    style={{
-      [side === "left" ? "right" : "left"]: "50%",
-      zIndex: 0,
-      transform: side === "right" ? "scaleX(-1)" : undefined,
-      transformOrigin: "50% 50%",
-    } as React.CSSProperties}
-  >
-    <motion.div
-      style={{ transformOrigin: "97% 8%" }}
-      animate={
-        phase === "folded"
-          ? { scaleX: 0.12, rotate: 32, opacity: 0.5 }
-          : phase === "snap"
-            ? { scaleX: 1, rotate: 0, opacity: 1 }
-            : flap
-              ? { scaleX: [1, 0.8, 1], rotate: [0, 7, 0], opacity: 1 }
-              : { scaleX: 1, rotate: 0, opacity: 1 }
-      }
-      transition={
-        phase === "folded"
-          ? { duration: 0.16, ease: "easeIn" }
-          : phase === "snap"
-            ? { type: "spring", stiffness: 300, damping: 12, mass: 0.9 }
-            : flap
-              ? { repeat: Infinity, duration: 1.7, ease: "easeInOut" }
-              : { duration: 0.4 }
-      }
-    >
-      <svg width="72" height="90" viewBox="0 0 72 90" fill="none">
-        <defs>
-          <linearGradient id={`wing-${side}`} x1="1" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#341826" />
-            <stop offset="65%" stopColor="#1a0d14" />
-            <stop offset="100%" stopColor="#0d0709" />
-          </linearGradient>
-        </defs>
-        {/* 膜翼轮廓：翼根在右上(70,6)，膜向左下张开，三个扇形凹口成蝠翼指骨 */}
-        <path d="M70 6 C42 2 14 10 4 42 C2 52 3 64 9 78 C16 66 22 70 26 80 C31 68 37 72 42 82 C47 70 54 74 60 84 C66 62 69 30 70 6 Z"
-          fill={`url(#wing-${side})`} stroke={glow} strokeOpacity="0.45" strokeWidth="1.1" />
-        <path d="M68 10 C48 26 30 48 20 76" stroke={glow} strokeOpacity="0.38" strokeWidth="1" fill="none" />
-        <path d="M68 10 C52 22 42 44 41 80" stroke={glow} strokeOpacity="0.3" strokeWidth="1" fill="none" />
-        <path d="M68 10 C58 20 54 44 60 82" stroke={glow} strokeOpacity="0.24" strokeWidth="1" fill="none" />
-      </svg>
-    </motion.div>
-  </div>
-);
-
-/**
- * 尾巴：更长更灵动的两段式——尾根摆动（root）+ 尾梢跟随延迟摆动（tip），形成鞭尾/S 形甩动。
- * 尾根在斗篷底部中偏右探出，尾梢带发光心形箭镞。
- * 交互升级：bias（MotionValue，度）让尾根随鼠标方向偏转（复用视线跟随信号，零重渲染）；
- * flick=true 边沿触发尾梢快速双甩——从循环动画升级成“有反应的活物”。
- */
-const DemonTail = ({ glow, sway, bias, flick = false }: { glow: string; sway: boolean; bias?: MotionValue<number>; flick?: boolean }) => {
-  const [flicking, setFlicking] = useState(false);
-  useEffect(() => {
-    if (!flick) return;
-    setFlicking(true);
-    const t = setTimeout(() => setFlicking(false), 720);
-    return () => clearTimeout(t);
-  }, [flick]);
-
-  return (
-    /* 外层：鼠标方向偏置（MotionValue 直驱）；内层：常态摆动循环。分两层避免 animate 覆盖 style 旋转 */
-    <motion.div className="absolute left-[58%] top-[116px] z-0" style={{ rotate: bias, transformOrigin: "6px 6px" }}>
-      <motion.div
-        style={{ transformOrigin: "6px 6px" }}
-        animate={sway ? { rotate: [12, 34, 12] } : { rotate: 20 }}
-        transition={sway ? { repeat: Infinity, duration: 2.6, ease: "easeInOut" } : undefined}
-      >
-        {/* 尾根段：从斗篷底伸出的粗根，渐细，红边线拉开与暗底/光池的对比 */}
-        <svg width="44" height="72" viewBox="0 0 44 72" fill="none" className="overflow-visible">
-          <path d="M4 2 C18 6 28 16 32 32" stroke={glow} strokeOpacity="0.45" strokeWidth="8" strokeLinecap="round" fill="none" />
-          <path d="M4 2 C18 6 28 16 32 32" stroke="#311a26" strokeWidth="6" strokeLinecap="round" fill="none" />
-        {/* 尾梢段：以尾根末端(32,32)为轴延迟跟随摆动（鞭尾感）；hover 双甩优先于循环 */}
-          <motion.g
-            style={{ transformOrigin: "32px 32px" }}
-            animate={flicking ? { rotate: [0, 26, -10, 20, 0] } : sway ? { rotate: [-16, 22, -16] } : { rotate: 0 }}
-            transition={
-              flicking
-                ? { duration: 0.68, ease: "easeOut" }
-                : sway
-                  ? { repeat: Infinity, duration: 2.6, ease: "easeInOut", delay: 0.45 }
-                  : undefined
-            }
-          >
-            <path d="M32 32 C38 40 38 47 32 55" stroke={glow} strokeOpacity="0.42" strokeWidth="6.5" strokeLinecap="round" fill="none" />
-            <path d="M32 32 C38 40 38 47 32 55" stroke="#2a1620" strokeWidth="4.5" strokeLinecap="round" fill="none" />
-            {/* 心形/箭镞尾尖，带辉光 */}
-            <path d="M32 53 C27 57 23 62 32 69 C41 62 37 57 32 53 Z" fill={glow} stroke={glow} strokeWidth="0.6" style={{ filter: `drop-shadow(0 0 3px ${glow})` }} />
-          </motion.g>
-        </svg>
-      </motion.div>
-    </motion.div>
-  );
-};
-
-
-/**
- * 全新恶魔形象（不复用机器人剪影）：悬浮兜帽小恶魔——蝠翼 + 犄角 + 兜帽 + 红眼 +
- * 胸口符文 + 尾巴 + 三节指骨爪。复用眼睛/爪/余烬/姿态变体，保证与站内 IP 同源。
- */
-export const DemonForm: React.FC<DemonProps> = ({ mode, isHovered, newsText, newsCta, scrollTilt, flightRotate, gazeX, gazeY, squashY, shadowOpacity, onNewsCta, reduced, lowFx = false, revealed = true }) => {
-  const [eyeColor, setEyeColor] = useState(SKIN.demon.eyeColors[0]);
-  const [eyeExpression, setEyeExpression] = useState<EyeExpr>("focused");
-  const waving = mode === "idle_wave";
-  const squashX = useTransform(squashY, (v) => 1 + (1 - v) * 0.55);
-  const anim = !reduced && !lowFx;
-  const swayOn = anim && SWAY_MODES.has(mode);
-  /* 展翼仪式：初次挂载与每次蝠群落地（revealed 上升沿）都从收拢态弹簧展开，仪式感由 spring 过冲提供 */
-  const [wingPhase, setWingPhase] = useState<WingPhase>(anim ? "folded" : "loop");
-  /* 尾随鼠标：视线信号（±2.4px）放大为尾根 ±14° 偏转，MotionValue 直驱不触发重渲染 */
-  const tailBias = useTransform(gazeX, (v) => v * 6);
-
-  useEffect(() => {
-    if (!anim) {
-      setWingPhase("loop");
-      return;
-    }
-    if (!revealed) {
-      setWingPhase("folded");
-      return;
-    }
-    const snapT = setTimeout(() => setWingPhase("snap"), 100);
-    const loopT = setTimeout(() => setWingPhase("loop"), 760);
-    return () => {
-      clearTimeout(snapT);
-      clearTimeout(loopT);
-    };
-  }, [revealed, anim]);
-
-  useEffect(() => {
-    const colors = SKIN.demon.eyeColors;
-    let i = 0;
-    const t = setInterval(() => {
-      if (document.hidden) return;
-      i = (i + 1) % colors.length;
-      setEyeColor(colors[i]);
-    }, lowFx ? 8000 : 3500);
-    return () => clearInterval(t);
-  }, [lowFx]);
-
-  useEffect(() => {
-    if (isHovered) return setEyeExpression("happy");
-    if (mode === "falling") return setEyeExpression("scared");
-    if (mode === "idle_scan") return setEyeExpression("scanning");
-    setEyeExpression("focused");
-  }, [mode, isHovered]);
-
-  return (
-    <motion.div
-      className="relative w-32 h-44 flex items-center justify-center [transform-style:preserve-3d]"
-      style={{ rotateX: scrollTilt, rotate: flightRotate }}
-    >
-      <motion.div className="relative w-full h-full" style={{ scaleY: squashY, scaleX: squashX, transformOrigin: "50% 86%" }}>
-        <motion.div
-          className="relative w-full h-full flex items-center justify-center"
-          variants={buildBodyVariants(reduced)}
-          animate={mode === "idle_spin" ? "idle_base" : mode}
-          transition={{ type: "spring", stiffness: 100, damping: 20 }}
-        >
-          <NewsHologram active={mode === "idle_news"} text={newsText} cta={newsCta} color={eyeColor} onCta={onNewsCta} />
-          {anim && <DemonEmbers color={eyeColor} />}
-          {/* 双翼严格镜像、同步扇动（挥手不再收拢单翼，靠手臂 z 层级压过翼）；phase 驱动展翼仪式 */}
-          <DemonWing side="left" glow={eyeColor} flap={anim} phase={wingPhase} />
-          <DemonWing side="right" glow={eyeColor} flap={anim} phase={wingPhase} />
-          <DemonTail glow={eyeColor} sway={anim} bias={tailBias} flick={isHovered && anim} />
-
-          {/* 身体：兜帽斗篷（锯齿下摆）+ 胸口符文 */}
-          <div className="absolute left-1/2 top-[30px] z-10 -translate-x-1/2">
-            <svg width="112" height="140" viewBox="0 0 112 140" fill="none">
-              <defs>
-                <linearGradient id="demon-cloak" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#3a2130" />
-                  <stop offset="55%" stopColor="#23131c" />
-                  <stop offset="100%" stopColor="#120a0f" />
-                </linearGradient>
-                <radialGradient id="demon-hood" cx="50%" cy="38%" r="60%">
-                  <stop offset="0%" stopColor="#4a2a39" />
-                  <stop offset="70%" stopColor="#241521" />
-                  <stop offset="100%" stopColor="#160c13" />
-                </radialGradient>
-              </defs>
-              {/* 斗篷躯干：肩宽收到锯齿下摆 */}
-              <path d="M28 54 C24 40 34 28 56 28 C78 28 88 40 84 54 L92 108 C94 118 90 126 92 138 L84 130 L78 138 L70 129 L62 138 L56 130 L50 138 L42 129 L34 138 L28 128 L20 138 C22 126 18 118 20 108 Z"
-                fill="url(#demon-cloak)" stroke={eyeColor} strokeOpacity="0.18" strokeWidth="1" />
-              {/* 兜帽 */}
-              <path d="M56 8 C82 8 96 30 90 54 C80 44 68 40 56 40 C44 40 32 44 22 54 C16 30 30 8 56 8 Z" fill="url(#demon-hood)" stroke={eyeColor} strokeOpacity="0.3" strokeWidth="1" />
-              {/* 兜帽内阴影脸洞 */}
-              <ellipse cx="56" cy="46" rx="26" ry="20" fill="#0a0509" />
-            </svg>
-
-            {/* 犄角：从兜帽顶两侧探出 */}
-            <div className="absolute -top-1 left-1/2 -translate-x-1/2" style={{ width: 84 }}>
-              {(["left", "right"] as const).map((s) => (
-                <svg key={s} width="26" height="30" viewBox="0 0 26 30" fill="none" className="absolute top-0" style={{ [s]: -2, transform: s === "right" ? "scaleX(-1)" : undefined } as React.CSSProperties}>
-                  <path d="M20 30 C9 26 3 15 5 3 C5 3 14 6 19 14 C23 20 22 26 20 30 Z" fill="#160b11" stroke={eyeColor} strokeOpacity="0.5" strokeWidth="1" />
-                  <path d="M17 25 C10 21 7 14 8 7 C12 10 15 15 16 20 Z" fill={eyeColor} fillOpacity="0.22" />
-                </svg>
-              ))}
-            </div>
-
-            {/* 红眼（脸洞内），带眼神跟随。外层静态居中，内层做 gaze——
-                framer 的 x 会覆盖 -translate-x-1/2 类，故居中用 marginLeft 而非 translate 类 */}
-            <div className="absolute left-1/2 top-[42px]" style={{ marginLeft: -27 }}>
-              <motion.div className="flex gap-[7px]" style={{ x: gazeX, y: gazeY }}>
-                <DigitalEye expression={eyeExpression} color={eyeColor} tilt={13} screen={SKIN.demon.eyeScreen} />
-                <DigitalEye expression={eyeExpression} color={eyeColor} tilt={-13} screen={SKIN.demon.eyeScreen} />
-              </motion.div>
-            </div>
-
-            {/* 胸口符文：无界 LOGO 之印——用品牌 mark 的透明 PNG 做 CSS mask，
-                填充随眼色脉动的红光（∞ 破框剪影 = 恶魔化的品牌符文，替代原六边形） */}
-            <motion.div
-              className="absolute left-1/2 top-[88px]"
-              style={{ marginLeft: -20 }}
-              animate={anim ? { opacity: [0.6, 1, 0.6], scale: [0.94, 1.06, 0.94] } : { opacity: 0.92 }}
-              transition={anim ? { repeat: Infinity, duration: 2.4, ease: "easeInOut" } : undefined}
-            >
-              <div
-                aria-hidden
-                style={{
-                  width: 40,
-                  height: 30,
-                  backgroundColor: eyeColor,
-                  WebkitMaskImage: "url(/brand/logos/boundless-mark-256.png)",
-                  maskImage: "url(/brand/logos/boundless-mark-256.png)",
-                  WebkitMaskSize: "contain",
-                  maskSize: "contain",
-                  WebkitMaskRepeat: "no-repeat",
-                  maskRepeat: "no-repeat",
-                  WebkitMaskPosition: "center",
-                  maskPosition: "center",
-                  filter: `drop-shadow(0 0 4px ${eyeColor})`,
-                  transition: "background-color 1s",
-                }}
-              />
-            </motion.div>
-          </div>
-
-          {/* 左臂：完整袖臂（复用 EveArm 骨架，暗黑渐变+红缘线），挥手时整臂提到 z-30
-              压过兜帽/蝠翼——修复原细杆臂“只见爪不见臂”的问题；末端接三节指骨爪。
-              肩点挂在斗篷肩线（24,92），抬臂经过下巴以下，不遮红眼 */}
-          <motion.div
-            className="absolute"
-            style={{ left: 24, top: 92, zIndex: waving ? 30 : 12, transformOrigin: ANATOMY.shoulderLeft }}
-            variants={leftArmVariants}
-            animate={mode}
-          >
-            <motion.div style={{ transformOrigin: ANATOMY.shoulderLeft }} variants={armSwayVariants("left")} animate={swayOn ? "sway" : "still"}>
-              <EveArm side="left" stops={SKIN.demon.armStops} edge={`${eyeColor}66`} />
-              <motion.div className="eve-hand absolute" style={{ left: 4, top: 40, transformOrigin: "12px 22px" }} variants={handWrapperVariants(reduced)} initial="hidden" animate={waving ? "shown" : "hidden"}>
-                <EveHand skin="demon" />
-              </motion.div>
-            </motion.div>
-          </motion.div>
-          {/* 右臂：完整袖臂静垂配重（同款镜像） */}
-          <motion.div
-            className="absolute z-[12]"
-            style={{ right: 24, top: 92, transformOrigin: ANATOMY.shoulderRight }}
-            variants={rightArmVariants}
-            animate={mode}
-          >
-            <motion.div style={{ transformOrigin: ANATOMY.shoulderRight }} variants={armSwayVariants("right")} animate={swayOn ? "sway" : "still"}>
-              <EveArm side="right" stops={SKIN.demon.armStops} edge={`${eyeColor}66`} />
-            </motion.div>
-          </motion.div>
-        </motion.div>
-      </motion.div>
-
-      {/* 悬浮暗红光池 */}
-      <motion.div className="pointer-events-none absolute left-1/2 top-[97%] -z-20 -translate-x-1/2" style={{ opacity: shadowOpacity }}>
-        <motion.div
-          className="h-3 w-16 rounded-[50%] blur-[6px]"
-          style={{ background: `radial-gradient(ellipse at center, ${eyeColor}55 0%, ${eyeColor}18 55%, transparent 75%)` }}
-          animate={anim ? { scaleX: [1, 0.82, 1], opacity: [0.9, 0.55, 0.9] } : { scaleX: 1, opacity: 0.8 }}
-          transition={anim ? { repeat: Infinity, duration: 2.5, ease: "easeInOut" } : undefined}
-        />
-      </motion.div>
-    </motion.div>
-  );
-};
 
 
 /** 通用资讯池（未识别到特定版块时使用） */
@@ -974,7 +136,8 @@ const DEBUG_MODES: BotMode[] = ["idle_wave", "idle_news", "idle_dance", "idle_sc
 
 export default function AISprite() {
   const { lang } = useLang();
-  const reduced = useReducedMotion() ?? false;
+  // 水合安全版：入场 initial 按 reduced 分叉，SSR/首帧必须一致（forms 系列经 props 透传共用）
+  const reduced = useReducedMotionSafe();
   const { scrollY } = useScroll();
   const [mode, setMode] = useState<BotMode>("idle_base");
   const [newsText, setNewsText] = useState("");
@@ -982,6 +145,9 @@ export default function AISprite() {
   const [questNews, setQuestNews] = useState(false);
   const [ceremonyActive, setCeremonyActive] = useState(false);
   const ceremonyPauseRef = useRef(false);
+  /* 互动坞占用：聊天面板打开 → 精灵淡出让位；任意浮层活跃 → 播报让位 */
+  const [chatDock, setChatDock] = useState(false);
+  const dockBusyRef = useRef(false);
   const [isHovered, setIsHovered] = useState(false);
   /* SSR 先按桌面渲染，挂载后由 matchMedia 校正；移动端走轻量行为分级 */
   const [isDesktop, setIsDesktop] = useState(true);
@@ -1115,7 +281,9 @@ export default function AISprite() {
   useEffect(() => {
     const onTeaser = (e: Event) => {
       if (reduced || document.hidden) return;
-      if (forcedModeRef.current) return;
+      if (forcedModeRef.current || dockBusyRef.current) return;
+      /* 台上有自动气泡（星珠/招呼）时不抢戏——龙影预告让位本轮 */
+      if (attnActive()) return;
       const detail = (e as CustomEvent<LoongTeaserDetail>).detail;
       const txt =
         detail?.text ??
@@ -1144,6 +312,24 @@ export default function AISprite() {
     };
     window.addEventListener(LOONG_CEREMONY, onCer);
     return () => window.removeEventListener(LOONG_CEREMONY, onCer);
+  }, []);
+
+  /* 互动坞：聊天开 → 本体淡出（面板有 AI 头像，不需要双形象）；
+     任意浮层（聊天/龙珠托盘面板）活跃 → 全息播报让位（正在播的立刻收回） */
+  useEffect(() => {
+    const dockState = { chat: false, "dragon-panel": false };
+    const onDock = (e: Event) => {
+      const d = (e as CustomEvent<DockDetail>).detail;
+      if (!d?.source) return;
+      dockState[d.source] = d.active;
+      setChatDock(dockState.chat);
+      dockBusyRef.current = dockState.chat || dockState["dragon-panel"];
+      if (dockBusyRef.current) {
+        setMode((p) => (p === "idle_news" ? "idle_base" : p));
+      }
+    };
+    window.addEventListener(DOCK_EVENT, onDock);
+    return () => window.removeEventListener(DOCK_EVENT, onDock);
   }, []);
 
   useEffect(() => {
@@ -1205,7 +391,7 @@ export default function AISprite() {
   useEffect(() => {
     if (reduced) return;
     const loop = setInterval(() => {
-      if (forcedModeRef.current) return;
+      if (forcedModeRef.current || dockBusyRef.current) return;
       if (document.hidden || isHoveredRef.current) return;
       if (Math.abs(springScrollVelocity.get()) > 100 || Math.abs(flightVelX.get()) > 10) return;
       const rand = Math.random();
@@ -1214,6 +400,8 @@ export default function AISprite() {
       else if (rand > 0.9) next = "idle_dance";
       else if (rand > 0.8) next = "idle_wave";
       else if (rand > 0.65) {
+        /* 全息播报不占号但避让：台上有气泡时本轮改做普通待机 */
+        if (attnActive()) return;
         next = "idle_news";
         const pool = SECTION_NEWS[lang]?.[currentSectionRef.current] ?? NEWS[lang] ?? NEWS.en;
         const txt = pool[Math.floor(Math.random() * pool.length)];
@@ -1499,16 +687,21 @@ export default function AISprite() {
     {/* 蝙蝠群覆盖层：仅在有飞行时激活；到达后清空并让本体重现 */}
     <BatSwarm flight={batFlight} count={46} onArrive={() => setDissolved(false)} />
     <motion.div
-      className="fixed bottom-40 right-3 md:right-6 [perspective:1000px] pointer-events-none ai-sprite-container"
+      className={`fixed bottom-40 right-3 md:right-6 [perspective:1000px] pointer-events-none ai-sprite-container transition-opacity duration-300 ${
+        chatDock ? "!pointer-events-none opacity-0" : ""
+      }`}
       style={{ zIndex: isHovered ? 100 : 50, x: combinedX, y: combinedY }}
+      aria-hidden={chatDock}
     >
       {/* 响应式体型：移动端缩到 55%（轻量版），桌面端原尺寸；
           缩放放在独立节点上，避免与 framer 的 transform 写入互相覆盖 */}
       <div className="origin-bottom-right scale-[0.55] md:scale-100">
         <motion.div
-          className="cursor-pointer pointer-events-auto outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/60 rounded-[2.5rem]"
+          className={`cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/60 rounded-[2.5rem] ${
+            chatDock ? "pointer-events-none" : "pointer-events-auto"
+          }`}
           role="button"
-          tabIndex={0}
+          tabIndex={chatDock ? -1 : 0}
           aria-label={lang === "zh" ? "打开 AI 客服对话" : "Open AI chat"}
           onMouseEnter={() => {
             setIsHovered(true);

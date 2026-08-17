@@ -18,7 +18,7 @@ import Database from "better-sqlite3";
 import { DATA_DIR } from "./data-dir";
 import { isValidId, newId } from "./ids";
 
-export const LEDGER_SCHEMA_VERSION = 4;
+export const LEDGER_SCHEMA_VERSION = 6;
 
 // ── 表结构（schema v1）──────────────────────────────────────────────
 // ⚠️ 与 scripts/ledger-lib.mjs 中的 DDL_V1 逐字一致，修改必须同步！
@@ -221,6 +221,31 @@ CREATE INDEX IF NOT EXISTS idx_opplog_customer ON opportunities_log(customer_id)
 CREATE INDEX IF NOT EXISTS idx_opplog_status ON opportunities_log(status);
 `;
 
+// ── 表结构（schema v5：渠道账号台账 channel_accounts）───────────────
+// 多平台对外账号登记：哪个号（label/handle）- 哪个平台 - 挂哪个实例 - 什么用途 -
+// 谁保管（渠道账号架构 2026-07 纪律三条之 3）。session_ref 只存登录态文件/凭据
+// 位置的纯文本备注（如 sessions/639952947442.session），绝不存任何密钥或凭据本体。
+// CRUD 在 lib/channels.ts（同 v3 personas / v4 opportunities 的分层惯例）。
+// ⚠️ 与 scripts/ledger-lib.mjs 中的 DDL_V5 逐字一致，修改必须同步！
+const DDL_V5 = `
+CREATE TABLE IF NOT EXISTS channel_accounts (
+  id TEXT PRIMARY KEY,
+  platform TEXT NOT NULL CHECK(platform IN ('telegram','whatsapp','messenger','line','web','other')),
+  label TEXT NOT NULL,
+  handle TEXT,
+  instance TEXT NOT NULL DEFAULT 'none' CHECK(instance IN ('zhiliao','tongyi','avatarhub','huoke','website','none')),
+  purpose TEXT NOT NULL DEFAULT '其他' CHECK(purpose IN ('总机接待','交付服务','测试','投放专号','其他')),
+  holder TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','paused','revoked','pending')),
+  session_ref TEXT,
+  notes TEXT,
+  created_at TEXT,
+  updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_channel_accounts_platform ON channel_accounts(platform);
+CREATE INDEX IF NOT EXISTS idx_channel_accounts_status ON channel_accounts(status);
+`;
+
 // ── 行类型（console 直接消费）───────────────────────────────────────
 export interface CustomerRow {
   id: string;
@@ -231,6 +256,8 @@ export interface CustomerRow {
   notes: string | null;
   created_at: string | null;
   updated_at: string | null;
+  /** 1 = 测试/演练数据（e2e/smoke 等，schema v6）：KPI/商机默认排除，console 显示徽章。 */
+  is_test: number;
 }
 
 export const IDENTITY_KINDS = ["contact", "tg", "email", "phone", "fingerprint"] as const;
@@ -260,6 +287,7 @@ export interface LeadRow {
   count: number | null;
   raw: string | null;
   synced_at: string | null;
+  is_test?: number | null;
 }
 
 export interface OrderRow {
@@ -285,6 +313,7 @@ export interface OrderRow {
   code: string | null;
   raw: string | null;
   synced_at: string | null;
+  is_test?: number | null;
 }
 
 export interface LicenseRow {
@@ -303,6 +332,7 @@ export interface LicenseRow {
   status: string | null;
   raw: string | null;
   synced_at: string | null;
+  is_test?: number | null;
 }
 
 export interface AuditRow {
@@ -394,6 +424,19 @@ export function getLedgerDb(dbPath?: string): Database.Database {
   return db;
 }
 
+// v5 → v6：为 customers/orders/leads/licenses 补 is_test 列（测试/演练数据标记）。
+// 用函数式迁移而非裸 ALTER：生产库可能已被 scripts/ledger-mark-testdata.mjs 抢先加过该列，
+// 故先探 PRAGMA 存在性再 ALTER，重复运行幂等（裸 ALTER 会因 duplicate column 报错）。
+// ⚠️ 与 scripts/ledger-lib.mjs 的 migrateV6 逐字一致，修改必须同步！
+function migrateV6(d: Database.Database) {
+  const hasCol = (t: string, c: string) =>
+    (d.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[]).some((x) => x.name === c);
+  for (const t of ["customers", "orders", "leads", "licenses"]) {
+    if (!hasCol(t, "is_test")) d.exec(`ALTER TABLE ${t} ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0`);
+  }
+  d.exec("CREATE INDEX IF NOT EXISTS idx_orders_is_test ON orders(is_test)");
+}
+
 function migrate(db: Database.Database) {
   db.exec("CREATE TABLE IF NOT EXISTS meta (\n  key TEXT PRIMARY KEY,\n  value TEXT\n);");
   const row = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as
@@ -405,6 +448,8 @@ function migrate(db: Database.Database) {
     (d) => d.exec(DDL_V2), // v1 → v2：控制台实名账号 users + 会话 sessions
     (d) => d.exec(DDL_V3), // v2 → v3：人设总线 personas / persona_grants / persona_purges
     (d) => d.exec(DDL_V4), // v3 → v4：跨售商机跟进 opportunities_log
+    (d) => d.exec(DDL_V5), // v4 → v5：渠道账号台账 channel_accounts
+    migrateV6, // v5 → v6：is_test 标记列（测试/演练数据，KPI/商机默认排除）
   ];
   if (current >= migrations.length) return;
   const run = db.transaction(() => {
@@ -439,6 +484,36 @@ export function normIdentityValue(kind: IdentityKind, value: string): string {
   if (kind === "contact" || kind === "email") return v.toLowerCase().replace(/\s+/g, "");
   if (kind === "phone") return v.replace(/[\s\-()]/g, "");
   return v;
+}
+
+// ── 测试/演练数据判定（schema v6 is_test 的唯一口径）────────────────
+// 保守词边界匹配：e2e / test / drill / smoke 必须前后都是非字母数字（"contest"、
+// "latest"、"testuser" 不命中，宁可漏标不误标——误标会把真实数据从 KPI 滤掉）；
+// @internal 只认结尾（e2e 脚本约定 contact 形如 e2e-notify@internal）。
+// ⚠️ 与 scripts/ledger-lib.mjs 的 isTestSignal 逐字一致，修改必须同步！
+const TEST_SIGNAL_RE = /(^|[^a-z0-9])(e2e|test|drill|smoke)([^a-z0-9]|$)|@internal\s*$/i;
+
+/** 任一入参命中测试信号即 true（null/undefined 跳过）。 */
+export function isTestSignal(...vals: (string | null | undefined)[]): boolean {
+  return vals.some((v) => v !== null && v !== undefined && TEST_SIGNAL_RE.test(String(v)));
+}
+
+/** 联系方式强信号分类（与 scripts/ledger-lib.mjs 的 classifyStrongContact 同规则，修改必须同步）：
+ *  仅 @handle / t.me/handle / email / phone 判为可自动建档的强信号；自由文本不建档。
+ *  返回 { kind, value（已归一）, display }，用于实时归并的 create-on-miss。 */
+export function classifyStrongContact(
+  text: string | null | undefined
+): { kind: IdentityKind; value: string; display: string } | null {
+  const t = String(text ?? "").trim();
+  if (!t) return null;
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t)) return { kind: "email", value: t.toLowerCase(), display: t.toLowerCase() };
+  const h =
+    t.match(/^@([A-Za-z0-9_]{3,32})$/) ||
+    t.match(/^(?:https?:\/\/)?(?:www\.)?t(?:elegram)?\.me\/@?([A-Za-z0-9_]{3,32})\/?$/i);
+  if (h) return { kind: "contact", value: h[1].toLowerCase(), display: `@${h[1].toLowerCase()}` };
+  const d = t.replace(/[\s\-()]/g, "");
+  if (/^\+?\d{7,15}$/.test(d)) return { kind: "phone", value: d, display: t };
+  return null;
 }
 
 // ── 幂等 upsert（自然键；已有 customer_id 关联绝不被覆盖）───────────
@@ -726,12 +801,18 @@ export function assignCustomer(
  *  订单尚未归属且命中时写回 customer_id 并记 audit（actor=system）。返回 customer_id 或 null。 */
 export function ensureCustomerForOrder(orderKey: string, db: Database.Database = getLedgerDb()): string | null {
   const o = db
-    .prepare("SELECT id, source_key, customer_id, contact, fingerprint FROM orders WHERE id = ? OR source_key = ?")
-    .get(orderKey, orderKey) as Pick<OrderRow, "id" | "source_key" | "customer_id" | "contact" | "fingerprint"> | undefined;
+    .prepare("SELECT id, source_key, customer_id, contact, fingerprint, notify_chat FROM orders WHERE id = ? OR source_key = ?")
+    .get(orderKey, orderKey) as
+    | Pick<OrderRow, "id" | "source_key" | "customer_id" | "contact" | "fingerprint" | "notify_chat">
+    | undefined;
   if (!o) return null;
   if (o.customer_id) return o.customer_id;
+  const chat = String(o.notify_chat ?? "").trim();
+  const tgId = /^\d+$/.test(chat) ? chat : null; // 客户本人深链绑定的私聊 chat_id = 其 user id
+  // 先按身份精确匹配已有客户（含 fingerprint / tg id / 联系方式）
   const candidates: [IdentityKind, string | null][] = [
     ["fingerprint", o.fingerprint],
+    ["tg", tgId],
     ["contact", o.contact],
     ["email", o.contact],
     ["phone", o.contact],
@@ -748,20 +829,49 @@ export function ensureCustomerForOrder(orderKey: string, db: Database.Database =
       return cid;
     }
   }
-  return null;
+  // 未命中：强信号（@handle / email / phone / tg id）自动建档（实时归档，实施22）。
+  // 弱信号/自由文本/仅 fingerprint 不建档，避免热路径产生垃圾客户。
+  const strong = classifyStrongContact(o.contact);
+  if (!strong && !tgId) return null;
+  const cid = createCustomerForContact(
+    { display: strong?.display ?? `tg:${tgId}`, primaryContact: o.contact, tgUserId: tgId },
+    db
+  );
+  if (strong) attachIdentity(cid, strong.kind, strong.value, db);
+  if (o.contact && (!strong || normIdentityValue("contact", o.contact) !== strong.value))
+    attachIdentity(cid, "contact", o.contact, db);
+  if (tgId) attachIdentity(cid, "tg", tgId, db);
+  db.prepare("UPDATE orders SET customer_id = ? WHERE id = ? AND customer_id IS NULL").run(cid, o.id);
+  writeAudit(
+    { actor: "system", action: "auto_create", entity: "order", entity_id: o.source_key, detail: { customer_id: cid, via: strong?.kind ?? "tg" } },
+    db
+  );
+  return cid;
 }
 
-/** 留资自动归属：按 tg / contact 身份精确匹配已有客户（不自动建客户）。语义同订单。 */
+/** 留资自动归属：按 tg / contact 身份精确匹配已有客户；未命中且有强信号则自动建档。语义同订单。 */
 export function ensureCustomerForLead(sourceKey: string, db: Database.Database = getLedgerDb()): string | null {
   const l = db
-    .prepare("SELECT source_key, customer_id, contact, raw FROM leads WHERE source_key = ?")
-    .get(sourceKey) as Pick<LeadRow, "source_key" | "customer_id" | "contact" | "raw"> | undefined;
+    .prepare("SELECT source_key, customer_id, name, contact, raw FROM leads WHERE source_key = ?")
+    .get(sourceKey) as Pick<LeadRow, "source_key" | "customer_id" | "name" | "contact" | "raw"> | undefined;
   if (!l) return null;
   if (l.customer_id) return l.customer_id;
   let tgUserId: string | null = null;
   if (l.source_key.startsWith("tg:")) tgUserId = l.source_key.slice(3);
+  else if (l.source_key.startsWith("c:")) {
+    const c = classifyStrongContact(l.source_key.slice(2));
+    if (c?.kind === "contact") tgUserId = null; // c: 前缀是联系方式，非 tg id
+  }
+  let rawTgId: string | null = null;
+  try {
+    const raw = l.raw ? (JSON.parse(l.raw) as { tg_user_id?: unknown }) : null;
+    if (raw?.tg_user_id != null && /^\d+$/.test(String(raw.tg_user_id))) rawTgId = String(raw.tg_user_id);
+  } catch {
+    /* raw 非 JSON → 忽略 */
+  }
+  const tgId = tgUserId ?? rawTgId;
   const candidates: [IdentityKind, string | null][] = [
-    ["tg", tgUserId],
+    ["tg", tgId],
     ["contact", l.contact],
     ["email", l.contact],
     ["phone", l.contact],
@@ -778,7 +888,42 @@ export function ensureCustomerForLead(sourceKey: string, db: Database.Database =
       return cid;
     }
   }
-  return null;
+  // 未命中：强信号或 tg id 自动建档（实时归档，实施22）
+  const strong = classifyStrongContact(l.contact);
+  if (!strong && !tgId) return null;
+  const cid = createCustomerForContact(
+    { display: s(l.name) ?? strong?.display ?? (tgId ? `tg:${tgId}` : null), primaryContact: l.contact, tgUserId: tgId },
+    db
+  );
+  if (tgId) attachIdentity(cid, "tg", tgId, db);
+  if (strong) attachIdentity(cid, strong.kind, strong.value, db);
+  if (l.contact && (!strong || normIdentityValue("contact", l.contact) !== strong.value))
+    attachIdentity(cid, "contact", l.contact, db);
+  db.prepare("UPDATE leads SET customer_id = ? WHERE source_key = ? AND customer_id IS NULL").run(cid, l.source_key);
+  writeAudit(
+    { actor: "system", action: "auto_create", entity: "lead", entity_id: l.source_key, detail: { customer_id: cid, via: strong?.kind ?? "tg" } },
+    db
+  );
+  return cid;
+}
+
+/** create-on-miss 小工具：建客户主档（实时归档钩子用）。identities 由调用方随后挂。 */
+function createCustomerForContact(
+  input: { display: string | null; primaryContact: string | null; tgUserId: string | null },
+  db: Database.Database
+): string {
+  const cust = createCustomer(
+    {
+      display_name: input.display,
+      primary_contact: input.primaryContact,
+      tg_user_id: input.tgUserId,
+      source: "auto:order-lead",
+      notes: "下单/留资实时自动建档（强信号）",
+    },
+    db,
+    "system"
+  );
+  return cust.id;
 }
 
 // ── 审计 ────────────────────────────────────────────────────────────
@@ -810,6 +955,25 @@ export function writeAudit(a: WriteAuditInput, db: Database.Database = getLedger
 export interface ListOptions {
   limit?: number;
   offset?: number;
+  /** 默认 false：列表排除测试/演练数据（is_test=1）。true 时一并带出（配合 UI「显示测试」开关）。 */
+  includeTest?: boolean;
+}
+
+// 表是否有 is_test 列（按连接缓存；迁移前旧库/无该表时安全返回 false）。
+const _isTestColCache = new WeakMap<Database.Database, Map<string, boolean>>();
+function tableHasIsTest(db: Database.Database, table: string): boolean {
+  let m = _isTestColCache.get(db);
+  if (!m) _isTestColCache.set(db, (m = new Map()));
+  const hit = m.get(table);
+  if (hit !== undefined) return hit;
+  let has = false;
+  try {
+    has = (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === "is_test");
+  } catch {
+    has = false;
+  }
+  m.set(table, has);
+  return has;
 }
 export interface ListResult<T> {
   rows: T[];
@@ -832,6 +996,8 @@ function runList<T>(
   orderBy: string,
   opts: ListOptions
 ): ListResult<T> {
+  // 默认排除测试数据（实施23）：表有 is_test 列且未显式 includeTest 时加过滤。
+  if (!opts.includeTest && tableHasIsTest(db, table)) where = [...where, "COALESCE(is_test,0) = 0"];
   const cond = where.length ? ` WHERE ${where.join(" AND ")}` : "";
   const { limit, offset } = page(opts);
   const total = (db.prepare(`SELECT COUNT(*) AS c FROM ${table}${cond}`).get(params) as { c: number }).c;
@@ -938,25 +1104,36 @@ export interface LedgerStats {
   ordersByStatus: Record<string, number>;
   /** 30 天内到期（未 revoked/expired）的授权数。 */
   licensesExpiringIn30d: number;
+  /** 被标记为测试/演练的数据量（headline 计数已排除这些；供 UI 显示「+N 测试」）。 */
+  test: { customers: number; leads: number; orders: number; licenses: number };
   generatedAt: string;
 }
 
 export function getStats(db: Database.Database = getLedgerDb()): LedgerStats {
-  const count = (table: string) => (db.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get() as { c: number }).c;
+  // headline 计数默认排除测试数据（is_test=1）；无该列的旧库退化为全量（excl 为空串）。
+  const excl = (table: string) => (tableHasIsTest(db, table) ? " WHERE COALESCE(is_test,0) = 0" : "");
+  const count = (table: string) =>
+    (db.prepare(`SELECT COUNT(*) AS c FROM ${table}${excl(table)}`).get() as { c: number }).c;
+  const testCount = (table: string) =>
+    tableHasIsTest(db, table)
+      ? (db.prepare(`SELECT COUNT(*) AS c FROM ${table} WHERE is_test = 1`).get() as { c: number }).c
+      : 0;
   const byStatus: Record<string, number> = {};
+  const ordExcl = tableHasIsTest(db, "orders") ? " WHERE COALESCE(is_test,0) = 0" : "";
   for (const r of db
-    .prepare("SELECT COALESCE(status, '(null)') AS status, COUNT(*) AS c FROM orders GROUP BY status")
+    .prepare(`SELECT COALESCE(status, '(null)') AS status, COUNT(*) AS c FROM orders${ordExcl} GROUP BY status`)
     .all() as { status: string; c: number }[]) {
     byStatus[r.status] = r.c;
   }
   const now = nowIso();
   const until = new Date(Date.now() + 30 * 86400000).toISOString();
+  const licExcl = tableHasIsTest(db, "licenses") ? " AND COALESCE(is_test,0) = 0" : "";
   const expiring = (
     db
       .prepare(
         `SELECT COUNT(*) AS c FROM licenses
          WHERE expires_at IS NOT NULL AND expires_at > ? AND expires_at <= ?
-           AND (status IS NULL OR status NOT IN ('revoked','expired'))`
+           AND (status IS NULL OR status NOT IN ('revoked','expired'))${licExcl}`
       )
       .get(now, until) as { c: number }
   ).c;
@@ -969,6 +1146,12 @@ export function getStats(db: Database.Database = getLedgerDb()): LedgerStats {
     audit: count("audit"),
     ordersByStatus: byStatus,
     licensesExpiringIn30d: expiring,
+    test: {
+      customers: testCount("customers"),
+      leads: testCount("leads"),
+      orders: testCount("orders"),
+      licenses: testCount("licenses"),
+    },
     generatedAt: now,
   };
 }

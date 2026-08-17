@@ -11,6 +11,7 @@ const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   compress: true,
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   experimental: {
     // better-sqlite3 是原生模块（.node 二进制），不能被 webpack 打包，保持外部 require
     serverComponentsExternalPackages: ["better-sqlite3"],

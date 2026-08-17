@@ -481,6 +481,13 @@ function PricingTable({
   );
 }
 
+/** /api/payment/methods 的浏览器可见子集（见 lib/payment-settings.ts getPublicPaymentSettings）。 */
+interface PayMethodsInfo {
+  usdt?: { enabled?: boolean; address?: string };
+  card?: { enabled?: boolean; provider?: string; publishableKey?: string; currency?: string };
+  cardSecretConfigured?: boolean;
+}
+
 function CheckoutModal({
   zh,
   tier,
@@ -500,7 +507,59 @@ function CheckoutModal({
   const [orderId, setOrderId] = useState("");
   const [payAmount, setPayAmount] = useState(0);
   const [copied, setCopied] = useState<"" | "addr" | "amount" | "id">("");
+  // 可用支付方式（后台可配）：拉不到就保持 null → 只走 USDT 老流程，绝不阻断下单。
+  const [pay, setPay] = useState<PayMethodsInfo | null>(null);
+  const [method, setMethod] = useState<"usdt" | "card">("usdt");
+  const [cardNotice, setCardNotice] = useState(false);
   const price = tierPrice(tier, period);
+  // 卡通道可用 = 后台启用 + 服务器已配 Stripe Secret；免费档（price=0）无可扣金额，不给卡入口。
+  const cardAvailable = !!pay?.card?.enabled && pay?.cardSecretConfigured !== false && price > 0;
+  const usdtAvailable = !pay || pay.usdt?.enabled !== false;
+  const showToggle = cardAvailable && usdtAvailable;
+  const cardCurrency = pay?.card?.currency || "USD";
+  const amountUnit = method === "card" ? cardCurrency : "USDT";
+  // 收款地址：后台设置优先，未配置回落到构建期环境变量（保持老行为）。
+  const usdtAddr = pay?.usdt?.address || USDT_ADDR;
+
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/payment/methods")
+      .then((r) => r.json())
+      .then((j: { ok?: boolean } & PayMethodsInfo) => {
+        if (!alive || !j?.ok) return;
+        setPay(j);
+        // 只开了卡（USDT 被关）时默认选卡；其余情况保持 USDT 默认。
+        if (j.card?.enabled && j.cardSecretConfigured !== false && j.usdt?.enabled === false && price > 0) {
+          setMethod("card");
+        }
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** 卡支付：为刚创建的订单换取 Stripe Checkout 跳转链接。true = 正在跳转离站。 */
+  const startCardCheckout = async (id: string): Promise<boolean> => {
+    if (!id) return false;
+    try {
+      const r = await fetch("/api/payment/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order_id: id }),
+      });
+      const j = await r.json();
+      if (j?.ok && j.url) {
+        track("order_card_redirect", { order: id });
+        window.location.href = j.url;
+        return true;
+      }
+    } catch {
+      /* fall through → USDT 回落 */
+    }
+    return false;
+  };
 
   const submit = async () => {
     if (!contact.trim()) {
@@ -520,14 +579,22 @@ function CheckoutModal({
           contact: contact.trim(),
           fingerprint: fp.trim(),
           lang: zh ? "zh" : "en",
+          method,
         }),
       });
       const j = await r.json();
       if (j?.ok) {
         setOrderId(j.order_id || "");
         setPayAmount(Number(j.pay_amount) || price);
+        track("order_submitted", { tier: tier.key, period, amount: price, method });
+        if (method === "card") {
+          const redirecting = await startCardCheckout(String(j.order_id || ""));
+          if (redirecting) return; // 离站去 Stripe，保持 busy 态直到页面卸载
+          // 卡通道未就绪（not_configured / Stripe 报错）→ 提示并回落 USDT 展示
+          setCardNotice(true);
+          setMethod("usdt");
+        }
         setState("ok");
-        track("order_submitted", { tier: tier.key, period, amount: price });
       } else {
         setState("err");
       }
@@ -560,9 +627,23 @@ function CheckoutModal({
       >
         <div className="flex items-start justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-white">{zh ? "确认订单 · USDT 结算" : "Confirm order · USDT"}</h3>
+            <h3 className="text-lg font-semibold text-white">
+              {method === "card"
+                ? zh
+                  ? "确认订单 · 银行卡支付"
+                  : "Confirm order · Card"
+                : zh
+                  ? "确认订单 · USDT 结算"
+                  : "Confirm order · USDT"}
+            </h3>
             <p className="mt-0.5 text-xs text-slate-500">
-              {zh ? "核对信息后按地址付款，客服 ≈5 分钟内为你开通" : "Pay to the address below; activation within ~5 minutes"}
+              {method === "card"
+                ? zh
+                  ? "提交订单后跳转 Stripe 安全支付页完成付款"
+                  : "Submit to continue to Stripe secure checkout"
+                : zh
+                  ? "核对信息后按地址付款，客服 ≈5 分钟内为你开通"
+                  : "Pay to the address below; activation within ~5 minutes"}
             </p>
           </div>
           <button onClick={onClose} className="text-slate-500 transition hover:text-white" aria-label="close">
@@ -590,10 +671,42 @@ function CheckoutModal({
           />
           <Row
             k={zh ? "应付金额" : "Total"}
-            v={tier.monthly === 0 ? "0 USDT" : `${fmt(price)} USDT`}
+            v={tier.monthly === 0 ? `0 ${amountUnit}` : `${fmt(price)} ${amountUnit}`}
             accent
           />
         </div>
+
+        {showToggle && (
+          <div className="mt-4">
+            <div className="text-xs text-slate-400">{zh ? "支付方式" : "Payment method"}</div>
+            <div className="mt-1.5 inline-flex rounded-full border border-white/10 p-1">
+              {(["usdt", "card"] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => {
+                    setMethod(m);
+                    track("order_pay_method", { method: m });
+                  }}
+                  className={`rounded-full px-4 py-1.5 text-xs transition ${
+                    method === m
+                      ? "bg-gradient-to-r from-neon-cyan to-neon-violet font-medium text-ink-950"
+                      : "text-slate-300 hover:text-white"
+                  }`}
+                >
+                  {m === "usdt" ? "USDT (TRC20)" : zh ? "银行卡 · Card" : "Card (Stripe)"}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {cardNotice && (
+          <div className="mt-4 rounded-xl border border-neon-pink/30 bg-neon-pink/10 px-3 py-2.5 text-xs text-slate-200">
+            {zh
+              ? "银行卡支付即将开通，暂请使用 USDT 转账，或联系客服协助付款。"
+              : "Card payment is coming soon — please pay with USDT or contact support."}
+          </div>
+        )}
 
         <label className="mt-5 block text-xs text-slate-400">
           {zh ? "联系方式（Telegram / 邮箱，用于开通通知）*" : "Contact (Telegram / email) *"}
@@ -614,28 +727,38 @@ function CheckoutModal({
           className="mt-1.5 w-full rounded-xl border border-white/10 bg-ink-950/60 px-4 py-2.5 text-sm text-white placeholder-slate-600 outline-none transition focus:border-neon-cyan/50"
         />
 
-        <div className="mt-4 text-xs text-slate-400">{zh ? "USDT 收款地址（TRC20）：" : "USDT address (TRC20):"}</div>
-        {USDT_ADDR ? (
-          <div className="mt-1.5 flex items-center gap-3 rounded-xl border border-white/10 bg-ink-950/60 px-3 py-2.5">
-            <div className="shrink-0 rounded-lg bg-white p-1.5">
-              <QRCodeSVG value={USDT_ADDR} size={72} />
-            </div>
-            <span className="break-all font-mono text-xs text-slate-300">{USDT_ADDR}</span>
-            <button
-              onClick={() => copy("addr", USDT_ADDR)}
-              className="ml-auto flex shrink-0 items-center gap-1 rounded-full border border-white/15 px-2.5 py-1 text-[11px] text-slate-300 transition hover:border-neon-cyan/50 hover:text-white"
-            >
-              <Copy className="h-3 w-3" />
-              {copied === "addr" ? (zh ? "已复制" : "Copied") : zh ? "复制" : "Copy"}
-            </button>
-          </div>
-        ) : (
-          <div className="mt-1.5 rounded-xl border border-neon-pink/20 bg-neon-pink/5 px-3 py-2.5 text-xs text-slate-300">
-            {zh ? (
-              <>提交订单后请联系 <a className="text-neon-cyan hover:underline" href={CONTACT_URL} target="_blank" rel="noreferrer">Telegram 客服 {TELEGRAM_DISPLAY}</a> 获取当期收款地址（防伪冒）。</>
+        {method === "usdt" ? (
+          <>
+            <div className="mt-4 text-xs text-slate-400">{zh ? "USDT 收款地址（TRC20）：" : "USDT address (TRC20):"}</div>
+            {usdtAddr ? (
+              <div className="mt-1.5 flex items-center gap-3 rounded-xl border border-white/10 bg-ink-950/60 px-3 py-2.5">
+                <div className="shrink-0 rounded-lg bg-white p-1.5">
+                  <QRCodeSVG value={usdtAddr} size={72} />
+                </div>
+                <span className="break-all font-mono text-xs text-slate-300">{usdtAddr}</span>
+                <button
+                  onClick={() => copy("addr", usdtAddr)}
+                  className="ml-auto flex shrink-0 items-center gap-1 rounded-full border border-white/15 px-2.5 py-1 text-[11px] text-slate-300 transition hover:border-neon-cyan/50 hover:text-white"
+                >
+                  <Copy className="h-3 w-3" />
+                  {copied === "addr" ? (zh ? "已复制" : "Copied") : zh ? "复制" : "Copy"}
+                </button>
+              </div>
             ) : (
-              <>After submitting, contact <a className="text-neon-cyan hover:underline" href={CONTACT_URL} target="_blank" rel="noreferrer">support {TELEGRAM_DISPLAY}</a> for the current payment address.</>
+              <div className="mt-1.5 rounded-xl border border-neon-pink/20 bg-neon-pink/5 px-3 py-2.5 text-xs text-slate-300">
+                {zh ? (
+                  <>提交订单后请联系 <a className="text-neon-cyan hover:underline" href={CONTACT_URL} target="_blank" rel="noreferrer">Telegram 客服 {TELEGRAM_DISPLAY}</a> 获取当期收款地址（防伪冒）。</>
+                ) : (
+                  <>After submitting, contact <a className="text-neon-cyan hover:underline" href={CONTACT_URL} target="_blank" rel="noreferrer">support {TELEGRAM_DISPLAY}</a> for the current payment address.</>
+                )}
+              </div>
             )}
+          </>
+        ) : (
+          <div className="mt-4 rounded-xl border border-white/10 bg-ink-950/60 px-3 py-2.5 text-xs text-slate-300">
+            {zh
+              ? `提交订单后将跳转 Stripe 安全支付页，支持 Visa / Mastercard 等主流银行卡，按 ${cardCurrency} 结算。`
+              : `After submitting you'll be redirected to Stripe secure checkout (Visa / Mastercard and more), settled in ${cardCurrency}.`}
           </div>
         )}
 
@@ -718,7 +841,17 @@ function CheckoutModal({
             disabled={state === "busy"}
             className="rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet px-5 py-2 text-sm font-medium text-ink-950 transition hover:opacity-90 disabled:opacity-50"
           >
-            {state === "busy" ? (zh ? "提交中…" : "Submitting…") : zh ? "我已付款 · 提交订单" : "Paid · submit order"}
+            {state === "busy"
+              ? zh
+                ? "提交中…"
+                : "Submitting…"
+              : method === "card"
+                ? zh
+                  ? "提交订单 · 前往支付"
+                  : "Submit · go to payment"
+                : zh
+                  ? "我已付款 · 提交订单"
+                  : "Paid · submit order"}
           </button>
         </div>
 

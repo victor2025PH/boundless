@@ -42,11 +42,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: "contact_required" }, { status: 400 });
     }
 
+    // 支付方式白名单：usdt（默认）/ card；其余值一律按 usdt 处理。
+    const method = clean(data?.method, 10) === "card" ? ("card" as const) : ("usdt" as const);
+
     const order = await createOrder({
       plan: clean(data?.plan, 40),
       edition: clean(data?.edition, 20),
       period: clean(data?.period, 10),
       amount: Math.max(0, Number(data?.amount) || 0),
+      method,
       contact,
       fingerprint: clean(data?.fingerprint, 128),
       lang: clean(data?.lang, 8),
@@ -71,7 +75,7 @@ export async function POST(req: NextRequest) {
     await appendLead(rec);
     await notifyAdminsOfOrder(order);
 
-    return NextResponse.json({ ok: true, order_id: order.id, pay_amount: order.pay_amount });
+    return NextResponse.json({ ok: true, order_id: order.id, pay_amount: order.pay_amount, method: order.method || "usdt" });
   } catch {
     return NextResponse.json({ ok: false, error: "server_error" }, { status: 500 });
   }

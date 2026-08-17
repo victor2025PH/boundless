@@ -16,6 +16,8 @@ import {
   PageHeader,
   Pager,
   Td,
+  TestBadge,
+  TestFilterToggle,
   filterInputCls,
   fmtAmount,
   fmtDateTime,
@@ -36,15 +38,20 @@ const STATUS_LABEL: Record<string, string> = {
 export default function OrdersPage({
   searchParams,
 }: {
-  searchParams: { status?: string; q?: string; offset?: string };
+  searchParams: { status?: string; q?: string; offset?: string; test?: string };
 }) {
   const me = getConsoleSessionUser();
   if (!me) return null;
   const canWrite = roleAtLeast(me.role, "admin");
   const status = searchParams.status?.trim() || undefined;
   const q = searchParams.q?.trim() || undefined;
+  const showTest = searchParams.test === "1";
   const offset = Math.max(0, Number(searchParams.offset) || 0);
-  const { rows, total } = listOrders({ status, q, limit: LIMIT, offset });
+  const { rows, total } = listOrders({ status, q, limit: LIMIT, offset, includeTest: showTest });
+  // 当前筛选条件下的测试数据条数 = 含测试 total − 不含测试 total（limit:1 仅取计数）
+  const testCount = showTest
+    ? total - listOrders({ status, q, limit: 1 }).total
+    : listOrders({ status, q, limit: 1, includeTest: true }).total - total;
 
   // 归属下拉的候选客户（最多 500 位，超出后建议先用搜索建档再归属）
   const customerOptions: CustomerOption[] = listCustomers({ limit: 500 }).rows.map((c) => ({
@@ -60,7 +67,7 @@ export default function OrdersPage({
     }
   }
 
-  const filters = { status, q };
+  const filters = { status, q, test: showTest ? "1" : undefined };
 
   return (
     <div>
@@ -85,12 +92,20 @@ export default function OrdersPage({
           placeholder="搜索单号 / 联系方式 / 方案"
           className={`${filterInputCls} w-64`}
         />
+        {showTest && <input type="hidden" name="test" value="1" />}
         <FilterSubmit />
         {(status || q) && (
           <Link href="/console/orders" className="text-xs text-slate-500 hover:text-slate-300">
             清除
           </Link>
         )}
+        <TestFilterToggle
+          basePath="/console/orders"
+          params={{ status, q }}
+          showTest={showTest}
+          testCount={testCount}
+          className="ml-auto"
+        />
       </form>
 
       {rows.length === 0 ? (
@@ -114,6 +129,7 @@ export default function OrdersPage({
               <tr key={o.id} className="hover:bg-slate-800/40">
                 <Td>
                   <span className="font-mono text-xs text-slate-200">{o.source_key}</span>
+                  {o.is_test === 1 && <TestBadge className="ml-2 align-middle" />}
                 </Td>
                 <Td className="text-xs text-slate-300">
                   {[o.product_id, o.plan, o.edition, o.period].filter(Boolean).join(" / ") || "—"}

@@ -58,8 +58,8 @@ export const BRAND = {
         zh: "真机多号自动加友、打招呼、群提取，7×24 全自动获客引流进私域",
         en: "Multi-device auto add / greet / group-extract — automated lead-gen into your funnel",
       },
-      // 获客能力对应 mobile-auto0423（OpenClaw 真机 RPA 集群）；非 solutions SKU。
-      skuIds: [],
+      // 获客能力对应 mobile-auto0423（OpenClaw 真机 RPA 集群）；SKU 卡 = content.solutions#reach。
+      skuIds: ["reach"],
     },
     chatx: {
       category: "growth",
@@ -145,7 +145,7 @@ export const BRAND = {
         zh: "会议 / 直播实时语音同传：克隆音同传 + 双语字幕 + 抢话打断",
         en: "Real-time voice interpreting: cloned-voice simul-interpret + subtitles",
       },
-      skuIds: [],
+      skuIds: ["interpret"],
     },
   },
   engine: {
