@@ -1,0 +1,9 @@
+[submodule "mofangyinse"]
+	path = mofangyinse
+	url = ../mofangyinse.git
+[submodule "zhituo"]
+	path = zhituo
+	url = ../zhituo.git
+[submodule "guanwang"]
+	path = guanwang
+	url = ../guanwang.git
