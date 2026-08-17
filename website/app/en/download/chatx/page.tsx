@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import ChatxDownloadSection from "@/components/ChatxDownloadSection";
+import InviteRefBanner from "@/components/InviteRefBanner";
 import { SITE_URL } from "@/lib/site";
 import { CHATX } from "@/lib/chatxContent";
 
@@ -35,6 +37,10 @@ export default function ChatxDownloadPageEn() {
     <main className="relative min-h-screen">
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(appLd) }} />
       <Navbar />
+      {/* ?ref=ZL-XXXXXX referral banner (useSearchParams needs Suspense; page stays static) */}
+      <Suspense fallback={null}>
+        <InviteRefBanner lang="en" />
+      </Suspense>
       <ChatxDownloadSection lang="en" />
       <Footer />
     </main>

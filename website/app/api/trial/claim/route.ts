@@ -1,15 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { clientIp } from "@/lib/client-ip";
 import { createClaim, issueBindCode } from "@/lib/trial-claim-store";
+import { registerReferral } from "@/lib/referral-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * POST /api/trial/claim —— 客户端注册领 7 天试用。
+ * POST /api/trial/claim —— 客户端注册领免费额度（100 万字符 · 无期限）。
  *
- * body: `{ fingerprint, contact, source?, product? }`
- * 返回: `{ ok, claim_id, bind_code, status, deduped }`
+ * body: `{ fingerprint, contact, source?, product?, invite_code? }`
+ * 返回: `{ ok, claim_id, bind_code, status, deduped, referral? }`
+ *
+ * `invite_code`（选填）＝好友邀请码：**只对全新建单归因**——指纹去重命中旧机器
+ * 说明这台机器早已领过，不算「拉来一个新用户」（防刷口径的一部分）。归因结果
+ * 随响应回显（ok / 拒绝原因），失败绝不影响领取主流程。
  *
  * 安全模型（与 /api/activate 一致）：本端点**绝不签发**授权。它只把「谁、哪台机器、
  * 要一份试用」写进台账（pending）；Ed25519 私钥留在厂商机，由履约脚本轮询
@@ -74,12 +79,27 @@ export async function POST(req: NextRequest) {
     // 分两个请求只会让客户端多一次往返、多一处失败点。
     const withCode = (await issueBindCode(res.claim.id)) || res.claim;
 
+    // 邀请归因（fire-and-forget 语义：归因失败绝不拖垮领取主流程）
+    let referral: string | undefined;
+    const inviteCode = String(data?.invite_code || "").trim();
+    if (inviteCode && !res.deduped) {
+      try {
+        const rr = await registerReferral({ code: inviteCode, invitee: res.claim, inviteeIp: ip });
+        referral = rr.ok ? (rr.already ? "already" : "ok") : rr.reason;
+      } catch {
+        referral = "error";
+      }
+    } else if (inviteCode && res.deduped) {
+      referral = "not_new_machine";
+    }
+
     return NextResponse.json({
       ok: true,
       claim_id: withCode.id,
       bind_code: withCode.bindCode || "",
       status: withCode.status,
       deduped: res.deduped,
+      referral,
       // 已经签好了就直接给（重装/换目录后再来 claim 的常见路径，免得再轮询一轮）
       license: withCode.license || undefined,
     });

@@ -107,9 +107,53 @@ export function TrialRedeemPanel({ defaultChars }: { defaultChars: number }) {
         </div>
       )}
       <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
-        用户会在客户端「加客服领 10 万字符」拿到这串码。核销只是登记「该赠多少」，
-        真凭证由厂商机用离线私钥签发后回填，客户端自动入账。重复核销不会重复赠送。
+        用户会在客户端「联系客服申请更多字符」拿到这串码。核销只是登记「该赠多少」
+        （数额可按用户情况调整），真凭证由厂商机用离线私钥签发后回填，客户端自动入账。
+        重复核销不会重复赠送。
       </p>
     </div>
+  );
+}
+
+/** 邀请人审：放行一条被防刷启发标 flagged 的邀请（宿舍/公司同网段是真实场景，
+ *  启发式必然有误伤，所以出口是人审不是直接拒绝）。 */
+export function ReferralApproveButton({ id }: { id: string }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function approve() {
+    setBusy(true);
+    setErr("");
+    try {
+      const r = await fetch("/api/console/referral-approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d?.ok) {
+        setErr(String(d?.error || `失败 (${r.status})`));
+        return;
+      }
+      router.refresh();
+    } catch {
+      setErr("网络错误");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <button
+        onClick={approve}
+        disabled={busy}
+        className="rounded bg-emerald-500/15 px-2 py-0.5 text-[11px] font-medium text-emerald-300 hover:bg-emerald-500/25 disabled:opacity-50"
+      >
+        {busy ? "放行中…" : "人审放行"}
+      </button>
+      {err && <span className="text-[10px] text-rose-400">{err}</span>}
+    </span>
   );
 }

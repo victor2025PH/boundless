@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/admin-auth";
-import { claimStats, fulfillClaim, listClaims, touchFulfiller } from "@/lib/trial-claim-store";
+import {
+  claimStats,
+  decodeLicenseInfo,
+  fulfillClaim,
+  listClaims,
+  touchFulfiller,
+} from "@/lib/trial-claim-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -60,21 +66,29 @@ export async function GET(req: NextRequest) {
       oldest_pending_min: s.oldestPendingMin,
     },
     // 履约脚本只需要这几样：谁、哪台机、要什么。联系方式给出去便于人工核对异常件。
-    claims: claims.map((c) => ({
-      id: c.id,
-      fingerprint: c.fingerprint,
-      contact: c.contact,
-      contact_kind: c.contactKind,
-      source: c.source || "",
-      product: c.product,
-      created_at: c.createdAt,
-      status: c.status,
-      has_license: !!c.license,
-      bind_code: c.bindCode || "",
-      bind_redeemed_at: c.bindRedeemedAt || "",
-      bind_chars: c.bindChars || 0,
-      has_topup_voucher: !!c.topupVoucher,
-    })),
+    claims: claims.map((c) => {
+      // 已签授权的解码摘要（不验签，仅台账口径）：升级重签判定读它——
+      // 「这张单当年签了多少字符、有没有期限」。解不开（旧格式）给 null，
+      // 履约端对 null 一律跳过（信息不足不盲签）。
+      const lic = c.license ? decodeLicenseInfo(c.license) : null;
+      return {
+        id: c.id,
+        fingerprint: c.fingerprint,
+        contact: c.contact,
+        contact_kind: c.contactKind,
+        source: c.source || "",
+        product: c.product,
+        created_at: c.createdAt,
+        status: c.status,
+        has_license: !!c.license,
+        license_chars: lic ? lic.chars : null,
+        license_exp: lic ? lic.exp : null,
+        bind_code: c.bindCode || "",
+        bind_redeemed_at: c.bindRedeemedAt || "",
+        bind_chars: c.bindChars || 0,
+        has_topup_voucher: !!c.topupVoucher,
+      };
+    }),
   });
 }
 

@@ -60,6 +60,23 @@ export interface TrialClaim {
   /** 厂商机回填：加量凭证（客户端粘贴/自动兑换）。 */
   topupVoucher?: string;
   topupIssuedAt?: string;
+
+  // ── 用量水位（客户端 usage-beacon 节流上报；单调只增）──
+  /** 该机器累计消耗字符（邀请达标判定的数据源；不是计费口径，计费在客户端本地）。 */
+  usedChars?: number;
+  usedAt?: string;
+
+  // ── 追加凭证（邀请见面礼 / 邀请人奖励等，厂商机回填；ref 幂等）──
+  extraVouchers?: ExtraVoucher[];
+}
+
+export interface ExtraVoucher {
+  /** 兑换幂等键（厂商机由 referral_id 确定性派生）。 */
+  ref: string;
+  voucher: string;
+  chars: number;
+  note?: string;
+  issuedAt: string;
 }
 
 interface ClaimDb {
@@ -361,6 +378,79 @@ export async function redeemBindCode(
     }
     return { ok: true, claim: { ...rec }, alreadyRedeemed } as RedeemBindResult;
   });
+}
+
+/** 客户端节流上报的消耗水位（单调只增；邀请达标判定读它）。 */
+export async function recordUsage(id: string, usedChars: number): Promise<TrialClaim | null> {
+  const key = String(id || "").trim();
+  const n = Math.max(0, Math.round(Number(usedChars) || 0));
+  if (!key || n <= 0) return null;
+  return serialize(async () => {
+    const db = await readDb();
+    const rec = db.byId[key];
+    if (!rec) return null;
+    if (n > (rec.usedChars || 0)) {
+      rec.usedChars = n;
+      rec.usedAt = new Date().toISOString();
+      await writeDb(db);
+      // 高频小步上报不进审计流水（jsonl 会被刷成日志）；台账字段本身即口径。
+    }
+    return { ...rec };
+  });
+}
+
+/** 追加一张凭证到 claim（邀请奖励等；按 ref 幂等——重复回填不重复挂）。 */
+export async function addExtraVoucher(
+  id: string,
+  v: { ref: string; voucher: string; chars: number; note?: string }
+): Promise<TrialClaim | null> {
+  const key = String(id || "").trim();
+  const ref = String(v?.ref || "").trim();
+  const voucher = String(v?.voucher || "").trim();
+  if (!key || !ref || !voucher) return null;
+  return serialize(async () => {
+    const db = await readDb();
+    const rec = db.byId[key];
+    if (!rec) return null;
+    const list = rec.extraVouchers || [];
+    if (!list.some((x) => x.ref === ref)) {
+      list.push({
+        ref,
+        voucher,
+        chars: Math.max(0, Math.round(Number(v.chars) || 0)),
+        note: v.note ? String(v.note).slice(0, 60) : undefined,
+        issuedAt: new Date().toISOString(),
+      });
+      rec.extraVouchers = list;
+      await writeDb(db);
+      await audit("extra_voucher_added", rec, { ref, chars: v.chars, note: v.note || "" });
+    }
+    return { ...rec };
+  });
+}
+
+/**
+ * 解码 license token 的 payload（**不验签**——b64url(json).b64url(sig) 的前半段）。
+ *
+ * 用途仅限台账展示/升级判定（「这张单当年签了多少字符、有没有期限」）：
+ * 官网没有公钥也不该有；真验签在客户端与厂商机。解不开返回 null（旧格式/脏数据）。
+ */
+export function decodeLicenseInfo(license: string): { chars: number; exp: number } | null {
+  const t = String(license || "").trim();
+  const dot = t.indexOf(".");
+  if (!t || dot <= 0) return null;
+  try {
+    const b64 = t.slice(0, dot).replace(/-/g, "+").replace(/_/g, "/");
+    const pad = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+    const payload = JSON.parse(Buffer.from(pad, "base64").toString("utf-8"));
+    if (!payload || typeof payload !== "object") return null;
+    return {
+      chars: Math.max(0, Math.round(Number(payload.included_chars) || 0)),
+      exp: Math.max(0, Math.round(Number(payload.exp) || 0)),
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**

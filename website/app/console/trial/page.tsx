@@ -5,13 +5,14 @@
 // 台账与客户体系已打通：联系方式自动比对 identities 解析归属（核销时强信号自动
 // 建档，见 /api/console/trial-redeem），并给出「试用→付费」转化读数。
 import Link from "next/link";
-import { Cloud, Gift, HeartPulse, KeyRound } from "lucide-react";
+import { Cloud, Gift, HeartPulse, KeyRound, Users } from "lucide-react";
 import { getConsoleSessionUser } from "@/lib/console-auth";
 import { roleAtLeast } from "@/lib/console-users";
 import { gatewayDayStats } from "@/lib/ai-gateway";
 import { poolStats as tgPoolStats } from "@/lib/tg-cred-pool";
 import { classifyStrongContact, normIdentityValue } from "@/lib/ledger";
-import { claimStats, listClaims } from "@/lib/trial-claim-store";
+import { claimStats, getClaim, listClaims } from "@/lib/trial-claim-store";
+import { listReferrals, referralAggregate } from "@/lib/referral-store";
 import { readTrialFunnel } from "@/lib/trial-funnel";
 import { getCustomerById, identityCustomerMap, paidCustomerIdSet } from "../data";
 import {
@@ -26,7 +27,7 @@ import {
   filterInputCls,
   fmtDateTime,
 } from "../parts";
-import { TrialRedeemPanel } from "./ui";
+import { ReferralApproveButton, TrialRedeemPanel } from "./ui";
 import { UnquarantineButton } from "../ui";
 
 export const runtime = "nodejs";
@@ -73,12 +74,29 @@ export default async function TrialPage({
   if (!me) return null;
   const canRedeem = roleAtLeast(me.role, "admin");
 
-  const [stats, rows, funnel, gw] = await Promise.all([
+  const [stats, rows, funnel, gw, refAgg, refFlagged] = await Promise.all([
     claimStats(),
     listClaims({ limit: 500 }),
     readTrialFunnel(7),
     gatewayDayStats().catch(() => null),
+    referralAggregate().catch(() => null),
+    listReferrals({ status: "flagged", limit: 50 }).catch(() => []),
   ]);
+  // flagged 行的双方联系方式（≤50 次主键查询，人审要看得见「谁邀了谁」）
+  const flaggedRows = await Promise.all(
+    (refFlagged || []).map(async (r) => {
+      const [inviter, invitee] = await Promise.all([
+        getClaim(r.inviterClaimId),
+        getClaim(r.inviteeClaimId),
+      ]);
+      return {
+        ...r,
+        inviterContact: inviter?.contact || "—",
+        inviteeContact: invitee?.contact || "—",
+        inviteeUsed: invitee?.usedChars || 0,
+      };
+    })
+  );
   let tgPool: ReturnType<typeof tgPoolStats> | null = null;
   try {
     tgPool = tgPoolStats();
@@ -137,9 +155,10 @@ export default async function TrialPage({
         desc={
           <>
             <Gift className="mr-1 inline h-3.5 w-3.5 align-text-bottom" />
-            用户在客户端「注册领 7 天」建单，厂商机离线签发后自动激活。客服在这里
+            用户在客户端「注册领免费额度」（100 万字符 · 无期限）建单，厂商机离线签发后
+            自动激活。客服在这里
             <span className="font-medium text-amber-300/90"> 核销绑定码</span>
-            ，为用户追加赠送字符——凭证由厂商机签，客服不接触任何密钥。
+            为用户追加赠送字符（数额可调）——凭证由厂商机签，客服不接触任何密钥。
           </>
         }
       />
@@ -252,6 +271,80 @@ export default async function TrialPage({
               跳过 {funnel.machines.claim_skip} · 打开客服码 {funnel.machines.gift_open}
             </span>
           </div>
+        </Card>
+      )}
+
+      {refAgg && (refAgg.codes > 0 || refAgg.registered > 0) && (
+        <Card className="mb-4 border-ink-700 bg-ink-900/40 !py-3">
+          <div className="mb-2 flex items-center gap-1.5 text-[11px] text-slate-500">
+            <Users className="h-3.5 w-3.5" />
+            邀请裂变（好友注册双方各得字符；被邀请方消耗达标才给邀请人发奖）
+          </div>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+            <span className="text-slate-400">
+              发码 <span className="font-medium text-white">{refAgg.codes}</span>
+            </span>
+            <span className="text-slate-400">
+              归因注册 <span className="font-medium text-white">{refAgg.registered}</span>
+            </span>
+            <span className="text-slate-400">
+              消耗达标 <span className="font-medium text-white">{refAgg.qualified}</span>
+            </span>
+            <span className="text-slate-400">
+              见面礼已发 <span className="font-medium text-emerald-300">{refAgg.invitee_rewarded}</span>
+            </span>
+            <span className="text-slate-400">
+              邀请奖已发 <span className="font-medium text-emerald-300">{refAgg.inviter_rewarded}</span>
+            </span>
+            <span className="text-slate-400">
+              累计赠出 <span className="font-medium text-white">{refAgg.chars_granted.toLocaleString()}</span> 字符
+            </span>
+            {refAgg.flagged > 0 && (
+              <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">
+                {refAgg.flagged} 条待人审
+              </span>
+            )}
+          </div>
+          {flaggedRows.length > 0 && (
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="text-[10px] uppercase tracking-wide text-slate-600">
+                    <th className="py-1 pr-3">时间</th>
+                    <th className="py-1 pr-3">邀请人</th>
+                    <th className="py-1 pr-3">被邀请人</th>
+                    <th className="py-1 pr-3">拦截原因</th>
+                    <th className="py-1 pr-3">被邀方消耗</th>
+                    <th className="py-1">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {flaggedRows.map((r) => (
+                    <tr key={r.id} className="border-t border-ink-800">
+                      <td className="py-1.5 pr-3 font-mono text-[11px] text-slate-500">
+                        {fmtDateTime(r.createdAt)}
+                      </td>
+                      <td className="py-1.5 pr-3 text-slate-300">{r.inviterContact}</td>
+                      <td className="py-1.5 pr-3 text-slate-300">{r.inviteeContact}</td>
+                      <td className="py-1.5 pr-3 text-amber-300/90">
+                        {r.flagReason === "ip_cluster" ? "同 IP 聚集" : r.flagReason || "—"}
+                      </td>
+                      <td className="py-1.5 pr-3 text-slate-400">
+                        {(r.inviteeUsed || 0).toLocaleString()}
+                      </td>
+                      <td className="py-1.5">
+                        {canRedeem ? <ReferralApproveButton id={r.id} /> : <span className="text-slate-600">需 admin</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="mt-2 text-[10px] leading-relaxed text-slate-600">
+                flagged = 防刷启发命中（同邀请人名下多台被邀请机器共用出口 IP）。宿舍/公司
+                同网段装机是真实场景，确认后放行即可；放行后厂商机下一轮自动发奖。
+              </p>
+            </div>
+          )}
         </Card>
       )}
 

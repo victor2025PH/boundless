@@ -22,14 +22,14 @@ export const CHATX_RELEASE_BASE = "/downloads";
 
 export const CHATX = {
   download: {
-    version: "1.001",
-    size: { zh: "453 MB", en: "453 MB" },
-    filename: "ChatX-Setup-1.001.exe",
+    version: "1.0.21",
+    size: { zh: "476 MB", en: "476 MB" },
+    filename: "ChatX-Setup-1.0.21.exe",
     os: { zh: "Windows 10 / 11（64 位）", en: "Windows 10 / 11 (x64)" },
-    url: `${CHATX_RELEASE_BASE}/ChatX-Setup-1.001.exe`,
+    url: `${CHATX_RELEASE_BASE}/ChatX-Setup-1.0.21.exe`,
     /** 与实际上架 /downloads/ 的安装包一致（scripts/gen-chatx-manifest.ps1 计算）；
      *  运行时会被 manifest.json 的值覆盖。 */
-    sha256: "6087c377ecbdb2c04cfac8f9e75a9049500c6a1762256521a0549ba9450f1f24",
+    sha256: "020db8fc4fbe655e5cbeb97563f23ca143547995444b32e5c4237214fc21d1ab",
     /** 运行时清单（打包脚本生成，含 version/size/sha256/signed）。 */
     manifestUrl: `${CHATX_RELEASE_BASE}/manifest.json`,
     macNote: {

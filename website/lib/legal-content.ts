@@ -159,3 +159,107 @@ export const termsSections: LegalSection[] = [
     },
   },
 ];
+
+// ── 危机干预协议（WP-4 合规模式配套模板页，2026-08-17）─────────────────────────
+// 供部署智聊 ChatX 的运营方公示（加州 SB 243「危机协议公示」义务的模板落点）。
+// 【运营方填写：…】占位处必须按属地实情替换后方可作为正式公示件；引擎侧
+// compliance.crisis_protocol_url 配置本页 URL 后，披露语会自动带出本页链接。
+
+export const crisisProtocolTitle = {
+  zh: "危机干预协议（AI 陪伴服务）",
+  en: "Crisis Intervention Protocol (AI Companion Service)",
+};
+
+export const crisisProtocolSections: LegalSection[] = [
+  {
+    h: { zh: "目的与适用范围", en: "Purpose & scope" },
+    p: {
+      zh: [
+        "本协议说明由 AI 助理协助的聊天服务在识别到用户可能处于自我伤害或其他心理危机时的响应流程。",
+        "本页为运营方公示模板：标注【运营方填写】的内容须由服务运营方按其所在法域与实际资源替换后生效。",
+      ],
+      en: [
+        "This protocol describes how our AI-assisted chat service responds when a user may be at risk of self-harm or another mental-health crisis.",
+        "This page is a deployer-facing template: items marked [to be completed by the operator] must be replaced by the service operator according to their jurisdiction and actual resources.",
+      ],
+    },
+  },
+  {
+    h: { zh: "AI 参与披露", en: "AI involvement disclosure" },
+    p: {
+      zh: [
+        "本服务的对话由 AI 助理协助生成，人工团队可随时接入。新会话首条回复会向用户作出披露。",
+      ],
+      en: [
+        "Conversations in this service are assisted by an AI assistant; a human team can step in at any time. The first reply of a new conversation discloses this to the user.",
+      ],
+    },
+  },
+  {
+    h: { zh: "危机信号的识别", en: "How crisis signals are detected" },
+    p: {
+      zh: [
+        "系统对每条用户消息运行确定性的危机识别（含自我伤害相关表达的多语种检测），识别能力由常驻自动化测试守护（severe 级召回率要求 100%，惯用语不误报）。",
+        "识别结果分级处理：severe（高危）触发完整干预流程；elevated（升高）触发预防性安全指令。",
+      ],
+      en: [
+        "Every user message runs through deterministic crisis detection (multi-language coverage of self-harm expressions), guarded by permanent automated tests (100% recall required on severe cases, no false alarms on idioms).",
+        "Signals are tiered: severe triggers the full intervention flow; elevated injects preventive safety instructions.",
+      ],
+    },
+  },
+  {
+    h: { zh: "干预措施", en: "Intervention measures" },
+    p: {
+      zh: [
+        "任何可能鼓励自我伤害的 AI 回复会在发出前被安全回复整段覆盖（出站硬红线，常驻测试钉住「终态输出 100% 不含鼓励自伤内容」）。",
+        "识别为高危时，回复会附上危机求助资源（热线信息，见下节），并以共情、非评判的语气回应。",
+        "【运营方填写：人工升级路径——何种情形下由人工团队接管、响应时限、值班安排。】",
+      ],
+      en: [
+        "Any AI reply that could encourage self-harm is fully overridden by a safe reply before sending (a hard outbound red line, pinned by permanent tests: final output must contain zero self-harm-encouraging content).",
+        "On severe signals, the reply includes crisis-support resources (hotlines, next section) and responds with an empathetic, non-judgmental tone.",
+        "[To be completed by the operator: human escalation path — when the human team takes over, response SLA, on-call arrangements.]",
+      ],
+    },
+  },
+  {
+    h: { zh: "危机转介资源", en: "Crisis referral resources" },
+    p: {
+      zh: [
+        "【运营方填写：按服务用户所在地区列出危机热线名称与号码，例如所在国家/地区的自杀干预热线、心理援助热线；建议至少覆盖主要服务地区。】",
+        "以上资源同时配置在系统内，高危对话中由系统自动提供给用户。",
+      ],
+      en: [
+        "[To be completed by the operator: list crisis hotline names and numbers for the regions you serve — e.g. national suicide-prevention or mental-health support lines; cover at least your primary service regions.]",
+        "The same resources are configured inside the system and are provided to users automatically during severe conversations.",
+      ],
+    },
+  },
+  {
+    h: { zh: "记录与年度报告", en: "Records & annual reporting" },
+    p: {
+      zh: [
+        "系统对危机处置持久计数（高危识别次数 / 安全覆盖次数 / 资源提供次数，按日累计、可导出），供运营方履行年度报告义务（如加州 SB 243 自 2027 年起的年报要求）。",
+        "计数不含对话原文，仅为聚合数字。",
+      ],
+      en: [
+        "The system keeps persistent counters of crisis handling (severe detections / safe-reply overrides / resource referrals, daily buckets, exportable) so operators can meet annual-reporting duties (e.g. California SB 243 reports starting 2027).",
+        "Counters contain aggregate numbers only — never conversation content.",
+      ],
+    },
+  },
+  {
+    h: { zh: "联系方式与法域说明", en: "Contact & jurisdiction note" },
+    p: {
+      zh: [
+        "【运营方填写：合规联系人 / 邮箱 / 即时通讯联系方式。】",
+        "本模板不构成法律意见；运营方应根据其属地法规（如 EU AI Act 第 50 条、加州 SB 243、纽约 GBL §1700）对内容作最终审定。",
+      ],
+      en: [
+        "[To be completed by the operator: compliance contact / email / messaging handle.]",
+        "This template is not legal advice; operators should finalize the content per their local regulations (e.g. EU AI Act Art. 50, California SB 243, New York GBL §1700).",
+      ],
+    },
+  },
+];

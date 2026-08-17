@@ -26,6 +26,13 @@ param(
     [int]   $Keep       = 3,
     [switch]$DryRun,
     [switch]$Yes,
+    # Release announcement (P0 2026-08-14): every publish also prepends a "release-v<ver>"
+    # entry to downloads/announcements.json, which every >=1.0.27 client polls and shows as
+    # an in-app banner. -Notes inline text, or -NotesFile path to a text file (UTF-8);
+    # neither given -> generic copy. -NoAnnouncement skips the feed update entirely.
+    [string]$Notes      = "",
+    [string]$NotesFile  = "",
+    [switch]$NoAnnouncement,
     [string]$Key        = "$HOME\.ssh\hualing_deploy",
     [string]$Vps        = "ubuntu@165.154.233.121",
     [string]$RemoteDir  = "/home/ubuntu/yuntech/public/downloads",
@@ -100,6 +107,52 @@ if ($DryRun) {
     Ok "staged + manifest.json regenerated"
 }
 
+# -- 3.5 release announcement feed (announcements.json) --------------------------
+# Source of truth = the currently public feed (fetched fresh) so multiple build hosts
+# never clobber each other's entries; this publish's entry is replaced idempotently.
+# Feed contract (consumed by desktop update-notify.js): { items: [ { id, type,
+# title, body, link, published_at, target:{minVersion,maxVersion} } ] }.
+$AnnLocal = Join-Path $DownloadsDir "announcements.json"
+$PublishAnnouncement = -not $NoAnnouncement
+if ($PublishAnnouncement) {
+    $notesText = $Notes
+    if (-not $notesText -and $NotesFile) {
+        if (-not (Test-Path $NotesFile)) { Fail "-NotesFile not found: $NotesFile" }
+        $notesText = (Get-Content $NotesFile -Raw -Encoding UTF8).Trim()
+    }
+    if (-not $notesText) { $notesText = "包含稳定性与体验改进，建议尽快更新。" }
+    $existingItems = @()
+    $minSupported = ""   # top-level forced-upgrade line: MUST survive the merge (set via push_announcement.ps1)
+    try {
+        $feed = (& curl.exe -s -m 15 "$SiteUrl/downloads/announcements.json" | Out-String).Trim()
+        if ($feed -and $feed.StartsWith("{")) {
+            $parsed = $feed | ConvertFrom-Json
+            if ($parsed.items) { $existingItems = @($parsed.items | Where-Object { $_.id -ne "release-v$Version" }) }
+            if ($parsed.min_supported_version) { $minSupported = [string]$parsed.min_supported_version }
+        }
+    } catch { Info "no existing public announcements.json (first publish or fetch failed) - starting fresh" }
+    $entry = [ordered]@{
+        id           = "release-v$Version"
+        type         = "release"
+        title        = "ChatX v$Version 已发布"
+        body         = $notesText
+        link         = "$SiteUrl/download/chatx"
+        published_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+        # only nudge clients still below this version; the just-updated ones shouldn't see it
+        target       = [ordered]@{ minVersion = ""; maxVersion = "" }
+    }
+    $items = @(@($entry) + $existingItems | Select-Object -First 20)   # feed stays small forever
+    if ($DryRun) {
+        Info "DRYRUN would stage announcements.json (release-v$Version + $($existingItems.Count) kept entries; min_supported_version='$minSupported')"
+    } else {
+        $feedObj = [ordered]@{ items = $items }
+        if ($minSupported) { $feedObj["min_supported_version"] = $minSupported }
+        $json = $feedObj | ConvertTo-Json -Depth 6
+        [IO.File]::WriteAllText($AnnLocal, $json, (New-Object Text.UTF8Encoding($false)))
+        Ok "announcements.json staged (release-v$Version, $($items.Count) total entries$(if ($minSupported) { ", min_supported_version=$minSupported" }))"
+    }
+}
+
 # -- 4. atomic upload: exe first, verify sha on VPS, THEN pointers ---------------
 $scpBase = @("-i", $Key, "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new")
 $sshBase = $scpBase
@@ -112,7 +165,9 @@ if ($DryRun) {
     $vpsSha = (& ssh @sshBase $Vps "openssl dgst -sha512 -binary '$RemoteDir/ChatX-Setup-$Version.exe' | openssl base64 -A").Trim()
     if ($vpsSha -ne $shaLocal) { Fail "VPS sha512 mismatch after upload (corrupt transfer): got $vpsSha" }
     Ok "exe verified on VPS (sha512 matches)"
-    & scp @scpBase (Join-Path $DownloadsDir "latest.yml") (Join-Path $DownloadsDir "manifest.json") "${Vps}:$RemoteDir/"
+    $pointerFiles = @((Join-Path $DownloadsDir "latest.yml"), (Join-Path $DownloadsDir "manifest.json"))
+    if ($PublishAnnouncement -and (Test-Path $AnnLocal)) { $pointerFiles += $AnnLocal }
+    & scp @scpBase @pointerFiles "${Vps}:$RemoteDir/"
     if ($LASTEXITCODE -ne 0) { Fail "scp pointers failed" }
     & ssh @sshBase $Vps "pm2 restart yuntech --update-env >/dev/null 2>&1 && sleep 4 && echo restarted" | Out-Null
     Ok "pointers uploaded + pm2 restarted"
@@ -128,7 +183,7 @@ if ($DryRun) {
     Info "syncing to R2 mirror ..."
     & $RcloneExe --config $R2Conf copy $DownloadsDir "r2:avatarhub/downloads" `
         --include "ChatX-Setup-$Version.exe" --include "ChatX-Setup-$Version.exe.blockmap" `
-        --include "latest.yml" --include "manifest.json" `
+        --include "latest.yml" --include "manifest.json" --include "announcements.json" `
         --transfers 4 --s3-chunk-size 32M --log-level ERROR
     if ($LASTEXITCODE -ne 0) { Write-Warning "R2 sync failed - /dl router will fall back to VPS; re-run: rclone --config $R2Conf copy $DownloadsDir r2:avatarhub/downloads" }
     else { Ok "R2 mirror synced (r2:avatarhub/downloads)" }
@@ -146,6 +201,13 @@ if (-not $DryRun) {
     if ($mv -ne $Version) { Fail "public manifest version=$mv != $Version" }
     if ($code -notin @("200","206")) { Fail "public exe not downloadable (HTTP $code)" }
     Ok "public verified: latest.yml=$lv manifest=$mv exe=HTTP$code"
+    if ($PublishAnnouncement) {
+        # soft check: a broken feed must not fail an otherwise-good release (clients fail-open)
+        $annPub = ""
+        try { $annPub = (& curl.exe -s -m 15 "$SiteUrl/downloads/announcements.json" | Out-String) } catch {}
+        if ($annPub -match "release-v$([regex]::Escape($Version))") { Ok "public announcements.json carries release-v$Version" }
+        else { Write-Warning "public announcements.json missing release-v$Version (clients just won't see the banner; re-upload announcements.json to fix)" }
+    }
 }
 
 # -- 6. hygiene: keep newest -Keep versions, delete older (local + VPS) ----------

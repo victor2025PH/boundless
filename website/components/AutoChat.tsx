@@ -1,6 +1,6 @@
 "use client";
 
-import { Languages, Bot, Mic, Inbox, ArrowRight, Check, X, type LucideIcon } from "lucide-react";
+import { Languages, Bot, Mic, Inbox, ArrowRight, Check, X, Download, type LucideIcon } from "lucide-react";
 import { useLang } from "./LanguageContext";
 import Reveal from "./fx/Reveal";
 import { track } from "@/lib/track";
@@ -16,8 +16,9 @@ const ICONS: Record<string, LucideIcon> = {
 };
 
 export default function AutoChat() {
-  const { t } = useLang();
+  const { t, lang } = useLang();
   const a = t.autochat;
+  const zh = lang === "zh";
 
   return (
     <section id="autochat" className="relative overflow-hidden py-24">
@@ -127,6 +128,18 @@ export default function AutoChat() {
         {/* AI auto-closing chat plans */}
         <Reveal className="mt-20">
           <Plans />
+        </Reveal>
+
+        {/* WS-1 试用入口（首页显著位）：下载桌面端即领首装体验额度，与 /order 订阅并行 */}
+        <Reveal className="mt-8 text-center">
+          <a
+            href={zh ? "/download/chatx" : "/en/download/chatx"}
+            onClick={() => track("cta_click", { where: "home_autochat_trial" })}
+            className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet px-7 py-3 text-sm font-medium text-ink-950 transition hover:opacity-90"
+          >
+            <Download className="h-4 w-4" />
+            {zh ? "免费下载试用（自带体验额度，注册再送 100 万字符）" : "Free trial download — starter allowance included"}
+          </a>
         </Reveal>
       </div>
 

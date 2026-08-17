@@ -44,6 +44,13 @@ export async function GET(req: NextRequest) {
       bind_redeemed: !!claim.bindRedeemedAt,
       topup_voucher: claim.topupVoucher || undefined,
       topup_chars: claim.bindChars || undefined,
+      // 追加凭证（邀请见面礼/邀请人奖励等）：客户端按 ref 幂等入账，重复下发无害。
+      extra_vouchers: (claim.extraVouchers || []).map((v) => ({
+        ref: v.ref,
+        voucher: v.voucher,
+        chars: v.chars,
+        note: v.note || "",
+      })),
     });
   } catch {
     return NextResponse.json({ ok: false, error: "server_error" }, { status: 500 });

@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import ChatxDownloadSection from "@/components/ChatxDownloadSection";
+import InviteRefBanner from "@/components/InviteRefBanner";
 import { SITE_URL } from "@/lib/site";
 import { CHATX } from "@/lib/chatxContent";
 
@@ -36,6 +38,10 @@ export default function ChatxDownloadPage() {
     <main className="relative min-h-screen">
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(appLd) }} />
       <Navbar />
+      {/* ?ref=ZL-XXXXXX 邀请归因横幅（useSearchParams 需 Suspense，页面保持静态渲染） */}
+      <Suspense fallback={null}>
+        <InviteRefBanner lang="zh" />
+      </Suspense>
       <ChatxDownloadSection lang="zh" />
       <Footer />
     </main>
