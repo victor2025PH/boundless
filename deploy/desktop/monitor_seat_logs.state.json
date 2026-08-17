@@ -1,0 +1,13 @@
+{
+  "last_seen": {
+    "kouxing": "2026-08-17 16:24:52",
+    "lianbei": "2026-08-17 16:27:32",
+    "yunsheng": "2026-08-17 16:23:13",
+    "tingxie": "2026-08-17 17:15:05"
+  },
+  "alerted": {
+    "yunsheng|有客户消息长时间无回复且无待审稿（自动回复链可能被静默拦断）| [WARNING] src.inbox.health_watchdog: 入站漏球：# 个会话最后一条是客户消息、超 #h 无回复且无待审稿（最老 #.#h；样例 messenger:#:#, messenger:#:#, messeng": 1786891924.7339032,
+    "kouxing|有客户消息长时间无回复且无待审稿（自动回复链可能被静默拦断）| [WARNING] src.inbox.health_watchdog: 入站漏球：# 个会话最后一条是客户消息、超 #h 无回复且无待审稿（最老 #.#h；样例 messenger:#:#, messenger:#:#, messeng": 1786935122.015466
+  },
+  "last_run": "2026-08-17 17:52:18"
+}

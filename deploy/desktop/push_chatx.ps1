@@ -29,8 +29,10 @@
 # Exit: 0 ok / 2 no setup found / 3 stage or hash verify failed / 4 install failed
 #       5 smoke failed (install may still be fine; read the output)
 #       7 fresh-install prep failed (backup rename or uninstall; data dir locked?)
-#       8 target disk too low (clean old setups in the stage dir first)
+#       8 target disk too low even after auto-remedy (old setups + stale scoped_dir temps)
 #       9 account restore failed (recovery _bak dir is still intact on the node)
+#      10 seat backend freshness verification failed (stale backend survived /
+#         backend never booted / seat port silent -- see [seatverify] output)
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)][string]$TargetSsh,
@@ -72,13 +74,29 @@ Say ("sha256: " + $sha)
 # mid-rollout because every release had parked another 476 MB setup in the stage
 # dir; the NSIS unpack needs ~2 GB on top of the upload). Fail fast + tell the
 # operator what to clean instead of dying halfway through a 476 MB scp.
+# 2026-08-17 upgrade: low disk now triggers an AUTO-REMEDY first. Real .198 root
+# cause that day was NOT parked setups (0.5 GB) but stale Chromium scoped_dir*
+# staging corpses in TEMP: 45 dirs / ~69 GB of dead webview download staging.
+# Both hog classes are safe to clear unattended: setups keep only the version
+# being pushed; scoped_dirs only when >24h stale (live sessions keep a fresh
+# mtime; files locked by running processes silently survive Remove-Item).
+# Still <3 GB after remedy -> honest exit 8 with a manual-inspection hint.
 $freeRaw = ssh $TargetSsh 'powershell -NoProfile -Command "[math]::Round((Get-PSDrive C).Free/1GB,1)"'
 $freeGb = 0.0
 if (-not [double]::TryParse(("$freeRaw".Trim()), [ref]$freeGb)) { $freeGb = 0.0 }
 Say ("target C: free = " + $freeGb + " GB")
 if ($freeGb -lt 3.0) {
-  Say "target disk too low (<3 GB). Clean old setups first, e.g.:"
-  Say ("  ssh {0} powershell -NoProfile -Command `"Get-ChildItem {1} -Filter ChatX-Setup-*.exe | Remove-Item -Force`"" -f $TargetSsh, $StageDir)
+  Say "target disk low (<3 GB) -- auto-remedy: old setups + stale scoped_dir temps ..."
+  $curLeaf = Split-Path -Leaf $Setup
+  $remedy = 'powershell -NoProfile -Command "Get-ChildItem ''' + $StageDir + ''' -Filter ChatX-Setup-*.exe -ErrorAction SilentlyContinue | Where-Object Name -ne ''' + $curLeaf + ''' | Remove-Item -Force -ErrorAction SilentlyContinue; Get-ChildItem $env:TEMP -Directory -Filter scoped_dir* -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-1) } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue; [math]::Round((Get-PSDrive C).Free/1GB,1)"'
+  $freeRaw = ssh $TargetSsh $remedy
+  $freeGb = 0.0
+  if (-not [double]::TryParse(("$freeRaw".Trim()), [ref]$freeGb)) { $freeGb = 0.0 }
+  Say ("target C: free after remedy = " + $freeGb + " GB")
+}
+if ($freeGb -lt 3.0) {
+  Say "target disk still too low (<3 GB) after auto-remedy. Inspect the big hogs manually, e.g.:"
+  Say ("  ssh {0} powershell -NoProfile -Command `"Get-ChildItem C:\Users\Administrator\Downloads,{1} -Recurse -File | Sort-Object Length -Descending | Select-Object -First 10 FullName,Length`"" -f $TargetSsh, $StageDir)
   exit 8
 }
 
@@ -88,7 +106,7 @@ $stageFwd = $StageDir.Replace('\', '/')
 ssh $TargetSsh "mkdir `"$StageDir`" 2>nul & echo staged-dir-ok" | Out-Null
 foreach ($f in @('install_chatx_node.ps1', 'smoke_chatx_node.ps1', 'relaunch_chatx_node.ps1', 'verify_chatx_vs_local.ps1',
                  'backup_chatx_data_node.ps1', 'uninstall_chatx_node.ps1', 'wipe_chatx_data_node.ps1',
-                 'restore_chatx_accounts_node.ps1')) {
+                 'restore_chatx_accounts_node.ps1', 'verify_seat_backend_node.ps1')) {
   scp -q (Join-Path $here $f) ("{0}:{1}/{2}" -f $TargetSsh, $stageFwd, $f)
 }
 Say "uploading installer ..."
@@ -139,8 +157,26 @@ if ($FreshInstall -and $KeepAccounts) {
 
 # --- 4. relaunch in the console session (operator sees the app come back) -----
 if ($Relaunch) {
+  # WP-5 root-fix companion: capture the TARGET clock before the relaunch, so the
+  # post-relaunch seat verification can prove the backend's run_sentinel
+  # started_at is NEWER than this deploy (a surviving old backend = started_at
+  # from days ago = the 2026-08-13 false-positive signature).
+  $t0raw = ssh $TargetSsh 'powershell -NoProfile -Command "[DateTimeOffset]::Now.ToUnixTimeSeconds()"'
+  $t0 = 0.0
+  if (-not [double]::TryParse(("$t0raw".Trim()), [ref]$t0)) { $t0 = 0.0 }
   ssh $TargetSsh "powershell -ExecutionPolicy Bypass -File $StageDir\relaunch_chatx_node.ps1"
   if ($LASTEXITCODE -ne 0) { Say "relaunch did not confirm; operator may need the desktop shortcut" }
+  # --- 4.5 seat backend freshness verification (started_at judge) -------------
+  # Only meaningful after an install in this run; skip if we could not read the
+  # target clock (never fail the deploy on a broken clock probe alone).
+  if (($Install -or $FreshInstall) -and $t0 -gt 0) {
+    Say "verifying the seat came back on a FRESH backend (run_sentinel started_at) ..."
+    ssh $TargetSsh "powershell -ExecutionPolicy Bypass -File $StageDir\verify_seat_backend_node.ps1 -SinceEpoch $t0"
+    if ($LASTEXITCODE -ne 0) {
+      Say ("seat backend verification FAILED exit=" + $LASTEXITCODE + " (1=stale backend / 2=never booted / 3=port silent)")
+      exit 10
+    }
+  }
 }
 
 # --- 5. smoke the INSTALLED build (throwaway data dir; never touches real data)

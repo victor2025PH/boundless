@@ -49,6 +49,9 @@ if (-not $tasks.Count) { Say "未发现 $Prefix 计划任务，退出（本机�
 $benign = @(0, 267009, 267011)   # 0=成功 267009=正在运行 267011=从未运行
 $failed = @()
 foreach ($t in $tasks) {
+    # 已禁用＝运营刻意停用（如 2026-08-15 Boundless-chengjie-watchdog 改「安装程序启动为准」），
+    # 不是故障——跳过，否则 26h 后每轮巡检都拿它刷「超期」告警。
+    if ([string]$t.State -eq 'Disabled') { continue }
     $info = $t | Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
     if (-not $info) { continue }
     $rc = $info.LastTaskResult

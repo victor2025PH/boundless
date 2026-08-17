@@ -1,0 +1,37 @@
+---
+description: Chengjie 人设数据编辑纪律：删除要删干净、丰富不许复活已删设定
+globs: engines/chengjie/**/*,D:/chengjie-instances/**/*
+alwaysApply: false
+---
+
+# Chengjie 人设数据纪律（2026-08-03/04 「删除不干净」事故链沉淀）
+
+碰人设数据（Studio API / `profiles_runtime.yaml` / `personas.yaml` / 批量丰富）时：
+
+## 背景事实（勿凭直觉推翻）
+
+- 一个人设事实会被创建/丰富期**反规范化写进 6~9 个字段**（hobbies/background/
+  tastes/selfie_scenes/life_arc/family/schedule/openers…）——删一处不等于删干净。
+- `profiles_runtime.yaml` 已有 **mtime 热重载**（约 3s 内进内存，无需重启）；
+  直改文件＝直接上生产。
+- 运营的删除意图沉淀在 `boundaries.retired_facts`（结构化条目
+  `{text, added, terms}`，`terms`＝机器可读锚词）。它驱动三层防线：
+  prompt 否认钉子（full+compact）、persona_guard 出站认领剥离、
+  Studio 保存前 `retired_conflicts` 冲突检测。
+
+## 铁律
+
+1. **丰富/生成人设内容前先读 `boundaries.retired_facts`**——锚词命中的内容
+   **禁止再生成**（2026-08-02 批量丰富把运营删过的猫写回档案＝本条的由来）。
+2. **直改 YAML 后必跑清扫**（Studio 保存路径的检测覆盖不到你）：
+   `python tools/persona_retired_sweep.py`（冲突退出码 1；`--json` 可进脚本）。
+   运行时兜底＝watchdog `persona_retired_remind`（默认开，60min 一轮，
+   webhook 别名 `persona_retired`）。
+3. **替运营删设定**用 Studio 的「内容排查」（人设 → 预览 → 🔎）确认全层零命中；
+   API 口 `GET /api/personas/profiles/{pid}/content-scan?q=词`（支持逗号多词）。
+   记忆残留用 `POST /api/episodic-memory/bulk-delete`（默认 dry_run）。
+4. **要恢复一个已撤销的设定**：先删对应 retired_facts 钉子，再加内容——
+   顺序反了会被冲突告警点名（这不是误报）。
+5. 人设编辑撞车面（`personas.html` / `persona_manager.py` /
+   `persona_content_scan.py` / `persona_retired.py`）动工前跑
+   `scripts\agent_probe.ps1` 探活，遵守共享树协议。

@@ -15,7 +15,9 @@ alwaysApply: false
 3. **后端指纹**：`cd engines/chengjie/desktop && python build/check_backend_freshness.py`；红→`npm run build:backend`（约 12 分钟）。
 4. **打包**：`npm run dist:win`（predist 自带门禁+双冒烟；产物 `dist/ChatX-Setup-<ver>.exe` ~476MB，**必须落在 desktop\dist**——push 默认从那里取最新）。
 5. **逐台推**（默认升级保数据）：`powershell -File deploy\desktop\push_chatx.ps1 -TargetSsh <别名> -Install -Relaunch -Smoke`
-6. **终验**：`& deploy\desktop\chatx_fleet_status.ps1 -Targets yunsheng,kouxing,lianbei`——**以 fleet 台账的运行版本为准**（smoke 用的是一次性数据目录，只证明包能起，不证明坐席在跑新版）。
+   ——2026-08-17 起 `-Install -Relaunch` 自带坐席新鲜度终验（`verify_seat_backend_node.ps1`：
+   真坐席 run_sentinel `started_at` 晚于本次安装 + 18799 答 /login 200；失败 exit 10）。
+6. **终验**：`& deploy\desktop\chatx_fleet_status.ps1 -Targets yunsheng,kouxing,lianbei`——**以 fleet 台账的运行版本为准**（smoke 用的是一次性数据目录，只证明包能起，不证明坐席在跑新版；第 5 步的 seatverify 已把「坐席跑的是**本次**新后端」也证掉）。
 7. **收尾**：删各机 `C:\Users\Administrator\Downloads\chatx` 旧安装包只留当前版；`agent_probe.ps1 -Intent ... -Done`。
 
 ## 机器映射（ssh config 由 deploy/machines.json 生成）
@@ -23,7 +25,7 @@ alwaysApply: false
 | 说法 | 别名 | 系统 | 备注 |
 |---|---|---|---|
 | 173 | `yunsheng` | Win11 | 用户 `admin`；NSIS 静默安装高频崩（见下） |
-| 198 | `kouxing` | Win10 | C 盘小，push 已内建 <3GB 快败预检（exit 8） |
+| 198 | `kouxing` | Win10 | C 盘小；push <3GB 预检现自带**自动处方**（清旧包+陈旧 scoped_dir，见台账）；另有周清任务 `ChatXSeatTempClean`（SUN 06:40，脚本源 `deploy/desktop/seat_temp_clean.ps1`） |
 | 104 | `lianbei` | Win10 | |
 | 140 | `tingxie` | Win10 | 历史坐席节点 |
 
@@ -39,14 +41,28 @@ alwaysApply: false
 
 ## 173 专属坑（每次都撞，按此处置）
 
-- `installer exit=-1073741819`(0xC0000005) 连崩＝NSIS System.dll 在 SSH 会话的已知抖动（Win11 高发），**不是包坏**（sha256 已验）。脚本自带 4 次重试+控制台会话计划任务兜底（2026-08-13 修复过 PS5.1 stderr 终止 bug）。
+- `installer exit=-1073741819`(0xC0000005) 连崩＝NSIS System.dll 在 SSH 会话的已知抖动（Win11 高发；**2026-08-17 实测 Win10/.198 也抖过一次、重试第 2 次即成——不是 Win11 专属，重试机制勿删**），**不是包坏**（sha256 已验）。脚本自带 4 次重试+控制台会话计划任务兜底（2026-08-13 修复过 PS5.1 stderr 终止 bug）。
 - push 整体失败→**立刻原样重推**（历史最多两轮必成）。install 是先卸旧再装新，失败时机器处于**无安装状态**，绝不能放着收工。
 - 别 RDP 手点安装、别中途 kill、别删脚本重试逻辑。
+
+### 173 第二坑：装后「smoke 过 → 几分钟内 DOWN」＝残留旧后端抢端口（2026-08-13 发 1.0.25 实测两轮复现；**2026-08-17 已根修**）
+
+- **与上面的 NSIS 崩溃是两码事**（安装本身 exit=0）。机制：安装周期没杀干净**上一版的后端 sidecar**（`run_sentinel.json` 的 `started_at` 早于本次安装、`beat_at` 仍在跳＝铁证）→ 新壳的后端绑 18799 失败即退 → 旧后端随后寿终 → fleet 报 `exe only (backend not serving)`（沙箱 smoke 用随机端口看不见这病）。
+- **根修已落**（2026-08-17 发 1.0.38 于 173 连装两轮实弹验证）：
+  ① `install_chatx_node.ps1` 步骤 2b「收割-验证-端口预检」：Stop-Process 后按路径+端口双面收割幸存者（`taskkill /T /F` 走不同权限路径），三轮后仍有残留/18799 仍被占 → **exit 5 拒装**（外来进程占端口只点名不杀）；
+  ② `push_chatx.ps1` 步骤 4.5 坐席新鲜度终验（新 exit 10）：拉起前取目标机时钟 → `verify_seat_backend_node.ps1` 轮询真坐席 `run_sentinel.json`，**started_at 必须晚于本次安装**（旧后端顶包=exit 1 立刻现形）+ 18799 真答 /login 200 才放行。
+- 旧的人工处置（杀壳→ChatXKick 计划任务拉起→fleet 复验）仍适用于**存量机器**上偶发的同型事故；新发版流程已不需要。
+- 2026-08-17 顺带实锤：**安装脚本内建的控制台会话兜底首次在真实发版中生效**（173 静默 4 连崩 → 兜底一次装成，两轮都是），此前它只被独立探针验证过。
 
 ## 踩过的坑台账（改这套工具/流程前先读）
 
 - **fleet 参数**：`powershell -File xx.ps1 -Targets a,b,c` 绑成单字符串→全队显示 unreachable 假象；脚本已自拆逗号，但报「未安装/不可达」时先怀疑调用方式再怀疑机器。
-- **磁盘**：每次发版在暂存目录攒 476MB；198 曾剩 2.5GB 装不进。push 已内建预检，装完照第 7 步清旧包。
+- **磁盘**：每次发版在暂存目录攒 476MB；198 曾剩 2.5GB 装不进。**真根因（2026-08-17 实锤）不是旧安装包**：
+  Chromium webview 的下载暂存尸体 `%TEMP%\scoped_dir*` 从不自清——198 实测 45 个共 ~69GB（删旧包只回 0.5GB，
+  清尸体 2.5→71GB）。现三层机制：① push <3GB 预检**先自动处方**（清「非本次版本」旧包 + >24h 陈旧 scoped_dir，
+  复查仍 <3GB 才 exit 8）；② fleet 台账带 `diskGB` 列（<10GB 标 LOW DISK）＝发版间隙的被动观测；③ 仅小盘机
+  198 注册周清任务 `ChatXSeatTempClean`（>7 天 scoped_dir + 旧包保最新，日志 `Downloads\chatx\seat_temp_clean.log`）。
+  173/104 盘大（400GB+）刻意不装任务——数据点名再扩。清理绝不碰 `*bak20*` 恢复副本与业务数据。
 - **本机(117)也装着智聊坐席端**：测试任何带「杀 telegram-ai-desktop 进程」步骤的节点脚本，必须用合成 `-AppDataRoot`（restore 脚本对非真实 APPDATA 自动不杀进程——2026-08-13 曾误杀 117 在用的智聊）。
 - **PS 引号**：远程命令用单引号外壳内嵌 `\"`；多行提交信息用 here-string 写临时文件 `git commit -F`（bash heredoc 在 PowerShell 必炸）。
 - **验证**：升级/重装后一律 fleet 台账终验运行版本，不要只看 smoke OK。

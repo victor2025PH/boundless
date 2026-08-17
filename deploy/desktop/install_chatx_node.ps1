@@ -18,11 +18,13 @@
 #   5. report where it landed + version, so the caller can verify
 #
 # Exit codes: 0 ok / 2 bad setup file / 3 install failed / 4 post-install missing
+#             5 stale app/backend processes (or port 18799) could not be reaped
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)][string]$Setup,
   [string]$ExpectSha256 = "",
-  [switch]$KeepSetup
+  [switch]$KeepSetup,
+  [int]$SeatPort = 18799
 )
 
 $ErrorActionPreference = 'Stop'
@@ -57,6 +59,77 @@ if ($running) {
 Get-Process -ErrorAction SilentlyContinue |
   Where-Object { $_.Path -and $_.Path -like '*telegram-ai-desktop*' } |
   Stop-Process -Force -ErrorAction SilentlyContinue
+
+# --- 2b. reap-verify + seat-port precheck (WP-5 root fix, 2026-08-17) --------
+# The 2026-08-13 1.0.25 incident on .173: the Stop-Process calls above are
+# fire-and-forget (-ErrorAction SilentlyContinue swallows access-denied / slow
+# exits), so a previous build's backend sidecar can SURVIVE the install cycle
+# still holding the seat port. The new shell's backend then fails to bind and
+# exits; the node degrades to "exe only (backend not serving)" minutes after a
+# green smoke (the smoke runs on its own throwaway port and cannot see this).
+# Fix: VERIFY the reap actually worked, kill the port owner directly (taskkill
+# /T /F walks a different privilege path than Stop-Process), and REFUSE to
+# install while the seat port is still taken. A foreign (non-ChatX) port owner
+# is reported but never killed -- that machine needs a human decision.
+function Get-SeatPortOwners {
+  $owners = @()
+  try {
+    $owners = @(Get-NetTCPConnection -LocalPort $SeatPort -State Listen -ErrorAction SilentlyContinue |
+      Select-Object -ExpandProperty OwningProcess -Unique)
+  } catch {}
+  if ($owners.Count -eq 0) {
+    # netstat fallback for hosts without the NetTCPIP module
+    $lines = @(netstat -ano -p tcp 2>$null | Select-String ("[:.]" + $SeatPort + "\s+.*LISTENING"))
+    foreach ($ln in $lines) {
+      $tok = ($ln.ToString().Trim() -split '\s+')[-1]
+      if ($tok -match '^\d+$' -and [int]$tok -gt 0) { $owners += [int]$tok }
+    }
+  }
+  return @($owners | Sort-Object -Unique)
+}
+$foreignOnPort = @()
+for ($round = 1; $round -le 3; $round++) {
+  $survivors = @(Get-Process -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -and $_.Path -like '*telegram-ai-desktop*' })
+  $portOwners = Get-SeatPortOwners
+  $foreignOnPort = @()
+  if ($survivors.Count -eq 0 -and $portOwners.Count -eq 0) { break }
+  foreach ($sp in $survivors) {
+    Say ("  reaping survivor pid=" + $sp.Id + " (" + $sp.Path + ")")
+    cmd /c ("taskkill /PID " + $sp.Id + " /T /F >nul 2>&1")
+  }
+  foreach ($ownerId in $portOwners) {
+    $op = Get-Process -Id $ownerId -ErrorAction SilentlyContinue
+    $opath = ''
+    if ($op -and $op.Path) { $opath = $op.Path }
+    if ($opath -like '*telegram-ai-desktop*') {
+      Say ("  reaping port $SeatPort owner pid=" + $ownerId + " (" + $opath + ")")
+      cmd /c ("taskkill /PID " + $ownerId + " /T /F >nul 2>&1")
+    } else {
+      $foreignOnPort += ("pid=" + $ownerId + " path=" + $opath)
+    }
+  }
+  Start-Sleep -Seconds 3
+}
+$survivors = @(Get-Process -ErrorAction SilentlyContinue |
+  Where-Object { $_.Path -and $_.Path -like '*telegram-ai-desktop*' })
+$portOwners = Get-SeatPortOwners
+if ($survivors.Count -gt 0) {
+  Say ("FATAL: stale app/backend processes survived 3 reap rounds: pid=" +
+    (($survivors | ForEach-Object { $_.Id }) -join ','))
+  Say "installing over them would reproduce the 'exe only (backend not serving)' incident -- aborting"
+  exit 5
+}
+if ($portOwners.Count -gt 0) {
+  if ($foreignOnPort.Count -gt 0) {
+    Say ("FATAL: seat port $SeatPort is held by a FOREIGN process (not killing it): " + ($foreignOnPort -join ' ; '))
+  } else {
+    Say ("FATAL: seat port $SeatPort still LISTENING after reap: pid=" + ($portOwners -join ','))
+  }
+  Say "free the port first, then rerun the install"
+  exit 5
+}
+Say ("reap verified: no app processes left, seat port $SeatPort free")
 
 # --- 3. uninstall previous installs (both hives) ---------------------------
 $keys = @(
