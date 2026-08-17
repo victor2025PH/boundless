@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="30 92 452 328" role="img" aria-label="BOUNDLESS">
+  <!-- BOUNDLESS flat vector mark (infinity through screen), transparent master.
+       First vector edition of the VI unification, 2026-08-06.
+       Traced/simplified from the 3D bitmap master 00_master/src/boundless-mark-white.png:
+       same composition (infinity ribbon through a portrait frame), same color story
+       (cyan-blue -> violet -> magenta -> orange).
+       Uses: watermark / mono-color base / small-size favicon / motion base.
+       Tile edition: boundless-tile-flat.svg; product-side copy = avatarhub static/icon.svg. -->
+  <defs>
+    <linearGradient id="bd-frame" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1e6bf0"/>
+      <stop offset=".55" stop-color="#7a3bf5"/>
+      <stop offset="1" stop-color="#d030f0"/>
+    </linearGradient>
+    <linearGradient id="bd-ribbon" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#00b0f0"/>
+      <stop offset=".24" stop-color="#1e6bf0"/>
+      <stop offset=".5" stop-color="#7a3bf5"/>
+      <stop offset=".64" stop-color="#d030f0"/>
+      <stop offset=".8" stop-color="#f0509a"/>
+      <stop offset="1" stop-color="#f07800"/>
+    </linearGradient>
+  </defs>
+  <g id="bd-vi-mark">
+    <rect x="173" y="120" width="166" height="272" rx="44" fill="none" stroke="url(#bd-frame)" stroke-width="32"/>
+    <path d="M 66 256 C 66 184, 170 184, 256 256 C 342 328, 446 328, 446 256 C 446 184, 342 184, 256 256 C 170 328, 66 328, 66 256 Z"
+          fill="none" stroke="url(#bd-ribbon)" stroke-width="50" stroke-linejoin="round"/>
+  </g>
+</svg>

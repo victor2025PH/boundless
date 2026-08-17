@@ -69,15 +69,19 @@ CATEGORIES = {
     "lingo": {"zh": "通达", "en": "Lingo", "tag": "跨语沟通 · 语言无障碍", "accent": C("F07800"),
               "ring": [C("F06A00"), C("FFB020"), C("F06A00")]},
 }
-PRODUCTS = {  # 顺序即展示顺序
-    "reachx": {"zh": "智拓", "en": "ReachX", "cat": "growth", "desc": "真机多号自动获客引流"},
-    "chatx": {"zh": "智聊", "en": "ChatX", "cat": "growth", "desc": "多平台 AI 聊天与成交"},
-    "facex": {"zh": "幻颜", "en": "FaceX", "cat": "studio", "desc": "图片 / 视频 AI 换脸"},
-    "voicex": {"zh": "幻声", "en": "VoiceX", "cat": "studio", "desc": "零样本声音克隆配音"},
-    "livex": {"zh": "幻影", "en": "LiveX", "cat": "studio", "desc": "直播实时换脸换声"},
+# 顺序即展示顺序 —— 单一真相 = 官网 lib/brand.ts 的 PRODUCT_ORDER（2026-08-06 对齐）：
+# 商业主线 通达(现金流)→智连(获客)→幻境(定制殿后)；系内 幻声→幻颜→幻影（幻声=低风险第二现金流居首）。
+# 改序先改官网 brand.ts，再同步这里；avatarhub tools/brand_asset_lint.py 做三方对账。
+PRODUCTS = {
     "lingox": {"zh": "通译", "en": "LingoX", "cat": "lingo", "desc": "多平台实时聊天互译"},
     "voxx": {"zh": "通传", "en": "VoxX", "cat": "lingo", "desc": "会议直播同声传译"},
+    "reachx": {"zh": "智拓", "en": "ReachX", "cat": "growth", "desc": "真机多号自动获客引流"},
+    "chatx": {"zh": "智聊", "en": "ChatX", "cat": "growth", "desc": "多平台 AI 聊天与成交"},
+    "voicex": {"zh": "幻声", "en": "VoiceX", "cat": "studio", "desc": "零样本声音克隆配音"},
+    "facex": {"zh": "幻颜", "en": "FaceX", "cat": "studio", "desc": "图片 / 视频 AI 换脸"},
+    "livex": {"zh": "幻影", "en": "LiveX", "cat": "studio", "desc": "直播实时换脸换声"},
 }
+CATEGORY_ORDER = ["lingo", "growth", "studio"]  # 系陈列序（矩阵海报消费，与官网 CATEGORY_ORDER 一致）
 
 MANIFEST = []  # (relpath, "WxH", 用途)
 
@@ -635,7 +639,7 @@ def build_matrix_poster():
     overlay = Image.new("RGBA", cv.size, (0, 0, 0, 0))
     od = ImageDraw.Draw(overlay)
     x = margin
-    for ck in ["growth", "studio", "lingo"]:
+    for ck in CATEGORY_ORDER:
         cat = CATEGORIES[ck]
         od.rounded_rectangle([x, top, x + card_w, top + card_h], radius=28, fill=(255, 255, 255, 26),
                              outline=(255, 255, 255, 48), width=2)
@@ -643,7 +647,7 @@ def build_matrix_poster():
         x += card_w + gap
     cv.alpha_composite(overlay)
     x = margin
-    for ck in ["growth", "studio", "lingo"]:
+    for ck in CATEGORY_ORDER:
         cat = CATEGORIES[ck]
         head_zh = render_text(cat["zh"], font_noto(62, "black"), WHITE, tracking=4)
         head_en = render_text(cat["en"].upper(), font_mont(34, 700), cat["accent"] + (255,), tracking=6)
@@ -684,15 +688,46 @@ def write_manifest():
         f.write("\n".join(lines) + "\n")
     print("[ok] MANIFEST.md (%d files)" % len(MANIFEST))
 
-def main():
-    build_masters()
-    build_logos()
-    build_product_icons()
-    build_lockups()
-    build_avatars()
-    build_backgrounds()
-    build_matrix_poster()
-    write_manifest()
+def load_masters():
+    """从 00_master/keyed 直接载入母版（不重抠、不落盘）——局部重建用，
+    像素与上一次全量完全一致，也不需要 scipy。"""
+    for name in ["mark"] + list(PRODUCTS):
+        MASTERS[name] = Image.open(os.path.join(KEYED, name + "-keyed.png")).convert("RGBA")
+
+STEPS = [
+    ("masters", build_masters),
+    ("logos", build_logos),
+    ("icons", build_product_icons),
+    ("lockups", build_lockups),
+    ("avatars", build_avatars),
+    ("backgrounds", build_backgrounds),
+    ("poster", build_matrix_poster),
+]
+
+def main(argv=None):
+    import argparse
+    ap = argparse.ArgumentParser(description="无界品牌资产生成（默认全量重建）")
+    ap.add_argument("--parts", default="all",
+                    help="逗号分隔的局部重建集：%s；默认 all。"
+                         "局部重建从 00_master/keyed 载入母版（不重抠图），"
+                         "且不重写 MANIFEST.md（局部清单不完整，只有全量才更新）。"
+                         % ",".join(n for n, _ in STEPS))
+    args = ap.parse_args(argv)
+    parts = {p.strip() for p in args.parts.split(",") if p.strip()}
+    if "all" in parts:
+        for _, fn in STEPS:
+            fn()
+        write_manifest()
+    else:
+        unknown = parts - {n for n, _ in STEPS}
+        if unknown:
+            raise SystemExit("未知 parts: %s（可选：%s）" % (", ".join(sorted(unknown)),
+                                                            ",".join(n for n, _ in STEPS)))
+        build_masters() if "masters" in parts else load_masters()
+        for name, fn in STEPS[1:]:
+            if name in parts:
+                fn()
+        print("局部重建完成（MANIFEST.md 未重写：仅全量时更新）")
     print("DONE.")
 
 if __name__ == "__main__":

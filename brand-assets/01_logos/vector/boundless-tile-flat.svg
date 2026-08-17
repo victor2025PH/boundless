@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="无界 BOUNDLESS">
+  <!-- 无界 BOUNDLESS · 扁平 VI 标（∞ 穿屏，2026-08-06 三脸合一）：
+       与 assets/app.ico（3D 母版深底瓦片）同构图同色系——标签页(本文件)/任务栏(app.ico)/
+       页面PNG(static/app-icon-256.png) 三处从此同一张脸。
+       矢量母版：D:\boundless\brand-assets\01_logos\vector\boundless-mark-flat.svg（透明底）。
+       maskable 安全区：主体收在中央 ~78%。 -->
+  <defs>
+    <linearGradient id="bd-tile-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#161a2a"/>
+      <stop offset="1" stop-color="#0c0e18"/>
+    </linearGradient>
+    <linearGradient id="bd-frame" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1e6bf0"/>
+      <stop offset=".55" stop-color="#7a3bf5"/>
+      <stop offset="1" stop-color="#d030f0"/>
+    </linearGradient>
+    <linearGradient id="bd-ribbon" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#00b0f0"/>
+      <stop offset=".24" stop-color="#1e6bf0"/>
+      <stop offset=".5" stop-color="#7a3bf5"/>
+      <stop offset=".64" stop-color="#d030f0"/>
+      <stop offset=".8" stop-color="#f0509a"/>
+      <stop offset="1" stop-color="#f07800"/>
+    </linearGradient>
+  </defs>
+  <g id="bd-vi-mark">
+    <rect width="512" height="512" rx="114" fill="url(#bd-tile-bg)"/>
+    <rect x="173" y="120" width="166" height="272" rx="44" fill="none" stroke="url(#bd-frame)" stroke-width="32"/>
+    <path d="M 66 256 C 66 184, 170 184, 256 256 C 342 328, 446 328, 446 256 C 446 184, 342 184, 256 256 C 170 328, 66 328, 66 256 Z"
+          fill="none" stroke="url(#bd-ribbon)" stroke-width="50" stroke-linejoin="round"/>
+  </g>
+</svg>

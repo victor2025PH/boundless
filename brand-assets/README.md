@@ -8,9 +8,14 @@
 | 层级 | 中文 | 英文 | 说明 |
 |---|---|---|---|
 | 母品牌 | 无界科技 | BOUNDLESS | ∞ 无限标，口号「让沟通，无界 / Communication, Boundless.」 |
-| 智连系 Growth | 智拓 / 智聊 | ReachX / ChatX | 社交增长：获客 + AI 聊天成交（蓝色系光环） |
-| 幻境系 Studio | 幻颜 / 幻声 / 幻影 | FaceX / VoiceX / LiveX | 数字分身：换脸 / 克隆声 / 直播分身（紫色系光环） |
 | 通达系 Lingo | 通译 / 通传 | LingoX / VoxX | 跨语沟通：聊天翻译 / 同声传译（橙色系光环） |
+| 智连系 Growth | 智拓 / 智聊 | ReachX / ChatX | 社交增长：获客 + AI 聊天成交（蓝色系光环） |
+| 幻境系 Studio | 幻声 / 幻颜 / 幻影 | VoiceX / FaceX / LiveX | 数字分身：克隆声 / 换脸 / 直播分身（紫色系光环） |
+
+陈列序 = 商业主线（2026-08-06 对齐官网 `website/lib/brand.ts` 的 CATEGORY_ORDER / PRODUCT_ORDER，
+单一真相在官网仓）：通达(现金流) → 智连(获客) → 幻境(定制殿后)；系内 幻声→幻颜→幻影。
+幻缘 FateX / 智控 MatrixX 已退出现役名录（定位改版），母版如需复役走「新增产品 SOP」。
+三方一致性（官网 ↔ 本库 ↔ 宣传片 brand_names.py）由 avatarhub `tools/brand_asset_lint.py` 对账。
 
 品牌色（取自 ∞ 主标渐变）：`#00B0F0 → #1E6BF0 → #7A3BF5 → #D030F0 → #F0509A → #F07800 → #F0A010`；
 深空底 `#1A1D3A → #05060F`；墨色文字 `#0B1020`。
@@ -22,9 +27,14 @@
 
 ```
 brand-assets/
-├─ build_brand_assets.py     一键重建脚本（python build_brand_assets.py）
-├─ sync_brand_targets.py     分发产物到消费方：两份 website + 坐席工作台 + 桌面端
+├─ build_brand_assets.py     一键重建（全量 python build_brand_assets.py；局部 --parts backgrounds,poster
+│                            ——只重出陈列序相关产物，不动其余 90+ 张，MANIFEST 仅全量时重写）
+├─ sync_brand_targets.py     分发产物到消费方：website + AvatarHub 开发仓 + 坐席工作台/桌面端
+│                            （--check 干跑；--only avatarhub 只喂一组；根随文件走，目标缺失=跳过）
 ├─ apply_telegram_branding.py  线上应用：频道/群头像+简介（幂等，--dry-run 预演）
+├─ export_jpg.py             JPG 导出（python export_jpg.py → 06_jpg/ 同结构镜像；
+│                            透明件自动垫底：墨字/彩色垫白、-white 白字件垫深空墨 #0B1020）
+├─ 06_jpg/                   全库 JPG 版（只收 JPG 的投放位用这套；脚本产物勿手改）
 ├─ MANIFEST.md               全部 106 个产物的清单（自动生成）
 ├─ fonts/                    品牌字体（OFL 授权，可商用可分发）
 ├─ 00_master/
@@ -33,6 +43,8 @@ brand-assets/
 ├─ 01_logos/
 │   ├─ mark/                 公司 ∞ 主标 1024/512/256/128/64/32 透明底
 │   ├─ mono/                 单色剪影（白/墨）— 水印、单色印刷、遮罩
+│   ├─ vector/               ∞ 扁平矢量标（手绘维护，非脚本产物）：boundless-mark-flat.svg
+│   │                        透明底母版 + boundless-tile-flat.svg 深底瓦片（=avatarhub static/icon.svg）
 │   └─ favicon/              boundless.ico（16–64 多尺寸）
 ├─ 02_product-icons/<key>/   7 产品图标 512/256/128 **正方形**透明底（统一 pad 8%）
 ├─ 03_lockups/
@@ -66,7 +78,8 @@ brand-assets/
 
 1. 生成同风格白底 3D 图标（参考现有 7 张的 prompt 风格：puffy 3D chrome、蓝紫橙渐变、白底），
    存为 `00_master/src/<key>-white.png`。
-2. 在 `build_brand_assets.py` 顶部 `PRODUCTS` 里加一行（中文名/英文名/所属系/一句话描述）。
+2. 在 `build_brand_assets.py` 顶部 `PRODUCTS` 里加一行（中文名/英文名/所属系/一句话描述）——
+   **先在官网 `lib/brand.ts` 注册并定序，这里照抄**；改完跑 avatarhub `tools/brand_asset_lint.py` 对账。
 3. `python build_brand_assets.py` —— 图标多尺寸、组合标、两款头像、矩阵海报全部自动补齐。
 4. 官网侧：把 `<key>-white.png` 拷到 `website/public/brand/products/` 并生成 256 透明版
    （或直接拷 `02_product-icons/<key>/<key>-256.png` 改名 `<key>.png`），

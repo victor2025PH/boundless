@@ -5,7 +5,7 @@
   频道 @hykj7  → boundless-avatar-ring.png（光环 = 官方资源号识别符）+ 新标题/简介
   群   @hykjz  → boundless-avatar.png（纯主标）+ 新标题/简介
 
-Token 读取顺序：环境变量 TELEGRAM_BOT_TOKEN → telegram-mtproto-ai/website/.env.local。
+Token 读取顺序：环境变量 TELEGRAM_BOT_TOKEN → 单仓 website/.env.local（没有则报错提示）。
 文案与 website/lib/tg-broadcast.ts::CHANNEL_BRAND 保持一致（改那边请同步这边）。
 
 用法：  python apply_telegram_branding.py [--dry-run]
@@ -22,9 +22,11 @@ import urllib.request
 # Windows 控制台默认 GBK，简介含 emoji 会打印崩溃
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-WS = r"D:\workspace"
-LOGOS = os.path.join(WS, "ai-p0-integration", "website", "public", "brand", "logos")
-ENV_LOCAL = os.path.join(WS, "telegram-mtproto-ai", "website", ".env.local")
+# 2026-08-06 修复断链：路径随文件走（此前指向已迁移消失的 D:\workspace 双仓）。
+ROOT = os.path.dirname(os.path.abspath(__file__))
+BOUNDLESS = os.path.dirname(ROOT)
+LOGOS = os.path.join(BOUNDLESS, "website", "public", "brand", "logos")  # sync_brand_targets.py 产物
+ENV_LOCAL = os.path.join(BOUNDLESS, "website", ".env.local")
 
 CHANNEL = "@hykj7"
 GROUP = "@hykjz"
@@ -49,6 +51,8 @@ def read_token():
     tok = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     if tok:
         return tok
+    if not os.path.exists(ENV_LOCAL):
+        raise SystemExit("no TELEGRAM_BOT_TOKEN in env, and %s not found" % ENV_LOCAL)
     with open(ENV_LOCAL, encoding="utf-8") as f:
         m = re.search(r"^TELEGRAM_BOT_TOKEN=(\S+)", f.read(), re.M)
     if not m:
