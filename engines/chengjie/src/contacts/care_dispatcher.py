@@ -26,6 +26,16 @@ from src.contacts.care_schedule import CRISIS_CARE_TOPIC, CareScheduleStore
 
 logger = logging.getLogger(__name__)
 
+
+def _proactive_allowed(platform: str) -> bool:
+    """该平台是否允许系统主动私聊（取不到判据一律放行，不因内省失败停掉关怀）。"""
+    try:
+        from src.integrations.platform_capabilities import proactive_outreach_allowed
+        return bool(proactive_outreach_allowed(platform))
+    except Exception:  # noqa: BLE001
+        return True
+
+
 # send_callback：(channel, account_id, chat_name, reply, defer_until, reason, staleness, extra) -> row_id
 SendCallback = Callable[[str, str, str, str, float, str, float, dict], Awaitable[int]]
 # context_provider：(contact_key) -> 最近对话/episodic 要点文本（供 prompt 引用）
@@ -332,6 +342,13 @@ class CareDispatcher:
 
         if not chat_key or not platform:
             self._mark_skipped(sid, "missing platform/chat_key")
+            return False
+
+        # 平台规则禁止主动私聊的（Discord Bot）→ 就地销账。deferred 队列入口也拦了
+        # 一道，但那里只是「不入队」，schedule 行会留着每 tick 重来一次；在这里
+        # mark_skipped 才能真正把这条关怀了结，且原因写进台账可查。
+        if not _proactive_allowed(platform):
+            self._mark_skipped(sid, "platform_no_proactive")
             return False
 
         # Phase ④续¹⁰：危机来源关怀（## 56 主动护栏拦下后转的兜底）走「克制陪伴」专线——

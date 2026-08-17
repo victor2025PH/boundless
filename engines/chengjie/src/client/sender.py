@@ -12,6 +12,38 @@ from typing import Any, Dict, List, Optional
 
 from src.client import daily_stats
 
+
+def _record_outbound(platform: str, outcome: str, *,
+                     kind: str = "text", reason: str = "") -> None:
+    """A 线出站记账（best-effort，永不影响发送）。
+
+    A 线直发 Pyrogram，不经 AccountOrchestrator，故必须在这里自记；但同一条
+    消息若是编排器托管发出的，外层已 ``claim_send()`` → ``only_if_outermost``
+    让本次记账让位，保证「一条消息一条记录」。
+    """
+    try:
+        from src.integrations.shared.outbound_delivery_stats import (
+            record_send_result,
+        )
+        record_send_result(platform, kind=kind, outcome=outcome,
+                           reason=reason, only_if_outermost=True)
+    except Exception:  # noqa: BLE001 - 观测坏了也不能影响发送
+        pass
+
+
+def _record_outbound_exc(platform: str, exc: BaseException, *,
+                         kind: str = "text") -> None:
+    """A 线出站异常记账（异常 → 有界原因）。"""
+    try:
+        from src.integrations.shared.outbound_delivery_stats import (
+            record_send_result,
+        )
+        record_send_result(platform, kind=kind, exc=exc,
+                           only_if_outermost=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # A1 text-first 占位句内置池（config reply.ai_fallback_replies 缺席时的兜底备货——
 # 2026-07-26 实锤：实例配置池为空 → 硬编码单句「稍等我一下哈～」4 分钟连发 3 次，
 # 触发出站复读告警，真人不会这样说话）。
@@ -615,10 +647,16 @@ class TelegramSenderMixin:
             self.logger.debug("[回复逻辑] 记账失败（忽略）", exc_info=True)
 
     async def _send_reply(self, original_message, reply_text: str, parse_mode=None):
+        # 出站投递记账：本函数恒返回 None（成败只体现在日志里），故不能用 meter_send
+        # 装饰器，只能在三个出口各记一次。`only_if_outermost` 让编排器托管的调用让位。
+        def _rec_out(outcome: str, reason: str = "") -> None:
+            _record_outbound("telegram", outcome, reason=reason)
+
         try:
             # 统一发送前护栏（与 send_photo 共用）：G1 Kill-Switch + 反封号闸门 + 限速 + 营业时段。
             # 这是「入站自动回复」路径 → is_autoreply=True（受营业时段约束；主动发/编排器不受时段拦）。
             if self._presend_blocked(is_autoreply=True):
+                _rec_out("blocked", "send_gate")
                 return
             # 拟人已读回执：回复前先「看」消息（对端由未读变已读），再节流/发送。
             await self._mark_peer_read(
@@ -627,6 +665,7 @@ class TelegramSenderMixin:
             await self._presend_pace()
             if not self.client:
                 self.logger.error("客户端未初始化，无法发送回复")
+                _rec_out("failed", "no_client")
                 return
             _out_text = self._sanitize_parenthetical_stage_directions(reply_text)
             # B2 出站统一质量管道（2026-07-15）：无论文本来自 LLM/模板/占位/兜底，
@@ -650,6 +689,7 @@ class TelegramSenderMixin:
             if parse_mode is not None:
                 send_kw["parse_mode"] = parse_mode
             _sent = await self.client.send_message(**send_kw)
+            _rec_out("sent")
             # 统一发送后记账（与 send_photo 共用）：刷新墙钟 + 记入共用发送计数器
             # （喂反封号闸门 + 机群健康灯今日外发量，best-effort 绝不阻断发送）。
             self._postsend_record_count()
@@ -671,6 +711,7 @@ class TelegramSenderMixin:
             self.logger.info("已回复消息: %s", self._log_safe_text(_out_text))
         except Exception as e:
             self.logger.error("发送回复失败: %s", e)
+            _record_outbound_exc("telegram", e)
             self._handle_send_exc(e)   # G2 分级急停 + 实施31 TG 告警（best-effort）
 
     @staticmethod
@@ -860,17 +901,21 @@ class TelegramSenderMixin:
             self.logger.info(
                 "[dead-peer] 跳过已拉黑 peer %s（%s，避免无效重发累积风控）",
                 chat_id, _dp_reg.reason_of("telegram", chat_id) or "permanent")
+            _record_outbound("telegram", "blocked", reason="dead_peer")
             return False, None
         try:
             # 统一发送前护栏：G1 Kill-Switch + N 线反封号闸门（与 _send_reply/send_photo 共用）
             if self._presend_blocked():
+                _record_outbound("telegram", "blocked", reason="send_gate")
                 return False, None
             await self._presend_pace()
             if not self.client:
                 self.logger.error("客户端未初始化")
+                _record_outbound("telegram", "failed", reason="no_client")
                 return False, None
             _sent = await self.client.send_message(chat_id, text)
             self._postsend_record_count()
+            _record_outbound("telegram", "sent")
             self.logger.info("已发送消息到 %s: %s...", chat_id, text[:50])
             return True, _sent
         except Exception as e:
@@ -883,12 +928,17 @@ class TelegramSenderMixin:
                 _sent2 = await self._retry_send_after_peer_warmup(chat_id, text)
                 if _sent2 is not None:
                     self._postsend_record_count()
+                    # 预热重试与首发是**同一条逻辑消息**，只记一次（记在这里而不是
+                    # 每次 Pyrogram 调用，否则失败率会变成重试次数的函数）。
+                    _record_outbound("telegram", "sent")
                     self.logger.info("已发送消息到 %s（peer 预热重试）: %s...",
                                      chat_id, str(text or "")[:50])
                     return True, _sent2
                 self.logger.error("发送消息失败（peer 预热后仍不可达）: %s", e)
+                _record_outbound("telegram", "failed", reason="peer_invalid")
                 return False, None
             self.logger.error("发送消息失败: %s", e)
+            _record_outbound_exc("telegram", e)
             # 死 peer 登记（gated）：永久不可达（账号注销/被拉黑/写禁止）落共享黑名单
             # → 下次本方法开头的闸直接拦截。可自愈类（peer_invalid，上面已走预热分支）
             # classify 归 peer_unresolved，record 内部按「非永久」忽略，双重保险不误拉黑。
@@ -934,12 +984,16 @@ class TelegramSenderMixin:
         try:
             if not self.client:
                 self.logger.error("客户端未初始化")
+                _record_outbound("telegram", "failed", kind="media",
+                                 reason="no_client")
                 return False
             if not photo_path:
                 return False
             # 统一发送前护栏（与文本回复共用）：冻结/被反封号闸门拦 → 不发，避免图绕过风控。
             if self._presend_blocked():
                 self.logger.info("照片发送被发送前护栏拦截，跳过（chat=%s）", chat_id)
+                _record_outbound("telegram", "blocked", kind="media",
+                                 reason="send_gate")
                 return False
             # 统一节流：与文本共用墙钟，图文混发也排队（不瞬时双发触发反垃圾）。
             await self._presend_pace()
@@ -973,10 +1027,12 @@ class TelegramSenderMixin:
                 chat_id, f"[图片] {_cap}".strip() if _cap else "[图片]",
                 msg_id=getattr(_sent, "id", "") or "",
                 media_type=_mt or "image", media_ref=_mref)
+            _record_outbound("telegram", "sent", kind="media")
             self.logger.info("已发送照片到 %s（%s）", chat_id, photo_path)
             return True
         except Exception as e:
             self.logger.error("发送照片失败: %s", e)
+            _record_outbound_exc("telegram", e, kind="media")
             self._handle_send_exc(e)   # G2 分级急停 + 实施31 TG 告警（best-effort）
             return False
 

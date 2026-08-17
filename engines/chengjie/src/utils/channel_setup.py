@@ -34,6 +34,10 @@ class Field:
     secret: bool = False           # 密钥类：状态接口回显时打码
     type: str = "str"             # str | int | bool
     help: str = ""                 # 去哪拿 / 填什么
+    #: ``help`` 的 i18n 键（``src/web/i18n_packs/setup_channels.py``）。中文文案仍留在
+    #: ``help`` 里当兜底/离线口径，键只是让前端有译文可取——向导模板当前把后端字符串
+    #: verbatim 直显，英文用户看到的是中文，这是**全渠道**都存在的既有缺口。
+    help_key: str = ""
 
 
 @dataclass
@@ -51,6 +55,9 @@ class Channel:
     login_platform: str = ""
     #: 官方 API 那条路的一句话说明（与 intro 分工：intro 描述整个渠道）。
     api_intro: str = ""
+    #: intro / api_intro 的 i18n 键（同 :attr:`Field.help_key` 的语义与既有缺口）。
+    intro_key: str = ""
+    api_intro_key: str = ""
     # 必填字段全部就绪时顺带置 true 的 config 路径（声明式桥接）：修「凭据填了但
     # 登录开关没人开」的断层——如 Telegram 填齐 api_id/api_hash 后若不开
     # platform_login.telegram.protocol_enabled + orchestrator_enabled，接入弹窗的
@@ -122,6 +129,35 @@ CHANNELS: List[Channel] = [
                   help="自定义任意字符串，需与 Webhook 配置一致"),
             Field("facebook_messenger.app_secret", "App Secret", secret=True, required=False,
                   help="可选；用于校验 Webhook 签名（X-Hub-Signature）"),
+        ],
+    ),
+    Channel(
+        id="discord",
+        name="Discord",
+        # Discord 只有一条真实形态：官方 Bot 应用（一个 Bot Token）。没有二维码、
+        # 没有手机号，也没有合法的「用户号登录」——self-bot 违反 ToS 且封号。
+        # 于是 enable_key 直接挂在 Bot 接入开关上，不发明一个没人读的 discord.enabled。
+        enable_key="platform_login.discord.bot_enabled",
+        login_platform="discord",
+        # ⚠ 这句是**硬限制**不是保守措辞，口径与 platform_capabilities.PLATFORM_HARD_LIMITS
+        # 一致：Bot 主动私聊陌生人只会拿到 403(50007)。向导里不能暗示能主动触达。
+        intro="用一个官方 Bot Token 接入。注意：Bot 只能被动接待——对方需与 Bot 有"
+              "共同服务器（且其隐私设置允许服务器成员私信）、或先私信过 Bot，才能"
+              "建立会话；不能主动私聊陌生人。",
+        intro_key="setup.ch.discord_intro",
+        api_intro="Token 在 Discord 开发者后台 → Applications → 你的应用 → Bot → "
+                  "Reset Token 取；**同页必须开启 MESSAGE CONTENT INTENT**，否则 Bot "
+                  "收得到事件却读不到消息正文（最高频的踩坑）。",
+        api_intro_key="setup.ch.discord_api_intro",
+        # 与 Telegram 同款桥接：token 填齐后顺带开编排器总闸，否则 Bot 校验通过、
+        # 账号也落了注册表，却没有任何东西把 worker 拉上线（表现为「连上了但一条
+        # 消息都不来」）。enable_key 自身由 apply_channel_values 写入，不重复声明。
+        enable_on_ready=["platform_login.orchestrator_enabled"],
+        fields=[
+            Field("platform_login.discord.bot_token", "Bot Token", secret=True,
+                  help="Discord 开发者后台 → Applications → 你的应用 → Bot → Reset "
+                       "Token；同页开启 MESSAGE CONTENT INTENT",
+                  help_key="setup.ch.discord_token_help"),
         ],
     ),
     Channel(
@@ -222,6 +258,7 @@ def channel_status(
             fields_status.append({
                 "key": fld.key, "label": fld.label, "required": fld.required,
                 "secret": fld.secret, "type": fld.type, "help": fld.help,
+                "help_key": fld.help_key,
                 "filled": filled, "display": disp,
             })
         # 托管派发：凭据已就绪 → 视为已配置（不因隐藏了字段而误判「未配置」）
@@ -245,6 +282,7 @@ def channel_status(
         if ch.fields:
             api_path = {
                 "intro": ch.api_intro,
+                "intro_key": ch.api_intro_key,
                 "fields": fields_status,
                 "missing": missing,
                 "configured": bool(not missing),
@@ -265,6 +303,8 @@ def channel_status(
             "id": ch.id, "name": ch.name, "enable_key": ch.enable_key,
             "enabled": enabled,
             "intro": (auto["intro"] if auto else ch.intro),
+            # 托管派发换过 intro 文案 → 没有对应词条键，如实给空而不是指向错的键
+            "intro_key": ("" if auto else ch.intro_key),
             "login_required": ch.login_required,
             "fields": fields_status, "missing": missing,
             "configured": configured,

@@ -31,6 +31,7 @@ from src.integrations.line_rpa.human_pacing import (
     typing_duration_sec,
 )
 from src.integrations.line_rpa.navigator import Navigator
+from src.integrations.shared.outbound_delivery_stats import meter_send
 
 logger = logging.getLogger(__name__)
 
@@ -955,12 +956,16 @@ class LineRpaRunner:
             result["step"] = "send_failed"
         return result
 
+    @meter_send("line", kind="text", shape="ok")
     async def _pace_and_send(
         self, xml_bytes: Optional[bytes], text: str
     ) -> Dict[str, Any]:
         """拟人节奏封装：读停顿 → 分条 → 逐条发送（条间抖动）。
 
         返回汇总结果：ok 需全部成功；parts 记录每条发送结果与耗时。
+
+        记账挂在这一层而不是 ``_send_text``：一条逻辑消息可能被拆成多段、每段还会
+        重试一次，按 ``_send_text`` 计会把失败率算成重试次数的函数。
         """
         # G1 全局 Kill-Switch（Phase C：RPA 覆盖）：紧急冻结时跳过物理发送
         try:

@@ -1063,6 +1063,27 @@
         <button class="primary" onclick="confirmConfigAndScan()" data-i18n="inbox.connect.next_scan">下一步 · 开始扫码</button>
       </div>
     </div>
+    <!-- 步骤②'：凭据接入（服务端 API 凭据，如 Discord Bot Token）
+         与左边「账号配置」是**互斥**的两条路，不是它的一栏。凭据接入走官方 API、身份
+         本就是明牌，代理与指纹是给「一号一 IP、伪装成真人设备」用的——摆在这里等于让
+         运营配一堆代码根本不读的东西。渲染完全由后端 mode.credential 契约驱动
+         （字段名/标题/帮助/是否密文/可否留空），**不认平台名**：再来一个 Token 型平台，
+         后端加一段声明即可，这里不用动。 -->
+    <div id="connect-cred-view" style="display:none;">
+      <div class="cfg-section">
+        <div class="cfg-row"><label class="cfg-label" for="cred-label" data-i18n="inbox.cfg.label">账号备注</label>
+          <input id="cred-label" class="cfg-input" placeholder="便于识别，可留空" data-i18n-placeholder="inbox.cfg.label_ph"></div>
+        <div class="cfg-row"><label class="cfg-label" for="cred-value" id="cred-value-label"></label>
+          <input id="cred-value" class="cfg-input" type="password" autocomplete="off" spellcheck="false"
+                 onkeydown="if(event.key==='Enter'){event.preventDefault();submitCredConnect();}"></div>
+        <div class="cfg-hint" id="cred-help"></div>
+        <div class="connect-enable-msg" id="cred-msg" role="status" aria-live="polite" style="display:none;"></div>
+      </div>
+      <div class="connect-actions">
+        <button type="button" onclick="backToModeSelect()" data-i18n="inbox.connect.back_mode">← 换方式</button>
+        <button type="button" class="primary" id="cred-submit-btn" onclick="submitCredConnect()" data-i18n="inbox.connect.cred_submit">连接</button>
+      </div>
+    </div>
     <!-- 步骤③：扫码 -->
     <div id="connect-qr-view" style="display:none;">
       <div class="connect-qr-wrap">
@@ -1181,17 +1202,25 @@
 <script>
 (function(){
 /* ===== 常量 ===== */
-const PC = {telegram:'#2BA5E0',line:'#00C300',messenger:'#0084FF',whatsapp:'#25D366',web:'#3b82f6'};
-const PI = {telegram:'✈️',line:'💚',messenger:'💙',whatsapp:'📱',web:'🌐'};
-const PN = {telegram:'Telegram',line:'LINE',messenger:'Messenger',whatsapp:'WhatsApp',web:'Web'};
+const PC = {telegram:'#2BA5E0',line:'#00C300',messenger:'#0084FF',whatsapp:'#25D366',web:'#3b82f6',discord:'#5865F2'};
+const PI = {telegram:'✈️',line:'💚',messenger:'💙',whatsapp:'📱',web:'🌐',discord:'🎮'};
+const PN = {telegram:'Telegram',line:'LINE',messenger:'Messenger',whatsapp:'WhatsApp',web:'Web',discord:'Discord'};
 // 左栏常驻平台（无会话也显示）+ 各平台能力说明（hover 卡片）
 const FIXED_PLATS = ['telegram','line','whatsapp','messenger'];
+// 按需出现的平台（默认关的子系统）：连上了或有会话才进左栏。放进 FIXED_PLATS 会让
+// 从不用它的客户永远盯着一个灰图标；而只靠「有会话才显示」又会让**刚接上、还没人
+// 私信过**的 Discord Bot 隐身（Bot 只能被动接待，天生零会话），运营找不到入口。
+const OPT_PLATS = ['web','discord'];
+// 账号抽屉里恒常露出的按需平台＝「可接入但可能还没接」的那些。web 不在其中：它是内置
+// 网页客服，没有「接入一个账号」这回事，摆个空卡只会让人去点一个不存在的流程。
+const DRAWER_ALWAYS_PLATS = ['discord'];
 const PLAT_DESC = {
   telegram:window.T('inbox.plat.telegram_desc'),
   line:window.T('inbox.plat.line_desc'),
   whatsapp:window.T('inbox.plat.whatsapp_desc'),
   messenger:window.T('inbox.plat.messenger_desc'),
   web:window.T('inbox.plat.web_desc'),
+  discord:window.T('inbox.plat.discord_desc'),
 };
 const PLAT_STATE_LABEL = {on:window.T('inbox.pstate.on'),off:window.T('inbox.pstate.off'),none:window.T('inbox.pstate.none')};
 const PLAT_STATE_COLOR = {on:'#16a34a',off:'#dc2626',none:'#94a3b8'};
@@ -1863,9 +1892,11 @@ function buildNavRail(chats){
       if(n>0) platUnread[p]=n;
     });
   }
-  // 常驻 4 平台 + 有会话/已配置的 web + 其它意外出现的平台
+  // 常驻 4 平台 + 有会话/已配置的按需平台（web / discord）+ 其它意外出现的平台
   const order=[...FIXED_PLATS];
-  if(platCounts['web']||platConnState('web')!=='none') order.push('web');
+  OPT_PLATS.forEach(p=>{
+    if(platCounts[p]||platConnState(p)!=='none') order.push(p);
+  });
   Object.keys(platCounts).forEach(p=>{ if(!order.includes(p)) order.push(p); });
 
   const el = document.getElementById('plat-icons');
@@ -11108,9 +11139,13 @@ function renderDrawerAccounts(){
   const ps=platformStatus||{};
   const byPlat={};
   Object.values(ps).forEach(p=>{ const pl=p.platform||'web'; (byPlat[pl]=byPlat[pl]||[]).push(p); });
-  // 常驻 4 平台 + 有账号的 web + 其它意外平台
+  // 常驻 4 平台 + 按需平台 + 其它意外平台。
+  // 抽屉的显示规则**刻意与左栏会话导航不同**：这里是全站唯一的「接入」入口，用
+  // 「有账号才显示」会锁死成先有鸡还是先有蛋——没接入就不显示、不显示就没地方接入
+  // （Discord 此前正是这样：后端能力齐备，界面上却根本找不到门）。左栏那份是会话
+  // 筛选器，空筛选项纯属噪音，故仍保持「有会话/已连接才显示」。
   const order=[...FIXED_PLATS];
-  if(byPlat['web']) order.push('web');
+  OPT_PLATS.forEach(p=>{ if(byPlat[p]||DRAWER_ALWAYS_PLATS.includes(p)) order.push(p); });
   Object.keys(byPlat).forEach(pl=>{ if(!order.includes(pl)) order.push(pl); });
 
   // 舰队摘要（全量口径，不受搜索/异常过滤影响）；异常清零 → 过滤自动失效
@@ -12086,30 +12121,33 @@ function openConnect(pl, acctId){
   document.getElementById('connect-title').textContent=window.Tf(acctId?'inbox.connect.reconnect_t':'inbox.connect.connect_t',{plat:platName(pl)});
   document.getElementById('connect-sub').textContent=PLAT_DESC[pl]||window.T('inbox.connect.sub');
   modal.classList.add('show');
+  // 重置凭据态：不重置的话，上一次接 Discord 留下的契约会跟着进下一个平台的弹窗，
+  // 而「无可选方式直接开连」那条分支会绕过 chooseMode，正好读到这份陈旧契约。
+  _connectCred=null; _clearCredSecret();
   _showModeView();
   loadConnectModes();
   _trapFocus(modal);   // 三期 a11y
 }
-function _showModeView(){
-  document.getElementById('connect-mode-view').style.display='block';
-  document.getElementById('connect-config-view').style.display='none';
-  document.getElementById('connect-qr-view').style.display='none';
+// 四个步骤视图互斥。收成一处切换，是因为加第四个视图（凭据接入）时，三份各自
+// 「显示自己、隐藏另两个」的写法必须同步改三遍——漏一遍就是两个视图同时挂在弹窗里。
+const _CONNECT_VIEWS={mode:'connect-mode-view', cfg:'connect-config-view',
+                      cred:'connect-cred-view', qr:'connect-qr-view'};
+function _connectSetView(which){
+  Object.keys(_CONNECT_VIEWS).forEach(k=>{
+    const el=document.getElementById(_CONNECT_VIEWS[k]);
+    if(el) el.style.display=(k===which)?'block':'none';
+  });
 }
-function _showConfigView(){
-  document.getElementById('connect-mode-view').style.display='none';
-  document.getElementById('connect-config-view').style.display='block';
-  document.getElementById('connect-qr-view').style.display='none';
-}
-function _showQrView(){
-  document.getElementById('connect-mode-view').style.display='none';
-  document.getElementById('connect-config-view').style.display='none';
-  document.getElementById('connect-qr-view').style.display='block';
-}
+function _showModeView(){ _connectSetView('mode'); }
+function _showConfigView(){ _connectSetView('cfg'); }
+function _showCredView(){ _connectSetView('cred'); }
+function _showQrView(){ _connectSetView('qr'); }
 function backToModeSelect(){
   _connectStartSeq++;   // 作废可能仍在飞的 login/start
   if(_connectPollTimer){ clearInterval(_connectPollTimer); _connectPollTimer=null; }
   _cancelPendingLogin();
   _showConnectPin(false); _showConnectErrDetail('');
+  _clearCredSecret();
   _showModeView();
 }
 // modes 状态缓存：不可用说明卡 / 一键启用文案按 reason_code 取键
@@ -12331,9 +12369,71 @@ function enableProtocolMode(reuseExisting){
   });
 }
 let _connectCfg={};
+/* ── 凭据式接入 ────────────────────────────────────────────────────────────────
+   后端 mode.credential 非空 ⇒ 这不是「把某个人的账号连进来」，而是服务端 API 凭据接入
+   （Discord Bot Token 是第一例）。三条推论全从这一个字段推出，**不写 if(平台==='discord')**：
+   ①没有二维码（校验是一次同步往返，没有「等手机扫」的等待期）②没有代理/指纹（官方 API
+   身份即明牌）③凭据即身份。契约字段见 platform_login.py::CREDENTIAL_MODE_HINT 处注释。 */
+let _connectCred=null;        // 当前 mode 的 credential 契约；null=走扫码流
+let _connectCredValue='';     // 待提交的凭据明文，只在内存里活到 login/start 发出为止
+function _clearCredSecret(){
+  _connectCredValue='';
+  const inp=document.getElementById('cred-value');
+  if(inp) inp.value='';
+}
+// 第三步那块界面是照「扫码」写的：三步条（扫码→确认→完成）、「刷新二维码」按钮、
+// 「等待扫码」状态。凭据流里这些全是假的，留着就是让坐席盯一个永不出现的码
+// （Messenger 那次「挂着推荐角标却点不动」的同类事故）。按契约把它们换掉。
+function _applyCredChrome(on){
+  const steps=document.getElementById('connect-steps');
+  if(steps) steps.style.display=on?'none':'';
+  const btn=document.getElementById('connect-refresh-btn');
+  if(btn) btn.textContent=window.T(on?'inbox.connect.cred_retry':'inbox.connect.refresh_qr');
+}
+function _primeCredForm(cred){
+  const lab=document.getElementById('cred-value-label');
+  const inp=document.getElementById('cred-value');
+  const help=document.getElementById('cred-help');
+  const msg=document.getElementById('cred-msg');
+  const l=document.getElementById('cred-label');
+  if(lab) lab.textContent=(cred.label_key&&window.T(cred.label_key,null))||cred.label||'';
+  if(inp){
+    inp.value='';
+    inp.type=cred.secret?'password':'text';
+    // 可留空只在「服务端已配好同名凭据」时成立，占位符如实说明，免得运营以为必填而卡住
+    inp.placeholder=cred.optional_if_configured?window.T('inbox.connect.cred_ph_optional'):'';
+  }
+  if(help) help.textContent=(cred.help_key&&window.T(cred.help_key,null))||cred.help||'';
+  if(l) l.value='';
+  if(msg){ msg.style.display='none'; msg.textContent=''; }
+}
+function submitCredConnect(){
+  const cred=_connectCred;
+  if(!cred||!cred.field) return;
+  const inp=document.getElementById('cred-value');
+  const v=((inp&&inp.value)||'').trim();
+  const msg=document.getElementById('cred-msg');
+  if(!v&&!cred.optional_if_configured){
+    if(msg){ msg.className='connect-enable-msg err'; msg.style.display='block';
+             msg.textContent=window.T('inbox.connect.cred_need'); }
+    if(inp) inp.focus();
+    return;
+  }
+  _connectCredValue=v;
+  if(inp) inp.value='';   // 明文不留在 DOM 里过夜
+  // 凭据流没有防关联配置，这三项恒为空——显式写出来，免得沿用上一次扫码流的残留值
+  _connectCfg={ label:((document.getElementById('cred-label')||{}).value||'').trim(),
+                group:'', proxy_id:'', use_fingerprint:false };
+  _showQrView();
+  startConnect();
+}
 function chooseMode(mode){
   _connectMode=mode;
   _connectCfg={};
+  const _m=(_connectModes||[]).find(x=>String(x.mode)===String(mode));
+  const _cred=(_m&&_m.credential&&_m.credential.field)?_m.credential:null;
+  _connectCred=_cred;
+  if(_cred){ _primeCredForm(_cred); _showCredView(); return; }
   // 进入账号配置（代理 + 指纹）
   document.getElementById('cfg-label').value='';
   document.getElementById('cfg-group').value='';
@@ -12415,7 +12515,10 @@ function backToConfig(){
   if(_connectPollTimer){ clearInterval(_connectPollTimer); _connectPollTimer=null; }
   _cancelPendingLogin();
   _showConnectPin(false); _showConnectErrDetail('');
-  _showConfigView();
+  // 「上一步」得回到**来时那一步**：凭据流压根没经过账号配置页，退到那里等于把人
+  // 丢进一堆对它无效的代理/指纹开关里。
+  if(_connectCred){ _primeCredForm(_connectCred); _showCredView(); }
+  else { _showConfigView(); }
 }
 function closeConnect(){
   _connectStartSeq++;   // 作废可能仍在飞的 login/start
@@ -12423,6 +12526,7 @@ function closeConnect(){
   _cancelPendingLogin();
   _showConnectPassword(false);
   _showConnectPin(false); _showConnectErrDetail('');
+  _clearCredSecret();
   _releaseFocus(document.getElementById('connect-modal'));   // 三期 a11y
   document.getElementById('connect-modal').classList.remove('show');
 }
@@ -12607,16 +12711,24 @@ async function startConnect(){
   _showConnectPin(false);
   _showConnectErrDetail('');
   _setConnectQr(null);
-  document.getElementById('connect-qr-mask').innerHTML='<span class="spin"></span><span>'+window.T('inbox.connect.qr_gen')+'</span>';
+  const _isCred=!!(_connectCred&&_connectCred.field);
+  _applyCredChrome(_isCred);
+  document.getElementById('connect-qr-mask').innerHTML='<span class="spin"></span><span>'+window.T(_isCred?'inbox.connect.cred_verifying':'inbox.connect.qr_gen')+'</span>';
   _setConnectStep(1);
-  _setConnectState('pending',window.T('inbox.connect.st_prep'),window.T('inbox.connect.hint_prep'));
+  _setConnectState('pending',
+    window.T(_isCred?'inbox.connect.cred_st_verifying':'inbox.connect.st_prep'),
+    window.T(_isCred?'inbox.connect.cred_hint_verifying':'inbox.connect.hint_prep'));
   try{
+    const _body={account_id:_connectAcct, mode:_connectMode,
+        label:(_connectCfg.label||''), group:(_connectCfg.group||''),
+        proxy_id:(_connectCfg.proxy_id||''), use_fingerprint:!!_connectCfg.use_fingerprint};
+    // 键名取自契约（后端按同一声明白名单接收）。留空＝沿用服务端已配的那份，故不带键。
+    if(_isCred&&_connectCredValue) _body[_connectCred.field]=_connectCredValue;
     const r=await apiFetch(`/api/platforms/${enc(_connectPlat)}/login/start`,{
       method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({account_id:_connectAcct, mode:_connectMode,
-        label:(_connectCfg.label||''), group:(_connectCfg.group||''),
-        proxy_id:(_connectCfg.proxy_id||''), use_fingerprint:!!_connectCfg.use_fingerprint})
+      body:JSON.stringify(_body)
     }, {timeoutMs: 60000});
+    _connectCredValue='';   // 已交给后端，内存里不再留
     const d=await r.json();
     if(seq!==_connectStartSeq){
       // 这一轮已被关窗/重开作废：会话在后端已经建起来了却没人认领，就地取消，
@@ -12644,8 +12756,14 @@ async function startConnect(){
     else {
       document.getElementById('connect-qr-mask').innerHTML='<span class="spin"></span><span>'+esc(d.instruction||window.T('inbox.connect.qr_gen'))+'</span>';
     }
-    _setConnectState('pending',window.T('inbox.connect.state_pending'), d.instruction||window.Tf('inbox.connect.hint_scan',{plat:platName(_connectPlat)}));
+    _setConnectState('pending',
+      window.T(_isCred?'inbox.connect.cred_st_verifying':'inbox.connect.state_pending'),
+      d.instruction||(_isCred?window.T('inbox.connect.cred_hint_verifying')
+                             :window.Tf('inbox.connect.hint_scan',{plat:platName(_connectPlat)})));
     _connectPollTimer=setInterval(pollConnect, 2500);
+    // 凭据校验在 start 阶段就同步做完了，首帧即可定论；不立刻问一次，坐席要对着
+    // 一个其实已经成功的界面白等一个轮询周期。
+    if(_isCred) pollConnect();
   }catch(e){
     _setConnectState('err',window.T('inbox.connect.st_neterr'),window.T('inbox.connect.hint_neterr'));
     document.getElementById('connect-qr-mask').innerHTML='<span style="font-size:26px;">⚠️</span><span>'+window.T('inbox.toast.net_err')+'</span>';
@@ -13320,7 +13438,7 @@ async function init(){
     const _connect=String(_q.get('connect')||'').toLowerCase().trim();
     const _drawerRaw=String(_q.get('drawer')||'').toLowerCase().trim();
     const _wantDrawer=_drawerRaw==='1'||_drawerRaw==='true'||!!_connect;
-    const _CONNECT_PLATS=new Set(['telegram','whatsapp','line','messenger']);
+    const _CONNECT_PLATS=new Set(['telegram','whatsapp','line','messenger','discord']);
     if(_wantDrawer && typeof openDrawer==='function'){
       openDrawer();
       if(_connect && _CONNECT_PLATS.has(_connect) && typeof openConnect==='function'){
@@ -13414,7 +13532,7 @@ Object.assign(window, {
   showModeUnavailable, hideModeUnavailable, enableProtocolMode,
   recheckModes, proceedAnyway,
   onProxyToggle, onFpToggle, toggleAddProxy, submitAddProxy, previewFingerprint,
-  confirmConfigAndScan, orchSync, submitConnectPassword,
+  confirmConfigAndScan, submitCredConnect, orchSync, submitConnectPassword,
   // 筛选空态 / 会话记录 / 业务助手切换 / 文档·多线路翻译
   resetAllFilters, _openAutoLog, wsToggleApp,
   _onXlateCompare, _openDocXlate, _onDocXlateRun, _docxlDownload,

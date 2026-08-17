@@ -4,6 +4,8 @@
 ZH = {
     # 命令面板专属项(CMD_EXTRA_ITEMS.work_goal):括注同义词,搜「工作计划」的人一眼认出
     "nav_work_goal": "工作目标（工作计划）",
+    # 渠道组：Discord（官方 Bot 接入，不是 RPA；标题刻意带 Bot 以免被当成用户号登录）
+    "nav_discord": "Discord Bot",
     "section_workbench": "工作台",
     "section_channels": "渠道运营",
     "section_ai_kb": "AI 与知识",
@@ -17,6 +19,7 @@ ZH = {
 
 EN = {
     "nav_work_goal": "Work Goal (work plan)",
+    "nav_discord": "Discord Bot",
     "section_workbench": "Workbench",
     "section_channels": "Channel Operations",
     "section_ai_kb": "AI & Knowledge",

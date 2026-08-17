@@ -372,23 +372,13 @@ class GoogleEngine:
             return EngineResult("", self.name, False, f"{type(exc).__name__}: {exc}")
 
 
-# Hunyuan-MT 官方模型卡覆盖的语种（映射到本项目语种码）。命中集内 supports_target=True，
-# 集外交给下游引擎（ai/deepl/google）——即便置信度切换关着，冷门语种也不会被硬吃。
-_HYMT_LANGS = {
-    "zh", "yue", "en", "ja", "ko", "fr", "es", "it", "pt", "de", "tr", "ru",
-    "ar", "th", "id", "ms", "vi", "tl", "hi", "pl", "cs", "nl", "km", "my",
-    "fa", "he", "bn", "ta", "te", "mr", "gu", "ur", "uk",
-}
-
-# zh 相关语种对的中文指令名（Hunyuan-MT 官方 zh<=>xx prompt 用中文语种名）。
-_HYMT_ZH_NAME = {
-    "zh": "中文", "en": "英语", "ja": "日语", "ko": "韩语", "fr": "法语",
-    "es": "西班牙语", "it": "意大利语", "pt": "葡萄牙语", "de": "德语",
-    "tr": "土耳其语", "ru": "俄语", "ar": "阿拉伯语", "th": "泰语",
-    "id": "印尼语", "ms": "马来语", "vi": "越南语", "tl": "菲律宾语",
-    "hi": "印地语", "pl": "波兰语", "nl": "荷兰语", "km": "高棉语",
-    "yue": "粤语", "he": "希伯来语", "uk": "乌克兰语",
-}
+# MT 模型契约（prompt 格式/调用模式/语种集/语种命名）集中在 mt_profiles。
+# 这里保留旧名供既有引用与测试使用，语义不变。
+from src.ai.mt_profiles import (  # noqa: E402
+    HYMT_LANGS as _HYMT_LANGS,
+    HYMT_ZH_NAME as _HYMT_ZH_NAME,
+    get_profile as _get_mt_profile,
+)
 
 
 class OllamaMTEngine:
@@ -423,6 +413,8 @@ class OllamaMTEngine:
         temperature: Optional[float] = None,
         max_tokens: int = 1024,
         keep_alive: str = "30m",
+        profile: Any = "hunyuan_mt",
+        name: str = "",
     ) -> None:
         # base_url 兼容三种形态：单字符串 / 逗号分隔字符串 / 列表（build_engines 的 base_urls）
         if isinstance(base_url, (list, tuple)):
@@ -439,9 +431,19 @@ class OllamaMTEngine:
         self._keep_alive = str(keep_alive or "").strip()
         self._clients: Dict[str, Any] = {}
         self._url_bad_until: Dict[str, float] = {}
+        self._profile = _get_mt_profile(profile)
+        # 实例级引擎名：同一台 Ollama 上跑两个 MT 模型（如 HY-MT2 主力 + MiLMMT 补冷门
+        # 语种）时，per_lang_order / 统计 / 日志都按引擎名寻址——同名就区分不开。
+        # 留空 = "ollama_mt"，与单模型部署的既有行为一致。
+        if str(name or "").strip():
+            self.name = str(name).strip().lower()
+
+    @property
+    def profile(self) -> Any:
+        return self._profile
 
     def supports_target(self, target_lang: str) -> bool:
-        return str(target_lang or "").strip().lower() in _HYMT_LANGS
+        return self._profile.supports(target_lang)
 
     @property
     def _base_url(self) -> str:
@@ -497,17 +499,10 @@ class OllamaMTEngine:
         self._url_bad_until[url] = _t.monotonic() + self._URL_COOLDOWN_SEC
 
     def _build_prompt(self, text: str, source_lang: str, target_lang: str) -> str:
-        src = str(source_lang or "").strip().lower()
-        tgt = str(target_lang or "").strip().lower()
-        if src == "zh" or tgt == "zh" or src == "yue" or tgt == "yue":
-            name = _HYMT_ZH_NAME.get(tgt, tgt)
-            return f"把下面的文本翻译成{name}，不要额外解释。\n\n{text}"
-        from src.ai.translation_service import LANG_NAMES
-
-        name = LANG_NAMES.get(tgt, tgt)
-        return (
-            f"Translate the following segment into {name}, "
-            f"without additional explanation.\n\n{text}"
+        return self._profile.build_prompt(
+            text,
+            str(source_lang or "").strip().lower(),
+            str(target_lang or "").strip().lower(),
         )
 
     async def translate(
@@ -527,26 +522,43 @@ class OllamaMTEngine:
         extra: Dict[str, Any] = {}
         if self._keep_alive:
             extra["keep_alive"] = self._keep_alive  # 保持模型常驻，避免冷启动 ~2-4s
+        # 补全式模型（如 MiLMMT-46）的官方用法是裸 completions：套 chat template 等于
+        # 喂了与训练分布不同的输入，质量下滑会被误读成「这模型不行」。
+        completion_mode = self._profile.mode == "completion"
         kwargs: Dict[str, Any] = {
             "model": self._model,
-            "messages": [{"role": "user", "content": prompt}],
             "max_tokens": self._max_tokens,
         }
+        if completion_mode:
+            kwargs["prompt"] = prompt
+            if self._profile.stop:
+                kwargs["stop"] = list(self._profile.stop)
+        else:
+            kwargs["messages"] = [{"role": "user", "content": prompt}]
         if self._temperature is not None:
             kwargs["temperature"] = self._temperature
         if extra:
             kwargs["extra_body"] = extra
         last_err = "no_endpoint"
         for url in self._ordered_urls():
+            cli = self._client_for(url)
             try:
-                resp = await self._client_for(url).chat.completions.create(**kwargs)
+                if completion_mode:
+                    resp = await cli.completions.create(**kwargs)
+                else:
+                    resp = await cli.chat.completions.create(**kwargs)
             except Exception as exc:  # noqa: BLE001
                 self._mark_bad(url)
                 last_err = f"{type(exc).__name__}: {exc}"
                 continue
             out = ""
             if resp and getattr(resp, "choices", None):
-                out = getattr(resp.choices[0].message, "content", "") or ""
+                ch = resp.choices[0]
+                out = (
+                    getattr(ch, "text", "") if completion_mode
+                    else getattr(ch.message, "content", "")
+                ) or ""
+            out = self._profile.postprocess(str(out), target_lang)
             cleaned = _clean_translation(str(out))
             if not cleaned:
                 # 空产出不冷却端点（是模型行为而非主机故障），直接试下一端点
@@ -853,10 +865,39 @@ def build_engines(translation_cfg: Optional[Dict[str, Any]], ai_client: Optional
         deepl: {api_key: "...", pro: false}
         google: {api_key: "..."}
     未知引擎名忽略；缺 key 的引擎仍会被构造但 available=False（路由自动跳过）。
+
+    **自定义本地 MT 实例**：order 里的未知名，若其同名配置块声明 ``type: ollama_mt``，
+    即按该块再装一个本地 MT 引擎，引擎名就是那个键。用途是「主力模型 + 补位模型」
+    共存——例如 HY-MT2 覆盖不了的语种由 MiLMMT-46 本地接住，而不是漏到付费云端::
+
+        order: ["ollama_mt", "milmmt", "ai"]
+        ollama_mt: {model: "hy-mt2-7b-official:latest", profile: "hunyuan_mt", ...}
+        milmmt:    {type: "ollama_mt", model: "hf.co/...MiLMMT...", profile: "milmmt46", ...}
+
+    两个实例各带自己的语种白名单，router 天然按 supports_target 顺移；per_lang_order
+    也能按这个自定义名寻址。不写这种块 = 行为与单模型部署完全一致。
     """
     cfg = (translation_cfg or {}).get("engines") or {}
     order = cfg.get("order") or ["ai"]
     timeout = float(cfg.get("timeout_sec", 8) or 8)
+
+    def _mk_ollama(mc: Dict[str, Any], engine_name: str) -> Any:
+        _temp = mc.get("temperature")
+        # base_urls（列表，双活）优先；否则 base_url（单端点/逗号分隔）
+        return OllamaMTEngine(
+            base_url=mc.get("base_urls") or mc.get("base_url", ""),
+            model=mc.get("model", ""),
+            api_key=mc.get("api_key", "ollama"),
+            timeout=float(mc.get("timeout_sec", timeout) or timeout),
+            temperature=None if _temp is None else float(_temp),
+            max_tokens=int(mc.get("max_tokens", 1024) or 1024),
+            keep_alive=str(mc.get("keep_alive", "30m") or ""),
+            # 缺省 hunyuan_mt = 改造前行为；换别家 MT 模型必须同时换档，
+            # 否则 prompt 格式/语种白名单还停在上一个模型上（静默失真）。
+            profile=mc.get("profile", "hunyuan_mt"),
+            name=engine_name,
+        )
+
     out: List[Any] = []
     for name in order:
         name = str(name or "").strip().lower()
@@ -869,19 +910,12 @@ def build_engines(translation_cfg: Optional[Dict[str, Any]], ai_client: Optional
             gc = cfg.get("google") or {}
             out.append(GoogleEngine(gc.get("api_key", ""), timeout=timeout))
         elif name in ("ollama_mt", "hunyuan_mt", "hymt"):
-            mc = cfg.get("ollama_mt") or cfg.get(name) or {}
-            _temp = mc.get("temperature")
-            # base_urls（列表，双活）优先；否则 base_url（单端点/逗号分隔）
-            _urls = mc.get("base_urls") or mc.get("base_url", "")
-            out.append(OllamaMTEngine(
-                base_url=_urls,
-                model=mc.get("model", ""),
-                api_key=mc.get("api_key", "ollama"),
-                timeout=float(mc.get("timeout_sec", timeout) or timeout),
-                temperature=None if _temp is None else float(_temp),
-                max_tokens=int(mc.get("max_tokens", 1024) or 1024),
-                keep_alive=str(mc.get("keep_alive", "30m") or ""),
-            ))
+            out.append(_mk_ollama(cfg.get("ollama_mt") or cfg.get(name) or {}, "ollama_mt"))
+        else:
+            ec = cfg.get(name) or {}
+            if isinstance(ec, dict) and \
+                    str(ec.get("type") or "").strip().lower() in ("ollama_mt", "hunyuan_mt", "hymt"):
+                out.append(_mk_ollama(ec, name))
     if not out:
         out.append(AIEngine(ai_client))
     return out

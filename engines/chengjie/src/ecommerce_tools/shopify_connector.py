@@ -12,13 +12,80 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Awaitable, Callable, Optional
+from datetime import date
+from typing import Any, Awaitable, Callable, Dict, List, Optional
+
+from src.utils import external_api_lifecycle as _lifecycle
 
 from .models import OrderInfo, ShipmentInfo
 
 logger = logging.getLogger(__name__)
 
 HttpGet = Callable[[str, dict], Awaitable[Any]]
+
+#: Shopify Admin API 版本的单一事实源。**别在别处写死日期版本号**——
+#: 门禁 ``tests/test_external_api_lifecycle.py`` 会扫出来。
+#:
+#: ⚠ Shopify 的失败模式比 Meta 阴险得多：版本过期**不报错**，静默 fall-forward 到
+#: 最老的受支持版本（官方原话：「requests to a retired 2026-10 are served as
+#: 2027-01」）。也就是说破坏性变更会被悄悄应用，日志里一个字都看不到——你以为在用
+#: 2024-01，其实在用别的。所以这里的到期日只能靠**门禁在 CI 里提前喊**，
+#: 指望线上报错是等不到的。
+DEFAULT_API_VERSION = "2026-07"
+
+#: 官方公布的「可访问至」（https://shopify.dev/docs/api/usage/versioning）。
+#: 季度发版、每版至少支持 12 个月。**照抄官方表，别按「发布+12 月」自己推算**
+#: ——官方实际是 +12 月再加到当月 16 日，自己推会差半个月。
+VERSION_EOL: Dict[str, Optional[date]] = {
+    "2025-07": date(2026, 7, 16),
+    "2025-10": date(2026, 10, 16),
+    "2026-01": date(2027, 1, 16),
+    "2026-04": date(2027, 4, 16),
+    "2026-07": date(2027, 7, 16),
+    "2026-10": date(2027, 10, 16),
+    "2027-01": date(2028, 1, 16),
+}
+
+
+def _warn_if_stale(version: str) -> None:
+    """运维在配置里显式指定了版本时，检查它是否已过期/不认识。
+
+    **只警告，不静默改写**——与告警通道那边同一条判断：运维显式写下的值，我们无权
+    替他改（他可能正是为了钉住某个行为才写的）；但也不能装作没看见，
+    尤其 Shopify 过期后线上完全没有信号。
+    """
+    ver = str(version or "").strip()
+    if not ver or ver == DEFAULT_API_VERSION:
+        return
+    _, days, level = _lifecycle.status_in_table(ver, VERSION_EOL)
+    if level in ("expired", "critical", "unknown"):
+        logger.warning(
+            "ecommerce: 配置里的 Shopify api_version=%s 已%s（当前建议 %s）。"
+            "Shopify 对退役版本不报错、会静默改用更新的版本——请尽快确认并升级。",
+            ver,
+            "不在官方支持列表内" if level == "unknown" else f"临近/超过到期日（剩 {days} 天）",
+            DEFAULT_API_VERSION,
+        )
+
+
+def pins() -> List[_lifecycle.ApiPin]:
+    """向通用生命周期登记表申报 Shopify 侧钉住的版本。"""
+    return [
+        _lifecycle.ApiPin(
+            key="shopify_admin",
+            label="Shopify Admin API",
+            version=DEFAULT_API_VERSION,
+            eol=VERSION_EOL.get(DEFAULT_API_VERSION),
+            failure_mode=_lifecycle.FAIL_SILENT,
+            owner="src/ecommerce_tools/shopify_connector.py",
+            doc_url="https://shopify.dev/docs/api/usage/versioning",
+            remediation=(
+                "把 DEFAULT_API_VERSION 提到最新稳定版，并把新版「可访问至」照抄进 "
+                "VERSION_EOL。升级前先读该版 changelog 的破坏性变更——Shopify 只在"
+                "新版引入破坏性变更，不会改动你正在用的版本。"
+            ),
+        )
+    ]
 
 
 class ShopifyConnector:
@@ -29,7 +96,7 @@ class ShopifyConnector:
         *,
         shop: str,
         access_token: str,
-        api_version: str = "2024-01",
+        api_version: str = "",
         http_get: Optional[HttpGet] = None,
         timeout: float = 15.0,
     ) -> None:
@@ -39,7 +106,8 @@ class ShopifyConnector:
             s = f"{s}.myshopify.com"
         self._shop = s
         self._token = str(access_token or "")
-        self._api_version = str(api_version or "2024-01")
+        _warn_if_stale(api_version)
+        self._api_version = str(api_version or DEFAULT_API_VERSION)
         self._http_get = http_get
         self._timeout = float(timeout or 15.0)
 

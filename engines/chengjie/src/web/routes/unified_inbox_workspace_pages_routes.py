@@ -196,11 +196,16 @@ def register_workspace_pages_routes(
             return RedirectResponse("/workspace/dash", status_code=307)
         return templates.TemplateResponse(request, "setup_wizard.html", _page_ctx(request))
 
-    # ── 渠道中心（四渠道设置融合，主管专属）─────────────────────────
+    # ── 渠道中心（多渠道设置融合，主管专属）─────────────────────────
     # 旧管理后台四页（/telegram /line-rpa /messenger-rpa /whatsapp-rpa）整体迁入
     # 工作台壳：正文 partial =_channel_body_<ch>.html，观感由 workspace_channels.html
     # 的「变量桥」统一；旧路径 302 到这里（书签不断）。
-    _CHANNEL_KEYS = ("telegram", "line", "messenger", "whatsapp")
+    #
+    # discord 是第五个渠道，且与前四个**不同族**：官方 Bot Token 接入（无扫码/无真机
+    # 设备/无 UI 自动化），能力面见 _channel_body_discord.html。它是默认关的子系统，
+    # 但 tab 仍然常驻——正文首屏就是「接入就绪自检」，未启用时如实说「开关没开/缺
+    # discord.py/缺 Token」并给处置。把 tab 藏起来反而会让运营找不到开它的地方。
+    _CHANNEL_KEYS = ("telegram", "line", "messenger", "whatsapp", "discord")
 
     @app.get("/workspace/channels", response_class=HTMLResponse)
     async def workspace_channels_root(request: Request, _=Depends(page_auth)):

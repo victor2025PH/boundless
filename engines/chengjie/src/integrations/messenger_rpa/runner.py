@@ -11019,6 +11019,25 @@ class MessengerRpaRunner:
 
         非致命错误（inject_text / tap 失败）会重试；致命错误（empty text）立即返回。
         """
+        def _done(ok: bool) -> bool:
+            """出站记账 + 原样返回。
+
+            记在**重试外层**而不是每次 `_send_reply`：4 级降级最多试 4 次，按次记
+            会把失败率算成重试次数的函数。原因取 `result["error"]`（代码里的字面量，
+            有界可读），比一个没有归因的 send_failed 有用得多。
+            """
+            try:
+                from src.integrations.shared.outbound_delivery_stats import (
+                    record_ok_send,
+                )
+                record_ok_send(
+                    "messenger",
+                    {"ok": bool(ok), "error": str(result.get("error") or "")},
+                    kind="text")
+            except Exception:  # noqa: BLE001 - 观测坏了不能影响发送
+                pass
+            return ok
+
         # P2-B：发送前做"真人感"后处理（emoji 替换 等）
         reply_text = self._apply_human_text_filters(reply_text, result)
         # P2-T：发送前先触发 typing indicator（"对方正在输入"），让 victor 端
@@ -11026,7 +11045,7 @@ class MessengerRpaRunner:
         await self._typing_indicator_warmup(serial, result)
         rt_cfg = (self._cfg.get("send_retry") or {})
         if not rt_cfg.get("enabled", True):
-            return await self._send_reply(serial, wh, reply_text, result)
+            return _done(await self._send_reply(serial, wh, reply_text, result))
 
         max_attempts = int(rt_cfg.get("max_attempts", 4) or 4)
         retry_delay = float(rt_cfg.get("retry_delay_sec", 5.0) or 5.0)
@@ -11066,18 +11085,18 @@ class MessengerRpaRunner:
                 # 成功后若 IME 被临时关闭，恢复配置
                 if ime_toggled:
                     self._cfg["use_adb_keyboard"] = orig_use_ime
-                return True
+                return _done(True)
 
             # 致命错误：文本为空 → 不重试
             if "empty_reply_text" in err:
                 result["send_attempts"] = attempt_log
-                return False
+                return _done(False)
 
             # ★ 致命错误：UI 安全护盾触发（误点相机/图库）→ 不重试
             # 已在 _send_reply 里执行了 BACK 恢复；重试只会再误点一次
             if result.get("step") == "ui_unsafe_tap":
                 result["send_attempts"] = attempt_log
-                return False
+                return _done(False)
 
             if attempt >= max_attempts:
                 break
@@ -11182,7 +11201,7 @@ class MessengerRpaRunner:
                         )
             except Exception:
                 logger.debug("send_all_failed 扣信用失败", exc_info=True)
-        return False
+        return _done(False)
 
     # ── 内部：发送 ────────────────────────────────
     async def _send_reply(

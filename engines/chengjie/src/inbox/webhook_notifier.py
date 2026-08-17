@@ -25,7 +25,11 @@
       events: ["autoreply_alert", "sla_breach"]
     - name: "wa-ops"
       format: "whatsapp"
-      url: "https://graph.facebook.com/v19.0/<PHONE_ID>/messages"
+      phone_id: "<PHONE_NUMBER_ID>"  # 端点由系统按 meta_graph_version 拼，
+                                     # 别在这里手写 graph.facebook.com/vXX.X ——
+                                     # Graph 版本约两年一停，写死在配置里没有任何
+                                     # 门禁扫得到，会静默烂掉（url 键仍支持，但只
+                                     # 建议用于非标准端点/自建代理）
       token: "EAAB..."               # 永久/临时 access token（Bearer）
       target: "8613800000000"        # 收件人号码（含国家码，无 +）
       events: ["autoreply_alert"]
@@ -54,6 +58,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+from src.integrations import meta_graph_version
+from src.integrations.meta_graph_version import version_status
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +130,9 @@ _EVENT_ALIASES: Dict[str, Dict[str, Any]] = {
     "colloquial_llm": {"types": {"colloquial_llm_alert"}, "levels": None},
     # 出站语音连发异常（2026-07-15 三连发事故指纹：同会话短窗多条语音=重复处理回归）
     "voice_burst": {"types": {"voice_burst_alert"}, "levels": None},
+    # 出站投递不健康（链路故障 / 闸门被人关着 / RPA 队列只进不出；业务性 403 与
+    # 24h 窗口过期刻意不在此列——见 outbound_delivery_health 模块 docstring）
+    "outbound_delivery": {"types": {"outbound_delivery_alert"}, "levels": None},
 }
 
 # ─── 告警受众分层（2026-07-31，产品化：终端客户能自己绑、看得懂）─────────────
@@ -139,6 +149,10 @@ _BUSINESS_ALERTS: Dict[str, str] = {
     "sla_breach":       "cp.alert.sla_breach",         # 回复超时
     "sla_escalated":    "cp.alert.sla_escalated",       # 严重超时升级
     "draft_backlog":    "cp.alert.draft_backlog",       # 待回复积压，客户在等
+    # 「消息发不出去」对老板来说和「没人回」一样直白，故归 business 而非 technical：
+    # 判据已在 outbound_delivery_health 里把业务性拒收（403/24h 窗口）剔干净，
+    # 剩下的都是「真的没送到、且有人能处理」。
+    "outbound_delivery": "cp.alert.outbound_delivery",  # 消息发不出去
     "queue_alert":      "cp.alert.queue_alert",         # 会话排队超时
     "csat_alert":       "cp.alert.csat_alert",          # 客户满意度跌破
     "reply_risk":       "cp.alert.reply_risk",          # 高危回复预警
@@ -276,18 +290,55 @@ def _plainify(text: str, base_url: str = "") -> str:
     return s.strip()
 
 
-def _resolve_chat_endpoint(fmt: str, url: str, token: str) -> str:
-    """渠道端点解析：给了完整 url 直接用；否则按 token 推断标准端点。
-    whatsapp 需要 phone-id，无法仅凭 token 推断，必须显式给 url。"""
+_GRAPH_URL_VER = re.compile(
+    r"https://graph\.facebook\.com/(v\d+\.\d+)/", re.IGNORECASE)
+
+
+def _warn_if_stale_graph_url(name: str, url: str) -> None:
+    """运营手填的完整 Graph url 若钉着已停用的版本，出声提醒。
+
+    **刻意不改写**运营给的 url：静默篡改配置比留着坏值更难排查。但也不能装作没
+    看见——Graph 版本过期只在真正发请求时才报错，而告警渠道平时零流量，坏了要等到
+    「真出事、要发告警」那一刻才暴露，恰是最糟的时机。
+    """
+    m = _GRAPH_URL_VER.search(url or "")
+    if not m:
+        return
+    st = version_status(m.group(1))
+    if st.healthy:
+        return
+    logger.warning(
+        "Webhook [%s] 的 url 钉着 Graph API %s（%s）：%s。"
+        "请改用 phone_id/token 让系统自动拼端点，或把版本号换成 %s",
+        name, st.version,
+        "已停用" if st.level == "expired" else f"状态 {st.level}",
+        f"官方停用日 {st.expiry}" if st.expiry else "不在官方版本表内",
+        meta_graph_version.DEFAULT_VERSION,
+    )
+
+
+def _resolve_chat_endpoint(
+    fmt: str, url: str, token: str, phone_id: str = "", name: str = "",
+) -> str:
+    """渠道端点解析：给了完整 url 直接用；否则按 token/phone_id 推断标准端点。
+
+    whatsapp 光凭 token 推不出端点（还需要 phone-number-id），但只要运营填了
+    ``phone_id`` 就能拼——这样**版本号不必出现在运营配置里**，也就不会在某个
+    我们扫不到的 json 文件里悄悄过期（门禁只能管住源码，管不到运维配置）。
+    """
     url = (url or "").strip()
     if url:
+        _warn_if_stale_graph_url(name, url)
         return url
     token = (token or "").strip()
     if fmt == "telegram" and token:
         return f"https://api.telegram.org/bot{token}/sendMessage"
     if fmt == "messenger" and token:
-        return ("https://graph.facebook.com/v19.0/me/messages"
+        return (f"{meta_graph_version.graph_base('messenger')}/me/messages"
                 f"?access_token={urllib.parse.quote(token)}")
+    if fmt == "whatsapp" and token and (phone_id or "").strip():
+        base = meta_graph_version.graph_base("whatsapp")
+        return f"{base}/{urllib.parse.quote(str(phone_id).strip())}/messages"
     return ""
 
 
@@ -723,6 +774,42 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 "[📊 查看运营总览](/admin/ops)"
             )
 
+    elif event_type == "outbound_delivery_alert":
+        if data.get("recovered"):
+            title = "✅ 出站投递已恢复"
+            text = (
+                "**状态**: 观察窗内不再出现链路故障 / 闸门拦截 / 队列积压\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+        else:
+            kind = str(data.get("kind") or "")
+            win = int(data.get("window_min") or 30)
+            summary = str(data.get("summary") or "—")
+            prefix = "⏰" if data.get("reminder") else "🚨"
+            head = {
+                "infra": "出站链路故障",
+                "blocked": "出站被闸门拦截",
+                "stuck_queue": "出站队列只进不出",
+            }.get(kind, "出站投递异常")
+            title = f"{prefix} {head}（近 {win} 分钟）"
+            # 处置按类别分开写：三类的第一步动作完全不同，合成一段等于让人自己猜。
+            howto = {
+                "infra": "**处置**: 查该平台的网络/凭证/worker 状态——"
+                         "`timeout`/`network`＝主机或代理不通；`auth_failed`＝令牌过期；"
+                         "`no_worker`/`no_client`＝账号 worker 没起来（看编排器）",
+                "blocked": "**处置**: 有人把发送开关关着——查 G1 Kill-Switch 与反封号"
+                           "闸门是否还冻结着（应急冻结后忘了解冻是这条最常见的成因）",
+                "stuck_queue": "**处置**: RPA 队列在涨但一条都没真发出去——"
+                               "查手机在不在线、runner 是否卡死（`status.bat`）",
+            }.get(kind, "**处置**: 打开运营总览「出站投递」卡看按平台的失败原因分布")
+            text = (
+                f"**明细**: {summary}\n"
+                "**口径**: 只统计「有人能处理」的失败——Discord 不能私信陌生人、"
+                "24h 客服窗口过期这类平台业务规则**刻意不告警**（那是运营信号不是故障）\n"
+                f"{howto}\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+
     elif event_type == "human_deliver_alert":
         if data.get("recovered"):
             title = "✅ 人工通过投递链已恢复"
@@ -974,6 +1061,11 @@ class WebhookNotifier:
         for wh in self._webhooks:
             if wh.get("enabled") is False:
                 continue
+            # 配置落地即体检：运营保存/热更时就点名钉着停用版本的 url，而不是等到
+            # 某次真要发告警才在发送路径上暴露（告警渠道平时零流量，那时才发现＝
+            # 出事当口告警发不出去）。每条配置只提一次，不随 events 数量刷屏。
+            _warn_if_stale_graph_url(
+                str(wh.get("name") or "webhook"), str(wh.get("url") or ""))
             events = list(wh.get("events") or ["all"])
             for alias in events:
                 rule = _EVENT_ALIASES.get(alias)
@@ -985,6 +1077,7 @@ class WebhookNotifier:
                     "fmt": str(wh.get("format") or "json").lower(),
                     "secret": str(wh.get("secret") or ""),
                     "token": str(wh.get("token") or ""),
+                    "phone_id": str(wh.get("phone_id") or ""),
                     "target": str(wh.get("target") or wh.get("chat_id") or ""),
                     "name": str(wh.get("name") or "webhook"),
                     "types": rule["types"],          # None → 全部
@@ -1061,7 +1154,11 @@ class WebhookNotifier:
         title, text = _build_message(etype, data)
 
         if fmt in CHAT_FORMATS:
-            url = _resolve_chat_endpoint(fmt, matcher["url"], token)
+            url = _resolve_chat_endpoint(
+                fmt, matcher["url"], token,
+                phone_id=matcher.get("phone_id") or "",
+                name=str(matcher.get("name") or ""),
+            )
             if not url:
                 self.total_errors += 1
                 logger.warning("Webhook 跳过 [%s]：%s 渠道缺少 url/token",
@@ -1120,6 +1217,7 @@ class WebhookNotifier:
             "fmt": str(webhook.get("format") or "json").lower(),
             "secret": str(webhook.get("secret") or ""),
             "token": str(webhook.get("token") or ""),
+            "phone_id": str(webhook.get("phone_id") or ""),
             "target": str(webhook.get("target") or webhook.get("chat_id") or ""),
             "name": str(webhook.get("name") or "test"),
             "types": rule["types"], "levels": rule.get("levels"),

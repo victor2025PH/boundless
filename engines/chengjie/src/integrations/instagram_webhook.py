@@ -31,6 +31,7 @@ import aiohttp
 from fastapi import FastAPI, Query, Request, Response
 
 from src.integrations.facebook_webhook import GRAPH_BASE, verify_fb_signature
+from src.integrations.shared.outbound_delivery_stats import claim_send, meter_send
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,7 @@ def _ig_fail(status: int, raw_body: str) -> Dict[str, Any]:
     return out
 
 
+@meter_send("instagram", kind="text")
 async def ig_send_text(
     igsid: str,
     text: str,
@@ -119,6 +121,7 @@ async def ig_send_text(
         return {"ok": False, "error": str(e)}
 
 
+@meter_send("instagram", kind="text")
 async def ig_send_with_window_fallback(
     igsid: str,
     text: str,
@@ -132,17 +135,22 @@ async def ig_send_with_window_fallback(
 
     ⚠️ HUMAN_AGENT 需账号开通「Human Agent」权限，否则回退仍会失败（已带 error_kind 可观测）。
     故由上层 opt-in（``instagram.human_agent_fallback``），默认走纯 ``ig_send_text``。
+
+    出站记账占坑在本层：内部两次 ``ig_send_text`` 是同一条逻辑消息的降级重试，
+    逐次计会把「窗口关了挂 tag 重发」这个正常路径记成一条失败。
     """
-    out = await ig_send_text(igsid, text, ig_id, page_access_token,
-                             account_id=account_id, messaging_type="RESPONSE")
-    if out.get("ok") or out.get("error_kind") != "window_expired":
-        return out
-    logger.info("IG 24h 窗口已关闭，降级 tag=%s 重发", fallback_tag)
-    return await ig_send_text(
-        igsid, text, ig_id, page_access_token, account_id=account_id,
-        messaging_type="MESSAGE_TAG", message_tag=fallback_tag)
+    with claim_send():
+        out = await ig_send_text(igsid, text, ig_id, page_access_token,
+                                 account_id=account_id, messaging_type="RESPONSE")
+        if out.get("ok") or out.get("error_kind") != "window_expired":
+            return out
+        logger.info("IG 24h 窗口已关闭，降级 tag=%s 重发", fallback_tag)
+        return await ig_send_text(
+            igsid, text, ig_id, page_access_token, account_id=account_id,
+            messaging_type="MESSAGE_TAG", message_tag=fallback_tag)
 
 
+@meter_send("instagram", kind="media")
 async def ig_send_attachment(
     igsid: str,
     media_url: str,

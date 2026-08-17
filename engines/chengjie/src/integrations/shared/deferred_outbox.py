@@ -29,6 +29,16 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+
+def _proactive_allowed(platform: str) -> bool:
+    """该平台是否允许系统主动私聊（取不到判据一律放行，绝不因内省失败停摆）。"""
+    try:
+        from src.integrations.platform_capabilities import proactive_outreach_allowed
+        return bool(proactive_outreach_allowed(platform))
+    except Exception:  # noqa: BLE001
+        return True
+
+
 class DeferredSenderNotReady(Exception):
     """sender 抛此异常表示「此刻无法投递（如 worker 未就绪）」→ 不算失败，
     dispatcher 把该条推后重试（区别于「投递失败」的 mark_failed）。"""
@@ -125,6 +135,14 @@ class DeferredOutboxStore:
         chat = str(chat_key or "").strip()
         text = str(reply_text or "").strip()
         if not plat or not chat or not text:
+            return 0
+        # 平台规则禁止主动私聊的（Discord Bot）在**入队处**就挡掉。本队列是 care /
+        # reactivation / reaction_followup / voicecall 四条主动链的共同出口，候选集
+        # 各自来源不同（DB 行 / identity 优先级 / 配置白名单），逐条去堵必然漏；
+        # 堵在这里 = 一处覆盖全部。放进来的下场是每次到期 drain 撞一次 403 →
+        # mark_failed → 下次再来，白烧配额还把失败率喂给告警。
+        if not _proactive_allowed(plat):
+            logger.info("[deferred_outbox] 平台不允许主动私聊，拒绝入队 platform=%s", plat)
             return 0
         n = float(now if now is not None else time.time())
         try:

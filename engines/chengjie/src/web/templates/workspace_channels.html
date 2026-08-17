@@ -5,7 +5,8 @@
 <style>
   /* ============================================================
      渠道中心（P0 融合）：四个旧后台渠道页（telegram / line-rpa /
-     messenger-rpa / whatsapp-rpa）整体迁入工作台壳，一站式配置。
+     messenger-rpa / whatsapp-rpa）整体迁入工作台壳，一站式配置；
+     discord 为后加的第五个渠道（官方 Bot Token 接入，非 RPA 族）。
      正文来自 _channel_body_<channel>.html（原页 block content 平移，
      JS 与 API 契约零改动）；观感统一靠下方「管理后台变量桥」。
      ============================================================ */
@@ -64,6 +65,7 @@
   .chc-acct-rail[data-plat="line"]{--pc:#06C755;}
   .chc-acct-rail[data-plat="messenger"]{--pc:#0084FF;}
   .chc-acct-rail[data-plat="whatsapp"]{--pc:#25D366;}
+  .chc-acct-rail[data-plat="discord"]{--pc:#5865F2;}
   .chc-acct-rail[data-status="offline"]{background:linear-gradient(180deg,rgba(225,29,72,.055),transparent 58%) var(--tk-surface);}
   .chc-acct-rail[data-status="connecting"]{background:linear-gradient(180deg,rgba(245,158,11,.06),transparent 58%) var(--tk-surface);}
   .chc-acct-head{display:flex;gap:12px;align-items:flex-start;}
@@ -224,7 +226,7 @@
 </style>
 {% endblock %}
 {% block content %}
-{% set _chs = [('telegram', 'Telegram'), ('line', 'LINE'), ('messenger', 'Messenger'), ('whatsapp', 'WhatsApp')] %}
+{% set _chs = [('telegram', 'Telegram'), ('line', 'LINE'), ('messenger', 'Messenger'), ('whatsapp', 'WhatsApp'), ('discord', 'Discord')] %}
 <div class="chc-wrap"><div class="chc-inner">
   <div class="chc-head">
     <div class="chc-head-main">
@@ -263,7 +265,8 @@
       <div class="chc-acct-head-main">
         <div class="chc-acct-rail-title">
           <span>{{ (i18n or {}).get('chc_acct_title', '账号入口') }}</span>
-          <span class="chc-acct-rail-badge" id="chc-acct-badge">{{ (i18n or {}).get('chc_acct_badge_seat', '坐席多开 · 工作台扫码') }}</span>
+          {# 默认徽章按接入方式分档：Discord 是凭据接入（Bot Token），说「扫码」是假话 #}
+          <span class="chc-acct-rail-badge" id="chc-acct-badge">{% if channel == 'discord' %}{{ (i18n or {}).get('chc_acct_badge_bot', 'Bot Token 接入 · 无需扫码') }}{% else %}{{ (i18n or {}).get('chc_acct_badge_seat', '坐席多开 · 工作台扫码') }}{% endif %}</span>
         </div>
         {% if channel == 'telegram' %}
         <p class="chc-acct-rail-body">{{ (i18n or {}).get('chc_acct_body_tg', '本页上方状态是 Telegram 主会话（A 线）。工作台扫码管理的是坐席多开号（B 线），两者互不替代。') }}</p>
@@ -271,6 +274,8 @@
         <p class="chc-acct-rail-body">{{ (i18n or {}).get('chc_acct_body_line', 'LINE 账号接入与重连在聊天坐席账号抽屉完成（真机 / 协议扫码）。本页只管自动化节奏与语音链路。') }}</p>
         {% elif channel == 'whatsapp' %}
         <p class="chc-acct-rail-body">{{ (i18n or {}).get('chc_acct_body_wa', 'WhatsApp 扫码登录在聊天坐席账号抽屉完成（需本机连接服务）。下方会话健康条只观测网页会话。') }}</p>
+        {% elif channel == 'discord' %}
+        <p class="chc-acct-rail-body">{{ (i18n or {}).get('chc_acct_body_discord', 'Discord 用官方 Bot Token 接入（聊天坐席账号抽屉里填，一次校验即完成，没有扫码等待期）。Bot 只能被动接待：对方需与 Bot 有共同服务器或先私信 Bot 才能建立会话。') }}</p>
         {% else %}
         <p class="chc-acct-rail-body">{{ (i18n or {}).get('chc_acct_body_msg', 'Messenger 登录在聊天坐席账号抽屉发起（服务器托管浏览器）。掉线可走下方健康条「重新登录」。') }}</p>
         {% endif %}
@@ -496,7 +501,7 @@ async function chcLoadAcctSummary(){
       /* 零账号 → 获客空态：能力卖点 chips（词条复用收件箱 inbox.acct.*，单一词源；
          CTA 不重复——上方主按钮就是接入入口） */
       if(emptyBox){
-        var pn = {telegram:'Telegram', line:'LINE', messenger:'Messenger', whatsapp:'WhatsApp'}[CHC_CHANNEL] || CHC_CHANNEL;
+        var pn = {telegram:'Telegram', line:'LINE', messenger:'Messenger', whatsapp:'WhatsApp', discord:'Discord'}[CHC_CHANNEL] || CHC_CHANNEL;
         emptyBox.innerHTML = '<span class="chc-acct-empty-lead">'+chcSessEsc(window.Tf('inbox.acct.empty_lead',{plat:pn}))+'</span>'+
           ['inbox.acct.cap_autoreply','inbox.acct.cap_xlate','inbox.acct.cap_multi'].map(function(k){
             return '<span class="chc-acct-cap">'+chcSessEsc(window.T(k))+'</span>';

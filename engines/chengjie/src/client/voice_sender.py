@@ -147,6 +147,19 @@ def resolve_opus_application(cfg: Optional[Dict[str, Any]] = None) -> str:
 
 # ── Main send helper ─────────────────────────────────────────────────────────
 
+def _record(outcome: str, *, reason: str = "",
+            exc: Optional[BaseException] = None) -> None:
+    """出站记账（best-effort）。A 线语音也是一条真实出站，必须进同一张表。"""
+    try:
+        from src.integrations.shared.outbound_delivery_stats import (
+            record_send_result,
+        )
+        record_send_result("telegram", kind="media", outcome=outcome,
+                           reason=reason, exc=exc, only_if_outermost=True)
+    except Exception:  # noqa: BLE001 - 观测坏了不能影响发送
+        pass
+
+
 async def send_telegram_voice(
     client: Any,
     chat_id: Any,
@@ -166,6 +179,7 @@ async def send_telegram_voice(
     path = Path(audio_path)
     if not path.is_file():
         logger.error("[voice_sender] audio file not found: %s", audio_path)
+        _record("failed", reason="file_missing")
         return False
 
     ogg_path: Optional[str] = None
@@ -197,9 +211,13 @@ async def send_telegram_voice(
             "[voice_sender] sent voice chat_id=%s file=%s dur=%s",
             chat_id, Path(ogg_path).name, duration,
         )
+        _record("sent")
         return True
     except Exception as ex:
         logger.error("[voice_sender] send_voice failed chat_id=%s: %s", chat_id, ex)
+        # 本函数把异常吞成 False，所以记账必须在这里带上异常本身——不然看板上
+        # 只会看到一个没有归因的 send_failed。
+        _record("failed", exc=ex)
         return False
     finally:
         if cleanup_ogg and ogg_path != audio_path:

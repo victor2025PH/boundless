@@ -31,6 +31,7 @@ from src.integrations.line_rpa.human_pacing import (       # 复用拟人节奏
     split_message,
     typing_duration_sec,
 )
+from src.integrations.shared.outbound_delivery_stats import meter_send
 from src.integrations.whatsapp_rpa import ui_hierarchy as ui
 from src.integrations.whatsapp_rpa.state_store import WaRpaStateStore
 from src.integrations.whatsapp_rpa.intent_detector import (
@@ -1479,9 +1480,12 @@ class WhatsAppRpaRunner:
 
     # ── 拟人节奏发送（支持分条 + 重试） ─────────────────────────────────
 
+    @meter_send("whatsapp", kind="text", shape="ok")
     async def _pace_and_send(
         self, xml_bytes: Optional[bytes], text: str
     ) -> Dict[str, Any]:
+        # 记账挂这一层（一条逻辑消息 = 一次调用），不挂 `_send_text`：分条 + 每段
+        # 重试一次，按段计会把失败率算成重试次数的函数。
         # G1 全局 Kill-Switch（Phase C：RPA 覆盖）：紧急冻结时跳过物理发送
         try:
             from src.integrations.shared.rpa_send_guard import rpa_send_blocked
@@ -2444,11 +2448,15 @@ class WhatsAppRpaRunner:
         logger.warning("[wa_rpa][multi] all groups failed, fallback single chat=%s", chat_key)
         return None
 
+    @meter_send("whatsapp", kind="text", shape="ok")
     async def _send_text_coord_fallback(
         self, serial: str, text: str, screen_size: Tuple[int, int]
     ) -> Dict[str, Any]:
         """坐标+ADB keyboard 发送文字（不依赖 XML/uiautomator）。
         适用于 MIUI 屏蔽 uiautomator 的情况。
+
+        这是绕过 ``_pace_and_send`` 的旁路（多群 / companion 测试 / 主流程失败回落
+        都会直达这里）。若不单独记账，MIUI 场景下的出站在看板上永久静默为 0。
         """
         sw, sh = screen_size
         # WhatsApp 输入框：底部上方约 4.4%（720x1600 → Y≈1530）

@@ -65,6 +65,10 @@ WORKERS: List[Tuple[str, str, str, str]] = [
      "MessengerWebWorker"),
     ("line", "protocol", "src.integrations.account_orchestrator",
      "LineProtocolWorker"),
+    # Discord 的 mode 名沿用 protocol（编排器只认 ORCHESTRATED_MODES 那几个），
+    # 但它其实是官方 Bot 应用，不是协议逆向——语义差异见 PLATFORM_HARD_LIMITS。
+    ("discord", "protocol", "src.integrations.discord_bot_worker",
+     "DiscordBotWorker"),
 ]
 
 #: 入站媒体接线点：矩阵行 key → (模块, 函数路径；``.`` 分隔嵌套)。
@@ -82,6 +86,8 @@ INBOUND_SITES: Dict[str, Tuple[str, str]] = {
                           "api_protocol_ingest"),
     "messenger:web": ("src.web.routes.unified_inbox_account_routes",
                       "api_protocol_ingest"),
+    "discord:protocol": ("src.integrations.discord_bot_worker",
+                         "DiscordBotWorker._wire_inbound.on_message"),
 }
 
 #: 已知**由配置开关决定**的格子：(platform, mode, capability) → 开关路径。
@@ -96,7 +102,34 @@ SWITCHED_CAPABILITIES: Dict[Tuple[str, str, str], str] = {
 #: 结构判定不了、且**不是我们没接而是对面没有**的能力——写清楚免得反复被问。
 HARD_LIMITS: Dict[Tuple[str, str], str] = {
     ("line", "typing"): "okline 无 typing/presence 端点（协议层不可做，非未接）",
+    ("discord", "mark_read"): "Discord 已读态是用户端私有（read state），Bot 无 API 可写",
 }
+
+#: **平台级**硬边界：不对应矩阵的某一列，而是整行的语义前提。
+#:
+#: 为什么单开一张表：`HARD_LIMITS` 回答「这一格为什么是 N」，但有些约束根本不落在
+#: 「能不能调这个方法」上——Discord 的 `send()` 明明存在且好用，可它**只在对方先建立
+#: 关系后**才能用。这种约束若不显式写出来，运营会按其他平台的心智去用（第一件事就是
+#: 主动群发），然后得到一屏 403 并以为是 bug。它同时是 `proactive_topic` 平台闸门的
+#: 事实依据，由 `tests/test_discord_bot.py::test_proactive_excludes_discord` 钉住。
+PLATFORM_HARD_LIMITS: Dict[str, str] = {
+    "discord": (
+        "Bot 不能主动私聊陌生人：仅当对方与 Bot 有共同服务器且允许服务器成员私信、"
+        "或对方先私信过 Bot 时才能开 DM，否则 API 返回 403(50007)。因此 Discord "
+        "只做**被动接待**，已从主动触达的候选平台中排除。"
+    ),
+}
+
+
+#: 平台规则禁止「主动私聊陌生人」的平台——**不参与主动触达候选**。
+#: 这不是保守起见的白名单，是硬事实：放它进候选的唯一结果是每个 tick 撞一轮 403，
+#: 而连败还会喂给 `_mark_bad_peer` 把本来能被动接待的会话误拉黑（比不发更糟）。
+NO_PROACTIVE_PLATFORMS = frozenset({"discord"})
+
+
+def proactive_outreach_allowed(platform: str) -> bool:
+    """该平台能否作为**主动触达**的候选（被动接待不受影响）。"""
+    return str(platform or "").strip().lower() not in NO_PROACTIVE_PLATFORMS
 
 
 def _switch_on(config: Dict[str, Any], dotted: str) -> Dict[str, Any]:
@@ -377,6 +410,9 @@ __all__ = [
     "WORKERS",
     "SWITCHED_CAPABILITIES",
     "HARD_LIMITS",
+    "PLATFORM_HARD_LIMITS",
+    "NO_PROACTIVE_PLATFORMS",
+    "proactive_outreach_allowed",
     "capability_matrix",
     "switched_cells",
     "worker_capabilities",

@@ -204,7 +204,8 @@ def build_connector(config: Optional[Dict[str, Any]]) -> Any:
             from .shopify_connector import ShopifyConnector
             return ShopifyConnector(
                 shop=shop, access_token=token,
-                api_version=str(sh.get("api_version") or "2024-01"),
+                # 不填即用 connector 里的 SSOT 默认版本；填了会被体检并在陈旧时告警
+                api_version=str(sh.get("api_version") or ""),
                 timeout=float(cfg.get("timeout_sec") or 15),
             )
         logger.warning("ecommerce: provider=shopify 但缺 shop/access_token，回落 mock")

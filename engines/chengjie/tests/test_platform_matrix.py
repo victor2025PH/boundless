@@ -93,6 +93,11 @@ def test_registered_workers_are_all_in_matrix():
 
     注册是按配置+依赖门控的，本机缺 pyrogram/okline 时会少注册几项 → 只做**单向**
     包含检查（注册了的必须在表里），不反向要求，从而对缺依赖的机器友好。
+
+    ⚠ ``_WORKER_FACTORIES`` 是**模块级全局**，注册进去就跨测试文件留存：不还原会让
+    ``test_account_orchestrator::test_worker_supported_gating``（断言 line 未注册）
+    在同进程后跑时莫名其妙变红。`-n auto` 下两者常分散到不同 worker，所以这个污染
+    只在**跑定向子集**时才现形——正是排障时最不需要假红的时候。
     """
     from src.integrations import account_orchestrator as AO
 
@@ -104,15 +109,20 @@ def test_registered_workers_are_all_in_matrix():
             "line": {"protocol_enabled": True},
         },
     }
-    AO.ensure_builtin_workers(cfg)
-    known = {"%s:%s" % (p, m.split("(")[0]) for p, m, _, _ in PC.WORKERS}
-    for key in AO._WORKER_FACTORIES:
-        platform, _, mode = key.partition(":")
-        if mode == "official":
-            continue  # 官方通道 worker 是另一族（一个类服务多平台），不进本表
-        assert key in known, (
-            "编排器注册了 %s，但 platform_capabilities.WORKERS 里没有它 —— "
-            "矩阵会少一行" % key)
+    snapshot = dict(AO._WORKER_FACTORIES)
+    try:
+        AO.ensure_builtin_workers(cfg)
+        known = {"%s:%s" % (p, m.split("(")[0]) for p, m, _, _ in PC.WORKERS}
+        for key in AO._WORKER_FACTORIES:
+            platform, _, mode = key.partition(":")
+            if mode == "official":
+                continue  # 官方通道 worker 是另一族（一个类服务多平台），不进本表
+            assert key in known, (
+                "编排器注册了 %s，但 platform_capabilities.WORKERS 里没有它 —— "
+                "矩阵会少一行" % key)
+    finally:
+        AO._WORKER_FACTORIES.clear()
+        AO._WORKER_FACTORIES.update(snapshot)
 
 
 # ─────────────────── 入站接线判定 ───────────────────
@@ -320,6 +330,35 @@ def test_hard_limits_are_documented_not_silently_false():
         assert PC.CAPABILITY_LABELS[cap] in text
         assert platform.lower() in text.lower()
     assert "协议层硬限制" in text
+
+
+def test_platform_hard_limits_are_documented():
+    """平台级硬边界必须出现在文档里，且**每条都点名平台**。
+
+    这类约束不落在任何一列上（Discord 的 `send()` 存在且好用，只是不能对陌生人先开口），
+    只写在代码常量里等于没写——运营读表会得出「Discord 四列全 Y，可以群发」的相反结论。
+    """
+    text = render_matrix({})
+    assert PC.PLATFORM_HARD_LIMITS, "至少应登记 Discord 不能主动私聊那条"
+    assert "平台级硬边界" in text
+    for platform, why in PC.PLATFORM_HARD_LIMITS.items():
+        assert why.strip(), "登记必须带原因"
+        assert platform.lower() in text.lower()
+
+
+def test_no_proactive_platforms_have_a_stated_reason():
+    """被排除出主动触达的平台，必须在 ``PLATFORM_HARD_LIMITS`` 里有白纸黑字的理由。
+
+    「悄悄少一个平台」是最难查的一类缺陷：运营看着 Discord 会话在收件箱里活得好好的，
+    却永远等不到主动问候，而代码里只有一个孤零零的集合字面量。
+    """
+    for platform in PC.NO_PROACTIVE_PLATFORMS:
+        assert platform in PC.PLATFORM_HARD_LIMITS, (
+            "%s 被排除出主动触达却没登记理由" % platform)
+        assert not PC.proactive_outreach_allowed(platform)
+    assert PC.proactive_outreach_allowed("telegram")
+    assert PC.proactive_outreach_allowed("TELEGRAM")   # 大小写不敏感
+    assert PC.proactive_outreach_allowed("")           # 空值不误伤（保守放行）
 
 
 def test_matrix_reflects_known_asymmetries():

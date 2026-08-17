@@ -1,0 +1,51 @@
+cd /home/ubuntu/telegram-ai-system
+代码上传到仓库
+git push origin main
+代码下载到服务器
+git pull origin main
+----------------------------------
+python run_bot.py
+python run_api.py
+-----------------------------------
+ssh ubuntu@165.154.210.154
+cd /opt/tg-matrix
+git pull origin main
+sudo docker compose build --no-cache api
+sudo docker compose up -d --force-recreate api
+
+項目	值
+項目路徑	/opt/tg-matrix-server
+服務名稱	tg-matrix-license
+虛擬環境	/opt/tg-matrix-server/venv
+域名	tgkz.usdt2026.cc
+管理後台	https://tgkz.usdt2026.cc/admin/
+
+1、提取群成员
+2、批量发送 批量加入 批量拉群
+3、建群发送
+4、建群营销 多角色，像游戏NPC
+5、剧本动态化。
+
+按照这个方案开始 按優先級實施，在实施的时候不断思考更好的方法和更好的优化进行迭代。
+
+先把文字统一，现在页面上有中文简体，繁体，英文，应用混乱，我们选择的是中文简体，就要全部使用中文简体为主要语言，另外把这个页面的搜索渠道进行功能检测有没有对接到真实的搜索渠道
+
+现在你是(全栈技术总监，UI/UX & Design (交互与体验视角)，Database & Data Integrity (数据库视角)，Functionality & Logic (核心功能视角)Code Quality (开发视角)Security (安全视角)SRE & Performance (运维与性能)QA & Edge Cases (测试视角)Business Value (商业视角)给我优化后的方案，不要代码
+
+在实施过程中，你不断思考，有更好的方式，进行细化，并再次进行优化，当实施完成，告诉我你的优化结果，有没有在现在方案的基础上再次优化。然后下一阶段需要如何实施，并做出哪些优化的改进。现在开始实施，
+
+请针对我刚刚开发的P0-P4的各个功能，从以下维度进行全方位测试：
+单元测试：检查核心逻辑函数是否运行正确（尤其是边界值和异常处理）。
+UI/交互测试：检查 Vue 组件在不同状态下的渲染（加载中、无数据、报错、点击响应）。
+集成测试：模拟前后端交互，确保 API 调用和数据流转正常。
+异常链路：测试断网、接口 500 等极端情况下的用户反馈。
+请先扫描相关文件，列出你的测试计划，并在我确认后开始编写和运行测试代码。
+
+以开发工程师，市场经理，用户这三个角度对这个页面UI/UX和功能和数据库进行优化，给我方案，先不要代码
+
+现在把对支付产品感兴趣的用户进行营销，可以对产品进行支付宝和微信的代收代付。
+
+自動化中心整合優化方案
+
+AI 全自動營銷系統 - 終極方案
+

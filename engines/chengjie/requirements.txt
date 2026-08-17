@@ -55,6 +55,12 @@ lunar_python>=1.4.0
 # ⚠️ 非官方库、违反 LINE ToS、有封号风险；务必配套一号一指纹一代理 + 养号（防关联）。
 okline>=2.7.0
 
+# Discord 官方 Bot 接入（src/integrations/discord_bot_login.py 校验 Bot Token +
+# discord_bot_worker.py 走 Gateway 长连接收发）。缺失时整条 Discord 链优雅缺席
+# （is_discord_available() 探测），但接入向导会明确报「服务端缺少 discord.py 依赖」，
+# 所以要开 Discord 的部署必须装。2.3 起 discord.Intents.message_content 稳定可用。
+discord.py>=2.3.0
+
 # 可选：本地数据库支持
 # aiosqlite>=0.19.0
 

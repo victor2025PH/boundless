@@ -410,6 +410,12 @@ class HealthWatchdog:
         self._last_drift_sig: Optional[str] = None
         # 云端余额水位巡检（独立稀疏节流；间隔在 _check_cloud_balance 内读配置）
         self._last_cloud_balance_ts: float = 0.0
+        # 外部 API 版本临期巡检（2026-08-03）：CI 门禁只在**有人提交代码**时跑，
+        # 而这类失效是**日历驱动**的——仓库几个月没动，版本照样走向死亡。
+        # v19.0 死了 74 天无人知，正是因为没有任何东西按日历看着它。
+        self._last_api_version_ts: float = 0.0
+        self._apiver_alerted: bool = False
+        self.total_api_version_alerts: int = 0
         # 试用领取兑现巡检（P2）：只在「本地有未兑现的单」时才真跑，正常部署零开销
         self._last_trial_poll_ts: float = 0.0
         # 授权字符额度水位巡检（P4c）：稀疏节流 + 「告过警」标记（恢复通知只发给告过警的）
@@ -465,6 +471,10 @@ class HealthWatchdog:
         self._csrf_samples: List[tuple] = []
         self._csrf_alerted: bool = False
         self._csrf_last_remind: float = 0.0
+        # 出站投递健康（滚动窗样本 + 升级式提醒状态）
+        self._outbound_samples: List[tuple] = []
+        self._outbound_alerted: bool = False
+        self._outbound_last_remind: float = 0.0
         self.total_csrf_reject_alerts: int = 0
         # 出站媒体承诺未兑现升级提醒（Phase21a）：delta 口径累加净撤回数 + 首提/重提去抖
         self._promise_last_ret: Optional[int] = None
@@ -646,6 +656,14 @@ class HealthWatchdog:
         except Exception:
             logger.debug("CSRF 拦截巡检异常（已忽略）", exc_info=True)
 
+        # 出站投递不健康：看板已有数，但「看板要有人开才有用」——链路故障 /
+        # 闸门被关着 / RPA 队列只进不出，三类各自主动外发（业务性 403、24h 窗口
+        # 过期刻意不轰人，见 outbound_delivery_health 模块 docstring）。
+        try:
+            self._check_outbound_delivery()
+        except Exception:
+            logger.debug("出站投递巡检异常（已忽略）", exc_info=True)
+
         # 试用履约端（厂商机）停摆：客服台心跳卡是被动的，得有人去看；这里升级为主动外发。
         try:
             self._check_trial_fulfiller()
@@ -693,6 +711,13 @@ class HealthWatchdog:
             self._check_cloud_balance()
         except Exception:
             logger.debug("云端余额巡检异常（已忽略）", exc_info=True)
+
+        # 外部 API 版本临期巡检（2026-08-03）：把「供应商公布的死期」按日历盯住，
+        # 补上「CI 门禁只在有人提交时才跑」的缺口。健康时完全静默。
+        try:
+            self._check_api_version_expiry()
+        except Exception:
+            logger.debug("外部 API 版本巡检异常（已忽略）", exc_info=True)
 
         # 授权字符额度水位巡检（P4c）：临近/触顶 → host_alert 主动外发并指路
         # 「会员中心 → 兑换加量包」，替代「翻译突然被拦才发现额度没了」。
@@ -1530,6 +1555,91 @@ class HealthWatchdog:
         logger.warning(
             "CSRF 写请求拦截激增：%d 分钟窗内 %d 次（形态 %s；接口 Top %s）",
             round(window_sec / 60.0), delta, kind_delta, top_paths)
+
+    def _check_outbound_delivery(self, *, now: Optional[float] = None) -> None:
+        """出站投递不健康 → 主动轰人（把出站看板从「要人开」变成「会来找人」）。
+
+        判定全在纯函数 ``outbound_delivery_health.diagnose`` 里（该模块 docstring
+        解释了为什么**不能**用一个扁平的失败率阈值：Discord 403 / 24h 窗口过期这类
+        业务性失败每天都有，混进同一个阈值会让告警在一周内被无视）。这里只负责
+        采样、去抖、发布。
+
+        三类各自独立、按平台分开：``infra``（有人能修的链路故障）/ ``blocked``
+        （闸门被人关着）/ ``stuck_queue``（RPA 队列只进不出）。
+        配置 ``health_watchdog.outbound_delivery_remind.{enabled,window_min,
+        interval_min,min_infra,min_infra_rate,min_blocked,min_queued_stuck}``。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        od = (((cfg.get("health_watchdog") or {}).get("outbound_delivery_remind"))
+              or {}) if isinstance(cfg, dict) else {}
+        if not od.get("enabled", True):
+            return
+        try:
+            from src.integrations.shared.outbound_delivery_health import (
+                diagnose, snapshot, summarize, worst_kind,
+            )
+            from src.integrations.shared.outbound_delivery_stats import (
+                get_outbound_delivery_stats,
+            )
+            snap = snapshot(get_outbound_delivery_stats().dump())
+        except Exception:
+            return
+        ts = float(now if now is not None else time.time())
+        window_sec = max(300.0, float(od.get("window_min", 30) or 30) * 60.0)
+        self._outbound_samples.append((ts, snap))
+        self._outbound_samples = [s for s in self._outbound_samples
+                                  if ts - s[0] <= window_sec]
+        # 单样本时基线==当前 ⇒ 增量恒 0 ⇒ 不会在刚启动就凭历史累计值误报。
+        base = self._outbound_samples[0][1]
+
+        findings = diagnose(
+            base, snap,
+            min_infra=max(1, int(od.get("min_infra", 5) or 5)),
+            min_infra_rate=float(od.get("min_infra_rate", 0.25) or 0.25),
+            min_blocked=max(1, int(od.get("min_blocked", 10) or 10)),
+            min_queued_stuck=max(1, int(od.get("min_queued_stuck", 5) or 5)),
+        )
+        if not findings:
+            if self._outbound_alerted:
+                try:
+                    from src.integrations.shared.event_bus import get_event_bus
+                    get_event_bus().publish("outbound_delivery_alert", {
+                        "recovered": True,
+                        "rate_key": "outbound_delivery:recovered",
+                    })
+                    logger.info("HealthWatchdog 发出出站投递恢复通知")
+                except Exception:
+                    logger.debug("outbound_delivery recovery 发布失败（忽略）",
+                                 exc_info=True)
+                self._outbound_alerted = False
+                self._outbound_last_remind = 0.0
+            return
+
+        interval_sec = max(600.0, float(od.get("interval_min", 60) or 60) * 60.0)
+        if self._outbound_alerted and ts - self._outbound_last_remind < interval_sec:
+            return
+
+        summary = summarize(findings)
+        kind = worst_kind(findings)
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("outbound_delivery_alert", {
+                "kind": kind,
+                "summary": summary,
+                "findings": findings[:6],
+                "window_min": round(window_sec / 60.0),
+                "reminder": bool(self._outbound_alerted),
+                # rate_key 带上类别：链路故障与「闸门没打开」是两件事，
+                # 挤同一个限流窗会让后来的那类被吞掉。
+                "rate_key": f"outbound_delivery:{kind or 'any'}",
+            })
+        except Exception:
+            logger.debug("outbound_delivery alert 发布失败（忽略）", exc_info=True)
+            return
+        self._outbound_alerted = True
+        self._outbound_last_remind = ts
+        logger.warning("出站投递异常（%d 分钟窗）：%s",
+                       round(window_sec / 60.0), summary)
 
     def _check_human_deliver_chain(self, *, now: Optional[float] = None) -> None:
         """坐席「通过」了草稿却一条都没真投递出去 → 投递链静默断裂，主动轰人。
@@ -2515,6 +2625,71 @@ class HealthWatchdog:
                     f"余额接口鉴权失败（{summary.get('error') or 'HTTP 401'}），Key 可能已失效",
                 ):
                     self.total_cloud_balance_alerts += 1
+
+    def _check_api_version_expiry(self, *, now: Optional[float] = None) -> None:
+        """外部 API 版本临期/过期 → 主动告警（补 CI 门禁的**日历盲区**）。
+
+        为什么单有 CI 门禁不够（2026-08-03 事故复盘）：门禁只在**有人提交代码**时跑，
+        而这类失效是**日历驱动**的。Messenger 告警端点钉的 v19.0 过期 74 天无人知道，
+        期间仓库一直有提交——但当时根本没有那条门禁；反过来，就算有门禁，一个几个月
+        没人动的模块同样能悄悄走到死期。两条腿才站得住：
+        提交时由 ``tests/test_external_api_lifecycle.py`` 拦，日历时由这里盯。
+
+        **只在真正需要动手时出声**（``critical``/``expired``/``unknown``）：
+        ``warn``（半年内到期）留给看板与门禁，这里出声就是噪音，运维会学会无视它。
+        去抖交给 ``notify_host`` 的 per-key 冷却（默认 24h 重提一次）；恢复后补一条
+        恢复通知并复位，免得运维不确定「到底修好没有」。
+
+        配置 ``health_watchdog.api_version_expiry.{enabled,check_interval_sec,remind_sec}``
+        ——与 avatar_voice/draft_backlog 等健康类巡检一致 **默认开**（它不是新功能，
+        是安全网；且健康时零输出、零 IO：纯日期运算）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        conf = ((cfg.get("health_watchdog") or {}).get("api_version_expiry") or {})
+        if conf.get("enabled") is False:
+            return
+        interval = float(conf.get("check_interval_sec") or 43200.0)  # 12h
+        ts = float(now if now is not None else time.time())
+        if self._last_api_version_ts and (ts - self._last_api_version_ts) < interval:
+            return
+        self._last_api_version_ts = ts
+
+        from src.utils.external_api_lifecycle import health_report
+        from src.utils.host_alert import notify_host
+
+        report = health_report()
+        bad = [s for s in report.values() if s.level in ("expired", "critical", "unknown")]
+        if not bad:
+            if self._apiver_alerted:
+                notify_host(
+                    "外部 API 版本已恢复",
+                    "此前临期/过期的外部 API 版本已全部升到安全范围。",
+                    key="apiver:recovered", cooldown_sec=0.0,
+                )
+                self._apiver_alerted = False
+            return
+
+        lines = []
+        for st in bad:
+            if st.level == "expired":
+                when = f"已过期 {abs(st.days_left or 0)} 天"
+            elif st.level == "unknown":
+                when = "不在官方支持列表内（版本写错或早已退役）"
+            else:
+                when = f"仅剩 {st.days_left} 天"
+            # 静默失败的那类要单独点名——它过期后线上不会有任何信号
+            silent = "（过期不报错，会静默改用别的版本）" if st.pin.failure_mode == "silent_fallforward" else ""
+            lines.append(f"· {st.pin.label} {st.pin.version}：{when}{silent}\n  → {st.pin.remediation}")
+
+        if notify_host(
+            "外部 API 版本需要升级",
+            "\n".join(lines) + "\n（单一事实源见各 pin 的 owner 文件；"
+                               "升版本，不要改到期日——那是供应商公布的事实）",
+            key="apiver:stale",
+            cooldown_sec=float(conf.get("remind_sec") or 86400.0),
+        ):
+            self._apiver_alerted = True
+            self.total_api_version_alerts += 1
 
     def _check_identity_shadow(self, *, now: Optional[float] = None) -> None:
         """跨平台身份影子周期扫描（P3.2）：只读发现「疑似同一人」跨平台会话配对，

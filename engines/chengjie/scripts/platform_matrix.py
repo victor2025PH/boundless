@@ -25,8 +25,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.integrations.platform_capabilities import (  # noqa: E402
-    CAPABILITY_LABELS, HARD_LIMITS, INBOUND_LABEL, capability_matrix,
-    switched_cells,
+    CAPABILITY_LABELS, HARD_LIMITS, INBOUND_LABEL, PLATFORM_HARD_LIMITS,
+    capability_matrix, switched_cells,
 )
 
 _DOC_DEFAULT = Path(__file__).resolve().parent.parent / "docs" / "平台能力矩阵.md"
@@ -36,6 +36,7 @@ PLATFORM_LABEL = {
     "whatsapp": "WhatsApp",
     "messenger": "Messenger",
     "line": "LINE",
+    "discord": "Discord",
 }
 
 
@@ -106,6 +107,20 @@ def render_matrix(config: dict | None = None) -> str:
             lines.append("- %s 的**%s**：%s"
                          % (PLATFORM_LABEL.get(platform, platform),
                             CAPABILITY_LABELS.get(cap, cap), why))
+
+    if PLATFORM_HARD_LIMITS:
+        lines += [
+            "",
+            "## 平台级硬边界（整行的语义前提）",
+            "",
+            "上一节说的是「某一格为什么是 `-`」；这一节的约束**不落在任何一列上**——",
+            "方法都在、调用也成功，但使用前提与其他平台根本不同。不写出来的话，运营会",
+            "按别的平台的心智去用，然后撞一屏 403 并以为是 bug。",
+            "",
+        ]
+        for platform, why in sorted(PLATFORM_HARD_LIMITS.items()):
+            lines.append("- **%s**：%s"
+                         % (PLATFORM_LABEL.get(platform, platform), why))
 
     lines += [
         "",

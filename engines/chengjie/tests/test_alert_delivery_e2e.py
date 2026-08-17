@@ -199,6 +199,26 @@ _EMITTED_ALERTS = [
       "reminder": False, "rate_key": "csrf_reject:remind"}),
     ("csrf_reject", "csrf_reject_alert",
      {"recovered": True, "rate_key": "csrf_reject:recovered"}),
+    # 出站投递不健康（2026-08：三类形态处置动作完全不同，各过一遍 + 恢复态）
+    ("outbound_delivery", "outbound_delivery_alert",
+     {"kind": "infra", "window_min": 30,
+      "summary": "telegram 链路故障 8/10（timeout 6, network 2）",
+      "findings": [{"platform": "telegram", "kind": "infra", "failed": 8,
+                    "attempts": 10, "top": [["timeout", 6], ["network", 2]]}],
+      "reminder": False, "rate_key": "outbound_delivery:infra"}),
+    ("outbound_delivery", "outbound_delivery_alert",
+     {"kind": "blocked", "window_min": 30,
+      "summary": "whatsapp 被闸门拦截 12 条（kill_switch 12）",
+      "findings": [{"platform": "whatsapp", "kind": "blocked", "blocked": 12,
+                    "top": [["kill_switch", 12]]}],
+      "reminder": True, "rate_key": "outbound_delivery:blocked"}),
+    ("outbound_delivery", "outbound_delivery_alert",
+     {"kind": "stuck_queue", "window_min": 30,
+      "summary": "line 队列只进不出（queued 9 / sent 0）",
+      "findings": [{"platform": "line", "kind": "stuck_queue", "queued": 9, "sent": 0}],
+      "reminder": False, "rate_key": "outbound_delivery:stuck_queue"}),
+    ("outbound_delivery", "outbound_delivery_alert",
+     {"recovered": True, "rate_key": "outbound_delivery:recovered"}),
     # 2026-07-30：补齐此前漂移出表的 9 个真实发布点（health_watchdog / voice_burst_guard
     # 都真会 publish，却从没在这张 e2e 投递表里）。payload 触发各自「告警态」分支
     # （非 recovered），_build_message 全程 .get 兜底故最小字段即可送达+出标题。

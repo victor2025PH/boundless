@@ -1,0 +1,513 @@
+{# 渠道中心·Discord 正文（由 workspace_channels.html include）。
+
+   与另外四个 _channel_body_*.html 的**族群差异**（不是排版差异，是能力面差异）：
+   Discord 走**官方 Bot 应用 + Gateway 长连**（src/integrations/discord_bot_login.py /
+   discord_bot_worker.py），不是扫码、不是真机 RPA、不是网页自动化。于是那四页里的
+   「二维码 / 真机设备与截图 / 选择器热修 / 风控封号与冷却 / 网页会话重登 / 主动触达」
+   在这里**一个都不存在**——不是没做完，是这条链路上根本没有这些东西。本页刻意不放
+   空壳区块（本仓「可见但空」的门禁教训），只呈现代码里真的有的能力面。
+
+   数据全部来自既有通用端点，本页不新增后端路由：
+     GET  /api/platforms/discord/modes        接入就绪自检（platform_readiness）
+     GET  /api/accounts                        已接入的 Bot（注册表 + 运行时）
+     GET  /api/accounts/orchestrator           worker 实况（bot_name/guilds/latency/guild_mode）
+     POST /api/accounts/discord/{id}/start|stop|restart
+#}
+{% include "_rpa_shared_styles.html" %}
+{% include "_rpa_shared_scripts.html" %}
+<style>
+/* 品牌头像（_rpa_shared_styles 只登记了四个 RPA 平台的 theme-*，Discord 在本页自备） */
+.rpa-hero-avatar.theme-discord{background:linear-gradient(135deg,#5865F2,#404EED)}
+.dc-dot{width:9px;height:9px;border-radius:50%;background:var(--t3);flex-shrink:0}
+.dc-dot.on{background:var(--green);box-shadow:0 0 0 2px var(--gs)}
+.dc-dot.err{background:var(--red);box-shadow:0 0 0 2px var(--rs)}
+
+/* 平台硬边界横条：整页最该被先读到的一句话，故用 danger 色且不可折叠 */
+.dc-limit{border:1px solid rgba(239,68,68,.3);border-left:3px solid var(--red);background:var(--rs);
+  border-radius:11px;padding:.85rem 1.1rem;margin-bottom:1.2rem}
+.dc-limit-t{font-size:.9rem;font-weight:700;color:var(--t);margin-bottom:.35rem;display:flex;align-items:center;gap:.4rem}
+.dc-limit p{margin:.25rem 0 0;font-size:.8rem;color:var(--t2);line-height:1.6}
+
+/* Tab bar（与另外四页同形，函数名加 dc 前缀避免与它们的 switchTab 混淆） */
+.dc-bar{display:flex;gap:.25rem;border-bottom:2px solid var(--bd);margin-bottom:1.3rem;flex-wrap:wrap}
+.dc-tab{padding:.55rem 1.15rem;border-radius:8px 8px 0 0;font-size:.875rem;font-weight:600;color:var(--t2);
+  cursor:pointer;border:none;background:transparent;transition:all .15s;bottom:-2px;border-bottom:2px solid transparent;position:relative}
+.dc-tab:hover{color:var(--t);background:var(--input)}
+.dc-tab.active{color:var(--p);border-bottom:2px solid var(--p);background:var(--card)}
+.dc-pane{display:none}
+.dc-pane.active{display:block}
+
+/* 步骤 / 说明列表 */
+.dc-steps{margin:.2rem 0 .9rem;padding-left:1.25rem;font-size:.83rem;color:var(--t2);line-height:1.75}
+.dc-steps li{margin:.25rem 0}
+.dc-steps code{font-size:.78rem}
+.dc-facts{list-style:none;margin:0;padding:0;font-size:.83rem;color:var(--t2);line-height:1.7}
+.dc-facts li{padding:.3rem 0 .3rem 1.15rem;position:relative;border-bottom:1px dashed var(--bd)}
+.dc-facts li:last-child{border-bottom:none}
+.dc-facts li::before{content:'·';position:absolute;left:.3rem;color:var(--p);font-weight:800}
+.dc-hint{font-size:.75rem;color:var(--t3);margin-top:.6rem;line-height:1.6}
+.dc-hint a{color:var(--p);text-decoration:none}
+.dc-hint a:hover{text-decoration:underline}
+
+/* 能力清单 */
+.dc-cap{display:flex;gap:.7rem;align-items:flex-start;padding:.55rem 0;border-bottom:1px dashed var(--bd)}
+.dc-cap:last-child{border-bottom:none}
+.dc-cap-flag{flex:0 0 auto;font-size:.72rem;font-weight:700;border-radius:6px;padding:.15rem .5rem;margin-top:.1rem}
+.dc-cap-flag.yes{background:var(--gs);color:var(--green)}
+.dc-cap-flag.no{background:var(--rs);color:var(--red)}
+.dc-cap-name{font-size:.85rem;font-weight:600;color:var(--t)}
+.dc-cap-desc{font-size:.78rem;color:var(--t3);line-height:1.55;margin-top:.1rem}
+
+/* guild_mode 三档 */
+.dc-gm{border:1px solid var(--bd);border-radius:10px;padding:.6rem .85rem;margin-bottom:.5rem;background:var(--input)}
+.dc-gm.is-live{border-color:var(--p);background:var(--ps)}
+.dc-gm-k{font-size:.82rem;font-weight:700;color:var(--t);display:flex;align-items:center;gap:.5rem}
+.dc-gm-live{font-size:.68rem;font-weight:700;border-radius:20px;padding:.1rem .5rem;background:var(--p);color:#fff;display:none}
+.dc-gm.is-live .dc-gm-live{display:inline-block}
+.dc-gm-d{font-size:.77rem;color:var(--t3);margin-top:.15rem;line-height:1.55}
+
+/* 就绪自检行 */
+.dc-blk{display:flex;gap:.55rem;align-items:flex-start;font-size:.82rem;line-height:1.6;padding:.35rem 0}
+.dc-blk-ic{flex:0 0 auto;font-weight:800}
+.dc-blk.block .dc-blk-ic{color:var(--red)}
+.dc-blk.warn .dc-blk-ic{color:var(--amber)}
+.dc-blk.ok .dc-blk-ic{color:var(--green)}
+
+/* 「本页为什么没有那些区块」——防运营误以为功能没做完 */
+.dc-na{font-size:.76rem;color:var(--t3);line-height:1.65;border-left:2px solid var(--bd);padding:.15rem 0 .15rem .7rem;margin-top:.3rem}
+
+.dc-tb td{vertical-align:top}
+.dc-tb code{font-size:.76rem}
+</style>
+
+<!-- ══ HERO ══════════════════════════════════════════════════════════════ -->
+<div class="rpa-hero">
+  <div class="rpa-hero-avatar theme-discord">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8.5 15.5c2.3 1.1 4.7 1.1 7 0"/><path d="M9 4.5c-2.2.4-4 1.2-5.2 2.2C2.5 9.6 2 13.4 2.4 17.4c1.6 1.2 3.2 2 4.8 2.4l1-1.9"/>
+      <path d="M15 4.5c2.2.4 4 1.2 5.2 2.2 1.3 2.9 1.8 6.7 1.4 10.7-1.6 1.2-3.2 2-4.8 2.4l-1-1.9"/>
+      <circle cx="9" cy="12" r="1.2"/><circle cx="15" cy="12" r="1.2"/>
+    </svg>
+  </div>
+  <div class="rpa-hero-info">
+    <div class="rpa-hero-name">
+      <span class="dc-dot" id="dc-dot"></span>
+      <span id="dc-name">{{ (i18n or {}).get('dash.loading', "加载中…") }}</span>
+    </div>
+    <div class="rpa-hero-sub" id="dc-sub">{{ (i18n or {}).get('chc_dc_hero_loading', "正在读取 Bot 状态…") }}</div>
+  </div>
+  <div class="rpa-kpi-row">
+    <div class="rpa-kpi"><span class="rpa-kpi-n" id="dc-kpi-bots">—</span><span class="rpa-kpi-l">{{ (i18n or {}).get('chc_dc_kpi_bots', "已接入 Bot") }}</span></div>
+    <div class="rpa-kpi"><span class="rpa-kpi-n" id="dc-kpi-guilds">—</span><span class="rpa-kpi-l">{{ (i18n or {}).get('chc_dc_kpi_guilds', "所在服务器") }}</span></div>
+    <div class="rpa-kpi"><span class="rpa-kpi-n" id="dc-kpi-lat">—</span><span class="rpa-kpi-l">{{ (i18n or {}).get('chc_dc_kpi_latency', "网关延迟") }}</span></div>
+    <div class="rpa-kpi"><span class="rpa-kpi-n" id="dc-kpi-gm">—</span><span class="rpa-kpi-l">{{ (i18n or {}).get('chc_dc_kpi_guild_mode', "频道接收档位") }}</span></div>
+  </div>
+  <div class="rpa-hero-actions">
+    <button class="rpa-hero-btn" onclick="dcRefreshAll()" title="{{ (i18n or {}).get('chc_dc_refresh', '刷新') }}">↻</button>
+  </div>
+</div>
+
+<!-- ══ 平台硬边界（PLATFORM_HARD_LIMITS['discord'] 同口径）═══════════════ -->
+<div class="dc-limit">
+  <div class="dc-limit-t">⚠ {{ (i18n or {}).get('chc_dc_limit_title', "Bot 只能被动接待：不能主动私聊陌生人") }}</div>
+  <p>{{ (i18n or {}).get('chc_dc_limit_body', "仅当对方与 Bot 有共同服务器且允许服务器成员私信、或对方先私信过 Bot 时才能开 DM，否则 Discord API 返回 403（50007）。") }}</p>
+  <p>{{ (i18n or {}).get('chc_dc_limit_note', "因此本渠道只做被动接待：主动触达（外呼 / 群发 / 回访）在规划阶段就已跳过 Discord，不会去撞这一轮 403。拿它做外呼是行不通的。") }}</p>
+</div>
+
+<!-- ══ TABS ══════════════════════════════════════════════════════════════ -->
+<div class="dc-bar">
+  <button class="dc-tab active" id="dc-tab-connect" onclick="dcSwitchTab('connect')">{{ (i18n or {}).get('chc_dc_tab_connect', "接入与就绪") }}</button>
+  <button class="dc-tab" id="dc-tab-intake" onclick="dcSwitchTab('intake')">{{ (i18n or {}).get('chc_dc_tab_intake', "接收与能力") }}</button>
+  <button class="dc-tab" id="dc-tab-trouble" onclick="dcSwitchTab('trouble')">{{ (i18n or {}).get('chc_dc_tab_trouble', "排障") }}</button>
+</div>
+
+<!-- ══════════════════════════ TAB: 接入与就绪 ═══════════════════════════ -->
+<div class="dc-pane active" id="dc-pane-connect">
+
+  <div class="rpa-card">
+    <div class="rpa-card-head">
+      <div class="rpa-card-icon blue">🔑</div>
+      <div>
+        <div class="rpa-card-title">{{ (i18n or {}).get('chc_dc_setup_title', "接入方式：Bot Token") }}</div>
+        <div style="font-size:.75rem;color:var(--t3);margin-top:.1rem">{{ (i18n or {}).get('chc_dc_setup_desc', "Discord 没有扫码登录，也没有合法的用户号协议登录（self-bot 违反 ToS 且封号）。接入 = 在开发者后台建一个官方 Bot 应用，把 Bot Token 填进来。") }}</div>
+      </div>
+    </div>
+    <ol class="dc-steps">
+      <li>{{ (i18n or {}).get('chc_dc_setup_1', "开发者后台 → New Application → Bot，点 Reset Token 复制 Bot Token（等价密码，别外传）。") }}</li>
+      <li>{{ (i18n or {}).get('chc_dc_setup_2', "同页 Privileged Gateway Intents 勾选 MESSAGE CONTENT INTENT —— 不勾则所有消息正文为空，接入会硬失败（这比连不上更难排查）。") }}</li>
+      <li>{{ (i18n or {}).get('chc_dc_setup_3', "OAuth2 → URL Generator 勾 bot 与 Send Messages / Attach Files 权限，用生成的链接把 Bot 邀请进服务器。") }}</li>
+      <li>{{ (i18n or {}).get('chc_dc_setup_4', "回到聊天坐席的账号抽屉选 Discord 填入 Token —— 校验是一次同步往返，没有扫码等待期。") }}</li>
+    </ol>
+    <div class="chc-acct-rail-actions" style="padding-left:0">
+      <a class="chc-acct-btn" href="/workspace?drawer=1&amp;connect=discord">{{ (i18n or {}).get('chc_dc_setup_cta', "去工作台接入 Bot") }}</a>
+      <a class="chc-acct-btn-sec" href="https://discord.com/developers/applications" target="_blank" rel="noopener">{{ (i18n or {}).get('chc_dc_setup_docs', "打开 Discord 开发者后台") }}</a>
+    </div>
+    <div class="dc-na">{{ (i18n or {}).get('chc_dc_na_note', "本页没有二维码 / 真机设备与截图 / 选择器热修 / 风控封号冷却 —— 那些是 UI 自动化与协议号才有的运维语义，官方 Bot 链路上不存在，不是功能没做完。") }}</div>
+  </div>
+
+  <div class="rpa-card">
+    <div class="rpa-card-head">
+      <div class="rpa-card-icon amber">🩺</div>
+      <div>
+        <div class="rpa-card-title">{{ (i18n or {}).get('chc_dc_ready_title', "接入就绪自检") }}</div>
+        <div style="font-size:.75rem;color:var(--t3);margin-top:.1rem">{{ (i18n or {}).get('chc_dc_ready_desc', "接入开关 · discord.py 依赖 · Bot Token 三道，缺哪道说哪道。") }}</div>
+      </div>
+      <button class="btn-sec" style="margin-left:auto;font-size:.78rem;padding:.35rem .7rem" onclick="dcRecheckReadiness()">{{ (i18n or {}).get('chc_dc_ready_recheck', "重新检测") }}</button>
+    </div>
+    <div id="dc-ready-body"><div class="rpa-empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </div>
+
+  <div class="rpa-card">
+    <div class="rpa-card-head">
+      <div class="rpa-card-icon green">🤖</div>
+      <div>
+        <div class="rpa-card-title">{{ (i18n or {}).get('chc_dc_acct_title', "已接入的 Bot") }}</div>
+        <div style="font-size:.75rem;color:var(--t3);margin-top:.1rem">{{ (i18n or {}).get('chc_dc_acct_desc', "Gateway 长连由账号编排器保活；这里可以单独启停某个 Bot。") }}</div>
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="dc-tb">
+        <thead><tr>
+          <th>{{ (i18n or {}).get('chc_dc_th_bot', "Bot") }}</th>
+          <th>{{ (i18n or {}).get('chc_dc_th_state', "进程状态") }}</th>
+          <th>{{ (i18n or {}).get('chc_dc_th_guilds', "服务器") }}</th>
+          <th>{{ (i18n or {}).get('chc_dc_th_latency', "延迟") }}</th>
+          <th>{{ (i18n or {}).get('chc_dc_th_ops', "操作") }}</th>
+        </tr></thead>
+        <tbody id="dc-acct-body"><tr><td colspan="5">{{ (i18n or {}).get('dash.loading', "加载中…") }}</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════ TAB: 接收与能力 ═══════════════════════════ -->
+<div class="dc-pane" id="dc-pane-intake">
+
+  <div class="rpa-card">
+    <div class="rpa-card-head">
+      <div class="rpa-card-icon blue">📥</div>
+      <div>
+        <div class="rpa-card-title">{{ (i18n or {}).get('chc_dc_gm_title', "服务器频道接收档位") }}</div>
+        <div style="font-size:.75rem;color:var(--t3);margin-top:.1rem">{{ (i18n or {}).get('chc_dc_gm_desc', "私聊永远全收；服务器频道按档位过滤。默认 mention —— Bot 一旦被拉进上千人的服务器，「全收」会把统一收件箱瞬间冲垮。") }}</div>
+      </div>
+    </div>
+    <div class="dc-gm" id="dc-gm-mention">
+      <div class="dc-gm-k">mention<span class="dc-gm-live">{{ (i18n or {}).get('chc_dc_gm_current', "当前生效") }}</span></div>
+      <div class="dc-gm-d">{{ (i18n or {}).get('chc_dc_gm_mention', "只收 @ 到本 Bot 的消息；@ 到 Bot 所属身份组（如 @客服）也算，@everyone / @here 不算（那是广播不是召唤）。回复 Bot 的消息天然带提及，同样收。") }}</div>
+    </div>
+    <div class="dc-gm" id="dc-gm-all">
+      <div class="dc-gm-k">all<span class="dc-gm-live">{{ (i18n or {}).get('chc_dc_gm_current', "当前生效") }}</span></div>
+      <div class="dc-gm-d">{{ (i18n or {}).get('chc_dc_gm_all', "频道里所有人说话都收（只适合小客服服务器，慎开）。") }}</div>
+    </div>
+    <div class="dc-gm" id="dc-gm-off">
+      <div class="dc-gm-k">off<span class="dc-gm-live">{{ (i18n or {}).get('chc_dc_gm_current', "当前生效") }}</span></div>
+      <div class="dc-gm-d">{{ (i18n or {}).get('chc_dc_gm_off', "完全不收服务器频道，只做私聊客服。") }}</div>
+    </div>
+    <div class="dc-hint" id="dc-gm-hint">{{ (i18n or {}).get('chc_dc_gm_where', "档位在配置 platform_login.discord.guild_mode 里改；本页只读回显 worker 实况，Bot 未连接时读不到当前档位。") }}</div>
+  </div>
+
+  <div class="rpa-card">
+    <div class="rpa-card-head">
+      <div class="rpa-card-icon purple">🧹</div>
+      <div><div class="rpa-card-title">{{ (i18n or {}).get('chc_dc_in_title', "入站过滤与附件处理") }}</div></div>
+    </div>
+    <ul class="dc-facts">
+      <li>{{ (i18n or {}).get('chc_dc_in_self', "Bot 自己发出去的消息永不回收（出站已镜像过一次，再收一次就是重复 + 自问自答死循环）。") }}</li>
+      <li>{{ (i18n or {}).get('chc_dc_in_bots', "其他 Bot 的消息默认不收 —— 两个 Bot 互相触发自动回复是无限对轰，本仓最贵的事故形态。") }}</li>
+      <li>{{ (i18n or {}).get('chc_dc_in_dm', "1:1 私聊永远全收且天然算「点名」；群组私信按频道口径处理，不自动算点名（Bot 被拉进一个群聊不代表每句话都在跟它说）。") }}</li>
+      <li>{{ (i18n or {}).get('chc_dc_in_att_first', "一条 Discord 消息可挂 10 个附件，而收件箱一条消息只有一个媒体位 —— 只取首个，其余在运行日志留痕。") }}</li>
+      <li>{{ (i18n or {}).get('chc_dc_in_att_dl', "入站附件当场下载落本地静态目录：Discord CDN 链接 24 小时过期，只存链接的话坐席隔天点开就是死图。") }}</li>
+      <li>{{ (i18n or {}).get('chc_dc_in_att_cap', "超过 16MB 的附件只记类型不下载（防一条大视频把 Gateway 心跳拖死）；此时会话里仍能看到「对方发了张图/段视频」，不会落成空消息。") }}</li>
+    </ul>
+  </div>
+
+  <div class="rpa-card">
+    <div class="rpa-card-head">
+      <div class="rpa-card-icon green">📤</div>
+      <div>
+        <div class="rpa-card-title">{{ (i18n or {}).get('chc_dc_cap_title', "出站能力边界") }}</div>
+        <div style="font-size:.75rem;color:var(--t3);margin-top:.1rem">{{ (i18n or {}).get('chc_dc_cap_desc', "以 Discord worker 实际实现为准，不是能力愿望清单。") }}</div>
+      </div>
+    </div>
+    <div class="dc-cap">
+      <span class="dc-cap-flag yes">{{ (i18n or {}).get('chc_dc_cap_yes', "可用") }}</span>
+      <div><div class="dc-cap-name">{{ (i18n or {}).get('chc_dc_cap_text', "发文本") }}</div>
+        <div class="dc-cap-desc">{{ (i18n or {}).get('chc_dc_cap_text_d', "单条 2000 字符是平台硬上限；超长回复按空行 → 换行 → 句末 → 空格的优先级切分连发，不会把一句话拦腰砍断。") }}</div></div>
+    </div>
+    <div class="dc-cap">
+      <span class="dc-cap-flag yes">{{ (i18n or {}).get('chc_dc_cap_yes', "可用") }}</span>
+      <div><div class="dc-cap-name">{{ (i18n or {}).get('chc_dc_cap_media', "发图片 / 视频 / 文件") }}</div>
+        <div class="dc-cap-desc">{{ (i18n or {}).get('chc_dc_cap_media_d', "私聊上限 25MiB；服务器按加成等级读平台自己算好的上限，加成越高越大。超限在上传前就如实返回「文件太大」，不占带宽也不堵出站队列。") }}</div></div>
+    </div>
+    <div class="dc-cap">
+      <span class="dc-cap-flag yes">{{ (i18n or {}).get('chc_dc_cap_yes', "可用") }}</span>
+      <div><div class="dc-cap-name">{{ (i18n or {}).get('chc_dc_cap_voice', "发语音") }}</div>
+        <div class="dc-cap-desc">{{ (i18n or {}).get('chc_dc_cap_voice_d', "以音频文件附件形式发送（客户端可内联播放）—— Discord Bot 没有原生语音条 API，别按 Telegram 语音条的观感预期。") }}</div></div>
+    </div>
+    <div class="dc-cap">
+      <span class="dc-cap-flag yes">{{ (i18n or {}).get('chc_dc_cap_yes', "可用") }}</span>
+      <div><div class="dc-cap-name">{{ (i18n or {}).get('chc_dc_cap_reply', "引用回复") }}</div>
+        <div class="dc-cap-desc">{{ (i18n or {}).get('chc_dc_cap_reply_d', "只有首段带引用；被引用的原消息已被删除时自动降级为普通消息，不会整条发送失败。") }}</div></div>
+    </div>
+    <div class="dc-cap">
+      <span class="dc-cap-flag yes">{{ (i18n or {}).get('chc_dc_cap_yes', "可用") }}</span>
+      <div><div class="dc-cap-name">{{ (i18n or {}).get('chc_dc_cap_typing', "正在输入") }}</div>
+        <div class="dc-cap-desc">{{ (i18n or {}).get('chc_dc_cap_typing_d', "Discord 没有「正在录音」语义，发语音时同样显示为正在输入。") }}</div></div>
+    </div>
+    <div class="dc-cap">
+      <span class="dc-cap-flag no">{{ (i18n or {}).get('chc_dc_cap_no', "不可用") }}</span>
+      <div><div class="dc-cap-name">{{ (i18n or {}).get('chc_dc_cap_read', "已读回执") }}</div>
+        <div class="dc-cap-desc">{{ (i18n or {}).get('chc_dc_cap_read_d', "Discord 的已读态是用户端私有（read state），Bot 没有可写的 API —— 平台不给，不是我们没接。") }}</div></div>
+    </div>
+    <div class="dc-cap">
+      <span class="dc-cap-flag no">{{ (i18n or {}).get('chc_dc_cap_no', "不可用") }}</span>
+      <div><div class="dc-cap-name">{{ (i18n or {}).get('chc_dc_cap_proactive', "主动私聊陌生人") }}</div>
+        <div class="dc-cap-desc">{{ (i18n or {}).get('chc_dc_cap_proactive_d', "平台规则禁止，详见页首红条。会话只能由对方先开口建立。") }}</div></div>
+    </div>
+    <div class="dc-cap">
+      <span class="dc-cap-flag no">{{ (i18n or {}).get('chc_dc_cap_no', "不可用") }}</span>
+      <div><div class="dc-cap-name">{{ (i18n or {}).get('chc_dc_cap_recall', "撤回 / 表情回应") }}</div>
+        <div class="dc-cap-desc">{{ (i18n or {}).get('chc_dc_cap_recall_d', "Discord API 本身有，但本仓的 Discord worker 尚未实现对应方法，所以本页不提供入口（画了也点不动）。") }}</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════ TAB: 排障 ═════════════════════════════════ -->
+<div class="dc-pane" id="dc-pane-trouble">
+  <div class="rpa-card">
+    <div class="rpa-card-head">
+      <div class="rpa-card-icon red">🧯</div>
+      <div><div class="rpa-card-title">{{ (i18n or {}).get('chc_dc_tb_title', "常见报错对照") }}</div></div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="dc-tb">
+        <thead><tr>
+          <th style="width:34%">{{ (i18n or {}).get('chc_dc_th_symptom', "现象 / 报错") }}</th>
+          <th>{{ (i18n or {}).get('chc_dc_th_cause', "原因与处置") }}</th>
+        </tr></thead>
+        <tbody>
+          <tr><td><code>PrivilegedIntentsRequired</code></td><td>{{ (i18n or {}).get('chc_dc_tb_intents', "未开启 MESSAGE CONTENT INTENT。开发者后台 → 你的应用 → Bot → Privileged Gateway Intents 勾选后重试。") }}</td></tr>
+          <tr><td>{{ (i18n or {}).get('chc_dc_tb_empty_s', "连上了、消息也来了，但正文全是空的") }}</td><td>{{ (i18n or {}).get('chc_dc_tb_empty', "同样是 MESSAGE CONTENT INTENT 没开。请优先核对这一项，它比「连不上」更难被发现。") }}</td></tr>
+          <tr><td><code>LoginFailure</code></td><td>{{ (i18n or {}).get('chc_dc_tb_login', "Bot Token 无效或已被重置，到开发者后台重新生成后更新配置。") }}</td></tr>
+          <tr><td><code>403 / 50007</code></td><td>{{ (i18n or {}).get('chc_dc_tb_dm403', "无法私信该用户：需与 Bot 有共同服务器且对方允许服务器成员私信。引导对方先私信 Bot 或加入同一服务器，这不是故障。") }}</td></tr>
+          <tr><td>{{ (i18n or {}).get('chc_dc_tb_ch403_s', "403（业务码不是 50007）") }}</td><td>{{ (i18n or {}).get('chc_dc_tb_ch403', "Bot 在该频道没有发言权限：检查频道权限覆盖，或重新邀请 Bot 时勾选 Send Messages / Attach Files。别照「对方不让私信」的方向排查。") }}</td></tr>
+          <tr><td><code>413 / 40005</code></td><td>{{ (i18n or {}).get('chc_dc_tb_large', "文件超过该频道上传上限（服务器加成等级越高上限越大）。换小文件，或改发链接。") }}</td></tr>
+          <tr><td>{{ (i18n or {}).get('chc_dc_tb_dep_s', "接入时提示缺少 discord.py") }}</td><td>{{ (i18n or {}).get('chc_dc_tb_dep', "服务端未安装依赖：pip install -U discord.py，装好后重启实例。") }}</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   Discord 渠道页脚本。函数一律**顶层全局**（内联 on* 在全局作用域求值，
+   哑按钮门禁 tests/test_rpa_inline_handlers_exposed.py 按此判定可达性）。
+   全部为只读观测 + 既有通用端点，本页不新增后端契约。
+   ============================================================ */
+var DC_PLATFORM = 'discord';
+
+function dcEsc(s){
+  return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function dcSet(id, text){
+  var el = document.getElementById(id);
+  if(el) el.textContent = String(text==null?'—':text);
+}
+function dcHtml(id, html){
+  var el = document.getElementById(id);
+  if(el) el.innerHTML = html;
+}
+
+function dcSwitchTab(name){
+  ['connect','intake','trouble'].forEach(function(k){
+    var tab = document.getElementById('dc-tab-'+k);
+    var pane = document.getElementById('dc-pane-'+k);
+    if(tab) tab.classList.toggle('active', k === name);
+    if(pane) pane.classList.toggle('active', k === name);
+  });
+}
+
+/* ── worker 实况：GET /api/accounts/orchestrator 里 discord 行的 worker 段
+      （DiscordBotWorker.status() → bot_name/guilds/latency_ms/guild_mode/state）── */
+function dcApplyGuildMode(mode){
+  var known = ['mention','all','off'];
+  known.forEach(function(k){
+    var el = document.getElementById('dc-gm-'+k);
+    if(el) el.classList.toggle('is-live', k === mode);
+  });
+  dcSet('dc-kpi-gm', mode || window.T('chc_dc_js_gm_unknown'));
+}
+
+async function dcLoadRuntime(){
+  var rows = [];
+  try{
+    var r = await window.apiFetch('/api/accounts/orchestrator', {credentials:'same-origin'});
+    if(!r.ok) throw new Error('http '+r.status);
+    var d = await r.json();
+    rows = ((d && d.accounts) || []).filter(function(a){
+      return String(a.platform||'') === DC_PLATFORM;
+    });
+  }catch(_e){
+    dcSet('dc-sub', window.T('chc_dc_js_load_fail'));
+    dcApplyGuildMode('');
+    return [];
+  }
+  var live = rows.filter(function(a){ return a.state === 'running'; });
+  var guilds = 0, lat = 0, gm = '', name = '';
+  live.forEach(function(a){
+    var w = a.worker || {};
+    guilds += Number(w.guilds || 0);
+    lat = Math.max(lat, Number(w.latency_ms || 0));
+    if(!gm && w.guild_mode) gm = String(w.guild_mode);
+    if(!name && w.bot_name) name = String(w.bot_name);
+  });
+  var dot = document.getElementById('dc-dot');
+  if(dot) dot.className = 'dc-dot' + (live.length ? ' on' : (rows.length ? ' err' : ''));
+  dcSet('dc-name', name || (rows.length ? rows[0].account_id : window.T('chc_dc_js_no_acct')));
+  dcSet('dc-sub', live.length
+    ? window.Tf('chc_dc_js_hero_on', {n: live.length})
+    : (rows.length ? window.T('chc_dc_js_hero_off') : window.T('chc_dc_js_hero_none')));
+  dcSet('dc-kpi-guilds', rows.length ? String(guilds) : '—');
+  dcSet('dc-kpi-lat', lat > 0 ? (Math.round(lat) + ' ms') : '—');
+  dcApplyGuildMode(gm);
+  return rows;
+}
+
+/* ── 已接入的 Bot：注册表清单（/api/accounts）× 编排器实况 ── */
+function dcStateLabel(state){
+  if(state === 'running') return window.T('chc_dc_js_state_running');
+  if(state === 'error') return window.T('chc_dc_js_state_error');
+  if(state === 'starting' || state === 'stopping') return window.T('chc_dc_js_state_pending');
+  return window.T('chc_dc_js_state_stopped');
+}
+function dcStateBadge(state){
+  var cls = state === 'running' ? 'b-g' : (state === 'error' ? 'b-r' : 'b-n');
+  return '<span class="badge '+cls+'">'+dcEsc(dcStateLabel(state))+'</span>';
+}
+
+async function dcLoadAccounts(runtimeRows){
+  var accounts = [];
+  try{
+    var r = await window.apiFetch('/api/accounts', {credentials:'same-origin'});
+    if(!r.ok) throw new Error('http '+r.status);
+    var d = await r.json();
+    accounts = ((d && d.accounts) || []).filter(function(a){
+      return String(a.platform||'') === DC_PLATFORM;
+    });
+  }catch(_e){
+    dcHtml('dc-acct-body', '<tr><td colspan="5">'+dcEsc(window.T('chc_dc_js_load_fail'))+'</td></tr>');
+    return;
+  }
+  dcSet('dc-kpi-bots', String(accounts.length));
+  if(!accounts.length){
+    dcHtml('dc-acct-body', '<tr><td colspan="5">'+dcEsc(window.T('chc_dc_js_no_acct'))+'</td></tr>');
+    return;
+  }
+  var byId = {};
+  (runtimeRows || []).forEach(function(a){ byId[String(a.account_id||'')] = a; });
+  var html = accounts.map(function(a){
+    var aid = String(a.account_id || '');
+    var rt = byId[aid] || {};
+    var w = rt.worker || {};
+    var state = String(rt.state || (a.running ? 'running' : 'stopped'));
+    var label = String(a.label || w.bot_name || a.self_name || aid);
+    var err = String(rt.last_error || w.detail || '');
+    return '<tr>'
+      + '<td><div style="font-weight:600">'+dcEsc(label)+'</div>'
+      + '<div style="font-size:.72rem;color:var(--t3)">'+dcEsc(aid)+'</div></td>'
+      + '<td>'+dcStateBadge(state)
+      + (err ? '<div style="font-size:.72rem;color:var(--red);margin-top:.2rem">'+dcEsc(err)+'</div>' : '')
+      + '</td>'
+      + '<td>'+dcEsc(w.guilds != null ? String(w.guilds) : '—')+'</td>'
+      + '<td>'+dcEsc(w.latency_ms ? (Math.round(w.latency_ms)+' ms') : '—')+'</td>'
+      + '<td><button class="btn btn-s btn-xs" data-dc-acct="'+dcEsc(aid)+'" data-dc-op="start" onclick="dcAcctAction(this)">'+dcEsc(window.T('chc_dc_js_start'))+'</button> '
+      + '<button class="btn btn-s btn-xs" data-dc-acct="'+dcEsc(aid)+'" data-dc-op="restart" onclick="dcAcctAction(this)">'+dcEsc(window.T('chc_dc_js_restart'))+'</button> '
+      + '<button class="btn btn-s btn-xs" data-dc-acct="'+dcEsc(aid)+'" data-dc-op="stop" onclick="dcAcctAction(this)">'+dcEsc(window.T('chc_dc_js_stop'))+'</button></td>'
+      + '</tr>';
+  }).join('');
+  dcHtml('dc-acct-body', html);
+}
+
+async function dcAcctAction(btn){
+  if(!btn || btn.disabled) return;
+  var aid = btn.getAttribute('data-dc-acct') || '';
+  var op = btn.getAttribute('data-dc-op') || '';
+  if(!aid || !op) return;
+  btn.disabled = true;
+  try{
+    var r = await window.apiFetch(
+      '/api/accounts/'+encodeURIComponent(DC_PLATFORM)+'/'+encodeURIComponent(aid)+'/'+op,
+      {method:'POST', credentials:'same-origin'}, {timeoutMs: 60000});
+    var d = await r.json().catch(function(){ return {}; });
+    if(r.ok && d && d.ok !== false){
+      window.showToast(window.T('chc_dc_js_op_ok'), 'ok');
+    }else{
+      window.showToast(window.T('chc_dc_js_op_fail'), 'err');
+    }
+  }catch(_e){
+    window.showToast(window.T('chc_dc_js_op_fail'), 'err');
+  }
+  btn.disabled = false;
+  dcRefreshAll();
+}
+
+/* ── 接入就绪自检：GET /api/platforms/discord/modes（platform_readiness 同源）── */
+function dcBlockerText(b){
+  var code = String((b && b.code) || '');
+  if(code === 'not_enabled') return window.T('chc_dc_js_blk_not_enabled');
+  if(code === 'dep_missing') return window.T('chc_dc_js_blk_dep_missing');
+  if(code === 'creds_missing') return window.T('chc_dc_js_blk_creds_missing');
+  if(code === 'login_disabled') return window.T('chc_dc_js_blk_login_disabled');
+  if(code === 'orchestrator_off') return window.T('chc_dc_js_blk_orchestrator_off');
+  if(code === 'provider_unavailable') return window.T('chc_dc_js_blk_provider');
+  return window.Tf('chc_dc_js_blk_other', {code: code || '?'});
+}
+
+async function dcLoadReadiness(force){
+  var url = '/api/platforms/discord/modes' + (force ? '?recheck=1' : '');
+  var mode = null;
+  try{
+    var r = await window.apiFetch(url, {credentials:'same-origin'}, {timeoutMs: 30000});
+    if(!r.ok) throw new Error('http '+r.status);
+    var d = await r.json();
+    var modes = (d && d.modes) || [];
+    for(var i = 0; i < modes.length; i++){
+      if(String(modes[i].mode||'') === 'protocol'){ mode = modes[i]; break; }
+    }
+    if(!mode && modes.length) mode = modes[0];
+  }catch(_e){
+    dcHtml('dc-ready-body', '<div class="dc-blk block"><span class="dc-blk-ic">✕</span><span>'
+      + dcEsc(window.T('chc_dc_js_ready_fail')) + '</span></div>');
+    return;
+  }
+  if(!mode){
+    dcHtml('dc-ready-body', '<div class="dc-blk block"><span class="dc-blk-ic">✕</span><span>'
+      + dcEsc(window.T('chc_dc_js_ready_fail')) + '</span></div>');
+    return;
+  }
+  var blockers = mode.blockers || [];
+  if(!blockers.length){
+    dcHtml('dc-ready-body', '<div class="dc-blk ok"><span class="dc-blk-ic">✓</span><span>'
+      + dcEsc(window.T('chc_dc_js_ready_ok')) + '</span></div>');
+    return;
+  }
+  dcHtml('dc-ready-body', blockers.map(function(b){
+    var warn = String(b.severity||'') === 'warn';
+    return '<div class="dc-blk '+(warn ? 'warn' : 'block')+'">'
+      + '<span class="dc-blk-ic">'+(warn ? '!' : '✕')+'</span>'
+      + '<span>'+dcEsc(dcBlockerText(b))+'</span></div>';
+  }).join(''));
+}
+
+function dcRecheckReadiness(){ dcLoadReadiness(1); }
+
+async function dcRefreshAll(){
+  var rows = await dcLoadRuntime();
+  await dcLoadAccounts(rows);
+  await dcLoadReadiness(0);
+}
+
+dcRefreshAll();
+</script>

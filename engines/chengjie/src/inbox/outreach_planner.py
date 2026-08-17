@@ -21,6 +21,15 @@ from typing import Any, Dict, List, Optional
 _DEFAULT_PER_SEND_SECONDS = 8.0
 
 
+def _proactive_allowed(platform: str) -> bool:
+    """该平台是否允许系统主动私聊（取不到判据一律放行，不因内省失败清空名单）。"""
+    try:
+        from src.integrations.platform_capabilities import proactive_outreach_allowed
+        return bool(proactive_outreach_allowed(platform))
+    except Exception:  # noqa: BLE001
+        return True
+
+
 @dataclass
 class OutreachFilters:
     platform: str = ""               # 限定平台；空=全平台
@@ -100,6 +109,11 @@ class OutreachPlanner:
         out: List[OutreachTarget] = []
         for r in rows:
             cid = str(r.get("conversation_id") or "")
+            # 平台规则禁止主动私聊的（Discord Bot）不进圈选名单。批量触达是**运营
+            # 显式点确认**才真发的，圈进来只会得到一批 403 和一份看不懂的失败报表；
+            # 且这条链不走 deferred 队列，队列那道闸拦不到它。
+            if not _proactive_allowed(str(r.get("platform") or "")):
+                continue
             last_ts = float(r.get("last_ts") or 0)
             if min_cut is not None and last_ts > min_cut:
                 continue   # 还不够沉默

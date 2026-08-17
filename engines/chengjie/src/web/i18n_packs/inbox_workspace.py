@@ -391,6 +391,19 @@ ZH = {
     "ws.aitrial.up_copied": "绑定码已复制，请发给客服",
     "inbox.connect.back_mode": "← 换方式",
     "inbox.connect.back_prev": "← 上一步",
+    # 凭据式接入（服务端 API 凭据，如 Discord Bot Token）。契约见
+    # platform_login.py::CREDENTIAL_MODE_HINT —— 这组键是通用的，别写成 Discord 专用。
+    "inbox.connect.cred_submit": "连接",
+    "inbox.connect.cred_need": "请先填入凭据",
+    "inbox.connect.cred_ph_optional": "留空则沿用服务端已配置的凭据",
+    "inbox.connect.cred_verifying": "正在校验凭据…",
+    "inbox.connect.cred_st_verifying": "校验中",
+    "inbox.connect.cred_hint_verifying": "正在用这份凭据连接平台，通常几秒内完成。",
+    "inbox.connect.cred_retry": "重试",
+    "inbox.connect.cred_l_bot_token": "Bot Token",
+    "inbox.connect.cred_h_discord":
+        "在 Discord 开发者后台 → 你的应用 → Bot → Reset Token 复制整串；"
+        "同一页必须打开 MESSAGE CONTENT INTENT，否则 Bot 收得到消息事件却读不到正文。",
     "inbox.connect.connect_t": "接入 {plat}",
     "inbox.connect.hint": "请用手机 App 扫描上方二维码完成登录。",
     "inbox.connect.hint_expired": "点击「刷新二维码」重新获取。",
@@ -475,6 +488,7 @@ ZH = {
     "inbox.connect.cap_need_device": "需手机设备",
     "inbox.connect.cap_server": "服务器端完成",
     "inbox.connect.cap_need_ops": "需运维配置",
+    "inbox.connect.cap_official": "官方接口",
     # ── 不可用方式的解释卡（点击灰色选项后展开：为什么 / 要做什么 / 现在怎么办）──
     "inbox.connect.unavail_title": "这个方式暂时不能用",
     "inbox.connect.unavail_why_t": "为什么",
@@ -971,6 +985,7 @@ ZH = {
     "inbox.plat.online": "平台已连接",
     "inbox.plat.telegram_desc": "MTProto 直连 · 收发文本/图片/语音 · 实时翻译",
     "inbox.plat.web_desc": "网站访客渠道 · 实时会话 · 引流转化",
+    "inbox.plat.discord_desc": "官方 Bot 接入 · 只能被动接待（不能主动私聊陌生人）· 服务器频道 + 私信",
     "inbox.plat.whatsapp_desc": "Web 扫码接入 · 支持多账号 · 媒体收发",
     "inbox.plat_pause.capped": "自动化档位已被平台上限限制",
     "inbox.plat_pause.manual": "AI 拟稿已暂停，仅人工回复",
@@ -1873,6 +1888,18 @@ EN = {
     "ws.aitrial.up_copied": "Bind code copied — send it to support",
     "inbox.connect.back_mode": "← Change method",
     "inbox.connect.back_prev": "← Back",
+    "inbox.connect.cred_submit": "Connect",
+    "inbox.connect.cred_need": "Enter the credential first",
+    "inbox.connect.cred_ph_optional": "Leave blank to use the credential already configured on the server",
+    "inbox.connect.cred_verifying": "Verifying credential…",
+    "inbox.connect.cred_st_verifying": "Verifying",
+    "inbox.connect.cred_hint_verifying": "Connecting to the platform with this credential; usually takes a few seconds.",
+    "inbox.connect.cred_retry": "Retry",
+    "inbox.connect.cred_l_bot_token": "Bot Token",
+    "inbox.connect.cred_h_discord":
+        "Discord Developer Portal → your application → Bot → Reset Token, then copy the whole string. "
+        "You must also enable MESSAGE CONTENT INTENT on that page, otherwise the bot receives message "
+        "events but cannot read their text.",
     "inbox.connect.connect_t": "Connect {plat}",
     "inbox.connect.hint": "Scan the QR code above with your phone app to log in.",
     "inbox.connect.hint_expired": "Click “Refresh QR code” to get a new one.",
@@ -1956,6 +1983,7 @@ EN = {
     "inbox.connect.cap_need_device": "Phone required",
     "inbox.connect.cap_server": "Done on the server",
     "inbox.connect.cap_need_ops": "Ops setup required",
+    "inbox.connect.cap_official": "Official API",
     # ── Explanation card for unavailable methods ──
     "inbox.connect.unavail_title": "This method isn’t available yet",
     "inbox.connect.unavail_why_t": "Why",
@@ -2452,6 +2480,7 @@ EN = {
     "inbox.plat.online": "Platform connected",
     "inbox.plat.telegram_desc": "MTProto direct · text/image/voice · live translation",
     "inbox.plat.web_desc": "Website visitor channel · live chat · conversion",
+    "inbox.plat.discord_desc": "Official Bot · inbound only (no unsolicited DMs) · server channels + DMs",
     "inbox.plat.whatsapp_desc": "QR web login · multi-account · media send/receive",
     "inbox.plat_pause.capped": "Automation level capped by platform ceiling",
     "inbox.plat_pause.manual": "AI drafting paused; manual replies only",

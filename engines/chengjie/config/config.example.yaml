@@ -2528,6 +2528,27 @@ translation:
       keep_alive: "30m"              # Ollama 侧模型常驻时长（防频繁冷启动）
       max_tokens: 1024
       # temperature: 0.7             # 缺省不传 → 沿用模型 Modelfile 官方推荐采样
+      # MT 模型契约档：决定 prompt 格式 / 调用模式 / 语种白名单 / 语种命名。
+      #   hunyuan_mt（默认）= 腾讯 Hunyuan-MT：指令式 prompt，走 chat 口，33 语
+      #   milmmt46           = 小米 MiLMMT-46：补全式 prompt，走 completions 口，46 语
+      # ⚠ 换 model 必须同时换 profile。喂错档不会报错，只会让模型无视输入胡乱输出
+      # （实测：MiLMMT 被喂 Hunyuan prompt 时把「我爱机器翻译」答成客服套话）。
+      # 两者语种集不是包含关系：milmmt46 多 az/bg/ca/da/el/fi/hr/hu/kk/lo/nb/ro/
+      # sk/sl/sv/uz/zht，少 te/mr/gu/uk——换档前先确认自己用不用得上那四种。
+      profile: "hunyuan_mt"
+    # 第二个本地 MT 实例（可选，默认不配 = 行为不变）：order 里的未知名，只要其
+    # 同名配置块声明 type: ollama_mt，就按该块再装一台本地 MT，引擎名即该键。
+    # 典型用途是**补位而非替换**：主力模型不收的语种，与其漏到付费云端，不如让
+    # 一个覆盖更广的小模型在本地接住（2026-08-03 实测 MiLMMT-46-4B 与 HY-MT2-7B
+    # 质量实质等价，显存 2.68 vs 4.91 GB、p90 延迟低 34%，但少 te/mr/gu/uk 四语，
+    # 故当补位层比整体替换划算）。router 按各自 supports_target 天然顺移。
+    # order: ["ollama_mt", "milmmt", "ai"]
+    # milmmt:
+    #   type: "ollama_mt"
+    #   base_url: "http://192.168.0.176:11434"
+    #   model: "hf.co/mradermacher/MiLMMT-46-4B-v0.1-GGUF:Q4_K_M"
+    #   profile: "milmmt46"
+    #   timeout_sec: 20
     # 按目标语引擎覆写（可选）：评测证实某引擎在特定语对显著弱时，把该语对重排到
     # 强引擎优先；其余语种不受影响。只能重排 order 里已有的引擎（未知名忽略），
     # 覆写之外的引擎按默认序附加兜底。例：7B 本地 MT 的 hi 明显弱于 LLM →
@@ -2586,7 +2607,11 @@ ecommerce_tools:
   # shopify:                         # provider=shopify 时填（缺 shop/token 自动回落 mock）
   #   shop: "your-store.myshopify.com"
   #   access_token: "shpat_xxx"
-  #   api_version: "2024-01"
+  #   # api_version 刻意不在这里给示例值：Shopify 版本每季度发布、只支持 12 个月，
+  #   # 写死在示例里的值几个月后就成了「推荐运维去踩的坑」（本文件曾示例 2024-01，
+  #   # 那个版本 2025-01-16 就到期了）。不填即用代码里的 SSOT
+  #   # （shopify_connector.DEFAULT_API_VERSION），随版本升级自动跟进。
+  #   # 确有理由钉住某版才填，届时启动日志会在它临期/过期时告警。
 
 contacts:
   enabled: false                     # 总开关
@@ -2761,6 +2786,40 @@ platform_login:
       groups: false
       inbound_max_bytes: 20971520   # 20MB：自报超限不下载；自报缺失则下完超限即丢
       outbound_max_bytes: 20971520  # 20MB
+  # ── Discord 官方 Bot（2026-08-02 新增）──────────────────────────────────────
+  # ⚠ 与上面几个平台**性质不同**，接之前先读这三条，否则一定会误用：
+  # 1) 没有扫码、也没有「用户号协议登录」这条合法路径（self-bot 违反 ToS 且封号）。
+  #    这里的「登录」＝填 Bot Token（开发者后台 → Bot → Reset Token）后校验落库。
+  # 2) **Bot 不能主动私聊陌生人**：只有对方与 Bot 有共同服务器且允许服务器成员私信、
+  #    或对方先私信过 Bot，才能开 DM，否则 403(50007)。所以 Discord 只做**被动接待**，
+  #    已从主动触达候选中排除（见 docs/平台能力矩阵.md 的「平台级硬边界」）。
+  # 3) 必须在开发者后台勾 **MESSAGE CONTENT INTENT**，否则收到的消息内容全是空串
+  #    （比连不上更难查）——本仓选择在连接期硬失败并给出照做的一句话。
+  # 依赖：pip install -U discord.py；orchestrator_enabled=true 才会被拉起。
+  discord:
+    bot_enabled: false
+    # 🔒 Bot Token 等价密码。建议**留空**、改用「账号管理」里逐号填（落注册表 meta，
+    # 随实例数据走，日志一律掩码）；填在这里则所有 Discord 账号共用同一个 Bot。
+    bot_token: ""
+    # 服务器频道的入站档位（私聊永远全收，这里只管频道）：
+    #   mention = 只收「在叫我们」的（默认）——Bot 被拉进上千人服务器时，「全收」会把
+    #             统一收件箱瞬间冲垮、把 SLA 看板变成噪音源。
+    #             判据含三种：@Bot 本身 / @Bot 所属的身份组（社群里 `@客服` 才是常态）/
+    #             回复 Bot 的消息。**不含** @everyone、@here（那是广播不是召唤，
+    #             认了等于每次全员通知都灌一条进收件箱）；
+    #   all     = 频道里所有人说话都收（小客服服务器可用，慎开）；
+    #   off     = 完全不做频道，只当私聊客服用。
+    guild_mode: mention
+    # 其他 Bot 发的消息默认不收：两个 Bot 互相触发自动回复＝无限对轰。
+    ignore_bots: true
+    # 入站附件当场下载落 /static（Discord CDN 链接 24h 过期，只存链接的话坐席隔天
+    # 点开就是死图）。关掉则只保留文字，媒体对 AI 不可见。
+    download_media: true
+    max_media_bytes: 16777216   # 16MB：入站超限只记类型不下载，防大视频卡住 Gateway 心跳
+    connect_timeout: 45         # 秒；冷启动含 Gateway 握手 + intent 校验
+    # 出站上传上限刻意**不做成配置项**：Discord 自己按服务器加成等级给出
+    # `guild.filesize_limit`（免费 25MB / 加成后 50/100MB），代码直接取它，
+    # 私聊回落 25MB。写死在配置里只会让加成过的服务器白白发不了大文件。
   # 官方 API 出站 worker（mode=official）：让 companion/autoreply 主管道经官方通道发
   # （LINE Messaging / Messenger Send / WhatsApp Cloud），与 RPA/Baileys 按账号并存。
   # 凭证优先读账号 meta，回退到对应通道块（line / facebook_messenger / whatsapp_cloud）。
@@ -3058,6 +3117,16 @@ health_watchdog:
     min_age_hours: 24                 # 稿龄超过此值才算「积压」
     min_count: 3                      # 超龄条数达此值才告警（避免把日常波动当事故）
     interval_min: 240                 # 重提间隔（4h）；队列清空自动补发恢复通知
+  # 外部 API 版本临期提醒（默认开；2026-08-03 v19.0 事故沉淀）：Meta Graph /
+  # Shopify Admin 这类版本有**供应商公布的死期**，过期后 Meta 报 4xx、Shopify 更阴——
+  # 不报错、静默改用别的版本（破坏性变更被悄悄应用，日志里什么都看不到）。
+  # CI 门禁（tests/test_external_api_lifecycle.py）只在有人提交代码时跑，而这类失效是
+  # **日历驱动**的，故这里按日历盯一遍。健康时零输出零 IO（纯日期运算）；只在
+  # 「剩 <60 天 / 已过期 / 版本号不在官方表里」时出声，warn 档留给看板不轰人。
+  api_version_expiry:
+    enabled: true
+    check_interval_sec: 43200         # 12h 巡一次（60 天窗口下足够）
+    remind_sec: 86400                 # 重提间隔（24h）；恢复后自动补发恢复通知
   # CSRF 写请求拦截激增提醒（默认开；2026-07 人设切换事故沉淀）：中间件 403 已进
   # csrf_stats 看板，但看板要有人开才有用——cookie_no_header 激增＝某前端宿主写通道
   # 断裂（功能事故）；origin/referer_mismatch/bare 激增＝反代漂移或跨站探测（安全信号）。
@@ -3082,6 +3151,19 @@ health_watchdog:
     enabled: true
     min_retracted: 3                  # 累计净撤回（撤回−兑现）达此数才首提
     interval_min: 240                 # 之后的重提间隔（4h）
+  # 出站投递不健康（默认开）：看「发出去了吗」——infra（超时/网络/no_worker）/
+  # blocked（Kill-Switch/send_gate 激增）/ stuck_queue（RPA queued 涨而 attempts 不动）。
+  # 刻意**不**把 Discord forbidden / 24h 窗口过期 / peer_invalid 当故障轰人（那是业务
+  # 信号，混进阈值会让运维学会无视告警）。判据见 outbound_delivery_health.diagnose；
+  # 订阅别名 outbound_delivery（受众目录归 business）。
+  outbound_delivery_remind:
+    enabled: true
+    window_min: 30                    # 滚动观察窗（分钟）
+    interval_min: 240                 # 重提间隔（4h）；窗内归零补发恢复通知
+    min_infra: 5                      # 基础设施类失败绝对数门槛
+    min_infra_rate: 0.25              # 且失败率 ≥ 此值才报（两条件同时满足）
+    min_blocked: 10                   # 闸门拦截激增门槛
+    min_queued_stuck: 5               # queued 增量门槛（且同平台 attempts 增量=0）
   # 口语化 LLM 持续连败升级提醒（2026-07-15 九连败静默事故，默认开）：本地口语化端点
   # 挂掉只会「60s 熔断-重试」无限循环，语音口语化静默降级规则档（活人感 A 档失效）。
   # fail_streak 连败且最近失败在 fresh_min 内、持续 after_min → 首提（colloquial_llm_alert），

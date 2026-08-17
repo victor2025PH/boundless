@@ -40,10 +40,16 @@ from typing import Any, Dict, Optional
 import aiohttp
 from fastapi import FastAPI, Query, Request, Response
 
+from src.integrations import meta_graph_version
+from src.integrations.shared.outbound_delivery_stats import meter_send
+
 logger = logging.getLogger(__name__)
 
-GRAPH_API_VERSION = "v21.0"
-GRAPH_BASE = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
+# 原先独立钉 v21.0（死期 2027-01-21），与 Messenger 侧的 v25.0 各走各的。收口到
+# meta_graph_version 后随默认版本走；本文件用到的只有 /messages 与 /media 两个
+# 端点，跨版本契约稳定。真要与其他产品错开，改 PRODUCT_VERSIONS["whatsapp"]。
+GRAPH_API_VERSION = meta_graph_version.version_for("whatsapp")
+GRAPH_BASE = meta_graph_version.graph_base("whatsapp")
 WA_TEXT_MAX = 4000  # 官方上限 4096，留余量给 emoji 编码膨胀
 
 
@@ -90,6 +96,7 @@ def verify_wa_signature(body: bytes, signature_header: str, app_secret: str) -> 
     return hmac.compare_digest(expected, sig[len("sha256="):])
 
 
+@meter_send("whatsapp", kind="text")
 async def wa_send_text(
     to: str,
     text: str,
@@ -227,6 +234,7 @@ async def wa_upload_media(
         return {"ok": False, "error": str(e), "error_kind": "network"}
 
 
+@meter_send("whatsapp", kind="media")
 async def wa_send_media(
     to: str,
     media_path: str,

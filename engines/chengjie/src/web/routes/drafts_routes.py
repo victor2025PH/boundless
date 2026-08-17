@@ -1230,6 +1230,15 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # 出站投递三态（编排器漏斗；含成功分母 → 看板出失败率而非裸失败数）
+        try:
+            from src.integrations.shared.outbound_delivery_stats import (
+                get_outbound_delivery_stats,
+            )
+            metrics["outbound_delivery"] = get_outbound_delivery_stats().dump()
+        except Exception:
+            pass
+
         # CSRF 写请求拒绝观测（中间件 403 计数；kind=cookie_no_header 即「宿主缺
         # fetch 补丁/客户端未带凭证」签名——2026-07-31 人设切换事故的形态）
         try:
@@ -1540,6 +1549,15 @@ def register_metrics_route(app, *, api_auth):
             try:
                 from src.web.frontend_error_stats import get_frontend_error_stats
                 buf.write(get_frontend_error_stats().dump_prom())
+            except Exception:
+                pass
+
+            # 出站投递三态 + 失败原因（counter；进程重启归零由 Prom 的 reset 检测兜住）
+            try:
+                from src.integrations.shared.outbound_delivery_stats import (
+                    get_outbound_delivery_stats,
+                )
+                buf.write(get_outbound_delivery_stats().dump_prom())
             except Exception:
                 pass
 

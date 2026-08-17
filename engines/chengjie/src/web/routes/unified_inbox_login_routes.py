@@ -118,6 +118,11 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
             _ln_reg(cfg)
         except Exception:
             logger.debug("注册 line protocol provider 失败", exc_info=True)
+        try:
+            from src.integrations.discord_bot_login import maybe_register as _dc_reg
+            _dc_reg(cfg)
+        except Exception:
+            logger.debug("注册 discord bot provider 失败", exc_info=True)
 
     def _persist_login_account(platform: str, account_id: str, sess: Any) -> None:
         """登录成功后把账号 + mode + 代理 + 指纹 + 备注落库，并把代理标记为已分配。"""
@@ -245,6 +250,21 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                 login_ctx["fingerprint"] = fp["profile"]
             except Exception:
                 logger.debug("生成指纹失败", exc_info=True)
+        # 凭据式接入（如 Discord Bot Token）：无二维码，凭据随 start 请求带上；不带则由
+        # provider 回落配置里那份。字段名取自 mode 自己声明的 credential 契约，**不硬编码
+        # 平台名**——再来一个 Token 型平台只需在 PLATFORM_MODE_OVERRIDES 加声明，这里不动。
+        # 只认声明过的那一个键 = 天然白名单：请求体里的任何其他字段都进不了 provider ctx。
+        # 绝不落日志（provider 侧统一掩码后才允许出现在任何输出里）。
+        _cred = {}
+        for _m in modes:
+            if str(_m.get("mode") or "") == mode:
+                _cred = _m.get("credential") or {}
+                break
+        _cred_field = str(_cred.get("field") or "")
+        if _cred_field:
+            _val = str((body or {}).get(_cred_field) or "").strip()
+            if _val:
+                login_ctx[_cred_field] = _val
 
         qr_url = qr_image = instruction = prov_reason = ""
         poll_fn = cancel_fn = submit_fn = provider_state = None

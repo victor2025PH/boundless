@@ -10,6 +10,12 @@ Meta Page Token）。那是给有开发团队的企业用的集成路径，要�
 - setup.ch.path_*   两条接入路径的标题/说明/按钮
 - setup.ch.badge_*  渠道卡右上角状态（按「能不能收发消息」而非「yaml 填没填」）
 - setup.ch.prog     顶部进度条口径
+- setup.ch.discord_* Discord Bot 接入的渠道文案（``channel_setup.Channel.intro_key`` /
+  ``api_intro_key`` / ``Field.help_key`` 指过来；中文仍是 channel_setup 里的兜底原文）
+
+⚠ 已知缺口（**不是** Discord 独有）：向导模板当前把后端返回的 ``intro`` / ``help``
+字符串 verbatim 直显，还没有走 ``*_key`` 取译文，所以英文用户在渠道卡上看到的是
+中文。键先备齐，模板侧接上即生效。
 """
 
 ZH = {
@@ -27,6 +33,12 @@ ZH = {
     "setup.ch.enable_cta": "立即启用",
     "setup.ch.prog": "能收发消息的渠道 {r} / {t}",
     "setup.ch.prog_hint": "按「现在能不能收发消息」统计：登录了账号，或官方接入凭据已就绪。",
+    # Discord：只有「官方 Bot Token」一条真实路径；硬限制口径与
+    # platform_capabilities.PLATFORM_HARD_LIMITS 一致，别在向导里暗示能主动触达。
+    "setup.ch.discord_intro": "用一个官方 Bot Token 接入。注意：Bot 只能被动接待——对方需与 Bot 有共同服务器（且其隐私设置允许服务器成员私信）、或先私信过 Bot，才能建立会话；不能主动私聊陌生人。",
+    "setup.ch.discord_api_intro": "Token 在 Discord 开发者后台 → Applications → 你的应用 → Bot → Reset Token 取；同页必须开启 MESSAGE CONTENT INTENT，否则 Bot 收得到事件却读不到消息正文（最高频的踩坑）。",
+    "setup.ch.discord_token_help": "Discord 开发者后台 → Applications → 你的应用 → Bot → Reset Token；同页开启 MESSAGE CONTENT INTENT",
+    "setup.ch.discord_limit": "平台硬限制：Bot 不能主动私聊陌生人，否则 API 返回 403(50007)。Discord 因此只做被动接待，已从主动触达的候选平台中排除。",
 }
 
 EN = {
@@ -44,4 +56,8 @@ EN = {
     "setup.ch.enable_cta": "Enable now",
     "setup.ch.prog": "Channels that can send & receive: {r} / {t}",
     "setup.ch.prog_hint": "Counted by what actually works: an account is logged in, or official API credentials are ready.",
+    "setup.ch.discord_intro": "Connect with one official Bot Token. Note: the bot can only receive — a person must share a server with the bot (and allow DMs from server members), or DM the bot first, before a conversation can start. It cannot DM strangers.",
+    "setup.ch.discord_api_intro": "Get the token from the Discord developer portal → Applications → your app → Bot → Reset Token. You must also enable MESSAGE CONTENT INTENT on that same page, otherwise the bot receives events but cannot read message text (the most common pitfall).",
+    "setup.ch.discord_token_help": "Discord developer portal → Applications → your app → Bot → Reset Token; enable MESSAGE CONTENT INTENT on the same page",
+    "setup.ch.discord_limit": "Platform hard limit: a bot cannot DM strangers — the API returns 403 (50007). Discord is therefore inbound-only and is excluded from proactive outreach.",
 }

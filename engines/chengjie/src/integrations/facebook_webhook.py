@@ -37,11 +37,15 @@ from typing import Any, Dict, Optional
 import aiohttp
 from fastapi import FastAPI, Query, Request, Response
 
+from src.integrations import meta_graph_version
+from src.integrations.shared.outbound_delivery_stats import claim_send, meter_send
+
 logger = logging.getLogger(__name__)
 
-# Graph API 默认版本（v25 是 2026-Q1 的稳定版）
-GRAPH_API_VERSION = "v25.0"
-GRAPH_BASE = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
+# Graph API 版本收口到 meta_graph_version（含官方死期表 + 到期门禁）。
+# instagram_webhook 复用下面的 GRAPH_BASE，故 IG 与 Messenger 天然同版本。
+GRAPH_API_VERSION = meta_graph_version.version_for("messenger")
+GRAPH_BASE = meta_graph_version.graph_base("messenger")
 SEND_API_URL = f"{GRAPH_BASE}/me/messages"
 FB_TEXT_MAX = 1900  # 实际限 2000 字符，留余量给 emoji 编码膨胀
 
@@ -70,6 +74,7 @@ def verify_fb_signature(body: bytes, signature_header: str, app_secret: str) -> 
     return hmac.compare_digest(expected, provided)
 
 
+@meter_send("messenger", kind="text")
 async def fb_send_message(
     psid: str,
     text: str,
@@ -137,6 +142,7 @@ async def fb_send_message(
         return {"ok": False, "error": str(e)}
 
 
+@meter_send("messenger", kind="text")
 async def fb_send_with_window_fallback(
     psid: str,
     text: str,
@@ -146,27 +152,34 @@ async def fb_send_with_window_fallback(
     account_id: str = "default",
 ) -> Dict[str, Any]:
     """优先用 RESPONSE 发；若返回 24h window 错误（10:2534022），
-    自动降级用 MESSAGE_TAG=fallback_tag 重发。``account_id`` 透传给 Kill-Switch 账号级作用域。"""
-    out = await fb_send_message(
-        psid, text, page_access_token, messaging_type="RESPONSE",
-        account_id=account_id,
-    )
-    if out.get("ok"):
-        return out
-    err = str(out.get("error") or "")
-    if "2534022" in err or "outside of allowed window" in err.lower():
-        logger.info("FB 24h 窗口已关闭，降级 tag=%s 重发", fallback_tag)
-        return await fb_send_message(
-            psid,
-            text,
-            page_access_token,
-            messaging_type="MESSAGE_TAG",
-            message_tag=fallback_tag,
+    自动降级用 MESSAGE_TAG=fallback_tag 重发。``account_id`` 透传给 Kill-Switch 账号级作用域。
+
+    记账在**本层**占坑：里面的两次 ``fb_send_message`` 是同一条逻辑消息的
+    「先试 RESPONSE、窗口关了再挂 tag」，逐次计会让看板出现一条 failed + 一条
+    sent，把 24h 窗口降级这个**正常路径**记成失败率。
+    """
+    with claim_send():
+        out = await fb_send_message(
+            psid, text, page_access_token, messaging_type="RESPONSE",
             account_id=account_id,
         )
+        if out.get("ok"):
+            return out
+        err = str(out.get("error") or "")
+        if "2534022" in err or "outside of allowed window" in err.lower():
+            logger.info("FB 24h 窗口已关闭，降级 tag=%s 重发", fallback_tag)
+            return await fb_send_message(
+                psid,
+                text,
+                page_access_token,
+                messaging_type="MESSAGE_TAG",
+                message_tag=fallback_tag,
+                account_id=account_id,
+            )
     return out
 
 
+@meter_send("messenger", kind="media")
 async def fb_send_attachment(
     psid: str,
     media_url: str,
@@ -242,6 +255,7 @@ def _fb_attachment_type(media_type: str) -> str:
             "video": "video"}.get(str(media_type or "").lower(), "file")
 
 
+@meter_send("messenger", kind="media")
 async def fb_send_attachment_upload(
     psid: str,
     media_path: str,

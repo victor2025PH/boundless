@@ -38,7 +38,7 @@ HOLD_STATES = frozenset({"password_needed", "pin_needed"})
 # 会话再留着也不可能走到 authorized。
 HOLD_MAX_SEC = 600
 
-SUPPORTED_PLATFORMS = ("telegram", "line", "whatsapp", "messenger", "web")
+SUPPORTED_PLATFORMS = ("telegram", "line", "whatsapp", "messenger", "discord", "web")
 
 # 登录方式（mode）：协议多开 / 网页隔离 / 真机RPA
 MODES = ("protocol", "web", "device")
@@ -95,7 +95,47 @@ PLATFORM_MODE_OVERRIDES: Dict[str, Dict[str, Dict[str, Any]]] = {
             "unavailable_reason_code": REASON_NEEDS_SERVER_SETUP,
         },
     },
+    # Discord 复用 protocol 这条 mode 通道（编排器/前端无需认识新 mode），但语义完全
+    # 不同：不是「协议多开」而是**官方 Bot 应用**——填 Token 而非扫码，且能力上限由
+    # 平台规则封顶（不能主动私聊陌生人）。文案必须改写，否则运营会按「协议号」的心智
+    # 去用，第一件事就是主动群发，然后收获一屏 403。
+    "discord": {
+        "protocol": {
+            "label": "官方 Bot 接入",
+            "desc": "填入 Discord Bot Token 接入（需在开发者后台开启 MESSAGE CONTENT "
+                    "INTENT）。Bot 只能被动接待：对方需与 Bot 有共同服务器或先主动私信。",
+            "caps": ("official", "light"),
+            "credential": {
+                "field": "bot_token",
+                "label": "Bot Token",
+                "label_key": "inbox.connect.cred_l_bot_token",
+                "help": "Discord 开发者后台 → 你的应用 → Bot → Reset Token 复制整串；"
+                        "同页需开启 MESSAGE CONTENT INTENT，否则 Bot 收不到消息正文。",
+                "help_key": "inbox.connect.cred_h_discord",
+                "secret": True,
+                "optional_if_configured": True,
+            },
+        },
+    },
 }
+
+# ``credential`` 的语义（前端按它通用渲染，勿写成 if platform==='discord'）：
+#
+# 该 mode 不是「把一个人的账号连进来」，而是**服务端 API 凭据接入**。三条推论对前端
+# 是硬约束，都由这一个字段推出，不再另设开关：
+#
+# 1. **没有二维码**——接入是一次同步校验（打平台 API 验 token），没有「等手机扫」的
+#    等待期。前端必须隐藏码位与「刷新二维码」，否则坐席对着一个永不出现的码干等
+#    （Messenger 那次的同类事故，见上面 PLATFORM_MODE_OVERRIDES 的注释）。
+# 2. **没有防关联配置**——代理/指纹是给「一号一 IP、伪装成真人设备」用的；Bot 走官方
+#    API、身份就是明牌，摆出这两栏等于让运营配一堆**代码根本不读**的东西。
+# 3. **凭据即身份**——``field`` 是随 ``login/start`` 上送的请求体键名（后端白名单接收），
+#    ``secret`` 决定输入框类型与「绝不回显」；``optional_if_configured`` 表示配置里已有
+#    同名凭据时可留空沿用（前端据此决定要不要拦「必填」）。
+#
+# 反过来说：**扫码/账密类 mode 一律不要声明 credential**，否则会被前端当成 API 凭据接入
+# 而把二维码藏掉。
+CREDENTIAL_MODE_HINT = "credential"
 
 # 每平台默认可选方式与默认方式（可被 config.platform_login.<platform> 覆盖）
 DEFAULT_PLATFORM_MODES: Dict[str, Dict[str, Any]] = {
@@ -103,6 +143,7 @@ DEFAULT_PLATFORM_MODES: Dict[str, Dict[str, Any]] = {
     "whatsapp": {"modes": ["protocol", "web", "device"], "default": "protocol"},
     "line": {"modes": ["protocol", "device"], "default": "protocol"},
     "messenger": {"modes": ["web", "device"], "default": "web"},
+    "discord": {"modes": ["protocol"], "default": "protocol"},
     "web": {"modes": [], "default": ""},
 }
 
@@ -122,6 +163,11 @@ PLATFORM_INSTRUCTIONS: Dict[str, str] = {
     ),
     "messenger": (
         "在设备 / 投屏端完成 Facebook 账号登录授权；成功后本窗口会自动确认。"
+    ),
+    "discord": (
+        "Discord 无二维码登录：在开发者后台（discord.com/developers）建应用 → Bot → "
+        "开启 MESSAGE CONTENT INTENT → Reset Token 复制，填入配置 "
+        "platform_login.discord.bot_token，再点接入即可校验上线。"
     ),
     "web": "网页客服为服务端原生渠道，无需扫码登录。",
 }
@@ -391,6 +437,9 @@ def list_modes(
             "preferred": bool(avail and m == default),
             "reason_code": rc,
             "reason": REASON_TEXTS.get(rc, "") if rc else "",
+            # 凭据式接入契约（见 CREDENTIAL_MODE_HINT 处的长注释）。非凭据式恒为 {}，
+            # 前端据「空/非空」二分渲染：空=扫码流，非空=表单流（无码、无防关联配置）。
+            "credential": dict(ov.get("credential") or {}),
         })
     return out
 

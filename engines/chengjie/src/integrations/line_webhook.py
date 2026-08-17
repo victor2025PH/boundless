@@ -16,6 +16,8 @@ from typing import Any, Dict
 import aiohttp
 from fastapi import FastAPI, Request, Response
 
+from src.integrations.shared.outbound_delivery_stats import meter_send
+
 logger = logging.getLogger(__name__)
 
 LINE_REPLY_URL = "https://api.line.me/v2/bot/message/reply"
@@ -52,6 +54,7 @@ def _line_kill_switch_blocked(account_id: str) -> bool:
         return False
 
 
+@meter_send("line", kind="text", shape="bool")
 async def line_reply(
     reply_token: str, text: str, access_token: str,
     *, account_id: str = "default", check_kill_switch: bool = True,
@@ -88,6 +91,7 @@ async def line_reply(
     return True
 
 
+@meter_send("line", kind="text", shape="bool")
 async def line_push(
     to: str, text: str, access_token: str, *, notification_disabled: bool = False,
     account_id: str = "default", check_kill_switch: bool = True,
@@ -126,6 +130,7 @@ async def line_push(
     return True
 
 
+@meter_send("line", kind="media", shape="bool")
 async def line_push_media(
     to: str,
     media_url: str,

@@ -28,6 +28,10 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from src.integrations.account_registry import get_account_registry
+from src.integrations.shared.outbound_delivery_stats import (
+    claim_send,
+    record_send_result,
+)
 from src.integrations.shared.send_guard import send_blocked
 
 logger = logging.getLogger(__name__)
@@ -403,10 +407,14 @@ class AccountOrchestrator:
         if _blk:
             logger.warning("[orchestrator] 媒体发送被护栏拦截 %s:%s (%s)",
                            platform, account_id, _reason)
-            return {"delivered": False, "blocked": _reason}
+            _blocked = {"delivered": False, "blocked": _reason}
+            record_send_result(platform, kind="media", res=_blocked)
+            return _blocked
         m = self._managed.get(account_key(platform, account_id))
         if not (m is not None and m.state == "running"
                 and m.worker is not None and hasattr(m.worker, "send_media")):
+            record_send_result(platform, kind="media",
+                               res={"delivered": False, "error": "no_worker"})
             raise RuntimeError(f"无可用的运行中 worker(媒体): {platform}:{account_id}")
         # 反封号·去重微扰（默认关，opt-in）：同一张图发多人 → 文件哈希相同是垃圾信号。
         # 发送前产出「视觉无差、字节唯一」临时副本喂 worker，发完删除；canonical /static 原图不动
@@ -432,7 +440,15 @@ class AccountOrchestrator:
         except (ValueError, TypeError):
             pass
         try:
-            res = await _sm(chat_key, **_kw)
+            # claim_send 只裹这一次调用：worker 内层（A 线 send_photo / RPA adb /
+            # 官方 API 的 HTTP 辅助）也各自记账，占坑让它们让位，一次发送只记一条。
+            with claim_send():
+                res = await _sm(chat_key, **_kw)
+        except Exception as _ex:  # noqa: BLE001 - 只记账，异常照常上抛
+            record_send_result(platform, kind="media", exc=_ex)
+            raise
+        else:
+            record_send_result(platform, kind="media", res=res)
         finally:
             # 无论成功失败都清理微扰临时副本（原图不受影响）
             try:
@@ -473,10 +489,14 @@ class AccountOrchestrator:
         if _blk:
             logger.warning("[orchestrator] 发送被护栏拦截 %s:%s (%s)",
                            platform, account_id, _reason)
-            return {"delivered": False, "blocked": _reason}
+            _blocked = {"delivered": False, "blocked": _reason}
+            record_send_result(platform, kind="text", res=_blocked)
+            return _blocked
         m = self._managed.get(account_key(platform, account_id))
         if not (m is not None and m.state == "running"
                 and m.worker is not None and hasattr(m.worker, "send")):
+            record_send_result(platform, kind="text",
+                               res={"delivered": False, "error": "no_worker"})
             raise RuntimeError(f"无可用的运行中 worker: {platform}:{account_id}")
         # P4-5B reply_to + P4-11 mentions：仅协议 worker 支持这些 kwarg；用逐级降级
         # 探测其签名（先全带、再退 reply_to、最后裸发），非协议 worker 一律安全回落。
@@ -485,19 +505,27 @@ class AccountOrchestrator:
             _kw["reply_to"] = reply_to
         if mentions:
             _kw["mentions"] = mentions
-        if _kw:
-            try:
-                res = await m.worker.send(chat_key, text, **_kw)
-            except TypeError:
-                if reply_to:
+        try:
+            # 见 send_media 处同样的注释：占坑，内层记录点让位。
+            with claim_send():
+                if _kw:
                     try:
-                        res = await m.worker.send(chat_key, text, reply_to=reply_to)
+                        res = await m.worker.send(chat_key, text, **_kw)
                     except TypeError:
-                        res = await m.worker.send(chat_key, text)
+                        if reply_to:
+                            try:
+                                res = await m.worker.send(
+                                    chat_key, text, reply_to=reply_to)
+                            except TypeError:
+                                res = await m.worker.send(chat_key, text)
+                        else:
+                            res = await m.worker.send(chat_key, text)
                 else:
                     res = await m.worker.send(chat_key, text)
-        else:
-            res = await m.worker.send(chat_key, text)
+        except Exception as _ex:  # noqa: BLE001 - 只记账，异常照常上抛
+            record_send_result(platform, kind="text", exc=_ex)
+            raise
+        record_send_result(platform, kind="text", res=res)
         # P0-4：带回平台消息 id(wamid)，让出站回写与 worker 的 fromMe 回显同键去重
         _mid = str(res.get("message_id") or "") if isinstance(res, dict) else ""
         # 失败不镜像：worker 明确报 delivered=False 的消息**没有发出去**，回写会在
@@ -653,6 +681,17 @@ def ensure_builtin_workers(config: Dict[str, Any]) -> None:
                             lambda acc, cfg: LineProtocolWorker(acc, cfg))
     except Exception:
         logger.debug("[orchestrator] 注册 line protocol worker 失败", exc_info=True)
+    try:
+        from src.integrations.discord_bot_login import bot_enabled, is_discord_available
+        if (bot_enabled(config) and is_discord_available()
+                and get_worker_factory("discord", "protocol") is None):
+            # 惰性导入 worker 模块：discord.py 缺席时上面的 is_discord_available 已挡住，
+            # 这里再晚一步导入可让「装了库但配置关着」的部署零 import 开销。
+            from src.integrations.discord_bot_worker import DiscordBotWorker
+            register_worker("discord", "protocol",
+                            lambda acc, cfg: DiscordBotWorker(acc, cfg))
+    except Exception:
+        logger.debug("[orchestrator] 注册 discord bot worker 失败", exc_info=True)
     # 官方 API 出站 worker（LINE/Messenger/WhatsApp Cloud，mode=official；G 延伸）
     try:
         from src.integrations.official_api_worker import register_official_workers

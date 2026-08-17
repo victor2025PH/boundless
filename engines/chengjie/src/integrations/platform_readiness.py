@@ -57,6 +57,7 @@ _SIDECAR_MODES = {("whatsapp", "protocol"), ("messenger", "web")}
 _IMPLEMENTED_MODES = {
     ("telegram", "protocol"), ("line", "protocol"),
     ("whatsapp", "protocol"), ("messenger", "web"),
+    ("discord", "protocol"),
 }
 
 
@@ -153,6 +154,41 @@ def _line_protocol_blockers(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
+def _discord_bot_blockers(config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Discord Bot：开关 + discord.py 依赖 + Bot Token 三道，缺哪道说哪道。
+
+    Token 归到 ``creds_missing``（与 Telegram 的 api_id 同类），不是「未启用」——
+    运营开了开关却没填 token 时，报「未启用」会让人回去反复检查那个已经打开的开关。
+    """
+    from src.integrations.discord_bot_login import (
+        bot_enabled, configured_token, is_discord_available,
+    )
+    out: List[Dict[str, Any]] = []
+    if not bot_enabled(config):
+        out.append(_blocker(BLOCK_NOT_ENABLED))
+    if not is_discord_available():
+        out.append(_blocker(BLOCK_DEP_MISSING, dep="discord.py",
+                            install="pip install -U discord.py"))
+    if not configured_token(config):
+        # 已登记过的账号把 token 存在 meta 里，此时配置为空是正常的 → 只算提示级，
+        # 否则「已在线的 Bot」会被诊断成故障（本仓 protocol_doctor 最忌的误导）。
+        sev = SEV_BLOCK if not _has_registered_discord_bot() else SEV_WARN
+        out.append(_blocker(BLOCK_CREDS_MISSING, severity=sev,
+                            field="platform_login.discord.bot_token"))
+    return out
+
+
+def _has_registered_discord_bot() -> bool:
+    try:
+        from src.integrations.account_registry import get_account_registry
+        for a in (get_account_registry().list("discord") or []):
+            if ((a.get("meta") or {}).get("bot_token") or "").strip():
+                return True
+    except Exception:  # noqa: BLE001
+        logger.debug("[readiness] 读取 discord 账号失败", exc_info=True)
+    return False
+
+
 def _sidecar_blockers(
     platform: str, config: Dict[str, Any], service_ok: Optional[bool],
 ) -> List[Dict[str, Any]]:
@@ -211,6 +247,8 @@ def diagnose_mode(
                     blockers += _telegram_protocol_blockers(config)
                 elif platform == "line":
                     blockers += _line_protocol_blockers(config)
+                elif platform == "discord":
+                    blockers += _discord_bot_blockers(config)
                 elif (platform, mode) in _SIDECAR_MODES:
                     blockers += _sidecar_blockers(platform, config, service_ok)
             except Exception:  # noqa: BLE001

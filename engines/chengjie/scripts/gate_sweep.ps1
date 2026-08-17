@@ -125,6 +125,19 @@ $gates = @(
     # 代码根资源用相对路径 → 本地一切正常、只在真实部署才错位。2026-07-29 实锤：
     # 自身头像写进 <数据根>/src/web/static/... → 永久 404（且指纹去重不重下）。
     'tests/test_static_asset_paths.py',
+    # Meta Graph API 版本到期（2026-08-03 实锤：告警通道的 Messenger 端点钉着
+    # v19.0，而它 2026-05-21 就被 Meta 移除了——已死 74 天无人知晓；同期三个 Meta
+    # 集成各写各的版本常量 v25/v21/v19）。版本过期不在部署期报错，只在真发请求那刻
+    # 4xx，而告警渠道平时零流量＝出事当口才发现发不出去。本门禁把版本收成单一事实
+    # 源，并在离官方停用日 <60 天时硬失败（时间驱动，到点自己变红）。
+    'tests/test_meta_graph_version.py',
+    # 外部 API 版本生命周期（2026-08-03，上面那条的泛化）：v19.0 不是孤例——同一次
+    # 排查发现 shopify_connector 钉着 2024-01，官方 2025-01-16 就到期了，**已死 564
+    # 天**。且 Shopify 的失败模式更阴：过期不报错，静默 fall-forward 到别的版本，
+    # 破坏性变更被悄悄应用而日志里一个字都没有。本门禁把「钉了外部版本 + 有公布死期」
+    # 收成一张登记表，守三条：源码零散落字面量 / 每个 pin 离死期 >60 天 /
+    # 登记表自己不许漏登记（否则只是把原 bug 搬到上一层）。
+    'tests/test_external_api_lifecycle.py',
     # 幽灵 SQL（2026-08-01 双实锤：conversation_meta.claimed_by 让 churn-risks/
     # agent-qa-stats 全部署 500 两个月；messenger_rpa_runs.reply_lang 让 Messenger
     # 语言分布被 except 吞成静默恒空）。列名写错不在导入期/测试期报错，只在真实

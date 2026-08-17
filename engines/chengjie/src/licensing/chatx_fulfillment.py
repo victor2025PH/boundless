@@ -36,7 +36,12 @@ import time
 from typing import Any, Dict, List, Optional
 
 # chatx 全渠道（team/flagship「全平台」）
-ALL_CHANNELS: List[str] = ["telegram", "line", "whatsapp", "messenger", "web"]
+# 新增渠道必须同步进来，否则 `channel_allowed` 对未知渠道是**失败关闭**的：
+# 客户买了「全渠道」却用不了新平台，试用更是连评估机会都没有（见 TRIAL_SPEC 注释）。
+# 不必担心「白送存量客户」——license 是签名产物，签发时就把 channels 列表**冻进
+# payload** 了，改这里只影响此后新签发的授权与试用，存量客户的权益不受影响。
+ALL_CHANNELS: List[str] = ["telegram", "line", "whatsapp", "messenger", "web",
+                           "discord"]
 
 # chatx 三档权威映射（业务可调）。entry「1 平台」默认主渠道 telegram（可经 channels 覆盖）。
 CHATX_SKU_SPECS: Dict[str, Dict[str, Any]] = {

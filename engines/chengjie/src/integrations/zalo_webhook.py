@@ -32,6 +32,8 @@ from typing import Any, Dict, List
 import aiohttp
 from fastapi import FastAPI, Request, Response
 
+from src.integrations.shared.outbound_delivery_stats import meter_send
+
 logger = logging.getLogger(__name__)
 
 ZALO_SEND_BASE = "https://openapi.zalo.me/v3.0/oa/message"
@@ -71,6 +73,7 @@ def extract_zalo_messages(body: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [{"sender": sender, "text": text, "msg_id": str(msg.get("msg_id") or "")}]
 
 
+@meter_send("zalo", kind="text")
 async def zalo_send_text(
     user_id: str,
     text: str,

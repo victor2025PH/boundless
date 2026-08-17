@@ -821,7 +821,24 @@ async def send_via_adapters(
             # 回落到平台适配器（RPA/单连接/网页微服务）——观测这条兜底路径的触发频率，
             # 让「编排器漏接」在看板可见（回落率高=该查 worker ownership），而非崩了才知道。
             _record_send_route(platform, "adapter")
-            return await adapter.send(request, account_id, chat_key, text)
+            # 投递结果也要记账。上面 orch.owns 分支已在编排器内部记过，两条分支互斥
+            # 返回 → 不会重复计（有门禁钉住「一次发送只产生一条记录」）。不在这里记
+            # 的话，非编排器托管的账号（TG default / Messenger 网页 / RPA）在看板上
+            # 是**零出站**——比没有看板更糟，运维会据此认定该平台一切正常。
+            from src.integrations.shared.outbound_delivery_stats import (
+                claim_send,
+                record_send_result,
+            )
+            try:
+                # 占坑：适配器内部若最终落到 A 线 / RPA adb / 官方 API 的 HTTP 辅助
+                # （它们各自也记账），让内层让位，这次发送只记这一条。
+                with claim_send():
+                    _res = await adapter.send(request, account_id, chat_key, text)
+            except Exception as _ex:  # noqa: BLE001 - 只记账，异常照常上抛
+                record_send_result(platform, kind="text", exc=_ex)
+                raise
+            record_send_result(platform, kind="text", res=_res)
+            return _res
     raise ChannelSendError(400, f"不支持的平台: {platform}")
 
 

@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
+from src.integrations.platform_capabilities import proactive_outreach_allowed
+
 
 def voice_gate_verdict(
     voice_cfg: Dict[str, Any], text: str, rand01: float,
@@ -544,6 +546,11 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 _ck = str(r.get("chat_key") or "")
                 _pf = str(r.get("platform") or "telegram")
                 if _plat_allow is not None and _pf.lower() not in _plat_allow:
+                    continue
+                # 平台规则禁止主动私聊的（Discord Bot）：只做被动接待，绝不进候选。
+                # 放进来的唯一结果是每 tick 撞一轮 403，且连败会被 _mark_bad_peer
+                # 误判成死 peer，把本来能正常接待的会话拉黑——比不发更糟。
+                if not proactive_outreach_allowed(_pf):
                     continue
                 if _is_bad_peer(str(r.get("conversation_id") or ""), _pf):
                     continue  # 死 peer（本地集 or 共享登记表：含 A 线 sender 拉黑的）
