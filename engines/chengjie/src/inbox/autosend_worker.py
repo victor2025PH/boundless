@@ -704,6 +704,15 @@ class AutosendWorker:
                 raise RuntimeError(str(
                     res.get("error") or res.get("blocked") or "send not ok"))
             self.total_human_delivered += 1
+            # 2026-08-19 Token P5b 影子计数（观测非计费）：投递点口径——与出稿点
+            # （ai_client generate_reply 记 ai_reply）对读几周，拿真实「出稿/投递」
+            # 比值再决定计费点迁移。fail-silent，总闸关=零行为。
+            try:
+                from src.licensing.token_ledger import record_shadow
+
+                record_shadow("ai_reply_delivered_human")
+            except Exception:
+                pass
             # 人工通过也进同一账本：坐席刚发过 → 紧随的自动稿同样要垫连发地板
             # （对客户视角「谁按的发送」不重要，背靠背两条出站一样露馅）。
             self._note_conv_sent(item["conversation_id"])
@@ -1021,6 +1030,14 @@ class AutosendWorker:
                 raise RuntimeError(str(
                     res.get("error") or res.get("blocked") or "send not ok"))
             self.total_delivered += 1
+            # 2026-08-19 Token P5b 影子计数（观测非计费）：自动链投递点口径，
+            # 与出稿点对读校准「出稿/投递」比值。fail-silent，总闸关=零行为。
+            try:
+                from src.licensing.token_ledger import record_shadow
+
+                record_shadow("ai_reply_delivered_auto")
+            except Exception:
+                pass
             self._note_conv_sent(_conv_id_g)
             if int(item.get("_attempt", 0)) > 0:
                 self.total_retry_recovered += 1

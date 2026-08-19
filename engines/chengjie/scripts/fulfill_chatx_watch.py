@@ -107,7 +107,11 @@ def run_once(conf: dict, dry: bool) -> int:
     # 客户在 会员中心 → 兑换加量包 粘贴入账（ref=订单号幂等）。
     for order, vargs in select_topup_fulfillable(orders, done_ids):
         oid = str(order.get("id") or "")
-        print(f"[凭证] {oid} · {order.get('sku_id')} · chars={vargs['chars']} · "
+        # 2026-08-19 双载荷：字符包带 chars、Token 包带 tokens——日志按实际载荷打
+        # （此行在 try 外，硬取缺失键会 KeyError 崩掉整轮循环，实装前实测抓到）。
+        amount = (f"chars={vargs['chars']}" if "chars" in vargs
+                  else f"tokens={vargs.get('tokens')}")
+        print(f"[凭证] {oid} · {order.get('sku_id')} · {amount} · "
               f"{vargs['customer']}")
         if dry:
             continue

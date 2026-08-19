@@ -169,6 +169,12 @@ CREATE TABLE IF NOT EXISTS token_spend (
     tokens  INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (lic_id, day, action)
 );
+CREATE TABLE IF NOT EXISTS fair_use_chars (
+    wallet  TEXT NOT NULL,
+    day     TEXT NOT NULL,
+    chars   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (wallet, day)
+);
 """
 
 
@@ -262,6 +268,32 @@ class TokenLedgerStore:
         except Exception:
             logger.debug("[token_ledger] record_spend 失败（已忽略）", exc_info=True)
 
+    def note_fair_use(self, wallet: str, chars: int, *, now: Optional[float] = None) -> int:
+        """免费标准翻译公平使用记账（字符/日/钱包），返回**当日累计**。绝不抛（失败按 0）。
+
+        与 token_spend 分表：这是免费额度的防滥用水表，不是计费（0 Token 动作不进账本）。
+        """
+        n = int(chars or 0)
+        day = _day_str(now)
+        w = str(wallet or "default")
+        try:
+            with self._lock:
+                if n > 0:
+                    self._conn.execute(
+                        "INSERT INTO fair_use_chars (wallet, day, chars) VALUES (?,?,?) "
+                        "ON CONFLICT(wallet, day) DO UPDATE SET chars = chars + excluded.chars",
+                        (w, day, n),
+                    )
+                    self._conn.commit()
+                row = self._conn.execute(
+                    "SELECT COALESCE(chars,0) AS c FROM fair_use_chars WHERE wallet=? AND day=?",
+                    (w, day),
+                ).fetchone()
+            return int(row["c"] if row else 0)
+        except Exception:
+            logger.debug("[token_ledger] note_fair_use 失败（按 0）", exc_info=True)
+            return 0
+
     def _grants(self, lic_id: str) -> List[Tuple[int, Optional[float]]]:
         with self._lock:
             rows = self._conn.execute(
@@ -335,6 +367,36 @@ _WARNED_LIC_IDS: set = set()
 # （local_trial 同款模块级开关范式；配置热重载不重跑 bootstrap → 改开关需重启）。
 _ENABLED = False
 
+# ── P5b 影子计数器（进程内观测，重启清零；权威计费口径是账本 token_spend）────────
+# 用途=校准「出稿 vs 投递」比值：ai_reply 计费点当前在 generate_reply 出稿处（上界），
+# 投递点（autosend auto/human）只打影子计数——两边对读几周后再决定计费点迁移。
+_SHADOW: Dict[str, int] = {}
+_SHADOW_LOCK = threading.Lock()
+
+# 免费标准翻译公平使用（P4，warn-only）：字符/日/授权，与官网公示同数（bootstrap 可覆盖）。
+FAIR_USE_TRANSLATE_CHARS_PER_DAY = 2_000_000
+_FAIR_USE_LIMIT = FAIR_USE_TRANSLATE_CHARS_PER_DAY
+_FAIR_USE_WARNED_DAYS: set = set()
+
+
+def record_shadow(key: str, n: int = 1) -> None:
+    """影子观测计数（fail-silent；enabled 关时零写）。"""
+    try:
+        if not _ENABLED:
+            return
+        k = str(key or "").strip()
+        if not k:
+            return
+        with _SHADOW_LOCK:
+            _SHADOW[k] = int(_SHADOW.get(k, 0)) + int(n)
+    except Exception:
+        pass
+
+
+def shadow_snapshot() -> Dict[str, int]:
+    with _SHADOW_LOCK:
+        return dict(_SHADOW)
+
 
 def _default_db_path() -> str:
     from src.licensing.data_paths import data_file
@@ -345,9 +407,10 @@ def _default_db_path() -> str:
 def configure_token_ledger(
     *, enabled: Optional[bool] = None, db_path: Any = None,
     store: Optional[TokenLedgerStore] = None,
+    fair_use_translate_chars: Optional[int] = None,
 ) -> Optional[TokenLedgerStore]:
-    """启动期装配（可选）：设总闸 / 覆盖 db 路径 / 直接注入 store（测试用）。幂等。"""
-    global _STORE, _DB_PATH, _ENABLED
+    """启动期装配（可选）：设总闸 / 覆盖 db 路径 / 公平使用阈值 / 注入 store（测试用）。幂等。"""
+    global _STORE, _DB_PATH, _ENABLED, _FAIR_USE_LIMIT
     with _CFG_LOCK:
         if enabled is not None:
             _ENABLED = bool(enabled)
@@ -355,6 +418,8 @@ def configure_token_ledger(
             _STORE = store
         if db_path is not None:
             _DB_PATH = str(db_path)
+        if fair_use_translate_chars is not None and int(fair_use_translate_chars) > 0:
+            _FAIR_USE_LIMIT = int(fair_use_translate_chars)
         return _STORE
 
 
@@ -363,13 +428,17 @@ def get_token_ledger() -> Optional[TokenLedgerStore]:
 
 
 def reset_token_ledger() -> None:
-    """测试钩子：清空单例/路径/总闸/告警去重。"""
-    global _STORE, _DB_PATH, _ENABLED
+    """测试钩子：清空单例/路径/总闸/影子计数/公平使用状态/告警去重。"""
+    global _STORE, _DB_PATH, _ENABLED, _FAIR_USE_LIMIT
     with _CFG_LOCK:
         _STORE = None
         _DB_PATH = None
         _ENABLED = False
+        _FAIR_USE_LIMIT = FAIR_USE_TRANSLATE_CHARS_PER_DAY
         _WARNED_LIC_IDS.clear()
+        _FAIR_USE_WARNED_DAYS.clear()
+    with _SHADOW_LOCK:
+        _SHADOW.clear()
 
 
 def _ensure_store() -> Optional[TokenLedgerStore]:
@@ -564,6 +633,44 @@ def grant_pack_for_status(
         return {"ok": False, "error": "internal"}
 
 
+def note_translate_fair_use(
+    chars: int, *, lic_status: Any = None, now: Optional[float] = None,
+) -> Dict[str, Any]:
+    """标准翻译成功后记公平使用水表（P4，warn-only 绝不拦截）。
+
+    返回 {today, limit, exceeded}；超限当日 warn 一次 + 影子计数
+    ``fair_use_exceeded``（enforce 是后续产品决策，当前纯观测）。绝不抛。
+    """
+    out = {"today": 0, "limit": _FAIR_USE_LIMIT, "exceeded": False}
+    try:
+        if not _ENABLED:
+            return out
+        store = _ensure_store()
+        if store is None:
+            return out
+        st = lic_status
+        if st is None:
+            from src.licensing.license_manager import get_license_manager
+
+            st = get_license_manager().status()
+        wallet = wallet_id_for_status(st)
+        today = store.note_fair_use(wallet, chars, now=now)
+        out["today"] = today
+        if today > _FAIR_USE_LIMIT:
+            out["exceeded"] = True
+            record_shadow("fair_use_exceeded")
+            day_key = f"{wallet}:{_day_str(now)}"
+            if day_key not in _FAIR_USE_WARNED_DAYS:
+                _FAIR_USE_WARNED_DAYS.add(day_key)
+                logger.warning(
+                    "[token_ledger] 免费标准翻译超公平使用（%s：今日 %s / 上限 %s 字符）；"
+                    "warn-only 不拦截", wallet, today, _FAIR_USE_LIMIT,
+                )
+    except Exception:
+        logger.debug("[token_ledger] note_translate_fair_use 失败（放行）", exc_info=True)
+    return out
+
+
 def wallet_snapshot(lic_status: Any = None, *, now: Optional[float] = None) -> Dict[str, Any]:
     """会员页「Token 钱包」数据装配（只读；顺路补当月含量）。
 
@@ -575,6 +682,7 @@ def wallet_snapshot(lic_status: Any = None, *, now: Optional[float] = None) -> D
         "enabled": False, "wallet": "", "balance": 0, "active_granted": 0,
         "expired_lost": 0, "total_spend": 0, "today": 0, "by_action": {},
         "grants": [], "monthly": 0,
+        "shadow": {}, "fair_use": {"today": 0, "limit": _FAIR_USE_LIMIT, "exceeded": False},
         "rates": [
             {"key": k, "tokens": v["tokens"], "unit": v["unit"],
              "unit_size": v["unit_size"]}
@@ -601,6 +709,13 @@ def wallet_snapshot(lic_status: Any = None, *, now: Optional[float] = None) -> D
         usage = store.usage(wallet)
         out["today"] = usage["today"]
         out["by_action"] = usage["by_action"]
+        out["shadow"] = shadow_snapshot()
+        _fu_today = store.note_fair_use(wallet, 0, now=now)
+        out["fair_use"] = {
+            "today": _fu_today,
+            "limit": _FAIR_USE_LIMIT,
+            "exceeded": _fu_today > _FAIR_USE_LIMIT,
+        }
         # 展示就绪：批次带 expires_day（YYYY-MM-DD；空=永不过期），模板零日期逻辑。
         grants = []
         for g in usage["grants"][:8]:
@@ -618,6 +733,7 @@ def wallet_snapshot(lic_status: Any = None, *, now: Optional[float] = None) -> D
 
 __all__ = [
     "CHARS_PER_TOKEN_LEGACY",
+    "FAIR_USE_TRANSLATE_CHARS_PER_DAY",
     "PACK_VALID_MONTHS",
     "TOKEN_EXHAUSTED_ERROR",
     "TOKEN_RATES",
@@ -628,9 +744,12 @@ __all__ = [
     "ensure_monthly_tokens",
     "get_token_ledger",
     "grant_pack_for_status",
+    "note_translate_fair_use",
     "record_action_for_status",
+    "record_shadow",
     "record_token_action",
     "reset_token_ledger",
+    "shadow_snapshot",
     "token_ledger_enabled",
     "tokens_for",
     "wallet_id_for_status",

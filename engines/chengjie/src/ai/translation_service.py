@@ -327,13 +327,29 @@ class TranslationService:
         source_lang: str = "",
         style: str = "chat",
         engine: str = "",
+        tier: str = "",
     ) -> TranslationResult:
         """``engine``（F+）：会话首选引擎名（如 ``deepl``）。指定且可用 → 强制走该引擎，
-        失败再回落现有 failover 路由；空 / 不可用 → 维持原 failover 行为（零回归）。"""
+        失败再回落现有 failover 路由；空 / 不可用 → 维持原 failover 行为（零回归）。
+
+        ``tier``（2026-08-19 Token 定价 P5b）：翻译服务层级——计费跟**显式请求的层级**
+        走，绝不跟引擎回落走（本地引擎宕机静默回落云端时，标准请求不能被按专业价扣）：
+        - ``""``/``"std"``：标准翻译＝免费（只记公平使用水表，warn-only）；
+        - ``"pro"``：专业翻译（术语锁定/翻译记忆语义）＝10 Token/千字符；
+        - ``"certified"``：认证翻译＝优先 DeepL 引擎（独立缓存桶），真由 DeepL 交付
+          才计 40 Token/千字符；回落其它引擎按 pro 价 10 计——绝不按未交付的价值收费。
+        计费只在**新鲜引擎成功**时发生（缓存/翻译记忆命中不计，与字符额度同口径）；
+        总闸 licensing.token_ledger.enabled 关（默认）＝全零行为。
+        """
         src_text = str(text or "")
         target = normalize_lang(target_lang) or self.default_target_lang
         source = normalize_lang(source_lang) or detect_language(src_text)
         pref_engine = str(engine or "").strip().lower()
+        tier = str(tier or "").strip().lower()
+        # certified 未显式指定引擎 → 首选 DeepL；在缓存键计算**之前**生效，
+        # 认证请求走 engine=deepl 独立缓存桶，绝不命中标准桶旧译文（质量承诺）。
+        if tier == "certified" and not pref_engine:
+            pref_engine = "deepl"
         if not src_text.strip():
             return TranslationResult(src_text, "", source, target, True, provider="none")
         if source == target:
@@ -461,7 +477,8 @@ class TranslationService:
         if result.ok:
             self._memory_put(key, result, style, engine=res.engine)
             self._record_cost(src_text, out, source, target)
-            self._record_license_quota(src_text)
+            self._record_license_quota(src_text, tier=tier,
+                                       provider=str(res.engine or ""))
             try:   # P4 埋点：翻译字符量按语向聚合计量（窗口 flush，绝不逐条发事件）
                 from src.utils.telemetry import add_translated_chars
                 add_translated_chars(len(src_text), source, target)
@@ -513,12 +530,33 @@ class TranslationService:
         except Exception:
             pass
 
-    def _record_license_quota(self, src: str) -> None:
-        """P0-4：成功引擎翻译后按源文字符记账（无额度授权零开销；绝不抛）。"""
+    def _record_license_quota(self, src: str, *, tier: str = "",
+                              provider: str = "") -> None:
+        """P0-4：成功引擎翻译后按源文字符记账（无额度授权零开销；绝不抛）。
+
+        2026-08-19 Token 计量（P5b）叠加：按**请求层级**计费（见 translate docstring）
+        ——std/缺省＝免费只记公平使用水表；pro＝10/千字符；certified 且真由 DeepL
+        交付＝40/千字符（回落其它引擎按 pro 价）。总闸关＝零行为。
+        """
         try:
             from src.licensing.quota_store import record_license_chars
 
             record_license_chars("translation", len(src))
+        except Exception:
+            pass
+        try:
+            t = str(tier or "").strip().lower()
+            if t in ("pro", "certified"):
+                from src.licensing.token_ledger import record_action_for_status
+
+                action = ("deepl_translate"
+                          if t == "certified" and str(provider).lower() == "deepl"
+                          else "pro_translate")
+                record_action_for_status(action, len(src))
+            else:
+                from src.licensing.token_ledger import note_translate_fair_use
+
+                note_translate_fair_use(len(src))
         except Exception:
             pass
 

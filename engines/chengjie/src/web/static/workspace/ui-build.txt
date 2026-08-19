@@ -1,4 +1,4 @@
-20260819-0930
+20260819-1034
 # 前端构建戳(单一版本源):首行 token 即版本。任何工作台前端批次(模板/静态资源)
 # 20260819-0930: 会员页 Token 钱包卡(余额/月含量/消耗构成/入账批次/公示费率, 服务端渲染
 # feat-detect licensing.token_ledger.enabled) + 兑换框吃 Token 包凭证(mb_redeem_ok_tokens)

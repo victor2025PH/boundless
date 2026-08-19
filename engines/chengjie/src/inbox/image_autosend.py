@@ -90,7 +90,21 @@ def record_caption(source: str, caption: str = "") -> None:
 def record_image_sent(kind: str = "", source: str = "") -> None:
     """发图成功计数。``source``（Phase19 观察维度）＝意图判定来源：
     llm_directive（LLM [PHOTO 标记）/ keyword（关键词生成链）/ registry（注册相册）
-    ——看板据此观察「LLM 决策 vs 关键词兜底」占比，指导 hybrid → llm 收敛节奏。"""
+    ——看板据此观察「LLM 决策 vs 关键词兜底」占比，指导 hybrid → llm 收敛节奏。
+
+    2026-08-19 Token 计量（P5b，licensing.token_ledger.enabled 默认关=零行为）：
+    只对**现场生成**的图记 ai_image（50 Token/张）——source 带 _album 后缀（相册
+    存货顶上）/ registry（注册相册）/ bazi_kline（本地 PIL 渲染，产品决策免费引流）
+    都是免费路径不计，与「预渲染语音/缓存命中不计费」同一原则。B 线单点覆盖；
+    A 线自拍链（skill_manager，旗舰本地经济学）刻意不接，P6 再议。
+    """
+    try:
+        if source in ("llm_directive", "keyword"):
+            from src.licensing.token_ledger import record_action_for_status
+
+            record_action_for_status("ai_image", 1)
+    except Exception:
+        pass
     with _METRICS_LOCK:
         _METRICS["sent"] = int(_METRICS["sent"]) + 1
         _METRICS["last_kind"] = str(kind or "")
@@ -191,10 +205,20 @@ def metrics_snapshot() -> Dict[str, Any]:
 
 
 def resolve_image_autosend_cfg(config: Dict[str, Any]) -> Dict[str, Any]:
-    """取 ``companion.selfie`` 块（与 ``skill_manager._selfie_cfg`` 同口径；缺失返回 {}）。"""
+    """取 ``companion.selfie`` 块（与 ``skill_manager._selfie_cfg`` 同口径；缺失返回 {}）。
+
+    随块捎带 ``_weather_cfg``＝``companion.weather``（2026-08-18 天气匹配生活照）：
+    ``stage_image_file`` 只收 scfg 不收整份 config，天气闸门/坐标解析要用它——
+    单点捎带让全部调用方零改动获得天气接线。下划线前缀=内部键，勿进 example。
+    """
     try:
-        sc = ((config or {}).get("companion") or {}).get("selfie")
-        return dict(sc) if isinstance(sc, dict) else {}
+        comp = (config or {}).get("companion") or {}
+        sc = comp.get("selfie")
+        out = dict(sc) if isinstance(sc, dict) else {}
+        wx = comp.get("weather")
+        if isinstance(wx, dict) and out:
+            out["_weather_cfg"] = dict(wx)
+        return out
     except Exception:
         return {}
 
@@ -381,6 +405,15 @@ async def stage_image_file(
                     now_hour=_now_hour, prefer_series=_prefer_series)
             else:
                 persona = _resolve_persona(persona_id)
+                # 天气快照（2026-08-18）：轮换池滤天气冲突场景（暴雨×沙滩）+
+                # 生图 prompt 强天气氛围。闸门/坐标缺失 → None＝逐位旧行为。
+                _wx_snap = None
+                try:
+                    from src.companion.weather_state import snap_for_persona
+                    _wx_snap = snap_for_persona(
+                        persona, scfg.get("_weather_cfg"))
+                except Exception:
+                    _wx_snap = None
                 # 场景：directive 可显式指定（proactive 文案-场景对齐用，Phase17）；
                 # 否则按日期/时段/相册张数从场景池轮换（人设 selfie_scenes →
                 # config scene_rotation → 固定 scene_hint）。同种子下场景变、人设不变。
@@ -392,6 +425,7 @@ async def stage_image_file(
                         default_scene=str(scfg.get("scene_hint") or ""),
                         fallback_scenes=scfg.get("scene_rotation"),
                         salt=_auto_photo_count(persona_id),
+                        weather_snap=_wx_snap,
                     )
                 # 今日衣着状态（P1，与 A 线/聊天注入同 key 同函数）：连续窗内
                 # 刚发过照片 → 跟随其系列；否则今日确定性衣着。发出成功后以
@@ -417,7 +451,7 @@ async def stage_image_file(
                 # 人设级 appearance 优先（多人设各有长相），config 全局 appearance 兜底。
                 prompt = build_selfie_prompt(
                     persona,
-                    scene_hint=ensure_time_of_day(scene),
+                    scene_hint=ensure_time_of_day(scene, weather_snap=_wx_snap),
                     style=str(scfg.get("style") or ""),
                     default_appearance=str(scfg.get("appearance") or ""),
                     content_rating=str(scfg.get("content_rating") or ""),
@@ -1217,11 +1251,15 @@ async def run_autosend_image(
             try:
                 from src.ai.companion_selfie import resolve_current_scene
                 from src.companion.persona_location import resolve_persona_now
+                from src.companion.weather_state import snap_for_persona
                 _p_img = _resolve_persona(persona_id)
                 directive["scene"] = resolve_current_scene(
                     _p_img, scfg,
                     now=resolve_persona_now(_p_img),
-                    salt=_auto_photo_count(persona_id))
+                    salt=_auto_photo_count(persona_id),
+                    # 2026-08-18：滤天气冲突场景（暴雨×沙滩）；闸关/无坐标=None 旧行为
+                    weather_snap=snap_for_persona(
+                        _p_img, scfg.get("_weather_cfg")))
             except Exception:
                 logger.debug("[image_autosend] 场景解析跳过", exc_info=True)
     staged = await stage_image_file(

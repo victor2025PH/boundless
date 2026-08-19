@@ -429,6 +429,14 @@
           {% endfor %}
         </div>
       </details>
+      {% set fu = tk.get('fair_use') or {} %}
+      {% if fu.get('today', 0) > 0 %}
+      <div style="font-size:.74rem;color:var(--t2);margin-top:.6rem">
+        {{ ((i18n or {}).get('mb_tok_fair_use', '免费标准翻译今日 {n} / {limit} 字符（公平使用，超出仅提醒不拦截）'))
+           .replace('{n}', '{:,}'.format(fu.get('today', 0))).replace('{limit}', '{:,}'.format(fu.get('limit', 0))) }}
+        {% if fu.get('exceeded') %}<b style="color:var(--amber,#d97706)">⚠</b>{% endif %}
+      </div>
+      {% endif %}
       <div style="font-size:.72rem;color:var(--t2);margin-top:.6rem">💡 {{ (i18n or {}).get('mb_tok_degrade_note', '余额用尽不会断线：AI 回复自动切换免费本地模型、专业翻译降级标准翻译（免费不限量），补充 Token 包立即恢复。') }}</div>
     </div>
   </div>

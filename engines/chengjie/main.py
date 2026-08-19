@@ -260,7 +260,11 @@ class AIChatAssistant:
                     from src.licensing.token_ledger import configure_token_ledger
                     _tl_enabled = bool((_lic_cfg.get("token_ledger") or {})
                                        .get("enabled", False))
-                    configure_token_ledger(enabled=_tl_enabled)
+                    _fair_use = int(((_lic_cfg.get("fair_use") or {})
+                                     .get("translate_chars_per_day")) or 0)
+                    configure_token_ledger(
+                        enabled=_tl_enabled,
+                        fair_use_translate_chars=_fair_use or None)
                     if _tl_enabled:
                         self.logger.info("🪙 Token 账本：已启用（观测记账）")
                 except Exception:
