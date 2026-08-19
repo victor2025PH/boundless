@@ -437,7 +437,13 @@
         {% if fu.get('exceeded') %}<b style="color:var(--amber,#d97706)">⚠</b>{% endif %}
       </div>
       {% endif %}
-      <div style="font-size:.72rem;color:var(--t2);margin-top:.6rem">💡 {{ (i18n or {}).get('mb_tok_degrade_note', '余额用尽不会断线：AI 回复自动切换免费本地模型、专业翻译降级标准翻译（免费不限量），补充 Token 包立即恢复。') }}</div>
+      <div style="font-size:.72rem;color:var(--t2);margin-top:.6rem">💡 {{ (i18n or {}).get('mb_tok_degrade_note', '余额用尽不会断线：AI 回复自动切换免费本地模型、专业翻译降级标准翻译（免费不限量），补充 Token 包立即恢复。') }}
+        {%- if mb.tokens.get('enforce') %}
+        <span style="display:inline-block;margin-left:.35rem;padding:.05rem .45rem;border-radius:99px;background:var(--ok-bg,#dcfce7);color:var(--ok,#15803d);font-weight:600">{{ (i18n or {}).get('mb_tok_enforce_on', '降级保护已启用') }}</span>
+        {%- else %}
+        <span style="display:inline-block;margin-left:.35rem;padding:.05rem .45rem;border-radius:99px;background:var(--chip-bg,#f1f5f9);color:var(--t2)">{{ (i18n or {}).get('mb_tok_enforce_off', '当前仅观测记账（不扣减服务）') }}</span>
+        {%- endif %}
+      </div>
     </div>
   </div>
   {% endif %}
