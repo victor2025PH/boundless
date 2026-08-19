@@ -1,6 +1,9 @@
 // 幻境 STUDIO 五档报价单一真相在 lib/avatarhub-pricing.ts::TIERS（2026-08-04 单源化）：
 // 本文件所有幻境档位行 / 起价数字一律派生，勿再手写（改价只改 TIERS 一处）。
+// 智聊 ChatX / 翻译 Token 分层单一真相在 lib/chatx-pricing.ts（2026-08-19 定价决议）：
+// 套餐卡（plans.items）与产品卡报价行（solutions.pricing）同样全部派生，零手写数字。
 import { studioTierRows, studioTier, tierPriceLabel, STUDIO_PAID_FROM } from "./avatarhub-pricing";
+import { chatxPlanCardItems, chatxPlanRows, translateRows, SIGNUP_BONUS_TOKENS } from "./chatx-pricing";
 
 export type Lang = "zh" | "en";
 
@@ -25,12 +28,17 @@ export interface Solution {
 export interface Plan {
   name: string;
   priceMonthly: string;
+  /** 年付总价（2026-08-19 起 = 月价 × 10「送 2 个月」；显示单位切「/ 年」，废除旧折合月价） */
   priceYearly: string;
+  /** 按坐席档的单位后缀（" / 坐席"），普通档为空串 */
+  seatSuffix?: string;
   desc: string;
   features: string[];
   highlight?: boolean;
   /** 自助下单深链键（/order?plan=<key>）；缺省 = CTA 回落客服。 */
   plan?: string;
+  /** 直链覆写（免费版 → 下载页）；优先于 plan 深链。 */
+  href?: string;
 }
 
 export interface Dict {
@@ -81,7 +89,11 @@ export interface Dict {
     save: string;
     popular: string;
     perMonth: string;
+    /** 年付显示单位（"/ 年"）——年付展示真实年总价，不再显示折合月价 */
+    perYear: string;
     cta: string;
+    /** 「查看完整价格与计算器」链接文案（→ /pricing） */
+    fullPricing: string;
     items: Plan[];
   };
   orderSteps: {
@@ -423,14 +435,11 @@ const zh: Dict = {
       id: "chatx",
       tag: "智聊 ChatX",
       title: "AI 成交聊天 · 统一收件箱",
-      desc: "多平台消息聚合进一个工作台：AI 按你的人设自动答疑、跟单、促成交，拟人翻译内建，重要节点一键人工接管；支持私有部署。",
-      features: ["多平台统一收件箱", "AI 人设自动跟单", "内建拟人翻译", "一键人工接管"],
+      desc: "多平台消息聚合进一个工作台：AI 按你的人设自动答疑、跟单、促成交，标准翻译永久免费，重要节点一键人工接管；AI 用量按 Token 透明计价，支持私有部署。",
+      features: ["多平台统一收件箱", "AI 人设自动跟单", "标准翻译永久免费", "一键人工接管"],
       highlight: true,
-      pricing: [
-        { plan: "入门", price: "58 / 月", detail: "3 个聊天账号 · 1 个平台", order: "autochat-entry" },
-        { plan: "团队", price: "198 / 月", detail: "10 账号 · 全平台 · AI 自动成交", order: "autochat-team" },
-        { plan: "旗舰", price: "598 / 月", detail: "50 账号 · 人工接管 · 数据看板", order: "autochat-flagship" },
-      ],
+      // 2026-08-19 Token 分层：档位行由 chatx-pricing.ts 派生（免费/个人/按量/团队/旗舰）。
+      pricing: chatxPlanRows("zh"),
     },
     {
       id: "reach",
@@ -456,15 +465,11 @@ const zh: Dict = {
       //（id/SKU/深链不变，授权层 lingox-* 照旧履约；主推位 highlight 移交智聊主卡）。
       id: "translate",
       tag: "智聊 ChatX · 翻译",
-      title: "跨境聊天翻译 · 翻译专项套餐",
-      desc: "多平台文字 + 语音双向实时翻译，术语表锁定专有名词、翻译记忆省成本，统一收件箱沉淀客户资产——让不会外语的团队在 WhatsApp / Telegram / LINE 上即时跟全球客户对话。翻译能力已内置在智聊 ChatX 客户端，按坐席 + 字符额度授权，下载智聊即可使用。",
-      features: ["多平台双向翻译", "术语锁定 · 翻译记忆", "统一收件箱 · 客户资产", "多模态（图片/语音）翻译"],
-      // 定价与 lib/pricing.ts::translateOffers 同步（USD，2026-07-18 定价决议：竞品×2）；改价两处一起改。
-      pricing: [
-        { plan: "字符包", price: "59", detail: "一次性 · 150 万字符 + 术语库 + 翻译记忆", order: "translate-charpack" },
-        { plan: "团队", price: "99 / 月", detail: "300 万字符/月 + 多坐席收件箱 + 客户 journey + 漏斗计数", order: "translate-team" },
-        { plan: "专业", price: "198 / 月", detail: "不限字符 + 多模态翻译 + 置信度/引擎健康", order: "translate-pro" },
-      ],
+      title: "跨境聊天翻译 · 标准翻译永久免费",
+      desc: "多平台文字 + 语音双向实时翻译——标准翻译所有档位免费含、不限字符（内置引擎，公平使用 200 万字符/日）；术语锁定、翻译记忆、DeepL 认证与图片/语音多模态属专业翻译，按 Token 透明计量。翻译能力内置在智聊 ChatX 客户端，下载即用。",
+      features: ["标准翻译免费 · 不限字符", "术语锁定 · 翻译记忆", "统一收件箱 · 客户资产", "多模态（图片/语音）翻译"],
+      // 2026-08-19 翻译免费化：报价行由 chatx-pricing.ts::translateRows 派生。
+      pricing: translateRows("zh"),
     },
     {
       id: "interpret",
@@ -512,7 +517,7 @@ const zh: Dict = {
     },
   ],
   pricingSection: {
-    note: `幻境 STUDIO ：免费换脸+水印 / 入门 ${studioTier("starter").monthly} / 标准 ${studioTier("standard").monthly} / 专业 ${studioTier("pro").monthly}（月付；另有季付·年付挂牌）/ 旗舰咨询报价。智聊（成交 + 翻译）套餐见其产品线；超出清单的需求按场景定制。`,
+    note: `智聊 ChatX：免费版 $0（标准翻译不限量）/ 个人 39 / 团队 49 每坐席 / 旗舰 598（月付，年付 ×10 送 2 个月）；Token 包 9.9 起。幻境 STUDIO ：免费换脸+水印 / 入门 ${studioTier("starter").monthly} / 标准 ${studioTier("standard").monthly} / 专业 ${studioTier("pro").monthly} / 旗舰咨询报价。超出清单的需求按场景定制。`,
   },
   trust: {
     platformsLabel: "深度对接的沟通平台",
@@ -560,40 +565,17 @@ const zh: Dict = {
   },
   plans: {
     title: "AI 成交聊天 · 套餐",
-    subtitle: "聚合 + AI 拟人翻译 + AI 自动成交 + 人设语音，按账号规模选档，年付更划算。",
+    subtitle: `标准翻译永久免费；AI 回复 / 专业翻译 / 克隆语音按 Token 透明计价——免费版下载即用，注册送 ${SIGNUP_BONUS_TOKENS.toLocaleString("en-US")} 体验 Token。`,
     monthly: "月付",
     yearly: "年付",
-    save: "省 15%",
+    save: "省 2 个月",
     popular: "最受欢迎",
     perMonth: "/ 月",
+    perYear: "/ 年",
     cta: "选择此套餐",
-    items: [
-      {
-        name: "入门",
-        priceMonthly: "58",
-        priceYearly: "50",
-        desc: "小团队 / 个人起步",
-        features: ["3 个聊天账号", "AI 拟人翻译", "1 个平台", "基础声音克隆体验"],
-        plan: "autochat-entry",
-      },
-      {
-        name: "团队",
-        priceMonthly: "198",
-        priceYearly: "168",
-        desc: "成长型团队首选",
-        features: ["10 个聊天账号", "全平台聚合", "AI 自动成交回复", "人设语音消息", "优先客服"],
-        highlight: true,
-        plan: "autochat-team",
-      },
-      {
-        name: "旗舰",
-        priceMonthly: "598",
-        priceYearly: "508",
-        desc: "规模化 / 企业级",
-        features: ["50 个聊天账号", "AI 自动成交 + 人设语音", "人工接管 + 知识库", "数据看板", "可选私有化部署"],
-        plan: "autochat-flagship",
-      },
-    ],
+    fullPricing: "看完整价格 · Token 费率 · 用量计算器 →",
+    // 2026-08-19 Token 分层：五档卡片由 chatx-pricing.ts 派生（年付=×10 送 2 个月，显示年总价）。
+    items: chatxPlanCardItems("zh"),
   },
   orderSteps: {
     title: "三步即可开通",
@@ -614,7 +596,7 @@ const zh: Dict = {
       { q: "AI 能自动跟客户成交吗？人工能接管吗？", a: "可以。AI 以你的人设 7×24 自动接洽、答疑、跟进、促单转化，遇到关键节点人工可随时一键接管。" },
       { q: "声音克隆需要什么素材？", a: "仅需几十秒清晰人声样本即可零样本克隆；请确保你拥有该声音的授权。" },
       { q: "私有大模型和公有云 API 有什么区别？", a: "私有部署的大模型数据完全留在本地、不依赖公有云内容策略，可按你的业务自由微调知识库与输出风格，无云端上报，自主可控。" },
-      { q: "可以按量付费吗？", a: "可以。多数业务同时提供订阅与按量加购，用多少付多少，灵活组合。" },
+      { q: "可以按量付费吗？Token 是什么？", a: "可以。Token 是全站统一的 AI 用量单位，每个动作的消耗全部公示（如 AI 回复 10 Token/条、专业翻译 10 Token/千字符）；订阅含每月 Token，超出买 Token 包（12 个月有效），也可选 0 月费的按量版纯钱包扣费。标准翻译不耗 Token、永久免费。" },
       { q: "如何确认我在和官方沟通、收款地址无误？", a: "官网只在订单页实时展示收款地址；客服只使用官网页面上列出的官方 Telegram 账号。任何『主动私聊你的客服』或第三方转发的地址，请一律回到订单页核对后再操作。" },
     ],
   },
@@ -1074,14 +1056,11 @@ const en: Dict = {
       id: "chatx",
       tag: "ChatX",
       title: "AI Closing Chat · Unified Inbox",
-      desc: "Every platform's messages flow into one workspace: AI answers, follows up and closes in your persona, human-like translation is built in, and you take over with one click at key moments; private deployment supported.",
-      features: ["Unified multi-platform inbox", "Persona-driven AI follow-up", "Built-in human-like translation", "One-click human takeover"],
+      desc: "Every platform's messages flow into one workspace: AI answers, follows up and closes in your persona, standard translation is free forever, and you take over with one click at key moments; AI usage meters at transparent token rates. Private deployment supported.",
+      features: ["Unified multi-platform inbox", "Persona-driven AI follow-up", "Standard translation free forever", "One-click human takeover"],
       highlight: true,
-      pricing: [
-        { plan: "Entry", price: "58 / mo", detail: "3 chat accounts · 1 platform", order: "autochat-entry" },
-        { plan: "Team", price: "198 / mo", detail: "10 accounts · all platforms · AI auto-closing", order: "autochat-team" },
-        { plan: "Flagship", price: "598 / mo", detail: "50 accounts · human takeover · analytics", order: "autochat-flagship" },
-      ],
+      // 2026-08-19 token plans: rows derived from chatx-pricing.ts (Free/Personal/Flex/Team/Flagship).
+      pricing: chatxPlanRows("en"),
     },
     {
       id: "reach",
@@ -1107,15 +1086,11 @@ const en: Dict = {
       // (id / SKUs / deep links unchanged; lingox-* licensing keeps fulfilling as before).
       id: "translate",
       tag: "ChatX · Translate",
-      title: "Cross-border Chat Translation · Translate Plans",
-      desc: "Two-way real-time text + voice translation across platforms, glossary-locked proper nouns, cost-saving translation memory, and a unified inbox that builds customer assets — so teams that don't speak the language can chat with global clients on WhatsApp / Telegram / LINE. Translation ships inside the ChatX client, licensed by seats + character quota; download ChatX to use it.",
-      features: ["Multi-platform translation", "Term lock · translation memory", "Unified inbox · customer assets", "Multimodal (image/voice)"],
-      // Prices mirror lib/pricing.ts::translateOffers (USD; repriced 2026-07-18, competitor ×2); change both together.
-      pricing: [
-        { plan: "Char pack", price: "59", detail: "One-time · 1.5M chars + glossary + translation memory", order: "translate-charpack" },
-        { plan: "Team", price: "99 / mo", detail: "3M chars/mo + multi-seat inbox + customer journey + funnel counter", order: "translate-team" },
-        { plan: "Pro", price: "198 / mo", detail: "Unlimited chars + multimodal translate + confidence/engine health", order: "translate-pro" },
-      ],
+      title: "Cross-border Chat Translation · Standard Free Forever",
+      desc: "Two-way real-time text + voice translation across platforms — standard translation is free in every plan with unlimited characters (built-in engine, fair use 2M chars/day). Term-lock glossaries, translation memory, certified DeepL and image/voice multimodal are pro features metered in tokens. Ships inside the ChatX client; download and go.",
+      features: ["Standard translation free · unlimited", "Term lock · translation memory", "Unified inbox · customer assets", "Multimodal (image/voice)"],
+      // 2026-08-19 free-translation repricing: rows derived from chatx-pricing.ts::translateRows.
+      pricing: translateRows("en"),
     },
     {
       id: "interpret",
@@ -1163,7 +1138,7 @@ const en: Dict = {
     },
   ],
   pricingSection: {
-    note: `STUDIO: Free face-swap+watermark / Starter ${studioTier("starter").monthly} / Standard ${studioTier("standard").monthly} / Pro ${studioTier("pro").monthly} (monthly; quarterly & annual list prices) / Flagship quote. ChatX (closing + translate) keeps its own plans; anything beyond the list is custom by scenario.`,
+    note: `ChatX: Free $0 (unlimited standard translation) / Personal 39 / Team 49 per seat / Flagship 598 (monthly; annual ×10 = 2 months free); token packs from 9.9. STUDIO: free face swap+watermark / Starter ${studioTier("starter").monthly} / Standard ${studioTier("standard").monthly} / Pro ${studioTier("pro").monthly} / Flagship quote. Anything beyond the list is custom by scenario.`,
   },
   trust: {
     platformsLabel: "Deeply integrated platforms",
@@ -1211,40 +1186,17 @@ const en: Dict = {
   },
   plans: {
     title: "AI Auto-Closing Chat · Plans",
-    subtitle: "Aggregation + human-like AI translation + AI auto-closing + persona voice. Pick by account scale; save more annually.",
+    subtitle: `Standard translation free forever; AI replies, pro translation and cloned voice meter at transparent token rates — the Free plan needs no card, with ${SIGNUP_BONUS_TOKENS.toLocaleString("en-US")} bonus tokens on signup.`,
     monthly: "Monthly",
     yearly: "Yearly",
-    save: "Save 15%",
+    save: "2 months free",
     popular: "Most popular",
     perMonth: "/ mo",
+    perYear: "/ yr",
     cta: "Choose plan",
-    items: [
-      {
-        name: "Entry",
-        priceMonthly: "58",
-        priceYearly: "50",
-        desc: "Small teams / individuals",
-        features: ["3 chat accounts", "Human-like AI translation", "1 platform", "Basic voice cloning trial"],
-        plan: "autochat-entry",
-      },
-      {
-        name: "Team",
-        priceMonthly: "198",
-        priceYearly: "168",
-        desc: "Best for growing teams",
-        features: ["10 chat accounts", "All platforms unified", "AI auto-closing replies", "Persona voice messages", "Priority support"],
-        highlight: true,
-        plan: "autochat-team",
-      },
-      {
-        name: "Flagship",
-        priceMonthly: "598",
-        priceYearly: "508",
-        desc: "Scale / enterprise",
-        features: ["50 chat accounts", "AI auto-closing + persona voice", "Human handoff + knowledge base", "Analytics dashboard", "Optional private deployment"],
-        plan: "autochat-flagship",
-      },
-    ],
+    fullPricing: "Full pricing · token rates · calculator →",
+    // 2026-08-19 token plans: cards derived from chatx-pricing.ts (annual = ×10, shown as yearly total).
+    items: chatxPlanCardItems("en"),
   },
   orderSteps: {
     title: "Get started in 3 steps",
@@ -1265,7 +1217,7 @@ const en: Dict = {
       { q: "Can AI close deals automatically? Can humans take over?", a: "Yes. AI works your persona 24/7 to engage, answer, follow up and convert; at key moments a human can take over in one click." },
       { q: "What does voice cloning need from me?", a: "Just a few dozen seconds of clear voice audio for zero-shot cloning; make sure you hold the rights to that voice." },
       { q: "How is a private LLM different from a public cloud API?", a: "A privately deployed LLM keeps data fully local, free of public-cloud dependencies — fine-tune its knowledge base and output style to your business, with no cloud reporting and full self-control." },
-      { q: "Can I pay per usage?", a: "Yes. Most services offer both subscriptions and usage-based add-ons — pay for what you use, mix freely." },
+      { q: "Can I pay per usage? What are tokens?", a: "Yes. Tokens are the single AI-usage unit across the product, with every action's cost published (e.g. an AI reply costs 10 tokens; pro translation 10 tokens/1k chars). Plans include monthly tokens; packs top you up (valid 12 months), and the Flex plan is pure pay-as-you-go with no monthly fee. Standard translation costs no tokens — it's free forever." },
       { q: "How do I know I'm talking to the official team and paying the right address?", a: "The payment address is shown live on the order page only, and our support uses only the official Telegram accounts listed on this site. If a \"support agent\" messages you first, or a third party forwards you an address, always go back to the order page and verify before acting." },
     ],
   },

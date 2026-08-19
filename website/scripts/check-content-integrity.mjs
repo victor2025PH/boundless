@@ -167,6 +167,9 @@ function checkPrices() {
   const facts = JSON.parse(readFileSync(factsPath, "utf8"));
   const contentSrc = readFileSync(join(websiteRoot, "lib", "content.ts"), "utf8");
   const pricingSrc = readFileSync(join(websiteRoot, "lib", "pricing.ts"), "utf8");
+  // 2026-08-19 Token 定价改版：智聊/翻译的价格单一真相迁到 lib/chatx-pricing.ts
+  //（content.ts / pricing.ts 全部派生、不再有字面量），价格文本比对源随之扩一处。
+  const chatxPricingSrc = readFileSync(join(websiteRoot, "lib", "chatx-pricing.ts"), "utf8");
 
   let checked = 0;
   const productsToCheck = ["zhiliao", "tongyi"];
@@ -183,32 +186,36 @@ function checkPrices() {
         // 非定值报价（TBD / from N / 按规模报价）不做文本比对
         continue;
       }
+      // 停售台账 SKU（note/名称带「停售」/legacy）不再要求出现在文案——只留注册表反查。
+      const legacy = /停售|legacy/i.test(`${sku.id} ${sku.name ?? ""} ${sku.note ?? ""}`);
       factPrices[pid].add(price);
+      if (legacy) continue;
       checked++;
       const re = priceRe(price);
-      if (!re.test(contentSrc) && !re.test(pricingSrc)) {
+      if (!re.test(contentSrc) && !re.test(pricingSrc) && !re.test(chatxPricingSrc)) {
         problems.push(
-          `SKU ${sku.id}（${pid}）价格 ${price} 在 lib/content.ts 与 lib/pricing.ts 均未出现 —— 文案价格与事实源脱钩`
+          `SKU ${sku.id}（${pid}）价格 ${price} 在 lib/content.ts / lib/pricing.ts / lib/chatx-pricing.ts 均未出现 —— 文案价格与事实源脱钩`
         );
       }
     }
   }
 
-  // 反向断言：content.ts 里 autochat 档位（plans items 的 priceMonthly）出现的价格
-  // 必须 ∈ 事实源 zhiliao（chatx）SKU 价格集合 —— 防止文案侧擅自改价/加档。
-  // 刻意排除 priceYearly：那是"年付省 15%"的派生展示价（50/168/508），不是 SKU 事实，
-  // 事实源里也没有月付外的档位；如未来上年付 SKU，先进 product.yaml 再改这里。
-  const monthlyMatches = [...contentSrc.matchAll(/priceMonthly:\s*["']([\d.]+)["']/g)];
-  if (monthlyMatches.length < 3) {
+  // 反向断言（2026-08-19 起断言目标 = 新单源 chatx-pricing.ts）：CHATX_PLANS 各档
+  // monthly 价必须 ∈ 事实源 zhiliao/tongyi SKU 价格集合 —— 防止官网侧擅自改价/加档
+  //（skuId: null 的免费/按量档除外；更强的逐 SKU 相等闸在 scripts/assert-order-lines.mjs）。
+  const planPriceMatches = [...chatxPricingSrc.matchAll(/skuId:\s*"[\w-]+",\s*\n\s*edition:[^\n]+\n\s*monthly:\s*([\d.]+)/g)];
+  if (planPriceMatches.length < 3) {
     problems.push(
-      `content.ts 中 autochat 档位价格（priceMonthly）只找到 ${monthlyMatches.length} 处（预期 ≥3）—— 字段改名或结构变更，请同步本门禁`
+      `chatx-pricing.ts 档位价格只抽到 ${planPriceMatches.length} 处（预期 ≥3）—— 源码形状变更，请同步本门禁`
     );
   }
-  for (const mm of monthlyMatches) {
+  const factUnion = new Set([...factPrices.zhiliao, ...factPrices.tongyi]);
+  for (const mm of planPriceMatches) {
+    if (Number(mm[1]) === 0) continue; // 免费档不是 SKU 价
     checked++;
-    if (!factPrices.zhiliao.has(mm[1])) {
+    if (!factUnion.has(mm[1])) {
       problems.push(
-        `content.ts autochat 档位出现价格 ${mm[1]}，不在事实源 zhiliao SKU 价格集合 {${[...factPrices.zhiliao].join(", ")}} 内`
+        `chatx-pricing.ts 档位价格 ${mm[1]} 不在事实源 zhiliao/tongyi SKU 价格集合内（改价必须先改 product.yaml 并重跑 sync:facts）`
       );
     }
   }

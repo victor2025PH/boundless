@@ -270,3 +270,54 @@ Service 节点在原定制部署 2 档之上加挂买断/矩阵）；新数组�
 - `website/` 目录 `npx tsc --noEmit`：**退出码 0，零类型错误**。
 - grep 复核：本次许可文件中剩余 "USDT" 全部为 §8.3 所列支付轨道语义；"3980" 全站已清零。
 - 未运行 `npm run build`（按分工统一执行）。
+
+---
+
+## 9. 2026-08-19 Token 定价改版（ChatGPT 式分层 + 翻译免费化，老板拍板）
+
+### 9.1 决议内容
+
+体系换轨：**订阅（含每月 Token）+ Token 包（耗材）双轮**，统一货币 Token 跨智聊/通译一个钱包。
+
+| 决策点 | 拍板 |
+|---|---|
+| 个人版 | \/月（替代 Entry \；对齐 STUDIO Starter 同价带） |
+| 团队版 | \/坐席/月，最少 2 席（替代整包 \；席位可扩即增收） |
+| 免费版 | \ 正式档（1 账号/1 平台/1,000 Token 月 + 注册送 10,000 体验 Token = 现行试用 1M 字符精确等值） |
+| 按量版 Flex | 0 月费，功能对齐个人版，纯 Token 钱包扣费 |
+| 翻译 | **标准翻译永久免费不限字符**（公平使用 200 万字符/日/授权）；专业翻译 10 Token/千字符、DeepL 认证 40/千字符 |
+| Token 包 | 9.9/10k · 49/60k · 199/300k · 499/1M，12 个月有效，跨产品通用 |
+| 年付 | 全线统一 ×10（送 2 个月），废除首页旧「85 折折合月价」双公式 |
+| 老客迁移 | 存量订阅服务到期；charpack 未用完按 1.5M 字符 = 60,000 Token 换发（客户受益） |
+
+### 9.2 SKU 注册表变更（products/*/product.yaml → 重新生成，25→34 SKU）
+
+新增在售：`chatx-free(0)` / `chatx-personal(39)` / `chatx-team-seat(49/席)` /
+`token-pack-s/m/l/xl(9.9/49/199/499)` / `lingox-free(0)` / `lingox-workbench(29/席)`。
+停售转台账（保留条目防历史订单丢反查）：`chatx-entry(58)` / `chatx-team(198)` /
+`lingox-charpack(59)` / `lingox-team(99)` / `lingox-pro(198)`。
+
+### 9.3 官网侧单源化（新文件 website/lib/chatx-pricing.ts）
+
+- 新单一真相 `chatx-pricing.ts`（档位/Token 费率/包/计算器纯函数）；`pricing.ts` 的
+  autochatOffers/tokenPackOffers/translateOffers 全部派生，旧价降级 legacy 数组仅供
+  findOfferBySkuId 反查；content.ts 套餐卡/产品卡报价行全部派生，零手写数字。
+- 新 `/pricing` 报价决策页（档位对比/Token 计价透明表/用量计算器/竞品锚定/FAQ）；
+  `/order` 退居结算页并新增：Token 包产品线 Tab、团队版坐席步进器（订单新增 seats 字段）、
+  停售档深链平移表 LEGACY_PLAN_MAP（老链接绝不落空）。
+- 门禁升级：`assert-order-lines.mjs` 重写为「可购 key ∈ offer-map + order-lines 禁手写价 +
+  **官网 ⟺ sku_registry 价格逐一相等**」跨仓单源闸；`assert-offer-map.mjs` 断言扩到新档；
+  `check-content-integrity.mjs` 价格断言目标迁到 chatx-pricing.ts（停售 SKU 豁免文案出现）。
+
+### 9.4 引擎侧地基（engines/chengjie，未接线零行为变化）
+
+`src/licensing/token_ledger.py`（语义对齐 quota_store：check→do→record、幂等 ref、fail-open、
+默认关 `licensing.token_ledger.enabled`）+ `tests/test_token_ledger.py` 12 例含
+**官网 ⟺ 引擎 Token 费率交叉钉**（同机比对 chatx-pricing.ts，CI 无 website 自动跳过）。
+
+### 9.5 验证
+
+- `npx tsc --noEmit` 0 错误；`npm run build` 成功（/pricing 静态生成）；
+- `assert-offer-map`（15 条一致）/ `assert-order-lines`（8 SKU 跨仓价一致）/
+  `gate:content`（17 项价格断言）全绿；
+- chengjie `tests/test_token_ledger.py` 12/12。

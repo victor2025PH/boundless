@@ -10,7 +10,7 @@ const LANGUAGES = { "zh-CN": "/order", en: "/en/order", "x-default": "/order" };
 export const metadata: Metadata = {
   title: "Plans & Ordering · BOUNDLESS",
   description:
-    "STUDIO plans and licensing: free face swap (watermarked) to start; paid tiers unlock AI image gen, video face swap, live face swap, voice changer and interpreting. Runs on your own hardware — unlimited usage, no per-character or per-minute metering; we assist deployment. Monthly, quarterly or annual billing, settled in USDT; Flagship private deployment is quoted by sales.",
+    "Self-serve checkout: STUDIO plans (free face swap to start, unlimited usage on your hardware); ChatX token plans (Free to download · Personal 39 · Team 49/seat · Flagship 598, standard translation free forever); token packs from 9.9 shared across products. Monthly / quarterly / annual (2 months free), USDT or card, auto-activation.",
   alternates: { canonical: "/en/order", languages: LANGUAGES },
   openGraph: {
     title: "Plans & Ordering · BOUNDLESS",

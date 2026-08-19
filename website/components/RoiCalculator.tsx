@@ -70,9 +70,15 @@ export default function RoiCalculator() {
   const [conv, setConv] = useState(8);
 
   const calc = useMemo(() => {
-    const planIdx = agents >= 9 || leads >= 150 ? 2 : 1;
-    const plan = t.plans.items[planIdx];
-    const planCost = Number(plan.priceMonthly) || 0;
+    // 2026-08-19 Token 定价改版：按 plan key 选档（旧按索引取会踩到 0 月费的按量版卡）。
+    // 单人 → 个人版；多人 → 团队版按坐席真实核算（每坐席价 × 坐席数，最少 2 席）。
+    const heavy = agents >= 2 || leads >= 150;
+    const plan =
+      t.plans.items.find((p) => p.plan === (heavy ? "autochat-team-seat" : "autochat-personal")) ??
+      t.plans.items.find((p) => Number(p.priceMonthly) > 0) ??
+      t.plans.items[0];
+    const seatCount = plan.seatSuffix ? Math.max(2, Math.min(50, agents)) : 1;
+    const planCost = (Number(plan.priceMonthly) || 0) * seatCount;
 
     const laborSave = agents * salary * LABOR_OPT;
     const newConv = Math.min(conv * (1 + CONV_UPLIFT), 95);
@@ -85,7 +91,7 @@ export default function RoiCalculator() {
     const outBar = 100;
     const inBar = gain > 0 ? Math.max(4, (planCost / gain) * 100) : 4;
 
-    return { plan, planCost, laborSave, extraRev, gain, net, roi, yearNet, inBar, outBar };
+    return { plan, planCost, seatCount, laborSave, extraRev, gain, net, roi, yearNet, inBar, outBar };
   }, [agents, salary, leads, aov, conv, t.plans.items]);
 
   return (
@@ -191,7 +197,8 @@ export default function RoiCalculator() {
                   {r.planLabel}
                 </span>
                 <span className="text-sm font-semibold text-white">
-                  {calc.plan.name} · {calc.plan.priceMonthly} USD{r.perMonth}
+                  {calc.plan.name}
+                  {calc.seatCount > 1 ? ` × ${calc.seatCount}` : ""} · {calc.planCost} USD{r.perMonth}
                 </span>
               </div>
 

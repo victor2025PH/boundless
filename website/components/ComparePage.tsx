@@ -78,12 +78,21 @@ export default function ComparePage({ spec }: { spec: CompareSpec }) {
             {zh ? "免费下载试用（自带体验额度）" : "Free trial download"}
           </a>
           <a
-            href={zh ? "/order?plan=team" : "/en/order?plan=team"}
+            href={zh ? "/pricing" : "/en/pricing"}
             onClick={() => track("cta_click", { where: `compare_${spec.slug}_order` })}
             className="inline-flex items-center gap-2 rounded-full border border-white/15 px-7 py-3 text-sm text-slate-200 transition hover:border-neon-cyan/50 hover:text-white"
           >
             <ShoppingCart className="h-4 w-4" />
             {zh ? "查看套餐与价格" : "Plans & pricing"}
+          </a>
+          {/* P2（2026-08-18）：合规是对 respond.io/SaleSmartly 的差异化维度——表格里
+              有「合规工具」行，这里给可点的深读入口（埋点分 slug 归因）。 */}
+          <a
+            href={zh ? "/compliance" : "/en/compliance"}
+            onClick={() => track("cta_click", { where: `compare_${spec.slug}_compliance` })}
+            className="inline-flex items-center gap-1.5 text-sm text-slate-400 underline-offset-4 transition hover:text-neon-cyan hover:underline"
+          >
+            {zh ? "合规能力详情（EU AI Act / SB 243）→" : "Compliance capabilities (EU AI Act / SB 243) →"}
           </a>
         </div>
       </div>

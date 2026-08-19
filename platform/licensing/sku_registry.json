@@ -1,10 +1,10 @@
 {
-  "generated": "2026-07-20",
+  "generated": "2026-08-19",
   "source": "products/*/product.yaml",
   "note": "Single source of SKUs for website pricing + license gating + order. Regenerate via platform/licensing/build_sku_registry.py.",
   "summary": {
     "product_count": 8,
-    "sku_count": 25,
+    "sku_count": 34,
     "tbd_price_count": 2,
     "by_category": {
       "studio": 3,
@@ -197,8 +197,24 @@
       "landing": "/interpreting",
       "skus": [
         {
+          "sku_id": "lingox-free",
+          "name": "免费版",
+          "unit": "month",
+          "price": "0",
+          "currency": "USD",
+          "note": ""
+        },
+        {
+          "sku_id": "lingox-workbench",
+          "name": "翻译工作台·每坐席",
+          "unit": "month",
+          "price": "29",
+          "currency": "USD",
+          "note": ""
+        },
+        {
           "sku_id": "lingox-charpack",
-          "name": "字符包",
+          "name": "字符包（停售）",
           "unit": "one-time",
           "price": "59",
           "currency": "USD",
@@ -206,7 +222,7 @@
         },
         {
           "sku_id": "lingox-team",
-          "name": "团队",
+          "name": "团队（停售）",
           "unit": "month",
           "price": "99",
           "currency": "USD",
@@ -214,7 +230,7 @@
         },
         {
           "sku_id": "lingox-pro",
-          "name": "专业",
+          "name": "专业（停售）",
           "unit": "month",
           "price": "198",
           "currency": "USD",
@@ -225,12 +241,12 @@
     {
       "id": "zhikong",
       "brand_key": "matrixx",
-      "name": "智控王",
+      "name": "智控",
       "category": "growth",
       "visibility": "gated",
       "risk": "high",
       "engine": "tgkz2026",
-      "landing": null,
+      "landing": "/matrix",
       "skus": [
         {
           "sku_id": "matrixx-silver",
@@ -269,20 +285,28 @@
       "landing": null,
       "skus": [
         {
-          "sku_id": "chatx-entry",
-          "name": "入门",
+          "sku_id": "chatx-free",
+          "name": "免费版",
           "unit": "month",
-          "price": "58",
+          "price": "0",
           "currency": "USD",
-          "note": "3 账号/AI 翻译/1 平台"
+          "note": "1 坐席/1 账号/1 平台/标准翻译免费不限量/1"
         },
         {
-          "sku_id": "chatx-team",
-          "name": "团队",
+          "sku_id": "chatx-personal",
+          "name": "个人版",
           "unit": "month",
-          "price": "198",
+          "price": "39",
           "currency": "USD",
-          "note": "10 账号/全平台/AI 自动成交"
+          "note": "1 坐席/3 账号/全平台/30"
+        },
+        {
+          "sku_id": "chatx-team-seat",
+          "name": "团队版·每坐席",
+          "unit": "month",
+          "price": "49",
+          "currency": "USD",
+          "note": "每坐席计价 ≥2 席/每席 5 账号+50"
         },
         {
           "sku_id": "chatx-flagship",
@@ -290,7 +314,55 @@
           "unit": "month",
           "price": "598",
           "currency": "USD",
-          "note": "50 账号/人工接管/数据看板"
+          "note": "50 账号/人工接管/数据看板/本地模型 Token 不限/可选私有化"
+        },
+        {
+          "sku_id": "token-pack-s",
+          "name": "Token 体验包",
+          "unit": "one-time",
+          "price": "9.9",
+          "currency": "USD",
+          "note": 10
+        },
+        {
+          "sku_id": "token-pack-m",
+          "name": "Token 标准包",
+          "unit": "one-time",
+          "price": "49",
+          "currency": "USD",
+          "note": 60
+        },
+        {
+          "sku_id": "token-pack-l",
+          "name": "Token 专业包",
+          "unit": "one-time",
+          "price": "199",
+          "currency": "USD",
+          "note": 300
+        },
+        {
+          "sku_id": "token-pack-xl",
+          "name": "Token 团队包",
+          "unit": "one-time",
+          "price": "499",
+          "currency": "USD",
+          "note": 1
+        },
+        {
+          "sku_id": "chatx-entry",
+          "name": "入门（停售）",
+          "unit": "month",
+          "price": "58",
+          "currency": "USD",
+          "note": "停售 2026-08-19/3 账号/AI 翻译/1 平台/由个人版 39 承接"
+        },
+        {
+          "sku_id": "chatx-team",
+          "name": "团队（停售）",
+          "unit": "month",
+          "price": "198",
+          "currency": "USD",
+          "note": "停售 2026-08-19/10 账号/全平台/由团队版 49 每坐席承接"
         }
       ]
     },
@@ -501,8 +573,32 @@
       "brand_key": "lingox",
       "category": "lingo",
       "visibility": "public",
+      "sku_id": "lingox-free",
+      "name": "免费版",
+      "unit": "month",
+      "price": "0",
+      "currency": "USD",
+      "note": ""
+    },
+    {
+      "product": "tongyi",
+      "brand_key": "lingox",
+      "category": "lingo",
+      "visibility": "public",
+      "sku_id": "lingox-workbench",
+      "name": "翻译工作台·每坐席",
+      "unit": "month",
+      "price": "29",
+      "currency": "USD",
+      "note": ""
+    },
+    {
+      "product": "tongyi",
+      "brand_key": "lingox",
+      "category": "lingo",
+      "visibility": "public",
       "sku_id": "lingox-charpack",
-      "name": "字符包",
+      "name": "字符包（停售）",
       "unit": "one-time",
       "price": "59",
       "currency": "USD",
@@ -514,7 +610,7 @@
       "category": "lingo",
       "visibility": "public",
       "sku_id": "lingox-team",
-      "name": "团队",
+      "name": "团队（停售）",
       "unit": "month",
       "price": "99",
       "currency": "USD",
@@ -526,7 +622,7 @@
       "category": "lingo",
       "visibility": "public",
       "sku_id": "lingox-pro",
-      "name": "专业",
+      "name": "专业（停售）",
       "unit": "month",
       "price": "198",
       "currency": "USD",
@@ -573,24 +669,36 @@
       "brand_key": "chatx",
       "category": "growth",
       "visibility": "mixed",
-      "sku_id": "chatx-entry",
-      "name": "入门",
+      "sku_id": "chatx-free",
+      "name": "免费版",
       "unit": "month",
-      "price": "58",
+      "price": "0",
       "currency": "USD",
-      "note": "3 账号/AI 翻译/1 平台"
+      "note": "1 坐席/1 账号/1 平台/标准翻译免费不限量/1"
     },
     {
       "product": "zhiliao",
       "brand_key": "chatx",
       "category": "growth",
       "visibility": "mixed",
-      "sku_id": "chatx-team",
-      "name": "团队",
+      "sku_id": "chatx-personal",
+      "name": "个人版",
       "unit": "month",
-      "price": "198",
+      "price": "39",
       "currency": "USD",
-      "note": "10 账号/全平台/AI 自动成交"
+      "note": "1 坐席/3 账号/全平台/30"
+    },
+    {
+      "product": "zhiliao",
+      "brand_key": "chatx",
+      "category": "growth",
+      "visibility": "mixed",
+      "sku_id": "chatx-team-seat",
+      "name": "团队版·每坐席",
+      "unit": "month",
+      "price": "49",
+      "currency": "USD",
+      "note": "每坐席计价 ≥2 席/每席 5 账号+50"
     },
     {
       "product": "zhiliao",
@@ -602,7 +710,79 @@
       "unit": "month",
       "price": "598",
       "currency": "USD",
-      "note": "50 账号/人工接管/数据看板"
+      "note": "50 账号/人工接管/数据看板/本地模型 Token 不限/可选私有化"
+    },
+    {
+      "product": "zhiliao",
+      "brand_key": "chatx",
+      "category": "growth",
+      "visibility": "mixed",
+      "sku_id": "token-pack-s",
+      "name": "Token 体验包",
+      "unit": "one-time",
+      "price": "9.9",
+      "currency": "USD",
+      "note": 10
+    },
+    {
+      "product": "zhiliao",
+      "brand_key": "chatx",
+      "category": "growth",
+      "visibility": "mixed",
+      "sku_id": "token-pack-m",
+      "name": "Token 标准包",
+      "unit": "one-time",
+      "price": "49",
+      "currency": "USD",
+      "note": 60
+    },
+    {
+      "product": "zhiliao",
+      "brand_key": "chatx",
+      "category": "growth",
+      "visibility": "mixed",
+      "sku_id": "token-pack-l",
+      "name": "Token 专业包",
+      "unit": "one-time",
+      "price": "199",
+      "currency": "USD",
+      "note": 300
+    },
+    {
+      "product": "zhiliao",
+      "brand_key": "chatx",
+      "category": "growth",
+      "visibility": "mixed",
+      "sku_id": "token-pack-xl",
+      "name": "Token 团队包",
+      "unit": "one-time",
+      "price": "499",
+      "currency": "USD",
+      "note": 1
+    },
+    {
+      "product": "zhiliao",
+      "brand_key": "chatx",
+      "category": "growth",
+      "visibility": "mixed",
+      "sku_id": "chatx-entry",
+      "name": "入门（停售）",
+      "unit": "month",
+      "price": "58",
+      "currency": "USD",
+      "note": "停售 2026-08-19/3 账号/AI 翻译/1 平台/由个人版 39 承接"
+    },
+    {
+      "product": "zhiliao",
+      "brand_key": "chatx",
+      "category": "growth",
+      "visibility": "mixed",
+      "sku_id": "chatx-team",
+      "name": "团队（停售）",
+      "unit": "month",
+      "price": "198",
+      "currency": "USD",
+      "note": "停售 2026-08-19/10 账号/全平台/由团队版 49 每坐席承接"
     },
     {
       "product": "zhituo",

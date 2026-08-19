@@ -24,6 +24,7 @@ export async function GET(req: NextRequest) {
     plan: o.plan,
     period: o.period,
     delivery: o.delivery || "installed",
+    seats: o.seats ?? null,
     pay_amount: o.pay_amount,
     t: o.t,
     paid_at: o.paid_at ?? null,
@@ -47,6 +48,8 @@ export async function POST(req: NextRequest) {
     const method = clean(data?.method, 10) === "card" ? ("card" as const) : ("usdt" as const);
     // 交付形态白名单：hosted=托管实例；其余/缺省=装机授权（防任意字符串污染履约分流）。
     const delivery = clean(data?.delivery, 16) === "hosted" ? ("hosted" as const) : ("installed" as const);
+    // 坐席数（2026-08-19 按坐席档）：夹 [1,50]；缺省/非按坐席档不写（历史单=1 席语义）。
+    const seats = Math.min(50, Math.max(0, Math.round(Number(data?.seats) || 0)));
 
     const order = await createOrder({
       plan: clean(data?.plan, 40),
@@ -55,6 +58,7 @@ export async function POST(req: NextRequest) {
       amount: Math.max(0, Number(data?.amount) || 0),
       method,
       delivery,
+      ...(seats > 0 ? { seats } : {}),
       contact,
       fingerprint: clean(data?.fingerprint, 128),
       lang: clean(data?.lang, 8),
@@ -70,7 +74,7 @@ export async function POST(req: NextRequest) {
       name: "",
       contact,
       interest: `订单 ${order.plan}/${order.period}`,
-      message: `[${order.id}] ${order.plan} (${order.edition}) ${order.period} 应付 ${order.pay_amount} USDT${order.fingerprint ? ` 指纹:${order.fingerprint}` : ""}`,
+      message: `[${order.id}] ${order.plan} (${order.edition}) ${order.period}${order.seats && order.seats > 1 ? ` ${order.seats}席` : ""} 应付 ${order.pay_amount} USDT${order.fingerprint ? ` 指纹:${order.fingerprint}` : ""}`,
       lang: order.lang,
       source: "order",
       path: "/order",

@@ -27,6 +27,9 @@ export interface OrderEntry {
   period: string;
   /** 交付形态。缺省/历史单视同 installed；hosted 单不进装机 license 守护。 */
   delivery?: OrderDelivery;
+  /** 坐席数（2026-08-19 Token 定价改版：团队版/工作台按坐席计价，amount=单价×seats）。
+   *  仅按坐席档写入；缺省/历史单=1 坐席语义。履约按此签发 seats 席位。 */
+  seats?: number;
   /** 全域 SKU 关联键，见 platform/licensing/sku_registry.json（下单时经 lib/offer-map.ts
    *  的 resolveOrderSku 推断填充；映射不到则不写，宁缺毋错）。 */
   sku_id?: string;
@@ -366,6 +369,7 @@ export async function notifyAdminsOfOrder(o: OrderEntry) {
   const text =
     `🧾 新订单 ${o.id}\n` +
     `套餐：${o.plan} (${o.edition}) · ${o.period}\n` +
+    (o.seats && o.seats > 1 ? `坐席：${o.seats} 席（按坐席计价，应付=单价×席数）\n` : "") +
     (o.delivery === "hosted" ? `交付：☁️ 云端托管（自动开通实例，勿手发授权码）\n` : "") +
     `应付：${o.pay_amount} USDT（挂牌 ${o.amount} + 识别尾数）\n` +
     `联系：${o.contact}\n` +

@@ -26,10 +26,12 @@ import {
   type Period,
 } from "@/lib/avatarhub-pricing";
 import {
+  CHATX_FREE_HINT,
   FAMILIES,
   familyDefaultTier,
   familyOfPlan,
   familyTiers,
+  resolvePlanAlias,
   type LineTier,
   type OrderFamily,
 } from "@/lib/order-lines";
@@ -39,9 +41,17 @@ const fmt = (n: number) => n.toLocaleString("en-US");
 /** 交付形态（仅智聊 ChatX 主套餐）：installed=装机授权码（默认）；hosted=云端托管实例。 */
 type Delivery = "installed" | "hosted";
 
-/** 家族通用价格：一次性商品（charpack）不随周期变价；其余走 tierPrice（年付 ×10）。 */
-function linePrice(t: LineTier, period: Period): number {
-  return t.oneTime ? t.monthly : tierPrice(t, period);
+/** 家族通用价格：一次性商品（Token 包）不随周期变价；其余走 tierPrice（年付 ×10）；
+ *  按坐席档（团队版/工作台）= 单价 × 坐席数。 */
+function linePrice(t: LineTier, period: Period, seats = 1): number {
+  const unit = t.oneTime ? t.monthly : tierPrice(t, period);
+  return t.perSeat ? unit * seats : unit;
+}
+
+/** 坐席数夹取（档位切换/深链共用）。 */
+function clampSeats(t: LineTier, n: number): number {
+  if (!t.perSeat) return 1;
+  return Math.min(t.perSeat.max, Math.max(t.perSeat.min, Math.round(n) || t.perSeat.min));
 }
 
 export default function OrderPanel() {
@@ -50,6 +60,8 @@ export default function OrderPanel() {
   const [family, setFamily] = useState<OrderFamily>("avatarhub");
   const [period, setPeriod] = useState<Period>("monthly");
   const [selected, setSelected] = useState("pro");
+  // 坐席数（仅 perSeat 档生效；档位切换按各档下限重置，深链 ?seats= 预填）
+  const [seats, setSeats] = useState(2);
   // 交付形态：仅 chatx 产品线可选「云端托管」；切走产品线自动回落装机，绝不让
   // 非托管 SKU 带 hosted 标提交（履约分流以此字段为准）。
   const [delivery, setDelivery] = useState<Delivery>("installed");
@@ -74,11 +86,15 @@ export default function OrderPanel() {
   // 否则挂载后立刻换掉子树会让全页 whileInView 观察失效 → 面板整段卡在 opacity:0（实测）。
   useLayoutEffect(() => {
     const q = new URLSearchParams(window.location.search);
-    const plan = q.get("plan");
+    // 停售档深链平移（LEGACY_PLAN_MAP）：老链接落到承接档，绝不落空
+    const plan = resolvePlanAlias(q.get("plan") || "");
     const fam = plan ? familyOfPlan(plan, TIERS) : undefined;
     if (plan && fam) {
       setFamily(fam);
-      setSelected(plan.trim().toLowerCase());
+      setSelected(plan);
+      const tiersOfFam = familyTiers(fam, TIERS);
+      const t = tiersOfFam.find((x) => x.key === plan);
+      if (t?.perSeat) setSeats(clampSeats(t, Number(q.get("seats")) || t.perSeat.min));
     }
     const p = q.get("period");
     if (p === "annual" || p === "quarterly") setPeriod(p);
@@ -105,6 +121,11 @@ export default function OrderPanel() {
     if (family !== "chatx" && delivery === "hosted") setDelivery("installed");
   }, [family, delivery]);
 
+  // 档位切换 → 坐席数按新档下限/上限夹取（非按坐席档归 1）
+  useEffect(() => {
+    setSeats((s) => clampSeats(tier, s));
+  }, [tier]);
+
   // 选档/周期/交付 → URL 同步（replaceState，可分享/刷新不丢；保留 fp/check 等其它参数）。
   useEffect(() => {
     if (!urlReady.current || typeof window === "undefined") return;
@@ -114,11 +135,13 @@ export default function OrderPanel() {
     else u.searchParams.delete("period");
     if (family === "chatx" && delivery === "hosted") u.searchParams.set("delivery", "hosted");
     else u.searchParams.delete("delivery");
+    if (tier.perSeat) u.searchParams.set("seats", String(seats));
+    else u.searchParams.delete("seats");
     const next = u.pathname + u.search + u.hash;
     if (next !== window.location.pathname + window.location.search + window.location.hash) {
       window.history.replaceState(null, "", next);
     }
-  }, [selected, period, tier.oneTime, family, delivery]);
+  }, [selected, period, tier.oneTime, tier.perSeat, family, delivery, seats]);
 
   return (
     <section className="relative pb-24 pt-32">
@@ -171,28 +194,45 @@ export default function OrderPanel() {
           </div>
         </Reveal>
 
-        {/* ── 通译已并入智聊：合并说明（通译 tab 专属） ── */}
+        {/* ── 翻译免费化公告（2026-08-19 定价改版；通译 tab 专属） ── */}
         {family === "lingox" && (
           <Reveal eager className="mx-auto mt-6 max-w-3xl">
-            <div className="glass rounded-2xl border border-amber-400/30 bg-amber-400/[0.06] px-5 py-3.5 text-sm leading-relaxed text-slate-300">
-              <span className="mr-1.5">📌</span>
+            <div className="glass rounded-2xl border border-emerald-400/30 bg-emerald-400/[0.06] px-5 py-3.5 text-sm leading-relaxed text-slate-300">
+              <span className="mr-1.5">🎉</span>
               {zh ? (
                 <>
-                  <b className="text-amber-300">通译 LingoX 已与智聊 ChatX 合并为同一个客户端程序</b>
-                  ：下载智聊 ChatX 即可使用通译全部翻译能力；本页通译套餐照常购买，授权码在同一程序内激活生效，原有通译授权继续有效。{" "}
+                  <b className="text-emerald-300">标准翻译已永久免费、不限字符</b>
+                  ——下载智聊 ChatX 即用，无需购买。原「字符包 / 团队 / 专业」套餐停售：存量订阅服务到期，
+                  字符包未用完的字符按 <b className="text-emerald-300">150 万字符 = 60,000 Token</b> 免费换发（只多不少）。
+                  专业翻译（术语锁定 / DeepL 认证 / 多模态）按 Token 计量，见「Token 包」。{" "}
                   <a href="/download/chatx" className="text-neon-cyan hover:underline">
                     下载智聊 ChatX →
                   </a>
                 </>
               ) : (
                 <>
-                  <b className="text-amber-300">LingoX is now merged into the ChatX client — one single program</b>
-                  : download ChatX to get every LingoX translation capability. LingoX plans on this page work as before; license codes activate inside the same app, and existing LingoX licenses remain valid.{" "}
+                  <b className="text-emerald-300">Standard translation is now free forever with unlimited characters</b>
+                  {" "}— just download ChatX. Legacy char packs & plans are discontinued: active subscriptions run to term, and
+                  unused char-pack balances convert to <b className="text-emerald-300">60,000 tokens per 1.5M chars</b> (always in your favor).
+                  Pro translation (term-lock / certified DeepL / multimodal) meters in tokens — see Token packs.{" "}
                   <a href="/en/download/chatx" className="text-neon-cyan hover:underline">
                     Download ChatX →
                   </a>
                 </>
               )}
+            </div>
+          </Reveal>
+        )}
+
+        {/* ── 免费版指引（智聊 tab 专属）：免费档不出购买卡，下载即用 ── */}
+        {family === "chatx" && (
+          <Reveal eager className="mx-auto mt-6 max-w-3xl">
+            <div className="glass rounded-2xl border border-neon-cyan/25 bg-neon-cyan/[0.05] px-5 py-3.5 text-sm leading-relaxed text-slate-300">
+              <span className="mr-1.5">🆓</span>
+              {zh ? CHATX_FREE_HINT.zh : CHATX_FREE_HINT.en}{" "}
+              <a href={zh ? "/download/chatx" : "/en/download/chatx"} className="text-neon-cyan hover:underline">
+                {zh ? "免费下载 →" : "Download free →"}
+              </a>
             </div>
           </Reveal>
         )}
@@ -226,8 +266,8 @@ export default function OrderPanel() {
           {tier.oneTime && (
             <p className="text-xs text-slate-500">
               {zh
-                ? "字符包为一次性加购，价格不受月/季/年付切换影响"
-                : "Char pack is one-time — the period toggle does not change its price"}
+                ? "Token 包为一次性加购（12 个月有效），价格不受月/季/年付切换影响"
+                : "Token packs are one-time (valid 12 months) — the period toggle does not change the price"}
             </p>
           )}
         </Reveal>
@@ -299,6 +339,34 @@ export default function OrderPanel() {
               <div className="text-xs text-slate-500">{zh ? "已选套餐" : "Selected plan"}</div>
               <div className="font-semibold text-white">{zh ? tier.name.zh : tier.name.en}</div>
             </div>
+            {tier.perSeat && (
+              <div>
+                <div className="text-xs text-slate-500">
+                  {zh ? `坐席数（最少 ${tier.perSeat.min} 席）` : `Seats (min ${tier.perSeat.min})`}
+                </div>
+                <div className="mt-0.5 inline-flex items-center gap-2">
+                  <button
+                    onClick={() => setSeats((s) => clampSeats(tier, s - 1))}
+                    disabled={seats <= tier.perSeat.min}
+                    aria-label={zh ? "减少坐席" : "Fewer seats"}
+                    className="flex h-7 w-7 items-center justify-center rounded-full border border-white/15 text-slate-300 transition hover:border-neon-cyan/50 hover:text-white disabled:opacity-30"
+                  >
+                    −
+                  </button>
+                  <span className="min-w-[3.5rem] text-center font-semibold tabular-nums text-white">
+                    {seats} {zh ? "席" : seats > 1 ? "seats" : "seat"}
+                  </span>
+                  <button
+                    onClick={() => setSeats((s) => clampSeats(tier, s + 1))}
+                    disabled={seats >= tier.perSeat.max}
+                    aria-label={zh ? "增加坐席" : "More seats"}
+                    className="flex h-7 w-7 items-center justify-center rounded-full border border-white/15 text-slate-300 transition hover:border-neon-cyan/50 hover:text-white disabled:opacity-30"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            )}
             <div>
               <div className="text-xs text-slate-500">{zh ? "应付金额" : "Total"}</div>
               <div className="font-semibold text-neon-cyan">
@@ -312,10 +380,17 @@ export default function OrderPanel() {
                       : "Free"
                     : tier.oneTime
                       ? `${fmt(tier.monthly)} USD${zh ? " · 一次性" : " · one-time"}`
-                      : `${fmt(linePrice(tier, period))} USD / ${
+                      : `${fmt(linePrice(tier, period, seats))} USD / ${
                           period === "monthly" ? (zh ? "月" : "mo") : period === "quarterly" ? (zh ? "季" : "qtr") : zh ? "年" : "yr"
                         }`}
               </div>
+              {tier.perSeat && (
+                <div className="text-[11px] text-slate-500">
+                  {zh
+                    ? `${fmt(tierPrice(tier, period))} × ${seats} 席`
+                    : `${fmt(tierPrice(tier, period))} × ${seats} seats`}
+                </div>
+              )}
             </div>
             {tier.custom ? (
               <a
@@ -514,8 +589,8 @@ export default function OrderPanel() {
               ? "会员等级对应引擎授权档（trial / standard / pro / enterprise），到账后由激活服务器按机器指纹签发 Ed25519 签名授权。产出默认带 C2PA 内容凭证 + 不可见水印可验真；克隆需本人合法授权，禁止用于冒充 / 诈骗。下单前请向客服核对最新收款地址。"
               : "Plan tiers map to engine license editions (trial / standard / pro / enterprise). Licenses are Ed25519-signed against your machine fingerprint after payment. Outputs carry C2PA credentials + invisible watermark; cloning requires the subject's consent. Always verify the payment address with support before sending."
             : zh
-              ? "到账后自动签发 Ed25519 签名授权码并按联系方式送达，在后台「会员中心」粘贴即激活；字符包凭证同样在会员中心兑换（绑定下单联系方式，防串号）。下单前请向客服核对最新收款地址。"
-              : "After payment an Ed25519-signed license code is issued automatically and delivered to your contact — paste it in the admin Membership Center to activate. Char-pack vouchers redeem the same way (bound to your order contact). Always verify the payment address with support before sending."}
+              ? "到账后自动签发 Ed25519 签名授权码并按联系方式送达，在后台「会员中心」粘贴即激活；Token 包凭证同样在会员中心兑换（绑定下单联系方式，防串号）。下单前请向客服核对最新收款地址。"
+              : "After payment an Ed25519-signed license code is issued automatically and delivered to your contact — paste it in the admin Membership Center to activate. Token-pack vouchers redeem the same way (bound to your order contact). Always verify the payment address with support before sending."}
         </p>
       </div>
 
@@ -527,6 +602,7 @@ export default function OrderPanel() {
             tier={tier}
             period={period}
             family={family}
+            seats={tier.perSeat ? seats : 1}
             delivery={family === "chatx" ? delivery : "installed"}
             initialFp={prefillFp}
             attributionRef={prefillRef}
@@ -554,21 +630,22 @@ function TierCard({
   onSelect: () => void;
 }) {
   const price = linePrice(t, period);
+  const seatSuffix = t.perSeat ? (zh ? " / 坐席" : " / seat") : "";
   const unit = t.oneTime
     ? zh
       ? "USD · 一次性"
       : "USD one-time"
-    : period === "monthly"
-      ? zh
-        ? "USD / 月"
-        : "USD / mo"
-      : period === "quarterly"
+    : (period === "monthly"
         ? zh
-          ? "USD / 季"
-          : "USD / qtr"
-        : zh
-          ? "USD / 年"
-          : "USD / yr";
+          ? "USD / 月"
+          : "USD / mo"
+        : period === "quarterly"
+          ? zh
+            ? "USD / 季"
+            : "USD / qtr"
+          : zh
+            ? "USD / 年"
+            : "USD / yr") + seatSuffix;
   return (
     <Reveal eager delay={delay} className="h-full">
       <button
@@ -761,6 +838,7 @@ function CheckoutModal({
   tier,
   period,
   family,
+  seats = 1,
   delivery = "installed",
   initialFp,
   attributionRef = "",
@@ -770,6 +848,8 @@ function CheckoutModal({
   tier: LineTier;
   period: Period;
   family: OrderFamily;
+  /** 坐席数（仅 perSeat 档 >1；应付 = 单价 × seats）。 */
+  seats?: number;
   /** 交付形态（仅 chatx 可为 hosted）：hosted 单走托管开通守护，不签装机授权码。 */
   delivery?: Delivery;
   initialFp: string;
@@ -787,7 +867,7 @@ function CheckoutModal({
   const [pay, setPay] = useState<PayMethodsInfo | null>(null);
   const [method, setMethod] = useState<"usdt" | "card">("usdt");
   const [cardNotice, setCardNotice] = useState(false);
-  const price = linePrice(tier, period);
+  const price = linePrice(tier, period, seats);
   // 卡通道可用 = 后台启用 + 服务器已配 Stripe Secret；免费档（price=0）无可扣金额，不给卡入口。
   const cardAvailable = !!pay?.card?.enabled && pay?.cardSecretConfigured !== false && price > 0;
   const usdtAvailable = !pay || pay.usdt?.enabled !== false;
@@ -860,6 +940,8 @@ function CheckoutModal({
           method,
           // 托管交付标：只在显式选托管时携带（缺省=装机，与历史单同语义）
           ...(delivery === "hosted" ? { delivery: "hosted" } : {}),
+          // 坐席数：仅按坐席档携带（履约按席数签发；amount 已是 单价×seats）
+          ...(tier.perSeat ? { seats } : {}),
           // 会话归因串（AI 坐席链接 ?ref=…）：有值才带，供营销目标自动结算
           ...(attributionRef ? { ref: attributionRef } : {}),
         }),
@@ -935,6 +1017,12 @@ function CheckoutModal({
 
         <div className="mt-4 space-y-1 text-sm">
           <Row k={zh ? "套餐" : "Plan"} v={`${zh ? tier.name.zh : tier.name.en} (${tier.edition})`} />
+          {tier.perSeat && (
+            <Row
+              k={zh ? "坐席数" : "Seats"}
+              v={zh ? `${seats} 席 × ${fmt(tierPrice(tier, period))} USD` : `${seats} × ${fmt(tierPrice(tier, period))} USD`}
+            />
+          )}
           {family === "chatx" && (
             <Row
               k={zh ? "交付方式" : "Delivery"}
@@ -1033,8 +1121,8 @@ function CheckoutModal({
           <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
             {tier.oneTime
               ? zh
-                ? "字符包凭证绑定此联系方式，且需与订阅时填写的一致（同一 Telegram / 邮箱即可，写法不必逐字相同）。"
-                : "The top-up voucher is bound to this contact — use the same Telegram / email as your subscription (formatting may differ)."
+                ? "Token 包凭证绑定此联系方式；已有订阅的请与订阅联系方式一致（同一 Telegram / 邮箱即可，写法不必逐字相同）。"
+                : "The token-pack voucher is bound to this contact — if you have a subscription, use the same Telegram / email (formatting may differ)."
               : delivery === "hosted"
                 ? zh
                   ? "到账后自动开通你的独立云端实例，专属网址与登录账号按此联系方式送达（订单进度页也可自取），浏览器直接使用，无需安装。"

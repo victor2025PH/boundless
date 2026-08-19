@@ -21,13 +21,14 @@ export interface NavLinkItem {
   anchor?: string;
 }
 
-/** 价格入口：全端统一「看价格」→ /order 自助下单页。
- *  文案定稿依据：A/B 数据窗口内 b 组（看价格）与 a 组（购买）同指 /order 后，
- *  「看价格」承诺更轻、语义同时覆盖「看价 + 购买」两问，采纳为唯一文案。 */
+/** 价格入口：全端统一「看价格」→ /pricing 报价决策页（2026-08-19 Token 定价改版：
+ *  /pricing 负责「看懂与选择」——档位对比 / Token 费率 / 计算器 / FAQ；/order 退居
+ *  纯结算页，/pricing 各 CTA 深链直达。旧收藏 /order 不受影响（仍可直接下单）。
+ *  文案沿用 2026-08-07 A/B 定稿「看价格」。 */
 export const NAV_PRICING: NavLinkItem = {
   id: "pricing",
   label: { zh: "看价格", en: "Pricing" },
-  path: "/order",
+  path: "/pricing",
 };
 
 export const NAV_CONTACT: NavLinkItem = {

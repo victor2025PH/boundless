@@ -20,6 +20,8 @@ export const SITE_PAGES: SitePage[] = [
   { slug: "/interpreting", bilingual: true, changeFrequency: "weekly", priority: 0.8, enPriority: 0.7 },
   { slug: "/fate", bilingual: true, changeFrequency: "weekly", priority: 0.7, enPriority: 0.6 },
   { slug: "/growth", bilingual: true, changeFrequency: "weekly", priority: 0.8, enPriority: 0.7 },
+  // 2026-08-19 Token 定价改版：/pricing=报价决策页（档位/Token 费率/计算器），/order=结算页。
+  { slug: "/pricing", bilingual: true, changeFrequency: "weekly", priority: 0.9, enPriority: 0.8 },
   { slug: "/order", bilingual: true, changeFrequency: "weekly", priority: 0.8, enPriority: 0.7 },
   { slug: "/download", bilingual: true, changeFrequency: "weekly", priority: 0.8, enPriority: 0.7 },
   { slug: "/download/chatx", bilingual: true, changeFrequency: "monthly", priority: 0.7, enPriority: 0.6 },
@@ -31,6 +33,8 @@ export const SITE_PAGES: SitePage[] = [
   { slug: "/terms", bilingual: true, changeFrequency: "yearly", priority: 0.3 },
   // WP-4/WS-1（2026-08-17）：合规协议模板页 + 竞品对比 lander
   { slug: "/compliance/crisis-protocol", bilingual: true, changeFrequency: "yearly", priority: 0.3 },
+  // P2 销售件（2026-08-18）：合规能力页（EU AI Act 生效窗口期的搜索/销售入口）
+  { slug: "/compliance", bilingual: true, changeFrequency: "monthly", priority: 0.6, enPriority: 0.6 },
   { slug: "/compare/respond-io", bilingual: true, changeFrequency: "monthly", priority: 0.6, enPriority: 0.6 },
   { slug: "/compare/salesmartly", bilingual: true, changeFrequency: "monthly", priority: 0.6, enPriority: 0.6 },
 ];

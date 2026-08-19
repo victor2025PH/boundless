@@ -40,9 +40,10 @@ const US_COMPLIANCE: CompareCell = {
   en: "Compliance ships as product switches: AI disclosure (9 languages), honest-identity mode, and a crisis detect→intervene→hotline-referral loop with exportable annual counters (EU AI Act Art. 50 / CA SB 243 / NY §1700) — off by default, enabled per jurisdiction.",
 };
 
+// 2026-08-19 Token 定价改版：口径与 lib/chatx-pricing.ts 同步（改价两处一起改）。
 const US_PRICING: CompareCell = {
-  zh: "USD 订阅三档：Entry $58 / Team $198 / Flagship $598 每月，支持 USDT 结算；私有化部署不按月活联系人（MAU）加价。",
-  en: "Three USD plans: Entry $58 / Team $198 / Flagship $598 per month, USDT accepted; self-hosted — no per-MAU surcharges.",
+  zh: "免费版 $0（标准翻译不限量）起：个人 $39/月 · 团队 $49/坐席/月 · 旗舰 $598/月；AI 用量按 Token 透明计价（无按月活联系人 MAU 加价），支持 USDT / 银行卡。",
+  en: "From Free $0 (unlimited standard translation): Personal $39/mo · Team $49/seat/mo · Flagship $598/mo; AI usage meters in transparent tokens (no per-MAU surcharges), USDT & cards accepted.",
 };
 
 const THEM_SAAS_DATA: CompareCell = {

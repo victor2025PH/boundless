@@ -421,14 +421,22 @@ export function inferProductId(plan, edition) {
 // ⚠️ 条目与 lib/offer-map.ts 的 ORDER_SKU_MAP 文本一致（本文件不经 TS 编译、无法
 // import 那份），修改必须两处同步！
 const ORDER_SKU_MAP = {
-  // 通译 LingoX（pricing.ts translateOffers → registry tongyi/lingox-*）
+  // 通译 LingoX（2026-08-19 翻译免费化：workbench 在售；charpack/team/pro 停售但保留映射——历史订单反查）
+  "translate-workbench": { skuId: "lingox-workbench", productId: "tongyi" },
   "translate-charpack": { skuId: "lingox-charpack", productId: "tongyi" },
   "translate-team": { skuId: "lingox-team", productId: "tongyi" },
   "translate-pro": { skuId: "lingox-pro", productId: "tongyi" },
-  // 智聊 ChatX（pricing.ts autochatOffers → registry zhiliao/chatx-*）
+  // 智聊 ChatX（2026-08-19 Token 分层：personal/team-seat/flagship 在售；entry/team 停售保留映射）
+  "autochat-personal": { skuId: "chatx-personal", productId: "zhiliao" },
+  "autochat-team-seat": { skuId: "chatx-team-seat", productId: "zhiliao" },
   "autochat-entry": { skuId: "chatx-entry", productId: "zhiliao" },
   "autochat-team": { skuId: "chatx-team", productId: "zhiliao" },
   "autochat-flagship": { skuId: "chatx-flagship", productId: "zhiliao" },
+  // Token 包（跨 ChatX/LingoX 通用钱包；registry 挂 zhiliao 名下）
+  "token-pack-s": { skuId: "token-pack-s", productId: "zhiliao" },
+  "token-pack-m": { skuId: "token-pack-m", productId: "zhiliao" },
+  "token-pack-l": { skuId: "token-pack-l", productId: "zhiliao" },
+  "token-pack-xl": { skuId: "token-pack-xl", productId: "zhiliao" },
   // 实时部署（pricing.ts realtimeOffers）：basic → 幻颜实时换脸部署；
   // creator → 幻影创作者全能部署（registry 2026-07 新增 livex-creator-deploy）
   "realtime-basic": { skuId: "facex-live-deploy", productId: "huanyan" },

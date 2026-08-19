@@ -1,10 +1,14 @@
 #!/usr/bin/env node
-// 回归守卫：lib/order-lines.ts 的 ChatX/LingoX offer key 必须：
-//  1) 全部出现在 lib/offer-map.ts（否则下单后 resolveOrderSku → null → 无法自动履约）；
-//  2) 价格从 lib/pricing.ts 同 id offer 派生（防 order-lines 手写数字漂移）；
-//  3) translate-team 文案含 3M/300 万字符（与引擎签发额度同源）。
-// 纯文本正则，无 import 副作用；node scripts/assert-order-lines.mjs。
-import { readFileSync } from "node:fs";
+// 回归守卫（2026-08-19 Token 定价改版重写）：
+//  1) chatx-pricing.ts 里全部可购 plan key（autochat-* 订阅 / token-pack-* / translate-workbench）
+//     必须出现在 lib/offer-map.ts（否则下单后 resolveOrderSku → null → 无法自动履约）；
+//  2) lib/order-lines.ts 禁止手写价格数字（monthly: <字面量>）——一律派生自 chatx-pricing.ts；
+//  3) 【跨仓单源闸】chatx-pricing.ts 的挂牌价必须与 platform/licensing/sku_registry.json
+//     （products/*/product.yaml 生成）逐一相等——「官网价 ≠ 注册表价」在此直接红灯，
+//     把「改价两处一起改」从注释纪律升级为机器断言（registry 不存在时警告跳过，
+//     兼容 website 独立部署上下文）。
+// 纯文本正则 + JSON 解析，无 import 副作用；node scripts/assert-order-lines.mjs。
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -12,78 +16,90 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
 const read = (rel) => readFileSync(join(root, rel), "utf-8");
 
-function offerKeysFromOrderLines() {
-  const text = read("lib/order-lines.ts");
-  const keys = [];
-  const re = /key:\s*"(autochat-[\w-]+|translate-[\w-]+)"/g;
-  let m;
-  while ((m = re.exec(text)) !== null) keys.push(m[1]);
-  return keys;
-}
-
-function offerMapKeys() {
-  const text = read("lib/offer-map.ts");
-  const start = text.indexOf("ORDER_SKU_MAP");
-  const body = text.slice(start, text.indexOf("};", start));
-  const keys = [];
-  const re = /"([\w-]+)"\s*:\s*\{/g;
-  let m;
-  while ((m = re.exec(body)) !== null) keys.push(m[1]);
-  return new Set(keys);
-}
-
-function pricingPrice(id) {
-  const text = read("lib/pricing.ts");
-  // 匹配 id: "…" … price: "N" 同对象块（非贪婪到下一个 id 或闭合）
-  const re = new RegExp(
-    `id:\\s*"${id}"[\\s\\S]*?price:\\s*"(\\d+(?:\\.\\d+)?)"`,
-  );
-  const m = text.match(re);
-  return m ? m[1] : null;
-}
-
-function priceOfCall(id) {
-  // order-lines 用 priceOf(autochatOffers|translateOffers, "id")——不得出现字面 monthly: 58
-  const text = read("lib/order-lines.ts");
-  const re = new RegExp(
-    `key:\\s*"${id}"[\\s\\S]*?monthly:\\s*priceOf\\(\\w+,\\s*"${id}"\\)`,
-  );
-  return re.test(text);
-}
-
 let failed = 0;
-const keys = offerKeysFromOrderLines();
-const map = offerMapKeys();
 
-if (keys.length < 6) {
+/* ── 1) 可购 plan key 全量 ∈ offer-map ─────────────────────────────────── */
+
+const pricingSrc = read("lib/chatx-pricing.ts");
+
+// 订阅档 key（跳过免费/按量：free 不产生订单、flex 无订阅 SKU——skuId: null 已在源码注明）
+const planKeys = [...pricingSrc.matchAll(/key:\s*"(autochat-[\w-]+)"/g)].map((m) => m[1]);
+const buyablePlans = planKeys.filter((k) => k !== "autochat-free" && k !== "autochat-flex");
+const packKeys = [...pricingSrc.matchAll(/key:\s*"(token-pack-[\w-]+)"/g)].map((m) => m[1]);
+const workbenchKey = (pricingSrc.match(/key:\s*"(translate-workbench)"/) || [])[1];
+const buyable = [...buyablePlans, ...packKeys, ...(workbenchKey ? [workbenchKey] : [])];
+
+const mapText = read("lib/offer-map.ts");
+const mapBody = mapText.slice(mapText.indexOf("ORDER_SKU_MAP"), mapText.indexOf("};", mapText.indexOf("ORDER_SKU_MAP")));
+const mapKeys = new Set([...mapBody.matchAll(/"([\w-]+)"\s*:\s*\{/g)].map((m) => m[1]));
+
+if (buyable.length < 8) {
   failed++;
-  console.error(`FAIL: order-lines 期望 ≥6 个 chatx/lingox key，实际 ${keys.length}`);
+  console.error(`FAIL: chatx-pricing 可购 key 期望 ≥8（3 订阅 + 4 包 + 工作台），实际 ${buyable.length}`);
 } else {
-  console.log(`OK: order-lines 收集到 ${keys.length} 个 offer key`);
+  console.log(`OK: chatx-pricing 收集到 ${buyable.length} 个可购 key`);
 }
+for (const k of buyable) {
+  if (!mapKeys.has(k)) {
+    failed++;
+    console.error(`FAIL: 可购 key ${k} 不在 offer-map → 下单无法自动履约`);
+  }
+}
+if (!failed) console.log("OK: 全部可购 key ∈ offer-map");
 
-for (const k of keys) {
-  if (!map.has(k)) {
-    failed++;
-    console.error(`FAIL: order-lines key ${k} 不在 offer-map → 下单无法自动履约`);
-  }
-  if (!priceOfCall(k)) {
-    failed++;
-    console.error(`FAIL: ${k} 未用 priceOf(..., "${k}") 派生价格（禁止手写数字）`);
-  }
-  if (!pricingPrice(k)) {
-    failed++;
-    console.error(`FAIL: pricing.ts 缺 offer id=${k}`);
-  }
-}
-if (!failed) console.log("OK: 全部 key ∈ offer-map 且价格从 pricing.ts 派生");
+/* ── 2) order-lines 禁止手写价格 ───────────────────────────────────────── */
 
 const ol = read("lib/order-lines.ts");
-if (!/300\s*万字符|3M chars/.test(ol)) {
+const literalPrice = ol.match(/monthly:\s*\d/);
+if (literalPrice) {
   failed++;
-  console.error("FAIL: translate-team 文案未声明 300万/3M 字符额度（与引擎签发口径对齐）");
+  console.error("FAIL: order-lines.ts 出现手写价格（monthly: <数字>）——必须派生自 chatx-pricing.ts");
 } else {
-  console.log("OK: translate-team 文案含 300万/3M 字符额度");
+  console.log("OK: order-lines 无手写价格，全部派生");
+}
+
+/* ── 3) 跨仓单源闸：chatx-pricing.ts ⟺ sku_registry.json 价格逐一相等 ──── */
+
+const regPath = join(root, "..", "platform", "licensing", "sku_registry.json");
+if (!existsSync(regPath)) {
+  console.warn("WARN: sku_registry.json 不存在（独立部署上下文？），跳过跨仓价格比对");
+} else {
+  const reg = JSON.parse(readFileSync(regPath, "utf-8"));
+  const regPrice = new Map(reg.flat_skus.map((s) => [s.sku_id, String(s.price)]));
+
+  /** 从 chatx-pricing.ts 抽 [skuId → 官网价]：订阅档（skuId + monthly）与 Token 包（skuId + price）。 */
+  const sitePrices = new Map();
+  for (const m of pricingSrc.matchAll(/skuId:\s*"([\w-]+)",[\s\S]{0,200}?(?:monthly|price):\s*([\d.]+)/g)) {
+    sitePrices.set(m[1], m[2]);
+  }
+  // Token 包对象形状是 { key, skuId, price, tokens }（skuId 在 price 前）；订阅是 skuId 后跟 monthly。
+  for (const m of pricingSrc.matchAll(/key:\s*"(token-pack-[\w-]+)",\s*skuId:\s*"([\w-]+)",\s*price:\s*([\d.]+)/g)) {
+    sitePrices.set(m[2], m[3]);
+  }
+
+  const mustMatch = ["chatx-personal", "chatx-team-seat", "chatx-flagship", "lingox-workbench", "token-pack-s", "token-pack-m", "token-pack-l", "token-pack-xl"];
+  let checked = 0;
+  for (const sku of mustMatch) {
+    const site = sitePrices.get(sku);
+    const regv = regPrice.get(sku);
+    if (site == null) {
+      failed++;
+      console.error(`FAIL: chatx-pricing.ts 抽不到 ${sku} 的价格（源码形状变了？更新本脚本正则）`);
+      continue;
+    }
+    if (regv == null) {
+      failed++;
+      console.error(`FAIL: sku_registry.json 缺 ${sku}（product.yaml 忘登记？跑 tools/build_sku_registry.py）`);
+      continue;
+    }
+    if (Number(site) !== Number(regv)) {
+      failed++;
+      console.error(`FAIL: ${sku} 价格分叉：官网 ${site} vs 注册表 ${regv}（改价必须两处同批改）`);
+      continue;
+    }
+    checked++;
+  }
+  if (checked === mustMatch.length) console.log(`OK: 官网 ⟺ SKU 注册表价格一致（${checked} 个 SKU）`);
 }
 
 process.exit(failed ? 1 : 0);

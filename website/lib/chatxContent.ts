@@ -105,8 +105,8 @@ export const CHATX = {
       {
         q: { zh: "需要自己配置 AI 的 API Key 吗？", en: "Do I need my own AI API key?" },
         a: {
-          zh: "不需要。智聊托管版启动后会经官网验证本机并走我们的云端 AI 通道，**Key 只在服务端**，工作台里看不到、也无需填写。按字符额度计费；额度用尽联系客服续期即可。",
-          en: "No. Managed ChatX verifies this PC with our site and routes AI through our cloud gateway — **the vendor key never leaves the server**. You don't enter or manage keys. Usage is metered by character quota; contact support to top up.",
+          zh: "不需要。智聊托管版启动后会经官网验证本机并走我们的云端 AI 通道，**Key 只在服务端**，工作台里看不到、也无需填写。AI 用量按 Token 计量（标准翻译免费、不耗 Token）；余额与流水在会员中心随时可查，用尽可自助购买 Token 包，也不会断线（自动降级到免费引擎）。",
+          en: "No. Managed ChatX verifies this PC with our site and routes AI through our cloud gateway — **the vendor key never leaves the server**. You don't enter or manage keys. AI usage meters in tokens (standard translation is free and costs none); check balance and ledger in the membership center, top up with packs anytime — and you never go offline (graceful fallback to free engines).",
         },
       },
       {
@@ -138,10 +138,12 @@ export const CHATX = {
         },
       },
       {
+        // 2026-08-19 Token 定价改版：免费版=正式档位（非限时试用），试用口径全站唯一
+        //（注册送 10,000 体验 Token，与 /pricing、下单页同源），不再引导「找顾问拿试用码」。
         q: { zh: "免费吗？怎么获得正式授权？", en: "Is it free? How do I get a license?" },
         a: {
-          zh: "下载与试用免费。正式授权按团队规模与功能模块订阅，联系顾问获取方案与试用码。",
-          en: "Download and trial are free. Production licenses are subscription-based by team size and modules — contact us for a plan and trial code.",
+          zh: "下载即是免费版（非限时试用）：标准翻译永久免费不限字符 + 每月 1,000 Token，注册再送 10,000 体验 Token。要更多账号、坐席与 Token，去官网报价页自助购买（个人版 39 USD/月起，到账自动开通），无需找顾问。",
+          en: "The download is the Free plan (not a timed trial): unlimited standard translation forever plus 1,000 tokens/mo, with 10,000 bonus tokens on signup. Need more accounts, seats or tokens? Self-serve on the pricing page (Personal from 39 USD/mo, auto-activation) — no sales call required.",
         },
       },
     ],

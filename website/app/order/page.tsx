@@ -8,7 +8,7 @@ import { TIERS } from "@/lib/avatarhub-pricing";
 export const metadata: Metadata = {
   title: "购买与下单 · 无界科技 BOUNDLESS",
   description:
-    "幻境 STUDIO 会员套餐与授权购买：免费换脸（带水印）起步，付费解锁 AI 作图、视频换脸、直播换脸、变声器与同声传译。引擎跑在你自己的设备上，用量不限、不按字符或时长计费；设备自备、协助部署。月付 / 季付 / 年付，全程 USDT 结算；旗舰版私有部署请咨询客服获取报价方案。",
+    "自助购买：幻境 STUDIO 会员（免费换脸起步，本机算力用量不限）；智聊 ChatX Token 分层套餐（免费版下载即用 · 个人版 39 · 团队版 49/坐席 · 旗舰 598，标准翻译永久免费）；Token 包 9.9 起跨产品通用。月付 / 季付 / 年付（年付送 2 个月），USDT / 银行卡结算，到账自动开通。",
   alternates: {
     canonical: "/order",
     languages: { "zh-CN": "/order", en: "/en/order", "x-default": "/order" },

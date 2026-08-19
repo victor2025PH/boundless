@@ -496,7 +496,7 @@ export default function ProductLanding({ product, content, ui }: LandingProps) {
               </a>
               {/* 幻缘无对外 SKU（详批付费未开闸）：不给「套餐与价格」入口，改回首页看其他产品线 */}
               <Link
-                href={ui ? ui.pricingHref : product === "fate" ? localePath(lang, "/") : localePath(lang, "/order")}
+                href={ui ? ui.pricingHref : product === "fate" ? localePath(lang, "/") : localePath(lang, "/pricing")}
                 className="inline-flex items-center gap-2 rounded-full border border-white/15 px-7 py-3 font-medium text-slate-200 transition hover:border-neon-cyan/50 hover:text-white"
               >
                 {ui

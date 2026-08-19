@@ -61,9 +61,11 @@ const FACT_SKUS: ReadonlyMap<string, FactSku> = (() => {
   return map;
 })();
 
-/** 主推线的报价 SKU（顺序即展示顺序，与 content.ts 对应板块的档位顺序一致）。 */
-const CHATX_PLAN_SKUS: readonly string[] = ["chatx-entry", "chatx-team", "chatx-flagship"];
-const LINGOX_SKUS: readonly string[] = ["lingox-charpack", "lingox-team", "lingox-pro"];
+/** 主推线的报价 SKU（顺序即展示顺序，与 content.ts 对应板块的档位顺序一致）。
+ *  2026-08-19 Token 定价改版：切到在售新档（免费/个人/团队每坐席/旗舰 + 翻译免费化）；
+ *  停售的 chatx-entry/team、lingox-charpack/team/pro 留在注册表供台账反查，bot 不再外报。 */
+const CHATX_PLAN_SKUS: readonly string[] = ["chatx-free", "chatx-personal", "chatx-team-seat", "chatx-flagship"];
+const LINGOX_SKUS: readonly string[] = ["lingox-free", "lingox-workbench"];
 const VOICEX_SKUS: readonly string[] = ["voicex-starter", "voicex-std", "voicex-pro", "voicex-usage"];
 
 /** 业务能力段里价格对改由事实源生成的 solution（content.ts 的 Solution.id → SKU 列表）；
@@ -224,6 +226,26 @@ export function buildDeploy(lang: BotLang) {
     : `🤝 <b>Three engagement models</b>\n\n${models}\n\nYou own hardware, data stays private; listed in USD, USDT settlement supported.`;
 }
 
+// P2（2026-08-18）：合规问答——出海 B 端客户评估必问项（EU AI Act 第 50 条已生效）。
+// 深读页 /compliance 与官网内容单源；bot 只给能力概览 + 链接，不做法律表述。
+export function buildCompliance(lang: BotLang) {
+  return lang === "zh"
+    ? `🛡 <b>合规能力（已生效法规做成产品开关）</b>\n\n` +
+      `• AI 披露语：九语种、每会话首条一次、覆盖全部 AI 出站（EU AI Act 第 50 条）\n` +
+      `• 诚实身份模式：直问「你是 AI 吗」如实回答，人设其余不变\n` +
+      `• 危机识别→安全回复→热线转介闭环，常驻自动化评测门禁守护\n` +
+      `• 危机转介计数持久台账 + 只读导出（加州 SB 243 年报口径）\n` +
+      `• 《危机干预协议》双语公示页模板\n\n` +
+      `全部默认关，由运营方按属地法规开启。详情：${SITE_URL}/compliance`
+    : `🛡 <b>Compliance, built in (switches for laws already in force)</b>\n\n` +
+      `• AI disclosure: 9 languages, once per conversation, every AI outbound path (EU AI Act Art. 50)\n` +
+      `• Honest-identity mode: a direct "are you an AI?" gets an honest answer\n` +
+      `• Crisis detection → safe-reply override → hotline referral, guarded by always-on eval gates\n` +
+      `• Durable crisis-referral counters with read-only export (CA SB 243 annual reporting)\n` +
+      `• Bilingual crisis-intervention protocol template page\n\n` +
+      `All off by default; operators opt in per jurisdiction. Details: ${SITE_URL}/en/compliance`;
+}
+
 export function buildContact(lang: BotLang) {
   const c = t(lang).contact;
   return lang === "zh"
@@ -302,6 +324,8 @@ function keywordRules(lang: BotLang) {
     { keys: ["安装", "下载", "装不上", "装机", "smartscreen", "杀毒", "报毒", "激活", "试用", "显卡", "显存", "配置要求", "客户端"], fn: () => buildInstallHelp(lang) },
     // 换脸/直播能力已产品化为幻境 STUDIO 套餐（免费换脸起步）；私有部署/企业定制仍走人工评估。
     { keys: ["换脸", "换声", "变声", "直播", "连麦", "视频通话", "studio", "幻境"], fn: () => buildStudioPlans(lang) },
+    // 合规规则必须排在「成交/聊天」等贪婪短键之前（键更特异，先到先得）
+    { keys: ["合规", "披露", "危机", "监管", "法规", "gdpr", "ai act", "sb 243", "sb243"], fn: () => buildCompliance(lang) },
     { keys: ["成交", "翻译", "聊天", "聚合", "客服", "谷歌"], fn: () => buildAutochat(lang) },
     { keys: ["价格", "多少钱", "费用", "usdt", "套餐", "月付"], fn: () => buildPricing(lang) },
     { keys: ["部署", "私有", "托管", "交钥匙", "投资", "分红", "合作"], fn: () => buildDeploy(lang) },
@@ -322,6 +346,8 @@ function keywordRules(lang: BotLang) {
     // private deployment / enterprise customization still routes to a human consultant.
     // ("voice" stays out of this rule so voice-clone questions fall through to the dedicated voice rule below.)
     { keys: ["face", "swap", "live", "stream", "studio"], fn: () => buildStudioPlans(lang) },
+    // Compliance must outrank greedy substring keys below ("clos" bites disCLOSure).
+    { keys: ["complian", "disclos", "ai act", "sb 243", "sb243", "regulat", "crisis", "gdpr"], fn: () => buildCompliance(lang) },
     { keys: ["chat", "translat", "clos", "aggregat", "google"], fn: () => buildAutochat(lang) },
     { keys: ["price", "cost", "usdt", "plan", "monthly"], fn: () => buildPricing(lang) },
     { keys: ["deploy", "private", "turnkey", "invest", "partner"], fn: () => buildDeploy(lang) },
@@ -414,6 +440,12 @@ export function buildKnowledgeContext(lang: BotLang): string {
     lang === "zh"
       ? "【产品合并】通译 LingoX 已与智聊 ChatX 合并为同一个客户端程序：下载智聊 ChatX 即可使用通译全部翻译能力；通译套餐照常销售，授权在同一程序内激活，原有授权继续有效。"
       : "[Product merge] LingoX is merged into the ChatX client — one program: download ChatX to get every LingoX translation capability; LingoX plans sell as before and licenses activate inside the same app."
+  );
+  // P2（2026-08-18）：合规能力进 LLM 事实底座——出海 B 端评估必问，答案有据可查。
+  parts.push(
+    lang === "zh"
+      ? `【合规能力】针对 EU AI Act 第 50 条 / 加州 SB 243 / 纽约 GBL §1700：AI 披露语（九语种、每会话首条一次、覆盖全部 AI 出站）、诚实身份模式、危机识别→安全回复→热线转介闭环（常驻自动化评测门禁）、危机转介计数持久台账+只读导出（年报口径）、危机干预协议双语公示页模板。全部默认关、由运营方按属地开启（披露义务主体是运营方，我们提供工具与证据面，不构成法律意见）。详情页 ${SITE_URL}/compliance`
+      : `[Compliance] For EU AI Act Art. 50 / CA SB 243 / NY GBL §1700: AI disclosure line (9 languages, once per conversation, every AI outbound path), honest-identity mode, crisis detection → safe-reply override → hotline referral (guarded by always-on eval gates), durable crisis-referral counters with read-only export (annual-report grade), bilingual crisis-protocol template page. All off by default; operators enable per jurisdiction (disclosure duty rests with the operator; we provide tooling & evidence, not legal advice). Details: ${SITE_URL}/en/compliance`
   );
 
   parts.push(lang === "zh" ? "【业务能力】" : "[Solutions]");

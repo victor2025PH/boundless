@@ -6,6 +6,8 @@
 // formats of these same numbers — when a price changes, update it HERE and keep
 // the content.ts display strings in sync.
 
+import { LINGOX_WORKBENCH, chatxSchemaOffers } from "./chatx-pricing";
+
 export type PriceUnit = "one-time" | "month";
 
 export interface PriceOffer {
@@ -121,79 +123,64 @@ export const livexOffers: PriceOffer[] = [
   },
 ];
 
-/** AI auto-closing chat system — subscription.
- *  skuId 对齐 registry 智聊 ChatX：价格数值/周期一致；2026-07-18 定价决议起报价币种
- *  统一 USD（与 product.yaml"单位 USD、结算支持 USDT"口径一致），币种差异已消除。
- *  2026-07-18 治理收尾：补挂 chatx-entry（入门 58/月，registry 确认），三档齐进 JSON-LD。 */
-export const autochatOffers: PriceOffer[] = [
-  {
-    id: "autochat-entry",
-    skuId: "chatx-entry",
-    name: "Entry",
-    price: "58",
+/** AI auto-closing chat system — Token 分层体系（2026-08-19 定价决议）。
+ *  数字单一真相在 lib/chatx-pricing.ts::CHATX_PLANS / TOKEN_PACKS，本数组按
+ *  schema.org PriceOffer 形状派生（个人 39 / 团队 49 每坐席 / 旗舰 598），
+ *  layout.tsx JSON-LD 与 order-lines 消费。改价改 chatx-pricing.ts，勿在此手写数字。
+ *  旧 chatx-entry(58)/chatx-team(198) 停售 → legacyAutochatOffers 台账反查。 */
+export const autochatOffers: PriceOffer[] = chatxSchemaOffers()
+  .filter((o) => o.unit === "month")
+  .map((o) => ({
+    id: o.id,
+    skuId: o.skuId,
+    name: o.name,
+    price: o.price,
     currency: "USD",
     unit: "month",
-    description: "Per month; 3 chat accounts, AI translation, 1 platform.",
-  },
+    description: o.description,
+  }));
+
+/** Token 包（一次性 · 12 个月有效 · 跨 ChatX/LingoX 通用）——同样派生自 chatx-pricing.ts。 */
+export const tokenPackOffers: PriceOffer[] = chatxSchemaOffers()
+  .filter((o) => o.unit === "one-time")
+  .map((o) => ({
+    id: o.id,
+    skuId: o.skuId,
+    name: o.name,
+    price: o.price,
+    currency: "USD",
+    unit: "one-time",
+    description: o.description,
+  }));
+
+/** 通译 LingoX（2026-08-19 翻译免费化决议）：标准翻译永久免费不限量（不产生 offer，
+ *  公平使用 200 万字符/日/授权）；专业翻译按 Token 计量（10/千字符，DeepL 认证 40/千字符，
+ *  无订阅 SKU）；唯一订阅挂牌 = 翻译工作台（每坐席/月，纯翻译团队）。
+ *  旧 charpack(59)/team(99)/pro(198) 停售 → legacyTranslateOffers 台账反查；
+ *  charpack 未用完字符按 1.5M = 60,000 Token 等值换发。 */
+export const translateOffers: PriceOffer[] = [
   {
-    id: "autochat-team",
-    skuId: "chatx-team",
-    name: "Team",
-    price: "198",
+    id: LINGOX_WORKBENCH.key,
+    skuId: LINGOX_WORKBENCH.skuId,
+    name: "Translation Workbench",
+    price: String(LINGOX_WORKBENCH.monthly),
     currency: "USD",
     unit: "month",
-    description: "Per month; 10 chat accounts, all platforms, AI auto-closing replies.",
-  },
-  {
-    id: "autochat-flagship",
-    skuId: "chatx-flagship",
-    name: "Flagship",
-    price: "598",
-    currency: "USD",
-    unit: "month",
-    description: "Per month; 50 accounts, human handoff, dashboard, persona voice.",
+    description:
+      "Per month per seat; translation-only teams: multi-seat unified inbox, customer journey, funnel counter. Standard translation is free & unlimited in every plan.",
   },
 ];
 
-/** Real-time cross-border translation SCRM (通译 LingoX) — flagship, low-risk cash flow.
- *  USD, self-serve. Differentiator vs. plain translation add-ons: term-lock glossary,
- *  translation memory, and customer-asset SCRM (unified inbox + journey + funnel).
- *  skuId 对齐 registry 通译 LingoX：三档 id/币种/周期一一对应。2026-07-18 定价决议
- *  （竞品 NexScrm ×2 + 品牌尾数惯例）：charpack $30×2=60→59；team $48×2=96→99；
- *  pro $90×2=180→198。registry（products/tongyi/product.yaml）已同步实价，TBD 差异已消除。 */
-export const translateOffers: PriceOffer[] = [
-  {
-    id: "translate-charpack",
-    skuId: "lingox-charpack",
-    name: "Char pack",
-    price: "59",
-    currency: "USD",
-    unit: "one-time",
-    description:
-      "One-time; 1.5M translation chars, term-lock glossary + translation memory.",
-  },
-  {
-    id: "translate-team",
-    skuId: "lingox-team",
-    name: "Team",
-    price: "99",
-    currency: "USD",
-    unit: "month",
-    // 3M chars/mo 与引擎签发额度同源（chatx_fulfillment.LINGOX_SKU_SPECS
-    // included_chars_monthly）；改额度两处一起改，防「官网没说限量、实例按 3M 执行」预期错位。
-    description:
-      "Per month; 3M translation chars, multi-seat unified inbox, customer journey, conversion funnel counter.",
-  },
-  {
-    id: "translate-pro",
-    skuId: "lingox-pro",
-    name: "Pro",
-    price: "198",
-    currency: "USD",
-    unit: "month",
-    description:
-      "Per month; unlimited chars, multimodal (image/voice) translate, confidence badge + engine health.",
-  },
+/** ⚠ 2026-08-19 停售台账（勿删）：仅供 findOfferBySkuId 反查历史订单，不进任何页面/JSON-LD。 */
+export const legacyAutochatOffers: PriceOffer[] = [
+  { id: "autochat-entry", skuId: "chatx-entry", name: "Entry (legacy)", price: "58", currency: "USD", unit: "month", description: "Discontinued 2026-08-19; superseded by ChatX Personal (39/mo)." },
+  { id: "autochat-team", skuId: "chatx-team", name: "Team (legacy)", price: "198", currency: "USD", unit: "month", description: "Discontinued 2026-08-19; superseded by ChatX Team per-seat (49/seat/mo)." },
+];
+
+export const legacyTranslateOffers: PriceOffer[] = [
+  { id: "translate-charpack", skuId: "lingox-charpack", name: "Char pack (legacy)", price: "59", currency: "USD", unit: "one-time", description: "Discontinued 2026-08-19; unused chars convert to 60,000 tokens." },
+  { id: "translate-team", skuId: "lingox-team", name: "Team (legacy)", price: "99", currency: "USD", unit: "month", description: "Discontinued 2026-08-19; superseded by Workbench (29/seat/mo) + free standard translation." },
+  { id: "translate-pro", skuId: "lingox-pro", name: "Pro (legacy)", price: "198", currency: "USD", unit: "month", description: "Discontinued 2026-08-19; unlimited chars superseded by free standard translation." },
 ];
 
 /** Map a PriceOffer to a schema.org Offer node. */
@@ -207,13 +194,17 @@ export function toSchemaOffer(o: PriceOffer) {
   };
 }
 
-// 全部对外挂牌的 offer 数组（新增数组时同步登记，findOfferBySkuId 才能反查到）。
+// 全部对外挂牌 + 停售台账 offer 数组（新增数组时同步登记，findOfferBySkuId 才能反查到；
+// legacy 数组排在最后——同 skuId 时挂牌价优先命中）。
 const ALL_OFFER_ARRAYS: readonly (readonly PriceOffer[])[] = [
   realtimeOffers,
   voiceOffers,
   livexOffers,
   autochatOffers,
+  tokenPackOffers,
   translateOffers,
+  legacyAutochatOffers,
+  legacyTranslateOffers,
 ];
 
 /** 按全域 SKU id（platform/licensing/sku_registry.json 的 sku_id）反查官网 offer。

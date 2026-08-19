@@ -1,12 +1,21 @@
 # products/zhiliao/product.yaml — 智聊 ChatX（照 tongyi 模板）
+#
+# ── 2026-08-19 定价决议（ChatGPT 式分层 + Token 计量，老板拍板）────────────────
+# 体系：免费版 / 个人版 39 / 按量版（0 月费纯钱包）/ 团队版 49/坐席（≥2 席）/ 旗舰 598；
+# 统一耗材货币 Token（跨 ChatX/LingoX 通用）：AI 回复 10/条 · 专业翻译 10/千字符 ·
+# DeepL 认证翻译 40/千字符 · 克隆语音 10/100字符 · AI 配图 50/张 · ASR 5/分钟；
+# 标准翻译（内置引擎）0 Token 永久免费（公平使用 200 万字符/日/授权）。
+# 订阅含量当月有效；Token 包 12 个月有效；扣减顺序=先订阅含量后 Token 包。
+# 年付=月价×10（送 2 个月），全线统一，废除旧「85 折」双口径。
+# 旧 chatx-entry/chatx-team 自本日停售（保留条目供台账/历史订单反查，勿删）。
+# 展示单一真相：website/lib/chatx-pricing.ts（改价先改本文件再同步该文件）。
 id: zhiliao
 brand_key: chatx
 name:   { zh: 智聊, en: ChatX }
 category: growth
 tagline:
-  zh: 多平台统一收件箱 + AI 人设承接 + 翻译 + 转人工，全自动开发客户推进成交
-  en: Omni-channel unified inbox + AI persona + translation + human handoff
-
+  zh: 多平台统一收件箱 + AI 人设承接 + 免费翻译 + 转人工，全自动开发客户推进成交
+  en: Omni-channel unified inbox + AI persona + free translation + human handoff
 engine: chengjie
 engine_services: [main.py]         # 统一收件箱/AI 承接/handoff（src/inbox·ai·integrations）
 
@@ -20,12 +29,22 @@ website:
   anchor: "#autochat"
   matrix_family: growth
 
-# 账号制套餐（website/lib/content.ts#plans / pricing.ts autochatOffers）；单位 USD、结算支持 USDT（dual）
+# Token 分层套餐（2026-08-19 决议；website/lib/chatx-pricing.ts 派生展示）；单位 USD、结算支持 USDT（dual）
 skus:
-  - { id: chatx-entry,    name: { zh: 入门, en: Entry },    unit: month, price: "58",  currency: USD, note: 3 账号/AI 翻译/1 平台 }
-  - { id: chatx-team,     name: { zh: 团队, en: Team },     unit: month, price: "198", currency: USD, note: 10 账号/全平台/AI 自动成交 }
-  - { id: chatx-flagship, name: { zh: 旗舰, en: Flagship }, unit: month, price: "598", currency: USD, note: 50 账号/人工接管/数据看板 }
+  - { id: chatx-free,      name: { zh: 免费版, en: Free },       unit: month, price: "0",   currency: USD, note: 1 坐席/1 账号/1 平台/标准翻译免费不限量/1,000 Token 每月 }
+  - { id: chatx-personal,  name: { zh: 个人版, en: Personal },   unit: month, price: "39",  currency: USD, note: 1 坐席/3 账号/全平台/30,000 Token 每月/1 克隆音色/3 AI 人设 }
+  - { id: chatx-team-seat, name: { zh: 团队版·每坐席, en: Team per seat }, unit: month, price: "49", currency: USD, note: 每坐席计价 ≥2 席/每席 5 账号+50,000 Token 入池/权限审计/优先支持 }
+  - { id: chatx-flagship,  name: { zh: 旗舰, en: Flagship },     unit: month, price: "598", currency: USD, note: 50 账号/人工接管/数据看板/本地模型 Token 不限/可选私有化 }
+  # Token 包（跨 ChatX/LingoX 通用耗材；一次性、12 个月有效；履约=topup 凭证通道）
+  - { id: token-pack-s,  name: { zh: Token 体验包, en: Token pack S },  unit: one-time, price: "9.9", currency: USD, note: 10,000 Token/12 个月有效/跨产品通用 }
+  - { id: token-pack-m,  name: { zh: Token 标准包, en: Token pack M },  unit: one-time, price: "49",  currency: USD, note: 60,000 Token（+21%）/12 个月有效/跨产品通用 }
+  - { id: token-pack-l,  name: { zh: Token 专业包, en: Token pack L },  unit: one-time, price: "199", currency: USD, note: 300,000 Token（+50%）/12 个月有效/跨产品通用 }
+  - { id: token-pack-xl, name: { zh: Token 团队包, en: Token pack XL }, unit: one-time, price: "499", currency: USD, note: 1,000,000 Token（约 5 折）/12 个月有效/跨产品通用 }
+  # ── 停售台账（2026-08-19 起不再对外挂牌；保留供历史订单/授权反查，勿删）──
+  - { id: chatx-entry,    name: { zh: 入门（停售）, en: Entry (legacy) },    unit: month, price: "58",  currency: USD, note: 停售 2026-08-19/3 账号/AI 翻译/1 平台/由个人版 39 承接 }
+  - { id: chatx-team,     name: { zh: 团队（停售）, en: Team (legacy) },     unit: month, price: "198", currency: USD, note: 停售 2026-08-19/10 账号/全平台/由团队版 49 每坐席承接 }
 
 delivery:
-  gate: platform/licensing         # LLM token 计量（边际成本大头）+ SKU 门控
+  gate: platform/licensing         # Token 计量（LLM 边际成本大头）+ SKU 门控
+  metering: Token 账本（engines/chengjie token_ledger，P2 落地）；本地引擎路由（标准翻译/预渲染语音/缓存命中）一律 0 Token
   compliance_out: platform/compliance

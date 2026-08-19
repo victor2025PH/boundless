@@ -42,11 +42,18 @@ if (!eq(ts, mjs)) {
   console.log(`OK: 两处 ORDER_SKU_MAP 一致（${Object.keys(ts).length} 条）`);
 }
 
-// 2) chatx 三档齐全（防 entry 丢单回潮）
+// 2) chatx 档位齐全：2026-08-19 Token 体系在售档（personal/team-seat/flagship + token 包）
+//    与停售台账档（entry/team——历史订单反查，防丢单回潮）都必须在。
 const expect = {
+  "autochat-personal": "chatx-personal",
+  "autochat-team-seat": "chatx-team-seat",
   "autochat-entry": "chatx-entry",
   "autochat-team": "chatx-team",
   "autochat-flagship": "chatx-flagship",
+  "token-pack-s": "token-pack-s",
+  "token-pack-m": "token-pack-m",
+  "token-pack-l": "token-pack-l",
+  "token-pack-xl": "token-pack-xl",
 };
 for (const [plan, sku] of Object.entries(expect)) {
   if (!ts[plan] || ts[plan].skuId !== sku || ts[plan].productId !== "zhiliao") {
@@ -54,6 +61,19 @@ for (const [plan, sku] of Object.entries(expect)) {
     console.error(`FAIL: offer-map 缺/错 ${plan} → ${sku} (zhiliao)`);
   }
 }
-if (!failed) console.log("OK: chatx 三档 entry/team/flagship 映射齐全");
+// 3) 翻译线：在售 workbench + 停售三档映射齐全
+const expectTongyi = {
+  "translate-workbench": "lingox-workbench",
+  "translate-charpack": "lingox-charpack",
+  "translate-team": "lingox-team",
+  "translate-pro": "lingox-pro",
+};
+for (const [plan, sku] of Object.entries(expectTongyi)) {
+  if (!ts[plan] || ts[plan].skuId !== sku || ts[plan].productId !== "tongyi") {
+    failed++;
+    console.error(`FAIL: offer-map 缺/错 ${plan} → ${sku} (tongyi)`);
+  }
+}
+if (!failed) console.log("OK: chatx Token 体系在售/停售档 + 翻译线映射齐全");
 
 process.exit(failed ? 1 : 0);
