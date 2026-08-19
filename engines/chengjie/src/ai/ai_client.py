@@ -1770,10 +1770,21 @@ class AIClient(LoggerMixin):
             self._primary_mode in ("local", "local_only")
             and self._fb_client and self._fb_model
         ):
-            return await self._generate_reply_openai_compat(
+            reply = await self._generate_reply_openai_compat(
                 user_message, context, conversation_history, strategy_overrides,
                 _skip_quality_check=_skip_quality_check,
             )
+            # 2026-08-19 Token 计量（P5a 观测接线，licensing.token_ledger.enabled
+            # 默认关=零行为）：成功出稿记 ai_reply（10 Token/条）。观测口径=出稿数
+            # （含未投递草稿，计费上界）；P5b 切到投递点后本处降级为影子对照。绝不抛。
+            if reply:
+                try:
+                    from src.licensing.token_ledger import record_action_for_status
+
+                    record_action_for_status("ai_reply", 1)
+                except Exception:
+                    pass
+            return reply
         _fb_lang = (context or {}).get("reply_lang", "zh")
         if not self.client:
             self.logger.error("AI 客户端未初始化")
@@ -2720,6 +2731,11 @@ class AIClient(LoggerMixin):
         _portrait_block = (context.get("_contact_portrait_block") or "").strip()
         if _portrait_block:
             prompt_parts.append(_portrait_block)
+        # 2026-08-18 跨平台档案叙事：客户来源平台/原平台称呼/聊过的话题域——
+        # skill_manager._inject_origin_context 渲染好的块，有键即消费（与 bazi 同模式）。
+        _origin_block = (context.get("_origin_block") or "").strip()
+        if _origin_block:
+            prompt_parts.append(_origin_block)
         _cfg_ctx = (self.config.config or {}) if self.config else {}
         _is_companion = isinstance(_cfg_ctx, dict) and effective_domain_name(_cfg_ctx) == "conversion"
         _wa = (_cfg_ctx.get("web_admin") or {}) if isinstance(_cfg_ctx, dict) else {}
@@ -2952,6 +2968,11 @@ class AIClient(LoggerMixin):
         _bazi = (context.get("_bazi_block") or "").strip()
         if _bazi:
             prompt_parts.append(_bazi)
+        # 报障群值守（bug_intake）：分类/工单上下文块（skill_manager 注入；
+        # 开关与群白名单判定全在注入侧，这里有块即消费——与 _bazi_block 同模式）
+        _bug_intake = (context.get("_bug_intake_block") or "").strip()
+        if _bug_intake:
+            prompt_parts.append(_bug_intake)
         # 人设长传记检索（personas.bio_retrieval）：客户追问人设长尾细节时
         # skill_manager 关键词检索命中才注入；开关与预算判定都在注入侧，有块即消费
         _pbio = (context.get("_persona_bio_block") or "").strip()

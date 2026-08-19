@@ -850,6 +850,18 @@ class TTSPipeline:
                 record_license_chars("tts", len(text_s))
             except Exception:
                 pass
+            # 2026-08-19 Token 计量（P5a 观测接线，licensing.token_ledger.enabled
+            # 默认关=零行为）：只对**克隆声引擎**计 voice_clone（10 Token/100 字符）；
+            # 预渲染命中不进本路径、edge 等兜底声=免费路径不计——兑现对外承诺
+            # 「Token 用尽自动降级，降级路径免费」。
+            try:
+                prov = str(rv.provider or "")
+                if prov in ("avatar_clone", "minicpm_clone") or prov.endswith("_clone"):
+                    from src.licensing.token_ledger import record_action_for_status
+
+                    record_action_for_status("voice_clone", len(text_s))
+            except Exception:
+                pass
         self._record_stats(rv, text_s, cache_hit=False, spec=spec)
         return rv
 

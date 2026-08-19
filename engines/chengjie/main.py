@@ -254,6 +254,17 @@ class AIChatAssistant:
                 _lic_cfg = (self.config.config or {}).get("licensing", {}) or {}
                 _lic = configure_license_manager(
                     enforce=bool(_lic_cfg.get("enforce", False)))
+                # 2026-08-19 Token 定价改版：Token 账本总闸（默认关；开=消费点
+                # 观测记账 + 会员页钱包卡。local_trial 同款模块级开关范式，改需重启）。
+                try:
+                    from src.licensing.token_ledger import configure_token_ledger
+                    _tl_enabled = bool((_lic_cfg.get("token_ledger") or {})
+                                       .get("enabled", False))
+                    configure_token_ledger(enabled=_tl_enabled)
+                    if _tl_enabled:
+                        self.logger.info("🪙 Token 账本：已启用（观测记账）")
+                except Exception:
+                    self.logger.debug("Token 账本装配跳过", exc_info=True)
                 if _lic.state == "active":
                     _exp = ("永久" if not _lic.expires_at
                             else f"剩 {_lic.days_left} 天")

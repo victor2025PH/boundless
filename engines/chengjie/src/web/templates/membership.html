@@ -306,8 +306,10 @@
   </script>
   {% endif %}
 
-  {#- 兑换加量包（P4c）：粘贴厂商签发的 topup 凭证 → 验签+绑定校验+幂等入账。 -#}
-  {% if user_role == 'master' and mb.quota.included_chars %}
+  {#- 兑换加量包（P4c；2026-08-19 起同一兑换框吃两种凭证：字符包 + Token 包）。
+      条件补 tokens.enabled：新 SKU（字符不限=免费翻译）用户也要有兑换入口，
+      否则 Token 包凭证无处粘贴。 -#}
+  {% if user_role == 'master' and (mb.quota.included_chars or (mb.tokens or {}).get('enabled')) %}
   <div class="card" style="margin-bottom:1.2rem">
     <div class="card-h"><h3>{{ (i18n or {}).get('mb_redeem_title', '兑换加量包') }}</h3></div>
     <div style="padding:.8rem 1rem">
@@ -339,8 +341,10 @@
         msg.style.display = 'block';
         if (res && res.ok) {
           msg.style.color = 'var(--green)';
-          msg.textContent = (window.T ? window.T('mb_redeem_ok') : 'OK')
-            .replace('{n}', (res.chars || 0).toLocaleString());
+          // Token 包凭证回 tokens 字段、字符包回 chars——按载荷选文案（双载荷优先报 Token）
+          msg.textContent = (res.tokens
+            ? (window.T ? window.T('mb_redeem_ok_tokens') : 'OK').replace('{n}', (res.tokens || 0).toLocaleString())
+            : (window.T ? window.T('mb_redeem_ok') : 'OK').replace('{n}', (res.chars || 0).toLocaleString()));
           setTimeout(function(){ location.reload(); }, 1400);
         } else {
           msg.style.color = 'var(--red,#ef4444)';
@@ -356,6 +360,78 @@
     });
   })();
   </script>
+  {% endif %}
+
+  {#- Token 钱包（2026-08-19 Token 定价改版 P2b）：licensing.token_ledger.enabled
+      开启才出卡（服务端 feat-detect，中间态自洽）。余额/月含量/消耗构成/入账批次/
+      公示计价表全部服务端渲染零 JS；与字符额度、托管通道是三套独立水表。 -#}
+  {% set tk = mb.tokens or {} %}
+  {% if tk.get('enabled') %}
+  <div class="card" style="margin-bottom:1.2rem">
+    <div class="card-h"><h3>🪙 {{ (i18n or {}).get('mb_tok_title', 'Token 钱包') }}</h3></div>
+    <div style="padding:.9rem 1.1rem">
+      <div style="display:flex;flex-wrap:wrap;gap:1.6rem;align-items:flex-end">
+        <div>
+          <div style="font-size:.72rem;color:var(--t2)">{{ (i18n or {}).get('mb_tok_balance', '当前余额') }}</div>
+          <div style="font-size:1.9rem;font-weight:700;line-height:1.15">{{ '{:,}'.format(tk.get('balance', 0)) }}
+            <span style="font-size:.78rem;font-weight:400;color:var(--t2)">{{ (i18n or {}).get('mb_tok_unit', 'Token') }}</span></div>
+        </div>
+        <div style="font-size:.76rem;color:var(--t2);display:flex;gap:1.2rem;flex-wrap:wrap">
+          <span>{{ (i18n or {}).get('mb_tok_today', '今日消耗') }} <b style="color:var(--t1)">{{ '{:,}'.format(tk.get('today', 0)) }}</b></span>
+          <span>{{ (i18n or {}).get('mb_tok_total', '累计消耗') }} <b style="color:var(--t1)">{{ '{:,}'.format(tk.get('total_spend', 0)) }}</b></span>
+          {% if tk.get('expired_lost', 0) > 0 %}
+          <span>{{ (i18n or {}).get('mb_tok_expired', '过期作废') }} <b style="color:var(--t1)">{{ '{:,}'.format(tk.get('expired_lost', 0)) }}</b></span>
+          {% endif %}
+        </div>
+      </div>
+      <div style="font-size:.76rem;color:var(--t2);margin-top:.5rem">
+        {% if tk.get('monthly', 0) > 0 %}{{ ((i18n or {}).get('mb_tok_monthly', '订阅每月含 {n} Token（自动入账 · 当月有效不结转）')).replace('{n}', '{:,}'.format(tk.get('monthly', 0))) }}
+        {% else %}{{ (i18n or {}).get('mb_tok_monthly_none', '无订阅月含量（按量 / Token 包模式）') }}{% endif %}
+      </div>
+
+      {% if tk.get('by_action') %}
+      <div style="margin-top:.8rem">
+        <div style="font-size:.74rem;color:var(--t2);margin-bottom:.3rem">{{ (i18n or {}).get('mb_tok_by_action', '消耗构成（累计）') }}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:.4rem">
+          {% for act, n in tk.get('by_action', {}).items() %}
+          <span style="font-size:.74rem;border:1px solid var(--bd);border-radius:999px;padding:.18rem .6rem;color:var(--t1)">
+            {{ (i18n or {}).get('mb_tok_act_' ~ act, act) }} · {{ '{:,}'.format(n) }}</span>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      {% if tk.get('grants') %}
+      <div style="margin-top:.8rem">
+        <div style="font-size:.74rem;color:var(--t2);margin-bottom:.3rem">{{ (i18n or {}).get('mb_tok_grants', '最近入账批次') }}</div>
+        <table style="width:100%;font-size:.76rem;border-collapse:collapse">
+          {% for g in tk.get('grants', []) %}
+          <tr style="border-top:1px solid var(--bd)">
+            <td style="padding:.28rem 0;color:var(--t1)">{{ (i18n or {}).get('mb_tok_kind_' ~ g.kind, g.kind) }}</td>
+            <td style="padding:.28rem 0;text-align:right;font-weight:600">+{{ '{:,}'.format(g.tokens) }}</td>
+            <td style="padding:.28rem 0 .28rem 1rem;color:var(--t2)">
+              {% if g.expires_day %}{{ ((i18n or {}).get('mb_tok_expires', '有效期至 {d}')).replace('{d}', g.expires_day) }}
+              {% else %}{{ (i18n or {}).get('mb_tok_never', '永不过期') }}{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
+      {% endif %}
+
+      <details style="margin-top:.8rem">
+        <summary style="font-size:.74rem;color:var(--t2);cursor:pointer">{{ (i18n or {}).get('mb_tok_rates_title', '计价表（公示口径）') }}</summary>
+        <div style="display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.4rem">
+          {% for r in tk.get('rates', []) %}
+          <span style="font-size:.72rem;border:1px solid var(--bd);border-radius:6px;padding:.2rem .5rem;color:var(--t2)">
+            {{ (i18n or {}).get('mb_tok_act_' ~ r.key, r.key) }}：
+            {%- if r.tokens == 0 %} {{ (i18n or {}).get('mb_tok_free', '免费') }}
+            {%- else %} {{ r.tokens }} / {% if r.unit_size > 1 %}{{ '{:,}'.format(r.unit_size) }} {% endif %}{{ (i18n or {}).get('mb_tok_u_' ~ r.unit, r.unit) }}{% endif %}</span>
+          {% endfor %}
+        </div>
+      </details>
+      <div style="font-size:.72rem;color:var(--t2);margin-top:.6rem">💡 {{ (i18n or {}).get('mb_tok_degrade_note', '余额用尽不会断线：AI 回复自动切换免费本地模型、专业翻译降级标准翻译（免费不限量），补充 Token 包立即恢复。') }}</div>
+    </div>
+  </div>
   {% endif %}
 
   {#- 托管 AI 试用通道（云端网关按日计量）：与授权字符额度是**两套水表**，

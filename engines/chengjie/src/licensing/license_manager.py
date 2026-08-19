@@ -146,6 +146,9 @@ class LicenseStatus:
     # P0-4 免费试用（字符额度）：翻译/TTS 合计含量（0 = 不限）+ 试用标记
     included_chars: int = 0
     trial: bool = False
+    # 2026-08-19 Token 定价改版：订阅每月含 Token（0 = 无月度含量；团队版 payload
+    # 已按坐席数放大）。运行时由 token_ledger.ensure_monthly_tokens 按自然月幂等入账。
+    included_tokens_monthly: int = 0
 
     @property
     def licensed(self) -> bool:
@@ -196,6 +199,7 @@ class LicenseStatus:
             "channels": list(self.channels),
             "features": dict(self.features),
             "included_chars": self.included_chars,
+            "included_tokens_monthly": self.included_tokens_monthly,
             "trial": self.trial,
             "enforce": self.enforce,
             "read_only": self.read_only,
@@ -367,6 +371,8 @@ class LicenseManager:
             channels=list(payload.get("channels") or []),
             features=dict(payload.get("features") or {}),
             included_chars=max(0, int(payload.get("included_chars") or 0)),
+            included_tokens_monthly=max(
+                0, int(payload.get("included_tokens_monthly") or 0)),
             trial=bool(payload.get("trial", False)),
         )
         if not exp or now <= exp:

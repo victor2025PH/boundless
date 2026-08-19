@@ -326,11 +326,14 @@ class TokenLedgerStore:
         return out
 
 
-# ── 模块级单例 + 配置闸（与 quota_store 同构；当前未接线，默认关）───────────────
+# ── 模块级单例 + 配置闸（与 quota_store/local_trial 同构；默认关）───────────────
 _STORE: Optional[TokenLedgerStore] = None
 _DB_PATH: Optional[str] = None
 _CFG_LOCK = threading.Lock()
 _WARNED_LIC_IDS: set = set()
+# 总闸：bootstrap（main.py 授权装配段）按 licensing.token_ledger.enabled 注入
+# （local_trial 同款模块级开关范式；配置热重载不重跑 bootstrap → 改开关需重启）。
+_ENABLED = False
 
 
 def _default_db_path() -> str:
@@ -340,11 +343,14 @@ def _default_db_path() -> str:
 
 
 def configure_token_ledger(
-    *, db_path: Any = None, store: Optional[TokenLedgerStore] = None,
+    *, enabled: Optional[bool] = None, db_path: Any = None,
+    store: Optional[TokenLedgerStore] = None,
 ) -> Optional[TokenLedgerStore]:
-    """启动期装配（可选）：覆盖 db 路径或直接注入 store（测试用）。幂等。"""
-    global _STORE, _DB_PATH
+    """启动期装配（可选）：设总闸 / 覆盖 db 路径 / 直接注入 store（测试用）。幂等。"""
+    global _STORE, _DB_PATH, _ENABLED
     with _CFG_LOCK:
+        if enabled is not None:
+            _ENABLED = bool(enabled)
         if store is not None:
             _STORE = store
         if db_path is not None:
@@ -357,11 +363,12 @@ def get_token_ledger() -> Optional[TokenLedgerStore]:
 
 
 def reset_token_ledger() -> None:
-    """测试钩子：清空单例/路径/告警去重。"""
-    global _STORE, _DB_PATH
+    """测试钩子：清空单例/路径/总闸/告警去重。"""
+    global _STORE, _DB_PATH, _ENABLED
     with _CFG_LOCK:
         _STORE = None
         _DB_PATH = None
+        _ENABLED = False
         _WARNED_LIC_IDS.clear()
 
 
@@ -378,12 +385,14 @@ def _ensure_store() -> Optional[TokenLedgerStore]:
 
 
 def token_ledger_enabled(cfg: Optional[Dict[str, Any]] = None) -> bool:
-    """总闸 ``licensing.token_ledger.enabled``（默认 False——P2 地基未接线）。"""
+    """总闸 ``licensing.token_ledger.enabled``（默认 False）。
+
+    给 cfg（dict）→ 直接从配置读（测试/一次性判定）；不给 → 读 bootstrap 注入的
+    模块级开关（生产路径，local_trial 同款范式；改开关需重启）。
+    """
     try:
         if cfg is None:
-            from src.utils.config import get_config  # type: ignore
-
-            cfg = get_config() or {}
+            return _ENABLED
         lic = (cfg.get("licensing") or {}) if isinstance(cfg, dict) else {}
         tl = lic.get("token_ledger") or {}
         return bool(tl.get("enabled", False))
@@ -446,6 +455,167 @@ def record_token_action(
         return 0
 
 
+# ── 授权态感知的高层入口（P3 履约/消费点/会员页共用）────────────────────────────
+
+def wallet_id_for_status(lic_status: Any = None) -> str:
+    """钱包主键 = **客户身份**（contact_core），绝不是 lic_id。
+
+    月付续费 = 新订单新 lic_id——Token 包 12 个月有效必须跨授权号存活，钱包若挂
+    lic_id 会在每次续费时被孤立（P3 设计时抓到的关键缺陷）。回退顺序：
+    contact_core(customer) → lic_id（payload 无 sub 的老授权）→ "default"。
+    """
+    try:
+        st = lic_status
+        if st is None:
+            from src.licensing.license_manager import get_license_manager
+
+            st = get_license_manager().status()
+        customer = str(getattr(st, "customer", "") or "")
+        if customer:
+            from src.licensing.topup_voucher import contact_core
+
+            core = contact_core(customer)
+            if core:
+                return core
+        return str(getattr(st, "lic_id", "") or "") or "default"
+    except Exception:
+        return "default"
+
+
+def ensure_monthly_tokens(lic_status: Any = None, *, now: Optional[float] = None) -> bool:
+    """按授权的 ``included_tokens_monthly`` 给钱包补当月含量（幂等，每月一次）。
+
+    消费点与会员页都会顺路调用——无需定时任务，任何一次访问都能触发本月入账。
+    无授权 / 月含量为 0 → False 零 IO。绝不抛。
+    """
+    try:
+        st = lic_status
+        if st is None:
+            from src.licensing.license_manager import get_license_manager
+
+            st = get_license_manager().status()
+        if not getattr(st, "licensed", False):
+            return False
+        monthly = int(getattr(st, "included_tokens_monthly", 0) or 0)
+        if monthly <= 0:
+            return False
+        store = _ensure_store()
+        if store is None:
+            return False
+        return store.grant_monthly(
+            wallet_id_for_status(st), monthly, now=now,
+            note=f"plan:{getattr(st, 'lic_id', '') or 'default'}",
+        )
+    except Exception:
+        logger.debug("[token_ledger] ensure_monthly_tokens 失败（已忽略）", exc_info=True)
+        return False
+
+
+def record_action_for_status(
+    action: str, units: float, *, lic_status: Any = None, now: Optional[float] = None,
+) -> int:
+    """消费点单行入口：闸门开→顺路补当月含量→按费率记账。返回记账 Token 数；绝不抛。
+
+    与 ``record_license_chars`` 同姿势（成功交付后旁路一行），额外前置总闸
+    ``licensing.token_ledger.enabled``——默认关，生产零行为变化。
+    """
+    try:
+        if not token_ledger_enabled():
+            return 0
+        st = lic_status
+        if st is None:
+            from src.licensing.license_manager import get_license_manager
+
+            st = get_license_manager().status()
+        ensure_monthly_tokens(st, now=now)
+        return record_token_action(wallet_id_for_status(st), action, units, now=now)
+    except Exception:
+        logger.debug("[token_ledger] record_action_for_status 失败（已忽略）", exc_info=True)
+        return 0
+
+
+def grant_pack_for_status(
+    tokens: int, ref: str, *, lic_status: Any = None, note: str = "",
+    now: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Token 包入账（凭证兑换通道）。返回 {ok, error?, wallet, balance}。绝不抛。
+
+    幂等 ref=订单号（同单重复兑换拒绝）；入账后立即回读余额供 UI 展示。
+    """
+    try:
+        st = lic_status
+        if st is None:
+            from src.licensing.license_manager import get_license_manager
+
+            st = get_license_manager().status()
+        if not getattr(st, "licensed", False):
+            return {"ok": False, "error": "not_licensed"}
+        store = _ensure_store()
+        if store is None:
+            return {"ok": False, "error": "store_unavailable"}
+        wallet = wallet_id_for_status(st)
+        if not store.grant_pack(wallet, tokens, ref, note, now=now):
+            return {"ok": False, "error": "duplicate_ref", "wallet": wallet,
+                    "balance": store.balance(wallet, now=now).get("balance", 0)}
+        return {"ok": True, "wallet": wallet, "tokens": int(tokens),
+                "balance": store.balance(wallet, now=now).get("balance", 0)}
+    except Exception:
+        logger.debug("[token_ledger] grant_pack_for_status 失败", exc_info=True)
+        return {"ok": False, "error": "internal"}
+
+
+def wallet_snapshot(lic_status: Any = None, *, now: Optional[float] = None) -> Dict[str, Any]:
+    """会员页「Token 钱包」数据装配（只读；顺路补当月含量）。
+
+    返回 {enabled, wallet, balance, active_granted, expired_lost, total_spend,
+    today, by_action, grants, monthly, rates}；enabled=False 时其余字段仍给零值
+    （模板 feat-detect 整卡隐藏）。绝不抛。
+    """
+    out: Dict[str, Any] = {
+        "enabled": False, "wallet": "", "balance": 0, "active_granted": 0,
+        "expired_lost": 0, "total_spend": 0, "today": 0, "by_action": {},
+        "grants": [], "monthly": 0,
+        "rates": [
+            {"key": k, "tokens": v["tokens"], "unit": v["unit"],
+             "unit_size": v["unit_size"]}
+            for k, v in TOKEN_RATES.items()
+        ],
+    }
+    try:
+        out["enabled"] = token_ledger_enabled()
+        if not out["enabled"]:
+            return out
+        st = lic_status
+        if st is None:
+            from src.licensing.license_manager import get_license_manager
+
+            st = get_license_manager().status()
+        ensure_monthly_tokens(st, now=now)
+        store = _ensure_store()
+        if store is None:
+            return out
+        wallet = wallet_id_for_status(st)
+        out["wallet"] = wallet
+        out["monthly"] = int(getattr(st, "included_tokens_monthly", 0) or 0)
+        out.update(store.balance(wallet, now=now))
+        usage = store.usage(wallet)
+        out["today"] = usage["today"]
+        out["by_action"] = usage["by_action"]
+        # 展示就绪：批次带 expires_day（YYYY-MM-DD；空=永不过期），模板零日期逻辑。
+        grants = []
+        for g in usage["grants"][:8]:
+            g = dict(g)
+            exp = g.get("expires_at")
+            g["expires_day"] = (
+                time.strftime("%Y-%m-%d", time.gmtime(float(exp))) if exp else ""
+            )
+            grants.append(g)
+        out["grants"] = grants
+    except Exception:
+        logger.debug("[token_ledger] wallet_snapshot 失败（返回零值）", exc_info=True)
+    return out
+
+
 __all__ = [
     "CHARS_PER_TOKEN_LEGACY",
     "PACK_VALID_MONTHS",
@@ -455,9 +625,14 @@ __all__ = [
     "allocate_spend",
     "check_token_balance",
     "configure_token_ledger",
+    "ensure_monthly_tokens",
     "get_token_ledger",
+    "grant_pack_for_status",
+    "record_action_for_status",
     "record_token_action",
     "reset_token_ledger",
     "token_ledger_enabled",
     "tokens_for",
+    "wallet_id_for_status",
+    "wallet_snapshot",
 ]

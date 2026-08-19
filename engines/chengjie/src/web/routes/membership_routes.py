@@ -80,6 +80,14 @@ def build_membership_snapshot(config: dict, user_store=None) -> Dict[str, Any]:
         out["gate"] = {"enabled": False, "plan": "community", "features": {},
                        "locked": [], "plan_order": []}
     out["quota"] = _quota_snapshot()
+    # 2026-08-19 Token 钱包（P2b）：licensing.token_ledger.enabled 关（默认）时
+    # enabled=False → 模板整卡隐藏；开时顺路补当月含量并出余额/流水/费率。绝不抛。
+    try:
+        from src.licensing.token_ledger import wallet_snapshot
+
+        out["tokens"] = wallet_snapshot(st)
+    except Exception:
+        out["tokens"] = {"enabled": False}
     # 购买/续费入口（P4b/P7）：运营配置 licensing.shop_url；指向 /order 时按当前
     # 授权自动拼 ?plan=<offer>（额度耗尽→字符包）。TG 客服等非 order 链原样透传。
     try:

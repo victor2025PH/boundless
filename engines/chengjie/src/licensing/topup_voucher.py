@@ -62,34 +62,45 @@ def batch_refs(ref: str, count: int) -> list:
 def issue_topup_voucher(
     private_hex: str,
     *,
-    chars: int,
+    chars: int = 0,
+    tokens: int = 0,
     ref: str,
     lic_id: str = "",
     customer: str = "",
     note: str = "",
     now: Optional[int] = None,
 ) -> str:
-    """签发一张字符加量凭证。``lic_id`` / ``customer`` 至少给一个（绑定防串号）。"""
+    """签发一张加量凭证。``lic_id`` / ``customer`` 至少给一个（绑定防串号）。
+
+    两种载荷（2026-08-19 Token 定价改版，同一 typ 同一兑换框）：
+      · ``chars>0``  —— 字符加量包（停售存量轨道，入 quota_store）；
+      · ``tokens>0`` —— Token 包（在售轨道，入 token_ledger 客户钱包）。
+    至少给一个正数；两者可同给（换发场景），兑换端各自入账。
+    """
     try:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     except Exception as e:  # pragma: no cover - 生产环境必装
         raise LicenseError(f"cryptography 未安装，无法签发凭证: {e}")
     n = int(chars or 0)
+    tk = int(tokens or 0)
     r = str(ref or "").strip()
     lic = str(lic_id or "").strip()
     sub = str(customer or "").strip()
-    if n <= 0:
-        raise LicenseError("chars 必须为正整数")
+    if n <= 0 and tk <= 0:
+        raise LicenseError("chars / tokens 至少一个为正整数")
     if not r:
         raise LicenseError("ref（订单号）不能为空——它是兑换幂等键")
     if not lic and not sub:
         raise LicenseError("必须绑定 lic_id 或 customer 之一（防凭证串号）")
     body: Dict[str, Any] = {
         "typ": VOUCHER_TYP,
-        "chars": n,
         "ref": r,
         "iat": int(now if now is not None else time.time()),
     }
+    if n > 0:
+        body["chars"] = n
+    if tk > 0:
+        body["tokens"] = tk
     if lic:
         body["lic"] = lic
     if sub:
@@ -166,10 +177,16 @@ def verify_topup_voucher(token: str, public_key_hex: str) -> Dict[str, Any]:
         return {"ok": False, "error": "bad_signature"}
     if str(payload.get("typ") or "") != VOUCHER_TYP:
         return {"ok": False, "error": "not_voucher"}
+    # 载荷合法性（2026-08-19 起支持双载荷）：chars / tokens 至少一个正整数。
     chars = payload.get("chars")
+    tokens = payload.get("tokens")
+    has_chars = isinstance(chars, int) and chars > 0
+    has_tokens = isinstance(tokens, int) and tokens > 0
     ref = str(payload.get("ref") or "").strip()
-    if not isinstance(chars, int) or chars <= 0 or not ref:
+    if (not has_chars and not has_tokens) or not ref:
         return {"ok": False, "error": "malformed"}
+    if (chars is not None and not has_chars) or (tokens is not None and not has_tokens):
+        return {"ok": False, "error": "malformed"}   # 显式给了但非法（0/负数/非整型）
     if not str(payload.get("lic") or "").strip() and not str(payload.get("sub") or "").strip():
         return {"ok": False, "error": "malformed"}
     return {"ok": True, "payload": payload}
@@ -183,11 +200,14 @@ def redeem_topup_voucher(
 ) -> Dict[str, Any]:
     """客户侧兑换入口（会员中心「兑换加量包」按钮的全部后端逻辑）。
 
-    返回 {ok, error?, chars?, ref?, lic_id?, topup_chars?, included?}。
-    error 除 verify 三码外还有：not_licensed（无有效授权，凭证无处入账）、
-    lic_mismatch / customer_mismatch（绑定不符=别人的凭证）、
-    以及 ``add_license_topup`` 透传的 unlimited / duplicate_ref / store_unavailable。
-    自身绝不抛；成功即入账（check_license_quota 立即反映新额度）。
+    返回 {ok, error?, chars?, tokens?, ref?, lic_id?, topup_chars?, included?,
+    wallet?, balance?}。error 除 verify 三码外还有：not_licensed（无有效授权，
+    凭证无处入账）、lic_mismatch / customer_mismatch（绑定不符=别人的凭证）、
+    以及入账层透传的 unlimited / duplicate_ref / store_unavailable。
+
+    双载荷（2026-08-19）：``chars`` 入 quota_store 字符池（挂 lic_id）；
+    ``tokens`` 入 token_ledger 客户钱包（挂 contact_core——跨续费存活）。
+    自身绝不抛；成功即入账（check_license_quota / wallet_snapshot 立即反映）。
     """
     try:
         from src.licensing.license_manager import get_license_manager
@@ -198,7 +218,8 @@ def redeem_topup_voucher(
         if not v.get("ok"):
             return {"ok": False, "error": str(v.get("error") or "bad_signature")}
         payload = v["payload"]
-        chars = int(payload["chars"])
+        chars = int(payload.get("chars") or 0)
+        tokens = int(payload.get("tokens") or 0)
         ref = str(payload["ref"])
         if not getattr(st, "licensed", False):
             return {"ok": False, "error": "not_licensed"}
@@ -214,14 +235,26 @@ def redeem_topup_voucher(
             core_have = contact_core(str(getattr(st, "customer", "") or ""))
             if not core_want or core_want != core_have:
                 return {"ok": False, "error": "customer_mismatch"}
+        note = str(payload.get("note") or "") or "voucher"
+        # Token 包：入客户钱包（幂等 ref 在账本层）。纯 Token 凭证到此返回；
+        # 双载荷（换发场景）继续走字符入账，任一失败如实报错。
+        if tokens > 0:
+            from src.licensing.token_ledger import grant_pack_for_status
+            tres = grant_pack_for_status(tokens, ref, lic_status=st, note=note)
+            if not tres.get("ok"):
+                return {"ok": False, "error": str(tres.get("error") or "internal"),
+                        "tokens": tokens, "ref": ref}
+            if chars <= 0:
+                out = dict(tres)
+                out.setdefault("tokens", tokens)
+                out.setdefault("ref", ref)
+                return out
         from src.licensing.quota_store import add_license_topup
-        res = add_license_topup(
-            chars, ref,
-            note=str(payload.get("note") or "") or "voucher",
-            lic_status=st,
-        )
+        res = add_license_topup(chars, ref, note=note, lic_status=st)
         out = dict(res)
         out.setdefault("chars", chars)
+        if tokens > 0:
+            out.setdefault("tokens", tokens)
         out.setdefault("ref", ref)
         return out
     except Exception:

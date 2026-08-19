@@ -38,19 +38,44 @@ from typing import Any, Dict, List, Optional
 # chatx 全渠道（team/flagship「全平台」）
 ALL_CHANNELS: List[str] = ["telegram", "line", "whatsapp", "messenger", "web"]
 
-# chatx 三档权威映射（业务可调）。entry「1 平台」默认主渠道 telegram（可经 channels 覆盖）。
+# chatx 档位权威映射（业务可调）。
+#
+# ── 2026-08-19 Token 定价改版 ────────────────────────────────────────────────
+# 在售：personal（39/月）/ team-seat（49/坐席/月，按坐席签发）/ flagship（598/月）。
+# 停售但保留可履约：entry/team（历史订单/续费单仍能自动签发，官网已不再挂牌）。
+# 新增维度：
+#   · included_tokens_monthly —— 订阅每月含 Token（进 payload；运行时由
+#     token_ledger.ensure_monthly_tokens 按自然月幂等入账到**客户钱包**）。
+#     per_seat SKU 签发时按订单 seats 放大（build_issue_payload）。
+#   · per_seat —— 按坐席计价档：payload.seats = 订单 seats（clamp [min,50]），
+#     included_tokens_monthly 同步 ×seats。
+#   · **新 SKU 刻意不带 included_chars_monthly** —— 字符不限量 = 标准翻译免费
+#     （2026-08-19 决议）的引擎侧实现：quota_store 对 included=0 恒放行，零新代码。
+#     专业翻译/语音/AI 回复的计量走 Token 钱包（token_ledger），与字符池正交。
 CHATX_SKU_SPECS: Dict[str, Dict[str, Any]] = {
+    "chatx-personal": {
+        "plan": "basic", "seats": 1, "channels": list(ALL_CHANNELS),
+        "included_tokens_monthly": 30_000,
+        "note": "1 坐席/3 账号/全平台/30,000 Token 每月",
+    },
+    "chatx-team-seat": {
+        "plan": "pro", "seats": 2, "channels": list(ALL_CHANNELS),
+        "per_seat": {"min": 2, "max": 50},
+        "included_tokens_monthly": 50_000,   # 每坐席；签发按 seats 放大
+        "note": "每坐席 5 账号+50,000 Token 入池/权限审计",
+    },
     "chatx-entry": {
         "plan": "basic", "seats": 3, "channels": ["telegram"],
-        "note": "3 账号/AI 翻译/1 平台",
+        "note": "【停售 2026-08-19】3 账号/AI 翻译/1 平台（历史续费仍可签发）",
     },
     "chatx-team": {
         "plan": "pro", "seats": 10, "channels": list(ALL_CHANNELS),
-        "note": "10 账号/全平台/AI 自动成交",
+        "note": "【停售 2026-08-19】10 账号/全平台（历史续费仍可签发）",
     },
     "chatx-flagship": {
         "plan": "flagship", "seats": 50, "channels": list(ALL_CHANNELS),
-        "note": "50 账号/人工接管/数据看板",
+        "included_tokens_monthly": 0,   # 本地模型不限量；云增值按钱包（不发月含量）
+        "note": "50 账号/人工接管/数据看板/本地模型 Token 不限",
     },
 }
 
@@ -69,23 +94,43 @@ CHATX_SKU_SPECS: Dict[str, Dict[str, Any]] = {
 #   - pro：官网明示「不限字符」→ 0（=不限；charpack 对 pro 拒兑是正确语义）。
 # 签发时按授权月数放大（annual ×12），见 build_issue_payload。
 LINGOX_SKU_SPECS: Dict[str, Dict[str, Any]] = {
+    # 2026-08-19 在售：翻译工作台（29/坐席/月，纯翻译团队）。不带 included_chars_monthly
+    # = 字符不限（标准翻译免费）；专业翻译按 Token 钱包，无订阅月含量。
+    "lingox-workbench": {
+        "plan": "basic", "seats": 1, "channels": list(ALL_CHANNELS),
+        "per_seat": {"min": 1, "max": 50},
+        "features": {"analytics": True}, "product_id": "tongyi",
+        "included_tokens_monthly": 0,
+        "note": "多坐席收件箱/客户 journey/漏斗/术语锁定（标准翻译免费不限量）",
+    },
+    # ── 停售 2026-08-19（历史续费仍可签发；新客走 workbench + Token）──
     "lingox-team": {
         "plan": "basic", "seats": 5, "channels": list(ALL_CHANNELS),
         "features": {"analytics": True}, "product_id": "tongyi",
         "included_chars_monthly": 3_000_000,
-        "note": "多坐席/客户 journey/漏斗看板",
+        "note": "【停售】多坐席/客户 journey/漏斗看板",
     },
     "lingox-pro": {
         "plan": "basic", "seats": 15, "channels": list(ALL_CHANNELS),
         "features": {"analytics": True}, "product_id": "tongyi",
         "included_chars_monthly": 0,
-        "note": "不限字符/多模态翻译/置信度·引擎健康",
+        "note": "【停售】不限字符/多模态翻译/置信度·引擎健康",
     },
 }
 
-# 加购型用量包 → 字符量（topup 凭证自动履约；量取自 products/tongyi/product.yaml：
-# lingox-charpack $59 / 150 万字符 one-time）。
+# 加购型用量包 → 字符量（topup 凭证自动履约；lingox-charpack 停售 2026-08-19，
+# 保留映射供历史订单兑付——无老客户但防手工补单）。
 TOPUP_SKU_CHARS: Dict[str, int] = {"lingox-charpack": 1_500_000}
+
+# Token 包 → Token 量（2026-08-19；与 products/zhiliao/product.yaml + 官网
+# chatx-pricing.ts::TOKEN_PACKS 同批改）。履约同走 topup 凭证通道（payload 带
+# tokens 而非 chars），兑换入 token_ledger 客户钱包（12 个月有效在账本层实施）。
+TOPUP_SKU_TOKENS: Dict[str, int] = {
+    "token-pack-s": 10_000,
+    "token-pack-m": 60_000,
+    "token-pack-l": 300_000,
+    "token-pack-xl": 1_000_000,
+}
 
 # 已知但不可自动履约（转人工；理由见模块 docstring）。charpack 已迁 TOPUP（P4c）。
 MANUAL_SKUS = frozenset()
@@ -118,6 +163,7 @@ def build_issue_payload(
     days: Optional[int] = None,
     features: Optional[Dict[str, Any]] = None,
     channels: Optional[List[str]] = None,
+    seats: Optional[int] = None,
     now: Optional[int] = None,
 ) -> Dict[str, Any]:
     """把一笔 chatx 订单映射为 ``issue_license`` 可直接签发的 payload。
@@ -127,6 +173,8 @@ def build_issue_payload(
     - ``days``：有效天数（None=DEFAULT_PERIOD_DAYS；<=0=永久，不写 exp）。
     - ``features`` / ``channels``：可覆盖 spec 默认（业务定制；features 与 spec
       默认位合并，同 key 以调用方为准）。
+    - ``seats``：**按坐席档**（spec 带 per_seat）的订单席数——clamp 到 [min,max]，
+      缺省按下限签发；included_tokens_monthly 同步 ×seats。非按坐席档忽略此参。
     额外写入 ``sku_id`` / ``product_id`` 供台账按产品/SKU 归集（填补 ledger §6 缺口）；
     product_id 随 spec（chatx=zhiliao / lingox=tongyi），供合并实例按产品线出品牌/报表。
     """
@@ -135,22 +183,35 @@ def build_issue_payload(
     d = DEFAULT_PERIOD_DAYS if days is None else int(days)
     merged_features = dict(spec.get("features") or {})
     merged_features.update(features or {})
+    # 按坐席档：席数=订单值 clamp [min,max]；固定档：spec.seats。
+    per_seat = spec.get("per_seat") or None
+    if per_seat:
+        want = int(seats or 0) or int(per_seat["min"])
+        eff_seats = max(int(per_seat["min"]), min(int(per_seat["max"]), want))
+    else:
+        eff_seats = int(spec["seats"])
     payload: Dict[str, Any] = {
         "sub": str(customer or ""),
         "plan": str(spec["plan"]),
-        "seats": int(spec["seats"]),
+        "seats": eff_seats,
         "channels": list(channels if channels is not None else spec["channels"]),
         "features": merged_features,
         "sku_id": str(sku_id),
         "product_id": str(spec.get("product_id") or "zhiliao"),
     }
-    # 字符计量产品线（P6）：spec 月度额度 × 授权月数 → payload.included_chars。
-    # 月付 32 天=1 个月、年付 366 天=12 个月（用量表按 lic_id 记账，月付续费
-    # =新单新 lic_id 额度自然重置；年付一个池）。0/缺省 = 不限量，不写字段。
+    # 字符计量产品线（P6，2026-08-19 起仅停售档还带）：spec 月度额度 × 授权月数 →
+    # payload.included_chars。月付 32 天=1 个月、年付 366 天=12 个月。
+    # 0/缺省 = 不限量，不写字段（新档全部如此 = 标准翻译免费）。
     monthly = int(spec.get("included_chars_monthly") or 0)
     if monthly > 0:
         months = 12 if d >= 360 else max(1, d // 28)
         payload["included_chars"] = monthly * months
+    # Token 月含量（2026-08-19）：写**每月值**（不按月数放大——运行时按自然月
+    # 幂等入账，当月有效不结转；年付授权自动覆盖 12 次月度入账）。按坐席档 ×seats。
+    tokens_monthly = int(spec.get("included_tokens_monthly") or 0)
+    if tokens_monthly > 0:
+        payload["included_tokens_monthly"] = tokens_monthly * (
+            eff_seats if per_seat else 1)
     if d > 0:
         payload["exp"] = now_ts + d * 86400
     if order_id:
@@ -249,9 +310,12 @@ def build_trial_payload(
 # 与 avatarhub/fulfill_orders.py 同构，但把「订单→是否可履约→签发 payload」抽成纯函数以便单测。
 
 def is_chatx_order(order: Dict[str, Any]) -> bool:
-    """该 website 订单是否属于 chatx（zhiliao）。sku_id 前缀优先，product_id 兜底。"""
+    """该 website 订单是否属于 chatx（zhiliao）。sku_id 前缀优先，product_id 兜底。
+
+    Token 包（token-pack-*）挂 zhiliao 名下（跨 ChatX/LingoX 通用钱包，registry 归属）。
+    """
     sku = str((order or {}).get("sku_id") or "")
-    if sku.startswith("chatx"):
+    if sku.startswith("chatx") or sku.startswith("token-pack"):
         return True
     return str((order or {}).get("product_id") or "") == "zhiliao"
 
@@ -291,12 +355,18 @@ def fulfillment_payload_for_order(order: Dict[str, Any]) -> Optional[Dict[str, A
         customer=str((order or {}).get("contact") or ""),
         order_id=str((order or {}).get("id") or ""),
         days=days,
+        # 按坐席档（team-seat/workbench）：官网订单 2026-08-19 起带 seats 字段；
+        # 缺失/历史单按档位下限签发（build_issue_payload 内 clamp）。
+        seats=int((order or {}).get("seats") or 0),
     )
 
 
 def topup_voucher_args_for_order(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """把一笔 paid 加购包订单映射为 ``issue_topup_voucher`` 的关键字参数；不可映射 → None。
 
+    两类加购走同一凭证轨道（typ=topup，客户在会员中心同一个兑换框粘贴）：
+      · 字符包（TOPUP_SKU_CHARS，停售存量）→ args 带 ``chars``；
+      · Token 包（TOPUP_SKU_TOKENS，2026-08-19 在售）→ args 带 ``tokens``。
     绑定用 ``customer=contact``（订单没有 lic_id；授权 payload.sub=contact，同一客户
     名下可兑）。contact 缺失 → None（没有绑定面=谁捡到谁兑，宁转人工不裸发）。
     托管交付单不签装机加购包（归租户实例内计量）。
@@ -306,12 +376,17 @@ def topup_voucher_args_for_order(order: Dict[str, Any]) -> Optional[Dict[str, An
     if is_hosted_order(order):
         return None
     sku = str((order or {}).get("sku_id") or "").strip()
-    chars = TOPUP_SKU_CHARS.get(sku)
     contact = str((order or {}).get("contact") or "").strip()
     oid = str((order or {}).get("id") or "").strip()
-    if not chars or not contact or not oid:
+    if not contact or not oid:
         return None
-    return {"chars": int(chars), "ref": oid, "customer": contact, "note": sku}
+    chars = TOPUP_SKU_CHARS.get(sku)
+    if chars:
+        return {"chars": int(chars), "ref": oid, "customer": contact, "note": sku}
+    tokens = TOPUP_SKU_TOKENS.get(sku)
+    if tokens:
+        return {"tokens": int(tokens), "ref": oid, "customer": contact, "note": sku}
+    return None
 
 
 def select_topup_fulfillable(
