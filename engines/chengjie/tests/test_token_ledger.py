@@ -80,18 +80,23 @@ def test_tokens_for_ceil_and_edges():
 # ── 2) 批次核算纯函数 ────────────────────────────────────────────────────────
 
 def test_allocate_spend_expiry_order_and_loss():
+    """按到期序吸收（含过期批次）——2026-08-19 P6 修正语义：上月支出记在上月批次头上，
+    绝不侵蚀本月新含量（初版「过期不吸收」会系统性少给客户，被 P6 月度续杯门禁抓出）。"""
     now = 1_000_000.0
     grants = [
         (10_000, now + 100),   # 快到期（月度含量）
         (60_000, now + 9_999), # Token 包
-        (5_000, now - 1),      # 已过期 → 作废，不吸收支出
+        (5_000, now - 1),      # 已过期 → 最先吸收支出（它活跃期内的消费记它头上）
     ]
     out = allocate_spend(grants, total_spend=12_000, now=now)
-    assert out["expired_lost"] == 5_000
+    # 过期 5k 全被支出吃掉（无作废）→ 10k 批再吸 7k → 余 3k + 完整 60k
+    assert out["expired_lost"] == 0
     assert out["active_granted"] == 70_000
-    # 先扣快到期的 10k，再从包里扣 2k → 余额 58k
-    assert out["balance"] == 58_000
+    assert out["balance"] == 63_000
     assert out["spend_unmet"] == 0
+    # 无支出时过期批次原样作废
+    out2 = allocate_spend(grants, total_spend=0, now=now)
+    assert out2["expired_lost"] == 5_000 and out2["balance"] == 70_000
 
 
 def test_allocate_spend_conservative_and_unmet():

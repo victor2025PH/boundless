@@ -1218,10 +1218,31 @@ class TTSPipeline:
 
         # ── 主后端合成 ──
         primary_backend = self._effective_backend()
+        # 2026-08-19 Token enforce（P6）：钱包耗尽 + enforce 开 + 主后端是克隆声
+        # （计费引擎）→ 注入合成失败原因，交给下方**既有** edge 兜底块出免费兜底声
+        # （voice/format 语义全复用，语音永不哑）；兜底不可用则照走克隆（永不断线 > 计费）。
+        # 兜底声 provider=edge → 计费钩天然不记（克隆引擎集合外）。
+        _token_skip_clone = False
+        if (primary_backend in ("avatar_clone", "minicpm_clone")
+                or primary_backend.endswith("_clone")):
+            try:
+                from src.licensing.token_ledger import should_degrade_action
+
+                _token_skip_clone = bool(
+                    self.fallback_on_error and self.fallback_backend
+                    and self.fallback_backend != primary_backend
+                    and should_degrade_action("voice_clone"))
+            except Exception:
+                _token_skip_clone = False
         # minicpm_clone：与 fish 同 /v1/tts/clone 契约的远程情感克隆主机（产 WAV），作为
         # 可显式选择的克隆后端（异步语音消息专用，慢于实时但不阻塞）。成功直接定稿；
         # 失败且允许兜底 → 落到下方 edge 回落（绝不卡死出站）。
-        if primary_backend == "avatar_clone":
+        if _token_skip_clone:
+            err = "token_wallet_exhausted"
+            logger.info(
+                "[tts] Token 钱包耗尽（enforce）→ 跳过克隆声 '%s'，走 '%s' 兜底",
+                primary_backend, self.fallback_backend)
+        elif primary_backend == "avatar_clone":
             # AvatarHub CosyVoice3（本机 7852）：情感克隆在线主力（2~4s/句）。
             av_rv = await self._try_avatar_clone(
                 rv, out, t0, spec=spec, colloquial_lead=colloquial_lead,

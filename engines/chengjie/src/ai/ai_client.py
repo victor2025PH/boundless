@@ -818,6 +818,21 @@ class AIClient(LoggerMixin):
         if _cb_blocked and not (self._pool_entries or (self._fb_client and self._fb_model)):
             return self._fallback_reply(_fb_lang)
 
+        # 2026-08-19 Token enforce（P6）：钱包耗尽（曾注资且余额≤0）+ enforce 开 →
+        # 跳过云端主链/备用池，直接本地兜底出话（免费路径）。只有本地兜底可用才降级
+        # ——无处可去时照走云端（永不断线 > 计费，本次照常计费）。熔断开路时让位
+        # 熔断语义（那条链本就以本地收尾）。
+        _token_degraded = False
+        if not _cb_blocked and not _local_primary:
+            try:
+                from src.licensing.token_ledger import should_degrade_action
+
+                _token_degraded = bool(
+                    (self._fb_client and self._fb_model)
+                    and should_degrade_action("ai_reply"))
+            except Exception:
+                _token_degraded = False
+
         so = strategy_overrides or {}
         use_temperature = float(so["temperature"]) if "temperature" in so else self.temperature
         use_max_tokens = int(so["max_tokens"]) if "max_tokens" in so else self.max_tokens
@@ -919,6 +934,23 @@ class AIClient(LoggerMixin):
                 model_override=use_local_model,
             )
             return fb_reply if fb_reply else self._fallback_reply(_fb_lang)
+        if _token_degraded:
+            # Token enforce 降级：本地兜底出真话（免费路径，_reply_free_path 标记
+            # 由 _try_local_fallback_chat 成功时打上 → 顶层计费钩跳过记账）。
+            # 本地失败 → fall through 照走云端主链（永不断线 > 计费）。
+            fb_reply = await self._try_local_fallback_chat(
+                messages, use_temperature, use_max_tokens, context, request_id,
+                skip_quality_check=_skip_quality_check,
+                model_override=use_local_model,
+            )
+            if fb_reply:
+                self.logger.info(
+                    "Token 钱包耗尽（enforce）→ 本地模型已出话 request_id=%s",
+                    request_id or "n/a")
+                return fb_reply
+            self.logger.warning(
+                "Token enforce 降级失败（本地无话）→ 照走云端主链（永不断线优先）"
+                " request_id=%s", request_id or "n/a")
         last_error = None
         start_time = time.time()
         for attempt in range(2):
@@ -1410,6 +1442,12 @@ class AIClient(LoggerMixin):
                     )
                 except Exception:
                     pass
+            # 2026-08-19 Token 计费（P6）：本地模型出话＝免费路径（自有 GPU），打标记
+            # 让顶层计费钩跳过本条 ai_reply 记账——断云顶班/enforce 降级/本地主链
+            # 三种形态都不该扣客户 Token。标记由计费钩 pop 消费（context 在 A 线
+            # 跨轮复用，残留会豁免下一条云端回复——必须取走即清）。
+            if context is not None:
+                context["_reply_free_path"] = True
             return reply
         except Exception as e:
             if not as_primary:
@@ -1777,7 +1815,15 @@ class AIClient(LoggerMixin):
             # 2026-08-19 Token 计量（P5a 观测接线，licensing.token_ledger.enabled
             # 默认关=零行为）：成功出稿记 ai_reply（10 Token/条）。观测口径=出稿数
             # （含未投递草稿，计费上界）；P5b 切到投递点后本处降级为影子对照。绝不抛。
-            if reply:
+            # P6：本地模型出话（断云顶班/enforce 降级/本地主链）带 _reply_free_path
+            # 标记＝免费路径不记账；pop 消费防 context 跨轮残留误豁免云端回复。
+            _free_path = False
+            try:
+                if context is not None:
+                    _free_path = bool(context.pop("_reply_free_path", False))
+            except Exception:
+                _free_path = False
+            if reply and not _free_path:
                 try:
                     from src.licensing.token_ledger import record_action_for_status
 
@@ -3668,6 +3714,14 @@ class AIClient(LoggerMixin):
         One cheap LLM call: extract 0–4 durable user-specific facts from this turn.
         Skips when circuit breaker is open (caller may still use heuristics).
         """
+        # P1 2026-08-19：剥掉 [图片内容]/[视频内容] 识别描述——系统自产内容不得变成
+        # 「用户事实」（聊天截图里被抄录的“我是XX”会污染本人画像，Phase8 幻觉同族）。
+        # 剥完只剩空（纯媒体消息）→ 下面的长度闸自然短路返回 []。
+        try:
+            from src.inbox.media_enrich import strip_media_desc
+            user_msg = strip_media_desc(user_msg or "")
+        except Exception:
+            pass
         u = (user_msg or "").strip()
         a = (assistant_msg or "").strip()
         if len(u) < 2 or len(a) < 2:

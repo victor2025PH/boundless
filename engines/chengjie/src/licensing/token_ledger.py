@@ -100,36 +100,40 @@ def allocate_spend(
     """把累计支出分摊到批次，返回 {balance, active_granted, expired_lost, spend_unmet}。
 
     grants: [(tokens, expires_at_epoch|None), ...]（None=永不过期）。
-    规则：按**到期时间升序**（先到期先扣，None 最后）逐批吸收支出；
-    - 已过期批次只吸收「其过期前理应已发生」的支出？——刻意不做时间序重放
-      （需要逐笔 spend 时间戳与批次配对，复杂且对账收益低）；简化为**保守口径**：
-      已过期批次直接作废、不吸收任何支出，支出全部压在未过期批次上。
-      该口径对客户**永远不多扣**（过期作废的是我们送出的额度，支出压在活批次上
-      只会让余额显示更低=更保守），与「订阅含量当月有效」的对外承诺一致。
+    规则：**全部批次**（含已过期）按到期时间升序（先到期先吸收，None 最后）
+    逐批吸收累计支出；balance = 未过期批次吸收后的剩余合计。
+
+    为什么过期批次也吸收（2026-08-19 P6 修正，初版「过期不吸收」被门禁抓出产品级
+    错误）：月度含量按自然月轮换——上月批次过期时，其间发生的支出必须记在**它**头上，
+    否则会全额压到本月新批次上＝上月消费侵蚀本月含量（系统性少给客户）。不做逐笔
+    spend×批次时间配对（重），按到期序吸收在常规时序（先发生的支出对应先到期的批次）
+    下即正确；极端时序（支出发生在某批过期之后）会让过期批次多吸收一点＝余额略偏高
+    ＝**宁可略微多给客户**，绝不反向多扣。
+    ``expired_lost`` = 过期批次吸收支出后**仍未用掉**的部分（真正作废的额度）。
     """
-    active: List[Tuple[int, Optional[float]]] = []
-    expired_lost = 0
-    for tokens, exp in grants:
-        t = int(tokens or 0)
-        if t <= 0:
-            continue
-        if exp is not None and exp <= now:
-            expired_lost += t
-        else:
-            active.append((t, exp))
-    # 先到期先扣（None=最晚）
-    active.sort(key=lambda g: (g[1] is None, g[1] if g[1] is not None else 0))
+    lots: List[Tuple[int, Optional[float]]] = [
+        (int(t), exp) for t, exp in grants if int(t or 0) > 0
+    ]
+    # 先到期先吸收（None=最晚）
+    lots.sort(key=lambda g: (g[1] is None, g[1] if g[1] is not None else 0))
     remaining_spend = max(0, int(total_spend or 0))
     balance = 0
-    for t, _exp in active:
+    active_granted = 0
+    expired_lost = 0
+    for t, exp in lots:
         absorbed = min(t, remaining_spend)
         remaining_spend -= absorbed
-        balance += t - absorbed
+        left = t - absorbed
+        if exp is not None and exp <= now:
+            expired_lost += left
+        else:
+            active_granted += t
+            balance += left
     return {
         "balance": balance,
-        "active_granted": sum(t for t, _ in active),
+        "active_granted": active_granted,
         "expired_lost": expired_lost,
-        "spend_unmet": remaining_spend,  # >0 = 历史支出超过现存批次（正常：老批次过期后的痕迹）
+        "spend_unmet": remaining_spend,  # >0 = 历史支出超过全部批次（异常痕迹，如实报）
     }
 
 
@@ -366,6 +370,10 @@ _WARNED_LIC_IDS: set = set()
 # 总闸：bootstrap（main.py 授权装配段）按 licensing.token_ledger.enabled 注入
 # （local_trial 同款模块级开关范式；配置热重载不重跑 bootstrap → 改开关需重启）。
 _ENABLED = False
+# enforce 闸（P6，licensing.token_ledger.enforce 默认关）：开=钱包耗尽时付费动作
+# **降级到免费路径**（AI 回复→本地模型 / 专业翻译→标准档 / 克隆声→edge 兜底），
+# 绝不阻断消息/翻译/语音本身——「永不断线」是比计费更高优先级的产品承诺。
+_ENFORCE = False
 
 # ── P5b 影子计数器（进程内观测，重启清零；权威计费口径是账本 token_spend）────────
 # 用途=校准「出稿 vs 投递」比值：ai_reply 计费点当前在 generate_reply 出稿处（上界），
@@ -405,15 +413,18 @@ def _default_db_path() -> str:
 
 
 def configure_token_ledger(
-    *, enabled: Optional[bool] = None, db_path: Any = None,
+    *, enabled: Optional[bool] = None, enforce: Optional[bool] = None,
+    db_path: Any = None,
     store: Optional[TokenLedgerStore] = None,
     fair_use_translate_chars: Optional[int] = None,
 ) -> Optional[TokenLedgerStore]:
-    """启动期装配（可选）：设总闸 / 覆盖 db 路径 / 公平使用阈值 / 注入 store（测试用）。幂等。"""
-    global _STORE, _DB_PATH, _ENABLED, _FAIR_USE_LIMIT
+    """启动期装配（可选）：设总闸 / enforce / db 路径 / 公平使用阈值 / 注入 store（测试用）。幂等。"""
+    global _STORE, _DB_PATH, _ENABLED, _ENFORCE, _FAIR_USE_LIMIT
     with _CFG_LOCK:
         if enabled is not None:
             _ENABLED = bool(enabled)
+        if enforce is not None:
+            _ENFORCE = bool(enforce)
         if store is not None:
             _STORE = store
         if db_path is not None:
@@ -428,12 +439,13 @@ def get_token_ledger() -> Optional[TokenLedgerStore]:
 
 
 def reset_token_ledger() -> None:
-    """测试钩子：清空单例/路径/总闸/影子计数/公平使用状态/告警去重。"""
-    global _STORE, _DB_PATH, _ENABLED, _FAIR_USE_LIMIT
+    """测试钩子：清空单例/路径/总闸/enforce/影子计数/公平使用状态/告警去重。"""
+    global _STORE, _DB_PATH, _ENABLED, _ENFORCE, _FAIR_USE_LIMIT
     with _CFG_LOCK:
         _STORE = None
         _DB_PATH = None
         _ENABLED = False
+        _ENFORCE = False
         _FAIR_USE_LIMIT = FAIR_USE_TRANSLATE_CHARS_PER_DAY
         _WARNED_LIC_IDS.clear()
         _FAIR_USE_WARNED_DAYS.clear()
@@ -633,6 +645,46 @@ def grant_pack_for_status(
         return {"ok": False, "error": "internal"}
 
 
+def should_degrade_action(action: str, *, lic_status: Any = None,
+                          now: Optional[float] = None) -> bool:
+    """enforce 降级判定（P6）：该付费动作是否应改走**免费路径**。
+
+    True 的充要条件（任一不满足即 False，宁不降级不误伤）：
+      总闸开 + enforce 开 + 动作是计费动作（费率>0）+ 钱包**曾被注资**
+      （active_granted>0 或 expired_lost>0——从未注资的老授权不适用 Token 语义，
+      防 enforce 一开就把存量/dogfood 部署全体打降级）+ 余额 <= 0。
+    命中记影子计数 ``enforce_degrade_<action>``。自身异常一律 False（fail-open）。
+
+    ⚠ 本函数只建议「降级」，绝不建议「阻断」——调用方的降级目标必须是能出结果的
+    免费路径（本地 LLM / 标准翻译 / edge 兜底声）；无免费路径可去时调用方应照走
+    付费路径（永不断线 > 计费）。
+    """
+    try:
+        if not _ENABLED or not _ENFORCE:
+            return False
+        rate = TOKEN_RATES.get(str(action or ""))
+        if not rate or rate["tokens"] <= 0:
+            return False
+        store = _ensure_store()
+        if store is None:
+            return False
+        st = lic_status
+        if st is None:
+            from src.licensing.license_manager import get_license_manager
+
+            st = get_license_manager().status()
+        ensure_monthly_tokens(st, now=now)
+        bal = store.balance(wallet_id_for_status(st), now=now)
+        funded = bal["active_granted"] > 0 or bal["expired_lost"] > 0
+        if funded and bal["balance"] <= 0:
+            record_shadow(f"enforce_degrade_{action}")
+            return True
+        return False
+    except Exception:
+        logger.debug("[token_ledger] should_degrade_action 失败（不降级）", exc_info=True)
+        return False
+
+
 def note_translate_fair_use(
     chars: int, *, lic_status: Any = None, now: Optional[float] = None,
 ) -> Dict[str, Any]:
@@ -679,7 +731,8 @@ def wallet_snapshot(lic_status: Any = None, *, now: Optional[float] = None) -> D
     （模板 feat-detect 整卡隐藏）。绝不抛。
     """
     out: Dict[str, Any] = {
-        "enabled": False, "wallet": "", "balance": 0, "active_granted": 0,
+        "enabled": False, "enforce": _ENFORCE, "wallet": "", "balance": 0,
+        "active_granted": 0,
         "expired_lost": 0, "total_spend": 0, "today": 0, "by_action": {},
         "grants": [], "monthly": 0,
         "shadow": {}, "fair_use": {"today": 0, "limit": _FAIR_USE_LIMIT, "exceeded": False},
@@ -750,6 +803,7 @@ __all__ = [
     "record_token_action",
     "reset_token_ledger",
     "shadow_snapshot",
+    "should_degrade_action",
     "token_ledger_enabled",
     "tokens_for",
     "wallet_id_for_status",

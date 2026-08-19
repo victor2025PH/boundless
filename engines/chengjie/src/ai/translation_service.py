@@ -346,6 +346,17 @@ class TranslationService:
         source = normalize_lang(source_lang) or detect_language(src_text)
         pref_engine = str(engine or "").strip().lower()
         tier = str(tier or "").strip().lower()
+        # Token enforce（P6）：钱包耗尽 + enforce 开 → 专业/认证层级降级为标准档
+        # （翻译照做，免费引擎链 + 公平使用水表；「永不断线」——降的是层级不是服务）。
+        if tier in ("pro", "certified"):
+            try:
+                from src.licensing.token_ledger import should_degrade_action
+
+                if should_degrade_action("pro_translate"):
+                    logger.info("[translate] Token 钱包耗尽（enforce）→ %s 降级 std", tier)
+                    tier = "std"
+            except Exception:
+                pass
         # certified 未显式指定引擎 → 首选 DeepL；在缓存键计算**之前**生效，
         # 认证请求走 engine=deepl 独立缓存桶，绝不命中标准桶旧译文（质量承诺）。
         if tier == "certified" and not pref_engine:

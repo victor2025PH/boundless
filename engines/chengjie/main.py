@@ -258,15 +258,18 @@ class AIChatAssistant:
                 # 观测记账 + 会员页钱包卡。local_trial 同款模块级开关范式，改需重启）。
                 try:
                     from src.licensing.token_ledger import configure_token_ledger
-                    _tl_enabled = bool((_lic_cfg.get("token_ledger") or {})
-                                       .get("enabled", False))
+                    _tl_cfg = _lic_cfg.get("token_ledger") or {}
+                    _tl_enabled = bool(_tl_cfg.get("enabled", False))
+                    _tl_enforce = bool(_tl_cfg.get("enforce", False))
                     _fair_use = int(((_lic_cfg.get("fair_use") or {})
                                      .get("translate_chars_per_day")) or 0)
                     configure_token_ledger(
-                        enabled=_tl_enabled,
+                        enabled=_tl_enabled, enforce=_tl_enforce,
                         fair_use_translate_chars=_fair_use or None)
                     if _tl_enabled:
-                        self.logger.info("🪙 Token 账本：已启用（观测记账）")
+                        self.logger.info(
+                            "🪙 Token 账本：已启用（%s）",
+                            "enforce=耗尽降级免费路径" if _tl_enforce else "观测记账")
                 except Exception:
                     self.logger.debug("Token 账本装配跳过", exc_info=True)
                 if _lic.state == "active":
