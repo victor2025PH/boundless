@@ -69,6 +69,24 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'sync:brand --check 失败：vendor/brand 与 platform/brand 不一致' }
   Write-Host '    [OK] vendor/brand 已与上游对齐'
 
+  # 2026-08-19 部署防呆（当日实锤：一条线从 ~2 周旧的 website 树部署，把 08-18 compare-P2
+  # 与 08-19 定价改版从生产整体抹掉——rsync --delete 语义下旧树=静默回滚）。打包前把
+  # git HEAD 元数据写进包内 .deploy-meta.json；服务器侧 deploy.sh 发现「更旧提交覆盖
+  # 更新提交」直接拒绝（FORCE_OLDER=1 显式覆盖），并留下「谁在何时部署了哪个提交」的取证记录。
+  Write-Host '[0.5/4] 写部署元数据 (.deploy-meta.json: git HEAD + 提交时间 + 部署机) ...'
+  try {
+    $gitHead = (git -C $WebRoot rev-parse HEAD 2>$null).Trim()
+    $gitTs   = [int](git -C $WebRoot log -1 --format=%ct 2>$null).Trim()
+    $gitDirty = -not [string]::IsNullOrWhiteSpace((git -C $WebRoot status --porcelain -- . 2>$null | Out-String).Trim())
+    @{ commit = $gitHead; commit_ts = $gitTs; dirty = $gitDirty
+       packed_at = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+       host = $env:COMPUTERNAME; user = $env:USERNAME } |
+      ConvertTo-Json -Compress | Set-Content -Path (Join-Path $WebRoot '.deploy-meta.json') -Encoding ascii
+    Write-Host ("    HEAD {0} @ {1}{2}" -f $gitHead.Substring(0,8), $gitTs, $(if ($gitDirty) { ' (dirty tree)' } else { '' }))
+  } catch {
+    Write-Warning "    部署元数据写入失败（不阻断；服务器侧防呆将按缺失处理）: $_"
+  }
+
   Write-Host '[1/4] 打包 website/ (排除 node_modules/.next/.git/.env.local/临时文件) ...'
   if (Test-Path $tar) { Remove-Item $tar -Force }
   # public/downloads、public/releases（安装包等大文件）不进源码包：服务器侧 rsync 已 exclude

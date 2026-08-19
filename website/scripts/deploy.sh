@@ -138,6 +138,28 @@ log "2/7 extract stage"
 rm -rf "$STAGE" && mkdir -p "$STAGE"
 tar -xzf "$TARBALL" -C "$STAGE"
 
+# 2026-08-19 部署防呆：拒绝「更旧的提交」覆盖线上（rsync --delete 下旧树部署=静默整站回滚，
+# 当日实锤抹掉了两条线的已上线工作）。比较包内与线上 .deploy-meta.json 的 commit_ts；
+# 旧包默认拒绝并指路 git pull，显式 FORCE_OLDER=1 才放行（真要回滚时用备份 tar 更干净）。
+# 包内缺 meta（老版 deploy.ps1 / 手工 tar）→ 只告警不拦（老脚本打的包挡不住，尽力而为）。
+log "2.5/7 staleness guard (.deploy-meta.json)"
+NEW_META="$STAGE/.deploy-meta.json"
+CUR_META="$APP_DIR/.deploy-meta.json"
+if [ -f "$NEW_META" ]; then
+  NEW_TS=$(python3 -c "import json;print(int(json.load(open('$NEW_META')).get('commit_ts') or 0))" 2>/dev/null || echo 0)
+  CUR_TS=0
+  [ -f "$CUR_META" ] && CUR_TS=$(python3 -c "import json;print(int(json.load(open('$CUR_META')).get('commit_ts') or 0))" 2>/dev/null || echo 0)
+  if [ "$NEW_TS" -gt 0 ] && [ "$CUR_TS" -gt 0 ] && [ "$NEW_TS" -lt "$CUR_TS" ] && [ "${FORCE_OLDER:-0}" != "1" ]; then
+    fail "incoming commit ($(date -u -d @"$NEW_TS" +%F\ %T 2>/dev/null || echo "$NEW_TS")) is OLDER than deployed ($(date -u -d @"$CUR_TS" +%F\ %T 2>/dev/null || echo "$CUR_TS"))"
+    fail "  your website tree is stale — run: git pull  (or FORCE_OLDER=1 bash deploy.sh ... to override)"
+    rm -rf "$STAGE"
+    exit 1
+  fi
+  log "meta OK: incoming commit_ts=$NEW_TS current=$CUR_TS ($(python3 -c "import json;m=json.load(open('$NEW_META'));print(str(m.get('commit') or '')[:8], m.get('host') or '?')" 2>/dev/null || echo '?'))"
+else
+  log "WARN no .deploy-meta.json in package (old deploy.ps1?) — staleness guard skipped"
+fi
+
 log "3/7 sync into place (keep .env.local/node_modules/.next, prune stale)"
 # 发布物目录（安装包等大文件）常驻服务器、不随源码 tarball 走：本地 deploy.ps1 打包时排除、
 # 部署后单独差量上传。这里 exclude + --delete 语义 = 不覆盖也不删除；缺此保护时，

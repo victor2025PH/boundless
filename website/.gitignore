@@ -13,3 +13,4 @@ next-env.d.ts
 /scripts/_ios_wave
 /scripts/_wave_*.png
 /scripts/_shot_*.mjs
+.deploy-meta.json
