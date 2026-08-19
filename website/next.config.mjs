@@ -17,8 +17,12 @@ const nextConfig = {
     serverComponentsExternalPackages: ["better-sqlite3"],
   },
   async redirects() {
-    // /pricing 与 /order 同页（外发链接两种叫法都通）
-    return [{ source: "/pricing", destination: "/order", permanent: true }];
+    // 2026-08-19 Token 定价改版：/pricing 已是独立报价决策页（app/pricing），
+    // 撤销旧「/pricing → /order 同页」重定向（redirect 优先级高于文件路由，
+    // 留着会把新页整个挡住——上线当天实测 title 渲染成购买页才揪出来）。
+    // 注意旧 301/308 已被浏览器/搜索引擎缓存一段时间，存量客户端会继续跳 /order
+    // （/order 本身可用，无伤）；新访客与爬虫重抓后即到新页。
+    return [];
   },
   async headers() {
     return [
