@@ -321,3 +321,18 @@ Service 节点在原定制部署 2 档之上加挂买断/矩阵）；新数组�
 - `assert-offer-map`（15 条一致）/ `assert-order-lines`（8 SKU 跨仓价一致）/
   `gate:content`（17 项价格断言）全绿；
 - chengjie `tests/test_token_ledger.py` 12/12。
+
+### 9.6 引擎接线进度（同日 P3→P6，按批次入仓）
+
+| 批次 | 内容 | commit |
+|---|---|---|
+| P3 履约 | 新 SKU specs（per-seat 缩放/`included_tokens_monthly`）+ Token 包 voucher 双载荷（chars/tokens 分流兑付：chars→quota_store、tokens→token_ledger.grant_pack）+ 钱包绑 `contact_core`（续费换 lic_id 不丢钱包） | dc366e5 |
+| P5a 观测 | ai_reply/voice_clone 消费点记账（enforce 未实现＝纯观测）+ 会员页「Token 钱包」卡 + zhiliao 灰度开 | dc366e5 |
+| P5b+P4 | 翻译层级计费（std 免费入公平使用水表 / pro 10 / certified 40 走 DeepL 独立缓存桶）+ AI 生成图计费（仅 fresh 生成，相册/复用不计）+ 公平使用 200 万字符/日 warn-only + 投递侧影子计数（出稿/投递比校准用） | 35b69aa |
+| **P6 enforce** | `should_degrade_action` 五闸判定；耗尽降级免费路径：AI 回复→本地模型（`_reply_free_path` 标记免计费，连带修正断云顶班回复被扣费）/ 专业翻译→标准档 / 克隆声→edge 兜底；`allocate_spend` 修正为「过期批次按到期序吸收支出」（上月消费不侵蚀本月含量）；默认关 `licensing.token_ledger.enforce` | f4290d8 |
+
+**P6 语义要点**：enforce ≠ 阻断——降级目标必须是能出结果的免费路径，无处可去照走付费
+路径（永不断线 > 计费）；从未注资的存量授权不适用（防 enforce 一开全体打降级）。
+AI 配图 enforce 刻意不做（自有 GPU 固定成本，阻断不省钱；P7 再议）。
+线上实弹：token-pack-s 全链（下单→标记到账→watcher 自动签发→兑换→钱包 +10,000）
+已于 2026-08-19 验证，订单 AH-20260819-UDW5DJ。
