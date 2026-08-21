@@ -10,6 +10,7 @@ const { createBackendManager } = require("./backend-launcher.js");
 const { createAllSidecarManagers } = require("./sidecar-launcher.js");
 const brandUtil = require("./brand-util.js");
 const tokenUtil = require("./token-util.js");
+const winFit = require("./win-fit.js");
 
 // 面向用户的版本串：package.json 的 displayVersion 优先（内测「1.001」这类展示号
 // 不是合法 semver，进不了 version 字段——那是 electron-builder/updater 的机器版本），
@@ -78,14 +79,25 @@ function loadConfig() {
 
 let config = loadConfig();
 
-// 出厂默认值迁移（2026-08-14）：userData/config.json 是首启种子、升级保留——产品级
-// 改名（统一收件箱 → AI 工作台 → 人工操作台）会被老副本的旧出厂值永久顶住（lianbei 升 1.0.31 实锤）。
-// 只迁「等于旧出厂默认」的值（用户显式自定义过的标签不动），幂等，写失败不阻断启动。
+// Document PiP 浮窗副驾（rider 2026-08-18）：后端是 http 裸源（127.0.0.1:18799），
+// Chromium 视为不安全上下文 → documentPictureInPicture API 不存在。把后端源列入
+// 「视作安全」白名单以点亮壳内浮窗副驾；页面侧已出货+门禁（verify_cp_panel_modes 6.5）。
+// 必须在 app ready 之前 appendSwitch 才生效（backendOrigin 为函数声明，提升可用）。
+try { app.commandLine.appendSwitch("unsafely-treat-insecure-origin-as-secure", backendOrigin()); } catch (e) { /* 白名单失败仅浮窗不可用，不阻断启动 */ }
+
+// 出厂默认值迁移（2026-08-14；2026-08-19 i18n 收口改为「清空＝跟随界面语言」）：
+// userData/config.json 是首启种子、升级保留——产品级改名（统一收件箱 → AI 工作台 →
+// 人工操作台）会被老副本的旧出厂值永久顶住（lianbei 升 1.0.31 实锤）。
+// ⚠ 旧实现把新中文名**写进配置**，于是英文坐席机的侧栏永远是「人工操作台」——配置里
+// 存了一个中文字面量，i18n 再怎么做也盖不住。现在改为迁成**空串**：renderer 的
+// `ui.label || SH("console.manual")` 会按界面语言取词（zh 仍是「人工操作台」，逐字
+// 不变；en 出 "Manual Console"）。用户显式自定义过的标签一律不动。
+const FACTORY_INBOX_LABELS = ["统一收件箱", "AI 工作台", "人工操作台"];
 (function migrateFactoryDefaults() {
   try {
     const ui = config && config.unified_inbox;
-    if (ui && (ui.label === "统一收件箱" || ui.label === "AI 工作台")) {
-      ui.label = "人工操作台";
+    if (ui && FACTORY_INBOX_LABELS.indexOf(ui.label) >= 0) {
+      ui.label = "";
       fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
     }
   } catch (e) { /* 迁移失败保持旧名，不影响启动 */ }
@@ -121,7 +133,9 @@ function brandInfoLocal() {
     brandJson = JSON.parse(
       fs.readFileSync(path.join(__dirname, "renderer", "brand", "brand.json"), "utf-8"));
   } catch (e) { /* 无 brand.json → 走硬编码兜底 */ }
-  return brandUtil.pickBrandLocal((config && config.brand) || {}, brandJson);
+  // 第 4 参＝界面语言（与应用菜单 SS() / webview ?lang= 同源）：brand.json 双语列
+  // 据此取 en/zh，兜底常量同理。部署方显式配的 config.brand 语言无关，仍最高优先。
+  return brandUtil.pickBrandLocal((config && config.brand) || {}, brandJson, null, shellLang());
 }
 
 // 运行期白标：向后端拉实时生效品牌（settings 页改了即时反映到桌面壳），
@@ -137,7 +151,8 @@ async function fetchLiveBrand() {
       signal: ctl.signal,
     });
     if (!r.ok) return null;
-    return brandUtil.normalizeLiveBrand(await r.json());
+    // 缺字段回落**按界面语言**的兜底（此前恒回中文，英文壳会混出「智聊/无界科技」）
+    return brandUtil.normalizeLiveBrand(await r.json(), brandUtil.brandFallback(shellLang()));
   } catch (e) {
     return null; // 后端未起 / 超时 / 无授权 → 用本地兜底
   } finally {
@@ -148,6 +163,81 @@ async function fetchLiveBrand() {
 // 实时优先、本地兜底的统一入口（关于弹窗 / 图标用）。
 async function resolveBrand() {
   return (await fetchLiveBrand()) || brandInfoLocal();
+}
+
+// 支持信息（机器码等，实施49 P1-9）：客服排障第一句永远是「把机器码发我」，
+// 而机器码此前只在后台深处。壳的「关于」是用户找得到的唯一自述页，必须带上它。
+// 2s 超时 + 任何异常回 null——关于框绝不能因为后端没起而打不开。
+async function fetchSupportInfo() {
+  const { base_url, token } = config.backend || {};
+  if (!base_url) return null;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 2000);
+  try {
+    const r = await fetch(`${base_url}/api/support/info`, {
+      headers: { Authorization: `Bearer ${token || ""}` },
+      signal: ctl.signal,
+    });
+    if (!r.ok) return null;   // 旧后端无此路由 → 关于框少一行，不报错
+    const d = await r.json();
+    return (d && d.ok) ? d : null;
+  } catch (e) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 诊断直传（壳内，实施49 P1-9）。**为什么主进程也要有一份**：页面里已经有
+// _support.html 的面板，但最需要报障的那一刻恰恰是「工作台白屏/打不开」——那时
+// 页面内的入口一并没了，只剩托盘与应用菜单这条原生路径。后端还活着的白屏场景
+// 因此能自助上传；后端也挂了则如实失败，用户仍可用「复制信息」把机器码给客服。
+let _diagBusy = false;
+async function uploadDiagFromShell(note) {
+  const { base_url, token } = config.backend || {};
+  if (!base_url) return { ok: false };
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 90000);   // 打包+上行比常规接口慢得多
+  try {
+    const r = await fetch(`${base_url}/api/support/diag-upload`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token || ""}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ note: String(note || "").slice(0, 200) }),
+      signal: ctl.signal,
+    });
+    return await r.json();
+  } catch (e) {
+    return { ok: false };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 原生报障流程：通知（上传中）→ 上传 → 结果弹窗（成功时可一键复制短码）。
+// 「关于」框与「帮助」菜单共用同一份，两处文案与行为不会分叉。
+async function runDiagFlow(win, product, ver, where) {
+  if (_diagBusy) return;   // 打包要几十秒，期间再点＝重复烧一份包
+  _diagBusy = true;
+  // 原生弹窗是模态的，上传期间界面毫无反馈 → 先发一条系统通知，
+  // 否则用户只会觉得「点了没反应」再点一次。
+  try { new Notification({ title: product, body: SS("about.diag_busy") }).show(); } catch (e) { /* 通知不可用时静默 */ }
+  const out = await uploadDiagFromShell(`${where} | v${ver}`);
+  _diagBusy = false;
+  const okc = !!(out && out.ok && out.code);
+  const res = await dialog.showMessageBox(win, {
+    type: okc ? "info" : "warning",
+    title: `${SS("about.title_prefix")} ${product}`,
+    // 成功文案的主语是「把这个编码告诉客服」——「上传成功」对用户是无动作信息
+    message: okc ? `${SS("about.diag_ok")} ${out.code}` : SS("about.diag_fail"),
+    detail: okc ? "" : String((out && out.detail) || ""),
+    buttons: okc ? [SS("about.copy"), SS("about.close")] : [SS("about.close")],
+    defaultId: 0,
+    cancelId: okc ? 1 : 0,
+    noLink: true,
+  });
+  if (okc && res.response === 0) {
+    try { clipboard.writeText(String(out.code)); } catch (e) { /* 静默 */ }
+  }
 }
 
 // macOS dock 图标运行期热替换（Win/Linux 无 app.dock，静默跳过）。
@@ -572,7 +662,7 @@ ipcMain.handle("desktop:notify", (_e, args) => {
     const a = args || {};
     if (!Notification.isSupported()) return { ok: false, error: "unsupported" };
     const n = new Notification({
-      title: String(a.title || "新消息"),
+      title: String(a.title || SS("notif.default_title")),
       body: String(a.body || ""),
       silent: a.silent === true,
     });
@@ -648,7 +738,7 @@ ipcMain.handle("desktop:open-selectors", async () => {
   try {
     const r = await backendGet("/api/desktop/selector-profiles/path");
     if (!r || !r.ok || !r.path) {
-      return { ok: false, error: (r && r.error) || "后端未返回路径" };
+      return { ok: false, error: (r && r.error) || SS("err.no_path") };
     }
     const err = await shell.openPath(r.path); // 成功返回 ""，失败返回错误串
     if (err) return { ok: false, path: r.path, error: err };
@@ -754,7 +844,7 @@ ipcMain.handle("desktop:export-corrections", async (_e, opts) => {
     });
     const text = await r.text();
     const count = text ? text.split("\n").filter(Boolean).length : 0;
-    if (!count) return { ok: false, error: "无样本可导出" };
+    if (!count) return { ok: false, error: SS("err.no_samples") };
     const win = BrowserWindow.getFocusedWindow();
     const def = `desktop_corrections_${new Date().toISOString().slice(0, 10)}.jsonl`;
     const res = await dialog.showSaveDialog(win, {
@@ -856,7 +946,7 @@ ipcMain.handle("desktop:voice-tts", async (_e, { text, persona_id, chat_key, pla
     const r = await fetch(
       `${base_url}/api/voice/tts-file/${encodeURIComponent(d.filename)}`,
       { headers: { Authorization: `Bearer ${token}` } });
-    if (!r.ok) return { ok: false, message: `音频拉取失败 ${r.status}` };
+    if (!r.ok) return { ok: false, message: SS("err.audio_fetch", { status: r.status }) };
     const b64 = Buffer.from(await r.arrayBuffer()).toString("base64");
     const mt = String(d.format || "mp3").includes("ogg") ? "audio/ogg" : "audio/mpeg";
     return { ...d, ok: true, dataUrl: `data:${mt};base64,${b64}` };
@@ -900,7 +990,7 @@ ipcMain.handle("desktop:voice-enroll", async (_e, payload) => {
     const p = payload || {};
     const { base_url, token } = config.backend || {};
     const buf = Buffer.from(String(p.audio_b64 || ""), "base64");
-    if (!buf.length) return { ok: false, message: "空音频" };
+    if (!buf.length) return { ok: false, message: SS("err.empty_audio") };
     const fd = new FormData();
     fd.append("file", new Blob([buf]), String(p.filename || "voice.wav"));
     fd.append("persona_id", String(p.persona_id || ""));
@@ -1438,7 +1528,7 @@ function openBackendPopup(url) {
   const child = new BrowserWindow({
     width: 1100,
     height: 800,
-    title: "智聊",
+    title: SS("win.backend_popup"),
     webPreferences: {
       partition: BACKEND_WORKSPACE_PARTITION,
       nodeIntegration: false,
@@ -1473,6 +1563,220 @@ function makeBackendPopupHandler() {
   };
 }
 
+// ── 悬浮副驾原生置顶窗（cp PiP shell 桥 P1，2026-08-18）──────────────────────
+// 浏览器端悬浮副驾走 Document PiP；Electron 31 的该 API 是 0×0 退化窗（探针实锤，
+// 页面侧已按 UA 禁用）→ 壳内改由这里开原生 alwaysOnTop 窗装 wrapper
+// （renderer/pip.html + iframe /copilot/app.html，共享热区 app.html 零改动）。
+// 消息中继：workspace 页(webview) ⇄ inbox-preload(invoke/事件) ⇄ 这里 ⇄
+// pip-preload ⇄ wrapper ⇄ app.html。窗全局唯一（再开=聚焦复用）；owner=最近
+// open/post 的 webContents（cp-fill/cp-send 回吐只送它，销毁即无人可送）。
+// 认证双保险：分区复用工作台登录 cookie + URL hash 带 token（app.html 自带兜底）。
+let copilotPipWin = null;
+let copilotPipOwner = null;
+
+function copilotPipStatus() {
+  return { ok: true, open: !!(copilotPipWin && !copilotPipWin.isDestroyed()) };
+}
+
+/* 位置/尺寸记忆（P2 2026-08-18）：关窗时存 bounds 进 config.copilot_pip.bounds，
+   下次打开还原到坐席习惯的位置。记忆放主进程而非页面 localStorage——原生窗的
+   bounds 只有主进程知道（页面拿不到），且 config.json 跨页面刷新/壳重启都在。
+   还原前过屏幕边界校验：多屏拔线/换分辨率后旧坐标可能整窗落屏外，要求与任一
+   显示器工作区至少 40px 交叠，不足则位置作废只还原尺寸（居中开，坐席再拖）。 */
+function copilotPipSavedBounds() {
+  const c = config.copilot_pip || {};
+  const b = c.bounds;
+  if (!b || typeof b !== "object") return null;
+  const r = {
+    x: parseInt(b.x, 10), y: parseInt(b.y, 10),
+    width: parseInt(b.width, 10), height: parseInt(b.height, 10),
+  };
+  if (!Number.isFinite(r.width) || !Number.isFinite(r.height)) return null;
+  r.width = Math.max(320, Math.min(r.width, 900));
+  r.height = Math.max(360, Math.min(r.height, 1000));
+  if (!Number.isFinite(r.x) || !Number.isFinite(r.y)) return { width: r.width, height: r.height };
+  try {
+    const { screen } = require("electron");
+    const visible = screen.getAllDisplays().some((d) => {
+      const a = d.workArea;
+      return r.x < a.x + a.width - 40 && r.x + r.width > a.x + 40
+        && r.y < a.y + a.height - 40 && r.y + r.height > a.y + 40;
+    });
+    if (!visible) return { width: r.width, height: r.height };
+  } catch (e) {
+    return { width: r.width, height: r.height }; // screen 不可用：保守只还原尺寸
+  }
+  return r;
+}
+
+function notifyCopilotPipOwner(msg) {
+  try {
+    if (copilotPipOwner && !copilotPipOwner.isDestroyed()) copilotPipOwner.send("cp-pip-evt", msg);
+  } catch (e) { /* owner 已销毁：无人可通知，静默 */ }
+}
+
+function openCopilotPipWindow(sender, opts) {
+  copilotPipOwner = sender;
+  if (copilotPipWin && !copilotPipWin.isDestroyed()) {
+    try {
+      if (copilotPipWin.isMinimized()) copilotPipWin.restore();
+      copilotPipWin.focus();
+    } catch (e) { /* 聚焦失败不阻断 */ }
+    return copilotPipStatus();
+  }
+  const o = opts && typeof opts === "object" ? opts : {};
+  const b = config.backend || {};
+  const base = String(b.base_url || "http://127.0.0.1:18799").replace(/\/+$/, "");
+  const theme = o.theme === "light" ? "light" : "dark";
+  const lang = o.lang === "en" ? "en" : "zh";
+  // pip=1 仅作标记（app.html 忽略未知参数）；hostAccounts=1 与 renderer 内嵌副驾同参
+  const appUrl = base + "/copilot/app.html?theme=" + theme + "&lang=" + lang + "&hostAccounts=1&pip=1"
+    + (b.token ? "#token=" + encodeURIComponent(String(b.token)) : "");
+  // 尺寸优先级：主进程记忆（含坐席上次拖出的位置）> 页面传参 > 默认
+  const saved = copilotPipSavedBounds();
+  const w = (saved && saved.width) || Math.max(320, Math.min(parseInt(o.w, 10) || 380, 900));
+  const h = (saved && saved.height) || Math.max(360, Math.min(parseInt(o.h, 10) || 560, 1000));
+  const winOpts = {
+    width: w,
+    height: h,
+    minWidth: 320,
+    minHeight: 360,
+    title: SS("win.pip"),
+    alwaysOnTop: true,
+    autoHideMenuBar: true,
+    webPreferences: {
+      partition: BACKEND_WORKSPACE_PARTITION, // iframe 复用工作台登录态
+      preload: path.join(__dirname, "renderer", "pip-preload.js"),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false,
+    },
+  };
+  if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
+    winOpts.x = saved.x;
+    winOpts.y = saved.y;
+  }
+  copilotPipWin = new BrowserWindow(winOpts);
+  try { copilotPipWin.setAlwaysOnTop(true, "floating"); } catch (e) { /* 平台不支持档位时保默认置顶 */ }
+  try { if (fs.existsSync(DEFAULT_BRAND_ICON)) copilotPipWin.setIcon(DEFAULT_BRAND_ICON); } catch (e) { /* 图标缺失不阻断 */ }
+  copilotPipWin.on("close", () => {
+    // close（销毁前）才能取到 bounds；closed 时窗已亡。保存失败不阻断关窗。
+    try { saveConfigPatch({ copilot_pip: { bounds: copilotPipWin.getBounds() } }); } catch (e) { /* 静默 */ }
+  });
+  copilotPipWin.on("closed", () => {
+    copilotPipWin = null;
+    notifyCopilotPipOwner({ type: "cp-pip-closed" });
+    copilotPipOwner = null;
+  });
+  copilotPipWin.loadFile(path.join(__dirname, "renderer", "pip.html"), { query: { src: appUrl } });
+  return copilotPipStatus();
+}
+
+// 工作台页（webview 的 inbox-preload）唯一入口；纵深防御再验一道发起方 URL。
+ipcMain.handle("desktop:copilot-pip", (e, req) => {
+  try {
+    if (!isBackendUrl(e.sender.getURL())) return { ok: false, error: "forbidden" };
+  } catch (err) {
+    return { ok: false, error: "forbidden" };
+  }
+  const r = req && typeof req === "object" ? req : {};
+  if (r.action === "open") return openCopilotPipWindow(e.sender, r);
+  if (r.action === "close") {
+    try { if (copilotPipWin && !copilotPipWin.isDestroyed()) copilotPipWin.close(); } catch (err) { /* 已销毁视同已关 */ }
+    return copilotPipStatus();
+  }
+  if (r.action === "post") {
+    copilotPipOwner = e.sender; // 最近喂上下文的窗即当前宿主（页面刷新/多窗接管自然跟随）
+    try {
+      if (copilotPipWin && !copilotPipWin.isDestroyed() && r.msg && typeof r.msg === "object") {
+        copilotPipWin.webContents.send("cp-pip-in", r.msg);
+      }
+    } catch (err) { /* 窗关闭竞态：丢弃本条，closed 事件会同步页面状态 */ }
+    return copilotPipStatus();
+  }
+  if (r.action === "status") return copilotPipStatus();
+  return { ok: false, error: "bad action" };
+});
+
+// wrapper（pip-preload）回吐 → 宿主页：只认自家 PiP 窗的 webContents
+ipcMain.on("cp-pip-out", (e, msg) => {
+  if (!copilotPipWin || copilotPipWin.isDestroyed() || e.sender !== copilotPipWin.webContents) return;
+  if (!msg || typeof msg !== "object" || !msg.type) return;
+  notifyCopilotPipOwner(msg);
+});
+
+// ── 壳层文案语言（i18n P0 2026-08-19）────────────────────────────────────────
+// 此前应用菜单/右键菜单/关于框硬编码中文——英文坐席开壳第一眼就是「文件 编辑 视图」。
+// 语言源=壳配置 unified_inbox.lang（首启向导写入；与工作台 webview 的 ?lang= 同源）。
+// 保守策略：**显式配 en 才切英文**，其余（zh / 空=跟随系统 / 未知值）一律维持中文
+// ——存量中文坐席机零行为变化。菜单构建是启动期一次性，改语言重启壳生效。
+function shellLang() {
+  try {
+    const l = String((((config || {}).unified_inbox) || {}).lang || "").trim().toLowerCase();
+    if (l === "en" || l.indexOf("en-") === 0) return "en";
+  } catch (e) { /* 配置缺失回落中文 */ }
+  return "zh";
+}
+const SHELL_STR = {
+  zh: {
+    "menu.file": "文件", "menu.reload": "重新加载", "menu.force_reload": "强制重新加载",
+    "menu.quit": "退出", "menu.edit": "编辑", "menu.undo": "撤销", "menu.redo": "重做",
+    "menu.cut": "剪切", "menu.copy": "复制", "menu.paste": "粘贴",
+    "menu.paste_image": "粘贴图片", "menu.paste_plain": "粘贴为纯文本",
+    "menu.select_all": "全选", "menu.view": "视图", "menu.zoom_reset": "实际大小",
+    "menu.zoom_in": "放大", "menu.zoom_out": "缩小", "menu.fullscreen": "全屏",
+    "menu.devtools": "开发者工具", "menu.window": "窗口", "menu.minimize": "最小化",
+    "menu.close_win": "关闭窗口", "menu.help": "帮助", "menu.about": "关于",
+    "menu.check_update": "检查更新", "menu.diag": "上传诊断给客服",
+    "about.title_prefix": "关于", "about.workbench": "桌面工作台",
+    "about.tagline": "人工操作台 + 业务助手", "about.version": "版本",
+    "about.visit": "访问官网", "about.close": "关闭",
+    "about.machine": "机器码", "about.copy": "复制信息",
+    "about.diag": "上传诊断给客服", "about.diag_busy": "正在打包上传诊断信息，请稍候…",
+    "about.diag_ok": "请把这个编码告诉客服：", "about.diag_fail": "上传失败，请检查网络后重试；也可点「复制信息」把机器码发给客服。",
+    "ctx.copy_link": "复制链接地址", "ctx.copy_image": "复制图片",
+    // 窗口标题 / 系统通知 / IPC 错误回执：都会原样出现在坐席眼前（任务栏、
+    // 通知中心、渲染层 toast），此前全是中文字面量。
+    "win.backend_popup": "智聊", "win.pip": "悬浮副驾",
+    "notif.default_title": "新消息",
+    "err.no_path": "后端未返回路径", "err.no_samples": "无样本可导出",
+    "err.audio_fetch": "音频拉取失败 {status}", "err.empty_audio": "空音频",
+  },
+  en: {
+    "menu.file": "File", "menu.reload": "Reload", "menu.force_reload": "Force Reload",
+    "menu.quit": "Quit", "menu.edit": "Edit", "menu.undo": "Undo", "menu.redo": "Redo",
+    "menu.cut": "Cut", "menu.copy": "Copy", "menu.paste": "Paste",
+    "menu.paste_image": "Paste Image", "menu.paste_plain": "Paste as Plain Text",
+    "menu.select_all": "Select All", "menu.view": "View", "menu.zoom_reset": "Actual Size",
+    "menu.zoom_in": "Zoom In", "menu.zoom_out": "Zoom Out", "menu.fullscreen": "Full Screen",
+    "menu.devtools": "Developer Tools", "menu.window": "Window", "menu.minimize": "Minimize",
+    "menu.close_win": "Close Window", "menu.help": "Help", "menu.about": "About",
+    "menu.check_update": "Check for Updates", "menu.diag": "Send Diagnostics to Support",
+    "about.title_prefix": "About", "about.workbench": "Desktop Workbench",
+    "about.tagline": "Agent console + business copilot", "about.version": "Version",
+    "about.visit": "Visit Website", "about.close": "Close",
+    "about.machine": "Machine code", "about.copy": "Copy details",
+    "about.diag": "Send diagnostics", "about.diag_busy": "Packing and uploading diagnostics...",
+    "about.diag_ok": "Give this code to support:", "about.diag_fail": "Upload failed. Check the network and retry, or use Copy details and send it to support.",
+    "ctx.copy_link": "Copy Link Address", "ctx.copy_image": "Copy Image",
+    "win.backend_popup": "ChatX", "win.pip": "Floating Copilot",
+    "notif.default_title": "New message",
+    "err.no_path": "Backend returned no path", "err.no_samples": "No samples to export",
+    "err.audio_fetch": "Audio fetch failed ({status})", "err.empty_audio": "Empty audio",
+  },
+};
+// vars 走 {name} 占位替换（与渲染层 SH() 同约定）：错误回执要带 status 之类的
+// 动态量，拼字符串会把语序烙死（英文 "Audio fetch failed (404)" 括号在后）。
+function SS(key, vars) {
+  const d = SHELL_STR[shellLang()] || SHELL_STR.zh;
+  let s = d[key] != null ? d[key] : (SHELL_STR.zh[key] != null ? SHELL_STR.zh[key] : key);
+  if (vars) {
+    s = String(s).replace(/\{(\w+)\}/g, (m, k) =>
+      (vars[k] === undefined || vars[k] === null ? m : String(vars[k])));
+  }
+  return s;
+}
+
 // ── 系统右键菜单（composer 批 2026-08-17）────────────────────────────────────
 // Electron 默认不弹任何右键菜单：坐席在聊天输入框右键「粘贴」一直没反应（浏览器端
 // 访问同页不受影响）。给壳内全部 webContents（主窗 chrome / 官方页与工作台 webview /
@@ -1492,26 +1796,26 @@ function wireEditContextMenu(wc) {
         let clipHasImage = false;
         try { clipHasImage = clipboard.availableFormats().some((f) => String(f).indexOf("image/") === 0); } catch (err) { /* ignore */ }
         items.push(
-          { label: "撤销", enabled: !!ef.canUndo, click: () => wc.undo() },
-          { label: "重做", enabled: !!ef.canRedo, click: () => wc.redo() },
+          { label: SS("menu.undo"), enabled: !!ef.canUndo, click: () => wc.undo() },
+          { label: SS("menu.redo"), enabled: !!ef.canRedo, click: () => wc.redo() },
           { type: "separator" },
-          { label: "剪切", enabled: !!ef.canCut, click: () => wc.cut() },
-          { label: "复制", enabled: !!ef.canCopy, click: () => wc.copy() },
-          { label: clipHasImage ? "粘贴图片" : "粘贴", enabled: !!ef.canPaste, click: () => wc.paste() },
-          { label: "粘贴为纯文本", enabled: !!ef.canPaste, click: () => wc.pasteAndMatchStyle() },
+          { label: SS("menu.cut"), enabled: !!ef.canCut, click: () => wc.cut() },
+          { label: SS("menu.copy"), enabled: !!ef.canCopy, click: () => wc.copy() },
+          { label: clipHasImage ? SS("menu.paste_image") : SS("menu.paste"), enabled: !!ef.canPaste, click: () => wc.paste() },
+          { label: SS("menu.paste_plain"), enabled: !!ef.canPaste, click: () => wc.pasteAndMatchStyle() },
           { type: "separator" },
-          { label: "全选", enabled: !!ef.canSelectAll, click: () => wc.selectAll() },
+          { label: SS("menu.select_all"), enabled: !!ef.canSelectAll, click: () => wc.selectAll() },
         );
       } else if (p.selectionText && p.selectionText.trim()) {
-        items.push({ label: "复制", click: () => wc.copy() });
+        items.push({ label: SS("menu.copy"), click: () => wc.copy() });
       }
       if (p.linkURL) {
         if (items.length) items.push({ type: "separator" });
-        items.push({ label: "复制链接地址", click: () => clipboard.writeText(p.linkURL) });
+        items.push({ label: SS("ctx.copy_link"), click: () => clipboard.writeText(p.linkURL) });
       }
       if (p.mediaType === "image" && p.srcURL) {
         if (items.length) items.push({ type: "separator" });
-        items.push({ label: "复制图片", click: () => { try { wc.copyImageAt(p.x, p.y); } catch (err) { /* ignore */ } } });
+        items.push({ label: SS("ctx.copy_image"), click: () => { try { wc.copyImageAt(p.x, p.y); } catch (err) { /* ignore */ } } });
       }
       if (!items.length) return; // 空白处右键保持无菜单（与主流聊天软件一致）
       Menu.buildFromTemplate(items).popup();
@@ -1550,7 +1854,20 @@ async function createWindow() {
   try {
     if (fs.existsSync(DEFAULT_BRAND_ICON)) winOpts.icon = DEFAULT_BRAND_ICON;
   } catch (e) { /* 图标缺失不阻断启动 */ }
+  // 小逻辑桌面自适配（2026-08-17 .173：4K@300% 逻辑桌面 1280x720 矮于固定 820 →
+  // composer 工具栏永久在折叠线下）。clamp 进工作区，放不下则建窗后最大化；
+  // 取不到 screen 一律保持固定尺寸旧行为。详见 desktop/win-fit.js。
+  let _fit = null;
+  try {
+    const { screen } = require("electron");
+    _fit = winFit.fitWindowBounds(screen.getPrimaryDisplay().workAreaSize, winOpts);
+    winOpts.width = _fit.width;
+    winOpts.height = _fit.height;
+  } catch (e) { /* 自适配失败不阻断开窗 */ }
   const win = new BrowserWindow(winOpts);
+  if (_fit && _fit.maximize) {
+    try { win.maximize(); } catch (e) { /* 最大化失败保持 clamp 尺寸 */ }
+  }
 
   win.webContents.on("did-finish-load", () => {
     console.log("[diag] renderer loaded ok");
@@ -1586,82 +1903,113 @@ async function createWindow() {
   });
 
   console.log(`[diag] platforms enabled: ${(config.platforms || []).filter((p) => p.enabled).map((p) => p.id).join(",")}`);
-  win.loadFile(path.join(__dirname, "renderer", "index.html"));
+  // ?lang= 把壳语言（shellLang()＝unified_inbox.lang，与应用菜单 SS() 同源）钉进页面
+  // URL：renderer/shell-i18n.js 与 shared/copilot/i18n/cp-i18n.js 都从 location.search
+  // 取词，于是壳静态文案 + 整条 cp-* 组件链**首帧即正确**，无需异步 IPC 也不会闪中文。
+  win.loadFile(path.join(__dirname, "renderer", "index.html"), { query: { lang: shellLang() } });
   if (process.argv.includes("--dev")) win.webContents.openDevTools({ mode: "detach" });
 }
 
-// 中文应用菜单(替换默认英文菜单;保留 role 以维持快捷键与原生行为)
-function buildChineseMenu() {
+// 应用菜单（i18n P0 2026-08-19：原 buildChineseMenu 硬编码中文 → 按壳语言双语；
+// 保留 role 以维持快捷键与原生行为。文案单源=SHELL_STR，勿再写字面量）
+function buildAppMenu() {
   const template = [
     {
-      label: "文件",
+      label: SS("menu.file"),
       submenu: [
-        { label: "重新加载", role: "reload" },
-        { label: "强制重新加载", role: "forceReload" },
+        { label: SS("menu.reload"), role: "reload" },
+        { label: SS("menu.force_reload"), role: "forceReload" },
         { type: "separator" },
-        { label: "退出", role: "quit" },
+        { label: SS("menu.quit"), role: "quit" },
       ],
     },
     {
-      label: "编辑",
+      label: SS("menu.edit"),
       submenu: [
-        { label: "撤销", role: "undo" },
-        { label: "重做", role: "redo" },
+        { label: SS("menu.undo"), role: "undo" },
+        { label: SS("menu.redo"), role: "redo" },
         { type: "separator" },
-        { label: "剪切", role: "cut" },
-        { label: "复制", role: "copy" },
-        { label: "粘贴", role: "paste" },
-        { label: "全选", role: "selectAll" },
+        { label: SS("menu.cut"), role: "cut" },
+        { label: SS("menu.copy"), role: "copy" },
+        { label: SS("menu.paste"), role: "paste" },
+        { label: SS("menu.select_all"), role: "selectAll" },
       ],
     },
     {
-      label: "视图",
+      label: SS("menu.view"),
       submenu: [
-        { label: "实际大小", role: "resetZoom" },
-        { label: "放大", role: "zoomIn" },
-        { label: "缩小", role: "zoomOut" },
+        { label: SS("menu.zoom_reset"), role: "resetZoom" },
+        { label: SS("menu.zoom_in"), role: "zoomIn" },
+        { label: SS("menu.zoom_out"), role: "zoomOut" },
         { type: "separator" },
-        { label: "全屏", role: "togglefullscreen" },
-        { label: "开发者工具", role: "toggleDevTools" },
+        { label: SS("menu.fullscreen"), role: "togglefullscreen" },
+        { label: SS("menu.devtools"), role: "toggleDevTools" },
       ],
     },
     {
-      label: "窗口",
+      label: SS("menu.window"),
       submenu: [
-        { label: "最小化", role: "minimize" },
-        { label: "关闭窗口", role: "close" },
+        { label: SS("menu.minimize"), role: "minimize" },
+        { label: SS("menu.close_win"), role: "close" },
       ],
     },
     {
-      label: "帮助",
+      label: SS("menu.help"),
       submenu: [
         {
-          label: "关于",
+          label: SS("menu.about"),
           click: async () => {
             const w = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
             const bi = await resolveBrand();
             const ver = displayVersion();
+            // 机器码拿不到就整行不出现（宁可少一行，也别显示一个空标签让人以为坏了）
+            const sup = await fetchSupportInfo();
+            const mc = (sup && sup.machine_code) ? String(sup.machine_code) : "";
             const detail =
-              `Telegram / WhatsApp / Messenger / LINE · 人工操作台 + 业务助手\n\n` +
-              `版本 v${ver}  ·  Electron ${process.versions.electron}  ·  Chromium ${process.versions.chrome}\n` +
+              `Telegram / WhatsApp / Messenger / LINE · ${SS("about.tagline")}\n\n` +
+              `${SS("about.version")} v${ver}  ·  Electron ${process.versions.electron}  ·  Chromium ${process.versions.chrome}\n` +
+              (mc ? `${SS("about.machine")}: ${mc}\n` : "") +
               `${bi.company} · ${bi.website}`;
+            // 按钮按能力动态拼，并**按 id 派发**而不是按下标——下标算式在增删按钮时
+            // 是静默错位（点「复制」变成打开官网），id 派发让新增按钮零风险。
+            // 「复制信息」：用户对着弹窗手抄机器码是最容易抄错的一步，抄错＝客服查不到
+            // 这台机器。「上传诊断」只在后端确认支持时出现（sup 非空即两个端点都在）。
+            const acts = [{ id: "visit", label: SS("about.visit") }];
+            if (mc) acts.push({ id: "copy", label: SS("about.copy") });
+            if (sup && sup.upload) acts.push({ id: "diag", label: SS("about.diag") });
+            acts.push({ id: "close", label: SS("about.close") });
             const res = await dialog.showMessageBox(w, {
               type: "info",
-              title: `关于 ${bi.product}`,
-              message: `${bi.product} · 桌面工作台`,
+              title: `${SS("about.title_prefix")} ${bi.product}`,
+              message: `${bi.product} · ${SS("about.workbench")}`,
               detail,
-              buttons: ["访问官网", "关闭"],
-              defaultId: 1,
-              cancelId: 1,
+              buttons: acts.map((a) => a.label),
+              defaultId: acts.length - 1,
+              cancelId: acts.length - 1,
               noLink: true,
             });
-            if (res.response === 0 && bi.website) {
+            const act = (acts[res.response] || {}).id;
+            if (act === "visit" && bi.website) {
               shell.openExternal(bi.website).catch(() => {});
+            } else if (act === "copy") {
+              try { clipboard.writeText(`${bi.product} v${ver}\n${SS("about.machine")}: ${mc}`); } catch (e) { /* 剪贴板不可用时静默 */ }
+            } else if (act === "diag") {
+              await runDiagFlow(w, bi.product, ver, "desktop-about");
             }
           },
         },
         {
-          label: "检查更新",
+          // 报障直达（实施49 P1-9）：白屏/卡死时页面内的入口一并没了，
+          // 「帮助」菜单是那时唯一还点得动的地方，别逼用户先绕进「关于」。
+          label: SS("menu.diag"),
+          click: async () => {
+            const w = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+            const bi = await resolveBrand();
+            await runDiagFlow(w, bi.product, displayVersion(), "desktop-help-menu");
+          },
+        },
+        {
+          label: SS("menu.check_update"),
           click: () => checkForUpdatesManual(
             BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0]),
         },
@@ -1939,6 +2287,135 @@ function setupAnnouncements() {
   if (t.unref) t.unref();
 }
 
+// ── 活动海报 feed（P0 2026-08-21：新人 6U 首启海报）────────────────────────
+// 与公告同域同模式：官网 public/downloads/campaigns.json——市场改 JSON 即上/下活动，
+// 无需发版。选品/频控/资格判定纯函数在 renderer/campaign-model.js（Node 直跑可测）；
+// 这里只做 IO：HTTP 拉取（含本地缓存）、展示状态落盘、CTA 外链放行（https 白名单）。
+// 展示时序：audience=new_user 依赖 config.onboarding.completed_at ——首启向导没完成
+// 天然不弹；完成向导 reload 后的那次进入工作台就是首个展示时机。
+const campaignModel = require("./renderer/campaign-model.js");
+
+function _campCachePath() { return path.join(app.getPath("userData"), "campaigns-cache.json"); }
+function _campStatePath() { return path.join(app.getPath("userData"), "campaign-state.json"); }
+
+let _campFeed = null; // 懒加载：首次访问读本地缓存（离线也有上次内容）
+function _getCampaigns() {
+  if (_campFeed === null) {
+    _campFeed = campaignModel.cmNormalizeFeed(_loadJsonSoft(_campCachePath(), null));
+  }
+  return _campFeed.campaigns;
+}
+
+let _campState = null; // { shows: {id: {count,last_ts}}, never: {id: true} }
+function _getCampState() {
+  if (!_campState) {
+    const raw = _loadJsonSoft(_campStatePath(), {}) || {};
+    _campState = {
+      shows: raw.shows && typeof raw.shows === "object" ? raw.shows : {},
+      never: raw.never && typeof raw.never === "object" ? raw.never : {},
+    };
+  }
+  return _campState;
+}
+function _saveCampState() {
+  try {
+    fs.mkdirSync(path.dirname(_campStatePath()), { recursive: true });
+    fs.writeFileSync(_campStatePath(), JSON.stringify(_getCampState(), null, 2), "utf-8");
+  } catch (e) { /* 状态丢失最多多看一次海报，不阻断 */ }
+}
+
+/** 活动源：更新源同域（publish url + campaigns.json），config.updates.campaigns_url 可覆写。 */
+function _campaignsUrl() {
+  try {
+    const cfgUrl = ((config || {}).updates || {}).campaigns_url;
+    if (cfgUrl) return String(cfgUrl);
+  } catch (e) { /* config 未就绪按默认 */ }
+  try {
+    const pub = require("./package.json").build.publish[0].url;
+    return pub.replace(/\/+$/, "") + "/campaigns.json";
+  } catch (e) { return ""; }
+}
+
+async function refreshCampaigns() {
+  const url = _campaignsUrl();
+  if (!url) return;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 10000);
+  try {
+    const r = await fetch(url, { signal: ctl.signal, cache: "no-store" });
+    if (!r.ok) return;
+    const raw = await r.json();
+    _campFeed = campaignModel.cmNormalizeFeed(raw);
+    try {
+      fs.writeFileSync(_campCachePath(), JSON.stringify(raw, null, 2), "utf-8");
+    } catch (e) { /* 缓存写失败不影响本次展示 */ }
+  } catch (e) {
+    /* 活动拉取失败静默：营销链路非关键，下轮定时器/下次启动自然重试 */
+  } finally { clearTimeout(timer); }
+}
+
+/** 新用户资格锚：onboarding 完成时刻（本地近似；购买资格的最终权威在服务端履约）。 */
+function _onboardingMs() {
+  try {
+    const ob = (config || {}).onboarding || {};
+    if (!ob.completed) return 0;
+    const t = Date.parse(String(ob.completed_at || ""));
+    return isNaN(t) ? 0 : t;
+  } catch (e) { return 0; }
+}
+
+ipcMain.handle("desktop:campaign-poster", () => {
+  try {
+    const onboardingMs = _onboardingMs();
+    const c = campaignModel.cmPick(_getCampaigns(), {
+      now: Date.now(),
+      onboardingMs,
+      managed: _managedEdition,
+      state: _getCampState(),
+    });
+    if (!c) return null;
+    return {
+      campaign: c,
+      deadline: campaignModel.cmDeadline(c, onboardingMs),
+      lang: String(((config || {}).unified_inbox || {}).lang || ""),
+    };
+  } catch (e) { return null; }
+});
+
+ipcMain.handle("desktop:campaign-act", async (_e, args) => {
+  const a = args || {};
+  const id = String(a.id || "");
+  if (!id) return { ok: false };
+  if (a.action === "shown") {
+    // 展示计数只记在 shown（click 不重复计——一次会话只消耗一次频控额度）
+    _campState = campaignModel.cmRecordShow(_getCampState(), id, Date.now());
+    _saveCampState();
+    return { ok: true };
+  }
+  if (a.action === "never") {
+    _campState = campaignModel.cmOptOut(_getCampState(), id);
+    _saveCampState();
+    return { ok: true };
+  }
+  if (a.action === "click") {
+    const c = _getCampaigns().find((x) => x.id === id);
+    const url = (c && c.ctaUrl) || "";
+    if (!/^https:\/\//i.test(url)) return { ok: false }; // 只放行 https，活动数据不可指挥本地执行任何东西
+    // 追加注册时间锚 reg_ts（秒）：官网 /order 金卡据此渲染 72h 真倒计时——
+    // 仅官网域白名单（注册时间不带给第三方链接），未完成首启 / 解析失败原样打开。
+    const finalUrl = campaignModel.cmCtaUrlWithReg(url, _onboardingMs(), ["bd2026.cc"]);
+    try { await shell.openExternal(finalUrl); return { ok: true }; } catch (e) { return { ok: false }; }
+  }
+  return { ok: false };
+});
+
+/** 活动轮询（与公告同节奏；dev 也跑便于验证——资格判定的 managed 闸会挡住开发态弹出）。 */
+function setupCampaigns() {
+  refreshCampaigns();
+  const t = setInterval(refreshCampaigns, 6 * 60 * 60 * 1000);
+  if (t.unref) t.unref();
+}
+
 // ── 版本遥测心跳（P1 2026-08-14）───────────────────────────────────────────
 // 复用官网既有 /api/telemetry 匿名回执端点（白名单 schema：未知字段服务端一律丢弃）：
 // 每台安装每 24h 报一次 {kind:"chatx_heartbeat", manifest_version=当前版本, anon_id}。
@@ -2037,7 +2514,10 @@ if (!_gotSingleInstanceLock) {
   }
 
   app.whenReady().then(async () => {
-    Menu.setApplicationMenu(buildChineseMenu());
+    Menu.setApplicationMenu(buildAppMenu());
+    // 显示指纹面包屑：落 userData/display-metrics.json 供 fleet 台账/装后检查
+    // 远程读精确缩放（SSH 侧 API 全撒谎，壳上报是唯一精确通道；best-effort）。
+    try { winFit.installDisplayBreadcrumb(app, require("electron").screen); } catch (e) { /* 静默 */ }
     await maybeRotateManagedToken();
     // 后台自拉起（不阻塞开窗：renderer 已有「正在连接后台→自动重连」遮罩兜底）。
     backendManager.start(config).catch((e) => console.log(`[backend] start error: ${e}`));
@@ -2047,6 +2527,7 @@ if (!_gotSingleInstanceLock) {
     createWindow();
     setupAutoUpdate();
     setupAnnouncements();
+    setupCampaigns();
     setupVersionTelemetry();
   });
 }
