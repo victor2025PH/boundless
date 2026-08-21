@@ -6,11 +6,13 @@
     "173 编程载体=WSL vllm-coder.service（Qwen3.6-27B-abl-awq :8010）。只 start 不 enable；",
     "  切走必须 stop+wsl --shutdown，否则 TTS 唤醒被 28G 池拒。",
     "qwen14b 已退役（2026-08-14）。173 双 vLLM 按模式轮换（0.9 池互斥）：chatx 模式跑",
-    "  vllm.service(:8001 served=chatx qwen36-27b-abl-awq 64k——117 于 2026-08-15 底模换代，served 名/端口不变，智聊主对话链 ai.primary=local_only），",
+    "  vllm.service(:8001 served=chatx qwen36-27b-abl-awq 64k——117 于 2026-08-15 底模换代，served 名/端口不变），",
     "  code 模式跑 vllm-coder.service(:8010)。face 双停、质量轨 TTS 回岗。两 unit 都只 start 不",
     "  enable（开机自启抢卡=2026-08-14 两次实锤：coder 挤死 TTS、chatx 挤死 coder），boot-restore 按模式拉。",
-    "  智聊切流契约（117 回信 2026-08-15）：停 :8001 前必须把智聊热切 cloud，起+暖机后再切回",
-    "  local_only。裸停=local_only 失败走 canned 复读机，不是回落云端。117 线 VLLM_Keepalive",
+    "  【2026-08-22 老板令·永久】kind=zhiliao_primary 三步（chatx y7 切回 local_only / face·code y-zl 切 cloud）",
+    "  已彻底删除：智聊主链已锁死 ai.primary_lock=cloud（117 侧 02:48 起引擎强制+全程审计），本方一切途径",
+    "  不得再读写 ai.primary/ai.primary_lock；档位变更唯一路径=向老板申请→智聊侧治理接口。执行器自动切=违规。",
+    "  本方职责仅限 173/176 vLLM 服务启停与显存调度。117 线 VLLM_Keepalive",
     "  已收编（每分钟无条件 start vllm=code 双开根因）；WSL 钉会话/portproxy/暖机改走",
     "  tools/vllm_keepwarm.py 按当前模式执行。智聊 TTS 主力=140:7852 CosyVoice（三模式不泊），",
     "  117 本机 TTS 08-14 已退役；173 IndexTTS 与 :8001 0.9 池物理互斥，chatx 仍泊、质量轨回落 140。",
@@ -40,10 +42,9 @@
     "                       进泊车名单——两条不变量防双活/僵驻，跨泳道时序不靠运气。",
     "  no_expect:true     = posture 巡检不为该步派生期望（engine_stop 停 176 本机、但 Hub /health",
     "                       按生效路由探远端那份——两个语义，按 health 判本机必误报）。",
-    "  顺序契约不受暖机影响：chatx y6 暖机/y7 切回 local_only 在 y5 vLLM 健康之后的同一泳道",
-    "  延续段内按序执行——:8001 不可用的任何时段智聊仍在 cloud 档。"
+    "  顺序契约不受暖机影响：chatx y6 暖机在 y5 vLLM 健康之后的同一泳道延续段内按序执行。"
   ],
-  "version": "2026-08-16",
+  "version": "2026-08-22",
   "cooldown_s": 300,
   "allowed_machines": ["zhongshu", "tingxie", "yunsheng", "kouxing"],
   "untouchable": {
@@ -60,7 +61,7 @@
     "chatx": {
       "zh": "智聊模式",
       "accent": "#22D3EE",
-      "desc": "只跑智聊：173 起智聊 vLLM(:8001) 整卡；停前切 cloud、起+暖机后切回 local_only；140 保 CosyVoice:7852+bge-m3+hy-mt2",
+      "desc": "只跑智聊：173 起智聊 vLLM(:8001) 整卡；主链档位归智聊侧治理（老板锁 cloud）；140 保 CosyVoice:7852+bge-m3+hy-mt2",
       "chips": {
         "zhongshu": "智聊翻译+配音+质量轨",
         "tingxie": "MT+克隆语音",
@@ -134,6 +135,8 @@
              "why": "停编程 vLLM（0.9 池互斥，让位智聊 vLLM）"},
             {"id": "y1", "kind": "ollama_unload", "base": "http://192.168.0.173:11434", "model": "qwen3-abl-32k:latest",
              "why": "卸编程通用 30B 备胎"},
+            {"id": "y1b", "kind": "ollama_unload", "base": "http://192.168.0.173:11434", "model": "gemma4:latest",
+             "why": "卸兜底 LLM gemma4（台账 chatx@173=vLLM 29.4 独占，gemma4 只记在 face 的 7.0；5.6G 在驻留则 0.9 池物理装不下。2026-08-18 夜实锤：gemma4 08-14 接任兜底后本步一直缺席，vLLM 崩溃循环 426 次）"},
             {"id": "y3", "kind": "remote_park", "name": "index_tts", "port": 7865,
              "script": "index_tts_server.py", "no_expect": true,
              "why": "173 整卡给 :8001（0.9 池≈29G）与 IndexTTS 10G 物理互斥；chatx 由 176 本机接管（z19/z20），泊车登记随后被本机 engine_start 摘除属正常——no_expect 防姿态误报泊车名单缺失"},
@@ -143,16 +146,14 @@
              "distro": "Ubuntu-24.04", "port": 8001, "portproxy": true,
              "health": "http://192.168.0.173:8001/v1/models", "wait_s": 600, "warm_async": true,
              "budget_key": "vllm_chatx_qwen25_abl_awq_90pct",
-             "why": "起智聊 vLLM（qwen36-27b-abl-awq 64k——117 08-15 底模换代，served=chatx/端口不变，0.9 池；只 start 不 enable；后台暖机——y6/y7 在同泳道延续段按序跟进，顺序契约不破）"},
+             "why": "起智聊 vLLM（qwen36-27b-abl-awq 64k——117 08-15 底模换代，served=chatx/端口不变，0.9 池；只 start 不 enable；后台暖机——y6 在同泳道延续段跟进）"},
             {"id": "y6", "kind": "http_post",
              "url": "http://192.168.0.173:8001/v1/chat/completions",
              "body": {"model": "chatx",
                       "messages": [{"role": "user", "content": "warmup"}],
                       "max_tokens": 8, "temperature": 0},
              "timeout": 120,
-             "why": "暖机（冷态 JIT 7 tok/s → 暖态 56+）后再把智聊切回 local_only"},
-            {"id": "y7", "kind": "zhiliao_primary", "primary": "local_only",
-             "why": "起+暖机后把智聊主链切回 173:8001（local_only=失败不回落云端）"}
+             "why": "暖机（冷态 JIT 7 tok/s → 暖态 56+）——:8001 就绪即可；智聊主链档位归智聊侧治理（2026-08-22 老板令，原 y7 切回 local_only 已永久删除）"}
           ]
         },
         "kouxing": {
@@ -239,8 +240,6 @@
           "steps": [
             {"id": "y-ka", "kind": "schtask_stop", "task": "VLLM_Keepalive", "missing_ok": true,
              "why": "停 117 线每分钟无条件拉回 :8001 的 keepalive"},
-            {"id": "y-zl", "kind": "zhiliao_primary", "primary": "cloud",
-             "why": "双停 vLLM 前先把智聊切云端——local_only 对着空端点=canned 复读机"},
             {"id": "y0", "kind": "wsl_unit_stop", "unit": "vllm-coder.service",
              "distro": "Ubuntu-24.04", "port": 8010,
              "health": "http://192.168.0.173:8010/v1/models", "shutdown": false,
@@ -339,12 +338,10 @@
           "steps": [
             {"id": "y-ka", "kind": "schtask_stop", "task": "VLLM_Keepalive", "missing_ok": true,
              "why": "停 117 线每分钟无条件拉回 :8001 的 keepalive（2026-08-15 回信：code 双开根因）"},
-            {"id": "y-zl", "kind": "zhiliao_primary", "primary": "cloud",
-             "why": "停 :8001 前先把智聊切云端——local_only 失败不回落云、直接 canned 复读机"},
             {"id": "y0", "kind": "wsl_unit_stop", "unit": "vllm.service",
              "distro": "Ubuntu-24.04", "port": 8001,
              "health": "http://192.168.0.173:8001/v1/models", "shutdown": false,
-             "why": "停智聊 vLLM（0.9 池互斥；智聊已切 cloud，主链走 DeepSeek）"},
+             "why": "停智聊 vLLM（0.9 池互斥；智聊主链已锁死 cloud——2026-08-22 老板锁，停 :8001 不再需要切档）"},
             {"id": "y0c", "kind": "route_set", "name": "index_tts", "url": "http://192.168.0.173:7865",
              "local_port": 7865, "wait_s": 180,
              "why": "index_tts 宿主指回 173 泊位（code 两边都停；路由指远端=本机 supervisor 不误启）——先等 176 本机实例死透（z13b 停的）"},
@@ -356,6 +353,8 @@
              "why": "卸 ollama 编程备胎（本模式用 vLLM）"},
             {"id": "y5", "kind": "ollama_unload", "base": "http://192.168.0.173:11434", "model": "qwen2.5:14b",
              "why": "卸原始 14B 若在驻留"},
+            {"id": "y5b", "kind": "ollama_unload", "base": "http://192.168.0.173:11434", "model": "gemma4:latest",
+             "why": "卸兜底 LLM gemma4（code@173=vllm-coder 28.0 独占，与 chatx y1b 对称；不卸则 Coder 冷启同样装不下）"},
             {"id": "y6", "kind": "wsl_unit_start", "unit": "vllm-coder.service",
              "distro": "Ubuntu-24.04", "port": 8010, "portproxy": true,
              "health": "http://192.168.0.173:8010/v1/models", "wait_s": 600, "warm_async": true,
