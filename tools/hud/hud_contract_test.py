@@ -341,8 +341,8 @@ def main() -> int:
                       ("verdict != \"safe\"", "T2 忙态否决"),
                       ("FACESWAP_TARGETS", "路由白名单（拒任意 URL）"),
                       ("只救死的", "svc_restart 只动离线服务"),
-                      ("src not in (\"gesture\", \"voice\", \"key\")", "在场信号授权（遥控不点火）"),
-                      ("AUTH_MODE", "刷脸授权插槽（P2b）"),
+                      ("src not in (\"gesture\", \"voice\", \"key\", \"mouse\")", "在场信号授权（遥控不点火）"),
+                      ("AUTH_MODE", "在场信号授权常量（刷脸层 2026-08-21 已拆除）"),
                       ("ops_audit.jsonl", "审计流文件"),
                       ("def recent_events", "操作即叙事（拼事件流）")]:
         check(f"P 网关 {why}", mark in ogt)
@@ -382,7 +382,8 @@ def main() -> int:
     check("P 周报挂号指挥四键", "ops_arm" in rep_p.read_text(encoding="utf-8", errors="replace"))
     check("P 实拍矩阵含指挥两态", "ops_armed" in shots_txt and "ops_fired" in shots_txt)
 
-    # Q. P2b 刷脸授权 + P3 手机万能外设（2026-08-08）
+    # Q. P2b 刷脸授权（2026-08-21 用户拍板整体拆除——face_auth.py 留作独立工具，
+    #    网关/服务端/HUD 零引用=负向锚）+ P3 手机万能外设（2026-08-08）
     fap = HERE / "face_auth.py"
     try:
         py_compile.compile(str(fap), doraise=True)
@@ -397,9 +398,11 @@ def main() -> int:
                       ("HUD_OPS_AUTH", "应急压制阀"), ("不落盘", "帧隐私口径"),
                       ("登记即生效", "零配置叠加层")]:
         check(f"Q 刷脸 {why}", mark in fat)
-    for mark, why in [("face_auth.enabled()", "叠加层判定"), ("fired_by", "点火记名审计"),
-                      ("frame_b64", "点火带帧参数"), ("auth_face", "刷脸拒绝埋点")]:
-        check(f"Q 网关 {why}", mark in ogt or mark in ogp.read_text(encoding="utf-8", errors="replace"))
+    # 拆除断言（2026-08-21）：功能面零 face_auth 引用；点火在场信号收编鼠标（点击即切的服务端半边）
+    check("Q 网关 刷脸层已拆除（零 import face_auth）", "import face_auth" not in ogt)
+    check("Q 网关 刷脸帧参数已拆除", "frame_b64" not in ogt)
+    check("Q 网关 点火在场信号含鼠标", "\"mouse\"" in ogt)
+    check("Q 网关 点火记名审计", "fired_by" in ogt)
     for name, anchors in [("join.html", ["角色即租约", "手势站", "扬声器", "魔杖", "监看", "展演遥控"]),
                           ("speaker.html", ["wakeLock", "开嗓", "EventSource", "告警提示音"]),
                           ("wand.html", ["requestPermission", "deviceorientation", "校准"])]:
@@ -416,14 +419,14 @@ def main() -> int:
                       ("setdefault(\"role\", \"gesture\")", "角色合并（中继手势站）")]:
         check(f"Q 服务 {why}", mark in Path(HUD_SRV).read_text(encoding="utf-8", errors="replace"))
     for mark, why in [("checkWand", "魔杖光标"), ("/api/wand/", "魔杖拉取"),
-                      ("speaker:\"#E8B341\"", "卫星角色着色"),
-                      ("grabAuthFrame", "点火抓帧"), ("frame:state.camOn", "帧随点火")]:
+                      ("speaker:\"#E8B341\"", "卫星角色着色")]:
         check(f"Q HUD {why}", mark in html)
+    check("Q HUD 刷脸抓帧已拆除", "grabAuthFrame" not in html)
     check("Q 周报挂号 phone_role", "phone_role" in rep_p.read_text(encoding="utf-8", errors="replace"))
     srv2 = Path(HUD_SRV).read_text(encoding="utf-8", errors="replace")
     check("Q 预检带点火授权项", "点火授权" in srv2)
     check("Q 快照带授权模式（武装卡提示语）", "ctx[\"ops\"][\"auth\"]" in srv2)
-    check("Q 武装卡刷脸提示语", "刷脸点火：正对镜头" in html)
+    check("Q 武装卡纯在场信号提示语", "竖拇指 1.2s / 回车 / 说「确认」＝点火" in html)
 
     # R. 展演收官（2026-08-09）：提词卡 + 全场营销包
     rs = HERE / "runsheet.html"
@@ -564,8 +567,6 @@ def main() -> int:
                       ("def ctrl_arm", "武装"), ("def ctrl_action", "动作"),
                       ("def ctrl_pull", "agent 领取"), ("def ctrl_disarm", "撤防"),
                       ("CTRL_DISABLE_FLAG", "受控专用总闸"),
-                      ("face_auth.enabled()", "强制刷脸（登记表空即拒）"),
-                      ("必须刷脸授权", "受控刷脸话术"),
                       ("verdict != \"safe\"", "推流硬闸"),
                       ("_ctrl_end(f\"busy", "会话中途开播即硬切"),
                       ("CTRL_FUSE_MAX", "动作熔断"), ("_audit(\"ctrl_act\"", "点按逐条审计"),
@@ -580,10 +581,10 @@ def main() -> int:
                       ("og.ctrl_state()", "心跳带受控态")]:
         check(f"V 服务 {why}", mark in srv2)
     # HUD 受控层
-    for mark, why in [("function ctrlArm", "刷脸武装"), ("function ctrlActionAt", "发动作"),
+    for mark, why in [("function ctrlArm", "武装（在场信号，刷脸层已拆除）"), ("function ctrlActionAt", "发动作"),
                       ("function ctrlDisarm", "撤防"), ("function ctrlArmed", "会话活判定"),
                       ("ctrlCanControl", "可控判定（白名单∩已部署）"),
-                      ("grabAuthFrame", "复用刷脸取帧"), ("armed", "琥珀武装边框"),
+                      ("armed", "琥珀武装边框"),
                       ("竖拇指授权", "授权手势话术"), ("if(m===\"frozen\") ctrlDisarm", "推流冻结即撤防"),
                       ("ctrlDisarm(\"close\")", "关窗即撤防"),
                       ("_injectCtrlArm", "武装验证钩"), ("_injectCtrlAction", "动作验证钩")]:
@@ -599,7 +600,7 @@ def main() -> int:
     vgt3 = vgp.read_text(encoding="utf-8", errors="replace") if vgp.is_file() else ""
     for mark, why in [("def set_dictate", "听写开关"), ("def _handle_dictation", "听写路由"),
                       ("_dictate", "听写状态位"), ("_DICT_NAV", "导航词表"),
-                      ("_DICT_OFF", "退出词"), ("先刷脸武装", "开听写需先武装"),
+                      ("_DICT_OFF", "退出词"), ("先武装某台机", "开听写需先武装"),
                       ("if _dictate[\"on\"]", "关时早返回（管道零改动）"),
                       ("ctrl_dictate", "打字依赖"), ("ctrl_key", "按键依赖")]:
         check(f"V2 语音听写 {why}", mark in vgt3)
@@ -664,7 +665,7 @@ def main() -> int:
         check(f"W4 收尾 {why}", mark in html)
     # ---- P1+ 交互升级（三视角方案 20260811 §P1 backlog）：双手俯仰/缩放 + 遮挡感知拾取 ----
     for mark, why in [("holoS.zoom", "双手缩放"), ("holoS.pitch", "双手俯仰"),
-                      ("holoS.thb={span,midY}", "双手基准(拦在全息不落墙/详情分支)"),
+                      ("holoS.thb={span,midY,ang}", "双手基准(拦在全息不落墙/详情分支;2026-08-18 三轮+扭转角)"),
                       ("*(holoS.zoom||1)", "相机应用缩放"), ("+(holoS.pitch||0)+Math.sin", "相机应用俯仰"),
                       ("遮挡感知", "遮挡感知拾取"), ("best.d < Math.max(30", "投影中心最近阈值"),
                       ("holoS.zoom=1; holoS.pitch=0", "进入复位相机"),
@@ -720,7 +721,7 @@ def main() -> int:
         check(f"V2 HUD {why}", mark in html)
 
     # W10 P1 功能加厚：节点操作盘（从孪生体直接指挥）+ 集群总览条 —— 动作全复用既有通道，
-    # 危险动词只做「武装」（确认仍走竖拇指/回车+刷脸=两段式零旁路）
+    # 危险动词只做「武装」（确认仍走竖拇指/回车=两段式零旁路；模式条例外=点击直通 2026-08-21）
     for mark, why in [("id=\"holopanel\"", "操作盘 DOM"), ("id=\"holostat\"", "总览条 DOM"),
                       ("function openHoloPanel", "开盘函数"), ("function closeHoloPanel", "收盘函数"),
                       ("function buildHoloStat", "总览条构建"),
@@ -734,7 +735,8 @@ def main() -> int:
                       ("if(doLabels) buildHoloStat()", "总览条节流同拍"),
                       ("closeHoloPanel(); else collapseAll(\"key\")", "Esc 先收盘")]:
         check(f"W10 操作盘 {why}", mark in html)
-    # 护栏不旁路：面板/下钻共用 holoArm=只 arm（fire 侧只认 gesture/voice/key，在场信号仍是第二段）
+    # 护栏不旁路：面板/下钻共用 holoArm=只 arm（fire 侧只认 gesture/voice/key/mouse 在场信号；
+    # 模式条在自己的 click 里接 fire 直通（2026-08-21 拍板），面板/下钻仍两段式）
     _pnl = html.split("function openHoloPanel", 1)[1].split("function closeHoloPanel", 1)[0]
     _arm = html.split("function holoArm", 1)[1].split("\n}", 1)[0]
     check("W10 操作盘 面板只武装不点火", "holoArm(" in _pnl and "opsPost(\"fire\"" not in _pnl
@@ -771,7 +773,7 @@ def main() -> int:
                       ("function holoPickSub", "子星拾取"), ("function holoDrillAct", "子星动作"),
                       ("_HSUB_COL", "三色语义表"), ("park", "泊车态"),
                       ("holoS.zoom=Math.min", "下钻即聚焦"), ("zoom0", "退出还原相机"),
-                      ("crowded?(i%2?1.68:1.16)", "拥挤双环"),
+                      ("svcs.length>11?2:1", "拥挤双列机柜(2026-08-21 方案C：子星双环→机柜双列)"),
                       ("holoDrill.crowded&&s.st===\"ok\"&&!hov", "拥挤渐进披露"),
                       ("id!==holoDrill.mid", "其余机器淡出"),
                       ("id=\"holodrill\"", "下钻章 DOM"), ("服务下钻 · ", "下钻按钮/章文案"),
@@ -831,13 +833,13 @@ def main() -> int:
                       ("const modeKey=cm.mode+", "姿态变化触发重绘")]:
         check(f"W15 姿态绶带 {why}", mark in html)
 
-    # W16 P1 算力模式切换进指挥链（2026-08-13：看得到/守得住→切得动。三重把关=
-    # 两段式武装点火+刷脸 之外，执行不带 force——执行器闸门受理时再实判）
+    # W16 P1 算力模式切换进指挥链（2026-08-13：看得到/守得住→切得动。武装点火之外，
+    # 执行不带 force——执行器闸门受理时再实判；刷脸层 2026-08-21 拆除、模式条点击直通）
     for mark, why in [("\"mode_switch\":  {\"tier\": \"T2\", \"reversible\": False}", "动词注册 T2 不可撤销"),
                       ("def _cluster_mode_now", "SSOT 同源读取"),
                       ("已经是", "同模式拒绝人话"),
                       ("dry_run\": True", "武装带执行器闸门预览"),
-                      ("\"reason\": \"隔空指挥（ops_gateway 两段式+刷脸点火）\"", "执行带记名原因"),
+                      ("\"reason\": \"隔空指挥（ops_gateway 武装点火）\"", "执行带记名原因"),
                       ("执行器拒绝：", "409 闸门转人话")]:
         check(f"W16 切模式 {why}", mark in ogt)
     check("W16 切模式 执行不越闸(无 force:true)", "\"force\": True" not in
@@ -940,7 +942,8 @@ def main() -> int:
     # 三维全息中枢盘=第一屏找不到实锤）：模式条/视图页签/界面版本自愈/事件区鼠标平权补全。
     for mark, why in [("id=\"modebar\"", "模式条 DOM"),
                       ("function renderModeBar", "模式条渲染"),
-                      ("holoArm(\"mode_switch\"", "切模式走武装(只 arm 不 fire)"),
+                      ("holoArm(\"mode_switch\"", "切模式走武装口"),
+                      ("opsPost(\"fire\",{id:r.id,src:\"mouse\"})", "点击即点火直通(2026-08-21 拍板)"),
                       ("cm.modes||[]).filter(x=>x.id!==cm.mode)", "按钮数据驱动(服务端 modes 表)"),
                       ("body.evx #modebar,body.consview #modebar,body.holoview #modebar",
                        "仅第一屏可见"),
@@ -959,6 +962,303 @@ def main() -> int:
                       ("cmstate", "模式条实拍直达参数")]:
         check(f"W20 首屏直给 {why}", mark in html)
     check("W20 服务端 asset_ver 下发", "ctx[\"asset_ver\"]" in srv)
+
+    # W21 电视台档+全屏舞台+帮助层（P0 · 2026-08-18 电视台化方案）：HUD 的日常岗位——
+    # 非展演时段自动巡览+告警插播+切换叙事；全息 3D 铺满视口收面板成悬浮 chrome；
+    # 操作词表卡治「知者自知」。让位纪律与秒回退是本节命根。
+    for mark, why in [("const AUTOPLAY_P=PARAMS.get(\"autoplay\")", "电视台档显式参数(优先)"),
+                      ("function apWanted", "台账 SSOT 驱动(tv 屏缺参自动开)"),
+                      ("return !!(s&&s.tv)", "tv=true 即开播判据"),
+                      ("function apEngaged", "让位判定收口(单一函数)"),
+                      ("tr.step>0) return false", "真展演一票让位"),
+                      ("AP_IDLE_S", "用户操作静默窗"),
+                      ("function apFlyBeats", "并联节拍表(与 holoTourBeat 同构)"),
+                      ("holoTourBeat()||apBeat()", "并联入口(真 tour 优先)"),
+                      ("ap.alert={key:e.key,mid:amid,until:now+10}", "告警插播 10s 聚焦"),
+                      ("stat(\"autoplay_alert\"", "插播埋点"),
+                      ("stat(\"autoplay_on\"", "开播曝光埋点"),
+                      ("function apSwitchTick", "切换/暖机叙事卡"),
+                      ("id=\"apswitch\"", "叙事卡 DOM"),
+                      ("id=\"chip-ap\"", "电视台在岗章"),
+                      ("function stageWanted", "全屏舞台判定(缺省跟随电视台档)"),
+                      ("function apStageTick", "舞台结算(动态切换+首开曝光埋点)"),
+                      ("body.stagefull.holoview #holo{position:fixed;inset:0", "3D 铺满视口"),
+                      ("body.stagefull.holoview #panel{width:100vw", "面板收成 chrome"),
+                      ("stageOnNow&&view===3)) stepRain", "舞台档雨层省笔"),
+                      ("id=\"helpcard\"", "帮助层 DOM"),
+                      ("function buildHelp", "词表卡构建"),
+                      ("stat(\"help_open\"", "帮助层埋点"),
+                      ("e.key===\"?\"", "? 键唤出"),
+                      ("if(helpOn()) helpClose()", "Esc 链帮助层居首"),
+                      ("?autoplay=0 电视台档关", "回退开关词表(卡内自述)")]:
+        check(f"W21 电视台/舞台/帮助 {why}", mark in html)
+    try:
+        _scr21 = (ckd.get("screens") or [])
+        _tv21 = next((s for s in _scr21 if s.get("tv")), {})
+        check("W21 台账 tv 屏默认电视台档", "autoplay=1" in str(_tv21.get("params") or ""))
+    except Exception as e:  # noqa: BLE001
+        check("W21 台账 tv 屏默认电视台档", False, str(e)[:60])
+
+    # W22 导演位+飞览解说+质感包（P1 · 2026-08-18）：遥控页点机器名=飞览聚焦（T0 呈现层，
+    # 幕切自动清）；每拍一句解说（小界 TTS 缓存链，字幕永出、出声仅 ?speak=1 屏）；
+    # 空中面板方案 P0b 克制子集=音族/物质化/光尾/冲击波（?fx=0 素颜，reduced-motion 全静）。
+    for mark, why in [("\"focus\" in payload", "聚焦端点(step 之外的第二动词)"),
+                      ("TOUR[\"focus\"]", "聚焦单槽"),
+                      ("log_stat(\"tour_focus\"", "聚焦埋点"),
+                      ("幕切走一次性清场", "幕切清聚焦"),
+                      ("/api/narrate", "解说 TTS 代理端点"),
+                      ("_NARR_CACHE", "解说内存缓存"),
+                      ("ProxyHandler({})", "LAN 直连绕系统代理(红线纪律)"),
+                      ("data[\"kouxing\"]", "Lite 自治机直探(svc 盲区补齐,远端不可救语义)")]:
+        check(f"W22 服务 {why}", mark in srv)
+    for mark, why in [("_fc&&_fc.m&&holoS.nodes[_fc.m]", "聚焦覆盖节拍"),
+                      ("<90) beat={mid:_fc.m", "聚焦 90s 新鲜窗"),
+                      ("function apNarr", "解说播报"),
+                      ("function narrLineOf", "台词固定模板(缓存可命中)"),
+                      ("id=\"narrbar\"", "解说字幕 DOM"),
+                      ("const NARRATE", "?narrate=0 退路"),
+                      ("if(!SPEAK||DEMO) return", "出声只在 speak 屏·demo 静默"),
+                      ("function fxSnd", "合成音族"),
+                      ("createStereoPanner", "声像随屏幕 x"),
+                      ("function fxRing", "抓取冲击波"),
+                      ("const FX=PARAMS.get(\"fx\")!==\"0\"", "?fx=0 素颜开关"),
+                      ("@keyframes hmat", "面板物质化 scanline"),
+                      ("_fxTrail", "指尖光尾"),
+                      (".fxring{display:none}", "reduced-motion 冲击波全静"),
+                      ("fxSnd(\"error\")", "被拒错误音(音画联动)")]:
+        check(f"W22 HUD {why}", mark in html)
+    _tour22 = (HERE / "tour.html").read_text(encoding="utf-8", errors="replace")
+    for mark, why in [("id=\"dirrow\"", "导演位按钮区"),
+                      ("function postFocus", "聚焦请求"),
+                      ("恢复自动巡览", "取消聚焦按钮"),
+                      ("d.tour.focus&&d.tour.focus.m", "聚焦态回显")]:
+        check(f"W22 遥控页 {why}", mark in _tour22)
+
+    # W23 实控升维+特效层（P2 · 2026-08-18 三轮，拍板「不要视频要实控+炫酷」）：空中面板升维
+    # （DOM 盘保判据单一真相：伪 3D 悬浮倾斜+活体跟随+捏标题栏抓移+双手缩放+按钮磁吸+1-Euro）、
+    # 数据流粒子层（密度=GPU util 真数据,拒造假流量;预算闸+自适应降档+?fx=0）、双手扭转、
+    # 双色光标、「演示状态」语音宏。安静纪律不破：非 full 全停、reduced-motion 全静。
+    for mark, why in [("function initFxParticles", "数据流粒子建层"),
+                      ("function updateFxParticles", "粒子逐帧更新"),
+                      ("function fxBurstAt", "抓取/按下爆发粒"),
+                      ("setDrawRange(0,n)", "粒子活跃数裁剪"),
+                      ("fx.scale=Math.max(0.25", "帧预算自适应降档(下限0.25)"),
+                      ("(5+u*30)", "粒子密度=GPU util 真数据"),
+                      ("SHOW?2:1", "演示状态粒子翻倍"),
+                      ("function mkEuro", "1-Euro 滤波器"),
+                      ("const _euX=mkEuro", "手势光标滤波接线"),
+                      ("function setShow", "演示状态开关"),
+                      ("id=\"chip-show\"", "演示状态章"),
+                      ("a.act===\"show\"", "语音宏客户端接线"),
+                      ("holoDrag=\"mov\"", "面板捏合抓移"),
+                      ("磁吸：未直中时吸附", "按钮磁吸补偿(44px)"),
+                      ("pnS._scale", "双手缩放面板"),
+                      ("da*1.15", "双手扭转=偏航"),
+                      ("pn.style.transform=\"perspective(", "伪 3D 悬浮倾斜"),
+                      ("_pinned=false", "开卡复位摆位"),
+                      ("拖标题栏=抓移", "鼠标平权抓移"),
+                      ("#holopanel{animation:none}", "reduced-motion 面板全静")]:
+        check(f"W23 实控升维 {why}", mark in html)
+    for mark, why in [("\"show\":", "演示状态动词注册"),
+                      ("{\"act\": \"show\"}", "演示状态动作广播"),
+                      ("演示状态已开", "应答话术")]:
+        check(f"W23 语音 {why}", mark in vgt)
+
+    # W24 过夜自愈+环幕近似（2026-08-19 晨检：电视位隔夜 clients=0）——
+    # kiosk 看门狗保 Edge 进程、SSE/WebGL 页内自刷保僵尸页、C2 按 side 偏航不写猜测 pose。
+    _kiosk24 = (HERE / "cockpit_kiosk.ps1").read_text(encoding="utf-8", errors="replace")
+    for mark, why in [("[switch]$Watch", "看门狗开关"),
+                      ("BoundlessCockpitKioskWatch", "2 分钟保活任务"),
+                      ("function Count-Kiosk", "存活计数(活着不杀)"),
+                      ("function Test-InteractiveSession", "会话 0 拒拉"),
+                      ("SessionId -ne 0", "交互会话判据"),
+                      ("GetFullPath($PSCommandPath)", "同路径自拷跳过")]:
+        check(f"W24 kiosk {why}", mark in _kiosk24)
+    for mark, why in [("function ckCamYaw", "环幕偏航(按 side 推导)"),
+                      ("me.tv) return 0", "电视位英雄机位不偏"),
+                      ("+ckCamYaw()", "相机接入偏航"),
+                      ("webglcontextlost", "GPU 上下文丢失自刷"),
+                      ("ui_reload\",{src:\"webgl\"}", "webgl 自刷埋点"),
+                      ("let connLostAt=0", "SSE 断连计时"),
+                      ("ui_reload\",{src:\"sse\"}", "SSE 90s 自刷埋点")]:
+        check(f"W24 HUD {why}", mark in html)
+
+    # W25 页活看门狗（2026-08-19 五轮）：不造 ping 端点——SSE screens 即页活。
+    # Edge 进程活 ≠ 页活；hub 不可达 hold；连续两拍 miss 才杀僵尸（宽限 vs 中枢重启）。
+    for mark, why in [("GetEmptyWebProxy", "LAN 探测绕系统代理"),
+                      ("function Get-LiveNames", "页活名单(/health.screens 优先)"),
+                      ("watch ok: page live", "页活即放行"),
+                      ("hub unreachable -- hold", "中枢不可达不杀"),
+                      ("page zombie -- relaunching", "僵尸页才重拉"),
+                      ("miss $miss/2 -- hold", "两拍宽限"),
+                      ("kiosk_watch", "重拉埋点"),
+                      ("page-alive", "Register 声明页活")]:
+        check(f"W25 kiosk {why}", mark in _kiosk24)
+    for mark, why in [("def air_snapshot", "页活快照函数"),
+                      ("tv_on_air", "心跳/health 电视台在播")]:
+        check(f"W25 服务 {why}", mark in srv)
+
+    # W26 模式条排版预算化（2026-08-21 排版错乱五视角方案 P0）：chatx+姿态失守把
+    # 「单行禁换行×内容随状态膨胀×面板 940px 定宽」的零余量结构病晒出来——归位钮冲出
+    # 面板右缘、武装回执被挤出不可见。修=预算压缩（短时间戳/短按钮文案/失守徽章与归位钮
+    # 合体）+flex-wrap 换行保险丝+回执独立行；配套=麦名短化闭合（旧 slice(0,26) 硬切出
+    # 括号不闭合的「…Podcast Microp」）、窗口化隐藏屏角 ✕、kiosk 之外的响应式基线。
+    for mark, why in [("#modebar{display:none;align-items:center;flex-wrap:wrap",
+                       "模式条换行保险丝"),
+                      ("cmbtn cmfix", "失守胶囊=告警即动作(徽章与归位合体)"),
+                      ("data-t='__drill'", "失守胶囊=先明细后动手(P1-1 演进)"),
+                      ("cm.switching?\"<span class='cmpo bad'>", "切换中只亮徽章不给归位钮"),
+                      ("const _cmSince", "时间戳短化(全文进 title)"),
+                      ("const _cmShort", "按钮短文案(全文进 title)"),
+                      ("flex-basis:100%", "回执独立行(失守态曾被挤出不可见)"),
+                      ("function _micShort", "麦名短化闭合(全名进语音章 title)"),
+                      ("body.windowed #closebtn{display:none}", "窗口化隐藏屏角关闭钮"),
+                      ("function _winMode", "窗口化判定(视口贴屏=kiosk/F11)"),
+                      ("@media (max-width:1080px)", "响应式基线·窄屏让宽度"),
+                      ("@media (max-height:660px)", "响应式基线·矮屏收事件区"),
+                      ("cmstate=idle|switching|repair|fired", "实拍直达含点火回执态")]:
+        check(f"W26 排版 {why}", mark in html)
+
+    # W27 全息沙盘重做（2026-08-21 五视角方案A「全息指挥沙盘」渐进落地：交互 API 零改动，
+    # 只换视觉装配层——灭棉花球/极坐标地台/三段式浮筒/能量拱桥列车/涟漪事件池/物质化揭幕/
+    # 2x 名牌/TV 标定/fx=0 蓝图素颜。契约锁的是「结构与数据诚实」不锁调色数值。
+    for mark, why in [("function holoFloorMat", "极坐标全息地台材质"),
+                      ("function holoArcMat", "弧形仪表环材质"),
+                      ("function holoRipple", "涟漪事件池(真事件驱动)"),
+                      ("HOLO_FLOOR_Y", "台面高度单一常量"),
+                      ("uRip[4]", "涟漪 uniform 池(上限4)"),
+                      ("QuadraticBezierCurve3", "能量拱桥曲线"),
+                      ("TubeGeometry(curve", "管道几何(替代1px直线)"),
+                      ("_icount", "管道揭幕 drawRange 满量程"),
+                      ("lk.cars", "数据包列车车厢"),
+                      ("cp.x+wob", "粒子沿拱桥曲线飞行"),
+                      ("悬浮高度=GPU util 真数据", "高度=第二编码通道"),
+                      ("nd.group.position.y=nd.h", "浮筒高度逐帧应用"),
+                      ("baseArc", "基座环=显存弧"),
+                      ("utilArc", "数据环=GPU 弧"),
+                      ("nd.anchor", "锚线 grounding"),
+                      ("nd.spot", "投影光斑(假倒影)"),
+                      ("uniforms.uMat", "物质化扫描升起 uniform"),
+                      ("holoS._evMode", "模式切换冲击波边沿检测"),
+                      ("holoS._evAlerts", "告警新燃/息燃涟漪边沿检测"),
+                      ("function _holoPR", "TV 档 pixelRatio 自适应"),
+                      ("body.holoview #rain", "汉字雨全息视图压暗"),
+                      ("#holo::before", "屏幕空间扫描线(CSS 减法暗带)"),
+                      ("FX?0.4:0.62", "fx=0 蓝图态线框增强"),
+                      ("drillSelf", "下钻聚焦机退紧凑章(去冗余大卡)")]:
+        check(f"W27 全息沙盘 {why}", mark in html)
+
+    # W28 机柜下钻层（2026-08-21 P2 方案C：子星环绕→数字孪生机柜切片；ctx.svc 数据面/救活两段式
+    # 护栏/语音手势通道逐字不变，只换呈现骨架）：分诊排序可救顶置、>11 双列、槽位=canvas 条、
+    # 机柜缓转朝相机、核上浮避让；配套=E 档蓝图深化（uFx 密径线+跑马近静）+B 元素（环进动+光锥扫掠）。
+    for mark, why in [("function _hslotTex", "机柜槽位条纹理"),
+                      ("方案C 机柜切片", "机柜化注释锚"),
+                      ("_rank={fix:0,ok:1,park:2}", "分诊排序(可救顶置)"),
+                      ("EdgesGeometry", "线框舱体"),
+                      ("rackH", "机柜高度记账"),
+                      ("getWorldPosition", "槽位拾取世界坐标化"),
+                      ("捏红槽=救活", "下钻章话术(星→槽)"),
+                      ("捏合=武装救活", "悬停槽救活提字"),
+                      ("holoDrill.rackH+0.55", "核为魂柜为身(上浮避让)"),
+                      ("uFx", "E 档蓝图 uniform"),
+                      ("48 根密径线", "蓝图密径线"),
+                      ("rg.rotation.x+=dt*0.022", "反应堆环倾角进动"),
+                      ("光锥扫掠", "揭幕光锥扫掠")]:
+        check(f"W28 机柜下钻 {why}", mark in html)
+
+    # W29 告警可解释+事件降噪+满载色语义（2026-08-21 五视角方案 P1，表格视图线）：失守胶囊
+    # 点开=巡检人话明细+就地归位（值班员不再翻 logs/cluster_posture.json）；>7 天旧闻折叠一行；
+    # 姿态健康的「编制满载」显存条走品牌青紫（红色留给真事故）；高水位徽章降为描边章。
+    check("W29 服务 失守明细入快照(err_items 各裁6条)", "err_items" in srv)
+    for mark, why in [("t===\"__drill\"", "胶囊开合明细(读为先·不进武装链)"),
+                      ("class='cmdrill'", "明细块 DOM(模式条整行子块)"),
+                      ("const _poLine", "明细人话化(机器id→中文名+IP尾号,剥CLI修复尾)"),
+                      ("确认归位 · 按当前模式重放", "明细内归位动词(执行器护栏照常)"),
+                      ("||cm.switching) cmDrillOpen=false", "痊愈/切换开始明细自动收"),
+                      ("let evOldOpen", "旧闻折叠开关"),
+                      ("天前的旧闻", "折叠行文案(点击展开)"),
+                      ("_planFull&&f>=.75", "编制满载条色青紫(红留给真事故)"),
+                      ("background:transparent;color:var(--amber)", "高水位徽章降噪(描边章)")]:
+        check(f"W29 P1 {why}", mark in html)
+
+    # W30 色彩收编+徽章合一（2026-08-21 五视角方案 P2，表格视图线）：模式条按钮静息=
+    # 中性文字+识别色点（一行五色的「色彩沙拉」收成一套安静语言，悬停才亮模式色）；
+    # 警示动作统一琥珀；.flag 与 .cmpo 徽章规格合一；手势 ack 靶限定未折叠区；
+    # 语音章麦名显示位收 16 字（全名 title）。
+    for mark, why in [("style='--mac:", "按钮识别色走自定义属性(静息不染文字)"),
+                      ("class='bdot'", "模式识别色点(电视距离可辨)"),
+                      (".cmbtn.cmwarn{color:var(--amber)", "警示动作统一琥珀(金色退场)"),
+                      (".flag{font-size:11.5px;font-weight:800;border-radius:8px",
+                       "徽章规格与 cmpo 合一"),
+                      ("state.focusKey=(evFresh.find", "ack 靶限定未折叠区(无隐形靶)"),
+                      ("vMicLabel.length>16", "语音章麦名收 16 字(全名 title)")]:
+        check(f"W30 P2 {why}", mark in html)
+
+    # W31 八卦罗盘中国风重塑（2026-08-21 五视角方案·青铜鎏金观星仪，全息视图线）：盘面=canvas
+    # 烘焙鎏金蚀刻叠加层（底层 procedural 地台管揭幕/涟漪/模式环不动）；数据诚实三通道=时辰环
+    # 高亮(真时钟)/干支纪日章(真日历,1949-10-01 甲子日锚)/天池寻凶针(真告警指病机,平时隐匿)；
+    # 辐条=天圆地方玉琮方框+五行本命色(结构层,病机让位状态色)+卦符佩章(后天卦宫方位派生·台座
+    # 铭牌外置)；中枢=太极北辰（保浑天仪线框锚）；汉字雨干支卦符化=全视图世界观统一；
+    # 只取方位·计时·星官器物层不上占断内容（D8）。
+    for mark, why in [("function holoLuopanTex", "罗盘盘面烘焙"),
+                      ("子癸丑艮寅甲卯乙辰巽巳丙午丁未坤申庚酉辛戌乾亥壬", "二十四山正针序列(考据)"),
+                      ("HOLO_BAGUA", "后天八卦爻表"),
+                      ("HOLO_WUXING", "五行本命表"),
+                      ("function holoGanzhiDay", "干支纪日(真日历)"),
+                      ("2433191", "甲子日锚(1949-10-01)"),
+                      ("function holoShichen", "时辰钟(真时间)"),
+                      ("function holoGuaTex", "卦符佩章纹理"),
+                      ("function holoTaijiTex", "太极北辰章"),
+                      ("寻凶针", "告警指针"),
+                      ("holoS._ndlV", "寻凶针显隐驱动(平时隐匿)"),
+                      ("function holoRelic", "六器成形工厂(2026-08-21 夜北斗方案 D3：玉琮方框→身份器物+线描剪影)"),
+                      ("nd.wxCol||colStr", "五行结构色(病机让位状态色)"),
+                      ("甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌亥☰", "汉字雨干支卦符化"),
+                      ("回纹", "回纹边带"),
+                      ("SpriteMaterial 无图编译后补 map", "精灵材质带图出生纪律(白块实锤)")]:
+        check(f"W31 罗盘 {why}", mark in html)
+
+    # W32 观星仪收官（2026-08-21 罗盘方案 P2 余项+P3 转正）：二十八宿星官连线（四象各取一宿，
+    # 方位对齐罗盘=天地呼应；宿形示意星图，心宿二按「大火」礼制微红；静态结构层不随星野缓旋）+
+    # 飞览解说五行化（固定串保 TTS 缓存）+ 提词卡欢迎幕罗盘解说 + 太极旋纹核（中枢专属 uTaiji，
+    # ±20% 亮度双臂回旋，健康色语义不受扰）。
+    for mark, why in [("SKY28", "二十八宿数据表"),
+                      ("心宿", "东苍龙宿"), ("斗宿", "北玄武宿"),
+                      ("参宿", "西白虎宿"), ("井宿", "南朱雀宿"),
+                      ("大火", "心宿二微红礼制"),
+                      ("holoS._skyO", "星官随揭幕后段点亮"),
+                      ("uTaiji", "太极旋纹 uniform(中枢专属)"),
+                      ("五行属", "飞览解说五行化"),
+                      ("斗为帝车，临制四方", "中枢解说词(北斗方案 D6：北辰居中→帝车)")]:
+        check(f"W32 观星仪 {why}", mark in html)
+    check("W32 提词卡 罗盘解说入欢迎幕", "罗盘观星仪" in rst and "金针一出" in rst)
+
+    # W33 北斗七星阵与六器成形（2026-08-21 夜 五视角方案）：座次=《晋书·天文志》职掌正典逐席有出处
+    # （枢为天=中枢/璇为地=声备/玑为人=脸备/权为时=听写/衡为音=韵声/阳为律=口型/光为星=虚位），
+    # 总叙事=《史记·天官书》「斗为帝车」；六器=编钟/磬(钟磬主备对)/竹简卷/变脸面具(川剧变脸×AI换脸)/
+    # 埙(以口吹奏)+浑天仪，全套 holoMat=全息古器物+同几何线描剪影；管道自天枢席扇出（帝车放射）；
+    # 摇光虚位以待（扩容席，虚线鎏金不可拾取）；辅星傅乎开阳（丞相之象彩蛋）；斗柄授时章（鹖冠子，
+    # 真日期→季节）；CONS_ANG 保留=2D 星座视图与席位溢出兜底。
+    for mark, why in [("HOLO_SEAT", "七星座次表(单一真相)"),
+                      ("枢为天", "晋书职掌正典注释"),
+                      ("玉衡", "衡为音席(韵声)"),
+                      ("摇光", "光为星席(虚位)"),
+                      ("虚位以待", "扩容席叙事"),
+                      ("holoS.douDeco", "斗链+虚位+辅星一体生命周期"),
+                      ("斗魁合口", "魁四星闭合刻线"),
+                      ("辅星傅乎开阳", "辅星彩蛋(晋书出处)"),
+                      ("帝车放射", "管道自天枢席扇出"),
+                      ("function holoRelic", "六器几何工厂"),
+                      ("编钟", "韵声器形"), ("钟磬主备对", "磬=声备器形(成对成语)"),
+                      ("竹简卷", "听写器形"), ("变脸面具", "脸备器形(川剧变脸×AI换脸)"),
+                      ("以口吹奏", "埙=口型器形"),
+                      ("function _maskArtTex", "金线脸谱浮层(D7)"),
+                      ("function _relicEdges", "线描剪影层(白描+光体双层)"),
+                      ("nd.relic", "器物与线描同步旋转"),
+                      ("function holoDouBiaoTex", "斗柄授时章(真日期)"),
+                      ("holoS._dbMo", "授时章跨月换面"),
+                      ("斗为帝车，六台机各居北斗一席", "提词卡帝车词")]:
+        check(f"W33 北斗 {why}", mark in (html if mark!="斗为帝车，六台机各居北斗一席" else rst))
 
     bad = [m for ok, m in results if not ok]
     for ok, m in results:

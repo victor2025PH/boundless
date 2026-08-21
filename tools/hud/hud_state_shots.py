@@ -49,7 +49,31 @@ SCENES = [("ok", "ok", ""), ("warn", "warn", ""), ("down", "down", ""),
           # 姿态漂移带「一键归位」章（cmstate demo 注入层直达，确定性像素）
           ("cm_idle", "ok", "&cmstate=idle"),
           ("cm_switching", "ok", "&cmstate=switching"),
-          ("cm_repair", "warn", "&cmstate=repair")]
+          ("cm_repair", "warn", "&cmstate=repair"),
+          # P0 电视台化（2026-08-18）：全屏舞台（3D 铺满+悬浮 chrome）/ 电视台告警插播
+          # （down 场景脸备失联=apBeat 自动聚焦+红脉冲；hpT 注入钉死节拍=headless 确定性）/
+          # 切换叙事卡（cmstate=switching × autoplay=全屏进度卡）/ 帮助层词表卡
+          ("stage_full", "ok", "&view=holo&stage=full"),
+          ("autoplay_alert", "down", "&view=holo&autoplay=1"),
+          ("tv_switching", "ok", "&view=holo&autoplay=1&cmstate=switching"),
+          ("help", "ok", "&help=1"),
+          # P2 实控升维（2026-08-18 三轮）：演示状态=数据流粒子×2+辉光增强（warn 场景有
+          # 高 util 机+告警红粒入镜）；空中面板升维景复用 holo_panel（悬浮倾斜/抓手已入镜）
+          ("fx_show", "warn", "&view=holo&stage=full&show=1"),
+          # P0 排版预算化（2026-08-21 排版错乱五视角方案）：失守态曾把归位钮撑出面板右缘——
+          # cm_repair_narrow=失守胶囊在窄窗（1024 宽）不出界；cm_fired=点火回执独立行；
+          # short_win=矮窗（640 高）事件区收敛不憋死。第 4 元=该景专属窗口尺寸（缺省 1920×1080）
+          ("cm_repair_narrow", "warn", "&cmstate=repair", "1024,700"),
+          ("cm_fired", "ok", "&cmstate=fired"),
+          ("short_win", "ok", "", "1600,640"),
+          # P1 失守下钻（2026-08-21）：胶囊点开=巡检人话明细+就地归位（warn 场景另带旧闻折叠行）
+          ("cm_drill", "warn", "&cmstate=repair&cmdrill=1"),
+          # P2 全息沙盘重做（2026-08-21 方案A+C+E）：机柜双列 21 项（svcmany 合成）/ 蓝图素颜档。
+          # rack 景刻意用卡片态：QA 价值=双列布局本身；stage+rack=全矩阵最重景（300 虚拟帧×60+ 精灵
+          # ×SwiftShader），在 GPU 长任务抢 CPU 的日子会顶到 90s 超时（2026-08-21 实锤，超时 kill
+          # 还会留 Edge 孤儿进程锁住默认配置=后续场景连环弹跳）
+          ("holo_rack_full", "warn", "&view=holo&holodrill=zhongshu&svcmany=1"),
+          ("holo_fx0", "warn", "&view=holo&stage=full&fx=0")]
 SIZE = "1920,1080"
 
 EDGE_CANDIDATES = [
@@ -65,17 +89,32 @@ def find_edge() -> Path | None:
     return None
 
 
-def shoot(edge: Path, scene: str, out: Path, extra: str = "", scale: int = 1) -> tuple[bool, str]:
+def shoot(edge: Path, scene: str, out: Path, extra: str = "", scale: int = 1,
+          size: str = "") -> tuple[bool, str]:
     url = BASE + scene + extra
     cmd = [str(edge), "--headless=new", "--disable-gpu", "--hide-scrollbars",
-           f"--window-size={SIZE}", "--virtual-time-budget=5000",
+           f"--window-size={size or SIZE}", "--virtual-time-budget=5000",
            f"--screenshot={out}", url]
     if scale > 1:
         cmd.insert(4, f"--force-device-scale-factor={scale}")   # 营销档：2x=3840×2160 印刷级
     try:
-        r = subprocess.run(cmd, capture_output=True, timeout=90)
+        # 150s：stage 重景（fx_show/tv_switching/全息机柜）=300 虚拟帧×SwiftShader 软渲，
+        # 撞上集群 GPU 长任务抢 CPU 的日子实测 90s 会间歇翻车（2026-08-21 两连锤）
+        r = subprocess.run(cmd, capture_output=True, timeout=150)
         ok = out.is_file() and out.stat().st_size > 30_000
         return ok, ("" if ok else f"exit={r.returncode} size={out.stat().st_size if out.is_file() else 0}")
+    except subprocess.TimeoutExpired as e:
+        # 超时 kill 只杀直接子进程：Edge 进程树留孤儿锁默认配置目录→后续场景启动
+        # 「附身弹跳」秒退零字节（2026-08-21 实锤 11 只孤儿）。按本景截图路径特征清整树。
+        try:
+            subprocess.run(["powershell", "-NoProfile", "-Command",
+                            "Get-CimInstance Win32_Process -Filter \"Name='msedge.exe'\" | "
+                            "Where-Object { $_.CommandLine -match 'headless' } | "
+                            "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"],
+                           capture_output=True, timeout=30)
+        except Exception:  # noqa: BLE001
+            pass
+        return False, f"TimeoutExpired: {e}"
     except Exception as e:  # noqa: BLE001
         return False, f"{type(e).__name__}: {e}"
 
@@ -85,7 +124,12 @@ def shoot(edge: Path, scene: str, out: Path, extra: str = "", scale: int = 1) ->
 MARKETING = [("holo", "down", "&view=holo"),
              ("holo_panel", "down", "&view=holo&holopanel=lianbei"),
              ("holo_drill", "warn", "&view=holo&holodrill=zhongshu"),
-             ("tour_flyby", "ok", "&view=holo&tour=welcome&visitor=贵宾示例&tourat=13")]
+             ("tour_flyby", "ok", "&view=holo&tour=welcome&visitor=贵宾示例&tourat=13"),
+             # 电视台化（2026-08-18）：全屏舞台+告警插播+切换叙事卡三景补进营销包
+             ("stage_full", "ok", "&view=holo&stage=full"),
+             ("autoplay_alert", "down", "&view=holo&autoplay=1"),
+             ("tv_switching", "ok", "&view=holo&autoplay=1&cmstate=switching"),
+             ("fx_show", "warn", "&view=holo&stage=full&show=1")]
 
 
 def marketing(edge: Path) -> int:
@@ -114,9 +158,9 @@ def main() -> int:
         return marketing(edge)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     shots, fails = [], 0
-    for name, sc, extra in SCENES:
+    for name, sc, extra, *rest in SCENES:
         out = OUT_DIR / f"{name}.png"
-        ok, why = shoot(edge, sc, out, extra)
+        ok, why = shoot(edge, sc, out, extra, size=(rest[0] if rest else ""))
         if ok:
             shots.append({"scene": name, "file": str(out), "bytes": out.stat().st_size})
             print(f"OK   {name} -> {out.name} ({out.stat().st_size // 1024}KB)")

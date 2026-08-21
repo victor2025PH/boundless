@@ -172,7 +172,7 @@ def set_dictate(on: bool) -> dict:
     （防连续听写半句缓冲被后续当成指令误解析）。"""
     on = bool(on)
     if on and not (_deps.get("ctrl_active") and _deps["ctrl_active"]()):
-        return {"ok": False, "error": "先刷脸武装某台机的受控会话，再开语音打字"}
+        return {"ok": False, "error": "先武装某台机的受控会话，再开语音打字"}
     _dictate.update(on=on, at=time.time())
     if not on:
         with _lock:
@@ -254,7 +254,7 @@ def _match_ops(t: str, pin: str, mid: str | None):
         if target:
             return {"verb": "ops_arm", "ops_verb": "mode_switch",
                     "args": {"target": target}, "tier": "T2"}
-    # P0 联动 2026-08-14：姿态归位（漂移了一句话拉回当前模式编制；仍 T2 两段式+刷脸）
+    # P0 联动 2026-08-14：姿态归位（漂移了一句话拉回当前模式编制；仍 T2 两段式）
     if "归位" in t and any(w in t for w in ("姿态", "模式", "算力", "一键", "集群")):
         return {"verb": "ops_arm", "ops_verb": "posture_repair", "args": {}, "tier": "T2"}
     if "换脸" in t and ("切" in t or "换到" in t):
@@ -280,6 +280,9 @@ VERBS = {
     "detail":   (["放大", "看看", "看一下", "打开", "详情", "fangda"], True,  "T0"),
     "view":     (["星座", "表格", "列表", "事件", "告警流", "概览"],   False, "T0"),
     "collapse": (["收起", "返回", "关闭面板", "shouqi"],               False, "T0"),
+    # P2 演示状态宏（2026-08-18 三轮）：特效满档+切全息（纯呈现层 T0；关=说「收起」回安静档由
+    # collapse 兼管——collapse 在前不冲突：「演示状态」不含其触发词）
+    "show":     (["演示状态", "特效全开", "展演特效", "yanshi"],       False, "T0"),
     "tour":     (["欢迎", "开始展演", "下一幕", "谢幕", "结束展演"],   False, "T0"),
     # P0 联动 2026-08-14：算力模式问询（T0 只读秒答：当前模式/切换进度/姿态一句话）
     "mode_query": (["什么模式", "哪个模式", "当前模式", "切换进度", "模式进度", "切到哪"],
@@ -365,11 +368,14 @@ def _exec_intent(it: dict) -> tuple[str, dict, bool]:
         return ("已撤销，恢复原样。" if r.get("ok")
                 else f"撤销失败：{r.get('error', '')[:50]}"), {"act": "ops"}, r.get("ok", False)
     if verb == "panel":
-        # P2 语音开盘：面板动作仍全走既有护栏（危险动词面板只武装,点火要第二段在场信号+刷脸）
+        # P2 语音开盘：面板动作仍全走既有护栏（危险动词面板只武装,点火要第二段在场信号）
         return f"已打开{mzh}的操作盘。", {"act": "panel", "m": mid}, True
     if verb == "drill":
         # P4 语音下钻：子星环绕看服务；救活仍两段式（无编目服务时客户端退操作盘）
         return f"已下钻{mzh}的服务。", {"act": "drill", "m": mid}, True
+    if verb == "show":
+        # P2 演示状态宏（2026-08-18 三轮）：客户端 setShow=粒子×2+辉光增强+切全息（纯呈现层）
+        return "演示状态已开，特效全开。", {"act": "show"}, True
     if verb == "detail":
         return f"好的，为您放大{mzh}。", {"act": "detail", "m": mid}, True
     if verb == "view":

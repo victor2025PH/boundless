@@ -31,6 +31,10 @@
   POST /api/desktop/want   {machine,on}  HUD 拉屏时刷新「想看 X」（TTL 12s）
   POST /api/cockpit/throw  {screen,dir,machine}  C0 甩桌面跨屏（座次邻接路由→ctx.handoff 广播）
   POST /api/gest/beat      {screen,q,hands,src}  C1 指挥权心跳（纯函数仲裁→ctx.gestlead,迟滞接力）
+  POST /api/tour {focus:"<机器id>"|""}   导演位聚焦（P1 电视台化 2026-08-18）：飞览跳到某机/取消。
+                           T0 呈现层；不 bump seq=不触发欢迎动画重播，Condition 即时推快照
+  POST /api/narrate {text}  飞览解说 TTS 代理（同机小界 :7912 /api/tts；文本固定=磁盘缓存直命中；
+                           代理是为绕浏览器跨端口 CORS——HUD 页面在 :7913，小界在 :7912）
   GET  /api/desktop/<X>.jpg  最新屏帧（陈旧 404）；GET /api/desktop/list  在推的屏
 
 心跳：C:/Users/Public/boundless-hud/hud_server_state.json 每 30s 一行
@@ -118,6 +122,11 @@ HISTORY = Path(r"C:\Users\Public\boundless-hud\history.jsonl")
 BOARD_STATE = Path(r"C:\Users\Public\boundless-hud\board_state.json")
 HEARTBEAT = Path(r"C:\Users\Public\boundless-hud\hud_server_state.json")
 USAGE = Path(r"C:\Users\Public\boundless-hud\hud_usage.jsonl")
+# P1 飞览解说（2026-08-18 电视台化）：代理小界 /api/tts 绕跨端口 CORS。LAN 直连必须绕系统代理
+# （AGENTS 红线：Windows urllib 默认吃注册表代理，死端口经代理回 502「装活」——lan_probe_lint 同款修法）。
+_NOPROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+_NARR_CACHE: dict[str, bytes] = {}      # 文本→wav 内存 LRU（小界侧另有磁盘缓存，这层省一跳）
+XIAOJIE_TTS = "http://127.0.0.1:7912/api/tts"
 
 # VRAM 水位两档（判据单一真相在 render_cluster_board.py，此处只读它的计数结果；
 # 阈值分钟数与其 VRAM_BADGE_MIN/VRAM_SAT_MIN 同值——hud_contract_test 逐值对账防漂移）
@@ -150,6 +159,26 @@ def screens() -> dict[str, dict]:
         rec["modes"] = sorted(rec["modes"])
         rec["age_s"] = round(now - rec.pop("since"))
     return out
+
+
+def air_snapshot() -> dict:
+    """页活快照：SSE 连着哪些机 + 电视台是否在播。
+    Watch 认 /health.screens（Edge 进程活 ≠ 页活）；doctor 认心跳 tv_on_air。
+    不造第二套 ping 端点——SSE 注册表就是页活信号。"""
+    scr = screens()
+    names = sorted(k for k in scr if k and k != "?")
+    tv_mid = ""
+    ck = cockpit()
+    if ck:
+        for s in ck.get("screens") or []:
+            if s.get("tv"):
+                tv_mid = str(s.get("machine") or "")
+                break
+    return {
+        "screens": names,
+        "tv": tv_mid,
+        "tv_on_air": bool(tv_mid and tv_mid in scr),
+    }
 
 # U 型指挥舱（C0 · 2026-08-13）：cockpit.json=屏↔机↔座次 SSOT（boundless deploy 目录，
 # 与 modes/machines 同居）。mtime 缓存零 IO 常数;文件缺席=全部 C0 特性休眠（零回归）。
@@ -255,6 +284,23 @@ def svc_by_machine() -> dict:
                 if not up and name in fixable:
                     rec["fix"] = True           # 可救=在 svc_restart 合法集（红星）；其余 down=泊车灰
                 data.setdefault(claimed.get(name, hub_mid), []).append(rec)
+            # 口型机=AvatarHub Lite 自治装机（cluster_map _note_mode_20260816：自带 :9000 Hub
+            # 守护 lipsync/faceswap/fish/stt/vcam）——服务不经中枢 Hub 编目，此前 ctx.svc 五键
+            # 缺 kouxing 是探测盲区不是诚实空（2026-08-18 二轮补齐）。直探其 Lite /health（判据
+            # 同构：同一软件 Lite 档），全部标「远端不可救」语义=绿在跑/灰不在跑（fix 只认中枢
+            # _dead_engines，远端死服务中枢救不了不给假按钮——韵声 moss_ttsd 先例）；失败保留上次。
+            try:
+                kx = next((m for m in xj._machines() if m.get("id") == "kouxing"), None)
+                if kx and kx.get("ip"):
+                    req_kx = urllib.request.Request(f"http://{kx['ip']}:9000/health")
+                    with _NOPROXY.open(req_kx, timeout=2) as r2:
+                        lh = json.loads(r2.read().decode("utf-8", "replace")).get("services") or {}
+                    if isinstance(lh, dict) and lh:
+                        data["kouxing"] = [{"n": k, "up": bool(v)} for k, v in sorted(lh.items())]
+            except Exception:
+                old_kx = (_svc_cache.get("data") or {}).get("kouxing")
+                if old_kx:
+                    data["kouxing"] = old_kx
             _svc_cache["data"] = data
     except Exception:
         pass                        # 保留上次数据（新鲜度换可用性；下一拍再试）
@@ -275,7 +321,9 @@ TELEM_FRESH_S = 12
 # 编排对时用服务端时钟：ctx 带 srv_epoch，客户端算钟差后按服务器时间轴播放
 # （机间时钟漂移的老问题，age_s 服务端计算的同一防线）。
 TOUR_STEPS = ["常态", "欢迎", "手势", "语音", "手机", "点火", "谢幕"]   # 0..6，与遥控页/HUD 同源
-TOUR = {"step": 0, "name": TOUR_STEPS[0], "seq": 0, "at": 0.0, "visitor": ""}
+# focus=导演位聚焦（P1 电视台化 2026-08-18）：{"m":机器id,"at":时刻} 或 None——飞览（欢迎幕/电视台档）
+# 期间跳到某机并停自动节拍；客户端 90s 新鲜窗自动过期，遥控页可随时取消。T0 呈现层零运维动词。
+TOUR = {"step": 0, "name": TOUR_STEPS[0], "seq": 0, "at": 0.0, "visitor": "", "focus": None}
 _tour_cond = threading.Condition()
 TOUR_PIN = os.environ.get("HUD_TOUR_PIN", "")      # 默认空=LAN 开放（遥控只有 T0 呈现动词）
 _VISITOR_RE = re.compile(r"[<>&\"'\\\x00-\x1f]")
@@ -288,6 +336,7 @@ def set_tour(step: int, visitor=None) -> dict:
         TOUR["name"] = TOUR_STEPS[step]
         TOUR["seq"] += 1
         TOUR["at"] = round(time.time(), 3)
+        TOUR["focus"] = None            # 幕切走一次性清场：导演位聚焦不跨幕残留
         if visitor is not None:
             TOUR["visitor"] = _VISITOR_RE.sub("", str(visitor))[:24].strip()
         _tour_cond.notify_all()
@@ -395,11 +444,7 @@ def build_ctx() -> dict:
     except Exception:
         ctx["voice"]["dictate"] = False
     ctx["ops"] = dict(og.OPS_LAST)                # 隔空指挥相位（armed/fired/denied 六屏同源）
-    try:
-        import face_auth  # noqa: PLC0415
-        ctx["ops"]["auth"] = "face" if face_auth.enabled() else "presence"   # 武装卡提示语用
-    except Exception:
-        ctx["ops"]["auth"] = "presence"
+    ctx["ops"]["auth"] = "presence"               # 刷脸层已拆除（2026-08-21）：武装卡提示语恒纯在场信号
     ctx["wands"] = sorted({sid for sid, w in WANDS.items()
                            if now - w["ts"] <= WAND_FRESH_S + 3})   # 布尔级：目标机见到自己才开拉取
     ctx["pullable"] = sorted(m for m, t in AGENTS.items() if now - t <= AGENT_FRESH_S)  # 有活 agent=可拉屏
@@ -451,7 +496,11 @@ def build_ctx() -> dict:
             ctx["clustermode"]["posture"] = {
                 "ok": bool(po.get("ok")), "errors": len(po.get("errors") or []),
                 "warns": len(po.get("warns") or []), "checked": int(po.get("checked") or 0),
-                "top": str((po.get("errors") or po.get("warns") or [""])[0])[:80]}
+                "top": str((po.get("errors") or po.get("warns") or [""])[0])[:80],
+                # [P1-1 2026-08-21] 失守下钻：巡检人话原文带进快照（各裁 6 条×120 字），
+                # HUD 点失守胶囊直看明细+就地归位，值班员不再翻 logs/cluster_posture.json
+                "err_items": [str(x)[:120] for x in (po.get("errors") or [])[:6]],
+                "warn_items": [str(x)[:120] for x in (po.get("warns") or [])[:6]]}
     except Exception:
         pass
     try:
@@ -542,13 +591,7 @@ def preflight() -> dict:
     except Exception:
         add("语音采集", "info", "语音态不可读")
     add("遥控 PIN", "info", "已启用" if TOUR_PIN else "未启用（LAN 内任何人可切幕；仅 T0 呈现层）")
-    try:
-        ost = og.state()
-        who = "、".join(ost.get("operators") or [])
-        add("点火授权", "ok" if ost.get("auth_mode") == "presence+face" else "info",
-            f"刷脸层开 · 操作员：{who}" if who else "纯在场信号（登记操作员后自动升级刷脸）")
-    except Exception:
-        add("点火授权", "info", "状态不可读")
+    add("点火授权", "ok", "在场信号（手势/语音/键盘/鼠标）· 刷脸层已拆除（2026-08-21）")
     ok = not any(c["level"] == "warn" for c in checks)
     return {"ok": ok, "checks": checks, "ts": round(time.time())}
 
@@ -573,10 +616,13 @@ def heartbeat_loop() -> None:
                 n = _clients
             now = time.time()
             telem_ages = {k: round(now - v["ts"]) for k, v in TELEM.items()}
+            air = air_snapshot()
             tmp = HEARTBEAT.with_suffix(".tmp")
             tmp.write_text(json.dumps({
                 "ts": round(now), "clients": n, "hist_age_s": age, "port": PORT,
                 "telem": telem_ages,
+                "screens": air["screens"],       # doctor/Watch 页活：哪几台 SSE 连着
+                "tv": air["tv"], "tv_on_air": air["tv_on_air"],
                 "voice": vg.status(),            # doctor「语音指挥」读它
                 "ops": og.state(),               # doctor「隔空指挥」读它（旗标/熔断/审计龄）
                 "ctrl": og.ctrl_state(),         # doctor「隔空受控」读它（白名单/已部署/总闸/熔断）
@@ -863,8 +909,11 @@ class Handler(BaseHTTPRequestHandler):
                 n = _clients
             now = time.time()
             tf = sum(1 for v in TELEM.values() if now - v["ts"] <= TELEM_FRESH_S)
+            air = air_snapshot()
             self._send(200, json.dumps({"ok": True, "service": "hud", "port": PORT,
-                                        "clients": n, "telem_fresh": tf}).encode())
+                                        "clients": n, "telem_fresh": tf,
+                                        "screens": air["screens"],
+                                        "tv": air["tv"], "tv_on_air": air["tv_on_air"]}).encode())
         else:
             self._send(404, b"{}")
 
@@ -949,6 +998,22 @@ class HandlerWithPost(Handler):
             if TOUR_PIN and str(payload.get("pin") or "") != TOUR_PIN:
                 self._send(401, json.dumps({"ok": False, "error": "pin"}).encode())
                 return
+            if "focus" in payload and payload.get("step") is None:
+                # 导演位聚焦（P1 电视台化 2026-08-18）：飞览跳到某机；空串=取消聚焦。
+                # 刻意不 bump seq（seq 变更会让 15s 窗内的屏重播欢迎动画）；Condition 即时推快照。
+                mid = str(payload.get("focus") or "").strip().lower()
+                if mid and not any(m.get("id") == mid for m in xj._machines()):
+                    self._send(400, json.dumps(
+                        {"ok": False, "error": f"机器「{mid}」不在台账"},
+                        ensure_ascii=False).encode("utf-8"))
+                    return
+                with _tour_cond:
+                    TOUR["focus"] = ({"m": mid, "at": round(time.time(), 3)} if mid else None)
+                    _tour_cond.notify_all()
+                log_stat("tour_focus", m=(mid or "clear"), src="remote")
+                self._send(200, json.dumps({"ok": True, "tour": dict(TOUR)},
+                                           ensure_ascii=False).encode("utf-8"))
+                return
             raw = payload.get("step")
             if raw == "next":
                 step = (TOUR["step"] + 1) % len(TOUR_STEPS)
@@ -969,6 +1034,31 @@ class HandlerWithPost(Handler):
             ok = log_stat(str(payload.get("k") or ""), m=str(payload.get("m") or ""),
                           v=str(payload.get("v") or ""), src=str(payload.get("src") or ""))
             self._send(200 if ok else 400, json.dumps({"ok": ok}).encode())
+        elif u.path == "/api/narrate":
+            # P1 飞览解说（2026-08-18）：文本→小界 TTS wav（固定台词=小界磁盘缓存逐字节命中，
+            # 不给 Fish 添活）。失败 503——客户端字幕照出、只是不出声（诚实降级）。
+            text = str(payload.get("text") or "").strip()[:80]
+            if not text:
+                self._send(400, b'{"ok": false}')
+                return
+            wav = _NARR_CACHE.get(text)
+            if wav is None:
+                try:
+                    req = urllib.request.Request(
+                        XIAOJIE_TTS,
+                        data=json.dumps({"text": text}, ensure_ascii=False).encode("utf-8"),
+                        headers={"Content-Type": "application/json"}, method="POST")
+                    with _NOPROXY.open(req, timeout=25) as r:
+                        wav = r.read() if r.status == 200 else b""
+                except Exception:
+                    wav = b""
+                if len(_NARR_CACHE) > 40:       # 台词表就六机+告警句，40 条封顶足够
+                    _NARR_CACHE.clear()
+                _NARR_CACHE[text] = wav
+            if wav:
+                self._send(200, wav, "audio/wav")
+            else:
+                self._send(503, b'{"ok": false, "error": "tts unavailable"}')
         elif u.path == "/api/voice/dictate":
             # P2b 语音打字开关（HUD 在受控武装态下切换；判据在 voice_gateway.set_dictate）
             res = vg.set_dictate(bool(payload.get("on")))
@@ -1079,8 +1169,7 @@ class HandlerWithPost(Handler):
                     res = og.arm(str(payload.get("verb") or ""), payload.get("args") or {},
                                  by=str(payload.get("by") or "hud"), src=src)
                 elif act == "fire":
-                    res = og.fire(str(payload.get("id") or ""), src=src,
-                                  frame_b64=str(payload.get("frame") or ""))
+                    res = og.fire(str(payload.get("id") or ""), src=src)
                 elif act == "disarm":
                     res = og.disarm(str(payload.get("id") or ""), src=src)
                 elif act == "undo":
@@ -1092,13 +1181,12 @@ class HandlerWithPost(Handler):
             except Exception as e:  # noqa: BLE001
                 self._send(500, json.dumps({"ok": False, "error": str(e)[:160]}).encode())
         elif u.path.startswith("/api/ctrl/"):
-            # 隔空受控（P2 输入注入）：武装(刷脸)/动作/撤防——判据全在 ops_gateway（四重护栏）
+            # 隔空受控（P2 输入注入）：武装/动作/撤防——判据全在 ops_gateway（四重护栏）
             act = u.path[len("/api/ctrl/"):]
             src = str(payload.get("src") or "")[:16]
             try:
                 if act == "arm":
-                    res = og.ctrl_arm(str(payload.get("machine") or ""), by="hud", src=src,
-                                      frame_b64=str(payload.get("frame") or ""))
+                    res = og.ctrl_arm(str(payload.get("machine") or ""), by="hud", src=src)
                 elif act == "action":
                     res = og.ctrl_action(str(payload.get("token") or ""),
                                          str(payload.get("kind") or ""), payload, src=src)

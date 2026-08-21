@@ -71,7 +71,7 @@ body.night #nightshade{opacity:.38}
 @keyframes breathe{0%,100%{opacity:.75}50%{opacity:1}}
 @keyframes glitch{25%{transform:translate(2px,-1px);filter:hue-rotate(18deg)}75%{transform:translate(-2px,1px);filter:hue-rotate(-14deg)}}
 /* ---- 标题区 ---- */
-#hd{display:flex;align-items:center;gap:14px;padding-bottom:12px;
+#hd{display:flex;align-items:center;flex-wrap:wrap;gap:6px 14px;padding-bottom:12px;
     border-bottom:1px solid transparent;
     border-image:linear-gradient(90deg,var(--neon-cyan),var(--neon-violet)) 1}
 #title{font-size:27px;font-weight:900;letter-spacing:1px;
@@ -89,10 +89,12 @@ body.night #nightshade{opacity:.38}
 /* ---- 六机行 ---- */
 #rows{padding:6px 0 2px}
 /* ---- [2026-08-16] 算力模式条（仅第一屏表格视图）：控制台徽章撤下后 HUD 首屏=鼠标切换主入口 ---- */
-#modebar{display:none;align-items:center;gap:10px;padding:9px 6px 3px;font-size:14px;
-  border-bottom:1px solid rgba(139,92,246,.28)}
+#modebar{display:none;align-items:center;flex-wrap:wrap;gap:4px 10px;padding:9px 6px 3px;
+  font-size:14px;border-bottom:1px solid rgba(139,92,246,.28)}
+  /* [P0 2026-08-21] flex-wrap=换行保险丝：失守态徽章+归位钮+回执曾把单行撑出面板右缘 */
 #modebar .cmdot{width:10px;height:10px;border-radius:50%;flex:none}
 #modebar .cmname{font-weight:900;font-size:16px;white-space:nowrap}
+#modebar .cmpre{font-style:normal}   /* 窄屏断点下省略的「算力模式 · 」前缀载体 */
 #modebar .cmid{color:var(--mut);font-size:12.5px;white-space:nowrap}
 #modebar .cmpo{font-size:11.5px;font-weight:800;border-radius:8px;padding:2px 8px;white-space:nowrap}
 #modebar .cmpo.ok{color:#2EC27E;border:1px solid rgba(46,194,126,.45)}
@@ -100,13 +102,39 @@ body.night #nightshade{opacity:.38}
 #modebar .cmpo.bad{color:var(--red-t);border:1px solid rgba(222,60,70,.55)}
 #modebar .cmsw{color:#E8B341;font-weight:800}
 #modebar .sp{flex:1}
-#modebar .cmbtn{cursor:pointer;font:inherit;font-size:13px;font-weight:800;
+#modebar .cmbtn{cursor:pointer;font:inherit;font-size:13px;font-weight:800;color:var(--txt2);
   background:rgba(255,255,255,.05);border:1px solid rgba(139,147,168,.45);
   border-radius:10px;padding:5px 12px;white-space:nowrap}
-#modebar .cmbtn:hover{background:rgba(255,255,255,.13)}
+/* [P2-1 2026-08-21] 色彩收编：静息=中性文字+识别色点（bdot 扛模式身份），悬停才亮该模式色——
+   一行五色的「色彩沙拉」收成一套安静语言；--mac=按钮自带识别色 */
+#modebar .cmbtn:hover{background:rgba(255,255,255,.12);color:var(--mac,var(--txt));
+  border-color:color-mix(in srgb,var(--mac,#8B93A8) 55%,transparent)}
 #modebar .cmbtn:disabled{opacity:.45;cursor:default}
-#modebar .cmfb{font-size:12.5px;font-weight:700;color:var(--amber);white-space:nowrap}
+#modebar .cmbtn .bdot{display:inline-block;width:7px;height:7px;border-radius:50%;
+  background:var(--mac,#8B93A8);margin-right:6px;vertical-align:1px;
+  box-shadow:0 0 6px color-mix(in srgb,var(--mac,#8B93A8) 70%,transparent)}
+#modebar .cmbtn.cmwarn{color:var(--amber);border-color:rgba(232,179,65,.5)}
+#modebar .cmbtn.cmwarn:hover{background:rgba(232,179,65,.12);color:var(--amber)}
+/* [P0 2026-08-21] 失守胶囊=告警即动作（徽章与归位钮合体：省 ~80px 且问题与解法就近） */
+#modebar .cmbtn.cmfix{font-size:11.5px;color:var(--red-t);border-color:rgba(222,60,70,.55);
+  background:rgba(222,60,70,.07);border-radius:9px;padding:3px 10px}
+#modebar .cmbtn.cmfix:hover{background:rgba(222,60,70,.16)}
+/* [P0 2026-08-21] 武装/点火回执独立成行（flex-basis:100% 换行块）——此前拼在行尾，
+   恰好在最需要它的失守态被挤出面板不可见=反馈闭环断裂 */
+#modebar .cmfb{flex-basis:100%;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  font-size:12.5px;font-weight:700;color:var(--amber);white-space:nowrap;
+  animation:cmfbin .18s ease}
+@keyframes cmfbin{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
 #modebar .cmfb.bad{color:var(--red-t)}
+/* [P1-1 2026-08-21] 失守明细块（胶囊点开）：巡检人话+就地归位——告警可解释才可信 */
+#modebar .cmdrill{flex-basis:100%;margin:2px 0 4px;padding:8px 12px;border-radius:10px;
+  background:rgba(222,60,70,.06);border:1px solid rgba(222,60,70,.30);font-size:12.5px;
+  animation:cmfbin .18s ease}
+#modebar .cmdrill .dh{font-weight:800;color:var(--red-t);padding-bottom:4px}
+#modebar .cmdrill .dr{color:var(--txt2);padding:1.5px 0}
+#modebar .cmdrill .dw{color:var(--mut);padding-top:3px}
+#modebar .cmdrill .da{padding-top:7px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#modebar .cmdrill .dhint{color:var(--faint);font-size:11px}
 body.evx #modebar,body.consview #modebar,body.holoview #modebar{display:none !important}
 /* ---- [2026-08-16 P0-2] 视图页签：四视图循环此前只有方向键/挥扫=完全不可发现，鼠标平权入口 ---- */
 #viewtabs{display:flex;gap:5px;align-items:center}
@@ -151,12 +179,17 @@ body.evx #modebar,body.consview #modebar,body.holoview #modebar{display:none !im
   background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);
   box-shadow:0 0 8px rgba(34,211,238,.08)}
 .mz{font-size:19px;font-weight:700;white-space:nowrap}
+.mz .mip{font-style:normal;font-weight:600;font-size:12.5px;color:var(--faint);margin-left:5px;letter-spacing:.4px}
 .mz .star{color:var(--acc);margin-left:6px;font-size:14px}
 .detail{font-size:15px;color:var(--txt2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .detail.bad{font-weight:700}
 .spark{opacity:.9}
-.flag{font-size:11px;font-weight:700;border-radius:9px;padding:2px 8px;color:#100A06;display:none}
-.flag.high{display:inline-block;background:var(--amber)}
+/* [P2-2 2026-08-21] 徽章规格与 .cmpo 合一（11.5px/800/圆角8）——两套章语言收成一套 */
+.flag{font-size:11.5px;font-weight:800;border-radius:8px;padding:2px 8px;color:#100A06;display:none}
+/* [P1-4 2026-08-21] 高水位降为描边章（此前琥珀实底是全表最重元素,比「在线」还抢——
+   视觉重量对齐信息等级）；「饱和」=真事故级,保留红实底 */
+.flag.high{display:inline-block;background:transparent;color:var(--amber);
+  border:1px solid rgba(232,179,65,.6)}
 .flag.sat{display:inline-block;background:var(--red);color:#fff}
 .vtxt{font-size:13px;color:var(--mut);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .vbar{height:8px;border-radius:4px;background:rgba(255,255,255,.09);overflow:hidden}
@@ -175,12 +208,16 @@ body.evx #modebar,body.consview #modebar,body.holoview #modebar{display:none !im
 .ev .dot{width:7px;height:7px;border-radius:50%;flex:none;align-self:center}
 .ev .s{color:#BEC3D4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ev.none{color:var(--faint)}
+.ev.evold{color:var(--faint);cursor:pointer;user-select:none}
+.ev.evold:hover{color:var(--txt2)}
 /* ---- 页脚与角标 ---- */
 #ft{display:flex;align-items:center;gap:10px;padding-top:8px;font-size:12.5px;color:var(--faint)}
 #ft .sp{flex:1}
-#chips{position:fixed;top:14px;left:16px;z-index:3;display:flex;gap:8px}
+#chips{position:fixed;top:14px;left:16px;z-index:3;display:flex;gap:8px;
+  flex-wrap:wrap;max-width:44vw}   /* 多章并存（demo+电视台+手势…）换行不互叠 */
 .chip{display:none;font-size:12.5px;font-weight:700;border-radius:15px;padding:4px 12px;
-  backdrop-filter:blur(4px)}
+  backdrop-filter:blur(4px);max-width:min(520px,42vw);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}   /* [P0 2026-08-21] 单章超长（如带长麦名的语音章）省略号收口不生截 */
 #chip-frozen{background:rgba(236,72,153,.16);color:var(--neon-pink);border:1px solid var(--neon-pink)}
 #chip-stale{background:rgba(232,179,65,.15);color:var(--amber);border:1px solid var(--amber)}
 #chip-gestlead{background:rgba(232,179,65,.15);color:var(--amber);border:1px solid var(--amber)}
@@ -190,6 +227,8 @@ body.evx #modebar,body.consview #modebar,body.holoview #modebar{display:none !im
   border:1px solid rgba(255,255,255,.18);background:rgba(10,12,27,.6);color:var(--mut);
   font-size:15px;cursor:pointer;opacity:0;transition:opacity .3s}
 body:hover #closebtn{opacity:.85}
+body.windowed #closebtn{display:none}  /* [P0 2026-08-21] 窗口化浏览有系统关闭钮，
+  屏角 ✕ 只在全屏/kiosk 语境有意义——否则孤悬视口角落像残影 */
 /* ---- P2 手势层 / demo 层 ---- */
 #gcur{position:fixed;inset:0;z-index:4;pointer-events:none}
 #chip-cam{background:rgba(46,194,126,.14);color:var(--st-ok);border:1px solid var(--st-ok)}
@@ -225,6 +264,11 @@ body.consview #cons{display:block}
 body.holoview #rows{display:none}
 body.holoview #holo{display:block}
 #holo canvas{display:block;width:100%;height:100%}
+/* S8/S9 全息重做（20260821 方案A 沙盘）：屏幕空间扫描线=减法暗带（零渲染管线开销，Codrops 手法的
+   CSS 等价形态——比引 ShaderPass 多 vendor 文件更省 deploy 面）；汉字雨在全息视图压暗让位世界观。 */
+#holo::before{content:"";position:absolute;inset:0;z-index:1;pointer-events:none;
+  background:repeating-linear-gradient(0deg,rgba(0,0,0,.15) 0 1px,transparent 1px 3px);opacity:.5}
+body.holoview #rain{opacity:.12}
 /* 暗角：径向渐变压暗四周，聚焦中心、沉住背景=更"全息投影悬浮在暗处"的高级感 */
 #holovig{position:absolute;inset:0;z-index:1;pointer-events:none;
   background:radial-gradient(ellipse 62% 68% at 50% 46%,transparent 40%,rgba(3,4,10,.55) 100%)}
@@ -425,10 +469,110 @@ body.holoview #holo{display:block}
   font-size:13px;font-weight:700;color:var(--txt)}
 .wtile .off{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   color:var(--faint);font-size:13px}
+/* ---- P0 全屏舞台档（2026-08-18 电视台化）：?stage=full——全息视图 3D 铺满视口，
+   面板收成悬浮 chrome（顶部状态带+底部判定/事件带，半透明；读数不被舞台牺牲）。
+   只在 body.stagefull 且全息视图（holoview）时生效：表格/事件流/星座保持卡片布局零回归。 ---- */
+body.stagefull.holoview #panel{width:100vw;max-width:none;margin:0;padding:0;
+  background:transparent;box-shadow:none;border-radius:0}
+body.stagefull.holoview #panel::before{display:none}
+body.stagefull.holoview #hd{position:fixed;top:0;left:0;right:0;z-index:4;padding:12px 24px 10px;
+  border-bottom:none;background:linear-gradient(180deg,rgba(5,6,15,.74),transparent)}
+body.stagefull.holoview #holo{position:fixed;inset:0;height:100vh}
+body.stagefull.holoview #holostat{left:24px;top:58px;font-size:14px}
+body.stagefull.holoview #chips{top:84px;left:24px}   /* 舞台档：章让位标题与总览条（左上三层不互叠） */
+body.stagefull.holoview #holodrill{right:24px;top:58px}
+body.stagefull.holoview #holohint{left:24px;bottom:104px;font-size:13px}
+body.stagefull.holoview #holovig{background:radial-gradient(ellipse 68% 74% at 50% 46%,
+  transparent 46%,rgba(3,4,10,.62) 100%)}
+body.stagefull.holoview #verdict{position:fixed;left:0;right:0;bottom:62px;z-index:4;
+  padding:6px 24px 2px;border-top:none;font-size:16px;
+  background:linear-gradient(0deg,rgba(5,6,15,.6),transparent)}
+body.stagefull.holoview #vreason{position:fixed;left:0;right:0;bottom:42px;z-index:4;padding:0 24px}
+body.stagefull.holoview #events{position:fixed;left:0;right:0;bottom:0;z-index:4;min-height:0;
+  max-height:42px;overflow:hidden;padding:4px 24px 10px;border-top:none;background:rgba(5,6,15,.58)}
+body.stagefull.holoview #ft{display:none}
+/* ---- P0 帮助层（2026-08-18）：手势/语音/键盘词表卡——入口可发现性止血（? 键 / 右上 ? 钮） ---- */
+#helpbtn{cursor:pointer;font-weight:900;font-size:13px;color:var(--mut);
+  border:1px solid rgba(139,147,168,.3);border-radius:50%;width:22px;height:22px;flex:none;
+  display:inline-flex;align-items:center;justify-content:center;margin-left:6px}
+#helpbtn:hover{color:var(--neon-cyan);border-color:rgba(34,211,238,.6)}
+#helpcard{position:fixed;inset:0;z-index:13;display:none;align-items:center;justify-content:center;
+  background:rgba(5,6,15,.78)}
+#helpcard.on{display:flex}
+#helpin{width:min(900px,92vw);max-height:86vh;overflow:auto;border-radius:20px;
+  background:rgba(10,12,27,.97);border:1px solid rgba(34,211,238,.4);
+  box-shadow:0 0 60px rgba(34,211,238,.18);padding:26px 30px}
+#helpin h2{font-size:22px;padding-bottom:4px;display:inline-block;
+  background:linear-gradient(90deg,var(--neon-cyan),var(--neon-violet));
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+#helpin .hsub{font-size:12px;color:var(--faint);padding-bottom:12px}
+#helpin .hcols{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:18px}
+#helpin h3{font-size:14px;color:var(--neon-cyan);padding-bottom:6px}
+#helpin .hrow{display:flex;gap:8px;font-size:13px;padding:2.5px 0;color:var(--txt2)}
+#helpin .hrow b{flex:none;min-width:104px;color:var(--txt);font-weight:700}
+#helpin .hnote{font-size:11.5px;color:var(--faint);padding-top:14px;line-height:1.8}
+/* ---- P0 电视台档（2026-08-18）：切换/暖机全屏叙事卡 + 在岗章 ---- */
+#chip-ap{background:rgba(34,211,238,.13);color:var(--neon-cyan);border:1px solid var(--neon-cyan)}
+#apswitch{position:fixed;left:50%;top:20vh;transform:translateX(-50%);z-index:9;display:none;
+  width:min(720px,80vw);text-align:center;background:rgba(6,9,18,.9);
+  border:1.5px solid var(--neon-cyan);border-radius:20px;padding:26px 30px 22px;
+  box-shadow:0 0 50px rgba(34,211,238,.25)}
+#apswitch.on{display:block}
+#apswitch .t{font-size:30px;font-weight:900}
+#apswitch .bar{height:6px;border-radius:3px;background:rgba(255,255,255,.10);overflow:hidden;
+  margin:16px 0 10px}
+#apswitch .bar i{display:block;height:100%;width:0%;border-radius:3px;transition:width .6s ease}
+#apswitch .n{font-size:14px;color:var(--txt2)}
+/* ---- P1 飞览解说字幕（?narrate=0 关；出声只在 ?speak=1 屏） ---- */
+#narrbar{position:fixed;left:50%;bottom:112px;transform:translateX(-50%);z-index:5;display:none;
+  max-width:min(860px,88vw);font-size:16px;font-weight:700;color:var(--txt);
+  background:rgba(10,12,27,.84);border:1px solid rgba(34,211,238,.35);border-radius:14px;
+  padding:8px 20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#narrbar.on{display:block}
+/* ---- P1 质感包（空中面板方案 P0b 克制子集）：面板物质化 scanline + 抓取冲击波（?fx=0 素颜） ---- */
+#holopanel.on{animation:hmat .28s ease-out}
+#detail.on #dcard{animation:hmat .3s ease-out}
+@keyframes hmat{0%{clip-path:inset(0 0 96% 0);opacity:.35}100%{clip-path:inset(0 0 0 0);opacity:1}}
+.fxring{position:fixed;z-index:12;width:30px;height:30px;margin:-15px 0 0 -15px;border-radius:50%;
+  border:2.5px solid var(--neon-cyan);pointer-events:none;opacity:0;transform:scale(.3)}
+.fxring.go{animation:fxring .5s ease-out}
+@keyframes fxring{0%{opacity:.95;transform:scale(.3)}100%{opacity:0;transform:scale(2.2)}}
+/* ---- P2 空中面板升维（2026-08-18 三轮·拍板「要实控+炫酷」）：DOM 盘保判据单一真相，
+   升维=伪 3D 倾斜（JS 按屏位设 perspective/rotate）+ 悬浮呼吸 + 捏标题栏抓移 + 双手缩放 ---- */
+#holopanel{transform-origin:50% 18%;will-change:transform,left,top;
+  animation:hpfloat 4.6s ease-in-out infinite}
+#holopanel.grabbing{animation:none;cursor:grabbing;border-color:var(--neon-cyan);
+  box-shadow:0 18px 60px rgba(0,0,0,.7),0 0 44px rgba(34,211,238,.5)}
+#holopanel .ttl{cursor:grab;user-select:none}
+#holopanel .ttl::after{content:"⠿";float:right;font-size:12px;color:var(--faint);font-weight:400}
+@keyframes hpfloat{0%,100%{margin-top:0}50%{margin-top:-4px}}
+/* 演示状态章（?show=1 / 语音「演示状态」宏：粒子×2+辉光增强） */
+#chip-show{background:rgba(236,72,153,.14);color:var(--neon-pink);border:1px solid var(--neon-pink)}
 @media (prefers-reduced-motion: reduce){
   #panel::before,#live{animation:none}
   #ripple,#banner{display:none}
   #curtain .inf{animation:none}
+  #holopanel.on,#detail.on #dcard{animation:none}
+  #holopanel{animation:none}
+  .fxring{display:none}
+  #apswitch .bar i{transition:none}
+}
+/* ---- [P0-4 2026-08-21] 响应式基线：设计基准是 1920×1080 kiosk 全屏，但现实里有
+   窗口化浏览器（1920×910 实锤）/4K/1920×1200——三档断点保「窄屏不溢出、矮屏不憋死」。 ---- */
+@media (max-width:1080px){
+  #modebar .cmpre{display:none}       /* 模式名自带语境，前缀让宽度 */
+  #title{font-size:22px}
+  #clock{font-size:17px}
+}
+@media (max-width:880px){
+  .row{grid-template-columns:18px 22px 98px 1fr auto 78px 104px;gap:8px}
+  .spark{display:none}                /* 趋势线是锦上花，窄屏先保读数 */
+  #kpis{display:none}
+}
+@media (max-height:660px){
+  #panel{margin-top:12px}
+  #events{min-height:0}
+  #events .ev:nth-child(n+3){display:none}   /* 矮屏事件区只留最近两条 */
 }
 </style>
 </head>
@@ -444,9 +588,14 @@ body.holoview #holo{display:block}
   <span class="chip" id="chip-tour"></span>
   <span class="chip" id="chip-voice"></span>
   <span class="chip" id="chip-gestlead"></span>
+  <span class="chip" id="chip-ap">电视台 · 自动巡览中</span>
+  <span class="chip" id="chip-show">演示状态 · 特效全开</span>
 </div>
 <canvas id="gcur"></canvas>
 <div id="hint"></div>
+<div id="helpcard"><div id="helpin"></div></div>
+<div id="apswitch"><div class="t"></div><div class="bar"><i></i></div><div class="n"></div></div>
+<div id="narrbar"></div>
 <div id="detail"><div id="dcard"></div></div>
 <div id="ripple"></div>
 <div id="banner"><div class="b1"></div><div class="b2">无界 BOUNDLESS · 智控集群</div></div>
@@ -485,6 +634,7 @@ body.holoview #holo{display:block}
     <span id="clock">--:--:--</span>
     <span class="sp"></span>
     <span id="viewtabs"></span>
+    <span id="helpbtn" title="帮助与操作词表（? 键）">?</span>
     <span class="sp"></span>
     <span id="tag"><span class="dot"></span><span id="tagtxt">连接中…</span></span>
   </div>
@@ -527,7 +677,7 @@ function utilColor(u){ /* GPU 热度：冷青→紫→热粉（与壁纸板 util
 
 /* ================= 数字雨 2.0（三层视差） ================= */
 const rain=$("rain"), rc=rain.getContext("2d");
-const GLYPHS="ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾊﾋﾌﾍﾎﾏﾐ0123456789$#*+<>无界∞";
+const GLYPHS="甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌亥☰☱☲☳☴☵☶☷0123456789无界∞";   /* D6 干支卦符化：数字雨与罗盘世界观统一（2026-08-21 罗盘重塑） */
 /* 远/中/近 三层：字号↑ 速度↑ 亮度↑（视差深度） */
 const LAYERS=[
   {font:12, cps:4.5, alpha:.30, dens:.55},
@@ -581,7 +731,10 @@ let raf=null, timer=null, lastT=0;
 function stopLoops(){ if(raf){cancelAnimationFrame(raf);raf=null} if(timer){clearInterval(timer);timer=null} }
 function frame(t){
   const dt=Math.min(.1,(t-lastT)/1000); lastT=t;
-  const t0=performance.now(); stepRain(dt); budget(performance.now()-t0);
+  const t0=performance.now();
+  /* 全屏舞台：3D 不透明底铺满视口后雨层完全不可见——省一支笔（governor 预算之外的白送） */
+  if(!(typeof stageOnNow!=="undefined"&&stageOnNow&&view===3)) stepRain(dt);
+  budget(performance.now()-t0);
   if(view===2) drawCons(dt);
   else if(view===3&&holoS.renderer) renderHolo(dt);   /* P0 全息：仅 full 模式(rAF)渲染=生产忙态自然让位 */
   raf=requestAnimationFrame(frame);
@@ -616,11 +769,18 @@ function applyGovernor(){
 }
 document.addEventListener("visibilitychange",applyGovernor);
 addEventListener("resize",()=>{resetRain(); if(state.mode==="still") setMode("boot"),applyGovernor();});
+/* [P0 2026-08-21] 窗口化判定：视口明显小于屏幕=窗口化浏览（kiosk/F11 全屏两侧都≈0 差值），
+   body.windowed 由 CSS 侧消费（隐藏屏角 ✕ 等只对全屏语境有意义的件） */
+function _winMode(){ document.body.classList.toggle("windowed",
+  (screen.height-innerHeight>64)||(screen.width-innerWidth>24)); }
+addEventListener("resize",_winMode); _winMode();
 
 /* ================= 数据渲染 ================= */
 const ST_TXT={degraded:["服务端口掉线",C.deg], offline:["失联 · 断网/关机/漂移",C.off],
               selfwarn:["自检告警",C.wrn], unknown:["数据未达",C.off]};
 function fmtLat(l){ if(l==null)return""; return l<1?"<1ms":Math.round(l)+"ms"; }
+/* 机器名后缀=IP 尾段（「中枢 176」）：源=ctx.machines[].ip（machines.json 单一真相），缺席回退空串 */
+function _ipT(m){ const t=String((m&&m.ip)||"").split(".").pop(); return /^\d+$/.test(t)?t:""; }
 function rowHtml(m,flag){
   const self=m.id===SELF;
   const u=(m.gpu_util==null||m.gpu_util<0)?-1:m.gpu_util;
@@ -632,6 +792,10 @@ function rowHtml(m,flag){
     const s=ST_TXT[m.status]||ST_TXT.unknown;
     led=s[1]; detail=s[0]; cls="bad";
   }
+  /* [P1-6] 高水位语义拆分：姿态巡检健康（errors=0）时的「饱和」=当前算力模式按编制钉满，
+     是设计态不是事故——红牌吓访客一跳的旧病（韵声 30/32G 天天挂红）。姿态失守/无巡检数据时
+     维持原红牌（诚实降级：没有证据说它健康就不说）。判据=ctx.clustermode.posture 同源。 */
+  const _po=((state.ctx||{}).clustermode||{}).posture, _planFull=_po&&_po.errors===0;
   let vt="",pct=0,g1=C.ok,g2=C.amber;
   const vu=m.vram_used_mb,vtm=m.vram_total_mb;
   if(vu!=null&&vtm&&vtm>0){
@@ -639,11 +803,10 @@ function rowHtml(m,flag){
     vt=(vu/1024).toFixed(1)+"/"+Math.round(vtm/1024)+"G";
     g1=f<.75?C.ok:mix(C.ok,C.amber,Math.min(1,(f-.75)/.2));
     g2=f<.92?C.amber:C.red;
+    /* [P1-3 2026-08-21] 编制满载=设计态：条色随语义走品牌青紫，琥珀/红留给「姿态失守下的
+       高位」真警情——「满载≠事故」从徽章文案贯彻到颜色层 */
+    if(_planFull&&f>=.75){ g1=C.cyan; g2=C.violet; }
   }
-  /* [P1-6] 高水位语义拆分：姿态巡检健康（errors=0）时的「饱和」=当前算力模式按编制钉满，
-     是设计态不是事故——红牌吓访客一跳的旧病（韵声 30/32G 天天挂红）。姿态失守/无巡检数据时
-     维持原红牌（诚实降级：没有证据说它健康就不说）。判据=ctx.clustermode.posture 同源。 */
-  const _po=((state.ctx||{}).clustermode||{}).posture, _planFull=_po&&_po.errors===0;
   let flagTxt=flag==="sat"?"饱和":flag==="high"?"高水位":"", flagCls=flag||"";
   if(flag==="sat"&&_planFull){ flagTxt="编制满载"; flagCls="sat plan"; }
   const flagTip=flag?(_planFull?"显存持续高位 · 姿态巡检健康＝按当前算力模式编制的满载，不是异常"
@@ -652,7 +815,7 @@ function rowHtml(m,flag){
     title="${(m.role_now||m.role||"").replace(/"/g,"")} · 点击看详情 · 双击拉屏">
     <span class="led" style="--c:${led}"></span>
     <img class="ric" src="/icon/${m.id}.png" alt="" onerror="this.style.visibility='hidden'">
-    <span class="mz">${m.zh}${self?'<b class="star">★</b>':""}</span>
+    <span class="mz">${m.zh}${_ipT(m)?'<i class="mip">'+_ipT(m)+'</i>':""}${self?'<b class="star">★</b>':""}</span>
     <span class="detail ${cls}" style="${cls?("color:"+led):""}">${detail}</span>
     <canvas class="spark" data-id="${m.id}" width="100" height="20"></canvas>
     <span class="flag ${flagCls}" title="${flagTip}">${flagTxt}</span>
@@ -711,11 +874,15 @@ function renderData(){
     if(state.booted && !state.firing.has(k)){ newFiring=true; newEvs.push(e); } } }
   state.firing=keys;
   if(newEvs.length) cockpitAlertFx(newEvs);   /* C0 指挥舱：告警飞向中央+空间声像（台账缺席=休眠） */
-  /* ack 目标 = 最新一条未确认的在燃告警（竖拇指 dwell / 双击 的靶子） */
-  state.focusKey=(evs.find(e=>e.state==="firing"&&!e.ack)||{}).key||null;
+  /* ack 目标 = 最新一条未确认的在燃告警（竖拇指 dwell / 双击 的靶子）；
+     [P2 2026-08-21] 靶子限定未折叠区——折叠旧闻里的陈年 firing 不做隐形靶（分仓在此前移） */
+  const _evAge=t=>{ const d=new Date(String(t||"").replace(" ","T")).getTime();
+    return isFinite(d)?(Date.now()-d)/1000:-1; };
+  const evFresh=evs.filter(e=>_evAge(e.t)<=7*86400), evOld=evs.filter(e=>_evAge(e.t)>7*86400);
+  state.focusKey=(evFresh.find(e=>e.state==="firing"&&!e.ack)||{}).key||null;
   /* [P1-4] 三态外显：resolved 沉降（旧告警不再和在燃的一样醒目）+ 相对时间（"3 天前"比裸
      时间戳可读，悬停仍有完整时间戳）+ 悬停出「确认」单击钮（双击通道保留=鼠标平权补全）。 */
-  $("events").innerHTML=evs.length?evs.map(e=>{
+  const _evRow=e=>{
     const col=e.state==="resolved"?C.ok:(e.level==="error"||e.level==="critical")?C.red:C.amber;
     const cls="ev"+(e.state==="resolved"?" resolved":"")+(e.ack?" acked":"")
       +((e.key&&e.key===state.focusKey&&(state.gestOn||state.camOn))?" focus":"");
@@ -727,7 +894,15 @@ function renderData(){
       <span class="rel">${relTime(e.t)}</span>
       <span class="dot" style="background:${col};box-shadow:0 0 7px ${col}"></span>
       <span class="s">${e.title}</span>${ackBtn}</div>`;
-  }).join(""):'<div class="ev none">近 2 小时无告警事件</div>';
+  };
+  /* [P1-2 2026-08-21] 旧闻折叠：>7 天的条目收进一行（后端 sweep_stale 清孤儿告警，
+     这里管前端降噪——「演示预跑未全绿 · 26 天前」常驻占位的病）；时间解析不了=不算旧，
+     诚实保显；分仓 evFresh/evOld 已随 focusKey 前移到事件块头部 */
+  $("events").innerHTML=evs.length
+    ? evFresh.map(_evRow).join("")
+      +(evOld.length?`<div class="ev evold" title="点击展开/收起旧闻">🗂 还有 ${evOld.length} 条 7 天前的旧闻${evOldOpen?"（点击收起）":" · 点击展开"}</div>`:"")
+      +(evOldOpen?evOld.map(_evRow).join(""):"")
+    : '<div class="ev none">近 2 小时无告警事件</div>';
   if(newFiring){ $("panel").classList.add("glitch");
     setTimeout(()=>$("panel").classList.remove("glitch"),900); }
   /* 页脚身份（本机视角） */
@@ -751,13 +926,14 @@ function renderData(){
    HUD 成为鼠标切换的主入口——但切换按钮此前只在三维全息视图的中枢节点操作盘里，用户开板
    落在第一屏找不到入口（2026-08-16 实锤）。此条=首屏直给：当前模式（zh/accent/姿态/暖机）
    + 其余模式一键切换 + 姿态失守时一键归位。
-   纪律：按钮只武装（holoArm 同口，白名单/忙态/审计/熔断全在 ops_gateway 服务端裁决），
-   点火仍两段式=回车/竖拇指/刷脸；数据全部来自 ctx.clustermode（modes 表由服务端按
+   纪律：按钮=arm+fire 直通（2026-08-21 用户拍板「点击即切」；holoArm 同口武装后立即 src=mouse
+   点火，白名单/忙态/审计/熔断全在 ops_gateway 服务端裁决）；数据全部来自 ctx.clustermode（modes 表由服务端按
    modes.json 下发，增删模式零改前端）；未配置机 ctx 不带 clustermode.mode=整条隐藏零回归。 */
 const _cmEsc=s=>String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;")
   .replace(/>/g,"&gt;").replace(/'/g,"&#39;");
 /* [P0-1] 界面版本自愈状态（判定在 renderData，安全窗自动刷新在 tick） */
 let assetVer=null, assetMismatchAt=0;
+let evOldOpen=false;   /* [P1-2] 事件区旧闻折叠开关（>7 天条目收进一行，点击展开） */
 /* [P1-4] 相对时间（"3 天前"）：解析失败诚实留空不猜 */
 function relTime(t){ try{ const d=new Date(String(t||"").replace(" ","T"));
   const s=(Date.now()-d.getTime())/1000;
@@ -768,6 +944,21 @@ function relTime(t){ try{ const d=new Date(String(t||"").replace(" ","T"));
 /* [P2-10] 武装反馈闭环：按钮点下→行内常驻回执（成功=点火指引 / 被拒=原因留 10s，
    不再只靠 2.6s 一闪而过的 toast）；反馈期+已武装期按钮锁定防连点。 */
 let cmFb={t:0,txt:"",err:false};
+/* [P0 2026-08-21] 模式条宽度预算化：失守态冲出面板右缘的病根=「单行禁换行 × 内容随状态
+   膨胀 × 面板 940px 定宽」零余量。短时间戳（当年省年份秒数）+按钮短文案（「切到/模式」
+   套话省掉），全文一律进 title；CSS 侧 flex-wrap 兜底。 */
+const _cmSince=s=>{ const m=String(s||"").match(/^(\d{4})-(\d\d-\d\d) (\d\d:\d\d)/);
+  if(!m) return String(s||"");
+  return (m[1]===String(new Date().getFullYear())?"":m[1]+"-")+m[2]+" "+m[3]; };
+const _cmShort=z=>String(z||"").replace(/模式$/,"");
+/* [P1-1 2026-08-21] 失守下钻：胶囊点开=巡检人话明细+就地归位（告警可解释才可信）。
+   _poLine=明细行人话化：机器 id→中文名+IP 尾号（与六机行同一命名语言）、剥「（修复：CLI）」
+   尾巴（明细块自带归位按钮，CLI 指路是给终端人的）。 */
+let cmDrillOpen=false;
+const _poLine=s=>{ s=String(s||"").replace(/（修复：[^）]*）\s*$/,"");
+  for(const m of ((state.ctx||{}).machines)||[])
+    if(s.startsWith(m.id+" ")) return (m.zh||m.id)+(_ipT(m)?" "+_ipT(m):"")+" · "+s.slice(m.id.length+1);
+  return s; };
 function renderModeBar(c){
   const el=$("modebar"); if(!el) return;
   const cm=(c||{}).clustermode||{};
@@ -775,11 +966,21 @@ function renderModeBar(c){
   el.style.display="flex";
   const acc=cm.accent||"#22D3EE";
   el.style.borderLeft="3px solid "+acc; el.style.paddingLeft="11px";   /* 模式色导光条 */
+  const fbFresh=cmFb.txt&&(Date.now()-cmFb.t<10000);
+  const lock=(typeof opsArmed==="function"&&opsArmed())||(fbFresh&&!cmFb.err);
   let h="<span class='cmdot' style='background:"+acc+";box-shadow:0 0 9px "+acc+"'></span>"
-    +"<span class='cmname' style='color:"+acc+"'>算力模式 · "+_cmEsc(cm.zh||cm.mode)+"</span>"
-    +"<span class='cmid'>"+_cmEsc(cm.mode)+(cm.since?" · 切换于 "+_cmEsc(cm.since):"")+"</span>";
+    +"<span class='cmname' style='color:"+acc+"'><i class='cmpre'>算力模式 · </i>"+_cmEsc(cm.zh||cm.mode)+"</span>"
+    +"<span class='cmid' title='"+_cmEsc(cm.mode)+(cm.since?" · 切换于 "+_cmEsc(cm.since):"")+"'>"
+    +_cmEsc(cm.mode)+(cm.since?" · 切换于 "+_cmEsc(_cmSince(cm.since)):"")+"</span>";
   const po=cm.posture;
-  if(po&&po.errors>0) h+="<span class='cmpo bad'>姿态失守 "+(po.errors|0)+"</span>";
+  if(po&&po.errors>0){
+    /* 失守胶囊（切换中只亮徽章不给入口：切换进行时归位必被闸门拒，给了也是噪音）；
+       点击=开合明细块（读为先，归位动词在明细内）——看明细是只读动作，不吃 lock */
+    h+=cm.switching?"<span class='cmpo bad'>姿态失守 "+(po.errors|0)+"</span>"
+      :"<button class='cmbtn cmfix' data-t='__drill'"
+        +" title='姿态巡检发现 "+(po.errors|0)+" 项偏离当前模式编制 · 点击看明细与一键归位'>"
+        +"⚠ 姿态失守 "+(po.errors|0)+" · 明细"+(cmDrillOpen?" ▴":" ▾")+"</button>";
+  }
   else if(po&&po.warns>0) h+="<span class='cmpo warn'>姿态观察 "+(po.warns|0)+"</span>";
   else if(po) h+="<span class='cmpo ok'>姿态 ✓</span>";
   if(cm.warming&&cm.warming.pending>0)
@@ -790,29 +991,52 @@ function renderModeBar(c){
     h+="<span class='cmsw'>⏳ 切换中 "+(pg.done|0)+"/"+(pg.total|0)
       +(pg.note?" · "+_cmEsc(pg.note):"")+"</span>";
   }else{
-    const fbFresh=cmFb.txt&&(Date.now()-cmFb.t<10000);
-    const lock=(typeof opsArmed==="function"&&opsArmed())||(fbFresh&&!cmFb.err);
     for(const m of (cm.modes||[]).filter(x=>x.id!==cm.mode)){
       const a=m.accent||"#8b93a8";
-      h+="<button class='cmbtn' data-t='"+_cmEsc(m.id)+"' style='color:"+a+"'"
-        +(lock?" disabled":"")+">🔁 切到「"+_cmEsc(m.zh||m.id)+"」</button>";
+      h+="<button class='cmbtn' data-t='"+_cmEsc(m.id)+"' style='--mac:"+a+"'"
+        +" title='切到「"+_cmEsc(m.zh||m.id)+"」 · 点击即切，执行器闸门照常'"
+        +(lock?" disabled":"")+"><i class='bdot'></i>"+_cmEsc(_cmShort(m.zh||m.id))+"</button>";
     }
-    if(po&&po.errors>0)
-      h+="<button class='cmbtn' data-t='__repair' style='color:#E8B341'"
-        +(lock?" disabled":"")+">🧭 姿态一键归位</button>";
-    if(fbFresh) h+="<span class='cmfb"+(cmFb.err?" bad":"")+"'>"+_cmEsc(cmFb.txt)+"</span>";
+  }
+  /* 回执移出 else：点火后条子翻到「切换中」态，回执线仍完整可见（独立行，CSS flex-basis:100%） */
+  if(fbFresh) h+="<span class='cmfb"+(cmFb.err?" bad":"")+"'>"+_cmEsc(cmFb.txt)+"</span>";
+  /* [P1-1] 失守明细块（flex-basis:100% 整行）：巡检人话原文直读；姿态痊愈/切换开始自动收 */
+  if(!(po&&po.errors>0)||cm.switching) cmDrillOpen=false;
+  if(cmDrillOpen&&(po.err_items||[]).length){
+    h+="<div class='cmdrill'><div class='dh'>⚠ 姿态失守明细 · 巡检 "+(po.checked|0)+" 项，"
+      +(po.errors|0)+" 项偏离当前模式编制</div>"
+      +(po.err_items||[]).map(s=>"<div class='dr'>• "+_cmEsc(_poLine(s))+"</div>").join("")
+      +((po.warn_items||[]).length?"<div class='dw'>观察（不拦运行）："
+        +(po.warn_items||[]).map(s=>_cmEsc(_poLine(s))).join("；")+"</div>":"")
+      +"<div class='da'><button class='cmbtn cmwarn' data-t='__repair'"+(lock?" disabled":"")
+      +">🧭 确认归位 · 按当前模式重放</button>"
+      +"<button class='cmbtn' data-t='__drillclose'>收起</button>"
+      +"<span class='dhint'>归位=按当前模式 force 重放全部步骤 · 执行器闸门/回滚护栏照常</span></div></div>";
   }
   el.innerHTML=h;
 }
 $("modebar").addEventListener("click",e=>{
   const b=e.target&&e.target.closest?e.target.closest(".cmbtn"):null; if(!b||b.disabled) return;
   const t=b.getAttribute("data-t"); if(!t) return;
-  cmFb={t:Date.now(),txt:"武装请求已发出…",err:false}; renderModeBar(state.ctx);
+  /* [P1-1 2026-08-21] 失守明细开合（只读动作，不进武装链）；点归位前先收明细让回执行可见 */
+  if(t==="__drill"){ cmDrillOpen=!cmDrillOpen; renderModeBar(state.ctx);
+    stat("modebar",{v:"drill",src:"mouse"}); return; }
+  if(t==="__drillclose"){ cmDrillOpen=false; renderModeBar(state.ctx); return; }
+  if(t==="__repair") cmDrillOpen=false;
+  const vb=(t==="__repair"?"归位":"切换");
+  cmFb={t:Date.now(),txt:vb+"请求已发出…",err:false}; renderModeBar(state.ctx);
+  /* 2026-08-21 用户拍板「点击即切」：arm 成功即刻 fire（src=mouse 在场信号），不再等第二段确认；
+     服务端护栏照常=忙态实时二查/熔断/审计先行/执行器闸门（hub_busy/冷却），被拒原样晒 */
   (t==="__repair"?holoArm("posture_repair",{}):holoArm("mode_switch",{target:t}))
     .then(r=>{
-      cmFb=(r&&r.ok)?{t:Date.now(),txt:"⚡ 已武装 · 回车＝点火 · Esc＝撤防",err:false}
-                    :{t:Date.now(),txt:"✗ 武装被拒："+((r&&r.error)||"通道不可达"),err:true};
-      renderModeBar(state.ctx); });
+      if(!(r&&r.ok)){
+        cmFb={t:Date.now(),txt:"✗ 被拒："+((r&&r.error)||"通道不可达"),err:true};
+        renderModeBar(state.ctx); return; }
+      return opsPost("fire",{id:r.id,src:"mouse"}).then(f=>{
+        cmFb=(f&&f.ok)?{t:Date.now(),txt:"⚡ 已点火 · "+vb+"执行中…",err:false}
+                      :{t:Date.now(),txt:"✗ 点火被拒："+((f&&f.error)||"通道不可达"),err:true};
+        renderModeBar(state.ctx); });
+    });
   stat("modebar",{v:t,src:"mouse"});
 });
 
@@ -853,9 +1077,29 @@ const SCENE=PARAMS.get("scene")||"warn";
 const GEST_WANT=PARAMS.get("gesture")==="1";
 const GSRC=PARAMS.get("gsrc")||"local";
 const VOICE_WANT=PARAMS.get("voice")==="1";
+/* ---- P0 电视台档+全屏舞台（2026-08-18 电视台化方案；同日二轮改 SSOT 驱动）：
+   开关判定=显式 URL 参数优先（?autoplay=1|0 / ?stage=full|card），缺参时**由 cockpit 台账
+   tv=true 推导**（apWanted/stageWanted）——电视位换屏/改参只动 cockpit.json，跑单零依赖，
+   运行中的 kiosk 靠版本自愈刷新自动进岗。demo 无 tv 台账=自动关（实拍确定性靠显式参数）。
+   ?fx=0 质感包素颜；?narrate=0 关飞览解说。全部秒回退：显式 ?autoplay=0 一票关。 ---- */
+const AUTOPLAY_P=PARAMS.get("autoplay");
+const STAGE_P=PARAMS.get("stage");
+const FX=PARAMS.get("fx")!=="0";
+const NARRATE=PARAMS.get("narrate")!=="0";
+let stageOnNow=false;   /* tick 每秒结算（frame 每帧读它省一次台账遍历） */
+function apWanted(){ if(AUTOPLAY_P!==null) return AUTOPLAY_P==="1";
+  const s=(typeof ckSelf==="function")?ckSelf():null; return !!(s&&s.tv); }   /* 台账 SSOT：tv 屏默认开播 */
+function stageWanted(){ if(STAGE_P!==null) return STAGE_P==="full"; return apWanted(); }
+function apStageTick(){ const want=stageWanted();
+  if(want!==stageOnNow){ stageOnNow=want;
+    document.body.classList.toggle("stagefull",want);
+    if(want&&!DEMO&&!apStageTick._st){ apStageTick._st=1; stat("stage",{v:"full"}); }
+    if(view===3&&typeof sizeHolo==="function"&&holoS.renderer) sizeHolo(); } }
 function demoCtx(scene){
+  const IPD={zhongshu:"192.168.0.176",yunsheng:"192.168.0.173",shengbei:"192.168.0.117",
+    lianbei:"192.168.0.104",tingxie:"192.168.0.140",kouxing:"192.168.0.198"};
   const M=(id,zh,role,acc,util,vu,vt,st)=>({id,zh,role,role_now:role,accent:acc,gpu_util:util,
-    vram_used_mb:vu,vram_total_mb:vt,status:st,lat_ms:id==="zhongshu"?0.4:3});
+    vram_used_mb:vu,vram_total_mb:vt,status:st,lat_ms:id==="zhongshu"?0.4:3,ip:IPD[id]||""});
   const base=[M("zhongshu","中枢","Hub·换脸主力·同传·渲染","#E8B341",18,23600,32600,"ok"),
     M("yunsheng","韵声","质量轨TTS·LLM容灾","#C43BF0",64,29900,32600,"ok"),
     M("shengbei","声备","qwen3·TTS热备·坐席","#F0A010",7,10300,12200,"ok"),
@@ -869,7 +1113,10 @@ function demoCtx(scene){
     base[1].vram_used_mb=31600; vflags={yunsheng:"high"};
     events=[ev("08:56","演示告警：韵声显存高水位（合成）","warn","firing","d1"),
             ev("08:41","演示告警：听写 GPU 采样熔断（合成）","error","firing","d2",true),
-            ev("07:58","演示：口型端口恢复（合成）","ok","resolved","d3")]; }
+            ev("07:58","演示：口型端口恢复（合成）","ok","resolved","d3"),
+            /* [P1-2] 旧闻折叠实拍确定性：12 天前的历史条目→折叠行入镜 */
+            ev(new Date(Date.now()-12*864e5).toISOString().slice(0,16).replace("T"," "),
+               "演示旧闻：历史告警样例（合成）","warn","firing","d9",true)]; }
   else if(scene==="down"){ overall="down";alerting=true;base[3].status="offline";base[3].gpu_util=null;
     events=[ev("09:01","演示告警：集群节点失联：脸备（合成）","error","firing","d4")]; }
   else if(scene==="stream"){ streaming=true;verdict="danger";reason="直播/推流中：换脸+同传+推流链路全在跑。"; }
@@ -883,6 +1130,11 @@ function demoCtx(scene){
     tingxie:[{n:"stt",up:true},{n:"nemo_stt",up:scene!=="warn"}],
     yunsheng:[{n:"index_tts",up:true},{n:"moss_ttsd",up:true},{n:"emotion_tts",up:true}],
     shengbei:[{n:"emotion_tts_standby",up:true},{n:"qwen3_tts",up:true}]};
+  /* svcmany=1（demo 专用）：中枢服务清单补足 21 项合成条目——机柜双列布局/拥挤渐进披露的
+     确定性 QA 数据（真集群 21 项只在真机上有，实拍矩阵不碰真数据纪律） */
+  if(PARAMS.get("svcmany")==="1"){ const zs=svc.zhongshu;
+    for(let i=zs.length;i<21;i++) zs.push(i%7===5?{n:"svc_"+i+"_dead",up:false,fix:i%2===1}
+                                                 :{n:"svc_"+String(i).padStart(2,"0"),up:true}); }
   /* demo 指挥舱（C0 实拍确定性）：三屏微缩 U——左翼韵声/中央中枢/右翼脸备 */
   const cockpit={layout:"U",screens:[
     {id:"demo-l",machine:"yunsheng",zh:"左翼位",order:1,role:"telemetry"},
@@ -949,6 +1201,221 @@ function handleTour(){
 }
 window._injectTour=t=>{ state.ctx=state.ctx||{}; state.ctx.tour=t; handleTour(); };
 
+/* ================= P0 电视台档（2026-08-18 电视台化方案）：?autoplay=1 无人值守自动巡览 =================
+   HUD 的日常岗位：非展演时段自动循环飞览（与 holoTourBeat 同一节拍表，apBeat 并联进 renderHolo）
+   + 在燃告警插播（聚焦该机 10s，红脉冲/准星/仪表卡由既有链路自带）+ 切换/暖机全屏进度叙事卡。
+   让位纪律（一票否决序）：真 tour 任何幕 > 用户操作（60s 静默窗）> governor 非 full >
+   拉屏/桌面墙/武装/受控/操作盘任何交互面开着。?autoplay=0 或缺参=本段完全不存在。 */
+const AP_IDLE_S=60;
+const ap={usedAt:0,seen:{},alert:null,epoch:Date.now()/1000,statOn:false,on:false};
+function apUser(){ ap.usedAt=Date.now(); }
+addEventListener("pointerdown",apUser); addEventListener("keydown",apUser);
+addEventListener("wheel",apUser,{passive:true});
+function apEngaged(){
+  if(!apWanted()||!holoOK) return false;
+  if(state.mode!=="full") return false;                                   /* governor 让位（含推流硬闸） */
+  const tr=((state.ctx||{}).tour||{});
+  if(!DEMO&&tr.step>0) return false;                                      /* 真展演让位（demo 注入归实拍确定性） */
+  if(ap.usedAt&&Date.now()-ap.usedAt<AP_IDLE_S*1000) return false;        /* 有人在操作：退后台 60s */
+  if((typeof deskOpen==="function"&&deskOpen())||(typeof wallOn!=="undefined"&&wallOn)) return false;
+  if((typeof opsArmed==="function"&&opsArmed())||(typeof ctrlSess!=="undefined"&&ctrlSess)) return false;
+  if(typeof holoPanelMid!=="undefined"&&holoPanelMid) return false;
+  return true;
+}
+function apFlyBeats(){   /* 与 holoTourBeat 同一节拍表（全景5s→辐条各6s→中枢12s下钻）——电视台档并联入口 */
+  const ids=Object.keys(holoS.nodes||{}); if(!ids.length) return null;
+  const hub=ids.find(id=>holoS.nodes[id].isHub)||ids[0];
+  const spokes=ids.filter(id=>id!==hub).sort((a,b)=>{
+    const pa=holoS.nodes[a].group.position, pb=holoS.nodes[b].group.position;
+    return Math.atan2(pa.x,pa.z)-Math.atan2(pb.x,pb.z); });
+  const beats=[{mid:null,d:5}]; for(const id of spokes) beats.push({mid:id,d:6});
+  beats.push({mid:hub,d:12,drill:true});
+  return beats;
+}
+function apBeat(){
+  if(!apEngaged()||!holoS.built){ ap.on=false; return null; }
+  ap.on=true;
+  if(!ap.statOn){ ap.statOn=true; stat("autoplay_on",{v:stageWanted()?"stage":"card"}); }
+  const now=Date.now()/1000;
+  /* 告警插播：新在燃告警→聚焦该机 10s（seen 记账防复播；确认/恢复后新告警再来照插） */
+  if(!ap.alert||now>ap.alert.until){
+    ap.alert=null;
+    for(const e of ((state.ctx||{}).events||[])){
+      if(e.state!=="firing"||e.ack||!e.key||ap.seen[e.key]) continue;
+      const amid=alertMachineOf(e); if(!amid||!holoS.nodes[amid]) continue;
+      ap.seen[e.key]=1; ap.alert={key:e.key,mid:amid,until:now+10};
+      apNarr("注意，"+((((state.ctx||{}).machines||[]).find(x=>x.id===amid)||{}).zh||amid)
+        +"："+String(e.title||"").slice(0,30),true);
+      stat("autoplay_alert",{m:amid,v:String(e.key).slice(0,24)});
+      break; }
+  }
+  if(ap.alert) return {mid:ap.alert.mid,d:10,alert:true};
+  const cm=((state.ctx||{}).clustermode||{});
+  if(cm.switching||(((cm.warming||{}).pending||0)>0)) return {mid:null,d:5};   /* 叙事卡当主角：全景慢转 */
+  const beats=apFlyBeats(); if(!beats) return null;
+  const total=beats.reduce((s,b)=>s+b.d,0);
+  let t=(now-ap.epoch)%total; if(!(t>=0)) t=0;
+  for(const b of beats){ if(t<b.d) return b; t-=b.d; }
+  return beats[0];
+}
+function apSwitchTick(){   /* 切换/暖机全屏叙事卡（1s 粒度；数据=ctx.clustermode，与绶带/操作盘同源） */
+  const el=$("apswitch"); if(!el) return;
+  const cm=((state.ctx||{}).clustermode||{});
+  const sw=!!cm.switching, wm=(((cm.warming||{}).pending)||0)>0;
+  if(!(ap.on&&apEngaged())||(!sw&&!wm)){ el.classList.remove("on"); return; }
+  const acc=cm.accent||"#22D3EE", pg=cm.progress||{};
+  el.style.borderColor=acc;
+  el.querySelector(".t").textContent=sw?("算力模式切换中 → "+(cm.zh||cm.mode)):("暖机中 · "+(cm.zh||cm.mode));
+  const bi=el.querySelector(".bar i");
+  bi.style.background="linear-gradient(90deg,"+acc+",#8B5CF6)";
+  bi.style.width=(sw&&pg.total?Math.round(pg.done/pg.total*100):(wm?66:4))+"%";
+  el.querySelector(".n").textContent= sw
+    ? ((pg.total?(pg.done+"/"+pg.total+" 步"):"…")+(pg.note?(" · "+pg.note):""))
+    : ("后台暖机 "+((cm.warming||{}).pending)+" 步"
+       +(((cm.warming||{}).failed)?("（失败 "+cm.warming.failed+"，可一键归位）"):""));
+  el.classList.add("on");
+}
+function apViewTick(){   /* 电视台在岗：自动回到全息视图（用户操作 60s 静默窗内绝不抢） */
+  if(!apEngaged()){ ap.on=false; return; }
+  if(view!==3){ view=3; applyView(); }
+  ap.on=true;
+}
+
+/* ================= P1 飞览解说（2026-08-18）：每拍一句该机角色（小界 TTS 缓存链） =================
+   字幕永远出（#narrbar）；出声只在 ?speak=1 屏且 ?narrate=1（缺省开）。台词=固定模板
+   （机器名+role 稳定串）→ 小界磁盘缓存首合成后逐字节命中，不给 Fish 添活。 */
+let _narrAud=null,_narrHideT=0;
+function narrLineOf(mid){ const m=((state.ctx||{}).machines||[]).find(x=>x.id===mid)||{};
+  const wx=(typeof HOLO_WUXING!=="undefined")?HOLO_WUXING[mid]:null;   /* 固定串=TTS 缓存首合成后仍逐字节命中 */
+  const st=(typeof HOLO_SEAT!=="undefined")?HOLO_SEAT.find(q=>q.m===mid):null;   /* 北斗座次+晋书职掌入解说 */
+  if(m.id==="zhongshu") return "这里是中枢，"+String(m.role||"集群主控")+"。座天枢，斗为帝车，临制四方。";
+  return "这里是"+(m.zh||mid)+"，"+String(m.role||"集群节点")+"。"
+    +(wx?("五行属"+wx[0]+"，"):"")+(st?("座"+st.star+"，"+st.duty+"。"):""); }
+function apNarr(text,urgent){
+  if(!NARRATE||!text) return;
+  if(!(holoS.tourFly||ap.on)) return;                    /* 只在飞览语境说话：手动看板不聒噪 */
+  const nb=$("narrbar");
+  if(nb){ nb.textContent=text; nb.classList.add("on");
+    clearTimeout(_narrHideT); _narrHideT=setTimeout(()=>nb.classList.remove("on"),6000); }
+  if(!SPEAK||DEMO) return;
+  if(_narrAud&&!_narrAud.ended&&!urgent) return;         /* 上一句没说完：跳过不排队（告警句抢话） */
+  fetch("/api/narrate",{method:"POST",body:JSON.stringify({text})})
+    .then(r=>{ if(!r.ok) throw 0; return r.blob(); })
+    .then(b=>{ try{ if(_narrAud&&!_narrAud.ended) _narrAud.pause(); }catch(_){/**/}
+      _narrAud=new Audio(URL.createObjectURL(b)); _narrAud.volume=0.85;
+      _narrAud.play().catch(()=>{}); })
+    .catch(()=>{});
+}
+
+/* ================= P1 质感包（2026-08-18 空中面板方案 P0b 克制子集） =================
+   WebAudio 合成音族 5 件（hover/grab/press/error/materialize，声像随屏幕 x）+ 抓取冲击波
+   （DOM ring，CSS 动画自清）+ 指尖光尾（gcur 尾迹）。?fx=0 素颜；非 full 档全关；失败静默。 */
+let _fxCtx=null,_fxTrail=[];
+function fxSnd(kind,x01){
+  if(!FX||state.mode!=="full") return;
+  try{
+    _fxCtx=_fxCtx||new (window.AudioContext||window.webkitAudioContext)();
+    const c=_fxCtx,t=c.currentTime,g=c.createGain();
+    const p=c.createStereoPanner?c.createStereoPanner():null;
+    if(p) p.pan.value=Math.max(-0.7,Math.min(0.7,(((x01==null?0.5:x01)*2)-1)*0.7));
+    g.connect(p||c.destination); if(p) p.connect(c.destination);
+    const o=c.createOscillator(); o.connect(g);
+    const env=(v,dur)=>{ g.gain.setValueAtTime(v,t);
+      g.gain.exponentialRampToValueAtTime(0.0008,t+dur); o.start(t); o.stop(t+dur+0.02); };
+    if(kind==="hover"){ o.type="sine"; o.frequency.value=1250; env(0.035,0.05); }
+    else if(kind==="grab"){ o.type="triangle"; o.frequency.setValueAtTime(190,t);
+      o.frequency.exponentialRampToValueAtTime(70,t+0.14); env(0.13,0.16); }
+    else if(kind==="press"){ o.type="square"; o.frequency.value=880; env(0.07,0.05); }
+    else if(kind==="error"){ o.type="sawtooth"; o.frequency.setValueAtTime(150,t);
+      o.frequency.setValueAtTime(118,t+0.09); env(0.09,0.2); }
+    else { o.type="sine"; o.frequency.setValueAtTime(320,t);           /* materialize whoosh */
+      o.frequency.exponentialRampToValueAtTime(1350,t+0.24); env(0.05,0.26); }
+  }catch(_){/* 音效永不影响主链路 */}
+}
+function fxRing(x,y,col){
+  if(!FX||x==null||y==null) return;
+  try{ const d=document.createElement("div"); d.className="fxring go";
+    if(col) d.style.borderColor=col;
+    d.style.left=x+"px"; d.style.top=y+"px"; document.body.appendChild(d);
+    setTimeout(()=>d.remove(),560); }catch(_){/**/}
+}
+/* ---- P2 1-Euro 滤波（2026-08-18 三轮·空中面板方案检索定案：手追光标标配——低速稳高速跟，
+   指尖抖动被吸掉、快挥不拖影；对全局手势光标生效=按钮磁吸的另一半 ---- */
+function mkEuro(minCut,beta){
+  let xp=null,dxp=0,tp=0;
+  const alpha=(cut,dt)=>{ const r=2*Math.PI*cut*dt; return r/(r+1); };
+  return (x,tms)=>{ const t=tms/1000;
+    if(xp==null){ xp=x; tp=t; return x; }
+    const dt=Math.max(1e-3,t-tp); tp=t;
+    const dx=(x-xp)/dt, ad=alpha(1.0,dt); dxp=ad*dx+(1-ad)*dxp;
+    const ax=alpha(minCut+beta*Math.abs(dxp),dt);
+    xp=ax*x+(1-ax)*xp; return xp; };
+}
+const _euX=mkEuro(1.4,0.012), _euY=mkEuro(1.4,0.012);
+/* ---- P2 演示状态（?show=1 / 语音「演示状态」宏）：特效满档=粒子×2+辉光增强+切全息。
+   纯呈现层；governor 非 full 照常全停（安静纪律不破）。 ---- */
+let SHOW=PARAMS.get("show")==="1";
+function setShow(on,src){
+  SHOW=!!on;
+  $("chip-show").classList.toggle("on",SHOW);
+  if(SHOW&&holoOK&&view!==3){ view=3; applyView(); }
+  toast(SHOW?"演示状态 · 特效全开（数据流粒子×2 · 辉光增强）":"已回安静档");
+  stat("fx_show",{v:SHOW?"on":"off",src:src||"url"});
+}
+
+/* ================= P0 帮助层（2026-08-18）：操作词表卡——「知者自知」的可发现性止血 ================= */
+function buildHelp(){
+  const el=$("helpin"); if(!el) return;
+  const row=(k,v)=>"<div class='hrow'><b>"+k+"</b><span>"+v+"</span></div>";
+  el.innerHTML=
+    "<h2>集群实况 · 操作词表</h2>"
+    +"<div class='hsub'>? 键或右上角 ? 随时唤出 · Esc / 点空处关闭 · 本卡纯本地零请求</div>"
+    +"<div class='hcols'>"
+    +"<div><h3>键盘与鼠标</h3>"
+      +row("← → / 页签","切视图（表格/事件流/星座/全息）")
+      +row("点行 / 双击行","详情卡 / 拉取该机桌面（只读）")
+      +row("右键全息节点","节点操作盘")
+      +row("W","桌面墙（全集群实时桌面）")
+      +row("回车 / U","武装态点火 / 撤销窗撤回")
+      +row("Esc","逐层退出：帮助→墙→拉屏→下钻→操作盘→收起")
+    +"</div>"
+    +"<div><h3>手势（摄像头屏）</h3>"
+      +row("张开手掌","唤醒手势层")
+      +row("捏合","提取行 / 按下按钮 / 救活红星")
+      +row("捏面板标题栏","抓移空中面板（松手停驻）")
+      +row("双手撑开 / 收拢","详情卡开关；全息=缩放/俯仰/扭转=旋转；面板开着=缩放面板")
+      +row("挥扫","切视图（疾扫=甩桌面跨屏）")
+      +row("握拳","收起 / 归还桌面 / 退出下钻")
+      +row("竖拇指 1.2s","确认告警 / 武装点火（在场信号）")
+      +row("指向节点停留 1s","拉取该机桌面")
+      +row("指向 + 竖拇指","打开节点操作盘")
+      +row("剪刀手上下","受控态远端滚动")
+    +"</div>"
+    +"<div><h3>语音（?voice=1 屏）</h3>"
+      +row("「小界小界」","唤醒（近讲麦 ≤半米；远场 ?mic=brio）")
+      +row("看 / 放大 某机","聚焦并拉屏该机")
+      +row("某机 的操作盘","打开节点操作盘")
+      +row("下钻 某机","服务子星下钻")
+      +row("切到某模式","算力模式切换（两段式确认）")
+      +row("一键归位","姿态失守时重申当前模式（需确认）")
+      +row("什么模式 / 切换进度","问询当前算力模式")
+      +row("集群体检 / 确认 / 取消","体检播报 / 点火 / 撤防")
+      +row("演示状态","特效全开宏（粒子×2+辉光增强+切全息）")
+    +"</div>"
+    +"<div><h3>展演与安全</h3>"
+      +row("/tour 手机页","幕次遥控 · 署名 · 预检 · 导演位跳机")
+      +row("电视台档","tv 屏自动开播（台账驱动）· ?autoplay=1|0 显式覆盖")
+      +row("全屏舞台","电视台档默认全息铺满 · ?stage=full|card 显式覆盖")
+      +row("指挥动作","模式条点击即切；面板危险动作先武装，再竖拇指/回车点火")
+      +row("推流硬闸","直播推流中动画/编排/指挥全冻结")
+    +"</div></div>"
+    +"<div class='hnote'>回退开关：?autoplay=0 电视台档关 · ?stage=card 回卡片布局 · ?fx=0 质感包素颜 · "
+    +"?narrate=0 关解说 · ?bloom=0 关辉光 · ?gestlead=0 退多目仲裁 · ?view= 直达任意视图</div>";
+}
+function helpOpen(src){ buildHelp(); $("helpcard").classList.add("on"); stat("help_open",{src:src||"key"}); }
+function helpClose(){ $("helpcard").classList.remove("on"); }
+function helpOn(){ return $("helpcard").classList.contains("on"); }
+
 /* ================= P1 语音指挥（「小界」唤醒；?voice=1 逐机 opt-in，默认关） =================
    分层：采集（本页 AudioWorklet 16k PCM16 → 128ms/块 POST）→ 中枢 voice_gateway
    （KWS+ASR+意图，音频内存流转不落盘）→ 结果并入快照经 SSE 广播（六屏字幕带同源）。
@@ -958,7 +1425,16 @@ window._injectTour=t=>{ state.ctx=state.ctx||{}; state.ctx.tour=t; handleTour();
 const SPEAK=PARAMS.get("speak")!=null ? PARAMS.get("speak")==="1" : SELF!=="zhongshu";
 const VIRTUAL_MIC=/virtual|cable|voicemeeter|vb-audio|ivcam|droidcam|splitcam|立体声混音|stereo mix|loopback|monitor|mix/i;
 let vctx=null,vstream=null,vnode=null,vbuf=[],vlen=0,vBusy=false,vQueue=[],vState="off",voiceStarting=false;
-let vMicLabel="";   /* 选中的真麦名（亮在语音章上：哪个麦在听一眼可见，选错当场能发现） */
+let vMicLabel="",vMicFull="";   /* 选中的真麦名（亮在语音章上：哪个麦在听一眼可见，选错当场能发现） */
+/* [P0 2026-08-21] 麦名短化：Windows 中文标签「麦克风 (真名)」剥外壳取真名、剥 USB vid:pid
+   尾巴、超长省略号收口——旧 slice(0,26) 硬切出「…Podcast Microp」括号不闭合像渲染坏了；
+   完整设备名走语音章 title 悬停可查。 */
+function _micShort(l){
+  l=String(l||"").replace(/\s+/g," ").trim();
+  const m=l.match(/^(.{0,8}?)[(（]([^()（）]{4,})[)）]\s*$/); if(m) l=m[2];
+  l=l.replace(/\s*[(（][0-9a-f]{4}[:&][0-9a-f]{4}[)）]\s*$/i,"").trim();
+  return l.length>28?l.slice(0,27)+"…":l;
+}
 function setVorb(st){
   vState=st;
   const o=$("vorb");
@@ -968,9 +1444,12 @@ function setVorb(st){
   o.classList.toggle("err",st==="err");
   const c=$("chip-voice");
   if(st==="off"){ c.classList.remove("on"); return; }
-  c.textContent = st==="idle" ? "语音 · 说「小界」唤醒"+(vMicLabel?" · "+vMicLabel:"")
+  /* [P2-4] 语音章聚合：唤醒教学保留，麦名显示位收 16 字（识别足矣），全名在 title */
+  c.textContent = st==="idle" ? "语音 · 说「小界」唤醒"
+      +(vMicLabel?" · "+(vMicLabel.length>16?vMicLabel.slice(0,15)+"…":vMicLabel):"")
     : st==="listen" ? "语音 · 聆听中" : st==="think" ? "语音 · 识别中"
     : st==="err" ? "语音 · 链路降级（用手势/键盘）" : "语音";
+  c.title=vMicFull?("麦克风："+vMicFull):"";   /* 短名亮章，全名悬停 */
   c.classList.add("on");
 }
 async function startVoice(){
@@ -1021,7 +1500,7 @@ async function startVoice(){
     }
     let pick=(pinPick&&pinR>=0.0008)?pinPick:(best||pinPick||mics[0]);
     vPinDev=pinPick?pinPick.deviceId:null; vPickDev=pick.deviceId;
-    vMicLabel=(pick.label||"麦克风").slice(0,26);
+    vMicFull=pick.label||"麦克风"; vMicLabel=_micShort(vMicFull);
     /* ?vdsp= 采集 DSP 档：full=AEC+NS+AGC(旧默认) / agc=只留自动增益 / raw=全关。
        2026-08-13 现场：远场人声 0.325 峰值仍不唤醒、房间谈话转写成碎渣——嫌疑=浏览器
        降噪把远场咬字频谱抹坏（近讲麦调的算法）。默认改 agc:远场要增益、不要 NS/AEC。 */
@@ -1206,6 +1685,7 @@ function applyVoiceAct(v){
   else if(a.act==="dim") state.dimHold=!!a.on;   /* 覆盖位：tick 的夜间自动档让位于语音指令 */
   else if(a.act==="checkup"){ const r=$("ripple"); r.classList.remove("on"); void r.offsetWidth;
     r.classList.add("on"); setTimeout(()=>r.classList.remove("on"),1700); }
+  else if(a.act==="show") setShow(true,"voice");   /* P2 演示状态宏：特效满档+切全息（「小界小界，演示状态」） */
 }
 window._injectVoice=v=>{ state.ctx=state.ctx||{}; state.ctx.voice=v; handleVoice(); };
 
@@ -1216,6 +1696,13 @@ const SCREEN=PARAMS.get("screen")||"";           /* 多屏同机（中枢三联�
 function ckScreens(){ return (((state.ctx||{}).cockpit)||{}).screens||[]; }
 function ckSelf(){ const s=ckScreens(); if(!s.length) return null;
   return s.find(x=>x.id===SCREEN)||s.find(x=>x.machine===SELF)||null; }
+function ckCamYaw(){
+  /* C2 环幕近似：按台账 side 给相机一个静态偏航，不把猜测 pose 写入 cockpit.json。
+     tv 屏是客户演示锚点，保持正面英雄机位（offset=0）。卷尺实测 pose 仍留给真 C2。 */
+  const me=ckSelf(); if(!me||me.tv) return 0;
+  if(me.side==="left") return -0.28;
+  if(me.side==="right") return 0.28;
+  return 0; }
 function ckCenter(){ return ckScreens().find(x=>x.center)||null; }
 function ckNeighbor(dir){ const s=ckScreens(), me=ckSelf(); if(!me) return null;
   const i=s.findIndex(x=>x.id===me.id), j=dir==="left"?i-1:i+1;
@@ -1361,21 +1848,9 @@ async function opsPost(act,body){
   try{ const r=await fetch("/api/ops/"+act,{method:"POST",body:JSON.stringify(body||{})});
     return await r.json(); }catch(_){ return {ok:false}; }
 }
-function grabAuthFrame(){
-  /* 刷脸叠加层的当帧（登记表空时服务端不看此字段）：取手势视频源缩到 640 宽，
-     内存直传验证即弃——与「画面不落盘不出机」同一口径 */
-  try{
-    const src=grabSource(); if(!src) return "";
-    const w=src.videoWidth||src.width,h=src.videoHeight||src.height;
-    if(!w||!h) return "";
-    const c=document.createElement("canvas");
-    c.width=Math.min(640,w); c.height=Math.round(h*c.width/w);
-    c.getContext("2d").drawImage(src,0,0,c.width,c.height);
-    return c.toDataURL("image/jpeg",0.75);
-  }catch(_){ return ""; }
-}
+/* 刷脸叠加层已拆除（2026-08-21 用户拍板）：点火不再取帧，纯在场信号 */
 function fireOps(src){ const o=opsArmed();
-  if(o) opsPost("fire",{id:o.id,src,frame:state.camOn?grabAuthFrame():""}); }
+  if(o) opsPost("fire",{id:o.id,src}); }
 function disarmOps(src){ const o=opsArmed(); if(o) opsPost("disarm",{id:o.id,src}); }
 function undoOps(src){ opsPost("undo",{src}); }
 function handleOps(){
@@ -1393,9 +1868,7 @@ function handleOps(){
         obi=card.querySelector(".ob i"),ok2=card.querySelector(".ok2");
   if(o.phase==="armed"){
     oh.textContent="⚡ "+o.desc; oi.textContent=o.impact||"";
-    ok2.textContent=o.auth==="face"
-      ? "刷脸点火：正对镜头 + 竖拇指 1.2s / 回车　·　握拳 / Esc / 说「取消」＝撤防"
-      : "竖拇指 1.2s / 回车 / 说「确认」＝点火　·　握拳 / Esc / 说「取消」＝撤防";
+    ok2.textContent="竖拇指 1.2s / 回车 / 说「确认」＝点火　·　握拳 / Esc / 说「取消」＝撤防";
     card.classList.add("on");
     const total=Math.max(1,(o.expires-o.at)||8);
     opsTimer=setInterval(()=>{ const rem=(o.expires+srvSkew)-Date.now()/1000;
@@ -1410,7 +1883,7 @@ function handleOps(){
       setTimeout(()=>$("panel").classList.remove("glitch"),900); }
     opsHideT=setTimeout(()=>card.classList.remove("on"),7000);
   }else if(o.phase==="denied"){
-    card.classList.add("on","deny");
+    card.classList.add("on","deny"); fxSnd("error");
     oh.textContent="✗ 被拒绝"; oi.textContent=o.impact||o.detail||"";
     obi.style.width="0%"; ok2.textContent="";
     opsHideT=setTimeout(()=>card.classList.remove("on"),5000);
@@ -1489,7 +1962,7 @@ window._injectDeskGrab=deskGrab;   /* 实拍/验证钩 */
 addEventListener("resize",()=>{ if(deskMid) sizeDeskLaser(); });
 
 /* ---- P2 隔空受控（输入注入；四重护栏全在服务端 ops_gateway，客户端只发意图）----
-   安全：白名单只认服务端下发的 ctrl.targets∩deployed；武装须刷脸（服务端判决）；
+   安全：白名单只认服务端下发的 ctrl.targets∩deployed；武装=在场信号（刷脸层 2026-08-21 拆除）；
    推流冻结/关窗/超时/总闸=立即撤防；每个动作服务端再查一遍（fail-closed）。 */
 let ctrlSess=null;                 /* {token,machine,until,by} —— token 仅存内存，不入 URL/日志 */
 let dtoastT=null;
@@ -1505,9 +1978,8 @@ async function ctrlPost(act,body){
     return await r.json(); }catch(_){ return {ok:false,error:"网络不可达"}; } }
 async function ctrlArm(src){
   if(!deskMid||!ctrlCanControl(deskMid)||ctrlArmed()) return;
-  const frame=state.camOn?grabAuthFrame():"";
-  toast("刷脸授权中…");
-  const r=await ctrlPost("arm",{machine:deskMid,src:src||"gesture",frame});
+  toast("武装受控会话…");
+  const r=await ctrlPost("arm",{machine:deskMid,src:src||"gesture"});
   if(r&&r.ok){ ctrlSess={token:r.token,machine:r.machine,until:r.until,by:r.by};
     stat("ctrl_arm",{v:deskMid,src:src||"gesture"});
     toast("已授权操控 "+((state.ctx.machines||[]).find(m=>m.id===deskMid)||{}).zh+" · "+(r.by||"主人")); }
@@ -1521,7 +1993,7 @@ function ctrlActionAt(kind,nx,ny,extra){
 /* P2b 语音打字：受控武装态下开/关「说话→远端焦点框」（判据在 voice_gateway；关时管道零改动） */
 function voiceDictating(){ return !!((state.ctx||{}).voice||{}).dictate; }
 async function ctrlDictateToggle(){
-  if(!ctrlArmed()){ toast("先竖拇指刷脸授权操控，再语音打字"); return; }
+  if(!ctrlArmed()){ toast("先竖拇指授权操控，再语音打字"); return; }
   const on=!voiceDictating();
   const r=await ctrlPost2("/api/voice/dictate",{on});
   if(r&&r.ok){ stat("ctrl_dictate",{v:on?"on":"off"}); toast(on?"语音打字已开 · 说什么打什么，说「回车」「翻页」控制，「停打字」退出":"已退出语音打字"); }
@@ -1566,7 +2038,7 @@ function wallOpen(src){
   $("wall").classList.add("on");
   $("wallgrid").innerHTML=mids.map(m=>{
     const mm=((state.ctx||{}).machines||[]).find(x=>x.id===m);
-    return `<div class="wtile" data-m="${m}"><span class="nm">${(mm&&mm.zh)||m}</span>
+    return `<div class="wtile" data-m="${m}"><span class="nm">${(mm&&mm.zh)||m}${mm&&_ipT(mm)?" "+_ipT(mm):""}</span>
       <img alt=""><div class="off">连接中…</div></div>`;
   }).join("");
   stat("wall_open",{v:mids.length,src:src||"key"});
@@ -1632,12 +2104,28 @@ if(!DEMO){
   const _modes=[GEST_WANT?"gesture":"",VOICE_WANT?"voice":"",GSRC==="phone"?"phone":""].filter(Boolean);
   const _q="?machine="+encodeURIComponent(SELF||"")+(_modes.length?"&modes="+_modes.join(","):"");
   const es=new EventSource("/api/stream"+_q);
+  let connLostAt=0;
   es.onmessage=e=>{ try{ state.ctx=JSON.parse(e.data); }catch(_){ return; }
-    state.recvAt=Date.now(); state.connLost=false;
+    state.recvAt=Date.now(); state.connLost=false; connLostAt=0;
     if(state.ctx.srv_epoch) srvSkew=Date.now()/1000-state.ctx.srv_epoch;   /* 钟差校正 */
     $("chip-conn").classList.remove("on");
     renderData(); applyGovernor(); };
-  es.onerror=()=>{ state.connLost=true; $("chip-conn").classList.add("on"); };
+  es.onerror=()=>{ state.connLost=true; if(!connLostAt) connLostAt=Date.now();
+    $("chip-conn").classList.add("on"); };
+  /* 过夜自愈：SSE 断 90s 仍未回来（页还活着、EventSource 重连没救活）→ 整页重载。
+     让位纪律与 asset_ver 自刷同一套：武装/拉屏/墙/受控/切换中绝不打断。 */
+  setInterval(()=>{
+    if(!connLostAt||DEMO) return;
+    if(Date.now()-connLostAt<90000) return;
+    if(typeof opsArmed==="function"&&opsArmed()) return;
+    if(typeof deskOpen==="function"&&deskOpen()) return;
+    if(typeof wallOn!=="undefined"&&wallOn) return;
+    if(typeof ctrlSess!=="undefined"&&ctrlSess) return;
+    const cm=((state.ctx||{}).clustermode||{});
+    if(cm.switching) return;
+    stat("ui_reload",{src:"sse"}); connLostAt=0;
+    setTimeout(()=>location.reload(),400);
+  },5000);
 }
 
 /* ================= P2 手势层（?gesture=1 逐机 opt-in，默认关） =================
@@ -1796,9 +2284,11 @@ function smAwake(){ sm.st="awake"; sm.wakeAt=0;
   $("hint").classList.add("on"); stat("wake",{src:"gesture",v:GSRC}); }
 function smIdle(){ sm.st="idle"; sm.wakeAt=0; sm.pinch=false;
   $("hint").classList.remove("on"); extractRow(null); dwellRing(null,0);
+  _fxTrail.length=0;
   gc.clearRect(0,0,gcur.width,gcur.height); }
 let cursorPos=null;
-function moveCursor(cx,cy){ cursorPos=[cx*innerWidth,cy*innerHeight]; }
+function moveCursor(cx,cy){ const t=performance.now();   /* 1-Euro 平滑（抖动吸掉、快挥不拖） */
+  cursorPos=[_euX(cx*innerWidth,t),_euY(cy*innerHeight,t)]; }
 function drawGhost(hands){
   gc.clearRect(0,0,gcur.width,gcur.height);
   if(sm.st!=="awake"&&!(hands&&hands.length)) return;
@@ -1811,8 +2301,23 @@ function drawGhost(hands){
     for(const i of [4,8,12,16,20]){ const[x,y]=P(i);
       gc.beginPath(); gc.arc(x,y,3.2,0,7); gc.fill(); }
   }
-  if(cursorPos){ gc.beginPath(); gc.arc(cursorPos[0],cursorPos[1],9,0,7);
+  if(cursorPos){   /* 主手光标：环径随手掌尺度=伪深度（近大远小，Ultraleap 深度提示定案） */
+    let rr=9;
+    if(hands&&hands[0]&&hands[0][0]&&hands[0][9])
+      rr=Math.max(6,Math.min(14,Math.hypot(hands[0][0].x-hands[0][9].x,hands[0][0].y-hands[0][9].y)*46));
+    gc.beginPath(); gc.arc(cursorPos[0],cursorPos[1],rr,0,7);
     gc.strokeStyle="rgba(236,72,153,.9)"; gc.lineWidth=2; gc.stroke(); }
+  if(hands&&hands.length>=2&&hands[1]&&hands[1][8]){   /* 副手光标：青色小环（双手语法可见化） */
+    gc.beginPath(); gc.arc((1-hands[1][8].x)*innerWidth,hands[1][8].y*innerHeight,7,0,7);
+    gc.strokeStyle="rgba(34,211,238,.85)"; gc.lineWidth=2; gc.stroke(); }
+  /* P1 质感包：指尖光尾（近 450ms 尾迹渐细渐隐；?fx=0 素颜） */
+  if(FX&&cursorPos){ const _tn=performance.now();
+    const _lp=_fxTrail[_fxTrail.length-1];
+    if(!_lp||_lp[0]!==cursorPos[0]||_lp[1]!==cursorPos[1]) _fxTrail.push([cursorPos[0],cursorPos[1],_tn]);
+    while(_fxTrail.length>18||(_fxTrail.length&&_tn-_fxTrail[0][2]>450)) _fxTrail.shift();
+    for(let i=1;i<_fxTrail.length;i++){ const a=_fxTrail[i-1],b=_fxTrail[i],f=i/_fxTrail.length;
+      gc.strokeStyle="rgba(34,211,238,"+(0.05+f*0.32).toFixed(2)+")"; gc.lineWidth=1+f*3.2;
+      gc.beginPath(); gc.moveTo(a[0],a[1]); gc.lineTo(b[0],b[1]); gc.stroke(); } }
 }
 function dwellRing(hands,frac){
   if(!cursorPos||!frac){ return; }
@@ -1842,7 +2347,7 @@ function openDetail(machine,src){
   stat("detail",{src:src||"mouse",v:m.id});
   const vt=m.vram_total_mb>0?`${(m.vram_used_mb/1024).toFixed(1)} / ${Math.round(m.vram_total_mb/1024)}G`:"—";
   $("dcard").style.setProperty("--acc",m.accent||"#8B5CF6");
-  $("dcard").innerHTML=`<h2 style="color:${m.accent}">${m.zh} <small style="font-size:14px;color:#969CB0">${m.id}</small></h2>
+  $("dcard").innerHTML=`<h2 style="color:${m.accent}">${m.zh}${_ipT(m)?" "+_ipT(m):""} <small style="font-size:14px;color:#969CB0">${m.id}${m.ip?" · "+m.ip:""}</small></h2>
     <div class="rn">${m.role_now||m.role||""}</div>
     <div class="kv">状态 ${m.status} · 延迟 ${fmtLat(m.lat_ms)||"—"} · GPU ${m.gpu_util!=null&&m.gpu_util>=0?m.gpu_util+"%":"—"} · 显存 ${vt}${m.temp!=null&&m.temp>=0?` · ${m.temp}°C`:""}${m.fresh?" · 秒级":""}</div>
     <div class="kv" style="color:#7A8096;padding-top:16px">握拳 / Esc / 点击空白 收起</div>`;
@@ -1883,7 +2388,7 @@ function applyView(){
   if(view===2){ sizeCons(); fetchStations(); drawCons(0); }
   if(view===3){ initHolo().then(ok=>{ if(!ok){ holoOK=false; if(view===3){ view=2; applyView(); } }
                                        else { holoS.reveal=0; holoS.zoom=1; holoS.pitch=0;
-                                              holoS.orbitManual=0; sizeHolo(); } }); }   /* 每次进入重放揭幕+复位相机 */
+                                              holoS.orbitManual=0; holoS.ripples=[]; sizeHolo(); } }); }   /* 每次进入重放揭幕+复位相机+清涟漪池 */
 }
 function cycleView(dir,src){ const n=viewCount(); view=(view+(dir||1)+n)%n; applyView();
   stat("view",{v:["rows","events","cons","holo"][view],src:src||"mouse"}); }
@@ -1905,64 +2410,75 @@ function holoGlowTex(THREE){ const s=64,c=document.createElement("canvas"); c.wi
   return new THREE.CanvasTexture(c); }
 function _hrr(g,x,y,w,h,r){ g.beginPath(); g.moveTo(x+r,y); g.arcTo(x+w,y,x+w,y+h,r);
   g.arcTo(x+w,y+h,x,y+h,r); g.arcTo(x,y+h,x,y,r); g.arcTo(x,y,x+w,y,r); g.closePath(); }
-function _hbrk(g,x,y,w,h,col){ g.strokeStyle=col; g.lineWidth=2; g.globalAlpha=.9; const L=13;
+function _hbrk(g,x,y,w,h,col,s){ s=s||1; g.strokeStyle=col; g.lineWidth=2*s; g.globalAlpha=.9; const L=13*s;
   const k=(cx,cy,dx,dy)=>{ g.beginPath(); g.moveTo(cx+dx*L,cy); g.lineTo(cx,cy); g.lineTo(cx,cy+dy*L); g.stroke(); };
   k(x,y,1,1); k(x+w,y,-1,1); k(x,y+h,1,-1); k(x+w,y+h,-1,-1); g.globalAlpha=1; }
 function _htemp(t){ return t<0?"#5a6070":t<45?"#22D3EE":t<60?"#2EC27E":t<75?"#E8B341":"#DE3C46"; }
-function _hbar(g,x,y,w,label,frac,val,col){
-  g.textAlign="left"; g.font="600 15px 'Segoe UI',system-ui"; g.fillStyle="#8b93a8"; g.fillText(label,x,y);
-  g.textAlign="right"; g.font="700 15px Consolas,monospace"; g.fillStyle="#cdd6ea"; g.fillText(val,x+w,y);
-  _hrr(g,x,y+5,w,6,3); g.fillStyle="rgba(255,255,255,.10)"; g.fill();
-  _hrr(g,x,y+5,Math.max(3,w*Math.max(0,Math.min(1,frac))),6,3); g.fillStyle=col; g.fill(); }
-/* 节点仪表卡（替代素标签）：名 + GPU/显存/温度三读数 + 状态点 + 四角框；NormalBlending 保持 crisp 不进 bloom */
+function _hbar(g,x,y,w,label,frac,val,col,s){ s=s||1;   /* S5 数值=等宽字（tabular 防抖），s=超采样倍率 */
+  g.textAlign="left"; g.font="600 "+(15*s)+"px 'Segoe UI',system-ui"; g.fillStyle="#8b93a8"; g.fillText(label,x,y);
+  g.textAlign="right"; g.font="700 "+(15*s)+"px Consolas,monospace"; g.fillStyle="#cdd6ea"; g.fillText(val,x+w,y);
+  _hrr(g,x,y+5*s,w,6*s,3*s); g.fillStyle="rgba(255,255,255,.10)"; g.fill();
+  _hrr(g,x,y+5*s,Math.max(3,w*Math.max(0,Math.min(1,frac))),6*s,3*s); g.fillStyle=col; g.fill(); }
+/* 节点仪表卡（替代素标签）：名 + GPU/显存/温度三读数 + 状态点 + 四角框；NormalBlending 保持 crisp 不进 bloom；
+   S5 2x 超采样（同长宽比=sprite 缩放零改动）+ 等宽数值 + 顶缘光条（边缘高光语言） */
 function holoCardTex(THREE,m){
-  const w=280,h=150,c=document.createElement("canvas"); c.width=w; c.height=h;
+  const w=560,h=300,c=document.createElement("canvas"); c.width=w; c.height=h;
   const g=c.getContext("2d"); g.clearRect(0,0,w,h);
   const acc=_holoColor(m), ok=m.status==="ok";
   const u=(m.gpu_util==null||m.gpu_util<0)?-1:m.gpu_util;
   const vr=(m.vram_total_mb&&m.vram_used_mb!=null)?m.vram_used_mb/m.vram_total_mb:0;
   const tp=(m.temp!=null&&m.temp>=0)?m.temp:-1;
-  _hrr(g,6,6,w-12,h-12,14); g.fillStyle="rgba(6,9,18,0.80)"; g.fill();
-  g.lineWidth=1.5; g.strokeStyle=acc; g.globalAlpha=.5; g.stroke(); g.globalAlpha=1;
-  _hbrk(g,6,6,w-12,h-12,acc);
-  g.textAlign="left"; g.fillStyle="#EAF2FF"; g.font="700 30px 'Segoe UI',system-ui"; g.fillText(m.zh||m.id,22,42);
-  g.beginPath(); g.arc(w-28,32,7,0,7); g.fillStyle=ok?C.ok:acc; g.fill();
-  _hbar(g,22,70,w-44,"GPU",u>=0?u/100:0,u>=0?(u+"%"):"离线",u>=0?utilColor(u):"#5a6070");
-  _hbar(g,22,100,w-44,"显存",vr,(vr*100).toFixed(0)+"%",C.violet);
-  _hbar(g,22,130,w-44,"温度",tp>=0?Math.min(1,tp/90):0,tp>=0?(tp+"°"):"—",_htemp(tp));
+  _hrr(g,12,12,w-24,h-24,28); g.fillStyle="rgba(5,8,17,0.88)"; g.fill();
+  g.lineWidth=3; g.strokeStyle=acc; g.globalAlpha=.5; g.stroke(); g.globalAlpha=1;
+  _hbrk(g,12,12,w-24,h-24,acc,2);
+  g.fillStyle=acc; g.globalAlpha=.85; g.fillRect(44,18,96,4); g.globalAlpha=1;
+  g.textAlign="left"; g.fillStyle="#EAF2FF"; g.font="700 60px 'Segoe UI',system-ui"; g.fillText(m.zh||m.id,44,86);
+  if(_ipT(m)){ const nw=g.measureText(m.zh||m.id).width;
+    g.fillStyle="#969CB0"; g.font="600 38px Consolas,monospace"; g.fillText(_ipT(m),44+nw+16,86); }
+  g.beginPath(); g.arc(w-56,64,14,0,7); g.fillStyle=ok?C.ok:acc; g.fill();
+  _hbar(g,44,140,w-88,"GPU",u>=0?u/100:0,u>=0?(u+"%"):"离线",u>=0?utilColor(u):"#5a6070",2);
+  _hbar(g,44,200,w-88,"显存",vr,(vr*100).toFixed(0)+"%",C.violet,2);
+  _hbar(g,44,260,w-88,"温度",tp>=0?Math.min(1,tp/90):0,tp>=0?(tp+"°"):"—",_htemp(tp),2);
   return new THREE.CanvasTexture(c); }
-/* 节点紧凑章（静息态）：名 + 状态点 + 三条极小 GPU/显存/温度 pip；6 个也不挤，悬停才换成完整仪表卡 */
+/* 节点紧凑章（静息态）：名 + 状态点 + 三条极小 GPU/显存/温度 pip；6 个也不挤，悬停才换成完整仪表卡；
+   S5 2x 超采样 + 顶缘光条 + IP 尾号等宽 */
 function holoChipTex(THREE,m){
-  const w=184,h=66,c=document.createElement("canvas"); c.width=w; c.height=h;
+  const w=368,h=132,c=document.createElement("canvas"); c.width=w; c.height=h;
   const g=c.getContext("2d"); g.clearRect(0,0,w,h);
   const acc=_holoColor(m), ok=m.status==="ok";
   const u=(m.gpu_util==null||m.gpu_util<0)?-1:m.gpu_util;
   const vr=(m.vram_total_mb&&m.vram_used_mb!=null)?m.vram_used_mb/m.vram_total_mb:0;
   const tp=(m.temp!=null&&m.temp>=0)?m.temp:-1;
-  _hrr(g,4,4,w-8,h-8,12); g.fillStyle="rgba(6,9,18,0.72)"; g.fill();
-  g.lineWidth=1.2; g.strokeStyle=acc; g.globalAlpha=.45; g.stroke(); g.globalAlpha=1;
-  g.textAlign="left"; g.fillStyle="#EAF2FF"; g.font="700 24px 'Segoe UI',system-ui"; g.fillText(m.zh||m.id,16,34);
-  g.beginPath(); g.arc(w-20,22,6,0,7); g.fillStyle=ok?C.ok:acc; g.fill();
+  _hrr(g,8,8,w-16,h-16,24); g.fillStyle="rgba(5,8,17,0.84)"; g.fill();
+  g.lineWidth=2.4; g.strokeStyle=acc; g.globalAlpha=.45; g.stroke(); g.globalAlpha=1;
+  g.fillStyle=acc; g.globalAlpha=.85; g.fillRect(30,10,60,3); g.globalAlpha=1;
+  g.textAlign="left"; g.fillStyle="#EAF2FF"; g.font="700 48px 'Segoe UI',system-ui"; g.fillText(m.zh||m.id,32,66);
+  if(_ipT(m)){ const nw=g.measureText(m.zh||m.id).width;
+    g.fillStyle="#969CB0"; g.font="600 30px Consolas,monospace"; g.fillText(_ipT(m),32+nw+12,66); }
+  g.beginPath(); g.arc(w-40,44,12,0,7); g.fillStyle=ok?C.ok:acc; g.fill();
   const pips=[[u>=0?u/100:0,u>=0?utilColor(u):"#5a6070"],[vr,C.violet],[tp>=0?Math.min(1,tp/90):0,_htemp(tp)]];
-  let px=16; for(const p of pips){ _hrr(g,px,46,44,5,2); g.fillStyle="rgba(255,255,255,.10)"; g.fill();
-    _hrr(g,px,46,Math.max(2,44*Math.max(0,Math.min(1,p[0]))),5,2); g.fillStyle=p[1]; g.fill(); px+=52; }
+  let px=32; for(const p of pips){ _hrr(g,px,92,88,10,5); g.fillStyle="rgba(255,255,255,.10)"; g.fill();
+    _hrr(g,px,92,Math.max(4,88*Math.max(0,Math.min(1,p[0]))),10,5); g.fillStyle=p[1]; g.fill(); px+=104; }
   return new THREE.CanvasTexture(c); }
 function _holoColor(m){ const u=(m.gpu_util==null||m.gpu_util<0)?-1:m.gpu_util;
   return m.status==="ok" ? (u>=0?utilColor(u):C.ok) : ((ST_TXT[m.status]||ST_TXT.unknown)[1]); }
 /* P2 全息材质：Fresnel 边缘辉光 + 水平扫描线（内联 GLSL 自定义 ShaderMaterial）。
    材质本身零 addon 依赖；真 Bloom(UnrealBloomPass) 由 initHolo 的 EffectComposer 另行叠加（P2+，硬回退保零回归）。*/
 function holoMat(THREE,colStr){
-  return new THREE.ShaderMaterial({   /* P0b 能量护盾：Fresnel 边缘 + 六边形能量网格 + 噪声呼吸 + 扫描线 */
+  return new THREE.ShaderMaterial({   /* P0b 能量护盾：Fresnel 边缘 + 六边形能量网格 + 噪声呼吸 + 扫描线
+       + S10 物质化（uMat 0→1 自下而上扫描升起，uRad=局部半径归一；常态 uMat=1 零开销） */
     transparent:true, depthWrite:false, blending:THREE.AdditiveBlending, side:THREE.DoubleSide,
-    uniforms:{ uColor:{value:new THREE.Color(colStr)}, uTime:{value:0}, uAlpha:{value:1} },
-    vertexShader:`varying vec3 vN; varying vec3 vV; varying float vY; varying vec2 vUvS;
+    uniforms:{ uColor:{value:new THREE.Color(colStr)}, uTime:{value:0}, uAlpha:{value:1},
+               uMat:{value:1}, uRad:{value:1}, uTaiji:{value:0} },
+    vertexShader:`varying vec3 vN; varying vec3 vV; varying float vY; varying vec2 vUvS; varying vec3 vLp;
       void main(){ vec4 wp=modelMatrix*vec4(position,1.0);
-        vN=normalize(mat3(modelMatrix)*normal); vV=normalize(cameraPosition-wp.xyz); vY=wp.y;
+        vN=normalize(mat3(modelMatrix)*normal); vV=normalize(cameraPosition-wp.xyz); vY=wp.y; vLp=position;
         vec3 pn=normalize(position);      /* 球面 UV：经度/纬度，用于把六边形网格投到核上 */
         vUvS=vec2(atan(pn.z,pn.x)*0.15915+0.5, asin(clamp(pn.y,-1.0,1.0))*0.31831+0.5);
         gl_Position=projectionMatrix*viewMatrix*wp; }`,
     fragmentShader:`uniform vec3 uColor; uniform float uTime; uniform float uAlpha;
-      varying vec3 vN; varying vec3 vV; varying float vY; varying vec2 vUvS;
+      uniform float uMat; uniform float uRad; uniform float uTaiji;
+      varying vec3 vN; varying vec3 vV; varying float vY; varying vec2 vUvS; varying vec3 vLp;
       float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
       float vnoise(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.0-2.0*f);
         return mix(mix(hash(i),hash(i+vec2(1.,0.)),f.x),mix(hash(i+vec2(0.,1.)),hash(i+vec2(1.,1.)),f.x),f.y); }
@@ -1975,10 +2491,365 @@ function holoMat(THREE,colStr){
         float scan=0.5+0.5*sin(vY*30.0-uTime*3.2);
         float n=vnoise(vUvS*7.0+uTime*0.25);                              /* 噪声呼吸 */
         float hex=hexEdge(vUvS*9.0+vec2(0.0,uTime*0.05))*(0.45+0.55*n);   /* 六边形能量网格 */
-        float b=(0.05 + hex*0.5 + fres*1.15 + scan*0.08)*(0.78+0.22*n);
-        gl_FragColor=vec4(uColor*(0.5+fres*1.3+hex*0.6), clamp(b*uAlpha,0.0,0.95)); }`
+        float tj=uTaiji*(0.5+0.5*sin(vUvS.x*6.2832+uTime*0.55+sin(vUvS.y*3.1416)*2.4));   /* 太极旋纹（中枢专属，±20% 亮度双臂回旋） */
+        float b=(0.05 + hex*0.5 + fres*1.15 + scan*0.08)*(0.78+0.22*n)*(1.0+uTaiji*(tj*0.5-0.22));
+        float mm=clamp(uMat,0.0,1.0);
+        float lift=(vLp.y/max(uRad,0.001))*0.5+0.5;                       /* 局部高度 0..1 */
+        float wipe=smoothstep(lift-0.10,lift+0.02,mm*1.12);               /* 物质化：自下而上升起 */
+        float mfront=exp(-abs(mm*1.12-lift)*9.0)*step(mm,0.999)*0.35;     /* 扫描前锋亮边（瞬时，允许过阈） */
+        gl_FragColor=vec4((uColor*(0.5+fres*1.3+hex*0.6)+uColor*mfront)*(0.86*(1.0+uTaiji*(tj*0.42-0.18))),
+                          clamp(b*uAlpha,0.0,0.92)*wipe+mfront*uAlpha); }`   /* ×0.86=核心留结构不成白团 */
   });
 }
+/* ============ S2-S4/S10-S11 沙盘视觉装配层（20260821 全息重做方案A「全息指挥沙盘」）：
+   极坐标全息地台 / 弧形仪表环 / 涟漪事件池。全部走 uniform 更新零逐帧重建几何；
+   颜色一律经 _rgb3 双格式解析（NaN 铁律）；加性元素峰值亮度守 bloom 阈 0.9 纪律。 ============ */
+const HOLO_FLOOR_Y=-1.15;   /* 台面高度（原 GridHelper -1.7 过远=构图脱节，收紧贴近沙盘） */
+function holoFloorMat(THREE){   /* 极坐标全息地台：刻度环+径向线+反应堆坪+模式色外环跑马+事件涟漪+揭幕掩码 */
+  const rip=[],ripc=[];
+  /* 颜色池必须是 THREE.Color（vec3 uniform 两者皆可上传，但更新路径用 setRGB——Vector3 无此法，
+     首发涟漪即 TypeError 打死 rAF 整条渲染循环：2026-08-21 实拍矩阵全黑实锤，NaN 铁律的类型近亲 */
+  for(let i=0;i<4;i++){ rip.push(new THREE.Vector4(0,0,9,0)); ripc.push(new THREE.Color(0.13,0.83,0.93)); }
+  return new THREE.ShaderMaterial({
+    transparent:true, depthWrite:false, side:THREE.DoubleSide,
+    uniforms:{ uTime:{value:0}, uReveal:{value:0}, uBusy:{value:0}, uFx:{value:FX?0:1},
+      uAccent:{value:new THREE.Color(C.cyan)}, uRip:{value:rip}, uRipCol:{value:ripc} },
+    vertexShader:`varying vec2 vP;
+      void main(){ vP=position.xy; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+    fragmentShader:`uniform float uTime; uniform float uReveal; uniform float uBusy; uniform float uFx;
+      uniform vec3 uAccent; uniform vec4 uRip[4]; uniform vec3 uRipCol[4];
+      varying vec2 vP;
+      void main(){
+        float r=length(vP), a=atan(vP.y,vP.x);
+        float rv=clamp(uReveal,0.0,1.0)*8.4;                 /* 揭幕：地台自内向外点亮 */
+        if(r>rv) discard;
+        float fade=1.0-smoothstep(4.6,7.9,r);                /* 距离衰减：边缘融进星野 */
+        float ring=smoothstep(0.030,0.0,abs(fract(r*1.25)-0.5)-0.44);      /* 密刻度环 */
+        float ring2=smoothstep(0.016,0.0,abs(fract(r*0.42+0.5)-0.5)-0.485);/* 疏主环 */
+        float spoke=smoothstep(0.026,0.0,abs(fract(a*3.8197)-0.5)-0.47);   /* 24 根径向线 */
+        float spoke2=smoothstep(0.020,0.0,abs(fract(a*7.6394)-0.5)-0.478)*uFx;   /* E 档蓝图：48 根密径线 */
+        float pad=smoothstep(0.05,0.0,abs(r-1.05))*0.9+smoothstep(0.04,0.0,abs(r-1.35))*0.5; /* 反应堆坪 */
+        float ow=0.055+uBusy*0.03;                           /* 模式色外环跑马（忙态加宽加速） */
+        float oring=smoothstep(ow,0.0,abs(r-6.9));
+        float dash=step(0.5,fract(a*9.5493+uTime*(0.14+uBusy*0.6)*(1.0-uFx*0.85)));   /* 蓝图态跑马近静 */
+        float orun=oring*(0.35+0.65*dash);
+        vec3 ripCol=vec3(0.0); float ripI=0.0;               /* 事件涟漪池（真事件驱动） */
+        for(int i=0;i<4;i++){
+          float ag=uRip[i].z; if(ag>=1.0) continue;
+          float rr=ag*7.6, d=length(vP-uRip[i].xy);
+          float w=exp(-pow((d-rr)*2.6,2.0))*(1.0-ag)*uRip[i].w;
+          ripI+=w; ripCol+=uRipCol[i]*w;
+        }
+        vec3 base=vec3(0.10,0.16,0.30);
+        vec3 col=base*(ring*0.55+ring2*0.9+spoke*0.30+spoke2*0.5)+uAccent*(pad*0.55+orun*0.75)+ripCol*0.85;
+        float alpha=(ring*0.14+ring2*0.22+spoke*0.07+spoke2*0.10+pad*0.30+orun*0.42+min(ripI,1.4)*0.5)
+                    *fade*(1.0+uFx*0.3);   /* 蓝图态整体提亮=工程图纸感 */
+        float front=exp(-abs(r-rv)*2.2)*step(rv,8.3)*0.5;    /* 揭幕前锋亮边 */
+        col+=uAccent*front; alpha+=front*0.4;
+        gl_FragColor=vec4(col,clamp(alpha,0.0,0.9));
+      }`});
+}
+function holoArcMat(THREE,colStr,alpha){   /* 弧形仪表环：uFrac=占比（暗底轨+亮弧+端点头灯），S2 三段式浮筒的读数环 */
+  const c3=_rgb3(colStr);
+  return new THREE.ShaderMaterial({
+    transparent:true, depthWrite:false, side:THREE.DoubleSide,
+    uniforms:{ uFrac:{value:0}, uColor:{value:new THREE.Color(c3[0]/255,c3[1]/255,c3[2]/255)},
+               uAlpha:{value:alpha==null?1:alpha} },
+    vertexShader:`varying vec2 vP; void main(){ vP=position.xy;
+      gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+    fragmentShader:`uniform float uFrac; uniform vec3 uColor; uniform float uAlpha; varying vec2 vP;
+      void main(){
+        float a=fract((atan(vP.y,vP.x)+1.5707963)/6.2831853+1.0);   /* 12 点起 */
+        float fr=clamp(uFrac,0.0,1.0);
+        float on=step(a,fr);
+        float head=exp(-abs(a-max(fr,0.001))*46.0);                 /* 端点头灯 */
+        vec3 col=uColor*(0.26+on*0.62+head*0.85);
+        gl_FragColor=vec4(col,(0.27+on*0.46+head*0.5)*uAlpha);   /* 底轨提亮=整环可读，弧段才有「刻度」语义 */
+      }`});
+}
+function holoRipple(x,z,colStr,amp,life){   /* S11 涟漪池：一切涟漪对应真事件（切换/告警/恢复），禁装饰性触发 */
+  if(!FX||!holoS.ripples) return;
+  const c3=_rgb3(colStr);
+  holoS.ripples.push({x,z,t0:holoT,r:c3[0]/255,g:c3[1]/255,b:c3[2]/255,amp:amp==null?1:amp,life:life||1.7});
+  while(holoS.ripples.length>4) holoS.ripples.shift();
+}
+/* ============ 八卦罗盘中国风重塑（2026-08-21 五视角方案·青铜鎏金观星仪）============
+   盘面=canvas 烘焙鎏金蚀刻叠加层（字符环无法纯 shader；初始化画一次零逐帧重绘）；
+   数据诚实三通道：十二时辰环高亮=真时钟 / 干支纪日章=真日历 / 天池寻凶针=真告警指向病机；
+   只取方位·计时·星官器物层，不上占断内容（D8）。方位基准：口型位（CONS_ANG -90）=子位=北=-Z。 */
+const HOLO_GAN="甲乙丙丁戊己庚辛壬癸", HOLO_ZHI="子丑寅卯辰巳午未申酉戌亥";
+/* 二十四山正针序列（维基「罗庚」考据：子午卯酉居四正、乾坤艮巽居四隅），自北顺时针每山 15° */
+const HOLO_M24="子癸丑艮寅甲卯乙辰巽巳丙午丁未坤申庚酉辛戌乾亥壬";
+/* 后天八卦（罗盘定方位用后天卦位，bearing 45° 一宫自坎北起）：爻序自下而上，1=阳爻实线 0=阴爻断线 */
+const HOLO_BAGUA=[["坎",[0,1,0]],["艮",[0,0,1]],["震",[1,0,0]],["巽",[0,1,1]],
+                  ["离",[1,0,1]],["坤",[0,0,0]],["兑",[1,1,0]],["乾",[1,1,1]]];
+/* 五行本命表（D2）：结构层识别色（低亮度件：方框/锚线/佩章边）；能量层健康色不受扰。
+   火行刻意偏橙朱——正红让给告警语义（色彩语法三层不打架）。中枢=太极北辰不入五行。 */
+const HOLO_WUXING={yunsheng:["金","#E3D6A8"],tingxie:["水","#4A7EDB"],lianbei:["木","#4AB58B"],
+                   kouxing:["火","#E07A3C"],shengbei:["土","#C9A24B"]};
+const HOLO_GOLD="#C8A96E";   /* 鎏金蚀刻主色（青铜观星仪气质，压在 bloom 阈下） */
+const HOLO_FONT='"KaiTi","STKaiti","SimSun",serif';
+function holoBearing(x,z){ return ((Math.atan2(x,-z)*180/Math.PI)%360+360)%360; }   /* 0=北(-Z) 顺时针 90=东(+X) */
+function holoGuaOf(bear){ return HOLO_BAGUA[Math.round(bear/45)%8]; }   /* 卦符=方位派生（一卦管三山，D3） */
+function holoGanzhiDay(){   /* 干支纪日：锚 1949-10-01=甲子日（JDN 2433191；2000-01-01=戊午日验算过）；23 点入子时算次日 */
+  const d=new Date(); let days=Math.floor((d.getTime()-d.getTimezoneOffset()*60000)/86400000);
+  if(d.getHours()>=23) days+=1;
+  const idx=(((days+2440588-2433191)%60)+60)%60;
+  return HOLO_GAN[idx%10]+HOLO_ZHI[idx%12];
+}
+function holoGanzhiYear(){ const i=((new Date().getFullYear()-1984)%60+60)%60;   /* 1984=甲子年 */
+  return HOLO_GAN[i%10]+HOLO_ZHI[i%12]; }
+function holoShichen(){ return Math.floor(((new Date().getHours()+1)%24)/2); }   /* 0=子时(23-1点) */
+function holoLuopanTex(THREE){   /* 罗盘盘面 2048² 一次烘焙：八卦爻画/十二地支/二十四山/回纹边/分环细线 */
+  const S=2048,C2=S/2,c=document.createElement("canvas"); c.width=c.height=S;
+  const g=c.getContext("2d"); g.clearRect(0,0,S,S);
+  const px=r=>r/6.8*C2;   /* 世界半径→像素（叠加层 CircleGeometry 半径 6.8） */
+  const ring=(r,w,a)=>{ g.beginPath(); g.arc(C2,C2,px(r),0,7); g.lineWidth=w;
+    g.strokeStyle=HOLO_GOLD; g.globalAlpha=a; g.stroke(); g.globalAlpha=1; };
+  const put=(bear,r,fn)=>{ const t=(bear-90)*Math.PI/180;   /* 北=画布上方；字底朝天池（罗盘惯例） */
+    g.save(); g.translate(C2+Math.cos(t)*px(r),C2+Math.sin(t)*px(r)); g.rotate(t+Math.PI/2); fn(); g.restore(); };
+  const txt=(ch,size,a)=>{ g.font="700 "+size+"px "+HOLO_FONT; g.fillStyle=HOLO_GOLD; g.globalAlpha=a;
+    g.textAlign="center"; g.textBaseline="middle"; g.fillText(ch,0,0); g.globalAlpha=1; };
+  const tick=(bear,r0,r1,w,a)=>{ const t=(bear-90)*Math.PI/180,cs=Math.cos(t),sn=Math.sin(t);
+    g.beginPath(); g.moveTo(C2+cs*px(r0),C2+sn*px(r0)); g.lineTo(C2+cs*px(r1),C2+sn*px(r1));
+    g.lineWidth=w; g.strokeStyle=HOLO_GOLD; g.globalAlpha=a; g.stroke(); g.globalAlpha=1; };
+  /* 刻度环外推（北斗布阵）：内净区 r≤4.30 让给七星席位（原 4.02 会被天璇/摇光席基座压线） */
+  for(const rr of [[4.30,3,.45],[5.02,2,.38],[5.10,2,.38],[5.74,2,.38],[5.82,2,.38],[6.50,3,.45],[6.78,4,.5]])
+    ring(rr[0],rr[1],rr[2]);
+  for(let i=0;i<8;i++){ const lines=HOLO_BAGUA[i][1];   /* 八卦环：爻画自绘（阳爻一横/阴爻两段）+卦名 */
+    put(i*45,4.86,()=>{ g.strokeStyle=HOLO_GOLD; g.globalAlpha=.78; g.lineWidth=8; g.lineCap="butt";
+      for(let k=0;k<3;k++){ const y=(1-k)*19;   /* k=0 下爻画在下 */
+        if(lines[k]){ g.beginPath(); g.moveTo(-30,y); g.lineTo(30,y); g.stroke(); }
+        else { g.beginPath(); g.moveTo(-30,y); g.lineTo(-6,y); g.stroke();
+               g.beginPath(); g.moveTo(6,y); g.lineTo(30,y); g.stroke(); } }
+      g.globalAlpha=1; });
+    put(i*45,4.50,()=>txt(HOLO_BAGUA[i][0],32,.55));
+    tick(i*45+22.5,4.30,5.02,2,.3);
+  }
+  for(let i=0;i<12;i++){ put(i*30,5.42,()=>txt(HOLO_ZHI[i],72,.8)); tick(i*30+15,5.10,5.74,2,.35); }
+  for(let i=0;i<24;i++){ put(i*15,6.18,()=>txt(HOLO_M24[i],54,.72)); tick(i*15+7.5,5.82,6.50,2,.32); }
+  for(let i=0;i<96;i++)   /* 回纹边带（greek-key 形制） */
+    put(i*3.75,6.645,()=>{ g.strokeStyle=HOLO_GOLD; g.globalAlpha=.48; g.lineWidth=3.5;
+      g.beginPath(); g.moveTo(-20,14); g.lineTo(-20,-14); g.lineTo(20,-14); g.lineTo(20,6);
+      g.lineTo(-6,6); g.lineTo(-6,-4); g.lineTo(10,-4); g.stroke(); g.globalAlpha=1; });
+  return new THREE.CanvasTexture(c);
+}
+function holoGuaTex(THREE,bear,wxCol,starName){   /* 卦符佩章（台座铭牌）：本命色边框 + 星位名 + 鎏金爻画 + 卦名 */
+  const w=220,h=260,c=document.createElement("canvas"); c.width=w; c.height=h;
+  const g=c.getContext("2d"); g.clearRect(0,0,w,h);
+  const gua=holoGuaOf(bear);
+  _hrr(g,8,8,w-16,h-16,26); g.fillStyle="rgba(5,8,17,.72)"; g.fill();
+  g.lineWidth=4; g.strokeStyle=wxCol||HOLO_GOLD; g.globalAlpha=.75; g.stroke(); g.globalAlpha=1;
+  if(starName){ g.font="700 34px "+HOLO_FONT; g.fillStyle=HOLO_GOLD; g.textAlign="center";
+    g.globalAlpha=.85; g.fillText(starName,w/2,44); g.globalAlpha=1; }   /* 北斗星位名（座次可读） */
+  g.strokeStyle=HOLO_GOLD; g.lineWidth=13; g.lineCap="butt"; g.globalAlpha=.9;
+  for(let k=0;k<3;k++){ const y=76+(2-k)*34;   /* 下爻在下 */
+    if(gua[1][k]){ g.beginPath(); g.moveTo(45,y); g.lineTo(175,y); g.stroke(); }
+    else { g.beginPath(); g.moveTo(45,y); g.lineTo(96,y); g.stroke();
+           g.beginPath(); g.moveTo(124,y); g.lineTo(175,y); g.stroke(); } }
+  g.globalAlpha=1; g.font="700 56px "+HOLO_FONT; g.fillStyle=HOLO_GOLD; g.textAlign="center";
+  g.fillText(gua[0],w/2,h-38);
+  return new THREE.CanvasTexture(c);
+}
+function holoTaijiTex(THREE){   /* 中枢太极佩（北辰居其所而众星共之）：线描阴阳鱼，鎏金 */
+  const w=220,h=260,c=document.createElement("canvas"); c.width=w; c.height=h;
+  const g=c.getContext("2d"); g.clearRect(0,0,w,h);
+  _hrr(g,8,8,w-16,h-16,26); g.fillStyle="rgba(5,8,17,.72)"; g.fill();
+  g.lineWidth=4; g.strokeStyle=HOLO_GOLD; g.globalAlpha=.8; g.stroke(); g.globalAlpha=1;
+  const cx=w/2,cy=104,R=72;
+  g.strokeStyle=HOLO_GOLD; g.fillStyle=HOLO_GOLD;
+  g.beginPath(); g.arc(cx,cy,R,-Math.PI/2,Math.PI/2);          /* 阳鱼半界 */
+  g.arc(cx,cy+R/2,R/2,Math.PI/2,-Math.PI/2,true);
+  g.arc(cx,cy-R/2,R/2,Math.PI/2,-Math.PI/2,false);
+  g.closePath(); g.globalAlpha=.3; g.fill(); g.globalAlpha=1;
+  g.lineWidth=4; g.beginPath(); g.arc(cx,cy,R,0,7); g.stroke();
+  g.beginPath(); g.arc(cx,cy-R/2,10,0,7); g.fill();            /* 阳中阴点/阴中阳点 */
+  g.beginPath(); g.arc(cx,cy+R/2,10,0,7); g.lineWidth=3.5; g.stroke();
+  g.font="700 44px "+HOLO_FONT; g.textAlign="center"; g.globalAlpha=.85;
+  g.fillText("天枢",w/2,h-38); g.globalAlpha=1;   /* 北斗布阵：中枢居天枢席（名实相符），太极图=帝车之枢 */
+  return new THREE.CanvasTexture(c);
+}
+function holoGanzhiTex(THREE,gz){   /* 干支纪日章：岁次+日柱（真日历，跨夜自动换） */
+  const w=420,h=96,c=document.createElement("canvas"); c.width=w; c.height=h;
+  const g=c.getContext("2d"); g.clearRect(0,0,w,h);
+  _hrr(g,4,4,w-8,h-8,20); g.fillStyle="rgba(5,8,17,.66)"; g.fill();
+  g.lineWidth=3; g.strokeStyle=HOLO_GOLD; g.globalAlpha=.6; g.stroke(); g.globalAlpha=1;
+  g.font="700 46px "+HOLO_FONT; g.fillStyle=HOLO_GOLD; g.textAlign="center"; g.textBaseline="middle";
+  g.globalAlpha=.9; g.fillText(holoGanzhiYear()+"年 · "+gz+"日",w/2,h/2+3); g.globalAlpha=1;
+  return new THREE.CanvasTexture(c);
+}
+/* ============ 北斗七星阵与六器成形（2026-08-21 夜 五视角方案）============
+   座次=《晋书·天文志》职掌正典「枢为天，璇为地，玑为人，权为时，玉衡为音，开阳为律，摇光为星」，
+   每席入座逐条有出处；总叙事=《史记·天官书》「斗为帝车，运于中央，临制四乡」。
+   坐标为示意比例（真北斗压进沙盘净区，间距让位可用性：中枢邻距≥2.15/辐条≥1.75/外沿≤4.30 已验算）；
+   摇光=虚位以待（扩容席=「下一台机器席位已留好」）；未登记新机自动补虚席（先到先得）。 */
+const HOLO_SEAT=[
+  {star:"天枢",duty:"枢为天",m:"zhongshu",x:-2.30,z:-1.60},
+  {star:"天璇",duty:"璇为地",m:"shengbei",x:-0.10,z:-3.15},
+  {star:"天玑",duty:"玑为人",m:"lianbei", x: 1.95,z:-2.45},
+  {star:"天权",duty:"权为时",m:"tingxie", x: 0.45,z:-1.35},
+  {star:"玉衡",duty:"衡为音",m:"yunsheng",x: 2.35,z:-0.30},
+  {star:"开阳",duty:"阳为律",m:"kouxing", x: 2.75,z: 1.45},
+  {star:"摇光",duty:"光为星",m:null,      x: 1.85,z: 2.95}
+];
+function _maskArtTex(THREE){   /* 变脸面具脸谱（金线线描，D7 川剧风）：凤眼/眉焰/鼻梁/唇——蚀刻语言不上油彩 */
+  const w=256,h=320,c=document.createElement("canvas"); c.width=w; c.height=h;
+  const g=c.getContext("2d"); g.clearRect(0,0,w,h);
+  g.strokeStyle=HOLO_GOLD; g.lineWidth=5; g.lineCap="round"; g.globalAlpha=.95;
+  const E=(x,y,rx,ry,rot,a0,a1)=>{ g.beginPath(); g.ellipse(x,y,rx,ry,rot,a0,a1); g.stroke(); };
+  E(128,160,96,140,0,0,7);                                   /* 脸缘 */
+  E(88,128,34,16,-0.35,Math.PI,2*Math.PI); E(168,128,34,16,0.35,Math.PI,2*Math.PI);   /* 凤眼上睑 */
+  g.beginPath(); g.moveTo(60,96); g.quadraticCurveTo(88,72,120,92); g.stroke();       /* 眉焰左 */
+  g.beginPath(); g.moveTo(196,96); g.quadraticCurveTo(168,72,136,92); g.stroke();     /* 眉焰右 */
+  g.beginPath(); g.moveTo(128,110); g.lineTo(122,192); g.quadraticCurveTo(128,202,134,192); g.stroke(); /* 鼻梁 */
+  E(128,236,30,12,0,0,Math.PI);                              /* 唇 */
+  g.beginPath(); g.moveTo(128,44); g.lineTo(112,76); g.lineTo(128,66); g.lineTo(144,76); g.closePath(); g.stroke(); /* 额焰 */
+  g.globalAlpha=1;
+  return new THREE.CanvasTexture(c);
+}
+function _relicEdges(THREE,geo,col){ return new THREE.LineSegments(new THREE.EdgesGeometry(geo,24),
+  new THREE.LineBasicMaterial({color:col||HOLO_GOLD,transparent:true,opacity:0.5})); }
+function holoRelic(THREE,mid,mat,wxCol){
+  /* 六器成形（函数对职能、成对成语）：编钟↔磬=钟磬主备对 / 竹简=听而写之 / 变脸面具=川剧变脸×AI换脸 /
+     埙=以口吹奏；中枢=浑天仪走原路径。全部手写几何零模型资产（离线红线）；统一套 holoMat=「全息古器物」
+     （形制古·材质光），线描剪影层=同几何 EdgesGeometry 复线（五行本命色）=白描+光体双层。
+     返回 {inner,shell(线描组),uRad}；未知机返回 null 走原球体路径。 */
+  const grp=new THREE.Group(), edg=new THREE.Group();
+  const add=(geo,tx,ty,tz,rx,ry,rz)=>{ const mm=new THREE.Mesh(geo,mat);
+    mm.position.set(tx||0,ty||0,tz||0); mm.rotation.set(rx||0,ry||0,rz||0); grp.add(mm);
+    const ee=_relicEdges(THREE,geo,wxCol); ee.position.copy(mm.position); ee.rotation.copy(mm.rotation);
+    edg.add(ee); return mm; };
+  if(mid==="yunsheng"){   /* 编钟（玉衡为音·金声玉振）：旋成钟体+甬柱 */
+    const prof=[[0.02,0.50],[0.10,0.49],[0.17,0.46],[0.23,0.38],[0.27,0.26],[0.30,0.10],
+                [0.33,-0.10],[0.35,-0.26],[0.36,-0.38],[0.30,-0.44]].map(p=>new THREE.Vector2(p[0],p[1]));
+    add(new THREE.LatheGeometry(prof,20));
+    add(new THREE.CylinderGeometry(0.045,0.06,0.22,10),0,0.60,0);
+    return {inner:grp,shell:edg,uRad:0.62};
+  }
+  if(mid==="shengbei"){   /* 磬（天璇为地·钟磬主备对）：曲尺折板悬置 */
+    const sh=new THREE.Shape();
+    sh.moveTo(-0.46,0.06); sh.lineTo(-0.06,0.34); sh.lineTo(0.46,0.10);
+    sh.lineTo(0.38,-0.08); sh.lineTo(-0.02,0.12); sh.lineTo(-0.36,-0.12); sh.closePath();
+    add(new THREE.ExtrudeGeometry(sh,{depth:0.09,bevelEnabled:false}),0,0.05,-0.045,0.12,0,-0.10);
+    return {inner:grp,shell:edg,uRad:0.50};
+  }
+  if(mid==="tingxie"){    /* 竹简卷（天权为时·听而写之）：十片简围半展卷 */
+    const slat=new THREE.BoxGeometry(0.085,0.52,0.020);
+    for(let i=0;i<10;i++){ const a=-1.05+i*0.42, rr=0.20+i*0.012;
+      add(slat,Math.sin(a)*rr,0,Math.cos(a)*rr,0,a,0); }
+    return {inner:grp,shell:edg,uRad:0.55};
+  }
+  if(mid==="lianbei"){    /* 变脸面具（天玑为人·川剧变脸×AI换脸）：曲面壳+金线脸谱浮层 */
+    const shellGeo=new THREE.SphereGeometry(0.42,20,16,Math.PI/2-0.95,1.9,0.38,2.05);
+    shellGeo.scale(0.95,1.15,0.85);
+    add(shellGeo);
+    const art=new THREE.Mesh(new THREE.PlaneGeometry(0.56,0.70),
+      new THREE.MeshBasicMaterial({map:_maskArtTex(THREE),transparent:true,depthWrite:false,opacity:0.9}));
+    art.position.set(0,0,0.40); grp.add(art);   /* 脸谱只进光体组不进线描组（浮层） */
+    return {inner:grp,shell:edg,uRad:0.55};
+  }
+  if(mid==="kouxing"){    /* 埙（开阳为律·以口吹奏）：卵形+音孔 */
+    const egg=new THREE.SphereGeometry(0.36,18,14); egg.scale(1,1.18,0.94);
+    add(egg);
+    const holeMat=new THREE.MeshBasicMaterial({color:0x05060F,transparent:true,opacity:0.85});
+    const holeGeo=new THREE.CircleGeometry(0.034,10);
+    for(const hp of [[0.11,0.10],[-0.11,0.10],[0.15,-0.07],[-0.15,-0.07],[0,-0.18]]){
+      const hh=new THREE.Mesh(holeGeo,holeMat); hh.position.set(hp[0],hp[1],0.315); grp.add(hh); }
+    const top=new THREE.Mesh(new THREE.CircleGeometry(0.05,10),holeMat);
+    top.position.set(0,0.415,0); top.rotation.x=-Math.PI/2; grp.add(top);   /* 顶吹孔 */
+    return {inner:grp,shell:edg,uRad:0.46};
+  }
+  return null;
+}
+function holoDouBiaoTex(THREE){   /* 斗柄授时章（《鹖冠子》斗柄四指，D8-B）：真日期→季节指向 */
+  const mo=new Date().getMonth()+1;
+  const s=(mo>=3&&mo<=5)?["东","春"]:(mo>=6&&mo<=8)?["南","夏"]:(mo>=9&&mo<=11)?["西","秋"]:["北","冬"];
+  const w=460,h=96,c=document.createElement("canvas"); c.width=w; c.height=h;
+  const g=c.getContext("2d"); g.clearRect(0,0,w,h);
+  _hrr(g,4,4,w-8,h-8,20); g.fillStyle="rgba(5,8,17,.66)"; g.fill();
+  g.lineWidth=3; g.strokeStyle=HOLO_GOLD; g.globalAlpha=.6; g.stroke(); g.globalAlpha=1;
+  g.font="700 42px "+HOLO_FONT; g.fillStyle=HOLO_GOLD; g.textAlign="center"; g.textBaseline="middle";
+  g.globalAlpha=.9; g.fillText("斗柄"+s[0]+"指 · 天下皆"+s[1],w/2,h/2+3); g.globalAlpha=1;
+  return new THREE.CanvasTexture(c);
+}
+/* ============ P2 数据流粒子层（2026-08-18 三轮·空中面板方案 P2 收编）：
+   链路粒子密度/速度=该机 GPU 利用率**真数据**（拒造假流量,08-12 判定的诚实原则原样），
+   告警机=红粒加速；抓取/按下=爆发粒即发即收。预算闸：总量 ≤2600 + 帧预算自适应降档
+   （连续超 33ms 半档,下限 0.25,恢复缓升）+ ?fx=0 素颜 + 非 full 档不渲（renderHolo 天然）。 ============ */
+function initFxParticles(THREE){
+  const MAX=2600;
+  const geo=new THREE.BufferGeometry();
+  const pos=new Float32Array(MAX*3), col=new Float32Array(MAX*3);
+  geo.setAttribute("position",new THREE.BufferAttribute(pos,3));
+  geo.setAttribute("color",new THREE.BufferAttribute(col,3));
+  geo.setDrawRange(0,0);
+  /* 亮度纪律（当日 A/B 实锤）：粒子颜色必须压在 bloom 阈值(0.9)之下——每颗过阈=几十个
+     bloom 源沿链路级联糊成大团（08-12「只让能量核发光」的破坏形态）；阈下加性混合在暗底
+     依然发光，存在感靠 size 补。 */
+  const mat=new THREE.PointsMaterial({size:0.13,map:holoS.glowTex,transparent:true,opacity:0.9,
+    depthWrite:false,blending:THREE.AdditiveBlending,vertexColors:true});
+  const pts=new THREE.Points(geo,mat); pts.frustumCulled=false; pts.renderOrder=2;
+  holoS.scene.add(pts);
+  holoS.fx={geo,pos,col,MAX,flow:{},bursts:[],scale:1,slow:0};
+}
+function _rgb3(cs){   /* 颜色解析双格式：_holoColor 的 util 路径经 utilColor/mix 返回 "rgb(r,g,b)"
+   而非 "#hex"——首版直喂 hex2rgb 得 NaN 写进颜色缓冲，NaN 经 bloom mip 模糊扩散成
+   大片白团（全场洗白当日 A/B 实锤）。NaN 不进 GPU 缓冲是铁律。 */
+  if(cs&&cs[0]==="#") return hex2rgb(cs);
+  const mm=/rgb\((\d+),\s*(\d+),\s*(\d+)\)/.exec(cs||"");
+  return mm?[+mm[1],+mm[2],+mm[3]]:[34,211,238];
+}
+function fxBurstAt(mid){   /* 抓取/按下爆发粒（40 粒即发即收，颜色=该机状态色） */
+  if(!FX||!holoS.fx||!holoS.nodes[mid]) return;
+  const m=((state.ctx||{}).machines||[]).find(x=>x.id===mid)||{};
+  const [r,g,b]=_rgb3(_holoColor(m)), p=holoS.nodes[mid].group.position;
+  for(let i=0;i<40;i++){
+    const th=Math.random()*6.283, ph=Math.random()*3.14, v=0.9+Math.random()*1.7;
+    holoS.fx.bursts.push({x:p.x,y:p.y+0.1,z:p.z,
+      vx:Math.sin(ph)*Math.cos(th)*v,vy:Math.abs(Math.cos(ph))*v*0.9,vz:Math.sin(ph)*Math.sin(th)*v,
+      life:0.5+Math.random()*0.35,r:r/255,g:g/255,b:b/255});
+  }
+  while(holoS.fx.bursts.length>480) holoS.fx.bursts.shift();
+}
+function updateFxParticles(dt,byId){
+  const fx=holoS.fx; if(!fx) return;
+  if(dt>0.033){ if(++fx.slow>18){ fx.scale=Math.max(0.25,fx.scale*0.5); fx.slow=0; } }
+  else { fx.slow=Math.max(0,fx.slow-1); if(fx.scale<1) fx.scale=Math.min(1,fx.scale+dt*0.02); }
+  let n=0; const P=fx.pos,C=fx.col,MAX=fx.MAX,boost=SHOW?2:1;
+  if(FX) for(const id in holoS.links){
+    const lk=holoS.links[id], m=byId[id]||{};
+    const u=Math.max(0,(m.gpu_util==null||m.gpu_util<0)?0:m.gpu_util)/100;
+    const alert=!!(holoS.alertSet&&holoS.alertSet[id]);
+    const want=Math.min(64,Math.floor((5+u*30)*fx.scale*boost*(alert?1.5:1)));
+    let st=fx.flow[id]||(fx.flow[id]=[]);
+    while(st.length<want) st.push({t:Math.random(),s:Math.random()*6.283,o:0.05+Math.random()*0.1});
+    if(st.length>want) st.length=want;
+    const [r,g,b]=_rgb3(alert?"#DE3C46":_holoColor(m));
+    for(const q of st){
+      q.t+=dt*(0.22+u*0.9)*(alert?1.7:1); if(q.t>1) q.t-=1;
+      if(n>=MAX) break;
+      const wob=Math.sin(q.s+q.t*12)*q.o, wo2=Math.cos(q.s*1.7+q.t*9)*q.o;
+      const cp=lk.pts?lk.pts[Math.max(0,Math.min(lk.pts.length-1,Math.round(q.t*(lk.pts.length-1))))]:lk.pos;
+      P[n*3]=cp.x+wob; P[n*3+1]=cp.y+0.07+wo2*0.5; P[n*3+2]=cp.z+wo2;   /* 粒子沿能量拱桥飞行（S4） */
+      const f=(0.3+0.7*q.t)*0.55;                /* 越近节点越亮=方向可读；0.55 封顶=永在 bloom 阈下 */
+      C[n*3]=r/255*f; C[n*3+1]=g/255*f; C[n*3+2]=b/255*f; n++;
+    }
+  }
+  for(let i=fx.bursts.length-1;i>=0;i--){
+    const q=fx.bursts[i];
+    q.life-=dt; if(q.life<=0){ fx.bursts.splice(i,1); continue; }
+    q.x+=q.vx*dt; q.y+=q.vy*dt; q.z+=q.vz*dt; q.vy-=dt*1.7;
+    if(n>=MAX) continue;
+    P[n*3]=q.x; P[n*3+1]=q.y; P[n*3+2]=q.z;
+    const f=Math.min(1,q.life*2.6)*0.6;          /* 爆发粒同样阈下（瞬时几十颗更要守亮度纪律） */
+    C[n*3]=q.r*f; C[n*3+1]=q.g*f; C[n*3+2]=q.b*f; n++;
+  }
+  fx.geo.setDrawRange(0,n);
+  fx.geo.attributes.position.needsUpdate=true;
+  fx.geo.attributes.color.needsUpdate=true;
+}
+function _holoPR(){   /* S12 TV 标定：全屏舞台档允许 2x（电视 3 米可读），卡片态维持 1.5 上限省生产卡 */
+  return Math.min((typeof stageOnNow!=="undefined"&&stageOnNow)?2:1.5, devicePixelRatio||1); }
 async function initHolo(){
   if(holoS.renderer) return true;
   if(holoOK===false) return false;
@@ -1990,9 +2861,12 @@ async function initHolo(){
   let renderer;
   try{ renderer=new THREE.WebGLRenderer({alpha:true,antialias:true}); }
   catch(_){ holoOK=false; return false; }
-  renderer.setPixelRatio(Math.min(1.5,devicePixelRatio||1));
+  renderer.setPixelRatio(_holoPR());
   renderer.setSize(W,Hh,false); renderer.setClearColor(0x000000,0);
   host.appendChild(renderer.domElement);
+  renderer.domElement.addEventListener("webglcontextlost",e=>{
+    e.preventDefault(); if(DEMO) return;
+    stat("ui_reload",{src:"webgl"}); setTimeout(()=>location.reload(),400); });
   /* 鼠标平权：移入=悬停高亮，点节点=拉屏（与手势食指指向/dwell 抓取同义） */
   renderer.domElement.addEventListener("pointermove",e=>{
     if(holoDrill){ holoDrill.hover=holoPickSub(e.clientX,e.clientY); return; }   /* 下钻期准星锁父不漂 */
@@ -2010,18 +2884,110 @@ async function initHolo(){
     if(mid) openHoloPanel(mid,"mouse"); else closeHoloPanel(); });
   const scene=new THREE.Scene();
   const camera=new THREE.PerspectiveCamera(42,W/Hh,0.1,100);
-  const grid=new THREE.GridHelper(16,16,0x2A3350,0x161B2C); grid.position.y=-1.7;
-  grid.material.transparent=true; grid.material.opacity=0.22; scene.add(grid);
-  scene.fog=new THREE.FogExp2(0x05060F,0.052);   /* P2 景深雾：远节点/网格渐隐=空间纵深 */
-  /* 星野背景：暗点云，加纵深、不参与 bloom（阈值下） */
-  const sN=260, sp=new Float32Array(sN*3);
-  for(let i=0;i<sN;i++){ const rr2=9+Math.random()*15, th=Math.random()*6.283;
-    sp[i*3]=rr2*Math.cos(th); sp[i*3+1]=(Math.random()-0.5)*11; sp[i*3+2]=rr2*Math.sin(th); }
-  scene.add(new THREE.Points(new THREE.BufferGeometry().setAttribute("position",new THREE.BufferAttribute(sp,3)),
-    new THREE.PointsMaterial({color:0x4a5578,size:0.06,transparent:true,opacity:0.7,depthWrite:false})));
-  holoS={THREE,renderer,scene,camera,grid,glowTex:holoGlowTex(THREE),nodes:{},links:{},
+  /* S3 极坐标全息地台（替代方格 GridHelper）：世界观=一切由台座投影而出 */
+  const floorMat=holoFloorMat(THREE);
+  const grid=new THREE.Mesh(new THREE.CircleGeometry(8.4,96),floorMat);
+  grid.rotation.x=-Math.PI/2; grid.position.y=HOLO_FLOOR_Y; grid.renderOrder=-3; scene.add(grid);
+  scene.fog=new THREE.FogExp2(0x05060F,0.046);   /* P2 景深雾：远节点/地台渐隐=空间纵深 */
+  /* 星野背景：双层视差暗点云，加纵深、不参与 bloom（阈值下） */
+  const stars=[];
+  for(const sl of [[260,0.06,0.7,0x4a5578],[170,0.035,0.5,0x5a4f86]]){
+    const sN=sl[0], sp=new Float32Array(sN*3);
+    for(let i=0;i<sN;i++){ const rr2=9+Math.random()*15, th=Math.random()*6.283;
+      sp[i*3]=rr2*Math.cos(th); sp[i*3+1]=(Math.random()-0.5)*11; sp[i*3+2]=rr2*Math.sin(th); }
+    const pts=new THREE.Points(new THREE.BufferGeometry().setAttribute("position",new THREE.BufferAttribute(sp,3)),
+      new THREE.PointsMaterial({color:sl[3],size:sl[1],transparent:true,opacity:sl[2],depthWrite:false}));
+    scene.add(pts); stars.push(pts);
+  }
+  /* S7 中枢投影光锥：台座→反应堆的光柱（加性低透明=永在 bloom 阈下；世界观「光由台座投出」） */
+  const pillar=new THREE.Mesh(new THREE.CylinderGeometry(0.30,1.05,2.05,36,1,true),
+    new THREE.MeshBasicMaterial({color:0x22D3EE,transparent:true,opacity:0.10,
+      blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}));
+  pillar.position.y=HOLO_FLOOR_Y+1.03; scene.add(pillar);
+  /* 罗盘盘面叠加层（鎏金蚀刻，法线朝上组：局部 +y=世界北 -Z，画布上方=北，flipY 链路自洽）：
+     底层 procedural 地台继续管 揭幕/涟漪/模式环/密刻度，盘面只管字符刻度=两层各司其职 */
+  const luopanG=new THREE.Group(); luopanG.rotation.x=-Math.PI/2;
+  luopanG.position.y=HOLO_FLOOR_Y+0.015; scene.add(luopanG);
+  const luopan=new THREE.Mesh(new THREE.CircleGeometry(6.8,128),
+    new THREE.MeshBasicMaterial({map:holoLuopanTex(THREE),transparent:true,opacity:0,depthWrite:false}));
+  luopan.renderOrder=-2; luopanG.add(luopan);
+  /* 时辰高亮块（D5 静态刻度+高亮当前时辰=地盘正针固定的考据形）：旋转定位零重建 */
+  const shichen=new THREE.Mesh(new THREE.RingGeometry(5.10,5.73,24,1,Math.PI/2-Math.PI/12,Math.PI/6),
+    new THREE.MeshBasicMaterial({color:HOLO_GOLD,transparent:true,opacity:0,
+      blending:THREE.AdditiveBlending,depthWrite:false}));
+  shichen.renderOrder=-1; luopanG.add(shichen);
+  /* 天池寻凶针（D4 平时隐匿告警现身指病机）：指端红=磁针南红礼制 */
+  const needle=new THREE.Group();
+  const _nshaft=new THREE.Mesh(new THREE.BoxGeometry(0.075,0.02,2.40),
+    new THREE.MeshBasicMaterial({color:0xF0E2B6,transparent:true,opacity:0,depthWrite:false,
+      blending:THREE.AdditiveBlending}));   /* 亮金+加性=从鎏金盘面「保护色」里跳出来 */
+  const _ntip=new THREE.Mesh(new THREE.ConeGeometry(0.10,0.34,8),
+    new THREE.MeshBasicMaterial({color:0xDE3C46,transparent:true,opacity:0,depthWrite:false}));
+  _ntip.rotation.x=Math.PI/2; _ntip.position.z=1.36;   /* 针尖穿出中枢基座簇（天池净区 1.4-4.0），指向可读 */
+  const _ntail=new THREE.Mesh(new THREE.SphereGeometry(0.06,10,10),
+    new THREE.MeshBasicMaterial({color:0xF0E2B6,transparent:true,opacity:0,depthWrite:false,
+      blending:THREE.AdditiveBlending}));
+  _ntail.position.z=-1.18;
+  needle.add(_nshaft,_ntip,_ntail); needle.position.y=HOLO_FLOOR_Y+0.16; needle.visible=false;
+  scene.add(needle);
+  /* 干支纪日章（真日历，doLabels 跨夜自动换面）：悬于天池南缘。
+     创建即带贴图——SpriteMaterial 无图编译后补 map 即使 needsUpdate 也不换程序（白块实锤），
+     带图出生则后续只是同构换贴图零编译（2026-08-21 CDP 取证定案） */
+  const gzSprite=new THREE.Sprite(new THREE.SpriteMaterial({map:holoGanzhiTex(THREE,holoGanzhiDay()),
+    transparent:true,depthWrite:false,opacity:0.85}));
+  gzSprite.scale.set(1.15,0.26,1); gzSprite.position.set(0,HOLO_FLOOR_Y+0.30,2.15); scene.add(gzSprite);
+  /* 斗柄授时章（D8-B《鹖冠子》斗柄四指=真日期→季节；带图出生同纪律）：悬于西南缘 */
+  const dbSprite=new THREE.Sprite(new THREE.SpriteMaterial({map:holoDouBiaoTex(THREE),
+    transparent:true,depthWrite:false,opacity:0.8}));
+  dbSprite.scale.set(1.25,0.26,1); dbSprite.position.set(-4.0,HOLO_FLOOR_Y+0.30,2.85); scene.add(dbSprite);
+  /* 二十八宿星官连线（四象各取一宿，方位对齐罗盘：东苍龙·心宿/北玄武·斗宿/西白虎·参宿/南朱雀·井宿）：
+     天上星官对地上罗盘=观星仪世界观闭环；宿形为识别性示意星图（非天文坐标，器物刻画层）；
+     心宿二按「大火」礼制微红；静态结构层不随星野缓旋（四象锚方位），远侧经雾自然退隐 */
+  const sky=new THREE.Group(), skyTex=holoGlowTex(THREE);
+  const SKY28=[
+    ["心宿",90,[[-1.1,0.8],[0,0],[0.95,-0.9]],[[0,1],[1,2]],1],
+    ["斗宿",0,[[0,0],[1.15,0.3],[1.45,1.4],[0.4,1.5],[-1.0,-0.7],[-2.0,-1.55]],
+      [[0,1],[1,2],[2,3],[3,0],[0,4],[4,5]],-1],
+    ["参宿",270,[[-1.5,1.7],[1.5,1.9],[-0.55,0.25],[0,0.05],[0.55,-0.15],[-1.35,-1.7],[1.6,-1.5]],
+      [[0,1],[1,6],[6,5],[5,0],[2,3],[3,4]],-1],
+    ["井宿",180,[[-0.6,1.5],[-0.65,0.5],[-0.7,-0.5],[-0.75,-1.5],[0.6,1.4],[0.65,0.4],[0.7,-0.6],[0.75,-1.6]],
+      [[0,1],[1,2],[2,3],[4,5],[5,6],[6,7],[1,5]],-1],
+  ];
+  for(const sk of SKY28){
+    const nm=sk[0], b=sk[1]*Math.PI/180, pts2=sk[2], segs=sk[3], fire=sk[4];
+    const gsky=new THREE.Group();
+    gsky.position.set(Math.sin(b)*17,3.1,-Math.cos(b)*17); gsky.rotation.y=-b;
+    const sc=1.35, lpts=[];
+    for(const sg of segs){ lpts.push(new THREE.Vector3(pts2[sg[0]][0]*sc,pts2[sg[0]][1]*sc,0));
+      lpts.push(new THREE.Vector3(pts2[sg[1]][0]*sc,pts2[sg[1]][1]*sc,0)); }
+    const lmat=new THREE.LineBasicMaterial({color:HOLO_GOLD,transparent:true,opacity:0});
+    lmat.userData.op0=0.30;
+    gsky.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(lpts),lmat));
+    for(let i2=0;i2<pts2.length;i2++){
+      const isFire=(i2===fire);
+      const smat=new THREE.SpriteMaterial({map:skyTex,color:isFire?0xE0705C:0xE8D9A0,
+        transparent:true,blending:THREE.AdditiveBlending,depthWrite:false,opacity:0});
+      smat.userData.op0=isFire?0.7:0.5;
+      const sspr=new THREE.Sprite(smat); sspr.scale.setScalar(isFire?0.5:0.32);
+      sspr.position.set(pts2[i2][0]*sc,pts2[i2][1]*sc,0); gsky.add(sspr);
+    }
+    const nmC=document.createElement("canvas"); nmC.width=192; nmC.height=72;
+    const ng=nmC.getContext("2d"); ng.font="700 44px "+HOLO_FONT; ng.fillStyle=HOLO_GOLD;
+    ng.textAlign="center"; ng.textBaseline="middle"; ng.globalAlpha=.92; ng.fillText(nm,96,38);
+    const nmat=new THREE.SpriteMaterial({map:new THREE.CanvasTexture(nmC),
+      transparent:true,depthWrite:false,opacity:0});
+    nmat.userData.op0=0.5;
+    const nspr=new THREE.Sprite(nmat); nspr.scale.set(1.5,0.56,1); nspr.position.set(0,-2.7,0);
+    gsky.add(nspr);
+    sky.add(gsky);
+  }
+  scene.add(sky);
+  holoS={THREE,renderer,scene,camera,grid,floorMat,stars,pillar,ripples:[],
+         luopan,shichen,needle,gzSprite,dbSprite,sky,
+         glowTex:holoGlowTex(THREE),nodes:{},links:{},
          orbit:0,built:false,reveal:0,composer:null};
   buildHoloNodes();
+  initFxParticles(THREE);   /* P2 数据流粒子层（真数据驱动；?fx=0 素颜） */
   /* P2+ 真 Bloom：EffectComposer + UnrealBloomPass + OutputPass（自托管 addon 树，import map 解析 three）。
      硬回退：任何环节失败 → composer=null → renderHolo 走既有直接渲染，零回归。 */
   if(BLOOM){ try{
@@ -2042,33 +3008,92 @@ async function initHolo(){
 function buildHoloNodes(){
   const {THREE,scene,glowTex}=holoS; if(!THREE) return;
   const ms=((state.ctx||{}).machines)||[]; if(!ms.length) return;
-  for(const id in holoS.nodes){ scene.remove(holoS.nodes[id].group); }
-  for(const id in holoS.links){ scene.remove(holoS.links[id].line); scene.remove(holoS.links[id].pulse); }
+  for(const id in holoS.nodes){ const nd=holoS.nodes[id];
+    scene.remove(nd.group); if(nd.ground) scene.remove(nd.ground); }
+  for(const id in holoS.links){ const lk=holoS.links[id];
+    scene.remove(lk.line); scene.remove(lk.pulse);
+    if(lk.cars) for(const c of lk.cars) scene.remove(c);
+    if(lk.line.geometry) lk.line.geometry.dispose(); }
   holoS.nodes={}; holoS.links={};
+  if(holoS.douDeco){ scene.remove(holoS.douDeco); holoS.douDeco=null; }
   const hubId=ms.some(m=>m.id==="zhongshu")?"zhongshu":ms[0].id; holoS.hubId=hubId;
-  const R=2.9; let _spokeN=0;   /* 辐条环加大=节点摊开、仪表卡少重叠 */
+  const R=2.9; let _spokeN=0;   /* 五边形兜底半径（席位溢出才用；CONS_ANG 保留=2D 星座视图仍用它） */
+  /* 北斗布阵（两遍法）：座次表优先（正典职掌）；未登记机自动补虚席；再溢出走旧五边形兜底 */
+  const _posOf={}, _seatUsed=new Set();
+  for(const m of ms){ const s=HOLO_SEAT.find(q=>q.m===m.id);
+    if(s){ _posOf[m.id]=s; _seatUsed.add(s.star); } }
+  for(const m of ms){ if(_posOf[m.id]) continue;
+    const free=HOLO_SEAT.find(q=>!_seatUsed.has(q.star));
+    if(free){ _posOf[m.id]=free; _seatUsed.add(free.star); } }
+  const hubSeat=_posOf[hubId]||{x:0,z:0};
+  if(holoS.pillar) holoS.pillar.position.set(hubSeat.x,HOLO_FLOOR_Y+1.03,hubSeat.z);   /* 投影光锥随中枢迁席 */
   for(const m of ms){
     const isHub=m.id===hubId;
+    const seat=_posOf[m.id]||null;
     const a=((CONS_ANG[m.id]!=null?CONS_ANG[m.id]:-90))*Math.PI/180;
-    const pos=isHub?new THREE.Vector3(0,0,0):new THREE.Vector3(R*Math.cos(a),0,R*Math.sin(a));
+    /* S2 三段式浮筒：核悬浮于台面上方（初始高度，逐帧随 util 升降=真数据编码第二通道） */
+    const y0=HOLO_FLOOR_Y+(isHub?1.02:0.80);
+    const pos=seat?new THREE.Vector3(seat.x,y0,seat.z)
+      :(isHub?new THREE.Vector3(0,y0,0):new THREE.Vector3(R*Math.cos(a),y0,R*Math.sin(a)));
     const rad=isHub?0.68:0.46;
     const group=new THREE.Group(); group.position.copy(pos);
-    const shell=new THREE.Mesh(new THREE.IcosahedronGeometry(rad,1),
-      new THREE.MeshBasicMaterial({color:0x22D3EE,wireframe:true,transparent:true,opacity:0.4}));  /* 暗线框=清晰笼架不参与 bloom */
+    const wx=HOLO_WUXING[m.id]||null, wxCol=wx?wx[1]:null;   /* 五行本命色（结构层识别；能量层健康色不受扰） */
+    /* 壳：中枢=浑天仪线框笼架（原样）；辐条=天圆地方「玉琮」方框（外方缓旋+内圆健康核） */
     const innerMat=holoMat(THREE,"#22D3EE");    /* P2 Fresnel+扫描线全息核 */
-    const inner=new THREE.Mesh(new THREE.IcosahedronGeometry(rad*0.72,2),innerMat);
+    if(isHub) innerMat.uniforms.uTaiji.value=1; /* 太极旋纹核（罗盘重塑 P3 转正：双臂回旋亮度纹） */
+    /* 六器成形（D3 撤玉琮方框）：辐条=身份器物（全息光体）+同几何线描剪影层；中枢=浑天仪笼架（原样保锚） */
+    const relic=isHub?null:holoRelic(THREE,m.id,innerMat,wxCol);
+    const shell=relic?relic.shell
+      : new THREE.Mesh(new THREE.IcosahedronGeometry(rad,1),
+          new THREE.MeshBasicMaterial({color:0x22D3EE,wireframe:true,transparent:true,opacity:0.4}));  /* 暗线框=清晰笼架不参与 bloom */
+    const shellMats=relic?relic.shell.children.map(e2=>e2.material):[shell.material];
+    innerMat.uniforms.uRad.value=relic?relic.uRad:rad*0.72;   /* S10 物质化归一半径（按器物包围盒标定） */
+    const inner=relic?relic.inner:new THREE.Mesh(new THREE.IcosahedronGeometry(rad*0.72,2),innerMat);
     const glow=new THREE.Sprite(new THREE.SpriteMaterial({map:glowTex,color:0x22D3EE,
-      transparent:true,blending:THREE.AdditiveBlending,depthWrite:false,opacity:0.85}));
-    glow.scale.setScalar(rad*4);
+      transparent:true,blending:THREE.AdditiveBlending,depthWrite:false,opacity:0.35}));
+    glow.scale.setScalar(rad*2.2);   /* S1 灭棉花球：辉光只作核心近距光晕（原 rad*4 盖过结构） */
     const label=new THREE.Sprite(new THREE.SpriteMaterial({transparent:true,depthWrite:false,depthTest:false}));
     label.position.y=rad+1.0; label.scale.set(1.7,0.91,1);   /* 仪表卡：位于节点上方（缩小防 6 卡拥挤重叠） */
+    /* S5 引导线：核顶→名牌底（随组浮动，把贴纸标签「接」进三维世界） */
+    const lead=new THREE.Line(new THREE.BufferGeometry().setFromPoints(
+      [new THREE.Vector3(0,rad*0.92,0),new THREE.Vector3(0,rad+0.60,0)]),
+      new THREE.LineBasicMaterial({color:0x8b93a8,transparent:true,opacity:0.38}));
     /* 隐形拾取球（比节点大一圈，宽容命中）：opacity 0 不可见但可被射线命中；userData 回映机器 id */
     const pick=new THREE.Mesh(new THREE.SphereGeometry(rad*1.55,12,12),
       new THREE.MeshBasicMaterial({transparent:true,opacity:0,depthWrite:false}));
     pick.userData.mid=m.id;
-    group.add(glow,shell,inner,label,pick); scene.add(group);
-    holoS.nodes[m.id]={group,shell,inner,innerMat,glow,label,pick,isHub,rad,lastText:"",
-      revDelay:isHub?0:(0.1+(_spokeN++)*0.06)};   /* 错峰揭幕：中枢先亮，辐条依次点亮 */
+    /* S2 数据环（绕核浮动，GPU util 弧；颜色随健康/热度同源刷新） */
+    const utilArc=holoArcMat(THREE,C.cyan,0.9);
+    const dataRing=new THREE.Mesh(new THREE.RingGeometry(rad*1.04,rad*1.18,56),utilArc);
+    dataRing.rotation.x=-Math.PI/2; dataRing.position.y=-rad*0.05;
+    group.add(glow,shell,inner,label,lead,dataRing,pick); scene.add(group);
+    /* S2/S6/S7 地面基座组（贴台面，不随核升降）：基座环=显存弧 + 投影光斑=假倒影 + 锚线=grounding */
+    const ground=new THREE.Group(); ground.position.set(pos.x,HOLO_FLOOR_Y,pos.z);
+    const baseArc=holoArcMat(THREE,C.violet,1);
+    const baseRing=new THREE.Mesh(new THREE.RingGeometry(rad*1.5,rad*1.84,64),baseArc);
+    baseRing.rotation.x=-Math.PI/2; baseRing.position.y=0.02; baseRing.renderOrder=-1; ground.add(baseRing);
+    const spot=new THREE.Mesh(new THREE.CircleGeometry(rad*2.6,40),
+      new THREE.MeshBasicMaterial({map:glowTex,color:0x22D3EE,transparent:true,opacity:0.20,
+        blending:THREE.AdditiveBlending,depthWrite:false}));
+    spot.rotation.x=-Math.PI/2; spot.position.y=0.011; spot.renderOrder=-2; ground.add(spot);
+    const anchor=new THREE.Line(new THREE.BufferGeometry().setFromPoints(
+      [new THREE.Vector3(0,0.02,0),new THREE.Vector3(0,1,0)]),
+      new THREE.LineBasicMaterial({color:0x22D3EE,transparent:true,opacity:0.5}));
+    ground.add(anchor);
+    /* 卦符佩章（D3 方位派生=后天卦宫，一卦管三山；中枢=太极北辰）：台座铭牌径向外置——
+       挂核下会随低负载沉穿台面、挂基座中心又被核球遮挡（两轮实拍实锤），外移即「站牌」永远可读；
+       中枢太极章南置，与天池南缘的干支纪日章成列=察验区 */
+    const _or=Math.hypot(pos.x,pos.z)||1;
+    const plaque=new THREE.Sprite(new THREE.SpriteMaterial({
+      map:isHub?holoTaijiTex(THREE):holoGuaTex(THREE,holoBearing(pos.x,pos.z),wxCol,seat?seat.star:""),
+      transparent:true,depthWrite:false,opacity:0.9}));
+    plaque.scale.set(0.40,0.47,1);
+    if(isHub) plaque.position.set(0,0.42,1.45);
+    else plaque.position.set(pos.x/_or*1.05,0.42,pos.z/_or*1.05);
+    ground.add(plaque); scene.add(ground);
+    holoS.nodes[m.id]={group,shell,shellMats,inner,innerMat,relic:!!relic,seat,glow,label,lead,pick,isHub,rad,lastText:"",
+      ground,baseArc,baseRing,spot,anchor,utilArc,dataRing,plaque,wxCol,h:y0,
+      revDelay:isHub?0:(0.30+(_spokeN++)*0.09)};   /* 错峰揭幕：地台/中枢先亮，辐条依次点亮 */
     if(isHub){   /* P2 中枢方舟反应堆：三道加性光环（renderHolo 逐帧异轴旋转） */
       holoS.rings=[];
       for(let i=0;i<3;i++){
@@ -2079,16 +3104,56 @@ function buildHoloNodes(){
       }
     }
     if(!isHub){
-      const line=new THREE.Line(new THREE.BufferGeometry().setFromPoints(
-        [new THREE.Vector3(0,0,0),pos.clone()]),
-        new THREE.LineBasicMaterial({color:0x8B5CF6,transparent:true,opacity:0.3}));
+      /* S4 能量拱桥管道（替代 1px 直线）：中枢台座→机位台座的贝塞尔弧，drawRange 随揭幕逐段接通 */
+      const p0=new THREE.Vector3(hubSeat.x,HOLO_FLOOR_Y+0.05,hubSeat.z), p2=new THREE.Vector3(pos.x,HOLO_FLOOR_Y+0.05,pos.z);
+      const pm=new THREE.Vector3((hubSeat.x+pos.x)/2,HOLO_FLOOR_Y+0.66,(hubSeat.z+pos.z)/2);   /* 帝车放射：管道自天枢席扇出 */
+      const curve=new THREE.QuadraticBezierCurve3(p0,pm,p2);
+      const line=new THREE.Mesh(new THREE.TubeGeometry(curve,42,0.022,6,false),
+        new THREE.MeshBasicMaterial({color:0x8B5CF6,transparent:true,opacity:0.3,depthWrite:false}));
+      line.geometry._icount=line.geometry.index.count;
       scene.add(line);
+      const pts=curve.getPoints(64);   /* 列车/粒子共用采样点（端点=台座，静态几何零逐帧重建） */
       const pulse=new THREE.Sprite(new THREE.SpriteMaterial({map:glowTex,color:0x22D3EE,
         transparent:true,blending:THREE.AdditiveBlending,depthWrite:false,opacity:0.95}));
-      pulse.scale.setScalar(0.32); scene.add(pulse);
-      holoS.links[m.id]={line,pulse,pos:pos.clone(),phase:Math.random()};
+      pulse.scale.setScalar(0.28); scene.add(pulse);
+      const cars=[];   /* S4 数据包列车：头车=pulse，3 节车厢跟随（速度/亮度/长度=util 真数据） */
+      for(let k=0;k<3;k++){ const cc=new THREE.Sprite(new THREE.SpriteMaterial({map:glowTex,color:0x22D3EE,
+          transparent:true,blending:THREE.AdditiveBlending,depthWrite:false,opacity:0.5}));
+        cc.scale.setScalar(0.15); scene.add(cc); cars.push(cc); }
+      holoS.links[m.id]={line,pulse,cars,pts,pos:pos.clone(),phase:Math.random(),flash:0};
     }
   }
+  /* 斗链刻线+虚位席+辅星（douDeco 一体生命周期）：静态结构层，同盘面蚀刻地位 */
+  const deco=new THREE.Group();
+  const _chain=["天枢","天璇","天玑","天权","玉衡","开阳","摇光"].map(nm=>HOLO_SEAT.find(q=>q.star===nm));
+  const _cp=[], _cpush=(a2,b2)=>{ _cp.push(new THREE.Vector3(a2.x,HOLO_FLOOR_Y+0.035,a2.z),
+    new THREE.Vector3(b2.x,HOLO_FLOOR_Y+0.035,b2.z)); };
+  for(let i=0;i<3;i++) _cpush(_chain[i],_chain[i+1]);
+  _cpush(_chain[3],_chain[0]);                          /* 斗魁合口：权→枢 */
+  for(let i=3;i<6;i++) _cpush(_chain[i],_chain[i+1]);   /* 斗杓：权→衡→阳→光 */
+  deco.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(_cp),
+    new THREE.LineBasicMaterial({color:HOLO_GOLD,transparent:true,opacity:0.30})));
+  for(const q of HOLO_SEAT){ if(_seatUsed.has(q.star)) continue;
+    /* 虚位席（扩容叙事）：虚线鎏金环+星名章——「留白的印」不是「熄灭的灯」；不可拾取不进告警链 */
+    const vp=[]; for(let k=0;k<24;k+=2){ const va=k/24*6.2832,vb=(k+1)/24*6.2832;
+      vp.push(new THREE.Vector3(q.x+Math.cos(va)*0.5,HOLO_FLOOR_Y+0.03,q.z+Math.sin(va)*0.5),
+              new THREE.Vector3(q.x+Math.cos(vb)*0.5,HOLO_FLOOR_Y+0.03,q.z+Math.sin(vb)*0.5)); }
+    deco.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(vp),
+      new THREE.LineBasicMaterial({color:HOLO_GOLD,transparent:true,opacity:0.35})));
+    const vc=document.createElement("canvas"); vc.width=336; vc.height=84;
+    const vg=vc.getContext("2d"); vg.font="700 40px "+HOLO_FONT; vg.fillStyle=HOLO_GOLD;
+    vg.textAlign="center"; vg.textBaseline="middle"; vg.globalAlpha=.85;
+    vg.fillText(q.star+" · 虚位以待",168,44);
+    const vs=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(vc),
+      transparent:true,depthWrite:false,opacity:0.62}));
+    vs.scale.set(0.98,0.245,1); vs.position.set(q.x,HOLO_FLOOR_Y+0.30,q.z);
+    deco.add(vs);
+  }
+  const _ky=HOLO_SEAT.find(q=>q.star==="开阳");   /* 「辅星傅乎开阳，所以佐斗成功，丞相之象也」（《晋书》）——主备哲学彩蛋 */
+  if(_ky){ const fu=new THREE.Sprite(new THREE.SpriteMaterial({map:glowTex,color:0xE8D9A0,
+      transparent:true,blending:THREE.AdditiveBlending,depthWrite:false,opacity:0.55}));
+    fu.scale.setScalar(0.16); fu.position.set(_ky.x+0.42,HOLO_FLOOR_Y+0.62,_ky.z-0.34); deco.add(fu); }
+  scene.add(deco); holoS.douDeco=deco;
   holoS.built=true;
 }
 function renderHolo(dt){
@@ -2097,7 +3162,7 @@ function renderHolo(dt){
   const ms=((state.ctx||{}).machines)||[];
   if(ms.length && (!holoS.built || Object.keys(holoS.nodes).length!==ms.length)) buildHoloNodes();
   holoT+=dt;
-  holoS.reveal=Math.min(1,(holoS.reveal||0)+dt/1.5);      /* P2 揭幕：1.5s 容纳中枢→辐条错峰级联 */
+  holoS.reveal=Math.min(1,(holoS.reveal||0)+dt/2.3);      /* S10 揭幕编舞：2.3s=地台展开→中枢→辐条物质化→管道接通（?holopanel 实拍仍 reveal=1 快进） */
   const doLabels = holoT-holoLabelT>0.8; if(doLabels) holoLabelT=holoT;
   if(doLabels) buildHoloStat();   /* P1 总览条与仪表卡同拍刷新（0.8s 节流） */
   const byId={}; for(const m of ms) byId[m.id]=m;
@@ -2108,26 +3173,86 @@ function renderHolo(dt){
     holoS.alertSet={};
     for(const e of ((state.ctx||{}).events||[])){ if(e.state!=="firing"||e.ack) continue;
       const amid=alertMachineOf(e); if(amid&&holoS.nodes[amid]) holoS.alertSet[amid]=1; }
+    /* S11 事件时刻库（0.8s 同拍边沿检测，全部真事件驱动）：
+       模式切换=中央模式色冲击波+全管道闪波；告警新燃=病机红涟漪；息燃=恢复绿波 */
+    if(holoS._evMode===undefined) holoS._evMode=cm.mode;
+    else if(cm.mode!==holoS._evMode){ holoS._evMode=cm.mode;
+      holoRipple(0,0,acc,1.4,2.2);
+      for(const id2 in holoS.links) holoS.links[id2].flash=1; }
+    const _was=holoS._evAlerts||{};
+    for(const id2 in (holoS.alertSet||{})) if(!_was[id2]&&holoS.nodes[id2]){
+      const p2=holoS.nodes[id2].group.position; holoRipple(p2.x,p2.z,"#DE3C46",1.2,1.6); }
+    for(const id2 in _was) if(!(holoS.alertSet||{})[id2]&&holoS.nodes[id2]){
+      const p2=holoS.nodes[id2].group.position; holoRipple(p2.x,p2.z,"#2EC27E",1.0,1.6); }
+    holoS._evAlerts=Object.assign({},holoS.alertSet||{});
+    /* 时辰高亮定位（真时钟）与干支纪日章跨夜换面（真日历）——0.8s 同拍够用 */
+    const sc2=holoShichen();
+    if(holoS.shichen&&sc2!==holoS._scIdx){ holoS._scIdx=sc2; holoS.shichen.rotation.z=-sc2*Math.PI/6; }
+    const gz2=holoGanzhiDay();
+    if(holoS.gzSprite&&gz2!==holoS._gzDay){ holoS._gzDay=gz2;
+      if(holoS.gzSprite.material.map) holoS.gzSprite.material.map.dispose();
+      holoS.gzSprite.material.map=holoGanzhiTex(THREE,gz2); holoS.gzSprite.material.needsUpdate=true; }
+    const mo2=new Date().getMonth();
+    if(holoS.dbSprite&&mo2!==holoS._dbMo){ holoS._dbMo=mo2;   /* 斗柄授时章跨月换面（真日期） */
+      if(holoS.dbSprite.material.map) holoS.dbSprite.material.map.dispose();
+      holoS.dbSprite.material.map=holoDouBiaoTex(THREE); holoS.dbSprite.material.needsUpdate=true; }
   }
+  const stageK=(typeof stageOnNow!=="undefined"&&stageOnNow)?1.26:1;   /* S12 TV 档：名牌整体放大（3 米可读） */
   for(const id in holoS.nodes){
     const nd=holoS.nodes[id], m=byId[id]||{}, u=(m.gpu_util==null||m.gpu_util<0)?-1:m.gpu_util;
     const ok=m.status==="ok", uu=Math.max(0,u)/100, colStr=_holoColor(m);
     const rp=Math.max(0,Math.min(1,(holoS.reveal-(nd.revDelay||0))/0.66));   /* 错峰揭幕（中枢先亮） */
     nd.group.scale.setScalar(1-Math.pow(1-rp,3));         /* easeOutCubic（含 pick/label 一并升起） */
-    nd.shell.material.color.set(colStr); nd.glow.material.color.set(colStr);
+    const drillSelf=holoDrill&&id===holoDrill.mid;        /* 下钻聚焦机（机柜升起=核上浮避让，卡退紧凑章） */
+    /* S2 悬浮高度=GPU util 真数据（忙的机器浮得高=第二编码通道；缓动防跳；中枢=反应堆定高）；
+       下钻期该机核上浮至机柜顶——「核为魂、柜为身」 */
+    const hT=(drillSelf&&holoDrill.rackH)?(HOLO_FLOOR_Y+holoDrill.rackH+0.55)
+      :(nd.isHub?(HOLO_FLOOR_Y+1.02):(HOLO_FLOOR_Y+0.68+(ok?uu:0)*0.85));
+    nd.h=(nd.h==null)?hT:nd.h+(hT-nd.h)*Math.min(1,dt*1.6);
+    nd.group.position.y=nd.h;
+    for(const smm of (nd.shellMats||[])){   /* 壳=五行本命色（结构层；器物线描组与浑天仪笼架同规）；病机让位状态色 */
+      smm.color.set(ok?(nd.wxCol||colStr):colStr);
+      smm.opacity=FX?0.4:0.62; }            /* E 档素颜=蓝图态线描增强 */
+    nd.glow.material.color.set(colStr);
     nd.innerMat.uniforms.uColor.value.set(colStr); nd.innerMat.uniforms.uTime.value=holoT;
     nd.innerMat.uniforms.uAlpha.value= ok?1:0.7;
+    nd.innerMat.uniforms.uMat.value=rp;                   /* S10 物质化：自下而上扫描升起 */
     const throb= ok ? 1+0.06*Math.sin(holoT*(1.2+uu*3)) : 1+0.17*Math.sin(holoT*7);
     nd.shell.scale.setScalar(throb);
-    nd.shell.rotation.y+=dt*(0.2+uu*0.8); nd.shell.rotation.x+=dt*0.1;
-    const hov=(id===holoHover)||(id===holoPanelMid);   /* P1 悬停/选中高亮：辉光+完整仪表卡 */
+    if(nd.relic&&id==="lianbei"){   /* 变脸面具=方向性器物特例：缓转面向相机（正脸恒可读，戏即「变脸」） */
+      const wy=Math.atan2(camera.position.x-nd.group.position.x,camera.position.z-nd.group.position.z);
+      const dfm=((wy-nd.shell.rotation.y+Math.PI)%(2*Math.PI)+2*Math.PI)%(2*Math.PI)-Math.PI;
+      nd.shell.rotation.y+=dfm*Math.min(1,dt*2);
+    } else nd.shell.rotation.y+=dt*(0.2+uu*0.8);
+    if(nd.isHub) nd.shell.rotation.x+=dt*0.1;   /* 器物只缓旋不翻滚（端正）；浑天仪笼架保翻滚 */
+    if(nd.relic) nd.inner.rotation.y=nd.shell.rotation.y;   /* 光体与线描剪影同步旋转（同几何双层） */
+    const hov=((id===holoHover)||(id===holoPanelMid))&&!drillSelf;   /* P1 悬停/选中高亮：辉光+完整仪表卡（下钻机退章去冗余） */
     const dimmed=holoDrill&&id!==holoDrill.mid;        /* P3 下钻聚焦：其余机器卡/辉光淡出让位 */
-    nd.glow.material.opacity= Math.min(1,(ok ? (0.45+uu*0.5) : (0.6+0.4*Math.abs(Math.sin(holoT*7))))*(hov?1.7:1))*(dimmed?0.4:1);
-    nd.glow.scale.setScalar(nd.rad*(3.4+uu*1.7)*(hov?1.4:1));
-    nd.label.material.opacity=dimmed?0.22:1;
-    nd.label.scale.set(hov?2.0:1.22, hov?1.07:0.44, 1);   /* 静息=紧凑章(小)，悬停=完整仪表卡(大) */
+    /* S1 灭棉花球：辉光=核心近距光晕（存在感转移给基座环/光斑/锚线），fx=0 素颜全关 */
+    nd.glow.material.opacity=(FX?1:0)*(nd.isHub?0.55:1)*Math.min(0.5,(ok?(0.15+uu*0.16):(0.26+0.18*Math.abs(Math.sin(holoT*7))))*(hov?1.8:1))*(dimmed?0.4:1);
+    nd.glow.scale.setScalar(nd.rad*(1.7+uu*0.5)*(hov?1.35:1));
+    /* S5 标签：距离淡出（远节点让位）+ TV 档放大 */
+    const cd=nd.group.position.distanceTo(camera.position);
+    nd.label.material.opacity=(dimmed?0.22:1)*Math.max(0.55,Math.min(1,1.35-cd*0.045));
+    nd.label.scale.set((hov?2.0:1.22)*stageK,(hov?1.07:0.44)*stageK,1);   /* 静息=紧凑章(小)，悬停=完整仪表卡(大) */
     const vr=(m.vram_total_mb&&m.vram_used_mb!=null)?Math.max(0,Math.min(1,m.vram_used_mb/m.vram_total_mb)):0;
     nd.inner.scale.setScalar(0.4+vr*0.95);   /* 显存充能：内核随占用胀满 */
+    /* S2 三段式仪表逐帧驱动：基座环=显存弧 / 数据环=GPU 弧（缓动=読数不抖） */
+    if(nd.baseArc){ nd.baseArc.uniforms.uFrac.value+=(vr-nd.baseArc.uniforms.uFrac.value)*Math.min(1,dt*3);
+      nd.baseArc.uniforms.uAlpha.value=(dimmed?0.35:1)*rp; }
+    if(nd.utilArc){ nd.utilArc.uniforms.uFrac.value+=((ok?uu:0)-nd.utilArc.uniforms.uFrac.value)*Math.min(1,dt*3);
+      const c3=_rgb3(colStr); nd.utilArc.uniforms.uColor.value.setRGB(c3[0]/255,c3[1]/255,c3[2]/255);
+      nd.utilArc.uniforms.uAlpha.value=(dimmed?0.35:1)*rp; }
+    if(nd.dataRing) nd.dataRing.rotation.z+=dt*(0.15+uu*0.8);
+    if(nd.anchor){ const ap2=nd.anchor.geometry.attributes.position;   /* S6 锚线随核升降 */
+      ap2.setY(1,Math.max(0.05,nd.h-HOLO_FLOOR_Y-nd.rad*0.62)); ap2.needsUpdate=true;
+      nd.anchor.material.color.set(ok?(nd.wxCol||colStr):colStr); nd.anchor.material.opacity=(dimmed?0.2:0.5)*rp; }
+    if(nd.spot){ nd.spot.material.color.set(colStr);   /* S7 投影光斑=假倒影：越高越散 */
+      nd.spot.material.opacity=(FX?1:0)*(dimmed?0.08:0.20)*rp*(hov?1.5:1);
+      nd.spot.scale.setScalar(1+(nd.h-HOLO_FLOOR_Y)*0.22); }
+    if(nd.lead) nd.lead.material.opacity=(dimmed?0.15:0.38)*rp;
+    if(nd.plaque) nd.plaque.material.opacity=(dimmed?0.25:0.9)*rp;   /* 卦符佩章随揭幕/下钻淡入淡出 */
+    if(nd.ground) nd.ground.scale.setScalar(Math.max(0.001,1-Math.pow(1-rp,3)));
     if(doLabels || hov!==nd.hovState){   /* 数据变或悬停态变即重绘：静息紧凑章 / 悬停完整卡 */
       const key=(m.zh||id)+"|"+u+"|"+Math.round(vr*20)+"|"+(m.temp==null?-1:m.temp)+"|"+m.status+"|"+(hov?"H":"c");
       if(key!==nd.lastText){ nd.lastText=key; nd.hovState=hov;
@@ -2135,37 +3260,104 @@ function renderHolo(dt){
         nd.label.material.map=hov?holoCardTex(THREE,m):holoChipTex(THREE,m); nd.label.material.needsUpdate=true; }
     }
   }
+  const revLk=Math.max(0,Math.min(1,(holoS.reveal-0.30)/0.5));   /* S10 管道随揭幕逐段接通 */
   for(const id in holoS.links){
     const lk=holoS.links[id], m=byId[id]||{}, u=Math.max(0,(m.gpu_util==null||m.gpu_util<0)?0:m.gpu_util)/100;
     const alert=!!(holoS.alertSet&&holoS.alertSet[id]);   /* P2 告警红脉冲：变红+加速+加粗（事件真相驱动） */
     lk.phase=(lk.phase+dt*(alert?1.5:(0.2+u*0.9)))%1;
-    lk.pulse.position.copy(lk.pos).multiplyScalar(lk.phase);
+    if(lk.line.geometry._icount) lk.line.geometry.setDrawRange(0,Math.floor(lk.line.geometry._icount*revLk));
+    const _sam=t=>lk.pts[Math.max(0,Math.min(lk.pts.length-1,Math.round(t*(lk.pts.length-1))))];
+    lk.pulse.position.copy(_sam(lk.phase));   /* 头车沿拱桥曲线 */
     lk.pulse.material.color.set(alert?"#DE3C46":_holoColor(m));
-    lk.pulse.scale.setScalar(alert?0.46:0.32);
+    lk.pulse.material.opacity=0.95*revLk;
+    lk.pulse.scale.setScalar(alert?0.40:0.26+u*0.10);
+    if(lk.cars) for(let k=0;k<lk.cars.length;k++){   /* S4 数据包列车：车厢跟随，忙机列车更长更亮（真数据） */
+      const cc=lk.cars[k], tp=((lk.phase-(k+1)*0.055)%1+1)%1;
+      cc.position.copy(_sam(tp));
+      cc.material.color.set(alert?"#DE3C46":_holoColor(m));
+      cc.material.opacity=Math.max(0,(alert?0.8:0.26+u*0.5)-k*0.12)*revLk;
+      cc.scale.setScalar((alert?0.20:0.12+u*0.07)*(1-k*0.16));
+      cc.visible=FX&&(alert||u>0.02);
+    }
+    lk.flash=Math.max(0,(lk.flash||0)-dt*1.4);   /* S11 模式切换沿管道闪波（事件时刻库触发） */
     lk.line.material.color.set(alert?"#DE3C46":acc);
-    lk.line.material.opacity= alert?0.55:(m.status==="ok"?0.28:0.5);   /* 链路随模式色/告警变色 */
+    lk.line.material.opacity=(alert?0.62:(m.status==="ok"?0.30:0.5))+lk.flash*0.4;   /* 链路随模式色/告警变色 */
   }
-  if(holoDrill&&holoS.nodes[holoDrill.mid]){   /* P3 下钻：子星绕父旋转；红星呼吸闪；悬停放大 */
+  /* S3/S9 地台与环境随模式色；S11 涟漪池上载（真事件驱动，池上限 4） */
+  if(holoS.floorMat){
+    const fm=holoS.floorMat.uniforms; fm.uTime.value=holoT;
+    fm.uReveal.value=Math.min(1,holoS.reveal*2.6);   /* 地台先行展开 */
+    const a3=_rgb3(acc); fm.uAccent.value.setRGB(a3[0]/255,a3[1]/255,a3[2]/255);
+    fm.uBusy.value=(cm.switching||((cm.warming||{}).pending>0))?1:0;
+    holoS.ripples=(holoS.ripples||[]).filter(q=>holoT-q.t0<q.life);
+    for(let i=0;i<4;i++){ const q=holoS.ripples[i];
+      if(q){ fm.uRip.value[i].set(q.x,-q.z,(holoT-q.t0)/q.life,q.amp);   /* 地台局部系=世界 (x,-z) */
+             fm.uRipCol.value[i].setRGB(q.r,q.g,q.b); }
+      else fm.uRip.value[i].z=9; }
+  }
+  /* 罗盘器物层随揭幕显影；时辰高亮呼吸（真时钟，D5 静态刻度高亮式）；星官随揭幕后段点亮 */
+  if(holoS.luopan) holoS.luopan.material.opacity=Math.min(0.92,holoS.reveal*1.6);
+  if(holoS.sky){ const so=Math.max(0,Math.min(1,(holoS.reveal-0.35)*2));
+    if(so!==holoS._skyO){ holoS._skyO=so;
+      holoS.sky.traverse(o2=>{ if(o2.material&&o2.material.userData&&o2.material.userData.op0!==undefined)
+        o2.material.opacity=o2.material.userData.op0*so; }); } }
+  if(holoS.shichen) holoS.shichen.material.opacity=(0.16+0.07*Math.sin(holoT*1.8))*Math.min(1,holoS.reveal*2);
+  if(holoS.gzSprite) holoS.gzSprite.material.opacity=0.85*Math.min(1,holoS.reveal*2);
+  if(holoS.dbSprite) holoS.dbSprite.material.opacity=0.80*Math.min(1,holoS.reveal*2);
+  if(holoS.needle){   /* 天池寻凶针（D4）：真告警驱动，平时隐匿；指向病机=定位视线最短路径 */
+    const aks=Object.keys(holoS.alertSet||{}).filter(k=>holoS.nodes[k]).sort();
+    const ntg=aks.length?holoS.nodes[aks[0]].group.position:null;
+    holoS._ndlV=Math.max(0,Math.min(1,(holoS._ndlV||0)+(ntg?dt*2.2:-dt*2.2)));
+    const nv=holoS._ndlV;
+    holoS.needle.visible=nv>0.01;
+    if(ntg){ const nw=Math.atan2(ntg.x,ntg.z);
+      const ndf=((nw-holoS.needle.rotation.y+Math.PI)%(2*Math.PI)+2*Math.PI)%(2*Math.PI)-Math.PI;
+      holoS.needle.rotation.y+=ndf*Math.min(1,dt*3); }
+    holoS.needle.scale.setScalar(0.001+nv*(1+0.03*Math.sin(holoT*6)));
+    for(const nc of holoS.needle.children) nc.material.opacity=nv*0.9;
+  }
+  if(holoS.pillar){ const pm2=holoS.pillar.material;   /* S7 投影光锥：模式色+暖机呼吸+S10 揭幕光锥扫掠（先张后收） */
+    pm2.color.set(acc);
+    const swp=holoS.reveal<0.35?(1+(1-holoS.reveal/0.35)*1.6):1;
+    holoS.pillar.scale.set(swp,1,swp);
+    pm2.opacity=(FX?1:0)*((((cm.warming||{}).pending>0)?(0.13+0.05*Math.sin(holoT*5)):0.10)+(swp>1?0.05:0))*Math.min(1,holoS.reveal*3); }
+  if(holoS.stars){ holoS.stars[0].rotation.y+=dt*0.004;
+    if(holoS.stars[1]){ holoS.stars[1].rotation.y-=dt*0.006; holoS.stars[1].visible=FX; } }
+  if(scene.fog){ const f3=_rgb3(acc);   /* S9 雾色随模式微调（±5% 量级=环境层，健康色语义不受扰） */
+    scene.fog.color.setRGB(0.02+f3[0]/255*0.05,0.024+f3[1]/255*0.05,0.059+f3[2]/255*0.05); }
+  updateFxParticles(dt,byId);   /* P2 数据流粒子（真数据密度；预算闸/素颜开关在函数内） */
+  if(holoS.bloom&&holoS._showB!==SHOW){ holoS._showB=SHOW;   /* 演示状态：辉光增强/还原（0.6 实拍标定，0.72 会洗白） */
+    holoS.bloom.strength=SHOW?0.6:0.5; }
+  if(holoDrill&&holoS.nodes[holoDrill.mid]){   /* 方案C 机柜：升起动画+缓转朝相机+槽位交互（红槽呼吸/悬停亮边） */
     holoDrill.t+=dt;
-    const cpos=holoS.nodes[holoDrill.mid].group.position;
-    for(const s of holoDrill.subs){
-      const a=s.ang+holoDrill.t*0.35;
-      s.mesh.position.set(cpos.x+Math.cos(a)*s.rr,cpos.y+0.26+Math.sin(holoDrill.t*1.3+s.ang)*0.06,
-        cpos.z+Math.sin(a)*s.rr);
-      s.glow.position.copy(s.mesh.position);
-      s.label.position.set(s.mesh.position.x,s.mesh.position.y+0.36,s.mesh.position.z);
-      const hov=holoDrill.hover===s.name, blink=s.st==="fix"?(0.55+0.45*Math.abs(Math.sin(holoT*5))):1;
-      s.glow.material.opacity=(s.st==="fix"?0.95:s.st==="ok"?0.6:0.3)*blink*(hov?1.5:1);
-      s.glow.scale.setScalar((hov?0.92:0.62)+(s.st==="fix"?0.1*Math.abs(Math.sin(holoT*5)):0));
-      s.mesh.rotation.y+=dt*1.2;
-      s.label.scale.set(hov?1.42:1.06,hov?0.36:0.27,1);
-      /* 拥挤自适应渐进披露：>10 项时在跑服务名牌隐去（红/灰/悬停保留）——21 张名牌=谁也读不了 */
-      s.label.material.opacity=(holoDrill.crowded&&s.st==="ok"&&!hov)?0:1;
+    const rk=holoDrill.rack;
+    if(rk){
+      const rise=Math.min(1,holoDrill.t/0.5);
+      rk.scale.set(1,0.02+0.98*(1-Math.pow(1-rise,3)),1);   /* 机柜自台座升起 */
+      holoDrill.frame.material.opacity=0.5*rise;
+      const want=Math.atan2(camera.position.x-rk.position.x,camera.position.z-rk.position.z);
+      const dfy=((want-rk.rotation.y+Math.PI)%(2*Math.PI)+2*Math.PI)%(2*Math.PI)-Math.PI;
+      rk.rotation.y+=dfy*Math.min(1,dt*3);                  /* 缓转正面朝相机（保 3D 存在感） */
+    }
+    for(let i=0;i<holoDrill.subs.length;i++){ const s=holoDrill.subs[i];
+      const hov=holoDrill.hover===s.name;
+      const em=Math.max(0,Math.min(1,(holoDrill.t-0.22-i*0.028)/0.22));   /* 槽位错峰点亮 */
+      s.mesh.material.opacity=em*(s.st==="park"?0.72:1);
+      const blink=s.st==="fix"?(0.55+0.45*Math.abs(Math.sin(holoT*5))):1;
+      s.glow.material.opacity=em*(s.st==="fix"?0.5*blink:(hov?0.30:0));
+      s.mesh.scale.setScalar(hov?1.12:1);
+      if(hov!==s._hv){ s._hv=hov;   /* 悬停态换纹理（亮边+救活提字） */
+        if(s.mesh.material.map) s.mesh.material.map.dispose();
+        s.mesh.material.map=_hslotTex(THREE,s.name,s.st,hov); s.mesh.material.needsUpdate=true; }
+      /* 拥挤自适应渐进披露：>10 项时在跑状态章隐去（红/灰/悬停保留）——21 章全亮=谁也读不了 */
+      s.label.material.opacity=((holoDrill.crowded&&s.st==="ok"&&!hov)?0:1)*em;
     }
   } else if(holoDrill) holoDrillExit();   /* 父节点没了（重建/机器摘除）安全退出 */
   /* P2 算力模式联动：反应堆环+绶带+链路随 chatx 青 / face 品红（节点色仍编码健康，两信号并存） */
+  const warmK=((cm.warming||{}).pending>0)?1.9:1;   /* S11 暖机=反应堆环加速（真状态驱动） */
   if(holoS.rings) for(let i=0;i<holoS.rings.length;i++){ const rg=holoS.rings[i];
-    rg.material.color.set(acc); rg.rotation.z+=dt*(0.4+i*0.25); rg.rotation.y+=dt*(0.2-i*0.06); }
+    rg.material.color.set(acc); rg.rotation.z+=dt*(0.4+i*0.25)*warmK; rg.rotation.y+=dt*(0.2-i*0.06)*warmK;
+    rg.rotation.x+=dt*0.022*(i+1)*warmK; }   /* B 元素：轨道环倾角缓进动（异轴叠加=陀螺仪感） */
   const po=cm.posture||null;   /* P0 姿态巡检（cluster_posture.json 经 ctx 下发,30min 龄闸在服务端） */
   const modeKey=cm.mode+"|"+(cm.switching?("s"+(((cm.progress||{}).done)||0)):"")
     +"|w"+(((cm.warming||{}).pending)||0)+"|"+(po?(po.errors+"/"+po.warns):"-");
@@ -2187,8 +3379,19 @@ function renderHolo(dt){
       if(cm.mode){ hint.style.color=col; hint.style.borderLeft="3px solid "+col;
         hint.style.paddingLeft="8px"; hint.style.background="linear-gradient(90deg,"+col+"22,transparent)"; }
       else { hint.style.color=""; hint.style.borderLeft=""; hint.style.paddingLeft=""; hint.style.background=""; } } }
-  /* P4 展演飞览：欢迎幕逐机巡览（转向/变焦缓动；捏合拖拽中让位；幕结束一次性清场还原） */
-  const beat=holoTourBeat();
+  /* P4 展演飞览：欢迎幕逐机巡览（转向/变焦缓动；捏合拖拽中让位；幕结束一次性清场还原）
+     + P0 电视台档并联（apBeat 同一节拍表）+ 导演位聚焦覆盖（tour.focus，90s 新鲜窗，仅飞览语境生效） */
+  let beat=holoTourBeat()||apBeat();
+  const _fc=(((state.ctx||{}).tour||{}).focus)||null;
+  if(_fc&&_fc.m&&holoS.nodes[_fc.m]&&beat
+     &&((Date.now()/1000)-((_fc.at||0)+srvSkew))<90) beat={mid:_fc.m,d:9,focus:true};
+  if(beat&&beat.mid&&beat.mid!==holoS._narrMid){ holoS._narrMid=beat.mid;   /* P1 逐拍解说（每拍一句） */
+    if(!beat.alert) apNarr(narrLineOf(beat.mid)); }
+  else if(!beat) holoS._narrMid=null;
+  if(holoHover!==holoS._fxHov){ holoS._fxHov=holoHover;                     /* P1 质感包：悬停 tick 音 */
+    if(holoHover&&!holoS.tourFly&&!ap.on&&holoS.nodes[holoHover]){
+      const _hv=holoS.nodes[holoHover].group.position.clone().project(camera);
+      fxSnd("hover",_hv.x*0.5+0.5); } }
   if(beat&&typeof holoDrag!=="number"){
     holoS.tourFly=true;
     if(beat.mid&&holoS.nodes[beat.mid]){
@@ -2210,9 +3413,9 @@ function renderHolo(dt){
   } else if(holoS.tourFly){ holoS.tourFly=false;   /* 幕切走：退下钻、还原相机与悬停 */
     if(holoDrill) holoDrillExit(); holoHover=null; holoS.zoom=1; }
   if(!holoS.tourFly) holoS.orbit+=dt*0.12;   /* orbitManual=捏合偏航 · zoom=双手缩放 · pitch=双手俯仰 */
-  const rr=8.2*(holoS.zoom||1), ang=holoS.orbit+(holoS.orbitManual||0);
-  camera.position.set(Math.sin(ang)*rr, 2.7+(holoS.pitch||0)+Math.sin(holoT*0.3)*0.22, Math.cos(ang)*rr);   /* 拉远+俯角抬高=六节点摊开少重叠 */
-  camera.lookAt(0,0.15,0);
+  const rr=8.2*(holoS.zoom||1), ang=holoS.orbit+(holoS.orbitManual||0)+ckCamYaw();
+  camera.position.set(Math.sin(ang)*rr, 3.05+(holoS.pitch||0)+Math.sin(holoT*0.3)*0.22, Math.cos(ang)*rr);   /* 拉远+俯角抬高=六节点摊开少重叠；S3 抬高看清沙盘台面 */
+  camera.lookAt(0,0.02,0);
   if(holoS.composer) holoS.composer.render(); else renderer.render(scene,camera);   /* 真 bloom 或硬回退 */
   /* P2 目标锁定准星：render 后投影（相机矩阵已新鲜），追踪 选中>悬停 节点；换靶 snap-in */
   const rt=$("holoret"), tgt=holoPanelMid||holoHover;
@@ -2229,11 +3432,36 @@ function renderHolo(dt){
         rt.classList.add("on");
       } else rt.classList.remove("on");
     } else if(rt._tgt||rt.classList.contains("on")){ rt.classList.remove("on"); rt._tgt=null; } }
+  /* P2 空中面板升维：未被抓走时缓动跟随锚节点（一轮的「开卡定格」升级为活体跟随，
+     抓移过（_pinned）即停跟随尊重人的摆位）；伪 3D 倾斜随屏位（越靠边越侧身=悬浮在场景里）。 */
+  const pn=$("holopanel");
+  if(pn&&pn.classList.contains("on")&&holoPanelMid&&holoS.nodes[holoPanelMid]){
+    const host2=$("holo").getBoundingClientRect();
+    if(!pn._pinned){
+      const v3=holoS.nodes[holoPanelMid].group.position.clone().project(camera);
+      if(v3.z<1){
+        const r3=renderer.domElement.getBoundingClientRect();
+        const tx=Math.max(8,Math.min(host2.width-pn.offsetWidth-8,
+          (v3.x*0.5+0.5)*r3.width+(r3.left-host2.left)+26));
+        const ty=Math.max(8,Math.min(host2.height-pn.offsetHeight-8,
+          (-v3.y*0.5+0.5)*r3.height+(r3.top-host2.top)-20));
+        const cl=parseFloat(pn.style.left)||tx, ct=parseFloat(pn.style.top)||ty;
+        pn.style.left=(cl+(tx-cl)*Math.min(1,dt*6))+"px";
+        pn.style.top=(ct+(ty-ct)*Math.min(1,dt*6))+"px";
+      }
+    }
+    const ccx=(parseFloat(pn.style.left)||0)+pn.offsetWidth/2-host2.width/2;
+    const ccy=(parseFloat(pn.style.top)||0)+pn.offsetHeight/2-host2.height/2;
+    pn.style.transform="perspective(900px) rotateY("+(ccx/host2.width*-14).toFixed(2)
+      +"deg) rotateX("+(ccy/host2.height*10).toFixed(2)+"deg) scale("+(pn._scale||1).toFixed(3)+")";
+  }
 }
 function sizeHolo(){ if(!holoS.renderer) return; const host=$("holo");
   const W=host.clientWidth||640,Hh=host.clientHeight||296;
+  holoS.renderer.setPixelRatio(_holoPR());   /* S12 舞台档 2x/卡片态 1.5（apStageTick 切换时经此处生效） */
   holoS.renderer.setSize(W,Hh,false); holoS.camera.aspect=W/Hh; holoS.camera.updateProjectionMatrix();
-  if(holoS.composer) holoS.composer.setSize(W,Hh); }
+  if(holoS.composer) holoS.composer.setSize(W,Hh);
+  if(holoS.composer&&holoS.composer.setPixelRatio) holoS.composer.setPixelRatio(_holoPR()); }
 
 /* ---- P1 手控声控接进 3D（复用现有手势/语音/拉屏基座，无新依赖、无共享管道改动） ---- */
 function holoPick(sx,sy){   /* 屏幕像素 → 机器 id。遮挡感知：优先"投影中心最近"（点哪台选哪台，
@@ -2272,7 +3500,9 @@ function holoGrabTick(name){   /* 镜 grabTick：食指指向节点 dwell 1s →
   if(mid&&pullable&&pointing){
     if(grab.mid!==mid){ grab.mid=mid; grab.at=now; }
     grab.hit=now; dwellRing(true,(now-grab.at)/GRAB_DWELL);
-    if(now-grab.at>=GRAB_DWELL){ holoBleep(); deskGrab(mid,"gesture"); grab.mid=null; holoHover=null; return true; }
+    if(now-grab.at>=GRAB_DWELL){ holoBleep(); deskGrab(mid,"gesture");
+      if(cursorPos) fxRing(cursorPos[0],cursorPos[1]); fxSnd("grab"); fxBurstAt(mid);
+      grab.mid=null; holoHover=null; return true; }
   } else if(grab.mid&&now-grab.hit>GEST.GRACE){ grab.mid=null; }
   return false;
 }
@@ -2282,7 +3512,7 @@ function holoFocusNode(mid){   /* 声控「看/放大 X」：高亮该节点并�
 /* ============ P1 功能加厚：节点操作盘 + 集群总览条 ============ */
 let holoPanelMid=null;
 function openHoloPanel(mid,src){   /* 选中节点浮出玻璃操作卡：动作全复用既有通道（拉屏/详情/确认告警走直发，
-   唤醒/切路由走 ops_gateway 武装→点火两段式=面板只做「武装」，确认仍需竖拇指/回车+刷脸，护栏零旁路） */
+   唤醒/切路由走 ops_gateway 武装→点火两段式=面板只做「武装」，确认仍需竖拇指/回车，护栏零旁路） */
   const ctx=state.ctx||{}; const m=(ctx.machines||[]).find(x=>x.id===mid); if(!m) return;
   const p=$("holopanel"), nd=holoS.nodes&&holoS.nodes[mid]; if(!p||!nd) return;
   const acts=[];
@@ -2293,7 +3523,7 @@ function openHoloPanel(mid,src){   /* 选中节点浮出玻璃操作卡：动作
   if(al) acts.push(["✅ 确认告警 · "+String(al.title||"").slice(0,10),()=>{ fireAck(al.key,"panel"); closeHoloPanel(); },"warn"]);
   if(m.status!=="ok"&&m.status!=="warn") acts.push(["⚡ 唤醒 (WOL) · 需确认",()=>{holoArm("wol",{machine:mid});closeHoloPanel();},"warn"]);
   if(mid==="zhongshu"||mid==="lianbei") acts.push(["🔀 换脸路由切到此机 · 需确认",()=>{holoArm("route_switch",{target:mid});closeHoloPanel();},"warn"]);
-  const cmm=(ctx.clustermode||{}), cmode=cmm.mode;   /* P1 算力切模式（集群级动作锚中枢节点）：只武装,点火仍两段式+刷脸,
+  const cmm=(ctx.clustermode||{}), cmode=cmm.mode;   /* P1 算力切模式（集群级动作锚中枢节点）：只武装,点火仍两段式,
      执行器闸门受理时再实判一遍=三重把关；2026-08-14 三模式=按服务端 modes 表动态出按钮（SSOT 驱动） */
   if(mid==="zhongshu"&&cmode&&!cmm.switching){
     const others=(cmm.modes||[]).filter(m=>m.id!==cmode);
@@ -2316,20 +3546,23 @@ function openHoloPanel(mid,src){   /* 选中节点浮出玻璃操作卡：动作
   p.textContent=""; const tt=document.createElement("div"); tt.className="ttl";
   tt.textContent=zh+" · 操作"; p.appendChild(tt);
   for(const a of acts){ const b=document.createElement("button"); b.className="act"+(a[2]?" "+a[2]:"");
-    b.textContent=a[0]; b.onclick=e=>{ e.stopPropagation(); a[1](); }; p.appendChild(b); }
+    b.textContent=a[0]; b.onclick=e=>{ e.stopPropagation(); fxSnd("press"); fxBurstAt(mid); a[1](); }; p.appendChild(b); }
   /* 锚在节点投影点旁（开卡时定格，稳定可点；越界钳回画面内） */
   const v=nd.group.position.clone().project(holoS.camera);
   const r=holoS.renderer.domElement.getBoundingClientRect(), host=$("holo").getBoundingClientRect();
   const sx=r.left+(v.x*0.5+0.5)*r.width-host.left, sy=r.top+(-v.y*0.5+0.5)*r.height-host.top;
   p.style.left=Math.max(8,Math.min(host.width-216,sx+26))+"px";
   p.style.top=Math.max(8,Math.min(host.height-40-acts.length*38,sy-20))+"px";
-  p.classList.add("on"); holoPanelMid=mid; holoBleep(); stat("holo_panel",{v:mid,src:src||""});
+  p._mid=mid; p._pinned=false; p._scale=1; p.classList.remove("grabbing");   /* 空中面板：每次开卡复位摆位 */
+  p.classList.add("on"); holoPanelMid=mid; fxSnd("mat"); holoBleep(); stat("holo_panel",{v:mid,src:src||""});
 }
-function closeHoloPanel(){ const p=$("holopanel"); if(p) p.classList.remove("on"); holoPanelMid=null; }
-function holoArm(verb,args){   /* 面板/下钻/模式条共用的武装口：只 arm 不 fire（点火仍两段式在场信号+刷脸），
+function closeHoloPanel(){ const p=$("holopanel");
+  if(p){ p.classList.remove("on","grabbing"); p.style.transform=""; }
+  holoPanelMid=null; }
+function holoArm(verb,args){   /* 面板/下钻/模式条共用的武装口：只 arm 不 fire（模式条在自己的 click 里接 fire 直通；面板/下钻仍两段式在场信号），
      被拒 toast；返回结果 Promise 给模式条做行内回执（P2-10） */
   return opsPost("arm",{verb,args,by:"holo",src:"mouse"})
-    .then(r=>{ if(!(r&&r.ok)) toast("武装被拒："+((r&&r.error)||"通道不可达")); return r; });
+    .then(r=>{ if(!(r&&r.ok)){ fxSnd("error"); toast("武装被拒："+((r&&r.error)||"通道不可达")); } return r; });
 }
 function holoPanelWhenReady(mid,src){   /* 语音开盘：不在全息先切过去，等三维就绪再开；WebGL 缺席退详情卡 */
   if(!holoOK){ const m=((state.ctx||{}).machines||[]).find(x=>x.id===mid); if(m) openDetail(m,src); return; }
@@ -2342,64 +3575,98 @@ function holoPanelWhenReady(mid,src){   /* 语音开盘：不在全息先切过�
    死活 Hub /health 同源；救活=svc_restart 与语音「重启X服务」同通道，只 arm 不 fire） ============ */
 let holoDrill=null;   /* {mid, subs:[{name,st,mesh,glow,label,ang,rr}], t, hover, crowded} */
 const _HSUB_COL={ok:"#2EC27E",fix:"#DE3C46",park:"#5A6070"};   /* 三色语义：在跑/死可救/泊车按需 */
-function _hsubTex(THREE,name,st){   /* 子星名牌：状态点 + 服务名（等宽字；泊车灰=信息不告警） */
-  const w=168,h=42,c=document.createElement("canvas"); c.width=w; c.height=h;
+function _hsubTex(THREE,name,st){   /* 状态章（机柜槽位右侧「在跑/可救/泊车」词章）；S5 2x 超采样 */
+  const w=336,h=84,c=document.createElement("canvas"); c.width=w; c.height=h;
   const g=c.getContext("2d"); g.clearRect(0,0,w,h);
-  _hrr(g,3,3,w-6,h-6,10); g.fillStyle="rgba(6,9,18,.78)"; g.fill();
-  g.lineWidth=1.2; g.strokeStyle=_HSUB_COL[st]; g.globalAlpha=st==="park"?.5:.7; g.stroke(); g.globalAlpha=1;
-  g.beginPath(); g.arc(19,h/2,5,0,7); g.fillStyle=_HSUB_COL[st]; g.fill();
-  g.textAlign="left"; g.fillStyle=st==="park"?"#8b93a8":"#EAF2FF"; g.font="700 19px Consolas,monospace";
-  g.fillText(String(name).slice(0,13),33,h/2+7);
+  _hrr(g,6,6,w-12,h-12,20); g.fillStyle="rgba(5,8,17,.82)"; g.fill();
+  g.lineWidth=2.4; g.strokeStyle=_HSUB_COL[st]; g.globalAlpha=st==="park"?.5:.7; g.stroke(); g.globalAlpha=1;
+  g.beginPath(); g.arc(38,h/2,10,0,7); g.fillStyle=_HSUB_COL[st]; g.fill();
+  g.textAlign="left"; g.fillStyle=st==="park"?"#8b93a8":"#EAF2FF"; g.font="700 38px Consolas,monospace";
+  g.fillText(String(name).slice(0,13),66,h/2+14);
+  return new THREE.CanvasTexture(c); }
+function _hslotTex(THREE,name,st,hov){   /* 方案C 机柜槽位条：状态点+服务名（等宽 2x）；悬停=亮边+提字 */
+  const w=560,h=64,c=document.createElement("canvas"); c.width=w; c.height=h;
+  const g=c.getContext("2d"); g.clearRect(0,0,w,h);
+  const col=_HSUB_COL[st];
+  _hrr(g,3,3,w-6,h-6,14); g.fillStyle=hov?"rgba(16,26,48,.94)":"rgba(6,10,20,.88)"; g.fill();
+  g.lineWidth=hov?3:2; g.strokeStyle=col; g.globalAlpha=st==="park"?.45:(hov?.95:.6); g.stroke(); g.globalAlpha=1;
+  g.fillStyle=col; g.globalAlpha=st==="park"?.5:.9; g.fillRect(3,10,6,h-20); g.globalAlpha=1;   /* 左缘状态条 */
+  g.beginPath(); g.arc(34,h/2,9,0,7); g.fillStyle=col; g.fill();
+  g.textAlign="left"; g.fillStyle=st==="park"?"#8b93a8":"#EAF2FF"; g.font="700 32px Consolas,monospace";
+  g.fillText(String(name).slice(0,18),56,h/2+11);
+  if(st==="fix"){ g.textAlign="right"; g.fillStyle=col; g.font="700 24px 'Segoe UI',system-ui";
+    g.fillText(hov?"捏合=武装救活":"可救",w-20,h/2+9); }
   return new THREE.CanvasTexture(c); }
 function holoDrillEnter(mid,src){
+  /* 方案C 机柜切片（2026-08-21 P2：子星环绕→数字孪生机柜）：从机位台座升起线框服务舱，
+     每格=一个服务（数据仍=ctx.svc 单一真相）；分诊排序=可救在顶、在跑居中、泊车垫底；
+     >11 项双列（中枢 21 项）；救活语义/两段式护栏与子星时代逐字不变。 */
   if(!holoS.renderer||!holoS.nodes[mid]) return;
   holoDrillExit();
-  const svcs=((state.ctx||{}).svc||{})[mid]||[]; if(!svcs.length) return;
+  const svcs0=((state.ctx||{}).svc||{})[mid]||[]; if(!svcs0.length) return;
+  const _stOf=s=>s.up?"ok":(s.fix?"fix":"park");
+  const _rank={fix:0,ok:1,park:2};
+  const svcs=svcs0.slice().sort((a,b)=>(_rank[_stOf(a)]-_rank[_stOf(b)])||String(a.n).localeCompare(String(b.n)));
   const {THREE,scene}=holoS, subs=[], crowded=svcs.length>10;
+  const nd=holoS.nodes[mid], bp=nd.ground.position;
+  const cols=svcs.length>11?2:1, rows=Math.ceil(svcs.length/cols);   /* 拥挤双列机柜 */
+  const SW=1.34,SH=0.15,GP=0.045,CW=SW+0.14;
+  const rackW=cols*CW+0.08, rackH=rows*(SH+GP)+0.30;
+  const rack=new THREE.Group(); rack.position.set(bp.x,HOLO_FLOOR_Y+0.09,bp.z);
+  const frame=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(rackW,rackH,0.26)),
+    new THREE.LineBasicMaterial({color:0x22D3EE,transparent:true,opacity:0.0}));
+  frame.position.y=rackH/2; rack.add(frame);
   for(let i=0;i<svcs.length;i++){ const s=svcs[i];
-    const st=s.up?"ok":(s.fix?"fix":"park"), col=_HSUB_COL[st];
-    const mesh=new THREE.Mesh(new THREE.IcosahedronGeometry(0.16,1),
-      new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:st==="park"?.55:.9,wireframe:true}));
+    const st=_stOf(s), col=_HSUB_COL[st];
+    const cI=Math.floor(i/rows), rI=i%rows;
+    const cx=(cI-(cols-1)/2)*CW, sy=rackH-0.24-rI*(SH+GP);
+    const mesh=new THREE.Mesh(new THREE.PlaneGeometry(SW,SH),
+      new THREE.MeshBasicMaterial({map:_hslotTex(THREE,s.n,st,false),transparent:true,
+        depthWrite:false,opacity:0}));
+    mesh.position.set(cx,sy,0.15);
     const glow=new THREE.Sprite(new THREE.SpriteMaterial({map:holoS.glowTex,color:col,
-      transparent:true,blending:THREE.AdditiveBlending,depthWrite:false,opacity:.8}));
-    glow.scale.setScalar(0.62);
-    const label=new THREE.Sprite(new THREE.SpriteMaterial({map:_hsubTex(THREE,s.n,st),
-      transparent:true,depthWrite:false,depthTest:false}));
-    label.scale.set(1.06,0.27,1);
-    scene.add(mesh,glow,label);
-    /* 拥挤自适应：>10 服务分内外双环（中枢 21 项单环必挤爆） */
-    subs.push({name:s.n,st,mesh,glow,label,ang:(i/svcs.length)*Math.PI*2,
-      rr:crowded?(i%2?1.68:1.16):1.15});
+      transparent:true,blending:THREE.AdditiveBlending,depthWrite:false,opacity:0}));
+    glow.scale.set(SW*1.25,SH*3.2,1); glow.position.set(cx,sy,0.10);
+    const label=new THREE.Sprite(new THREE.SpriteMaterial({   /* 状态词章：右缘（拥挤时在跑章隐去） */
+      map:_hsubTex(THREE,st==="ok"?"在跑":(st==="fix"?"可救":"泊车"),st),
+      transparent:true,depthWrite:false,depthTest:false,opacity:0}));
+    label.scale.set(0.52,0.13,1); label.position.set(cx+SW/2+0.34,sy,0.15);
+    rack.add(mesh,glow,label);
+    subs.push({name:s.n,st,mesh,glow,label});
   }
-  holoDrill={mid,subs,t:0,hover:null,crowded,zoom0:holoS.zoom||1};
-  holoS.zoom=Math.min(holoS.zoom||1,0.62);   /* 下钻即聚焦：拉近看清子星，退出还原 */
+  scene.add(rack);
+  holoDrill={mid,subs,t:0,hover:null,crowded,zoom0:holoS.zoom||1,rack,frame,rackH};
+  holoS.zoom=Math.min(holoS.zoom||1,0.62);   /* 下钻即聚焦：拉近看清机柜，退出还原 */
   holoHover=mid;   /* 准星锁父节点（下钻期间机器悬停冻结） */
   const hd=$("holodrill"), m=((state.ctx||{}).machines||[]).find(x=>x.id===mid)||{};
   if(hd){ const okN=subs.filter(s=>s.st==="ok").length, fixN=subs.filter(s=>s.st==="fix").length;
     hd.textContent="服务下钻 · "+(m.zh||mid)+" — "+okN+"/"+subs.length+" 在跑"
-      +(fixN?" · 捏红星=救活":"")+" · 握拳退出";
+      +(fixN?" · 捏红槽=救活":"")+" · 握拳退出";
     hd.classList.add("on"); }
   stat("holo_drill",{v:mid,src:src||""});
 }
 function holoDrillExit(){
   if(!holoDrill) return;
   const scene=holoS.scene;
-  for(const s of holoDrill.subs){ scene.remove(s.mesh); scene.remove(s.glow); scene.remove(s.label);
-    s.mesh.geometry.dispose(); s.mesh.material.dispose();
+  for(const s of holoDrill.subs){
+    s.mesh.geometry.dispose(); if(s.mesh.material.map) s.mesh.material.map.dispose(); s.mesh.material.dispose();
     s.glow.material.dispose();                       /* glowTex 归 holoS 所有，不在此 dispose */
     if(s.label.material.map) s.label.material.map.dispose(); s.label.material.dispose(); }
+  if(holoDrill.rack){ scene.remove(holoDrill.rack);
+    holoDrill.frame.geometry.dispose(); holoDrill.frame.material.dispose(); }
   holoS.zoom=holoDrill.zoom0||1;                     /* 还原下钻前的相机距离 */
   holoDrill=null; const hd=$("holodrill"); if(hd) hd.classList.remove("on");
 }
-function holoPickSub(sx,sy){   /* 子星拾取：投影近邻（子星小，阈值 26px） */
+function holoPickSub(sx,sy){   /* 槽位拾取：投影近邻（槽在 rack 组内=用世界坐标投影） */
   if(!holoDrill||!holoS.renderer) return null;
   const r=holoS.renderer.domElement.getBoundingClientRect();
+  const wp=holoS._wp3||(holoS._wp3=new holoS.THREE.Vector3());
   let best={n:null,d:1e9};
-  for(const s of holoDrill.subs){ const p=s.mesh.position.clone().project(holoS.camera);
+  for(const s of holoDrill.subs){ const p=s.mesh.getWorldPosition(wp).project(holoS.camera);
     if(p.z>1) continue;
     const px=r.left+(p.x*0.5+0.5)*r.width, py=r.top+(-p.y*0.5+0.5)*r.height;
     const d=Math.hypot(sx-px,sy-py); if(d<best.d) best={n:s.name,d}; }
-  return best.d<26?best.n:null;
+  return best.d<34?best.n:null;
 }
 function holoDrillWhenReady(mid,src){   /* 语音下钻：切全息等就绪；无编目服务退操作盘；无 WebGL 退详情 */
   if(!holoOK){ const m=((state.ctx||{}).machines||[]).find(x=>x.id===mid); if(m) openDetail(m,src); return; }
@@ -2428,7 +3695,7 @@ function holoTourBeat(){
   for(const b of beats){ if(t<b.d) return b; t-=b.d; }
   return beats[0];
 }
-function holoDrillAct(sn,src){   /* 捏/点子星：红=武装救活（第二段仍要在场+刷脸）；绿/灰=只读人话 */
+function holoDrillAct(sn,src){   /* 捏/点子星：红=武装救活（第二段仍要在场信号）；绿/灰=只读人话 */
   const hs=sn&&holoDrill&&holoDrill.subs.find(s=>s.name===sn); if(!hs) return false;
   if(hs.st==="ok") toast("「"+hs.name+"」在跑 · 只救死的（ops 前置断言同源）");
   else if(hs.st==="park") toast("「"+hs.name+"」按需引擎/泊车态 · 不在可救清单（引擎登记表判定）");
@@ -2545,7 +3812,7 @@ function drawCons(dt){
     }
     g.fillStyle=isSelf?"#EEF0F8":"#A6ACBE"; g.textAlign="center";
     g.font=(isSelf?"700 ":"")+(12*dpr)+"px 'Noto Sans SC',sans-serif";
-    g.fillText(m.zh+(isSelf?" ★":""),x,y+r+13*dpr);
+    g.fillText(m.zh+(_ipT(m)?" "+_ipT(m):"")+(isSelf?" ★":""),x,y+r+13*dpr);
     if(u>=0){ g.fillStyle="#7A8096"; g.font=(10*dpr)+"px sans-serif";
       g.fillText("GPU "+u+"%"+(m.temp!=null&&m.temp>=0?" · "+m.temp+"°C":""),x,y+r+25*dpr); }
     const st=stationsData[m.id];
@@ -2584,7 +3851,9 @@ function grabTick(name){
     if(grab.mid!==mid){ grab.mid=mid; grab.at=now; }
     grab.hit=now;
     dwellRing(true,(now-grab.at)/GRAB_DWELL);
-    if(now-grab.at>=GRAB_DWELL){ deskGrab(mid,"gesture"); grab.mid=null; consHover=null; return true; }
+    if(now-grab.at>=GRAB_DWELL){ deskGrab(mid,"gesture");
+      if(cursorPos) fxRing(cursorPos[0],cursorPos[1]); fxSnd("grab");
+      grab.mid=null; consHover=null; return true; }
   } else if(grab.mid&&now-grab.hit>GEST.GRACE){ grab.mid=null; }
   return false;
 }
@@ -2656,7 +3925,7 @@ function handleGesture(d){
     } else if(sm.fistAt&&now-(sm.fistHit||0)>GEST.GRACE) sm.fistAt=0;
     return;
   }
-  /* 拉屏焦点窗开着时：食指=激光笔（纯本地覆盖）。可控机额外：竖拇指 dwell=刷脸授权，
+  /* 拉屏焦点窗开着时：食指=激光笔（纯本地覆盖）。可控机额外：竖拇指 dwell=武装授权，
      武装后 pinch=在激光点左键点击（唯一往远端发输入的路径），握拳=撤防/归还。 */
   if(deskOpen()){
     const nx=1-lm[8].x, ny=lm[8].y;
@@ -2682,7 +3951,7 @@ function handleGesture(d){
       else if(sm.fistAt&&now-(sm.fistHit||0)>GEST.GRACE) sm.fistAt=0;
       return;
     }
-    if(name==="Thumb_Up"&&ctrlCanControl(deskMid)){   /* 未武装+可控：竖拇指 dwell=刷脸授权 */
+    if(name==="Thumb_Up"&&ctrlCanControl(deskMid)){   /* 未武装+可控：竖拇指 dwell=武装授权 */
       if(!sm.thumbAt) sm.thumbAt=now; sm.thumbHit=now;
       dwellRing(hands,(now-sm.thumbAt)/GEST.DWELL_ACK);
       if(now-sm.thumbAt>=GEST.DWELL_ACK){ ctrlArm("gesture"); sm.thumbAt=0; sm.cooldownAt=now+GEST.COOLDOWN; }
@@ -2706,12 +3975,25 @@ function handleGesture(d){
      否则照常放行挥扫等手势（悬停只用于高亮+累计 dwell，挥扫快速移动自然清零 grab）。 */
   if(view===2){ if(grabTick(name)){ sm.cooldownAt=now+GEST.COOLDOWN; return; } }
   else if(view===3){   /* 全息：双手=俯仰/缩放；捏合拖拽=偏航轨道；食指指向 dwell=抓取拉屏；否则放行挥扫 */
-    if(hands.length>=2){   /* 双手撑开/收拢=缩放、整体上下=俯仰（拦在此，不落到墙/详情的双手分支） */
+    if(hands.length>=2){   /* 双手：撑开/收拢=缩放、整体上下=俯仰、扭转=偏航（P1 三自由度齐活）；
+       面板开着=双手缩放面板（空中面板语法优先，场景相机让位） */
       const span=Math.hypot(hands[0][9].x-hands[1][9].x,hands[0][9].y-hands[1][9].y);
       const midY=(hands[0][9].y+hands[1][9].y)/2;
-      if(holoS.thb){ holoS.zoom=Math.max(0.55,Math.min(1.9,(holoS.zoom||1)-(span-holoS.thb.span)*1.6));
-        holoS.pitch=Math.max(-1.2,Math.min(2.6,(holoS.pitch||0)+(midY-holoS.thb.midY)*4)); }
-      holoS.thb={span,midY}; grab.mid=null; return;
+      const ang=Math.atan2(hands[1][9].y-hands[0][9].y,hands[1][9].x-hands[0][9].x);
+      if(holoS.thb){
+        const pnS=$("holopanel");
+        if(holoPanelMid&&pnS&&pnS.classList.contains("on")){
+          pnS._scale=Math.max(0.7,Math.min(1.7,(pnS._scale||1)+(span-holoS.thb.span)*2.2));
+          pnS._pinned=true;                            /* 人调过尺寸=停跟随，尊重摆位 */
+        } else {
+          holoS.zoom=Math.max(0.55,Math.min(1.9,(holoS.zoom||1)-(span-holoS.thb.span)*1.6));
+          holoS.pitch=Math.max(-1.2,Math.min(2.6,(holoS.pitch||0)+(midY-holoS.thb.midY)*4));
+          let da=ang-(holoS.thb.ang!=null?holoS.thb.ang:ang);
+          if(da>Math.PI) da-=2*Math.PI; if(da<-Math.PI) da+=2*Math.PI;
+          holoS.orbitManual=(holoS.orbitManual||0)+da*1.15;   /* 双手扭转=偏航（方向盘手感） */
+        }
+      }
+      holoS.thb={span,midY,ang}; grab.mid=null; return;
     }
     holoS.thb=null;
     if(holoDrill){   /* P3 下钻模态：指尖悬停子星，捏死星=武装救活；捏空处/握拳=退出 */
@@ -2726,16 +4008,39 @@ function handleGesture(d){
       else if(sm.fistAt&&now-(sm.fistHit||0)>GEST.GRACE) sm.fistAt=0;
       return;
     }
-    if(holoPanelMid){   /* P1 操作盘开着：指尖悬停按钮高亮，捏合=按下；指空处捏合/握拳=收盘（模态，防误抓） */
+    if(holoPanelMid){   /* P1 操作盘开着：指尖悬停按钮高亮(P2 磁吸补偿)，捏按钮=按下；
+       捏标题栏/面板身=抓移（空中面板抓在手里走，松手停驻）；指空处捏合/握拳=收盘（模态防误抓） */
+      const pn4=$("holopanel");
       const el=cursorPos?document.elementFromPoint(cursorPos[0],cursorPos[1]):null;
-      const btn=el&&el.closest?el.closest("#holopanel .act"):null;
+      let btn=el&&el.closest?el.closest("#holopanel .act"):null;
+      if(!btn&&cursorPos&&pn4&&holoDrag==null){   /* 磁吸：未直中时吸附 44px 内最近按钮（抖动补偿） */
+        let best=null,bd=44;
+        for(const x of pn4.querySelectorAll(".act")){ const rb=x.getBoundingClientRect();
+          const ddx=Math.max(rb.left-cursorPos[0],0,cursorPos[0]-rb.right);
+          const ddy=Math.max(rb.top-cursorPos[1],0,cursorPos[1]-rb.bottom);
+          const dd=Math.hypot(ddx,ddy); if(dd<bd){ bd=dd; best=x; } }
+        btn=best;
+      }
       for(const x of document.querySelectorAll("#holopanel .act.hov")) x.classList.remove("hov");
       if(btn) btn.classList.add("hov");
+      const onPanel=el&&el.closest&&el.closest("#holopanel");
       const pd=Math.hypot(lm[4].x-lm[8].x,lm[4].y-lm[8].y);
-      if(pd<GEST.PINCH_D){ if(holoDrag==null){ holoDrag="pnl";
-          if(btn){ holoBleep(); btn.click(); } else closeHoloPanel();
-          sm.cooldownAt=now+GEST.COOLDOWN; } }
-      else holoDrag=null;
+      if(pd<GEST.PINCH_D){
+        if(holoDrag==null){
+          if(btn){ holoDrag="pnl"; holoBleep(); btn.click(); sm.cooldownAt=now+GEST.COOLDOWN; }
+          else if(onPanel&&pn4&&cursorPos){ holoDrag="mov";   /* 捏面板=抓移 */
+            pn4._pinned=true; pn4.classList.add("grabbing"); fxSnd("grab");
+            const hb=$("holo").getBoundingClientRect();
+            pn4._gdx=cursorPos[0]-hb.left-(parseFloat(pn4.style.left)||0);
+            pn4._gdy=cursorPos[1]-hb.top-(parseFloat(pn4.style.top)||0); }
+          else { holoDrag="pnl"; closeHoloPanel(); sm.cooldownAt=now+GEST.COOLDOWN; }
+        } else if(holoDrag==="mov"&&pn4&&cursorPos){
+          const hb=$("holo").getBoundingClientRect();
+          pn4.style.left=Math.max(8,cursorPos[0]-hb.left-(pn4._gdx||0))+"px";
+          pn4.style.top=Math.max(8,cursorPos[1]-hb.top-(pn4._gdy||0))+"px";
+        }
+      }
+      else { if(holoDrag==="mov"&&pn4) pn4.classList.remove("grabbing"); holoDrag=null; }
       if(name==="Closed_Fist"){ if(!sm.fistAt) sm.fistAt=now; sm.fistHit=now;
         if(now-sm.fistAt>=GEST.FIST_HOLD){ closeHoloPanel(); sm.fistAt=0; sm.cooldownAt=now+GEST.COOLDOWN; } }
       else if(sm.fistAt&&now-(sm.fistHit||0)>GEST.GRACE) sm.fistAt=0;
@@ -2752,7 +4057,7 @@ function handleGesture(d){
     if(pinchD<GEST.PINCH_D){   /* 捏合：指着节点=一把捏取拉屏（无需等 dwell、无需握拳）；指着空处=按住转视角 */
       if(holoDrag==null){
         if(holoHover&&((state.ctx||{}).pullable||[]).includes(holoHover)){
-          holoBleep(); deskGrab(holoHover,"gesture"); holoDrag="grab"; grab.mid=null;
+          holoBleep(); fxBurstAt(holoHover); deskGrab(holoHover,"gesture"); holoDrag="grab"; grab.mid=null;
           sm.cooldownAt=now+GEST.COOLDOWN; return; }
         holoDrag=1-lm[8].x;                                /* 捏在空处：起手转视角 */
       } else if(holoDrag!=="grab"){
@@ -2834,6 +4139,12 @@ function tick(){
     stat("ui_reload",{src:"auto"}); assetMismatchAt=0;
     setTimeout(()=>location.reload(),400);
   }
+  /* P0 电视台档：视图跟随 + 切换/暖机叙事卡 + 在岗章（1s 粒度足够；apEngaged 内含全部让位判定）
+     + 全屏舞台结算（SSOT 驱动：台账 tv 屏缺参自动开，改台账即全场生效） */
+  apStageTick();
+  if(apWanted()){ apViewTick(); apSwitchTick();
+    $("chip-ap").classList.toggle("on",ap.on&&state.mode==="full"); }
+  else if(ap.on){ ap.on=false; $("chip-ap").classList.remove("on"); $("apswitch").classList.remove("on"); }
 }
 const t0=Date.now();
 setInterval(tick,1000);
@@ -2845,6 +4156,8 @@ $("events").addEventListener("dblclick",e=>{           /* 鼠标平权：双击=
   if(row&&row.dataset.key&&row.dataset.state==="firing") fireAck(row.dataset.key,"mouse");
 });
 $("events").addEventListener("click",e=>{               /* [P1-4] 悬停「确认」钮单击=同一通道 */
+  if(e.target.closest(".evold")){ evOldOpen=!evOldOpen; renderData();   /* [P1-2] 旧闻开合 */
+    stat("events",{v:evOldOpen?"old_open":"old_close",src:"mouse"}); return; }
   const b=e.target.closest(".ack");
   if(b&&b.dataset.key){ e.stopPropagation(); fireAck(b.dataset.key,"mouse"); }
 });
@@ -2858,6 +4171,20 @@ $("viewtabs").addEventListener("click",e=>{             /* [P0-2] 页签点击�
     stat("view",{v:["rows","events","cons","holo"][view],src:"tab"}); }
 });
 $("verpill").onclick=()=>{ stat("ui_reload",{src:"pill"}); location.reload(); };
+$("helpbtn").onclick=()=>{ helpOn()?helpClose():helpOpen("mouse"); };   /* P0 帮助层：角标钮 */
+$("helpcard").addEventListener("click",e=>{ if(e.target.id==="helpcard") helpClose(); });
+$("holopanel").addEventListener("pointerdown",e=>{   /* P2 空中面板鼠标平权：拖标题栏=抓移 */
+  const t=e.target.closest(".ttl"); if(!t) return;
+  const pn=$("holopanel"), hb=$("holo").getBoundingClientRect();
+  pn._pinned=true; pn.classList.add("grabbing"); fxSnd("grab");
+  const gx=e.clientX-hb.left-(parseFloat(pn.style.left)||0);
+  const gy=e.clientY-hb.top-(parseFloat(pn.style.top)||0);
+  const mv=ev=>{ pn.style.left=Math.max(8,ev.clientX-hb.left-gx)+"px";
+    pn.style.top=Math.max(8,ev.clientY-hb.top-gy)+"px"; };
+  const up=()=>{ removeEventListener("pointermove",mv); removeEventListener("pointerup",up);
+    pn.classList.remove("grabbing"); };
+  addEventListener("pointermove",mv); addEventListener("pointerup",up); e.preventDefault();
+});
 $("rows").addEventListener("click",e=>{                /* 鼠标平权：点行=详情；双击行=拉屏 */
   const row=e.target.closest(".row"); if(row) openDetail(machineOfRow(row),"mouse");
 });
@@ -2871,8 +4198,10 @@ $("cons").addEventListener("click",e=>{               /* 鼠标平权：点星�
 });
 $("cons").style.cursor="pointer";
 $("detail").addEventListener("click",e=>{ if(e.target.id==="detail") closeDetail(); });
-addEventListener("keydown",e=>{ if(e.key==="Escape"){ if(wallOn) wallClose(); else if(deskOpen()) deskClose();
+addEventListener("keydown",e=>{ if(e.key==="Escape"){ if(helpOn()) helpClose();
+    else if(wallOn) wallClose(); else if(deskOpen()) deskClose();
     else if(holoDrill) holoDrillExit(); else if(holoPanelMid) closeHoloPanel(); else collapseAll("key"); }
+  else if(e.key==="?"){ helpOn()?helpClose():helpOpen("key"); }   /* P0 帮助层：? 键唤出词表卡 */
   else if(e.key==="w"||e.key==="W"){ if(wallOn) wallClose(); else wallOpen("key"); }
   else if(e.key==="ArrowRight") cycleView(1,"key");      /* 键鼠平权：方向键=挥扫 */
   else if(e.key==="ArrowLeft") cycleView(-1,"key");
@@ -2889,7 +4218,7 @@ if(DEMO){
   histMap={};
   for(const m of state.ctx.machines){ const f=m.vram_total_mb>0?m.vram_used_mb/m.vram_total_mb:.3;
     histMap[m.id]=Array.from({length:30},(_,i)=>Math.min(.98,Math.max(.05,f+Math.sin(i/4+m.id.length)*.05))); }
-  /* 模式条实拍直达（营销/验证确定性）：?demo=1&cmstate=idle|switching|repair（demo 纪律：无内网 IP） */
+  /* 模式条实拍直达（营销/验证确定性）：?demo=1&cmstate=idle|switching|repair|fired（demo 纪律：无内网 IP） */
   const CMSD=PARAMS.get("cmstate");
   if(CMSD){ state.ctx.clustermode={mode:"chatx",zh:"智聊模式",accent:"#22D3EE",
       since:"2026-08-16 02:26",switching:CMSD==="switching",
@@ -2897,7 +4226,14 @@ if(DEMO){
       modes:[{id:"chatx",zh:"智聊模式",accent:"#22D3EE"},
              {id:"face",zh:"换脸/直播模式",accent:"#EC4899"},
              {id:"code",zh:"编程模式",accent:"#8B5CF6"}],
-      posture:CMSD==="repair"?{errors:2,warns:0,checked:28}:{errors:0,warns:1,checked:28}}; }
+      posture:CMSD==="repair"?{errors:2,warns:0,checked:28,
+        err_items:["tingxie 钉驻蒸发：hy-mt2-7b-official 不在显存",
+                   "yunsheng 满血变部分装载：index_tts vram/size=0.62（CPU 混载）"],
+        warn_items:["zhongshu qwen2.5:14b 驻留回来了（多半按需装载，留意预算）"]}
+       :{errors:0,warns:1,checked:28}};
+    /* fired=点火回执独立行实拍态（点击即切链路的用户可见反馈）；cmdrill=1 失守明细展开实拍态 */
+    if(CMSD==="fired") cmFb={t:Date.now(),txt:"⚡ 已点火 · 切换执行中…",err:false};
+    if(PARAMS.get("cmdrill")==="1") cmDrillOpen=true; }
   renderData(); applyGovernor();
   /* 展演幕次直达（实拍/营销确定性）：?demo=1&tour=welcome|curtain[&visitor=…][&tourat=秒]
      tourat=把幕开始时刻回拨 N 秒——飞览时间轴可钉在任意节拍（实拍聚焦某机的确定性） */
@@ -2944,12 +4280,18 @@ if(DEMO){
         else if(HPD&&holoS.nodes[HPD]){
           state.ctx.pullable=[HPD];             /* demo 注入：让拉屏按钮可见（真数据由 agent 心跳决定） */
           openHoloPanel(HPD,"demo"); }
+        else if(apWanted()){ const bt2=apBeat();   /* 电视台档实拍确定性：headless 缓动来不及=直接落到当前节拍 */
+          if(bt2&&bt2.mid&&holoS.nodes[bt2.mid]){ const p2=holoS.nodes[bt2.mid].group.position;
+            holoS.orbit=Math.atan2(p2.x,p2.z)-(holoS.orbitManual||0);
+            holoS.zoom=0.8; holoHover=bt2.mid; }
+          apSwitchTick(); }
         else if(!TOURD) holoHover=Object.keys(holoS.nodes).find(x=>x!==SELF)||null;   /* 纯全息景：悬停一台入镜 */
         clearInterval(hpT); }
       else if(++hpTries>20) clearInterval(hpT); },400); }
 }else{
   pullHistory();
   stat("hud_open",{v:GEST_WANT?("g:"+GSRC):"plain"});
+  /* 全屏舞台曝光埋点已随 SSOT 改造挪进 apStageTick（首次真开启才记，台账驱动与显式参数同轨） */
 }
 if(VOICE_WANT&&!DEMO){ startVoice();
   setTimeout(()=>{ if(!vctx) startVoice(); },8000);   /* 授权竞态重试（手势同款） */
@@ -2961,6 +4303,8 @@ if(GEST_WANT){ state.gestOn=true; startGesture();
 /* 拉屏直达（实拍/验证/演示，demo 与真数据两路都生效）：?desk=<机器> 打开只读镜像焦点窗 */
 const DESKD=PARAMS.get("desk");
 if(DESKD&&DESKD!==SELF) setTimeout(()=>deskGrab(DESKD,"url"),700);
+if(PARAMS.get("help")==="1") setTimeout(()=>helpOpen("url"),500);   /* 帮助层直达（实拍/分享用） */
+if(SHOW) setTimeout(()=>setShow(true,"url"),600);                   /* ?show=1 演示状态直达 */
 applyView();                       /* ?view=events|cons 直达（实拍/营销用） */
 fetchStations(); setInterval(fetchStations,10000);
 addEventListener("resize",()=>{ if(view===2) sizeCons(); });
