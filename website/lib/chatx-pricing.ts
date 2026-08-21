@@ -1,20 +1,32 @@
-// 智聊 ChatX / 通译 LingoX「Token 分层报价」单一真相（2026-08-19 定价决议）。
+// 智聊 ChatX / 通译 LingoX「按充值计费」单一真相（2026-08-21 充值唯一化改版）。
 //
-// 体系（ChatGPT 式分层 + Token 耗材双轮）：
-//   免费版 0 / 个人版 39 / 按量版 Flex（0 月费纯钱包）/ 团队版 49/坐席（≥2 席）/ 旗舰 598；
-//   统一耗材货币 Token（跨 ChatX/LingoX 同一钱包）；标准翻译（内置引擎）永久免费不限量
-//   （公平使用 2,000,000 字符/日/授权）；专业翻译（术语锁定/翻译记忆/认证引擎/多模态）耗 Token。
-//   年付 = 月价 × 10（送 2 个月）——全线唯一公式，废除旧「85 折折合月价」双口径。
-//   订阅含量当月有效不结转；Token 包 12 个月有效；扣减顺序 = 先订阅含量后 Token 包。
+// 体系（2026-08-21 决议：订阅全线停售，只留「免费开始 + 按充值计费」两层）：
+//   免费开始（非 SKU 档位）：下载即用 + 标准翻译永久免费不限量 + 每月 1,000 Token +
+//   注册再送 10,000 体验 Token（1 个聊天账号防薅护栏是唯一上限）。
+//   充值八档（唯一付费通道）：6U 新人包 + 50/100/200/500/1000/5000/10000 USD；
+//   1 USD = 1,500 Token；首笔充值按到账金额向下取档一次性加赠 +5/10/20/30/35/40%
+//   （每人一次，服务端判定，退款回收加赠）；新人包 6U = 18,000 Token（2 倍率，
+//   注册 72 小时内，每账号一次，不占用首充资格）。
+//   大额档服务权益：5000U=专属客户经理/发票合同/优先支持；10000U 另含团队用量
+//   分账报表 + API 对接支持（权益写在 RechargeTier.perks，展示层零手写）。
+//   企业两形态 lead-based 面议（不走自助结算，见 ENTERPRISE_TRACKS）：
+//   企业合作年框（协议价/月结/发票/SLA）+ 企业级私有化部署（一次性实施 + 年授权维保，
+//   本地模型数据不出网——承接旧旗舰版「可选私有化」叙事）。
+//   标准翻译（内置引擎）永久免费不限量（公平使用 2,000,000 字符/日/授权）。
+//   充值实付 Token 12 个月有效（≥500U 档 24 个月）；赠送部分 6 个月且先扣；
+//   存量订阅（停售台账）履约期内扣减顺序仍为 先赠送、再订阅含量、后充值实付。
 //
 // 单源纪律：新体系价格/额度/费率**只改本文件**；
-//   - lib/pricing.ts 的 autochatOffers / tokenPackOffers / translateOffers 由本文件派生（schema.org 兼容形状）；
+//   - lib/pricing.ts 的 tokenPackOffers / translateOffers 由本文件派生（schema.org 兼容形状）；
 //   - lib/order-lines.ts 的下单档位卡由本文件派生；
 //   - lib/content.ts 首页套餐区 / app/pricing 报价页 / lib/compare-content.ts 竞品对照全部派生取数；
-//   - products/zhiliao/product.yaml + products/tongyi/product.yaml（sku_registry 源）与本文件同批修改。
-// 旧 chatx-entry(58)/chatx-team(198)/lingox-charpack(59)/lingox-team(99)/lingox-pro(198)
-// 自 2026-08-19 停售，仅存 lib/pricing.ts legacy 数组供台账/历史订单反查。
-import { ANNUAL_MONTHS, QUARTER_MONTHS, type Period } from "./avatarhub-pricing";
+//   - products/zhiliao/product.yaml + platform/licensing/sku_registry.json 与本文件同批修改。
+// 停售台账：chatx-personal(39)/chatx-pro(99)/chatx-flagship(598) 订阅三档自 2026-08-21 停售
+//   （存量按期履约到期转充值）——LEGACY_CHATX_PLANS 与 lib/pricing.ts legacy 数组仅供
+//   台账/历史订单反查与门禁形状断言，不进任何页面展示或 JSON-LD。
+// 更早停售：chatx-team-seat(49/坐席) 与 token-pack-s/m/l/xl 自 2026-08-20 停售，
+//   chatx-entry(58)/chatx-team(198)/lingox-charpack(59)/lingox-team(99)/lingox-pro(198)
+//   自 2026-08-19 停售——全部仅存 lib/pricing.ts legacy 数组 + offer-map 映射。
 
 export type Lang = "zh" | "en";
 
@@ -92,7 +104,20 @@ export const FREE_TRANSLATE_FAIR_USE_CHARS_PER_DAY = 2_000_000;
  *  官网口径与引擎发放零冲突。试用口径全站唯一：不再有「7 天」「顾问试用码」两套旧说法。 */
 export const SIGNUP_BONUS_TOKENS = 10_000;
 
-/* ── 档位（Free / Personal / Flex / Team / Flagship）───────────────────────── */
+/* ── 免费开始（非 SKU 档位：所有付费档的共同起点，不是「订阅第一档」）─────────── */
+
+export const CHATX_FREE = {
+  /** 每月免费 Token（自然月刷新，不结转） */
+  tokensMonthly: 1_000,
+  /** 唯一防滥用上限：1 个聊天账号 */
+  accountCap: 1,
+  signupBonusTokens: SIGNUP_BONUS_TOKENS,
+} as const;
+
+/* ── 停售订阅台账（2026-08-21 起不进任何页面/JSON-LD；勿删）────────────────────
+ *  仅供：① 历史订单/授权反查（配合 lib/pricing.ts legacy 数组与 offer-map）；
+ *  ② 门禁形状断言（scripts/check-content-integrity.mjs 抽 skuId/edition/monthly 三连、
+ *     scripts/assert-order-lines.mjs 抽订阅价与注册表比对）——字段顺序勿动。 */
 
 export interface ChatxPlan {
   /** /order?plan= 深链与 POST /api/order 的 plan 参数 */
@@ -101,158 +126,447 @@ export interface ChatxPlan {
   skuId: string | null;
   /** 引擎授权档（订单 edition 字段；chengjie 侧另有 plan 映射） */
   edition: "trial" | "standard" | "pro" | "enterprise";
-  /** 月价 USD；perSeat 档 = 每坐席月价；custom 档无挂牌价 */
+  /** 月价 USD */
   monthly: number;
-  /** 按坐席计价（团队版）：应付 = monthly × seats */
-  perSeat?: { min: number; max: number };
-  /** 按量版：无月费，用量走 Token 钱包（购买入口 = Token 包） */
-  wallet?: boolean;
   custom?: boolean;
   hot?: boolean;
   name: { zh: string; en: string };
   audience: { zh: string; en: string };
   blurb: { zh: string; en: string };
   feats: { zh: string[]; en: string[] };
-  /** 每月含 Token（perSeat 档 = 每坐席入池；0 = 无含量） */
+  /** 每月含 Token（当月有效不结转） */
   tokensMonthly: number;
-  /** 聊天账号数（perSeat 档 = 每坐席，池共享） */
-  accounts: number;
-  platforms: "one" | "all";
-  seats: number | "per-seat" | "custom";
 }
 
-export const CHATX_PLANS: ChatxPlan[] = [
+export const LEGACY_CHATX_PLANS: ChatxPlan[] = [
   {
     key: "autochat-free",
     skuId: "chatx-free",
     edition: "trial",
     monthly: 0,
-    name: { zh: "免费版 Free", en: "Free" },
+    name: { zh: "免费开始", en: "Free start" },
     audience: { zh: "下载即用 · 翻译永久免费", en: "Free forever · translation included" },
-    blurb: { zh: "标准翻译不限量 + 每月 1,000 Token", en: "Unlimited standard translation + 1,000 tokens/mo" },
-    feats: {
-      zh: ["标准翻译免费 · 不限字符", "1 个聊天账号 · 1 个平台", "每月 1,000 Token（约 100 条 AI 回复）", "注册再送 10,000 体验 Token", "统一收件箱 · 人审工作台"],
-      en: ["Unlimited standard translation", "1 chat account · 1 platform", "1,000 tokens/mo (~100 AI replies)", "10,000 bonus tokens on signup", "Unified inbox · review workspace"],
-    },
+    blurb: { zh: "全功能开放 + 每月 1,000 Token", en: "All features + 1,000 tokens/mo" },
+    feats: { zh: [], en: [] },
     tokensMonthly: 1_000,
-    accounts: 1,
-    platforms: "one",
-    seats: 1,
   },
   {
     key: "autochat-personal",
     skuId: "chatx-personal",
     edition: "standard",
     monthly: 39,
-    name: { zh: "个人版 Personal", en: "Personal" },
-    audience: { zh: "单人创业者 / 跨境个体", en: "Solo founders & sellers" },
-    blurb: { zh: "3 账号全平台 + 每月 30,000 Token", en: "3 accounts, all platforms + 30,000 tokens/mo" },
-    feats: {
-      zh: ["3 个聊天账号 · 全平台", "每月 30,000 Token（约 100 条 AI 回复/天）", "3 个 AI 人设 · 1 个克隆音色", "人设相册 · 主动跟进", "标准翻译免费 · 不限字符"],
-      en: ["3 chat accounts · all platforms", "30,000 tokens/mo (~100 AI replies/day)", "3 AI personas · 1 cloned voice", "Persona albums · proactive follow-up", "Unlimited standard translation"],
-    },
-    tokensMonthly: 30_000,
-    accounts: 3,
-    platforms: "all",
-    seats: 1,
+    name: { zh: "基础版（停售）", en: "Basic (legacy)" },
+    audience: { zh: "停售 2026-08-21", en: "Discontinued 2026-08-21" },
+    blurb: { zh: "原每月 60,000 Token", en: "Was 60,000 tokens/mo" },
+    feats: { zh: [], en: [] },
+    tokensMonthly: 60_000,
   },
   {
-    key: "autochat-flex",
-    skuId: null, // 无订阅 SKU：开通 = 免费版 + 购买任意 Token 包（token-pack-*）
-    edition: "standard",
-    monthly: 0,
-    wallet: true,
-    name: { zh: "按量版 Flex", en: "Flex (pay-as-you-go)" },
-    audience: { zh: "用量波动大 · 用多少付多少", en: "Spiky usage · pay for what you use" },
-    blurb: { zh: "0 月费 · 全功能 · 纯 Token 钱包扣费", en: "No monthly fee · full features · wallet only" },
-    feats: {
-      zh: ["0 月费 · 预充 Token 包即用", "个人版全部功能", "3 个聊天账号 · 全平台", "Token 12 个月有效", "标准翻译免费 · 不限字符"],
-      en: ["No monthly fee — top up a token pack", "Everything in Personal", "3 chat accounts · all platforms", "Tokens valid 12 months", "Unlimited standard translation"],
-    },
-    tokensMonthly: 0,
-    accounts: 3,
-    platforms: "all",
-    seats: 1,
-  },
-  {
-    key: "autochat-team-seat",
-    skuId: "chatx-team-seat",
+    key: "autochat-pro",
+    skuId: "chatx-pro",
     edition: "pro",
-    monthly: 49,
-    perSeat: { min: 2, max: 50 },
-    hot: true,
-    name: { zh: "团队版 Team", en: "Team" },
-    audience: { zh: "跨境销售 / 客服团队", en: "Cross-border sales & support teams" },
-    blurb: { zh: "每坐席 49/月（≥2 席）· 每席 5 账号 + 50,000 Token 入池", en: "$49/seat/mo (2+ seats) · 5 accounts + 50k tokens per seat, pooled" },
-    feats: {
-      zh: ["每坐席 5 个聊天账号（池共享）", "每坐席 50,000 Token / 月（入池共享）", "10 个 AI 人设 · 每席 1 克隆音色", "权限 / 审计 / 团队看板 · 周报", "优先支持"],
-      en: ["5 chat accounts per seat (pooled)", "50,000 tokens/seat/mo (pooled)", "10 AI personas · 1 cloned voice per seat", "Roles / audit / team dashboards", "Priority support"],
-    },
-    tokensMonthly: 50_000,
-    accounts: 5,
-    platforms: "all",
-    seats: "per-seat",
+    monthly: 99,
+    name: { zh: "专业版（停售）", en: "Pro (legacy)" },
+    audience: { zh: "停售 2026-08-21", en: "Discontinued 2026-08-21" },
+    blurb: { zh: "原每月 200,000 Token", en: "Was 200,000 tokens/mo" },
+    feats: { zh: [], en: [] },
+    tokensMonthly: 200_000,
   },
   {
     key: "autochat-flagship",
     skuId: "chatx-flagship",
     edition: "enterprise",
     monthly: 598,
-    name: { zh: "旗舰 · 私有化", en: "Flagship · Private" },
-    audience: { zh: "企业级 · 数据不出网", en: "Enterprise · on-prem data" },
-    blurb: { zh: "50 账号 · 本地模型 Token 不限 · 可私有化", en: "50 accounts · unlimited local-model tokens · private deploy" },
-    feats: {
-      zh: ["50 个聊天账号 · 坐席不限", "本地模型 Token 不限量（云模型按量）", "人工接管 · 数据看板 · API", "可选私有化部署 · 数据不出网", "专属对接 · SLA"],
-      en: ["50 chat accounts · unlimited seats", "Unlimited local-model tokens (cloud metered)", "Human takeover · dashboards · API", "Optional private deployment", "Dedicated support · SLA"],
-    },
-    tokensMonthly: 0,
-    accounts: 50,
-    platforms: "all",
-    seats: "custom",
+    name: { zh: "旗舰版（停售）", en: "Max (legacy)" },
+    audience: { zh: "停售 2026-08-21 · 私有化叙事由企业级部署承接", en: "Discontinued 2026-08-21" },
+    blurb: { zh: "原每月 1,500,000 Token + 本地模型不限", en: "Was 1.5M tokens/mo + unlimited local models" },
+    feats: { zh: [], en: [] },
+    tokensMonthly: 1_500_000,
   },
 ];
 
-export function chatxPlan(key: string): ChatxPlan {
-  const p = CHATX_PLANS.find((x) => x.key === key);
-  if (!p) throw new Error(`chatx-pricing: unknown plan ${key}`);
-  return p;
-}
+/* ── Token 充值（2026-08-21 起唯一付费通道）──────────────────────────────────
+ *  1 USD = 1,500 Token（基准 $0.667/千）；首笔充值按到账金额**向下取档**一次性加赠，
+ *  每人一次（账号 + 支付指纹 + 设备指纹三合一，服务端判定，退款回收加赠）；
+ *  复充按 **VIP 累充等级**加赠（实施50 P2 落地，取代「复充回归基准价」）：
+ *  累计已付充值达门槛后，之后每笔复充自动 +3%/+5%/+8%（VIP_REPEAT_BONUS_TIERS，
+ *  与引擎 chatx_fulfillment.VIP_REPEAT_BONUS_TIERS 跨仓门禁钉死）。
+ *  有效期：实付 Token 12 个月（≥500U 档 24 个月）；赠送 Token 6 个月且先扣。 */
 
-/** 挂牌付费订阅档（进 JSON-LD / PriceOffer 派生；免费/按量档不进）。 */
-export const CHATX_PAID_PLANS = CHATX_PLANS.filter((p) => !p.custom && !p.wallet && p.monthly > 0);
+export const RECHARGE_TOKENS_PER_USD = 1_500;
 
-/* ── Token 包（一次性 · 12 个月有效 · 跨 ChatX/LingoX 通用）────────────────── */
-
-export interface TokenPack {
-  /** /order?plan= 键 = registry sku_id（token-pack-*） */
-  key: string;
-  skuId: string;
-  price: number;
-  tokens: number;
-  hot?: boolean;
-  name: { zh: string; en: string };
-}
-
-export const TOKEN_PACKS: TokenPack[] = [
-  { key: "token-pack-s", skuId: "token-pack-s", price: 9.9, tokens: 10_000, name: { zh: "体验包", en: "Starter pack" } },
-  { key: "token-pack-m", skuId: "token-pack-m", price: 49, tokens: 60_000, hot: true, name: { zh: "标准包", en: "Standard pack" } },
-  { key: "token-pack-l", skuId: "token-pack-l", price: 199, tokens: 300_000, name: { zh: "专业包", en: "Pro pack" } },
-  { key: "token-pack-xl", skuId: "token-pack-xl", price: 499, tokens: 1_000_000, name: { zh: "团队包", en: "Team pack" } },
+/** VIP 累充等级：累计已付充值（USD）≥ fromUsd → 复充加赠 pct%。
+ *  首充不参与（首充走一次性 +5%~40% 阶梯）；档位判定在履约侧按订单台账现算。 */
+export const VIP_REPEAT_BONUS_TIERS: ReadonlyArray<{ fromUsd: number; pct: number }> = [
+  { fromUsd: 500, pct: 3 },
+  { fromUsd: 2000, pct: 5 },
+  { fromUsd: 10000, pct: 8 },
 ];
 
-/** Token 包有效期（月）；订阅含量当月有效。 */
-export const TOKEN_PACK_VALID_MONTHS = 12;
-
-/** 每千 Token 单价（USD，保留两位）——包越大越便宜的展示口径。 */
-export function packUnitPrice(p: TokenPack): number {
-  return Math.round((p.price / p.tokens) * 1000 * 100) / 100;
+export interface RechargeTier {
+  /** /order?plan= 键 = registry sku_id（recharge-*） */
+  key: string;
+  skuId: string;
+  /** 充值金额 USD（同时是挂牌价） */
+  price: number;
+  /** 首充一次性加赠百分比（复充为 0） */
+  firstBonusPct: number;
+  hot?: boolean;
+  name: { zh: string; en: string };
+  /** 大额档（≥5000U）附带的服务权益；展示层由此派生，勿另写清单。 */
+  perks?: { zh: string[]; en: string[] };
 }
 
-/** 相对体验包的赠幅百分比（体验包为基准 0%）。 */
-export function packBonusPct(p: TokenPack): number {
-  const base = TOKEN_PACKS[0];
-  const baseTokensAtPrice = (p.price / base.price) * base.tokens;
-  return Math.round((p.tokens / baseTokensAtPrice - 1) * 100);
+export const RECHARGE_TIERS: RechargeTier[] = [
+  { key: "recharge-50", skuId: "recharge-50", price: 50, firstBonusPct: 0, name: { zh: "50U 起充档", en: "50U starter" } },
+  { key: "recharge-100", skuId: "recharge-100", price: 100, firstBonusPct: 5, name: { zh: "100U 档", en: "100U" } },
+  { key: "recharge-200", skuId: "recharge-200", price: 200, firstBonusPct: 10, hot: true, name: { zh: "200U 档", en: "200U" } },
+  { key: "recharge-500", skuId: "recharge-500", price: 500, firstBonusPct: 20, name: { zh: "500U 档", en: "500U" } },
+  { key: "recharge-1000", skuId: "recharge-1000", price: 1000, firstBonusPct: 30, name: { zh: "1000U 档", en: "1000U" } },
+  {
+    key: "recharge-5000", skuId: "recharge-5000", price: 5000, firstBonusPct: 35,
+    name: { zh: "5000U 工作室档", en: "5000U studio" },
+    perks: {
+      zh: ["专属客户经理", "发票 / 合同 / 对公", "优先支持"],
+      en: ["Dedicated account manager", "Invoice / contract / corporate billing", "Priority support"],
+    },
+  },
+  {
+    key: "recharge-10000", skuId: "recharge-10000", price: 10000, firstBonusPct: 40,
+    name: { zh: "10000U 旗舰档", en: "10000U flagship" },
+    perks: {
+      zh: ["5000U 档权益全含", "团队用量分账报表", "API 对接支持"],
+      en: ["Everything in 5000U", "Team usage split reports", "API integration support"],
+    },
+  },
+];
+
+/** 新人首充大礼包：6U = 18,000 Token（2 倍率）；注册 72 小时内、每账号一次；
+ *  刻意**不占用**首充加赠资格——新人包是首笔小额转化钩，加赠阶梯是首笔大额抬单器。 */
+export const NEWBIE_PACK = {
+  key: "recharge-newbie-6",
+  skuId: "recharge-newbie-6",
+  price: 6,
+  tokens: 18_000,
+  windowHours: 72,
+  name: { zh: "新人首充大礼包", en: "Newcomer pack" },
+} as const;
+
+/** 实付 Token 有效期（月）；≥LARGE_FROM 的大额档放宽（否则大额加赠是画饼）。 */
+export const RECHARGE_VALID_MONTHS = 12;
+export const RECHARGE_VALID_MONTHS_LARGE = 24;
+export const RECHARGE_LARGE_FROM_USD = 500;
+/** 赠送 Token 有效期（月）；扣费顺序=先赠送、（存量订阅含量）、后充值实付。 */
+export const BONUS_VALID_MONTHS = 6;
+
+export function rechargeTier(key: string): RechargeTier {
+  const t = RECHARGE_TIERS.find((x) => x.key === key);
+  if (!t) throw new Error(`chatx-pricing: unknown recharge tier ${key}`);
+  return t;
+}
+
+/** 基础到账（不含加赠）。 */
+export function rechargeBaseTokens(t: RechargeTier): number {
+  return t.price * RECHARGE_TOKENS_PER_USD;
+}
+
+/** 首充到账（含一次性加赠）。 */
+export function rechargeFirstTokens(t: RechargeTier): number {
+  return Math.round(rechargeBaseTokens(t) * (1 + t.firstBonusPct / 100));
+}
+
+/** 每千 Token 单价（USD，两位小数）。 */
+export function rechargeUnitPrice(priceUsd: number, tokens: number): number {
+  return Math.round((priceUsd / tokens) * 1000 * 100) / 100;
+}
+
+/** 该档有效期（月）。 */
+export function rechargeValidMonths(t: RechargeTier): number {
+  return t.price >= RECHARGE_LARGE_FROM_USD ? RECHARGE_VALID_MONTHS_LARGE : RECHARGE_VALID_MONTHS;
+}
+
+/** 下一个加赠档（UI「再充 X 升到 +Y%」提示）；已到顶返回 null。 */
+export function nextRechargeTier(t: RechargeTier): RechargeTier | null {
+  const idx = RECHARGE_TIERS.findIndex((x) => x.key === t.key);
+  for (let i = idx + 1; i < RECHARGE_TIERS.length; i++) {
+    if (RECHARGE_TIERS[i].firstBonusPct > t.firstBonusPct) return RECHARGE_TIERS[i];
+  }
+  return null;
+}
+
+/* ── 企业两形态（lead-based 面议：不产生自助订单，CTA=联系商务）───────────────
+ *  「企业合作」= 还是用云端服务只是量大（年框协议价，充值体系的顶端延伸）；
+ *  「企业级部署」= 整套引擎部署进客户内网（一次性实施 + 年授权维保），
+ *  承接旧旗舰版「可选私有化 + 本地模型不限量」叙事。 */
+
+export interface EnterpriseTrack {
+  key: "enterprise-coop" | "private-deploy";
+  /** sku_registry.json 台账键（lead 成交后人工履约挂账用，不进自助结算） */
+  skuId: string;
+  name: { zh: string; en: string };
+  tagline: { zh: string; en: string };
+  points: { zh: string[]; en: string[] };
+}
+
+export const ENTERPRISE_TRACKS: EnterpriseTrack[] = [
+  {
+    key: "enterprise-coop",
+    skuId: "chatx-enterprise",
+    name: { zh: "企业合作 · 年框", en: "Enterprise partnership" },
+    tagline: { zh: "年用量超过 10000U？一次谈清协议价", en: "Beyond 10000U a year? Lock an annual frame deal" },
+    points: {
+      zh: ["年框协议价（建议 ≥20,000U 起谈）", "月结 · 对公 · 发票", "专属 SLA 与客户成功", "多席位与子账号管理"],
+      en: ["Annual frame pricing (from ~20,000U)", "Monthly settlement · corporate billing · invoices", "Dedicated SLA & customer success", "Multi-seat & sub-account management"],
+    },
+  },
+  {
+    key: "private-deploy",
+    skuId: "chatx-private-deploy",
+    name: { zh: "企业级私有化部署", en: "Private deployment" },
+    tagline: { zh: "整套引擎部署进你的内网，数据不出网", en: "The full engine inside your own network" },
+    points: {
+      zh: ["部署在你自己的服务器 / 内网 GPU", "本地模型 Token 不限量", "一次性实施 + 年授权维保", "实施培训 · 升级通道 · SLA"],
+      en: ["Runs on your servers / on-prem GPUs", "Unlimited local-model tokens", "One-time setup + annual license & care", "Onboarding training · upgrade channel · SLA"],
+    },
+  },
+];
+
+/* ── 展示派生（营销卡 / 报价页 / JSON-LD 全部由此取数，零手写数字）─────────── */
+
+/** 首页产品卡报价行（content.ts Solution.pricing 同构：plan/price/detail/order）。 */
+export function chatxPlanRows(lang: Lang): { plan: string; price: string; detail: string; order?: string }[] {
+  const zh = lang === "zh";
+  const hot = RECHARGE_TIERS.find((t) => t.hot) ?? RECHARGE_TIERS[0];
+  const maxPct = RECHARGE_TIERS[RECHARGE_TIERS.length - 1].firstBonusPct;
+  return [
+    {
+      plan: zh ? "免费开始" : "Free start",
+      price: zh ? "0" : "0",
+      detail: zh
+        ? `下载即用 · 标准翻译免费不限量 · 每月 ${CHATX_FREE.tokensMonthly.toLocaleString("en-US")} Token，注册再送 ${SIGNUP_BONUS_TOKENS.toLocaleString("en-US")}`
+        : `Download & go · unlimited standard translation · ${CHATX_FREE.tokensMonthly.toLocaleString("en-US")} tokens/mo + ${SIGNUP_BONUS_TOKENS.toLocaleString("en-US")} on signup`,
+    },
+    {
+      plan: zh ? "新人 6U 大礼包" : "Newcomer 6U pack",
+      price: String(NEWBIE_PACK.price),
+      detail: zh
+        ? `${NEWBIE_PACK.tokens.toLocaleString("en-US")} Token 双倍到账 · 注册 ${NEWBIE_PACK.windowHours} 小时内 · 每账号一次`
+        : `${NEWBIE_PACK.tokens.toLocaleString("en-US")} tokens at double rate · within ${NEWBIE_PACK.windowHours}h of signup`,
+      order: NEWBIE_PACK.key,
+    },
+    {
+      plan: zh ? "Token 充值" : "Top-up",
+      price: zh ? `${RECHARGE_TIERS[0].price}U 起` : `from ${RECHARGE_TIERS[0].price}U`,
+      detail: zh
+        ? `1U = ${RECHARGE_TOKENS_PER_USD.toLocaleString("en-US")} Token · 首充最高 +${maxPct}% · 充多少用多少不订阅`
+        : `1U = ${RECHARGE_TOKENS_PER_USD.toLocaleString("en-US")} tokens · first top-up up to +${maxPct}% · no subscription`,
+      order: hot.key,
+    },
+    {
+      plan: zh ? "企业合作 / 私有化部署" : "Enterprise / private deploy",
+      price: zh ? "面议" : "Custom",
+      detail: zh
+        ? "年框协议价 · 月结发票 · 或整套部署进你的内网（数据不出网）"
+        : "Annual frame pricing · invoices · or the full engine deployed in your network",
+    },
+  ];
+}
+
+/** 翻译卡报价行（免费主张 + 工作台 + Token 计价）。 */
+export function translateRows(lang: Lang): { plan: string; price: string; detail: string; order?: string }[] {
+  const zh = lang === "zh";
+  const pro = tokenRate("pro_translate");
+  return [
+    {
+      plan: zh ? "标准翻译" : "Standard",
+      price: zh ? "永久免费" : "Free forever",
+      detail: zh
+        ? "内置引擎 · 不限字符（公平使用 200 万字符/日）· 所有用户含"
+        : "Built-in engine · unlimited chars (fair use 2M/day) · included for everyone",
+      order: "autochat-free",
+    },
+    {
+      plan: zh ? "专业翻译" : "Pro translate",
+      price: zh ? `${pro.tokens} Token / 千字符` : `${pro.tokens} tokens / 1k chars`,
+      detail: zh
+        ? "术语锁定 + 翻译记忆 + 多模态（图/语音）· 认证引擎（DeepL）40 Token/千字符"
+        : "Term-lock + memory + multimodal · certified DeepL engine at 40 tokens/1k chars",
+      order: RECHARGE_TIERS[1].key,
+    },
+    {
+      plan: zh ? "翻译工作台" : "Workbench",
+      price: zh ? `${LINGOX_WORKBENCH.monthly} / 月 / 坐席` : `${LINGOX_WORKBENCH.monthly}/mo/seat`,
+      detail: zh
+        ? "纯翻译团队：多坐席收件箱 + 客户 journey + 漏斗计数"
+        : "Translation-only teams: shared inbox + journey + funnel counter",
+      order: LINGOX_WORKBENCH.key,
+    },
+  ];
+}
+
+/** 充值档展示行（首页/下单面板紧凑位）。 */
+export function rechargeRows(lang: Lang): { plan: string; price: string; detail: string; order: string }[] {
+  const zh = lang === "zh";
+  return RECHARGE_TIERS.map((t) => {
+    const first = rechargeFirstTokens(t);
+    return {
+      plan: t.name[lang],
+      price: String(t.price),
+      detail: zh
+        ? `首充到账 ${first.toLocaleString("en-US")} Token${t.firstBonusPct ? `（+${t.firstBonusPct}%）` : ""} · 复充 ${rechargeBaseTokens(t).toLocaleString("en-US")} · ${rechargeValidMonths(t)} 个月有效`
+        : `First top-up ${first.toLocaleString("en-US")} tokens${t.firstBonusPct ? ` (+${t.firstBonusPct}%)` : ""} · repeat ${rechargeBaseTokens(t).toLocaleString("en-US")} · valid ${rechargeValidMonths(t)} months`,
+      order: t.key,
+    };
+  });
+}
+
+/** 首页套餐区卡片（components/Plans.tsx 消费；2026-08-21 起为充值卡形状，无月/年切换）。 */
+export interface PlanCardItem {
+  name: string;
+  /** 主价格文本（"0" / "6" / "200" / "面议"） */
+  price: string;
+  /** 价格单位行（"USD · 一次性" / "免费" / "联系商务"…） */
+  unit: string;
+  desc: string;
+  features: string[];
+  highlight?: boolean;
+  /** /order 深链 plan；免费开始走 href 直达下载页；两者皆无 = 联系商务 */
+  plan?: string;
+  href?: string;
+}
+
+export function chatxPlanCardItems(lang: Lang): PlanCardItem[] {
+  const zh = lang === "zh";
+  const fmtN = (n: number) => n.toLocaleString("en-US");
+  const hot = RECHARGE_TIERS.find((t) => t.hot) ?? RECHARGE_TIERS[2];
+  const big = rechargeTier("recharge-1000");
+  const aiReply = tokenRate("ai_reply").tokens;
+  return [
+    {
+      name: zh ? "免费开始" : "Free start",
+      price: "0",
+      unit: zh ? "永久免费" : "free forever",
+      desc: zh ? "下载即用 · 翻译永久免费" : "Download & go · translation included",
+      features: zh
+        ? [
+            "全功能开放 · 与付费用户同款能力",
+            "标准翻译免费 · 不限字符",
+            `每月 ${fmtN(CHATX_FREE.tokensMonthly)} Token（约 ${fmtN(CHATX_FREE.tokensMonthly / aiReply)} 条 AI 回复）`,
+            `注册再送 ${fmtN(SIGNUP_BONUS_TOKENS)} 体验 Token`,
+            "1 个聊天账号（唯一的防滥用上限）",
+          ]
+        : [
+            "All features unlocked — same as paying users",
+            "Unlimited standard translation",
+            `${fmtN(CHATX_FREE.tokensMonthly)} tokens/mo (~${fmtN(CHATX_FREE.tokensMonthly / aiReply)} AI replies)`,
+            `${fmtN(SIGNUP_BONUS_TOKENS)} bonus tokens on signup`,
+            "1 chat account (the only anti-abuse cap)",
+          ],
+      href: zh ? "/download/chatx" : "/en/download/chatx",
+    },
+    {
+      name: zh ? "新人 6U 大礼包" : "Newcomer 6U pack",
+      price: String(NEWBIE_PACK.price),
+      unit: zh ? "USD · 一次性" : "USD one-time",
+      desc: zh ? `注册 ${NEWBIE_PACK.windowHours} 小时内 · 每账号一次` : `Within ${NEWBIE_PACK.windowHours}h of signup · once`,
+      features: zh
+        ? [
+            `${fmtN(NEWBIE_PACK.tokens)} Token 双倍到账（$0.33/千）`,
+            `约 ${fmtN(NEWBIE_PACK.tokens / aiReply)} 条 AI 回复的量`,
+            "不占用首充加赠资格",
+            "跨智聊 / 通译同一钱包",
+          ]
+        : [
+            `${fmtN(NEWBIE_PACK.tokens)} tokens at double rate ($0.33/1k)`,
+            `~${fmtN(NEWBIE_PACK.tokens / aiReply)} AI replies' worth`,
+            "Doesn't consume your first-top-up bonus",
+            "One wallet across ChatX & LingoX",
+          ],
+      plan: NEWBIE_PACK.key,
+    },
+    {
+      name: zh ? `充值 ${hot.price}U` : `Top up ${hot.price}U`,
+      price: String(hot.price),
+      unit: zh ? "USD · 一次性" : "USD one-time",
+      desc: zh ? "个人 / 小团队主力档" : "The solo & small-team workhorse",
+      features: zh
+        ? [
+            `首充到账 ${fmtN(rechargeFirstTokens(hot))} Token（+${hot.firstBonusPct}%）`,
+            `复充 ${fmtN(rechargeBaseTokens(hot))} · 1U = ${fmtN(RECHARGE_TOKENS_PER_USD)}`,
+            `实付 ${rechargeValidMonths(hot)} 个月有效`,
+            "用尽自动降级免费引擎，永不断线",
+          ]
+        : [
+            `First top-up ${fmtN(rechargeFirstTokens(hot))} tokens (+${hot.firstBonusPct}%)`,
+            `Repeat ${fmtN(rechargeBaseTokens(hot))} · 1U = ${fmtN(RECHARGE_TOKENS_PER_USD)}`,
+            `Paid tokens valid ${rechargeValidMonths(hot)} months`,
+            "Graceful fallback to free engines — never offline",
+          ],
+      highlight: true,
+      plan: hot.key,
+    },
+    {
+      name: zh ? `充值 ${big.price}U` : `Top up ${big.price}U`,
+      price: String(big.price),
+      unit: zh ? "USD · 一次性" : "USD one-time",
+      desc: zh ? "重度团队 · 越充越省" : "Heavy teams · bigger is cheaper",
+      features: zh
+        ? [
+            `首充到账 ${fmtN(rechargeFirstTokens(big))} Token（+${big.firstBonusPct}%）`,
+            `≈ $${rechargeUnitPrice(big.price, rechargeFirstTokens(big))}/千 Token`,
+            `实付 ${rechargeValidMonths(big)} 个月有效`,
+            `更高档：5000U +35% · 10000U +40%`,
+          ]
+        : [
+            `First top-up ${fmtN(rechargeFirstTokens(big))} tokens (+${big.firstBonusPct}%)`,
+            `≈ $${rechargeUnitPrice(big.price, rechargeFirstTokens(big))}/1k tokens`,
+            `Paid tokens valid ${rechargeValidMonths(big)} months`,
+            "Higher tiers: 5000U +35% · 10000U +40%",
+          ],
+      plan: big.key,
+    },
+    {
+      name: zh ? "企业 · 合作与部署" : "Enterprise",
+      price: zh ? "面议" : "Custom",
+      unit: zh ? "联系商务" : "contact sales",
+      desc: zh ? "年框协议 / 私有化部署" : "Annual frame / private deployment",
+      features: zh
+        ? ["年框协议价 · 月结 · 发票", "企业级私有化部署（数据不出网）", "本地模型 Token 不限量", "专属 SLA 与客户成功"]
+        : ["Annual frame pricing · invoices", "Private deployment (data stays on-prem)", "Unlimited local-model tokens", "Dedicated SLA & customer success"],
+    },
+  ];
+}
+
+/** JSON-LD offers（schema.org Offer 源数据；lib/pricing.ts toSchemaOffer 消费）。
+ *  2026-08-21 起只出一次性充值商品——停售订阅不进结构化数据。 */
+export function chatxSchemaOffers(): {
+  id: string;
+  skuId?: string;
+  name: string;
+  price: string;
+  currency: "USD";
+  unit: "month" | "one-time";
+  description: string;
+}[] {
+  const recharges = RECHARGE_TIERS.map((t) => ({
+    id: t.key,
+    skuId: t.skuId,
+    name: `Token top-up ${t.price}U`,
+    price: String(t.price),
+    currency: "USD" as const,
+    unit: "one-time" as const,
+    description: `One-time top-up; ${rechargeBaseTokens(t).toLocaleString("en-US")} tokens (first top-up ${rechargeFirstTokens(t).toLocaleString("en-US")} with +${t.firstBonusPct}% once-per-person bonus), valid ${rechargeValidMonths(t)} months, shared across ChatX & LingoX.`,
+  }));
+  const newbie = {
+    id: NEWBIE_PACK.key,
+    skuId: NEWBIE_PACK.skuId,
+    name: "Newcomer token pack 6U",
+    price: String(NEWBIE_PACK.price),
+    currency: "USD" as const,
+    unit: "one-time" as const,
+    description: `One-time; ${NEWBIE_PACK.tokens.toLocaleString("en-US")} tokens at double rate, within ${NEWBIE_PACK.windowHours}h of signup, once per account.`,
+  };
+  return [...recharges, newbie];
 }
 
 /* ── 通译 LingoX（翻译免费化后的两个新形状）──────────────────────────────── */
@@ -266,153 +580,10 @@ export const LINGOX_WORKBENCH = {
   perSeat: { min: 1, max: 50 },
   name: { zh: "翻译工作台", en: "Translation Workbench" },
   blurb: {
-    zh: "纯翻译团队按坐席订阅：多坐席统一收件箱 · 客户 journey · 漏斗计数（AI 成交能力见智聊档位）",
+    zh: "纯翻译团队按坐席订阅：多坐席统一收件箱 · 客户 journey · 漏斗计数（AI 成交能力见智聊充值档）",
     en: "Per-seat plan for translation-only teams: shared inbox, customer journey, funnel counter",
   },
 };
-
-/* ── 周期换算（与 avatarhub-pricing 同一常量：季 ×3 / 年 ×10 送 2 个月）────── */
-
-export function planPrice(monthly: number, period: Period): number {
-  if (period === "monthly") return monthly;
-  if (period === "quarterly") return monthly * QUARTER_MONTHS;
-  return monthly * ANNUAL_MONTHS;
-}
-
-/** 年付总价（营销位「年付 XXX · 省 2 个月」用）。 */
-export function annualTotal(monthly: number): number {
-  return monthly * ANNUAL_MONTHS;
-}
-
-/* ── 展示派生（营销卡 / 报价页 / JSON-LD 全部由此取数，零手写数字）─────────── */
-
-export function planPriceLabel(p: ChatxPlan, lang: Lang): string {
-  if (p.custom) return lang === "zh" ? "咨询报价" : "Quote";
-  if (p.wallet) return lang === "zh" ? "0 月费" : "$0/mo";
-  if (p.monthly === 0) return lang === "zh" ? "免费" : "Free";
-  const seat = p.perSeat ? (lang === "zh" ? " / 坐席" : "/seat") : "";
-  return lang === "zh" ? `${p.monthly} / 月${seat}` : `${p.monthly}/mo${seat}`;
-}
-
-/** 首页产品卡报价行（content.ts Solution.pricing 同构：plan/price/detail/order）。 */
-export function chatxPlanRows(lang: Lang): { plan: string; price: string; detail: string; order?: string }[] {
-  return CHATX_PLANS.map((p) => ({
-    plan: lang === "zh" ? p.name.zh.split(" ")[0] : p.name.en.split(" (")[0],
-    price: planPriceLabel(p, lang),
-    detail: p.blurb[lang],
-    order: p.key,
-  }));
-}
-
-/** 翻译卡报价行（免费主张 + 工作台 + Token 计价）。 */
-export function translateRows(lang: Lang): { plan: string; price: string; detail: string; order?: string }[] {
-  const zh = lang === "zh";
-  const pro = tokenRate("pro_translate");
-  return [
-    {
-      plan: zh ? "标准翻译" : "Standard",
-      price: zh ? "永久免费" : "Free forever",
-      detail: zh
-        ? "内置引擎 · 不限字符（公平使用 200 万字符/日）· 所有档位含"
-        : "Built-in engine · unlimited chars (fair use 2M/day) · in every plan",
-      order: "autochat-free",
-    },
-    {
-      plan: zh ? "专业翻译" : "Pro translate",
-      price: zh ? `${pro.tokens} Token / 千字符` : `${pro.tokens} tokens / 1k chars`,
-      detail: zh
-        ? "术语锁定 + 翻译记忆 + 多模态（图/语音）· 认证引擎（DeepL）40 Token/千字符"
-        : "Term-lock + memory + multimodal · certified DeepL engine at 40 tokens/1k chars",
-      order: "token-pack-m",
-    },
-    {
-      plan: zh ? "翻译工作台" : "Workbench",
-      price: zh ? `${LINGOX_WORKBENCH.monthly} / 月 / 坐席` : `${LINGOX_WORKBENCH.monthly}/mo/seat`,
-      detail: zh
-        ? "纯翻译团队：多坐席收件箱 + 客户 journey + 漏斗计数"
-        : "Translation-only teams: shared inbox + journey + funnel counter",
-      order: LINGOX_WORKBENCH.key,
-    },
-  ];
-}
-
-/** Token 包展示行。 */
-export function tokenPackRows(lang: Lang): { plan: string; price: string; detail: string; order: string }[] {
-  const zh = lang === "zh";
-  return TOKEN_PACKS.map((p) => ({
-    plan: p.name[lang],
-    price: String(p.price),
-    detail: zh
-      ? `${p.tokens.toLocaleString("en-US")} Token · $${packUnitPrice(p)}/千 · ${TOKEN_PACK_VALID_MONTHS} 个月有效`
-      : `${p.tokens.toLocaleString("en-US")} tokens · $${packUnitPrice(p)}/1k · valid ${TOKEN_PACK_VALID_MONTHS} months`,
-    order: p.key,
-  }));
-}
-
-/** 首页套餐区卡片（components/Plans.tsx 消费；年付显示**年付总价**，废除折合月价）。 */
-export interface PlanCardItem {
-  name: string;
-  priceMonthly: string;
-  /** 年付总价（×10；月价 0 → "0"） */
-  priceYearly: string;
-  /** perSeat 档的单位后缀（"/ 坐席"）；普通档为空串 */
-  seatSuffix: string;
-  desc: string;
-  features: string[];
-  highlight?: boolean;
-  /** /order 深链 plan；免费版走 href 直达下载页 */
-  plan?: string;
-  href?: string;
-}
-
-export function chatxPlanCardItems(lang: Lang): PlanCardItem[] {
-  const zh = lang === "zh";
-  return CHATX_PLANS.map((p) => {
-    const item: PlanCardItem = {
-      name: zh ? p.name.zh.split(" ")[0] : p.name.en.split(" (")[0],
-      priceMonthly: p.wallet ? "0" : String(p.monthly),
-      priceYearly: p.wallet ? "0" : String(annualTotal(p.monthly)),
-      seatSuffix: p.perSeat ? (zh ? " / 坐席" : " /seat") : "",
-      desc: p.audience[lang],
-      features: p.feats[lang],
-      highlight: !!p.hot,
-      plan: p.key === "autochat-free" ? undefined : p.key,
-      href: p.key === "autochat-free" ? (zh ? "/download/chatx" : "/en/download/chatx") : undefined,
-    };
-    return item;
-  });
-}
-
-/** JSON-LD offers（schema.org Offer 源数据；lib/pricing.ts toSchemaOffer 消费）。 */
-export function chatxSchemaOffers(): {
-  id: string;
-  skuId?: string;
-  name: string;
-  price: string;
-  currency: "USD";
-  unit: "month" | "one-time";
-  description: string;
-}[] {
-  const subs = CHATX_PAID_PLANS.map((p) => ({
-    id: p.key,
-    skuId: p.skuId ?? undefined,
-    name: `ChatX ${p.name.en.split(" (")[0]}`,
-    price: String(p.monthly),
-    currency: "USD" as const,
-    unit: "month" as const,
-    description: `Per month${p.perSeat ? " per seat" : ""}; ${p.blurb.en}.`,
-  }));
-  const packs = TOKEN_PACKS.map((p) => ({
-    id: p.key,
-    skuId: p.skuId,
-    name: `Token ${p.name.en}`,
-    price: String(p.price),
-    currency: "USD" as const,
-    unit: "one-time" as const,
-    description: `One-time; ${p.tokens.toLocaleString("en-US")} tokens, valid ${TOKEN_PACK_VALID_MONTHS} months, shared across ChatX & LingoX.`,
-  }));
-  return [...subs, ...packs];
-}
 
 /* ── 用量计算器（/pricing 页交互模型；纯函数便于门禁）──────────────────────── */
 
@@ -438,46 +609,43 @@ export function estimateMonthlyTokens(u: UsageInput): number {
   return Math.round(replies + pro + voice + images);
 }
 
-/** 超量部分按最优 Token 包组合估算月补充成本（简化：用标准包单价做边际价）。 */
-export function estimateTopUpCost(tokensShort: number): number {
-  if (tokensShort <= 0) return 0;
-  const marginal = packUnitPrice(TOKEN_PACKS[1]); // 标准包 $/千
-  return Math.round(((tokensShort / 1000) * marginal + Number.EPSILON) * 10) / 10;
+/** 充值基准单价（USD/千 Token）。 */
+export function rechargeMarginalPerK(): number {
+  return Math.round((1000 / RECHARGE_TOKENS_PER_USD) * 100) / 100;
 }
 
-export interface PlanCost {
-  planKey: string;
-  seats: number;
-  base: number;
-  topUp: number;
-  total: number;
-  fits: boolean;
+/** 按基准价折算的月成本（USD/月）。 */
+export function rechargeOnlyMonthlyCost(tokensPerMonth: number): number {
+  if (tokensPerMonth <= 0) return 0;
+  return Math.round(((tokensPerMonth / 1000) * rechargeMarginalPerK() + Number.EPSILON) * 10) / 10;
 }
 
-/** 各档位承接该用量的月成本对比（计算器输出；cheapest 用 total 升序 + fits 优先）。 */
-export function comparePlanCosts(tokensPerMonth: number, seats: number): PlanCost[] {
-  const s = Math.max(1, Math.round(seats));
-  const out: PlanCost[] = [];
-  for (const p of CHATX_PLANS) {
-    if (p.custom) continue;
-    if (p.key === "autochat-flagship") {
-      out.push({ planKey: p.key, seats: s, base: p.monthly, topUp: 0, total: p.monthly, fits: true });
-      continue;
-    }
-    const planSeats = p.perSeat ? Math.max(p.perSeat.min, s) : 1;
-    const fits = p.perSeat ? true : s <= 1;
-    const included = p.perSeat ? p.tokensMonthly * planSeats : p.tokensMonthly;
-    const base = p.perSeat ? p.monthly * planSeats : p.monthly;
-    const topUp = estimateTopUpCost(tokensPerMonth - included);
-    out.push({ planKey: p.key, seats: planSeats, base, topUp, total: Math.round((base + topUp) * 10) / 10, fits });
+/** 某档位按当前月用量的续航（月）：first=首充口径 / repeat=复充口径。 */
+export interface RechargeAdvice {
+  tier: RechargeTier;
+  monthsFirst: number;
+  monthsRepeat: number;
+}
+
+function monthsOf(tokens: number, tokensPerMonth: number): number {
+  if (tokensPerMonth <= 0) return Infinity;
+  return Math.round((tokens / tokensPerMonth) * 10) / 10;
+}
+
+export function rechargeCoverage(t: RechargeTier, tokensPerMonth: number): RechargeAdvice {
+  return {
+    tier: t,
+    monthsFirst: monthsOf(rechargeFirstTokens(t), tokensPerMonth),
+    monthsRepeat: monthsOf(rechargeBaseTokens(t), tokensPerMonth),
+  };
+}
+
+/** 推荐充值档：能撑满 ≥1 个月（复充口径，保守）的最小档；用量再大取最大档。
+ *  用量为 0 → 最小档（免得推荐空转）。 */
+export function recommendRechargeTier(tokensPerMonth: number): RechargeAdvice {
+  if (tokensPerMonth <= 0) return rechargeCoverage(RECHARGE_TIERS[0], tokensPerMonth);
+  for (const t of RECHARGE_TIERS) {
+    if (rechargeBaseTokens(t) >= tokensPerMonth) return rechargeCoverage(t, tokensPerMonth);
   }
-  return out;
-}
-
-/** 推荐档位：能承接（fits）里月总成本最低者；并列取靠后档（功能更全）。 */
-export function recommendPlan(tokensPerMonth: number, seats: number): PlanCost {
-  const all = comparePlanCosts(tokensPerMonth, seats).filter((c) => c.fits);
-  let best = all[0];
-  for (const c of all) if (c.total <= best.total) best = c;
-  return best;
+  return rechargeCoverage(RECHARGE_TIERS[RECHARGE_TIERS.length - 1], tokensPerMonth);
 }

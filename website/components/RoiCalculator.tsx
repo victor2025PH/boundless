@@ -7,10 +7,13 @@ import { useLang } from "./LanguageContext";
 import Reveal from "./fx/Reveal";
 import { CONTACT_URL } from "@/lib/site";
 import { track } from "@/lib/track";
+import { rechargeOnlyMonthlyCost, tokenRate } from "@/lib/chatx-pricing";
 
 const LABOR_OPT = 0.6;
 const CONV_UPLIFT = 0.35;
 const DAYS = 30;
+// 每条新咨询日均消耗的 AI 回复条数（答疑 + 跟进；与 content.ts roi.assumptions 同口径）
+const AI_REPLIES_PER_LEAD = 8;
 
 function fmt(n: number) {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(Math.max(0, Math.round(n)));
@@ -70,15 +73,10 @@ export default function RoiCalculator() {
   const [conv, setConv] = useState(8);
 
   const calc = useMemo(() => {
-    // 2026-08-19 Token 定价改版：按 plan key 选档（旧按索引取会踩到 0 月费的按量版卡）。
-    // 单人 → 个人版；多人 → 团队版按坐席真实核算（每坐席价 × 坐席数，最少 2 席）。
-    const heavy = agents >= 2 || leads >= 150;
-    const plan =
-      t.plans.items.find((p) => p.plan === (heavy ? "autochat-team-seat" : "autochat-personal")) ??
-      t.plans.items.find((p) => Number(p.priceMonthly) > 0) ??
-      t.plans.items[0];
-    const seatCount = plan.seatSuffix ? Math.max(2, Math.min(50, agents)) : 1;
-    const planCost = (Number(plan.priceMonthly) || 0) * seatCount;
+    // 2026-08-21 充值唯一化：工具成本不再按订阅档，按「充值基准价 × 估算 Token 用量」
+    // 真实核算（与 /pricing 计算器同一张费率表）——每条咨询日均 ~8 条 AI 回复。
+    const tokens = Math.round(leads * DAYS * AI_REPLIES_PER_LEAD * tokenRate("ai_reply").tokens);
+    const planCost = rechargeOnlyMonthlyCost(tokens);
 
     const laborSave = agents * salary * LABOR_OPT;
     const newConv = Math.min(conv * (1 + CONV_UPLIFT), 95);
@@ -91,8 +89,8 @@ export default function RoiCalculator() {
     const outBar = 100;
     const inBar = gain > 0 ? Math.max(4, (planCost / gain) * 100) : 4;
 
-    return { plan, planCost, seatCount, laborSave, extraRev, gain, net, roi, yearNet, inBar, outBar };
-  }, [agents, salary, leads, aov, conv, t.plans.items]);
+    return { tokens, planCost, laborSave, extraRev, gain, net, roi, yearNet, inBar, outBar };
+  }, [agents, salary, leads, aov, conv]);
 
   return (
     <section className="relative py-8">
@@ -197,8 +195,7 @@ export default function RoiCalculator() {
                   {r.planLabel}
                 </span>
                 <span className="text-sm font-semibold text-white">
-                  {calc.plan.name}
-                  {calc.seatCount > 1 ? ` × ${calc.seatCount}` : ""} · {calc.planCost} USD{r.perMonth}
+                  ≈ {fmt(calc.tokens)} Token · {fmt(calc.planCost)} USD{r.perMonth}
                 </span>
               </div>
 

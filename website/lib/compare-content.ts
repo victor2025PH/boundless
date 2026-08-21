@@ -42,8 +42,8 @@ const US_COMPLIANCE: CompareCell = {
 
 // 2026-08-19 Token 定价改版：口径与 lib/chatx-pricing.ts 同步（改价两处一起改）。
 const US_PRICING: CompareCell = {
-  zh: "免费版 $0（标准翻译不限量）起：个人 $39/月 · 团队 $49/坐席/月 · 旗舰 $598/月；AI 用量按 Token 透明计价（无按月活联系人 MAU 加价），支持 USDT / 银行卡。",
-  en: "From Free $0 (unlimited standard translation): Personal $39/mo · Team $49/seat/mo · Flagship $598/mo; AI usage meters in transparent tokens (no per-MAU surcharges), USDT & cards accepted.",
+  zh: "免费开始（全功能 + 标准翻译不限量），充多少用多少、不订阅：充值 50U 起、1U = 1,500 Token，首充按档加赠最高 +40%，新人 6U 大礼包 18,000 Token 双倍到账。AI 用量按 Token 透明计价（无月费、无按月活联系人 MAU 加价），支持 USDT / 银行卡；企业年框与私有化部署面议。",
+  en: "Start free (all features + unlimited standard translation), then top up as you go — no subscription: from 50U at 1U = 1,500 tokens, first top-up earns up to +40%, newcomer 6U pack lands 18,000 tokens at double rate. AI usage meters in transparent tokens (no monthly fee, no per-MAU surcharges), USDT & cards accepted; enterprise frames and private deployment by quote.",
 };
 
 const THEM_SAAS_DATA: CompareCell = {

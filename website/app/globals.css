@@ -875,6 +875,120 @@ html.fx-warp .star-wrap {
   }
 }
 
+/* ============================================================
+   ===== 充值定价区特效（BonusLadder / 金色描边 / 吸底结算条）=====
+   消费方：/order 充值 Tab（RechargeOrderZone）与 /pricing 报价页。
+   ============================================================ */
+
+/* 金色描边光束变体（新人礼包 / 大额档语义色；与 .border-beam 同机制仅换色） */
+.border-beam-gold {
+  background: conic-gradient(
+    from var(--beam-angle, 0deg),
+    transparent 0%,
+    rgba(252, 211, 77, 0.9) 12%,
+    rgba(251, 146, 60, 0.85) 22%,
+    transparent 35%
+  );
+}
+html[data-mode="day"] .border-beam-gold {
+  background: conic-gradient(
+    from var(--beam-angle, 0deg),
+    transparent 0%,
+    rgba(180, 83, 9, 0.6) 12%,
+    rgba(194, 65, 12, 0.5) 22%,
+    transparent 35%
+  );
+}
+
+/* 阶梯选中节点：呼吸脉冲（扩散环 + 辉光交替） */
+.ladder-node-sel {
+  animation: ladder-pulse 2.4s ease-in-out infinite;
+}
+@keyframes ladder-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.45), 0 0 18px rgba(34, 211, 238, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(34, 211, 238, 0), 0 0 30px rgba(139, 92, 246, 0.55);
+  }
+}
+html[data-mode="day"] .ladder-node-sel {
+  animation-name: ladder-pulse-day;
+}
+@keyframes ladder-pulse-day {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(8, 145, 178, 0.35), 0 0 14px rgba(8, 145, 178, 0.28);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(8, 145, 178, 0), 0 0 22px rgba(124, 58, 237, 0.35);
+  }
+}
+
+/* 阶梯入场：一道光带从左到右点亮扫过（一次性） */
+.ladder-sweep {
+  position: absolute;
+  inset: -6px 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.ladder-sweep::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 34%;
+  background: linear-gradient(100deg, transparent, rgba(103, 232, 249, 0.16) 50%, transparent);
+  transform: translateX(-140%) skewX(-14deg);
+  animation: ladder-sweep-move 1.1s ease-out 0.25s forwards;
+}
+html[data-mode="day"] .ladder-sweep::before {
+  background: linear-gradient(100deg, transparent, rgba(15, 23, 42, 0.1) 50%, transparent);
+}
+@keyframes ladder-sweep-move {
+  to {
+    transform: translateX(340%) skewX(-14deg);
+  }
+}
+
+/* keep-dark 深色广告牌（新人 6U 海报/横幅）里的琥珀文字：
+ * 日间覆盖表把 text-amber-300 压深成 #b45309，在深底上不可读——keep-dark 区还原亮金 */
+html[data-mode="day"] .keep-dark .text-amber-300 {
+  color: #fcd34d;
+}
+/* 竞品对照表本站行左侧发光竖条：日间换深青 */
+html[data-mode="day"] .border-l-neon-cyan\/70 {
+  border-left-color: rgba(8, 145, 178, 0.7);
+}
+
+/* 吸底结算条（/order 充值 Tab）：底部滑入；与全局移动粘性条(.sticky-cta)互斥
+ * ——挂载期在 <html> 打 data-order-bar，粘性条让位（同 data-nav-open 模式）。 */
+.order-bar {
+  transition: transform 0.3s ease;
+}
+html[data-order-bar] .sticky-cta {
+  display: none;
+}
+html[data-nav-open] .order-bar {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ladder-node-sel {
+    animation: none !important;
+    box-shadow: 0 0 14px rgba(34, 211, 238, 0.35);
+  }
+  .ladder-sweep {
+    display: none;
+  }
+  .border-beam-gold {
+    animation: none !important;
+  }
+  .order-bar {
+    transition: none;
+  }
+}
+
 /* ===== HUD scanlines ===== */
 .hud-scanlines {
   background: repeating-linear-gradient(

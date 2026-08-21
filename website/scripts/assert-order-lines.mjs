@@ -22,20 +22,20 @@ let failed = 0;
 
 const pricingSrc = read("lib/chatx-pricing.ts");
 
-// 订阅档 key（跳过免费/按量：free 不产生订单、flex 无订阅 SKU——skuId: null 已在源码注明）
+// 订阅档 key（跳过免费档：free 不产生订单）；2026-08-20 起加购通道 = recharge-*（含新人包）
 const planKeys = [...pricingSrc.matchAll(/key:\s*"(autochat-[\w-]+)"/g)].map((m) => m[1]);
 const buyablePlans = planKeys.filter((k) => k !== "autochat-free" && k !== "autochat-flex");
-const packKeys = [...pricingSrc.matchAll(/key:\s*"(token-pack-[\w-]+)"/g)].map((m) => m[1]);
+const rechargeKeys = [...pricingSrc.matchAll(/key:\s*"(recharge-[\w-]+)"/g)].map((m) => m[1]);
 const workbenchKey = (pricingSrc.match(/key:\s*"(translate-workbench)"/) || [])[1];
-const buyable = [...buyablePlans, ...packKeys, ...(workbenchKey ? [workbenchKey] : [])];
+const buyable = [...new Set([...buyablePlans, ...rechargeKeys, ...(workbenchKey ? [workbenchKey] : [])])];
 
 const mapText = read("lib/offer-map.ts");
 const mapBody = mapText.slice(mapText.indexOf("ORDER_SKU_MAP"), mapText.indexOf("};", mapText.indexOf("ORDER_SKU_MAP")));
 const mapKeys = new Set([...mapBody.matchAll(/"([\w-]+)"\s*:\s*\{/g)].map((m) => m[1]));
 
-if (buyable.length < 8) {
+if (buyable.length < 10) {
   failed++;
-  console.error(`FAIL: chatx-pricing 可购 key 期望 ≥8（3 订阅 + 4 包 + 工作台），实际 ${buyable.length}`);
+  console.error(`FAIL: chatx-pricing 可购 key 期望 ≥10（3 订阅 + 5 充值档 + 新人包 + 工作台），实际 ${buyable.length}`);
 } else {
   console.log(`OK: chatx-pricing 收集到 ${buyable.length} 个可购 key`);
 }
@@ -67,17 +67,22 @@ if (!existsSync(regPath)) {
   const reg = JSON.parse(readFileSync(regPath, "utf-8"));
   const regPrice = new Map(reg.flat_skus.map((s) => [s.sku_id, String(s.price)]));
 
-  /** 从 chatx-pricing.ts 抽 [skuId → 官网价]：订阅档（skuId + monthly）与 Token 包（skuId + price）。 */
+  /** 从 chatx-pricing.ts 抽 [skuId → 官网价]：订阅档（skuId + monthly）与充值档（skuId + price）。 */
   const sitePrices = new Map();
   for (const m of pricingSrc.matchAll(/skuId:\s*"([\w-]+)",[\s\S]{0,200}?(?:monthly|price):\s*([\d.]+)/g)) {
     sitePrices.set(m[1], m[2]);
   }
-  // Token 包对象形状是 { key, skuId, price, tokens }（skuId 在 price 前）；订阅是 skuId 后跟 monthly。
-  for (const m of pricingSrc.matchAll(/key:\s*"(token-pack-[\w-]+)",\s*skuId:\s*"([\w-]+)",\s*price:\s*([\d.]+)/g)) {
+  // 充值档对象形状是 { key, skuId, price, firstBonusPct }（skuId 在 price 前）；订阅是 skuId 后跟 monthly。
+  for (const m of pricingSrc.matchAll(/key:\s*"(recharge-[\w-]+)",\s*skuId:\s*"([\w-]+)",\s*price:\s*([\d.]+)/g)) {
     sitePrices.set(m[2], m[3]);
   }
 
-  const mustMatch = ["chatx-personal", "chatx-team-seat", "chatx-flagship", "lingox-workbench", "token-pack-s", "token-pack-m", "token-pack-l", "token-pack-xl"];
+  const mustMatch = [
+    // 停售订阅三档（2026-08-21）仍留在比对清单：legacy 台账价与注册表分叉同样是事故
+    "chatx-personal", "chatx-pro", "chatx-flagship", "lingox-workbench",
+    "recharge-50", "recharge-100", "recharge-200", "recharge-500", "recharge-1000",
+    "recharge-5000", "recharge-10000", "recharge-newbie-6",
+  ];
   let checked = 0;
   for (const sku of mustMatch) {
     const site = sitePrices.get(sku);

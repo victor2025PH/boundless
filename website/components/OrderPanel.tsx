@@ -7,7 +7,9 @@ import { QRCodeSVG } from "qrcode.react";
 import { BadgeCheck, Check, Copy, KeyRound, ShieldCheck, Sparkles, Timer, Wallet, X } from "lucide-react";
 import { useLang } from "./LanguageContext";
 import OrderStatusLookup from "./OrderStatusLookup";
+import Burst from "./fx/Burst";
 import Reveal from "./fx/Reveal";
+import RechargeOrderZone, { StickyOrderBar } from "./RechargeOrderZone";
 import { track } from "@/lib/track";
 import { BRAND_FILM } from "@/lib/film";
 import { BOT_HANDLE, CONTACT_URL, TELEGRAM_DISPLAY } from "@/lib/site";
@@ -38,11 +40,8 @@ import {
 
 const fmt = (n: number) => n.toLocaleString("en-US");
 
-/** 交付形态（仅智聊 ChatX 主套餐）：installed=装机授权码（默认）；hosted=云端托管实例。 */
-type Delivery = "installed" | "hosted";
-
-/** 家族通用价格：一次性商品（Token 包）不随周期变价；其余走 tierPrice（年付 ×10）；
- *  按坐席档（团队版/工作台）= 单价 × 坐席数。 */
+/** 家族通用价格：一次性商品（充值档）不随周期变价；其余走 tierPrice（年付 ×10）；
+ *  按坐席档（工作台）= 单价 × 坐席数。 */
 function linePrice(t: LineTier, period: Period, seats = 1): number {
   const unit = t.oneTime ? t.monthly : tierPrice(t, period);
   return t.perSeat ? unit * seats : unit;
@@ -62,9 +61,6 @@ export default function OrderPanel() {
   const [selected, setSelected] = useState("pro");
   // 坐席数（仅 perSeat 档生效；档位切换按各档下限重置，深链 ?seats= 预填）
   const [seats, setSeats] = useState(2);
-  // 交付形态：仅 chatx 产品线可选「云端托管」；切走产品线自动回落装机，绝不让
-  // 非托管 SKU 带 hosted 标提交（履约分流以此字段为准）。
-  const [delivery, setDelivery] = useState<Delivery>("installed");
   const [checkout, setCheckout] = useState(false);
   const [prefillFp, setPrefillFp] = useState("");
   // 会话归因串（AI 坐席聊天里发的下单链接带 ?ref=<会话id>）：静默随单提交，
@@ -98,8 +94,6 @@ export default function OrderPanel() {
     }
     const p = q.get("period");
     if (p === "annual" || p === "quarterly") setPeriod(p);
-    // 深链 ?delivery=hosted：产品页「云端托管」入口 / AI 坐席链接直达托管下单
-    if (q.get("delivery") === "hosted" && (!plan || fam === "chatx")) setDelivery("hosted");
     const fp = q.get("fp");
     if (fp) setPrefillFp(fp.slice(0, 128));
     const ref = q.get("ref");
@@ -116,11 +110,6 @@ export default function OrderPanel() {
     urlReady.current = true;
   }, []);
 
-  // 产品线切走 chatx → 托管选择失效回落装机（hosted 只对 chatx 主套餐有意义）
-  useEffect(() => {
-    if (family !== "chatx" && delivery === "hosted") setDelivery("installed");
-  }, [family, delivery]);
-
   // 档位切换 → 坐席数按新档下限/上限夹取（非按坐席档归 1）
   useEffect(() => {
     setSeats((s) => clampSeats(tier, s));
@@ -133,15 +122,15 @@ export default function OrderPanel() {
     u.searchParams.set("plan", selected);
     if (period !== "monthly" && !tier.oneTime) u.searchParams.set("period", period);
     else u.searchParams.delete("period");
-    if (family === "chatx" && delivery === "hosted") u.searchParams.set("delivery", "hosted");
-    else u.searchParams.delete("delivery");
+    // 2026-08-21 云端托管随订阅停售下线：老 URL 里的 delivery 参数一律清掉
+    u.searchParams.delete("delivery");
     if (tier.perSeat) u.searchParams.set("seats", String(seats));
     else u.searchParams.delete("seats");
     const next = u.pathname + u.search + u.hash;
     if (next !== window.location.pathname + window.location.search + window.location.hash) {
       window.history.replaceState(null, "", next);
     }
-  }, [selected, period, tier.oneTime, tier.perSeat, family, delivery, seats]);
+  }, [selected, period, tier.oneTime, tier.perSeat, family, seats]);
 
   return (
     <section className="relative pb-24 pt-32">
@@ -224,8 +213,8 @@ export default function OrderPanel() {
           </Reveal>
         )}
 
-        {/* ── 免费版指引（智聊 tab 专属）：免费档不出购买卡，下载即用 ── */}
-        {family === "chatx" && (
+        {/* ── 免费开始指引（充值 tab 专属）：免费档不出购买卡，下载即用 ── */}
+        {family === "tokens" && (
           <Reveal eager className="mx-auto mt-6 max-w-3xl">
             <div className="glass rounded-2xl border border-neon-cyan/25 bg-neon-cyan/[0.05] px-5 py-3.5 text-sm leading-relaxed text-slate-300">
               <span className="mr-1.5">🆓</span>
@@ -237,100 +226,76 @@ export default function OrderPanel() {
           </Reveal>
         )}
 
-        {/* ── 月付 / 季付 / 年付 ── */}
-        <Reveal eager className="mt-6 flex flex-col items-center gap-3">
-          <div className="glass inline-flex rounded-full border border-white/10 p-1">
-            {(["monthly", "quarterly", "annual"] as Period[]).map((p) => (
-              <button
-                key={p}
-                onClick={() => {
-                  setPeriod(p);
-                  track("order_period", { period: p });
-                }}
-                className={`rounded-full px-5 py-2 text-sm transition ${
-                  period === p
-                    ? "bg-gradient-to-r from-neon-cyan to-neon-violet font-medium text-ink-950"
-                    : "text-slate-300 hover:text-white"
-                }`}
-              >
-                {p === "monthly"
-                  ? zh ? "月付" : "Monthly"
-                  : p === "quarterly"
-                    ? zh ? "季付" : "Quarterly"
-                    : family === "avatarhub"
-                      ? zh ? "年付" : "Annual"
-                      : zh ? "年付 · 送 2 个月" : "Annual · 2 months free"}
-              </button>
-            ))}
-          </div>
-          {tier.oneTime && (
-            <p className="text-xs text-slate-500">
-              {zh
-                ? "Token 包为一次性加购（12 个月有效），价格不受月/季/年付切换影响"
-                : "Token packs are one-time (valid 12 months) — the period toggle does not change the price"}
-            </p>
-          )}
-        </Reveal>
-
-        {/* ── 交付方式（仅智聊 ChatX）：装机授权码 vs 云端托管实例 ── */}
-        {family === "chatx" && (
-          <Reveal eager className="mt-4 flex flex-col items-center gap-2">
+        {/* ── 月付 / 季付 / 年付（充值家族隐藏——一次性商品上的周期切换只会制造困惑，
+              由 RechargeOrderZone 顶部的「一次性 · 不订阅 · 永不自动扣费」徽章行替位） ── */}
+        {family !== "tokens" && (
+          <Reveal eager className="mt-6 flex flex-col items-center gap-3">
             <div className="glass inline-flex rounded-full border border-white/10 p-1">
-              {(
-                [
-                  { key: "installed", zh: "💻 装机版 · 自己电脑", en: "💻 Self-hosted install" },
-                  { key: "hosted", zh: "☁️ 云端托管 · 开通即用", en: "☁️ Cloud hosted · instant" },
-                ] as const
-              ).map((d) => (
+              {(["monthly", "quarterly", "annual"] as Period[]).map((p) => (
                 <button
-                  key={d.key}
+                  key={p}
                   onClick={() => {
-                    setDelivery(d.key);
-                    track("order_delivery", { delivery: d.key });
+                    setPeriod(p);
+                    track("order_period", { period: p });
                   }}
                   className={`rounded-full px-5 py-2 text-sm transition ${
-                    delivery === d.key
+                    period === p
                       ? "bg-gradient-to-r from-neon-cyan to-neon-violet font-medium text-ink-950"
                       : "text-slate-300 hover:text-white"
                   }`}
                 >
-                  {zh ? d.zh : d.en}
+                  {p === "monthly"
+                    ? zh ? "月付" : "Monthly"
+                    : p === "quarterly"
+                      ? zh ? "季付" : "Quarterly"
+                      : family === "avatarhub"
+                        ? zh ? "年付" : "Annual"
+                        : zh ? "年付 · 送 2 个月" : "Annual · 2 months free"}
                 </button>
               ))}
             </div>
-            <p className="max-w-xl text-center text-xs text-slate-500">
-              {delivery === "hosted"
-                ? zh
-                  ? "我们代管服务器与部署：到账后自动开通你的独立实例，浏览器登录即用，数据按客户隔离；价格与装机版相同。"
-                  : "We run the server for you — an isolated instance is provisioned automatically after payment. Log in from your browser; same price as self-hosted."
-                : zh
-                  ? "授权码激活，部署在你自己的电脑 / 服务器上，数据不出机房。"
-                  : "License-code activation on your own machine — data stays on-prem."}
-            </p>
+            {tier.oneTime && (
+              <p className="text-xs text-slate-500">
+                {zh
+                  ? "充值为一次性加购（实付 12 个月有效，500U 及以上档 24 个月），价格不受月/季/年付切换影响"
+                  : "Top-ups are one-time (paid tokens valid 12 months, 24 for 500U+) — the period toggle does not change the price"}
+              </p>
+            )}
           </Reveal>
         )}
 
-        {/* ── 套餐卡片 ── */}
-        <div
-          className={`mt-10 grid gap-5 sm:grid-cols-2 ${
-            tiers.length >= 5 ? "xl:grid-cols-5" : "mx-auto max-w-4xl lg:grid-cols-3"
-          }`}
-        >
-          {tiers.map((t, i) => (
-            <TierCard
-              key={t.key}
-              tier={t}
-              zh={zh}
-              period={period}
-              selected={selected === t.key}
-              delay={i * 0.05}
-              onSelect={() => {
-                setSelected(t.key);
-                track("order_tier", { tier: t.key });
-              }}
-            />
-          ))}
-        </div>
+        {/* ── 套餐卡片（充值家族走专属渲染区：6U 置顶金卡 + 加赠阶梯 + 充值卡网格） ── */}
+        {family === "tokens" ? (
+          <RechargeOrderZone
+            zh={zh}
+            selected={selected}
+            onSelect={(k) => {
+              setSelected(k);
+              track("order_tier", { tier: k });
+            }}
+          />
+        ) : (
+          <div
+            className={`mt-10 grid gap-5 sm:grid-cols-2 ${
+              tiers.length >= 5 ? "xl:grid-cols-5" : "mx-auto max-w-4xl lg:grid-cols-3"
+            }`}
+          >
+            {tiers.map((t, i) => (
+              <TierCard
+                key={t.key}
+                tier={t}
+                zh={zh}
+                period={period}
+                selected={selected === t.key}
+                delay={i * 0.05}
+                onSelect={() => {
+                  setSelected(t.key);
+                  track("order_tier", { tier: t.key });
+                }}
+              />
+            ))}
+          </div>
+        )}
 
         {/* ── 结算条 ── */}
         <Reveal eager className="mt-8">
@@ -594,6 +559,20 @@ export default function OrderPanel() {
         </p>
       </div>
 
+      {/* ── 吸底结算条（充值家族专属）：已选档+到账数常驻视口，CTA 不再依赖回滚页面；
+            挂载期打 html[data-order-bar]，全局移动粘性条自动让位 ── */}
+      {family === "tokens" && (
+        <StickyOrderBar
+          zh={zh}
+          selected={selected}
+          hidden={checkout}
+          onOrder={() => {
+            setCheckout(true);
+            track("order_sticky_cta", { tier: selected });
+          }}
+        />
+      )}
+
       {/* ── 结算弹窗 ── */}
       <AnimatePresence>
         {checkout && (
@@ -603,7 +582,6 @@ export default function OrderPanel() {
             period={period}
             family={family}
             seats={tier.perSeat ? seats : 1}
-            delivery={family === "chatx" ? delivery : "installed"}
             initialFp={prefillFp}
             attributionRef={prefillRef}
             onClose={() => setCheckout(false)}
@@ -839,7 +817,6 @@ function CheckoutModal({
   period,
   family,
   seats = 1,
-  delivery = "installed",
   initialFp,
   attributionRef = "",
   onClose,
@@ -850,8 +827,6 @@ function CheckoutModal({
   family: OrderFamily;
   /** 坐席数（仅 perSeat 档 >1；应付 = 单价 × seats）。 */
   seats?: number;
-  /** 交付形态（仅 chatx 可为 hosted）：hosted 单走托管开通守护，不签装机授权码。 */
-  delivery?: Delivery;
   initialFp: string;
   /** 会话归因串（?ref=…，AI 坐席链接带入）：静默随单提交，不渲染任何 UI。 */
   attributionRef?: string;
@@ -860,6 +835,8 @@ function CheckoutModal({
   const [contact, setContact] = useState("");
   const [fp, setFp] = useState(initialFp);
   const [state, setState] = useState<"idle" | "busy" | "ok" | "err">("idle");
+  // 服务端拒单代码（如新人包资格不符）：有值时错误框给具体原因而不是笼统「提交失败」
+  const [errCode, setErrCode] = useState("");
   const [orderId, setOrderId] = useState("");
   const [payAmount, setPayAmount] = useState(0);
   const [copied, setCopied] = useState<"" | "addr" | "amount" | "id">("");
@@ -919,9 +896,11 @@ function CheckoutModal({
 
   const submit = async () => {
     if (!contact.trim()) {
+      setErrCode("");
       setState("err");
       return;
     }
+    setErrCode("");
     setState("busy");
     try {
       const r = await fetch("/api/order", {
@@ -938,8 +917,6 @@ function CheckoutModal({
           fingerprint: fp.trim(),
           lang: zh ? "zh" : "en",
           method,
-          // 托管交付标：只在显式选托管时携带（缺省=装机，与历史单同语义）
-          ...(delivery === "hosted" ? { delivery: "hosted" } : {}),
           // 坐席数：仅按坐席档携带（履约按席数签发；amount 已是 单价×seats）
           ...(tier.perSeat ? { seats } : {}),
           // 会话归因串（AI 坐席链接 ?ref=…）：有值才带，供营销目标自动结算
@@ -960,6 +937,7 @@ function CheckoutModal({
         }
         setState("ok");
       } else {
+        setErrCode(String(j?.error || ""));
         setState("err");
       }
     } catch {
@@ -1021,16 +999,6 @@ function CheckoutModal({
             <Row
               k={zh ? "坐席数" : "Seats"}
               v={zh ? `${seats} 席 × ${fmt(tierPrice(tier, period))} USD` : `${seats} × ${fmt(tierPrice(tier, period))} USD`}
-            />
-          )}
-          {family === "chatx" && (
-            <Row
-              k={zh ? "交付方式" : "Delivery"}
-              v={
-                delivery === "hosted"
-                  ? zh ? "☁️ 云端托管（开通即用）" : "☁️ Cloud hosted"
-                  : zh ? "💻 装机版（授权码激活）" : "💻 Self-hosted install"
-              }
             />
           )}
           <Row
@@ -1121,15 +1089,11 @@ function CheckoutModal({
           <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
             {tier.oneTime
               ? zh
-                ? "Token 包凭证绑定此联系方式；已有订阅的请与订阅联系方式一致（同一 Telegram / 邮箱即可，写法不必逐字相同）。"
-                : "The token-pack voucher is bound to this contact — if you have a subscription, use the same Telegram / email (formatting may differ)."
-              : delivery === "hosted"
-                ? zh
-                  ? "到账后自动开通你的独立云端实例，专属网址与登录账号按此联系方式送达（订单进度页也可自取），浏览器直接使用，无需安装。"
-                  : "After payment your isolated cloud instance is provisioned automatically — the URL and login account are delivered to this contact (also self-serve on the status page). Nothing to install."
-                : zh
-                  ? "授权码将按此联系方式送达，激活后绑定到你的实例，无需机器指纹。"
-                  : "Your license code is delivered to this contact and binds to your instance — no machine fingerprint needed."}
+                ? "充值凭证绑定此联系方式；老客户请与历史订单联系方式一致（同一 Telegram / 邮箱即可，写法不必逐字相同）。"
+                : "The top-up voucher is bound to this contact — returning customers should use the same Telegram / email as before (formatting may differ)."
+              : zh
+                ? "授权码将按此联系方式送达，激活后绑定到你的实例，无需机器指纹。"
+                : "Your license code is delivered to this contact and binds to your instance — no machine fingerprint needed."}
           </p>
         )}
 
@@ -1169,7 +1133,9 @@ function CheckoutModal({
         )}
 
         {state === "ok" && (
-          <div className="mt-4 rounded-xl border border-neon-cyan/30 bg-neon-cyan/10 px-4 py-3 text-sm text-slate-200">
+          <div className="relative mt-4 rounded-xl border border-neon-cyan/30 bg-neon-cyan/10 px-4 py-3 text-sm text-slate-200">
+            {/* 成交时刻彩纸（一次性，1.4s 自卸载；reduced-motion 由样式隐藏） */}
+            <Burst count={22} />
             <div>
               ✅ {zh ? "订单已创建" : "Order created"}
               {orderId && (
@@ -1227,7 +1193,15 @@ function CheckoutModal({
         )}
         {state === "err" && (
           <div className="mt-4 rounded-xl border border-neon-pink/30 bg-neon-pink/10 px-4 py-3 text-sm text-slate-200">
-            {zh ? (
+            {errCode === "newbie_already_claimed" ? (
+              zh
+                ? <>这个账号已经领过新人 6U 大礼包（每账号仅一次）。日常充值 50U 起、首笔还有加赠——切到充值档即可。</>
+                : <>This account has already claimed the newcomer 6U pack (once per account). Regular top-ups start at 50U with a first-top-up bonus — just pick a tier.</>
+            ) : errCode === "newbie_window_passed" ? (
+              zh
+                ? <>新人 6U 大礼包仅限注册后 72 小时内购买，你的注册时间已超窗。别急——首笔正常充值仍有 +5%~+40% 加赠。</>
+                : <>The newcomer 6U pack is only available within 72h of signup, and that window has passed. Your first regular top-up still earns +5%–40%.</>
+            ) : zh ? (
               <>{contact.trim() ? "提交失败，请稍后重试，或" : "请填写联系方式，或"}直接联系 <a className="text-neon-cyan hover:underline" href={CONTACT_URL} target="_blank" rel="noreferrer">Telegram 客服</a> 下单。</>
             ) : (
               <>{contact.trim() ? "Submission failed — retry or" : "Contact is required, or"} order via <a className="text-neon-cyan hover:underline" href={CONTACT_URL} target="_blank" rel="noreferrer">Telegram support</a>.</>

@@ -34,6 +34,7 @@ export async function GET(req: NextRequest) {
     paid: "已到账",
     activated: "已开通",
     cancelled: "已取消",
+    refunded: "已退款",
   };
   return new NextResponse(
     `✅ 订单 ${r.order.id} 已更新为「${zhStatus[r.order.status] ?? r.order.status}」\n套餐：${r.order.plan} · 应付 ${r.order.pay_amount} USDT\n联系：${r.order.contact}`,

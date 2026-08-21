@@ -10,9 +10,12 @@ import { resolveOrderSku } from "./offer-map";
 const DB = process.env.ORDERS_DB || path.join(DATA_DIR, "orders-db.json");
 const LOG = process.env.ORDERS_LOG || path.join(DATA_DIR, "orders.jsonl");
 
-/** pending 待付款 → paid 已到账 → activated 已开通；cancelled 取消。 */
-export type OrderStatus = "pending" | "paid" | "activated" | "cancelled";
-export const ORDER_STATUSES: OrderStatus[] = ["pending", "paid", "activated", "cancelled"];
+/** pending 待付款 → paid 已到账 → activated 已开通；cancelled 取消；
+ *  refunded 已退款（实施50 P2）——退款单在首充/新人/VIP/返利等一切资格判定里
+ *  视同不存在（判定只认 paid/activated）；已履约单标退款后，厂商机守护会点名
+ *  「凭证可能已兑换」转人工跟进（离线凭证架构无远程回收面）。 */
+export type OrderStatus = "pending" | "paid" | "activated" | "cancelled" | "refunded";
+export const ORDER_STATUSES: OrderStatus[] = ["pending", "paid", "activated", "cancelled", "refunded"];
 
 /** 交付形态：installed=装机授权码（默认）；hosted=托管实例开通（tenant_fulfill_watch）。 */
 export type OrderDelivery = "installed" | "hosted";
@@ -385,7 +388,10 @@ export async function notifyAdminsOfOrder(o: OrderEntry) {
               { text: "✅ 标记已到账", url: mark("paid") },
               { text: "🚀 标记已开通", url: mark("activated") },
             ],
-            [{ text: "❌ 取消订单", url: mark("cancelled") }],
+            [
+              { text: "❌ 取消订单", url: mark("cancelled") },
+              { text: "↩️ 标记已退款", url: mark("refunded") },
+            ],
           ],
         }
       : undefined,

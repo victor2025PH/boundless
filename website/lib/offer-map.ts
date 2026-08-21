@@ -24,13 +24,24 @@ const ORDER_SKU_MAP: Record<string, { skuId: string; productId: string }> = {
   "translate-charpack": { skuId: "lingox-charpack", productId: "tongyi" },
   "translate-team": { skuId: "lingox-team", productId: "tongyi" },
   "translate-pro": { skuId: "lingox-pro", productId: "tongyi" },
-  // 智聊 ChatX（2026-08-19 Token 分层：personal/team-seat/flagship 在售；entry/team 停售保留映射）
+  // 智聊 ChatX（2026-08-20 全功能开放：personal(基础)/pro(专业)/flagship 在售；
+  // entry/team/team-seat 停售保留映射——历史订单反查）
   "autochat-personal": { skuId: "chatx-personal", productId: "zhiliao" },
+  "autochat-pro": { skuId: "chatx-pro", productId: "zhiliao" },
   "autochat-team-seat": { skuId: "chatx-team-seat", productId: "zhiliao" },
   "autochat-entry": { skuId: "chatx-entry", productId: "zhiliao" },
   "autochat-team": { skuId: "chatx-team", productId: "zhiliao" },
   "autochat-flagship": { skuId: "chatx-flagship", productId: "zhiliao" },
-  // Token 包（跨 ChatX/LingoX 通用钱包；registry 挂 zhiliao 名下）
+  // Token 充值（2026-08-21 充值唯一化后 = 智聊唯一付费通道；跨 ChatX/LingoX 通用钱包，registry 挂 zhiliao 名下）
+  "recharge-50": { skuId: "recharge-50", productId: "zhiliao" },
+  "recharge-100": { skuId: "recharge-100", productId: "zhiliao" },
+  "recharge-200": { skuId: "recharge-200", productId: "zhiliao" },
+  "recharge-500": { skuId: "recharge-500", productId: "zhiliao" },
+  "recharge-1000": { skuId: "recharge-1000", productId: "zhiliao" },
+  "recharge-5000": { skuId: "recharge-5000", productId: "zhiliao" },
+  "recharge-10000": { skuId: "recharge-10000", productId: "zhiliao" },
+  "recharge-newbie-6": { skuId: "recharge-newbie-6", productId: "zhiliao" },
+  // 旧 Token 包（2026-08-20 停售保留映射——历史订单反查）
   "token-pack-s": { skuId: "token-pack-s", productId: "zhiliao" },
   "token-pack-m": { skuId: "token-pack-m", productId: "zhiliao" },
   "token-pack-l": { skuId: "token-pack-l", productId: "zhiliao" },

@@ -1,28 +1,34 @@
-// /order 面板的多产品线适配层（2026-07-24 P7；2026-08-19 Token 定价改版）：把 ChatX /
-// LingoX / Token 包的服务类 SKU（lib/chatx-pricing.ts 单一价格真相）适配成幻境 STUDIO
-// 面板同构的 Tier 卡片，让下单面板一套交互四条产品线通吃。
+// /order 面板的多产品线适配层（2026-07-24 P7；2026-08-21 充值唯一化改版）：把 ChatX /
+// LingoX 的服务类 SKU（lib/chatx-pricing.ts 单一价格真相）适配成幻境 STUDIO
+// 面板同构的 Tier 卡片，让下单面板一套交互多条产品线通吃。
 //
 // 设计约束：
 //  - 价格绝不在本文件复写数字——一律从 chatx-pricing.ts 派生（改价只改那里）；
-//  - key = plan id（autochat-personal / token-pack-m …）＝ POST /api/order 的 plan 参数，
+//  - key = plan id（recharge-200 / translate-workbench …）＝ POST /api/order 的 plan 参数，
 //    经 lib/offer-map.ts::resolveOrderSku 映射全域 SKU → 引擎自动履约；
-//  - 周期：季付 ×3、年付 ×10（送 2 个月，avatarhub-pricing.QUARTER_MONTHS / ANNUAL_MONTHS）；
-//    一次性商品（Token 包）标 oneTime，周期切换不影响其价格；
-//  - 团队版按坐席计价（perSeat）：面板出坐席步进器，应付 = 单价 × 坐席数 × 周期；
-//  - 2026-08-19 停售的旧档（autochat-entry/team、translate-charpack/team/pro）不再出卡，
-//    历史深链经 LEGACY_PLAN_MAP 平移到承接档，绝不 404/落空。
+//  - 周期：季付 ×3、年付 ×10（送 2 个月）——现只剩 STUDIO 会员与翻译工作台适用；
+//    充值档一律 oneTime，周期切换不影响其价格；
+//  - 2026-08-21 充值唯一化：订阅三档（autochat-personal/pro/flagship）停售不再出卡，
+//    「智聊 ChatX」产品线 Tab 整体由「充值」Tab 承接（tokens family 改名挂帅）；
+//    历史深链经 LEGACY_PLAN_MAP 平移到就近充值档，绝不 404/落空。
 import {
+  CHATX_FREE,
   LINGOX_WORKBENCH,
+  NEWBIE_PACK,
+  RECHARGE_TIERS,
   SIGNUP_BONUS_TOKENS,
-  TOKEN_PACKS,
-  TOKEN_PACK_VALID_MONTHS,
-  chatxPlan,
-  packUnitPrice,
+  VIP_REPEAT_BONUS_TIERS,
+  rechargeBaseTokens,
+  rechargeFirstTokens,
+  rechargeUnitPrice,
+  rechargeValidMonths,
   tokenRate,
 } from "@/lib/chatx-pricing";
 import type { Tier } from "@/lib/avatarhub-pricing";
 
-export type OrderFamily = "avatarhub" | "chatx" | "tokens" | "lingox";
+/** 2026-08-21 起产品线只剩三条：STUDIO 会员 / 充值（=智聊唯一付费通道）/ 翻译工作台。
+ *  "chatx" 订阅家族已整体停售移除——历史深链由 LEGACY_PLAN_MAP 平移进 tokens 家族。 */
+export type OrderFamily = "avatarhub" | "tokens" | "lingox";
 
 /** Tier 超集：oneTime=一次性买断（周期切换不变价）；perSeat=按坐席计价（出坐席步进器）。 */
 export interface LineTier extends Tier {
@@ -32,52 +38,61 @@ export interface LineTier extends Tier {
 
 const fmtN = (n: number) => n.toLocaleString("en-US");
 
-// ── 智聊 ChatX（Token 分层：个人 / 团队每坐席 / 旗舰；sku_registry zhiliao/chatx-*）──
-// 免费版不出购买卡（0 元单污染台账）：面板 blurb 给「下载即用」入口；按量版 Flex 的
-// 购买入口 = Token 包产品线（同一钱包），此处亦不出卡。
-export const CHATX_TIERS: LineTier[] = (["autochat-personal", "autochat-team-seat", "autochat-flagship"] as const).map(
-  (key) => {
-    const p = chatxPlan(key);
-    return {
-      key: p.key,
-      edition: p.edition === "trial" ? "standard" : p.edition,
-      monthly: p.monthly,
-      hot: p.hot,
-      perSeat: p.perSeat,
-      name: p.name,
-      audience: p.audience,
-      feats: p.feats,
-    } satisfies LineTier;
+// ── Token 充值（2026-08-21 起智聊唯一付费通道；sku_registry zhiliao/recharge-*）──
+// 首充加赠只对首笔充值生效（每人一次，履约侧判定）；卡面同时标注首充/复充两个到账数；
+// 大额档（≥5000U）把 perks 服务权益并进卡面清单（单源在 chatx-pricing.ts）。
+export const TOKEN_TIERS: LineTier[] = [
+  ...RECHARGE_TIERS.map((t) => ({
+    key: t.key,
+    edition: "standard" as const,
+    monthly: t.price,
+    oneTime: true,
+    hot: t.hot,
+    name: { zh: `充值 ${t.price}U`, en: `Top up ${t.price}U` },
+    audience: {
+      zh: t.firstBonusPct ? `首充 +${t.firstBonusPct}% · 每人一次` : `$${rechargeUnitPrice(t.price, rechargeBaseTokens(t))} / 千 Token`,
+      en: t.firstBonusPct ? `First top-up +${t.firstBonusPct}% (once per person)` : `$${rechargeUnitPrice(t.price, rechargeBaseTokens(t))} per 1k tokens`,
+    },
+    feats: {
+      zh: [
+        `首充到账 ${fmtN(rechargeFirstTokens(t))} Token${t.firstBonusPct ? `（+${t.firstBonusPct}% 加赠）` : ""}`,
+        `复充到账 ${fmtN(rechargeBaseTokens(t))} Token 起（VIP 累充最高再 +${VIP_REPEAT_BONUS_TIERS[VIP_REPEAT_BONUS_TIERS.length - 1].pct}%）`,
+        `实付 Token ${rechargeValidMonths(t)} 个月有效 · 赠送 6 个月先扣`,
+        "跨智聊 / 通译同一钱包 · 会员中心粘贴凭证即到账",
+        ...(t.perks ? t.perks.zh : []),
+      ],
+      en: [
+        `First top-up: ${fmtN(rechargeFirstTokens(t))} tokens${t.firstBonusPct ? ` (+${t.firstBonusPct}% bonus)` : ""}`,
+        `Repeat top-up: from ${fmtN(rechargeBaseTokens(t))} tokens (VIP loyalty adds up to +${VIP_REPEAT_BONUS_TIERS[VIP_REPEAT_BONUS_TIERS.length - 1].pct}%)`,
+        `Paid tokens valid ${rechargeValidMonths(t)} months · bonus 6 months, spends first`,
+        "One wallet across ChatX & LingoX · redeem in membership center",
+        ...(t.perks ? t.perks.en : []),
+      ],
+    },
+  })),
+  {
+    key: NEWBIE_PACK.key,
+    edition: "standard" as const,
+    monthly: NEWBIE_PACK.price,
+    oneTime: true,
+    name: { zh: `${NEWBIE_PACK.name.zh} ${NEWBIE_PACK.price}U`, en: `${NEWBIE_PACK.name.en} ${NEWBIE_PACK.price}U` },
+    audience: { zh: "注册 72 小时内 · 每账号一次", en: "Within 72h of signup · once per account" },
+    feats: {
+      zh: [
+        `${fmtN(NEWBIE_PACK.tokens)} Token 一次到账（2 倍率，$0.33/千）`,
+        "不占用首充加赠资格（大额首充另享 +5%~40%）",
+        "注册 72 小时内可购 · 每账号仅一次（履约侧核验）",
+        "跨智聊 / 通译同一钱包",
+      ],
+      en: [
+        `${fmtN(NEWBIE_PACK.tokens)} tokens at double rate ($0.33/1k)`,
+        "Does not consume your first-top-up bonus",
+        "Within 72h of signup · once per account (verified at fulfillment)",
+        "One wallet across ChatX & LingoX",
+      ],
+    },
   },
-);
-
-// ── Token 包（跨 ChatX/LingoX 通用耗材；一次性、12 个月有效；sku_registry zhiliao/token-pack-*）──
-export const TOKEN_TIERS: LineTier[] = TOKEN_PACKS.map((p) => ({
-  key: p.key,
-  edition: "standard" as const,
-  monthly: p.price,
-  oneTime: true,
-  hot: p.hot,
-  name: { zh: `${p.name.zh} ${fmtN(p.tokens)}`, en: `${p.name.en} · ${fmtN(p.tokens)}` },
-  audience: {
-    zh: `$${packUnitPrice(p)} / 千 Token`,
-    en: `$${packUnitPrice(p)} per 1k tokens`,
-  },
-  feats: {
-    zh: [
-      `${fmtN(p.tokens)} Token 一次到账`,
-      `${TOKEN_PACK_VALID_MONTHS} 个月有效 · 先订阅含量后扣包`,
-      "跨智聊 / 通译同一钱包",
-      "会员中心粘贴凭证即到账",
-    ],
-    en: [
-      `${fmtN(p.tokens)} tokens credited at once`,
-      `Valid ${TOKEN_PACK_VALID_MONTHS} months · plan allowance spends first`,
-      "One wallet across ChatX & LingoX",
-      "Redeem instantly in the membership center",
-    ],
-  },
-}));
+];
 
 // ── 通译 LingoX（2026-08-19 翻译免费化：唯一订阅 = 翻译工作台每坐席）────────────
 export const LINGOX_TIERS: LineTier[] = [
@@ -93,13 +108,13 @@ export const LINGOX_TIERS: LineTier[] = [
       zh: [
         "多坐席统一收件箱 · 客户 journey · 漏斗计数",
         "术语锁定 · 翻译记忆",
-        "标准翻译免费不限量（所有档位含）",
+        "标准翻译免费不限量（所有用户含）",
         `专业翻译按 Token：${tokenRate("pro_translate").tokens}/千字符 · DeepL 认证 ${tokenRate("deepl_translate").tokens}/千字符`,
       ],
       en: [
         "Multi-seat unified inbox · journey · funnel counter",
         "Term-lock glossary · translation memory",
-        "Standard translation free & unlimited (every plan)",
+        "Standard translation free & unlimited (for everyone)",
         `Pro translation by tokens: ${tokenRate("pro_translate").tokens}/1k chars · DeepL ${tokenRate("deepl_translate").tokens}/1k`,
       ],
     },
@@ -107,7 +122,7 @@ export const LINGOX_TIERS: LineTier[] = [
 ];
 
 /** 产品线元信息：Tab 文案 + 面板首段（幻境 STUDIO 的「不按字符计费」话术只对本机算力
- *  产品成立，ChatX/Token 按 Token 计量——文案必须随产品线切换，防承诺错位）。 */
+ *  产品成立，充值档按 Token 计量——文案必须随产品线切换，防承诺错位）。 */
 export interface FamilyMeta {
   key: OrderFamily;
   tab: { zh: string; en: string };
@@ -124,19 +139,13 @@ export const FAMILIES: FamilyMeta[] = [
     },
   },
   {
-    key: "chatx",
-    tab: { zh: "智聊 ChatX", en: "ChatX" },
-    blurb: {
-      zh: "AI 客服成交引擎：多平台账号统一接管，AI 自动回复、主动跟进、引导成交，人工可随时接管。标准翻译永久免费不限量；AI 动作按 Token 计量（订阅含每月 Token，超出买 Token 包）。免费版下载即用，无需下单；到账自动开通，粘贴授权码即激活。",
-      en: "AI closing engine: unify accounts across platforms with AI auto-reply, proactive follow-up and guided closing — humans can take over anytime. Standard translation is free & unlimited; AI actions meter in tokens (plans include monthly tokens, top up with packs). The Free plan needs no order — just download. Paid plans auto-activate after payment.",
-    },
-  },
-  {
+    // 2026-08-21 充值唯一化：本 Tab 即智聊 ChatX 的唯一付费入口（family key 保持 "tokens"
+    // ——它是 /order 深链参数与埋点维度，改键会断历史深链与漏斗数据）。
     key: "tokens",
-    tab: { zh: "Token 包", en: "Token packs" },
+    tab: { zh: "智聊 ChatX · 充值", en: "ChatX · Top up" },
     blurb: {
-      zh: "跨智聊 / 通译通用的 AI 耗材钱包：AI 回复、专业翻译、克隆语音、AI 配图按公示费率扣 Token；订阅含量先扣，Token 包 12 个月有效。按量版（0 月费）用户预充任意包即可开用；到账自动发放兑换凭证，会员中心粘贴即入账。",
-      en: "One AI wallet across ChatX & LingoX: AI replies, pro translation, cloned voice and AI images meter at published token rates. Plan allowances spend first; packs stay valid 12 months. Pay-as-you-go users just top up any pack — vouchers issue automatically after payment and redeem in the membership center.",
+      zh: "智聊 ChatX 按充值计费，不订阅：免费开始（下载即用 + 标准翻译免费不限量），要 AI 用量就充值——50U 起、1U = 1,500 Token；首笔充值按档一次性加赠 +5%~40%（每人一次，到账时核验），新人 6U 大礼包 18,000 Token（注册 72 小时内、每账号一次、不占首充资格）。实付 Token 12 个月有效（500U 及以上 24 个月）、赠送部分 6 个月先扣；5000U 起含专属客户经理与发票合同，年框合作 / 私有化部署请联系商务。",
+      en: "ChatX bills by top-up — no subscription. Start free (download & go with unlimited standard translation), then top up for AI usage: from 50U at 1U = 1,500 tokens. Your first top-up earns a once-per-person bonus of +5%–40% by tier (verified at fulfillment). Newcomer pack: 6U for 18,000 tokens within 72h of signup, once per account, without consuming the first-top-up bonus. Paid tokens valid 12 months (24 for 500U+), bonus tokens 6 months and spend first. From 5000U you get a dedicated account manager and invoicing; annual frames and private deployment are quoted by sales.",
     },
   },
   {
@@ -146,14 +155,13 @@ export const FAMILIES: FamilyMeta[] = [
     key: "lingox",
     tab: { zh: "智聊 · 翻译", en: "ChatX · Translate" },
     blurb: {
-      zh: "标准翻译已永久免费、不限字符（内置引擎，公平使用 200 万字符/日）——下载智聊 ChatX 即用，无需购买。本页只卖两样：翻译工作台（纯翻译团队的坐席订阅）与专业翻译所需的 Token（术语锁定 / 翻译记忆 / DeepL 认证 / 图片语音多模态，见 Token 包）。原字符包 / 团队 / 专业订阅已停售，存量按公告换发升级。",
-      en: "Standard translation is now free forever with unlimited characters (built-in engine, fair use 2M chars/day) — just download ChatX. This tab sells two things only: the Translation Workbench (per-seat plan for translation-only teams) and tokens for pro translation (term-lock, memory, certified DeepL, multimodal — see Token packs). Legacy char packs and subscriptions are discontinued; existing customers get an upgrade conversion.",
+      zh: "标准翻译已永久免费、不限字符（内置引擎，公平使用 200 万字符/日）——下载智聊 ChatX 即用，无需购买。本页只卖两样：翻译工作台（纯翻译团队的坐席订阅）与专业翻译所需的 Token（术语锁定 / 翻译记忆 / DeepL 认证 / 图片语音多模态，见「充值」）。原字符包 / 团队 / 专业订阅已停售，存量按公告换发升级。",
+      en: "Standard translation is now free forever with unlimited characters (built-in engine, fair use 2M chars/day) — just download ChatX. This tab sells two things only: the Translation Workbench (per-seat plan for translation-only teams) and tokens for pro translation (term-lock, memory, certified DeepL, multimodal — see the Top up tab). Legacy char packs and subscriptions are discontinued; existing customers get an upgrade conversion.",
     },
   },
 ];
 
 const TIERS_BY_FAMILY: Record<Exclude<OrderFamily, "avatarhub">, LineTier[]> = {
-  chatx: CHATX_TIERS,
   tokens: TOKEN_TIERS,
   lingox: LINGOX_TIERS,
 };
@@ -162,21 +170,31 @@ export function familyTiers(family: OrderFamily, avatarhubTiers: Tier[]): LineTi
   return family === "avatarhub" ? avatarhubTiers : TIERS_BY_FAMILY[family];
 }
 
-/** 2026-08-19 停售档深链平移表：老链接 / 老收藏 / 历史聊天里的下单链一律落到承接档。
- *  entry→个人版；team→团队版每坐席；charpack→Token 标准包（60,000 Token 恰是换发等值）；
- *  translate-team/pro→翻译工作台。 */
+/** 停售档深链平移表：老链接 / 老收藏 / 历史聊天里的下单链一律落到承接档。
+ *  注意：resolvePlanAlias 是**单跳**查表，链式条目必须拍平（entry→personal→recharge 要直接写 recharge）。
+ *  2026-08-19 批：translate-team/pro→翻译工作台。
+ *  2026-08-20 批：旧 Token 包→就近充值档。
+ *  2026-08-21 批（充值唯一化）：订阅三档 + 更早订阅档全部按月价就近平移到充值档——
+ *  entry(58)/personal(39)/team-seat(49)→50U；pro(99)/team(198 旧链已拍平)/flex→100U；
+ *  裸 "team"→200U；flagship(598)→500U；free（免费营销键）→新人 6U 包（新客最优转化钩）。 */
 export const LEGACY_PLAN_MAP: Record<string, string> = {
-  "autochat-entry": "autochat-personal",
-  "autochat-team": "autochat-team-seat",
-  "translate-charpack": "token-pack-m",
+  "autochat-entry": "recharge-50",
+  "autochat-personal": "recharge-50",
+  "autochat-team-seat": "recharge-50",
+  "autochat-pro": "recharge-100",
+  "autochat-team": "recharge-100",
+  "autochat-flex": "recharge-100",
+  "autochat-flagship": "recharge-500",
+  "autochat-free": "recharge-newbie-6",
+  "team": "recharge-200",
+  "translate-charpack": "recharge-50",
   "translate-team": LINGOX_WORKBENCH.key,
   "translate-pro": LINGOX_WORKBENCH.key,
-  // 非购买档的营销键（免费版/按量版）：落到最合理的购买入口——免费版落个人版卡
-  //（chatx tab 顶部有「免费版无需下单」提示条），按量版落 Token 标准包。
-  "autochat-free": "autochat-personal",
-  "autochat-flex": "token-pack-m",
-  // 历史 compare 页曾用的裸 "team" 深链（原本就落不到任何档）：平移到团队版。
-  "team": "autochat-team-seat",
+  // 2026-08-20 停售的旧 Token 包 → 就近充值档。
+  "token-pack-s": "recharge-50",
+  "token-pack-m": "recharge-50",
+  "token-pack-l": "recharge-200",
+  "token-pack-xl": "recharge-500",
 };
 
 /** 深链 plan 参数解析（含停售档平移）：返回归一化后的 plan key。 */
@@ -190,7 +208,6 @@ export function familyOfPlan(plan: string, avatarhubTiers: Tier[]): OrderFamily 
   const p = resolvePlanAlias(plan);
   if (!p) return undefined;
   if (avatarhubTiers.some((t) => t.key === p)) return "avatarhub";
-  if (CHATX_TIERS.some((t) => t.key === p)) return "chatx";
   if (TOKEN_TIERS.some((t) => t.key === p)) return "tokens";
   if (LINGOX_TIERS.some((t) => t.key === p)) return "lingox";
   return undefined;
@@ -202,8 +219,8 @@ export function familyDefaultTier(family: OrderFamily, avatarhubTiers: Tier[]): 
   return (tiers.find((t) => t.hot) ?? tiers[0]).key;
 }
 
-/** 免费版指引（chatx 产品线面板下的「不用买」提示）。 */
+/** 免费开始指引（tokens 产品线面板下的「不用买也能用」提示）。 */
 export const CHATX_FREE_HINT = {
-  zh: `免费版无需下单：下载智聊 ChatX 即用——标准翻译免费不限量 + 每月 ${fmtN(chatxPlan("autochat-free").tokensMonthly)} Token，注册再送 ${fmtN(SIGNUP_BONUS_TOKENS)} 体验 Token。`,
-  en: `The Free plan needs no order: download ChatX and go — unlimited standard translation + ${fmtN(chatxPlan("autochat-free").tokensMonthly)} tokens/mo, plus ${fmtN(SIGNUP_BONUS_TOKENS)} bonus tokens on signup.`,
+  zh: `免费开始无需下单：下载智聊 ChatX 即用——标准翻译免费不限量 + 每月 ${fmtN(CHATX_FREE.tokensMonthly)} Token，注册再送 ${fmtN(SIGNUP_BONUS_TOKENS)} 体验 Token。`,
+  en: `Starting free needs no order: download ChatX and go — unlimited standard translation + ${fmtN(CHATX_FREE.tokensMonthly)} tokens/mo, plus ${fmtN(SIGNUP_BONUS_TOKENS)} bonus tokens on signup.`,
 };

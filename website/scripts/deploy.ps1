@@ -1,7 +1,8 @@
 ﻿<#
   华灵网站 · 本地一键部署 (Windows / PowerShell)
-  流程: sync:brand → 打包 website/ → 上传(部署包 + deploy.sh) → 服务器侧原子部署 → 公网体检
+  流程: 主树门禁 → sync:brand → 打包 website/ → 只上传部署包 → 服务器针定 deploy.sh 原子部署 → 公网体检
   绝不在脚本中存放密码：从 $env:VPS_PASS 读取，缺失则安全提示输入(SecureString)。
+  2026-08-20：不再上传覆盖远端 deploy.sh（该文件 chattr +i 针定）；只允许主工作树部署。
 
   认证: 优先 SSH 密钥；找不到密钥文件时回退密码。
   传输: 优先本机 OpenSSH (scp/ssh)，无需 Posh-SSH；仅当 ssh 不可用时回退 Posh-SSH。
@@ -37,6 +38,26 @@ if ($PSVersionTable.PSEdition -ne 'Core') {
 }
 
 $WebRoot = Split-Path -Parent $PSScriptRoot
+
+# 2026-08-20：只许从主工作树部署。并行 worktree 里的 website 停在 7/31–8/1，
+# 从那里跑本脚本会把生产 rsync --delete 回旧版（8/19 一天两次）。
+$resolvedRoot = (Resolve-Path $WebRoot).Path
+$canonicalOk = $false
+foreach ($c in @('D:\workspace\boundless\website', 'D:\boundless\website')) {
+  if (Test-Path $c) {
+    if ($resolvedRoot -eq (Resolve-Path $c).Path) { $canonicalOk = $true; break }
+  }
+}
+if (-not $canonicalOk) {
+  throw "拒绝部署：当前 website 根不在主工作树（$resolvedRoot）。请到 D:\boundless\website 再跑 scripts\deploy.ps1。"
+}
+if (-not (Test-Path (Join-Path $WebRoot 'app\pricing\page.tsx'))) {
+  throw '拒绝部署：缺少 app/pricing/page.tsx，这是一份旧 website 树。'
+}
+if (-not (Test-Path (Join-Path $WebRoot '.deploy-epoch'))) {
+  throw '拒绝部署：缺少 .deploy-epoch（旧树没有此文件）。'
+}
+
 # tar 名带 PID+时间戳：多条线（多 agent/多窗口）并发部署时各用各的临时包，
 # 不再互踩「文件被另一进程占用」（2026-07-25 实际发生）。服务器端并发由 deploy.sh 的 flock 锁串行化。
 $tar = Join-Path $env:TEMP ("website-deploy-{0}-{1}.tar.gz" -f $PID, (Get-Date -Format 'HHmmss'))
@@ -69,23 +90,19 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'sync:brand --check 失败：vendor/brand 与 platform/brand 不一致' }
   Write-Host '    [OK] vendor/brand 已与上游对齐'
 
-  # 2026-08-19 部署防呆（当日实锤：一条线从 ~2 周旧的 website 树部署，把 08-18 compare-P2
-  # 与 08-19 定价改版从生产整体抹掉——rsync --delete 语义下旧树=静默回滚）。打包前把
-  # git HEAD 元数据写进包内 .deploy-meta.json；服务器侧 deploy.sh 发现「更旧提交覆盖
-  # 更新提交」直接拒绝（FORCE_OLDER=1 显式覆盖），并留下「谁在何时部署了哪个提交」的取证记录。
-  Write-Host '[0.5/4] 写部署元数据 (.deploy-meta.json: git HEAD + 提交时间 + 部署机) ...'
-  try {
-    $gitHead = (git -C $WebRoot rev-parse HEAD 2>$null).Trim()
-    $gitTs   = [int](git -C $WebRoot log -1 --format=%ct 2>$null).Trim()
-    $gitDirty = -not [string]::IsNullOrWhiteSpace((git -C $WebRoot status --porcelain -- . 2>$null | Out-String).Trim())
-    @{ commit = $gitHead; commit_ts = $gitTs; dirty = $gitDirty
-       packed_at = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-       host = $env:COMPUTERNAME; user = $env:USERNAME } |
-      ConvertTo-Json -Compress | Set-Content -Path (Join-Path $WebRoot '.deploy-meta.json') -Encoding ascii
-    Write-Host ("    HEAD {0} @ {1}{2}" -f $gitHead.Substring(0,8), $gitTs, $(if ($gitDirty) { ' (dirty tree)' } else { '' }))
-  } catch {
-    Write-Warning "    部署元数据写入失败（不阻断；服务器侧防呆将按缺失处理）: $_"
-  }
+  # 打包前写 .deploy-meta.json。commit_ts 取 website/ 目录最近一次提交（不是仓 HEAD），
+  # 避免功能分支「仓更新、website 仍旧」骗过时间戳门禁。写失败直接中止。
+  Write-Host '[0.5/4] 写部署元数据 (.deploy-meta.json: website 提交时间 + 部署机) ...'
+  $gitHead = (git -C $WebRoot rev-parse HEAD 2>$null).Trim()
+  $gitTsRaw = (git -C $WebRoot log -1 --format=%ct -- . 2>$null).Trim()
+  if (-not $gitHead -or -not $gitTsRaw) { throw '读 git 元数据失败，拒绝打包' }
+  $gitTs = [int]$gitTsRaw
+  $gitDirty = -not [string]::IsNullOrWhiteSpace((git -C $WebRoot status --porcelain -- . 2>$null | Out-String).Trim())
+  @{ commit = $gitHead; commit_ts = $gitTs; dirty = $gitDirty
+     packed_at = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+     host = $env:COMPUTERNAME; user = $env:USERNAME } |
+    ConvertTo-Json -Compress | Set-Content -Path (Join-Path $WebRoot '.deploy-meta.json') -Encoding ascii
+  Write-Host ("    website HEAD {0} @ {1}{2}" -f $gitHead.Substring(0,8), $gitTs, $(if ($gitDirty) { ' (dirty tree)' } else { '' }))
 
   Write-Host '[1/4] 打包 website/ (排除 node_modules/.next/.git/.env.local/临时文件) ...'
   if (Test-Path $tar) { Remove-Item $tar -Force }
@@ -125,31 +142,28 @@ try {
     throw '当前走 OpenSSH 通道，需提供 -KeyFile / $env:VPS_KEY（~/.ssh/hualing_deploy）'
   }
 
-  Write-Host "[2/4] 上传部署包 + deploy.sh（通道: $(if ($useOpenSsh) {'OpenSSH'} else {'Posh-SSH'})）..."
+  Write-Host "[2/4] 上传部署包（通道: $(if ($useOpenSsh) {'OpenSSH'} else {'Posh-SSH'})；不覆盖远端 deploy.sh）..."
   # 远端 tar 名同样唯一：上传阶段不在 deploy.sh 的 flock 锁内，两条并发线同名上传会互相截断包体。
-  # deploy.sh 收 $1 指定包路径、部署完成后自行 rm，唯一名不会堆积。
+  # 远端执行针定的 /home/ubuntu/deploy.sh（chattr +i），客户端不再 scp 覆盖它。
   $remoteTarName = Split-Path $tar -Leaf
   if ($useOpenSsh) {
     $scpArgs = @('-o', 'StrictHostKeyChecking=accept-new', '-i', $script:keyPath)
     & $scpExe @scpArgs $tar "${User}@${VpsHost}:${RemoteDir}/$remoteTarName"
     if ($LASTEXITCODE -ne 0) { throw 'scp 上传 tar 失败' }
-    & $scpExe @scpArgs (Join-Path $PSScriptRoot 'deploy.sh') "${User}@${VpsHost}:${RemoteDir}/deploy.sh"
-    if ($LASTEXITCODE -ne 0) { throw 'scp 上传 deploy.sh 失败' }
   } else {
     Set-SCPItem @auth -Path $tar -Destination $RemoteDir -Force
-    Set-SCPItem @auth -Path (Join-Path $PSScriptRoot 'deploy.sh') -Destination $RemoteDir -Force
     $script:sshSession = New-SSHSession @auth -ConnectionTimeout 30
   }
 
-  Write-Host '[3/4] 服务器侧原子部署 (后台执行 deploy.sh + 轮询日志) ...'
+  Write-Host '[3/4] 服务器侧原子部署 (针定 deploy.sh + 轮询日志) ...'
   try {
     # 日志名跟 tar 同后缀：并发线各写各的日志，后来者不再截断先行者正在写的 deploy.log
     # （撞 flock 锁的那条线只会在自己的日志里看到 ERROR，不污染别人的轮询判定）。
     $remoteLog = "deploy-$($remoteTarName -replace '\.tar\.gz$','').log"
-    $launch = "sed -i 's/\r$//' $RemoteDir/deploy.sh; cd $RemoteDir && nohup bash deploy.sh $RemoteDir/$remoteTarName >$remoteLog 2>&1 </dev/null & echo launched"
+    $launch = "cd $RemoteDir && nohup bash $RemoteDir/deploy.sh $RemoteDir/$remoteTarName >$remoteLog 2>&1 </dev/null & echo launched"
     Invoke-Remote $launch | Out-Null
 
-    $deadline = (Get-Date).AddMinutes(10); $done = $false
+    $deadline = (Get-Date).AddMinutes(15); $done = $false
     do {
       Start-Sleep -Seconds 8
       $p = Invoke-Remote "tail -4 $RemoteDir/$remoteLog 2>/dev/null; pgrep -f '[b]ash deploy.sh' >/dev/null && echo __RUN__ || echo __STOP__"
@@ -162,7 +176,7 @@ try {
         throw "deploy.sh 已退出但未见 DONE，疑似中断：`n$final"
       }
     } until ((Get-Date) -gt $deadline)
-    if (-not $done) { throw "部署轮询超时(>10min)，请上服务器查看 $RemoteDir/$remoteLog" }
+    if (-not $done) { throw "部署轮询超时(>15min)，请上服务器查看 $RemoteDir/$remoteLog" }
     # 成功后清掉本次日志与历史遗留的唯一名日志（>2 天），避免 /home/ubuntu 堆积
     Invoke-Remote "rm -f $RemoteDir/$remoteLog; find $RemoteDir -maxdepth 1 -name 'deploy-*.log' -mtime +2 -delete 2>/dev/null; true" | Out-Null
 

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useLang } from "./LanguageContext";
 import Reveal from "./fx/Reveal";
 import { track } from "@/lib/track";
-import { LINGOX_WORKBENCH, TOKEN_PACKS, tokenRate } from "@/lib/chatx-pricing";
+import { LINGOX_WORKBENCH, RECHARGE_TIERS, tokenRate } from "@/lib/chatx-pricing";
 import { Languages, Loader2, ArrowRight, Sparkles } from "lucide-react";
 
 type Tr = { code: string; native: string; flag: string; text: string };
@@ -64,11 +64,11 @@ const LINGOX_ORDER_CHIPS: {
     hot: true,
   },
   {
-    id: "token-pack-m",
-    href: "/order?plan=token-pack-m",
+    id: RECHARGE_TIERS[0].key,
+    href: `/order?plan=${RECHARGE_TIERS[0].key}`,
     label: { zh: "专业翻译", en: "Pro translate" },
     price: `${tokenRate("pro_translate").tokens} Token`,
-    unit: { zh: "/ 千字符 · Token 包 $" + TOKEN_PACKS[1].price + " 起", en: `/ 1k chars · packs from $${TOKEN_PACKS[1].price}` },
+    unit: { zh: "/ 千字符 · 充值 $" + RECHARGE_TIERS[0].price + " 起", en: `/ 1k chars · top up from $${RECHARGE_TIERS[0].price}` },
   },
   {
     id: LINGOX_WORKBENCH.key,

@@ -25,19 +25,20 @@ export interface Solution {
   highlight?: boolean;
 }
 
+/** 首页套餐卡（2026-08-21 充值唯一化：形状与 chatx-pricing.PlanCardItem 同构——
+ *  price 是主数字文本、unit 是单位行；无月/年切换，充值档全部一次性）。 */
 export interface Plan {
   name: string;
-  priceMonthly: string;
-  /** 年付总价（2026-08-19 起 = 月价 × 10「送 2 个月」；显示单位切「/ 年」，废除旧折合月价） */
-  priceYearly: string;
-  /** 按坐席档的单位后缀（" / 坐席"），普通档为空串 */
-  seatSuffix?: string;
+  /** 主价格文本（"0" / "6" / "200" / "面议"） */
+  price: string;
+  /** 价格单位行（"USD · 一次性" / "永久免费" / "联系商务"…） */
+  unit: string;
   desc: string;
   features: string[];
   highlight?: boolean;
   /** 自助下单深链键（/order?plan=<key>）；缺省 = CTA 回落客服。 */
   plan?: string;
-  /** 直链覆写（免费版 → 下载页）；优先于 plan 深链。 */
+  /** 直链覆写（免费开始 → 下载页）；优先于 plan 深链。 */
   href?: string;
 }
 
@@ -84,13 +85,9 @@ export interface Dict {
   plans: {
     title: string;
     subtitle: string;
-    monthly: string;
-    yearly: string;
-    save: string;
+    /** 卡片区下方一句话计费提示（充值一次性 · 无月费） */
+    note: string;
     popular: string;
-    perMonth: string;
-    /** 年付显示单位（"/ 年"）——年付展示真实年总价，不再显示折合月价 */
-    perYear: string;
     cta: string;
     /** 「查看完整价格与计算器」链接文案（→ /pricing） */
     fullPricing: string;
@@ -517,7 +514,7 @@ const zh: Dict = {
     },
   ],
   pricingSection: {
-    note: `智聊 ChatX：免费版 $0（标准翻译不限量）/ 个人 39 / 团队 49 每坐席 / 旗舰 598（月付，年付 ×10 送 2 个月）；Token 包 9.9 起。幻境 STUDIO ：免费换脸+水印 / 入门 ${studioTier("starter").monthly} / 标准 ${studioTier("standard").monthly} / 专业 ${studioTier("pro").monthly} / 旗舰咨询报价。超出清单的需求按场景定制。`,
+    note: `智聊 ChatX：免费开始（标准翻译不限量），按充值计费不订阅——50U 起充、1U = 1,500 Token、首充按档加赠最高 +40%，新人 6U 大礼包 18,000 Token 双倍到账；企业年框 / 私有化部署面议。幻境 STUDIO ：免费换脸+水印 / 入门 ${studioTier("starter").monthly} / 标准 ${studioTier("standard").monthly} / 专业 ${studioTier("pro").monthly} / 旗舰咨询报价。超出清单的需求按场景定制。`,
   },
   trust: {
     platformsLabel: "深度对接的沟通平台",
@@ -564,17 +561,13 @@ const zh: Dict = {
     disclaimer: "以上为内部工程实测与部署记录口径（2026-08），非对具体商业效果的承诺。",
   },
   plans: {
-    title: "AI 成交聊天 · 套餐",
-    subtitle: `标准翻译永久免费；AI 回复 / 专业翻译 / 克隆语音按 Token 透明计价——免费版下载即用，注册送 ${SIGNUP_BONUS_TOKENS.toLocaleString("en-US")} 体验 Token。`,
-    monthly: "月付",
-    yearly: "年付",
-    save: "省 2 个月",
+    title: "AI 成交聊天 · 按充值计费",
+    subtitle: `免费开始，充多少用多少，不订阅：标准翻译永久免费；AI 回复 / 专业翻译 / 克隆语音按 Token 透明计价——注册送 ${SIGNUP_BONUS_TOKENS.toLocaleString("en-US")} 体验 Token。`,
+    note: "充值均为一次性、无月费；首笔充值按档加赠最高 +40%，实付 Token 12 个月有效（500U 及以上 24 个月）。",
     popular: "最受欢迎",
-    perMonth: "/ 月",
-    perYear: "/ 年",
-    cta: "选择此套餐",
+    cta: "选择此档",
     fullPricing: "看完整价格 · Token 费率 · 用量计算器 →",
-    // 2026-08-19 Token 分层：五档卡片由 chatx-pricing.ts 派生（年付=×10 送 2 个月，显示年总价）。
+    // 2026-08-21 充值唯一化：五张卡（免费开始/新人 6U/200U/1000U/企业）由 chatx-pricing.ts 派生。
     items: chatxPlanCardItems("zh"),
   },
   orderSteps: {
@@ -596,7 +589,7 @@ const zh: Dict = {
       { q: "AI 能自动跟客户成交吗？人工能接管吗？", a: "可以。AI 以你的人设 7×24 自动接洽、答疑、跟进、促单转化，遇到关键节点人工可随时一键接管。" },
       { q: "声音克隆需要什么素材？", a: "仅需几十秒清晰人声样本即可零样本克隆；请确保你拥有该声音的授权。" },
       { q: "私有大模型和公有云 API 有什么区别？", a: "私有部署的大模型数据完全留在本地、不依赖公有云内容策略，可按你的业务自由微调知识库与输出风格，无云端上报，自主可控。" },
-      { q: "可以按量付费吗？Token 是什么？", a: "可以。Token 是全站统一的 AI 用量单位，每个动作的消耗全部公示（如 AI 回复 10 Token/条、专业翻译 10 Token/千字符）；订阅含每月 Token，超出买 Token 包（12 个月有效），也可选 0 月费的按量版纯钱包扣费。标准翻译不耗 Token、永久免费。" },
+      { q: "可以按量付费吗？Token 是什么？", a: "可以，而且只有按量：不订阅、无月费。Token 是全站统一的 AI 用量单位，每个动作的消耗全部公示（如 AI 回复 10 Token/条、专业翻译 10 Token/千字符）；充值 50U 起、1U = 1,500 Token，首笔充值按档加赠最高 +40%，实付 12 个月有效（500U 及以上档 24 个月）。标准翻译不耗 Token、永久免费。" },
       { q: "如何确认我在和官方沟通、收款地址无误？", a: "官网只在订单页实时展示收款地址；客服只使用官网页面上列出的官方 Telegram 账号。任何『主动私聊你的客服』或第三方转发的地址，请一律回到订单页核对后再操作。" },
     ],
   },
@@ -941,13 +934,14 @@ const zh: Dict = {
     resultNetLabel: "净增收益 / 月",
     resultRoiLabel: "投入产出比",
     resultYearLabel: "年化净增（估）",
-    planLabel: "推荐套餐",
+    planLabel: "AI 用量成本",
     perMonth: "/ 月",
     assumptionsTitle: "测算假设（可与客服按你的实际调整）",
     assumptions: [
       "AI 自动成交可优化约 60% 重复性人力成本",
       "拟人翻译 + 7×24 不漏客，转化率平均相对提升约 35%",
       "按每月 30 天、你输入的客单价与转化率估算",
+      "AI 用量按公示费率折算：每条咨询约 8 条 AI 回复（10 Token/条），充值基准 1U = 1,500 Token",
     ],
     disclaimer: "以上为基于行业经验的估算模型，实际效果因行业、流量与运营而异，不构成任何收益承诺。",
     cta: "按我的数据要方案",
@@ -1138,7 +1132,7 @@ const en: Dict = {
     },
   ],
   pricingSection: {
-    note: `ChatX: Free $0 (unlimited standard translation) / Personal 39 / Team 49 per seat / Flagship 598 (monthly; annual ×10 = 2 months free); token packs from 9.9. STUDIO: free face swap+watermark / Starter ${studioTier("starter").monthly} / Standard ${studioTier("standard").monthly} / Pro ${studioTier("pro").monthly} / Flagship quote. Anything beyond the list is custom by scenario.`,
+    note: `ChatX: start free (unlimited standard translation), pay by top-up — no subscription: from 50U at 1U = 1,500 tokens, first top-up earns up to +40%, newcomer 6U pack lands 18,000 tokens at double rate; enterprise frames / private deployment by quote. STUDIO: free face swap+watermark / Starter ${studioTier("starter").monthly} / Standard ${studioTier("standard").monthly} / Pro ${studioTier("pro").monthly} / Flagship quote. Anything beyond the list is custom by scenario.`,
   },
   trust: {
     platformsLabel: "Deeply integrated platforms",
@@ -1185,17 +1179,13 @@ const en: Dict = {
     disclaimer: "Figures above are internal engineering measurements and deployment records (Aug 2026), not a promise of specific business results.",
   },
   plans: {
-    title: "AI Auto-Closing Chat · Plans",
-    subtitle: `Standard translation free forever; AI replies, pro translation and cloned voice meter at transparent token rates — the Free plan needs no card, with ${SIGNUP_BONUS_TOKENS.toLocaleString("en-US")} bonus tokens on signup.`,
-    monthly: "Monthly",
-    yearly: "Yearly",
-    save: "2 months free",
+    title: "AI Auto-Closing Chat · Pay by Top-up",
+    subtitle: `Start free and top up as you go — no subscription. Standard translation free forever; AI replies, pro translation and cloned voice meter at transparent token rates, with ${SIGNUP_BONUS_TOKENS.toLocaleString("en-US")} bonus tokens on signup.`,
+    note: "All top-ups are one-time with no monthly fee; the first top-up earns up to +40% by tier, and paid tokens stay valid 12 months (24 for 500U+).",
     popular: "Most popular",
-    perMonth: "/ mo",
-    perYear: "/ yr",
-    cta: "Choose plan",
+    cta: "Choose this",
     fullPricing: "Full pricing · token rates · calculator →",
-    // 2026-08-19 token plans: cards derived from chatx-pricing.ts (annual = ×10, shown as yearly total).
+    // 2026-08-21 top-up-only: five cards (free start / 6U / 200U / 1000U / enterprise) derived from chatx-pricing.ts.
     items: chatxPlanCardItems("en"),
   },
   orderSteps: {
@@ -1217,7 +1207,7 @@ const en: Dict = {
       { q: "Can AI close deals automatically? Can humans take over?", a: "Yes. AI works your persona 24/7 to engage, answer, follow up and convert; at key moments a human can take over in one click." },
       { q: "What does voice cloning need from me?", a: "Just a few dozen seconds of clear voice audio for zero-shot cloning; make sure you hold the rights to that voice." },
       { q: "How is a private LLM different from a public cloud API?", a: "A privately deployed LLM keeps data fully local, free of public-cloud dependencies — fine-tune its knowledge base and output style to your business, with no cloud reporting and full self-control." },
-      { q: "Can I pay per usage? What are tokens?", a: "Yes. Tokens are the single AI-usage unit across the product, with every action's cost published (e.g. an AI reply costs 10 tokens; pro translation 10 tokens/1k chars). Plans include monthly tokens; packs top you up (valid 12 months), and the Flex plan is pure pay-as-you-go with no monthly fee. Standard translation costs no tokens — it's free forever." },
+      { q: "Can I pay per usage? What are tokens?", a: "Yes — and usage is the only thing you pay for: no subscription, no monthly fee. Tokens are the single AI-usage unit across the product, with every action's cost published (e.g. an AI reply costs 10 tokens; pro translation 10 tokens/1k chars). Top up from 50U at 1U = 1,500 tokens; your first top-up earns up to +40% by tier, and paid tokens stay valid 12 months (24 for 500U+). Standard translation costs no tokens — it's free forever." },
       { q: "How do I know I'm talking to the official team and paying the right address?", a: "The payment address is shown live on the order page only, and our support uses only the official Telegram accounts listed on this site. If a \"support agent\" messages you first, or a third party forwards you an address, always go back to the order page and verify before acting." },
     ],
   },
@@ -1562,13 +1552,14 @@ const en: Dict = {
     resultNetLabel: "Net gain / mo",
     resultRoiLabel: "Return on spend",
     resultYearLabel: "Annualized net (est.)",
-    planLabel: "Suggested plan",
+    planLabel: "AI usage cost",
     perMonth: "/ mo",
     assumptionsTitle: "Assumptions (tune with support to your reality)",
     assumptions: [
       "AI auto-closing optimizes ~60% of repetitive labor cost",
       "Human-like translation + 24/7 lifts conversion by ~35% relative",
       "Estimated over 30 days using your AOV and conversion",
+      "AI usage at published rates: ~8 AI replies per inquiry (10 tokens each), top-ups at 1U = 1,500 tokens",
     ],
     disclaimer: "An estimate model based on industry experience; actual results vary by industry, traffic and operations — not a guarantee of returns.",
     cta: "Get a plan with my numbers",

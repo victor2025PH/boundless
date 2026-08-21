@@ -7,7 +7,7 @@ import GlobalChrome from "@/components/GlobalChrome";
 import TgRedirect from "@/components/TgRedirect";
 import { SITE_URL, CONTACT_URL } from "@/lib/site";
 import { content } from "@/lib/content";
-import { autochatOffers, tokenPackOffers, translateOffers, toSchemaOffer } from "@/lib/pricing";
+import { tokenPackOffers, translateOffers, toSchemaOffer } from "@/lib/pricing";
 import { studioSchemaOffers } from "@/lib/avatarhub-pricing";
 import { BRAND, PRODUCT_ORDER, type ProductKey } from "@/lib/brand";
 
@@ -87,9 +87,9 @@ const jsonLd = {
 // fatex（未上线）；per-usage 计量 SKU 亦不进。锚点均指向仍存在的页面/section，避免坏链。
 const SCHEMA_HIDDEN: ReadonlySet<ProductKey> = new Set(["facex", "livex", "matrixx", "fatex"]);
 const PRODUCT_OFFERS: Partial<Record<ProductKey, Parameters<typeof toSchemaOffer>[0][]>> = {
-  // 2026-08-04 通译并入智聊；2026-08-19 Token 定价改版：chatx 承接 Token 分层订阅
-  // （个人/团队每坐席/旗舰）+ Token 包 + 翻译工作台（数字全部派生自 chatx-pricing.ts）。
-  chatx: [...autochatOffers, ...tokenPackOffers, ...translateOffers],
+  // 2026-08-04 通译并入智聊；2026-08-21 充值唯一化：订阅停售，chatx 结构化数据只挂
+  // Token 充值档（含新人包）+ 翻译工作台（数字全部派生自 chatx-pricing.ts）。
+  chatx: [...tokenPackOffers, ...translateOffers],
   voicex: studioSchemaOffers(),
 };
 const PRODUCT_SCHEMA_ANCHOR: Partial<Record<ProductKey, string>> = {

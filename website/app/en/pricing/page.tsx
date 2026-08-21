@@ -3,19 +3,19 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import PricingPage from "@/components/PricingPage";
 import { SITE_URL } from "@/lib/site";
-import { autochatOffers, tokenPackOffers, translateOffers, toSchemaOffer } from "@/lib/pricing";
+import { tokenPackOffers, translateOffers, toSchemaOffer } from "@/lib/pricing";
 
 const LANGUAGES = { "zh-CN": "/pricing", en: "/en/pricing", "x-default": "/pricing" };
 
 export const metadata: Metadata = {
-  title: "Pricing · ChatX token plans · BOUNDLESS",
+  title: "Pricing · ChatX — start free, pay by top-up, no subscription · BOUNDLESS",
   description:
-    "Standard translation free forever with unlimited characters. AI replies, pro translation and cloned voice meter at published token rates. Free plan (10,000 bonus tokens on signup) · Personal 39 USD/mo · Flex pay-as-you-go · Team 49 USD/seat/mo (2+ seats) · Flagship from 598. Token packs from 9.9 USD, valid 12 months; annual billing = 2 months free.",
+    "Start free and pay only by top-up — no subscription: download & go, unlimited free standard translation, 1,000 tokens/mo plus 10,000 on signup. Top up from 50U at 1U = 1,500 tokens; first top-up earns up to +40% (100U +5% · 200U +10% · 500U +20% · 1000U +30% · 5000U +35% · 10000U +40%). Newcomer pack: 6U for 18,000 tokens at double rate within 72h of signup. Enterprise partnership and private deployment quoted by sales.",
   alternates: { canonical: "/en/pricing", languages: LANGUAGES },
   openGraph: {
-    title: "Pricing · Translation free forever — pay only to close · BOUNDLESS",
+    title: "Pricing · Start free, top up as you go · BOUNDLESS",
     description:
-      "ChatX new pricing: Free / Personal 39 / Flex / Team 49 per seat / Flagship 598. Unlimited free standard translation, transparent token metering, graceful degradation — never offline.",
+      "ChatX top-up pricing: from 50U with up to +40% on your first top-up; newcomer 6U pack lands 18,000 tokens at double rate. Unlimited free standard translation — never offline. Enterprise & private deployment by quote.",
     url: `${SITE_URL}/en/pricing`,
   },
 };
@@ -23,11 +23,11 @@ export const metadata: Metadata = {
 const pricingLd = {
   "@context": "https://schema.org",
   "@type": "Product",
-  name: "ChatX — AI closing chat system (token plans)",
+  name: "ChatX — AI closing chat system (start free · pay by top-up)",
   description:
-    "Omni-channel unified inbox + AI personas + free standard translation + human handoff. Plans include monthly tokens; packs top you up. Standard translation is free forever.",
+    "Omni-channel unified inbox + AI personas + free standard translation + human handoff. Start free, top up as you go: from 50U with up to +40% on the first top-up; newcomer 6U pack at double rate. Standard translation is free forever.",
   brand: { "@type": "Organization", name: "BOUNDLESS" },
-  offers: [...autochatOffers, ...tokenPackOffers, ...translateOffers].map(toSchemaOffer),
+  offers: [...tokenPackOffers, ...translateOffers].map(toSchemaOffer),
 };
 
 export default function PricingRouteEn() {

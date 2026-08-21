@@ -62,16 +62,22 @@ const FACT_SKUS: ReadonlyMap<string, FactSku> = (() => {
 })();
 
 /** 主推线的报价 SKU（顺序即展示顺序，与 content.ts 对应板块的档位顺序一致）。
- *  2026-08-19 Token 定价改版：切到在售新档（免费/个人/团队每坐席/旗舰 + 翻译免费化）；
- *  停售的 chatx-entry/team、lingox-charpack/team/pro 留在注册表供台账反查，bot 不再外报。 */
-const CHATX_PLAN_SKUS: readonly string[] = ["chatx-free", "chatx-personal", "chatx-team-seat", "chatx-flagship"];
+ *  2026-08-21 充值唯一化：智聊只报充值档（新人 6U + 50~10000U，全部一次性）；
+ *  停售的订阅三档（chatx-personal/pro/flagship）与更早的 entry/team/team-seat、
+ *  token-pack-*、lingox-charpack/team/pro 留在注册表供台账反查，bot 不再外报。
+ *  企业合作 / 私有化部署（chatx-enterprise / chatx-private-deploy）价为「按规模报价」，
+ *  被 NUMERIC_PRICE_RE 自动挡在外报之外——引导人工客服即可。 */
+const CHATX_TOPUP_SKUS: readonly string[] = [
+  "recharge-newbie-6", "recharge-50", "recharge-100", "recharge-200",
+  "recharge-500", "recharge-1000", "recharge-5000", "recharge-10000",
+];
 const LINGOX_SKUS: readonly string[] = ["lingox-free", "lingox-workbench"];
 const VOICEX_SKUS: readonly string[] = ["voicex-starter", "voicex-std", "voicex-pro", "voicex-usage"];
 
 /** 业务能力段里价格对改由事实源生成的 solution（content.ts 的 Solution.id → SKU 列表）；
  *  其余板块（定制交付 / 按需报价类）没有定值 SKU，维持 content 文案原样。 */
 const FACT_PRICED_SOLUTIONS: Record<string, readonly string[]> = {
-  chatx: CHATX_PLAN_SKUS,
+  chatx: CHATX_TOPUP_SKUS,
   voice: VOICEX_SKUS,
   translate: LINGOX_SKUS,
 };
@@ -169,13 +175,19 @@ export function buildServices(lang: BotLang) {
 
 export function buildPricing(lang: BotLang) {
   const c = t(lang);
-  // 档位名/权益文案取 content，价格数字取事实源（按档位顺序对应）；查不到的档省略该行
-  const plans = c.plans.items
-    .map((p, i) => {
-      const price = skuPriceNumber(CHATX_PLAN_SKUS[i]);
-      return price === null ? null : `· <b>${p.name}</b> — ${price} USD/${lang === "zh" ? "月" : "mo"}`;
-    })
-    .filter((line): line is string => line !== null)
+  // 2026-08-21 充值唯一化：智聊按充值档报价（名称/数字全取事实源 SKU，一次性无周期）；
+  // 免费开始不是 SKU，单独一行讲清；查不到的档省略该行（宁可漏报不错报）。
+  const freeLine = lang === "zh"
+    ? "· <b>免费开始</b> — 0（下载即用 · 标准翻译免费不限量 · 每月 1,000 Token）"
+    : "· <b>Free start</b> — 0 (download & go · unlimited standard translation · 1,000 tokens/mo)";
+  const plans = [freeLine]
+    .concat(
+      CHATX_TOPUP_SKUS.map((id) => {
+        const s = sku(id);
+        const price = skuPriceNumber(id);
+        return s && price !== null ? `· <b>${s.name[lang]}</b> — ${price} USD${lang === "zh" ? "（一次性）" : " one-time"}` : null;
+      }).filter((line): line is string => line !== null),
+    )
     .join("\n");
   const xlate = skuPlanPrices(LINGOX_SKUS, lang)
     .map((r) => `· <b>${r.name}</b> — ${r.price}`)
@@ -186,8 +198,9 @@ export function buildPricing(lang: BotLang) {
   return lang === "zh"
     ? `💰 <b>价格速览</b>（挂牌 USD · 可 USDT 结算）
 
-<b>AI 成交聊天 · 月付</b>
+<b>AI 成交聊天 · 按充值计费（不订阅 · 1U = 1,500 Token · 首充最高 +40%）</b>
 ${plans}
+· <b>企业合作 / 私有化部署</b> — 面议（联系人工客服）
 
 <b>跨境聊天翻译 · 智聊内置</b>
 ${xlate}
@@ -198,8 +211,9 @@ ${engage}
 📱 打开 Mini App 可查看完整价格表与 ROI 试算`
     : `💰 <b>Pricing overview</b> (listed USD · USDT settlement OK)
 
-<b>AI auto-closing chat · monthly</b>
+<b>AI auto-closing chat · pay by top-up (no subscription · 1U = 1,500 tokens · up to +40% first top-up)</b>
 ${plans}
+· <b>Enterprise partnership / private deployment</b> — quoted by sales
 
 <b>Chat translation · built into ChatX</b>
 ${xlate}
@@ -406,16 +420,12 @@ export function buildKnowledgeContext(lang: BotLang): string {
   parts.push(c.autochat.subtitle);
   c.autochat.features.forEach((f) => parts.push(`- ${f.title}: ${f.desc}`));
   parts.push(
-    (lang === "zh" ? "套餐：" : "Plans: ") +
+    (lang === "zh"
+      ? "计费（2026-08-21 起按充值、不订阅；1U = 1,500 Token，首充按档加赠最高 +40%，新人 6U 包双倍到账；企业年框/私有化部署面议走人工）："
+      : "Billing (top-up only since 2026-08-21, no subscription; 1U = 1,500 tokens, first top-up earns up to +40%, 6U newcomer pack at double rate; enterprise frames / private deployment quoted by sales): ") +
+      // 卡片文案取 content（其数字派生自 chatx-pricing.ts，经 assert-order-lines 与注册表钉死同源）
       c.plans.items
-        .map((p, i) => {
-          // 档位名/权益取 content，价格数字取事实源（按档位顺序对应）；查不到省略该档
-          const price = skuPriceNumber(CHATX_PLAN_SKUS[i]);
-          return price === null
-            ? null
-            : `${p.name} ${price} USD/${lang === "zh" ? "月" : "mo"}（${p.features.join("、")}）`;
-        })
-        .filter((line): line is string => line !== null)
+        .map((p) => `${p.name} ${p.price}${p.unit ? ` ${p.unit}` : ""}（${p.features.join(lang === "zh" ? "、" : ", ")}）`)
         .join("; ")
   );
 

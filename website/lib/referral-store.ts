@@ -34,9 +34,26 @@ export const REFERRAL_INVITEE_CHARS = Number(process.env.REFERRAL_INVITEE_CHARS 
 export const REFERRAL_INVITER_CHARS = Number(process.env.REFERRAL_INVITER_CHARS || 100_000);
 export const REFERRAL_QUALIFY_CHARS = Number(process.env.REFERRAL_QUALIFY_CHARS || 10_000);
 export const REFERRAL_DAILY_CAP = Number(process.env.REFERRAL_DAILY_CAP || 5);
-export const REFERRAL_TOTAL_CAP = Number(process.env.REFERRAL_TOTAL_CAP || 20);
+/** 累计上限（2026-08-21 实施50：20 → 50，给 10 人里程碑留空间；超限新归因仍拒，
+ *  真有超级推广者时人工放行/改 env）。 */
+export const REFERRAL_TOTAL_CAP = Number(process.env.REFERRAL_TOTAL_CAP || 50);
 /** 同一邀请人名下、同一出口 IP 的被邀请人达到此数即标 flagged 人审。 */
 const IP_CLUSTER_FLAG_AT = Number(process.env.REFERRAL_IP_CLUSTER_FLAG_AT || 3);
+
+// ── 里程碑阶梯 + 首充返利（2026-08-21 实施50 P1）──────────────────────────────
+/** 邀请里程碑：达标人数（qualified 口径）→ 额外奖励字符。每档每人一次。 */
+export const REFERRAL_MILESTONES: ReadonlyArray<{ at: number; chars: number }> = [
+  { at: 3, chars: 200_000 },
+  { at: 5, chars: 500_000 },
+  { at: 10, chars: 1_000_000 },
+];
+/** 被邀请人首笔已付充值的返利比例（%）与封顶（等值 U）。 */
+export const REFERRAL_REBATE_PCT = Number(process.env.REFERRAL_REBATE_PCT || 10);
+export const REFERRAL_REBATE_CAP_USD = Number(process.env.REFERRAL_REBATE_CAP_USD || 100);
+/** 返利延迟发放天数（退款/拒付观察窗——订单状态机没有 refund，延迟是唯一防线）。 */
+export const REFERRAL_REBATE_DELAY_DAYS = Number(process.env.REFERRAL_REBATE_DELAY_DAYS || 7);
+/** 1U = 1,500 Token = 150,000 字符（与 chatx-pricing / 引擎并账口径同源）。 */
+const CHARS_PER_USD = 150_000;
 
 export type ReferralStatus = "registered" | "qualified" | "flagged" | "rejected";
 
@@ -58,6 +75,11 @@ export interface Referral {
   inviteeChars?: number;
   inviterRewardedAt?: string;
   inviterChars?: number;
+  // ── 首充返利（实施50 P1；每条归因至多一次）──
+  rebateRewardedAt?: string;
+  rebateChars?: number;
+  /** 触发返利的被邀请人首笔已付充值订单号（审计锚）。 */
+  rebateOrderId?: string;
 }
 
 interface ReferralDb {
@@ -69,6 +91,8 @@ interface ReferralDb {
   referrals: Record<string, Referral>;
   /** inviteeClaimId → referralId（一个被邀请人只能被归因一次）。 */
   byInvitee: Record<string, string>;
+  /** 里程碑发放台账：inviterClaimId → { "3": {rewardedAt, chars}, ... }（每档一次）。 */
+  milestones: Record<string, Record<string, { rewardedAt: string; chars: number }>>;
 }
 
 let chain: Promise<unknown> = Promise.resolve();
@@ -89,12 +113,13 @@ async function readDb(): Promise<ReferralDb> {
         claimByCode: parsed.claimByCode || {},
         referrals: parsed.referrals || {},
         byInvitee: parsed.byInvitee || {},
+        milestones: parsed.milestones || {},
       };
     }
   } catch {
     /* fresh */
   }
-  return { version: 1, codeByClaim: {}, claimByCode: {}, referrals: {}, byInvitee: {} };
+  return { version: 1, codeByClaim: {}, claimByCode: {}, referrals: {}, byInvitee: {}, milestones: {} };
 }
 
 async function writeDb(db: ReferralDb) {
@@ -376,6 +401,154 @@ export async function markRewarded(
   });
 }
 
+// ── 里程碑 / 首充返利：厂商机发奖待办与幂等回填（实施50 P1）─────────────────
+// 与见面礼/邀请奖励同一协议形态：官网只算 due 清单，凭证由厂商机签、经
+// POST /api/admin/referrals {bonus:[…]} 挂到邀请人 claim.extraVouchers 后回填标记。
+
+export interface BonusDue {
+  /** 回填幂等键：mile:{inviterClaimId}:{at} 或 rebate:{referralId}。 */
+  key: string;
+  kind: "milestone" | "rebate";
+  claim_id: string;
+  fingerprint: string;
+  contact: string;
+  chars: number;
+  /** 凭证兑换幂等 ref（厂商机原样用作 voucher.ref）。 */
+  ref: string;
+  note: string;
+}
+
+function rebateCharsForOrder(o: { amount?: number; pay_amount?: number }): number {
+  // 返利基数=实收金额（USDT 尾数几分钱忽略，取挂牌 amount；amount 缺失回退 pay_amount 取整）
+  const usd = Math.max(0, Number(o.amount) || Math.floor(Number(o.pay_amount) || 0));
+  const rebateUsd = Math.min((usd * REFERRAL_REBATE_PCT) / 100, REFERRAL_REBATE_CAP_USD);
+  return Math.round(rebateUsd * CHARS_PER_USD);
+}
+
+/** 厂商机的加码发奖待办：里程碑（qualified 人数达标）+ 首充返利（被邀请人首笔
+ *  已付充值、过了退款观察窗）。flagged/rejected 归因不参与返利。 */
+export async function listBonusDue(limit = 100): Promise<BonusDue[]> {
+  const db = await readDb();
+  const out: BonusDue[] = [];
+  const all = Object.values(db.referrals);
+
+  // ① 里程碑：按邀请人聚合 qualified 数
+  const qualifiedBy = new Map<string, number>();
+  for (const r of all) {
+    if (r.status !== "qualified") continue;
+    qualifiedBy.set(r.inviterClaimId, (qualifiedBy.get(r.inviterClaimId) || 0) + 1);
+  }
+  for (const [inviterClaimId, count] of qualifiedBy) {
+    const done = db.milestones[inviterClaimId] || {};
+    for (const m of REFERRAL_MILESTONES) {
+      if (count < m.at || done[String(m.at)]) continue;
+      const inviter = await getClaim(inviterClaimId);
+      if (!inviter) continue;
+      out.push({
+        key: `mile:${inviterClaimId}:${m.at}`,
+        kind: "milestone",
+        claim_id: inviter.id,
+        fingerprint: inviter.fingerprint,
+        contact: inviter.contact,
+        chars: m.chars,
+        ref: `refmile-${inviterClaimId.slice(0, 16)}-${m.at}`,
+        note: `referral-milestone-${m.at}`,
+      });
+      if (out.length >= limit) return out;
+    }
+  }
+
+  // ② 首充返利：被邀请人首笔已付充值单（recharge-* 含新人包），过观察窗才 due。
+  //    动态 import 防模块环（order-store 不依赖本文件，纯保守写法）。
+  const rebateCandidates = all.filter(
+    (r) => (r.status === "registered" || r.status === "qualified") && !r.rebateRewardedAt
+  );
+  if (rebateCandidates.length) {
+    const { listOrders } = await import("./order-store");
+    const { contactCore } = await import("./newbie-gate");
+    let orders: Awaited<ReturnType<typeof listOrders>> = [];
+    try {
+      orders = await listOrders();
+    } catch {
+      return out; // 订单台账不可读：返利段本轮跳过（下轮自愈）
+    }
+    const normFp = (s: unknown) =>
+      String(s ?? "").trim().toUpperCase().replace(/[-\s]/g, "");
+    const now = Date.now();
+    for (const rec of rebateCandidates) {
+      const invitee = await getClaim(rec.inviteeClaimId);
+      if (!invitee) continue;
+      const fp = normFp(invitee.fingerprint);
+      const cc = contactCore(invitee.contact);
+      const mine = orders
+        .filter((o) => {
+          const sku = String(o.sku_id || o.plan || "");
+          if (!sku.startsWith("recharge")) return false;
+          if (o.status !== "paid" && o.status !== "activated") return false;
+          if (/e2e/i.test(String(o.contact || "")) ||
+              normFp(o.fingerprint).startsWith("E2E")) return false;
+          const of = normFp(o.fingerprint);
+          const oc = contactCore(o.contact);
+          return (fp && of && of === fp) || (cc && oc && oc === cc);
+        })
+        .sort((a, b) => (Date.parse(a.paid_at || a.t) || 0) - (Date.parse(b.paid_at || b.t) || 0));
+      const first = mine[0];
+      if (!first) continue;
+      const paidAt = Date.parse(first.paid_at || first.t) || 0;
+      if (!paidAt || now - paidAt < REFERRAL_REBATE_DELAY_DAYS * 86_400_000) continue;
+      const chars = rebateCharsForOrder(first);
+      if (chars <= 0) continue;
+      const inviter = await getClaim(rec.inviterClaimId);
+      if (!inviter) continue;
+      out.push({
+        key: `rebate:${rec.id}`,
+        kind: "rebate",
+        claim_id: inviter.id,
+        fingerprint: inviter.fingerprint,
+        contact: inviter.contact,
+        chars,
+        ref: `refrebate-${rec.id}`,
+        note: `referral-rebate-${first.id}`,
+      });
+      if (out.length >= limit) break;
+    }
+  }
+  return out;
+}
+
+/** 厂商机加码发奖回填（幂等）：key 决定标记落点。返回是否新标记。 */
+export async function markBonusRewarded(key: string, chars: number, note = ""): Promise<boolean> {
+  const k = String(key || "").trim();
+  const n = Math.max(0, Math.round(Number(chars) || 0));
+  if (!k) return false;
+  return serialize(async () => {
+    const db = await readDb();
+    if (k.startsWith("mile:")) {
+      const [, claimId, atRaw] = k.split(":");
+      const at = String(Number(atRaw) || "");
+      if (!claimId || !at) return false;
+      const slot = (db.milestones[claimId] ||= {});
+      if (slot[at]) return false;
+      slot[at] = { rewardedAt: new Date().toISOString(), chars: n };
+      await writeDb(db);
+      await audit("referral_milestone_rewarded", { inviterClaimId: claimId }, { at, chars: n });
+      return true;
+    }
+    if (k.startsWith("rebate:")) {
+      const rid = k.slice("rebate:".length);
+      const rec = db.referrals[rid];
+      if (!rec || rec.rebateRewardedAt) return false;
+      rec.rebateRewardedAt = new Date().toISOString();
+      rec.rebateChars = n;
+      rec.rebateOrderId = note.replace(/^referral-rebate-/, "") || undefined;
+      await writeDb(db);
+      await audit("referral_rebate_rewarded", rec, { chars: n });
+      return true;
+    }
+    return false;
+  });
+}
+
 export interface InviteStats {
   registered: number;
   qualified: number;
@@ -385,6 +558,12 @@ export interface InviteStats {
   chars_earned: number;
   cap_total: number;
   cap_left: number;
+  /** 里程碑进度（会员页阶梯条）：各档达标人数要求 / 奖励 / 是否已发。 */
+  milestones: Array<{ at: number; chars: number; rewarded: boolean }>;
+  /** 下一个里程碑还差几人（全部达成 = null）。 */
+  next_milestone_need: number | null;
+  /** 里程碑 + 首充返利累计到手字符（chars_earned 之外的加码部分）。 */
+  bonus_chars_earned: number;
 }
 
 /** 某邀请人的进度统计（会员页邀请卡）。 */
@@ -394,15 +573,28 @@ export async function inviteStats(claimId: string): Promise<InviteStats> {
     (r) => r.inviterClaimId === claimId && r.status !== "rejected"
   );
   const rewarded = mine.filter((r) => !!r.inviterRewardedAt);
+  const qualified = mine.filter((r) => r.status === "qualified").length;
+  const done = db.milestones[claimId] || {};
+  const milestones = REFERRAL_MILESTONES.map((m) => ({
+    at: m.at,
+    chars: m.chars,
+    rewarded: !!done[String(m.at)],
+  }));
+  const nextM = REFERRAL_MILESTONES.find((m) => qualified < m.at);
+  const mileChars = Object.values(done).reduce((s, v) => s + (v.chars || 0), 0);
+  const rebateChars = mine.reduce((s, r) => s + (r.rebateChars || 0), 0);
   return {
     registered: mine.length,
-    qualified: mine.filter((r) => r.status === "qualified").length,
+    qualified,
     invitee_rewarded: mine.filter((r) => !!r.inviteeRewardedAt).length,
     inviter_rewarded: rewarded.length,
     flagged: mine.filter((r) => r.status === "flagged").length,
     chars_earned: rewarded.reduce((s, r) => s + (r.inviterChars || 0), 0),
     cap_total: REFERRAL_TOTAL_CAP,
     cap_left: Math.max(0, REFERRAL_TOTAL_CAP - mine.length),
+    milestones,
+    next_milestone_need: nextM ? nextM.at - qualified : null,
+    bonus_chars_earned: mileChars + rebateChars,
   };
 }
 

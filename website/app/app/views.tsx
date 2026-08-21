@@ -392,7 +392,7 @@ export function PricingView({
                 {p.name} {p.highlight && <span className="ml-1 rounded-full bg-cyan-500/20 px-2 py-0.5 text-[10px] text-cyan-300">{t.plans.popular}</span>}
               </span>
               <span className="text-sm font-bold text-cyan-300">
-                {p.priceMonthly} <span className="text-[10px] font-normal text-slate-500">{t.plans.perMonth}</span>
+                {p.price} <span className="text-[10px] font-normal text-slate-500">{p.unit}</span>
               </span>
             </div>
             <div className="mt-0.5 text-[11px] text-slate-500">{p.desc}</div>

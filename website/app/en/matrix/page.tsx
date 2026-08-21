@@ -43,7 +43,8 @@ export default function MatrixLandingEn() {
             <div className="mx-auto mb-6 flex items-center justify-center gap-3">
               <ProductIcon product="matrixx" size={56} className="h-14 w-14 object-contain" alt="MatrixX" />
               <span className="text-2xl font-bold tracking-wide">
-                MatrixX <span className="text-slate-400">智控</span>
+                {/* EN 页不留中文描述词（WP-9 走查）；Fleet ops = brand.ts matrixx.scene.en 单源 */}
+                MatrixX <span className="text-slate-400">Fleet ops</span>
               </span>
             </div>
             <p className="mb-3 text-xs font-medium uppercase tracking-[0.3em] text-neon-cyan">{h.kicker[lang]}</p>

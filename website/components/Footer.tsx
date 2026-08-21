@@ -27,6 +27,7 @@ export default function Footer() {
     { href: zh ? "/download" : "/en/download", label: zh ? "下载客户端" : "Download client" },
     { href: zh ? "/manual" : "/en/manual", label: zh ? "使用手册" : "User manual" },
     { href: zh ? "/order" : "/en/order", label: zh ? "购买与下单" : "Plans & ordering" },
+    { href: zh ? "/enterprise" : "/en/enterprise", label: zh ? "企业服务" : "Enterprise" },
     { href: zh ? "/videos" : "/en/videos", label: zh ? "视频动态" : "Video feed" },
   ];
 
@@ -75,6 +76,10 @@ export default function Footer() {
             <span className="text-slate-700">·</span>
             <Link href={zh ? "/terms" : "/en/terms"} className="transition hover:text-slate-300">
               {zh ? "服务条款" : "Terms"}
+            </Link>
+            <span className="text-slate-700">·</span>
+            <Link href={zh ? "/compliance" : "/en/compliance"} className="transition hover:text-slate-300">
+              {zh ? "合规能力" : "Compliance"}
             </Link>
           </div>
           <div>© {year} {t.footer.rights}</div>

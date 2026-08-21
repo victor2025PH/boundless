@@ -42,14 +42,23 @@ if (!eq(ts, mjs)) {
   console.log(`OK: 两处 ORDER_SKU_MAP 一致（${Object.keys(ts).length} 条）`);
 }
 
-// 2) chatx 档位齐全：2026-08-19 Token 体系在售档（personal/team-seat/flagship + token 包）
-//    与停售台账档（entry/team——历史订单反查，防丢单回潮）都必须在。
+// 2) chatx 档位齐全：2026-08-20 全功能开放体系在售档（personal(基础)/pro/flagship + 充值档）
+//    与停售台账档（entry/team/team-seat/token-pack-*——历史订单反查，防丢单回潮）都必须在。
 const expect = {
   "autochat-personal": "chatx-personal",
+  "autochat-pro": "chatx-pro",
   "autochat-team-seat": "chatx-team-seat",
   "autochat-entry": "chatx-entry",
   "autochat-team": "chatx-team",
   "autochat-flagship": "chatx-flagship",
+  "recharge-50": "recharge-50",
+  "recharge-100": "recharge-100",
+  "recharge-200": "recharge-200",
+  "recharge-500": "recharge-500",
+  "recharge-1000": "recharge-1000",
+  "recharge-5000": "recharge-5000",
+  "recharge-10000": "recharge-10000",
+  "recharge-newbie-6": "recharge-newbie-6",
   "token-pack-s": "token-pack-s",
   "token-pack-m": "token-pack-m",
   "token-pack-l": "token-pack-l",

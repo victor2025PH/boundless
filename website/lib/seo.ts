@@ -23,6 +23,8 @@ export const SITE_PAGES: SitePage[] = [
   // 2026-08-19 Token 定价改版：/pricing=报价决策页（档位/Token 费率/计算器），/order=结算页。
   { slug: "/pricing", bilingual: true, changeFrequency: "weekly", priority: 0.9, enPriority: 0.8 },
   { slug: "/order", bilingual: true, changeFrequency: "weekly", priority: 0.8, enPriority: 0.7 },
+  // 实施50 P4（2026-08-21）：企业销售件（年框/私有化叙事 + 站内留资表单）
+  { slug: "/enterprise", bilingual: true, changeFrequency: "monthly", priority: 0.7, enPriority: 0.6 },
   { slug: "/download", bilingual: true, changeFrequency: "weekly", priority: 0.8, enPriority: 0.7 },
   { slug: "/download/chatx", bilingual: true, changeFrequency: "monthly", priority: 0.7, enPriority: 0.6 },
   { slug: "/manual", bilingual: true, changeFrequency: "monthly", priority: 0.6, enPriority: 0.5 },

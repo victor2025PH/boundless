@@ -3,7 +3,7 @@
 // ProductMatrix / /brand 页 / 小程序首页共用本文件，避免「同一映射散落多份、改一处漏一处」。
 import { PRODUCT_ORDER, productsInCategory, type CategoryKey, type ProductKey } from "@/lib/brand";
 import { STUDIO_PAID_FROM, studioTier } from "@/lib/avatarhub-pricing";
-import { autochatOffers } from "@/lib/pricing";
+import { NEWBIE_PACK, RECHARGE_TIERS } from "@/lib/chatx-pricing";
 
 // 产品专属玻璃 3D 图标（透明底 256×256）：唯一来源是 brand-assets/ 新管线
 // （build_brand_assets.py → 02_product-icons/{key}/{key}-256.png）。
@@ -104,14 +104,17 @@ export const PRODUCT_GLOW: Record<ProductKey, string> = {
 
 /* ── 产品卡价格锚（2026-08-07，修「拿着产品名找不到价格」）──
  * 首页矩阵卡片一句话告诉访客「这条线的价格从哪起、去哪看」。
- * 数字一律从定价单源派生（avatarhub-pricing.TIERS / pricing.autochatOffers），零手写；
+ * 数字一律从定价单源派生（avatarhub-pricing.TIERS / chatx-pricing 充值档），零手写；
  * 档位归属与 /order 页 CAPABILITY_TIERS 对照表同构（幻声/幻影→标准版、通传→专业版），
- * 刻意不写「会员 39 起」——39 是会员起价但不含直播换脸等能力，按能力所在档报数才诚实。
+ * 2026-08-21 充值唯一化：智聊改标「免费开始 · 充值 XXU 起」（无月费）。
  * 邀请制/未挂牌线（reachx）只标交付方式不标数字。 */
-const CHATX_FROM = Math.min(...autochatOffers.map((o) => Number(o.price)));
+const CHATX_TOPUP_FROM = RECHARGE_TIERS[0].price;
 
 export const PRODUCT_PRICE_HINT: Partial<Record<ProductKey, { zh: string; en: string }>> = {
-  chatx: { zh: `套餐 ${CHATX_FROM} USD/月起`, en: `Plans from $${CHATX_FROM}/mo` },
+  chatx: {
+    zh: `免费开始 · 新人 ${NEWBIE_PACK.price}U · 充值 ${CHATX_TOPUP_FROM}U 起（无月费）`,
+    en: `Free start · ${NEWBIE_PACK.price}U newcomer pack · top up from ${CHATX_TOPUP_FROM}U (no monthly fee)`,
+  },
   reachx: { zh: "邀请制 · 评估后报价", en: "Invite-only · quoted" },
   voicex: {
     zh: `幻境 STUDIO 标准版 ${studioTier("standard").monthly} USD/月起（会员 ${STUDIO_PAID_FROM} 起）`,

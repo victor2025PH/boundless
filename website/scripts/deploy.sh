@@ -138,26 +138,62 @@ log "2/7 extract stage"
 rm -rf "$STAGE" && mkdir -p "$STAGE"
 tar -xzf "$TARBALL" -C "$STAGE"
 
-# 2026-08-19 部署防呆：拒绝「更旧的提交」覆盖线上（rsync --delete 下旧树部署=静默整站回滚，
-# 当日实锤抹掉了两条线的已上线工作）。比较包内与线上 .deploy-meta.json 的 commit_ts；
-# 旧包默认拒绝并指路 git pull，显式 FORCE_OLDER=1 才放行（真要回滚时用备份 tar 更干净）。
-# 包内缺 meta（老版 deploy.ps1 / 手工 tar）→ 只告警不拦（老脚本打的包挡不住，尽力而为）。
-log "2.5/7 staleness guard (.deploy-meta.json)"
-NEW_META="$STAGE/.deploy-meta.json"
-CUR_META="$APP_DIR/.deploy-meta.json"
-if [ -f "$NEW_META" ]; then
-  NEW_TS=$(python3 -c "import json;print(int(json.load(open('$NEW_META')).get('commit_ts') or 0))" 2>/dev/null || echo 0)
-  CUR_TS=0
-  [ -f "$CUR_META" ] && CUR_TS=$(python3 -c "import json;print(int(json.load(open('$CUR_META')).get('commit_ts') or 0))" 2>/dev/null || echo 0)
-  if [ "$NEW_TS" -gt 0 ] && [ "$CUR_TS" -gt 0 ] && [ "$NEW_TS" -lt "$CUR_TS" ] && [ "${FORCE_OLDER:-0}" != "1" ]; then
-    fail "incoming commit ($(date -u -d @"$NEW_TS" +%F\ %T 2>/dev/null || echo "$NEW_TS")) is OLDER than deployed ($(date -u -d @"$CUR_TS" +%F\ %T 2>/dev/null || echo "$CUR_TS"))"
-    fail "  your website tree is stale — run: git pull  (or FORCE_OLDER=1 bash deploy.sh ... to override)"
+# 2026-08-20 部署防呆（fail-closed）：
+#   8/19 加的 commit_ts 检查被绕过三次洞：① 每次部署都用客户端上传的 deploy.sh 覆盖服务器脚本，
+#   旧树带着无防呆的旧脚本上来；② 缺 .deploy-meta.json 只 WARN 不拦；③ rsync --delete 把线上
+#   基准 meta 删掉，之后防呆永久空转。
+# 现规则（FORCE_OLDER=1 才放行，真回滚请用备份 tar）：
+#   · 包内必须有 .deploy-epoch，且 ≥ MIN_EPOCH（旧树没有这个文件 → 直接拒绝）
+#   · 不得低于线上已部署的 epoch
+#   · 包内必须有 .deploy-meta.json；commit_ts 不得比线上更旧
+# 本脚本针定在 /home/ubuntu/deploy.sh（chattr +i），客户端不再覆盖它。
+MIN_EPOCH=20260819
+read_epoch() {
+  local f="$1" e=0
+  if [ -f "$f" ]; then
+    e="$(tr -cd '0-9' < "$f" | head -c 16)"
+  fi
+  echo "${e:-0}"
+}
+log "2.5/7 staleness guard (.deploy-epoch + .deploy-meta.json, fail-closed)"
+NEW_EPOCH="$(read_epoch "$STAGE/.deploy-epoch")"
+CUR_EPOCH="$(read_epoch "$APP_DIR/.deploy-epoch")"
+if [ "${FORCE_OLDER:-0}" != "1" ]; then
+  if [ "$NEW_EPOCH" -lt "$MIN_EPOCH" ]; then
+    fail "incoming .deploy-epoch missing or below floor $MIN_EPOCH (got $NEW_EPOCH) — stale website tree, refused"
+    fail "  deploy only from the canonical repo (D:\\boundless\\website). Old worktree copies cannot overwrite production."
     rm -rf "$STAGE"
     exit 1
   fi
-  log "meta OK: incoming commit_ts=$NEW_TS current=$CUR_TS ($(python3 -c "import json;m=json.load(open('$NEW_META'));print(str(m.get('commit') or '')[:8], m.get('host') or '?')" 2>/dev/null || echo '?'))"
+  if [ "$CUR_EPOCH" -gt 0 ] && [ "$NEW_EPOCH" -lt "$CUR_EPOCH" ]; then
+    fail "incoming epoch $NEW_EPOCH is older than deployed $CUR_EPOCH — refused"
+    rm -rf "$STAGE"
+    exit 1
+  fi
+  NEW_META="$STAGE/.deploy-meta.json"
+  CUR_META="$APP_DIR/.deploy-meta.json"
+  if [ ! -f "$NEW_META" ]; then
+    fail "incoming package has no .deploy-meta.json — refused (old deploy.ps1 / hand-rolled tar)"
+    rm -rf "$STAGE"
+    exit 1
+  fi
+  NEW_TS=$(python3 -c "import json;print(int(json.load(open('$NEW_META')).get('commit_ts') or 0))" 2>/dev/null || echo 0)
+  CUR_TS=0
+  [ -f "$CUR_META" ] && CUR_TS=$(python3 -c "import json;print(int(json.load(open('$CUR_META')).get('commit_ts') or 0))" 2>/dev/null || echo 0)
+  if [ "$NEW_TS" -le 0 ]; then
+    fail "incoming .deploy-meta.json has no commit_ts — refused"
+    rm -rf "$STAGE"
+    exit 1
+  fi
+  if [ "$CUR_TS" -gt 0 ] && [ "$NEW_TS" -lt "$CUR_TS" ]; then
+    fail "incoming commit ($(date -u -d @"$NEW_TS" +%F\ %T 2>/dev/null || echo "$NEW_TS")) is OLDER than deployed ($(date -u -d @"$CUR_TS" +%F\ %T 2>/dev/null || echo "$CUR_TS"))"
+    fail "  your website tree is stale — run: git pull  (or FORCE_OLDER=1 to override)"
+    rm -rf "$STAGE"
+    exit 1
+  fi
+  log "guard OK: epoch $NEW_EPOCH (live $CUR_EPOCH) commit_ts=$NEW_TS live=$CUR_TS ($(python3 -c "import json;m=json.load(open('$NEW_META'));print(str(m.get('commit') or '')[:8], m.get('host') or '?')" 2>/dev/null || echo '?'))"
 else
-  log "WARN no .deploy-meta.json in package (old deploy.ps1?) — staleness guard skipped"
+  log "WARN FORCE_OLDER=1 — staleness guard bypassed"
 fi
 
 log "3/7 sync into place (keep .env.local/node_modules/.next, prune stale)"
@@ -225,6 +261,25 @@ SETUP_KEY=$(grep -E '^TELEGRAM_SETUP_KEY=' "$APP_DIR/.env.local" 2>/dev/null | s
 if [ -n "$SETUP_KEY" ]; then
   IN_RES=$(curl -s -m 20 -X POST -H "x-setup-key: $SETUP_KEY" "http://127.0.0.1:$PORT/api/admin/indexnow" || echo '{"ok":false,"error":"curl_failed"}')
   log "indexnow ping: $IN_RES"
+fi
+
+# 成功后用本次包内的 scripts/deploy.sh 更新针定脚本。本机 chattr +i 需要 sudo；
+# 解不了锁就跳过自更新（站点已在上面起来，绝不能在这里把整次部署判失败）。
+PINNED="$PARENT/deploy.sh"
+PACKED_SH="$APP_DIR/scripts/deploy.sh"
+if [ -f "$PACKED_SH" ]; then
+  if sudo -n chattr -i "$PINNED" 2>/dev/null || chattr -i "$PINNED" 2>/dev/null; then
+    sed 's/\r$//' "$PACKED_SH" > "$PINNED.tmp"
+    chmod +x "$PINNED.tmp"
+    mv "$PINNED.tmp" "$PINNED"
+    if sudo -n chattr +i "$PINNED" 2>/dev/null || chattr +i "$PINNED" 2>/dev/null; then
+      log "pinned deploy.sh updated + immutable"
+    else
+      log "WARN pinned deploy.sh updated but could not re-lock"
+    fi
+  else
+    log "WARN pinned deploy.sh immutable and unlock failed — skip self-update (site already live)"
+  fi
 fi
 
 rm -rf "$STAGE" "$TARBALL"

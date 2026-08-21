@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { appendLead, upsertLead, type LeadRecord } from "@/lib/lead-store";
 import { createOrder, getOrder, notifyAdminsOfOrder } from "@/lib/order-store";
+import { newbieOrderGate } from "@/lib/newbie-gate";
+import { NEWBIE_PACK } from "@/lib/chatx-pricing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,6 +44,18 @@ export async function POST(req: NextRequest) {
     const contact = clean(data?.contact, 200);
     if (!contact || contact.length < 4) {
       return NextResponse.json({ ok: false, error: "contact_required" }, { status: 400 });
+    }
+
+    // 新人 6U 包下单预检（实施50 P1）：明确不合格的单在收钱前就拦下并给出人话原因；
+    // 履约端另有同口径终审（本闸 fail-open，绝不因台账抖动挡住结账）。
+    if (clean(data?.plan, 40).toLowerCase() === NEWBIE_PACK.key) {
+      const verdict = await newbieOrderGate({
+        contact,
+        fingerprint: clean(data?.fingerprint, 128),
+      });
+      if (!verdict.ok) {
+        return NextResponse.json({ ok: false, error: verdict.error }, { status: 400 });
+      }
     }
 
     // 支付方式白名单：usdt（默认）/ card；其余值一律按 usdt 处理。

@@ -7,6 +7,8 @@ import { hasConsoleSession } from "@/lib/console-auth";
 import {
   activationFunnel, cohortActivation, winbackList, type FunnelWindow,
 } from "@/lib/activation-funnel";
+import { trialPaidFunnel, type TrialPaidWindow } from "@/lib/trial-paid-funnel";
+import { newbieFunnel, type NewbieFunnelWindow } from "@/lib/newbie-funnel";
 import { Card, DataTable, EmptyState, PageHeader, SectionTitle, Td, fmtDateTime } from "../parts";
 import { WinbackContactButton, WinbackCopyButton } from "../ui";
 
@@ -62,8 +64,10 @@ function FunnelBlock({ w }: { w: FunnelWindow }) {
 
 export default async function FunnelPage() {
   if (!hasConsoleSession()) return null;
-  const [w7, w30, cohort, winback] = await Promise.all([
+  const [w7, w30, cohort, winback, p7, p30, n7, n30] = await Promise.all([
     activationFunnel(7), activationFunnel(30), cohortActivation(7), winbackList(7),
+    trialPaidFunnel(7), trialPaidFunnel(30),
+    newbieFunnel(7), newbieFunnel(30),
   ]);
 
   return (
@@ -92,6 +96,61 @@ export default async function FunnelPage() {
           <div className="grid gap-4 lg:grid-cols-2">
             <FunnelBlock w={w7} />
             <FunnelBlock w={w30} />
+          </div>
+
+          {/* P1-4（2026-08-18）：商业段——「试用→付费 ≥30%」的读数面。
+              cohort 口径：窗口内领试用，转化看截至现在（转化天然滞后于领取）；
+              付费真相=集团库 orders.paid_at（licenses 表刻意不当付费证据，
+              只经 identities 参与身份归并 join）。 */}
+          <div className="grid gap-4 lg:grid-cols-2">
+            {[p7, p30].map((p: TrialPaidWindow) => (
+              <Card key={p.days}>
+                <SectionTitle>💰 试用→付费（近 {p.days} 天领取的同期群）</SectionTitle>
+                {p.claimed > 0 ? (
+                  <div className="mt-2 text-sm text-slate-300">
+                    <span className={`text-xl font-bold tabular-nums ${
+                      (p.rate ?? 0) >= 30 ? "text-emerald-300" : "text-white"}`}>
+                      {p.rate ?? 0}%
+                    </span>
+                    <span className="ml-2 text-slate-500">
+                      {p.paid}/{p.claimed} 已转化（目标 ≥30%）
+                    </span>
+                    <div className="mt-1 text-[11px] text-slate-600">
+                      按指纹 {p.matched.fingerprint} · 按联系方式 {p.matched.contact} ·
+                      经身份归并 {p.matched.identity}
+                      {!p.ledger_present && " · ⚠ 集团库不可读，本读数不可信"}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-2 text-[12px] text-slate-500">
+                    窗口内暂无试用领取样本。
+                  </div>
+                )}
+              </Card>
+            ))}
+          </div>
+
+          {/* 实施50 P1：新人 6U 海报漏斗——曝光/点击是官网口径（桌面端弹窗曝光在引擎
+              ui-event-trend poster6u_ 前缀），订单/已付是全渠道口径（订单台账全域唯一）。 */}
+          <div className="grid gap-4 lg:grid-cols-2">
+            {[n7, n30].map((n: NewbieFunnelWindow) => (
+              <Card key={n.days}>
+                <SectionTitle>🎁 新人 6U 海报（近 {n.days} 天）</SectionTitle>
+                <div className="mt-2 flex flex-wrap items-baseline gap-x-5 gap-y-1 text-sm text-slate-300">
+                  <span>官网曝光 <b className="tabular-nums text-white">{n.poster_views}</b></span>
+                  <span>点击 <b className="tabular-nums text-white">{n.poster_clicks}</b></span>
+                  <span>下单 <b className="tabular-nums text-white">{n.orders_created}</b></span>
+                  <span>已付 <b className="tabular-nums text-emerald-300">{n.orders_paid}</b></span>
+                  {n.click_to_paid !== null && (
+                    <span className="text-slate-500">点击→已付 {n.click_to_paid}%</span>
+                  )}
+                </div>
+                <div className="mt-1 text-[10.5px] text-slate-600">
+                  曝光/点击=官网海报；下单/已付=全渠道（含桌面弹窗引流，剔 e2e 测试单）。
+                  桌面端曝光看引擎 ui-event-trend（poster6u_ 前缀）。
+                </div>
+              </Card>
+            ))}
           </div>
 
           <Card>

@@ -3,32 +3,33 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import PricingPage from "@/components/PricingPage";
 import { SITE_URL } from "@/lib/site";
-import { autochatOffers, tokenPackOffers, translateOffers, toSchemaOffer } from "@/lib/pricing";
+import { tokenPackOffers, translateOffers, toSchemaOffer } from "@/lib/pricing";
 
 const LANGUAGES = { "zh-CN": "/pricing", en: "/en/pricing", "x-default": "/pricing" };
 
 export const metadata: Metadata = {
-  title: "价格 · 智聊 ChatX Token 分层套餐 · 无界科技 BOUNDLESS",
+  title: "价格 · 智聊 ChatX 按充值计费 · 不订阅 · 无界科技 BOUNDLESS",
   description:
-    "标准翻译永久免费不限字符；AI 回复 / 专业翻译 / 克隆语音按公示 Token 费率计量。免费版下载即用（注册送 10,000 体验 Token）· 个人版 39 USD/月 · 按量版 0 月费 · 团队版 49 USD/坐席/月（≥2 席）· 旗舰私有化 598 起。Token 包 9.9 USD 起，跨产品通用、12 个月有效；年付送 2 个月。",
+    "免费开始，按充值计费，不订阅：下载即用 + 标准翻译永久免费不限字符 + 每月 1,000 Token（注册再送 10,000）。充值 50U 起、1U = 1,500 Token，首充加赠最高 +40%（100U +5% · 200U +10% · 500U +20% · 1000U +30% · 5000U +35% · 10000U +40%）；新人 6U 大礼包 18,000 Token 双倍到账（注册 72 小时内）。企业合作年框与企业级私有化部署面议。",
   alternates: { canonical: "/pricing", languages: LANGUAGES },
   openGraph: {
-    title: "价格 · 翻译永久免费，只为成交付费 · 无界科技",
+    title: "价格 · 免费开始，充多少用多少 · 无界科技",
     description:
-      "智聊 ChatX 新价格体系：免费版 / 个人版 39 / 按量版 / 团队版 49 每坐席 / 旗舰 598。标准翻译免费不限量，AI 用量按 Token 透明计价，用尽自动降级永不断线。",
+      "智聊 ChatX 充值计费：50U 起充、首充最高 +40%，新人 6U 大礼包双倍到账。标准翻译免费不限量，用尽自动降级永不断线；企业合作 / 私有化部署面议。",
     url: `${SITE_URL}/pricing`,
   },
 };
 
-// Token 分层体系全量结构化数据（订阅 + Token 包 + 翻译工作台；数字派生自 chatx-pricing 单源）
+// 充值计费结构化数据（充值档 + 新人包 + 翻译工作台；数字派生自 chatx-pricing 单源；
+// 2026-08-21 充值唯一化：停售订阅不进 JSON-LD）
 const pricingLd = {
   "@context": "https://schema.org",
   "@type": "Product",
-  name: "智聊 ChatX — AI 成交聊天系统（Token 分层套餐）",
+  name: "智聊 ChatX — AI 成交聊天系统（免费开始 · 按充值计费）",
   description:
-    "多平台统一收件箱 + AI 人设承接 + 免费标准翻译 + 人工接管。订阅含每月 Token，超出按 Token 包加购；标准翻译永久免费不限字符。",
+    "多平台统一收件箱 + AI 人设承接 + 免费标准翻译 + 人工接管。免费开始，充多少用多少：50U 起充、首充最高 +40%、新人 6U 大礼包双倍到账；标准翻译永久免费不限字符。",
   brand: { "@type": "Organization", name: "无界科技 BOUNDLESS" },
-  offers: [...autochatOffers, ...tokenPackOffers, ...translateOffers].map(toSchemaOffer),
+  offers: [...tokenPackOffers, ...translateOffers].map(toSchemaOffer),
 };
 
 export default function PricingRoute() {

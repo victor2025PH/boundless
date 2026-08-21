@@ -142,8 +142,8 @@ export const CHATX = {
         //（注册送 10,000 体验 Token，与 /pricing、下单页同源），不再引导「找顾问拿试用码」。
         q: { zh: "免费吗？怎么获得正式授权？", en: "Is it free? How do I get a license?" },
         a: {
-          zh: "下载即是免费版（非限时试用）：标准翻译永久免费不限字符 + 每月 1,000 Token，注册再送 10,000 体验 Token。要更多账号、坐席与 Token，去官网报价页自助购买（个人版 39 USD/月起，到账自动开通），无需找顾问。",
-          en: "The download is the Free plan (not a timed trial): unlimited standard translation forever plus 1,000 tokens/mo, with 10,000 bonus tokens on signup. Need more accounts, seats or tokens? Self-serve on the pricing page (Personal from 39 USD/mo, auto-activation) — no sales call required.",
+          zh: "下载即免费开始（非限时试用）：标准翻译永久免费不限字符 + 每月 1,000 Token，注册再送 10,000 体验 Token。要更多 AI 用量直接充值（50U 起、1U = 1,500 Token、首充最高 +40%；新人 6U 大礼包双倍到账），到账自动开通，无需找顾问。",
+          en: "The download is the free start (not a timed trial): unlimited standard translation forever plus 1,000 tokens/mo, with 10,000 bonus tokens on signup. Need more AI usage? Just top up (from 50U at 1U = 1,500 tokens, up to +40% on your first top-up; newcomer 6U pack at double rate) — auto-activation, no sales call required.",
         },
       },
     ],

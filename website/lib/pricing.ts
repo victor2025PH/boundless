@@ -123,24 +123,10 @@ export const livexOffers: PriceOffer[] = [
   },
 ];
 
-/** AI auto-closing chat system — Token 分层体系（2026-08-19 定价决议）。
- *  数字单一真相在 lib/chatx-pricing.ts::CHATX_PLANS / TOKEN_PACKS，本数组按
- *  schema.org PriceOffer 形状派生（个人 39 / 团队 49 每坐席 / 旗舰 598），
- *  layout.tsx JSON-LD 与 order-lines 消费。改价改 chatx-pricing.ts，勿在此手写数字。
- *  旧 chatx-entry(58)/chatx-team(198) 停售 → legacyAutochatOffers 台账反查。 */
-export const autochatOffers: PriceOffer[] = chatxSchemaOffers()
-  .filter((o) => o.unit === "month")
-  .map((o) => ({
-    id: o.id,
-    skuId: o.skuId,
-    name: o.name,
-    price: o.price,
-    currency: "USD",
-    unit: "month",
-    description: o.description,
-  }));
-
-/** Token 包（一次性 · 12 个月有效 · 跨 ChatX/LingoX 通用）——同样派生自 chatx-pricing.ts。 */
+/** Token 充值档（一次性 · 跨 ChatX/LingoX 通用；2026-08-21 充值唯一化后 = ChatX
+ *  仅有的自助挂牌商品）——派生自 chatx-pricing.ts（导出名沿用 tokenPackOffers，
+ *  消费方零改动）。订阅三档（chatx-personal/pro/flagship）2026-08-21 停售 →
+ *  legacyAutochatOffers 台账反查，不再进任何页面/JSON-LD。 */
 export const tokenPackOffers: PriceOffer[] = chatxSchemaOffers()
   .filter((o) => o.unit === "one-time")
   .map((o) => ({
@@ -171,10 +157,24 @@ export const translateOffers: PriceOffer[] = [
   },
 ];
 
-/** ⚠ 2026-08-19 停售台账（勿删）：仅供 findOfferBySkuId 反查历史订单，不进任何页面/JSON-LD。 */
+/** ⚠ 停售台账（勿删）：仅供 findOfferBySkuId 反查历史订单，不进任何页面/JSON-LD。
+ *  2026-08-21 充值唯一化：订阅三档（基础 39 / 专业 99 / 旗舰 598）整体停售，
+ *  存量按期履约到期转充值——三条 offer 从在售数组平移到此。 */
 export const legacyAutochatOffers: PriceOffer[] = [
-  { id: "autochat-entry", skuId: "chatx-entry", name: "Entry (legacy)", price: "58", currency: "USD", unit: "month", description: "Discontinued 2026-08-19; superseded by ChatX Personal (39/mo)." },
-  { id: "autochat-team", skuId: "chatx-team", name: "Team (legacy)", price: "198", currency: "USD", unit: "month", description: "Discontinued 2026-08-19; superseded by ChatX Team per-seat (49/seat/mo)." },
+  { id: "autochat-personal", skuId: "chatx-personal", name: "Basic (legacy)", price: "39", currency: "USD", unit: "month", description: "Discontinued 2026-08-21; superseded by token top-ups (recharge-*). Active terms run to expiry." },
+  { id: "autochat-pro", skuId: "chatx-pro", name: "Pro (legacy)", price: "99", currency: "USD", unit: "month", description: "Discontinued 2026-08-21; superseded by token top-ups (recharge-*). Active terms run to expiry." },
+  { id: "autochat-flagship", skuId: "chatx-flagship", name: "Max (legacy)", price: "598", currency: "USD", unit: "month", description: "Discontinued 2026-08-21; private-deployment story continues as chatx-private-deploy (lead-based)." },
+  { id: "autochat-entry", skuId: "chatx-entry", name: "Entry (legacy)", price: "58", currency: "USD", unit: "month", description: "Discontinued 2026-08-19; superseded by ChatX Basic (39/mo), itself discontinued 2026-08-21." },
+  { id: "autochat-team", skuId: "chatx-team", name: "Team (legacy)", price: "198", currency: "USD", unit: "month", description: "Discontinued 2026-08-19; superseded by ChatX Pro (99/mo), itself discontinued 2026-08-21." },
+  { id: "autochat-team-seat", skuId: "chatx-team-seat", name: "Team per seat (legacy)", price: "49", currency: "USD", unit: "month", description: "Discontinued 2026-08-20; superseded by ChatX Pro (99/mo), itself discontinued 2026-08-21." },
+];
+
+/** ⚠ 2026-08-20 停售的旧 Token 包台账（勿删）：仅供 findOfferBySkuId 反查历史订单。 */
+export const legacyTokenPackOffers: PriceOffer[] = [
+  { id: "token-pack-s", skuId: "token-pack-s", name: "Token pack S (legacy)", price: "9.9", currency: "USD", unit: "one-time", description: "Discontinued 2026-08-20; superseded by the 50U top-up tier." },
+  { id: "token-pack-m", skuId: "token-pack-m", name: "Token pack M (legacy)", price: "49", currency: "USD", unit: "one-time", description: "Discontinued 2026-08-20; superseded by the 50U top-up tier." },
+  { id: "token-pack-l", skuId: "token-pack-l", name: "Token pack L (legacy)", price: "199", currency: "USD", unit: "one-time", description: "Discontinued 2026-08-20; superseded by the 200U top-up tier." },
+  { id: "token-pack-xl", skuId: "token-pack-xl", name: "Token pack XL (legacy)", price: "499", currency: "USD", unit: "one-time", description: "Discontinued 2026-08-20; superseded by the 500U top-up tier." },
 ];
 
 export const legacyTranslateOffers: PriceOffer[] = [
@@ -200,10 +200,10 @@ const ALL_OFFER_ARRAYS: readonly (readonly PriceOffer[])[] = [
   realtimeOffers,
   voiceOffers,
   livexOffers,
-  autochatOffers,
   tokenPackOffers,
   translateOffers,
   legacyAutochatOffers,
+  legacyTokenPackOffers,
   legacyTranslateOffers,
 ];
 

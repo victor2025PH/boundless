@@ -392,7 +392,7 @@ export async function POST(req: NextRequest) {
           o
             ? (lang === "zh"
                 ? `🔔 已绑定订单 <code>${o.id}</code>\n到账、开通、临期都会第一时间通知你。当前状态：${
-                    { pending: "待付款", paid: "已到账·开通中", activated: "已开通", cancelled: "已取消" }[o.status] ?? o.status
+                    { pending: "待付款", paid: "已到账·开通中", activated: "已开通", cancelled: "已取消", refunded: "已退款" }[o.status] ?? o.status
                   }。`
                 : `🔔 Bound to order <code>${o.id}</code>\nYou'll get payment, activation and renewal alerts here.`)
             : (lang === "zh"

@@ -10,7 +10,7 @@ const LANGUAGES = { "zh-CN": "/order", en: "/en/order", "x-default": "/order" };
 export const metadata: Metadata = {
   title: "Plans & Ordering · BOUNDLESS",
   description:
-    "Self-serve checkout: STUDIO plans (free face swap to start, unlimited usage on your hardware); ChatX token plans (Free to download · Personal 39 · Team 49/seat · Flagship 598, standard translation free forever); token packs from 9.9 shared across products. Monthly / quarterly / annual (2 months free), USDT or card, auto-activation.",
+    "Self-serve checkout: STUDIO plans (free face swap to start, unlimited usage on your hardware); ChatX pays by top-up with no subscription (free start · top up from 50U · up to +40% on the first top-up · 6U newcomer pack; standard translation free forever), tokens shared across ChatX & LingoX. USDT or card, auto-activation.",
   alternates: { canonical: "/en/order", languages: LANGUAGES },
   openGraph: {
     title: "Plans & Ordering · BOUNDLESS",
