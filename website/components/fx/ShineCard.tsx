@@ -57,7 +57,9 @@ export default function ShineCard({
       ref={ref}
       onMouseMove={onMove}
       onMouseLeave={onLeave}
-      className={`transition-transform duration-200 will-change-transform ${className ?? ""}`}
+      // will-change 不再常驻：触屏设备不倾斜却各建一个合成层（8 张充值卡 = 8 层，
+      // 低端机滚动白闪的来源）——由 .shine-card 的 hover+pointer:fine 媒体查询按需提升。
+      className={`shine-card transition-transform duration-200 ${className ?? ""}`}
       style={{ transformStyle: "preserve-3d", ...style }}
     >
       {/* 光泽层（跟随鼠标；无鼠标/reduced-motion 下停在右上作静态高光） */}

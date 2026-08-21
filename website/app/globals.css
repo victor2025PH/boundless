@@ -1392,6 +1392,55 @@ html[data-nav-open] .order-bar {
   .hero-line { opacity: 1; transform: none; }
 }
 
+/* ===== /order 首屏（order-hero）：首页首屏视觉语言的紧凑版 =====
+ * 背景层 = 极光（.hero-aurora 复用）+ 数据网格（.order-grid）+ 扫描线（.hero-scan 复用）
+ *        + 低密度数字雨（.order-rain，仅 md+ 且夜间——canvas 拖尾是深色填充，白底会糊）。
+ * 产品线切换时主张区 / 数据卡以 key 重挂，.order-swap 播一次入场（reduced-motion 关）。 */
+.order-grid {
+  background-image:
+    linear-gradient(rgba(148, 163, 184, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.05) 1px, transparent 1px);
+  background-size: 44px 44px;
+  -webkit-mask-image: radial-gradient(ellipse 64% 60% at 50% 28%, #000 22%, transparent 74%);
+  mask-image: radial-gradient(ellipse 64% 60% at 50% 28%, #000 22%, transparent 74%);
+}
+@keyframes order-swap-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+.order-swap {
+  animation: order-swap-in 0.28s cubic-bezier(0.22, 0.7, 0.3, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .order-swap { animation: none; }
+}
+
+/* ShineCard 合成层按需提升：只有真正会倾斜的设备（鼠标 + 未降级动画）才 will-change，
+ * 触屏 / reduced-motion 下不建层——低端机滚动白闪的治理点。 */
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .shine-card { will-change: transform; }
+}
+
+/* ---- /order 首屏日间版（完整双色适配，不走 keep-dark 偷懒）----
+ * 数字雨整层隐藏（拖尾深色填充在白底上只会发灰）；极光收成晨雾；网格/扫描线换深青细线。 */
+html[data-mode="day"] .order-rain { display: none; }
+html[data-mode="day"] .order-hero .hero-aurora {
+  opacity: 0.4;
+  filter: blur(34px) saturate(0.78) brightness(1.12);
+}
+html[data-mode="day"] .order-hero .hero-scan {
+  background: linear-gradient(180deg, rgba(8, 145, 178, 0.13), transparent);
+}
+html[data-mode="day"] .order-grid {
+  background-image:
+    linear-gradient(rgba(14, 116, 144, 0.09) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(14, 116, 144, 0.09) 1px, transparent 1px);
+}
+/* 轮换卖点渐变字：白底换深色三段渐变（顺带修首页 Hero 同类字在日间的可读性） */
+html[data-mode="day"] .hero-subrotate {
+  background-image: linear-gradient(90deg, #0e7490, #047857, #6d28d9);
+}
+
 /* ===== 产品 LOGO 星门喷涌（rAF 物理引擎驱动，见 IntroCover.tsx 的 tickGateEngine） =====
  * 位置/缩放/透明度全部由 JS 内联样式逐帧设置（transform/opacity 合成器友好）；
  * CSS 只负责基础盒模型、三层景深的辉光差异、以及冲越光门时的 launch 冲刺动画。 */

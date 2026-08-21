@@ -6,7 +6,7 @@ import Reveal from "./fx/Reveal";
 import { track } from "@/lib/track";
 import { TIERS } from "@/lib/avatarhub-pricing";
 
-/** 首页 → 客户端购买/下载 的引流横幅：自助漏斗入口（下载试用 → 订阅），与人工咨询并行。 */
+/** 首页 → 客户端购买/下载 的引流横幅：自助漏斗入口（下载试用 → 充值），与人工咨询并行。 */
 export default function ClientAppCTA() {
   const { lang } = useLang();
   const zh = lang === "zh";

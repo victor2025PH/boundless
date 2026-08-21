@@ -130,7 +130,7 @@ export default function AutoChat() {
           <Plans />
         </Reveal>
 
-        {/* WS-1 试用入口（首页显著位）：下载桌面端即领首装体验额度，与 /order 订阅并行 */}
+        {/* WS-1 试用入口（首页显著位）：下载桌面端即领首装体验额度，与 /order 充值自助下单并行 */}
         <Reveal className="mt-8 text-center">
           <a
             href={zh ? "/download/chatx" : "/en/download/chatx"}

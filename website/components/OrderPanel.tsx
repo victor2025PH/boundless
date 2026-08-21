@@ -4,12 +4,30 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
 import { QRCodeSVG } from "qrcode.react";
-import { BadgeCheck, Check, Copy, KeyRound, ShieldCheck, Sparkles, Timer, Wallet, X } from "lucide-react";
+import {
+  BadgeCheck,
+  Building2,
+  Check,
+  ChevronDown,
+  Coins,
+  Copy,
+  KeyRound,
+  Languages,
+  ServerCog,
+  ShieldCheck,
+  Sparkles,
+  Timer,
+  Wallet,
+  X,
+} from "lucide-react";
 import { useLang } from "./LanguageContext";
 import OrderStatusLookup from "./OrderStatusLookup";
 import Burst from "./fx/Burst";
+import MatrixRain from "./fx/MatrixRain";
 import Reveal from "./fx/Reveal";
-import RechargeOrderZone, { StickyOrderBar } from "./RechargeOrderZone";
+import HeroStatCards from "./HeroStatCards";
+import RotatingPerk from "./RotatingPerk";
+import RechargeOrderZone, { StickyOrderBar, type CreditView } from "./RechargeOrderZone";
 import { track } from "@/lib/track";
 import { BRAND_FILM } from "@/lib/film";
 import { BOT_HANDLE, CONTACT_URL, TELEGRAM_DISPLAY } from "@/lib/site";
@@ -33,10 +51,14 @@ import {
   familyDefaultTier,
   familyOfPlan,
   familyTiers,
+  rechargeCreditOf,
   resolvePlanAlias,
+  type FamilyMeta,
   type LineTier,
   type OrderFamily,
 } from "@/lib/order-lines";
+import { ACTIVATION_MINUTES, ORDER_HERO } from "@/lib/order-hero";
+import { ENTERPRISE_TRACKS } from "@/lib/chatx-pricing";
 
 const fmt = (n: number) => n.toLocaleString("en-US");
 
@@ -53,12 +75,115 @@ function clampSeats(t: LineTier, n: number): number {
   return Math.min(t.perSeat.max, Math.max(t.perSeat.min, Math.round(n) || t.perSeat.min));
 }
 
+/** 产品线 Tab 图标（lucide，避免引入 brand ProductIcon 的资源依赖）。 */
+const FAMILY_ICON: Record<OrderFamily, typeof Sparkles> = {
+  avatarhub: Sparkles,
+  tokens: Coins,
+  lingox: Languages,
+};
+
+/** 注册时间锚解析（秒 / 毫秒兼容）：必须是过去时间且 30 天内——垃圾值 / 陈年值
+ *  不进倒计时语义，返回 0（= 不显示倒计时，绝不显示一个错的钟）。 */
+function parseRegTs(raw: string | null): number {
+  const n = Number(raw || 0);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  const ms = n > 1e12 ? n : n * 1000;
+  const age = Date.now() - ms;
+  if (age < 0 || age > 30 * 86400e3) return 0;
+  return ms;
+}
+
+/** 首屏主张区（kicker / 脉冲徽章 / 两行大标题 / 轮换卖点 / 一句话副标题 + 规则折叠）。
+ *  外层以 key={family} 重挂：切产品线时 CSS 入场重播、规则折叠态自动复位。 */
+function OrderHeroCopy({
+  family,
+  familyMeta,
+  zh,
+}: {
+  family: OrderFamily;
+  familyMeta: FamilyMeta;
+  zh: boolean;
+}) {
+  const copy = ORDER_HERO[family];
+  const [rulesOpen, setRulesOpen] = useState(false);
+  return (
+    <>
+      {/* kicker：保住「购买与下单」的页面语义（SEO 词在 metadata/title 同在） */}
+      <div className="text-[11px] font-semibold uppercase tracking-[0.34em] text-slate-500">
+        {zh ? "购买与下单" : "Plans & Ordering"}
+      </div>
+
+      <div className="mt-4 flex justify-center">
+        <span className="inline-flex items-center gap-2 rounded-full border border-neon-cyan/25 bg-neon-cyan/[0.06] px-4 py-1.5 text-xs text-slate-200 shadow-[0_0_20px_rgba(34,211,238,0.15)]">
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-70" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
+          </span>
+          {zh ? copy.badge.zh : copy.badge.en}
+        </span>
+      </div>
+
+      {/* 两行大标题：宣言（实色）→ 解法（渐变，text-gradient 自带日间覆盖表） */}
+      <h1 className="mx-auto mt-5 max-w-3xl text-4xl font-black leading-[1.15] tracking-tight text-white md:text-6xl">
+        <span className="block">{zh ? copy.titleTop.zh : copy.titleTop.en}</span>
+        <span className="text-gradient block">{zh ? copy.titleAccent.zh : copy.titleAccent.en}</span>
+      </h1>
+
+      <RotatingPerk items={copy.rotating} zh={zh} />
+
+      <p className="mx-auto mt-4 max-w-2xl text-sm leading-relaxed text-slate-400 md:text-base">
+        {zh ? familyMeta.blurb.zh : familyMeta.blurb.en}
+        {family === "avatarhub" && (
+          <>
+            {" "}
+            <a href={zh ? "/download" : "/en/download"} className="text-neon-cyan hover:underline">
+              {zh ? "前往下载客户端 →" : "Download the client →"}
+            </a>
+          </>
+        )}
+        <button
+          type="button"
+          onClick={() => {
+            setRulesOpen((v) => {
+              if (!v) track("order_rules_expand", { family });
+              return !v;
+            });
+          }}
+          aria-expanded={rulesOpen}
+          className="ml-2 inline-flex items-center gap-0.5 align-baseline text-xs text-neon-cyan transition hover:underline"
+        >
+          {zh ? "详细规则" : "Full terms"}
+          <ChevronDown className={`h-3 w-3 transition-transform ${rulesOpen ? "rotate-180" : ""}`} />
+        </button>
+      </p>
+      {rulesOpen && (
+        <div className="mx-auto mt-3 max-w-2xl rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-xs leading-relaxed text-slate-500">
+          {zh ? familyMeta.rules.zh : familyMeta.rules.en}
+        </div>
+      )}
+    </>
+  );
+}
+
+/* RotatingPerk 已抽到 components/RotatingPerk.tsx（/pricing 首屏复用同款）。 */
+
 export default function OrderPanel() {
   const { lang } = useLang();
   const zh = lang === "zh";
-  const [family, setFamily] = useState<OrderFamily>("avatarhub");
+  // 2026-08-21 充值唯一化后主推产品线 = 智聊充值：无深链直进 /order 默认落 tokens
+  //（此前默认 avatarhub，想买智聊的人落地先看到 STUDIO 会员卡）；带 ?plan= 深链照旧
+  // 在 useLayoutEffect 里切到所属产品线，STUDIO 买家全部来自带参产品页，零损伤。
+  const [family, setFamily] = useState<OrderFamily>("tokens");
   const [period, setPeriod] = useState<Period>("monthly");
-  const [selected, setSelected] = useState("pro");
+  const [selected, setSelected] = useState(() => familyDefaultTier("tokens", TIERS));
+  // 首充 / 复充视角（tokens 家族）：卡片主数字、结算明细、吸底条随视角换口径——
+  // 复充老客看首充大数是预期错位，诚实的数字比大的数字更能让老客掏钱。
+  const [creditView, setCreditView] = useState<CreditView>("first");
+  // 新人 6U 真倒计时锚（ms）：深链 ?reg_ts=<注册时间> 带入（桌面端海报 CTA 追加，
+  // 跨仓待办），localStorage 兜底同会话续存。0 = 无锚 → 金卡不出任何倒计时（匿名
+  // 访客不做假倒计时，实施 50 决策不变）。倒计时纯展示；资格终审在履约端 72h 窗，
+  // 篡改参数只会看到错的钟，下单仍被 newbie-gate 拦并给人话文案。
+  const [regTs, setRegTs] = useState(0);
   // 坐席数（仅 perSeat 档生效；档位切换按各档下限重置，深链 ?seats= 预填）
   const [seats, setSeats] = useState(2);
   const [checkout, setCheckout] = useState(false);
@@ -75,6 +200,11 @@ export default function OrderPanel() {
     [tiers, selected],
   );
   const familyMeta = FAMILIES.find((f) => f.key === family) ?? FAMILIES[0];
+  // 充值档到账明细（结算条 / 确认弹窗共用；非充值档为 null 整段隐藏）
+  const selectedCredit = useMemo(
+    () => (family === "tokens" ? rechargeCreditOf(selected) : null),
+    [family, selected],
+  );
 
   // 深链预填：/order?plan=<档位|offer id>&period=quarterly|annual&fp=<指纹>——plan 跨三条产品线检索，
   // 命中即自动切到所属产品线（产品页「购买」按钮带参直达，见 config.example.yaml shop_url 注）。
@@ -96,6 +226,20 @@ export default function OrderPanel() {
     if (p === "annual" || p === "quarterly") setPeriod(p);
     const fp = q.get("fp");
     if (fp) setPrefillFp(fp.slice(0, 128));
+    // 新人 6U 真倒计时锚：?reg_ts= 优先，localStorage（bl-reg-ts）兜底续存——
+    // 从桌面海报点进来后刷新 / 二次访问倒计时不丢。
+    const rt = parseRegTs(q.get("reg_ts"));
+    if (rt) {
+      setRegTs(rt);
+      try {
+        localStorage.setItem("bl-reg-ts", String(rt));
+      } catch {}
+    } else {
+      try {
+        const saved = parseRegTs(localStorage.getItem("bl-reg-ts"));
+        if (saved) setRegTs(saved);
+      } catch {}
+    }
     const ref = q.get("ref");
     if (ref) setPrefillRef(ref.slice(0, 160));
     else {
@@ -133,53 +277,63 @@ export default function OrderPanel() {
   }, [selected, period, tier.oneTime, tier.perSeat, family, seats]);
 
   return (
-    <section className="relative pb-24 pt-32">
+    <section className="order-hero relative pb-24 pt-28">
+      {/* ── Hero 背景层（视觉语言对齐首页首屏：数字雨 + 极光 + 网格 + 扫描线）——
+            紧凑版：只铺首屏高度且底部渐隐，绝不压住下方卡片区；数字雨低密度、
+            仅 md+ 且暗色模式渲染（拖尾是深色填充，日间由 .order-rain 覆写隐藏）。 ── */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 h-[620px] overflow-hidden [mask-image:linear-gradient(#000_70%,transparent)]"
+      >
+        <MatrixRain className="order-rain absolute inset-0 hidden h-full w-full opacity-[0.11] md:block [mask-image:radial-gradient(ellipse_72%_68%_at_50%_26%,#000_8%,transparent_74%)]" />
+        <div className="hero-aurora absolute left-1/2 top-[-12%] h-[52vmax] w-[52vmax] -translate-x-1/2 rounded-full opacity-45" />
+        <div className="order-grid absolute inset-0" />
+        <div className="hero-scan absolute inset-x-0 top-0 h-36 opacity-25" />
+      </div>
       <div className="pointer-events-none absolute left-1/4 top-24 h-80 w-80 rounded-full bg-neon-violet/15 blur-[130px]" />
       <div className="pointer-events-none absolute right-1/4 top-96 h-72 w-72 rounded-full bg-neon-cyan/10 blur-[120px]" />
 
       <div className="relative mx-auto max-w-7xl px-5">
-        {/* ── 标题 ── */}
+        {/* ── 首屏主张区：kicker + 动态徽章 + 两行大标题 + 轮换卖点 + 一句话副标题。
+              整组随产品线切换（key 重挂 → .order-swap CSS 入场，reduced-motion 关）。 ── */}
         <Reveal eager className="text-center">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-neon-cyan/30 bg-neon-cyan/10 px-3 py-1 text-xs text-neon-cyan">
-            <Sparkles className="h-3.5 w-3.5" />
-            {zh ? "全程 USDT 结算 · 本地部署数据不出机房" : "Settled in USDT · local deployment, data stays on-prem"}
-          </span>
-          <h1 className="mt-4 text-3xl font-bold text-white md:text-5xl">
-            {zh ? "购买与下单" : "Plans & Ordering"}
-          </h1>
-          <p className="mx-auto mt-3 max-w-2xl text-slate-400">
-            {zh ? familyMeta.blurb.zh : familyMeta.blurb.en}
-            {family === "avatarhub" && (
-              <>
-                {" "}
-                <a href={zh ? "/download" : "/en/download"} className="text-neon-cyan hover:underline">
-                  {zh ? "前往下载客户端 →" : "Download the client →"}
-                </a>
-              </>
-            )}
-          </p>
+          <div key={family} className="order-swap">
+            <OrderHeroCopy family={family} familyMeta={familyMeta} zh={zh} />
+          </div>
         </Reveal>
 
         {/* ── 产品线切换（幻境 STUDIO / 智聊 / 通译）——eager：首屏关键交互不依赖滚动显现 ── */}
-        <Reveal eager className="mt-8 flex justify-center">
+        <Reveal eager delay={0.06} className="mt-7 flex justify-center">
           <div className="glass inline-flex max-w-full flex-wrap justify-center rounded-full border border-white/10 p-1">
-            {FAMILIES.map((f) => (
-              <button
-                key={f.key}
-                onClick={() => {
-                  setFamily(f.key);
-                  setSelected(familyDefaultTier(f.key, TIERS));
-                  track("order_family", { family: f.key });
-                }}
-                className={`rounded-full px-5 py-2 text-sm transition ${
-                  family === f.key
-                    ? "bg-gradient-to-r from-neon-cyan to-neon-violet font-medium text-ink-950"
-                    : "text-slate-300 hover:text-white"
-                }`}
-              >
-                {zh ? f.tab.zh : f.tab.en}
-              </button>
-            ))}
+            {FAMILIES.map((f) => {
+              const Icon = FAMILY_ICON[f.key];
+              return (
+                <button
+                  key={f.key}
+                  onClick={() => {
+                    setFamily(f.key);
+                    setSelected(familyDefaultTier(f.key, TIERS));
+                    track("order_family", { family: f.key });
+                  }}
+                  className={`inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-sm transition md:px-5 ${
+                    family === f.key
+                      ? "bg-gradient-to-r from-neon-cyan to-neon-violet font-medium text-ink-950"
+                      : "text-slate-300 hover:text-white"
+                  }`}
+                >
+                  <Icon className="h-3.5 w-3.5 shrink-0" />
+                  {zh ? f.tab.zh : f.tab.en}
+                </button>
+              );
+            })}
+          </div>
+        </Reveal>
+
+        {/* ── 关键数字数据卡（首页 Hero stats 同款 CountUp）：随产品线换数据组；
+              「到账 X 分钟」卡由 /api/order/stats 近 60 天实测 p50 替换，见 HeroStatCards ── */}
+        <Reveal eager delay={0.12}>
+          <div key={family} className="order-swap mt-7">
+            <HeroStatCards stats={ORDER_HERO[family].stats} zh={zh} />
           </div>
         </Reveal>
 
@@ -269,6 +423,12 @@ export default function OrderPanel() {
           <RechargeOrderZone
             zh={zh}
             selected={selected}
+            view={creditView}
+            regTs={regTs}
+            onViewChange={(v) => {
+              setCreditView(v);
+              track("order_credit_view", { view: v });
+            }}
             onSelect={(k) => {
               setSelected(k);
               track("order_tier", { tier: k });
@@ -354,6 +514,18 @@ export default function OrderPanel() {
                   {zh
                     ? `${fmt(tierPrice(tier, period))} × ${seats} 席`
                     : `${fmt(tierPrice(tier, period))} × ${seats} seats`}
+                </div>
+              )}
+              {/* 「所付即所得」：付款前把到账 Token / 有效期 / 等值 AI 回复摆在眼前 */}
+              {selectedCredit && (
+                <div className="text-[11px] tabular-nums text-slate-500">
+                  {zh
+                    ? `到账 ${fmt(creditView === "repeat" ? selectedCredit.repeat : selectedCredit.first)} Token · ${selectedCredit.months} 个月有效 · ≈ ${fmt(
+                        creditView === "repeat" ? selectedCredit.repliesRepeat : selectedCredit.repliesFirst,
+                      )} 条 AI 回复`
+                    : `${fmt(creditView === "repeat" ? selectedCredit.repeat : selectedCredit.first)} tokens credited · valid ${selectedCredit.months} mo · ≈ ${fmt(
+                        creditView === "repeat" ? selectedCredit.repliesRepeat : selectedCredit.repliesFirst,
+                      )} AI replies`}
                 </div>
               )}
             </div>
@@ -499,51 +671,60 @@ export default function OrderPanel() {
           </div>
         </Reveal>
 
-        {/* ── 信任区块：先试后买 / 密码学授权 / 到账自动核销 / 数据不出机房 ── */}
-        <Reveal className="mt-12">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {(
-              [
-                {
-                  icon: Timer,
-                  title: zh ? "先试后买" : "Try before you buy",
-                  desc: zh
-                    ? "免费版换脸直接用（输出带水印），效果满意再升级付费档；下载即用，无需信用卡。"
-                    : "The Free plan does face swap out of the box (watermarked). Upgrade only when you're satisfied — no card required.",
-                },
-                {
-                  icon: KeyRound,
-                  title: zh ? "密码学授权" : "Cryptographic licensing",
-                  desc: zh
-                    ? "Ed25519 签名 + 机器指纹绑定，兑换码在线激活即刻生效，不怕丢单。"
-                    : "Ed25519-signed licenses bound to your machine; redeem codes activate instantly.",
-                },
-                {
-                  icon: Wallet,
-                  title: zh ? "到账自动核销" : "Auto payment matching",
-                  desc: zh
-                    ? "每单唯一识别尾数，链上到账自动对单开通；进度随时自助可查。"
-                    : "Unique cent suffix per order — on-chain payments match automatically, status self-serve.",
-                },
-                {
-                  icon: BadgeCheck,
-                  title: zh ? "数据不出机房" : "Data stays on-prem",
-                  desc: zh
-                    ? "全部推理在你本机/内网运行，素材与产出不上传；产出带 C2PA 凭证可验真。"
-                    : "All inference runs on your hardware; nothing uploads. Outputs carry C2PA credentials.",
-                },
-              ] as const
-            ).map((c) => (
-              <div key={c.title} className="glass rounded-2xl border border-white/10 p-5">
-                <c.icon className="h-6 w-6 text-neon-cyan" />
-                <div className="mt-3 text-sm font-semibold text-white">{c.title}</div>
-                <p className="mt-1.5 text-xs leading-relaxed text-slate-400">{c.desc}</p>
-              </div>
-            ))}
-          </div>
-        </Reveal>
           </>
         )}
+
+        {/* ── 企业锚点（充值 tab 专属）：预算最大的两类客户不走自助结算，
+              年框协议 / 私有化部署直达商务——此前只在 /pricing 有卡，结算页是盲区 ── */}
+        {family === "tokens" && (
+          <Reveal className="mt-14">
+            <div className="mb-4 flex items-baseline gap-3">
+              <h2 className="text-xl font-bold text-white md:text-2xl">
+                {zh ? "预算超过 10000U？" : "Beyond 10000U?"}
+              </h2>
+              <span className="text-xs text-slate-500">
+                {zh ? "年框协议价 / 私有化部署 · 一对一评估报价" : "Annual frames / private deployment · quoted case by case"}
+              </span>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              {ENTERPRISE_TRACKS.map((t) => {
+                const Icon = t.key === "private-deploy" ? ServerCog : Building2;
+                return (
+                  <div key={t.key} className="glass flex flex-col rounded-2xl border border-neon-violet/25 p-6">
+                    <div className="flex items-center gap-3">
+                      <Icon className="h-7 w-7 shrink-0 text-neon-violet" />
+                      <div>
+                        <div className="font-semibold text-white">{zh ? t.name.zh : t.name.en}</div>
+                        <div className="mt-0.5 text-xs text-slate-500">{zh ? t.tagline.zh : t.tagline.en}</div>
+                      </div>
+                    </div>
+                    <ul className="mt-4 flex-1 space-y-2">
+                      {(zh ? t.points.zh : t.points.en).map((p) => (
+                        <li key={p} className="flex items-start gap-2 text-sm text-slate-300">
+                          <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-neon-violet" />
+                          {p}
+                        </li>
+                      ))}
+                    </ul>
+                    <a
+                      href={CONTACT_URL}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={() => track("order_contact_sales", { tier: t.key })}
+                      className="mt-5 rounded-full border border-neon-violet/40 py-2 text-center text-sm text-violet-300 transition hover:bg-neon-violet/10"
+                    >
+                      {zh ? "联系商务 · 获取方案" : "Contact sales"}
+                    </a>
+                  </div>
+                );
+              })}
+            </div>
+          </Reveal>
+        )}
+
+        {/* ── 信任区块：内容随产品线切换（此前被锁在 STUDIO 块里，
+              现金流主力的充值 tab 反而没有信任区） ── */}
+        {family !== "lingox" && <TrustGrid family={family} zh={zh} />}
 
         {/* ── 订单进度自助查询 ── */}
         <OrderStatusLookup />
@@ -565,6 +746,7 @@ export default function OrderPanel() {
         <StickyOrderBar
           zh={zh}
           selected={selected}
+          view={creditView}
           hidden={checkout}
           onOrder={() => {
             setCheckout(true);
@@ -582,6 +764,7 @@ export default function OrderPanel() {
             period={period}
             family={family}
             seats={tier.perSeat ? seats : 1}
+            creditView={creditView}
             initialFp={prefillFp}
             attributionRef={prefillRef}
             onClose={() => setCheckout(false)}
@@ -804,6 +987,85 @@ function PricingTable({
   );
 }
 
+/** 信任四卡：内容随产品线（tokens = 充值链路信任点；avatarhub = 本机算力信任点）。 */
+function TrustGrid({ family, zh }: { family: OrderFamily; zh: boolean }) {
+  const cards =
+    family === "tokens"
+      ? ([
+          {
+            icon: Wallet,
+            title: zh ? "到账自动核销" : "Auto payment matching",
+            desc: zh
+              ? `每单唯一识别尾数，链上到账自动对单开通，全程 ≈${ACTIVATION_MINUTES} 分钟；银行卡走 Stripe 安全支付。`
+              : `Unique cent suffix per order — payments match automatically, activation in ~${ACTIVATION_MINUTES} minutes. Cards go through Stripe.`,
+          },
+          {
+            icon: BadgeCheck,
+            title: zh ? "单号自助查询" : "Self-serve tracking",
+            desc: zh
+              ? "订单进度本页随时可查；绑定 Telegram 后到账、开通、临期自动私信提醒。"
+              : "Track any order right on this page; bind Telegram once for payment, activation and renewal alerts.",
+          },
+          {
+            icon: ShieldCheck,
+            title: zh ? "用尽永不断线" : "Never offline",
+            desc: zh
+              ? "Token 用尽自动降级到免费引擎，翻译与会话不中断——补充后即刻恢复满血。"
+              : "When tokens run out, ChatX gracefully falls back to free engines — nothing stops. Top up to restore full power.",
+          },
+          {
+            icon: Coins,
+            title: zh ? "一个钱包通用" : "One shared wallet",
+            desc: zh
+              ? "Token 跨智聊 / 通译同一钱包；会员中心粘贴凭证即到账，绑定下单联系方式防串号。"
+              : "Tokens are shared across ChatX & LingoX. Redeem vouchers in the membership center, bound to your order contact.",
+          },
+        ] as const)
+      : ([
+          {
+            icon: Timer,
+            title: zh ? "先试后买" : "Try before you buy",
+            desc: zh
+              ? "免费版换脸直接用（输出带水印），效果满意再升级付费档；下载即用，无需信用卡。"
+              : "The Free plan does face swap out of the box (watermarked). Upgrade only when you're satisfied — no card required.",
+          },
+          {
+            icon: KeyRound,
+            title: zh ? "密码学授权" : "Cryptographic licensing",
+            desc: zh
+              ? "Ed25519 签名 + 机器指纹绑定，兑换码在线激活即刻生效，不怕丢单。"
+              : "Ed25519-signed licenses bound to your machine; redeem codes activate instantly.",
+          },
+          {
+            icon: Wallet,
+            title: zh ? "到账自动核销" : "Auto payment matching",
+            desc: zh
+              ? "每单唯一识别尾数，链上到账自动对单开通；进度随时自助可查。"
+              : "Unique cent suffix per order — on-chain payments match automatically, status self-serve.",
+          },
+          {
+            icon: BadgeCheck,
+            title: zh ? "数据不出机房" : "Data stays on-prem",
+            desc: zh
+              ? "全部推理在你本机/内网运行，素材与产出不上传；产出带 C2PA 凭证可验真。"
+              : "All inference runs on your hardware; nothing uploads. Outputs carry C2PA credentials.",
+          },
+        ] as const);
+  return (
+    <Reveal className="mt-12">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {cards.map((c) => (
+          <div key={c.title} className="glass rounded-2xl border border-white/10 p-5">
+            <c.icon className="h-6 w-6 text-neon-cyan" />
+            <div className="mt-3 text-sm font-semibold text-white">{c.title}</div>
+            <p className="mt-1.5 text-xs leading-relaxed text-slate-400">{c.desc}</p>
+          </div>
+        ))}
+      </div>
+    </Reveal>
+  );
+}
+
 /** /api/payment/methods 的浏览器可见子集（见 lib/payment-settings.ts getPublicPaymentSettings）。 */
 interface PayMethodsInfo {
   usdt?: { enabled?: boolean; address?: string };
@@ -817,6 +1079,7 @@ function CheckoutModal({
   period,
   family,
   seats = 1,
+  creditView = "first",
   initialFp,
   attributionRef = "",
   onClose,
@@ -827,6 +1090,8 @@ function CheckoutModal({
   family: OrderFamily;
   /** 坐席数（仅 perSeat 档 >1；应付 = 单价 × seats）。 */
   seats?: number;
+  /** 首充 / 复充视角（充值档到账数按此口径展示）。 */
+  creditView?: CreditView;
   initialFp: string;
   /** 会话归因串（?ref=…，AI 坐席链接带入）：静默随单提交，不渲染任何 UI。 */
   attributionRef?: string;
@@ -845,6 +1110,8 @@ function CheckoutModal({
   const [method, setMethod] = useState<"usdt" | "card">("usdt");
   const [cardNotice, setCardNotice] = useState(false);
   const price = linePrice(tier, period, seats);
+  // 充值档到账明细（非充值档为 null → 到账/有效期两行整体隐藏）
+  const credit = family === "tokens" ? rechargeCreditOf(tier.key) : null;
   // 卡通道可用 = 后台启用 + 服务器已配 Stripe Secret；免费档（price=0）无可扣金额，不给卡入口。
   const cardAvailable = !!pay?.card?.enabled && pay?.cardSecretConfigured !== false && price > 0;
   const usdtAvailable = !pay || pay.usdt?.enabled !== false;
@@ -1025,6 +1292,39 @@ function CheckoutModal({
                         : "Annual"
             }
           />
+          {/* 充值档「所付即所得」：付款确认时刻必须看得到到账数与有效期 */}
+          {credit && (
+            <>
+              <Row
+                k={zh ? "到账 Token" : "Tokens credited"}
+                v={
+                  credit.newbie
+                    ? zh
+                      ? `${fmt(credit.first)}（2 倍率到账）`
+                      : `${fmt(credit.first)} (double rate)`
+                    : creditView === "repeat"
+                      ? zh
+                        ? `${fmt(credit.repeat)}（复充口径 · VIP 累充另加）`
+                        : `${fmt(credit.repeat)} (repeat · VIP loyalty extra)`
+                      : zh
+                        ? `${fmt(credit.first)}${credit.bonusPct ? `（含首充 +${credit.bonusPct}%）` : ""}`
+                        : `${fmt(credit.first)}${credit.bonusPct ? ` (incl. first +${credit.bonusPct}%)` : ""}`
+                }
+              />
+              <Row
+                k={zh ? "Token 有效期" : "Token validity"}
+                v={
+                  credit.newbie
+                    ? zh
+                      ? `${credit.months} 个月`
+                      : `${credit.months} months`
+                    : zh
+                      ? `实付 ${credit.months} 个月 · 赠送 6 个月先扣`
+                      : `paid ${credit.months} mo · bonus 6 mo, spends first`
+                }
+              />
+            </>
+          )}
           <Row
             k={zh ? "应付金额" : "Total"}
             v={tier.monthly === 0 ? `0 ${amountUnit}` : `${fmt(price)} ${amountUnit}`}

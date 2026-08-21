@@ -12,10 +12,12 @@
 //    「智聊 ChatX」产品线 Tab 整体由「充值」Tab 承接（tokens family 改名挂帅）；
 //    历史深链经 LEGACY_PLAN_MAP 平移到就近充值档，绝不 404/落空。
 import {
+  BONUS_VALID_MONTHS,
   CHATX_FREE,
   LINGOX_WORKBENCH,
   NEWBIE_PACK,
   RECHARGE_TIERS,
+  RECHARGE_TOKENS_PER_USD,
   SIGNUP_BONUS_TOKENS,
   VIP_REPEAT_BONUS_TIERS,
   rechargeBaseTokens,
@@ -122,11 +124,16 @@ export const LINGOX_TIERS: LineTier[] = [
 ];
 
 /** 产品线元信息：Tab 文案 + 面板首段（幻境 STUDIO 的「不按字符计费」话术只对本机算力
- *  产品成立，充值档按 Token 计量——文案必须随产品线切换，防承诺错位）。 */
+ *  产品成立，充值档按 Token 计量——文案必须随产品线切换，防承诺错位）。
+ *  2026-08-21 首屏 Hero 化：blurb 压缩为一句话副标题（首屏可读完），完整条款下沉到
+ *  rules 字段（首屏「详细规则」折叠区渲染）——信息没删，只是不再一次性砸在脸上。 */
 export interface FamilyMeta {
   key: OrderFamily;
   tab: { zh: string; en: string };
+  /** 一句话副标题（Hero 区，≤80 字） */
   blurb: { zh: string; en: string };
+  /** 完整条款（Hero「详细规则」折叠区；原 blurb 长文下沉于此，勿删信息） */
+  rules: { zh: string; en: string };
 }
 
 export const FAMILIES: FamilyMeta[] = [
@@ -134,8 +141,12 @@ export const FAMILIES: FamilyMeta[] = [
     key: "avatarhub",
     tab: { zh: "幻境 STUDIO ", en: "STUDIO" },
     blurb: {
-      zh: "幻境 STUDIO ：引擎跑在你自己的设备上——我们不卖算力，所以不按字符、张数、时长计费，用量不限。免费版即可换脸（输出带水印），付费档解锁作图、直播换脸、变声与同传。设备自备（下方有配置与配件清单），我们协助部署；到账后按机器指纹签发授权，客户端一键激活。",
-      en: "STUDIO: the engine runs on your own hardware — we don't sell compute, so there's no per-character or per-minute metering. The Free plan does face swap (watermarked); paid tiers unlock image gen, live swap, voice changer and interpreting. Bring your device (specs below), we help you deploy; licenses are issued against your machine fingerprint after payment.",
+      zh: "引擎跑在你自己的设备上——不按字符、张数、时长计费；免费版下载即可换脸，付费档解锁作图、直播换脸、变声与克隆音同传。",
+      en: "The engine runs on your own hardware — no per-character or per-minute metering. The Free plan does face swap; paid tiers unlock image gen, live swap, voice changer and interpreting.",
+    },
+    rules: {
+      zh: "我们不卖算力，引擎全部在你本机 / 内网运行，用量不限；免费版输出带合规水印。设备自备（下方有最低配置与配件清单），我们协助部署，远程代部署可预约；到账后按机器指纹签发 Ed25519 授权，客户端一键激活，产出默认带 C2PA 内容凭证。会员周期支持月付 / 季付 / 年付，私有化与企业定制走旗舰版咨询客服。",
+      en: "We don't sell compute — the engine runs entirely on your hardware with unlimited usage; Free-plan output is watermarked. Bring your own device (minimum specs and accessories below), we help you deploy, and remote installation can be booked. After payment an Ed25519 license is issued against your machine fingerprint for one-click activation; outputs carry C2PA credentials. Monthly / quarterly / annual billing; private deployment and enterprise customization go through the Flagship track.",
     },
   },
   {
@@ -144,8 +155,12 @@ export const FAMILIES: FamilyMeta[] = [
     key: "tokens",
     tab: { zh: "智聊 ChatX · 充值", en: "ChatX · Top up" },
     blurb: {
-      zh: "智聊 ChatX 按充值计费，不订阅：免费开始（下载即用 + 标准翻译免费不限量），要 AI 用量就充值——50U 起、1U = 1,500 Token；首笔充值按档一次性加赠 +5%~40%（每人一次，到账时核验），新人 6U 大礼包 18,000 Token（注册 72 小时内、每账号一次、不占首充资格）。实付 Token 12 个月有效（500U 及以上 24 个月）、赠送部分 6 个月先扣；5000U 起含专属客户经理与发票合同，年框合作 / 私有化部署请联系商务。",
-      en: "ChatX bills by top-up — no subscription. Start free (download & go with unlimited standard translation), then top up for AI usage: from 50U at 1U = 1,500 tokens. Your first top-up earns a once-per-person bonus of +5%–40% by tier (verified at fulfillment). Newcomer pack: 6U for 18,000 tokens within 72h of signup, once per account, without consuming the first-top-up bonus. Paid tokens valid 12 months (24 for 500U+), bonus tokens 6 months and spend first. From 5000U you get a dedicated account manager and invoicing; annual frames and private deployment are quoted by sales.",
+      zh: `免费开始，要 AI 用量就充值：${RECHARGE_TIERS[0].price}U 起、1U = ${fmtN(RECHARGE_TOKENS_PER_USD)} Token，Token 跨智聊 / 通译一个钱包。`,
+      en: `Start free, top up for AI usage: from ${RECHARGE_TIERS[0].price}U at 1U = ${fmtN(RECHARGE_TOKENS_PER_USD)} tokens — one wallet across ChatX & LingoX.`,
+    },
+    rules: {
+      zh: "首笔充值按到账金额向下取档一次性加赠 +5%~40%（每人一次，履约时核验，退款回收加赠）；新人 6U 大礼包 18,000 Token 双倍到账（注册 72 小时内、每账号一次、不占首充资格）。实付 Token 12 个月有效（500U 及以上档 24 个月），赠送部分 6 个月且先扣；复充按 VIP 累充等级自动加赠（累计 ≥500U 复充 +3%、≥2000U +5%、≥10000U +8%，与首充加赠不叠加）。5000U 起含专属客户经理与发票合同；年框合作 / 私有化部署请联系商务。",
+      en: "Your first top-up earns a once-per-person bonus of +5%–40% by tier (verified at fulfillment; refunds claw the bonus back). Newcomer pack: 6U for 18,000 tokens at double rate — within 72h of signup, once per account, without consuming the first-top-up bonus. Paid tokens are valid 12 months (24 for 500U+); bonus tokens last 6 months and spend first. Repeat top-ups earn automatic VIP loyalty bonuses (lifetime ≥500U → +3%, ≥2000U → +5%, ≥10000U → +8%; doesn't stack with the first-top-up bonus). From 5000U you get a dedicated account manager and invoicing; annual frames and private deployment are quoted by sales.",
     },
   },
   {
@@ -155,8 +170,12 @@ export const FAMILIES: FamilyMeta[] = [
     key: "lingox",
     tab: { zh: "智聊 · 翻译", en: "ChatX · Translate" },
     blurb: {
-      zh: "标准翻译已永久免费、不限字符（内置引擎，公平使用 200 万字符/日）——下载智聊 ChatX 即用，无需购买。本页只卖两样：翻译工作台（纯翻译团队的坐席订阅）与专业翻译所需的 Token（术语锁定 / 翻译记忆 / DeepL 认证 / 图片语音多模态，见「充值」）。原字符包 / 团队 / 专业订阅已停售，存量按公告换发升级。",
-      en: "Standard translation is now free forever with unlimited characters (built-in engine, fair use 2M chars/day) — just download ChatX. This tab sells two things only: the Translation Workbench (per-seat plan for translation-only teams) and tokens for pro translation (term-lock, memory, certified DeepL, multimodal — see the Top up tab). Legacy char packs and subscriptions are discontinued; existing customers get an upgrade conversion.",
+      zh: "标准翻译永久免费、不限字符，下载智聊 ChatX 即用；本页只卖翻译工作台（纯翻译团队按坐席）。",
+      en: "Standard translation is free forever with unlimited characters — just download ChatX. This tab sells one thing: the per-seat Translation Workbench for translation-only teams.",
+    },
+    rules: {
+      zh: "标准翻译由内置引擎提供，永久免费、不限字符（公平使用 200 万字符/日/授权）。专业翻译（术语锁定 / 翻译记忆 / DeepL 认证 / 图片语音多模态）按 Token 计量，见「充值」Tab。原字符包 / 团队 / 专业订阅已停售：存量订阅服务到期，字符包未用完的字符按 150 万字符 = 60,000 Token 免费换发（只多不少）。",
+      en: "Standard translation ships with the built-in engine — free forever, unlimited characters (fair use 2M chars/day per license). Pro translation (term-lock, memory, certified DeepL, multimodal) meters in tokens — see the Top up tab. Legacy char packs and subscriptions are discontinued: active plans run to term, and unused char-pack balances convert to 60,000 tokens per 1.5M chars, always in your favor.",
     },
   },
 ];
@@ -217,6 +236,56 @@ export function familyOfPlan(plan: string, avatarhubTiers: Tier[]): OrderFamily 
 export function familyDefaultTier(family: OrderFamily, avatarhubTiers: Tier[]): string {
   const tiers = familyTiers(family, avatarhubTiers);
   return (tiers.find((t) => t.hot) ?? tiers[0]).key;
+}
+
+/* ── 充值档到账明细（2026-08-21 首屏改版 C1：「所付即所得」）──────────────────
+ *  结算条 / 确认弹窗 / 吸底条三个消费面共用同一份数字——用户点「下单」前必须
+ *  看得到「这单到账多少 Token、多久有效、约等于多少条 AI 回复」。 */
+
+export interface RechargeCredit {
+  /** 首充口径到账（含一次性加赠） */
+  first: number;
+  /** 复充口径到账（基础额；VIP 累充另加，履约侧现算） */
+  repeat: number;
+  /** 首充加赠百分比（新人包 = 0，双倍率已含在 first 里） */
+  bonusPct: number;
+  /** 实付 Token 有效期（月）；新人包按赠送口径 6 个月 */
+  months: number;
+  newbie: boolean;
+  /** ≈ AI 回复条数（首充口径） */
+  repliesFirst: number;
+  /** ≈ AI 回复条数（复充口径） */
+  repliesRepeat: number;
+}
+
+/** 按 plan key 取充值到账明细；非充值档（STUDIO 会员 / 工作台）返回 null。 */
+export function rechargeCreditOf(planKey: string): RechargeCredit | null {
+  const perReply = tokenRate("ai_reply").tokens;
+  if (planKey === NEWBIE_PACK.key) {
+    const replies = Math.round(NEWBIE_PACK.tokens / perReply);
+    return {
+      first: NEWBIE_PACK.tokens,
+      repeat: NEWBIE_PACK.tokens,
+      bonusPct: 0,
+      months: BONUS_VALID_MONTHS,
+      newbie: true,
+      repliesFirst: replies,
+      repliesRepeat: replies,
+    };
+  }
+  const t = RECHARGE_TIERS.find((x) => x.key === planKey);
+  if (!t) return null;
+  const first = rechargeFirstTokens(t);
+  const repeat = rechargeBaseTokens(t);
+  return {
+    first,
+    repeat,
+    bonusPct: t.firstBonusPct,
+    months: rechargeValidMonths(t),
+    newbie: false,
+    repliesFirst: Math.round(first / perReply),
+    repliesRepeat: Math.round(repeat / perReply),
+  };
 }
 
 /** 免费开始指引（tokens 产品线面板下的「不用买也能用」提示）。 */

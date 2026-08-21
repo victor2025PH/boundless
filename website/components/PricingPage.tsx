@@ -18,11 +18,15 @@ import { useLang } from "./LanguageContext";
 import Reveal from "./fx/Reveal";
 import BorderBeam from "./fx/BorderBeam";
 import CountUp from "./fx/CountUp";
+import MatrixRain from "./fx/MatrixRain";
 import ShineCard from "./fx/ShineCard";
 import BonusLadder from "./BonusLadder";
+import HeroStatCards from "./HeroStatCards";
+import RotatingPerk from "./RotatingPerk";
 import { track } from "@/lib/track";
 import { CONTACT_URL } from "@/lib/site";
 import { STUDIO_PAID_FROM } from "@/lib/avatarhub-pricing";
+import { ORDER_HERO } from "@/lib/order-hero";
 import {
   AVG_VOICE_CHARS,
   BONUS_VALID_MONTHS,
@@ -60,35 +64,51 @@ export default function PricingPage() {
   const rechargeHref = (plan: string) => `${en}/order?plan=${plan}`;
 
   return (
-    <section className="relative pb-24 pt-32">
+    <section className="order-hero relative pb-24 pt-28">
+      {/* ── 首屏背景层（与 /order 同款视觉语言与日间规则：数字雨 + 极光 + 网格 + 扫描线；
+            底部渐隐不压内容；数字雨仅 md+ 且夜间——.order-rain 日间整层隐藏） ── */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 h-[620px] overflow-hidden [mask-image:linear-gradient(#000_70%,transparent)]"
+      >
+        <MatrixRain className="order-rain absolute inset-0 hidden h-full w-full opacity-[0.11] md:block [mask-image:radial-gradient(ellipse_72%_68%_at_50%_26%,#000_8%,transparent_74%)]" />
+        <div className="hero-aurora absolute left-1/2 top-[-12%] h-[52vmax] w-[52vmax] -translate-x-1/2 rounded-full opacity-45" />
+        <div className="order-grid absolute inset-0" />
+        <div className="hero-scan absolute inset-x-0 top-0 h-36 opacity-25" />
+      </div>
       <div className="pointer-events-none absolute left-1/4 top-24 h-80 w-80 rounded-full bg-neon-violet/15 blur-[130px]" />
       <div className="pointer-events-none absolute right-1/4 top-[30rem] h-72 w-72 rounded-full bg-neon-cyan/10 blur-[120px]" />
 
       <div className="relative mx-auto max-w-7xl px-5">
-        {/* ── Hero：核心价格主张 ── */}
+        {/* ── Hero：核心价格主张（决策页语义，与 /order 的「告别订阅时代」互补不重句） ── */}
         <Reveal eager className="text-center">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300/30 bg-emerald-300/10 px-3 py-1 text-xs text-emerald-300">
-            <Languages className="h-3.5 w-3.5" />
-            {zh ? "2026 充值计费 · 不订阅 · 标准翻译永久免费" : "2026 top-up billing · no subscription · translation free forever"}
-          </span>
-          <h1 className="mx-auto mt-4 max-w-3xl text-3xl font-bold leading-tight text-white md:text-5xl">
-            {zh ? (
-              <>
-                免费开始，
-                <span className="bg-gradient-to-r from-neon-cyan to-neon-violet bg-clip-text text-transparent">充多少用多少</span>
-              </>
-            ) : (
-              <>
-                Start free.
-                <span className="bg-gradient-to-r from-neon-cyan to-neon-violet bg-clip-text text-transparent"> Top up as you go.</span>
-              </>
-            )}
+          <div className="text-[11px] font-semibold uppercase tracking-[0.34em] text-slate-500">
+            {zh ? "价格与计费" : "Pricing & Billing"}
+          </div>
+          <div className="mt-4 flex justify-center">
+            <span className="inline-flex items-center gap-2 rounded-full border border-emerald-300/30 bg-emerald-300/10 px-4 py-1.5 text-xs text-emerald-300">
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-70" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
+              </span>
+              {zh ? "2026 充值计费 · 不订阅 · 标准翻译永久免费" : "2026 top-up billing · no subscription · translation free forever"}
+            </span>
+          </div>
+          <h1 className="mx-auto mt-5 max-w-3xl text-4xl font-black leading-[1.15] tracking-tight text-white md:text-6xl">
+            <span className="block">{zh ? "免费开始" : "Start free"}</span>
+            <span className="text-gradient block">{zh ? "充多少，用多少" : "Top up as you go"}</span>
           </h1>
-          <p className="mx-auto mt-4 max-w-2xl text-slate-400">
+          <RotatingPerk items={ORDER_HERO.tokens.rotating} zh={zh} />
+          <p className="mx-auto mt-4 max-w-2xl text-sm leading-relaxed text-slate-400 md:text-base">
             {zh
               ? `没有月费、没有档位墙：坐席、账号、平台、AI 人设、克隆音色、API 全部开放。1U = ${fmt(RECHARGE_TOKENS_PER_USD)} Token，首笔充值最高加赠 +${MAX_PCT}%；标准翻译永久免费不限字符，Token 用尽自动降级免费引擎，永不断线。`
               : `No monthly fee, no feature walls: seats, accounts, platforms, AI personas, cloned voices and API — all unlocked. 1U = ${fmt(RECHARGE_TOKENS_PER_USD)} tokens with up to +${MAX_PCT}% on your first top-up. Standard translation stays free and unlimited; exhausted wallets degrade gracefully, never offline.`}
           </p>
+        </Reveal>
+
+        {/* ── 关键数字数据卡（与 /order 同源同款；到账时长卡带实测替换） ── */}
+        <Reveal eager delay={0.1} className="mt-7">
+          <HeroStatCards stats={ORDER_HERO.tokens.stats} zh={zh} />
         </Reveal>
 
         {/* ── 免费开始横条（获客入口——所有付费档的共同起点） ── */}

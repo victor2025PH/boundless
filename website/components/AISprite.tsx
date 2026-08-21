@@ -80,14 +80,14 @@ const SECTION_NEWS: Record<"zh" | "en", Record<string, string[]>> = {
   zh: {
     autochat: ["AI 正在自动接待询盘…", "拟人回复 · 客户无感知…", "自动成交流程演示中…"],
     products: [`${PRODUCT_COUNT} 大引擎能力已就绪…`, "翻译 · 聊天 · 语音一站集成…", "挑一个引擎试试？"],
-    pricing: ["按需订阅 · 支持私有化…", "算一算你的获客 ROI…", "方案可按业务定制…"],
+    pricing: ["充多少用多少 · 不订阅…", "算一算你的获客 ROI…", "方案可按业务定制…"],
     proof: ["真实交付截图在此…", "数据不注水 · 可复核…"],
     contact: ["留下需求 · 1 对 1 方案…", "工程师在线 · 随时可聊…"],
   },
   en: {
     autochat: ["AI answering inquiries live…", "Human-like replies, seamless…", "Auto-closing demo running…"],
     products: [`${PRODUCT_COUNT} engines ready to deploy…`, "Translate · Chat · Voice in one…", "Pick an engine to try?"],
-    pricing: ["Subscribe or self-host…", "Estimate your lead-gen ROI…", "Plans tailored to your ops…"],
+    pricing: ["Pay as you go — no subscription…", "Estimate your lead-gen ROI…", "Plans tailored to your ops…"],
     proof: ["Real delivery screenshots…", "Verifiable numbers only…"],
     contact: ["Leave a brief, get a plan…", "Engineers online now…"],
   },

@@ -654,7 +654,7 @@ const zh: Dict = {
     extras: [
       "场景深度定制开发 · 咨询报价",
       "上门 / 驻场部署 · 咨询报价（含差旅）",
-      "运维订阅 · 198 / 月 或 1998 / 年",
+      "运维托管 · 198 / 月 或 1998 / 年",
       "按次远程协助 · 160 / 小时",
     ],
     capacityNote: "硬件归你所有、数据私有不出网；我们提供从选型到部署、定制与运维的全流程技术服务，适用于任何场景。",
@@ -1272,7 +1272,7 @@ const en: Dict = {
     extras: [
       "Custom development · quoted per scope",
       "On-site deployment · quoted (incl. travel)",
-      "Maintenance subscription · 198/mo or 1998/yr",
+      "Managed maintenance · 198/mo or 1998/yr",
       "Per-session remote help · 160/hour",
     ],
     capacityNote: "You own the hardware and your data stays private, off the public net; we provide end-to-end service from selection to deployment, customization and ops — for any scenario.",

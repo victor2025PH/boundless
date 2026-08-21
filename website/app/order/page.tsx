@@ -15,7 +15,9 @@ export const metadata: Metadata = {
   },
   openGraph: {
     title: "购买与下单 · 无界科技 BOUNDLESS",
-    description: "幻境 STUDIO 免费换脸起步，会员 39 USD/月起（月付 / 季付 / 年付），本机算力用量不限；旗舰版私有部署咨询客服。支持 USDT 结算，数据不出机房。",
+    // 与主 description 同一叙事顺序（充值唯一化后主推=智聊充值；此前这里还是纯 STUDIO 旧文案）
+    description:
+      "告别订阅：智聊 ChatX 充多少用多少——1U = 1,500 Token，首充最高 +40%，新人 6U 大礼包 18,000 Token，标准翻译永久免费。幻境 STUDIO 免费换脸起步、本机算力用量不限。USDT / 银行卡结算，到账自动开通。",
     url: `${SITE_URL}/order`,
   },
 };
