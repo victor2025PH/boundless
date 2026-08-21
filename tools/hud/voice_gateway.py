@@ -276,7 +276,7 @@ VERBS = {
     # panel/drill 必须排在 detail 之前：「打开X的操作盘」「看看X的服务」含 detail 触发词，
     # dict 序=匹配优先级（P2 语音开盘 / P4 语音下钻 2026-08-12）
     "panel":    (["操作盘", "操作面板", "caozuopan"],                  True,  "T0"),
-    "drill":    (["下钻", "的服务", "xiazuan"],                        True,  "T0"),
+    "drill":    (["下钻", "的服务", "xiazuan", "拆解", "开坛"],         True,  "T0"),
     "detail":   (["放大", "看看", "看一下", "打开", "详情", "fangda"], True,  "T0"),
     "view":     (["星座", "表格", "列表", "事件", "告警流", "概览"],   False, "T0"),
     "collapse": (["收起", "返回", "关闭面板", "shouqi"],               False, "T0"),
@@ -371,8 +371,9 @@ def _exec_intent(it: dict) -> tuple[str, dict, bool]:
         # P2 语音开盘：面板动作仍全走既有护栏（危险动词面板只武装,点火要第二段在场信号）
         return f"已打开{mzh}的操作盘。", {"act": "panel", "m": mid}, True
     if verb == "drill":
-        # P4 语音下钻：子星环绕看服务；救活仍两段式（无编目服务时客户端退操作盘）
-        return f"已下钻{mzh}的服务。", {"act": "drill", "m": mid}, True
+        # P4 语音下钻→开坛拆解（2026-08-22 道家法器方案：同一 act 通道，「拆解/开坛」同义词直达）；
+        # 救活仍两段式（无编目服务时客户端退操作盘）
+        return f"已开坛拆解{mzh}的法器。", {"act": "drill", "m": mid}, True
     if verb == "show":
         # P2 演示状态宏（2026-08-18 三轮）：客户端 setShow=粒子×2+辉光增强+切全息（纯呈现层）
         return "演示状态已开，特效全开。", {"act": "show"}, True

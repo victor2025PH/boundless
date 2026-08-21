@@ -254,6 +254,119 @@ def gest_arbitrate(cands: dict, cur: str, now: float) -> str:
 _svc_cache: dict = {"ts": 0.0, "data": {}}
 
 
+# ---- 开坛拆解 P3（2026-08-22 道家法器方案 D4）：大模型灵珠富化 ----
+# 「这台机装了哪几个 AI」的完整答案在大模型不在引擎：期望=modes.json 当前模式 ollama_pin 净期望
+# （enabled:false 跳过，(宿主,模型) 后写胜出与执行器同语义）+ wsl_unit_start(vLLM) 健康口；
+# 现实=各 ollama 宿主 /api/ps 直探（size_vram=实测显存=真数据）+ vLLM /v1/models 探活。
+# 探测跑在后台线程（30s 一巡，_NOPROXY 绕系统代理=LAN 探测纪律）——SSE 广播零阻塞；
+# 已装载模型全部外显（散客也是机上真相）；期望在而装载缺席=up:false（泊车灰——告警主权在
+# posture/keeper，灵珠只陈述不另设告警口）。任一文件/探测缺席=静默降级引擎-only。
+_pearl_cache: dict = {"ts": 0.0, "ps": {}, "vllm": {}, "expect": {}, "vsteps": [], "thr": False}
+
+
+def _ollama_ps(base: str) -> list:
+    req = urllib.request.Request(base.rstrip("/") + "/api/ps")
+    with _NOPROXY.open(req, timeout=1.5) as r:
+        models = json.loads(r.read().decode("utf-8", "replace")).get("models") or []
+    out = []
+    for m in models:
+        name = str(m.get("name") or m.get("model") or "").strip()
+        if name:
+            out.append({"n": name.split(":latest")[0],
+                        "vram": round(float(m.get("size_vram") or 0) / 2**30, 1)})
+    return out
+
+
+def _pearl_refresh() -> None:
+    cur = str(json.loads((AVATARHUB / "logs" / "cluster_mode.json")
+                         .read_text(encoding="utf-8")).get("mode") or "")
+    mode = (json.loads(_MODES_JSON.read_text(encoding="utf-8-sig")).get("modes") or {}).get(cur) or {}
+    cm_map = json.loads((AVATARHUB / "cluster_map.json").read_text(encoding="utf-8"))
+    hub_ip = str(((cm_map.get("hub") or {}).get("ip")) or "")
+
+    def _ip(url: str) -> str:   # 执行器视角的 127.0.0.1=中枢本机（modes.json 步骤按执行地写地址）
+        m2 = re.search(r"//([0-9a-zA-Z.\-]+):", str(url or ""))
+        ip = m2.group(1) if m2 else ""
+        return hub_ip if ip in ("127.0.0.1", "localhost", "") else ip
+
+    expect: dict = {}
+    vsteps: list = []
+    for sect in (mode.get("machines") or {}).values():
+        for stp in (sect or {}).get("steps") or []:
+            if stp.get("enabled") is False:
+                continue
+            k = stp.get("kind") or ""
+            if k == "ollama_pin" and stp.get("base") and stp.get("model"):
+                expect[(_ip(stp["base"]), str(stp["model"]).split(":latest")[0])] = True
+            elif k == "wsl_unit_start" and stp.get("health"):
+                vsteps.append({"unit": str(stp.get("unit") or "vllm"),
+                               "port": stp.get("port"), "health": str(stp["health"]),
+                               "ip": _ip(stp["health"])})
+    hosts = set(ip for ip, _m in expect)
+    for ip, bk in (cm_map.get("vram_budget") or {}).items():   # ollama 宿主=显存账里带 ollama/vllm 编制的机器
+        if not isinstance(bk, dict):
+            continue
+        names = list((bk.get("services") or {}).keys())
+        for mv in (bk.get("mode_services") or {}).values():
+            names += list((mv or {}).keys())
+        if any(str(nm).startswith(("ollama", "vllm")) for nm in names):
+            hosts.add(ip)
+    ps: dict = {}
+    for ip in sorted(hosts):
+        try:
+            ps[ip] = _ollama_ps(f"http://{ip}:11434")
+        except Exception:
+            ps[ip] = None                     # 探测失败=该宿主未知（不冒充空清单）
+    vl: dict = {}
+    for stp in vsteps:
+        try:
+            req = urllib.request.Request(stp["health"])
+            with _NOPROXY.open(req, timeout=1.5) as r:
+                vl[stp["health"]] = (r.status == 200)
+        except Exception:
+            vl[stp["health"]] = False
+    _pearl_cache.update({"ts": time.time(), "ps": ps, "vllm": vl,
+                         "expect": expect, "vsteps": vsteps})
+
+
+def _pearl_loop() -> None:
+    while True:
+        try:
+            _pearl_refresh()
+        except Exception:
+            pass
+        time.sleep(30)
+
+
+def _merge_model_pearls(data: dict, ip2mid: dict) -> dict:
+    if not _pearl_cache["thr"]:
+        _pearl_cache["thr"] = True
+        threading.Thread(target=_pearl_loop, daemon=True).start()
+    if not _pearl_cache["ts"]:
+        return data                            # 首巡未归：引擎-only（诚实降级）
+
+    def _mid(ip: str) -> str:
+        return ip2mid.get(ip) or "zhongshu"
+
+    seen: set = set()
+    for ip, models in (_pearl_cache["ps"] or {}).items():
+        if models is None:
+            continue
+        for m3 in models:
+            data.setdefault(_mid(ip), []).append(
+                {"n": m3["n"], "up": True, "kind": "model", "vram": m3["vram"]})
+            seen.add((ip, m3["n"]))
+    for (ip, model) in (_pearl_cache["expect"] or {}).keys():
+        if (ip, model) in seen or (_pearl_cache["ps"] or {}).get(ip) is None:
+            continue                           # 已装载 / 宿主未知：不判缺席
+        data.setdefault(_mid(ip), []).append({"n": model, "up": False, "kind": "model"})
+    for stp in (_pearl_cache["vsteps"] or []):
+        up = bool((_pearl_cache["vllm"] or {}).get(stp["health"]))
+        nm = stp["unit"].replace(".service", "") + ((":" + str(stp["port"])) if stp.get("port") else "")
+        data.setdefault(_mid(stp["ip"]), []).append({"n": nm, "up": up, "kind": "model"})
+    return data
+
+
 def svc_by_machine() -> dict:
     now = time.time()
     if now - _svc_cache["ts"] < 15:
@@ -301,6 +414,10 @@ def svc_by_machine() -> dict:
                 old_kx = (_svc_cache.get("data") or {}).get("kouxing")
                 if old_kx:
                     data["kouxing"] = old_kx
+            try:
+                data = _merge_model_pearls(data, ip2mid)   # 开坛拆解：大模型灵珠（读后台缓存零延迟）
+            except Exception:
+                pass
             _svc_cache["data"] = data
     except Exception:
         pass                        # 保留上次数据（新鲜度换可用性；下一拍再试）

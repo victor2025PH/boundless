@@ -645,7 +645,7 @@ body.stagefull.holoview #ft{display:none}
   <i class="hcb tl"></i><i class="hcb tr"></i><i class="hcb bl"></i><i class="hcb br"></i>
   <div id="holoret"><i></i><i></i><i></i><i></i><b></b></div>
   <div id="holostat"></div><div id="holodrill"></div><div id="holopanel"></div>
-  <div id="holohint">三维全息 · 舰桥 — 捏合拉屏 · 竖拇指出操作盘</div></div>
+  <div id="holohint">三维全息 · 七星法坛 — 捏合拉屏 · 竖拇指出操作盘 · 双手捏拉=拆解法器</div></div>
   <div id="verdict"><span class="dot"></span><span id="vtxtline">—</span><span id="kpis"></span></div>
   <div id="vreason" title="点击展开/收起全文"></div>
   <div id="events"></div>
@@ -1122,13 +1122,16 @@ function demoCtx(scene){
   else if(scene==="stream"){ streaming=true;verdict="danger";reason="直播/推流中：换脸+同传+推流链路全在跑。"; }
   /* demo 卫星：星座视图可确定性出图（听写位低电示例=琥珀电量角标） */
   const stations=scene==="down"?{}:{lianbei:{connected:true,batt:83},tingxie:{connected:true,batt:24}};
-  /* demo 服务清单（P3 下钻确定性数据；口型故意缺席=「无编目服务」语境）：三色语义全覆盖——
+  /* demo 服务清单（P3 开坛拆解确定性数据；口型故意缺席=「无编目服务」语境）：三色语义全覆盖 +
+     kind:"model" 大模型灵珠样本（带实测显存=珠径/徽章确定性 QA）——
      warn 场景中枢 rvc 死可救(红)+ditto 泊车(灰)、听写 nemo 泊车；down 场景脸备 faceswap 死可救 */
   const svc={zhongshu:[{n:"faceswap2",up:true},{n:"fish_tts",up:true},{n:"vcam",up:true},
-      {n:"funasr_stt",up:true},{n:"rvc",up:scene!=="warn",fix:scene==="warn"},{n:"ditto",up:false}],
+      {n:"funasr_stt",up:true},{n:"rvc",up:scene!=="warn",fix:scene==="warn"},{n:"ditto",up:false},
+      {n:"bge-m3",up:true,kind:"model",vram:0.7}],
     lianbei:[{n:"faceswap",up:scene!=="down",fix:scene==="down"}],
-    tingxie:[{n:"stt",up:true},{n:"nemo_stt",up:scene!=="warn"}],
-    yunsheng:[{n:"index_tts",up:true},{n:"moss_ttsd",up:true},{n:"emotion_tts",up:true}],
+    tingxie:[{n:"stt",up:true},{n:"nemo_stt",up:scene!=="warn"},{n:"hy-mt2-7b",up:true,kind:"model",vram:5.3}],
+    yunsheng:[{n:"index_tts",up:true},{n:"moss_ttsd",up:true},{n:"emotion_tts",up:true},
+      {n:"gemma4",up:true,kind:"model",vram:6.0}],
     shengbei:[{n:"emotion_tts_standby",up:true},{n:"qwen3_tts",up:true}]};
   /* svcmany=1（demo 专用）：中枢服务清单补足 21 项合成条目——机柜双列布局/拥挤渐进披露的
      确定性 QA 数据（真集群 21 项只在真机上有，实拍矩阵不碰真数据纪律） */
@@ -1288,9 +1291,10 @@ let _narrAud=null,_narrHideT=0;
 function narrLineOf(mid){ const m=((state.ctx||{}).machines||[]).find(x=>x.id===mid)||{};
   const wx=(typeof HOLO_WUXING!=="undefined")?HOLO_WUXING[mid]:null;   /* 固定串=TTS 缓存首合成后仍逐字节命中 */
   const st=(typeof HOLO_SEAT!=="undefined")?HOLO_SEAT.find(q=>q.m===mid):null;   /* 北斗座次+晋书职掌入解说 */
-  if(m.id==="zhongshu") return "这里是中枢，"+String(m.role||"集群主控")+"。座天枢，斗为帝车，临制四方。";
+  const rl=(typeof HOLO_RELIC_ZH!=="undefined")?HOLO_RELIC_ZH[mid]:null;   /* 法器入解说（固定串，一次性重合成后缓存） */
+  if(m.id==="zhongshu") return "这里是中枢，"+String(m.role||"集群主控")+"。座天枢，斗为帝车，临制四方。执号令牌。";
   return "这里是"+(m.zh||mid)+"，"+String(m.role||"集群节点")+"。"
-    +(wx?("五行属"+wx[0]+"，"):"")+(st?("座"+st.star+"，"+st.duty+"。"):""); }
+    +(wx?("五行属"+wx[0]+"，"):"")+(st?("座"+st.star+"，"+st.duty+"。"):"")+(rl?("执"+rl+"。"):""); }
 function apNarr(text,urgent){
   if(!NARRATE||!text) return;
   if(!(holoS.tourFly||ap.on)) return;                    /* 只在飞览语境说话：手动看板不聒噪 */
@@ -1384,8 +1388,9 @@ function buildHelp(){
       +row("捏合","提取行 / 按下按钮 / 救活红星")
       +row("捏面板标题栏","抓移空中面板（松手停驻）")
       +row("双手撑开 / 收拢","详情卡开关；全息=缩放/俯仰/扭转=旋转；面板开着=缩放面板")
+      +row("双手各捏 · 拉开/合拢","拆解法器看内里（跟手预拆）/ 收坛拼合")
       +row("挥扫","切视图（疾扫=甩桌面跨屏）")
-      +row("握拳","收起 / 归还桌面 / 退出下钻")
+      +row("握拳","收起 / 归还桌面 / 收坛退出")
       +row("竖拇指 1.2s","确认告警 / 武装点火（在场信号）")
       +row("指向节点停留 1s","拉取该机桌面")
       +row("指向 + 竖拇指","打开节点操作盘")
@@ -1395,7 +1400,7 @@ function buildHelp(){
       +row("「小界小界」","唤醒（近讲麦 ≤半米；远场 ?mic=brio）")
       +row("看 / 放大 某机","聚焦并拉屏该机")
       +row("某机 的操作盘","打开节点操作盘")
-      +row("下钻 某机","服务子星下钻")
+      +row("下钻 / 拆解 某机","开坛验器：看这台机装的哪些 AI 与功效")
       +row("切到某模式","算力模式切换（两段式确认）")
       +row("一键归位","姿态失守时重申当前模式（需确认）")
       +row("什么模式 / 切换进度","问询当前算力模式")
@@ -2436,6 +2441,9 @@ function holoCardTex(THREE,m){
   if(_ipT(m)){ const nw=g.measureText(m.zh||m.id).width;
     g.fillStyle="#969CB0"; g.font="600 38px Consolas,monospace"; g.fillText(_ipT(m),44+nw+16,86); }
   g.beginPath(); g.arc(w-56,64,14,0,7); g.fillStyle=ok?C.ok:acc; g.fill();
+  const _sv=(((state.ctx||{}).svc)||{})[m.id]||[];   /* 内藏N灵（开坛拆解可发现性入口：拆开看它装的 AI） */
+  if(_sv.length){ g.textAlign="left"; g.fillStyle="#C8A96E"; g.font="600 26px 'Segoe UI',system-ui";
+    g.fillText("内藏 "+_sv.length+" 灵 · "+_sv.filter(s=>s.up).length+" 在跑 · 可拆解",44,118); }
   _hbar(g,44,140,w-88,"GPU",u>=0?u/100:0,u>=0?(u+"%"):"离线",u>=0?utilColor(u):"#5a6070",2);
   _hbar(g,44,200,w-88,"显存",vr,(vr*100).toFixed(0)+"%",C.violet,2);
   _hbar(g,44,260,w-88,"温度",tp>=0?Math.min(1,tp/90):0,tp>=0?(tp+"°"):"—",_htemp(tp),2);
@@ -2692,72 +2700,137 @@ const HOLO_SEAT=[
   {star:"开阳",duty:"阳为律",m:"kouxing", x: 2.75,z: 1.45},
   {star:"摇光",duty:"光为星",m:null,      x: 1.85,z: 2.95}
 ];
-function _maskArtTex(THREE){   /* 变脸面具脸谱（金线线描，D7 川剧风）：凤眼/眉焰/鼻梁/唇——蚀刻语言不上油彩 */
-  const w=256,h=320,c=document.createElement("canvas"); c.width=w; c.height=h;
+/* ============ 道家法器与开坛拆解（2026-08-22 五视角方案）============
+   六器→六法器（世界观收官：罗盘+北斗+太极本就是一座法坛的全部要素，法器入座=「七星法坛」自洽闭环）：
+   函数对职能、有出处、成对成语——号令牌=召神遣将(集群调度)/三清铃=振铃出声(主力TTS)/宝葫芦=悬壶储真
+   (备用声引擎,与铃「一鸣一藏」主备对)/敕令符=听声敕笔落音成文(STT,符箓即云篆天书)/八卦照妖镜=鉴形辨妖
+   幻化千面(换脸,接棒变脸面具的产品梗)/法螺=启唇吹号(口型,斋醮吹奏法器)。
+   雅正纪律（D8 延伸）：只取器物层——云篆爻纹全部抽象几何笔意，不写真符咒不书神名讳，无仪式行为动效。 */
+const HOLO_RELIC_ZH={zhongshu:"号令牌",yunsheng:"三清铃",shengbei:"宝葫芦",
+                     tingxie:"敕令符",lianbei:"照妖镜",kouxing:"法螺"};
+function _glyphArtTex(THREE,kind){   /* 云篆/爻纹/令字浮层（单色金线蚀刻语言，接棒变脸面具浮层的地位） */
+  const w=256,h=kind==="fu"?512:320,c=document.createElement("canvas"); c.width=w; c.height=h;
   const g=c.getContext("2d"); g.clearRect(0,0,w,h);
-  g.strokeStyle=HOLO_GOLD; g.lineWidth=5; g.lineCap="round"; g.globalAlpha=.95;
-  const E=(x,y,rx,ry,rot,a0,a1)=>{ g.beginPath(); g.ellipse(x,y,rx,ry,rot,a0,a1); g.stroke(); };
-  E(128,160,96,140,0,0,7);                                   /* 脸缘 */
-  E(88,128,34,16,-0.35,Math.PI,2*Math.PI); E(168,128,34,16,0.35,Math.PI,2*Math.PI);   /* 凤眼上睑 */
-  g.beginPath(); g.moveTo(60,96); g.quadraticCurveTo(88,72,120,92); g.stroke();       /* 眉焰左 */
-  g.beginPath(); g.moveTo(196,96); g.quadraticCurveTo(168,72,136,92); g.stroke();     /* 眉焰右 */
-  g.beginPath(); g.moveTo(128,110); g.lineTo(122,192); g.quadraticCurveTo(128,202,134,192); g.stroke(); /* 鼻梁 */
-  E(128,236,30,12,0,0,Math.PI);                              /* 唇 */
-  g.beginPath(); g.moveTo(128,44); g.lineTo(112,76); g.lineTo(128,66); g.lineTo(144,76); g.closePath(); g.stroke(); /* 额焰 */
+  g.strokeStyle=HOLO_GOLD; g.fillStyle=HOLO_GOLD; g.lineWidth=6; g.lineCap="round"; g.globalAlpha=.92;
+  if(kind==="ling"){   /* 号令牌面：「令」字楷书+雷纹折带（号令雷霆的器物语义；常用字非符咒） */
+    g.font="700 150px "+HOLO_FONT; g.textAlign="center"; g.textBaseline="middle";
+    g.fillText("令",w/2,h/2-4);
+    g.lineWidth=5;
+    for(const yy of [26,h-26]){ g.beginPath(); let xx=28; g.moveTo(xx,yy);
+      while(xx<w-28){ g.lineTo(xx+16,yy-12); g.lineTo(xx+32,yy+12); xx+=32; } g.stroke(); }
+  } else if(kind==="mirror"){   /* 照妖镜缘：后天八卦爻画环列（复用罗盘爻画语言=风格统一） */
+    for(let i=0;i<8;i++){ const a=i*Math.PI/4, rr=96;
+      g.save(); g.translate(w/2+Math.cos(a)*rr,h/2+Math.sin(a)*rr); g.rotate(a+Math.PI/2);
+      g.lineWidth=7;
+      const lines=HOLO_BAGUA[i][1];
+      for(let k=0;k<3;k++){ const y=(1-k)*11;
+        if(lines[k]){ g.beginPath(); g.moveTo(-18,y); g.lineTo(18,y); g.stroke(); }
+        else { g.beginPath(); g.moveTo(-18,y); g.lineTo(-4,y); g.stroke();
+               g.beginPath(); g.moveTo(4,y); g.lineTo(18,y); g.stroke(); } }
+      g.restore(); }
+  } else {   /* fu=敕令符：抽象云篆纵列（篆意连笔几何纹，逐字不可释读=考据气质+零宗教文本风险） */
+    let seed=7;
+    const rnd=()=>{ seed=(seed*16807)%2147483647; return seed/2147483647; };
+    for(let col2=0;col2<2;col2++){ const cx=84+col2*88;
+      for(let row2=0;row2<5;row2++){ const cy=64+row2*92;
+        g.lineWidth=5.5; g.beginPath();
+        let px2=cx-24,py2=cy-28; g.moveTo(px2,py2);
+        for(let st2=0;st2<5;st2++){ const nx2=cx-24+rnd()*48,ny2=cy-28+((st2+1)/5)*56;
+          if(rnd()>0.5) g.quadraticCurveTo(px2,ny2,nx2,ny2); else g.lineTo(nx2,ny2);
+          px2=nx2; py2=ny2; }
+        g.stroke();
+      } }
+    g.lineWidth=4; g.beginPath(); g.arc(w/2,26,14,0,7); g.stroke();   /* 符首圆章 */
+  }
   g.globalAlpha=1;
   return new THREE.CanvasTexture(c);
 }
 function _relicEdges(THREE,geo,col){ return new THREE.LineSegments(new THREE.EdgesGeometry(geo,24),
   new THREE.LineBasicMaterial({color:col||HOLO_GOLD,transparent:true,opacity:0.5})); }
 function holoRelic(THREE,mid,mat,wxCol){
-  /* 六器成形（函数对职能、成对成语）：编钟↔磬=钟磬主备对 / 竹简=听而写之 / 变脸面具=川剧变脸×AI换脸 /
-     埙=以口吹奏；中枢=浑天仪走原路径。全部手写几何零模型资产（离线红线）；统一套 holoMat=「全息古器物」
-     （形制古·材质光），线描剪影层=同几何 EdgesGeometry 复线（五行本命色）=白描+光体双层。
+  /* 六法器成形（函数对职能、成对成语）：铃↔葫芦=「一鸣一藏」主备对 / 令牌↔敕令符=「令行符至」 /
+     照妖镜=鉴形辨妖（方向性器物·面向相机） / 法螺=启唇吹号；中枢=号令牌（浑天仪退役，笼架线保未知机兜底）。
+     全部手写几何零模型资产（离线红线）；统一套 holoMat=「全息法器」（形制古·材质光），
+     线描剪影层=同几何 EdgesGeometry 复线（五行本命色）=白描+光体双层。
+     add() 出生即烘焙 userData.bp 基位 + userData.exd 爆炸向量（开坛拆解沿向量分瓣、收坛精确回位）；
      返回 {inner,shell(线描组),uRad}；未知机返回 null 走原球体路径。 */
   const grp=new THREE.Group(), edg=new THREE.Group();
-  const add=(geo,tx,ty,tz,rx,ry,rz)=>{ const mm=new THREE.Mesh(geo,mat);
+  const add=(geo,tx,ty,tz,rx,ry,rz,exd)=>{ const mm=new THREE.Mesh(geo,mat);
     mm.position.set(tx||0,ty||0,tz||0); mm.rotation.set(rx||0,ry||0,rz||0); grp.add(mm);
     const ee=_relicEdges(THREE,geo,wxCol); ee.position.copy(mm.position); ee.rotation.copy(mm.rotation);
-    edg.add(ee); return mm; };
-  if(mid==="yunsheng"){   /* 编钟（玉衡为音·金声玉振）：旋成钟体+甬柱 */
-    const prof=[[0.02,0.50],[0.10,0.49],[0.17,0.46],[0.23,0.38],[0.27,0.26],[0.30,0.10],
-                [0.33,-0.10],[0.35,-0.26],[0.36,-0.38],[0.30,-0.44]].map(p=>new THREE.Vector2(p[0],p[1]));
-    add(new THREE.LatheGeometry(prof,20));
-    add(new THREE.CylinderGeometry(0.045,0.06,0.22,10),0,0.60,0);
+    edg.add(ee);
+    const dv=exd||[0,1,0];
+    for(const oo of [mm,ee]){ oo.userData.bp=oo.position.clone(); oo.userData.exd=dv; }
+    return mm; };
+  const deco=(mm2,exd)=>{ grp.add(mm2);   /* 浮层/亮件只进光体组不进线描组，同样烘焙基位+向量 */
+    mm2.userData.bp=mm2.position.clone(); mm2.userData.exd=exd||[0,0,1]; return mm2; };
+  if(mid==="zhongshu"){   /* 号令牌（枢为天·召神遣将）：圭首方牌+「令」字浮层——发号施令即集群调度 */
+    add(new THREE.BoxGeometry(0.44,0.72,0.09),0,-0.05,0,0,0,0,[0,-0.55,0]);
+    add(new THREE.CylinderGeometry(0.001,0.315,0.22,4),0,0.42,0,0,Math.PI/4,0,[0,1.2,0]);   /* 圭首四棱尖顶 */
+    const lg=new THREE.Mesh(new THREE.PlaneGeometry(0.34,0.52),
+      new THREE.MeshBasicMaterial({map:_glyphArtTex(THREE,"ling"),transparent:true,depthWrite:false,
+        opacity:0.9,side:THREE.DoubleSide}));
+    lg.position.set(0,-0.05,0.055); deco(lg,[0,0,1]);
     return {inner:grp,shell:edg,uRad:0.62};
   }
-  if(mid==="shengbei"){   /* 磬（天璇为地·钟磬主备对）：曲尺折板悬置 */
-    const sh=new THREE.Shape();
-    sh.moveTo(-0.46,0.06); sh.lineTo(-0.06,0.34); sh.lineTo(0.46,0.10);
-    sh.lineTo(0.38,-0.08); sh.lineTo(-0.02,0.12); sh.lineTo(-0.36,-0.12); sh.closePath();
-    add(new THREE.ExtrudeGeometry(sh,{depth:0.09,bevelEnabled:false}),0,0.05,-0.045,0.12,0,-0.10);
+  if(mid==="yunsheng"){   /* 三清铃（玉衡为音·振铃出声）：旋成铃身+山字柄+铃舌——主力 TTS 一摇即鸣 */
+    const prof=[[0.02,0.42],[0.12,0.40],[0.20,0.34],[0.26,0.24],[0.30,0.10],[0.325,-0.06],
+                [0.335,-0.22],[0.345,-0.30],[0.315,-0.34]].map(p=>new THREE.Vector2(p[0],p[1]));
+    add(new THREE.LatheGeometry(prof,20),0,0.02,0,0,0,0,[0,-0.35,0]);
+    add(new THREE.CylinderGeometry(0.032,0.045,0.10,8),0,0.49,0,0,0,0,[0,1,0]);          /* 柄颈 */
+    add(new THREE.BoxGeometry(0.30,0.05,0.05),0,0.565,0,0,0,0,[0,1,0]);                  /* 山字横 */
+    add(new THREE.BoxGeometry(0.05,0.15,0.05),-0.115,0.665,0,0,0,0,[0,1.15,0]);          /* 山字三峰 */
+    add(new THREE.BoxGeometry(0.05,0.15,0.05),0,0.665,0,0,0,0,[0,1.15,0]);
+    add(new THREE.BoxGeometry(0.05,0.15,0.05),0.115,0.665,0,0,0,0,[0,1.15,0]);
+    add(new THREE.CylinderGeometry(0.016,0.016,0.16,6),0,-0.10,0,0,0,0,[0,-1.5,0]);      /* 舌杆（藏于铃内） */
+    add(new THREE.SphereGeometry(0.052,10,8),0,-0.21,0,0,0,0,[0,-1.5,0]);                /* 铃舌（拆开始见） */
+    return {inner:grp,shell:edg,uRad:0.74};
+  }
+  if(mid==="shengbei"){   /* 宝葫芦（璇为地·悬壶储真）：束腰双球分体旋成+塞——备用声引擎藏于壶中，与铃成「一鸣一藏」 */
+    const up=[[0.02,0.44],[0.10,0.42],[0.165,0.36],[0.19,0.28],[0.16,0.20],[0.135,0.15]]
+      .map(p=>new THREE.Vector2(p[0],p[1]));
+    const lo=[[0.135,0.15],[0.20,0.06],[0.275,-0.05],[0.305,-0.18],[0.27,-0.31],[0.16,-0.40],[0.02,-0.42]]
+      .map(p=>new THREE.Vector2(p[0],p[1]));
+    add(new THREE.LatheGeometry(up,18),0,0,0,0,0,0,[0,0.95,0.30]);   /* 上葫（开坛=揭盖上启） */
+    add(new THREE.LatheGeometry(lo,18),0,0,0,0,0,0,[0,-0.55,0]);     /* 下葫 */
+    add(new THREE.CylinderGeometry(0.030,0.040,0.09,8),0,0.485,0,0,0,0,[0,1.4,0.4]);   /* 塞 */
+    add(new THREE.SphereGeometry(0.034,8,8),0,0.55,0,0,0,0,[0,1.4,0.4]);               /* 塞珠 */
+    return {inner:grp,shell:edg,uRad:0.58};
+  }
+  if(mid==="tingxie"){    /* 敕令符（权为时·听声敕笔落音成文）：S 弧符纸+云篆浮层+卷轴杆——STT 把声音写成天书再译人话 */
+    const pg=new THREE.PlaneGeometry(0.34,0.88,1,16);
+    const pa=pg.attributes.position;
+    for(let i2=0;i2<pa.count;i2++) pa.setZ(i2,0.085*Math.sin(pa.getY(i2)*4.6));   /* S 形垂带 */
+    pg.computeVertexNormals();
+    add(pg,0,-0.04,0,0,0,0,[0,-0.25,-0.35]);
+    const fu=new THREE.Mesh(new THREE.PlaneGeometry(0.245,0.70,1,16),
+      new THREE.MeshBasicMaterial({map:_glyphArtTex(THREE,"fu"),transparent:true,depthWrite:false,
+        opacity:0.9,side:THREE.DoubleSide}));
+    const fa=fu.geometry.attributes.position;
+    for(let i2=0;i2<fa.count;i2++) fa.setZ(i2,0.085*Math.sin(fa.getY(i2)*4.6)+0.016);   /* 贴纸随纸同弧 */
+    fu.geometry.computeVertexNormals(); fu.position.set(0,-0.04,0); deco(fu,[0,0.15,0.9]);
+    add(new THREE.CylinderGeometry(0.028,0.028,0.46,8),0,0.44,0.075,0,0,Math.PI/2,[0,1.1,0]);   /* 卷轴杆 */
+    return {inner:grp,shell:edg,uRad:0.56};
+  }
+  if(mid==="lianbei"){    /* 八卦照妖镜（玑为人·鉴形辨妖幻化千面）：八角镜盘+爻纹缘+镜心水光+柄——换脸=镜中幻形，
+       方向性器物面向相机（镜面永远照着你=接棒变脸面具的戏剧性） */
+    add(new THREE.CylinderGeometry(0.42,0.42,0.055,8),0,0,0,Math.PI/2,0,Math.PI/8,[0,0,-0.6]);
+    const rim=new THREE.Mesh(new THREE.PlaneGeometry(0.80,0.80),
+      new THREE.MeshBasicMaterial({map:_glyphArtTex(THREE,"mirror"),transparent:true,depthWrite:false,
+        opacity:0.85,side:THREE.DoubleSide}));
+    rim.position.set(0,0,0.034); deco(rim,[0,0,0.85]);
+    const pool=new THREE.Mesh(new THREE.CircleGeometry(0.165,24),
+      new THREE.MeshBasicMaterial({color:0xBFE9FF,transparent:true,opacity:0.30,
+        blending:THREE.AdditiveBlending,depthWrite:false}));
+    pool.position.set(0,0,0.032); deco(pool,[0,0,1.3]);   /* 镜心水光（阈下加性=一汪照妖的亮） */
+    add(new THREE.CylinderGeometry(0.032,0.042,0.26,8),0,-0.54,0,0,0,0,[0,-1.1,0]);   /* 镜柄 */
+    return {inner:grp,shell:edg,uRad:0.66};
+  }
+  if(mid==="kouxing"){    /* 法螺·龙角（开阳为律·启唇吹号）：弧形角身+喇叭口+吹嘴——斋醮吹奏法器，音形合一即口型 */
+    add(new THREE.TorusGeometry(0.24,0.085,10,22,3.6),0,0.04,0,0,0,0,[0,0.25,0]);
+    add(new THREE.ConeGeometry(0.155,0.22,14,1,true),-0.172,-0.155,0,0,0,-2.683,[-0.7,-0.9,0]);   /* 喇叭口沿切线外扬 */
+    add(new THREE.CylinderGeometry(0.026,0.042,0.10,8),0.24,0.09,0,0,0,0,[0.9,0.6,0]);            /* 吹嘴 */
     return {inner:grp,shell:edg,uRad:0.50};
-  }
-  if(mid==="tingxie"){    /* 竹简卷（天权为时·听而写之）：十片简围半展卷 */
-    const slat=new THREE.BoxGeometry(0.085,0.52,0.020);
-    for(let i=0;i<10;i++){ const a=-1.05+i*0.42, rr=0.20+i*0.012;
-      add(slat,Math.sin(a)*rr,0,Math.cos(a)*rr,0,a,0); }
-    return {inner:grp,shell:edg,uRad:0.55};
-  }
-  if(mid==="lianbei"){    /* 变脸面具（天玑为人·川剧变脸×AI换脸）：曲面壳+金线脸谱浮层 */
-    const shellGeo=new THREE.SphereGeometry(0.42,20,16,Math.PI/2-0.95,1.9,0.38,2.05);
-    shellGeo.scale(0.95,1.15,0.85);
-    add(shellGeo);
-    const art=new THREE.Mesh(new THREE.PlaneGeometry(0.56,0.70),
-      new THREE.MeshBasicMaterial({map:_maskArtTex(THREE),transparent:true,depthWrite:false,opacity:0.9}));
-    art.position.set(0,0,0.40); grp.add(art);   /* 脸谱只进光体组不进线描组（浮层） */
-    return {inner:grp,shell:edg,uRad:0.55};
-  }
-  if(mid==="kouxing"){    /* 埙（开阳为律·以口吹奏）：卵形+音孔 */
-    const egg=new THREE.SphereGeometry(0.36,18,14); egg.scale(1,1.18,0.94);
-    add(egg);
-    const holeMat=new THREE.MeshBasicMaterial({color:0x05060F,transparent:true,opacity:0.85});
-    const holeGeo=new THREE.CircleGeometry(0.034,10);
-    for(const hp of [[0.11,0.10],[-0.11,0.10],[0.15,-0.07],[-0.15,-0.07],[0,-0.18]]){
-      const hh=new THREE.Mesh(holeGeo,holeMat); hh.position.set(hp[0],hp[1],0.315); grp.add(hh); }
-    const top=new THREE.Mesh(new THREE.CircleGeometry(0.05,10),holeMat);
-    top.position.set(0,0.415,0); top.rotation.x=-Math.PI/2; grp.add(top);   /* 顶吹孔 */
-    return {inner:grp,shell:edg,uRad:0.46};
   }
   return null;
 }
@@ -3038,11 +3111,11 @@ function buildHoloNodes(){
     const rad=isHub?0.68:0.46;
     const group=new THREE.Group(); group.position.copy(pos);
     const wx=HOLO_WUXING[m.id]||null, wxCol=wx?wx[1]:null;   /* 五行本命色（结构层识别；能量层健康色不受扰） */
-    /* 壳：中枢=浑天仪线框笼架（原样）；辐条=天圆地方「玉琮」方框（外方缓旋+内圆健康核） */
+    /* 壳（2026-08-22 道家法器方案 D1）：六机=六法器（中枢=号令牌，浑天仪退役）；未知机=线框笼架兜底 */
     const innerMat=holoMat(THREE,"#22D3EE");    /* P2 Fresnel+扫描线全息核 */
-    if(isHub) innerMat.uniforms.uTaiji.value=1; /* 太极旋纹核（罗盘重塑 P3 转正：双臂回旋亮度纹） */
-    /* 六器成形（D3 撤玉琮方框）：辐条=身份器物（全息光体）+同几何线描剪影层；中枢=浑天仪笼架（原样保锚） */
-    const relic=isHub?null:holoRelic(THREE,m.id,innerMat,wxCol);
+    if(isHub) innerMat.uniforms.uTaiji.value=1; /* 太极旋纹（中枢专属亮度纹，号令牌光体上双臂回旋） */
+    /* 法器成形（六器化法器·D3 撤玉琮方框沿革）：身份器物（全息光体）+同几何线描剪影层 */
+    const relic=holoRelic(THREE,m.id,innerMat,wxCol);
     const shell=relic?relic.shell
       : new THREE.Mesh(new THREE.IcosahedronGeometry(rad,1),
           new THREE.MeshBasicMaterial({color:0x22D3EE,wireframe:true,transparent:true,opacity:0.4}));  /* 暗线框=清晰笼架不参与 bloom */
@@ -3205,12 +3278,11 @@ function renderHolo(dt){
     nd.group.scale.setScalar(1-Math.pow(1-rp,3));         /* easeOutCubic（含 pick/label 一并升起） */
     const drillSelf=holoDrill&&id===holoDrill.mid;        /* 下钻聚焦机（机柜升起=核上浮避让，卡退紧凑章） */
     /* S2 悬浮高度=GPU util 真数据（忙的机器浮得高=第二编码通道；缓动防跳；中枢=反应堆定高）；
-       下钻期该机核上浮至机柜顶——「核为魂、柜为身」 */
-    const hT=(drillSelf&&holoDrill.rackH)?(HOLO_FLOOR_Y+holoDrill.rackH+0.55)
-      :(nd.isHub?(HOLO_FLOOR_Y+1.02):(HOLO_FLOOR_Y+0.68+(ok?uu:0)*0.85));
+       开坛不再抬核——法器即坛心，珠牌环绕之（机柜时代的上浮避让随柜退役） */
+    const hT=nd.isHub?(HOLO_FLOOR_Y+1.02):(HOLO_FLOOR_Y+0.68+(ok?uu:0)*0.85);
     nd.h=(nd.h==null)?hT:nd.h+(hT-nd.h)*Math.min(1,dt*1.6);
     nd.group.position.y=nd.h;
-    for(const smm of (nd.shellMats||[])){   /* 壳=五行本命色（结构层；器物线描组与浑天仪笼架同规）；病机让位状态色 */
+    for(const smm of (nd.shellMats||[])){   /* 壳=五行本命色（结构层；法器线描组与未知机笼架同规）；病机让位状态色 */
       smm.color.set(ok?(nd.wxCol||colStr):colStr);
       smm.opacity=FX?0.4:0.62; }            /* E 档素颜=蓝图态线描增强 */
     nd.glow.material.color.set(colStr);
@@ -3219,13 +3291,24 @@ function renderHolo(dt){
     nd.innerMat.uniforms.uMat.value=rp;                   /* S10 物质化：自下而上扫描升起 */
     const throb= ok ? 1+0.06*Math.sin(holoT*(1.2+uu*3)) : 1+0.17*Math.sin(holoT*7);
     nd.shell.scale.setScalar(throb);
-    if(nd.relic&&id==="lianbei"){   /* 变脸面具=方向性器物特例：缓转面向相机（正脸恒可读，戏即「变脸」） */
+    if(nd.relic&&id==="lianbei"){   /* 照妖镜=方向性器物特例（接棒变脸面具）：缓转面向相机——镜面永远照着你 */
       const wy=Math.atan2(camera.position.x-nd.group.position.x,camera.position.z-nd.group.position.z);
       const dfm=((wy-nd.shell.rotation.y+Math.PI)%(2*Math.PI)+2*Math.PI)%(2*Math.PI)-Math.PI;
       nd.shell.rotation.y+=dfm*Math.min(1,dt*2);
-    } else nd.shell.rotation.y+=dt*(0.2+uu*0.8);
-    if(nd.isHub) nd.shell.rotation.x+=dt*0.1;   /* 器物只缓旋不翻滚（端正）；浑天仪笼架保翻滚 */
+    } else nd.shell.rotation.y+=dt*(0.2+uu*0.8)*(nd.isHub?0.45:1);   /* 号令牌端正缓旋（发令者不疾不徐） */
+    if(nd.isHub&&!nd.relic) nd.shell.rotation.x+=dt*0.1;   /* 器物只缓旋不翻滚（端正）；未知机笼架保翻滚 */
     if(nd.relic) nd.inner.rotation.y=nd.shell.rotation.y;   /* 光体与线描剪影同步旋转（同几何双层） */
+    /* 开坛拆解（2026-08-22）：分瓣沿出生烘焙的爆炸向量悬停——目标=开坛全开(1)/双捏跟手预拆(nd._preX)，
+       同一条缓动管开与合；收坛后精确回位（userData.bp 基位单一真相） */
+    const expT=(holoDrill&&holoDrill.mid===id)?1:(nd._preX||0);
+    nd._expK=(nd._expK==null)?0:nd._expK+(expT-nd._expK)*Math.min(1,dt*5);
+    if(nd.relic&&(nd._expK>0.003||nd._expOn)){
+      nd._expOn=nd._expK>0.003;
+      const ke=(nd._expOn?nd._expK:0)*0.42;
+      for(const gg of [nd.inner,nd.shell]) for(const ch of gg.children){
+        const bp=ch.userData.bp,ex=ch.userData.exd; if(!bp||!ex) continue;
+        ch.position.set(bp.x+ex[0]*ke,bp.y+ex[1]*ke,bp.z+ex[2]*ke); }
+    }
     const hov=((id===holoHover)||(id===holoPanelMid))&&!drillSelf;   /* P1 悬停/选中高亮：辉光+完整仪表卡（下钻机退章去冗余） */
     const dimmed=holoDrill&&id!==holoDrill.mid;        /* P3 下钻聚焦：其余机器卡/辉光淡出让位 */
     /* S1 灭棉花球：辉光=核心近距光晕（存在感转移给基座环/光斑/锚线），fx=0 素颜全关 */
@@ -3254,7 +3337,9 @@ function renderHolo(dt){
     if(nd.plaque) nd.plaque.material.opacity=(dimmed?0.25:0.9)*rp;   /* 卦符佩章随揭幕/下钻淡入淡出 */
     if(nd.ground) nd.ground.scale.setScalar(Math.max(0.001,1-Math.pow(1-rp,3)));
     if(doLabels || hov!==nd.hovState){   /* 数据变或悬停态变即重绘：静息紧凑章 / 悬停完整卡 */
-      const key=(m.zh||id)+"|"+u+"|"+Math.round(vr*20)+"|"+(m.temp==null?-1:m.temp)+"|"+m.status+"|"+(hov?"H":"c");
+      const svl=(((state.ctx||{}).svc)||{})[id]||[];   /* 内藏N灵入卡=计数变即重绘（开坛可发现性） */
+      const key=(m.zh||id)+"|"+u+"|"+Math.round(vr*20)+"|"+(m.temp==null?-1:m.temp)+"|"+m.status+"|"+(hov?"H":"c")
+        +"|"+svl.length+"."+svl.filter(s2=>s2.up).length;
       if(key!==nd.lastText){ nd.lastText=key; nd.hovState=hov;
         if(nd.label.material.map) nd.label.material.map.dispose();
         nd.label.material.map=hov?holoCardTex(THREE,m):holoChipTex(THREE,m); nd.label.material.needsUpdate=true; }
@@ -3328,29 +3413,27 @@ function renderHolo(dt){
   updateFxParticles(dt,byId);   /* P2 数据流粒子（真数据密度；预算闸/素颜开关在函数内） */
   if(holoS.bloom&&holoS._showB!==SHOW){ holoS._showB=SHOW;   /* 演示状态：辉光增强/还原（0.6 实拍标定，0.72 会洗白） */
     holoS.bloom.strength=SHOW?0.6:0.5; }
-  if(holoDrill&&holoS.nodes[holoDrill.mid]){   /* 方案C 机柜：升起动画+缓转朝相机+槽位交互（红槽呼吸/悬停亮边） */
+  if(holoDrill&&holoS.nodes[holoDrill.mid]){   /* 开坛拆解：珠牌环随法器悬浮跟随+缓转朝相机（分诊珠面向操作者）；
+       分瓣开合由节点循环的 _expK 驱动（跟手预拆与开坛全开同一条缓动） */
     holoDrill.t+=dt;
-    const rk=holoDrill.rack;
-    if(rk){
-      const rise=Math.min(1,holoDrill.t/0.5);
-      rk.scale.set(1,0.02+0.98*(1-Math.pow(1-rise,3)),1);   /* 机柜自台座升起 */
-      holoDrill.frame.material.opacity=0.5*rise;
-      const want=Math.atan2(camera.position.x-rk.position.x,camera.position.z-rk.position.z);
-      const dfy=((want-rk.rotation.y+Math.PI)%(2*Math.PI)+2*Math.PI)%(2*Math.PI)-Math.PI;
-      rk.rotation.y+=dfy*Math.min(1,dt*3);                  /* 缓转正面朝相机（保 3D 存在感） */
+    const rg2=holoDrill.ringG, ndd=holoS.nodes[holoDrill.mid];
+    if(rg2){
+      rg2.position.copy(ndd.group.position);
+      const want=Math.atan2(camera.position.x-rg2.position.x,camera.position.z-rg2.position.z);
+      const dfy=((want-rg2.rotation.y+Math.PI)%(2*Math.PI)+2*Math.PI)%(2*Math.PI)-Math.PI;
+      rg2.rotation.y+=dfy*Math.min(1,dt*3);                  /* 缓转朝相机（分诊靠前的珠面向操作者） */
     }
     for(let i=0;i<holoDrill.subs.length;i++){ const s=holoDrill.subs[i];
       const hov=holoDrill.hover===s.name;
-      const em=Math.max(0,Math.min(1,(holoDrill.t-0.22-i*0.028)/0.22));   /* 槽位错峰点亮 */
-      s.mesh.material.opacity=em*(s.st==="park"?0.72:1);
+      const em=Math.max(0,Math.min(1,(holoDrill.t-0.26-i*0.030)/0.22));   /* 分瓣先行 0.26s，珠牌错峰物质化 */
+      s.tab.material.opacity=em*(s.st==="park"?0.74:1);
       const blink=s.st==="fix"?(0.55+0.45*Math.abs(Math.sin(holoT*5))):1;
-      s.glow.material.opacity=em*(s.st==="fix"?0.5*blink:(hov?0.30:0));
-      s.mesh.scale.setScalar(hov?1.12:1);
+      s.orb.material.opacity=em*(s.st==="fix"?0.55*blink:(hov?0.42:0.26))*(s.st==="park"?0.5:1);   /* 灵珠常亮（显存大者珠大），阈下纪律 */
+      s.line.material.opacity=em*(hov?0.5:0.26)*(s.st==="park"?0.5:1);
+      s.tab.scale.set(hov?0.55:0.42,hov?1.02:0.78,1);        /* 悬停=放大读铭文 */
       if(hov!==s._hv){ s._hv=hov;   /* 悬停态换纹理（亮边+救活提字） */
-        if(s.mesh.material.map) s.mesh.material.map.dispose();
-        s.mesh.material.map=_hslotTex(THREE,s.name,s.st,hov); s.mesh.material.needsUpdate=true; }
-      /* 拥挤自适应渐进披露：>10 项时在跑状态章隐去（红/灰/悬停保留）——21 章全亮=谁也读不了 */
-      s.label.material.opacity=((holoDrill.crowded&&s.st==="ok"&&!hov)?0:1)*em;
+        if(s.tab.material.map) s.tab.material.map.dispose();
+        s.tab.material.map=_hfuTex(THREE,s.raw,s.st,hov); s.tab.material.needsUpdate=true; }
     }
   } else if(holoDrill) holoDrillExit();   /* 父节点没了（重建/机器摘除）安全退出 */
   /* P2 算力模式联动：反应堆环+绶带+链路随 chatx 青 / face 品红（节点色仍编码健康，两信号并存） */
@@ -3538,8 +3621,8 @@ function openHoloPanel(mid,src){   /* 选中节点浮出玻璃操作卡：动作
     if(pp&&pp.errors>0)
       acts.push(["🧭 姿态一键归位（重申"+(cmm.zh||cmode)+"） · 需确认",()=>{holoArm("posture_repair",{});closeHoloPanel();},"warn"]);
   }
-  const svcs=(ctx.svc||{})[mid]||[];   /* P3 下钻：有编目服务才出下钻口；可救死服务直挂救活按钮（≤3 防面板过长） */
-  if(svcs.length) acts.push(["🛰 服务下钻 · "+svcs.filter(s=>s.up).length+"/"+svcs.length+" 在跑",
+  const svcs=(ctx.svc||{})[mid]||[];   /* P3 开坛：有编目服务/模型才出拆解口；可救死服务直挂救活按钮（≤3 防面板过长） */
+  if(svcs.length) acts.push(["🔮 拆解法器 · "+svcs.filter(s=>s.up).length+"/"+svcs.length+" 在跑",
     ()=>{ closeHoloPanel(); holoDrillEnter(mid,"panel"); }]);
   for(const s of svcs.filter(x=>x.fix).slice(0,3))
     acts.push(["🚑 救活 "+s.n+" · 需确认",()=>{holoArm("svc_restart",{service:s.n});closeHoloPanel();},"warn"]);
@@ -3571,36 +3654,102 @@ function holoPanelWhenReady(mid,src){   /* 语音开盘：不在全息先切过�
     if(holoS.nodes&&holoS.nodes[mid]){ clearInterval(t); openHoloPanel(mid,src); }
     else if(++n>10) clearInterval(t); },400);
 }
-/* ============ P3 逐层下钻：节点→服务子星环绕（数据=ctx.svc：归属 cluster_map 拓扑 SSOT +
-   死活 Hub /health 同源；救活=svc_restart 与语音「重启X服务」同通道，只 arm 不 fire） ============ */
-let holoDrill=null;   /* {mid, subs:[{name,st,mesh,glow,label,ang,rr}], t, hover, crowded} */
+/* ============ P3 逐层下钻·开坛拆解（2026-08-22 道家法器方案 D2：下钻第三代
+   子星环绕→数字孪生机柜→开坛验器）：数据=ctx.svc 单一真相（归属 cluster_map 拓扑 SSOT +
+   死活 Hub /health 同源 + kind:"model" 大模型灵珠由 hud_server /api/ps 直探富化）；
+   救活=svc_restart 与语音「重启X服务」同通道，只 arm 不 fire——语义与机柜时代逐字不变。 ============ */
+let holoDrill=null;   /* {mid, subs:[{name,st,kind,vram,tab,orb,line,raw}], t, hover, crowded, ringG} */
 const _HSUB_COL={ok:"#2EC27E",fix:"#DE3C46",park:"#5A6070"};   /* 三色语义：在跑/死可救/泊车按需 */
-function _hsubTex(THREE,name,st){   /* 状态章（机柜槽位右侧「在跑/可救/泊车」词章）；S5 2x 超采样 */
-  const w=336,h=84,c=document.createElement("canvas"); c.width=w; c.height=h;
+/* 功效词表（静态身份层，与器形/佩章同地位）：键=服务/模型名前缀（真名，数据串不翻译），
+   值=[铭文≤4字(能力词,回避崇拜词——雅正纪律), 白话一句]；未登记=「未铭之灵」+原名照显。改词只改这张表。 */
+const SVC_LORE=[
+  ["index_tts",["引魂还声","情感克隆 · 整段质量轨"]],
+  ["moss_ttsd",["长谈之灵","对话感长闲聊合成"]],
+  ["fish",["摄声还魂","克隆音合成 · 快轨"]],
+  ["voxcpm",["无声造声","可商用克隆合成"]],
+  ["qwen3_tts",["疾言快语","低延迟流式克隆"]],
+  ["sbv2",["东瀛咏叹","日语情感合成"]],
+  ["s1_tts",["情随声动","情感标记合成"]],
+  ["emotion_tts",["妙音随情","情感TTS · CosyVoice"]],
+  ["cosyvoice",["妙音随情","情感TTS · CosyVoice"]],
+  ["nemo",["顺风疾耳","流式听写"]],
+  ["funasr",["粤音入耳","粤语识别"]],
+  ["dolphin",["乡音尽收","廿二方言识别"]],
+  ["whisper",["聆音辨字","语音转文字"]],
+  ["stt",["聆音辨字","语音转文字"]],
+  ["faceswap2",["分身候补","换脸容灾副本"]],
+  ["faceswap",["幻形易容","直播换脸主引擎"]],
+  ["latentsync",["唇齿如真","高清口型"]],
+  ["lipsync",["启唇之术","口型同步"]],
+  ["ditto",["肖影通灵","数字人实时渲染"]],
+  ["musetalk",["肖影通灵","数字人实时渲染"]],
+  ["echomimic",["肖影通灵","数字人渲染"]],
+  ["enhance",["驻颜之术","人脸增强"]],
+  ["hair",["云鬓妙手","发型工房"]],
+  ["makeup",["傅粉施朱","妆容定妆"]],
+  ["videotryon",["霓裳幻影","动态试衣"]],
+  ["tryon",["霓裳换羽","虚拟试衣"]],
+  ["dfm",["整容易貌","整脸换脸工房"]],
+  ["interpreter",["通译万邦","实时同声传译"]],
+  ["nllb",["符译万文","机器翻译"]],
+  ["hy-mt",["符译万文","机器翻译主力"]],
+  ["bge",["寻章摘句","语义检索嵌入"]],
+  ["gemma",["锦心绣口","对话大模型"]],
+  ["qwen3-vl",["慧眼识图","视觉理解大模型"]],
+  ["qwen3-coder",["文思泉涌","编程大模型"]],
+  ["vllm-coder",["文思泉涌","编程大模型"]],
+  ["vllm",["锦心绣口","对话大模型"]],
+  ["qwen",["锦心绣口","对话大模型"]],
+  ["vcam",["开光出画","虚拟摄像头广播"]],
+  ["rvc",["变声遁形","实时变声"]],
+  ["singing",["莺喉婉转","AI 翻唱工作室"]],
+  ["ace_studio",["谱曲成章","文本成曲"]],
+  ["live_director",["代言声援","智播控场"]],
+  ["hub",["中枢号令","AvatarHub 主控"]],
+  ["tts",["旧声退役","XTTS · 已退役"]]
+];
+function svcLore(n){ const s=String(n||"").toLowerCase();
+  for(const e of SVC_LORE) if(s.startsWith(e[0])||s.includes(e[0])) return e[1];
+  return ["未铭之灵",""]; }
+function _hfuTex(THREE,s,st,hov){   /* 灵珠符牌（开坛拆解槽位承载体，接棒机柜槽位条）：状态点+状态词
+     （在跑/可救/泊车三词全站统一）+服务名（数据串不翻译）+功效铭文+白话+实测显存徽章；
+     可救牌悬停保留「捏合=武装救活」逐字话术（两段式护栏语义纪律） */
+  const w=300,h=560,c=document.createElement("canvas"); c.width=w; c.height=h;
   const g=c.getContext("2d"); g.clearRect(0,0,w,h);
-  _hrr(g,6,6,w-12,h-12,20); g.fillStyle="rgba(5,8,17,.82)"; g.fill();
-  g.lineWidth=2.4; g.strokeStyle=_HSUB_COL[st]; g.globalAlpha=st==="park"?.5:.7; g.stroke(); g.globalAlpha=1;
-  g.beginPath(); g.arc(38,h/2,10,0,7); g.fillStyle=_HSUB_COL[st]; g.fill();
-  g.textAlign="left"; g.fillStyle=st==="park"?"#8b93a8":"#EAF2FF"; g.font="700 38px Consolas,monospace";
-  g.fillText(String(name).slice(0,13),66,h/2+14);
-  return new THREE.CanvasTexture(c); }
-function _hslotTex(THREE,name,st,hov){   /* 方案C 机柜槽位条：状态点+服务名（等宽 2x）；悬停=亮边+提字 */
-  const w=560,h=64,c=document.createElement("canvas"); c.width=w; c.height=h;
-  const g=c.getContext("2d"); g.clearRect(0,0,w,h);
-  const col=_HSUB_COL[st];
-  _hrr(g,3,3,w-6,h-6,14); g.fillStyle=hov?"rgba(16,26,48,.94)":"rgba(6,10,20,.88)"; g.fill();
-  g.lineWidth=hov?3:2; g.strokeStyle=col; g.globalAlpha=st==="park"?.45:(hov?.95:.6); g.stroke(); g.globalAlpha=1;
-  g.fillStyle=col; g.globalAlpha=st==="park"?.5:.9; g.fillRect(3,10,6,h-20); g.globalAlpha=1;   /* 左缘状态条 */
-  g.beginPath(); g.arc(34,h/2,9,0,7); g.fillStyle=col; g.fill();
-  g.textAlign="left"; g.fillStyle=st==="park"?"#8b93a8":"#EAF2FF"; g.font="700 32px Consolas,monospace";
-  g.fillText(String(name).slice(0,18),56,h/2+11);
-  if(st==="fix"){ g.textAlign="right"; g.fillStyle=col; g.font="700 24px 'Segoe UI',system-ui";
-    g.fillText(hov?"捏合=武装救活":"可救",w-20,h/2+9); }
+  const col=_HSUB_COL[st], lore=svcLore(s.n);
+  _hrr(g,6,6,w-12,h-12,26); g.fillStyle=hov?"rgba(14,24,46,.95)":"rgba(6,10,20,.90)"; g.fill();
+  g.lineWidth=hov?5:3; g.strokeStyle=col; g.globalAlpha=st==="park"?.45:(hov?.95:.65); g.stroke(); g.globalAlpha=1;
+  g.fillStyle=col; g.globalAlpha=st==="park"?.5:.9; g.fillRect(6,26,7,h-52); g.globalAlpha=1;   /* 左缘状态条（机柜槽位 DNA） */
+  g.beginPath(); g.arc(w/2,54,13,0,7); g.fillStyle=col; g.fill();
+  g.textAlign="center"; g.font="700 30px 'Segoe UI',system-ui"; g.fillStyle=col;
+  g.fillText(st==="ok"?"在跑":(st==="fix"?"可救":"泊车"),w/2,106);
+  g.fillStyle=st==="park"?"#8b93a8":"#EAF2FF";
+  const nm=String(s.n);   /* 服务名：长名缩字号，两行兜底 */
+  g.font="700 "+(nm.length>14?26:34)+"px Consolas,monospace";
+  if(nm.length>20){ g.fillText(nm.slice(0,18),w/2,152); g.fillText(nm.slice(18,36),w/2,184); }
+  else g.fillText(nm,w/2,160);
+  g.font="700 62px "+HOLO_FONT; g.fillStyle=HOLO_GOLD; g.globalAlpha=st==="park"?.55:.95;
+  const mw=lore[0]||"未铭之灵";
+  if(mw.length>4){ g.fillText(mw.slice(0,Math.ceil(mw.length/2)),w/2,268);
+    g.fillText(mw.slice(Math.ceil(mw.length/2)),w/2,340); }
+  else g.fillText(mw,w/2,300);
+  g.globalAlpha=1;
+  g.font="500 24px 'Segoe UI',system-ui"; g.fillStyle="#9aa4bd";
+  const bh=lore[1]||"";
+  if(bh){ if(bh.length>11){ g.fillText(bh.slice(0,11),w/2,404); g.fillText(bh.slice(11,22),w/2,436); }
+    else g.fillText(bh,w/2,412); }
+  if(s.kind==="model"&&s.vram!=null){ g.font="700 26px Consolas,monospace"; g.fillStyle="#C8A96E";
+    g.fillText("实测 "+s.vram+" G",w/2,486); }   /* 大模型灵珠：/api/ps 实测显存=真数据 */
+  else if(s.kind==="model"){ g.font="600 24px 'Segoe UI',system-ui"; g.fillStyle="#8b93a8";
+    g.fillText(s.up?"大模型":"大模型 · 未装载",w/2,486); }   /* vLLM 无显存读数：在跑≠未装载（实拍抓获措辞病） */
+  if(st==="fix"){ g.font="700 26px 'Segoe UI',system-ui"; g.fillStyle=col;
+    g.fillText(hov?"捏合=武装救活":"可救",w/2,h-34); }
   return new THREE.CanvasTexture(c); }
 function holoDrillEnter(mid,src){
-  /* 方案C 机柜切片（2026-08-21 P2：子星环绕→数字孪生机柜）：从机位台座升起线框服务舱，
-     每格=一个服务（数据仍=ctx.svc 单一真相）；分诊排序=可救在顶、在跑居中、泊车垫底；
-     >11 项双列（中枢 21 项）；救活语义/两段式护栏与子星时代逐字不变。 */
+  /* 开坛拆解（2026-08-22 道家法器方案：下钻第三代 子星环绕→数字孪生机柜→开坛验器）：
+     法器分瓣悬停（爆炸向量见 holoRelic）+ 灵珠符牌环列——每珠=一个真实 AI 服务/大模型；
+     分诊排序=可救在前、在跑居中、泊车垫底（逐字继承）；>10 珠双环（对位机柜双列的拥挤解法）；
+     救活语义/两段式护栏/握拳退出与机柜时代逐字不变。 */
   if(!holoS.renderer||!holoS.nodes[mid]) return;
   holoDrillExit();
   const svcs0=((state.ctx||{}).svc||{})[mid]||[]; if(!svcs0.length) return;
@@ -3608,40 +3757,37 @@ function holoDrillEnter(mid,src){
   const _rank={fix:0,ok:1,park:2};
   const svcs=svcs0.slice().sort((a,b)=>(_rank[_stOf(a)]-_rank[_stOf(b)])||String(a.n).localeCompare(String(b.n)));
   const {THREE,scene}=holoS, subs=[], crowded=svcs.length>10;
-  const nd=holoS.nodes[mid], bp=nd.ground.position;
-  const cols=svcs.length>11?2:1, rows=Math.ceil(svcs.length/cols);   /* 拥挤双列机柜 */
-  const SW=1.34,SH=0.15,GP=0.045,CW=SW+0.14;
-  const rackW=cols*CW+0.08, rackH=rows*(SH+GP)+0.30;
-  const rack=new THREE.Group(); rack.position.set(bp.x,HOLO_FLOOR_Y+0.09,bp.z);
-  const frame=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(rackW,rackH,0.26)),
-    new THREE.LineBasicMaterial({color:0x22D3EE,transparent:true,opacity:0.0}));
-  frame.position.y=rackH/2; rack.add(frame);
+  const nd=holoS.nodes[mid];
+  const ringG=new THREE.Group(); ringG.position.copy(nd.group.position); scene.add(ringG);
+  const inN=crowded?Math.ceil(svcs.length/2):svcs.length;   /* 双环珠牌：分诊靠前的入内环 */
   for(let i=0;i<svcs.length;i++){ const s=svcs[i];
     const st=_stOf(s), col=_HSUB_COL[st];
-    const cI=Math.floor(i/rows), rI=i%rows;
-    const cx=(cI-(cols-1)/2)*CW, sy=rackH-0.24-rI*(SH+GP);
-    const mesh=new THREE.Mesh(new THREE.PlaneGeometry(SW,SH),
-      new THREE.MeshBasicMaterial({map:_hslotTex(THREE,s.n,st,false),transparent:true,
-        depthWrite:false,opacity:0}));
-    mesh.position.set(cx,sy,0.15);
-    const glow=new THREE.Sprite(new THREE.SpriteMaterial({map:holoS.glowTex,color:col,
-      transparent:true,blending:THREE.AdditiveBlending,depthWrite:false,opacity:0}));
-    glow.scale.set(SW*1.25,SH*3.2,1); glow.position.set(cx,sy,0.10);
-    const label=new THREE.Sprite(new THREE.SpriteMaterial({   /* 状态词章：右缘（拥挤时在跑章隐去） */
-      map:_hsubTex(THREE,st==="ok"?"在跑":(st==="fix"?"可救":"泊车"),st),
+    const inner2=i<inN, n2=inner2?inN:svcs.length-inN, j=inner2?i:i-inN;
+    const rr2=crowded?(inner2?0.86:1.36):1.10, ty=crowded?(inner2?0.50:0.02):0.22;
+    const ang=(j/Math.max(1,n2))*2*Math.PI;   /* 自局部 +Z 顺排：环组缓转朝相机后，分诊靠前的珠面向操作者 */
+    const tx2=Math.sin(ang)*rr2, tz2=Math.cos(ang)*rr2;
+    const tab=new THREE.Sprite(new THREE.SpriteMaterial({map:_hfuTex(THREE,s,st,false),
       transparent:true,depthWrite:false,depthTest:false,opacity:0}));
-    label.scale.set(0.52,0.13,1); label.position.set(cx+SW/2+0.34,sy,0.15);
-    rack.add(mesh,glow,label);
-    subs.push({name:s.n,st,mesh,glow,label});
+    tab.scale.set(0.42,0.78,1); tab.position.set(tx2,ty,tz2);
+    const vsz=(s.kind==="model"&&s.vram!=null)?Math.min(0.30,0.10+Math.sqrt(Math.max(0,s.vram))*0.036):0.10;
+    const orb=new THREE.Sprite(new THREE.SpriteMaterial({map:holoS.glowTex,color:col,
+      transparent:true,blending:THREE.AdditiveBlending,depthWrite:false,opacity:0}));
+    orb.scale.setScalar(vsz*(st==="park"?0.7:1)*4);   /* 灵珠光晕=显存大者珠大（实测账），托在牌后 */
+    orb.position.set(tx2,ty,tz2);
+    const line=new THREE.Line(new THREE.BufferGeometry().setFromPoints(
+      [new THREE.Vector3(0,0,0),new THREE.Vector3(tx2,ty,tz2)]),
+      new THREE.LineBasicMaterial({color:col,transparent:true,opacity:0}));   /* 光丝：器心→灵珠 */
+    ringG.add(orb,line,tab);
+    subs.push({name:s.n,st,kind:s.kind,vram:s.vram,tab,orb,line,raw:s});
   }
-  scene.add(rack);
-  holoDrill={mid,subs,t:0,hover:null,crowded,zoom0:holoS.zoom||1,rack,frame,rackH};
-  holoS.zoom=Math.min(holoS.zoom||1,0.62);   /* 下钻即聚焦：拉近看清机柜，退出还原 */
-  holoHover=mid;   /* 准星锁父节点（下钻期间机器悬停冻结） */
+  holoDrill={mid,subs,t:0,hover:null,crowded,zoom0:holoS.zoom||1,ringG};
+  holoS.zoom=Math.min(holoS.zoom||1,0.62);   /* 开坛即聚焦：拉近验珠，收坛还原 */
+  holoHover=mid;   /* 准星锁父节点（开坛期间机器悬停冻结） */
+  fxBurstAt(mid); fxSnd("mat");   /* 开坛一瞬：爆发粒+物质化音（用户动作=真事件） */
   const hd=$("holodrill"), m=((state.ctx||{}).machines||[]).find(x=>x.id===mid)||{};
   if(hd){ const okN=subs.filter(s=>s.st==="ok").length, fixN=subs.filter(s=>s.st==="fix").length;
-    hd.textContent="服务下钻 · "+(m.zh||mid)+" — "+okN+"/"+subs.length+" 在跑"
-      +(fixN?" · 捏红槽=救活":"")+" · 握拳退出";
+    hd.textContent="开坛 · "+(m.zh||mid)+"（"+((typeof HOLO_RELIC_ZH!=="undefined"&&HOLO_RELIC_ZH[mid])||"法器")+"）— "
+      +okN+"/"+subs.length+" 在跑"+(fixN?" · 捏红牌=救活":"")+" · 握拳收坛";
     hd.classList.add("on"); }
   stat("holo_drill",{v:mid,src:src||""});
 }
@@ -3649,24 +3795,23 @@ function holoDrillExit(){
   if(!holoDrill) return;
   const scene=holoS.scene;
   for(const s of holoDrill.subs){
-    s.mesh.geometry.dispose(); if(s.mesh.material.map) s.mesh.material.map.dispose(); s.mesh.material.dispose();
-    s.glow.material.dispose();                       /* glowTex 归 holoS 所有，不在此 dispose */
-    if(s.label.material.map) s.label.material.map.dispose(); s.label.material.dispose(); }
-  if(holoDrill.rack){ scene.remove(holoDrill.rack);
-    holoDrill.frame.geometry.dispose(); holoDrill.frame.material.dispose(); }
-  holoS.zoom=holoDrill.zoom0||1;                     /* 还原下钻前的相机距离 */
+    if(s.tab.material.map) s.tab.material.map.dispose(); s.tab.material.dispose();
+    s.orb.material.dispose();                          /* glowTex 归 holoS 所有，不在此 dispose */
+    s.line.geometry.dispose(); s.line.material.dispose(); }
+  if(holoDrill.ringG) scene.remove(holoDrill.ringG);
+  holoS.zoom=holoDrill.zoom0||1;                       /* 还原开坛前的相机距离（分瓣由 _expK 缓合回位） */
   holoDrill=null; const hd=$("holodrill"); if(hd) hd.classList.remove("on");
 }
-function holoPickSub(sx,sy){   /* 槽位拾取：投影近邻（槽在 rack 组内=用世界坐标投影） */
+function holoPickSub(sx,sy){   /* 珠牌拾取：投影近邻（牌在环组内=用世界坐标投影） */
   if(!holoDrill||!holoS.renderer) return null;
   const r=holoS.renderer.domElement.getBoundingClientRect();
   const wp=holoS._wp3||(holoS._wp3=new holoS.THREE.Vector3());
   let best={n:null,d:1e9};
-  for(const s of holoDrill.subs){ const p=s.mesh.getWorldPosition(wp).project(holoS.camera);
+  for(const s of holoDrill.subs){ const p=s.tab.getWorldPosition(wp).project(holoS.camera);
     if(p.z>1) continue;
     const px=r.left+(p.x*0.5+0.5)*r.width, py=r.top+(-p.y*0.5+0.5)*r.height;
     const d=Math.hypot(sx-px,sy-py); if(d<best.d) best={n:s.name,d}; }
-  return best.d<34?best.n:null;
+  return best.d<40?best.n:null;
 }
 function holoDrillWhenReady(mid,src){   /* 语音下钻：切全息等就绪；无编目服务退操作盘；无 WebGL 退详情 */
   if(!holoOK){ const m=((state.ctx||{}).machines||[]).find(x=>x.id===mid); if(m) openDetail(m,src); return; }
@@ -3976,10 +4121,36 @@ function handleGesture(d){
   if(view===2){ if(grabTick(name)){ sm.cooldownAt=now+GEST.COOLDOWN; return; } }
   else if(view===3){   /* 全息：双手=俯仰/缩放；捏合拖拽=偏航轨道；食指指向 dwell=抓取拉屏；否则放行挥扫 */
     if(hands.length>=2){   /* 双手：撑开/收拢=缩放、整体上下=俯仰、扭转=偏航（P1 三自由度齐活）；
-       面板开着=双手缩放面板（空中面板语法优先，场景相机让位） */
+       面板开着=双手缩放面板（空中面板语法优先，场景相机让位）；
+       双手皆捏=对象通道（2026-08-22 开坛拆解）：拉开=拆解法器、合拢=收坛——与张掌相机通道正交 */
       const span=Math.hypot(hands[0][9].x-hands[1][9].x,hands[0][9].y-hands[1][9].y);
       const midY=(hands[0][9].y+hands[1][9].y)/2;
       const ang=Math.atan2(hands[1][9].y-hands[0][9].y,hands[1][9].x-hands[0][9].x);
+      const pA=Math.hypot(hands[0][4].x-hands[0][8].x,hands[0][4].y-hands[0][8].y);
+      const pB=Math.hypot(hands[1][4].x-hands[1][8].x,hands[1][4].y-hands[1][8].y);
+      if(pA<GEST.PINCH_D&&pB<GEST.PINCH_D){
+        holoS.thb=null;
+        if(!sm.xpB){
+          sm.xpB={span,mid:holoDrill?holoDrill.mid:(holoHover||((holoLastHov&&now-holoLastHov.at<1500)?holoLastHov.mid:null))};
+          if(!holoDrill&&!sm.xpB.mid) toast("先指向一件法器，再双手捏住拉开=拆解");
+        } else {
+          const kx=span/Math.max(0.02,sm.xpB.span);
+          if(holoDrill){   /* 开坛中：双捏合拢=收坛拼合 */
+            if(kx<0.70){ holoDrillExit(); fxSnd("grab"); toast("已收坛");
+              stat("holo_drill_exit",{src:"gesture2"});
+              sm.xpB=null; sm.cooldownAt=now+GEST.COOLDOWN; }
+          } else if(sm.xpB.mid&&holoS.nodes[sm.xpB.mid]){
+            const nx=holoS.nodes[sm.xpB.mid];
+            nx._preX=Math.max(0,Math.min(0.5,(kx-1)*1.43));   /* 跟手预拆：分瓣随手距张开（松手回合） */
+            if(kx>1.35){ nx._preX=0;
+              if((((state.ctx||{}).svc||{})[sm.xpB.mid]||[]).length) holoDrillEnter(sm.xpB.mid,"gesture2");
+              else toast("这台机暂无编目服务");
+              sm.xpB=null; sm.cooldownAt=now+GEST.COOLDOWN; }
+          }
+        }
+        grab.mid=null; return;
+      }
+      if(sm.xpB){ if(sm.xpB.mid&&holoS.nodes[sm.xpB.mid]) holoS.nodes[sm.xpB.mid]._preX=0; sm.xpB=null; }
       if(holoS.thb){
         const pnS=$("holopanel");
         if(holoPanelMid&&pnS&&pnS.classList.contains("on")){
@@ -3996,6 +4167,7 @@ function handleGesture(d){
       holoS.thb={span,midY,ang}; grab.mid=null; return;
     }
     holoS.thb=null;
+    if(sm.xpB){ if(sm.xpB.mid&&holoS.nodes[sm.xpB.mid]) holoS.nodes[sm.xpB.mid]._preX=0; sm.xpB=null; }   /* 双捏中断=预拆回合 */
     if(holoDrill){   /* P3 下钻模态：指尖悬停子星，捏死星=武装救活；捏空处/握拳=退出 */
       holoDrill.hover=cursorPos?holoPickSub(cursorPos[0],cursorPos[1]):null;
       const pdd=Math.hypot(lm[4].x-lm[8].x,lm[4].y-lm[8].y);
