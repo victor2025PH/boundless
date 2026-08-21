@@ -22,6 +22,7 @@ import MatrixRain from "./fx/MatrixRain";
 import ShineCard from "./fx/ShineCard";
 import BonusLadder from "./BonusLadder";
 import HeroStatCards from "./HeroStatCards";
+import NewbieCountdown, { readStoredRegTs } from "./NewbieCountdown";
 import RotatingPerk from "./RotatingPerk";
 import { track } from "@/lib/track";
 import { CONTACT_URL } from "@/lib/site";
@@ -418,12 +419,16 @@ export default function PricingPage() {
 
 function NewbiePoster({ zh, rechargeHref }: { zh: boolean; rechargeHref: (plan: string) => string }) {
   const viewed = useRef(false);
+  // 真倒计时锚：仅 localStorage 续存（用户从 /order?reg_ts= 深链来过才有）——
+  // /pricing 无深链参数场景，匿名访客依旧零倒计时（假倒计时红线不变）。
+  const [regTs, setRegTs] = useState(0);
 
   useEffect(() => {
     if (!viewed.current) {
       viewed.current = true;
       track("pricing_newbie_poster_view", {});
     }
+    setRegTs(readStoredRegTs());
   }, []);
 
   const aiReplies = Math.round(NEWBIE_PACK.tokens / tokenRate("ai_reply").tokens);
@@ -439,9 +444,12 @@ function NewbiePoster({ zh, rechargeHref }: { zh: boolean; rechargeHref: (plan: 
 
         <div className="relative flex flex-wrap items-center gap-x-10 gap-y-6 px-7 py-8 md:px-10">
           <div className="flex min-w-[240px] flex-1 flex-col">
-            <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-amber-300/15 px-3 py-1 text-xs font-medium text-amber-300">
-              <Gift className="h-3.5 w-3.5" />
-              {zh ? `新人专享 · 注册 ${NEWBIE_PACK.windowHours} 小时内 · 每账号一次` : `Newcomers only · within ${NEWBIE_PACK.windowHours}h of signup · once per account`}
+            <span className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-amber-300/15 px-3 py-1 text-xs font-medium text-amber-300">
+                <Gift className="h-3.5 w-3.5" />
+                {zh ? `新人专享 · 注册 ${NEWBIE_PACK.windowHours} 小时内 · 每账号一次` : `Newcomers only · within ${NEWBIE_PACK.windowHours}h of signup · once per account`}
+              </span>
+              {regTs > 0 && <NewbieCountdown regTs={regTs} zh={zh} />}
             </span>
             <div className="mt-4 flex flex-wrap items-end gap-x-4 gap-y-2">
               <span className="text-5xl font-bold tabular-nums text-white md:text-6xl">{NEWBIE_PACK.price}U</span>

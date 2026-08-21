@@ -27,6 +27,7 @@ import MatrixRain from "./fx/MatrixRain";
 import Reveal from "./fx/Reveal";
 import HeroStatCards from "./HeroStatCards";
 import RotatingPerk from "./RotatingPerk";
+import { parseRegTs, readStoredRegTs } from "./NewbieCountdown";
 import RechargeOrderZone, { StickyOrderBar, type CreditView } from "./RechargeOrderZone";
 import { track } from "@/lib/track";
 import { BRAND_FILM } from "@/lib/film";
@@ -82,16 +83,7 @@ const FAMILY_ICON: Record<OrderFamily, typeof Sparkles> = {
   lingox: Languages,
 };
 
-/** 注册时间锚解析（秒 / 毫秒兼容）：必须是过去时间且 30 天内——垃圾值 / 陈年值
- *  不进倒计时语义，返回 0（= 不显示倒计时，绝不显示一个错的钟）。 */
-function parseRegTs(raw: string | null): number {
-  const n = Number(raw || 0);
-  if (!Number.isFinite(n) || n <= 0) return 0;
-  const ms = n > 1e12 ? n : n * 1000;
-  const age = Date.now() - ms;
-  if (age < 0 || age > 30 * 86400e3) return 0;
-  return ms;
-}
+/* parseRegTs / 倒计时组件在 components/NewbieCountdown.tsx（/pricing 海报共用单源）。 */
 
 /** 首屏主张区（kicker / 脉冲徽章 / 两行大标题 / 轮换卖点 / 一句话副标题 + 规则折叠）。
  *  外层以 key={family} 重挂：切产品线时 CSS 入场重播、规则折叠态自动复位。 */
@@ -227,7 +219,7 @@ export default function OrderPanel() {
     const fp = q.get("fp");
     if (fp) setPrefillFp(fp.slice(0, 128));
     // 新人 6U 真倒计时锚：?reg_ts= 优先，localStorage（bl-reg-ts）兜底续存——
-    // 从桌面海报点进来后刷新 / 二次访问倒计时不丢。
+    // 从桌面海报点进来后刷新 / 二次访问 / 逛去 /pricing 倒计时都不丢。
     const rt = parseRegTs(q.get("reg_ts"));
     if (rt) {
       setRegTs(rt);
@@ -235,10 +227,8 @@ export default function OrderPanel() {
         localStorage.setItem("bl-reg-ts", String(rt));
       } catch {}
     } else {
-      try {
-        const saved = parseRegTs(localStorage.getItem("bl-reg-ts"));
-        if (saved) setRegTs(saved);
-      } catch {}
+      const saved = readStoredRegTs();
+      if (saved) setRegTs(saved);
     }
     const ref = q.get("ref");
     if (ref) setPrefillRef(ref.slice(0, 160));
