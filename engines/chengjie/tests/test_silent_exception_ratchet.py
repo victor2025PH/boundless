@@ -43,7 +43,13 @@ _VOCAL_ATTRS = frozenset({
 
 # 每个 src/<模块> 的静默处天花板（**只降不升**）。基线取自 2026-08-28 全树扫描。
 _SILENT_CEILINGS: dict[str, int] = {
-    "web": 575,
+    # 575 → 572（2026-08-28 第二批）：unified_inbox_send_routes 三处补 WARNING，
+    # 行为不变。同样按「失败有业务后果」筛，不是按数量扫：
+    #   · os.remove(local) ×2 —— 上传失败/超限拒收后的临时文件删除，单个可达
+    #     10MB(图)/50MB(视频)，静默失败＝慢性占盘；
+    #   · 账号所有权探测异常 —— 落到 return "offline" 即拦发，而本函数 docstring
+    #     写的是「异常一律放行」。分歧待产品决策，先让它可见（**未改返回值**）。
+    "web": 572,
     "integrations": 335,
     # 213 → 211（2026-08-28）：ai_client 两处「best-effort 包装」补了 WARNING，
     # 行为不变（仍 fail-open），只是不再无声。两处都不是随手挑的：

@@ -174,7 +174,15 @@ def _account_send_block(platform: str, account_id: str) -> str:
                 if get_orchestrator().owns(platform, account_id):
                     return ""
             except Exception:
-                pass
+                # ⚠ 只加留痕，**刻意不改返回值**：这里落到下面的 return "offline" ＝
+                # 拦发，与本函数 docstring 写的「查不到/异常一律放行」策略相反
+                # （外层 except 是 return "" 放行）。注册表已判 offline，把「所有权
+                # 探测失败」当作维持原判也说得通，所以这是个待产品决策的分歧而不是
+                # 明确 bug —— 先让它可见，别静默地按拦发执行。
+                logger.warning(
+                    "[send] 账号所有权探测异常，按注册表原判 offline 拦发 %s/%s"
+                    "（注意与本函数「异常放行」策略不一致）", platform, account_id,
+                    exc_info=True)
             return "offline"
         return ""
     except Exception:
@@ -971,14 +979,18 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             try:
                 os.remove(local)
             except Exception:
-                pass
+                # 删不掉不该挡住给坐席的 502，但也不能无声：这是上传失败路径上的
+                # 落盘残留，单个文件可达 10MB(图)/50MB(视频)，反复失败会慢性占盘。
+                logger.warning("[send-media] 上传失败后临时文件未能删除 path=%s", local,
+                               exc_info=True)
             raise HTTPException(502, tr(request, "err.inbox.media_send_failed", err=ex))
         if _overflow:
             _dedup.release(_dedup_scope, _client_msg_id)
             try:
                 os.remove(local)
             except Exception:
-                pass
+                logger.warning("[send-media] 超限拒收后临时文件未能删除 path=%s", local,
+                               exc_info=True)
             raise HTTPException(413, tr(
                 request, "err.inbox.file_too_large_mb", mb=_cap_mb))
 
