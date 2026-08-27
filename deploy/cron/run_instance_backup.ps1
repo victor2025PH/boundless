@@ -1,4 +1,4 @@
-# run_instance_backup.ps1 -- scheduled-task shell for FULL production instance backup.
+﻿# run_instance_backup.ps1 -- scheduled-task shell for FULL production instance backup.
 #
 # ASCII-only on purpose (PS 5.1 decodes BOM-less UTF-8 as GBK), same convention as
 # the script it wraps: engines\chengjie\scripts\instance_backup.ps1.
@@ -31,7 +31,19 @@ param(
     [string]$OutDir   = '',
     [int]$Keep        = 7,
     [string]$Label    = 'nightly',
-    [switch]$DryRun
+    [switch]$DryRun,
+
+    # ── 异地副本（默认关，必须由运营显式开启）───────────────────────────────
+    # 为什么不默认开：备份包里是**明文客户聊天记录**（messages.text / FTS 镜像均未加密，
+    # 见体检 PII 项）。把它推上对象存储是一个数据保护决策，不该由脚本替运营做：
+    #   1) 需要一个**专用桶**（现有 r2:avatarhub 是下载镜像，不能混放客户数据）；
+    #   2) 强烈建议走 rclone crypt remote 加密后再传，否则等于把 PII 明文放到云上；
+    #   3) 保留策略与本地 -Keep 独立，需在云侧另配生命周期规则。
+    # 三件事都定了再开 -Offsite；本地备份不依赖它，关着也不影响主路。
+    [switch]$Offsite,
+    [string]$RcloneExe    = 'C:\Tools\rclone\rclone.exe',
+    [string]$RcloneConf   = '',          # 缺省用仓库内 deploy\secrets\rclone_r2.conf
+    [string]$OffsiteRemote = ''          # 例：r2:boundless-backups/zhiliao
 )
 
 $ErrorActionPreference = 'Stop'
@@ -89,4 +101,29 @@ if ($zips.Count -gt $Keep) {
 $newest = @(Get-ChildItem -LiteralPath $OutDir -Filter '*.zip' -File | Sort-Object LastWriteTime -Descending)[0]
 Say ("done   newest={0} ({1} MB)  kept={2}" -f $newest.Name, [math]::Round($newest.Length / 1MB, 1),
      @(Get-ChildItem -LiteralPath $OutDir -Filter '*.zip' -File).Count)
+
+# 异地副本：仅在显式 -Offsite 时执行；失败**不**改变退出码——本地备份已经成功，
+# 不能因为云侧不可达就把整个任务报红（否则运营会为了消红而关掉整个备份）。
+if ($Offsite) {
+    if (-not $OffsiteRemote) {
+        Say 'offsite SKIP: -Offsite 已开但未给 -OffsiteRemote（例 r2:boundless-backups/zhiliao）'
+    }
+    elseif (-not (Test-Path -LiteralPath $RcloneExe)) {
+        Say "offsite SKIP: rclone 不存在 $RcloneExe"
+    }
+    else {
+        if (-not $RcloneConf) { $RcloneConf = Join-Path $RepoRoot 'deploy\secrets\rclone_r2.conf' }
+        if (-not (Test-Path -LiteralPath $RcloneConf)) {
+            Say "offsite SKIP: rclone 配置不存在 $RcloneConf"
+        }
+        else {
+            Say "offsite 上传 $($newest.Name) -> $OffsiteRemote"
+            & $RcloneExe --config $RcloneConf copy $newest.FullName $OffsiteRemote --no-traverse 2>&1 |
+                ForEach-Object { Say "  rclone: $_" }
+            if ($LASTEXITCODE -eq 0) { Say 'offsite OK' }
+            else { Say "offsite FAILED exit=$LASTEXITCODE（本地备份仍然有效，任务不因此报红）" }
+        }
+    }
+}
+
 exit 0

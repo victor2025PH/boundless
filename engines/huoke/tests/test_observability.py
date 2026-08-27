@@ -486,7 +486,11 @@ class TestConfigValidator:
 
 class TestSanitization:
     def test_api_key_masked(self):
-        text = "Using key ${OPENAI_API_KEY}"
+        # 合成夹具，必须匹配 security._SENSITIVE_PATTERNS 的 sk-[a-zA-Z0-9]{20,}。
+        # 2026-08-27：此处原本就是一个 sk- 字面量，被某次密钥清扫替换成了
+        # "${OPENAI_API_KEY}" —— 脱敏器于是无物可脱，本用例恒真、彻底失去鉴别力
+        # （下一行 `"sk-abc" not in result` 断言正是原始输入留下的指纹）。
+        text = "Using key sk-abcTESTONLYnotarealkey0123456789"  # gitleaks:allow
         result = sanitize(text)
         assert "sk-abc" not in result
         assert "REDACTED" in result
