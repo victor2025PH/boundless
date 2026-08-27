@@ -44,6 +44,14 @@ _PRODUCTION_QR_EXPIRED = (
     "code=100 path=/api/talk/thrift/LoginQrCode/SecondaryQrCodeLoginPermitNoti"
 )
 
+# 2026-08-24 实录（transcript login_qrfail_20260824_032405.log）：扫码 20s + 输码 11s 全对，
+# qrCodeLoginV2 仍被拒——LINE 的 code=100 是通用码，同时盖「QR 过期」与「服务端临时拒绝」，
+# 归类必须靠文案分流，否则用户被指去「重新扫码/动作快点」，把风控冷却越撞越长。
+_PRODUCTION_TEMP_UNAVAILABLE = (
+    "Verification is temporarily unavailable.\nPlease try again later. "
+    "code=100 path=/api/talk/thrift/LoginQrCode/SecondaryQrCodeLoginService/qrCodeLoginV2"
+)
+
 _PIN = "739241"
 
 
@@ -155,6 +163,9 @@ def test_classify_maps_production_qr_expired_sample():
     ("HTTP 429 Too Many Requests", "rate_limited"),
     ("Connection refused", "network"),
     ("something entirely unexpected", "login_failed"),
+    # code=100 双语义分流：带「temporarily unavailable」的必须先于 code=100 规则命中
+    (_PRODUCTION_TEMP_UNAVAILABLE, "temp_unavailable"),
+    (_PRODUCTION_QR_EXPIRED, "qr_expired"),
 ])
 def test_classify_covers_enum(text, expect):
     assert lpl.classify_login_error(text) == expect
@@ -163,22 +174,87 @@ def test_classify_covers_enum(text, expect):
 def test_classify_only_returns_declared_codes():
     """reason_code 是跨层契约（前端按码取文案），冒出枚举外的值前端会回落成通用错误。"""
     allowed = {"qr_expired", "pin_timeout", "network", "rate_limited",
-               "login_failed", "okline_missing", "client_init", "cancelled"}
-    samples = [_PRODUCTION_QR_EXPIRED, "pin not verified", "timed out", "429",
+               "login_failed", "okline_missing", "client_init", "cancelled",
+               "temp_unavailable"}
+    samples = [_PRODUCTION_QR_EXPIRED, _PRODUCTION_TEMP_UNAVAILABLE,
+               "pin not verified", "timed out", "429",
                "ssl error", "", "boom", "flood wait"]
     for s in samples:
         assert lpl.classify_login_error(s) in allowed, f"越界 reason_code: {s}"
 
 
+def test_temp_unavailable_not_remapped_by_pin_phase():
+    """服务端临时拒绝不参与「PIN 阶段过期→pin_timeout」的改判。
+
+    2026-08-24 实录就是 PIN 已签发、验证也通过、最后一步被拒——把它说成「验证码超时，
+    这次动作快点」同样是指错路（用户 11 秒就输完了，快慢不是问题）。
+    """
+
+    class _TempUnavail(_PinOkLine):
+        def qr_login(self, *, on_qr=None, on_pin=None, **kw):
+            if on_qr:
+                on_qr("line://qr/temp-unavail")
+            if on_pin:
+                on_pin(_PIN)
+            raise RuntimeError(_PRODUCTION_TEMP_UNAVAILABLE)
+
+    state: dict = {}
+    lpl._drive_qr_login(_TempUnavail(), state, {})
+    assert state["status"] == "failed"
+    assert state["reason_code"] == "temp_unavailable"
+
+
 def test_failure_never_leaks_internals_to_ui():
-    """thrift 路径/错误码既看不懂，又泄露了我们在用逆向协议——只能进日志，不能进界面。"""
+    """thrift 路径/错误码既看不懂，又泄露了我们在用逆向协议——只能进日志，不能进界面。
+
+    注意：_ExpiredOkLine 已签发 PIN，阶段感知归因把 qr_expired 修正为 pin_timeout
+    （见 test_pin_phase_expiry_reclassified_to_pin_timeout）；本测试只守「不泄露」。
+    """
     state: dict = {}
     lpl._drive_qr_login(_ExpiredOkLine(), state, {})
     assert state["status"] == "failed"
-    assert state.get("reason_code") == "qr_expired"
+    assert state.get("reason_code") == "pin_timeout"
     leaked = str(state.get("detail") or "")
     for needle in ("thrift", "path=", "code=", "/api/talk"):
         assert needle not in leaked, f"detail 泄露内部实现：{leaked}"
+
+
+def test_pin_phase_expiry_reclassified_to_pin_timeout():
+    """PIN 已签发后网关报「QR expired」＝会话在**验证码环节**到期。
+
+    用户视角他扫码成功了——再报「二维码超时」等于指错路（2026-08-24 实录截图：
+    扫完码、输完验证码，界面却让他「重新获取二维码」）。classify 保持纯文本归类，
+    阶段修正在 _mark_failed 收口。
+    """
+    state: dict = {}
+    lpl._drive_qr_login(_ExpiredOkLine(), state, {})
+    assert state["status"] == "failed"
+    assert state["reason_code"] == "pin_timeout"
+    # 归因改了，但 PIN 字段仍在（前端失败态要保留「输验证码」语境）
+    assert state["pin"] == _PIN
+
+
+def test_qr_expiry_before_pin_stays_qr_expired():
+    """没扫码就过期仍归 qr_expired——阶段修正只认「PIN 已签发」这个事实，不许扩大化。"""
+
+    class _NoPinExpired(_PinOkLine):
+        def qr_login(self, *, on_qr=None, on_pin=None, **kw):
+            if on_qr:
+                on_qr("line://qr/x")
+            raise RuntimeError(_PRODUCTION_QR_EXPIRED)
+
+    state: dict = {}
+    lpl._drive_qr_login(_NoPinExpired(), state, {})
+    assert state["status"] == "failed"
+    assert state["reason_code"] == "qr_expired"
+
+
+def test_cancelled_terminal_not_reclassified():
+    """用户取消后线程随后抛出的过期异常不得改写 cancelled 终态（阶段修正路径同样要让行）。"""
+    state = {"reason_code": "cancelled", "status": "failed", "pin": _PIN,
+             "pin_issued_at": time.time()}
+    lpl._mark_failed(state, "qr_expired")
+    assert state["reason_code"] == "cancelled"
 
 
 # ── 三、poll 返回体的跨层契约 ───────────────────────────────────────────────
@@ -234,9 +310,59 @@ def test_poll_surfaces_reason_code_on_failure(monkeypatch):
                 break
             time.sleep(0.1)
         assert res["status"] == "failed"
-        assert res["reason_code"] == "qr_expired"
+        # _ExpiredOkLine 已签发 PIN → 阶段感知归因为 pin_timeout
+        assert res["reason_code"] == "pin_timeout"
 
     asyncio.run(run())
+
+
+def test_poll_reports_pin_expiry_countdown(monkeypatch):
+    """pin_needed 期间 poll 必须带 pin_expires_in（服务端按签发时刻推算的权威倒计时）。
+
+    没有它，前端只能用本地写死常量——旧值 240s 比网关真实窗口（实测 ~120s 即回过期）
+    乐观一倍，倒计时走到一半码就死了。授权后该字段归 0（PIN 生命周期结束）。
+    """
+    import threading as _th
+    release = _th.Event()
+
+    class _SlowPin(_PinOkLine):
+        def qr_login(self, *, on_qr=None, on_pin=None, **kw):
+            if on_qr:
+                on_qr("line://qr/slow")
+            if on_pin:
+                on_pin(_PIN)
+            release.wait(5.0)
+            return _FakeResult()
+
+    provider = _run_provider(monkeypatch, _SlowPin)
+
+    async def run():
+        info = await provider(None, "line", "protocol", "")
+        res = None
+        for _ in range(50):
+            res = await info["poll"](None)
+            if res["status"] == "pin_needed":
+                break
+            time.sleep(0.1)
+        assert res is not None and res["status"] == "pin_needed"
+        assert 0 < res["pin_expires_in"] <= lpl._PIN_WINDOW_SEC, (
+            f"pin_needed 期间应回剩余秒（0 < x <= {lpl._PIN_WINDOW_SEC}），实际 {res['pin_expires_in']}")
+        release.set()
+        for _ in range(50):
+            res = await info["poll"](None)
+            if res["status"] == "authorized":
+                break
+            time.sleep(0.1)
+        assert res["status"] == "authorized"
+        assert res["pin_expires_in"] == 0, "授权后 pin_expires_in 应归 0"
+
+    asyncio.run(run())
+
+
+def test_pin_window_stays_below_hold_budget():
+    """展示窗口只能比后台预算紧、不能松：窗口 > wait_seconds(240) 意味着倒计时还在走、
+    后台线程早已放弃——回到「盯着假倒计时白等」的旧病。"""
+    assert 0 < lpl._PIN_WINDOW_SEC <= 240
 
 
 # ── 四、挂起态不被 TTL 误清 ─────────────────────────────────────────────────
@@ -291,8 +417,8 @@ def test_ordinary_pending_still_expires():
 
 def test_status_route_passes_pin_and_reason_code():
     src = _text(_ROUTES)
-    for field in ('"pin"', '"reason_code"'):
-        assert field in src, f"status 路由未透传 {field}，PIN 到不了前端"
+    for field in ('"pin"', '"reason_code"', '"pin_expires_in"'):
+        assert field in src, f"status 路由未透传 {field}，PIN/倒计时到不了前端"
 
 
 def test_frontend_consumes_structured_pin():
@@ -300,6 +426,39 @@ def test_frontend_consumes_structured_pin():
     src = _text(_TEMPLATE)
     assert re.search(r"\bd\.pin\b", src), "前端未消费结构化 pin 字段"
     assert "pin_needed" in src, "前端缺 pin_needed 状态分支"
+
+
+def test_frontend_consumes_pin_expiry_countdown():
+    """倒计时必须以服务端 pin_expires_in 为准——两套时钟各说各话是 2026-08-24 实录的病根：
+    前端写死 240s，网关 ~120s 就判死，用户盯着「剩余 1:30」白输。"""
+    src = _text(_TEMPLATE)
+    assert "pin_expires_in" in src, "前端未消费 pin_expires_in（倒计时仍用本地写死常量）"
+
+
+def test_frontend_pin_timeout_has_specific_status():
+    """失败短状态：pin_timeout 必须映射到专属短语（验证码验证超时），
+    而不是让遮罩/状态行/卡头三处齐喊「登录失败」把诊断藏起来。"""
+    src = _text(_TEMPLATE).replace(" ", "")
+    assert "pin_timeout:'inbox.connect.st_pin_timeout'" in src, \
+        "_CONNECT_FAIL_STATUS_KEYS 缺 pin_timeout 专属短状态"
+
+
+def test_pin_phase_copy_is_bilingual():
+    """PIN 阶段新增键 zh/en 双语齐备（_CONNECT_FAIL_STATUS_KEYS 等经变量取键，
+    window.T 静态门禁扫不到，这里补上）。"""
+    from src.web.web_i18n import get_translations
+
+    keys = ("inbox.connect.st_pin_timeout", "inbox.connect.st_pin_maybe_expired",
+            "inbox.connect.hint_pin_maybe_expired", "inbox.connect.fail_retry_pointer",
+            "inbox.connect.hint_pin_short", "inbox.connect.pin_step1",
+            "inbox.connect.pin_step2", "inbox.connect.pin_step3",
+            "inbox.connect.st_temp_unavailable")
+    missing = []
+    for key in keys:
+        for lang in ("zh", "en"):
+            if not str(get_translations(lang).get(key) or "").strip():
+                missing.append(f"[{lang}] {key}")
+    assert not missing, f"PIN 阶段键缺文案: {missing}"
 
 
 def test_frontend_has_branch_for_every_actionable_state():

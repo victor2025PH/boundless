@@ -38,9 +38,9 @@ import { fileURLToPath } from "url";
 import path from "path";
 import fs from "fs";
 import { chromium } from "playwright";
-import { classifyLoginPage, actionableCode, STAGE, isE2eePinText } from "./login_classify.js";
+import { classifyLoginPage, actionableCode, checkpointFlavor, STAGE, isE2eePinText, isTemporarilyBlockedText } from "./login_classify.js";
 import { relayStepFromStage, sanitizeSubmit, fillPlanFor, RELAY_STEP } from "./login_relay.js";
-import { resolveLaunch } from "./login_window.js";
+import { resolveLaunch, shouldAutoHideAfterLogin } from "./login_window.js";
 import {
   synthMsgId, parseReactionFromAria, isUnsentPreview, isUnsentTombstone,
   classifyInboxHint, resolveInboxHint, pinHealBump, adaptiveReqEvery, canOpenThread, normalizePin, autoPinGate,
@@ -50,6 +50,9 @@ import {
   matchQuotedTarget, msgrPaletteTarget, reactAriaCandidates,
   pickUnreadForced, classifyRequestsScan, sentRingPush, sentRingHit, echoTextHit,
   classifyComposerBlock, pickManualOutMirror,
+  inferGroupFromInboundSenders, updateSenderRoster,
+  sendFailureBackoffMs,
+  ariaDatetimeToEpoch,
 } from "./msg_ops.js";
 import {
   parseCurrentUserInitialData, pickSelfAvatar, summarizeCandidates,
@@ -97,6 +100,34 @@ const SESSIONS_DIR = process.env.MSG_SESSIONS_DIR || path.join(__dirname, "sessi
 const PORT = Number(process.env.PORT || 8791);
 const logger = pino({ level: process.env.LOG_LEVEL || "info" });
 
+// ── 进程遗言钩子（实施72 排查 2026-08-27 加，纯日志零行为变更）────────────────
+// 当日实锤：03:42-05:29 六只 node 进程**静默死亡**（日志里最后一行都是正常业务行，
+// 无任何堆栈/退出痕迹），死因至今不可归因——stdout/stderr 均已被启动器 2>&1 落盘，
+// 说明进程要么被外部强杀（taskkill /F 不给遗言机会），要么 exit 前没有任何输出。
+// 这里给「还来得及说话」的每一种死法都留一行：下一次成簇死亡时，「有遗言=进程内
+// 因（含具体异常）；无遗言=外部强杀」这条二分法直接把排查范围砍半。
+// 刻意不改变行为：uncaughtException/unhandledRejection 记录后仍按 node 默认语义
+// 退出（记完 flush 由 pino 同步 stdout 保证）——吞异常保活会把半死态变成新常态。
+process.on("exit", (code) => {
+  try { logger.warn({ code }, "process exit"); } catch (_) {}
+});
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"]) {
+  try {
+    process.on(sig, () => {
+      try { logger.warn({ sig }, "signal received, exiting"); } catch (_) {}
+      process.exit(128);
+    });
+  } catch (_) { /* 平台不支持该信号则跳过 */ }
+}
+process.on("uncaughtException", (err) => {
+  try { logger.error({ err: String(err && err.stack || err) }, "uncaughtException (exiting)"); } catch (_) {}
+  process.exit(1);
+});
+process.on("unhandledRejection", (reason) => {
+  try { logger.error({ reason: String(reason && reason.stack || reason) }, "unhandledRejection (exiting)"); } catch (_) {}
+  process.exit(1);
+});
+
 // 交互登录时是否隐藏浏览器窗口。默认 headed（"0"）：运营需在弹窗里完成官方登录
 // （扫码 / 账密 / 2FA）。这条只管**新发起的交互登录**。
 const HEADLESS = String(process.env.MSG_HEADLESS ?? "0") === "1";
@@ -106,6 +137,23 @@ const HEADLESS = String(process.env.MSG_HEADLESS ?? "0") === "1";
 // 被运营关掉后，scheduleRecovery 走 isRestore=true 也会以无头自动回来。多账号规模化
 // 的窗口治理主要靠这条（10 号从 10 个可见窗口 → 0）。置 "0" 恢复「restore 也 headed」旧行为。
 const RESTORE_HEADLESS = String(process.env.MSG_RESTORE_HEADLESS ?? "1") === "1";
+// B65（2026-08-24 老板拍板）：headed 登录窗在**授权成功后自动无头回归**。登录前窗口必须
+// 可见可操作（账密/2FA/checkpoint 都在真窗口里完成，配合登录看门狗的 stage 前置顶）；
+// 授权后窗口的使命结束——继续可见就是「三个页面来回刷新」的木偶秀（轮询 readPage/reqPage
+// 每 4s 导航），用户会去点/关它反而干扰自动化。做法＝复用崩溃自愈同一条恢复链：优雅关闭
+// headed context → startLogin(isRestore=true) 按 RESTORE_HEADLESS 无头回归（profile 持久化
+// + cookie 已落盘，通常 2-4s 内免扫重连）。置 "0" 回到「窗口留到人手关」旧行为。
+const HIDE_AFTER_LOGIN = String(process.env.MSG_HIDE_AFTER_LOGIN ?? "1") === "1";
+// 授权到隐藏之间的缓冲：让人看清「登录成功 + 养号提示」横幅，也让 saveCookies/身份采集
+// 落定。下限 3s 防手抖配置把成功横幅闪没。
+const HIDE_AFTER_LOGIN_DELAY_MS = Math.max(
+  3000, Number(process.env.MSG_HIDE_AFTER_LOGIN_DELAY_MS || 12000));
+// B65：登录期「需要人操作」的分段——看门狗观测到进入这些 stage 时把 headed 窗口
+// 前置一次（每个 stage 只前置一次，防 1.5s tick 反复夺焦点把整台机器搞到没法用）。
+const HUMAN_ACTION_STAGES = new Set([
+  STAGE.LOGIN_FORM, STAGE.TWO_FACTOR, STAGE.CHECKPOINT,
+  STAGE.E2EE_PIN, STAGE.PASSWORD_ERROR, STAGE.ACCOUNT_LOCKED,
+]);
 // 页面回收（省内存，规模化关键）：读会话 readPage / 读请求箱 reqPage 用完即弃，下次用到
 // 经既有 isClosed() 守卫懒重建。稳态每账号只常驻 entry.page（列表轮询）1 个 renderer——
 // 无头解决了「窗口」，这条解决「页面 renderer 随账号数线性涨」（10 号从 ~30 页 → ~10 页）。
@@ -614,7 +662,10 @@ async function backfillStep(entry) {
             // 前向兼容：当前 thread-history 路由尚未透传 msg_id（热区 ACTIVE 暂不动
             // Python）；实时 ingest 路径已带。两侧同公式，路由放开后历史表情可挂。
             msg_id: mid,
-            ts: 0, // DOM 无可靠绝对时间：Python 侧按数组序回推（只保序）
+            // 实施72 P4：aria 时间文本（parseMsgAria 早已解析出）保守转 epoch——
+            // 认出＝真实时间（Python 侧存真值、approx=0）；认不出＝0（Python 侧
+            // 照旧按数组序回推 + 打 approx 标，失败方向永远退回现状）。
+            ts: ariaDatetimeToEpoch(m.ts) || 0,
           };
         }),
     });
@@ -1171,12 +1222,17 @@ const BROWSER_CHANNEL = process.env.MSG_BROWSER_CHANNEL ?? "chrome";
 /** 浏览器启动参数（一号一代理 + 反自动化检测）。
  *  Facebook/Meta 会检测自动化浏览器（navigator.webdriver、AutomationControlled、
  *  HeadlessChrome UA 等），命中即登录后一导航就作废会话弹回登录页 → 必须 stealth。 */
-function launchOptions(proxyUrl, channel = BROWSER_CHANNEL, headless = HEADLESS, extraArgs = []) {
+function launchOptions(proxyUrl, channel = BROWSER_CHANNEL, headless = HEADLESS, extraArgs = [],
+                       humanWindow = false) {
   const opts = {
     headless: headless,
     locale: LOCALE,
     timezoneId: TZ,
-    viewport: { width: 1280, height: 800 },
+    // B64（2026-08-23 `_316`/`_317`）：给人看的 headed 登录窗必须用真实窗口视口
+    // （viewport:null=跟随窗口）——固定 1280×800 时用户「最大化/拉大窗口」页面纹丝
+    // 不动，FB checkpoint 机器人验证组件被压在一小块里放不大、过不去、永远等不到
+    // 2FA 码。离屏/headless 流保持固定视口（截图流与探测面要确定性尺寸）。
+    viewport: humanWindow ? null : { width: 1280, height: 800 },
     args: [
       "--disable-blink-features=AutomationControlled",
       "--disable-features=IsolateOrigins,site-per-process",
@@ -1207,17 +1263,19 @@ function isChannelUnavailable(err) {
 }
 
 /** 起持久化上下文：优先真 Chrome 通道，机器没装 Chrome 才回落捆绑 Chromium。
- *  headless 由调用方按「交互登录 vs restore/恢复」决定（见 startLogin）。 */
-async function launchPersistent(userDataDir, proxyUrl, headless = HEADLESS, extraArgs = []) {
+ *  headless 由调用方按「交互登录 vs restore/恢复」决定（见 startLogin）。
+ *  humanWindow=true（headed 且非离屏＝真给人操作的窗口）→ viewport 跟随窗口（B64）。 */
+async function launchPersistent(userDataDir, proxyUrl, headless = HEADLESS, extraArgs = [],
+                                humanWindow = false) {
   try {
     return await chromium.launchPersistentContext(
-      userDataDir, launchOptions(proxyUrl, BROWSER_CHANNEL, headless, extraArgs));
+      userDataDir, launchOptions(proxyUrl, BROWSER_CHANNEL, headless, extraArgs, humanWindow));
   } catch (e) {
     if (!BROWSER_CHANNEL || !isChannelUnavailable(e)) throw e;
     logger.warn({ e: String(e), channel: BROWSER_CHANNEL },
       "channel unavailable on this host → falling back to bundled chromium (weaker stealth)");
     return await chromium.launchPersistentContext(
-      userDataDir, launchOptions(proxyUrl, "", headless, extraArgs));
+      userDataDir, launchOptions(proxyUrl, "", headless, extraArgs, humanWindow));
   }
 }
 
@@ -1333,6 +1391,66 @@ async function detectPinPrompt(page) {
 }
 
 /**
+ * B70（实施67 P1-9，`_344`/`_345` 死等实录）：托管 PIN 后**主动重放**一次。
+ *
+ * 旧行为＝PIN 存好后「等下次浮层出现」由心跳/读线程顺带自愈——浮层被关掉 /
+ * 页面早已导航走时永远等不到，账号钉死在「入站半死+发送失败」。本函数把等待
+ * 变成驱动：① 当前页浮层在场 → 就地提交（零导航零副作用）；② 不在场 → 找左栏
+ * 首条 e2ee 线程链接导航过去钓浮层（副作用=该线程被标已读，vs 整账号瘫痪——
+ * 两害相权），试完导航回原页；③ 全程找不到浮层 → 如实回 prompt_not_found
+ * （PIN 已武装，下次浮层出现自动填）。绝不抛；结果回写 entry._pinState。
+ */
+async function driveE2eePinReplay(loginId, entry) {
+  if (!entry || !entry.page) return { attempted: false, healed: false, state: "offline" };
+  const page = entry.page;
+  // B99 ②可观测：replay 全程 INFO 落日志——CUN2TM 诊断包里「零 replay 行」无法
+  // 区分「没执行」vs「执行了没记」，这里把入口/结局钉成必出现的日志锚点。
+  logger.info({ loginId }, "e2ee pin replay: start");
+  try {
+    if (await detectPinPrompt(page)) {
+      const healed = await tryAutoE2eePin(loginId, entry, page).catch(() => false);
+      logger.info({ loginId, healed, state: String(entry._pinState || "") },
+        "e2ee pin replay: prompt on current page → submitted");
+      return { attempted: true, healed, state: String(entry._pinState || "") };
+    }
+    const href = await page.evaluate(() => {
+      const a = document.querySelector('a[href^="/e2ee/t/"]');
+      return a ? String(a.getAttribute("href") || "") : "";
+    }).catch(() => "");
+    if (!href) {
+      logger.info({ loginId }, "e2ee pin replay: no e2ee thread link → prompt_not_found");
+      return { attempted: false, healed: false, state: "prompt_not_found" };
+    }
+    const prevUrl = String(page.url() || "");
+    await page.goto(MESSENGER_URL.replace(/\/$/, "") + href,
+      { waitUntil: "domcontentloaded", timeout: 20000 });
+    await page.waitForTimeout(2500);
+    let healed = false;
+    let attempted = false;
+    if (await detectPinPrompt(page)) {
+      attempted = true;
+      healed = await tryAutoE2eePin(loginId, entry, page).catch(() => false);
+    }
+    // 回原页 best-effort（回不去也无害——下一轮读线程自会导航）
+    if (prevUrl && prevUrl !== String(page.url() || "")) {
+      await page.goto(prevUrl, { waitUntil: "domcontentloaded", timeout: 15000 })
+        .catch(() => {});
+    }
+    logger.info({ loginId, attempted, healed,
+      state: attempted ? String(entry._pinState || "") : "prompt_not_found" },
+    "e2ee pin replay: done");
+    return {
+      attempted, healed,
+      state: attempted ? String(entry._pinState || "") : "prompt_not_found",
+    };
+  } catch (e) {
+    logger.warn({ e: String((e && e.message) || e), loginId },
+      "e2ee pin replay: failed");
+    return { attempted: false, healed: false, state: "error" };
+  }
+}
+
+/**
  * 尝试把已配置的恢复 PIN 输进当前浮层。返回 true=浮层已消失（密钥恢复成功）。
  * 安全护栏：① 纯函数闸门 autoPinGate 管预算/冷却（误触键盘的风险面收敛成可单测的
  * 判定）；② 只在 PIN 浮层文案命中时动手；③ 登录表单（email/pass 输入框在场）绝不碰
@@ -1354,6 +1472,14 @@ async function tryAutoE2eePin(loginId, entry, page) {
   }
   if (gate.reset) entry._pinTries = 0;
   if (!(await detectPinPrompt(page))) return false;
+  // B99 ③观测：上次成功恢复后 24h 内浮层又出现＝设备密钥没被 FB 认持久
+  //（profile 本身是 launchPersistentContext 持久化的——若此行高频出现，嫌疑
+  // 在 FB 侧对指纹/代理变化的重验，证据留给下一个诊断包）。
+  if (entry._pinLastOkTs && Date.now() - entry._pinLastOkTs < 86400000) {
+    logger.warn({ loginId,
+      minsSinceHeal: Math.round((Date.now() - entry._pinLastOkTs) / 60000) },
+    "e2ee pin prompt REAPPEARED after successful heal (device-key persistence suspect)");
+  }
   const isLoginForm = await page.evaluate(
     () => !!document.querySelector('input[name="pass"], input[name="email"]'))
     .catch(() => true);
@@ -1391,6 +1517,7 @@ async function tryAutoE2eePin(loginId, entry, page) {
       logger.info({ loginId, tries: entry._pinTries },
         "e2ee recovery pin accepted (device keys restored)");
       entry._pinState = "ok";
+      entry._pinLastOkTs = Date.now();
       entry._pinHeal = pinHealBump(entry._pinHeal, "ok");
       // 密钥恢复后旧样本全部失真：清读取窗 + 占位统计——否则本拍心跳会据「恢复前
       // 的高占位比例」误报一次半死（placeholder_blind 支），要等下一次列表读取
@@ -1980,6 +2107,16 @@ async function pollInbound(entry) {
         const newSig = sigOf(fresh[fresh.length - 1]);
         if (entry.lastInboundSig.get(c.key) === newSig) continue; // 已上报过
         entry.lastInboundSig.set(c.key, newSig);
+        // P2：跨轮询累计发言人——安静群（单轮只有一人说话）也能在第二位发言人
+        // 出现时升群；excludeName=列表行名挡住 DM（含改名）误升。进程内状态，
+        // worker 重启后重新累计（store 侧 chat_type 非 private 粘住，已升的不回退）。
+        if (!entry._inboundSenders) entry._inboundSenders = new Map();
+        const _senderRoster = updateSenderRoster(
+          entry._inboundSenders, c.key,
+          tail.filter((row) => row && row.direction === "in").map((row) => row.sender),
+          { excludeName: c.name || "" },
+        );
+        const groupBySenders = inferGroupFromInboundSenders([..._senderRoster]);
         for (const m of fresh) {
           // P2：稳定 msg_id——表情/撤回按 platform_msg_id 挂载的前提
           const mid = stampMsgId(entry, c.key, m);
@@ -1987,7 +2124,10 @@ async function pollInbound(entry) {
             platform: "messenger",
             account_id: entry.accountId,
             chat_key: c.key,
-            name: m.sender || c.name || "", // 真实发送者（修复把 "在线" 当昵称）
+            // 群：会话标题用列表名，发言人走 sender_name（勿把群名改成最后说话的人）
+            name: groupBySenders ? (c.name || m.sender || "") : (m.sender || c.name || ""),
+            sender_name: m.sender || "",
+            ...(groupBySenders ? { chat_type: "group" } : {}),
             avatar_url: c.avatar || "",
             text: m.text, // 未截断全文（媒体可为空）
             media_type: m.media_type || "",
@@ -2344,6 +2484,7 @@ async function promoteIfLoggedIn(loginId, entry) {
     startPolling(entry);
     scheduleSelfProfileRecapture(loginId, entry); // 头像没采到 → 短周期补；采到了 → 长周期跟手机改动
     postStatus(loginId, entry, "authorized", "connected").catch(() => {});
+    maybeAutoHideAfterLogin(loginId, entry); // B65：headed 登录窗授权后自动无头回归
     return true;
   } catch (e) {
     logger.debug({ e, loginId }, "promoteIfLoggedIn failed");
@@ -2450,6 +2591,102 @@ function scheduleRecovery(loginId) {
   }, delay);
 }
 
+// ── B65：headed 登录窗授权后自动无头回归 ─────────────────────────────────────
+// 登录成功横幅（隐藏前的缓冲期展示）：告知「窗口将自动隐藏」消除「窗口去哪了」的困惑，
+// 顺带承载养号提示（老板拍板：不做新号强制人审，只做提醒）。全屏遮罩还有个副作用红利：
+// 缓冲期内用户点不到页面里的会话/输入框，不会在交接瞬间误操作真实账号。best-effort。
+async function injectPostLoginBanner(page) {
+  // B70（实施67 P1-9，`_341` 实锤）：授权 ≠ 页面可遮——cookie 双全时 e2ee PIN
+  // 恢复页可能正挂在面前，全屏成功横幅会把 PIN 输入盖死（用户永远输不了）。
+  // checkpoint/e2ee 浮层在场 → 本次不注入（横幅只是体验糖，遮住验证是事故）。
+  try {
+    if (await detectPinPrompt(page)) {
+      logger.info("post-login banner skipped: e2ee pin prompt on screen");
+      return;
+    }
+  } catch (_) { /* 探测失败按无浮层，维持旧行为 */ }
+  await page.evaluate(() => {
+    if (document.getElementById("__aitr_postlogin_banner")) return;
+    const d = document.createElement("div");
+    d.id = "__aitr_postlogin_banner";
+    d.style.cssText = "position:fixed;inset:0;z-index:2147483647;"
+      + "background:rgba(4,12,22,.88);color:#e8f6ff;display:flex;align-items:center;"
+      + "justify-content:center;text-align:center;"
+      + "font:15px/1.9 system-ui,'Microsoft YaHei',sans-serif;padding:32px;";
+    d.innerHTML = "<div style='max-width:520px'>"
+      + "<div style='font-size:22px;font-weight:700;margin-bottom:10px'>&#9989; 登录成功，AI 托管已开始</div>"
+      + "<div>本窗口将自动隐藏，转入后台无头运行；无需保持打开，账号照常收发。</div>"
+      + "<div style='margin-top:14px;padding:10px 14px;border:1px solid rgba(255,215,106,.5);"
+      + "border-radius:10px;color:#ffd76a'>&#127793; 新账号请注意养号：头几天建议控制自动发送频率、"
+      + "避免高频群发，降低平台风控概率。</div></div>";
+    document.documentElement.appendChild(d);
+  });
+}
+
+/** B70：成功横幅的反悔面——注入后才发现 PIN 浮层（时序竞态）时摘掉，还回输入。 */
+async function removePostLoginBanner(page) {
+  try {
+    await page.evaluate(() => {
+      const d = document.getElementById("__aitr_postlogin_banner");
+      if (d) d.remove();
+    });
+  } catch (_) { /* best-effort */ }
+}
+
+/** headed 登录窗授权后的自动隐藏：缓冲期展示成功横幅 → 优雅关闭可见 context →
+ *  以 restore 语义重启（RESTORE_HEADLESS ⇒ 无头）。判定纯函数 shouldAutoHideAfterLogin
+ *  有门禁；_intentionalClose 抑制崩溃自愈误判；失败回落 scheduleRecovery 兜底
+ * （profile/cookie 已落盘，恢复链是每天在跑的成熟路径，最坏丢一次换头、绝不丢会话）。 */
+function maybeAutoHideAfterLogin(loginId, entry) {
+  if (!shouldAutoHideAfterLogin({
+    windowMode: entry && entry.windowMode,
+    restoreHeadlessEnv: RESTORE_HEADLESS,
+    hideEnv: HIDE_AFTER_LOGIN,
+  })) return;
+  injectPostLoginBanner(entry.page).catch(() => {});
+  logger.info({ loginId, delayMs: HIDE_AFTER_LOGIN_DELAY_MS },
+    "headed login window authorized → will auto-swap to headless");
+  const t = setTimeout(async () => {
+    const cur = sessions.get(loginId);
+    // 只动「还是同一个 entry 且仍授权」的会话；期间被 relogin/cancel/logout 换掉就不掺和。
+    if (_shuttingDown || !cur || cur !== entry || cur.status !== "authorized") return;
+    if (_recovering.has(loginId)) return; // 崩溃自愈已在处理 → 让它走
+    // B70（实施67 P1-9）：隐藏前最后核对——e2ee PIN 浮层在场时把窗口无头化
+    // ＝把「等人输 PIN」的账号推进入站半死（`_344`/`_345` 死等实录）。
+    // 有托管 PIN 先就地自愈（成功→照常隐藏）；没有/自愈失败→本轮不隐藏，
+    // 摘掉成功横幅把输入还给人。
+    try {
+      if (await detectPinPrompt(cur.page)) {
+        let healed = false;
+        if (getE2eePin(loginId)) {
+          healed = await tryAutoE2eePin(loginId, cur, cur.page).catch(() => false);
+        }
+        if (!healed) {
+          logger.info({ loginId },
+            "auto-hide deferred: e2ee pin prompt on screen (window stays visible)");
+          await removePostLoginBanner(cur.page);
+          return;
+        }
+      }
+    } catch (_) { /* 探测异常按旧行为继续隐藏 */ }
+    try {
+      logger.info({ loginId }, "auto-hide: swapping headed login window to headless");
+      _intentionalClose.add(loginId); // 我们自己关的，别按崩溃自愈
+      stopPolling(cur);
+      try { await cur.context.close(); } catch (_) {}
+      sessions.delete(loginId);
+      await startLogin(loginId, cur.proxyUrl || "", true); // isRestore ⇒ RESTORE_HEADLESS 无头
+      logger.info({ loginId }, "auto-hide: headless session is back");
+    } catch (e) {
+      logger.error({ e, loginId },
+        "auto-hide swap failed → falling back to crash-recovery path");
+      _intentionalClose.delete(loginId);
+      scheduleRecovery(loginId);
+    }
+  }, HIDE_AFTER_LOGIN_DELAY_MS);
+  if (typeof t.unref === "function") t.unref();
+}
+
 async function startLogin(loginId, proxyUrl, isRestore = false, interactive = false) {
   const userDataDir = path.join(SESSIONS_DIR, loginId);
   // 窗口模式决策收拢到 login_window.resolveLaunch（纯函数 + 回归网）：非交互 / restore 逐字节
@@ -2463,7 +2700,10 @@ async function startLogin(loginId, proxyUrl, isRestore = false, interactive = fa
   const headless = launch.headless;
   logger.info({ loginId, mode: launch.mode, headless, interactive, isRestore },
     "login browser launching");
-  const context = await launchPersistent(userDataDir, proxyUrl, headless, launch.args);
+  // B64：headed（真给人操作）的登录窗视口跟随窗口，可最大化/缩放过 FB 机器人验证；
+  // offscreen/headless（截图流/无人窗口）保持固定视口。
+  const context = await launchPersistent(
+    userDataDir, proxyUrl, headless, launch.args, launch.mode === "headed");
   // 崩溃自愈：context 意外关闭 → 自动重启（正常退出由 _shuttingDown 拦掉）。
   context.on("close", () => scheduleRecovery(loginId));
   await applyStealth(context);
@@ -2481,8 +2721,17 @@ async function startLogin(loginId, proxyUrl, isRestore = false, interactive = fa
     proxyUrl: proxyUrl || "",
     seen: new Map(),
     pollTimer: null,
+    // B65：窗口模式随 entry 走——授权后自动隐藏（maybeAutoHideAfterLogin）与登录期
+    // stage 前置顶都只对可见 headed 窗口生效，offscreen/headless 不折腾。
+    windowMode: launch.mode,
   };
   sessions.set(loginId, entry);
+
+  // B65：登录前窗口主动弹出（老板拍板「登录前的各个页面不要隐藏，反而要主动弹出」）。
+  // 仅可见 headed + 非 restore（restore 无人在等窗口）；best-effort，弹不起来不阻塞登录链。
+  if (launch.mode === "headed" && !isRestore) {
+    page.bringToFront().catch(() => {});
+  }
 
   // profile-first restore：先用持久化 profile 自身的 cookie 导航——它往往已含**最新** xs
   // （持久化上下文会随浏览器写盘）。仅当 profile 自身未登录时，才回落注入快照 .cookies.json 并重载。
@@ -2549,6 +2798,17 @@ async function startLogin(loginId, proxyUrl, isRestore = false, interactive = fa
           entry.hintCode = actionableCode(lastStage);
           // 表单中继只读探针（/login/:id/relay-step）复用这份缓存，不重复抓页。
           entry.lastStage = lastStage;
+          // B64 三期：checkpoint 子味（等手机确认 vs 机器人验证/泛检查点）——仅细化
+          // relay-step 的 code（前端手机叙事视图），hint_code/reason_code 词汇不动
+          //（Python 漏斗契约保持：窗口期失败归因仍是 checkpoint）。
+          entry.lastFlavor = (lastStage === STAGE.CHECKPOINT) ? checkpointFlavor(pageText) : "";
+          // B65：进入需要人操作的分段（账密/2FA/checkpoint/PIN/密码错/锁定）→ headed 窗口
+          // 主动置顶一次（同一 stage 不重复夺焦点）。offscreen/headless 不折腾。
+          if (entry.windowMode === "headed" && lastStage
+              && lastStage !== entry._frontedStage && HUMAN_ACTION_STAGES.has(lastStage)) {
+            entry._frontedStage = lastStage;
+            page.bringToFront().catch(() => {});
+          }
           const sig = `${url}|${hasCUser}|${hasXs}|${lastStage}`;
           if (sig !== lastSig) {
             lastSig = sig;
@@ -3416,7 +3676,20 @@ app.post("/accounts/:id/e2ee-pin", async (req, res) => {
     }
   }
   logger.info({ loginId }, "e2ee pin stored (auto-restore armed)");
-  res.json({ ok: true, login_id: loginId, pin_set: true });
+  // B70（实施67 P1-9）：托管即重放——不再死等「下次浮层出现」。异步驱动
+  // （不阻塞响应），结果回写 entry._pinState 经 /accounts 心跳出网给上层
+  // 读进度。会话不在线 → replay:"offline"（下次上线由既有自愈链接管）。
+  let replay = "offline";
+  if (entry && entry.page) {
+    replay = "started";
+    setImmediate(() => {
+      driveE2eePinReplay(loginId, entry).then((r) => {
+        logger.info({ loginId, attempted: r.attempted, healed: r.healed,
+          state: r.state }, "e2ee pin replay after store");
+      }).catch(() => {});
+    });
+  }
+  res.json({ ok: true, login_id: loginId, pin_set: true, replay });
 });
 
 // P0（2026-08-14 必答弹窗配套）：立即验证所存 PIN——「所存即所验」。
@@ -3601,6 +3874,10 @@ app.get("/login/:id/relay-step", (req, res) => {
   // 冷启中（占位 entry 无 page）/ 首个看门狗 tick 之前：lastStage 为 undefined → 归 wait。
   const rs = relayStepFromStage(entry.lastStage, { authorized });
   const needShot = !authorized && (rs.escalate || rs.step === "wait");
+  // B64 三期：泛 checkpoint 且看门狗判出「等手机确认」子味 → code 细化为 device_confirm
+  //（前端据此切手机主视觉 + 三步清单）；account_locked 等具体码不受影响。
+  const code = (rs.code === "checkpoint" && entry.lastFlavor === "device_confirm")
+    ? "device_confirm" : rs.code;
   res.json({
     status: entry.status || "pending",
     booting: !!(entry.booting && !entry.page),
@@ -3608,7 +3885,7 @@ app.get("/login/:id/relay-step", (req, res) => {
     fields: rs.fields,
     error: rs.error,
     escalate: rs.escalate,
-    code: rs.code,
+    code: code,
     qr_image: needShot ? String(entry.qrImage || "") : "",
   });
 });
@@ -3634,6 +3911,29 @@ async function relayFillFields(page, plan, values) {
     }
   }
   return { filled, notFound };
+}
+
+// B64 二期（2026-08-24，手机确认后卡死实录）：检查点「继续」推进——用户在手机 App
+// 确认「是本人登录」后，headless 登录页停在「请验证你的 Facebook 帐户」并等页面上那个
+// 「继续 / This was me」按钮被点（窗口离屏，用户点不到）→ 整个登录卡死。此函数替用户点它。
+// 与 relayClickSubmit 分开：词表更宽（含 This was me / 是我本人 / 是的），且**不回车兜底**
+// ——检查点页回车常触发「重新发码」等副作用，只认明确的推进按钮，点不到就如实回 false
+// （前端保持「等手机确认」态，下一轮页面若已自行前进由分类器接管）。
+async function relayClickContinue(page) {
+  const RE = /^(继续|繼續|下一步|确认|確認|确定|確定|是的|是我本人|这是我本人|完成|Continue|Next|This\s+Was\s+Me|Yes,?\s*This\s+Was\s+Me|Yes|Confirm|Done|OK)$/i;
+  try {
+    const b = page.locator('div[role="button"]:visible, button:visible, [role="button"]:visible')
+      .filter({ hasText: RE }).first();
+    if (await b.count()) { await b.click({ timeout: 3000 }); return true; }
+  } catch (_) {}
+  // aria-label 兜底（FB 部分检查点按钮文字在 aria-label 而非可见文本里）
+  try {
+    for (const lab of ["继续", "Continue", "This was me", "确认", "Confirm"]) {
+      const b = page.locator(`[aria-label="${lab}"]:visible`).first();
+      if (await b.count()) { await b.click({ timeout: 3000 }); return true; }
+    }
+  } catch (_) {}
+  return false;
 }
 
 // 提交：先试计划里的 CSS 选择器，全落空再按可见按钮文案兜底（多语，仿 tryAutoE2eePin），
@@ -3676,6 +3976,14 @@ app.post("/login/:id/relay-submit", async (req, res) => {
   if (cur.step !== step) {
     return res.json({ ok: false, reason_code: "step_changed", step: cur.step,
                       fields: cur.fields, error: cur.error, escalate: cur.escalate });
+  }
+  // B64 二期：检查点「继续」推进——检查点步无输入字段，走 sanitize 会被判 not_fillable
+  // 拒掉。这里在 sanitize 之前特判：替用户点登录页的「继续 / This was me」，把手机确认后
+  // 卡死的登录推向下一步。点得到=submitted，点不到=如实回（前端保持等待态）。
+  if (step === RELAY_STEP.CHECKPOINT) {
+    const clicked = await relayClickContinue(entry.page).catch(() => false);
+    logger.info({ loginId: req.params.id, clicked }, "relay-continue (checkpoint advance)");
+    return res.json({ ok: true, submitted: !!clicked, clicked: !!clicked, step });
   }
   const clean = sanitizeSubmit(step, values);
   if (!clean.accepts) return res.json({ ok: false, reason_code: "not_fillable", step });
@@ -3809,6 +4117,64 @@ async function probeComposerBlockers(page) {
   return info;
 }
 
+// ── B99 发送护栏三件套（实施68 P1-9 残留 ④⑤，0825 CUN2TM/_485 实锤）────────────
+// 事故链：E2EE PIN 态整号瘫 → 上游对失败稿反复重投 → 每次都整页重导航/重试 →
+// FB 判为滥用弹「你已被暂时阻止」。三道闸：
+//   ① 连败指数退避（5s→…→5min，成功清零）：退避窗内直接 429，不碰浏览器；
+//   ② PIN 未就绪快速失败（503 e2ee_pin_pending）：composer 交互超时的真身是
+//      「加密会话没解锁」，别再当 DOM flake 去撞；
+//   ③ 临时封锁检出（页面文案）→ 冻结本号自动发送 + postStatus("blocked") 让
+//      Python 接 ban_signal 账号级暂停（原因进拦截横幅）。
+const SEND_BLOCKED_FREEZE_MS = Number(process.env.MSG_BLOCKED_FREEZE_MS || 7200000); // 2h
+
+function sendGateCheck(entry) {
+  const now = Date.now();
+  if ((entry._blockedUntil || 0) > now) {
+    return { ok: false, code: 423, reason: "account_blocked",
+      retryAfterMs: entry._blockedUntil - now };
+  }
+  const until = entry._sendBackoffUntil || 0;
+  if (until > now) {
+    return { ok: false, code: 429, reason: "send_backoff",
+      retryAfterMs: until - now };
+  }
+  return { ok: true };
+}
+
+function noteSendFailure(entry, reason) {
+  entry._sendFailStreak = (entry._sendFailStreak || 0) + 1;
+  const ms = sendFailureBackoffMs(entry._sendFailStreak);
+  entry._sendBackoffUntil = Date.now() + ms;
+  logger.warn({ loginId: entry._loginId, streak: entry._sendFailStreak,
+    backoffMs: ms, reason }, "send failure → backoff armed");
+}
+
+function noteSendSuccess(entry) {
+  entry._sendFailStreak = 0;
+  entry._sendBackoffUntil = 0;
+}
+
+/** 页面是否挂着「临时封锁」风控文案；命中即冻结本号自动发送 + 上报 Python。 */
+async function maybeMarkBlocked(entry, page) {
+  let text = "";
+  try {
+    text = await page.evaluate(
+      () => ((document.body && document.body.innerText) || "").slice(0, 4000));
+  } catch (_) { return false; }
+  if (!isTemporarilyBlockedText(text)) return false;
+  const first = !(entry._blockedUntil && entry._blockedUntil > Date.now());
+  entry._blockedUntil = Date.now() + SEND_BLOCKED_FREEZE_MS;
+  entry._blockedReason = "temporarily_blocked";
+  logger.error({ loginId: entry._loginId, freezeMs: SEND_BLOCKED_FREEZE_MS },
+    "platform TEMPORARILY BLOCKED detected → freezing outbound for this account");
+  if (first) {
+    // fire-and-forget：Python session-status 收 "blocked" → ban_signal 账号级暂停
+    postStatus(entry._loginId || "", entry, "blocked",
+      "fb_temporarily_blocked").catch(() => {});
+  }
+  return true;
+}
+
 /** send / send-media 共用：首轮等不到 composer 时的恢复一击 + 终局诊断。
  *
  * 2026-08-15 173 实锤：新建 E2EE 线程首开（+浏览器刚重启首次导航）SPA 渲染可超
@@ -3860,6 +4226,18 @@ app.post("/accounts/:id/send", async (req, res) => {
   // P3：send 进每账号写操作互斥（与 /react 串行；等锁超时 fail-open 回无锁旧行为）
   const _opRelease = await acquireAccountOp(entry, "send");
   try {
+    // B99 ①③：临时封锁冻结 / 连败退避窗内直接快速失败——不碰浏览器（重试风暴
+    // 正是风控反噬的燃料），上游拿 reason_code 决定改期而不是立刻再投。
+    const gate = sendGateCheck(entry);
+    if (!gate.ok) {
+      return res.status(gate.code).json({
+        ok: false, delivered: false, reason_code: gate.reason,
+        retry_after_ms: gate.retryAfterMs,
+        error: gate.reason === "account_blocked"
+          ? "account temporarily blocked by platform (auto-frozen)"
+          : "send backoff active after consecutive failures",
+      });
+    }
     const t0 = Date.now();
     const page = entry.page;
     // 同线程快路：页面已停在目标线程（连续给同一客户发消息的常态；发送后页面本就留在
@@ -3885,6 +4263,16 @@ app.post("/accounts/:id/send", async (req, res) => {
         await page.waitForTimeout(1500);
       }
     }
+    // B99 ②：PIN 浮层仍在场＝加密会话没解锁——此时 composer 交互必然超时/发了
+    // 对端也收不到（CUN2TM 实锤失败链）。快速失败出精确码，别再当 DOM flake 撞。
+    if (await detectPinPrompt(page)) {
+      noteSendFailure(entry, "e2ee_pin_pending");
+      return res.status(503).json({
+        ok: false, delivered: false, reason_code: "e2ee_pin_pending",
+        pin_set: !!getE2eePin(entry._loginId || ""),
+        error: "e2ee recovery pin prompt on screen (session locked; send would fail)",
+      });
+    }
     // 先处理「接受」——有此按钮即消息请求，须先接受才可回复（回复即接受，符合获客策略）。
     let accepted = await clickAcceptRequest(page);
     if (accepted) await page.waitForTimeout(2000);
@@ -3897,6 +4285,8 @@ app.post("/accounts/:id/send", async (req, res) => {
       accepted = accepted || rec.accepted;
       box = rec.box;
       if (!box) {
+        await maybeMarkBlocked(entry, page);   // B99 ⑤：composer 缺席可能是封锁页
+        noteSendFailure(entry, rec.reason || "composer_not_found");
         return res.status(500).json({
           ok: false, delivered: false, accepted,
           reason_code: rec.reason,
@@ -3948,8 +4338,27 @@ app.post("/accounts/:id/send", async (req, res) => {
       }
       await box.type(text, { delay: 20 });
     };
+    // B85（实施68）：composer ElementHandle 在点击瞬间被 Messenger 重绘换掉
+    // （stale element：`elementHandle.click: Element is not attached to the DOM`，
+    // e2ee 恢复态页面重绘频繁加剧）。click 抛 stale → 就地 re-resolve 一次再点，
+    // 而不是让异常冒泡成 500（坐席手发/自动稿双双静默丢失）。仅重解元素引用，
+    // 不重发消息——发送与否仍由下方 waitComposerCleared 判定，零重复发送风险。
+    const clickComposer = async () => {
+      try {
+        await box.click();
+      } catch (e) {
+        const msg = String((e && e.message) || e);
+        if (!/not attached|detached|stale/i.test(msg)) throw e;
+        logger.warn({ jid }, "send: composer stale on click → re-resolving once");
+        const fresh = await page.waitForSelector(SEL_COMPOSER, { timeout: 8000 })
+          .catch(() => null);
+        if (!fresh) throw e;
+        box = fresh;
+        await box.click();
+      }
+    };
     const attemptSend = async () => {
-      await box.click();
+      await clickComposer();
       await typeIntoComposer();
       await page.keyboard.press("Enter");
       return await waitComposerCleared(page, 3000);
@@ -3979,6 +4388,8 @@ app.post("/accounts/:id/send", async (req, res) => {
     // 不把「没发出去」的草稿标记为已送达（此前恒 ok:true → 静默丢消息）。
     if (!sent) {
       logger.error({ jid }, "send: composer still not cleared after retry → reporting NOT delivered");
+      await maybeMarkBlocked(entry, page);   // B99 ⑤：发送被吞可能是封锁弹层拦的
+      noteSendFailure(entry, "composer_not_cleared");
       return res.status(502).json({
         ok: false, delivered: false, accepted, sent: false,
         error: "composer not cleared after send (message likely not delivered)",
@@ -3992,6 +4403,8 @@ app.post("/accounts/:id/send", async (req, res) => {
     const rb = await readbackLastOutgoing(page, text, 5000);
     if (rb.found && rb.rowFail) {
       logger.error({ jid }, "send: bubble rendered with FAIL marker → reporting NOT delivered");
+      await maybeMarkBlocked(entry, page);   // B99 ⑤：失败气泡常伴随封锁提示
+      noteSendFailure(entry, "bubble_fail_marker");
       return res.status(502).json({
         ok: false, delivered: false, accepted, sent: false, verified: true,
         error: "messenger marked the message as failed to send",
@@ -4001,6 +4414,7 @@ app.post("/accounts/:id/send", async (req, res) => {
       logger.warn({ jid }, "send: composer cleared but readback did not find our bubble "
         + "(treating as delivered, verified=false)");
     }
+    noteSendSuccess(entry);   // B99 ④：成功清退避
     // 发送耗时观测：fast=同线程快路是否命中；线上「发送慢」从体感变成可读数
     logger.info({ jid, ms: Date.now() - t0, fast: fastPath, len: text.length,
                   verified: !!rb.found, quoted: quoteApplied }, "send ok");
@@ -4008,6 +4422,7 @@ app.post("/accounts/:id/send", async (req, res) => {
       verified: !!rb.found, quoted: quoteApplied });
   } catch (e) {
     logger.error({ e }, "send failed");
+    noteSendFailure(entry, "exception");
     res.status(500).json({ ok: false, delivered: false, error: String(e) });
   } finally {
     _opRelease();
@@ -4239,12 +4654,33 @@ app.post("/accounts/:id/send-media", async (req, res) => {
   if (!fs.existsSync(mediaPath)) {
     return res.status(400).json({ ok: false, error: "media_path not found on host" });
   }
+  // B99 ①③：与文本 send 同一发送闸（冻结/退避窗内不碰浏览器）
+  const _mGate = sendGateCheck(entry);
+  if (!_mGate.ok) {
+    return res.status(_mGate.code).json({
+      ok: false, delivered: false, reason_code: _mGate.reason,
+      retry_after_ms: _mGate.retryAfterMs,
+      error: _mGate.reason === "account_blocked"
+        ? "account temporarily blocked by platform (auto-frozen)"
+        : "send backoff active after consecutive failures",
+    });
+  }
   try {
     const page = entry.page;
     await page.goto(`${MESSENGER_URL}t/${jid}`, {
       waitUntil: "domcontentloaded", timeout: 20000,
     });
     await page.waitForTimeout(2000);
+    // B99 ②：加密会话未解锁 → 快速失败（与文本 send 同码）
+    if (await detectPinPrompt(page)) {
+      entry._pinPromptSeen = true;
+      noteSendFailure(entry, "e2ee_pin_pending");
+      return res.status(503).json({
+        ok: false, delivered: false, reason_code: "e2ee_pin_pending",
+        pin_set: !!getE2eePin(entry._loginId || ""),
+        error: "e2ee recovery pin prompt on screen (session locked; send would fail)",
+      });
+    }
     let accepted = await clickAcceptRequest(page);
     if (accepted) await page.waitForTimeout(2000);
     let box = await page.waitForSelector(SEL_COMPOSER, { timeout: 10000 }).catch(() => null);
@@ -4254,6 +4690,8 @@ app.post("/accounts/:id/send-media", async (req, res) => {
       accepted = accepted || rec.accepted;
       box = rec.box;
       if (!box) {
+        await maybeMarkBlocked(entry, page);
+        noteSendFailure(entry, rec.reason || "composer_not_found");
         return res.status(500).json({
           ok: false, delivered: false, accepted,
           reason_code: rec.reason,
@@ -4280,6 +4718,8 @@ app.post("/accounts/:id/send-media", async (req, res) => {
       const rb = await readbackLastOutgoing(page, caption, 5000);
       if (rb.found && rb.rowFail) {
         logger.error({ jid }, "send-media: bubble rendered with FAIL marker → NOT delivered");
+        await maybeMarkBlocked(entry, page);
+        noteSendFailure(entry, "bubble_fail_marker");
         return res.status(502).json({
           ok: false, delivered: false, accepted, sent: false, verified: true,
           error: "messenger marked the media message as failed to send",
@@ -4287,9 +4727,11 @@ app.post("/accounts/:id/send-media", async (req, res) => {
       }
       verified = !!rb.found;
     }
+    noteSendSuccess(entry);
     res.json({ ok: true, message_id: outMsgId, accepted, verified });
   } catch (e) {
     logger.error({ e }, "send-media failed");
+    noteSendFailure(entry, "exception");
     res.status(500).json({ ok: false, error: String(e) });
   }
 });
@@ -4354,7 +4796,9 @@ app.post("/accounts/:id/thread-history", async (req, res) => {
       const p = parseMsgAria(aria);
       if (!p || !p.text) continue; // 只要文字上下文（媒体无稳定指纹，Python 侧也不收）
       if (E2EE_PLACEHOLDER_RE.test(p.text)) continue;
-      msgs.push({ direction: p.direction, sender: p.sender, text: p.text });
+      // 实施72 P4：真实时间随行下发（认不出=0，Python 侧回落锚定+approx 标）
+      msgs.push({ direction: p.direction, sender: p.sender, text: p.text,
+        ts: ariaDatetimeToEpoch(p.ts) || 0 });
     }
     res.json({ ok: true, messages: msgs });
   } catch (e) {

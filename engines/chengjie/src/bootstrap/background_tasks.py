@@ -47,12 +47,26 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
             except Exception:
                 pass
 
+        # 对方机器人/自家账号守卫（2026-08-18 从派发层提前到这里构造）：捕获与
+        # 派发共用同一谓词——垃圾捕获事故（老板↔自有账号互聊的运维报告被抓成
+        # 「检查」关怀）从源头收口，而不是等派发时才拦。
+        _care_peer_filter = None
+        try:
+            from src.companion.proactive_peer_hygiene import build_peer_filter
+            from src.integrations.account_registry import get_account_registry
+            _care_peer_filter = build_peer_filter(
+                assistant.inbox_store, assistant.config.config or {},
+                registry=get_account_registry())
+        except Exception:
+            assistant.logger.debug("care peer_filter 构造失败（不拦）", exc_info=True)
+
         # 捕获接线：无条件注册（回调内部按实时配置逐条闸门）
         if assistant.inbox_store is not None:
             try:
                 from src.contacts.care_capture import make_care_inbound_cb
                 assistant.inbox_store.register_new_inbound_cb(
-                    make_care_inbound_cb(care_store, assistant.config))
+                    make_care_inbound_cb(care_store, assistant.config,
+                                         peer_filter=_care_peer_filter))
                 engine_state["capture_wired"] = True
                 assistant.logger.info("✅ proactive_care 捕获已常备接线（配置热闸，enabled=%s）",
                                       bool(cfg.get("enabled", False)))
@@ -151,17 +165,8 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
                 note="care",
             )
 
-        # 对方机器人/自家账号守卫（P1 2026-08-03）：care 派发前统一卫生闸——复用
-        # 主动触达同一入口 proactive_candidate_ok。inbox_store 缺失时闭包恒放行。
-        _care_peer_filter = None
-        try:
-            from src.companion.proactive_peer_hygiene import build_peer_filter
-            from src.integrations.account_registry import get_account_registry
-            _care_peer_filter = build_peer_filter(
-                assistant.inbox_store, assistant.config.config or {},
-                registry=get_account_registry())
-        except Exception:
-            assistant.logger.debug("care peer_filter 构造失败（不拦）", exc_info=True)
+        # 对方机器人/自家账号守卫（P1 2026-08-03）：care 派发前统一卫生闸——
+        # 谓词已在捕获接线前构造（2026-08-18 捕获/派发共用 _care_peer_filter）。
 
         dispatcher = CareDispatcher(
             store=care_store, ai_client=assistant.ai_client, send_callback=_care_send,
@@ -218,6 +223,172 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
     except Exception as ex:
         assistant.logger.warning("proactive_care 启动跳过: %s", ex)
         assistant.logger.debug("proactive_care 启动异常", exc_info=True)
+
+
+# 自号互聊安全语料（P1 dry/go_live 都用，中性寒暄——go_live 只发到本号收藏消息 'me'）
+_NURTURE_SELF_CHAT_CORPUS = (
+    "今天也要加油鸭", "记个事情：晚点回复几个朋友", "备忘：下午整理一下资料",
+    "喝口水休息一下", "随手记一笔", "提醒自己早点休息", "今天天气不错",
+    "待办：回消息 / 看看动态", "小结一下今天", "记得多喝水",
+)
+
+
+async def maybe_start_nurture_engine(assistant, web_app=None) -> None:
+    """智能养号执行引擎——常备接线 + 配置热闸（镜像 proactive_care）。
+
+    默认全关（``ops.nurture.enabled=false``）：循环常备启动但每 tick 空转，零副作用。
+    dry_run（enabled+dry_run）：算计划 + 影子记录，绝不碰账号。go_live（enabled+!dry_run）：
+    **仅金丝雀白名单**账号真动作（read=标记已读 / self_chat=发到本号收藏消息），动作前查
+    kill-switch。开关经 config.local.yaml 热重载 ~30s 生效，免重启（interval_sec 除外）。
+    """
+    try:
+        from src.nurture.nurture_engine import NurtureEngine
+        from src.nurture.nurture_ledger import get_nurture_ledger
+
+        cfg = ((assistant.config.config.get("ops") or {}).get("nurture") or {})
+        _cfg_dir = Path(assistant.config.config_path).parent
+        ledger = get_nurture_ledger(_cfg_dir / "nurture_ledger.json")
+        engine_state = {"skip": ""}
+        if web_app is not None:
+            web_app.state.nurture_ledger = ledger
+
+        def _live_nurture_cfg() -> dict:
+            try:
+                return dict((assistant.config.config.get("ops") or {}).get("nurture") or {})
+            except Exception:
+                return {}
+
+        def _accounts_provider():
+            """从 ops.nurture.accounts 配置 × 注册表在册号，产出调度器输入。"""
+            live = _live_nurture_cfg()
+            accts_cfg = live.get("accounts") or {}
+            if not isinstance(accts_cfg, dict) or not accts_cfg:
+                return []
+            try:
+                from src.integrations.account_registry import get_account_registry
+                reg = get_account_registry()
+                known = {f"{r.get('platform')}:{r.get('account_id')}" for r in reg.list()}
+            except Exception:
+                known = set()
+            out = []
+            for key, plan in accts_cfg.items():
+                key = str(key)
+                if known and key not in known:
+                    continue  # 只养在册号，跳过陈旧配置键
+                if ":" not in key:
+                    continue
+                plat, acct = key.split(":", 1)
+                out.append({"key": key, "platform": plat, "account_id": acct,
+                            "plan": plan if isinstance(plan, dict) else {}})
+            return out
+
+        def _signals_provider(accounts):
+            out = {}
+            try:
+                from src.integrations.account_registry import get_account_registry
+                from src.integrations.protocol_autoreply_limits import get_autoreply_limiter
+                from src.integrations.protocol_autoreply_settings import cfg_with_settings
+                from src.skills.account_signals import build_account_signals, lifecycle_stage
+                reg = get_account_registry()
+                try:
+                    lim = get_autoreply_limiter(cfg_with_settings(assistant.config.config or {}))
+                except Exception:
+                    lim = None
+                status_map = {f"{r.get('platform')}:{r.get('account_id')}": str(r.get("status") or "")
+                              for r in reg.list()}
+                for a in accounts or []:
+                    plat, acct, key = a["platform"], a["account_id"], a["key"]
+                    try:
+                        sig = build_account_signals(plat, acct, registry=reg, limiter=lim)
+                        stage = lifecycle_stage(sig, status_map.get(key, ""))
+                        out[key] = {"stage": stage, "age_days": sig.get("age_days"),
+                                    "banned": bool(sig.get("banned")),
+                                    "circuit_open": bool(sig.get("_circuit_open")),
+                                    # 风险退避信号（risk_backoff 消费：正被平台节流/报错的号不养）
+                                    "flood_waits_24h": int(sig.get("flood_waits_24h") or 0),
+                                    "errors_24h": int(sig.get("errors_24h") or 0)}
+                    except Exception:
+                        out[key] = {"stage": "offline"}  # 查不清=保守跳过（scheduler 剔 offline）
+            except Exception:
+                assistant.logger.debug("nurture signals provider 异常", exc_info=True)
+            return out
+
+        async def _run_on_web_loop(coro_factory):
+            _wl = getattr(assistant, "_web_loop", None)
+            if _wl is not None and _wl.is_running():
+                fut = asyncio.run_coroutine_threadsafe(coro_factory(), _wl)
+                return await asyncio.wrap_future(fut)
+            return await coro_factory()
+
+        async def _block_check(platform, account_id):
+            try:
+                from src.ops.kill_switch import is_blocked
+                on, _scope, _reason = is_blocked(platform, account_id)
+                return bool(on)
+            except Exception:
+                return True  # 查不清 kill-switch 一律保守拦
+
+        async def _read_cb(platform, account_id):
+            """read=给该号一条现有私聊标记已读（纯行为信号，不过 send-gate）。无会话→False。"""
+            try:
+                from src.integrations.account_orchestrator import get_orchestrator
+                orch = get_orchestrator()
+                convs = []
+                if assistant.inbox_store is not None:
+                    convs = assistant.inbox_store.list_conversations(
+                        limit=8, platform=platform, account_id=account_id,
+                        chat_type="private") or []
+                # 优先挑有未读的；否则挑最近一条
+                target = ""
+                for c in convs:
+                    if int(c.get("unread") or 0) > 0:
+                        target = str(c.get("chat_key") or "")
+                        break
+                if not target and convs:
+                    target = str(convs[0].get("chat_key") or "")
+                if not target:
+                    return False
+                return bool(await _run_on_web_loop(
+                    lambda: orch.mark_read(platform, account_id, target)))
+            except Exception:
+                assistant.logger.debug("nurture read_cb 异常", exc_info=True)
+                return False
+
+        async def _self_chat_cb(platform, account_id):
+            """self_chat=发一条中性寒暄到**本号收藏消息 'me'**（零外部足迹的安全发送信号）。"""
+            try:
+                import time as _t
+                from src.integrations.account_orchestrator import get_orchestrator
+                orch = get_orchestrator()
+                idx = int(_t.time() // 3600) % len(_NURTURE_SELF_CHAT_CORPUS)
+                text = _NURTURE_SELF_CHAT_CORPUS[idx]
+                res = await _run_on_web_loop(
+                    lambda: orch.send(platform, account_id, "me", text, origin="auto"))
+                if isinstance(res, dict):
+                    return bool(res.get("delivered")) and not res.get("blocked")
+                return bool(res)
+            except Exception:
+                assistant.logger.debug("nurture self_chat_cb 异常", exc_info=True)
+                return False
+
+        engine = NurtureEngine(
+            ledger, cfg_provider=_live_nurture_cfg,
+            accounts_provider=_accounts_provider, signals_provider=_signals_provider,
+            read_cb=_read_cb, self_chat_cb=_self_chat_cb, block_check=_block_check,
+            interval_sec=float(cfg.get("interval_sec", 900)),
+            max_actions_per_tick=int(cfg.get("max_actions_per_tick", 20)),
+        )
+        await engine.start()
+        assistant._nurture_engine = engine
+        if web_app is not None:
+            web_app.state.nurture_engine = engine
+        assistant.logger.info(
+            "✅ nurture_engine 已常备（interval=%ss, enabled=%s, dry_run=%s）",
+            cfg.get("interval_sec", 900), bool(cfg.get("enabled", False)),
+            bool(cfg.get("dry_run", True)))
+    except Exception as ex:  # noqa: BLE001
+        assistant.logger.warning("nurture_engine 启动跳过: %s", ex)
+        assistant.logger.debug("nurture_engine 启动异常", exc_info=True)
 
 
 async def maybe_start_reactivation_loop(assistant) -> None:
@@ -379,6 +550,19 @@ def ensure_deferred_outbox(assistant):
                 # 语言硬闸 HOLD（P3-198）：文本语言与客户语言实质冲突且翻译不可用
                 # → 按暂态推后重试（翻译引擎恢复后自动补投），绝不原样发出。
                 raise DeferredSenderNotReady("lang_gate_hold")
+            # WP-4 rider ② 系统级披露（compliance.disclosure.notice，基线关）：
+            # 本函数是 care/reactivation 等 deferred 主动家族的**单一投递收口**
+            # （5 平台同点）——首触即 AI 的会话在此前置披露语。放在出站翻译之后
+            # （披露语按会话语言取，绝不再过翻译层）；防重键与回复三线同键空间。
+            try:
+                from src.compliance.disclosure import apply_disclosure_for
+                from src.inbox.normalizer import conv_id as _dc_cid
+                text, _ = apply_disclosure_for(
+                    _dc_cid(str(platform), str(account_id), str(chat_key)),
+                    text, store=getattr(assistant, "inbox_store", None))
+            except Exception:
+                assistant.logger.debug(
+                    "[deferred_outbox] 披露注入异常（原样发送）", exc_info=True)
             # 1) 编排器受管 worker（telegram/whatsapp/line… 任一暴露 send 的）
             try:
                 from src.integrations.account_orchestrator import get_orchestrator

@@ -39,6 +39,10 @@ _KNOWN_TYPES = {
     # 换绑等写操作的 HTTP 失败按状态码上报——http_403_csrf 一旦出现即「某个
     # 宿主环境的写通道又断了」，比等用户截图早两周。
     "http_401", "http_403", "http_403_csrf", "http_404", "http_409", "http_5xx",
+    # B54 输入框焦点自愈（实施68 P1-16，2026-08-26）：_focus_selfheal.html 的
+    # 自愈触发计数——fn 带 focus_selfheal_{refocus|shell_fix|window_focus|fail}
+    # 分级，type 归本类；累计分布定位「还有哪页在丢焦点」。
+    "focus_selfheal",
 }
 
 

@@ -379,11 +379,11 @@ function resolve(draftId, action, text, btn){
     } else {
       if(btn){ btn.disabled=false; btn.textContent=window.T('draft.retry'); }
       var msg=(d&&d.detail)||(d&&d.error)||window.T('draft.op_fail');
-      alert(window.Tf('draft.op_fail_msg',{msg:msg}));
+      AITRNotify.alert(window.Tf('draft.op_fail_msg',{msg:msg}));
     }
   }).catch(function(){
     if(btn){ btn.disabled=false; btn.textContent=window.T('draft.retry'); }
-    alert(window.T('draft.net_err_retry'));
+    AITRNotify.alert(window.T('draft.net_err_retry'));
   });
 }
 
@@ -399,11 +399,11 @@ function forceOverride(draftId, btn){
       setTimeout(load, 600);
     } else {
       if(btn){ btn.disabled=false; btn.textContent=window.T('draft.act.override'); }
-      alert(window.Tf('draft.release_fail',{msg:((d&&d.detail)||(d&&d.error)||window.T('dash.unknown'))}));
+      AITRNotify.alert(window.Tf('draft.release_fail',{msg:((d&&d.detail)||(d&&d.error)||window.T('dash.unknown'))}));
     }
   }).catch(function(){
     if(btn){ btn.disabled=false; btn.textContent=window.T('draft.act.override'); }
-    alert(window.T('draft.net_err'));
+    AITRNotify.alert(window.T('draft.net_err'));
   });
 }
 
@@ -568,12 +568,12 @@ function triggerBulkAutosend(){
   },{timeoutMs:600000}).then(function(r){return r.json();}).then(function(d){
     if(btn){ btn.disabled=false; btn.textContent=window.T('draft.bulk_l2'); }
     if(d&&d.ok){
-      alert(window.Tf('draft.bulk.done',{sent:d.sent,errors:d.errors}));
+          AITRNotify.alert(window.Tf('draft.bulk.done',{sent:d.sent,errors:d.errors}), 'info');
       load();
-    } else { alert(window.T('draft.bulk.fail')); }
+    } else { AITRNotify.alert(window.T('draft.bulk.fail')); }
   }).catch(function(){
     if(btn){ btn.disabled=false; btn.textContent=window.T('draft.bulk_l2'); }
-    alert(window.T('draft.net_err'));
+    AITRNotify.alert(window.T('draft.net_err'));
   });
 }
 
@@ -648,10 +648,10 @@ function bulkAct(action){
     body:JSON.stringify({action:action,draft_ids:ids})
   }, {timeoutMs: 60000}).then(function(r){return r.json();}).then(function(d){
     if(d&&d.ok){
-      alert(window.Tf('draft.bulk.done2',{label:label,ok:d.succeeded,fail:d.failed}));
+        AITRNotify.alert(window.Tf('draft.bulk.done2',{label:label,ok:d.succeeded,fail:d.failed}), 'info');
       clearSel(); load();
-    } else { alert((d&&d.detail)||(d&&d.error)||window.Tf('draft.bulk.fail2',{label:label})); }
-  }).catch(function(){ alert(window.T('draft.net_err')); });
+    } else { AITRNotify.alert((d&&d.detail)||(d&&d.error)||window.Tf('draft.bulk.fail2',{label:label})); }
+  }).catch(function(){ AITRNotify.alert(window.T('draft.net_err')); });
 }
 
 // H2 键盘快捷键（card 级导航）
@@ -680,7 +680,7 @@ function cardKeydown(ev, cardEl){
     var prev=cardEl.previousElementSibling;
     if(prev&&prev.classList&&prev.classList.contains('dr-card')) prev.focus();
   } else if(ev.key==='?'){
-    alert(window.T('draft.kb_alert'));
+    AITRNotify.alert(window.T('draft.kb_alert'));
   }
 }
 

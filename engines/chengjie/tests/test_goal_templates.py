@@ -15,11 +15,13 @@ from __future__ import annotations
 from src.companion.goals.templates import (
     AUTONOMY_LEVELS,
     CARE_INTENTS,
+    CARE_PAIRS,
     GOAL_STATUSES,
     PUSH_LEVELS,
     STAGE_ORDER,
     TEMPLATES,
     get_template,
+    intent_en_for,
     list_templates,
     milestone_label,
     pick_care_intent,
@@ -27,6 +29,10 @@ from src.companion.goals.templates import (
     push_for_milestone,
     template_ids,
 )
+
+
+def _has_cjk(s: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" for ch in s)
 
 EXPECTED_IDS = {
     "conversion_unlock", "conversion_subscribe", "relationship_stage",
@@ -56,8 +62,16 @@ def test_every_template_structural_invariants():
         assert len(curve) == n, tid      # 曲线与里程碑一一对应
         assert all(lvl in PUSH_LEVELS for lvl in curve), tid
         assert set(t["intents"].keys()) == set(range(n)), tid
+        # i18n P0（2026-08-19）：意图池条目必须是 (zh, en) 双语对——zh 是
+        # planner/prompt 权威文案（含 CJK），en 是 UI 英文态展示（零 CJK）。
+        # 漏写 en ＝ 英文界面「今日节拍」直接漏中文（本门禁的由来）。
         for pool in t["intents"].values():
-            assert pool and all(isinstance(s, str) and s for s in pool), tid
+            assert pool, tid
+            for entry in pool:
+                assert isinstance(entry, tuple) and len(entry) == 2, (tid, entry)
+                zh, en = entry
+                assert isinstance(zh, str) and zh and _has_cjk(zh), (tid, zh)
+                assert isinstance(en, str) and en and not _has_cjk(en), (tid, en)
         assert t["kind"] and t["name_zh"] and t["name_en"], tid
         assert int(t["default_days"]) > 0, tid
         phase = t.get("phase_days")
@@ -111,7 +125,8 @@ def test_pick_intent_deterministic_same_goal_same_day():
     a = pick_intent(t, 0, "goal-x", "2026-07-01")
     b = pick_intent(t, 0, "goal-x", "2026-07-01")
     assert a == b
-    assert a in t["intents"][0]      # 里程碑 0 池无占位符 → 原样命中池内
+    # 里程碑 0 池无占位符 → 原样命中池内 zh 臂（返回值恒为中文权威文案）
+    assert a in [e[0] for e in t["intents"][0]]
 
 def test_pick_intent_rotates_across_days():
     t = TEMPLATES["conversion_unlock"]
@@ -121,8 +136,12 @@ def test_pick_intent_rotates_across_days():
 
 def test_pick_intent_clamps_milestone_and_handles_empty():
     t = TEMPLATES["conversion_unlock"]
-    assert pick_intent(t, 99, "g", "2026-07-01") in t["intents"][3]   # 上越界夹到末段
-    assert pick_intent(t, -5, "g", "2026-07-01") in t["intents"][0]   # 下越界夹到 0
+    zh0 = [e[0] for e in t["intents"][0]]
+    zh3 = [e[0] for e in t["intents"][3]]
+    # 3 号池含 {item} 占位符 → 比对代入留白词后的渲染集
+    zh3_rendered = [s.replace("{item}", "它") for s in zh3]
+    assert pick_intent(t, 99, "g", "2026-07-01") in zh3_rendered   # 上越界夹到末段
+    assert pick_intent(t, -5, "g", "2026-07-01") in zh0            # 下越界夹到 0
     assert pick_intent({}, 0, "g", "2026-07-01") == ""
     assert pick_intent({"intents": {}}, 0, "g", "2026-07-01") == ""
 
@@ -153,6 +172,45 @@ def test_pick_care_intent_deterministic_and_rotates():
     assert a in CARE_INTENTS
     seen = {pick_care_intent("goal-x", d) for d in _DAYS}
     assert len(seen) >= 2
+
+
+# ── intent_en_for：中文权威文案 → 英文展示态（i18n P0） ─────────────────────
+
+def test_intent_en_for_roundtrip_every_pool_entry():
+    """全池反查闭环：任一 pick 出的中文意图都能查到英文对应文案且零 CJK。"""
+    for tid, t in TEMPLATES.items():
+        params = {"item_label": "八字详批", "note": "推广新品"}
+        for mi in t["intents"]:
+            for d in _DAYS:
+                zh = pick_intent(t, mi, f"g-{tid}", d, params=params)
+                en = intent_en_for(t, params, zh)
+                assert en, (tid, mi, zh)
+                assert not _has_cjk(en.replace("八字详批", "").replace("推广新品", "")), (tid, en)
+
+
+def test_intent_en_for_keeps_operator_data_verbatim():
+    """{note}/{item} 是运营手输数据：英文句里原样保留，不翻译。"""
+    t = TEMPLATES["custom"]
+    zh = pick_intent(t, 0, "g", "2026-07-01", params={"note": "推广新品"})
+    en = intent_en_for(t, {"note": "推广新品"}, zh)
+    assert "推广新品" in en
+
+
+def test_intent_en_for_covers_care_pairs_and_misses_fall_back_empty():
+    care_zh = pick_care_intent("goal-x", "2026-07-01")
+    en = intent_en_for(TEMPLATES["custom"], {}, care_zh)
+    assert en and not _has_cjk(en)
+    assert intent_en_for(TEMPLATES["custom"], {}, "人工改写过的意图") == ""
+    assert intent_en_for(TEMPLATES["custom"], {}, "") == ""
+    assert len(CARE_PAIRS) == len(CARE_INTENTS)
+
+
+def test_intent_en_blank_params_use_english_fillers():
+    """缺参时英文臂用英文留白词（"it"/"this goal"），不带中文留白。"""
+    t = TEMPLATES["conversion_unlock"]
+    zh = pick_intent(t, 1, "g", "2026-07-01")           # {item} 缺参 → 「它」
+    en = intent_en_for(t, {}, zh)
+    assert en and not _has_cjk(en)
 
 
 # ── push_for_milestone / milestone_label ────────────────────────────────────

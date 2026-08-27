@@ -9,7 +9,13 @@ from src.contacts.care_shadow_scan import (
     CareShadowScanner, CareShadowStats, shadow_active,
 )
 
-FUTURE_JSON = '{"found":true,"topic":"面试","date":"2099-01-05","greeting":false,"confidence":0.9}'
+# 夹具锚 now（防时间炸弹纪律 + B68 远期 sanity：2099 这类「永远的未来」正是
+# 捕获侧要拦的日期解析错误形态，不能再当合法夹具用）：取 now+30 天。
+from datetime import datetime as _dt_anchor, timedelta as _td_anchor
+_FUTURE_DAY = (_dt_anchor.now() + _td_anchor(days=30)).date()
+FUTURE_DATE_STR = _FUTURE_DAY.strftime("%Y-%m-%d")
+FUTURE_JSON = ('{"found":true,"topic":"面试","date":"' + FUTURE_DATE_STR
+               + '","greeting":false,"confidence":0.9}')
 NOTFOUND_JSON = '{"found":false}'
 
 
@@ -67,6 +73,41 @@ def test_inbound_cb_silent_when_disabled(tmp_path):
     sc = _scanner(tmp_path, _FakeAI([]), _cfg(enabled=False))
     sc.inbound_cb(_conv(), "明天下午终面")
     assert sc.stats.enqueued == 0 and sc.snapshot()["queue"] == 0
+
+
+def test_inbound_cb_excludes_group_chats(tmp_path):
+    """B68（实施67 P2-i）：群聊消息不进扫描队列——报障群消息被 LLM 捕成
+    「关怀约定」实锤两条（值守现场 cancel）；关怀约定是私聊语义。"""
+    sc = _scanner(tmp_path, _FakeAI([]), _cfg())
+    conv_g = _conv(cid="telegram:a:g1")
+    conv_g["chat_type"] = "group"
+    sc.inbound_cb(conv_g, "明天下午终面记得复测")
+    assert sc.stats.enqueued == 0
+    # 显式 private / 缺省（向后兼容）都照常入队
+    conv_p = _conv(cid="telegram:a:p1")
+    conv_p["chat_type"] = "private"
+    sc.inbound_cb(conv_p, "明天下午终面")
+    sc.inbound_cb(_conv(cid="telegram:a:p2"), "明天下午终面")  # 无 chat_type
+    assert sc.stats.enqueued == 2
+
+
+def test_inbound_cb_scan_gate_all_admits_no_time_signal(tmp_path):
+    """scan_gate=all（2026-08-18 评估加速）：无时间信号的入站也进队——
+    窄门 7 天只攒 1 条 llm_only（切主判据要 ≥20），预算内买证据积累速度。"""
+    cfg = _cfg()
+    cfg["llm_extract"]["scan_gate"] = "all"
+    sc = _scanner(tmp_path, _FakeAI([]), cfg)
+    sc.inbound_cb(_conv(), "哈哈哈")            # 旧门必拒的闲聊
+    sc.inbound_cb(_conv(cid="c2"), "明天面试")  # 有时间信号照常
+    sc.inbound_cb(_conv(cid="c3"), "")          # 空文本仍忽略
+    assert sc.stats.enqueued == 2
+    assert sc.stats.gate_rejected == 0
+    # 缺省/未知值回落窄门（旧行为逐位不变）
+    cfg2 = _cfg()
+    cfg2["llm_extract"]["scan_gate"] = "bogus"
+    sc2 = _scanner(tmp_path, _FakeAI([]), cfg2)
+    sc2.inbound_cb(_conv(), "哈哈哈")
+    assert sc2.stats.gate_rejected == 1
 
 
 def test_queue_drop_oldest(tmp_path):
@@ -199,7 +240,8 @@ async def test_capture_llm_only_writes_store(tmp_path):
     assert r["chat_key"] == "1"
     assert r["topic"] == "面试"
     due = _dt.fromtimestamp(r["due_at"])
-    assert (due.year, due.month, due.day, due.hour) == (2099, 1, 5, 20)
+    assert ((due.year, due.month, due.day, due.hour)
+            == (_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 20))
     # JSONL 记 captured=true
     import json as _json
     files = list((tmp_path / "shadow").glob("*.jsonl"))
@@ -233,15 +275,15 @@ async def test_capture_skipped_when_regex_also_found(tmp_path):
 async def test_capture_same_day_pending_guard(tmp_path):
     # 同联系人同事件日已有 pending（正则昨天按「面试」入过）→ LLM 的「终面」不再入（防双写②）
     care = CareScheduleStore(":memory:")
-    ev = _dt(2099, 1, 5, 0, 0, 0).timestamp()
+    ev = _dt(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 0, 0, 0).timestamp()
     care.add_commitment(
         CareCommitment(due_at=ev + 20 * 3600, event_at=ev, topic="面试",
                        sentiment="neutral", anchor_text="regex",
                        source_text="x", confidence=0.9),
         contact_key="th:1", platform="telegram", account_id="a", chat_key="1",
         min_confidence=0.0, dedup_window_days=0.0)
-    interview_variant = ('{"found":true,"topic":"终面","date":"2099-01-05",'
-                         '"greeting":false,"confidence":0.9}')
+    interview_variant = ('{"found":true,"topic":"终面","date":"' + FUTURE_DATE_STR
+                         + '","greeting":false,"confidence":0.9}')
     sc = _scanner_cap(tmp_path, _FakeAI([interview_variant]), _cfg_capture(), care)
     sc.inbound_cb(_conv(cid="th:1"), "พรุ่งนี้ไปสัมภาษณ์งาน")
     await sc.run_once()

@@ -1,4 +1,7 @@
 {% extends "workspace_base.html" %}
+{#- 管理面一致性（2026-08-18）：本页由管理员菜单「AI 质量看板」进入，挂工作台左侧
+    导航（_ws_sidebar.html，菜单单源 nav_schema.py）。顶层 set 对父模板可见。 -#}
+{% set ws_sidebar = true %}
 {% block title %}{{ (i18n or {}).get('aq_s001', "AI 回复质量") }}{% endblock %}
 {% block head %}
 <style>
@@ -32,6 +35,8 @@
 </style>
 {% endblock %}
 {% block content %}
+{% set cluster_id = "boards" %}{% set cluster_here = "/workspace/ai-quality" %}
+{% include "_cluster_tabs.html" %}
 <div class="aq-wrap">
   <a class="aq-back" href="/workspace/dash">← {{ (i18n or {}).get('wr_s002', "返回今日概览") }}</a>
   <div class="aq-head">

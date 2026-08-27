@@ -58,6 +58,11 @@ __all__ = [
 #: 跨群冷却回看多久。闸门本身是十分钟级的，回看一天足够，再往前只是白扫库。
 _COOLDOWN_LOOKBACK_SEC = 86400.0
 
+#: ``_call`` 撞 TypeError 时可去掉重试的**可选** kwarg。老库 / 鸭子替身可能不认这些新
+#: 参数——去掉后拿到的是偏保守的读数（``platform`` 去掉＝全平台合读；``exclude_group``
+#: 去掉＝不排除本群），总好过整本账变空。真实 store 早已认这两个参数，此路只兜降级件。
+_OPTIONAL_KWARGS = ("exclude_group", "platform")
+
 #: ``window_days`` 传它 ＝ **不设窗，读全部历史**。
 #:
 #: 只给看板用，**闸门永远不要传**：共现是会饱和的，跑上几个月每一对都同过台，全历史
@@ -79,9 +84,9 @@ def _call(source: Any, name: str, degraded: Optional[List[str]],
     try:
         return fn(**kwargs)
     except TypeError:
-        # 老版本 store 不认新 kwarg（如 exclude_group）——退一步用旧签名重试，
-        # 拿到偏保守的读数总好过整本账变空。
-        trimmed = {k: v for k, v in kwargs.items() if k != "exclude_group"}
+        # 老版本 / 鸭子替身 store 不认新 kwarg（exclude_group / platform）——退一步用
+        # 旧签名重试，拿到偏保守的读数（全平台合读 / 不排除本群）总好过整本账变空。
+        trimmed = {k: v for k, v in kwargs.items() if k not in _OPTIONAL_KWARGS}
         if len(trimmed) == len(kwargs):
             _note(degraded, label)
             logger.debug("[group_show.ledgers] %s 读取失败（已忽略）", name,
@@ -153,7 +158,10 @@ def read_speech(shows: Any = None, inbox: Any = None, *, window_days: int = 0,
     return merge_speech(
         _call(shows, "performance_ledger", degraded, "shows",
               platform=platform, since=since),
-        _call(inbox, "group_speech_ledger", degraded, "inbox", since_ts=since),
+        # P0 轴隔离：inbox 侧同样按平台过滤——同一手机号在 TG 与 WA 是两个 account_id，
+        # 不按平台切会把「平台根本看不见的号对」算进共现，造出幻影暴露面。
+        _call(inbox, "group_speech_ledger", degraded, "inbox",
+              since_ts=since, platform=platform),
     )
 
 
@@ -201,8 +209,9 @@ def read_last_spoke(shows: Any = None, inbox: Any = None, *, group_key: str = ""
     sources = (
         _call(shows, "last_spoke_at", degraded, "shows", platform=platform,
               since=since, exclude_group=group_key),
+        # P0 轴隔离：inbox 侧同样按平台过滤（跨群冷却是每平台各自的节奏轴）。
         _call(inbox, "group_last_spoke_at", degraded, "inbox", since_ts=since,
-              exclude_group=group_key),
+              platform=platform, exclude_group=group_key),
     )
     for rows in sources:
         try:
@@ -434,9 +443,13 @@ def read_show_context(
 
 def read_show_outcomes(shows: Any = None, inbox: Any = None, *,
                        window_hours: float = 0.0, limit: int = 10,
+                       platform: str = "",
                        now: Optional[float] = None,
                        degraded: Optional[List[str]] = None) -> List[Any]:
     """最近若干**真发**场次的效果读数（排练一律剔除）。
+
+    ``platform`` 非空则只看该平台的真发场次（P0 多平台：效果卡与风险轴同口径按平台
+    隔离；空＝全部，保旧行为）。每条 outcome 的入站归因仍按**该场次自己的**平台取。
 
     与风险轴同一条规矩：口径在 :mod:`outcome`（纯函数），取数只在这里，路由与看板
     都不许自己再算一遍。效果数字会被写进周报、变成「这批号还投不投」的依据——

@@ -27,6 +27,9 @@ _optout_mutes = 0
 _checkin_gate_skips = 0
 _fabrication_blocks = 0
 _lang_gate_blocks = 0
+_wall_skips = 0
+_season_blocks = 0
+_greeting_time_blocks = 0
 _sent_modes: Dict[str, int] = {}
 _media_skips: Dict[str, Dict[str, int]] = {}
 _last: Dict[str, Any] = {}
@@ -105,6 +108,30 @@ def record_lang_gate_block() -> None:
         _lang_gate_blocks += 1
 
 
+def record_wall_skip() -> None:
+    """未回消息墙拦截计数（2026-08-18：拦下=避免了一次「往 ≥N 条未回消息上
+    再堆一条」的刷屏——对方打开聊天看到连排早安是流失级体验）。"""
+    global _wall_skips
+    with _lock:
+        _wall_skips += 1
+
+
+def record_season_block() -> None:
+    """季节守卫拦截计数（2026-08-18「迎新表演」事故：拦下=避免了一次
+    「8 月声称在排迎新」式的反季穿帮）。"""
+    global _season_blocks
+    with _lock:
+        _season_blocks += 1
+
+
+def record_greeting_time_block() -> None:
+    """问候词×时刻守卫拦截计数（2026-08-19「上午晚安」事故：拦下=避免了
+    一次「问候词与收件人时刻矛盾」的当场穿帮）。"""
+    global _greeting_time_blocks
+    with _lock:
+        _greeting_time_blocks += 1
+
+
 def record_tick(*, planned: int, sent: int, dry_run: bool = False) -> None:
     global _ticks, _planned_sum, _sent_sum, _last
     with _lock:
@@ -133,6 +160,9 @@ def metrics_snapshot() -> Dict[str, Any]:
             "checkin_gate_skips": _checkin_gate_skips,
             "fabrication_blocks": _fabrication_blocks,
             "lang_gate_blocks": _lang_gate_blocks,
+            "wall_skips": _wall_skips,
+            "season_blocks": _season_blocks,
+            "greeting_time_blocks": _greeting_time_blocks,
             "sent_modes": dict(_sent_modes),
             "media_skips": {k: dict(v) for k, v in _media_skips.items()},
             "last_tick": dict(_last),
@@ -144,6 +174,7 @@ __all__ = [
     "record_sent_mode", "record_media_skip",
     "record_variety_block", "record_optout_mute",
     "record_checkin_gate", "record_fabrication_block",
-    "record_lang_gate_block",
+    "record_lang_gate_block", "record_wall_skip", "record_season_block",
+    "record_greeting_time_block",
     "metrics_snapshot",
 ]

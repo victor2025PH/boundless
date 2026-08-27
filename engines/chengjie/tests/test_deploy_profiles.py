@@ -241,6 +241,77 @@ def test_seeding_bad_profile_is_soft_noop(tmp_path, monkeypatch):
     assert dig(_overlay_of(cfg_path), "deploy.profile") is None
 
 
+# ── ⑤ 打包能力对账单（同构病第 5 例的机制化收口，实施64 P0-2 2026-08-23）────
+#
+# 病株谱系：B1/B2/B8/B9 → B43/B55/B62 全是同一构型——「example/代码里有这能力、
+# 客户交付档把它关了、没人登记谁负责激活」→ 客户拿到静默残废，每例都靠报障
+# 群人肉发现。收口＝对账单：客户交付面（桌面种子 config.desktop.min.yaml +
+# cloud_light 档）里每一个 ``enabled: false`` 必须有**登记在案的处置**，三种
+# 合法处置：
+#   1. feature_registry 在册（A=启动补齐 / B=自助可开 / C=锁定有 reason 码）；
+#   2. 同段 ``_hosted_auto: true`` 预授权（持设备令牌的部署运行时自动接管）；
+#   3. 下方 allowlist 显式登记（非能力开关/纯基础设施旋钮，必须附人话理由）。
+# 新增一个 enabled:false 而三处都没登记 → 本门禁红，逼你当场表态谁来激活。
+
+#: 交付档里合法关闭、但**不是**用户能力开关的键（基础设施/运维旋钮）。
+#: 加条目必须附理由——本表本身就是对账单的一部分。
+_RECON_ALLOWLIST: dict = {
+    "ai.fallback.enabled": "本地 LLM 容灾端点是 LAN Ollama（注册表 C 类同名在册，"
+                           "此处冗余登记防注册表改名后漏网）",
+    "platform_login.telegram.credpool.enabled":
+        "集团 LAN 凭据池客户端（只绑 localhost，客户机够不着）；客户形态的"
+        "同一能力由 hosted_gateway.ensure_hosted_telegram 设备令牌派发接管，"
+        "启动即自动跑——关的是旧管道不是能力",
+}
+
+
+def _collect_disabled_enabled_keys(node, prefix="") -> list:
+    out = []
+    if not isinstance(node, dict):
+        return out
+    for k, v in node.items():
+        path = f"{prefix}{k}"
+        if isinstance(v, dict):
+            out.extend(_collect_disabled_enabled_keys(v, prefix=f"{path}."))
+        elif k == "enabled" and v is False:
+            out.append(path)
+    return out
+
+
+def test_ship_config_disabled_capabilities_are_all_accounted():
+    registry_keys = {f.key for f in FEATURES}
+    sources = {
+        "cloud_light": _cloud_light(),
+        "desktop_min": yaml.safe_load(DESKTOP_MIN.read_text(encoding="utf-8")) or {},
+    }
+    unaccounted: dict = {}
+    for src_name, doc in sources.items():
+        for dotted in _collect_disabled_enabled_keys(doc):
+            if dotted in registry_keys or dotted in _RECON_ALLOWLIST:
+                continue
+            section = dotted.rsplit(".enabled", 1)[0]
+            if bool(dig(doc, f"{section}._hosted_auto")):
+                continue  # hosted 预授权=有人接管激活
+            unaccounted.setdefault(dotted, []).append(src_name)
+    assert not unaccounted, (
+        "客户交付档关闭了以下能力，但 feature_registry / _hosted_auto / allowlist "
+        "三处都查无处置登记（B43/B55/B62 同构病）——去 feature_registry 表态"
+        f"（A 补齐 / B 自助 / C 说明原因），或在本文件 allowlist 附理由: {unaccounted}")
+
+
+def test_hosted_auto_sections_keep_optout_semantics():
+    """钉死 `_hosted_auto` 覆盖语义（实施64 P0-2）：种子写的 enabled:false 可被
+    运行时纯内存覆盖；用户显式退出的**唯一**表达是 hosted_opt_out——交付档里
+    绝不允许预置 hosted_opt_out（那等于替用户做了退出决定）。"""
+    patch = _cloud_light()
+    for section in ("avatar_voice", "voice_recognition", "vision"):
+        seg = patch.get(section) or {}
+        assert seg.get("_hosted_auto") is True, (
+            f"cloud_light.{section} 必须带 _hosted_auto 预授权（存量激活的种子面）")
+        assert not seg.get("hosted_opt_out"), (
+            f"cloud_light.{section} 不得预置 hosted_opt_out（退出是用户决定）")
+
+
 # ── 就绪自检端点（只读契约）──────────────────────────────────────────────────
 
 def test_deploy_profile_endpoint_readonly():

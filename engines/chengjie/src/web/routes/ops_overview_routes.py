@@ -755,26 +755,16 @@ def register_ops_overview_routes(app, ctx) -> None:
         if probe:
             return {"ok": True}
         import asyncio as _aio
-        from pathlib import Path as _P
 
         from fastapi.responses import Response as _Resp
 
+        from src.utils.diag_upload import app_identity, resolve_diag_dirs
         from src.utils.diagnostic_bundle import build_diagnostic_bundle
-        cfg_dir = None
-        logs_dir = None
-        try:
-            cfg_path = getattr(config_manager, "config_path", "") or ""
-            if cfg_path:
-                cfg_dir = _P(cfg_path).parent
-                logs_dir = cfg_dir.parent / "logs"
-        except Exception:
-            logger.debug("diagnostic-bundle 目录解析失败", exc_info=True)
+        cfg_dir, logs_dir = resolve_diag_dirs(config_manager)
         meta: Dict[str, Any] = {}
-        try:
-            from src.utils.app_identity import identity_payload
-            meta["app"] = identity_payload()
-        except Exception:
-            pass
+        app_meta, _ver = app_identity()
+        if app_meta:
+            meta["app"] = app_meta
         meta["config_dir"] = str(cfg_dir or "")
         meta["logs_dir"] = str(logs_dir or "")
         blob = await _aio.to_thread(
@@ -797,62 +787,16 @@ def register_ops_overview_routes(app, ctx) -> None:
         api_auth(request)
         if probe:
             return {"ok": True}
-        import asyncio as _aio
-        import json as _json
-        import urllib.request as _rq
-        from pathlib import Path as _P
-
-        from src.utils.diagnostic_bundle import build_diagnostic_bundle
-        cfg_dir = None
-        logs_dir = None
-        try:
-            cfg_path = getattr(config_manager, "config_path", "") or ""
-            if cfg_path:
-                cfg_dir = _P(cfg_path).parent
-                logs_dir = cfg_dir.parent / "logs"
-        except Exception:
-            logger.debug("diagnostic-upload 目录解析失败", exc_info=True)
-        meta: Dict[str, Any] = {}
-        ver = ""
-        try:
-            from src.utils.app_identity import identity_payload
-            meta["app"] = identity_payload()
-            ver = str((meta["app"] or {}).get("version") or "")
-        except Exception:
-            pass
-        fp = ""
-        try:
-            from src.licensing.machine_bridge import machine_fingerprint
-            fp = machine_fingerprint() or ""
-        except Exception:
-            pass
-        blob = await _aio.to_thread(
-            build_diagnostic_bundle,
-            config_dir=cfg_dir, logs_dir=logs_dir, meta=meta)
-
-        cfg = (config_manager.config if config_manager is not None else {}) or {}
-        try:
-            from src.ai.hosted_gateway import _site_url
-            site = _site_url(cfg)
-        except Exception:
-            site = "https://bd2026.cc"
-
-        def _upload() -> Dict[str, Any]:
-            req = _rq.Request(f"{site}/api/diag-upload", data=blob, method="POST")
-            req.add_header("content-type", "application/zip")
-            req.add_header("x-diag-meta", _json.dumps(
-                {"app": ver, "fp": fp}, ensure_ascii=False))
-            with _rq.urlopen(req, timeout=30) as resp:
-                return _json.loads(resp.read().decode("utf-8") or "{}")
-        try:
-            out = await _aio.to_thread(_upload)
-        except Exception:  # noqa: BLE001 —— 官网不可达/超限如实报错，别让用户干等
-            logger.info("diagnostic-upload 转投官网失败", exc_info=True)
-            return {"ok": False, "detail": tr(request, "err.svc.upstream_unreachable")}
-        if not out.get("ok") or not out.get("code"):
-            return {"ok": False,
-                    "detail": str(out.get("error") or "upload_failed")[:120]}
-        return {"ok": True, "code": str(out.get("code"))}
+        # 实现共用 src.utils.diag_upload（坐席入口 /api/support/diag-upload 同源）。
+        from src.utils.diag_upload import build_and_upload, error_detail_for
+        out = await build_and_upload(config_manager)
+        if out.get("ok"):
+            resp = {"ok": True, "code": str(out.get("code") or "")}
+            if out.get("mini"):
+                resp["mini"] = True   # 降级 mini 包送达（additive，旧前端零感知）
+            return resp
+        err = str(out.get("error") or "upload_failed")
+        return {"ok": False, "detail": error_detail_for(request, err)}
 
     @app.get("/api/admin/media-consistency")
     async def api_media_consistency(request: Request, force: int = 0):
@@ -1392,6 +1336,7 @@ def register_ops_overview_routes(app, ctx) -> None:
                                         platform=platform))
         from src.integrations.messenger_web_login import (
             _post_json,
+            http_error_detail,
             service_base_url,
         )
         config = getattr(config_manager, "config", None) or {}
@@ -1412,28 +1357,49 @@ def register_ops_overview_routes(app, ctx) -> None:
                 res = await _post_json(
                     f"{service_base_url(config)}/accounts/{ident}/relogin", {},
                     timeout=60.0)
-        except Exception as ex:  # worker 不可达/profile 不存在等，如实回给运营
+        except Exception as ex:
+            # 失败分诊（2026-08-27，修「裸 httpx 英文原文糊脸」）：三种失败对
+            # 运营是三种完全不同的处置，绝不再共用一句话——
+            #   · worker 回 404 ＝ 本机已无该账号的登录档案（在别的电脑登录了/
+            #     档案被别的账号复用/已被清理）：重试无意义，出路是账号管理
+            #     重新接入或登出停提醒 → 语义化 404，前端据此给专属 CTA；
+            #   · 连不上 worker（无 response）＝ 登录服务没起 → 502 指路管理员；
+            #   · worker 回其他 HTTP 错 → 502 附 http_error_detail（含边车真实
+            #     败因 reason_code），原文进日志便于排障。
+            _resp_code = getattr(getattr(ex, "response", None),
+                                 "status_code", None)
+            logger.warning("[psess] relogin 转发失败 platform=%s ident=%s: %s",
+                           platform, ident, http_error_detail(ex))
+            if _resp_code == 404:
+                raise HTTPException(404, tr(
+                    request, "err.psess.relogin_no_profile"))
+            if _resp_code is None:
+                raise HTTPException(502, tr(
+                    request, "err.psess.relogin_worker_down"))
             raise HTTPException(502, tr(request, "err.rpa.op_failed",
-                                        op="relogin", err=str(ex)))
+                                        op="relogin",
+                                        err=http_error_detail(ex)))
+        actor = "api"
+        try:
+            actor = request.session.get("username", "api")
+        except Exception:
+            pass  # 无 SessionMiddleware（内部调用）→ 记 api
         if audit_store is not None:
             try:
-                actor = "api"
-                try:
-                    actor = request.session.get("username", "api")
-                except Exception:
-                    pass  # 无 SessionMiddleware（内部调用）→ 记 api
                 audit_store.log(actor, "platform_session_relogin", "ops", ident,
                                 f"platform={platform}")
             except Exception:
                 logger.debug("platform_session_relogin 审计写入失败（已忽略）",
                              exc_info=True)
-        # P4 漏斗中段：人工重登计数（与 stall went/recovered 同表可观测）
+        # P4 漏斗中段：人工重登计数 + 操作者痕迹（状态中心 v2：横幅快照带
+        # relogin_ts/by → 多坐席可见「已有人触发过」，防同号被各触发一遍）
         try:
             from src.integrations.platform_session_health import (
                 get_platform_session_health,
             )
             acct = str(body.get("account_id") or ident)
-            get_platform_session_health().record_relogin(platform, acct)
+            get_platform_session_health().record_relogin(platform, acct,
+                                                         by=actor)
         except Exception:
             logger.debug("platform_session_relogin 漏斗计数失败（已忽略）",
                          exc_info=True)

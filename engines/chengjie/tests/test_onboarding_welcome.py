@@ -150,7 +150,17 @@ async def test_flag_on_page_and_status(tmp_path, monkeypatch):
         r = await c.get("/welcome")
         assert r.status_code == 200
         assert "onb-steps" in r.text
-        assert "persona_create_wizard.js" in r.text
+        # B35（impl49，2026-08-21）：向导只教不带走——第 3 步撤掉了内嵌人设创建
+        # 模态（persona_create_wizard.js 不再引入，人设创建回归「人设」页单一入口）
+        assert "persona_create_wizard.js" not in r.text
+        # B37（impl53，2026-08-22）：第 4/5 步撤全部实操按钮改纯图文（skuio 验收：
+        # 两位内测 100% 卡死在向导内应用档位）。真开关=收件箱值守/AI 接管主控；
+        # 向导内不得再出现 应用档位/发送测试 的可点入口，教导词条必须在场。
+        assert "onbApplyTier" not in r.text
+        assert "onbSendTest" not in r.text
+        assert "onbRefreshTest" not in r.text
+        assert "onb_wz_au_teach" in r.text or "AI 值守" in r.text
+        assert "onb_wz_ts_teach1" in r.text or "收藏消息" in r.text
 
         r = await c.get("/api/onboarding/status", headers=_HDRS)
         assert r.status_code == 200
@@ -210,7 +220,12 @@ async def test_automation_tier_writes_overlay(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_automation_tier_auto_ai_honest_blocking(tmp_path, monkeypatch):
-    """auto_ai 档：要么全应用（ok），要么如实回报 blocked——绝不静默半应用装成功。"""
+    """auto_ai 档：要么全应用（ok），要么如实回报 blocked——绝不静默半应用装成功。
+
+    B37 死锁修复（2026-08-22）：档位先写 + 护栏认「全局默认档=auto_ai」，
+    新装机（零会话）一键开成必须成功——不再出现「需至少 1 个会话设为
+    auto_ai」的先有鸡还是先有蛋。响应带 rewire 段（热接线结果如实回报）。
+    """
     monkeypatch.setenv("AITR_CONFIG_PATH", str(tmp_path / "config.yaml"))
     app, _cm = await _build_app(tmp_path, onboarding_enabled=True)
     async with _client(app) as c:
@@ -218,12 +233,10 @@ async def test_automation_tier_auto_ai_honest_blocking(tmp_path, monkeypatch):
                          json={"tier": "auto_ai"})
         assert r.status_code == 200
         d = r.json()
-        if d["ok"]:
-            assert "inbox.auto_draft.automation_mode" in d["applied"]
-        else:
-            assert d["blocked"], "ok=False 必须带被拦明细"
-            for b in d["blocked"]:
-                assert b.get("reason")
+        assert d["ok"] is True, f"新装机一键全自动必须开成（B37）：{d}"
+        assert "inbox.auto_draft.automation_mode" in d["applied"]
+        assert "inbox.l2_autosend.deliver" in d["applied"]
+        assert "rewire" in d           # 热接线结果如实回报（旧进程=not_wired）
 
 
 @pytest.mark.asyncio

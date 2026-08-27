@@ -30,6 +30,12 @@ export interface NewbieFunnelWindow {
   /** 新人包订单：创建 / 已付（全渠道，剔 e2e 测试单） */
   orders_created: number;
   orders_paid: number;
+  /** 其中桌面弹窗海报引流（订单 utm_source === "chatx_desktop"；下单页直落即记 +
+   *  7 天 localStorage 续存，「点海报→逛两天→回来下单」仍归因得到）。归因字段
+   *  2026-08-22 起随单落库——之前的老订单无此字段，一律计入「官网/自然」侧，
+   *  卡片脚注如实声明，绝不追溯脑补。 */
+  orders_created_desktop: number;
+  orders_paid_desktop: number;
   /** 官网点击 → 已付转化率（%；分母为 0 时 null） */
   click_to_paid: number | null;
 }
@@ -79,6 +85,8 @@ export async function newbieFunnel(days: number): Promise<NewbieFunnelWindow> {
 
   let created = 0;
   let paid = 0;
+  let createdDesktop = 0;
+  let paidDesktop = 0;
   try {
     const orders = await listOrders();
     for (const o of orders) {
@@ -86,9 +94,14 @@ export async function newbieFunnel(days: number): Promise<NewbieFunnelWindow> {
       if (!skuHit || isTestOrder(o)) continue;
       const t = Date.parse(o.t || "");
       if (!t || t < since) continue;
+      const fromDesktop = o.utm_source === "chatx_desktop";
       created += 1;
+      if (fromDesktop) createdDesktop += 1;
       // 状态判定而非 paid_at 残留：退款单（保留 paid_at）不算转化
-      if (o.status === "paid" || o.status === "activated") paid += 1;
+      if (o.status === "paid" || o.status === "activated") {
+        paid += 1;
+        if (fromDesktop) paidDesktop += 1;
+      }
     }
   } catch {
     /* 订单台账读取失败 → 订单段 0（曝光段照常） */
@@ -101,6 +114,8 @@ export async function newbieFunnel(days: number): Promise<NewbieFunnelWindow> {
     poster_clicks: clicks,
     orders_created: created,
     orders_paid: paid,
+    orders_created_desktop: createdDesktop,
+    orders_paid_desktop: paidDesktop,
     click_to_paid: clicks > 0 ? Math.round((paid / clicks) * 1000) / 10 : null,
   };
 }

@@ -104,11 +104,16 @@ def test_quota_endpoint_hidden_without_any_quota():
 
 
 def test_quota_endpoint_leaks_no_secrets(tmp_path):
-    """任意登录坐席可读 —— 字段白名单，别顺手把 lic_id / 客户名带出去。"""
+    """任意登录坐席可读 —— 字段白名单，别顺手把 lic_id / 客户名带出去。
+
+    quotawall v2（2026-08-21）：新增 ``state``（四表合议裁决，见
+    src/licensing/quota_state.py）。裁决段刻意用 ``tok``/``tok_out`` 命名而非
+    token，正是为了让下面的防泄漏子串扫描继续全量成立。
+    """
     _wire_trial(tmp_path)
     d = _client().get("/api/workspace/quota").json()
     assert set(d) == {"ok", "visible", "source", "included", "used", "remaining",
-                      "exceeded", "hours_left", "expired", "level"}
+                      "exceeded", "hours_left", "expired", "level", "state"}
     blob = str(d).lower()
     for leak in ("lic_id", "local:ab12cd34", "customer", "token", "sub"):
         assert leak not in blob

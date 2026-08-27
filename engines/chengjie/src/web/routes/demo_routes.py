@@ -18,6 +18,12 @@ def _inbox(request: Request):
     return getattr(request.app.state, "inbox_store", None)
 
 
+def _contacts(request: Request):
+    """Contacts store（子系统未启用时 None → 漏斗演示自动跳过）。"""
+    contacts = getattr(request.app.state, "contacts", None)
+    return getattr(contacts, "store", None) if contacts is not None else None
+
+
 def _kb(config_manager):
     try:
         from src.utils.kb_registry import get_kb_store
@@ -32,7 +38,7 @@ def register_demo_routes(app, *, api_auth, config_manager=None) -> None:
     async def api_admin_demo_status(request: Request):
         api_auth(request)
         from src.utils.demo_seeder import demo_status
-        st = demo_status(_inbox(request))
+        st = demo_status(_inbox(request), contacts_store=_contacts(request))
         st["ok"] = True
         return st
 
@@ -46,10 +52,11 @@ def register_demo_routes(app, *, api_auth, config_manager=None) -> None:
             body = {}
         days = int((body or {}).get("days") or 14)
         return seed_demo(_inbox(request), days=days,
-                         kb_store=_kb(config_manager), config_manager=config_manager)
+                         kb_store=_kb(config_manager), config_manager=config_manager,
+                         contacts_store=_contacts(request))
 
     @app.post("/api/admin/demo/clear")
     async def api_admin_demo_clear(request: Request):
         api_auth(request)
         from src.utils.demo_seeder import clear_demo
-        return clear_demo(_inbox(request))
+        return clear_demo(_inbox(request), contacts_store=_contacts(request))

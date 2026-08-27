@@ -78,6 +78,8 @@ export async function POST(req: NextRequest) {
       lang: clean(data?.lang, 8),
       // 会话归因串（AI 坐席发的下单链接 ?ref=…）：空串不落库（order-store 清理）
       ref: clean(data?.ref, 160),
+      // 渠道归因（?utm_source=，如 chatx_desktop=桌面海报）：同款空串不落库
+      utm_source: clean(data?.utm_source, 40),
       ip: clean(req.headers.get("x-forwarded-for")?.split(",")[0] || req.headers.get("x-real-ip"), 60),
       ua: clean(req.headers.get("user-agent"), 250),
     });

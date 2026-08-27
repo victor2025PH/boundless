@@ -109,6 +109,45 @@ def test_seat_banner_recent_carries_queued_flag(monkeypatch):
     assert by_domain["chat"]["queued"] is False
 
 
+# ── seat_banner：top_reason 主因（B73 实施67 P1-10）─────────────────────
+
+
+def test_seat_banner_top_reason_is_most_frequent(monkeypatch):
+    """近窗最高频 (domain, reason) 当主因，人话映射 + 原始码 + 次数齐备。"""
+    monkeypatch.setattr(ha, "notify_host", lambda *a, **k: True)
+    db.reset_for_tests()
+    db.report_block("translate", reason="hold")
+    db.report_block("translate", reason="hold")
+    db.report_block("voice", reason="tts_failed")
+    banner = db.seat_banner()
+    assert banner["top_reason_domain"] == "translate"
+    assert banner["top_reason_code"] == "hold"
+    assert banner["top_reason_n"] == 2
+    assert banner["top_reason"] == "出站翻译引擎不可用"
+
+
+def test_seat_banner_top_reason_window_excludes_stale(monkeypatch):
+    """主因按**近窗**现算——不能被进程累计里早已修好的旧故障顶成主因。"""
+    monkeypatch.setattr(ha, "notify_host", lambda *a, **k: True)
+    db.reset_for_tests()
+    import time as _t
+    now = _t.time()
+    db.report_block("voice", reason="tts_failed")   # 旧故障（窗口外）
+    banner = db.seat_banner(now=now + 3600, max_age_sec=1800)
+    assert banner["active"] is False
+    assert banner["top_reason"] == "" and banner["top_reason_n"] == 0
+
+
+def test_seat_banner_top_reason_unknown_code_falls_back_to_domain(monkeypatch):
+    """未登记的动态 reason 码 → 按域兜底人话，绝不因缺映射失声。"""
+    monkeypatch.setattr(ha, "notify_host", lambda *a, **k: True)
+    db.reset_for_tests()
+    db.report_block("vision", reason="some_dynamic_reason_xyz")
+    banner = db.seat_banner()
+    assert banner["top_reason_code"] == "some_dynamic_reason_xyz"
+    assert banner["top_reason"] == "识图引擎异常"
+
+
 # ── _toast_script：结构安全（纯函数）────────────────────────────────────
 
 

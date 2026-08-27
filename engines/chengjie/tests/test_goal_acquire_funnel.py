@@ -156,6 +156,24 @@ def test_capture_rejects_low_confidence():
     assert capture_from_text("x" * 3000) == []
 
 
+def test_capture_interests_positive():
+    # P3 2026-08-18：interests 补正则（此前四 relation 槽独缺，出厂默认下
+    # 兴趣槽只能人工）——第一人称爱好自述，中英两轨
+    assert dict(capture_from_text("我平时很喜欢钓鱼，周末就去海边"))[
+        "interests"] == "钓鱼"
+    assert dict(capture_from_text("我爱好是打篮球啦"))["interests"] == "打篮球"
+    assert dict(capture_from_text("I really love hiking, you?"))[
+        "interests"] == "hiking"
+
+
+def test_capture_interests_rejects_person_talk_and_negation():
+    # 陪聊语境高频关系话术/否定/疑问——一条都不许进画像（错采比漏采毒）
+    for t in ("我喜欢你", "我喜欢你的声音", "我不喜欢钓鱼", "你喜欢什么？",
+              "我喜欢她做的菜", "我喜欢听你说话", "我喜欢和你聊天",
+              "我爱你", "我喜欢死你了"):
+        assert "interests" not in dict(capture_from_text(t)), t
+
+
 def test_fill_rates_weighted_and_missing_order():
     fields = {"need": {"v": "客服人手"}, "budget": {"v": "200美金"},
               "team_size": {"v": "3人"}}

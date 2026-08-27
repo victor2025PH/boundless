@@ -281,11 +281,14 @@ console.log(`backend-launcher.test.js: ${pass} passed`);
     lok("别家占端口→lastError 说得出是谁", /grafana/.test(st.lastError || ""));
   }
 
-  // (e) 自家旧版本后端在跑 → 照常复用，但把版本错配记进状态供排查
+  // (e) 自家旧版本后端在跑（开发态）→ 照常复用，但把版本错配记进状态供排查；
+  //     开发态壳/后端版本错开是常态，绝不收割（exec 零调用）
   {
+    let execCalls = 0;
     const mgr = createBackendManager(baseDeps({
       app: { isPackaged: false, getPath: () => "/tmp", getVersion: () => "0.2.2" },
       spawn: () => fakeChild(),
+      exec: () => { execCalls++; },
       fetch: async (url) => (String(url).endsWith("/api/desktop/ping")
         ? { ok: true, status: 200, json: async () => ({ app: "chengjie", version: "0.2.1" }) }
         : { status: 200 }),
@@ -294,6 +297,109 @@ console.log(`backend-launcher.test.js: ${pass} passed`);
     const st = mgr.getStatus();
     lok("自家旧后端→仍复用", st.status === "running-external");
     lok("自家旧后端→记录版本错配", st.versionMismatch === true);
+    lok("开发态版本错配→绝不收割", execCalls === 0);
+  }
+
+  // (e2/e3) 打包态版本错配 = 上一版本升级残留的孤儿后端（B57 运行时兜底）：
+  //   按精确 exe 路径收割 → 端口静默（会话文件已释放）→ 拉起当前版本随包后端；
+  //   收割失败 → 退回复用（旧后端也比没有后端强）。win32 专属路径（打包发行面）。
+  if (process.platform === "win32") {
+    const savedResources = process.resourcesPath;
+    process.resourcesPath = path.join(path.sep, "Resources");
+    const staleBin = path.join(process.resourcesPath, "backend", "backend.exe");
+    try {
+      // (e2) 收割成功 → 重新 spawn 当前版本
+      {
+        let spawned = 0;
+        let reapCmd = "";
+        let reaped = false;
+        let spawnedFlag = false;
+        const mgr = createBackendManager(baseDeps({
+          app: { isPackaged: true, getPath: () => "/tmp", getVersion: () => "0.2.2" },
+          spawn: () => { spawned++; spawnedFlag = true; return fakeChild(); },
+          exec: (cmd) => { reapCmd = String(cmd); reaped = true; },
+          fetch: async (url) => {
+            if (String(url).endsWith("/api/desktop/ping")) {
+              return { ok: true, status: 200, json: async () => ({ app: "chengjie", version: "0.2.1" }) };
+            }
+            if (spawnedFlag) return { status: 200 };   // 新后端就绪
+            if (reaped) throw new Error("port silent"); // 收割后端口静默
+            return { status: 200 };                     // 初始：旧后端在应答
+          },
+          reapRoundMs: 50, reapPollMs: 1,
+        }));
+        await mgr.start(CFG);
+        const st = mgr.getStatus();
+        lok("打包态残留后端→收割后重新 spawn", spawned === 1);
+        lok("打包态残留后端→就绪", st.status === "ready");
+        lok("打包态残留后端→错配标记已清", st.versionMismatch === false);
+        lok("收割命令按精确路径全等（不误伤别人的 backend.exe）",
+          reapCmd.includes("Stop-Process") && reapCmd.includes(staleBin));
+      }
+
+      // (e3) 收割失败（进程杀不掉/端口一直有人应答）→ 退回复用，不 spawn
+      {
+        let spawned = 0;
+        const mgr = createBackendManager(baseDeps({
+          app: { isPackaged: true, getPath: () => "/tmp", getVersion: () => "0.2.2" },
+          spawn: () => { spawned++; return fakeChild(); },
+          exec: () => {},
+          fetch: async (url) => (String(url).endsWith("/api/desktop/ping")
+            ? { ok: true, status: 200, json: async () => ({ app: "chengjie", version: "0.2.1" }) }
+            : { status: 200 }),
+          reapRoundMs: 5, reapPollMs: 1,
+        }));
+        await mgr.start(CFG);
+        const st = mgr.getStatus();
+        lok("收割失败→退回复用", st.status === "running-external");
+        lok("收割失败→不盲目 spawn（防双进程抢会话）", spawned === 0);
+        lok("收割失败→版本错配线索保留", st.versionMismatch === true);
+      }
+    } finally {
+      if (savedResources === undefined) delete process.resourcesPath;
+      else process.resourcesPath = savedResources;
+    }
+  }
+
+  // (f) stopAndWait：等到进程真死才返回 true（B57 升级风暴修复——updater 必须
+  //     确认旧后端已释放 pyrogram 会话文件，才能放 NSIS 装新版拉新后端）
+  {
+    let killIssued = 0;
+    let alive = true;
+    const mgr = createBackendManager(baseDeps({
+      spawn: () => fakeChild(),
+      fetch: async () => { throw new Error("unreachable"); },
+      exec: () => { killIssued++; alive = false; }, // 击杀后进程消亡
+      pidAlive: () => alive,
+    }));
+    await mgr.start(CFG);
+    const dead = await mgr.stopAndWait(3000);
+    lok("stopAndWait→击杀已发出", killIssued >= 1 || process.platform !== "win32");
+    lok("stopAndWait→进程死透返回 true", dead === true);
+    lok("stopAndWait→状态 stopped 且 pid 清空", mgr.getStatus().status === "stopped" && mgr.getStatus().pid === null);
+  }
+
+  // (g) stopAndWait：杀不掉的进程超时返回 false（不把退出流程永远锁死）
+  {
+    const mgr = createBackendManager(baseDeps({
+      spawn: () => fakeChild(),
+      fetch: async () => { throw new Error("unreachable"); },
+      exec: () => {},
+      pidAlive: () => true, // 永远杀不死
+    }));
+    await mgr.start(CFG);
+    const dead = await mgr.stopAndWait(600);
+    lok("stopAndWait→超时如实返回 false", dead === false);
+  }
+
+  // (h) stopAndWait：无子进程（外部自管/未拉起）→ 直接 true
+  {
+    const mgr = createBackendManager(baseDeps({
+      spawn: () => fakeChild(),
+      fetch: async () => ({ status: 200 }), // running-external：child 恒空
+    }));
+    await mgr.start(CFG);
+    lok("stopAndWait→无 child 直接 true", (await mgr.stopAndWait(1000)) === true);
   }
 
   console.log(`backend-launcher.test.js lifecycle: ${lpass} passed`);

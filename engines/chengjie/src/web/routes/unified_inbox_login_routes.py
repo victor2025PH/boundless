@@ -157,6 +157,16 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                            f"platform={platform} mode={getattr(sess, 'mode', '')}")
         except Exception:
             logger.debug("account_online 里程碑上报失败（忽略）", exc_info=True)
+        # P0-1（B57+B59）：登录成功=最强「没被封」证据 → 自动解除该账号 auth 族
+        # auto_ban 冻结 + 清 meta.banned，并开启登录变更降档窗口（升级风暴闭环：
+        # 会话被杀 → 重登 → 冻结自动解除，不再需要运维手工翻 kill-switch）。
+        try:
+            from src.ops.ban_signal import clear_auth_ban_on_login
+            res = clear_auth_ban_on_login(platform, account_id)
+            if res.get("cleared") or res.get("meta_cleared"):
+                logger.info("登录成功自动解除 auth 族冻结 %s：%s", res.get("scope"), res)
+        except Exception:
+            logger.debug("登录后自动解冻检查失败（忽略）", exc_info=True)
 
     async def _diagnose_modes(platform: str, modes: list, *, force: bool = False) -> None:
         """给每个 mode 补 ``ready`` / ``blockers``，并把笼统的 reason_code 换成真原因。
@@ -479,6 +489,9 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                 _pout = {"ok": True, "status": st,
                          "detail": str(res.get("detail") or ""),
                          "pin": str(res.get("pin") or ""),
+                         # LINE PIN 展示剩余秒（provider 按签发时刻推算）：前端倒计时的权威来源，
+                         # 缺省 0＝旧 provider，前端回落本地兜底窗口
+                         "pin_expires_in": int(res.get("pin_expires_in") or 0),
                          "reason_code": sess.reason_code,
                          "hint_code": sess.hint_code,
                          "qr_url": poll_qr,
@@ -713,6 +726,10 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
             "missing": list(res.get("missing") or []),
             "submitted": bool(res.get("submitted")),
             "accepted": bool(res.get("accepted")),
+            # B64 三期：检查点「继续」回执——边车 relayClickContinue 是否真点到了页面按钮
+            # （点到=前端进「已替点，跟进中」态；没点到=指路先去手机确认）。旧边车无此键
+            # 时恒 False，前端另以 submitted 兜底（checkpoint 分支两者同义）。
+            "clicked": bool(res.get("clicked")),
             "detail": str(res.get("detail") or ""),
         }
 

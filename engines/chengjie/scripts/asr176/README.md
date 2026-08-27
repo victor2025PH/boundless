@@ -3,7 +3,7 @@
 faster-whisper `large-v3-turbo`(CUDA float16) 的 OpenAI 兼容转录端点(替代本机 CPU whisper 作为主 ASR)
 + emotion2vec_plus_large(CUDA) 的语音情绪端点(替代 117 CPU plus_base 作为主 SER)。
 
-- 端点:`http://192.168.0.176:8765/v1/audio/transcriptions`(契约=OpenAI `audio.transcriptions`,`response_format` 支持 `json`/`text`);`POST /v1/audio/emotion`(multipart file → 原始 `{labels,scores,model,latency_ms}`,标签→系统语义的映射**只在客户端** `src/ai/speech_emotion.py` 单一出口);健康检查 `GET /health`(含 `ser_model`)。
+- 端点:`http://192.168.0.176:8765/v1/audio/transcriptions`(契约=OpenAI `audio.transcriptions`,`response_format` 支持 `json`/`text`/`verbose_json`——后者回 `{text,language,duration,segments:[{start,end,text}]}` 供 SRT 字幕消费方,P3 2026-08-18 部署,默认 `json` 响应零变化);`POST /v1/audio/emotion`(multipart file → 原始 `{labels,scores,model,latency_ms}`,标签→系统语义的映射**只在客户端** `src/ai/speech_emotion.py` 单一出口);健康检查 `GET /health`(含 `ser_model`)。
 - 消费方:`config/config.local.yaml::voice_recognition`(provider `openai_compatible` 主 + `faster_whisper` CPU 备,经 `FallbackTranscriber` 级联)与 `speech_emotion.remote`(远程优先,失败 120s 冷却回落本地 funasr CPU),两条链都绝不阻塞理解链。
 - 实测:ASR 热延迟 ~0.3-0.4s;SER 热延迟 ~44ms 往返(server 15ms)。
 - **启动预热(2026-07-11)**:`AITR_WARMUP`(默认 1)在服务启动时后台预载 ASR+SER 两模型,

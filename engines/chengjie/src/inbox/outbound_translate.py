@@ -419,10 +419,31 @@ async def translate_outbound_text(
     if not _TRANSLATABLE_RE.search(text):
         return text  # 纯 emoji/符号/数字：无可译内容，放行（非兜底，是无操作）
 
-    # 会话目标语言用「最近入站消息加权多数决」（detect 取自同一 translation_service，
-    # 与入站落库检测同源），比 conversations.language 单值抗偶发外语翻转。
     _detect = getattr(translation_service, "detect_language", None)
-    target = normalize_target(_conv_language(store, cid, detect=_detect))
+    # B67（实施67 P1-8）：会话级「发→X」显式设置最优先——用户声明的意图不依赖
+    # 检测/投票（`_337` 实锤：检测判不出目标时中文盲发英文客户）。具体语种=钉死
+    # 目标；'auto'=显式要求跟客户语言（走既有投票，但意图升级见下）；未设置=
+    # 旧行为零变化。显式意图在场时 gate_only 升级为完整翻译——「发→英」开着
+    # 却只拦 CJK 冲突＝手动才译的旧断链换个姿势复发。
+    explicit = ""
+    try:
+        if store is not None and cid and hasattr(store, "get_outbound_lang_if_set"):
+            explicit = str(
+                store.get_outbound_lang_if_set(cid) or "").strip().lower()
+    except Exception:
+        explicit = ""
+    if explicit and explicit != "auto":
+        explicit = normalize_target(explicit)   # zh-CN→zh；非法值归 ''
+    if explicit and explicit != "auto":
+        target = explicit
+        gate_only = False
+    else:
+        # 会话目标语言用「最近入站消息加权多数决」（detect 取自同一
+        # translation_service，与入站落库检测同源），比 conversations.language
+        # 单值抗偶发外语翻转。
+        target = normalize_target(_conv_language(store, cid, detect=_detect))
+        if explicit == "auto":
+            gate_only = False
     # 冲突判定用「实质性 CJK」口径（cjk_substantial）：英文消息引用个别中文
     # 专名不算冲突（生产实锤误伤面，见函数 docstring）。
     text_cjk = cjk_substantial(text)

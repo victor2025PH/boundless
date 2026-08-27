@@ -249,7 +249,82 @@ class TelegramTriggerMixin:
             return False
         return my_username.lower() in text.lower() or f"@{my_username}".lower() in text.lower()
 
+    async def _bug_intake_archive_capped_photo(self, message) -> None:
+        """B33：报障群被压制的带图消息，图仍归档（protocol_media + bug_events）。
+
+        只下载登记、不回复不引燃；任何失败只打 debug 日志，绝不影响主链。
+        """
+        try:
+            from src.integrations.protocol_bridge import download_tg_media
+            from src.ops.bug_intake import record_capped_photo
+            _, url = await download_tg_media(
+                message, getattr(self, "account_id", "default"))
+            if url:
+                self.logger.info("[bug_intake] 压制消息截图已归档: %s", url)
+                record_capped_photo(
+                    chat_id=getattr(getattr(message, "chat", None), "id", ""),
+                    sender_id=getattr(getattr(message, "from_user", None), "id", ""),
+                    media_url=url)
+        except Exception:
+            self.logger.debug("[bug_intake] 压制截图归档失败（忽略）", exc_info=True)
+
     async def _should_reply_to_group_message(self, message) -> bool:
+        # 报障群值守三态（bug_intake，2026-08-18；2026-08-20 收口串戏）：
+        # None=非报障群，走下面原有触发链一字不变；True=报障/用法/收集窗/点名，
+        # 引燃；False=限频/危机词/闲聊/纯图，硬压制——报障群内 bug_intake 是唯一
+        # 触发裁决者（闲聊落回 follow_window 会让支持号用陪伴人设接话，实录：
+        # 官方支持号在报障群聊「Burrata 意面」）。is_direct=@提及/回复本账号。
+        try:
+            from src.ops.bug_intake import trigger_verdict
+            _bi_cfg = (self.config.config
+                       if hasattr(self.config, "config") else self.config)
+            _bi_direct = False
+            try:
+                _bi_direct = bool(self._contains_mention_of_self(message)) or bool(
+                    self.user_info and self._should_reply_by_reply_chain(message))
+            except Exception:
+                _bi_direct = False
+            # 引用文本并入触发判定（2026-08-20：引用一条报障消息+「分析」两个字，
+            # 裸正文判闲聊会被静默——引用内容是发言的真实对象）
+            _bi_text = (message.text or message.caption or "")
+            try:
+                _rq = getattr(message, "reply_to_message", None)
+                if _rq is not None:
+                    _qt = (getattr(_rq, "text", None)
+                           or getattr(_rq, "caption", None) or "")
+                    if _qt:
+                        _bi_text = f"{_bi_text} [引用] {str(_qt)[:200]}"
+            except Exception:
+                pass
+            _bi = trigger_verdict(
+                _bi_cfg if isinstance(_bi_cfg, dict) else {},
+                getattr(getattr(message, "chat", None), "id", ""),
+                getattr(getattr(message, "from_user", None), "id", ""),
+                _bi_text,
+                has_photo=bool(getattr(message, "photo", None)),
+                is_direct=_bi_direct,
+            )
+            if _bi is not None:
+                if _bi:
+                    message._trigger_path = "bug_intake"
+                    self.logger.info("[bug_intake] 报障群引燃回复")
+                else:
+                    self.logger.info("[bug_intake] 报障群压制（限频/危机词/闲聊/纯图）")
+                    # B33（实施49 2026-08-21）：被压制但带图 → 图仍入库。
+                    # 文字可 sync 还原、媒体不可——限频/闲聊误拦真反馈时，
+                    # 截图证据此前随压制永久丢失（06:33-06:38 实录 6 条）。
+                    # 后台归档到 protocol_media + bug_events 落 URL，不回复不引燃。
+                    if getattr(message, "photo", None):
+                        try:
+                            asyncio.create_task(
+                                self._bug_intake_archive_capped_photo(message))
+                        except Exception:
+                            self.logger.debug(
+                                "[bug_intake] 压制截图归档任务创建失败", exc_info=True)
+                return _bi
+        except Exception:
+            self.logger.debug("[bug_intake] 触发判定异常（放行原链）",
+                              exc_info=True)
         if self.user_info and self._should_reply_by_reply_chain(message):
             message._trigger_path = "reply_chain"
             return True

@@ -47,6 +47,10 @@ DATAS = [
     # mount 被 if 跳过 → /copilot/* 全 404：桌面右栏业务助手 iframe 显示 {"detail":"Not Found"}，
     # 网页工作台侧栏的 cp-* 组件与 tokens.css 一并失效（0.2.0/0.2.1 安装版实测中招）。
     (REPO / "shared" / "copilot", "shared/copilot"),
+    # AI 助手悬浮球组件（2026-08-21）。admin.py 同款 parents[2]/"shared"/"assistant"
+    # 定位挂 /assistant-shared——漏打则打包态开 assistant.enabled 时 bootstrap 探针
+    # 通过但组件脚本 404＝死球（与上面 copilot 0.2.0 中招机制完全相同）。
+    (REPO / "shared" / "assistant", "shared/assistant"),
     # P0-1 A1：桌面随包种子 = 最小配置（无 YOUR_* 占位）。AITR_DESKTOP_MODE 下
     # ConfigManager._ensure_seeded 优先播种它 → 首启只差一个 AI Key（向导写 overlay）。
     # 完整 example 仍随包：供参考 + 非桌面模式回落种子。
@@ -82,6 +86,15 @@ RUNTIME_STATIC_EXCLUDES = {"protocol_media", "persona_avatars"}
 STATIC_SRC = REPO / "src" / "web" / "static"
 STATIC_STAGED = HERE / "static-staged"
 
+# i18n 词条包（P1 增量化，2026-08-18）：packs 是纯数据 dict（有门禁保证零运行时
+# import），frozen 态由 i18n_packs/__init__ 改为「磁盘文件优先 exec」——把源文件
+# 一并 --add-data 进 <_MEIPASS>/src/web/i18n_packs/，词条改动即可走 refresh:datas
+# 秒级增量（并让 web_i18n 的 pack mtime 热重载在安装版复活）。PYZ 内编译副本仍在
+# （collect-submodules src），作 exec 失败回落。暂存清洗：剔 __pycache__/*.pyc +
+# 逐文件语法自检（全量构建 PYZ 编译天然会拦语法错，数据路径必须补齐同强度门）。
+I18N_PACKS_SRC = REPO / "src" / "web" / "i18n_packs"
+I18N_PACKS_STAGED = HERE / "i18n-packs-staged"
+
 # 领域包（只读代码资产：系统提示词/术语/KB 种子/看板挂件/域内模板）。
 # 消费方经 domain_loader.resolve_domains_dir 定位：冻结态回落到 <_MEIPASS>/domains。
 # 漏打 → 安装版日志出 "Domain 'xxx' has no manifest.yaml"，领域提示词与挂件静默丢失
@@ -100,7 +113,8 @@ PLATFORM_SECRET_SUFFIXES = {".db", ".db-wal", ".db-shm", ".key", ".pem",
 
 # 需要「暂存清洗后再打」的目录的包内目标（打包完整性门禁读这个常量，防两边口径漂移）
 STAGED_DESTS = ("src/web/static", "domains",
-                "platform/credpool", "platform/licensing")
+                "platform/credpool", "platform/licensing",
+                "src/web/i18n_packs")
 
 
 def _stage_static() -> Path:
@@ -117,6 +131,24 @@ def _stage_static() -> Path:
     if leaked:
         raise RuntimeError(f"static 暂存仍含运行时目录（打包中止防隐私泄漏）: {leaked}")
     return STATIC_STAGED
+
+
+def _stage_i18n_packs() -> Path:
+    """i18n packs 暂存：剔 __pycache__/*.pyc + 逐文件语法自检后供 --add-data。
+
+    frozen 态这些 .py 以数据文件被 exec（文件优先加载），不经 PYZ 编译——语法坏文件
+    若混进包，安装版收集时只能靠回落救；在构建/刷新期就地 compile 拦下才是同强度门。
+    """
+    shutil.rmtree(I18N_PACKS_STAGED, ignore_errors=True)
+    shutil.copytree(I18N_PACKS_SRC, I18N_PACKS_STAGED,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    for p in sorted(I18N_PACKS_STAGED.glob("*.py")):
+        try:
+            compile(p.read_text(encoding="utf-8-sig"), str(p), "exec")
+        except SyntaxError as e:
+            raise RuntimeError(
+                f"i18n pack 语法错误（打包/刷新中止，防坏词表进包）: {p.name}: {e}") from e
+    return I18N_PACKS_STAGED
 
 
 def _stage_domains() -> Path:
@@ -163,6 +195,8 @@ def _stage_platform_pkg(pkg: str):
 
 def _staged_datas() -> list:
     out = [(_stage_static(), "src/web/static")]
+    if I18N_PACKS_SRC.is_dir():
+        out.append((_stage_i18n_packs(), "src/web/i18n_packs"))
     if DOMAINS_SRC.is_dir():
         out.append((_stage_domains(), "domains"))
     # 集团底座瘦模块：清洗后再打（绝不整目录直打，见 _PLATFORM_ROOT 注释）
@@ -222,7 +256,7 @@ def main() -> int:
 
     if args.clean:
         for d in (OUT, HERE / "build", HERE / "__pycache__", STATIC_STAGED,
-                  DOMAINS_STAGED, PLATFORM_STAGED):
+                  DOMAINS_STAGED, PLATFORM_STAGED, I18N_PACKS_STAGED):
             shutil.rmtree(d, ignore_errors=True)
 
     OUT.mkdir(parents=True, exist_ok=True)
@@ -286,7 +320,9 @@ def main() -> int:
         if str(HERE) not in sys.path:
             sys.path.insert(0, str(HERE))
         from backend_source_fingerprint import compute_fingerprint, write_stamp
-        fp = compute_fingerprint(REPO, datas=list(DATAS))
+        # detail=True：stamp 带逐文件明细，refresh_backend_datas.py 据此做文件级 diff
+        # （纯数据资产变更走秒级增量刷新而非整跑 PyInstaller）
+        fp = compute_fingerprint(REPO, datas=list(DATAS), detail=True)
         stamp = write_stamp(OUT, fp)
         print(f"✓ 源码指纹已写入 {stamp.name} ({fp['aggregate'][:16]}… files={fp['file_count']})")
     except Exception as e:

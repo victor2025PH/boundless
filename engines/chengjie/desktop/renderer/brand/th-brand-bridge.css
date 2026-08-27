@@ -25,17 +25,21 @@
 :root{
   /* 纯色走 var() 直接引品牌令牌，未来改 tokens.json 自动跟随 */
   --th-bg-brand:var(--bl-growth,#1e8cf2);
-  /* 带 alpha 的无法引用 hex 令牌，取品牌智连蓝 rgb(30,140,242) 的对应透明档 */
-  --th-bg-brand06:rgba(30,140,242,.06);
-  --th-bg-brand08:rgba(30,140,242,.08);
-  --th-bg-brand10:rgba(30,140,242,.1);
-  --th-bg-brand15:rgba(30,140,242,.15);
-  --th-bg-brand18:rgba(30,140,242,.18);
-  --th-bg-brand22:rgba(30,140,242,.22);
-  --th-bd-brand15:rgba(30,140,242,.15);
-  --th-bd-brand18:rgba(30,140,242,.18);
-  --th-bd-brand20:rgba(30,140,242,.2);
-  --th-bd-brand22:rgba(30,140,242,.22);
+  /* alpha 档改 color-mix 引令牌（2026-08-23 白标压测批）：旧写法是写死的
+     rgba(30,140,242,.xx)——「带 alpha 无法引用 hex 令牌」是 color-mix 普及前的
+     约束，本仓 workspace_base 等处早已大量使用 color-mix；写死值=换肤时这 10 档
+     底色/描边仍是旧品牌蓝（verify_brand_reskin 压测的第一批实锤泄漏）。
+     现全部跟随 --bl-growth，改 tokens.json 即全站换肤。 */
+  --th-bg-brand06:color-mix(in srgb, var(--bl-growth,#1e8cf2) 6%, transparent);
+  --th-bg-brand08:color-mix(in srgb, var(--bl-growth,#1e8cf2) 8%, transparent);
+  --th-bg-brand10:color-mix(in srgb, var(--bl-growth,#1e8cf2) 10%, transparent);
+  --th-bg-brand15:color-mix(in srgb, var(--bl-growth,#1e8cf2) 15%, transparent);
+  --th-bg-brand18:color-mix(in srgb, var(--bl-growth,#1e8cf2) 18%, transparent);
+  --th-bg-brand22:color-mix(in srgb, var(--bl-growth,#1e8cf2) 22%, transparent);
+  --th-bd-brand15:color-mix(in srgb, var(--bl-growth,#1e8cf2) 15%, transparent);
+  --th-bd-brand18:color-mix(in srgb, var(--bl-growth,#1e8cf2) 18%, transparent);
+  --th-bd-brand20:color-mix(in srgb, var(--bl-growth,#1e8cf2) 20%, transparent);
+  --th-bd-brand22:color-mix(in srgb, var(--bl-growth,#1e8cf2) 22%, transparent);
 }
 
 /* 暗色：theme-tokens.css 的暗色块**漏了**纯色 --th-bg-brand（因此暗色下它仍取

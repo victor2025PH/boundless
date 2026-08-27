@@ -19,22 +19,37 @@
 deploy:
   profile: cloud_light
 
-# ── 语音：克隆链关（AvatarHub 是 LAN 集群），TTS 后端仅 edge_tts（云神经声，零 GPU）──
+# ── 语音：静态保守关（零 LAN 依赖零常驻探针，五项门禁语义不变）；_hosted_auto=
+# 托管预授权（2026-08-19 报障群实测「客户部署与语音引擎零通路」后开通）——持设备
+# 令牌（cx.*）的部署由 hosted_gateway.ensure_hosted_voice 运行时**纯内存**自动开启
+# 并接官方语音网关（{site}/api/ai/hub → 集群 GPU），概不落盘。客户要彻底关闭
+# 托管语音：avatar_voice.hosted_opt_out: true。TTS 兜底后端仍为 edge_tts。──
 avatar_voice:
   enabled: false
+  _hosted_auto: true
 realtime_voice:
   enabled: false
 speech_emotion:
   enabled: false
-# 语音接收转录整体关（本地 ASR 依赖已被桌面包显式排除；云 ASR 由运营后续自配）
+# 语音接收转录：静态保守关（本地 ASR 依赖已被桌面包显式排除）；_hosted_auto=
+# 托管预授权（2026-08-20 内测群实测「对方语音消息无法识别」后开通，与 avatar_voice
+# 同构）——持设备令牌的部署由 hosted_gateway.ensure_hosted_asr 运行时纯内存开启并
+# 走官网网关转写。客户要彻底关闭：voice_recognition.hosted_opt_out: true。
 voice_recognition:
   enabled: false
+  _hosted_auto: true
 telegram:
   voice_reply:
     backend: edge_tts
 
-# ── 视觉：无 LAN 端点（仅当运营自配云 key 时才识图；enabled 保持代码默认=关）──
+# ── 视觉：静态保守关（零 LAN 端点零常驻探针）；_hosted_auto=托管预授权
+# （2026-08-22 外网机实测「发图即拦」后开通，与 avatar_voice 同构）——持设备
+# 令牌的部署由 hosted_gateway.ensure_hosted_vision 运行时纯内存开启并走官网
+# 识图网关（{site}/api/ai/v1 → 集群 GPU VLM）。客户要彻底关闭：
+# vision.hosted_opt_out: true。──
 vision:
+  enabled: false
+  _hosted_auto: true
   base_urls: []
 
 # ── 嵌入：不配 → 记忆召回退关键词、语义去重退 hash（既有软降级，零阻断）──
@@ -74,6 +89,8 @@ whatsapp_rpa:
   enabled: false
 
 # ── 首启向导（WP-2）：新装客户默认见到 /welcome 五步向导；生产老实例（不经
-#    本档播种）保持基线 false 零打扰。完成后登录不再自动进入，页面仍可访问。──
+#    本档播种）保持基线 false 零打扰。完成后登录不再自动进入，页面仍可访问。
+#    WP-7 坐席新手任务卡随开箱档一并开（新坐席首日 5 任务；老坐席自动豁免）。──
 onboarding:
   enabled: true
+  agent_tasks: true

@@ -172,7 +172,7 @@ def test_autocov_card_renders_and_registered():
     assert "/api/admin/automation-coverage" in src
     assert "anchor:'autoCoverageKpis'" in src
     # 零流量/不适用整卡隐藏的站内惯例
-    assert "if(!d.ok || d.applicable === false){ sec.style.display='none'; return; }" in src
+    assert "if(!d.ok || d.applicable === false){ opsHideCardEl(sec, 'autocov', 'no_data'); return; }" in src
 
 
 def test_autocov_trend_rendering_wired():
@@ -194,7 +194,7 @@ def test_fleet_health_card_renders_and_registered():
     assert "/api/accounts/fleet-health" in src
     assert "anchor:'fleetHealthKpis'" in src
     # 零账号整卡隐藏惯例
-    assert "if(!d.ok || !Number(fl.total)){ sec.style.display='none'; return; }" in src
+    assert "if(!d.ok || !Number(fl.total)){ opsHideCardEl(sec, 'fleethp', 'no_data'); return; }" in src
 
 
 def test_fleet_health_i18n_keys_bilingual():

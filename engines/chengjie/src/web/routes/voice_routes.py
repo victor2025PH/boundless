@@ -255,7 +255,8 @@ def register_voice_routes(app, api_auth, config_manager=None):
             return tr(request, "err.voice.profile_not_ready")
         return ""
 
-    async def _run_tts_preview(body: Dict[str, Any], text: str) -> Dict[str, Any]:
+    async def _run_tts_preview(body: Dict[str, Any], text: str,
+                               xlate_svc: Any = None) -> Dict[str, Any]:
         """tts-test 核心段：resolve voice_cfg → override → fast 档 → 合成 → 整形响应。
 
         同步路径 ``return await`` 本函数（响应与历史行为逐字节一致）；background
@@ -263,8 +264,20 @@ def register_voice_routes(app, api_auth, config_manager=None):
         入参在提交时已从 request 取好（body 为已解析 dict、text 已校验），本函数
         不得引用 request——后台任务在请求生命周期结束后仍在跑。
         返回值＝POST /api/voice/tts-test 的响应 dict（成功/失败两种形状都在此组装）。
+
+        P0-V2（2026-08-19）译声：``body["target_lang"]``（handler 已把 'auto' 解析
+        成具体语种并归一）非空且 ``xlate_svc`` 就绪 → 先译后合成；spoken 文本决定
+        音色语言路由与实际念稿，复用 sidecar 仍按**请求原文**+目标语维度登记。
+        fail-open：翻译失败念原文并如实标记（试听听到什么、发送就发什么）。
         """
         persona_id: Optional[str] = body.get("persona_id") or None
+        spoken_text = text
+        _xl = {"translated": False, "target_lang": "", "source_lang": "",
+               "provider": "", "reason": ""}
+        _vt = str(body.get("target_lang") or "").strip().lower()
+        if _vt and xlate_svc is not None:
+            from src.ai.voice_outbound_xlate import resolve_spoken_text
+            spoken_text, _xl = await resolve_spoken_text(text, _vt, xlate_svc)
         fmt_override: Optional[str] = body.get("format") or None
         # Optional: caller passes current UI settings to override saved config
         cfg_override: Optional[Dict[str, Any]] = body.get("voice_cfg_override") or None
@@ -295,13 +308,15 @@ def register_voice_routes(app, api_auth, config_manager=None):
 
         try:
             from src.ai.persona_voice import resolve_effective_voice_context
+            # text=spoken_text：音色的语言路由必须跟**实际要念的文本**走（译声
+            # 场景 zh 原文 → ja 译文，edge 音色/克隆语言都该按 ja 解析）。
             voice_ctx = resolve_effective_voice_context(
                 raw_cfg, persona_id=persona_id,
                 chat_key=chat_key or None,
                 account_persona_id=account_persona_id or None,
                 contact_key=chat_key or None,
                 platform=platform, account_id=account_id or None,
-                text=text)
+                text=spoken_text)
             voice_cfg = voice_ctx.get("voice_cfg") or {}
         except Exception as ex:
             logger.warning("[voice/tts-test] resolve_voice_cfg failed: %s", ex)
@@ -357,7 +372,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
             # interactive 同时把 hub 候选数封顶（人在等）+ 豁免开场词去重剥词。
             result = await _aio.wait_for(
                 tts.synthesize(
-                    text, timeout_sec=(15.0 if fast else 45.0),
+                    spoken_text, timeout_sec=(15.0 if fast else 45.0),
                     emotion=voice_ctx.get("emotion"),
                     pre_colloquialized=True, interactive=True,
                     total_budget_sec=(15.0 if fast else 45.0)),
@@ -369,16 +384,24 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 "[voice/tts-test] TTS error (persona=%s text_len=%d elapsed=%.1fs): %s",
                 voice_ctx.get("persona_id") or persona_id or "-", len(text),
                 time.monotonic() - _t0, _exs)
+            # B61 观测盲区收口：hosted 客户的真实语音流量大头是试听——此前
+            # 完全不进 voice_outage 台账（attempts_24h=0 而客户在跑），断档对
+            # 看门狗/ops 卡全程隐形。
+            from src.ai.voice_outage import note_voice_attempt
+            note_voice_attempt(False, "preview", _exs)
             return {"ok": False, "error": _exs[:200], "fast": fast,
                     "reason": _classify_err(_exs)}
 
+        from src.ai.voice_outage import note_voice_attempt
         if not result.ok:
             logger.warning(
                 "[voice/tts-test] synth not ok (persona=%s provider=%s elapsed=%.1fs): %s",
                 voice_ctx.get("persona_id") or persona_id or "-",
                 result.provider, time.monotonic() - _t0, result.error)
+            note_voice_attempt(False, "preview", str(result.error or ""))
             return {"ok": False, "error": result.error, "fast": fast,
                     "reason": _classify_err(result.error)}
+        note_voice_attempt(True, "preview")
 
         # Rename to our deterministic preview path
         try:
@@ -400,6 +423,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
             record_preview_meta(
                 preview_path.name, text=text,
                 persona_key=str(persona_id or ""),
+                target_lang=(_vt if _xl.get("translated") else ""),
                 meta={
                     "resolved_persona_id": voice_ctx.get("persona_id") or "",
                     "persona_source": voice_ctx.get("persona_source") or "",
@@ -413,6 +437,9 @@ def register_voice_routes(app, api_auth, config_manager=None):
                     "duration_sec": result.duration_sec,
                     "format": result.format,
                     "fast": bool(fast),
+                    # 译声：复用命中时发送侧用它当收件箱镜像文本（客户实际听到的话）
+                    "spoken_text": (spoken_text if _xl.get("translated") else ""),
+                    "xl_provider": _xl.get("provider") or "",
                 })
         except Exception:
             logger.debug("[voice/tts-test] 复用 sidecar 登记失败（忽略）", exc_info=True)
@@ -429,6 +456,11 @@ def register_voice_routes(app, api_auth, config_manager=None):
             "format": result.format,
             "fast": fast,
             "requested_backend": requested_backend,
+            # P0-V2 译声（additive）：translated=false 时 spoken_text 为空串，
+            # 老前端零感知；新前端据此渲染「将念出（日本語）：…」译稿行。
+            "voice_translated": bool(_xl.get("translated")),
+            "spoken_text": (spoken_text if _xl.get("translated") else ""),
+            "target_lang": (_vt if _xl.get("translated") else ""),
             "bytes": preview_path.stat().st_size if preview_path.is_file() else 0,
             "voice_meta": {
                 "persona_id": voice_ctx.get("persona_id") or "",
@@ -440,6 +472,11 @@ def register_voice_routes(app, api_auth, config_manager=None):
                     if voice_ctx.get("emotion") else ""
                 ),
                 "fallback_from": (result.extra or {}).get("fallback_from", ""),
+                # B62：克隆名被映射成通用音色（如 steven → zh-CN-Xiaoxiao）时
+                # 前端同样要出「非克隆声」警示——没有 fallback_from 的映射场景
+                # （档位路由降级 edge）此前完全静默。
+                "voice_mapped_from": (result.extra or {}).get(
+                    "voice_mapped_from", ""),
             },
         }
 
@@ -474,15 +511,47 @@ def register_voice_routes(app, api_auth, config_manager=None):
         from src.utils.agent_char_usage import check_request_quota
         _aq = check_request_quota(request)
         if not _aq["allowed"]:
+            # X-AITR-Quota：quotawall v2 机器可读头（特性探测，旧前端零影响）
             raise HTTPException(403, tr(
                 request, "err.quota.agent_chars_exhausted",
-                used=_aq["used"], quota=_aq["quota"]))
+                used=_aq["used"], quota=_aq["quota"]),
+                headers={"X-AITR-Quota": "agent_chars"})
 
         # P0-4/C3：字符额度用尽且 licensing.enforce 开 → 402 + i18n（试听同样耗额度）
         # 后台模式下配额检查同样在**提交时**同步执行（提交即检查，任务里不再重复）。
         from src.licensing.quota_store import check_license_quota
         if not check_license_quota()["allowed"]:
-            raise HTTPException(402, tr(request, "err.lic.chars_exhausted"))
+            raise HTTPException(402, tr(request, "err.lic.chars_exhausted"),
+                                headers={"X-AITR-Quota": "license_chars"})
+
+        # P0-V2 译声（2026-08-19）：显式 target_lang（'auto'=会话客户语言）在提交时
+        # 解析/归一（核心段不得引用 request——后台 job 在请求结束后仍在跑），翻译
+        # 服务同样在提交时捕获。解析不出（会话语言未知/异常）→ 空串=不译，fail-open。
+        _vt_svc = None
+        _vt_raw = str(body.get("target_lang") or "").strip()
+        if _vt_raw:
+            try:
+                from src.ai.translation_service import normalize_lang as _nl
+                if _vt_raw.lower() == "auto":
+                    from src.web.routes.unified_inbox_services import (
+                        _resolve_conv_language)
+                    _vt_raw = _resolve_conv_language(
+                        request, str(body.get("platform") or ""),
+                        str(body.get("account_id") or "default"),
+                        str(body.get("chat_key") or ""))
+                _vt_raw = (_nl(_vt_raw) or "").lower()
+            except Exception:
+                _vt_raw = ""
+            if _vt_raw == "unknown":
+                _vt_raw = ""
+            if _vt_raw:
+                try:
+                    from src.web.routes.unified_inbox_services import (
+                        _get_translation_service)
+                    _vt_svc = _get_translation_service(request)
+                except Exception:
+                    _vt_svc = None
+            body["target_lang"] = _vt_raw
 
         # 提交路径顺手清理过期 job（与轮询路径同口径；纯内存操作，不影响响应）
         _cleanup_tts_jobs()
@@ -512,7 +581,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
             async def _job_runner() -> None:
                 # 任务内部整体兜住：后台没有外层错误处理，任何异常都写进 job 条目
                 try:
-                    rv = await _run_tts_preview(body, text)
+                    rv = await _run_tts_preview(body, text, xlate_svc=_vt_svc)
                 except Exception as ex:  # noqa: BLE001
                     entry["status"] = "error"
                     entry["error"] = (f"{type(ex).__name__}: {ex}".rstrip(": "))[:200]
@@ -522,6 +591,10 @@ def register_voice_routes(app, api_auth, config_manager=None):
                     entry["result"] = rv
                     # 试听真合成成功记 tts 字符（后台 job 无 request，用派发时捕获值）
                     record_named_chars(_uq_user, "tts", len(text), config=_uq_cfg)
+                    if rv.get("voice_translated"):
+                        # 译声=顺带消费了一次翻译，按源文本长度记（与文本出站同口径）
+                        record_named_chars(
+                            _uq_user, "translation", len(text), config=_uq_cfg)
                 else:
                     # 失败文案与同步路径完全一致（rv 的 error 字段原样透出）；
                     # reason=可行动分类，轮询路由据此补本地化 message
@@ -534,11 +607,14 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 _job_runner(), name=f"tts-preview-job-{job_id}")
             return {"ok": True, "job_id": job_id}
 
-        rv = await _run_tts_preview(body, text)
+        rv = await _run_tts_preview(body, text, xlate_svc=_vt_svc)
         # 坐席字符计量归因（2026-08-16）：同步路径试听合成成功才记（len(text) 与
         # 授权池 record_license_chars 同口径）；失败/异常不记。
         if rv.get("ok"):
             record_request_chars(request, "tts", len(text))
+            if rv.get("voice_translated"):
+                # 译声=顺带消费了一次翻译，按源文本长度记（与文本出站同口径）
+                record_request_chars(request, "translation", len(text))
         # 失败分类 → 本地化人话（additive：error 原样保留，老前端零感知）
         if not rv.get("ok") and rv.get("reason"):
             _msg = _voice_fail_message(request, str(rv.get("reason")))
@@ -652,19 +728,48 @@ def register_voice_routes(app, api_auth, config_manager=None):
             # hub 严格辖区风险预告（仅命中辖区才探测，健康路径零开销）：
             # unreachable=TCP 确定不可达（必拒发）；recent_failures=台账里 hub 失败
             # 比最近一次成功更新（hub 活着但音色档 404 类的事后证据）。
-            from src.ai.tts_pipeline import hub_strict_scope, probe_hub_reachable
+            from src.ai.tts_pipeline import (
+                HUB_SOURCE_ERROR_MARKERS,
+                hub_engine_offline as _hub_engine_offline,
+                hub_strict_scope,
+                probe_hub_reachable,
+            )
             _av_cfg = raw_cfg.get("avatar_voice") or {}
             hub_strict = hub_strict_scope(_av_cfg, ctx.get("persona_id"))
             hub_risk = ""
             if hub_strict:
-                if not probe_hub_reachable(_av_cfg):
+                # 熔断态先判：**零网络**（进程内快照）且它描述的不是预测而是「管线
+                # 此刻就在跳过 hub」——最确定的一档。与 hub 挂掉不会打架：连接被拒
+                # 是快败、压根喂不出超时，所以开路必然意味着 hub 是通的。
+                # ⚠ 只许用只读快照：``hub_synth_breaker_open`` 在半开态会**取走探路
+                # 名额**（副作用），从看板/预告这类只读面调它，等于把恢复探测的机会
+                # 从真正要发语音的那一发手里抢走。
+                _hf_c = _av_cfg.get("hub_fish") or {}
+                _brk = ""
+                try:
+                    from src.ai.avatar_voice import hub_synth_breaker_state
+                    if bool(_hf_c.get("timeout_breaker", True)) and \
+                        hub_synth_breaker_state(
+                            _hf_c.get("base_url"),
+                            _hf_c.get("tts_engine")).get("breaker") == "open":
+                        _brk = "timing_out"
+                except Exception:
+                    _brk = ""
+                if _brk:
+                    hub_risk = _brk
+                elif not probe_hub_reachable(_av_cfg):
                     hub_risk = "unreachable"
+                elif _hub_engine_offline(_av_cfg):
+                    # hub 活着但**点名的引擎**离线（2026-08-22 事故形态）：管线合成
+                    # 前预检会硬拒发，预告必须与之同源，否则坐席看到「无风险」却
+                    # 发不出去。这是确定性信号（目录自己说 available:false）。
+                    hub_risk = "engine_offline"
                 else:
                     try:
                         from src.ai.voice_outage import get_voice_outage
                         _snap = get_voice_outage().outage_snapshot()
                         _hub_fail = any(
-                            "hub_voice_source_unavailable" in str(k)
+                            any(m in str(k) for m in HUB_SOURCE_ERROR_MARKERS)
                             for k in (_snap.get("fail_reasons") or {}))
                         if _hub_fail and float(_snap.get("last_fail_ts") or 0.0) > \
                                 float(_snap.get("last_ok_ts") or 0.0):
@@ -832,6 +937,21 @@ def register_voice_routes(app, api_auth, config_manager=None):
         vo = (raw_cfg.get("messenger_rpa") or {}).get("voice_output") or {}
         return str(vo.get("dashscope_api_key") or "").strip(), str(vo.get("dashscope_region") or "").strip()
 
+    def _voice_missing_message(request: Request) -> str:
+        """B62/P0-2：按托管实情选文案——「请联系官方开通」对已预授权/已开通的
+        部署是假话（引擎在、只是这一刻不可达或登记链没走通）。预授权在场 →
+        「暂时不可用请稍后重试」；真没接 → 维持开通指引。"""
+        try:
+            cfg = (getattr(config_manager, "config", None) or {}) if config_manager else {}
+            av = cfg.get("avatar_voice") if isinstance(cfg.get("avatar_voice"), dict) else {}
+            hosted = bool(av.get("enabled")) or (
+                bool(av.get("_hosted_auto")) and not av.get("hosted_opt_out"))
+            if hosted:
+                return tr(request, "err.voice.hosted_unavailable")
+        except Exception:
+            pass
+        return tr(request, "err.voice.engine_missing")
+
     def _audit(request: Request, action: str, detail: str) -> None:
         """声纹运营留痕（登记/解绑/改绑/删除）。app.state.audit_store 缺失时静默跳过。"""
         try:
@@ -857,7 +977,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
         except RuntimeError as ex:
             if "DASHSCOPE_API_KEY" in str(ex):
                 return {"ok": False, "reason": "no_api_key",
-                        "message": "未配置 DASHSCOPE_API_KEY（messenger_rpa.voice_output.dashscope_api_key 或环境变量）"}
+                        "message": _voice_missing_message(request)}
             return {"ok": False, "reason": "list_failed", "message": str(ex)[:300]}
         except Exception as ex:  # noqa: BLE001
             return {"ok": False, "reason": "list_failed", "message": str(ex)[:300]}
@@ -922,15 +1042,20 @@ def register_voice_routes(app, api_auth, config_manager=None):
         else:
             # media_ref → 本地归档文件：只认 protocol_media 白名单目录 + 容纳检查防穿越
             from src.integrations.protocol_bridge import (
-                protocol_media_root, static_media_ref_to_path)
+                protocol_media_roots, static_media_ref_to_path)
             _mp = static_media_ref_to_path(media_ref)
             if not _mp:
                 raise HTTPException(400, tr(request, "err.voice.media_ref_invalid"))
             _rp = Path(_mp).resolve()
-            try:
-                _contained = _rp.is_relative_to(protocol_media_root().resolve())
-            except Exception:
-                _contained = False
+            # 双根：解析器可能在旧引擎树根命中（边车历史写点），容纳判定必须同口径
+            _contained = False
+            for _root in protocol_media_roots():
+                try:
+                    if _rp.is_relative_to(_root.resolve()):
+                        _contained = True
+                        break
+                except Exception:
+                    continue
             if not _contained:
                 raise HTTPException(400, tr(request, "err.voice.media_ref_invalid"))
             if not _rp.is_file():
@@ -996,8 +1121,36 @@ def register_voice_routes(app, api_auth, config_manager=None):
         # ── AvatarHub 最优先：本机 7852 在线则零样本登记（音质最好且零云端配额）──
         # 附加两个自动化：① 缺逐字稿时用 AvatarHub STT 转写参考音生成（提升相似度）；
         # ② 登记即 register_spk 预热（后台线程，首句延迟显著下降）。
+        #
+        # B43 回炉二次（2026-08-23，`_305` 死锁）：本分支旧入口条件是
+        # enabled=true——托管存量机 enabled:false 时整个分支不开，落到 DashScope
+        # 拦「语音引擎未接入」，而「登记成功即联动开启」长在分支**内部**永远
+        # 走不到＝拦检→登记不了→永不激活的闭环。修法：hosted 预授权形态
+        # （should_auto_enable_avatar_voice）同样放行入口，先当场重跑
+        # ensure_hosted_voice 把网关端点接上（纯内存），health 过了就登记，
+        # 登记成功后分支尾部的 B43 联动照旧把 enabled 持久化翻开。
         av_cfg = raw_full_cfg.get("avatar_voice") or {}
-        if isinstance(av_cfg, dict) and av_cfg.get("enabled"):
+        _av_auto_entry = False
+        if isinstance(av_cfg, dict) and not av_cfg.get("enabled"):
+            try:
+                from src.ai.voice_enroll import should_auto_enable_avatar_voice
+                if should_auto_enable_avatar_voice(raw_full_cfg):
+                    from src.ai.hosted_gateway import ensure_hosted_voice
+                    cm_auto = getattr(request.app.state, "config_manager", None) \
+                        or config_manager
+                    if cm_auto is not None and ensure_hosted_voice(cm_auto):
+                        # ensure 原地改的是 config_manager.config；重取本地引用
+                        # 拿到接好网关端点的 avatar_voice 段。
+                        raw_full_cfg = getattr(cm_auto, "config", None) or raw_full_cfg
+                        av_cfg = raw_full_cfg.get("avatar_voice") or av_cfg
+                        _av_auto_entry = True
+                        logger.info(
+                            "[voice/enroll] B43 hosted 预授权入口：ensure_hosted_voice"
+                            " 已接线，进入 AvatarHub 登记分支")
+            except Exception:
+                logger.debug("[voice/enroll] hosted 预授权入口探测失败（忽略）",
+                             exc_info=True)
+        if isinstance(av_cfg, dict) and (av_cfg.get("enabled") or _av_auto_entry):
             try:
                 from src.ai.avatar_voice import AvatarVoiceClient
                 av_client = AvatarVoiceClient(av_cfg)
@@ -1057,6 +1210,40 @@ def register_voice_routes(app, api_auth, config_manager=None):
                        f"persona={persona_id} mode=avatar_clone name={preferred_name}"
                        f" src={source_ref.get('kind')} consent={owner_consent}"
                        f" level={quality.get('level')}")
+                # B43（2026-08-22）：登记成功即联动开引擎——hosted 形态种子
+                # enabled:false，1.0.46 实录「登记显示成功、试听/发声仍 edge
+                # 通用音色」（诊断包 3DTSV9 实证）。能走到这里=克隆端点确实
+                # 可用（health 探针已过），把 avatar_voice.enabled 持久化翻开
+                # 并当场重跑 hosted 接线；否则引擎开关停留关闭态，登记成果
+                # 全程用不上。窄限 hosted 自动接入形态（_hosted_auto 且未
+                # opt-out）——内网/自配部署的 enabled 是运维显式决策，不代翻。
+                try:
+                    from src.ai.voice_enroll import should_auto_enable_avatar_voice
+                    cm_b43 = getattr(request.app.state, "config_manager", None) \
+                        or config_manager
+                    _cfg_b43 = getattr(cm_b43, "config", None) or {}
+                    if (should_auto_enable_avatar_voice(_cfg_b43)
+                            and hasattr(cm_b43, "set_overlay_flag")):
+                        _okf, _msgf = cm_b43.set_overlay_flag(
+                            "avatar_voice.enabled", True)
+                        if _okf:
+                            logger.info(
+                                "[voice/enroll] B43 联动：avatar_voice.enabled"
+                                " → true（hosted 登记成功即开引擎）")
+                            try:
+                                from src.ai.hosted_gateway import ensure_hosted_voice
+                                ensure_hosted_voice(cm_b43)
+                            except Exception:
+                                logger.debug(
+                                    "[voice/enroll] B43 重跑 hosted 接线失败"
+                                    "（下轮热重载兜底）", exc_info=True)
+                        else:
+                            logger.warning(
+                                "[voice/enroll] B43 联动写 overlay 失败：%s", _msgf)
+                except Exception:
+                    logger.debug(
+                        "[voice/enroll] B43 联动异常（忽略，登记本身已成功）",
+                        exc_info=True)
                 # 录入即体检（P3）：合成探针句 → 声纹比对 → jsonl → 下拉徽标
                 # 几分钟内点亮；体检结果缓存失效让 profiles 尽快看到新行
                 if _spawn_voice_quality_probe(persona_id):
@@ -1115,7 +1302,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
         except RuntimeError as ex:
             if "DASHSCOPE_API_KEY" in str(ex):
                 return {"ok": False, "reason": "no_api_key",
-                        "message": "未配置 DASHSCOPE_API_KEY（messenger_rpa.voice_output.dashscope_api_key 或环境变量）"}
+                        "message": _voice_missing_message(request)}
             return {"ok": False, "reason": "enroll_failed", "message": str(ex)[:300]}
         except Exception as ex:  # noqa: BLE001
             return {"ok": False, "reason": "enroll_failed", "message": str(ex)[:300]}
@@ -1510,6 +1697,26 @@ def register_voice_routes(app, api_auth, config_manager=None):
             out["outage"] = get_voice_outage().outage_snapshot()
         except Exception:
             out["outage"] = {}
+        # hub 引擎目录（2026-08-22 顶包事故）：engine_check 是**事后**指纹（要有人
+        # 真发过语音、且走 wav 路才有判据），目录是**事前**读数——「现在钉的引擎在
+        # 岗吗」零流量即可答。60s TTL 缓存，只在钉了引擎时探（没钉＝接受 hub 自选）。
+        try:
+            _hf = (av_cfg.get("hub_fish") or {}) if isinstance(av_cfg, dict) else {}
+            if (av_cfg.get("enabled") and _hf.get("enabled")
+                    and str(_hf.get("tts_engine") or "").strip()):
+                from src.ai.avatar_voice import (
+                    hub_engine_directory_status,
+                    hub_synth_breaker_state,
+                )
+                out["engine_dir"] = await asyncio.to_thread(
+                    hub_engine_directory_status,
+                    _hf.get("base_url"), _hf.get("tts_engine"))
+                # 超时熔断态并入同一行：「在岗 + 宿主吃紧 + 熔断开路」是同一个故事
+                # 的三段读数，分散到三处只会让运维拼不起来。纯进程内快照，零网络。
+                out["engine_dir"].update(hub_synth_breaker_state(
+                    _hf.get("base_url"), _hf.get("tts_engine")))
+        except Exception:
+            pass
         # 口语化 LLM 档健康：provider 分布（lan 端点/cloud/fallback 成败）+ 端点
         # 冷却 + 落盘缓存命中——「176 的逻辑有没有真的在被调用」看板可见（2026-08-01）
         try:
@@ -1524,6 +1731,14 @@ def register_voice_routes(app, api_auth, config_manager=None):
             out["preview_reuse"] = reuse_stats_snapshot()
         except Exception:
             out["preview_reuse"] = {}
+        # 清唱能力（companion.singing，2026-08-22 P0）：模板/每人设备货/命中计数。
+        # 刻意不随 avatar_voice.enabled 闸门（stock 是本地文件盘点，60s TTL 缓存）；
+        # enabled=false 时也回报（灰度前就能看备货进度）。
+        try:
+            from src.companion.song_stock import singing_status_snapshot
+            out["singing"] = singing_status_snapshot(cfg)
+        except Exception:
+            out["singing"] = {}
         # 音色质量最新抽检（夜间探针 jsonl 尾部；声纹+韵律自然度按人设取最新一行）
         try:
             latest: Dict[str, Any] = {}

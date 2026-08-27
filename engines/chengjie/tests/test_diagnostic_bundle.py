@@ -82,3 +82,51 @@ def test_bundle_never_raises_on_missing_dirs(tmp_path):
     blob2 = build_diagnostic_bundle(
         config_dir=tmp_path / "nope", logs_dir=tmp_path / "nada", meta={})
     assert zipfile.ZipFile(io.BytesIO(blob2)).namelist()
+
+
+# ── P2-12（B38 批 2026-08-22）：主日志 app.log 进包 ─────────────────────────
+#
+# 3DTSV9 实战暴露：包里只有 fatal/sidecar、主日志零痕迹——桌面部署主日志不在
+# logs_dir 一级。extra_files 走「运行时 logger 树的真实落点」清单，每文件尾部
+# 2MB（缺省），坏路径软跳过。
+
+def test_bundle_extra_files_tail_2mb(tmp_path):
+    main_log = tmp_path / "elsewhere" / "app.log"
+    main_log.parent.mkdir()
+    main_log.write_bytes(b"A" * (3 * 1024 * 1024))       # 3MB → 只收尾部 2MB
+    blob = build_diagnostic_bundle(
+        config_dir=None, logs_dir=None, meta={},
+        extra_files={"logs/app/app.log": main_log})
+    zf = zipfile.ZipFile(io.BytesIO(blob))
+    assert "logs/app/app.log" in zf.namelist()
+    data = zf.read("logs/app/app.log")
+    assert len(data) == 2 * 1024 * 1024
+
+
+def test_bundle_extra_files_soft_fail(tmp_path):
+    blob = build_diagnostic_bundle(
+        config_dir=None, logs_dir=None, meta={},
+        extra_files={"logs/app/missing.log": tmp_path / "missing.log"})
+    zf = zipfile.ZipFile(io.BytesIO(blob))
+    assert "logs/app/missing.log" not in zf.namelist()
+    assert "meta.json" in zf.namelist()
+
+
+def test_runtime_log_files_collects_file_handlers(tmp_path):
+    """diag_upload.runtime_log_files：进程正在写的 file handler 落点被收集。"""
+    import logging
+
+    from src.utils.diag_upload import runtime_log_files
+
+    logf = tmp_path / "probe_app.log"
+    h = logging.FileHandler(logf, encoding="utf-8")
+    lg = logging.getLogger("ai_chat_assistant")
+    lg.addHandler(h)
+    try:
+        lg.warning("probe line")
+        out = runtime_log_files()
+        assert any(str(p) == str(logf) for p in out.values()), out
+        assert all(a.startswith("logs/app/") for a in out), out
+    finally:
+        lg.removeHandler(h)
+        h.close()

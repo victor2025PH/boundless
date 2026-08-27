@@ -15,8 +15,10 @@ import pytest
 
 from src.utils.persona_guard import (
     build_self_name_allowlist,
+    find_vocative_self_name,
     find_wrong_self_name,
     sanitize_self_name,
+    strip_vocative_self_name,
 )
 
 _ALLOWED_CN = ["林小语"]
@@ -167,6 +169,63 @@ def test_pure_function_never_raises_on_garbage():
         assert isinstance(hard, list) and isinstance(soft, list)
 
 
+# ── B74 金标（实施67，`_352` v1.054 实录「叫我。朋友都这么喊我。」）──────────────
+#
+# 场景：自建人设（张浩然）绑定断链/白名单不完备时，AI 正当自报家门「叫我浩然，
+# 朋友都这么喊我」被 hard 档②（非白名单 CJK 强自称）命中；单句剥光后旧 inline
+# 抹名兜底把名字抹空 → 「叫我，朋友都这么喊我。」残句 100% 穿帮。
+# 修后不变量：非 borrowed 的 hard 剥光时保留原文（宁可漏拦不残剥）；
+# borrowed（David Lin 借名缝合）的 inline 抹名兜底行为不回退。
+
+_B74_REPLY = "叫我浩然，朋友都这么喊我。"
+
+
+def test_b74_self_intro_unlisted_name_never_leaves_stub():
+    """`_352` 金标：白名单没有人设名时，自介句绝不能被抹成「叫我。」残句。"""
+    cleaned, hard, _soft = sanitize_self_name(
+        _B74_REPLY, ["顾嘉"], peer_names=["Steven"])
+    assert hard, "非白名单 CJK 强自称仍须 hard 命中（观测语义保留）"
+    assert cleaned == _B74_REPLY, "非 borrowed 剥光→保留原文，绝不残剥"
+    assert "叫我，" not in cleaned and "叫我。" not in cleaned
+
+
+def test_b74_multi_sentence_still_strips_whole_sentence():
+    """多句时按句剥依旧成立（防真幻觉名）：违规句整句掉，好句保留。"""
+    text = "叫我浩然。今天天气不错，出去走走吧。"
+    cleaned, hard, _ = sanitize_self_name(text, ["顾嘉"], peer_names=["Steven"])
+    assert hard
+    assert "浩然" not in cleaned
+    assert "天气不错" in cleaned
+
+
+def test_b74_resolved_name_in_allowlist_not_flagged():
+    """白名单同源修复面：生成时 resolved name 进白名单后，自报家门不命中。"""
+    cleaned, hard, _ = sanitize_self_name(
+        _B74_REPLY, ["顾嘉", "张浩然"], peer_names=["Steven"])
+    assert not hard, "白名单含人设名（含去姓变体）→ 「叫我浩然」是合法自称"
+    assert cleaned == _B74_REPLY
+
+
+def test_b74_borrowed_inline_fallback_not_regressed():
+    """David Lin 金标不回退：borrowed（借对方名）单句剥光仍走 inline 抹名。"""
+    text = "I'm just David Lin, a real guy."
+    cleaned, hard, _ = sanitize_self_name(
+        text, ["Lin Xiaoyu", "Xiaoyu"], peer_names=["David"])
+    assert hard
+    assert "David Lin" not in cleaned, "借名缝合必须被抹（残句两害相权取其轻）"
+    assert cleaned.strip(), "绝不返回空"
+
+
+def test_b74_english_self_intro_unlisted_kept_whole():
+    """英文自介同理：call me + 非白名单名，单句剥光→保留原文不残剥。"""
+    text = "Call me Rachel, that's what my friends say."
+    cleaned, hard, _ = sanitize_self_name(
+        text, ["Lin Xiaoyu"], peer_names=["Steven"])
+    # 单词名按分级规则最多进 soft（拉丁全名档要求 ≥2 词），文本必须原样。
+    assert cleaned == text
+    assert "Call me ," not in cleaned
+
+
 # ── prompt 侧「对方身份」声明（与守卫同一事故的源头缓解） ────────────────────────
 
 def _cfg(domain: str = "conversion"):
@@ -202,3 +261,86 @@ def test_prompt_peer_identity_absent_outside_companion():
         "_peer_display_name": "David",
     })
     assert "对方身份" not in out
+
+
+# ── B42 称呼混淆守卫（2026-08-22 _236 实录「you're not that old, Steven」）────
+#
+# 镜像方向：AI 用**自己的**人设名呼叫客户（呼格）。上面的守卫抓「拿对方名自称」，
+# 这组抓「拿自己名喊对方」——两个方向合起来才是完整的身份锚。
+
+_VOC_INCIDENT = "Haha you're not that old, Steven! Age is just a number anyway."
+
+
+def test_vocative_incident_hit_and_stripped():
+    hits = find_vocative_self_name(_VOC_INCIDENT, ["Steven"], ["Nicks"])
+    assert hits == ["Steven"]
+    cleaned, hits2 = strip_vocative_self_name(_VOC_INCIDENT, ["Steven"], ["Nicks"])
+    assert hits2 == ["Steven"]
+    assert "Steven" not in cleaned
+    # 句子本体保留（剥名不剥句——整句剥会把有效回复杀掉）
+    assert "not that old" in cleaned and "Age is just a number" in cleaned
+
+
+def test_vocative_leading_form_hit():
+    cleaned, hits = strip_vocative_self_name(
+        "Steven, 你怎么看这件事？", ["Steven"], ["尼克"])
+    assert hits == ["Steven"]
+    assert "Steven" not in cleaned and "你怎么看" in cleaned
+
+
+def test_vocative_cjk_trailing_form_hit():
+    cleaned, hits = strip_vocative_self_name(
+        "你还年轻着呢，史蒂文。放宽心啦。", ["史蒂文"], ["尼克斯"])
+    assert hits == ["史蒂文"]
+    assert "史蒂文" not in cleaned and "你还年轻" in cleaned and "放宽心" in cleaned
+
+
+def test_vocative_self_intro_not_flagged():
+    # 自我介绍/报名字绝不误伤（含怪写法「name is, Steven」）
+    assert find_vocative_self_name("I'm Steven, nice to meet you.",
+                                   ["Steven"], ["Nicks"]) == []
+    assert find_vocative_self_name("My name is, Steven.",
+                                   ["Steven"], ["Nicks"]) == []
+    assert find_vocative_self_name("我是史蒂文，很高兴认识你。",
+                                   ["史蒂文"], ["尼克"]) == []
+
+
+def test_vocative_peer_actually_named_same_skipped():
+    # 客户真叫 Steven → 称呼合法，不拦
+    assert find_vocative_self_name(_VOC_INCIDENT, ["Steven"], ["Steven"]) == []
+    assert find_vocative_self_name(_VOC_INCIDENT, ["Steven"], ["Steven Wu"]) == []
+
+
+def test_vocative_unknown_peer_skipped():
+    # 对方名未知 → 不判（无法排除同名客户，宁可漏报不误伤）
+    assert find_vocative_self_name(_VOC_INCIDENT, ["Steven"], []) == []
+    assert find_vocative_self_name(_VOC_INCIDENT, ["Steven"], None) == []
+
+
+def test_vocative_peer_name_address_untouched():
+    # 用对方的名字称呼对方＝正常行为
+    assert find_vocative_self_name("Nice point, Nicks!", ["Steven"], ["Nicks"]) == []
+
+
+def test_vocative_never_returns_empty():
+    cleaned, hits = strip_vocative_self_name(", Steven", ["Steven"], ["Nicks"])
+    assert hits and cleaned == ", Steven"   # 剥空回原文（调用方记日志）
+
+
+def test_vocative_mention_mid_sentence_not_flagged():
+    # 句中普通提及（非呼格）不拦：谈论自己名字是合法内容
+    assert find_vocative_self_name(
+        "Steven is my English name btw.", ["Steven"], ["Nicks"]) == []
+
+
+def test_prompt_anchors_mirror_direction():
+    """B42 prompt 侧：身份锚必须写死「绝不能用自己的名字称呼对方」镜像方向。"""
+    from src.ai.ai_client import AIClient
+    client = AIClient(_cfg())
+    out = client._build_context_prompt({
+        "channel": "telegram",
+        "_resolved_persona_name": "林小语",
+        "_peer_display_name": "David",
+    })
+    assert "绝不能用它称呼对方" in out or "绝不能用你自己的名字称呼对方" in out
+    assert "对对方的称呼只能来自客户资料" in out

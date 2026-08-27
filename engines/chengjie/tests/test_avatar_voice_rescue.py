@@ -132,6 +132,47 @@ def test_watchdog_down_alert_carries_rescue_broken(monkeypatch):
     assert data["rescue_broken"] == sorted(DEFAULT_RESCUE_TASKS)
 
 
+def test_watchdog_down_alert_remote_target_skips_rescue_probe(monkeypatch):
+    # 探针目标在远端主机（如 140:7852）→ 本机 schtasks 与它无关：告警照发，
+    # 但绝不点名本机救援任务（本地 TTS 退役后 Boot/Watchdog 停用是刻意状态）
+    from src.inbox import health_watchdog as hw
+
+    bus = _FakeBus()
+    monkeypatch.setattr(
+        "src.integrations.shared.event_bus.get_event_bus", lambda: bus)
+
+    # 注意：不能用「mock 里 raise」验证——生产代码把探测包在 try/except 里，
+    # 异常会被吞成 rescue_broken=[]，坏实现也能骗绿。用调用记录当铁证。
+    called: list = []
+
+    def _record_probe(names, **kw):
+        called.append(list(names))
+        return {n: "disabled" for n in names}
+
+    monkeypatch.setattr(
+        "src.ai.avatar_voice_rescue.probe_rescue_tasks", _record_probe)
+    down = {"reachable": False, "models_loaded": False,
+            "url": "http://192.168.0.140:7852/health", "error": "conn refused"}
+    monkeypatch.setattr(hw, "probe_avatar_voice", lambda cfg, **kw: down)
+
+    wd = _watchdog({"health_watchdog": {}})
+    t0 = time.time()
+    wd._check_avatar_voice(now=t0)
+    wd._check_avatar_voice(now=t0 + 31 * 60)
+    assert called == []            # 本机任务探测不得发生
+    assert len(bus.events) == 1    # 告警本体照发
+    assert bus.events[0][1]["rescue_broken"] == []
+
+
+def test_avatar_probe_host_is_local():
+    from src.inbox.health_watchdog import avatar_probe_host_is_local
+    assert avatar_probe_host_is_local("http://127.0.0.1:7852/health")
+    assert avatar_probe_host_is_local("http://localhost:7852/health")
+    assert not avatar_probe_host_is_local("http://192.168.0.140:7852/health")
+    assert not avatar_probe_host_is_local("")
+    assert not avatar_probe_host_is_local(None)
+
+
 def test_watchdog_down_alert_rescue_probe_failure_is_silent(monkeypatch):
     # 探测抛异常 → rescue_broken 空列表，告警本体照发（探测失败绝不拦告警）
     from src.inbox import health_watchdog as hw

@@ -26,7 +26,9 @@ def _reset_module_state():
     # ensure_* 直接写 os.environ（刻意，供热重载回放）——测试进程里必须收尾清理，
     # 否则泄漏给同进程后续测试（config_manager._apply_env_overrides 会突然重放注入）
     for key in (hg.VOICE_ENV_BASE, hg.VOICE_ENV_FIRST, hg.VOICE_ENV_HUBFISH_OFF,
-                hg.ASR_ENV_BASE, hg.ASR_ENV_FIRST):
+                hg.VOICE_ENV_AUTO, hg.ASR_ENV_BASE, hg.ASR_ENV_FIRST,
+                hg.ASR_ENV_AUTO, hg.VISION_ENV_BASE, hg.VISION_ENV_MODEL,
+                hg.VISION_ENV_AUTO):
         os.environ.pop(key, None)
 
 
@@ -196,6 +198,51 @@ def test_quota_probe_disabled_when_not_hosted(tmp_path, monkeypatch):
     monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
     cm = _CM(tmp_path, {"api_key": "sk-user-own"})
     assert hg.quota_probe(cm)["enabled"] is False
+
+
+def _hosted_cm(tmp_path):
+    cm = _CM(tmp_path, {"api_key": "cx.tok", "_hosted_trial": True})
+    cache = Path(cm.config_path).parent / hg.STATE_FILENAME
+    cache.write_text(json.dumps({
+        "token": "cx.tok", "exp": int(time.time()) + 86400}), encoding="utf-8")
+    return cm
+
+
+def test_quota_probe_unlimited_flag(tmp_path, monkeypatch):
+    """B82：官网显式 unlimited=true → 归一 unlimited，绝不判用尽（B40 放开态）。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _hosted_cm(tmp_path)
+    out = hg.quota_probe(cm, fetch=lambda u, m, b: {
+        "ok": True, "used": 999999, "budget": 1000, "remaining": 0,
+        "unlimited": True})
+    assert out["unlimited"] is True
+    assert out["exhausted"] is False   # 不限量下 remaining=0 不算用尽
+
+
+def test_quota_probe_zero_budget_is_unlimited(tmp_path, monkeypatch):
+    """B82：budget<=0＝历史「0=不限量」约定（与 daily_reply_budget 同口径）。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _hosted_cm(tmp_path)
+    out = hg.quota_probe(cm, fetch=lambda u, m, b: {
+        "ok": True, "used": 500, "budget": 0, "remaining": 0})
+    assert out["unlimited"] is True
+    assert out["exhausted"] is False
+
+
+def test_quota_probe_normal_budget_not_unlimited(tmp_path, monkeypatch):
+    """反面：正常有限额度不误标 unlimited，用尽判定不变。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _hosted_cm(tmp_path)
+    out = hg.quota_probe(cm, fetch=lambda u, m, b: {
+        "ok": True, "used": 100, "budget": 50000, "remaining": 49900})
+    assert out.get("unlimited") is False
+    assert out["exhausted"] is False
+    hg._quota_cache["ts"] = 0.0   # 清缓存再测用尽档
+    hg._quota_cache["data"] = None
+    out2 = hg.quota_probe(cm, fetch=lambda u, m, b: {
+        "ok": True, "used": 50000, "budget": 50000, "remaining": 0})
+    assert out2.get("unlimited") is False
+    assert out2["exhausted"] is True
 
 
 def test_schedule_forced_refresh_swaps_token(tmp_path, monkeypatch):
@@ -518,6 +565,68 @@ def test_hosted_vision_lan_seed_restores_on_return(tmp_path, monkeypatch):
     assert not os.environ.get(hg.VISION_ENV_BASE)
 
 
+# ── 托管识图自动接入（_hosted_auto，2026-08-22 外网机「发图即拦」）──────
+
+
+def test_hosted_vision_auto_enables_pure_cloud(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMV(tmp_path, vision={"enabled": False, "_hosted_auto": True})
+    assert hg.ensure_hosted_vision(cm, probe=lambda u: False) is True
+    v = cm.config["vision"]
+    assert v["enabled"] is True                    # 纯内存自动开启
+    assert v["base_url"] == "https://bd2026.cc/api/ai/v1"
+    assert v["api_key"] == "cx.tok" and v.get("_hosted_vision") is True
+    assert os.environ.get(hg.VISION_ENV_AUTO) == "1"   # 热重载回放标记
+
+
+def test_hosted_vision_auto_respects_opt_out(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMV(tmp_path, vision={
+        "enabled": False, "_hosted_auto": True, "hosted_opt_out": True})
+    assert hg.ensure_hosted_vision(cm, probe=lambda u: False) is False
+    assert cm.config["vision"]["enabled"] is False
+    assert not os.environ.get(hg.VISION_ENV_AUTO)
+
+
+def test_hosted_vision_auto_requires_device_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMV(tmp_path, ai_key="sk-user-own",
+              vision={"enabled": False, "_hosted_auto": True})
+    assert hg.ensure_hosted_vision(cm, probe=lambda u: False) is False
+    assert cm.config["vision"]["enabled"] is False
+
+
+def test_hosted_vision_plain_disabled_still_untouched(tmp_path, monkeypatch):
+    """无 _hosted_auto 的纯关闭段（存量自建/显式关）→ enabled 一字不变。
+
+    现有 ensure 仍会注入网关后端（一键开齐入站识别靠它），但不得把显式 false
+    扳回 true——那是运营「全部关闭」的意图。
+    """
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMV(tmp_path, vision={"enabled": False})
+    assert hg.ensure_hosted_vision(cm, probe=lambda u: False) is True
+    assert cm.config["vision"]["enabled"] is False
+    assert not os.environ.get(hg.VISION_ENV_AUTO)
+
+
+def test_cloud_light_profile_carries_vision_hosted_auto():
+    """客户档契约：识图静态保守关 + 托管预授权标记并存（与语音/转写同构）。"""
+    import yaml
+    prof = yaml.safe_load(
+        (Path(__file__).resolve().parents[1] / "config" / "profiles"
+         / "cloud_light.yaml").read_text(encoding="utf-8"))
+    v = prof["vision"]
+    assert v["enabled"] is False
+    assert v["_hosted_auto"] is True
+
+
+def test_config_manager_replays_vision_auto_flag():
+    """回放接线钉：热重载必须透传 AITR_HOSTED_VISION_AUTO（缺了=写 overlay 关识图）。"""
+    src = (Path(__file__).resolve().parents[1] / "src" / "utils"
+           / "config_manager.py").read_text(encoding="utf-8")
+    assert "AITR_HOSTED_VISION_AUTO" in src
+
+
 # ── 托管克隆语音（混合形态）──────────────────────────────────────────────
 
 
@@ -614,6 +723,79 @@ def test_apply_hosted_voice_replay_after_reload(tmp_path):
     assert av["hub_fish"]["enabled"] is False
 
 
+# ── 托管自动接入（2026-08-19 报障群实测「客户部署与语音引擎零通路」修复）────
+# 纯云客户档（cloud_light）静态保守关（enabled:false，五项部署档门禁语义不变），
+# 带 _hosted_auto 预授权：持设备令牌的部署运行时纯内存自动开启并接官方网关。
+
+
+def test_hosted_voice_auto_enables_pure_cloud(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, avatar_voice={"enabled": False, "_hosted_auto": True})
+    assert hg.ensure_hosted_voice(cm, probe=lambda u: False) is True
+    av = cm.config["avatar_voice"]
+    assert av["enabled"] is True            # 纯内存自动开启
+    assert av["base_urls"] == [_HUB]        # 无 LAN 种子 → 网关唯一端点
+    assert os.environ.get(hg.VOICE_ENV_AUTO) == "1"   # 热重载回放标记
+
+
+def test_hosted_voice_auto_respects_opt_out(tmp_path, monkeypatch):
+    """用户显式退出（hosted_opt_out）→ 绝不自动开启（意图键与种子默认分离）。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, avatar_voice={
+        "enabled": False, "_hosted_auto": True, "hosted_opt_out": True})
+    assert hg.ensure_hosted_voice(cm, probe=lambda u: False) is False
+    assert cm.config["avatar_voice"]["enabled"] is False
+    assert not os.environ.get(hg.VOICE_ENV_AUTO)
+
+
+def test_hosted_voice_auto_requires_device_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, ai_key="sk-user-own",
+              avatar_voice={"enabled": False, "_hosted_auto": True})
+    assert hg.ensure_hosted_voice(cm, probe=lambda u: False) is False
+    assert cm.config["avatar_voice"]["enabled"] is False
+
+
+def test_hosted_voice_plain_disabled_still_untouched(tmp_path, monkeypatch):
+    """无 _hosted_auto 的纯关闭段（存量自建/显式关）→ 行为一字不变。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, avatar_voice={"enabled": False})
+    assert hg.ensure_hosted_voice(cm, probe=lambda u: False) is False
+    assert cm.config["avatar_voice"]["enabled"] is False
+
+
+def test_apply_hosted_voice_auto_replay_survives_reload(tmp_path):
+    """热重载把 enabled 抹回 false → 回放带 auto_enable 恢复；不带则不碰。"""
+    cfg = {"avatar_voice": {"enabled": False, "_hosted_auto": True}}
+    assert hg.apply_hosted_voice(
+        cfg, _HUB, gateway_first=True, hub_fish_off=False,
+        auto_enable=True) is True
+    assert cfg["avatar_voice"]["enabled"] is True
+    assert cfg["avatar_voice"]["base_urls"] == [_HUB]
+    cfg2 = {"avatar_voice": {"enabled": False, "_hosted_auto": True}}
+    assert hg.apply_hosted_voice(
+        cfg2, _HUB, gateway_first=True, hub_fish_off=False) is False
+    assert cfg2["avatar_voice"]["enabled"] is False
+
+
+def test_cloud_light_profile_carries_hosted_auto():
+    """客户档契约：静态保守关 + 托管预授权标记并存（部署档五门禁的前提）。"""
+    import yaml
+    prof = yaml.safe_load(
+        (Path(__file__).resolve().parents[1] / "config" / "profiles"
+         / "cloud_light.yaml").read_text(encoding="utf-8"))
+    av = prof["avatar_voice"]
+    assert av["enabled"] is False
+    assert av["_hosted_auto"] is True
+
+
+def test_config_manager_replays_auto_flag():
+    """回放接线钉：热重载必须透传 AITR_HOSTED_VOICE_AUTO（缺了=写 overlay 关语音）。"""
+    src = (Path(__file__).resolve().parents[1] / "src" / "utils"
+           / "config_manager.py").read_text(encoding="utf-8")
+    assert "AITR_HOSTED_VOICE_AUTO" in src
+
+
 # ── 托管语音识别（混合形态）──────────────────────────────────────────────
 
 
@@ -676,6 +858,76 @@ def test_hosted_asr_untouched_without_seed(tmp_path, monkeypatch):
     cm = _CMM(tmp_path, voice_recognition=own)
     assert hg.ensure_hosted_asr(cm, probe=lambda u: True) is False
     assert "fallback" not in cm.config["voice_recognition"]
+
+
+# ── 托管转写自动接入（_hosted_auto，2026-08-20 内测群「语音无法识别」）──────
+
+
+def test_hosted_asr_auto_enables_pure_cloud(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, voice_recognition={"enabled": False, "_hosted_auto": True})
+    assert hg.ensure_hosted_asr(cm, probe=lambda u: False) is True
+    vr = cm.config["voice_recognition"]
+    assert vr["enabled"] is True                    # 纯内存自动开启
+    assert vr["provider"] == "openai_compatible"    # 无 LAN 种子 → 网关即主转写
+    assert vr["base_url"] == _GW
+    assert vr["api_key"] == hg.HOSTED_KEY_PLACEHOLDER
+    assert os.environ.get(hg.ASR_ENV_AUTO) == "1"   # 热重载回放标记
+
+
+def test_hosted_asr_auto_respects_opt_out(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, voice_recognition={
+        "enabled": False, "_hosted_auto": True, "hosted_opt_out": True})
+    assert hg.ensure_hosted_asr(cm, probe=lambda u: False) is False
+    assert cm.config["voice_recognition"]["enabled"] is False
+    assert not os.environ.get(hg.ASR_ENV_AUTO)
+
+
+def test_hosted_asr_auto_requires_device_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, ai_key="sk-user-own",
+              voice_recognition={"enabled": False, "_hosted_auto": True})
+    assert hg.ensure_hosted_asr(cm, probe=lambda u: False) is False
+    assert cm.config["voice_recognition"]["enabled"] is False
+
+
+def test_hosted_asr_plain_disabled_still_untouched(tmp_path, monkeypatch):
+    """无 _hosted_auto 的纯关闭段（存量自建/显式关）→ 行为一字不变。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, voice_recognition={"enabled": False})
+    assert hg.ensure_hosted_asr(cm, probe=lambda u: False) is False
+    assert cm.config["voice_recognition"]["enabled"] is False
+
+
+def test_apply_hosted_asr_auto_replay_survives_reload(tmp_path):
+    """热重载把 enabled 抹回 false → 回放带 auto_enable 恢复；不带则不碰。"""
+    cfg = {"voice_recognition": {"enabled": False, "_hosted_auto": True}}
+    assert hg.apply_hosted_asr(cfg, _GW, gateway_first=True,
+                               auto_enable=True) is True
+    assert cfg["voice_recognition"]["enabled"] is True
+    assert cfg["voice_recognition"]["base_url"] == _GW
+    cfg2 = {"voice_recognition": {"enabled": False, "_hosted_auto": True}}
+    assert hg.apply_hosted_asr(cfg2, _GW, gateway_first=True) is False
+    assert cfg2["voice_recognition"]["enabled"] is False
+
+
+def test_cloud_light_profile_carries_asr_hosted_auto():
+    """客户档契约：转写静态保守关 + 托管预授权标记并存（与语音同构）。"""
+    import yaml
+    prof = yaml.safe_load(
+        (Path(__file__).resolve().parents[1] / "config" / "profiles"
+         / "cloud_light.yaml").read_text(encoding="utf-8"))
+    vr = prof["voice_recognition"]
+    assert vr["enabled"] is False
+    assert vr["_hosted_auto"] is True
+
+
+def test_config_manager_replays_asr_auto_flag():
+    """回放接线钉：热重载必须透传 AITR_HOSTED_ASR_AUTO（缺了=写 overlay 关转写）。"""
+    src = (Path(__file__).resolve().parents[1] / "src" / "utils"
+           / "config_manager.py").read_text(encoding="utf-8")
+    assert "AITR_HOSTED_ASR_AUTO" in src
 
 
 # ── 托管态下的调用端令牌解析 ────────────────────────────────────────────

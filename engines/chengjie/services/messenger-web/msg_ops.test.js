@@ -14,7 +14,48 @@ import {
   matchQuotedTarget, msgrPaletteTarget, reactAriaCandidates,
   pickUnreadForced, classifyRequestsScan, sentRingPush, sentRingHit, echoTextHit,
   classifyComposerBlock, pickManualOutMirror,
+  inferGroupFromInboundSenders, updateSenderRoster,
+  sendFailureBackoffMs,
 } from "./msg_ops.js";
+
+test("B80 normalizeTsLabelForId：跨日时间表述漂移归一到稳定时钟（防镜像重复）", async () => {
+  const { normalizeTsLabelForId, synthMsgId } = await import("./msg_ops.js");
+  // 同一条消息在不同日子的 aria 时间表述 → 归一后都是 "14:44"
+  assert.equal(normalizeTsLabelForId("14:44"), "14:44");
+  assert.equal(normalizeTsLabelForId("昨天 14:44"), "14:44");
+  assert.equal(normalizeTsLabelForId("Yesterday 14:44"), "14:44");
+  assert.equal(normalizeTsLabelForId("July 24, 2026, 14:44"), "14:44");
+  assert.equal(normalizeTsLabelForId("2026年7月24日 14:44:05"), "14:44:05");
+  // 12h 制保留 AM/PM
+  assert.equal(normalizeTsLabelForId("July 24, 2026, 12:35 PM"), "12:35 PM");
+  // 纯相对词/无时钟 → 空串（回落正文去重，不进指纹）
+  assert.equal(normalizeTsLabelForId("刚刚"), "");
+  assert.equal(normalizeTsLabelForId("2 days ago"), "");
+  assert.equal(normalizeTsLabelForId(""), "");
+  // 端到端：同消息跨日重拉必须得到同一 msg_id（B80 核心不变量）
+  const a = synthMsgId({ chatKey: "c1", direction: "in", tsLabel: "14:44", text: "hi" });
+  const b = synthMsgId({ chatKey: "c1", direction: "in", tsLabel: "昨天 14:44", text: "hi" });
+  const d = synthMsgId({ chatKey: "c1", direction: "in", tsLabel: "July 24, 2026, 14:44", text: "hi" });
+  assert.equal(a, b);
+  assert.equal(a, d);
+  // 不同时钟仍是不同消息（别把两条真消息去重掉）
+  const e = synthMsgId({ chatKey: "c1", direction: "in", tsLabel: "14:45", text: "hi" });
+  assert.notEqual(a, e);
+});
+
+test("sendFailureBackoffMs：B99 连败指数退避（5s 起步 / 翻倍 / 5min 封顶 / 0 无退避）", () => {
+  assert.equal(sendFailureBackoffMs(0), 0);
+  assert.equal(sendFailureBackoffMs(-3), 0);
+  assert.equal(sendFailureBackoffMs(1), 5000);
+  assert.equal(sendFailureBackoffMs(2), 10000);
+  assert.equal(sendFailureBackoffMs(3), 20000);
+  assert.equal(sendFailureBackoffMs(6), 160000);
+  assert.equal(sendFailureBackoffMs(7), 300000);   // 封顶
+  assert.equal(sendFailureBackoffMs(99), 300000);  // 大 streak 不溢出
+  assert.equal(sendFailureBackoffMs("bad"), 0);    // 脏输入按 0
+  assert.equal(sendFailureBackoffMs(2, { baseMs: 1000, capMs: 3000 }), 2000);
+  assert.equal(sendFailureBackoffMs(9, { baseMs: 1000, capMs: 3000 }), 3000);
+});
 
 test("msgrPaletteTarget：出站表情面板映射（VS16 归一/😂→😆/面板外拒绝/脏输入）", () => {
   assert.equal(msgrPaletteTarget("👍"), "👍");
@@ -611,4 +652,83 @@ test("pickManualOutMirror：水位无变化 / 空入参 → 零动作", () => {
   assert.deepEqual(r2, { fresh: [], newMark: undefined });
   const r3 = pickManualOutMirror(null, { mark: undefined, sigOf: _sigOf });
   assert.deepEqual(r3, { fresh: [], newMark: undefined });
+});
+
+test("inferGroupFromInboundSenders：≥2 互异入站发言人才当群（trim/大小写去重）", () => {
+  assert.equal(inferGroupFromInboundSenders([]), false);
+  assert.equal(inferGroupFromInboundSenders(["Alice"]), false);
+  assert.equal(inferGroupFromInboundSenders(["Alice", "alice", " ALICE "]), false);
+  assert.equal(inferGroupFromInboundSenders(["Alice", "Bob"]), true);
+  assert.equal(inferGroupFromInboundSenders(["", "Alice", null, "Bob"]), true);
+  assert.equal(inferGroupFromInboundSenders(null), false);
+});
+
+test("updateSenderRoster：跨轮累计升群 + excludeName 挡私聊改名 + 有界", () => {
+  // 安静群：每轮只有一个人说话，跨轮攒到 2 → 群
+  const m = new Map();
+  let s = updateSenderRoster(m, "t1", ["Alice"], { excludeName: "Group X" });
+  assert.equal(inferGroupFromInboundSenders([...s]), false);
+  s = updateSenderRoster(m, "t1", ["Bob"], { excludeName: "Group X" });
+  assert.equal(inferGroupFromInboundSenders([...s]), true);
+  // DM：sender == 行名（空白折叠/大小写归一）恒排除；改名后行名同步变 → 仍攒不出第二个
+  const dm = new Map();
+  let d = updateSenderRoster(dm, "p1", [" alice  smith "], { excludeName: "Alice Smith" });
+  assert.equal(d.size, 0);
+  d = updateSenderRoster(dm, "p1", ["Alicia Smith"], { excludeName: "Alicia Smith" });
+  assert.equal(d.size, 0);
+  assert.equal(inferGroupFromInboundSenders([...d]), false);
+  // per-key 封顶：超限新名字不再进（已在集合的不受影响）
+  const big = new Map();
+  const many = Array.from({ length: 12 }, (_, i) => "u" + i);
+  assert.equal(updateSenderRoster(big, "g", many, { maxPerKey: 8 }).size, 8);
+  // LRU 键数上限：被触碰的键存活，最久未触碰的被淘汰
+  const lru = new Map();
+  updateSenderRoster(lru, "a", ["x"], { maxKeys: 2 });
+  updateSenderRoster(lru, "b", ["x"], { maxKeys: 2 });
+  updateSenderRoster(lru, "a", ["y"], { maxKeys: 2 });
+  updateSenderRoster(lru, "c", ["x"], { maxKeys: 2 });
+  assert.equal(lru.has("a"), true);
+  assert.equal(lru.has("b"), false);
+  assert.equal(lru.has("c"), true);
+  // 脏输入不抛：非 Map / 空 chatKey → 空集合
+  assert.equal(updateSenderRoster(null, "k", ["x"]).size, 0);
+  assert.equal(updateSenderRoster(new Map(), "", ["x"]).size, 0);
+});
+
+test("实施72 P4 ariaDatetimeToEpoch：aria 时间文本保守转 epoch（认不出=0）", async () => {
+  const { ariaDatetimeToEpoch } = await import("./msg_ops.js");
+  // 固定 now：2026-08-27 08:30 本地时（周四）
+  const NOW = new Date(2026, 7, 27, 8, 30, 0).getTime();
+  const at = (y, mo, d, h, mi, s = 0) => Math.floor(
+    new Date(y, mo, d, h, mi, s).getTime() / 1000);
+  // en 带年（12h 制 + 双逗号）
+  assert.equal(ariaDatetimeToEpoch("July 24, 2026, 12:35 PM", NOW),
+    at(2026, 6, 24, 12, 35));
+  assert.equal(ariaDatetimeToEpoch("Aug 18, 2026, 8:24 AM", NOW),
+    at(2026, 7, 18, 8, 24));
+  // zh 带年（24h 制 + 秒）
+  assert.equal(ariaDatetimeToEpoch("2026年7月24日 14:44:05", NOW),
+    at(2026, 6, 24, 14, 44, 5));
+  // 无年 → 就近过去（12月 在 8 月的未来 → 退回去年）
+  assert.equal(ariaDatetimeToEpoch("July 24, 12:35 PM", NOW),
+    at(2026, 6, 24, 12, 35));
+  assert.equal(ariaDatetimeToEpoch("12月1日 10:00", NOW),
+    at(2025, 11, 1, 10, 0));
+  // 今/昨
+  assert.equal(ariaDatetimeToEpoch("Today at 7:05 AM", NOW), at(2026, 7, 27, 7, 5));
+  assert.equal(ariaDatetimeToEpoch("昨天 14:44", NOW), at(2026, 7, 26, 14, 44));
+  // 周内 → 最近的过去周 X（now=周四；周一=8/24、周四同名=上周四 8/20）
+  assert.equal(ariaDatetimeToEpoch("Mon 9:15 AM", NOW), at(2026, 7, 24, 9, 15));
+  assert.equal(ariaDatetimeToEpoch("星期四 20:00", NOW), at(2026, 7, 20, 20, 0));
+  // 裸时钟 → 今天；未来时刻 → 昨天
+  assert.equal(ariaDatetimeToEpoch("07:12", NOW), at(2026, 7, 27, 7, 12));
+  assert.equal(ariaDatetimeToEpoch("23:59", NOW), at(2026, 7, 26, 23, 59));
+  assert.equal(ariaDatetimeToEpoch("12:35 PM", NOW), at(2026, 7, 26, 12, 35));
+  // 上午/下午（zh 12h 制）
+  assert.equal(ariaDatetimeToEpoch("今天 下午2:05", NOW), at(2026, 7, 27, 14, 5));
+  // 认不出/越界 → 0（失败方向=退回合成+approx 标）
+  assert.equal(ariaDatetimeToEpoch("", NOW), 0);
+  assert.equal(ariaDatetimeToEpoch("just now", NOW), 0);
+  assert.equal(ariaDatetimeToEpoch("July 24, 1999, 12:35 PM", NOW), 0);   // <now-3y
+  assert.equal(ariaDatetimeToEpoch("2027年1月1日 00:00", NOW), 0);        // >now+26h
 });

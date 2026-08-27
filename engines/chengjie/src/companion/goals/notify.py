@@ -96,6 +96,14 @@ def resolve_notify_cfg(cfg_root: Any) -> Dict[str, Any]:
         "miss_digest": bool(raw.get("miss_digest", True)),
         "miss_min_count": max(1, min(miss_min, 50)),
         "miss_max_age_hours": max(1.0, min(miss_age, 24 * 7.0)),
+        # P2 2026-08-18：完成推送的「责任坐席副本」——按 目标创建人→会话认领
+        # 坐席 解析绑定的 Telegram 通知号随 payload 下发（webhook 侧加发一份；
+        # 管理员渠道照常全量收）。默认关；坐席未绑定=天然回落只推管理员。
+        "push_agent": bool(raw.get("push_agent", False)),
+        # P3 2026-08-18：完成推送带「摸底要点」（已采画像事实一行，facts_line
+        # 口径）。**默认关**——画像值是客户数据，出境到外部 IM 必须显式 opt-in；
+        # 关时推送只有模板/金额/用时等目标层事实，不含画像原值。
+        "include_profile": bool(raw.get("include_profile", False)),
     }
 
 
@@ -153,6 +161,172 @@ def result_kind(result: Any) -> str:
     return "auto" if r else ""
 
 
+# ── 责任坐席解析（P2 2026-08-18：完成推送的定向副本）────────────────────────
+
+# created_by 里的「非人」来源（生命周期自建 + 批量口）；这些值不是用户名，
+# 解析时一律跳过。人建目标存的是 session 用户名（goal_routes actor）。
+AUTO_CREATED_BY = frozenset(
+    {"", "batch", "auto_create", "winback_auto", "retention_auto",
+     "reconvert_auto"})
+
+_USER_STORE_CACHE: Dict[str, Any] = {}
+
+
+def user_store_for(config_path: Any) -> Any:
+    """web_users.db 惰性单例（按 config 目录缓存；任何失败返 None 绝不抛）。
+
+    与 admin/unified_inbox_auth 同一寻址约定：``config_path.parent/web_users.db``
+    ——扫描循环跑在服务进程里，CWD=实例数据根，路径与登录端完全一致。"""
+    try:
+        if not config_path:
+            return None
+        from pathlib import Path
+        key = str(Path(config_path).resolve().parent)
+        st = _USER_STORE_CACHE.get(key)
+        if st is None:
+            from src.utils.web_user_store import WebUserStore
+            st = WebUserStore(Path(key) / "web_users.db")
+            _USER_STORE_CACHE[key] = st
+        return st
+    except Exception:
+        logger.debug("user_store_for failed", exc_info=True)
+        return None
+
+
+def resolve_agent_push_target(
+    goal: Dict[str, Any],
+    *,
+    inbox_store: Any = None,
+    user_store: Any = None,
+) -> Dict[str, str]:
+    """「这单该额外通知哪个坐席」解析：目标创建人（人建）→ 会话认领坐席 → 无。
+
+    命中的用户须**启用中**且绑定了 Telegram 通知号（web_users.notify_tg_chat_id，
+    用户管理页「通知」按钮维护），返回 ``{"agent_chat_id","agent_username"}``；
+    任何一环缺失返回 ``{}``＝回落只推管理员渠道（与 P0 行为完全一致）。绝不抛。
+    刻意不解析 AI 自建目标的「账号 owner」——auto_create 的目标没有责任人语义，
+    硬派发只会把好消息变成无人认领的噪音。"""
+    try:
+        candidates: List[str] = []
+        raw = str(goal.get("created_by") or "").strip()
+        if raw.endswith(":batch"):
+            raw = raw[: -len(":batch")].strip()
+        if raw and raw not in AUTO_CREATED_BY:
+            candidates.append(raw)
+        conv = str(goal.get("conversation_id") or "")
+        getter = getattr(inbox_store, "get_conversation_claim", None) \
+            if inbox_store is not None else None
+        if conv and callable(getter):
+            try:
+                claim = getter(conv) or {}
+                agent = str(claim.get("agent_id") or "").strip()
+                if agent and agent not in candidates:
+                    candidates.append(agent)
+            except Exception:
+                logger.debug("claim lookup failed", exc_info=True)
+        if user_store is None or not candidates:
+            return {}
+        for name in candidates:
+            try:
+                u = user_store.get_user(name)
+            except Exception:
+                u = None
+            if not isinstance(u, dict) or not u.get("enabled", 1):
+                continue
+            chat = str(u.get("notify_tg_chat_id") or "").strip()
+            if chat:
+                return {"agent_chat_id": chat, "agent_username": name}
+        return {}
+    except Exception:
+        logger.debug("resolve_agent_push_target failed", exc_info=True)
+        return {}
+
+
+# ── 逐目标指定收件人（P3 2026-08-18：params.notify_extra）──────────────────
+# 语义：目标上显式点名的「达成后额外通知谁」——条目是 web 用户名（经
+# web_users 解析绑定的 notify_tg_chat_id）或裸 Telegram chat_id（正/负整数）。
+# webhook 侧借订阅了该事件的 telegram 渠道 bot 逐个加发（与 agent_chat_id
+# 副本同机制）；解析不到的条目静默跳过=回落只推管理员渠道，绝不因此丢主推。
+
+_EXTRA_TARGET_CAP = 5
+_CHAT_ID_RE = None  # 惰性编译（模块 import 期零 re 开销）
+
+
+def sanitize_notify_extra(raw: Any) -> List[str]:
+    """目标 ``params.notify_extra``（列表或逗号/顿号分隔串）→ 清洗后的条目表。
+
+    保序去重、单条 ≤64 字、最多 ``_EXTRA_TARGET_CAP`` 条；条目形态不在这里
+    判定（用户名还是 chat_id 由解析时决定）——写入口（create/update 路由）与
+    读出口（scan_and_notify）共用本函数，存进库的永远是干净形状。空 → []。"""
+    import re as _re
+    if isinstance(raw, (list, tuple)):
+        items = [str(x) for x in raw]
+    else:
+        items = _re.split(r"[,，、;；\n]+", str(raw or ""))
+    out: List[str] = []
+    for it in items:
+        v = str(it or "").strip()[:64]
+        if v and v not in out:
+            out.append(v)
+        if len(out) >= _EXTRA_TARGET_CAP:
+            break
+    return out
+
+
+def resolve_extra_push_targets(
+    goal: Dict[str, Any], *, user_store: Any = None,
+) -> List[str]:
+    """``params.notify_extra`` → 可直投的 Telegram chat_id 列表。
+
+    条目判定：纯 ``-?\\d{4,20}`` 视为裸 chat_id 直用；其余当 web 用户名查
+    ``web_users``（须启用中且绑定 notify_tg_chat_id，与责任坐席副本同判据）。
+    user_store 缺席时用户名条目跳过（chat_id 条目不受影响）。去重、封顶、
+    绝不抛。"""
+    global _CHAT_ID_RE
+    try:
+        if _CHAT_ID_RE is None:
+            import re as _re
+            _CHAT_ID_RE = _re.compile(r"^-?\d{4,20}$")
+        params = goal.get("params") if isinstance(goal.get("params"), dict) \
+            else {}
+        entries = sanitize_notify_extra((params or {}).get("notify_extra"))
+        out: List[str] = []
+        for ent in entries:
+            chat = ""
+            if _CHAT_ID_RE.match(ent):
+                chat = ent
+            elif user_store is not None:
+                try:
+                    u = user_store.get_user(ent)
+                except Exception:
+                    u = None
+                if isinstance(u, dict) and u.get("enabled", 1):
+                    chat = str(u.get("notify_tg_chat_id") or "").strip()
+            if chat and chat not in out:
+                out.append(chat)
+            if len(out) >= _EXTRA_TARGET_CAP:
+                break
+        return out
+    except Exception:
+        logger.debug("resolve_extra_push_targets failed", exc_info=True)
+        return []
+
+
+def build_slots_brief(store: GoalStore, goal: Dict[str, Any]) -> str:
+    """完成推送的「摸底要点」一行（``include_profile`` 开时才被调用）。
+
+    与聊天注入同一口径 ``profile_slots.facts_line``（「称呼:阿龙｜业务痛点:
+    客服人手」），不另造格式。无画像/异常 → ""。"""
+    try:
+        from src.companion.goals.profile_slots import facts_line
+        prof = store.get_customer_profile(
+            str(goal.get("platform") or ""), str(goal.get("chat_key") or ""))
+        return facts_line(dict((prof or {}).get("fields") or {}), limit=4)
+    except Exception:
+        logger.debug("build_slots_brief failed", exc_info=True)
+        return ""
+
+
 def _display_names(
     inbox_store: Any, conversation_ids: List[str],
 ) -> Dict[str, str]:
@@ -188,8 +362,9 @@ def build_completion_payload(
         else None
     meta = won_meta or {}
     account_id = str(goal.get("account_id") or "")
+    gid = str(goal.get("goal_id") or "")
     return {
-        "goal_id": str(goal.get("goal_id") or ""),
+        "goal_id": gid,
         "conversation_id": str(goal.get("conversation_id") or ""),
         "platform": str(goal.get("platform") or ""),
         "account_id": account_id,
@@ -205,8 +380,12 @@ def build_completion_payload(
         "product": str(meta.get("product") or ""),
         "days_to_done": days,
         "done_at": done_at,
-        # 同账号完成潮共用限流窗（webhook 侧 rate_key 语义）
-        "rate_key": f"goal_done:{account_id}",
+        # rate_key 按「账号+目标」粒度（2026-08-18 收窄）：每个目标一生只完成一次
+        # （幂等标记已保证），完成推送是收入时刻——旧的纯账号粒度会把同账号一小时内
+        # **第二个客户**的成交静默吞掉（webhook _RateLimiter 窗口 1h）。带上 goal_id
+        # 后：不同目标互不挤兑；同一目标「标记写失败→下轮重发」的短窗重复仍被限流窗
+        # 正确压住（同 key 1h 内只出一条）。
+        "rate_key": f"goal_done:{account_id}:{gid}",
     }
 
 
@@ -217,12 +396,17 @@ def scan_and_notify(
     inbox_store: Any = None,
     publish: Optional[Callable[[str, Dict[str, Any]], Any]] = None,
     now: Optional[float] = None,
+    user_store: Any = None,
 ) -> Dict[str, int]:
     """扫「done 且未通知」→ 发布 ``goal_completed_alert`` → 落幂等标记。
 
     发布与标记的顺序＝先发布后标记（at-least-once）：进程内 EventBus 发布
     实际不会失败；若标记写失败，下一轮至多重发一次，比静默丢一次完成提醒
-    （at-most-once）好。返回 ``{scanned, notified}`` 观测计数。"""
+    （at-most-once）好。返回 ``{scanned, notified}`` 观测计数。
+
+    ``push_agent`` 开且给了 ``user_store`` 时，payload 附责任坐席收件地址
+    （``agent_chat_id``/``agent_username``，解析见 resolve_agent_push_target）；
+    webhook 侧据此加发一份坐席副本，管理员渠道不受影响。"""
     out = {"scanned": 0, "notified": 0}
     try:
         if not goals_enabled(cfg_root):
@@ -254,6 +438,20 @@ def scan_and_notify(
                         str(goal.get("conversation_id") or ""), ""),
                     won_meta=amounts.get(gid),
                 )
+                if cfg["push_agent"] and user_store is not None:
+                    payload.update(resolve_agent_push_target(
+                        goal, inbox_store=inbox_store,
+                        user_store=user_store))
+                # P3：逐目标点名收件人（与 push_agent 正交——目标上显式配置
+                # 即生效，webhook 侧借 telegram 渠道逐个加发）
+                extra = resolve_extra_push_targets(goal, user_store=user_store)
+                if extra:
+                    payload["extra_chat_ids"] = extra
+                # P3：摸底要点（默认关；开=已采画像事实一行随推送出境）
+                if cfg["include_profile"]:
+                    brief = build_slots_brief(store, goal)
+                    if brief:
+                        payload["slots_brief"] = brief
                 publish("goal_completed_alert", payload)
                 store.add_event(
                     gid, NOTIFIED_EVENT_KIND,
@@ -446,8 +644,12 @@ def scan_tick(
                     logger.info("[goal-sweep] 定时结算 %d 条 active 目标",
                                 res["settled"])
         if notify_cfg["enabled"]:
+            # user_store 恒传（惰性单例零成本）：push_agent 副本与逐目标
+            # notify_extra 的用户名解析都要它——后者不受 push_agent 开关闸。
             res = scan_and_notify(
-                store, cfg_root, inbox_store=inbox_store, now=n)
+                store, cfg_root, inbox_store=inbox_store, now=n,
+                user_store=user_store_for(
+                    getattr(config_manager, "config_path", None)))
             state["notified_total"] += int(res.get("notified") or 0)
             if res.get("notified"):
                 logger.info("[goal-notify] 本轮发出 %d 条目标达成通知",

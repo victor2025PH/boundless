@@ -59,6 +59,22 @@
      刻意不自动跳转：收件箱可能有未发送的草稿输入，跳转=丢字。 */
   var _sess401 = 0, _sess401First = 0;
   function _sessionBanner(){
+    /* 实施75：优先走统一通知总线（右下置顶卡片 + 状态胶囊）；总线缺席（极早期
+       报错/独立片段）回落旧的顶部红条实现。 */
+    if(window.AITRNotify){
+      var _txt = window.T ? window.T('ws.session.expired_msg')
+        : 'Session expired; page data can no longer refresh.';
+      AITRNotify.ongoing.set('session', {text: _txt, tone: 'error'});
+      AITRNotify.notify({
+        severity: 'error', sticky: true, domKey: 'session', center: false,
+        text: _txt,
+        actions: [{label: (window.T ? window.T('ws.session.relogin_btn') : 'Sign in again'),
+          onClick: function(){
+            location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
+          }}]
+      });
+      return;
+    }
     var el = document.getElementById('ws-sessionexpired');
     if(!el){
       el = document.createElement('div');
@@ -85,6 +101,42 @@
     }
     window.wsBanner.set('ws-sessionexpired', true);
   }
+  /* ── 能力闸拒绝指路（P0-A3 2026-08-19）──
+     背景：能力未授予的 403（_deny_capability）此前只在各调用点当普通错误文案展示，
+     坐席撞闸=死胡同，也是最被浪费的「联系管理员开通/升级」时刻。后端将随下批在该
+     403 上带 X-Deny-Reason: capability 响应头（特性探测：旧后端无头=这里零行为变化）；
+     choke point 出一枚自动消失的底部提示统一指路，120s 节流防连点刷屏。 */
+  var _capLast = 0;
+  function _capToast(){
+    try{
+      var now = Date.now();
+      if(now - _capLast < 120000) return;
+      _capLast = now;
+      /* 实施75：走统一总线（右下）；缺席回落旧的底部中央提示 */
+      if(window.AITRNotify){
+        AITRNotify.notify({
+          severity: 'warn', center: false,
+          text: (window.T ? window.T('ws.cap.denied_msg')
+            : 'This capability is not enabled for your account; ask your admin to enable it.')
+        });
+        return;
+      }
+      var el = document.getElementById('ws-capdenied');
+      if(!el){
+        el = document.createElement('div');
+        el.id = 'ws-capdenied';
+        el.style.cssText = 'position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:99989;' +
+          'max-width:min(520px,calc(100vw - 32px));padding:10px 16px;border-radius:10px;' +
+          'background:rgba(15,23,42,.92);color:#fff;font-size:13px;line-height:1.5;' +
+          'box-shadow:0 8px 24px rgba(0,0,0,.35);display:none;';
+        (document.body || document.documentElement).appendChild(el);
+      }
+      el.textContent = window.T ? window.T('ws.cap.denied_msg')
+        : 'This capability is not enabled for your account; ask your admin to enable it.';
+      el.style.display = 'block';
+      setTimeout(function(){ try{ el.style.display = 'none'; }catch(_e){} }, 8000);
+    }catch(_e){}
+  }
   function _noteAuth(res, url){
     try{
       if(!res || typeof res.status !== 'number') return;
@@ -94,6 +146,28 @@
         u = u.slice(location.origin.length);
       }
       if(u.indexOf('/api/') !== 0) return;
+      if(res.status === 403){
+        try{
+          if(res.headers && res.headers.get('X-Deny-Reason') === 'capability') _capToast();
+        }catch(_e){}
+      }
+      /* ── 额度拦截即时事件（quotawall v2，2026-08-21）──
+         后端在额度类 402/403 上带 X-AITR-Quota 机器头（license_chars / agent_chars，
+         与 X-Deny-Reason 同款特性探测）；这里只广播事件，弹不弹/怎么弹由
+         workspace_base 的 __wsQuotaWall 调度器统一治理（去抖/互斥/角色分流）。
+         旧后端 402 无头 → 本应用 402 只有授权字符池一种语义，按 license_chars 兜底；
+         无监听者（非工作台系页面）时事件自然空转，零行为。 */
+      if(res.status === 402 || res.status === 403){
+        var _qh = null;
+        try{ _qh = res.headers && res.headers.get('X-AITR-Quota'); }catch(_e){}
+        if(!_qh && res.status === 402) _qh = 'license_chars';
+        if(_qh){
+          try{
+            document.dispatchEvent(new CustomEvent('aitr:quota-blocked',
+              {detail:{source:String(_qh)}}));
+          }catch(_e){}
+        }
+      }
       if(res.status === 401){
         var now = Date.now();
         if(!_sess401First || now - _sess401First > 90000){ _sess401First = now; _sess401 = 0; }
@@ -101,6 +175,10 @@
         if(_sess401 >= 2) _sessionBanner();
       }else if(res.ok){
         _sess401 = 0; _sess401First = 0;
+        if(window.AITRNotify){
+          AITRNotify.ongoing.clear('session');
+          AITRNotify.dismiss('session');
+        }
         if(document.getElementById('ws-sessionexpired')) window.wsBanner.set('ws-sessionexpired', false);
       }
     }catch(_e){}
@@ -160,6 +238,13 @@
 
   /* ── 横幅仲裁器 ── */
   var _reg = {};
+  /* 状态中心 v2（2026-08-27）：＋N 角标从「悬停看名字」升级为「点开展开」。
+     展开态＝把所有 want=true 的横幅按各自 display 原地叠出——展示的是**真实
+     元素**（重登/登出/刷新等按钮原生可用），不做二手摘要面板；再点角标/点外部/
+     Esc/异常只剩一条 → 自动收回单槽仲裁。展开是用户显式动作，短暂「叠罗汉」
+     是他自己要看的清单，不违背单槽默认。 */
+  var _stackExpanded = false;
+  var _stackDismissWired = false;
   function _applyBanners(){
     var top = null, id;
     for(id in _reg){
@@ -167,12 +252,37 @@
     }
     var suppressed = [];
     for(id in _reg){
-      var el = document.getElementById(id);
-      if(!el) continue;
-      el.style.display = (id === top) ? (_reg[id].display || 'flex') : 'none';
       if(id !== top && _reg[id].want) suppressed.push(id);
     }
+    if(!suppressed.length) _stackExpanded = false;
+    for(id in _reg){
+      var el = document.getElementById(id);
+      if(!el) continue;
+      var show = _stackExpanded ? _reg[id].want : (id === top);
+      el.style.display = show ? (_reg[id].display || 'flex') : 'none';
+    }
     _renderStackChip(top, suppressed);
+  }
+  function _wireStackDismiss(){
+    if(_stackDismissWired) return;
+    _stackDismissWired = true;
+    /* 捕获相位：点击落在任一可见横幅内（含角标自身）不收起——横幅上的按钮
+       要先能用；真正的「外点」才收。 */
+    document.addEventListener('click', function(e){
+      if(!_stackExpanded) return;
+      for(var id in _reg){
+        var el = document.getElementById(id);
+        if(el && el.style.display !== 'none' && el.contains(e.target)) return;
+      }
+      _stackExpanded = false;
+      _applyBanners();
+    }, true);
+    document.addEventListener('keydown', function(e){
+      if(_stackExpanded && e.key === 'Escape'){
+        _stackExpanded = false;
+        _applyBanners();
+      }
+    });
   }
 
   /* ── 折叠角标（P1-4）：被仲裁压掉的横幅不再"消失得无影无踪"——
@@ -198,9 +308,19 @@
     if(!chip){
       chip = document.createElement('span');
       chip.id = 'ws-banner-stack';
+      chip.setAttribute('role', 'button');
+      chip.setAttribute('tabindex', '0');
       chip.style.cssText = 'position:absolute;right:10px;top:50%;transform:translateY(-50%);' +
-        'font-size:11px;line-height:1;padding:3px 7px;border-radius:999px;cursor:help;' +
-        'background:rgba(0,0,0,.12);color:inherit;opacity:.85;white-space:nowrap;';
+        'font-size:11px;line-height:1;padding:3px 7px;border-radius:999px;cursor:pointer;' +
+        'background:rgba(0,0,0,.12);color:inherit;opacity:.85;white-space:nowrap;user-select:none;';
+      chip.addEventListener('click', function(){
+        _stackExpanded = !_stackExpanded;
+        if(_stackExpanded) _wireStackDismiss();
+        _applyBanners();
+      });
+      chip.addEventListener('keydown', function(e){
+        if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); chip.click(); }
+      });
     }
     if(chip.parentNode !== host) host.appendChild(chip);
     try{
@@ -211,10 +331,19 @@
       var fn = _BANNER_NAMES[suppressed[i]];
       names.push(fn ? fn() : suppressed[i]);
     }
-    chip.textContent = '\uFF0B' + suppressed.length;
-    chip.title = (window.Tf
-      ? window.Tf('ws.banner.more_title', {n: suppressed.length, names: names.join(' / ')})
-      : names.join(' / '));
+    var n = suppressed.length;
+    if(_stackExpanded){
+      chip.textContent = '\uFF0D' + n;
+      chip.title = window.T ? window.T('ws.banner.collapse_t') : 'collapse';
+    }else{
+      chip.textContent = '\uFF0B' + n;
+      chip.title = (window.Tf
+        ? (window.Tf('ws.banner.more_title', {n: n, names: names.join(' / ')})
+           + ' ' + window.Tf('ws.banner.expand_t', {n: n + 1}))
+        : names.join(' / '));
+    }
+    chip.setAttribute('aria-label', chip.title);
+    chip.setAttribute('aria-expanded', _stackExpanded ? 'true' : 'false');
     chip.style.display = 'inline-block';
   }
   window.wsBanner = {

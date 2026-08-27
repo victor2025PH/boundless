@@ -53,6 +53,14 @@ _IMG_PROMISE = [re.compile(p, re.IGNORECASE) for p in (
     r"等\s*(?:我|人家)\s*(?:去)?\s*拍",
     r"(?:我|人家)\s*(?:这就|這就|马上|馬上|现在|現在|立刻|待会儿?|待會兒?|等下|一会儿?|一會兒?)\s*(?:去)?\s*拍",
     r"(?:我|人家)\s*去\s*拍",
+    # zh：宾语前置「(我这就)给你拍(一张X)」（实施69 实录漏网：「我这就给你拍一张
+    # 刚烤好的大腰子」——「给你」插在副词与「拍」之间，上面各条全漏；该洞还连锁
+    # 关掉下一轮 claim 门控的 last_reply 粘性判定，一个语序两道防线同时失守）。
+    # 负向前瞻排除惯用语（拍手/拍马屁/拍肩/拍板…）与过去指涉（「给你拍过」）；
+    # 「回头/改天给你拍」由 _EXCLUDES 远期组照常豁免；「你给你朋友拍」因
+    # 「你」「拍」间有插入词不命中。
+    r"(?:给|給)\s*你\s*拍(?!手|马|馬|肩|背|板|桌|脑|腦|过|過)\s*(?:一?[张張个個])?",
+    r"(?:给|給)\s*你\s*来\s*(?:一?[张張])",
     # zh：拍(一张)(照片)发/给/传你、拍张给你看
     r"拍\s*(?:一?[张張]|好|完)?\s*(?:照片|自拍|相片)?\s*(?:就)?\s*(?:发|發|传|傳|给|給)\s*(?:给|給)?\s*你",
     r"拍\s*(?:一?[张張]|个|個)?\s*给\s*你\s*看",
@@ -229,6 +237,11 @@ _WANTS_IMG = [re.compile(p, re.IGNORECASE) for p in (
     # 有没有/想要/给我 + 照片；「店里的照片」「海边的照片」这类点名索要
     r"(?:有没有|有無|有冇|想要|想看|要看|給我|给我|发我|發我)\s*(?:.{0,10})?(?:照片|自拍|相片|靓照|靚照)",
     r"(?:照片|自拍|相片)\s*(?:呢|吗|嗎|呀|啊|嘛)?\s*[?？]?\s*$",
+    # 裸「照」索要（实施69 实录漏网：「拍个照我看看」「拍照烤串的给我看看」——
+    # 名词表只有照片/自拍/图，量词+「照」与「拍照X给我看」两种口语语序全漏，
+    # 而这是 claim 门控（media_context）的判据，漏＝谎言门全程不开）。
+    r"拍\s*(?:个|個|张|張|一张|一張)\s*照",
+    r"拍照?[^，。！？!?\n]{0,10}(?:给|給|俾)\s*我\s*(?:看|睇)",
     # 裸「图」索要（2026-07-31 试聊实录：「有图嘛」——上面各条都要求
     # 照片/自拍全词，「图」单字只在句式收口时认，防「地图/图书馆」误伤）
     r"(?:有没有|有沒有|有冇|有無|有)\s*(?:图|圖)\s*(?:吗|嗎|嘛|呀|啊|呢)?\s*[?？]?\s*$",
@@ -382,6 +395,12 @@ def strip_media_promises(text: str) -> str:
 
 
 # ── 完成/进行「断言」检测（claim；本轮无媒体时即谎言）───────────────────────────
+# 客户自述动作前置（实施69）：「我去拍个照」「我先拍张照」是客户叙述自己
+# 要拍照，不是向 AI 索图——新收的「拍X照」结构若无此护栏会把它当索要。
+_OWN_ACTION_RE = re.compile(
+    r"^\s*(?:我|俺|人家)\s*(?:去|要|来|來|先|这就|這就|马上|馬上|刚|剛|已经|已經)?\s*拍")
+
+
 def wants_media(peer_text: str) -> str:
     """客户本条是否在**索要**照片/语音/唱歌 → 'image'/'voice'/''（纯函数）。
 
@@ -391,6 +410,8 @@ def wants_media(peer_text: str) -> str:
     """
     s = str(peer_text or "")
     if not s.strip():
+        return ""
+    if _OWN_ACTION_RE.match(s):
         return ""
     for rx in _WANTS_IMG:
         if rx.search(s):
@@ -621,6 +642,9 @@ _SHOW_MARKERS = (
     "要不要看", "想不想看", "想看", "给你看", "給你看", "给你瞧", "給你瞧",
     "给你瞅", "給你瞅", "拍给你", "拍給你", "发给你", "發給你", "看看吗",
     "看看嗎", "让你看", "讓你看", "给你晒", "給你曬",
+    # 实施69：宾语前置承诺「给你拍一张X」也是展示提议——不认它，承诺句里的
+    # 主体（大腰子）就无法经 offer-主体桥传给后续「照片呢」的兑现轮。
+    "给你拍", "給你拍", "给你来一张", "給你來一張",
 )
 # 名词候选里不该出现的功能字（代词/动词/助词）——正则难免把「你有」「发张自」
 # 这类片段当名词捞出来，字级黑名单比继续堆正则可靠。
@@ -646,6 +670,18 @@ _SHOW_SUBJECT_RE = re.compile(
     r"(?:我(?:的|家的|家里的|家裡的)?)?\s*"
     rf"({_NOT_QUANT}[\u4e00-\u9fff]{{2,6}})"
 )
+# 「给你拍一张刚烤好的大腰子」：宾语前置承诺里点名的主体（实施69）。
+# 「的」锚定版优先（修饰语被「的」隔开，名词紧随其后）；直取版兜底
+# （「给你拍一张大腰子」）——直取版贪婪吃进修饰语时会含「的」等功能字，
+# 由 _clean_subject 整体否决，不会抽出脏主体。
+_SHOW_BENEFACTIVE_DE_RE = re.compile(
+    r"(?:给|給)\s*你\s*(?:拍|来|來)[^，。！？!?\n]{0,10}的\s*"
+    rf"({_NOT_QUANT}[\u4e00-\u9fff]{{2,6}})"
+)
+_SHOW_BENEFACTIVE_RE = re.compile(
+    r"(?:给|給)\s*你\s*拍(?!手|马|馬|肩|背|板|桌|脑|腦)\s*(?:一?[张張个個])?\s*"
+    rf"({_NOT_QUANT}[\u4e00-\u9fff]{{2,6}})"
+)
 # 客户侧：「燕窝粥的照片」「那碗粥拍给我看看」「给我看看你卧室」
 _REQ_OF_PHOTO_RE = re.compile(
     rf"({_NOT_QUANT}[\u4e00-\u9fff]{{2,6}})(?:的)?(?:照片|相片|图片|圖片)"
@@ -660,6 +696,11 @@ _REQ_SHOW_ME_RE = re.compile(
     r"(?:给|給|让|讓)我(?:看看|瞧瞧|瞅瞅|看下|看一下)\s*"
     r"(?:你(?:的|家的|家里的|家裡的)?)?\s*"
     rf"({_NOT_QUANT}[\u4e00-\u9fff]{{2,6}})"
+)
+# 「拍照烤串的给我看看」：动词前置的客户点名（实施69 实录漏网语序）。
+_REQ_SHOOT_SHOW_RE = re.compile(
+    rf"拍照?\s*({_NOT_QUANT}[\u4e00-\u9fff]{{2,6}})\s*(?:的)?\s*"
+    r"(?:拍|发|發|传|傳)?(?:给|給|俾)\s*我\s*(?:看|睇)"
 )
 
 
@@ -701,7 +742,8 @@ def detect_show_offer_subject(text: str) -> str:
         return ""
     if not any(m in s for m in _SHOW_MARKERS):
         return ""
-    for rx in (_SHOW_SUBJECT_RE, _MADE_SUBJECT_RE):
+    for rx in (_SHOW_SUBJECT_RE, _SHOW_BENEFACTIVE_DE_RE,
+               _SHOW_BENEFACTIVE_RE, _MADE_SUBJECT_RE):
         for m in rx.finditer(s):
             sub = _clean_subject(m.group(1))
             if sub:
@@ -714,7 +756,8 @@ def _requested_subject(text: str) -> str:
     s = str(text or "")
     if not s.strip() or len(s) > 200:
         return ""
-    for rx in (_REQ_OF_PHOTO_RE, _REQ_SHOW_ME_RE, _REQ_SHOW_RE):
+    for rx in (_REQ_OF_PHOTO_RE, _REQ_SHOW_ME_RE, _REQ_SHOOT_SHOW_RE,
+               _REQ_SHOW_RE):
         for m in rx.finditer(s):
             sub = _clean_subject(m.group(1))
             if sub:

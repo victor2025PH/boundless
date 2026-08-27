@@ -12,8 +12,93 @@
   <link rel="stylesheet" href="shared/copilot/tokens.css" />
   <link rel="stylesheet" href="shared/copilot/theme-dark.css" />
   <link rel="stylesheet" href="style.css" />
+  <!-- 开机动画（splash P0 2026-08-22）：样式先行 + 双 LOGO 预载——首帧即品牌，
+       杜绝「先白屏后灰遮罩」的廉价开场。生命周期由 splash.js 驱动（body 末尾）。 -->
+  <link rel="preload" as="image" href="brand/boundless-mark-256.png" />
+  <link rel="preload" as="image" href="brand/chatx.png" />
+  <link rel="stylesheet" href="splash.css" />
+  <!-- 壳渲染进程文案单源（i18n P0 2026-08-19）：**必须在 head 内同步加载**——
+       ①首帧前改掉 <html lang>/title，无中文闪现；②在 body 末尾的 cp-i18n.js 之前
+       就位 window.CP_LANG，整条 cp-* 组件链随之英文化。语言权威源＝main.js
+       loadFile 带的 ?lang=（壳配置 unified_inbox.lang，与主进程菜单同源）。 -->
+  <script src="shell-i18n.js"></script>
+  <!-- 扩展语 overlay 按语言条件装载（i18n_desktop_ext 生成 per-lang 文件；
+       CSP 禁内联 → 外部 loader 以 document.write 同步注入，保「先钩子后装载」时序） -->
+  <script src="i18n-ext-loader.js" data-kind="shell"></script>
 </head>
 <body>
+  <!-- ── 开机动画「赛博朋克首启序列」（splash P0 2026-08-22）─────────────────
+       静态 DOM + splash.css 保证 JS 尚未执行时首帧已是品牌画面；三幕/暖场/极简
+       的编排与真实进度全在 splash.js（纯函数在 splash-model.js，Node 门禁直测）。
+       z-index 99900：低于首启向导 99999/活动海报 99980（引导可叠在动画上交互），
+       高于其余一切。中文文案=词典 zh 默认值（shell-i18n 零漂移契约），勿单侧改。
+       刻意不挂 role="status"：真实行每秒更新，live region 会对读屏器连环播报。 -->
+  <div id="bl-splash">
+    <div class="sp-bg" aria-hidden="true">
+      <div class="sp-grid"><i></i></div>
+      <div class="sp-stars s1"></div>
+      <div class="sp-stars s2"></div>
+      <div class="sp-beam"></div>
+    </div>
+    <div class="sp-center">
+      <div class="sp-act sp-act1" aria-hidden="true">
+        <img class="sp-mark" src="brand/boundless-mark-256.png" alt="" decoding="async" />
+        <div class="sp-word">BOUNDLESS</div>
+        <div class="sp-word-sub" data-sh-i18n="splash.brand.co">无界科技</div>
+      </div>
+      <div class="sp-act sp-act2" aria-hidden="true">
+        <img class="sp-cx" src="brand/chatx.png" alt="" decoding="async" />
+        <div class="sp-cx-word"><span data-sh-i18n="brand.product">智聊</span><span class="sp-cx-en">ChatX</span></div>
+        <div class="sp-tagline" data-sh-i18n="splash.tagline">多平台智能会话 · 人机协同工作台</div>
+      </div>
+    </div>
+    <div class="sp-console">
+      <div class="sp-amb" id="sp-amb" aria-hidden="true"></div>
+      <div class="sp-conduit" aria-hidden="true">
+        <div class="sp-track">
+          <div class="sp-fill" id="sp-fill"></div>
+          <i class="sp-node" data-at="12" style="left:12%"></i>
+          <i class="sp-node" data-at="68" style="left:68%"></i>
+          <i class="sp-node" data-at="88" style="left:88%"></i>
+          <i class="sp-node" data-at="99.5" style="left:calc(100% - 2px)"></i>
+        </div>
+        <div class="sp-pct" id="sp-pct">0%</div>
+      </div>
+      <div class="sp-real" id="sp-real"></div>
+      <div class="sp-term" id="sp-term" aria-hidden="true"></div>
+    </div>
+    <div class="sp-err" id="sp-err" hidden>
+      <div class="sp-err-title" data-sh-i18n="splash.err.title">启动序列中断</div>
+      <div class="sp-err-msg" id="sp-err-msg"></div>
+      <div class="sp-err-actions">
+        <button type="button" id="sp-retry" data-sh-i18n="splash.err.retry">重试连接</button>
+        <button type="button" id="sp-diag" data-sh-i18n="splash.err.copy">复制诊断信息</button>
+      </div>
+    </div>
+    <button type="button" class="sp-skip" id="sp-skip" hidden data-sh-i18n="splash.skip">跳过动画</button>
+    <div class="sp-ver" aria-hidden="true">BOUNDLESS ∞ CHATX</div>
+  </div>
+  <!-- ── 融合标题栏（titlebar merge P2 2026-08-22）─────────────────────────────
+       主窗 titleBarStyle:hidden 后系统标题栏消失，这条 32px 壳级细条承接三件事：
+       ① 窗口拖拽面（-webkit-app-region:drag 只在顶层 frame 生效，webview 里做不了）；
+       ② 右缘给原生 min/max/close 悬浮按钮让位（titleBarOverlay 138px + 呼吸位）；
+       ③「⋯」应急菜单（关于/上传诊断/检查更新）——工作台 webview 白屏时它仍活着，
+       接替被 autoHideMenuBar 藏起的原生帮助菜单当报障保命通道。
+       只在 main.js loadFile 带 ?tb=1（win32 融合模式）时由 renderer.initTitlebar
+       点亮；mac / 旧配置不带参 → CSS 默认 display:none，零影响。配色与工作台顶栏
+       ws-top 同源（暗档同渐变、亮档随页面主题经 cx-titlebar-theme 回推翻转）。 -->
+  <div id="cx-titlebar">
+    <span class="cxtb-mark" aria-hidden="true" data-sh-i18n="brand.mark">智</span>
+    <span id="cx-tb-title"></span>
+    <span class="cxtb-spacer" aria-hidden="true"></span>
+    <button type="button" id="cx-tb-more" title="关于 / 上传诊断 / 检查更新"
+            data-sh-i18n-title="tb.more" aria-haspopup="menu">⋯</button>
+    <div id="cx-tb-menu" role="menu" hidden>
+      <button type="button" role="menuitem" data-tbm="about" data-sh-i18n="tb.about">关于</button>
+      <button type="button" role="menuitem" data-tbm="diag" data-sh-i18n="tb.diag">上传诊断给客服</button>
+      <button type="button" role="menuitem" data-tbm="update" data-sh-i18n="tb.update">检查更新</button>
+    </div>
+  </div>
   <div id="app">
     <!-- 2026-08-14 竖栏回归：标签条改为 stage 左侧 64px 竖栏，栏顶自带壳级品牌头
          （#rail-brand，满足「菜单在 LOGO 下方」——网页 LOGO 在 webview 里跨文档不可插，
@@ -28,50 +113,51 @@
         <span class="sn-badge" id="sn-badge"></span>
         <span class="sn-text" id="sn-text"></span>
         <button type="button" class="sn-primary" id="sn-primary" hidden></button>
-        <button type="button" class="sn-dismiss" id="sn-dismiss" title="暂不">✕</button>
+        <button type="button" class="sn-dismiss" id="sn-dismiss" title="暂不" data-sh-i18n-title="notice.dismiss">✕</button>
       </div>
-      <nav id="rail" aria-label="工作台标签栏">
+      <nav id="rail" aria-label="工作台标签栏" data-sh-i18n-aria="rail.aria">
         <!-- 壳级品牌头：竖栏顶部常驻（webview 内的页面 LOGO 归页面，这份归壳）。
              仓内无 chatx.png 位图（main.js 图标同为 existsSync 兜底），用字形块不引死资源。 -->
-        <div id="rail-brand" title="智聊 · 坐席工作台" aria-label="智聊 · 坐席工作台">
-          <span class="rb-mark" aria-hidden="true">智</span>
-          <span>智聊</span>
+        <div id="rail-brand" title="智聊 · 坐席工作台" aria-label="智聊 · 坐席工作台"
+             data-sh-i18n-title="brand.workbench" data-sh-i18n-aria="brand.workbench">
+          <span class="rb-mark" aria-hidden="true" data-sh-i18n="brand.mark">智</span>
+          <span data-sh-i18n="brand.product">智聊</span>
         </div>
       </nav>
       <div id="webviews"></div>
       <!-- Path2 assist-only 诚实条：官方网页可聊但不接全自动；点 CTA 进人工操作台（统一收件箱） -->
       <div id="assist-only-banner" hidden>
         <span class="aob-text"></span>
-        <button type="button" class="aob-cta" id="assist-only-inbox-btn">人工操作台</button>
+        <button type="button" class="aob-cta" id="assist-only-inbox-btn" data-sh-i18n="console.manual">人工操作台</button>
       </div>
     </main>
     <aside id="copilot">
-      <div class="cp-sidebar-resize" id="cp-sidebar-resize" title="拖动调节宽度（双击恢复默认）"></div>
+      <div class="cp-sidebar-resize" id="cp-sidebar-resize" title="拖动调节宽度（双击恢复默认）" data-sh-i18n-title="cp.resize"></div>
       <div class="cp-head">
-        <span id="cp-title">业务助手</span>
-        <span id="cp-open-inbox" title="在人工操作台（统一收件箱）打开该会话" hidden>📥</span>
-        <span id="cp-accounts-toggle" title="账号管理（多账号扫码登录）">👥</span>
-        <span id="cp-health-toggle" title="自动化健康：全账号注入命中 + 受控出站队列概览">🩺</span>
-        <span id="cp-mode-toggle" title="切换统一 App（实验，与网页同源同款）">🧪</span>
-        <span id="cp-toggle" title="折叠/展开">⟩</span>
+        <span id="cp-title" data-sh-i18n="cp.title">业务助手</span>
+        <span id="cp-open-inbox" title="在人工操作台（统一收件箱）打开该会话" data-sh-i18n-title="cp.open_inbox" hidden>📥</span>
+        <span id="cp-accounts-toggle" title="账号管理（多账号扫码登录）" data-sh-i18n-title="cp.accounts">👥</span>
+        <span id="cp-health-toggle" title="自动化健康：全账号注入命中 + 受控出站队列概览" data-sh-i18n-title="cp.health">🩺</span>
+        <span id="cp-mode-toggle" title="切换统一 App（实验，与网页同源同款）" data-sh-i18n-title="cp.mode">🧪</span>
+        <span id="cp-toggle" title="折叠/展开" data-sh-i18n-title="cp.collapse">⟩</span>
       </div>
       <div id="cp-accounts-panel" hidden>
         <cp-accounts id="cp-accounts"></cp-accounts>
       </div>
       <div id="cp-health-panel" hidden></div>
       <div class="cp-tabs" id="cp-tabs" hidden>
-        <button class="cp-tab active" data-tab="reply">回复台<span class="cp-tab-badge" id="cp-tab-badge-reply"></span></button>
-        <button class="cp-tab" data-tab="customer">客户关系<span class="cp-tab-badge" id="cp-tab-badge-customer"></span></button>
-        <button class="cp-tab" data-tab="tools">工具箱<span class="cp-tab-badge" id="cp-tab-badge-tools"></span></button>
+        <button class="cp-tab active" data-tab="reply" data-sh-i18n-txt="tab.reply">回复台<span class="cp-tab-badge" id="cp-tab-badge-reply"></span></button>
+        <button class="cp-tab" data-tab="customer" data-sh-i18n-txt="tab.customer">客户关系<span class="cp-tab-badge" id="cp-tab-badge-customer"></span></button>
+        <button class="cp-tab" data-tab="tools" data-sh-i18n-txt="tab.tools">工具箱<span class="cp-tab-badge" id="cp-tab-badge-tools"></span></button>
       </div>
       <div class="cp-body">
-        <div class="cp-empty" id="cp-empty">打开一个会话即可显示智能草拟、AI 分析、知识库与客户档案</div>
+        <div class="cp-empty" id="cp-empty" data-sh-i18n="cp.empty">打开一个会话即可显示智能草拟、AI 分析、知识库与客户档案</div>
 
         <!-- 可折叠卡片（与网页 unified_inbox 同款：卡头图标+标题+状态 pill+chevron，
              折叠态 localStorage 记忆、展开懒取数；核心逻辑复用 sidebar-chrome.createCardController）。 -->
         <section class="cp-sec cp-card" id="cp-draft-sec" data-tab="reply" data-cp-card="draft" hidden>
           <button type="button" class="cp-card-hd" data-cp-toggle="draft">
-            <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="spark"></span>回复工坊</span>
+            <span class="cp-card-ttl" data-sh-i18n-txt="card.draft"><span class="cp-card-ic" data-cp-ic="spark"></span>回复工坊</span>
             <span class="cp-card-pill" id="cpp-draft"></span>
             <span class="cp-card-chev" aria-hidden="true"></span>
           </button>
@@ -84,24 +170,24 @@
 
         <section class="cp-sec cp-card" id="cp-voice-sec" data-tab="reply" data-cp-card="voice" hidden>
           <button type="button" class="cp-card-hd" data-cp-toggle="voice">
-            <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="mic"></span>语音克隆 / 发送</span>
+            <span class="cp-card-ttl" data-sh-i18n-txt="card.voice"><span class="cp-card-ic" data-cp-ic="mic"></span>语音克隆 / 发送</span>
             <span class="cp-card-chev" aria-hidden="true"></span>
           </button>
           <div class="cp-card-bd">
             <cp-voice id="cp-voice"></cp-voice>
-            <p class="cp-voice-note">与 📥 人工操作台同源 API；完整横向工具栏请用「人工操作台」标签。</p>
+            <p class="cp-voice-note" data-sh-i18n="voice.note">与 📥 人工操作台同源 API；完整横向工具栏请用「人工操作台」标签。</p>
           </div>
         </section>
 
         <section class="cp-sec cp-card" id="cp-kb-sec" data-tab="reply" data-cp-card="kb" hidden>
           <button type="button" class="cp-card-hd" data-cp-toggle="kb">
-            <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="book"></span>知识库</span>
+            <span class="cp-card-ttl" data-sh-i18n-txt="card.kb"><span class="cp-card-ic" data-cp-ic="book"></span>知识库</span>
             <span class="cp-card-chev" aria-hidden="true"></span>
           </button>
           <div class="cp-card-bd">
             <div class="cp-search">
-              <input id="cp-kb-input" type="text" placeholder="搜索话术/知识条目…" />
-              <button id="cp-kb-btn">搜</button>
+              <input id="cp-kb-input" type="text" placeholder="搜索话术/知识条目…" data-sh-i18n-ph="kb.ph" />
+              <button id="cp-kb-btn" data-sh-i18n="kb.btn">搜</button>
             </div>
             <div id="cp-kb" class="cp-list"></div>
           </div>
@@ -109,7 +195,7 @@
 
         <section class="cp-sec cp-card" id="cp-tpl-sec" data-tab="reply" data-cp-card="tpl" hidden>
           <button type="button" class="cp-card-hd" data-cp-toggle="tpl">
-            <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="zap"></span>快捷回复</span>
+            <span class="cp-card-ttl" data-sh-i18n-txt="card.tpl"><span class="cp-card-ic" data-cp-ic="zap"></span>快捷回复</span>
             <span class="cp-card-chev" aria-hidden="true"></span>
           </button>
           <div class="cp-card-bd"><div id="cp-tpl" class="cp-list"></div></div>
@@ -119,7 +205,7 @@
              （客户信息 → 关系 → SOP → 协作）；卡名收敛到坐席培训词汇。 -->
         <section class="cp-sec cp-card" id="cp-profile-sec" data-tab="customer" data-cp-card="profile" hidden>
           <button type="button" class="cp-card-hd" data-cp-toggle="profile">
-            <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="user"></span>客户信息</span>
+            <span class="cp-card-ttl" data-sh-i18n-txt="card.profile"><span class="cp-card-ic" data-cp-ic="user"></span>客户信息</span>
             <span class="cp-card-chev" aria-hidden="true"></span>
           </button>
           <div class="cp-card-bd"><div id="cp-profile" class="cp-box"></div></div>
@@ -127,7 +213,7 @@
 
         <section class="cp-sec cp-card" id="cp-relstage-sec" data-tab="customer" data-cp-card="relstage" hidden>
           <button type="button" class="cp-card-hd" data-cp-toggle="relstage">
-            <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="heart"></span>关系阶段</span>
+            <span class="cp-card-ttl" data-sh-i18n-txt="card.relstage"><span class="cp-card-ic" data-cp-ic="heart"></span>关系阶段</span>
             <span class="cp-card-pill" id="cpp-relstage"></span>
             <span class="cp-card-chev" aria-hidden="true"></span>
           </button>
@@ -139,7 +225,7 @@
              修「徽章在客户关系亮、卡片却在工具箱」的错位）。 -->
         <section class="cp-sec cp-card" id="cp-chain-sec" data-tab="customer" data-cp-card="chain" hidden>
           <button type="button" class="cp-card-hd" data-cp-toggle="chain">
-            <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="link"></span>跟进 SOP（工作链）</span>
+            <span class="cp-card-ttl" data-sh-i18n-txt="card.chain"><span class="cp-card-ic" data-cp-ic="link"></span>跟进 SOP（工作链）</span>
             <span class="cp-card-pill" id="cpp-chain"></span>
             <span class="cp-card-chev" aria-hidden="true"></span>
           </button>
@@ -148,7 +234,7 @@
 
         <section class="cp-sec cp-card" id="cp-collab-sec" data-tab="customer" data-cp-card="collab" hidden>
           <button type="button" class="cp-card-hd" data-cp-toggle="collab">
-            <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="users"></span>协作上下文</span>
+            <span class="cp-card-ttl" data-sh-i18n-txt="card.collab"><span class="cp-card-ic" data-cp-ic="users"></span>协作上下文</span>
             <span class="cp-card-pill" id="cpp-collab"></span>
             <span class="cp-card-chev" aria-hidden="true"></span>
           </button>
@@ -160,12 +246,12 @@
              按钮不可见即零 LLM 调用。恢复＝删掉 style 属性。保留 DOM：renderer.js 1321 行等处直接解引用。 -->
         <section class="cp-sec cp-card" id="cp-analyze-sec" data-tab="tools" data-cp-card="analysis" hidden style="display:none">
           <button type="button" class="cp-card-hd" data-cp-toggle="analysis">
-            <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="brain"></span>AI 对话分析</span>
+            <span class="cp-card-ttl" data-sh-i18n-txt="card.analysis"><span class="cp-card-ic" data-cp-ic="brain"></span>AI 对话分析</span>
             <span class="cp-card-pill" id="cpp-analysis"></span>
             <span class="cp-card-chev" aria-hidden="true"></span>
           </button>
           <div class="cp-card-bd">
-            <button id="cp-analyze-btn" class="cp-btn-primary">分析当前对话</button>
+            <button id="cp-analyze-btn" class="cp-btn-primary" data-sh-i18n="analysis.btn">分析当前对话</button>
             <div id="cp-analyze" class="cp-box" hidden></div>
             <div id="cp-analyze-replies" class="cp-list"></div>
           </div>
@@ -177,18 +263,20 @@
              不导航——这段窗口给坐席真实的启动叙事（spawn 三态文案由 renderer 刷新），
              而不是一块空白或一个取不到数据的旧面板。 -->
         <div id="cp-boot-overlay" hidden>
-          <div class="cp-boot-title">正在启动后台服务…</div>
-          <div class="cp-boot-sub" id="cp-boot-phase">首次启动较慢（约 1 分钟），就绪后自动进入业务面板</div>
+          <div class="cp-boot-title" data-sh-i18n="boot.title">正在启动后台服务…</div>
+          <div class="cp-boot-sub" id="cp-boot-phase" data-sh-i18n="boot.sub">首次启动较慢（约 1 分钟），就绪后自动进入业务面板</div>
         </div>
-        <iframe id="cp-appframe" title="统一业务面板" referrerpolicy="no-referrer"></iframe>
+        <iframe id="cp-appframe" title="统一业务面板" data-sh-i18n-title="appframe.title" referrerpolicy="no-referrer"></iframe>
       </div>
     </aside>
   </div>
   <!-- Copilot 组件 i18n（须在组件前加载，否则组件取不到 CopilotShared.t 会显示原始 key）。
-       桌面壳为中文/深色专属：无 CP_LANG/?lang= 时按 <html lang="zh"> 回退中文，保持原行为。 -->
+       语言由 head 里的 shell-i18n.js 先行钉好（window.CP_LANG + <html lang> + ?lang=
+       三者同值）；壳配置未显式配 en 时仍为中文，存量坐席机零行为变化。 -->
   <!-- 平台原生图标库(与网页端同一份，桌面壳本地副本)：window.platformIconSVG -->
   <script src="platform-icons.js"></script>
   <script src="shared/copilot/i18n/cp-i18n.js"></script>
+  <script src="i18n-ext-loader.js" data-kind="cp"></script>
   <script src="shared/copilot/client/copilot-client.js"></script>
   <script src="shared/copilot/sidebar-chrome.js"></script>
   <script src="shared/copilot/components/cp-panel-base.js"></script>
@@ -211,8 +299,14 @@
   <!-- Path2 assist-only 能力矩阵（messenger/IG/X/Zalo）：须在 renderer 之前加载 -->
   <script src="platform-caps.js"></script>
   <script src="renderer.js"></script>
+  <!-- 开机动画：model（纯函数）先于 driver；两者都在 renderer.js 之后——事件桥
+       aitr:inbox-phase 的首发在 renderer 的 getConfig IPC 回包之后，同步注册必然赶上。 -->
+  <script src="splash-model.js"></script>
+  <script src="splash.js"></script>
   <script src="first-run-model.js"></script>
   <script src="first-run.js"></script>
+  <script src="campaign-model.js"></script>
+  <script src="poster.js"></script>
   <script src="health-panel.js"></script>
 </body>
 </html>

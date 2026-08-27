@@ -412,3 +412,80 @@ async def test_fresh_inbound_only_gets_now_anchor():
     assert "当前时间" in hint
     assert "迟回复" not in hint and "不是刚才" not in hint
     assert out["time_anchor"]["kind"] == "fresh"
+
+
+# ── 双时钟事故修复（2026-08-22：B 线锚点必须用人设当地钟）──────────────────────
+#
+# 实录：温哥华人设在服务器 03:31 时，B 线锚点说「深夜」、ai_client 人设钟说
+# 「中午」——同一 prompt 两个「现在」连日期都差一天，LLM 每条随机站队＝
+# 「一会白天一会晚上」。以下钉住：锚点渲染当地钟 + 接线解析 + 组装级单钟不变量。
+
+class _FakePMVan:
+    def get_persona_by_id(self, pid):
+        return {"id": pid, "name": "林佳欣", "location": "vancouver"}
+
+
+class _FakePMNoPlace:
+    def get_persona_by_id(self, pid):
+        return {"id": pid, "name": "顾嘉", "location": "none"}
+
+
+def _vancouver_now():
+    from src.companion.persona_location import persona_now, resolve_persona_place
+    return persona_now(resolve_persona_place({"location": "vancouver"}))
+
+
+def test_now_anchor_hint_renders_persona_local_clock():
+    import datetime as dt
+    local = dt.datetime(2026, 8, 21, 12, 31)  # 温哥华当地中午（服务器 8-22 深夜）
+    h = build_now_anchor_hint(local_now=local, place_label="加拿大·温哥华")
+    assert "2026-08-21" in h and "12:31" in h
+    assert "（加拿大·温哥华当地）" in h
+    assert "中午" in h and "深夜" not in h
+    # 缺省路径不带「当地」标注（服务器钟旧行为逐字兼容）
+    t = time.mktime((2026, 8, 12, 21, 15, 0, 0, 0, -1))
+    assert "当地" not in build_now_anchor_hint(t)
+
+
+def test_persona_anchor_clock_resolves_place(monkeypatch):
+    from src.inbox import persona_reply as pr
+    monkeypatch.setattr(
+        "src.utils.persona_manager.PersonaManager.get_instance",
+        lambda: _FakePMVan())
+    local, label = pr._persona_anchor_clock("van_girl")
+    assert label == "加拿大·温哥华"
+    expect = _vancouver_now()
+    assert abs((local - expect).total_seconds()) < 120
+
+
+def test_persona_anchor_clock_no_place_falls_back(monkeypatch):
+    from src.inbox import persona_reply as pr
+    monkeypatch.setattr(
+        "src.utils.persona_manager.PersonaManager.get_instance",
+        lambda: _FakePMNoPlace())
+    assert pr._persona_anchor_clock("gu_jia") == (None, "")
+    assert pr._persona_anchor_clock("") == (None, "")
+
+
+@pytest.mark.asyncio
+async def test_b_line_anchor_uses_persona_local_clock(monkeypatch):
+    """组装级不变量：温哥华人设的 B 线 extra_hint 锚点＝当地钟（带当地标注、
+    时段词与当地小时一致），绝不再出现「按服务器钟的另一个现在」。"""
+    from src.inbox.time_context import daypart_label as _dp
+    monkeypatch.setattr(
+        "src.utils.persona_manager.PersonaManager.get_instance",
+        lambda: _FakePMVan())
+    now = time.time()
+    ai = _FakeAI()
+    sm = _FakeSM(ai)
+    out = await generate_persona_reply(
+        app=_app(sm), platform="telegram", chat_key="c7",
+        last_inbound="在吗", history=[_u("在吗", now - 5)],
+        persona_id="van_girl",
+    )
+    assert out["ok"] is True
+    hint = sm.inbox_draft_calls[0].get("extra_hint") or ""
+    local = _vancouver_now()
+    assert "（加拿大·温哥华当地）" in hint
+    assert _dp(local.hour) in hint
+    assert f"{local.year}-{local.month:02d}-{local.day:02d}" in hint

@@ -27,7 +27,12 @@ from src.companion.goals import report as goal_report
 from src.companion.goals.store import GoalStore, reset_goal_store
 from src.web.routes.goal_routes import register_goal_routes
 
-NOW = time.time()
+# NOW 锚到「今天正午」（本地时区，与 daily_outcomes 本地日分桶同口径）：
+# 裸 time.time() 是时间炸弹——test_daily_outcomes 用 0.1/0.2 天前造「今天」的
+# 完成，凌晨 00:00-04:48 跑测试时 4.8h 前落进昨天桶必红（2026-08-18 04:35 实锤）。
+# 锚正午后 NOW-0.2d=07:12 同日恒成立，任何时刻跑都稳定。
+_lt = time.localtime()
+NOW = time.mktime((_lt.tm_year, _lt.tm_mon, _lt.tm_mday, 12, 0, 0, 0, 0, -1))
 DAY = 86400.0
 
 

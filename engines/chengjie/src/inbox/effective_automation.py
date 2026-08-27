@@ -47,6 +47,32 @@ from src.inbox.automation_mode import (
 # 翻译线账号 AI 只拟稿人审后发，绝不自动发送；账号无标签 = 不封顶）。
 _BUILTIN_BUSINESS_LINE_CEILINGS: Dict[str, str] = {"translation": "review"}
 
+# 实施72 P2 重连积压封顶缺省（``inbox.auto_draft.reconnect_backlog``）：长断线
+# （≥min_downtime_hours）恢复后的 window_min 分钟内，积压消息会以「现在」的时间
+# 戳涌进实时链——AI 按当下语境回旧消息＝穿帮（实锤：对 8/18 早 8 点的消息回
+# 「大半夜的你在街上溜达啥呢」）。短窗内封 review 让人先看一眼。默认开：影响面
+# 极小（仅长断线恢复后的头几分钟），且这是诚实性护栏而非新业务能力。
+_RECONNECT_BACKLOG_DEFAULTS: Dict[str, Any] = {
+    "enabled": True, "min_downtime_hours": 6.0, "window_min": 10.0,
+}
+
+
+def reconnect_backlog_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """解析 ``inbox.auto_draft.reconnect_backlog``，缺项取安全默认（不抛）。"""
+    out = dict(_RECONNECT_BACKLOG_DEFAULTS)
+    try:
+        node = (((config or {}).get("inbox") or {}).get("auto_draft") or {}).get(
+            "reconnect_backlog")
+        if isinstance(node, dict):
+            if "enabled" in node:
+                out["enabled"] = bool(node.get("enabled"))
+            for k in ("min_downtime_hours", "window_min"):
+                if node.get(k) is not None:
+                    out[k] = max(0.0, float(node.get(k)))
+    except Exception:
+        return dict(_RECONNECT_BACKLOG_DEFAULTS)
+    return out
+
 
 @dataclass(frozen=True)
 class ModeCap:
@@ -128,13 +154,19 @@ def compute_mode_caps(
     business_line_ceilings_fallback: Optional[Dict[str, str]] = None,
     business_line: Optional[str] = None,
     connected_at: Optional[float] = None,
+    chat_key: str = "",
+    peer_name: str = "",
+    account_meta: Optional[Dict[str, Any]] = None,
 ) -> List[ModeCap]:
     """求本会话适用的全部档位封顶（纯读，逐层 fail-open）。
 
-    顺序与 B 线旧内联链一致：平台 → 业务线 → 冷启动预热。
-    ``business_line`` / ``connected_at`` 可显式注入（why_no_reply CLI 用只读
-    SQLite 自取，避免进程外调 ``get_account_registry`` 触碰生产库写路径）；
-    None ＝服务内路径，走各自带缓存的解析函数。
+    顺序与 B 线旧内联链一致：平台 → 业务线 → 冷启动预热 → 身份待确认 →
+    重连积压 → 外机自有号对端。``business_line`` / ``connected_at`` /
+    ``account_meta`` 可显式注入（why_no_reply CLI 用只读 SQLite 自取，避免
+    进程外调 ``get_account_registry`` 触碰生产库写路径）；None ＝服务内路径，
+    走各自带缓存的解析函数。``chat_key``/``peer_name``（实施72 P2）＝会话级
+    信息，调用方有才传——不传时「外机自有号对端」层自然不判（该层是唯一的
+    会话级封顶，账号级各层不受影响）。
     """
     now = time.time() if now is None else float(now)
     plat = str(platform or "").lower()
@@ -191,6 +223,64 @@ def compute_mode_caps(
     except Exception:
         pass
 
+    # ── ④ 身份待确认封顶（实施72，2026-08-27 身份错乱事故）────────────────
+    # 登录位换人（同 login_id 被另一账号登录）→ 新账号进隔离态：AI 只拟稿人审
+    # 后发，直到人显式转正（confirm_account_identity）。与 ③ 的区别：③ 管
+    # 「号太新」，④ 管「号是谁还没人确认」——身份问题不随时间自愈，无 until_ts。
+    # fail-open：判不出（注册表不可用/无此行）不封顶，绝不成为回复链故障点。
+    try:
+        if account_meta is not None:
+            _pending = bool(account_meta.get("identity_pending"))
+        else:
+            from src.integrations.account_identity import identity_pending
+            _pending = identity_pending(plat, acct)
+        if _pending:
+            caps.append(ModeCap("identity_pending", "review", detail=acct))
+    except Exception:
+        pass
+
+    # ── ⑤ 重连积压封顶（实施72 P2）：长断线恢复后的短窗强制人审 ─────────────
+    # 断线期积压的消息经实时链涌入时时间戳=「现在」，AI 按当下语境回旧消息必然
+    # 穿帮；恢复盖章（session-status offline→online 时写 meta.last_recovered_at/
+    # last_downtime_sec）+ 短窗封 review，窗过自动解除（until_ts 可倒计时）。
+    try:
+        rb = reconnect_backlog_cfg(config)
+        if rb.get("enabled"):
+            _meta = account_meta
+            if _meta is None:
+                from src.integrations.account_identity import (
+                    cached_account_meta,
+                )
+                _meta = cached_account_meta(plat, acct)
+            _rec_at = float((_meta or {}).get("last_recovered_at") or 0.0)
+            _down = float((_meta or {}).get("last_downtime_sec") or 0.0)
+            _win = float(rb.get("window_min", 10.0)) * 60.0
+            if (_rec_at > 0
+                    and _down >= float(rb.get("min_downtime_hours", 6.0)) * 3600.0
+                    and 0 <= (now - _rec_at) < _win):
+                caps.append(ModeCap(
+                    "reconnect_backlog", "review",
+                    detail=f"downtime_h={_down / 3600.0:.1f}",
+                    until_ts=_rec_at + _win))
+    except Exception:
+        pass
+
+    # ── ⑥ 外机自有号对端封顶（实施72 P2）：对端是**另一台机器运营的自有号** ──
+    # （overlay ``companion.own_fleet.extra`` 显式登记）→ 封 review，防两台机器
+    # 的 AI 隔着平台互聊（风控眼里=互刷）。**刻意不对同库自有号对子封顶**：
+    # 老板测试全自动的方式就是拿自己账号扮客户，一刀切会废掉演示/测试流程；
+    # 同库对子的主动触达已有舰队自嗨排除，入站回复保持现状。
+    try:
+        if chat_key or peer_name:
+            from src.companion.proactive_peer_hygiene import (
+                external_fleet_peer_match,
+            )
+            _hit = external_fleet_peer_match(plat, chat_key, peer_name, config)
+            if _hit:
+                caps.append(ModeCap("own_fleet_peer", "review", detail=_hit))
+    except Exception:
+        pass
+
     return caps
 
 
@@ -229,6 +319,8 @@ def effective_automation(
     base_mode: Optional[str] = None,
     business_line: Optional[str] = None,
     connected_at: Optional[float] = None,
+    peer_name: str = "",
+    account_meta: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """只读求「基础档位 + 封顶明细 + 有效档位」（API / CLI / 巡检入口）。
 
@@ -258,9 +350,29 @@ def effective_automation(
     else:
         ui_mode = global_automation_mode_from_config(config)
         source = "global"
+    # 会话级信息（实施72 P2 ⑥ 层用）：chat_key 从 conversation_id 反解
+    #（platform:account:chat，chat 段可含冒号故 maxsplit=2）；peer_name 显式
+    # 传入优先，否则 best-effort 从 store 会话行取 display_name（读不到不判）。
+    _ck = ""
+    try:
+        _parts = str(conversation_id or "").split(":", 2)
+        if len(_parts) == 3:
+            _ck = _parts[2]
+    except Exception:
+        _ck = ""
+    _pname = str(peer_name or "")
+    if not _pname and store is not None and conversation_id:
+        try:
+            _get_conv = getattr(store, "get_conversation", None)
+            if callable(_get_conv):
+                _pname = str((_get_conv(conversation_id) or {}).get(
+                    "display_name") or "")
+        except Exception:
+            _pname = ""
     caps_all = compute_mode_caps(
         platform=platform, account_id=account_id, config=config, now=now,
-        business_line=business_line, connected_at=connected_at)
+        business_line=business_line, connected_at=connected_at,
+        chat_key=_ck, peer_name=_pname, account_meta=account_meta)
     eff, applied = apply_mode_caps(ui_mode, caps_all)
     return {
         "mode": ui_mode,
@@ -276,6 +388,7 @@ __all__ = [
     "serialize_caps",
     "platform_ceilings_from_config",
     "business_line_ceilings_from_config",
+    "reconnect_backlog_cfg",
     "compute_mode_caps",
     "apply_mode_caps",
     "effective_automation",

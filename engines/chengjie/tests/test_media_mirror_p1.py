@@ -91,13 +91,26 @@ def test_inbound_voice_ref_threads_into_mirror():
 
 
 def test_inbound_voice_mirror_text_strips_prefix():
-    """镜像正文去 [语音转录] 前缀（与 B 线转录回填同口径）；AI 链内部 text 不动。"""
+    """镜像正文去 [语音转录] 前缀（与 B 线转录回填同口径）；AI 链内部 text 不动。
+
+    钉锚更新（2026-08-23）：剥前缀逻辑已被 B29 emoji 镜像批收编进单源助手
+    ``_inbound_mirror_text``（行为不变、纯函数化）——钉行为改钉助手本体 +
+    调用点 + emit 消费，保护等价。
+    """
     src = _tg_src()
-    i = src.index("_mirror_text = text")
-    seg = src[i:i + 420]
-    assert "[语音转录] " in seg and "_mirror_text = text[len(" in seg
-    j = src.index("self._emit_inbox(", i)
+    i = src.index("def _inbound_mirror_text(")
+    seg = src[i:i + 900]
+    assert "[语音转录] " in seg and 'media_type == "voice"' in seg, (
+        "语音镜像剥前缀逻辑离开了 _inbound_mirror_text 单源助手")
+    k = src.index("_mirror_text = _inbound_mirror_text(")
+    j = src.index("self._emit_inbox(", k)
     assert "text=_mirror_text" in src[j:j + 220], "emit 必须用去前缀的 _mirror_text"
+    # 行为级双保险（静态钉之外直接调用纯函数）
+    mod = __import__("src.client.telegram_client",
+                     fromlist=["_inbound_mirror_text"])
+    fn = mod._inbound_mirror_text
+    assert fn("voice", "[语音转录] 给我唱首歌吧", "") == "给我唱首歌吧"
+    assert fn("", "普通文本", "") == "普通文本"
 
 
 # ─────────────────── 3) 「谁的音色」显示名 ───────────────────

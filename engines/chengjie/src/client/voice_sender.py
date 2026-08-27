@@ -23,9 +23,27 @@ logger = logging.getLogger(__name__)
 
 
 # ── ffmpeg helpers ───────────────────────────────────────────────────────────
+# 路径解析统一走 ffmpeg_resolver（实施49 P1-11）：客户桌面包把 ffmpeg/ffprobe
+# 打进 resources/ffmpeg/，冻结态按相对布局找到包内二进制；内部部署仍回落 PATH。
+
+def _ffmpeg_exe() -> Optional[str]:
+    try:
+        from src.utils.ffmpeg_resolver import ffmpeg_path
+        return ffmpeg_path()
+    except Exception:
+        return shutil.which("ffmpeg")
+
+
+def _ffprobe_exe() -> Optional[str]:
+    try:
+        from src.utils.ffmpeg_resolver import ffprobe_path
+        return ffprobe_path()
+    except Exception:
+        return shutil.which("ffprobe")
+
 
 def _ffmpeg_available() -> bool:
-    return shutil.which("ffmpeg") is not None
+    return _ffmpeg_exe() is not None
 
 
 def probe_audio_duration_ms(path: str) -> Optional[int]:
@@ -33,7 +51,8 @@ def probe_audio_duration_ms(path: str) -> Optional[int]:
 
     LINE 音频消息（``audio``）要求 ``duration`` 毫秒整数；官方通道语音出站据此填值。
     """
-    if shutil.which("ffprobe") is None:
+    _probe = _ffprobe_exe()
+    if _probe is None:
         return None
     p = Path(path)
     if not p.is_file():
@@ -41,7 +60,7 @@ def probe_audio_duration_ms(path: str) -> Optional[int]:
     try:
         r = subprocess.run(
             [
-                "ffprobe", "-v", "error",
+                _probe, "-v", "error",
                 "-show_entries", "format=duration",
                 "-of", "default=noprint_wrappers=1:nokey=1",
                 str(p),
@@ -74,7 +93,8 @@ def convert_to_ogg_opus(
     ``application``：``voip``=Telegram 语音条稳态（默认）；``audio``=音乐档，
     频带更宽、听感更「立体」（Phase D 活人感，部分客户端波形同样正常）。
     """
-    if not _ffmpeg_available():
+    _ff = _ffmpeg_exe()
+    if _ff is None:
         logger.warning("[voice_sender] ffmpeg not found — OGG conversion skipped")
         return None
 
@@ -106,7 +126,7 @@ def convert_to_ogg_opus(
         # 48k 采样 + 单声道 + application 档（voip/audio）
         r = subprocess.run(
             [
-                "ffmpeg", "-y",
+                _ff, "-y",
                 "-i", str(src),
                 "-c:a", "libopus",
                 "-b:a", "48k",
@@ -165,6 +185,7 @@ async def send_telegram_voice(
     duration: Optional[int] = None,
     reply_to_message_id: Optional[int] = None,
     opus_application: str = "voip",
+    caption: Optional[str] = None,
 ) -> Any:
     """Send a voice note via ``pyrogram client.send_voice()``.
 
@@ -203,6 +224,8 @@ async def send_telegram_voice(
         send_kw["duration"] = int(duration)
     if reply_to_message_id is not None:
         send_kw["reply_to_message_id"] = int(reply_to_message_id)
+    if caption:
+        send_kw["caption"] = str(caption)
 
     try:
         msg = await _invoke_on_client_loop(client, send_kw)
@@ -235,7 +258,14 @@ _CROSS_LOOP_SEND_TIMEOUT_SEC = 180.0
 
 
 async def _invoke_on_client_loop(client: Any, send_kw: dict) -> Any:
-    client_loop = getattr(client, "loop", None)
+    # 2026-08-21 B14：改经 client_bound_loop 解析（session.loop 才是真身，
+    # Client.loop 构造/启动分环时撒谎；解析点还会把它扶正——save_file 内部
+    # 用 Client.loop 起上传 worker，不扶正则封送对了照样跨环炸 Queue）。
+    try:
+        from src.integrations.telegram_companion_worker import client_bound_loop
+        client_loop = client_bound_loop(client)
+    except Exception:
+        client_loop = getattr(client, "loop", None)
     try:
         running = asyncio.get_running_loop()
     except RuntimeError:

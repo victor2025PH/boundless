@@ -51,6 +51,11 @@ def send_gate_snapshot(
       因额度让路（人工仍可发时横幅据此显示「AI 已让路，余量专供人工」）。
     - ``frees_at``：额度拦截（warmup_cap）时首个空位的预计释放时刻（epoch
       秒；算不出 → None）。
+    - ``kill``（P0 2026-08-23 急停归因可见化）：Kill-Switch 拦截时附
+      ``{scope, source: auto|manual, cause, actor, expires_at}``——横幅据此分
+      「系统自动风控（PeerFlood…）+ 倒计时」vs「管理员手动冻结」，不再一律
+      说「运营手动」（自动置位被错误归因是实录误导事故）。取不到详情时缺省
+      不带该键，前端回落通用文案（旧后端兼容＝feat 特性探测同哲学）。
     - 返回 None ＝ 护栏没拦且闸门未启用——调用方（横幅/搭便车字段）直接略过。
     """
     p = str(platform or "").lower()
@@ -123,14 +128,36 @@ def send_gate_snapshot(
         logger.debug("[send-gate-status] 额度数字取数失败（忽略）", exc_info=True)
         quota = quota or None
 
+    kill: Optional[Dict[str, Any]] = None
+    if blocked and str(reason or "").startswith("kill_switch"):
+        try:
+            from src.ops.kill_switch import active_record, freeze_source
+            rec = active_record(p, a, now=now)
+            if rec:
+                source, cause = freeze_source(rec.get("actor"), rec.get("reason"))
+                kill = {
+                    "scope": str(rec.get("scope") or ""),
+                    "source": source,
+                    "cause": cause,
+                    "actor": str(rec.get("actor") or ""),
+                    "expires_at": float(rec.get("expires_at") or 0) or None,
+                }
+        except Exception:
+            logger.debug("[send-gate-status] 急停详情取数失败（回落通用文案）",
+                         exc_info=True)
+            kill = None
+
     if not blocked and quota is None:
         return None
-    return {
+    out: Dict[str, Any] = {
         "blocked": bool(blocked),
         "reason": str(reason or ""),
         "quota": quota,
         "frees_at": frees_at,
     }
+    if kill:
+        out["kill"] = kill
+    return out
 
 
 def blocked_reason_key(reason: str) -> str:

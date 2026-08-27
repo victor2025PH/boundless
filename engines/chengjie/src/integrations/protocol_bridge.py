@@ -73,10 +73,122 @@ def media_preview_text(text: str, media_type: str) -> str:
     return f"{media_placeholder(media_type)} {t}"
 
 
+def legacy_protocol_media_root() -> Path:
+    """旧协议媒体根：引擎代码树 ``src/web/static/protocol_media``。
+
+    仅两个用途：``migrate_legacy_protocol_media`` 的搬迁源 + 无数据根契约时的回落。
+    业务代码一律走 ``protocol_media_root()``，别直接引用这里。
+    """
+    return Path(__file__).resolve().parents[1] / "web" / "static" / _STATIC_MEDIA_SUBDIR
+
+
+def _media_data_root() -> Optional[Path]:
+    """实例数据根（媒体落点用），与 ``licensing.data_paths.config_dir()`` 同一契约。
+
+    ``AITR_CONFIG_PATH``（config.yaml 路径 → 其 config 目录的父级＝数据根）优先，
+    其次 ``AITR_DATA_DIR``（生产双实例 start_*.ps1 注入的就是它）；两者都没有
+    （裸开发机/旧单实例形态）返回 None。环境变量畸形一律按无契约处理——媒体根
+    解析在收发热路径上，绝不抛。
+    """
+    try:
+        env_cfg = (os.environ.get("AITR_CONFIG_PATH") or "").strip()
+        if env_cfg:
+            return Path(env_cfg).expanduser().parent.parent
+        env_dir = (os.environ.get("AITR_DATA_DIR") or "").strip()
+        if env_dir:
+            return Path(env_dir).expanduser()
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def protocol_media_root() -> Path:
-    """协议媒体落地根目录：``src/web/static/protocol_media``（按需创建）。"""
-    root = Path(__file__).resolve().parents[1] / "web" / "static" / _STATIC_MEDIA_SUBDIR
-    return root
+    """协议媒体落地根目录（父目录按需创建由写入方负责）。
+
+    2026-08-19（账号资产 P0）起迁**实例数据根** ``<数据根>/protocol_media``：
+    旧根在引擎代码树 static/ 下——实例备份（``instance_backup`` denylist 只打包
+    数据根）永远带不走媒体、多实例共用引擎树时媒体混居、封号后「历史可读」的
+    承诺对媒体不成立。数据根契约下媒体随实例走并自动进备份包。
+
+    URL 命名空间**不变**（``/static/protocol_media/...``）：admin.py 对该前缀有
+    专属挂载 ``ProtocolMediaStatic``（本根优先、旧根兜底），存量 media_ref 零改写。
+    无数据根契约时回落旧引擎树位置＝旧行为（裸开发机零感知）。
+    """
+    d = _media_data_root()
+    if d is not None:
+        return d / _STATIC_MEDIA_SUBDIR
+    return legacy_protocol_media_root()
+
+
+def migrate_legacy_protocol_media() -> Dict[str, int]:
+    """把旧引擎树媒体逐文件搬进数据根（幂等 best-effort；无契约=no-op）。
+
+    ⚠ **只允许从 main.py 真实服务启动路径调用**（后台 daemon 线程）——绝不许挂在
+    app 装配路径上：pytest 也会装配 app，而测试态 ``AITR_DATA_DIR`` 指向即弃 tmp，
+    在那里触发会把生产机引擎树里的真实媒体搬进临时目录（「测试写生产文件」同族
+    事故，本仓已踩过三次）。
+
+    冲突语义：目标已存在 → 跳过并**保留**源文件（绝不删数据；读取以新根优先，
+    残留旧件由专属挂载兜底服务）。单文件失败不挡整批，下次启动重试。多实例共用
+    引擎树时先启动的实例收走全部旧件（当前生产仅智聊单活，通译已退役）。
+    """
+    stats = {"moved": 0, "skipped": 0, "failed": 0}
+    try:
+        src = legacy_protocol_media_root()
+        dst = protocol_media_root()
+        if not src.is_dir() or str(src) == str(dst):
+            return stats
+        import shutil
+        for p in sorted(src.rglob("*")):
+            if not p.is_file():
+                continue
+            target = dst / p.relative_to(src)
+            try:
+                if target.exists():
+                    stats["skipped"] += 1
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(p), str(target))
+                stats["moved"] += 1
+            except Exception:  # noqa: BLE001 - 单文件失败不挡整批
+                stats["failed"] += 1
+        # 清空壳目录（自底向上；非空 rmdir 自然失败＝保留）
+        for d in sorted((x for x in src.rglob("*") if x.is_dir()), reverse=True):
+            try:
+                d.rmdir()
+            except OSError:
+                pass
+    except Exception:  # noqa: BLE001
+        logger.debug("protocol_media 旧根迁移异常（忽略，下次启动重试）",
+                     exc_info=True)
+    return stats
+
+
+def protocol_media_roots() -> Tuple[Path, ...]:
+    """协议媒体**读取**根（主根优先，旧引擎树根兜底；无契约时只有一个）。
+
+    落地（写）永远只用 ``protocol_media_root()``；读要双根，因为同一时刻磁盘上
+    可能两处都有货：
+
+    - 开机迁移器把存量搬进主根，但**冲突文件刻意保源**（旧根残留）；
+    - 更要紧的：Node 边车（whatsapp-baileys / messenger-web）历史上把入站媒体
+      写进旧根，2026-08-20 才随本批改指向数据根——线上仍有「主根没有、旧根有」
+      的入站媒体（实锤：一条客户语音落旧根，ASR 在主根找不到 → 无兜底纪律拦下
+      整条回复，见 ``docs`` 与 delivery_block ``media_missing``）。
+
+    ``admin.py::ProtocolMediaStatic`` 的双根静态服务是同一语义——**别再让读侧
+    单根**：单根读 + 双根 serve 的组合会造成「坐席听得见、后端识别不到」这种
+    最难查的分叉（UI 正常，只是 AI 不说话）。
+    """
+    roots: List[Path] = []
+    for fn in (protocol_media_root, legacy_protocol_media_root):
+        try:
+            p = fn()
+        except Exception:  # noqa: BLE001 - 根解析在收发热路径上，绝不抛
+            continue
+        if str(p) not in {str(x) for x in roots}:
+            roots.append(p)
+    return tuple(roots)
 
 
 def static_media_ref_to_path(media_ref: str) -> Optional[str]:
@@ -84,14 +196,25 @@ def static_media_ref_to_path(media_ref: str) -> Optional[str]:
     返回其本进程可读的本地绝对路径；否则返回 None（非 protocol 媒体，交由原逻辑）。
 
     供媒体识别翻译端点把 URL 形态的 ref 解析成本地文件（OCR/ASR 的前提）。
-    路径穿越由调用方的 base_dirs 容纳检查兜底。
+    **按 ``protocol_media_roots()`` 逐根找存在的那个**；都不存在时返回主根路径
+    （保持旧语义：调用方自己 ``isfile`` 判假，报错信息仍指向主根＝该在的地方）。
+    路径穿越由调用方的容纳检查兜底——容纳检查也必须用 ``protocol_media_roots()``，
+    否则这里解析出的旧根命中会被守卫当穿越拒掉（比找不到更难查）。
     """
     ref = str(media_ref or "")
     prefix = f"/static/{_STATIC_MEDIA_SUBDIR}/"
     if not ref.startswith(prefix):
         return None
     rel = ref[len(prefix):]
-    return str(protocol_media_root() / rel)
+    roots = protocol_media_roots()
+    for root in roots:
+        cand = root / rel
+        try:
+            if cand.is_file():
+                return str(cand)
+        except OSError:
+            continue
+    return str((roots[0] if roots else protocol_media_root()) / rel)
 
 
 def media_paths(platform: str, name: str, ext: str) -> Tuple[Path, str]:
@@ -345,6 +468,44 @@ def report_read_upto(
         return 0
 
 
+def report_deleted_messages(
+    platform: str, account_id: str, platform_msg_ids: Any, *,
+    chat_key: str = "",
+) -> int:
+    """B87（实施68）：对端在手机上删了消息 → 工作台镜像同步软删。
+
+    Telegram 的 ``UpdateDeleteMessages`` 只带裸 message id（私聊/小群无 chat id），
+    ``UpdateDeleteChannelMessages`` 带 channel_id → 传 chat_key 收窄。软删（数据保留、
+    deleted_by=peer）：界面同步删，AI 记忆保留但按钧口径**不主动提已删内容**
+    （生成守卫另立，见 memory_grounding/skill_manager）。发 ``messages_deleted``
+    SSE 让所有工作台窗口即时同步。best-effort：返回软删条数，异常/未就绪返回 0。
+    """
+    ids = [str(i) for i in (platform_msg_ids or []) if str(i or "").strip()]
+    if not ids:
+        return 0
+    store = get_inbox_store()
+    if store is None:
+        return 0
+    try:
+        n = int(store.soft_delete_by_platform_msg_ids(
+            platform, account_id, ids, chat_key=str(chat_key or ""),
+            deleted_by="peer"))
+    except Exception:
+        logger.debug("[protocol_bridge] 对端删除同步软删失败", exc_info=True)
+        return 0
+    if n:
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("messages_deleted", {
+                "platform": str(platform or "").lower(),
+                "account_id": str(account_id or ""),
+                "chat_key": str(chat_key or ""),
+                "op": "peer_delete", "count": n})
+        except Exception:
+            logger.debug("[protocol_bridge] 删除同步 SSE 发布失败", exc_info=True)
+    return n
+
+
 def tg_peer_to_chat_key(peer: Any) -> str:
     """把 pyrogram raw Peer（``PeerUser``/``PeerChat``/``PeerChannel``）归一为收件箱 chat_key
     （= pyrogram ``chat.id`` 的字符串形态：用户正数 / 群负数 / 频道 -100 前缀）。
@@ -500,10 +661,18 @@ def ingest_incoming(
             src["mentions"] = _ml
     # P4-11E：群发言人结构化落库（替代把「发言人：」拼进正文）——消息正文保持干净，
     # 供气泡上方显示发言人名 + 稳定色。
-    _sender_name = str(sender_name or "").strip()
-    _sender_id = str(sender_id or "").strip()
-    if _sender_id or _sender_name:
+    # ⚠ 关键字**或** source 都算（P1 2026-08-20）：本函数有两类调用方——显式传关键字的
+    # （编排器出站/WA 边车）和把字段塞 source 的（A 线 telegram_client._emit_inbox、
+    # tg_message_payload）。旧实现只认关键字，于是 source 派的调用方虽然把 sender_name
+    # 落进了库（ingest 那边读的是 src），却拿不到下面的会话列表发言人前缀——同一个字段
+    # 一半生效一半不生效。另：旧实现 `if _sender_id or _sender_name` 会把两个键**都**
+    # 覆写，只给 sender_id 时会把 source 里已有的名字擦成空串（错名不如缺名，但擦掉真名
+    # 更糟）。现在各键独立、非空才写。
+    _sender_name = str(sender_name or src.get("sender_name") or "").strip()
+    _sender_id = str(sender_id or src.get("sender_id") or "").strip()
+    if _sender_id:
         src["sender_id"] = _sender_id
+    if _sender_name:
         src["sender_name"] = _sender_name
     if msg_id:
         src.setdefault("message_id", str(msg_id))
@@ -542,7 +711,10 @@ def ingest_incoming(
         chat["last_msg"] = media_preview_text(text, media_type)
     # P4-11E：群入站会话列表预览前缀发言人名（「张三：早上好」，对齐官方群聊列表），
     # 只改**会话预览** last_msg，不动**消息正文**（气泡正文保持干净，发言人走结构化字段）。
-    if direction == "in" and str(chat_type or "") == "group" and _sender_name:
+    # 判「是不是群」用 normalize_chat 已算好的 chat["chat_type"]（它同时吃关键字与
+    # source，还含 TG 负数 chat_id 启发式）——别再单看关键字，那会漏掉 source 派调用方。
+    if (direction == "in" and _sender_name
+            and str(chat.get("chat_type") or "") == "group"):
         _base = str(chat.get("last_msg") or "")
         chat["last_msg"] = f"{_sender_name}：{_base}" if _base else _sender_name
     try:
@@ -691,6 +863,17 @@ def tg_message_payload(
 
     会话身份取自 ``message.chat``（私聊即对端本人，群/频道即群名）——组装 first+last 全名、
     ``@username``、电话，落库后列表/头部/客户信息面板显示真实昵称，替代裸 chat_id。
+
+    **群语义随消息走**（P1 2026-08-20，复核 CLI 实测发现的断链）：此前本函数既不带
+    ``chat_type`` 也不带发言人——协议线 15 个群、数百条入站消息，``messages.sender_name``
+    **全库为空**（``python tools/group_inference_review.py`` 一眼看到 12 个群
+    ``发言人=0``）。后果是两层：① 群气泡的发言人名/头像色（P4-11E 结构化字段）在
+    最大的真群来源上**没有数据可渲染**，群里所有人看着像同一个人说话；② 会话的
+    ``chat_type=group`` 全靠 ``telegram_directory_sync`` 的群名单占位补，目录同步没
+    覆盖到的群（新入群、私有群）消息会被当私聊——群闸/群护栏整套形同虚设。
+    现在群/频道消息显式带 ``chat_type`` + ``sender_id``/``sender_name``；**私聊刻意
+    不带发言人**（``normalizer`` 语义「空＝非群」，且私聊发言人就是会话本人＝纯冗余），
+    与 A 线镜像（``telegram_client._emit_inbox``）同一口径。
     """
     chat = getattr(message, "chat", None)
     chat_id = getattr(chat, "id", None)
@@ -698,6 +881,10 @@ def tg_message_payload(
         return None
     ident = tg_peer_identity(chat)
     name = ident["name"] or str(chat_id)
+    from src.client.reply_logic_gates import normalize_chat_type
+    _ctype = normalize_chat_type(getattr(chat, "type", ""))
+    _is_group = _ctype in ("group", "supergroup", "megagroup", "gigagroup")
+    _is_channel = _ctype == "channel"
     text = getattr(message, "text", None) or getattr(message, "caption", None) or ""
     # Phase4：B 线贴纸/emoji 语义与 A 线同口径 → inbound_enrich 可解析 [表情] 块
     if getattr(message, "sticker", None) is not None and not str(text).strip():
@@ -721,6 +908,20 @@ def tg_message_payload(
             _src["file_name"] = _fn
         if _sz > 0:
             _src["file_size"] = _sz
+    if _is_group or _is_channel:
+        _src = _src or {}
+        _src["chat_type"] = "channel" if _is_channel else "group"
+        # 发言人：私聊号用 from_user；频道播报/匿名管理员用 sender_chat（那条消息
+        # 的署名主体就是频道/群本身）。两者都取不到就不写——宁缺名不错名。
+        _speaker = (getattr(message, "from_user", None)
+                    or getattr(message, "sender_chat", None))
+        if _speaker is not None:
+            _sname = sanitize_peer_name(tg_peer_identity(_speaker)["name"])
+            _sid = str(getattr(_speaker, "id", "") or "")
+            if _sid:
+                _src["sender_id"] = _sid
+            if _sname:
+                _src["sender_name"] = _sname
     return make_message(
         platform="telegram", account_id=str(account_id), chat_key=str(chat_id),
         name=str(name), text=str(text), ts=ts,
@@ -782,6 +983,11 @@ def history_message_obj(payload: Optional[Dict[str, Any]], message: Any) -> Dict
       ``media_ref`` 留空）——工作台按形态卡渲染并给出「拉取原件」入口
       （``/api/platforms/telegram/{acct}/fetch-media`` 按行回填），替代纯占位文字。
       占位文本保留（会话预览与旧口径一致；气泡层 ``_dropBarePlaceholder`` 会剥掉）。
+    - **发言人随历史走**（P1 2026-08-20）：``source`` 除 ``id`` 外还带
+      ``sender_id``/``sender_name``（``ingest._msg_from_obj`` 读的就是这两个键）。
+      漏掉它们时，实时链修好了也只覆盖「修复之后新收到的」——群历史（深度回填/
+      账号级同步，实测是库里群消息的绝大多数来源）仍整片没有发言人，坐席翻群历史
+      看着像同一个人自言自语。
     """
     text = str((payload or {}).get("text") or "")
     meta = tg_media_meta(message)
@@ -790,10 +996,19 @@ def history_message_obj(payload: Optional[Dict[str, Any]], message: Any) -> Dict
     if not text:
         return {}
     mid = str((payload or {}).get("msg_id") or "")
+    _psrc = (payload or {}).get("source")
+    _psrc = _psrc if isinstance(_psrc, dict) else {}
+    _src: Dict[str, Any] = {}
+    if mid:
+        _src["id"] = mid
+    for _k in ("sender_id", "sender_name"):
+        _v = str(_psrc.get(_k) or "").strip()
+        if _v:
+            _src[_k] = _v
     return message_obj(
         text=text, ts=(payload or {}).get("ts") or 0,
         direction=str((payload or {}).get("direction") or "in"),
-        message_id=mid, source={"id": mid} if mid else {},
+        message_id=mid, source=_src,
         media_type=(meta[0] if meta else ""),
     )
 
@@ -806,12 +1021,18 @@ def tg_chat_dict(
 
     身份取自 ``tg_peer_identity``；``chat.type``（pyrogram ChatType 枚举）经 source
     交由 ``infer_chat_type`` 归一（supergroup→group 等）。无 id → None。
+
+    类型归一走 ``normalize_chat_type``（与 ``tg_message_payload`` 同一函数）：旧实现
+    只取枚举 ``.value``，纯字符串 ``type``（旧版 pyrogram / duck-typed）取不到 → 落
+    ``infer_chat_type`` 的负数启发式，而那条启发式把 **频道也判成群**（``-100`` 前缀
+    同样是负数）。频道当群 → 群闸/群护栏对着一个只能读的广播会话空转。
     """
     chat_id = getattr(chat, "id", None)
     if chat_id is None:
         return None
     ident = tg_peer_identity(chat)
-    ctype = str(getattr(getattr(chat, "type", None), "value", "") or "").lower()
+    from src.client.reply_logic_gates import normalize_chat_type
+    ctype = normalize_chat_type(getattr(chat, "type", ""))
     return normalize_chat(
         platform="telegram",
         platform_name=PLATFORM_DISPLAY.get("telegram", "Telegram"),
@@ -1051,4 +1272,73 @@ async def deep_backfill_tg_history(
     _flush()
     stats["exhausted"] = stats["fetched"] < int(max_messages)
     _report()
+    return stats
+
+
+async def probe_fill_tg_gap(
+    client: Any, account_id: str, chat_key: str, *,
+    mirror_max_id: int, cap: int = 300,
+    ingest: Optional[Callable[[Dict[str, Any], List[Dict[str, Any]]], Any]] = None,
+) -> Dict[str, Any]:
+    """B88 线程缺口探测+补拉：newest-first 拉云端历史，遇到镜像已有的 id 即停。
+
+    重启/停机窗口期间到达的消息不在实时镜像里，就是 ``(mirror_max_id, 云端顶部]``
+    这一段；本函数把这段补进镜像（ingest 按 platform_msg_id 去重，重复零成本），
+    打开会话的读取链因此不再冻结在「重启前最后一条」。
+
+    返回 ``{"top_id", "gap", "fetched", "inserted", "capped"}``：
+    - ``top_id``＝云端顶部消息 id（0=会话无历史/取不到）；
+    - ``gap``＝顶部 id > mirror_max_id（镜像确实落后于云端）；
+    - ``capped``＝拉满 ``cap`` 仍没接上镜像（超长停机窗）——中段仍缺，调用方
+      必须显式提示（禁止装作补完），深段走既有 deep-backfill；
+    - ``mirror_max_id<=0``（镜像无数字 id 的冷会话）→ 只补最近一小页
+      （min(cap, 50)），别把「打开会话」放大成深同步。
+    """
+    stats: Dict[str, Any] = {
+        "top_id": 0, "gap": False, "fetched": 0, "inserted": 0, "capped": False,
+    }
+    if client is None or not chat_key:
+        return stats
+    peer: Any = chat_key
+    try:
+        peer = int(chat_key)
+    except (TypeError, ValueError):
+        peer = chat_key
+    mmax = int(mirror_max_id or 0)
+    limit = max(1, int(cap or 300)) if mmax > 0 else min(max(1, int(cap or 300)), 50)
+    chat_obj: Any = None
+    batch: List[Dict[str, Any]] = []
+    seen = 0
+    async for message in client.get_chat_history(peer, limit=limit):
+        mid = int(getattr(message, "id", 0) or 0)
+        if stats["top_id"] == 0 and mid > 0:
+            stats["top_id"] = mid
+        if mmax > 0 and mid > 0 and mid <= mmax:
+            break   # 接上镜像：缺口段已全部收集
+        seen += 1
+        stats["fetched"] += 1
+        if chat_obj is None:
+            chat_obj = getattr(message, "chat", None)
+        payload = tg_message_payload(message, account_id)
+        if payload is not None:
+            obj = history_message_obj(payload, message)
+            if obj:
+                batch.append(obj)
+    else:
+        # 生成器耗尽而非 break 退出：拉满 limit 还没接上镜像 = 缺口比 cap 深
+        stats["capped"] = bool(mmax > 0 and seen >= limit)
+    stats["gap"] = bool(stats["top_id"] > mmax)
+    if batch and chat_obj is not None and ingest is not None:
+        newest = max(batch, key=lambda m: float(m.get("ts") or 0))
+        chat = tg_chat_dict(
+            chat_obj, account_id,
+            last_msg=str(newest.get("text") or ""),
+            last_ts=float(newest.get("ts") or 0),
+        )
+        if chat is not None:
+            try:
+                stats["inserted"] = int(ingest(chat, batch) or 0)
+            except Exception:
+                logger.debug("[protocol_bridge] 缺口补拉 ingest 失败（已跳过）",
+                             exc_info=True)
     return stats

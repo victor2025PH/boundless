@@ -360,3 +360,209 @@ def test_supervisor_roles_constants_synced():
     assert "supervisor" in drafts_roles
     assert {"master", "admin"} <= inbox_roles
     assert {"master", "admin"} <= drafts_roles
+
+
+# ─────────────────────────────────────────────────────────
+# 坐席 Telegram 通知号绑定（P2 2026-08-18：目标达成定向副本的收件地址）
+# ─────────────────────────────────────────────────────────
+
+class TestNotifyBindingStore:
+    def test_column_default_and_listing(self, tmp_path):
+        store = WebUserStore(tmp_path / "users.db")
+        u = store.create_user("nb01", "pass123456", "agent")
+        assert u["notify_tg_chat_id"] == ""
+        assert all("notify_tg_chat_id" in r for r in store.list_users())
+        assert "notify_tg_chat_id" in store.get_user_by_id(u["id"])
+
+    def test_update_sanitizes(self, tmp_path):
+        store = WebUserStore(tmp_path / "users.db")
+        u = store.create_user("nb02", "pass123456", "agent")
+        # 正数 / 负数（群）/ 前后空白 → 接受并归一
+        for raw, want in (("5433982810", "5433982810"),
+                          ("-100123", "-100123"),
+                          ("  42 ", "42")):
+            store.update_user(u["id"], notify_tg_chat_id=raw)
+            assert store.get_user("nb02")["notify_tg_chat_id"] == want
+        # 脏值（字母/@名/超长/中置负号）→ 忽略不写（保留旧值）
+        for bad in ("@boss", "12a3", "1" * 21, "12-3"):
+            store.update_user(u["id"], notify_tg_chat_id=bad)
+            assert store.get_user("nb02")["notify_tg_chat_id"] == "42", bad
+        # 空串 = 解绑
+        store.update_user(u["id"], notify_tg_chat_id="")
+        assert store.get_user("nb02")["notify_tg_chat_id"] == ""
+
+
+class TestNotifyBindingRoute:
+    def test_admin_binds_agent_ok(self, admin_client, config_dir):
+        store = WebUserStore(config_dir / "web_users.db")
+        ag = store.create_user("nbagent", "pass123456", "agent")
+        r = admin_client.post(
+            f"/users/notify-binding/{ag['id']}",
+            data={"tg_chat_id": "5433982810"},
+            headers={"Accept": "application/json"})
+        assert r.status_code == 200
+        assert r.json() == {"ok": True, "tg_chat_id": "5433982810"}
+        assert store.get_user("nbagent")["notify_tg_chat_id"] == "5433982810"
+        # 空串保存 = 解绑
+        r2 = admin_client.post(
+            f"/users/notify-binding/{ag['id']}",
+            data={"tg_chat_id": ""},
+            headers={"Accept": "application/json"})
+        assert r2.status_code == 200 and r2.json()["tg_chat_id"] == ""
+
+    def test_bad_chat_id_400(self, admin_client, config_dir):
+        store = WebUserStore(config_dir / "web_users.db")
+        ag = store.create_user("nbagent2", "pass123456", "agent")
+        r = admin_client.post(
+            f"/users/notify-binding/{ag['id']}",
+            data={"tg_chat_id": "@boss"},
+            headers={"Accept": "application/json"})
+        assert r.status_code == 400
+        assert store.get_user("nbagent2")["notify_tg_chat_id"] == ""
+
+    def test_admin_cannot_bind_peer_admin(self, admin_client, config_dir):
+        store = WebUserStore(config_dir / "web_users.db")
+        peer = store.create_user("nbpeeradmin", "pass123456", "admin")
+        r = admin_client.post(
+            f"/users/notify-binding/{peer['id']}",
+            data={"tg_chat_id": "1"},
+            headers={"Accept": "application/json"})
+        assert r.status_code == 403
+
+    def test_agent_role_denied(self, agent_client, config_dir):
+        store = WebUserStore(config_dir / "web_users.db")
+        ag = store.create_user("nbagent3", "pass123456", "agent")
+        r = agent_client.post(
+            f"/users/notify-binding/{ag['id']}",
+            data={"tg_chat_id": "7"},
+            headers={"Accept": "application/json"},
+            follow_redirects=False)
+        # require_role 对无权角色是重定向（HTML 语义）而非 403——跟随后会拿到
+        # 200 落地页；真正的不变量是绑定绝不落库
+        assert r.status_code in (302, 303, 307, 403)
+        assert store.get_user("nbagent3")["notify_tg_chat_id"] == ""
+
+
+# ─────────────────────────────────────────────────────────
+# 坐席自助绑定 + 测试推送（P3 2026-08-18：/api/workspace/my-notify-binding*）
+# api_auth choke point：agent 白名单放行 /api/workspace 前缀——坐席自己就能绑，
+# 不再卡在「找管理员代绑」。测试推送借告警渠道 bot 真发（这里全程 mock HTTP）。
+# ─────────────────────────────────────────────────────────
+
+class TestSelfNotifyBinding:
+    def test_agent_self_bind_get_roundtrip(self, agent_client, config_dir):
+        store = WebUserStore(config_dir / "web_users.db")
+        r0 = agent_client.get(
+            "/api/workspace/my-notify-binding",
+            headers={"Accept": "application/json"})
+        assert r0.status_code == 200
+        d0 = r0.json()
+        assert d0["ok"] is True and d0["username"] == "teamagent"
+        assert d0["bound"] is False and d0["chat_tail"] == ""
+        r1 = agent_client.post(
+            "/api/workspace/my-notify-binding",
+            data={"tg_chat_id": "5433982810"},
+            headers={"Accept": "application/json"})
+        assert r1.status_code == 200 and r1.json()["bound"] is True
+        assert store.get_user("teamagent")["notify_tg_chat_id"] == "5433982810"
+        d2 = agent_client.get(
+            "/api/workspace/my-notify-binding",
+            headers={"Accept": "application/json"}).json()
+        # 响应只回尾 4 位（页面显示够用，全量号不外传）
+        assert d2["bound"] is True and d2["chat_tail"] == "2810"
+        # 空串=解绑
+        r3 = agent_client.post(
+            "/api/workspace/my-notify-binding", data={"tg_chat_id": ""},
+            headers={"Accept": "application/json"})
+        assert r3.status_code == 200 and r3.json()["bound"] is False
+
+    def test_self_bind_bad_id_400(self, agent_client, config_dir):
+        store = WebUserStore(config_dir / "web_users.db")
+        r = agent_client.post(
+            "/api/workspace/my-notify-binding",
+            data={"tg_chat_id": "@boss"},
+            headers={"Accept": "application/json"})
+        assert r.status_code == 400
+        assert store.get_user("teamagent")["notify_tg_chat_id"] == ""
+
+    def test_test_push_flows(self, agent_client, config_dir, monkeypatch):
+        from src.inbox.webhook_notifier import WebhookNotifier
+        from src.integrations import notify_webhooks_store as nws
+        store = WebUserStore(config_dir / "web_users.db")
+        # ① 未绑定 → 400
+        monkeypatch.setattr(
+            nws, "effective_webhooks",
+            lambda cfg: [{"name": "tg-ops", "format": "telegram",
+                          "token": "T", "target": "111", "enabled": True,
+                          "events": ["goal_complete"]}])
+        r0 = agent_client.post(
+            "/api/workspace/my-notify-binding/test",
+            headers={"Accept": "application/json"})
+        assert r0.status_code == 400
+        # ② 绑定 + mock HTTP → 200 且真调了 sendMessage 端点、body 带 chat_id
+        agent_client.post(
+            "/api/workspace/my-notify-binding",
+            data={"tg_chat_id": "424242"},
+            headers={"Accept": "application/json"})
+        calls = []
+        monkeypatch.setattr(
+            WebhookNotifier, "_http_post",
+            staticmethod(lambda url, body, headers=None:
+                         calls.append((url, bytes(body)))))
+        r1 = agent_client.post(
+            "/api/workspace/my-notify-binding/test",
+            headers={"Accept": "application/json"})
+        assert r1.status_code == 200 and r1.json()["ok"] is True
+        assert len(calls) == 1
+        assert "api.telegram.org/botT/sendMessage" in calls[0][0]
+        assert b"424242" in calls[0][1]
+        # ③ 30s 防抖 → 429（同号立刻再测）
+        r2 = agent_client.post(
+            "/api/workspace/my-notify-binding/test",
+            headers={"Accept": "application/json"})
+        assert r2.status_code == 429
+        assert store.get_user("teamagent")["notify_tg_chat_id"] == "424242"
+
+    def test_test_push_no_channel_503(self, agent_client, monkeypatch):
+        from src.integrations import notify_webhooks_store as nws
+        monkeypatch.setattr(nws, "effective_webhooks", lambda cfg: [])
+        agent_client.post(
+            "/api/workspace/my-notify-binding",
+            data={"tg_chat_id": "77"},
+            headers={"Accept": "application/json"})
+        r = agent_client.post(
+            "/api/workspace/my-notify-binding/test",
+            headers={"Accept": "application/json"})
+        # 告警渠道没接通：诚实 503 指路接通面板，绝不装成功
+        assert r.status_code == 503
+
+    def test_admin_tests_agent_binding_with_guard(
+            self, admin_client, config_dir, monkeypatch):
+        from src.inbox.webhook_notifier import WebhookNotifier
+        from src.integrations import notify_webhooks_store as nws
+        store = WebUserStore(config_dir / "web_users.db")
+        ag = store.create_user("nbagent9", "pass123456", "agent")
+        store.update_user(ag["id"], notify_tg_chat_id="909090")
+        monkeypatch.setattr(
+            nws, "effective_webhooks",
+            lambda cfg: [{"name": "tg-ops", "format": "telegram",
+                          "token": "T", "target": "111", "enabled": True,
+                          "events": ["goal_complete"]}])
+        calls = []
+        monkeypatch.setattr(
+            WebhookNotifier, "_http_post",
+            staticmethod(lambda url, body, headers=None:
+                         calls.append(url)))
+        r = admin_client.post(
+            "/api/workspace/my-notify-binding/test",
+            data={"user_id": str(ag["id"])},
+            headers={"Accept": "application/json"})
+        assert r.status_code == 200 and len(calls) == 1
+        # 层级守卫：admin 不得代测平级 admin
+        peer = store.create_user("nbpeeradmin2", "pass123456", "admin")
+        store.update_user(peer["id"], notify_tg_chat_id="808080")
+        r2 = admin_client.post(
+            "/api/workspace/my-notify-binding/test",
+            data={"user_id": str(peer["id"])},
+            headers={"Accept": "application/json"})
+        assert r2.status_code == 403

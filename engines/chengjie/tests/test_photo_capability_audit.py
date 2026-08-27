@@ -140,7 +140,7 @@ def test_ops_card_wired():
     assert 'id="photoCapSection"' in html
     assert "renderPhotoCapability" in html
     # 零流量隐藏（bazi 惯例）
-    assert "if(!pc || !pc.active){ sec.style.display='none'; return; }" in html
+    assert "if(!pc || !pc.active){ opsHideCardEl(sec, 'photocap', 'disabled'); return; }" in html
     from src.web.web_i18n import get_translations
     for lang in ("zh", "en"):
         tr_map = get_translations(lang)

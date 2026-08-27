@@ -309,27 +309,35 @@ class GroupShowStore:
         return self._session_row_to_dict(row) if row is not None else None
 
     def recent_sessions(
-        self, *, group_key: str = "", limit: int = 20,
+        self, *, group_key: str = "", limit: int = 20, platform: str = "",
     ) -> List[Dict[str, Any]]:
-        """最近场次（按 ``started_at`` 降序）。``group_key`` 非空则只看该群。"""
+        """最近场次（按 ``started_at`` 降序）。
+
+        ``group_key`` / ``platform`` 非空则各自过滤、可独立组合（P0 多平台：导播台按
+        当前平台上下文只看该平台的场次；两者皆空＝全部，与旧行为一字不差）。
+        """
         if self._conn is None:
             return []
         n = max(1, min(_i(limit, 20) or 20, 500))
         gk = _s(group_key)
+        plat = _s(platform)
+        wheres: List[str] = []
+        params: List[Any] = []
+        if gk:
+            wheres.append("group_key = ?")
+            params.append(gk)
+        if plat:
+            wheres.append("platform = ?")
+            params.append(plat)
+        where_sql = (" WHERE " + " AND ".join(wheres)) if wheres else ""
+        params.append(n)
         try:
             with self._lock:
-                if gk:
-                    rows = self._conn.execute(
-                        "SELECT * FROM choreography_sessions WHERE group_key = ? "
-                        "ORDER BY started_at DESC, session_id DESC LIMIT ?",
-                        (gk, n),
-                    ).fetchall()
-                else:
-                    rows = self._conn.execute(
-                        "SELECT * FROM choreography_sessions "
-                        "ORDER BY started_at DESC, session_id DESC LIMIT ?",
-                        (n,),
-                    ).fetchall()
+                rows = self._conn.execute(
+                    "SELECT * FROM choreography_sessions" + where_sql +
+                    " ORDER BY started_at DESC, session_id DESC LIMIT ?",
+                    params,
+                ).fetchall()
         except Exception:  # noqa: BLE001
             logger.debug("[group_show.store] recent_sessions 失败（已忽略）", exc_info=True)
             return []

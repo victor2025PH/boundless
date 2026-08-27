@@ -84,6 +84,23 @@ def trailing_unanswered_texts(
     return tail[-max(0, int(max_texts)):]
 
 
+def trailing_unanswered_out_count(messages: List[Dict[str, Any]]) -> int:
+    """末尾「连续出站未获回应」的**消息条数**（时间升序输入；含媒体/空文本行）。
+
+    与 ``trailing_unanswered_texts`` 的区别：那个取**文案**做反复读负样本（跳过
+    空文本行），这个数**可见消息堆叠**做防刷屏墙——对方打开聊天看到的是几条
+    未回消息，媒体条同样占一行，必须一并计数。
+    """
+    n = 0
+    for m in reversed(messages or []):
+        if not isinstance(m, dict):
+            continue
+        if str(m.get("direction") or "") != "out":
+            break  # 一遇到入站 = 对方回过话，连发尾结束
+        n += 1
+    return n
+
+
 def trailing_unanswered_inbound(
     messages: List[Dict[str, Any]], *, max_texts: int = 2,
 ) -> List[str]:
@@ -168,6 +185,7 @@ __all__ = [
     "similarity",
     "most_similar",
     "trailing_unanswered_texts",
+    "trailing_unanswered_out_count",
     "trailing_unanswered_inbound",
     "rel_age_label",
     "format_recent_context",

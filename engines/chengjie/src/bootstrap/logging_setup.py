@@ -46,13 +46,17 @@ def setup_logging(assistant, log_config: dict) -> None:
                 console_handler.addFilter(throttle_filter)
             assistant.logger.addHandler(console_handler)
 
-        # 文件处理器（RotatingFileHandler 自动轮转）
+        # 文件处理器（轮转容忍句柄占用，2026-08-27 06:11 宕机事故沉淀：
+        # 外部 tail 工具占住 app.log → rename 永败 → 每条日志向 stderr 倒堆栈
+        # → 45min 1.5GB 拖死实例。Resilient 版 rename 失败降级 copytruncate、
+        # 再失败进 60s 冷却，风暴在结构上不可能；正常路径行为与原生逐字节一致）
         if log_file:
             os.makedirs(os.path.dirname(log_file), exist_ok=True)
-            from logging.handlers import RotatingFileHandler
+            from logging.handlers import RotatingFileHandler  # isinstance 去重仍用基类
+            from src.utils.resilient_logging import ResilientRotatingFileHandler
             max_bytes = int(log_config.get("max_size_mb", 10)) * 1024 * 1024
             backup_count = int(log_config.get("backup_count", 5))
-            file_handler = RotatingFileHandler(
+            file_handler = ResilientRotatingFileHandler(
                 log_file, maxBytes=max_bytes, backupCount=backup_count,
                 encoding='utf-8',
             )

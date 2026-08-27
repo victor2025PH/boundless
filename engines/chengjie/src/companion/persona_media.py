@@ -44,7 +44,11 @@ _SCENE_CLASS_WORDS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("park", ("park", "outdoor", "natural daylight", "公园", "公園", "户外", "戶外")),
     ("bedroom", ("bedroom", "卧室", "臥室", "床上")),
     ("library", ("library", "bookstore", "bookshel", "图书馆", "圖書館", "书店", "書店")),
-    ("street", ("street", "shopping", "night market", "逛街", "夜市", "街头", "街頭")),
+    # 实施69：烧烤/烤串/大排档并入 street（哈尔滨烧烤店老板娘人设的职业场景
+    # 此前词表全盲——人设媒体缺口体检与客户点名「发张烤串的」都定向不了）。
+    ("street", ("street", "shopping", "night market", "逛街", "夜市", "街头",
+                "街頭", "烧烤", "燒烤", "烤串", "撸串", "擼串", "大排档",
+                "大排檔", "路边摊", "路邊攤", "街边摊", "街邊攤")),
     ("campus", ("campus", "classroom", "校园", "校園", "教室")),
     ("restaurant", ("restaurant", "dinner table", "餐厅", "餐廳")),
     ("night_city", ("night lights", "night view", "city night", "夜景")),
@@ -176,6 +180,11 @@ _MEDIA_REQ_RE = re.compile(
     r"拍一?[张張个個]|"
     r"有[没沒]有.{0,8}(?:照片|相片|图|圖|视频|視頻|影片|自拍)|"
     r"(?:照片|相片|图片|圖片|视频|視頻|影片|自拍).{0,4}(?:有[吗嗎]|有[没沒])|"
+    # 实施69 P3 实测补漏：「大腰子照片呢？」这类**光杆催讨**（名词+照片+呢，
+    # 无看/发/拍动词）曾被 is_info_question 当成"问名词信息"→ 关键词池让路
+    # → 刚入册的库存发不出（试触发端到端实测抓到）。「X照片呢」语义上就是
+    # 在要图/催图，不是问「照片」是什么。
+    r"(?:照片|相片|图|圖|视频|視頻|影片|自拍)\s*[呢咧勒]|"
     r"show\s+me|send\s+(?:me\s+)?(?:a\s+)?(?:pic|photo|video|selfie)|"
     r"can\s+i\s+see|got\s+any",
     re.IGNORECASE)

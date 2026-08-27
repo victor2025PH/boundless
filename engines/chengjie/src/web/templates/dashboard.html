@@ -86,6 +86,8 @@ a.stat-card:hover .s-lbl::after{content:' →';color:var(--p)}
 a.tl-item,div.tl-item.ro-row{text-decoration:none;color:inherit;border-radius:8px;margin:0 -.4rem;padding:.6rem .4rem;transition:background .15s;cursor:pointer}
 a.tl-item:hover,div.tl-item.ro-row:hover{background:var(--input)}
 .ro-sum{font-size:.72rem;font-weight:400;color:var(--t3);margin-left:.5rem;white-space:nowrap}
+.ro-sum a{color:var(--t2);text-decoration:none}
+.ro-sum a:hover{text-decoration:underline}
 .ro-day{font-size:.7rem;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.04em;margin:.55rem 0 .15rem}
 .ro-day:first-of-type{margin-top:.1rem}
 .ro-count{display:inline-block;margin-left:.35rem;padding:.02rem .4rem;border-radius:99px;font-size:.7rem;font-weight:700;background:var(--ps);color:var(--p);vertical-align:1px}
@@ -149,6 +151,61 @@ a.tl-item:hover,div.tl-item.ro-row:hover{background:var(--input)}
   <div class="sys-pills" id="todo-pills"></div>
   <a href="/workspace" target="_blank" data-winname="workspace" onclick="return __openUnique(event,this)" class="btn btn-p btn-xs" style="flex-shrink:0">{{ (i18n or {}).get('db2_todo_workspace', "打开工作台") }} ↗</a>
 </div>
+
+<!-- 英雄区·本周 AI 价值（2026-08-21 老板拍板）：老板打开首屏 3 秒回答
+     「AI 本周替我干了什么」。数据=/api/report/weekly value 段，与 ops
+     价值周报卡同源同口径（含上周环比）；零流量/端点不可用整卡隐藏不出空壳。
+     待办条与健康卡本页已有，英雄区刻意只补这块缺口（不造第二张健康脸）。 -->
+<div id="dash-value-card" class="card fa fa1" style="display:none;margin-bottom:1rem;">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:.6rem;margin-bottom:.65rem;">
+    <span style="font-weight:700;font-size:.92rem;display:inline-flex;align-items:center;gap:.4rem;">🧾 {{ (i18n or {}).get('db2_val_title','本周 AI 价值') }}</span>
+    <a href="/admin/ops" style="font-size:.75rem;color:var(--p);text-decoration:none;">{{ (i18n or {}).get('db2_val_more','完整报表') }} →</a>
+  </div>
+  <div id="dash-value-kpis" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.6rem;"></div>
+</div>
+<script>
+(function(){
+  /* 环比小标：上周 0 → 标「新」；否则 ±% 着色（涨绿跌黄，与 ops 卡同语义） */
+  function _wow(cur,prev){
+    cur=Number(cur)||0;prev=Number(prev)||0;
+    if(prev<=0)return cur>0?'<span style="font-size:11px;color:var(--t3)"> ('+window.T('db2_val_new')+')</span>':'';
+    var pd=Math.round((cur-prev)/prev*100);
+    var col=pd>=0?'var(--green,#059669)':'var(--amber,#d97706)';
+    return '<span style="font-size:11px;color:'+col+'"> '+(pd>=0?'+':'')+pd+'%</span>';
+  }
+  function _kpi(label,val){
+    return '<div><div style="font-size:.72rem;color:var(--t3);">'+label+'</div>'
+      +'<div style="font-size:1.25rem;font-weight:700;margin-top:2px;">'+val+'</div></div>';
+  }
+  async function loadValueHero(){
+    var card=document.getElementById('dash-value-card');
+    var box=document.getElementById('dash-value-kpis');
+    if(!card||!box)return;
+    try{
+      var r=await apiFetch('/api/report/weekly',{credentials:'same-origin'});
+      if(!r.ok)return;
+      var d=await r.json();
+      var v=(d&&d.value)||{};
+      var tw=v.this_week||{},lw=v.last_week||{};
+      var dr=tw.drafts||{},o=tw.outreach||{},tr=tw.traffic||{};
+      var ld=lw.drafts||{},lo=lw.outreach||{},lt=lw.traffic||{};
+      var total=(Number(dr.created)||0)+(Number(o.sent)||0)+(Number(tr.messages_out)||0);
+      if(!v.this_week||total===0)return;   // 零流量不出空壳
+      var kpis=[
+        _kpi(window.T('db2_val_drafts'),(Number(dr.created)||0)+_wow(dr.created,ld.created)),
+        _kpi(window.T('db2_val_sent'),(Number(dr.sent)||0)+_wow(dr.sent,ld.sent)),
+        _kpi(window.T('db2_val_outreach'),(Number(o.sent)||0)+_wow(o.sent,lo.sent)),
+        _kpi(window.T('db2_val_reply'),(Number(o.response_rate)||0)+'%'),
+        _kpi(window.T('db2_val_out'),(Number(tr.messages_out)||0)+_wow(tr.messages_out,lt.messages_out)),
+        _kpi(window.T('db2_val_in'),(Number(tr.messages_in)||0))
+      ];
+      box.innerHTML=kpis.join('');
+      card.style.display='block';
+    }catch(e){}
+  }
+  loadValueHero();
+})();
+</script>
 <script>
 (function(){
   function pill(href,cls,label,n){
@@ -832,7 +889,9 @@ a.tl-item:hover,div.tl-item.ro-row:hover{background:var(--input)}
     {{ (i18n or {}).get('recent_ops', "最近操作") }}
     {% if audit_today is defined and audit_today and audit_today.total %}
     {% set _sumfmt = (i18n or {}).get('aud_ui_today_fmt', "今日 {n} 次操作 · 含 {d} 次删除") if audit_today.danger else (i18n or {}).get('aud_ui_today_fmt0', "今日 {n} 次操作") %}
-    <span class="ro-sum">{{ _sumfmt.replace('{n}', audit_today.total|string).replace('{d}', audit_today.danger|string) }}</span>
+    {# 今日按族拆分（P4）：summarize_actions.families 前 3，点击直达 /audit?family=；
+       旧后端无 families 键 → 空列表 → 只显原摘要（热更中间态自洽） #}
+    <span class="ro-sum">{{ _sumfmt.replace('{n}', audit_today.total|string).replace('{d}', audit_today.danger|string) }}{% for f, c in (audit_today.families or [])[:3] %} · <a href="/audit?family={{ f }}" title="{{ (i18n or {}).get('em_s010', '筛选') }} family={{ f }}">{{ (i18n or {}).get('au_fam_' ~ f, f) }} {{ c }}</a>{% endfor %}</span>
     {% endif %}
     <div class="actions"><a href="/audit" class="btn btn-s btn-xs">{{ (i18n or {}).get('view_all', "查看全部") }}</a></div>
   </h2>
@@ -846,7 +905,7 @@ a.tl-item:hover,div.tl-item.ro-row:hover{background:var(--input)}
     {% set dc = 'ico-p' if g.icon == 'update' else ('ico-g' if g.icon == 'add' else ('ico-r' if g.icon == 'delete' else 'ico-a')) %}
     {% set _ro_href = "/audit?action=" ~ (g.action|urlencode) ~ (
       ("&channel=" ~ (g.targets_shown[0]|urlencode))
-      if (g.count == 1 and g.target_kind in ('generic', 'keyword') and g.targets_shown)
+      if (g.count == 1 and g.target_kind in ('generic', 'keyword', 'kv') and g.targets_shown)
       else ""
     ) %}
     <div class="tl-item ro-row{% if g.danger %} ro-danger{% endif %}"
@@ -863,18 +922,22 @@ a.tl-item:hover,div.tl-item.ro-row:hover{background:var(--input)}
           {%- elif g.snapshot %} <span class="ro-badge" title="{{ (i18n or {}).get('aud_ui_rollback_tip', "该操作留有配置快照，点击对比当前配置并可回滚") }}">{{ (i18n or {}).get('aud_ui_rollback', "可回滚") }}</span>{% endif %}
         </div>
         <div class="tl-meta">
-          {% if g.operator %}<span class="ro-av" style="background:hsl({{ g.hue }},52%,46%)">{{ g.operator[:1]|upper }}</span><span>{{ g.operator }}</span>{% endif %}
+          {% if g.operator %}{% set _opn = (operator_names or {}).get(g.operator, g.operator) %}<span class="ro-av" style="background:hsl({{ g.hue }},52%,46%)">{{ _opn[:1]|upper }}</span><span title="{{ g.operator }}">{{ _opn }}</span>{% endif %}
           {% if g.target_kind == 'memory' %}
           <span class="ro-tgt">{{ (i18n or {}).get('aud_ui_tgt_memory', "记忆") }} {% for t in g.targets_shown %}#{{ t }}{% if not loop.last %} {% endif %}{% endfor %}{% if g.targets_more %} +{{ g.targets_more }}{% endif %}</span>
           {% elif g.target_kind == 'keyword' %}
           <span class="ro-tgt">{{ (i18n or {}).get('aud_ui_tgt_keyword', "关键词") }}「{{ g.targets_shown[0] }}」</span>
           {% elif g.target_kind == 'identity' %}
           <span class="ro-tgt mono" title="{{ (i18n or {}).get('aud_ui_tgt_identity', "身份") }}">{{ g.targets_shown[0] }}</span>
+          {% elif g.target_kind == 'kv' and g.target_tokens %}
+          <span class="ro-tgt">{% for tok in g.target_tokens %}{{ (i18n or {}).get('aud_tgt_' ~ tok.key, tok.key) }} {{ tok.value }}{% if not loop.last %} · {% endif %}{% endfor %}{% if g.targets_more %} +{{ g.targets_more }}{% endif %}</span>
           {% elif g.targets_shown %}
           <span class="ro-tgt">{{ g.targets_shown|join('、') }}{% if g.targets_more %} +{{ g.targets_more }}{% endif %}</span>
           {% endif %}
+          {% if g.family %}<a class="ro-badge" href="/audit?family={{ g.family }}" onclick="event.stopPropagation()" title="{{ (i18n or {}).get('em_s010', '筛选') }} family={{ g.family }}">{{ (i18n or {}).get('au_fam_' ~ g.family, g.family) }}</a>{% endif %}
         </div>
-        {% if g.brief %}<div class="ro-brief" title="{{ g.brief }}">{{ g.brief }}</div>{% endif %}
+        {% if g.brief %}<div class="ro-brief" title="{{ g.brief }}">{{ g.brief }}</div>
+        {% elif g.detail_tokens %}<div class="ro-brief">{% for tok in g.detail_tokens %}{{ (i18n or {}).get('aud_tgt_' ~ tok.key, tok.key) }} {{ tok.value }}{% if not loop.last %} · {% endif %}{% endfor %}</div>{% endif %}
       </div>
       <div class="tl-time" data-ts="{{ g.ts }}" title="{{ g.ts }}">{{ g.hm }}</div>
     </div>

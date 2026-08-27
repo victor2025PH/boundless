@@ -2,54 +2,61 @@
 {% block title %}{{ (i18n or {}).get('goal_rpt_title', "目标达成报表") }}{% endblock %}
 {% block head %}
 <style>
+  /* 2026-08-18 暗色适配整页 pass：全部颜色走 workspace --tk-* 令牌（暗档自适配，
+     不写 [data-cp-theme] 成对覆盖）；语义徽章按 admin-theme 约定＝半透底 + *-ink
+     文字（旧浅色实心底在暗档发白块）。刻意保持常量的：批量浮条/遮罩（两主题恒
+     深）、阴影（主题无关）、趋势赢单金 #ca8a04 与热力 rgba 渐变（图表系列色）。 */
   .gr-wrap{height:100%;overflow-y:auto;background:var(--tk-bg,#f7f8fa);padding:18px;}
   .gr-header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:4px;}
-  .gr-sub{font-size:12px;color:#94a3b8;margin-bottom:14px;}
+  .gr-sub{font-size:12px;color:var(--tk-text-muted,#94a3b8);margin-bottom:14px;}
   .gr-filters{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px;}
-  .gr-filters select,.gr-filters input{padding:5px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;background:#fff;}
+  .gr-filters select,.gr-filters input{padding:5px 10px;border:1px solid var(--tk-border,#d1d5db);border-radius:6px;font-size:13px;background:var(--tk-surface,#fff);color:var(--tk-text,#0f172a);}
   .gr-summary{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:12px;margin-bottom:18px;}
-  .gr-kpi{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:14px 16px;text-align:center;}
-  .gr-kpi .val{font-size:26px;font-weight:700;color:#1e3a5f;}
-  .gr-kpi .lbl{font-size:11px;color:#94a3b8;margin-top:2px;}
-  .gr-card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;margin-bottom:18px;}
-  .gr-card h3{margin:0;padding:12px 14px 10px;font-size:14px;color:#374151;}
+  .gr-kpi{background:var(--tk-surface,#fff);border:1px solid var(--tk-border,#e5e7eb);border-radius:12px;padding:14px 16px;text-align:center;}
+  .gr-kpi .val{font-size:26px;font-weight:700;color:var(--tk-text,#1e3a5f);}
+  .gr-kpi .lbl{font-size:11px;color:var(--tk-text-muted,#94a3b8);margin-top:2px;}
+  .gr-card{background:var(--tk-surface,#fff);border:1px solid var(--tk-border,#e5e7eb);border-radius:12px;overflow:hidden;margin-bottom:18px;}
+  .gr-card h3{margin:0;padding:12px 14px 10px;font-size:14px;color:var(--tk-text,#374151);}
   .gr-table{width:100%;border-collapse:collapse;font-size:13px;}
-  .gr-table th{background:#f1f5f9;padding:9px 12px;text-align:left;font-weight:600;color:#374151;border-bottom:2px solid #e5e7eb;white-space:nowrap;}
-  .gr-table td{padding:8px 12px;border-bottom:1px solid #f3f4f6;color:#374151;vertical-align:middle;}
-  .gr-table tr:hover td{background:#f8fafc;}
+  .gr-table th{background:var(--tk-surface-2,#f1f5f9);padding:9px 12px;text-align:left;font-weight:600;color:var(--tk-text,#374151);border-bottom:2px solid var(--tk-border,#e5e7eb);white-space:nowrap;}
+  .gr-table td{padding:8px 12px;border-bottom:1px solid var(--tk-border,#f3f4f6);color:var(--tk-text,#374151);vertical-align:middle;}
+  .gr-table tr:hover td{background:var(--tk-surface-2,#f8fafc);}
   .gr-table tr:last-child td{border-bottom:0;}
-  .gr-bar-wrap{width:90px;background:#f1f5f9;border-radius:4px;height:8px;display:inline-block;vertical-align:middle;margin-right:6px;}
+  .gr-bar-wrap{width:90px;background:var(--tk-surface-2,#f1f5f9);border-radius:4px;height:8px;display:inline-block;vertical-align:middle;margin-right:6px;}
   .gr-bar{height:8px;border-radius:4px;background:var(--bl-growth-600,#0d76d9);}
   .gr-badge{display:inline-block;padding:2px 8px;border-radius:9px;font-size:11px;font-weight:600;white-space:nowrap;}
-  .st-done{background:#d1fae5;color:#065f46;} .st-active{background:#dbeafe;color:#1e40af;}
-  .st-failed{background:#fee2e2;color:#991b1b;} .st-expired{background:#ffedd5;color:#9a3412;}
-  .st-cancelled{background:#f1f5f9;color:#64748b;}
-  .fu-yes{background:#d1fae5;color:#065f46;} .fu-no{background:#fef3c7;color:#92400e;}
-  .gr-hot{color:#dc2626;font-weight:700;font-size:11px;margin-left:4px;}
-  .gr-act{display:inline-block;padding:3px 9px;border:1px solid #d1d5db;border-radius:6px;font-size:12px;cursor:pointer;background:#fff;color:#374151;margin-right:4px;white-space:nowrap;}
-  .gr-act:hover{border-color:#2563eb;color:#1d4ed8;}
+  .st-done{background:color-mix(in srgb,var(--tk-emerald,#10b981) 14%,transparent);color:var(--tk-ok-ink,#065f46);}
+  .st-active{background:color-mix(in srgb,var(--tk-brand,#2563eb) 12%,transparent);color:var(--tk-brand,#1e40af);}
+  .st-failed{background:color-mix(in srgb,var(--tk-danger,#ef4444) 13%,transparent);color:var(--tk-danger-ink,#991b1b);}
+  .st-expired{background:color-mix(in srgb,var(--tk-amber,#f59e0b) 16%,transparent);color:var(--tk-amber-ink,#9a3412);}
+  .st-cancelled{background:var(--tk-surface-2,#f1f5f9);color:var(--tk-text-muted,#64748b);}
+  .fu-yes{background:color-mix(in srgb,var(--tk-emerald,#10b981) 14%,transparent);color:var(--tk-ok-ink,#065f46);}
+  .fu-no{background:color-mix(in srgb,var(--tk-amber,#f59e0b) 16%,transparent);color:var(--tk-amber-ink,#92400e);}
+  .gr-hot{color:var(--tk-danger-ink,#dc2626);font-weight:700;font-size:11px;margin-left:4px;}
+  .gr-act{display:inline-block;padding:3px 9px;border:1px solid var(--tk-border,#d1d5db);border-radius:6px;font-size:12px;cursor:pointer;background:var(--tk-surface,#fff);color:var(--tk-text,#374151);margin-right:4px;white-space:nowrap;}
+  .gr-act:hover{border-color:var(--tk-brand,#2563eb);color:var(--tk-brand,#1d4ed8);}
   .gr-act[disabled]{opacity:.45;cursor:not-allowed;}
-  .gr-empty{text-align:center;padding:32px;color:#94a3b8;font-size:14px;}
-  .gr-pager{display:flex;gap:10px;align-items:center;justify-content:flex-end;padding:10px 14px;font-size:12px;color:#6b7280;}
-  .gr-name{font-weight:600;color:#1f2937;}
-  .gr-dim{font-size:11px;color:#94a3b8;}
-  /* 发消息弹层 */
+  .gr-empty{text-align:center;padding:32px;color:var(--tk-text-muted,#94a3b8);font-size:14px;}
+  .gr-pager{display:flex;gap:10px;align-items:center;justify-content:flex-end;padding:10px 14px;font-size:12px;color:var(--tk-text-muted,#6b7280);}
+  .gr-name{font-weight:600;color:var(--tk-text,#1f2937);}
+  .gr-dim{font-size:11px;color:var(--tk-text-muted,#94a3b8);}
+  /* 发消息弹层（遮罩恒深属刻意常量；面材/文字随主题） */
   .gr-modal-bg{position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:center;justify-content:center;z-index:1200;}
-  .gr-modal{background:#fff;border-radius:14px;width:min(480px,92vw);padding:18px;box-shadow:0 18px 50px rgba(0,0,0,.25);}
-  .gr-modal h4{margin:0 0 10px;font-size:15px;color:#111827;}
-  .gr-modal textarea{width:100%;box-sizing:border-box;min-height:96px;border:1px solid #d1d5db;border-radius:8px;padding:9px;font-size:13px;resize:vertical;}
-  .gr-chip{display:inline-block;padding:3px 10px;border:1px solid #dbeafe;background:#eff6ff;color:#1d4ed8;border-radius:999px;font-size:12px;cursor:pointer;margin:0 6px 8px 0;}
+  .gr-modal{background:var(--tk-surface,#fff);color:var(--tk-text,#0f172a);border:1px solid var(--tk-border,#e5e7eb);border-radius:14px;width:min(480px,92vw);padding:18px;box-shadow:0 18px 50px rgba(0,0,0,.25);}
+  .gr-modal h4{margin:0 0 10px;font-size:15px;color:var(--tk-text,#111827);}
+  .gr-modal textarea{width:100%;box-sizing:border-box;min-height:96px;border:1px solid var(--tk-border,#d1d5db);border-radius:8px;padding:9px;font-size:13px;resize:vertical;background:var(--tk-surface,#fff);color:var(--tk-text,#0f172a);}
+  .gr-chip{display:inline-block;padding:3px 10px;border:1px solid color-mix(in srgb,var(--tk-brand,#2563eb) 35%,transparent);background:color-mix(in srgb,var(--tk-brand,#2563eb) 10%,transparent);color:var(--tk-brand,#1d4ed8);border-radius:999px;font-size:12px;cursor:pointer;margin:0 6px 8px 0;}
   .gr-modal-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:12px;}
-  .gr-btn{padding:6px 16px;border-radius:8px;font-size:13px;cursor:pointer;border:1px solid #d1d5db;background:#fff;color:#374151;}
-  .gr-btn-primary{background:#2563eb;border-color:#2563eb;color:#fff;}
+  .gr-btn{padding:6px 16px;border-radius:8px;font-size:13px;cursor:pointer;border:1px solid var(--tk-border,#d1d5db);background:var(--tk-surface,#fff);color:var(--tk-text,#374151);}
+  .gr-btn-primary{background:var(--tk-brand,#2563eb);border-color:var(--tk-brand,#2563eb);color:#fff;}
   .gr-btn[disabled]{opacity:.5;cursor:not-allowed;}
-  /* P1：勾选与批量触达 */
+  /* P1：勾选与批量触达（浮条两主题恒深＝刻意常量，文字用常量浅灰不用翻转 ink） */
   .gr-table input[type=checkbox]{cursor:pointer;}
   .gr-batchbar{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;background:#111827;color:#fff;border-radius:999px;padding:9px 18px;display:none;align-items:center;gap:12px;box-shadow:0 10px 30px rgba(0,0,0,.35);z-index:1100;font-size:13px;}
   .gr-batchbar button{border:0;border-radius:999px;padding:5px 14px;font-size:12px;cursor:pointer;}
   .gr-bb-send{background:#2563eb;color:#fff;} .gr-bb-clear{background:#374151;color:#e5e7eb;}
-  .gr-ob-box{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:9px;font-size:12px;color:#475569;margin-top:8px;display:none;}
-  .gr-ob-box b{color:#111827;}
+  .gr-ob-box{background:var(--tk-surface-2,#f8fafc);border:1px solid var(--tk-border,#e2e8f0);border-radius:8px;padding:9px;font-size:12px;color:var(--tk-text-muted,#475569);margin-top:8px;display:none;}
+  .gr-ob-box b{color:var(--tk-text,#111827);}
   @media (max-width:760px){ .gr-table th:nth-child(n+7),.gr-table td:nth-child(n+7){display:none;} }
 </style>
 {% endblock %}
@@ -188,13 +195,13 @@
 <div class="gr-modal-bg" id="gr-ob-bg" onclick="if(event.target===this)grCloseOutreach()">
   <div class="gr-modal">
     <h4>📣 {{ (i18n or {}).get('goal_rpt_ob_title', "批量触达（完成客户跟进）") }}</h4>
-    <div style="font-size:12px;color:#6b7280;margin-bottom:6px;" id="gr-ob-count"></div>
+    <div style="font-size:12px;color:var(--tk-text-muted,#6b7280);margin-bottom:6px;" id="gr-ob-count"></div>
     <div>
       <span class="gr-chip" onclick="grObFillTpl('thanks')">{{ (i18n or {}).get('goal_rpt_tpl_thanks', "感谢成交") }}</span>
       <span class="gr-chip" onclick="grObFillTpl('care')">{{ (i18n or {}).get('goal_rpt_tpl_care', "完成关怀") }}</span>
     </div>
     <textarea id="gr-ob-text" placeholder="{{ (i18n or {}).get('goal_rpt_ob_tpl_ph', '输入模板文案…支持变量 {name}＝客户昵称') }}"></textarea>
-    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#475569;margin-top:6px;cursor:pointer;">
+    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tk-text-muted,#475569);margin-top:6px;cursor:pointer;">
       <input type="checkbox" id="gr-ob-translate" checked>
       {{ (i18n or {}).get('goal_rpt_ob_translate', "按每位客户的会话语言自动翻译后发送") }}
     </label>
@@ -586,9 +593,9 @@ function grRenderTrend(trend){
     {label: GR_I18N.trend_won,  values: trend.map(function(r){ return r.won||0; }), color: '#ca8a04'}
   ], {h:90});
   var days = trend.map(function(r){ return r.day; });
-  var lbl = '<div style="display:flex;justify-content:space-between;font-size:10px;color:#94a3b8;margin-top:2px;">'
+  var lbl = '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--tk-text-muted,#94a3b8);margin-top:2px;">'
     +'<span>'+esc(days[0])+'</span><span>'+esc(days[Math.floor(days.length/2)])+'</span><span>'+esc(days[days.length-1])+'</span></div>';
-  var legend = '<div style="font-size:11px;color:#6b7280;margin-bottom:4px;">'
+  var legend = '<div style="font-size:11px;color:var(--tk-text-muted,#6b7280);margin-bottom:4px;">'
     +'<span style="color:var(--bl-growth-600,#0d76d9);">●</span> '+esc(GR_I18N.trend_done)
     +'　<span style="color:#ca8a04;">●</span> '+esc(GR_I18N.trend_won)+'</div>';
   document.getElementById('gr-trend').innerHTML = legend + svg + lbl;

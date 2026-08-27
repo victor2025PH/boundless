@@ -41,6 +41,10 @@ WATCHED_ROOTS = (
     _REPO / "src" / "web" / "templates",
     _REPO / "src" / "web" / "static",
     _REPO / "shared" / "copilot",
+    # 2026-08-27 补缺口：shared/assistant（小智球/教学/替我做三模块）与
+    # shared/copilot 同样经 HTTP 直发坐席、同样热更即上生产，却一直不在观测面
+    # ——改了小智前端忘 bump，坐席标签页照样跑旧 JS 且无人提醒。
+    _REPO / "shared" / "assistant",
 )
 
 _EXCLUDE_PARTS = {"__pycache__", "protocol_media", "persona_avatars"}

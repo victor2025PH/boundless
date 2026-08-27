@@ -1,13 +1,23 @@
 # products/zhiliao/product.yaml — 智聊 ChatX（照 tongyi 模板）
 #
-# ── 2026-08-19 定价决议（ChatGPT 式分层 + Token 计量，老板拍板）────────────────
-# 体系：免费版 / 个人版 39 / 按量版（0 月费纯钱包）/ 团队版 49/坐席（≥2 席）/ 旗舰 598；
-# 统一耗材货币 Token（跨 ChatX/LingoX 通用）：AI 回复 10/条 · 专业翻译 10/千字符 ·
+# ── 2026-08-21 定价改版（充值唯一化：订阅全线停售，只留「免费开始 + 按充值计费」，老板拍板）──
+# 免费开始（非 SKU 档位）：下载即用、标准翻译永久免费不限量（公平使用 200 万字符/日/授权）、
+# 每月 1,000 Token、注册再送 10,000 体验 Token、1 账号防薅护栏——chatx-free 条目保留承载该口径。
+# 充值八档（唯一付费通道）：6U 新人包 + 50/100/200/500/1000/5000/10000 USD；1 USD = 1,500 Token；
+# 首笔充值按档一次性加赠 +5/10/20/30/35/40%（每人一次，履约侧按 账号+支付指纹+设备指纹 核验，
+# 退款回收加赠）；新人包 6U=18,000（2 倍率，注册 72h 内、每账号一次、不占首充资格）。
+# 大额档（≥5000U）附服务权益：专属客户经理/发票合同/优先支持；10000U 另含团队用量分账报表 + API 对接支持。
+# 企业两形态（lead-based 面议，不走自助结算）：chatx-enterprise=企业合作年框（协议价/月结/发票/SLA）；
+# chatx-private-deploy=企业级私有化部署（一次性实施 + 年授权维保，本地模型数据不出网，
+# 承接旧旗舰版「可选私有化」叙事）。
+# Token 计价（跨 ChatX/LingoX 通用）：AI 回复 10/条 · 专业翻译 10/千字符 ·
 # DeepL 认证翻译 40/千字符 · 克隆语音 10/100字符 · AI 配图 50/张 · ASR 5/分钟；
 # 标准翻译（内置引擎）0 Token 永久免费（公平使用 200 万字符/日/授权）。
-# 订阅含量当月有效；Token 包 12 个月有效；扣减顺序=先订阅含量后 Token 包。
-# 年付=月价×10（送 2 个月），全线统一，废除旧「85 折」双口径。
-# 旧 chatx-entry/chatx-team 自本日停售（保留条目供台账/历史订单反查，勿删）。
+# 充值实付 12 个月有效（≥500U 档 24 个月）、赠送 6 个月先扣；扣减顺序=先赠送、
+# 再存量订阅含量（停售订阅履约期内仍有效）、后充值实付。
+# 停售台账（保留条目供历史订单反查，勿删）：chatx-entry/chatx-team（2026-08-19）、
+# chatx-team-seat 与 token-pack-s/m/l/xl（2026-08-20）、
+# chatx-personal/chatx-pro/chatx-flagship 订阅三档（2026-08-21，存量按期履约到期转充值）。
 # 展示单一真相：website/lib/chatx-pricing.ts（改价先改本文件再同步该文件）。
 id: zhiliao
 brand_key: chatx
@@ -29,20 +39,33 @@ website:
   anchor: "#autochat"
   matrix_family: growth
 
-# Token 分层套餐（2026-08-19 决议；website/lib/chatx-pricing.ts 派生展示）；单位 USD、结算支持 USDT（dual）
+# 充值唯一化（2026-08-21 决议；website/lib/chatx-pricing.ts 派生展示）；单位 USD、结算支持 USDT（dual）
 skus:
-  - { id: chatx-free,      name: { zh: 免费版, en: Free },       unit: month, price: "0",   currency: USD, note: 1 坐席/1 账号/1 平台/标准翻译免费不限量/1,000 Token 每月 }
-  - { id: chatx-personal,  name: { zh: 个人版, en: Personal },   unit: month, price: "39",  currency: USD, note: 1 坐席/3 账号/全平台/30,000 Token 每月/1 克隆音色/3 AI 人设 }
-  - { id: chatx-team-seat, name: { zh: 团队版·每坐席, en: Team per seat }, unit: month, price: "49", currency: USD, note: 每坐席计价 ≥2 席/每席 5 账号+50,000 Token 入池/权限审计/优先支持 }
-  - { id: chatx-flagship,  name: { zh: 旗舰, en: Flagship },     unit: month, price: "598", currency: USD, note: 50 账号/人工接管/数据看板/本地模型 Token 不限/可选私有化 }
-  # Token 包（跨 ChatX/LingoX 通用耗材；一次性、12 个月有效；履约=topup 凭证通道）
-  - { id: token-pack-s,  name: { zh: Token 体验包, en: Token pack S },  unit: one-time, price: "9.9", currency: USD, note: 10,000 Token/12 个月有效/跨产品通用 }
-  - { id: token-pack-m,  name: { zh: Token 标准包, en: Token pack M },  unit: one-time, price: "49",  currency: USD, note: 60,000 Token（+21%）/12 个月有效/跨产品通用 }
-  - { id: token-pack-l,  name: { zh: Token 专业包, en: Token pack L },  unit: one-time, price: "199", currency: USD, note: 300,000 Token（+50%）/12 个月有效/跨产品通用 }
-  - { id: token-pack-xl, name: { zh: Token 团队包, en: Token pack XL }, unit: one-time, price: "499", currency: USD, note: 1,000,000 Token（约 5 折）/12 个月有效/跨产品通用 }
-  # ── 停售台账（2026-08-19 起不再对外挂牌；保留供历史订单/授权反查，勿删）──
-  - { id: chatx-entry,    name: { zh: 入门（停售）, en: Entry (legacy) },    unit: month, price: "58",  currency: USD, note: 停售 2026-08-19/3 账号/AI 翻译/1 平台/由个人版 39 承接 }
-  - { id: chatx-team,     name: { zh: 团队（停售）, en: Team (legacy) },     unit: month, price: "198", currency: USD, note: 停售 2026-08-19/10 账号/全平台/由团队版 49 每坐席承接 }
+  - { id: chatx-free,      name: { zh: 免费开始, en: Free start },  unit: month, price: "0",   currency: USD, note: "非卖品条目/下载即用/1,000 Token 每月/标准翻译免费不限量/1 账号防薅护栏/注册送 10,000" }
+  # Token 充值（2026-08-21 起唯一付费通道；1U=1,500 Token；首充按档一次性加赠——每人一次，
+  # 履约侧按 账号+支付指纹+设备指纹 核验；实付 12 个月有效（≥500U 档 24 个月）、赠送 6 个月先扣）
+  - { id: recharge-50,   name: { zh: 充值 50U,  en: Top up 50U },  unit: one-time, price: "50",   currency: USD, note: "75,000 Token 到账/首充无加赠/实付 12 个月有效" }
+  - { id: recharge-100,  name: { zh: 充值 100U, en: Top up 100U }, unit: one-time, price: "100",  currency: USD, note: "150,000 Token/首充 +5% 到账 157,500/实付 12 个月有效" }
+  - { id: recharge-200,  name: { zh: 充值 200U, en: Top up 200U }, unit: one-time, price: "200",  currency: USD, note: "300,000 Token/首充 +10% 到账 330,000/实付 12 个月有效" }
+  - { id: recharge-500,  name: { zh: 充值 500U, en: Top up 500U }, unit: one-time, price: "500",  currency: USD, note: "750,000 Token/首充 +20% 到账 900,000/实付 24 个月有效" }
+  - { id: recharge-1000, name: { zh: 充值 1000U, en: Top up 1000U }, unit: one-time, price: "1000", currency: USD, note: "1,500,000 Token/首充 +30% 到账 1,950,000/实付 24 个月有效" }
+  - { id: recharge-5000, name: { zh: 充值 5000U, en: Top up 5000U }, unit: one-time, price: "5000", currency: USD, note: "7,500,000 Token/首充 +35% 到账 10,125,000/实付 24 个月有效/专属客户经理 发票合同 优先支持" }
+  - { id: recharge-10000, name: { zh: 充值 10000U, en: Top up 10000U }, unit: one-time, price: "10000", currency: USD, note: "15,000,000 Token/首充 +40% 到账 21,000,000/实付 24 个月有效/大额档权益全含 + 团队用量分账报表 + API 对接支持" }
+  - { id: recharge-newbie-6, name: { zh: 新人首充大礼包, en: Newcomer pack }, unit: one-time, price: "6", currency: USD, note: "18,000 Token（2 倍率）/注册 72h 内/每账号一次/不占首充加赠资格" }
+  # 企业两形态（lead-based 面议：官网只出「联系商务」，不走自助结算；成交后按合同人工履约）
+  - { id: chatx-enterprise,     name: { zh: 企业合作·年框, en: Enterprise partnership }, unit: one-time, price: "按规模报价", currency: USD, note: "年框协议价（建议 ≥20,000U 起谈）/月结 对公 发票/专属 SLA 与客户成功/多席位管理" }
+  - { id: chatx-private-deploy, name: { zh: 企业级私有化部署, en: Private deployment },  unit: one-time, price: "按规模报价", currency: USD, note: "一次性实施 + 年授权维保/部署进客户内网 本地模型 数据不出网/实施培训 升级通道/承接旧旗舰版可选私有化叙事" }
+  # ── 停售台账（不再对外挂牌；保留供历史订单/授权反查，勿删）──
+  - { id: chatx-personal,  name: { zh: 基础版（停售）, en: Basic (legacy) },  unit: month, price: "39",  currency: USD, note: "停售 2026-08-21/原 60,000 Token 每月/存量按期履约到期转充值" }
+  - { id: chatx-pro,       name: { zh: 专业版（停售）, en: Pro (legacy) },    unit: month, price: "99",  currency: USD, note: "停售 2026-08-21/原 200,000 Token 每月/存量按期履约到期转充值" }
+  - { id: chatx-flagship,  name: { zh: 旗舰版（停售）, en: Max (legacy) },    unit: month, price: "598", currency: USD, note: "停售 2026-08-21/原 1,500,000 Token 每月 本地模型不限/私有化叙事由 chatx-private-deploy 承接" }
+  - { id: chatx-team-seat, name: { zh: 团队版·每坐席（停售）, en: Team per seat (legacy) }, unit: month, price: "49", currency: USD, note: "停售 2026-08-20/原每坐席计价 ≥2 席/由专业版 99 承接（同价位段 Token 翻倍）" }
+  - { id: token-pack-s,  name: { zh: Token 体验包（停售）, en: Token pack S (legacy) },  unit: one-time, price: "9.9", currency: USD, note: "停售 2026-08-20/原 10,000 Token/由充值 50U 档承接" }
+  - { id: token-pack-m,  name: { zh: Token 标准包（停售）, en: Token pack M (legacy) },  unit: one-time, price: "49",  currency: USD, note: "停售 2026-08-20/原 60,000 Token/由充值 50U 档承接" }
+  - { id: token-pack-l,  name: { zh: Token 专业包（停售）, en: Token pack L (legacy) },  unit: one-time, price: "199", currency: USD, note: "停售 2026-08-20/原 300,000 Token/由充值 200U 档承接" }
+  - { id: token-pack-xl, name: { zh: Token 团队包（停售）, en: Token pack XL (legacy) }, unit: one-time, price: "499", currency: USD, note: "停售 2026-08-20/原 1,000,000 Token/由充值 500U 档承接" }
+  - { id: chatx-entry,    name: { zh: 入门（停售）, en: Entry (legacy) },    unit: month, price: "58",  currency: USD, note: "停售 2026-08-19/3 账号/AI 翻译/1 平台/由基础版 39 承接" }
+  - { id: chatx-team,     name: { zh: 团队（停售）, en: Team (legacy) },     unit: month, price: "198", currency: USD, note: "停售 2026-08-19/10 账号/全平台/由专业版 99 承接" }
 
 delivery:
   gate: platform/licensing         # Token 计量（LLM 边际成本大头）+ SKU 门控

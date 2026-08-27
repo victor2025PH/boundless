@@ -962,3 +962,266 @@ class TestWonMeta:
             {"product": "P" * 200})["product"] == "P" * WON_META_PRODUCT_MAX
         assert sanitize_won_meta(
             {"note": "N" * 500})["note"] == "N" * WON_META_NOTE_MAX
+
+
+# ── 完成通知链路状态（2026-08-18 可见化）────────────────────────────────────
+# 面板「达成后会通知谁」状态行的数据源：goals.notify 扫描器开关（YAML）×
+# 告警渠道是否订阅 goal_complete（notify_webhooks.json）。文件真相口径，零密钥。
+
+
+class TestNotifyStatus:
+    def test_disabled_403(self):
+        client, _ = _build_client(enabled=False)
+        assert client.get("/api/goals/notify-status").status_code == 403
+
+    def test_covered_shape(self, monkeypatch):
+        from src.integrations import notify_webhooks_store as nws
+        monkeypatch.setattr(
+            nws, "effective_webhooks",
+            lambda cfg: [{"name": "tg-ops", "enabled": True,
+                          "format": "telegram",
+                          "events": ["host_alert", "goal_complete"]}])
+        client, _ = _build_client(notify={"enabled": True})
+        r = client.get("/api/goals/notify-status")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ok"] is True and body["notify_enabled"] is True
+        assert body["push_covered"] is True
+        assert body["push_channels"] == ["tg-ops"]
+        # 零密钥响应：不得带 token/secret/url/target 字段
+        assert not ({"token", "secret", "url", "target"} & set(body))
+
+    def test_uncovered_and_scan_off(self, monkeypatch):
+        from src.integrations import notify_webhooks_store as nws
+        monkeypatch.setattr(
+            nws, "effective_webhooks",
+            lambda cfg: [{"name": "tg-ops", "enabled": True,
+                          "format": "telegram", "events": ["host_alert"]}])
+        client, _ = _build_client()          # notify 缺省关
+        body = client.get("/api/goals/notify-status").json()
+        assert body["notify_enabled"] is False        # 扫描器没开如实说
+        assert body["push_covered"] is False
+        assert body["push_channels"] == []
+
+    def test_disabled_channel_not_counted(self, monkeypatch):
+        from src.integrations import notify_webhooks_store as nws
+        monkeypatch.setattr(
+            nws, "effective_webhooks",
+            lambda cfg: [{"name": "tg-ops", "enabled": False,
+                          "format": "telegram", "events": ["goal_complete"]}])
+        client, _ = _build_client(notify={"enabled": True})
+        body = client.get("/api/goals/notify-status").json()
+        assert body["push_covered"] is False   # 停用渠道订了也不算接通
+
+    def test_push_agent_fields(self, tmp_path, monkeypatch):
+        """P2：push_agent 回显 + self_bound 按当前登录人真实绑定判定。"""
+        from src.companion.goals import notify as gn
+        from src.utils.web_user_store import WebUserStore
+        monkeypatch.setattr(gn, "_USER_STORE_CACHE", {})
+        us = WebUserStore(tmp_path / "web_users.db")
+        u = us.create_user("tester", "pass123456", "agent")
+        # 默认（未开 push_agent）→ 两字段如实 False
+        client0, _ = _build_client(notify={"enabled": True})
+        b0 = client0.get("/api/goals/notify-status").json()
+        assert b0["push_agent"] is False and b0["self_bound"] is False
+        # 开 push_agent + config_path 指向 tmp（user_store_for 同目录寻址）：
+        # tester 未绑定 → self_bound False；绑定后 → True
+        goals = {"enabled": True, "db_path": ":memory:",
+                 "notify": {"enabled": True, "push_agent": True}}
+        sess = {"role": "", "user": "tester"}
+        app = FastAPI()
+
+        def auth_dep(request: Request) -> None:
+            request.scope["session"] = dict(sess)
+
+        register_goal_routes(app, auth_dep, SimpleNamespace(
+            config={"companion": {"goals": goals}},
+            config_path=tmp_path / "config.yaml"))
+        client = TestClient(app)
+        b1 = client.get("/api/goals/notify-status").json()
+        assert b1["push_agent"] is True and b1["self_bound"] is False
+        us.update_user(u["id"], notify_tg_chat_id="5433982810")
+        b2 = client.get("/api/goals/notify-status").json()
+        assert b2["self_bound"] is True
+
+
+# ── created_by＝session 真键（P3 2026-08-18 生产 bug 修复钉）────────────────
+# 登录只写 session["username"]（auth_user_routes:137），从不写 ["user"]——修前
+# actor 恒空串 → 人建目标 created_by 全空 → 定向推送「创建人」解析链整条落空。
+# 本测钉住：username 键单独在场即可归因；旧 "user" 键仍兼容（测试桩用它）。
+
+
+def test_created_by_reads_session_username_key():
+    goals = {"enabled": True, "db_path": ":memory:"}
+    sess = {"role": "", "username": "amy"}       # 生产形态：只有 username
+    app = FastAPI()
+
+    def auth_dep(request: Request) -> None:
+        request.scope["session"] = dict(sess)
+
+    register_goal_routes(
+        app, auth_dep, SimpleNamespace(
+            config={"companion": {"goals": goals}}, config_path=None))
+    client = TestClient(app)
+    gid = _create(client).json()["goal"]["goal_id"]
+    detail = client.get(f"/api/goals/{gid}").json()
+    assert detail["goal"]["created_by"] == "amy"
+    # 批量口同样归因（后缀 :batch 语义不变）
+    r = client.post("/api/goals/batch", json={
+        "template": "conversion_unlock",
+        "targets": ["telegram:a1:777"]})
+    assert r.status_code == 200
+    rows = client.get("/api/goals?limit=20").json()["goals"]
+    batch_row = next(g for g in rows
+                     if g["conversation_id"] == "telegram:a1:777")
+    assert batch_row["created_by"] == "amy:batch"
+
+
+# ── 终局卡「已推送提醒」回执（P2 2026-08-18）──────────────────────────────
+# for-conversation 的 done 终局视图附 notified（读通知幂等标记，与扫描器同一
+# 事实源）；未通知/非 done 不附或 False——前端据此渲染「✓ 已推送提醒」chip。
+
+
+def test_for_conversation_done_carries_notified_receipt():
+    from src.companion.goals.notify import NOTIFIED_EVENT_KIND
+    from src.companion.goals.store import get_goal_store
+    client, _ = _build_client()
+    gid = _create(client).json()["goal"]["goal_id"]
+    assert client.post(f"/api/goals/{gid}/status",
+                       json={"action": "done"}).status_code == 200
+    r1 = client.get(f"/api/goals/for-conversation?conversation_id={CONV}").json()
+    last = r1["last"]
+    assert last and last["status"] == "done"
+    assert last.get("notified") is False          # 扫描器还没发过
+    get_goal_store().add_event(gid, NOTIFIED_EVENT_KIND, "{}")
+    r2 = client.get(f"/api/goals/for-conversation?conversation_id={CONV}").json()
+    assert r2["last"]["notified"] is True          # 发过了 → 回执点亮
+
+
+# ── 完成推送设置写口（P3 2026-08-18）────────────────────────────────────────
+# 白名单四开关经 set_overlay_flag 写 overlay；拒 agent/viewer；goals 关随全家
+# 403；config_manager 无写能力时如实报 config_unavailable 不装死。
+
+
+def _build_client_with_flags(enabled=True):
+    """带可写 set_overlay_flag 的假 config_manager：记录写入并回填 config
+    （模拟 overlay 热重载后的生效态）。"""
+    goals = {"enabled": enabled, "db_path": ":memory:"}
+    cfg = {"companion": {"goals": goals}}
+    sess = {"role": "", "user": "tester", "username": "tester"}
+    writes: list = []
+
+    class _CM:
+        config = cfg
+        config_path = None
+
+        def set_overlay_flag(self, path, value):
+            writes.append((path, value))
+            cur = cfg
+            parts = path.split(".")
+            for p in parts[:-1]:
+                cur = cur.setdefault(p, {})
+            cur[parts[-1]] = value
+            return True, "ok"
+
+    app = FastAPI()
+
+    def auth_dep(request: Request) -> None:
+        request.scope["session"] = dict(sess)
+
+    register_goal_routes(app, auth_dep, _CM())
+    return TestClient(app), sess, writes
+
+
+def test_notify_settings_writes_whitelisted_flags_only():
+    client, _sess, writes = _build_client_with_flags()
+    r = client.post("/api/goals/notify-settings", json={
+        "enabled": True, "push_agent": True, "bogus_key": True})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["ok"] is True
+    assert sorted(d["applied"]) == ["enabled", "push_agent"]   # bogus 被白名单拒
+    assert ("companion.goals.notify.enabled", True) in writes
+    assert ("companion.goals.notify.push_agent", True) in writes
+    assert all(not p.endswith("bogus_key") for p, _v in writes)
+    assert d["effective"]["notify_enabled"] is True
+    assert d["effective"]["push_agent"] is True
+    # 空 body=没东西可写，如实报
+    r2 = client.post("/api/goals/notify-settings", json={})
+    assert r2.json()["reason"] == "nothing_to_update"
+
+
+def test_notify_settings_role_and_capability_gates():
+    # viewer / agent 拒（403）；master/operator/空 role 放行
+    client, sess, _w = _build_client_with_flags()
+    for role in ("viewer", "agent"):
+        sess["role"] = role
+        assert client.post("/api/goals/notify-settings",
+                           json={"enabled": True}).status_code == 403
+    sess["role"] = "master"
+    assert client.post("/api/goals/notify-settings",
+                       json={"enabled": True}).status_code == 200
+    # goals 总闸关 → 随全家 403
+    client_off, _s2, _w2 = _build_client_with_flags(enabled=False)
+    assert client_off.post("/api/goals/notify-settings",
+                           json={"enabled": True}).status_code == 403
+    # config_manager 无写能力（SimpleNamespace）→ 如实 config_unavailable
+    client_plain, _ = _build_client()
+    r = client_plain.post("/api/goals/notify-settings", json={"enabled": True})
+    assert r.status_code == 200
+    assert r.json() == {"ok": False, "reason": "config_unavailable"}
+
+
+def test_notify_status_echoes_include_profile():
+    client, _ = _build_client(notify={"enabled": True, "include_profile": True})
+    d = client.get("/api/goals/notify-status").json()
+    assert d["include_profile"] is True
+
+
+# ── 逐目标点名收件人 notify_extra（P3 2026-08-18）───────────────────────────
+
+
+def test_create_sanitizes_notify_extra():
+    client, _ = _build_client()
+    r = _create(client, params={
+        "notify_extra": "amy, amy，-1001234567890, " + "x" * 99})
+    assert r.status_code == 200
+    got = r.json()["goal"]["params"]["notify_extra"]
+    assert got[:2] == ["amy", "-1001234567890"]    # 去重保序
+    assert len(got) == 3 and len(got[2]) == 64     # 单条截 64
+    # 全垃圾输入 → 键整个不落库（不留空列表噪声）
+    r2 = _create(client, conv="telegram:a1:200",
+                 params={"notify_extra": [" ", ""]})
+    assert "notify_extra" not in r2.json()["goal"]["params"]
+
+
+def test_update_notify_extra_set_and_clear():
+    client, _ = _build_client()
+    gid = _create(client).json()["goal"]["goal_id"]
+    r = client.post(f"/api/goals/{gid}/update", json={
+        "params": {"notify_extra": ["boss", "12345678"]}})
+    assert r.status_code == 200
+    assert r.json()["goal"]["params"]["notify_extra"] == ["boss", "12345678"]
+    # 显式传空=清除点名收件人
+    r2 = client.post(f"/api/goals/{gid}/update", json={
+        "params": {"notify_extra": ""}})
+    assert r2.status_code == 200
+    assert "notify_extra" not in r2.json()["goal"]["params"]
+
+
+# ── slots_progress 带来源 src（P3 2026-08-18）───────────────────────────────
+
+
+def test_slots_progress_carries_src():
+    from src.companion.goals.store import get_goal_store
+    client, _ = _build_client()
+    r = _create(client, template="profile_discovery",
+                params={"slots": "age,interests"})
+    assert r.status_code == 200
+    get_goal_store().upsert_customer_profile(
+        "telegram", "100", {"age": "28岁"}, source="llm")
+    d = client.get(
+        f"/api/goals/for-conversation?conversation_id={CONV}").json()
+    rows = {s["key"]: s for s in d["goal"]["slots_progress"]}
+    assert rows["age"]["filled"] is True and rows["age"]["src"] == "llm"
+    assert rows["interests"]["filled"] is False and rows["interests"]["src"] == ""

@@ -16,6 +16,36 @@ from dataclasses import dataclass, field
 # 窗口过大会把很久前的旧媒体也拉来识别。
 _MEDIA_BACKSCAN_DEFAULT = 5
 
+# 拟稿等图的轮询步长（秒）。测试 monkeypatch 调小加速；预算见
+# media_enrich.media_wait_sec_from_cfg（inbox.auto_draft.media_wait_sec）。
+_MEDIA_WAIT_TICK_SEC = 1.5
+
+
+def _fold_image_desc(last: str, history: list, desc: str) -> str:
+    """把图片识别描述并入待回复正文与 history 占位行（Phase1.3 口径），返回新 last。
+
+    识别描述只走 media_desc 辅助块时模型反应明显弱于「描述在正文」——
+    describe 直识与等待环重读（并行链路回写）两条来源共用本函数，口径一致。"""
+    _cap = str(last or "").strip()
+    if _cap.startswith("[图片") or _cap in ("[贴纸]", "[媒体]", ""):
+        _cap = ""
+    _ifull = (
+        f"{_cap}\n[图片内容] {desc}" if _cap else f"[图片内容] {desc}"
+    )
+    if str(last or "").strip() in ("[图片]", "[贴纸]", "[媒体]", "") or _cap:
+        last = _ifull
+    for _hm in reversed(history or []):
+        if isinstance(_hm, dict) and _hm.get("role") == "user":
+            _hc = str(_hm.get("content") or "").strip()
+            if _hc in (
+                "[图片]", "[贴纸]", "[媒体]", "",
+            ) or (
+                _hc and not _hc.startswith("[图片内容]")
+            ):
+                _hm["content"] = _ifull
+            break
+    return last
+
 
 async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict, text: str, draft_id: str, mode: str) -> None:
     """异步：拉历史 → 人设产线生成正文 → enrich_draft 收尾。
@@ -45,6 +75,9 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
                     "media_ref": r.get("media_ref") or "",
                     "message_id": r.get("message_id") or "",
                     "ts": r.get("ts") or 0,
+                    # 实施72 P2：合成时间戳标记透传 → trim_stale_history 给这类
+                    # 行打「[补收的历史消息，时间不详]」，防 LLM 把补收当刚说的
+                    "approx_ts": r.get("approx_ts") or 0,
                 })
             # 时间断层修剪：隔了几天的旧对话只留少量并打「[N天前]」标记，
             # 根治旧话题被当成刚说的（如 10 天前的英语梗 → "你突然换英语啦"幻觉）。
@@ -77,27 +110,90 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
         _peer_audio_emotion = None  # 语音声学情绪（SER）
         if (
             _peer_media_type in ("image", "photo", "sticker")
-            and _peer_media_ref
             and not _peer_media_desc
         ):
+            # 拟稿等图（2026-08-23「把人看成猫」P0）：照片行落库与 media_ref/媒体
+            # 文件就绪之间有秒级窗口（边车先落行、后补媒体），旧代码在此窗内直接
+            # 盲拟——ref 为空时连降级分支都进不去（无诚实指令），LLM 自由发挥断言
+            # 画面。现在在 media_wait_sec 预算内等：ref 出现 / 文件可解析 / 并行
+            # 链路把「[图片内容] …」写进消息行，等到才识别生成；等不到再走
+            # degrade/hold——degrade 只吃「真识别失败」，不再吃「还没来得及识」。
+            # 同图去重锁（try_mark_desc_inflight）防「图+紧跟一句话」两轮拟稿
+            # 对同一张图双调 VLM：后来者只轮询等首轮的回写。
             try:
+                from src.inbox.media_enrich import (
+                    media_wait_sec_from_cfg,
+                    try_mark_desc_inflight,
+                )
                 from src.integrations.protocol_bridge import (
                     static_media_ref_to_path,
                 )
-                _img_path = static_media_ref_to_path(
-                    _peer_media_ref
-                )
+                _wait_deadline = time.monotonic() + media_wait_sec_from_cfg(
+                    assistant.config.config or {})
+                _iw_key = f"{cid}|{_peer_media_ref or _peer_msg_id}"
+                _i_own = try_mark_desc_inflight(_iw_key)
+                _img_path = ""
+                while True:
+                    if _peer_media_desc:
+                        break
+                    if _peer_media_ref and _i_own:
+                        _img_path = str(static_media_ref_to_path(
+                            _peer_media_ref) or "")
+                        if _img_path or _peer_media_ref.lower().startswith(
+                                ("http://", "https://")):
+                            # 远程 CDN 引用不等文件（旧语义：本层不下载）
+                            break
+                    if time.monotonic() >= _wait_deadline:
+                        break
+                    await asyncio.sleep(_MEDIA_WAIT_TICK_SEC)
+                    # 重读该行：迟到的 media_ref / 并行链路（A 线收图即识、
+                    # 协议直发线、另一拟稿轮）回写的描述都在这里被接住。
+                    try:
+                        for _r2 in _ad_store.list_recent_messages(
+                                cid, limit=10):
+                            if _peer_msg_id and str(
+                                    _r2.get("message_id") or ""
+                            ) != _peer_msg_id:
+                                continue
+                            if not _peer_msg_id and str(
+                                    _r2.get("direction") or "") != "in":
+                                continue
+                            _t2 = str(_r2.get("text") or "")
+                            _pk2, _pd2 = _match_media_prefix(_t2)
+                            if _pd2:
+                                _peer_media_desc = _pd2
+                            elif _t2.startswith("[图片内容]"):
+                                _peer_media_desc = _t2.replace(
+                                    "[图片内容]", "", 1).strip()
+                            if not _peer_media_ref:
+                                _peer_media_ref = str(
+                                    _r2.get("media_ref") or "")
+                            break
+                    except Exception:
+                        assistant.logger.debug(
+                            "[AutoDraft] 等图重读失败（忽略）", exc_info=True)
                 _tc = getattr(
                     getattr(_ad_app, "state", None),
                     "telegram_client",
                     None,
                 )
-                if _img_path and _tc is not None and hasattr(
-                    _tc, "_get_image_content"
-                ):
-                    _desc = await _tc._get_image_content(
-                        _img_path
-                    )
+                if _img_path and not _peer_media_desc:
+                    if _tc is not None and hasattr(_tc, "_get_image_content"):
+                        _desc = await _tc._get_image_content(
+                            _img_path
+                        )
+                    else:
+                        # 桌面/协议部署可能没有 A 线 client 对象——识别不该被
+                        # 它绑架，走平台无关共享识别层（同一 VisionClient）。
+                        from src.inbox.media_enrich import (
+                            enrich_inbound_media_text as _eimt,
+                        )
+                        _ignored_text, _desc = await _eimt(
+                            media_type=_peer_media_type,
+                            media_ref=_peer_media_ref,
+                            caption="",
+                            config=assistant.config.config or {},
+                        )
                     if _desc:
                         _peer_media_desc = str(_desc).strip()
                         # 识别结果回写收件箱消息行（与语音/视频分支对等，补齐此前缺口）：
@@ -122,43 +218,53 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
                         # 语音/视频分支同口径。此前图片描述只走 media_desc 辅助
                         # 块、正文停留 [图片] 占位——模型对占位正文的回应明显弱
                         # 于描述在正文（WA/协议线识图「答非所问」的直接根源）。
-                        _cap = last.strip()
-                        if _cap.startswith("[图片") or _cap in (
-                                "[贴纸]", "[媒体]", ""):
-                            _cap = ""
-                        _ifull = (
-                            f"{_cap}\n[图片内容] {_peer_media_desc}"
-                            if _cap
-                            else f"[图片内容] {_peer_media_desc}"
-                        )
-                        if last.strip() in (
-                                "[图片]", "[贴纸]", "[媒体]", "") or _cap:
-                            last = _ifull
-                        for _hm in reversed(history or []):
-                            if isinstance(_hm, dict) and _hm.get(
-                                    "role") == "user":
-                                _hc = str(
-                                    _hm.get("content") or "").strip()
-                                if _hc in (
-                                    "[图片]", "[贴纸]", "[媒体]", "",
-                                ) or (
-                                    _hc
-                                    and not _hc.startswith("[图片内容]")
-                                ):
-                                    _hm["content"] = _ifull
-                                break
+                        last = _fold_image_desc(
+                            last, history, _peer_media_desc)
                         assistant.logger.info(
                             "[AutoDraft] 图片识别补全: %s",
                             _peer_media_desc[:80],
                         )
+                elif _peer_media_desc:
+                    # 等待环从消息行重读到的描述（并行链路已回写）：同样并入
+                    # 正文与 history（与直识路径同口径）；不再回写、不再识别。
+                    last = _fold_image_desc(last, history, _peer_media_desc)
+                    assistant.logger.info(
+                        "[AutoDraft] 等图拿到并行回写描述: %s",
+                        _peer_media_desc[:80],
+                    )
             except Exception:
                 assistant.logger.debug(
                     "[AutoDraft] 图片识别补全失败",
                     exc_info=True,
                 )
+        # 识别失败处置（实施56 P1，2026-08-22）：media_degrade_reply 开 → 放行
+        # 拟稿，产线经 inbound_enrich 给无 desc 媒体挂媒体块（ai_client 自带
+        # 「自然承认收到+温和追问」话术，诚实降级不装懂）；关（默认）→ 维持
+        # 08-17 无兜底纪律：拦下 + 上报 + 取消本条拟稿。
+        _degrade_ok = False
+        # 图片分支不再要求 media_ref 非空（2026-08-23）：边车「先落行后补 ref」的
+        # 窗口内，ref 为空的图片行此前两个分支都进不去 → 裸生成无诚实指令 →
+        # 盲猜画面（「这图是你家猫吗」实锤）。看得见 media_type=图 就必须
+        # 走降级或扣留，绝不裸拟。语音分支维持原条件（转写链无此事故形态）。
+        if not _peer_media_desc and (
+                _peer_media_type in ("image", "photo", "sticker")
+                or (_peer_media_ref and _peer_media_type in ("voice", "audio"))):
+            try:
+                from src.inbox.media_enrich import media_degrade_reply_enabled
+                _degrade_ok = media_degrade_reply_enabled(
+                    assistant.config.config or {})
+            except Exception:
+                _degrade_ok = False
         if (
             _peer_media_type in ("image", "photo", "sticker")
-            and _peer_media_ref
+            and not _peer_media_desc
+            and _degrade_ok
+        ):
+            assistant.logger.info(
+                "[AutoDraft] 图片未识别 → 降级诚实拟稿"
+                "（media_degrade_reply）cid=%s", cid)
+        elif (
+            _peer_media_type in ("image", "photo", "sticker")
             and not _peer_media_desc
         ):
             # 无兜底：没看懂图就不拟稿、不放行模板自动发。
@@ -315,6 +421,17 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
                     exc_info=True,
                 )
         if (
+            _peer_media_type in ("voice", "audio")
+            and _peer_media_ref
+            and not _peer_media_desc
+            and _degrade_ok
+        ):
+            # 降级诚实拟稿：未转写语音不置 desc → inbound_enrich 判非转写语音
+            # → 挂媒体块（ai_client「内容暂无法识别，自然承认+追问」话术）。
+            assistant.logger.info(
+                "[AutoDraft] 语音未转写 → 降级诚实拟稿"
+                "（media_degrade_reply）cid=%s", cid)
+        elif (
             _peer_media_type in ("voice", "audio")
             and _peer_media_ref
             and not _peer_media_desc
@@ -596,7 +713,59 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
             # P3：入站 mid（TG message.id / 协议 wamid…）贯通案例锚点
             inbound_msg_id=str(_peer_msg_id or "").strip(),
         )
+        # B51 反复读闸（实施64 P1-2，`_285` 实录「把对方原话当成要发的回复」）：
+        # 出稿与对方上一条近逐字 → 重生成一次（温度抖动通常即破复读）；复发 →
+        # 判生成失败走兜底放行（规则模板占位进人审），绝不把鹦鹉稿发出去。
+        try:
+            from src.ai.reply_echo_guard import reply_echoes_inbound
+            if (out.get("ok") and out.get("reply")
+                    and reply_echoes_inbound(str(out.get("reply") or ""), last)):
+                assistant.logger.warning(
+                    "[AutoDraft] 反复读闸命中 cid=%s：出稿≈对方原话 %r → 重生成一次",
+                    cid, str(out.get("reply") or "")[:60])
+                out2 = await generate_persona_reply(
+                    app=_ad_app, platform=platform, chat_key=chat_key,
+                    last_inbound=last, history=history,
+                    persona_id=_persona_id,
+                    risk_level=_risk_level,
+                    media_type=_peer_media_type,
+                    media_ref=_peer_media_ref,
+                    media_desc=_peer_media_desc,
+                    conversation_id=cid,
+                    peer_audio_emotion=_peer_audio_emotion,
+                    account_id=account_id,
+                    inbound_msg_id=str(_peer_msg_id or "").strip(),
+                )
+                if (out2.get("ok") and out2.get("reply")
+                        and not reply_echoes_inbound(
+                            str(out2.get("reply") or ""), last)):
+                    out = out2
+                else:
+                    assistant.logger.warning(
+                        "[AutoDraft] 反复读闸复发 cid=%s → 判生成失败兜底放行", cid)
+                    out = {"ok": False}
+        except Exception:
+            assistant.logger.debug(
+                "[AutoDraft] 反复读闸异常（放行原稿）", exc_info=True)
         if out.get("ok") and out.get("reply"):
+            # 盲断言闸门（2026-08-23 P0-2）：无识图描述的图片轮，出稿不得断言/
+            # 猜测/夸赞画面内容——降级指令是软约束，LLM 违约（「这图是你家猫吗」
+            # 实锤）就把整稿换成诚实追问。有描述时不干预（描述真提到猫时说猫没错）。
+            if (_peer_media_type in ("image", "photo", "sticker")
+                    and not _peer_media_desc):
+                try:
+                    from src.inbox.media_enrich import (
+                        blind_image_assertion, honest_image_ask,
+                    )
+                    if blind_image_assertion(str(out.get("reply") or "")):
+                        assistant.logger.info(
+                            "[AutoDraft] 盲断言拦截 cid=%s：%r → 诚实追问",
+                            cid, str(out.get("reply") or "")[:60])
+                        out["reply"] = honest_image_ask(
+                            str(out.get("reply_lang") or "zh"), seed=cid)
+                except Exception:
+                    assistant.logger.debug(
+                        "[AutoDraft] 盲断言闸门异常（放行原稿）", exc_info=True)
             done = draft_svc.enrich_draft(
                 draft_id, reply_text=out["reply"],
                 reply_lang=str(out.get("reply_lang") or "zh"),
@@ -684,6 +853,10 @@ class AutoDraftConfig:
     # 账号未打 business_line 标签 = 不封顶 = 旧行为）。
     business_line_ceilings: dict = field(
         default_factory=lambda: {"translation": "review"})
+    # 群/频道 P1：skip_group_chats 是否也信「弱证据群」（messenger/instagram 的
+    # 网页 DOM 启发式）。默认 False＝弱证据群照常拟稿（宁可让真群的草稿进队列，
+    # 也不让被误判的私聊客户静默无草稿）；真群噪音压过误判风险时置 True 复旧。
+    skip_groups_trust_weak: bool = False
 
 
 def _a_line_on_duty(app_config, conv: dict, text: str) -> bool:
@@ -751,13 +924,43 @@ def make_auto_draft_cb(
     ) -> None:
         if conv.get("platform", "") in cfg.skip:
             return
-        if cfg.skip_groups:
-            try:
-                from src.inbox.ingest import is_group_conversation
-                if is_group_conversation(conv):
-                    return
-            except Exception:
-                pass
+        # leadbus 线索占位符不拟稿（2026-08-18）：`[线索捕获] <昵称>` 是系统合成的
+        # 「捕获到一个线索」标记，不是客户发言——对它拟回复必然是无意义稿（LLM 被
+        # 占位文本带偏），auto_ai 会话还会被 AutosendWorker 真发出去（本次事故：
+        # 52 条线索 → 28 次投递撞「WhatsApp 服务未启用」刷 WARNING）。线索的首触达
+        # 属坐席认领 / 获客侧 RPA 的职责，不属入站自动回复。前缀与 leadbus_routes
+        # 合成处同源（LEAD_CAPTURE_PREFIX），判定异常一律放行（护栏不伤主链）。
+        try:
+            from src.integrations.leadbus_account import is_lead_capture_text
+            if is_lead_capture_text(text):
+                return
+        except Exception:
+            pass
+        # 群/频道拟稿闸（P1 2026-08-20 收口 group_draft_skip 单源）：skip 开 →
+        # 群一律不拟稿，**除非**坐席经 confirm_group 闸显式确认过全自动——否则
+        # A 线让位（l2 deliver=on）+ 本处早退 = 双让死锁，确认过的群永远哑火。
+        try:
+            from src.inbox.automation_mode import group_draft_skip
+            if group_draft_skip(
+                conv, store, bool(cfg.skip_groups),
+                trust_weak_evidence=bool(
+                    getattr(cfg, "skip_groups_trust_weak", False)),
+            ):
+                return
+        except Exception:
+            # 兜底路径同样尊重「弱证据不静默」——否则单源函数导入失败时，
+            # 被误判成群的私聊客户又掉回无草稿黑洞（兜底不该比主路更危险）。
+            if cfg.skip_groups:
+                try:
+                    from src.inbox.ingest import is_group_conversation
+                    from src.inbox.automation_mode import group_evidence_is_weak
+                    _cid = str(conv.get("conversation_id") or "")
+                    if is_group_conversation(conv) and not (
+                            group_evidence_is_weak(_cid)
+                            and not getattr(cfg, "skip_groups_trust_weak", False)):
+                        return
+                except Exception:
+                    pass
         # min_len 活读（P1 2026-08-02）：cfg.min_len 是构造期快照，设置页写 overlay
         # 后热重载传导不到冻结的 dataclass——有 app_config（生产恒有，持 config 根
         # 引用、热重载就地 merge 可见新值）时以活值为准，异常/缺失回落快照。
@@ -864,6 +1067,9 @@ def make_auto_draft_cb(
                 config=app_config,
                 platform_ceilings_fallback=cfg.platform_ceilings,
                 business_line_ceilings_fallback=cfg.business_line_ceilings,
+                # 实施72 P2：会话级信息给 ⑥「外机自有号对端」层（防跨机 AI 自聊）
+                chat_key=str(conv.get("chat_key") or ""),
+                peer_name=str(conv.get("display_name") or ""),
             ))
             for _cap in _caps_applied:
                 if _cap.layer == "warmup":
@@ -982,6 +1188,11 @@ def setup_auto_draft(assistant, draft_svc, web_app):
         # 群消息本非 1:1 客服场景，生成 L3/L4 待审草稿只会长期无人处置、
         # 反复触发 SLA 铃铛，故提供开关从源头跳过。
         _ad_skip_groups = bool(_ad_cfg.get("skip_group_chats", False))
+        # 弱证据群（messenger/instagram 网页 DOM 启发式）是否也照 skip 静默。
+        # 默认 False：把「私聊被误判成群 → 客户永久无草稿且看板无痕」这条不可见
+        # 失败换成「真群草稿进队列」这条可见失败。真群噪音受不了时置 true。
+        _ad_skip_groups_weak = bool(
+            _ad_cfg.get("skip_group_chats_trust_weak_evidence", False))
         # Phase 2：自动草稿正文走人设产线（与手动「生成草稿」同源）。
         # 默认开；关闭则回落旧规则模板（向后兼容）。
         _ad_enrich = bool(_ad_cfg.get("persona_enrich", True))
@@ -1000,6 +1211,7 @@ def setup_auto_draft(assistant, draft_svc, web_app):
                 platform_ceilings=_ad_platform_ceilings,
                 skip_groups=_ad_skip_groups, enrich=_ad_enrich,
                 business_line_ceilings=_ad_bl_ceilings,
+                skip_groups_trust_weak=_ad_skip_groups_weak,
             ),
             draft_svc, _ad_store, _ad_loop, _enrich_auto_draft, assistant.logger,
             app_config=assistant.config.config or {},
@@ -1047,8 +1259,9 @@ def setup_auto_draft(assistant, draft_svc, web_app):
             assistant.inbox_store.register_new_inbound_cb(_auto_draft_cb)
         assistant.logger.info(
             "AutoDraft 已启用（per-conv 优先, 全局默认 mode=%s min_len=%s "
-            "persona_enrich=%s skip=%s skip_groups=%s）",
+            "persona_enrich=%s skip=%s skip_groups=%s(weak_evidence=%s)）",
             _ad_mode, _ad_min_len, _ad_enrich, _ad_skip, _ad_skip_groups,
+            "skip" if _ad_skip_groups_weak else "draft",
         )
     else:
         assistant.logger.info("AutoDraft 已禁用（auto_draft.enabled=false）")

@@ -86,6 +86,16 @@ def _resolve(value: str, palette: dict[str, str], depth: int = 0) -> str:
             return _resolve(palette[name], palette, depth + 1)
         assert fb, f"变量 {name} 未定义且无 fallback"
         return _resolve(fb, palette, depth + 1)
+    # color-mix 折算（2026-08-23 白标批）：品牌淡底/描边改成
+    # color-mix(in srgb, <c> P%, transparent) 引令牌（换肤自动跟随，verify_brand_reskin
+    # 实锤 --ps 一个 rgba 字面量曾泄漏 472 处）。等价关系 ≡ rgba(c, P/100 × αc)，
+    # 对比度数学零变化；只支持 over-transparent 形态（当前全站唯一用法）。
+    mx = re.fullmatch(
+        r"color-mix\(\s*in\s+srgb\s*,\s*(.+?)\s+([\d.]+)%\s*,\s*transparent\s*\)",
+        v, re.S | re.I)
+    if mx:
+        cr, cg, cb, ca = _parse_rgba(_resolve(mx.group(1), palette, depth + 1))
+        return f"rgba({cr:g},{cg:g},{cb:g},{ca * float(mx.group(2)) / 100:g})"
     return v
 
 

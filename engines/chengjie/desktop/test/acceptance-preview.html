@@ -83,6 +83,7 @@
   </section>
 </div>
 
+<script src="/desktop/renderer/shell-i18n.js"></script>
 <script src="/desktop/renderer/inject-status.js"></script>
 <script src="/desktop/renderer/webmulti.js"></script>
 <script src="/desktop/renderer/shared/copilot/cp-capabilities.js"></script>
@@ -172,9 +173,12 @@ const rail=document.getElementById("rail");
   {label:"X",ic:"X",payload:null},
 ].forEach(function(s,i){
   const item=document.createElement("div"); item.className="rail-item"+(i===0?" active":"");
-  const st=deriveInjectState(s.payload); const badge=railBadge({level:st.cls,text:st.text});
+  // 两个纯函数只出 code/key，文案由 shell-i18n 取（与 renderer.js 同一条链）
+  const st=deriveInjectState(s.payload);
+  const badge=railBadge({level:st.cls,textKey:"inject."+st.code});
+  const tip=(window.SH?SH(badge.textKey):badge.textKey)||"";
   item.innerHTML='<span class="ic">'+s.ic+'</span><span>'+s.label+'</span>'
-    +'<span class="rail-dot '+badge.dot+'" title="'+(badge.text||"")+'"></span>';
+    +'<span class="rail-dot '+badge.dot+'" title="'+tip+'"></span>';
   rail.appendChild(item);
 });
 

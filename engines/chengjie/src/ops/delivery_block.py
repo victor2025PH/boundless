@@ -239,7 +239,11 @@ SEAT_BANNER_MAX_AGE_SEC = 1800.0
 
 def seat_banner(*, now: Optional[float] = None,
                 max_age_sec: float = SEAT_BANNER_MAX_AGE_SEC) -> Dict[str, Any]:
-    """坐席工作台红条快照：无密钥/无路径，只报近窗内还在响的域。"""
+    """坐席工作台红条快照：无密钥/无路径，只报近窗内还在响的域。
+
+    B73（实施67 P1-10）：附 ``top_reason``＝近窗最高频拦截原因（人话）——横幅
+    只说「已安全拦下」不说为什么，用户与值守都无从下手（钧机 v1.054 实录）。
+    """
     snap = snapshot()
     t = float(now if now is not None else time.time())
     last = {
@@ -247,6 +251,10 @@ def seat_banner(*, now: Optional[float] = None,
         for k, v in (snap.get("last_ts") or {}).items()
         if t - float(v or 0) <= max_age_sec
     }
+    recent_evs = [
+        ev for ev in (snap.get("recent") or [])
+        if t - float(ev.get("ts") or 0) <= max_age_sec
+    ]
     recent = [
         {
             "domain": ev.get("domain"),
@@ -256,15 +264,65 @@ def seat_banner(*, now: Optional[float] = None,
             # False ＝连稿都没生成（客户在等回复，红色语义）。前端分级渲染用。
             "queued": bool(ev.get("queued_draft")),
         }
-        for ev in (snap.get("recent") or [])
-        if t - float(ev.get("ts") or 0) <= max_age_sec
+        for ev in recent_evs
     ]
+    # 近窗最高频 (domain, reason)：环形明细现算（by_reason 是进程累计，会把
+    # 修好的旧故障顶成主因）；人话映射复用弹窗同一词表，绝不吐裸错误码。
+    top_reason = ""
+    top_reason_domain = ""
+    top_reason_code = ""
+    top_reason_n = 0
+    if recent_evs:
+        _cnt: Dict[tuple, int] = {}
+        for ev in recent_evs:
+            _k = (str(ev.get("domain") or ""), str(ev.get("reason") or ""))
+            _cnt[_k] = _cnt.get(_k, 0) + 1
+        (top_reason_domain, top_reason_code), top_reason_n = max(
+            _cnt.items(), key=lambda kv: kv[1])
+        top_reason = (_REASON_ZH.get((top_reason_domain, top_reason_code))
+                      or _DOMAIN_REASON_FALLBACK.get(top_reason_domain)
+                      or top_reason_code or "")
     return {
         "active": bool(last),
         "by_domain": {k: int((snap.get("by_domain") or {}).get(k) or 0) for k in last},
         "recent": recent[-5:],
         "total": int(snap.get("total") or 0),
+        "top_reason": top_reason,
+        "top_reason_domain": top_reason_domain,
+        "top_reason_code": top_reason_code,
+        "top_reason_n": int(top_reason_n),
     }
+
+
+def recent_blocks_for(
+    conversation_id: str,
+    *,
+    max_age_sec: float = SEAT_BANNER_MAX_AGE_SEC,
+    now: Optional[float] = None,
+) -> list:
+    """近窗内**指定会话**的拦截明细（收件箱诊断面板「这条为什么没回」的现场证据）。
+
+    读环形明细（50 条）按会话过滤 + 时窗（默认与坐席红条同 30min 口径）。
+    进程重启即清——明细本就是近窗语义，历史口径由消息表/待发队列承载。
+    只读；空会话 id / 无匹配 → []。
+    """
+    cid = str(conversation_id or "")
+    if not cid:
+        return []
+    t = float(now if now is not None else time.time())
+    with _lock:
+        evs = list(_recent)
+    return [
+        {
+            "ts": float(ev.get("ts") or 0.0),
+            "domain": str(ev.get("domain") or ""),
+            "reason": str(ev.get("reason") or ""),
+            "queued": bool(ev.get("queued_draft")),
+        }
+        for ev in evs
+        if str(ev.get("conversation_id") or "") == cid
+        and t - float(ev.get("ts") or 0.0) <= max_age_sec
+    ]
 
 
 def reset_for_tests() -> None:

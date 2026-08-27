@@ -21,13 +21,8 @@
 {% set _al_admin = (user_role|default('') in ('master', 'operator')) or (can_manage_ops|default(false)) %}
 {% if _al_admin %}
 {% if alertlink_banner|default(false) %}
-<div id="ws-alertlink" style="display:none;align-items:center;gap:10px;padding:6px 14px;
-     background:linear-gradient(90deg,#7c2d12,var(--th-bg-amber8,#92400e));color:#ffedd5;font-size:12.5px;">
-  <span style="flex:0 0 auto;">🔕</span>
-  <span style="flex:1 1 auto;line-height:1.5;" data-i18n="ws.alertlink.text">{{ (i18n or {}).get('ws.alertlink.text', '告警通道未接通：账号掉线、消息积压、系统故障不会通知到任何人，只能靠人盯页面。') }}</span>
-  <button type="button" id="ws-alertlink-go" style="flex:0 0 auto;border:1px solid rgba(255,237,213,.5);background:rgba(255,237,213,.14);color:#ffedd5;border-radius:7px;padding:3px 12px;font-size:12px;font-weight:600;cursor:pointer;">{{ (i18n or {}).get('ws.alertlink.connect', '立即接通') }}</button>
-  <button type="button" id="ws-alertlink-x" title="{{ (i18n or {}).get('ws.alertlink.later', '24 小时内不再提醒') }}" aria-label="{{ (i18n or {}).get('ws.alertlink.later', '24 小时内不再提醒') }}" style="flex:0 0 auto;border:none;background:transparent;color:#ffedd5;opacity:.7;cursor:pointer;font-size:14px;padding:2px 6px;">✕</button>
-</div>
+<!-- 实施75：告警链路未接通横幅退役——右下胶囊（琥珀）+ 每日一次卡片提示
+     （立即接通=开共享弹窗 / 24h 内不再提醒）；仅管理角色（外层 _al_admin 闸）。 -->
 {% endif %}
 <div id="al-connect-mask" style="display:none;position:fixed;inset:0;z-index:10050;background:rgba(15,23,42,.55);align-items:center;justify-content:center;padding:16px;">
   <div style="background:var(--tk-surface,#fff);color:var(--tk-text,#0f172a);border:1px solid var(--tk-border,#e2e8f0);border-radius:14px;max-width:480px;width:100%;padding:20px 22px;box-shadow:0 20px 50px rgba(2,6,23,.35);">
@@ -44,6 +39,16 @@
       <button type="button" id="al-ct-test" style="border:1px solid var(--tk-brand,#2563eb);background:transparent;color:var(--tk-brand,#2563eb);border-radius:8px;padding:6px 14px;font-size:12.5px;font-weight:600;cursor:pointer;" data-i18n="al.ct.test">{{ (i18n or {}).get('al.ct.test', '发送测试消息') }}</button>
       <button type="button" id="al-ct-save" disabled style="border:none;background:var(--tk-brand,#2563eb);color:#fff;border-radius:8px;padding:6px 14px;font-size:12.5px;font-weight:600;cursor:pointer;opacity:.45;" data-i18n="al.ct.save">{{ (i18n or {}).get('al.ct.save', '保存并接通') }}</button>
     </div>
+    {#- 目标达成推送三灯（2026-08-18）：扫描器/渠道订阅/本人绑定——「达成后推送
+        管理员」的设置状态此前碎在 YAML+渠道面板+用户页三处，这里给唯一汇总面。
+        数据 GET /api/goals/notify-status（任意登录可读；弹窗本身已 admin 闸）；
+        扫描器开关写 POST /api/goals/notify-settings（overlay 保注释，~30s 热生效）。
+        goals 总闸关（403）/旧后端无路由（404）→ 整区隐藏＝特性探测。 -#}
+    <div id="al-ct-goal" style="display:none;margin-top:14px;padding-top:10px;border-top:1px dashed var(--tk-border,#e2e8f0);">
+      <div style="font-size:13px;font-weight:700;" data-i18n="al.ct.goal_title">{{ (i18n or {}).get('al.ct.goal_title', '🎯 目标达成推送') }}</div>
+      <div style="font-size:11.5px;color:var(--tk-text-muted,#64748b);line-height:1.6;margin-top:2px;" data-i18n="al.ct.goal_hint">{{ (i18n or {}).get('al.ct.goal_hint', '客户达成目标（成交/摸底完成等）时推送管理员与坐席——下面几项都绿才真有人收到。') }}</div>
+      <div id="al-ct-goal-rows" style="font-size:12px;line-height:1.9;margin-top:6px;"></div>
+    </div>
   </div>
 </div>
 <script>
@@ -56,11 +61,18 @@
   var testBtn=document.getElementById('al-ct-test');
   var saveBtn=document.getElementById('al-ct-save');
   var closeBtn=document.getElementById('al-ct-close');
-  var banner=document.getElementById('ws-alertlink');
+  var bannerMode={{ 'true' if alertlink_banner|default(false) else 'false' }};
+  var AL_TXT={{ ((i18n or {}).get('ws.alertlink.text', '告警通道未接通：账号掉线、消息积压、系统故障不会通知到任何人，只能靠人盯页面。'))|tojson }};
+  var AL_GO={{ ((i18n or {}).get('ws.alertlink.connect', '立即接通'))|tojson }};
+  var AL_LATER={{ ((i18n or {}).get('ws.alertlink.later', '24 小时内不再提醒'))|tojson }};
+  var AL_TITLE={{ ((i18n or {}).get('ntf.capsule_title', '系统状态 · 点击查看通知中心'))|tojson }};
   var SNOOZE='ws_alertlink_snooze';
   /* 兜底与 alert_link_audit.HIGH_VALUE_ALIASES 同集（门禁钉住），正常路径用
-     状态接口回传的 focus_aliases（业务目录∪高价值），接通即达 healthy 覆盖口径。 */
-  var FALLBACK_EVENTS=['draft_backlog','human_deliver','host_alert'];
+     状态接口回传的 focus_aliases（业务目录∪高价值），接通即达 healthy 覆盖口径。
+     2026-08-27 补 assistant_report / bug_intake：用户报障通道此前不在关注集，
+     一键接通也接不上它——「点了报障没人收到」是产品级断链，不是运维告警缺口。 */
+  var FALLBACK_EVENTS=['draft_backlog','human_deliver','host_alert',
+                       'assistant_report','bug_intake'];
   var focusAliases=[];
   var tested=false, busy=false;
   function _f(){ return window.apiFetch||fetch; }
@@ -94,10 +106,23 @@
   function _invalidate(){ tested=false; _setSave(false); }
   if(tokenEl) tokenEl.addEventListener('input', _invalidate);
   if(chatEl) chatEl.addEventListener('input', _invalidate);
+  /* 实施75：横幅显隐 → 右下胶囊 + 每日一次卡片提示（保留原「未接通才提示、
+     贪睡 24h、接通即灭」语义；_tick 的 want 已含 verdict+snooze 判定）。 */
   function _setBanner(want){
-    if(!banner) return;
-    if(window.wsBanner&&window.wsBanner.set) window.wsBanner.set('ws-alertlink', want);
-    else banner.style.display=want?'flex':'none';
+    if(!bannerMode || !window.AITRNotify) return;
+    if(!want){ AITRNotify.ongoing.clear('alertlink'); return; }
+    AITRNotify.ongoing.set('alertlink', {text:AL_TXT, tone:'warn', title:AL_TITLE});
+    AITRNotify.notify({
+      severity:'warn', text:AL_TXT,
+      dedupKey:'alertlink', dedupTtlMs:24*3600000, center:false,
+      actions:[
+        {label:AL_GO, onClick:openModal},
+        {label:AL_LATER, onClick:function(){
+          try{ localStorage.setItem(SNOOZE, String(Date.now()+24*3600*1000)); }catch(_){}
+          AITRNotify.ongoing.clear('alertlink');
+        }}
+      ]
+    });
   }
   function _snoozed(){
     try{ return Number(localStorage.getItem(SNOOZE)||0)>Date.now(); }catch(_){ return false; }
@@ -113,10 +138,123 @@
       _setBanner(d.verdict==='no_channel'&&!_snoozed());
     }catch(_){ /* 探测失败静默——横幅绝不因网络抖动误弹 */ }
   }
+  /* ── 目标达成推送三灯（扫描器/渠道订阅/本人绑定；非 200＝整区隐藏） ── */
+  var goalBox=document.getElementById('al-ct-goal');
+  var goalRows=document.getElementById('al-ct-goal-rows');
+  var goalSt=null, goalBusy=false;
+  function _esc(s){
+    return String(s==null?'':s).replace(/[&<>"']/g,function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+  function _gRow(ok,text,extraHtml){
+    return '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">'
+      +'<span style="flex:0 0 auto;">'+(ok?'\u2705':'\u26A0\uFE0F')+'</span>'
+      +'<span style="flex:1 1 auto;color:'+(ok?'var(--tk-text-muted,#64748b)':'var(--tk-amber-ink,#b45309)')+';">'
+      +_esc(text)+'</span>'+(extraHtml||'')+'</div>';
+  }
+  /* 推送选项三开关：与 /api/goals/notify-settings 白名单键 1:1（enabled 是上面
+     那盏灯的按钮，这里管其余三个——此前它们只能改 YAML，是设置面最后的无 UI 死角） */
+  function _gOpt(key,labelKey,tipKey){
+    return '<label title="'+_esc(_t(tipKey))+'" style="display:inline-flex;align-items:center;gap:4px;margin-right:12px;cursor:pointer;color:var(--tk-text-muted,#64748b);">'
+      +'<input type="checkbox" data-goal-flag="'+key+'"'+(goalSt&&goalSt[key]?' checked':'')+'>'
+      +_esc(_t(labelKey))+'</label>';
+  }
+  function _goalRender(){
+    if(!goalRows||!goalSt) return;
+    var h='';
+    if(goalSt.notify_enabled) h+=_gRow(true,_t('al.ct.goal_scan_on'));
+    else h+=_gRow(false,_t('al.ct.goal_scan_off'),
+      '<button type="button" id="al-ct-goal-en" style="flex:0 0 auto;border:1px solid var(--tk-brand,#2563eb);background:transparent;color:var(--tk-brand,#2563eb);border-radius:7px;padding:2px 10px;font-size:11.5px;font-weight:600;cursor:pointer;">'
+      +_esc(_t(goalBusy?'al.ct.goal_scan_saving':'al.ct.goal_scan_btn'))+'</button>');
+    if(goalSt.push_covered){
+      h+=_gRow(true,_tf('al.ct.goal_cover_on',
+        {names:(goalSt.push_channels||[]).join(', ')||'-'}));
+    }else h+=_gRow(false,_t('al.ct.goal_cover_off'));
+    if(goalSt.push_agent){
+      h+= goalSt.self_bound ? _gRow(true,_t('al.ct.goal_self_on'))
+        : _gRow(false,_t('al.ct.goal_self_off'));
+    }
+    h+='<div style="margin-top:4px;padding-top:6px;border-top:1px dashed var(--tk-border,#e2e8f0);font-size:11.5px;">'
+      +'<span style="color:var(--tk-text-muted,#64748b);margin-right:10px;">'+_esc(_t('al.ct.goal_opt_title'))+'</span>'
+      +_gOpt('push_agent','al.ct.goal_opt_agent','al.ct.goal_opt_agent_t')
+      +_gOpt('miss_digest','al.ct.goal_opt_miss','al.ct.goal_opt_miss_t')
+      +_gOpt('include_profile','al.ct.goal_opt_profile','al.ct.goal_opt_profile_t')
+      +'</div>';
+    goalRows.innerHTML=h;
+    var en=document.getElementById('al-ct-goal-en');
+    if(en) en.addEventListener('click', _goalEnable);
+    goalRows.querySelectorAll('[data-goal-flag]').forEach(function(cb){
+      cb.addEventListener('change', function(){ _goalSetFlag(cb); });
+    });
+  }
+  async function _goalSetFlag(cb){
+    var key=cb.getAttribute('data-goal-flag');
+    var want=!!cb.checked;
+    cb.disabled=true;
+    try{
+      var body={}; body[key]=want;
+      var r=await _f()('/api/goals/notify-settings',{
+        method:'POST',credentials:'same-origin',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(body)});
+      var d=await r.json().catch(function(){ return {}; });
+      if(r.ok&&d&&d.ok){
+        _msg(_t('al.ct.goal_scan_ok'),'ok');
+        if(goalSt&&d.effective){
+          goalSt.push_agent=!!d.effective.push_agent;
+          goalSt.miss_digest=!!d.effective.miss_digest;
+          goalSt.include_profile=!!d.effective.include_profile;
+          goalSt.notify_enabled=!!d.effective.notify_enabled;
+        }
+      }else{
+        cb.checked=!want;   /* 写失败回滚勾选态——UI 绝不谎报已保存 */
+        _msg(_tf('al.ct.goal_opt_fail',{err:(d&&(d.reason||d.detail))||('HTTP '+r.status)}),'err');
+      }
+    }catch(e){
+      cb.checked=!want;
+      _msg(_tf('al.ct.goal_opt_fail',{err:String(e&&e.message||e)}),'err');
+    }
+    cb.disabled=false;
+    _goalRender();
+  }
+  async function _goalTick(){
+    if(!goalBox) return;
+    try{
+      var r=await _f()('/api/goals/notify-status',{credentials:'same-origin'});
+      if(!r.ok){ goalBox.style.display='none'; return; }
+      var d=await r.json();
+      if(!d||!d.ok){ goalBox.style.display='none'; return; }
+      goalSt=d;
+      _goalRender();
+      goalBox.style.display='block';
+    }catch(_){ goalBox.style.display='none'; }
+  }
+  async function _goalEnable(){
+    if(goalBusy) return;
+    goalBusy=true; _goalRender();
+    try{
+      var r=await _f()('/api/goals/notify-settings',{
+        method:'POST',credentials:'same-origin',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({enabled:true})});
+      var d=await r.json().catch(function(){ return {}; });
+      if(r.ok&&d&&d.ok){
+        _msg(_t('al.ct.goal_scan_ok'),'ok');
+        /* 写的是文件真相，effective 即刻回显；进程内扫描循环 ~30s 热跟上 */
+        if(goalSt&&d.effective) goalSt.notify_enabled=!!d.effective.notify_enabled;
+      }else{
+        _msg(_tf('al.ct.goal_scan_fail',{err:(d&&(d.reason||d.detail))||('HTTP '+r.status)}),'err');
+      }
+    }catch(e){ _msg(_tf('al.ct.goal_scan_fail',{err:String(e&&e.message||e)}),'err'); }
+    goalBusy=false;
+    _goalRender();
+  }
   function openModal(){
     mask.style.display='flex';
     _msg('','');
     _invalidate();
+    _goalTick();
     if(tokenEl) setTimeout(function(){ tokenEl.focus(); },50);
   }
   function closeModal(){ mask.style.display='none'; }
@@ -137,7 +275,9 @@
       if(r.status===403){ _msg(_t('al.ct.no_perm'),'err'); busy=false; return; }
       var d=await r.json().catch(function(){ return {}; });
       if(r.ok&&d&&d.ok){ tested=true; _setSave(true); _msg(_t('al.ct.test_ok'),'ok'); }
-      else _msg(_tf('al.ct.test_fail',{err:(d&&d.error)||('HTTP '+r.status)}),'err');
+      /* B24：HTTP 状态码只在真非 2xx 时兜底；200+ok:false（渠道拒收）必须给人话
+         ——服务端现已带映射后的 d.error，这里的 unknown 只是双保险 */
+      else _msg(_tf('al.ct.test_fail',{err:(d&&d.error)||(r.ok?_t('al.ct.err.unknown'):('HTTP '+r.status))}),'err');
     }catch(e){ _msg(_tf('al.ct.test_fail',{err:String(e&&e.message||e)}),'err'); }
     busy=false;
   });
@@ -170,23 +310,16 @@
         try{ if(typeof loadAlertLink==='function') loadAlertLink(); }catch(_){}
         setTimeout(closeModal, 1400);
         _tick();
+        _goalTick();   /* 渠道覆盖灯随保存即刻复核（focus_aliases 含 goal_complete） */
       }else{
         _msg(_tf('al.ct.save_fail',{err:(d&&d.error)||('HTTP '+r.status)}),'err');
       }
     }catch(e){ _msg(_tf('al.ct.save_fail',{err:String(e&&e.message||e)}),'err'); }
     busy=false;
   });
-  /* 横幅（仅工作台外壳渲染）：注册进 wsBanner 仲裁（prio 15，让位于事故类横幅）；
-     ✕=24h 贪睡（localStorage，跨标签页共享）；每 5 分钟复查 + 回前台补查。 */
-  if(banner){
-    if(window.wsBanner&&window.wsBanner.register) window.wsBanner.register('ws-alertlink', 15, 'flex');
-    var go=document.getElementById('ws-alertlink-go');
-    if(go) go.addEventListener('click', openModal);
-    var x=document.getElementById('ws-alertlink-x');
-    if(x) x.addEventListener('click', function(){
-      try{ localStorage.setItem(SNOOZE, String(Date.now()+24*3600*1000)); }catch(_){}
-      _setBanner(false);
-    });
+  /* 提示（仅工作台外壳启用）：每 5 分钟复查 + 回前台补查；渲染面=右下胶囊/卡片
+     （_setBanner），24h 贪睡 localStorage 跨标签页共享。 */
+  if(bannerMode){
     setTimeout(_tick, 2500);
     setInterval(_tick, 300000);
     document.addEventListener('visibilitychange', function(){

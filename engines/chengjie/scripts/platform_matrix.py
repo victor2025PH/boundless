@@ -25,8 +25,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.integrations.platform_capabilities import (  # noqa: E402
-    CAPABILITY_LABELS, HARD_LIMITS, INBOUND_LABEL, capability_matrix,
-    switched_cells,
+    CAPABILITY_LABELS, GROUP_ADMIN_LABEL, GROUP_RECV_LABEL, GROUP_SEND_LABEL,
+    HARD_LIMITS, INBOUND_LABEL, capability_matrix, switched_cells,
 )
 
 _DOC_DEFAULT = Path(__file__).resolve().parent.parent / "docs" / "平台能力矩阵.md"
@@ -36,6 +36,8 @@ PLATFORM_LABEL = {
     "whatsapp": "WhatsApp",
     "messenger": "Messenger",
     "line": "LINE",
+    "zalo": "Zalo",
+    "instagram": "Instagram",
 }
 
 
@@ -52,13 +54,29 @@ def render_matrix(config: dict | None = None) -> str:
         "> 自动生成，**不要手改**（门禁 `tests/test_platform_matrix.py` 钉住与代码",
         "> 逐字一致）。",
         "",
-        "两组列的**事实源不同**，别混着读：",
+        "各列的**事实源不同**，别混着读：",
         "",
         "- **发送四列** = 各 worker 类上**方法是否存在**，与编排器运行时判据同源",
         "  （`owns_media()` 就是 `hasattr(worker, \"send_media\")`）。",
-        "- **收媒体列** = 该平台入站 handler 有没有把 `media_type` 带进 payload（AST",
-        "  判定）。不带就等于客户发的图对 AI 不存在——下游识别层（`media_enrich`）是",
-        "  平台无关的，只要字段到位，识图/转写就自动生效。",
+        "- **收媒体列** = 该平台入站链有没有把 `media_type` 带进 payload——Python",
+        "  handler 用 AST 判定；Node 边车平台（WA/Messenger/Zalo/IG）判定**边车",
+        "  server.js 的 ingest payload**（文本判定；共享 ingest 路由只证明「路由会",
+        "  转发」，证明不了「边车真的送了」）。不带就等于客户发的图对 AI 不存在。",
+        "- **群消息进箱列** = 群消息能否被标注/分流进统一收件箱，事实源分三种：",
+        "  Telegram 两档＝落库层 `normalizer.infer_chat_type` 负数 chat_id 启发式",
+        "  （判定＝真调用该函数）；LINE protocol＝handler 显式 `chat_type`（AST）；",
+        "  边车平台＝ingest payload 里的 `chat_type` 真含 \"group\"（文本判定，",
+        "  显式空串不算数）。**判据强度分档**：WA/LINE/TG 的群地址自描述（`@g.us` /",
+        "  群 id / 负数 chat_id）＝硬事实；Messenger（一线程出现 ≥2 个不同发言人）与",
+        "  Instagram（线程行叠 ≥2 张头像，`services/instagram-web/ig_threads.js`）＝",
+        "  **网页 DOM 启发式**，判不出时如实回落私聊，平台改版可能失准——这两家的",
+        "  这一格是「已接线」，不是「已在真号上验证过」。",
+        "- **群内可发列** = 推导列：群消息进箱 ∧ 发文本。群地址在 WA/LINE/TG 自描述，",
+        "  Zalo 由边车群注册表自动解析 ThreadType（`services/zalo-personal/",
+        "  group-registry.js`）。看不见群的平台谈不上群内回复。",
+        "- **群管理 API 列** = worker 方法内省（`invite_to_group`/`create_group`/",
+        "  `kick_group_member`/`rename_group`，见 `GROUP_ADMIN_METHODS` 预留契约），",
+        "  列出已有能力的中文标签，无则 `-`。",
         "",
         "判读：`Y` 支持 / `-` 不支持 / `开关` 需打开配置（开关名见表下）/ `?` 未知",
         "（本机缺依赖构造不出 worker，或入站接线点被重命名找不到）——`?` **不等于",
@@ -66,14 +84,21 @@ def render_matrix(config: dict | None = None) -> str:
         "",
         "⚠ 收媒体列判的是**代码接没接线**，不读运行时配置：LINE 另有一个默认开启的",
         "开关 `platform_login.line.media.inbound`，运营把它关掉后该格仍显示 `Y`（代码",
-        "确实接着，只是被配置停用了）。`--live` 模式同理。",
+        "确实接着，只是被配置停用了）。`--live` 模式同理。群消息进箱同理：TG 的",
+        "`telegram.process_groups` / 群自动回复档位是运行时策略，不改变接线事实。",
         "",
     ]
 
     header = ("| 平台（mode） | " + " | ".join(CAPABILITY_LABELS[c] for c in caps)
-              + " | " + INBOUND_LABEL + " |")
+              + " | " + INBOUND_LABEL
+              + " | " + GROUP_RECV_LABEL
+              + " | " + GROUP_SEND_LABEL
+              + " | " + GROUP_ADMIN_LABEL + " |")
     lines.append(header)
-    lines.append("|---" * (len(caps) + 2) + "|")
+    lines.append("|---" * (len(caps) + 5) + "|")
+
+    def _tri(v):
+        return "?" if v is None else ("Y" if v else "-")
 
     for key in sorted(matrix):
         row = matrix[key]
@@ -89,8 +114,14 @@ def render_matrix(config: dict | None = None) -> str:
                 cells.append("开关")
             else:
                 cells.append("-")
-        rm = row.get("recv_media")
-        cells.append("?" if rm is None else ("Y" if rm else "-"))
+        cells.append(_tri(row.get("recv_media")))
+        cells.append(_tri(row.get("recv_group")))
+        cells.append(_tri(row.get("group_send")))
+        ga = row.get("group_admin")
+        if ga is None:
+            cells.append("?")
+        else:
+            cells.append("、".join(ga) if ga else "-")
         lines.append("| %s | %s |" % (label, " | ".join(cells)))
 
     if switched:
@@ -115,6 +146,11 @@ def render_matrix(config: dict | None = None) -> str:
         "`reply_to` 不代表真的透传（LINE 的 `send()` 收了它却忽略，一直到 2026-07-31",
         "才接上；Messenger 至今仍是收了不用）。按签名推断会造出假阳性——那正是本表要",
         "消灭的东西。要查这些请直接读 worker 实现。",
+        "",
+        "**频道（channel/OA/broadcast）刻意不进本表**：频道的「订阅/收帖/发布」是与",
+        "会话收发不同构的实体（订阅关系 + 帖子流 + 发布管线），归 channel_hub 主线",
+        "（P2/P3）落地时再进表；现状只有 Telegram 的 channel 类型会话能按 `chat_type`",
+        "进箱（与群同判据，已被群消息进箱列覆盖）。",
         "",
         "**收媒体列只判「接没接线」，不判「支持哪几种」**：图 / 语音 / 视频 / 贴纸 /",
         "文件的逐项支持度取决于各平台上游（如 Messenger 网页侧文件只给占位），那要逐",

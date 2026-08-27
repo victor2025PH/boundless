@@ -338,6 +338,35 @@ def resolve_voice_autosend_cfg(config: Dict[str, Any]) -> Dict[str, Any]:
         return {}
 
 
+def global_voice_reply_off(config: Optional[Dict[str, Any]]) -> bool:
+    """B120（实施74）：全局「启用语音回复」是否被**显式关闭**。
+
+    自动回复设置页的「启用语音回复」开关写 ``inbox.l2_autosend.voice.enabled``
+    （见 reply_settings.html data-hot-chip）。0826 ``_588/_589`` + 0827 07:18
+    实录：用户关了它，主动关怀/仪式链的语音照发——各自动语音链各读各的开关，
+    没有一个「总闸」语义。
+
+    统一语义（本函数是唯一判定口）：
+
+    - **显式 false**（键存在且为假）＝用户明确关声 → 所有自动语音链路禁声：
+      B 线 autosend（本就读同键）、主动触达/仪式 opener（proactive_topic）、
+      A 线 TG voice_reply（sender）。
+    - **键缺席** ＝ 保持各链自己的开关各管各（存量部署零行为变化）。
+    - 坐席手动 send-voice **刻意豁免**——人的明示决定不受 AI 自动开关约束
+      （与「人工通过≠AI自动发」同一原则）。
+    - RPA 平台链（whatsapp/line/messenger 的 ``voice_output``）各平台页有独立
+      可见开关，且 runner 只持平台段配置——本闸暂不透传（实施74 备案，如需
+      「一关全关」属结构改动走后续批次）。
+    """
+    try:
+        vb = (((config or {}).get("inbox") or {}).get("l2_autosend") or {}).get(
+            "voice")
+        return isinstance(vb, dict) and "enabled" in vb and not bool(
+            vb.get("enabled"))
+    except Exception:
+        return False
+
+
 # 客户**明确点名要语音/唱歌**时，放宽长度上限到该硬帽（~30s 语音；避免绝口不发，
 # 也避免几分钟语音）。低于此仍强制走语音——「发条语音/唱首歌」得不到语音是实录事故。
 _REQUEST_HARD_CAP = 300

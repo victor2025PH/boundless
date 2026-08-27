@@ -77,6 +77,7 @@ __all__ = [
     "in_quiet_hours",
     "schedule_clock",
     "shift_hours_to_clock",
+    "city_ask_eligible",
     "dump_stats",
     "reset_stats_for_tests",
 ]
@@ -854,11 +855,13 @@ def user_time_line(
 ) -> str:
     """一行「对方那边现在几点」内部事实块（注入 prompt）。
 
-    ``clock`` 为 None 或 ``trust=advisory`` → 返回 ""：弱信号不进 prompt，否则 LLM 会拿
-    一个猜出来的时间当事实复述（「你那边应该刚起床吧」猜错就是当场穿帮）。
+    只有 ``trust == replace``（显式信号）才注入；narrow/advisory → ""。
+    2026-08-19 事故同根收口：裸行为推断把国内客户猜成 UTC-5（0.78 置信、
+    country=CN 自相矛盾）——narrow 猜出的时间进 prompt，LLM 就会在对方上午
+    说「这么晚了早点睡」，与仪式档位错位是同一类内容错误。宁可不注入。
     """
     try:
-        if clock is None or clock.trust == TRUST_ADVISORY:
+        if clock is None or clock.trust != TRUST_REPLACE:
             return ""
         if _clock_tzinfo(clock) is None:
             return ""
@@ -999,19 +1002,69 @@ def in_quiet_hours(
             return False
 
 
+# 与服务器默认钟（本机 UTC+8）差这么多才算「行为时钟像海外」——
+# 2026-08-19 晚安事故那条是 UTC-5 vs +8 = 13h；3h 正好盖住东亚 vs 西亚/欧洲。
+_CITY_ASK_MIN_SHIFT = 3.0
+_CITY_ASK_SERVER_OFFSET = 8.0
+_ZH_LANG_RE = re.compile(r"^(zh|cmn|yue|wuu)\b", re.IGNORECASE)
+
+
+def city_ask_eligible(
+    clock: Optional[UserClock],
+    *,
+    language: str = "",
+    server_offset: float = _CITY_ASK_SERVER_OFFSET,
+    min_shift_hours: float = _CITY_ASK_MIN_SHIFT,
+) -> Tuple[bool, str]:
+    """是否该借 gentle_checkin 问居住城市。返回 ``(ok, reason)``。
+
+    只问「没有 replace 时钟」且「像海外」的会话——不是人人都问：
+
+    - 已有自述城市 / 单时区国码 → ``already_replace``（时钟已可信）
+    - 会话语种非中文 → ``foreign_lang``
+    - 行为时钟相对服务器钟偏移 ≥ ``min_shift_hours``（含 8/19 那条
+      ``behavior UTC-5 + country=CN`` 自相矛盾）→ ``behavior_shift``
+    - 其余（国内中文、无信号）→ ``not_overseas``
+
+    纯函数、绝不 raise。上层再叠亲密度 / 冷却 / 槽位已知。
+    """
+    try:
+        if clock is not None and str(getattr(clock, "trust", "") or "") == TRUST_REPLACE:
+            return False, "already_replace"
+        lang = str(language or "").strip().lower()
+        if lang in ("unknown", "und", "auto", "null", "none"):
+            lang = ""
+        if lang and not _ZH_LANG_RE.match(lang):
+            return True, "foreign_lang"
+        source = str(getattr(clock, "source", "") or "") if clock is not None else ""
+        if source in ("behavior", "behavior_corroborated"):
+            off = getattr(clock, "offset_hours", None)
+            if off is not None and abs(float(off) - float(server_offset)) >= float(min_shift_hours):
+                return True, "behavior_shift"
+        return False, "not_overseas"
+    except Exception:
+        return False, "error"
+
+
 def schedule_clock(
     clock: Optional[UserClock],
     now_ts: float,
 ) -> Tuple[int, str, float]:
     """择时用的 ``(小时, day_key, offset_hours)``。
 
-    ``trust`` 为 replace/narrow → 用户钟（narrow 也用：择时挪到对方白天是「收窄到更合适的
-    时刻」，真正的越界防线在 in_quiet_hours）；否则服务器钟且 offset 返回 0.0。
-    offset 按 ``now_ts`` 实时算（DST 正确），而非用创建时的快照。
+    **只有 ``trust == replace``（显式信号：自述城市/号码国码/行为得到佐证）才把
+    择时基准换成用户钟**；narrow（裸行为推断）与 advisory 一律服务器钟、offset 0.0。
+
+    2026-08-19 10:12 生产事故把旧赌注证伪：旧实现让 narrow 也驱动择时（理由
+    「挪到对方白天=收窄，越界防线在 in_quiet_hours」）——但 5 条稀疏活跃样本把
+    国内客户推断成 UTC-5（连 country=CN 都自相矛盾），晚安仪式在服务器上午
+    10:12 发出「外面雨声哗哗的，被子裹紧点哈，晚安🌙」。错钟驱动档位选择产生的
+    是**内容错误**（上午说晚安），安静时段防线管不到这一层；timing 优化绝不值
+    这个险。offset 按 ``now_ts`` 实时算（DST 正确），而非用创建时的快照。
     """
     try:
         tz = _clock_tzinfo(clock)
-        if clock is not None and tz is not None and clock.trust in (TRUST_REPLACE, TRUST_NARROW):
+        if clock is not None and tz is not None and clock.trust == TRUST_REPLACE:
             dt = _as_utc(now_ts).astimezone(tz)
             off = dt.utcoffset()
             offset = (off.total_seconds() / 3600.0) if off is not None else float(clock.offset_hours)

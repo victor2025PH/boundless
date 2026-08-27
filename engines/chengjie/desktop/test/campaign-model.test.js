@@ -152,4 +152,56 @@ ok(m.cmLangText({ zh: "领取", en: "" }, "en") === "领取", "英文缺失回�
   ok(m.cmCtaUrlWithReg("", OB, ["bd2026.cc"]) === "", "空串安全");
 }
 
+// ── skip 原因汇总（P0 2026-08-22 可诊断化） ─────────────────────────────────
+{
+  ok(m.cmSkipSummary([], ctx({})).reason === "no_feed", "空 feed → no_feed");
+  const list = m.cmNormalizeFeed(feedWith({})).campaigns;
+  ok(m.cmSkipSummary(list, ctx({})) === null, "有合格活动 → null（不产生 skip）");
+  const s1 = m.cmSkipSummary(list, ctx({ onboardingMs: NOW - 73 * H }));
+  ok(s1 && s1.reason === "window_passed" && s1.id === "newbie-6u", "72h 窗已过 → window_passed 带活动 id");
+  ok(m.cmSkipSummary(list, ctx({ managed: false })).reason === "not_managed", "非托管 → not_managed");
+  ok(m.cmSkipSummary(list, ctx({ onboardingMs: 0 })).reason === "no_onboarding", "向导未完成 → no_onboarding");
+  const s2 = m.cmSkipSummary(list,
+    ctx({ state: { shows: { "newbie-6u": { count: 3, last_ts: NOW - 24 * H } }, never: {} } }));
+  ok(s2.reason === "max_shows", "额度用尽 → max_shows");
+  // 多活动：原因取最高 priority 那张（代表性原因，与 cmPick 的择优视角一致）
+  const lo = m.cmNormalizeFeed(feedWith({ id: "lo", priority: 1, audience: "all" })).campaigns[0];
+  const hi = m.cmNormalizeFeed(feedWith({ id: "hi", priority: 9 })).campaigns[0];
+  const s3 = m.cmSkipSummary([lo, hi], ctx({ onboardingMs: NOW - 73 * H, managed: false }));
+  ok(s3.id === "hi", "多活动 skip 原因取最高 priority 条目");
+}
+
+// ── headline 数字拆解（P1 CountUp） ────────────────────────────────────────
+{
+  const hp = m.cmHeadlineParts("6U → 18,000 Token");
+  ok(hp && hp.num === "18,000" && hp.value === 18000, "取最大数字（含千分位原样保留）");
+  ok(hp.before === "6U → " && hp.after === " Token", "前后段原样切分");
+  ok(m.cmHeadlineParts("6U 大礼包") === null, "无 ≥1000 数字 → null（'6' 不值得滚）");
+  ok(m.cmHeadlineParts("") === null && m.cmHeadlineParts(null) === null, "空/坏输入安全");
+  const plain = m.cmHeadlineParts("送 18000 Token");
+  ok(plain && plain.num === "18000" && plain.value === 18000, "无千分位写法同样识别");
+}
+
+// ── 倒计时紧迫档（P1 递进变色） ─────────────────────────────────────────────
+ok(m.cmCountdownUrgent(23 * H) === true, "剩 23h → 紧迫");
+ok(m.cmCountdownUrgent(25 * H) === false, "剩 25h → 常规");
+ok(m.cmCountdownUrgent(0) === false && m.cmCountdownUrgent(-1) === false, "过期/零剩余不紧迫");
+
+// ── poster-hero 版式 + ctaSub（P1 新增面） ──────────────────────────────────
+{
+  const hero = m.cmNormalizeFeed(feedWith({ layout: "poster-hero" }));
+  ok(hero.campaigns.length === 1 && hero.campaigns[0].layout === "poster-hero",
+    "poster-hero 进白名单（视觉资产随包、文本仍来自 feed）");
+  const withSub = m.cmNormalizeFeed(feedWith({
+    cta: {
+      label: { zh: "领取", en: "Claim" },
+      sub: { zh: "仅需 6U", en: "Only 6U" },
+      url: "https://bd2026.cc/order?plan=recharge-newbie-6",
+    },
+  })).campaigns[0];
+  ok(withSub.ctaSub.zh === "仅需 6U" && withSub.ctaSub.en === "Only 6U", "cta.sub 归一化带出");
+  const noSub = m.cmNormalizeFeed(feedWith({})).campaigns[0];
+  ok(noSub.ctaSub && noSub.ctaSub.zh === "" && noSub.ctaSub.en === "", "缺 cta.sub → 双语空串（渲染层跳过）");
+}
+
 console.log(`campaign-model.test.js: ${passed} assertions passed`);

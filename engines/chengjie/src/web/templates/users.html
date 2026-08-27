@@ -118,6 +118,9 @@
       </select>
       <button class="btn btn-s btn-xs" onclick="openQuotaModal({{ u.id }},'{{ u.username }}')">{{ (i18n or {}).get('tq_quota_btn', "额度") }}</button>
       <button class="btn btn-s btn-xs" onclick="openPermModal({{ u.id }},'{{ u.username }}')">{{ (i18n or {}).get('tq_perm_btn', "权限") }}</button>
+      <button class="btn btn-s btn-xs" id="notify-btn-{{ u.id }}" data-tg="{{ u.notify_tg_chat_id or '' }}"
+              title="{{ (i18n or {}).get('tq_notify_bound', '已绑定') if u.notify_tg_chat_id else '' }}"
+              onclick="openNotifyModal({{ u.id }},'{{ u.username }}')">{{ (i18n or {}).get('tq_notify_btn', "通知") }}{{ ' ✓' if u.notify_tg_chat_id else '' }}</button>
       <button class="btn btn-s btn-xs toggle-btn" onclick="toggleEnabled({{ u.id }},{{ 'false' if u.enabled else 'true' }},this)">{{ (i18n or {}).get('disable', '禁用') if u.enabled else (i18n or {}).get('enable', '启用') }}</button>
       <button class="btn btn-d btn-xs" data-help="btn_delete" onclick="deleteUser({{ u.id }},'{{ u.username }}')">{{ (i18n or {}).get('delete', "删除") }}</button>
     </div>
@@ -203,6 +206,28 @@
   </div>
 </div>
 
+<!-- Notify modal（坐席 Telegram 通知号绑定，P2 2026-08-18：目标达成定向推送
+     收件地址；空串保存=解绑。管理员渠道不受影响照常全量收） -->
+<div class="modal-bg" id="notify-modal" onclick="if(event.target===this)this.classList.remove('show')">
+  <div class="modal">
+    <h3>{{ (i18n or {}).get('tq_notify_title', "绑定 Telegram 通知号") }} · <span id="notify-modal-user"></span></h3>
+    <form id="notify-form" onsubmit="saveNotifyBinding(event)">
+      <input type="hidden" name="uid" value="">
+      <div class="f-grp">
+        <label class="f-lbl">{{ (i18n or {}).get('tq_notify_ph', "Chat ID（个人为正数，群为负数）") }}</label>
+        <input type="text" name="tg_chat_id" inputmode="numeric" pattern="-?\d{0,20}"
+               placeholder="{{ (i18n or {}).get('tq_notify_ph', 'Chat ID') }}" autocomplete="off" spellcheck="false">
+      </div>
+      <p style="font-size:.75rem;color:var(--t3);margin:.2rem 0 0">{{ (i18n or {}).get('tq_notify_hint', "绑定后：该坐席创建/认领的会话目标达成时，完成推送会同时发到这个号（管理员渠道照常收）。留空保存=解绑。") }}</p>
+      <div style="display:flex;gap:.5rem;margin-top:1rem">
+        <button type="submit" class="btn btn-p">{{ (i18n or {}).get('save', "保存") }}</button>
+        <button type="button" class="btn btn-s" onclick="sendNotifyTest(this)">{{ (i18n or {}).get('tq_notify_test_btn', "发送测试") }}</button>
+        <button type="button" class="btn btn-s" onclick="document.getElementById('notify-modal').classList.remove('show')">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <!-- Perm modal（L3 按人权限覆写；行由 JS 从 GET /api/users/{id}/perms 渲染，
      端点未装载（重启前）→ openPermModal 直接 toast 提示、不开弹窗） -->
 <div class="modal-bg" id="perm-modal" onclick="if(event.target===this)this.classList.remove('show')">
@@ -227,6 +252,9 @@ const TQ={
   delConfirm: {{ (i18n or {}).get('tq_js_del_confirm', 'Danger: type the username {name} to confirm deletion') | tojson }},
   delMismatch: {{ (i18n or {}).get('tq_js_del_mismatch', 'Username mismatch, cancelled') | tojson }},
   quotaSaved: {{ (i18n or {}).get('tq_js_quota_saved', 'Quota saved') | tojson }},
+  notifySaved: {{ (i18n or {}).get('tq_js_notify_saved', 'Notify chat saved') | tojson }},
+  notifyBound: {{ (i18n or {}).get('tq_notify_bound', 'Bound') | tojson }},
+  notifyTestOk: {{ (i18n or {}).get('tq_js_test_ok', 'Test push sent - check Telegram') | tojson }},
   lvOver: {{ (i18n or {}).get('tq_lv_over', 'Over') | tojson }},
   lvWarn: {{ (i18n or {}).get('tq_lv_warn', 'Near limit') | tojson }},
   permName: {
@@ -342,6 +370,53 @@ async function saveQuota(e){
     var r=await apiFetch('/users/quota/'+f.uid.value,{method:'POST',body:fd,headers:{'Accept':'application/json'}},{timeoutMs:60000});
     var d=await r.json().catch(function(){return {}});
     if(r.ok&&d.ok){showToast(TQ.quotaSaved,'ok');document.getElementById('quota-modal').classList.remove('show');loadCharUsage()}
+    else showToast((d&&d.detail)||window.T('ov_js_op_fail'),'err');
+  }catch(ex){showToast(window.T('draft.net_err'),'err')}
+  finally{btnLoading(btn,false)}
+}
+
+/* ── 坐席 Telegram 通知号绑定（P2 2026-08-18；端点未装载=保存时 404 toast）── */
+function openNotifyModal(uid,uname){
+  var f=document.getElementById('notify-form');
+  f.uid.value=uid;
+  document.getElementById('notify-modal-user').textContent='@'+uname;
+  var btn=document.getElementById('notify-btn-'+uid);
+  f.tg_chat_id.value=btn?(btn.getAttribute('data-tg')||''):'';
+  document.getElementById('notify-modal').classList.add('show');
+  try{f.tg_chat_id.focus()}catch(e){}
+}
+async function saveNotifyBinding(e){
+  e.preventDefault();
+  var f=e.target;
+  var btn=f.querySelector('.btn-p');btnLoading(btn,true);
+  var val=(f.tg_chat_id.value||'').trim();
+  var fd=new FormData();fd.append('tg_chat_id',val);
+  try{
+    var r=await apiFetch('/users/notify-binding/'+f.uid.value,{method:'POST',body:fd,headers:{'Accept':'application/json'}},{timeoutMs:60000});
+    var d=await r.json().catch(function(){return {}});
+    if(r.ok&&d.ok){
+      showToast(TQ.notifySaved,'ok');
+      document.getElementById('notify-modal').classList.remove('show');
+      var b=document.getElementById('notify-btn-'+f.uid.value);
+      if(b){
+        var bound=!!(d.tg_chat_id&&String(d.tg_chat_id).length);
+        b.setAttribute('data-tg',d.tg_chat_id||'');
+        b.textContent=b.textContent.replace(/ ✓$/,'')+(bound?' ✓':'');
+        b.title=bound?TQ.notifyBound:'';
+      }
+    }else showToast((d&&d.detail)||window.T('ov_js_op_fail'),'err');
+  }catch(ex){showToast(window.T('draft.net_err'),'err')}
+  finally{btnLoading(btn,false)}
+}
+/* 管理员代测：对「已保存的」绑定号真发一条测试（未保存的输入先点保存）。 */
+async function sendNotifyTest(btn){
+  var f=document.getElementById('notify-form');
+  btnLoading(btn,true);
+  var fd=new FormData();fd.append('user_id',f.uid.value);
+  try{
+    var r=await apiFetch('/api/workspace/my-notify-binding/test',{method:'POST',body:fd,headers:{'Accept':'application/json'}},{timeoutMs:60000});
+    var d=await r.json().catch(function(){return {}});
+    if(r.ok&&d.ok)showToast(TQ.notifyTestOk,'ok');
     else showToast((d&&d.detail)||window.T('ov_js_op_fail'),'err');
   }catch(ex){showToast(window.T('draft.net_err'),'err')}
   finally{btnLoading(btn,false)}

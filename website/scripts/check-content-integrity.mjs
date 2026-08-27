@@ -37,6 +37,8 @@ const BANNED_CLAIMS = [
   //   「九产品」仍禁——销售面禁止手写产品数量数字，防与 brand.ts PRODUCT_COUNT 双源漂移。）
   "九产品", // 品牌层口径（brand.ts PRODUCT_COUNT 驱动）；销售面禁止手写产品数量数字
   "防封",   // 高风险表述：暗示对抗平台风控，与"封号自动换号"同族，法务红线
+  "顾嘉",   // 2026-08-21 顾问改名「小界（Jie）」（与产品内助手/交流群 @小界 同名统一）；旧名不许回潮
+  "Gary",   // 同上：小界的旧英文名，防从旧文案复制粘贴带回
 ];
 
 // 黑名单检查的目标文件（对外文案的集中地；新增内容文件时在此登记）。
@@ -50,6 +52,10 @@ const BANNED_TARGET_FILES = [
   "lib/chatxContent.ts",
   "lib/growthContent.ts",
   "lib/downloads.ts",
+  // 顾问人设三消费面（2026-08-21 顾嘉→小界改名后进扫描，守「旧名回潮」）
+  "components/AIChat.tsx",
+  "lib/bot-knowledge.ts",
+  "lib/telegram-bot.ts",
 ];
 
 // ---------------------------------------------------------------------------

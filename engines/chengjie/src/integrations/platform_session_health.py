@@ -25,8 +25,11 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger("ai_chat_assistant.platform_session_health")
 
-# 视为「不健康」的会话状态（会话不可用于收发）
-UNHEALTHY_STATUSES = frozenset({"expired", "needs_login", "logged_out", "failed"})
+# 视为「不健康」的会话状态（会话不可用于收发）。
+# blocked（B99 2026-08-26）＝worker 检出平台「临时封锁」页：账号在线但发送必失败，
+# 边车已自冻；这里入不健康集合让横幅/看门狗/发送闸同步可见。
+UNHEALTHY_STATUSES = frozenset(
+    {"expired", "needs_login", "logged_out", "failed", "blocked"})
 # 视为「健康」的状态
 HEALTHY_STATUSES = frozenset({"authorized"})
 # 「放弃的登录尝试」（登录窗未授权就被关掉，从来不是真实账号）——worker 上报
@@ -123,7 +126,8 @@ class PlatformSessionHealth:
                 if len(self._sessions) >= _MAX_KEYS:
                     # 超限：不再收新 key（防刷量），但事件计数仍累计
                     return {"changed": False, "went_unhealthy": False,
-                            "recovered": False, "prev": "", "status": st}
+                            "recovered": False, "prev": "", "status": st,
+                            "superseded": []}
                 sess = {"status": "", "detail": "", "login_id": "", "ts": 0.0,
                         "changes": 0, "unhealthy_since": 0.0,
                         "last_remind_ts": 0.0}
@@ -153,6 +157,7 @@ class PlatformSessionHealth:
             # 后，同一次登录早期以 login_id 为 key 挂的占位行（authorizing/expired…）
             # 就成了永远无人更新的孤儿——不清会以「另一个号」的身份在横幅/看门狗里
             # 常亮。此前只有 _ORPHAN_LOGIN_TTL_SEC 超时兜底（要等 30 分钟）。
+            superseded: list = []
             if st in HEALTHY_STATUSES:
                 lid = _san(login_id)
                 if lid:
@@ -164,8 +169,36 @@ class PlatformSessionHealth:
                         if g1 or g2:
                             logger.info("[session_health] 登录晋级 %s → %s，"
                                         "清除占位行", ghost, key)
+                    # 身份接替清账（2026-08-27 实锤：登录档案 msg_* 先属 Calixa、
+                    # 重登时被改登成 Wisley——旧账号在本节点已无档案，其不健康
+                    # 记录永远等不到 authorized，横幅/催办就成了删不掉的僵尸）。
+                    # 同一 login_id 被另一账号授权 ⇒ 挂在该 login_id 上的其他
+                    # 账号行确定性地「被顶替」：翻成 logged_out（发送前快速失败
+                    # 语义不变；横幅刻意不显示 logged_out、催办由注册表标记停），
+                    # 入站健康行整行弹出（档案已易主，旧读数是另一个号的陈迹）。
+                    # 注册表 offline_reason 落盘由调用方经
+                    # ``mark_superseded_accounts`` 处理（本类保持零依赖）。
+                    for okey, osess in self._sessions.items():
+                        if okey == key:
+                            continue
+                        if _san(str(osess.get("login_id") or "")) != lid:
+                            continue
+                        if str(osess.get("status")) not in UNHEALTHY_STATUSES:
+                            continue
+                        osess["status"] = "logged_out"
+                        osess["detail"] = f"superseded by {key}"[:300]
+                        osess["ts"] = now
+                        osess["changes"] = int(osess.get("changes") or 0) + 1
+                        self._by_status["logged_out"] = (
+                            self._by_status.get("logged_out", 0) + 1)
+                        self._inbox_health.pop(okey, None)
+                        superseded.append(okey.partition(":")[2])
+                        logger.info(
+                            "[session_health] 登录档案 %s 已被 %s 接替，"
+                            "旧账号记录 %s 翻为 logged_out", lid, key, okey)
             return {"changed": changed, "went_unhealthy": went_unhealthy,
-                    "recovered": recovered, "prev": prev, "status": st}
+                    "recovered": recovered, "prev": prev, "status": st,
+                    "superseded": superseded}
 
     def is_unhealthy(self, platform: str, account_id: str) -> bool:
         """该会话最近一次上报是否处于不健康态（未上报过 → False，不拦）。"""
@@ -207,12 +240,20 @@ class PlatformSessionHealth:
                     if str(v.get("status")) in UNHEALTHY_STATUSES}
 
     def due_reminders(self, *, min_age_sec: float, interval_sec: float,
-                      now: Optional[float] = None) -> Dict[str, Dict[str, Any]]:
+                      now: Optional[float] = None,
+                      stale_after_sec: float = 0.0,
+                      stale_interval_sec: float = 0.0,
+                      ) -> Dict[str, Dict[str, Any]]:
         """待提醒的「持续不健康」会话（供 HealthWatchdog 周期复查）。
 
         语义（升级式）：掉线后 ``min_age_sec`` 仍未恢复 → 第一条提醒（「还没人修」），
         之后每 ``interval_sec`` 一条（防唠叨）。返回即视为「本轮要提醒」——原子标记
         ``last_remind_ts``，并发/下轮不重复。恢复时 ``record()`` 会清零两个时间戳。
+
+        催办衰减（2026-08-27，防告警疲劳）：``stale_after_sec``/``stale_interval_sec``
+        同时 >0 时，掉线超过 ``stale_after_sec`` 的会话改按 ``stale_interval_sec``
+        节流（取与常规 interval 的较大者）——挂了两天没人修的号每 4h 轰一次只会让
+        人把整个频道静音，降为日更保底比「响到没人听」更能保住告警可信度。
         """
         ts = time.time() if now is None else float(now)
         due: Dict[str, Dict[str, Any]] = {}
@@ -224,12 +265,19 @@ class PlatformSessionHealth:
                 since = float(sess.get("unhealthy_since") or 0.0)
                 if not since or (ts - since) < float(min_age_sec):
                     continue
+                eff_interval = float(interval_sec)
+                is_stale = (float(stale_after_sec) > 0
+                            and float(stale_interval_sec) > 0
+                            and (ts - since) >= float(stale_after_sec))
+                if is_stale:
+                    eff_interval = max(eff_interval, float(stale_interval_sec))
                 last = float(sess.get("last_remind_ts") or 0.0)
-                if last and (ts - last) < float(interval_sec):
+                if last and (ts - last) < eff_interval:
                     continue
                 sess["last_remind_ts"] = ts
                 out = dict(sess)
                 out["down_sec"] = ts - since
+                out["stale"] = is_stale
                 due[key] = out
         return due
 
@@ -488,14 +536,28 @@ class PlatformSessionHealth:
             ]
         return "\n".join(lines) + "\n"
 
-    def record_relogin(self, platform: str, account_id: str) -> None:
-        """登记一次人工「重新登录」触发（ops/坐席 CTA）——漏斗中段。"""
+    def record_relogin(self, platform: str, account_id: str,
+                       *, by: str = "") -> None:
+        """登记一次人工「重新登录」触发（ops/坐席 CTA）——漏斗中段。
+
+        2026-08-27 状态中心 v2：痕迹同时落**会话行**（``last_relogin_ts/by``）——
+        横幅快照读的是 _sessions（死号常无 inbox_health 行，旧版痕迹在那种账号上
+        必丢）；多坐席值守时「已有人触发过重登」经快照全员可见，防重复处理。
+        ``by`` 只截断不消毒（用户名可含 CJK；仅进 JSON 展示，无注入面）。
+        """
         key = self._key(platform, account_id)
+        now = time.time()
+        actor = str(by or "")[:24]
         with self._lock:
             self.total_relogin += 1
             h = self._inbox_health.get(key)
             if h is not None:
-                h["last_relogin_ts"] = time.time()
+                h["last_relogin_ts"] = now
+            sess = self._sessions.get(key)
+            if sess is not None:
+                sess["last_relogin_ts"] = now
+                if actor:
+                    sess["last_relogin_by"] = actor
 
     def reset(self) -> None:
         with self._lock:
@@ -610,6 +672,78 @@ def ensure_seeded_from_registry() -> int:
         return n
 
 
+def session_expected_online(key: str) -> bool:
+    """会话键（``platform:account_id``）对应账号是否仍被**期望在线**（单一策略源）。
+
+    原为 ``HealthWatchdog._session_expected_online``（催办过滤专用）；2026-08-27
+    状态中心 v2 把坐席横幅快照也接到同一判据上——此前两面口径分裂：看门狗对
+    「运营已登出/已接替/已删除」的号不催，横幅却照亮（worker 重启用陈旧 cookie
+    重推一次 needs_login 就能把处理完的号再点红，Calixa 僵尸的最后一条上游通路）。
+    判据取注册表持久事实：
+
+    - ``online`` → True（编排器会拉起、掉了就该有人修）；
+    - ``offline`` 且 ``meta.offline_reason`` 以 ``worker:`` 开头（自灭型掉线，
+      没人决定退役它）→ True 继续催/亮；``operator``（运营主动登出）、
+      ``superseded:*``（登录位已被新账号接替）、无标记（来历不明）→ False；
+    - 无注册表行 / ``removed`` → False（登录尝试幽灵 msg_* 也归此类——横幅上
+      一个坐席看不懂、无从操作的临时 id 本就不该亮，2026-08-14 实锤）；
+    - 注册表读取异常 → True（fail-open：不因巡检自身故障漏报真掉线）。
+    """
+    plat, _, acct = str(key or "").partition(":")
+    if not plat or not acct:
+        return True
+    try:
+        from src.integrations.account_registry import get_account_registry
+        row = get_account_registry().get(plat, acct)
+    except Exception:
+        return True
+    if not row:
+        return False
+    status = str(row.get("status") or "")
+    if status == "online":
+        return True
+    if status == "offline":
+        reason = str((row.get("meta") or {}).get("offline_reason") or "")
+        return reason.startswith("worker:")
+    return False
+
+
+def mark_superseded_accounts(platform: str, accounts: Any,
+                             new_account: str) -> None:
+    """身份接替的注册表落盘（best-effort，绝不抛）。
+
+    ``record()`` 判出「登录档案被新账号接替」后，旧账号的注册表催办标记
+    ``offline_reason=worker:*`` 改写为 ``superseded:<新账号>``——看门狗的
+    「死号持续提醒」只认 ``worker:`` 前缀，改写即自然停催。**只动** offline
+    且带 worker:* 标记的行：``operator``（运营主动登出）与空标记本就不催、
+    审计语义不该被覆盖；online 行说明注册表仍期望它在线（该不该下线是运营
+    决策），不在此替人做主。
+    """
+    if not accounts:
+        return
+    try:
+        from src.integrations.account_registry import get_account_registry
+        reg = get_account_registry()
+        for acct in accounts:
+            acct = str(acct or "")
+            if not acct:
+                continue
+            row = reg.get(platform, acct)
+            if not row or str(row.get("status") or "") != "offline":
+                continue
+            reason = str((row.get("meta") or {}).get("offline_reason") or "")
+            if not reason.startswith("worker:"):
+                continue
+            reg.upsert(platform, acct, meta={
+                "offline_reason": f"superseded:{new_account}"[:80],
+            }, merge_meta=True)
+            logger.info("[session_health] 注册表标记 %s:%s 已被 %s 接替"
+                        "（停止死号催办）", platform, acct, new_account)
+    except Exception:
+        logger.debug("[session_health] superseded 注册表落盘失败（忽略）",
+                     exc_info=True)
+
+
 def report_session_transition(
     platform: str, account_id: str, status: str, *,
     detail: str = "", login_id: str = "",
@@ -637,6 +771,8 @@ def report_session_transition(
         return {"changed": False, "went_unhealthy": False, "recovered": False}
     trans = get_platform_session_health().record(
         plat, acct, st, detail=detail, login_id=login_id)
+    if trans.get("superseded"):
+        mark_superseded_accounts(plat, trans["superseded"], acct)
     try:
         from src.integrations.account_registry import get_account_registry
         _reg = get_account_registry()
@@ -674,8 +810,43 @@ def report_session_transition(
     return trans
 
 
+# B63-②（实施64 P1-4，`_314`/`_322`）：发送失败里的**会话性** reason_code →
+# 会话健康登记映射。skuio 实录 7/7 全失败每条只静默 500——PIN 浮层/接受浮层/
+# 登出态是账号级处境，不是逐条消息的事，必须点亮账号卡/横幅/看门狗同一数据源。
+# needs_login 会连带翻注册表 offline（report_session_transition 既有语义）；
+# PIN/接受浮层用 failed（会话还活着，只是要人工一步，不翻注册表）。
+_SEND_FAIL_SESSION_MAP = (
+    (("e2ee_pin",), "failed", "e2ee_pin_required"),
+    (("needs_accept", "accept_prompt"), "failed", "needs_accept"),
+    (("logged_out", "not_logged_in", "login_required", "session_expired",
+      "checkpoint_required"), "needs_login", ""),
+)
+
+
+def note_send_auth_failure(platform: str, account_id: str,
+                           error_text: Any) -> str:
+    """发送失败文本含会话性 reason_code → 登记会话不健康；返回登记的 status
+    （空串=普通发送失败，不登记）。重复同态由 record 去重，绝不抛。"""
+    try:
+        low = str(error_text or "").lower()
+        if not low or not platform or not account_id:
+            return ""
+        for markers, status, detail in _SEND_FAIL_SESSION_MAP:
+            if any(m in low for m in markers):
+                report_session_transition(
+                    str(platform), str(account_id), status,
+                    detail=(detail or low[:120]))
+                return status
+    except Exception:
+        logger.debug("[session_health] 发送失败会话登记异常（忽略）",
+                     exc_info=True)
+    return ""
+
+
 __all__ = [
     "PlatformSessionHealth", "get_platform_session_health",
     "ensure_seeded_from_registry", "report_session_transition",
+    "note_send_auth_failure", "mark_superseded_accounts",
+    "session_expected_online",
     "UNHEALTHY_STATUSES", "HEALTHY_STATUSES", "ABANDONED_STATUS",
 ]

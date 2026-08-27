@@ -35,6 +35,7 @@ if str(ENGINE_ROOT) not in sys.path:
 from scripts._data_root import ENGINE_ROOT as DR_ENGINE_ROOT  # noqa: E402
 from scripts._data_root import load_merged_config, resolve_data_roots  # noqa: E402
 from src.integrations.alert_link_audit import (  # noqa: E402
+    HIGH_VALUE_ALIASES,
     WEBHOOKS_REL,
     audit_alert_link,
     default_focus_aliases,
@@ -66,15 +67,30 @@ def _audit_root(root: Path) -> Dict[str, Any]:
     return audit
 
 
-_HELP_CONNECT = (
-    "接通步骤（无需重启，运营角色）：\n"
-    "  1) 后台「告警渠道」面板 → 新增渠道：format=telegram、token=<Bot token>、\n"
-    "     target=<chat_id>（群/频道/个人均可）。\n"
-    "  2) 订阅先勾高价值三项：草稿积压 / 人工投递断链 / 主机告警\n"
-    "     （别名 draft_backlog · human_deliver · host_alert），再逐步放开。\n"
-    "  3) 面板「发送测试」确认送达 → 保存即热更生效（写入数据根，避开引擎根诱饵）。\n"
-    "  API：GET/POST /api/accounts/auto-reply/webhooks（+ /test）。"
-)
+_HIGH_VALUE_LABELS = {
+    "draft_backlog": "草稿积压",
+    "human_deliver": "人工投递断链",
+    "host_alert": "主机告警",
+    "assistant_report": "用户报障（小智面板）",
+    "bug_intake": "用户报障（报障群）",
+}
+
+
+def _help_connect() -> str:
+    """接通指引。别名清单**从 HIGH_VALUE_ALIASES 派生**，不再硬编码「三项」
+    ——2026-08-27 补两个报障别名时，这段文案就是靠硬编码悄悄过期的典型。"""
+    items = " · ".join(HIGH_VALUE_ALIASES)
+    names = " / ".join(
+        _HIGH_VALUE_LABELS.get(a, a) for a in HIGH_VALUE_ALIASES)
+    return (
+        "接通步骤（无需重启，运营角色）：\n"
+        "  1) 后台「告警渠道」面板 → 新增渠道：format=telegram、token=<Bot token>、\n"
+        "     target=<chat_id>（群/频道/个人均可）。\n"
+        f"  2) 订阅先勾高价值 {len(HIGH_VALUE_ALIASES)} 项：{names}\n"
+        f"     （别名 {items}），再逐步放开。\n"
+        "  3) 面板「发送测试」确认送达 → 保存即热更生效（写入数据根，避开引擎根诱饵）。\n"
+        "  API：GET/POST /api/accounts/auto-reply/webhooks（+ /test）。"
+    )
 
 
 def _render(audit: Dict[str, Any]) -> str:
@@ -114,7 +130,7 @@ def _render(audit: Dict[str, Any]) -> str:
         lines.append("  [结论] 已接通，关注别名零遗漏。")
     else:
         lines.append("  [结论] 未接通 / 有遗漏。")
-        lines.append("  " + _HELP_CONNECT.replace("\n", "\n  "))
+        lines.append("  " + _help_connect().replace("\n", "\n  "))
     return "\n".join(lines)
 
 

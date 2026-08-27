@@ -134,4 +134,22 @@ contextBridge.exposeInMainWorld("shell", {
   updateRestart: () => ipcRenderer.invoke("desktop:update-restart"),
   // 主进程推送的通知态变化（下载进度/就绪/新公告）
   onShellNotice: (cb) => ipcRenderer.on("desktop:shell-notice", (_e, notice) => { try { cb(notice); } catch (err) { /* 渲染回调异常不断桥 */ } }),
+  // ── 活动海报（P0 2026-08-21：新人 6U 首启海报）──────────────────────────
+  // 当前该弹的一张活动（主进程 campaign-model.cmPick 决策；无 → {campaign:null, skip}）
+  campaignPoster: () => ipcRenderer.invoke("desktop:campaign-poster"),
+  // 海报交互回执：{id, action: "shown"|"click"|"never"}；click 由主进程放行 https 外链
+  campaignAct: (args) => ipcRenderer.invoke("desktop:campaign-act", args),
+  // `--poster-preview` 验收通道旗标（P0 2026-08-22）：跳资格/频控强制弹出、不落频控、
+  // 埋点独立。与 forceFirstRun 同款同步读 env——poster.js 装载即要判断。
+  posterPreview: process.env.AITR_POSTER_PREVIEW === "1",
+  // 🩺 健康看板「活动海报」行：最近一次选品判定（show/skip/preview + 原因），零敏感字段
+  campaignDiag: () => ipcRenderer.invoke("desktop:campaign-diag"),
+  // ── 融合标题栏（titlebar merge P2 2026-08-22）──────────────────────────
+  // 细条「⋯」应急菜单（about|diag|update）：工作台 webview 白屏时这条链仍活着，
+  // 接替被 autoHideMenuBar 藏起的原生帮助菜单当报障保命通道。
+  titlebarMenu: (id) => ipcRenderer.invoke("desktop:titlebar-menu", String(id || "")),
+  // 主进程按工作台页面主题回推 light|dark：细条与原生窗控按钮（setTitleBarOverlay）同步换肤。
+  onTitlebarTheme: (cb) => ipcRenderer.on("cx-titlebar-theme", (_e, mode) => { try { cb(mode); } catch (err) { /* 渲染回调异常不断桥 */ } }),
+  // 全屏进出回推（P2b）：全屏时原生窗控自动消失，细条同步收起（退出还原）。
+  onTitlebarFs: (cb) => ipcRenderer.on("cx-titlebar-fs", (_e, on) => { try { cb(!!on); } catch (err) { /* 渲染回调异常不断桥 */ } }),
 });

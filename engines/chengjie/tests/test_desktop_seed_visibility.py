@@ -41,6 +41,7 @@ from starlette.testclient import TestClient
 from src.utils.feature_registry import (
     dig as _dig,
     product_baseline_map,
+    product_baseline_values,
     seed_forbidden_map,
 )
 
@@ -60,12 +61,21 @@ def _seed_cfg() -> dict:
 # ── 声明表 ↔ 种子内容 ────────────────────────────────────────────────────────
 
 def test_baseline_keys_enabled_in_seed():
+    """A 类必须在种子里落**注册表声明的那个值**。
+
+    早期这里写死 `is not True`，2026-08-20 起 baseline 出现非布尔档位值
+    （`contacts.mode="lite"`）——按 True 校验会把「正确写了 lite」判成缺失，
+    而按声明值校验同时抓住「写成 full」这种更危险的偏差。
+    """
     cfg = _seed_cfg()
-    missing = {k: why for k, why in PRODUCT_BASELINE.items()
-               if _dig(cfg, k) is not True}
+    want = product_baseline_values()
+    missing = {k: (want[k], _dig(cfg, k)) for k in want
+               if _dig(cfg, k) != want[k]}
     assert not missing, (
-        "产品基线功能没在桌面种子里打开（客户装完会「功能不存在」）：\n" + "\n".join(
-            f"  {k} —— {why}" for k, why in missing.items()))
+        "产品基线功能没在桌面种子里按声明值交付（客户装完会「功能不存在」或跑错档）：\n"
+        + "\n".join(
+            f"  {k}: 应为 {exp!r}，种子里是 {got!r} —— {PRODUCT_BASELINE[k]}"
+            for k, (exp, got) in missing.items()))
 
 
 def test_c_class_keys_absent_or_off():
@@ -84,13 +94,12 @@ def test_baseline_and_denylist_disjoint():
 
 
 # ── 出厂默认节奏「不秒回」不变量（2026-08-07：修「装完即秒回」出货缺陷）──────
-# 背景：新装机默认档 l2_autosend.deliver=false（C 类安全默认），此时自动回复走
-# 协议 7×24 直发链，它的延迟读 inbox.l2_autosend.deliver_delay。种子里若缺该块
-# 或配成 0/0，协议链恒 0s 秒回——客户与平台风控当场识破机器人，正是老板实锤的
+# 背景：自动回复的投递延迟读 inbox.l2_autosend.deliver_delay。种子里若缺该块
+# 或配成 0/0，出站恒 0s 秒回——客户与平台风控当场识破机器人，正是老板实锤的
 # 「设了不生效、一直秒回」。这两条门禁钉住「出厂即拟人」：任何人把种子/示例的
 # deliver_delay 改回 0 或删掉，CI 立刻红（比等客户装完投诉早无数个数量级）。
-# ⚠ 与 test_c_class_keys_absent_or_off 正交：那条保证 deliver(真发) 关着，本条
-# 保证「真要发时的等待」非零——两者一起才是「安全默认 + 不秒回」。
+# 2026-08-22 起种子 deliver=true（全自动开箱，deliver C→B 拍板）——本条不再与
+# 「deliver 关着」组合成立，而是升级成「出厂即真发 ⇒ 拟人节奏更是硬底线」。
 
 _INSTANT_FLOOR_SEC = 3.0   # <3s＝秒回带（与 reply_settings 的 bot-band 同口径）
 ENGINE_ROOT_CFG = ENGINE_ROOT / "config"

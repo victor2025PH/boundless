@@ -182,6 +182,29 @@ class CachedStaticFiles(StaticFiles):
         return resp
 
 
+class ProtocolMediaStatic(CachedStaticFiles):
+    """协议媒体专属静态服务：主根（实例数据根）优先，旧引擎树根兜底。
+
+    媒体根 2026-08-19 迁入实例数据根（``protocol_bridge.protocol_media_root``：
+    备份带得走、多实例不混居），但存量 ``media_ref`` 全是
+    ``/static/protocol_media/…`` URL——本类保住该命名空间：主根 miss 时回查旧根，
+    启动迁移（``migrate_legacy_protocol_media``）偶发搬不动的文件（被占用/权限）
+    仍可被服务，搬迁过程零 404 窗口。缓存语义继承 ``CachedStaticFiles``（?v= 分级）。
+    """
+
+    def __init__(self, *args, fallback_directory: str | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._fallback = (
+            StaticFiles(directory=fallback_directory, check_dir=False)
+            if fallback_directory else None)
+
+    def lookup_path(self, path: str):
+        full, stat_result = super().lookup_path(path)
+        if stat_result is None and self._fallback is not None:
+            return self._fallback.lookup_path(path)
+        return full, stat_result
+
+
 def create_app(config_manager, audit_store=None, boot_ts: float = 0,
                telegram_client=None, event_tracker=None, log_buffer=None) -> FastAPI:
     # Load domain pack manifest for web integration（支付域在插件关闭时映射为 conversion）
@@ -348,6 +371,31 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _mimetypes.add_type("font/woff2", ".woff2")
         _mimetypes.add_type("font/woff", ".woff")
+        # 协议媒体专属挂载（账号资产 P0，2026-08-19）：媒体根已迁实例数据根
+        # （protocol_bridge.protocol_media_root），对同一 URL 前缀**先**注册专属
+        # 挂载（Starlette 按注册序匹配）保住存量 /static/protocol_media/... 引用；
+        # 无数据根契约（根==旧根）时不挂＝旧单挂载行为。挂载失败回落旧行为，
+        # 绝不因媒体挂载挡整个后台。
+        try:
+            from src.integrations.protocol_bridge import (
+                legacy_protocol_media_root as _pm_legacy_fn,
+                protocol_media_root as _pm_root_fn,
+            )
+            _pm_root = _pm_root_fn()
+            _pm_legacy = _pm_legacy_fn()
+            if str(_pm_root) != str(_pm_legacy):
+                _pm_root.mkdir(parents=True, exist_ok=True)
+                app.mount(
+                    "/static/protocol_media",
+                    ProtocolMediaStatic(
+                        directory=str(_pm_root),
+                        fallback_directory=(
+                            str(_pm_legacy) if _pm_legacy.is_dir() else None)),
+                    name="protocol_media",
+                )
+        except Exception:  # noqa: BLE001
+            logger.warning("protocol_media 专属挂载失败（回落旧 /static 单挂载）",
+                           exc_info=True)
         app.mount("/static", CachedStaticFiles(directory=str(_static_dir)), name="static")
     # 两端共享 copilot 组件库(单一事实来源 repo 根 shared/copilot);独立前缀避开 /static 匹配顺序
     # no-cache：iframe 入口 app.html 无 ?v= 戳，必须逐次回源校验防启发式缓存钉住旧版
@@ -357,6 +405,17 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             "/copilot",
             RevalidateStaticFiles(directory=str(_shared_copilot_dir)),
             name="copilot_shared",
+        )
+    # AI 助手悬浮球共享组件（2026-08-19；与 copilot 同模式：仓根单一事实源 +
+    # 桌面镜像，no-cache 逐次回源防旧版钉住）
+    _shared_assistant_dir = (
+        Path(__file__).resolve().parents[2] / "shared" / "assistant"
+    )
+    if _shared_assistant_dir.is_dir():
+        app.mount(
+            "/assistant-shared",
+            RevalidateStaticFiles(directory=str(_shared_assistant_dir)),
+            name="assistant_shared",
         )
 
     # ── PWA（Phase 1：把 /workspace 做成可安装的原生官网）──────────────
@@ -615,6 +674,17 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     if "/api/rpa/intent-tags" not in _BODY_LIMIT_OVERRIDES:
         _BODY_LIMIT_OVERRIDES["/api/rpa/intent-tags"] = int(
             web_cfg.get("max_body_bytes_intent_tags_write", 4 * 1024 * 1024))
+    # P4（2026-08-18）媒体翻译上传口代码级缺省：这些端点收 base64 媒体（×1.33 膨胀），
+    # 2MB 全局默认把「音频 25MB/视频 50MB/文档 10MB/图 8MB」的路由级上限拦腰斩断
+    # （实测 1.85MB 参考音 b64=2.47MB 被 413）。上限=路由级源文件上限×1.37 取整，
+    # 端点内各自的解码上限仍是第二道闸；config body_limits 可按实例覆写。
+    for _mp, _mlim in (
+        ("/api/unified-inbox/translate-voice", 36 * 1024 * 1024),
+        ("/api/unified-inbox/translate-video", 72 * 1024 * 1024),
+        ("/api/unified-inbox/translate-document-file", 16 * 1024 * 1024),
+        ("/api/unified-inbox/translate-image", 12 * 1024 * 1024),
+    ):
+        _BODY_LIMIT_OVERRIDES.setdefault(_mp, _mlim)
     _BODY_LIMIT_EXEMPT_PREFIXES: tuple = tuple(web_cfg.get("max_body_exempt_prefixes", []))
     # P25-B / P26-D: 413 攻击信号防抖 — 用通用 AuditThrottle
     from src.utils.audit_throttle import AuditThrottle as _AuditThrottle
@@ -747,13 +817,40 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     config_manager.on_reload(_apply_branding_globals)
 
     from src.web.web_i18n import get_translations
-    from src.web.i18n_packs import UI_LANGS  # UI 语言白名单单一事实源（xlate P3）
+    # UI 语言白名单/locale/系统语言协商——单一事实源（xlate P3 / 自动跟随 2026-08-27）
+    from src.web.i18n_packs import (
+        UI_LANGS, UI_LOCALES, negotiate_ui_lang, primary_lang_tag,
+    )
+
+    from src.web.ui_lang_stats import get_ui_lang_stats
+    _ui_lang_stats = get_ui_lang_stats()
+    _UI_LANG_STATS_SKIP = ("/static", "/copilot", "/i18n", "/favicon")
 
     @app.middleware("http")
     async def inject_i18n(request: Request, call_next):
-        lang = request.query_params.get("lang") or request.cookies.get("ui_lang", "zh")
-        if lang not in UI_LANGS:
-            lang = "zh"
+        # 语言链：?lang=（显式压制）→ ui_lang cookie（显式选择/登录回填）→
+        # Accept-Language 系统语言推断（跟随而非固化：不落 cookie，浏览器/系统
+        # 换语言界面即跟走；显式选过一次则 cookie 永远先手）→ zh。
+        # 逐级独立校验：脏 ?lang= 落到 cookie 而非直接跳推断（旧实现 or 串联会
+        # 让垃圾 query 吞掉合法 cookie）。
+        _q = request.query_params.get("lang")
+        _c = request.cookies.get("ui_lang")
+        if _q in UI_LANGS:
+            lang, _src = _q, "query"
+        elif _c in UI_LANGS:
+            lang, _src = _c, "cookie"
+        else:
+            _al = request.headers.get("accept-language", "")
+            _neg = negotiate_ui_lang(_al)
+            lang, _src = (_neg, "negotiated") if _neg else ("zh", "default")
+        try:
+            if not request.url.path.startswith(_UI_LANG_STATS_SKIP):
+                _ui_lang_stats.record(_src, lang)
+                # 「想要却没有」：推断落空但浏览器确实声明了语言 → 记需求分布
+                if _src == "default" and _al:
+                    _ui_lang_stats.record_unsupported(primary_lang_tag(_al))
+        except Exception:
+            pass  # 观测绝不干扰请求
         request.state.ui_lang = lang
         request.state.i18n = get_translations(lang)
         # 配置热重载检查点：check_and_hot_reload 原本只挂在 Telegram 消息循环——
@@ -790,15 +887,34 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         "/rpa-overview": "rpa_overview",
         "/funnel": "funnel",
         "/personas": "personas",
+        "/singing": "singing",
         "/ai-studio": "ai_studio",
         "/membership": "membership",
         "/reply-settings": "reply_settings",
         "/personal-settings": "personal_settings",
+        # 账号资产中心（账号资产保全 P1，2026-08-19）
+        "/workspace/assets": "asset_center",
     }
     for _dp in domain_web_pages:
         _PATH_TO_ACTIVE[_dp["path"]] = _dp["key"]
 
     old_render = templates.TemplateResponse
+
+    # 坐席规模快照（实施49 P1-6/B13）：每次渲染都查一遍用户表没必要，60s TTL 足够
+    # ——加了第二个坐席账号后最迟下一分钟刷新页面即出现「认领」。
+    _seat_snap = {"ts": 0.0, "multi": True}
+
+    def _multi_seat_now() -> bool:
+        import time as _t
+        try:
+            from src.web.ui_visibility import is_multi_seat
+            if _t.time() - _seat_snap["ts"] > 60:
+                _seat_snap["multi"] = is_multi_seat(
+                    getattr(config_manager, "config", None), user_store.list_users())
+                _seat_snap["ts"] = _t.time()
+            return bool(_seat_snap["multi"])
+        except Exception:
+            return True   # 取不到一律显示：藏错方向会让真团队退回「两人回同一个客户」
 
     def _enrich_context(request: Request, context: dict) -> dict:
         """向模板上下文注入 i18n / 用户身份 / active 导航 / ui_mode 等公共字段"""
@@ -809,6 +925,9 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             ui_lang = getattr(request.state, "ui_lang", ui_lang)
         context.setdefault("i18n", i18n)
         context.setdefault("ui_lang", ui_lang)
+        # BCP-47 locale（<html lang>/日期本地化用；消费 UI_LOCALES 单一事实源，
+        # 此前 login.html 等页写死 zh-CN/en-US 二元——扩展语拿错 locale）
+        context.setdefault("ui_locale", UI_LOCALES.get(ui_lang, "zh-CN"))
         # 词典指纹 → _i18n_bootstrap.html 走外链词典包（/i18n/ws-i18n.js?v=fp，
         # immutable 缓存；P2 传输减重）。异常时不注入 → 模板自动回落内联词典。
         try:
@@ -873,6 +992,9 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
                 getattr(config_manager, "config", None)))
         except Exception:
             context.setdefault("ui_vis", {})
+
+        # 坐席规模：单人部署藏「认领/释放」协作原语（B13）；藏而不废，API 不封。
+        context.setdefault("ws_multi_seat", _multi_seat_now())
 
         # ── 档位徽章(P3)：仅 feature_gate 开启时出现在顶栏,默认部署零变化 ──
         try:
@@ -952,9 +1074,22 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     @app.get("/set_lang")
     async def set_lang(request: Request, lang: str = "zh"):
         resp = RedirectResponse(request.headers.get("referer", "/"), status_code=303)
-        resp.set_cookie("ui_lang", lang, max_age=365 * 86400)
-        # 语言跟人走：登录用户切换语言时落库个人偏好，下次任意设备登录自动套用。
+        # auto = 回到「跟随系统」（2026-08-27）：删 cookie + 清落库偏好 →
+        # 中间件按 Accept-Language 推断，坐席换系统语言界面即跟走。
+        if lang == "auto":
+            resp.delete_cookie("ui_lang")
+            try:
+                _uname = request.session.get("username", "")
+                if _uname:
+                    user_store.set_lang(_uname, "")
+            except Exception:
+                pass
+            return resp
+        # 白名单内才写 cookie（此前无条件写——脏值 cookie 会让中间件误判
+        # 「有显式选择」的语义边界；现在脏值=纯 no-op 重定向）。
         if lang in UI_LANGS:
+            resp.set_cookie("ui_lang", lang, max_age=365 * 86400)
+            # 语言跟人走：登录用户切换语言时落库个人偏好，下次任意设备登录自动套用。
             try:
                 _uname = request.session.get("username", "")
                 if _uname:
@@ -1006,7 +1141,15 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         return (path.startswith("/api/unified-inbox")
                 or path.startswith("/api/workspace")
                 or path.startswith("/api/drafts")
-                or path.startswith("/api/voice/tts-test"))
+                or path.startswith("/api/voice/tts-test")
+                # AI 助手悬浮球（2026-08-19）：坐席可问答/报障
+                or path.startswith("/api/assistant")
+                # 客服支持通道（2026-08-20 P1-9）：机器码自查 + 一键诊断直传。
+                # 报障的主力恰恰是坐席，而诊断直传原先只挂在 /api/admin/* 下
+                # → 坐席点了必 403。刻意另起 support 命名空间而非放开 admin 前缀。
+                or path.startswith("/api/support")
+                # 顺修存量缺陷：坐席前端错误 beacon 此前被 403 静默丢失
+                or path.startswith("/api/telemetry"))
 
     def _require_auth(request: Request):
         # 无用户且无 token → 引导至首次设置向导
@@ -1210,6 +1353,19 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         import logging as _log_onb
 
         _log_onb.getLogger("admin").warning("welcome 路由注册失败", exc_info=True)
+
+    # ── WP-7：坐席新手任务（onboarding.agent_tasks 基线关；关=API 全 404）──
+    try:
+        from src.web.routes.agent_tasks_routes import register_agent_tasks_routes
+
+        register_agent_tasks_routes(
+            app, api_auth=_api_auth, config_manager=config_manager,
+            user_store=user_store)
+    except Exception:
+        import logging as _log_agt
+
+        _log_agt.getLogger("admin").warning("agent-tasks 路由注册失败",
+                                            exc_info=True)
 
     # ── WP-4：合规只读导出（危机转介计数 + 开关回显；写入面在危机处置链打点）──
     try:
@@ -1461,11 +1617,14 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         mins, secs = divmod(remainder, 60)
         uptime_str = f"{hours}h {mins}m {secs}s"
 
+        from src.web.audit_display import operator_display_names
+
         return templates.TemplateResponse(request, "dashboard.html", {
             "templates": tpl_data,
             "channels": channels,
             "recent_op_days": recent_op_days,
             "audit_today": audit_today,
+            "operator_names": operator_display_names(user_store),
             "uptime": uptime_str,
             "uptime_hours": hours,
             "template_count": len(tpl_data),
@@ -1597,6 +1756,28 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         import logging as _log_gm
         _log_gm.getLogger("admin").debug("Telegram 群成员提取路由注册跳过", exc_info=True)
 
+    # ── 工具箱「AI 生成图片」（cp-image）：坐席手动出图 → VLM 后验 → 发送/存册 ──
+    try:
+        from src.web.routes.image_gen_routes import register_image_gen_routes
+        register_image_gen_routes(
+            app, auth_dep=_api_auth, audit_store=audit_store,
+            config_manager=config_manager, page_auth=_page_auth,
+        )
+    except Exception:
+        import logging as _log_img
+        _log_img.getLogger("admin").debug("AI 生成图片路由注册跳过", exc_info=True)
+
+    # ── 工具箱「智能养号」（cp-nurture）：机群养护状态 + 用户自配养护方案 ──
+    try:
+        from src.web.routes.nurture_routes import register_nurture_routes
+        register_nurture_routes(
+            app, auth_dep=_api_auth, audit_store=audit_store,
+            config_manager=config_manager, page_auth=_page_auth,
+        )
+    except Exception:
+        import logging as _log_nur
+        _log_nur.getLogger("admin").debug("智能养号路由注册跳过", exc_info=True)
+
     # ── 营销目标（marketing goals）：会话级工作目标 CRUD + settle-on-read 视图 ──
     try:
         from src.web.routes.goal_routes import register_goal_routes
@@ -1631,6 +1812,15 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         import logging as _log_uiv
         _log_uiv.getLogger("admin").warning("ui_visibility 路由注册失败", exc_info=True)
 
+    # ── 人设声音评测台（2026-08-19 由 tmp_voice_eval 转正）：试听/评分/替换候选 ──
+    try:
+        from src.web.routes.voice_eval_routes import register_voice_eval_routes
+        register_voice_eval_routes(
+            app, page_auth=_page_auth, api_auth=_api_auth, templates=templates)
+    except Exception:
+        import logging as _log_vev
+        _log_vev.getLogger("admin").warning("voice_eval 路由注册失败", exc_info=True)
+
     @app.get("/personas", response_class=HTMLResponse)
     async def personas_page(request: Request, _=Depends(_page_auth)):
         from src.utils.persona_manager import PersonaManager
@@ -1656,6 +1846,11 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             "personas_cfg": personas_from_cfg,
             "tg_accounts": tg_accounts_stats,
         })
+
+    # ── 歌房（实施58 P1：人设清唱能力管理——开关/备货试听/曲库/声库）──
+    @app.get("/singing", response_class=HTMLResponse)
+    async def singing_page(request: Request, _=Depends(_page_auth)):
+        return templates.TemplateResponse(request, "singing.html", {})
 
     # ── AI 工作室 (/ai-studio) — 4-Tab 集中入口 ─────────────────────
     @app.get("/ai-studio", response_class=HTMLResponse)
@@ -2033,7 +2228,11 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         yaml.safe_load(content)
         prefix = snap_id.rsplit("_", 1)[0] if "_" in snap_id else ""
         target = None
-        if "templates" in prefix:
+        # 顺序敏感：templates_i18n 前缀含 "templates" 子串——本分支必须在前，
+        # 否则变体快照回滚会把多语言内容覆写进 templates.yaml（机器人话术池被毁）。
+        if "templates_i18n" in prefix:
+            target = cfg_dir / "templates_i18n.yaml"
+        elif "templates" in prefix:
             target = cfg_dir / "templates.yaml"
         elif "exchange_rates" in prefix:
             target = cfg_dir / "exchange_rates.yaml"
@@ -2164,6 +2363,16 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         import logging as _log_ovw
 
         _log_ovw.getLogger("admin").warning("ops overview 路由注册失败", exc_info=True)
+
+    # 客服支持通道（P1-9）：机器码/版本自查 + 坐席可用的一键诊断直传
+    try:
+        from src.web.routes.support_routes import register_support_routes
+
+        register_support_routes(app, _admin_ctx)
+    except Exception:
+        import logging as _log_sup
+
+        _log_sup.getLogger("admin").warning("support 路由注册失败", exc_info=True)
 
     # 群脉 CrowdX 导播台：剧本库 / 逐拍详情 / 一键排练（dry-run）/ 历史场次
     try:
@@ -2308,6 +2517,135 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         if audit_store:
             audit_store.log(actor, "update_template", key, "", str(value)[:100], snap_id)
         return {"ok": True, "key": key}
+
+    # ── 团队话术多语言变体·起草工作台（V2 2026-08-18）────────────────────────
+    # 写侧唯一入口＝src/web/templates_i18n_store.py（读侧在 unified_inbox_context，
+    # mtime 缓存 → 落盘即热生效，坐席面板/自动推荐零重启拿到新变体）。
+    # draft＝服务端直调生产翻译栈机器起草（含 {var} 占位符的源文本拒绝——机翻会
+    # 翻掉占位符名，破坏面板变量补全表单契约）；确认/改稿/删除对齐 KB
+    # kb_translations 的 auto_translated→人工确认 心智。权限与模板编辑同位。
+
+    def _ti_snapshot(actor: str) -> str:
+        from src.web import templates_i18n_store as _ti
+        return _auto_snapshot(
+            "templates_i18n",
+            _ti.dump_yaml(_ti.load_all(config_manager)), actor) or ""
+
+    @app.get("/api/templates-i18n")
+    async def api_get_templates_i18n(request: Request, _=Depends(_api_auth)):
+        from src.web import templates_i18n_store as _ti
+        return {"ok": True, "variants": _ti.load_all(config_manager),
+                "path": str(_ti.resolve_path(config_manager))}
+
+    @app.post("/api/templates-i18n/draft")
+    async def api_templates_i18n_draft(
+        request: Request, _=Depends(_api_write("edit_template")),
+    ):
+        from src.web import templates_i18n_store as _ti
+        from src.web.routes.unified_inbox_context import _qtpl_is_system_key
+        body = await request.json()
+        key = str(body.get("key") or "").strip()
+        lang = str(body.get("lang") or "").strip().lower()
+        data = config_manager.get_dynamic_templates_config() or {}
+        if key not in data:
+            raise HTTPException(404, f"Template '{key}' not found")
+        if _qtpl_is_system_key(key):
+            return {"ok": False, "error": "system_key"}
+        val = data.get(key)
+        if isinstance(val, str):
+            texts = [val]
+        elif isinstance(val, list):
+            texts = [x for x in val if isinstance(x, str)]
+        else:
+            return {"ok": False, "error": "system_key"}
+        src = next((s.strip() for s in texts if s and s.strip()), "")
+        if not src:
+            return {"ok": False, "error": "no_source"}
+        if _ti.has_placeholders(src):
+            return {"ok": False, "error": "has_vars"}
+        from src.web.routes.unified_inbox_services import _get_translation_service
+        svc = _get_translation_service(request)
+        result = await svc.translate(src, target_lang=lang, source_lang="zh")
+        translated = str(getattr(result, "translated_text", "") or "").strip()
+        if not getattr(result, "ok", False) or not translated:
+            return {"ok": False, "error": "translate_failed"}
+        actor = request.session.get("username", "api")
+        snap_id = _ti_snapshot(actor)
+        ok, err, entries = _ti.draft_variant(config_manager, key, lang, translated)
+        if not ok:
+            return {"ok": False, "error": err or "write_failed"}
+        if audit_store:
+            audit_store.log(actor, "templates_i18n_draft", f"{key}:{lang}", "",
+                            translated[:100], snap_id)
+        return {"ok": True, "key": key, "lang": lang, "entries": entries,
+                "provider": str(getattr(result, "provider", "") or "")}
+
+    @app.post("/api/templates-i18n/save")
+    async def api_templates_i18n_save(
+        request: Request, _=Depends(_api_write("edit_template")),
+    ):
+        from src.web import templates_i18n_store as _ti
+        body = await request.json()
+        key = str(body.get("key") or "").strip()
+        lang = str(body.get("lang") or "").strip().lower()
+        text = str(body.get("text") or "")
+        index = body.get("index", None)
+        idx = int(index) if isinstance(index, (int, float)) else None
+        actor = request.session.get("username", "api")
+        snap_id = _ti_snapshot(actor)
+        ok, err, entries = _ti.upsert_variant(
+            config_manager, key, lang, text,
+            approved=bool(body.get("approved", True)), index=idx)
+        if not ok:
+            return {"ok": False, "error": err or "write_failed"}
+        if audit_store:
+            audit_store.log(actor, "templates_i18n_save", f"{key}:{lang}", "",
+                            text[:100], snap_id)
+        return {"ok": True, "key": key, "lang": lang, "entries": entries}
+
+    @app.post("/api/templates-i18n/confirm")
+    async def api_templates_i18n_confirm(
+        request: Request, _=Depends(_api_write("edit_template")),
+    ):
+        from src.web import templates_i18n_store as _ti
+        body = await request.json()
+        key = str(body.get("key") or "").strip()
+        lang = str(body.get("lang") or "").strip().lower()
+        try:
+            idx = int(body.get("index"))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "not_found"}
+        actor = request.session.get("username", "api")
+        snap_id = _ti_snapshot(actor)
+        ok, err, entries = _ti.confirm_variant(config_manager, key, lang, idx)
+        if not ok:
+            return {"ok": False, "error": err or "write_failed"}
+        if audit_store:
+            audit_store.log(actor, "templates_i18n_confirm", f"{key}:{lang}", "",
+                            str(idx), snap_id)
+        return {"ok": True, "key": key, "lang": lang, "entries": entries}
+
+    @app.post("/api/templates-i18n/delete")
+    async def api_templates_i18n_delete(
+        request: Request, _=Depends(_api_write("edit_template")),
+    ):
+        from src.web import templates_i18n_store as _ti
+        body = await request.json()
+        key = str(body.get("key") or "").strip()
+        lang = str(body.get("lang") or "").strip().lower()
+        try:
+            idx = int(body.get("index"))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "not_found"}
+        actor = request.session.get("username", "api")
+        snap_id = _ti_snapshot(actor)
+        ok, err, entries = _ti.delete_variant(config_manager, key, lang, idx)
+        if not ok:
+            return {"ok": False, "error": err or "write_failed"}
+        if audit_store:
+            audit_store.log(actor, "templates_i18n_delete", f"{key}:{lang}", "",
+                            str(idx), snap_id)
+        return {"ok": True, "key": key, "lang": lang, "entries": entries}
 
     @app.post("/api/batch-strategies")
     async def api_batch_strategies(request: Request, _=Depends(_api_write("edit_strategy"))):
@@ -2758,6 +3096,30 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _log_cases.getLogger("admin").warning("cases 路由注册失败", exc_info=True)
 
+    # 报障群工单管理（bug_intake，2026-08-18：报障群 AI 值守台账）
+    try:
+        from src.web.routes.bug_intake_routes import register_bug_intake_routes
+
+        register_bug_intake_routes(app, api_auth=_admin_ctx.api_auth)
+    except Exception:
+        import logging as _log_bi
+
+        _log_bi.getLogger("admin").warning("bug_intake 路由注册失败",
+                                           exc_info=True)
+
+    # 回连认领（账号资产保全 P1）：封号账号 → 新账号的老客户识别 + 记忆合流
+    try:
+        from src.web.routes.reconnect_claim_routes import (
+            register_reconnect_claim_routes,
+        )
+
+        register_reconnect_claim_routes(app, api_auth=_admin_ctx.api_auth)
+    except Exception:
+        import logging as _log_rcl
+
+        _log_rcl.getLogger("admin").warning("reconnect_claim 路由注册失败",
+                                            exc_info=True)
+
     # 运营 Copilot + 测试纠错 API（Phase E1 续拆 → copilot_routes）
     try:
         from src.web.routes.copilot_routes import register_copilot_routes
@@ -2767,6 +3129,43 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         import logging as _log_cop
 
         _log_cop.getLogger("admin").warning("copilot 路由注册失败", exc_info=True)
+
+    # AI 助手悬浮球 /api/assistant/*（2026-08-19 P0；assistant.enabled 灰度）
+    try:
+        from src.web.routes.assistant_routes import register_assistant_routes
+
+        register_assistant_routes(app, _admin_ctx)
+    except Exception:
+        import logging as _log_asb
+
+        _log_asb.getLogger("admin").warning("assistant 路由注册失败",
+                                            exc_info=True)
+
+    # 小智动作注册表 /api/assistant/actions|act*（实施58 P1；同 assistant.enabled 灰度）
+    try:
+        from src.web.routes.assistant_action_routes import (
+            register_assistant_action_routes,
+        )
+
+        register_assistant_action_routes(app, _admin_ctx)
+    except Exception:
+        import logging as _log_asa
+
+        _log_asa.getLogger("admin").warning("assistant action 路由注册失败",
+                                            exc_info=True)
+
+    # 小智手机扫码操控 /api/assistant/pair* + GET /xz（实施58 P4；同灰度）
+    try:
+        from src.web.routes.assistant_pair_routes import (
+            register_assistant_pair_routes,
+        )
+
+        register_assistant_pair_routes(app, _admin_ctx)
+    except Exception:
+        import logging as _log_asp
+
+        _log_asp.getLogger("admin").warning("assistant pair 路由注册失败",
+                                            exc_info=True)
 
     # ---------- 知识库健康度 ----------
     # KB 健康统计/Miss日志/翻译审核/图片/种子/维护建议 已抽到 routes/kb_routes.py（批 5K）
@@ -3421,6 +3820,22 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _log_boss.getLogger("admin").warning("boss 路由注册失败", exc_info=True)
 
+    # ── 账号资产中心（账号资产保全 P1，2026-08-19）：/workspace/assets ──
+    # 独立注册块（同 boss_routes 例：不与草稿链装配连坐；须留在
+    # _unified_inbox_page_auth 定义之后，挪前会 NameError 被 try 静默吞掉）。
+    try:
+        from src.web.routes.asset_center_routes import (
+            register_asset_center_routes,
+        )
+
+        register_asset_center_routes(
+            app, page_auth=_unified_inbox_page_auth, api_auth=_api_auth,
+            templates=templates)
+    except Exception:
+        import logging as _log_ac
+
+        _log_ac.getLogger("admin").warning("资产中心路由注册失败", exc_info=True)
+
     # ── P29: 实时队列看板页面 ──────────────────────────────────────
     @app.get("/workspace/queue")
     async def _ws_queue_monitor(request: Request):
@@ -3516,6 +3931,29 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     except Exception:
         import logging as _log_wc
         _log_wc.getLogger("admin").debug("网页聊天 Widget 路由注册跳过", exc_info=True)
+
+    # ── 歌房（唱歌能力管理）API ───────────────────────────────
+    try:
+        from src.web.routes.singing_routes import register_singing_routes
+
+        register_singing_routes(app, api_auth=_api_auth,
+                                config_manager=config_manager)
+    except Exception:
+        import logging as _log_sg
+        _log_sg.getLogger("admin").warning("singing 路由注册失败", exc_info=True)
+
+    # ── 专属歌订单（点唱台：列表/试听/人审放行=就地投递/打回）──
+    try:
+        from src.web.routes.song_order_routes import (
+            register_song_order_routes,
+        )
+
+        register_song_order_routes(app, api_auth=_api_auth,
+                                   config_manager=config_manager)
+    except Exception:
+        import logging as _log_so
+        _log_so.getLogger("admin").warning("song_order 路由注册失败",
+                                           exc_info=True)
 
     # ── Voice / TTS 统一试听 API ──────────────────────────────
     try:

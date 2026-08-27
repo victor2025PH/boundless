@@ -58,7 +58,12 @@ _TAILWIND_CEILINGS = {
     # 套餐阶梯徽章(.ws-plan-basic，蓝/紫/金阶梯刻意非品牌) 3 + 深蓝信息横幅
     # (#dbeafe on --th-bg-blue8，语义蓝族非品牌桥) 1 + JS 类型调色板
     # (message=蓝/contact=紫/note=青 categorical + 通知类型图标 + toast 默认色) 6
-    "src/web/templates/workspace_base.html": 11,
+    # + 2026-08-17 顶栏随主题(P0-c)：.ws-plan-basic 亮档皮肤 3（rgba(59,130,246,
+    #   .12/.40) 底/描边 + #1d4ed8 ink）——同一「蓝/紫/金阶梯」多色家族的亮色臂，
+    #   与暗档 3 处同判据保留字面量（一臂跟品牌变量其余臂字面量会破坏阶梯一致性）
+    # 2026-08-27 实施75 蓝条退役：ws-restartcool 顶部横幅（含 --th-bg-blue8 渐变端点
+    # 的 Tailwind 蓝字面量）随 DOM 摘除，14→13。
+    "src/web/templates/workspace_base.html": 13,
     # ── 判据（后续文件沿用）：蓝色是「多色家族的一臂」（同类名族里有 ≥2 个
     # 其它颜色臂：档位梯/状态调色板/类型章/阶段色）→ 留字面量（一臂跟变量
     # 其余臂字面量会破坏体系一致性）；蓝色「独立」当强调/active/hover/tint
@@ -130,8 +135,11 @@ _TAILWIND_CEILINGS = {
     # 发送队列五态 processing=蓝 1
     "src/web/templates/_channel_body_line.html": 5,
     # ── 2026-07-30 尾批（22 文件 46 处审毕，转 21 留 25）───────────────
-    # 3 转 1 留 2：质量档 A绿/B蓝 1 + 分数刻度（≥90绿/≥75蓝/≥60琥珀/红）1
-    "src/web/templates/agent_perf.html": 2,
+    # 3 转 1 留 2 → 2026-08-18 暗色令牌归队批再收 1：分数刻度（≥90/≥75/≥60/其余）
+    # **四臂全族**转 --tk-emerald/brand/amber/danger（全族齐转不破「一臂跟变量」判据，
+    # 且暗色自适配）；仅留 QA 档 B 蓝 tint rgba(59,130,246,.16) 1——六色家族
+    # (A绿/B蓝/C琥珀/D橙/F红/NA灰) 一臂，六臂 ink 已全部令牌化、tint 统一字面量。
+    "src/web/templates/agent_perf.html": 1,
     # 3 转 0 留 3（既定决策不动）：--blue/--violet 命名语义变量 1 +
     # 套餐阶梯徽章 .plan-badge-basic（蓝/紫/金）2
     "src/web/templates/base.html": 3,
@@ -160,6 +168,11 @@ _TAILWIND_CEILINGS = {
     "src/web/static/platform_icons.js": 2,
     # 2 转 0 留 2：头像渐变池（多组渐变 categorical）；shared 双树勿单边改
     "shared/copilot/components/cp-accounts.js": 2,
+    # 1 处语义留（2026-08-17 登记，rail/滚动条批次首扫点名的存量债）：人设身份
+    # 8 色盘 PERSONA_DISC_PALETTE 的蓝臂——与宿主 unified_inbox._acctColor 色盘
+    # **逐字节同构**（哈希+色盘同构是跨区域同人同色的契约，改任何一边都会让
+    # 右栏色盘 ≠ 底部身份条圆点），categorical 一臂非品牌强调；shared 双树勿单边改
+    "shared/copilot/components/cp-persona.js": 1,
     # 1 转 0 留 1：漏斗系列色 handoff_rate=蓝（多系列并列）
     "src/web/templates/_rpa_shared_funnel.html": 1,
     # 1 转 0 留 1：意图调色板 inquiry=蓝
@@ -186,7 +199,10 @@ _TAILWIND_CEILINGS = {
     # failed红/expired橙 并列的档位调色板）+ 品牌用途应令牌化 7（.gr-act:hover 2 +
     # .gr-chip 3 + .gr-btn-primary 2）——后者随该页暗色适配一起归 owner 线收口
     # （与 inline_color 台账同一条目注释互引）。数值取自门禁实测。
-    "src/web/templates/goal_report.html": 9,
+    # 2026-08-20 收紧 9 → 1（owner 线已把 .gr-act:hover / .gr-chip / .gr-btn-primary
+    # 那 7 处品牌用途令牌化，实测只剩 1 处）：棘轮只降不升，这行不跟着降就等于门禁
+    # 给回了 8 个格的退化空间（清账线代记，非本线业务改动）。
+    "src/web/templates/goal_report.html": 1,
 }
 
 

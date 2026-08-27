@@ -12,13 +12,91 @@ alwaysApply: false
 
 1. **探活+登记**：`engines\chengjie\scripts\agent_probe.ps1 -Intent "..."`；`services/messenger-web`、`shared/inject`、`desktop/` 有 ACTIVE（≤10min）先等静默——它们都会被打进包（extraResources）。
 2. **版本号**：`engines/chengjie/desktop/package.json` 的 `version`+`displayVersion` 一起递增（可能已被并行线 bump，确认即可，勿重复加）。
-3. **后端指纹**：`cd engines/chengjie/desktop && python build/check_backend_freshness.py`；红→`npm run build:backend`（约 12 分钟）。
-4. **打包**：`npm run dist:win`（predist 自带门禁+双冒烟；产物 `dist/ChatX-Setup-<ver>.exe` ~476MB，**必须落在 desktop\dist**——push 默认从那里取最新）。
+3. **后端指纹**：`cd engines/chengjie/desktop && python build/check_backend_freshness.py`；红→**先试增量档** `npm run refresh:datas`（2026-08-18 起：变化全落在 templates/static/shared/domains/config 种子/**i18n 词条包**（`src/web/i18n_packs/*.py`，同日起 frozen 态文件优先 exec 属 datas；`__init__.py` 等 `_` 开头文件仍属代码）等 datas 资产时秒级刷绿；有编进 exe 的 `.py` 变更它会 exit 3 自拒）→ 仍红/被拒才 `npm run build:backend`（约 12 分钟）。增量档要求 stamp 带逐文件明细且根清单与当前代码一致（旧 stamp 会 exit 4，全量重打一次即自举；i18n 根并入后首次全量同理）。
+4. **打包**：`npm run dist:win`（predist 自带门禁+双冒烟；产物 `dist/ChatX-Setup-<ver>.exe` ~476MB，**必须落在 desktop\dist**——push 默认从那里取最新）。不确定改动范围时可用一键智能档 `npm run dist:win:smart`＝步骤 3+4 合一（先试增量刷新，被拒自动落全量再打包）。
 5. **逐台推**（默认升级保数据）：`powershell -File deploy\desktop\push_chatx.ps1 -TargetSsh <别名> -Install -Relaunch -Smoke`
    ——2026-08-17 起 `-Install -Relaunch` 自带坐席新鲜度终验（`verify_seat_backend_node.ps1`：
    真坐席 run_sentinel `started_at` 晚于本次安装 + 18799 答 /login 200；失败 exit 10）。
 6. **终验**：`& deploy\desktop\chatx_fleet_status.ps1 -Targets yunsheng,kouxing,lianbei`——**以 fleet 台账的运行版本为准**（smoke 用的是一次性数据目录，只证明包能起，不证明坐席在跑新版；第 5 步的 seatverify 已把「坐席跑的是**本次**新后端」也证掉）。
 7. **收尾**：删各机 `C:\Users\Administrator\Downloads\chatx` 旧安装包只留当前版；`agent_probe.ps1 -Intent ... -Done`。
+
+## 干净包（对外发行，零数据种子；2026-08-19 起）
+
+- 「给用户的全新安装包 / 不带知识库人设库」＝ **clean 档**：
+  `cd engines/chengjie/desktop && npm run dist:win:clean`
+  （predist 自动：删 `build/seed-data` 内测残留 → 标准冒烟 `smoke_backend` + clean 零数据冒烟
+  `smoke_clean`（首启不得出现 KB/人设/相册/语音/内测 overlay 指纹）；after-pack 在
+  `CHATX_ALLOW_STANDARD=1` 下反向断言产物里**不得**有 `resources/seed-data`）。
+- 产物落 **`desktop\dist-clean\ChatX-Setup-<ver>.exe`**（与内测包分目录——push_chatx 默认取
+  `dist\` 最新包，不会误推 clean 包到坐席机）；包内 `resources/build-info.json` 带
+  `flavor: "clean"` 可远程核对形态。
+- clean 包首启形态：知识库/人设库/相册/克隆语音全空，config 播种自
+  `config.desktop.min.yaml`（首启向导 + 托管网关照常，出厂试用额度生效）；装到已有数据的
+  机器不会动存量数据（播种一律缺才补）。
+- 内测包流程不变（`dist:win` / `dist:win:smart` 仍走 stage:internal）；打完内测包
+  `build/seed-data` 会残留，下次打 clean 档由 `stage:clean` 自动清掉，别手工混用产物目录。
+
+## 热补丁（同版本内小修，不发整包；2026-08-27 起）
+
+改一行 JS 不该让坐席等一次 476MB 发版。热补丁在**同一 `baseAppVersion` 内**替换
+`resources\` 下的白名单文件，不过 NSIS、不碰用户数据。**新 semver 一律走上面的整包
+流程**——版本号变了 base 就对不上，客户端会自己拒绝。
+
+**载荷按区域 opt-in，这就是本通道的全部价值**（2026-08-27 实测）：
+
+| 区域 | 开关 | 体量 |
+|---|---|---|
+| `app.asar` + `build-info.json` + `shared\`(inject) + `app.asar.unpacked\` | 默认 | **~1.2MB / 8 文件**（壳/渲染/inject 修复都在这） |
+| `services\`（messenger-web / whatsapp-baileys） | `-IncludeServices` | 4700 文件 / 518MB 原始 → **~226MB zip** |
+| `backend\`（PyInstaller 产物） | `-IncludeBackend`（须先 `npm run build:backend`） | 大 |
+| `seed-data\` | `-IncludeSeed` | 中 |
+
+边车真改了就得带 `-IncludeServices`，但 226MB vs 整包 476MB 省得有限——**这种批次
+优先考虑正常发版**。make 每次会打印「哪些区进了、哪些没进」，**发之前读那一行**：
+换了 asar 而配套边车留在旧版＝版本错配运行时，比不打补丁更糟。
+
+1. **打补丁包**（117，不用 `build:backend`，不用改 `package.json` 版本号）：
+   `powershell -File deploy\desktop\make_chatx_hotpatch.ps1 -Fixes B117,B121 -Notes "贴纸不再当照片评论"`
+   ——内部走 `copy-shared` + `write-build-info` + `electron-builder --win dir`（只出
+   `dist\win-unpacked`，跳过 NSIS）；产物 `desktop\dist\hotpatch\ChatX-Hotpatch-<ver>-p<N>.zip`
+   + 同名 manifest + `hotpatch.json` 指针。补丁号 **p1 起自增**（同 base 续号，读指针）。
+   区域开关见上表。手上已有 `dist\win-unpacked` 时可
+   `-SkipDirBuild -FromUnpacked <路径>` 秒出包（改 `-OutDir` 可避免动默认指针）。
+2. **推坐席机**（SSH，默认 yunsheng/kouxing/lianbei）：
+   `powershell -File deploy\desktop\push_chatx_hotpatch.ps1 [-Targets yunsheng] [-Relaunch]`
+   ——scp zip+manifest+落地脚本 → `certutil` 远端核 sha256 → 远端跑 apply。
+3. **发给外部用户**（自助更新的那一半，缺这步只有坐席机拿到）：
+   `powershell -File website\scripts\publish_chatx_hotpatch.ps1 -Yes [-Announce]`
+   ——与 `publish_chatx.ps1` 同一原子序：**先传 zip、VPS 上验 sha256、最后才翻
+   `hotpatch.json` 指针**（指针绝不指向不存在的包）；顺带 R2 镜像 + 公网回验 + 旧包保留 5 份。
+   **不碰 `latest.yml` / `ChatX-Setup-*.exe`**，整包通道完全不受影响。
+4. **客户端行为**（壳内自助，`desktop/hotpatch-apply.js` 决策 + `hotpatch-stage.js` 落地）：
+   开机 90s 首查 + 每 4h + 唤醒补查（仅打包态 Windows）；**整包永远优先**（`latest.yml`
+   有更新 semver → `defer_full`，已暂存的补丁作废）；校验链＝manifest 自洽 → 整包 sha256
+   → 解包 → **逐文件 sha256**，全过才点亮**现有那个**「立即重启更新」横幅（刻意不新建
+   第二套横幅/IPC 桥）。点重启＝先等后端真死（B57），再交脱离进程的 helper 等本壳 PID
+   消失后换文件并拉起。任一步不过＝保持旧文件、横幅不出现，日志 `[hotpatch]`。
+   一键关停：`config.json` 的 `updates.hotpatch: false`（`updates.hotpatch_url` 可改源）。
+
+**引导期**：壳内自助拉取的代码本身在 `app.asar` 里，所以只有**含该能力的安装包**才会
+自己去拉热补丁。存量机（1.0.56 及更早）只能靠第 2 步 SSH 推，或等下一次整包发版；
+第 3 步的公网通道要等那次整包铺开才对外真正生效。
+
+改这套之前先读的硬不变量：
+
+- **落地脚本单一事实源**＝`deploy\desktop\apply_chatx_hotpatch_node.ps1`；壳内那份是
+  `copy-shared.js` 镜像进 `desktop\hotpatch\`（该目录已 gitignore）。**别 fork 第二份**
+  ——两份迟早漂移，漂移那天就是「装了一半的补丁」。
+- **base 不符即拒**（脚本 exit 3）、**补丁号只增不降**、旧文件进
+  `resources\.hotpatch-bak\p<N>`（永远留一次回滚）；用户数据全程不碰。
+- **manifest 规范化后条目数对不上＝整份拒绝**，不做「能套多少套多少」：asar 换了而
+  配套 inject/边车没换，是比不更新更坏的版本错配运行时。
+- 所有 `.ps1` **ASCII-only**（PS 5.1 按 GBK 解码脚本，中文注释＝语法错），壳生成的
+  wrapper 同理；等待参数叫 `$ShellPid` 不叫 `$Pid`（后者是自动变量，param 重名即语法错）。
+- 展示版本缀补丁号（`1.056+p3`），**遥测 `manifest_version` 保持纯 semver**、补丁号走
+  独立 `patch` 字段（老服务端直接丢弃）。
+- 门禁：`cd engines\chengjie\desktop && node test\hotpatch-apply.test.js`（75 断言，含
+  ASCII/顺序/白名单/接线契约），已挂进 `npm test` 链。
 
 ## 机器映射（ssh config 由 deploy/machines.json 生成）
 
@@ -39,6 +117,24 @@ alwaysApply: false
 
 `_bak` 恢复副本只许人工删除（wipe 脚本会跳过 `*bak20*`）；节点确认健康后再清。
 
+## 用户侧卸载语义（desktop >= 1.0.45，`build/installer.nsh`）
+
+交互式卸载器新增「数据处置」页：**保留数据（默认）** / **彻底删除**（需勾选不可恢复确认，
+二次确认后删 `%APPDATA%\智聊` + `%APPDATA%\telegram-ai-desktop` + updater 缓存，先按路径
+收割后端/sidecar 进程再删，删后校验残留并如实弹报）。五条契约（C1-C5）钉在
+`desktop/test/uninstall-nsh-invariants.test.js`（挂 npm test + predist 三链）：
+
+| 通道 | 行为 |
+|---|---|
+| 升级链（新装老卸 `/S /KEEP_APP_DATA`） | **绝不删数据**（模板守卫 + nsh 内 `${isUpdated}` 双保险） |
+| `/S` 静默（`uninstall_chatx_node.ps1` 现行） | 只删程序，数据保留（语义不变） |
+| `/S --delete-app-data` | 静默全清（用户机应急通道；坐席机仍走 wipe/backup 脚本——_bak 感知更细） |
+| 交互式选「彻底删除」 | 全清 + 弹结果（成功/残留路径） |
+
+改 `installer.nsh` 前先读其头部 C1-C5 注释；「保留哪些数据」文案与
+`restore_chatx_accounts_node.ps1` keep-list 互为镜像（两边有交叉注释）。
+卸载器实弹测试**禁止在 117 跑**（会真卸本机在用坐席端），用沙箱或坐席机发版流程验证。
+
 ## 173 专属坑（每次都撞，按此处置）
 
 - `installer exit=-1073741819`(0xC0000005) 连崩＝NSIS System.dll 在 SSH 会话的已知抖动（Win11 高发；**2026-08-17 实测 Win10/.198 也抖过一次、重试第 2 次即成——不是 Win11 专属，重试机制勿删**），**不是包坏**（sha256 已验）。脚本自带 4 次重试+控制台会话计划任务兜底（2026-08-13 修复过 PS5.1 stderr 终止 bug）。
@@ -53,6 +149,13 @@ alwaysApply: false
   ② `push_chatx.ps1` 步骤 4.5 坐席新鲜度终验（新 exit 10）：拉起前取目标机时钟 → `verify_seat_backend_node.ps1` 轮询真坐席 `run_sentinel.json`，**started_at 必须晚于本次安装**（旧后端顶包=exit 1 立刻现形）+ 18799 真答 /login 200 才放行。
 - 旧的人工处置（杀壳→ChatXKick 计划任务拉起→fleet 复验）仍适用于**存量机器**上偶发的同型事故；新发版流程已不需要。
 - 2026-08-17 顺带实锤：**安装脚本内建的控制台会话兜底首次在真实发版中生效**（173 静默 4 连崩 → 兜底一次装成，两轮都是），此前它只被独立探针验证过。
+
+## 坐席显示标准（2026-08-17 .173「工具栏消失」事故沉淀）
+
+- **标准**：4K（3840x2160）面板一律 **200%**（逻辑 1920x1080）；1080p 面板 100%。逻辑高度 **≥800px** 是硬底线——低于它，收件箱 composer 工具栏（AI回复/语音/媒体/翻译）会被挤到折叠线以下，坐席看起来像「按钮全没了」，零代码故障。Windows 对 4K 的「推荐」是 300%（逻辑 1280x720）＝必踩，新机开机就要改。
+- **远程改缩放（免注销免 RDP）**：`deploy\desktop\set_seat_scale.ps1 -TargetSsh <node> -Scale 200 [-RestartApp|-StartApp]`——经控制台会话计划任务用 `DisplayConfigSetDeviceInfo` 现场生效（`SystemParametersInfo(SPI_SETLOGICALDPIOVERRIDE)` 在 Win11 26200 静默无效，别回去用）；`-RestartApp` 只重启壳 UI 保后端。截图留在坐席本机 `%USERPROFILE%\Downloads\chatx\seat_scale_after.png`（**不自动回传**，要看就 scp 拉回）；窗口是否真最大化用 `deploy\desktop\_winrect_probe_remote.ps1`（/IT 任务读 GetWindowRect+IsZoomed，全屏截图分不清「最大化」与「底部被裁」）。1.0.39 起壳自带 win-fit：逻辑桌面高 <820 自动最大化 + 写 `%APPDATA%\telegram-ai-desktop\display-metrics.json` 面包屑（缩放变化事件驱动自动刷新，fleet/push 探针优先读它）。
+- **观测三层**：① fleet 台账 `display` 列（逻辑 WxH@scale%；`*`=带活覆盖的推算值，无标=壳面包屑精确值；SMALL DESKTOP 点名）；② `push_chatx -Install` 步骤 4.6 装后自动查一次（warning-only 不拦发版）；③ 壳 >=1.0.39 落 `%APPDATA%\智聊\display-metrics.json` 面包屑（Chromium 实测真值，探针优先读、与当前 GPU 模式核对防陈旧）。
+- **诊断口径**：SSH 会话里所有会话级显示 API 都撒谎（WinForms 见幻影 1024x768；QueryDisplayConfig 0 路径）——远程判显示问题只信 CIM 物理分辨率 + 注册表 AppliedDPI/DpiValue 推算，或壳面包屑；要看真渲染用 `schtasks /IT` 进控制台会话截图。
 
 ## 踩过的坑台账（改这套工具/流程前先读）
 

@@ -266,8 +266,10 @@ def test_prompt_side_default_mode_unchanged(pm_with_rules):
     assert "不要解释系统/人设/名字/规则" in block          # anti_bot_response 原样在
     assert "如实、简短地说明你是 AI 助理" not in block
 
-    compact = pm.format_persona_block(account_persona_id="t_cmp",
-                                      detail="compact", record_usage=False)
+    # compact 格式器本体（实施67 起显式绑定 tier 会自动升 full，
+    # format_persona_block(detail="compact") 不再是 compact 输出的入口——
+    # 直调格式器验证合规折算在 compact 形态同样成立）
+    compact = pm._format_persona_compact(pm.get_persona_by_id("t_cmp") or {})
     assert "不承认是 AI" in compact
 
 
@@ -285,8 +287,7 @@ def test_prompt_side_honest_mode_flips(pm_with_rules):
     assert "先正面回答" in block                            # 非身份类约束保留
     assert "没有任何别名" in block                          # 名字硬锁幸存（正交锁对照）
 
-    compact = pm.format_persona_block(account_persona_id="t_cmp",
-                                      detail="compact", record_usage=False)
+    compact = pm._format_persona_compact(pm.get_persona_by_id("t_cmp") or {})
     assert "不承认是 AI" not in compact
     assert "那是错误数据" in compact                        # compact 名字锁同样幸存
     # 开关关回来 → 立即恢复旧行为（provider 是实时读取，不缓存）

@@ -318,6 +318,9 @@ def resolve_gate_cfg(scfg: Dict[str, Any]) -> Dict[str, Any]:
     cfg.setdefault("content_rating", str((scfg or {}).get("content_rating") or "sfw"))
     cfg.setdefault("scene_check", True)
     cfg.setdefault("tod_check", True)
+    # 同脸校验（P2 手动出图；默认关——多一次 VLM 往返 ~2-5s，且判定保守只拦
+    # 灾难级错脸；开法 companion.selfie.vision_gate.identity_check: true）
+    cfg.setdefault("identity_check", False)
     return cfg
 
 
@@ -377,6 +380,113 @@ async def check_image(
         logger.info("[image_gate] 出图体检不合格 kind=%s reason=%s file=%s raw=%r",
                     kind, reason, image_path, str(raw or "")[:160])
     return ok, reason
+
+
+# ── 同脸校验（P2 2026-08-22，手动出图身份保证）─────────────────────────────
+# 背景：PuLID 锁脸是**生成机制**不是**验收机制**——锁脸失败（权重漂移/参考图
+# 质量差/引擎回退）时生成的是陌生人脸，而 UI 徽章曾写「视觉已校验」给了假信心
+# （体检验的是尺度/年龄/场景，从不验身份）。本组把「是不是同一个人」变成可验收：
+# 参考脸与生成图 PIL 左右拼成一张 → 单图 VLM 问「同一人？」——零新依赖
+# （VisionClient 单图 API + PIL 均已在库），定位=抓**灾难级**错脸（性别/年龄/
+# 人种级差异），与语音侧 clone_score 0.80 地板同哲学；细微不像仍需人眼。
+# 软失败=skipped 绝不拦发（体检仪坏了不拖死出图链）；仅明确「no」才判 mismatch。
+
+_IDENTITY_PROMPT = (
+    "The image shows TWO photos side by side (left and right). "
+    "Are the LEFT person and the RIGHT person the same person? "
+    'Answer STRICT JSON only: {"same_person": "yes" | "no" | "unsure"}. '
+    'If either side has no clear human face, answer "unsure".'
+)
+
+
+def build_identity_prompt() -> str:
+    return _IDENTITY_PROMPT
+
+
+def parse_identity_response(raw: Any) -> str:
+    """VLM 回答 → yes|no|unsure（解析不出=unsure，绝不误判）。"""
+    s = str(raw or "").strip().lower()
+    if not s:
+        return "unsure"
+    try:
+        import json as _json
+        import re as _re
+        m = _re.search(r"\{[^{}]*\}", s)
+        if m:
+            v = str((_json.loads(m.group(0)) or {}).get("same_person") or "").lower()
+            if v in ("yes", "no", "unsure"):
+                return v
+    except Exception:
+        pass
+    # 非 JSON 回落：只认整词（"no" 是 "not sure" 的子串，必须词边界匹配）
+    import re as _re2
+    if _re2.search(r'\byes\b|\bsame\b', s) and not _re2.search(r'\bnot\s+the\s+same\b', s):
+        return "yes"
+    if _re2.search(r'\bno\b|\bdifferent\b|\bnot\s+the\s+same\b', s):
+        return "no"
+    return "unsure"
+
+
+def compose_side_by_side(left_path: str, right_path: str, out_path: str,
+                         max_h: int = 512) -> bool:
+    """两图等高左右拼接（PIL；软失败 False）。给同脸校验的单图 VLM 用。"""
+    try:
+        from PIL import Image
+
+        li = Image.open(left_path).convert("RGB")
+        ri = Image.open(right_path).convert("RGB")
+        h = min(max_h, li.height, ri.height)
+        lw = max(1, int(li.width * h / max(1, li.height)))
+        rw = max(1, int(ri.width * h / max(1, ri.height)))
+        li = li.resize((lw, h))
+        ri = ri.resize((rw, h))
+        canvas = Image.new("RGB", (lw + rw + 8, h), (255, 255, 255))
+        canvas.paste(li, (0, 0))
+        canvas.paste(ri, (lw + 8, 0))
+        canvas.save(out_path, "JPEG", quality=88)
+        return True
+    except Exception:
+        logger.debug("[image_gate] 同脸拼图失败（跳过校验）", exc_info=True)
+        return False
+
+
+async def check_face_identity(gen_path: str, ref_path: str,
+                              root_config: Optional[Dict[str, Any]]) -> Tuple[str, str]:
+    """同脸校验：返回 ``(verdict, note)``，verdict ∈ ok|mismatch|skipped。
+
+    skipped=基础设施缺席/拼图失败/VLM 不可达/回答含糊——一律放行不拦
+    （软失败纪律与 check_image 一致）。仅 VLM 明确判「不同人」才 mismatch。
+    """
+    vcfg = dict((root_config or {}).get("vision") or {})
+    if not vcfg or not gen_path or not ref_path:
+        return "skipped", "no_vision_cfg"
+    import os as _os
+    import uuid as _uuid
+    comp = _os.path.join(
+        _os.path.dirname(_os.path.abspath(gen_path)) or ".",
+        f"_idchk_{_uuid.uuid4().hex[:8]}.jpg")
+    if not compose_side_by_side(ref_path, gen_path, comp):
+        return "skipped", "compose_fail"
+    try:
+        from src.vision_client import VisionClient
+        vc = VisionClient(vcfg)
+        if not vc.initialize():
+            return "skipped", "vision_init_fail"
+        raw = await vc.describe_image(comp, prompt=build_identity_prompt())
+        v = parse_identity_response(raw)
+        if v == "no":
+            logger.info("[image_gate] 同脸校验判不同人 gen=%s raw=%r",
+                        gen_path, str(raw or "")[:160])
+            return "mismatch", str(raw or "")[:160]
+        return ("ok", "") if v == "yes" else ("skipped", "unsure")
+    except Exception as ex:  # noqa: BLE001
+        logger.debug("[image_gate] 同脸校验异常（跳过）", exc_info=True)
+        return "skipped", f"vlm_error:{type(ex).__name__}"
+    finally:
+        try:
+            _os.remove(comp)
+        except Exception:
+            pass
 
 
 async def generate_with_gate(

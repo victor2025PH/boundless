@@ -470,6 +470,26 @@ def _split_sentences_sn(text: str) -> List[str]:
     return [f for f in frags if f]
 
 
+def _hit_is_borrowed(claim: str, peer_names: List[str] | None) -> bool:
+    """hard 命中是否属「借对方名」档（与 find_wrong_self_name 内部同判据）。
+
+    borrowed＝身份级穿帮（拿客户的名字自称），残剥也比发出去强；
+    非 borrowed 的 hard（白名单外自称）实证主因是**白名单不完备**（自建人设
+    名没进白名单，B74 `_352`），残剥反而必穿帮。
+    """
+    try:
+        cn = _norm(str(claim or ""))
+        if not cn:
+            return False
+        peer_latin, peer_cjk = _peer_norm_tokens(peer_names)
+        if re.search(r"[a-z]", cn):
+            ctoks = {t.lower() for t in re.split(r"\s+", str(claim)) if t}
+            return bool(ctoks & set(peer_latin))
+        return any(pc in cn or cn in pc for pc in peer_cjk)
+    except Exception:
+        return False
+
+
 def sanitize_self_name(
     text: str,
     allowed_names: List[str] | None,
@@ -478,6 +498,13 @@ def sanitize_self_name(
     """剥离 hard 级错误自称句，返回 ``(清洁文本, hard 命中, soft 观测)``。
 
     与 :func:`sanitize` 同一套「按句剥离 → 剥光则 inline 抹名 → 绝不返回空」策略。
+
+    B74 修正（实施67，`_352` 实录「叫我。朋友都这么喊我。」）：hard 自称名必然
+    处于自介引导语境（我叫/叫我/call me…——检测正则本身就锚定这些引导词），
+    inline 抹名会把自介句剁成「叫我。」残句＝100% 穿帮，比误放行更糟。故 inline
+    抹名兜底**只对 borrowed（借对方名）档执行**（David Lin 事故金标不回退——
+    借名缝合发出去是身份级事故，残句是两害相权）；非 borrowed 的 hard 剥光时
+    保留原文（宁可漏拦不误伤，白名单不完备时这正是人设真名在自报家门）。
     """
     t = str(text or "")
     if not t:
@@ -491,8 +518,11 @@ def sanitize_self_name(
     ]
     cleaned = "".join(kept).strip()
     if not cleaned:
+        borrowed = [h for h in hard if _hit_is_borrowed(h, peer_names)]
+        if not borrowed:
+            return t, hard, soft          # 非借名 → 残剥必穿帮，保留原文
         cleaned = t
-        for h in hard:
+        for h in borrowed:
             cleaned = re.sub(re.escape(h), "", cleaned)
         cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
         if not cleaned or _norm(cleaned) == _norm(t):
@@ -500,7 +530,109 @@ def sanitize_self_name(
     return cleaned, hard, soft
 
 
+# ── 称呼混淆守卫（B42 2026-08-22）：用**自己的**人设名呼叫对方 ────────────────
+#
+# 实录（1.0.46 _236）：对客户 Nicks 说 "you're not that old, Steven"——Steven 是
+# AI 自己的人设名。上面的 find_wrong_self_name 守的是反方向（拿别人的名字自称）；
+# 这里守正方向：把自己的名字砸在客户头上（呼格）。
+#
+# 只抓高置信**呼格形态**（句首「Name, …」/ 句尾「…, Name」），并且：
+#   - 对方已知名字含该名 → 全跳（客户真叫这个名，禁了就误伤）；
+#   - 名字前是自我介绍语境（我是/我叫/叫我/I'm/call me/this is…）→ 不算呼格；
+#   - 对方名字**未知**（peer_names 空）→ 整体不判——没有客户资料就无法排除
+#     「对方恰好同名」，宁可漏报不误伤（与孤儿引用门禁同哲学）。
+# 剥离粒度＝**名字 token 本身**而非整句——"you're not that old, Steven" 去掉
+# 呼格名后句子本体仍是有效回复；整句剥反而把内容杀掉。
+
+_VOC_SELF_INTRO_TAIL_RE = re.compile(
+    r"(?:我(?:就)?[是叫]|叫我|人家(?:是|叫)|这(?:里|边)是|我系|"
+    r"i\s*(?:'?a?m)|it\s*'?s|this\s+is|call\s+me|name\s*(?:'?s|is)|named|-|—)"
+    r"\s*[,，]?\s*$",   # 「name is, Steven」怪写法的逗号也算自介语境
+    re.IGNORECASE)
+
+
+def _voc_patterns(name: str) -> List[re.Pattern]:
+    n = re.escape(str(name or "").strip())
+    if not n:
+        return []
+    return [
+        # 句尾呼格：…, Name / …，Name（后只许终止标点/空白）
+        re.compile(r"[,，]\s*(" + n + r")\s*(?=[.!?。！？~～…\s]*$)", re.IGNORECASE),
+        # 句首呼格：Name, … / Name，…
+        re.compile(r"^\s*(" + n + r")\s*[,，]", re.IGNORECASE),
+    ]
+
+
+def find_vocative_self_name(
+    text: str,
+    self_names: List[str] | None,
+    peer_names: List[str] | None = None,
+) -> List[str]:
+    """返回被用来**称呼对方**的自己人设名命中列表（高置信呼格形态）。纯函数绝不抛。"""
+    hits: List[str] = []
+    try:
+        t = str(text or "")
+        peers = [str(p or "").strip() for p in (peer_names or []) if str(p or "").strip()]
+        if not t.strip() or not peers:
+            return []          # 对方名未知 → 不判（无法排除同名客户）
+        peer_norm = _norm(" ".join(peers))
+        for name in (self_names or []):
+            nm = str(name or "").strip()
+            if len(nm) < 2:
+                continue
+            if _norm(nm) and _norm(nm) in peer_norm:
+                continue       # 客户名里含此名 → 称呼合法
+            for sent in _split_sentences_sn(t):
+                for pat in _voc_patterns(nm):
+                    m = pat.search(sent)
+                    if not m:
+                        continue
+                    # 自我介绍语境（"…, I'm Steven" 的逗号形不落此形态，但
+                    # "my name is, Steven" 类怪写法防一手）
+                    if _VOC_SELF_INTRO_TAIL_RE.search(sent[:m.start(1)]):
+                        continue
+                    hits.append(nm)
+                    break
+                if nm in hits:
+                    break
+    except Exception:
+        return []
+    return hits
+
+
+def strip_vocative_self_name(
+    text: str,
+    self_names: List[str] | None,
+    peer_names: List[str] | None = None,
+) -> Tuple[str, List[str]]:
+    """剥离呼格位置的自己人设名（只抹名字 token，句子本体保留）。
+
+    返回 ``(清洁文本, 命中列表)``；无命中原样返回。剥后为空回原文（绝不返回空）。
+    """
+    t = str(text or "")
+    hits = find_vocative_self_name(t, self_names, peer_names)
+    if not hits:
+        return t, []
+    out_sents: List[str] = []
+    for sent in _split_sentences_sn(t):
+        s = sent
+        for nm in hits:
+            for pat in _voc_patterns(nm):
+                m = pat.search(s)
+                if m and not _VOC_SELF_INTRO_TAIL_RE.search(s[:m.start(1)]):
+                    # 连同引导逗号一起抹（句首形态抹尾随逗号）
+                    s = (s[:m.start()] + s[m.end():]) if m.start() > 0 or s[:m.start()].strip() \
+                        else s[m.end():]
+        out_sents.append(s)
+    cleaned = "".join(out_sents)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
+    if not cleaned:
+        return t, hits
+    return cleaned, hits
+
+
 __all__ = [
     "collect_forbidden", "find_violations", "matches_ai_self_identity", "sanitize",
     "build_self_name_allowlist", "find_wrong_self_name", "sanitize_self_name",
+    "find_vocative_self_name", "strip_vocative_self_name",
 ]

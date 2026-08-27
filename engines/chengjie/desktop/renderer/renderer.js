@@ -1,5 +1,10 @@
 "use strict";
 
+// 壳渲染进程文案单源＝renderer/shell-i18n.js（index.html 的 <head> 内同步加载，
+// 故此处 window.SH 必然已就位）。这行只兜「打包漏文件」的极端情形：宁可显示 key
+// 也绝不让一个 ReferenceError 把整个壳打白。
+if (typeof window.SH !== "function") window.SH = function (k) { return String(k == null ? "" : k); };
+
 const ICONS = { telegram: "✈️", whatsapp: "🟢", line: "💬", messenger: "💠", instagram: "📷", x: "𝕏", zalo: "💙", signal: "🔵" };
 
 // 标签条自有图标（收件箱/新增）：lucide 单色描边，与工作台 ui_icons 同风格、吃 currentColor
@@ -115,6 +120,55 @@ function resolveAccounts(cfg) {
     .filter((a) => a.id && a.url);
 }
 
+// ── 融合标题栏（titlebar merge P2 2026-08-22）────────────────────────────────
+// 主窗 titleBarStyle:hidden（win32）后由这条 32px 壳级细条承接拖拽/窗控让位/应急⋯菜单。
+// 点亮判据＝main.js loadFile 带的 ?tb=1（与 ?lang= 同一权威源：主进程知道自己开没开
+// 融合模式，renderer 不做平台猜测）；不带参 → body 类不加、CSS 保持 display:none。
+// ⋯菜单动作全部经 shell.titlebarMenu 回主进程（关于/诊断/更新的实现只有主进程有）；
+// 亮暗档随工作台页面主题：页面 menuAction(theme_*) → 主进程 → cx-titlebar-theme 回推。
+function initTitlebar() {
+  let on = false;
+  try { on = new URLSearchParams(location.search).get("tb") === "1"; } catch (e) { on = false; }
+  const bar = document.getElementById("cx-titlebar");
+  if (!on || !bar) return;
+  document.body.classList.add("cx-tb-on");
+  const ttl = document.getElementById("cx-tb-title");
+  if (ttl) ttl.textContent = document.title || "";
+  const more = document.getElementById("cx-tb-more");
+  const menu = document.getElementById("cx-tb-menu");
+  if (more && menu) {
+    more.addEventListener("click", (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; });
+    document.addEventListener("click", () => { if (!menu.hidden) menu.hidden = true; });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !menu.hidden) menu.hidden = true; });
+    menu.addEventListener("click", (e) => {
+      const b = e.target && e.target.closest ? e.target.closest("button[data-tbm]") : null;
+      if (!b) return;
+      menu.hidden = true;
+      try {
+        if (window.shell && typeof window.shell.titlebarMenu === "function") {
+          window.shell.titlebarMenu(b.getAttribute("data-tbm") || "");
+        }
+      } catch (err) { /* 应急菜单桥缺席时静默（老 preload 混装态） */ }
+    });
+  }
+  try {
+    if (window.shell && typeof window.shell.onTitlebarTheme === "function") {
+      window.shell.onTitlebarTheme((mode) => {
+        document.body.classList.toggle("cx-tb-light", String(mode) === "light");
+      });
+    }
+  } catch (err) { /* 主题回推缺席＝保持暗档 */ }
+  // 全屏进出（P2b）：原生窗控在全屏下自动消失，细条同步收起，退出还原
+  try {
+    if (window.shell && typeof window.shell.onTitlebarFs === "function") {
+      window.shell.onTitlebarFs((on) => {
+        document.body.classList.toggle("cx-tb-fs", !!on);
+      });
+    }
+  } catch (err) { /* 回推缺席＝细条常驻，仅损失全屏纯净度 */ }
+}
+initTitlebar();
+
 (async function () {
   const cfg = await window.shell.getConfig();
   // Option C：默认只保留统一收件箱（与网页同源同款），关掉左侧账号栏 rail + 内嵌官方网页 Tab。
@@ -202,7 +256,7 @@ function resolveAccounts(cfg) {
       const cur = el.getAttribute("title") || "";
       if (cur !== el.dataset.tipComposed) el.dataset.tipBase = cur;
       const base = el.dataset.tipBase || "";
-      const composed = i < 9 ? (base ? base + "\n" : "") + "快捷键 Ctrl+" + (i + 1) : base;
+      const composed = i < 9 ? (base ? base + "\n" : "") + SH("tab.shortcut_hint", { n: i + 1 }) : base;
       if (composed !== cur) { el.title = composed; el.dataset.tipComposed = composed; }
     });
   }
@@ -267,8 +321,9 @@ function resolveAccounts(cfg) {
     if (!id) { el.hidden = true; return; }
     const st = deriveInjectState(InjectStatus.byId[id]);
     el.className = "is-" + st.cls;
-    el.querySelector(".is-text").textContent = st.text;
-    el.title = st.detail;
+    // 纯函数只给 code + 插值变量，文案在此按当前壳语言取（见 inject-status.js 顶部说明）
+    el.querySelector(".is-text").textContent = SH("inject." + st.code);
+    el.title = SH("inject." + st.code + ".d", st.vars);
     el.hidden = false;
   }
   function onInjectStatus(payload, wv) {
@@ -289,9 +344,9 @@ function resolveAccounts(cfg) {
     const dot = item.querySelector(".rail-dot");
     if (!dot) return;
     const st = deriveInjectState(InjectStatus.byId[id]);
-    const badge = railBadge({ level: st.cls, text: st.text });
+    const badge = railBadge({ level: st.cls, textKey: "inject." + st.code });
     dot.className = "rail-dot " + badge.dot;
-    dot.title = badge.text || "";
+    dot.title = badge.textKey ? SH(badge.textKey) : "";
     pushShellState();   // 健康变化同步回推页面抽屉（内容级去重，常态零流量）
   }
   buildInjectStatusPill();
@@ -318,13 +373,13 @@ function resolveAccounts(cfg) {
     const item = document.createElement("div");
     item.className = "rail-item active";
     item.dataset.id = INBOX_ID;
-    item.title = "人工操作台（统一收件箱 · AI+人工协作）";
-    item.setAttribute("aria-label", "人工操作台");
+    item.title = SH("rail.inbox.title");
+    item.setAttribute("aria-label", SH("console.manual"));
     // rail-badge＝全局未读徽标：数据由 /workspace 页面经 inbox-preload.js 桥回推
     // （cmd=badge），壳自己不另拉后端——未读口径单源在页面聚合逻辑里。
     // rail-chip「AI+人工」＝模式徽章：与官方平台组的「人工」chip 构成两类入口的色彩语义。
-    item.innerHTML = `<span class="ic">${INBOX_TAB_SVG}</span><span>${ui.label || "人工操作台"}</span>` +
-      '<span class="rail-chip" title="AI 拟稿/自动回复 + 人工审核协作">AI+人工</span>' +
+    item.innerHTML = `<span class="ic">${INBOX_TAB_SVG}</span><span>${ui.label || SH("console.manual")}</span>` +
+      `<span class="rail-chip" title="${SH("rail.inbox.chip_title")}">${SH("rail.inbox.chip")}</span>` +
       '<span class="rail-badge" id="rail-inbox-badge" hidden></span>';
     item.addEventListener("click", () => activate(INBOX_ID));
     rail.appendChild(item);
@@ -364,8 +419,8 @@ function resolveAccounts(cfg) {
     overlay.innerHTML =
       '<div class="inbox-overlay-card">' +
       '<div class="inbox-spinner"></div>' +
-      '<div class="inbox-msg">正在连接后台…</div>' +
-      '<button class="inbox-retry" hidden>重试连接</button>' +
+      `<div class="inbox-msg">${SH("conn.connecting")}</div>` +
+      `<button class="inbox-retry" hidden>${SH("conn.retry")}</button>` +
       "</div>";
     stage.appendChild(overlay);
     const msgEl = overlay.querySelector(".inbox-msg");
@@ -386,6 +441,11 @@ function resolveAccounts(cfg) {
       // 仅在本标签激活时显示遮罩；ready 态彻底隐藏
       const active = item.classList.contains("active");
       overlay.style.display = (phase !== "ready" && active) ? "flex" : "none";
+      // 开机动画层（splash.js）镜像同一状态机：phase/msg 单源在此，splash 不自算一套
+      //（error 文案 verbatim 透传、ready 收幕；splash 缺席时该事件无人消费，零影响）。
+      try {
+        window.dispatchEvent(new CustomEvent("aitr:inbox-phase", { detail: { phase: phase, msg: msg || "" } }));
+      } catch (e) { /* 事件桥异常不影响遮罩 */ }
     }
     // 供 rail 切换联动：切到收件箱时按阶段恢复遮罩，切走时隐藏
     Inbox.applyVisibility = function (active) {
@@ -409,9 +469,9 @@ function resolveAccounts(cfg) {
           const st = window.shell.backendSpawnStatus ? await window.shell.backendSpawnStatus() : null;
           const phase = st && st.status;
           if (phase === "starting" || phase === "probing")
-            setPhase("error", "正在启动后台服务，请稍候…（首次启动较慢）");
+            setPhase("error", SH("conn.spawning"));
           else if (phase === "failed")
-            setPhase("error", "后台启动失败：" + (st.lastError || "未知错误") + "\n详见 用户数据/logs/backend.log；将持续重试…");
+            setPhase("error", SH("conn.spawn_failed", { err: st.lastError || SH("conn.err_unknown") }));
         } catch (e) {}
         Inbox._reconnectTimer = setTimeout(tick, 2000);
       };
@@ -424,10 +484,12 @@ function resolveAccounts(cfg) {
       wv._loginIdx = 0;
       wv._loginPending = false;
       wv._phase = undefined;
-      setPhase("loading", "正在连接后台…");
+      setPhase("loading", SH("conn.connecting"));
       try { wv.loadURL(fullUrl); } catch (e) { try { wv.reload(); } catch (e2) {} }
     }
     retryBtn.addEventListener("click", reload);
+    // 开机动画故障面板的「重试连接」：回派事件复用同一 reload 闭环（绝不长第二套重试逻辑）。
+    window.addEventListener("aitr:splash-retry", reload);
 
     // 单一导航处理：凭据链自动登录 + 三态遮罩。
     // _loginIdx 指向下一组待试凭据；_loginPending 防同一次 /login 加载被 dom-ready+did-navigate 重复触发。
@@ -443,7 +505,7 @@ function resolveAccounts(cfg) {
         ).then((isOfflineShell) => {
           if (!isOfflineShell) { wv._phase = "done"; wv._loginIdx = 0; setPhase("ready"); return; }
           wv._phase = "error";
-          setPhase("error", "后台还没起来（当前是离线页）。\n正在等待后台启动并自动重连…\n后端地址：" + base);
+          setPhase("error", SH("conn.offline_shell", { base: base }));
           startReconnectPoll();
         }).catch(() => {
           // 旧后端不带该标记 / 取值失败 → 保持原行为，不因探测失败卡住用户
@@ -457,13 +519,20 @@ function resolveAccounts(cfg) {
         if (idx < creds.length) {
           wv._loginIdx = idx + 1;
           wv._loginPending = true;
-          setPhase("loading", idx === 0 ? "正在登录后台…" : "首选凭据失败，尝试备用凭据…");
-          wv.executeJavaScript(backendLoginJS(creds[idx], navTarget)).catch(() => {});
+          setPhase("loading", SH(idx === 0 ? "conn.logging_in" : "conn.logging_in_alt"));
+          // B95：回跳目标优先取 /login?next=（会话中途过期时=用户本次真想去的页），
+          // 无 next 才回工作台首页——否则「点数据洞察」重登后被弹回工作台，静默且诡异。
+          let dest = navTarget;
+          try {
+            const nx = new URL(url).searchParams.get("next") || "";
+            if (nx && nx.charAt(0) === "/" && nx.indexOf("//") !== 0) dest = nx;
+          } catch (e) { /* keep navTarget */ }
+          wv.executeJavaScript(backendLoginJS(creds[idx], dest)).catch(() => {});
         } else {
           // 凭据用尽（或未配置）：露出登录页让人工处理
           wv._phase = "failed";
           setPhase("ready");
-          if (creds.length) flash("自动登录失败，请在页面手动登录");
+          if (creds.length) flash(SH("conn.login_manual"));
         }
         return;
       }
@@ -473,13 +542,19 @@ function resolveAccounts(cfg) {
 
     wv.addEventListener("did-start-loading", () => {
       wv._loginPending = false; // 新一次加载开始（含 replace 跳转），解除登录进行中标记
-      if (wv._phase !== "done") setPhase("loading", Inbox.phase === "loading" ? msgEl.textContent : "正在连接后台…");
+      if (wv._phase !== "done") setPhase("loading", Inbox.phase === "loading" ? msgEl.textContent : SH("conn.connecting"));
     });
     wv.addEventListener("dom-ready", () => { wv._navAlive = true; try { onNav(wv.getURL()); } catch (e) {} });
     wv.addEventListener("did-navigate", (e) => { wv._navAlive = true; onNav(e.url); });
     wv.addEventListener("page-title-updated", (e) => {
       const t = String(e.title || "").trim();
-      if (!t || !window.shell || !window.shell.setWindowTitle) return;
+      if (!t) return;
+      // 融合标题栏细条同步镜像（系统标题栏隐藏后，这里是标题唯一可见处）
+      try {
+        const el = document.getElementById("cx-tb-title");
+        if (el && document.body.classList.contains("cx-tb-on")) el.textContent = t;
+      } catch (err) { /* 细条缺席不影响 OS 标题透传 */ }
+      if (!window.shell || !window.shell.setWindowTitle) return;
       // 嵌入页 title 已由后端按生效品牌渲染（白标可改），直接透传到 OS 窗口标题——
       // 不再硬编码「智聊」，否则白标客户会被强改回默认品牌。
       window.shell.setWindowTitle(t);
@@ -489,7 +564,10 @@ function resolveAccounts(cfg) {
       wv._navAlive = true; // 失败也是「导航链活着」——看门狗只抓完全静默的吞导航
       if (e.errorCode === -3) return; // ERR_ABORTED：重定向/replace 的正常中断，忽略
       wv._phase = "error";
-      setPhase("error", "无法连接后台服务（" + (e.errorDescription || ("错误 " + e.errorCode)) + "）。\n正在等待后台启动并自动重连…\n后端地址：" + base);
+      setPhase("error", SH("conn.fail_load", {
+        why: e.errorDescription || SH("conn.err_code", { code: e.errorCode }),
+        base: base,
+      }));
       startReconnectPoll();
     });
 
@@ -516,9 +594,7 @@ function resolveAccounts(cfg) {
         } catch (e) {}
         // 端口冲突：继续等只会一直等（对方一直在应答），必须立刻告诉用户怎么办。
         if (conflict !== null) {
-          setPhase("error", "后端端口被占用：" + conflict
-            + "\n请停掉占用该端口的程序，或改 config.json 的 backend.base_url 端口后重启本应用。"
-            + "\n后端地址：" + base);
+          setPhase("error", SH("conn.port_conflict", { who: conflict, base: base }));
           return;
         }
         if (ok) break;
@@ -535,16 +611,23 @@ function resolveAccounts(cfg) {
         // 后台轮询不停。既不让用户面对无出口的转圈，也不放弃自动恢复。
         if (Date.now() - t0 > BOOT_ESCAPE_MS || spawnPhase === "failed") {
           const why = spawnPhase === "failed"
-            ? "后台启动失败：" + (spawnErr || "未知错误") + "\n详见 用户数据/logs/backend.log。"
-            : "后台还没起来（已等待 " + secs + "s，首次启动较慢）。";
-          setPhase("error", why + "\n正在自动重试…\n后端地址：" + base);
+            ? SH("conn.spawn_failed_short", { err: spawnErr || SH("conn.err_unknown") })
+            : SH("conn.waiting_secs", { secs: secs });
+          setPhase("error", SH("conn.auto_retry", { why: why, base: base }));
         } else if (secs >= 3) {
-          setPhase("loading", "正在启动后台服务…（首次启动较慢，已 " + secs + "s）");
+          // B38（P2-9 2026-08-22）：真·首启（本壳从未成功连上过后端）等待期
+          // 说人话——sidecar 冷启动要解包初始化，泛泛的「启动中」让用户以为
+          // 卡死（_209 实录）。标记在首次探活成功时落，此后永远走常规文案，
+          // 「仅此一次」绝不对老用户复读。
+          let _first = false;
+          try { _first = !localStorage.getItem("aitr.shell.booted_once"); } catch (e) {}
+          setPhase("loading", SH(_first ? "conn.first_boot_init" : "conn.starting_secs", { secs: secs }));
         }
         await new Promise((r) => setTimeout(r, BOOT_POLL_MS));
       }
       if (Inbox._bootAborted) return;
-      setPhase("loading", "正在载入工作台…");
+      try { localStorage.setItem("aitr.shell.booted_once", "1"); } catch (e) {}
+      setPhase("loading", SH("conn.loading_ws"));
       wv._navAlive = false;
       try { wv.loadURL(fullUrl); } catch (e) { wv.setAttribute("src", fullUrl); }
       // 装载看门狗（2026-08-15 117 实锤）：分区里 v5 之前的旧 Service Worker 会把
@@ -564,15 +647,20 @@ function resolveAccounts(cfg) {
     }
 
     // 主动先点亮 loading 遮罩，遮住首屏可能的 /login 闪屏（不依赖 did-start-loading 时序）
-    setPhase("loading", "正在连接后台…");
+    setPhase("loading", SH("conn.connecting"));
     bootLoad();
     return true;
   }
 
   const inboxOn = buildInboxTab();
+  // 收件箱未启用（纯内嵌账号模式）＝没有启动闸门可等：立刻通知开机动画收幕，
+  // 否则 splash 等一个永远不会来的 ready 事件（唯一的死等路径，堵死）。
+  if (!inboxOn) {
+    try { window.dispatchEvent(new CustomEvent("aitr:inbox-phase", { detail: { phase: "ready", msg: "" } })); } catch (e) { /* ignore */ }
+  }
 
   if (!ACCOUNTS.length && !inboxOn) {
-    stage.innerHTML = '<div class="placeholder">config.json 里没有启用任何账号</div>';
+    stage.innerHTML = `<div class="placeholder">${SH("stage.no_accounts")}</div>`;
     return;
   }
 
@@ -583,10 +671,14 @@ function resolveAccounts(cfg) {
   let addMenuEl = null;
 
   // 竖栏 64px 只放得下短名：取「账号N」尾缀或首 4 字，全名恒在 tooltip（title）里
+  // 尾缀正则须同时认中英两种自动标签（account.auto_label 双语，见 shell-i18n.js）——
+  // 只认中文时英文壳的「Telegram Account 2」会被截成「Tele…」，同平台多号全长一样。
   function shortTabLabel(label) {
     const s = String(label || "").trim();
-    const m = s.match(/(账号\s*\d+)$/);
-    if (m) return m[1].replace(/\s+/g, "");
+    const m = s.match(/((?:账号|Account)\s*\d+)$/i);
+    // 中文尾缀去掉词与数字间的空格（「账号 2」→「账号2」，64px 竖栏省一个字位）；
+    // 英文「Account 2」必须留空格。按字符判语言，避免在代码里再写一遍中文字面量。
+    if (m) return /[\u4e00-\u9fff]/.test(m[1]) ? m[1].replace(/\s+/g, "") : m[1].trim();
     return s.length > 5 ? s.slice(0, 4) + "…" : s;
   }
 
@@ -604,19 +696,20 @@ function resolveAccounts(cfg) {
     item.className = "rail-item" + (active ? " active" : "");
     item.dataset.id = a.id;
     const _pc = window.PlatformCaps;
-    const _assistTag = (_pc && _pc.assistOnlyTabTag(a.platform)) || "";
+    const _assistTagKey = (_pc && _pc.assistOnlyTabTagKey(a.platform)) || "";
+    const _assistTag = _assistTagKey ? SH(_assistTagKey) : "";
     item.title = _assistTag
-      ? `${a.label}（官方网页·仅人工；全自动请用「人工操作台」）`
-      : `${a.label}（${a.platform}:${a.id}）`;
+      ? SH("tab.assist_title", { label: a.label })
+      : SH("tab.plain_title", { label: a.label, platform: a.platform, id: a.id });
     item.setAttribute("aria-label", a.label);
     // 运行时新增的账号(_auto)带「✕」可就地移除；config.json 定义的账号不可在此删（交配置管理）
-    const rmHtml = a._auto ? '<span class="rm" title="移除该内嵌标签">✕</span>' : "";
+    const rmHtml = a._auto ? `<span class="rm" title="${SH("tab.remove")}">✕</span>` : "";
     const tagHtml = _assistTag
-      ? `<span class="via-tag assist" title="仅人工聊天/翻译；全自动在「人工操作台」">${_assistTag}</span>`
+      ? `<span class="via-tag assist" title="${SH("tab.assist_chip_title")}">${_assistTag}</span>`
       : "";
     // rail-dot＝账号健康三态点；rail-meta 把 chip/点/✕ 收成一行，竖栏标签不无限长高。
     item.innerHTML = `<span class="ic">${platIconHtml(a.platform)}</span><span>${shortTabLabel(a.label)}</span>` +
-      `<span class="rail-meta">${tagHtml}<span class="rail-dot idle" title="等待注入…"></span>${rmHtml}</span>`;
+      `<span class="rail-meta">${tagHtml}<span class="rail-dot idle" title="${SH("tab.dot_idle")}"></span>${rmHtml}</span>`;
     item.addEventListener("click", (e) => {
       if (e.target && e.target.classList && e.target.classList.contains("rm")) {
         e.stopPropagation();
@@ -670,12 +763,13 @@ function resolveAccounts(cfg) {
     const ri = document.createElement("div");
     ri.className = "rail-item via-inbox";
     ri.dataset.id = "viainbox:" + a.id;
-    ri.title = `${a.label}（${a.platform}）无官方网页版聊天，请在「人工操作台」中使用`;
+    ri.title = SH("tab.via_inbox_title", { label: a.label, platform: a.platform });
     ri.setAttribute("aria-label", a.label);
-    ri.innerHTML = `<span class="ic">${platIconHtml(a.platform)}</span><span>${shortTabLabel(a.label)}</span><span class="via-tag">↪工作台</span>`;
+    ri.innerHTML = `<span class="ic">${platIconHtml(a.platform)}</span><span>${shortTabLabel(a.label)}</span>` +
+      `<span class="via-tag">${SH("tab.via_workbench")}</span>`;
     ri.addEventListener("click", () => {
       activate(INBOX_ID);
-      flash(`${a.label} 无官方网页版，已切到人工操作台`);
+      flash(SH("tab.via_inbox_flash", { label: a.label }));
     });
     railInsert(ri);
     syncRailVisibility();
@@ -713,7 +807,7 @@ function resolveAccounts(cfg) {
       if (!RENDERED.has(a.id)) return;
       const st = deriveInjectState(InjectStatus.byId[a.id]);
       const dot = (typeof railBadge === "function")
-        ? railBadge({ level: st.cls, text: st.text }).dot : "idle";
+        ? railBadge({ level: st.cls }).dot : "idle";
       embedded.push({
         id: a.id, platform: a.platform, label: a.label, health: dot,
         // assist＝assist-only 平台（Messenger/IG/X/Zalo 官方网页仅人工），页内标签条据此挂「人工」角标
@@ -741,8 +835,8 @@ function resolveAccounts(cfg) {
   function buildRailAddButton() {
     const btn = document.createElement("div");
     btn.className = "rail-item rail-add";
-    btn.title = "新增内嵌账号标签（Telegram / WhatsApp 网页版，在标签内扫码登录）";
-    btn.innerHTML = `<span class="ic">${PLUS_TAB_SVG}</span><span>新增</span>`;
+    btn.title = SH("tab.add_title");
+    btn.innerHTML = `<span class="ic">${PLUS_TAB_SVG}</span><span>${SH("tab.add_label")}</span>`;
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       toggleAddMenu(btn);
@@ -760,7 +854,8 @@ function resolveAccounts(cfg) {
     menu.innerHTML = embeddables
       .map((p) => {
         const name = (TEMPLATES[p] && TEMPLATES[p].name) || p;
-        const hint = (_pcMenu && _pcMenu.assistOnlyMenuHint(p)) || "";
+        const hintKey = (_pcMenu && _pcMenu.assistOnlyMenuHintKey(p)) || "";
+        const hint = hintKey ? SH(hintKey) : "";
         return `<button data-plat="${p}"><span class="ic">${platIconHtml(p, 16)}</span>${name}${hint}</button>`;
       })
       .join("");
@@ -791,20 +886,20 @@ function resolveAccounts(cfg) {
   function nextLabel(platform) {
     const base = (TEMPLATES[platform] && TEMPLATES[platform].name) || platform;
     const n = ACCOUNTS.filter((a) => a.platform === platform).length + 1;
-    return `${base} 账号${n}`;
+    return SH("account.auto_label", { base: base, n: n });
   }
 
   async function addEmbeddedAccount(platform) {
-    if (!isEmbeddable(platform)) return flash("该平台无可内嵌网页版");
+    if (!isEmbeddable(platform)) return flash(SH("add.no_web"));
     const id = `auto-${platform}-${Date.now().toString(36)}`;
     const acc = buildRuntimeAccount({ id, platform, label: nextLabel(platform), template: TEMPLATES[platform] });
-    if (!acc) return flash("无法新增：缺少该平台网页地址");
+    if (!acc) return flash(SH("add.no_url"));
     if (isWhatsappPlatform(platform)) await ensureWhatsappSessionUa(acc);
     ACCOUNTS.push(acc);
-    if (!addAccountTab(acc, { active: true })) return flash("新增失败");
+    if (!addAccountTab(acc, { active: true })) return flash(SH("add.failed"));
     persistRuntimeAccounts();
     activate(acc.id);
-    flash(`已新增内嵌标签：${acc.label}（请在标签内扫码登录）`);
+    flash(SH("add.done", { label: acc.label }));
     return acc; // 双面板融合 P0：调用方（openEmbedded 深链）需要新标签的账号对象做会话定位
   }
 
@@ -826,7 +921,7 @@ function resolveAccounts(cfg) {
       activate(fb);
     }
     syncRailVisibility();
-    flash("已移除内嵌标签");
+    flash(SH("tab.removed"));
   }
 
   // ── 收件箱页 → 壳 反向桥（inbox-preload.js 经 sendToHost 抵达）──────────────
@@ -852,7 +947,7 @@ function resolveAccounts(cfg) {
       // 不带 opts / 旧壳收到 opts 都按「仅切标签」降级，桥契约双向前向兼容。
       const opts = (msg.opts && typeof msg.opts === "object") ? msg.opts : {};
       if (!EMBEDDED_ON) {
-        flash("内嵌官方网页版未启用（config.embedded_official_pages）");
+        flash(SH("web.disabled"));
         return;
       }
       // shell_tab_id＝页内标签条精确点名某个壳标签（chatx-bridge-state.embedded[].id 原样回传），
@@ -863,14 +958,14 @@ function resolveAccounts(cfg) {
         locateEmbeddedThread(tabId, ACCOUNT_BY_ID[tabId].platform, opts);
         return;
       }
-      if (!isEmbeddable(plat)) { flash("该平台无可内嵌的官方网页版"); return; }
+      if (!isEmbeddable(plat)) { flash(SH("web.no_embeddable")); return; }
       // 账号选择＝该平台首个已渲染标签（桌面标签与后端账号无强映射，P0 语义；
       // 多标签同平台时若需精确映射，后续在账号配置补 backend_account_id 再升级）。
       const existing = ACCOUNTS.find((a) => a.platform === plat && RENDERED.has(a.id));
       if (existing) {
         activate(existing.id);
         locateEmbeddedThread(existing.id, plat, opts);
-        flash(`已切到网页版标签：${existing.label}`);
+        flash(SH("web.switched", { label: existing.label }));
         return;
       }
       addEmbeddedAccount(plat).then((acc) => {
@@ -909,8 +1004,8 @@ function resolveAccounts(cfg) {
     // 只剩收件箱时整条 rail 由 rail-solo 隐藏，故无需单独管理本标题显隐。
     const grp = document.createElement("div");
     grp.className = "rail-group-label";
-    grp.textContent = "官方平台 · 人工";
-    grp.title = "官方网页版账号：人工聊天/翻译辅助；全自动请用「人工操作台」";
+    grp.textContent = SH("web.group_assist");
+    grp.title = SH("web.group_assist_title");
     rail.appendChild(grp);
     buildRailAddButton();
     ACCOUNTS.forEach((a, idx) => {
@@ -978,10 +1073,16 @@ function _feedCardComponent(id, ctx) {
 // 卡头状态 pill：组件 cp-data-loaded → 折叠态也能一眼读懂面板内容（复用共享 pillMetaFromCpLoaded）
 const _CP_PILL_BY_PANEL = { "cp-draft": "cpp-draft", "cp-relstage": "cpp-relstage", "cp-collab": "cpp-collab", "cp-chain": "cpp-chain" };
 const _CP_PILL_TONES = ["pill-accent", "pill-ok", "pill-warn", "pill-danger"];
+// 共享组件（pillMetaFromCpLoaded / initDesktopTabBadges）按网页宿主的 inbox.pill.* 键取词，
+// 桌面壳没有 window.T → 这里做「共享键 → 壳词典」的唯一映射层。**别再复制第二份**：
+// 早先卡头 pill 与 tab 徽标各带一份中文字面量表，改一处漏一处（本批已合流至此）。
 function _deskPillT(key, vars) {
   const m = {
-    "inbox.pill.guard_high": "高风险", "inbox.pill.guard_medium": "中风险", "inbox.pill.draft_ready": "已生成",
-    "inbox.pill.chain_failed": "{n} 失败", "inbox.pill.chain_running": "{n} 运行中",
+    "inbox.pill.guard_high": SH("pill.guard_high"),
+    "inbox.pill.guard_medium": SH("pill.guard_medium"),
+    "inbox.pill.draft_ready": SH("pill.draft_ready"),
+    "inbox.pill.chain_failed": SH("pill.chain_failed"),
+    "inbox.pill.chain_running": SH("pill.chain_running"),
   };
   let s = m[key] || key;
   if (vars) Object.keys(vars).forEach((p) => { s = s.split("{" + p + "}").join(String(vars[p])); });
@@ -1042,7 +1143,7 @@ function renderCopilotShowcase() {
       '<div class="cp-showcase">' +
       (head ? '<div class="cp-sc-hd">' + esc(head) + '</div>' : '') +
       '<ul class="cp-sc-list">' + rows + '</ul>' +
-      '<div class="cp-sc-ft">打开一个会话即可开始</div></div>';
+      '<div class="cp-sc-ft">' + esc(SH("cp.showcase_ft")) + '</div></div>';
   } catch (e) { /* 橱窗只是空状态美化,任何异常都不该影响副驾主链 */ }
 }
 
@@ -1092,18 +1193,8 @@ function initCopilot() {
       badgeReply: "cp-tab-badge-reply",
       badgeCustomer: "cp-tab-badge-customer",
       badgeTools: "cp-tab-badge-tools",
-      snoozedLabel: "搁置中",
-      translate: (key, vars) => {
-        const m = {
-          "inbox.pill.guard_high": "高风险",
-          "inbox.pill.guard_medium": "中风险",
-          "inbox.pill.chain_failed": "{n} 失败",
-          "inbox.pill.chain_running": "{n} 运行中",
-        };
-        let s = m[key] || key;
-        if (vars) Object.keys(vars).forEach((p) => { s = s.split("{" + p + "}").join(String(vars[p])); });
-        return s;
-      },
+      snoozedLabel: SH("pill.snoozed"),
+      translate: _deskPillT,
     });
   }
   // 关系阶段动作(确认进阶/降级/回暖/对齐)完成后:刷新档案,联动后续可在此扩展
@@ -1128,8 +1219,8 @@ function initCopilot() {
     // 此前桌面零反馈，服务端如实报的失败原因（如「会话未关联客户档案」）被静默吞掉，
     // 坐席眼里就是「点了没反应」（2026-08-13 198 实录）。ok→轻提示；fail→显示原因。
     const d = (e && e.detail) || {};
-    if (d.ok) flash("已执行 ✓");
-    else flash(d.error ? String(d.error) : "执行失败，请稍后重试");
+    if (d.ok) flash(SH("exec.done"));
+    else flash(d.error ? String(d.error) : SH("exec.failed"));
     shellBeacon(d.ok ? "cpshell_exec_ok" : "cpshell_exec_fail");
     const rel = $("cp-relstage");
     if (rel) rel.refresh();
@@ -1166,13 +1257,11 @@ function initCopilot() {
 function openInInbox(opts) {
   opts = opts || {};
   const c = Copilot.ctx;
-  if (!Inbox.wv || !Inbox.activate) { flash("人工操作台（统一收件箱）未启用"); return; }
+  if (!Inbox.wv || !Inbox.activate) { flash(SH("inbox.disabled")); return; }
   // 诚实条 CTA：无会话也可切到收件箱（Messenger 全自动入口）
   if (!c || !c.chat_key) {
     Inbox.activate(INBOX_ID);
-    flash(opts.fromAssistBanner
-      ? "已切到人工操作台 — Messenger 全自动需在此完成服务器登录"
-      : "已切到人工操作台");
+    flash(SH(opts.fromAssistBanner ? "inbox.switched_assist" : "inbox.switched"));
     return;
   }
   Inbox.activate(INBOX_ID);
@@ -1186,9 +1275,7 @@ function openInInbox(opts) {
     "window.__desktopOpenConversation && window.__desktopOpenConversation(" +
     JSON.stringify(payload) + ");";
   deliverToInbox(js);
-  flash(opts.fromAssistBanner
-    ? "已在人工操作台打开 — 全自动请确认账号已服务器登录"
-    : "已在人工操作台打开 📥");
+  flash(SH(opts.fromAssistBanner ? "inbox.opened_assist" : "inbox.opened"));
 }
 
 // 收件箱可能仍在加载/登录：轮询到 ready（约 12s）再投递 executeJavaScript
@@ -1198,7 +1285,7 @@ function deliverToInbox(js, tries) {
     Inbox.wv.executeJavaScript(js).catch(() => {});
     return;
   }
-  if (tries <= 0) { flash("收件箱尚未就绪，请稍后重试"); return; }
+  if (tries <= 0) { flash(SH("inbox.not_ready")); return; }
   setTimeout(() => deliverToInbox(js, tries - 1), 250);
 }
 
@@ -1333,17 +1420,11 @@ async function bootPhaseText() {
   try {
     const st = window.shell.backendSpawnStatus ? await window.shell.backendSpawnStatus() : null;
     const phase = st && st.status;
-    if (phase === "failed") {
-      return "后台服务启动失败：请重启应用；反复出现请联系运维（日志：logs/backend.log）";
-    }
-    if (phase === "port-conflict") {
-      return "端口被其他程序占用，后台服务无法启动——请联系运维处理";
-    }
-    if (phase === "starting" || phase === "probing") {
-      return "首次启动较慢（约 1 分钟），就绪后自动进入业务面板";
-    }
+    if (phase === "failed") return SH("boot.failed");
+    if (phase === "port-conflict") return SH("boot.port_conflict");
+    if (phase === "starting" || phase === "probing") return SH("boot.sub");
   } catch (e) { /* 拿不到阶段就用缺省文案 */ }
-  return "正在连接后台服务…（就绪后自动进入业务面板）";
+  return SH("boot.connecting");
 }
 
 // 强制导航：iframe 对「同值 src」不触发重载——加载失败的错误页会永久驻留，
@@ -1371,7 +1452,7 @@ function scheduleFrameRetry() {
     const frame = $("cp-appframe");
     if (frame && Copilot._frameSrc) {
       console.log("[iframe] 后端已就绪 → 加载统一业务面板");
-      if (Copilot.useIframe) setFrameBootOverlay(true, "正在加载业务面板…");
+      if (Copilot.useIframe) setFrameBootOverlay(true, SH("iframe.loading"));
       navigateFrame(frame, Copilot._frameSrc);
       startFrameWatchdog();
       // 与 boot_gate_wait 配对：等待后成功进入加载＝闸门闭环（差值=卡死量）
@@ -1396,7 +1477,7 @@ function startFrameWatchdog() {
     const btn = $("cp-mode-toggle");
     if (btn) btn.classList.remove("active");
     disableIframe();
-    flash("统一业务面板加载超时，已回退经典面板（后台就绪后自动恢复）");
+    flash(SH("iframe.timeout"));
     // 后端未就绪（冷启动/重启窗）→ 保持后台轮询，就绪后重载 iframe 走 lateReady 自愈；
     // 后端本就健康却超时（如旧后端没有 /copilot/app.html）→ 维持单次尝试语义，不无限重载。
     (async () => {
@@ -1444,7 +1525,7 @@ function onFrameMessage(e) {
       const btn = $("cp-mode-toggle");
       if (btn) btn.classList.add("active");
       enableIframe();
-      flash("统一业务面板已恢复 ✓");
+      flash(SH("iframe.restored"));
       return;
     }
     if (Copilot._pendingFrameCtx) postFrameContext(Copilot._pendingFrameCtx);
@@ -1466,7 +1547,7 @@ function sendComposer(text) {
   const t = String(text || "").trim();
   if (!t || !Copilot.ctx || !Copilot.ctx.webview) return;
   Copilot.ctx.webview.send("fill-composer", { text: t, send: true });
-  flash("已填入并发送 ✓");
+  flash(SH("send.filled_sent"));
 }
 
 async function feedActiveChat() {
@@ -1490,7 +1571,7 @@ async function feedActiveChat() {
         account_id: acc,
         account_label: c.account_label || "",
         chat_key: c.chat_key,
-        summary: c.name ? ("会话对象：" + c.name) : "",
+        summary: c.name ? (SH("send.peer_prefix") + c.name) : "",
       },
     };
     if (Copilot._frameReady) postFrameContext(ctx); else Copilot._pendingFrameCtx = ctx;
@@ -1556,7 +1637,8 @@ function syncAssistOnlyBanner(accountId) {
   const pc = window.PlatformCaps;
   if (!pc || !a || !pc.isAssistOnlyEmbed(a.platform)) { el.hidden = true; return; }
   const txt = el.querySelector(".aob-text");
-  if (txt) txt.textContent = pc.assistOnlyBannerText(a.platform);
+  const bannerKey = pc.assistOnlyBannerKey(a.platform);
+  if (txt) txt.textContent = bannerKey ? SH(bannerKey) : "";
   el.hidden = false;
 }
 
@@ -1586,7 +1668,7 @@ async function fillComposer(text, send) {
   // 一键「填入并发送」前过发送风控闸门；纯「填入」由人工复核，不拦
   if (send && !(await guardConfirm(t))) return;
   Copilot.ctx.webview.send("fill-composer", { text: t, send: !!send });
-  flash(send ? "已填入并发送 ✓" : "已填入 ✓");
+  flash(SH(send ? "send.filled_sent" : "send.filled"));
 }
 
 // ── D4b：受控桌面出站轮询 ────────────────────────────────────────────────────
@@ -1708,16 +1790,18 @@ async function guardConfirm(text) {
     return true;
   }
   if (!v || v.ok === false) return true;
-  const terms = (v.hits || []).map((h) => h.term).filter(Boolean).join("、");
-  const robo = (v.robotic || []).join("、");
+  // 枚举分隔符随语言走（中文顿号 vs 英文逗号）——直接硬编「、」会让英文确认框读成中文标点
+  const sep = SH("sep.enum");
+  const terms = (v.hits || []).map((h) => h.term).filter(Boolean).join(sep);
+  const robo = (v.robotic || []).join(sep);
   if (v.risk === "high") {
-    return window.confirm(`⚠ 高风险内容，命中敏感词：${terms}\n（支付/密码/账号安全类）\n\n确认仍要直接发送给客户吗？`);
+    return window.confirm(SH("send.confirm_high", { terms }));
   }
   if (v.risk === "medium") {
-    return window.confirm(`提醒：命中需谨慎词：${terms}\n（优惠/投诉/法律类）\n\n确认发送？`);
+    return window.confirm(SH("send.confirm_medium", { terms }));
   }
   if (robo) {
-    return window.confirm(`提醒：回复像 AI 口吻（含「${robo}」），可能露馅。\n\n仍要发送吗？`);
+    return window.confirm(SH("send.confirm_robotic", { robo }));
   }
   return true;
 }
@@ -1727,9 +1811,9 @@ async function copyText(text) {
   try {
     if (window.shell.copy) await window.shell.copy(t);
     else await navigator.clipboard.writeText(t);
-    flash("已复制 ✓");
+    flash(SH("act.copied"));
   } catch (e) {
-    flash("复制失败");
+    flash(SH("act.copy_failed"));
   }
 }
 
@@ -1762,9 +1846,9 @@ function actionRow(text) {
     });
     return b;
   };
-  row.appendChild(mk("填入", "primary", () => fillComposer(get(), false)));
-  row.appendChild(mk("填入并发送", "send", () => fillComposer(get(), true)));
-  row.appendChild(mk("复制", "ghost", () => copyText(get())));
+  row.appendChild(mk(SH("act.fill"), "primary", () => fillComposer(get(), false)));
+  row.appendChild(mk(SH("act.fill_send"), "send", () => fillComposer(get(), true)));
+  row.appendChild(mk(SH("act.copy"), "ghost", () => copyText(get())));
   return row;
 }
 
@@ -1798,7 +1882,7 @@ function onActiveChat(payload, webview) {
   $("cp-tabs").hidden = false;
   Copilot.chatActive = true;
   renderSections();
-  $("cp-title").textContent = payload.name || "业务助手";
+  $("cp-title").textContent = payload.name || SH("cp.title");
 
   if (switched) {
     $("cp-analyze").hidden = true;
@@ -1859,7 +1943,7 @@ function cleanText(s) {
   const segs = t.split(/[/\n]/).map((x) => x.replace(/\s+/g, " ").trim());
   if (segs.length > 3) {
     const f = segs.find((x) => FILE_EXT.test(x));
-    if (f) return "[文件] " + f;
+    if (f) return SH("msg.file_prefix") + f;
   }
   // ③ 去重复时间戳（webk 把时间渲染两份：「10:5610:56」）
   t = t.replace(/(\d{1,2}:\d{2})\1+/g, "");
@@ -1917,7 +2001,7 @@ async function runAnalyze() {
   const reps = $("cp-analyze-replies");
   btn.disabled = true;
   const old = btn.textContent;
-  btn.textContent = "分析中…";
+  btn.textContent = SH("an.running");
   reps.innerHTML = "";
   try {
     await ensureFullThread();
@@ -1928,13 +2012,13 @@ async function runAnalyze() {
     const a = (res && res.analysis) || {};
     if (!res || !res.ok) {
       box.hidden = false;
-      box.textContent = "分析失败";
+      box.textContent = SH("an.failed");
       return;
     }
     const chips = [];
-    if (a.intent) chips.push(`<span class="tag">意图：${esc(a.intent)}</span>`);
-    if (a.sentiment) chips.push(`<span class="tag">情绪：${esc(a.sentiment)}</span>`);
-    if (a.detected_lang) chips.push(`<span class="tag">语种：${esc(a.detected_lang)}</span>`);
+    if (a.intent) chips.push(`<span class="tag">${esc(SH("an.intent"))}${esc(a.intent)}</span>`);
+    if (a.sentiment) chips.push(`<span class="tag">${esc(SH("an.sentiment"))}${esc(a.sentiment)}</span>`);
+    if (a.detected_lang) chips.push(`<span class="tag">${esc(SH("an.lang"))}${esc(a.detected_lang)}</span>`);
     (a.risk_signals || []).forEach((r) => {
       const label = typeof r === "string" ? r : r.type || r.label || "";
       if (label) chips.push(`<span class="tag danger">⚠ ${esc(label)}</span>`);
@@ -1960,17 +2044,32 @@ async function runAnalyze() {
     });
   } catch (e) {
     box.hidden = false;
-    box.textContent = "分析失败";
+    box.textContent = SH("an.failed");
   } finally {
     btn.disabled = false;
     btn.textContent = old;
   }
 }
 
+// 关系阶段机器码 → 本地化标签。词条长在 cp-i18n（`cp.rel.stage.<code>`，共享组件
+// <cp-rel-stage> 用的同一份），故经 window.CP_T 取：壳侧不再复制一份阶段词表，
+// 免得两处译名分叉。取不到 → 服务端 label → 裸码（旧后端/新码零破坏）。
+function relStageLabel(code, fallbackLabel) {
+  const c = String(code || "").trim().toLowerCase();
+  if (c && typeof window.CP_T === "function") {
+    try {
+      const key = "cp.rel.stage." + c;
+      const v = window.CP_T(key);
+      if (v && v !== key) return v;
+    } catch (e) { /* 词典未就绪＝按回落链走 */ }
+  }
+  return fallbackLabel || code || "";
+}
+
 async function loadProfile() {
   const c = Copilot.ctx;
   const box = $("cp-profile");
-  box.textContent = "加载中…";
+  box.textContent = SH("profile.loading");
   try {
     const res = await window.shell.profile({
       platform: c.platform,
@@ -1978,22 +2077,25 @@ async function loadProfile() {
       chat_key: c.chat_key,
     });
     if (!res || !res.ok || !res.profile) {
-      box.textContent = "暂无档案（会话刚同步，稍后重试）";
+      box.textContent = SH("profile.empty");
       return;
     }
     const p = res.profile;
     const rel = p.relationship || {};
     const act = p.activity || {};
     const tags = [];
-    if (rel.stage) tags.push(`阶段：${rel.stage}`);
-    if (p.language) tags.push(`语言：${p.language}`);
-    if (rel.intimacy_score != null) tags.push(`亲密度：${rel.intimacy_score}`);
-    if (act.message_count != null) tags.push(`消息：${act.message_count}`);
+    // rel.stage 是**机器码**（warming/steady/…），服务端的 stage_label 恒为中文
+    // （STAGE_LABEL_ZH）——所以走 cp 词典按码取本地化标签，查不到才回落服务端 label /
+    // 裸码。与共享组件 <cp-rel-stage>._stLabel 同一口径，两处不得各译一套。
+    if (rel.stage) tags.push(SH("profile.stage") + relStageLabel(rel.stage, rel.stage_label));
+    if (p.language) tags.push(SH("profile.lang") + p.language);
+    if (rel.intimacy_score != null) tags.push(SH("profile.intimacy") + rel.intimacy_score);
+    if (act.message_count != null) tags.push(SH("profile.msgs") + act.message_count);
     box.innerHTML =
       `<div style="font-weight:600;margin-bottom:6px">${esc(p.display_name || c.name || c.chat_key)}</div>` +
       tags.map((t) => `<span class="tag">${esc(t)}</span>`).join("");
   } catch (e) {
-    box.textContent = "档案加载失败";
+    box.textContent = SH("profile.load_failed");
   }
 }
 
@@ -2005,15 +2107,15 @@ async function runKbSearch() {
   const q = $("cp-kb-input").value.trim();
   const list = $("cp-kb");
   if (!q) {
-    list.innerHTML = '<div class="cp-hint">输入关键词搜索知识库</div>';
+    list.innerHTML = '<div class="cp-hint">' + esc(SH("kb.hint_input")) + '</div>';
     return;
   }
-  list.innerHTML = '<div class="cp-hint">搜索中…</div>';
+  list.innerHTML = '<div class="cp-hint">' + esc(SH("kb.searching")) + '</div>';
   try {
     const res = await window.shell.kbSearch({ q, platform: c ? c.platform : "", intent: "" });
     const entries = (res && res.entries) || [];
     if (!entries.length) {
-      list.innerHTML = '<div class="cp-hint">无匹配条目</div>';
+      list.innerHTML = '<div class="cp-hint">' + esc(SH("kb.no_match")) + '</div>';
       return;
     }
     list.innerHTML = "";
@@ -2022,13 +2124,13 @@ async function runKbSearch() {
       const item = document.createElement("div");
       item.className = "cp-item";
       item.innerHTML =
-        `<div class="it-title">${esc(en.title || en.category || "条目")}</div>` +
+        `<div class="it-title">${esc(en.title || en.category || SH("kb.entry"))}</div>` +
         `<div>${esc(ans.slice(0, 160))}${ans.length > 160 ? "…" : ""}</div>`;
       item.appendChild(actionRow(ans));
       list.appendChild(item);
     });
   } catch (e) {
-    list.innerHTML = '<div class="cp-hint">搜索失败</div>';
+    list.innerHTML = '<div class="cp-hint">' + esc(SH("kb.search_failed")) + '</div>';
   }
 }
 
@@ -2040,7 +2142,7 @@ async function loadTemplatesOnce() {
     const res = await window.shell.templates();
     const tpls = (res && res.templates) || [];
     if (!tpls.length) {
-      list.innerHTML = '<div class="cp-hint">暂无快捷回复模板</div>';
+      list.innerHTML = '<div class="cp-hint">' + esc(SH("tpl.empty")) + '</div>';
       return;
     }
     list.innerHTML = "";
@@ -2057,7 +2159,7 @@ async function loadTemplatesOnce() {
       list.appendChild(item);
     });
   } catch (e) {
-    list.innerHTML = '<div class="cp-hint">模板加载失败</div>';
+    list.innerHTML = '<div class="cp-hint">' + esc(SH("tpl.load_failed")) + '</div>';
   }
 }
 
@@ -2126,14 +2228,16 @@ function esc(s) {
     if (!cur) { bar.hidden = true; return; }
     bar.className = "sn-" + (cur.tone || "info");
     badge.textContent = cur.badge || "";
-    text.textContent = cur.text || "";
-    text.title = cur.text || ""; // 超长省略时 hover 看全文
+    // 更新类回 textKey(+vars) 由壳词典取词；公告类是服务端下发内容，回 text 原样显示。
+    const body = cur.textKey ? SH(cur.textKey, cur.vars || {}) : (cur.text || "");
+    text.textContent = body;
+    text.title = body; // 超长省略时 hover 看全文
     primary.disabled = false;
     if (cur.kind === "update" && cur.action === "restart") {
-      primary.textContent = "立即重启更新";
+      primary.textContent = SH("notice.update_restart");
       primary.hidden = false;
     } else if (cur.kind === "announcement" && cur.action === "open") {
-      primary.textContent = "查看详情";
+      primary.textContent = SH("notice.open_detail");
       primary.hidden = false;
     } else {
       primary.hidden = true;
@@ -2149,7 +2253,7 @@ function esc(s) {
     try {
       if (cur.kind === "update") {
         primary.disabled = true;
-        primary.textContent = "正在重启…";
+        primary.textContent = SH("notice.restarting");
         const r = await sh.updateRestart();
         if (!r || !r.ok) render(await sh.shellNotice()); // 没就绪等罕见态：回读真状态复位按钮
       } else if (cur.kind === "announcement") {

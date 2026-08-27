@@ -26,7 +26,11 @@ logger = logging.getLogger(__name__)
 
 
 def _quota_snapshot() -> dict:
-    """P0-4 字符额度快照（无额度授权 → included=0/used=0）。绝不抛。"""
+    """P0-4 字符额度快照（无额度授权 → included=0/used=0）。绝不抛。
+
+    ``lic_id`` 仅供进程内消费（quota_state 预测取逐日消耗用）——端点响应按
+    显式白名单构造，**绝不**把它带给前端（防泄漏门禁钉着字段集）。
+    """
     try:
         from src.licensing.quota_store import check_license_quota
 
@@ -40,12 +44,13 @@ def _quota_snapshot() -> dict:
             "source": q.get("source", "license"),
             "trial_hours_left": q.get("trial_hours_left"),
             "trial_expired": q.get("trial_expired", False),
+            "lic_id": str(q.get("lic_id") or ""),
         }
     except Exception:
         return {"included_chars": 0, "used_chars": 0,
                 "remaining_chars": None, "exceeded": False,
                 "source": "license", "trial_hours_left": None,
-                "trial_expired": False}
+                "trial_expired": False, "lic_id": ""}
 
 
 #: 顶栏额度徽章的分级阈值。放在服务端而不是前端：坐席顶栏 / 会员中心 / 首启向导
@@ -286,7 +291,7 @@ def register_license_routes(app, *, api_auth, config_manager=None) -> None:
             included = int(q.get("included_chars") or 0)
             source = str(q.get("source") or "license")
             _spawn_usage_beacon(int(q.get("used_chars") or 0))
-            return {
+            payload = {
                 "ok": True,
                 "visible": bool(included > 0 or source == "local_trial"),
                 "source": source,
@@ -298,9 +303,46 @@ def register_license_routes(app, *, api_auth, config_manager=None) -> None:
                 "expired": bool(q.get("trial_expired")),
                 "level": quota_level(q),
             }
+            # quotawall v2（2026-08-21）：四表合议裁决随同一次轮询下发（feat=qs1，
+            # 旧前端忽略新字段零影响；新前端 feat 探测，缺 state 自动走 legacy）。
+            # 单独 try：合议失败只丢 state，legacy 徽章字段绝不陪葬。
+            try:
+                from src.licensing.quota_state import collect_quota_state
+
+                payload["state"] = collect_quota_state(
+                    quota=q, level=payload["level"],
+                    request=request, config_manager=_CONFIG_MANAGER)
+            except Exception:
+                logger.debug("[license] quota_state 合议失败（略过）", exc_info=True)
+            return payload
         except Exception:  # pragma: no cover - 观测端点绝不影响工作台
             logger.debug("[license] 坐席额度摘要失败", exc_info=True)
             return {"ok": False, "visible": False, "level": "ok"}
+
+    @app.get("/api/admin/license/topup-trend")
+    async def api_license_topup_trend(request: Request, days: int = 14):
+        """近 N 天入账台账按日聚合（额度墙漏斗卡「服务端到账真值」，P2.5）。
+
+        ``qw_credited`` 埋点只统计「坐席开着页面等到 watch 侦测命中」的场景，
+        页面关早了就漏计；本端点读 ``license_char_topup`` 台账＝全部真实到账
+        （凭证兑换/手工直充/自动履约），给 ops 漏斗卡做对账分母。响应只含
+        day/n/chars 聚合数字，无 lic_id 无订单号。
+        """
+        api_auth(request)
+        try:
+            from src.licensing.quota_store import current_topup_daily
+
+            rows = current_topup_daily(int(days or 14))
+            return {
+                "ok": True,
+                "days": rows,
+                "total_n": sum(int(r.get("n") or 0) for r in rows),
+                "total_chars": sum(int(r.get("chars") or 0) for r in rows),
+            }
+        except Exception:  # pragma: no cover - 观测端点绝不抛
+            logger.debug("[license] topup-trend 读取失败", exc_info=True)
+            return {"ok": True, "days": [], "total_n": 0, "total_chars": 0}
+
     @app.get("/api/admin/license")
     async def api_admin_license(request: Request):
         api_auth(request)
@@ -380,7 +422,8 @@ def register_license_routes(app, *, api_auth, config_manager=None) -> None:
             import asyncio
 
             from src.ai.hosted_gateway import (
-                ensure_hosted_ai, ensure_hosted_telegram, ensure_hosted_vision)
+                ensure_hosted_ai, ensure_hosted_asr, ensure_hosted_telegram,
+                ensure_hosted_vision, ensure_hosted_voice)
             from src.utils.golive import _is_placeholder
 
             # Telegram 托管凭据独立于 AI Key 状态尝试（池未配则静默跳过）——
@@ -401,13 +444,32 @@ def register_license_routes(app, *, api_auth, config_manager=None) -> None:
                 except Exception:
                     logger.debug("[hosted-vision] claim 后接入识图失败（忽略）", exc_info=True)
 
+            async def _link_voice() -> None:
+                """克隆语音/语音识别与识图同理：令牌一到就顺手接上（B21）。
+
+                main.py 启动跑的是五件套（ai/telegram/vision/voice/asr），但首启
+                「未领试用」时全部失败；本钩子此前只补前三件，voice/asr 要等
+                下次重启才接通——「领完试用聊天正常、语音登记却报未接入」的
+                窗口期即此（2026-08-21）。
+                """
+                try:
+                    await asyncio.to_thread(ensure_hosted_voice, _CONFIG_MANAGER)
+                except Exception:
+                    logger.debug("[hosted-voice] claim 后接入克隆语音失败（忽略）", exc_info=True)
+                try:
+                    await asyncio.to_thread(ensure_hosted_asr, _CONFIG_MANAGER)
+                except Exception:
+                    logger.debug("[hosted-asr] claim 后接入语音识别失败（忽略）", exc_info=True)
+
             ai = (_cfg_or_none().get("ai") or {})
             if not _is_placeholder(ai.get("api_key")):
                 await _link_vision()
+                await _link_voice()
                 return  # AI 已有可用 Key（自有或令牌），别反复 reload
             if not await asyncio.to_thread(ensure_hosted_ai, _CONFIG_MANAGER):
                 return
             await _link_vision()
+            await _link_voice()
             from src.web.routes.unified_inbox_setup_routes import reload_ai_runtime
             await reload_ai_runtime(app_, _CONFIG_MANAGER)
             logger.info("[hosted-ai] 领取试用后已自动接入 AI 网关并热生效")

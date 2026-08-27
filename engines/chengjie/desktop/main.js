@@ -11,22 +11,62 @@ const { createAllSidecarManagers } = require("./sidecar-launcher.js");
 const brandUtil = require("./brand-util.js");
 const tokenUtil = require("./token-util.js");
 const winFit = require("./win-fit.js");
+const hotpatchApply = require("./hotpatch-apply.js");
+const hotpatchStage = require("./hotpatch-stage.js");
+
+// 本机已落地的热补丁（resources/hotpatch.json，由 apply_chatx_hotpatch_node.ps1 写）。
+// 进程内只读一次：该文件只在「本进程已退出、helper 正在替换文件」时变，读到的永远是
+// 本次运行对应的那份。缺文件/坏 JSON 一律按「没打过补丁」。
+let _localPatchInfo;
+function localHotpatchInfo() {
+  if (_localPatchInfo !== undefined) return _localPatchInfo;
+  _localPatchInfo = null;
+  try {
+    if (app.isPackaged && process.resourcesPath) {
+      const raw = JSON.parse(fs.readFileSync(path.join(process.resourcesPath, "hotpatch.json"), "utf-8"));
+      _localPatchInfo = hotpatchApply.readLocalPatch(raw);
+    }
+  } catch (e) { /* 没打过补丁 / 文件坏 → 按未打过 */ }
+  return _localPatchInfo;
+}
+
+/** 已落地的补丁号（0=没打过）。基线对不上的残留记录按 0——那是上一档安装包留下的。 */
+function localPatchLevel() {
+  try {
+    const lp = localHotpatchInfo();
+    if (lp && lp.patch > 0 && lp.baseAppVersion === app.getVersion()) return lp.patch;
+  } catch (e) { /* app 未就绪等：按未打过 */ }
+  return 0;
+}
 
 // 面向用户的版本串：package.json 的 displayVersion 优先（内测「1.001」这类展示号
 // 不是合法 semver，进不了 version 字段——那是 electron-builder/updater 的机器版本），
 // 缺字段回落 app.getVersion()。更新比对仍用 semver，勿拿本函数结果参与版本比较。
+// 打过热补丁再缀 `+pN`（1.056+p3）：同一个安装包的第几号补丁必须一眼可见，否则报障
+// 时 support 只看到 semver，分不清对面跑的是 p0 还是 p3。app.getVersion() 保持纯
+// semver（updater 比对、遥测 manifest_version 都指着它）。
 function displayVersion() {
+  let base = "";
   try {
     const dv = require("./package.json").displayVersion;
-    if (dv) return String(dv);
+    if (dv) base = String(dv);
   } catch (e) { /* 读不到 package.json → 回落 semver */ }
-  try { return app.getVersion(); } catch (e) { return "dev"; }
+  if (!base) {
+    try { base = app.getVersion(); } catch (e) { base = "dev"; }
+  }
+  return hotpatchApply.displayLabel(base, localPatchLevel());
 }
 
 // `--first-run`：无视「只弹一次」标记重看首启向导。写进 env 而不是走 IPC，是为了让
 // shell-preload 能同步读到（向导在 DOM 就绪那一刻就要判断弹不弹，等不起一次往返）。
 // 在这里而非 ready 里设置：preload 可能先于任何 ready 回调求值。
 if (process.argv.includes("--first-run")) process.env.AITR_FORCE_FIRSTRUN = "1";
+
+// `--poster-preview`：活动海报**验收通道**（P0 2026-08-22）——跳过资格/频控强制弹出，
+// 不记展示频控、埋点走独立 poster6u_preview。没有它，验收海报要碰巧凑齐 8 道展示闸门
+// （托管版/onboarding 72h 窗/频控/feed…），内部老机器永远不合格，每次发版都在问
+// 「为什么没弹」。与 --first-run 同款走 env 让 preload 同步读到。
+if (process.argv.includes("--poster-preview")) process.env.AITR_POSTER_PREVIEW = "1";
 
 // D3：每账号确定性指纹缓存（account_id → fingerprint）。启动/运行时新增账号前拉取，
 // 供 session UA / Accept-Language / webview additionalArguments 注入，使多号内嵌互不关联。
@@ -1458,25 +1498,45 @@ function isBackendUrl(url) {
 function bindBackendPopupLogin(win, intendedUrl) {
   const token = String(((config.backend || {}).token) || "");
   if (!token) return;
-  let attempted = false;
+  // B95（实施68 P1-14）：两处旧缺陷曾把「点数据洞察」变成「弹回后台首页」——
+  //   ① 回跳目标写死为「开窗时的 URL」：会话中途过期后点任何侧栏页 → 服务端
+  //      303 /login?next=<目标页> → 这里重登后 location.replace(开窗首页)，
+  //      用户看到的就是「正在连接…→ 被弹回后台首页」，且毫无报错。
+  //      现在优先取 /login?next=（本次真实目的地，服务端 safe_next_path 同规则
+  //      校验过），开窗 URL 只作兜底。
+  //   ② attempted 一次性：长寿命弹窗第二次过期就永远停在登录页。改为按次冷却
+  //      （8s）+ 每窗上限 3 次（token 失效时不无限打转，登录页如实露出让人工
+  //      处理）；任一次成功进入非登录页即重置配额。
+  let tries = 0;
+  let lastTry = 0;
   win.webContents.on("did-finish-load", () => {
-    if (attempted) return;
     let u;
     try { u = new URL(win.webContents.getURL()); } catch (e) { return; }
-    if (u.pathname !== "/login" && u.pathname !== "/login/") return;
-    attempted = true;
-    let next = "/";
-    try {
-      const dest = new URL(intendedUrl);
-      next = dest.pathname + dest.search || "/";
-    } catch (e) { /* keep / */ }
+    if (u.pathname !== "/login" && u.pathname !== "/login/") {
+      tries = 0;   // 成功进站：重置重登配额（下次过期还有机会自愈）
+      return;
+    }
+    const now = Date.now();
+    if (tries >= 3 || (now - lastTry) < 8000) return;
+    tries++;
+    lastTry = now;
+    let next = "";
+    try { next = String(u.searchParams.get("next") || ""); } catch (e) { next = ""; }
+    // 与服务端 safe_next_path 同向的最小校验：仅站内相对路径（防 //evil）
+    if (!next || next.charAt(0) !== "/" || next.indexOf("//") === 0) {
+      try {
+        const dest = new URL(intendedUrl);
+        next = (dest.pathname + dest.search) || "/";
+      } catch (e) { next = "/"; }
+    }
     if (!String(next).startsWith("/")) next = "/";
     const js =
       "(function(){try{" +
       "var n=" + JSON.stringify(next) + ";" +
       "fetch('/login',{method:'POST'," +
       "headers:{'Content-Type':'application/x-www-form-urlencoded'}," +
-      "body:'auth_token='+encodeURIComponent(" + JSON.stringify(token) + ")," +
+      "body:'auth_token='+encodeURIComponent(" + JSON.stringify(token) + ")" +
+      "+'&next='+encodeURIComponent(n)," +
       "credentials:'same-origin'})" +
       ".then(function(){location.replace(n);})" +
       ".catch(function(){location.replace(n);});" +
@@ -1529,11 +1589,16 @@ function openBackendPopup(url) {
     width: 1100,
     height: 800,
     title: SS("win.backend_popup"),
+    // 与主窗同批（appmenu 内迁 2026-08-22）：弹窗保留系统标题栏但菜单条同样隐藏
+    // （Alt 唤出）——否则主窗黑条没了、每个后台弹窗还顶着一条，观感割裂。
+    autoHideMenuBar: true,
     webPreferences: {
       partition: BACKEND_WORKSPACE_PARTITION,
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
+      // B54：焦点自愈桥（confirm/alert 后焦点态失步的主进程复位通道）
+      preload: path.join(__dirname, "renderer", "popup-preload.js"),
     },
   });
   try {
@@ -1673,6 +1738,32 @@ function openCopilotPipWindow(sender, opts) {
 }
 
 // 工作台页（webview 的 inbox-preload）唯一入口；纵深防御再验一道发起方 URL。
+// B54（实施68 P1-16）：Electron 原生 confirm/alert 关闭后 Chromium 焦点态失步
+// （上游久悬 bug）——整窗输入框点不进、退出重进才恢复。钧实录「主动关怀 →
+// 跳过关怀记录 → 取消 → 输入全死」与 skuio「人设编辑页偶发无光标」同根：两处
+// 都是 window.confirm。唯一可靠解药=主进程把窗口 blur+focus 一轮，复位焦点态。
+// 页面侧（_focus_selfheal.html）在壳内包一层 confirm/alert/prompt，返回即调本
+// 通道；另有点击自愈兜底。窗口解析兼容两形态：弹窗自身 / webview 的宿主窗。
+ipcMain.handle("desktop:focus-fix", (e) => {
+  try {
+    if (!isBackendUrl(e.sender.getURL())) return { ok: false, error: "forbidden" };
+  } catch (err) {
+    return { ok: false, error: "forbidden" };
+  }
+  try {
+    let win = BrowserWindow.fromWebContents(e.sender);
+    if (!win && e.sender.hostWebContents) {
+      win = BrowserWindow.fromWebContents(e.sender.hostWebContents);
+    }
+    if (win && !win.isDestroyed()) {
+      win.blur();
+      win.focus();
+      return { ok: true };
+    }
+  } catch (err) { /* 窗口已销毁等：如实返回 false */ }
+  return { ok: false };
+});
+
 ipcMain.handle("desktop:copilot-pip", (e, req) => {
   try {
     if (!isBackendUrl(e.sender.getURL())) return { ok: false, error: "forbidden" };
@@ -1705,16 +1796,40 @@ ipcMain.on("cp-pip-out", (e, msg) => {
   notifyCopilotPipOwner(msg);
 });
 
-// ── 壳层文案语言（i18n P0 2026-08-19）────────────────────────────────────────
+// ── 壳层文案语言（i18n P0 2026-08-19；扩展语透传 2026-08-27）─────────────────
 // 此前应用菜单/右键菜单/关于框硬编码中文——英文坐席开壳第一眼就是「文件 编辑 视图」。
 // 语言源=壳配置 unified_inbox.lang（首启向导写入；与工作台 webview 的 ?lang= 同源）。
-// 保守策略：**显式配 en 才切英文**，其余（zh / 空=跟随系统 / 未知值）一律维持中文
-// ——存量中文坐席机零行为变化。菜单构建是启动期一次性，改语言重启壳生效。
+// 语言决策：显式配置最高（en / zh / 扩展语 vi/th/id/zh_hant 原样透传——webview
+// ?lang= 让 Web 端按该语渲染，壳自身词典没有的语按表定底回落：vi/th/id → en，
+// zh_hant → zh）；**配置为空=「跟随系统」**（首启向导默认项，2026-08-27 起真跟随：
+// app.getLocale()=OS 界面语言 → 同一套家族映射；此前空值恒中文，「跟随系统」是假的）。
+// 显式未知值（如手改成 ja）保守维持中文、不偷跟系统——显式≠委托推断。
+// 菜单构建是启动期一次性，改语言重启壳生效。
+const SHELL_EXT_LANGS = { vi: "en", th: "en", id: "en", zh_hant: "zh" }; // 码→词典回落底
+// BCP-47/配置值 → 壳语言码；认不出返回 ""（调用方决定回落方向）
+function shellLangFromTag(raw) {
+  const l = String(raw || "").trim().toLowerCase().replace(/-/g, "_");
+  if (!l) return "";
+  if (l === "en" || l.indexOf("en_") === 0) return "en";
+  const parts = l.split("_");
+  if (parts[0] === "zh") {
+    return (parts.indexOf("tw") > 0 || parts.indexOf("hk") > 0
+      || parts.indexOf("mo") > 0 || parts.indexOf("hant") > 0) ? "zh_hant" : "zh";
+  }
+  if (SHELL_EXT_LANGS[parts[0]]) return parts[0];
+  return "";
+}
 function shellLang() {
   try {
-    const l = String((((config || {}).unified_inbox) || {}).lang || "").trim().toLowerCase();
-    if (l === "en" || l.indexOf("en-") === 0) return "en";
-  } catch (e) { /* 配置缺失回落中文 */ }
+    const cfg = String((((config || {}).unified_inbox) || {}).lang || "").trim();
+    const explicit = shellLangFromTag(cfg);
+    if (explicit) return explicit;
+    if (!cfg) {
+      // 空=跟随系统。app ready 前 getLocale 可能为空 → 落中文（下次构建即正确）
+      const sys = shellLangFromTag(app.getLocale());
+      if (sys) return sys;
+    }
+  } catch (e) { /* 配置/app 缺失回落中文 */ }
   return "zh";
 }
 const SHELL_STR = {
@@ -1728,6 +1843,11 @@ const SHELL_STR = {
     "menu.devtools": "开发者工具", "menu.window": "窗口", "menu.minimize": "最小化",
     "menu.close_win": "关闭窗口", "menu.help": "帮助", "menu.about": "关于",
     "menu.check_update": "检查更新", "menu.diag": "上传诊断给客服",
+    // 开发者模式（版本号连点 12 次解锁，2026-08-22）：帮助菜单版本行与解锁提示
+    "menu.devmode_on": "开发者模式已开启",
+    "menu.devmode_off": "关闭开发者模式",
+    "menu.devmode_hint": "再点 {n} 次开启开发者模式",
+    "menu.support": "求助 / 发诊断给客服",
     "about.title_prefix": "关于", "about.workbench": "桌面工作台",
     "about.tagline": "人工操作台 + 业务助手", "about.version": "版本",
     "about.visit": "访问官网", "about.close": "关闭",
@@ -1741,6 +1861,9 @@ const SHELL_STR = {
     "notif.default_title": "新消息",
     "err.no_path": "后端未返回路径", "err.no_samples": "无样本可导出",
     "err.audio_fetch": "音频拉取失败 {status}", "err.empty_audio": "空音频",
+    // 充值到账奖励时刻（海报 CTA → 浏览器付款 → 入账后的系统通知）
+    "camp.credited_title": "充值已到账 🎉",
+    "camp.credited_body": "+{n} 已入账，工作台额度已更新，感谢支持！",
   },
   en: {
     "menu.file": "File", "menu.reload": "Reload", "menu.force_reload": "Force Reload",
@@ -1752,6 +1875,10 @@ const SHELL_STR = {
     "menu.devtools": "Developer Tools", "menu.window": "Window", "menu.minimize": "Minimize",
     "menu.close_win": "Close Window", "menu.help": "Help", "menu.about": "About",
     "menu.check_update": "Check for Updates", "menu.diag": "Send Diagnostics to Support",
+    "menu.devmode_on": "Developer mode enabled",
+    "menu.devmode_off": "Disable Developer Mode",
+    "menu.devmode_hint": "{n} more clicks to enable developer mode",
+    "menu.support": "Get Help / Send Diagnostics",
     "about.title_prefix": "About", "about.workbench": "Desktop Workbench",
     "about.tagline": "Agent console + business copilot", "about.version": "Version",
     "about.visit": "Visit Website", "about.close": "Close",
@@ -1763,12 +1890,25 @@ const SHELL_STR = {
     "notif.default_title": "New message",
     "err.no_path": "Backend returned no path", "err.no_samples": "No samples to export",
     "err.audio_fetch": "Audio fetch failed ({status})", "err.empty_audio": "Empty audio",
+    "camp.credited_title": "Top-up credited 🎉",
+    "camp.credited_body": "+{n} just landed — your workspace quota is updated. Thank you!",
   },
 };
+// 扩展语壳词条 overlay（scripts/i18n_desktop_ext.py 生成 shell-str-ext.json；
+// zh_hant 等语言的 SHELL_STR 后装。缺文件/坏 JSON＝静默维持 zh/en 双语，绝不崩壳）。
+try {
+  const _extStr = JSON.parse(
+    fs.readFileSync(path.join(__dirname, "shell-str-ext.json"), "utf-8"));
+  for (const _lg of Object.keys(_extStr || {})) {
+    if (_extStr[_lg] && typeof _extStr[_lg] === "object") SHELL_STR[_lg] = _extStr[_lg];
+  }
+} catch (e) { /* overlay 可选 */ }
 // vars 走 {name} 占位替换（与渲染层 SH() 同约定）：错误回执要带 status 之类的
 // 动态量，拼字符串会把语序烙死（英文 "Audio fetch failed (404)" 括号在后）。
+// 词典回落：扩展语走 SHELL_EXT_LANGS 表定底（vi/th/id→en，zh_hant→zh）；其余未知语维持 zh。
 function SS(key, vars) {
-  const d = SHELL_STR[shellLang()] || SHELL_STR.zh;
+  const l = shellLang();
+  const d = SHELL_STR[l] || SHELL_STR[SHELL_EXT_LANGS[l]] || SHELL_STR.zh;
   let s = d[key] != null ? d[key] : (SHELL_STR.zh[key] != null ? SHELL_STR.zh[key] : key);
   if (vars) {
     s = String(s).replace(/\{(\w+)\}/g, (m, k) =>
@@ -1843,6 +1983,16 @@ async function createWindow() {
     width: 1280,
     height: 820,
     title: "智聊 · 桌面工作台",
+    // 开机首帧防白闪（splash P0 2026-08-22）：深空底色（=brand --bl-ink-950）+
+    // show:false 等 ready-to-show 再亮窗——双击到品牌首屏之间不再闪系统白底。
+    backgroundColor: "#05060f",
+    show: false,
+    // 应用菜单内迁（P0 2026-08-22）：黑色原生菜单条默认隐藏，工作台顶栏渲染同构
+    // 页内菜单（desktop:app-menu-spec/-action）。原生 ApplicationMenu 保留＝快捷键
+    // role 全部照旧 + **Alt 可唤出**＝白屏时的应急后门（帮助>上传诊断仍可达）。
+    // 刻意只用 autoHideMenuBar、不叠 setMenuBarVisibility(false)——后者连 Alt 唤出
+    // 也封死，应急后门就没了。
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "shell-preload.js"),
       contextIsolation: true,
@@ -1851,6 +2001,17 @@ async function createWindow() {
       webviewTag: true,
     },
   };
+  // ── 融合标题栏（titlebar merge P2 2026-08-22）────────────────────────────
+  // win32 隐藏系统标题栏：原生 min/max/close 以 overlay 悬浮在壳级 32px 细条
+  // （renderer #cx-titlebar，经 ?tb=1 点亮）右缘——三层 chrome（系统标题+菜单条+
+  // 页头）收敛成「细条+页头」一体品牌头。overlay 配色随工作台页面主题经
+  // menuAction(theme_light|theme_dark) 运行时 setTitleBarOverlay 换肤。
+  // mac 刻意保持原生标题栏（坐席机全为 Windows；mac 红绿灯语义另案）。
+  const TB_MERGED = process.platform === "win32";
+  if (TB_MERGED) {
+    winOpts.titleBarStyle = "hidden";
+    winOpts.titleBarOverlay = { color: "#191b21", symbolColor: "#e2e8f0", height: 32 };
+  }
   try {
     if (fs.existsSync(DEFAULT_BRAND_ICON)) winOpts.icon = DEFAULT_BRAND_ICON;
   } catch (e) { /* 图标缺失不阻断启动 */ }
@@ -1865,9 +2026,27 @@ async function createWindow() {
     winOpts.height = _fit.height;
   } catch (e) { /* 自适配失败不阻断开窗 */ }
   const win = new BrowserWindow(winOpts);
-  if (_fit && _fit.maximize) {
-    try { win.maximize(); } catch (e) { /* 最大化失败保持 clamp 尺寸 */ }
+  // 融合细条×全屏（titlebar merge P2b）：F11/视图菜单进全屏后原生窗控自动消失，
+  // 32px 细条再常驻就是纯浪费——通知壳 renderer 收起（cx-tb-fs），退出全屏还原。
+  if (TB_MERGED) {
+    const _tbFs = (on) => { try { win.webContents.send("cx-titlebar-fs", !!on); } catch (e) { /* 窗已销毁等边角，忽略 */ } };
+    win.on("enter-full-screen", () => _tbFs(true));
+    win.on("leave-full-screen", () => _tbFs(false));
   }
+  // show:false + ready-to-show：首帧渲染完成才亮窗。maximize 挪进回调——Windows 上
+  // 对隐藏窗调 maximize 会立刻强制显示，提前调等于白闪回归。
+  const _wantMax = !!(_fit && _fit.maximize);
+  const _revealWin = () => {
+    try {
+      if (win.isDestroyed() || win.isVisible()) return;
+      if (_wantMax) win.maximize(); // maximize 在 Windows 上自带 show
+      win.show();
+    } catch (e) { /* 亮窗失败不阻断启动 */ }
+  };
+  win.once("ready-to-show", _revealWin);
+  // 兜底：渲染进程异常（资源缺失/崩溃）时 ready-to-show 永不触发——4s 后强制亮窗，
+  // 宁可看到错误界面也不能「双击后无事发生」。
+  setTimeout(_revealWin, 4000);
 
   win.webContents.on("did-finish-load", () => {
     console.log("[diag] renderer loaded ok");
@@ -1875,6 +2054,27 @@ async function createWindow() {
   });
   // 运行中改了 logo 无需重开窗口：切回桌面壳时（节流后）重取品牌热替换图标。
   win.on("focus", () => applyLiveWindowBranding(win));
+  // ── B69（实施67 P2-j，`_336`）：菜单认领看门狗 ─────────────────────────
+  // 原生菜单条 autoHideMenuBar 隐藏的前提＝页内菜单（app-menu-spec）会接管；
+  // 更新装载后的混装/加载失败/白屏态页面没接管时＝两头落空（顶部无任何菜单，
+  // 重启才恢复）。窗起 30s 内菜单未被认领 → 把原生菜单条还回来（Alt 后门升级
+  // 为常驻可见）；页面随后认领 → 收回隐藏。did-fail-load 立即还原生条。
+  const _menuBarFallback = (on) => {
+    try {
+      if (win.isDestroyed()) return;
+      win.setMenuBarVisibility(!!on ? true : false);
+      win.setAutoHideMenuBar(!on);
+      if (on) console.log("[diag] app-menu watchdog: native menu bar restored");
+    } catch (e) { /* 菜单条切换失败不伤主链 */ }
+  };
+  _onAppMenuClaimed = () => _menuBarFallback(false);
+  const _menuWatchTimer = setTimeout(() => {
+    if (!_appMenuClaimed) _menuBarFallback(true);
+  }, 30000);
+  if (_menuWatchTimer.unref) _menuWatchTimer.unref();
+  win.webContents.on("did-fail-load", () => {
+    if (!_appMenuClaimed) _menuBarFallback(true);
+  });
   win.webContents.on("did-fail-load", (_e, code, desc) =>
     console.log(`[diag] renderer load FAILED ${code} ${desc}`));
   win.webContents.on("render-process-gone", (_e, d) =>
@@ -1906,8 +2106,51 @@ async function createWindow() {
   // ?lang= 把壳语言（shellLang()＝unified_inbox.lang，与应用菜单 SS() 同源）钉进页面
   // URL：renderer/shell-i18n.js 与 shared/copilot/i18n/cp-i18n.js 都从 location.search
   // 取词，于是壳静态文案 + 整条 cp-* 组件链**首帧即正确**，无需异步 IPC 也不会闪中文。
-  win.loadFile(path.join(__dirname, "renderer", "index.html"), { query: { lang: shellLang() } });
+  // ?tb=1＝融合标题栏点亮信号（renderer.initTitlebar 按它加 body.cx-tb-on）：主进程
+  // 是「开没开融合」的唯一权威，renderer 不做平台猜测；lang 必须保持首位（i18n 门禁钉）。
+  win.loadFile(path.join(__dirname, "renderer", "index.html"), { query: { lang: shellLang(), tb: TB_MERGED ? "1" : "0" } });
   if (process.argv.includes("--dev")) win.webContents.openDevTools({ mode: "detach" });
+}
+
+// 「关于」弹窗（应用菜单内迁 P0 2026-08-22 抽出为共用函数：原生帮助菜单与
+// 工作台顶栏帮助下拉两个入口同一实现，防止页内菜单再手搓一份漂移版）。
+async function showAboutDialog(w) {
+  const bi = await resolveBrand();
+  const ver = displayVersion();
+  // 机器码拿不到就整行不出现（宁可少一行，也别显示一个空标签让人以为坏了）
+  const sup = await fetchSupportInfo();
+  const mc = (sup && sup.machine_code) ? String(sup.machine_code) : "";
+  const detail =
+    `Telegram / WhatsApp / Messenger / LINE · ${SS("about.tagline")}\n\n` +
+    `${SS("about.version")} v${ver}  ·  Electron ${process.versions.electron}  ·  Chromium ${process.versions.chrome}\n` +
+    (mc ? `${SS("about.machine")}: ${mc}\n` : "") +
+    `${bi.company} · ${bi.website}`;
+  // 按钮按能力动态拼，并**按 id 派发**而不是按下标——下标算式在增删按钮时
+  // 是静默错位（点「复制」变成打开官网），id 派发让新增按钮零风险。
+  // 「复制信息」：用户对着弹窗手抄机器码是最容易抄错的一步，抄错＝客服查不到
+  // 这台机器。「上传诊断」只在后端确认支持时出现（sup 非空即两个端点都在）。
+  const acts = [{ id: "visit", label: SS("about.visit") }];
+  if (mc) acts.push({ id: "copy", label: SS("about.copy") });
+  if (sup && sup.upload) acts.push({ id: "diag", label: SS("about.diag") });
+  acts.push({ id: "close", label: SS("about.close") });
+  const res = await dialog.showMessageBox(w, {
+    type: "info",
+    title: `${SS("about.title_prefix")} ${bi.product}`,
+    message: `${bi.product} · ${SS("about.workbench")}`,
+    detail,
+    buttons: acts.map((a) => a.label),
+    defaultId: acts.length - 1,
+    cancelId: acts.length - 1,
+    noLink: true,
+  });
+  const act = (acts[res.response] || {}).id;
+  if (act === "visit" && bi.website) {
+    shell.openExternal(bi.website).catch(() => {});
+  } else if (act === "copy") {
+    try { clipboard.writeText(`${bi.product} v${ver}\n${SS("about.machine")}: ${mc}`); } catch (e) { /* 剪贴板不可用时静默 */ }
+  } else if (act === "diag") {
+    await runDiagFlow(w, bi.product, ver, "desktop-about");
+  }
 }
 
 // 应用菜单（i18n P0 2026-08-19：原 buildChineseMenu 硬编码中文 → 按壳语言双语；
@@ -1943,7 +2186,10 @@ function buildAppMenu() {
         { label: SS("menu.zoom_out"), role: "zoomOut" },
         { type: "separator" },
         { label: SS("menu.fullscreen"), role: "togglefullscreen" },
-        { label: SS("menu.devtools"), role: "toggleDevTools" },
+        // 开发者工具对所有人隐藏（老板令 2026-08-22）：菜单项与 Ctrl+Shift+I role
+        // 快捷键一并消失；工程调试走 --dev 启动参，坐席解锁走页内「版本号连点 12 次」
+        // 开发者模式（appMenuSpec extras 供词条，页面注入菜单项经 desktop:app-menu-action
+        // 的 devtools 分支执行——分支保留，入口全部收进解锁态）。
       ],
     },
     {
@@ -1958,45 +2204,8 @@ function buildAppMenu() {
       submenu: [
         {
           label: SS("menu.about"),
-          click: async () => {
-            const w = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
-            const bi = await resolveBrand();
-            const ver = displayVersion();
-            // 机器码拿不到就整行不出现（宁可少一行，也别显示一个空标签让人以为坏了）
-            const sup = await fetchSupportInfo();
-            const mc = (sup && sup.machine_code) ? String(sup.machine_code) : "";
-            const detail =
-              `Telegram / WhatsApp / Messenger / LINE · ${SS("about.tagline")}\n\n` +
-              `${SS("about.version")} v${ver}  ·  Electron ${process.versions.electron}  ·  Chromium ${process.versions.chrome}\n` +
-              (mc ? `${SS("about.machine")}: ${mc}\n` : "") +
-              `${bi.company} · ${bi.website}`;
-            // 按钮按能力动态拼，并**按 id 派发**而不是按下标——下标算式在增删按钮时
-            // 是静默错位（点「复制」变成打开官网），id 派发让新增按钮零风险。
-            // 「复制信息」：用户对着弹窗手抄机器码是最容易抄错的一步，抄错＝客服查不到
-            // 这台机器。「上传诊断」只在后端确认支持时出现（sup 非空即两个端点都在）。
-            const acts = [{ id: "visit", label: SS("about.visit") }];
-            if (mc) acts.push({ id: "copy", label: SS("about.copy") });
-            if (sup && sup.upload) acts.push({ id: "diag", label: SS("about.diag") });
-            acts.push({ id: "close", label: SS("about.close") });
-            const res = await dialog.showMessageBox(w, {
-              type: "info",
-              title: `${SS("about.title_prefix")} ${bi.product}`,
-              message: `${bi.product} · ${SS("about.workbench")}`,
-              detail,
-              buttons: acts.map((a) => a.label),
-              defaultId: acts.length - 1,
-              cancelId: acts.length - 1,
-              noLink: true,
-            });
-            const act = (acts[res.response] || {}).id;
-            if (act === "visit" && bi.website) {
-              shell.openExternal(bi.website).catch(() => {});
-            } else if (act === "copy") {
-              try { clipboard.writeText(`${bi.product} v${ver}\n${SS("about.machine")}: ${mc}`); } catch (e) { /* 剪贴板不可用时静默 */ }
-            } else if (act === "diag") {
-              await runDiagFlow(w, bi.product, ver, "desktop-about");
-            }
-          },
+          click: () => showAboutDialog(
+            BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0]).catch(() => {}),
         },
         {
           // 报障直达（实施49 P1-9）：白屏/卡死时页面内的入口一并没了，
@@ -2018,6 +2227,166 @@ function buildAppMenu() {
   ];
   return Menu.buildFromTemplate(template);
 }
+
+// ── 应用菜单内迁（P0 2026-08-22）────────────────────────────────────────────
+// 黑色原生菜单条已在主窗 autoHideMenuBar 隐藏（Alt 唤出=应急后门），工作台顶栏
+// 经 __chatxShell.menuSpec() 取本清单渲染页内五菜单（文件/编辑/视图/窗口/帮助），
+// 动作经 desktop:app-menu-action 回主进程执行。词条单源=SHELL_STR（与原生菜单同
+// 一词典，随壳启动语言）；页面零兜底文案=无双源。帮助组的 support 带 local:1＝
+// 页面本地动作（openSupportPanel 报障面板），不回主进程；原生 diag 流刻意不进
+// 页内菜单——页面活着时报障面板严格更好，白屏时 Alt 唤出的原生帮助里 diag 仍在。
+function appMenuSpec() {
+  const it = (id, key, accel) => ({ id, label: SS(key), accel: accel || "" });
+  return {
+    ok: true,
+    lang: shellLang(),
+    menus: [
+      { id: "file", label: SS("menu.file"), items: [
+        it("reload", "menu.reload", "Ctrl+R"),
+        it("force_reload", "menu.force_reload", "Ctrl+Shift+R"),
+        { type: "sep" },
+        it("quit", "menu.quit", "Alt+F4"),
+      ] },
+      { id: "edit", label: SS("menu.edit"), items: [
+        it("undo", "menu.undo", "Ctrl+Z"),
+        it("redo", "menu.redo", "Ctrl+Y"),
+        { type: "sep" },
+        it("cut", "menu.cut", "Ctrl+X"),
+        it("copy", "menu.copy", "Ctrl+C"),
+        it("paste", "menu.paste", "Ctrl+V"),
+        it("select_all", "menu.select_all", "Ctrl+A"),
+      ] },
+      { id: "view", label: SS("menu.view"), items: [
+        it("zoom_reset", "menu.zoom_reset", "Ctrl+0"),
+        it("zoom_in", "menu.zoom_in", "Ctrl++"),
+        it("zoom_out", "menu.zoom_out", "Ctrl+-"),
+        { type: "sep" },
+        it("fullscreen", "menu.fullscreen", "F11"),
+        // devtools 不进默认清单（对所有人隐藏，老板令 2026-08-22）：页面在
+        // 「开发者模式」解锁态（帮助菜单版本号连点 12 次）用 extras 词条自行注入，
+        // 动作仍走 desktop:app-menu-action 的 devtools 分支。
+      ] },
+      { id: "window", label: SS("menu.window"), items: [
+        it("minimize", "menu.minimize", ""),
+        it("close_win", "menu.close_win", ""),
+      ] },
+      { id: "help", label: SS("menu.help"), items: [
+        Object.assign(it("support", "menu.support", ""), { local: 1 }),
+        it("about", "menu.about", ""),
+        it("check_update", "menu.check_update", ""),
+      ] },
+    ],
+    // 版本与开发者模式词条（2026-08-22）：帮助菜单底部由页面渲染版本行，
+    // 连点 12 次解锁「开发者模式」（localStorage，页面侧注入 devtools 菜单项）。
+    // 词条全部单源 SHELL_STR——页面零兜底文案，与五菜单同一纪律。
+    version: displayVersion(),
+    extras: {
+      version_label: SS("about.version"),
+      devtools: SS("menu.devtools"),
+      devmode_on: SS("menu.devmode_on"),
+      devmode_off: SS("menu.devmode_off"),
+      devmode_hint: SS("menu.devmode_hint"),
+    },
+  };
+}
+
+// B69（实施67 P2-j，`_336` 实录：更新装完顶部菜单栏消失、重启可恢复）：
+// 「菜单认领」信号——页面调 app-menu-spec ＝ 页内菜单已接管。主窗的菜单看门狗
+// 据此决定要不要把原生菜单条还回来（见 createWindow 内 _menuClaimWatchdog）。
+let _appMenuClaimed = false;
+let _onAppMenuClaimed = null;
+
+ipcMain.handle("desktop:app-menu-spec", (e) => {
+  // 纵深防御：只有后端工作台页可取（与 desktop:copilot-pip 同款闸）。
+  try { if (!isBackendUrl(e.sender.getURL())) return { ok: false, error: "forbidden" }; }
+  catch (err) { return { ok: false, error: "forbidden" }; }
+  _appMenuClaimed = true;
+  try { if (_onAppMenuClaimed) _onAppMenuClaimed(); } catch (err) { /* 看门狗回调异常不伤主链 */ }
+  return appMenuSpec();
+});
+
+ipcMain.handle("desktop:app-menu-action", (e, rawId) => {
+  try { if (!isBackendUrl(e.sender.getURL())) return { ok: false, error: "forbidden" }; }
+  catch (err) { return { ok: false, error: "forbidden" }; }
+  const id = String(rawId || "");
+  const wc = e.sender;
+  // webview 场景 hostWebContents=壳 renderer，据此找宿主窗（窗控/全屏/退出用）。
+  const host = wc.hostWebContents || wc;
+  const win = BrowserWindow.fromWebContents(host)
+    || BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+  try {
+    switch (id) {
+      // 刷新/缩放/DevTools 作用于**发起页 webContents**（坐席眼里的「页面」就是
+      // 工作台 webview）：原生 role 是对壳整窗操作——重载会连官方网页标签一起
+      // 重载（掉登录检查）、缩放只缩壳 chrome 缩不到 webview 内容，页内菜单按
+      // 坐席直觉收敛到本页。编辑类显式打发起页＝wireEditContextMenu 同教训
+      // （role 依赖焦点窗语义，webview 场景会打错目标）。
+      case "reload": wc.reload(); return { ok: true };
+      case "force_reload": wc.reloadIgnoringCache(); return { ok: true };
+      case "quit": app.quit(); return { ok: true };
+      case "undo": wc.undo(); return { ok: true };
+      case "redo": wc.redo(); return { ok: true };
+      case "cut": wc.cut(); return { ok: true };
+      case "copy": wc.copy(); return { ok: true };
+      case "paste": wc.paste(); return { ok: true };
+      case "select_all": wc.selectAll(); return { ok: true };
+      case "zoom_reset": wc.setZoomLevel(0); return { ok: true };
+      case "zoom_in": wc.setZoomLevel(Math.min(wc.getZoomLevel() + 0.5, 5)); return { ok: true };
+      case "zoom_out": wc.setZoomLevel(Math.max(wc.getZoomLevel() - 0.5, -5)); return { ok: true };
+      case "fullscreen": if (win) win.setFullScreen(!win.isFullScreen()); return { ok: true };
+      case "devtools": wc.toggleDevTools(); return { ok: true };
+      case "minimize": if (win) win.minimize(); return { ok: true };
+      case "close_win": if (win) win.close(); return { ok: true };
+      case "about": showAboutDialog(win).catch(() => {}); return { ok: true };
+      case "check_update": checkForUpdatesManual(win); return { ok: true };
+      // 融合标题栏主题跟随（titlebar merge P2 2026-08-22）：工作台页面主题翻转时
+      // 上报，这里同步换 ① 原生窗控 overlay 配色（win32 融合窗才有，异常静默）
+      // ② 壳级细条配色（cx-titlebar-theme → renderer 翻 body.cx-tb-light）。
+      // 色值与页面 ws-top 暗/亮两档同源（#191b21 渐变主段 / #ffffff + 深 ink）。
+      case "theme_dark":
+      case "theme_light": {
+        const mode = id === "theme_light" ? "light" : "dark";
+        try {
+          if (win && typeof win.setTitleBarOverlay === "function") {
+            win.setTitleBarOverlay(mode === "light"
+              ? { color: "#ffffff", symbolColor: "#334155", height: 32 }
+              : { color: "#191b21", symbolColor: "#e2e8f0", height: 32 });
+          }
+        } catch (err) { /* 非融合窗（mac/后台弹窗）无 overlay，忽略 */ }
+        try { if (host && host !== wc) host.send("cx-titlebar-theme", mode); } catch (err) { /* 细条缺席不阻断 */ }
+        return { ok: true };
+      }
+      default: return { ok: false, error: "unknown_action" };
+    }
+  } catch (err) {
+    return { ok: false, error: String((err && err.message) || err) };
+  }
+});
+
+// ── 融合标题栏「⋯」应急菜单（titlebar merge P2 2026-08-22）─────────────────
+// 调用方＝壳级细条（renderer #cx-titlebar，file:// 页）。工作台 webview 白屏时
+// 页内帮助菜单一并死掉，这条链是那时唯一还点得动的报障/更新入口——接替被
+// autoHideMenuBar 藏起的原生帮助菜单。只放行 file:// 发起方（后端页走
+// desktop:app-menu-action，不共用本口）。
+ipcMain.handle("desktop:titlebar-menu", async (e, rawId) => {
+  try { if (!String(e.sender.getURL() || "").startsWith("file://")) return { ok: false, error: "forbidden" }; }
+  catch (err) { return { ok: false, error: "forbidden" }; }
+  const id = String(rawId || "");
+  const win = BrowserWindow.fromWebContents(e.sender)
+    || BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+  try {
+    if (id === "about") { showAboutDialog(win).catch(() => {}); return { ok: true }; }
+    if (id === "diag") {
+      const bi = await resolveBrand();
+      await runDiagFlow(win, bi.product, displayVersion(), "desktop-titlebar-menu");
+      return { ok: true };
+    }
+    if (id === "update") { checkForUpdatesManual(win); return { ok: true }; }
+    return { ok: false, error: "unknown_action" };
+  } catch (err) {
+    return { ok: false, error: String((err && err.message) || err) };
+  }
+});
 
 // ── 更新与公告通知中心（P0 2026-08-14）─────────────────────────────────────
 // 决策纯函数在 update-notify.js（Node 直跑可测）；这里只做 IO：updater 事件、
@@ -2140,14 +2509,34 @@ ipcMain.handle("desktop:notice-open", async (_e, id) => {
   if (!/^https:\/\//i.test(link)) return { ok: false }; // 只放行 https，公告数据不可执行本地任何东西
   try { await shell.openExternal(link); return { ok: true }; } catch (e) { return { ok: false }; }
 });
+/** 升级安装前的有序停机：先等旧后端真死（释放 pyrogram 会话文件），再交给
+ *  NSIS 安装器。顺序倒过来就是 B57 升级风暴：装完自动拉起的新后端与没死透的
+ *  旧后端并存，同一份会话双连 → Telegram 强制注销全部账号。 */
+async function installUpdateNow(u) {
+  await shutdownBackendAndWait();
+  try { u.quitAndInstall(false, true); } catch (e) { console.log(`[updater] quitAndInstall: ${String((e && e.message) || e)}`); }
+}
+
 ipcMain.handle("desktop:update-restart", () => {
+  // 热补丁与整包更新共用同一个「已就绪」横幅，但落地方式完全不同（整包交 NSIS，
+  // 热补丁交 helper 替换 resources\）——路由错了就是装错东西，故先判热补丁。
+  if (_hotpatchReady) {
+    const hp = _hotpatchReady;
+    // 停后端之前先确认暂存还在（杀软清理/用户手删 userData 都可能把它拿走）：
+    // 等停完再发现没得装，用户就只剩一个没有后端的空壳。
+    if (!_hotpatchFilesPresent(hp)) {
+      console.log("[hotpatch] 暂存文件已不在，取消本次热补丁（旧文件原样保留）");
+      _discardStagedHotpatch("staging_missing");
+      broadcastShellNotice();
+      return { ok: false, error: "not_ready" };
+    }
+    setImmediate(() => { void installHotpatchNow(hp); });
+    return { ok: true };
+  }
   const u = _getUpdater();
   if (!u || _updateInfo.phase !== "downloaded") return { ok: false, error: "not_ready" };
-  // isSilent=false 让 NSIS 走静默安装参数由 updater 默认处理；forceRunAfter=true 装完自动拉起。
   // setImmediate：先把 IPC 应答送回 renderer（按钮已进「正在重启…」态），再触发退出流程。
-  setImmediate(() => {
-    try { u.quitAndInstall(false, true); } catch (e) { console.log(`[updater] quitAndInstall: ${String((e && e.message) || e)}`); }
-  });
+  setImmediate(() => { void installUpdateNow(u); });
   return { ok: true };
 });
 
@@ -2170,6 +2559,10 @@ function _getUpdater() {
     autoUpdater.disableDifferentialDownload = true;
     autoUpdater.on("error", (e) => console.log(`[updater] ${String((e && e.message) || e)}`));
     autoUpdater.on("update-available", (info) => {
+      // 整包永远优先：新 semver 里本就含着热补丁那点改动，且装完 base 就对不上了。
+      // 已暂存的热补丁在这里作废，否则「点重启」会走进热补丁分支装错东西。
+      _latestFullVersion = String((info && info.version) || _latestFullVersion);
+      _discardStagedHotpatch("full_update_available");
       _updateInfo = { phase: "downloading", version: String((info && info.version) || ""), percent: 0 };
       broadcastShellNotice();
     });
@@ -2184,6 +2577,8 @@ function _getUpdater() {
     });
     autoUpdater.on("update-downloaded", (info) => {
       console.log("[updater] 更新已下载，横幅提示一键重启");
+      _latestFullVersion = String((info && info.version) || _latestFullVersion);
+      _discardStagedHotpatch("full_update_ready");
       _updateInfo = { phase: "downloaded", version: String((info && info.version) || _updateInfo.version), percent: 100 };
       broadcastShellNotice();
     });
@@ -2200,7 +2595,12 @@ async function runUpdateCheck(reason) {
   if (!u || _updCheckBusy) return null;
   _updCheckBusy = true;
   try {
-    return await u.checkForUpdates();
+    const r = await u.checkForUpdates();
+    // 记下 latest.yml 上的整包版本：热补丁决策要靠它让路（比 update-available
+    // 事件更早也更全——「已是最新」时不发事件，但这里同样拿得到版本号）。
+    const v = r && r.updateInfo && r.updateInfo.version;
+    if (v) _latestFullVersion = String(v);
+    return r;
   } catch (e) {
     console.log(`[updater] check(${reason}) failed: ${String((e && e.message) || e)}`);
     return null;
@@ -2234,7 +2634,7 @@ async function checkForUpdatesManual(win) {
       buttons: ["立即重启更新", "稍后"], defaultId: 0, cancelId: 1, noLink: true,
     });
     if (res.response === 0) {
-      setImmediate(() => { try { u.quitAndInstall(false, true); } catch (e) { /* 失败下次重启仍会装 */ } });
+      setImmediate(() => { void installUpdateNow(u); });
     }
     return;
   }
@@ -2276,6 +2676,303 @@ function setupAutoUpdate() {
       if (now - lastResume < 5 * 60 * 1000) return; // 连续唤醒去抖
       lastResume = now;
       setTimeout(() => runUpdateCheck("resume"), 15000); // 给网络恢复留缓冲
+    });
+  } catch (e) { /* powerMonitor 异常不阻断：定时器仍在 */ }
+}
+
+// ── 热补丁拉取（P0 2026-08-27）─────────────────────────────────────────────
+// 与 electron-updater 的分工：整包（新 semver）永远优先，热补丁只在**同一
+// baseAppVersion 内**替换 asar / inject / sidecar 这类可替换文件——几十 MB、不过
+// NSIS、不碰用户数据，用来把「改一行 JS 要等一次 400MB 发版」压成一次重启。
+// 决策纯函数在 hotpatch-apply.js，落地纯函数在 hotpatch-stage.js；这里只做 IO。
+//
+// 刻意复用现有「立即重启更新」横幅（_updateInfo.phase="downloaded"）而不另起一套：
+// 对用户这两件事是同一件事——「点一下，重启，就好了」；多一条通知只会稀释注意力。
+//
+// 失败纪律：任何一步不过一律保持旧文件、横幅不出现（或消失），日志留 [hotpatch]。
+// 最坏结果必须是「没更新」，不能是「应用坏掉」。
+const HOTPATCH_MAX_BYTES = 512 * 1024 * 1024; // manifest 撒谎也不至于把磁盘吃穿
+
+let _hotpatchReady = null; // 校验通过、等用户点重启的暂存件
+let _hotpatchBusy = false;
+let _latestFullVersion = ""; // 最近一次 updater 检查看到的整包版本（让路判据）
+
+function _hotpatchDir() { return path.join(app.getPath("userData"), "hotpatch-staging"); }
+
+/** 指针源：与更新源同域（publish url + hotpatch.json）；config.updates 可覆写/关停。 */
+function _hotpatchUrl() {
+  try {
+    const cfg = (config || {}).updates || {};
+    if (cfg.hotpatch === false) return ""; // 一键关停（与 telemetry 同款开关语义）
+    if (cfg.hotpatch_url) return String(cfg.hotpatch_url);
+  } catch (e) { /* config 未就绪按默认 */ }
+  try {
+    return hotpatchApply.hotpatchUrlFromPublish(require("./package.json").build.publish[0].url);
+  } catch (e) { return ""; }
+}
+
+/** 落地脚本：随包镜像（copy-shared 从 deploy/desktop 同步）优先，开发树兜底。 */
+function _hotpatchHelperScript() {
+  const cands = [
+    path.join(__dirname, "hotpatch", "apply_chatx_hotpatch_node.ps1"),
+    path.resolve(__dirname, "..", "..", "..", "deploy", "desktop", "apply_chatx_hotpatch_node.ps1"),
+  ];
+  for (const p of cands) {
+    try { if (fs.existsSync(p)) return p; } catch (e) { /* 下一个候选 */ }
+  }
+  return "";
+}
+
+function _sha256File(p) {
+  return new Promise((resolve) => {
+    try {
+      const h = require("crypto").createHash("sha256");
+      const rs = fs.createReadStream(p);
+      rs.on("data", (c) => h.update(c));
+      rs.on("error", () => resolve(""));
+      rs.on("end", () => resolve(h.digest("hex")));
+    } catch (e) { resolve(""); }
+  });
+}
+
+function _psQuote(s) { return "'" + String(s).replace(/'/g, "''") + "'"; }
+
+/** 解包：与 helper 同一个 .NET API（ZipFile.ExtractToDirectory 自带 zip-slip 拒绝）。 */
+function _extractZip(zipPath, destDir) {
+  return new Promise((resolve) => {
+    try {
+      const cmd = "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.IO.Compression.FileSystem; "
+        + `[IO.Compression.ZipFile]::ExtractToDirectory(${_psQuote(zipPath)}, ${_psQuote(destDir)})`;
+      const child = spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", cmd], { windowsHide: true });
+      let err = "";
+      child.stderr.on("data", (d) => { err += String(d); });
+      child.on("error", (e) => { console.log(`[hotpatch] 解包进程起不来：${String((e && e.message) || e)}`); resolve(false); });
+      child.on("close", (code) => {
+        if (code === 0) return resolve(true);
+        console.log(`[hotpatch] 解包失败 exit=${code} ${err.trim().slice(0, 300)}`);
+        resolve(false);
+      });
+    } catch (e) { console.log(`[hotpatch] 解包异常：${String((e && e.message) || e)}`); resolve(false); }
+  });
+}
+
+/** 流式下载并算整包 sha256（边下边算，不把整包读进内存）。 */
+async function _downloadZip(url, dest, expectSha, expectBytes) {
+  const { Readable } = require("stream");
+  const { pipeline } = require("stream/promises");
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 15 * 60 * 1000);
+  try {
+    const r = await fetch(url, { signal: ctl.signal, cache: "no-store" });
+    if (!r || !r.ok || !r.body) { console.log(`[hotpatch] 下载失败 HTTP ${r && r.status}`); return false; }
+    const h = require("crypto").createHash("sha256");
+    let total = 0;
+    await pipeline(
+      Readable.fromWeb(r.body),
+      async function* (src) {
+        for await (const c of src) {
+          total += c.length;
+          if (total > HOTPATCH_MAX_BYTES) throw new Error("zip over size cap");
+          h.update(c);
+          yield c;
+        }
+      },
+      fs.createWriteStream(dest),
+    );
+    const got = h.digest("hex");
+    if (got !== String(expectSha || "").toLowerCase()) {
+      console.log(`[hotpatch] 整包 sha256 不符 expect=${expectSha} got=${got}`);
+      return false;
+    }
+    if (expectBytes > 0 && total !== expectBytes) {
+      console.log(`[hotpatch] 整包大小不符 expect=${expectBytes} got=${total}`);
+      return false;
+    }
+    console.log(`[hotpatch] 已下载 ${(total / 1048576).toFixed(1)}MB，整包 sha256 通过`);
+    return true;
+  } catch (e) {
+    console.log(`[hotpatch] 下载异常：${String((e && e.message) || e)}`);
+    return false;
+  } finally { clearTimeout(timer); }
+}
+
+/**
+ * 下载 + 全套校验 + 备好 helper。任一步不过返回 null（调用方保持旧文件）。
+ * 校验顺序刻意是「先便宜后昂贵」：manifest 自洽性 → 整包哈希 → 解包 → 逐文件哈希。
+ */
+async function _stageHotpatch(remote, manifestUrl, rawManifest) {
+  const zipUrl = hotpatchStage.zipUrlFrom(manifestUrl, remote.zip);
+  if (!zipUrl) { console.log(`[hotpatch] zip 地址非法或跨域，放弃：${remote.zip}`); return null; }
+  if (!hotpatchStage.isSha256(remote.sha256)) { console.log("[hotpatch] manifest 缺整包 sha256，放弃"); return null; }
+  const noHash = hotpatchStage.filesMissingHash(remote);
+  if (noHash.length) { console.log(`[hotpatch] manifest 有 ${noHash.length} 个文件缺 sha256，放弃`); return null; }
+  if (hotpatchStage.manifestTampered(rawManifest, remote)) {
+    console.log("[hotpatch] manifest 含越权/重复路径（规范化后条目数对不上），整份拒绝——半套补丁比不套更危险");
+    return null;
+  }
+  const script = _hotpatchHelperScript();
+  if (!script) { console.log("[hotpatch] 落地脚本缺失（copy-shared 未同步？），放弃"); return null; }
+
+  const names = hotpatchStage.stagedNames(remote.zip);
+  const dir = _hotpatchDir();
+  try {
+    fs.rmSync(dir, { recursive: true, force: true }); // 上一轮残留：暂存永远只留一份
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (e) { console.log(`[hotpatch] 暂存目录不可用：${String((e && e.message) || e)}`); return null; }
+
+  const zipPath = path.join(dir, names.zip);
+  if (!(await _downloadZip(zipUrl, zipPath, remote.sha256, remote.size_bytes))) return null;
+
+  const unpacked = path.join(dir, names.unpacked);
+  if (!(await _extractZip(zipPath, unpacked))) return null;
+
+  // 逐文件：路径白名单再确认一次（不单点信任 normalizeManifest）+ 内容哈希逐字节对上。
+  // 这一轮在**用户看到横幅之前**跑完：横幅出现 = 这份补丁已经整体可信。
+  for (const f of remote.files) {
+    if (!hotpatchApply.isSafeRelPath(f.path)) { console.log(`[hotpatch] 路径越权：${f.path}`); return null; }
+    const abs = path.join(unpacked, ...f.path.split("/"));
+    let st = null;
+    try { st = fs.statSync(abs); } catch (e) { /* 下面统一报缺失 */ }
+    if (!st || !st.isFile()) { console.log(`[hotpatch] zip 内缺文件：${f.path}`); return null; }
+    if (f.bytes > 0 && st.size !== f.bytes) { console.log(`[hotpatch] 文件大小不符：${f.path}`); return null; }
+    const got = await _sha256File(abs);
+    if (got !== String(f.sha256 || "").toLowerCase()) { console.log(`[hotpatch] 文件 sha256 不符：${f.path}`); return null; }
+  }
+  console.log(`[hotpatch] 逐文件校验通过（${remote.files.length} 个）`);
+
+  try {
+    // 写**规范化后**的 manifest 而不是原始 JSON：helper 会用同一份白名单再判一次，
+    // 两边口径必须逐字一致，否则就是「JS 说能套、PS 说不能」的静默失败。
+    fs.writeFileSync(path.join(dir, names.manifest), JSON.stringify(remote, null, 2), "utf-8");
+    fs.writeFileSync(path.join(dir, names.runner), hotpatchStage.wrapperScript(), "ascii");
+    // readFileSync+writeFileSync 而非 copyFileSync：源在 app.asar 内，asar 虚拟 fs
+    // 对前者支持最稳（copy-shared 同款教训）。
+    fs.writeFileSync(path.join(dir, names.script), fs.readFileSync(script));
+  } catch (e) {
+    console.log(`[hotpatch] 暂存落盘失败：${String((e && e.message) || e)}`);
+    return null;
+  }
+
+  let installDir = "";
+  try { installDir = path.dirname(app.getPath("exe")); } catch (e) { /* 让 helper 自己探测 */ }
+  return {
+    dir,
+    zip: zipPath,
+    manifest: path.join(dir, names.manifest),
+    runner: path.join(dir, names.runner),
+    script: path.join(dir, names.script),
+    log: path.join(dir, names.log),
+    installDir,
+    patch: remote.patch,
+    version: hotpatchApply.displayLabel(app.getVersion(), remote.patch),
+  };
+}
+
+function _hotpatchFilesPresent(hp) {
+  try {
+    return !!hp && [hp.zip, hp.manifest, hp.runner, hp.script].every((p) => fs.existsSync(p));
+  } catch (e) { return false; }
+}
+
+/** 作废已暂存的热补丁（整包接管 / 暂存丢失）。文件留着，下一轮 stage 会清目录。
+ *  why 用 ASCII 代号（与 decide() 的 reason 同一套词汇），只进日志不进 UI。 */
+function _discardStagedHotpatch(why) {
+  if (!_hotpatchReady) return;
+  console.log(`[hotpatch] 暂存作废：${why}`);
+  _hotpatchReady = null;
+  if (_updateInfo.phase === "downloaded") _updateInfo = { phase: "idle", version: "", percent: 0 };
+}
+
+async function runHotpatchCheck(reason) {
+  if (!app.isPackaged || process.platform !== "win32") return; // 落地链路是 Windows 专属
+  if (_hotpatchBusy || _hotpatchReady) return; // 已就绪 = 等用户重启，别再拉
+  if (_updateInfo.phase !== "idle") return; // 整包在下/已就绪：让路，不抢横幅
+  const url = _hotpatchUrl();
+  if (!url) return;
+  _hotpatchBusy = true;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 10000);
+  try {
+    const r = await fetch(url, { signal: ctl.signal, cache: "no-store" });
+    if (!r.ok) return;
+    const raw = await r.json();
+    const remote = hotpatchApply.normalizeManifest(raw);
+    const d = hotpatchApply.decide({
+      appVersion: app.getVersion(),
+      local: localHotpatchInfo(),
+      remote,
+      latestFullVersion: _latestFullVersion,
+    });
+    if (d.action !== "apply") {
+      // defer_full / mismatch / skip 一律什么都不做：整包更新链路照常，这里不插手。
+      console.log(`[hotpatch] check(${reason}) → ${d.action}/${d.reason}`);
+      return;
+    }
+    console.log(`[hotpatch] check(${reason}) → apply ${remote.baseAppVersion}+p${remote.patch}（${remote.files.length} 个文件）`);
+    const ready = await _stageHotpatch(remote, url, raw);
+    if (!ready) { console.log("[hotpatch] 暂存未通过，保持旧文件"); return; }
+    if (_updateInfo.phase !== "idle") { console.log("[hotpatch] 下载期间整包更新已接管，热补丁让路"); return; }
+    _hotpatchReady = ready;
+    _updateInfo = { phase: "downloaded", version: ready.version, percent: 100 };
+    console.log(`[hotpatch] 已就绪 ${ready.version}，等用户点「立即重启更新」`);
+    broadcastShellNotice();
+  } catch (e) {
+    console.log(`[hotpatch] check(${reason}) 异常：${String((e && e.message) || e)}`);
+  } finally {
+    clearTimeout(timer);
+    _hotpatchBusy = false;
+  }
+}
+
+/** 落地：先等后端真死（B57），再把替换工作交给脱离进程的 helper。
+ *  顺序不能反——装完自动拉起的新后端与没死透的旧后端并存，同一份 pyrogram 会话
+ *  双连 → Telegram 强制注销全部账号。helper 另外还会等本进程 PID 消失才动文件
+ *  （app.asar 运行中被锁，进程内换不掉）。 */
+async function installHotpatchNow(hp) {
+  await shutdownBackendAndWait();
+  let spawned = false;
+  try {
+    const child = spawn("powershell", hotpatchStage.wrapperArgs({
+      runner: hp.runner,
+      shellPid: process.pid,
+      script: hp.script,
+      zip: hp.zip,
+      manifest: hp.manifest,
+      log: hp.log,
+      installDir: hp.installDir,
+    }), { detached: true, stdio: "ignore", windowsHide: true });
+    child.unref();
+    spawned = true;
+    console.log(`[hotpatch] helper 已脱离启动 pid=${child.pid}，本进程退出后开始替换（日志 ${hp.log}）`);
+  } catch (e) {
+    console.log(`[hotpatch] helper 启动失败：${String((e && e.message) || e)}`);
+  }
+  if (!spawned) {
+    // 后端已经停了，留在这儿只是个空壳：拉起一个干净的旧版本，
+    // 让最坏结果停在「没更新」而不是「应用没了」。
+    try { app.relaunch(); } catch (e) { /* relaunch 不可用就只能退出 */ }
+  }
+  try { app.quit(); } catch (e) {
+    try { app.exit(0); } catch (e2) { /* 已在退出流程 */ }
+  }
+}
+
+/** 热补丁轮询（仅打包态 Windows）：启动后 90s 首查 + 每 4h + 唤醒补查。
+ *  首查刻意延后：让 setupAutoUpdate 的开机整包检查先把 _latestFullVersion 落下，
+ *  否则「其实有整包新版本」的机器会先白下一个马上就要作废的热补丁。 */
+function setupHotpatch() {
+  if (!app.isPackaged || process.platform !== "win32") return;
+  const t0 = setTimeout(() => runHotpatchCheck("boot"), 90 * 1000);
+  if (t0.unref) t0.unref();
+  const t = setInterval(() => runHotpatchCheck("interval"), 4 * 60 * 60 * 1000);
+  if (t.unref) t.unref();
+  try {
+    let lastResume = 0;
+    powerMonitor.on("resume", () => {
+      const now = Date.now();
+      if (now - lastResume < 5 * 60 * 1000) return; // 连续唤醒去抖
+      lastResume = now;
+      setTimeout(() => runHotpatchCheck("resume"), 25000); // 排在整包唤醒补查(15s)之后
     });
   } catch (e) { /* powerMonitor 异常不阻断：定时器仍在 */ }
 }
@@ -2336,6 +3033,8 @@ function _campaignsUrl() {
   } catch (e) { return ""; }
 }
 
+let _campRefreshInflight = null; // 首启拉取在途 promise：海报查询等它收尾，消「+3.5s 时 feed 未就绪」竞态
+
 async function refreshCampaigns() {
   const url = _campaignsUrl();
   if (!url) return;
@@ -2364,54 +3063,179 @@ function _onboardingMs() {
   } catch (e) { return 0; }
 }
 
-ipcMain.handle("desktop:campaign-poster", () => {
+// 内置预览样例（--poster-preview 时 feed 不可达也能验收）：双语数据本体在
+// campaign-model.js::CM_PREVIEW_SAMPLE（活动域数据与模型同居，且不给 main.js
+// 添未迁 i18n 债——它与 feed 数据走同一双语渲染路径，不是 UI 硬编码）。
+const _CAMP_PREVIEW_SAMPLE = campaignModel.CM_PREVIEW_SAMPLE;
+
+// 最近一次选品判定（诊断面板消费）：{ts, result:"show"|"skip"|"preview", id, reason}。
+// cmEligible 早就算得出精确原因，此前在这里被丢成 null——「为什么没弹」于是要翻代码
+// + 翻 %APPDATA%。现在原因三路透出：IPC 回执（渲染层发 skip 埋点）/ 主进程日志一行 /
+// desktop:campaign-diag（🩺 健康看板「活动海报」行）。
+let _campLastDecision = null;
+
+ipcMain.handle("desktop:campaign-poster", async () => {
   try {
+    // 首启竞态兜底：feed 尚空（首次安装无本地缓存）且首拉在途 → 等它收尾再判定。
+    // refreshCampaigns 自带 10s abort，最坏 ~10s 后照常判定，不会挂死。
+    if (!_getCampaigns().length && _campRefreshInflight) {
+      try { await _campRefreshInflight; } catch (e) { /* refresh 从不 reject，保险而已 */ }
+    }
     const onboardingMs = _onboardingMs();
-    const c = campaignModel.cmPick(_getCampaigns(), {
+    const lang = String(((config || {}).unified_inbox || {}).lang || "");
+    if (process.env.AITR_POSTER_PREVIEW === "1") {
+      // 验收通道：feed 首张（缺 feed 用内置样例）跳资格/频控直出；deadline 已过/缺失时
+      // 造一个「满窗」的未来截止，让倒计时可视——预览的意义是看到真实渲染而非真实资格。
+      const list = _getCampaigns();
+      const c = list.length ? list[0] : campaignModel.cmNormalizeFeed(_CAMP_PREVIEW_SAMPLE).campaigns[0];
+      let dl = campaignModel.cmDeadline(c, onboardingMs);
+      if (!dl || dl <= Date.now()) {
+        dl = c.windowHoursAfterOnboarding ? Date.now() + c.windowHoursAfterOnboarding * 3600e3 : 0;
+      }
+      _campLastDecision = { ts: Date.now(), result: "preview", id: c.id, reason: "" };
+      console.log(`[campaign] preview: ${c.id} (--poster-preview, eligibility/frequency skipped)`);
+      return { campaign: c, deadline: dl, lang, preview: true, showCount: 0 };
+    }
+    const ctx = {
       now: Date.now(),
       onboardingMs,
       managed: _managedEdition,
       state: _getCampState(),
-    });
-    if (!c) return null;
+    };
+    const c = campaignModel.cmPick(_getCampaigns(), ctx);
+    if (!c) {
+      const skip = campaignModel.cmSkipSummary(_getCampaigns(), ctx) || { id: "", reason: "" };
+      _campLastDecision = { ts: Date.now(), result: "skip", id: skip.id, reason: skip.reason };
+      console.log(`[campaign] skip: ${skip.reason || "?"}${skip.id ? ` (${skip.id})` : ""}`
+        + ` onboarding=${onboardingMs ? new Date(onboardingMs).toISOString() : "none"}`
+        + ` feed=${_getCampaigns().length} managed=${_managedEdition}`);
+      // campaign:null + skip 原因：老渲染层只认 payload.campaign（安全忽略），
+      // 新渲染层据此发 poster6u_skip_{reason} 埋点（暗面漏斗）。
+      return { campaign: null, skip, lang };
+    }
+    const shows = ((_getCampState().shows || {})[c.id]) || {};
+    _campLastDecision = { ts: Date.now(), result: "show", id: c.id, reason: "" };
     return {
       campaign: c,
       deadline: campaignModel.cmDeadline(c, onboardingMs),
-      lang: String(((config || {}).unified_inbox || {}).lang || ""),
+      lang,
+      // 本次之前已展示次数：渲染层据此把第 2/3 次曝光降级为非模态角卡（减打扰）
+      showCount: Number(shows.count) || 0,
     };
   } catch (e) { return null; }
+});
+
+// 🩺 健康看板「活动海报」行的数据口（P0 可诊断化）：最近判定 + feed/频控概览，零敏感字段。
+ipcMain.handle("desktop:campaign-diag", () => {
+  try {
+    const st = _getCampState();
+    const shows = st.shows || {};
+    let shownTotal = 0;
+    for (const k of Object.keys(shows)) shownTotal += Number((shows[k] || {}).count) || 0;
+    return {
+      ok: true,
+      last: _campLastDecision,
+      feed_count: _getCampaigns().length,
+      onboarding_ms: _onboardingMs(),
+      managed: _managedEdition,
+      preview: process.env.AITR_POSTER_PREVIEW === "1",
+      shown_total: shownTotal,
+      never_count: Object.keys(st.never || {}).length,
+    };
+  } catch (e) { return { ok: false }; }
 });
 
 ipcMain.handle("desktop:campaign-act", async (_e, args) => {
   const a = args || {};
   const id = String(a.id || "");
+  const preview = process.env.AITR_POSTER_PREVIEW === "1";
   if (!id) return { ok: false };
   if (a.action === "shown") {
+    if (preview) return { ok: true, preview: true }; // 预览不落频控（渲染层本就不发，双保险）
     // 展示计数只记在 shown（click 不重复计——一次会话只消耗一次频控额度）
     _campState = campaignModel.cmRecordShow(_getCampState(), id, Date.now());
     _saveCampState();
     return { ok: true };
   }
   if (a.action === "never") {
+    if (preview) return { ok: true, preview: true }; // 预览点「不再提醒」不永久静默真机
     _campState = campaignModel.cmOptOut(_getCampState(), id);
     _saveCampState();
     return { ok: true };
   }
   if (a.action === "click") {
-    const c = _getCampaigns().find((x) => x.id === id);
+    // 预览态 feed 可能为空（内置样例）：找不到条目时回落样例 CTA，验收也要能点开链接
+    let c = _getCampaigns().find((x) => x.id === id);
+    if (!c && preview) c = campaignModel.cmNormalizeFeed(_CAMP_PREVIEW_SAMPLE).campaigns[0];
     const url = (c && c.ctaUrl) || "";
     if (!/^https:\/\//i.test(url)) return { ok: false }; // 只放行 https，活动数据不可指挥本地执行任何东西
     // 追加注册时间锚 reg_ts（秒）：官网 /order 金卡据此渲染 72h 真倒计时——
     // 仅官网域白名单（注册时间不带给第三方链接），未完成首启 / 解析失败原样打开。
     const finalUrl = campaignModel.cmCtaUrlWithReg(url, _onboardingMs(), ["bd2026.cc"]);
-    try { await shell.openExternal(finalUrl); return { ok: true }; } catch (e) { return { ok: false }; }
+    try {
+      await shell.openExternal(finalUrl);
+      // 奖励时刻（P2 2026-08-22）：用户去浏览器付款，付款→履约→入账全程发生在壳外，
+      // 完成后桌面端此前零反馈（额度墙的 armWatch 只在墙内点「立即充值」才布防）。
+      // 预览态不布防（验收点击不是真购买意图）。
+      if (!preview) _armTopupArrivalWatch();
+      return { ok: true };
+    } catch (e) { return { ok: false }; }
   }
   return { ok: false };
 });
 
+// ── 充值到账「奖励时刻」（P2 2026-08-22）────────────────────────────────────
+// 海报 CTA 点击后每 60s 盯一次 /api/workspace/quota（backendGet 带 Bearer，与
+// ui-event 同一后端通道）最长 30 分钟：余量较基线增加 → 原生系统通知庆祝到账，
+// 闭合「弹窗→下单→付款→到账→确认」最后一环。USDT 付款到履约通常几分钟，30 分钟
+// 覆盖绝大多数真实链路；窗口耗尽静默放弃（工作台额度墙/顶栏徽章仍是兜底真相面）。
+// fail-soft：后端不可达/字段缺失只是本轮跳过，绝不打扰、绝不影响海报链路。
+let _topupWatch = null; // {timer, left, baseRemaining}
+function _armTopupArrivalWatch() {
+  try {
+    if (_topupWatch && _topupWatch.timer) clearInterval(_topupWatch.timer); // 重复点击=重置窗口
+    _topupWatch = { timer: null, left: 30, baseRemaining: null };
+    const poll = async () => {
+      const w = _topupWatch;
+      if (!w) return;
+      w.left -= 1;
+      let q = null;
+      try { q = await backendGet("/api/workspace/quota"); } catch (e) { /* 后端未就绪：下轮再试 */ }
+      const rem = q && q.ok && q.remaining != null ? Number(q.remaining) : null;
+      if (rem != null && isFinite(rem)) {
+        if (w.baseRemaining == null) {
+          w.baseRemaining = rem; // 首个可读快照=基线（点击时后端可能还没起来）
+        } else if (rem > w.baseRemaining + 1) {
+          const delta = rem - w.baseRemaining;
+          try {
+            if (Notification.isSupported()) {
+              new Notification({
+                title: SS("camp.credited_title"),
+                body: SS("camp.credited_body", { n: delta.toLocaleString("en-US") }),
+              }).show();
+            }
+          } catch (e) { /* 通知不可用静默 */ }
+          console.log(`[campaign] topup credited +${delta} (${30 - w.left}min after poster CTA)`);
+          clearInterval(w.timer);
+          _topupWatch = null;
+          return;
+        }
+      }
+      if (w.left <= 0) {
+        clearInterval(w.timer);
+        _topupWatch = null;
+      }
+    };
+    _topupWatch.timer = setInterval(() => { poll().catch(() => {}); }, 60000);
+    if (_topupWatch.timer.unref) _topupWatch.timer.unref();
+    poll().catch(() => {}); // 立即取基线
+  } catch (e) { /* 盯梢失败不影响海报主链路 */ }
+}
+
 /** 活动轮询（与公告同节奏；dev 也跑便于验证——资格判定的 managed 闸会挡住开发态弹出）。 */
 function setupCampaigns() {
-  refreshCampaigns();
+  // 首拉 promise 留给海报查询等待（竞态兜底）；收尾即清引用，后续 6h 轮询不参与等待
+  _campRefreshInflight = refreshCampaigns().finally(() => { _campRefreshInflight = null; });
   const t = setInterval(refreshCampaigns, 6 * 60 * 60 * 1000);
   if (t.unref) t.unref();
 }
@@ -2460,7 +3284,8 @@ async function sendVersionBeacon() {
         schema: 1,
         ts: new Date().toISOString(),
         kind: "chatx_heartbeat", // 服务端 kind 限长 16，本串 15
-        manifest_version: app.getVersion(),
+        manifest_version: app.getVersion(), // 保持纯 semver：版本分布/强制升级线都按它聚合
+        patch: localPatchLevel(), // 已落地热补丁号（0=未打）；老服务端不认这个字段会直接丢
         channel: "stable",
         platform: `${process.platform}-${process.arch}`,
         anon_id: _anonId(),
@@ -2526,6 +3351,7 @@ if (!_gotSingleInstanceLock) {
     sidecars.startAll(config).catch((e) => console.log(`[sidecar] start error: ${e}`));
     createWindow();
     setupAutoUpdate();
+    setupHotpatch(); // 整包之后：热补丁按 _latestFullVersion 让路，先后顺序有意义
     setupAnnouncements();
     setupCampaigns();
     setupVersionTelemetry();
@@ -2533,12 +3359,23 @@ if (!_gotSingleInstanceLock) {
 }
 
 // 退出时回收后端进程，避免残留 Python/二进制占端口。
+// B57 升级风暴修复：必须**等后端真死**再放行退出——旧 fire-and-forget taskkill
+// 让「壳已退、装完新版自动拉起」跑在「旧后端还没死透」之前，新旧双进程抢同一份
+// pyrogram 会话 → Telegram 强制注销全部账号。preventDefault + 等死 + 二次 quit；
+// 二次进入时 _backendStopped=true 直接放行，绝无死循环。8s 超时兜底：杀不掉的
+// 进程不该把用户永远锁在退出流程里（超时后照旧退出，风险如实留在日志）。
 let _backendStopped = false;
-app.on("before-quit", () => {
+async function shutdownBackendAndWait() {
   if (_backendStopped) return;
   _backendStopped = true;
-  try { backendManager.stop(); } catch (e) { /* 回收失败不阻断退出 */ }
+  try { await backendManager.stopAndWait(8000); } catch (e) { /* 回收失败不阻断退出 */ }
   try { sidecars.stopAll(); } catch (e) { /* 同上：边车残留不该阻断退出 */ }
+}
+app.on("before-quit", (e) => {
+  if (_backendStopped) return;
+  e.preventDefault();
+  const finish = () => { try { app.quit(); } catch (err) { try { app.exit(0); } catch (err2) {} } };
+  shutdownBackendAndWait().then(finish, finish);
 });
 
 app.on("window-all-closed", () => {

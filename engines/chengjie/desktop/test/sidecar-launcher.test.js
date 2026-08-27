@@ -79,7 +79,22 @@ ok(
   === null
 );
 
-// ── ⑥ 媒体目录：必须落后端真正 serve 的 static 下 ────────────────────────────
+// ── ⑥ 媒体目录：必须与后端 protocol_media_root() 同址 ───────────────────────
+// 有数据根契约（打包态 backend-launcher 注入 AITR_DATA_DIR=<userData>/data）时后端
+// 读写 <dataDir>/protocol_media —— 边车写代码树 static 就是「写 A 读 B」：前端因
+// 双根兜底照样能播，后端识别链（ASR/VLM/OCR）全空手 → AI 静默不回（08-20 实锤）。
+const DATA_ROOT = "C:/Users/u/AppData/Roaming/zhiliao/data";
+for (const spec of [WA, MSG]) {
+  ok(
+    `${spec.name} 有数据根 → 媒体跟后端走数据根`,
+    resolveMediaDir(spec, {
+      isPackaged: true, resourcesPath: RES, appDir: APP_DIR, dataDir: DATA_ROOT,
+      // 代码树 static 存在也不许选它（否则回到写 A 读 B）
+      exists: () => true,
+    }) === path.join(DATA_ROOT, "protocol_media", spec.mediaSubdir)
+  );
+}
+// 无数据根（开发态裸跑）才回落代码树 static —— 那时后端 protocol_media_root() 同址。
 // 冻结态 = resources/backend/_internal/src/web/static（PyInstaller 6.x onedir 布局）。
 // 写偏一层，前端按 /static/protocol_media/... 取图就是永久 404。
 const internalStatic = path.join(RES, "backend", "_internal", "src", "web", "static");

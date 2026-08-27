@@ -179,7 +179,15 @@ def build_reply_latency(store: Any, *, now: Optional[float] = None) -> Dict[str,
             eligible = _eligible_conversations(conn)
             msg_rows = conn.execute(
                 "SELECT conversation_id, direction, ts FROM messages"
-                " WHERE ts >= ? AND ts < ? ORDER BY conversation_id, ts",
+                " WHERE ts >= ? AND ts < ?"
+                # B63③：投递失败留痕（status=failed/resent 的出站行）不是回复——
+                # 客户什么也没收到，算进去会让 SLO 谎报「已回」并吞掉零回复告警。
+                " AND NOT (direction='out' AND status IN ('failed','resent'))"
+                # 实施72 P2：合成时间戳的补收/回填历史（approx_ts=1）整体剔除——
+                # 它们的 ts 是「入库时刻回推」不是真实收发时刻，入站会伪造
+                # 「客户在等」、出站会伪造「已回复」，两个方向都污染 SLO。
+                " AND COALESCE(approx_ts, 0) = 0"
+                " ORDER BY conversation_id, ts",
                 (fetch_lo, t)).fetchall()
         per_conv: Dict[str, List[Tuple[str, float]]] = {}
         for r in msg_rows:

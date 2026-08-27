@@ -333,6 +333,7 @@ login_dump*.html
 # PyInstaller workpath `desktop/build/build/` 命中通用 `build/`，产出目录单列如下）
 !desktop/build/
 desktop/build/backend-dist/
+desktop/build/refresh_usage.jsonl
 # 内测包随包数据种子暂存（stage_internal_assets.py 产出：生产人设/语音/相册快照，~90MB）
 desktop/build/seed-data/
 config/notify_webhooks.json

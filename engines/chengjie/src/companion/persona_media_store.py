@@ -113,7 +113,7 @@ class PersonaMediaStore:
             self._conn.commit()
 
     def _migrate(self) -> None:
-        """存量库补列（幂等；调用方已持锁）。失败不抛——建表已成，缺列走降级路径。"""
+        """存量库补列/补表（幂等；调用方已持锁）。失败不抛——建表已成，缺列走降级路径。"""
         for table, col, decl in (
             ("persona_media_sends", "file_key", "TEXT NOT NULL DEFAULT ''"),
         ):
@@ -126,6 +126,57 @@ class PersonaMediaStore:
             except Exception:
                 logger.debug("[persona_media] 迁移 %s.%s 跳过", table, col,
                              exc_info=True)
+        # P3 2026-08-22：场景需求日账本（旧库升级路径；新库走 _DDL 一并建）。
+        # scene_demand/unmet 原是进程计数、重启即清零——本机日均 8+ 次重启下
+        # chips 热度排序/补货报告的「需求侧」形同摆设，落库才有跨重启记忆。
+        try:
+            self._conn.execute(
+                "CREATE TABLE IF NOT EXISTS scene_demand_daily ("
+                " day TEXT NOT NULL, scene TEXT NOT NULL,"
+                " demand INTEGER NOT NULL DEFAULT 0,"
+                " unmet INTEGER NOT NULL DEFAULT 0,"
+                " PRIMARY KEY (day, scene))")
+        except Exception:
+            logger.debug("[persona_media] scene_demand_daily 建表跳过", exc_info=True)
+
+    # ── 场景需求日账本（P3 2026-08-22：需求侧跨重启记忆）────────────────────
+    def record_scene_demand(self, scene_class: str, *, unmet: bool,
+                            now: Optional[float] = None) -> None:
+        """按日 upsert 场景需求（demand +1；unmet 时 unmet +1）。绝不抛。"""
+        sc = str(scene_class or "").strip().lower()
+        if not sc:
+            return
+        day = time.strftime("%Y-%m-%d",
+                            time.localtime(now if now is not None else time.time()))
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "INSERT INTO scene_demand_daily (day, scene, demand, unmet)"
+                    " VALUES (?, ?, 1, ?)"
+                    " ON CONFLICT(day, scene) DO UPDATE SET"
+                    " demand = demand + 1, unmet = unmet + excluded.unmet",
+                    (day, sc, 1 if unmet else 0))
+                self._conn.commit()
+        except Exception:
+            logger.debug("[persona_media] record_scene_demand 失败（已忽略）",
+                         exc_info=True)
+
+    def scene_demand_window(self, days: int = 14, *,
+                            now: Optional[float] = None) -> Dict[str, Dict[str, int]]:
+        """近 N 天需求汇总 ``{scene: {demand, unmet}}``；失败返回 {}。"""
+        ts = now if now is not None else time.time()
+        since = time.strftime("%Y-%m-%d", time.localtime(ts - max(1, int(days)) * 86400))
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT scene, SUM(demand), SUM(unmet) FROM scene_demand_daily"
+                    " WHERE day >= ? GROUP BY scene", (since,)).fetchall()
+            return {str(r[0]): {"demand": int(r[1] or 0), "unmet": int(r[2] or 0)}
+                    for r in rows}
+        except Exception:
+            logger.debug("[persona_media] scene_demand_window 失败（已忽略）",
+                         exc_info=True)
+            return {}
 
     @staticmethod
     def _row_to_dict(r: sqlite3.Row) -> Dict[str, Any]:
@@ -460,6 +511,16 @@ def get_persona_media_store() -> Optional[PersonaMediaStore]:
     return _STORE
 
 
+def peek_persona_media_store() -> Optional[PersonaMediaStore]:
+    """取**已存在**的单例（绝不懒建）。
+
+    给低价值 best-effort 写点用（如场景需求账本）：生产进程里单例早被媒体链
+    懒建过=写得进；测试进程没人建过=天然零磁盘写入（不会像 get_* 那样把
+    ``config/persona_media.db`` 懒建到测试 CWD——「测试写仓库 config/」教训）。
+    """
+    return _STORE
+
+
 def reset_persona_media_store() -> None:
     """测试钩子：清空单例。"""
     global _STORE
@@ -470,5 +531,5 @@ def reset_persona_media_store() -> None:
 __all__ = [
     "MEDIA_PHOTO", "MEDIA_VIDEO", "DEFAULT_DB_PATH", "PersonaMediaStore",
     "configure_persona_media_store", "get_persona_media_store",
-    "reset_persona_media_store",
+    "peek_persona_media_store", "reset_persona_media_store",
 ]

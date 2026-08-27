@@ -220,8 +220,8 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
         .then(function(r){return r.json().then(function(d){return {st:r.status,d:d};});})
         .then(function(x){
           if(x.d&&x.d.ok){ load(); }
-          else { alert(window.T('fc_js_fail')+((x.d&&x.d.detail)||x.st)); btn.disabled=false; }
-        }).catch(function(){ alert(window.T('fc_js_fail')); btn.disabled=false; });
+          else { AITRNotify.alert(window.T('fc_js_fail')+((x.d&&x.d.detail)||x.st)); btn.disabled=false; }
+        }).catch(function(){ AITRNotify.alert(window.T('fc_js_fail')); btn.disabled=false; });
     });
     load();
   })();
@@ -231,7 +231,7 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
        （未重启/旧安装包）→ probe 404 整卡隐藏，模板热更新自洽 ══ -->
   <div class="acc{% if ui_mode == 'simple' %} set-simple-hide{% endif %}" id="diag-card" style="display:none">
     <div class="acc-hd" onclick="toggleAcc(this)">
-      <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-teal6),var(--th-bg-teal8))">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-teal6,#0d9488),var(--th-bg-teal8,#0f766e))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12"/><polyline points="7 10 12 15 17 10"/><path d="M5 21h14"/></svg>
       </div>
       <div>
@@ -243,7 +243,7 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
     <div class="acc-body" id="body-diag">
       <a class="btn-s" href="/api/admin/diagnostic-bundle" style="display:inline-block;padding:.45rem 1rem;border:1.5px solid var(--bd);border-radius:8px;background:var(--p);color:var(--th-ink-inverse);font-size:.8rem;font-weight:600;text-decoration:none">{{ (i18n or {}).get('diag_btn', "下载诊断包") }}</a>
       <!-- P1-⑦ 一键直传：后端打包→转投官网→回 6 位短码（旧后端无路由时按钮保持隐藏） -->
-      <button type="button" class="btn-s" id="diag-upload-btn" style="display:none;margin-left:.5rem;padding:.45rem 1rem;border:1.5px solid var(--bd);border-radius:8px;background:transparent;color:var(--tx);font-size:.8rem;font-weight:600;cursor:pointer">{{ (i18n or {}).get('diag_upload_btn', "一键上传给客服") }}</button>
+      <button type="button" class="btn-s" id="diag-upload-btn" style="display:none;margin-left:.5rem;padding:.45rem 1rem;border:1.5px solid var(--bd);border-radius:8px;background:transparent;color:var(--t,#111827);font-size:.8rem;font-weight:600;cursor:pointer">{{ (i18n or {}).get('diag_upload_btn', "一键上传给客服") }}</button>
       <p class="f-hint" id="diag-upload-out" style="display:none;margin-top:.55rem;font-weight:600"></p>
       <p class="f-hint" style="margin-top:.55rem">{{ (i18n or {}).get('diag_hint', "不含聊天记录数据库；配置里的 API Key / Token 等已全部打码。") }}</p>
     </div>
@@ -466,7 +466,7 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
   <script>
   (function(){
     function g(id){return document.getElementById(id);}
-    function fmt(c){c=c||{};return window.T('dash.ws.col_convs')+' '+(c.conversations||0)+' · '+window.T('set_js_005')+' '+(c.messages||0)+' · '+window.T('set_js_006')+' '+(c.draft_audits||0);}
+    function fmt(c){c=c||{};var s=window.T('dash.ws.col_convs')+' '+(c.conversations||0)+' · '+window.T('set_js_005')+' '+(c.messages||0)+' · '+window.T('set_js_006')+' '+(c.draft_audits||0);if(c.funnel_events){s+=' · '+window.T('set_js_100')+' '+c.funnel_events;}return s;}
     function refresh(){
       apiFetch('/api/admin/demo').then(function(r){return r.json();}).then(function(d){
         if(!d||!d.ok){ g('demo-status').textContent=window.T('msg_js_010'); return; }
@@ -483,7 +483,8 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
           g('demo-seed-btn').disabled=false;
           if(d&&d.ok){
             var tip=(d.search_hints&&d.search_hints.length)?(' · CmdK: '+d.search_hints.join(' / ')):'';
-            res.textContent='✓ '+window.T('set_js_011')+' '+d.conversations+' · '+window.T('set_js_005')+' '+d.messages+' · '+window.T('db_js_021')+' '+d.draft_audits+'）'+tip;
+            var fn=(d.funnel&&d.funnel.conversions)?(' · '+window.T('set_js_100')+' '+d.funnel.leads+'/'+d.funnel.conversions):'';
+            res.textContent='✓ '+window.T('set_js_011')+' '+d.conversations+' · '+window.T('set_js_005')+' '+d.messages+' · '+window.T('db_js_021')+' '+d.draft_audits+fn+'）'+tip;
             res.style.color='var(--green)'; refresh();
           }
           else { res.textContent=window.T('set_js_012')+((d&&d.detail)||window.T('rpa_unknown')); res.style.color='var(--red)'; }
@@ -1635,11 +1636,11 @@ function heAgentsLoadFromTextarea(){
   try{
     arr = JSON.parse(ta.value && String(ta.value).trim() ? ta.value : '[]');
   }catch(err){
-    alert('agents JSON '+window.T('set_js_078'));
+    AITRNotify.alert('agents JSON '+window.T('set_js_078'));
     return;
   }
   if(!Array.isArray(arr)){
-    alert('agents '+window.T('set_js_079'));
+    AITRNotify.alert('agents '+window.T('set_js_079'));
     return;
   }
   tbody.innerHTML = '';
@@ -1743,18 +1744,18 @@ function heAddWorkExceptionClosedDay(){
   if(!inp || !ta) return;
   const day = String(inp.value || '').trim();
   if(!/^\d{4}-\d{2}-\d{2}$/.test(day)){
-    alert(window.T('set_js_080'));
+    AITRNotify.alert(window.T('set_js_080'));
     return;
   }
   let o = {};
   try{
     o = JSON.parse(ta.value && String(ta.value).trim() ? ta.value : '{}');
   }catch(e){
-    alert('work_exceptions JSON '+window.T('set_js_078'));
+    AITRNotify.alert('work_exceptions JSON '+window.T('set_js_078'));
     return;
   }
   if(typeof o !== 'object' || o === null || Array.isArray(o)){
-    alert('work_exceptions '+window.T('set_js_081'));
+    AITRNotify.alert('work_exceptions '+window.T('set_js_081'));
     return;
   }
   o[day] = [];
@@ -1770,24 +1771,24 @@ function heAddWorkExceptionInterval(){
   if(!dayEl || !ta || !sEl || !eEl) return;
   const day = String(dayEl.value || '').trim();
   if(!/^\d{4}-\d{2}-\d{2}$/.test(day)){
-    alert(window.T('set_js_082'));
+    AITRNotify.alert(window.T('set_js_082'));
     return;
   }
   const s = String(sEl.value || '').trim();
   const e = String(eEl.value || '').trim();
   if(!s || !e){
-    alert(window.T('set_js_083'));
+    AITRNotify.alert(window.T('set_js_083'));
     return;
   }
   let o = {};
   try{
     o = JSON.parse(ta.value && String(ta.value).trim() ? ta.value : '{}');
   }catch(err){
-    alert('work_exceptions JSON '+window.T('set_js_078'));
+    AITRNotify.alert('work_exceptions JSON '+window.T('set_js_078'));
     return;
   }
   if(typeof o !== 'object' || o === null || Array.isArray(o)){
-    alert('work_exceptions '+window.T('set_js_081'));
+    AITRNotify.alert('work_exceptions '+window.T('set_js_081'));
     return;
   }
   const prev = o[day];

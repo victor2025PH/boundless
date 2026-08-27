@@ -5,6 +5,7 @@ const assert = require("assert");
 const {
   FR_STRINGS,
   FR_FUNNEL_EVENTS,
+  FR_CLAIM_CHARS,
   frT,
   frBuildSteps,
   frAiPrefill,
@@ -20,6 +21,9 @@ const {
   frShouldShowWizard,
   frWelcomeView,
   frCelebrateView,
+  frFeatureList,
+  frQuotaCompareView,
+  frNextSteps,
   frFormatChars,
 } = require("../renderer/first-run-model.js");
 
@@ -116,6 +120,82 @@ const tvNoRemain = frTrialView({ ok: true, visible: true, source: "local_trial",
 ok("缺 remaining 回落 included", tvNoRemain.chars === 10000);
 ok("缺时长 → null（UI 隐藏该格）", tvNoRemain.hours === null);
 ok("空输入不炸", frTrialView(undefined).show === false);
+
+// ── P0 首屏说明+引导（2026-08-21）：能力三点式 / 10 倍对比 / 三步引导 / 回门 ──
+const fl = frFeatureList("zh");
+ok("能力三点式恒 3 条", fl.length === 3);
+ok("每条有图标/标题/描述", fl.every((f) => !!f.icon && !!f.t && !!f.d));
+ok("能力文案英文独立", frFeatureList("en")[0].t !== fl[0].t);
+
+const cmp = frQuotaCompareView(TRIAL_ON, "zh");
+ok("体验档可见才出对比", cmp.show === true);
+ok("对比左格=本机剩余真值", cmp.now.chars === "8,500");
+ok("对比右格=注册领取营销数字", cmp.claim.chars === "100 万");
+ok("英文右格千分位", frQuotaCompareView(TRIAL_ON, "en").claim.chars === "1,000,000");
+ok("营销数字常量=100万", FR_CLAIM_CHARS === 1000000);
+ok("额度状态探不到不摆数字", frQuotaCompareView(null, "zh").show === false);
+ok("已用尽不进对比",
+  frQuotaCompareView(Object.assign({}, TRIAL_ON, { exceeded: true }), "zh").show === false);
+ok("付费额度不进对比", frQuotaCompareView(
+  { ok: true, visible: true, source: "license", included: 3000000 }, "zh").show === false);
+
+const ns = frNextSteps("zh");
+ok("三步引导恒 3 条", ns.length === 3);
+ok("每步有序号/标题/描述", ns.every((s) => !!s.n && !!s.t && !!s.d));
+ok("三步引导英文独立", frNextSteps("en")[0].t !== ns[0].t);
+
+// 就绪屏扩展：未领取给「回去领取」门（bind-code 需先领取，绑定码入口对 skip 必败）
+const celBack = frCelebrateView({ claimed: false }, "zh");
+ok("未领取→就绪屏给回门",
+  celBack.showClaimBack === true && celBack.backCta === FR_STRINGS.zh.btn_back_claim);
+ok("已领取→不给回门", frCelebrateView({ claimed: true }, "zh").showClaimBack === false);
+ok("就绪屏带三步引导", celBack.steps.length === 3 && !!celBack.stepsTitle);
+
+// ── P1 步骤指示器三态（done/current/todo）──
+const { frStepDotsView } = require("../renderer/first-run-model.js");
+const sd = frStepDotsView(["welcome", "claim", "celebrate"], "claim");
+ok("当前步之前=done", sd[0].state === "done");
+ok("当前步=current", sd[1].state === "current");
+ok("当前步之后=todo", sd[2].state === "todo");
+ok("首步激活时无 done",
+  frStepDotsView(["welcome", "claim"], "welcome").every((s, i) => (i === 0 ? s.state === "current" : s.state === "todo")));
+ok("末步激活时其余全 done",
+  frStepDotsView(["a", "b", "c"], "c").slice(0, 2).every((s) => s.state === "done"));
+ok("activeId 不存在→全 todo（异常态不装完成）",
+  frStepDotsView(["a", "b"], "zzz").every((s) => s.state === "todo"));
+ok("空 steps 不炸", frStepDotsView([], "x").length === 0);
+ok("非数组不炸", frStepDotsView(null, "x").length === 0);
+
+// ── P1 渲染层源码契约（品牌 token 桥接 + 无障碍开关；扫 first-run.js 源文本）──
+// 品牌色单一事实源=platform/brand/brand.css（index.html 已加载）；first-run.js 内联
+// 样式必须经 var(--bl-*, 字面量兜底) 消费。这里钉两头：①渲染层真的在用这些 token；
+// ②token 名在 brand.css 里真实存在（防「引用了不存在的变量→恒走兜底」静默漂移）。
+const fs = require("fs");
+const path = require("path");
+const frSrc = fs.readFileSync(path.join(__dirname, "..", "renderer", "first-run.js"), "utf8");
+["--bl-gradient-brand", "--bl-ink-700", "--bl-growth-500",
+  "--bl-brand-cyan", "--bl-brand-violet"].forEach(function (tok) {
+  ok("渲染层引用品牌 token " + tok, frSrc.indexOf("var(" + tok) >= 0);
+});
+ok("动画带 reduced-motion 关停", frSrc.indexOf("prefers-reduced-motion") >= 0);
+ok("步骤指示器接模型三态", frSrc.indexOf("frStepDotsView") >= 0);
+ok("就绪屏对勾有弹入动画类", frSrc.indexOf("fr-anim-pop") >= 0);
+const brandCssPath = path.join(__dirname, "..", "..", "..", "..", "platform", "brand", "brand.css");
+if (fs.existsSync(brandCssPath)) {
+  const brandCss = fs.readFileSync(brandCssPath, "utf8");
+  ["--bl-gradient-brand", "--bl-ink-700", "--bl-growth-500",
+    "--bl-brand-cyan", "--bl-brand-violet"].forEach(function (tok) {
+    ok("brand.css 存在 token " + tok, brandCss.indexOf(tok + ":") >= 0);
+  });
+  // 渐变兜底字面量的七个色标必须与 SSOT 逐一吻合（兜底=陈旧包时的视觉，不许漂）
+  ["#00b0f0", "#1e6bf0", "#7a3bf5", "#d030f0", "#f0509a", "#f07800", "#f0a010"]
+    .forEach(function (hex) {
+      ok("渐变兜底色标在 SSOT 中 " + hex, brandCss.toLowerCase().indexOf(hex) >= 0);
+      ok("渲染层兜底含色标 " + hex, frSrc.toLowerCase().indexOf(hex) >= 0);
+    });
+} else {
+  console.log("  .. platform/brand/brand.css 不在（非完整仓布局），SSOT 比对跳过");
+}
 
 // ── 预填：状态可用给回显值；不可用回落桌面种子默认（deepseek） ──
 const pre1 = frAiPrefill({ ok: true, configured: false, base_url: "http://x/v1", model: "m1" });
@@ -216,7 +296,8 @@ ok("无深链但有码仍算成功",
 // ── 漏斗事件白名单：与后端 trial_claim_client.FUNNEL_EVENTS 同口径 ──
 //   first-run.js 只从这张表取名——拼错事件名在这里就红，而不是线上数据悄悄丢。
 ok("漏斗事件表齐全", FR_FUNNEL_EVENTS.join(",")
-  === "welcome,claim_submit,claim_ok,claim_skip,gift_open,done,invite_share");
+  === "welcome,claim_submit,claim_ok,claim_skip,gift_open,done,invite_share,"
+    + "invite_open,claim_back,claim_banner");
 ok("漏斗事件名全小写下划线", FR_FUNNEL_EVENTS.every(function (e) {
   return /^[a-z_]+$/.test(e);
 }));
@@ -228,5 +309,25 @@ ok("zh/en 键集合一致", zhKeys === enKeys);
 ok("en 取英文", frT("en", "btn_finish") === FR_STRINGS.en.btn_finish);
 ok("未知语言回落 zh", frT("fr", "btn_finish") === FR_STRINGS.zh.btn_finish);
 ok("未知键回显键名", frT("zh", "nope_x") === "nope_x");
+// 扩展语白名单（vi/th/id）→ en 底（与壳 shellLang/SS 同向；跟随系统/真未知仍 zh）
+ok("扩展语 vi 回落 en", frT("vi", "btn_finish") === FR_STRINGS.en.btn_finish);
+ok("扩展语 th 回落 en", frT("th", "btn_finish") === FR_STRINGS.en.btn_finish);
+ok("扩展语 id 回落 en", frT("id", "btn_finish") === FR_STRINGS.en.btn_finish);
+ok("跟随系统仍回落 zh", frT("", "btn_finish") === FR_STRINGS.zh.btn_finish);
+// 繁体 zh_hant → zh 底（向导词典无繁体；简体可读，英文才是断崖）
+ok("繁体 zh_hant 回落 zh", frT("zh_hant", "btn_finish") === FR_STRINGS.zh.btn_finish);
+ok("繁体数字单位用萬", frFormatChars(1000000, "zh_hant") === "100 萬");
+ok("简体数字单位仍万", frFormatChars(1000000, "zh") === "100 万");
+
+// ── 系统语言映射（「跟随系统」真跟随；与 main.js::shellLangFromTag 同口径）──
+const frSysLang = require("../renderer/first-run-model.js").frSysLang;
+[["zh-CN", "zh"], ["zh", "zh"], ["zh-Hans-SG", "zh"],
+ ["zh-TW", "zh_hant"], ["zh-HK", "zh_hant"], ["zh-Hant-TW", "zh_hant"], ["zh-MO", "zh_hant"],
+ ["en-US", "en"], ["en", "en"], ["vi-VN", "vi"], ["th-TH", "th"], ["id-ID", "id"],
+ ["ja-JP", ""], ["", ""], [null, ""]]
+  .forEach(([raw, want]) => {
+    ok(`frSysLang(${JSON.stringify(raw)}) === ${JSON.stringify(want)}`,
+      frSysLang(raw) === want);
+  });
 
 console.log(`first-run-model.test.js: ${pass} passed`);

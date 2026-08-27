@@ -417,6 +417,25 @@ def test_avatar_probe_target_decision():
     assert avatar_probe_target(
         {"avatar_voice": {"enabled": True, "base_url": "http://10.0.0.5:7852/"}}
     ) == "http://10.0.0.5:7852/health"
+    # base_urls（多端点）优先于单数 base_url——与 AvatarVoiceClient「主端点=首个」
+    # 同口径（2026-08-18 假告警实锤：只配 base_urls 时旧实现回落 127.0.0.1 探
+    # 已退役旧服务）
+    assert avatar_probe_target(
+        {"avatar_voice": {"enabled": True,
+                          "base_urls": ["http://192.168.0.140:7852/"]}}
+    ) == "http://192.168.0.140:7852/health"
+    assert avatar_probe_target(
+        {"avatar_voice": {"enabled": True,
+                          "base_urls": ["http://192.168.0.140:7852"],
+                          "base_url": "http://127.0.0.1:7852"}}
+    ) == "http://192.168.0.140:7852/health"
+    # 空/坏形列表回落单数键（含缺省）
+    assert avatar_probe_target(
+        {"avatar_voice": {"enabled": True, "base_urls": []}}
+    ) == "http://127.0.0.1:7852/health"
+    assert avatar_probe_target(
+        {"avatar_voice": {"enabled": True, "base_urls": ["", None]}}
+    ) == "http://127.0.0.1:7852/health"
 
 
 def test_build_health_avatar_component():

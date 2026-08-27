@@ -122,8 +122,9 @@
 
     /* 2026-08-17 「向左拉伸」：默认上限从固定 480 升为动态 min(720px, 45vw)，并给
        相邻主内容列留 ≥520px 保底（读面板父容器实测宽 - 520，聊天/消息列不被挤残）；
-       显式 opts.max 仍最高优先（调用方自知布局）。每次 apply 现算——拖拽中途、窗口
-       缩放后都取实时上限，存储值超限由 applyPanelWidth 夹紧。 */
+       显式 opts.max 仍最高优先（调用方自知布局）。非拖拽 apply（init 恢复/双击/键盘）
+       现算取实时上限；拖拽路径在 pointerdown 快照一次整段复用（见 init 性能注释④——
+       本函数读布局，每帧调用即 layout thrash），存储值超限由 applyPanelWidth 夹紧。 */
     function _dynMax() {
       if (opts.max != null) return opts.max;
       var cap = Math.min(720, Math.round((root.innerWidth || 1280) * 0.45));
@@ -142,14 +143,25 @@
       return applyPanelWidth(panel, w, min, _dynMax(), def);
     }
 
+    /* 2026-08-17 拖拽性能重构（修「拖动卡顿/粘滞」，Web/桌面壳/App 三面同源受益）：
+       ① pointer capture 替代 document mousemove——指针滑进 iframe（App 模式右栏）/
+          <webview>（桌面壳官方页）事件不再被吞成「粘住/断跳」；pointercancel 与
+          buttons==0 双自愈，绝不出「松了键还在拖」。
+       ② 拖动期挂全窗透明护罩（内联样式零 CSS 依赖）——webview 是跨进程 guest，
+          capture 也可能收不到，护罩保证宿主文档恒收事件；顺带压掉扫过区域 hover 抖动。
+       ③ rAF 合帧：pointermove 只记 clientX，每帧至多一次宽度写入，等值跳写。
+       ④ 测量缓存：动态上限与气泡锚点只在 pointerdown 读一次布局，拖动全程零
+          getBoundingClientRect（旧实现每帧 2-3 次读写交错 = layout thrash 卡顿主因）。
+       ⑤ 刻意不 preventDefault pointerdown——会吞兼容鼠标事件链，双击恢复默认宽就死
+          （_cpTearOut 踩过的同款坑）；选字由 body userSelect=none 防。 */
     function init() {
       if (!panel || !handle || handle.__cpResizeBound) return;
       handle.__cpResizeBound = true;
       applyWidth(readStoredWidth(def));
       var dragging = false;
-      var startX = 0;
-      var startW = 0;
-      var bubble = null;
+      var startX = 0, startW = 0, lastX = 0, dragPid = null;
+      var dragMax = 0, appliedW = 0, edgeX0 = 0, bubbleTop = 8;
+      var raf = 0, shield = null, bubble = null;
 
       function _ensureBubble() {
         if (bubble) return bubble;
@@ -165,60 +177,130 @@
         } catch (_) { bubble = null; }
         return bubble;
       }
+      /* 气泡随宽度纯算术定位：面板左缘 = edgeX0 - (w - startW)，拖动中零布局读 */
       function _showBubble(w) {
         var b = _ensureBubble();
         if (!b) return;
         b.textContent = String(w) + "px";
         b.classList.add("show");
-        try {
-          var r = handle.getBoundingClientRect();
-          b.style.top = Math.max(8, r.top + r.height / 2 - 12) + "px";
-          b.style.left = Math.max(8, r.left - 56) + "px";
-        } catch (_) {}
+        b.style.top = bubbleTop + "px";
+        b.style.left = Math.max(8, edgeX0 - (w - startW) - 56) + "px";
       }
       function _hideBubble() {
         if (bubble) bubble.classList.remove("show");
       }
 
-      function onMove(e) {
-        if (!dragging || !panel) return;
-        var dx = startX - (e.clientX || 0);
-        _showBubble(applyWidth(startW + dx));
+      function _mountShield() {
+        if (!shield) {
+          shield = document.createElement("div");
+          shield.id = "ws-cp-resize-shield";
+          shield.setAttribute("aria-hidden", "true");
+          shield.style.cssText = "position:fixed;inset:0;z-index:2147483000;cursor:col-resize;background:transparent;touch-action:none;";
+          /* 兜底自愈：若异常残留（onUp 未走到），首次点击即自清，绝不锁死整个 UI */
+          shield.addEventListener("pointerdown", function () {
+            if (!dragging) _removeShield();
+          });
+        }
+        if (!shield.parentNode) (document.body || document.documentElement).appendChild(shield);
+      }
+      function _removeShield() {
+        if (shield && shield.parentNode) shield.parentNode.removeChild(shield);
       }
 
-      function onUp() {
+      function _syncAria(w) {
+        try { handle.setAttribute("aria-valuenow", String(w)); } catch (_) {}
+      }
+
+      function _flush() {
+        raf = 0;
+        if (!dragging || !panel) return;
+        var n = Math.round(startW + (startX - lastX));
+        n = Math.max(min, Math.min(dragMax, n));
+        if (n !== appliedW) { panel.style.width = n + "px"; appliedW = n; }
+        _showBubble(appliedW);
+      }
+
+      function onMove(e) {
+        if (!dragging) return;
+        if (e.pointerType === "mouse" && e.buttons === 0) { onUp(e); return; }
+        lastX = e.clientX || 0;
+        if (!raf) raf = requestAnimationFrame(_flush);
+      }
+
+      function onUp(e) {
         if (!dragging) return;
         dragging = false;
+        if (raf) { try { cancelAnimationFrame(raf); } catch (_) {} raf = 0; }
+        var n = Math.round(startW + (startX - lastX));
+        n = Math.max(min, Math.min(dragMax, n));
+        if (n !== appliedW) { panel.style.width = n + "px"; appliedW = n; }
         handle.classList.remove("dragging");
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
-        document.removeEventListener("mousemove", onMove);
-        document.removeEventListener("mouseup", onUp);
+        handle.removeEventListener("pointermove", onMove);
+        handle.removeEventListener("pointerup", onUp);
+        handle.removeEventListener("pointercancel", onUp);
+        try { if (dragPid != null) handle.releasePointerCapture(dragPid); } catch (_) {}
+        dragPid = null;
+        _removeShield();
         _hideBubble();
-        try {
-          localStorage.setItem(storageKey, String(parseInt(panel.offsetWidth, 10) || def));
-        } catch (_) {}
+        /* 仅松手读一次真实宽（CSS max-width 等外部钳制下 appliedW 可能偏大，存实际值） */
+        var real = parseInt(panel.offsetWidth, 10) || appliedW || def;
+        _syncAria(real);
+        try { localStorage.setItem(storageKey, String(real)); } catch (_) {}
       }
 
-      handle.addEventListener("mousedown", function (e) {
+      handle.addEventListener("pointerdown", function (e) {
+        if (dragging) return;
         if (hideWhen && hideWhen()) return;
-        if (e.button !== 0) return;
+        if (e.pointerType === "mouse" && e.button !== 0) return;
         dragging = true;
-        startX = e.clientX;
-        startW = panel.offsetWidth;
+        dragPid = e.pointerId;
+        startX = lastX = e.clientX || 0;
+        startW = appliedW = panel.offsetWidth;
+        dragMax = _dynMax();
+        try {
+          var r = handle.getBoundingClientRect();
+          edgeX0 = r.left;
+          bubbleTop = Math.max(8, r.top + r.height / 2 - 12);
+        } catch (_) { edgeX0 = startX; bubbleTop = 8; }
         handle.classList.add("dragging");
         document.body.style.cursor = "col-resize";
         document.body.style.userSelect = "none";
-        document.addEventListener("mousemove", onMove);
-        document.addEventListener("mouseup", onUp);
-        e.preventDefault();
+        _mountShield();
+        try { handle.setPointerCapture(e.pointerId); } catch (_) {}
+        handle.addEventListener("pointermove", onMove);
+        handle.addEventListener("pointerup", onUp);
+        handle.addEventListener("pointercancel", onUp);
       });
 
       handle.addEventListener("dblclick", function () {
-        applyWidth(def);
+        var n = applyWidth(def);
+        _syncAria(n);
         try {
           localStorage.setItem(storageKey, String(def));
         } catch (_) {}
+      });
+
+      /* a11y：窗格分隔条语义 + 键盘调宽（← 加宽右侧栏 / → 收窄，步长 16px）。
+         touch-action 兜底内联（两树 CSS 均已有，防未来样式漂移）。 */
+      try {
+        handle.style.touchAction = "none";
+        handle.setAttribute("role", "separator");
+        handle.setAttribute("aria-orientation", "vertical");
+        handle.setAttribute("aria-valuemin", String(min));
+        handle.setAttribute("aria-valuemax", String(_dynMax()));
+        if (!handle.hasAttribute("tabindex")) handle.setAttribute("tabindex", "0");
+        _syncAria(parseInt(panel.offsetWidth, 10) || def);
+      } catch (_) {}
+      handle.addEventListener("keydown", function (e) {
+        if (hideWhen && hideWhen()) return;
+        var d = e.key === "ArrowLeft" ? 16 : e.key === "ArrowRight" ? -16 : 0;
+        if (!d) return;
+        var n = applyWidth((parseInt(panel.offsetWidth, 10) || def) + d);
+        _syncAria(n);
+        try { localStorage.setItem(storageKey, String(n)); } catch (_) {}
+        e.preventDefault();
       });
     }
 
@@ -321,6 +403,11 @@
       text = s ? s + " · " + pct + "%" : "";
       if (d.pending_advancement || d.needs_confirmation || d.stage_conflict) tone = "warn";
       else if (d.reunion) tone = "danger";
+    } else if (suf === "origin") {
+      // 跨平台档案：pill 文本由服务端按 trail/档案计算（平台标签单源）；
+      // 档案已存但注入开关未开 → warn（提醒「AI 还用不上」）。
+      text = _trunc(String(d.pill || ""), 20);
+      tone = (d.enabled === false && text) ? "warn" : "ok";
     } else if (suf === "chain") {
       var ex = d.executions || [];
       var run = 0;

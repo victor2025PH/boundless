@@ -11,6 +11,10 @@ var FR_STRINGS = {
   zh: {
     // 欢迎步（原先硬编码在 first-run.js::renderBasic，英文用户看不到翻译，故收进这里）
     welcome_title: "欢迎使用 智聊",
+    // 白标部署（cfg.brand.product 非空）时的欢迎标题。此前是 first-run.js 里
+    // `state.lang === "en" ? "Welcome to " : "欢迎使用 "` 的内联三元——白标客户改一次
+    // 品牌名就要改代码，且中文串烙在逻辑层。占位符由调用方 replace。
+    welcome_to_brand: "欢迎使用 {brand}",
     welcome_sub: "多平台 AI 客服，装好即用——不用注册账号、也不用自己配 AI 模型。首次启动会自动准备本地服务，稍等片刻即可进入。",
     welcome_managed_note: "AI 引擎与额度我们已为你配好，直接用就行。",
     welcome_value_hook: "装好就能聊——不用注册、不用自己配 AI",
@@ -85,9 +89,37 @@ var FR_STRINGS = {
     copied: "已复制",
     gift_fail: "取码失败，稍后可在「会员中心」再试",
     gift_done: "已到账 10 万字符",
+    // ── 首屏能力三点式（P0-A 2026-08-21：让新用户 5 秒内明白产品是什么，
+    //    先建立价值认知再要联系方式）──
+    feat1_t: "多平台消息，一个收件箱",
+    feat1_d: "Telegram / WhatsApp / LINE 统一接待",
+    feat2_t: "AI 替你回复",
+    feat2_d: "自动拟好草稿，你只管把关",
+    feat3_t: "聊天实时互译",
+    feat3_d: "客户什么语言都能接",
+    // ── 额度对比（P0-B：尝鲜 vs 注册领取，10 倍差距从文案数字升为视觉对比）──
+    cmp_now_t: "现在就能用",
+    cmp_now_note: "已激活",
+    cmp_claim_t: "留联系方式再领",
+    cmp_claim_note: "免费 · 无期限",
+    // ── 领取步信任说明 + 字符换算锚点（P0-C：要联系方式必须给理由）──
+    claim_trust: "联系方式仅用于发放额度与售后服务，不会向你推销，也不会提供给第三方。",
+    claim_calc: "参考：一条普通回复约消耗 50–150 字符。",
+    invite_toggle: "有邀请码？（选填）",
+    // ── 就绪屏「接下来三步」（P0-D：修「进入工作台后不知道干嘛」的落地断层；
+    //    纯信息地图不做深链——finish 后落点由壳决定，假深链失效比没有更糟）──
+    next_title: "接下来 3 步",
+    next1_t: "绑定第一个聊天渠道",
+    next1_d: "左侧「渠道」入口，扫码即可接入",
+    next2_t: "看 AI 替你接待",
+    next2_d: "客户消息进来自动拟稿，你确认后发出",
+    next3_t: "额度随时可查",
+    next3_d: "顶栏紫色徽章可进「会员中心」查余量、加量",
+    btn_back_claim: "← 免费领 100 万字符",
   },
   en: {
     welcome_title: "Welcome to ChatX",
+    welcome_to_brand: "Welcome to {brand}",
     welcome_sub: "Multi-platform AI customer service, ready right after install — no account, no AI setup on your side. The local service is starting up; you'll be in shortly.",
     welcome_managed_note: "The AI engine and your quota are already set up for you — just start.",
     welcome_value_hook: "Ready to chat — no signup, no AI setup on your side",
@@ -165,23 +197,67 @@ var FR_STRINGS = {
     copied: "Copied",
     gift_fail: "Couldn't get a code — retry later from the membership center",
     gift_done: "100,000 characters credited",
+    feat1_t: "Every platform, one inbox",
+    feat1_d: "Telegram, WhatsApp and LINE in one place",
+    feat2_t: "AI replies for you",
+    feat2_d: "Drafts are written automatically — you just approve",
+    feat3_t: "Live two-way translation",
+    feat3_d: "Serve customers in any language",
+    cmp_now_t: "Ready now",
+    cmp_now_note: "Active",
+    cmp_claim_t: "After you claim",
+    cmp_claim_note: "Free · no expiry",
+    claim_trust: "Your contact is used only to issue the quota and for support — "
+      + "no marketing, never shared with anyone.",
+    claim_calc: "For reference: a typical reply uses ~50–150 characters.",
+    invite_toggle: "Have an invite code? (optional)",
+    next_title: "Your next 3 steps",
+    next1_t: "Connect your first channel",
+    next1_d: "Open “Channels” in the sidebar and scan to connect",
+    next2_t: "Watch AI handle chats",
+    next2_d: "Incoming messages get drafts automatically — approve and send",
+    next3_t: "Check your quota anytime",
+    next3_d: "The purple badge in the top bar opens Membership",
+    btn_back_claim: "← Claim 1,000,000 free characters",
   },
 };
 
+// 向导词典只有 zh/en。扩展语白名单（vi/th/id，与 main.js::SHELL_EXT_LANGS /
+// 后端 i18n_packs.UI_LANGS 对齐）→ en 底：扩展语坐席英文向导远比中文可用。
+// 其余（空=跟随系统 / 真未知语）维持 zh——保守口径，只对白名单语言改变行为。
+var FR_EXT_LANGS = { vi: 1, th: 1, id: 1 };
 function frT(lang, key) {
-  var d = FR_STRINGS[lang === "en" ? "en" : "zh"] || FR_STRINGS.zh;
+  var d = FR_STRINGS[lang] || (FR_EXT_LANGS[lang] ? FR_STRINGS.en : FR_STRINGS.zh);
   return d[key] != null ? d[key] : key;
+}
+
+// 系统语言 → 壳语言码（「跟随系统」真跟随，2026-08-27）。与 main.js::shellLangFromTag
+// 同一家族映射（zh 系按 TW/HK/MO/Hant 细分繁体；en 家族→en；扩展语取主子标签）；
+// 认不出返回 ""（调用方回落中文）。输入=navigator.language / app.getLocale()。
+function frSysLang(raw) {
+  var l = String(raw || "").trim().toLowerCase().replace(/-/g, "_");
+  if (!l) return "";
+  if (l === "en" || l.indexOf("en_") === 0) return "en";
+  var p = l.split("_");
+  if (p[0] === "zh") {
+    return (p.indexOf("tw") > 0 || p.indexOf("hk") > 0 || p.indexOf("mo") > 0
+      || p.indexOf("hant") > 0) ? "zh_hant" : "zh";
+  }
+  if (p[0] === "zh_hant") return "zh_hant";
+  if (FR_EXT_LANGS[p[0]]) return p[0];
+  return "";
 }
 
 // 字符数展示。原实现一律缩成「1w / 2.5w」——那是中文口语写法，**英文界面照样显示
 // `1w`**，对英文用户就是个不明所以的字符串（视觉验收时抓到）。改为跟语言走：
-// 中文用「万」，英文用千分位。语言判定与 frT 同口径（只有显式 en 算英文）。
+// 简体「万」/ 繁体「萬」，en 与扩展语（vi/th/id）用千分位。语言判定与 frT 同口径。
 function frFormatChars(n, lang) {
   var v = Math.max(0, Math.round(Number(n) || 0));
-  if (lang === "en") return v.toLocaleString("en-US");
+  if (lang === "en" || FR_EXT_LANGS[lang]) return v.toLocaleString("en-US");
   if (v >= 10000) {
     var w = v / 10000;
-    return (w >= 100 ? w.toFixed(0) : w.toFixed(1).replace(/\.0$/, "")) + " 万";
+    return (w >= 100 ? w.toFixed(0) : w.toFixed(1).replace(/\.0$/, ""))
+      + (lang === "zh_hant" ? " 萬" : " 万");
   }
   return v.toLocaleString("zh-CN");
 }
@@ -221,6 +297,9 @@ function frWelcomeView(trialStatus, lang) {
 }
 
 // 就绪庆祝屏：按用户是否领取 / 是否看过赠量码给出不同收尾文案。
+// P0-D（2026-08-21）：附「接下来三步」信息地图（修落地断层）+ 未领取用户的
+// 「回去领取」次入口——bind-code 赠量要求先有 claim_id（trial_claim_client.bind_code
+// 无单直接 not_claimed），给 skip 用户摆绑定码入口＝必然失败，改成送回领取步。
 function frCelebrateView(opts, lang) {
   var o = opts || {};
   var subKey = o.claimed ? "celebrate_sub_claimed"
@@ -229,7 +308,69 @@ function frCelebrateView(opts, lang) {
     title: frT(lang, "celebrate_title"),
     sub: frT(lang, subKey),
     cta: frT(lang, "btn_enter"),
+    showClaimBack: !o.claimed,
+    backCta: frT(lang, "btn_back_claim"),
+    stepsTitle: frT(lang, "next_title"),
+    steps: frNextSteps(lang),
   };
+}
+
+// ── 首屏能力三点式（P0-A）：静态价值主张，刻意不探后端能力——首启时后端可能
+// 还没起，且欢迎屏要回答「这是什么」，不是「此刻什么能用」。
+function frFeatureList(lang) {
+  return [
+    { icon: "💬", t: frT(lang, "feat1_t"), d: frT(lang, "feat1_d") },
+    { icon: "🤖", t: frT(lang, "feat2_t"), d: frT(lang, "feat2_d") },
+    { icon: "🌐", t: frT(lang, "feat3_t"), d: frT(lang, "feat3_d") },
+  ];
+}
+
+//: 注册领取的营销额度数字（与 claim_title / btn_claim_start 文案同源）。
+//: 真值以官网台账签发为准——这里只做展示对比，不构成额度的第二事实源。
+var FR_CLAIM_CHARS = 1000000;
+
+// ── 额度对比视图（P0-B）：尝鲜（本机真值）vs 注册领取（营销数字）。
+// 只在体验档确认可见时 show——额度状态探不到就不摆数字（绝不凭空承诺）；
+// 隐藏时欢迎屏仍有 CTA 文案里的「100 万」，语义完整。
+function frQuotaCompareView(trialStatus, lang) {
+  var tv = frTrialView(trialStatus, lang);
+  return {
+    show: tv.show,
+    now: {
+      label: frT(lang, "cmp_now_t"),
+      chars: frFormatChars(tv.chars, lang),
+      note: frT(lang, "cmp_now_note"),
+    },
+    claim: {
+      label: frT(lang, "cmp_claim_t"),
+      chars: frFormatChars(FR_CLAIM_CHARS, lang),
+      note: frT(lang, "cmp_claim_note"),
+    },
+  };
+}
+
+// ── 就绪屏「接下来三步」（P0-D）──
+function frNextSteps(lang) {
+  return [
+    { n: "1", t: frT(lang, "next1_t"), d: frT(lang, "next1_d") },
+    { n: "2", t: frT(lang, "next2_t"), d: frT(lang, "next2_d") },
+    { n: "3", t: frT(lang, "next3_t"), d: frT(lang, "next3_d") },
+  ];
+}
+
+// ── 步骤指示器状态（P1-I）：done/current/todo 三态——已完成的步骤打 ✓，
+// 给「走到哪了」以进度感。activeId 不在 steps 里（异常态）＝全 todo 不装完成。
+function frStepDotsView(steps, activeId) {
+  var ids = Array.isArray(steps) ? steps : [];
+  var cur = ids.indexOf(activeId);
+  var out = [];
+  for (var i = 0; i < ids.length; i++) {
+    out.push({
+      id: ids[i],
+      state: cur < 0 ? "todo" : (i < cur ? "done" : (i === cur ? "current" : "todo")),
+    });
+  }
+  return out;
 }
 
 // 体验额度展示模型。只在「后端确认可见 + 确实是体验档 + 还没用尽」时 show——
@@ -357,9 +498,11 @@ function frResultView(saveView, lang) {
 
 // 首启漏斗事件白名单（与后端 trial_claim_client.FUNNEL_EVENTS 同口径）。
 // 单列成表：first-run.js 只从这里取名，拼错事件名在单测就会红，而不是数据悄悄丢。
-// invite_share 属会员页邀请卡（web 侧），列在此处只为与后端白名单保持同一张表。
+// invite_share / claim_banner 属会员页（web 侧），列在此处只为与后端保持同一张表。
+// invite_open=领取屏邀请码折叠展开（P0 收进折叠后的需求读数）；claim_back=就绪屏
+// 「回去领取」回门点击（跳过者挽回入口的效果读数）。
 var FR_FUNNEL_EVENTS = ["welcome", "claim_submit", "claim_ok", "claim_skip", "gift_open",
-  "done", "invite_share"];
+  "done", "invite_share", "invite_open", "claim_back", "claim_banner"];
 
 // 是否弹向导。默认「只弹一次」。权威完成态有两处：
 //   ① localStorage 旗标（快路径，同步可读）
@@ -376,12 +519,18 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     FR_STRINGS: FR_STRINGS,
     FR_FUNNEL_EVENTS: FR_FUNNEL_EVENTS,
+    FR_CLAIM_CHARS: FR_CLAIM_CHARS,
     frT: frT,
+    frSysLang: frSysLang,
     frFormatChars: frFormatChars,
     frShouldShowWizard: frShouldShowWizard,
     frBuildSteps: frBuildSteps,
     frWelcomeView: frWelcomeView,
     frCelebrateView: frCelebrateView,
+    frFeatureList: frFeatureList,
+    frQuotaCompareView: frQuotaCompareView,
+    frNextSteps: frNextSteps,
+    frStepDotsView: frStepDotsView,
     frAiPrefill: frAiPrefill,
     frValidateAiInput: frValidateAiInput,
     frAiTestView: frAiTestView,

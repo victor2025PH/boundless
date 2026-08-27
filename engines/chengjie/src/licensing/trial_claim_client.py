@@ -277,8 +277,15 @@ def bind_code(*, config: Optional[dict] = None, fetch: Optional[Fetch] = None) -
 #: 通用事件流水，别让任意字符串顺着桌面壳灌进去。
 #: invite_share（2026-08-11 邀请裂变）＝会员页复制邀请码/分享链接；与官网侧
 #: invite_landing（落地页横幅曝光，官网自记）合成邀请漏斗的头两段。
+#: 2026-08-21 P2（首启说明+引导改版的读数面）三个新事件：
+#:   invite_open  = 向导领取屏「有邀请码？」折叠展开（邀请码真实需求信号——
+#:                  P0 把该字段收进折叠，这个数决定它该不该回到常显）；
+#:   claim_back   = 就绪屏「← 免费领 100 万」回门点击（跳过领取者的挽回入口效果）；
+#:   claim_banner = 会员中心尝鲜接回横幅 CTA（web 侧，与 invite_share 同渠道发送）。
+#: 刻意不给会员页领取加 claim_submit：领取真相在官网台账（服务端建单），客户端
+#: claim_submit 保持「向导域」口径——混入会员页来源会污染 welcome→submit 转化读数。
 FUNNEL_EVENTS = {"welcome", "claim_submit", "claim_ok", "claim_skip", "gift_open",
-                 "done", "invite_share"}
+                 "done", "invite_share", "invite_open", "claim_back", "claim_banner"}
 
 
 def funnel(event: str, *, config: Optional[dict] = None,

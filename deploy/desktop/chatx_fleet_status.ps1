@@ -34,8 +34,8 @@ $ErrorActionPreference = 'Continue'
 # a PS session) -- normalize so both calling styles behave identically.
 $Targets = @($Targets | ForEach-Object { "$_".Split(',') } |
   ForEach-Object { "$_".Trim() } | Where-Object { $_ })
-Write-Output ("{0,-16} {1,-10} {2,-24} {3,7} {4}" -f 'node', 'backend', 'app/version', 'diskGB', 'note')
-Write-Output ('-' * 70)
+Write-Output ("{0,-16} {1,-10} {2,-24} {3,7} {4,-15} {5}" -f 'node', 'backend', 'app/version', 'diskGB', 'display', 'note')
+Write-Output ('-' * 86)
 
 foreach ($t in $Targets) {
   $note = ''
@@ -66,7 +66,53 @@ foreach ($t in $Targets) {
     $disk = ("" + $dv)
     if ($dv -lt 10) { $note = ("LOW DISK (stale scoped_dir temps? see push_chatx auto-remedy) " + $note).Trim() }
   }
-  Write-Output ("{0,-16} {1,-10} {2,-24} {3,7} {4}" -f $t, $backend, $ver, $disk, $note)
+  # 4. display sanity (2026-08-17 .173 lesson: 4K panel at Windows-recommended 300%
+  #    -> 1280x720 LOGICAL desktop; the workspace collapses into its narrow layout and
+  #    the composer toolbar sits below the fold, i.e. the seat "loses" buttons with
+  #    zero code involved). Column shows logical WxH@scale; logical height < 800
+  #    flags the note -> remedy is deploy\desktop\set_seat_scale.ps1 (live, no logoff).
+  #    Mechanism: scp a static probe file + run it (same pattern as the telemetry
+  #    section) -- inlining this over ssh dies in PS5.1/cmd quote mangling, and naive
+  #    AppliedDPI reads miss live per-monitor overrides (probe header has the details).
+  $probeSrc = Join-Path $PSScriptRoot '_seat_disp_probe.ps1'
+  $disp = ''
+  if (Test-Path $probeSrc) {
+    scp -o ConnectTimeout=6 $probeSrc ($t + ':C:/Windows/Temp/_seat_disp_probe.ps1') 2>$null | Out-Null
+    $dispRaw = ssh -o ConnectTimeout=6 $t 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\Windows\Temp\_seat_disp_probe.ps1' 2>$null
+    if ("$dispRaw".Trim() -match '^EXACT (\d+)x(\d+)@(\d+)$') {
+      # Shell-written breadcrumb (>= 1.0.39): live Chromium truth, no candidates,
+      # no ambiguity marker. Older seats keep the registry-derived branch below.
+      $lw = [int]$Matches[1]; $lh = [int]$Matches[2]; $pct = [int]$Matches[3]
+      $disp = ('' + $lw + 'x' + $lh + '@' + $pct + '%')   # plain = exact (shell-reported)
+      if ($lh -lt 800) { $note = ('SMALL DESKTOP (toolbar may not fit; run set_seat_scale.ps1) ' + $note).Trim() }
+    }
+    elseif ("$dispRaw".Trim() -match '^(\d+)x(\d+)@(\d+)#(-?\d+)$') {
+      $pw = [int]$Matches[1]; $ph = [int]$Matches[2]
+      $dpiPct = [int][math]::Round([int]$Matches[3] * 100.0 / 96)
+      $ovr = [int]$Matches[4]
+      # Effective scale from logon-snapshot dpi + live override steps on the standard
+      # ladder. Ambiguity (documented in the probe header): after the NEXT sign-in the
+      # snapshot may absorb the override, so compute both candidates and only flag
+      # SMALL when even the LARGEST logical height is under budget (no false alarms;
+      # exact live value arrives with shell-reported telemetry in a future release).
+      $ladder = @(100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500)
+      $candB = $dpiPct                                  # snapshot already includes ovr
+      $candA = $dpiPct                                  # snapshot is the recommended rung
+      $iRec = $ladder.IndexOf($dpiPct)
+      if ($ovr -ne 0 -and $iRec -ge 0) {
+        $iCur = $iRec + $ovr
+        if ($iCur -ge 0 -and $iCur -lt $ladder.Count) { $candA = $ladder[$iCur] }
+      }
+      $pct = $candA
+      $lw = [int][math]::Round($pw * 100.0 / $pct)
+      $lh = [int][math]::Round($ph * 100.0 / $pct)
+      $disp = ('' + $lw + 'x' + $lh + '@' + $pct + '%')
+      if ($ovr -ne 0) { $disp = $disp + '*' }           # * = live override, best-effort
+      $lhWorst = [math]::Max([int][math]::Round($ph * 100.0 / $candA), [int][math]::Round($ph * 100.0 / $candB))
+      if ($lhWorst -lt 800) { $note = ('SMALL DESKTOP (toolbar may not fit; run set_seat_scale.ps1) ' + $note).Trim() }
+    }
+  }
+  Write-Output ("{0,-16} {1,-10} {2,-24} {3,7} {4,-15} {5}" -f $t, $backend, $ver, $disk, $disp, $note)
 }
 
 if (-not $Telemetry) { return }

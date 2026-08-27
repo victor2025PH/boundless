@@ -30,6 +30,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -48,13 +49,22 @@ STATE_FILENAME = "hosted_ai_token.json"
 #: 托管识图注入的 env 回放键（令牌本身复用 AITR_HOSTED_AI_KEY，避免两处各存一份会漂移）
 VISION_ENV_BASE = "AITR_HOSTED_VISION_BASE_URL"
 VISION_ENV_MODEL = "AITR_HOSTED_VISION_MODEL"
+#: 托管识图自动接入（2026-08-22 外网机实测「发图即拦、顶栏报 AI 不能自动回」）：
+#: 种子档 ``vision._hosted_auto`` 预授权 + 持设备令牌 → 运行时纯内存开启并接网关；
+#: 本 env 让热重载回放同样重放「自动开启」（否则 overlay 的 enabled:false 把识图抹回关）。
+VISION_ENV_AUTO = "AITR_HOSTED_VISION_AUTO"
 #: 托管克隆语音 / 语音识别（混合形态，2026-08-03）的 env 回放键：
 #: *_BASE_URL=网关挂载点；*_FIRST="1"＝注入时 LAN 探测不可达 → 网关排首位。
 VOICE_ENV_BASE = "AITR_HOSTED_VOICE_BASE_URL"
 VOICE_ENV_FIRST = "AITR_HOSTED_VOICE_FIRST"
 VOICE_ENV_HUBFISH_OFF = "AITR_HOSTED_HUBFISH_OFF"
+#: 托管自动接入（2026-08-19 报障群实测「客户部署与语音引擎零通路」）：种子档带
+#: ``avatar_voice._hosted_auto`` 预授权 + 持设备令牌 → 运行时纯内存开启并接网关；
+#: 本 env 让热重载回放同样重放「自动开启」（否则任何 overlay 写入把语音抹回关）。
+VOICE_ENV_AUTO = "AITR_HOSTED_VOICE_AUTO"
 ASR_ENV_BASE = "AITR_HOSTED_ASR_BASE_URL"
 ASR_ENV_FIRST = "AITR_HOSTED_ASR_FIRST"
+ASR_ENV_AUTO = "AITR_HOSTED_ASR_AUTO"
 #: 注入 voice_recognition 用的 api_key 占位值：OpenAITranscriber 在**调用时**把它
 #: 解析为当前设备令牌（AITR_HOSTED_AI_KEY）——转写器构建一次常驻，令牌 30 天
 #: 换新不能把旧值钉死在已构建实例里。
@@ -444,11 +454,19 @@ def ensure_hosted_vision(
 
     ``enabled`` 只在**从未表达过**时置 true（与 ``channel_setup.enable_on_ready`` 同
     口径）：显式 false 是运营用「全部关闭」表达过的意图，重启不该把它扳回来。
+    例外＝种子档 ``_hosted_auto`` 预授权且未 ``hosted_opt_out``：与语音/转写同构，
+    纯云客户（cloud_light ``enabled: false``）运行时纯内存自动开启走官网网关。
     """
     cfg = getattr(config_manager, "config", None) or {}
     if not _wants_hosted(cfg):
         return False
     v = cfg.get("vision") if isinstance(cfg.get("vision"), dict) else {}
+    # 托管自动接入（2026-08-22，与 ensure_hosted_voice/asr 同构）：种子档
+    # `_hosted_auto` 预授权 + 未 opt-out → 纯云客户（enabled:false 且零 LAN 种子）
+    # 也可运行时接入官网识图网关。退出走 vision.hosted_opt_out: true。
+    auto_ok = bool(v.get("_hosted_auto")) and not v.get("hosted_opt_out")
+    if v.get("hosted_opt_out"):
+        return False
     # 用户已自配识图后端（base_url/base_urls/智谱 key）→ 不动。
     # 两个例外：本模块此前注入的（_hosted_vision，允许续期刷新）；内测种子的
     # LAN 后端（_lan_seed，混合形态——LAN 可达保持直连、不可达由网关接管）。
@@ -491,6 +509,7 @@ def ensure_hosted_vision(
                 v.pop("_lan_backend", None)
                 os.environ.pop(VISION_ENV_BASE, None)
                 os.environ.pop(VISION_ENV_MODEL, None)
+                os.environ.pop(VISION_ENV_AUTO, None)
                 logger.info("[hosted-vision] LAN 识图后端恢复可达 → 还原直连")
             return False
         if stash is not None:
@@ -511,7 +530,12 @@ def ensure_hosted_vision(
     vision["model"] = str(model)
     vision["api_key"] = token
     vision["_hosted_vision"] = True
-    vision.setdefault("enabled", True)  # 显式 false = 运营关过，不扳回
+    if auto_ok:
+        vision["enabled"] = True
+        os.environ[VISION_ENV_AUTO] = "1"
+    else:
+        vision.setdefault("enabled", True)  # 显式 false = 运营关过，不扳回
+        os.environ.pop(VISION_ENV_AUTO, None)
     os.environ[VISION_ENV_BASE] = str(vision["base_url"])
     os.environ[VISION_ENV_MODEL] = str(model)
     logger.info("[hosted-vision] 识图已指向官网网关（我们的 GPU 模型 %s，用户无需配置）", model)
@@ -552,16 +576,29 @@ def _lan_bases(av: Dict[str, Any], *, exclude: str) -> list:
 
 
 def apply_hosted_voice(cfg: Dict[str, Any], hub_base: str, *,
-                       gateway_first: bool, hub_fish_off: bool) -> bool:
+                       gateway_first: bool, hub_fish_off: bool,
+                       auto_enable: bool = False) -> bool:
     """把网关端点排进 ``avatar_voice.base_urls``（纯内存变更）。
 
     ensure_hosted_voice 与 ConfigManager 的 env 回放共用本函数＝变更逻辑单一事实源。
     只动种子标记过（``_lan_seed``）或本模块注入过（``_hosted_voice``）的配置。
     hub_fish 是 LAN 专属高保真链且调用处**没有**健康预检——不可达时就地禁用
     （``_hosted_off`` 记账，可逆），否则外网机器 allowlist 人设每条语音硬吃 TCP 超时。
+
+    ``auto_enable``（2026-08-19 托管自动接入）：种子档 ``_hosted_auto`` 预授权且
+    用户未 ``hosted_opt_out`` → 就地把 ``enabled`` 翻 true 并纳入 ``_lan_seed``
+    管理域——纯内存，overlay 里的 ``enabled: false`` 保持原样（静态门禁语义不变，
+    自建/无令牌部署永不受影响——调用方只在持 cx 令牌时才传 True）。
     """
     av = cfg.get("avatar_voice") if isinstance(cfg.get("avatar_voice"), dict) else None
-    if not av or not (av.get("_lan_seed") or av.get("_hosted_voice")):
+    if not av:
+        return False
+    if (auto_enable and av.get("_hosted_auto")
+            and not av.get("hosted_opt_out")):
+        if not av.get("enabled"):
+            av["enabled"] = True
+        av.setdefault("_lan_seed", True)
+    if not (av.get("_lan_seed") or av.get("_hosted_voice")):
         return False
     hub = str(hub_base or "").rstrip("/")
     if not hub:
@@ -581,16 +618,29 @@ def apply_hosted_voice(cfg: Dict[str, Any], hub_base: str, *,
     return True
 
 
-def apply_hosted_asr(cfg: Dict[str, Any], gw_base: str, *, gateway_first: bool) -> bool:
+def apply_hosted_asr(cfg: Dict[str, Any], gw_base: str, *, gateway_first: bool,
+                     auto_enable: bool = False) -> bool:
     """把网关转写接进 ``voice_recognition``（纯内存变更；与 env 回放共用）。
 
     LAN 可达 → 主转写保持 LAN，网关作**最后一级** fallback；LAN 不可达 → 主转写
     换成网关（原 LAN 主位入 ``_lan_primary`` 暂存，回内网可逆还原）。api_key 用
     占位值 ``hosted``：OpenAITranscriber 在调用时解析当前设备令牌，换新不失效。
+
+    ``auto_enable``（2026-08-20 内测群实测「客户端语音消息识别不了」后补齐；与
+    apply_hosted_voice 同构）：种子档 ``_hosted_auto`` 预授权且用户未
+    ``hosted_opt_out`` → 就地把 ``enabled`` 翻 true 并纳入 ``_lan_seed`` 管理域
+    ——纯内存，overlay 里的 ``enabled: false`` 保持原样。
     """
     vr = (cfg.get("voice_recognition")
           if isinstance(cfg.get("voice_recognition"), dict) else None)
-    if not vr or not (vr.get("_lan_seed") or vr.get("_hosted_asr")):
+    if not vr:
+        return False
+    if (auto_enable and vr.get("_hosted_auto")
+            and not vr.get("hosted_opt_out")):
+        if not vr.get("enabled"):
+            vr["enabled"] = True
+        vr.setdefault("_lan_seed", True)
+    if not (vr.get("_lan_seed") or vr.get("_hosted_asr")):
         return False
     gw = str(gw_base or "").rstrip("/")
     if not gw:
@@ -647,9 +697,15 @@ def ensure_hosted_voice(
     if not _wants_hosted(cfg):
         return False
     av = cfg.get("avatar_voice") if isinstance(cfg.get("avatar_voice"), dict) else None
-    if not av or not av.get("enabled"):
+    if not av:
         return False
-    if not (av.get("_lan_seed") or av.get("_hosted_voice")):
+    # 托管自动接入（2026-08-19）：种子档 `_hosted_auto` 预授权 + 未 opt-out →
+    # 纯云客户（enabled:false 且零 LAN 种子）也可运行时接入官方语音网关。
+    # 用户显式退出走独立键 `hosted_opt_out: true`（与「档位种子默认关」语义分离）。
+    auto_ok = bool(av.get("_hosted_auto")) and not av.get("hosted_opt_out")
+    if not av.get("enabled") and not auto_ok:
+        return False
+    if not (av.get("_lan_seed") or av.get("_hosted_voice") or auto_ok):
         return False
     if not str((cfg.get("ai") or {}).get("api_key") or "").startswith("cx."):
         return False  # 网关要设备令牌鉴权，等 ensure_hosted_ai 先成
@@ -660,9 +716,14 @@ def ensure_hosted_voice(
     hub_fish_off = bool(
         hf and (hf.get("enabled") or hf.get("_hosted_off"))
         and not chk(str(hf.get("base_url") or "")))
-    apply_hosted_voice(cfg, hub, gateway_first=not lan_ok, hub_fish_off=hub_fish_off)
+    apply_hosted_voice(cfg, hub, gateway_first=not lan_ok,
+                       hub_fish_off=hub_fish_off, auto_enable=auto_ok)
     os.environ[VOICE_ENV_BASE] = hub
     os.environ[VOICE_ENV_FIRST] = "0" if lan_ok else "1"
+    if auto_ok:
+        os.environ[VOICE_ENV_AUTO] = "1"
+    else:
+        os.environ.pop(VOICE_ENV_AUTO, None)
     if hub_fish_off:
         os.environ[VOICE_ENV_HUBFISH_OFF] = "1"
     else:
@@ -689,9 +750,15 @@ def ensure_hosted_asr(
         return False
     vr = (cfg.get("voice_recognition")
           if isinstance(cfg.get("voice_recognition"), dict) else None)
-    if not vr or vr.get("enabled") is False:
+    if not vr:
         return False
-    if not (vr.get("_lan_seed") or vr.get("_hosted_asr")):
+    # 托管自动接入（2026-08-20，与 ensure_hosted_voice 同构）：种子档
+    # `_hosted_auto` 预授权 + 未 opt-out → 纯云客户（enabled:false 且零 LAN 种子）
+    # 也可运行时接入网关转写。退出走 voice_recognition.hosted_opt_out: true。
+    auto_ok = bool(vr.get("_hosted_auto")) and not vr.get("hosted_opt_out")
+    if vr.get("enabled") is False and not auto_ok:
+        return False
+    if not (vr.get("_lan_seed") or vr.get("_hosted_asr") or auto_ok):
         return False
     if not str((cfg.get("ai") or {}).get("api_key") or "").startswith("cx."):
         return False
@@ -700,9 +767,13 @@ def ensure_hosted_asr(
     stash = vr.get("_lan_primary") if isinstance(vr.get("_lan_primary"), dict) else None
     lan_primary = str((stash or {}).get("base_url") or vr.get("base_url") or "")
     lan_ok = bool(lan_primary) and lan_primary != gw and chk(lan_primary)
-    apply_hosted_asr(cfg, gw, gateway_first=not lan_ok)
+    apply_hosted_asr(cfg, gw, gateway_first=not lan_ok, auto_enable=auto_ok)
     os.environ[ASR_ENV_BASE] = gw
     os.environ[ASR_ENV_FIRST] = "0" if lan_ok else "1"
+    if auto_ok:
+        os.environ[ASR_ENV_AUTO] = "1"
+    else:
+        os.environ.pop(ASR_ENV_AUTO, None)
     logger.info("[hosted-asr] 语音识别已接入网关兜底（LAN %s）",
                 "直连优先" if lan_ok else "不可达 → 网关优先")
     return True
@@ -882,6 +953,93 @@ def schedule_forced_refresh(
     return True
 
 
+# ── 远程诊断拉取（2026-08-21，值守线奉命增设）─────────────────────────
+# 背景：内测用户不会走「设置页→一键上传→回读 6 位码」三步（B14 诊断码催了
+# 一上午没到）。既然诊断包本就自动直传官网并推送客服 TG（diag_upload.py），
+# 缺的只是**远程触发**：客服在官网登记「取包请求」（按机器指纹），客户端在
+# 启动后首查 + 每小时刷新轮顺带轻询一次，看到请求就地打包上传，用户零操作。
+# 隐私边界不变：包内容与用户手点「一键上传」完全同一实现（同一套打码规则），
+# 本功能只改「谁按下按钮」。已处理过的 request_id 进程内去重；服务端在收到
+# 回执（ack）后清 pending，双向兜底防重复上传。
+_diag_handled: set = set()
+
+
+def check_remote_diag(config_manager: Any, *, fetch: Optional[Fetch] = None) -> bool:
+    """轻询官网是否有针对本机的诊断请求；有则自动打包上传并回执。
+
+    返回是否完成了一次上传。所有失败静默（logger.debug）——诊断通道本身
+    绝不能成为新的故障源。轮询代价：每小时一次 GET，无请求时服务端 O(1) 空答。
+    """
+    cfg = getattr(config_manager, "config", None) or {}
+    if not _wants_hosted(cfg):
+        return False
+    try:
+        from src.licensing.machine_bridge import machine_fingerprint
+        fp = str(machine_fingerprint() or "")
+    except Exception:
+        fp = ""
+    if not fp:
+        return False
+    f = fetch or _http
+    site = _site_url(cfg)
+    resp = f(f"{site}/api/diag-request?fp={urllib.parse.quote(fp)}", "GET", None)
+    if not resp.get("ok") or not resp.get("requested"):
+        return False
+    req_id = str(resp.get("request_id") or "")
+    if not req_id or req_id in _diag_handled:
+        return False
+    _diag_handled.add(req_id)
+    try:
+        from src.utils.diag_upload import build_and_upload
+        out = asyncio.run(build_and_upload(
+            config_manager, note=f"remote-request:{req_id}"))
+    except Exception:
+        logger.debug("[remote-diag] 打包/上传异常（忽略）", exc_info=True)
+        _diag_handled.discard(req_id)   # 下轮可重试
+        return False
+    if not out.get("ok"):
+        logger.info("[remote-diag] 上传失败：%s", out.get("error"))
+        _diag_handled.discard(req_id)
+        return False
+    code = str(out.get("code") or "")
+    f(f"{site}/api/diag-request", "POST",
+      {"action": "ack", "fp": fp, "request_id": req_id, "code": code})
+    logger.info("[remote-diag] 应客服请求已自动上传诊断包，code=%s", code)
+    return True
+
+
+#: quota 捎带位触发的远程诊断在途闸（防 60s 轮询在上传期间叠加起线程）
+_diag_kick_lock = threading.Lock()
+
+
+def kick_remote_diag_async(config_manager: Any) -> bool:
+    """后台线程触发一次 :func:`check_remote_diag`（quota 捎带位的消费端，实施51）。
+
+    额度轮询看到 ``diag_requested`` 即调用——把远程拉取时延从「每小时守护轮」
+    压到「工作台开着 ~1 分钟」。非阻塞闸：上传在途时的后续 tick 直接返回 False
+    （check_remote_diag 自带 request_id 去重，这里的闸只省线程）；绝不阻塞
+    额度数据路径，任何异常静默。返回是否真的起了线程（可测性）。
+    """
+    if not _diag_kick_lock.acquire(blocking=False):
+        return False
+
+    def _run() -> None:
+        try:
+            check_remote_diag(config_manager)
+        except Exception:
+            logger.debug("[remote-diag] quota 捎带触发异常（忽略）", exc_info=True)
+        finally:
+            _diag_kick_lock.release()
+
+    try:
+        threading.Thread(target=_run, daemon=True,
+                         name="remote-diag-kick").start()
+        return True
+    except Exception:
+        _diag_kick_lock.release()
+        return False
+
+
 def refresh_once(config_manager: Any) -> None:
     """守护线程每轮做的事（抽成函数＝可被门禁直接调用，不必等一小时的 sleep）。
 
@@ -895,6 +1053,8 @@ def refresh_once(config_manager: Any) -> None:
     此前只在启动时领一次——首启没网/官网抖动错过那一发，用户就一直停在「填
     API ID/Hash」表单直到重启。已注入/用户自填时它秒级短路（不发 HTTP），
     只有缺凭据时每小时多一次补领请求。
+
+    远程诊断请求也在此轻询（2026-08-21）：见 :func:`check_remote_diag`。
     """
     try:
         ensure_hosted_ai(config_manager)
@@ -904,6 +1064,10 @@ def refresh_once(config_manager: Any) -> None:
         ensure_hosted_asr(config_manager)
     except Exception:
         logger.debug("[hosted-ai] 刷新守护异常（忽略）", exc_info=True)
+    try:
+        check_remote_diag(config_manager)
+    except Exception:
+        logger.debug("[remote-diag] 轮询异常（忽略）", exc_info=True)
 
 
 def start_refresh_daemon(config_manager: Any, *, interval_sec: int = 3600) -> bool:
@@ -923,6 +1087,13 @@ def start_refresh_daemon(config_manager: Any, *, interval_sec: int = 3600) -> bo
         _daemon_started = True
 
     def _loop() -> None:
+        # 启动后 ~2 分钟先查一次远程诊断请求：客服等包的场景要的是分钟级
+        # 响应，不能等第一个小时轮（ensure_* 启动段 main.py 已跑过，不重复）。
+        time.sleep(120)
+        try:
+            check_remote_diag(config_manager)
+        except Exception:
+            logger.debug("[remote-diag] 首查异常（忽略）", exc_info=True)
         while True:
             time.sleep(max(300, int(interval_sec)))
             refresh_once(config_manager)
@@ -950,14 +1121,32 @@ def quota_probe(config_manager: Any, *, fetch: Optional[Fetch] = None,
         f = fetch or (lambda u, m, b: _http(u, m, b, bearer=token))
         resp = f(f"{_gateway_base(cfg)}/quota", "GET", None)
         if resp.get("ok"):
+            _budget = int(resp.get("budget") or 0)
+            # B82（实施68）：无限额期（B40 内测放开 / 套餐不限量）——官网显式带
+            # ``unlimited`` 位，或 budget<=0（历史「0=不限量」约定，与 daily_reply_budget
+            # 同口径）→ 归一 unlimited。前端据此**不算百分比、不弹「仅剩 3%」预警**：
+            # 放开了却还倒计时是坐席的直接困惑（skuio 08-25 实录，B40 放开态失效误报）。
+            _unlimited = bool(resp.get("unlimited")) or _budget <= 0
             out = {
                 "enabled": True,
                 "used": int(resp.get("used") or 0),
-                "budget": int(resp.get("budget") or 0),
+                "budget": _budget,
                 "remaining": int(resp.get("remaining") or 0),
                 "busy": bool(resp.get("busy")),
-                "exhausted": int(resp.get("remaining") or 0) <= 0,
+                "unlimited": _unlimited,
+                # 无限额绝不判用尽（remaining 在不限量下无意义，官网可能回 0）
+                "exhausted": (False if _unlimited
+                              else int(resp.get("remaining") or 0) <= 0),
             }
+            # 实施51：官网在额度响应里捎带「有未兑现的远程取包请求」位 →
+            # 后台触发 check_remote_diag（非阻塞，见 kick_remote_diag_async）。
+            # 键仅在 true 时携带；老官网无此键=永不触发，行为不变。
+            if resp.get("diag_requested"):
+                try:
+                    kick_remote_diag_async(config_manager)
+                except Exception:
+                    logger.debug("[remote-diag] quota 捎带位处理异常（忽略）",
+                                 exc_info=True)
         else:
             out = {"enabled": True, "error": str(resp.get("error") or "network")}
         # 额度用尽时刻＝最高转化意向时刻：把本机绑定码带给前端升级弹窗

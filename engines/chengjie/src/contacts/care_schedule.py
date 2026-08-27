@@ -107,12 +107,26 @@ class CareScheduleStore:
         min_confidence: float = _DEFAULT_MIN_CONFIDENCE,
         dedup_window_days: float = _DEFAULT_DEDUP_WINDOW_DAYS,
     ) -> Optional[int]:
-        """落一条关怀待办；置信度不足或近窗同主题已有 pending → 跳过返回 None（绝不抛）。"""
+        """落一条关怀待办；置信度不足或近窗同主题已有 pending → 跳过返回 None（绝不抛）。
+
+        B68（实施67 P2-i）：远期到期日 sanity——解析产物 due/event 落在一年开外
+        （>370 天）＝几乎必是日期解析错误（实锤：报告长文里的日期被抓成 2027 年
+        约定），捕获侧直接拦下（派发侧「远日期 chip」只是显示层，垃圾不该入库）。
+        """
         if commitment.confidence < float(min_confidence):
             return None
+        now = time.time()
+        _far = 370.0 * _DAY
+        try:
+            if (float(commitment.due_at) > now + _far
+                    or float(commitment.event_at) > now + _far):
+                logger.info("[care] 远期到期日拦下（疑日期解析错误）：topic=%s due=%s",
+                            str(commitment.topic)[:40], commitment.due_at)
+                return None
+        except Exception:
+            pass
         tnorm = _topic_norm(commitment.topic)
         win = float(dedup_window_days) * _DAY
-        now = time.time()
         try:
             with self._lock:
                 # 去重：同 contact + 同主题 + due 邻近窗口内已有 pending → 不重复
@@ -230,6 +244,21 @@ class CareScheduleStore:
                             [str(contact_key), str(status)], max(1, min(int(limit), 500)))
         return self._rows(" WHERE contact_key = ?", [str(contact_key)],
                         max(1, min(int(limit), 500)))
+
+    def recent_sent_texts(self, contact_key: str, *, limit: int = 5) -> List[str]:
+        """某联系人最近真发过的关怀话术（B110④ 防重负样本，最新在前）。
+
+        只取非空 ``sent_text`` 的 sent 行（含 dry_run 拟稿快照——坐席可能放行
+        同款，句式同样该规避）；排序与 ``list_history`` 同键。喂
+        ``build_care_prompt(recent_sent=)`` 当负样本，修「同客户连发五条
+        『想你了』式模板」（0826 _527 实录）。
+        """
+        rows = self._rows(
+            " WHERE contact_key = ? AND status = 'sent' AND sent_text != ''",
+            [str(contact_key)], max(1, min(int(limit), 20)),
+            order_by=self._HISTORY_ORDER)
+        return [str(r.get("sent_text") or "").strip() for r in rows
+                if str(r.get("sent_text") or "").strip()]
 
     def count_pending_by_contact(self, contact_key: str) -> int:
         """某联系人当前 pending 关怀数（健康卡 pending_care 信号）。"""

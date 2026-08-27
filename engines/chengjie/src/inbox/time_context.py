@@ -233,17 +233,39 @@ def daypart_label(hour: int) -> str:
     return "深夜"
 
 
-def build_now_anchor_hint(now: Optional[float] = None) -> str:
+def build_now_anchor_hint(
+    now: Optional[float] = None,
+    *,
+    local_now: Any = None,
+    place_label: str = "",
+) -> str:
     """当前时刻锚点：日期/星期/时刻/时段 + 一致性约束（进 _topic_switch_hint）。
 
     刻意只给「事实 + 约束」，不指示复述时间——真人不会每句话报时；
     这行治的是「晚上 9 点生成『早安』体」这类时段错位。
+
+    ``local_now``（2026-08-22 双时钟事故修复）：**人设当地** naive 时间。
+    跨时区人设（温哥华/旧金山…）必须传——否则本行按服务器钟出「深夜」，
+    而 ai_client 的【当前真实时间】按人设当地钟出「中午」，同一个 prompt
+    两个「现在」连日期都可能差一天，LLM 每条随机站队＝生产实录
+    「一会白天一会晚上」的根因。``place_label`` 非空时钟面标注「（XX当地）」，
+    与 ai_client 时间行同口径。两参均缺省＝服务器钟旧行为（无居住地人设
+    的正确语义，逐字节兼容）。
     """
-    t = time.localtime(now if now is not None else time.time())
-    part = daypart_label(t.tm_hour)
+    import datetime as _dt
+
+    if isinstance(local_now, _dt.datetime):
+        _y, _mo, _d = local_now.year, local_now.month, local_now.day
+        _wd, _hh, _mi = local_now.weekday(), local_now.hour, local_now.minute
+    else:
+        t = time.localtime(now if now is not None else time.time())
+        _y, _mo, _d = t.tm_year, t.tm_mon, t.tm_mday
+        _wd, _hh, _mi = t.tm_wday, t.tm_hour, t.tm_min
+    part = daypart_label(_hh)
+    _where = f"（{place_label}当地）" if str(place_label or "").strip() else ""
     return (
-        f"【当前时间】现在是 {t.tm_year}-{t.tm_mon:02d}-{t.tm_mday:02d}"
-        f"（{_WEEKDAYS[t.tm_wday]}）{t.tm_hour:02d}:{t.tm_min:02d}，{part}。"
+        f"【当前时间】现在是 {_y}-{_mo:02d}-{_d:02d}"
+        f"（{_WEEKDAYS[_wd]}）{_hh:02d}:{_mi:02d}{_where}，{part}。"
         "回复中涉及时段/日期/问候（早安、晚安、吃了吗等）必须与当前时间一致，"
         "不要沿用对话历史里旧消息的时段。"
     )

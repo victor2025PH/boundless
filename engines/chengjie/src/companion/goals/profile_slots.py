@@ -204,6 +204,18 @@ def slot_value(fields: Optional[Dict[str, Any]], key: str) -> str:
     return str(cell or "").strip()
 
 
+def slot_src(fields: Optional[Dict[str, Any]], key: str) -> str:
+    """读槽位值来源（``auto`` 正则 / ``llm`` 抽取 / ``agent`` 人工）。
+
+    裸值（旧行）/无值/未知来源 → ""——消费方（目标卡打勾清单）据此标注
+    「AI 猜的还是人核实的」；空串=不标注，绝不猜。"""
+    cell = (fields or {}).get(str(key or ""))
+    if isinstance(cell, dict) and str(cell.get("v") or "").strip():
+        s = str(cell.get("src") or "").strip().lower()
+        return s if s in ("auto", "llm", "agent") else ""
+    return ""
+
+
 def facts_line(
     fields: Optional[Dict[str, Any]], *, limit: int = 5, max_chars: int = 88,
 ) -> str:
@@ -365,6 +377,31 @@ _AGE_RE = re.compile(
 # 年龄段：「我(是)90后/00后」——存段标签，诚实不虚构具体岁数
 _AGE_BAND_RE = re.compile(r"我(?:是)?\s*((?:[5-9]0|00)后)")
 
+# 兴趣（P3 2026-08-18）：此前四个 relation 槽独缺 interests 正则——出厂默认
+# （profile_llm 关）下摸底目标的兴趣槽永远只能人工补录。只认第一人称爱好
+# 自述，三道防线（宁可漏采）：
+# ① 锚定「我…喜欢/爱好是/热爱」且副词白名单（很/最/特别…都是正向词；
+#    「不/没/别」不在白名单 → 「我不喜欢X」整体不命中）；
+# ② 宾语含人称代词/疑问指代（含首字碎片「的/了/上…」）整条放弃——陪聊语境
+#    「我喜欢你/听你说话/和你聊天」高频，是关系话术不是兴趣；刻意不收裸
+#    「爱」触发词（「我爱你/爱死你了」变体太多，漏采兴趣好过错把情话入档）；
+# ③ 宾语 2..12 字、截断于标点，尾部语气词剥离。
+_INTERESTS_RE = re.compile(
+    r"我(?:平时|周末|闲下来|没事(?:的时候)?|一直|比较|挺|很|最|特别|超|真的|蛮)*"
+    r"(?:喜欢|爱好是|热爱)"
+    r"([\u4e00-\u9fffA-Za-z][\u4e00-\u9fff A-Za-z0-9]{1,11})(?=[，。,.!！?？;；~～\s]|$)")
+_INTERESTS_EN_RE = re.compile(
+    r"\bI\s+(?:really\s+|just\s+)?(?:love|enjoy)\s+"
+    r"([a-z][a-z ]{2,18}?)(?=[,.!?;]|$)", re.IGNORECASE)
+# 宾语任意位置的人称/指代（中英）——命中即整条放弃（关系话术拦截网）
+_INTERESTS_PRONOUN_RE = re.compile(
+    r"[你妳您我他她它]|\b(?:you|your|him|her|me|us|them)\b", re.IGNORECASE)
+# 宾语首字碎片黑名单：疑问/指代/虚词开头=截出来的不是爱好
+_INTERESTS_STOP = re.compile(
+    r"^(?:谁|啥|什么|这|那|上|的|了|就|不|没|it\b|this\b|that\b)",
+    re.IGNORECASE)
+_INTERESTS_TRAIL_RE = re.compile(r"(?:啦|哈|呢|哦|喔|嘛|呀|吧|了)+$")
+
 
 def capture_from_text(text: str) -> List[Tuple[str, str]]:
     """从一条入站消息确定性抽画像槽位。返回 ``[(slot_key, value), ...]``。
@@ -444,6 +481,13 @@ def capture_from_text(text: str) -> List[Tuple[str, str]]:
         if m:
             _add("age", m.group(1))
 
+    m = _INTERESTS_RE.search(t) or _INTERESTS_EN_RE.search(t)
+    if m:
+        hobby = _INTERESTS_TRAIL_RE.sub("", m.group(1).strip()).strip()
+        if (len(hobby) >= 2 and not _INTERESTS_STOP.match(hobby)
+                and not _INTERESTS_PRONOUN_RE.search(hobby)):
+            _add("interests", hobby)
+
     return out
 
 
@@ -512,5 +556,6 @@ __all__ = [
     "selected_fill_rate",
     "slot_keys",
     "slot_label",
+    "slot_src",
     "slot_value",
 ]

@@ -21,8 +21,8 @@ window.WS_LANG = window.WS_LANG || "{{ ui_lang|default('zh') }}";
 /* locale 映射表驱动（xlate P3）：加 UI 语言改下一行与 i18n_packs.UI_LOCALES 两处即可。
    （用 JS 注释而非 Jinja 注释——本文件头部纪律：script 内不写 Jinja 定界符，
    否则 test_template_inline_js_syntax 的掩码器不剥注释定界符会把它当坏 JS。） */
-window.WS_LOCALE = window.WS_LOCALE || "{{ {'zh':'zh-CN','en':'en-US','vi':'vi-VN','th':'th-TH','id':'id-ID'}.get(ui_lang|default('zh'), 'en-US') }}";
-window.wsDateLocale = function(){ if(window.WS_LOCALE) return window.WS_LOCALE; var m={zh:'zh-CN',en:'en-US',vi:'vi-VN',th:'th-TH',id:'id-ID'}; return m[window.WS_LANG]||'zh-CN'; };
+window.WS_LOCALE = window.WS_LOCALE || "{{ {'zh':'zh-CN','en':'en-US','vi':'vi-VN','th':'th-TH','id':'id-ID','zh_hant':'zh-Hant'}.get(ui_lang|default('zh'), 'en-US') }}";
+window.wsDateLocale = function(){ if(window.WS_LOCALE) return window.WS_LOCALE; var m={zh:'zh-CN',en:'en-US',vi:'vi-VN',th:'th-TH',id:'id-ID',zh_hant:'zh-Hant'}; return m[window.WS_LANG]||'zh-CN'; };
 window.wsFmtDate = function(ts, opts){
   if(ts==null||ts==='') return '';
   var d=new Date(ts<1e12?ts*1000:ts);
@@ -44,9 +44,14 @@ window.Tf = function(k, vars){ var s = window.T(k); if(vars){ for(var p in vars)
 /* 语言切换（xlate P3 升级）：三语循环 → 就地五语选择器。所有调用点（顶栏 pill /
    用户菜单 / 各页兜底）零改动自动升级；语言名用其母语自称（选择器惯例，刻意不随
    UI 语言翻译——zh 自称用 unicode 转义写，守住共享 partial 零裸 CJK 门禁）。
-   th/id 标 β=覆盖渐进（en 底回落）。异常一律回落旧式循环，绝不让切换入口失效。 */
+   th/id 标 β=覆盖渐进（en 底回落）。第三列=覆盖范围小字（母语，切换前诚实告知
+   「部分页面仍是英文」，防误切后的「假支持」观感；语种转正时删这一列即可）。
+   异常一律回落旧式循环，绝不让切换入口失效。 */
 window.WS_UI_LANGS = window.WS_UI_LANGS || [
-  ['zh','\u4e2d\u6587'], ['en','English'], ['vi','Ti\u1ebfng Vi\u1ec7t'], ['th','\u0e44\u0e17\u0e22 (\u03b2)'], ['id','Bahasa Indonesia (\u03b2)']
+  ['zh','\u4e2d\u6587'], ['zh_hant','\u7e41\u9ad4\u4e2d\u6587'], ['en','English'],
+  ['vi','Ti\u1ebfng Vi\u1ec7t','M\u1ed9t s\u1ed1 trang v\u1eabn hi\u1ec3n th\u1ecb ti\u1ebfng Anh'],
+  ['th','\u0e44\u0e17\u0e22 (\u03b2)','\u0e1a\u0e32\u0e07\u0e2b\u0e19\u0e49\u0e32\u0e22\u0e31\u0e07\u0e41\u0e2a\u0e14\u0e07\u0e40\u0e1b\u0e47\u0e19\u0e20\u0e32\u0e29\u0e32\u0e2d\u0e31\u0e07\u0e01\u0e24\u0e29'],
+  ['id','Bahasa Indonesia (\u03b2)','Sebagian halaman masih dalam bahasa Inggris']
 ];
 window.wsToggleLang = function(ev){
   try{
@@ -55,17 +60,32 @@ window.wsToggleLang = function(ev){
     var cur=window.WS_LANG||'zh';
     var box=document.createElement('div'); box.id='ws-lang-menu';
     box.style.cssText='position:fixed;z-index:10050;background:var(--tk-surface,#fff);color:var(--tk-text,#16223a);border:1px solid var(--tk-border,#d7dce3);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.18);padding:4px;min-width:172px;font-size:13px;';
-    var langs=window.WS_UI_LANGS||[];
+    /* 「跟随系统」置顶项（自动跟随 2026-08-27）：无 ui_lang cookie = 当前就在跟随态。
+       文案走词典（随当前 UI 语言），语言行仍用母语自称。 */
+    var isAuto = document.cookie.indexOf('ui_lang=') === -1;
+    var langs=[['auto', (window.T ? window.T('base.lang.follow_sys') : 'Auto'),
+                (window.T ? window.T('base.lang.follow_sys_t') : ''), isAuto]]
+      .concat(window.WS_UI_LANGS||[]);
     for(var i=0;i<langs.length;i++){
-      (function(code,label){
+      (function(code,label,note,mark){
+        var on = mark || (code===cur && !isAuto);
         var a=document.createElement('div');
-        a.textContent=(code===cur?'✓ ':'')+label;
-        a.style.cssText='padding:7px 12px;border-radius:7px;cursor:pointer;white-space:nowrap;'+(code===cur?'font-weight:700;':'');
+        a.textContent=(on?'✓ ':'')+label;
+        a.style.cssText='padding:7px 12px;border-radius:7px;cursor:pointer;white-space:nowrap;'+(on?'font-weight:700;':'')+(code==='auto'?'border-bottom:1px solid var(--tk-border,#d7dce3);border-radius:7px 7px 0 0;margin-bottom:2px;':'');
+        if(note){
+          a.title=note;
+          if(code!=='auto'){
+            var sub=document.createElement('div');
+            sub.textContent=note;
+            sub.style.cssText='font-size:11px;opacity:.65;font-weight:400;margin-top:2px;white-space:normal;max-width:220px;';
+            a.appendChild(sub);
+          }
+        }
         a.onmouseenter=function(){ a.style.background='rgba(125,125,125,.14)'; };
         a.onmouseleave=function(){ a.style.background=''; };
         a.onclick=function(){ location.href='/set_lang?lang='+code; };
         box.appendChild(a);
-      })(langs[i][0], langs[i][1]);
+      })(langs[i][0], langs[i][1], langs[i][2], langs[i][3]);
     }
     document.body.appendChild(box);
     var e=ev||window.event;

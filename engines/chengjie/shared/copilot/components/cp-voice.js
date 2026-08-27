@@ -4,7 +4,10 @@
    用法:
      el.client = CopilotShared.createCopilotClient();
      el.context = { platform, accountId, chatKey, conversationId };
-   监听 cp-fill 自动填入草稿文字。发送成功 emit cp-voice-sent。 */
+   监听 cp-fill 自动填入草稿文字。发送成功 emit cp-voice-sent。
+   B25-①（2026-08-21）另有登记专用档：<cp-voice mode="enroll" persona="pid">——
+   只渲染登记/改绑/对账段（免会话上下文，赋 client 即渲染），persona 属性预选目标
+   人设；人设页与收件箱右栏共用同一登记流（单源两挂载点，避免双端重复维护）。 */
 (function (root) {
   const VOICE_KEY = "ws_voice_persona_v1";
 
@@ -31,9 +34,8 @@
       this._persona = "";
       this._enrollOpen = false;
       this._lastReconcile = null;
-      // P0「从消息一键导入」：气泡上点「克隆音色」→ prefillEnroll() 填充；
-      // {media_ref, platform, conversation_id, message_id}，非空即「消息导入模式」
-      // （登记免选文件，服务端直读会话归档语音）。
+      // B115（实施74）：旧「从消息一键导入」预填源已随工具箱登记块撤除，
+      // 本字段保留恒 null（_enroll 的 src 分支自然不走，改动面最小）。
       this._prefillSrc = null;
       // ── 生成/发送状态机（P0 2026-08-05：修「预览清不掉 / 生成入口迷失 / 连点双发」）──
       // _busy: "" | "tts" | "send"，请求期互斥闸门（连点＝双烧 GPU / 给客户双发）；
@@ -112,8 +114,13 @@
       .srcchip button { padding:0 5px; line-height:16px; }`;
     }
 
-    set client(c) { this._client = c; }
+    set client(c) {
+      this._client = c;
+      // 登记专用档没有 context 喂入时机：赋 client 即渲染（重复赋值幂等重渲）。
+      if (c && this._mode() === "enroll") this._renderEnrollOnly();
+    }
     get client() { return this._client; }
+    _mode() { return (this.getAttribute("mode") || "").trim(); }
     set context(ctx) {
       this._ctx = ctx;
       this._persona = this._loadPersona();
@@ -121,6 +128,29 @@
       this._loadProfiles();
     }
     get context() { return this._ctx; }
+
+    /* B25-① 登记专用档（人设页挂载）：只出登记/改绑/对账段——生成/发送需要会话
+       上下文，留在收件箱右栏。目标人设按 persona 属性预选，显示名空则预填人设名
+       （少打一格字；仍可改）。 */
+    async _renderEnrollOnly() {
+      this._enrollOpen = true;
+      this.shadowRoot.innerHTML = `<style>${this._css()}</style>
+        <div class="wrap"><div data-role="enroll">${this._enrollHtml()}</div></div>`;
+      await this._loadEnrollPersonas();
+      const pid = (this.getAttribute("persona") || "").trim();
+      if (pid) {
+        const sel = this.shadowRoot.querySelector('[data-role="epersona"]');
+        if (sel) {
+          sel.value = pid;
+          const opt = sel.selectedOptions && sel.selectedOptions[0];
+          const nameEl = this.shadowRoot.querySelector('[data-role="ename"]');
+          if (opt && opt.value === pid && nameEl && !nameEl.value) {
+            nameEl.value = (opt.textContent || "").replace(/\s*🎤$/, "").trim();
+          }
+        }
+      }
+      this._reconcile();
+    }
 
     _convKey() {
       const c = this._ctx || {};
@@ -133,6 +163,7 @@
       } catch (e) { return ""; }
     }
     _savePersona(v) {
+      if (!this._ctx) return;   // 登记专用档无会话：不写「::」垃圾键进音色偏好表
       try {
         const m = JSON.parse(localStorage.getItem(VOICE_KEY) || "{}");
         m[this._convKey()] = v;
@@ -300,19 +331,15 @@
           <button class="primary" data-act="tts" data-role="gen-main">${this._genLabelHtml()}</button>
           <select data-role="persona" title="${this._esc(this._t("cp.voice.persona_title"))}"></select>
           <button data-act="unbind" title="${this._esc(this._t("cp.voice.unbind_title"))}">${this._ic("trash", 13)}</button>
-          <button data-act="toggle-enroll" title="${this._esc(this._t("cp.voice.enroll_title"))}">${this._t("cp.voice.enroll_btn")}</button>
         </div>
         <div data-role="effstatus" class="hint" hidden></div>
         <textarea data-role="text" placeholder="${this._esc(this._t("cp.voice.text_ph"))}"></textarea>
         <div class="cnt" data-role="cnt" hidden></div>
-        <div class="hint">${this._t("cp.voice.hint")}</div>
-        <div data-role="preview" class="preview" hidden></div>
-        <div data-role="enroll" class="panel" hidden>${this._enrollHtml()}</div>`;
-      if (this._enrollOpen) {
-        const ep = this.shadowRoot.querySelector('[data-role="enroll"]');
-        if (ep) ep.hidden = false;
-        this._loadEnrollPersonas();
-      }
+        <div class="hint">${this._t("cp.voice.hint")} ${this._t("cp.voice.enroll_moved")}</div>
+        <div data-role="preview" class="preview" hidden></div>`;
+      /* B115（实施74，B25-① 口径落定）：工具箱撤克隆「录入+登记」整块——
+         登记只留人设页语音区一个入口（本组件 mode="enroll" 挂载档保留）。
+         生成/试听/发送功能不动；hint 里指路人设页防「功能消失」误报。 */
     }
 
     _enrollHtml() {
@@ -392,27 +419,10 @@
       if (act === "clear-preview") { this._clearPreview(); return; }
       if (act === "cancel-gen") { this._cancelGen(); return; }
       if (act === "unbind") return this._unbind();
-      if (act === "toggle-enroll") {
-        this._enrollOpen = !this._enrollOpen;
-        const ep = this.shadowRoot.querySelector('[data-role="enroll"]');
-        if (ep) {
-          ep.hidden = !this._enrollOpen;
-          if (this._enrollOpen) {
-            this._prefillSrc = null;   // 手动展开＝上传模式（面板重建后 chip 已不在，状态同步清）
-            ep.innerHTML = this._enrollHtml();
-            this._loadEnrollPersonas();
-            this._reconcile();
-          }
-        }
-        return;
-      }
+      /* B115：toggle-enroll / clear-src 分支随工具箱登记块一并撤除——
+         enroll-submit/force/rebind/reconcile 仍服务人设页 mode="enroll" 档。 */
       if (act === "enroll-submit") return this._enroll(false);
       if (act === "enroll-force") return this._enroll(true);
-      if (act === "clear-src") {
-        this._prefillSrc = null;
-        this._renderSrcChip();
-        return;
-      }
       if (act === "rebind") return this._rebind();
       if (act === "reconcile") return this._reconcile();
       if (act === "purge-orphans") return this._purgeOrphans();
@@ -487,7 +497,8 @@
       this._previewText = text;
       this._previewPersona = persona;
       this._previewFilename = String((d && d.filename) || "");
-      const fb = ((d && d.voice_meta) || {}).fallback_from;
+      const _vm = ((d && d.voice_meta) || {});
+      const fb = _vm.fallback_from || _vm.voice_mapped_from;
       box.innerHTML =
         `<div class="row pv-hd"><span>${this._ic("mic", 12)} ${this._t("cp.voice.preview")}</span>` +
         `<span class="pv-actions">` +
@@ -497,10 +508,46 @@
         `<audio controls src="${url}"></audio>` +
         this._metaLine(d) +
         (fb ? `<div class="hint warn">${this._esc(this._t("cp.voice.fallback_warn"))}</div>` : "") +
+        `<div class="hint err" data-role="silent-note" hidden>${this._esc(this._t("cp.voice.silent_note"))}</div>` +
         `<div class="hint err" data-role="stale-note" hidden>${this._esc(this._t("cp.voice.stale_note"))}</div>` +
         `<div class="row" style="justify-content:flex-end;margin-top:6px;">` +
         `<button class="primary" data-act="send">${this._t("cp.voice.send_btn")}</button></div>`;
       this._syncStale();   // 生成期间若已改字/换音色，立即标过期
+      this._sniffSilence(url);   // B61：疑似无声产物 → 显式警示（best-effort）
+    }
+
+    /** B61 哑音警示（2026-08-23）：服务端能量闸兜大头，但客户机 ffmpeg 缺席时
+     *  压缩产物判不了——浏览器这端用 WebAudio 解码测峰值补盲区。任何失败静默
+     *  （检测是增益不是闸门）；epoch 变了（切会话/重新生成）不回写 DOM。 */
+    async _sniffSilence(url) {
+      const ep = this._epoch;
+      let silent = false;
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC || !window.fetch) return;
+        const r = await fetch(url);
+        if (!r.ok) return;
+        const buf = await r.arrayBuffer();
+        const ac = new AC();
+        try {
+          const audio = await ac.decodeAudioData(buf);
+          const ch = audio && audio.numberOfChannels ? audio.getChannelData(0) : null;
+          if (!ch || !ch.length) return;
+          const step = Math.max(1, Math.floor(ch.length / 48000));
+          let peak = 0;
+          for (let i = 0; i < ch.length; i += step) {
+            const a = Math.abs(ch[i]);
+            if (a > peak) peak = a;
+          }
+          silent = peak < 0.004;
+        } finally {
+          try { ac.close(); } catch (e) { /* 忽略 */ }
+        }
+      } catch (e) { return; }
+      if (!silent || ep !== this._epoch) return;
+      const note = this.shadowRoot
+        && this.shadowRoot.querySelector('[data-role="silent-note"]');
+      if (note) note.hidden = false;
     }
 
     async _sendVoice() {
@@ -575,55 +622,10 @@
       } catch (e) { this._hint(this._t("cp.voice.unbind_fail"), false); }
     }
 
-    /* 从会话语音消息预填登记表单（宿主气泡「克隆音色」按钮调用）。
-       data: {media_ref, name?, reference_text?, language?, platform?,
-              conversation_id?, message_id?}。media_ref 为空则忽略。 */
-    prefillEnroll(data) {
-      const d = data || {};
-      if (!d.media_ref || !this._ctx || !this._ctx.chatKey) return;
-      if (!this._enrollOpen) {
-        this._enrollOpen = true;
-        const ep = this.shadowRoot.querySelector('[data-role="enroll"]');
-        if (ep) {
-          ep.hidden = false;
-          ep.innerHTML = this._enrollHtml();
-          this._loadEnrollPersonas();
-          this._reconcile();
-        }
-      }
-      this._prefillSrc = {
-        media_ref: String(d.media_ref || ""),
-        platform: String(d.platform || ""),
-        conversation_id: String(d.conversation_id || ""),
-        message_id: String(d.message_id || ""),
-      };
-      const q = (r) => this.shadowRoot.querySelector(`[data-role="${r}"]`);
-      const nameEl = q("ename");
-      if (nameEl && d.name && !nameEl.value) nameEl.value = String(d.name).slice(0, 40);
-      const refEl = q("ereftext");
-      if (refEl && d.reference_text) refEl.value = String(d.reference_text);
-      const langEl = q("elang");
-      const lt = ({ zh: "Chinese", en: "English", ja: "Japanese" })[
-        String(d.language || "").toLowerCase().slice(0, 2)];
-      if (langEl && lt) langEl.value = lt;
-      this._renderSrcChip();
-      const hint = q("ehint");
-      if (hint) hint.textContent = this._t("cp.voice.prefilled_hint");
-    }
-
-    _renderSrcChip() {
-      const box = this.shadowRoot.querySelector('[data-role="esrc"]');
-      const file = this.shadowRoot.querySelector('[data-role="efile"]');
-      if (!box) return;
-      if (this._prefillSrc && this._prefillSrc.media_ref) {
-        box.innerHTML = `<div class="row srcchip">${this._ic("headphones", 13)} <span>${this._esc(this._t("cp.voice.src_msg"))}</span>
-          <button data-act="clear-src" title="${this._esc(this._t("cp.voice.src_clear_t"))}">${this._ic("x", 12)}</button></div>`;
-        if (file) file.style.display = "none";   // 消息导入模式：免选文件，防两个来源歧义
-      } else {
-        box.innerHTML = "";
-        if (file) file.style.display = "";
-      }
-    }
+    /* B115（实施74）：prefillEnroll「从消息一键导入」随工具箱登记块一并撤除
+      （撤前已无任何宿主调用方=死代码）；登记单一入口=人设页语音区
+       mode="enroll" 档。_prefillSrc 字段保留恒 null（_enroll 的 src 分支自然
+       不走，改动面最小）。 */
 
     async _enroll(force) {
       const file = this.shadowRoot.querySelector('[data-role="efile"]');

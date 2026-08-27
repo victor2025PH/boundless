@@ -27,9 +27,12 @@ def test_dry_run_unsupported_rejected():
 
 
 def test_enable_child_blocked_when_parent_off():
-    # companion.enabled 关 → 开 proactive_topic 被拒
+    # companion.enabled 关 → 开 proactive_topic 被拒。
+    # B37-3（2026-08-22）：拒因走人话（注册表反查父开关 label），不再亮 config
+    # 路径/内部代号——文案面向客户包 verbatim 直显。
     r = check_toggle({"companion": {"enabled": False}}, {}, "proactive_topic", "enabled", True)
-    assert r["allowed"] is False and "父总开关" in r["reason"]
+    assert r["allowed"] is False and "上级功能" in r["reason"]
+    assert "companion.enabled" not in r["reason"] or "「" in r["reason"]
 
 
 # ── 护栏：主开关「全自动真发」双重 opt-in ──────────────────────────────────
@@ -37,13 +40,33 @@ def test_enable_child_blocked_when_parent_off():
 def test_master_deliver_blocked_no_worker():
     cfg = {"inbox": {"l2_autosend": {"enabled": False, "deliver": False}}}
     r = check_toggle(cfg, {"c1": "auto_ai"}, "l2_autosend_deliver", "enabled", True)
-    assert r["allowed"] is False and "worker" in r["reason"]
+    assert r["allowed"] is False and "拟稿引擎" in r["reason"]
+    # B37-3 人话铁律：拒因不得再亮 config 路径黑话
+    assert "inbox.l2_autosend" not in r["reason"]
 
 
 def test_master_deliver_blocked_no_autoai():
-    cfg = {"inbox": {"l2_autosend": {"enabled": True, "deliver": False}}}
+    # 全局默认档非全自动（review）且零 auto_ai 会话 → 拦（旧不变量保持）
+    cfg = {"inbox": {"l2_autosend": {"enabled": True, "deliver": False},
+                     "auto_draft": {"automation_mode": "review"}}}
     r = check_toggle(cfg, {"c1": "review"}, "l2_autosend_deliver", "enabled", True)
-    assert r["allowed"] is False and "auto_ai" in r["reason"]
+    assert r["allowed"] is False and "全自动" in r["reason"]
+    assert "auto_ai" not in r["reason"]
+
+
+def test_master_deliver_allowed_global_auto_ai_zero_convs():
+    """B37 死锁修复（2026-08-22）：全局默认档=auto_ai（缺省值）时，零显式
+    auto_ai 会话**不再拦**——新装机的真发人群在首条入站 bootstrap 时诞生，
+    「不会对任何人真发」的前提不成立。向导第 4 步从此一次开成。"""
+    cfg = {"inbox": {"l2_autosend": {"enabled": True, "deliver": False}}}
+    r = check_toggle(cfg, {}, "l2_autosend_deliver", "enabled", True)
+    assert r["allowed"] is True          # 只剩 send-gate 裸奔 warn
+    assert r["warn"] is True
+    # 显式把全局档钉回 review → 旧死锁判据恢复（语义可回退）
+    cfg2 = {"inbox": {"l2_autosend": {"enabled": True, "deliver": False},
+                      "auto_draft": {"automation_mode": "review"}}}
+    r2 = check_toggle(cfg2, {}, "l2_autosend_deliver", "enabled", True)
+    assert r2["allowed"] is False
 
 
 def test_master_deliver_allowed_with_warn_when_gate_off():

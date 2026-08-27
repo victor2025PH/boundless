@@ -33,11 +33,12 @@ logger = logging.getLogger(__name__)
 
 def _record_snooze_ops_event(
     conversation_id: str, *, by: str, action: str, until_ts: float = 0.0,
+    mode_note: str = "",
 ) -> None:
     """搁置操作落 ops_events 审计（90 天可追溯），best-effort 绝不阻断主流程。
 
     - ``kind``＝``conv_snooze``；``reason``＝``set``（定时）/``forever``（永久）/``clear``（取消）；
-    - ``detail``＝``conv=<id>;by=<agent>[;until=<epoch>]``——「谁把哪个客户永久搁置了」从
+    - ``detail``＝``conv=<id>;by=<agent>[;until=<epoch>][;mute=1|restored=<mode>]``——「谁把哪个客户永久搁置了」从
       不可考变成可查（P0 时 ``set_snooze(by=)`` 只收参不落痕，这里补上最后一米）。
     platform/account 从 conversation_id（``platform:account:chat_key``）反解，解不出不猜。
     """
@@ -53,6 +54,10 @@ def _record_snooze_ops_event(
         detail = f"conv={conversation_id};by={by}"
         if action != "clear" and until_ts:
             detail += f";until={int(until_ts)}"
+        if mode_note:
+            # P1-12：搁置静音/还原的档位变化一并入审计（「谁把这个会话的 AI
+            # 关了、什么时候还原的」与搁置事件同一条流水，不必另翻档位日志）。
+            detail += f";{mode_note}"
         store.record(
             "conv_snooze", account_id=account,
             platform=platform or "telegram", reason=str(action or ""),
@@ -311,20 +316,47 @@ def register_workspace_escalation_routes(app, *, api_auth) -> None:
             until_ts = time.time() + minutes * 60.0
         by = _session_agent(request)["agent_id"]
         snoozed = inbox.set_snooze(cid, until_ts, by=by)
+        # P1-12「搁置并停止自动回复」：``mute`` 三态而非布尔——**缺省**＝不碰档位
+        # （旧前端/批量搁置走这条，语义不偷改）；``true``＝按成 manual 并把原档编进
+        # source；``false``＝显式取消静音（面板勾选框反映现状，改期时把勾去掉就该
+        # 真的放 AI 回去，否则那个勾选框会变成只进不出的单向开关）。
+        muted = ""
+        unmuted = ""
+        _mute_req = body.get("mute")
+        if snoozed and _mute_req is not None:
+            try:
+                if _mute_req:
+                    from src.inbox.snooze_hold import apply_snooze_hold
+                    muted = apply_snooze_hold(inbox, cid)
+                else:
+                    from src.inbox.snooze_hold import release_snooze_hold
+                    _cm2 = getattr(request.app.state, "config_manager", None)
+                    unmuted = release_snooze_hold(
+                        inbox, cid,
+                        (getattr(_cm2, "config", None) or {}) if _cm2 else {})
+            except Exception:
+                logger.debug("[snooze] 静音写入失败（搁置本身已生效）", exc_info=True)
         if snoozed:
+            _note = "mute=1" if muted else (f"unmuted={unmuted}" if unmuted else "")
             _record_snooze_ops_event(
                 cid, by=by,
                 action="forever" if is_permanent_snooze(until_ts) else "set",
-                until_ts=until_ts)
+                until_ts=until_ts,
+                mode_note=_note)
         return {"ok": True, "conversation_id": cid, "snoozed": snoozed,
                 "snooze_until": until_ts if snoozed else 0,
-                "permanent": bool(snoozed and is_permanent_snooze(until_ts))}
+                "permanent": bool(snoozed and is_permanent_snooze(until_ts)),
+                "muted": bool(muted), "restored_mode": unmuted}
 
     @app.post("/api/workspace/conversation/{conversation_id}/unsnooze")
     async def api_workspace_conversation_unsnooze(
         request: Request, conversation_id: str,
     ):
-        """立即取消搁置，会话回到「待接管/超时告警」队列。"""
+        """立即取消搁置，会话回到「待接管/超时告警」队列。
+
+        P1-12：若该会话是「搁置并停止自动回复」按下的静音，同时**还原原档**
+        （幂等；坐席期间自己改过档位则不动——更新的意图优先）。
+        """
         api_auth(request)
         inbox = _inbox_store(request)
         if inbox is None:
@@ -333,8 +365,19 @@ def register_workspace_escalation_routes(app, *, api_auth) -> None:
         if not cid:
             raise HTTPException(400, tr(request, "err.ws.field_required", field="conversation_id"))
         inbox.clear_snooze(cid)
-        _record_snooze_ops_event(cid, by=_session_agent(request)["agent_id"], action="clear")
-        return {"ok": True, "conversation_id": cid, "snoozed": False}
+        restored = ""
+        try:
+            from src.inbox.snooze_hold import release_snooze_hold
+            _cm = getattr(request.app.state, "config_manager", None)
+            restored = release_snooze_hold(
+                inbox, cid, (getattr(_cm, "config", None) or {}) if _cm else {})
+        except Exception:
+            logger.debug("[snooze] 档位还原失败（取消搁置已生效）", exc_info=True)
+        _record_snooze_ops_event(
+            cid, by=_session_agent(request)["agent_id"], action="clear",
+            mode_note=f"restored={restored}" if restored else "")
+        return {"ok": True, "conversation_id": cid, "snoozed": False,
+                "restored_mode": restored}
 
     @app.post("/api/workspace/conversation/{conversation_id}/seen-mention")
     async def api_workspace_conversation_seen_mention(

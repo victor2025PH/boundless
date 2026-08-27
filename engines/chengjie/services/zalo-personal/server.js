@@ -35,6 +35,7 @@ import { fileURLToPath } from "url";
 import path from "path";
 import fs from "fs";
 import { Zalo, ThreadType } from "zca-js";
+import { createGroupRegistry, resolveThreadType } from "./group-registry.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SESSIONS_DIR = process.env.ZALO_SESSIONS_DIR || path.join(__dirname, "sessions");
@@ -56,6 +57,9 @@ fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 const logins = new Map();
 // account_id -> { api, ctx, loginId, loggedIn, displayName, avatarUrl }
 const accounts = new Map();
+// 群会话注册表（2026-08-19 P0）：出站自动判 ThreadType.Group ——
+// 入站学习 + 登录 getAllGroups 预热 + groups.json 持久化；显式 chat_type 参数可覆盖。
+const groupReg = createGroupRegistry({ sessionsDir: SESSIONS_DIR });
 
 const nowSec = () => Math.floor(Date.now() / 1000);
 const genId = () => "zl_" + Math.random().toString(36).slice(2, 12);
@@ -116,16 +120,24 @@ async function ingestMessage(accountId, message) {
     // zca-js 的 content：文字为 string；富媒体为对象（此版本先只回流文字，媒体占位）。
     const text = typeof content === "string" ? content : "";
     const isGroup = message && message.type === ThreadType.Group;
+    const threadId = String((message && message.threadId) || d.uidFrom || "");
+    // 群会话学习：出站 ThreadType 自动解析的数据来源之一（见 group-registry.js）。
+    if (isGroup && threadId) groupReg.remember(accountId, threadId);
     await postJson(PY_INGEST_URL, {
       platform: "zalo",
       account_id: String(accountId || ""),
-      chat_key: String((message && message.threadId) || d.uidFrom || ""),
-      name: String(d.dName || ""),
+      chat_key: threadId,
+      // 群会话不把发言人名当会话名（dName=本条发言人；当群名会随发言人漂移）。
+      // 空串在 ingest 侧「绝不覆盖已有非空值」，新群暂显 id ——诚实缺名。
+      name: isGroup ? "" : String(d.dName || ""),
       text: text || "[媒体]",
       direction: "in",
       msg_id: String(d.msgId || d.cliMsgId || ""),
       ts: Number(d.ts ? Math.floor(Number(d.ts) / 1000) : nowSec()),
       chat_type: isGroup ? "group" : "",
+      // P4-11E 同款群发言人结构化字段（对齐 WhatsApp）：气泡上方显示发言人名+稳定色。
+      sender_id: isGroup ? String(d.uidFrom || "") : "",
+      sender_name: isGroup ? String(d.dName || "") : "",
     });
   } catch (e) {
     logger.debug({ e: String(e) }, "ingestMessage failed");
@@ -159,6 +171,22 @@ function attachAccount(accountId, api, ctx, loginId, profile) {
   } catch (e) {
     logger.warn({ e: String(e), accountId }, "attach listener failed");
   }
+  // 群清单预热（best-effort）：getAllGroups → 注册表；失败不影响登录，
+  // 入站学习会渐进补齐。跨版本返回形状差异由 extractGroupIds 防御。
+  (async () => {
+    try {
+      if (api && typeof api.getAllGroups === "function") {
+        const res = await api.getAllGroups();
+        const added = groupReg.primeFromResult(accountId, res);
+        logger.info(
+          { accountId, added, total: groupReg.sizeOf(accountId) },
+          "zalo groups primed"
+        );
+      }
+    } catch (e) {
+      logger.debug({ e: String(e), accountId }, "getAllGroups prime failed");
+    }
+  })();
   return rec;
 }
 
@@ -314,10 +342,14 @@ app.get("/accounts", (_req, res) => {
   res.json({ accounts: out });
 });
 
-function threadTypeOf(chatType) {
-  return String(chatType || "").toLowerCase() === "group"
-    ? ThreadType.Group
-    : ThreadType.User;
+/** 出站线程类型：显式 chat_type 最高优先 → 群注册表命中 → User。
+ *  修复 2026-08-19 P0：Python 侧从不传 chat_type → 群回复按 User 发（错目标）。 */
+function threadTypeFor(accountId, threadId, chatType) {
+  const kind = resolveThreadType({
+    explicit: chatType,
+    isKnownGroup: groupReg.isGroup(accountId, threadId),
+  });
+  return { kind, tt: kind === "group" ? ThreadType.Group : ThreadType.User };
 }
 
 app.post("/accounts/:id/send", async (req, res) => {
@@ -325,14 +357,14 @@ app.post("/accounts/:id/send", async (req, res) => {
   if (!rec || !rec.api) return res.status(404).json({ ok: false, error: "account not connected" });
   const threadId = String((req.body && req.body.thread_id) || "");
   const text = String((req.body && req.body.text) || "");
-  const tt = threadTypeOf(req.body && req.body.chat_type);
+  const { kind, tt } = threadTypeFor(req.params.id, threadId, req.body && req.body.chat_type);
   if (!threadId) return res.status(400).json({ ok: false, error: "thread_id required" });
   try {
     const r = await rec.api.sendMessage({ msg: text }, threadId, tt);
     const messageId = String((r && (r.msgId || r.message_id)) || "");
-    res.json({ ok: true, delivered: true, message_id: messageId });
+    res.json({ ok: true, delivered: true, message_id: messageId, thread_type: kind });
   } catch (e) {
-    logger.warn({ e: String(e), id: req.params.id }, "send failed");
+    logger.warn({ e: String(e), id: req.params.id, thread_type: kind }, "send failed");
     res.status(502).json({ ok: false, delivered: false, error: String(e) });
   }
 });
@@ -343,7 +375,7 @@ app.post("/accounts/:id/send-media", async (req, res) => {
   const threadId = String((req.body && req.body.thread_id) || "");
   const mediaPath = String((req.body && req.body.media_path) || "");
   const caption = String((req.body && req.body.caption) || "");
-  const tt = threadTypeOf(req.body && req.body.chat_type);
+  const { kind, tt } = threadTypeFor(req.params.id, threadId, req.body && req.body.chat_type);
   if (!threadId) return res.status(400).json({ ok: false, error: "thread_id required" });
   if (!mediaPath || !fs.existsSync(mediaPath))
     return res.status(400).json({ ok: false, error: "media_path missing" });
@@ -355,9 +387,9 @@ app.post("/accounts/:id/send-media", async (req, res) => {
       tt
     );
     const messageId = String((r && (r.msgId || r.message_id)) || "");
-    res.json({ ok: true, delivered: true, message_id: messageId });
+    res.json({ ok: true, delivered: true, message_id: messageId, thread_type: kind });
   } catch (e) {
-    logger.warn({ e: String(e), id: req.params.id }, "send-media failed");
+    logger.warn({ e: String(e), id: req.params.id, thread_type: kind }, "send-media failed");
     res.status(502).json({ ok: false, delivered: false, error: String(e) });
   }
 });

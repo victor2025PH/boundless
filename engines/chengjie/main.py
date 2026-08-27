@@ -156,6 +156,27 @@ class AIChatAssistant:
                 self.logger.warning("AvatarHub 语音预热调度异常（忽略）: %s", ex)
             self._boot_mark("local_tts")
 
+            # 2d. 协议媒体旧根迁移（账号资产 P0，2026-08-19）：媒体根迁实例数据根
+            #     （protocol_bridge.protocol_media_root）后，把引擎树
+            #     static/protocol_media 的存量逐文件搬进数据根（同盘 rename 秒级；
+            #     幂等，单文件失败下次启动重试）。daemon fire-and-forget，绝不挡启动。
+            #     ⚠ 只能挂这里（真实服务启动）——绝不挂 app 装配路径：pytest 也装配
+            #     app，测试态数据根是即弃 tmp，在那触发会把生产媒体搬进临时目录。
+            try:
+                from src.integrations.protocol_bridge import (
+                    migrate_legacy_protocol_media,
+                )
+
+                def _pm_migrate() -> None:
+                    st = migrate_legacy_protocol_media()
+                    if st.get("moved") or st.get("failed"):
+                        self.logger.info("协议媒体旧根迁移完成: %s", st)
+
+                threading.Thread(target=_pm_migrate, name="pm_media_migrate",
+                                 daemon=True).start()
+            except Exception as ex:
+                self.logger.warning("协议媒体迁移调度异常（忽略）: %s", ex)
+
             # 3. 根据配置重新配置日志记录器
             log_config = self.config.config.get("logging", {})
             from src.bootstrap.logging_setup import setup_logging
@@ -359,7 +380,9 @@ class AIChatAssistant:
             self._boot_mark("contacts")
 
             # ── Mobile Bridge（依赖 Contacts 子系统，仅 contacts 启用时构建）──
-            if self.contacts is not None:
+            # 精简档（contacts.mode=lite，客户装机默认）不建：它每 15s 打本机
+            # 18080 的手机自动化 rig，客户机上没有那套服务，只会刷连接失败日志。
+            if self.contacts is not None and self.contacts.heavy_integrations_enabled():
                 try:
                     from src.contacts.mobile_bridge import MobileBridgeService
                     _bridge_cfg = (self.config.config or {}).get("mobile_bridge", {})
@@ -696,6 +719,22 @@ class AIChatAssistant:
             self.logger.info("✅ 质量趋势快照循环已启动")
         except Exception:
             self.logger.warning("质量趋势持久化启动跳过", exc_info=True)
+
+    def _maybe_seed_assistant_help(self) -> None:
+        """小智帮助语料首启自动播种（2026-08-23，1.0.51 全功能开箱）。
+
+        assistant.enabled 时后台幂等 upsert（seed_corpus 随包生成，与代码版本
+        同步）：新装机首启即有语料，升级自动补新词条；关着=零动作。
+        刻意挂 lifecycle 启动段而非 web 装配（测试自建 app 不应触发，首版踩过）。
+        """
+        try:
+            acfg = self.config.config.get("assistant") or {}
+            if not (isinstance(acfg, dict) and acfg.get("enabled")):
+                return
+            from src.assistant.seed_corpus import seed_help_corpus_bg
+            seed_help_corpus_bg()
+        except Exception:
+            self.logger.debug("帮助语料播种调度失败（忽略）", exc_info=True)
 
     def _maybe_init_tts_cost_log(self) -> None:
         """P4-B：按 ``voice_routing.cost_log.enabled`` 装配 TTS 成本日聚合落库（默认关）。
@@ -1126,6 +1165,10 @@ class AIChatAssistant:
     async def _maybe_start_proactive_care(self, *args, **kwargs):
         from src.bootstrap.background_tasks import maybe_start_proactive_care
         return await maybe_start_proactive_care(self, *args, **kwargs)
+
+    async def _maybe_start_nurture_engine(self, *args, **kwargs):
+        from src.bootstrap.background_tasks import maybe_start_nurture_engine
+        return await maybe_start_nurture_engine(self, *args, **kwargs)
 
     async def _maybe_start_companion_proactive(self) -> None:
         from src.companion.proactive_topic import maybe_start_companion_proactive

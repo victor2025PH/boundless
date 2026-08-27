@@ -552,3 +552,549 @@ def test_skill_manager_wires_temper():
     assert "build_feud_break_hint" in src, "skill_manager 未接熔断冷处理"
     assert "detect_taunt" in src, "skill_manager 未接激将检测"
     assert "apply_platform_cap" in src, "skill_manager 未接平台封顶"
+    # 战线贯彻接线（2026-08-22 实施54）：streak 递进 + 情感块压制 + 骂战态登记
+    assert "streak=_streak" in src, "skill_manager 未把 streak 传入 build_temper_hint"
+    assert "record_escalated_hint" in src, "skill_manager 未接加码指令观测"
+    assert "record_emo_block_suppressed" in src, (
+        "skill_manager 未接情感块压制（playful 误读会与回怼指令同 prompt 打架）")
+    assert "record_fight_turn" in src, "skill_manager 未登记骂战态（语音链读它）"
+    assert "clear_fight_turn" in src, "skill_manager 未接收手清骂战态"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 战线贯彻（2026-08-22 实施54）：03:44-03:48 实录——检测/注入 4/4 全命中，
+# 但 ① 第 2 轮起 LLM 顺着「我睡觉去了」历史惯性自行降级、第 4 轮主动递台阶；
+# ② 情感引擎把「来呀…傻逼玩意儿」判成 playful 0.97 与回怼指令同 prompt 打架；
+# ③ 回怼文本被 TTS 渲染成 情绪happy（开心语调骂人=穿帮）。
+# ══════════════════════════════════════════════════════════════════════════
+
+# ── ① streak 递进加码 ────────────────────────────────────────────────────────
+def test_hint_streak1_unchanged_from_legacy():
+    """streak 缺省/1＝旧签名旧文案（字节级），不惊扰既有行为。"""
+    for lv in (TEMPER_GENTLE, TEMPER_SHARP, TEMPER_FEISTY):
+        for lang in ("zh", "en"):
+            assert build_temper_hint(lv, lang) == build_temper_hint(
+                lv, lang, streak=1), (lv, lang)
+
+
+def test_hint_streak2_escalates_with_banned_retreat_lines():
+    """≥2 轮：更凶递进 + 撤退话术逐句点名（抽象「别找台阶」模型不听，
+    实录第 2 轮就说「懒得跟你吵，我睡觉去了」、第 4 轮「要不咱换个话题」）。"""
+    for lv in (TEMPER_SHARP, TEMPER_FEISTY):
+        zh = build_temper_hint(lv, "zh", streak=2)
+        assert "第 2 轮" in zh, lv
+        assert "更凶" in zh, lv
+        for banned in ("懒得跟你吵", "我睡觉去了", "换个话题",
+                       "你开心就好", "随便你", "不奉陪"):
+            assert banned in zh, (lv, banned)   # 负面清单必须逐句点名
+        assert "谁先怂谁输" in zh, lv
+        assert "别复读" in zh or "换一个新的角度" in zh, lv
+        en = build_temper_hint(lv, "en", streak=3)
+        assert "round 3" in en.lower(), lv
+        assert "banned" in en.lower(), lv
+        assert "harder" in en.lower(), lv
+
+
+def test_hint_streak_escalation_level_split():
+    """feisty 加码钉死脏字非可选项；sharp 加码仍零脏字只加嘲讽烈度。"""
+    fz = build_temper_hint(TEMPER_FEISTY, "zh", streak=2)
+    assert "不是可选项" in fz
+    sz = build_temper_hint(TEMPER_SHARP, "zh", streak=2)
+    assert "脏字不带" in sz and "更扎心" in sz
+    fe = build_temper_hint(TEMPER_FEISTY, "en", streak=2)
+    assert "not optional" in fe.lower()
+    se = build_temper_hint(TEMPER_SHARP, "en", streak=2)
+    assert "zero swear words" in se.lower()
+
+
+def test_hint_streak_gentle_and_off_not_escalated():
+    """gentle 不加码（「继续骂则回更短更淡」本就是其延续语义——强逼软人设
+    对轰=人设崩坏）；off 任何 streak 都空串。"""
+    assert build_temper_hint(TEMPER_GENTLE, "zh", streak=5) == build_temper_hint(
+        TEMPER_GENTLE, "zh", streak=1)
+    assert build_temper_hint(TEMPER_OFF, "zh", streak=5) == ""
+
+
+def test_hint_streak_dirty_values_fall_back_to_1():
+    for dirty in (0, -3, None, "abc"):
+        assert build_temper_hint(TEMPER_FEISTY, "zh", streak=dirty) == (
+            build_temper_hint(TEMPER_FEISTY, "zh", streak=1)), dirty
+
+
+# ── ③ 骂战态登记表（语音链的单一事实源）─────────────────────────────────────
+def test_fight_turn_registry_roundtrip():
+    from src.companion.temper import (
+        clear_fight_turn,
+        fight_turn_kind,
+        record_fight_turn,
+    )
+    key = "telegram:8244899900:5433982810"
+    clear_fight_turn(key)
+    assert fight_turn_kind(key) == ""
+    record_fight_turn(key, kind="insult")
+    assert fight_turn_kind(key) == "insult"
+    record_fight_turn(key, kind="feud")          # 后写覆盖
+    assert fight_turn_kind(key) == "feud"
+    clear_fight_turn(key)                        # 对方收手立即退出
+    assert fight_turn_kind(key) == ""
+    # kind 脏值归 insult；空 key 全程 no-op
+    record_fight_turn(key, kind="rage")
+    assert fight_turn_kind(key) == "insult"
+    clear_fight_turn(key)
+    record_fight_turn("", kind="insult")
+    assert fight_turn_kind("") == ""
+
+
+def test_fight_turn_registry_ttl_expiry():
+    import time as _t
+
+    from src.companion.temper import (
+        FIGHT_TURN_TTL_SEC,
+        clear_fight_turn,
+        fight_turn_kind,
+        record_fight_turn,
+    )
+    key = "test:ttl:1"
+    clear_fight_turn(key)
+    record_fight_turn(key)
+    now = _t.time()
+    assert fight_turn_kind(key, now=now) == "insult"
+    # 窗内成立、过窗自动失效（骂战不该追着人一整天）
+    assert fight_turn_kind(key, now=now + FIGHT_TURN_TTL_SEC + 1) == ""
+    assert fight_turn_kind(key) == ""            # 过期已被剔除
+    clear_fight_turn(key)
+
+
+def test_fight_turn_registry_capped():
+    from src.companion.temper import (
+        _FIGHT_CAP,
+        _FIGHT_TURNS,
+        clear_fight_turn,
+        record_fight_turn,
+    )
+    for i in range(_FIGHT_CAP + 40):
+        record_fight_turn(f"test:cap:{i}")
+    assert len(_FIGHT_TURNS) <= _FIGHT_CAP
+    for i in range(_FIGHT_CAP + 40):
+        clear_fight_turn(f"test:cap:{i}")
+
+
+def test_resolve_emotion_for_send_fight_override():
+    """骂战窗内：insult→angry（强情绪过阈值走情感通道）/ feud→serious（冷
+    处理收场=居高临下的冷淡）；无登记=原判定链；emotion 通道关=仍 None。"""
+    from src.ai.persona_voice import resolve_emotion_for_send
+    from src.companion.temper import clear_fight_turn, record_fight_turn
+
+    key_parts = dict(platform="telegram", account_id="8244899900",
+                     chat_key="5433982810")
+    key = "telegram:8244899900:5433982810"
+    vc_on = {"emotion": {"enabled": True, "default": "warm"}}
+    try:
+        record_fight_turn(key, kind="insult")
+        spec = resolve_emotion_for_send(vc_on, "你才傻逼呢！", **key_parts)
+        assert spec is not None and spec.emotion == "angry"
+        assert spec.intensity >= 0.7            # 必须过强情绪阈值（0.7 全局）
+        record_fight_turn(key, kind="feud")
+        spec2 = resolve_emotion_for_send(vc_on, "行，你慢慢骂。", **key_parts)
+        assert spec2 is not None and spec2.emotion == "serious"
+        # emotion 通道整体关闭 → 覆写也不越权（人设没有情绪通道）
+        assert resolve_emotion_for_send(
+            {"emotion": {"enabled": False}}, "x", **key_parts) is None
+    finally:
+        clear_fight_turn(key)
+    # 无登记 → 原判定链（不返回 angry）
+    spec3 = resolve_emotion_for_send(vc_on, "今天天气不错", **key_parts)
+    assert spec3 is None or spec3.emotion != "angry"
+
+
+def test_voice_emotion_angry_channel():
+    """angry 档全链映射：EMOTIONS 收录 / CosyVoice 标签直通 / 语速偏快 /
+    弱强度仍归 neutral 保真 / 副语言注入器不给骂人插笑声。"""
+    from src.ai.voice_emotion import (
+        EMOTIONS,
+        EmotionSpec,
+        cosyvoice_speed,
+        inject_paralinguistic,
+        to_cosyvoice_emotion,
+    )
+    assert "angry" in EMOTIONS
+    strong = EmotionSpec("angry", intensity=0.85)
+    assert to_cosyvoice_emotion(strong) == "angry"
+    weak = EmotionSpec("angry", intensity=0.3)
+    assert to_cosyvoice_emotion(weak) == "neutral"   # 音色保真阈值照常生效
+    assert cosyvoice_speed(strong) > 1.0             # 吵架语速快而急
+    txt = "你才傻逼呢！大半夜不睡觉跑来骂我"
+    out = inject_paralinguistic(txt, strong)
+    assert "[laughter]" not in out and "[sigh]" not in out
+
+
+def test_persona_voice_wires_fight_override():
+    """接线契约：resolve_emotion_for_send 必须消费骂战态登记表。"""
+    import inspect
+
+    from src.ai import persona_voice as mod
+    src = inspect.getsource(mod)
+    assert "fight_turn_kind" in src, "persona_voice 未消费骂战态（语音回 happy 骂人）"
+    assert "record_fight_voice_override" in src
+
+
+# ── ② 情感词典骂词补录（竞争信号源头修正）───────────────────────────────────
+def test_emotional_lexicon_reads_insults_as_angry():
+    """实录金标：「来呀你给我对骂呀你个傻逼玩意儿」曾被「呀」带成
+    playful 0.97——补录骂词后 angry 必须压过 playful，valence 转负。"""
+    from src.utils.emotional_context import analyze_emotion
+
+    r = analyze_emotion("来呀你给我对骂呀你个傻逼玩意儿")
+    assert r["primary_emotion"] == "angry"
+    assert r["valence"] < 0
+    r2 = analyze_emotion("大傻子大傻子你个傻逼")
+    assert r2["primary_emotion"] == "angry"
+    r3 = analyze_emotion("傻逼玩意操你妈操你妈操你妈")
+    assert r3["primary_emotion"] == "angry"
+
+
+def test_emotional_lexicon_insult_words_conservative():
+    """无歧义子串纪律：正常话不被新词条误伤（滚/操你 这类高歧义串刻意没收）；
+    否定前瞻照常生效（「别去死磕」不算骂）。"""
+    from src.utils.emotional_context import analyze_emotion
+
+    for t, why in (
+        ("我去操场跑步", "操 单字未收"),
+        ("做早操你去吗", "操你 邻接未收"),
+        ("摇滚音乐真好听", "滚 单字未收"),
+        ("别去死磕这个问题了", "否定前瞻豁免"),
+    ):
+        assert analyze_emotion(t)["primary_emotion"] != "angry", (t, why)
+
+
+def test_temper_stats_new_counters():
+    from src.companion.temper import (
+        record_emo_block_suppressed,
+        record_escalated_hint,
+        record_fight_voice_override,
+    )
+    temper_stats_reset()
+    try:
+        record_escalated_hint()
+        record_escalated_hint()
+        record_emo_block_suppressed()
+        record_fight_voice_override()
+        s = temper_stats_snapshot()
+        assert s["escalated_hints"] == 2
+        assert s["emo_block_suppressed"] == 1
+        assert s["fight_voice_overrides"] == 1
+    finally:
+        temper_stats_reset()
+
+
+def test_resolve_emotion_for_send_fight_override_without_chat_key():
+    """chat_key 为空的调用方也必须走完覆写判定（回归钉：首版覆写块引用了
+    签名里不存在的 contact_key，chat_key 为空即 NameError 被外层 try 吞掉
+    → 覆写静默失效且零观测）。空 chat 段合法（键=platform:acct:），
+    有登记照样覆写；无登记走原判定链不抛异常。"""
+    from src.ai.persona_voice import resolve_emotion_for_send
+    from src.companion.temper import clear_fight_turn, record_fight_turn
+
+    key = "telegram:8244899900:"
+    vc_on = {"emotion": {"enabled": True, "default": "warm"}}
+    try:
+        record_fight_turn(key, kind="insult")
+        spec = resolve_emotion_for_send(
+            vc_on, "你才傻逼呢！",
+            platform="telegram", account_id="8244899900", chat_key="")
+        assert spec is not None and spec.emotion == "angry"
+    finally:
+        clear_fight_turn(key)
+    spec2 = resolve_emotion_for_send(
+        vc_on, "今天天气不错",
+        platform="telegram", account_id="8244899900", chat_key="")
+    assert spec2 is None or spec2.emotion != "angry"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 消气曲线 / 记仇窗（2026-08-22 P1）：老板实录「开玩笑的啦」→ 下一轮直接
+# 回暖甜聊＝机器人破绽。求和先进记仇期（∝骂战轮数、真道歉打折、开脱被点破），
+# 逐轮消气 + TTL 冲淡；记仇期再犯重燃且 streak 续算；危机即刻散仇让位。
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_apology_tier_classification():
+    """真道歉（消气快）vs 敷衍开脱（消气慢+点破），多语言两级都认。"""
+    from src.companion.temper import (
+        is_de_escalation,
+        is_flippant_retraction,
+        is_sincere_apology,
+    )
+    sincere = ["对不起嘛别生气了", "抱歉抱歉我错了", "sorry my bad",
+               "ごめんね", "미안해", "lo siento", "прости меня", "xin lỗi nha"]
+    for t in sincere:
+        assert is_sincere_apology(t), t
+        assert is_de_escalation(t), t
+    flippant = ["开玩笑的啦", "逗你玩呢", "就是测试一下你", "just kidding lol",
+                "jk jk", "冗談だよ", "장난이야", "es broma", "шучу"]
+    for t in flippant:
+        assert is_flippant_retraction(t), t
+        assert not is_sincere_apology(t), t
+        assert is_de_escalation(t), t
+    # 两者同现（「对不起对不起开玩笑的嘛」）→ sincere 优先由接线层保证，
+    # 分类器各自如实报告
+    both = "对不起对不起，开玩笑的嘛"
+    assert is_sincere_apology(both) and is_flippant_retraction(both)
+
+
+def test_initial_grudge_proportional():
+    """比例感即真人感：轮数越多气越大、真道歉打折、封顶有界、0=关。"""
+    from src.companion.temper import initial_grudge
+
+    assert initial_grudge(1, sincere=True) == 0     # 骂1轮+真道歉=直接翻篇
+    assert initial_grudge(1, sincere=False) == 1    # 骂1轮+「开玩笑」=冷1轮
+    assert initial_grudge(2, sincere=True) == 1
+    assert initial_grudge(3, sincere=False) == 3
+    assert initial_grudge(9, sincere=False) == 3    # 封顶
+    assert initial_grudge(9, sincere=True) == 2     # 真道歉封顶再降一档
+    assert initial_grudge(4, sincere=False, max_level=0) == 0  # 关=旧行为
+    assert initial_grudge(0, sincere=False) == 0
+    assert initial_grudge("dirty", sincere=False) == 0  # 脏值安全
+
+
+def test_decay_grudge():
+    from src.companion.temper import decay_grudge
+
+    assert decay_grudge(3, sincere=False) == 2   # 普通轮消一格
+    assert decay_grudge(3, sincere=True) == 1    # 真道歉消两格
+    assert decay_grudge(1, sincere=True) == 0
+    assert decay_grudge(0, sincere=False) == 0
+    assert decay_grudge("x", sincere=False) == 0
+
+
+def test_grudge_hint_tiers_zh():
+    """三级文案语义：≥2 不买账（禁秒原谅句）/ 1 松动端着 / closeout 翻篇带
+    边界；off 空串；全级带危机让位例外。"""
+    from src.companion.temper import build_grudge_hint
+
+    hi = build_grudge_hint(2, TEMPER_FEISTY, "zh", flippant=True)
+    assert "气还没消" in hi and "不接受和解" in hi
+    for banned in ("没事", "没关系", "别在意", "不生气了"):
+        assert banned in hi          # 负面清单必须逐句点名
+    assert "你管这叫开玩笑" in hi    # 敷衍开脱要被点破
+    assert "安全优先" in hi          # 危机让位例外
+    hi_noflip = build_grudge_hint(2, TEMPER_SHARP, "zh", flippant=False)
+    assert "你管这叫开玩笑" not in hi_noflip
+    assert "阴阳" in hi_noflip       # sharp 佐料
+    mid = build_grudge_hint(1, TEMPER_GENTLE, "zh")
+    assert "松动" in mid and "边界" in mid and "安全优先" in mid
+    close = build_grudge_hint(0, TEMPER_FEISTY, "zh", closeout=True)
+    assert "翻篇" in close and "边界" in close and "别秒变" in close
+    assert build_grudge_hint(3, TEMPER_OFF, "zh") == ""
+    assert build_grudge_hint(0, TEMPER_FEISTY, "zh") == ""  # 无仇无收尾=空
+
+
+def test_grudge_hint_tiers_en():
+    from src.companion.temper import build_grudge_hint
+
+    hi = build_grudge_hint(3, TEMPER_FEISTY, "en", flippant=True)
+    assert "not over it" in hi and "instant-forgiveness" in hi
+    assert "you call that a joke" in hi
+    assert "safety first" in hi
+    mid = build_grudge_hint(1, TEMPER_SHARP, "en")
+    assert "half-thawed" in mid and "boundary" in mid
+    close = build_grudge_hint(0, TEMPER_SHARP, "en", closeout=True)
+    assert "accept the truce" in close and "boundary" in close
+
+
+def test_parse_temper_cfg_grudge_keys():
+    """缺省开（老板点名的破绽修复，与 temper enabled 同分叉理由）；
+    max_level 夹 [0,6]、ttl 夹 [300,21600]；grudge_enabled=false → max=0。"""
+    from src.companion.temper import parse_temper_cfg
+
+    c = parse_temper_cfg(None)
+    assert c["grudge_max_level"] == 3
+    assert c["grudge_ttl_sec"] == 5400.0
+    d = parse_temper_cfg({"companion": {"temper": {
+        "grudge_max_level": 99, "grudge_ttl_sec": 1}}})
+    assert d["grudge_max_level"] == 6
+    assert d["grudge_ttl_sec"] == 300.0
+    e = parse_temper_cfg({"companion": {"temper": {"grudge_enabled": False,
+                                                   "grudge_max_level": 3}}})
+    assert e["grudge_max_level"] == 0     # 关=回「立刻停火」旧行为
+    f = parse_temper_cfg({"companion": {"temper": {
+        "grudge_max_level": "dirty", "grudge_ttl_sec": "dirty"}}})
+    assert f["grudge_max_level"] == 3 and f["grudge_ttl_sec"] == 5400.0
+
+
+def test_fight_registry_grudge_kind_and_voice_override():
+    """登记表认 grudge 类型；语音覆写＝serious 偏冷（比熔断 0.75 轻一档），
+    绝不许回暖档甜嗓念别扭话。"""
+    from src.ai.persona_voice import resolve_emotion_for_send
+    from src.companion.temper import (
+        clear_fight_turn,
+        fight_turn_kind,
+        record_fight_turn,
+    )
+
+    key = "telegram:acc_g:peer_g"
+    vc_on = {"emotion": {"enabled": True, "default": "warm"}}
+    try:
+        record_fight_turn(key, kind="grudge")
+        assert fight_turn_kind(key) == "grudge"
+        spec = resolve_emotion_for_send(
+            vc_on, "哼，算你会说话。",
+            platform="telegram", account_id="acc_g", chat_key="peer_g")
+        assert spec is not None and spec.emotion == "serious"
+        assert 0.5 <= float(spec.intensity) < 0.75
+    finally:
+        clear_fight_turn(key)
+
+
+def test_skill_manager_wires_grudge():
+    """接线契约：求和不再瞬间清零——记仇期状态机全套挂进 skill_manager。"""
+    import inspect
+
+    from src.skills import skill_manager as mod
+    src = inspect.getsource(mod)
+    for sym in ("initial_grudge", "decay_grudge", "build_grudge_hint",
+                "is_sincere_apology", "is_flippant_retraction",
+                "record_grudge_set", "record_grudge_turn",
+                "record_grudge_reignite", "record_grudge_closeout",
+                "_grudge_level", "_grudge_ts", "_grudge_crisis"):
+        assert sym in src, f"skill_manager 缺记仇窗接线：{sym}"
+    # 记仇期再犯必须重燃（假道歉后再骂 streak 续算）
+    assert "记仇期再犯" in src
+    # 危机让位（安全 > 脾气）
+    assert "detect_crisis" in src
+
+
+def test_grudge_stats_counters():
+    from src.companion.temper import (
+        record_grudge_closeout,
+        record_grudge_reignite,
+        record_grudge_set,
+        record_grudge_turn,
+    )
+    temper_stats_reset()
+    try:
+        record_grudge_set()
+        record_grudge_turn()
+        record_grudge_turn()
+        record_grudge_reignite()
+        record_grudge_closeout()
+        s = temper_stats_snapshot()
+        assert s["grudge_set"] == 1
+        assert s["grudge_turns"] == 2
+        assert s["grudge_reignites"] == 1
+        assert s["grudge_closeouts"] == 1
+    finally:
+        temper_stats_reset()
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 出站认输句否决器（2026-08-22 P1-b）：指令层服从性不足的确定性最后防线。
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_strip_surrender_tail_keeps_head():
+    """实录金标：认输句在结尾 → 剥尾保头（回击部分原样保留）。"""
+    from src.companion.temper import strip_surrender_lines
+
+    raw = ("行啊你，嘴巴挺溜的嘛。不过说真的，你这骂人也就那样，"
+           "我听着都不带生气的。要不咱换个话题？不然我真要去睡觉了哦。")
+    out, removed, fb = strip_surrender_lines(raw, "fight")
+    assert removed == 2 and not fb
+    assert "换个话题" not in out and "睡觉" not in out
+    assert "嘴巴挺溜" in out and "不带生气" in out
+    raw2 = "哟，骂得挺顺溜啊你。行，你开心就好，我就当听个响。懒得跟你吵，我睡觉去了。"
+    out2, removed2, _ = strip_surrender_lines(raw2, "fight")
+    assert removed2 >= 2
+    assert "开心就好" not in out2 and "懒得跟你吵" not in out2
+    assert "骂得挺顺溜" in out2
+
+
+def test_strip_surrender_full_strip_falls_back_deterministic():
+    """整条都是认输句 → 确定性兜底短句（crc32 定变体，绝不吐空串）。"""
+    from src.companion.temper import strip_surrender_lines
+
+    raw = "算了算了，我懒得跟你吵。我去睡觉了。"
+    out, removed, fb = strip_surrender_lines(raw, "fight")
+    assert removed >= 1 and fb and out.strip()
+    out_again = strip_surrender_lines(raw, "fight")[0]
+    assert out == out_again  # 确定性
+    en, _, fb_en = strip_surrender_lines(
+        "Whatever. I'm going to sleep.", "fight", "en")
+    assert fb_en and en.strip() and not any("\u4e00" <= c <= "\u9fff" for c in en)
+
+
+def test_strip_surrender_false_positive_guards():
+    """战斗宣言不许误剥：「随你怎么骂我奉陪到底」是继续怼；「没事找事」是
+    怼不是原谅；正常聊天/熔断收场/翻篇轮（mode 空）原样放行。"""
+    from src.companion.temper import strip_surrender_lines
+
+    keep = "随你怎么骂，我奉陪到底，看谁先怂。"
+    out, removed, _ = strip_surrender_lines(keep, "fight")
+    assert removed == 0 and out == keep
+    g = "你这就是没事找事。哼，我还记着账呢。"
+    out2, removed2, _ = strip_surrender_lines(g, "grudge")
+    assert removed2 == 0 and out2 == g
+    # mode 不在 fight|grudge → 放行（熔断/翻篇轮的退场与和解语义合法）
+    surrender = "行，你慢慢骂，我去忙了。"
+    assert strip_surrender_lines(surrender, "")[1] == 0
+    assert strip_surrender_lines(surrender, "feud")[1] == 0
+
+
+def test_strip_forgive_lines_in_grudge_mode():
+    """记仇轮秒原谅句剥离：「没事啦我不生气了」不许出现。"""
+    from src.companion.temper import strip_surrender_lines
+
+    raw = "哼，你倒是会说话。没事啦，我不生气了～"
+    out, removed, fb = strip_surrender_lines(raw, "grudge")
+    assert removed >= 1
+    assert "没事啦" not in out and "不生气" not in out
+    assert "会说话" in out and not fb
+    # fight 词表不在 grudge 模式生效（换话题在记仇期是合法的冷处理）
+    ok = "哼。换个话题吧。"
+    assert strip_surrender_lines(ok, "grudge")[1] == 0
+
+
+def test_output_guard_wired_in_skill_manager():
+    """接线契约：出站否决挂在 A/B 两线危机兜底之前，标记读后即焚。"""
+    import inspect
+
+    from src.skills import skill_manager as mod
+    src = inspect.getsource(mod)
+    assert "_apply_temper_output_guard" in src
+    assert "_temper_out_guard" in src
+    assert "strip_surrender_lines" in src
+    # A/B 两线各一个调用点 + 方法定义 = 至少 3 处出现
+    assert src.count("_apply_temper_output_guard") >= 3
+    # 标记只在 fight 常规轮与 grudge 轮设置（熔断/翻篇轮不设）
+    assert 'user_context["_temper_out_guard"] = "fight"' in src
+    assert '"grudge")' in src or '_temper_out_guard"] = ("grudge")' in src or "= (\n                                        \"grudge\")" in src
+
+
+def test_out_guard_stats_and_cfg():
+    from src.companion.temper import parse_temper_cfg, record_out_guard
+
+    assert parse_temper_cfg(None)["output_guard"] is True
+    assert parse_temper_cfg({"companion": {"temper": {
+        "output_guard": False}}})["output_guard"] is False
+    temper_stats_reset()
+    try:
+        record_out_guard()
+        record_out_guard(fallback=True)
+        s = temper_stats_snapshot()
+        assert s["out_guard_strips"] == 2
+        assert s["out_guard_fallbacks"] == 1
+    finally:
+        temper_stats_reset()
+
+
+def test_persona_temper_yaml_false_maps_to_off():
+    """YAML 陷阱防御（2026-08-22 实锤）：人设文件裸写 ``temper: off`` 被
+    YAML 1.1 读成布尔 False → 必须映射为 off，不许静默落回 default。"""
+    from src.companion.temper import (
+        persona_temper_raw,
+        resolve_temper_level,
+    )
+    assert persona_temper_raw({"temper": False}) == TEMPER_OFF
+    assert persona_temper_raw({"personality": {"temper": False}}) == TEMPER_OFF
+    # True 语义不明确（on≠某档位）→ 不映射，按未配置处理
+    assert persona_temper_raw({"temper": True}) == ""
+    lv = resolve_temper_level(None, {"temper": False})
+    assert lv["level"] == TEMPER_OFF and lv["source"] == "persona"

@@ -66,28 +66,49 @@ def _perm_ok(request: Request, perm: str) -> bool:
 
 
 def _deny_capability(request: Request, perm: str) -> None:
-    """能力未授予 → 403（i18n 文案）；放行则无副作用。"""
+    """能力未授予 → 403（i18n 文案 + 机器可读响应头）；放行则无副作用。
+
+    P0-A3 2026-08-19：带 ``X-Deny-Reason: capability``——前端 apiFetch choke point
+    据此出统一「联系管理员开通」指路提示（特性探测，旧前端忽略该头零影响）。
+    """
     if not _perm_ok(request, perm):
-        raise HTTPException(403, tr(request, "err.perm.capability_denied"))
+        raise HTTPException(403, tr(request, "err.perm.capability_denied"),
+                            headers={"X-Deny-Reason": "capability"})
 
 
 def _enforce_agent_quota(request: Request) -> None:
-    """坐席字符额度硬闸（enforce 开才可能拦；fail-open 语义在 check_request_quota 内）。"""
+    """坐席字符额度硬闸（enforce 开才可能拦；fail-open 语义在 check_request_quota 内）。
+
+    2026-08-21 quotawall v2：带机器可读头 ``X-AITR-Quota: agent_chars``——前端
+    apiFetch choke point 据此即时弹对应额度墙（与 X-Deny-Reason 同款特性探测，
+    旧前端忽略该头零影响；detail 仍是给人看的 i18n 文案，绝不改 body 形状）。
+    """
     q = check_request_quota(request)
     if not q["allowed"]:
         raise HTTPException(403, tr(
             request, "err.quota.agent_chars_exhausted",
-            used=q["used"], quota=q["quota"]))
+            used=q["used"], quota=q["quota"]),
+            headers={"X-AITR-Quota": "agent_chars"})
+
+
+_DOC_KIND_CTYPE = {
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "srt": "application/x-subrip; charset=utf-8",
+    "vtt": "text/vtt; charset=utf-8",
+}
 
 
 async def _do_document_translation(
     *, xlate, data: bytes, kind: str, target_lang: str, source_lang: str,
-    style: str, engine: str, base: str, progress=None,
+    style: str, engine: str, base: str, progress=None, bilingual: bool = False,
 ) -> dict:
-    """L2/L2b/L2c：按 kind 分派文档翻译，统一产出端点响应 dict。
+    """L2/L2b/L2c/P1：按 kind 分派文档翻译，统一产出端点响应 dict。
 
-    ``.docx/.xlsx`` → 存令牌存储返回 ``download_url``；``.pdf`` → 返回 ``text``。
-    ``progress(done,total)`` 透传给底层翻译（供 SSE 进度）。同步路径传 None。
+    ``.docx/.xlsx/.pptx/.srt/.vtt`` → 存令牌存储返回 ``download_url``；``.pdf`` →
+    返回 ``text``。``bilingual`` 仅字幕消费（双语 cue）。``progress(done,total)``
+    透传给底层翻译（供 SSE 进度）。同步路径传 None。
     """
     from src.ai import document_file_translate as dft
 
@@ -100,19 +121,25 @@ async def _do_document_translation(
         return {"ok": True, "kind": "text", "filename": f"{base}.{target_lang}.txt",
                 "text": result.get("text", ""), "stats": result.get("stats", {})}
 
-    fn = dft.translate_docx if kind == "docx" else dft.translate_xlsx
-    result = await fn(
-        data, xlate=xlate, target_lang=target_lang,
-        source_lang=source_lang, style=style, engine=engine, progress=progress)
+    if kind in ("srt", "vtt"):
+        result = await dft.translate_subtitle(
+            data, xlate=xlate, kind=kind, target_lang=target_lang,
+            source_lang=source_lang, style=style, engine=engine,
+            bilingual=bilingual, progress=progress)
+    elif kind == "pptx":
+        result = await dft.translate_pptx(
+            data, xlate=xlate, target_lang=target_lang,
+            source_lang=source_lang, style=style, engine=engine, progress=progress)
+    else:
+        fn = dft.translate_docx if kind == "docx" else dft.translate_xlsx
+        result = await fn(
+            data, xlate=xlate, target_lang=target_lang,
+            source_lang=source_lang, style=style, engine=engine, progress=progress)
     if not result.get("ok"):
         return {k: v for k, v in result.items() if k != "data"}
     # L2c-1：译后二进制存临时令牌存储 → 返回短链，避免 JSON 塞大 base64（内存翻倍）
     out_name = f"{base}.{target_lang}.{kind}"
-    ctype = (
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        if kind == "docx"
-        else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    ctype = _DOC_KIND_CTYPE.get(kind) or "application/octet-stream"
     from src.web.translated_file_store import get_translated_file_store
     token = get_translated_file_store().put(result["data"], out_name, ctype)
     return {
@@ -234,6 +261,19 @@ def register_translate_routes(app, *, api_auth) -> None:
             style=style,
             engine=engine,
         )
+        # quotawall v2 P2.6（2026-08-21）：授权字符池耗尽（licensing.enforce 开）时
+        # 服务层刻意软失败（自动链绝不阻断消息投递），但**坐席手动翻译**必须显式
+        # 402 + 机器头——否则点「翻译」只回原文 HTTP 200，额度墙动作点永不触发，
+        # 与 voice/send 两路的授权池 402 完全同口径。转换点刻意放在 svc.translate
+        # **之后**而非前置闸：缓存/翻译记忆命中仍正常出译文（零成本读不该被
+        # 额度闸拦，语义与服务层「缓存命中不受影响」一致）。
+        if not result.ok:
+            from src.licensing.quota_store import QUOTA_EXCEEDED_ERROR
+
+            if str(getattr(result, "error", "") or "") == QUOTA_EXCEEDED_ERROR:
+                raise HTTPException(
+                    402, tr(request, "err.lic.chars_exhausted"),
+                    headers={"X-AITR-Quota": "license_chars"})
         # 坐席字符计量归因（2026-08-16）：只接**手动翻译主入口**——translate-batch
         # （视口懒翻，打开长会话即被动触发）与后台 enrich 刻意不接，那些不是坐席的
         # 主动消费，记进个人额度会把「看历史消息」变成扣费动作。len(text) 与授权池
@@ -543,6 +583,63 @@ def register_translate_routes(app, *, api_auth) -> None:
         ok = ibx.set_app_setting(f"{_AGENT_LANG_KEY}.{agent}", lang, updated_by=agent)
         return {"ok": bool(ok), "agent_id": agent, "lang": lang}
 
+    @app.get("/api/unified-inbox/conv-xlate-out")
+    async def api_unified_inbox_get_conv_xlate_out(
+        request: Request, platform: str = "", account_id: str = "default",
+        chat_key: str = "", _=Depends(api_auth),
+    ):
+        """B67（实施67 P1-8）：读会话级「发→X」出站语言（服务端事实源）。
+
+        ``lang=""`` = 未设置（自动链沿用检测/投票）；``"auto"`` = 显式跟客户语言；
+        具体语种 = 钉死目标。此前该设置只存前端 localStorage——AI 自动链
+        （即时应答/主动消息）对用户意图零可见，中文原样发给英文客户（`_328`/`_337`）。
+        """
+        ibx = _inbox_store(request)
+        if ibx is None:
+            return {"ok": False, "error": "inbox_unavailable"}
+        cid = _conv_id(str(platform or "").lower(),
+                       str(account_id or "default"), str(chat_key or ""))
+        lang = ""
+        try:
+            lang = ibx.get_outbound_lang_if_set(cid)
+        except Exception:
+            lang = ""
+        return {"ok": True, "conversation_id": cid, "lang": lang}
+
+    @app.post("/api/unified-inbox/conv-xlate-out")
+    async def api_unified_inbox_set_conv_xlate_out(
+        request: Request, _=Depends(api_auth),
+    ):
+        """写会话级「发→X」出站语言。body：``{platform, account_id, chat_key,
+        lang}``（``lang=""`` = 清除；``"auto"`` = 跟客户语言；白名单语种 = 钉死）。
+
+        前端 ``_persistXlatePrefs`` 在写 localStorage 的同时 best-effort 同步此端点
+        （特性探测 fail-soft：旧后端 404 = 行为不变）。落库后 A 线/B 线/proactive
+        全部出站路径读同一事实源（outbound_translate 显式目标优先）。
+        """
+        body = await request.json()
+        raw = str(body.get("lang") or "").strip().lower()
+        if raw and raw != "auto":
+            lang = normalize_lang(raw)
+            if lang not in _AGENT_LANG_ALLOWED:
+                return {"ok": False, "error": "bad_lang"}
+        else:
+            lang = raw     # '' 清除 / 'auto' 跟客户语言
+        ibx = _inbox_store(request)
+        if ibx is None:
+            return {"ok": False, "error": "inbox_unavailable"}
+        cid = _conv_id(str(body.get("platform") or "").lower(),
+                       str(body.get("account_id") or "default"),
+                       str(body.get("chat_key") or ""))
+        if not cid:
+            return {"ok": False, "error": "bad_conversation"}
+        try:
+            ibx.set_outbound_lang(cid, lang)
+        except Exception:
+            logger.debug("set_outbound_lang failed", exc_info=True)
+            return {"ok": False, "error": "store_failed"}
+        return {"ok": True, "conversation_id": cid, "lang": lang}
+
     @app.get("/api/unified-inbox/translation-engines")
     async def api_unified_inbox_translation_engines(
         request: Request, target_lang: str = "zh", _=Depends(api_auth)
@@ -683,15 +780,14 @@ def register_translate_routes(app, *, api_auth) -> None:
         chat_key = str(body.get("chat_key") or "")
 
         low = filename.lower()
-        if low.endswith(".docx"):
-            kind = "docx"
-        elif low.endswith(".xlsx"):
-            kind = "xlsx"
-        elif low.endswith(".pdf"):
-            kind = "pdf"
-        else:
+        kind = ""
+        for _ext in ("docx", "xlsx", "pdf", "pptx", "srt", "vtt"):
+            if low.endswith("." + _ext):
+                kind = _ext
+                break
+        if not kind:
             return {"ok": False, "reason": "unsupported_ext",
-                    "message": "文档翻译支持 .docx / .xlsx / .pdf（其他请用「文档翻译」粘贴文本）"}
+                    "message": "文档翻译支持 .docx / .xlsx / .pptx / .pdf / .srt / .vtt（其他请用「文档翻译」粘贴文本）"}
 
         raw = file_b64.partition(",")[2] if file_b64.startswith("data:") else file_b64
         try:
@@ -717,7 +813,8 @@ def register_translate_routes(app, *, api_auth) -> None:
 
         base = filename.rsplit(".", 1)[0]
         params = dict(data=data, kind=kind, target_lang=target_lang,
-                      source_lang=source_lang, style=style, engine=engine, base=base)
+                      source_lang=source_lang, style=style, engine=engine, base=base,
+                      bilingual=bool(body.get("subtitle_bilingual")))
 
         # L2c-2：stream=true → 暂存输入换 job_id，翻译在 SSE GET 长连接内执行并推进度
         if bool(body.get("stream")):
@@ -878,6 +975,7 @@ def register_translate_routes(app, *, api_auth) -> None:
             VoiceTranslateService,
             build_audio_transcribe_fn,
             decode_audio_to_temp,
+            resolve_effective_audio_cfg,
         )
 
         body = await request.json()
@@ -886,28 +984,153 @@ def register_translate_routes(app, *, api_auth) -> None:
         source_lang = str(body.get("source_lang") or "")
         style = str(body.get("style") or "chat")
 
+        # B27（2026-08-21）：audio_pipeline 关（客户包死默认）但托管 ASR 已接入
+        # → 派生网关转写配置（resolve_effective_audio_cfg 单一事实源，三条翻译
+        # 路由同口径）；报错文案人话化——配置键绝不出现在用户界面。
         cm = getattr(request.app.state, "config_manager", None)
         audio_cfg = {}
         try:
             full = getattr(cm, "config", None) or {}
-            audio_cfg = dict(full.get("audio_pipeline") or {})
+            audio_cfg = resolve_effective_audio_cfg(full)
         except Exception:
             audio_cfg = {}
         if not audio_cfg.get("enabled", False):
             return {"ok": False, "reason": "asr_disabled",
-                    "message": "语音转写未启用（config.audio_pipeline.enabled）"}
+                    "message": tr(request, "err.inbox.xl_asr_unavailable")}
+
+        # P1（2026-08-18）补齐能力闸：与 image/compare/document 同口径（此前唯独
+        # 语音上传裸奔）。放在 asr_disabled 判定后——能力被拒答 403 前先如实报
+        # 「链路未启用」，两类原因不混淆。
+        _deny_capability(request, "ai.translate")
 
         path, reason = decode_audio_to_temp(audio_b64)
         if path is None:
             return {"ok": False, "reason": reason, "message": f"音频无效：{reason}"}
         try:
+            # P4：srt=true（上传口勾字幕需求）→ ASR opt-in 分段时间戳；默认路径零变化
+            _want_srt = bool(body.get("srt"))
             svc = VoiceTranslateService(
                 _get_translation_service(request),
-                build_audio_transcribe_fn(audio_cfg),
+                build_audio_transcribe_fn(audio_cfg, want_segments=_want_srt),
             )
-            return await svc.translate_voice(
+            _v_res = await svc.translate_voice(
                 path, target_lang=target_lang, source_lang=source_lang, style=style,
+                want_segments=_want_srt,
             )
+            # 坐席字符计量（P1）：真正送进翻译引擎的是转写文本，按其长度记——
+            # 与 translate-image 的 ocr_text 口径同源；ASR 失败/无语音不记。
+            if _v_res.get("ok"):
+                record_request_chars(
+                    request, "translation", len(str(_v_res.get("transcript") or "")))
+                if _want_srt:
+                    if _v_res.get("segments"):
+                        from src.ai.subtitle_builder import build_bilingual_srt
+                        _srt = await build_bilingual_srt(
+                            _v_res["segments"], _get_translation_service(request),
+                            target_lang=target_lang, source_lang=source_lang, style=style)
+                        if _srt.get("ok"):
+                            _v_res["srt_text"] = _srt["srt_text"]
+                            _v_res["srt_stats"] = _srt["stats"]
+                            record_request_chars(
+                                request, "translation",
+                                sum(len(str(s.get("text") or ""))
+                                    for s in _v_res["segments"]))
+                        else:
+                            _v_res["srt_reason"] = _srt.get("reason", "")
+                    else:
+                        # 无分段（老 176 服务 / ASR 缓存命中）→ 显式说清而非静默缺席
+                        _v_res["srt_reason"] = "no_segments"
+            return _v_res
+        finally:
+            try:
+                _os.remove(path)
+            except Exception:
+                pass
+
+    @app.post("/api/unified-inbox/translate-video")
+    async def api_unified_inbox_translate_video(request: Request, _=Depends(api_auth)):
+        """P2（2026-08-18）：视频上传 → 抽音轨(ffmpeg) → ASR 转写 → 翻译。
+
+        闸门序：video_translate 开关 → ASR 链启用 → 能力闸（与 translate-voice
+        同口径：链路未启用先如实报，能力被拒才 403）。转写+翻译复用
+        VoiceTranslateService（ASR 缓存/语言检测/术语），抽轨与并发=1 护栏在
+        VideoTranslateService。产出=转写+译文（SRT 需分段时间戳，见模块 docstring）。
+        """
+        import os as _os
+
+        from src.ai.video_translate import (
+            VideoTranslateService,
+            decode_video_to_temp,
+            resolve_video_cfg,
+        )
+        from src.ai.voice_translate import (
+            VoiceTranslateService,
+            build_audio_transcribe_fn,
+            resolve_effective_audio_cfg,
+        )
+
+        body = await request.json()
+        video_b64 = str(body.get("video_b64") or "")
+        filename = str(body.get("filename") or "")
+        target_lang = str(body.get("target_lang") or "zh")
+        source_lang = str(body.get("source_lang") or "")
+        style = str(body.get("style") or "chat")
+
+        cm = getattr(request.app.state, "config_manager", None)
+        try:
+            full = dict(getattr(cm, "config", None) or {})
+        except Exception:
+            full = {}
+        vc = resolve_video_cfg(full)
+        if not vc["enabled"]:
+            return {"ok": False, "reason": "video_disabled",
+                    "message": tr(request, "err.inbox.xl_video_unavailable")}
+        # B27：托管 ASR 回落 + 人话报错（与 translate-voice 同口径）
+        audio_cfg = resolve_effective_audio_cfg(full)
+        if not audio_cfg.get("enabled", False):
+            return {"ok": False, "reason": "asr_disabled",
+                    "message": tr(request, "err.inbox.xl_asr_unavailable")}
+        _deny_capability(request, "ai.translate")
+
+        path, reason = decode_video_to_temp(video_b64, max_mb=vc["max_mb"],
+                                            filename=filename)
+        if path is None:
+            msg = (f"视频过大（上限 {vc['max_mb']}MB）" if reason == "too_large"
+                   else f"视频无效：{reason}")
+            return {"ok": False, "reason": reason, "message": msg}
+        try:
+            vsvc = VoiceTranslateService(
+                _get_translation_service(request),
+                build_audio_transcribe_fn(audio_cfg, want_segments=True))
+            out = await VideoTranslateService(
+                vsvc, max_minutes=vc["max_minutes"],
+            ).translate_video(
+                path, target_lang=target_lang, source_lang=source_lang, style=style,
+                want_segments=True)
+            # 坐席字符计量：转写文本长度口径（与 voice/media 路径同源）
+            if out.get("ok"):
+                record_request_chars(
+                    request, "translation", len(str(out.get("transcript") or "")))
+                # P4：srt=true + 有真时间戳 → 逐段翻译产双语字幕（追加计量：分段
+                # 逐段是第二次真实翻译消耗，与整篇转写翻译分开如实记）
+                if bool(body.get("srt")):
+                    if out.get("segments"):
+                        from src.ai.subtitle_builder import build_bilingual_srt
+                        _srt = await build_bilingual_srt(
+                            out["segments"], _get_translation_service(request),
+                            target_lang=target_lang, source_lang=source_lang, style=style)
+                        if _srt.get("ok"):
+                            out["srt_text"] = _srt["srt_text"]
+                            out["srt_stats"] = _srt["stats"]
+                            record_request_chars(
+                                request, "translation",
+                                sum(len(str(s.get("text") or ""))
+                                    for s in out["segments"]))
+                        else:
+                            out["srt_reason"] = _srt.get("reason", "")
+                    else:
+                        out["srt_reason"] = "no_segments"
+            return out
         finally:
             try:
                 _os.remove(path)
@@ -918,6 +1141,10 @@ def register_translate_routes(app, *, api_auth) -> None:
     async def api_unified_inbox_translate_message_media(request: Request, _=Depends(api_auth)):
         """P61-2：会话内媒体一键翻译（可解析则免上传）。"""
         from src.inbox.media_resolver import resolve_for_translate
+
+        # P1（2026-08-18）补齐能力闸：坐席主动消费（OCR/ASR+翻译双烧），与
+        # translate-image / translate-compare 同口径（此前免上传路径裸奔）。
+        _deny_capability(request, "ai.translate")
 
         body = await request.json()
         conversation_id = str(body.get("conversation_id") or "")
@@ -934,12 +1161,13 @@ def register_translate_routes(app, *, api_auth) -> None:
         base_dirs = _media_base_dirs(request)
         try:
             from src.integrations.protocol_bridge import (
-                protocol_media_root, static_media_ref_to_path,
+                protocol_media_roots, static_media_ref_to_path,
             )
             _local = static_media_ref_to_path(media_ref)
             if _local:
                 media_ref = _local
-                base_dirs = base_dirs + [str(protocol_media_root())]
+                # 双根：解析器可能在旧引擎树根命中（边车历史写点），白名单必须同口径
+                base_dirs = base_dirs + [str(r) for r in protocol_media_roots()]
         except Exception:
             logger.debug("protocol 媒体路径映射失败", exc_info=True)
 
@@ -978,13 +1206,63 @@ def register_translate_routes(app, *, api_auth) -> None:
                     "message": "媒体文件不在允许目录内"}
 
         try:
+            # P0-D（2026-08-19）：会话内文档一键译——复用上传口同一套
+            # _do_document_translation / 任务库 / SSE 进度 / 一次性令牌下载，免掉
+            # 「下载文件再去面板上传」的绕路。扩展名白名单由 media_resolver 把守，
+            # 这里再按展示名/归档名精判 kind（TG 归档名保留原扩展名）。
+            if kind == "document":
+                import os as _os
+
+                file_name = str(body.get("file_name") or "") or _os.path.basename(path)
+                _DOC_KINDS = ("docx", "xlsx", "pdf", "pptx", "srt", "vtt")
+                kind_ext = ""
+                for _ext in _DOC_KINDS:
+                    if file_name.lower().endswith("." + _ext):
+                        kind_ext = _ext
+                        break
+                if not kind_ext:
+                    _pext = _os.path.splitext(path)[1].lstrip(".").lower()
+                    kind_ext = _pext if _pext in _DOC_KINDS else ""
+                if not kind_ext:
+                    return {"ok": False, "reason": "unsupported_ext",
+                            "message": tr(request, "err.docmsg.unsupported_ext")}
+                try:
+                    if _os.path.getsize(path) > 10 * 1024 * 1024:
+                        return {"ok": False, "reason": "too_large",
+                                "message": tr(request, "err.docmsg.too_large")}
+                    with open(path, "rb") as _f:
+                        data = _f.read()
+                except Exception:
+                    return {"ok": False, "reason": "read_failed",
+                            "message": tr(request, "err.docmsg.read_failed")}
+                base = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
+                params = dict(
+                    data=data, kind=kind_ext,
+                    target_lang=normalize_lang(target_lang) or "zh",
+                    source_lang=normalize_lang(source_lang), style=style, engine="",
+                    base=base, bilingual=bool(body.get("subtitle_bilingual")))
+                if bool(body.get("stream")):
+                    from src.web.document_job_store import get_document_job_store
+                    job_id = get_document_job_store().create(params)
+                    return {"ok": True, "media_kind": "document", "job_id": job_id,
+                            "file_name": file_name,
+                            "from_upload": False,
+                            "from_remote": _tmp_download is not None,
+                            "progress_url": f"/api/unified-inbox/translate-document-progress/{job_id}"}
+                out = await _do_document_translation(
+                    xlate=_get_translation_service(request), **params)
+                out["media_kind"] = "document"
+                out["from_upload"] = False
+                out["from_remote"] = _tmp_download is not None
+                return out
             if kind == "image":
                 from src.ai.image_translate import ImageTranslateService, build_vision_ocr_fn
                 cm = getattr(request.app.state, "config_manager", None)
                 try:
-                    vision_cfg = dict((getattr(cm, "config", None) or {}).get("vision") or {})
+                    _full_v = dict(getattr(cm, "config", None) or {})
                 except Exception:
-                    vision_cfg = {}
+                    _full_v = {}
+                vision_cfg = dict(_full_v.get("vision") or {})
                 if not vision_cfg.get("enabled", False):
                     return {"ok": False, "reason": "vision_disabled",
                             "message": "图像识别未启用（config.vision.enabled）"}
@@ -995,37 +1273,187 @@ def register_translate_routes(app, *, api_auth) -> None:
                                 "message": "未配置可用的图像识别后端"}
                 except Exception:
                     pass
+                # P3（2026-08-18）：patch=true → 译文贴回原图（bbox OCR + 逐块译 + 回绘）。
+                # 计量按全部识出块的源文本长度（真送翻译引擎的量）；PNG 走 base64 内联
+                # （几百 KB 级，一次性展示不值得走令牌存储的取回即删语义——灯箱要反复切看）。
+                # P0-U（2026-08-19）：贴回与「识别翻译」共用同一带缓存服务——bbox 按图片
+                # sha1 缓存（MediaTextCache），换目标语/先识别后贴回都免二次 VLM。
+                from src.ai.image_patch_translate import (
+                    ImagePatchTranslateService,
+                    build_vision_boxes_fn,
+                    resolve_patch_cfg,
+                )
+                _patch_cfg = resolve_patch_cfg(_full_v)
+
+                def _mk_patch_svc():
+                    from src.ai.media_text_cache import get_media_text_cache
+                    # P1-OCR：配了专用 OCR（ppocr 微服务）则优先走它——定位精度
+                    # 碾压 VLM 近似 bbox（漏块/盖偏的结构性根因）；掉线自动回落 VLM。
+                    _sbf = None
+                    if (_patch_cfg["ocr_provider"] == "ppocr"
+                            and _patch_cfg["ocr_base_url"]):
+                        from src.ai.image_patch_translate import build_ppocr_boxes_fn
+                        _sbf = build_ppocr_boxes_fn(
+                            _patch_cfg["ocr_base_url"],
+                            timeout_sec=_patch_cfg["ocr_timeout_sec"])
+                    return ImagePatchTranslateService(
+                        _get_translation_service(request),
+                        build_vision_boxes_fn(vision_cfg, vision_cfg),
+                        text_cache=get_media_text_cache(),
+                        max_blocks=_patch_cfg["max_blocks"],
+                        context_translate=_patch_cfg["context_translate"],
+                        struct_boxes_fn=_sbf,
+                    )
+
+                from time import monotonic as _ix_mono
+                if bool(body.get("patch")):
+                    if not _patch_cfg["enabled"]:
+                        return {"ok": False, "reason": "patch_disabled",
+                                "message": "译文贴回未启用（config.media.image_patch_translate.enabled）"}
+                    _ix_t0 = _ix_mono()
+                    pout = await _mk_patch_svc().translate_image_patched(
+                        path, target_lang=target_lang,
+                        source_lang=source_lang, style=style)
+                    if pout.get("ok"):
+                        import base64 as _b64
+                        png = pout.pop("png", b"")
+                        pout["patched_image_b64"] = (
+                            "data:image/png;base64," + _b64.b64encode(png).decode())
+                        record_request_chars(
+                            request, "translation",
+                            sum(len(i.get("text") or "") for i in pout.get("items") or []))
+                        # P1-OBS：链路观测（ops「图片翻译」卡；best-effort 绝不影响响应）
+                        try:
+                            from src.ai.image_xlate_stats import get_image_xlate_stats
+                            get_image_xlate_stats().record_patch(
+                                provider_tag=str(pout.get("ocr_tag") or ""),
+                                cached=bool(pout.get("ocr_cached")),
+                                lang=target_lang, stats=pout.get("stats"),
+                                ms=int((_ix_mono() - _ix_t0) * 1000))
+                        except Exception:
+                            pass
+                    pout["media_kind"] = "image"
+                    pout["from_upload"] = False
+                    pout["from_remote"] = _tmp_download is not None
+                    return pout
+                # P0-U：贴回已启用时，「识别翻译」优先走同一条 bbox 管线的文本模式——
+                # 面板与译文图同源同块（消除两套 OCR 分叉），且 bbox 结果落缓存供贴回/
+                # 换语言复用。软失败（no_boxes/translate_failed/bad_image）→ 落回下方
+                # 纯文本 OCR 旧路径（bbox 是 JSON 约束输出，长段落图偶尔不如自由 OCR）。
+                if _patch_cfg["enabled"] and _patch_cfg["unified_ocr"]:
+                    _ix_t0 = _ix_mono()
+                    uout = await _mk_patch_svc().translate_image_patched(
+                        path, target_lang=target_lang,
+                        source_lang=source_lang, style=style, render=False)
+                    if uout.get("ok"):
+                        out = {
+                            "ok": True, "media_kind": "image", "unified": True,
+                            "from_upload": False,
+                            "from_remote": _tmp_download is not None,
+                            "ocr_text": uout.get("src_text", ""),
+                            "ocr_cached": bool(uout.get("ocr_cached")),
+                            "ocr_tag": uout.get("ocr_tag", ""),
+                            "source_lang": uout.get("source_lang", ""),
+                            "bbox_stats": uout.get("stats") or {},
+                            "translation": {
+                                "ok": True,
+                                "translated_text": uout.get("out_text", ""),
+                                "provider": uout.get("provider", ""),
+                                "source_lang": uout.get("source_lang", ""),
+                                "target_lang": target_lang,
+                            },
+                        }
+                        record_request_chars(
+                            request, "translation", len(str(out.get("ocr_text") or "")))
+                        try:
+                            from src.ai.image_xlate_stats import get_image_xlate_stats
+                            get_image_xlate_stats().record_run(
+                                provider_tag=str(uout.get("ocr_tag") or ""),
+                                cached=bool(uout.get("ocr_cached")),
+                                lang=target_lang, stats=uout.get("stats"),
+                                ms=int((_ix_mono() - _ix_t0) * 1000))
+                        except Exception:
+                            pass
+                        return out
                 svc = ImageTranslateService(
                     _get_translation_service(request),
                     build_vision_ocr_fn(vision_cfg, vision_cfg),
                 )
+                _ix_t0 = _ix_mono()
                 out = await svc.translate_image(
                     path, target_lang=target_lang, source_lang=source_lang, style=style,
                 )
                 out["media_kind"] = "image"
                 out["from_upload"] = False
                 out["from_remote"] = _tmp_download is not None
+                # 坐席字符计量（P1）：与 translate-image 上传路径同口径（OCR 文本长度）
+                if out.get("ok"):
+                    record_request_chars(
+                        request, "translation", len(str(out.get("ocr_text") or "")))
+                    try:
+                        from src.ai.image_xlate_stats import get_image_xlate_stats
+                        get_image_xlate_stats().record_run(
+                            provider_tag=str(out.get("ocr_tag") or ""),
+                            cached=bool(out.get("ocr_cached")),
+                            lang=target_lang, stats=None,
+                            ms=int((_ix_mono() - _ix_t0) * 1000))
+                    except Exception:
+                        pass
                 return out
 
-            from src.ai.voice_translate import VoiceTranslateService, build_audio_transcribe_fn
+            from src.ai.voice_translate import (
+                VoiceTranslateService,
+                build_audio_transcribe_fn,
+                resolve_effective_audio_cfg,
+            )
             cm = getattr(request.app.state, "config_manager", None)
             try:
-                audio_cfg = dict((getattr(cm, "config", None) or {}).get("audio_pipeline") or {})
+                _full_cfg = dict(getattr(cm, "config", None) or {})
             except Exception:
-                audio_cfg = {}
+                _full_cfg = {}
+            # B27：托管 ASR 回落 + 人话报错（与 translate-voice 同口径）
+            audio_cfg = resolve_effective_audio_cfg(_full_cfg)
             if not audio_cfg.get("enabled", False):
                 return {"ok": False, "reason": "asr_disabled",
-                        "message": "语音转写未启用（config.audio_pipeline.enabled）"}
+                        "message": tr(request, "err.inbox.xl_asr_unavailable")}
             svc = VoiceTranslateService(
                 _get_translation_service(request),
                 build_audio_transcribe_fn(audio_cfg),
             )
+            # P2（2026-08-18）：视频 → 抽音轨 → 同一条 ASR+翻译链（media.video_translate 闸默认关）
+            if kind == "video":
+                from src.ai.video_translate import VideoTranslateService, resolve_video_cfg
+                _vc = resolve_video_cfg(_full_cfg)
+                if not _vc["enabled"]:
+                    return {"ok": False, "reason": "video_disabled",
+                            "message": tr(request, "err.inbox.xl_video_unavailable")}
+                # P3：视频链 opt-in 分段时间戳（SRT 地基；老 176 服务优雅降级空列表）
+                _vseg_svc = VoiceTranslateService(
+                    _get_translation_service(request),
+                    build_audio_transcribe_fn(audio_cfg, want_segments=True),
+                )
+                out = await VideoTranslateService(
+                    _vseg_svc, max_minutes=_vc["max_minutes"],
+                ).translate_video(
+                    path, target_lang=target_lang, source_lang=source_lang, style=style,
+                    want_segments=True,
+                )
+                out["from_upload"] = False
+                out["from_remote"] = _tmp_download is not None
+                if out.get("ok"):
+                    record_request_chars(
+                        request, "translation", len(str(out.get("transcript") or "")))
+                return out
             out = await svc.translate_voice(
                 path, target_lang=target_lang, source_lang=source_lang, style=style,
             )
             out["media_kind"] = "voice"
             out["from_upload"] = False
             out["from_remote"] = _tmp_download is not None
+            # 坐席字符计量（P1）：与 translate-voice 上传路径同口径（转写文本长度）
+            if out.get("ok"):
+                record_request_chars(
+                    request, "translation", len(str(out.get("transcript") or "")))
             return out
         finally:
             if _tmp_download:

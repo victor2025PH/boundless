@@ -207,6 +207,54 @@ def test_ingest_group_no_sender_backward_compatible(tmp_path):
     assert store_row_to_chat(store.get_conversation(cid))["last_msg"] == "hi"
 
 
+def test_ingest_group_sender_via_source_gets_same_treatment(tmp_path):
+    """关键字派与 source 派必须**等效**（P1 2026-08-20）。
+
+    本函数两类调用方：显式传关键字的（编排器/WA 边车）和把字段塞 source 的
+    （A 线 telegram_client._emit_inbox、tg_message_payload）。旧实现只认关键字，
+    于是 source 派虽然 sender_name 落了库，却拿不到会话列表的发言人前缀——同一个
+    字段一半生效一半不生效，坐席在群列表里看不出谁在说话。
+    """
+    from src.inbox.normalizer import store_message_to_obj, store_row_to_chat
+    store = InboxStore(tmp_path / "inbox.db")
+    cid = pb.ingest_incoming(
+        store, platform="telegram", account_id="a", chat_key="-100777",
+        name="内测bug群", text="早上好啊", ts=100, msg_id="gs3", direction="in",
+        source={"chat_type": "group", "sender_id": "555", "sender_name": "张三"},
+    )
+    obj = store_message_to_obj(store.list_messages(cid)[-1])
+    assert obj["text"] == "早上好啊", "正文仍须干净"
+    assert obj["sender_name"] == "张三" and obj["sender_id"] == "555"
+    row = store.get_conversation(cid)
+    assert row["chat_type"] == "group"
+    assert store_row_to_chat(row)["last_msg"] == "张三：早上好啊"
+
+
+def test_ingest_sender_id_keyword_does_not_wipe_source_name(tmp_path):
+    """只给 sender_id 时不得把 source 里已有的名字擦成空串（擦掉真名比缺名更糟）。"""
+    from src.inbox.normalizer import store_message_to_obj
+    store = InboxStore(tmp_path / "inbox.db")
+    cid = pb.ingest_incoming(
+        store, platform="telegram", account_id="a", chat_key="-100778",
+        text="hi", ts=100, msg_id="gs4", direction="in", chat_type="group",
+        sender_id="555", source={"sender_name": "张三"},
+    )
+    obj = store_message_to_obj(store.list_messages(cid)[-1])
+    assert obj["sender_name"] == "张三" and obj["sender_id"] == "555"
+
+
+def test_ingest_private_sender_never_prefixes_preview(tmp_path):
+    """私聊即使带了发言人也不加前缀（前缀是群列表语义）。"""
+    from src.inbox.normalizer import store_row_to_chat
+    store = InboxStore(tmp_path / "inbox.db")
+    cid = pb.ingest_incoming(
+        store, platform="whatsapp", account_id="a", chat_key="8613800000000",
+        text="hi", ts=100, msg_id="gs5", direction="in",
+        sender_id="x", sender_name="张三",
+    )
+    assert store_row_to_chat(store.get_conversation(cid))["last_msg"] == "hi"
+
+
 # ── sink ────────────────────────────────────────────────────────────────────
 
 def test_emit_incoming_dispatches_to_sink():
@@ -347,10 +395,12 @@ def test_desktop_mode_not_orchestrated(tmp_path, monkeypatch):
 # ── M6②：TG 历史回填 + 消息归一 ──────────────────────────────────────────────
 
 class _FakeChat:
-    def __init__(self, cid, title=None, first_name=None):
+    def __init__(self, cid, title=None, first_name=None, type=None):
         self.id = cid
         self.title = title
         self.first_name = first_name
+        if type is not None:
+            self.type = type
 
 
 class _FakeDate:
@@ -393,6 +443,78 @@ def test_tg_message_payload_outgoing_and_caption():
 
 def test_tg_message_payload_no_chat_returns_none():
     assert pb.tg_message_payload(_FakeMsg(None), "acc1") is None
+
+
+# ── 群语义随消息走（P1 2026-08-20，复核 CLI 实测的断链）────────────────────────
+# 生产实测：协议线 15 个群、数百条入站，messages.sender_name 全库为空
+# （tools/group_inference_review.py 报 12 个群「发言人=0」）→ 群气泡的发言人名/
+# 稳定色在最大的真群来源上没有数据；且 chat_type 全靠群名单同步补，同步没覆盖的
+# 群消息会被当私聊 → 群闸/群护栏形同虚设。这几条钉住修复不再退回。
+
+def _grp_msg(mid="9", ts=1, speaker=None, sender_chat=None, ctype="supergroup"):
+    m = _FakeMsg(_FakeChat(-100123, title="内测bug群", type=ctype),
+                 text="早上好", mid=mid, ts=ts)
+    if speaker is not None:
+        m.from_user = speaker
+    if sender_chat is not None:
+        m.sender_chat = sender_chat
+    return m
+
+
+def test_tg_payload_group_carries_chat_type_and_speaker():
+    speaker = _FakeChat(555, first_name="张三")
+    p = pb.tg_message_payload(_grp_msg(speaker=speaker), "acc1")
+    assert p["source"]["chat_type"] == "group", "群消息必须自带 chat_type"
+    assert p["source"]["sender_name"] == "张三"
+    assert p["source"]["sender_id"] == "555"
+    # 会话显示名仍是群名（不是发言人名）——两者是不同的字段，别串
+    assert p["name"] == "内测bug群"
+
+
+def test_tg_payload_private_carries_no_speaker():
+    """私聊刻意不带发言人（normalizer 语义「空=非群」，且发言人就是会话本人）。"""
+    msg = _FakeMsg(_FakeChat(555, first_name="Bob", type="private"),
+                   text="hi", mid="1", ts=1)
+    msg.from_user = _FakeChat(555, first_name="Bob")
+    p = pb.tg_message_payload(msg, "acc1")
+    src = p.get("source") or {}
+    assert not src.get("sender_name") and not src.get("sender_id")
+    assert not src.get("chat_type")
+
+
+def test_tg_payload_channel_post_uses_sender_chat():
+    """频道播报/匿名管理员没有 from_user，署名主体是 sender_chat。"""
+    p = pb.tg_message_payload(
+        _grp_msg(sender_chat=_FakeChat(-100999, title="公告频道"),
+                 ctype="channel"), "acc1")
+    assert p["source"]["chat_type"] == "channel"
+    assert p["source"]["sender_name"] == "公告频道"
+
+
+def test_tg_payload_group_without_speaker_writes_no_name():
+    """取不到发言人 → 不写键（宁缺名不错名），但 chat_type 照样带。"""
+    p = pb.tg_message_payload(_grp_msg(), "acc1")
+    assert p["source"]["chat_type"] == "group"
+    assert "sender_name" not in p["source"]
+
+
+def test_tg_payload_group_speaker_dirty_name_dropped():
+    """状态文案不是名字（sanitize_peer_name 同一口径），但 id 仍可留作聚合键。"""
+    p = pb.tg_message_payload(
+        _grp_msg(speaker=_FakeChat(777, first_name="Active now")), "acc1")
+    assert "sender_name" not in p["source"]
+    assert p["source"]["sender_id"] == "777"
+
+
+def test_tg_payload_group_keeps_document_fields():
+    """群 + 文件：两组 source 字段必须共存（别互相覆盖）。"""
+    msg = _grp_msg(speaker=_FakeChat(555, first_name="张三"))
+    msg.text = ""
+    msg.document = types.SimpleNamespace(file_name="report.pdf", file_size=2048)
+    p = pb.tg_message_payload(msg, "acc1", media_type="document")
+    assert p["source"]["file_name"] == "report.pdf"
+    assert p["source"]["sender_name"] == "张三"
+    assert p["source"]["chat_type"] == "group"
 
 
 class _FakeDialogs:

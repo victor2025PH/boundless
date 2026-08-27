@@ -142,6 +142,9 @@ async def start_assistant(assistant):
             # ★ Phase O：主动关怀引擎（记忆驱动的约定/事件跟进）
             await assistant._maybe_start_proactive_care(assistant._web_app)
 
+            # ★ 智能养号执行引擎（常备接线 + 配置热闸；默认全关，go_live 仅金丝雀）
+            await assistant._maybe_start_nurture_engine(assistant._web_app)
+
             # ★ 多平台 deferred 队列（非 messenger 主动消息的发送闭环；默认关）
             await assistant._maybe_start_deferred_outbox()
 
@@ -150,6 +153,10 @@ async def start_assistant(assistant):
 
             # ★ P4-B：TTS 成本按日落库（供 ops 看板画近 N 天花费曲线；默认关）
             assistant._maybe_init_tts_cost_log()
+
+            # ★ 小智帮助语料首启自动播种（assistant.enabled 才动；幂等 upsert，
+            #   新装机首启即有语料——1.0.51 全功能开箱配套）
+            assistant._maybe_seed_assistant_help()
 
             # ★ S：翻译置信度低置信率/切换率按日落库（供看板画 7 天 sparkline；默认关）
             assistant._maybe_init_translation_trend_log()

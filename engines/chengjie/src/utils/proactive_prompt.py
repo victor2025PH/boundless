@@ -95,6 +95,51 @@ def _silence_header(name: str, plan: Dict[str, Any]) -> str:
     )
 
 
+def build_persona_clock_note(
+    place_label: str,
+    local_now: Any = None,
+    offset_hours: float = 0.0,
+) -> str:
+    """人设当地钟批注（纯函数，实施53 P2-2，2026-08-22）。
+
+    主动 prompt 的日历块按**调度钟**（服务器/经显式信号核实的客户钟）框定
+    问候时点——那半边是对的（晨安要落在对方的早上）；但海外人设**自己的状态**
+    （刚起床/在干嘛/「今天」指哪天）此前没有任何框定，LLM 顺着日历块把人设也
+    放进对方的时段（温哥华人设在对方早上说「我刚起床」——她当地是傍晚，且
+    两地日期可能差一天）。本批注只管「自己的状态」半边，与日历块显式分工，
+    不引入第二个「现在几点」的仲裁混乱（B 线双时钟教训，实施53 RC1）。
+
+    |offset_hours| < 3 或缺 place/时刻 → 返回 ""（近时区两个钟几乎重合，
+    注入=纯噪音；这与 ``persona_location.time_gap_line`` 同阈值）。
+    """
+    import datetime as _dt
+
+    label = str(place_label or "").strip()
+    if not label or not isinstance(local_now, _dt.datetime):
+        return ""
+    try:
+        if abs(float(offset_hours or 0.0)) < 3.0:
+            return ""
+    except (TypeError, ValueError):
+        return ""
+    try:
+        from src.companion.persona_location import daypart_label as _daypart
+        part = _daypart(local_now.hour, "zh")
+    except Exception:
+        part = ""
+    part_seg = f"（{part}）" if part else ""
+    wd = "周" + "一二三四五六日"[local_now.weekday()]
+    return (
+        f"（你的当地钟——重要：你人在{label}，你那边现在是"
+        f"{local_now.month}月{local_now.day}日 {wd} "
+        f"{local_now:%H:%M}{part_seg}。上一条日历说的是对方那边的时点，"
+        "问候时点跟它走；但**你自己的状态**——刚做完什么、正在做什么、"
+        "接下来的安排、以及你说的「今天/明天」——一律按你这边的当地时间，"
+        "自然处可带「我这边」（如「我这边快半夜了」）；"
+        "绝不要把自己的作息放进对方的时段。）\n"
+    )
+
+
 def build_proactive_prompt(
     ai_name: str,
     plan: Dict[str, Any],
@@ -104,9 +149,12 @@ def build_proactive_prompt(
     peer_language: str = "",
     scene_note: str = "",
     persona_style: str = "",
+    persona_clock_note: str = "",
+    self_state_note: str = "",
     avoid_texts: Optional[List[str]] = None,
     pending_inbound: Optional[List[str]] = None,
     pending_inbound_age: str = "",
+    now: Optional[float] = None,
 ) -> str:
     """组装主动外发文案生成 prompt（按 mode 自适应框定）。绝不抛。
 
@@ -124,6 +172,10 @@ def build_proactive_prompt(
         persona_style: 人设说话风格一行（personality.style / style_hint），可空。
             主动消息与被动回复应是同一个「人」——此前只带名字，七个人设写出同一句
             「好久没联系啦」。
+        persona_clock_note: 人设当地钟批注（``build_persona_clock_note`` 产物，
+            实施53 P2-2）。跨时区人设（时差 ≥3h）时非空：日历块管「问候时点」
+            （对方的钟），本批注管「人设自身状态」（自己的钟），显式分工防
+            LLM 在两个都正确的时间框架间随机横跳；近时区/无居住地恒空=零变化。
         avoid_texts: 「禁止相似」负样本——最近主动发过但没得到回应的开场原文。
             LLM 必须换切入点/句式（P0 反复读：生产实锤同句式 x3/x2/x2 连发）。
         pending_inbound: 悬空话头（P0 2026-08-05）——TA 最后发的、我们一直没回的
@@ -149,7 +201,11 @@ def build_proactive_prompt(
         )
         # 有悬空话头要接时放宽到 40 字：既回应又问候，30 字挤不下会顾此失彼
         length = "不超过40字" if pend else "不超过30字"
-        if not pend:
+        # 2026-08-18 双池统一：directive 层（build_ritual_opener 素材化）已带
+        # 「开场切入」时本层让行——两套切入角同时注入会互相打架（一句说聊早餐
+        # 一句说聊天气，LLM 无所适从或硬缝两个方向）。directive 层池更全
+        # （天气素材联动 + 轻话题顶替），它在场即以它为准。
+        if not pend and "开场切入" not in directive:
             # 无话头可接才配当日切入角（接茬本身就是今天的切入角）
             _angle = _ritual_angle(mode, str(plan.get("conversation_id") or ""))
             if _angle:
@@ -181,6 +237,43 @@ def build_proactive_prompt(
         "共同经历过的具体往事。没有确凿依据时，不要写「你以前…」「我们上次…」"
         "「还记得我们…」这类断言，宁可只聊当下。）\n"
     )
+    # 真实日历接地（2026-08-18「迎新表演」事故防线之三，无条件注入）：LLM 不知道
+    # 今天几号——8 月中旬编出「今天在排迎新表演」这类反季活动，唯有把真实日期
+    # 写进 prompt 才能拦在生成前（素材层 filter_seasonal_beats + 出站层
+    # present_claim_season_conflict 是另外两道）。
+    # 2026-08-19 补钟点（「上午 10:12 晚安」事故）：只给日期不给小时，LLM 在
+    # 非仪式开场里可能自由发挥「晚安/早安」——小时取 plan.local_hour（排程修复
+    # 后＝服务器钟或经显式信号核实的用户钟），缺失回落服务器当前小时。
+    _lt = time.localtime(now if now is not None else time.time())
+    _ph = plan.get("local_hour")
+    _hour = _ph if isinstance(_ph, int) and 0 <= _ph <= 23 else _lt.tm_hour
+    prompt += (
+        f"（真实日历：今天是{_lt.tm_mon}月{_lt.tm_mday}日，对方那边现在约"
+        f"{_hour}点。你提到自己在做的事、节令活动必须符合这个日期与季节，"
+        "问候语要符合这个钟点（上午别说晚安）——拿不准的就不要提。）\n"
+    )
+    # 跨时区人设的「自身状态」框定（实施53 P2-2）：紧跟日历块，两个时间框架
+    # 相邻且显式分工（问候时点=对方的钟 / 自己的状态=自己的钟）。
+    _pcn = str(persona_clock_note or "").strip()
+    if _pcn:
+        prompt += _pcn + "\n"
+    # B52（实施64 P1-2，`_287`）：自己上一轮亲口说过的状态（要睡了/去健身…）
+    # 必须衔接——proactive 开场是最高发的「装没说过」翻车面（睡前说晚安、
+    # 早上开场却像无事发生）。块由 self_state.self_state_note 产出（TTL 窗内
+    # 才非空），此处有块即消费。
+    _ssn = str(self_state_note or "").strip()
+    if _ssn:
+        prompt += _ssn + "\n"
+    # 已读不回 → 无压力文体（P1 2026-08-18）：TA 看过消息但没回，这是软拒绝
+    # 信号——追问「怎么不回/在吗」是加压，真人朋友的做法是发一条不需要回答的
+    # 轻分享，把回不回的主动权还给对方。
+    if (str(plan.get("read_state") or "") == "read"
+            and int(plan.get("unanswered_streak") or 0) > 0):
+        prompt += (
+            "（TA 看到过你之前的消息但一直没回——这条只做无压力的轻分享：说说"
+            "你自己的近况或所见就好，句末不要问号，不要出现「在吗/忙吗/怎么"
+            "不回」这类催促、追问或求回复的话。）\n"
+        )
 
     # 悬空话头接茬（P0 2026-08-05）：TA 最后说的话没人回过 → 本条必须先接住。
     # 放在所有可选块最前——这是比问候本身更高优先级的社交义务（真人绝不会
@@ -252,4 +345,4 @@ def build_proactive_prompt(
     return prompt
 
 
-__all__ = ["build_proactive_prompt"]
+__all__ = ["build_persona_clock_note", "build_proactive_prompt"]

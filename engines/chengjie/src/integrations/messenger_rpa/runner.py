@@ -8528,6 +8528,16 @@ class MessengerRpaRunner:
         if len(text) > max_chars:
             text = text[:max_chars].rstrip() + "..."
             result["tts_truncated"] = True
+        # 语音断档台账（2026-08-22）：与 WhatsApp 同批接线——两条 RPA 语音链此前都不进
+        # voice_outage，导致「hub 引擎被显存挤到每发必超时」那晚台账仍是 24h 全绿，
+        # 看门狗/ops 卡/Prometheus 集体沉默。终局口径：真发档（auto_voice 且 reply_mode
+        # =auto）看发送成败，其余档（approval_only=只产 artifact 待人审）合成成功即终局。
+        _vo_send_final = (mode == "auto_voice" and self._reply_mode == "auto")
+
+        def _vo(ok: bool, reason: str = "") -> None:
+            from src.ai.voice_outage import note_voice_attempt
+            note_voice_attempt(ok, "mr_rpa", reason)
+
         try:
             from src.ai.tts_pipeline import get_tts_pipeline
 
@@ -8570,6 +8580,7 @@ class MessengerRpaRunner:
                     result.setdefault("hints", []).append(
                         f"tts_duration_guard_blocked:{rv.duration_sec:.1f}s"
                     )
+                    _vo(False, f"duration_guard:{rv.duration_sec:.1f}s")
                     # 删掉坏的 artifact，避免误投
                     try:
                         import os as _os
@@ -8582,8 +8593,14 @@ class MessengerRpaRunner:
                 result["tts_voice"] = rv.voice
                 result["tts_format"] = rv.format
                 result.setdefault("hints", []).append("tts_ready_for_review")
+                if not _vo_send_final:
+                    _vo(True)
                 if mode == "auto_voice" and self._reply_mode == "auto":
                     await self._maybe_send_tts_audio(rv.audio_path, cfg, result)
+                    if result.get("tts_send_ok"):
+                        _vo(True)
+                    else:
+                        _vo(False, f"send:{str(result.get('tts_send_error') or 'unknown')}")
                     # ★ 若 share-sheet 发送失败，需按 BACK 回到 Messenger 聊天页
                     # 否则后续 text send 会在 "Send to" 页面操作，导致循环
                     # 但如果是预检就中止的（share_skip_），share 根本没打开，不需要 BACK
@@ -8610,8 +8627,10 @@ class MessengerRpaRunner:
             else:
                 result["tts_error"] = rv.error
                 result.setdefault("hints", []).append("tts_failed_text_fallback")
-        except Exception:
+                _vo(False, str(rv.error or "synth_failed"))
+        except Exception as ex:
             result.setdefault("hints", []).append("tts_exception_text_fallback")
+            _vo(False, f"exception:{type(ex).__name__}")
             logger.debug("[messenger_rpa] TTS generation failed", exc_info=True)
 
     async def _maybe_send_tts_audio(

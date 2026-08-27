@@ -732,3 +732,265 @@ def test_logout_endpoint_stamps_operator_reason(monkeypatch):
     assert row["status"] == "offline"
     assert row["meta"].get("offline_reason") == "operator"
     assert "session_string" not in row["meta"]   # 凭据仍被清（原语义不回退）
+
+
+# ── 8) 身份接替清账 + 登出联动健康表 + 催办衰减 + 重登分诊 ──────────────────
+# （2026-08-27 Calixa 僵尸横幅事故：登录档案 msg_* 先属 A，重登窗口里改登成 B →
+#   A 在本节点永无档案，其 needs_login 记录成了删不掉的红条 + 重登永远 404。）
+
+
+def test_record_supersede_flips_old_account_on_login_reuse():
+    """同一登录档案（login_id）被另一账号授权 ⇒ 旧账号不健康记录翻 logged_out。"""
+    s = _store()
+    s.record("messenger", "A100", "needs_login", detail="cookies expired",
+             login_id="msg_slot1")
+    s.record_inbox_health("messenger", "A100", unread=3, read_attempts=2,
+                          read_fails=2)
+    t = s.record("messenger", "B200", "authorized", login_id="msg_slot1")
+    assert t["superseded"] == ["A100"]
+    sess = s.dump()["sessions"]["messenger:A100"]
+    assert sess["status"] == "logged_out"
+    assert "superseded by messenger:B200" in sess["detail"]
+    # 发送前快速失败语义不变（logged_out 仍属不健康集合）
+    assert s.is_unhealthy("messenger", "A100") is True
+    # 记录仍在 unhealthy_sessions（横幅消费方按 logged_out 过滤，不再显示）
+    assert "messenger:A100" in s.unhealthy_sessions()
+    # 入站健康残行整行弹出（档案已易主，旧读数是另一个号的陈迹）
+    assert "messenger:A100" not in s.inbox_health()
+
+
+def test_record_supersede_skips_healthy_and_other_slots():
+    s = _store()
+    s.record("messenger", "A100", "needs_login", login_id="msg_slot1")
+    s.record("messenger", "C300", "needs_login", login_id="msg_other")
+    s.record("messenger", "E500", "authorized", login_id="msg_slot2")
+    t = s.record("messenger", "B200", "authorized", login_id="msg_slot1")
+    assert t["superseded"] == ["A100"]
+    d = s.dump()["sessions"]
+    assert d["messenger:C300"]["status"] == "needs_login"   # 别的档案不动
+    assert d["messenger:E500"]["status"] == "authorized"    # 健康行不动
+
+
+def test_record_same_account_reauth_is_recovery_not_supersede():
+    s = _store()
+    s.record("messenger", "A100", "needs_login", login_id="msg_slot1")
+    t = s.record("messenger", "A100", "authorized", login_id="msg_slot1")
+    assert t["recovered"] is True and t["superseded"] == []
+    assert s.is_unhealthy("messenger", "A100") is False
+
+
+def test_mark_superseded_updates_worker_marker_only():
+    """注册表落盘边界：只改 offline+worker:* 行；operator/online 行不替人做主。"""
+    from src.integrations.platform_session_health import (
+        mark_superseded_accounts,
+    )
+    reg = _registry()
+    reg.upsert("messenger", "SUP_W", status="offline",
+               meta={"offline_reason": "worker:needs_login"}, merge_meta=True)
+    reg.upsert("messenger", "SUP_O", status="offline",
+               meta={"offline_reason": "operator"}, merge_meta=True)
+    reg.upsert("messenger", "SUP_ON", status="online",
+               meta={"offline_reason": "worker:needs_login"}, merge_meta=True)
+    mark_superseded_accounts("messenger", ["SUP_W", "SUP_O", "SUP_ON", ""],
+                             "B200")
+    assert (reg.get("messenger", "SUP_W")["meta"]["offline_reason"]
+            == "superseded:B200")
+    assert reg.get("messenger", "SUP_O")["meta"]["offline_reason"] == "operator"
+    assert (reg.get("messenger", "SUP_ON")["meta"]["offline_reason"]
+            == "worker:needs_login")
+
+
+def test_watchdog_no_reminder_for_superseded_account():
+    """superseded 标记（非 worker: 前缀）→ 死号催办自然停止。"""
+    _registry().upsert("messenger", "SUP1", mode="web", status="offline",
+                       meta={"offline_reason": "superseded:B200"},
+                       merge_meta=True)
+    s = _store()
+    s.record("messenger", "SUP1", "logged_out", detail="superseded by B200")
+    t0 = s.dump()["sessions"]["messenger:SUP1"]["unhealthy_since"]
+    _watchdog()._check_platform_sessions(now=t0 + 86400)
+    assert _events() == []
+
+
+def test_session_status_endpoint_supersede_marks_registry():
+    """端到端：worker push「B 在档案 slotZ 授权」→ 旧号 OLD9 健康记录翻
+    logged_out + 注册表 worker:* 标记改 superseded:*（横幅/催办双灭）。"""
+    from src.web.routes.unified_inbox_account_routes import (
+        register_account_routes,
+    )
+    reg = _registry()
+    reg.upsert("messenger", "OLD9", mode="web", status="offline",
+               meta={"offline_reason": "worker:needs_login"}, merge_meta=True)
+    _store().record("messenger", "OLD9", "needs_login", login_id="msg_slotZ")
+    app = FastAPI()
+    register_account_routes(app, api_auth=lambda request: None,
+                            config_manager=None)
+    c = TestClient(app)
+    r = c.post("/api/internal/protocol/session-status", json={
+        "platform": "messenger", "account_id": "NEW9",
+        "status": "authorized", "login_id": "msg_slotZ"})
+    assert r.status_code == 200, r.text
+    assert (_store().dump()["sessions"]["messenger:OLD9"]["status"]
+            == "logged_out")
+    assert (reg.get("messenger", "OLD9")["meta"]["offline_reason"]
+            == "superseded:NEW9")
+
+
+def test_due_reminders_stale_decay_to_daily():
+    """催办衰减：>stale_after 后节流从 interval 升为 stale_interval（日更）。"""
+    s = _store()
+    s.record("messenger", "ST1", "expired")
+    t0 = s.dump()["sessions"]["messenger:ST1"]["unhealthy_since"]
+    kw = dict(min_age_sec=1800, interval_sec=14400,
+              stale_after_sec=48 * 3600, stale_interval_sec=86400)
+    due = s.due_reminders(now=t0 + 1860, **kw)          # 新鲜期首提
+    assert due["messenger:ST1"]["stale"] is False
+    assert s.due_reminders(now=t0 + 1860 + 3600, **kw) == {}   # 4h 内不重复
+    due = s.due_reminders(now=t0 + 1860 + 14460, **kw)         # 4h 到点照提
+    assert due["messenger:ST1"]["stale"] is False
+    due = s.due_reminders(now=t0 + 48 * 3600 + 60, **kw)       # 进入陈旧期
+    assert due["messenger:ST1"]["stale"] is True
+    # 陈旧期内 4h 到点不再提……
+    assert s.due_reminders(now=t0 + 48 * 3600 + 60 + 14460, **kw) == {}
+    # ……满 24h 才提（日更保底）
+    assert "messenger:ST1" in s.due_reminders(
+        now=t0 + 48 * 3600 + 60 + 86460, **kw)
+
+
+def test_due_reminders_stale_params_zero_keeps_old_behavior():
+    s = _store()
+    s.record("messenger", "ST0", "expired")
+    t0 = s.dump()["sessions"]["messenger:ST0"]["unhealthy_since"]
+    assert "messenger:ST0" in s.due_reminders(
+        min_age_sec=1800, interval_sec=14400, now=t0 + 30 * 86400)
+
+
+def test_watchdog_stale_decay_daily_reminder():
+    """看门狗接线：默认 48h 后降为日更（防「每 4h 轰一个没人修的死号」）。"""
+    s = _store()
+    _registered(account_id="ST2")
+    s.record("messenger", "ST2", "expired")
+    t0 = s.dump()["sessions"]["messenger:ST2"]["unhealthy_since"]
+    wd = _watchdog()
+    wd._check_platform_sessions(now=t0 + 49 * 3600)            # 陈旧期首提
+    assert len(_events()) == 1
+    wd._check_platform_sessions(now=t0 + 49 * 3600 + 14460)    # 4h 后：不提
+    assert len(_events()) == 1
+    wd._check_platform_sessions(now=t0 + 49 * 3600 + 86460)    # 24h 后：日更
+    assert len(_events()) == 2
+
+
+def test_relogin_route_worker_404_maps_to_no_profile(monkeypatch):
+    """worker 404（本机已无该账号档案）→ 语义化 404 + 人话文案，
+    绝不再把 httpx 英文原文/内部 URL 糊给坐席（2026-08-27 实锤）。"""
+    import src.integrations.messenger_web_login as mgw
+
+    class _Resp:
+        status_code = 404
+
+        @staticmethod
+        def json():
+            return {"ok": False, "error": "no session/profile found for id"}
+
+    class _Err(Exception):
+        def __init__(self):
+            super().__init__(
+                "Client error '404 Not Found' for url 'http://127.0.0.1:8791/"
+                "accounts/61584070255403/relogin'")
+            self.response = _Resp()
+
+    async def _boom(url, payload, timeout=20.0):
+        raise _Err()
+
+    monkeypatch.setattr(mgw, "_post_json", _boom)
+    monkeypatch.setattr(mgw, "service_base_url", lambda cfg: "http://svc")
+    c = TestClient(_ops_app())
+    r = c.post("/api/admin/platform-sessions/relogin", json={
+        "platform": "messenger", "account_id": "61584070255403"})
+    assert r.status_code == 404, r.text
+    d = str(r.json().get("detail") or "")
+    assert ("登录档案" in d) or ("login profile" in d)
+    assert "127.0.0.1" not in d and "Client error" not in d
+
+
+def test_relogin_route_connect_error_maps_to_worker_down(monkeypatch):
+    """连不上 worker（无 response）→ 502 + 「服务未运行」指路，不透传原文。"""
+    import src.integrations.messenger_web_login as mgw
+
+    async def _boom(url, payload, timeout=20.0):
+        raise RuntimeError("All connection attempts failed")
+
+    monkeypatch.setattr(mgw, "_post_json", _boom)
+    monkeypatch.setattr(mgw, "service_base_url", lambda cfg: "http://svc")
+    c = TestClient(_ops_app())
+    r = c.post("/api/admin/platform-sessions/relogin", json={
+        "platform": "messenger", "account_id": "100"})
+    assert r.status_code == 502
+    d = str(r.json().get("detail") or "")
+    assert ("登录服务" in d) or ("login service" in d)
+    assert "connection attempts" not in d
+
+
+def test_logout_route_flips_health_record(monkeypatch):
+    """运营登出 → 内存健康表同步翻 logged_out（横幅立灭，不再等重启）；
+    发送前快速失败语义保持（logged_out 仍不健康）。"""
+    import src.web.routes.unified_inbox_account_routes as rt
+
+    class _FakeOrch:
+        async def stop_account(self, key):
+            return True
+
+    monkeypatch.setattr(rt, "get_orchestrator", lambda cfg=None: _FakeOrch())
+    monkeypatch.setattr(rt, "ensure_builtin_workers", lambda cfg=None: None)
+    import src.integrations.messenger_web_login as mgw
+
+    async def _fake_post(url, payload, timeout=20.0):
+        return {"ok": True}
+
+    monkeypatch.setattr(mgw, "_post_json", _fake_post)
+    reg = _registry()
+    reg.upsert("messenger", "HS1", mode="web", status="online")
+    s = _store()
+    s.record("messenger", "HS1", "needs_login", detail="cookies expired")
+    app = FastAPI()
+    rt.register_account_routes(app, api_auth=lambda request: None,
+                               config_manager=None)
+    c = TestClient(app)
+    r = c.post("/api/accounts/messenger/HS1/logout")
+    assert r.status_code == 200, r.text
+    sess = s.dump()["sessions"]["messenger:HS1"]
+    assert sess["status"] == "logged_out"
+    assert "operator logout" in sess["detail"]
+    assert s.is_unhealthy("messenger", "HS1") is True
+    row = reg.get("messenger", "HS1")
+    assert row["status"] == "offline"
+    assert row["meta"].get("offline_reason") == "operator"
+
+
+def test_remove_route_flips_health_record(monkeypatch):
+    import src.web.routes.unified_inbox_account_routes as rt
+
+    class _FakeOrch:
+        async def stop_account(self, key):
+            return True
+
+    monkeypatch.setattr(rt, "get_orchestrator", lambda cfg=None: _FakeOrch())
+    monkeypatch.setattr(rt, "ensure_builtin_workers", lambda cfg=None: None)
+    import src.integrations.messenger_web_login as mgw
+
+    async def _fake_post(url, payload, timeout=20.0):
+        return {"ok": True}
+
+    monkeypatch.setattr(mgw, "_post_json", _fake_post)
+    reg = _registry()
+    reg.upsert("messenger", "HS2", mode="web", status="offline")
+    s = _store()
+    s.record("messenger", "HS2", "expired")
+    app = FastAPI()
+    rt.register_account_routes(app, api_auth=lambda request: None,
+                               config_manager=None)
+    c = TestClient(app)
+    r = c.post("/api/accounts/messenger/HS2/remove")
+    assert r.status_code == 200, r.text
+    assert s.dump()["sessions"]["messenger:HS2"]["status"] == "logged_out"
+    assert reg.get("messenger", "HS2")["status"] == "removed"

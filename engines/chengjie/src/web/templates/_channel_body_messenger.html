@@ -623,28 +623,28 @@ body:has(.mr-page.monitor-mode) .wrap{padding:.65rem .85rem 1.5rem}
         {{ (i18n or {}).get('msg_s446', '🚨 应急工具：紧急停发某 chat（即刻生效，重启不丢）') }}
       </summary>
       <div style="padding:.75rem;display:grid;gap:.7rem">
-        <div style="font-size:.74rem;color:var(--mt);line-height:1.55">
+        <div style="font-size:.74rem;color:var(--t3,#5b6b85);line-height:1.55">
           <b>{{ (i18n or {}).get('msg_s062', "使用场景") }}</b>{{ (i18n or {}).get('msg_s447', '：客户被反复刷屏 / 错误回复 / 舆情应急。一键写永久黑名单') }}
           {{ (i18n or {}).get('msg_s448', '+ 设短期内存 cooldown（默认 30 分钟）。30 分钟后内存 cooldown 自然失效，') }}
           {{ (i18n or {}).get('msg_s449', '但永久黑名单仍在；运营点&ldquo;解除&rdquo;才完全放行。') }}
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem">
           <label style="display:flex;flex-direction:column;gap:.2rem">
-            <span style="font-size:.7rem;color:var(--mt)">{{ (i18n or {}).get('msg_s063', "账号 ID（如 vwnj_test）") }}</span>
+            <span style="font-size:.7rem;color:var(--t3,#5b6b85)">{{ (i18n or {}).get('msg_s063', "账号 ID（如 vwnj_test）") }}</span>
             <input id="es-account-id" placeholder="account_id" autocomplete="off" />
           </label>
           <label style="display:flex;flex-direction:column;gap:.2rem">
-            <span style="font-size:.7rem;color:var(--mt)">{{ (i18n or {}).get('msg_s064', "Chat 名（peer 显示名）") }}</span>
+            <span style="font-size:.7rem;color:var(--t3,#5b6b85)">{{ (i18n or {}).get('msg_s064', "Chat 名（peer 显示名）") }}</span>
             <input id="es-chat-name" placeholder="{{ (i18n or {}).get('msg_s065', "如 Yunshan Zan") }}" autocomplete="off" />
           </label>
         </div>
         <label style="display:flex;flex-direction:column;gap:.2rem">
-          <span style="font-size:.7rem;color:var(--mt)">{{ (i18n or {}).get('msg_s066', "原因（写明白便于审计追溯）") }}</span>
+          <span style="font-size:.7rem;color:var(--t3,#5b6b85)">{{ (i18n or {}).get('msg_s066', "原因（写明白便于审计追溯）") }}</span>
           <input id="es-reason" placeholder="{{ (i18n or {}).get('msg_s067', "如：客户投诉刷屏 / OCR 误识死循环 / 风控触发") }}" autocomplete="off" />
         </label>
         <div style="display:flex;gap:.5rem;align-items:flex-end">
           <label style="flex:1;display:flex;flex-direction:column;gap:.2rem">
-            <span style="font-size:.7rem;color:var(--mt)">{{ (i18n or {}).get('msg_s068', "内存 cooldown 秒数（默认 1800s = 30 分钟）") }}</span>
+            <span style="font-size:.7rem;color:var(--t3,#5b6b85)">{{ (i18n or {}).get('msg_s068', "内存 cooldown 秒数（默认 1800s = 30 分钟）") }}</span>
             <input id="es-self-skip-sec" type="number" value="1800" min="0" max="86400" />
           </label>
           <button class="btn" id="btn-emergency-stop"
@@ -654,7 +654,7 @@ body:has(.mr-page.monitor-mode) .wrap{padding:.65rem .85rem 1.5rem}
         </div>
         <div style="border-top:1px solid var(--bd);padding-top:.5rem">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.4rem">
-            <span style="font-size:.78rem;color:var(--mt)">{{ (i18n or {}).get('msg_s069', "当前已停发列表（仅当前账号）") }}</span>
+            <span style="font-size:.78rem;color:var(--t3,#5b6b85)">{{ (i18n or {}).get('msg_s069', "当前已停发列表（仅当前账号）") }}</span>
             <button class="btn" id="btn-emergency-refresh"
                     style="font-size:.7rem;padding:.2rem .55rem">{{ (i18n or {}).get('refresh', "刷新") }}</button>
           </div>
@@ -933,7 +933,7 @@ body:has(.mr-page.monitor-mode) .wrap{padding:.65rem .85rem 1.5rem}
 
   <style>
     .dc-tab{background:transparent;border:0;border-bottom:2px solid transparent;color:var(--t2);padding:10px 16px;cursor:pointer;font-size:13px;font-weight:600;transition:.16s;border-radius:0}
-    .dc-tab:hover{color:var(--t);background:rgba(30,140,242,0.05)}
+    .dc-tab:hover{color:var(--t);background:color-mix(in srgb, var(--bl-growth,#1e8cf2) 5%, transparent)}
     .dc-tab.active{color:var(--tk-brand,#1e8cf2);border-bottom-color:var(--tk-brand,#1e8cf2)}
     .dc-pane{animation:dcFade .2s ease-out}
     @keyframes dcFade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
@@ -1484,11 +1484,11 @@ body:has(.mr-page.monitor-mode) .wrap{padding:.65rem .85rem 1.5rem}
   .pe-field label{font-size:13px;color:#cbd5e1;font-weight:600}
   .pe-field .pe-hint{font-size:11px;color:#94a3b8;margin-top:-2px}
   .pe-field input,.pe-field textarea,.pe-field select{background:#1e293b;border:1px solid #334155;color:#f1f5f9;padding:10px 12px;border-radius:8px;font-size:14px;font-family:inherit;transition:.16s;width:100%;box-sizing:border-box}
-  .pe-field input:focus,.pe-field textarea:focus,.pe-field select:focus{outline:none;border-color:var(--tk-brand,#1e8cf2);background:#1a2438;box-shadow:0 0 0 3px rgba(30,140,242,0.15)}
+  .pe-field input:focus,.pe-field textarea:focus,.pe-field select:focus{outline:none;border-color:var(--tk-brand,#1e8cf2);background:#1a2438;box-shadow:0 0 0 3px color-mix(in srgb, var(--bl-growth,#1e8cf2) 15%, transparent)}
   .pe-field input:disabled{opacity:0.55;cursor:not-allowed;background:#0f172a}
   .pe-field textarea{resize:vertical;min-height:90px;line-height:1.6}
   .pe-field textarea.pe-large{min-height:140px}
-  .pe-tag{display:inline-block;padding:2px 8px;font-size:10px;background:rgba(30,140,242,0.15);color:var(--bl-growth-300,#8bc4f8);border-radius:4px;margin-left:6px;font-weight:500}
+  .pe-tag{display:inline-block;padding:2px 8px;font-size:10px;background:color-mix(in srgb, var(--bl-growth,#1e8cf2) 15%, transparent);color:var(--bl-growth-300,#8bc4f8);border-radius:4px;margin-left:6px;font-weight:500}
   #persona-edit-modal-footer .btn{padding:10px 18px;font-size:14px;font-weight:600;border-radius:8px;cursor:pointer;border:1px solid #334155;background:#1e293b;color:#cbd5e1;transition:.16s}
   #persona-edit-modal-footer .btn:hover{background:#334155;color:#f1f5f9}
   #persona-edit-modal-footer .btn.btn-primary{background:#10b981;border-color:#10b981;color:white}
@@ -1617,10 +1617,10 @@ body:has(.mr-page.monitor-mode) .wrap{padding:.65rem .85rem 1.5rem}
       if (typeof window.savePersonaForm === 'function') {
         window.savePersonaForm().catch(err => {
           if (window.toast) window.toast(err.message || window.T('ov_js_save_fail'), 'err');
-          else alert(window.T('ov_js_save_fail')+': ' + (err.message || err));
+          else AITRNotify.alert(window.T('ov_js_save_fail')+': ' + (err.message || err));
         });
       } else {
-        alert('savePersonaForm '+window.T('msg_js_2048'));
+        AITRNotify.alert('savePersonaForm '+window.T('msg_js_2048'));
       }
       return;
     }
@@ -1797,7 +1797,7 @@ body:has(.mr-page.monitor-mode) .wrap{padding:.65rem .85rem 1.5rem}
           }
           if (window.toast) window.toast(window.Tf('msg_js_p79',{c:chatName,x:newProfile ? window.Tf('msg_js_p80',{p:newProfile}) : window.T('psn_js_086')}));
           refresh();
-        } catch(e) { alert(window.T('psn_js_030')+': ' + e.message); }
+        } catch(e) { AITRNotify.alert(window.T('psn_js_030')+': ' + e.message); }
       });
     });
 
@@ -1814,7 +1814,7 @@ body:has(.mr-page.monitor-mode) .wrap{padding:.65rem .85rem 1.5rem}
 
   async function bulkBindSelected() {
     const checks = [...listEl.querySelectorAll('.binding-mgr-check:checked')];
-    if (!checks.length) return alert(window.T('msg_js_2051')+' chat');
+    if (!checks.length) return AITRNotify.alert(window.T('msg_js_2051')+' chat');
     const profiles = (window.state || {}).pmProfiles || (((window.state || {}).personas || {}).reply_profiles || {}).profiles || [];
     const profileId = prompt(`${window.T('msg_js_1837')} ${checks.length} ${window.T('msg_js_1838')}。\n${window.T('msg_s416')}:\n${profiles.map(p => '  - ' + (p.id||p.name)).join('\n')}\n\n${window.T('inbox.prompt.title')} reply_profile_id（${window.T('msg_js_1839')} = ${window.T('psn_js_086')}）:`, (profiles[0] && (profiles[0].id||profiles[0].name)) || '');
     if (profileId === null) return;
@@ -1833,12 +1833,12 @@ body:has(.mr-page.monitor-mode) .wrap{padding:.65rem .85rem 1.5rem}
       }
       if (window.toast) window.toast(window.T('msg_js_2069'));
       refresh();
-    } catch(e) { alert(window.T('msg_js_2052')+': ' + e.message); }
+    } catch(e) { AITRNotify.alert(window.T('msg_js_2052')+': ' + e.message); }
   }
 
   async function bindAllAccount() {
     const accounts = [...new Set(_bindingMgrLeads.map(l => l.account_id || '').filter(Boolean))];
-    if (!accounts.length) return alert(window.T('msg_js_2053'));
+    if (!accounts.length) return AITRNotify.alert(window.T('msg_js_2053'));
     const profiles = (window.state || {}).pmProfiles || (((window.state || {}).personas || {}).reply_profiles || {}).profiles || [];
     const accountId = prompt(`${window.T('msg_js_2065')}:\n${accounts.map(a => '  - ' + a).join('\n')}`, accounts[0]);
     if (!accountId) return;
@@ -1855,7 +1855,7 @@ body:has(.mr-page.monitor-mode) .wrap{padding:.65rem .85rem 1.5rem}
       }, {timeoutMs: 60000}).then(r => r.json());
       if (window.toast) window.toast(window.Tf('msg_js_p82',{a:accountId,x:r.applied,t:r.total_in_request}));
       refresh();
-    } catch(e) { alert(window.T('msg_js_2054')+': ' + e.message); }
+    } catch(e) { AITRNotify.alert(window.T('msg_js_2054')+': ' + e.message); }
   }
 
   if (btnOpen) btnOpen.addEventListener('click', open);
@@ -1919,9 +1919,9 @@ async function mrCancelSendItem(id){
   if(!confirm(window.T('msg_js_2057')+' #'+id+'？')) return;
   try{
     const r=await apiFetch('/api/messenger-rpa/send-queue/'+id+'/cancel',{method:'POST'}, {timeoutMs: 60000});
-    if(!r.ok){ const t=await r.json(); alert(window.T('msg_js_2058')+': '+(t.detail||r.status)); return; }
+    if(!r.ok){ const t=await r.json(); AITRNotify.alert(window.T('msg_js_2058')+': '+(t.detail||r.status)); return; }
     loadMrSendQueue();
-  }catch(e){ alert(window.T('ov_js_req_fail')+': '+e); }
+  }catch(e){ AITRNotify.alert(window.T('ov_js_req_fail')+': '+e); }
 }
 
 function mrOpenSendManual(){
@@ -2023,11 +2023,11 @@ async function _msgrSetLang(chatKey, lang) {
       body: JSON.stringify({chat_key: chatKey, lang: lang || null}),
     }, {timeoutMs: 60000});
     const d = await r.json();
-    if (!r.ok || !d.ok) { alert(window.T('ov_js_op_fail')+': ' + (d.detail || d.error || r.status)); return; }
+    if (!r.ok || !d.ok) { AITRNotify.alert(window.T('ov_js_op_fail')+': ' + (d.detail || d.error || r.status)); return; }
     const msg = lang ? window.Tf('msg_js_p84',{c:chatKey.split(':').pop()||chatKey,l:lang}) : window.Tf('msg_js_p85',{c:chatKey.split(':').pop()||chatKey});
-    if (typeof showToast === 'function') showToast(msg, 'ok'); else alert(msg);
+      if (typeof showToast === 'function') showToast(msg, 'ok'); else AITRNotify.alert(msg, 'ok');
     if (typeof refreshLeads === 'function') refreshLeads();
-  } catch(e) { alert(window.T('draft.net_err')+': ' + e); }
+  } catch(e) { AITRNotify.alert(window.T('draft.net_err')+': ' + e); }
 }
 
 // ── 回复模式封顶提示：inbox.auto_draft.platform_modes 若把 messenger 封顶（壳层注入 window.__chcPlatformCaps），

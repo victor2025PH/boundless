@@ -54,6 +54,10 @@ export interface OrderEntry {
   /** 会话归因串（AI 坐席聊天里发出的下单链接带 ?ref=<platform:acct:chat>）：
    *  记录这单是哪个 AI 会话促成的；chengjie 引擎按 ref 拉单自动结算营销目标。 */
   ref?: string;
+  /** 渠道归因（实施50 P2 桌面海报漏斗）：下单页 URL 的 ?utm_source=（如 chatx_desktop
+   *  =桌面弹窗海报带来）。与 ref 同款「宁缺毋错」——空值不落字段；/console/funnel
+   *  按它把「桌面海报 → 下单」从全渠道订单里拆出来，闭合跨系统漏斗。 */
+  utm_source?: string;
   ip?: string;
   ua?: string;
   paid_at?: string;
@@ -143,6 +147,7 @@ export async function createOrder(
     if (sku.skuId) entry.sku_id = sku.skuId;
     if (sku.productId) entry.product_id = sku.productId;
     if (!entry.ref) delete entry.ref; // 空归因串不落字段（绝大多数自然流量单）
+    if (!entry.utm_source) delete entry.utm_source; // 渠道归因同款：自然流量不落字段
     // installed 是默认态：历史读库无字段视同 installed；新单也只在 hosted 时强制写出亦可，
     // 这里显式落 installed，方便运营后台一眼区分两条履约链。
     db.orders[entry.id] = entry;

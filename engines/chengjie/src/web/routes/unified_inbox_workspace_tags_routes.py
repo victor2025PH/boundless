@@ -88,6 +88,47 @@ def register_workspace_tags_routes(app, *, api_auth) -> None:
             return {"ok": False, "error": "contacts_disabled"}
         return {"ok": gw.delete_tag_library(tag), "library": gw.list_tag_library()}
 
+    @app.post("/api/workspace/tags/remove-from-all")
+    async def api_workspace_tag_remove_from_all(
+        request: Request, _=Depends(api_auth),
+    ):
+        """把某标签从**所有**会话上摘除（2026-08-23 标签治理闭环）。
+
+        上方库删除刻意不动已打标签（注释钉死该语义），于是测试期乱打的
+        「123/333」会永远挂在筛选条上（strip 按在用标签生成）——本端点是唯一的
+        全量摘除入口。viewer 拒写（与 batch/tags 同口径）；ops_events 留审计。
+        标签库条目**不动**：摘干净后是否删库条目由运营在管理器里另行决定。
+        """
+        try:
+            role = str(request.session.get("role", "") or "")
+        except Exception:
+            role = ""
+        if role == "viewer":
+            raise HTTPException(403, tr(request, "err.perm.viewer_readonly"))
+        body = await request.json()
+        tag = str((body or {}).get("tag") or "").strip()
+        if not tag:
+            raise HTTPException(400, tr(request, "err.ws.field_required", field="tag"))
+        store = _inbox_store(request)
+        if store is None or not hasattr(store, "remove_tag_from_all_conversations"):
+            return {"ok": False, "error": tr(request, "err.svc.inbox_not_ready")}
+        removed = int(store.remove_tag_from_all_conversations(tag) or 0)
+        try:
+            actor = str(request.session.get("username", "") or "") or "api"
+        except Exception:
+            actor = "api"
+        logger.info("[tags] 标签 %r 已从 %d 个会话摘除 by=%s", tag, removed, actor)
+        try:
+            from src.ops.ops_events import get_ops_event_store
+            _oes = get_ops_event_store()
+            if _oes is not None:
+                _oes.record(
+                    platform="workspace", account_id="", kind="tag_remove_all",
+                    reason="ok", detail=f"tag={tag};removed={removed};by={actor}")
+        except Exception:
+            logger.debug("[tags] remove-from-all 审计落账失败（忽略）", exc_info=True)
+        return {"ok": True, "tag": tag, "removed": removed}
+
     # ── T1: 会话级标签 + 归档 API ─────────────────────────────────────
 
     @app.post("/api/workspace/conv/{conversation_id}/summarize")
@@ -142,6 +183,14 @@ def register_workspace_tags_routes(app, *, api_auth) -> None:
         store = _inbox_store(request)
         if store is None:
             return {"ok": False, "error": tr(request, "err.svc.inbox_not_ready")}
+        # 实施74（实施69 P1-1）：摘掉「需人工」时元数据同清（防陈旧 tooltip 复活）
+        try:
+            from src.integrations.protocol_autoreply import HANDOFF_TAG
+            if HANDOFF_TAG not in tags and hasattr(store, "set_handoff_meta") \
+                    and HANDOFF_TAG in (store.get_conv_tags(conversation_id) or []):
+                store.set_handoff_meta(conversation_id, None)
+        except Exception:
+            logger.debug("handoff_meta 清除失败（忽略）", exc_info=True)
         ok = store.set_conv_tags(conversation_id, tags)
         # P28：广播标签变更事件
         if ok:

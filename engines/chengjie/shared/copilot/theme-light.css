@@ -3,6 +3,11 @@
    仍是同一色值，保证未挂品牌令牌时也不回落到旧 Tailwind 蓝）。 */
 :root[data-cp-theme="light"],
 .cp-theme-light {
+  /* UA 原生件（滚动条/表单件）跟随亮色；iframe(app.html) 是独立文档，
+     不继承宿主的 color-scheme —— 必须在主题文件里自带（2026-08-17）。 */
+  color-scheme: light;
+  /* 统一细滚动条 thumb 色（cp-panel-base 注入 scrollbar-color 消费；track 恒透明） */
+  --cp-sb-thumb: rgba(100, 116, 139, .45);
   --cp-bg: #f8fafc;
   --cp-surface: #ffffff;
   --cp-surface-2: #f1f5f9;
@@ -29,6 +34,8 @@
   --cp-goal-rel: #e11d48;
   --cp-goal-eng: #0284c7;
   --cp-goal-disc: #0d9488;
+  /* gold=目标「达成」收入时刻金带（cp-goal 终局卡；与工作台达成 toast 同色系） */
+  --cp-gold: #ca8a04;
   --cp-track: #e2e8f0;
   /* 语义状态 底/描边/文字（2026-08-17）：组件内禁再裸写亮色 hex——
      暗色主题下浅色实心底=白块，配近白 --cp-text 直接不可读
@@ -37,4 +44,6 @@
   --cp-warn-bg: #fffbeb;
   --cp-warn-border: #fde68a;
   --cp-warn-ink: #b45309;
+  /* danger-bg=危险淡底（cp-nurture go_live 确认框/真跑 chip 等危险确认面） */
+  --cp-danger-bg: #fef2f2;
 }

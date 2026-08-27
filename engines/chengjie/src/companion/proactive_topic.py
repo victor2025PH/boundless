@@ -174,6 +174,27 @@ def photo_share_gate(
 # （新闻钩子 > 天气强信号 > 裸问候）。
 NEWS_MODE = "news_share"
 _NEWS_UPGRADEABLE_MODES = ("gentle_checkin", "weather_hook")
+
+
+def news_upgradeable_modes(config: Dict[str, Any]) -> tuple:
+    """可被 news_share 升级的开场 mode 集（纯函数，绝不抛）。
+
+    默认＝gentle_checkin / weather_hook（生活线优先旧语义）；
+    ``companion.daily_topics.proactive.upgrade_life_share: true``（实施55
+    「聊资以实时新闻为主」老板拍板）时 **life_share 也可被升级**——新闻有货
+    即优先于预写生活素材，生活线退居「无新闻可用/72h 频控窗内」的补位；
+    配合「聊过即退役」账本，预写素材整体从主粮降级为补充。
+    """
+    try:
+        comp = (config or {}).get("companion")
+        dt = (comp.get("daily_topics") if isinstance(comp, dict) else None)
+        dt = dt if isinstance(dt, dict) else {}
+        pro = dt.get("proactive") if isinstance(dt.get("proactive"), dict) else {}
+        if bool(pro.get("upgrade_life_share", False)):
+            return _NEWS_UPGRADEABLE_MODES + ("life_share",)
+    except Exception:
+        pass
+    return _NEWS_UPGRADEABLE_MODES
 # 同一会话 72h 内不重复用新闻开场——新闻是全网同一批素材，高频轮播一眼机器人。
 NEWS_REPEAT_WINDOW_HOURS = 72.0
 # 缓存超过一天没刷出来的「新鲜事」不能当「今天看到的」讲（诚实口径，与
@@ -335,6 +356,7 @@ def _news_opener(
     now: Optional[float] = None,
     persona_words: Optional[List[str]] = None,
     persona_words_fn: Optional[Callable[[], List[str]]] = None,
+    persona_fn: Optional[Callable[[], Any]] = None,
 ) -> Dict[str, Any]:
     """今日新鲜事主动开场（签名对齐 _life_beat_opener/_weather_opener 同族，
     模块级故多收 config；返回 opener dict 或 {}＝无货，升级链自然落下一级）。
@@ -370,11 +392,38 @@ def _news_opener(
             return {}
         if not news_opener_allowed(contact_key, now=now):
             return {}
-        cache = read_topics_cache(tcfg.get("cache_path"))
+        # 实施55 按人设分源：人设 id/居住地国家命中 region_feeds → 用该区域
+        # 缓存（并背景保鲜）；区域缓存冷启动/过期 → 回落全局缓存（宁可聊
+        # 全局新闻也不空手）。未配置 region_feeds＝旧行为逐位不变。
         now_v = float(now if now is not None else time.time())
-        fetched_ts = float(cache.get("fetched_ts") or 0.0)
-        if fetched_ts <= 0 or (
-                now_v - fetched_ts) > NEWS_CACHE_MAX_AGE_HOURS * 3600.0:
+        rcfg = tcfg
+        try:
+            from src.companion.daily_topics import cfg_for_region, region_key_for
+            _p = persona_fn() if persona_fn is not None else None
+            _rk = region_key_for(_p, tcfg.get("region_feeds"))
+            if _rk:
+                rcfg = cfg_for_region(tcfg, _rk)
+        except Exception:
+            rcfg = tcfg
+        if rcfg is not tcfg:
+            try:
+                from src.companion.daily_topics import refresh_if_stale
+                # daemon 背景刷，绝不阻塞规划循环；now 透传保判定与本轮同钟
+                refresh_if_stale(rcfg, now=now_v)
+            except Exception:
+                pass
+
+        def _fresh_cache(path: Any) -> Dict[str, Any]:
+            c = read_topics_cache(path)
+            ts = float(c.get("fetched_ts") or 0.0)
+            if ts <= 0 or (now_v - ts) > NEWS_CACHE_MAX_AGE_HOURS * 3600.0:
+                return {}
+            return c
+
+        cache = _fresh_cache(rcfg.get("cache_path"))
+        if not cache and rcfg is not tcfg:
+            cache = _fresh_cache(tcfg.get("cache_path"))
+        if not cache:
             return {}
         # 轻话题硬闸（allowlist）：识别不出类别的一律不做主动开场素材
         pool = [t for t in (cache.get("topics") or [])
@@ -444,20 +493,24 @@ def maybe_upgrade_to_news(
     now: Optional[float] = None,
     persona_words: Optional[List[str]] = None,
     persona_words_fn: Optional[Callable[[], List[str]]] = None,
+    persona_fn: Optional[Callable[[], Any]] = None,
 ) -> Dict[str, Any]:
     """在 build_proactive_opener 结果上做 news_share 升级判定（纯决策，可测）。
 
-    只动 ``_NEWS_UPGRADEABLE_MODES``（gentle_checkin / weather_hook）——
-    life_share 及一切富开场原样放行；升级成功把 ``silent_hours`` / ``gap_bucket``
-    从原 opener 透传（prompt 框定层按真实沉默时长说话）。无货/未开闸/异常 →
-    返回原 op，零行为变化。
+    可升级 mode 集＝``news_upgradeable_modes(config)``：默认 gentle_checkin /
+    weather_hook（生活线优先旧语义）；``proactive.upgrade_life_share`` 开
+    （实施55「新闻为主」）时 life_share 也让位——新闻有货即优先。其余富开场
+    原样放行；升级成功把 ``silent_hours`` / ``gap_bucket`` 从原 opener 透传
+    （prompt 框定层按真实沉默时长说话）。``persona_fn``＝人设 dict 惰性解析
+    （地区分源用）。无货/未开闸/异常 → 返回原 op，零行为变化。
     """
     try:
-        if str((op or {}).get("mode") or "") not in _NEWS_UPGRADEABLE_MODES:
+        if str((op or {}).get("mode") or "") not in news_upgradeable_modes(config):
             return op
         news = _news_opener(
             config, contact_key, now=now,
-            persona_words=persona_words, persona_words_fn=persona_words_fn)
+            persona_words=persona_words, persona_words_fn=persona_words_fn,
+            persona_fn=persona_fn)
         if news:
             news["silent_hours"] = (op or {}).get("silent_hours", 0.0)
             news["gap_bucket"] = str((op or {}).get("gap_bucket") or "")
@@ -509,6 +562,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
         from src.utils.proactive_pacing import (
             parse_adaptive_pacing_cfg,
             parse_no_reply_backoff_cfg,
+            parse_read_aware_cfg,
             parse_response_pacing_cfg,
         )
         _pacing_cfg = parse_adaptive_pacing_cfg(cfg)
@@ -521,6 +575,26 @@ async def maybe_start_companion_proactive(assistant) -> None:
         _response_cfg = parse_response_pacing_cfg(cfg)
         if not _response_cfg.get("enabled"):
             _response_cfg = None
+        # P1 已读/未读分流（2026-08-18，默认关须 overlay 显式开）：已读不回退避
+        # 更陡（×4）+ 改无压力文体 + 停语音照片；未读首条不罚、连续 2 条抬月频。
+        _read_aware_cfg = parse_read_aware_cfg(cfg)
+        if not _read_aware_cfg.get("enabled"):
+            _read_aware_cfg = None
+
+        # 未回消息墙（2026-08-18，默认开=防骚扰护栏惯例）：会话末尾连续 ≥N 条
+        # 出站未获回应 → 一切主动（含仪式问候）暂停到对方开口。修「打开聊天
+        # 看到 6 条连排早安」的刷屏尴尬——仪式链此前完全没有堆叠上限。
+        def _parse_wall_cfg(pt_cfg: Dict[str, Any]) -> Dict[str, Any]:
+            v = pt_cfg.get("visibility_gate") if isinstance(
+                pt_cfg.get("visibility_gate"), dict) else {}
+            try:
+                _mt = int(v.get("max_trailing", 6) or 6)
+            except (TypeError, ValueError):
+                _mt = 6
+            return {"enabled": bool(v.get("enabled", True)),
+                    "max_trailing": max(1, _mt)}
+
+        _wall_cfg = _parse_wall_cfg(cfg)
 
         def _live_pacing_cfg():
             """每次调用现读 pacing（P1-198）：ConfigManager 热重载后，主动触达的
@@ -535,6 +609,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     return {}
                 _bo = parse_no_reply_backoff_cfg(_pt)
                 _rp = parse_response_pacing_cfg(_pt)
+                _ra = parse_read_aware_cfg(_pt)
                 return {
                     "min_silent_hours": float(_pt.get("min_silent_hours", 24)),
                     "cooldown_hours": float(_pt.get("cooldown_hours", 72)),
@@ -545,6 +620,8 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     "pacing_cfg": parse_adaptive_pacing_cfg(_pt),
                     "backoff_cfg": _bo if _bo.get("enabled") else None,
                     "response_pacing_cfg": _rp if _rp.get("enabled") else None,
+                    "read_aware_cfg": _ra if _ra.get("enabled") else None,
+                    "wall_cfg": _parse_wall_cfg(_pt),
                 }
             except Exception:
                 return {}
@@ -647,7 +724,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
         # 生日(birthday, Stage R)、称呼(name, Stage T) 共用一套通用框架，按优先级择一问。
         _collect_specs = []
 
-        def _add_collect_spec(slot, cfg_key, resolver, default_min):
+        def _add_collect_spec(slot, cfg_key, resolver, default_min, eligible=None):
             c = (cfg.get(cfg_key) or {})
             if not bool(c.get("enabled", False)):
                 return
@@ -656,10 +733,21 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 "min_intim": float(c.get("min_intimacy", default_min)),
                 "cooldown_days": float(c.get("cooldown_days", 30)),
                 "resolve": resolver,
+                "eligible": eligible,
                 "cd": JsonCooldownStore(
                     Path(assistant.config.config_path).parent
                     / f"companion_{slot}_ask_cooldown.json"),
             })
+
+        def _city_ask_eligible(cid):
+            # 城市槽额外闸：没有 replace 时钟 + 像海外（外语 / 行为钟偏国内 ≥3h）。
+            # 国内中文会话即使开关开了也不问——这是和「人人都问城市」方案的分界。
+            from src.companion.user_clock import city_ask_eligible
+            conv = _conv_index.get(str(cid or "")) or {}
+            ok, _reason = city_ask_eligible(
+                _resolve_clock(str(cid or "")),
+                language=str(conv.get("language") or ""))
+            return ok
 
         _add_collect_spec(
             "birthday", "birthday_ask",
@@ -667,6 +755,10 @@ async def maybe_start_companion_proactive(assistant) -> None:
         _add_collect_spec(
             "name", "name_ask",
             assistant.skill_manager.resolve_preferred_name, 35)
+        _add_collect_spec(
+            "city", "city_ask",
+            assistant.skill_manager.resolve_residence, 40,
+            eligible=_city_ask_eligible)
         min_silent_hours_base = min_silent_hours
         # mode(ask_<slot>) → 冷却 store，供发出后记冷却。
         _collect_cd_by_mode = {
@@ -964,7 +1056,13 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     build_own_fleet_index,
                 )
                 from src.integrations.account_registry import get_account_registry
-                _own_fleet_index = build_own_fleet_index(get_account_registry())
+                from src.companion.proactive_peer_hygiene import (
+                    own_fleet_extra_from_config,
+                )
+                _own_fleet_index = build_own_fleet_index(
+                    get_account_registry(),
+                    extra=own_fleet_extra_from_config(
+                        getattr(assistant.config, "config", None) or {}))
             except Exception:
                 _own_fleet_index = {}
             _filtered = []
@@ -1044,6 +1142,13 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 last_in_map = assistant.inbox_store.last_inbound_ts_map(cids)
             except Exception:
                 last_in_map = {}
+            # P1 已读/未读分流判据：最后一条出站的已读态（仅 telegram 有回执；
+            # 查失败 → 全空 = 未知 = 旧退避语义，安全方向）。
+            try:
+                read_state_map = (
+                    assistant.inbox_store.last_outbound_read_state_map(cids))
+            except Exception:
+                read_state_map = {}
             try:
                 tags_map = assistant.inbox_store.list_conv_tags_map(cids)
             except Exception:
@@ -1183,6 +1288,8 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     "last_direction": (dirs.get(cid) or {}).get("direction") or "",
                     # 对方最后一次开口（未回退避判据；从未入站 = 0）
                     "last_in_ts": _last_in_ts,
+                    # 最后一条出站的已读态（read/unread/""；已读不回 vs 未读分流）
+                    "read_state": str(read_state_map.get(cid) or ""),
                     "archived": bool(meta.get("archived")),
                     # 私聊：episodic 记忆 key 与写入侧同源（账号分桶 + CPI canonical）
                     "memory_key": _mem_key,
@@ -1226,6 +1333,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     episodic_store=_epi,
                     memory_key=str(conv.get("memory_key") or ""),
                     cfg=_uc_cfg,
+                    last_inbound_ts=float(conv.get("last_in_ts") or 0),
                 )
             except Exception:
                 return None
@@ -1280,15 +1388,14 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     "[proactive] 地区节日解析失败 cid=%s", cid, exc_info=True)
                 return None
 
-        def _news_persona_words(contact_key: str) -> list:
-            """news_share 选题用的人设词（tastes.likes + selfie_scenes 中文名词，
-            与反应式注入同一提取器）。人设解析与 _persona_style 同路（effective
-            persona=账号绑定人设），platform/account/chat 取会话快照 _conv_index。
-            任何失败返回 [] ＝ 纯当日轮换选题。"""
+        def _news_persona_obj(contact_key: str):
+            """生效人设 dict（账号绑定人设；解析失败 None）。人设解析与
+            _persona_style 同路，platform/account/chat 取会话快照 _conv_index。
+            实施55：地区分源（region_key_for 按人设 id/居住地国家挑 feeds）
+            与人设词提取共用这一次解析。"""
             try:
                 conv = _conv_index.get(str(contact_key or "")) or {}
                 from src.ai.persona_voice import resolve_effective_persona_id
-                from src.ai.reply_variety import extract_persona_words
                 from src.utils.persona_manager import PersonaManager
                 pid = resolve_effective_persona_id(
                     assistant.config.config or {},
@@ -1296,9 +1403,18 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     str(conv.get("account_id") or ""),
                     str(conv.get("chat_key") or ""))
                 if not pid:
-                    return []
+                    return None
+                return PersonaManager.get_instance().get_persona_by_id(pid)
+            except Exception:
+                return None
+
+        def _news_persona_words(contact_key: str) -> list:
+            """news_share 选题用的人设词（tastes.likes + selfie_scenes 中文名词，
+            与反应式注入同一提取器）。任何失败返回 [] ＝ 纯当日轮换选题。"""
+            try:
+                from src.ai.reply_variety import extract_persona_words
                 return extract_persona_words(
-                    PersonaManager.get_instance().get_persona_by_id(pid)) or []
+                    _news_persona_obj(contact_key)) or []
             except Exception:
                 return []
 
@@ -1317,18 +1433,22 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 last_emotion=last_emotion,
                 last_emotion_intensity=last_emotion_intensity,
                 contact_key=contact_key)
-            # 今日新鲜事升级（news_share）：升级链＝生活分享 → 新鲜事 → 天气。
-            # life_beat/weather 在 build_proactive_opener 内部——life_share 结果
-            # 原样放行（生活线优先不变），落到 weather_hook/gentle_checkin 才试
-            # 新闻钩子。危机 block 时 mode 为空 → 天然不触发；gated 于
-            # companion.daily_topics.proactive.enabled（默认关）+ 72h 每会话频控
-            # （真发才落账，见 _on_teaser_sent）。无货/异常 → 原 op，零行为变化。
-            if str((op or {}).get("mode") or "") in _NEWS_UPGRADEABLE_MODES:
+            # 今日新鲜事升级（news_share）：默认升级链＝生活分享 → 新鲜事 →
+            # 天气（life_beat/weather 在 build_proactive_opener 内部）。实施55
+            # 「新闻为主」：proactive.upgrade_life_share 开时 life_share 也让位
+            # （news_upgradeable_modes 单一事实源），预写生活素材降级为新闻
+            # 无货/频控窗内的补位。危机 block 时 mode 为空 → 天然不触发；
+            # gated 于 companion.daily_topics.proactive.enabled（默认关）+ 72h
+            # 每会话频控（真发才落账，见 _on_teaser_sent）。无货/异常 → 原 op。
+            if str((op or {}).get("mode") or "") in news_upgradeable_modes(
+                    assistant.config.config or {}):
                 try:
                     _ck = str(contact_key or memory_key or "")
                     _upg = maybe_upgrade_to_news(
                         op, assistant.config.config or {}, _ck,
                         persona_words_fn=lambda: _news_persona_words(
+                            str(contact_key or "")),
+                        persona_fn=lambda: _news_persona_obj(
                             str(contact_key or "")))
                     if str((_upg or {}).get("mode") or "") == NEWS_MODE:
                         return _upg
@@ -1351,6 +1471,13 @@ async def maybe_start_companion_proactive(assistant) -> None:
                             continue
                         if (_now - last_ask) < spec["cooldown_days"] * 86400.0:
                             continue
+                        _elig = spec.get("eligible")
+                        if _elig is not None:
+                            try:
+                                if not _elig(cid):
+                                    continue
+                            except Exception:
+                                continue
                         if spec["resolve"](memory_key) is not None:
                             continue  # 该槽位已知 → 不问
                         if not should_ask_profile_slot(
@@ -1663,6 +1790,40 @@ async def maybe_start_companion_proactive(assistant) -> None:
             except Exception:
                 return ""
 
+        def _persona_clock_note(plan) -> str:
+            """人设当地钟批注（实施53 P2-2，2026-08-22）。
+
+            主动 prompt 的日历块按调度钟（服务器/经核实的客户钟）框定问候
+            时点，但海外人设**自己的状态**此前无框定——LLM 顺着日历块把人设
+            也放进对方时段（温哥华人设在对方早上说「我刚起床」，她当地是
+            傍晚）。时差 ≥3h 才注入（近时区=噪音，阈值同 time_gap_line）；
+            解析失败/无居住地返回 ""（零行为变化）。"""
+            try:
+                from src.ai.persona_voice import resolve_effective_persona_id
+                from src.companion.persona_location import (
+                    persona_now,
+                    resolve_place_with_fallback,
+                    tz_offset_hours,
+                )
+                from src.utils.persona_manager import PersonaManager
+                from src.utils.proactive_prompt import build_persona_clock_note
+                pid = resolve_effective_persona_id(
+                    assistant.config.config or {},
+                    str(plan.get("platform") or ""),
+                    str(plan.get("account_id") or ""),
+                    str(plan.get("chat_key") or ""))
+                if not pid:
+                    return ""
+                p = PersonaManager.get_instance().get_persona_by_id(pid) or {}
+                place = resolve_place_with_fallback(p)
+                if place is None:
+                    return ""
+                return build_persona_clock_note(
+                    place.display("zh"), persona_now(place),
+                    tz_offset_hours(place))
+            except Exception:
+                return ""
+
         def _avoid_texts(plan) -> list:
             """「禁止相似」负样本：账本里上次主动的文案 + 末尾连续未回的出站消息。
 
@@ -1738,12 +1899,26 @@ async def maybe_start_companion_proactive(assistant) -> None:
                         mode=str(plan.get("mode") or "")) or ""
                 except Exception:
                     fs_block = ""
+            # B52（实施64 P1-2）：人设自述状态衔接——读该会话 B 线同键 user_context
+            # 的 _self_state_log（TTL 窗内才产块），proactive 开场不得与自己刚说过
+            # 的「要睡了/去健身」矛盾。任何失败按无状态处理，绝不阻塞开场生成。
+            _ss_note = ""
+            try:
+                from src.companion.self_state import self_state_note as _ssn_f
+                _uc_ss = assistant.skill_manager._get_user_context(
+                    str(plan.get("chat_key") or ""),
+                    str(plan.get("account_id") or ""))
+                _ss_note = _ssn_f(_uc_ss)
+            except Exception:
+                _ss_note = ""
             # Stage O：prompt 组装抽成纯函数，按 mode 自适应框定（仪式问候不再套「久别重逢」）。
             from src.utils.proactive_prompt import build_proactive_prompt
             prompt = build_proactive_prompt(
                 ai_name, plan, recent_context=ctx, few_shot_block=fs_block,
                 peer_language=_peer_language(plan), scene_note=scene_note,
                 persona_style=_persona_style(plan),
+                persona_clock_note=_persona_clock_note(plan),
+                self_state_note=_ss_note,
                 avoid_texts=list(avoid_texts or []),
                 pending_inbound=pending_in,
                 pending_inbound_age=pending_age)
@@ -1881,6 +2056,13 @@ async def maybe_start_companion_proactive(assistant) -> None:
             6% 无人知晓」的观测盲区）。
             """
             import random as _rnd
+
+            # B120（实施74）：全局「启用语音回复」显式关闭 → 主动/仪式链语音
+            # 一律禁声（0827 07:18 实锤：关闸态早安关怀语音直发客户）。
+            from src.inbox.voice_autosend import global_voice_reply_off
+            if global_voice_reply_off(assistant.config.config or {}):
+                _media_skip("voice", "global_gate")
+                return False
 
             v_cfg = cfg.get("voice") if isinstance(cfg.get("voice"), dict) else {}
             if _mfb_on and v_cfg.get("enabled", False):
@@ -2072,10 +2254,60 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 from src.ai.companion_selfie import pick_scene_hint, scene_pool
                 from src.utils.persona_manager import PersonaManager
                 persona = PersonaManager.get_instance().get_persona_by_id(pid) or {}
+                # 天气快照（2026-08-18）：反选池与轮换兜底都滤天气冲突场景
+                # （暴雨天不给 LLM 提供 beach picnic 选项）；无坐标/闸关 → None。
+                _wx_snap = None
+                try:
+                    from src.companion.weather_state import (
+                        scene_conflicts_with_weather,
+                        snap_for_persona,
+                    )
+                    _wx_snap = snap_for_persona(
+                        persona,
+                        (_cfg_root.get("companion") or {}).get("weather"))
+                except Exception:
+                    _wx_snap = None
                 scene = ""
+                # 人设当地钟（实施53 P2-2）：主动发照的场景时段判定此前一直用
+                # 服务器钟——海外人设在服务器早八（当地傍晚）会按上午桶选景。
+                # 与 A/B 线场景注入同源：无居住地人设回落服务器钟（旧行为）。
+                try:
+                    from src.companion.persona_location import (
+                        resolve_persona_now,
+                    )
+                    _p_now = resolve_persona_now(persona)
+                except Exception:
+                    import datetime as _dt_pp
+                    _p_now = _dt_pp.datetime.now()
                 # 场景反选（话题贴合）：仅回访/问候类有实际话题时有意义。
                 if bool(p_cfg.get("scene_by_topic", True)) and assistant.ai_client:
                     pool = scene_pool(persona, scfg.get("scene_rotation"))
+                    if _wx_snap is not None:
+                        try:
+                            _ok = [s for s in pool
+                                   if not scene_conflicts_with_weather(
+                                       s, _wx_snap)]
+                            if _ok:
+                                pool = _ok
+                        except Exception:
+                            pass
+                    # 时段硬冲突过滤（实施53 P2-2）：反选池此前不滤时段——LLM
+                    # 按话题贴合挑出「图书馆」时不管人设当地是不是凌晨（P0-2
+                    # 只收紧了轮换层，这里是它的镜像）。深夜全池冲突 → 清空池
+                    # 跳过反选，落到下方 pick_scene_hint 的 NIGHT_NEUTRAL 兜底。
+                    try:
+                        from src.ai.companion_selfie import (
+                            scene_conflicts_with_hour,
+                        )
+                        _h_pp = int(_p_now.hour)
+                        _ok_h = [s for s in pool
+                                 if not scene_conflicts_with_hour(s, _h_pp)]
+                        if _ok_h:
+                            pool = _ok_h
+                        elif _h_pp >= 22 or _h_pp < 6:
+                            pool = []
+                    except Exception:
+                        pass
                     directive = str(plan.get("directive") or "").strip()
                     if pool and directive:
                         try:
@@ -2099,7 +2331,9 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     scene = pick_scene_hint(
                         persona,
                         default_scene=str(scfg.get("scene_hint") or ""),
-                        fallback_scenes=scfg.get("scene_rotation"))
+                        fallback_scenes=scfg.get("scene_rotation"),
+                        now=_p_now,
+                        weather_snap=_wx_snap)
                 return (pid, scene)
             except Exception:
                 _media_skip("photo", "error")
@@ -2337,6 +2571,84 @@ async def maybe_start_companion_proactive(assistant) -> None:
             except Exception:
                 assistant.logger.debug(
                     "[proactive] 反编造守卫异常（放行）", exc_info=True)
+            # 1.08) 季节守卫（2026-08-18「迎新表演」事故）：文案以现在时声称在做
+            # 出窗节令的事（8 月「今天被拉去排迎新」）→ 重写一次；仍出窗 → 放弃
+            # 本轮。素材层（pick_life_beat 过滤）+ prompt 层（真实日历行）是前两道，
+            # 这里兜住 LLM 自由发挥编出来的反季活动。窄口径（同子句 现在时+节令词）
+            # 保证「上次圣诞」「离圣诞还有仨月」这类合法人话零误伤。best-effort。
+            try:
+                from src.companion.seasonal_guard import (
+                    present_claim_season_conflict,
+                )
+                _season_kw = present_claim_season_conflict(text, time.time())
+                if _season_kw:
+                    _retry_s = await _gen_text(
+                        plan, scene_note=_scene,
+                        avoid_texts=(_avoid or []) + [text])
+                    _kw2 = _season_kw
+                    if _retry_s:
+                        _kw2 = present_claim_season_conflict(
+                            _retry_s, time.time())
+                    if _retry_s and not _kw2:
+                        text = _retry_s
+                    else:
+                        _cd_store.mark_attempt(
+                            plan["conversation_id"], time.time())
+                        try:
+                            from src.companion.proactive_stats import (
+                                record_season_block,
+                            )
+                            record_season_block()
+                        except Exception:
+                            pass
+                        assistant.logger.info(
+                            "[proactive] 季节守卫拦截 cid=%s：「%s」不合当下"
+                            "时令（文案=%r），本轮放弃",
+                            plan.get("conversation_id"), _season_kw, text[:48])
+                        return False
+            except Exception:
+                assistant.logger.debug(
+                    "[proactive] 季节守卫异常（放行）", exc_info=True)
+            # 1.09) 问候词×时刻守卫（2026-08-19「上午 10:12 晚安」事故第四层）：
+            # 时钟层已收口（schedule_clock trust=replace-only），这里兜**内容层**
+            # ——句首/尾的 晚安/早安 与收件人时刻矛盾（LLM 在下午问候里自由发挥
+            # / 任何未来排程回归 / 显式时区配错）→ 重写一次，仍矛盾放弃本轮。
+            # 小时用 plan.local_hour（规划时按修复后语义算出：服务器钟或经显式
+            # 信号核实的用户钟），缺失回落服务器当前小时。
+            try:
+                from src.companion.seasonal_guard import greeting_time_conflict
+                _g_hour = plan.get("local_hour")
+                if not isinstance(_g_hour, int) or not (0 <= _g_hour <= 23):
+                    _g_hour = time.localtime().tm_hour
+                _greet_kw = greeting_time_conflict(text, _g_hour)
+                if _greet_kw:
+                    _retry_g = await _gen_text(
+                        plan, scene_note=_scene,
+                        avoid_texts=(_avoid or []) + [text])
+                    _gkw2 = _greet_kw
+                    if _retry_g:
+                        _gkw2 = greeting_time_conflict(_retry_g, _g_hour)
+                    if _retry_g and not _gkw2:
+                        text = _retry_g
+                    else:
+                        _cd_store.mark_attempt(
+                            plan["conversation_id"], time.time())
+                        try:
+                            from src.companion.proactive_stats import (
+                                record_greeting_time_block,
+                            )
+                            record_greeting_time_block()
+                        except Exception:
+                            pass
+                        assistant.logger.info(
+                            "[proactive] 问候时刻守卫拦截 cid=%s：「%s」不合"
+                            "收件人时刻 %d 点（文案=%r），本轮放弃",
+                            plan.get("conversation_id"), _greet_kw, _g_hour,
+                            text[:48])
+                        return False
+            except Exception:
+                assistant.logger.debug(
+                    "[proactive] 问候时刻守卫异常（放行）", exc_info=True)
             # 1.1) 出站优惠守卫（P14）：目标桥带来的开场也可能被 LLM 加一句
             # 「给你打个折」。只守目标驱动的开场（普通陪伴开场不碰），文案/
             # 配图配文/语音稿三条分支同源，所以放在这里一次搞定。
@@ -2368,13 +2680,44 @@ async def maybe_start_companion_proactive(assistant) -> None:
             platform = plan["platform"]
             account_id = plan["account_id"]
             chat_key = plan["chat_key"]
+            # 1.2) WP-4 rider ② 系统级披露（compliance.disclosure.notice，基线关）：
+            # 主动开场可能是会话的**首次 AI 接触**（EU AI Act「首次交互披露」正是
+            # 这里）。披露命中 → 本轮强制走文本（跳过生活照/语音开场——克隆声
+            # 绝不念披露语、图片配文不承载披露；下一轮起照常）。语言取
+            # `_peer_language`（与开场文案生成同源；拉丁语系靠它出 es/pt/id/vi
+            # 披露语）。notice 关（缺省）＝标记不烧、分支照旧，零行为变化。
+            _disc_forced_text = False
+            try:
+                from src.compliance.disclosure import apply_disclosure_for
+                _disc_out, _disc_applied = apply_disclosure_for(
+                    str(plan.get("conversation_id") or ""), text,
+                    lang_hint=_peer_language(plan))
+                if _disc_applied:
+                    text = _disc_out
+                    plan["_sent_text"] = text
+                    _disc_forced_text = True
+            except Exception:
+                assistant.logger.debug(
+                    "[proactive] 披露注入异常（照常分支）", exc_info=True)
+            # 1.25) 已读不回降媒体（P1 2026-08-18，read_aware 开才生效）：TA 看过
+            # 没回 → 本条只发无压力文本——语音要点开听、照片是升温动作，对软拒绝
+            # 中的人都是加压；文体已由 prompt 层改为「陈述句轻分享」，媒体这里降。
+            _rn_forced_text = False
+            if (_read_aware_cfg is not None
+                    and str(plan.get("read_state") or "") == "read"
+                    and int(plan.get("unanswered_streak") or 0) > 0):
+                _rn_forced_text = True
+                _media_skip("voice", "read_no_reply")
+                _media_skip("photo", "read_no_reply")
             # 1.3) 生活照分支（Phase16/17）：场景自拍 + 对齐文案作配文，图文一体
-            if _photo_plan and await _try_send_photo(
-                    plan, text, _photo_plan[0], _photo_plan[1]):
+            if ((not _disc_forced_text) and (not _rn_forced_text)
+                    and _photo_plan and await _try_send_photo(
+                        plan, text, _photo_plan[0], _photo_plan[1])):
                 _log_outreach(plan, "photo")
                 return True
             # 1.5) 语音开场分支（Phase13）：按概率发克隆声语音条；失败回落文本
-            if await _try_send_voice(plan, text):
+            if ((not _disc_forced_text) and (not _rn_forced_text)
+                    and await _try_send_voice(plan, text)):
                 _log_outreach(plan, "voice")
                 return True
             # 2) 优先编排器受管 worker（自动回写收件箱出站镜像）。
@@ -2459,10 +2802,13 @@ async def maybe_start_companion_proactive(assistant) -> None:
             except Exception:
                 pass
             # P1：生活分享真发成功才扣周配额（规划/生成失败/被守卫拦下都不扣）。
+            # 实施55：素材原文（plan.fact）一并记进「聊过即退役」会话账本——
+            # 主动分享过＝确定聊过，该会话此后不再用这条素材。
             if _mode == "life_share":
                 try:
                     assistant.skill_manager.mark_life_share_sent(
-                        str((plan or {}).get("conversation_id") or ""))
+                        str((plan or {}).get("conversation_id") or ""),
+                        beat=str((plan or {}).get("fact") or ""))
                 except Exception:
                     assistant.logger.debug(
                         "[proactive] life_share 配额落账失败", exc_info=True)
@@ -2526,10 +2872,18 @@ async def maybe_start_companion_proactive(assistant) -> None:
         _ritual_cd = None
         _r_cfg = (cfg.get("daily_ritual") or {})
         if bool(_r_cfg.get("enabled", False)):
-            from src.utils.daily_ritual import plan_daily_rituals as _plan_rituals
+            from src.utils.daily_ritual import (
+                parse_ritual_backoff_cfg,
+                plan_daily_rituals as _plan_rituals,
+            )
             _ritual_cd = JsonCooldownStore(
                 Path(assistant.config.config_path).parent
                 / "companion_ritual_cooldown.json")
+            # 仪式未回退避（2026-08-18，默认开）：连续 ≥3 个仪式日零回复 →
+            # 阶梯降频（隔天→每4天→每周）+ 降频期每天至多一档；对方开口即恢复。
+            _r_backoff = parse_ritual_backoff_cfg(_r_cfg)
+            if not _r_backoff.get("enabled"):
+                _r_backoff = None
 
             def _ritual_opener(*, slot, memory_key, stage, intimacy,
                                last_emotion="", last_emotion_intensity=-1.0,
@@ -2625,6 +2979,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     min_quiet_gap_hours=_r_gap,
                     max_per_tick=_r_max,
                     has_pending_care=_has_pending_care,
+                    backoff_cfg=_r_backoff,
                     active_hours_provider=_active_hours if _personalize else None,
                     # 用户时钟未启用 → 一个新参数都不传（逐位旧行为）
                     **({
@@ -2675,11 +3030,25 @@ async def maybe_start_companion_proactive(assistant) -> None:
             except Exception:
                 return 0.0
 
+        def _unanswered_wall_count(conversation_id: str) -> int:
+            """未回消息墙判据：末尾连续未回的出站条数（含媒体条）。异常 → 0（放行）。"""
+            try:
+                from src.utils.proactive_variety import (
+                    trailing_unanswered_out_count,
+                )
+                msgs = assistant.inbox_store.list_recent_messages(
+                    str(conversation_id or ""), limit=10) or []
+                return trailing_unanswered_out_count(msgs)
+            except Exception:
+                return 0
+
         loop = CompanionProactiveLoop(
             conversations_provider=_conversations,
             opener_fn=_opener,
             send_fn=_send,
             fresh_activity_provider=_fresh_last_ts,
+            unanswered_wall_provider=_unanswered_wall_count,
+            wall_cfg=_wall_cfg,
             cooldown_store=_cd_store,
             interval_sec=float(cfg.get("interval_sec", 900)),
             # 首 tick 前等 worker 拉起（编排器监督循环 15s 起步 + 连接耗时）
@@ -2700,6 +3069,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
             user_clock_provider=_user_clock if _uc_enabled else None,
             backoff_cfg=_backoff_cfg,
             response_pacing_cfg=_response_cfg,
+            read_aware_cfg=_read_aware_cfg,
             live_cfg_provider=_live_pacing_cfg,
         )
         await loop.start()

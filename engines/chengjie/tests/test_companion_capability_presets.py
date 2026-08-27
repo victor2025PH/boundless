@@ -72,7 +72,9 @@ def test_other_presets_have_no_extras():
 
 
 def test_capture_extra_flags_defaults_and_override():
-    assert capture_extra_flags({}) == {"ops.canary.enabled": False,
+    assert capture_extra_flags({}) == {"inbox.auto_draft.automation_mode": "auto_ai",
+                                       "inbox.auto_draft.bootstrap_automation_mode": True,
+                                       "ops.canary.enabled": False,
                                        "ops.canary.mode": "manual"}
     cfg = {"ops": {"canary": {"enabled": True, "mode": "auto_health"}}}
     got = capture_extra_flags(cfg)

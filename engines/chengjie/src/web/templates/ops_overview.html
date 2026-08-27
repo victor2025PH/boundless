@@ -85,6 +85,21 @@
   .ops-wrap .ops-prob-chip{border-color:var(--as);background:var(--as)}
   .ops-wrap .ops-prob-chip:hover{border-color:var(--amber)}
   .ops-wrap .ops-prob-chip .ops-group-dot{opacity:1}
+  /* 隐藏能力清单：复用 ops-toc-chip，不另造一套尺寸。默认收起，展开后按原因分组。 */
+  .ops-hid-panel{padding:0 2px 12px}
+  .ops-hid-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .ops-hid-hint{font-size:12px}
+  .ops-hid-body{margin-top:8px;display:flex;flex-direction:column;gap:10px}
+  .ops-hid-grp{display:flex;flex-direction:column;gap:6px}
+  .ops-hid-glabel{font-size:12px}
+  .ops-wrap .ops-hid-chip.off{border-color:var(--p);color:var(--t)}
+  .ops-wrap .ops-hid-chip.err{border-color:var(--as);background:var(--as)}
+  .ops-wrap .ops-hid-chip.healthy{border-color:var(--green);background:var(--gs)}
+  .ops-hid-pop{margin-top:8px;padding:10px 12px;background:var(--input);border:1px solid var(--bd);
+    border-radius:10px;font-size:12px;color:var(--t);max-width:440px;line-height:1.45}
+  .ops-hid-pop-t{font-weight:600;margin-bottom:4px;color:var(--t)}
+  .ops-hid-pop-b{color:var(--t2);margin-bottom:6px}
+  .ops-hid-pop-a{display:inline-block;margin-top:6px}
   .ops-group-head{display:flex;align-items:center;gap:8px;margin:24px 2px 10px;
     font-weight:700;font-size:13px;color:var(--t2);letter-spacing:.02em}
   .ops-group:first-child .ops-group-head{margin-top:2px}
@@ -102,6 +117,15 @@
   .ops-wrap section.ops-collapsed > *:not(h2){display:none!important}
   .ops-wrap section.ops-collapsed h2{margin-bottom:0}
   .ops-wrap section[data-ops-fhide]{display:none!important}
+  /* 老板视图（焦点档）：第四种隐藏语义，与 fhide/折叠/loader 条件隐藏互不覆写 */
+  .ops-wrap section[data-ops-bhide]{display:none!important}
+  /* warn 卡「去处理」CTA（P2）：只在红/黄灯时由 _opsSyncCtas 挂上，绿灯自动摘除 */
+  .ops-wrap section h2 .ops-cta{margin-left:auto;flex-shrink:0;white-space:nowrap;
+    font-size:11.5px;font-weight:600;color:var(--p);text-decoration:none;
+    border:1px solid color-mix(in srgb, var(--p) 45%, transparent);border-radius:999px;padding:2px 10px}
+  .ops-wrap section h2 .ops-cta:hover{background:color-mix(in srgb, var(--p) 12%, transparent)}
+  /* 折叠态刻意保留 CTA：红灯卡收着也能一键直达处理页（h2 是折叠态唯一可见行） */
+  .ops-wrap .ops-ghost-btn.ops-boss-on{border-color:var(--p);color:var(--p)}
 </style>
 {% endblock %}
 {% block content %}
@@ -115,12 +139,26 @@
     <span class="muted" id="updatedAt"></span>
     <input id="opsFilter" type="search" autocomplete="off" placeholder="{{ (i18n or {}).get('ov2_toc_filter', '筛选卡片…') }}">
     <span class="ops-toc-chips" id="opsTocChips"></span>
+    <button type="button" class="ops-toc-chip" id="opsHidTbChip" style="display:none;"></button>
+    <button id="opsBossBtn" class="ops-ghost-btn" type="button" onclick="opsToggleBossView()"></button>
     <button id="opsFoldAllBtn" class="ops-ghost-btn" type="button" onclick="opsToggleAllCards()"></button>
     <button id="opsRefreshBtn" type="button" onclick="opsManualRefresh()" style="margin-left:auto;" title="{{ (i18n or {}).get('refresh', '刷新') }}">⟳ {{ (i18n or {}).get('refresh', "刷新") }}</button>
   </div>
   <div id="opsNoMatch" class="muted" style="display:none;font-size:12px;padding:2px 2px 8px;"></div>
+  {#- 焦点档生效提示：档位跨会话记忆，隔天打开「卡怎么少了一半」需要一句解释。 -#}
+  <div id="opsBossNote" class="muted" style="display:none;font-size:12px;padding:2px 2px 8px;"></div>
   {#- P3 问题卡提示条：结构化/启发式判为红黄的卡点名成 chip，点击直达（红先黄后）。 -#}
   <div id="opsProbStrip" style="display:none;padding:0 2px 10px;"></div>
+  {#- 隐藏能力清单（2026-08-18）：从页底长文改到问题条下方。默认收起，展开后
+      chip 分组；点 chip 出白话说明。可发现性进 sticky 工具栏 #opsHidTbChip。 -#}
+  <div id="opsHidPanel" class="ops-hid-panel" style="display:none;">
+    <div class="ops-hid-bar">
+      <button type="button" class="ops-toc-chip" id="opsHidToggle" aria-expanded="false"></button>
+      <span class="muted ops-hid-hint" id="opsHidHint"></span>
+    </div>
+    <div id="opsHidBody" class="ops-hid-body" style="display:none;"></div>
+    <div id="opsHidPop" class="ops-hid-pop" style="display:none;"></div>
+  </div>
 
   <div id="opsAlertBanner" style="display:none;"></div>
 
@@ -208,6 +246,13 @@
     <div id="uqCharDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
 
+  <section id="qwFunnelSection" style="display:none;">
+    <h2>💰 {{ (i18n or {}).get('ov2_qwf_title', "额度墙转化（曝光 · 充值 · 到账）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_qwf_sub', "读 /api/admin/ui-event-trend?prefix=qw_（近 14 天；beacon 按日落库重启无损）；ops.ui_event_trend 关闭或窗口内零事件 → 整卡隐藏") }}</div>
+    <div class="grid" id="qwFunnelKpis"></div>
+    <div id="qwFunnelDetail" style="margin-top:8px;"></div>
+  </section>
+
   <section>
     <h2>💸 {{ (i18n or {}).get('ov2_s006', "计费异常") }}</h2>
     <div id="billingAnomalies"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
@@ -288,6 +333,15 @@
     <div id="feErrTrend" style="margin-top:8px;"></div>
   </section>
 
+  <!-- 🪙 Token 计费账本（2026-08-19 定价改版观测三件套之三）：钱包余额/今日与累计消耗/
+       enforce 态 + 按动作分布 + P5b 投递影子计数 + P4 公平使用水表。
+       licensing.token_ledger.enabled 关 → 整卡隐藏（disabled，重启前的实例同语义） -->
+  <section id="tokLedgerSection" style="display:none;">
+    <h2>🪙 {{ (i18n or {}).get('ov2_s_tokled', "Token 计费（钱包 / 消耗 / 公平使用）") }}</h2>
+    <div class="grid" id="tokLedgerKpis"></div>
+    <div id="tokLedgerDetail"></div>
+  </section>
+
   <!-- 账号接入漏斗：login_funnel_stats 的看板消费面（stalled 一眼判读位此前只进 metrics 没人看）。
        进程内零尝试且趋势也无数据 → 整卡隐藏；有趋势落库时重启后仍可回看曲线 -->
   <section id="loginFunnelSection" style="display:none;">
@@ -306,6 +360,45 @@
     <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_at_hint', "口径：在册＝账号注册表；会话目录＝聊天库里出现过的账号。「仅目录」＝幽灵账号。") }}</div>
     <div class="grid" id="acctTruthKpis"></div>
     <div id="acctTruthDetail"></div>
+  </section>
+
+  <!-- 登录身份决议（实施72 2026-08-27）：换号检测 → 隔离态 → 人工转正的**唯一 UI 面**。
+       此前只有 API + 告警：pending 账号在隔离期只能读日志/打接口才知道，转正后 pending
+       归空又什么都看不到（隔离是瞬时状态）→ 卡里同时给「待确认清单（可就地转正）」与
+       「近 20 条变更审计」。三源皆空 → 整卡隐藏；有 pending / 疑似自有号未登记 → 亮黄。
+       「疑似自有号未登记」（下一阶段 P1）＝对端命中本机 removed 归档账号却没登记
+       own_fleet.extra——跨机自有号互聊的候选检测，只读提示不自动封顶。 -->
+  <section id="lIdentSection" style="display:none;">
+    <h2>🪪 {{ (i18n or {}).get('ov2_s_lident', "登录身份决议（换号检测 / 待确认 / 变更审计）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_li_hint', "待确认＝该登录位被检测到换人：AI 只拟稿不自发、不自动挂人设，直到人确认「这个新身份就是本机要运营的账号」。转正后自动化封顶随缓存（≤60s）解除。审计口径＝ops_events 台账（重启不清零）。") }}</div>
+    <div class="grid" id="lIdentKpis"></div>
+    <div id="lIdentDetail"></div>
+  </section>
+
+  <!-- 图片翻译链路（P1-OBS 2026-08-19）：识别/贴回量、OCR 后端分布（ppocr 微服务
+       灰度切换的直接读数）、块级覆盖率（「很多地方没翻译」的量化位）、目标语 Top。
+       零流量整卡隐藏；覆盖率 <90% 且有失败块 → 亮黄。 -->
+  <section id="imgXlateSection" style="display:none;">
+    <h2>🖼️ {{ (i18n or {}).get('ov2_s_imgxl', "图片翻译（识别 / 译文图 / 覆盖率）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_ix_hint', "口径：链路成功次数（进程内，重启清零）。OCR 后端分布是 ppocr 微服务灰度的决策读数——切换后看 ppocr 占比与覆盖率是否同涨；覆盖率＝已译块/识别块（identity 同语保留算已译）。") }}</div>
+    <div class="grid" id="imgXlateKpis"></div>
+    <div id="imgXlateDetail"></div>
+  </section>
+
+  <!-- AI 助手悬浮球「小智」（2026-08-20 P0/P1）：问答量/自答率/报障 + miss 照单。
+       未启用/旧后端(404) → 整卡隐藏；启用后零流量也显示（灰度期「已装弹」的
+       就绪读数：语料条数就是战备量）；语料 0 条 → 亮黄（装载了没灌语料）。 -->
+  <section id="assistSection" style="display:none;">
+    <h2>🤖 {{ (i18n or {}).get('ov2_s_assist', "AI 助手小智（问答 / 报障 / 语料）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_as_hint', "问答量/自答率=持久 7 天口径（重启不清零）；报障/限频=本进程口径。「未答清单」按频次排序＝运营补语料照单：跑 seed_product_help 或往 howto_pack 加条目。") }}</div>
+    <div class="grid" id="assistKpis"></div>
+    <div id="assistDetail"></div>
+    <!-- 对话球 orb 遥测行（实施59 P3a）：读 ui-event-trend?prefix=asb_orb_（14 天，
+         beacon 按日落库重启无损）；趋势库未开/窗口零事件 → 整行静默不占版面 -->
+    <div id="assistOrbRow" style="margin-top:6px;"></div>
+    <!-- 助教用量行（实施58 P6 观察期）：教学/代办/登录流/手机配对四段漏斗，
+         读 ui-event-trend?prefix=asb_（剔除 asb_orb_ 归 orb 行）；零事件整行静默 -->
+    <div id="assistXzRow" style="margin-top:4px;"></div>
   </section>
 
   <!-- 对方机器人守卫（P1 2026-08-03）：SpamBot 空转实锤后的四道防线观测。
@@ -393,6 +486,15 @@
     <div id="stkDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
 
+  <!-- 🎨 手动出图（2026-08-22 P2）：坐席「AI 生成图片」漏斗——尝试/成功率/时延/
+       失败码分布（model_missing 涨=运维事故、vram 涨=算力互挤）+ 相册秒发占比
+       （album-first 省了多少 GPU）。metrics.image_gen 进程口径；零流量整卡隐藏。 -->
+  <section id="imgenSection" style="display:none;">
+    <h2>🎨 {{ (i18n or {}).get('ov2_s_imgen', "手动出图（坐席 AI 生成图片）") }}</h2>
+    <div class="grid" id="imgenKpis"></div>
+    <div id="imgenDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
   <section id="mconsistSection" style="display:none;">
     <h2>🧷 {{ (i18n or {}).get('ov2_s_mconsist', "图文一致性（点名场景兑现 · 投诉 · 相册缺口）") }}</h2>
     <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_mc_sub', "客户点名的场景要到了没有、谁在抱怨图不对、哪些场景相册零备货——照单补图即闭环") }}</div>
@@ -439,6 +541,12 @@
     <h2>🖥️ {{ (i18n or {}).get('ov2_s_gpuwm', "LAN GPU 显存水位（Ollama 模型占用）") }}</h2>
     <div class="grid" id="gpuWmKpis"></div>
     <div id="gpuWmDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
+  <section id="pxmSection" style="display:none;">
+    <h2>🌐 {{ (i18n or {}).get('ov2_s_pxm', "一键代理（托管订阅 · 续期 · 库存）") }}</h2>
+    <div class="grid" id="pxmKpis"></div>
+    <div id="pxmDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
 
   <section id="pAuditSection" style="display:none;">
@@ -496,6 +604,15 @@
     <div id="baziDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
 
+  <!-- 跨平台档案（P2 2026-08-18）：客户来源/原平台背景 → AI 注入的读数面。
+       共享 /api/workspace/metrics 分发链（origin_profile 段）；无档案且零消费 → 整卡隐藏。 -->
+  <section id="originProfileSection" style="display:none;">
+    <h2>🌐 {{ (i18n or {}).get('ov2_s_origin', "跨平台档案（来源背景 → AI 记忆注入）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_or_hint', "口径：消费=每条消息一次 provider 查询（进程内，重启清零）；档案/导入=contacts.db 持久台账。") }}</div>
+    <div class="grid" id="originProfileKpis"></div>
+    <div id="originProfileDetail"></div>
+  </section>
+
   <section id="temperGuardSection" style="display:none;">
     <h2>🔥 {{ (i18n or {}).get('ov2_s_temper', "回怼防线（客户辱骂 → 按人设脾气顶回去，非客服腔安抚）") }}</h2>
     <div class="grid" id="temperGuardKpis"></div>
@@ -518,6 +635,13 @@
     <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_cs_sub', "AI 判定需要真人跟进的会话：危机 / 要人工 / 怀疑机器人 / 媒体质疑等自动立案；零案例且零流量时整卡隐藏") }}</div>
     <div class="grid" id="casesKpis"></div>
     <div id="casesDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
+  <section id="bugIntakeSection" style="display:none;">
+    <h2>🐞 {{ (i18n or {}).get('ov2_s_bugintake', "报障群值守（分类 → 工单 → 追问收集）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_bi_sub', "官方报障群 AI 值守：疑似 bug 自动登记工单并查重归并，用法问题走知识库答疑，危机词压制转人工；零流量整卡隐藏") }}</div>
+    <div class="grid" id="bugIntakeKpis"></div>
+    <div id="bugIntakeDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
 
   <section id="careSection" style="display:none;">
@@ -552,6 +676,15 @@
     <h2>🔔 {{ (i18n or {}).get('ov2_s_alertlink', "告警链路（最后一公里自检）") }}</h2>
     <div class="grid" id="alertlinkKpis"></div>
     <div id="alertlinkDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
+  <!-- ── 紧急停发（P1 2026-08-23 急停可见化）：唯一置位/解除面板在 /rpa-overview
+       而矩阵导航默认隐藏——急停生效时这里必须看得见、解得掉。无生效急停 →
+       整卡隐藏（healthy，安全网待命不占版面）。 -->
+  <section id="ksGuardSection" style="display:none;">
+    <h2>🛑 {{ (i18n or {}).get('ov2_s_ksguard', "紧急停发（生效急停 / 一键解除）") }}</h2>
+    <div class="grid" id="ksGuardKpis"></div>
+    <div id="ksGuardDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
 
   <section id="officialWhSection" style="display:none;">
@@ -650,9 +783,7 @@
     </div>
   </section>
 
-  {#- 条件隐藏卡（loader 判定未启用/无数据 → display:none）的可发现性兜底：
-      不点名列出的话，运营根本不知道这些能力存在。每轮刷新后由 JS 更新。 -#}
-  <div id="opsHiddenNote" class="muted" style="display:none;font-size:12px;padding:4px 2px 0;"></div>
+  {#- 隐藏卡清单已上移到 #opsHidPanel（问题条下方），勿再在页底拼长文。 -#}
 </div>
 
 <script>
@@ -920,13 +1051,13 @@ async function runFix(key, target){
       headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},
     }, {timeoutMs: 60000});
     var d = await r.json();
-    if(!d.ok){ alert(window.T('ov2_js029')+(d.error||window.T('rpa_unknown'))); return; }
+    if(!d.ok){ AITRNotify.alert(window.T('ov2_js029')+(d.error||window.T('rpa_unknown'))); return; }
     if(key === 'migrate_memory_keys'){
-      alert(window.T('ov2_js030') + (d.merged_keys||0) + ' '+window.T('ov2_js031') + (d.moved_rows||0) + ' '+window.T('ov2_js032'));
+      AITRNotify.alert(window.T('ov2_js030') + (d.merged_keys||0) + ' '+window.T('ov2_js031') + (d.moved_rows||0) + ' '+window.T('ov2_js032'), 'ok');
     }
     // 动作后立即重巡，让相关事件自动恢复。
     await recheckHealth();
-  }catch(e){ alert(window.T('ov2_js029')+e); }
+  }catch(e){ AITRNotify.alert(window.T('ov2_js029')+e); }
 }
 
 // P14 一键换绑：ops 卡直接把候选账号绑到获客人设（复用人设页同一路由＝
@@ -945,12 +1076,12 @@ async function goalBindNow(platform, accountId, profileId){
     }, {timeoutMs: 20000});
     var d = await r.json().catch(function(){ return {}; });
     if(!r.ok || !d.ok){
-      alert(window.T('ov2_goal_bind_fail')+(d.detail||d.error||r.status));
+      AITRNotify.alert(window.T('ov2_goal_bind_fail')+(d.detail||d.error||r.status));
       return;
     }
-    alert(window.T('ov2_goal_bind_ok'));
+    AITRNotify.alert(window.T('ov2_goal_bind_ok'), 'ok');
     loadGoals();
-  }catch(e){ alert(window.T('ov2_goal_bind_fail')+e); }
+  }catch(e){ AITRNotify.alert(window.T('ov2_goal_bind_fail')+e); }
 }
 
 async function recheckHealth(){
@@ -976,7 +1107,7 @@ async function ackIncident(id){
       body: JSON.stringify({assigned_to: who}),
     }, {timeoutMs: 60000});
     loadIncidents(); loadOverview();
-  }catch(e){ alert(window.T('ov_js_op_fail_e')+e); }
+  }catch(e){ AITRNotify.alert(window.T('ov_js_op_fail_e')+e); }
 }
 
 async function loadReport(){
@@ -1005,7 +1136,7 @@ async function loadValueWeekly(){
   if(!sec || !kp || !dv) return;
   try{
     const r = await apiFetch('/api/report/weekly', {credentials:'same-origin'}, {timeoutMs: 30000});
-    if(!r.ok){ sec.style.display='none'; return; }
+    if(!r.ok){ opsHideCardEl(sec, 'value', 'error'); return; }
     const d = await r.json();
     var v = d.value || {};
     var tw = v.this_week || {}, lw = v.last_week || {};
@@ -1013,8 +1144,8 @@ async function loadValueWeekly(){
     var cs = tw.cases || {}, lcs = lw.cases || {};
     var total = (Number(dr.created)||0) + (Number(o.sent)||0) + (Number(tr.messages_out)||0)
       + (Number(cs.opened)||0) + (Number(cs.closed)||0);
-    if(!v.this_week || total === 0){ sec.style.display='none'; return; }
-    sec.style.display = '';
+    if(!v.this_week || total === 0){ opsHideCardEl(sec, 'value', 'no_data'); return; }
+    opsShowCardEl(sec, 'value');
     function wow(cur, prev){
       cur = Number(cur)||0; prev = Number(prev)||0;
       if(prev <= 0){
@@ -1059,7 +1190,7 @@ async function loadValueWeekly(){
     dv.innerHTML = (parts.length ? '<div class="muted" style="font-size:12px;">'+parts.join(' · ')+'</div>' : '')
       + '<div class="muted" style="font-size:12px;margin-top:6px;">'+window.T('ov2_vw_hint')+'</div>';
   }catch(e){
-    sec.style.display='none';
+    opsHideCardEl(sec, 'value', 'error');
   }
 }
 
@@ -1087,12 +1218,12 @@ async function loadUsageQuota(){
   if(!sec || !kp || !dv) return;
   try{
     const r = await apiFetch('/api/users/char-usage', {credentials:'same-origin'}, {timeoutMs: 20000});
-    if(!r.ok){ sec.style.display='none'; return; }
+    if(!r.ok){ opsHideHttp(sec, 'uqchar', r.status); return; }
     const d = await r.json();
-    if(!d || !d.ok){ sec.style.display='none'; return; }
+    if(!d || !d.ok){ opsHideCardEl(sec, 'uqchar', 'error'); return; }
     var monthTotal = Number((d.totals||{}).month_total)||0;
-    if(d.enabled===false && monthTotal===0){ sec.style.display='none'; return; }
-    sec.style.display = '';
+    if(d.enabled===false && monthTotal===0){ opsHideCardEl(sec, 'uqchar', 'disabled'); return; }
+    opsShowCardEl(sec, 'uqchar');
     var meterVal = (d.enabled===false) ? UQ_OV_T.off : UQ_OV_T.on;
     if(typeof d.enforce === 'boolean'){
       meterVal += ' · ' + (d.enforce ? UQ_OV_T.enforce_on : UQ_OV_T.enforce_soft);
@@ -1129,6 +1260,73 @@ async function loadUsageQuota(){
   }
 }
 
+// 💰 额度墙转化卡（quotawall v2 P2，2026-08-21）：读 /api/admin/ui-event-trend
+// ?prefix=qw_（beacon 旁路按日落库，重启无损；ops.ui_event_trend 关 → enabled:false
+// 整卡隐藏）。曝光→点充值→到账三段漏斗 + 变体分布 + 预警条读数；14 天窗口内
+// 零事件 → 整卡隐藏（零流量不占版面）。转化率按曝光分母就地标注——「每次弹窗
+// 值多少」是 CTA 排序 A/B 的裁决口径。
+async function loadQwFunnel(){
+  var sec = document.getElementById('qwFunnelSection');
+  var kp = document.getElementById('qwFunnelKpis');
+  var dv = document.getElementById('qwFunnelDetail');
+  if(!sec || !kp || !dv) return;
+  try{
+    const r = await apiFetch('/api/admin/ui-event-trend?days=14&prefix=qw_', {credentials:'same-origin'}, {timeoutMs: 20000});
+    if(!r.ok){ opsHideHttp(sec, 'qwfun', r.status); return; }
+    const d = await r.json();
+    if(!d || d.enabled===false){ opsHideCardEl(sec, 'qwfun', 'disabled'); return; }
+    var agg = {};
+    (d.days||[]).forEach(function(row){
+      var by = (row && row.by_action) || {};
+      Object.keys(by).forEach(function(a){ agg[a] = (agg[a]||0) + (Number(by[a])||0); });
+    });
+    var n = function(k){ return Number(agg[k])||0; };
+    var shown = 0, variants = [];
+    Object.keys(agg).sort().forEach(function(a){
+      if(a.indexOf('qw_shown_')===0){ shown += agg[a]; variants.push(a.slice(9)+' '+fmt(agg[a])); }
+    });
+    var buy = n('qw_cta_buy')+n('qw_cta_buy_daily')+n('qw_cta_buy_page')+n('qw_low_buy');
+    var voucher = n('qw_cta_voucher_ok');
+    var credited = n('qw_credited');
+    var later = n('qw_cta_later');
+    var lowShown = n('qw_low_shown');
+    if(!(shown||buy||voucher||credited||lowShown)){ opsHideCardEl(sec, 'qwfun', 'no_data'); return; }
+    opsShowCardEl(sec, 'qwfun');
+    var rate = function(a,b){ return b>0 ? (' ('+Math.round(a/b*100)+'%)') : ''; };
+    var kpis = [
+      {label:window.T('ov2_qwf_shown'),   value:fmt(shown)},
+      {label:window.T('ov2_qwf_buy'),     value:fmt(buy)+esc(rate(buy, shown))},
+      {label:window.T('ov2_qwf_credit'),  value:fmt(credited)+esc(rate(credited, shown))},
+      {label:window.T('ov2_qwf_voucher'), value:fmt(voucher)}
+    ];
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+    }).join('');
+    var lines = [];
+    if(variants.length) lines.push(esc(window.T('ov2_qwf_variants'))+': '+esc(variants.join(' · ')));
+    lines.push(esc(window.T('ov2_qwf_later'))+': '+fmt(later)
+      +' · '+esc(window.T('ov2_qwf_low'))+': '+fmt(lowShown)+'/'+fmt(n('qw_low_buy')));
+    // 服务端到账真值（P2.5 对账线）：qw_credited 埋点只在页面开着等到 watch
+    // 命中时才计（关页即漏计），license_char_topup 台账＝全部真实到账。
+    // 旧后端无此端点/读失败 → 静默缺席，不影响漏斗主体。
+    try{
+      const r2 = await apiFetch('/api/admin/license/topup-trend?days=14',
+        {credentials:'same-origin'}, {timeoutMs: 15000});
+      if(r2.ok){
+        const t = await r2.json();
+        if(t && t.ok && (Number(t.total_n)||0) > 0){
+          lines.push(esc(window.T('ov2_qwf_srv'))+': '+fmt(Number(t.total_n)||0)
+            +' · '+fmt(Number(t.total_chars)||0));
+        }
+      }
+    }catch(_e){}
+    dv.innerHTML = '<div class="muted" style="font-size:12px;">'+lines.join('<br>')+'</div>';
+  }catch(e){
+    sec.style.display='none';
+  }
+}
+
 // 🎁 邀请裂变卡（2026-08-11 免费额度升级配套）：读 /api/admin/referral-stats
 // （实例侧 300s TTL 代理官网 /api/trial/referral-stats 全局聚合，纯计数零 PII；
 // 配置 licensing.trial.referral_stats 默认关——只有厂商 ops 实例该开）。
@@ -1140,11 +1338,11 @@ async function loadReferralGrowth(){
   if(!sec || !kp || !dv) return;
   try{
     const r = await apiFetch('/api/admin/referral-stats', {credentials:'same-origin'}, {timeoutMs: 20000});
-    if(!r.ok){ sec.style.display='none'; return; }
+    if(!r.ok){ opsHideCardEl(sec, 'referral', 'error'); return; }
     const d = await r.json();
-    if(!d || !d.ok || !d.enabled){ sec.style.display='none'; return; }
-    if(!(Number(d.codes)||0) && !(Number(d.registered)||0)){ sec.style.display='none'; return; }
-    sec.style.display = '';
+    if(!d || !d.ok || !d.enabled){ opsHideCardEl(sec, 'referral', 'disabled'); return; }
+    if(!(Number(d.codes)||0) && !(Number(d.registered)||0)){ opsHideCardEl(sec, 'referral', 'no_data'); return; }
+    opsShowCardEl(sec, 'referral');
     var flagged = Number(d.flagged)||0;
     var kpis = [
       {label:window.T('ov2_rg_codes'),      value:fmt(Number(d.codes)||0)},
@@ -1162,7 +1360,148 @@ async function loadReferralGrowth(){
     }).join('');
     dv.innerHTML = '<div class="muted" style="font-size:12px;">'+window.T('ov2_rg_hint')+'</div>';
   }catch(e){
-    sec.style.display='none';
+    opsHideCardEl(sec, 'referral', 'error');
+  }
+}
+
+// 对话球 orb 遥测行（实施59 P3a）：小智卡内一行，读 ui-event-trend?prefix=asb_orb_
+// （boot 档位分布/播报/聆听/降档/安静档切换，14 天累计）。趋势库未开
+// （enabled:false）或全零 → 整行清空；降档>0 亮琥珀（低配机在受苦的直接读数）。
+async function _assistOrbRow(){
+  var el = document.getElementById('assistOrbRow');
+  if(!el) return;
+  try{
+    const r = await apiFetch('/api/admin/ui-event-trend?days=14&prefix=asb_orb_', {credentials:'same-origin'});
+    if(!r.ok){ el.innerHTML=''; return; }
+    const d = await r.json();
+    if(!d || d.enabled===false){ el.innerHTML=''; return; }
+    var agg = {};
+    (d.days||[]).forEach(function(row){
+      var by = (row && row.by_action) || {};
+      Object.keys(by).forEach(function(a){ agg[a] = (agg[a]||0) + (Number(by[a])||0); });
+    });
+    var n = function(k){ return Number(agg['asb_orb_'+k])||0; };
+    var deg = n('degrade_half') + n('degrade_css');
+    var parts = [];
+    if(n('boot_lv2')+n('boot_lv1')+n('boot_lv0') > 0){
+      parts.push(window.T('ov2_as_orb_lv')+' lv2:'+n('boot_lv2')+' · lv1:'+n('boot_lv1')+' · lv0:'+n('boot_lv0'));
+    }
+    if(n('say')) parts.push(window.T('ov2_as_orb_say')+' '+n('say'));
+    if(n('listen')) parts.push(window.T('ov2_as_orb_listen')+' '+n('listen'));
+    if(deg) parts.push('<span style="color:var(--amber)">'+window.T('ov2_as_orb_deg')+' '+deg+'</span>');
+    if(n('calm_on')) parts.push(window.T('ov2_as_orb_calm')+' '+n('calm_on'));
+    el.innerHTML = parts.length
+      ? '<div class="muted" style="font-size:12px;">🔮 '+window.T('ov2_as_orb_hd')+': '+parts.join(' ｜ ')+'</div>'
+      : '';
+  }catch(e){ el.innerHTML=''; }
+}
+
+// 助教用量行（实施58 P6 观察期）：小智卡内一行——教学模式/代办任务/登录流程/
+// 手机配对四段 14 天累计（prefix=asb_，剔 asb_orb_ 归 orb 行）。趋势库未开或
+// 窗口零事件 → 整行静默；流程有失败亮琥珀（登录流翻车要人看一眼）。
+async function _assistXzRow(){
+  var el = document.getElementById('assistXzRow');
+  if(!el) return;
+  try{
+    const r = await apiFetch('/api/admin/ui-event-trend?days=14&prefix=asb_', {credentials:'same-origin'});
+    if(!r.ok){ el.innerHTML=''; return; }
+    const d = await r.json();
+    if(!d || d.enabled===false){ el.innerHTML=''; return; }
+    var agg = {};
+    (d.days||[]).forEach(function(row){
+      var by = (row && row.by_action) || {};
+      Object.keys(by).forEach(function(a){
+        if(a.indexOf('asb_orb_')===0) return;  // orb 行自有归属
+        agg[a] = (agg[a]||0) + (Number(by[a])||0);
+      });
+    });
+    var n = function(k){ return Number(agg[k])||0; };
+    var teach = n('asb_teach_on'), tClick = n('asb_teach_click'), tAsk = n('asb_teach_ask');
+    var plans = n('asb_agent_plan'), okS = n('asb_agent_step_ok'),
+        cf = n('asb_agent_confirm'), un = n('asb_agent_undo'), vg = n('asb_agent_voice_goal');
+    var fs = n('asb_flow_start'), fd = n('asb_flow_done'), ff = n('asb_flow_fail'), fc = n('asb_flow_cancel');
+    var ps = n('asb_pair_scan'), pk = n('asb_pair_kick');
+    if(!(teach||tClick||plans||fs||fd||ps)){ el.innerHTML=''; return; }
+    var amber = ff > 0;
+    el.innerHTML = '<div style="font-size:12px;color:var(--t3,#889)">'
+      + '🧭 ' + esc(window.T('ov2_as_xz_t'))
+      + ' · ' + esc(window.T('ov2_as_xz_teach')) + ' ' + fmt(teach) + '/' + fmt(tClick) + '/' + fmt(tAsk)
+      + ' · ' + esc(window.T('ov2_as_xz_tasks')) + ' ' + fmt(plans) + esc(window.Tf('ov2_as_xz_tasks_d', {ok: fmt(okS), cf: fmt(cf), un: fmt(un), vg: fmt(vg)}))
+      + ' · ' + (amber?'<span style="color:var(--amber)">':'') + esc(window.T('ov2_as_xz_flows')) + ' ' + fmt(fs) + '→' + fmt(fd) + (ff?esc(window.Tf('ov2_as_xz_fail', {n: fmt(ff)})):'') + (fc?esc(window.Tf('ov2_as_xz_cancel', {n: fmt(fc)})):'') + (amber?'</span>':'')
+      + ' · ' + esc(window.T('ov2_as_xz_pair')) + ' ' + fmt(ps) + (pk?esc(window.Tf('ov2_as_xz_kick', {n: fmt(pk)})):'')
+      + '</div>';
+  }catch(e){ el.innerHTML=''; }
+}
+
+// 🤖 AI 助手小智卡（2026-08-20）：读 /api/assistant/health（语料/问答台账/进程计数）。
+// 未启用或旧后端(403/404) → 整卡隐藏；启用后零流量也显示（灰度就绪读数）；
+// 语料 0 条 → 黄灯（后端活着但没灌语料=问什么都答不上）。
+async function loadAssistant(){
+  var sec = document.getElementById('assistSection');
+  var kp = document.getElementById('assistKpis');
+  var dv = document.getElementById('assistDetail');
+  if(!sec || !kp || !dv) return;
+  try{
+    const r = await apiFetch('/api/assistant/health', {credentials:'same-origin'}, {timeoutMs: 20000});
+    if(!r.ok){ opsHideCardEl(sec, 'assist', 'disabled'); return; }
+    const d = await r.json();
+    if(!d || !d.ok || !d.enabled){ opsHideCardEl(sec, 'assist', 'disabled'); return; }
+    opsShowCardEl(sec, 'assist');
+    var kb = Number(d.kb_entries)||0;
+    var qa = d.qa_7d || {};
+    var pr = d.process || {};
+    opsSetCardLight('assist', (kb === 0 || !d.llm_wired) ? 'yellow' : '');
+    _assistOrbRow();  // orb 遥测行：独立取数、自吞异常，绝不拖累主卡
+    _assistXzRow();   // 助教用量行（实施58）：同款独立取数模式
+    var rate = (Number(qa.n)||0) ? Math.round((Number(qa.rate)||0)*100)+'%' : '—';
+    var kpis = [
+      {label:window.T('ov2_as_kb'),      value:(kb ? fmt(kb) : '<span style="color:var(--amber)">0</span>')},
+      {label:window.T('ov2_as_qa7'),     value:fmt(Number(qa.n)||0)},
+      {label:window.T('ov2_as_rate'),    value:rate},
+      {label:window.T('ov2_as_fb'),      value:'👍'+fmt(Number(qa.up)||0)+' 👎'+fmt(Number(qa.down)||0)},
+      {label:window.T('ov2_as_reports'), value:fmt(Number(pr.reports)||0)},
+      {label:window.T('ov2_as_rl'),      value:fmt(Number(pr.rate_limited)||0)},
+    ];
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+    }).join('');
+    /* 拒答分型行（实施74 P5）：「没答上」有两种成因、处置完全不同——
+       零命中＝补语料；有条目但答不了＝NO_BASIS 哨兵。
+       最要紧的读数是**哨兵占比恒 0**：哨兵依赖 LLM 肯输出约定词，不工作时
+       小智会把沾边条目硬凑成答案，而这在别处完全看不出来。零拒答不占版面。 */
+    var refuseHtml = '';
+    var mTot = Number(qa.miss)||0, mHit = Number(qa.miss_no_hit)||0,
+        mBas = Number(qa.miss_no_basis)||0;
+    if(mTot > 0){
+      var share = Math.round((Number(qa.no_basis_share)||0)*100);
+      var silent = (mBas === 0);
+      refuseHtml = '<div style="font-size:12px;margin-bottom:6px;" title="'+
+        esc(window.T('ov2_as_refuse_tip'))+'">'+
+        '<span class="muted">'+window.T('ov2_as_refuse')+'：</span>'+
+        window.T('ov2_as_refuse_hit')+' <b>'+fmt(mHit)+'</b> · '+
+        window.T('ov2_as_refuse_basis')+' <b'+
+        (silent ? ' style="color:var(--amber)"' : '')+'>'+fmt(mBas)+'</b>'+
+        (silent ? '' : ' <span class="muted">('+share+'%)</span>')+
+        (silent ? ' <span style="color:var(--amber)">— '+
+          esc(window.T('ov2_as_refuse_silent'))+'</span>' : '')+
+        '</div>';
+      if(silent){ opsSetCardLight('assist', 'yellow'); }
+    }
+    var miss = d.miss_top || [];
+    if(miss.length){
+      dv.innerHTML = refuseHtml+'<div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_as_miss')+'</div>'+
+        '<table style="width:100%;font-size:12px;"><tbody>'+
+        miss.map(function(m){
+          return '<tr><td style="padding:2px 6px 2px 0;">'+esc(String(m.q||''))+'</td>'+
+            '<td style="text-align:right;white-space:nowrap;">×'+fmt(Number(m.count)||0)+
+            (Number(m.down)||0 ? ' <span style="color:var(--amber)">👎'+fmt(Number(m.down))+'</span>' : '')+'</td></tr>';
+        }).join('')+'</tbody></table>';
+    } else {
+      dv.innerHTML = refuseHtml+'<div class="muted" style="font-size:12px;">'+window.T('ov2_as_nomiss')+'</div>';
+    }
+  }catch(e){
+    opsHideCardEl(sec, 'assist', 'error');
   }
 }
 
@@ -1180,7 +1519,7 @@ async function loadReplyLatency(){
     const d = await r.json();
     var rl = d.reply_latency || {};
     var d1 = rl.d1 || {}, prev = rl.d1_prev || {}, d7 = rl.d7 || {};
-    if(!(Number(d1.episodes)||0) && !(Number(d7.episodes)||0)){ sec.style.display='none'; return; }
+    if(!(Number(d1.episodes)||0) && !(Number(d7.episodes)||0)){ opsHideCardEl(sec, 'rlatency', 'no_data'); return; }
     sec.style.display = '';
     function secs(v){
       v = Number(v)||0;
@@ -1250,7 +1589,7 @@ async function loadEntranceSlo(){
     const d = await r.json();
     var es = d.entrance_slo || {};
     var sv = es.server || {}, cl = es.client || {}, d30 = es.d30 || {};
-    if(!(Number(sv.ticks)||0)){ sec.style.display='none'; return; }
+    if(!(Number(sv.ticks)||0)){ opsHideCardEl(sec, 'eslo', 'no_data'); return; }
     sec.style.display = '';
     function pct(v){ return (v===null||v===undefined) ? '—' : (Number(v).toFixed(2)+'%'); }
     function availCol(v){
@@ -1304,9 +1643,9 @@ async function loadAutoCoverage(){
   if(!sec || !kp || !dv) return;
   try{
     const r = await apiFetch('/api/admin/automation-coverage', {credentials:'same-origin'}, {timeoutMs: 30000});
-    if(!r.ok){ sec.style.display='none'; return; }
+    if(!r.ok){ opsHideHttp(sec, 'autocov', r.status); return; }
     const d = await r.json();
-    if(!d.ok || d.applicable === false){ sec.style.display='none'; return; }
+    if(!d.ok || d.applicable === false){ opsHideCardEl(sec, 'autocov', 'no_data'); return; }
     sec.style.display = '';
     var t = d.totals || {};
     var dr = d.drafts || {};
@@ -1395,10 +1734,10 @@ async function loadFleetHealth(){
   if(!sec || !kp || !dv) return;
   try{
     const r = await apiFetch('/api/accounts/fleet-health', {credentials:'same-origin'}, {timeoutMs: 30000});
-    if(!r.ok){ sec.style.display='none'; return; }
+    if(!r.ok){ opsHideHttp(sec, 'fleethp', r.status); return; }
     const d = await r.json();
     var fl = d.fleet || {};
-    if(!d.ok || !Number(fl.total)){ sec.style.display='none'; return; }
+    if(!d.ok || !Number(fl.total)){ opsHideCardEl(sec, 'fleethp', 'no_data'); return; }
     sec.style.display = '';
     var lc = d.lifecycle || {};
     var counts = fl.counts || {};
@@ -2277,8 +2616,10 @@ async function loadFrontendErrors(){
   if(!kp || !dv) return;
   try{
     const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
-    if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; try{ renderProfilePush(null); }catch(_pp){} try{ renderUiEvents(null); }catch(_ue){} try{ renderDpickFunnel(null); }catch(_df){} try{ renderPersonaOverride(null); }catch(_po){} try{ renderCsrfRejects(null); }catch(_cs){} try{ renderOutboundMirror(null); }catch(_om){} try{ renderPhotoCapability(null); }catch(_pc){} try{ renderLoginFunnel(null); }catch(_lf){} try{ renderPeerBotGuard(null); }catch(_bp){} try{ renderAccountsTruth(null); }catch(_at){} return; }
+    if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; try{ renderProfilePush(null); }catch(_pp){} try{ renderUiEvents(null); }catch(_ue){} try{ renderDpickFunnel(null); }catch(_df){} try{ renderPersonaOverride(null); }catch(_po){} try{ renderCsrfRejects(null); }catch(_cs){} try{ renderOutboundMirror(null); }catch(_om){} try{ renderPhotoCapability(null); }catch(_pc){} try{ renderLoginFunnel(null); }catch(_lf){} try{ renderPeerBotGuard(null); }catch(_bp){} try{ renderAccountsTruth(null); }catch(_at){} try{ renderOriginProfile(null); }catch(_or){} try{ renderTokenLedger(null); }catch(_tk){} try{ renderImageXlate(null); }catch(_ix){} return; }
     const d = await r.json();
+    try{ renderImageXlate(d); }catch(_ix){}
+    try{ renderTokenLedger(d); }catch(_tk){}
     try{ renderProfilePush(d); }catch(_pp){}
     try{ renderUiEvents(d); }catch(_ue){}
     try{ renderDpickFunnel(d); }catch(_df){}
@@ -2289,6 +2630,7 @@ async function loadFrontendErrors(){
     try{ renderLoginFunnel(d); }catch(_lf){}
     try{ renderPeerBotGuard(d); }catch(_bp){}
     try{ renderAccountsTruth(d); }catch(_at){}
+    try{ renderOriginProfile(d); }catch(_or){}
     var fe = d.frontend_errors || null;
     if(!fe || !(Number(fe.total)||0)){
       opsSetCardLight('fe', '');
@@ -2425,7 +2767,7 @@ function renderLoginFunnel(d){
     // 暂隐；loadLoginFunnelTrend / _loginBlockersRow 若发现耐久数据会再打开
     kp.innerHTML = '';
     dv.innerHTML = '';
-    sec.style.display = 'none';
+    opsHideCardEl(sec, 'loginfn', 'no_data');
   }
   try{ loadLoginFunnelTrend(!!totStart); }catch(_t){}
   try{ _loginBlockersRow(); }catch(_b){}
@@ -2444,7 +2786,7 @@ function renderAccountsTruth(d){
   var at = (d && d.accounts_truth) || null;
   var regTot = at ? (Number(at.registry_total)||0) : 0;
   var dirTot = at ? (Number(at.directory_total)||0) : 0;
-  if(!at || (!regTot && !dirTot)){ sec.style.display='none'; kp.innerHTML=''; dv.innerHTML=''; return; }
+  if(!at || (!regTot && !dirTot)){ opsHideCardEl(sec, 'atruth', 'no_data'); kp.innerHTML=''; dv.innerHTML=''; return; }
   sec.style.display = '';
   var ghost = Number(at.history_only != null ? at.history_only : at.directory_only)||0;
   var desk = Number(at.desktop)||0;
@@ -2462,6 +2804,251 @@ function renderAccountsTruth(d){
       '</div><div style="font-size:20px;font-weight:600;margin-top:4px;'+(c.color?('color:'+c.color+';'):'')+'">'+c.value+'</div></div>';
   }).join('');
   dv.innerHTML = '<div class="muted" style="font-size:12px;">'+window.T('ov2_at_status')+': '+stStr+'</div>';
+}
+
+// 🪪 登录身份决议卡（实施72 2026-08-27）：读 /api/admin/account-identity/pending
+// （pending 清单 + 近期 identity_change 审计）。旧后端 404 / 两者皆空 → 整卡隐藏；
+// 有 pending → 亮黄（那些账号的 AI 正被封在 review，是需要人动手的状态）。
+// 转正按钮走同一端点族的 confirm（后端拒 agent/viewer，前端按 CAN_MANAGE_OPS 收敛）。
+var _lIdentPending = [];
+
+function _lIdentReasonText(reason){
+  if(reason === 'quarantined') return window.T('ov2_li_ev_quar');
+  if(reason === 'confirmed') return window.T('ov2_li_ev_conf');
+  return reason || '—';
+}
+
+async function loadLoginIdentity(){
+  var sec = document.getElementById('lIdentSection');
+  var kp = document.getElementById('lIdentKpis');
+  var dv = document.getElementById('lIdentDetail');
+  if(!sec || !kp || !dv) return;
+  var d = null;
+  try{
+    var r = await apiFetch('/api/admin/account-identity/pending', {credentials:'same-origin'});
+    if(!r.ok){ opsHideCardEl(sec, 'lident', 'no_endpoint'); return; }
+    d = await r.json();
+  }catch(e){ opsHideCardEl(sec, 'lident', 'error'); return; }
+  var pend = (d && d.pending) || [];
+  var recent = (d && d.recent) || [];
+  // 疑似自有号未登记（实施72 下一阶段 P1）：对端命中已归档账号却没登记
+  // own_fleet.extra——只读提示，不自动封顶（旧后端无此字段 → 空表零影响）。
+  var cands = (d && d.fleet_candidates) || [];
+  _lIdentPending = pend;
+  if(!pend.length && !recent.length && !cands.length){
+    opsHideCardEl(sec, 'lident', 'no_data'); kp.innerHTML=''; dv.innerHTML=''; return;
+  }
+  sec.style.display = '';
+  opsSetCardLight('lident', (pend.length || cands.length) ? 'yellow' : '');
+  var quar = recent.filter(function(x){ return x.reason === 'quarantined'; }).length;
+  var conf = recent.filter(function(x){ return x.reason === 'confirmed'; }).length;
+  var kpis = [
+    {label:window.T('ov2_li_pending'), value:fmt(pend.length),
+     color:(pend.length?'var(--amber)':null)},
+    {label:window.T('ov2_li_quar'), value:fmt(quar)},
+    {label:window.T('ov2_li_conf'), value:fmt(conf)},
+    {label:window.T('ov2_li_fleet'), value:fmt(cands.length),
+     color:(cands.length?'var(--amber)':null)},
+  ];
+  kp.innerHTML = kpis.map(function(c){
+    return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+      '</div><div style="font-size:20px;font-weight:600;margin-top:4px;'+(c.color?('color:'+c.color+';'):'')+'">'+c.value+'</div></div>';
+  }).join('');
+  var html = '';
+  if(pend.length){
+    html += '<div style="font-weight:600;margin:10px 0 4px;">'+window.T('ov2_li_pending_title')+'</div>';
+    html += pend.map(function(p, i){
+      var prev = (p.prev_accounts || []).join(', ');
+      var btn = CAN_MANAGE_OPS
+        ? '<button class="btn" data-lident-ok="'+i+'" style="margin-left:8px;">'+window.T('ov2_li_confirm_btn')+'</button>'
+        : '';
+      return '<div style="padding:6px 0;border-top:1px solid var(--bd);font-size:12.5px;">'
+        + '<b>'+esc(String(p.platform||''))+':'+esc(String(p.account_id||''))+'</b>'
+        + ' <span class="muted">'+window.T('ov2_li_prev')+': '+esc(prev||'—')+'</span>'
+        + (p.persona_id ? ' <span class="muted">· '+window.T('ov2_li_persona')+': '+esc(String(p.persona_id))+'</span>' : '')
+        + (p.changed_at ? ' <span class="muted">· '+window.wsFmtDateTime(Number(p.changed_at))+'</span>' : '')
+        + btn + '</div>';
+    }).join('');
+  }
+  if(cands.length){
+    html += '<div style="font-weight:600;margin:10px 0 4px;">'+window.T('ov2_li_fleet_title')+'</div>';
+    html += '<div class="muted" style="font-size:12px;margin:0 0 4px;">'+window.T('ov2_li_fleet_hint')+'</div>';
+    html += cands.map(function(c){
+      var basis = window.T(c.match === 'id' ? 'ov2_li_fleet_match_id' : 'ov2_li_fleet_match_name');
+      return '<div style="padding:6px 0;border-top:1px solid var(--bd);font-size:12.5px;">'
+        + '<b>'+esc(String(c.platform||''))+':'+esc(String(c.account_id||''))+'</b>'
+        + ' ↔ '+esc(String(c.peer_name||c.chat_key||''))
+        + ' <span class="muted">('+esc(String(c.chat_key||''))+')</span>'
+        + ' <span class="muted">· '+window.T('ov2_li_fleet_matched')+': '
+        + esc(String(c.matched_account||''))
+        + (c.matched_name ? ' ('+esc(String(c.matched_name))+')' : '')+'</span>'
+        + ' <span class="muted">· '+basis+'</span>'
+        + (c.last_ts ? ' <span class="muted">· '+window.wsFmtDateTime(Number(c.last_ts))+'</span>' : '')
+        + '</div>';
+    }).join('');
+  }
+  if(recent.length){
+    html += '<div style="font-weight:600;margin:10px 0 4px;">'+window.T('ov2_li_audit_title')+'</div>';
+    html += recent.slice(0, 10).map(function(e){
+      return '<div class="muted" style="font-size:12px;padding:2px 0;">'
+        + (e.ts ? window.wsFmtDateTime(Number(e.ts)) : '—') + ' · '
+        + esc(String(e.platform||'')) + ':' + esc(String(e.account_id||'')) + ' · '
+        + esc(_lIdentReasonText(String(e.reason||''))) + ' · ' + esc(String(e.detail||''))
+        + '</div>';
+    }).join('');
+  }
+  dv.innerHTML = html;
+}
+
+// 转正：事件委托（行是动态拼出来的，逐行 onclick 会踩「动态点属性拼接」那类坑）
+async function _lIdentConfirm(idx){
+  if(!CAN_MANAGE_OPS) return;
+  var p = _lIdentPending[idx];
+  if(!p) return;
+  if(!window.confirm(window.T('ov2_li_confirm_q'))) return;
+  try{
+    var r = await apiFetch('/api/admin/account-identity/confirm', {
+      method:'POST', credentials:'same-origin',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({platform: p.platform, account_id: p.account_id}),
+    });
+    var d = await r.json();
+    if(!r.ok || !d.ok){ AITRNotify.alert((d && d.detail) || ('HTTP '+r.status)); return; }
+    AITRNotify.alert(window.T('ov2_li_confirm_ok') + (d.persona_id ? (' → ' + d.persona_id) : ''), 'ok');
+    loadLoginIdentity();
+  }catch(e){ AITRNotify.alert(String(e)); }
+}
+document.addEventListener('click', function(ev){
+  var t = ev.target && ev.target.closest ? ev.target.closest('[data-lident-ok]') : null;
+  if(!t) return;
+  _lIdentConfirm(Number(t.getAttribute('data-lident-ok')));
+});
+window.loadLoginIdentity = loadLoginIdentity;
+
+// 图片翻译链路（P1-OBS 2026-08-19）：共享 /api/workspace/metrics 分发链，读 image_xlate 段。
+// providers/langs 键为受控枚举（ppocr/ppocr_cache/vlm/vlm_cache）与归一语种码，可直接拼 HTML。
+// 覆盖率 <90% 且有失败块 → 亮黄（「很多地方没翻译」的量化预警）；零流量整卡隐藏。
+function renderImageXlate(d){
+  var sec = document.getElementById('imgXlateSection');
+  var kp = document.getElementById('imgXlateKpis');
+  var dv = document.getElementById('imgXlateDetail');
+  if(!sec || !kp || !dv) return;
+  var ix = (d && d.image_xlate) || null;
+  if(!ix || !ix.active){ opsHideCardEl(sec, 'imgxl', 'no_data'); kp.innerHTML=''; dv.innerHTML=''; return; }
+  sec.style.display = '';
+  var cov = ix.coverage || {};
+  var blocks = Number(cov.blocks)||0, okb = Number(cov.ok)||0, failb = Number(cov.failed)||0;
+  var ratio = blocks ? Math.round(okb / blocks * 100) : null;
+  opsSetCardLight('imgxl', (failb > 0 && ratio !== null && ratio < 90) ? 'yellow' : '');
+  var kpis = [
+    {label:window.T('ov2_ix_runs'), value:fmt(Number(ix.runs)||0)},
+    {label:window.T('ov2_ix_patches'), value:fmt(Number(ix.patches)||0)},
+    {label:window.T('ov2_ix_cover'), value:(ratio===null?'—':(ratio+'%')),
+     color:((ratio!==null && ratio<90)?'var(--amber)':null)},
+    {label:window.T('ov2_ix_avgms'), value:((Number(ix.avg_ms)||0)?fmt(Number(ix.avg_ms))+'ms':'—')},
+  ];
+  kp.innerHTML = kpis.map(function(c){
+    return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+      '</div><div style="font-size:20px;font-weight:600;margin-top:4px;'+(c.color?('color:'+c.color+';'):'')+'">'+c.value+'</div></div>';
+  }).join('');
+  function topLine(obj){
+    obj = obj || {};
+    return Object.keys(obj).sort(function(a,b){ return (obj[b]||0)-(obj[a]||0); })
+      .slice(0,8).map(function(k){ return k+' '+obj[k]; }).join(' · ') || '—';
+  }
+  dv.innerHTML =
+    '<div class="muted" style="font-size:12px;">'+window.T('ov2_ix_prov')+': '+topLine(ix.providers)+'</div>'
+    +'<div class="muted" style="font-size:12px;">'+window.T('ov2_ix_langs')+': '+topLine(ix.langs)+'</div>'
+    +(blocks?('<div class="muted" style="font-size:12px;">'+window.Tf('ov2_ix_cover_v',{n:blocks,m:okb,k:failb})+'</div>'):'');
+}
+
+// 跨平台档案（P2 2026-08-18）：共享 /api/workspace/metrics 分发链，读 origin_profile 段。
+// lookups/blocks=进程口径（provider 每条消息一次；blocks=AI 真吃到背景的次数）；
+// totals=contacts.db 持久台账（档案数/导入批次/记忆事实）。无档案且零消费 → 整卡隐藏；
+// 开关关着但已有档案 → 亮黄提醒「填了 AI 用不上」。
+function renderOriginProfile(d){
+  var sec = document.getElementById('originProfileSection');
+  var kp = document.getElementById('originProfileKpis');
+  var dv = document.getElementById('originProfileDetail');
+  if(!sec || !kp || !dv) return;
+  var op = (d && d.origin_profile) || null;
+  var tot = (op && op.totals) || {};
+  var profiles = Number(tot.profiles)||0;
+  var imports = Number(tot.imports_confirmed)||0;
+  var lookups = op ? (Number(op.lookups)||0) : 0;
+  if(!op || (!profiles && !imports && !lookups)){ opsHideCardEl(sec, 'originp', 'no_data'); kp.innerHTML=''; dv.innerHTML=''; return; }
+  opsShowCardEl(sec, 'originp');
+  var blocks = Number(op.blocks)||0;
+  var enabled = op.enabled !== false;
+  opsSetCardLight('originp', (!enabled && (profiles || imports)) ? 'yellow' : '');
+  var kpis = [
+    {label:window.T('ov2_or_profiles'), value:fmt(profiles)},
+    {label:window.T('ov2_or_imports'), value:fmt(imports) + (Number(tot.imports_revoked)?(' / -'+fmt(Number(tot.imports_revoked))):'')},
+    {label:window.T('ov2_or_facts'), value:fmt(Number(tot.facts_written)||0)},
+    {label:window.T('ov2_or_inject'), value:fmt(blocks) + ' / ' + fmt(lookups)},
+    {label:window.T('ov2_or_merge'), value:fmt(Number(op.merge_links)||0)},
+  ];
+  kp.innerHTML = kpis.map(function(c){
+    return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+      '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+  }).join('');
+  dv.innerHTML = enabled ? '' :
+    '<div class="muted" style="font-size:12px;color:var(--amber);">'+window.T('ov2_or_flag_off')+'</div>';
+}
+
+// 🪙 Token 计费卡（2026-08-19 观测三件套）：与 loadFrontendErrors 共享同一次
+// /api/workspace/metrics 响应，读 token_ledger 段（wallet_snapshot 轻量版）。
+// enabled=false → 整卡隐藏（disabled）；余额耗尽且钱包曾注资 → 黄灯（enforce 开时
+// 付费动作在降级，运营该看一眼是不是该买包了）。action/shadow 键是后端固定枚举
+//（TOKEN_RATES / record_shadow 调用点写死），可直接拼 HTML。
+function renderTokenLedger(d){
+  var sec = document.getElementById('tokLedgerSection');
+  var kp = document.getElementById('tokLedgerKpis');
+  var dv = document.getElementById('tokLedgerDetail');
+  if(!sec || !kp || !dv) return;
+  var tk = (d && d.token_ledger) || null;
+  if(!tk || !tk.enabled){
+    kp.innerHTML=''; dv.innerHTML='';
+    opsHideCardEl(sec, 'tokled', tk ? 'disabled' : 'no_data');
+    return;
+  }
+  opsShowCardEl(sec, 'tokled');
+  var bal = Number(tk.balance)||0;
+  var funded = (Number(tk.active_granted)||0) > 0 || (Number(tk.expired_lost)||0) > 0;
+  var exhausted = funded && bal <= 0 && (Number(tk.total_spend)||0) > 0;
+  opsSetCardLight('tokled', exhausted ? 'yellow' : '');
+  var kpis = [
+    {label:window.T('ov2_tok_balance'), value:fmt(bal.toLocaleString()),
+     color: exhausted ? 'var(--amber)' : ''},
+    {label:window.T('ov2_tok_today'), value:fmt((Number(tk.today)||0).toLocaleString())},
+    {label:window.T('ov2_tok_total'), value:fmt((Number(tk.total_spend)||0).toLocaleString())},
+    {label:window.T('ov2_tok_enforce'),
+     value: tk.enforce ? window.T('ov2_tok_enforce_on') : window.T('ov2_tok_enforce_off'),
+     color: tk.enforce ? 'var(--amber)' : ''}
+  ];
+  if(Number(tk.expired_lost)||0){
+    kpis.push({label:window.T('ov2_tok_expired'), value:fmt((Number(tk.expired_lost)||0).toLocaleString())});
+  }
+  kp.innerHTML = kpis.map(function(c){
+    return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+      '</div><div style="font-size:20px;font-weight:600;margin-top:4px;'+(c.color?('color:'+c.color+';'):'')+'">'+c.value+'</div></div>';
+  }).join('');
+  function pairStr(obj){
+    return Object.keys(obj||{}).map(function(k){ return k+' '+obj[k]; }).join(' · ') || '—';
+  }
+  var fu = tk.fair_use || {};
+  var lines = [
+    '<div class="muted" style="font-size:12px;">'+window.T('ov2_tok_by_action')+': '+pairStr(tk.by_action)+'</div>'
+  ];
+  if(Object.keys(tk.shadow||{}).length){
+    lines.push('<div class="muted" style="font-size:12px;margin-top:4px;">'+window.T('ov2_tok_shadow')+': '+pairStr(tk.shadow)+'</div>');
+  }
+  if(Number(fu.today)||0){
+    lines.push('<div class="muted" style="font-size:12px;margin-top:4px;'+(fu.exceeded?'color:var(--amber);':'')+'">'
+      + window.Tf('ov2_tok_fair_use', {n:(Number(fu.today)||0).toLocaleString(), limit:(Number(fu.limit)||0).toLocaleString()})
+      + (fu.exceeded ? ' ⚠' : '') + '</div>');
+  }
+  dv.innerHTML = lines.join('');
 }
 
 // 接入卡点 + 官方开通两行（登录会话漏斗之前的那半程）：读 ui-event-trend 的
@@ -2546,7 +3133,7 @@ async function loadLoginFunnelTrend(hasLive){
       el.innerHTML = hasLive
         ? ('<div class="muted" style="font-size:12px;">'+window.T('ov2_js_lf_trend_none')+'</div>')
         : '';
-      if(!hasLive && sec) sec.style.display='none';
+      if(!hasLive && sec) opsHideCardEl(sec, 'loginfn', 'no_data');
       return;
     }
     if(sec) sec.style.display = '';
@@ -2587,6 +3174,46 @@ async function loadLoginFunnelTrend(hasLive){
         }
       }
     }catch(_al){}
+    // P1（实施64 B64 二期）：Messenger 应用内登录（表单中继）前端相位漏斗——
+    // 表单曝光→提交→验证中→安全验证/锁定→成功（cnr_* beacon，14 天口径）。
+    // 与上面的服务端会话漏斗互补：这里能看见「用户卡在表单哪一步」。零事件静默。
+    try{
+      const cr = await apiFetch('/api/admin/ui-event-trend?days=14&prefix=cnr_', {credentials:'same-origin'}, {timeoutMs: 15000});
+      if(cr && cr.ok){
+        const cd = await cr.json();
+        if(cd && cd.enabled!==false){
+          var cagg = {};
+          (cd.days||[]).forEach(function(row){
+            var by = (row && row.by_action) || {};
+            Object.keys(by).forEach(function(a){ cagg[a] = (cagg[a]||0) + (Number(by[a])||0); });
+          });
+          var cn = function(k){ return Number(cagg[k])||0; };
+          var cTotal = cn('cnr_form')+cn('cnr_submit')+cn('cnr_ok');
+          if(cTotal > 0){
+            // 转化率就地标注：提交率=提交/曝光（「看了没敢填」的流失＝信任/文案问题），
+            // 成功率=成功/提交（FB 侧验证问题）——两段分别指向不同的整改动作。
+            var cRate = function(a,b){ return b>0 ? (' ('+Math.round(a/b*100)+'%)') : ''; };
+            var cparts = [
+              window.T('ov2_js_lf_inapp_form')+' '+fmt(cn('cnr_form')),
+              window.T('ov2_js_lf_inapp_submit')+' '+fmt(cn('cnr_submit'))+cRate(cn('cnr_submit'), cn('cnr_form')),
+              window.T('ov2_js_lf_inapp_2fa')+' '+fmt(cn('cnr_2fa')),
+              // B64 三期：cnr_devconf（等手机确认子味）并入安全验证总数——它是 checkpoint 家族
+              window.T('ov2_js_lf_inapp_ck')+' '+fmt(cn('cnr_checkpoint')+cn('cnr_stuck')+cn('cnr_devconf')),
+              window.T('ov2_js_lf_inapp_locked')+' '+fmt(cn('cnr_locked')),
+              window.T('ov2_js_lf_inapp_ok')+' '+fmt(cn('cnr_ok'))+cRate(cn('cnr_ok'), cn('cnr_submit'))
+            ];
+            // B64 三期：「手机确认解卡」读数（点击→60s 内页面真前进）；零点击不占版面
+            if(cn('cnr_continue')>0){
+              cparts.push(window.T('ov2_js_lf_inapp_cont')+' '+fmt(cn('cnr_continue'))
+                +' / '+window.T('ov2_js_lf_inapp_cont_ok')+' '+fmt(cn('cnr_continue_ok'))
+                +cRate(cn('cnr_continue_ok'), cn('cnr_continue')));
+            }
+            el.innerHTML += '<div class="muted" style="font-size:12px;margin-top:6px;">'
+              + window.T('ov2_js_lf_inapp_title') + ': ' + cparts.join(' · ') + '</div>';
+          }
+        }
+      }
+    }catch(_cnr){}
   }catch(_e){ el.innerHTML=''; }
 }
 
@@ -2658,8 +3285,8 @@ function renderCsrfRejects(d){
   var dv = document.getElementById('csrfRejectDetail');
   if(!sec || !kp || !dv) return;
   var cs = (d && d.csrf_rejects) || null;
-  if(!cs || !(Number(cs.total)||0)){ opsSetCardLight('csrf', ''); sec.style.display='none'; return; }
-  sec.style.display = '';
+  if(!cs || !(Number(cs.total)||0)){ opsSetCardLight('csrf', ''); opsHideCardEl(sec, 'csrf', 'healthy'); return; }
+  opsShowCardEl(sec, 'csrf');
   // P4 结构化状态：卡片可见即有拦截量（「有量就该查，别等坐席截图」）
   opsSetCardLight('csrf', 'yellow');
   var lastTs = Number(cs.last_reject_ts)||0;
@@ -2697,8 +3324,8 @@ function renderOutboundMirror(d){
   if(!sec || !kp || !dv) return;
   var om = (d && d.outbound_mirror) || null;
   var fails = (om && Number(om.fail)) || 0;
-  if(!om || !fails){ opsSetCardLight('omirror', ''); sec.style.display='none'; return; }
-  sec.style.display = '';
+  if(!om || !fails){ opsSetCardLight('omirror', ''); opsHideCardEl(sec, 'omirror', 'healthy'); return; }
+  opsShowCardEl(sec, 'omirror');
   // P4 结构化状态：有归档失败＝坐席台已出现「无音频存档」占位，值得查
   opsSetCardLight('omirror', 'yellow');
   var total = Number(om.total)||0;
@@ -2820,8 +3447,8 @@ function renderDpickFunnel(d){
   var by=(d && d.ui_events && d.ui_events.by_action)||{};
   var n=function(k){ return Number(by['dpick.'+k])||0; };
   var opens=n('open')+n('regen');
-  if(!opens){ sec.style.display='none'; return; }
-  sec.style.display='';
+  if(!opens){ opsHideCardEl(sec, 'dpick', 'no_data'); return; }
+  opsShowCardEl(sec, 'dpick');
   var ready=n('ready'), adopt=n('send')+n('fill')+n('backup_use');
   var pct=function(a,b){ return b>0 ? (100*a/b).toFixed(1)+'%' : '—'; };
   var kpis=[
@@ -2856,7 +3483,7 @@ function renderUiEvents(d){
   var dv = document.getElementById('uiEventsDetail');
   if(!sec || !kp || !dv) return;
   var ue = (d && d.ui_events) || null;
-  if(!ue || !(Number(ue.total)||0)){ sec.style.display='none'; return; }
+  if(!ue || !(Number(ue.total)||0)){ opsHideCardEl(sec, 'uiev', 'no_data'); return; }
   sec.style.display = '';
   var actionLabel = {
     'empty.show_all':   window.T('ov2_uiev_a_show_all'),
@@ -2905,8 +3532,8 @@ function renderProfilePush(d){
   var dv = document.getElementById('profilePushDetail');
   if(!sec || !kp || !dv) return;
   var pp = (d && d.profile_push) || null;
-  if(!pp || !pp.active){ sec.style.display='none'; return; }
-  sec.style.display = '';
+  if(!pp || !pp.active){ opsHideCardEl(sec, 'ppush', 'disabled'); return; }
+  opsShowCardEl(sec, 'ppush');
   var attempts = Number(pp.attempts)||0;
   var success = Number(pp.success)||0;
   var partial = Number(pp.partial)||0;
@@ -2958,8 +3585,8 @@ function renderPhotoCapability(d){
   var dv = document.getElementById('photoCapDetail');
   if(!sec || !kp || !dv) return;
   var pc = (d && d.photo_capability) || null;
-  if(!pc || !pc.active){ sec.style.display='none'; return; }
-  sec.style.display = '';
+  if(!pc || !pc.active){ opsHideCardEl(sec, 'photocap', 'disabled'); return; }
+  opsShowCardEl(sec, 'photocap');
   var calls = Number(pc.sanitize_calls)||0;
   var stripped = Number(pc.sanitize_stripped)||0;
   var rate = Math.round((Number(pc.strip_rate)||0)*100);
@@ -3147,13 +3774,13 @@ async function loadVisionUsage(){
   if(!sec || !kp || !dv) return;
   try{
     const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
-    if(r.status === 403){ sec.style.display='none'; return; }
+    if(r.status === 403){ opsHideCardEl(sec, 'vision', 'no_access'); return; }
     const d = await r.json();
     var vz = (d.providers || {}).vision || null;
     var attempts = vz ? (Number(vz.total_attempts)||0) : 0;
     var cacheHits = vz ? (Number(vz.cache_hits)||0) : 0;
-    if(!vz || (attempts + cacheHits) <= 0){ sec.style.display='none'; return; }
-    sec.style.display = '';
+    if(!vz || (attempts + cacheHits) <= 0){ opsHideCardEl(sec, 'vision', 'no_data'); return; }
+    opsShowCardEl(sec, 'vision');
     var rows = vz.rows || [];
     var okSum = 0, latSum = 0;
     rows.forEach(function(row){
@@ -3467,11 +4094,11 @@ async function loadPlatformSessions(){
         btn.textContent = window.T('ov2_js_ps_relogin_ok');
         setTimeout(loadPlatformSessions, 4000);
       }else{
-        alert(window.T('ov2_js_ps_relogin_fail')+' '+((d && d.detail) || r.status));
+        AITRNotify.alert(window.T('ov2_js_ps_relogin_fail')+' '+((d && d.detail) || r.status));
         btn.disabled = false; btn.textContent = old;
       }
     }catch(e){
-      alert(window.T('ov2_js_ps_relogin_fail')+' '+e);
+      AITRNotify.alert(window.T('ov2_js_ps_relogin_fail')+' '+e);
       btn.disabled = false; btn.textContent = old;
     }
   });
@@ -3673,6 +4300,58 @@ async function loadPersonaMedia(){
   }
 }
 
+// 🎨 手动出图卡：读 /api/workspace/metrics.image_gen（进程口径）——尝试/成功率/
+// p50 时延/发送数 + 失败码 Top（model_missing 涨=运维事故、vram_insufficient 涨=
+// 算力互挤、gen_timeout 涨=冷启动窗）+ 发送来源分布（相册秒发占比=album-first
+// 在省多少 GPU）+ 存货命中率 + 取消数（高=坐席等不起）。零流量整卡隐藏。
+async function loadImageGen(){
+  var sec = document.getElementById('imgenSection');
+  var kp = document.getElementById('imgenKpis');
+  var dv = document.getElementById('imgenDetail');
+  if(!sec || !kp || !dv) return;
+  try{
+    const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
+    if(!r.ok){ sec.style.display='none'; return; }
+    const d = await r.json();
+    var g = d.image_gen || null;
+    var total = g ? (Number(g.gen_total)||0) : 0;
+    var sent = g ? ((Number(g.sent_generated)||0)+(Number(g.sent_album)||0)) : 0;
+    if(!g || (!total && !sent)){ opsHideCardEl(sec, 'imgen', 'no_data'); return; }
+    sec.style.display = '';
+    var ok = Number(g.gen_ok)||0;
+    var rate = total ? Math.round(ok*100/total) : 0;
+    var kpis = [
+      {label:window.T('ov2_ig_total'), value:fmt(total)},
+      {label:window.T('ov2_ig_okrate'), value: rate+'%'},
+      {label:window.T('ov2_ig_p50'), value: fmt(Number(g.latency_p50_ms)||0)+'ms'},
+      {label:window.T('ov2_ig_sent'), value: fmt(sent)},
+    ];
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+    }).join('');
+    var rows = [];
+    var fb = g.fail_by_code || {};
+    var codes = Object.keys(fb).sort(function(a,b){ return (fb[b]||0)-(fb[a]||0); });
+    if(codes.length){
+      rows.push(window.T('ov2_ig_fails')+': '+codes.slice(0,6).map(function(k){
+        return esc(k)+' '+fmt(Number(fb[k])||0); }).join(' · '));
+    }
+    if(sent){
+      rows.push(window.T('ov2_ig_srcsplit')+': '+window.T('ov2_ig_src_gen')+' '
+        +fmt(Number(g.sent_generated)||0)+' · '+window.T('ov2_ig_src_album')+' '
+        +fmt(Number(g.sent_album)||0));
+    }
+    var sq = Number(g.stock_queries)||0;
+    if(sq){ rows.push(window.T('ov2_ig_stock')+': '+fmt(Number(g.stock_hits)||0)+'/'+fmt(sq)); }
+    if(Number(g.cancelled)||0){ rows.push(window.T('ov2_ig_cancel')+': '+fmt(Number(g.cancelled)||0)); }
+    if(Number(g.latency_p95_ms)||0){ rows.push(window.T('ov2_ig_p95')+': '+fmt(Number(g.latency_p95_ms)||0)+'ms'); }
+    dv.innerHTML = rows.length ? rows.map(function(x){
+      return '<div style="font-size:12px;margin-top:4px;">'+x+'</div>'; }).join('')
+      : '<div class="empty">'+window.T('ov2_ig_none')+'</div>';
+  }catch(_){ sec.style.display='none'; }
+}
+
 // 😊 表情包卡：读 /api/workspace/metrics 的 stickers（备货水位=持久口径，
 // 发送/收藏=进程口径；sent_as 分桶 image 占比高＝原生贴纸能力缺口——
 // WA 边车未升级 / LINE 自建包为主）。零备货且零发送 → 整卡隐藏。
@@ -3688,7 +4367,7 @@ async function loadStickers(){
     var s = d.stickers || null;
     var sends = s ? (Number(s.sends)||0) : 0;
     var items = s ? (Number(s.stickers)||0) : 0;
-    if(!s || (!sends && !items)){ sec.style.display='none'; return; }
+    if(!s || (!sends && !items)){ opsHideCardEl(sec, 'stk', 'no_data'); return; }
     sec.style.display = '';
     var kpis = [
       {label:window.T('ov2_stk_packs'), value:fmt(Number(s.packs)||0)},
@@ -3728,10 +4407,10 @@ async function loadMediaConsistency(){
   if(!sec || !kp || !dv) return;
   try{
     const r = await apiFetch('/api/admin/media-consistency', {credentials:'same-origin'});
-    if(r.status === 403){ sec.style.display='none'; return; }
+    if(r.status === 403){ opsHideCardEl(sec, 'mconsist', 'no_access'); return; }
     const d = await r.json();
-    if(!d.active){ sec.style.display='none'; return; }
-    sec.style.display = '';
+    if(!d.active){ opsHideCardEl(sec, 'mconsist', 'disabled'); return; }
+    opsShowCardEl(sec, 'mconsist');
     var comp = d.complaints || {};
     var gap = d.gap || {};
     var rows = gap.rows || [];
@@ -3797,10 +4476,10 @@ async function loadDuelBench(){
   if(!sec || !kp || !dv) return;
   try{
     const r = await apiFetch('/api/admin/duel-bench', {credentials:'same-origin'});
-    if(r.status === 403 || r.status === 404){ sec.style.display='none'; return; }
+    if(r.status === 403 || r.status === 404){ opsHideHttp(sec, 'duel', r.status); return; }
     const d = await r.json();
-    if(!d || !d.active){ sec.style.display='none'; return; }
-    sec.style.display = '';
+    if(!d || !d.active){ opsHideCardEl(sec, 'duel', 'disabled'); return; }
+    opsShowCardEl(sec, 'duel');
     var last = d.last_run || {};
     var latest = d.latest || {};
     var nightly = d.nightly || {};
@@ -3878,11 +4557,11 @@ async function loadRealWorld(){
   if(!sec || !kp || !dv) return;
   try{
     const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
-    if(r.status === 403){ sec.style.display='none'; return; }
+    if(r.status === 403){ opsHideCardEl(sec, 'rw', 'no_access'); return; }
     const d = await r.json();
     var rw = d.real_world || null;
-    if(!rw || !rw.active){ sec.style.display='none'; return; }
-    sec.style.display = '';
+    if(!rw || !rw.active){ opsHideCardEl(sec, 'rw', 'disabled'); return; }
+    opsShowCardEl(sec, 'rw');
     var wx = rw.weather || {}, ck = rw.clock || {}, cc = rw.clock_core || {};
     var src = rw.sources || {}, hol = rw.holidays || {};
     var wxTotal = (Number(wx.hits)||0)+(Number(wx.stale_hits)||0)+(Number(wx.misses)||0);
@@ -3935,11 +4614,11 @@ async function loadBazi(){
   if(!sec || !kp || !dv) return;
   try{
     const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
-    if(r.status === 403){ sec.style.display='none'; return; }
+    if(r.status === 403){ opsHideCardEl(sec, 'bazi', 'no_access'); return; }
     const d = await r.json();
     var bz = d.bazi || null;
-    if(!bz || !bz.active){ sec.style.display='none'; return; }
-    sec.style.display = '';
+    if(!bz || !bz.active){ opsHideCardEl(sec, 'bazi', 'disabled'); return; }
+    opsShowCardEl(sec, 'bazi');
     var daily = bz.daily_cards || {};
     var deep = bz.deep_reading || {};
     var kline = bz.kline || {};
@@ -3981,15 +4660,15 @@ async function loadTemperGuard(){
   if(!sec || !kp || !dv) return;
   try{
     const r = await apiFetch('/api/companion/temper/status', {credentials:'same-origin'});
-    if(r.status === 403){ sec.style.display='none'; return; }
+    if(r.status === 403){ opsHideCardEl(sec, 'temper', 'no_access'); return; }
     const d = await r.json();
-    if(!d || !d.ok){ sec.style.display='none'; return; }
+    if(!d || !d.ok){ opsHideCardEl(sec, 'temper', 'error'); return; }
     var cfg = d.config || {}, s = d.stats || {}, hints = s.hints || {};
     var comebacks = (Number(hints.gentle)||0)+(Number(hints.sharp)||0)+(Number(hints.feisty)||0);
     var insults = Number(s.insults)||0;
     var pristine = (cfg.enabled !== false) && !cfg.force_level;  // 出厂默认
-    if(insults === 0 && comebacks === 0 && pristine){ sec.style.display='none'; return; }
-    sec.style.display = '';
+    if(insults === 0 && comebacks === 0 && pristine){ opsHideCardEl(sec, 'temper', 'no_data'); return; }
+    opsShowCardEl(sec, 'temper');
     var kpis = [
       {label:window.T('ov2_tp_insults'),   value:fmt(insults)},
       {label:window.T('ov2_tp_comebacks'), value:fmt(comebacks)},
@@ -4024,6 +4703,13 @@ async function loadTemperGuard(){
     if((Number(s.feud_breaks)||0) > 0){ parts.push('<span style="color:var(--tk-amber-ink,#d97706);">'+window.T('ov2_tp_breaks')+': '+fmt(Number(s.feud_breaks)||0)+'</span>'); }
     if((Number(s.taunts)||0) > 0){ parts.push(window.T('ov2_tp_taunts')+': '+fmt(Number(s.taunts)||0)); }
     if((Number(s.platform_capped)||0) > 0){ parts.push(window.T('ov2_tp_pcapped')+': '+fmt(Number(s.platform_capped)||0)); }
+    if((Number(s.escalated_hints)||0) > 0){ parts.push(window.T('ov2_tp_escalated')+': '+fmt(Number(s.escalated_hints)||0)); }
+    if((Number(s.emo_block_suppressed)||0) > 0){ parts.push(window.T('ov2_tp_emoblk')+': '+fmt(Number(s.emo_block_suppressed)||0)); }
+    if((Number(s.fight_voice_overrides)||0) > 0){ parts.push(window.T('ov2_tp_voiceov')+': '+fmt(Number(s.fight_voice_overrides)||0)); }
+    if((Number(s.grudge_set)||0) > 0){ parts.push(window.T('ov2_tp_grudge')+': '+fmt(Number(s.grudge_set)||0)+' / '+fmt(Number(s.grudge_turns)||0)); }
+    if((Number(s.grudge_reignites)||0) > 0){ parts.push('<span style="color:var(--tk-amber-ink,#d97706);">'+window.T('ov2_tp_grudge_reig')+': '+fmt(Number(s.grudge_reignites)||0)+'</span>'); }
+    if((Number(s.grudge_closeouts)||0) > 0){ parts.push(window.T('ov2_tp_grudge_close')+': '+fmt(Number(s.grudge_closeouts)||0)); }
+    if((Number(s.out_guard_strips)||0) > 0){ parts.push('<span style="color:var(--tk-amber-ink,#d97706);">'+window.T('ov2_tp_outguard')+': '+fmt(Number(s.out_guard_strips)||0)+(Number(s.out_guard_fallbacks)>0?(' ('+window.T('ov2_tp_outguard_fb')+' '+fmt(Number(s.out_guard_fallbacks)||0)+')'):'')+'</span>'); }
     // Top 被怼人设
     var byP = s.by_persona || {};
     var top = Object.keys(byP).map(function(k){return {id:k,n:byP[k]};}).sort(function(a,b){return b.n-a.n;}).slice(0,5);
@@ -4045,10 +4731,10 @@ async function loadGroupMembers(){
   if(!sec || !kp || !dv) return;
   try{
     const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
-    if(r.status === 403){ sec.style.display='none'; return; }
+    if(r.status === 403){ opsHideCardEl(sec, 'gmembers', 'no_access'); return; }
     const d = await r.json();
     var gm = d.group_members || null;
-    if(!gm || !gm.active){ sec.style.display='none'; return; }
+    if(!gm || !gm.active){ opsHideCardEl(sec, 'gmembers', 'disabled'); return; }
     sec.style.display = '';
     var kpis = [
       {label:window.T('ov2_gm_members'), value:fmt(Number(gm.members_total)||0)},
@@ -4067,6 +4753,62 @@ async function loadGroupMembers(){
 
 // 🗂 案例跟进卡（2026-08-03）：live 未结案读 /api/cases/active，自启动累计读
 // /api/workspace/metrics.cases（进程计数，重启清零如实标注）。双料全零 → 整卡隐藏。
+async function loadBugIntake(){
+  var sec = document.getElementById('bugIntakeSection');
+  var kp = document.getElementById('bugIntakeKpis');
+  var dv = document.getElementById('bugIntakeDetail');
+  if(!sec || !kp || !dv) return;
+  try{
+    const r = await apiFetch('/api/admin/bug-intake?limit=8', {credentials:'same-origin'});
+    if(r.status === 403){ opsHideCardEl(sec, 'bugintake', 'no_access'); return; }
+    if(r.status === 404){ opsHideCardEl(sec, 'bugintake', 'not_loaded'); return; }
+    if(!r.ok){ opsHideCardEl(sec, 'bugintake', 'error'); return; }
+    const d = await r.json();
+    var st = d.stats || {};
+    var tickets = d.tickets || [];
+    var open = Number(st.open_total)||0;
+    if(!st.active && open===0 && !tickets.length){ opsHideCardEl(sec, 'bugintake', 'no_data'); return; }
+    sec.style.display='';
+    var sev = st.open_by_severity || {};
+    var kpis = [
+      {label:window.T('ov2_bi_open'), value:fmt(open)},
+      {label:window.T('ov2_bi_p01'), value:fmt((Number(sev.P0)||0)+(Number(sev.P1)||0))},
+      {label:window.T('ov2_bi_24h'), value:fmt(Number(st.tickets_24h)||0)},
+      {label:window.T('ov2_bi_usage'), value:fmt(Number(st.usage)||0)},
+      {label:window.T('ov2_bi_dup'), value:fmt(Number(st.bug_dup)||0)},
+      {label:window.T('ov2_bi_capped'), value:fmt(Number(st.rate_capped)||0)}
+    ];
+    if(Number(st.crisis_hold)>0){
+      kpis.push({label:window.T('ov2_bi_crisis'), value:'<span style="color:var(--tk-amber-ink,#d97706);">'+fmt(Number(st.crisis_hold)||0)+'</span>'});
+    }
+    if(Number(st.pending_notify)>0){
+      kpis.push({label:window.T('ov2_bi_pending_notify'), value:'<span style="color:var(--tk-amber-ink,#d97706);">'+fmt(Number(st.pending_notify)||0)+'</span>'});
+    }
+    if(Number(st.verify_yes)>0 || Number(st.verify_no)>0){
+      kpis.push({label:window.T('ov2_bi_verify'), value:fmt(Number(st.verify_yes)||0)+' / '+fmt(Number(st.verify_no)||0)});
+    }
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+    }).join('');
+    var openRows = tickets.filter(function(t){
+      return ['new','confirmed','in_progress'].indexOf(String(t.status||''))>=0;
+    }).slice(0,6);
+    if(openRows.length){
+      dv.innerHTML = openRows.map(function(t){
+        var sv = String(t.severity||'P2');
+        var svColor = sv==='P0' ? 'var(--tk-red-ink,#dc2626)' : (sv==='P1' ? 'var(--tk-amber-ink,#d97706)' : 'var(--t2)');
+        return '<div style="padding:4px 0;border-bottom:1px solid var(--bd);font-size:13px;">'
+          +'<span style="color:'+svColor+';font-weight:600;">#'+esc(t.id)+' '+esc(sv)+'</span> '
+          +esc(String(t.title||'').slice(0,60))
+          +' <span class="muted" style="font-size:12px;">· '+esc(t.reporter_name||t.reporter_id||'')
+          +(Number(t.report_count)>1 ? (' ×'+esc(t.report_count)) : '')+' · '+esc(t.status)+'</span></div>';
+      }).join('');
+    } else {
+      dv.innerHTML = '<div class="empty">'+window.T('ov2_bi_none_open')+'</div>';
+    }
+  }catch(e){ opsHideCardEl(sec, 'bugintake', 'error'); }
+}
 async function loadCasesCard(){
   var sec = document.getElementById('casesSection');
   var kp = document.getElementById('casesKpis');
@@ -4077,7 +4819,7 @@ async function loadCasesCard(){
     var cum = null;
     try{
       const r1 = await apiFetch('/api/cases/active', {credentials:'same-origin'});
-      if(r1.status === 403){ sec.style.display='none'; return; }
+      if(r1.status === 403){ opsHideCardEl(sec, 'cases', 'no_access'); return; }
       if(r1.ok) live = await r1.json();
     }catch(_){}
     try{
@@ -4099,7 +4841,7 @@ async function loadCasesCard(){
     var mediaStale = Number(sum.media_stale)||0;
     var openDrill = Number(sum.open_drill)||0;
     var opened = cum ? (Number(cum.opened)||0) : 0;
-    if(open===0 && opened===0 && rows.length===0 && openDrill===0){ sec.style.display='none'; return; }
+    if(open===0 && opened===0 && rows.length===0 && openDrill===0){ opsHideCardEl(sec, 'cases', 'no_data'); return; }
     sec.style.display='';
     var kpis = [
       {label:window.T('ov2_cs_open'), value:fmt(open)},
@@ -4220,12 +4962,12 @@ async function loadCare(){
     // 首轮 refreshAll 并发 ~50 个接口，health 的 effect 首算可能挤到默认超时——
     // 显式放宽；失败也**不武断隐藏**（对齐 loadBazi 容错惯例，只有 403/未启用才藏卡）
     const r = await apiFetch('/api/care/health', {credentials:'same-origin'}, {timeoutMs: 30000});
-    if(r.status === 403){ sec.style.display='none'; return; }
+    if(r.status === 403){ opsHideCardEl(sec, 'care', 'no_access'); return; }
     if(!r.ok){ throw new Error('http '+r.status); }
     const h = await r.json();
     var su = (h.activity && h.activity.summary) || {};
     var total = (su.pending||0)+(su.sent||0)+(su.skipped||0)+(su.expired||0)+(su.cancelled||0);
-    if(!h.enabled && total === 0){ sec.style.display='none'; return; }
+    if(!h.enabled && total === 0){ opsHideCardEl(sec, 'care', 'disabled'); return; }
     sec.style.display = '';
     var state = !h.enabled ? window.T('ov2_care_state_off')
       : (h.dry_run ? window.T('ov2_care_state_dry') : window.T('ov2_care_state_live'));
@@ -4378,7 +5120,7 @@ async function loadPersonaImport(){
   var hasTrend = !!(tot && (Number(tot.reports)||0) > 0);
   // 检索计数独立于导入漏斗：重启后导入计数清零、传记却还在被检索——这时卡不能整张消失
   var hasBio = !!(pi && pi.bio_retrieval && (Number(pi.bio_retrieval.queries)||0) > 0);
-  if((!pi || !pi.active) && !hasTrend && !hasBio){ sec.style.display='none'; return; }
+  if((!pi || !pi.active) && !hasTrend && !hasBio){ opsHideCardEl(sec, 'pimp', 'no_data'); return; }
   sec.style.display = '';
   pi = pi || {};
   try{
@@ -4434,9 +5176,9 @@ async function loadAlertLink(){
   if(!sec||!kp||!dv) return;
   try{
     const r=await apiFetch('/api/admin/alert-link-status',{credentials:'same-origin'});
-    if(!r.ok){ sec.style.display='none'; return; }
+    if(!r.ok){ opsHideHttp(sec, 'alertlink', r.status); return; }
     const d=await r.json();
-    if(!d||!d.ok){ sec.style.display='none'; return; }
+    if(!d||!d.ok){ opsHideCardEl(sec, 'alertlink', 'error'); return; }
     sec.style.display='';
     var a=d.audit||{};
     var proc=d.process||{};
@@ -4488,6 +5230,79 @@ async function loadAlertLink(){
   }catch(e){ sec.style.display='none'; }
 }
 
+// ── 🛑 紧急停发（P1 2026-08-23 急停可见化）──────────────────────────────────
+// 数据源＝已注册的 GET /api/ops/kill-switch（任意登录可读；解除 DELETE 由服务端
+// manage_ops 再闸）。无生效急停 → 整卡隐藏（healthy）；全局冻结=红灯、局部=黄灯。
+// 来源判定与后端 freeze_source 同契约（actor=ban_signal 或 reason 带 auto_ 前缀
+// ＝自动风控——写入形态有 tests/test_killswitch_visibility.py 钉住）。
+function _ksIsAuto(it){
+  var rs=String((it&&it.reason)||'');
+  return String((it&&it.actor)||'').toLowerCase()==='ban_signal'
+    ||rs.indexOf('auto_pause:')===0||rs.indexOf('auto_ban:')===0;
+}
+async function loadKsGuard(){
+  var sec=document.getElementById('ksGuardSection');
+  var kp=document.getElementById('ksGuardKpis');
+  var dv=document.getElementById('ksGuardDetail');
+  if(!sec||!kp||!dv) return;
+  try{
+    const r=await apiFetch('/api/ops/kill-switch',{credentials:'same-origin'});
+    if(!r.ok){ opsHideCardEl(sec, 'ksguard', r.status===403?'no_access':'error'); return; }
+    const d=await r.json();
+    var items=(d&&d.items)||[];
+    if(!d||!d.ok||!items.length){ opsHideCardEl(sec, 'ksguard', 'healthy'); return; }
+    opsShowCardEl(sec, 'ksguard');
+    opsSetCardLight('ksguard', d.frozen?'red':'yellow');
+    var autoN=items.filter(_ksIsAuto).length;
+    kp.innerHTML=
+      '<div class="kpi"><div class="muted" style="font-size:12px;">'+esc(window.T('ov2_ks_active'))+'</div>'
+      +'<div style="font-size:20px;font-weight:700;margin-top:4px;color:'
+      +(d.frozen?'var(--tk-red-ink,#dc2626)':'var(--tk-amber-ink,#d97706)')+';">'+esc(String(items.length))+'</div></div>'
+      +'<div class="kpi"><div class="muted" style="font-size:12px;">'+esc(window.T('ov2_ks_global'))+'</div>'
+      +'<div style="font-size:16px;font-weight:700;margin-top:4px;'
+      +(d.frozen?'color:var(--tk-red-ink,#dc2626);':'')+'">'
+      +esc(d.frozen?window.T('ov2_ks_global_on'):window.T('ov2_ks_global_off'))+'</div></div>'
+      +'<div class="kpi"><div class="muted" style="font-size:12px;">'+esc(window.T('ov2_ks_auto'))+'</div>'
+      +'<div style="font-size:20px;font-weight:600;margin-top:4px;">'+esc(String(autoN))+'</div></div>';
+    dv.innerHTML=items.map(function(it){
+      var srcTag=_ksIsAuto(it)?window.T('ov2_ks_src_auto'):window.T('ov2_ks_src_manual');
+      var exp=(it.expires_at&&Number(it.expires_at)>0)
+        ? window.Tf('ov2_ks_ttl_until',{time:tsfmt(it.expires_at)})
+        : window.T('ov2_ks_ttl_perm');
+      var lift=(typeof CAN_MANAGE_OPS!=='undefined'&&CAN_MANAGE_OPS)
+        ? ' <button type="button" class="ks-lift-btn" data-scope="'+esc(it.scope||'')+'"'
+          +' style="border:1px solid var(--tk-line,#e5e7eb);background:transparent;color:inherit;'
+          +'border-radius:6px;padding:1px 10px;font-size:12px;cursor:pointer;margin-left:8px;">'
+          +esc(window.T('ov2_ks_lift_btn'))+'</button>'
+        : '';
+      return '<div style="border-top:1px solid var(--tk-line,#e5e7eb);padding:4px 0;font-size:12px;">'
+        +'<code>'+esc(it.scope||'')+'</code> · '+esc(srcTag)
+        +(it.reason?(' · '+esc(it.reason)):'')
+        +(it.actor?(' · '+esc(it.actor)):'')
+        +' · '+esc(exp)+lift+'</div>';
+    }).join('')
+      +'<div class="muted" style="font-size:11px;margin-top:8px;">'+esc(window.T('ov2_ks_hint'))+'</div>';
+    Array.prototype.forEach.call(dv.querySelectorAll('.ks-lift-btn'),function(b){
+      b.addEventListener('click',function(){ ksGuardLift(b.getAttribute('data-scope')); });
+    });
+  }catch(e){ sec.style.display='none'; }
+}
+async function ksGuardLift(scope){
+  if(!scope) return;
+  if(!confirm(window.Tf('ov2_ks_lift_confirm',{scope:scope}))) return;
+  try{
+    const r=await apiFetch('/api/ops/kill-switch',{method:'DELETE',
+      headers:{'Content-Type':'application/json'},credentials:'same-origin',
+      body:JSON.stringify({scope:scope})});
+    var d={}; try{ d=await r.json(); }catch(_){ d={}; }
+    if(r.ok&&d.ok){ loadKsGuard(); }
+    else{
+      var m=(d&&typeof d.detail==='string')?d.detail:((d&&d.message)||('HTTP '+r.status));
+      AITRNotify.alert(window.Tf('ov2_ks_lift_fail',{msg:m}));
+    }
+  }catch(e){ AITRNotify.alert(window.T('ov2_ks_lift_fail_net')); }
+}
+
 // ── 📡 官方渠道回调（webhook 可达性）────────────────────────────────────────
 // IG/Zalo/Messenger 官方/WA Cloud 是被动回调入站：回调打不进来时系统零报错、
 // 客户消息静默丢失（与「后端完工面板不亮」同构的断层）。此卡读
@@ -4502,10 +5317,10 @@ async function loadOfficialWebhooks(){
   if(!sec||!kp||!dv) return;
   try{
     const r=await apiFetch('/api/admin/official-webhook-status',{credentials:'same-origin'});
-    if(!r.ok){ sec.style.display='none'; return; }
+    if(!r.ok){ opsHideCardEl(sec, 'offwh', r.status===403?'no_access':'error'); return; }
     const d=await r.json();
-    if(!d||!d.ok||!d.active){ sec.style.display='none'; return; }
-    sec.style.display='';
+    if(!d||!d.ok||!d.active){ opsHideCardEl(sec, 'offwh', 'disabled'); return; }
+    opsShowCardEl(sec, 'offwh');
     var VMAP={
       live:{txt:window.T('ov2_ow_verdict_live'), color:'var(--tk-green-ink,#059669)'},
       handshake_only:{txt:window.T('ov2_ow_verdict_handshake_only'), color:'var(--tk-amber-ink,#d97706)'},
@@ -4523,7 +5338,7 @@ async function loadOfficialWebhooks(){
     };
     var plats=(d.platforms||[]);
     var shown=plats.filter(function(p){ return p.enabled || (p.events_total>0) || (p.last_verify_age_sec>=0); });
-    if(!shown.length){ sec.style.display='none'; return; }
+    if(!shown.length){ opsHideCardEl(sec, 'offwh', 'no_data'); return; }
     var attention=shown.some(function(p){
       return p.enabled && (p.verdict==='never_reached'||p.verdict==='auth_failing'||p.verdict==='not_mounted');
     });
@@ -4567,9 +5382,9 @@ async function loadTenantOverview(){
   if(!sec||!kp||!dv) return;
   try{
     const r=await apiFetch('/api/admin/tenant-overview',{credentials:'same-origin'});
-    if(!r.ok){ sec.style.display='none'; return; }
+    if(!r.ok){ opsHideHttp(sec, 'tenantov', r.status); return; }
     const d=await r.json();
-    if(!d||!d.ok||!d.active){ sec.style.display='none'; return; }
+    if(!d||!d.ok||!d.active){ opsHideCardEl(sec, 'tenantov', 'disabled'); return; }
     sec.style.display='';
     var c=d.counts||{}, f=d.fulfill||{}, g=d.guards||{};
     var held=(f.held||[]);
@@ -4656,10 +5471,10 @@ async function loadBuriedConvs(){
   if(!sec||!kp||!dv) return;
   try{
     const r=await apiFetch('/api/admin/buried-conversations',{credentials:'same-origin'});
-    if(!r.ok){ sec.style.display='none'; return; }
+    if(!r.ok){ opsHideCardEl(sec, 'buried', r.status===403?'no_access':'error'); return; }
     const d=await r.json();
-    if(!d||!d.supported||!Number(d.count)){ sec.style.display='none'; return; }
-    sec.style.display='';
+    if(!d||!d.supported||!Number(d.count)){ opsHideCardEl(sec, 'buried', 'healthy'); return; }
+    opsShowCardEl(sec, 'buried');
     // 红灯而非黄：客户在等且**没有任何默认视图看得见**，属于正在流失而非降级
     opsSetCardLight('buried','red');
     var autoN=Number(d.auto_archived)||0;
@@ -4715,7 +5530,7 @@ async function loadCredPool(){
     if(!r.ok){ sec.style.display='none'; return; }
     const d = await r.json();
     var cp = (d && d.credpool) || null;
-    if(!cp || !cp.active){ sec.style.display='none'; return; }
+    if(!cp || !cp.active){ opsHideCardEl(sec, 'credpool', 'disabled'); return; }
     sec.style.display = '';
     var src = cp.by_source || {};
     var fb = cp.fallbacks || {};
@@ -4843,10 +5658,10 @@ async function loadGoals(){
   if(!sec || !kp || !dv) return;
   try{
     const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
-    if(r.status === 403){ sec.style.display='none'; return; }
+    if(r.status === 403){ opsHideCardEl(sec, 'goal', 'no_access'); return; }
     const d = await r.json();
     var g = d.goals || null;
-    if(!g){ sec.style.display='none'; return; }
+    if(!g){ opsHideCardEl(sec, 'goal', 'no_data'); return; }
     var summary = null, tops = [], report = null, ready = null;
     var goalsApiOk = false;   // B3：/api/goals 可读（功能开）才亮「今日清单」按钮
     try{
@@ -4876,7 +5691,7 @@ async function loadGoals(){
     var total = summary ? (Number(summary.total)||0) : 0;
     // P10：开闸后零流量也显卡（否则「待绑账号」卡点永远看不见）
     var goalsOn = !!(ready && ready.checks && ready.checks.goals_enabled);
-    if(!g.active && (!summary || total === 0) && !goalsOn){ sec.style.display='none'; return; }
+    if(!g.active && (!summary || total === 0) && !goalsOn){ opsHideCardEl(sec, 'goal', 'no_data'); return; }
     sec.style.display = '';
     var by = (summary && summary.by_status) || null;
     var term = g.terminal || {};
@@ -5296,10 +6111,10 @@ async function loadEpisodicDedup(){
   if(!sec || !kp || !dv) return;
   try{
     const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
-    if(r.status === 403){ sec.style.display='none'; return; }
+    if(r.status === 403){ opsHideCardEl(sec, 'ededup', 'no_access'); return; }
     const d = await r.json();
     var ed = d.episodic_dedup || null;
-    if(!ed){ sec.style.display='none'; return; }
+    if(!ed){ opsHideCardEl(sec, 'ededup', 'no_data'); return; }
     sec.style.display = '';
     var scans = Number(ed.scans)||0;
     if(scans <= 0){
@@ -5340,10 +6155,10 @@ async function loadIdentityShadow(){
   if(!sec || !kp || !dv) return;
   try{
     const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
-    if(r.status === 403){ sec.style.display='none'; return; }
+    if(r.status === 403){ opsHideCardEl(sec, 'ishadow', 'no_access'); return; }
     const d = await r.json();
     var isd = d.identity_shadow || null;
-    if(!isd || !isd.enabled){ sec.style.display='none'; return; }
+    if(!isd || !isd.enabled){ opsHideCardEl(sec, 'ishadow', 'disabled'); return; }
     sec.style.display = '';
     if(!isd.state_available){
       kp.innerHTML = '';
@@ -5494,10 +6309,10 @@ async function ishadowDismiss(idx){
       body: JSON.stringify(body),
     });
     var d = await r.json();
-    if(!r.ok || !d.ok){ alert((d && d.detail) || ('HTTP '+r.status)); return; }
-    alert(window.T('ov2_ish_dismiss_ok'));
+    if(!r.ok || !d.ok){ AITRNotify.alert((d && d.detail) || ('HTTP '+r.status)); return; }
+    AITRNotify.alert(window.T('ov2_ish_dismiss_ok'), 'ok');
     loadIdentityShadow();
-  }catch(e){ alert(String(e)); }
+  }catch(e){ AITRNotify.alert(String(e)); }
 }
 
 async function ishadowConfirm(idx){
@@ -5511,14 +6326,14 @@ async function ishadowConfirm(idx){
       body: JSON.stringify(body),
     });
     var d = await r.json();
-    if(!r.ok || !d.ok){ alert((d && d.detail) || ('HTTP '+r.status)); return; }
+    if(!r.ok || !d.ok){ AITRNotify.alert((d && d.detail) || ('HTTP '+r.status)); return; }
     var okMsg = window.T('ov2_ish_confirm_ok')+' → '+(d.canonical_id||'');
     if(Number(d.merged_rows)>0){
       okMsg += '\n'+window.T('ov2_ish_merged')+': '+d.merged_rows;
     }
-    alert(okMsg);
+    AITRNotify.alert(okMsg, 'ok');
     loadIdentityShadow();
-  }catch(e){ alert(String(e)); }
+  }catch(e){ AITRNotify.alert(String(e)); }
 }
 window.ishadowEvidence = ishadowEvidence;
 window.ishadowDismiss = ishadowDismiss;
@@ -5613,11 +6428,11 @@ async function loadTgCall(){
   if(!sec || !kp || !dv) return;
   try{
     const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
-    if(r.status === 403){ sec.style.display='none'; return; }
+    if(r.status === 403){ opsHideCardEl(sec, 'tgcall', 'no_access'); return; }
     const d = await r.json();
     var c = d.tg_call || null;
-    if(!c || !(Number(c.attempts)||0)){ await _tgCallReadiness(sec, kp, dv); return; }
-    sec.style.display = '';
+    if(!c || !(Number(c.attempts)||0)){ opsSetCardHidden('tgcall', 'no_data'); await _tgCallReadiness(sec, kp, dv); return; }
+    opsShowCardEl(sec, 'tgcall');
     var kpis = [
       {label:window.T('ov2_tc_attempts'), value:fmt(Number(c.attempts)||0)},
       {label:window.T('ov2_tc_accept'), value:fmt(Number(c.accepted)||0)+' · '+Math.round((Number(c.accept_rate)||0)*100)+'%'},
@@ -5654,9 +6469,9 @@ async function loadTgCall(){
 async function _tgCallReadiness(sec, kp, dv){
   try{
     const r = await apiFetch('/api/voice/call/readiness', {credentials:'same-origin'});
-    if(!r.ok){ sec.style.display='none'; return; }
+    if(!r.ok){ opsHideHttp(sec, 'tgcall', r.status); return; }
     const d = await r.json();
-    if(!d.enabled){ sec.style.display='none'; return; }
+    if(!d.enabled){ opsHideCardEl(sec, 'tgcall', 'disabled'); return; }
     sec.style.display = '';
     kp.innerHTML = '';
     var blockers = d.blockers || [], warns = d.warnings || [];
@@ -5685,7 +6500,7 @@ async function loadGpuWatermark(){
   try{
     const r = await apiFetch('/api/admin/gpu-watermark', {credentials:'same-origin'});
     const d = await r.json();
-    if(!d.enabled){ sec.style.display='none'; return; }
+    if(!d.enabled){ opsHideCardEl(sec, 'gpuwm', 'disabled'); return; }
     sec.style.display='';
     var lvIcon = {ok:'🟢', warn:'🟡', high:'🔴', unknown:'⚪'};
     var hosts = d.hosts || [];
@@ -5717,6 +6532,70 @@ async function loadGpuWatermark(){
   }
 }
 
+// 🌐 一键代理卡：读 /api/proxies/managed/overview（订阅台账 + 到期分布 + 库存水位）。
+// 隐藏语义：功能关着**且**从没有过订阅 → 整卡隐藏；关着但还有活跃订阅在计时 →
+// 照常显示（运营必须看得见正在倒计时的钱）。
+async function loadProxyManaged(){
+  var sec = document.getElementById('pxmSection');
+  var kp = document.getElementById('pxmKpis');
+  var dv = document.getElementById('pxmDetail');
+  if(!sec || !kp || !dv) return;
+  try{
+    const r = await apiFetch('/api/proxies/managed/overview', {credentials:'same-origin'});
+    const d = await r.json();
+    var st = d.stats || {};
+    var cap = d.capability || {};
+    if(!cap.enabled && !(st.active||0) && !(st.expired_total||0)){
+      opsHideCardEl(sec, 'pxm', 'disabled'); return;
+    }
+    sec.style.display='';
+    var lowKeys = Object.keys(d.low_stock || {});
+    var billPend = (st.unbilled||0) + (st.renew_pending||0);
+    var balLow = (d.vendor_balance!==null && d.vendor_balance!==undefined
+      && d.vendor_min_balance!==null && d.vendor_min_balance!==undefined
+      && Number(d.vendor_balance) < Number(d.vendor_min_balance));
+    opsSetCardLight('pxm', (billPend>0 || lowKeys.length || balLow) ? 'yellow' : '');
+    var kpis = [
+      {label:window.T('ov2_px_active'), value:fmt(Number(st.active)||0)},
+      {label:window.T('ov2_px_exp7'), value:fmt(Number(st.expiring_7d)||0)},
+      {label:window.T('ov2_px_billpend'), value:fmt(billPend)},
+      {label:window.T('ov2_px_lowstock'), value:fmt(lowKeys.length)},
+    ];
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+    }).join('');
+    var html = '';
+    var exp = d.expiring_7d || [];
+    if(exp.length){
+      html += '<table><tr><th>'+window.T('ov2_px_col_country')+'</th><th>'+window.T('ov2_px_col_kind')+
+        '</th><th>'+window.T('ov2_px_col_days')+'</th><th>'+window.T('ov2_px_col_renew')+'</th></tr>'
+        + exp.map(function(s){
+            return '<tr><td>'+esc(s.country||'?')+'</td><td>'+esc(s.kind||'?')+'</td><td>'
+              +(Number(s.remaining_days)||0)+'</td><td>'+(s.auto_renew?'✓':'—')+'</td></tr>';
+          }).join('') + '</table>';
+    }
+    if(lowKeys.length){
+      html += '<div style="margin-top:8px;">📦 '+window.Tf('ov2_px_stock_line', {
+        s: lowKeys.map(function(c){ return c+'×'+(d.low_stock[c]||0); }).join(' · '),
+        m: Number(d.min_stock)||0 })+'</div>';
+    }
+    if((st.renew_pending||0) > 0){
+      html += '<div class="muted" style="font-size:12px;margin-top:6px;">'
+        + window.Tf('ov2_px_pending_line', {n: Number(st.renew_pending)||0})+'</div>';
+    }
+    if(d.vendor_balance!==null && d.vendor_balance!==undefined){
+      html += '<div style="margin-top:6px;">💳 '+esc(window.Tf('ov2_px_vendor_bal',
+        {b: d.vendor_balance, m: (d.vendor_min_balance==null?'—':d.vendor_min_balance)}))
+        + (balLow?' <span class="cfg-badge warn">!</span>':'')+'</div>';
+    }
+    html += '<div class="muted" style="font-size:12px;margin-top:8px;">'+window.T('ov2_px_hint')+'</div>';
+    dv.innerHTML = html || ('<div class="empty">'+window.T('ov2_px_ok')+'</div>');
+  }catch(e){
+    dv.innerHTML = '<div class="empty">'+window.T('ln_js_033')+e+'</div>';
+  }
+}
+
 // 🆔 资料变更审计流卡：读 /api/admin/profile-audit（ops_events 的 profile_push/align）。
 // 近 7 天按天聚合 + 最近批次归组 + 明细；无事件/缺库则整卡隐藏。
 async function loadProfileAudit(){
@@ -5724,10 +6603,13 @@ async function loadProfileAudit(){
   var kp = document.getElementById('pAuditKpis');
   var dv = document.getElementById('pAuditDetail');
   if(!sec || !kp || !dv) return;
+  // 本卡两处表格渲染依赖的时间格式化——曾无定义（B39 同族：有数据即 ReferenceError
+  // 被 try 吞成「加载失败」，2026-08-22 新门禁 test_template_undefined_identifiers 扫出补齐）
+  function fmtTs(ts){ if(!ts) return '—'; return window.wsFmtDate(ts,{month:'2-digit',day:'2-digit'})+' '+window.wsFmtTime(ts,{hour:'2-digit',minute:'2-digit'}); }
   try{
     const r = await apiFetch('/api/admin/profile-audit?days=7&limit=40', {credentials:'same-origin'});
     const d = await r.json();
-    if(!d.enabled){ sec.style.display='none'; return; }
+    if(!d.enabled){ opsHideCardEl(sec, 'paudit', 'disabled'); return; }
     sec.style.display='';
     var t = d.totals || {};
     var kpis = [
@@ -6417,13 +7299,13 @@ async function loadReplyBubbles(){
   if(!sec || !kp || !det) return;
   try{
     const r = await apiFetch('/api/drafts/autosend-status', {credentials:'same-origin'});
-    if(r.status === 403){ sec.style.display='none'; return; }
+    if(r.status === 403){ opsHideCardEl(sec, 'bubbles', 'no_access'); return; }
     const d = await r.json();
     var w = (d && d.worker) || {};
     var bub = w.bubbles || {};
     var ab = w.bubbles_ab || {};
     var sends = bub.sends || 0;
-    if(!sends && !Object.keys(ab).length){ sec.style.display='none'; return; }
+    if(!sends && !Object.keys(ab).length){ opsHideCardEl(sec, 'bubbles', 'no_data'); return; }
     sec.style.display='';
     var bySrc = bub.sends_by_source || {};
     var srcParts = Object.keys(bySrc).sort(function(a,b){ return (bySrc[b]||0)-(bySrc[a]||0); })
@@ -6456,11 +7338,11 @@ async function loadChainFunnel(){
   if(!sec || !kp || !dv) return;
   try{
     const r = await apiFetch('/api/workspace/chain-funnel?days=14', {credentials:'same-origin'});
-    if(r.status === 403){ sec.style.display='none'; return; }
+    if(r.status === 403){ opsHideCardEl(sec, 'chainfun', 'no_access'); return; }
     const d = await r.json();
     var t = (d && d.total) || {};
-    if(!d.ok || !Number(t.started)){ sec.style.display='none'; return; }
-    sec.style.display = '';
+    if(!d.ok || !Number(t.started)){ opsHideCardEl(sec, 'chainfun', 'no_data'); return; }
+    opsShowCardEl(sec, 'chainfun');
     function rate(x){ return (x && x.reply_rate != null)
       ? (Math.round(Number(x.reply_rate)*100)+'% ('+fmt(Number(x.replied_n)||0)+'/'+fmt(Number(x.mature_n)||0)+')') : '—'; }
     var kpis = [
@@ -6543,11 +7425,11 @@ async function loadProactiveEngagement(){
   if(!sec || !kp || !det) return;
   try{
     const r = await apiFetch('/api/companion/proactive/status', {credentials:'same-origin'});
-    if(r.status === 403){ sec.style.display='none'; return; }
+    if(r.status === 403){ opsHideCardEl(sec, 'proactive', 'no_access'); return; }
     const d = await r.json();
-    if(!d || !d.ok){ sec.style.display='none'; return; }
+    if(!d || !d.ok){ opsHideCardEl(sec, 'proactive', 'error'); return; }
     var cfg = d.config || {};
-    if(!cfg.enabled){ sec.style.display='none'; return; }
+    if(!cfg.enabled){ opsHideCardEl(sec, 'proactive', 'disabled'); return; }
     sec.style.display='';
     var pr = d.proactive || {};
     var bs = d.automation_bootstrap || {};
@@ -6693,7 +7575,7 @@ async function loadAutosendMedia(){
     var vo = w.voice || d.voice || {};
     var im = w.image || d.image || {};
     var active = (Number(vo.sent||0)+Number(vo.fallback||0)+Number(im.sent||0)+Number(im.fallback||0)) > 0;
-    if(!active && !d.worker){ sec.style.display='none'; return; }
+    if(!active && !d.worker){ opsHideCardEl(sec, 'asmedia', 'disabled'); return; }
     sec.style.display='';
     var provParts = [];
     var pc = vo.provider_counts || {};
@@ -6819,7 +7701,21 @@ async function loadAvatarVoice(){
     var og = d.outage || {};
     var ogAtt = Number(og.attempts_24h)||0, ogOk = Number(og.ok_24h)||0;
     var ogRed = ogAtt >= 3 && ogOk === 0;
-    opsSetCardLight('avatar', (!hp(h.cosyvoice) || ogRed) ? 'red'
+    // 单链全灭（2026-08-22，接进 wa_rpa/mr_rpa 同批）：全局口径「窗内 0 成功」
+    // 在多链下会被一条健康链盖住——WhatsApp 语音全发不出而 Telegram 正常时，
+    // 上面那盏灯是绿的。它对那个平台的客户来说就是「语音功能没有了」，所以
+    // 逐链判同一把尺子（≥3 次尝试 0 成功），任一条全灭即红并点名。
+    var ogDead = [];
+    var ogBy = og.by_source || {};
+    Object.keys(ogBy).forEach(function(k){
+      var s = ogBy[k] || {};
+      if((Number(s.attempts)||0) >= 3 && (Number(s.ok)||0) === 0){ ogDead.push(k); }
+    });
+    var vsrcLabel = function(k){
+      var t = window.T('ov2_av_vsrc_'+k);
+      return (!t || t.indexOf('ov2_av_vsrc_') === 0) ? k : t;
+    };
+    opsSetCardLight('avatar', (!hp(h.cosyvoice) || ogRed || ogDead.length) ? 'red'
       : ((((d.prerender_inventory||{}).stale||0) > 0) ? 'yellow' : ''));
     var ogVal;
     if(!ogAtt){ ogVal = '<span class="muted">'+window.T('ov2_av_outage_none')+'</span>'; }
@@ -6827,9 +7723,26 @@ async function loadAvatarVoice(){
       var ogReasons = Object.keys(og.fail_reasons||{}).slice(0,2).join('/').slice(0,40).replace(/</g,'&lt;');
       ogVal = '<span style="color:var(--th-ink-red5,#b91c1c)">⛔ '+fmt(ogOk)+' / '+fmt(ogAtt)
         +' '+window.T('ov2_av_outage_bad')+(ogReasons?(' · '+ogReasons):'')+'</span>';
+    }
+    else if(ogDead.length){
+      // 汇总数字照实给（它是绿的，别粉饰），红字点名死掉的那几条链
+      ogVal = dot(true)+fmt(ogOk)+' / '+fmt(ogAtt)
+        +' <span style="color:var(--th-ink-red5,#b91c1c)">⛔ '
+        +ogDead.map(vsrcLabel).join('、').slice(0,60).replace(/</g,'&lt;')
+        +' '+window.T('ov2_av_outage_chain')+'</span>';
     } else {
       ogVal = dot(ogOk>0)+fmt(ogOk)+' / '+fmt(ogAtt)
         +((og.consecutive_fails||0)>0?(' <span style="color:var(--th-ink-amber5,#92400e)">⚠×'+fmt(og.consecutive_fails)+'</span>'):'');
+    }
+    // 「(24h)」这个标签在事件挤满台账时会撒谎——真实覆盖只到最老那条事件为止，
+    // 而「窗内 0 成功」的分母正是这些事件：窗一缩，断档判据就随流量悄悄闭嘴。
+    // 台账已自陈 truncated/effective_window_hours，这里照实改写标签。
+    var ogLabel = window.T('ov2_av_outage');
+    if(og.truncated){
+      var ogEff = Math.round(Number(og.effective_window_hours)||0);
+      ogLabel += ' <span style="color:var(--th-ink-amber5,#92400e)" title="'
+        +window.T('ov2_av_outage_trunc_tip')+'">⚠'
+        +window.T('ov2_av_outage_trunc')+' '+ogEff+'h</span>';
     }
     var kpis = [
       {label:window.T('ov2_av_cosy'), value:dot(hp(h.cosyvoice))+(hp(h.cosyvoice)?window.T('ov2_localtts_ready'):window.T('ov2_js_gpuwm_unreach'))},
@@ -6838,7 +7751,7 @@ async function loadAvatarVoice(){
       {label:window.T('ov2_av_synth'), value:fmt(okN)+' / '+fmt(total)+(total?(' · '+Math.round((st.avg_latency_ms||0))+'ms'):'')},
       {label:window.T('ov2_av_prerender'), value:fmt(st.prerender_hits||0)+(st.prerender_coverage!==null&&st.prerender_coverage!==undefined?(' · '+Math.round(st.prerender_coverage*100)+'%'):'')+' · '+window.T('ov2_av_stock')+' '+fmt((d.prerender_inventory||{}).clips||0)+(((d.prerender_inventory||{}).stale||0)>0?(' <span style="color:var(--th-ink-amber5,#92400e)">⚠'+window.T('ov2_av_stale')+' '+fmt(d.prerender_inventory.stale)+'</span>'):'')},
       {label:window.T('ov2_av_queue'), value:fmt(st.queue_depth||0)+' · '+window.T('ov2_av_peak')+' '+fmt(st.queue_peak||0)},
-      {label:window.T('ov2_av_outage'), value:ogVal},
+      {label:ogLabel, value:ogVal},
     ];
     kp.innerHTML = kpis.map(function(c){
       return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
@@ -6919,6 +7832,81 @@ async function loadAvatarVoice(){
         + ' · '+window.T('ov2_av_guard_cache')+' '+fmt(gs.cache_hits||0)
         + '</div>'
       : '';
+    // 引擎归属（2026-08-22「fish 冒充 IndexTTS-2」事故）：hub 是 prefer 语义——点名
+    // 引擎在目录里不可用就静默换一个合成，信封里没有引擎字段，于是全链全绿而客户
+    // 听到的是别人的声音。这里按采样率指纹反查真实引擎；mismatch>0 = 正在被顶包。
+    // 只有 wav 路径有指纹（分段合成/探针），ogg 转码会抹平 → 判不了的不计入分母。
+    var ec = st.engine_check || {};
+    var ecOk = ec.ok||0, ecBad = ec.mismatch||0;
+    var engRow = (ecOk+ecBad)>0
+      ? '<div class="muted" style="font-size:12px;margin-top:4px;" title="'
+        + window.T('ov2_av_eng_hint')+'">'+window.T('ov2_av_eng')+': '
+        + (ecBad>0
+            ? '<span style="color:var(--th-ink-red6,#b91c1c);font-weight:600;">⛔ '
+              + window.T('ov2_av_eng_bad')+' '+fmt(ecBad)+'</span> · '
+              + String(ec.last_mismatch||'').slice(0,80).replace(/</g,'&lt;')+' · '
+            : '✅ ')
+        + window.T('ov2_av_eng_ok')+' '+fmt(ecOk)
+        + '</div>'
+      : '';
+    // 引擎在岗（事前读数）：上面那行要「有人真发过语音且走 wav 路」才有判据，
+    // 夜里零流量时它一直是空的。目录是合成前就能读的确定信号——钉的引擎被标
+    // available:false ＝下一条语音必被顶包（lenient）或必被拒发（strict）。
+    var ed = d.engine_dir || {};
+    var edState = String(ed.state||'');
+    var dirRow = (edState==='offline' || edState==='ok')
+      ? '<div class="muted" style="font-size:12px;margin-top:4px;" title="'
+        + window.T('ov2_av_engdir_hint')+'">'+window.T('ov2_av_engdir')+': '
+        + (edState==='offline'
+            ? '<span style="color:var(--th-ink-red6,#b91c1c);font-weight:600;">⛔ '
+              + String(ed.engine||'').slice(0,32).replace(/</g,'&lt;')+' '
+              + window.T('ov2_av_engdir_off')+'</span>'
+              + ((ed.available_engines||[]).length
+                  ? ' · '+window.T('ov2_av_engdir_avail')+' '
+                    + (ed.available_engines||[]).slice(0,4).join('、')
+                      .replace(/</g,'&lt;')
+                  : '')
+            : '✅ '+String(ed.engine||'').slice(0,32).replace(/</g,'&lt;')+' '
+              + window.T('ov2_av_engdir_on')
+              // 「在岗」≠「答得上来」：2026-08-22 实测目录 available:true 且进程
+              // /health 200，但同卡显存 97% 满 → 短句 36~69s vs 预算 30s，每发必
+              // 超时回落。只亮绿灯会**如实地说谎**，故宿主吃紧时就在同一行说出来。
+              + (String(ed.pressure||'')==='high'
+                  ? ' <span style="color:var(--th-ink-amber6,#92400e);" title="'
+                    + window.T('ov2_av_engdir_tight_hint')+'">· '
+                    + window.T('ov2_av_engdir_tight')
+                    + (ed.host? ' '+String(ed.host).slice(0,15).replace(/</g,'&lt;'):'')
+                    + (ed.host_free_mb>0
+                        ? ' ('+(ed.host_free_mb/1024).toFixed(1)+'G)' : '')
+                    // 读数陈旧到「可能已经不成立」时如实标龄：吃紧提示容忍 10min 旧
+                    // 缓存（慢变量，刻意取舍），但运维照它去腾显存前有权知道自己在看
+                    // 几分钟前的快照，否则「我刚泊了唱歌怎么还吃紧」没法收场。
+                    + (Number(ed.pressure_age_s||0)>=120
+                        ? ' '+window.Tf('ov2_av_engdir_tight_age',
+                              {m: String(Math.floor(Number(ed.pressure_age_s)/60))})
+                        : '')
+                    + '</span>'
+                  // 宿主读数**还没量到**（进程刚起/缓存全冷，后台预热中，下一轮就有）。
+                  // 不说的话，「✅ 在岗」这一行在「量过了很宽松」与「压根没量」两种
+                  // 状态下**渲染完全相同**——那正是本行要消灭的那种「绿灯说谎」，只是
+                  // 挪到了首屏。空白从不代表安好，所以给未知态一个词。
+                  : (!ed.host
+                      ? ' <span title="'
+                        + window.T('ov2_av_engdir_unmeasured_hint')+'">· '
+                        + window.T('ov2_av_engdir_unmeasured')+'</span>'
+                      : '')))
+        // 熔断态（同一故事的第三段）：连续超时后开路＝本进程正在**主动跳过** hub。
+        // 不说的话，运维会看着「在岗」的绿灯纳闷为什么一条语音都没发出去。
+        + (Number(ed.timeout_streak||0)>0
+            ? ' <span style="color:var(--th-ink-red6,#b91c1c);font-weight:600;" title="'
+              + window.T('ov2_av_engdir_brk_hint')+'">· '
+              + window.T('ov2_av_engdir_brk')
+              + (Number(ed.reopen_in_s||0)>0
+                  ? ' ('+Math.ceil(Number(ed.reopen_in_s)/60)+'min)' : '')
+              + '</span>'
+            : '')
+        + '</div>'
+      : '';
     det.innerHTML = '<div class="muted" style="font-size:12px;">'
       + window.T('ov2_av_channel')+': '+(chParts.join(' · ')||'—')
       + ' &nbsp;|&nbsp; '+window.T('ov2_av_emo_dist')+': '+(emoParts.join(' · ')||'—')
@@ -6939,6 +7927,8 @@ async function loadAvatarVoice(){
       + (refqParts.length? '<div class="muted" style="font-size:12px;margin-top:4px;" title="'
         + window.T('ov2_av_refq_hint')+'">'+window.T('ov2_av_refq')+': '
         + refqParts.join(' · ')+'</div>' : '')
+      + dirRow
+      + engRow
       + prRow
       + guardRow
       + (missParts.length? '<div class="muted" style="font-size:12px;margin-top:4px;">'
@@ -6976,15 +7966,15 @@ async function loadMsgOps(){
   if(!sec || !kp || !dv) return;
   try{
     const r = await apiFetch('/api/admin/msg-ops-stats', {credentials:'same-origin'}, {timeoutMs: 20000});
-    if(!r.ok){ sec.style.display='none'; return; }
+    if(!r.ok){ opsHideHttp(sec, 'msgops', r.status); return; }
     const d = await r.json();
     var c = d.counts || {};
     function g(k){ return c[k] || {total:0, ok:0, by_reason:{}}; }
     var rv = g('msg_revoke');
     var total = 0;
     Object.keys(c).forEach(function(k){ total += Number((c[k]||{}).total)||0; });
-    if(total === 0){ sec.style.display='none'; return; }
-    sec.style.display = '';
+    if(total === 0){ opsHideCardEl(sec, 'msgops', 'no_data'); return; }
+    opsShowCardEl(sec, 'msgops');
     var okRate = (Number(rv.total)||0) > 0 ? Math.round((Number(rv.ok)||0) / Number(rv.total) * 100) + '%' : '—';
     var kpis = [
       {label:window.T('ov2_mo_revoke'), value:fmt(Number(rv.total)||0)},
@@ -7055,11 +8045,13 @@ var OPS_CARDS = [
   {key:'fleethp',  group:'boss',    anchor:'fleetHealthKpis',  loaders:[loadFleetHealth]},
   {key:'msgops',   group:'boss',    anchor:'msgOpsKpis',       loaders:[loadMsgOps]},
   {key:'billing',  group:'boss',    anchor:'billingAnomalies', loaders:[]},
+  {key:'tokled',   group:'boss',    anchor:'tokLedgerKpis',    loaders:[loadFrontendErrors]},
   {key:'incidents',group:'boss',    anchor:'fltKind',          loaders:[loadIncidents]},
   // ── 内容质量 ──
   {key:'aisafety', group:'quality', anchor:'aiSafetyKpis',     loaders:[loadAiSafety]},
   {key:'backlog',  group:'quality', anchor:'slaBacklogKpis',   loaders:[loadSlaBacklog]},
   {key:'cases',    group:'quality', anchor:'casesKpis',        loaders:[loadCasesCard]},
+  {key:'bugintake',group:'quality', anchor:'bugIntakeKpis',    loaders:[loadBugIntake]},
   {key:'xlate',    group:'quality', anchor:'xlateKpis',        loaders:[loadTranslationEngines, loadXlateTrend, loadXlateAgentFeel]},
   {key:'dpick',    group:'quality', anchor:'dpickFunnelKpis',  loaders:[loadFrontendErrors]},
   {key:'duel',     group:'quality', anchor:'duelKpis',         loaders:[loadDuelBench]},
@@ -7078,6 +8070,7 @@ var OPS_CARDS = [
   {key:'vision',   group:'persona', anchor:'visionUsageKpis',  loaders:[loadVisionUsage]},
   {key:'pma',      group:'persona', anchor:'pmaKpis',          loaders:[loadPersonaMedia]},
   {key:'stk',      group:'persona', anchor:'stkKpis',          loaders:[loadStickers]},
+  {key:'imgen',    group:'persona', anchor:'imgenKpis',        loaders:[loadImageGen]},
   {key:'mconsist', group:'persona', anchor:'mconsistKpis',     loaders:[loadMediaConsistency]},
   {key:'photocap', group:'persona', anchor:'photoCapKpis',     loaders:[loadFrontendErrors]},
   {key:'dp',       group:'persona', anchor:'deepPersonaKpis',  loaders:[loadDeepPersona]},
@@ -7092,6 +8085,7 @@ var OPS_CARDS = [
   {key:'bubbles',  group:'growth',  anchor:'bubblesKpis',      loaders:[loadReplyBubbles]},
   {key:'rw',       group:'growth',  anchor:'realWorldKpis',    loaders:[loadRealWorld]},
   {key:'bazi',     group:'growth',  anchor:'baziKpis',         loaders:[loadBazi]},
+  {key:'originp',  group:'growth',  anchor:'originProfileKpis',loaders:[loadFrontendErrors]},
   {key:'temper',   group:'persona', anchor:'temperGuardKpis',  loaders:[loadTemperGuard]},
   {key:'gmembers', group:'growth',  anchor:'gmembersKpis',     loaders:[loadGroupMembers]},
   {key:'care',     group:'growth',  anchor:'careKpis',         loaders:[loadCare]},
@@ -7104,23 +8098,87 @@ var OPS_CARDS = [
   {key:'psess',    group:'infra',   anchor:'psessKpis',        loaders:[loadPlatformSessions]},
   {key:'chrdy',    group:'infra',   anchor:'chrdyKpis',        loaders:[loadChannelReadiness]},
   {key:'atruth',   group:'infra',   anchor:'acctTruthKpis',    loaders:[loadFrontendErrors]},
+  {key:'lident',   group:'infra',   anchor:'lIdentKpis',       loaders:[loadLoginIdentity]},
+  {key:'imgxl',    group:'quality', anchor:'imgXlateKpis',     loaders:[loadFrontendErrors]},
+  {key:'assist',   group:'quality', anchor:'assistKpis',       loaders:[loadAssistant]},
   {key:'loginfn',  group:'infra',   anchor:'loginFunnelKpis',  loaders:[loadFeTrend]},
   {key:'csrf',     group:'infra',   anchor:'csrfRejectKpis',   loaders:[loadFrontendErrors]},
   {key:'omirror',  group:'infra',   anchor:'outMirrorKpis',    loaders:[loadFrontendErrors]},
   {key:'fe',       group:'infra',   anchor:'feErrKpis',        loaders:[loadFrontendErrors, loadFeTrend]},
   {key:'uiev',     group:'infra',   anchor:'uiEventsKpis',     loaders:[loadFrontendErrors]},
   {key:'gpuwm',    group:'infra',   anchor:'gpuWmKpis',        loaders:[loadGpuWatermark]},
+  // 一键代理（托管订阅/续期/库存；2026-08-21 P2）——账务+库存双面，放基建组
+  {key:'pxm',      group:'infra',   anchor:'pxmKpis',          loaders:[loadProxyManaged]},
   {key:'credpool', group:'infra',   anchor:'credpoolKpis',     loaders:[loadCredPool]},
   {key:'alertlink',group:'infra',   anchor:'alertlinkKpis',    loaders:[loadAlertLink]},
+  // 紧急停发（P1 2026-08-23 急停可见化；无生效急停整卡隐藏）
+  {key:'ksguard',  group:'infra',   anchor:'ksGuardKpis',      loaders:[loadKsGuard]},
   {key:'offwh',    group:'infra',   anchor:'officialWhKpis',   loaders:[loadOfficialWebhooks]},
   {key:'tenantov', group:'infra',   anchor:'tenantOvKpis',     loaders:[loadTenantOverview]},
   {key:'buried',   group:'quality', anchor:'buriedKpis',       loaders:[loadBuriedConvs]},
   {key:'iso',      group:'infra',   anchor:'isoKpis',          loaders:[loadIsolationHealth]},
   // 字符额度（2026-08-16 用量页 v2 配套；账务类 → boss 组，追加式登记勿重排上方）
   {key:'uqchar',   group:'boss',    anchor:'uqCharKpis',       loaders:[loadUsageQuota]},
+  // 额度墙转化（quotawall v2 P2 2026-08-21；营收漏斗 → boss 组）
+  {key:'qwfun',    group:'boss',    anchor:'qwFunnelKpis',     loaders:[loadQwFunnel]},
 ];
 var OPS_CARDS_BY_KEY = {};
 OPS_CARDS.forEach(function(c){ OPS_CARDS_BY_KEY[c.key] = c; });
+
+// 隐藏原因回落表（独立于注册表，避免改 68 行撞车）。只在 loader 尚未上报
+// （首轮加载前的几秒）时兜底；loader 调 opsSetCardHidden 后以运行时为准。
+// 仅收录核对过 hide 条件的卡；宁标 unknown，不假装「可去开启」。
+var _OPS_HIDE_HINT = {
+  value:    {reason:'no_data'},
+  referral: {reason:'disabled', href:'/developer'},
+  uqchar:   {reason:'disabled'},
+  qwfun:    {reason:'no_data'},
+  gmembers: {reason:'disabled'},
+  stk:      {reason:'no_data'},
+  rw:       {reason:'disabled', href:'/rpa-overview'},
+  bazi:     {reason:'disabled', href:'/rpa-overview'},
+  mconsist: {reason:'disabled'},
+  imgen:    {reason:'no_data'},
+  csrf:     {reason:'healthy'},
+  omirror:  {reason:'healthy'},
+  buried:   {reason:'healthy'},
+  ppush:    {reason:'disabled'},
+  photocap: {reason:'disabled'},
+  duel:     {reason:'disabled'},
+  temper:   {reason:'no_data', href:'/rpa-overview'},
+  dpick:    {reason:'no_data'},
+  tgcall:   {reason:'no_data'},
+  vision:   {reason:'no_data'},
+  originp:  {reason:'no_data'},
+  chainfun: {reason:'no_data'},
+  offwh:    {reason:'disabled'},
+  pid:      {reason:'no_data'},
+  msgops:   {reason:'no_data'},
+  cases:    {reason:'no_data'},
+  goal:     {reason:'no_data'},
+  care:     {reason:'disabled'},
+  proactive:{reason:'disabled'},
+  bubbles:  {reason:'no_data'},
+  asmedia:  {reason:'disabled'},
+  ededup:   {reason:'no_data'},
+  ishadow:  {reason:'disabled'},
+  gpuwm:    {reason:'disabled'},
+  pxm:      {reason:'disabled'},
+  paudit:   {reason:'disabled'},
+  credpool: {reason:'disabled'},
+  tenantov: {reason:'disabled'},
+  alertlink:{reason:'disabled'},
+  atruth:   {reason:'no_data'},
+  imgxl:    {reason:'no_data'},
+  assist:   {reason:'disabled'},
+  uiev:     {reason:'no_data'},
+  loginfn:  {reason:'no_data'},
+  rlatency: {reason:'no_data'},
+  eslo:     {reason:'no_data'},
+  autocov:  {reason:'no_data'},
+  fleethp:  {reason:'no_data'},
+  pimp:     {reason:'no_data'}
+};
 
 // ── 折叠记忆（localStorage，跨会话）──
 var _opsCollapsed = {};
@@ -7222,6 +8280,142 @@ function opsSetCardLight(key, light){
   var c = OPS_CARDS_BY_KEY[key];
   if(c) c.light = light || '';
 }
+// 隐藏原因结构化上报：disabled（开关没开）/ no_data（等流量）/ healthy（零异常
+// 才隐藏的观测卡——csrf 拒绝、镜像失败、被埋会话这类，隐藏=好消息）/ error（取数
+// 失败）/ no_access（403，当前角色无权限，非故障）。其它一律 unknown。
+// 与 opsSetCardLight 同形——loader 算出结论时调用，覆盖 hint 表。
+var _OPS_HIDE_REASONS = {disabled:1, no_data:1, healthy:1, error:1, no_access:1};
+function opsSetCardHidden(key, reason){
+  var c = OPS_CARDS_BY_KEY[key];
+  if(!c) return;
+  var r = String(reason || '');
+  c.hideReason = _OPS_HIDE_REASONS[r] ? r : 'unknown';
+}
+function opsHideCardEl(sec, key, reason){
+  if(key) opsSetCardHidden(key, reason);
+  if(sec) sec.style.display = 'none';
+}
+// HTTP 态→隐藏原因统一口径：403=当前角色无权限；404=端点未装载（重启前的新
+// 功能，对本实例等同未启用）；其余非 2xx=真取数失败（进「需要关注」条）。
+function opsHideHttp(sec, key, status){
+  opsHideCardEl(sec, key, status === 403 ? 'no_access' : (status === 404 ? 'disabled' : 'error'));
+}
+function opsShowCardEl(sec, key){
+  var c = key ? OPS_CARDS_BY_KEY[key] : null;
+  if(c) c.hideReason = '';
+  if(sec) sec.style.display = '';
+}
+function _opsCardShort(c){
+  return ((c.title || '').split('（')[0] || c.title || c.key || '').trim().slice(0, 18);
+}
+function _opsCardBlurb(c){
+  var t = c.title || '';
+  var i = t.indexOf('（');
+  var j = t.lastIndexOf('）');
+  return (i >= 0 && j > i) ? t.slice(i + 1, j) : '';
+}
+function _opsHideReason(c){
+  var r = (c && c.hideReason) || ((_OPS_HIDE_HINT[(c && c.key) || ''] || {}).reason) || 'unknown';
+  return _OPS_HIDE_REASONS[r] ? r : 'unknown';
+}
+function _opsHideHref(c){
+  return (c && c.hideHref) || ((_OPS_HIDE_HINT[(c && c.key) || ''] || {}).href) || '';
+}
+function _opsHidFmt(key, n){
+  return String(window.T(key) || '').replace(/\{n\}/g, String(n));
+}
+var _opsHidOpen = false;
+function _opsCloseHidPop(){
+  var pop = document.getElementById('opsHidPop');
+  if(pop){ pop.style.display = 'none'; opsSetHtml(pop, ''); }
+}
+function _opsOpenHidPop(c){
+  var pop = document.getElementById('opsHidPop');
+  if(!pop || !c) return;
+  var reason = _opsHideReason(c);
+  var whyKey = ({disabled:'ov2_hid_why_off', no_data:'ov2_hid_why_wait', healthy:'ov2_hid_why_healthy',
+    error:'ov2_hid_why_err', no_access:'ov2_hid_why_noacc'})[reason] || 'ov2_hid_why_other';
+  // 白话一句先取运营文案键 ov2_hidb_<key>（老板视角的价值一句话），缺键回落卡标题括号说明。
+  var bk = 'ov2_hidb_' + (c.key || '');
+  var blurb = window.T(bk);
+  if(blurb === bk) blurb = _opsCardBlurb(c);
+  var href = _opsHideHref(c);
+  var html = '<div class="ops-hid-pop-t">'+esc(_opsCardShort(c))+'</div>';
+  if(blurb) html += '<div class="ops-hid-pop-b">'+esc(blurb)+'</div>';
+  html += '<div class="muted">'+esc(window.T(whyKey))+'</div>';
+  if(href) html += '<a class="ops-hid-pop-a" href="'+esc(href)+'">'+esc(window.T('ov2_hid_open'))+' →</a>';
+  pop.style.display = '';
+  opsSetHtml(pop, html);
+}
+function opsToggleHiddenPanel(force){
+  if(typeof force === 'boolean') _opsHidOpen = force;
+  else _opsHidOpen = !_opsHidOpen;
+  if(!_opsHidOpen) _opsCloseHidPop();
+  _opsUpdateGroups();
+}
+function _opsRenderHidden(hiddenCards, shownN){
+  var panel = document.getElementById('opsHidPanel');
+  var toggle = document.getElementById('opsHidToggle');
+  var body = document.getElementById('opsHidBody');
+  var hint = document.getElementById('opsHidHint');
+  var tb = document.getElementById('opsHidTbChip');
+  if(!panel || !toggle || !body) return;
+  if(!hiddenCards.length){
+    panel.style.display = 'none';
+    if(tb) tb.style.display = 'none';
+    _opsCloseHidPop();
+    return;
+  }
+  panel.style.display = '';
+  var groups = [
+    {reason:'disabled', label:window.T('ov2_hid_grp_off'), cls:'off'},
+    {reason:'no_data', label:window.T('ov2_hid_grp_wait'), cls:'wait'},
+    {reason:'healthy', label:window.T('ov2_hid_grp_healthy'), cls:'healthy'},
+    {reason:'error', label:window.T('ov2_hid_grp_err'), cls:'err'},
+    {reason:'no_access', label:window.T('ov2_hid_grp_noacc'), cls:'noacc'},
+    {reason:'unknown', label:window.T('ov2_hid_grp_other'), cls:'other'}
+  ];
+  var byReason = {};
+  hiddenCards.forEach(function(c){
+    var r = _opsHideReason(c);
+    (byReason[r] = byReason[r] || []).push(c);
+  });
+  // 按原因拆解（如「未开启 6 · 等待数据 4 · 零异常 3」）：收起态也能看懂构成，
+  // 不必点开；放 title 与 hint 两处，不占版面。
+  var breakdown = groups.map(function(g){
+    var m = (byReason[g.reason] || []).length;
+    return m ? (g.label + ' ' + m) : '';
+  }).filter(Boolean).join(' · ');
+  var n = hiddenCards.length;
+  var label = '💤 ' + _opsHidFmt('ov2_hid_summary', n);
+  toggle.textContent = label + (_opsHidOpen ? ' ▾' : ' ▸');
+  toggle.title = breakdown;
+  toggle.setAttribute('aria-expanded', _opsHidOpen ? 'true' : 'false');
+  if(hint) hint.textContent = _opsHidOpen ? window.T('ov2_hid_collapse')
+    : (breakdown + ' · ' + window.T('ov2_hid_expand'));
+  if(tb){
+    tb.style.display = '';
+    tb.textContent = '💤 ' + n;
+    tb.title = label + (breakdown ? '：' + breakdown : '');
+  }
+  if(!_opsHidOpen){
+    body.style.display = 'none';
+    return;
+  }
+  body.style.display = '';
+  var html = groups.map(function(g){
+    var items = byReason[g.reason] || [];
+    if(!items.length) return '';
+    var chips = items.map(function(c){
+      return '<button type="button" class="ops-toc-chip ops-hid-chip '+g.cls+'" data-hidkey="'+esc(c.key)+'">'+
+        esc(_opsCardShort(c))+'</button>';
+    }).join('');
+    return '<div class="ops-hid-grp"><span class="muted ops-hid-glabel">'+esc(g.label)+
+      ' ('+items.length+')</span><div class="ops-toc-chips">'+chips+'</div></div>';
+  }).join('');
+  if(shownN) html += '<div class="muted ops-hid-hint">'+esc(_opsHidFmt('ov2_hid_shown', shownN))+'</div>';
+  opsSetHtml(body, html);
+}
 // 渲染防抖写：内容没变就不碰 DOM——保住用户的划选/hover，也省整卡 reflow。
 // 高频重渲染的卡（KPI 网格/周报/事件表）用它替代直接 innerHTML 赋值。
 function opsSetHtml(el, html){
@@ -7230,16 +8424,127 @@ function opsSetHtml(el, html){
   el._opsHtml = html;
   el.innerHTML = html;
 }
+// ── 老板视图（焦点档）：只显示红黄灯卡 + 「经营总览」组；其余卡打
+//    data-ops-bhide 收起但**不停更**（降频后台刷新，变红自动现身）。
+//    搜索时整档让位——筛选是显式意图，被焦点档吞掉命中比多显几张卡更糟。
+//    跨会话记忆 localStorage ops.boss.v1。──
+/* 默认档（2026-08-22 P1「三问首屏」收口）：**首访（无记忆键）默认焦点档**——落地即
+   「哪里在坏（红黄灯卡）+ 经营总览」，而不是 50+ 张全量卡墙；opsBossNote 自带收起
+   计数说明，点「只看重点」或 ?view=all 一键回全量。显式点过按钮即落记忆键，此后
+   永远尊重用户自己的选择（'0'=全量、'1'=焦点，双向持久）。 */
+var _opsBossMode = true;
+try{
+  var _bv0 = localStorage.getItem('ops.boss.v1');
+  if(_bv0 === '0') _opsBossMode = false;
+  else if(_bv0 === '1') _opsBossMode = true;
+}catch(_){ }
+// 深链：?view=boss / ?view=all 覆写本次初始档位（老板收藏一个网址直达焦点档；
+// all 用于解救「别人电脑上档位被记住了」的困惑）。刻意**不写** localStorage——
+// URL 是本次访问的意图，不该替人改默认档；点按钮切换才落记忆。
+try{
+  var _vq = new URLSearchParams(location.search).get('view');
+  if(_vq === 'boss') _opsBossMode = true;
+  else if(_vq === 'all') _opsBossMode = false;
+}catch(_){ }
+function _bossHidden(c){ return c.el && c.el.hasAttribute('data-ops-bhide'); }
+function _applyBossMode(){
+  var q = String((document.getElementById('opsFilter') || {}).value || '').trim();
+  var tucked = 0;
+  OPS_CARDS.forEach(function(c){
+    if(!c.el) return;
+    var hide = _opsBossMode && !q && c.group !== 'boss'
+      && c._light !== 'red' && c._light !== 'yellow';
+    if(hide){
+      c.el.setAttribute('data-ops-bhide', '1');
+      // 只数「本来会显示」的卡——loader 条件隐藏的卡不算被焦点档收起
+      if(!_condHidden(c)) tucked++;
+    } else {
+      c.el.removeAttribute('data-ops-bhide');
+    }
+  });
+  var note = document.getElementById('opsBossNote');
+  if(note){
+    if(_opsBossMode && !q && tucked > 0){
+      note.textContent = '👔 ' + _opsHidFmt('ov2_view_boss_on', tucked);
+      note.style.display = '';
+    } else {
+      note.style.display = 'none';
+    }
+  }
+  _bossBtnSync();
+}
+function _bossBtnSync(){
+  var b = document.getElementById('opsBossBtn');
+  if(!b) return;
+  b.textContent = '👔 ' + window.T('ov2_view_boss');
+  b.title = window.T('ov2_view_boss_t');
+  b.classList.toggle('ops-boss-on', _opsBossMode);
+}
+function opsToggleBossView(){
+  _opsBossMode = !_opsBossMode;
+  try{ localStorage.setItem('ops.boss.v1', _opsBossMode ? '1' : '0'); }catch(_){ }
+  // URL 与档位同步（replaceState 不刷新不进历史）：切完直接复制地址栏就是可分享深链
+  try{
+    var u = new URL(location.href);
+    if(_opsBossMode) u.searchParams.set('view', 'boss');
+    else u.searchParams.delete('view');
+    history.replaceState(null, '', u);
+  }catch(_){ }
+  _opsUpdateGroups();
+}
 // ── 每轮刷新后聚合：组状态点 + 组卡数 + 空组隐藏 + 问题卡提示条 +
 //    隐藏卡清单 + 折叠按钮文案 ──
+// ── warn 卡「去处理」CTA 注册表（2026-08-22 P2）：红/黄灯卡在标题行给出明确的
+//    下一步入口——焦点档把报警卡推到首屏后，「所以我点哪」是下一个瓶颈。
+//    只登记目的地无歧义的卡；卡内已有专属自愈按钮的（psess 重新登录 / alertlink
+//    接通）不重复给。键必须存在于 OPS_CARDS（tests/test_ops_card_cta.py 钉住）。──
+var OPS_CARD_CTA = {
+  backlog:  '/workspace/drafts',    // 草稿积压 → 草稿审批台
+  rlatency: '/workspace',           // 回复时延 → 收件箱去回消息
+  cases:    '/cases',               // 案例积压 → 案例跟进
+  chrdy:    '/workspace/channels',  // 渠道接入未就绪 → 接入页
+  atruth:   '/workspace/assets',    // 账号真相异常 → 账号资产中心
+  fe:       '/developer',           // 前端哑按钮错误 → 开发者工具
+  billing:  '/membership',          // 计费异常 → 会员中心
+  uqchar:   '/membership',          // 字符额度 → 会员中心
+  mconsist: '/personas',            // 图文一致性缺口 → 人设工作室补相册
+  care:     '/care-schedule',       // 主动关怀链路 → 关怀页
+  autocov:  '/reply-settings',      // 自动化覆盖低 → 自动回复设置
+  fleethp:  '/rpa-overview'         // 车队健康 → 矩阵总览
+};
+function _opsSyncCtas(){
+  OPS_CARDS.forEach(function(c){
+    var href = OPS_CARD_CTA[c.key];
+    if(!href || !c.el) return;
+    var h2 = c.el.querySelector('h2');
+    if(!h2) return;
+    var a = h2.querySelector('.ops-cta');
+    if(c._light === 'red' || c._light === 'yellow'){
+      if(!a){
+        a = document.createElement('a');
+        a.className = 'ops-cta';
+        a.href = href;
+        a.textContent = window.T('ov2_cta_fix');
+        a.title = window.T('ov2_cta_fix_t');
+        // h2 点击=折叠开关；其内部 closest('a') 已豁免，这里再兜一层防冒泡语义漂移
+        a.addEventListener('click', function(ev){ ev.stopPropagation(); });
+        h2.appendChild(a);
+      }
+    } else if(a){
+      a.remove();
+    }
+  });
+}
 function _opsUpdateGroups(){
-  var hiddenTitles = [], probs = [];
+  var hiddenCards = [], probs = [], shownN = 0;
   OPS_CARDS.forEach(function(c){ c._light = _cardLight(c); });
+  _applyBossMode();
+  _opsSyncCtas();
   OPS_GROUPS.forEach(function(g){
     var shown = 0, light = '';
     OPS_CARDS.forEach(function(c){
       if(c.group !== g.key || !c.el) return;
-      if(_condHidden(c) || _filtered(c)) return;
+      if(_condHidden(c) || _filtered(c) || _bossHidden(c)) return;
       shown++;
       if(c._light === 'red') light = 'red';
       else if(c._light === 'yellow' && light !== 'red') light = 'yellow';
@@ -7253,21 +8558,23 @@ function _opsUpdateGroups(){
       if(n) n.textContent = shown ? String(shown) : '';
     });
     if(g.el) g.el.style.display = shown ? '' : 'none';
+    shownN += shown;
   });
   OPS_CARDS.forEach(function(c){
     if(!c.el || !c.title) return;
-    if(_condHidden(c)){ hiddenTitles.push(c.title); return; }
+    if(_condHidden(c)){
+      if(!_filtered(c)){
+        hiddenCards.push(c);
+        if(_opsHideReason(c) === 'error'){
+          if(!c._light) c._light = 'yellow';
+          probs.push(c);
+        }
+      }
+      return;
+    }
     if(!_filtered(c) && c._light) probs.push(c);
   });
-  var foot = document.getElementById('opsHiddenNote');
-  if(foot){
-    if(hiddenTitles.length){
-      foot.style.display = '';
-      foot.textContent = '💤 ' + window.T('ov2_hidden_note') + ' (' + hiddenTitles.length + '): ' + hiddenTitles.join(' · ');
-    } else {
-      foot.style.display = 'none';
-    }
-  }
+  _opsRenderHidden(hiddenCards, shownN);
   // 问题卡提示条：红黄卡点名成 chip，点击展开并跳过去（chip 走容器级事件委托）。
   var strip = document.getElementById('opsProbStrip');
   if(strip){
@@ -7361,21 +8668,23 @@ function opsToggleAllCards(){
 // ── 标题筛选 ──
 function opsFilterCards(q){
   q = String(q || '').trim().toLowerCase();
-  var any = false;
+  var anyShown = false, hidHits = 0;
   OPS_CARDS.forEach(function(c){
     if(!c.el) return;
     var hit = !q || (c.title || '').toLowerCase().indexOf(q) >= 0;
     if(hit){
       c.el.removeAttribute('data-ops-fhide');
-      if(!_condHidden(c)) any = true;
+      if(_condHidden(c)) hidHits++;
+      else anyShown = true;
     } else {
       c.el.setAttribute('data-ops-fhide', '1');
     }
   });
+  if(q && hidHits) _opsHidOpen = true;
   var nm = document.getElementById('opsNoMatch');
   if(nm){
     nm.textContent = window.T('ov2_toc_nomatch');
-    nm.style.display = (q && !any) ? '' : 'none';
+    nm.style.display = (q && !anyShown && !hidHits) ? '' : 'none';
   }
   _opsUpdateGroups();
 }
@@ -7435,6 +8744,12 @@ function _opsRefreshTick(){
       if(_opsTick % 5 === 0){ c.lastLoad = Date.now(); fns.push.apply(fns, c.loaders); }
       return;
     }
+    // 老板视图收起的卡不进视口刷新，但保留低频后台刷新——灯变红要能自己现身，
+    // 否则焦点档＝闭眼档。
+    if(_bossHidden(c)){
+      if(_opsTick % 5 === 0){ c.lastLoad = Date.now(); fns.push.apply(fns, c.loaders); }
+      return;
+    }
     var r = c.el.getBoundingClientRect();
     if(r.bottom > -300 && r.top < window.innerHeight + 600){
       c.lastLoad = Date.now();
@@ -7470,6 +8785,7 @@ window.addEventListener("rtv-ops-refresh", _onRtvOpsRefresh);
 _opsDistribute();
 _opsBuildToc();
 _opsFoldBtnLabel();
+_bossBtnSync();
 (function(){
   var f = document.getElementById('opsFilter');
   if(f){
@@ -7487,10 +8803,43 @@ _opsFoldBtnLabel();
       if(!b) return;
       var c = OPS_CARDS_BY_KEY[b.getAttribute('data-probkey')];
       if(!c || !c.el) return;
+      if(_condHidden(c)){
+        _opsHidOpen = true;
+        _opsUpdateGroups();
+        var hp = document.getElementById('opsHidPanel');
+        if(hp) hp.scrollIntoView({behavior:'smooth', block:'start'});
+        _opsOpenHidPop(c);
+        return;
+      }
       if(c.el.classList.contains('ops-collapsed')) opsToggleCard(c.key);
       c.el.scrollIntoView({behavior:'smooth', block:'start'});
     });
   }
+  var hidPanel = document.getElementById('opsHidPanel');
+  if(hidPanel){
+    hidPanel.addEventListener('click', function(ev){
+      if(ev.target.closest('#opsHidToggle')){
+        opsToggleHiddenPanel();
+        return;
+      }
+      var chip = ev.target.closest('[data-hidkey]');
+      if(!chip) return;
+      var c = OPS_CARDS_BY_KEY[chip.getAttribute('data-hidkey')];
+      if(c) _opsOpenHidPop(c);
+    });
+  }
+  var tb = document.getElementById('opsHidTbChip');
+  if(tb){
+    tb.addEventListener('click', function(){
+      opsToggleHiddenPanel(true);
+      var hp = document.getElementById('opsHidPanel');
+      if(hp) hp.scrollIntoView({behavior:'smooth', block:'start'});
+    });
+  }
+  document.addEventListener('click', function(ev){
+    if(ev.target.closest('#opsHidPanel, #opsHidTbChip')) return;
+    _opsCloseHidPop();
+  });
 })();
 if(_opsIO){ OPS_CARDS.forEach(function(c){ if(c.el) _opsIO.observe(c.el); }); }
 refreshAll();

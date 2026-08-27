@@ -159,6 +159,7 @@
 .btn-sm{font-size:.78rem;padding:.3rem .65rem;border-radius:6px;border:1px solid var(--bd);background:var(--card);color:var(--t);cursor:pointer;transition:.15s;font-weight:500}
 .btn-sm:hover{border-color:var(--p);color:var(--p)}
 .btn-sm.active{background:var(--p);color:#fff;border-color:var(--p)}
+a.btn-sm{text-decoration:none;display:inline-block}
 .btn-green{background:var(--green)!important;color:#fff!important;border-color:var(--green)!important}
 .btn-green:hover{opacity:.85}
 .btn-red{background:none;color:var(--red);border-color:var(--red)}
@@ -363,6 +364,7 @@ function renderDrafts(drafts){
           <button class="btn-sm btn-red" onclick="rejectDraft('${d.id}')">${window.T('rpa_js_act_reject')}</button>
           <button class="btn-sm" onclick="editDraft('${d.id}')">${window.T('edit')}</button>
         `:''}
+        ${(d.status==='approved'&&d.entry_id)?'<a class="btn-sm" href="'+_kbEntryHref(d.entry_id)+'" target="_blank" rel="noopener">📖 '+window.T('lr2_view_entry')+'</a>':''}
       </div>
     </div>`;
   });
@@ -370,6 +372,13 @@ function renderDrafts(drafts){
 }
 
 function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+/* 学习闭环补链（实施49 P0-4）：approve 时后端把正式条目 id 回写进草稿行，
+   这里按知识库页既有的锚点约定（效果回访/查重链同款）拼跳转地址。 */
+function _kbEntryHref(entryId){
+  return '/knowledge#entry-'+encodeURIComponent(String(entryId||''));
+}
+window._kbEntryHref=_kbEntryHref;
 
 function filterDrafts(status,btn){
   currentFilter=status;
@@ -452,8 +461,18 @@ async function approveDraft(id){
   var msg=hasDup?'⚠ '+window.T('lr_js016'):window.T('lr_js017');
   if(!confirm(msg))return;
   try{
-    await apiFetch('/api/learner/drafts/'+id+'/approve',{method:'POST'}, {timeoutMs: 60000});
-    if(typeof showToast==='function')showToast(window.T('lr_js018'),'success');
+    const r=await apiFetch('/api/learner/drafts/'+id+'/approve',{method:'POST'}, {timeoutMs: 60000});
+    /* apiFetch 对 4xx/5xx 是正常 resolve（语义同 fetch）——不判 ok 会把失败也报成
+       「已通过入库」，坐席以为学会了、知识库里其实什么都没有。 */
+    const d=await r.json().catch(function(){return {}});
+    if(!r.ok||d.ok===false)throw new Error(d.detail||('HTTP '+r.status));
+    if(typeof showToast==='function'){
+      var t=window.T('lr_js018');
+      /* 学习闭环补链（实施49 P0-4）：入库后直接给出正式条目的去处，
+         「审完不知道去哪看」是内测里最常见的断链。 */
+      if(d.entry_id)t+=' · <a href="'+_kbEntryHref(d.entry_id)+'" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">'+window.T('lr2_view_entry')+'</a>';
+      showToast(t,'success',d.entry_id?8000:3500);
+    }
     loadDrafts();
   }catch(e){if(typeof showToast==='function')showToast(window.T('ov_js_op_fail'),'error')}
 }

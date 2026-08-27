@@ -9,6 +9,22 @@
 // 双模式：浏览器经 <script> 加载执行 DOM 装配；Node 经 require 取纯函数（health-panel.test.js 单测）。
 // 纯渲染模型与 inject-status.js::deriveInjectState 的语义对齐（同一套失配分类）。
 
+// ⚠ 文案单源（2026-08-20 i18n 收口）：本文件此前 100+ 条中文写死在渲染模型里，英文壳
+// 的 🩺 看板整块是中文——而这是运营判断「全自动到底发没发出去」的唯一入口。现在全部经
+// T() 走 renderer/shell-i18n.js 的 `hp.*` 段（注入状态复用 `inject.*`，与状态条同一说法）。
+//   · 浏览器：<script> 已装载 shell-i18n.js → 直接用 window.SH；
+//   · Node（health-panel.test.js）：require 同一个词典 → 断言仍读中文，零测试改写。
+// 两侧同一份 DICT，绝不各写一份。
+let _SHI = null;
+function T(key, vars) {
+  if (typeof SH === "function") return SH(key, vars);
+  if (_SHI === null) {
+    try { _SHI = (typeof require === "function") ? require("./shell-i18n.js") : false; }
+    catch (e) { _SHI = false; }
+  }
+  return (_SHI && _SHI.t) ? _SHI.t(key, vars) : String(key);
+}
+
 function _num(obj, key) {
   const v = obj && obj[key];
   const n = Number(v);
@@ -22,15 +38,15 @@ function injectBadge(summary) {
   const mismatch = _num(s, "mismatch");
   const total = _num(s, "total");
   if (persistent > 0) {
-    return { cls: "bad", text: persistent + " 账号持续失配", hint: "疑似官方网页改版，可热修 selector-profiles(D1)" };
+    return { cls: "bad", text: T("hp.inj_persistent", { n: persistent }), hint: T("hp.inj_persistent_h") };
   }
   if (mismatch > 0) {
-    return { cls: "warn", text: mismatch + " 账号选择器失配", hint: "短暂失配可自愈；持续则需校准" };
+    return { cls: "warn", text: T("hp.inj_mismatch", { n: mismatch }), hint: T("hp.inj_mismatch_h") };
   }
   if (total === 0) {
-    return { cls: "wait", text: "暂无注入账号", hint: "打开内嵌官方页并登录后开始上报" };
+    return { cls: "wait", text: T("hp.inj_none"), hint: T("hp.inj_none_h") };
   }
-  return { cls: "ok", text: "全部正常（" + total + "）", hint: "" };
+  return { cls: "ok", text: T("hp.inj_ok", { n: total }), hint: "" };
 }
 
 // 受控出站队列徽标：failed > 待审(held) > 活动中(pending/claimed) > 空闲。
@@ -41,26 +57,26 @@ function outboundBadge(summary) {
   const pending = _num(s, "pending");
   const claimed = _num(s, "claimed");
   if (failed > 0) {
-    return { cls: "bad", text: failed + " 条发送失败", hint: "DOM 发送未成功（已记 failed，非误判已送达）" };
+    return { cls: "bad", text: T("hp.ob_failed", { n: failed }), hint: T("hp.ob_failed_h") };
   }
   if (held > 0) {
-    return { cls: "warn", text: held + " 条待人工审核", hint: "review_mode：放行后才会自动发送" };
+    return { cls: "warn", text: T("hp.ob_held", { n: held }), hint: T("hp.ob_held_h") };
   }
   if (pending + claimed > 0) {
-    return { cls: "warn", text: "活动中：待发 " + pending + " · 发送中 " + claimed, hint: "" };
+    return { cls: "warn", text: T("hp.ob_active", { pending, claimed }), hint: "" };
   }
-  return { cls: "ok", text: "队列空闲", hint: "" };
+  return { cls: "ok", text: T("hp.ob_idle"), hint: "" };
 }
 
-// 出站状态码 → 中文。
+// 出站状态码 → 人话（词条键 hp.st_*，未知码原样回显便于排障）。
 function outboundStatusText(status) {
   switch (status) {
-    case "pending": return "待发";
-    case "claimed": return "发送中";
-    case "sent": return "已发送";
-    case "failed": return "失败";
-    case "held": return "待审核";
-    case "cancelled": return "已拦截";
+    case "pending": return T("hp.st_pending");
+    case "claimed": return T("hp.st_claimed");
+    case "sent": return T("hp.st_sent");
+    case "failed": return T("hp.st_failed");
+    case "held": return T("hp.st_held");
+    case "cancelled": return T("hp.st_cancelled");
     default: return String(status || "");
   }
 }
@@ -73,9 +89,9 @@ const _OB_COLOR = {
 // 按状态决定可用的人审动作（claimed=飞行中、sent/cancelled=终态 → 无动作）。
 function outboundActions(status) {
   switch (status) {
-    case "pending": return [{ act: "cancel", label: "拦截" }, { act: "hold", label: "暂停" }, { act: "edit", label: "改写" }];
-    case "held": return [{ act: "release", label: "放行" }, { act: "cancel", label: "拦截" }, { act: "edit", label: "改写" }];
-    case "failed": return [{ act: "retry", label: "重试" }];
+    case "pending": return [{ act: "cancel", label: T("hp.act_cancel") }, { act: "hold", label: T("hp.act_hold") }, { act: "edit", label: T("hp.act_edit") }];
+    case "held": return [{ act: "release", label: T("hp.act_release") }, { act: "cancel", label: T("hp.act_cancel") }, { act: "edit", label: T("hp.act_edit") }];
+    case "failed": return [{ act: "retry", label: T("hp.act_retry") }];
     default: return [];
   }
 }
@@ -108,33 +124,35 @@ function renderOutboundRowHtml(item) {
     + 'padding:.2rem 0;border-top:1px solid #ffffff14;font-size:.73rem">'
     + '<span style="color:' + color + ';flex:0 0 auto">' + _esc(m.statusText) + "</span>"
     + '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#bbb">'
-    + _esc(m.account_id) + "：" + _esc(m.preview) + "</span>"
+    + _esc(m.account_id) + T("hp.colon") + _esc(m.preview) + "</span>"
     + btns + "</div>";
 }
 
 // 失配持续时长 → 人话（秒/分/时）。
 function formatDuration(secs) {
   const n = Math.max(0, Math.floor(Number(secs) || 0));
-  if (n < 60) return n + " 秒";
+  if (n < 60) return T("hp.dur_sec", { n });
   if (n < 3600) {
     const m = Math.floor(n / 60);
     const s = n % 60;
-    return s ? m + " 分 " + s + " 秒" : m + " 分";
+    return s ? T("hp.dur_min_sec", { m, s }) : T("hp.dur_min", { m });
   }
   const h = Math.floor(n / 3600);
   const m = Math.floor((n % 3600) / 60);
-  return m ? h + " 时 " + m + " 分" : h + " 时";
+  return m ? T("hp.dur_hour_min", { h, m }) : T("hp.dur_hour", { h });
 }
 
-// 注入状态码 → 中文（与 inject-status.js::deriveInjectState 对齐）。
+// 注入状态码 → 人话。**刻意复用 inject.* 词条**（inject-status.js 状态条同一套说法）：
+// 同一件事在状态条与 🩺 看板里必须逐字一致，各写一份迟早分叉。
 function injectStatusText(status) {
   switch (status) {
-    case "ok": return "注入正常";
-    case "mismatch_composer": return "选择器失配（输入框）";
-    case "mismatch_bubble": return "选择器失配（消息）";
-    case "unsupported": return "无注入档案";
-    case "unknown": return "未上报";
-    default: return String(status || "未知");
+    case "ok":
+    case "mismatch_composer":
+    case "mismatch_bubble":
+    case "unsupported":
+      return T("inject." + status);
+    case "unknown": return T("hp.st_unreported");
+    default: return status ? String(status) : T("health.unknown");
   }
 }
 
@@ -194,7 +212,7 @@ function alertDotModel(injectData, alertsData, sla) {
       on: true,
       count,
       level: "mismatch",
-      title: count + " 个账号注入持续失配（疑似官方网页改版，可热修 selector-profiles）",
+      title: T("hp.dot_mismatch", { n: count }),
     };
   }
   if (sla && sla.breach) {
@@ -203,29 +221,30 @@ function alertDotModel(injectData, alertsData, sla) {
       on: true,
       count: sla.count,
       level: sla.level,
-      title: (urgent ? "🔴 严重：" : "")
-        + sla.count + " 条待审超时未处理（review_mode），客户可能"
-        + (urgent ? "已流失——请立即放行/改写" : "久等——点开 🩺 尽快放行/改写"),
+      // 严重/一般各一条整句词条（英文语序与中文差太远，拼装式会碎成不通顺的句子）
+      title: T(urgent ? "hp.dot_sla_urgent" : "hp.dot_sla_warn", { n: sla.count }),
     };
   }
   return {
     on: false,
     count: 0,
     level: "none",
-    title: "自动化健康：全账号注入命中 + 受控出站队列概览",
+    title: T("hp.dot_default"),
   };
 }
 
 // 覆写文件校验结果 → 展示模型（纯函数）。后端 validate 返回 {ok,exists,valid,profiles,dropped,error?}。
 function formatValidateResult(r) {
-  if (!r || !r.ok) return { cls: "bad", text: "校验失败：" + ((r && r.error) || "后端不可达") };
-  if (!r.exists) return { cls: "wait", text: "无覆写文件（注入用内置档）" };
-  if (!r.valid) return { cls: "bad", text: "JSON 无效：" + (r.error || "解析失败") };
+  if (!r || !r.ok) return { cls: "bad", text: T("hp.val_failed", { err: (r && r.error) || T("hp.val_no_backend") }) };
+  if (!r.exists) return { cls: "wait", text: T("hp.val_absent") };
+  if (!r.valid) return { cls: "bad", text: T("hp.val_invalid", { err: r.error || T("hp.val_parse_failed") }) };
   const dropped = Array.isArray(r.dropped) ? r.dropped : [];
-  let text = "有效 ✓ " + (_num(r, "profiles")) + " 个平台覆写";
+  let text = T("hp.val_ok", { n: _num(r, "profiles") });
   if (dropped.length) {
-    text += " · 已忽略 " + dropped.length + " 项（"
-      + dropped.slice(0, 3).join("、") + (dropped.length > 3 ? "…" : "") + "）";
+    text += T("hp.val_dropped", {
+      n: dropped.length,
+      list: dropped.slice(0, 3).join(T("sep.enum")) + (dropped.length > 3 ? "…" : ""),
+    });
   }
   return { cls: dropped.length ? "warn" : "ok", text };
 }
@@ -248,10 +267,12 @@ function _esc(s) {
     .replace(/"/g, "&quot;");
 }
 
-// selector key → 人话标签（与后端 SELECTOR_KEYS 对齐）。
-const SELECTOR_LABELS = {
-  composer: "输入框", sendBtn: "发送按钮", bubble: "消息气泡", peerTitle: "对话标题",
-};
+// selector key → 人话标签（与后端 SELECTOR_KEYS 对齐）。**函数而非常量**：词条要在
+// 语言就绪后才取，模块加载期求值会把中文烙死在英文壳里。
+const SELECTOR_KEYS = ["composer", "sendBtn", "bubble", "peerTitle"];
+function selectorLabel(key) {
+  return SELECTOR_KEYS.indexOf(key) >= 0 ? T("hp.sel_" + key) : String(key || "");
+}
 
 // 逐选择器失配诊断（纯函数，P9）：优先用后端聚合 selector_diagnosis，缺失则从 alerts[].selectors
 // 客户端兜底统计。让运营从「N 个账号失配」下钻到「哪个 selector key 抓空最多」，精准热修该键。
@@ -264,7 +285,7 @@ function selectorDiagnosisModel(alertsData) {
       .filter((e) => e.missing > 0);
   } else {
     const alerts = Array.isArray(d.alerts) ? d.alerts : [];
-    const order = ["composer", "sendBtn", "bubble", "peerTitle"];
+    const order = SELECTOR_KEYS;
     const counts = {};
     for (const a of alerts) {
       const sel = (a && a.selectors) || {};
@@ -273,12 +294,11 @@ function selectorDiagnosisModel(alertsData) {
     entries = order.filter((k) => counts[k] > 0).map((k) => ({ key: k, missing: counts[k] }));
   }
   entries.sort((a, b) => b.missing - a.missing);
-  entries.forEach((e) => { e.label = SELECTOR_LABELS[e.key] || e.key; });
+  entries.forEach((e) => { e.label = selectorLabel(e.key); });
   if (!entries.length) return { has: false, text: "", entries: [] };
   return {
     has: true, entries,
-    text: "失配定位：" + entries.map((e) => e.label + " ✗" + e.missing).join(" · ")
-      + " → 优先校准这些 selector key",
+    text: T("hp.diag", { list: entries.map((e) => e.label + " ✗" + e.missing).join(" · ") }),
   };
 }
 
@@ -289,7 +309,7 @@ function renderAlertsHtml(alertsData) {
   let rows = "";
   for (const a of alerts.slice(0, 6)) {
     const m = accountRowModel(a);
-    const dur = m.durationText ? " · 已持续 " + _esc(m.durationText) : "";
+    const dur = m.durationText ? _esc(T("hp.for_duration", { d: m.durationText })) : "";
     rows += '<div style="display:flex;align-items:center;gap:.4rem;padding:.2rem 0;font-size:.74rem">'
       + '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'
       + _esc(m.platform) + " / " + _esc(m.account_id) + "</span>"
@@ -299,16 +319,66 @@ function renderAlertsHtml(alertsData) {
   const diag = selectorDiagnosisModel(alertsData);
   const diagHtml = diag.has
     ? '<div style="font-size:.7rem;color:#e67e22;margin-top:.25rem;font-weight:600" '
-      + 'title="跨失配账号统计各 selector key 抓空次数，定位官方改版到底改了哪个元素">'
+      + 'title="' + _esc(T("hp.diag_title")) + '">'
       + _esc(diag.text) + "</div>"
     : "";
   return '<div style="background:#e74c3c1a;border:1px solid #e74c3c66;border-radius:8px;padding:.45rem .6rem;margin-bottom:.5rem">'
     + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.15rem">'
-    + '<span style="font-size:.78rem;color:#e74c3c;font-weight:600">⚠ 注入持续失配（' + alerts.length + " 个账号）</span>"
-    + '<button id="cp-health-fix" style="font-size:.7rem;padding:.12rem .55rem;border:1px solid #e74c3c88;border-radius:6px;background:#e74c3c22;color:#e74c3c;cursor:pointer" title="打开覆写文件，按平台填正确选择器即可热修（无需重发桌面包）">热修选择器</button>'
+    + '<span style="font-size:.78rem;color:#e74c3c;font-weight:600">' + _esc(T("hp.alerts_hdr", { n: alerts.length })) + "</span>"
+    + '<button id="cp-health-fix" style="font-size:.7rem;padding:.12rem .55rem;border:1px solid #e74c3c88;border-radius:6px;background:#e74c3c22;color:#e74c3c;cursor:pointer" title="'
+    + _esc(T("hp.fix_title")) + '">' + _esc(T("hp.fix_btn")) + "</button>"
     + "</div>" + rows + diagHtml
-    + '<div style="font-size:.68rem;color:#c0392b;margin-top:.2rem">疑似官方网页改版 → 点「热修选择器」打开 desktop_selector_profiles.json，保存后注入下次拉取即生效</div>'
+    + '<div style="font-size:.68rem;color:#c0392b;margin-top:.2rem">' + _esc(T("hp.alerts_ft")) + "</div>"
     + "</div>";
+}
+
+// 活动海报判定行（P0 2026-08-22 可诊断化，纯函数）：desktop:campaign-diag 的快照 →
+// 「最近一次选品结果 + 原因人话 + feed 条数」。此前 cmEligible 的精确原因被 IPC 丢弃，
+// 「为什么没弹」要翻代码+翻 %APPDATA%——现在运营在 🩺 面板一眼看到并知道下一步
+//（验收走 --poster-preview）。skip 多数属预期（如 72h 窗已过）→ wait 灰而非 warn。
+function campaignDiagModel(diag) {
+  const d = diag || {};
+  if (!d.ok) return { has: false, text: "", cls: "wait", hint: "" };
+  const last = d.last || null;
+  const feed = _num(d, "feed_count");
+  const feedTxt = T("hp.camp_feed", { n: feed });
+  if (!last) {
+    return { has: true, cls: "wait", text: T("hp.camp_no_query") + " · " + feedTxt, hint: T("hp.camp_hint") };
+  }
+  if (last.result === "preview") {
+    return { has: true, cls: "warn", text: T("hp.camp_preview"), hint: T("hp.camp_hint") };
+  }
+  if (last.result === "show") {
+    return {
+      has: true, cls: "ok",
+      text: T("hp.camp_shown", { id: String(last.id || "") }) + " · " + feedTxt,
+      hint: T("hp.camp_hint"),
+    };
+  }
+  const reason = String(last.reason || "");
+  const knownReasons = [
+    "no_feed", "not_managed", "no_onboarding", "window_passed",
+    "max_shows", "interval", "opted_out", "not_started", "ended",
+  ];
+  const why = knownReasons.indexOf(reason) >= 0 ? T("hp.camp_r_" + reason) : (reason || "?");
+  return {
+    has: true,
+    // feed 都没拉到是链路问题（值得注意）；其余 skip 是资格判定按设计工作 → 中性灰
+    cls: reason === "no_feed" ? "warn" : "wait",
+    text: T("hp.camp_skip", { why }) + " · " + feedTxt,
+    hint: T("hp.camp_hint"),
+  };
+}
+
+function renderCampaignRowHtml(diag) {
+  const m = campaignDiagModel(diag);
+  if (!m.has) return "";
+  const color = _CLS_COLOR[m.cls] || "#7f8c8d";
+  return '<div style="display:flex;align-items:center;gap:.4rem;margin-top:.45rem;'
+    + 'padding-top:.35rem;border-top:1px solid #ffffff14" title="' + _esc(m.hint) + '">'
+    + '<span style="font-size:.72rem;color:#bbb;flex:0 0 auto">🎁 ' + _esc(T("hp.camp")) + "</span>"
+    + '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'
+    + 'font-size:.7rem;color:' + color + '">' + _esc(m.text) + "</span></div>";
 }
 
 // 近期拦截率读数（纯函数）：cancelled/(sent+failed+cancelled)。样本不足时不渲染颜色告警。
@@ -317,11 +387,11 @@ function interceptRateModel(out) {
   const sample = _num(o, "intercept_sample");
   const rate = Number(o.intercept_rate);
   if (!sample || !isFinite(rate)) {
-    return { pct: "—", text: "拦截率 —（样本不足）", cls: "ok" };
+    return { pct: "—", text: T("hp.rate_nosample"), cls: "ok" };
   }
   const pct = Math.round(rate * 100) + "%";
   const cls = rate >= 0.5 ? "bad" : rate >= 0.2 ? "warn" : "ok";
-  return { pct, text: "近 7 日拦截率 " + pct + "（" + sample + " 条已审）", cls };
+  return { pct, text: T("hp.rate", { pct, n: sample }), cls };
 }
 
 // 纠正样本读数（纯函数）：沉淀的「AI 失误/协同」数据量。无样本则不渲染。
@@ -331,8 +401,8 @@ function correctionsModel(out) {
   if (!total) return { has: false, text: "" };
   const edit = _num(c, "edit");
   const ai = _num(c, "ai_assisted");
-  const aiPart = ai > 0 ? " · AI 协同 " + ai : "";
-  return { has: true, text: "纠正样本 " + total + " 条（改写 " + edit + aiPart + "）" };
+  const aiPart = ai > 0 ? T("hp.corr_ai", { n: ai }) : "";
+  return { has: true, text: T("hp.corr", { total, edit, ai: aiPart }) };
 }
 
 // 保存改写时的 action 载荷（纯函数）：据是否用过 AI 候选推断 source，凑黄金三元组。
@@ -344,25 +414,22 @@ function editSavePayload(id, text, aiSuggestion) {
   return { id, action: "edit", text: t, ai_suggestion: ai, source };
 }
 
-// 结构化拦截理由分类（P7）：code 稳定供聚类/ML，label 供展示。
-const REASON_OPTIONS = [
-  { code: "off_topic", label: "答非所问" },
-  { code: "tone", label: "语气不当" },
-  { code: "factual", label: "事实错误" },
-  { code: "over_boundary", label: "越界违规" },
-  { code: "redundant", label: "冗余" },
-  { code: "other", label: "其他" },
-];
+// 结构化拦截理由分类（P7）：**code 是持久化契约**（落 corrections 台账 → 聚类/DPO 样本），
+// 绝不因语言变化；label 只是当下语言的显示层，故按需 T() 取而非常量表烙死。
+const REASON_CODES = ["off_topic", "tone", "factual", "over_boundary", "redundant", "other"];
 
 function reasonLabel(code) {
-  const f = REASON_OPTIONS.find((o) => o.code === code);
-  return f ? f.label : String(code || "");
+  return REASON_CODES.indexOf(code) >= 0 ? T("hp.rsn_" + code) : String(code || "");
+}
+
+function reasonOptions() {
+  return REASON_CODES.map((code) => ({ code, label: reasonLabel(code) }));
 }
 
 // 拦截理由 chips（纯函数）：点「拦截」展开，点某分类即带结构化 reason 拦截。
 function renderInterceptChipsHtml(id) {
-  let html = '<span style="font-size:.66rem;color:#e74c3c;flex:0 0 auto">拦截原因：</span>';
-  for (const o of REASON_OPTIONS) {
+  let html = '<span style="font-size:.66rem;color:#e74c3c;flex:0 0 auto">' + _esc(T("hp.rsn_prompt")) + "</span>";
+  for (const o of reasonOptions()) {
     html += '<button data-cancel-reason="' + o.code + '" data-id="' + _esc(id) + '" '
       + 'style="font-size:.64rem;padding:.04rem .35rem;border:1px solid #e74c3c66;border-radius:5px;'
       + 'background:#e74c3c1a;color:#e74c3c;cursor:pointer;flex:0 0 auto">' + _esc(o.label) + "</button>";
@@ -383,7 +450,7 @@ function reasonClusterModel(out) {
   return {
     has: true,
     entries,
-    text: "失误聚类：" + entries.map((e) => e.label + " " + e.count).join(" · "),
+    text: T("hp.cluster", { list: entries.map((e) => e.label + " " + e.count).join(" · ") }),
   };
 }
 
@@ -400,33 +467,36 @@ function renderReviewHtml(review) {
   return '<div style="border:1px solid #f39c1255;background:#f39c120f;border-radius:8px;'
     + 'padding:.4rem .5rem;margin-bottom:.45rem">'
     + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.15rem">'
-    + '<strong style="font-size:.78rem;color:#f39c12">🔎 待审 ' + list.length + ' 条（先进先出）</strong>'
+    + '<strong style="font-size:.78rem;color:#f39c12">' + _esc(T("hp.review_hdr", { n: list.length })) + "</strong>"
     + '<span style="display:flex;gap:.3rem">'
     + '<button data-bulk="release" data-ids="' + _esc(ids) + '" style="font-size:.66rem;'
     + 'padding:.05rem .4rem;border:1px solid #2ecc7188;border-radius:5px;background:#2ecc7122;'
-    + 'color:#2ecc71;cursor:pointer">全部放行</button>'
+    + 'color:#2ecc71;cursor:pointer">' + _esc(T("hp.bulk_release")) + "</button>"
     + '<button data-bulk="cancel" data-ids="' + _esc(ids) + '" style="font-size:.66rem;'
     + 'padding:.05rem .4rem;border:1px solid #e74c3c88;border-radius:5px;background:#e74c3c22;'
-    + 'color:#e74c3c;cursor:pointer">全部拦截</button>'
+    + 'color:#e74c3c;cursor:pointer">' + _esc(T("hp.bulk_cancel")) + "</button>"
     + "</span></div>" + rows + "</div>";
 }
 
 // 行内编辑器 HTML（纯函数）：输入框 + AI 重写 + 保存 + 取消。供 startInlineEdit 装配、可单测。
 function renderInlineEditHtml(id) {
-  return '<input class="cp-ob-edit" type="text" placeholder="输入改写后的内容…" '
+  return '<input class="cp-ob-edit" type="text" placeholder="' + _esc(T("hp.edit_ph")) + '" '
     + 'style="flex:1;min-width:120px;font-size:.72rem;background:#0003;border:1px solid #ffffff33;'
     + 'border-radius:5px;color:inherit;padding:.15rem .35rem"/>'
-    + '<button data-edit-airewrite="' + _esc(id) + '" title="按客户会话上下文生成更好的候选，可再编辑后保存" '
+    + '<button data-edit-airewrite="' + _esc(id) + '" title="' + _esc(T("hp.ai_title")) + '" '
     + 'style="font-size:.66rem;padding:.05rem .4rem;border:1px solid #9b8cff88;border-radius:5px;'
-    + 'background:#9b8cff22;color:#9b8cff;cursor:pointer;flex:0 0 auto">AI 重写</button>'
+    + 'background:#9b8cff22;color:#9b8cff;cursor:pointer;flex:0 0 auto">' + _esc(T("hp.ai_btn")) + "</button>"
     + '<button data-edit-save="' + _esc(id) + '" style="font-size:.66rem;padding:.05rem .4rem;'
-    + 'border:1px solid #2ecc7188;border-radius:5px;background:#2ecc7122;color:#2ecc71;cursor:pointer;flex:0 0 auto">保存</button>'
+    + 'border:1px solid #2ecc7188;border-radius:5px;background:#2ecc7122;color:#2ecc71;cursor:pointer;flex:0 0 auto">'
+    + _esc(T("hp.save")) + "</button>"
     + '<button data-edit-cancel="1" style="font-size:.66rem;padding:.05rem .4rem;'
-    + 'border:1px solid #ffffff33;border-radius:5px;background:transparent;color:inherit;cursor:pointer;flex:0 0 auto">取消</button>';
+    + 'border:1px solid #ffffff33;border-radius:5px;background:transparent;color:inherit;cursor:pointer;flex:0 0 auto">'
+    + _esc(T("hp.cancel")) + "</button>";
 }
 
-// 完整面板 HTML（纯函数：便于单测，不碰 DOM）。alertsData 可选，给定时顶部渲染持续失配红框。
-function renderPanelHtml(injectData, outboundData, alertsData) {
+// 完整面板 HTML（纯函数：便于单测，不碰 DOM）。alertsData 可选，给定时顶部渲染持续失配红框；
+// campDiag 可选（活动海报判定行，P0 可诊断化）——缺省不渲染该行，旧调用零影响。
+function renderPanelHtml(injectData, outboundData, alertsData, campDiag) {
   const inj = injectData || {};
   const out = outboundData || {};
   const injB = injectBadge(inj.summary);
@@ -440,13 +510,13 @@ function renderPanelHtml(injectData, outboundData, alertsData) {
 
   let rows = "";
   if (!accounts.length) {
-    rows = '<div style="color:#7f8c8d;font-size:.74rem;padding:.3rem 0">暂无注入上报。</div>';
+    rows = '<div style="color:#7f8c8d;font-size:.74rem;padding:.3rem 0">' + _esc(T("hp.no_inject")) + "</div>";
   } else {
     for (const a of accounts) {
       const m = accountRowModel(a);
       const color = _CLS_COLOR[m.cls] || "#7f8c8d";
-      const dur = m.durationText ? ' · 已持续 ' + _esc(m.durationText) : "";
-      const staleTag = m.stale ? ' · <span style="color:#7f8c8d">数据陈旧</span>' : "";
+      const dur = m.durationText ? _esc(T("hp.for_duration", { d: m.durationText })) : "";
+      const staleTag = m.stale ? ' · <span style="color:#7f8c8d">' + _esc(T("hp.stale")) + "</span>" : "";
       rows += '<div style="display:flex;align-items:center;gap:.4rem;padding:.22rem 0;border-top:1px solid #ffffff14">'
         + '<span style="width:7px;height:7px;border-radius:50%;background:' + color + ';flex:0 0 auto"></span>'
         + '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.76rem">'
@@ -458,7 +528,7 @@ function renderPanelHtml(injectData, outboundData, alertsData) {
 
   let outRows = "";
   if (!recent.length) {
-    outRows = '<div style="color:#7f8c8d;font-size:.74rem;padding:.3rem 0">暂无出站命令（未开 desktop_bridge / 无 desktop 账号全自动回复）。</div>';
+    outRows = '<div style="color:#7f8c8d;font-size:.74rem;padding:.3rem 0">' + _esc(T("hp.no_outbound")) + "</div>";
   } else {
     for (const it of recent.slice(0, 8)) outRows += renderOutboundRowHtml(it);
   }
@@ -466,33 +536,41 @@ function renderPanelHtml(injectData, outboundData, alertsData) {
   return ''
     + '<div style="padding:.5rem .65rem">'
     + '  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.35rem">'
-    + '    <strong style="font-size:.82rem">🩺 自动化健康</strong>'
-    + '    <button id="cp-health-refresh" style="font-size:.72rem;padding:.12rem .55rem;border:1px solid #ffffff33;border-radius:6px;background:transparent;color:inherit;cursor:pointer">刷新</button>'
+    + '    <strong style="font-size:.82rem">' + _esc(T("hp.title")) + "</strong>"
+    + '    <button id="cp-health-refresh" style="font-size:.72rem;padding:.12rem .55rem;border:1px solid #ffffff33;border-radius:6px;background:transparent;color:inherit;cursor:pointer">'
+    + _esc(T("hp.refresh")) + "</button>"
     + "  </div>"
     + renderAlertsHtml(alertsData)
     + '  <div style="display:flex;flex-direction:column;gap:.5rem">'
     + '    <div>'
-    + '      <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.2rem"><span style="font-size:.76rem;color:#bbb">注入命中</span>' + _badgeHtml(injB) + "</div>"
+    + '      <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.2rem"><span style="font-size:.76rem;color:#bbb">'
+    + _esc(T("hp.sec_inject")) + "</span>" + _badgeHtml(injB) + "</div>"
     + rows
     + '      <div style="display:flex;gap:.35rem;align-items:center;margin-top:.4rem;flex-wrap:wrap">'
-    + '        <button id="cp-health-validate" style="font-size:.7rem;padding:.12rem .55rem;border:1px solid #ffffff33;border-radius:6px;background:transparent;color:inherit;cursor:pointer" title="校验 desktop_selector_profiles.json：JSON 是否合法、有无被忽略字段">校验覆写</button>'
-    + '        <button id="cp-health-reload" style="font-size:.7rem;padding:.12rem .55rem;border:1px solid #ffffff33;border-radius:6px;background:transparent;color:inherit;cursor:pointer" title="重载内嵌官方页 → 注入重拉选择器（热修保存后点此即时生效，无需重启）">重载注入</button>'
+    + '        <button id="cp-health-validate" style="font-size:.7rem;padding:.12rem .55rem;border:1px solid #ffffff33;border-radius:6px;background:transparent;color:inherit;cursor:pointer" title="'
+    + _esc(T("hp.validate_title")) + '">' + _esc(T("hp.validate_btn")) + "</button>"
+    + '        <button id="cp-health-reload" style="font-size:.7rem;padding:.12rem .55rem;border:1px solid #ffffff33;border-radius:6px;background:transparent;color:inherit;cursor:pointer" title="'
+    + _esc(T("hp.reload_title")) + '">' + _esc(T("hp.reload_btn")) + "</button>"
     + '        <span id="cp-health-tools-msg" style="font-size:.7rem;color:#7f8c8d"></span>'
     + "      </div>"
     + "    </div>"
     + '    <div>'
-    + '      <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.2rem;flex-wrap:wrap"><span style="font-size:.76rem;color:#bbb">受控出站</span>' + _badgeHtml(outB)
+    + '      <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.2rem;flex-wrap:wrap"><span style="font-size:.76rem;color:#bbb">'
+    + _esc(T("hp.sec_outbound")) + "</span>" + _badgeHtml(outB)
     + '<span style="font-size:.68rem;color:' + (_CLS_COLOR[rateM.cls] || "#7f8c8d") + '">' + _esc(rateM.text) + "</span>"
-    + (corrM.has ? '<span style="font-size:.68rem;color:#9b8cff" title="人审改写/拦截沉淀的 AI 失误样本，供离线调优">' + _esc(corrM.text) + "</span>" : "")
-    + (corrM.has ? '<button id="cp-corr-export" title="导出 JSONL 偏好对（rejected/chosen），喂 DPO/eval" style="font-size:.64rem;padding:.03rem .35rem;border:1px solid #9b8cff66;border-radius:5px;background:#9b8cff1a;color:#9b8cff;cursor:pointer">导出样本</button>' : "")
+    + (corrM.has ? '<span style="font-size:.68rem;color:#9b8cff" title="' + _esc(T("hp.corr_title")) + '">' + _esc(corrM.text) + "</span>" : "")
+    + (corrM.has ? '<button id="cp-corr-export" title="' + _esc(T("hp.export_title"))
+      + '" style="font-size:.64rem;padding:.03rem .35rem;border:1px solid #9b8cff66;border-radius:5px;background:#9b8cff1a;color:#9b8cff;cursor:pointer">'
+      + _esc(T("hp.export_btn")) + "</button>" : "")
     + '<span id="cp-corr-export-msg" style="font-size:.66rem;color:#7f8c8d"></span>'
     + "</div>"
-    + (clusterM.has ? '<div style="font-size:.66rem;color:#c39bd3;margin:.05rem 0 .1rem" title="人审拦截按原因聚类，看 AI 最常错在哪类">' + _esc(clusterM.text) + "</div>" : "")
+    + (clusterM.has ? '<div style="font-size:.66rem;color:#c39bd3;margin:.05rem 0 .1rem" title="' + _esc(T("hp.cluster_title")) + '">' + _esc(clusterM.text) + "</div>" : "")
     + renderReviewHtml(review)
     + outRows
     + "    </div>"
     + "  </div>"
-    + '  <div style="margin-top:.45rem;font-size:.68rem;color:#7f8c8d">每 10 秒自动刷新 · 持续失配可改 config/desktop_selector_profiles.json 热修</div>'
+    + renderCampaignRowHtml(campDiag)
+    + '  <div style="margin-top:.45rem;font-size:.68rem;color:#7f8c8d">' + _esc(T("hp.footer")) + "</div>"
     + "</div>";
 }
 
@@ -505,7 +583,9 @@ if (typeof module !== "undefined" && module.exports) {
     interceptRateModel, renderReviewHtml, correctionsModel,
     renderInlineEditHtml, editSavePayload, slaBreachModel,
     reasonLabel, renderInterceptChipsHtml, reasonClusterModel,
-    selectorDiagnosisModel,
+    selectorDiagnosisModel, campaignDiagModel, renderCampaignRowHtml,
+    // 持久化契约（落台账/供聚类）+ 显示层分离后的可断言面
+    REASON_CODES, SELECTOR_KEYS, reasonOptions, selectorLabel,
   };
 }
 
@@ -567,14 +647,12 @@ if (typeof document !== "undefined" && document.addEventListener) {
         slaWarnNotified = true;  // 已越过 warn 阶段
         if (!slaUrgentNotified) {
           slaUrgentNotified = true;
-          _notify("🔴 待审严重超时",
-            sla.count + " 条 AI 回复待审已超 " + mins + " 分钟，客户极可能流失，请立即处理");
+          _notify(T("hp.sla_urgent_title"), T("hp.sla_urgent_body", { n: sla.count, mins }));
         }
       } else if (sla.level === "warn") {
         if (!slaWarnNotified) {
           slaWarnNotified = true;
-          _notify("待审超时",
-            sla.count + " 条 AI 回复待人工审核已超 " + mins + " 分钟，请尽快放行/改写");
+          _notify(T("hp.sla_warn_title"), T("hp.sla_warn_body", { n: sla.count, mins }));
         }
       } else {
         slaWarnNotified = false;
@@ -600,12 +678,13 @@ if (typeof document !== "undefined" && document.addEventListener) {
     async function refresh() {
       if (!window.shell || !window.shell.injectHealthList) return;
       try {
-        const [inj, out, al] = await Promise.all([
+        const [inj, out, al, camp] = await Promise.all([
           window.shell.injectHealthList({}).catch(() => ({})),
           window.shell.outboundStats({}).catch(() => ({})),
           window.shell.injectAlerts ? window.shell.injectAlerts({}).catch(() => ({})) : Promise.resolve({}),
+          window.shell.campaignDiag ? window.shell.campaignDiag().catch(() => null) : Promise.resolve(null),
         ]);
-        panel.innerHTML = renderPanelHtml(inj, out, al);
+        panel.innerHTML = renderPanelHtml(inj, out, al, camp);
         applyHealth(inj, al, out);
         const rb = document.getElementById("cp-health-refresh");
         if (rb) rb.addEventListener("click", () => { refresh().catch(() => {}); });
@@ -614,12 +693,12 @@ if (typeof document !== "undefined" && document.addEventListener) {
           fx.addEventListener("click", async () => {
             fx.disabled = true;
             const prev = fx.textContent;
-            fx.textContent = "打开中…";
+            fx.textContent = T("hp.opening");
             try {
               const r = await window.shell.openSelectors();
-              fx.textContent = r && r.ok ? "已打开 ✓" : "打开失败";
+              fx.textContent = r && r.ok ? T("hp.opened") : T("hp.open_failed");
             } catch (e) {
-              fx.textContent = "打开失败";
+              fx.textContent = T("hp.open_failed");
             }
             setTimeout(() => { fx.textContent = prev; fx.disabled = false; }, 2500);
           });
@@ -628,7 +707,7 @@ if (typeof document !== "undefined" && document.addEventListener) {
         const vb = document.getElementById("cp-health-validate");
         if (vb && window.shell && window.shell.validateSelectors) {
           vb.addEventListener("click", async () => {
-            if (toolsMsg) toolsMsg.textContent = "校验中…";
+            if (toolsMsg) toolsMsg.textContent = T("hp.validating");
             try {
               const r = await window.shell.validateSelectors();
               const m = formatValidateResult(r);
@@ -637,7 +716,7 @@ if (typeof document !== "undefined" && document.addEventListener) {
                 toolsMsg.style.color = _CLS_COLOR[m.cls] || "#7f8c8d";
               }
             } catch (e) {
-              if (toolsMsg) toolsMsg.textContent = "校验失败";
+              if (toolsMsg) toolsMsg.textContent = T("hp.val_fail_short");
             }
           });
         }
@@ -646,22 +725,22 @@ if (typeof document !== "undefined" && document.addEventListener) {
         if (ex && window.shell && window.shell.exportCorrections) {
           ex.addEventListener("click", async () => {
             ex.disabled = true;
-            if (exMsg) { exMsg.textContent = "导出中…"; exMsg.style.color = "#7f8c8d"; }
+            if (exMsg) { exMsg.textContent = T("hp.exporting"); exMsg.style.color = "#7f8c8d"; }
             try {
               const r = await window.shell.exportCorrections({});
               if (exMsg) {
                 if (r && r.ok) {
-                  exMsg.textContent = "已导出 " + r.count + " 条 ✓";
+                  exMsg.textContent = T("hp.exported", { n: r.count });
                   exMsg.style.color = "#2ecc71";
                 } else if (r && r.canceled) {
                   exMsg.textContent = "";
                 } else {
-                  exMsg.textContent = (r && r.error) || "导出失败";
+                  exMsg.textContent = (r && r.error) || T("hp.export_failed");
                   exMsg.style.color = "#e74c3c";
                 }
               }
             } catch (e) {
-              if (exMsg) { exMsg.textContent = "导出失败"; exMsg.style.color = "#e74c3c"; }
+              if (exMsg) { exMsg.textContent = T("hp.export_failed"); exMsg.style.color = "#e74c3c"; }
             }
             ex.disabled = false;
           });
@@ -673,15 +752,14 @@ if (typeof document !== "undefined" && document.addEventListener) {
             let n = 0;
             wvs.forEach((wv) => { try { wv.reload(); n++; } catch (e) { /* 忽略单个失败 */ } });
             if (toolsMsg) {
-              toolsMsg.textContent = n ? "已重载 " + n + " 个内嵌页（注入将重拉选择器）"
-                : "无内嵌官方页（当前为人工操作台模式）";
+              toolsMsg.textContent = n ? T("hp.reloaded", { n }) : T("hp.reload_none");
               toolsMsg.style.color = "#7f8c8d";
             }
           });
         }
       } catch (e) {
-        panel.innerHTML = '<div style="padding:.6rem;color:#e74c3c;font-size:.76rem">读取健康数据失败：'
-          + _esc(String(e)) + "</div>";
+        panel.innerHTML = '<div style="padding:.6rem;color:#e74c3c;font-size:.76rem">'
+          + _esc(T("hp.read_failed", { err: String(e) })) + "</div>";
       }
     }
 
@@ -725,7 +803,7 @@ if (typeof document !== "undefined" && document.addEventListener) {
         const ids = (bulk.getAttribute("data-ids") || "").split(",").map(Number).filter(Boolean);
         if (ids.length && window.shell && window.shell.outboundAction) {
           if (action === "cancel" && typeof window.confirm === "function"
-              && !window.confirm("确认拦截全部 " + ids.length + " 条待审命令？此操作不可撤销。")) {
+              && !window.confirm(T("hp.confirm_bulk_cancel", { n: ids.length }))) {
             return;
           }
           bulk.disabled = true;
@@ -742,17 +820,17 @@ if (typeof document !== "undefined" && document.addEventListener) {
         if (!id || !window.shell || !window.shell.outboundRewrite) return;
         const prev = air.textContent;
         air.disabled = true;
-        air.textContent = "生成中…";
+        air.textContent = T("hp.generating");
         try {
           const r = await window.shell.outboundRewrite({ id });
           if (r && r.ok && r.reply) {
             if (inp) { inp.value = r.reply; inp.dataset.aiSuggestion = r.reply; inp.focus(); }
-            air.textContent = "已填入 ✓";
+            air.textContent = T("hp.ai_filled");
           } else {
-            air.textContent = r && r.detail ? "无上下文" : "失败";
+            air.textContent = r && r.detail ? T("hp.no_context") : T("hp.failed_short");
           }
         } catch (_) {
-          air.textContent = "失败";
+          air.textContent = T("hp.failed_short");
         }
         setTimeout(() => { air.textContent = prev; air.disabled = false; }, 2500);
         return;

@@ -789,30 +789,26 @@ class TelegramSenderMixin:
                 pass
             # WP-4 rider ① 系统级披露（compliance.disclosure.notice，基线关）：
             # 每会话首条 AI 出站前置披露语，持久防重键=conv_id（与 B 线 autosend /
-            # 协议线同键空间——任一条线先披露过，其余线不再重复）。刻意放在
-            # 质量管道之后（披露语是系统文案，不过改写/复读检测），且只挂文本
+            # 协议线/主动触达同键空间——任一条线先披露过，其余线不再重复）。刻意
+            # 放在质量管道之后（披露语是系统文案，不过改写/复读检测），且只挂文本
             # 发送口（克隆声绝不念披露语；语音先行的会话由首条文本回复补披露，
             # 标记只在真应用时才烧）。分块发送天然只中首块（首块烧标记后
             # 同回复后续块查标记即跳过）。任何异常＝原样发送，绝不阻断回复。
             try:
-                from src.compliance.disclosure import apply_disclosure
-                from src.compliance.runtime import runtime_config
+                from src.compliance.disclosure import apply_disclosure_for
                 from src.inbox.normalizer import conv_id as _dc_conv_id
-                _dc_cid = _dc_conv_id(
-                    "telegram",
-                    str(getattr(self, "account_id", "default") or "default"),
-                    str(original_message.chat.id))
-                _dc_lh = ""
+                _dc_store = None
                 try:
-                    from src.inbox.outbound_translate import peer_language_hint
                     from src.integrations.protocol_bridge import get_inbox_store
                     _dc_store = get_inbox_store()
-                    if _dc_store is not None:
-                        _dc_lh = peer_language_hint(_dc_store, _dc_cid) or ""
                 except Exception:
-                    _dc_lh = ""
-                _out_text, _ = apply_disclosure(
-                    runtime_config(), _dc_cid, _out_text, lang_hint=_dc_lh)
+                    _dc_store = None
+                _out_text, _ = apply_disclosure_for(
+                    _dc_conv_id(
+                        "telegram",
+                        str(getattr(self, "account_id", "default") or "default"),
+                        str(original_message.chat.id)),
+                    _out_text, store=_dc_store)
             except Exception:
                 self.logger.debug("[披露] 注入异常（原样发送）", exc_info=True)
             _rt = self._reply_to_message_id_for_send(original_message)
@@ -1158,6 +1154,59 @@ class TelegramSenderMixin:
             self._handle_send_exc(e)   # G2 分级急停 + 实施31 TG 告警（best-effort）
             return False
 
+    async def send_voice_file(self, chat_id: Any, voice_path: str,
+                              caption: str = "", mirror_note: str = "") -> bool:
+        """A 线主客户端直发**现成语音文件**（预渲染唱段等；实施66 P0-1 直发缝）。
+
+        与 ``send_photo`` 同一套发送前护栏/节流/外发记账/出站镜像——A 线绕过
+        编排器的媒体直发缝必须自带风控四件套，否则唱段成旁路。转码/跨 loop
+        由 ``voice_sender`` 承担（备货是标准 OggS+OpusHead → 魔数放行零重编码）。
+        失败绝不抛、返回 False（调用方回落文字）。``mirror_note``＝收件箱镜像
+        正文（如 ``[唱歌]《月光》♪ 首句``），缺省 ``[语音]``。
+        """
+        try:
+            if not self.client:
+                self.logger.error("客户端未初始化")
+                return False
+            if not voice_path:
+                return False
+            if self._presend_blocked():
+                self.logger.info("语音文件发送被发送前护栏拦截，跳过（chat=%s）", chat_id)
+                return False
+            await self._presend_pace()
+            from src.client.voice_sender import (
+                probe_audio_duration_ms, send_telegram_voice,
+            )
+            _dur_ms = probe_audio_duration_ms(voice_path)
+            # 变量名刻意不以 sent 结尾：test_outbound_media_mirror 的归档窗口钉
+            # 按「sent =」+发送调用的**首现子串**定锚，本方法位置靠前撞名会抢锚。
+            _msg = await send_telegram_voice(
+                self.client, chat_id, voice_path,
+                duration=(max(1, int(_dur_ms / 1000)) if _dur_ms else None),
+                caption=(caption or None))
+            if not _msg:
+                return False
+            # 发送已成功——之后的记账/镜像失败绝不能把「已送达」误报成 False
+            # （调用方会回落文字=客户收到双份）。
+            try:
+                self._postsend_record_count()
+                _note = (mirror_note or "").strip() or "[语音]"
+                _mt, _mref = self._publish_media_ref(voice_path)
+                self._postsend_mirror_and_record(
+                    chat_id, _note,
+                    msg_id=str(getattr(_msg, "id", "") or ""),
+                    media_type="voice", media_ref=_mref,
+                    mirror_text=(caption or "").strip())
+            except Exception:
+                self.logger.debug("语音文件镜像/记账失败（送达不受影响）",
+                                  exc_info=True)
+            self.logger.info("已发送语音文件到 %s（%s）", chat_id, voice_path)
+            return True
+        except Exception as e:
+            self.logger.error("发送语音文件失败: %s", e)
+            self._handle_send_exc(e)   # G2 分级急停（与图/文同口径）
+            return False
+
     async def _send_escalation_private_jump_hint(
         self,
         peer: Any,
@@ -1303,6 +1352,28 @@ class TelegramSenderMixin:
             if not vr_cfg.get("enabled", False):
                 self.logger.warning("[voice_reply] skip: enabled=false (section=%s)", "found" if vr_cfg else "missing")
                 return False
+            # B120（实施74）：全局「启用语音回复」显式关闭 → A 线自动语音同样
+            # 禁声（统一闸；telegram.voice_reply.enabled 是本链自己的开关，
+            # 全局显式关时两者取 AND——键缺席不影响存量行为）。
+            from src.inbox.voice_autosend import global_voice_reply_off
+            if global_voice_reply_off(raw_cfg):
+                self.logger.info(
+                    "[voice_reply] skip: 全局「启用语音回复」显式关闭（B120 统一闸）")
+                return False
+            # 报障群/支持账号语音压制（bug_intake，2026-08-18）：支持人设没有
+            # 克隆声，放行会落到全局 voice_profile 的陪伴参考音（错声=「换人」
+            # 级穿帮）；报障群场景也不该有语音条。
+            try:
+                from src.ops.bug_intake import voice_suppressed
+                if voice_suppressed(
+                        raw_cfg,
+                        getattr(getattr(original_message, "chat", None),
+                                "id", ""),
+                        getattr(self, "account_id", "")):
+                    self.logger.info("[voice_reply] skip: bug_intake 压制")
+                    return False
+            except Exception:
+                pass
 
             trigger = str(vr_cfg.get("trigger", "when_peer_voice")).strip().lower()
             if trigger == "never":

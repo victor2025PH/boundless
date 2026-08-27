@@ -23,6 +23,7 @@ from src.companion.goals.stats import get_goal_stats
 from src.companion.goals.store import GoalStore, get_goal_store
 from src.companion.goals.templates import (
     get_template,
+    intent_en_for,
     milestone_label,
 )
 
@@ -353,16 +354,23 @@ def goal_view(
         "start_ts": start,
         "deadline_ts": deadline,
         "result": str(goal.get("result") or ""),
+        # 终局时刻（done/failed/expired 统一落在 done_at；0=未终局或旧行）——
+        # 终局卡「用时 X 天」显示用（P0 2026-08-18），additive 字段零消费方破坏。
+        "done_at": float(goal.get("done_at") or 0),
         "created_at": float(goal.get("created_at") or 0),
         "updated_at": float(goal.get("updated_at") or 0),
         "hold": hold,
         "today": None,
     }
     if action is not None:
+        _intent = str(action.get("intent") or "")
         view["today"] = {
             "action_id": str(action.get("action_id") or ""),
             "day": str(action.get("day") or ""),
-            "intent": str(action.get("intent") or ""),
+            "intent": _intent,
+            # i18n P0（2026-08-19）：英文展示态文案（同池反查；匹配不到=""，
+            # 前端回落中文原文）。intent 本体保持中文权威口径不动。
+            "intent_en": intent_en_for(template, goal.get("params") or {}, _intent),
             "push_level": str(action.get("push_level") or "soft"),
             "status": str(action.get("status") or "planned"),
             # detail 透传：坐席「采纳」标记（"adopted"）/驳回原因（"rejected:*"）
@@ -427,6 +435,8 @@ def agenda_item(view: Dict[str, Any]) -> Dict[str, Any]:
         "milestone_idx": int(view.get("milestone_idx") or 0),
         "milestone_label": str(view.get("milestone_label") or ""),
         "intent": str((today or {}).get("intent") or ""),
+        # additive（i18n P0）：英文展示态；旧消费方不读此键零影响
+        "intent_en": str((today or {}).get("intent_en") or ""),
         "push_level": str((today or {}).get("push_level") or "none"),
         "hold": str(view.get("hold") or ""),
         "feedback": beat_feedback_state(today),

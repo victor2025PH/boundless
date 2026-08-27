@@ -203,9 +203,13 @@ def test_unified_inbox_profile_endpoint_returns_contact_shape():
     data = resp.json()
     profile = data["profile"]
     assert profile["display_name"] == "TG User"
-    assert profile["relationship"]["stage"] in {"初识", "升温", "稳定陪伴"}
+    # i18n P0 缺口回填（2026-08-20）：stage 走 inbox.rel.stage.* 词典（warming 从
+    # 旧「升温」对齐为系统统一叫法「试探/升温」）；载荷新增 stage_key 机器码
+    assert profile["relationship"]["stage"] in {"初识", "试探/升温", "稳定陪伴"}
+    assert profile["relationship"]["stage_key"] in {"initial", "warming", "steady"}
     assert profile["activity"]["message_count"] == 2
     assert "tags" in profile
+    assert len(profile.get("tags_keys") or []) == len(profile.get("tags") or [])
 
 
 def test_unified_inbox_automation_mode_roundtrip():

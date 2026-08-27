@@ -170,6 +170,32 @@ class LicenseQuotaStore:
             logger.debug("[license_quota] usage_history 读取失败（空表）", exc_info=True)
             return []
 
+    def daily_totals(self, lic_id: str, days: int = 7) -> list:
+        """最近 N 天逐日消耗（旧→新，缺日补零）。「预计耗尽」外推的数据源。
+
+        与用量页客户端版算式同口径（remaining ÷ 日均）；quotawall v2 起算式
+        上移服务端（quota_state.forecast_exhaustion），顶栏 tooltip / 预警条 /
+        会员页共用同一个数字。读失败返回空表（外推层按「无法预测」处理）。
+        """
+        import time as _t
+
+        n = max(1, min(int(days or 7), 90))
+        base = _t.time()
+        day_keys = [_day_str(base - i * 86400) for i in range(n - 1, -1, -1)]
+        got: Dict[str, int] = {}
+        try:
+            with self._lock:
+                for r in self._conn.execute(
+                    "SELECT day, SUM(chars) AS s FROM license_char_usage "
+                    "WHERE lic_id = ? AND day >= ? GROUP BY day",
+                    (str(lic_id or "default"), day_keys[0]),
+                ).fetchall():
+                    got[str(r["day"])] = int(r["s"] or 0)
+        except Exception:
+            logger.debug("[license_quota] daily_totals 读取失败（空表）", exc_info=True)
+            return []
+        return [got.get(k, 0) for k in day_keys]
+
     # ── 字符加量包（charpack，融合实例 P4b）────────────────────────────────
     #
     # lingox-charpack 等「买字符包」订单的入账通道：license payload 的
@@ -227,6 +253,37 @@ class LicenseQuotaStore:
             return [dict(r) for r in rows]
         except Exception:
             return []
+
+    def topup_daily_counts(self, lic_id: str, days: int = 14) -> list:
+        """最近 N 天逐日入账聚合（旧→新，缺日补零；``{day,n,chars}``）。
+
+        额度墙漏斗卡「服务端到账真值」口径（quotawall v2 P2.5）：``qw_credited``
+        埋点只统计「坐席开着页面等到 watch 侦测命中」的场景，页面关早了就漏计；
+        本表每行都是一笔真实到账（凭证兑换/手工直充/自动履约共用 add_topup），
+        按日聚合即对账真值。created_at 为 UTC ``YYYY-MM-DD HH:MM:SS`` 文本 →
+        与日键前缀字典序可比。读失败返回空表。
+        """
+        import time as _t
+
+        n_days = max(1, min(int(days or 14), 90))
+        base = _t.time()
+        day_keys = [_day_str(base - i * 86400) for i in range(n_days - 1, -1, -1)]
+        got: Dict[str, Dict[str, int]] = {}
+        try:
+            with self._lock:
+                for r in self._conn.execute(
+                    "SELECT substr(created_at, 1, 10) AS d, COUNT(*) AS n, "
+                    "COALESCE(SUM(chars), 0) AS s FROM license_char_topup "
+                    "WHERE lic_id = ? AND created_at >= ? GROUP BY d",
+                    (str(lic_id or "default"), day_keys[0]),
+                ).fetchall():
+                    got[str(r["d"])] = {"n": int(r["n"] or 0),
+                                        "chars": int(r["s"] or 0)}
+        except Exception:
+            logger.debug("[license_quota] topup_daily_counts 读取失败（空表）",
+                         exc_info=True)
+            return []
+        return [{"day": k, **got.get(k, {"n": 0, "chars": 0})} for k in day_keys]
 
 
 # ── 模块级单例 + 惰性建库（治理随授权走）────────────────────────────────────
@@ -444,6 +501,54 @@ def check_license_quota(*, lic_status: Any = None) -> Dict[str, Any]:
     return out
 
 
+def current_daily_totals(days: int = 7, *, lic_id: str = "") -> list:
+    """当前生效水表（正式授权或体验档）最近 N 天逐日消耗（旧→新，缺日补零）。
+
+    ``lic_id`` 给则直查（quota_state 已从 check 结果拿到，免二次解析）；缺省
+    自解析一次（含体验档合并语义，与 check_license_quota 同源）。无水表/
+    不限量/任何异常 → []（外推层据此显示「无法预测」而不是编数字）。
+    """
+    try:
+        lid = str(lic_id or "")
+        if not lid:
+            q = check_license_quota()
+            if int(q.get("included") or 0) <= 0:
+                return []
+            lid = str(q.get("lic_id") or "")
+        if not lid:
+            return []
+        store = _ensure_store()
+        if store is None:
+            return []
+        return store.daily_totals(lid, days)
+    except Exception:
+        logger.debug("[license_quota] current_daily_totals 失败（空表）", exc_info=True)
+        return []
+
+
+def current_topup_daily(days: int = 14, *, lic_id: str = "") -> list:
+    """当前生效水表最近 N 天逐日入账（服务端到账真值；quotawall v2 P2.5）。
+
+    lic_id 解析与 ``current_daily_totals`` 同源（缺省自解析，含体验档合并语义）；
+    刻意**不**按 included>0 闸——不限量授权也可能收到加量入账，如实回列。
+    无授权/任何异常 → []（漏斗卡对账行缺席，不编数字）。
+    """
+    try:
+        lid = str(lic_id or "")
+        if not lid:
+            q = check_license_quota()
+            lid = str(q.get("lic_id") or "")
+        if not lid:
+            return []
+        store = _ensure_store()
+        if store is None:
+            return []
+        return store.topup_daily_counts(lid, days)
+    except Exception:
+        logger.debug("[license_quota] current_topup_daily 失败（空表）", exc_info=True)
+        return []
+
+
 def add_license_topup(
     chars: int, ref: str, note: str = "", *, lic_status: Any = None,
 ) -> Dict[str, Any]:
@@ -485,6 +590,8 @@ __all__ = [
     "add_license_topup",
     "check_license_quota",
     "configure_license_quota_store",
+    "current_daily_totals",
+    "current_topup_daily",
     "get_license_quota_store",
     "record_license_chars",
     "reset_license_quota_store",

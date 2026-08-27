@@ -22,24 +22,27 @@ import urllib.request
 # Windows 控制台默认 GBK，简介含 emoji 会打印崩溃
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-WS = r"D:\workspace"
-LOGOS = os.path.join(WS, "ai-p0-integration", "website", "public", "brand", "logos")
-ENV_LOCAL = os.path.join(WS, "telegram-mtproto-ai", "website", ".env.local")
+# 路径按脚本自身位置推导（2026-08-21 修正：旧 D:\workspace\ai-p0-integration /
+# telegram-mtproto-ai 布局已不存在，写死绝对路径在仓库迁移后全部失效）。
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LOGOS = os.path.join(_REPO, "website", "public", "brand", "logos")
+ENV_LOCAL = os.path.join(_REPO, "website", ".env.local")
 
 CHANNEL = "@hykj7"
 GROUP = "@hykjz"
 
-# 与 tg-broadcast.ts::CHANNEL_BRAND 逐字一致
+# 与 tg-broadcast.ts::CHANNEL_BRAND 同步（2026-08-21 起主推智聊 ChatX；本文件多一句防假冒提示）
 CHANNEL_TITLE = "无界科技 BOUNDLESS · 官方频道"
 CHANNEL_DESC = (
     "无界科技官方频道 · 让沟通，无界。"
-    "🎯智连（智拓获客·智聊AI成交）🎭幻境（幻颜换脸·幻声克隆·幻影直播分身）🌐通达（通译翻译·通传同传）。"
-    "真实案例 · 新功能 · 限时优惠第一时间发布 · USDT 结算。"
+    "主推 💬智聊 ChatX：统一收件箱＋AI 自动成交＋拟人互译，下载即免费开始。"
+    "另有 🎯真机获客 🎭换脸 🎙克隆声音 🎬直播分身 🔐私有部署。"
+    "新功能 · 限时优惠第一时间发布 · USDT 结算。"
     "⚠️官方客服头像带「客服」徽标，谨防假冒。官网与客服见置顶。"
 )
 GROUP_TITLE = "无界科技 · 交流群"
 GROUP_DESC = (
-    "无界科技官方交流群 · 三系七款：智拓获客/智聊AI成交/幻颜换脸/幻声克隆/幻影直播分身/通译翻译/通传同传。"
+    "无界科技官方交流群 · 主聊 💬智聊 ChatX（收件箱/AI 成交/翻译），也聊换脸、克隆声音、直播分身。"
     "提问、领试用、同行交流。⚠️官方客服头像带「客服」徽标，谨防假冒。"
     "@小界 或点客服随时响应；广告与刷屏将被移除。"
 )
@@ -49,6 +52,11 @@ def read_token():
     tok = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     if tok:
         return tok
+    if not os.path.exists(ENV_LOCAL):
+        raise SystemExit(
+            "no TELEGRAM_BOT_TOKEN: set the env var, or run on the server where "
+            "website/.env.local exists (or use POST /api/telegram/setup instead)"
+        )
     with open(ENV_LOCAL, encoding="utf-8") as f:
         m = re.search(r"^TELEGRAM_BOT_TOKEN=(\S+)", f.read(), re.M)
     if not m:

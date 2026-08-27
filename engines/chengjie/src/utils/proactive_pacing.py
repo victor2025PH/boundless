@@ -207,6 +207,71 @@ def backoff_exhausted(streak: int, backoff_cfg: Optional[Dict[str, Any]]) -> boo
     return stop > 0 and int(streak or 0) >= stop
 
 
+# ── P1 已读/未读分流（2026-08-18）───────────────────────────────────────────
+# 未回退避此前把「看了没回」和「压根没看到」当同一种信号。已读回执数据其实
+# 一直在库里（P4-4 UpdateReadHistoryOutbox → messages.status='read'，生产覆盖率
+# 82%），只是没人消费。语义分流：
+#   read（已读不回）＝软拒绝 → 退避更陡（multiplier 换 read_multiplier，默认 4）；
+#   unread（未读）＝没看到 ≠ 拒绝 → 首次未读不惩罚（折算 streak 向下取整，
+#     streak1×0.5→0＝按正常节奏再试一次，换个时间对方可能就看到了）；
+#     连续 ≥mute_after_unread（默认 2）条未读 → 疑似被静音/归档 → 冷却抬到
+#     月频地板（再发只是往人家永远不看的箱子里堆料）；
+#   unknown（非 TG / 无回执）→ 原退避语义，零行为变化。
+# 默认关（unread 首次折零会**增发**，非纯保守收敛，须运营 overlay 显式开）。
+
+def parse_read_aware_cfg(
+    proactive_cfg: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """从 ``companion.proactive_topic.read_aware`` 解析（缺省 enabled=false）。"""
+    pc = proactive_cfg or {}
+    blk = pc.get("read_aware") if isinstance(pc.get("read_aware"), dict) else {}
+
+    def _f(key: str, default: float) -> float:
+        try:
+            return float(blk.get(key, default) or default)
+        except (TypeError, ValueError):
+            return default
+
+    return {
+        "enabled": bool(blk.get("enabled", False)),
+        "read_multiplier": max(1.0, _f("read_multiplier", 4.0)),
+        "unread_discount": min(1.0, max(0.0, _f("unread_discount", 0.5))),
+        "mute_after_unread": max(0, int(_f("mute_after_unread", 2.0))),
+        "mute_cooldown_hours": max(1.0, _f("mute_cooldown_hours", 720.0)),
+    }
+
+
+def read_aware_cooldown_hours(
+    base_hours: float,
+    streak: int,
+    read_state: str,
+    backoff_cfg: Optional[Dict[str, Any]],
+    read_cfg: Optional[Dict[str, Any]],
+) -> float:
+    """按最后一条出站的已读态分流未回退避冷却。
+
+    ``read_state`` ∈ ``read``/``unread``/其他（含 ""=unknown）。read_cfg 未启用
+    或 state 未知 → 与 ``backoff_cooldown_hours`` 逐位一致（旧行为）。
+    """
+    st = int(streak or 0)
+    rc = read_cfg or {}
+    state = str(read_state or "").strip().lower()
+    if not rc.get("enabled") or st <= 0 or state not in ("read", "unread"):
+        return backoff_cooldown_hours(base_hours, st, backoff_cfg)
+    if state == "read":
+        # 已读不回：换更陡的倍率，封顶沿用 backoff_cfg 的 max_backoff_hours
+        steep = dict(backoff_cfg or {"enabled": True})
+        steep["multiplier"] = float(rc.get("read_multiplier", 4.0))
+        return backoff_cooldown_hours(base_hours, st, steep)
+    # unread：折算 streak 向下取整（首次未读=0=正常节奏换个时段再试）
+    eff = int(st * float(rc.get("unread_discount", 0.5)))
+    cool = backoff_cooldown_hours(base_hours, eff, backoff_cfg)
+    mute_after = int(rc.get("mute_after_unread", 2) or 0)
+    if mute_after > 0 and st >= mute_after:
+        cool = max(cool, float(rc.get("mute_cooldown_hours", 720.0)))
+    return cool
+
+
 # ── P2 回复率反哺（2026-07-29）────────────────────────────────────────────────
 # streak 是**急性**信号（这一轮连着没回几条）；长期回复率是**慢性**信号（TA 历来
 # 回不回我们的主动开场）。账本 obs_n/obs_replied 半衰滑窗累计「主动→是否得到回应」，

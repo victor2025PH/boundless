@@ -38,7 +38,17 @@ _REPO = pathlib.Path(__file__).resolve().parents[1]
 TEMPLATES_ROOT = _REPO / "src/web/templates"
 THEME_CSS = _REPO / "src/web/static/theme-tokens.css"
 
-_STYLE_ATTR = re.compile(r"""style\s*=\s*("([^"]*)"|'([^']*)')""", re.IGNORECASE)
+# 前置词界 `(?<![\w-])` 是必需的，不是防御性写法：没有它，`re.IGNORECASE` 会让
+# **JS canvas 的 `g.fillStyle = '#fcd34d'` / `strokeStyle = 'rgba(...)'` 整片命中**
+# （"fillStyle" 的尾巴就是 "style"）。2026-08-22 实锤：membership.html 的邀请海报
+# 渲染器（canvas 逐行画字）被记成 11 处「内联硬编码色」，是当时台账上最大的一笔，
+# 而该文件真实计数是 0。后果不只是数字虚高——它让门禁**指着一个没做错事的文件**，
+# 于是每条来看的线都在 membership.html 里翻到一堆 canvas 代码、合理地判断「这跟内联
+# style 无关，不是我的事」然后走开；红灯因此在共享账本上挂了 76 小时无人认领，把
+# 另外三个**真**违规一起埋了。canvas 绘图色本就在本门禁射程外（见上方口径第 4 条：
+# JS 动态色另行治理），所以这是纯假阳性，修掉零成本。
+_STYLE_ATTR = re.compile(
+    r"""(?<![\w-])style\s*=\s*("([^"]*)"|'([^']*)')""", re.IGNORECASE)
 _COLOR = re.compile(r"#[0-9a-fA-F]{3,8}\b|rgba?\(")
 
 # ── 账本：文件 → 含硬编码颜色的内联 style 属性数天花板（只许降不许升） ──
@@ -49,20 +59,30 @@ _INLINE_COLOR_CEILINGS = {
     # 2026-08-06 登记：告警接通共享部件（暖色横幅+弹窗，2026-08-05 alertlink 线新建，
     # 未提交在途设计）——横幅刻意用固定暖棕/奶油色（跨主题恒定的告警视觉），
     # token 化归属其 owner 线；先登记保 sweep 绿 + 债务可见（台账语义与 _PENDING_* 同）。
-    "_alertlink_connect.html": 6,
-    # 2026-08-10 登记（清账线代记，owner=goal 报表线，其意向已标 DEPLOYED 未跑广域
-    # 门禁）：新页 6 处=弹层说明行×2 + 趋势图轴标/图例/赢单圆点×3 + 热力格 JS 拼
-    # rgba 动态透明度×1。该页暗色适配整体未做（卡片底 #fff 硬编码），token 化应与
-    # 暗色适配一起由 owner 线做，勿单点替换致半暗怪胎。数值取自门禁实测。
-    "goal_report.html": 6,
+    # 2026-08-27 实施75 batch2：未接通横幅（暖棕渐变+奶油字）随顶部退役摘除，6→3。
+    "_alertlink_connect.html": 3,
+    # 2026-08-18 暗色适配整页 pass 后收紧 6→2（goal-push 线）：剩 2 处=图表系列
+    # 常量（趋势图「赢单」金 #ca8a04 图例圆点×1 + 热力格 JS 拼 rgba 渐变、深格
+    # 白字×1）——数据可视化系列色两主题恒定属刻意常量（与 SVG stroke 同色一体），
+    # 其余弹层说明/轴标/图例灰全部 token 化，卡面/表格/徽章/弹层随主题。
+    "goal_report.html": 2,
     # 2026-08-10 登记（清账线代记，owner=cases 线，意向 16h 前已收尾）：1 处，
     # token 化归属 owner；数值取自门禁实测。
     "cases.html": 1,
     "_rpa_shared_scripts.html": 4,
-    "agent_perf.html": 3,
+    # agent_perf.html：2026-08-18 暗色令牌归队批清零（dashed 分隔线/force_override
+    # 紫字/cooldown chip 全部 token 化），除名。
     "ai_studio.html": 2,
+    # 2026-08-22 1→4 代记（语音可观测线代记，owner=后台壳陈旧页横幅线 2026-08-21）：
+    # +3 处全在 `#adm-uibuild` 横幅（深青渐变 #134e4a→#0f766e 底 + 常量浅青字
+    # #ccfbf1 + 按钮白透明描边/底）——与 workspace_base 台账里「维护窗/信息横幅
+    # 渐变端点色（深底常量，精确 token 不在映射表）」同判据同处置：深底横幅两主题
+    # 恒定，token 化需先扩 codemod 映射表单源，归后续暗色收口批。
+    # 2026-08-27 实施75 batch2：adm-uibuild 顶部横幅（深青渐变+浅青字）随迁移摘除，4→1。
     "base.html": 1,
-    "developer.html": 1,
+    # 2026-08-22 1→2 代记（同上，owner=styleguide 线）：+1 处 `acc-hd-icon`
+    # 装饰渐变（#ec4899→#db2777），属本台账「映射表外长尾一次性装饰色」既有类别。
+    "developer.html": 2,
     "draft_review.html": 3,
     "knowledge.html": 4,
     # 渠道中心融合：四渠道正文迁 _channel_body_*.html（计数随内容平移）
@@ -75,7 +95,8 @@ _INLINE_COLOR_CEILINGS = {
     "ops/mobile_handoffs.html": 1,
     "ops_overview.html": 2,
     # personas.html：2026-07-30 品牌收口把最后一个内联硬编码色转成 color-mix(var(--p)) → 0，除名
-    "queue_monitor.html": 3,
+    # queue_monitor.html：2026-08-18 整页随主题令牌化（老板拍板废弃恒暗大屏语义），
+    # 刷新按钮描边/虚拟坐席头像底/负载条轨三处全部 token 化 → 0，除名。
     # relations_health.html：2026-08-01 任务台改版把仅剩内联色恢复 --th-* token → 0，除名
     "rpa_overview.html": 11,
     "settings.html": 9,
@@ -102,7 +123,19 @@ _INLINE_COLOR_CEILINGS = {
     # 2026-08-17 3→4 登记（msgops 线代记，HEAD diff 归因）：+1 横幅动作按钮
     # 白透明描边/底（rgba(255,255,255,.5)，深色渐变横幅上的常量白，与上行
     # 「渐变端点色」同判据；owner=横幅线，token 化随暗色收口批一并）。
-    "workspace_base.html": 4,
+    # 2026-08-22 4→7 代记（语音可观测线代记，owner=接待状态 v2 线 2026-08-19）：
+    # +3 处＝`ws-pr-dot` 状态点三连（在线绿 #22c55e / 忙碌琥珀 #f59e0b / 离开灰
+    # #94a3b8）。**这三处与本台账其余条目不同类，是真正该 token 化的**——它们不是
+    # 2026-08-23 appmenu 线清账 7→4：ws-pr-dot 三个接待状态点自内联迁类规则
+    # （.ws-pr-dot.on/.busy/.off）。刻意保留字面量未迁 token：宿主 .ws-user-menu
+    # 两主题恒白底（「整卡主题化属后续批次」原注），面不翻转则点不跟 token 翻转
+    # ——与 .ws-ava-dot 同先例；菜单卡将来主题化时整组一起迁。余 4 处＝gs-panel
+    # 阴影（box-shadow 主题无关豁免映射）+ 维护窗/信息横幅渐变端点色×2 等深底
+    # 常量（精确 token 不在映射表，token 化需动 codemod 单源，归暗色收口批）。
+    # 2026-08-27 实施75 蓝条退役：重启冷却顶部横幅（渐变端点深底常量 #1e3a5f）
+    # 随 DOM 摘除，4→3；batch3 通道离线红条与 .stale 琥珀降色 CSS 再摘 2 处，
+    # 3→1；余 1 处＝gs-panel 阴影（box-shadow 主题无关，工具方针豁免映射）。
+    "workspace_base.html": 1,
     "workspace_dashboard.html": 4,  # 2026-07-30 品牌收口：当前行高亮 → color-mix(var(--tk-brand))
     # workspace_usage.html：2026-07-30 品牌收口把图例点 #93c5fd → var(--bl-growth-300) → 0，除名
 }
@@ -175,6 +208,30 @@ def test_inline_color_not_above_ceiling():
         "（var(--th-*,#亮值)，见 static/theme-tokens.css + tools/inline_color_codemod.py），"
         "不要写 style=\"...#hex...\"：\n  " + "\n  ".join(offenders)
     )
+
+
+def test_scanner_ignores_js_canvas_style_properties():
+    """`fillStyle`/`strokeStyle` 不得被当成 style 属性（2026-08-22 假阳性回归钉）。
+
+    钉这条的理由是**假阳性比漏报更贵**：漏一处装饰色，暗色下顶多一个色块不翻转；
+    而错点一个无辜文件，会让所有来排查的线得出「这门禁在胡说」的结论，从此整条
+    红灯失去可信度——实测代价是 76 小时无人认领 + 三个真违规被一起埋掉。
+
+    同时钉住「真的内联 style 仍然要抓」，否则这条修复可能被写成一刀切的豁免。
+    """
+    canvas = """<script>
+      g.fillStyle = '#fcd34d';
+      g.strokeStyle = 'rgba(252,211,77,.65)';
+      ctx.shadowColor = "#000";
+    </script>"""
+    assert _count_inline_color_styles(canvas) == 0
+
+    # 真违规（属性位、含硬编码色）必须仍然计数；var() fallback 仍然豁免
+    assert _count_inline_color_styles('<div style="color:#fff">x</div>') == 1
+    assert _count_inline_color_styles(
+        '<div style="color:var(--th-ink,#111)">x</div>') == 0
+    # 词界只挡「style 前面粘着标识符字符」，不挡正常的属性前空白/引号
+    assert _count_inline_color_styles("<div id='a'style='color:#fff'>") == 1
 
 
 def test_inline_color_ledger_not_stale():

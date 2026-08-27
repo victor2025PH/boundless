@@ -707,6 +707,53 @@ class TestConvCrmApi:
         assert r["today"]["new_contacts"] >= 1
 
 
+class TestContact360OriginApi:
+    """P3：Contact 360 跨平台档案侧栏 API。"""
+
+    @staticmethod
+    def _client(cstore, gateway):
+        app = FastAPI()
+
+        def page_auth(request: Request):
+            return True
+
+        def api_auth(request: Request):
+            return True
+
+        cfg = SimpleNamespace(config={
+            "contacts": {"origin_profile": {"enabled": True, "max_chars": 500}},
+        })
+        register_unified_inbox_routes(
+            app, page_auth=page_auth, api_auth=api_auth,
+            templates=_Templates(), config_manager=cfg,
+        )
+        app.state.contacts = SimpleNamespace(store=cstore, gateway=gateway)
+        return TestClient(app)
+
+    def test_origin_get_save_and_404(self, cstore, gateway):
+        ctx = gateway.on_peer_seen(
+            channel=CHANNEL_WEB, account_id="web",
+            external_id="orig1", display_name="OriginUser",
+        )
+        cid = ctx.contact.contact_id
+        cli = self._client(cstore, gateway)
+        assert cli.get("/api/workspace/contact/nope/origin").status_code == 404
+        g = cli.get(f"/api/workspace/contact/{cid}/origin").json()
+        assert g["ok"] and g["enabled"] and g["contact_id"] == cid
+        s = cli.post(
+            f"/api/workspace/contact/{cid}/origin",
+            json={"profile": {
+                "origin_channel": "wechat",
+                "origin_label": "广告线索",
+                "preferred_name": "宝哥",
+                "background_note": "在微信聊了半年",
+            }},
+        ).json()
+        assert s["ok"] and s["profile"]["origin_channel"] == "wechat"
+        assert s["profile"]["preferred_name"] == "宝哥"
+        assert "跨平台" in (s.get("block_preview") or "")
+
+
 class TestSlaTrendStore:
     """Phase 6-7：SLA last_message_dirs + 趋势/多事件聚合。"""
 

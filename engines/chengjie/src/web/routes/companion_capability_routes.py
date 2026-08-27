@@ -175,6 +175,23 @@ def _collect_status(state, config):
     return collect_capability_status(config, runtime=runtime)
 
 
+def _try_rewire(state) -> dict:
+    """开关写完 overlay 后 best-effort 热接线 autosend（P1 2026-08-22）。
+
+    闭包由 bootstrap 注册（``make_autosend_rewire``）；旧进程/测试 app 无此键
+    → 如实回 ``{"rewired": False, "reason": "not_wired"}``（重启后仍会生效，
+    与旧行为一致——feature 探测，绝不抛）。
+    """
+    fn = getattr(state, "autosend_rewire", None)
+    if not callable(fn):
+        return {"rewired": False, "reason": "not_wired"}
+    try:
+        return dict(fn() or {})
+    except Exception:
+        logger.debug("autosend 热接线调用失败（忽略）", exc_info=True)
+        return {"rewired": False, "reason": "error"}
+
+
 def _auto_ai_count(state):
     store = getattr(state, "inbox_store", None)
     if store is None:
@@ -438,6 +455,9 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
                 "value": value, "capability": capability, "summary": summary}
         if chk.get("warn"):
             resp["warn"] = chk.get("reason")
+        # autosend 双开关（worker/deliver）即时生效：热接线运行中的 worker
+        if key in ("l2_autosend_worker", "l2_autosend_deliver"):
+            resp["rewire"] = _try_rewire(state)
         return resp
 
     @app.get("/api/companion/media-capabilities")
@@ -606,6 +626,7 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
             result.update(_apply_extra_flags(
                 cm, {e["path"]: e["value"] for e in extras},
                 actor=actor, reason=f"preset:{name}"))
+        result["rewire"] = _try_rewire(state)
         summary = None
         try:
             runtime = {dep: (getattr(state, attr, None) is not None)
@@ -657,6 +678,7 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
         if isinstance(extra_flags, dict) and extra_flags:
             result.update(_apply_extra_flags(cm, extra_flags,
                                              actor=actor, reason="rollback"))
+        result["rewire"] = _try_rewire(state)
         summary = None
         try:
             runtime = {dep: (getattr(state, attr, None) is not None)
@@ -704,6 +726,9 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
                 "warn": bool(chk.get("warn")),
                 "reason": chk.get("reason") or "",
                 "auto_ai": cal["automation_modes"]["auto_ai"],
+                # 全局默认档=auto_ai（新会话 bootstrap 即全自动）——前端据此
+                # 不再对「显式 auto_ai=0」误报「不会对任何人真发」（B37 读侧）
+                "global_auto_ai": bool(cal.get("global_auto_ai")),
                 "worker": cal["switches"]["worker"],
                 "send_gate": cal["switches"]["send_gate"],
             },
@@ -713,12 +738,20 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
     async def api_companion_standby_set(request: Request, _=Depends(api_auth)):
         """切换 AI 值守姿态（主管专属）。逐条过同一套护栏 + 写 overlay + 存快照供回滚。
 
-        body: {mode: off|suggest|watching, actor?}。切「值守中」若无 auto_ai 会话/worker 未开，
-        由 ``check_toggle`` 如实拦下 deliver 项（worker 仍会开），并在 blocked 里给出原因。
+        body: {mode: off|suggest|watching, actor?}。
+
+        P1 2026-08-22 捆绑语义（「一键全自动」单写入口）：三档不再只管
+        worker/deliver 两开关——**默认档位 extras 先落**（watching→auto_ai+
+        bootstrap / suggest→review / off→manual，护栏因此看到「全局已全自动」，
+        新装机零会话也不再死锁）→ 能力计划照旧逐条过护栏 → **存量系统落档
+        会话批量对齐**（只动 bootstrap/standby 来源的行，人的显式设置绝不覆盖）
+        → **热接线**运行中的 worker（真发当场生效，不再等重启）。
         """
         from src.web.routes.unified_inbox_auth import _require_supervisor
         from src.companion.standby_mode import (
-            build_standby_plan, infer_standby_mode, is_standby_mode, STANDBY_LABELS,
+            align_existing_conversations, build_standby_plan,
+            infer_standby_mode, is_standby_mode, standby_align_target,
+            standby_extras, STANDBY_LABELS,
         )
         from src.companion.capability_presets import capture_extra_flags, capture_snapshot
         from src.companion.delivery_calibration import delivery_calibration
@@ -764,8 +797,30 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
         except Exception:
             logger.debug("存快照失败（忽略）", exc_info=True)
 
-        result = _apply_plan(cm, config, modes, plan,
-                             actor=actor, reason=f"standby:{mode}")
+        result: dict = {}
+        # ① 默认档位 extras **先于**能力计划——deliver 的护栏读全局档位，
+        #    先写档位才轮到「全局已全自动」的免死锁语义（B37 修复的写侧）。
+        extras = standby_extras(mode)
+        if extras:
+            result.update(_apply_extra_flags(
+                cm, {e["path"]: e["value"] for e in extras},
+                actor=actor, reason=f"standby:{mode}"))
+        # ② 能力计划逐条过护栏（send-gate 先立 → worker → deliver 压最后）
+        result.update(_apply_plan(cm, config, modes, plan,
+                                  actor=actor, reason=f"standby:{mode}"))
+        # ③ 存量系统落档会话批量对齐（走线程池：可能逐行写几百条）
+        aligned = 0
+        target = standby_align_target(mode)
+        if target and store is not None:
+            try:
+                import asyncio as _aio
+                aligned = await _aio.to_thread(
+                    align_existing_conversations, store, target)
+            except Exception:
+                logger.debug("存量会话对齐失败（忽略）", exc_info=True)
+        result["aligned_conversations"] = aligned
+        # ④ 热接线运行中的 worker（真发当场生效；旧进程无闭包=如实回报）
+        result["rewire"] = _try_rewire(state)
         cal = delivery_calibration(config, modes)
         chk = check_toggle(config, modes, "l2_autosend_deliver", "enabled", True)
         return {
@@ -775,6 +830,7 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
                 "allowed": bool(chk.get("allowed")), "warn": bool(chk.get("warn")),
                 "reason": chk.get("reason") or "",
                 "auto_ai": cal["automation_modes"]["auto_ai"],
+                "global_auto_ai": bool(cal.get("global_auto_ai")),
                 "worker": cal["switches"]["worker"],
                 "send_gate": cal["switches"]["send_gate"],
             },

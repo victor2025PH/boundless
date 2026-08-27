@@ -128,6 +128,122 @@ async def test_skip_when_language_unknown():
     assert ts.calls == []
 
 
+# ── B67（实施67 P1-8）：store 层 conversation_outbound_lang 表 ──────────────
+
+
+def test_store_outbound_lang_roundtrip(tmp_path):
+    """set/get 往返 + ''=清除删行 + 未设置回 ''。"""
+    from src.inbox.store import InboxStore
+    st = InboxStore(str(tmp_path / "inbox.db"))
+    cid = "telegram:acc:123"
+    assert st.get_outbound_lang_if_set(cid) == ""
+    st.set_outbound_lang(cid, "EN")
+    assert st.get_outbound_lang_if_set(cid) == "en"       # 归一小写
+    st.set_outbound_lang(cid, "auto")
+    assert st.get_outbound_lang_if_set(cid) == "auto"
+    st.set_outbound_lang(cid, "")
+    assert st.get_outbound_lang_if_set(cid) == ""
+
+
+def test_store_outbound_lang_never_touches_automation_mode(tmp_path):
+    """独立小表铁律：写「发→X」绝不能让 get_automation_mode_if_set 从 None 变
+    'review'——那会把 bootstrap 全局默认 auto_ai 的会话静默拽回人审档。"""
+    from src.inbox.store import InboxStore
+    st = InboxStore(str(tmp_path / "inbox.db"))
+    cid = "telegram:acc:456"
+    assert st.get_automation_mode_if_set(cid) is None
+    st.set_outbound_lang(cid, "en")
+    assert st.get_automation_mode_if_set(cid) is None, (
+        "outbound_lang 写入污染了 conversation_settings 行存在性语义")
+
+
+# ── B67（实施67 P1-8）：会话级「发→X」显式设置优先 ─────────────────────────
+
+
+class _FakeStoreExplicit(_FakeStore):
+    """带会话级出站语言设置的 store（模拟 conversation_outbound_lang 表）。"""
+
+    def __init__(self, language="", outbound_lang=""):
+        super().__init__(language=language)
+        self._outbound_lang = outbound_lang
+
+    def get_outbound_lang_if_set(self, cid):
+        return self._outbound_lang
+
+
+@pytest.mark.asyncio
+async def test_explicit_target_wins_over_unknown_detection():
+    """`_337` 金标：会话语言判不出（投票失败）但用户显式「发→英」→ 目标钉死
+    en，中文必须被翻译——旧行为是 no_target_sent 盲发中文给英文客户。"""
+    ts = _FakeTS(_FakeRes("Hello there"))
+    store = _FakeStoreExplicit(language="", outbound_lang="en")
+    out = await translate_outbound_text(
+        {"conversation_id": "x1", "text": "你好呀，最近怎么样"},
+        translation_service=ts, store=store, source_lang="zh")
+    assert out == "Hello there"
+    assert ts.calls and ts.calls[0][1] == "en"
+
+
+@pytest.mark.asyncio
+async def test_explicit_target_upgrades_gate_only_to_full_translate():
+    """gate-only 部署（translate.enabled=false）+ 用户显式「发→英」→ 升级为
+    完整翻译（不再只拦 CJK 冲突）——「发→英」开着却只有手动才译＝旧断链复发。"""
+    ts = _FakeTS(_FakeRes("Sure, see you then"))
+    store = _FakeStoreExplicit(language="en", outbound_lang="en")
+    out = await translate_outbound_text(
+        {"conversation_id": "x1", "text": "好的，到时见"},
+        translation_service=ts, store=store, source_lang="zh", gate_only=True)
+    assert out == "Sure, see you then"
+    assert ts.calls, "显式目标在场时 gate_only 必须升级为真翻译"
+
+
+@pytest.mark.asyncio
+async def test_explicit_target_hold_when_engine_fails():
+    """显式「发→英」+ 翻译失败 → HOLD（None），绝不中文裸发。"""
+    ts = _FakeTS(_FakeRes("", ok=False, error="down"))
+    store = _FakeStoreExplicit(language="", outbound_lang="en")
+    out = await translate_outbound_text(
+        {"conversation_id": "x1", "text": "今天有点忙，晚点聊"},
+        translation_service=ts, store=store, source_lang="zh")
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_explicit_auto_follows_customer_language():
+    """显式 'auto' = 跟客户语言（走既有投票），gate_only 同样升级完整翻译。"""
+    ts = _FakeTS(_FakeRes("Good morning"))
+    store = _FakeStoreExplicit(language="en", outbound_lang="auto")
+    out = await translate_outbound_text(
+        {"conversation_id": "x1", "text": "早上好呀"},
+        translation_service=ts, store=store, source_lang="zh", gate_only=True)
+    assert out == "Good morning"
+    assert ts.calls and ts.calls[0][1] == "en"
+
+
+@pytest.mark.asyncio
+async def test_no_explicit_keeps_legacy_behavior():
+    """未设置（store 无该设置/旧 store 无该方法）→ 行为与旧版逐位一致。"""
+    ts = _FakeTS(_FakeRes("x"))
+    store = _FakeStoreExplicit(language="", outbound_lang="")
+    out = await translate_outbound_text(
+        {"conversation_id": "x1", "text": "你好"},
+        translation_service=ts, store=store, source_lang="zh")
+    assert out == "你好"          # 目标未知照旧盲发（观测计数，不误 HOLD）
+    assert ts.calls == []
+
+
+@pytest.mark.asyncio
+async def test_explicit_same_as_text_language_skips():
+    """显式「发→中」而文本本就中文 → 跳过不翻（目标==源语义保留）。"""
+    ts = _FakeTS(_FakeRes("不应被调用"))
+    store = _FakeStoreExplicit(language="en", outbound_lang="zh")
+    out = await translate_outbound_text(
+        {"conversation_id": "x1", "text": "你好呀"},
+        translation_service=ts, store=store, source_lang="zh")
+    assert out == "你好呀"
+    assert ts.calls == []
+
+
 @pytest.mark.asyncio
 async def test_hold_on_translation_failure_when_cjk_conflict():
     """2026-07-31 契约变更（198 实锤）：中文→非 CJK 目标语的翻译失败不再回落原文

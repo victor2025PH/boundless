@@ -33,6 +33,33 @@ def _save_binding_patch(cm, patch) -> bool:
     return bool(ok)
 
 
+def _hot_apply_account_persona(platform: str, account_id: str,
+                               profile_id: str) -> bool:
+    """把账号级人设换绑直写到**在跑** worker 的 client 快照（热生效）。
+
+    背景（2026-08-18 报障群工单#1）：`telegram_client.__init__` 只在启动时读一次
+    `persona_ids`，运行中换绑只落注册表 → 新人设要等账号重启才生效，客户视角
+    ＝「人设植入了为什么用不了」。本 helper 在换绑路由写库后 best-effort 更新
+    运行态快照：worker 不在线 / 平台 client 无该属性（LINE/WA 等）→ False
+    （无害，下次启动自然读到新 meta）；绝不抛。
+    """
+    try:
+        from src.integrations.account_orchestrator import (
+            get_orchestrator_if_running,
+        )
+        orch = get_orchestrator_if_running()
+        if orch is None:
+            return False
+        worker = orch.worker_for(str(platform), str(account_id))
+        client = getattr(worker, "client", None)
+        if client is None or not hasattr(client, "account_persona_ids"):
+            return False
+        client.account_persona_ids = [profile_id] if profile_id else []
+        return True
+    except Exception:
+        return False
+
+
 # ── legacy 债三件套（模块级：drafts_routes 的 metrics 也要用）────────────────
 
 def legacy_binding_entries(pm) -> dict:
@@ -175,11 +202,16 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         from src.utils.persona_manager import PersonaManager
         pm = PersonaManager.get_instance()
         persona = pm.get_persona(chat_id)
-        return {
+        out = {
             "persona": persona,
             "chat_id": chat_id,
             "is_default": chat_id == "" or not pm.has_chat_binding(str(chat_id)),
         }
+        # 实施49 P0-3：只有「全局默认」视图需要生效范围（账号绑定优先于它，
+        # 客户看不到这层就会得出「保存了但没生效」的结论）。
+        if not chat_id:
+            out["effective_scope"] = _default_persona_scope(request)
+        return out
 
     @app.get("/api/persona/bindings")
     async def api_persona_bindings(request: Request, _=Depends(auth_dep)):
@@ -209,6 +241,15 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
     def _live_config(request: Request) -> dict:
         cm = getattr(request.app.state, "config_manager", None) or config_manager
         return getattr(cm, "config", None) or {}
+
+    def _default_persona_scope(request: Request) -> dict:
+        """全局默认人设的生效范围快照（实施49 P0-3；fail-open 不影响主链路）。"""
+        try:
+            from src.utils.persona_scope import collect_default_persona_scope
+            return collect_default_persona_scope(_live_config(request))
+        except Exception:
+            _plog.debug("default persona scope 取数失败（忽略）", exc_info=True)
+            return {"available": False}
 
     def _record_override_action(kind: str) -> None:
         """人设治理动作观测（bind/unbind/整号/legacy 清理；best-effort 不抛）。"""
@@ -539,13 +580,21 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
             },
             merge_meta=True,
         )
+        # 热生效（2026-08-18 报障群工单#1 根因修复）：运行中的账号 worker 持有
+        # **启动时**的人设快照（telegram_client.__init__ 读一次 persona_ids），
+        # 此前换绑只写注册表 → 必须重启账号才生效（客户实录「人设植入了为什么
+        # 用不了」+「绑定账号了」）。这里 best-effort 直写在跑 client 的快照，
+        # 下一条消息即用新人设；worker 不在线＝零操作（下次启动读新 meta）。
+        hot_applied = _hot_apply_account_persona(plat, acct, profile_id)
         actor = request.session.get("username", "web_admin")
         if audit_store:
             audit_store.log(actor, "account_persona_set",
-                          f"{plat}:{acct} from={_prev or '-'} to={profile_id or '(cleared)'}")
+                          f"{plat}:{acct} from={_prev or '-'} to={profile_id or '(cleared)'}"
+                          f" hot={'1' if hot_applied else '0'}")
         _record_override_action("account_set")
         return {"ok": True, "platform": plat, "account_id": acct,
-                "from": _prev or "", "to": profile_id}
+                "from": _prev or "", "to": profile_id,
+                "hot_applied": hot_applied}
 
     # ── legacy peer-global 绑定清理（P3：升级为会话级 / 清除）────────────
     # 2026-07-24 双账号串音修复后，legacy 绑定在有账号人设时恒被压制=「活债」。
@@ -866,7 +915,9 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         if audit_store:
             audit_store.log(actor, "persona_update_default",
                           f"name={persona_data.get('name', '?')}")
-        return {"ok": True}
+        # 实施49 P0-3：保存成功 ≠ 对所有会话生效。把「谁在跟随、谁把它盖住」
+        # 随响应一起回去，前端据此出三态提示（B3 内测反馈的根治点）。
+        return {"ok": True, "effective_scope": _default_persona_scope(request)}
 
     @app.get("/api/persona/preview-prompt")
     async def api_persona_preview_prompt(request: Request, chat_id: str = "",

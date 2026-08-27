@@ -1,58 +1,67 @@
 {% extends "workspace_base.html" %}
+{#- 管理面一致性（2026-08-18）：本页由管理员菜单「坐席绩效看板」进入，挂工作台左侧
+    导航（_ws_sidebar.html，菜单单源 nav_schema.py）。顶层 set 对父模板可见。 -#}
+{% set ws_sidebar = true %}
 {% block title %}{{ (i18n or {}).get('ap_s001', "坐席绩效看板") }}{% endblock %}
 {% block head %}
 <style>
-  .ap-wrap{height:100%;overflow-y:auto;background:#f7f8fa;padding:18px;}
+  /* 令牌驱动（2026-08-18 归队 --tk-*）：旧版=硬编码浅色卡底 + #94a3b8 小标签（白底上
+     仅 ≈2.5:1，亮色主题都不达标），暗色主题下白卡压近白字整页发糊。结构/正文改 --tk-*；
+     正文内联 style 属性里既有的 var(--th-*) 属迁移层令牌、本就随主题翻转，保持不动。 */
+  .ap-wrap{height:100%;overflow-y:auto;background:var(--tk-bg);padding:18px;}
   .ap-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;}
   .ap-filters{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px;}
-  .ap-filters select,.ap-filters input{padding:5px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;}
+  .ap-filters select,.ap-filters input{padding:5px 10px;border:1px solid var(--tk-border);border-radius:6px;font-size:13px;background:var(--tk-surface);color:var(--tk-text);}
   /* 汇总卡片 */
   .ap-summary{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:12px;margin-bottom:18px;}
-  .ap-kpi{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:14px 16px;text-align:center;}
-  .ap-kpi .val{font-size:26px;font-weight:700;color:#1e3a5f;}
-  .ap-kpi .lbl{font-size:11px;color:#94a3b8;margin-top:2px;}
+  .ap-kpi{background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:12px;padding:14px 16px;text-align:center;box-shadow:var(--tk-shadow);}
+  .ap-kpi .val{font-size:26px;font-weight:700;color:var(--tk-text);}
+  .ap-kpi .lbl{font-size:11px;color:var(--tk-text-muted);margin-top:2px;}
   /* 表格 */
-  .ap-table-wrap{background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;margin-bottom:18px;}
+  .ap-table-wrap{background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:12px;overflow:hidden;margin-bottom:18px;}
   .ap-table{width:100%;border-collapse:collapse;font-size:13px;}
-  .ap-table th{background:#f1f5f9;padding:9px 12px;text-align:left;font-weight:600;color:#374151;border-bottom:2px solid #e5e7eb;}
-  .ap-table td{padding:8px 12px;border-bottom:1px solid #f3f4f6;color:#374151;vertical-align:middle;}
-  .ap-table tr:hover td{background:#f8fafc;}
+  .ap-table th{background:var(--tk-surface-2);padding:9px 12px;text-align:left;font-weight:600;color:var(--tk-text);border-bottom:2px solid var(--tk-border);}
+  .ap-table td{padding:8px 12px;border-bottom:1px solid var(--tk-border);color:var(--tk-text);vertical-align:middle;}
+  .ap-table tr:hover td{background:var(--tk-surface-2);}
   .ap-table tr:last-child td{border-bottom:0;}
-  .ap-bar-wrap{width:120px;background:#f1f5f9;border-radius:4px;height:8px;display:inline-block;vertical-align:middle;}
+  .ap-bar-wrap{width:120px;background:var(--tk-surface-2);border-radius:4px;height:8px;display:inline-block;vertical-align:middle;}
   .ap-bar{height:8px;border-radius:4px;background:var(--bl-growth-600,#0d76d9);}
   /* 趋势 */
-  .ap-trend{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:18px;}
-  .ap-trend h3{margin:0 0 10px;font-size:14px;color:#374151;}
+  .ap-trend{background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:12px;padding:16px;margin-bottom:18px;box-shadow:var(--tk-shadow);}
+  .ap-trend h3{margin:0 0 10px;font-size:14px;color:var(--tk-text);}
   .ap-chart{display:flex;align-items:flex-end;gap:4px;height:80px;overflow-x:auto;}
   .ap-bar-col{display:flex;flex-direction:column;align-items:center;gap:2px;min-width:28px;}
   .ap-bar-stk{width:20px;border-radius:3px 3px 0 0;}
-  .ap-bar-day{font-size:9px;color:#94a3b8;white-space:nowrap;}
-  .ap-empty{text-align:center;padding:32px;color:#94a3b8;font-size:14px;}
-  .ap-loading{text-align:center;padding:30px;color:#94a3b8;}
+  .ap-bar-day{font-size:9px;color:var(--tk-text-muted);white-space:nowrap;}
+  .ap-empty{text-align:center;padding:32px;color:var(--tk-text-muted);font-size:14px;}
+  .ap-loading{text-align:center;padding:30px;color:var(--tk-text-muted);}
   .badge-eff{display:inline-block;padding:2px 7px;border-radius:8px;font-size:11px;font-weight:600;}
-  .eff-high{background:#d1fae5;color:#065f46;}
-  .eff-mid{background:#fef3c7;color:#92400e;}
-  .eff-low{background:#fee2e2;color:#991b1b;}
+  /* 语义徽章：半透明底 + *-ink 文字（浅色实心底在暗色下会发白块，frontend-theme 禁则） */
+  .eff-high{background:rgba(16,185,129,.16);color:var(--tk-ok-ink);}
+  .eff-mid{background:rgba(245,158,11,.16);color:var(--tk-warn-ink);}
+  .eff-low{background:rgba(239,68,68,.16);color:var(--tk-danger-ink);}
   /* P34: QA 质检评分 */
   .qa-grade{display:inline-block;width:22px;height:22px;border-radius:50%;font-size:12px;font-weight:700;text-align:center;line-height:22px;}
-  .qa-A{background:#d1fae5;color:#065f46;} .qa-B{background:#dbeafe;color:#1e40af;}
-  .qa-C{background:#fef3c7;color:#92400e;} .qa-D{background:#ffedd5;color:#9a3412;}
-  .qa-F{background:#fee2e2;color:#991b1b;} .qa-NA{background:#f1f5f9;color:#64748b;}
-  .qa-bar-wrap{width:100px;background:#f1f5f9;border-radius:4px;height:7px;display:inline-block;vertical-align:middle;margin-left:5px;}
+  .qa-A{background:rgba(16,185,129,.16);color:var(--tk-ok-ink);} .qa-B{background:rgba(59,130,246,.16);color:var(--th-ink-blue6,#1d4ed8);}
+  .qa-C{background:rgba(245,158,11,.16);color:var(--tk-warn-ink);} .qa-D{background:rgba(249,115,22,.18);color:var(--th-ink-amber5,#92400e);}
+  .qa-F{background:rgba(239,68,68,.16);color:var(--tk-danger-ink);} .qa-NA{background:var(--tk-surface-2);color:var(--tk-text-muted);}
+  .qa-bar-wrap{width:100px;background:var(--tk-surface-2);border-radius:4px;height:7px;display:inline-block;vertical-align:middle;margin-left:5px;}
   .qa-bar{height:7px;border-radius:4px;transition:width .4s;}
   /* P35: 流失预警 */
-  .churn-high{color:#dc2626;font-weight:700;} .churn-medium{color:#d97706;font-weight:600;}
+  .churn-high{color:var(--tk-danger-ink);font-weight:700;} .churn-medium{color:var(--tk-warn-ink);font-weight:600;}
   /* P27: 热力图 */
   .hm-wrap{display:grid;gap:2px;font-size:10px;}
   .hm-cell{width:26px;height:22px;border-radius:3px;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.85);font-size:9px;cursor:default;transition:transform .1s;position:relative;}
   .hm-cell:hover{transform:scale(1.15);z-index:2;}
-  .hm-label{font-size:10px;color:#6b7280;display:flex;align-items:center;justify-content:center;}
-  .hm-legend{display:flex;align-items:center;gap:4px;margin-top:8px;font-size:11px;color:#6b7280;}
+  .hm-label{font-size:10px;color:var(--tk-text-muted);display:flex;align-items:center;justify-content:center;}
+  .hm-legend{display:flex;align-items:center;gap:4px;margin-top:8px;font-size:11px;color:var(--tk-text-muted);}
   .hm-legend-bar{display:flex;gap:2px;}
   .hm-lg-cell{width:20px;height:12px;border-radius:2px;}
 </style>
 {% endblock %}
 {% block content %}
+{% set cluster_id = "boards" %}{% set cluster_here = "/workspace/agent-perf" %}
+{% include "_cluster_tabs.html" %}
 <div class="ap-wrap">
   <div class="ap-header">
     <h2 style="margin:0;font-size:18px;">📊 {{ (i18n or {}).get('ap_s001', "坐席绩效看板") }}</h2>
@@ -295,7 +304,7 @@
         <tbody id="ob-body"><tr><td colspan="6" class="ap-loading">{{ (i18n or {}).get('set_s079', "点") }}「{{ (i18n or {}).get('ap_s071', "生成预览」") }}{{ (i18n or {}).get('ap_s072', "按筛选条件预估今日可触达名单") }}</td></tr></tbody>
       </table>
     </div>
-    <div style="margin-top:10px;border-top:1px dashed #e2e8f0;padding-top:8px;">
+    <div style="margin-top:10px;border-top:1px dashed var(--tk-border,#e5e6ea);padding-top:8px;">
       <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;">
         <textarea id="ob-template" rows="2" placeholder="{{ (i18n or {}).get('ap_s073', '消息模板，支持占位符') }} {name} {silent_days} {platform}，{{ (i18n or {}).get('ap_s074', '如：') }}{name}{{ (i18n or {}).get('ap_s075', '你好，好久没聊啦') }}～" style="flex:1;min-width:300px;padding:6px 9px;border:1px solid var(--th-bd-gray3,#d1d5db);border-radius:6px;font-size:13px;resize:vertical;"></textarea>
         <label style="display:flex;align-items:center;gap:3px;color:var(--th-ink-slate5,#64748b);font-size:13px;">{{ (i18n or {}).get('ap_s076', "本批上限") }}<input id="ob-maxsend" type="number" value="20" style="width:60px;padding:5px;border:1px solid var(--th-bd-gray3,#d1d5db);border-radius:6px;"></label>
@@ -421,7 +430,7 @@ function renderTable(agents){
       +'<td style="color:var(--th-ink-red6,#b91c1c);">'+(a.rejected||0)+'</td>'
       +'<td>'+(a.edit_send||0)+'</td>'
       +'<td style="color:var(--th-ink-emerald6,#047857);">'+(a.autosend||0)+'</td>'
-      +'<td style="color:#9d174d;">'+(a.force_override||0)+'</td>'
+      +'<td style="color:var(--th-ink-violet6,#7c3aed);">'+(a.force_override||0)+'</td>'
       +'<td><span class="badge-eff '+effCls+'">'+appRate+'%</span></td>'
       +'<td><div class="ap-bar-wrap"><div class="ap-bar" style="width:'+barW+'%;"></div></div></td>'
       +'<td style="font-size:11px;color:var(--th-ink-slate4,#5b6b85);">'+fmtTs(a.last_action_ts)+'</td>'
@@ -554,7 +563,7 @@ function renderHeatmap(d){
 
   function cellColor(v){
     var t = v/maxVal;
-    if(t===0) return '#f3f4f6';
+    if(t===0) return 'var(--tk-surface-2)';
     // 渐变：浅蓝→深紫
     var r = Math.round(239 - t*180);
     var g = Math.round(246 - t*200);
@@ -578,7 +587,7 @@ function renderHeatmap(d){
     row.forEach(function(v, hr){
       var tooltip = window.Tf('ap_js_p11',{day:WD_NAMES[wd],hr:String(hr).padStart(2,'0'),v:v});
       var color = cellColor(v);
-      var textColor = v/maxVal > 0.5 ? 'rgba(255,255,255,.9)' : '#94a3b8';
+      var textColor = v/maxVal > 0.5 ? 'rgba(255,255,255,.9)' : 'var(--tk-text-muted)';
       html += '<div class="hm-cell" style="background:'+color+';color:'+textColor+';" title="'+tooltip+'">'+(v||'')+'</div>';
     });
     html += '</div>';
@@ -588,7 +597,7 @@ function renderHeatmap(d){
   html += '<div class="hm-legend"><span>'+window.T('msg_js_1932')+'</span><div class="hm-legend-bar">';
   [0,.2,.4,.6,.8,1].forEach(function(t){
     var r=Math.round(239-t*180), g=Math.round(246-t*200), b=Math.round(255-t*80);
-    var c = t===0 ? '#f3f4f6' : 'rgb('+r+','+g+','+b+')';
+    var c = t===0 ? 'var(--tk-surface-2)' : 'rgb('+r+','+g+','+b+')';
     html += '<div class="hm-lg-cell" style="background:'+c+';"></div>';
   });
   html += '</div><span>'+window.T('msg_js_1931')+'</span></div>';
@@ -617,7 +626,7 @@ function loadQA(){
       tbody.innerHTML=d.agents.map(function(a){
         var score=a.avg_score||0;
         var grade=a.grade||'N/A';
-        var barColor=score>=90?'#10b981':score>=75?'#3b82f6':score>=60?'#f59e0b':'#ef4444';
+        var barColor=score>=90?'var(--tk-emerald)':score>=75?'var(--tk-brand)':score>=60?'var(--tk-amber)':'var(--tk-danger)';
         var gradeCls='qa-'+(grade==='N/A'?'NA':grade);
         var bd=a.breakdown||{};
         function dim(val){
@@ -750,7 +759,7 @@ window.loadXlateEngines=function(){
     var lbl={ai:'AI'+window.T('tg_s067'),deepl:'DeepL',google:'Google',ollama_mt:'HY-MT'};
     tbody.innerHTML=rows.map(function(r){
       var sr=Math.round((r.success_rate||0)*100);
-      var srColor=sr>=95?'#16a34a':sr>=80?'#d97706':'#dc2626';
+      var srColor=sr>=95?'var(--tk-ok-ink)':sr>=80?'var(--tk-warn-ink)':'var(--tk-danger-ink)';
       return '<tr>'
         +'<td><strong>'+esc(lbl[r.engine]||r.engine)+'</strong></td>'
         +'<td>'+(r.calls||0)+'</td>'
@@ -777,7 +786,7 @@ function _renderMultimodal(providers){
     if(!blk||!blk.rows||!blk.rows.length) return;
     blk.rows.forEach(function(r){
       var sr=Math.round((r.success_rate||0)*100);
-      var srColor=sr>=95?'#16a34a':sr>=80?'#d97706':'#dc2626';
+      var srColor=sr>=95?'var(--tk-ok-ink)':sr>=80?'var(--tk-warn-ink)':'var(--tk-danger-ink)';
       rows.push('<tr>'
         +'<td><strong>'+(capLbl[cap]||cap)+'</strong></td>'
         +'<td>'+esc(r.provider||'')+'</td>'
@@ -835,19 +844,19 @@ window.glImportCsv=function(input){
 function _glPost(payload){
   return apiFetch('/api/workspace/glossary',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify(payload)}, {timeoutMs: 60000}).then(function(r){return r.json();}).then(function(d){
-      if(!d.ok){ alert(d.message||window.T('ov_js_op_fail')); }
+      if(!d.ok){ AITRNotify.alert(d.message||window.T('ov_js_op_fail')); }
       loadGlossary();
-    }).catch(function(){ alert(window.T('draft.net_err')); });
+    }).catch(function(){ AITRNotify.alert(window.T('draft.net_err')); });
 }
 window.glAddTerm=function(){
   var t=document.getElementById('gl-term'),v=document.getElementById('gl-trans');
-  if(!t.value.trim()||!v.value.trim()){ alert(window.T('ap_js_026')); return; }
+  if(!t.value.trim()||!v.value.trim()){ AITRNotify.alert(window.T('ap_js_026')); return; }
   _glPost({op:'upsert_term',term:t.value.trim(),translation:v.value.trim()}).then(function(){ t.value='';v.value=''; });
 };
 window.glDelTerm=function(term){ _glPost({op:'remove_term',term:term}); };
 window.glAddProtect=function(){
   var w=document.getElementById('gl-protect');
-  if(!w.value.trim()){ alert(window.T('ap_js_027')); return; }
+  if(!w.value.trim()){ AITRNotify.alert(window.T('ap_js_027')); return; }
   _glPost({op:'add_protect',word:w.value.trim()}).then(function(){ w.value=''; });
 };
 window.glDelProtect=function(word){ _glPost({op:'remove_protect',word:word}); };
@@ -883,7 +892,7 @@ window.loadOutreachPreview=function(){
       var skipCap=(d.skipped||[]).filter(function(s){return s.reason==='account_cap';}).length;
       var chips=[];
       chips.push('<span style="background:var(--th-bg-emerald50,#ecfdf5);color:var(--th-ink-emerald8,#065f46);padding:2px 8px;border-radius:10px;">'+window.T('ap_js_030')+' '+d.eligible_count+'</span>');
-      if(skipCool)chips.push('<span style="background:#fef9c3;color:#854d0e;padding:2px 8px;border-radius:10px;">cooldown '+window.T('db_js_034')+' '+skipCool+'</span>');
+      if(skipCool)chips.push('<span style="background:var(--th-bg-amber100,#fef3c7);color:var(--th-ink-amber8,#92400e);padding:2px 8px;border-radius:10px;">cooldown '+window.T('db_js_034')+' '+skipCool+'</span>');
       if(skipCap)chips.push('<span style="background:var(--th-bg-red1,#fee2e2);color:var(--th-ink-red8,#991b1b);padding:2px 8px;border-radius:10px;">'+window.T('ap_js_031')+' '+skipCap+'</span>');
       chips.push('<span style="background:var(--th-bg-blue50,#eff6ff);color:var(--th-ink-blue8,#1e40af);padding:2px 8px;border-radius:10px;">'+window.T('ap_js_032')+' ~'+mins+' '+window.T('msg_js_008')+'</span>');
       Object.keys(d.per_account||{}).forEach(function(a){
@@ -901,7 +910,7 @@ window.loadOutreachPreview=function(){
 window.runOutreachExecute=function(){
   var tpl=document.getElementById('ob-template').value.trim();
   var res=document.getElementById('ob-exec-result');
-  if(!tpl){ alert(window.T('ap_js_034')); return; }
+  if(!tpl){ AITRNotify.alert(window.T('ap_js_034')); return; }
   var filters=_obLastFilters||_obReadFilters();
   var maxSend=parseInt(document.getElementById('ob-maxsend').value,10)||20;
   if(!confirm(window.Tf('ap_js_p05',{n:maxSend,tpl:tpl}))) return;
@@ -919,7 +928,7 @@ window.runOutreachExecute=function(){
 window.loadOutreachBatch=function(){
   var bid=document.getElementById('ob-batch-id').value.trim();
   var out=document.getElementById('ob-batch-result');
-  if(!bid){ alert(window.T('ap_js_035')+' ID'); return; }
+  if(!bid){ AITRNotify.alert(window.T('ap_js_035')+' ID'); return; }
   var win=parseInt(document.getElementById('ob-win').value,10)||7;
   out.textContent=window.T('ap_js_036');
   apiFetch('/api/unified-inbox/outreach/batch?batch_id='+encodeURIComponent(bid)+'&response_window_days='+win)

@@ -273,6 +273,31 @@ def test_seed_official_local_files_dict_tags_and_containment(
         "ok": True, "packs_added": 0, "items_added": 0}
 
 
+def test_dedup_self_heals_missing_files(env):
+    """「DB 行在、产物文件丢」自愈：sha 去重命中时若落盘产物被清
+    （git clean/误删未跟踪文件——2026-08-17 实锤），按行内原路径重写，
+    幂等重播从「被挡」变成「修复动作」。"""
+    import os
+
+    c = env["client"]
+    p = _mkpack(c, "自愈包")
+    data = _png()
+    it = _upload(c, p["id"], [("a.png", data)]).json()["added"][0]
+    row = ss.get_sticker_store().get(it["id"])
+    fp = str(row["file_path"])
+    png = fp[:-5] + ".png"
+    assert os.path.isfile(fp) and os.path.isfile(png)
+    os.unlink(fp)
+    os.unlink(png)
+    r = _upload(c, p["id"], [("a.png", data)]).json()
+    assert r["deduped"] == 1 and not r["added"]
+    assert os.path.isfile(fp), "webp 产物应被自愈重写"
+    assert os.path.isfile(png), "png 兄弟件应被自愈重写"
+    with open(fp, "rb") as fh:
+        head = fh.read(12)
+    assert head[:4] == b"RIFF" and head[8:12] == b"WEBP"
+
+
 # ── 发送（四平台方案）────────────────────────────────────────────────────────
 
 def _seed_file_sticker(client, animated=False):

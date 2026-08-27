@@ -50,6 +50,13 @@ $env:MSG_HEADLESS = "0"
 # restore/开机恢复/崩溃自愈已授权会话：1=无头后台保活（默认，稳态 0 可见窗口，多账号规模化
 # 的窗口治理靠这条）；0=restore 也 headed（旧行为，调试用）。交互登录仍受 MSG_HEADLESS 管。
 $env:MSG_RESTORE_HEADLESS = "1"
+# B65（2026-08-24 老板拍板）窗口方针，两个新开关（默认即生效，无需在此显式置值）：
+#   MSG_HIDE_AFTER_LOGIN=1        headed 登录窗授权成功后自动无头回归（登录前可见可操作、
+#                                 登录后零可见窗口——「三个页面来回刷新」的木偶秀收口）；
+#                                 置 0 回到「窗口留到人手关」旧行为。
+#   MSG_HIDE_AFTER_LOGIN_DELAY_MS=12000  授权→隐藏的缓冲毫秒（期间展示成功+养号提示横幅）。
+# 另：交互登录（Form-Relay）窗口模式 MSG_INTERACTIVE_WINDOW 默认已从 offscreen 反转为
+# headed（login_window.js B65）——登录前的各个页面不许藏、主动弹出；离屏/无头仍可 env 选。
 # 开机自动恢复持久化 profile（headed 默认关 → 曾出现「主进程先起时 restore 落空、
 # 账号一直不上线」的启动顺序依赖）。显式开：服务一起来就恢复会话，与主进程启动顺序解耦。
 $env:MSG_RESTORE_ON_BOOT = "1"
@@ -81,8 +88,20 @@ $env:MSG_DIR_SYNC_EVERY = "8"
 #   MSG_INBOX_HEALTH_EVERY=15 入站健康心跳周期（tick 数，≈60s）
 # 入站媒体落地目录（对齐 whatsapp-baileys）：进线程读到图片/视频等媒体气泡时，用浏览器会话
 # 下载写入 Python 静态目录（同机共享），前端按 /static URL 加载。未配置则回落占位文本。
-$env:MSG_MEDIA_DIR = "$root\src\web\static\protocol_media\messenger"
+# 落地目录必须与 Python 侧 protocol_bridge.protocol_media_root() 同址，否则
+# 「边车写 A、引擎读 B」＝入站媒体后端识别链全断（图片 VLM/视频/OCR/ASR/贴纸），而 UI 因
+# ProtocolMediaStatic 双根兜底照样能看图 → 症状只表现为「AI 突然不回话」，极难查
+# （2026-08-20 whatsapp 语音实锤，见 protocol_media_roots 注释）。解析顺序与
+# protocol_media_root() 逐字对齐：AITR_DATA_DIR（同上 token 契约）→ 无则回落旧引擎树 static。
+if ($env:AITR_DATA_DIR) {
+  $mediaRoot = Join-Path $env:AITR_DATA_DIR "protocol_media"
+} else {
+  $mediaRoot = Join-Path $root "src\web\static\protocol_media"
+}
+$env:MSG_MEDIA_DIR = Join-Path $mediaRoot "messenger"
 $env:MSG_MEDIA_URL_BASE = "/static/protocol_media/messenger"
+New-Item -ItemType Directory -Force -Path $env:MSG_MEDIA_DIR | Out-Null
+Write-Host ("[messenger-web] media dir = " + $env:MSG_MEDIA_DIR)
 $env:LOG_LEVEL = "info"
 
 Write-Host "[messenger-web] starting on :$($env:PORT) (ingest=$($env:PY_INGEST_URL))"

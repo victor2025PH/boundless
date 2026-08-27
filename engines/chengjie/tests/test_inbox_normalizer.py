@@ -85,3 +85,17 @@ def test_candidate_messages_filters_empty_and_maps_direction():
 
 def test_candidate_messages_none_when_no_list():
     assert candidate_messages_from_source({"foo": "bar"}) == []
+
+
+def test_infer_chat_type_messenger_aliases_and_dm_failclosed():
+    from src.inbox.normalizer import infer_chat_type
+
+    assert infer_chat_type("messenger", "peer1") == "private"
+    assert infer_chat_type("messenger", "peer1", {"chat_type": "group_thread"}) == "group"
+    assert infer_chat_type("messenger", "peer1", {"thread_type": "GROUP"}) == "group"
+    assert infer_chat_type("messenger", "peer1", {"threadType": "community"}) == "group"
+    assert infer_chat_type("messenger", "peer1", {"is_group_thread": True}) == "group"
+    assert infer_chat_type("messenger", "peer1", {"participants_count": 3}) == "group"
+    assert infer_chat_type("messenger", "peer1", {"participantCount": 2}) == "private"
+    assert infer_chat_type("line", "line:room:abc") == "group"
+    assert infer_chat_type("telegram", "-100123") == "group"

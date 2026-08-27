@@ -136,6 +136,8 @@ def register_leadbus_routes(app, *, api_auth, config_manager=None) -> None:
         # - text：leadbus 语义是「捕获到一个潜在线索」，不是「收到一条聊天消息」——这里
         #   没有真实聊天正文可转发，故合成一句占位文案，只用于会话列表预览/首条消息展示，
         #   不代表任何用户真实发言；坐席据此一眼可辨认「这是待激活的线索」而非常规对话。
+        #   前缀常量与 auto_draft 闸门同源（leadbus_account.LEAD_CAPTURE_PREFIX）——
+        #   占位符不是客户发言，不该触发 AI 拟稿/自动发（2026-08-18 事故沉淀）。
         # - assign_hint/profile/campaign/lead_id：目前只原样透传进 ingest_incoming 的
         #   source 参数（供本次调用内部的 chat_type 推断等复用同一 source 字典），
         #   *不*会被持久化成可查询的独立列——InboxMessage/InboxConversation 当前的表结构
@@ -143,12 +145,11 @@ def register_leadbus_routes(app, *, api_auth, config_manager=None) -> None:
         #   开对应列。也就是说这里的“记录”仅止于“接收、不丢弃、原样带过这一次调用”，不是
         #   「以后可在收件箱数据库里查到这些字段」。若后续需要真正的可查询留痕/坐席分配，
         #   需要新开列或旁路存储，超出本次「只新增一个路由文件」的边界，留给后续任务。
-        text = f"[线索捕获] {handle or external_id}"
-
         # P7：线索账号归属——带 source.account_id 则归真实设备账号并登记注册表，否则回落 product。
         from src.integrations.leadbus_account import (
-            register_lead_account, resolve_lead_account,
+            LEAD_CAPTURE_PREFIX, register_lead_account, resolve_lead_account,
         )
+        text = f"{LEAD_CAPTURE_PREFIX} {handle or external_id}"
         lead_account_id, _is_real_account = resolve_lead_account(source)
         if _is_real_account:
             try:

@@ -55,6 +55,9 @@ DEFAULT_INTERVAL = 15.0      # 监督步间隔（秒）
 BACKOFF_BASE = 2.0           # 退避基数（秒）
 BACKOFF_MAX = 120.0          # 退避上限（秒）
 MAX_RESTARTS = 8             # 连续失败上限 → 熔断（标 error，停止重试直到人工/sync 重置）
+# LINE 接收轮回的日志抽样间隔：网关 ~10s 一轮，逐轮打日志＝每天上万行，
+# 故只每 N 轮打一行（约 1h），日常读数走 status 的 recv_cycles。
+_LINE_RECV_CYCLE_LOG_EVERY = 360
 
 
 def account_key(platform: str, account_id: str) -> str:
@@ -530,14 +533,31 @@ class AccountOrchestrator:
         # 透传 media_url 给支持的 worker（LINE/Messenger 官方通道需公网 URL 拉取）；
         # 旧 worker（telegram/wa-protocol/测试 fake）签名无此参 → 经签名探测跳过，零回归。
         _sm = m.worker.send_media
+        # 排障插桩（2026-08-17 主号贴纸 loop 悬案）：静态推理与运行时行为矛盾
+        # （守卫代码在盘在 pyc，发送却零守卫日志且跨 loop 崩）——把「实际派发给
+        # 谁、当前 loop 是谁」打成事实。谜底揭开后可降 debug。
+        try:
+            logger.info("[orchestrator] send_media dispatch %s:%s worker=%s cur_loop=%s",
+                        platform, account_id, type(m.worker).__name__,
+                        id(asyncio.get_running_loop()))
+        except Exception:
+            pass
         _kw: Dict[str, Any] = dict(
             media_path=_send_path, media_type=media_type, caption=caption)
         try:
-            import inspect
-            if "media_url" in inspect.signature(_sm).parameters:
-                _kw["media_url"] = media_url
-        except (ValueError, TypeError):
-            pass
+            from src.inbox.group_thread import filter_send_kwargs, lookup_chat_type
+            _ctype = lookup_chat_type(platform, account_id, chat_key)
+            extra: Dict[str, Any] = {"media_url": media_url}
+            if _ctype:
+                extra["chat_type"] = _ctype
+            _kw.update(filter_send_kwargs(_sm, extra))
+        except Exception:
+            try:
+                import inspect
+                if "media_url" in inspect.signature(_sm).parameters:
+                    _kw["media_url"] = media_url
+            except (ValueError, TypeError):
+                pass
         try:
             res = await _sm(chat_key, **_kw)
         finally:
@@ -592,26 +612,28 @@ class AccountOrchestrator:
         if not (m is not None and m.state == "running"
                 and m.worker is not None and hasattr(m.worker, "send")):
             raise RuntimeError(f"无可用的运行中 worker: {platform}:{account_id}")
-        # P4-5B reply_to + P4-11 mentions：仅协议 worker 支持这些 kwarg；用逐级降级
-        # 探测其签名（先全带、再退 reply_to、最后裸发），非协议 worker 一律安全回落。
-        _kw: Dict[str, Any] = {}
+        # P4-5B reply_to + P4-11 mentions + 群 chat_type：只透 worker **具名**形参
+        # （filter_send_kwargs 刻意不把 **kwargs 当全收）。引用条能否镜像看
+        # quote_applied 回执，绝不因「传了 reply_to」就在工作台画引用
+        # （2026-08-14 173 实录：坐席见引用、客户端没有）。
+        from src.inbox.group_thread import (
+            annotate_quote_applied, filter_send_kwargs, lookup_chat_type,
+            should_mirror_quote,
+        )
+        _want: Dict[str, Any] = {}
         if reply_to:
-            _kw["reply_to"] = reply_to
+            _want["reply_to"] = reply_to
         if mentions:
-            _kw["mentions"] = mentions
+            _want["mentions"] = mentions
+        _ctype = lookup_chat_type(platform, account_id, chat_key)
+        if _ctype:
+            _want["chat_type"] = _ctype
+        _kw = filter_send_kwargs(m.worker.send, _want)
         if _kw:
-            try:
-                res = await m.worker.send(chat_key, text, **_kw)
-            except TypeError:
-                if reply_to:
-                    try:
-                        res = await m.worker.send(chat_key, text, reply_to=reply_to)
-                    except TypeError:
-                        res = await m.worker.send(chat_key, text)
-                else:
-                    res = await m.worker.send(chat_key, text)
+            res = await m.worker.send(chat_key, text, **_kw)
         else:
             res = await m.worker.send(chat_key, text)
+        res = annotate_quote_applied(res)
         # P0-4：带回平台消息 id(wamid)，让出站回写与 worker 的 fromMe 回显同键去重
         _mid = str(res.get("message_id") or "") if isinstance(res, dict) else ""
         # 失败不镜像：worker 明确报 delivered=False 的消息**没有发出去**，回写会在
@@ -624,7 +646,7 @@ class AccountOrchestrator:
             try:
                 from src.integrations.protocol_bridge import emit_incoming, make_message
                 _src = None
-                if reply_to and (reply_to.get("id") or reply_to.get("text")):
+                if should_mirror_quote(reply_to, res):
                     _src = {"reply_to": {
                         "id": str(reply_to.get("id") or ""),
                         "text": str(reply_to.get("text") or ""),
@@ -1006,8 +1028,28 @@ class TelegramProtocolWorker:
         except Exception:
             logger.debug("[tg-worker] 历史回填失败", exc_info=True)
 
+    async def _on_client_loop(self, coro_factory: Any) -> Dict[str, Any]:
+        """在 client 自己的事件循环上执行发送协程（loop 亲和守卫）。
+
+        pyrogram 的 Client/Session 在**创建时**绑定 ``asyncio.get_event_loop()``，
+        从别的 loop ``await`` 其 invoke/上传必炸 ``attached to a different loop``
+        （2026-08-17 实锤：web 路由对主号发贴纸在 upload.SaveFilePart 首块即崩；
+        2026-08-16 voice_sender 同族先例）。守卫语义与实现见共享助手
+        ``telegram_companion_worker.run_on_client_loop``（两个 TG worker 单源）。
+        """
+        from src.integrations.telegram_companion_worker import (
+            client_bound_loop, run_on_client_loop,
+        )
+        return await run_on_client_loop(
+            client_bound_loop(self.client), coro_factory)
+
     async def send(self, chat_key: str, text: str,
                    *, reply_to: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        return await self._on_client_loop(
+            lambda: self._send_impl(chat_key, text, reply_to=reply_to))
+
+    async def _send_impl(self, chat_key: str, text: str,
+                         *, reply_to: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if self.client is None:
             raise RuntimeError("telegram client 未连接")
         target: Any = chat_key
@@ -1026,10 +1068,21 @@ class TelegramProtocolWorker:
             except (TypeError, ValueError):
                 pass
         msg = await self.client.send_message(target, text, **kw)
-        return {"delivered": True, "message_id": str(getattr(msg, "id", "") or "")}
+        return {
+            "delivered": True,
+            "message_id": str(getattr(msg, "id", "") or ""),
+            "quote_applied": "reply_to_message_id" in kw,
+        }
 
     async def send_media(self, chat_key: str, *, media_path: str,
                          media_type: str, caption: str = "") -> Dict[str, Any]:
+        return await self._on_client_loop(
+            lambda: self._send_media_impl(
+                chat_key, media_path=media_path, media_type=media_type,
+                caption=caption))
+
+    async def _send_media_impl(self, chat_key: str, *, media_path: str,
+                               media_type: str, caption: str = "") -> Dict[str, Any]:
         if self.client is None:
             raise RuntimeError("telegram client 未连接")
         target: Any = chat_key
@@ -1212,7 +1265,9 @@ class WhatsAppProtocolWorker:
                     "error": "whatsapp session unhealthy (logged out / reconnect gave up)"}
         payload: Dict[str, Any] = {"jid": chat_key, "text": text}
         # P4-5B 原生引用回复：把被引用消息 key + 文本摘要下发给 Baileys 的 quoted 选项
+        quoted = False
         if reply_to and reply_to.get("id"):
+            quoted = True
             payload["quoted"] = {
                 "id": str(reply_to.get("id") or ""),
                 "from_me": bool(reply_to.get("from_me")),
@@ -1222,8 +1277,10 @@ class WhatsAppProtocolWorker:
         res = await _post_json(
             f"{self._base()}/accounts/{self.account_id}/send", payload,
         )
-        return {"delivered": bool((res or {}).get("ok", True)),
-                "message_id": str((res or {}).get("message_id") or "")}
+        delivered = bool((res or {}).get("ok", True))
+        return {"delivered": delivered,
+                "message_id": str((res or {}).get("message_id") or ""),
+                "quote_applied": bool(quoted and delivered)}
 
     async def send_media(self, chat_key: str, *, media_path: str,
                          media_type: str, caption: str = "") -> Dict[str, Any]:
@@ -1395,8 +1452,17 @@ class MessengerWebWorker:
             # e2ee_pin_prompt…）——裸 httpx 文本只有状态码，2026-08-15 173 事故
             # 排查为此绕了一整圈。
             from src.integrations.messenger_web_login import http_error_detail
+            _detail = http_error_detail(ex)
+            # B63-②（实施64 P1-4）：会话性败因（PIN/接受浮层/登出）→ 账号级
+            # 健康登记（账号卡/横幅/看门狗点亮），不再逐条静默 500。
+            try:
+                from src.integrations.platform_session_health import (
+                    note_send_auth_failure)
+                note_send_auth_failure("messenger", self.account_id, _detail)
+            except Exception:
+                logger.debug("[messenger] 发送败因会话登记失败", exc_info=True)
             return {"delivered": False,
-                    "error": f"messenger send failed: {http_error_detail(ex)}"}
+                    "error": f"messenger send failed: {_detail}"}
         res = res or {}
         # 双重口径：ok 或 delivered 任一显式为 False，或 sent 显式为 False，都判未送达。
         delivered = (res.get("ok", True) is not False
@@ -1505,15 +1571,20 @@ class ZaloPersonalWorker:
         self.detail = ""
 
     async def send(self, chat_key: str, text: str,
-                   *, reply_to: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                   *, reply_to: Optional[Dict[str, Any]] = None,
+                   chat_type: Optional[str] = None) -> Dict[str, Any]:
         from src.integrations.zalo_personal_login import _post_json
         if self._session_unhealthy():
             return {"delivered": False, "blocked": "session_unhealthy",
                     "error": "zalo session unhealthy (needs manual re-login)"}
+        payload: Dict[str, Any] = {"thread_id": chat_key, "text": text}
+        # 显式 chat_type 永远优先于 Node 群注册表（冷注册表 + 从未入站过的群）。
+        if chat_type:
+            payload["chat_type"] = str(chat_type)
         try:
             res = await _post_json(
                 f"{self._base()}/accounts/{self.account_id}/send",
-                {"thread_id": chat_key, "text": text},
+                payload,
             )
         except Exception as ex:  # noqa: BLE001
             return {"delivered": False, "error": f"zalo send failed: {ex}"}
@@ -1526,7 +1597,8 @@ class ZaloPersonalWorker:
                 "error": str(res.get("error") or "")}
 
     async def send_media(self, chat_key: str, *, media_path: str,
-                         media_type: str, caption: str = "") -> Dict[str, Any]:
+                         media_type: str, caption: str = "",
+                         chat_type: Optional[str] = None) -> Dict[str, Any]:
         """出站媒体（图片/语音/贴纸）。Node 与 Python 同机，直接把本地绝对路径交给
         Node（zca-js 上传发送）。**本方法存在即被编排器 owns_media 判为 True**。"""
         import os
@@ -1535,10 +1607,15 @@ class ZaloPersonalWorker:
             return {"delivered": False, "blocked": "session_unhealthy",
                     "error": "zalo session unhealthy (needs manual re-login)"}
         abs_path = os.path.abspath(media_path) if media_path else ""
+        payload: Dict[str, Any] = {
+            "thread_id": chat_key, "media_path": abs_path,
+            "media_type": str(media_type or ""), "caption": caption,
+        }
+        if chat_type:
+            payload["chat_type"] = str(chat_type)
         res = await _post_json(
             f"{self._base()}/accounts/{self.account_id}/send-media",
-            {"thread_id": chat_key, "media_path": abs_path,
-             "media_type": str(media_type or ""), "caption": caption},
+            payload,
             timeout=120.0,
         )
         res = res or {}
@@ -1707,6 +1784,18 @@ class LineProtocolWorker:
         # （Bot.run）不取 reqSeq、存量同步另建 client，都不参与竞争。
         # 每账号一把（不是模块级）：两个 LINE 号各有自己的 _reqseq，不该互相等。
         self._api_lock = threading.Lock()
+        # B98（实施68 P1-15）入站活性观测：接收线程起点 + 末条入站时刻 + 累计入站数。
+        # okline Bot.run(reconnect=True) 内部重连失败时线程可能不退（假活）——只看
+        # 线程存活的 healthy() 判不出「登录在、收不到消息」。这几个戳让诊断包/看门狗
+        # 能读出「接收线程活了多久、上次真收到消息是什么时候、总共收过几条」，把
+        # 「LINE 只出不进」从无据可查变成可读数。纯观测，绝不改收发行为。
+        self._recv_started_ts: float = 0.0
+        self._last_inbound_ts: float = 0.0
+        self._inbound_count: int = 0
+        # SSE 重连轮回累计（worker 实例跨接收线程重启复用，故是累计值）：
+        # 网关正常关流 ~10s 一轮，故它稳步上涨＝接收链在正常工作；配
+        # last_inbound_ts 长期不动即「在轮回却收不到 op」＝多半 token 该续期。
+        self._recv_cycles: int = 0
         # 出站媒体能力**按开关绑定**，而不是写成普通方法——因为 owns_media() 的判据就是
         # ``hasattr(worker, "send_media")``。写成普通方法即等于「LINE 恒有发媒体能力」，
         # 会把自拍/相册/克隆语音/命理 K 线在 LINE 上一次性全部放开（逆向协议发媒体有
@@ -1898,6 +1987,10 @@ class LineProtocolWorker:
         @bot.on_message
         def _on_msg(ctx: Any) -> None:  # noqa: ANN401
             try:
+                # B98 入站活性戳：收到任何一条 op（含群/非文本）即刷新——它证明的是
+                # 「接收链还在真收东西」，与「私聊入站是否落库」是两个层次，放在最前。
+                self._last_inbound_ts = time.time()
+                self._inbound_count += 1
                 text = ctx.text or ""
                 is_group = bool(ctx.is_group)
                 chat_key = str((ctx.to if is_group else ctx.sender) or "")
@@ -1938,11 +2031,57 @@ class LineProtocolWorker:
         self.bot = bot
 
         def _run() -> None:
+            # 2026-08-27 06:11 宕机事故：okline stream(reconnect=True) 的内建重连
+            # **零退避**——HMAC 签名桥崩坏后每秒上百轮「即抛即重试」，与日志轮转
+            # 故障共振把实例打死。改为一击语义（reconnect=False）+ 本侧监督器
+            # 指数退避；连败达阈值即放弃退出线程 → healthy() 变假 → 交编排器
+            # 既有「error→退避→重启」接管。决策纯函数有门禁，勿改回内建重连。
+            #
+            # ⚠ ``clean=``（本轮有没有抛异常）必须如实传：网关的 SSE 本来就是
+            # ~10s 发个 ping 后**正常关流**等客户端重连，把它当失败会连败放弃→
+            # 编排器重启→无限循环，LINE 收消息全停（2026-08-27 07:19–09:30 实锤，
+            # 详见 line_recv_supervisor 模块注释）。
+            from src.integrations.line_recv_supervisor import LineRecvSupervisor
+            sup = LineRecvSupervisor()
             try:
-                bot.run(reconnect=True)
+                while True:
+                    started = time.time()
+                    clean = True
+                    try:
+                        bot.run(reconnect=False)
+                    except Exception as exc:  # noqa: BLE001
+                        clean = False
+                        logger.warning(
+                            "[line-worker] receiver 断开 account=%s streak=%d: %s",
+                            account_id, sup.streak + 1,
+                            str(exc)[:200])
+                    lived = time.time() - started
+                    # 正常轮回本身不打日志（~10s 一轮＝每天上万行），改成可读数：
+                    # status 的 recv_cycles 配 last_inbound_ts 就能判「在正常轮回
+                    # 却一条 op 都不来」——那是 token 该续期，不是重连节奏的事。
+                    self._recv_cycles += 1
+                    if self._recv_cycles % _LINE_RECV_CYCLE_LOG_EVERY == 0:
+                        logger.info(
+                            "[line-worker] receiver 轮回 %d 次 account=%s "
+                            "（本轮 %.1fs clean=%s 入站累计 %d）",
+                            self._recv_cycles, account_id, lived, clean,
+                            self._inbound_count)
+                    verdict = sup.on_attempt_end(lived, clean=clean)
+                    if verdict["give_up"]:
+                        logger.error(
+                            "[line-worker] receiver 连败 %d 次，放弃并交编排器"
+                            "重启 account=%s", verdict["streak"], account_id)
+                        break
+                    if verdict["sleep_sec"] > 0:
+                        time.sleep(verdict["sleep_sec"])
             except Exception:
-                logger.debug("[line-worker] receiver 循环退出", exc_info=True)
+                logger.debug("[line-worker] receiver 监督循环异常退出", exc_info=True)
+            finally:
+                # 循环真退出（放弃/异常）→ 清起点戳，让 healthy()/诊断看得出
+                # 「接收线程已死」而非停在旧的 running 假象。
+                self._recv_started_ts = 0.0
 
+        self._recv_started_ts = time.time()
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
 
@@ -2156,8 +2295,16 @@ class LineProtocolWorker:
                     and self._thread.is_alive())
 
     def status(self) -> Dict[str, Any]:
+        # B98：入站活性快照进 status——诊断/看门狗据此判「登录在、收不到」
+        # （recv_started 有值但 last_inbound 长期不动 = 接收链假活）。
         return {"type": "line_protocol", "account_id": self.account_id,
-                "state": self.state, "detail": self.detail}
+                "state": self.state, "detail": self.detail,
+                "recv_started_ts": round(self._recv_started_ts, 1),
+                "last_inbound_ts": round(self._last_inbound_ts, 1),
+                "inbound_count": self._inbound_count,
+                "recv_cycles": self._recv_cycles,
+                "thread_alive": bool(self._thread is not None
+                                     and self._thread.is_alive())}
 
 
 _orchestrator: Optional[AccountOrchestrator] = None

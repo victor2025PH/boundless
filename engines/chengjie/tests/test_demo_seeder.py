@@ -87,3 +87,62 @@ def test_demo_routes_registered():
     assert "/api/admin/demo" in src
     assert "/api/admin/demo/seed" in src
     assert "/api/admin/demo/clear" in src
+    # 漏斗演示随三端点接线（contacts 子系统未启用时自动跳过）
+    assert "contacts_store=" in src
+
+
+def test_seed_demo_funnel_feeds_boss_metrics(tmp_path):
+    """漏斗演示与老板卡同口径：lead_captured/handoff_sent 事件近 7 天可数。"""
+    import time as _t
+    from src.contacts.store import ContactStore
+
+    cs = ContactStore(tmp_path / "contacts.db")
+    store = InboxStore(tmp_path / "inbox.db")
+    res = seed_demo(store, days=14, contacts_store=cs)
+    assert res["ok"] is True
+    assert res["funnel"]["leads"] >= 3
+    assert res["funnel"]["conversions"] >= 2
+    # 与 _daily_report_rows 同口径读回（7 天窗必须能看到转化）
+    since = int(_t.time()) - 7 * 86400
+    leads = sum(cs.count_events_by_day("lead_captured", since).values())
+    convs = sum(cs.count_events_by_day("handoff_sent", since).values())
+    assert leads >= 3
+    assert convs >= 2
+    assert sum(cs.count_contacts_by_day(since - 8 * 86400).values()) >= 5
+    # 解决时长口径：journey 内 msg_in → handoff_sent 有样本
+    rows = [r for r in cs.resolution_stats(since - 8 * 86400)
+            if r.get("resolved_ts")]
+    assert rows, "漏斗演示必须给解决时长指标喂出样本"
+    store.close()
+
+
+def test_clear_demo_funnel_leaves_real_contacts(tmp_path):
+    """清空只删 demo: 前缀的联系人/journey/事件，真实档案原样保留。"""
+    from src.contacts.store import ContactStore
+
+    cs = ContactStore(tmp_path / "contacts.db")
+    real = cs.create_contact(primary_name="真实客户")
+    store = InboxStore(tmp_path / "inbox.db")
+    seed_demo(store, days=7, contacts_store=cs)
+    st = demo_status(store, contacts_store=cs)
+    assert st["present"] is True
+    assert st["counts"]["contacts"] >= 5
+    out = clear_demo(store, contacts_store=cs)
+    assert out["ok"] is True
+    assert out["removed"]["funnel_contacts"] >= 5
+    st2 = demo_status(store, contacts_store=cs)
+    assert st2["present"] is False
+    assert st2["counts"].get("contacts", 0) == 0
+    assert cs.get_contact(real.contact_id) is not None
+    store.close()
+
+
+def test_seed_demo_without_contacts_store_unchanged(tmp_path):
+    """不传 contacts_store（子系统未启用）＝旧行为，funnel 为空不报错。"""
+    store = InboxStore(tmp_path / "inbox.db")
+    res = seed_demo(store, days=7)
+    assert res["ok"] is True
+    assert res["funnel"] == {}
+    assert demo_status(store)["present"] is True
+    assert clear_demo(store)["ok"] is True
+    store.close()

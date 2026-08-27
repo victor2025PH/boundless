@@ -103,6 +103,69 @@ def geo_mismatch(proxy_country: str, expected_country: str) -> bool:
     return a != b
 
 
+def parse_import_lines(
+    text: str, *, default_scheme: str = "socks5",
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """把供应商导出的代理清单文本解析成条目（一键代理 P3 批量入库的纯核心）。
+
+    供应商后台导出的主流三种行格式全收：
+
+    - ``host:port``
+    - ``host:port:user:pass``（Proxy-Seller / ZooProxy 等的默认导出）
+    - ``scheme://user:pass@host:port`` 与 ``scheme://host:port``（URL 形）
+
+    空行与 ``#`` 注释行跳过；批内按 (host, port, username) 去重（同一份导出常
+    重复粘贴）。返回 ``(entries, bad)``——坏行**逐行带行号与原因**如实返回而不是
+    整批拒绝：粘 50 行错 2 行，运营需要知道是哪 2 行，而不是重来一遍。
+    """
+    entries: List[Dict[str, Any]] = []
+    bad: List[Dict[str, Any]] = []
+    seen: set = set()
+    scheme_default = str(default_scheme or "socks5").lower()
+    if scheme_default not in VALID_SCHEMES:
+        scheme_default = "socks5"
+
+    for no, raw in enumerate(str(text or "").splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        scheme, user, pw = scheme_default, "", ""
+        rest = line
+        if "://" in line:
+            head, rest = line.split("://", 1)
+            scheme = head.strip().lower()
+            if scheme not in VALID_SCHEMES:
+                bad.append({"line": no, "text": raw, "reason": "bad_scheme"})
+                continue
+            if "@" in rest:
+                cred, rest = rest.rsplit("@", 1)
+                user, _, pw = cred.partition(":")
+        parts = rest.split(":")
+        if len(parts) == 2:
+            host, port_s = parts
+        elif len(parts) == 4 and not user:
+            host, port_s, user, pw = parts
+        else:
+            bad.append({"line": no, "text": raw, "reason": "bad_format"})
+            continue
+        host = host.strip()
+        try:
+            port = int(port_s.strip())
+        except ValueError:
+            bad.append({"line": no, "text": raw, "reason": "bad_port"})
+            continue
+        if not host or not (0 < port < 65536):
+            bad.append({"line": no, "text": raw, "reason": "bad_host_port"})
+            continue
+        key = (host, port, user)
+        if key in seen:
+            continue  # 批内重复：静默跳过（同一条粘两遍不是错误）
+        seen.add(key)
+        entries.append({"scheme": scheme, "host": host, "port": port,
+                        "username": user.strip(), "password": pw})
+    return entries, bad
+
+
 @dataclass
 class ProbeResult:
     """一次验活探测的结果。

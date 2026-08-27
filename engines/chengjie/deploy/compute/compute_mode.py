@@ -1,39 +1,46 @@
 #!/usr/bin/env python3
-"""compute_mode.py — 智聊算力三模式切换（ai.primary 的薄壳，README 同目录）。
+"""compute_mode.py — 智聊算力模式工具（ai.primary 的薄壳，README 同目录）。
+
+⛔ 2026-08-22 老板指令：``local`` / ``local_only`` 档**已从本工具移除**——
+   2026-08-21 05:49 老板令主链回 cloud 后数小时内被「切回 local_only」类自动化
+   翻回，直接导致 08-22 凌晨客服链三连 45s 超时静默不回。现：
+   - 主链档位由 ``ai.primary_lock``（老板锁）治理，引擎装载点强制执行 + 全程审计
+     （src/ai/ai_primary_audit.py，台账=实例 logs/ai_primary_audit.jsonl）；
+   - 本工具只保留 status / cloud（回滚方向）/ prep / cleanup——**只能向云端方向走**；
+   - 恢复本地档＝老板拍板 → overlay 改 ai.primary_lock → 治理接口切换，
+     任何执行器不得自动切回。
 
 用法（默认 dry-run 只打印 diff，--apply 才落盘；绝不重启进程）：
 
     python deploy/compute/compute_mode.py status
-    python deploy/compute/compute_mode.py prep --apply     # 第一级：主链不动，兜底+改写先换血
-    python deploy/compute/compute_mode.py local            # dry-run
-    python deploy/compute/compute_mode.py local --apply    # 落盘后按提示走标准重启
-    python deploy/compute/compute_mode.py cloud --apply    # 回滚档
+    python deploy/compute/compute_mode.py prep --apply     # 主链不动，兜底+改写换血
+    python deploy/compute/compute_mode.py cloud --apply    # 回滚档（唯一可写的主链档）
     python deploy/compute/compute_mode.py cleanup --apply [--cut-imagegen] [--cut-fatex]
-
-切流阶梯（每级风险面独立，比一步切主链稳）：
-    cloud → prep → local → local_only
 
 模式语义（与 src/ai/ai_client.py 的 ai.primary 完全同口径）：
     cloud      云主链（DeepSeek）→ key 池 → 本地兜底 → canned（回滚档）
     prep       主链仍 cloud；仅把 ai.fallback + 口语化改写指到 vLLM，并摘 173 死端点
-    local      本地 vLLM 主链，失败可回落云端（切流过渡档）
-    local_only 本地主链，用户内容绝不发云端；失败宁可 canned（终态）
 
-prep/local/local_only 都会做两件事：
-    1. ai.fallback 指到 173 vLLM（/v1 结尾 → ai_client 自动走 OpenAI 兼容口）
-    2. 口语化改写 llm_endpoints[0] 指到同一 vLLM（32B 改写质量 > 14B）
-
-cleanup 摘除 173 旧 Ollama/CosyVoice 死引用（vLLM 化后 11434/7852 已停）。
-写入走 ruamel round-trip 保注释（repo 既有约定，见 overlay 写入纪律）。
+cleanup 摘除 173 旧 Ollama/CosyVoice 死引用。
+写入走 ruamel round-trip 保注释（repo 既有约定，见 overlay 写入纪律）；
+--apply 落盘同步追加审计行（via=compute_mode_cli）。
 """
 from __future__ import annotations
 
 import argparse
 import difflib
 import io
+import json
 import sys
+import time
 import urllib.request
+from datetime import datetime
 from pathlib import Path
+
+# 本工具可用档位（2026-08-22 起 local/local_only 永久移除，见模块头）
+MODES = ["status", "prep", "cloud", "cleanup"]
+# 主链锁定后，唯一还会写 ai.primary 的档就是 cloud；锁与它不符时拒跑（见 main）
+REMOVED_MODES = ("local", "local_only")
 
 # ── 契约常量（与 deploy/compute/README.md「统一契约」段同源，改这里先改 README）──
 VLLM_BASE = "http://192.168.0.173:8001/v1"
@@ -84,19 +91,25 @@ def _ensure_map(parent, key):
 def apply_mode(data, mode: str) -> list[str]:
     """把 overlay 数据结构改成目标模式，返回人读得懂的变更清单。
 
-    ``prep``＝不动 ai.primary（保持 cloud 主链），只做 vLLM 接线——
-    兜底与改写先在生产流量的「边角」上验证 vLLM，主链切换留给 local。
+    ``prep``＝不动 ai.primary（保持 cloud 主链），只做 vLLM 接线。
+    ``local``/``local_only`` 已按老板指令（2026-08-22）移除——传入即抛
+    ValueError，绝不静默降级成别的档。
     """
+    if mode in REMOVED_MODES:
+        raise ValueError(
+            "local/local_only 档已按老板指令（2026-08-22）从本工具移除："
+            "主链锁定 cloud（ai.primary_lock），恢复本地档需老板拍板解锁，"
+            "任何执行器不得自动切回。")
     notes: list[str] = []
     ai = _ensure_map(data, "ai")
 
-    if mode in ("cloud", "local", "local_only"):
+    if mode == "cloud":
         old_primary = str(ai.get("primary") or "cloud")
         if old_primary != mode:
             ai["primary"] = mode
             notes.append(f"ai.primary: {old_primary} -> {mode}")
 
-    if mode in ("prep", "local", "local_only"):
+    if mode == "prep":
         fb = _ensure_map(ai, "fallback")
         changes = {
             "enabled": True,
@@ -188,9 +201,29 @@ def cmd_status(overlay: Path) -> None:
     print(f"vLLM 探活      : {_probe_vllm()}  ({VLLM_BASE}, model={VLLM_MODEL})")
 
 
+def _audit_apply(overlay: Path, mode: str, notes: list[str]) -> None:
+    """--apply 落盘后追加审计行（与 src/ai/ai_primary_audit.py 同台账同行式；
+    本脚本刻意自包含不 import 引擎——它常被外部执行器在任意 CWD 下调用）。"""
+    try:
+        logs = overlay.resolve().parent.parent / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        row = {
+            "ts": round(time.time(), 3),
+            "iso": datetime.now().isoformat(timespec="seconds"),
+            "event": "cli_apply",
+            "via": "compute_mode_cli",
+            "mode": mode,
+            "notes": notes[:10],
+        }
+        with (logs / "ai_primary_audit.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("mode", choices=["status", "prep", "cloud", "local", "local_only", "cleanup"])
+    ap.add_argument("mode", choices=MODES)
     ap.add_argument("--apply", action="store_true", help="落盘（默认 dry-run 打印 diff）")
     ap.add_argument("--overlay", type=Path, default=DEFAULT_OVERLAY)
     ap.add_argument("--cut-imagegen", action="store_true", help="cleanup 附带：停自拍/出图（含相册总闸）")
@@ -208,10 +241,17 @@ def main() -> None:
     yaml, data = _load_yaml(args.overlay)
     before = _dump_str(yaml, data)
 
+    # 老板锁：要动 ai.primary 的档（现仅 cloud）与锁不符 → 拒跑。
+    # （引擎装载点还有第二道强制，这里先拒是为了不制造「写了也白写」的假动作。）
+    _lock = str(((data.get("ai") or {}).get("primary_lock")) or "").strip().lower()
+    if args.mode == "cloud" and _lock and _lock != "cloud":
+        sys.exit(f"拒绝：ai.primary_lock={_lock} 在场，与目标档 cloud 不符——"
+                 "改锁需老板拍板（见 src/ai/ai_primary_audit.py 模块头）。")
+
     if args.mode == "cleanup":
         notes = apply_cleanup(data, args.cut_imagegen, args.cut_fatex)
     else:
-        if args.mode in ("prep", "local", "local_only"):
+        if args.mode == "prep":
             probe = _probe_vllm()
             if not probe.startswith("UP"):
                 sys.exit(f"拒绝切 {args.mode}：vLLM 探活失败 -> {probe}\n"
@@ -238,6 +278,7 @@ def main() -> None:
     bak = args.overlay.with_suffix(".yaml.bak_compute_mode")
     bak.write_text(raw_original, encoding="utf-8")
     args.overlay.write_text(after, encoding="utf-8")
+    _audit_apply(args.overlay, args.mode, notes)
     print(f"\n已落盘（备份: {bak.name}）。")
     print("下一步（标准重启纪律，勿绕过）：")
     print("  powershell -File scripts\\restart_preflight.ps1")

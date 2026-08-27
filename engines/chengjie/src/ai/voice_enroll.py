@@ -375,6 +375,23 @@ def build_avatar_voice_profile(
     return vp
 
 
+def should_auto_enable_avatar_voice(cfg: Optional[Dict[str, Any]]) -> bool:
+    """B43（2026-08-22）：克隆音色登记成功后，是否应联动翻开 ``avatar_voice.enabled``。
+
+    1.0.46 实录（诊断包 3DTSV9）：hosted 形态种子 ``enabled:false``，登记显示
+    成功、试听/实发仍 edge 通用音色——引擎开关没人翻，登记成果全程用不上。
+    判据窄限 **hosted 自动接入形态**：``_hosted_auto`` 预授权在场、用户未
+    ``hosted_opt_out``、且 enabled 当前为假。内网/自配部署的 enabled 是运维
+    显式决策，不代翻。纯函数（enroll 路由消费；写 overlay 与重跑接线在路由侧）。
+    """
+    av = (cfg or {}).get("avatar_voice")
+    if not isinstance(av, dict):
+        return False
+    return (not av.get("enabled")
+            and bool(av.get("_hosted_auto"))
+            and not av.get("hosted_opt_out"))
+
+
 def without_voice_profile(persona: Dict[str, Any]) -> Dict[str, Any]:
     """返回去掉 voice_profile 的人设副本（解绑音色用）。"""
     p = dict(persona or {})

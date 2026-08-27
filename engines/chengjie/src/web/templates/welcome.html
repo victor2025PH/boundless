@@ -55,16 +55,8 @@
 .onb-card p{margin:0;font-size:.75rem;color:var(--t2);line-height:1.45}
 .onb-fin{text-align:center;padding:1.6rem 0 .6rem}
 .onb-fin .mark{font-size:2.4rem}
-/* persona_create_wizard.js 复用的模态壳（personas.html 同款，welcome 宿主自带一份） */
-.pp-modal-ov{display:none;position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,.45);align-items:center;justify-content:center}
-.pp-modal-ov.open{display:flex}
-.pp-modal{width:min(520px,92vw);max-height:80vh;display:flex;flex-direction:column;background:var(--bg);border:1px solid var(--bd);border-radius:14px;box-shadow:0 18px 60px rgba(0,0,0,.4);overflow:hidden}
-.pp-modal-hd{display:flex;align-items:flex-start;justify-content:space-between;padding:.95rem 1.1rem .65rem}
-.pp-modal-ttl{font-size:1rem;font-weight:700;color:var(--t)}
-.pp-modal-sub{font-size:.74rem;color:var(--t2);margin-top:.15rem}
-.pp-modal-x{background:transparent;border:none;color:var(--t2);font-size:1rem;cursor:pointer;padding:.1rem .35rem;border-radius:6px}
-.pp-modal-x:hover{background:var(--bd);color:var(--t)}
-.pp-modal-foot{display:flex;justify-content:space-between;gap:.5rem;padding:.7rem 1.1rem;border-top:1px solid var(--bd)}
+/* B35（实施49 2026-08-21）：persona_create_wizard 模态壳已随「向导只教不带走」
+   一并撤除（人设创建回归「人设」页单一入口，向导第 3 步纯图文指引）。 */
 </style>
 
 <div class="onb-wrap">
@@ -75,7 +67,7 @@
     <li data-step="channel"><span class="n">2</span>{{ (i18n or {}).get('onb_wz_step_channel', '渠道') }}</li>
     <li data-step="persona"><span class="n">3</span>{{ (i18n or {}).get('onb_wz_step_persona', '人设') }}</li>
     <li data-step="automation"><span class="n">4</span>{{ (i18n or {}).get('onb_wz_step_automation', '自动化') }}</li>
-    <li data-step="test_message"><span class="n">5</span>{{ (i18n or {}).get('onb_wz_step_test', '测试消息') }}</li>
+    <li data-step="test_message"><span class="n">5</span>{{ (i18n or {}).get('onb_wz_step_test', '验证上线') }}</li>
   </ol>
 
   <!-- ① 授权 / 试用 -->
@@ -101,10 +93,11 @@
     </div>
   </section>
 
-  <!-- ② 渠道接入 -->
+  <!-- ② 渠道接入（B35 实施49 2026-08-21：纯图文教导——向导只教不带走，零跳转链接；
+       下方列表是接入状态读数，「刷新」只刷读数） -->
   <section class="onb-panel" id="onb-p-channel">
     <h3>{{ (i18n or {}).get('onb_wz_ch_title', '② 绑一个聊天渠道') }}</h3>
-    <p class="onb-hint">{{ (i18n or {}).get('onb_wz_ch_hint', '点「去接入」会打开渠道接入向导（新标签页）；扫码/填凭证完成后回到这里点「刷新」。') }}</p>
+    <p class="onb-hint">{{ (i18n or {}).get('onb_wz_ch_hint', '操作路径：左侧边栏 →「渠道」→ 选择平台（Telegram / WhatsApp / LINE）→ 扫码或按提示登录。完成后回到本页点「刷新」，下方状态会更新。') }}</p>
     <div class="onb-body">
       <div id="onb-ch-list">{{ (i18n or {}).get('onb_wz_loading', '加载中…') }}</div>
       <button class="onb-btn" style="margin-top:.4rem" onclick="onbRefreshChannels()">{{ (i18n or {}).get('onb_wz_refresh', '刷新') }}</button>
@@ -118,16 +111,14 @@
     </div>
   </section>
 
-  <!-- ③ 人设模板 -->
+  <!-- ③ 人设模板（B35 实施49 2026-08-21：纯图文教导——向导只教不带走，零跳转链接；
+       计数是读数，「刷新」只刷读数） -->
   <section class="onb-panel" id="onb-p-persona">
     <h3>{{ (i18n or {}).get('onb_wz_ps_title', '③ 挑一个 AI 人设') }}</h3>
-    <p class="onb-hint">{{ (i18n or {}).get('onb_wz_ps_hint', '从内置模板（陪聊/商务/客服/导师/导购）快速建一个人设；之后随时可在「人设工作室」细调。') }}</p>
+    <p class="onb-hint">{{ (i18n or {}).get('onb_wz_ps_hint', '操作路径：左侧边栏 →「人设」→「从模板新建」（陪聊/商务/客服/导师/导购任选）→ 保存。回到本页点「刷新」，下方计数会更新；之后随时可在人设工作室细调。') }}</p>
     <div class="onb-body">
       <div id="onb-ps-state">{{ (i18n or {}).get('onb_wz_loading', '加载中…') }}</div>
-      <div style="display:flex;gap:.5rem;margin-top:.8rem">
-        <button class="onb-btn pri" id="onb-ps-open" onclick="onbOpenPersonaWizard()">{{ (i18n or {}).get('onb_wz_ps_create', '从模板新建人设') }}</button>
-        <button class="onb-btn" onclick="onbOpenStudio()">{{ (i18n or {}).get('onb_wz_ps_studio', '打开人设工作室') }}</button>
-      </div>
+      <button class="onb-btn" style="margin-top:.4rem" onclick="onbRefreshPersonas()">{{ (i18n or {}).get('onb_wz_refresh', '刷新') }}</button>
       <div class="onb-note" id="onb-ps-note"></div>
     </div>
     <div class="onb-foot">
@@ -139,28 +130,29 @@
     </div>
   </section>
 
-  <!-- ④ 自动化档位 -->
+  <!-- ④ 自动化档位（B37 2026-08-22：撤「应用此档位」，纯图文教导——skuio 验收
+       实录两位内测 100% 卡死在向导内应用；真开关收口到 收件箱「AI 值守」/
+       设置页「AI 接管主控」单一入口（选全自动会当场问真发，不藏第二道开关）。
+       档位应用逻辑（/api/onboarding/automation-tier）保留给新入口，本页只教。 -->
   <section class="onb-panel" id="onb-p-automation">
     <h3>{{ (i18n or {}).get('onb_wz_au_title', '④ AI 自动化档位') }}</h3>
     <p class="onb-hint">{{ (i18n or {}).get('onb_wz_au_hint', '决定客户消息进来后 AI 做到哪一步。选保守档随时可以再升；全自动发送有服务端护栏兜底。') }}</p>
     <div class="onb-body">
       <div class="onb-cards" id="onb-au-cards">
-        <div class="onb-card" data-tier="manual" onclick="onbPickTier('manual')">
+        <div class="onb-card" data-tier="manual">
           <b>{{ (i18n or {}).get('onb_wz_au_manual', '🙋 全人工') }}</b>
           <p>{{ (i18n or {}).get('onb_wz_au_manual_d', 'AI 不出手，所有消息由坐席亲自回复。') }}</p>
         </div>
-        <div class="onb-card" data-tier="review" onclick="onbPickTier('review')">
+        <div class="onb-card" data-tier="review">
           <b>{{ (i18n or {}).get('onb_wz_au_review', '📝 AI 拟稿，人审后发') }}</b>
           <p>{{ (i18n or {}).get('onb_wz_au_review_d', 'AI 先写好草稿，坐席点「通过」才发出。最常用的稳妥档。') }}</p>
         </div>
-        <div class="onb-card" data-tier="auto_ai" onclick="onbPickTier('auto_ai')">
+        <div class="onb-card" data-tier="auto_ai">
           <b>{{ (i18n or {}).get('onb_wz_au_auto', '🚀 全自动') }}</b>
           <p>{{ (i18n or {}).get('onb_wz_au_auto_d', 'AI 直接回复客户；出站安全闸与额度护栏仍然在场。') }}</p>
         </div>
       </div>
-      <div style="margin-top:.7rem">
-        <button class="onb-btn pri" id="onb-au-apply" onclick="onbApplyTier()" disabled>{{ (i18n or {}).get('onb_wz_au_apply', '应用此档位') }}</button>
-      </div>
+      <p class="onb-hint" style="margin-top:.7rem">{{ (i18n or {}).get('onb_wz_au_teach', '在哪里切换：进入工作台后，聊天页顶部的「AI 值守」开关随时一键切档；选「值守中（全自动）」时会当场引导打开真实发送，不用再找第二个开关。') }}</p>
       <div class="onb-note" id="onb-au-note"></div>
     </div>
     <div class="onb-foot">
@@ -172,19 +164,14 @@
     </div>
   </section>
 
-  <!-- ⑤ 发测试消息 -->
+  <!-- ⑤ 验证上线（B37 2026-08-22：撤「发送测试消息」实操，纯图文教导——
+       与第 4 步同批收口，向导内不再有任何会真发消息/改配置的按钮。 -->
   <section class="onb-panel" id="onb-p-test_message">
-    <h3>{{ (i18n or {}).get('onb_wz_ts_title', '⑤ 发一条测试消息') }}</h3>
-    <p class="onb-hint">{{ (i18n or {}).get('onb_wz_ts_hint', '发到你自己账号的「收藏消息」（Saved Messages），不打扰任何客户——发出即证明整条链路通了。') }}</p>
+    <h3>{{ (i18n or {}).get('onb_wz_ts_title', '⑤ 上线前怎么验证') }}</h3>
+    <p class="onb-hint">{{ (i18n or {}).get('onb_wz_ts_hint', '两种零风险验证法，都不打扰真实客户：') }}</p>
     <div class="onb-body">
-      <div id="onb-ts-accwrap">
-        <select class="onb-input" id="onb-ts-account"></select>
-      </div>
-      <textarea class="onb-input" id="onb-ts-text" rows="2" style="margin-top:.55rem"></textarea>
-      <div style="margin-top:.55rem">
-        <button class="onb-btn pri" id="onb-ts-send" onclick="onbSendTest()">{{ (i18n or {}).get('onb_wz_ts_send', '发送测试消息') }}</button>
-      </div>
-      <div class="onb-note" id="onb-ts-note"></div>
+      <p class="onb-hint">{{ (i18n or {}).get('onb_wz_ts_teach1', '① 自测：在聊天工作台任选一条会话，输入框发一条消息到自己账号的「收藏消息」（Saved Messages）——发出即证明发送链路通了。') }}</p>
+      <p class="onb-hint">{{ (i18n or {}).get('onb_wz_ts_teach2', '② 实测：用另一个号（或同事的号）给你的业务号发条消息，在工作台看 AI 拟稿/自动回复是否按你选的档位出现。') }}</p>
     </div>
     <div class="onb-foot">
       <button class="onb-btn ghost" onclick="onbPrev()">{{ (i18n or {}).get('onb_wz_prev', '上一步') }}</button>
@@ -207,13 +194,12 @@
   </section>
 </div>
 
-<script src="/static/js/persona_create_wizard.js?v=20260816a"></script>
 <script>
 (function () {
   'use strict';
   var STEPS = ['license', 'channel', 'persona', 'automation', 'test_message'];
-  var ST = { idx: 0, status: null, tier: '', licOk: false, chReady: 0, psCount: 0,
-             auApplied: false, tsSent: false, finished: false };
+  var ST = { idx: 0, status: null, licOk: false, chReady: 0, psCount: 0,
+             finished: false };
 
   function T(k) { return window.T ? window.T(k) : k; }
   function esc(s) {
@@ -273,15 +259,15 @@
     else if (sid === 'channel') loadChannels();
     else if (sid === 'persona') loadPersonas();
     else if (sid === 'automation') loadAutomation();
-    else if (sid === 'test_message') loadTest();
   }
   function stepResult() {
     var sid = STEPS[ST.idx];
     if (sid === 'license') return ST.licOk;
     if (sid === 'channel') return ST.chReady > 0;
     if (sid === 'persona') return ST.psCount > 0;
-    if (sid === 'automation') return ST.auApplied;
-    if (sid === 'test_message') return ST.tsSent;
+    // B37：④⑤ 已改纯图文教导（无向导内动作）——看过点「下一步」即完成
+    if (sid === 'automation') return true;
+    if (sid === 'test_message') return true;
     return false;
   }
   function onbNext() {
@@ -372,6 +358,7 @@
     var chans = d.channels || [];
     ST.chReady = Number(d.ready_count || 0);
     if (!chans.length) { box.textContent = T('onb_wz_ch_none'); return; }
+    // B35：行内不再放「去接入」跳转——本步只教路径，列表纯状态读数
     var html = '';
     for (var i = 0; i < chans.length; i++) {
       var c = chans[i];
@@ -380,8 +367,6 @@
         + '<span class="onb-chip ' + (ready ? 'ok' : 'warn') + '">'
         + esc(ready ? T('onb_wz_ch_ready') : T('onb_wz_ch_not_ready')) + '</span>'
         + '<span class="grow">' + esc(c.name || c.id) + '</span>'
-        + '<button class="onb-btn" data-onb-ch="' + esc(c.id) + '">'
-        + esc(T('onb_wz_ch_open')) + '</button>'
         + '</div>';
     }
     box.innerHTML = html;
@@ -393,123 +378,43 @@
     var box = el('onb-ps-state');
     if (!box) return;
     var r = await jfetch('/api/personas/profiles');
-    var list = (r.data && (r.data.profiles || r.data.items)) || [];
-    window._allProfiles = list; // 喂给 persona_create_wizard 的 ID 查重护栏
-    ST.psCount = list.length;
-    box.innerHTML = '<span class="onb-chip ' + (list.length ? 'ok' : 'warn') + '">'
-      + esc(window.Tf ? window.Tf('onb_wz_ps_count', { n: list.length }) : '') + '</span>';
+    // 端点契约：profiles 是 **id→档案的字典**（不是数组），数组形状在 summary/ids。
+    // 2026-08-21 内测实锤：旧代码把字典当数组取 .length → 首启向导显示
+    // 「当前已有 undefined 个人设」。按 summary（数组）优先，字典 Object.values 兜底。
+    var d = (r && r.data) || {};
+    var list = Array.isArray(d.summary) ? d.summary
+      : Array.isArray(d.items) ? d.items
+      : (d.profiles && typeof d.profiles === 'object' && !Array.isArray(d.profiles))
+        ? Object.values(d.profiles)
+        : (Array.isArray(d.profiles) ? d.profiles : []);
+    ST.psCount = list.length || 0;
+    box.innerHTML = '<span class="onb-chip ' + (ST.psCount ? 'ok' : 'warn') + '">'
+      + esc(window.Tf ? window.Tf('onb_wz_ps_count', { n: ST.psCount }) : '') + '</span>';
   }
-  function onbOpenPersonaWizard() {
-    if (window.PSWizard && window.PSWizard.open) window.PSWizard.open();
-    else note('onb-ps-note', T('onb_wz_err'), 'err');
-  }
-  function onbOpenStudio() { window.open('/personas', '_blank'); }
-  // persona_create_wizard 创建成功后回调的宿主钩子（personas.html 里是刷新列表；
-  // 这里 = 刷新计数 + 顺手把本步标记完成）
-  function loadProfileList() {
+  // B35（实施49 2026-08-21）：人设步只教不带走——「刷新」是读数不是跳转；
+  // 计数 >0 顺手把本步标记完成（用户照指引去人设页建完回来点刷新即闭环）。
+  function onbRefreshPersonas() {
     loadPersonas().then(function () {
       if (ST.psCount > 0) {
-        note('onb-ps-note', T('onb_wz_ps_created'), 'ok');
         markStep('persona', { done: true, skipped: false });
         stepEntry('persona').done = true;
         renderStepper();
       }
     });
   }
-  function openNewProfile() { window.open('/personas', '_blank'); }
-  function _toast(msg) { note('onb-ps-note', msg, 'ok'); }
 
-  // ── ④ 自动化档位 ──────────────────────────────────────────────────────
+  // ── ④ 自动化档位（B37 纯图文：只读高亮当前档，真开关在收件箱值守/主控卡） ──
   function loadAutomation() {
     var mode = (ST.status && ST.status.automation && ST.status.automation.mode) || '';
-    if (!ST.tier && (mode === 'manual' || mode === 'review' || mode === 'auto_ai')) {
-      onbPickTier(mode);
-      note('onb-au-note', T('onb_wz_au_current') + ' ' + mode);
-    }
-  }
-  function onbPickTier(t) {
-    ST.tier = t;
     var cards = document.querySelectorAll('#onb-au-cards .onb-card');
+    var lbl = '';
     for (var i = 0; i < cards.length; i++) {
-      cards[i].classList.toggle('sel', cards[i].getAttribute('data-tier') === t);
+      var hit = cards[i].getAttribute('data-tier') === mode;
+      cards[i].classList.toggle('sel', hit);
+      if (hit) { var b = cards[i].querySelector('b'); lbl = (b && b.textContent) || ''; }
     }
-    var btn = el('onb-au-apply');
-    if (btn) btn.disabled = false;
-  }
-  async function onbApplyTier() {
-    if (!ST.tier) return;
-    var btn = el('onb-au-apply');
-    if (btn) btn.disabled = true;
-    note('onb-au-note', T('onb_wz_loading'));
-    var r = await postJson('/api/onboarding/automation-tier', { tier: ST.tier });
-    if (btn) btn.disabled = false;
-    var d = r.data || {};
-    if (d.ok) {
-      ST.auApplied = true;
-      var extra = (d.warns && d.warns.length) ? (' ' + d.warns.join('；')) : '';
-      note('onb-au-note', T('onb_wz_au_applied') + extra, 'ok');
-      markStep('automation', { done: true, skipped: false, data: { tier: ST.tier } });
-      stepEntry('automation').done = true;
-      renderStepper();
-    } else {
-      var why = '';
-      if (d.blocked && d.blocked.length) {
-        for (var i = 0; i < d.blocked.length; i++) why += (why ? '；' : '') + d.blocked[i].reason;
-      }
-      note('onb-au-note', T('onb_wz_au_blocked') + (why ? ' ' + why : ''), 'err');
-    }
-  }
-
-  // ── ⑤ 测试消息 ────────────────────────────────────────────────────────
-  function loadTest() {
-    var sel = el('onb-ts-account');
-    var txt = el('onb-ts-text');
-    if (txt && !txt.value) txt.value = T('onb_wz_ts_default_text');
-    if (!sel) return;
-    var accounts = (ST.status && ST.status.accounts) || [];
-    sel.innerHTML = '';
-    if (!accounts.length) {
-      var o0 = document.createElement('option');
-      o0.value = ''; o0.textContent = T('onb_wz_ts_no_account');
-      sel.appendChild(o0);
-      return;
-    }
-    for (var i = 0; i < accounts.length; i++) {
-      var a = accounts[i];
-      var o = document.createElement('option');
-      o.value = a.platform + '|' + a.account_id;
-      o.textContent = a.label + (a.online ? '' : ' (offline)');
-      sel.appendChild(o);
-    }
-  }
-  async function onbSendTest() {
-    var sel = el('onb-ts-account');
-    var txt = el('onb-ts-text');
-    var v = sel ? sel.value : '';
-    if (!v) { note('onb-ts-note', T('onb_wz_ts_no_account'), 'err'); return; }
-    var parts = v.split('|');
-    var body = {
-      platform: parts[0],
-      account_id: parts[1],
-      chat_key: 'me',
-      text: (txt && txt.value.trim()) || T('onb_wz_ts_default_text'),
-      client_msg_id: 'onb-' + Date.now().toString(36),
-    };
-    var btn = el('onb-ts-send');
-    if (btn) btn.disabled = true;
-    note('onb-ts-note', T('onb_wz_loading'));
-    var r = await postJson('/api/unified-inbox/send', body);
-    if (btn) btn.disabled = false;
-    if (r.data && (r.data.ok || r.data.sent)) {
-      ST.tsSent = true;
-      note('onb-ts-note', T('onb_wz_ts_sent'), 'ok');
-      markStep('test_message', { done: true, skipped: false });
-      stepEntry('test_message').done = true;
-      renderStepper();
-    } else {
-      var detail = (r.data && (r.data.detail || r.data.error)) || ('HTTP ' + r.status);
-      note('onb-ts-note', T('onb_wz_ts_fail') + ' ' + detail, 'err');
-    }
+    // 回显人话档名（不再亮 auto_ai 这类内部代号——B37-3 人话铁律）
+    if (lbl) note('onb-au-note', T('onb_wz_au_current') + ' ' + lbl);
   }
 
   // ── 启动：读状态 → 断点续走 ───────────────────────────────────────────
@@ -533,30 +438,13 @@
     gotoStep(resume);
   }
 
-  // 渠道行「去接入」事件委托（动态行不用内联 handler，规避拼接键脆弱模式）
-  var chList = el('onb-ch-list');
-  if (chList) {
-    chList.addEventListener('click', function (ev) {
-      var b = ev.target && ev.target.closest ? ev.target.closest('[data-onb-ch]') : null;
-      if (!b) return;
-      window.open('/workspace/setup?channel=' + encodeURIComponent(b.getAttribute('data-onb-ch')), '_blank');
-    });
-  }
-
   // 内联 onclick 引用的函数必须全局可达（哑按钮门禁 + 热更新即生产纪律）
   window.onbNext = onbNext;
   window.onbPrev = onbPrev;
   window.onbSkip = onbSkip;
   window.onbActivate = onbActivate;
   window.onbRefreshChannels = onbRefreshChannels;
-  window.onbOpenPersonaWizard = onbOpenPersonaWizard;
-  window.onbOpenStudio = onbOpenStudio;
-  window.onbPickTier = onbPickTier;
-  window.onbApplyTier = onbApplyTier;
-  window.onbSendTest = onbSendTest;
-  window.loadProfileList = loadProfileList;
-  window.openNewProfile = openNewProfile;
-  window._toast = _toast;
+  window.onbRefreshPersonas = onbRefreshPersonas;
 
   boot();
 })();

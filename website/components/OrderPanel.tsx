@@ -183,6 +183,9 @@ export default function OrderPanel() {
   // 会话归因串（AI 坐席聊天里发的下单链接带 ?ref=<会话id>）：静默随单提交，
   // 供 chengjie 引擎按 ref 自动结算营销目标；对用户不可见不可编辑。
   const [prefillRef, setPrefillRef] = useState("");
+  // 渠道归因（?utm_source=，如 chatx_desktop=桌面海报）：随单提交进订单台账，
+  // /console/funnel 据此拆「桌面海报带来的下单」；与 ref 同款静默、7 天续存。
+  const [prefillUtm, setPrefillUtm] = useState("");
   // 深链预填完成前不写回 URL，避免首帧用默认 pro 盖掉 ?plan=autochat-entry。
   const urlReady = useRef(false);
 
@@ -239,6 +242,22 @@ export default function OrderPanel() {
         const v = localStorage.getItem("bl-ref") || "";
         const ts = Number(localStorage.getItem("bl-ref-ts") || 0);
         if (v && ts && Date.now() - ts < 7 * 86400e3) setPrefillRef(v.slice(0, 160));
+      } catch {}
+    }
+    // 渠道归因（桌面海报深链 ?utm_source=chatx_desktop）：直落即记 + 7 天续存——
+    // 用户「点海报进来 → 先逛 /pricing → 回来下单」仍能归因到桌面海报。
+    const utm = (q.get("utm_source") || "").slice(0, 40);
+    if (utm) {
+      setPrefillUtm(utm);
+      try {
+        localStorage.setItem("bl-utm", utm);
+        localStorage.setItem("bl-utm-ts", String(Date.now()));
+      } catch {}
+    } else {
+      try {
+        const v = localStorage.getItem("bl-utm") || "";
+        const ts = Number(localStorage.getItem("bl-utm-ts") || 0);
+        if (v && ts && Date.now() - ts < 7 * 86400e3) setPrefillUtm(v.slice(0, 40));
       } catch {}
     }
     urlReady.current = true;
@@ -757,6 +776,7 @@ export default function OrderPanel() {
             creditView={creditView}
             initialFp={prefillFp}
             attributionRef={prefillRef}
+            attributionUtm={prefillUtm}
             onClose={() => setCheckout(false)}
           />
         )}
@@ -1072,6 +1092,7 @@ function CheckoutModal({
   creditView = "first",
   initialFp,
   attributionRef = "",
+  attributionUtm = "",
   onClose,
 }: {
   zh: boolean;
@@ -1085,6 +1106,9 @@ function CheckoutModal({
   initialFp: string;
   /** 会话归因串（?ref=…，AI 坐席链接带入）：静默随单提交，不渲染任何 UI。 */
   attributionRef?: string;
+  /** 渠道归因（?utm_source=，如 chatx_desktop=桌面海报）：与 ref 同款静默随单提交——
+   *  捕获/续存在 OrderPanel（bl-utm 7 天），此处只负责把值送进 POST /api/order。 */
+  attributionUtm?: string;
   onClose: () => void;
 }) {
   const [contact, setContact] = useState("");
@@ -1178,6 +1202,9 @@ function CheckoutModal({
           ...(tier.perSeat ? { seats } : {}),
           // 会话归因串（AI 坐席链接 ?ref=…）：有值才带，供营销目标自动结算
           ...(attributionRef ? { ref: attributionRef } : {}),
+          // 渠道归因（?utm_source=chatx_desktop 等）：有值才带——此前只捕获未随单提交，
+          // 「桌面海报 → 下单」在台账里断链（/console/funnel 拆不出桌面来源）
+          ...(attributionUtm ? { utm_source: attributionUtm } : {}),
         }),
       });
       const j = await r.json();

@@ -341,6 +341,12 @@ window.WF={
 
 // （原「自定义动作」tab 的 CRUD/预览 JS 已于 2026-08-14 随「AI 下一步」面板整体下线。）
 
+// ⚠ _TYPE_LABELS＝「步骤动作类型→人话标签」单一事实源：工作链步骤只读视图 / 编辑器
+//   类型下拉 / 监控分步统计三处渲染共用，不属于任何单一面板——2026-08-22 B39 事故：
+//   随上行「自定义动作」面板下线被连带误删，整页初始化 ReferenceError 列表永卡加载中。
+//   勿再随面板批次删除；词条键由 test_template_window_t_keys_resolve 守。
+var _TYPE_LABELS={template:window.T('templates'),task:window.T('wf_s013'),tag:window.T('wf_s014'),note:window.T('wf_s015'),escalate:window.T('wf_s016'),chain:window.T('wf_s017')};
+
 // ── 工作链 ──────────────────────────────────────────────────────────────────
 var _chainSteps=[];
 var _chainsCache=[];

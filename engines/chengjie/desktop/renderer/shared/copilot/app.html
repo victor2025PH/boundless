@@ -2,7 +2,9 @@
 <!-- 单一前端 App 壳(三层架构 §6)。唯一一份业务 UI,网页与桌面壳 iframe 共用。
      入口参数:?theme=light|dark · ?cid=<conversation_id> · #token=<bearer>
      驱动:postMessage({type:'cp-context', conversationId, chatKey, platform, accountId, caps?, customer?}) 由宿主壳喂入会话。
-     宿主指令:postMessage({type:'cp-cmd', cmd:'focus-draft'|'focus-voice'|'set-tab', tab?}) 供壳浮钮深链。
+     宿主指令:postMessage({type:'cp-cmd', cmd:'focus-draft'|'focus-voice'|'set-tab'|'set-theme', tab?, theme?}) 供壳浮钮深链/主题热切。
+     (set-theme:宿主切亮暗时热同步——?theme= 只在 iframe 加载那一刻读一次,没有这条指令,
+      宿主切亮色后本壳永远停在加载时的主题,2026-08-17「亮色下右栏仍暗」实锤。)
      回吐宿主:cp-ready / cp-fill / cp-send。
      单一来源 shared/copilot/,网页挂 /copilot/app.html。 -->
 <html lang="zh" data-cp-theme="light">
@@ -11,10 +13,13 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Copilot</title>
   <link rel="stylesheet" href="/copilot/tokens.css" />
-  <link rel="stylesheet" href="/copilot/theme-dark.css?v=20260817b" />
-  <link rel="stylesheet" href="/copilot/theme-light.css?v=20260817b" />
+  <link rel="stylesheet" href="/copilot/theme-dark.css?v=20260817t" />
+  <link rel="stylesheet" href="/copilot/theme-light.css?v=20260817t" />
   <style>
     html, body { margin: 0; height: 100%; background: var(--cp-bg, #f8fafc); }
+    /* 文档级(shadow 外)内滚区统一细滚动条：thumb 随主题、track 透明；
+       shadow 内由 cp-panel-base BASE_CSS 同规格注入，两层观感一致。 */
+    * { scrollbar-width: thin; scrollbar-color: var(--cp-sb-thumb, rgba(100,116,139,.45)) transparent; }
     body { font-family: 'Inter','PingFang SC','Microsoft YaHei',system-ui,sans-serif;
            color: var(--cp-text, #1e293b); display: flex; flex-direction: column; }
     .cp-app { flex: 1; min-height: 0; overflow-y: auto; padding: var(--cp-gap, 10px);
@@ -34,6 +39,9 @@
     .cp-tab.active { color: var(--cp-accent, #6366f1); border-bottom-color: var(--cp-accent, #6366f1); font-weight: 600; }
     .cp-tab-ic { display: inline-flex; align-items: center; flex-shrink: 0; opacity: .85; }
     .cp-tab.active .cp-tab-ic { opacity: 1; }
+    /* i18n P0 UX（2026-08-20）：EN 标签比 zh 长 1.5-2.5 倍，窄壳（≤400px）曾把
+       "Reply desk" 硬剪成 "Reply desl"（无省略号暗示）；label 允许收缩省略，全名走 title */
+    .cp-tab > span[data-cp-i18n] { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
     /* tab 状态圆点（P2，与网页 ws-cp-tab-badge 同构）：草稿高风险=红、关系冲突/链失败=按 tone */
     .cp-tab-badge { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
                     background: var(--cp-danger, #dc2626); font-size: 0; line-height: 0; flex-shrink: 0; }
@@ -96,6 +104,11 @@
     .cp-app.no-ctx .cp-sec > .cp-card { display: none; }
     /* 翻译工具卡弱会话依赖（2026-08-17 工具箱重组）：无会话也可用，豁免 no-ctx 隐藏 */
     .cp-app.no-ctx .cp-sec > .cp-card[data-cp-card="xlate"] { display: block; }
+    /* 生成图片/智能养号同为弱会话依赖（2026-08-22 App 收敛）：无会话也可生成/配置，
+       豁免 no-ctx；:not([hidden]) 保住桌面壳运行时 hidden（display:block 会压过 UA
+       [hidden] 规则——tgm 入口卡踩过的坑，勿去掉） */
+    .cp-app.no-ctx .cp-sec > .cp-card[data-cp-card="image"]:not([hidden]),
+    .cp-app.no-ctx .cp-sec > .cp-card[data-cp-card="nurture"]:not([hidden]) { display: block; }
     /* 回复台一次性搬家提示（语音/人设/知识库迁工具箱）：localStorage 记忆，点掉即走 */
     .cp-moved-hint { display: flex; align-items: center; gap: 7px; padding: 6px 10px;
       font-size: 11px; line-height: 1.5; color: var(--cp-text-dim, #64748b);
@@ -164,9 +177,23 @@
       @keyframes cpSecIn { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
     }
   </style>
-  <script src="/copilot/i18n/cp-i18n.js?v=20260817e"></script>
+  <script src="/copilot/i18n/cp-i18n.js?v=20260827c"></script>
+  <script>
+  /* 扩展语 overlay 按语言条件装载（i18n_desktop_ext 生成 per-lang 文件）。
+     document.write 同步注入＝写入点即当前解析位置，先于组件渲染；
+     非扩展语零动作零开销。本页无 CSP 内联限制（既有内联脚本先例）。 */
+  (function () {
+    var m = '';
+    try { m = new URLSearchParams(location.search).get('lang') || ''; } catch (e) { m = ''; }
+    m = m.trim().toLowerCase().replace(/-/g, '_');
+    if (m === 'zh_tw' || m === 'zh_hk') m = 'zh_hant';
+    if (m === 'zh_hant' || m === 'vi' || m === 'th' || m === 'id') {
+      document.write('<script src="/copilot/i18n/cp-i18n-ext.' + m + '.js?v=20260827b"><\/script>');
+    }
+  })();
+  </script>
   <script src="/copilot/cp-capabilities.js?v=20260812a"></script>
-  <script src="/copilot/client/copilot-client.js?v=20260817a"></script>
+  <script src="/copilot/client/copilot-client.js?v=20260822f"></script>
   <script>
   /* 宿主级 CSRF + Bearer 兜底（与 workspace_base 同款补丁思路，2026-07-31/08-01）：
      copilot-client 的方法已自带鉴权，但个别组件（如 cp-goal 的 _api）直接裸 fetch
@@ -200,19 +227,21 @@
     };
   })();
   </script>
-  <script src="/copilot/sidebar-chrome.js?v=20260817j"></script>
-  <script src="/copilot/components/cp-panel-base.js?v=20260808b"></script>
-  <script src="/copilot/components/cp-rel-stage.js?v=20260812a"></script>
+  <script src="/copilot/sidebar-chrome.js?v=20260818a"></script>
+  <script src="/copilot/components/cp-panel-base.js?v=20260817t"></script>
+  <script src="/copilot/components/cp-rel-stage.js?v=20260819a"></script>
   <script src="/copilot/components/cp-conv-ops.js?v=20260814a"></script>
-  <script src="/copilot/components/cp-kb.js?v=20260812a"></script>
-  <script src="/copilot/components/cp-persona.js?v=20260817d"></script>
-  <script src="/copilot/components/cp-collab.js?v=20260812a"></script>
-  <script src="/copilot/components/cp-goal.js?v=20260813b"></script>
+  <script src="/copilot/components/cp-kb.js?v=20260818d"></script>
+  <script src="/copilot/components/cp-persona.js?v=20260822a"></script>
+  <script src="/copilot/components/cp-collab.js?v=20260822c"></script>
+  <script src="/copilot/components/cp-goal.js?v=20260819a"></script>
   <script src="/copilot/components/cp-chain-exec.js?v=20260813a"></script>
   <script src="/copilot/components/cp-draft.js?v=20260813a"></script>
-  <script src="/copilot/components/cp-accounts.js?v=20260812c"></script>
-  <script src="/copilot/components/cp-voice.js?v=20260808b"></script>
-  <script src="/copilot/components/cp-xlate-tools.js?v=20260817a"></script>
+  <script src="/copilot/components/cp-accounts.js?v=20260818d"></script>
+  <script src="/copilot/components/cp-voice.js?v=20260827c"></script>
+  <script src="/copilot/components/cp-xlate-tools.js?v=20260817rz1"></script>
+  <script src="/copilot/components/cp-image.js?v=20260822f"></script>
+  <script src="/copilot/components/cp-nurture.js?v=20260822f"></script>
 </head>
 <body>
   <!-- 陈旧前端提醒（2026-07-31「切换失败」事故收尾）：iframe App 不在 workspace_base
@@ -237,9 +266,9 @@
   <!-- P2（2026-08-12）：tab 图标+徽章与网页右栏同构——图标/badge 是独立 span，
        data-cp-i18n 只挂文字 span（applyI18n 按 textContent 覆盖，挂 button 会清掉图标） -->
   <div class="cp-tabs" id="cp-tabs">
-    <button type="button" class="cp-tab active" data-tab="reply"><span class="cp-tab-ic" data-cp-ic="msg"></span><span data-cp-i18n="cp.app.tab_reply">回复台</span><span class="cp-tab-badge" id="cp-app-tab-badge-reply"></span></button>
-    <button type="button" class="cp-tab" data-tab="customer"><span class="cp-tab-ic" data-cp-ic="heart"></span><span data-cp-i18n="cp.app.tab_customer">客户关系</span><span class="cp-tab-badge" id="cp-app-tab-badge-customer"></span></button>
-    <button type="button" class="cp-tab" data-tab="tools"><span class="cp-tab-ic" data-cp-ic="link"></span><span data-cp-i18n="cp.app.tab_tools">工具箱</span><span class="cp-tab-badge" id="cp-app-tab-badge-tools"></span></button>
+    <button type="button" class="cp-tab active" data-tab="reply" data-cp-i18n-title="cp.app.tab_reply" title="回复台"><span class="cp-tab-ic" data-cp-ic="msg"></span><span data-cp-i18n="cp.app.tab_reply">回复台</span><span class="cp-tab-badge" id="cp-app-tab-badge-reply"></span></button>
+    <button type="button" class="cp-tab" data-tab="customer" data-cp-i18n-title="cp.app.tab_customer" title="客户关系"><span class="cp-tab-ic" data-cp-ic="heart"></span><span data-cp-i18n="cp.app.tab_customer">客户关系</span><span class="cp-tab-badge" id="cp-app-tab-badge-customer"></span></button>
+    <button type="button" class="cp-tab" data-tab="tools" data-cp-i18n-title="cp.app.tab_tools" title="工具箱"><span class="cp-tab-ic" data-cp-ic="link"></span><span data-cp-i18n="cp.app.tab_tools">工具箱</span><span class="cp-tab-badge" id="cp-app-tab-badge-tools"></span></button>
     <button type="button" class="cp-tabs-tool" id="cp-acct-open" data-cp-i18n-title="cp.app.acct_btn_t"
             title="账号管理（全局：登录 / 启停 / 自动回复）" aria-label="账号管理">
       <span data-cp-ic="users"></span><span class="cp-acct-dot" id="cp-acct-dot" hidden></span>
@@ -330,6 +359,16 @@
         <span class="sub" data-cp-i18n="cp.app.empty_tools">选中会话后，这里提供下一步行动建议等辅助工具。</span>
         <button type="button" class="cp-empty-acct-btn" data-acct-cta data-cp-i18n="cp.app.empty_cta_accounts">管理账号</button>
       </div>
+      <!-- 2026-08-17 工具箱重组：单次翻译四件套（图片/语音/对照/文档）共享组件——
+           与收件箱「对话翻译」弹层同一批端点；弱会话依赖（no-ctx 豁免，见 head CSS）。
+           置于工具箱首位＝与网页端「通用工具在前」同序（清单 SSOT 已同步调序）。 -->
+      <section class="cp-card" data-cp-card="xlate">
+        <button type="button" class="cp-card-hd" data-cp-toggle="xlate">
+          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="route"></span><span data-cp-i18n="cp.app.h_xlate">翻译工具</span></span>
+          <span class="cp-card-pill" id="cpp-xlate"></span><span class="cp-card-chev" aria-hidden="true"></span>
+        </button>
+        <div class="cp-card-bd"><cp-xlate-tools id="xlate"></cp-xlate-tools></div>
+      </section>
       <!-- 会话运维（P1-4 2026-08-12）：装配对齐网页工具箱——档位状态/暂停全自动/搁置/归档。
            「下一步建议」已升英雄卡（跨 tab 常驻，见 #cp-app 顶部），工具箱由本卡补位。 -->
       <section class="cp-card" data-cp-card="convops">
@@ -338,15 +377,6 @@
           <span class="cp-card-chev" aria-hidden="true"></span>
         </button>
         <div class="cp-card-bd"><cp-conv-ops id="convops"></cp-conv-ops></div>
-      </section>
-      <!-- 2026-08-17 工具箱重组：单次翻译四件套（图片/语音/对照/文档）共享组件——
-           与收件箱「对话翻译」弹层同一批端点；弱会话依赖（no-ctx 豁免，见 head CSS）。 -->
-      <section class="cp-card" data-cp-card="xlate">
-        <button type="button" class="cp-card-hd" data-cp-toggle="xlate">
-          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="route"></span><span data-cp-i18n="cp.app.h_xlate">翻译工具</span></span>
-          <span class="cp-card-pill" id="cpp-xlate"></span><span class="cp-card-chev" aria-hidden="true"></span>
-        </button>
-        <div class="cp-card-bd"><cp-xlate-tools id="xlate"></cp-xlate-tools></div>
       </section>
       <!-- 2026-08-17 工具箱重组：语音克隆/人设绑定/知识库自回复台迁入（低频工具与配置
            归工具箱，回复台聚焦拟稿）；卡内组件与折叠记忆键不变，坐席折叠偏好无缝延续。 -->
@@ -372,6 +402,24 @@
           <span class="cp-card-pill" id="cpp-persona"></span><span class="cp-card-chev" aria-hidden="true"></span>
         </button>
         <div class="cp-card-bd"><cp-persona id="persona"></cp-persona></div>
+      </section>
+      <!-- 2026-08-22 App 收敛：AI 生成图片 + 智能养号（与网页工具箱同卡同名）。
+           弱会话依赖（head 有 no-ctx 豁免）；组件自建 client 自启动。
+           桌面壳（window.shell）暂无 image/nurture 桥 → 下方 boot 脚本运行时 hidden
+           （诚实降级，待桌面桥接线后揭示）。 -->
+      <section class="cp-card" data-cp-card="image">
+        <button type="button" class="cp-card-hd" data-cp-toggle="image">
+          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="image"></span><span data-cp-i18n="cp.app.h_image">AI 生成图片</span></span>
+          <span class="cp-card-pill" id="cpp-image"></span><span class="cp-card-chev" aria-hidden="true"></span>
+        </button>
+        <div class="cp-card-bd"><cp-image id="image"></cp-image></div>
+      </section>
+      <section class="cp-card collapsed" data-cp-card="nurture">
+        <button type="button" class="cp-card-hd" data-cp-toggle="nurture">
+          <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="leaf"></span><span data-cp-i18n="cp.app.h_nurture">智能养号</span></span>
+          <span class="cp-card-pill" id="cpp-nurture"></span><span class="cp-card-chev" aria-hidden="true"></span>
+        </button>
+        <div class="cp-card-bd"><cp-nurture id="nurture"></cp-nurture></div>
       </section>
       <!-- 2026-08-12 群成员提取入口（App 模式）：静态链接卡开管理台 /tools/tg-members。
            不带 data-cp-card（非组件面板，只是链接入口）→ 不进 panel-manifest 装配门禁。
@@ -508,12 +556,20 @@
       refreshAcctBadge();
       setInterval(refreshAcctBadge, 120000);
       // 业务面板登记
-      var panels = ["draft", "persona", "collab", "relstage", "chain", "voice", "goal", "convops", "kb", "xlate"]
+      var panels = ["draft", "persona", "collab", "relstage", "chain", "voice", "goal", "convops", "kb", "xlate", "image", "nurture"]
         .map(function (id) {
           var el = document.getElementById(id);
           if (el) el.client = client;
           return el;
         });
+      // 桌面壳暂无 image/nurture 桥（DesktopCopilotClient 是软失败 stub）→ 运行时藏卡
+      // 诚实降级（露一张点了全报错的卡比不露更糟）；桌面桥接线后删掉这两行即揭示。
+      if (window.shell) {
+        ["image", "nurture"].forEach(function (k) {
+          var s = document.querySelector('.cp-card[data-cp-card="' + k + '"]');
+          if (s) s.hidden = true;
+        });
+      }
 
       // ── D1 静态壳 i18n bundle：目标卡的 inbox.goal.* 文案按需拉取 ──
       // 单一事实源仍是服务端合并词典；端点未上线/未登录/goals 关 → 卡保持 hidden，
@@ -683,6 +739,10 @@
       }
 
       // ── cp-fill / cp-send:本壳无 composer → 桥给宿主父窗口 ──
+      // ▸ 桥契约预留（B0 2026-08-18，勿撞名）：cp-quote-req（壳→宿主：请求 composer
+      //   现值）/ cp-cmd{cmd:'composer-text', text}（宿主→壳：回值）——「引用输入框」
+      //   PiP/壳原生宿主补桥用；触发阈值制（cpkb_quote_used 周均≥10 且 PiP 有日活跃），
+      //   动工前先与 PiP 线在意向板合流。
       document.addEventListener("cp-fill", function (e) {
         var text = e && e.detail && e.detail.text;
         if (text) post("cp-fill", { text: text });
@@ -702,7 +762,8 @@
           if (dr && typeof dr.setDirective === "function") {
             dr.setDirective({
               text: text,
-              summary: intent,
+              // i18n P0：展示态优先英文变体（指令 text 保持中文权威口径）
+              summary: (String(det.intentDisplay || "").trim() || intent),
               label: String(det.label || ""),
               pushLevel: String(det.pushLevel || ""),
               goalId: String(det.goalId || ""),
@@ -868,6 +929,10 @@
       // ── 宿主指令(壳浮钮深链)──
       function handleCmd(m) {
         var cmd = m && m.cmd;
+        if (cmd === "set-theme") {   // 宿主主题热切（cpApplyTheme→postMessage），零 reload 不丢面板状态
+          document.documentElement.setAttribute("data-cp-theme", m.theme === "dark" ? "dark" : "light");
+          return;
+        }
         if (cmd === "set-tab") { setTab(m.tab || "reply"); return; }
         if (cmd === "open-accounts") { openAcct(); return; }   // 宿主深链（壳头部图标可转发到此）
         if (cmd === "focus-draft") {

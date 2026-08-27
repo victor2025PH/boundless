@@ -68,6 +68,7 @@ def issue_topup_voucher(
     lic_id: str = "",
     customer: str = "",
     note: str = "",
+    valid_months: Optional[float] = None,
     now: Optional[int] = None,
 ) -> str:
     """签发一张加量凭证。``lic_id`` / ``customer`` 至少给一个（绑定防串号）。
@@ -76,6 +77,11 @@ def issue_topup_voucher(
       · ``chars>0``  —— 字符加量包（停售存量轨道，入 quota_store）；
       · ``tokens>0`` —— Token 包（在售轨道，入 token_ledger 客户钱包）。
     至少给一个正数；两者可同给（换发场景），兑换端各自入账。
+
+    ``valid_months``（实施50 P2，Token 载荷专属）：写进凭证的 ``months`` 字段，
+    兑换端透传给 token_ledger.grant_pack 定批次有效期——承载「充值 ≥500U 实付
+    24 个月有效」的官网承诺（缺省=兑换端 PACK_VALID_MONTHS=12）。字符载荷无
+    过期语义（quota_store 无过期列），chars-only 凭证给了也不写（静默忽略）。
     """
     try:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -101,6 +107,8 @@ def issue_topup_voucher(
         body["chars"] = n
     if tk > 0:
         body["tokens"] = tk
+        if valid_months is not None and float(valid_months) > 0:
+            body["months"] = round(float(valid_months), 2)
     if lic:
         body["lic"] = lic
     if sub:
@@ -187,6 +195,12 @@ def verify_topup_voucher(token: str, public_key_hex: str) -> Dict[str, Any]:
         return {"ok": False, "error": "malformed"}
     if (chars is not None and not has_chars) or (tokens is not None and not has_tokens):
         return {"ok": False, "error": "malformed"}   # 显式给了但非法（0/负数/非整型）
+    # months（实施50 P2）：可选；给了必须是 (0,120] 的数——签名契约里不许有垃圾字段。
+    months = payload.get("months")
+    if months is not None:
+        if not isinstance(months, (int, float)) or isinstance(months, bool) \
+                or not (0 < float(months) <= 120):
+            return {"ok": False, "error": "malformed"}
     if not str(payload.get("lic") or "").strip() and not str(payload.get("sub") or "").strip():
         return {"ok": False, "error": "malformed"}
     return {"ok": True, "payload": payload}
@@ -240,7 +254,10 @@ def redeem_topup_voucher(
         # 双载荷（换发场景）继续走字符入账，任一失败如实报错。
         if tokens > 0:
             from src.licensing.token_ledger import grant_pack_for_status
-            tres = grant_pack_for_status(tokens, ref, lic_status=st, note=note)
+            months = payload.get("months")
+            tres = grant_pack_for_status(
+                tokens, ref, lic_status=st, note=note,
+                valid_months=float(months) if months else None)
             if not tres.get("ok"):
                 return {"ok": False, "error": str(tres.get("error") or "internal"),
                         "tokens": tokens, "ref": ref}

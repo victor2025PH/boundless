@@ -296,6 +296,36 @@ function createBackendManager(deps) {
     return false;
   }
 
+  /**
+   * 收割「上一版本残留的随包后端」并等端口真静默（B57 升级风暴的运行时兜底）。
+   *
+   * 场景：安装器强杀壳的兜底路径（app 卡死/崩溃后升级）带不走 backend.exe——
+   * 孤儿旧后端抱着 18799 与 pyrogram 会话文件继续跑。此时若照旧「复用」，新壳
+   * 跑的是旧代码且孤儿无人看管；若不管不顾直接 spawn，新旧双进程抢同一份会话
+   * → Telegram AuthKeyDuplicated 强制注销全部账号（skuio 机实录）。
+   *
+   * 安全边界：只按**精确 exe 路径全等**收割（绝不误伤别人的 backend.exe），且
+   * 只在「打包态 + 身份确认是自家 + 版本确认错配 + 有随包二进制可拉起」四个
+   * 条件齐备时被调用；端口静默（探活连续失败）才算「会话文件已释放」。
+   */
+  async function _reapStaleBundled(binPath, config) {
+    if (process.platform !== "win32") return false; // 打包发行面 = Windows
+    const esc = String(binPath || "").replace(/'/g, "''");
+    if (!esc) return false;
+    const cmd = `powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Process | Where-Object { $_.Path -eq '${esc}' } | Stop-Process -Force -ErrorAction SilentlyContinue"`;
+    const roundMs = Math.max(5, deps.reapRoundMs || 4000);
+    const pollMs = Math.max(1, deps.reapPollMs || 400);
+    for (let round = 0; round < 2; round++) {
+      try { exec(cmd, { windowsHide: true }); } catch (e) { /* best-effort */ }
+      const deadline = Date.now() + roundMs;
+      while (Date.now() < deadline) {
+        if (!(await probeHealth(config, 800))) return true; // 端口静默 = 旧后端已死
+        await new Promise((res) => setTimeout(res, pollMs));
+      }
+    }
+    return !(await probeHealth(config, 800));
+  }
+
   function openLogStream() {
     try {
       const dir = path.join(app.getPath("userData"), "logs");
@@ -371,14 +401,36 @@ function createBackendManager(deps) {
         log(`拒绝复用：${verdict.detail}。请改 config.json 的 backend.base_url 端口，或停掉占用该端口的程序`);
         return;
       }
-      status = "running-external";
-      let note = "";
-      if (verdict.versionMismatch) note = `（注意：${verdict.detail}）`;
-      // 把「无法确认身份」显式记下来：0.2.2 之前的后端没有 ping 端点，此时端口冲突
-      // 仍是盲区。留一行日志，排查时能一眼看出判定是"确认过"还是"没得确认"。
-      else if (!identity) note = "（未能确认后端身份：可能是 0.2.2 之前的旧后端）";
-      log("检测到后端已在运行 → 复用，不重复拉起" + note);
-      return;
+      // 打包态 + 版本错配 + 有随包二进制 → 端口上是**上一版本升级后残留的孤儿后端**
+      // （安装器强杀壳的兜底路径带不走 backend.exe）。旧行为「照样复用」意味着
+      // 「装了新版却连着旧后端」永不自愈；而孤儿后端抱着 pyrogram 会话文件，
+      // 与新后端并存即 AuthKeyDuplicated 全账号注销（B57）。故：按精确路径收割 →
+      // 等端口真静默（=会话文件已释放）→ 落回正常 spawn 拉起当前版本。
+      // 收割失败退回复用（旧后端也比没有后端强）；开发态（isPackaged=false）
+      // 壳/后端版本错开是常态，保持旧的复用语义零回归。
+      let reapedStale = false;
+      if (verdict.versionMismatch && app && app.isPackaged &&
+          resolved && resolved.kind === "bundled") {
+        log(`stale backend from previous version detected (${verdict.detail}) -> reap by path, then spawn current`);
+        reapedStale = await _reapStaleBundled(resolved.command, config);
+        if (reapedStale) {
+          identity = null;
+          versionMismatch = false;
+          log("stale backend reaped (port silent = session files released); spawning bundled backend");
+        } else {
+          log(`WARN stale backend reap failed, falling back to reuse (${verdict.detail})`);
+        }
+      }
+      if (!reapedStale) {
+        status = "running-external";
+        let note = "";
+        if (verdict.versionMismatch) note = `（注意：${verdict.detail}）`;
+        // 把「无法确认身份」显式记下来：0.2.2 之前的后端没有 ping 端点，此时端口冲突
+        // 仍是盲区。留一行日志，排查时能一眼看出判定是"确认过"还是"没得确认"。
+        else if (!identity) note = "（未能确认后端身份：可能是 0.2.2 之前的旧后端）";
+        log("检测到后端已在运行 → 复用，不重复拉起" + note);
+        return;
+      }
     }
 
     if (!resolved) {
@@ -457,30 +509,75 @@ function createBackendManager(deps) {
     } catch (e) { /* 哨兵不存在/删不掉都无妨 */ }
   }
 
-  /** 回收后端进程（win→taskkill /T /F；posix→杀进程组）。退出时调用。 */
-  function stop() {
-    quitting = true;
-    if (logStream) { try { logStream.end(); } catch (e) {} logStream = null; }
-    if (!child || !child.pid) { status = "stopped"; return; }
-    markCleanShutdown(); // 强杀前先清哨兵，避免正常关闭被误报为崩溃
-    const pid = child.pid;
+  /** pid 是否仍存活（win/posix 通用：signal 0 探测，EPERM=存在但无权）。 */
+  function _pidAliveDefault(pid) {
+    try { process.kill(pid, 0); return true; } catch (e) { return !!(e && e.code === "EPERM"); }
+  }
+  const pidAlive = deps.pidAlive || _pidAliveDefault;
+
+  function _issueKill(pid) {
     try {
       if (process.platform === "win32") {
         // windowsHide：GUI 进程（Electron）无控制台，exec 默认会为 cmd.exe 新建
         // 可见控制台 → 用户退出应用瞬间闪黑窗；CREATE_NO_WINDOW 消除
         exec(`taskkill /pid ${pid} /T /F`, { windowsHide: true });
       } else {
-        try { process.kill(-pid, "SIGTERM"); } catch (e) { try { child.kill("SIGTERM"); } catch (e2) {} }
-        setTimeout(() => { try { process.kill(-pid, "SIGKILL"); } catch (e) {} }, 4000);
+        try { process.kill(-pid, "SIGTERM"); } catch (e) { try { child && child.kill("SIGTERM"); } catch (e2) {} }
       }
     } catch (e) {
-      try { child.kill(); } catch (e2) {}
+      try { child && child.kill(); } catch (e2) {}
+    }
+  }
+
+  /**
+   * 回收后端并**等到进程真死**（B57 升级风暴根子①的机制修复）。
+   *
+   * 旧 stop() 的 taskkill 是 fire-and-forget：更新器 quitAndInstall 后安装器
+   * 立刻跑、装完自动拉起新版，而旧后端可能还没死透——新旧双进程抢同一份
+   * pyrogram 会话 → Telegram AuthKeyDuplicated 强制注销全部账号（2026-08-23
+   * skuio 机实录）。会话文件句柄只有在进程对象真正消亡时才由 OS 释放，所以
+   * 「等 PID 死」是「会话已释放」的唯一可靠判据。轮询期中点若还活着会再补一刀
+   * （win 重发 taskkill；posix 升级 SIGKILL）。超时如实返回 false（调用方自行
+   * 决定是否继续退出——不能为一个杀不掉的进程把用户永远锁在退出流程里）。
+   */
+  async function stopAndWait(timeoutMs) {
+    quitting = true;
+    if (logStream) { try { logStream.end(); } catch (e) {} logStream = null; }
+    const proc = child;
+    if (!proc || !proc.pid) { status = "stopped"; return true; }
+    markCleanShutdown(); // 强杀前先清哨兵，避免正常关闭被误报为崩溃
+    const pid = proc.pid;
+    _issueKill(pid);
+    const budget = Math.max(500, timeoutMs || 8000);
+    const deadline = Date.now() + budget;
+    let escalated = false;
+    while (Date.now() < deadline) {
+      if (!pidAlive(pid)) {
+        child = null;
+        status = "stopped";
+        log(`backend pid ${pid} exited (session files released)`);
+        return true;
+      }
+      if (!escalated && Date.now() > deadline - budget / 2) {
+        escalated = true;
+        if (process.platform === "win32") _issueKill(pid);
+        else { try { process.kill(-pid, "SIGKILL"); } catch (e) {} }
+      }
+      await new Promise((res) => setTimeout(res, 150));
     }
     child = null;
     status = "stopped";
+    const dead = !pidAlive(pid);
+    if (!dead) log(`WARN backend pid ${pid} still alive after ${budget}ms (session files may be held)`);
+    return dead;
   }
 
-  return { start, stop, getStatus, probeHealth, probeIdentity, waitForReady };
+  /** 回收后端进程（兼容旧同步语义：发出击杀即返回，不等死透）。 */
+  function stop() {
+    void stopAndWait(4000);
+  }
+
+  return { start, stop, stopAndWait, getStatus, probeHealth, probeIdentity, waitForReady };
 }
 
 module.exports = {

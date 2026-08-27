@@ -24,16 +24,24 @@ account_status          block  账号非 online（worker 停了，收发全停�
 takeover_manual         block  坐席手动出站触发「接管即静音」（可一键接回）
 explicit_non_auto       block  显式非全自动档位（human/guard/sweep 等来源）
 cap_warmup              block  冷启动预热封顶（新号 72h 人审）
-cap_platform            block  平台封顶（platform_modes）
+cap_platform            block  平台封顶（platform_modes；params 另带 note=运营
+                               备注 / channel_ok=发送通道健康，见 P2 2026-08-21）
 cap_business_line       block  业务线封顶
 guard_<reason>          block  peer_bot_guard 将拦下一条入站
 deliver_off / l2_off    block  System-Z 架构下投递链没开
 work_schedule           block  工作班表扣留
-pending_drafts          warn   有待审草稿积压（AI 在拟稿、没人点发送）
+pending_drafts          warn   有待审草稿积压（params 另带 stale/stale_h=
+                               陈旧护栏预判，超龄稿直接通过会被 409 拦）
+media_block             warn   近窗（30min）有该会话的链路拦截明细（图片/语音
+                               没被理解等；params: domain/n/reason/queued——
+                               「这条为什么没回」的现场答案，实施56 P1）
 managed_peer            warn   对端是本系统受管账号（AI 对聊，谨防互聊环）
 peer_bot_flag           warn   会话被标记为机器人对方
 conv_missing            warn   会话行不存在（从没收到过对方消息）
 account_missing         warn   注册表无此账号行
+customer_waiting_no_gate warn  无任何闸拦、也无待审草稿，但末条是入站且已超
+                               宽限（600s）无回——「一片绿却不回」的定向诊断
+                               （B113；params: wait_sec/effective）
 looks_alive             ok     未发现拦截
 ======================  =====  ==========================================
 """
@@ -164,9 +172,36 @@ def diagnose_conversation(
                      ceiling=str(cap.get("ceiling") or ""),
                      until_ts=float(cap.get("until_ts") or 0.0))
         elif layer == "platform":
+            # P2 2026-08-21（「封顶忘摘」实锤沉淀：8/18 WA 封顶的两个前提
+            # 8/20 都已消除，却挂到 8/21 无人记得）：
+            # - note：运营在 inbox.auto_draft.platform_mode_notes.<平台> 留的
+            #   人话备注（为什么封/谁封的），面板原样展示——封顶自带说明书；
+            # - channel_ok：本会话账号 registry online 且 mode 属编排模式
+            #   （protocol/official/web）＝发送通道大概率活着 → 前端据此提示
+            #   「封顶原因可能已消除，可评估解除」。求值失败一律 False（宁可
+            #   不提示，绝不误导解除）。
+            plat_detail = str(cap.get("detail") or "") or platform
+            note = ""
+            try:
+                note = str((((cfg.get("inbox") or {}).get("auto_draft") or {})
+                            .get("platform_mode_notes") or {})
+                           .get(plat_detail) or "")
+            except Exception:
+                note = ""
+            channel_ok = False
+            try:
+                from src.integrations.account_orchestrator import (
+                    ORCHESTRATED_MODES,
+                )
+                channel_ok = bool(
+                    account.get("status") == "online"
+                    and str(account.get("mode") or "") in ORCHESTRATED_MODES)
+            except Exception:
+                channel_ok = False
             _finding(findings, "block", "cap_platform",
-                     detail=str(cap.get("detail") or ""),
-                     ceiling=str(cap.get("ceiling") or ""))
+                     detail=plat_detail,
+                     ceiling=str(cap.get("ceiling") or ""),
+                     note=note, channel_ok=channel_ok)
         elif layer == "business_line":
             _finding(findings, "block", "cap_business_line",
                      detail=str(cap.get("detail") or ""),
@@ -207,6 +242,32 @@ def diagnose_conversation(
     except Exception:
         logger.debug("[reply_diag] 守卫复演失败（忽略）", exc_info=True)
     out["guard"] = guard
+
+    # ── 近窗链路拦截明细（delivery_block 环形缓存，实施56 P1）───────────
+    # 链路级 findings 说的是「以后会不会回」；这里补「刚才那几条发生了什么」
+    # ——图片/语音没被理解而拦下的消息，正是坐席点开面板最想问的那条。
+    # warn 级（链路本身没死）；fail-open；进程重启即清（明细本就是近窗语义）。
+    try:
+        from src.ops.delivery_block import recent_blocks_for
+        _evs = recent_blocks_for(cid, now=ts_now)
+        if _evs:
+            _by_dom: Dict[str, Dict[str, Any]] = {}
+            for ev in _evs:
+                d = str(ev.get("domain") or "") or "unknown"
+                slot = _by_dom.setdefault(
+                    d, {"n": 0, "queued": False, "reason": ""})
+                slot["n"] += 1
+                slot["queued"] = slot["queued"] or bool(ev.get("queued"))
+                slot["reason"] = str(ev.get("reason") or "") or slot["reason"]
+            out["recent_blocks"] = _by_dom
+            for d in sorted(_by_dom):
+                info = _by_dom[d]
+                _finding(findings, "warn", "media_block",
+                         domain=d, n=int(info["n"]),
+                         reason=str(info["reason"]),
+                         queued=bool(info["queued"]))
+    except Exception:
+        logger.debug("[reply_diag] 拦截明细读取失败（忽略）", exc_info=True)
 
     # ── 对端是否本系统受管账号（AI 对聊观测，P0-5 薄版）────────────────
     try:
@@ -266,8 +327,57 @@ def diagnose_conversation(
             pending_n = 0
     out["drafts_pending"] = {"n": pending_n, "oldest_h": oldest_h}
     if pending_n:
+        # P2 2026-08-21：待审草稿预判「过没过陈旧护栏」（stale_approve_hours，
+        # 默认 24h；0=护栏关）。与 DraftService._stale_check 同阈值口径——
+        # 面板引导坐席去点「通过」之前先说清「这条其实会被拦、该重新生成」，
+        # 不然坐席白点一次 409（预判必须与护栏行为一致，approve_blocked 同哲学）。
+        stale_h_cfg = 24.0
+        try:
+            stale_h_cfg = float(
+                ((cfg.get("inbox") or {}).get("auto_draft") or {})
+                .get("stale_approve_hours", 24.0) or 0.0)
+        except Exception:
+            stale_h_cfg = 24.0
         _finding(findings, "warn", "pending_drafts",
-                 n=pending_n, oldest_h=oldest_h)
+                 n=pending_n, oldest_h=oldest_h,
+                 stale=bool(stale_h_cfg > 0 and oldest_h > stale_h_cfg),
+                 stale_h=round(stale_h_cfg, 1))
+
+    # ── B113（实施68 P1-17）：无闸拦、客户却在等 ────────────────────────
+    # 钧 _543：会话全自动绿、客户已回「Oh really?/Haha…」、AI 未跟，右栏只有
+    # 「初识 100%+确认进阶」（那是纯展示层，**不** gate 回复生成——回复链从不读
+    # relationship_stage 的 needs_confirmation）。所以所有闸都开着却不回时，坐席
+    # 面对一片绿一头雾水。这一档明说「没有闸拦下它，但这条确实还没回」——把排查
+    # 从「猜是不是进阶确认卡住」变成「要么在途稍等、要么人工推一把」。
+    # 判据：末条是入站 + 超宽限无出站 + 无 pending 草稿（有草稿走 pending_drafts）。
+    silent_wait_sec = 0.0
+    last_dir = ""
+    if store is not None and not any(f["level"] == "block" for f in findings) \
+            and not pending_n:
+        try:
+            _recent = []
+            if hasattr(store, "list_recent_messages"):
+                try:
+                    _recent = store.list_recent_messages(
+                        cid, limit=1, include_deleted=False) or []
+                except TypeError:
+                    _recent = store.list_recent_messages(cid, limit=1) or []
+            if _recent:
+                _last = _recent[-1]
+                last_dir = str(_last.get("direction") or "")
+                if last_dir == "in":
+                    silent_wait_sec = max(
+                        0.0, ts_now - float(_last.get("ts") or ts_now))
+        except Exception:
+            silent_wait_sec = 0.0
+    out["silent_wait_sec"] = round(silent_wait_sec, 1)
+    # 宽限＝轮询兜底 TTL 同刻度（600s）：超过它还没回＝不是「正在生成」能解释的
+    _SILENT_GRACE_SEC = 600.0
+    if silent_wait_sec >= _SILENT_GRACE_SEC:
+        _finding(findings, "warn", "customer_waiting_no_gate",
+                 wait_sec=round(silent_wait_sec, 1),
+                 effective=str(effective.get("effective_mode")
+                               or base_mode or ""))
 
     if not any(f["level"] == "block" for f in findings):
         _finding(findings, "ok", "looks_alive",

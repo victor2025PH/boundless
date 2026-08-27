@@ -635,6 +635,10 @@ def _enrich_chat_list(request: Request, chats: List[Dict[str, Any]], *, config_m
                 c["snooze_until"] = meta2.get("snooze_until", 0)
                 # 2026-08-17 官方级消息管理：置顶时刻（0=未置顶）→ 前端置顶恒排顶部 + 📌 徽标
                 c["pinned_at"] = meta2.get("pinned_at", 0)
+                # 实施74（实施69 P1-1）：「需人工」chip 悬停自解释（何时/为何/谁打的）
+                _hm = meta2.get("handoff_meta") or {}
+                if _hm:
+                    c["handoff_meta"] = _hm
     except Exception:
         logger.debug("会话列表 tags 加载失败（已忽略）", exc_info=True)
 
@@ -931,6 +935,50 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
         except Exception:
             logger.debug("[inbox] mark-read 落库失败 cid=%s", cid, exc_info=True)
             return {"ok": False, "conversation_id": cid}
+        # P0 未读可信化 v2（2026-08-23）：把坐席「已读」同步回平台（read receipt）。
+        # 协议号手机端未读残值是徽标回弹的持续供体——effective_unread 的
+        # last_in_ts 闸门只是止血，平台侧清零才断根。默认关（已读回执是客户可见
+        # 行为，按平台开关属产品决策；AI 自动回复链早已在发回执，这里补齐
+        # 「人工阅读」缺口使两条链行为一致）。fire-and-forget：协议 worker 与本
+        # 路由同在 web loop，create_task 即可，绝不阻塞水位写入的返回。
+        try:
+            from src.inbox import read_sync as _rs
+            _cfg = (config_manager.config if config_manager is not None else {}) or {}
+            _row = None
+            try:
+                _row = store.get_conversation(cid)
+            except Exception:
+                _row = None
+            _plat = str((_row or {}).get("platform")
+                        or (body or {}).get("platform") or "").lower()
+            if _plat and _rs.push_enabled(_cfg, _plat):
+                if int((_row or {}).get("unread") or 0) <= 0:
+                    _rs.note_no_unread()   # 手机端已读净——不必打扰 worker
+                elif _rs.should_push(cid):
+                    _acct = str((_row or {}).get("account_id")
+                                or (body or {}).get("account_id") or "default")
+                    _ck = str((_row or {}).get("chat_key")
+                              or (body or {}).get("chat_key") or "")
+                    if _ck:
+                        _rs.record_push(cid)
+
+                        async def _push_receipt(p=_plat, a=_acct, k=_ck):
+                            try:
+                                from src.integrations.account_orchestrator import (
+                                    get_orchestrator,
+                                )
+                                ok = bool(await get_orchestrator(_cfg)
+                                          .mark_read(p, a, k))
+                                _rs.note_result(ok)
+                            except Exception:
+                                _rs.note_result(False)
+                                logger.debug(
+                                    "[inbox] read-sync 平台回执失败 %s:%s",
+                                    p, a, exc_info=True)
+
+                        asyncio.create_task(_push_receipt())
+        except Exception:
+            logger.debug("[inbox] read-sync 决策失败（已忽略）", exc_info=True)
         return {"ok": True, "conversation_id": cid, "last_read_ts": water}
 
     @app.post("/api/unified-inbox/mark-account-read")
@@ -1163,7 +1211,25 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
 
         _record_panel_identity(target)   # F3：打开会话→记资料面板文字身份就绪度（去重）
 
-        return {
+        # B88：读取入口顺带探测「云端顶部 id vs 镜像最大 id」缺口并后台补拉
+        # （重启窗漏的消息打开即自愈；per-cid 冷却在触发器内部，秒级轮询零放大）。
+        # 快照随响应带出：state=error/capped 由前端在线程顶部显式提示（禁静默）。
+        gap_probe: Dict[str, Any] = {}
+        if platform == "telegram" and not history:
+            try:
+                from src.web.routes.unified_inbox_account_routes import (
+                    maybe_probe_tg_thread_gap, tg_gap_probe_snapshot,
+                )
+                _gp_store = getattr(request.app.state, "inbox_store", None)
+                if _gp_store is not None:
+                    maybe_probe_tg_thread_gap(
+                        request.app, _gp_store, account_id, chat_key)
+                    gap_probe = tg_gap_probe_snapshot(cid)
+            except Exception:
+                logger.debug("[thread] 缺口探测触发失败（已忽略）", exc_info=True)
+                gap_probe = {}
+
+        resp = {
             "ok": True,
             "chat": target,
             "messages": out_msgs,
@@ -1172,6 +1238,9 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
             "oldest_ts": out_msgs[0].get("ts") if out_msgs else None,
             "auto_translate": translate_stats,
         }
+        if gap_probe.get("state") not in (None, "", "idle"):
+            resp["gap_probe"] = gap_probe
+        return resp
 
     @app.get("/api/unified-inbox/conv-probe")
     async def api_unified_inbox_conv_probe(request: Request, cid: str = ""):

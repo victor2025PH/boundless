@@ -950,6 +950,10 @@ SEALED_PAGES = (
     ("workspace_dashboard.html", dict(ui_mode="full", user_name="admin", user_display_name="Admin",
                                       funnel_done_stages=[])),
     ("draft_review.html", dict(ui_mode="full", user_name="admin", user_display_name="Admin")),
+    # WP-9（2026-08-17）对外英文走查收编：首启向导（WP-2，新客户第一屏）+ 老板日报
+    # （WP-3，老板每日一屏）——出海评估路径上的两大门面页，EN 泄漏在这里最伤。
+    ("welcome.html", {"ui_mode": "full"}),
+    ("boss.html", dict(ui_mode="full", user_name="admin", user_display_name="Admin")),
     # 自动回复设置（2026-08-02）：可见文案全走服务端 (i18n or {}).get(rps_*)；JS 文案经
     # RPS_I18N（Jinja 按渲染语言注入）而非 window.T——<script> 源码里的中文是 get 默认值、
     # 随语言被 Jinja 消费，故**刻意不入** _SCRIPT_CJK_ZERO_PAGES（那是 window.T 架构的门禁）；

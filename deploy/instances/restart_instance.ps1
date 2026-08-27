@@ -38,7 +38,12 @@ param(
     [switch]$SkipReadyWait,
     [switch]$NoAlert,            # skip ops alert relay
     # Watchdog caller: implies Force+AllowHotOnly+NoAlert (watchdog sends its own alert)
-    [switch]$FromWatchdog
+    [switch]$FromWatchdog,
+    # P1-3 (2026-08-18): after DONE, run the read-only load-verification probe
+    # (tools/post_restart_probe.py). REPORT-ONLY: probe failures never change
+    # the restart result/exit code (restart already succeeded; a red probe row
+    # means some expected route/endpoint is missing -> yellow warning to read).
+    [switch]$Probe
 )
 
 $ErrorActionPreference = 'Stop'
@@ -378,5 +383,21 @@ if ($flap -and $flap.flapping) {
     $rs = @($flap.reasons) -join ','
     Say ("FLAP DETECTED: {0} restarts in {1}m (threshold {2}) reasons={3}" -f $flap.count, $flap.window_min, $flap.threshold, $rs) 'Yellow'
     Send-RestartAlert ("🚨 {0} RESTART FLAP: {1}x in {2}m on {3} (reasons={4}). Stop killing; wait cooldown; check boot logs." -f $meta.name, $flap.count, $flap.window_min, $env:COMPUTERNAME, $rs)
+}
+# P1-3: optional load-verification probe (report-only; never changes exit code).
+if ($Probe) {
+    $engine = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'engines\chengjie'
+    $probePy = Join-Path $engine 'tools\post_restart_probe.py'
+    if (Test-Path $probePy) {
+        Say 'running post-restart load-verification probe (read-only)...' 'Cyan'
+        & python -X utf8 $probePy --base ("http://127.0.0.1:{0}" -f $effPort) --data-root $root
+        if ($LASTEXITCODE -ne 0) {
+            Say ("PROBE REPORTED ISSUES (exit {0}) - restart itself succeeded; read the FAIL rows above (missing route = code not on disk before restart / registration error)." -f $LASTEXITCODE) 'Yellow'
+        } else {
+            Say 'probe: all expected routes/endpoints answering.' 'Green'
+        }
+    } else {
+        Say ("probe script missing: {0}" -f $probePy) 'Yellow'
+    }
 }
 exit 0

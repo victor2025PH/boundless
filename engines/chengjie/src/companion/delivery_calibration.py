@@ -55,17 +55,25 @@ def delivery_calibration(
 
     dist = summarize_automation_modes(modes)
     auto_ai = dist["auto_ai"]
+    # 全局默认档=auto_ai（新会话首条入站 bootstrap 即全自动）时，「无显式
+    # auto_ai 会话」不再等于「不会对任何人真发」——真发人群在首条入站时诞生。
+    # 与 capability_toggle._global_auto_ai 同一事实源（B37 死锁修复的读侧）。
+    try:
+        from src.inbox.automation_mode import global_automation_mode_from_config
+        global_auto = global_automation_mode_from_config(config) == "auto_ai"
+    except Exception:
+        global_auto = False
 
     warnings = []
     if deliver_on and not worker_on:
         warnings.append("deliver=true 但 l2_autosend worker 未启用 → 不会处置草稿，发不出")
-    if deliver_on and auto_ai == 0:
+    if deliver_on and auto_ai == 0 and not global_auto:
         warnings.append("deliver=true 但无 auto_ai 会话 → 不会对任何人真发（需把目标会话设「🚀全自动」）")
     if deliver_on and not gate_on:
         warnings.append("真发已开但出站安全闸 companion_send_gate 未开 → 内容/频率裸奔，建议同开")
 
     # verdict：会不会真发 + 配置是否自洽
-    will_send = deliver_on and worker_on and auto_ai > 0
+    will_send = deliver_on and worker_on and (auto_ai > 0 or global_auto)
     if will_send:
         verdict = "effective"           # 此刻确实会对 auto_ai 会话真发
         recommendation = ("真发生效中：建议确认 send-gate 已开 + 持续盯 recent 失败数"
@@ -82,6 +90,7 @@ def delivery_calibration(
     return {
         "switches": {"worker": worker_on, "deliver": deliver_on, "send_gate": gate_on},
         "automation_modes": dist,
+        "global_auto_ai": global_auto,
         "recent": {"autosend": recent_autosend, "autosend_failed": recent_autosend_failed},
         "will_send_now": will_send,
         "verdict": verdict,

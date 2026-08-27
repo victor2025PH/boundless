@@ -3,8 +3,8 @@
 `src/companion/user_clock.py` 是纯函数事实源（零 IO、绝不 raise，见其模块 docstring 的
 trust 三档语义）；本模块只负责它周围那圈脏活：
 
-1. **采信号**：自述居住地（episodic 记忆的 residence 槽）、电话国码（仅 WhatsApp）、
-   入站消息的 UTC 小时分布、会话语种；
+1. **采信号**：自述居住地（episodic 记忆的 residence 槽 **+ 入站原文挖掘**）、
+   电话国码（仅 WhatsApp）、入站消息的 UTC 小时分布、会话语种；
 2. **调纯函数** `resolve_user_clock`；
 3. **两级缓存**：进程级 dict（带容量上限）+ `conversation_meta.tz_*` 落库；
 4. **给主动触达链一个便宜的查询入口**——planner 每 tick 会对几十个会话问「对方那边几点」，
@@ -41,6 +41,7 @@ from src.companion.user_clock import (
     TRUST_NARROW,
     TRUST_REPLACE,
     UserClock,
+    infer_from_stated_place,
     resolve_user_clock,
 )
 from src.utils.memory_slots import SLOT_RESIDENCE, extract_slot
@@ -51,6 +52,10 @@ __all__ = [
     "resolve_for_conversation",
     "resolve_peer_locale",
     "utc_hours_for_conversation",
+    "utc_hours_from_rows",
+    "stated_place_from_inbound_text",
+    "stated_place_from_inbound_rows",
+    "stated_place_from_reply_text",
     "invalidate",
     "dump_stats",
     "distribution",
@@ -106,6 +111,8 @@ _STATS: Dict[str, int] = {
     "persist_ok": 0,
     "persist_fail": 0,
     "disabled": 0,
+    "inbound_stated": 0,
+    "cache_stale_inbound": 0,
 }
 
 
@@ -384,23 +391,23 @@ def _persist(inbox_store: Any, cid: str, clock: Optional[UserClock], now_ts: flo
 # 信号采集
 # ---------------------------------------------------------------------------
 
-def utc_hours_for_conversation(
+def _list_recent_messages(
     inbox_store: Any, conversation_id: str, *, limit: int = 120,
-) -> List[int]:
-    """会话最近 ``limit`` 条消息里**入站**消息的 UTC 小时序列（行为推断的输入）。
-
-    只算入站：出站是我们自己的发送节奏（受 worker/排班驱动），拿它推客户作息等于推自己。
-    ``ts <= 0`` 的行跳过（未知时间的占位行会污染直方图）。异常 → ``[]``（行为推断这一路
-    静默退场，其它信号照常）。
-    """
-    out: List[int] = []
+) -> List[Mapping[str, Any]]:
+    """取最近消息；失败 → []。供小时序列与入站城市挖掘共用，避免 cache miss 双扫。"""
     try:
         rows = inbox_store.list_recent_messages(
             str(conversation_id or ""), limit=int(limit)) or []
+        return list(rows)
     except Exception:
         logger.debug("[user_clock] 取消息失败 cid=%s", conversation_id, exc_info=True)
-        return out
-    for row in rows:
+        return []
+
+
+def utc_hours_from_rows(rows: Any) -> List[int]:
+    """已取到的消息行 → 入站 UTC 小时序列（纯函数，供 resolver / 覆盖率工具共用）。"""
+    out: List[int] = []
+    for row in rows or []:
         try:
             if str((row or {}).get("direction") or "") != "in":
                 continue
@@ -411,6 +418,19 @@ def utc_hours_for_conversation(
         except Exception:
             continue
     return out
+
+
+def utc_hours_for_conversation(
+    inbox_store: Any, conversation_id: str, *, limit: int = 120,
+) -> List[int]:
+    """会话最近 ``limit`` 条消息里**入站**消息的 UTC 小时序列（行为推断的输入）。
+
+    只算入站：出站是我们自己的发送节奏（受 worker/排班驱动），拿它推客户作息等于推自己。
+    ``ts <= 0`` 的行跳过（未知时间的占位行会污染直方图）。异常 → ``[]``（行为推断这一路
+    静默退场，其它信号照常）。
+    """
+    return utc_hours_from_rows(
+        _list_recent_messages(inbox_store, conversation_id, limit=limit))
 
 
 # 英文/正式中文的居住地线索（**刻意只放在本模块**，不进 `memory_slots`）。
@@ -441,18 +461,139 @@ def _place_hint_from_text(text: Any) -> str:
         return ""
 
 
-def _stated_place(episodic_store: Any, memory_key: str) -> str:
+# 入站原文挖掘（2026-08-19）：记忆槽经常空着，但客户聊里已经说过「我在曼谷」。
+# 血溅半径刻意比 `infer_from_stated_place(整句)` 小——那条会对「曼谷那家店」子串命中，
+# 拿来当 replace 时钟会把路过提及升级成居住地。这里只认三种高置信句式：
+# residence 槽 / live-in 线索 / 「我在 / I'm in」+ 35 城白名单。
+# 出行/老家一律弃权（「明天去纽约」「I'm from Manila」不是「你那边现在几点」）。
+_HERE_RE = re.compile(
+    r"(?:我(?:现在)?(?:就)?在|现在在|"
+    r"i(?:['’]?m|\s+am)(?:\s+currently)?\s+in)\s*"
+    r"(?P<v>[\u4e00-\u9fa5]{2,12}|[A-Za-z][A-Za-z .'-]{1,28})",
+    re.IGNORECASE,
+)
+_SKIP_INBOUND_RE = re.compile(
+    r"(?:要去|打算去|准备去|飞往|飞去|出差|旅游|旅行|路过|"
+    r"明天去|下周去|下次去|去过|"
+    r"老家(?:在|是)|故乡|出身|家乡|"
+    r"going\s+to|flying\s+to|headed\s+to|trip\s+to|"
+    r"will\s+be\s+in|next\s+week|"
+    r"i['’]?m\s+from|i\s+was\s+born|hometown)",
+    re.IGNORECASE,
+)
+_HERE_TRAIL_RE = re.compile(r"(?:这边|那边|这里|那里|呢|啊|哈|呀|的)$")
+
+
+def stated_place_from_inbound_text(text: Any) -> str:
+    """从一条**入站原文**抽可当 replace 时钟的地点；抽不出 / 出行 / 老家 → ""。
+
+    纯函数、绝不 raise。记忆槽路径仍走 `_stated_place`（事实已经过抽取），本函数
+    只服务「聊天里说过但没进 episodic」这条漏网。
+    """
+    try:
+        raw = str(text or "").strip()
+        if len(raw) < 2:
+            return ""
+        if _SKIP_INBOUND_RE.search(raw):
+            return ""
+        slot = extract_slot(raw)
+        if slot and slot[0] == SLOT_RESIDENCE and slot[1]:
+            return str(slot[1])
+        hint = _place_hint_from_text(raw)
+        if hint:
+            return hint
+        match = _HERE_RE.search(raw)
+        if not match:
+            return ""
+        value = _HERE_TRAIL_RE.sub("", str(match.group("v") or "").strip())
+        if not value or infer_from_stated_place(value) is None:
+            return ""
+        return value
+    except Exception:
+        return ""
+
+
+_REPLY_PUNCT_RE = re.compile(r"[，。！？、.!?\s~～]+")
+
+
+def _is_bare_whitelist_city(text: str) -> bool:
+    """整段文字就是 35 城白名单里的一个城名（不是句子里碰巧含城名）。"""
+    clock = infer_from_stated_place(text)
+    if clock is None:
+        return False
+    slug = str(getattr(clock, "city_slug", "") or "").strip().lower()
+    if not slug:
+        return False
+    try:
+        from src.companion.persona_location import CITY_PRESETS
+        preset = CITY_PRESETS.get(slug) or {}
+    except Exception:
+        preset = {}
+    aliases = {
+        slug,
+        str(preset.get("city_zh") or "").strip().lower(),
+        str(preset.get("city_en") or "").strip().lower(),
+    }
+    return str(text or "").strip().lower() in aliases
+
+
+def stated_place_from_reply_text(text: Any) -> str:
+    """问城市之后的短答（「曼谷」「Bangkok」）也能抽；长句仍走入站挖掘。
+
+    整句先走 ``stated_place_from_inbound_text``（我在/住在/I'm in）。抽不出
+    且原文很短（≤24）时，**整段必须就是白名单城名**——「明天去纽约」
+    「曼谷那家店」含城名但不等于城名，弃权。出行/老家句式仍弃权。
+    """
+    try:
+        raw = str(text or "").strip()
+        if not raw:
+            return ""
+        place = stated_place_from_inbound_text(raw)
+        if place:
+            return place
+        if len(raw) > 24:
+            return ""
+        cleaned = _REPLY_PUNCT_RE.sub("", raw)
+        if not cleaned or not _is_bare_whitelist_city(cleaned):
+            return ""
+        return cleaned
+    except Exception:
+        return ""
+
+
+def stated_place_from_inbound_rows(rows: Any) -> Tuple[str, float]:
+    """最近消息里最新一条合格入站地点 ``(place, ts)``；没有 → ``("", 0)``。"""
+    best_place = ""
+    best_ts = 0.0
+    for row in rows or []:
+        try:
+            if str((row or {}).get("direction") or "") != "in":
+                continue
+            ts = float((row or {}).get("ts") or 0)
+            if ts <= 0:
+                continue
+            text = (row or {}).get("text") or (row or {}).get("content") or ""
+            place = stated_place_from_inbound_text(text)
+            if place and ts >= best_ts:
+                best_ts, best_place = ts, place
+        except Exception:
+            continue
+    return best_place, best_ts
+
+
+def _stated_place_with_ts(episodic_store: Any, memory_key: str) -> Tuple[str, float]:
     """episodic 记忆里客户自述的居住地（取 ``created_at`` 最大的一条）。
 
     ``source="user_stated"`` 优先——AI 推断出来的居住地不该反过来当成客户亲口说的强信号。
     该筛选返回空（或旧版 store 不认这个入参）时退化为一次不带 source 的查询：拿不到
     最优信号也比整条路径静默失效好。
+    返回 ``(place, created_at)``；没有 → ``("", 0)``。
     """
     if episodic_store is None:
-        return ""
+        return "", 0.0
     key = str(memory_key or "").strip()
     if not key:
-        return ""
+        return "", 0.0
     rows: List[Any] = []
     try:
         rows = list(episodic_store.list_rows(
@@ -491,7 +632,16 @@ def _stated_place(episodic_store: Any, memory_key: str) -> str:
                 hint_ts, hint_place = created, cand
         except Exception:
             continue
-    return best_place or hint_place
+    if best_place:
+        return best_place, float(best_ts or 0.0)
+    if hint_place:
+        return hint_place, float(hint_ts or 0.0)
+    return "", 0.0
+
+
+def _stated_place(episodic_store: Any, memory_key: str) -> str:
+    place, _ts = _stated_place_with_ts(episodic_store, memory_key)
+    return place
 
 
 def _phone_from_conv(conv: Mapping[str, Any]) -> str:
@@ -527,11 +677,15 @@ def resolve_for_conversation(
     cfg: Optional[Dict[str, Any]] = None,
     now: Optional[float] = None,
     force: bool = False,
+    last_inbound_ts: float = 0.0,
 ) -> Optional[UserClock]:
     """推断某会话客户的时钟（带两级缓存的唯一入口）。
 
     ``cfg`` = ``companion.user_clock`` 配置段；未启用 → 直接 None 且**一次 store 调用
     都不发**。``force=True`` 越过两级缓存强制重算（客户刚说了城市之类的场景）。
+    ``last_inbound_ts``：规划器快照里对方最后开口的时间；比缓存 ``resolved_at`` 新
+    则视为信号可能变了（新说了城市 / 新的作息样本），越过两级缓存重推——否则入站
+    挖掘要等满 TTL（默认 6h）才生效，上午说了「我在曼谷」晚上还按北京钟发晚安。
     返回 None = 推不出来，调用方按「没有推断」处理（`user_clock` 各消费函数吃 None 会
     逐位回落服务器钟＝等价旧行为）。**绝不 raise**。
     """
@@ -550,21 +704,33 @@ def resolve_for_conversation(
             now_ts = float(now) if now is not None else time.time()
         except Exception:
             now_ts = time.time()
+        try:
+            inbound_ts = float(last_inbound_ts or 0.0)
+        except Exception:
+            inbound_ts = 0.0
+
+        def _inbound_stale(resolved_at: float) -> bool:
+            return inbound_ts > 0 and inbound_ts > float(resolved_at or 0) + 1e-6
 
         # 无条件取走标记（force 本轮也会重算，留着它只会让下一轮白重算一次）。
         marked = _consume_force_mark(cid)
         if not (force or marked):
             cached = _cache_get(cid)
             if cached is not None and (now_ts - cached[0]) <= ttl_sec:
-                _bump("cache_hit_mem")
-                return cached[1]
-            hit, db_clock, db_at = _from_conv_meta(inbox_store, cid, now_ts, ttl_sec)
-            if hit:
-                # 沿用库里的 resolved_at（而非 now）：否则跨重启回读会把 TTL 一次次续期，
-                # 一个陈旧推断可能永远不过期。
-                _cache_put(cid, db_at, db_clock)
-                _bump("cache_hit_db")
-                return db_clock
+                if not _inbound_stale(cached[0]):
+                    _bump("cache_hit_mem")
+                    return cached[1]
+                _bump("cache_stale_inbound")
+            else:
+                hit, db_clock, db_at = _from_conv_meta(inbox_store, cid, now_ts, ttl_sec)
+                if hit and not _inbound_stale(db_at):
+                    # 沿用库里的 resolved_at（而非 now）：否则跨重启回读会把 TTL 一次次续期，
+                    # 一个陈旧推断可能永远不过期。
+                    _cache_put(cid, db_at, db_clock)
+                    _bump("cache_hit_db")
+                    return db_clock
+                if hit and _inbound_stale(db_at):
+                    _bump("cache_stale_inbound")
 
         # 每路信号各自兜底：某个库挂了不该拖垮其它信号（get_conversation 一次取到，
         # phone 与 language 共用，省一次查询）。
@@ -574,10 +740,18 @@ def resolve_for_conversation(
             logger.debug("[user_clock] 取会话失败 cid=%s", cid, exc_info=True)
             conv = {}
 
+        rows = _list_recent_messages(inbox_store, cid)
+        mem_place, mem_ts = _stated_place_with_ts(episodic_store, memory_key)
+        inb_place, inb_ts = stated_place_from_inbound_rows(rows)
+        stated = mem_place
+        if inb_place and (not mem_place or inb_ts >= mem_ts):
+            stated = inb_place
+            _bump("inbound_stated")
+
         clock = resolve_user_clock(
-            stated_place=_stated_place(episodic_store, memory_key),
+            stated_place=stated,
             phone=_phone_from_conv(conv),
-            activity_hours=utc_hours_for_conversation(inbox_store, cid),
+            activity_hours=utc_hours_from_rows(rows),
             language=_language_from_conv(conv),
             min_samples=min_samples,
             min_margin=min_margin,

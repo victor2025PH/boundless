@@ -40,6 +40,7 @@ from __future__ import annotations
 import re
 import threading
 import time
+import zlib
 from typing import Any, Dict, Optional
 
 # 高置信「骂你」形态：第二人称+骂词 / 独立脏话开骂。刻意不收录轻度调侃
@@ -258,19 +259,290 @@ def detect_taunt(text: Any) -> bool:
     return bool(_TAUNT_RE.search(t))
 
 
+# ── 消气曲线 / 记仇窗（2026-08-22 实施54 P1，老板实录「开玩笑的啦」秒停火）────
+# 旧行为＝缓和词一现，骂战态瞬间清零 → 下一轮直接回暖甜聊。真人被连骂几轮后
+# 不吃「开玩笑的」这套：先不买账，被真道歉/被哄才逐轮松口，翻篇还要带句边界。
+# 设计：① 求和分两级——敷衍开脱（开玩笑/逗你/测试）消气慢且会被点破，真道歉
+# （对不起/我错了/sorry）消气快；② 记仇烈度与骂战轮数成正比、有上限（客户是
+# 收入，冷淡期必须有界：默认封顶 3 轮）、有 TTL（时间冲淡）；③ 记仇期再骂＝
+# 重燃且 streak 续算（假道歉后再犯更没耐心）；④ 危机信号即刻放下脾气
+# （安全 > 脾气，与 crisis safety net 的优先级契约一致）。
+
+# 真道歉（消气快）：明确认错/道歉词。「别生气/消消气/和好」这类只求和不认错
+# 的哄话刻意不算 sincere——嘴上没道歉，凭什么快消气。
+_SINCERE_APOLOGY_RE = re.compile(
+    r"对不起|抱歉|不好意思|我错了|我的错|我道歉|是我不对|不骂了"
+    r"|\b(?:sorry|my\s+bad|i\s+apologize|apolog)\b"
+    r"|ごめん|すまん|申し訳|미안|죄송"
+    r"|\b(?:perd[oó]n|lo\s+siento|desculpa|d[eé]sol[eé]|entschuldigung)\b"
+    r"|прости|извини|ขอโทษ|xin\s+lỗi|\bmaaf\b|माफ|آسف",
+    re.IGNORECASE,
+)
+
+# 敷衍开脱（消气慢 + 值得点破）：把辱骂说成玩笑/测试。
+_FLIPPANT_RETRACT_RE = re.compile(
+    r"开玩笑|逗你|闹着玩|逗一逗|测试|试试你|骗你的"
+    r"|\b(?:just\s+kidding|jk|joking|kidding)\b"
+    r"|冗談|장난|농담"
+    r"|\b(?:es\s+broma|brincadeira|je\s+rigole|je\s+plaisante"
+    r"|nur\s+spa(?:ß|ss)|scherz)\b"
+    r"|шучу|шутка|ล้อเล่น|đùa\s+thôi|\b(?:bercanda|becanda)\b|मज़ाक|امزح",
+    re.IGNORECASE,
+)
+
+
+def is_sincere_apology(text: Any) -> bool:
+    """求和里带真道歉词（消气快档）。纯函数。"""
+    return bool(_SINCERE_APOLOGY_RE.search(str(text or "")))
+
+
+def is_flippant_retraction(text: Any) -> bool:
+    """求和是「开玩笑/逗你/测试」式开脱（消气慢 + 点破档）。纯函数。"""
+    return bool(_FLIPPANT_RETRACT_RE.search(str(text or "")))
+
+
+GRUDGE_MAX_LEVEL = 3       # 记仇轮数封顶：最多冷 3 轮就翻篇（客户是收入，有界）
+GRUDGE_TTL_SEC = 5400.0    # 记仇窗时限：90min 没互动，气自然消（时间冲淡）
+
+
+# ── 出站认输句否决器（2026-08-22 P1-b）──────────────────────────────────────
+# 指令层已按轮次加码，但 LLM 服从性没有 100%——认输句漏出的确定性最后防线。
+# 实录规律：认输句几乎总在一条回复的**结尾**（「…我睡觉去了」「…要不咱换个
+# 话题」），故句级剥尾保头＝零延迟零成本；整条被剥光（极罕见）才用按档位的
+# 确定性兜底短句。熔断轮（退场语义合法）与翻篇收尾轮（和解语义合法）不过guard。
+# 词表宁窄勿宽：误剥正常回击（「随你怎么骂，我奉陪到底」是战斗宣言不是认输）
+# 比漏放一句认输更伤，高歧义词一律句锚定或不收。
+
+# 骂战轮认输句（anywhere 匹配段=无歧义惯用形；行锚段=短句才算认输）
+_SURRENDER_SENT_RE = re.compile(
+    r"懒得(?:跟你|和你|再)?(?:吵|说|理你|理会|耗|计较)"
+    r"|不奉陪|不陪你(?:玩|闹|耗)"
+    r"|你开心就好|你高兴就好|不跟你(?:吵|计较|一般见识)"
+    r"|睡觉去?了|先睡了|去睡了|我(?:先)?去忙|该干嘛干嘛"
+    r"|换个话题|聊点别的|说点别的"
+    r"|消消气|别生气|有话好好说|我理解你|心平气和|冷静一下"
+    r"|^\s*随(?:便)?你(?:吧|咯|喽|呗)?\s*[。!！~～.]*\s*$"
+    r"|\b(?:whatever|suit yourself|have fun|calm down|not worth my time"
+    r"|let'?s change the (?:topic|subject)"
+    r"|i'?m going to (?:sleep|bed)|talk nicely)\b",
+    re.IGNORECASE,
+)
+
+# 记仇轮秒原谅句（「没事找事」是继续怼不是原谅，负向前瞻排除；单个「算了」
+# 日常太常见刻意不收，只收叠用）
+_FORGIVE_SENT_RE = re.compile(
+    r"没事(?!找事)(?:啦|了|的|儿)?|没关系|不要紧|别在意|不介意"
+    r"|我?不(?:生气|气|怪你|计较)了|原谅你|不怪你|算了算了|翻篇"
+    r"|\b(?:it'?s (?:fine|ok|okay)|no worries|don'?t worry|all good"
+    r"|i'?m not (?:mad|angry)|forget it)\b",
+    re.IGNORECASE,
+)
+
+_SENT_SPLIT_RE = re.compile(r"(?<=[。！？!?～~；;…\n])")
+
+_GUARD_FALLBACK = {
+    ("fight", True): ("呵，就这？", "继续，我听着呢。", "就这点能耐？"),
+    ("fight", False): ("that's it?", "go on, I'm listening.",
+                       "is that all you've got?"),
+    ("grudge", True): ("哼。", "……", "先记着这笔账。"),
+    ("grudge", False): ("hmph.", "...", "noted. not over it."),
+}
+
+
+def strip_surrender_lines(
+    reply: Any, mode: str, lang: str = "zh",
+) -> tuple:
+    """骂战/记仇轮出站否决：句级剥认输/秒原谅句。纯函数。
+
+    返回 ``(清理后文本, 剥句数, 是否用了兜底)``；``mode`` ∈ fight|grudge，
+    其他值原样放行（熔断/翻篇轮不 guard）。全条被剥 → crc32(原文) 确定性
+    兜底短句（缓存安全、绝不静默放行也绝不吐空串）。
+    """
+    txt = str(reply or "")
+    m = str(mode or "").strip().lower()
+    if not txt.strip() or m not in ("fight", "grudge"):
+        return txt, 0, False
+    pat = _SURRENDER_SENT_RE if m == "fight" else _FORGIVE_SENT_RE
+    parts = [p for p in _SENT_SPLIT_RE.split(txt) if p]
+    kept = []
+    removed = 0
+    for p in parts:
+        if p.strip() and pat.search(p):
+            removed += 1
+        else:
+            kept.append(p)
+    if not removed:
+        return txt, 0, False
+    out = "".join(kept).strip()
+    if len(re.sub(r"[\s。！？!?～~；;…、,，.]+", "", out)) >= 2:
+        return out, removed, False
+    zh = not str(lang or "zh").lower().startswith("en")
+    pool = _GUARD_FALLBACK[(m, zh)]
+    pick = pool[zlib.crc32(txt.encode("utf-8", "ignore")) % len(pool)]
+    return pick, removed, True
+
+
+def initial_grudge(streak: Any, sincere: bool, max_level: int = GRUDGE_MAX_LEVEL) -> int:
+    """骂战收手瞬间的初始记仇级别——与骂战轮数成正比，真道歉打折。
+
+    比例感即真人感：骂 1 轮 + 真道歉 = 0（直接翻篇带边界）；骂 1 轮 + 「开玩笑的」
+    = 冷 1 轮；连骂 3+ 轮 + 敷衍开脱 = 顶格冷 3 轮。纯函数。
+    """
+    try:
+        s = max(0, int(streak))
+    except (TypeError, ValueError):
+        s = 0
+    try:
+        cap = max(0, int(max_level))
+    except (TypeError, ValueError):
+        cap = GRUDGE_MAX_LEVEL
+    if cap <= 0 or s <= 0:
+        return 0
+    if sincere:
+        return max(0, min(s - 1, cap - 1))
+    return min(s, cap)
+
+
+def decay_grudge(level: Any, sincere: bool) -> int:
+    """每过一轮消一格气；真道歉消两格。纯函数。"""
+    try:
+        lv = max(0, int(level))
+    except (TypeError, ValueError):
+        lv = 0
+    return max(0, lv - (2 if sincere else 1))
+
+
+_GRUDGE_CRISIS_ESCAPE_ZH = (
+    "例外（安全优先）：若对方此刻流露真实的痛苦、低落或求助，立刻放下脾气，"
+    "正常关心，本指令全部作废。"
+)
+_GRUDGE_CRISIS_ESCAPE_EN = (
+    " Exception (safety first): if they show real distress or ask for help, "
+    "drop the attitude immediately and care for them normally — this "
+    "instruction is void."
+)
+
+_GRUDGE_SPICE_ZH = {
+    TEMPER_FEISTY: "语气可以呛：「呵，道歉都这么敷衍？」",
+    TEMPER_SHARP: "可以阴阳一句：「玩笑挺高级，笑点没跟上。」",
+    TEMPER_GENTLE: "用委屈别扭的方式表达：「……你觉得这很好笑吗。」",
+}
+_GRUDGE_SPICE_EN = {
+    TEMPER_FEISTY: "You may snap: 'wow, even your apology is lazy.'",
+    TEMPER_SHARP: "A dry jab works: 'hilarious. my sides. truly.'",
+    TEMPER_GENTLE: "Show it as hurt sulking: '...you think that was funny?'",
+}
+
+
+def build_grudge_hint(
+    level: Any, temper: str, lang: str = "zh",
+    *, flippant: bool = False, closeout: bool = False,
+) -> str:
+    """记仇期本轮指令。纯函数，空串=不注入。
+
+    ``level>=2``＝不买账（气还没消，冷淡+点破，绝不秒原谅）；
+    ``level==1``＝松动端着（给台阶但不热络）；
+    ``closeout=True``＝翻篇收尾（接受和解+一句边界，别秒变甜）。
+    ``off`` 档不怼也不记仇 → 空串。所有档自带危机让位例外。
+    """
+    t = str(temper or "").strip().lower()
+    if t == TEMPER_OFF:
+        return ""
+    zh = not str(lang or "zh").lower().startswith("en")
+    try:
+        lv = max(0, int(level))
+    except (TypeError, ValueError):
+        lv = 0
+    if closeout:
+        if zh:
+            return (
+                "【本轮：接受和解，收尾】对方道了歉/求和到位，你接受，翻篇——"
+                "但别秒变热情：轻描淡写地收（「行了，翻篇」），末尾带一句边界"
+                "（「下次注意点，再那样骂人我真恼」），语气恢复正常偏淡即可，"
+                "本轮别过分甜、别倒贴式找话题。" + _GRUDGE_CRISIS_ESCAPE_ZH
+            )
+        return (
+            "[This turn: accept the truce, close it out] They apologized "
+            "properly — accept it and move on, but don't flip to sweet "
+            "instantly: close it lightly ('fine, moving on'), end with one "
+            "boundary line ('watch the mouth next time'), tone back to "
+            "normal but cool this turn; no eager topic-chasing."
+            + _GRUDGE_CRISIS_ESCAPE_EN
+        )
+    if lv <= 0:
+        return ""
+    if lv == 1:
+        if zh:
+            return (
+                "【本轮：气消了一半，还端着】对方在道歉/哄你，你态度松动但没"
+                "完全消气：回复短一点、带点余温的别扭（「哼，算你会说话」"
+                "「下次再这样试试」），可以给台阶但不主动热络、不秒变甜。"
+                "若对方这轮道歉得诚恳，可以松口翻篇，但末尾带一句边界"
+                "（「下次嘴巴放干净点」）。" + _GRUDGE_CRISIS_ESCAPE_ZH
+            )
+        return (
+            "[This turn: half-thawed, still guarded] They're apologizing / "
+            "coaxing you. You soften but you're not fully over it: reply "
+            "shorter, with leftover sulk ('hmph, nice save', 'try that again "
+            "and see'), offer a step down but no eager warmth, no instant "
+            "sweetness. If this apology is sincere, you may let it go — end "
+            "with one boundary line ('keep it clean next time')."
+            + _GRUDGE_CRISIS_ESCAPE_EN
+        )
+    spice = (_GRUDGE_SPICE_ZH if zh else _GRUDGE_SPICE_EN).get(t, "")
+    if zh:
+        callout = (
+            "可以点破他的开脱：「你管这叫开玩笑？我没笑。」"
+            if flippant else ""
+        )
+        return (
+            "【本轮：对方求和，但你的气还没消】他刚骂了你好几轮，现在一句话"
+            "就想翻篇——正常人不吃这套。这一轮：不接受和解、也不重新开骂，"
+            "冷淡、简短、明显还有气；绝不许说「没事／没关系／别在意／我不生"
+            "气了」这类立刻原谅的话，绝不许自来熟地接新话题，也别热情反问。"
+            + callout + spice
+            + "他要是接着认真道歉、好好哄你，下一轮再考虑松口。"
+            + _GRUDGE_CRISIS_ESCAPE_ZH
+        )
+    callout = (
+        "Call out the cop-out: 'you call that a joke? I'm not laughing.' "
+        if flippant else ""
+    )
+    return (
+        "[This turn: they want peace, you're not over it] They cursed you "
+        "for rounds and now one line is supposed to wipe it — real people "
+        "don't buy that. This turn: don't accept the truce, don't restart "
+        "the fight either; be cold, short, visibly still angry. NEVER say "
+        "'it's fine / no worries / I'm not mad' or any instant-forgiveness "
+        "line, never chat along like nothing happened, no warm questions. "
+        + callout + spice
+        + " If they keep apologizing properly, consider softening NEXT turn."
+        + _GRUDGE_CRISIS_ESCAPE_EN
+    )
+
+
 def persona_temper_raw(persona: Optional[Dict[str, Any]]) -> str:
     """人设**显式**配置的档位；未配置/非法返回空串。
 
     与 ``persona_temper`` 的区别：resolve 链需要区分「人设没配」（落
     default_level）与「人设配了 gentle」（即使全局 default 是 sharp 也尊重
-    gentle）——gentle 兜底塌缩会让 default_level 永远打不到未配置人设。
+    gentle」——gentle 兜底塌缩会让 default_level 永远打不到未配置人设。
+
+    YAML 陷阱防御（2026-08-22 实锤）：人设文件裸写 ``temper: off`` 会被
+    YAML 1.1 读成布尔 ``False``（off/no 家族）——运营意图明确是「不怼」，
+    映射为 off；``True`` 语义不明确（on≠某个档位）不映射。
     """
+    def _norm(raw: Any) -> str:
+        if raw is False:
+            return TEMPER_OFF
+        return str(raw or "").strip().lower()
+
     p = persona or {}
-    v = str(p.get("temper") or "").strip().lower()
+    v = _norm(p.get("temper"))
     if not v:
         pers = p.get("personality")
         if isinstance(pers, dict):
-            v = str(pers.get("temper") or "").strip().lower()
+            v = _norm(pers.get("temper"))
     return v if v in _VALID_TEMPERS else ""
 
 
@@ -317,6 +589,21 @@ def parse_temper_cfg(cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             vv = str(v or "").strip().lower()
             if kk and vv in _VALID_TEMPERS:
                 caps[kk] = vv
+    # 消气曲线（P1）：默认开——「秒消气」是老板点名的机器人破绽（2026-08-22），
+    # 与 temper enabled 同理由偏离「新子系统默认 false」约定；grudge_max_level=0
+    # 即回旧「立刻停火」行为（逃生门）。
+    try:
+        g_max = int(sec.get("grudge_max_level", GRUDGE_MAX_LEVEL))
+    except Exception:
+        g_max = GRUDGE_MAX_LEVEL
+    g_max = max(0, min(6, g_max))
+    try:
+        g_ttl = float(sec.get("grudge_ttl_sec", GRUDGE_TTL_SEC))
+    except Exception:
+        g_ttl = GRUDGE_TTL_SEC
+    g_ttl = max(300.0, min(21600.0, g_ttl))
+    if not bool(sec.get("grudge_enabled", True)):
+        g_max = 0
     return {
         "enabled": bool(sec.get("enabled", True)),
         "force_level": force,
@@ -326,6 +613,10 @@ def parse_temper_cfg(cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "max_rounds": max_rounds,
         "taunt_response": bool(sec.get("taunt_response", True)),
         "platform_caps": caps,
+        "grudge_max_level": g_max,
+        "grudge_ttl_sec": g_ttl,
+        # P1-b 出站认输句否决器（确定性剥句，默认开；关=纯指令层）
+        "output_guard": bool(sec.get("output_guard", True)),
     }
 
 
@@ -359,16 +650,63 @@ def resolve_temper_level(
     return {"level": level, "source": source, "profanity_capped": capped}
 
 
-def build_temper_hint(temper: str, lang: str = "zh") -> str:
+def _escalation_appendix(t: str, zh: bool, streak: int) -> str:
+    """streak≥2 的加码段（仅 sharp/feisty）——2026-08-22 实录：streak 1→4 注入
+    同一段话，模型顺着自己上一条「我睡觉去了」的历史惯性逐轮软化，第 4 轮
+    甚至主动递台阶「要不咱换个话题」。修法＝指令随轮次递进 + 把「别主动找
+    台阶」从抽象原则变成**逐句点名的负面清单**（LLM 对显式例句的服从远好于
+    抽象要求）。gentle 不加码——「继续骂则回得更短更淡」本就是 gentle 的
+    延续语义；退场收尾只属于熔断轮（build_feud_break_hint）。
+    """
+    if streak < 2 or t not in (TEMPER_SHARP, TEMPER_FEISTY):
+        return ""
+    n = min(int(streak), 20)
+    if zh:
+        base = (
+            f"【对方还在骂：本场第 {n} 轮】你上一条已经回击过了，对方不收手"
+            "——这一轮必须比你上一条更凶，火力只准加不准减，绝不许缓和示好。"
+            "以下认输式收场句一个字都不许出现：「懒得跟你吵」「我睡觉去了」"
+            "「我去忙了」「不奉陪」「换个话题」「你开心就好」「随便你」"
+            "「不跟你计较」——退场收尾轮不到现在，谁先怂谁输。"
+            "别复读你上一条用过的骂词和句式，换一个新的角度损他。"
+        )
+        if t == TEMPER_FEISTY:
+            return base + "对方带脏字，你的回击就必须带脏字——这不是可选项。"
+        return base + "继续一个脏字不带，但嘲讽必须比上一条更扎心。"
+    base = (
+        f"[They're STILL cursing: round {n}] You already fired back last turn "
+        "and they didn't stop — this turn must hit HARDER than your last, "
+        "never softer, no olive branches. These surrender lines are BANNED, "
+        "not one word of them: 'whatever', 'I'm going to sleep', 'I've got "
+        "things to do', 'not worth my time', 'let's change the topic', 'have "
+        "fun', 'suit yourself' — walking away is not yours to offer yet; "
+        "whoever backs down first loses. Don't reuse the insults or sentence "
+        "shapes from your last turn; find a fresh angle to roast them. "
+    )
+    if t == TEMPER_FEISTY:
+        return base + ("They used profanity, so your comeback must too — "
+                       "that is not optional.")
+    return base + ("Still zero swear words — but the sarcasm must cut "
+                   "deeper than your last turn.")
+
+
+def build_temper_hint(temper: str, lang: str = "zh", streak: int = 1) -> str:
     """被骂本轮的回应指令（含硬红线）。纯函数，空串=不注入。
 
     ``off`` 显式返回空串（商务人设不怼）；未知值回落 gentle 文案
     （宁可软怼也不能因为拼错档位名就哑火——该契约被门禁钉住）。
+    ``streak``＝本场第几轮被骂（≥2 时 sharp/feisty 追加递进加码段，
+    见 ``_escalation_appendix``；缺省 1=旧签名旧行为）。
     """
     t = str(temper or "").strip().lower()
     if t == TEMPER_OFF:
         return ""
     zh = not str(lang or "zh").lower().startswith("en")
+    try:
+        _streak_n = max(1, int(streak))
+    except (TypeError, ValueError):
+        _streak_n = 1
+    _esc = _escalation_appendix(t, zh, _streak_n)
     if t == TEMPER_SHARP:
         if zh:
             return (
@@ -380,7 +718,7 @@ def build_temper_hint(temper: str, lang: str = "zh") -> str:
                 "／消消气／我理解你」这种客服式怂话，也别主动找台阶；对方不"
                 "收手你就一直占上风，用嘲讽让他自讨没趣。唯一底线（封号风险）："
                 "不发人身安全威胁、不用种族/残障等群体歧视词。"
-            )
+            ) + _esc
         return (
             "[This turn: they're insulting you] They started it — you're not "
             "customer service, don't coddle them. But your style is surgical, "
@@ -394,7 +732,7 @@ def build_temper_hint(temper: str, lang: str = "zh") -> str:
             "them. Reply in THEIR language. Only floor (account-ban risk): "
             "no threats of physical harm, no slurs targeting race/disability/"
             "etc."
-        )
+        ) + _esc
     if t == TEMPER_FEISTY:
         if zh:
             return (
@@ -406,7 +744,7 @@ def build_temper_hint(temper: str, lang: str = "zh") -> str:
                 "我理解你」这种怂话，也别主动找台阶——对方不收手你就一直"
                 "顶着，谁先怂谁输。唯一底线（封号风险）：不发人身安全威胁、"
                 "不用种族/残障等群体歧视词；除此之外放开骂。"
-            )
+            ) + _esc
         return (
             "[This turn: they're insulting you] They started it — fire right "
             "back. You're a real person with a spine, not customer service. "
@@ -419,7 +757,7 @@ def build_temper_hint(temper: str, lang: str = "zh") -> str:
             "THEIR language (the language they insulted you in). Only floor "
             "(account-ban risk): no threats of physical harm, no slurs "
             "targeting race/disability/etc. Everything else is fair game."
-        )
+        ) + _esc
     if zh:
         return (
             "【本轮：对方在骂你】对方这条是在无端骂你/说难听话。你不是客服"
@@ -505,6 +843,68 @@ def build_feud_break_hint(lang: str = "zh") -> str:
     )
 
 
+# ── 骂战态登记表（2026-08-22 回怼战线贯彻 P0-3）──────────────────────────────
+# 「本轮在骂战中」的单一事实源：skill_manager 注入 temper/feud hint 时登记，
+# 语音链（persona_voice.resolve_emotion_for_send）读它决定「骂回去的话不许用
+# happy 语调念」（实录 03:44：feisty 文本被人设默认基调渲染成 情绪happy）。
+# 进程级 + 短 TTL（同轮合成在数秒内发生，180s 已含慢 LLM+TTS 排队余量）+
+# 容量上限防脏 key 刷量。key＝A/B 线 convo_key（platform:account:chat）。
+FIGHT_TURN_TTL_SEC = 180.0
+_FIGHT_CAP = 256
+_FIGHT_LOCK = threading.Lock()
+_FIGHT_TURNS: Dict[str, Any] = {}
+# grudge（2026-08-22 P1）＝记仇期回复：语音走 serious 偏冷（还端着），
+# 不是 insult 的怒也不是常规暖档。
+_FIGHT_KINDS = ("insult", "feud", "grudge")
+
+
+def record_fight_turn(convo_key: Any, kind: str = "insult") -> None:
+    """登记「该会话本轮在骂战中」。kind=insult（怼）| feud（熔断冷处理收场）。"""
+    key = str(convo_key or "").strip()
+    if not key:
+        return
+    k = str(kind or "insult").strip().lower()
+    if k not in _FIGHT_KINDS:
+        k = "insult"
+    now = time.time()
+    with _FIGHT_LOCK:
+        if key not in _FIGHT_TURNS and len(_FIGHT_TURNS) >= _FIGHT_CAP:
+            expired = [x for x, (ts, _) in _FIGHT_TURNS.items()
+                       if now - ts > FIGHT_TURN_TTL_SEC]
+            for x in expired:
+                _FIGHT_TURNS.pop(x, None)
+            if len(_FIGHT_TURNS) >= _FIGHT_CAP:
+                oldest = min(_FIGHT_TURNS, key=lambda x: _FIGHT_TURNS[x][0])
+                _FIGHT_TURNS.pop(oldest, None)
+        _FIGHT_TURNS[key] = (now, k)
+
+
+def fight_turn_kind(
+    convo_key: Any, *, ttl_sec: float = FIGHT_TURN_TTL_SEC,
+    now: Optional[float] = None,
+) -> str:
+    """查该会话是否在骂战窗内。返回 kind（insult|feud）或空串=不在。"""
+    key = str(convo_key or "").strip()
+    if not key:
+        return ""
+    t = float(now if now is not None else time.time())
+    with _FIGHT_LOCK:
+        rec = _FIGHT_TURNS.get(key)
+        if not rec:
+            return ""
+        ts, kind = rec
+        if t - ts > float(ttl_sec):
+            _FIGHT_TURNS.pop(key, None)
+            return ""
+        return str(kind)
+
+
+def clear_fight_turn(convo_key: Any) -> None:
+    """对方收手（de-escalation）/测试清理：立刻退出骂战窗。"""
+    with _FIGHT_LOCK:
+        _FIGHT_TURNS.pop(str(convo_key or "").strip(), None)
+
+
 # ── 观测计数器（进程级，长在契约模块——与 tts_preview.reuse_stats 同哲学）──
 # 消费面：/api/companion/temper/status + ops-overview「回怼防线」卡。
 # 记录点在 skill_manager 接线层（有人设上下文）；纯函数检测层保持零副作用。
@@ -524,6 +924,18 @@ def _new_stats() -> Dict[str, Any]:
         "feud_breaks": 0,      # 连怼熔断触发（超轮数改冷处理）
         "taunts": 0,           # 激将命中（接梗而非开骂）
         "platform_capped": 0,  # 平台封顶降档次数
+        # 2026-08-22 回怼战线贯彻三计数：
+        "escalated_hints": 0,        # streak≥2 加码指令注入次数
+        "emo_block_suppressed": 0,   # 骂战轮压制情感引擎误读次数
+        "fight_voice_overrides": 0,  # 语音情绪跟随骂战（angry/serious）次数
+        # 2026-08-22 P1 消气曲线四计数：
+        "grudge_set": 0,        # 骂战收手 → 进入记仇期次数
+        "grudge_turns": 0,      # 记仇期指令注入轮数（含衰减轮）
+        "grudge_reignites": 0,  # 记仇期再犯重燃骂战次数
+        "grudge_closeouts": 0,  # 翻篇收尾（带边界接受和解）次数
+        # 2026-08-22 P1-b 出站否决两计数：
+        "out_guard_strips": 0,     # 出站剥认输/秒原谅句次数（按回复计）
+        "out_guard_fallbacks": 0,  # 整条被剥光用兜底短句次数
         "by_persona": {},      # pid -> 注入次数（capped）
         "last_hit_ts": 0.0,
     }
@@ -589,6 +1001,49 @@ def record_platform_capped() -> None:
         _STATS["platform_capped"] += 1
 
 
+def record_escalated_hint() -> None:
+    with _STATS_LOCK:
+        _STATS["escalated_hints"] += 1
+
+
+def record_emo_block_suppressed() -> None:
+    with _STATS_LOCK:
+        _STATS["emo_block_suppressed"] += 1
+
+
+def record_fight_voice_override() -> None:
+    with _STATS_LOCK:
+        _STATS["fight_voice_overrides"] += 1
+
+
+def record_grudge_set() -> None:
+    with _STATS_LOCK:
+        _STATS["grudge_set"] += 1
+
+
+def record_grudge_turn() -> None:
+    with _STATS_LOCK:
+        _STATS["grudge_turns"] += 1
+
+
+def record_grudge_reignite() -> None:
+    with _STATS_LOCK:
+        _STATS["grudge_reignites"] += 1
+        _STATS["last_hit_ts"] = time.time()
+
+
+def record_grudge_closeout() -> None:
+    with _STATS_LOCK:
+        _STATS["grudge_closeouts"] += 1
+
+
+def record_out_guard(*, fallback: bool = False) -> None:
+    with _STATS_LOCK:
+        _STATS["out_guard_strips"] += 1
+        if fallback:
+            _STATS["out_guard_fallbacks"] += 1
+
+
 def temper_stats_snapshot() -> Dict[str, Any]:
     """观测快照（深拷贝，调用方随便改）。"""
     with _STATS_LOCK:
@@ -607,6 +1062,7 @@ def temper_stats_reset() -> None:
 
 __all__ = [
     "DEFAULT_MAX_ROUNDS",
+    "FIGHT_TURN_TTL_SEC",
     "STICKY_WINDOW_SEC",
     "TEMPER_FEISTY",
     "TEMPER_GENTLE",
@@ -615,18 +1071,37 @@ __all__ = [
     "TEMPER_SHARP",
     "apply_platform_cap",
     "build_feud_break_hint",
+    "build_grudge_hint",
     "build_taunt_hint",
     "build_temper_hint",
+    "clear_fight_turn",
+    "decay_grudge",
     "detect_insult",
     "detect_taunt",
+    "fight_turn_kind",
+    "GRUDGE_MAX_LEVEL",
+    "GRUDGE_TTL_SEC",
+    "initial_grudge",
     "is_de_escalation",
+    "is_flippant_retraction",
+    "is_sincere_apology",
     "looks_hostile",
     "parse_temper_cfg",
     "persona_temper",
     "persona_temper_raw",
     "record_deescalation",
+    "record_emo_block_suppressed",
+    "record_escalated_hint",
     "record_feud_break",
+    "record_fight_turn",
+    "record_fight_voice_override",
+    "record_grudge_closeout",
+    "record_grudge_reignite",
+    "record_grudge_set",
+    "record_grudge_turn",
     "record_hint",
+    "record_out_guard",
+    "strip_surrender_lines",
     "record_insult",
     "record_platform_capped",
     "record_sticky_hit",

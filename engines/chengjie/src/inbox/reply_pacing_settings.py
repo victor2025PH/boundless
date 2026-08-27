@@ -40,7 +40,10 @@ TONE_HINT_MAXLEN = 120
 # 平台专家覆写（P1，2026-08-03）：键域=编排器 worker 的平台集合。
 # 刻意本地定义而非 import platform_capabilities（本模块保持零依赖纯函数）；
 # 与 WORKERS 注册表的一致性由门禁钉住（test_platforms_match_worker_registry）。
-PLATFORMS = ("telegram", "whatsapp", "line", "messenger")
+# 2026-08-19：zalo/instagram 个人号 worker 进能力矩阵 → 键域同步扩（两平台的
+# 节奏/档位/班表覆写自此可配；拟人开关受 validate_platform_flags_caps 的能力
+# 校验约束——两平台无 mark_read/typing，开了会被如实提示不支持）。
+PLATFORMS = ("telegram", "whatsapp", "line", "messenger", "zalo", "instagram")
 # 平台拟人开关覆写的可编辑键（platform_humanize 条目白名单）
 HUMANIZE_FLAG_KEYS = ("mark_read", "typing")
 
@@ -198,18 +201,21 @@ FIELDS: Dict[str, Dict[str, Any]] = {
     # ── 回复额度守卫（P0-guard，2026-08-12）────────────────────────────
     # 消费方 peer_bot_guard.parse_cfg 逐调用现读 config → 写 overlay 即生效
     # （~30s 热重载节流）→ 两键均 hot=True。default 与 parse_cfg._DEFAULTS
-    # 同值（有门禁钉住）。daily_reply_budget 的 0=不限额是 YAML 专属语义
-    # （parse_cfg 只 clamp ≥0；evaluate 按 budget>0 才检查）——UI 白名单刻意
-    # 收 [5,500]：防运营把 0 当「全拦」或把「全拦」当 0 误设；真要不限额走
-    # YAML，触顶判定与收件箱横幅随之整体熄灭（budget_flags.enabled=False）。
+    # 同值（有门禁钉住）。
     "inbox.peer_bot_guard.enabled": {
         "type": "bool", "default": False, "hot": True,
     },
     # 2026-08-17：默认 40 → 500（与 parse_cfg._DEFAULTS 同步改，门禁钉住）。
-    # 500 恰为 UI clamp 上限：真人客户永远撞不到，纯当「对面也是 LLM」保险丝；
-    # 硬停随之为 2×=1000、near 预警线 80%=400。
+    # 2026-08-24 老板拍板（B34 落定，内测实录 600 被旧 [5,500] 白名单拒）：
+    # 每日额度**不设业务上限**——range 放开为 [0, 1_000_000]：
+    # - 0＝不限额，与 YAML/parse_cfg/budget_flags 全链同一语义（budget>0 才
+    #   检查，0 时触顶判定与收件箱横幅整体熄灭）。旧版怕「0 被当成全拦」而
+    #   把 0 挡在 UI 外，现改为在页面提示里写明语义，不再靠禁止输入防误解；
+    # - 上限 1_000_000 是纯技术帽（防误粘贴超长数字/int 溢出面），单会话
+    #   一天百万轮物理不可达，业务语义等于不设上限。
+    # 守卫的保险丝定位不变（防双 bot 互刷 + 单会话过密风控），默认值仍 500。
     "inbox.peer_bot_guard.daily_reply_budget": {
-        "type": "int", "lo": 5, "hi": 500, "default": 500, "hot": True,
+        "type": "int", "lo": 0, "hi": 1_000_000, "default": 500, "hot": True,
     },
     # ── 守卫高级参数（P1，2026-08-12；设置页折叠区，默认只露开关+额度）────
     # 均 hot=True（parse_cfg 逐调用现读）。clamp 语义逐键说明：

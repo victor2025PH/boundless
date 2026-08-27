@@ -64,6 +64,28 @@
       return this._client.getRelStage({ conversationId: ctx.conversationId });
     }
 
+    /* 阶段/漏斗**机器码** → 本地化标签（i18n P0 2026-08-19）：服务端 *_label
+       字段恒为中文（STAGE_LABEL_ZH/FUNNEL_STAGE_LABELS），英文 UI 直显会漏中文。
+       有码先查 cp 词典，查不到回落服务端 label——旧后端/未知码零破坏。 */
+    _stLabel(code, fallback) {
+      const c = String(code || "").trim().toLowerCase();
+      if (c) {
+        const key = "cp.rel.stage." + c;
+        const v = this.t(key);
+        if (v !== key) return v;
+      }
+      return fallback || code || "";
+    }
+    _fnLabel(code, fallback) {
+      const c = String(code || "").trim().toLowerCase();
+      if (c) {
+        const key = "cp.rel.funnel." + c;
+        const v = this.t(key);
+        if (v !== key) return v;
+      }
+      return fallback || code || "";
+    }
+
     /* 2026-07 重设计：同一事实只说一次——
        ① 顶部 CTA 横幅（待确认进阶/口径冲突/回暖 收成一条可行动横幅，不再 hint+badge+按钮三处重复）
        ② 当前阶段 + 下一步 一行；③ 单一 stepper（有阶段列表用节点线，否则退化进度条）
@@ -85,7 +107,7 @@
             acts.push(`<button data-act="sync_contact">${esc(this.t("cp.rel.sync_contact"))}</button>`);
           }
           if (detail.show_to_highest) {
-            const hLbl = detail.highest_stage_label || detail.highest_stage || this.t("cp.rel.highest");
+            const hLbl = this._stLabel(detail.highest_stage, detail.highest_stage_label) || this.t("cp.rel.highest");
             acts.push(`<button class="primary" data-act="sync_highest">${esc(this.t("cp.rel.sync_highest", { label: hLbl }))}</button>`);
           }
           if (!detail.show_to_highest && !(detail.show_to_contact !== false && detail.contact_stage)) {
@@ -94,11 +116,11 @@
         }
       }
       if (d.needs_confirmation) {
-        if (d.computed_stage_label) lines.push(esc(this.t("cp.rel.algo_suggest", { label: d.computed_stage_label })));
-        else lines.push(esc(this.t("cp.rel.pending_adv", { label: d.pending_stage_label || "" })));
+        if (d.computed_stage_label) lines.push(esc(this.t("cp.rel.algo_suggest", { label: this._stLabel(d.computed_stage, d.computed_stage_label) })));
+        else lines.push(esc(this.t("cp.rel.pending_adv", { label: this._stLabel(d.pending_stage, d.pending_stage_label) })));
         acts.push(`<button class="primary" data-act="confirm">${esc(this.t("cp.rel.confirm"))}</button>`);
       } else if (d.pending_advancement) {
-        lines.push(esc(this.t("cp.rel.pending_adv", { label: d.pending_stage_label || "" })));
+        lines.push(esc(this.t("cp.rel.pending_adv", { label: this._stLabel(d.pending_stage, d.pending_stage_label) })));
       }
       if (d.reunion) {
         if (!lines.length) tone = "danger";
@@ -117,7 +139,7 @@
         stages.forEach((s, i) => {
           if (i) parts.push(`<div class="ln${stages[i - 1].done ? " done" : ""}"></div>`);
           const cls = s.pending ? "nd pend" : s.done ? "nd done" : s.active ? "nd cur" : "nd";
-          parts.push(`<div class="${cls}" title="${esc(s.label)}${s.pending ? esc(this.t("cp.rel.pending_suffix")) : ""}"></div>`);
+          parts.push(`<div class="${cls}" title="${esc(this._stLabel(s.id, s.label))}${s.pending ? esc(this.t("cp.rel.pending_suffix")) : ""}"></div>`);
         });
         stepper = `<div class="stp">${parts.join("")}</div>`;
       } else {
@@ -127,14 +149,15 @@
       const intim = d.intimacy_score != null
         ? this.t("cp.rel.intimacy", { n: Math.round(d.intimacy_score) }) : this.t("cp.rel.intimacy_na");
       const contactHint = d.contact_stage_label
-        ? `<div class="hint contact">${esc(this.t("cp.rel.contact_level", { label: d.contact_stage_label }))}` +
+        ? `<div class="hint contact">${esc(this.t("cp.rel.contact_level", { label: this._stLabel(d.contact_stage, d.contact_stage_label) }))}` +
           (d.contact_updated_by ? esc(this.t("cp.rel.updated_by", { by: d.contact_updated_by })) : "") + `</div>`
         : "";
       const foot = (d.confirmed_stage && d.confirmed_stage !== "initial")
         ? `<div class="foot"><button class="warn" data-act="downgrade">${esc(this.t("cp.rel.downgrade"))}</button></div>` : "";
 
       // P1-5：旅程（漏斗）子分区——payload 带 journey 才渲染（老后端/contacts 关=缺省无痕）
-      const jv = d.journey && (d.journey.funnel_stage_label || d.journey.funnel_stage);
+      const jv = d.journey && (d.journey.funnel_stage_label || d.journey.funnel_stage)
+        ? this._fnLabel(d.journey.funnel_stage, d.journey.funnel_stage_label) : "";
       const journey = jv
         ? `<div class="jsec"><span class="jlbl">${esc(this.t("cp.rel.journey"))}</span>` +
           `<span class="jval">${esc(jv)}</span></div>`
@@ -142,8 +165,8 @@
 
       return (
         banner +
-        `<div class="hdr"><span class="cur">${esc(d.display_stage_label || d.stage_label || "—")}</span>` +
-        (d.next_stage_label ? `<span class="nxt">→ ${esc(d.next_stage_label)}</span>` : "") + `</div>` +
+        `<div class="hdr"><span class="cur">${esc(this._stLabel(d.display_stage || d.stage, d.display_stage_label || d.stage_label) || "—")}</span>` +
+        ((d.next_stage || d.next_stage_label) ? `<span class="nxt">→ ${esc(this._stLabel(d.next_stage, d.next_stage_label))}</span>` : "") + `</div>` +
         stepper +
         `<div class="meta"><span>${esc(this.t("cp.rel.progress", { pct }))}</span>` +
         `<span>${esc(this.t("cp.rel.rounds", { n: d.exchange_count || 0 }))}</span>` +

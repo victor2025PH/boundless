@@ -179,7 +179,20 @@ class CareShadowScanner:
             t = (text or "").strip()
             if not t:
                 return
-            if not time_like(t):
+            # B68（实施67 P2-i）：群聊不进扫描队列（与正则捕获链 care_capture
+            # 同口径）——关怀约定是私聊语义，报障群消息被 LLM 捕成「关怀约定」
+            # 的实锤已两条（值守现场 cancel #6/#7）。bug_intake 私聊形态的排除
+            # 在 care_capture（那里有全配置树）；本回调 cfg_provider 只给 care 段。
+            if str(conv.get("chat_type") or "private") != "private":
+                return
+            # 扫描门（2026-08-18 可配置）：time_like（默认，仅含时间信号的入站）
+            # / all（全量入站，仍受每日预算封顶）。切主判据要 llm_only 样本 ≥20，
+            # 窄门实测 7 天才攒 1 条（预算 150/天只用 ~4/天）——评估期把门放宽
+            # 是在**预算内**买证据积累速度；LLM prompt 本身严格要求可定日期的
+            # 事（模糊说法 found=false），门宽不等于抓得滥，且影子只记不写。
+            _gate = str((cfg.get("llm_extract") or {}).get(
+                "scan_gate") or "time_like").strip().lower()
+            if _gate != "all" and not time_like(t):
                 self.stats.gate_rejected += 1
                 return
             item = {

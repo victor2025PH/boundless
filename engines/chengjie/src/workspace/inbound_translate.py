@@ -40,6 +40,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.ai.translation_service import TranslationService, detect_language, normalize_lang
+from src.inbox.media_enrich import strip_media_desc
 
 logger = logging.getLogger(__name__)
 
@@ -259,7 +260,10 @@ async def _translate_one(
       （translated_text=原文 + target_lang），下次不再重译；
     - fail：异常/超时/引擎全败/空产出——记失败负缓存，TTL 内不重试。
     """
-    text = str(m.get("text") or m.get("original_text") or "")
+    # P0 2026-08-19：媒体消息只译客户 caption——「[图片内容] …」识别描述是系统自产
+    # 内容（已是坐席服务语言），送引擎只会把碎片 OCR 再造伪句并**持久化落库**。
+    text = strip_media_desc(
+        str(m.get("text") or m.get("original_text") or ""))
     src_lang = str(m.get("language") or detect_language(text))
     try:
         result = await asyncio.wait_for(
@@ -462,7 +466,10 @@ async def enrich_inbound_translations(
     for m in reversed(messages):
         if str(m.get("direction") or "in") != "in":
             continue
-        text = str(m.get("text") or m.get("original_text") or "").strip()
+        # P0 2026-08-19：候选筛选按「可译源文」（媒体消息＝caption）判定——纯媒体消息
+        # （text 只有 AI 识别描述、无客户文字）直接跳过，不再把识别汤送引擎并落库。
+        text = strip_media_desc(
+            str(m.get("text") or m.get("original_text") or "")).strip()
         if not text or len(text) > cfg["max_chars"]:
             stats["skipped"] += 1
             continue

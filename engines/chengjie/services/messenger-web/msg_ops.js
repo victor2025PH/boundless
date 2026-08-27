@@ -39,14 +39,35 @@ const REACT_NAME = {
 const EMOJI_RE = /\p{Extended_Pictographic}/u;
 
 /**
+ * B80（实施68）：把 aria 时间文本归一到「跨日稳定」的锚——只留时钟（HH:MM[:SS]，
+ * 12h 制含 AM/PM）。根因：Messenger aria 里同一条消息的时间**表述随时间漂移**
+ * （新消息「14:44」→ 隔天「昨天 14:44」/「Yesterday」→ 更久「July 24, 2026, 14:44」）。
+ * synthMsgId 直接吃这段文本时，E2EE 恢复后重拉同一条消息 → 文本变 → id 变 →
+ * store 落成新行（用户实录「工作台镜像全一样」＝同消息多条重复）。剥掉相对日期
+ * 前缀、只保留时钟后，跨日重读得到同一指纹。取不到时钟（纯相对词/媒体无时间）→
+ * 空串（回落 chatKey+text+mediaRef 去重，与原「无 tsLabel」路径一致）。
+ */
+export function normalizeTsLabelForId(tsLabel) {
+  const s = String(tsLabel || "").trim();
+  if (!s) return "";
+  // 抓最后一个时钟（同串里日期不含 HH:MM 冒号形态，只有时间有）——含可选秒 + AM/PM
+  const m = s.match(/(\d{1,2}:\d{2}(?::\d{2})?)\s*([AaPp][Mm])?/);
+  if (!m) return "";   // 纯「昨天/Yesterday/2 天前」无时钟 → 不进指纹（回落正文去重）
+  const clock = m[1];
+  const mer = (m[2] || "").toUpperCase();
+  return mer ? `${clock} ${mer}` : clock;
+}
+
+/**
  * 确定性平台消息 id（写入 ingest 的 msg_id → store.platform_msg_id）。
  * 不含墙钟：同一条 DOM 消息跨轮询重读必须得到同一 id，表情/撤回才能挂得上。
+ * tsLabel 经 normalizeTsLabelForId 归一（B80：跨日重拉不再生成新 id）。
  */
 export function synthMsgId({ chatKey, direction, tsLabel, text, mediaRef } = {}) {
   const parts = [
     String(chatKey || ""),
     String(direction || "in"),
-    String(tsLabel || ""),
+    normalizeTsLabelForId(tsLabel),
     String(text || "").trim(),
     String(mediaRef || ""),
   ].join("|");
@@ -161,6 +182,117 @@ export function parseMsgAria(aria) {
       ts: (m[1] || "").trim(), text: (m[3] || "").trim() };
   }
   return null;
+}
+
+/**
+ * 实施72 P4（2026-08-27）：aria 时间文本 → epoch 秒（**保守解析**，认不出返回 0）。
+ *
+ * 背景：parseMsgAria 早就把每条消息的完整时间文本（"July 24, 2026, 12:35 PM" /
+ * "昨天 14:44" / "2026年7月24日 14:44"…）解析出来了，但此前只用作去重指纹
+ * （B80 刻意剥掉日期只留时钟），回填推送一律 ts:0 → 引擎按入库时刻合成 →
+ * 断线补收的消息全体盖「今天」的时间（8/27 账号错乱事故的「消息时间全不对」）。
+ * 本函数把这份现成数据转成真实 epoch：解析成功 → 引擎存真值（approx=0）；
+ * 认不出 → 0 → 引擎照旧合成+打 approx 标——**失败方向永远是「退回现状」**。
+ *
+ * 支持的形态（en/zh 两族，超出即 0，宁缺勿错）：
+ *   带年全量  "July 24, 2026, 12:35 PM" / "2026年7月24日 14:44[:05]"
+ *   无年月日  "July 24, 12:35 PM" / "7月24日 14:44"   → 就近过去（未来则退一年）
+ *   今昨      "Today/Yesterday at 12:35 PM" / "今天/昨天 14:44"
+ *   周内      "Mon(day) 12:35 PM" / "星期一/周一 14:44" → 最近的那个过去周 X
+ *   裸时钟    "12:35[:05][ PM]" / "14:44"               → 今天；未来则昨天
+ * 夹界：结果必须落 [now-3年, now+26h]，越界按解析失败返 0（防荒谬年份）。
+ */
+const _EN_MONTHS = {
+  january: 0, february: 1, march: 2, april: 3, may: 4, june: 5, july: 6,
+  august: 7, september: 8, october: 9, november: 10, december: 11,
+  jan: 0, feb: 1, mar: 2, apr: 3, jun: 5, jul: 6, aug: 7,
+  sep: 8, sept: 8, oct: 9, nov: 10, dec: 11,
+};
+const _EN_WEEKDAYS = {
+  sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5,
+  saturday: 6, sun: 0, mon: 1, tue: 2, tues: 2, wed: 3, thu: 4, thur: 4,
+  thurs: 4, fri: 5, sat: 6,
+};
+const _ZH_WEEKDAYS = { 日: 0, 天: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6 };
+const _CLOCK_RE = /(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM|上午|下午)?/i;
+
+function _clockFrom(m) {
+  if (!m) return null;
+  let h = Number(m[1]);
+  const min = Number(m[2]);
+  const sec = Number(m[3] || 0);
+  const ap = String(m[4] || "").toUpperCase();
+  if (!(h >= 0 && h <= 23) || !(min >= 0 && min <= 59)) return null;
+  if ((ap === "PM" || ap === "下午") && h < 12) h += 12;
+  if ((ap === "AM" || ap === "上午") && h === 12) h = 0;
+  return { h, min, sec };
+}
+
+export function ariaDatetimeToEpoch(tsText, nowMs = Date.now()) {
+  const s = String(tsText || "").trim();
+  if (!s) return 0;
+  const now = new Date(nowMs);
+  const cm = s.match(_CLOCK_RE);
+  const clock = _clockFrom(cm);
+  // zh 午别是**前缀**形态（"下午2:05"）——时钟正则只认后缀午别，这里补前缀判定
+  if (clock && cm && !cm[4]) {
+    if (/下午/.test(s) && clock.h < 12) clock.h += 12;
+    else if (/上午/.test(s) && clock.h === 12) clock.h = 0;
+  }
+  const mk = (y, mo, d, c) => new Date(
+    y, mo, d, c ? c.h : 0, c ? c.min : 0, c ? c.sec : 0, 0).getTime();
+  const clamp = (ms) => {
+    if (!Number.isFinite(ms) || ms <= 0) return 0;
+    if (ms > nowMs + 26 * 3600e3) return 0;
+    if (ms < nowMs - 3 * 365 * 86400e3) return 0;
+    return Math.floor(ms / 1000);
+  };
+  // zh 带年："2026年7月24日 14:44"
+  let m = s.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+  if (m) return clamp(mk(+m[1], +m[2] - 1, +m[3], clock));
+  // zh 无年："7月24日 14:44" → 就近过去
+  m = s.match(/(^|[^\d])(\d{1,2})月(\d{1,2})日/);
+  if (m) {
+    let ms = mk(now.getFullYear(), +m[2] - 1, +m[3], clock);
+    if (ms > nowMs + 26 * 3600e3) ms = mk(now.getFullYear() - 1, +m[2] - 1, +m[3], clock);
+    return clamp(ms);
+  }
+  // en 月名（带年/无年）："July 24, 2026, 12:35 PM" / "Jul 24 at 12:35 PM"
+  m = s.match(/([A-Za-z]{3,9})\s+(\d{1,2})(?:,?\s*(\d{4}))?/);
+  if (m && Object.prototype.hasOwnProperty.call(_EN_MONTHS, m[1].toLowerCase())) {
+    const mo = _EN_MONTHS[m[1].toLowerCase()];
+    const d = +m[2];
+    if (m[3]) return clamp(mk(+m[3], mo, d, clock));
+    let ms = mk(now.getFullYear(), mo, d, clock);
+    if (ms > nowMs + 26 * 3600e3) ms = mk(now.getFullYear() - 1, mo, d, clock);
+    return clamp(ms);
+  }
+  // 今/昨（en+zh）
+  if (/today|今天/i.test(s)) return clamp(mk(now.getFullYear(), now.getMonth(), now.getDate(), clock));
+  if (/yesterday|昨天/i.test(s)) return clamp(mk(now.getFullYear(), now.getMonth(), now.getDate() - 1, clock));
+  // 周内（en）："Mon 12:35 PM"（无月名前提下才认——月名分支已在上面返回）
+  m = s.match(/^([A-Za-z]{3,9})[\s,]/);
+  if (m && Object.prototype.hasOwnProperty.call(_EN_WEEKDAYS, m[1].toLowerCase())) {
+    const target = _EN_WEEKDAYS[m[1].toLowerCase()];
+    let back = (now.getDay() - target + 7) % 7;
+    if (back === 0) back = 7; // FB 对「今天」不会用周名 → 同名一律上周
+    return clamp(mk(now.getFullYear(), now.getMonth(), now.getDate() - back, clock));
+  }
+  // 周内（zh）："星期一 14:44" / "周三 14:44"
+  m = s.match(/(?:星期|周)([日天一二三四五六])/);
+  if (m) {
+    const target = _ZH_WEEKDAYS[m[1]];
+    let back = (now.getDay() - target + 7) % 7;
+    if (back === 0) back = 7;
+    return clamp(mk(now.getFullYear(), now.getMonth(), now.getDate() - back, clock));
+  }
+  // 裸时钟："14:44" / "12:35 PM" → 今天；未来则昨天
+  if (clock && /^\s*\d{1,2}:\d{2}/.test(s)) {
+    let ms = mk(now.getFullYear(), now.getMonth(), now.getDate(), clock);
+    if (ms > nowMs + 5 * 60e3) ms -= 86400e3; // 5min 时钟漂移容忍
+    return clamp(ms);
+  }
+  return 0;
 }
 
 /**
@@ -692,6 +824,20 @@ export function classifyComposerBlock(probe) {
 }
 
 /**
+ * B99（实施68 P1-9 残留 ④）：发送连败指数退避。0825 实锤：E2EE PIN 态整号瘫时
+ * 上游/坐席反复重试 → 反复重导航+重登风暴 → FB「你已被暂时阻止」风控反噬。
+ * streak=连续失败次数（成功清零）；返回本次失败后应等待的毫秒数：
+ * 5s → 10s → 20s → 40s → … 封顶 5min。streak<=0 → 0（无退避）。
+ */
+export function sendFailureBackoffMs(streak, { baseMs = 5000, capMs = 300000 } = {}) {
+  const n = Math.max(0, Number(streak) || 0);
+  if (n <= 0) return 0;
+  const base = Math.max(1, Number(baseMs) || 5000);
+  const cap = Math.max(base, Number(capMs) || 300000);
+  return Math.min(cap, base * Math.pow(2, Math.min(30, n - 1)));
+}
+
+/**
  * 打开线程副作用清单（可执行决策，不只是注释）。
  *
  * Messenger 打开线程 = FB 侧标已读。任何「为探测/回填而打开」的路径必须先过这里。
@@ -718,4 +864,53 @@ export function canOpenThread({ purpose = "", unread = false, isRequest = false 
     return { ok: true, reason: isRequest ? "" : "not_a_request" };
   }
   return { ok: false, reason: "unknown_purpose" };
+}
+
+/** 入站发言人 ≥2 个互异名字 → 当群（fail-closed：1 人仍当私聊，不猜 chat_key）。 */
+export function inferGroupFromInboundSenders(senders) {
+  const seen = new Set();
+  for (const raw of senders || []) {
+    const s = String(raw || "").trim().toLowerCase();
+    if (!s) continue;
+    seen.add(s);
+    if (seen.size >= 2) return true;
+  }
+  return false;
+}
+
+/**
+ * P2：跨轮询累计入站发言人（安静群修复）——单轮 tail 只有一个人说话时，
+ * 同窗口版判不出群；把互异发言人攒进 per-thread 集合，跨轮达到 2 即可升群。
+ *
+ * excludeName（会话行名）是私聊防误升的关键护栏：DM 入站 sender == 列表行名
+ * （同一 DOM 快照同源），恒被排除 → DM 集合恒空，对方改名也攒不出第二个名字
+ * （否则改名会把真客户 DM 误升成群 → 掉出自动回复且 store 粘住）。
+ * 残余风险＝Messenger「聊天昵称」与真名改名双重变更叠加，概率极低，接受。
+ *
+ * 有界：per-key 上限 + Map 按插入序 LRU 淘汰（触碰即刷新回队尾）。
+ * 返回该会话累计集合（调用方用 inferGroupFromInboundSenders 判定，语义单点）。
+ */
+export function updateSenderRoster(map, chatKey, senders, {
+  maxKeys = 512, maxPerKey = 8, excludeName = "",
+} = {}) {
+  if (!(map instanceof Map) || !chatKey) return new Set();
+  const key = String(chatKey);
+  const norm = (v) => String(v || "").trim().toLowerCase().replace(/\s+/g, " ");
+  const ex = norm(excludeName);
+  let set = map.get(key);
+  if (set) map.delete(key); // 触碰刷新 LRU 位次
+  else set = new Set();
+  map.set(key, set);
+  for (const raw of senders || []) {
+    const s = norm(raw);
+    if (!s || s === ex) continue;
+    if (set.size >= maxPerKey && !set.has(s)) continue;
+    set.add(s);
+  }
+  while (map.size > maxKeys) {
+    const oldest = map.keys().next().value;
+    if (oldest === undefined) break;
+    map.delete(oldest);
+  }
+  return set;
 }

@@ -75,13 +75,20 @@ def test_disabled_channel_does_not_count():
 
 
 def test_full_coverage_is_healthy():
+    """订阅集 == 关注集 → healthy。
+
+    夹具**从常量派生**而非硬编码别名：2026-08-27 往 HIGH_VALUE_ALIASES 补
+    assistant_report/bug_intake 时，硬编码的旧夹具只覆盖 3/5 → 这条红了。
+    红得对（覆盖确实不全），但它测的是「全覆盖即健康」这个不变量，不是
+    「恰好这三个别名」——夹具与常量同源才不会每次扩关注集都误红一次。
+    """
     hooks = [
         {"name": "tg-ops", "format": "telegram",
-         "events": ["draft_backlog", "human_deliver", "host_alert"]},
+         "events": list(HIGH_VALUE_ALIASES)},
     ]
     a = audit_alert_link(hooks, focus_aliases=list(HIGH_VALUE_ALIASES))
     assert a["healthy"] is True
-    assert a["covered_count"] == 3
+    assert a["covered_count"] == len(HIGH_VALUE_ALIASES)
     assert a["formats"] == {"telegram": 1}
 
 

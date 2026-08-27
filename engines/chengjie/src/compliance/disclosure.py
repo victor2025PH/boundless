@@ -23,8 +23,14 @@
 - **B 线 autosend**：``autosend_worker._apply_compliance_disclosure``（自动/人工
   投递两路共用）；
 - **协议直发链**：``protocol_autoreply``（语言闸后、语音分支后）。
-- 主动触达（proactive_topic / care / reactivation，3 个分散发送点）＝ rider ②
-  待接：首触即 AI 的场景披露文案语义不同（无「回复」上下文），须配套模板评审。
+- **主动触达（rider ②，2026-08-17）**：deferred 家族（care/reactivation，5 平台）
+  收口于 ``background_tasks._universal_send``（翻译后）；proactive_topic 四模式
+  （topic/ritual/milestone/profile_ask）收口于开场发送闭包——披露命中**本轮强制
+  文本**（跳过生活照/语音开场，首条主动接触必须是带披露的文本）。模板已场景
+  中性化（zh/th/vi 去掉「回复」语境动词），单模板双场景通吃，免第二套模板。
+
+接线样板统一走 ``apply_disclosure_for``（runtime 配置 + store 语言提示一站式，
+拉丁语系客户靠提示出 es/pt/id/vi 披露语），门禁禁止绕过 helper 手拼样板。
 
 统一口径：放在出站翻译/语言闸**之后**（披露语已是客户语言，再过翻译层=混语
 garble 风险）、语音分支**之外**（克隆声绝不念披露语，语音先行的会话由首条文本
@@ -55,14 +61,18 @@ _MAX_MARKS = 50000          # 防标记库无界膨胀（超限剔最旧；重�
 #: 内置披露语（对齐现有翻译语种面；客服公告基调，零法务腔）。
 #: 客户面文案与既有惯例一致走代码内多语字典（selfie_stage_text / promise_fail
 #: 同族）——web i18n pack 只服务后台 UI 语言（zh/en/vi/th/id），不覆盖客户语种面。
+#: rider ②（2026-08-17）：文案**场景中性化**——同一条披露语既用于「回复」也用于
+#: 「主动开场」（首触即 AI）。zh/th/vi 原稿带「回复/ตอบ/trả lời」动词，开场语境下
+#: 不通；中性化后单模板双场景通吃，免去「9 语 × 变体」的第二套模板评审与维护。
+#: 门禁 test_proactive_disclosure_wiring 钉住「不得再引入回复语境动词」。
 _NOTICE_TEXTS: Dict[str, str] = {
-    "zh": "您好～本对话由 AI 助理协助回复，人工团队随时可以接入。",
+    "zh": "您好～本对话由 AI 助理协助，人工团队随时可以接入。",
     "en": "Quick note: this chat is assisted by an AI assistant — a human team can step in at any time.",
     "es": "Nota rápida: este chat cuenta con un asistente de IA; un equipo humano puede intervenir en cualquier momento.",
     "pt": "Aviso rápido: este chat é assistido por um assistente de IA — uma equipe humana pode entrar a qualquer momento.",
     "id": "Info singkat: percakapan ini dibantu asisten AI — tim manusia dapat bergabung kapan saja.",
-    "th": "แจ้งให้ทราบ: แชทนี้มีผู้ช่วย AI ช่วยตอบ และทีมงานที่เป็นมนุษย์พร้อมดูแลได้ตลอดเวลา",
-    "vi": "Lưu ý nhỏ: cuộc trò chuyện này có trợ lý AI hỗ trợ trả lời — đội ngũ nhân viên có thể tham gia bất cứ lúc nào.",
+    "th": "แจ้งให้ทราบ: แชทนี้มีผู้ช่วย AI ให้บริการ และทีมงานที่เป็นมนุษย์พร้อมดูแลได้ตลอดเวลา",
+    "vi": "Lưu ý nhỏ: cuộc trò chuyện này có trợ lý AI hỗ trợ — đội ngũ nhân viên có thể tham gia bất cứ lúc nào.",
     "ja": "ご案内：このチャットは AI アシスタントがお手伝いしています。必要に応じてスタッフがいつでも対応します。",
     "ko": "안내: 이 채팅은 AI 어시스턴트가 응대를 돕고 있으며, 필요 시 언제든 상담원이 참여할 수 있습니다.",
 }
@@ -228,6 +238,44 @@ def apply_disclosure(
         return str(text or ""), False
 
 
+def apply_disclosure_for(
+    conversation_id: str,
+    text: str,
+    *,
+    lang_hint: str = "",
+    store: Any = None,
+) -> Tuple[str, bool]:
+    """接线样板一站式（rider ②，2026-08-17）：runtime 配置 + 会话语言提示 +
+    ``apply_disclosure``，所有出站接线点（A 线 sender / deferred 投递 /
+    proactive 开场）统一走本入口，防三处样板各自漂移。
+
+    - 配置取 ``src.compliance.runtime.runtime_config()``（provider 未注册 → 空
+      配置 → 恒 no-op）；开关关时**提前返回**，不碰 store（热路径零成本）；
+    - ``lang_hint`` 缺省且给了 ``store`` → best-effort 取
+      ``peer_language_hint``（拉丁语系客户嗅探不出细分语种、会回落 en，
+      提示在场才能出 es/pt/id/vi 披露语）；
+    - 任何异常返回 ``(原文, False)``，绝不抛、绝不阻断发送。
+    """
+    try:
+        from src.compliance.runtime import runtime_config
+        cfg = runtime_config()
+        if not notice_enabled(cfg):
+            return str(text or ""), False
+        lh = str(lang_hint or "")
+        if not lh and store is not None:
+            try:
+                from src.inbox.outbound_translate import peer_language_hint
+                lh = peer_language_hint(store, str(conversation_id or "")) or ""
+            except Exception:
+                lh = ""
+        return apply_disclosure(cfg, str(conversation_id or ""), text,
+                                lang_hint=lh)
+    except Exception:
+        logger.debug("[compliance] apply_disclosure_for 异常（原样放行）",
+                     exc_info=True)
+        return str(text or ""), False
+
+
 __all__ = [
     "STATE_FILENAME",
     "pick_disclosure_lang",
@@ -236,4 +284,5 @@ __all__ = [
     "mark_disclosed",
     "marks_count",
     "apply_disclosure",
+    "apply_disclosure_for",
 ]

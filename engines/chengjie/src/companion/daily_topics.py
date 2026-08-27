@@ -566,12 +566,14 @@ def should_offer_topics(
     *,
     now: Optional[float] = None,
     cooldown_hours: float = 4,
+    offer_percent: float = 15,
 ) -> bool:
     """是否该在本轮附上话题素材。
 
     入站命中触发词（无聊/新鲜事/在干嘛/bored/what's up…）→ True（无视冷却）；
-    否则冷却期外按 crc32(日期+小时+入站文本) % 100 < 15 概率性 True
-    （确定性可测：同一小时同文本恒定）。
+    否则冷却期外按 crc32(日期+小时+入站文本) % 100 < ``offer_percent``
+    概率性 True（确定性可测：同一小时同文本恒定）。``offer_percent`` 缺省 15
+    ＝旧行为；实施55「新闻为主」的部署经配置调高（zhiliao overlay 35）。
     """
     text = str(inbound_text or "")
     if _TRIGGER_RE.search(text):
@@ -583,9 +585,13 @@ def should_offer_topics(
             return False
     except (TypeError, ValueError):
         pass
+    try:
+        pct = max(0.0, min(100.0, float(offer_percent)))
+    except (TypeError, ValueError):
+        pct = 15.0
     lt = time.localtime(now_v)
     key = f"{time.strftime('%Y-%m-%d', lt)}#{lt.tm_hour}#{text.strip()}"
-    return crc32(key.encode("utf-8", "ignore")) % 100 < 15
+    return crc32(key.encode("utf-8", "ignore")) % 100 < pct
 
 
 def build_topics_hint(
@@ -699,6 +705,19 @@ def parse_topics_cfg(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     else:
         merged_block = list(DEFAULT_BLOCKLIST)
     kind_map = dt.get("feed_kinds")
+    # region_feeds（实施55「人设所属国家的社会新闻」）：{区域键: [feed url]}。
+    # 键＝人设 id（人设级本土源，如 lin_xiaoyu=哈尔滨）或国家码（CA/US/ES…，
+    # 按人设居住地 country 命中）；值清洗成非空 url 列表，坏形态整键丢弃。
+    region_raw = dt.get("region_feeds")
+    region_feeds: Dict[str, List[str]] = {}
+    if isinstance(region_raw, dict):
+        for rk, urls in region_raw.items():
+            key = re.sub(r"[^A-Za-z0-9_\-]", "", str(rk or "").strip())
+            if not key or not isinstance(urls, (list, tuple)):
+                continue
+            clean = [str(u).strip() for u in urls if str(u or "").strip()]
+            if clean:
+                region_feeds[key] = clean
     return {
         "enabled": bool(dt.get("enabled", False)),
         "feeds": feeds,
@@ -706,10 +725,57 @@ def parse_topics_cfg(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         "max_items": int(_f("max_items", 8, 1, 50)),
         "pick_k": int(_f("pick_k", 3, 1, 10)),
         "cooldown_hours": _f("cooldown_hours", 4, 0, 168),
+        "offer_percent": _f("offer_percent", 15, 0, 100),
         "blocklist": merged_block,
         "cache_path": str(dt.get("cache_path") or DEFAULT_CACHE_PATH),
         "feed_kinds": dict(kind_map) if isinstance(kind_map, dict) else {},
+        "region_feeds": region_feeds,
     }
+
+
+# ── 按人设分源（实施55，2026-08-22「本土/人设所属国家社会新闻」）───────────────
+def region_key_for(persona: Any, region_feeds: Optional[Dict[str, Any]]) -> str:
+    """人设 → region_feeds 里的区域键：人设 id 直配优先 → 居住地国家码 →
+    ""（用全局池）。纯函数，绝不抛。
+
+    国家码来自 ``persona_location.resolve_place_with_fallback``（与人设钟同一
+    事实源）——哈尔滨人设命中 "CN"、温哥华人设命中 "CA"；无居住地/无对应键
+    回落全局 feeds（旧行为）。
+    """
+    feeds = region_feeds if isinstance(region_feeds, dict) else {}
+    if not feeds:
+        return ""
+    try:
+        p = persona if isinstance(persona, dict) else {}
+        pid = str(p.get("id") or "").strip()
+        if pid and pid in feeds:
+            return pid
+        from src.companion.persona_location import resolve_place_with_fallback
+        place = resolve_place_with_fallback(p)
+        if place is not None:
+            cc = str(getattr(place, "country", "") or "").strip().upper()
+            if cc and cc in feeds:
+                return cc
+    except Exception:
+        pass
+    return ""
+
+
+def cfg_for_region(tcfg: Dict[str, Any], region_key: str) -> Dict[str, Any]:
+    """把归一化配置克隆成某区域视图：feeds 换成区域源、缓存文件按键分家
+    （``daily_topics_cache.<key>.json``，各区域独立刷新/独立 in_flight）。
+    空键/无此键 → 原配置（全局池，零行为变化）。纯函数。
+    """
+    key = re.sub(r"[^A-Za-z0-9_\-]", "", str(region_key or "").strip())
+    base = tcfg if isinstance(tcfg, dict) else {}
+    feeds = (base.get("region_feeds") or {}).get(key) if key else None
+    if not feeds:
+        return dict(base)
+    out = dict(base)
+    out["feeds"] = list(feeds)
+    p = Path(str(base.get("cache_path") or DEFAULT_CACHE_PATH))
+    out["cache_path"] = str(p.with_name(f"{p.stem}.{key}{p.suffix}"))
+    return out
 
 
 # ── last_offer 进程内账本（bounded）───────────────────────────────────────────
@@ -742,6 +808,7 @@ __all__ = [
     "SMALLTALK_TOPIC_WORDS",
     "build_no_topics_hint",
     "build_topics_hint",
+    "cfg_for_region",
     "feed_kind",
     "fetch_feed",
     "is_news_question",
@@ -752,6 +819,7 @@ __all__ = [
     "read_topics_cache",
     "refresh_if_stale",
     "refresh_now",
+    "region_key_for",
     "sanitize_topics",
     "should_offer_topics",
     "smalltalk_topic",

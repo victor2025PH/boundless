@@ -275,6 +275,14 @@ class WebUserStore:
             )
         except sqlite3.OperationalError:
             pass  # 列已存在
+        # 迁移：目标达成等业务事件的坐席 Telegram 通知号（P2 2026-08-18；
+        # ''=未绑定=只推管理员渠道。纯 chat_id 非密钥，负数=群）
+        try:
+            self._conn.execute(
+                "ALTER TABLE web_users ADD COLUMN notify_tg_chat_id TEXT NOT NULL DEFAULT ''"
+            )
+        except sqlite3.OperationalError:
+            pass  # 列已存在
         self._conn.commit()
 
     # ── Session 管理 ──────────────────────────────────────────
@@ -423,7 +431,7 @@ class WebUserStore:
         with self._lock:
             row = self._conn.execute(
                 "SELECT id, username, role, display_name, enabled, "
-                "monthly_char_quota, quota_alert_pct, perms_json "
+                "monthly_char_quota, quota_alert_pct, perms_json, notify_tg_chat_id "
                 "FROM web_users WHERE id=?",
                 (user_id,)
             ).fetchone()
@@ -433,14 +441,15 @@ class WebUserStore:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT id, username, role, display_name, created_at, last_login, enabled, "
-                "monthly_char_quota, quota_alert_pct, perms_json "
+                "monthly_char_quota, quota_alert_pct, perms_json, notify_tg_chat_id "
                 "FROM web_users ORDER BY id"
             ).fetchall()
         return [dict(r) for r in rows]
 
     def update_user(self, user_id: int, role: str = None, enabled: bool = None,
                     password: str = None, display_name: str = None,
-                    monthly_char_quota=None, quota_alert_pct=None) -> bool:
+                    monthly_char_quota=None, quota_alert_pct=None,
+                    notify_tg_chat_id=None) -> bool:
         sets, params = [], []
         if role and role in ROLE_LABELS:
             sets.append("role=?"); params.append(role)
@@ -464,6 +473,14 @@ class WebUserStore:
             except (TypeError, ValueError):
                 _p = 80
             sets.append("quota_alert_pct=?"); params.append(min(100, max(50, _p)))  # 夹 [50,100]
+        if notify_tg_chat_id is not None:
+            # 纯 chat_id 白名单：可选负号 + 1..20 位数字；空串=解绑。其余一律忽略
+            # （静默存脏值会让「绑定了却收不到」无从排查——宁可不写）。
+            _c = str(notify_tg_chat_id).strip()
+            if _c == "" or (_c.lstrip("-").isdigit()
+                            and len(_c.lstrip("-")) <= 20
+                            and _c.count("-") <= (1 if _c.startswith("-") else 0)):
+                sets.append("notify_tg_chat_id=?"); params.append(_c)
         if not sets:
             return False
         params.append(user_id)
@@ -506,12 +523,14 @@ class WebUserStore:
         return cur.rowcount > 0
 
     def set_lang(self, username: str, lang: str) -> bool:
-        """持久化坐席 UI 语言偏好（语言跟人走）。仅接受 UI_LANGS 白名单，其它一律拒绝。"""
+        """持久化坐席 UI 语言偏好（语言跟人走）。仅接受 UI_LANGS 白名单；
+        空串=清除偏好（回到「跟随系统」：登录不再回填 cookie，中间件按
+        Accept-Language 推断）。其它值一律拒绝。"""
         try:
             from src.web.i18n_packs import UI_LANGS  # 单一事实源（xlate P3）；惰性导入防环
         except Exception:
-            UI_LANGS = ("zh", "en", "vi")
-        if lang not in UI_LANGS:
+            UI_LANGS = ("zh", "en", "vi", "th", "id", "zh_hant")  # 兜底与表同步
+        if lang != "" and lang not in UI_LANGS:
             return False
         with self._lock:
             self._conn.execute(

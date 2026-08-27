@@ -131,8 +131,11 @@ def _check_feature_baseline(d: dict) -> str:
         return "缺 version 指纹（app_identity 未接上）"
     try:
         sys.path.insert(0, str(HERE.parent.parent))
-        from src.utils.feature_registry import product_baseline_map
-        baseline = tuple(product_baseline_map())
+        from src.utils.feature_registry import FEATURES
+        # 只断言 show=True 的基线功能：show=False 是内部标记（如
+        # avatar_voice._hosted_auto），刻意不进 /api/setup/features UI 清单，
+        # 它们的种子/补齐正确性由 tests/test_desktop_seed_visibility.py 守。
+        baseline = tuple(f.key for f in FEATURES if f.cls == "A" and f.show)
     except Exception:
         baseline = ("companion.goals.enabled",)
     feats = {f.get("key"): f for f in d.get("features") or []

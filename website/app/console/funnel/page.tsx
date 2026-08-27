@@ -145,9 +145,17 @@ export default async function FunnelPage() {
                     <span className="text-slate-500">点击→已付 {n.click_to_paid}%</span>
                   )}
                 </div>
+                {/* 桌面弹窗来源拆分（订单 utm_source=chatx_desktop）：与上行全渠道数同窗，
+                    零也如实显示——「桌面海报到底带来几单」正是这张卡存在的原因 */}
+                <div className="mt-1.5 flex flex-wrap items-baseline gap-x-5 gap-y-1 text-[12.5px] text-slate-400">
+                  <span className="text-slate-500">其中桌面弹窗引流：</span>
+                  <span>下单 <b className="tabular-nums text-sky-300">{n.orders_created_desktop}</b></span>
+                  <span>已付 <b className="tabular-nums text-sky-300">{n.orders_paid_desktop}</b></span>
+                </div>
                 <div className="mt-1 text-[10.5px] text-slate-600">
-                  曝光/点击=官网海报；下单/已付=全渠道（含桌面弹窗引流，剔 e2e 测试单）。
-                  桌面端曝光看引擎 ui-event-trend（poster6u_ 前缀）。
+                  曝光/点击=官网海报；下单/已付=全渠道（剔 e2e 测试单）；桌面拆分按订单
+                  utm_source=chatx_desktop（7 天续存归因，2026-08-22 前的老订单无该字段计入官网侧）。
+                  桌面端曝光/点击/被拦原因看引擎 ui-event-trend（poster6u_ 前缀，含 poster6u_skip_*）。
                 </div>
               </Card>
             ))}

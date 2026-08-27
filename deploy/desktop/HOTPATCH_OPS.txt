@@ -1,0 +1,62 @@
+ChatX 群监控对话：自己闭环（修 + 热补丁 + 官网 + 频道）
+====================================================
+你同时负责：监控 Telegram 群、登记工单、在 117 修代码、打热补丁、
+发布到官网、通知频道@hykj7 和群@hykjz、引导用户热更新。
+不要把工单丢给别的对话。
+
+机器：117（chengjie117），仓库 D:\boundless
+基线安装包：1.0.57（用户必须先升到这一版才能吃热补丁）
+
+A. 每条群问题
+1. 登记 B 号 + 用户 + 现象
+2. 先定位根因和最小改法，用户确认后再改（不要顺手重构）
+3. 按 scope 出补丁（在 117 上跑）：
+
+   cd D:\boundless\deploy\desktop
+
+   只改壳/注入：
+   powershell -File .\make_chatx_hotpatch.ps1 -Fixes Bxxx -Notes "用户能看懂的一句话"
+
+   改了 sidecar：加 -IncludeServices
+   改了 Python 后端：先在 desktop 目录 npm run build:backend，再 make 时加 -IncludeBackend
+   动了 Electron/ffmpeg/安装器：不要热补丁，走整包
+     cd D:\boundless\engines\chengjie\desktop
+     改 package.json version / displayVersion（1.0.57 -> 1.0.58 / 1.057 -> 1.058）
+     npm run dist:win:fresh
+     pwsh D:\boundless\website\scripts\publish_chatx.ps1 -Yes -Notes "..."
+
+4. 先推内部坐席：
+   powershell -File .\push_chatx_hotpatch.ps1 -Targets yunsheng -Relaunch
+   确认后再：
+   powershell -File .\push_chatx_hotpatch.ps1 -Relaunch
+   pwsh D:\boundless\website\scripts\publish_chatx_hotpatch.ps1 -Yes -Announce
+
+5. 通知频道+群（引导热更新，不要让用户再下安装包）：
+   用 D:\boundless\deploy\desktop\CHANNEL_NOTICE_HOTPATCH.txt 填 {version}{notes}{user}{id}
+   把正文写成 JSON，scp 到 VPS 后执行（密钥只在 VPS 上读，不要打印）：
+
+   目标：https://bd2026.cc/api/admin/broadcast
+   在 VPS（ubuntu@165.154.233.121，钥匙 C:\Users\Administrator\.ssh\hualing_deploy）跑：
+     bash /tmp/_vps_bcast.sh /tmp/chatx_broadcast.json
+   脚本在 C:\Users\Administrator\_vps_bcast.sh
+   JSON 字段：
+     text, target=both, withButton=true,
+     sitePath=/download/chatx, siteLabel=立即更新,
+     campaign=chatx-Bxxx
+
+   用户引导固定三句：
+     打开智聊 -> 顶部点「立即重启更新」-> 关于页应显示 1.057+pN
+     还没升到 1.0.57 的，先去 https://bd2026.cc/download/chatx 装一次
+
+6. 在群反馈帖回一句 shipped，不要在 shipped 之前让用户重启。
+
+B. 现在卡着的 1.0.57 整包（若官网 latest.yml 还不是 1.0.57）
+   安装包已打好：D:\boundless\engines\chengjie\desktop\dist\ChatX-Setup-1.0.57.exe
+   发布脚本：pwsh D:\boundless\website\scripts\publish_chatx.ps1 -Yes -NotesFile C:\Users\Administrator\_notes_1057.txt
+   发布成功后立刻发频道（正文见 CHANNEL_NOTICE_FULL.txt），campaign=chatx-1057
+   不要在 latest.yml 仍是 1.0.56 时发「已发布」。
+
+C. 不要做
+   不要另起一套更新通道
+   不要把密钥写进聊天
+   不要为 JS 小修再打 NSIS 安装包（1.0.57 上线之后）

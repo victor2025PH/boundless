@@ -38,24 +38,30 @@
     return !!PREFER_INBOX_AUTO[p] || isAssistOnlyEmbed(p);
   }
 
-  /** 标签条副标（空串＝不挂 via-tag） */
-  function assistOnlyTabTag(platform) {
-    return isAssistOnlyEmbed(platform) ? "人工" : "";
+  // ── i18n 边界（2026-08-19）─────────────────────────────────────────────────
+  // 本模块是**纯判定层**：只回稳定 key，不回人话。此前直接回中文串 → 英文坐席看到
+  // 「人工」「此标签=官方网页…」。与 inject-status / webmulti 同一架构选择：取词留在
+  // 展示层（renderer 的 SH()），单测因此断言 key（稳定）而非文案（会随本地化漂移）。
+  // 空串＝不显示（调用方据此决定挂不挂元素），沿用旧语义不变。
+
+  /** 标签条副标 i18n key（空串＝不挂 via-tag） */
+  function assistOnlyTabTagKey(platform) {
+    return isAssistOnlyEmbed(platform) ? "caps.tag_manual" : "";
   }
 
-  /** 激活内嵌 Tab 时顶栏诚实条；非 assist-only 返回空串 */
-  function assistOnlyBannerText(platform) {
+  /** 激活内嵌 Tab 时顶栏诚实条 key；非 assist-only 返回空串 */
+  function assistOnlyBannerKey(platform) {
     if (!isAssistOnlyEmbed(platform)) return "";
-    const p = normalizePlatform(platform);
-    if (p === "messenger") {
-      return "此标签=官方网页（人工聊天/翻译）。全自动请用「人工操作台」（统一收件箱）——需服务器完整登录（含加密 PIN），与本页登录无关。";
-    }
-    return "此标签=官方网页（人工聊天/翻译/标签）。全自动收发请到「人工操作台」（统一收件箱）。";
+    // messenger 多一句「全自动另需服务器完整登录」——这是坐席最常误解的一点
+    // （本页登录了≠全自动能跑），故单列一条文案。
+    return normalizePlatform(platform) === "messenger"
+      ? "caps.banner_messenger"
+      : "caps.banner_generic";
   }
 
-  /** 新增账号菜单副标 */
-  function assistOnlyMenuHint(platform) {
-    return isAssistOnlyEmbed(platform) ? "（人工）" : "";
+  /** 新增账号菜单副标 key */
+  function assistOnlyMenuHintKey(platform) {
+    return isAssistOnlyEmbed(platform) ? "caps.menu_manual" : "";
   }
 
   const api = {
@@ -64,9 +70,9 @@
     normalizePlatform,
     isAssistOnlyEmbed,
     prefersInboxAuto,
-    assistOnlyTabTag,
-    assistOnlyBannerText,
-    assistOnlyMenuHint,
+    assistOnlyTabTagKey,
+    assistOnlyBannerKey,
+    assistOnlyMenuHintKey,
   };
 
   if (typeof module !== "undefined" && module.exports) {

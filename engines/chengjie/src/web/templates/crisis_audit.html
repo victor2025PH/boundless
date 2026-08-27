@@ -142,7 +142,20 @@ async function caLoad() {
       '<div class="ca-pill' + (unhandled > 0 ? ' warn' : '') + '">'+window.T('ca_js002')+' <strong>' + unhandled + '</strong></div>';
     st.textContent = window.T('ca_js003');
     if (!items.length) {
-      body.innerHTML = '<tr><td colspan="9" style="padding:2rem;color:var(--t3)">'+window.T('em_js001')+'</td></tr>';
+      /* 空态分两种（2026-08-18 P1）：无筛选的空 = 「安全体检」好消息（生产常态
+         是 0 危机事件，裸空表看着像页面坏了）；带用户前缀筛选的空 = 普通无匹配。 */
+      if (!prefix) {
+        var histBtn = onlyUnhandled
+          ? '<div style="margin-top:.7rem"><button type="button" class="btn btn-s btn-sm" onclick="caShowAll()">' + window.T('ca_js011') + '</button></div>'
+          : '';
+        body.innerHTML = '<tr><td colspan="9" style="padding:2.4rem 1rem;text-align:center">'
+          + '<div style="font-size:1.7rem;line-height:1">🛡️</div>'
+          + '<div style="font-weight:600;margin:.45rem 0 .25rem">' + window.T('ca_js010') + '</div>'
+          + '<div style="font-size:.8rem;color:var(--t3);max-width:520px;margin:0 auto">' + window.T('ca_js012') + '</div>'
+          + histBtn + '</td></tr>';
+      } else {
+        body.innerHTML = '<tr><td colspan="9" style="padding:2rem;color:var(--t3)">'+window.T('em_js001')+'</td></tr>';
+      }
       return;
     }
     body.innerHTML = items.map(function(it) {
@@ -183,6 +196,12 @@ async function caLoad() {
   } catch (e) {
     st.textContent = window.T('ov_js_req_fail')+': ' + e;
   }
+}
+
+/* 空态「查看已处理历史」按钮：innerHTML 拼出的 onclick → 顶层函数保证全局可达 */
+function caShowAll() {
+  document.getElementById('ca-only-unhandled').checked = false;
+  caLoad();
 }
 
 function caOpenModal(el) {

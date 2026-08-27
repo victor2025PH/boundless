@@ -11,24 +11,30 @@
 import re
 
 from src.web.audit_display import (
+    _KV_PAIR,
     FAMILY_DEFS,
+    FAMILY_ORDER,
     action_icon_kind,
     build_recent_groups,
     classify_target,
+    decorate_object,
     family_like_patterns,
+    family_of,
     family_predicate,
     group_days,
     is_danger_action,
+    operator_display_names,
     operator_hue,
     paginate_newest_first,
+    parse_object_tokens,
     summarize_actions,
 )
 
 
-def _e(ts, action, op="admin", target="", old="", snap="", rid=0):
+def _e(ts, action, op="admin", target="", old="", snap="", rid=0, new=""):
     return {
         "ts": ts, "action": action, "user_id": op, "target": target,
-        "old_val": old, "new_val": "", "snapshot_id": snap, "id": rid,
+        "old_val": old, "new_val": new, "snapshot_id": snap, "id": rid,
     }
 
 
@@ -170,8 +176,24 @@ def test_group_days_kinds():
 
 def test_summarize_actions():
     s = summarize_actions(["episodic_delete", "save_settings", "kb_delete_entry"])
-    assert s == {"total": 3, "danger": 2}
-    assert summarize_actions([]) == {"total": 0, "danger": 0}
+    assert s["total"] == 3 and s["danger"] == 2
+    # 族直方图：平局（各 1 次）按 FAMILY_ORDER 序；save_settings 无归属不进桶
+    assert s["families"] == [("memory", 1), ("kb", 1)]
+    empty = summarize_actions([])
+    assert empty["total"] == 0 and empty["danger"] == 0 and empty["families"] == []
+
+
+def test_summarize_actions_families_sorted_by_count_then_order():
+    s = summarize_actions(["stk_upload", "stk_delete", "episodic_delete"])
+    assert s["families"] == [("sticker", 2), ("memory", 1)]
+    # 模板消费面：dashboard h2 走 audit_today.families、/audit 徽章可点
+    from pathlib import Path
+    tpl = Path(__file__).resolve().parents[1] / "src" / "web" / "templates"
+    dash = (tpl / "dashboard.html").read_text(encoding="utf-8")
+    assert "audit_today.families" in dash
+    audit_html = (tpl / "audit.html").read_text(encoding="utf-8")
+    assert 'data-ue="audit.tok_pivot"' in audit_html
+    assert "/audit?channel={{ (tok.key ~ '=' ~ tok.value)|urlencode }}" in audit_html
 
 
 # ── family：谓词 ≡ SQL LIKE 模式（单源派生的一致性门禁）─────────────
@@ -226,6 +248,191 @@ def test_family_danger_predicate_is_single_source():
     pred = family_predicate("danger")
     for a in _action_corpus():
         assert pred(a) == is_danger_action(a), a
+
+
+def test_family_order_is_single_source():
+    assert list(FAMILY_ORDER) == [
+        "danger", "memory", "kb", "persona", "sticker", "contacts", "rpa",
+    ]
+    assert set(FAMILY_ORDER) == set(FAMILY_DEFS)
+    from src.web.i18n_packs.audit_ui import EN, ZH
+    for fam in FAMILY_ORDER:
+        assert ZH.get(f"au_fam_{fam}"), fam
+        assert EN.get(f"au_fam_{fam}"), fam
+    from pathlib import Path
+    audit_html = (Path(__file__).resolve().parents[1]
+                  / "src" / "web" / "templates" / "audit.html"
+                  ).read_text(encoding="utf-8")
+    assert "for f in family_order" in audit_html
+    assert "_fam_presets" not in audit_html
+    pred_stk = family_predicate("sticker")
+    pred_per = family_predicate("persona")
+    pred_ct = family_predicate("contacts")
+    assert pred_stk("stk_seed_official") and not pred_per("stk_seed_official")
+    assert pred_per("pmedia_upload") and pred_per("voice_enroll")
+    assert pred_ct("merge_review_approve") and pred_ct("tg_members_extract_start")
+
+
+def test_parse_object_tokens_kv_and_delta():
+    assert parse_object_tokens("pack=starter-faces") == [
+        {"key": "pack", "value": "starter-faces"}]
+    assert parse_object_tokens("pack=faces id=s1") == [
+        {"key": "pack", "value": "faces"}, {"key": "id", "value": "s1"}]
+    assert parse_object_tokens("from=a to=b") == [
+        {"key": "from", "value": "a"}, {"key": "to", "value": "b"}]
+    assert parse_object_tokens("packs+2 items+51") == [
+        {"key": "packs", "value": "+2"}, {"key": "items", "value": "+51"}]
+    assert parse_object_tokens("n=0;fail=1") == [
+        {"key": "n", "value": "0"}, {"key": "fail", "value": "1"}]
+
+
+def test_parse_object_tokens_rejects_unstructured():
+    assert parse_object_tokens("welcome") == []
+    assert parse_object_tokens("tg:1|line:2") == []
+    assert parse_object_tokens("https://example.com/path?pack=x") == []
+    assert parse_object_tokens("pack=x leftover prose that ruins coverage") == []
+    assert parse_object_tokens("") == []
+
+
+def test_decorate_object_known_families_untouched():
+    d = decorate_object("episodic_delete", "42")
+    assert d["target_kind"] == "memory" and d["target_tokens"] == []
+    d = decorate_object("identity_link", "tg:1|line:2")
+    assert d["target_kind"] == "identity" and d["target_tokens"] == []
+    d = decorate_object("update_template", "welcome")
+    assert d["target_kind"] == "generic" and d["target_tokens"] == []
+
+
+def test_decorate_object_kv_and_empty_target_uses_extra():
+    d = decorate_object("stk_pack_delete", "pack=starter-faces")
+    assert d["target_kind"] == "kv"
+    assert d["target_tokens"] == [{"key": "pack", "value": "starter-faces"}]
+    d = decorate_object("stk_seed_official", "", "packs+2 items+51")
+    assert d["target_kind"] == "kv"
+    assert d["target_tokens"] == [
+        {"key": "packs", "value": "+2"}, {"key": "items", "value": "+51"}]
+    assert d["detail_tokens"] == []  # 同源不重复
+
+
+def test_build_recent_groups_exposes_tokens_from_new_val():
+    groups = build_recent_groups([
+        _e("2026-08-18 16:00:00", "stk_seed_official", new="packs+2 items+51", rid=1),
+        _e("2026-08-18 16:01:00", "stk_pack_delete", target="pack=faces", rid=2),
+    ])
+    assert groups[0]["action"] == "stk_pack_delete"
+    assert groups[0]["target_kind"] == "kv"
+    assert groups[0]["target_tokens"][0]["value"] == "faces"
+    assert groups[0]["targets_shown"] == ["pack=faces"]  # 筛选 href 仍用原串
+    seed = groups[1]
+    assert seed["action"] == "stk_seed_official"
+    assert seed["target_kind"] == "kv"
+    assert seed["targets_shown"] == []
+    assert [t["key"] for t in seed["target_tokens"]] == ["packs", "items"]
+
+
+# ── P3：族芯片 / 操作人显示名 / 写入点 kv 键契约 ────────────────────
+
+
+def test_family_of_skips_danger_and_maps_business_family():
+    assert family_of("stk_pack_delete") == "sticker"   # danger 是严重度不是域
+    assert family_of("episodic_delete") == "memory"
+    assert family_of("pmedia_upload") == "persona"
+    assert family_of("merge_review_approve") == "contacts"
+    assert family_of("kb_import") == "kb"
+    assert family_of("save_settings") == ""            # 无归属不硬贴
+
+
+def test_build_recent_groups_carries_family():
+    groups = build_recent_groups([
+        _e("2026-08-18 16:00:00", "stk_seed_official", rid=1),
+        _e("2026-08-18 16:01:00", "save_settings", rid=2),
+    ])
+    assert groups[0]["family"] == ""          # save_settings 最新在前
+    assert groups[1]["family"] == "sticker"
+
+
+def test_operator_display_names_mapping_and_failsoft():
+    class _Store:
+        def list_users(self):
+            return [{"username": "admin", "display_name": "张三"},
+                    {"username": "ops", "display_name": ""}]
+
+    class _Boom:
+        def list_users(self):
+            raise RuntimeError("db gone")
+
+    m = operator_display_names(_Store())
+    assert m == {"admin": "张三", "ops": "ops"}   # 空显示名回落 username
+    assert operator_display_names(_Boom()) == {}
+    assert operator_display_names(None) == {}
+
+
+# 写入点 kv 键 → aud_tgt_* 词条契约：parse_object_tokens 在展示层拆出的键，
+# 若没登记就以英文原 key 上屏（与 P1 的 action 词条同病）。扫描器复用
+# test_audit_action_labels 的包装识别（tests/_audit_scan.py 共享核心），
+# 只看展示层真正消费的 target/new_val 两槽（old_val 只进 danger brief 不拆）。
+_TGT_TRAILING_KV = re.compile(r"(?:^|[\s;,])([A-Za-z_][A-Za-z0-9_]{0,31})=$")
+_TGT_TRAILING_DELTA = re.compile(r"(?:^|[\s;,])([A-Za-z_][A-Za-z0-9_]{0,31})\+$")
+
+# 已知未登记键台账（当前空；新键要么补词条要么在此登记原因）
+_PENDING_TGT_KEYS: dict = {}
+
+
+def _segment_kv_keys(seg: str) -> set:
+    """静态文本段里的 kv 键：段内完整 kv（scope=conv）+ 段尾悬挂键
+    （f-string 的 "pack=" / "items+" 后面跟运行时值）。"""
+    keys = {k for k, _v in _KV_PAIR.findall(seg)}
+    m = _TGT_TRAILING_KV.search(seg)
+    if m:
+        keys.add(m.group(1))
+    m = _TGT_TRAILING_DELTA.search(seg)
+    if m:
+        keys.add(m.group(1))
+    return keys
+
+
+def _collect_write_site_kv_keys():
+    from tests import _audit_scan as scan
+
+    found = {}
+    for rel, _hint, _slot, seg in scan.collect_audit_value_segments(
+            slots=("target", "new_val")):
+        for k in _segment_kv_keys(seg):
+            found.setdefault(k, set()).add(rel)
+    return found
+
+
+def test_audit_kv_keys_have_display_labels():
+    from src.web.i18n_packs.audit_ui import EN, ZH
+
+    found = _collect_write_site_kv_keys()
+    # 提取链自证：三种真实写入形态的生产哨兵键（局部包装 target / 包装
+    # detail→new_val / 关键字直调）任何一个消失＝扫描器回归，先对账再改。
+    for sentinel in ("pack", "packs", "pid", "scope"):
+        assert sentinel in found, f"扫描器没抓到哨兵键 {sentinel}"
+    assert len(found) >= 80, f"仅扫到 {len(found)} 个键，提取链疑似失效"
+
+    missing = {}
+    for k, files in sorted(found.items()):
+        if k in _PENDING_TGT_KEYS:
+            continue
+        if f"aud_tgt_{k}" not in ZH or f"aud_tgt_{k}" not in EN:
+            missing[k] = sorted(files)
+    assert not missing, (
+        "以下审计写入点的 kv 键缺人话词条（i18n_packs/audit_ui.py 补 "
+        f"aud_tgt_<key>，zh+en 双语，或登记 _PENDING_TGT_KEYS）：{missing}"
+    )
+
+
+def test_pending_tgt_keys_not_stale():
+    """pending 台账防过期：登记的键必须仍被扫到且仍未登记词条。"""
+    from src.web.i18n_packs.audit_ui import EN, ZH
+
+    found = _collect_write_site_kv_keys()
+    stale = [k for k in _PENDING_TGT_KEYS
+             if k not in found
+             or (f"aud_tgt_{k}" in ZH and f"aud_tgt_{k}" in EN)]
+    assert not stale, f"_PENDING_TGT_KEYS 台账过期条目（已登记词条或已消失）：{stale}"
 
 
 def test_family_unknown_returns_empty():

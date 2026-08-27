@@ -23,6 +23,27 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def stderr_storm_verdict(prev: Optional[Dict[str, Any]],
+                         cur: Dict[str, Any], *,
+                         growth_bytes: int) -> Dict[str, Any]:
+    """boot err 日志「异常增长」判定（纯函数，2026-08-27 宕机沉淀）。
+
+    ``prev``/``cur``＝``{"path", "size"}`` 观测快照（同一文件两次采样）。
+    判据＝**绝对增量**：err 日志健康态应恒近零，两次巡检间涨 ``growth_bytes``
+    （默认 15MB）只可能是「每条日志都在倒堆栈」级别的风暴（当日实测 ~570KB/s），
+    不做速率归一（简单可解释，慢泄漏不属本哨兵管）。
+
+    返回 ``{"alert": bool, "grew": int}``；换文件（新 boot）/首见＝建立基线不告警。
+    """
+    try:
+        if not prev or str(prev.get("path")) != str(cur.get("path")):
+            return {"alert": False, "grew": 0}
+        grew = int(cur.get("size") or 0) - int(prev.get("size") or 0)
+        return {"alert": grew >= int(growth_bytes), "grew": max(0, grew)}
+    except (TypeError, ValueError):
+        return {"alert": False, "grew": 0}
+
+
 def _collect_workers(state) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     specs = [
@@ -151,14 +172,45 @@ def avatar_probe_target(config: Dict[str, Any]) -> str:
     仅 ``avatar_voice.enabled`` 时探测；7858（懒加载批量服务，空闲卸载是常态）与
     远端 STT（有 176+本机 CPU 三级兜底）**不进灯**——避免把正常态/软降级报成异常，
     三端点明细看 ops-overview「🎙️ AvatarHub 语音」卡。
+
+    端点解析与 ``AvatarVoiceClient`` 同口径：多端点部署时 ``base_urls[0]``（主端点）
+    优先于单数 ``base_url``。2026-08-18 实锤：本机 7852 退役迁 140 后 overlay 只配了
+    ``base_urls``，本函数仍回落 127.0.0.1 → 探已退役旧服务 → 每 4h 一条假「掉线」
+    告警（真身 140:7852 全程健康、客户端用的就是它）。
     """
     av = (config.get("avatar_voice") or {}) if isinstance(config, dict) else {}
     if not av.get("enabled", False):
         return ""
-    base = str(av.get("base_url") or "http://127.0.0.1:7852").strip().rstrip("/")
+    base = ""
+    raw = av.get("base_urls")
+    if isinstance(raw, (list, tuple)):
+        for u in raw:
+            u = str(u or "").strip()
+            if u:
+                base = u
+                break
+    if not base:
+        base = str(av.get("base_url") or "http://127.0.0.1:7852").strip()
+    base = base.rstrip("/")
     if not base:
         return ""
     return base + "/health"
+
+
+def avatar_probe_host_is_local(url: str) -> bool:
+    """探针目标是否本机服务（127.0.0.1/localhost，纯函数）。
+
+    救援计划任务（EmotionTTS_Boot/EmotionTTSWatchdog）是**本机** schtasks——
+    探针目标迁到远端主机（如 140:7852）后仍探本机任务状态是张冠李戴：远端服务的
+    自愈链在远端，本机任务停用是本地 TTS 退役后的刻意状态，不构成「救援链断裂」。
+    解析失败按非本机处理（宁可少说一行，不误报）。
+    """
+    try:
+        from urllib.parse import urlparse
+        host = str(urlparse(str(url or "")).hostname or "").lower()
+    except Exception:
+        return False
+    return host in ("127.0.0.1", "localhost", "::1")
 
 
 _AVATAR_PROBE_CACHE: Dict[str, Any] = {"ts": 0.0, "url": "", "result": None}
@@ -467,6 +519,9 @@ class HealthWatchdog:
         # 授权字符额度水位巡检（P4c）：稀疏节流 + 「告过警」标记（恢复通知只发给告过警的）
         self._last_license_quota_ts: float = 0.0
         self._license_quota_alerted: bool = False
+        # Token 钱包水位巡检（quotawall v2 P2-4）：同款稀疏节流 + 告过警标记
+        self._last_token_wallet_ts: float = 0.0
+        self._token_wallet_alerted: bool = False
         # 本地兜底顶班提醒：上次观测的兜底出话累计数 + 首次观测到顶班的时间
         self._fb_duty_last_calls: Optional[int] = None
         self._fb_duty_since_ts: float = 0.0
@@ -480,6 +535,12 @@ class HealthWatchdog:
         # 不敏感。判据换成 voice_outage 滚动窗「尝试 ≥N 且 0 成功」。
         self._vo_alerted: bool = False
         self._vo_last_remind: float = 0.0
+        # 单链断档（2026-08-22）：上面那组是**全局**口径（窗内 0 成功），一条健康的
+        # 链就能把另一条全灭的链盖住。接进 wa_rpa/mr_rpa 后台账有 5 个 source，
+        # 「一条全灭、其余正常」从边角情形变成常态形态，故按 source 各记一份状态
+        # （共用一份计时器会让先响的那条把后来的顶掉）。
+        self._vo_src_alerted: Dict[str, bool] = {}
+        self._vo_src_last_remind: Dict[str, float] = {}
         self.total_voice_outage_alerts: int = 0
         # 履约端（厂商机签发链单点）停摆升级提醒：首次不健康时刻 + 已首提 + 上次重提 + 种类
         self._fulfiller_bad_since: float = 0.0
@@ -489,6 +550,13 @@ class HealthWatchdog:
         # 告警种类：down=不可达/未载入（health 探测红）；hang=半死（health 绿但合成连败，
         # 2026-07-14 事故形态）。恢复语义不同：hang 需要「失败后真的又成过一次」的正面证据。
         self._avatar_alert_kind: str = ""
+        # hub 引擎目录离线巡检（2026-08-22「fish 冒充 IndexTTS-2」事故）：与上面
+        # 三个 _avatar_* 状态**刻意分开**——那组盯的是本机 7852，这组盯的是 hub
+        # （另一台机、另一套失败域）；共用计时器会让两边的首提/重提互相顶掉。
+        self._hub_engine_down_since: float = 0.0
+        self._hub_engine_alerted: bool = False
+        self._hub_engine_last_remind: float = 0.0
+        self.total_hub_engine_reminders: int = 0
         # LAN GPU 主机宕机升级提醒（2026-08-01 176 整机静默下线两小时事故）：
         # 每主机独立状态 {down_since, alerted, last_remind}——故障转移网兜住了业务，
         # 但运维必须知道冗余已经归零。
@@ -505,6 +573,16 @@ class HealthWatchdog:
         self._apg_first_fail_ts: float = 0.0
         self._apg_switched: bool = False
         self.total_ai_primary_guard_switches: int = 0
+        # 托管代理生命周期巡检（一键代理 P2）：稀疏节流（默认 1h）+ 低库存签名去重
+        # （持续态每轮都会算出来，签名变了才重发，防每小时复读同一份缺货单）。
+        self._pxm_last_ts: float = 0.0
+        self._pxm_low_sig: str = ""
+        self._pxm_low_last_remind: float = 0.0
+        # JIT（http 供给）的上游余额水位（P4）：余额就是库存——低于 min_alert 首提，
+        # 4h 重提，充值回升自动清零（恢复不推送，看板可见即可）。
+        self._pxm_bal_alerted: bool = False
+        self._pxm_bal_last_remind: float = 0.0
+        self.total_proxy_managed_alerts: int = 0
         # 缺口自动入库：稀疏节流（默认 1h 一轮）+ 每日预算
         self._last_auto_stock_ts: float = 0.0
         self._auto_stock_day: str = ""
@@ -607,6 +685,7 @@ class HealthWatchdog:
         self.total_inbox_read_stall_reminders: int = 0
         self.total_cloud_balance_alerts: int = 0
         self.total_license_quota_alerts: int = 0
+        self.total_token_wallet_alerts: int = 0
         self.total_fallback_duty_reminders: int = 0
         self.total_avatar_voice_reminders: int = 0
         self.total_trial_fulfiller_reminders: int = 0
@@ -764,6 +843,21 @@ class HealthWatchdog:
         except Exception:
             logger.debug("平台会话持续掉线巡检异常（已忽略）", exc_info=True)
 
+        # stderr 风暴哨兵（2026-08-27 06:11 宕机沉淀）：boot err 日志异常增长＝
+        # 进程内有「每条日志都在倒堆栈」级别的风暴（当日 45min 写满 1.5GB 拖死
+        # 实例，全程零告警）。增长超阈值即经 host_alert 点名，早于进程被拖死。
+        try:
+            self._check_stderr_storm()
+        except Exception:
+            logger.debug("stderr 风暴哨兵异常（已忽略）", exc_info=True)
+
+        # Messenger worker 代码分叉提醒（实施74/实施69 P1-4）：worker 自报
+        # code_stale 持续超阈 → 点名重启装载，消「改了没重启」27 小时盲区。
+        try:
+            self._check_messenger_code_stale()
+        except Exception:
+            logger.debug("code_stale 巡检异常（已忽略）", exc_info=True)
+
         # 人工接管超时提醒（驾驶舱 P0 2026-08-13）：坐席接管会话后忘了交还——
         # 接管期间该客户的 AI 全停＝没人管，超时必须有人被点名。
         try:
@@ -805,6 +899,17 @@ class HealthWatchdog:
             self._check_avatar_voice()
         except Exception:
             logger.debug("AvatarHub 语音巡检异常（已忽略）", exc_info=True)
+        # hub 引擎目录离线哨兵（2026-08-22「fish 冒充 IndexTTS-2」事故）：
+        # 钉的引擎在目录里 available:false → 顶包/拒发，且**零流量时无人知**。
+        try:
+            self._check_hub_engine()
+        except Exception:
+            logger.debug("hub 引擎目录巡检异常（已忽略）", exc_info=True)
+        # 出图模型「被删」哨兵（2026-08-22 事故：176 模型整树被清空数小时无人知）。
+        try:
+            self._check_image_models()
+        except Exception:
+            logger.debug("出图模型巡检异常（已忽略）", exc_info=True)
         # 语音出站断档：探针绿也可能整链拒发（hub 音色档 404 实锤 5 天零告警），
         # 按 voice_outage 台账滚动窗判「有请求全在失败」，低流量同样敏感。
         try:
@@ -830,6 +935,13 @@ class HealthWatchdog:
             self._check_draft_backlog()
         except Exception:
             logger.debug("草稿积压巡检异常（已忽略）", exc_info=True)
+
+        # 托管代理生命周期（一键代理 P2）：自动续期 / 到期回收 / 低库存预警——
+        # 缺这一环＝「代理过期了坐席还在用它登号」（连接莫名失败，排查成本极高）
+        try:
+            self._check_proxy_managed()
+        except Exception:
+            logger.debug("托管代理巡检异常（已忽略）", exc_info=True)
 
         # 账号真相真幽灵：会话库有、注册表没有（剔除 web 工作台 / 桌面镜像）
         try:
@@ -984,6 +1096,14 @@ class HealthWatchdog:
             self._check_license_quota()
         except Exception:
             logger.debug("授权额度巡检异常（已忽略）", exc_info=True)
+
+        # Token 钱包水位（quotawall v2 P2-4）：enforce 生效的部署钱包耗尽＝AI 增强
+        # 功能静默降级免费路径（服务不断线但体验降档）——降级 pill 是被动面，这里
+        # 补主动外发；影子记账（enforce=false）期不告警（那个阶段看 ops 影子卡）。
+        try:
+            self._check_token_wallet()
+        except Exception:
+            logger.debug("Token 钱包巡检异常（已忽略）", exc_info=True)
 
         # 试用领取兑现巡检（P2）：官网建单后厂商机异步签发，用户早就关掉向导去干活了。
         # 没有这条后台轮询，授权就只在「首启窗口恰好还开着」时才落地——而那个窗口
@@ -1526,24 +1646,16 @@ class HealthWatchdog:
           （authorized 归位清标记）或删除账号即自然停催。
         - ``operator``（运营主动登出，``_clear_session_creds`` 落标）或**无标记**
           （历史存量行，来历不明——宁静默不误催）→ 不催，维持旧行为。
+
+        2026-08-27 状态中心 v2：判据本体移居
+        ``platform_session_health.session_expected_online``（坐席横幅快照同源
+        消费——催不催与亮不亮必须一个口径），本方法保留为委托壳（既有调用点/
+        测试零改动）。
         """
-        plat, _, acct = key.partition(":")
-        if not plat or not acct:
-            return True
-        try:
-            from src.integrations.account_registry import get_account_registry
-            row = get_account_registry().get(plat, acct)
-        except Exception:
-            return True
-        if not row:
-            return False
-        status = str(row.get("status") or "")
-        if status == "online":
-            return True
-        if status == "offline":
-            reason = str((row.get("meta") or {}).get("offline_reason") or "")
-            return reason.startswith("worker:")
-        return False
+        from src.integrations.platform_session_health import (
+            session_expected_online,
+        )
+        return session_expected_online(key)
 
     def _check_inject_health(self, *, now: Optional[float] = None) -> None:
         """内嵌网页端「选择器持续失配」提醒（2026-08-10）。
@@ -1639,8 +1751,17 @@ class HealthWatchdog:
             return
         after_sec = max(60.0, float(sr.get("after_min", 30) or 30) * 60.0)
         interval_sec = max(600.0, float(sr.get("interval_min", 240) or 240) * 60.0)
+        # 催办衰减（2026-08-27）：掉线超 stale_after_hours（默认 48h）的号降频为
+        # stale_interval_min（默认 1440=日更）——「每 4h 轰一个没人修的死号」只会
+        # 让人把告警频道整体静音；置 0 关衰减恢复旧行为。
+        stale_after_sec = max(0.0, float(
+            sr.get("stale_after_hours", 48) or 0) * 3600.0)
+        stale_interval_sec = max(0.0, float(
+            sr.get("stale_interval_min", 1440) or 0) * 60.0)
         due = store.due_reminders(min_age_sec=after_sec, interval_sec=interval_sec,
-                                  now=now)
+                                  now=now,
+                                  stale_after_sec=stale_after_sec,
+                                  stale_interval_sec=stale_interval_sec)
         due = {k: v for k, v in due.items() if self._session_expected_online(k)}
         if not due:
             return
@@ -1665,6 +1786,153 @@ class HealthWatchdog:
                 "rate_key": f"{key}:remind",
             })
             self.total_platform_session_reminders += 1
+
+    def _check_stderr_storm(self, *, now: Optional[float] = None,
+                            logs_dir: Optional[str] = None) -> None:
+        """stderr 风暴哨兵（2026-08-27 06:11 宕机沉淀）。
+
+        事故：日志轮转被外部句柄挡死 + okline 零退避重连共振 → 每条日志向
+        stderr 倒整段堆栈 → boot err 日志 45 分钟写满 1.5GB、web 监听被拖死，
+        全程零告警（err 日志不经 logging 体系，既有健康面全部看不见它）。
+
+        判据（``stderr_storm_verdict`` 纯函数）：最新 ``boot_*.err.log`` 两次
+        巡检间**绝对增量** ≥ ``growth_mb``（默认 15MB）→ 经 ``notify_host``
+        告警（日志 + EventBus host_alert 镜像 + 算力机弹窗，自带 30min 冷却）。
+        新 boot（文件名变）自动重建基线；logs 目录按进程 CWD 解析（服务进程
+        CWD＝实例数据根，boot 日志正落在那里的 ``logs/``）。
+
+        配置 ``health_watchdog.stderr_storm.{enabled,growth_mb}``（默认开/15）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        sc = (((cfg.get("health_watchdog") or {}).get("stderr_storm"))
+              or {}) if isinstance(cfg, dict) else {}
+        if not sc.get("enabled", True):
+            return
+        growth_bytes = max(1, int(float(sc.get("growth_mb", 15) or 15)
+                                  * 1024 * 1024))
+        import glob
+        import os
+        base = logs_dir or "logs"
+        try:
+            candidates = glob.glob(os.path.join(base, "boot_*.err.log"))
+            if not candidates:
+                return
+            newest = max(candidates, key=os.path.getmtime)
+            cur = {"path": newest, "size": int(os.path.getsize(newest))}
+        except OSError:
+            return
+        prev = getattr(self, "_stderr_state", None)
+        self._stderr_state = cur
+        verdict = stderr_storm_verdict(prev, cur, growth_bytes=growth_bytes)
+        if not verdict["alert"]:
+            return
+        self.total_stderr_storm_alerts = getattr(
+            self, "total_stderr_storm_alerts", 0) + 1
+        grew_mb = verdict["grew"] / 1024 / 1024
+        try:
+            from src.utils.host_alert import notify_host
+            notify_host(
+                "stderr 风暴（进程级日志异常）",
+                (f"{os.path.basename(cur['path'])} 在一个巡检间隔内增长 "
+                 f"{grew_mb:.0f}MB——进程内可能存在「每条日志倒堆栈」级风暴"
+                 f"（日志轮转被占用/第三方库热循环）。请尽快查看该文件尾部定位"
+                 f"根因；置之不理可能拖死实例（2026-08-27 06:11 实锤）。"),
+                key="stderr_storm", cooldown_sec=1800.0,
+            )
+        except Exception:
+            logger.warning("[watchdog] stderr 风暴：%s 增长 %.0fMB（host_alert "
+                           "出口异常，仅本地记录）", cur["path"], grew_mb)
+
+    def _fetch_messenger_worker_snapshot(self) -> Optional[Dict[str, Any]]:
+        """读 messenger worker ``GET /accounts`` 的 ``worker`` 段；不可达返回 None。
+
+        独立成方法＝测试可 monkeypatch；阻塞 HTTP 安全（tick 在线程池里跑）。
+        """
+        try:
+            from src.integrations.messenger_web_login import service_base_url
+            cfg = getattr(self._config_manager, "config", None) or {}
+            import httpx
+            r = httpx.get(f"{service_base_url(cfg)}/accounts", timeout=5.0)
+            r.raise_for_status()
+            data = r.json()
+            w = data.get("worker") if isinstance(data, dict) else None
+            return w if isinstance(w, dict) else {}
+        except Exception:
+            return None
+
+    def _check_messenger_code_stale(self, *, now: Optional[float] = None) -> None:
+        """实施74（实施69 P1-4）：messenger worker「代码分叉」升级提醒。
+
+        实锤（实施69 §1.1）：实施68 的 PIN/中继修复在盘上躺了 **27 小时**没被
+        在跑 worker 装载——`code_stale:true` 是 worker 的优秀自报，但只躺在
+        /accounts 响应里无人消费（Python 实例重启 ≠ Node worker 重启，两个
+        动作极易只做前者）。本检查把它接进告警：
+
+        - 判据＝worker 自报 ``code_stale=true`` 持续 ≥ ``after_min``（默认 30，
+          给「先落盘、稍后随窗重启」的正常发布节奏留缓冲）→ ``notify_host``
+          （key 固定 + ``interval_min`` 冷却重提）；
+        - 恢复（false / worker 重启换 boot）→ 曾告警才补恢复通知，状态清零；
+        - messenger web 未启用 / worker 不可达 → 静默返回不计时（可达性归
+          session_stale_remind / relogin 分诊管，本检查只管「活着但代码旧」）。
+
+        配置 ``health_watchdog.code_stale_remind.{enabled,after_min,interval_min}``
+        （默认 开/30/240）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        cs = (((cfg.get("health_watchdog") or {}).get("code_stale_remind"))
+              or {}) if isinstance(cfg, dict) else {}
+        if not cs.get("enabled", True):
+            return
+        try:
+            from src.integrations.messenger_web_login import web_enabled
+            if not web_enabled(cfg):
+                return
+        except Exception:
+            return
+        ts = float(now if now is not None else time.time())
+        after_sec = max(60.0, float(cs.get("after_min", 30) or 30) * 60.0)
+        interval_sec = max(600.0, float(
+            cs.get("interval_min", 240) or 240) * 60.0)
+        snap = self._fetch_messenger_worker_snapshot()
+        if snap is None:
+            return  # 不可达：不计时不清零（缺证据不动状态）
+        stale = bool(snap.get("code_stale"))
+        if not stale:
+            if getattr(self, "_code_stale_alerted", False):
+                try:
+                    from src.utils.host_alert import notify_host
+                    notify_host(
+                        "Messenger worker 代码已同步",
+                        "worker 已装载磁盘最新代码（code_stale 清零）。",
+                        key="msgr_code_stale_ok", cooldown_sec=60.0)
+                except Exception:
+                    logger.debug("[code_stale] 恢复通知失败", exc_info=True)
+            self._code_stale_since = 0.0
+            self._code_stale_alerted = False
+            return
+        since = float(getattr(self, "_code_stale_since", 0.0) or 0.0)
+        if since <= 0:
+            self._code_stale_since = ts
+            return
+        if ts - since < after_sec:
+            return
+        stale_min = int((ts - since) // 60)
+        try:
+            from src.utils.host_alert import notify_host
+            fired = notify_host(
+                "Messenger worker 代码分叉",
+                (f"messenger-web worker 在跑代码落后磁盘已 ≥{stale_min} 分钟"
+                 f"（code_stale=true，boot_ts={snap.get('boot_ts', '?')}）。"
+                 f"盘上的修复没有被装载——请在合适窗口重启 worker"
+                 f"（计划任务 Messenger-Web-Service 会用新代码自动拉活）。"
+                 f"实施69 实锤：该分叉曾静默存活 27 小时。"),
+                key="msgr_code_stale", cooldown_sec=interval_sec)
+            if fired:
+                self._code_stale_alerted = True
+                self.total_code_stale_alerts = getattr(
+                    self, "total_code_stale_alerts", 0) + 1
+        except Exception:
+            logger.debug("[code_stale] 告警外发失败", exc_info=True)
 
     def _check_takeover_overdue(self, *, now: Optional[float] = None) -> None:
         """人工接管超时提醒（驾驶舱 P0，2026-08-13）。
@@ -2105,6 +2373,172 @@ class HealthWatchdog:
             logger.info(
                 "[stale_enriching] 回收 %s 条卡死停泊草稿（>%.0f 分钟未收尾，"
                 "translated to pending 待人审/自动链接手）", released, after_min)
+
+    def _check_proxy_managed(self, *, now: Optional[float] = None) -> None:
+        """托管代理生命周期巡检（一键代理 P2）：续期 / 到期回收 / 低库存。
+
+        决策核心在 ``proxy_lifecycle.run_lifecycle_sweep``（可注入、离线可测），
+        这里只做：配置闸 + 稀疏节流（``proxies.managed.lifecycle.interval_min``，
+        默认 1h）+ 钱侧回调（token_ledger）+ 告警发布。
+
+        - 续期/到期/预警类告警的 once-per-period 去重在 sweep 内（台账标记），
+          这里原样 publish；
+        - **低库存是持续态**（每轮都会算出同一份缺货单）→ 这里按签名去重：
+          缺货名单变了立即发，没变每 4h 重提一次，补货后自动静默。
+        - ``proxies.managed.enabled=false``（出厂默认）恒静默，零开销。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        if not isinstance(cfg, dict):
+            return
+        try:
+            from src.integrations.proxy_provider import parse_managed_cfg
+
+            mcfg = parse_managed_cfg(cfg)
+        except Exception:
+            return
+        if not mcfg.get("enabled"):
+            return
+        ts = float(now if now is not None else time.time())
+        life = mcfg.get("lifecycle") or {}
+        interval = max(300.0, float(life.get("interval_min", 60) or 60) * 60.0)
+        if self._pxm_last_ts and ts - self._pxm_last_ts < interval:
+            return
+        self._pxm_last_ts = ts
+
+        try:
+            from src.integrations.proxy_lifecycle import run_lifecycle_sweep
+            from src.integrations.proxy_pool import get_proxy_pool
+            from src.integrations.proxy_subscription import get_proxy_subscriptions
+            from src.licensing.token_ledger import (
+                check_token_balance, record_fixed_spend, token_ledger_enabled,
+            )
+
+            try:
+                billing_on = bool(token_ledger_enabled())
+            except Exception:
+                billing_on = False
+
+            def _balance(wallet: str) -> Optional[int]:
+                if not billing_on:
+                    return None  # 未启用计费 → 免扣续期（与首购 billing=off 同口径）
+                try:
+                    return int(check_token_balance(wallet).get("balance") or 0)
+                except Exception:
+                    # 账本读不到按 0 余额＝本轮不续（宁可到期停，绝不盲扣）
+                    logger.debug("托管代理续期读余额失败（按 0）", exc_info=True)
+                    return 0
+
+            def _charge(wallet: str, tokens: int) -> int:
+                try:
+                    # 续期用独立 action（与首购 proxy_managed 分开）：对账时
+                    # 「新购 vs 续费」是两列账，混在一起就分不出流失/续费率。
+                    return int(record_fixed_spend(
+                        wallet, "proxy_managed_renew", tokens, now=ts) or 0)
+                except Exception:
+                    logger.debug("托管代理续期扣费失败（记 unbilled）", exc_info=True)
+                    return 0
+
+            # 上游续期直通（P4 JIT）：按**订阅行**的 provider 分流——http 单必须
+            # 先续上游（IP 活在上游时钟上），stock/mock 期留下的旧单直接放行。
+            # 用当前配置的 http 段建客户端：即便运营已把 provider 切回 stock，
+            # 存量 http 订阅的续期仍要走上游。
+            from src.integrations.proxy_provider import HttpProxyProvider
+
+            _http_prov = HttpProxyProvider(
+                mcfg.get("http") if isinstance(mcfg.get("http"), dict) else {})
+
+            def _prolong(order_ref: str, period_days: int,
+                         sub_provider: str) -> "tuple[bool, float]":
+                if sub_provider != "http":
+                    return True, 0.0  # 自有库存没有上游时钟
+                try:
+                    import asyncio as _a
+
+                    ok, expires, reason = _a.run(_http_prov.prolong(
+                        order_ref=order_ref, period_days=period_days))
+                    if not ok:
+                        logger.info("[proxy_managed] 上游续期被拦 order=%s: %s",
+                                    order_ref, reason)
+                    return ok, expires
+                except Exception:
+                    logger.debug("上游续期调用异常（按失败）", exc_info=True)
+                    return False, 0.0
+
+            summary = run_lifecycle_sweep(
+                store=get_proxy_subscriptions(), pool=get_proxy_pool(),
+                mcfg=mcfg, balance_fn=_balance, charge_fn=_charge,
+                prolong_fn=_prolong, now=ts)
+        except Exception:
+            logger.debug("托管代理生命周期巡检失败（忽略）", exc_info=True)
+            return
+
+        alerts = list(summary.get("alerts") or [])
+
+        # JIT（http 供给）上游余额水位：余额就是库存。低于 min_alert → 首提 +
+        # 4h 重提；充值回升自动清零。探测失败（None）不告警——网络抖动 ≠ 没钱，
+        # 上游真欠费会在下单环节以 upstream_http_4xx 显形。
+        try:
+            bal_cfg = ((mcfg.get("http") or {}).get("balance")
+                       if isinstance((mcfg.get("http") or {}).get("balance"),
+                                     dict) else {})
+            min_bal = float(bal_cfg.get("min_alert") or 0)
+            if str(mcfg.get("provider") or "") == "http" and min_bal > 0:
+                import asyncio as _asyncio
+
+                from src.integrations.proxy_provider import build_provider
+
+                provider = build_provider(mcfg, pool=None)
+                bal = (_asyncio.run(provider.vendor_balance())
+                       if provider is not None else None)
+                if bal is not None and bal < min_bal:
+                    if (not self._pxm_bal_alerted
+                            or ts - self._pxm_bal_last_remind >= 4 * 3600.0):
+                        alerts.append({
+                            "kind": "vendor_balance_low",
+                            "balance": round(float(bal), 2),
+                            "min_alert": min_bal,
+                            "rate_key": "proxy_managed:vendor_balance",
+                        })
+                        self._pxm_bal_alerted = True
+                        self._pxm_bal_last_remind = ts
+                elif bal is not None:
+                    self._pxm_bal_alerted = False
+        except Exception:
+            logger.debug("托管代理上游余额巡检失败（忽略）", exc_info=True)
+
+        # 低库存：签名去重 + 4h 重提；补货后签名清空自动静默（无恢复通知——
+        # 「货补上了」在 ops 卡可见，不值得占一条推送）。
+        low = summary.get("low_stock") or {}
+        if low:
+            low_sig = ",".join(f"{k}:{v}" for k, v in sorted(low.items()))
+            if (low_sig != self._pxm_low_sig
+                    or ts - self._pxm_low_last_remind >= 4 * 3600.0):
+                alerts.append({
+                    "kind": "low_stock", "low": low,
+                    "min_stock": int(life.get("min_stock", 2) or 0),
+                    "rate_key": "proxy_managed:low_stock",
+                })
+                self._pxm_low_last_remind = ts
+            self._pxm_low_sig = low_sig
+        else:
+            self._pxm_low_sig = ""
+
+        if summary.get("renewed") or summary.get("expired"):
+            logger.info(
+                "[proxy_managed] 生命周期：续期 %s（未入账 %s）/ 到期回收 %s / 预警 %s",
+                summary.get("renewed"), summary.get("renew_unbilled"),
+                summary.get("expired"), summary.get("warned"))
+        if not alerts:
+            return
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+
+            bus = get_event_bus()
+            for payload in alerts:
+                bus.publish("proxy_managed_alert", payload)
+                self.total_proxy_managed_alerts += 1
+        except Exception:
+            logger.debug("proxy_managed 告警发布失败（忽略）", exc_info=True)
 
     def _check_draft_backlog(self, *, now: Optional[float] = None) -> None:
         """待审草稿长期无人处理 → 主动轰人（补 SLA 告警的 **L1 盲区**）。
@@ -3301,6 +3735,87 @@ class HealthWatchdog:
                                  exc_info=True)
                 self._scanloop_alerted.pop(name, None)
 
+    def _check_image_models(self, *, now: Optional[float] = None) -> None:
+        """出图模型「被删/失踪」哨兵（2026-08-22 事故防再犯）。
+
+        事故：176 的 ``D:\\ComfyUI\\models`` 被整树清空，checkpoint 清单变空 →
+        所有现场生图 400——从删除到被人发现隔了数小时，唯一暴露面是坐席面板
+        里一段被截断的乱码。本巡检把「模型清单从有到无」变成主动告警：
+
+        - 探测复用 ``image_gen_routes.probe_comfy_models``（服务端 /object_info
+          清单）+ ``engine_deploy_status``（flux_pulid 部署判定）；
+        - **只在「见过 deployed=true」之后 true→false 才告警**——冷启动/从未
+          部署的机器天然静默零误报；ComfyUI 整机不可达也不由本检查管
+          （probe=None → 静默，服务活性归 176 侧 ComfyWatchdog）；
+        - 首提即发（模型没了=生图链全灭，不设 after 宽限），仍未恢复每
+          ``interval_min``（默认 240）重提；恢复补发恢复通知。
+        配置 ``health_watchdog.image_models_watch.{enabled,interval_min}``（默认开）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        watch = (((cfg.get("health_watchdog") or {}).get("image_models_watch"))
+                 or {}) if isinstance(cfg, dict) else {}
+        if not watch.get("enabled", True):
+            return
+        scfg = ((cfg.get("companion") or {}).get("selfie") or {}) \
+            if isinstance(cfg, dict) else {}
+        if not bool(scfg.get("enabled", False)):
+            return
+        try:
+            from src.web.routes.image_gen_routes import (
+                _comfy_url_from_args, engine_deploy_status, probe_comfy_models)
+        except Exception:
+            return
+        url = _comfy_url_from_args(((scfg.get("provider") or {}).get("command_args")))
+        if not url:
+            return
+        models = probe_comfy_models(url)
+        if models is None:
+            return  # 服务不可达 ≠ 模型被删（活性另有看门狗）；不猜不报
+        ts = float(now if now is not None else time.time())
+        deployed = bool(engine_deploy_status(models, ["flux_pulid"]).get("flux_pulid"))
+        seen_ok = bool(getattr(self, "_imgm_seen_ok", False))
+        alerted = bool(getattr(self, "_imgm_alerted", False))
+        last_remind = float(getattr(self, "_imgm_last_remind", 0.0))
+
+        if deployed:
+            if alerted:
+                try:
+                    from src.integrations.shared.event_bus import get_event_bus
+                    get_event_bus().publish("image_models_alert", {
+                        "recovered": True, "url": url,
+                        "rate_key": "image_models:recovered",
+                    })
+                    logger.info("HealthWatchdog 发出出图模型恢复通知")
+                except Exception:
+                    logger.debug("image_models recovery 发布失败（已忽略）",
+                                 exc_info=True)
+            self._imgm_seen_ok = True
+            self._imgm_alerted = False
+            self._imgm_last_remind = 0.0
+            return
+
+        if not seen_ok:
+            return  # 从未见过好状态：新装机/未部署环境不误报
+        interval_sec = max(600.0, float(watch.get("interval_min", 240) or 240) * 60.0)
+        if alerted and ts - last_remind < interval_sec:
+            return
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("image_models_alert", {
+                "url": url,
+                "ckpts": len(models.get("ckpts") or []),
+                "unets": len(models.get("unets") or []),
+                "reminder": alerted,
+                "rate_key": "image_models:remind",
+            })
+            logger.warning(
+                "HealthWatchdog 出图模型失踪告警 url=%s ckpts=%d（此前曾部署）",
+                url, len(models.get("ckpts") or []))
+        except Exception:
+            logger.debug("image_models alert 发布失败（已忽略）", exc_info=True)
+        self._imgm_alerted = True
+        self._imgm_last_remind = ts
+
     def _check_avatar_voice(self, *, now: Optional[float] = None) -> None:
         """AvatarHub 7852（在线语音克隆主力）持续掉线/半死的升级式提醒。
 
@@ -3404,8 +3919,10 @@ class HealthWatchdog:
         # 两个计划任务都 Disabled，而告警只说「掉线」，运维默认看门狗会拉）。
         # 只在 kind=down 且真的要发告警时才探（subprocess ×2，已被 due 限流）；
         # 只读不 /Change——恢复任务是运维决策（代码模式期间停用可能是刻意的）。
+        # 仅本机目标才探（2026-08-18）：救援任务是本机 schtasks，目标迁远端（140）
+        # 后再点名本机任务＝把退役刻意态谎报成救援链断裂。
         rescue_broken: list = []
-        if kind == "down":
+        if kind == "down" and avatar_probe_host_is_local(probe.get("url")):
             try:
                 from src.ai.avatar_voice_rescue import (
                     broken_rescue_tasks, probe_rescue_tasks,
@@ -3444,6 +3961,158 @@ class HealthWatchdog:
         self._avatar_last_remind = ts
         self.total_avatar_voice_reminders += 1
 
+    def _check_hub_engine(self, *, now: Optional[float] = None) -> None:
+        """hub 引擎目录离线哨兵（2026-08-22「fish 冒充 IndexTTS-2」事故沉淀）。
+
+        事故形态：配置钉死 ``hub_fish.tts_engine=index_tts``，但 hub 的
+        ``/api/engines`` 目录把它标成 ``available:false``（显存吃紧被泊车/掉登记），
+        **hub 的路由只认目录这一票**——于是静默换成 fish_speech 合成，客户听到的
+        是另一个人的声音。引擎进程自身 ``/health`` 200、``model_loaded:true``，
+        所以既有的 7852 探针、hang 检测、语音断档台账**三条线全绿**。
+
+        为什么不并进 ``_check_avatar_voice``：那组盯的是本机 7852（另一台机、另一
+        套失败域、另一套救援链），共用计时器会让两边的首提/重提互相顶掉，且恢复
+        语义不同（这里有确定性的目录读数，不需要 hang 那种「正面证据」推断）。
+
+        为什么不等流量：本哨兵的**全部价值**就是零流量也能响。既有的
+        ``_check_voice_outage`` 要「有人要语音且全在失败」才判——夜里没人说话时
+        引擎掉线，要等第二天第一批客户先听到别人的声音（lenient）或先收不到语音
+        （strict）才会有人知道。目录是**合成前**就能读到的确定信号。
+
+        判据（零误报优先）：
+          - 只在 ``hub_fish.enabled`` 且**显式钉了** ``tts_engine`` 时才检
+            （没钉引擎＝接受 hub 自选，顶包无从谈起）；
+          - 只认目录明说的 ``available:false``（``offline``）。目录拉不到
+            （``unknown``，hub 整体挂了）→ 静默，那是 hub 可达性的活，本哨兵不抢；
+            目录里查无此名（``unlisted``）→ 也静默，配置写错该由预检/首次合成报，
+            让夜间告警去猜配置笔误只会造噪音；
+          - 离线 ≥ ``after_min``（默认 20min，给正常的泊车/唤醒循环留窗）→ 首提，
+            此后每 ``interval_min``（默认 240）重提；转 ``available:true`` → 恢复通知。
+        配置 ``health_watchdog.hub_engine_remind.{enabled,after_min,interval_min}``。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        if not isinstance(cfg, dict):
+            return
+        hr = ((cfg.get("health_watchdog") or {}).get("hub_engine_remind")) or {}
+        if not hr.get("enabled", True):
+            return
+        av = (cfg.get("avatar_voice") or {})
+        if not isinstance(av, dict) or not av.get("enabled", False):
+            return
+        hf = av.get("hub_fish") or {}
+        if not isinstance(hf, dict) or not hf.get("enabled", False):
+            return
+        engine = str(hf.get("tts_engine") or "").strip()
+        if not engine:
+            return  # 没钉引擎＝接受 hub 自选，不存在「被顶包」
+        base_url = hf.get("base_url") or ""
+
+        ts = float(now if now is not None else time.time())
+        try:
+            from src.ai.avatar_voice import hub_engine_directory_status
+            snap = hub_engine_directory_status(base_url, engine)
+        except Exception:
+            logger.debug("hub 引擎目录读取失败（已忽略）", exc_info=True)
+            return
+        state = str(snap.get("state") or "unknown")
+        if state != "offline":
+            if state == "ok" and self._hub_engine_alerted:
+                try:
+                    from src.integrations.shared.event_bus import get_event_bus
+                    get_event_bus().publish("hub_engine_alert", {
+                        "recovered": True,
+                        "engine": snap.get("engine") or engine,
+                        "rate_key": "hub_engine:recovered",
+                    })
+                    logger.info("HealthWatchdog 发出 hub 引擎恢复通知 engine=%s",
+                                snap.get("engine") or engine)
+                except Exception:
+                    logger.debug("hub_engine recovery 发布失败（已忽略）",
+                                 exc_info=True)
+            if state == "ok":
+                self._hub_engine_down_since = 0.0
+                self._hub_engine_alerted = False
+                self._hub_engine_last_remind = 0.0
+            # unknown/unlisted：判不了，保持现状（不清零也不推进计时）
+            return
+
+        if not self._hub_engine_down_since:
+            self._hub_engine_down_since = ts
+            return
+        down_sec = ts - self._hub_engine_down_since
+        after_sec = max(60.0, float(hr.get("after_min", 20) or 20) * 60.0)
+        interval_sec = max(600.0, float(hr.get("interval_min", 240) or 240) * 60.0)
+        due = (
+            (not self._hub_engine_alerted and down_sec >= after_sec)
+            or (self._hub_engine_alerted
+                and ts - self._hub_engine_last_remind >= interval_sec)
+        )
+        if not due:
+            return
+        # strict 决定后果性质：strict＝拒发（客户收不到语音，看得见的缺失）；
+        # lenient＝顶包（客户听到别人的声音，看不见的破绽——更该修）
+        strict = str(av.get("voice_consistency") or "lenient").strip().lower() == "strict"
+
+        # 先自救再轰人：既然已经到了要叫醒人的地步，那就先替他按一下那个他到了
+        # 也只会按的按钮（``POST /api/services/ensure``＝把我们钉的引擎拉起来）。
+        # 挂在告警节奏上而非每 tick——最多 4h 一次、幂等、只点名自己钉的引擎，
+        # **绝不代运维泊车别人**（谁让路属跨条线的显存策略，hub 自有 lease 机制）。
+        # 成了的话下一 tick 就是恢复通知，人可能根本不用起床。
+        # 开关刻意与合成路径**共用一个键**（``avatar_voice.hub_fish.auto_wake``，
+        # 就在 ``tts_engine`` 旁边＝它作用的对象旁边）。两处各设一个键会让运营
+        # 关了一个以为关全了，而另一条还在替他动生产引擎。
+        wake_state = ""
+        if hf.get("auto_wake", True):
+            try:
+                from src.ai.avatar_voice import hub_engine_wake
+                ok, detail = hub_engine_wake(base_url, engine)
+                wake_state = ("accepted:" + detail) if ok else ("failed:" + detail)
+                logger.info("hub 引擎离线 → 已尝试唤醒 engine=%s 结果=%s",
+                            engine, wake_state)
+            except Exception:
+                logger.debug("hub 引擎唤醒尝试异常（已忽略）", exc_info=True)
+                wake_state = "failed:exception"
+
+        # 「谁占着显存」几乎总是这类事故的答案（2026-08-22 实测：唱歌工作室在线
+        # 占 5.7G，质量轨 index_tts 需 ~8.7G 而空闲仅 6.4G）——不指名道姓的话，
+        # 运维只知道「引擎离线了」，还得自己去翻 GPU 面板才知道该让谁让路。
+        blockers: List[Dict[str, Any]] = []
+        try:
+            from src.ai.avatar_voice import (
+                hub_engine_service_name, hub_vram_blockers,
+            )
+            # 排掉自己：候选表里出现「泊掉 index_tts 可让出 8.5G」时，那正是我们要
+            # 救的引擎——自指建议会把运维直接引向这次故障本身（2026-08-22）。
+            blockers = list((hub_vram_blockers(
+                base_url,
+                exclude=hub_engine_service_name(base_url, engine),
+            ) or {}).get("hosts") or [])
+        except Exception:
+            logger.debug("hub 显存归因读取失败（已忽略）", exc_info=True)
+
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("hub_engine_alert", {
+                "engine": snap.get("engine") or engine,
+                "url": str(base_url or ""),
+                "strict": strict,
+                "available_engines": list(snap.get("available_engines") or [])[:8],
+                "down_minutes": int(down_sec // 60),
+                "reminder": bool(self._hub_engine_alerted),
+                "wake": wake_state,
+                "vram_hosts": blockers[:3],
+                "rate_key": "hub_engine:remind",
+            })
+            logger.warning(
+                "HealthWatchdog hub 引擎离线告警 engine=%s down=%dmin strict=%s",
+                snap.get("engine") or engine, int(down_sec // 60), strict)
+        except Exception:
+            logger.debug("hub_engine alert 发布失败（已忽略）", exc_info=True)
+            return
+        self._hub_engine_alerted = True
+        self._hub_engine_last_remind = ts
+        self.total_hub_engine_reminders += 1
+
     def _check_voice_outage(self, *, now: Optional[float] = None) -> None:
         """语音出站断档巡检（2026-08-02）：滚动窗内「尝试 ≥N 次且 0 成功」告警。
 
@@ -3463,6 +4132,11 @@ class HealthWatchdog:
           - 台账空/读取异常/快照坏形 → 静默。
         配置 ``health_watchdog.voice_outage_remind.{enabled,min_attempts,
         window_hours,interval_min}``（默认开 / 3 / 24 / 240）。
+
+        **两条臂共用这一个开关与这套阈值**：本函数是全局臂（所有链一起看），
+        ``_check_voice_outage_per_source`` 是单链臂（逐 source 看）。后者必须在
+        全局臂的 ``ok_n > 0`` 早退**之前**跑——那个早退恰好覆盖了单链臂唯一
+        有价值的场景（一条链全灭、被另一条健康链的成功数盖住）。
         """
         cfg = getattr(self._config_manager, "config", None) or {}
         vr = (((cfg.get("health_watchdog") or {}).get("voice_outage_remind"))
@@ -3484,6 +4158,14 @@ class HealthWatchdog:
             return
         attempts = int(snap.get("attempts_24h") or 0)
         ok_n = int(snap.get("ok_24h") or 0)
+
+        # 单链臂先跑：全局臂在「窗内有成功」时会 return，而那恰恰是单链臂唯一
+        # 有价值的场景（一条链全灭、被另一条健康链的成功数盖住）。
+        try:
+            self._check_voice_outage_per_source(
+                snap, ts=ts, cfg=vr, window_hours=window_hours)
+        except Exception:
+            logger.debug("语音单链断档巡检异常（已忽略）", exc_info=True)
 
         if ok_n > 0:
             # 窗口内有成功=链路活着；从「已告警」恢复 → 补发恢复通知一次
@@ -3524,10 +4206,18 @@ class HealthWatchdog:
             get_event_bus().publish("voice_outage_alert", {
                 "attempts": attempts,
                 "window_hours": int(window_hours),
+                # 台账事件挤满时名义窗是假的（更早的失败已被挤掉），如实随告警
+                # 带上真实覆盖——运维照 24h 读会低估断档时长、也会以为「早上没事」
+                "window_truncated": bool(snap.get("truncated")),
+                "effective_window_hours": float(
+                    snap.get("effective_window_hours") or window_hours),
                 "consecutive_fails": int(snap.get("consecutive_fails") or 0),
                 "top_reasons": top_reasons,
                 "last_ok_hours": last_ok_hours,
                 "by_source": dict(snap.get("by_source") or {}),
+                # 原因指向 hub 时随告警带显存归因（谁占着、能不能让路）——
+                # 这一档的根因几乎总是显存，而告警响的时间几乎总是凌晨
+                "vram_hosts": self._vram_hosts_for_reasons(top_reasons),
                 "reminder": bool(self._vo_alerted),
                 # 独立限流键：首提/重提不与其他事件挤 1h 窗
                 "rate_key": "voice_outage:remind",
@@ -3543,6 +4233,142 @@ class HealthWatchdog:
             "——该发语音的回复全部回落文字",
             int(window_hours), attempts,
             int(snap.get("consecutive_fails") or 0), top_reasons)
+
+    # 显存归因只对「共用合成层」那几种原因有意义（`hub_` 前缀）。设备端的
+    # share intent 失败与显存无关，为它去打一次 hub GPU 面板纯属浪费。
+    _HUB_STARVED_MARKERS = ("hub_synth_timing_out", "hub_engine_offline",
+                            "hub_engine_mismatch")
+
+    def _vram_hosts_for_reasons(self, reasons: Any) -> List[Dict[str, Any]]:
+        """失败原因指向 hub 时，随告警带上「谁占着显存、能不能让路」。
+
+        为什么长在这里而不是让 formatter 自己去查：formatter 跑在 webhook 投递
+        线程上、且同一份 payload 可能投多个渠道，在那儿发 HTTP 会把「通知」变成
+        「可能超时的通知」。watchdog 本就在巡检线程、本就已经为 ``hub_engine``
+        那族告警调过同一个函数——**唯一的缺口是这族告警从没调过它**
+        （2026-08-22 事故里真正响的恰好是这半边，正文只写了「自己去看 GPU 面板」）。
+
+        只在原因确实指向 hub 时才调（``_HUB_STARVED_MARKERS``）：设备端 share
+        intent 失败与显存无关，为它多打一次 hub 是白付延迟。读不到一律返空列表
+        ——归因缺失只让告警少一段，绝不能让告警发不出去。
+        """
+        try:
+            keys = list(reasons.keys()) if isinstance(reasons, dict) else []
+        except Exception:
+            return []
+        if not any(m in str(k) for k in keys for m in self._HUB_STARVED_MARKERS):
+            return []
+        cfg = getattr(self._config_manager, "config", None) or {}
+        if not isinstance(cfg, dict):
+            return []
+        hf = ((cfg.get("avatar_voice") or {}).get("hub_fish")) or {}
+        if not isinstance(hf, dict):
+            hf = {}
+        base_url = hf.get("base_url") or ""
+        try:
+            from src.ai.avatar_voice import (
+                hub_engine_service_name, hub_vram_blockers,
+            )
+            # 同上：质量轨引擎自己不算「可让路的」（它就是被饿死的那个）
+            skip = hub_engine_service_name(base_url, hf.get("tts_engine"))
+            return list((hub_vram_blockers(
+                base_url, exclude=skip) or {}).get("hosts") or [])[:3]
+        except Exception:
+            logger.debug("语音断档显存归因读取失败（已忽略）", exc_info=True)
+            return []
+
+    def _check_voice_outage_per_source(
+        self, snap: Dict[str, Any], *, ts: float,
+        cfg: Dict[str, Any], window_hours: float,
+    ) -> None:
+        """单链断档臂：某一条语音链窗内全灭，即便别的链健康也要报。
+
+        为什么值得单独一臂（2026-08-22 接线 wa_rpa/mr_rpa 时想清楚的）：全局臂
+        判「窗内 0 成功」，**一条健康的链就能把另一条全灭的链盖住**——台账里
+        有 5 个 source，各自走不同的 TTS 后端/投递通道（A 线原生 voice、B 线
+        autosend、坐席手动、WhatsApp share-sheet、Messenger share-sheet），
+        「share intent 那条彻底不通而 Telegram 一切正常」不是边角情形而是常态。
+        当晚事故的另一半正是这个形态：hub 引擎被挤爆时 WhatsApp 语音全灭，
+        而台账（就算当时接了线）也会因为其他链有成功而全局绿灯。
+
+        判据沿用全局臂的保守口径，只把分母换成单链：该 source 窗内
+        ``attempts ≥ min_attempts`` 且 ``ok == 0`` → 首提，此后每
+        ``interval_min`` 重提；出现任一成功 → 补发恢复通知一次。样本不足
+        （新链刚上线只发过一两次）一律静默。source 数天然低基数（每条链一个
+        字面量），状态字典不会无界增长。
+        """
+        by_source = snap.get("by_source") or {}
+        if not isinstance(by_source, dict):
+            return
+        min_attempts = max(1, int(cfg.get("min_attempts", 3) or 3))
+        interval_sec = max(600.0, float(cfg.get("interval_min", 240) or 240) * 60.0)
+        # 全局臂已在报「所有链都灭了」——此时逐链重报一遍纯属刷屏（同一件事
+        # 说 5 遍），单链臂只负责它独有的那个形态：**有链活着**却有链全灭。
+        global_all_dead = int(snap.get("ok_24h") or 0) == 0
+
+        for src, st in sorted(by_source.items()):
+            if not isinstance(st, dict):
+                continue
+            src = str(src or "unknown")
+            attempts = int(st.get("attempts") or 0)
+            ok_n = int(st.get("ok") or 0)
+            if ok_n > 0:
+                if self._vo_src_alerted.get(src):
+                    try:
+                        from src.integrations.shared.event_bus import get_event_bus
+                        get_event_bus().publish("voice_outage_alert", {
+                            "recovered": True,
+                            "source": src,
+                            "rate_key": f"voice_outage:src:{src}:recovered",
+                        })
+                        logger.info("HealthWatchdog 发出语音单链恢复通知 source=%s",
+                                    src)
+                    except Exception:
+                        logger.debug("voice_outage(src) recovery 发布失败（已忽略）",
+                                     exc_info=True)
+                self._vo_src_alerted.pop(src, None)
+                self._vo_src_last_remind.pop(src, None)
+                continue
+            if attempts < min_attempts or global_all_dead:
+                continue
+            alerted = bool(self._vo_src_alerted.get(src))
+            last = float(self._vo_src_last_remind.get(src) or 0.0)
+            if alerted and ts - last < interval_sec:
+                continue
+            reasons = {}
+            try:
+                # 单链的失败原因：全局 fail_reasons 是混在一起的，逐链报错时
+                # 混着别的链的原因等于误导（「share_skip」和「hub 超时」是两种活）
+                reasons = dict(sorted(
+                    (st.get("fail_reasons") or {}).items(),
+                    key=lambda kv: (-int(kv[1] or 0), kv[0]))[:3])
+            except Exception:
+                reasons = {}
+            try:
+                from src.integrations.shared.event_bus import get_event_bus
+                get_event_bus().publish("voice_outage_alert", {
+                    "source": src,
+                    "attempts": attempts,
+                    "window_hours": int(window_hours),
+                    "window_truncated": bool(snap.get("truncated")),
+                    "effective_window_hours": float(
+                        snap.get("effective_window_hours") or window_hours),
+                    "top_reasons": reasons,
+                    "vram_hosts": self._vram_hosts_for_reasons(reasons),
+                    "reminder": alerted,
+                    "rate_key": f"voice_outage:src:{src}",
+                })
+            except Exception:
+                logger.debug("voice_outage(src) alert 发布失败（已忽略）",
+                             exc_info=True)
+                continue
+            self._vo_src_alerted[src] = True
+            self._vo_src_last_remind[src] = ts
+            self.total_voice_outage_alerts += 1
+            logger.warning(
+                "语音单链断档：source=%s %s 小时窗内 %d 次尝试 0 成功"
+                "（原因 Top %s）——其他链正常，所以全局告警不会响",
+                src, int(window_hours), attempts, reasons)
 
     # 入站漏球巡检每轮最多审视的活跃会话数（list_conversations 按活跃度取近段）
     _UNANSWERED_SCAN_LIMIT = 400
@@ -4096,7 +4922,10 @@ class HealthWatchdog:
         配置 ``health_watchdog.true_probe.{enabled,interval_min,fail_strikes}``
         （example 默认关——探针打真推理，Lite/无 LAN 引擎的部署会假阳；
         本机 overlay 开）。tick 在线程池里跑，阻塞 HTTP 安全；四域串行、
-        单域超时 ≤45s，interval_min 控制真实探测频率（默认 10min）。
+        单域超时 tts 90s（须大于 hub 内部换引擎重试预算，否则探针放弃后
+        在途请求会让 hub 把副本判「挂死」并规避——探针反伤业务，
+        见 true_probe._TTS_PROBE_TIMEOUT_DEFAULT）/ 其余 ≤45s，
+        interval_min 控制真实探测频率（默认 10min）。
         """
         cfg = getattr(self._config_manager, "config", None) or {}
         if not isinstance(cfg, dict):
@@ -4330,6 +5159,15 @@ class HealthWatchdog:
             logger.debug("ai_primary_guard 热重建调度失败（等待配置热重载兜底）",
                          exc_info=True)
         down_min = int((ts - self._apg_first_fail_ts) // 60)
+        # 切换审计（2026-08-22）：保险自动切档同样留痕——「谁改的」永远可查
+        try:
+            from src.ai.ai_primary_audit import append_event as _pa_append
+            _pa_append(
+                "guard_auto_cloud", mode_from=primary, mode_to="cloud",
+                base_url=base_url, fail_count=int(self._apg_fail_count),
+                via="health_watchdog")
+        except Exception:
+            pass
         try:
             from src.integrations.shared.event_bus import get_event_bus
             get_event_bus().publish("ai_primary_guard_alert", {
@@ -4343,7 +5181,7 @@ class HealthWatchdog:
             logger.debug("ai_primary_guard alert 发布失败（已忽略）", exc_info=True)
         logger.warning(
             "本地主链保险触发：%s 连续 %d 次探测失败（原档 %s）→ ai.primary 已切 cloud"
-            "（单向；恢复切回归中枢执行器）",
+            "（单向降级保服务；主链档位由 ai.primary_lock 治理，勿自动切回）",
             base_url, self._apg_fail_count, primary)
         self._apg_switched = True
         self._apg_fail_count = 0
@@ -4964,6 +5802,77 @@ class HealthWatchdog:
                 cooldown_sec=0.0,
             )
             self._license_quota_alerted = False
+
+    def _check_token_wallet(self, *, now: Optional[float] = None) -> None:
+        """Token 钱包水位巡检（quotawall v2 P2-4）：耗尽点名、临近提醒、回充报平安。
+
+        耗尽判定**同源复用** ``quota_state.resolve_quota_state`` 的 tok 裁决
+        （enabled+enforce+funded+balance<=0 才算 tok_out——funded 守卫防「从未
+        注资的部署被谎报用尽」，与前端额度墙 tok 变体同一判据，绝不各算一套）。
+        影子记账（enforce=False）期间余额只是观测数字，不告警——那个阶段的观测
+        面是 ops 影子卡；临近提醒只在有月度含量分母时做（消耗 ≥ warn_pct%，即
+        balance <= monthly*(100-warn_pct)%），纯充值包部署（monthly=0）没有稳定
+        分母，不做百分比预警防误报。配置
+        ``health_watchdog.token_wallet_remind.{enabled,warn_pct,interval_min}``
+        （默认开/85/360，与 quota_remind 同族——未启用 token_ledger 的部署
+        wallet.enabled=False 天然静默，零误报零开销）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        tw = (((cfg.get("health_watchdog") or {}).get("token_wallet_remind"))
+              or {}) if isinstance(cfg, dict) else {}
+        if not tw.get("enabled", True):
+            return
+        ts = float(now if now is not None else time.time())
+        if self._last_token_wallet_ts and (ts - self._last_token_wallet_ts) < 600.0:
+            return  # 与授权额度巡检同款 10min 稀疏节流
+        self._last_token_wallet_ts = ts
+        from src.licensing.token_ledger import wallet_snapshot
+        w = wallet_snapshot()
+        if not w.get("enabled") or not w.get("enforce"):
+            self._token_wallet_alerted = False
+            return
+        from src.licensing.quota_state import resolve_quota_state
+        tok = resolve_quota_state(quota=None, level="ok", wallet=w)["tok"]
+        balance = int(tok.get("balance") or 0)
+        monthly = int(tok.get("monthly") or 0)
+        warn_pct = float(tw.get("warn_pct", 85) or 85)
+        remind_sec = max(600.0, float(tw.get("interval_min", 360) or 360) * 60.0)
+        near = bool(
+            monthly > 0
+            and balance <= monthly * max(0.0, 100.0 - warn_pct) / 100.0
+        )
+        from src.utils.host_alert import notify_host
+        if tok.get("out"):
+            if notify_host(
+                "Token 钱包已耗尽",
+                (f"Token 钱包余额已用尽（本月含量 {monthly:,}）。AI 增强功能已"
+                 "自动降级为免费路径（服务不断线，体验降档）。请到 会员中心 → "
+                 "Token 钱包 充值，或等待下月含量补发。"),
+                key="token_wallet:exceeded",
+                cooldown_sec=remind_sec,
+            ):
+                self.total_token_wallet_alerts += 1
+            self._token_wallet_alerted = True
+        elif near:
+            pct_left = balance * 100.0 / monthly
+            if notify_host(
+                "Token 钱包即将耗尽",
+                (f"Token 钱包余额仅剩 {balance:,}（本月含量 {monthly:,} 的 "
+                 f"{pct_left:.0f}%）。耗尽后 AI 增强功能将降级为免费路径，"
+                 "建议提前到 会员中心 充值。"),
+                key="token_wallet:warn",
+                cooldown_sec=remind_sec,
+            ):
+                self.total_token_wallet_alerts += 1
+            self._token_wallet_alerted = True
+        elif self._token_wallet_alerted:
+            notify_host(
+                "Token 钱包已恢复",
+                f"Token 钱包余额回升至 {balance:,}。充值/月度补发已生效。",
+                key="token_wallet:recover",
+                cooldown_sec=0.0,
+            )
+            self._token_wallet_alerted = False
 
     def _check_pool_key_pings(self, *, now: Optional[float] = None) -> None:
         """备用 Key 主动探活：每日一轮 1-token chat ping（节流在 run_chat_pings 内）。
@@ -5597,6 +6506,7 @@ class HealthWatchdog:
             "total_daily_reports": self.total_daily_reports,
             "total_cloud_balance_alerts": self.total_cloud_balance_alerts,
             "total_license_quota_alerts": self.total_license_quota_alerts,
+            "total_token_wallet_alerts": self.total_token_wallet_alerts,
             "total_fallback_duty_reminders": self.total_fallback_duty_reminders,
             "total_avatar_voice_reminders": self.total_avatar_voice_reminders,
             "total_media_promise_alerts": self.total_media_promise_alerts,

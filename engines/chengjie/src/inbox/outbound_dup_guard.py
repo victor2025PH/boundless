@@ -138,6 +138,10 @@ def near_duplicate_of_recent(
                 continue
             if str(row.get("direction") or "") != "out":
                 continue
+            # B63③：投递失败留痕（status=failed/resent）不参与近重复比对——
+            # 「一键重发」的文本必然与它自己的留痕逐字相同，不豁免就永远 409。
+            if str(row.get("status") or "") in ("failed", "resent"):
+                continue
             ts = float(row.get("ts") or 0.0)
             if ts <= 0 or now - ts > float(window_sec):
                 continue

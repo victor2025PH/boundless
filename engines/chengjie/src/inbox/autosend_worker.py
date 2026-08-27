@@ -48,6 +48,17 @@ TypingCallback = Callable[[str, str, str, str], Awaitable[Any]]
 # 打字续挂间隔：单一来源在 humanize（chat action ~5s 过期，续挂须短于之）。
 from src.inbox.humanize import DEFAULT_TYPING_REFRESH_SEC as _TYPING_REFRESH_SEC
 
+# B41 投递幂等钉（2026-08-22）：同 (会话,草稿) 的同文只许成功出门一次。
+from src.inbox.deliver_once import DeliverOnceRegistry
+
+# 防双循环（B41）：同一 draft_service 只允许一个自动循环在跑——deliver 热切换 /
+# 假想的重复装配若起第二个 run()，两循环各自 list+resolve+deliver 就是结构性双发。
+# 键=id(draft_service)：测试各自造替身互不影响；生产同 svc 二次启动被拒并留痕。
+_RUNNING_SVC_KEYS: set = set()
+
+# apply_send_callbacks 的「未传」哨兵（None 是合法值=撤能力，不能当缺省用）
+_UNSET = object()
+
 def _is_permanent_send_error(err: str) -> bool:
     """判定投递错误是否为「短期内无法恢复」的平台硬错误（→ 会话封禁冷却）。
 
@@ -247,6 +258,13 @@ class AutosendWorker:
         self.total_skipped_off_hours: int = 0
         self.total_catchup_regenerated: int = 0  # 复班补觉：作废陈稿并重拟的条数
         self.total_skipped_pilot: int = 0  # 驾驶权在原生面板而取消的 L2 数（surface_fusion）
+        # B41（2026-08-22）：投递幂等钉拒绝的重复投递数（同稿在途/已投过）
+        self.total_skipped_already_sent: int = 0
+        # B41：通道互斥仲裁取消的跟进链稿数（同会话同批常规稿在场，链稿让位）
+        self.total_skipped_mutex: int = 0
+        # B41 投递权登记表（实例级，人工/自动两条投递链共用——见 deliver_once 模块
+        # docstring 的作用域论证）
+        self._deliver_once = DeliverOnceRegistry()
 
         # 驾驶权互斥锁 guard（surface_fusion P0，2026-08-13，默认不注入=零行为变更）：
         # (platform, account_id) -> bool。True＝该账号自动化持有者是「原生面板」，
@@ -669,6 +687,18 @@ class AutosendWorker:
         send_cb = self._human_send_callback or self._send_callback
         if send_cb is None or not item["text"] or not item["chat_key"]:
             return {"ok": False, "error": "no_send_path_or_empty"}
+        # B41 投递幂等钉：人工通过与自动链共用同一登记表——同稿在途/已投过
+        # 一律拒（resolve 的状态 CAS 只保「处置一次」，这里保「出门一次」）。
+        _claim_err = self._deliver_once.claim(
+            item["conversation_id"], item["draft_id"], item["text"])
+        if _claim_err:
+            self.total_skipped_already_sent += 1
+            logger.warning(
+                "[AutosendWorker] guard=deliver_once 人工通过投递被拒 draft=%s "
+                "conv=%s reason=%s（同稿已投/在途，防双发）",
+                item["draft_id"], item["conversation_id"], _claim_err)
+            return {"ok": False, "error": f"deliver_once:{_claim_err}"}
+        _delivered_ok = False
         try:
             send_text = item["text"]
             if self._translate_callback is not None:
@@ -703,7 +733,16 @@ class AutosendWorker:
             ):
                 raise RuntimeError(str(
                     res.get("error") or res.get("blocked") or "send not ok"))
+            _delivered_ok = True
             self.total_human_delivered += 1
+            # B41：成功投递补写 DB sent_at（best-effort，与自动链同口径）
+            try:
+                _st_mark = getattr(self._svc, "_store", None)
+                if _st_mark is not None and hasattr(_st_mark, "mark_draft_sent"):
+                    _st_mark.mark_draft_sent(item["draft_id"])
+            except Exception:
+                logger.debug("[AutosendWorker] mark_draft_sent 失败（忽略）",
+                             exc_info=True)
             # 2026-08-19 Token P5b 影子计数（观测非计费）：投递点口径——与出稿点
             # （ai_client generate_reply 记 ai_reply）对读几周，拿真实「出稿/投递」
             # 比值再决定计费点迁移。fail-silent，总闸关=零行为。
@@ -740,42 +779,60 @@ class AutosendWorker:
             self._publish_deliver_failed(
                 item, str(exc), permanent=_is_permanent_send_error(str(exc)))
             return {"ok": False, "error": str(exc)}
+        finally:
+            self._deliver_once.release(
+                item["conversation_id"], item["draft_id"],
+                delivered=_delivered_ok, text=item["text"])
 
     async def run(self) -> None:
         if not self._enabled:
             logger.info("[AutosendWorker] L2 自动发送已禁用（config.enabled=false）")
             return
-        # C3：在 run() 内初始化，确保绑定到正确的 event loop
-        self._loop = asyncio.get_running_loop()
-        self._l2_event = asyncio.Event()
-        self._running = True
-        logger.info(
-            "[AutosendWorker] 启动（事件驱动+定时兜底）— min_interval=%.0fs max_interval=%.0fs "
-            "circuit_threshold=%d cooldown=%.0fs",
-            self._min_interval, self._max_interval,
-            self._circuit_threshold, self._cooldown_sec,
-        )
-        # 首次启动延迟，避免与服务启动争资源；但用可中断等待——
-        # 若启动延迟期间有新 L2 草稿落库（事件触发），立即提前唤醒，不再傻等满 startup_delay。
-        if self._startup_delay > 0:
-            try:
-                await asyncio.wait_for(self._l2_event.wait(), timeout=self._startup_delay)
-                self._l2_event.clear()
-                self.event_triggers += 1
-            except asyncio.TimeoutError:
-                pass
-        while self._running:
-            await self._tick()
-            jitter = random.uniform(-0.1, 0.1) * self._current_interval
-            wait_sec = max(5.0, self._current_interval + jitter)
-            # C3：等待事件或定时器兜底
-            try:
-                await asyncio.wait_for(self._l2_event.wait(), timeout=wait_sec)
-                self._l2_event.clear()
-                self.event_triggers += 1
-                logger.debug("[AutosendWorker] L2 事件触发，提前唤醒")
-            except asyncio.TimeoutError:
-                pass  # 定时兜底触发，正常
+        # B41 防双循环：同一 draft_service 的第二个自动循环＝每条 L2 都可能被
+        # 两边各投一次（resolve CAS 只保一方 resolve，但两实例都持有 send 能力时
+        # 竞态窗口仍在）。拒绝启动 + ERROR 留痕，绝不静默并跑。
+        _svc_key = id(self._svc)
+        if _svc_key in _RUNNING_SVC_KEYS:
+            logger.error(
+                "[AutosendWorker] 同一 draft_service 已有自动循环在跑，"
+                "拒绝二次启动（B41 防双投）")
+            return
+        _RUNNING_SVC_KEYS.add(_svc_key)
+        try:
+            # C3：在 run() 内初始化，确保绑定到正确的 event loop
+            self._loop = asyncio.get_running_loop()
+            self._l2_event = asyncio.Event()
+            self._running = True
+            logger.info(
+                "[AutosendWorker] 启动（事件驱动+定时兜底）— min_interval=%.0fs max_interval=%.0fs "
+                "circuit_threshold=%d cooldown=%.0fs",
+                self._min_interval, self._max_interval,
+                self._circuit_threshold, self._cooldown_sec,
+            )
+            # 首次启动延迟，避免与服务启动争资源；但用可中断等待——
+            # 若启动延迟期间有新 L2 草稿落库（事件触发），立即提前唤醒，不再傻等满 startup_delay。
+            if self._startup_delay > 0:
+                try:
+                    await asyncio.wait_for(self._l2_event.wait(), timeout=self._startup_delay)
+                    self._l2_event.clear()
+                    self.event_triggers += 1
+                except asyncio.TimeoutError:
+                    pass
+            while self._running:
+                await self._tick()
+                jitter = random.uniform(-0.1, 0.1) * self._current_interval
+                wait_sec = max(5.0, self._current_interval + jitter)
+                # C3：等待事件或定时器兜底
+                try:
+                    await asyncio.wait_for(self._l2_event.wait(), timeout=wait_sec)
+                    self._l2_event.clear()
+                    self.event_triggers += 1
+                    logger.debug("[AutosendWorker] L2 事件触发，提前唤醒")
+                except asyncio.TimeoutError:
+                    pass  # 定时兜底触发，正常
+        finally:
+            _RUNNING_SVC_KEYS.discard(_svc_key)
+            self._running = False
 
     # ── 单轮逻辑 ─────────────────────────────────────────────
 
@@ -885,12 +942,30 @@ class AutosendWorker:
     async def _deliver_one(self, item: Dict[str, Any]) -> None:
         """投递单条已 resolve 草稿（翻译→近重复守卫→拟人延迟→过期复查→发送→失败处置）。
 
-        2026-08-09 从 _tick 的串行 for 循环整体抽出（并行化前置）。并发语义边界：
+        2026-08-09 从 _tick 的串行 for 循环整体抽出（并行化前置）。        并发语义边界：
         **同会话必须串行**（调度层 _deliver_parallel 按会话分组保证——顺序与
         防双发不变量都建立在会话内有序上）；跨会话可并发——本方法更新的共享
         状态（计数器/重试队列/封禁表/dup 登记）全部在事件循环单线程语义下写入，
         无跨线程共享。原 for 循环体的 continue 在此为 return（单条早退）。
         """
+        # B41 投递幂等钉：同 (会话,草稿) 同文只许成功出门一次。拿不到投递权＝
+        # 另一条链在途 / 同稿已投过（复活行 revive 双触发）→ 静默跳过，不算错误。
+        # 重试项 (_attempt>0) 豁免——与 dup_guard/fresh_guard 同口径：重试项只在
+        # 上一轮**失败**（未登记指纹）后存在，重发同文本是 recoverable 既定语义。
+        _do_conv = str(item.get("conversation_id") or "")
+        _do_did = str(item.get("draft_id") or "")
+        _do_text = str(item.get("text", ""))
+        _do_retry = int(item.get("_attempt", 0)) > 0
+        if not _do_retry:
+            _claim_err = self._deliver_once.claim(_do_conv, _do_did, _do_text)
+            if _claim_err:
+                self.total_skipped_already_sent += 1
+                logger.warning(
+                    "[AutosendWorker] guard=deliver_once 拒绝重复投递 draft=%s "
+                    "conv=%s reason=%s（B41 同稿双投防线）",
+                    _do_did, _do_conv, _claim_err)
+                return
+        _delivered_ok = False
         _dup_token = 0  # 出站登记 token（失败撤销用），须在 try 外初始化
         try:
             # 出站翻译：投递前把 AI 中文回复译成客户语言（补「全自动聊天翻译」闭环）。
@@ -1029,7 +1104,17 @@ class AutosendWorker:
             ):
                 raise RuntimeError(str(
                     res.get("error") or res.get("blocked") or "send not ok"))
+            _delivered_ok = True
             self.total_delivered += 1
+            # B41：成功投递补写 DB sent_at（best-effort）——跨重启的「已投过」
+            # 证据 + 价值周报的 inbox 投递计数从此有真值。
+            try:
+                _st_mark = getattr(self._svc, "_store", None)
+                if _st_mark is not None and hasattr(_st_mark, "mark_draft_sent"):
+                    _st_mark.mark_draft_sent(_do_did)
+            except Exception:
+                logger.debug("[AutosendWorker] mark_draft_sent 失败（忽略）",
+                             exc_info=True)
             # 2026-08-19 Token P5b 影子计数（观测非计费）：自动链投递点口径，
             # 与出稿点对读校准「出稿/投递」比值。fail-silent，总闸关=零行为。
             try:
@@ -1120,9 +1205,33 @@ class AutosendWorker:
                     )
             except Exception:
                 logger.debug("[AutosendWorker] autosend_failed 审计写入失败", exc_info=True)
+            # B63③（实施64 P1-4，实录 `_320`）：终局失败在会话消息流留痕
+            # （direction=out status=failed）——坐席在聊天里看得见「这条没发出去」
+            # 并可一键重发；此前失败内容零留痕直接消失，用户只能翻全自动记录。
+            try:
+                mir = getattr(self._svc, "record_failed_outbound_mirror", None)
+                if mir is not None:
+                    # 实施72 P3：原因码随留痕落库（气泡自解释「为什么失败」——
+                    # send_gate:daily_cap / kill_switch / needs_login…）。
+                    # 旧 svc 无 reason 形参 → TypeError 回落旧调用。
+                    try:
+                        mir(str(item.get("conversation_id") or ""),
+                            str(item.get("text") or ""),
+                            reason=str(exc)[:200])
+                    except TypeError:
+                        mir(str(item.get("conversation_id") or ""),
+                            str(item.get("text") or ""))
+            except Exception:
+                logger.debug("[AutosendWorker] 投递失败留痕写入失败（忽略）", exc_info=True)
             # Sprint2：开启 recoverable 时，永久/耗尽失败发实时提醒事件，坐席可补发。
             if self._recoverable:
                 self._publish_deliver_failed(item, str(exc), permanent=_permanent)
+        finally:
+            # B41：释放在途位；成功才登记已投指纹（transient 失败释放后重试
+            # 可再 claim——重发同文本是 recoverable 的既定语义）。重试项未
+            # claim 过，但 release 幂等（pop 不存在的键无害），成功仍登记指纹。
+            self._deliver_once.release(
+                _do_conv, _do_did, delivered=_delivered_ok, text=_do_text)
 
 
     async def _deliver_parallel(self, deliver_now: List[Dict[str, Any]]) -> None:
@@ -1184,12 +1293,51 @@ class AutosendWorker:
         l2 = [d for d in drafts if d.get("autopilot_level") == "L2"]
         sent, errors = 0, 0
         to_deliver: List[Dict[str, Any]] = []
+        # B41 通道互斥仲裁（2026-08-22）：同一会话同批**既有常规回复稿又有跟进链
+        # 自动稿（source_id 前缀 wf:）**＝两条出稿通道对同一客户各写了一份回复，
+        # 背靠背发出就是「同问双答」事故（impl49 B41 _241 实录）。仲裁规则＝
+        # 常规稿优先（它回应真实入站），链稿让位取消——链的节奏拍由 runner 的
+        # defer 机制平移，不在这里补偿。仅投递模式启用（标记模式双标无害）。
+        _mutex_cancel: set = set()
+        if self._send_callback is not None and len(l2) > 1:
+            _by_conv: Dict[str, List[Dict[str, Any]]] = {}
+            for _d in l2:
+                _c = str(_d.get("conversation_id") or "")
+                if _c:
+                    _by_conv.setdefault(_c, []).append(_d)
+            for _c, _rows in _by_conv.items():
+                if len(_rows) < 2:
+                    continue
+                _wf_rows = [r for r in _rows if str(
+                    r.get("source_id") or "").startswith("wf:")]
+                if _wf_rows and len(_wf_rows) < len(_rows):
+                    _mutex_cancel.update(
+                        str(r.get("draft_id") or "") for r in _wf_rows)
         # 复班补觉每批重拟预算：防复班瞬间对整夜积压一次性打满 LLM；超预算的
         # 留 pending，下一 tick 继续（min_interval 节拍天然把补觉摊开）。
         catchup_budget = 5
         for d in l2:
             draft_id = d.get("draft_id", "")
             _conv = str(d.get("conversation_id") or "")
+            # B41 通道互斥：链稿让位（常规稿本轮在场）→ 取消防双答
+            if draft_id and draft_id in _mutex_cancel:
+                try:
+                    _store_mx = getattr(self._svc, "_store", None)
+                    if _store_mx is not None and hasattr(
+                            _store_mx, "update_draft_status"):
+                        _store_mx.update_draft_status(
+                            draft_id, status="cancelled",
+                            decided_by="channel_mutex")
+                except Exception:
+                    logger.debug(
+                        "[AutosendWorker] channel_mutex 取消链稿失败 draft_id=%s",
+                        draft_id, exc_info=True)
+                self.total_skipped_mutex += 1
+                logger.info(
+                    "[AutosendWorker] guard=channel_mutex 跟进链稿让位常规稿 "
+                    "draft=%s conv=%s（同会话同批双通道出稿，防同问双答）",
+                    draft_id, _conv)
+                continue
             # Sprint1 统一出站闸门：会话被**显式**降级（坐席接管→manual / 改 review 等）后，
             # 接管前已入队的 L2 不该再自动发（防「接管前排队的草稿仍被投递」竞态）。
             # 仅对显式设过档位者生效；未显式设置(None)不干预 → 不改既有默认行为/perf 测试。
@@ -1463,6 +1611,71 @@ class AutosendWorker:
 
     # ── 运维动作 ──────────────────────────────────────────────
 
+    def apply_send_callbacks(
+        self,
+        *,
+        send_callback: Any = _UNSET,
+        translate_callback: Any = _UNSET,
+        mark_read_callback: Any = _UNSET,
+        typing_callback: Any = _UNSET,
+        persona_resolver: Any = _UNSET,
+        dup_guard_cfg: Any = _UNSET,
+        fresh_guard_cfg: Any = _UNSET,
+        work_schedule_provider: Any = _UNSET,
+        pilot_guard: Any = _UNSET,
+    ) -> None:
+        """运行时热接线投递能力（P1 2026-08-22「一键全自动」）。
+
+        为什么需要：deliver 此前是**构造期冻结**——用户在能力看板/向导点开
+        「全自动真发」只写了 overlay，worker 的 ``_send_callback`` 仍是 None，
+        实际要等下次重启才生效（B37 实录「开了全自动还是不回复」的第三个成因）。
+        本入口与 ``apply_deliver_delay`` 同一模式：路由在写 overlay 成功后调它，
+        把 bootstrap 同款回调注入运行中的 worker，开关即时生效。
+
+        仅覆盖**显式传入**的项（哨兵 ``_UNSET``）；``send_callback=None`` 是合法
+        值＝撤掉自动链真发能力（deliver 关闭方向），人工链回调不在此处变更。
+        """
+        if send_callback is not _UNSET:
+            self._send_callback = send_callback
+            # 签名探测缓存按回调对象记，换了对象必须重探
+            self._send_cb_accepts_original = None
+        if translate_callback is not _UNSET:
+            self._translate_callback = translate_callback
+        if mark_read_callback is not _UNSET:
+            self._mark_read_callback = mark_read_callback
+        if typing_callback is not _UNSET:
+            self._typing_callback = typing_callback
+        if persona_resolver is not _UNSET:
+            self._persona_resolver = persona_resolver
+        if dup_guard_cfg is not _UNSET:
+            self._dup_guard_cfg = dict(dup_guard_cfg or {})
+        if fresh_guard_cfg is not _UNSET:
+            self._fresh_guard_cfg = (
+                dict(fresh_guard_cfg) if isinstance(fresh_guard_cfg, dict)
+                else {"enabled": False})
+        if work_schedule_provider is not _UNSET:
+            self._ws_provider = work_schedule_provider
+        if pilot_guard is not _UNSET:
+            self._pilot_guard = pilot_guard
+
+    def ensure_auto_loop(self) -> bool:
+        """把「从未跑自动循环」的实例（deliver_only 兜底 / enabled=false 构造）
+        升格为常规自动循环（P1 一键全自动热接线）。
+
+        已在跑 → False（幂等）；无运行中事件循环 → False（调用方在异步路由内，
+        正常不会发生）。二次启动由 run() 的 ``_RUNNING_SVC_KEYS`` 防线兜底。
+        """
+        if self._running:
+            return False
+        self._enabled = True
+        self._deliver_only = False
+        try:
+            asyncio.ensure_future(self.run())
+            return True
+        except RuntimeError:
+            logger.warning("[AutosendWorker] ensure_auto_loop：无运行中事件循环")
+            return False
+
     def set_catchup_regenerate_cb(self, cb: Optional[Callable[..., bool]]) -> None:
         """注入复班补觉重拟回调（bootstrap 在 auto_draft 装配完成后调用）。
 
@@ -1537,6 +1750,11 @@ class AutosendWorker:
             "total_retry_recovered": self.total_retry_recovered,
             "total_retry_exhausted": self.total_retry_exhausted,
             "total_skipped_raced": self.total_skipped_raced,  # resolve 撞闸门（他方已处置）
+            # B41（2026-08-22）：幂等钉拒绝数 + 通道互斥让位数——恒 0 是常态，
+            # 涨了说明真拦到了双投/双答（去日志看 guard=deliver_once/channel_mutex）
+            "total_skipped_already_sent": self.total_skipped_already_sent,
+            "total_skipped_mutex": self.total_skipped_mutex,
+            "deliver_once": self._deliver_once.stats_snapshot(),
             "total_human_delivered": self.total_human_delivered,  # 人工通过经 worker 投递成功
             "total_human_deliver_errors": self.total_human_deliver_errors,
             "total_dup_blocked": self.total_dup_blocked,  # 出站近重复守卫拦截数

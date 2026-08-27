@@ -89,8 +89,25 @@ def test_buckets_and_shift_semantics(tmp_path):
     assert st["never_resolved"] == 1
     assert st["shifted_meaningful"] == 1  # 只有温哥华
     assert st["by_source"]["stated_city"] == 1
+    assert st["replace"] == 2            # stated_city + phone_cc（有 tz）
+    assert st["narrow"] == 0
+    assert st.get("advisory", 0) == 0
     txt = render(st)
     assert "可调度" in txt and "判词" in txt
+
+
+def test_lang_default_is_advisory_not_schedulable(tmp_path):
+    """语种默认钟有 IANA 名也不能进可调度——schedule_clock 只吃 replace。"""
+    db = _mk_db(tmp_path, [
+        {"cid": "a", "meta": {"tz_hint": "Asia/Bangkok", "tz_confidence": 0.3,
+                              "tz_source": "lang_default", "tz_country": "TH",
+                              "tz_offset": 7.0}},
+    ])
+    st = collect(db, days=14, now=NOW)
+    assert st["total"] == 1 and st["resolved"] == 1
+    assert st["schedulable"] == 0
+    assert st["replace"] == 0 and st["narrow"] == 0
+    assert st["advisory"] == 1
 
 
 def test_open_failure_soft(tmp_path):

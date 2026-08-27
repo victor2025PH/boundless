@@ -19,6 +19,7 @@ from src.utils.feature_registry import (
     feature_state,
     missing_deps,
     product_baseline_map,
+    product_baseline_values,
     seed_forbidden_map,
     ui_features,
 )
@@ -63,21 +64,57 @@ def test_by_key():
 # ── baseline_patch：只补缺失，尊重显式值 ────────────────────────────────────
 
 def test_baseline_patch_only_fills_missing():
-    # 空配置 → 全部 A 类入 patch（2026-07-31 拍板后 = goals + deep_persona + bubbles）
+    # 空配置 → 全部 A 类入 patch，且值＝注册表**声明值**（2026-08-20 起 baseline
+    # 不再一律为 True：contacts.mode 声明 "lite"，按 True 断言会把档位型基线判错）
     patch = baseline_patch({})
-    assert patch == {k: True for k in product_baseline_map()}
+    assert patch == product_baseline_values()
     assert set(patch) == {"companion.goals.enabled",
                           "companion.deep_persona.enabled",
-                          "inbox.reply_style.bubbles.enabled"}
+                          "inbox.reply_style.bubbles.enabled",
+                          "avatar_voice._hosted_auto",
+                          "voice_recognition._hosted_auto",
+                          "vision._hosted_auto",
+                          "inbox.auto_draft.media_degrade_reply",
+                          "companion.goals.notify.enabled",
+                          "telegram.poll_fallback.mirror_outgoing",
+                          # 2026-08-22 全自动开箱配套：两个防双发守卫升 A 类
+                          # （纯软件零依赖、只减发送不增，B41 防线默认在岗）
+                          "inbox.outbound_dup_guard.enabled",
+                          "inbox.l2_autosend.fresh_guard.enabled",
+                          "contacts.enabled",
+                          "contacts.mode",
+                          "contacts.origin_profile.enabled",
+                          # 2026-08-23 小智全家桶进基线（1.0.51 全功能开箱：
+                          # 1.0.50 发布说明宣传了小智、包里开关却是关的）
+                          "assistant.enabled",
+                          "assistant.agent.enabled",
+                          "assistant.vision.enabled"}
+    assert patch["contacts.mode"] == "lite"
     # 显式 false = 用户决定，绝不覆盖；其余缺失键照补
     part = baseline_patch({"companion": {"goals": {"enabled": False}}})
     assert "companion.goals.enabled" not in part
     assert "companion.deep_persona.enabled" in part
     # 全部已表态（开/关混合）→ 零 patch
     assert baseline_patch({
-        "companion": {"goals": {"enabled": True},
+        "companion": {"goals": {"enabled": True,
+                                "notify": {"enabled": True}},
                       "deep_persona": {"enabled": False}},
-        "inbox": {"reply_style": {"bubbles": {"enabled": True}}},
+        "inbox": {"reply_style": {"bubbles": {"enabled": True}},
+                  "auto_draft": {"media_degrade_reply": True},
+                  # 守卫一开一关＝显式表态的两种形态都不被覆盖
+                  "outbound_dup_guard": {"enabled": True},
+                  "l2_autosend": {"fresh_guard": {"enabled": False}}},
+        "avatar_voice": {"_hosted_auto": True},
+        "voice_recognition": {"_hosted_auto": True},
+        "vision": {"_hosted_auto": True},
+        "telegram": {"poll_fallback": {"mirror_outgoing": True}},
+        # 已显式选 full 的部署（内部/坐席包）不得被补成 lite——存量安装的档位是
+        # 运营决定，基线补齐只负责「从未表态」的键。
+        "contacts": {"enabled": True, "mode": "full",
+                     "origin_profile": {"enabled": False}},
+        # 小智三键（主开关开、子键一开一关＝显式表态不被覆盖）
+        "assistant": {"enabled": True, "agent": {"enabled": False},
+                      "vision": {"enabled": True}},
     }) == {}
 
 

@@ -96,6 +96,15 @@ def _norm_for_hash(text: str) -> str:
     return t[:500]
 
 
+def content_hash_of(text: str) -> str:
+    """事实文本 → 与 ``add_fact`` 落库口径一致的 content_hash（公开工具）。
+
+    导入批次台账（P1 2026-08-18）用它登记事实指纹，撤销按 (key, hash) 精确删；
+    与写入端共用 ``_norm_for_hash`` 归一化，绝不各算一套。
+    """
+    return hashlib.sha256(_norm_for_hash(text).encode("utf-8")).hexdigest()
+
+
 class EpisodicMemoryStore:
     _DDL = """
     CREATE TABLE IF NOT EXISTS episodic_memory (
@@ -1295,6 +1304,30 @@ class EpisodicMemoryStore:
         )
         self._conn.commit()
         return int(cur.rowcount or 0) > 0
+
+    def delete_by_hashes(self, user_id: str, content_hashes: List[str]) -> int:
+        """按 (user_id, content_hash) 精确删除，返回删除行数。
+
+        跨平台档案「整批撤销导入」用（P1 2026-08-18）：批次台账记录事实指纹，
+        撤销按指纹删——不误伤同 key 下其他来源的事实（同文写入 add_fact 会因
+        唯一索引去重返 None 不入台账，故指纹集合即本批独有写入）。
+        """
+        uid = str(user_id or "").strip()
+        hashes = [str(h).strip() for h in (content_hashes or []) if str(h).strip()]
+        if not uid or not hashes:
+            return 0
+        deleted = 0
+        for h in hashes:
+            try:
+                cur = self._conn.execute(
+                    "DELETE FROM episodic_memory WHERE user_id = ? AND content_hash = ?",
+                    (uid, h),
+                )
+                deleted += int(cur.rowcount or 0)
+            except Exception:
+                continue
+        self._conn.commit()
+        return deleted
 
     def fetch_rows_missing_embedding(
         self, limit: int = 20, memory_key_prefix: str = "", force: bool = False

@@ -905,7 +905,7 @@ async function resolveMerge(reviewId, action) {
     if (row) row.remove();
     asRefreshSummary();
   } catch (e) {
-    alert(window.Tf('as_action_fail', {verb: verb, msg: e.message}));
+    AITRNotify.alert(window.Tf('as_action_fail', {verb: verb, msg: e.message}));
   }
 }
 
@@ -923,7 +923,7 @@ function toggleSelectHighConf() {
   const rows = document.querySelectorAll('.merge-card-row[data-conf]');
   const highRows = [...rows].filter(r => parseFloat(r.dataset.conf) >= 0.85);
   if (!highRows.length) {
-    alert(window.T('as_js008')+' ≥0.85 '+window.T('as_js009'));
+    AITRNotify.alert(window.T('as_js008')+' ≥0.85 '+window.T('as_js009'));
     return;
   }
   const allChecked = highRows.every(r => r.querySelector('.merge-check')?.checked);
@@ -960,11 +960,11 @@ async function batchApproveSelected() {
     if (d.failed?.length) {
       parts.push(window.Tf('as_failed_n', {n: d.failed.length}));
     }
-    alert(parts.join('; '));
+    AITRNotify.alert(parts.join('; '));
     loadMergeCandidates();
     asRefreshSummary();
   } catch (e) {
-    alert(window.Tf('as_batch_fail', {msg: e.message}));
+    AITRNotify.alert(window.Tf('as_batch_fail', {msg: e.message}));
   }
 }
 
@@ -979,7 +979,7 @@ async function scanMergeCandidates() {
       throw new Error(`HTTP ${r.status} ${txt}`);
     }
     const d = await r.json();
-    alert(window.Tf('as_scan_done', {scanned: d.scanned, enq: d.enqueued, auto: d.auto_eligible}));
+      AITRNotify.alert(window.Tf('as_scan_done', {scanned: d.scanned, enq: d.enqueued, auto: d.auto_eligible}), 'ok');
     loadMergeCandidates();
     asRefreshSummary();
   } catch (e) {
@@ -1255,13 +1255,13 @@ async function markDraftSent() {
       method: 'POST',
     }, {timeoutMs: 60000});
     if (!r.ok) {
-      alert(window.Tf('as_mark_fail', {s: r.status}));
+      AITRNotify.alert(window.Tf('as_mark_fail', {s: r.status}));
       return;
     }
     closeDraftModal();
     loadReactivationCands();  // 列表刷新（应该看到该候选消失或 last_reactivation_ts 更新）
   } catch (e) {
-    alert(window.Tf('as_exc', {msg: e.message}));
+    AITRNotify.alert(window.Tf('as_exc', {msg: e.message}));
   }
 }
 
@@ -1380,12 +1380,12 @@ async function promoteVariant(variantId) {
     }, {timeoutMs: 60000});
     const d = await r.json();
     if (r.ok) {
-      alert(window.Tf('as_set_default_ok', {v: d.default_variant}));
+        AITRNotify.alert(window.Tf('as_set_default_ok', {v: d.default_variant}), 'ok');
       loadPromptAB();
     } else {
-      alert(window.Tf('as_fail_detail', {d: d.detail || JSON.stringify(d)}));
+      AITRNotify.alert(window.Tf('as_fail_detail', {d: d.detail || JSON.stringify(d)}));
     }
-  } catch(e) { alert(window.Tf('as_req_fail', {msg: e.message})); }
+  } catch(e) { AITRNotify.alert(window.Tf('as_req_fail', {msg: e.message})); }
 }
 
 // ── P21-1: Platform Persona Command Center ──────────────────────────────────
@@ -1515,9 +1515,9 @@ async function idUnlink(platform, uid) {
       body: JSON.stringify({platform, uid})
     }, {timeoutMs: 60000});
     const d = await r.json();
-    if (!r.ok) alert(window.T('rpa_js_st_failed')+': ' + d.detail);
+    if (!r.ok) AITRNotify.alert(window.T('rpa_js_st_failed')+': ' + d.detail);
     idLoad();
-  } catch (e) { alert(window.T('ln_js_036')+': ' + e.message); }
+  } catch (e) { AITRNotify.alert(window.T('ln_js_036')+': ' + e.message); }
 }
 
 // Init

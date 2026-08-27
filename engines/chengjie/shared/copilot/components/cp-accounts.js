@@ -257,6 +257,7 @@
       if (act === "webhooks") return this._renderWebhooks();
       if (act === "settings") return this._renderSettings();
       if (act === "wh-add") return this._whAddRow();
+      if (act === "wh-goal-preset") return this._whGoalPreset(el);
       if (act === "wh-del") return this._whDelRow(el);
       if (act === "wh-test") return this._whTest(el);
       if (act === "wh-save") return this._whSave(el);
@@ -576,6 +577,7 @@
         `<div class="add">` +
         `<div class="sub">${this._esc(T("cp.acct.wh_desc"))}</div>` +
         this._whChannelGuide() +
+        this._whGoalPresetHtml() +
         `<div class="wh-list">${rows || `<div class="empty">${this._esc(T("cp.acct.wh_empty"))}</div>`}</div>` +
         `<div class="field" style="justify-content:space-between;gap:8px">` +
         `<button data-act="wh-add">${this._esc(T("cp.acct.wh_add"))}</button>` +
@@ -638,8 +640,60 @@
         `• ${e(T("cp.acct.wh_ch_feishu"))}<br>` +
         `• ${e(T("cp.acct.wh_ch_wecom"))}<br>` +
         `• ${e(T("cp.acct.wh_ch_dingtalk"))}<br>` +
-        `• ${e(T("cp.acct.wh_ch_telegram"))}` +
+        `• ${e(T("cp.acct.wh_ch_telegram"))}<br>` +
+        `• ${e(T("cp.acct.wh_ch_whatsapp"))}` +
         `</div></details>`;
+    }
+
+    /* 「目标达成推送」一键预置（2026-08-18）：选平台加一行、预勾
+       goal_complete+goal_miss——「成交时推送老板/同事的 IM」从翻别名文档
+       变成三步（加行→填凭证→测试保存）。复用整套既有行编辑/测试/保存机制，
+       不造第二套渠道表单。 */
+    _whGoalPresetHtml() {
+      const e = (s) => this._esc(s == null ? "" : s);
+      const btn = (fmt, label) =>
+        `<button data-act="wh-goal-preset" data-fmt="${fmt}">${e(label)}</button>`;
+      return `<div class="wh-goal" style="border:1px dashed var(--cp-border,#e2e8f0);border-radius:8px;padding:6px 8px;margin:0 0 8px">` +
+        `<div style="font-size:11.5px;font-weight:700">${e(T("cp.acct.wh_goal_title"))}</div>` +
+        `<div class="sub" style="margin:2px 0 4px">${e(T("cp.acct.wh_goal_desc"))}</div>` +
+        `<div class="field" style="flex-wrap:wrap;gap:4px">` +
+        btn("telegram", "Telegram") +
+        btn("whatsapp", "WhatsApp") +
+        btn("feishu", T("cp.acct.wh_fmt_feishu")) +
+        btn("wecom", T("cp.acct.wh_fmt_wecom")) +
+        btn("dingtalk", T("cp.acct.wh_fmt_dingtalk")) +
+        `</div></div>`;
+    }
+
+    _whGoalPreset(el) {
+      const fmt = (el && el.getAttribute("data-fmt")) || "telegram";
+      const list = this.shadowRoot.querySelector(".wh-list");
+      if (!list) return;
+      const empty = list.querySelector(".empty");
+      if (empty) empty.remove();
+      // 唯一名 goal-push-<fmt>（重名追加 -2/-3……绝不覆盖已有渠道行）
+      const used = new Set(Array.from(list.querySelectorAll(".w-name"))
+        .map((n) => String(n.value || "").trim()));
+      let name = `goal-push-${fmt}`;
+      for (let k = 2; used.has(name); k++) name = `goal-push-${fmt}-${k}`;
+      const i = list.querySelectorAll(".wh-it").length;
+      const tmp = document.createElement("div");
+      tmp.innerHTML = this._whRowHtml(
+        { name, format: fmt, enabled: true,
+          events: ["goal_complete", "goal_miss"] }, i);
+      const row = tmp.firstChild;
+      list.appendChild(row);
+      try { row.scrollIntoView({ block: "nearest", behavior: "smooth" }); } catch (e2) { /* soft */ }
+      // 聚焦该渠道第一个要填的凭证位（TG/Messenger=Token；其余=URL）
+      const inp = row.querySelector(
+        (fmt === "telegram" || fmt === "messenger") ? ".w-token" : ".w-url");
+      if (inp) { try { inp.focus(); } catch (e2) { /* soft */ } }
+      const msg = this.shadowRoot.querySelector(".wh-msg");
+      if (msg) {
+        msg.textContent = T("cp.acct.wh_goal_added", { name }) +
+          (fmt === "whatsapp" ? " " + T("cp.acct.wh_goal_wa_hint") : "");
+        msg.style.color = "";
+      }
     }
 
     _whAddRow() {

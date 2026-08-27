@@ -31,6 +31,15 @@ try {
   });
 } catch (_) { /* ipc 不可用（异常环境）：页面拿不到状态，按无状态降级 */ }
 
+// 悬浮副驾原生窗事件通道（cp PiP shell 桥 P1 2026-08-18）：主进程经本 webContents
+// send("cp-pip-evt") 回吐 app.html 消息（cp-ready/cp-fill/cp-send）与 cp-pip-closed，
+// 这里原样转投页面世界；页面侧按 msg.type 消费（契约同 DOM PiP 路径）。
+try {
+  ipcRenderer.on("cp-pip-evt", (_e, m) => {
+    try { window.postMessage({ type: "chatx-cp-pip", msg: m }, "*"); } catch (_) { /* 页面未就绪时丢弃 */ }
+  });
+} catch (_) { /* ipc 不可用：PiP 事件失联，页面哨兵会兜住 */ }
+
 const api = {
   desktop: true,
   // 打开（或切到已开的）某平台官方网页版标签。opts 目前仅作前向兼容占位。
@@ -46,6 +55,27 @@ const api = {
   // P2 握手：页面在工作台头部之下渲染完 cx-shell-strip 后回报——壳收到才隐藏竖栏。
   // 旧页面不调用 → 竖栏保持可见（兜底导航永在）。
   stripReady() { send({ cmd: "stripReady" }); },
+  // 悬浮副驾原生置顶窗（cp PiP shell 桥 P1）：{action:'open'|'close'|'post'|'status',…}
+  // invoke 直达主进程 desktop:copilot-pip（不经壳 renderer——PiP 是主进程原生窗，
+  // 绕一跳纯增故障面）；回吐经上方 cp-pip-evt → window.postMessage 抵页面世界。
+  copilotPip(payload) {
+    try {
+      return ipcRenderer.invoke("desktop:copilot-pip", payload && typeof payload === "object" ? payload : {});
+    } catch (_) {
+      return Promise.resolve({ ok: false, error: "ipc unavailable" });
+    }
+  },
+  // 应用菜单内迁（P0 2026-08-22）：工作台顶栏渲染壳应用菜单（文件/编辑/视图/窗口/
+  // 帮助）。spec/action 直达主进程（与 copilotPip 同款）；旧壳无这两个方法 → 页面
+  // typeof 探测不点亮（旧壳原生菜单条本就还在，页内不画=零双菜单）。
+  menuSpec() {
+    try { return ipcRenderer.invoke("desktop:app-menu-spec"); }
+    catch (_) { return Promise.resolve(null); }
+  },
+  menuAction(id) {
+    try { return ipcRenderer.invoke("desktop:app-menu-action", String(id || "")); }
+    catch (_) { return Promise.resolve({ ok: false, error: "ipc unavailable" }); }
+  },
 };
 
 // contextIsolation 开（Electron webview 默认）→ contextBridge；关 → 直挂 window 兜底。
@@ -53,4 +83,19 @@ try {
   contextBridge.exposeInMainWorld("__chatxShell", api);
 } catch (_) {
   try { window.__chatxShell = api; } catch (_) { /* 环境异常时放弃暴露，页面自然降级 */ }
+}
+
+// B54 焦点自愈桥（与 popup-preload.js 同名契约 __chatxShellFocus）：原生
+// confirm/alert 关闭后 Chromium 焦点态失步 → 页面经此请主进程 blur+focus 复位。
+// 独立命名空间：后台弹窗只挂这一个极小桥，页面侧探测一个名字通吃两形态。
+const focusApi = {
+  focusFix() {
+    try { return ipcRenderer.invoke("desktop:focus-fix"); }
+    catch (_) { return Promise.resolve({ ok: false, error: "ipc unavailable" }); }
+  },
+};
+try {
+  contextBridge.exposeInMainWorld("__chatxShellFocus", focusApi);
+} catch (_) {
+  try { window.__chatxShellFocus = focusApi; } catch (_) { /* 页面自然降级 */ }
 }

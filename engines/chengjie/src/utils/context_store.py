@@ -55,6 +55,8 @@ _NON_PERSIST = frozenset({
     "_bazi_block",         # companion.bazi: 每轮注入前 pop 重建，落盘只是死重
     "_goal_block",         # companion.goals: 同上（目标态在 marketing_goals.db 才持久）
     "_goal_cta",           # companion.goals: 链接纪律档位暂存，出站守卫读后即焚
+    "_known_profile_block",  # B50: 每轮从 episodic 重建（事实源在记忆库）
+    "_self_state_block",     # B52: 每轮按 _self_state_log(持久) + TTL 重建
 })
 
 

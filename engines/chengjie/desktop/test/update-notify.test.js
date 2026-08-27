@@ -5,12 +5,21 @@
 
 const assert = require("assert");
 const un = require("../update-notify.js");
+const shI18n = require("../renderer/shell-i18n.js");
 
 let passed = 0;
 function ok(cond, msg) {
   assert.ok(cond, msg);
   passed++;
   console.log(`  ok - ${msg}`);
+}
+
+// i18n 边界（2026-08-19）：更新类横幅回 textKey+vars（取词在渲染层），公告类回 text
+// （服务端下发内容不该被壳词典翻译）。断言据此走 render()——它复刻渲染层那一行消费
+// 逻辑，于是「文案讲清了什么」这类产品不变量仍能在两种语言下被钉住。
+function render(n, lang) {
+  if (n && n.textKey) return shI18n.tIn(lang || "zh", n.textKey, n.vars || {});
+  return (n && n.text) || "";
 }
 
 // ── 版本比较 ──────────────────────────────────────────────────────────────
@@ -56,13 +65,16 @@ const base = { announcements: items, appVersion: "1.0.26", readIds: [], snoozedU
 
 let n = un.pickNotice({ ...base, update: { phase: "downloaded", version: "1.0.27", percent: 100 } });
 ok(n.kind === "update" && n.action === "restart", "更新就绪压过一切（含 urgent 公告）");
-ok(n.text.includes("v1.0.27") && n.text.includes("重启"), "就绪文案带版本与重启动作");
+ok(render(n).includes("v1.0.27") && render(n).includes("重启"), "就绪文案带版本与重启动作");
+ok(render(n, "en").includes("v1.0.27") && /restart/i.test(render(n, "en")),
+  "英文就绪文案同样带版本与 restart 动作（i18n 后语义不缩水）");
 
 n = un.pickNotice({ ...base, update: { phase: "downloading", version: "1.0.27", percent: 42 } });
 ok(n.kind === "announcement" && n.id === "a3", "下载中让位紧急公告");
 
 n = un.pickNotice({ ...base, readIds: ["a3"], update: { phase: "downloading", version: "1.0.27", percent: 42 } });
-ok(n.kind === "update" && n.action === "none" && n.text.includes("42%"), "紧急已读后显示下载进度（无动作按钮）");
+ok(n.kind === "update" && n.action === "none" && render(n).includes("42%"), "紧急已读后显示下载进度（无动作按钮）");
+ok(render(n, "en").includes("42%"), "英文横幅同样透传进度百分比");
 
 n = un.pickNotice({ ...base, readIds: ["a3"], update: { phase: "idle" } });
 ok(n.kind === "announcement" && n.id === "a1", "无更新时按序展示普通公告（release 先于 notice）");
@@ -85,7 +97,8 @@ ok(n.kind === "announcement", "更新被稍后时公告照常轮到（稍后只�
 const longBody = "很长的正文".repeat(60);
 const longItems = un.normalizeAnnouncements({ items: [{ id: "L1", type: "notice", title: "标题", body: longBody }] });
 n = un.pickNotice({ update: { phase: "idle" }, announcements: longItems, appVersion: "1.0.26", readIds: [], snoozedUntil: 0, now: NOW });
-ok(n.text.length < 140 && n.text.endsWith("…"), "长正文单行截断（横幅不是阅读器）");
+ok(!n.textKey && n.text.length < 140 && n.text.endsWith("…"),
+  "公告正文回 text（服务端内容不进壳词典）且单行截断（横幅不是阅读器）");
 ok(n.action === "none", "无 link 的公告没有主按钮");
 
 // ── 版本定向端到端：老版本公告不打扰已升级用户 ─────────────────────────────
@@ -130,9 +143,11 @@ ok(!un.forcedUpgradeActive("1.0.19", "   "), "线为空白同未启用");
 const forcedBase = { ...base, appVersion: "1.0.19", minSupportedVersion: "1.0.20" };
 n = un.pickNotice({ ...forcedBase, update: { phase: "idle" } });
 ok(n.forced === true && n.kind === "update" && n.tone === "urgent", "触线 idle：强制横幅（forced=true）");
-ok(n.action === "none" && n.text.includes("停止支持"), "idle 阶段无按钮，文案讲清「已停止支持」");
+ok(n.action === "none" && render(n).includes("停止支持"), "idle 阶段无按钮，文案讲清「已停止支持」");
+ok(/no longer supported/i.test(render(n, "en")),
+  "英文强制横幅同样讲清 no longer supported（这是不可弱化的产品红线）");
 n = un.pickNotice({ ...forcedBase, update: { phase: "downloading", version: "1.0.27", percent: 66.4 } });
-ok(n.forced === true && n.text.includes("66%"), "触线下载中：进度透传");
+ok(n.forced === true && render(n).includes("66%"), "触线下载中：进度透传");
 n = un.pickNotice({ ...forcedBase, update: { phase: "downloaded", version: "1.0.27" } });
 ok(n.forced === true && n.action === "restart", "触线就绪：唯一出口=立即重启更新");
 n = un.pickNotice({ ...forcedBase, snoozedUntil: NOW + 3600_000, update: { phase: "downloaded", version: "1.0.27" } });

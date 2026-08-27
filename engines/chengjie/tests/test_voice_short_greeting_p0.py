@@ -90,6 +90,24 @@ def test_dialect_packs_mandarin_pronounceable():
             assert b not in pack["words"], (pack["label"], b)
 
 
+def test_dialect_style_line_patterns_and_avoid():
+    """2026-08-19 晚升级：句式标记 + 反北方腔渲染（修「台湾词念出东北味」）。
+
+    南方三档（taiwan/minnan/hunan）必须带句式与反腔指令；未配 patterns 的档
+    （如 beijing）保持纯词表行为。"""
+    from src.ai.voice_colloquial import _DIALECT_PACKS, dialect_style_line
+    for flavor in ("taiwan", "minnan", "hunan"):
+        line = dialect_style_line(flavor)
+        assert "句式上可用" in line, flavor
+        assert "绝不用" in line and "儿化" in line, flavor
+    assert "有够" in dialect_style_line("taiwan")
+    assert "我有+动词" in dialect_style_line("minnan")
+    assert "何解" in dialect_style_line("hunan")
+    line_bj = dialect_style_line("beijing")
+    assert "句式上可用" not in line_bj      # 可选键缺省=旧行为
+    assert not _DIALECT_PACKS["beijing"].get("patterns")
+
+
 # ── ⑤ auto_stock 拒收仪式问候（每天该不重样的话不能固化成同一段波形）─────────
 
 def test_auto_stock_rejects_ritual_greetings():

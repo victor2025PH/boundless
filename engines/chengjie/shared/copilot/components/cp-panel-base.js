@@ -13,6 +13,11 @@
 (function (root) {
   const BASE_CSS = `
     :host { display:block; font-size:var(--cp-fs,13px); color:var(--cp-text,#1e293b); }
+    /* 统一细滚动条：文档级滚动条样式穿不进 shadow DOM（2026-08-17 人设列表
+       「Windows 默认宽白滚动条压深色卡」实锤），基类单点注入 → 全部 cp-* 组件
+       的内滚区一次生效。走标准属性(scrollbar-width/color, Chromium121+/FF)，
+       thumb 色随主题（--cp-sb-thumb 由 theme-*.css 提供），track 恒透明。 */
+    * { scrollbar-width:thin; scrollbar-color:var(--cp-sb-thumb,rgba(100,116,139,.45)) transparent; }
     .wrap { background:var(--cp-surface,#fff); border:1px solid var(--cp-border,#e2e8f0);
             border-radius:var(--cp-radius,10px); padding:var(--cp-gap,10px); }
     .empty,.err { color:var(--cp-text-tiny,#94a3b8); font-size:var(--cp-fs-sm,12px); }

@@ -15,6 +15,8 @@
   5. 拖宽动态上限：存储宽度 999 → 实际被夹到 min(720, 45vw, 父宽-520)；
   6. 单卡撕出（P2/P3）：撕出=搬同一节点进悬浮窗 + 原位回收 chip；面板收轨撕出窗
      独立存活；刷新按记忆恢复；收回按钮与双击标题栏都=节点回原位零残留；
+  6.5 系统级悬浮小窗（P5，Document PiP）：安全上下文（本门禁 127.0.0.1）下按钮可见、
+     点击真开 OS 级置顶窗且内嵌 /copilot/app.html、再点关闭；无 API 时按钮必须隐藏；
   7. App(iframe) 模式（?app=1）：空态面板常驻 + iframe 隐藏防串上一客户残留 +
      宿主侧说明块点亮；P3 起 App 同样有收纳轨/飞层（宿主 tabs 当图标轨，切页走
      postMessage set-tab 桥）；Shift+] 隐藏与把手唤回；撕出记忆不渲染（native-only）。
@@ -24,6 +26,12 @@
 Playwright + SKIP exit 0 语义）。**副作用：无**——只点已读会话
 （`.conv-item:not(.has-unread)`），不发消息不改会话状态；形态偏好写在本工具自己的
 浏览器 context（即用即弃）。
+
+**零遥测污染（P4 起）**：本工具每轮真点 rail/飞层/钉住/撕出——不拦 beacon 会把
+``cppanel_*``/``iflt_*`` 假用量灌进生产 ``ui_event_trend``（正是
+``tools/cp_panel_usage_report.py`` 的裁决数据源；2026-08-17 当日数据即门禁污染实锤，
+该 CLI 的纪元日因此定在 08-18）。手法与 verify_goal_form_ui 同族：context 级
+stub ``navigator.sendBeacon``。
 
 用法::
 
@@ -122,6 +130,10 @@ def run(base: str, token: str, *, headed: bool = False) -> int:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=not headed)
         ctx = browser.new_context(viewport=VIEWPORT)
+        # 零遥测污染：stub sendBeacon（_uiBeacon 唯一通道），门禁点击不进生产用量库
+        ctx.add_init_script(
+            "try{Object.defineProperty(navigator,'sendBeacon',{value:function(){return true;}});}"
+            "catch(_e){try{navigator.sendBeacon=function(){return true;};}catch(_e2){}}")
         ctx.request.post(base + "/login", form={"auth_token": token})
         page = ctx.new_page()
         page.goto(base + "/workspace?app=0", wait_until="domcontentloaded")
@@ -323,6 +335,54 @@ def run(base: str, token: str, *, headed: bool = False) -> int:
                      not t["win"] and t["card_in_sb"], f"win={t['win']} in_sb={t['card_in_sb']}")
         except Exception:
             ck.skip("撕出持久化/收回", "reload 后脚本未就绪")
+
+        # ── 6.5 系统级悬浮小窗（Document PiP，P5 2026-08-18）──
+        # 本门禁走 127.0.0.1（安全上下文）→ API 真实暴露，可端到端开窗；
+        # 生产坐席经 LAN http 访问时无 API → 断言退化为「按钮必须隐藏」（渐进增强两面都钉）。
+        print("== 6.5 系统级悬浮小窗（PiP：安全上下文真开窗 / 无 API 按钮隐藏）==")
+        # 第 6 段收尾停在 rail（reload 前按过 ]）——面板头随 rail 隐藏，按钮祖先不可见：
+        # 先归位 expanded 再断言（首跑实锤：computed display 自身仍 inline-flex 造成
+        # 假阳性「可见」，随后 click 卡死在可操作性检查；可见性一律用 offsetHeight 口径）。
+        if page.evaluate("() => window._cpPanelModeGet()") != "expanded":
+            page.keyboard.press("]")
+            page.wait_for_timeout(300)
+        pip_api = page.evaluate(
+            "() => !!(window.documentPictureInPicture && window.documentPictureInPicture.requestWindow)")
+        if not pip_api:
+            hidden_ok = page.evaluate(
+                "() => { const b=document.getElementById('ws-cp-pip-btn');"
+                " return !b || getComputedStyle(b).display==='none'; }")
+            ck.check("无 API：PiP 按钮隐藏（渐进增强不露死按钮）", hidden_ok, "")
+            ck.skip("PiP 开窗段", "documentPictureInPicture 不可用（非安全上下文或旧内核）")
+        else:
+            btn_vis = page.evaluate(
+                "() => { const b=document.getElementById('ws-cp-pip-btn');"
+                " return !!b && b.offsetHeight > 0 && getComputedStyle(b).display!=='none'; }")
+            ck.check("安全上下文：PiP 按钮可见", btn_vis, "")
+            page.click("#ws-cp-pip-btn", timeout=8000)
+            page.wait_for_timeout(900)
+            pp = page.evaluate("""() => {
+              const w = window.documentPictureInPicture.window;
+              const f = w ? w.document.querySelector('iframe') : null;
+              return { open: !!w, iframe_src: f ? f.src : '' };
+            }""")
+            ck.check("点按钮 → PiP 系统窗打开且内嵌 /copilot/app.html",
+                     pp["open"] and "/copilot/app.html" in pp["iframe_src"],
+                     f"open={pp['open']} src={pp['iframe_src'][:60]}")
+            # 握手断言（2026-08-18 灰屏事故补钉）：光「窗开了」不够——Electron 壳
+            # 曾开出 0×0 死窗、消息桥曾挂错窗（挂主窗收不到 parent=PiP窗 的消息），
+            # 两个 bug 都只有「cp-ready 真到达宿主」才能拦住。哨兵超时 8s，此处放宽等。
+            ready_ok = True
+            try:
+                page.wait_for_function("() => window.__cpPipReadyAt > 0", timeout=15000)
+            except Exception:
+                ready_ok = False
+            ck.check("PiP 内 App cp-ready 握手达成（消息桥挂 PiP 窗 + 加载占位已撤）",
+                     ready_ok, "")
+            page.click("#ws-cp-pip-btn", timeout=8000)
+            page.wait_for_timeout(700)
+            pp2 = page.evaluate("() => !window.documentPictureInPicture.window")
+            ck.check("再点按钮 → PiP 窗关闭（开关切换语义）", pp2, "")
 
         # ── 7. App(iframe) 模式（?app=1）：空态防串数据 + ] 降级 + 把手 ──
         print("== 7. App(iframe) 模式（?app=1）==")

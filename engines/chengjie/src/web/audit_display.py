@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import math
+import re
 import time
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -41,9 +42,61 @@ FAMILY_DEFS: Dict[str, Dict[str, tuple]] = {
     "danger": {"contains": DANGER_TOKENS},
     "memory": {"prefixes": ("episodic_", "identity_")},
     "kb": {"prefixes": ("kb_", "learner_")},
-    "persona": {"contains": ("persona",), "prefixes": ("profile",)},
+    # 人设资产：档案 + 相册/脸图 + 克隆声/台词备货（pmedia_/voice_ 不含
+    # "persona" 字样，旧定义漏进「未分类」——2026-08-18 并入本族）。
+    "persona": {"contains": ("persona",),
+                "prefixes": ("profile", "pmedia_", "voice_", "prerender_")},
+    "sticker": {"prefixes": ("stk_",)},
+    "contacts": {"prefixes": (
+        "merge_review_", "mobile_handoff_", "reunion_", "admin_link_",
+        "relations_", "account_limit_", "draft_eval_", "draft_unmark_",
+        "tg_members_",
+    )},
     "rpa": {"contains": ("rpa",), "prefixes": ("wa_", "line_", "messenger_")},
 }
+
+# 芯片渲染序＝FAMILY_DEFS 的唯一展示顺序；模板 / 路由禁止再手写一份
+# （漏登记 = 新族有谓词没入口，比没有更糟）。门禁钉 keys 集合相等。
+FAMILY_ORDER: Tuple[str, ...] = (
+    "danger", "memory", "kb", "persona", "sticker", "contacts", "rpa",
+)
+if set(FAMILY_ORDER) != set(FAMILY_DEFS):
+    raise RuntimeError(
+        f"FAMILY_ORDER {set(FAMILY_ORDER)!r} != FAMILY_DEFS {set(FAMILY_DEFS)!r}"
+    )
+
+
+def family_of(action: str) -> str:
+    """action → 业务族名（首页族芯片用）；无归属返回 ""。
+
+    刻意跳过 danger——那是**严重度**标记（行已有红色强调），不是业务域；
+    ``stk_pack_delete`` 的芯片该指 ``family=sticker`` 而非 ``family=danger``。
+    """
+    for fam in FAMILY_ORDER:
+        if fam == "danger":
+            continue
+        pred = family_predicate(fam)
+        if pred and pred(action):
+            return fam
+    return ""
+
+
+def operator_display_names(user_store) -> Dict[str, str]:
+    """web 用户表 username → display_name（纯展示层映射）。
+
+    账本 ``user_id`` 永不改写——模板显示 display_name、title 保留原 id 对账；
+    非 web 用户的操作人（system/watchdog…）不在表里，模板回落原样。
+    用户表缺席/查询异常 → 空表（等价旧行为）。
+    """
+    try:
+        out: Dict[str, str] = {}
+        for u in (user_store.list_users() if user_store else []) or []:
+            name = str(u.get("username") or "")
+            if name:
+                out[name] = str(u.get("display_name") or "") or name
+        return out
+    except Exception:
+        return {}
 
 
 def family_predicate(family: str):
@@ -115,6 +168,75 @@ def classify_target(action: str, target: str) -> Tuple[str, str]:
     return "generic", t
 
 
+# ── 对象串结构化（kv / 增减量，只出结构不出文案）────────────────────
+# 写入方把 target/new_val 写成自由文本（pack=starter-faces、from=a to=b、
+# packs+2 items+51）。展示层认得出的拆成 {key,value}，认不出的保持原样——
+# 绝不猜。键的人话标签由模板经 aud_tgt_* 渲染，未登记键回落原 key。
+_KV_PAIR = re.compile(
+    r"(?:^|(?<=[\s;,]))([A-Za-z_][A-Za-z0-9_]{0,31})=([^\s;,=]+)"
+)
+_DELTA_PAIR = re.compile(
+    r"(?:^|(?<=[\s;,]))([A-Za-z_][A-Za-z0-9_]{0,31})([+-]\d+)"
+)
+
+
+def parse_object_tokens(text: str) -> List[Dict[str, str]]:
+    """自由文本 → ``[{key, value}]``；覆盖率不够或非结构化则 ``[]``。
+
+    覆盖率守卫：解析出的字面量必须几乎铺满原文（只允许对间分隔符），
+    防止从 URL / 长句里抠出偶然的 ``pack=x`` 冒充结构化对象。
+    """
+    s = (text or "").strip()
+    if not s:
+        return []
+    if "=" in s:
+        pairs = _KV_PAIR.findall(s)
+        if pairs and _token_coverage_ok(s, pairs, joiner="="):
+            return [{"key": k, "value": v} for k, v in pairs]
+    if "+" in s or (s.count("-") >= 1 and any(ch.isdigit() for ch in s)):
+        pairs = _DELTA_PAIR.findall(s)
+        if pairs and _token_coverage_ok(s, pairs, joiner=""):
+            return [{"key": k, "value": v} for k, v in pairs]
+    return []
+
+
+def _token_coverage_ok(s: str, pairs: List[Tuple[str, str]], *,
+                       joiner: str) -> bool:
+    consumed = sum(len(k) + len(joiner) + len(v) for k, v in pairs)
+    leftover = len(s) - consumed
+    seps = max(0, len(pairs) - 1)
+    return leftover <= max(4, seps * 2) and leftover < len(s) and consumed > 0
+
+
+def decorate_object(action: str, target: str, extra: str = "") -> Dict:
+    """动作 + 对象串 + 可选详情 → 展示结构。
+
+    已知家族（memory/keyword/identity）保持旧语义，不拆 kv——那些字段
+    不是 key=value（记忆行 ID / 关键词 / platform:uid）。generic 且能
+    拆出 token 的升为 ``kv``；target 为空时回落解析 extra（播种类动作
+    把增量写在 new_val：``packs+2 items+51``）。
+    """
+    kind, text = classify_target(action, target)
+    tokens: List[Dict[str, str]] = []
+    if kind in ("", "generic"):
+        tokens = parse_object_tokens(target)
+        if tokens:
+            kind = "kv"
+        elif not (target or "").strip():
+            tokens = parse_object_tokens(extra)
+            if tokens:
+                kind = "kv"
+    detail = parse_object_tokens(extra) if extra else []
+    if tokens and tokens == detail:
+        detail = []
+    return {
+        "target_kind": kind,
+        "target_text": text,
+        "target_tokens": tokens,
+        "detail_tokens": detail,
+    }
+
+
 def operator_hue(name: str) -> int:
     """操作人名 → 稳定色相（0..359），avatar 圆点用；同名恒同色。"""
     h = 0
@@ -151,7 +273,8 @@ def build_recent_groups(entries: Iterable[Dict], *, window_sec: int = 90,
     合并（宁可多行不错并）。
 
     每组字段：action / operator / count / hue / icon / danger / snapshot /
-    target_kind / targets_shown / targets_more / brief / ts / hm / date。
+    target_kind / targets_shown / targets_more / target_tokens / detail_tokens /
+    brief / ts / hm / date。
     """
     rows: List[Dict] = []
     for e in entries or []:
@@ -199,11 +322,16 @@ def build_recent_groups(entries: Iterable[Dict], *, window_sec: int = 90,
             "_targets": [r["target"]] if r["target"] else [],
             "_tail_epoch": r["epoch"],
             "_old_val": r["old_val"],
+            "_new_val": r["new_val"],           # 组头=最新；合并时不覆盖
         })
 
     out: List[Dict] = []
     for g in groups[:max_groups]:
-        kind, _ = classify_target(g["action"], g["_targets"][0] if g["_targets"] else "")
+        dec = decorate_object(
+            g["action"],
+            g["_targets"][0] if g["_targets"] else "",
+            g.get("_new_val") or "",
+        )
         danger = is_danger_action(g["action"])
         brief = ""
         if danger and g["_old_val"]:
@@ -219,9 +347,12 @@ def build_recent_groups(entries: Iterable[Dict], *, window_sec: int = 90,
             "danger": danger,
             "snapshot": g["snapshot"],
             "snapshot_id": g["snapshot_id"],
-            "target_kind": kind,
+            "target_kind": dec["target_kind"],
             "targets_shown": g["_targets"][:shown_targets],
             "targets_more": max(0, len(g["_targets"]) - shown_targets),
+            "target_tokens": dec["target_tokens"],
+            "detail_tokens": dec["detail_tokens"],
+            "family": family_of(g["action"]),
             "brief": brief,
             "ts": g["ts"],
             "hm": g["hm"],
@@ -246,15 +377,27 @@ def group_days(groups: List[Dict], *, today: str, yesterday: str) -> List[Dict]:
     return out
 
 
-def summarize_actions(actions: Iterable[str]) -> Dict[str, int]:
-    """今日摘要：{total, danger}。"""
+def summarize_actions(actions: Iterable[str]) -> Dict:
+    """今日摘要：{total, danger, families}。
+
+    ``families``＝业务族直方图 [(族名, 次数)]，按 次数降序 → FAMILY_ORDER 序
+    平局；无归属动作（save_settings…）不进桶，故各族之和 ≤ total。
+    消费方（dashboard h2）只取前几个，截断策略留给展示层。
+    """
     total = 0
     danger = 0
+    fam_counts: Dict[str, int] = {}
     for a in actions or []:
         total += 1
         if is_danger_action(a):
             danger += 1
-    return {"total": total, "danger": danger}
+        fam = family_of(a)
+        if fam:
+            fam_counts[fam] = fam_counts.get(fam, 0) + 1
+    rank = {f: i for i, f in enumerate(FAMILY_ORDER)}
+    families = sorted(fam_counts.items(),
+                      key=lambda kv: (-kv[1], rank.get(kv[0], 99)))
+    return {"total": total, "danger": danger, "families": families}
 
 
 def paginate_newest_first(entries: List[Dict], page: int, per_page: int) -> Tuple[List[Dict], int, int, int]:

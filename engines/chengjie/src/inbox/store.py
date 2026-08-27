@@ -447,6 +447,18 @@ _WA_KEY_MERGE_MIG_ID = 900001
 # 结构性无效 WA 占位会话（chat_key='0'，历史 chats 同步坏 jid 产物）清理
 _WA_ZERO_KEY_MIG_ID = 900002
 
+# P0 未读可信化 v2（2026-08-23）：conversations.last_in_ts 存量回填 SQL。
+# 独立成常量供门禁直测；WHERE last_in_ts=0 保「可安全重跑」不变量（重跑只会
+# 对仍为 0 的行重算，绝不冲掉 ingest 推进过的新值）。回填顺带完成存量清账：
+# 「坐席早已读完、手机端残留未读」的老会话在新闸门下自动熄灭。
+_LAST_IN_TS_BACKFILL_SQL = (
+    "UPDATE conversations SET last_in_ts = COALESCE("
+    " (SELECT MAX(m.ts) FROM messages m"
+    "   WHERE m.conversation_id = conversations.conversation_id"
+    "     AND m.direction = 'in'), 0) "
+    "WHERE last_in_ts = 0"
+)
+
 # 对存量 escalations 表补列（新安装已由 DDL 建好，旧库通过 migration 追加）
 _MIGRATIONS = [
     "ALTER TABLE escalations ADD COLUMN assigned_to TEXT NOT NULL DEFAULT ''",
@@ -982,6 +994,39 @@ _MIGRATIONS = [
     #    不改变「客户收到过回复」的事实。
     "ALTER TABLE messages ADD COLUMN deleted_at REAL NOT NULL DEFAULT 0",
     "ALTER TABLE messages ADD COLUMN deleted_by TEXT NOT NULL DEFAULT ''",
+    # P0 未读可信化 v2（2026-08-23）：last_in_ts=该会话最后一条**入站**消息时间。
+    # effective_unread 闸门由 last_ts（含自己出站）改比它——修「坐席已读后自己
+    # 回一句，手机端未读残值被 last_ts 前进重新点亮」的徽标回弹路径。
+    "ALTER TABLE conversations ADD COLUMN last_in_ts REAL NOT NULL DEFAULT 0",
+    _LAST_IN_TS_BACKFILL_SQL,
+    # B67（实施67 P1-8，`_328`/`_337` 实录）：会话级「发→X」出站语言此前只存
+    # 前端 localStorage——服务端自动链（即时应答/主动消息）对用户意图零可见，
+    # 中文原样发给英文客户。落库后所有出站路径读同一事实源。
+    # **独立小表**而非 conversation_settings 加列：那张表「行存在=档位显式
+    # 设置过」的语义被 get_automation_mode_if_set 依赖，塞外键会把会话档位
+    # 从全局默认静默拽到 'review'。
+    # lang：'auto'=显式跟客户语言；具体语种=钉死目标；行不存在=未设置。
+    """CREATE TABLE IF NOT EXISTS conversation_outbound_lang (
+        conversation_id  TEXT PRIMARY KEY,
+        lang             TEXT NOT NULL DEFAULT '',
+        updated_at       REAL NOT NULL
+    )""",
+    # 实施72 P2（2026-08-27）补收时间戳诚实化：1=ts 为合成值（断线补收/历史回填
+    # 按序回推，只保序不保真）。写入方＝messenger thread-history 合并与「拉更早」；
+    # 消费方＝reply_latency SLO 剔除（合成时间的历史消息绝不进「客户在等」口径）、
+    # 前端「约·补收」样式与 AI 新鲜度判定（下阶段）。缺省 0=真实平台时间。
+    "ALTER TABLE messages ADD COLUMN approx_ts INTEGER NOT NULL DEFAULT 0",
+    # 实施72 P3（承实施71 P1-1）失败可解释：投递失败留痕行（status=failed）附拦截/
+    # 错误原因码（如 send_gate:daily_cap / kill_switch:account / needs_login）。此前
+    # 原因只进 WARNING 日志与 ops 告警，气泡上只有「发送失败」四个字——坐席/老板
+    # 只能来问人（2026-08-27 02:12 事故的直接教训）。缺省 ''=旧行/未知。
+    "ALTER TABLE messages ADD COLUMN fail_reason TEXT NOT NULL DEFAULT ''",
+    # 实施74（实施69 P1-1）「需人工」可解释：打标 sidecar JSON
+    # {reason, ts, source}——conv_tags 保持纯字符串数组（向后兼容），标签
+    # 自解释元数据另存本列。写口＝protocol_autoreply.tag_needs_human（系统
+    # 自动打标带原因）；清口＝clear_needs_human/坐席摘标。缺省 ''=无元数据
+    #（人工打的标/历史标 → 前端回落通用提示文案）。
+    "ALTER TABLE conversation_meta ADD COLUMN handoff_meta TEXT NOT NULL DEFAULT ''",
 ]
 
 
@@ -1355,9 +1400,9 @@ class InboxStore:
                 INSERT INTO conversations
                     (conversation_id, platform, account_id, chat_key, contact_id,
                      display_name, language, chat_type, last_text, last_ts, unread,
-                     username, phone, avatar_url, first_seen,
+                     last_in_ts, username, phone, avatar_url, first_seen,
                      created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(conversation_id) DO UPDATE SET
                     -- 昵称优先级覆盖：真实昵称（非空且不等于裸 chat_key）随时更新；
                     -- 但**绝不**用空名/裸号码把已存的真实昵称冲掉——只有当现值本身还是
@@ -1378,6 +1423,14 @@ class InboxStore:
                                      THEN excluded.last_text ELSE conversations.last_text END,
                     last_ts = MAX(excluded.last_ts, conversations.last_ts),
                     unread = excluded.unread,
+                    -- last_in_ts：对端未读数**增长**⇒必有新入站（自己出站绝不会涨
+                    -- 对端未读），用 excluded.last_in_ts（≈excluded.last_ts）近似入站
+                    -- 时刻——目录同步期消息本体未回流也能点亮徽标；消息真实回流时
+                    -- ingest 再用精确 msg.ts 推进（MAX 单调不回退）。
+                    last_in_ts = CASE
+                        WHEN excluded.unread > conversations.unread
+                            THEN MAX(excluded.last_in_ts, conversations.last_in_ts)
+                        ELSE conversations.last_in_ts END,
                     contact_id = CASE WHEN excluded.contact_id != ''
                                       THEN excluded.contact_id ELSE conversations.contact_id END,
                     -- 身份画像：仅在带来非空值时更新（空值不覆盖已采集到的真实身份）
@@ -1397,6 +1450,7 @@ class InboxStore:
                     conv.contact_id, conv.display_name, conv.language,
                     (conv.chat_type or "private"), conv.last_text,
                     float(conv.last_ts or 0), int(conv.unread or 0),
+                    (float(conv.last_ts or 0) if int(conv.unread or 0) > 0 else 0.0),
                     conv.username, conv.phone, conv.avatar_url,
                     (float(conv.first_seen or 0) or now),
                     now, now,
@@ -1443,6 +1497,13 @@ class InboxStore:
                 ),
             )
             inserted = cur.rowcount > 0
+            # P0 未读可信化 v2：入站落库即精确推进 last_in_ts（effective_unread
+            # 新闸门比对它而非 last_ts——自己的出站绝不再复活未读徽标）。
+            if inserted and msg.direction == "in":
+                self._conn.execute(
+                    "UPDATE conversations SET last_in_ts=? "
+                    "WHERE conversation_id=? AND last_in_ts < ?",
+                    (float(msg.ts or 0), msg.conversation_id, float(msg.ts or 0)))
             # 回复即接受：任何**新插入的出站**落库即撤「陌生人消息请求」标记——
             # worker 发送时会自动点官方「接受」按钮（messenger-web clickAcceptRequest），
             # 这里同步撤前端徽章/引导条。WHERE is_request=1 自守卫，非请求会话零成本。
@@ -1492,9 +1553,9 @@ class InboxStore:
                 INSERT INTO conversations
                     (conversation_id, platform, account_id, chat_key, contact_id,
                      display_name, language, chat_type, last_text, last_ts, unread,
-                     username, phone, avatar_url, first_seen,
+                     last_in_ts, username, phone, avatar_url, first_seen,
                      created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(conversation_id) DO UPDATE SET
                     -- 昵称优先级覆盖：真实昵称（非空且不等于裸 chat_key）随时更新；
                     -- 但**绝不**用空名/裸号码把已存的真实昵称冲掉——只有当现值本身还是
@@ -1515,6 +1576,12 @@ class InboxStore:
                                      THEN excluded.last_text ELSE conversations.last_text END,
                     last_ts = MAX(excluded.last_ts, conversations.last_ts),
                     unread = excluded.unread,
+                    -- last_in_ts：与 upsert_conversation 同语义（未读增长⇒新入站近似推进；
+                    -- 精确值随后由本事务内消息循环的 _new_inbound_ts 收口）。
+                    last_in_ts = CASE
+                        WHEN excluded.unread > conversations.unread
+                            THEN MAX(excluded.last_in_ts, conversations.last_in_ts)
+                        ELSE conversations.last_in_ts END,
                     contact_id = CASE WHEN excluded.contact_id != ''
                                       THEN excluded.contact_id ELSE conversations.contact_id END,
                     -- 身份画像：仅在带来非空值时更新（空值不覆盖已采集到的真实身份）
@@ -1534,6 +1601,7 @@ class InboxStore:
                     conv.contact_id, conv.display_name, conv.language,
                     (conv.chat_type or "private"), conv.last_text,
                     float(conv.last_ts or 0), int(conv.unread or 0),
+                    (float(conv.last_ts or 0) if int(conv.unread or 0) > 0 else 0.0),
                     conv.username, conv.phone, conv.avatar_url,
                     (float(conv.first_seen or 0) or now),
                     now, now,
@@ -1581,8 +1649,8 @@ class InboxStore:
                          original_text, translated_text, source_lang, target_lang,
                          media_type, media_ref, ts, ingested_at,
                          reply_to_id, reply_to_text, reply_to_sender, mentions_json,
-                         sender_id, sender_name)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         sender_id, sender_name, approx_ts)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         mid, msg.conversation_id, str(msg.platform_msg_id or ""), msg.direction,
@@ -1592,12 +1660,20 @@ class InboxStore:
                         str(msg.reply_to_id or ""), str(msg.reply_to_text or ""),
                         str(msg.reply_to_sender or ""), str(msg.mentions_json or "[]"),
                         str(msg.sender_id or ""), str(msg.sender_name or ""),
+                        int(getattr(msg, "approx_ts", 0) or 0),
                     ),
                 )
                 if cur.rowcount > 0:
                     inserted += 1
                     if msg.direction == "in":
                         _new_inbound_ts = max(_new_inbound_ts, float(msg.ts or 0))
+            if _new_inbound_ts > 0:
+                # P0 未读可信化 v2：本批新入站的最晚 ts 精确收口 last_in_ts
+                # （conv upsert 的「未读增长近似推进」之上的权威值，同一事务内落定）。
+                self._conn.execute(
+                    "UPDATE conversations SET last_in_ts=? "
+                    "WHERE conversation_id=? AND last_in_ts < ?",
+                    (_new_inbound_ts, conv.conversation_id, _new_inbound_ts))
             self._conn.commit()
         # 归档会话收到「归档之后」的新入站消息 → 自动解档，防客户被静默埋没。
         # 放在 with 块之外：_unarchive_on_inbound 自己取锁，且它与 ingest 无需同一事务
@@ -1763,6 +1839,7 @@ class InboxStore:
             "       v.conversation_id AS cid, "
             "       COALESCE(v.last_ts, 0) AS last_ts, "
             "       COALESCE(v.unread, 0) AS unread, "
+            "       COALESCE(v.last_in_ts, 0) AS last_in_ts, "
             "       COALESCE(v.last_read_ts, 0) AS last_read_ts "
             + from_sql
             + ((" WHERE " + " AND ".join(where)) if where else "") +
@@ -1783,6 +1860,7 @@ class InboxStore:
                 "last_ts": last_ts,
                 "unread": self.effective_unread({
                     "last_ts": last_ts,
+                    "last_in_ts": float(r["last_in_ts"] or 0),
                     "last_read_ts": float(r["last_read_ts"] or 0),
                     "unread": int(r["unread"] or 0),
                 }),
@@ -2228,7 +2306,7 @@ class InboxStore:
 
     def list_conversations(
         self, *, limit: int = 50, platform: str = "", account_id: str = "",
-        before_ts: Optional[float] = None,
+        chat_type: str = "", before_ts: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """会话列表（last_ts 降序）。``before_ts``：游标分页，只取更旧的会话。
 
@@ -2236,6 +2314,10 @@ class InboxStore:
         账号视角按需查库的基础（前端全局列表只保留最近若干条，点开单账号时
         必须能绕过全局截断直接查该账号的全部会话）。索引 idx_conv_platform
         (platform, account_id) 覆盖此 WHERE。
+
+        ``chat_type``：非空按会话类型过滤（如 ``group``）——群脉导播台按平台列
+        「可开演的群会话」正是靠它（P0 群选择器数据源）。chat_type 列上无独立索引，
+        但通常与 ``platform`` 组合使用，platform 过滤后残余行数小，无需加索引。
         """
         limit = max(1, min(500, int(limit or 50)))
         sql = "SELECT * FROM conversations"
@@ -2247,6 +2329,9 @@ class InboxStore:
         if account_id:
             wheres.append("account_id = ?")
             params.append(account_id)
+        if chat_type:
+            wheres.append("chat_type = ?")
+            params.append(chat_type)
         if before_ts is not None and float(before_ts) > 0:
             wheres.append("last_ts < ?")
             params.append(float(before_ts))
@@ -2356,12 +2441,14 @@ class InboxStore:
 
         供平台导航/账号 rail 徽标脱离客户端 top-N 窗口：未读会话若沉在全局
         快照之外，客户端求和会漏红点。SQL ``CASE`` 与 Python
-        ``effective_unread`` 对齐——``unread>0 AND last_ts > last_read_ts``。
+        ``effective_unread`` 对齐（v2）——``unread>0 AND 入站闸门 ts > last_read_ts``，
+        闸门 ts=``last_in_ts``（0 时回落 ``last_ts``，NULLIF+COALESCE 表达）。
         只返回合计 >0 的桶（空/零未读账号省略，调用方按 0 处理）。
         """
         sql = (
             "SELECT platform, account_id, COALESCE(SUM(CASE "
-            "WHEN unread > 0 AND last_ts > COALESCE(last_read_ts, 0) "
+            "WHEN unread > 0 AND COALESCE(NULLIF(last_in_ts, 0), last_ts) "
+            "> COALESCE(last_read_ts, 0) "
             "THEN unread ELSE 0 END), 0) AS n "
             "FROM conversations"
         )
@@ -2405,6 +2492,40 @@ class InboxStore:
                 (conversation_id,),
             ).fetchone()
         return dict(row) if row else None
+
+    def list_group_speakers(
+        self, conversation_id: str, *, limit: int = 80,
+    ) -> List[Dict[str, Any]]:
+        """群会话入站发言人去重名单（供 @提及选人在无直播成员 API 时回落）。
+
+        只看 ``direction='in'`` 且 ``sender_id``/``sender_name`` 至少一个非空；
+        同 ``sender_id``（空则同名）保留最近一条。读挂 → 空列表。
+        """
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            return []
+        cap = max(1, min(int(limit or 80), 200))
+        sql = (
+            "SELECT sender_id, sender_name, MAX(ts) AS last_ts "
+            "FROM messages WHERE conversation_id=? AND direction='in' "
+            "AND (sender_id != '' OR sender_name != '') "
+            "GROUP BY CASE WHEN sender_id != '' THEN sender_id ELSE sender_name END "
+            "ORDER BY last_ts DESC LIMIT ?"
+        )
+        try:
+            with self._lock:
+                rows = self._conn.execute(sql, (cid, cap)).fetchall()
+        except Exception:  # noqa: BLE001
+            logger.debug("[inbox] list_group_speakers 失败", exc_info=True)
+            return []
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            out.append({
+                "sender_id": str(r["sender_id"] or ""),
+                "sender_name": str(r["sender_name"] or ""),
+                "last_ts": float(r["last_ts"] or 0.0),
+            })
+        return out
 
     def set_conversation_mentioned(self, conversation_id: str, flag: bool) -> bool:
         """P4-11B：设/清会话的「@我」未读旗标（入站群消息 @本账号→True，打开会话→False）。
@@ -2492,19 +2613,26 @@ class InboxStore:
             return int(cur.rowcount or 0)
 
     def effective_unread(self, row: Dict[str, Any]) -> int:
-        """由会话行派生「有效未读」：已读水位覆盖到末条 → 0，否则用同步来的 unread。
+        """由会话行派生「有效未读」：已读水位覆盖到最后一条**入站** → 0。
 
-        纯函数（读 row 的 last_ts/last_read_ts/unread），供读路径统一口径。
+        v2（2026-08-23）：闸门时间戳优先用 ``last_in_ts``（最后一条入站），
+        仅在其为 0（无入站消息回流的占位/存量行）时回落 ``last_ts`` 保旧行为。
+        修「坐席已读后自己回一句 → last_ts 前进 → 手机端未读残值被重新点亮」。
+        纯函数（读 row 的 last_in_ts/last_ts/last_read_ts/unread），读路径统一口径，
+        与 ``sum_effective_unread_by_account`` 的 SQL CASE、normalizer
+        ``_effective_unread_from_row`` 三处必须同改。
         """
         try:
             last_ts = float(row.get("last_ts") or 0)
+            last_in = float(row.get("last_in_ts") or 0)
             last_read = float(row.get("last_read_ts") or 0)
             raw = int(row.get("unread") or 0)
         except (TypeError, ValueError):
             return int(row.get("unread") or 0)
         if raw <= 0:
             return 0
-        return raw if last_ts > last_read else 0
+        gate_ts = last_in if last_in > 0 else last_ts
+        return raw if gate_ts > last_read else 0
 
     def update_conversation_identity(
         self,
@@ -2859,10 +2987,12 @@ class InboxStore:
         } for r in rows]
 
     def list_messages(self, conversation_id: str, *, limit: int = 50) -> List[Dict[str, Any]]:
+        # 并列 ts 用 rowid（=入库序）兜底排序，见 list_recent_messages 的说明
         limit = max(1, min(500, int(limit or 50)))
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM messages WHERE conversation_id = ? ORDER BY ts ASC LIMIT ?",
+                "SELECT * FROM messages WHERE conversation_id = ? "
+                "ORDER BY ts ASC, rowid ASC LIMIT ?",
                 (conversation_id, limit),
             ).fetchall()
         return [dict(r) for r in rows]
@@ -2883,6 +3013,27 @@ class InboxStore:
                 (conversation_id,),
             ).fetchone()
         return dict(row) if row else None
+
+    def max_numeric_platform_msg_id(self, conversation_id: str) -> int:
+        """B88：该会话镜像里最大的**纯数字**平台消息 id（无 → 0）。
+
+        Telegram 线程缺口探测用：云端 dialog 顶部 id 大于此值＝停机/重启窗口
+        漏了消息（实时镜像只覆盖在线时段）。只认纯数字形态（MTProto id）；
+        hash 回落键 / wamid 等非数字 id 不参与比较——它们没有单调语义。
+        """
+        if not conversation_id:
+            return 0
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT MAX(CAST(platform_msg_id AS INTEGER)) AS m FROM messages"
+                " WHERE conversation_id = ? AND platform_msg_id != ''"
+                " AND platform_msg_id NOT GLOB '*[^0-9]*'",
+                (conversation_id,),
+            ).fetchone()
+        try:
+            return int(row["m"] or 0) if row else 0
+        except (TypeError, ValueError):
+            return 0
 
     def get_message_direction(
         self, conversation_id: str, platform_msg_id: str,
@@ -3077,6 +3228,56 @@ class InboxStore:
             self._conn.commit()
         return n
 
+    def soft_delete_by_platform_msg_ids(
+        self, platform: str, account_id: str, platform_msg_ids: List[str], *,
+        chat_key: str = "", deleted_by: str = "peer",
+    ) -> int:
+        """B87：按 platform_msg_id 软删（对端手机删消息同步）。返回标记条数。
+
+        Telegram 的 ``UpdateDeleteMessages``（私聊/小群）**只带裸 message id、不带
+        chat id** → 无法先拼出 conversation_id。这里按 (platform, account_id,
+        platform_msg_id) 定位软删；``chat_key`` 非空时进一步限定该会话（频道版
+        ``UpdateDeleteChannelMessages`` 有 channel_id，收窄防误删跨会话的同号 id）。
+        幂等（deleted_at=0 才动），收尾重算受影响会话预览。数据保留（deleted_by
+        标 peer），AI 记忆不受影响——「界面同步删、AI 记得但不主动提」按钧口径。
+        """
+        plat = str(platform or "").lower()
+        aid = str(account_id or "")
+        ids = [str(i) for i in (platform_msg_ids or []) if str(i or "").strip()]
+        if not plat or not ids:
+            return 0
+        now = self._now()
+        by = str(deleted_by or "peer")[:64]
+        like_prefix = f"{plat}:{aid}:{str(chat_key)}" if chat_key else f"{plat}:{aid}:"
+        affected: set = set()
+        n = 0
+        with self._lock:
+            for i in range(0, len(ids), 400):
+                chunk = ids[i:i + 400]
+                ph = ",".join("?" * len(chunk))
+                # 先查将被影响的会话（重算预览用）——限定本账号，绝不跨账号误删
+                rows = self._conn.execute(
+                    f"SELECT DISTINCT conversation_id FROM messages"
+                    f" WHERE deleted_at = 0 AND platform_msg_id IN ({ph})"
+                    f" AND conversation_id LIKE ?",
+                    [*chunk, like_prefix + "%"]).fetchall()
+                cids = [str(r["conversation_id"]) for r in rows]
+                if not cids:
+                    continue
+                affected.update(cids)
+                cph = ",".join("?" * len(cids))
+                cur = self._conn.execute(
+                    f"UPDATE messages SET deleted_at = ?, deleted_by = ?"
+                    f" WHERE deleted_at = 0 AND platform_msg_id IN ({ph})"
+                    f" AND conversation_id IN ({cph})",
+                    [now, by, *chunk, *cids])
+                n += int(cur.rowcount or 0)
+            for cid in affected:
+                self._recompute_conv_preview_locked(cid)
+            if n:
+                self._conn.commit()
+        return n
+
     def restore_messages_local(
         self, conversation_id: str, message_ids: List[str],
     ) -> int:
@@ -3173,6 +3374,55 @@ class InboxStore:
             self._conn.commit()
             return int(cur.rowcount or 0)
 
+    def record_failed_outbound(
+        self, conversation_id: str, text: str, *, ts: float = 0.0,
+        reason: str = "",
+    ) -> str:
+        """B63③（实施64 P1-4，实录 `_320`）：自动投递**终局失败**时在会话消息流留痕。
+
+        写一条 ``direction='out' status='failed'`` 的消息行（platform_msg_id 恒空——
+        平台侧从未存在过这条消息），前端据此渲染「发送失败＋一键重发」，修
+        「自动发送失败后用户内容直接消失」。三条刻意：
+        ① 不动 conversations（last_text/未读只反映真实收发）；
+        ② 不走 ingest_message（那条路径会推进会话状态与回调钩子）；
+        ③ 消费口径契约——凡统计「真的发出去了」的读数（首响 t_out / 回复时延 SLO /
+          群发言台账 / 草稿「已回过」护栏 / 目标「已跟进」）都必须排除
+          status in ('failed','resent')，各处过滤随本方法同批落地。
+        """
+        cid = str(conversation_id or "")
+        body = str(text or "")
+        if not cid or not body.strip():
+            return ""
+        now = float(ts) or time.time()
+        mid = f"{cid}:fail:{uuid.uuid4().hex[:12]}"
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO messages "
+                "(message_id, conversation_id, platform_msg_id, direction,"
+                " text, ts, ingested_at, status, fail_reason) "
+                "VALUES (?, ?, '', 'out', ?, ?, ?, 'failed', ?)",
+                (mid, cid, body, now, time.time(),
+                 str(reason or "")[:200]),
+            )
+            self._conn.commit()
+        return mid
+
+    def mark_message_resent(self, message_id: str) -> bool:
+        """B63③：失败留痕被「一键重发」成功接管后改标 ``resent``。
+
+        只允许 failed→resent 单向（历史仍如实保留那次失败，前端收起重发按钮），
+        绝不触碰回执状态机（sent/delivered/read 走 set_message_status 的单调升级）。
+        """
+        mid = str(message_id or "")
+        if not mid:
+            return False
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE messages SET status='resent' "
+                "WHERE message_id=? AND status='failed'", (mid,))
+            self._conn.commit()
+            return bool(cur.rowcount)
+
     def last_outbound_ts_map(
         self, conversation_ids: List[str],
     ) -> Dict[str, float]:
@@ -3193,12 +3443,59 @@ class InboxStore:
                     f"SELECT conversation_id AS cid, MAX(ts) AS ts"
                     f" FROM messages WHERE conversation_id IN ({ph})"
                     f" AND direction IN ('out','outbound')"
+                    # 投递失败留痕不算「已跟进」（B63③ 消费口径契约）
+                    f" AND status NOT IN ('failed','resent')"
                     f" GROUP BY conversation_id",
                     ids,
                 ).fetchall()
             return {str(r["cid"]): float(r["ts"] or 0.0) for r in rows}
         except Exception:
-            logger.debug("last_outbound_ts_map failed", exc_info=True)
+            return {}
+
+    def last_outbound_read_state_map(
+        self, conversation_ids: List[str],
+    ) -> Dict[str, str]:
+        """批量取每会话**最后一条出站**消息的已读态：``read`` / ``unread`` / ``""``。
+
+        已读/未读分流（P1 2026-08-18）的数据口：只有 Telegram 有已读回执契约
+        （P4-4 ``UpdateReadHistoryOutbox`` → ``mark_outbound_read_upto`` 把出站
+        status 升级 'read'，生产覆盖率实测 82%）——非 telegram 平台一律回 ``""``
+        （未知，调用方按旧退避语义），无出站消息的会话不出现在结果里。
+        消费方（主动触达规划）拿到的会话都沉默 ≥24h，最后一条出站天然够老，
+        无需再做「太新鲜不判」的年龄闸。空入参/异常返回空 map（全未知=旧行为）。
+        """
+        ids = list(dict.fromkeys(
+            str(x).strip() for x in (conversation_ids or []) if str(x).strip()))
+        if not ids:
+            return {}
+        try:
+            ph = ",".join("?" * len(ids))
+            with self._lock:
+                rows = self._conn.execute(
+                    f"SELECT m.conversation_id AS cid, m.status AS st,"
+                    f" c.platform AS platform"
+                    f" FROM messages m"
+                    f" JOIN conversations c"
+                    f"   ON c.conversation_id = m.conversation_id"
+                    f" WHERE m.conversation_id IN ({ph})"
+                    f" AND m.direction IN ('out','outbound')"
+                    f" AND m.ts = (SELECT MAX(ts) FROM messages m2"
+                    f"   WHERE m2.conversation_id = m.conversation_id"
+                    f"   AND m2.direction IN ('out','outbound'))",
+                    ids,
+                ).fetchall()
+            out: Dict[str, str] = {}
+            for r in rows:
+                cid = str(r["cid"])
+                if str(r["platform"] or "") != "telegram":
+                    out[cid] = ""  # 无回执契约的平台：未知
+                elif str(r["st"] or "") == "read":
+                    out[cid] = "read"
+                else:
+                    out[cid] = "unread"
+            return out
+        except Exception:
+            logger.debug("last_outbound_read_state_map failed", exc_info=True)
             return {}
 
     def count_inbound_between(
@@ -3270,6 +3567,13 @@ class InboxStore:
         ``include_deleted``（2026-08-17）：默认 True＝旧行为（业务口径——回复时延 /
         replied-after 护栏等消费方**必须**看到软删行，本地删除不改变事实）；
         UI 线程读路径显式传 False 过滤「仅工作台删除」的消息。
+
+        **并列 ts 必须用 rowid 兜底排序**（实施72 2026-08-27）：Messenger 网页端的
+        时间只到**分钟**，同一分钟的多条消息 ts 完全相同；只按 ts 排序时并列组的
+        次序由 SQLite 自行决定——实测按 ``ts DESC`` 扫索引会把并列组倒着给出，
+        `reversed()` 之后聊天记录**组内是反的**（「你回复的不对吧 / 哎呀，这次换你
+        住进来啦 / 那我得好好招待你才行呢」被读成倒序）。rowid＝入库序，而历史与
+        实时两条链都按时间顺序落库，所以它是并列组的正确次序。
         """
         limit = max(1, min(500, int(limit or 50)))
         del_sql = "" if include_deleted else " AND deleted_at = 0"
@@ -3277,13 +3581,13 @@ class InboxStore:
             if before_ts is not None:
                 rows = self._conn.execute(
                     f"SELECT * FROM messages WHERE conversation_id = ?{del_sql} AND ts < ? "
-                    "ORDER BY ts DESC LIMIT ?",
+                    "ORDER BY ts DESC, rowid DESC LIMIT ?",
                     (conversation_id, float(before_ts), limit),
                 ).fetchall()
             else:
                 rows = self._conn.execute(
                     f"SELECT * FROM messages WHERE conversation_id = ?{del_sql} "
-                    "ORDER BY ts DESC LIMIT ?",
+                    "ORDER BY ts DESC, rowid DESC LIMIT ?",
                     (conversation_id, limit),
                 ).fetchall()
         return [dict(r) for r in reversed(rows)]
@@ -3358,6 +3662,8 @@ class InboxStore:
             "SELECT f.conversation_id AS cid, f.t_in AS t_in, "
             "  (SELECT MIN(m.ts) FROM messages m "
             "   WHERE m.conversation_id=f.conversation_id AND m.direction='out' "
+            # 投递失败留痕不是首响（B63③ 消费口径契约：客户什么也没收到）
+            "   AND m.status NOT IN ('failed','resent') "
             "   AND m.ts>=f.t_in) AS t_out "
             "FROM firstin f WHERE f.t_in >= ?"
         )
@@ -3520,6 +3826,37 @@ class InboxStore:
                 WHERE {where}
                 """,
                 tuple([new_text, new_text] + params),
+            )
+            self._conn.commit()
+            return int(cur.rowcount or 0) > 0
+
+    def correct_approx_ts(self, message_id: str, ts: float) -> bool:
+        """把**合成时间戳**行校正为真实时间并清 approx 标（实施72 P5 自愈校正）。
+
+        场景：Messenger 网页 DOM 拿不到绝对时间，早期回填一律按数组序合成 ts
+        （断线补收的消息全体盖「导入时刻」）；worker 后来学会从 aria 文本解析真实
+        epoch，于是同一条消息**下一次重推**就带着真值回来了——但合并去重会把它当
+        重复整条丢弃，错时间就永久留在库里。本方法让那次重推顺手把旧行修对。
+
+        安全边界（都写进 SQL，不靠调用方自律）：
+        - ``COALESCE(approx_ts,0)=1``：**只动自己标过「时间是猜的」的行**。真实
+          时间行（实时链/其他平台/已校正过的行）一律不碰——把真值改成另一个
+          「真值」是我们无权做的事，且会让校正不幂等。
+        - ``ts`` 必须为正；非法值直接拒（不写 0 破坏排序）。
+        返回是否真的改了行（False＝没命中或该行本就是真实时间，属正常路径）。
+        """
+        mid = str(message_id or "").strip()
+        try:
+            real_ts = float(ts or 0)
+        except (TypeError, ValueError):
+            return False
+        if not mid or real_ts <= 0:
+            return False
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE messages SET ts = ?, approx_ts = 0 "
+                "WHERE message_id = ? AND COALESCE(approx_ts, 0) = 1",
+                (real_ts, mid),
             )
             self._conn.commit()
             return int(cur.rowcount or 0) > 0
@@ -4024,6 +4361,50 @@ class InboxStore:
                                  exc_info=True)
             self._conn.commit()
 
+    # ── 会话级出站语言（B67 实施67：「发→X」的服务端事实源）────────────
+
+    def get_outbound_lang_if_set(self, conversation_id: str) -> str:
+        """会话级「发→X」显式设置。''=未设置；'auto'=跟客户语言；其余=语种码。"""
+        if not conversation_id:
+            return ""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT lang FROM conversation_outbound_lang "
+                "WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+        if not row:
+            return ""
+        return str(row["lang"] or "").strip().lower()
+
+    def set_outbound_lang(self, conversation_id: str, lang: str) -> None:
+        """写会话级出站语言（''=清除设置，删行）。独立小表，绝不碰
+        conversation_settings 的「行存在=档位显式设置」语义。"""
+        if not conversation_id:
+            return
+        lv = str(lang or "").strip().lower()[:16]
+        now = self._now()
+        with self._lock:
+            if not lv:
+                self._conn.execute(
+                    "DELETE FROM conversation_outbound_lang "
+                    "WHERE conversation_id = ?",
+                    (conversation_id,),
+                )
+            else:
+                self._conn.execute(
+                    """
+                    INSERT INTO conversation_outbound_lang
+                        (conversation_id, lang, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(conversation_id) DO UPDATE SET
+                        lang = excluded.lang,
+                        updated_at = excluded.updated_at
+                    """,
+                    (conversation_id, lv, now),
+                )
+            self._conn.commit()
+
     def list_automation_mode_log(
         self, conversation_id: str, *, limit: int = 20,
     ) -> List[Dict[str, Any]]:
@@ -4194,6 +4575,36 @@ class InboxStore:
             self._conn.commit()
         return int(cur.rowcount or 0)
 
+    def cancel_drafts_for_account(
+        self, platform: str, account_id: str, *,
+        decided_by: str = "account_removed",
+    ) -> int:
+        """账号删除/清退时作废其**全部**待处理草稿（pending/enriching，含 L1）。
+
+        2026-08-27 实锤：Calixa 账号 8/24 已死、8/27 被移除，其一条 L1 待审稿
+        却挂了 10 天——账号终局后草稿既不可发（审批必撞发送闸）也无人清，
+        白占积压看板与坐席注意力。与 ``cancel_pending_l2_drafts`` 的差异：
+        那是「会话降出全自动」场景只清 L2；这里是账号终局，L1 一并清。
+        返回取消条数。
+        """
+        plat = str(platform or "").strip().lower()
+        acct = str(account_id or "").strip()
+        if not plat or not acct:
+            return 0
+        now = self._now()
+        with self._lock:
+            cur = self._conn.execute(
+                """
+                UPDATE reply_drafts
+                   SET status='cancelled', decided_by=?, decided_at=?, updated_at=?
+                 WHERE platform=? AND account_id=?
+                   AND status IN ('pending', 'enriching')
+                """,
+                (str(decided_by or "account_removed"), now, now, plat, acct),
+            )
+            self._conn.commit()
+        return int(cur.rowcount or 0)
+
     def bulk_set_automation_mode(
         self, from_mode: str, to_mode: str, *, source: str = "bulk",
     ) -> List[str]:
@@ -4238,6 +4649,22 @@ class InboxStore:
                 "SELECT conversation_id, automation_mode FROM conversation_settings"
             ).fetchall()
         return {str(r["conversation_id"]): str(r["automation_mode"]) for r in rows}
+
+    def list_automation_mode_rows(self) -> List[Dict[str, Any]]:
+        """全部显式档位行（含写入来源）——「一键全自动」存量对齐的判据读口
+        （P1 2026-08-22）：只有 source 能区分「系统 bootstrap 固化的档」与
+        「坐席显式设置/接管/守卫降档」，后者绝不被批量覆盖。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT conversation_id, automation_mode, source, updated_at "
+                "FROM conversation_settings"
+            ).fetchall()
+        return [{
+            "conversation_id": str(r["conversation_id"]),
+            "automation_mode": str(r["automation_mode"] or ""),
+            "source": str(r["source"] or ""),
+            "updated_at": float(r["updated_at"] or 0),
+        } for r in rows]
 
     # ── 分析落库（Phase C 用，A 先建口）────────────────────────
 
@@ -4400,6 +4827,27 @@ class InboxStore:
                 "decided_by=?, decided_at=?, updated_at=? WHERE draft_id=? "
                 f"AND status IN ({placeholders})",
                 (status, final_text, final_text, decided_by, now, now, draft_id, *allowed),
+            )
+            self._conn.commit()
+        return int(cur.rowcount or 0) > 0
+
+    def mark_draft_sent(self, draft_id: str, *, ts: float = 0.0) -> bool:
+        """B41（2026-08-22）：投递成功后补写 ``sent_at``（仅从 0 写一次，CAS 语义）。
+
+        供 AutosendWorker 自动/人工两条投递链在**真正送达平台后**调用——此前
+        inbox 草稿的 sent_at 恒为 0（价值周报的「已发送」计数漏掉整条 inbox 链），
+        也没有任何跨重启的「这稿已经出过门」证据。WHERE sent_at=0 保证复活行
+        （upsert 重置 sent_at）之外不会被重复覆盖时间戳。
+        """
+        did = str(draft_id or "").strip()
+        if not did:
+            return False
+        now = float(ts) if ts > 0 else self._now()
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE reply_drafts SET sent_at=?, updated_at=? "
+                "WHERE draft_id=? AND sent_at=0",
+                (now, now, did),
             )
             self._conn.commit()
         return int(cur.rowcount or 0) > 0
@@ -4813,6 +5261,8 @@ class InboxStore:
         返回形状与 ``GroupShowStore.performance_ledger`` 一致，可直接喂给共现矩阵。
         """
         clauses = ["m.direction='out'", "c.chat_key != ''", "c.account_id != ''",
+                   # 投递失败留痕平台从未看见，不进暴露度台账（B63③ 消费口径契约）
+                   "m.status NOT IN ('failed','resent')",
                    "c.chat_type NOT IN ('private', '')"]
         params: List[Any] = []
         if since_ts and since_ts > 0:
@@ -4860,6 +5310,8 @@ class InboxStore:
         让运营觉得闸门在乱拦（进而把它关掉）。
         """
         clauses = ["m.direction='out'", "c.chat_key != ''", "c.account_id != ''",
+                   # 同上：失败留痕不算「在群里冒过头」（B63③ 消费口径契约）
+                   "m.status NOT IN ('failed','resent')",
                    "c.chat_type NOT IN ('private', '')"]
         params: List[Any] = []
         if since_ts and since_ts > 0:
@@ -5914,6 +6366,8 @@ class InboxStore:
                     rep = self._conn.execute(
                         "SELECT text FROM messages WHERE conversation_id=? "
                         "AND direction='out' AND ts>=? AND text!='' "
+                        # 失败留痕不是「人真正发出的改稿」（B63③ 消费口径契约）
+                        "AND status NOT IN ('failed','resent') "
                         "ORDER BY ts ASC LIMIT 1",
                         (cid, ats - 1),
                     ).fetchone()
@@ -7648,6 +8102,53 @@ class InboxStore:
         except Exception:
             return []
 
+    def set_handoff_meta(self, conversation_id: str,
+                         meta: Optional[Dict[str, Any]]) -> bool:
+        """实施74（实施69 P1-1）：写「需人工」打标元数据（None/空 dict = 清除）。
+
+        与 conv_tags 分离存储——标签数组语义不动，元数据 sidecar 自解释
+        （{reason, ts, source}）。行不存在则插入（与 set_conv_tags 同语义）。
+        """
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            return False
+        try:
+            payload = json.dumps(meta, ensure_ascii=False) if meta else ""
+        except Exception:
+            payload = ""
+        now = self._now()
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO conversation_meta (conversation_id, handoff_meta, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(conversation_id) DO UPDATE SET
+                    handoff_meta = excluded.handoff_meta,
+                    updated_at   = excluded.updated_at
+                """,
+                (cid, payload, now),
+            )
+            self._conn.commit()
+        return True
+
+    def get_handoff_meta(self, conversation_id: str) -> Dict[str, Any]:
+        """读「需人工」打标元数据；无/脏数据 → 空 dict。"""
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            return {}
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT handoff_meta FROM conversation_meta WHERE conversation_id = ?",
+                (cid,),
+            ).fetchone()
+        if row is None:
+            return {}
+        try:
+            got = json.loads(row["handoff_meta"] or "{}")
+            return got if isinstance(got, dict) else {}
+        except Exception:
+            return {}
+
     def archived_conversation_ids(self) -> List[str]:
         """全部已归档会话 id（驾驶舱等待队列的排除集；走 idx_conv_meta_archived）。"""
         with self._lock:
@@ -7710,6 +8211,44 @@ class InboxStore:
             )
             self._conn.commit()
         return True
+
+    def remove_tag_from_all_conversations(self, tag: str) -> int:
+        """把某标签从**所有**会话上摘除（含已归档），返回实际改动的会话数。
+
+        场景＝标签库治理闭环（2026-08-23）：库删除刻意不动已打标签（route 注释
+        钉死该语义），于是「123/333」这类测试标签永远挂在筛选条上（strip 按在用
+        标签生成）——此前系统里根本没有全量摘除入口。LIKE 预筛 + Python json
+        精确复核（防「需人工」命中「不需人工确认」子串假阳性），与
+        ``list_tagged_conversations`` 同一防线。
+        """
+        t = str(tag or "").strip()
+        if not t:
+            return 0
+        now = self._now()
+        changed = 0
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT conversation_id, conv_tags FROM conversation_meta "
+                "WHERE conv_tags LIKE ?", (f"%{t}%",),
+            ).fetchall()
+            for r in rows:
+                try:
+                    tags = json.loads(r["conv_tags"] or "[]")
+                except Exception:
+                    continue
+                if not isinstance(tags, list) or t not in tags:
+                    continue
+                new_tags = [x for x in tags if x != t]
+                self._conn.execute(
+                    "UPDATE conversation_meta SET conv_tags=?, updated_at=? "
+                    "WHERE conversation_id=?",
+                    (json.dumps(new_tags, ensure_ascii=False), now,
+                     r["conversation_id"]),
+                )
+                changed += 1
+            if changed:
+                self._conn.commit()
+        return changed
 
     def set_manual_mood(
         self, conversation_id: str, mood: str, *, by: str = "",
@@ -8027,7 +8566,8 @@ class InboxStore:
         placeholders = ",".join("?" * len(conversation_ids))
         with self._lock:
             rows = self._conn.execute(
-                f"SELECT conversation_id, conv_tags, archived, snooze_until, pinned_at"
+                f"SELECT conversation_id, conv_tags, archived, snooze_until, pinned_at,"
+                f" handoff_meta"
                 f" FROM conversation_meta"
                 f" WHERE conversation_id IN ({placeholders})",
                 conversation_ids,
@@ -8038,11 +8578,19 @@ class InboxStore:
                 tags = json.loads(r["conv_tags"] or "[]")
             except Exception:
                 tags = []
+            # 实施74（实施69 P1-1）：「需人工」自解释元数据随行下发（无=空 dict）
+            try:
+                hmeta = json.loads(r["handoff_meta"] or "{}")
+                if not isinstance(hmeta, dict):
+                    hmeta = {}
+            except Exception:
+                hmeta = {}
             result[r["conversation_id"]] = {
                 "tags": tags,
                 "archived": bool(r["archived"]),
                 "snooze_until": float(r["snooze_until"] or 0),
                 "pinned_at": float(r["pinned_at"] or 0),
+                "handoff_meta": hmeta,
             }
         return result
 

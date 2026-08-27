@@ -185,3 +185,18 @@ def resolve_contained_path(root: str, candidate: str) -> Optional[str]:
         return cand_r
     except Exception:
         return None
+
+
+def resolve_contained_path_any(roots, candidate: str) -> Optional[str]:
+    """多白名单根版容纳守卫：落在**任一** root 内即放行（返回规范化路径）。
+
+    协议媒体读取是双根的（``protocol_bridge.protocol_media_roots``：数据根主根
+    + 旧引擎树根兜底）；单根守卫会把「解析器在旧根命中的文件」当穿越拒掉——
+    症状是 404/400 而文件明明在，比「找不到」更难查。守卫语义本身不放宽：
+    每个根仍走同一条 realpath commonpath 检查。
+    """
+    for r in (roots or ()):
+        hit = resolve_contained_path(str(r), candidate)
+        if hit:
+            return hit
+    return None

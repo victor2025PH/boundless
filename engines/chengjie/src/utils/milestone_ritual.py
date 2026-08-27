@@ -288,15 +288,20 @@ def plan_milestone_rituals(
             hour, _day_key, _offset = schedule_clock(clock, now)
             if hour != int(greet_hour):
                 continue  # 对方那边还没到（或已过）节点问候整点
-            # 节日/生日/年份一律按**用户钟下的今天**算
-            ukey = user_day_key(clock, now)
-            month_day = user_month_day(clock, now)
+            # 节日/生日/年份按**用户钟下的今天**算——但与 schedule_clock 同一
+            # 信任纪律（2026-08-19 事故同根收口）：只有 replace（显式信号）才
+            # 换日期基准；narrow 裸行为推断错一个时区就把生日/节日提前或推后
+            # 一天，宁按服务器日历。
+            _date_clock = clock if str(
+                getattr(clock, "trust", "") or "") == "replace" else None
+            ukey = user_day_key(_date_clock, now)
+            month_day = user_month_day(_date_clock, now)
             try:
                 year = int(ukey[:4])
             except (TypeError, ValueError):
                 year = lt.tm_year
-            if clock is not None:
-                # 无时钟时刻意不走新路径：仍调 is_birthday_today（服务器钟）＝旧行为
+            if _date_clock is not None:
+                # 无（可信）时钟时刻意不走新路径：仍调 is_birthday_today（服务器钟）＝旧行为
                 try:
                     today_md = (int(month_day[:2]), int(month_day[3:5]))
                 except (TypeError, ValueError):

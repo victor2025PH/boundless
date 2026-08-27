@@ -48,8 +48,10 @@ def test_extra_lang_placeholders_match_zh_and_nonempty():
 
 
 def test_merged_views_override_and_fallback_for_every_lang():
+    from src.web.i18n_packs import EXTRA_LANG_BASE
     _zh, _en, extras = collect_all()
     en_view = get_translations("en")
+    zh_view = get_translations("zh")
     for lg in EXTRA_LANGS:
         view = get_translations(lg)
         ov = extras.get(lg, {})
@@ -57,10 +59,14 @@ def test_merged_views_override_and_fallback_for_every_lang():
         # 覆盖键取 override
         for k in list(ov)[:8]:
             assert view.get(k) == ov[k], f"{lg} 覆盖未生效: {k}"
-        # 未覆盖键回落英文（拿一个必然未覆盖的长尾键验证）
-        probe = "inbox.xl.ocr_no_text"
-        assert probe not in ov
-        assert view.get(probe) == en_view.get(probe) and view.get(probe) != probe
+        # 未覆盖键回落**底语言**（EXTRA_LANG_BASE 表定：默认 en，zh_hant→zh）。
+        # 全覆盖语种（zh_hant regen 后）可能一个缺键都没有——跳过回落探针。
+        base_view = zh_view if EXTRA_LANG_BASE.get(lg) == "zh" else en_view
+        probe = next((k for k in zh_view if k not in ov), None)
+        if probe is not None:
+            assert view.get(probe) == base_view.get(probe), (
+                f"{lg} 缺键未按底语言回落: {probe}")
+            assert view.get(probe) != probe, f"{lg} 缺键漏成裸键名: {probe}"
 
 
 def test_th_id_spot_keys_translated():
@@ -89,3 +95,27 @@ def test_ui_langs_single_source_consistency():
     # 每个 UI 语言 get_translations 可用且非空
     for lg in UI_LANGS:
         assert get_translations(lg), f"get_translations({lg!r}) 为空"
+
+
+def test_login_backfills_extra_lang_cookie(client, config_dir):
+    """登录回填 ui_lang 必须消费 UI_LANGS 全量（P0 修复回归钉，2026-08-27）。
+
+    此前 auth_user_routes 硬编码 ``("zh","en")``：set_lang 落库五语、登录回填只认
+    两语的不对称——vi/th/id 坐席每次登录语言偏好静默丢失，回到 cookie/默认。
+    """
+    from src.utils.web_user_store import ROLE_MASTER, WebUserStore
+
+    store = WebUserStore(config_dir / "web_users.db")
+    if store.user_count() == 0:
+        store.create_user("admin", "test-token-123", ROLE_MASTER)
+    for lg in EXTRA_LANGS:
+        assert store.set_lang("admin", lg) is True, f"set_lang({lg}) 落库失败"
+        r = client.post(
+            "/login",
+            data={"username": "admin", "password": "test-token-123"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303, f"登录失败 ({lg}): {r.status_code}"
+        assert r.cookies.get("ui_lang") == lg, (
+            f"登录未回填 {lg} 偏好（得到 {r.cookies.get('ui_lang')!r}）")
+        client.get("/logout")

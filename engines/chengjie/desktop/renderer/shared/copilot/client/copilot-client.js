@@ -78,11 +78,19 @@
        403+code=csrf 且未带 Bearer → 补种 cookie 后重试一次（中间件拒绝发生在业务
        逻辑之前，服务端零副作用，安全可重放）；网络层异常不再向上抛，统一 status:0。 */
     async _post(url, body, _retried) {
+      return this._writeJson("POST", url, body, _retried);
+    }
+    /* PUT 通道（P1 2026-08-18：cp-kb 团队话术编辑走 admin 既有 PUT /api/templates/{key}）
+       ——与 _post 完全同一套 CSRF/归一化/重试语义，仅 method 不同。 */
+    async _put(url, body, _retried) {
+      return this._writeJson("PUT", url, body, _retried);
+    }
+    async _writeJson(method, url, body, _retried) {
       if (!_authToken && !_readCsrfCookie()) await _seedCsrfCookie();
       let r;
       try {
         r = await fetch(url, {
-          method: "POST",
+          method: method,
           headers: _writeHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify(body || {}),
         });
@@ -98,13 +106,102 @@
       }
       if (r.status === 403 && d && d.code === "csrf" && !_retried && !_authToken) {
         const seeded = await _seedCsrfCookie();
-        if (seeded) return this._post(url, body, true);
+        if (seeded) return this._writeJson(method, url, body, true);
       }
       const out = (d && typeof d === "object") ? d : {};
       if (out.ok === undefined) out.ok = false;
       if (out.status === undefined) out.status = r.status;
       if (!out.error) out.error = String(out.detail || r.statusText || ("HTTP " + r.status));
       return out;
+    }
+    /* multipart 写通道（P1 导入上传用）：与 _post 同 CSRF 语义；
+       不设 Content-Type（浏览器自带 boundary）。 */
+    async _postForm(url, formData, _retried) {
+      if (!_authToken && !_readCsrfCookie()) await _seedCsrfCookie();
+      let r;
+      try {
+        r = await fetch(url, { method: "POST", headers: _writeHeaders({}), body: formData });
+      } catch (e) {
+        return { ok: false, status: 0, code: "network",
+                 error: String((e && e.message) || e || "network error") };
+      }
+      let d = null;
+      try { d = await r.json(); } catch (_e) { d = null; }
+      if (r.ok) {
+        if (d === null) return { ok: false, status: r.status, code: "badjson", error: "invalid JSON response" };
+        return d;
+      }
+      if (r.status === 403 && d && d.code === "csrf" && !_retried && !_authToken) {
+        const seeded = await _seedCsrfCookie();
+        if (seeded) return this._postForm(url, formData, true);
+      }
+      const out = (d && typeof d === "object") ? d : {};
+      if (out.ok === undefined) out.ok = false;
+      if (out.status === undefined) out.status = r.status;
+      if (!out.error) out.error = String(out.detail || r.statusText || ("HTTP " + r.status));
+      return out;
+    }
+    /* 跨平台档案（cp-origin，2026-08-18）：ctx 缺显式三元组时从 conversationId
+       （platform:account:chat_key，chat_key 可含冒号）拆解兜底。 */
+    _originParams({ conversationId, platform, accountId, chatKey }) {
+      if (platform && chatKey) {
+        return { platform: platform, accountId: accountId || "default", chatKey: chatKey };
+      }
+      const s = String(conversationId || "");
+      const i = s.indexOf(":"); const j = i >= 0 ? s.indexOf(":", i + 1) : -1;
+      if (i < 0 || j < 0) return null;
+      return { platform: s.slice(0, i), accountId: s.slice(i + 1, j) || "default", chatKey: s.slice(j + 1) };
+    }
+    async getOrigin(ctx) {
+      const p = this._originParams(ctx || {});
+      if (!p) return { ok: false, error: "missing conversation context" };
+      return this._get(
+        `/api/workspace/origin?platform=${encodeURIComponent(p.platform)}` +
+        `&account_id=${encodeURIComponent(p.accountId)}&chat_key=${encodeURIComponent(p.chatKey)}`);
+    }
+    async saveOrigin(ctx) {
+      const p = this._originParams(ctx || {});
+      if (!p) return { ok: false, error: "missing conversation context" };
+      return this._post(`/api/workspace/origin`, {
+        platform: p.platform, account_id: p.accountId, chat_key: p.chatKey,
+        profile: (ctx && ctx.profile) || {}, facts: (ctx && ctx.facts) || [],
+      });
+    }
+    /* P1 聊天记录导入：解析（multipart 预览，不落库）/ 确认写入 / 整批撤销 */
+    async importOriginParse(ctx) {
+      const p = this._originParams(ctx || {});
+      if (!p) return { ok: false, error: "missing conversation context" };
+      if (!ctx || !ctx.file) return { ok: false, error: "missing file" };
+      const fd = new FormData();
+      fd.append("file", ctx.file, ctx.file.name || "chat.txt");
+      fd.append("platform", p.platform);
+      fd.append("account_id", p.accountId);
+      fd.append("chat_key", p.chatKey);
+      fd.append("source_channel", ctx.sourceChannel || "");
+      fd.append("source_label", ctx.sourceLabel || "");
+      fd.append("customer_sender", ctx.customerSender || "");
+      return this._postForm(`/api/workspace/origin/import/parse`, fd);
+    }
+    async importOriginConfirm(ctx) {
+      const p = this._originParams(ctx || {});
+      if (!p) return { ok: false, error: "missing conversation context" };
+      return this._post(`/api/workspace/origin/import/confirm`, {
+        platform: p.platform, account_id: p.accountId, chat_key: p.chatKey,
+        source_channel: (ctx && ctx.sourceChannel) || "",
+        source_label: (ctx && ctx.sourceLabel) || "",
+        file_name: (ctx && ctx.fileName) || "",
+        file_sha256: (ctx && ctx.fileSha256) || "",
+        msg_count: (ctx && ctx.msgCount) || 0,
+        date_from: (ctx && ctx.dateFrom) || "",
+        date_to: (ctx && ctx.dateTo) || "",
+        topics: (ctx && ctx.topics) || [],
+        note: (ctx && ctx.note) || "",
+        facts: (ctx && ctx.facts) || [],
+      });
+    }
+    async importOriginRevoke({ batchId }) {
+      if (!batchId) return { ok: false, error: "missing batchId" };
+      return this._post(`/api/workspace/origin/import/revoke`, { batch_id: batchId });
     }
     async getRelStage({ conversationId: cid }) {
       if (!cid) return { ok: false, error: "missing conversationId" };
@@ -167,13 +264,28 @@
     }
     // ── 知识库 / 快捷回复（P1-4：收编桌面原生 aside 的 kb/tpl 卡进统一 App；
     //    web 原生右栏走 composer 的 / 指令面板与 KB 自动推荐浮层，不在右栏重复）──
-    async kbSearch({ q, platform, intent, limit }) {
+    async kbSearch({ q, platform, intent, limit, lang }) {
+      // lang（V0 2026-08-18）：会话客户语言——外语会话的命中答案优先取已入库译稿
       return this._get(`/api/unified-inbox/kb-search?q=${encodeURIComponent(q || "")}` +
         `&platform=${encodeURIComponent(platform || "")}&intent=${encodeURIComponent(intent || "")}` +
-        `&limit=${encodeURIComponent(limit || 6)}`);
+        `&limit=${encodeURIComponent(limit || 6)}&lang=${encodeURIComponent(lang || "")}`);
     }
     async replyTemplates() {
       return this._get(`/api/unified-inbox/templates`);
+    }
+    // ── P1（2026-08-18）cp-kb 编辑闭环 ──
+    // 个人常用语增删改（服务端 KV，坐席私有）；团队话术读改走 admin 既有端点
+    // （PUT 自带快照/审计/热失效，绝不另造写入口）。组件按方法存在性特性探测，
+    // 旧适配器（桌面原生 renderer 客户端等）缺方法 → 编辑入口自动隐藏。
+    async quickReplyMutate({ action, text, id }) {
+      return this._post(`/api/unified-inbox/quick-replies`,
+        { action: action || "", text: text || "", id: id || "" });
+    }
+    async teamTemplates() {
+      return this._get(`/api/templates`);
+    }
+    async teamTemplateUpdate({ key, value }) {
+      return this._put(`/api/templates/${encodeURIComponent(key)}`, { value: value });
     }
     async getChainExecutions({ conversationId: cid, limit }) {
       if (!cid) return { ok: false, error: "missing conversationId" };
@@ -411,6 +523,46 @@
     async xlateDocumentFile(body) {
       return this._post(`/api/unified-inbox/translate-document-file`, body || {});
     }
+    // —— AI 生成图片（工具箱 cp-image，2026-08-21）：坐席手动出图 → VLM 后验 →
+    //    复用既有 send-media 发送 / 存入相册。generate 是重操作（子进程打 ComfyUI），
+    //    组件侧自管 busy/超时。——
+    async imageConfig() { return this._get(`/api/image/config`); }
+    async imageGenerate(body) { return this._post(`/api/image/generate`, body || {}); }
+    async imageSaveAlbum(body) { return this._post(`/api/image/save-album`, body || {}); }
+    // —— P1（2026-08-22）：异步任务三件套 + 相册优先 + 发送回写账本。
+    //    组件按 config.jobs_api/album_pick 特性探测——旧后端缺方法/404 自动退回同步链。
+    async imageJobCreate(body) { return this._post(`/api/image/jobs`, body || {}); }
+    async imageJobStatus(jobId) { return this._get(`/api/image/jobs/${encodeURIComponent(jobId)}`); }
+    async imageJobCancel(jobId) { return this._post(`/api/image/jobs/${encodeURIComponent(jobId)}/cancel`, {}); }
+    async imageAlbumStock(personaId, scene) {
+      const q = new URLSearchParams({ persona_id: personaId || "", scene: scene || "" });
+      return this._get(`/api/image/album-stock?${q.toString()}`);
+    }
+    async imageMarkSent(body) { return this._post(`/api/image/mark-sent`, body || {}); }
+    async imageSceneHints(personaId) {
+      const q = new URLSearchParams({ persona_id: personaId || "" });
+      return this._get(`/api/image/scene-hints?${q.toString()}`);
+    }
+    /* 发送生成图到当前会话：**不新造发送链**——取生成预览 blob 走既有 send-media
+       （幂等/未送达回执/接管全复用）。blob 由组件 fetch(preview_url) 得到。 */
+    async sendMedia({ platform, accountId, chatKey, blob, filename, caption, clientMsgId }) {
+      const fd = new FormData();
+      fd.append("file", blob, filename || "gen.png");
+      fd.append("platform", platform || "");
+      fd.append("account_id", accountId || "default");
+      fd.append("chat_key", chatKey || "");
+      fd.append("caption", caption || "");
+      if (clientMsgId) fd.append("client_msg_id", clientMsgId);
+      return this._postForm(`/api/unified-inbox/send-media`, fd);
+    }
+    // —— 智能养号（工具箱 cp-nurture，2026-08-21）：状态总览（复用 fleet-health）+
+    //    用户自配每号养护方案（写 ops.nurture overlay）。——
+    async nurtureStatus() { return this._get(`/api/nurture/status`); }
+    async nurtureConfig() { return this._get(`/api/nurture/config`); }
+    async nurtureSave(body) { return this._post(`/api/nurture/config`, body || {}); }
+    async nurtureEngine(body) { return this._post(`/api/nurture/engine`, body || {}); }
+    async nurtureShadow(limit) { return this._get(`/api/nurture/shadow?limit=${encodeURIComponent(limit || 50)}`); }
+    async nurtureProbe(body) { return this._post(`/api/nurture/probe`, body || {}); }
   }
 
   // —— 桌面适配器:经 window.shell IPC ——
@@ -682,6 +834,24 @@
       const s = this._shell();
       return s.xlateDocumentFile ? s.xlateDocumentFile(body || {}) : { ok: false, error: "shell.xlateDocumentFile 未暴露" };
     }
+    // —— AI 生成图片 / 智能养号（cp-image / cp-nurture）：P0 仅网页原生右栏（cookie 态
+    //    WebCopilotClient）；桌面 IPC 未桥 → 软失败（组件按方法存在性/返回 ok 优雅降级）——
+    async imageConfig() { const s = this._shell(); return s.imageConfig ? s.imageConfig() : { ok: false, error: "shell.imageConfig 未暴露" }; }
+    async imageGenerate(body) { const s = this._shell(); return s.imageGenerate ? s.imageGenerate(body || {}) : { ok: false, error: "shell.imageGenerate 未暴露" }; }
+    async imageSaveAlbum(body) { const s = this._shell(); return s.imageSaveAlbum ? s.imageSaveAlbum(body || {}) : { ok: false, error: "shell.imageSaveAlbum 未暴露" }; }
+    async imageJobCreate(body) { const s = this._shell(); return s.imageJobCreate ? s.imageJobCreate(body || {}) : { ok: false, error: "shell.imageJobCreate 未暴露" }; }
+    async imageJobStatus(jobId) { const s = this._shell(); return s.imageJobStatus ? s.imageJobStatus(jobId) : { ok: false, error: "shell.imageJobStatus 未暴露" }; }
+    async imageJobCancel(jobId) { const s = this._shell(); return s.imageJobCancel ? s.imageJobCancel(jobId) : { ok: false, error: "shell.imageJobCancel 未暴露" }; }
+    async imageAlbumStock(personaId, scene) { const s = this._shell(); return s.imageAlbumStock ? s.imageAlbumStock(personaId, scene) : { ok: false, error: "shell.imageAlbumStock 未暴露" }; }
+    async imageMarkSent(body) { const s = this._shell(); return s.imageMarkSent ? s.imageMarkSent(body || {}) : { ok: false, error: "shell.imageMarkSent 未暴露" }; }
+    async imageSceneHints(personaId) { const s = this._shell(); return s.imageSceneHints ? s.imageSceneHints(personaId) : { ok: false, error: "shell.imageSceneHints 未暴露" }; }
+    async sendMedia(args) { const s = this._shell(); return s.sendMedia ? s.sendMedia(args || {}) : { ok: false, error: "shell.sendMedia 未暴露" }; }
+    async nurtureStatus() { const s = this._shell(); return s.nurtureStatus ? s.nurtureStatus() : { ok: false, error: "shell.nurtureStatus 未暴露" }; }
+    async nurtureConfig() { const s = this._shell(); return s.nurtureConfig ? s.nurtureConfig() : { ok: false, error: "shell.nurtureConfig 未暴露" }; }
+    async nurtureSave(body) { const s = this._shell(); return s.nurtureSave ? s.nurtureSave(body || {}) : { ok: false, error: "shell.nurtureSave 未暴露" }; }
+    async nurtureEngine(body) { const s = this._shell(); return s.nurtureEngine ? s.nurtureEngine(body || {}) : { ok: false, error: "shell.nurtureEngine 未暴露" }; }
+    async nurtureShadow(limit) { const s = this._shell(); return s.nurtureShadow ? s.nurtureShadow(limit || 50) : { ok: false, error: "shell.nurtureShadow 未暴露" }; }
+    async nurtureProbe(body) { const s = this._shell(); return s.nurtureProbe ? s.nurtureProbe(body || {}) : { ok: false, error: "shell.nurtureProbe 未暴露" }; }
   }
 
   function createCopilotClient() {

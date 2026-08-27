@@ -96,8 +96,15 @@ class DraftService:
     # ── 读：跨平台统一列表（read-through）─────────────────────
 
     def list_drafts(
-        self, *, status: str = "pending", platform: str = "", limit: int = 50
+        self, *, status: str = "pending", platform: str = "", limit: int = 50,
+        conversation_id: str = "",
     ) -> List[Dict[str, Any]]:
+        """跨源统一草稿列表。``conversation_id``（B86，实施68 P1-12）＝会话级精确
+        过滤：体检/收件箱草稿面板此前拿「全平台前 N 条」再前端按 chat_key 筛——
+        平台积压超过 N 时本会话的稿子掉出窗口，坐席看到「计数 4、点开空」。
+        计数（reply_diagnosis 按 cid 直查 store）与列表必须同源，这里就是同源点。
+        """
+        conversation_id = str(conversation_id or "")
         drafts: List[UnifiedDraft] = []
         for adapter in self._adapters:
             if platform and adapter.platform != platform:
@@ -106,6 +113,10 @@ class DraftService:
                 drafts.extend(adapter.list_drafts(status=status, limit=limit))
             except Exception:
                 logger.debug("source adapter %s 列举失败", adapter.source_kind, exc_info=True)
+        # 会话过滤在合并层做（平台 adapter 无该参数；UnifiedDraft 恒带 conversation_id）
+        if conversation_id:
+            drafts = [d for d in drafts
+                      if str(getattr(d, "conversation_id", "") or "") == conversation_id]
         # inbox 自发草稿（无平台表，存在 reply_drafts）。
         # 2026-07-29 修可见性断链：inbox 草稿行自带真实 platform（telegram/whatsapp…），
         # 此前仅在 platform 为空或字面 "inbox" 时列出 → 工作台按会话平台过滤
@@ -113,7 +124,9 @@ class DraftService:
         # 无人处理的根因之一）。现按行内 platform 匹配；platform 空/"inbox" 保持旧行为。
         if self._store is not None:
             try:
-                for row in self._store.list_drafts(source_kind="inbox", status=status, limit=limit):
+                for row in self._store.list_drafts(
+                        source_kind="inbox", status=status, limit=limit,
+                        conversation_id=conversation_id):
                     if platform and platform != "inbox" and str(
                             row.get("platform") or "") != platform:
                         continue
@@ -395,11 +408,38 @@ class DraftService:
             try:
                 if not str(m.get("direction") or "").startswith("out"):
                     continue
+                # B63③：投递失败留痕不算「已经回过」——客户什么也没收到，按它拦
+                # approve 会挡住唯一还能把话送出去的路。
+                if str(m.get("status") or "") in ("failed", "resent"):
+                    continue
                 if float(m.get("ts") or 0) > created_ts + 1.0:
                     return True
             except (TypeError, ValueError):
                 continue
         return False
+
+    def record_failed_outbound_mirror(
+        self, conversation_id: str, text: str, reason: str = "",
+    ) -> str:
+        """B63③（实施64 P1-4）：自动投递终局失败 → 会话消息流留痕（供 worker 调用）。
+
+        薄包装 store.record_failed_outbound：store 缺席/旧版无该方法/任何异常
+        一律安静返回空串——留痕是可观测性增强，绝不反噬投递主链。
+        ``reason``（实施72 P3）＝拦截/错误原因码，随留痕行落库供气泡自解释；
+        旧 store 无 reason 形参 → TypeError 回落旧签名（原因丢弃，行为兼容）。
+        """
+        store = getattr(self, "_store", None)
+        fn = getattr(store, "record_failed_outbound", None)
+        if fn is None:
+            return ""
+        try:
+            try:
+                return str(fn(conversation_id, text, reason=reason) or "")
+            except TypeError:
+                return str(fn(conversation_id, text) or "")
+        except Exception:  # noqa: BLE001
+            logger.debug("投递失败留痕写入失败（忽略）", exc_info=True)
+            return ""
 
     @property
     def inbox_deliver_wired(self) -> bool:
@@ -891,14 +931,27 @@ class DraftService:
         try:
             # 幂等保护：同一会话已有 pending/enriching 草稿则跳过——但若 peer_text
             # 与本次入站不同，说明是陈旧草稿（客户又发了新消息），作废后重生成。
+            #
+            # ⚠ 媒体占位符不携带消息身份：两条**内容不同**的语音在这里都是「[语音]」
+            # （转录发生在 enrich 之后，且只回写消息行、不回填草稿快照）。按文本相等
+            # 判「同一条消息」会把它们判成重复 → 跳过拟稿 → 转录也不跑 → 下一条语音
+            # 仍是「[语音]」→ 会话**永久死锁**（2026-08-22 WA 实锤：03:45 首条转录成功，
+            # 其后 03:47 与 08-23 05:29 两条全空、零回复）。故占位符一律按陈旧处理：
+            # 最坏是多拟一稿，而误跳过的代价是客户再也收不到回复。
             _existing = self._store.list_drafts(
                 source_kind="inbox", conversation_id=conv_id, limit=20
             )
             _active = [d for d in (_existing or [])
                        if str(d.get("status") or "") in ("pending", "enriching")]
             if _active:
+                try:
+                    from src.inbox.media_enrich import is_placeholder_only
+                    _no_identity = is_placeholder_only(t)
+                except Exception:
+                    _no_identity = False
                 _stale = [d for d in _active
-                          if str(d.get("peer_text") or "").strip() != t]
+                          if _no_identity
+                          or str(d.get("peer_text") or "").strip() != t]
                 if _stale:
                     for d in _stale:
                         try:

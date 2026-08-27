@@ -347,6 +347,69 @@ def register_reply_settings_routes(
             })
         return out
 
+    @app.get("/api/reply-settings/health")
+    async def api_reply_settings_health(request: Request, _=Depends(api_auth)):
+        """「影响全自动回复的因素」聚合清单（只读，实施56 2026-08-22）。
+
+        判定单点在 ``src.inbox.autoreply_factors``（纯函数），本层只负责取数注入：
+        额度台账（store）/ 托管额度（quota_probe，60s 进程缓存）/ 外部会话健康 /
+        近窗拦截（seat_banner）。每一路输入 best-effort——任一数据源缺席按 None
+        注入（对应因素如实降级为保守判定），绝不 500：本端点是总控卡的数据源，
+        它挂了坐席连「为什么不回」都看不见。**只读**；修复动作全部由前端投既有
+        写入口（媒体预设 / 本页白名单 POST / 功能总览 toggle / 额度豁免），
+        本端点与因素模块零新增写路径。
+        """
+        import asyncio as _aio
+
+        from src.inbox.autoreply_factors import collect_autoreply_health
+
+        cfg = getattr(config_manager, "config", None) or {}
+
+        budget_rows = None
+        try:
+            from src.inbox.peer_bot_guard import today_key
+            from src.web.routes.unified_inbox_services import _inbox_store
+            store = _inbox_store(request)
+            if store is not None and hasattr(store, "list_reply_budget_today"):
+                budget_rows = await _aio.to_thread(
+                    store.list_reply_budget_today, today_key(), limit=50)
+        except Exception:
+            logger.debug("health: 读预算台账失败（按缺席降级）", exc_info=True)
+            budget_rows = None
+
+        quota = None
+        try:
+            from src.ai.hosted_gateway import quota_probe
+            quota = await _aio.to_thread(quota_probe, config_manager)
+        except Exception:
+            logger.debug("health: 读托管额度失败（按缺席降级）", exc_info=True)
+
+        sessions = None
+        try:
+            from src.integrations.platform_session_health import (
+                ensure_seeded_from_registry, get_platform_session_health,
+            )
+            ensure_seeded_from_registry()
+            hp = get_platform_session_health()
+            dump = hp.dump() or {}
+            sessions = {"known": bool(dump.get("sessions")),
+                        "unhealthy": hp.unhealthy_sessions() or {}}
+        except Exception:
+            logger.debug("health: 读会话健康失败（按缺席降级）", exc_info=True)
+
+        blocks = None
+        try:
+            from src.ops.delivery_block import seat_banner
+            blocks = seat_banner()
+        except Exception:
+            logger.debug("health: 读拦截快照失败（按缺席降级）", exc_info=True)
+
+        out = collect_autoreply_health(
+            cfg, budget_rows=budget_rows, quota=quota,
+            sessions=sessions, blocks=blocks)
+        out["ok"] = True
+        return out
+
     @app.post("/api/reply-settings")
     async def api_reply_settings_save(request: Request, _=Depends(api_auth)):
         try:

@@ -407,7 +407,16 @@ class MessengerInboxAdapter:
             # ——2026-08-15 173 事故里这行只显示裸 500，误导排查方向。
             from src.integrations.messenger_web_login import http_error_detail
             if getattr(ex, "response", None) is not None:
-                raise ChannelSendError(502, http_error_detail(ex))
+                _detail = http_error_detail(ex)
+                # B63-②：会话性败因（PIN/接受浮层/登出）→ 点亮账号级健康面，
+                # 不再让每条消息各自静默 500（skuio 实录 7/7）。
+                try:
+                    from src.integrations.platform_session_health import (
+                        note_send_auth_failure)
+                    note_send_auth_failure("messenger", account_id, _detail)
+                except Exception:
+                    logger.debug("[messenger] 发送败因会话登记失败", exc_info=True)
+                raise ChannelSendError(502, _detail)
             raise ChannelSendError(503, f"Messenger 网页服务不可达: {ex}")
         # 未送达判定收严：ok/delivered/sent 任一显式 False 都算失败（防「composer 未清空」
         # 的静默丢消息被当成功；Node 现也会对该情形回 HTTP 502，双保险）。
@@ -416,8 +425,16 @@ class MessengerInboxAdapter:
             or res.get("delivered") is False
             or res.get("sent") is False
         ):
-            raise ChannelSendError(
-                502, str(res.get("error") or "Messenger 网页发送失败（未确认送达）"))
+            _err_txt = str(res.get("error") or "Messenger 网页发送失败（未确认送达）")
+            try:
+                from src.integrations.platform_session_health import (
+                    note_send_auth_failure)
+                note_send_auth_failure(
+                    "messenger", account_id,
+                    f"{_err_txt} {res.get('reason_code') or ''}")
+            except Exception:
+                logger.debug("[messenger] 发送败因会话登记失败", exc_info=True)
+            raise ChannelSendError(502, _err_txt)
         return {
             "delivered": True,
             "message_id": str((res or {}).get("message_id") or ""),

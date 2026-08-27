@@ -70,6 +70,12 @@
         const inp = e.target.closest('input[data-role="psearch"]');
         if (inp) this._filterCards(inp.value);
       });
+      // 列表滚动 → 双端渐隐随位置刷新(scroll 不冒泡,捕获相位委托;_syncPlistFade 内 rAF 去抖)
+      this._fadeRaf = 0;
+      this.shadowRoot.addEventListener("scroll", (e) => {
+        const t = e.target;
+        if (t && t.classList && t.classList.contains("plist")) this._syncPlistFade();
+      }, true);
       // 键盘可达:div 卡片(tabindex)上 Enter/Space 触发 data-act。
       // 真按钮/链接/表单控件跳过——它们的 Enter 会派生原生 click,再触发一次
       // 基类 click 委托就是双发。方向键/Home/End 在 listbox 内移动焦点。
@@ -135,15 +141,30 @@
                  padding:4px 8px; margin-bottom:4px; border:1px solid var(--cp-border,#e2e8f0);
                  border-radius:var(--cp-radius-sm,6px); background:var(--cp-surface,#fff);
                  color:var(--cp-text,#1e293b); }
+      /* 标签行:左「为本会话指定」+ 右计数 chip(过滤时变 M/N,纯数字零 i18n 依赖) */
+      .lblrow { display:flex; align-items:center; justify-content:space-between; gap:6px; margin-bottom:var(--cp-gap-xs,4px); }
+      .lblrow .lbl { margin-bottom:0; }
+      .pcount { flex:none; font-size:10px; line-height:16px; padding:0 7px; border-radius:999px;
+                font-variant-numeric:tabular-nums; color:var(--cp-text-dim,#64748b);
+                background:var(--cp-surface-2,#f8fafc); border:1px solid var(--cp-border,#e2e8f0); }
       .plist-wrap { position:relative; }
-      .plist { max-height:min(40vh,320px); overflow-y:auto; display:flex; flex-direction:column; gap:3px; }
-      /* 底渐隐:只在列表真溢出时亮(is-ovf);短名单不盖最后一张 */
+      /* scrollbar-gutter:stable=滚动条常驻让位,出现/消失不再让卡片文字横跳;
+         overscroll-behavior:contain=滚到头不把整个侧栏一起带跑 */
+      .plist { max-height:min(48vh,380px); overflow-y:auto; display:flex; flex-direction:column; gap:4px;
+               scrollbar-gutter:stable; overscroll-behavior:contain; padding-right:2px; }
+      /* 双端渐隐=「这头还有货」的滚动暗示:is-ovf(下方还有)/is-ovf-top(上方滚过去了)
+         随滚动位置实时开关;短名单两头都不亮,不盖最后一张 */
       .plist-wrap::after { content:""; pointer-events:none; position:absolute; left:0; right:0; bottom:0;
                            height:14px; border-radius:0 0 var(--cp-radius-sm,6px) var(--cp-radius-sm,6px);
                            background:linear-gradient(to bottom, transparent, var(--cp-surface,#fff));
                            opacity:0; transition:opacity .15s ease; }
       .plist-wrap.is-ovf::after { opacity:1; }
-      .pcard { display:flex; align-items:center; gap:7px; padding:6px 8px; cursor:pointer;
+      .plist-wrap::before { content:""; pointer-events:none; position:absolute; left:0; right:0; top:0; z-index:1;
+                            height:14px; border-radius:var(--cp-radius-sm,6px) var(--cp-radius-sm,6px) 0 0;
+                            background:linear-gradient(to top, transparent, var(--cp-surface,#fff));
+                            opacity:0; transition:opacity .15s ease; }
+      .plist-wrap.is-ovf-top::before { opacity:1; }
+      .pcard { display:flex; align-items:center; gap:7px; padding:7px 9px; cursor:pointer;
                border:1px solid var(--cp-border,#e2e8f0); border-radius:var(--cp-radius-sm,6px);
                background:var(--cp-surface,#fff);
                transition:background-color .12s ease,border-color .12s ease; }
@@ -285,7 +306,9 @@
       const summary = Array.isArray(d.summary) ? d.summary : [];
       const convId = (eff.conv && eff.conv.id) || "";
       const acctId = (eff.account && eff.account.id) || "";
-      html += `<div class="lbl">${esc(this.t("cp.persona.conv_pick"))}</div>`;
+      html += `<div class="lblrow"><span class="lbl">${esc(this.t("cp.persona.conv_pick"))}</span>` +
+        (summary.length ? `<span class="pcount" data-role="pcount">${summary.length}</span>` : "") +
+        `</div>`;
       // 空态死胡同收口:没有人设时给「去创建」出路而不是空列表
       if (!summary.length) {
         html += `<div class="nomatch">${esc(this.t("cp.persona.no_data"))}</div>` +
@@ -346,19 +369,58 @@
       return html;
     }
 
+    /* B23 回炉（2026-08-22，1.0.46 五图实录）：legacy 面板「谁在生效」的**单一
+       解析**——四个消费面（下拉预选 / 来源行 / 「设为账号默认」按钮取值 / 宿主
+       composer 身份条经同一 effective API）此前各读各的：boundId 只认客户端
+       bindings map（按 chatKey 索引；旧绑定可能只活在服务端 _chat_personas 或
+       键位对不上 → 空），账号默认只认 eff.account——于是「顶部横幅说 steven
+       在生效（旧绑定）、下拉站『未绑定』、按钮反咬『请先选择』」三面同框打架。
+       解析顺序＝可见绑定语义：客户端 peer 绑定 → 服务端 legacy 层 → 服务端
+       生效者（非 default/domain 档：chat_binding/conv_override/account_profile
+       都是真绑定，服务端 resolver 与出站链同源）→ 账号默认。返回
+       {id,name,tier} 或 null（真·全空才允许「先选人设」分支）。 */
+    _legacyResolved(d) {
+      const eff = (d && d.eff) || null;
+      if (d && d.boundId) {
+        return { id: d.boundId, name: d.boundName || d.boundId, tier: "chat_binding" };
+      }
+      const lg = eff && eff.legacy;
+      if (lg && lg.id) return { id: lg.id, name: lg.name || lg.id, tier: "chat_binding" };
+      const e = eff && eff.effective;
+      const tier = String((e && e.tier) || "");
+      if (e && e.id && tier && tier !== "default" && tier !== "domain") {
+        return { id: e.id, name: e.name || e.id, tier };
+      }
+      const acctP = eff && eff.account;
+      if (acctP && acctP.id) {
+        return { id: acctP.id, name: acctP.name || acctP.id, tier: "account_profile" };
+      }
+      return null;
+    }
+
     _legacyBody(d) {
       const esc = (s) => this.esc(s);
       const summary = Array.isArray(d.summary) ? d.summary : [];
-      const boundId = d.boundId || "";
+      /* B23（实施49 2026-08-21 初版 + 2026-08-22 回炉）：下拉预选/来源行/按钮
+         全部消费 _legacyResolved 的同一份解析，杜绝「三面各读各的」状态分叉。 */
+      const resolved = this._legacyResolved(d);
+      const selId = (resolved && summary.some((p) => p && p.id === resolved.id))
+        ? resolved.id : "";
       const opts = [`<option value="">${esc(this.t("cp.persona.unbound_opt"))}</option>`]
         .concat(summary.map((p) => {
           const label = p.role ? `${p.name} (${p.role})` : (p.name || p.id);
-          const sel = p.id === boundId ? " selected" : "";
+          const sel = p.id === selId ? " selected" : "";
           return `<option value="${esc(p.id)}"${sel}>${esc(label)}</option>`;
         }));
-      const src = boundId
-        ? `<div class="src bound">${esc(this.t("cp.persona.bound", { name: d.boundName || boundId }))}</div>`
-        : `<div class="src unbound">${esc(this.t("cp.persona.unbound"))}</div>`;
+      let src;
+      if (resolved && resolved.tier === "account_profile") {
+        // 账号默认在生效：如实说，不再谎报「未绑定」
+        src = `<div class="src bound">${esc(this.t("cp.persona.acct_default_line", { name: resolved.name }))}</div>`;
+      } else if (resolved) {
+        src = `<div class="src bound">${esc(this.t("cp.persona.bound", { name: resolved.name }))}</div>`;
+      } else {
+        src = `<div class="src unbound">${esc(this.t("cp.persona.unbound"))}</div>`;
+      }
       /* P1-198 账号级默认升为主操作：客户实测按 peer 逐个绑（每接一个新客户都要
          重新绑一次）不符合「绑一次跟账号走」的预期。legacy 模式此前只有 peer 下拉，
          账号级入口仅存在于 conv_override 开启后的卡片 UI——这里补上（API 早已存在）。 */
@@ -391,6 +453,12 @@
       });
       const nm = this.shadowRoot.querySelector('[data-role="nomatch"]');
       if (nm) nm.classList.toggle("hide", vis > 0);
+      // 计数 chip:无筛选=总数,筛选中=命中/总数(坐席一眼知道「还有多少没显示」)
+      const pc = this.shadowRoot.querySelector('[data-role="pcount"]');
+      if (pc) {
+        const total = this.shadowRoot.querySelectorAll(".pcard").length;
+        pc.textContent = needle ? (vis + "/" + total) : String(total);
+      }
       this._syncPlistFade();
     }
 
@@ -398,15 +466,19 @@
       super._render(html);
       this._syncPlistFade();
     }
-    /* 短名单不盖渐隐;过滤后高度变了再量一次。rAF=等 max-height 布局落地。 */
+    /* 短名单不盖渐隐;过滤后高度变了再量一次。rAF=等 max-height 布局落地 + 滚动去抖
+       (滚动事件每帧可多发,_fadeRaf 归并到一次测量,防高频布局读)。 */
     _syncPlistFade() {
+      if (this._fadeRaf) return;
       const run = () => {
+        this._fadeRaf = 0;
         const wrap = this.shadowRoot && this.shadowRoot.querySelector(".plist-wrap");
         const list = wrap && wrap.querySelector(".plist");
         if (!wrap || !list) return;
-        wrap.classList.toggle("is-ovf", list.scrollHeight > list.clientHeight + 2);
+        wrap.classList.toggle("is-ovf", list.scrollHeight - list.scrollTop - list.clientHeight > 2);
+        wrap.classList.toggle("is-ovf-top", list.scrollTop > 2);
       };
-      try { requestAnimationFrame(run); } catch (_e) { run(); }
+      try { this._fadeRaf = requestAnimationFrame(run) || 1; } catch (_e) { this._fadeRaf = 0; run(); }
     }
 
     /* —— 点击处理 —— */
@@ -622,10 +694,18 @@
     }
 
     /* P1-198 legacy 模式「设为账号默认」：取下拉当前选中人设 → 恒弹确认后整号换绑。
-       未选人设时如实提示（绝不静默无反应）。 */
+       未选人设时如实提示（绝不静默无反应）。
+       B23（2026-08-21 初版 → 2026-08-22 回炉）：按钮以**可见的绑定状态**为准——
+       下拉值 → _legacyResolved（客户端 peer 绑定/服务端 legacy 层/服务端生效者/
+       账号默认，与下拉预选、来源行同一份解析），真·全空才提示「先选人设」。
+       复测五图的分叉形态＝「当前生效 steven（旧绑定）」横幅在场、按钮却反咬
+       「请先选择」——旧链只查客户端 bindings map 撞不上键位；现在服务端说谁在
+       生效就按谁兜底。 */
     _onLegacyAccount() {
       const sel = this.shadowRoot.querySelector('select[data-role="persona"]');
-      const pid = sel ? sel.value : "";
+      const d = this._d || {};
+      const resolved = this._legacyResolved(d);
+      const pid = (sel && sel.value) || ((resolved && resolved.id) || "");
       const tip = this.shadowRoot.querySelector('[data-role="failtip"]');
       if (!pid) {
         if (tip) {
@@ -637,10 +717,15 @@
       if (tip) tip.classList.add("hide");
       if (!this._acctRef()) return;
       const p = ((this._d && this._d.profiles) || {})[pid] || {};
+      // 弹窗 from＝账号当前默认（本操作改的就是账号默认位，不是「谁在生效」）
+      const acctP = (d.eff && d.eff.account) || null;
       this._pending = { pid };
       this._openConfirm({
-        pid, fromName: "—", toName: p.name || pid,
-        fromId: "", toId: pid,
+        pid,
+        fromName: (acctP && (acctP.name || acctP.id)) || "—",
+        toName: p.name || pid,
+        fromId: (acctP && acctP.id) || "",
+        toId: pid,
         hasOutbound: false, scopes: ["account"],
       });
     }

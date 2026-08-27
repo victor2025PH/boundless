@@ -35,8 +35,9 @@
 ## 已禁用清单（与 `scripts/check-content-integrity.mjs` 的 `BANNED_CLAIMS` 同源）
 
 本轮内容治理清理掉的虚构数字 / 高风险表述，门禁扫描 `lib/content.ts`、`lib/landingContent.ts`、
-`lib/matrixxContent.ts`、`lib/chatxContent.ts`、`lib/growthContent.ts`、`lib/downloads.ts`，
-命中即 build 失败：
+`lib/matrixxContent.ts`、`lib/chatxContent.ts`、`lib/growthContent.ts`、`lib/downloads.ts`、
+`components/AIChat.tsx`、`lib/bot-knowledge.ts`、`lib/telegram-bot.ts`（顾问人设三消费面，
+2026-08-21 起），命中即 build 失败：
 
 | 禁用子串 | 禁用原因 |
 | --- | --- |
@@ -50,6 +51,7 @@
 > `/fate` 后解禁。命理内容的合规边界见落地页文案约束：吉凶零断言、不预言死亡/重病/灾祸、
 > 重大决策仅供参考、低落情绪先共情（与引擎 `companion.bazi` 的安全红线同口径）。
 | `防封` | 暗示对抗平台风控，与「封号自动换号」同族，法务红线 |
+| `顾嘉` / `Gary` | 2026-08-21 顾问改名「小界（Jie）」——与 ChatX 产品内助手、交流群 @小界 同名统一；旧名（含英文名）不许从旧文案复制回潮 |
 
 > 注：2026-07-26 清理收口后，`lib/growthContent.ts`、`lib/downloads.ts` 已进
 > `BANNED_TARGET_FILES`。`lib/brand.ts` **刻意不进**：它是品牌层单一事实源，合法包含

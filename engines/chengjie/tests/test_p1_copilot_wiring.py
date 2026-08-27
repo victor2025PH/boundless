@@ -86,6 +86,35 @@ def test_cp_persona_legacy_account_entry_in_both_trees():
         assert js.count('data-role="cfm-slot"') >= 2, p
 
 
+# ── ⑥ B23 回炉（2026-08-22）：绑定状态四面同源 ────────────────────────────
+#
+# 1.0.46 五图实录：「当前生效 steven（旧绑定）」横幅 + 下拉「未绑定」+ 按钮红字
+# 「请先选择」+ composer 橙条「未绑人设」同框打架。根因＝四个消费面各读各的状态源。
+# 回炉后：cp-persona 三个面全部消费 _legacyResolved 单一解析（客户端 peer 绑定 →
+# 服务端 legacy 层 → 服务端生效者（非 default/domain）→ 账号默认）；composer
+# 身份条经同一 effective API + 缓存先画（不再按 TTL 闪回假「未绑」）。
+
+def test_cp_persona_legacy_surfaces_share_single_resolver():
+    for p, js in _both("components/cp-persona.js"):
+        # 单一解析函数存在，且吃 服务端 legacy 层 + 非默认档生效者 + 账号默认
+        assert "_legacyResolved(d)" in js, p
+        assert 'tier !== "default" && tier !== "domain"' in js, p
+        # 按钮取值链消费解析结果（旧 boundId-only 链是复测未过的病根，禁止回退）
+        assert '(sel && sel.value) || ((resolved && resolved.id) || "")' in js, p
+        assert "d.boundId || ((acctP && acctP.id)" not in js, p
+        # 下拉预选消费同一解析（membership 校验防 select 预选不存在的 option）
+        assert "summary.some((p) => p && p.id === resolved.id)" in js, p
+
+
+def test_identity_bar_cache_paint_not_ttl_gated():
+    """composer 身份条：有缓存就先画旧真相（TTL 只管要不要重拉），
+    过期缓存必须仍触发异步校正——两个断言合起来钉死「不闪橙、不永远旧值」。"""
+    tpl = (REPO / "src" / "web" / "templates" / "unified_inbox.html"
+           ).read_text(encoding="utf-8")
+    assert "if(cEff && cEff.eff && cEff.eff.id && (cEff.eff.name||cEff.eff.id)){" in tpl
+    assert "if((Date.now()-cEff.ts)>=_IDENT_EFF_TTL){" in tpl
+
+
 def test_cp_persona_theme_tokens_and_polish_in_both_trees():
     """暗色选中卡不可读事故的回归钉 + 第二轮呈现层锚点。"""
     for p, js in _both("components/cp-persona.js"):

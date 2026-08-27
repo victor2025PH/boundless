@@ -54,7 +54,11 @@ param(
     [int]   $MissLimit          = 2,
     [int]   $RestartCooldownMin = 30,
     [int]   $MainTimeoutSec     = 5,
-    [int]   $NodeTimeoutSec     = 3,
+    # 2026-08-27 hardening: 3s probe misread a BUSY-but-alive node as dead under host
+    # load (two timeouts at 08:02/08:14 while heavy test batches pegged the CPU) ->
+    # watchdog killed a healthy worker. Playwright work (thread reads/backfills) can
+    # legitimately stall the event loop for seconds; 10s separates busy from dead.
+    [int]   $NodeTimeoutSec     = 10,
     [switch]$DryRun,
     [string]$LogPath            = "$PSScriptRoot\..\logs\watchdog_messenger_web.log",
     [string]$StatePath          = "$PSScriptRoot\..\logs\watchdog_messenger_web.state.json"
@@ -313,14 +317,52 @@ if ($sinceRestartMin -lt $RestartCooldownMin) {
     exit 0
 }
 
+# 2026-08-27 hardening #1: last-chance re-probe RIGHT BEFORE the kill. The two misses
+# that armed us are up to 10 minutes old; a node that was merely busy (or briefly
+# restarting) may be healthy again by now. Killing on stale evidence caused the
+# 08:15 friendly-fire (healthy pid 1584 killed after two load-induced timeouts).
+$recheck = Test-NodeAlive
+if ($recheck.ok) {
+    Write-Log "RECOVERED" "pre-kill re-probe: node answers /health again - no restart, streak reset"
+    $st.missStreak = 0
+    Save-State $st
+    exit 0
+}
+
 Write-Log "RESTART" "hard restart: kill port $NodePort owner + leftovers, then schtasks /Run $TaskName"
 $r = Invoke-HardRestart
 if ($r.ok) {
     $st.missStreak = 0
     $st.lastRestartTs = $now
     Save-State $st
-    Send-Alert "[messenger-web] hard restart executed: killed node pid(s) [$($r.killed -join ',')], re-launched via task $TaskName ($missReason)."
-    Write-Log "RESTART" "done (killed: [$($r.killed -join ',')]); next rounds re-verify"
+    # 2026-08-27 hardening #2: verify the relaunch actually produced a listener.
+    # On 08-27 the 08:15 /End + /Run left the port DEAD for 19 minutes (task instance
+    # likely stuck, IgnoreNew swallowed the /Run) and nothing noticed until a human
+    # started the service at 08:34. Poll up to 90s; still dead -> one retry cycle;
+    # still dead after that -> loud alert (this is exactly the state that used to rot).
+    $verified = $false
+    foreach ($attempt in 1..2) {
+        $deadline = (Get-Date).AddSeconds(90)
+        while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 5
+            $chk = Test-NodeAlive
+            if ($chk.ok) { $verified = $true; break }
+        }
+        if ($verified) { break }
+        if ($attempt -eq 1) {
+            Write-Log "VERIFY" "no listener on :$NodePort 90s after /Run - retrying /End + /Run once"
+            schtasks /End /TN $TaskName 2>&1 | Out-Null
+            Start-Sleep -Seconds 2
+            schtasks /Run /TN $TaskName 2>&1 | Out-Null
+        }
+    }
+    if ($verified) {
+        Send-Alert "[messenger-web] hard restart executed: killed node pid(s) [$($r.killed -join ',')], re-launched via task $TaskName and verified alive ($missReason)."
+        Write-Log "RESTART" "done + verified alive (killed: [$($r.killed -join ',')])"
+    } else {
+        Send-Alert "[messenger-web] hard restart executed BUT service still not answering after 2 launch attempts (~3 min). Port $NodePort is DOWN - manual start needed (killed: [$($r.killed -join ',')]; $missReason)."
+        Write-Log "VERIFY" "FAILED: still no /health after 2 launch attempts - manual intervention needed"
+    }
 } else {
     Write-Log "REFUSE" $r.reason
     Send-Alert "[messenger-web] wanted to hard-restart but $($r.reason). Manual intervention needed."

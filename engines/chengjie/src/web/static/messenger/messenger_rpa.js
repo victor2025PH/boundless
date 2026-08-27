@@ -3793,7 +3793,7 @@
               <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
                 ${esc(c.chat_name || '(unnamed)')}
               </div>
-              <div style="font-size:.7rem;color:var(--mt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+              <div style="font-size:.7rem;color:var(--t3,#5b6b85);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
                 ${esc(c.reason || '-')} · ${esc(when)}
               </div>
             </div>

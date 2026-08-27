@@ -280,6 +280,35 @@ async def run_autoreply(
     if not is_autoreply_enabled(cfg, row):
         return _result("disabled")
 
+    # ── 群/频道 opt-in 闸（P1 2026-08-20）────────────────────────────────
+    # 本直发链没有任何群策略（无被@判定/发言概率/群冷却，生成上下文历史上还
+    # 硬编码 private）——把私聊口吻的 AI 回复直发进群就是误发。群消息只有坐席
+    # 显式确认过全自动（confirm_group 闸 → 显式 auto_ai → resolve 返回 auto_ai）
+    # 才继续；档位读不出（store 异常/未接线）对群 fail-closed。群判定与 B 线
+    # 同源（is_group_conversation：chat_type 集合 + TG 负 id 启发），chat_type
+    # 同时看顶层与 source（TG 协议 worker 放 source.chat_type）。telegram 群经
+    # 本链同样受闸——resolve 的 TG 豁免只属 pyrogram A 线自己的群闸。
+    try:
+        from src.inbox.ingest import is_group_conversation
+        _src0 = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+        _is_group_msg = bool(is_group_conversation({
+            "chat_type": str(payload.get("chat_type")
+                             or (_src0 or {}).get("chat_type") or ""),
+            "platform": platform,
+            "chat_key": chat_key,
+        }))
+    except Exception:
+        _is_group_msg = False
+    if _is_group_msg:
+        _gmode = ""
+        if inbox_mode_fn is not None:
+            try:
+                _gmode = str(inbox_mode_fn(platform, account_id, chat_key) or "")
+            except Exception:
+                _gmode = ""
+        if _gmode != "auto_ai":
+            return _result("group_optin_required", inbound=text)
+
     # Phase 3 防双发 + 人审闸：与收件箱 UI / A 线同一口径（allows_direct_autosend）。
     # - auto_ai + l2 deliver 开 → 让位 System Z（防双发）
     # - auto_ai + deliver 关 → 不让位（2026-07-22：让位=吞消息）
@@ -668,13 +697,27 @@ def clear_needs_human(store: Any, conversation_id: str) -> bool:
         return False
     try:
         store.set_conv_tags(conversation_id, [t for t in tags if t != HANDOFF_TAG])
-        return True
     except Exception:
         return False
+    # 实施74（实施69 P1-1）：标摘了元数据同清（best-effort；旧 store 无此方法跳过）
+    try:
+        if hasattr(store, "set_handoff_meta"):
+            store.set_handoff_meta(conversation_id, None)
+    except Exception:
+        logger.debug("[protocol-autoreply] handoff_meta 清除失败（忽略）",
+                     exc_info=True)
+    return True
 
 
-def tag_needs_human(store: Any, payload: Dict[str, Any]) -> bool:
-    """给会话打 HANDOFF_TAG（已存在则跳过）。store 需提供 get/set_conv_tags。"""
+def tag_needs_human(store: Any, payload: Dict[str, Any], *,
+                    reason: str = "", source: str = "system",
+                    now: Optional[float] = None) -> bool:
+    """给会话打 HANDOFF_TAG（已存在则跳过）。store 需提供 get/set_conv_tags。
+
+    实施74（实施69 P1-1）：打标同存 ``{reason, ts, source}`` 元数据
+    （``store.set_handoff_meta``，旧 store 缺方法自动跳过）——「需人工」从
+    裸结论变成可解释（何时/为何/谁打的），前端 chip 悬停直读。
+    """
     if store is None:
         return False
     from src.inbox.normalizer import conv_id
@@ -692,9 +735,19 @@ def tag_needs_human(store: Any, payload: Dict[str, Any]) -> bool:
     tags.append(HANDOFF_TAG)
     try:
         store.set_conv_tags(cid, tags)
-        return True
     except Exception:
         return False
+    try:
+        if hasattr(store, "set_handoff_meta"):
+            store.set_handoff_meta(cid, {
+                "reason": str(reason or ""),
+                "ts": float(now if now is not None else time.time()),
+                "source": str(source or "system"),
+            })
+    except Exception:
+        logger.debug("[protocol-autoreply] handoff_meta 写入失败（忽略）",
+                     exc_info=True)
+    return True
 
 
 def media_context_extra(
@@ -764,6 +817,7 @@ def build_reply_hook(app: Any) -> Callable[[Dict[str, Any]], Awaitable[None]]:
             try:
                 from src.inbox.media_enrich import (
                     enrich_inbound_media_text, is_placeholder_only,
+                    media_wait_sec_from_cfg,
                 )
                 _tc = getattr(app.state, "telegram_client", None)
                 _vtr = getattr(_tc, "voice_transcriber", None) if _tc is not None else None
@@ -771,6 +825,9 @@ def build_reply_hook(app: Any) -> Callable[[Dict[str, Any]], Awaitable[None]]:
                     media_type=media_type, media_ref=media_ref,
                     caption=("" if is_placeholder_only(text) else text),
                     config=_cfg(), voice_transcriber=_vtr,
+                    # 拟稿等图（2026-08-23）：边车「先落行后补文件」窗口内不再
+                    # 抢跑生成——预算内等文件就绪再识别，等不到才走降级/扣留。
+                    wait_file_sec=media_wait_sec_from_cfg(_cfg()),
                 )
                 if _enriched and _enriched.strip():
                     text = _enriched.strip()
@@ -794,34 +851,57 @@ def build_reply_hook(app: Any) -> Callable[[Dict[str, Any]], Awaitable[None]]:
             except Exception:
                 logger.debug("[protocol-autoreply] 媒体识别补全失败", exc_info=True)
         _mt_l = str(media_type or "").strip().lower()
+        # 识别失败处置（实施56 P1，2026-08-22）：media_degrade_reply 开 → 放行生成，
+        # ai_client 媒体块对无 desc 媒体自带「自然承认收到+温和追问」话术（诚实降级，
+        # 不装懂）；关（默认）→ 维持 08-17 无兜底纪律：拦下 + 上报 + 不回。
+        _degrade_ok = False
+        if media_ref and not media_desc and _mt_l in (
+                "image", "photo", "sticker", "voice", "audio"):
+            try:
+                from src.inbox.media_enrich import media_degrade_reply_enabled
+                _degrade_ok = media_degrade_reply_enabled(_cfg())
+            except Exception:
+                _degrade_ok = False
         if media_ref and _mt_l in ("image", "photo", "sticker") and not media_desc:
-            try:
-                from src.ops.delivery_block import report_block
-                from src.inbox.normalizer import conv_id as _vcid
-                report_block(
-                    "vision", reason="enrich_failed", platform=platform,
-                    conversation_id=_vcid(platform, account_id, chat_key))
-            except Exception:
-                logger.debug("[protocol-autoreply] vision hold 上报失败",
-                             exc_info=True)
-            logger.warning(
-                "[protocol-autoreply] 图片未看懂 → 跳过自动回复 %s:%s:%s",
-                platform, account_id, chat_key)
-            return None
+            if _degrade_ok:
+                logger.info(
+                    "[protocol-autoreply] 图片未识别 → 降级诚实回复"
+                    "（media_degrade_reply）%s:%s:%s",
+                    platform, account_id, chat_key)
+            else:
+                try:
+                    from src.ops.delivery_block import report_block
+                    from src.inbox.normalizer import conv_id as _vcid
+                    report_block(
+                        "vision", reason="enrich_failed", platform=platform,
+                        conversation_id=_vcid(platform, account_id, chat_key))
+                except Exception:
+                    logger.debug("[protocol-autoreply] vision hold 上报失败",
+                                 exc_info=True)
+                logger.warning(
+                    "[protocol-autoreply] 图片未看懂 → 跳过自动回复 %s:%s:%s",
+                    platform, account_id, chat_key)
+                return None
         if media_ref and _mt_l in ("voice", "audio") and not media_desc:
-            try:
-                from src.ops.delivery_block import report_block
-                from src.inbox.normalizer import conv_id as _acid
-                report_block(
-                    "asr", reason="enrich_failed", platform=platform,
-                    conversation_id=_acid(platform, account_id, chat_key))
-            except Exception:
-                logger.debug("[protocol-autoreply] asr hold 上报失败",
-                             exc_info=True)
-            logger.warning(
-                "[protocol-autoreply] 语音未转写 → 跳过自动回复 %s:%s:%s",
-                platform, account_id, chat_key)
-            return None
+            if _degrade_ok:
+                logger.info(
+                    "[protocol-autoreply] 语音未转写 → 降级诚实回复"
+                    "（media_degrade_reply）%s:%s:%s",
+                    platform, account_id, chat_key)
+            else:
+                try:
+                    from src.ops.delivery_block import report_block
+                    from src.inbox.normalizer import conv_id as _acid
+                    report_block(
+                        "asr", reason="enrich_failed", platform=platform,
+                        conversation_id=_acid(platform, account_id, chat_key))
+                except Exception:
+                    logger.debug("[protocol-autoreply] asr hold 上报失败",
+                                 exc_info=True)
+                logger.warning(
+                    "[protocol-autoreply] 语音未转写 → 跳过自动回复 %s:%s:%s",
+                    platform, account_id, chat_key)
+                return None
         # N 线 核心1：复用共享 companion_context 装配标准上下文（与 A 线同一套）。
         # 记忆/情绪由 skill_manager 内部按 platform+user_id+chat_id 注入；
         # 此处保证平台/会话标识 + 人设一致（协议线默认私聊）。
@@ -856,18 +936,81 @@ def build_reply_hook(app: Any) -> Callable[[Dict[str, Any]], Awaitable[None]]:
                 _extra["_topic_switch_hint"] = _hb
         except Exception:
             logger.debug("[protocol-autoreply] 交接提醒跳过", exc_info=True)
+        # 群上下文诚实（P1 2026-08-20）：能走到这里的群都是坐席显式确认过
+        # 全自动的（run_autoreply 群闸）——此前 chat_type 硬编码 private，
+        # 人设当 1:1 聊、群语境全丢。从会话库取真类型，取不到回落 private。
+        _ct = "private"
+        try:
+            _ibx0 = getattr(app.state, "inbox_store", None)
+            if _ibx0 is not None:
+                from src.inbox.normalizer import conv_id as _ct_cid
+                _ct_raw = str(((_ibx0.get_conversation(
+                    _ct_cid(platform, account_id, chat_key)) or {})
+                    .get("chat_type") or "")).strip().lower()
+                if _ct_raw == "channel":
+                    _ct = "channel"
+                elif _ct_raw in ("group", "supergroup", "megagroup", "gigagroup"):
+                    _ct = "group"
+        except Exception:
+            _ct = "private"
         ctx = build_companion_context(
             platform=platform,
             chat_id=chat_key,
             text=text,
-            chat_type="private",
+            chat_type=_ct,
             persona_id=persona_id,
             emotion_enhancer=_emo,
             extra=_extra,
         )
-        return await sm.process_message(
+        _reply = await sm.process_message(
             text, user_id=f"{platform}:{account_id}:{chat_key}", context=ctx
         )
+        # B51 反复读闸（实施64 P1-2，与 autodraft_helpers 同口径）：回复与对方
+        # 上一条近逐字 → 重生成一次；复发 → 本轮不回（鹦鹉稿比沉默更伤）。
+        try:
+            from src.ai.reply_echo_guard import reply_echoes_inbound
+            if (isinstance(_reply, str) and _reply
+                    and reply_echoes_inbound(_reply, text)):
+                logger.warning(
+                    "[protocol-autoreply] 反复读闸命中 %s:%s:%s：%r → 重生成",
+                    platform, account_id, chat_key, _reply[:60])
+                _r2 = await sm.process_message(
+                    text, user_id=f"{platform}:{account_id}:{chat_key}",
+                    context=ctx)
+                if (isinstance(_r2, str) and _r2
+                        and not reply_echoes_inbound(_r2, text)):
+                    _reply = _r2
+                else:
+                    logger.warning(
+                        "[protocol-autoreply] 反复读闸复发 %s:%s:%s → 本轮不回",
+                        platform, account_id, chat_key)
+                    return None
+        except Exception:
+            logger.debug(
+                "[protocol-autoreply] 反复读闸异常（放行原稿）", exc_info=True)
+        # 盲断言闸门（2026-08-23 P0-2，与 autodraft_helpers 同口径）：无识图
+        # 描述的图片轮，回复不得断言/猜测画面内容——降级指令是软约束，模型
+        # 违约就整稿换成诚实追问。语言按稿面文字系统粗判（下游出站语言闸/
+        # 翻译层会再对齐客户语言）。
+        if (_mt_l in ("image", "photo", "sticker") and not media_desc
+                and isinstance(_reply, str) and _reply):
+            try:
+                from src.inbox.media_enrich import (
+                    blind_image_assertion, honest_image_ask,
+                )
+                if blind_image_assertion(_reply):
+                    logger.info(
+                        "[protocol-autoreply] 盲断言拦截 %s:%s:%s：%r → 诚实追问",
+                        platform, account_id, chat_key, _reply[:60])
+                    _lang = "zh" if any(
+                        "\u4e00" <= ch <= "\u9fff" for ch in _reply) else "en"
+                    _reply = honest_image_ask(
+                        _lang, seed=f"{platform}:{account_id}:{chat_key}")
+            except Exception:
+                logger.debug(
+                    "[protocol-autoreply] 盲断言闸门异常（放行原稿）",
+                    exc_info=True)
+        return _reply
 
     async def _send(*, platform, account_id, chat_key, text):
         from src.integrations.account_orchestrator import get_orchestrator
@@ -1070,7 +1213,11 @@ def build_reply_hook(app: Any) -> Callable[[Dict[str, Any]], Awaitable[None]]:
             logger.debug("[protocol-autoreply] 审计写入失败", exc_info=True)
         try:
             if needs_handoff(res):
-                tag_needs_human(getattr(app.state, "inbox_store", None), payload)
+                tag_needs_human(
+                    getattr(app.state, "inbox_store", None), payload,
+                    reason=str((res or {}).get("reason") or ""),
+                    source="system",
+                )
         except Exception:
             logger.debug("[protocol-autoreply] 转人工打标失败", exc_info=True)
 

@@ -24,6 +24,9 @@
 .tl-diff.show{display:block}
 .tl-diff .rm{color:var(--red);background:var(--rs);padding:.05rem .25rem;border-radius:3px}
 .tl-diff .add{color:var(--green);background:var(--gs);padding:.05rem .25rem;border-radius:3px}
+/* kv 对象徽章可点（P4）：继承 badge 配色，仅加悬停暗示 */
+a.badge{text-decoration:none;cursor:pointer}
+a.badge:hover{filter:brightness(1.1);text-decoration:underline}
 .tl-expand{background:none;border:none;cursor:pointer;font-size:.75rem;color:var(--t3);padding:.2rem .5rem;border-radius:5px;transition:.15s;margin-top:.3rem;font-family:inherit}
 .tl-expand:hover{background:var(--bd);color:var(--t)}
 /* pagination */
@@ -100,19 +103,14 @@
        class="btn btn-xs {% if filters and filters.action == a %}btn-p{% else %}btn-s{% endif %}"
        title="{{ (i18n or {}).get('em_s010', '筛选') }} action={{ a }}">{{ label }}</a>
     {% endfor %}
-    {# 2026-08-05 业务视角族筛选（family → audit_display.FAMILY_DEFS） #}
+    {# 2026-08-18 芯片序＝FAMILY_ORDER 单源，禁止再手写一份 #}
     <span style="width:1px;height:18px;background:var(--bd);margin:0 .2rem"></span>
-    {% set _fam_presets = [
-      ('danger',  (i18n or {}).get('au_fam_danger', '⚠️ 高危操作')),
-      ('memory',  (i18n or {}).get('au_fam_memory', '🧠 记忆操作')),
-      ('kb',      (i18n or {}).get('au_fam_kb', '📚 知识库')),
-      ('persona', (i18n or {}).get('au_fam_persona', '🎭 人设')),
-      ('rpa',     (i18n or {}).get('au_fam_rpa', '🤖 RPA·渠道')),
-    ] %}
-    {% for f, label in _fam_presets %}
+    {# family_order 由路由注入；缺省=旧 5 族——热更先于重启时新族芯片不出现，
+       避免点「贴纸」却打到旧进程空 patterns＝不过滤＝全库倾泻。 #}
+    {% for f in family_order|default(['danger', 'memory', 'kb', 'persona', 'rpa']) %}
     <a href="/audit?family={{ f }}" data-ue="audit.filter_family"
        class="btn btn-xs {% if filters and filters.family is defined and filters.family == f %}btn-p{% else %}btn-s{% endif %}"
-       title="{{ (i18n or {}).get('em_s010', '筛选') }} family={{ f }}">{{ label }}</a>
+       title="{{ (i18n or {}).get('em_s010', '筛选') }} family={{ f }}">{{ (i18n or {}).get('au_fam_' ~ f, f) }}</a>
     {% endfor %}
   </div>
 </div>
@@ -160,7 +158,8 @@
         <select name="operator">
           <option value="">{{ (i18n or {}).get('rpa_all', "全部") }}</option>
           {% for op in all_operators|default([]) %}
-          <option value="{{ op }}" {% if filters and filters.operator == op %}selected{% endif %}>{{ op }}</option>
+          {# 显示坐席名（web_users.display_name），value 恒为账本 user_id 保对账 #}
+          <option value="{{ op }}" title="{{ op }}" {% if filters and filters.operator == op %}selected{% endif %}>{{ (operator_names or {}).get(op, op) }}</option>
           {% endfor %}
         </select>
       </div>
@@ -221,8 +220,15 @@
       <div class="tl-body">
         <div class="tl-top">
           <span class="tl-action" title="{{ act }}">{{ (i18n or {}).get('aud_act_' ~ act, act) }}</span>
-          {% if r.target %}<span class="badge b-p">{{ r.target }}</span>{% endif %}
-          {% if r.user_id %}<span class="badge b-n">{{ r.user_id }}</span>{% endif %}
+          {% if r.target_tokens %}
+          {# kv 徽章可点＝按原始 key=value 串走 keyword 筛选（LIKE 四列，跨动作
+             聚出同对象全史）；增减量（packs+2）筛选无意义保持纯展示 #}
+          {% for tok in r.target_tokens %}{% if tok.value[:1] not in ('+', '-') %}<a class="badge b-p" data-ue="audit.tok_pivot" href="/audit?channel={{ (tok.key ~ '=' ~ tok.value)|urlencode }}" title="{{ (i18n or {}).get('em_s010', '筛选') }} {{ tok.key }}={{ tok.value }}">{{ (i18n or {}).get('aud_tgt_' ~ tok.key, tok.key) }} {{ tok.value }}</a>{% else %}<span class="badge b-p" title="{{ tok.key }}{{ tok.value }}">{{ (i18n or {}).get('aud_tgt_' ~ tok.key, tok.key) }} {{ tok.value }}</span>{% endif %}{% endfor %}
+          {% elif r.target %}<span class="badge b-p">{{ r.target }}</span>{% endif %}
+          {% if r.detail_tokens %}
+          {% for tok in r.detail_tokens %}{% if tok.value[:1] not in ('+', '-') %}<a class="badge b-n" data-ue="audit.tok_pivot" href="/audit?channel={{ (tok.key ~ '=' ~ tok.value)|urlencode }}" title="{{ (i18n or {}).get('em_s010', '筛选') }} {{ tok.key }}={{ tok.value }}">{{ (i18n or {}).get('aud_tgt_' ~ tok.key, tok.key) }} {{ tok.value }}</a>{% else %}<span class="badge b-n" title="{{ tok.key }}{{ tok.value }}">{{ (i18n or {}).get('aud_tgt_' ~ tok.key, tok.key) }} {{ tok.value }}</span>{% endif %}{% endfor %}
+          {% endif %}
+          {% if r.user_id %}<span class="badge b-n" title="{{ r.user_id }}">{{ (operator_names or {}).get(r.user_id, r.user_id) }}</span>{% endif %}
           <span class="tl-time">{{ r.ts }}</span>
         </div>
         {% if r.old_val or r.new_val or r.snapshot_id %}

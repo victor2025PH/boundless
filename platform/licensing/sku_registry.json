@@ -1,10 +1,10 @@
 {
-  "generated": "2026-08-19",
+  "generated": "2026-08-21",
   "source": "products/*/product.yaml",
   "note": "Single source of SKUs for website pricing + license gating + order. Regenerate via platform/licensing/build_sku_registry.py.",
   "summary": {
     "product_count": 8,
-    "sku_count": 34,
+    "sku_count": 45,
     "tbd_price_count": 2,
     "by_category": {
       "studio": 3,
@@ -286,67 +286,155 @@
       "skus": [
         {
           "sku_id": "chatx-free",
-          "name": "免费版",
+          "name": "免费开始",
           "unit": "month",
           "price": "0",
           "currency": "USD",
-          "note": "1 坐席/1 账号/1 平台/标准翻译免费不限量/1"
+          "note": "非卖品条目/下载即用/1,000 Token 每月/标准翻译免费不限量/1 账号防薅护栏/注册送 10,000"
+        },
+        {
+          "sku_id": "recharge-50",
+          "name": "充值 50U",
+          "unit": "one-time",
+          "price": "50",
+          "currency": "USD",
+          "note": "75,000 Token 到账/首充无加赠/实付 12 个月有效"
+        },
+        {
+          "sku_id": "recharge-100",
+          "name": "充值 100U",
+          "unit": "one-time",
+          "price": "100",
+          "currency": "USD",
+          "note": "150,000 Token/首充 +5% 到账 157,500/实付 12 个月有效"
+        },
+        {
+          "sku_id": "recharge-200",
+          "name": "充值 200U",
+          "unit": "one-time",
+          "price": "200",
+          "currency": "USD",
+          "note": "300,000 Token/首充 +10% 到账 330,000/实付 12 个月有效"
+        },
+        {
+          "sku_id": "recharge-500",
+          "name": "充值 500U",
+          "unit": "one-time",
+          "price": "500",
+          "currency": "USD",
+          "note": "750,000 Token/首充 +20% 到账 900,000/实付 24 个月有效"
+        },
+        {
+          "sku_id": "recharge-1000",
+          "name": "充值 1000U",
+          "unit": "one-time",
+          "price": "1000",
+          "currency": "USD",
+          "note": "1,500,000 Token/首充 +30% 到账 1,950,000/实付 24 个月有效"
+        },
+        {
+          "sku_id": "recharge-5000",
+          "name": "充值 5000U",
+          "unit": "one-time",
+          "price": "5000",
+          "currency": "USD",
+          "note": "7,500,000 Token/首充 +35% 到账 10,125,000/实付 24 个月有效/专属客户经理 发票合同 优先支持"
+        },
+        {
+          "sku_id": "recharge-10000",
+          "name": "充值 10000U",
+          "unit": "one-time",
+          "price": "10000",
+          "currency": "USD",
+          "note": "15,000,000 Token/首充 +40% 到账 21,000,000/实付 24 个月有效/大额档权益全含 + 团队用量分账报表 + API 对接支持"
+        },
+        {
+          "sku_id": "recharge-newbie-6",
+          "name": "新人首充大礼包",
+          "unit": "one-time",
+          "price": "6",
+          "currency": "USD",
+          "note": "18,000 Token（2 倍率）/注册 72h 内/每账号一次/不占首充加赠资格"
+        },
+        {
+          "sku_id": "chatx-enterprise",
+          "name": "企业合作·年框",
+          "unit": "one-time",
+          "price": "按规模报价",
+          "currency": "USD",
+          "note": "年框协议价（建议 ≥20,000U 起谈）/月结 对公 发票/专属 SLA 与客户成功/多席位管理"
+        },
+        {
+          "sku_id": "chatx-private-deploy",
+          "name": "企业级私有化部署",
+          "unit": "one-time",
+          "price": "按规模报价",
+          "currency": "USD",
+          "note": "一次性实施 + 年授权维保/部署进客户内网 本地模型 数据不出网/实施培训 升级通道/承接旧旗舰版可选私有化叙事"
         },
         {
           "sku_id": "chatx-personal",
-          "name": "个人版",
+          "name": "基础版（停售）",
           "unit": "month",
           "price": "39",
           "currency": "USD",
-          "note": "1 坐席/3 账号/全平台/30"
+          "note": "停售 2026-08-21/原 60,000 Token 每月/存量按期履约到期转充值"
         },
         {
-          "sku_id": "chatx-team-seat",
-          "name": "团队版·每坐席",
+          "sku_id": "chatx-pro",
+          "name": "专业版（停售）",
           "unit": "month",
-          "price": "49",
+          "price": "99",
           "currency": "USD",
-          "note": "每坐席计价 ≥2 席/每席 5 账号+50"
+          "note": "停售 2026-08-21/原 200,000 Token 每月/存量按期履约到期转充值"
         },
         {
           "sku_id": "chatx-flagship",
-          "name": "旗舰",
+          "name": "旗舰版（停售）",
           "unit": "month",
           "price": "598",
           "currency": "USD",
-          "note": "50 账号/人工接管/数据看板/本地模型 Token 不限/可选私有化"
+          "note": "停售 2026-08-21/原 1,500,000 Token 每月 本地模型不限/私有化叙事由 chatx-private-deploy 承接"
+        },
+        {
+          "sku_id": "chatx-team-seat",
+          "name": "团队版·每坐席（停售）",
+          "unit": "month",
+          "price": "49",
+          "currency": "USD",
+          "note": "停售 2026-08-20/原每坐席计价 ≥2 席/由专业版 99 承接（同价位段 Token 翻倍）"
         },
         {
           "sku_id": "token-pack-s",
-          "name": "Token 体验包",
+          "name": "Token 体验包（停售）",
           "unit": "one-time",
           "price": "9.9",
           "currency": "USD",
-          "note": 10
+          "note": "停售 2026-08-20/原 10,000 Token/由充值 50U 档承接"
         },
         {
           "sku_id": "token-pack-m",
-          "name": "Token 标准包",
+          "name": "Token 标准包（停售）",
           "unit": "one-time",
           "price": "49",
           "currency": "USD",
-          "note": 60
+          "note": "停售 2026-08-20/原 60,000 Token/由充值 50U 档承接"
         },
         {
           "sku_id": "token-pack-l",
-          "name": "Token 专业包",
+          "name": "Token 专业包（停售）",
           "unit": "one-time",
           "price": "199",
           "currency": "USD",
-          "note": 300
+          "note": "停售 2026-08-20/原 300,000 Token/由充值 200U 档承接"
         },
         {
           "sku_id": "token-pack-xl",
-          "name": "Token 团队包",
+          "name": "Token 团队包（停售）",
           "unit": "one-time",
           "price": "499",
           "currency": "USD",
-          "note": 1
+          "note": "停售 2026-08-20/原 1,000,000 Token/由充值 500U 档承接"
         },
         {
           "sku_id": "chatx-entry",
@@ -354,7 +442,7 @@
           "unit": "month",
           "price": "58",
           "currency": "USD",
-          "note": "停售 2026-08-19/3 账号/AI 翻译/1 平台/由个人版 39 承接"
+          "note": "停售 2026-08-19/3 账号/AI 翻译/1 平台/由基础版 39 承接"
         },
         {
           "sku_id": "chatx-team",
@@ -362,7 +450,7 @@
           "unit": "month",
           "price": "198",
           "currency": "USD",
-          "note": "停售 2026-08-19/10 账号/全平台/由团队版 49 每坐席承接"
+          "note": "停售 2026-08-19/10 账号/全平台/由专业版 99 承接"
         }
       ]
     },
@@ -670,11 +758,131 @@
       "category": "growth",
       "visibility": "mixed",
       "sku_id": "chatx-free",
-      "name": "免费版",
+      "name": "免费开始",
       "unit": "month",
       "price": "0",
       "currency": "USD",
-      "note": "1 坐席/1 账号/1 平台/标准翻译免费不限量/1"
+      "note": "非卖品条目/下载即用/1,000 Token 每月/标准翻译免费不限量/1 账号防薅护栏/注册送 10,000"
+    },
+    {
+      "product": "zhiliao",
+      "brand_key": "chatx",
+      "category": "growth",
+      "visibility": "mixed",
+      "sku_id": "recharge-50",
+      "name": "充值 50U",
+      "unit": "one-time",
+      "price": "50",
+      "currency": "USD",
+      "note": "75,000 Token 到账/首充无加赠/实付 12 个月有效"
+    },
+    {
+      "product": "zhiliao",
+      "brand_key": "chatx",
+      "category": "growth",
+      "visibility": "mixed",
+      "sku_id": "recharge-100",
+      "name": "充值 100U",
+      "unit": "one-time",
+      "price": "100",
+      "currency": "USD",
+      "note": "150,000 Token/首充 +5% 到账 157,500/实付 12 个月有效"
+    },
+    {
+      "product": "zhiliao",
+      "brand_key": "chatx",
+      "category": "growth",
+      "visibility": "mixed",
+      "sku_id": "recharge-200",
+      "name": "充值 200U",
+      "unit": "one-time",
+      "price": "200",
+      "currency": "USD",
+      "note": "300,000 Token/首充 +10% 到账 330,000/实付 12 个月有效"
+    },
+    {
+      "product": "zhiliao",
+      "brand_key": "chatx",
+      "category": "growth",
+      "visibility": "mixed",
+      "sku_id": "recharge-500",
+      "name": "充值 500U",
+      "unit": "one-time",
+      "price": "500",
+      "currency": "USD",
+      "note": "750,000 Token/首充 +20% 到账 900,000/实付 24 个月有效"
+    },
+    {
+      "product": "zhiliao",
+      "brand_key": "chatx",
+      "category": "growth",
+      "visibility": "mixed",
+      "sku_id": "recharge-1000",
+      "name": "充值 1000U",
+      "unit": "one-time",
+      "price": "1000",
+      "currency": "USD",
+      "note": "1,500,000 Token/首充 +30% 到账 1,950,000/实付 24 个月有效"
+    },
+    {
+      "product": "zhiliao",
+      "brand_key": "chatx",
+      "category": "growth",
+      "visibility": "mixed",
+      "sku_id": "recharge-5000",
+      "name": "充值 5000U",
+      "unit": "one-time",
+      "price": "5000",
+      "currency": "USD",
+      "note": "7,500,000 Token/首充 +35% 到账 10,125,000/实付 24 个月有效/专属客户经理 发票合同 优先支持"
+    },
+    {
+      "product": "zhiliao",
+      "brand_key": "chatx",
+      "category": "growth",
+      "visibility": "mixed",
+      "sku_id": "recharge-10000",
+      "name": "充值 10000U",
+      "unit": "one-time",
+      "price": "10000",
+      "currency": "USD",
+      "note": "15,000,000 Token/首充 +40% 到账 21,000,000/实付 24 个月有效/大额档权益全含 + 团队用量分账报表 + API 对接支持"
+    },
+    {
+      "product": "zhiliao",
+      "brand_key": "chatx",
+      "category": "growth",
+      "visibility": "mixed",
+      "sku_id": "recharge-newbie-6",
+      "name": "新人首充大礼包",
+      "unit": "one-time",
+      "price": "6",
+      "currency": "USD",
+      "note": "18,000 Token（2 倍率）/注册 72h 内/每账号一次/不占首充加赠资格"
+    },
+    {
+      "product": "zhiliao",
+      "brand_key": "chatx",
+      "category": "growth",
+      "visibility": "mixed",
+      "sku_id": "chatx-enterprise",
+      "name": "企业合作·年框",
+      "unit": "one-time",
+      "price": "按规模报价",
+      "currency": "USD",
+      "note": "年框协议价（建议 ≥20,000U 起谈）/月结 对公 发票/专属 SLA 与客户成功/多席位管理"
+    },
+    {
+      "product": "zhiliao",
+      "brand_key": "chatx",
+      "category": "growth",
+      "visibility": "mixed",
+      "sku_id": "chatx-private-deploy",
+      "name": "企业级私有化部署",
+      "unit": "one-time",
+      "price": "按规模报价",
+      "currency": "USD",
+      "note": "一次性实施 + 年授权维保/部署进客户内网 本地模型 数据不出网/实施培训 升级通道/承接旧旗舰版可选私有化叙事"
     },
     {
       "product": "zhiliao",
@@ -682,23 +890,23 @@
       "category": "growth",
       "visibility": "mixed",
       "sku_id": "chatx-personal",
-      "name": "个人版",
+      "name": "基础版（停售）",
       "unit": "month",
       "price": "39",
       "currency": "USD",
-      "note": "1 坐席/3 账号/全平台/30"
+      "note": "停售 2026-08-21/原 60,000 Token 每月/存量按期履约到期转充值"
     },
     {
       "product": "zhiliao",
       "brand_key": "chatx",
       "category": "growth",
       "visibility": "mixed",
-      "sku_id": "chatx-team-seat",
-      "name": "团队版·每坐席",
+      "sku_id": "chatx-pro",
+      "name": "专业版（停售）",
       "unit": "month",
-      "price": "49",
+      "price": "99",
       "currency": "USD",
-      "note": "每坐席计价 ≥2 席/每席 5 账号+50"
+      "note": "停售 2026-08-21/原 200,000 Token 每月/存量按期履约到期转充值"
     },
     {
       "product": "zhiliao",
@@ -706,11 +914,23 @@
       "category": "growth",
       "visibility": "mixed",
       "sku_id": "chatx-flagship",
-      "name": "旗舰",
+      "name": "旗舰版（停售）",
       "unit": "month",
       "price": "598",
       "currency": "USD",
-      "note": "50 账号/人工接管/数据看板/本地模型 Token 不限/可选私有化"
+      "note": "停售 2026-08-21/原 1,500,000 Token 每月 本地模型不限/私有化叙事由 chatx-private-deploy 承接"
+    },
+    {
+      "product": "zhiliao",
+      "brand_key": "chatx",
+      "category": "growth",
+      "visibility": "mixed",
+      "sku_id": "chatx-team-seat",
+      "name": "团队版·每坐席（停售）",
+      "unit": "month",
+      "price": "49",
+      "currency": "USD",
+      "note": "停售 2026-08-20/原每坐席计价 ≥2 席/由专业版 99 承接（同价位段 Token 翻倍）"
     },
     {
       "product": "zhiliao",
@@ -718,11 +938,11 @@
       "category": "growth",
       "visibility": "mixed",
       "sku_id": "token-pack-s",
-      "name": "Token 体验包",
+      "name": "Token 体验包（停售）",
       "unit": "one-time",
       "price": "9.9",
       "currency": "USD",
-      "note": 10
+      "note": "停售 2026-08-20/原 10,000 Token/由充值 50U 档承接"
     },
     {
       "product": "zhiliao",
@@ -730,11 +950,11 @@
       "category": "growth",
       "visibility": "mixed",
       "sku_id": "token-pack-m",
-      "name": "Token 标准包",
+      "name": "Token 标准包（停售）",
       "unit": "one-time",
       "price": "49",
       "currency": "USD",
-      "note": 60
+      "note": "停售 2026-08-20/原 60,000 Token/由充值 50U 档承接"
     },
     {
       "product": "zhiliao",
@@ -742,11 +962,11 @@
       "category": "growth",
       "visibility": "mixed",
       "sku_id": "token-pack-l",
-      "name": "Token 专业包",
+      "name": "Token 专业包（停售）",
       "unit": "one-time",
       "price": "199",
       "currency": "USD",
-      "note": 300
+      "note": "停售 2026-08-20/原 300,000 Token/由充值 200U 档承接"
     },
     {
       "product": "zhiliao",
@@ -754,11 +974,11 @@
       "category": "growth",
       "visibility": "mixed",
       "sku_id": "token-pack-xl",
-      "name": "Token 团队包",
+      "name": "Token 团队包（停售）",
       "unit": "one-time",
       "price": "499",
       "currency": "USD",
-      "note": 1
+      "note": "停售 2026-08-20/原 1,000,000 Token/由充值 500U 档承接"
     },
     {
       "product": "zhiliao",
@@ -770,7 +990,7 @@
       "unit": "month",
       "price": "58",
       "currency": "USD",
-      "note": "停售 2026-08-19/3 账号/AI 翻译/1 平台/由个人版 39 承接"
+      "note": "停售 2026-08-19/3 账号/AI 翻译/1 平台/由基础版 39 承接"
     },
     {
       "product": "zhiliao",
@@ -782,7 +1002,7 @@
       "unit": "month",
       "price": "198",
       "currency": "USD",
-      "note": "停售 2026-08-19/10 账号/全平台/由团队版 49 每坐席承接"
+      "note": "停售 2026-08-19/10 账号/全平台/由专业版 99 承接"
     },
     {
       "product": "zhituo",

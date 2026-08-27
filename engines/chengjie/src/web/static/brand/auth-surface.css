@@ -35,7 +35,7 @@
 :root{
   /* 主色 = 智连蓝（brand.css: --bl-growth，与工作台 --tk-brand 同一色） */
   --p:var(--bl-growth,#1e8cf2);
-  --ps:rgba(30,140,242,.12);          /* 主色淡底：focus ring / hover 底 */
+  --ps:color-mix(in srgb, var(--bl-growth,#1e8cf2) 12%, transparent);          /* 主色淡底：focus ring / hover 底 */
   /* 官方 growth 光环渐变，替代原先自造的 indigo→violet→cyan */
   --g:var(--bl-growth-ring,linear-gradient(135deg,#0070f0 0%,#00c2ff 100%));
   /* 字体栈单一源＝brand.css 的 --bl-font-sans（tokens.json 派生）；此处 fallback
@@ -60,7 +60,9 @@ body{font-family:var(--auth-font);}
 /* ===== 主动作按钮光晕：品牌阴影 token，去掉原先硬编码的 periwinkle 光 =====
    .btn-login = login.html，.btn-submit = setup.html（两页按钮类名不同，一并覆盖）。*/
 .btn-login,.btn-submit{box-shadow:var(--bl-shadow-primary,0 4px 14px 0 rgba(30,140,242,.25));}
-.btn-login:hover,.btn-submit:hover{box-shadow:0 6px 22px rgba(30,140,242,.42);}
+/* hover/光晕投影 color-mix 引令牌（2026-08-23 白标压测批）：写死 rgba＝换肤后按钮
+   光晕仍是旧品牌蓝；--bl-shadow-primary 本体属 brand.css 生成层，换肤时随 tokens.json 再生。 */
+.btn-login:hover,.btn-submit:hover{box-shadow:0 6px 22px color-mix(in srgb, var(--bl-growth,#1e8cf2) 42%, transparent);}
 
 /* 卡片上的品牌标光晕：同步改为智连蓝（原为紫） */
-.brand-mark-wrap--card{box-shadow:0 6px 22px rgba(30,140,242,.32);}
+.brand-mark-wrap--card{box-shadow:0 6px 22px color-mix(in srgb, var(--bl-growth,#1e8cf2) 32%, transparent);}

@@ -2,6 +2,8 @@
 {% block title %}{{ (i18n or {}).get('rpa_fn_title','运营漏斗') }} · {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
 {% block page_title %}{{ (i18n or {}).get('rpa_fn_title','运营漏斗') }}{% endblock %}
 {% block content %}
+{% set cluster_id = "analysis" %}{% set cluster_here = "/funnel" %}
+{% include "_cluster_tabs.html" %}
 {# 跨平台客户旅程漏斗独立页:全量复用 RPA 共享漏斗组件,默认全渠道聚合,
    页内渠道筛选片(all/messenger/line/telegram/mobile)由组件自带。 #}
 {% include "_rpa_shared_styles.html" %}

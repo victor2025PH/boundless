@@ -169,6 +169,17 @@ def record_scene_request(scene: str, *, unmet: bool) -> None:
         if unmet:
             _bump_counter(_METRICS.setdefault("scene_unmet", {}), cls)
         _METRICS["last_ts"] = time.time()
+    # P3 2026-08-22：需求侧落库（跨重启记忆——本机日均 8+ 次重启把进程计数
+    # 清成摆设）。**peek 不懒建**：生产单例早被媒体链建过=写得进；测试进程
+    # 没建过=零磁盘写（防「测试写仓库 config/」）。绝不因账本失败影响计数。
+    if cls != "other":
+        try:
+            from src.companion.persona_media_store import peek_persona_media_store
+            st = peek_persona_media_store()
+            if st is not None:
+                st.record_scene_demand(cls, unmet=unmet)
+        except Exception:
+            logger.debug("[image_autosend] 场景需求落账失败（已忽略）", exc_info=True)
 
 
 def record_promise_event(name: str) -> None:
@@ -402,7 +413,11 @@ async def stage_image_file(
             if backend == "album":
                 res = await provider.generate(
                     "", album_key=album_key, album_scene=_scene_req,
-                    now_hour=_now_hour, prefer_series=_prefer_series)
+                    now_hour=_now_hour, prefer_series=_prefer_series,
+                    # 实施69 P1：非硬要求的 directive 场景（轮换/LLM 软场景）
+                    # 作软偏好——有匹配存货贴场景，没有绝不拒发（与 A 线同口径）。
+                    prefer_scene=("" if _scene_req else str(
+                        (directive or {}).get("scene") or "").strip()))
             else:
                 persona = _resolve_persona(persona_id)
                 # 天气快照（2026-08-18）：轮换池滤天气冲突场景（暴雨×沙滩）+

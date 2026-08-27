@@ -75,6 +75,57 @@ def test_dedup_scoped_per_contact():
     assert s.count() == 2
 
 
+def test_far_future_due_rejected_at_capture():
+    """B68（实施67 P2-i）：到期日在一年开外＝几乎必是日期解析错误（实锤：
+    报告长文里的日期被抓成 2027 年约定）——捕获侧直接拦下不入库。
+    锚 time.time()（捕获侧 sanity 的判定时钟），不锚测试固定 NOW。"""
+    import time as _t
+    s = _store()
+    far_due = _t.time() + 400 * 86400
+    c = CareCommitment(
+        due_at=far_due, event_at=far_due - 36000, topic="检查",
+        sentiment="neutral", anchor_text="2027年", source_text="2027年再检查",
+        confidence=0.9,
+    )
+    assert s.add_commitment(c, contact_key="tg:u1") is None
+    assert s.count() == 0
+    # 一年内的正常约定不受影响
+    ok_due = _t.time() + 5 * 86400
+    c2 = CareCommitment(
+        due_at=ok_due, event_at=ok_due - 3600, topic="复查",
+        sentiment="neutral", anchor_text="下周", source_text="下周复查",
+        confidence=0.9,
+    )
+    assert s.add_commitment(c2, contact_key="tg:u1")
+
+
+def test_capture_cb_excludes_groups_and_bug_intake():
+    """B68（实施67 P2-i）：正则捕获回调对群聊 contact 与 bug_intake 会话一律
+    跳过（00:12 实锤 2 条报障群消息被捕成关怀约定，值守现场 cancel）。"""
+    from src.contacts.care_capture import make_care_inbound_cb
+
+    class _CM:
+        config = {
+            "companion": {"proactive_care": {"enabled": True, "capture": True}},
+            "bug_intake": {"enabled": True, "groups": ["-100999"]},
+        }
+
+    s = _store()
+    cb = make_care_inbound_cb(s, _CM())
+    base = {"conversation_id": "telegram:a:x", "platform": "telegram",
+            "account_id": "a", "chat_key": "x"}
+    # 群聊 → 不捕
+    cb({**base, "chat_type": "group"}, "明天面试好紧张")
+    assert s.count() == 0
+    # bug_intake 在册会话（私聊形态）→ 不捕
+    cb({**base, "chat_key": "-100999", "chat_type": "private"},
+       "明天面试好紧张")
+    assert s.count() == 0
+    # 正常私聊 → 照捕
+    cb({**base, "chat_type": "private"}, "明天面试好紧张")
+    assert s.count() == 1
+
+
 def test_add_from_text():
     s = _store()
     ids = s.add_from_text("明天面试好紧张", contact_key="tg:u1", platform="telegram", now=NOW)

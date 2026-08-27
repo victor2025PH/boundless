@@ -19,6 +19,18 @@ from typing import Optional, Tuple
 SLOT_NAME = "name"
 SLOT_RESIDENCE = "residence"
 SLOT_RELATIONSHIP = "relationship"
+SLOT_AGE = "age"
+
+# 年龄（B50 2026-08-23）：单值身份槽——同槽不同值＝冲突按新近择一（用户过
+# 生日年龄+1 是常态）。只认规范事实（memory_heuristic「用户年龄：38岁」）与
+# 第一人称现在时自报；追忆句（岁的时候/那年）刻意排除。
+_AGE_PATTERNS = [
+    re.compile(r"用户年龄\s*[：:]\s*(?P<v>\d{1,2})\s*岁"),
+    re.compile(r"我(?:今年|现在|都)?\s*(?P<v>\d{1,2})\s*岁(?!的时候|那年|之前|以前)"),
+    re.compile(r"我今年\s*(?P<v>\d{1,2})(?!\d)"
+               r"(?!\s*(?:年|月|号|日|点|块|元|斤|万|亿|个|天|小时|分|秒|[kKwW]))"),
+    re.compile(r"(?i)\bI(?:'m|\s+am)\s+(?P<v>\d{1,2})(?:\s+years?\s+old)?\b"),
+]
 
 # 关系状态：关键词 → 规范值（单值：当前只可能处于其一）
 _REL_MAP = [
@@ -82,6 +94,16 @@ def extract_slot(text: str) -> Optional[Tuple[str, str, int]]:
             if val:
                 return (SLOT_NAME, val, 0)
 
+    for pat in _AGE_PATTERNS:
+        m = pat.search(t)
+        if m:
+            try:
+                age = int(m.group("v"))
+            except (TypeError, ValueError):
+                continue
+            if 10 <= age <= 99:
+                return (SLOT_AGE, str(age), 0)
+
     for pat in _REL_MAP:
         if pat[0].search(t):
             return (SLOT_RELATIONSHIP, pat[1], 0)
@@ -124,4 +146,5 @@ __all__ = [
     "SLOT_NAME",
     "SLOT_RESIDENCE",
     "SLOT_RELATIONSHIP",
+    "SLOT_AGE",
 ]

@@ -64,6 +64,7 @@
 
 /* ── 批量选择 ── */
 .entry-card.sel{outline:2px solid var(--p);outline-offset:2px;background:var(--ps)}
+.entry-card.hl-flash{outline:2px solid var(--p);outline-offset:2px;box-shadow:0 0 0 6px var(--ps)}
 .entry-cb{position:static;width:16px;height:16px;cursor:pointer;accent-color:var(--p);z-index:2;margin:0;flex:0 0 auto;align-self:flex-end}
 /* 选中模式：整个 card 可点击切换 */
 .sel-mode .entry-card{cursor:pointer}
@@ -841,6 +842,13 @@ function debounceLoadEntries(){
 }
 
 /* ── 知识条目 ─────────────────────────────────────────── */
+/* 空态「清除筛选」落点（顶层声明=全局，供内联 onclick 调用） */
+function kbResetFilters(){
+  document.getElementById('entry-search').value='';
+  document.getElementById('entry-cat').value='';
+  document.getElementById('entry-enabled-only').checked=false;
+  loadEntries();
+}
 async function loadEntries(){
   const search=(document.getElementById('entry-search').value||'').trim();
   const cat=document.getElementById('entry-cat').value;
@@ -851,7 +859,21 @@ async function loadEntries(){
   const grid=document.getElementById('entry-grid');
   _allEntryIds = (entries||[]).map(e=>String(e.id));   // 更新全选池
   if(!entries.length){
-    grid.innerHTML='<div class="empty-state"><p>'+window.T('kb_js_001')+'"'+window.T('kb_s005')+'"'+window.T('add')+'</p></div>';
+    /* 空态分语义（2026-08-22 P5）：「筛选无结果」与「库真空」是两回事——
+       前者给一键清筛，后者给三件套（插画+一句人话+真 CTA：起步包向导/新建）。
+       旧实现一行灰字两头凑，违反 /developer 样式指南卡 ⑤。 */
+    if(search || cat || enabled){
+      grid.innerHTML='<div class="empty-state"><p>'+window.T('kb2_nomatch')+'</p>'
+        +'<button class="btn btn-s btn-sm" onclick="kbResetFilters()">'+window.T('kb2_clearfilter')+'</button></div>';
+    }else{
+      grid.innerHTML='<div class="empty-state">'
+        +'<div style="font-size:34px;line-height:1" aria-hidden="true">📚</div>'
+        +'<p style="margin:.6rem auto 1rem;max-width:420px">'+window.T('kb2_empty_lead')+'</p>'
+        +'<div style="display:flex;gap:.6rem;justify-content:center;flex-wrap:wrap">'
+        +'<a class="btn btn-p btn-sm" href="/workspace/kb-start" style="text-decoration:none">🌱 '+window.T('kb2_empty_seed')+'</a>'
+        +'<button class="btn btn-s btn-sm" onclick="openEntryDrawer()">＋ '+window.T('kb_s005')+'</button>'
+        +'</div></div>';
+    }
     return;
   }
   grid.innerHTML=entries.map(e=>entryCard(e)).join('');
@@ -1103,7 +1125,7 @@ async function restoreVersion(vid){
   if(r.ok){
     toast(window.T('kb_js_026'));
     const id=document.getElementById('entry-id').value;
-    openEntryEditor(id);  // 重新加载条目内容
+    openEntryDrawer(id);  // 重新加载条目内容（真名是 openEntryDrawer——旧名 openEntryEditor 从未存在，点恢复版本即 ReferenceError）
     showVersionHistory();
   } else {
     toast(window.T('wa_js_038'),'warn');
@@ -2248,8 +2270,8 @@ async function restoreBackup(filename){
 /* ── 条目编辑快捷入口 ────────────────────────────────────── */
 function editEntry(id){
   switchTab('entries');
-  // 直接调用条目编辑 drawek
-  setTimeout(()=>openEntryEditor(id),300);
+  // 直接打开条目编辑抽屉（真名 openEntryDrawer；旧名 openEntryEditor 是 ReferenceError 死链）
+  setTimeout(()=>openEntryDrawer(id),300);
 }
 
 /* ── 页头健康分芯片（复用维护面板同一接口；取数失败静默隐藏不打扰） ── */
@@ -2278,8 +2300,31 @@ function sandboxFromDrawer(){
   if(q.value.trim())runSandbox();
 }
 
+/* ── 深链定位：/knowledge#entry-<id>（实施49 P0-4）────────────
+   学习队列「已通过」、查重提示、效果回访三处早就在发这个链接，而本页
+   从不消费 hash——点过去只是打开知识库首屏，人还得自己搜标题，这正是
+   内测反馈里「学完了不知道去哪看」的断链点。命中列表就滚动高亮；条目
+   被筛选/搜索挡在列表外时按 id 直接拉起编辑抽屉（openEntryDrawer 按 id
+   取数，不依赖当前列表），删掉的条目如实提示而不是静默什么都不发生。 */
+async function _focusHashEntry(){
+  const m=/^#(?:entry|ec)-(.+)$/.exec(location.hash||'');
+  if(!m) return;
+  const id=decodeURIComponent(m[1]);
+  const card=document.getElementById('ec-'+id);
+  if(card){
+    card.scrollIntoView({behavior:'smooth',block:'center'});
+    card.classList.add('hl-flash');
+    setTimeout(()=>card.classList.remove('hl-flash'),2600);
+    return;
+  }
+  try{ await openEntryDrawer(id); }
+  catch(e){ if(typeof showToast==='function')showToast(window.T('kb2_entry_gone'),'warning'); }
+}
+window._focusHashEntry=_focusHashEntry;
+window.addEventListener('hashchange',_focusHashEntry);
+
 /* 初始加载 */
-loadEntries();
+loadEntries().then(_focusHashEntry).catch(()=>{});
 loadHealthChip();
 // 静默加载待审核数量
 apiFetch('/api/kb/translations/pending?limit=100').then(r=>r.json()).then(d=>{

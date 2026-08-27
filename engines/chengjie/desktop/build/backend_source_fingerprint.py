@@ -81,35 +81,50 @@ def hash_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def fingerprint_tree(label: str, root: Path) -> dict:
-    """对单棵树（或单文件）出 ``{label, path, digest, file_count}``。"""
+def fingerprint_tree(label: str, root: Path, *, detail: bool = False) -> dict:
+    """对单棵树（或单文件）出 ``{label, path, digest, file_count}``。
+
+    ``detail=True`` 额外带 ``files: {relpath: sha256}`` 逐文件明细（哈希本就逐文件算，
+    只是顺手记录，零额外 IO）——供 ``refresh_backend_datas.py`` 做「stamp vs 当前树」
+    文件级 diff，判定变化是否全落在 DATAS 类资产内。聚合 digest 算法不变。
+    """
     root = Path(root)
     h = hashlib.sha256()
     n = 0
+    files: dict[str, str] = {}
     if not root.exists():
-        return {
+        out = {
             "label": label,
             "path": str(root),
             "digest": h.hexdigest(),
             "file_count": 0,
             "missing": True,
         }
+        if detail:
+            out["files"] = files
+        return out
     base = root if root.is_dir() else root.parent
     for p in iter_fingerprint_files(root):
         rel = _norm_rel(p, base) if root.is_dir() else p.name
+        digest = hash_file(p)
         # path 进哈希：防「两文件内容对调」碰撞；内容进哈希：防静默改文
         h.update(rel.encode("utf-8"))
         h.update(b"\0")
-        h.update(hash_file(p).encode("ascii"))
+        h.update(digest.encode("ascii"))
         h.update(b"\n")
+        if detail:
+            files[rel] = digest
         n += 1
-    return {
+    out = {
         "label": label,
         "path": str(root.resolve()),
         "digest": h.hexdigest(),
         "file_count": n,
         "missing": False,
     }
+    if detail:
+        out["files"] = files
+    return out
 
 
 def _staged_source_roots(repo: Path) -> list[tuple[str, Path]]:
@@ -124,6 +139,9 @@ def _staged_source_roots(repo: Path) -> list[tuple[str, Path]]:
     repo = Path(repo).resolve()
     out: list[tuple[str, Path]] = [
         ("src/web/static", repo / "src" / "web" / "static"),
+        # i18n 词条包（2026-08-18 起走暂存清洗进 datas，frozen 态文件优先 exec）：
+        # 指纹指真实源目录（iter 已剔 __pycache__/.pyc，与暂存清洗口径一致）。
+        ("src/web/i18n_packs", repo / "src" / "web" / "i18n_packs"),
     ]
     if (repo / "domains").is_dir():
         out.append(("domains", repo / "domains"))
@@ -177,9 +195,11 @@ def default_roots(repo: Path, datas: Sequence[tuple[Path, str]] | None = None) -
 def compute_fingerprint(
     repo: Path,
     datas: Sequence[tuple[Path, str]] | None = None,
+    *,
+    detail: bool = False,
 ) -> dict:
     roots = default_roots(repo, datas=datas)
-    parts = [fingerprint_tree(label, path) for label, path in roots]
+    parts = [fingerprint_tree(label, path, detail=detail) for label, path in roots]
     agg = hashlib.sha256()
     for part in parts:
         agg.update(part["label"].encode("utf-8"))
@@ -255,7 +275,8 @@ def verify_stamp(
         return (
             False,
             f"backend-dist STALE vs working tree (changed: {hint}). "
-            f"Run: npm run build:backend   then retry dist. "
+            f"Try: npm run refresh:datas   (datas-only, seconds; refuses if .py changed) "
+            f"else: npm run build:backend   then retry dist. "
             f"stamped={stamped['aggregate'][:12]}… current={current['aggregate'][:12]}…",
             current,
             stamped,

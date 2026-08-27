@@ -30,7 +30,12 @@ _EMOJI = re.compile(
 
 # 非增天花板（2026-08-08 P2A 清理后的基线）。
 _CEILINGS = {
-    "workspace_base.html": 12,
+    # 2026-08-17 12→10 收紧：顶栏药丸区块注释里的装饰 emoji（风控盾/图钉，块注释
+    # 中间行不在行首剥离豁免内）随 P0-c 顶栏主题化改写为等义文字。
+    # 2026-08-19 10→7：presence-status v2 把「我的状态」从 <option> 三色圆点改成
+    # radio 行，控件位 emoji 再少 3；剩余属豁免语境（升级⛔ / 会话⚠ / 桌面通知💬）。
+    # 2026-08-27 实施75 batch2 7→6：到期/拦截横幅退役顶部，⏳⛔ 装饰位随 DOM 摘除。
+    "workspace_base.html": 6,
     # 2026-08-12 P2.5：注释区 emoji 清理（块注释中间行不在行首剥离豁免内，10 处全部
     # 改为等义文字，零 UI 变化）后 54→43 锁死。剩余=控件位真图标（诊断面板 ⛔⚠️✅ 等，
     # 归属诊断面板线）+ 豁免语境（option/reaction/PI 回退表/庆祝语/克隆 🎤 标记）。
@@ -41,6 +46,15 @@ _CEILINGS = {
     #      文案前缀」豁免语境，owner=xlate 线）；
     #   +1 🧲 TG 抓群成员工具链接（控件位，应转 uiIcon——记债，owner=tg-members 线）。
     #   （msgops 自增的 📌 注释 emoji 已改文字，不占额度。）
+    #   -4 2026-08-21 AI 体检面板改版：结论头/卡片行严重度图标全走 CSS 色点
+    #      （⛔⚠️✅ 控件位 emoji 清退，左缘色轨+色点承担语义）。
+    #   +1 2026-08-22 全自动一键化 P2：存量升级一次性提示弹层的 🚀（__wsModal
+    #      icon 槽位＝该组件的设计图标位，预算触顶弹窗同款用法；owner=本线）。
+    # 2026-08-23 50→53 登记（impl64 exec 线代记，HEAD diff 归因；三处均为当日
+    # 上午 unread-trust/tag 线 hot-live 的控件位 emoji，应转 uiIcon——记债，
+    # owner=inbox unread trust + tag 线）：
+    #   +2 🏷 标签编辑器入口（strip gear/编辑弹层三入口批次）；
+    #   +1 🧹 在线账号菜单「清除未读」行（acct-menu clear-unread 批次）。
     "unified_inbox.html": 53,
     "workspace_dashboard.html": 0,
     "workspace_channels.html": 1,

@@ -30,36 +30,57 @@ sys.path.insert(0, str(_ENGINE_ROOT / "scripts"))
 SERVER_OFFSET_HOURS = 8.0  # 本机部署恒 UTC+8；如迁移由 CLI 参数覆写
 SHIFT_MEANINGFUL_HOURS = 3.0  # 偏移差 ≥3h 视为「会实质改变发送时段」
 _PHONE_PLATFORMS = ("whatsapp", "wa")  # 与 user_clock_resolver._PHONE_PLATFORMS 同口径
+_REPLACE_SOURCES = ("stated_city", "phone_cc", "behavior_corroborated")
+_NARROW_SOURCES = ("behavior",)
 
 
 def _recompute_clock(conn: sqlite3.Connection, cid: str, platform: str,
                      chat_key: str, language: str, now_v: float):
-    """离线重算该会话时钟（复刻生产 resolver 的信号装配，**缺 stated_place 一路**——
-    情景记忆库不在本工具读取范围，覆盖率因此是下界）。失败 → None。"""
+    """离线重算该会话时钟（复刻生产 resolver 的信号装配）。
+
+    情景记忆库不在本工具读取范围，但入站原文挖掘（「我在曼谷」）与生产同口径——
+    覆盖率因此仍是下界（缺 episodic），但不再把聊天里已经说过的城市漏掉。
+    失败 → None。
+    """
     from datetime import datetime, timezone
 
     from src.companion.user_clock import resolve_user_clock
+    from src.companion.user_clock_resolver import (
+        stated_place_from_inbound_text,
+        utc_hours_from_rows,
+    )
 
     phone = ""
     if str(platform or "").strip().lower() in _PHONE_PLATFORMS:
         phone = str(chat_key or "").strip()
-    hours: List[int] = []
+    rows: List[Dict[str, Any]] = []
     try:
-        rows = conn.execute(
-            "SELECT ts FROM messages WHERE conversation_id=? AND direction='in'"
-            " AND ts>0 ORDER BY ts DESC LIMIT 120", (cid,)).fetchall()
-        hours = [
-            datetime.fromtimestamp(float(t[0]), tz=timezone.utc).hour
-            for t in rows
-        ]
+        try:
+            fetched = conn.execute(
+                "SELECT ts, text FROM messages WHERE conversation_id=?"
+                " AND direction='in' AND ts>0 ORDER BY ts DESC LIMIT 120",
+                (cid,)).fetchall()
+            rows = [{"ts": r[0], "text": r[1], "direction": "in"} for r in fetched]
+        except Exception:
+            fetched = conn.execute(
+                "SELECT ts FROM messages WHERE conversation_id=?"
+                " AND direction='in' AND ts>0 ORDER BY ts DESC LIMIT 120",
+                (cid,)).fetchall()
+            rows = [{"ts": r[0], "text": "", "direction": "in"} for r in fetched]
     except Exception:
-        hours = []
+        rows = []
+    hours = utc_hours_from_rows(rows)
+    stated = ""
+    for row in rows:  # DESC already: first hit is newest
+        stated = stated_place_from_inbound_text(row.get("text") or "")
+        if stated:
+            break
     lang = str(language or "").strip()
     if lang.lower() in ("", "unknown"):
         lang = ""
     try:
         return resolve_user_clock(
-            stated_place=None, phone=phone, activity_hours=hours,
+            stated_place=stated or None, phone=phone, activity_hours=hours,
             language=lang,
             now=datetime.fromtimestamp(now_v, tz=timezone.utc))
     except Exception:
@@ -112,6 +133,7 @@ def collect(db_path: str, *, days: float = 14.0,
         "resolved": 0, "schedulable": 0, "country_only": 0,
         "negative_cached": 0, "never_resolved": 0,
         "shifted_meaningful": 0,
+        "replace": 0, "narrow": 0, "advisory": 0,
         "by_source": {}, "offsets": {},
     }
 
@@ -121,12 +143,18 @@ def collect(db_path: str, *, days: float = 14.0,
         out["by_source"][src] = int(out["by_source"].get(src, 0)) + 1
         if tz_name and schedulable_hint:
             out["schedulable"] += 1
+            if src in _REPLACE_SOURCES:
+                out["replace"] += 1
+            elif src in _NARROW_SOURCES:
+                out["narrow"] += 1
             off = float(offset or 0.0)
             key = (f"UTC{off:+.0f}" if abs(off - round(off)) < 0.25
                    else f"UTC{off:+.1f}")
             out["offsets"][key] = int(out["offsets"].get(key, 0)) + 1
             if abs(off - float(server_offset)) >= SHIFT_MEANINGFUL_HOURS:
                 out["shifted_meaningful"] += 1
+        elif tz_name or src in ("lang_default",):
+            out["advisory"] += 1
         elif country:
             out["country_only"] += 1
 
@@ -170,10 +198,13 @@ def collect(db_path: str, *, days: float = 14.0,
             if conf < 0:
                 out["negative_cached"] += 1
                 continue
+            src = str(tz_source or "")
             _bucket_clockish(
                 tz_name=str(tz_hint or ""), country=str(tz_country or ""),
-                source=str(tz_source or ""), offset=float(tz_offset or 0.0),
-                schedulable_hint=True)  # 落库口径：有 tz_hint 即 replace/narrow
+                source=src, offset=float(tz_offset or 0.0),
+                # 落库 source 与 trust 同口径：lang_default 有 IANA 名也只是 advisory，
+                # 不能算「可调度」（2026-08-19 早安/晚安事故后 schedule_clock 只吃 replace）。
+                schedulable_hint=(src in _REPLACE_SOURCES or src in _NARROW_SOURCES))
     finally:
         try:
             conn.close()
@@ -193,12 +224,15 @@ def render(stats: Dict[str, Any]) -> str:
         return f"{(100.0 * n / total):.0f}%" if total else "-"
 
     mode = ("落库口径" if stats.get("mode") != "recomputed"
-            else "离线重算口径（缺 stated_place 信号，覆盖率为下界）")
+            else "离线重算口径（缺 episodic 记忆，入站原文已挖；覆盖率仍为下界）")
     lines.append(
         f"== {stats['db']}（近 {stats['days']:.0f} 天活跃私聊 {total} 会话 · {mode}）==")
     lines.append(
         f"  已解析 {stats['resolved']}（{_pct(stats['resolved'])}）"
         f" · 可调度(有明确时区) {sched}（{_pct(sched)}）"
+        f" · 其中 replace {stats.get('replace', 0)}"
+        f" / narrow {stats.get('narrow', 0)}"
+        f" / advisory {stats.get('advisory', 0)}"
         f" · 仅国家 {stats['country_only']}"
         f" · 推不出 {stats['negative_cached']}"
         f" · 从未解析 {stats['never_resolved']}")

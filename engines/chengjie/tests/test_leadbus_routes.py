@@ -182,3 +182,58 @@ def test_status_requires_auth(tmp_path):
     client, _ = _client(tmp_path, auth_ok=False)
     r = client.get("/api/leadbus/status")
     assert r.status_code == 401
+
+
+# ── ④ 线索占位符不进自动拟稿（2026-08-18 事故门禁）──────────────────────
+# 事故：zhituo 批量推 52 条线索 → 占位符被当客户消息喂 LLM 拟稿（内容全是
+# 「诶？这是什么意思呀」）→ auto_ai 会话被 AutosendWorker 真发 → 本实例无
+# WhatsApp 通道 → 28 次「WhatsApp 服务未启用」WARNING → triage 告警。
+# 两条不变量：① 合成前缀与判定函数同源；② auto_draft 回调对占位符零拟稿。
+
+def test_lead_capture_prefix_single_source():
+    """路由合成的占位文案必须能被同源判定函数认出（防两侧字面量漂移）。"""
+    from src.integrations.leadbus_account import (
+        LEAD_CAPTURE_PREFIX, is_lead_capture_text,
+    )
+    assert is_lead_capture_text(f"{LEAD_CAPTURE_PREFIX} @who") is True
+    assert is_lead_capture_text(f"  {LEAD_CAPTURE_PREFIX} tg:123") is True
+    # 存量库里已落库的历史占位符（本次事故那 52 条）也必须命中
+    assert is_lead_capture_text("[线索捕获] suyat031592") is True
+    # 客户真实消息绝不误伤：普通文本 / 前缀出现在句中 / 空值
+    assert is_lead_capture_text("你好，想咨询一下") is False
+    assert is_lead_capture_text("我看到 [线索捕获] 这几个字") is False
+    assert is_lead_capture_text("") is False
+    assert is_lead_capture_text(None) is False
+
+
+def test_ingested_placeholder_matches_gate(tmp_path):
+    """端到端：经真实 ingest 落库的 last_text 必须命中闸门判定。"""
+    from src.integrations.leadbus_account import is_lead_capture_text
+    client, store = _client(tmp_path)
+    r = client.post("/api/leadbus/ingest", json=_envelope())
+    row = store.get_conversation(r.json()["session_id"])
+    assert is_lead_capture_text(row["last_text"]) is True
+
+
+def test_auto_draft_cb_skips_lead_capture_placeholder():
+    """auto_draft 回调对线索占位符零拟稿（正常消息不受影响）。"""
+    from unittest.mock import MagicMock
+
+    from src.inbox.autodraft_helpers import AutoDraftConfig, make_auto_draft_cb
+
+    ds = MagicMock()
+    ds.auto_generate_draft.return_value = "d1"
+    store = MagicMock()
+    store.get_automation_mode_if_set.return_value = None
+    cb = make_auto_draft_cb(
+        AutoDraftConfig(mode="auto_ai", min_len=0, skip=set(),
+                        platform_ceilings={}, skip_groups=False, enrich=False),
+        ds, store, MagicMock(), MagicMock(), MagicMock())
+    conv = {"platform": "whatsapp", "account_id": "zhituo",
+            "conversation_id": "whatsapp:zhituo:wa:+639000000000"}
+
+    cb(conv, "[线索捕获] victor082676")
+    ds.auto_generate_draft.assert_not_called()
+
+    cb(conv, "hi, is this available?")
+    ds.auto_generate_draft.assert_called_once()

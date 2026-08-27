@@ -75,6 +75,53 @@ def test_store_unknown_session_is_healthy():
     assert _store().is_unhealthy("messenger", "nobody") is False
 
 
+# ── B63-②（实施64 P1-4）：发送失败会话性败因 → 健康登记 ─────────────────────
+
+def test_note_send_auth_failure_maps_session_codes(monkeypatch):
+    import src.integrations.platform_session_health as psh
+    seen = []
+    monkeypatch.setattr(
+        psh, "report_session_transition",
+        lambda p, a, st, detail="", login_id="": seen.append((p, a, st, detail)) or {})
+    # PIN 浮层 → failed + 精确 hint 码（坐席该做的是填 PIN，不是完整重登）
+    assert psh.note_send_auth_failure(
+        "messenger", "42",
+        "Server error '500' — composer not found [e2ee_pin_prompt]") == "failed"
+    assert seen[-1][2] == "failed" and seen[-1][3] == "e2ee_pin_required"
+    # 接受浮层 → failed + needs_accept
+    assert psh.note_send_auth_failure(
+        "messenger", "42", "blocked [needs_accept]") == "failed"
+    assert seen[-1][3] == "needs_accept"
+    # 登出态 → needs_login（连带注册表 offline 由 report_session_transition 语义承担）
+    assert psh.note_send_auth_failure(
+        "messenger", "42", "send failed: not_logged_in") == "needs_login"
+    # 普通发送失败（渲染超时等）不登记——不是账号级处境
+    assert psh.note_send_auth_failure(
+        "messenger", "42", "render_timeout after 8s") == ""
+    assert psh.note_send_auth_failure("messenger", "42", "") == ""
+    assert len(seen) == 3
+
+
+def test_note_send_auth_failure_never_raises(monkeypatch):
+    import src.integrations.platform_session_health as psh
+
+    def _boom(*a, **k):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(psh, "report_session_transition", _boom)
+    assert psh.note_send_auth_failure("messenger", "42", "e2ee_pin_prompt") == ""
+
+
+def test_send_fail_wiring_present_in_both_send_paths():
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[1]
+    ca = (repo / "src" / "inbox" / "channel_adapters.py").read_text(encoding="utf-8")
+    ao = (repo / "src" / "integrations" / "account_orchestrator.py"
+          ).read_text(encoding="utf-8")
+    assert "note_send_auth_failure" in ca, "统一收件箱 messenger 发送路径未接会话登记"
+    assert "note_send_auth_failure" in ao, "编排器 messenger 发送路径未接会话登记"
+
+
 def test_inbox_health_blindspot_observability_fields():
     """P1 2026-08-15 盲区修复观测：unread_forced / worker_code_* /
     requests_suspect 随心跳落行；**缺省（老 worker 未上报）不写键**——

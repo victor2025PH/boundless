@@ -39,6 +39,17 @@ npm run dist:win:fresh
 **拒打安装包**（防再出现「版本号新、sidecar 仍是旧 `_cancelMedia`」）。
 手动自检：`npm run check:backend-fresh`。
 
+**增量刷新档（2026-08-18）**：门禁红且变化**只落在 datas 类资产**
+（templates / static / shared/copilot / domains / config 种子 / platform 瘦模块——
+包内运行时按文件路径读，不进 exe）时，`npm run refresh:datas` 秒级把它们同步进
+`backend-dist/_internal` 并重落 stamp，免跑 ~7.5 分钟 PyInstaller。诚实性由
+stamp 逐文件明细的 diff 保证：任何编进 exe 的 `.py` 变了 → exit 3 自拒（须全量
+`build:backend`）；旧格式 stamp 无明细 → exit 4（全量重打一次即自举）。static/
+domains/platform 走与全量构建同一套暂存清洗（隐私/机密剔除断言原样生效）。
+门禁 `tests/test_backend_refresh_datas.py`；`--dry-run` 只看判定不动产物。
+一键智能档：`npm run dist:win:smart`＝先试增量刷新，被拒/失败自动落
+`build:backend`（含冒烟），然后 `dist:win`——不确定改动范围时用它最省心。
+
 ## 运行时行为（生命周期）
 
 - 启动：先探活 `backend.base_url/login`——**已在跑则复用、不重复拉起**（对「先手动起后端」零回归）；

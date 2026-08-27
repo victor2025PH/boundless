@@ -51,7 +51,7 @@ rail 标签：
   （token 为空/失效时自动接力，全部失败才露出登录页人工处理）。带 loading/error 遮罩；
   **后端未起会自动重连**（主进程 `desktop:backend-health` 探活，可达即自动重载，先开桌面后开后端也能自愈）。
   开关：`config.json::unified_inbox.enabled`（默认 `true`，可改 `label`/`path`）；
-  `unified_inbox.lang`（如 `zh`/`en`，空=跟随后台）会以 `?lang=` 注入并贯穿登录回跳，**坐席界面语言对齐**。
+  `unified_inbox.lang`（`zh`/`zh_hant`/`en`/`vi`/`th`/`id`，与后端 `i18n_packs.UI_LANGS` 对齐，`zh-TW`/`zh-HK` 视作 `zh_hant`；**空=跟随系统**——`app.getLocale()` 按同一家族映射推断，2026-08-27 起真跟随，此前空值恒中文）会以 `?lang=` 注入并贯穿登录回跳，**坐席界面语言对齐**。扩展语下壳菜单/向导按表定底回落（vi/th/id→en，zh_hant→zh），Web 工作台按该语渲染。Web 端未登录/无偏好时按 `Accept-Language` 协商（显式选择与登录回填永远优先，推断不落 cookie）。
 - **内嵌官方网页多账号**：每个平台/账号一个 Electron `partition`（独立 cookie/storage），
   可在 `config.json` 的 `accounts[].proxy` 配独立代理（防关联）。除 `config.json` 静态配置外，
   rail 底部「➕新增」可**运行时新增**（免改配置免重启），账号持久化到 `localStorage`、重启自动重建。

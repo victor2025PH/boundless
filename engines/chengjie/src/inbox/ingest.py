@@ -121,6 +121,8 @@ def _msg_from_obj(
         # P4-11E 群发言人（source.sender_id/sender_name，缺则空）
         sender_id=str(src.get("sender_id") or ""),
         sender_name=str(src.get("sender_name") or ""),
+        # 实施72 P2：合成时间戳标记透传（回填/拉更早路径置 1；实时路径缺省 0）
+        approx_ts=int(m.get("approx_ts") or 0),
     )
 
 

@@ -151,6 +151,20 @@ _EMITTED_ALERTS = [
      {"light": "red", "problems": [{"name": "DB", "detail": "连接失败"}]}),
     ("reply_risk", "human_reply_risk",
      {"agent_id": "u1", "risk_level": "high", "risk_reasons": ["辱骂"], "text_preview": "..."}),
+    # 2026-08-18：报障群 AI 值守（bug_intake）——新 P0/P1 工单 + 危机词压制转人工
+    ("bug_intake", "bug_intake_alert",
+     {"kind": "ticket", "chat_id": "-1004290740529", "ticket_id": 7,
+      "severity": "P1", "title": "消息发不出去", "reporter": "张三",
+      "report_count": 2, "rate_key": "bug_intake:ticket:-1004290740529"}),
+    ("bug_intake", "bug_intake_alert",
+     {"kind": "crisis", "chat_id": "-1004290740529", "reporter": "李四",
+      "text": "你们是骗子我要退款", "severity": "P0",
+      "rate_key": "bug_intake:crisis:-1004290740529"}),
+    # 2026-08-19：AI 助手悬浮球报障（assistant_routes /api/assistant/report）
+    ("assistant_report", "assistant_report_alert",
+     {"ticket_id": 12, "dup": False, "severity": "P2", "reporter": "op1",
+      "page": "/workspace", "text": "语音发送按钮点了没反应",
+      "rate_key": "assistant:1"}),
     # P0-2：平台会话健康（unified_inbox_account_routes /session-status → 掉线/恢复）
     ("platform_session", "platform_session_alert",
      {"platform": "messenger", "account_id": "10008900", "login_id": "msg_x",
@@ -174,6 +188,27 @@ _EMITTED_ALERTS = [
      {"conversation_id": "telegram:tg1:5433982810", "platform": "telegram",
       "by": "agent01", "elapsed_min": 135,
       "rate_key": "telegram:tg1:5433982810:takeover_remind"}),
+    # 一键代理 P2 2026-08-21：托管代理生命周期（health_watchdog._check_proxy_managed
+    # → proxy_lifecycle.run_lifecycle_sweep；kind 分 expiring/renew_blocked/
+    # renew_unbilled/expired/low_stock 五类，rate_key 按类独立限流窗）
+    ("proxy_managed", "proxy_managed_alert",
+     {"kind": "renew_blocked", "count": 2, "need_tokens": 600,
+      "reasons": {"insufficient": 2},
+      "subs": [{"sub_id": "pxs_a", "country": "JP", "kind": "isp",
+                "remaining_days": 2}],
+      "rate_key": "proxy_managed:renew_blocked"}),
+    ("proxy_managed", "proxy_managed_alert",
+     {"kind": "expired", "count": 1, "countries": {"JP": 1},
+      "subs": [{"sub_id": "pxs_b", "country": "JP", "kind": "isp",
+                "remaining_days": 0}],
+      "rate_key": "proxy_managed:expired"}),
+    ("proxy_managed", "proxy_managed_alert",
+     {"kind": "low_stock", "low": {"JP": 0, "US": 1}, "min_stock": 2,
+      "rate_key": "proxy_managed:low_stock"}),
+    # P4 2026-08-22（老板拍板 JIT 即买即用、零囤货）：上游预付余额=库存水位
+    ("proxy_managed", "proxy_managed_alert",
+     {"kind": "vendor_balance_low", "balance": 4.5, "min_alert": 10,
+      "rate_key": "proxy_managed:vendor_balance"}),
     # P2 2026-08-13：注册表期望在线但 sidecar 无会话（health_watchdog.
     # _check_messenger_not_restored → 重启恢复失败/会话被清，零事件零心跳的盲区对账）
     ("platform_session", "platform_session_alert",
@@ -327,6 +362,24 @@ _EMITTED_ALERTS = [
       "rate_key": "human_deliver:remind"}),
     ("avatar_voice", "avatar_voice_alert",
      {"down_minutes": 45, "reminder": False, "rate_key": "avatar_voice:remind"}),
+    # hub 引擎目录离线（2026-08-22 顶包事故）：lenient=换声 / strict=拒发 / 恢复
+    ("hub_engine", "hub_engine_alert",
+     {"engine": "index_tts", "url": "http://192.168.0.176:9000", "strict": False,
+      "available_engines": ["fish_speech", "moss_ttsd"], "down_minutes": 35,
+      "reminder": False, "rate_key": "hub_engine:remind"}),
+    ("hub_engine", "hub_engine_alert",
+     {"engine": "index_tts", "strict": True, "down_minutes": 200,
+      "reminder": True, "rate_key": "hub_engine:remind"}),
+    ("hub_engine", "hub_engine_alert",
+     {"recovered": True, "engine": "index_tts",
+      "rate_key": "hub_engine:recovered"}),
+    # 出图模型失踪（2026-08-22 模型被清空事故防再犯）：告警态 + 恢复态
+    ("image_models", "image_models_alert",
+     {"url": "http://192.168.0.176:8188", "ckpts": 0, "unets": 0,
+      "reminder": False, "rate_key": "image_models:remind"}),
+    ("image_models", "image_models_alert",
+     {"recovered": True, "url": "http://192.168.0.176:8188",
+      "rate_key": "image_models:recovered"}),
     # LAN GPU 主机整机下线（2026-08-01 176 静默宕机两小时实锤）：告警态 + 恢复态
     ("lan_gpu", "lan_gpu_alert",
      {"host": "192.168.0.176:11434", "url": "http://192.168.0.176:11434",
@@ -344,6 +397,14 @@ _EMITTED_ALERTS = [
      {"from_mode": "local_only", "base_url": "http://192.168.0.173:8001/v1",
       "fail_count": 2, "down_minutes": 5,
       "rate_key": "ai_primary_guard:switched"}),
+    # 老板锁（2026-08-22）：配置被越权改动 → 装载点强制回锁值（ai_client 发布）
+    ("ai_primary_guard", "ai_primary_guard_alert",
+     {"kind": "lock_enforced", "from_mode": "local_only", "lock": "cloud",
+      "effective": "cloud", "rate_key": "ai_primary_guard:lock"}),
+    # 老板锁（2026-08-22）：治理接口拒绝与锁不符的切换请求（setup 路由发布）
+    ("ai_primary_guard", "ai_primary_guard_alert",
+     {"kind": "lock_rejected", "requested": "local_only", "lock": "cloud",
+      "actor": "user:admin", "rate_key": "ai_primary_guard:lock"}),
     # 入站漏球（P0 2026-08-05：客户最后一句既没被回也没拟稿——draft_backlog 只看
     # 「有稿没人处理」，「压根没稿」此前零信号）：告警态 + 恢复态各过一遍
     ("unanswered_inbound", "unanswered_inbound_alert",
@@ -396,7 +457,11 @@ _EMITTED_ALERTS = [
       "template": "conversion_subscribe", "template_name": "会员订阅",
       "title": "会员订阅", "result": "order:pro:ORD-1", "result_kind": "order",
       "won": True, "amount": 199, "product": "pro", "days_to_done": 3.5,
-      "done_at": 1754700000.0, "rate_key": "goal_done:8244899900"}),
+      "done_at": 1754700000.0, "rate_key": "goal_done:8244899900",
+      # P3 2026-08-18：摸底要点（include_profile opt-in）+ 逐目标点名收件人
+      # （params.notify_extra 解析产物；telegram 渠道逐个加发副本）
+      "slots_brief": "年龄:28岁｜业务痛点:客服人手",
+      "extra_chat_ids": ["7770001"]}),
     ("goal_complete", "goal_completed_alert",
      {"goal_id": "g2", "conversation_id": "telegram:8244899900:5433982810",
       "platform": "telegram", "account_id": "8244899900",

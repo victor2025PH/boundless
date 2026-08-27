@@ -23,7 +23,13 @@ from fastapi import Depends, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from src.utils.audit_store import AuditStore
-from src.web.audit_display import family_like_patterns
+from src.web.audit_display import (
+    FAMILY_ORDER,
+    decorate_object,
+    family_like_patterns,
+    operator_display_names,
+)
+from src.web.web_i18n import tr
 
 
 def _norm_since(date_from: str) -> str:
@@ -108,8 +114,20 @@ def register_audit_page_routes(app, ctx) -> None:
             qs_parts.append(f"family={family}")
         qs_parts.append(f"limit={per}")
         query_str = "&".join(qs_parts)
+        for r in records:
+            dec = decorate_object(
+                r.get("action") or "",
+                r.get("target") or "",
+                r.get("new_val") or "",
+            )
+            r["target_kind"] = dec["target_kind"]
+            r["target_tokens"] = dec["target_tokens"]
+            r["detail_tokens"] = dec["detail_tokens"]
         return templates.TemplateResponse(request, "audit.html", {
             "records": records,
+            "family_order": FAMILY_ORDER,
+            "operator_names": operator_display_names(
+                getattr(ctx, "user_store", None)),
             "total": total, "page": page, "total_pages": total_pages,
             "query_str": query_str,
             "filters": {"action": action, "keyword": chan, "operator": operator,
@@ -145,12 +163,18 @@ def register_audit_page_routes(app, ctx) -> None:
                          f"日期={date_from or '不限'}~{date_to or '不限'}"])
         writer.writerow(["# 记录总数", len(all_entries)])
         writer.writerow([])
-        writer.writerow(["序号", "时间", "操作类型", "目标", "操作人", "旧值", "新值", "快照ID"])
+        # 「操作说明」列＝aud_act_* 人话标签（随 UI 语言）；原动作码保留在
+        # 「操作类型」列供程序对账——加列不改列，旧列相对顺序不动。
+        writer.writerow(["序号", "时间", "操作类型",
+                         tr(request, "au_exp_col_label"),
+                         "目标", "操作人", "旧值", "新值", "快照ID"])
         for i, e in enumerate(all_entries, 1):
+            act = e.get("action", "")
             writer.writerow([
                 i,
                 e.get("ts", ""),
-                e.get("action", ""),
+                act,
+                tr(request, f"aud_act_{act}", act),
                 e.get("target", ""),
                 e.get("user_id", ""),
                 e.get("old_val", "") or "",

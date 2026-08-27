@@ -95,11 +95,21 @@ _EVENT_ALIASES: Dict[str, Dict[str, Any]] = {
     "realtime_voice": {"types": {"realtime_voice_alert"}, "levels": None},
     # AvatarHub 语音克隆持续掉线（7852 不可达/未载入超阈值 → 克隆音色静默降级 edge）
     "avatar_voice": {"types": {"avatar_voice_alert"}, "levels": None},
+    # 出图模型失踪（2026-08-22 事故：176 ComfyUI 模型目录被整树清空，生图链
+    # 全灭数小时无人知——「曾部署过→清单里消失」才告警，新装机零误报）
+    "image_models": {"types": {"image_models_alert"}, "levels": None},
+    # hub 钉死的 TTS 引擎在目录里被标不可用（2026-08-22 事故：index_tts 掉登记 →
+    # hub 静默换 fish 合成 = 客户听到另一个人的声音；引擎进程自身还是健康的）
+    "hub_engine": {"types": {"hub_engine_alert"}, "levels": None},
     # LAN GPU 主机整机下线（嵌入/视觉/兜底 LLM/本地 MT 静默转移备点 → 冗余归零无人知，
     # 2026-08-01 176 两小时静默宕机实锤）
     "lan_gpu": {"types": {"lan_gpu_alert"}, "levels": None},
     # 人工通过投递链静默断裂（坐席点了「发送」，一条都没真投递 → 客户什么也没收到）
     "human_deliver": {"types": {"human_deliver_alert"}, "levels": None},
+    # 报障群 AI 值守（2026-08-18）：新 P0/P1 工单 / 危机词压制转人工
+    "bug_intake": {"types": {"bug_intake_alert"}, "levels": None},
+    # AI 助手悬浮球报障（2026-08-19）：web 端坐席/运营经助手面板提交的工单
+    "assistant_report": {"types": {"assistant_report_alert"}, "levels": None},
     # 待审草稿长期无人处理（补 SLA 的 L1 盲区：L1 既不自动发也无逐条告警 → 无声烂掉）
     "draft_backlog": {"types": {"draft_backlog_alert"}, "levels": None},
     # 账号真相真幽灵（P4b 2026-08-17）：会话库有、注册表没有（剔除 web / 桌面镜像）
@@ -178,6 +188,10 @@ _EVENT_ALIASES: Dict[str, Dict[str, Any]] = {
     # 人工接管超时（驾驶舱 P0 2026-08-13：坐席接管会话后忘了交还——AI 对该客户
     # 持续停摆＝没人管；watchdog 按 takeover_remind 升级式提醒）
     "takeover": {"types": {"takeover_alert"}, "levels": None},
+    # 托管代理生命周期（一键代理 P2 2026-08-21：到期预警/续期被拦/续期未入账/
+    # 到期回收/库存水位——「代理过期了坐席还在用」与「地区卖空了没人补货」都
+    # 必须有人被点名）
+    "proxy_managed": {"types": {"proxy_managed_alert"}, "levels": None},
 }
 
 # ─── 告警受众分层（2026-07-31，产品化：终端客户能自己绑、看得懂）─────────────
@@ -218,6 +232,16 @@ _BUSINESS_ALERTS: Dict[str, str] = {
     # AI 对聊提醒＝老板/运营可行动（是测试就忽略；不是就把任一侧切手动止损配额），
     # 与 bot_peer 同族的「对端身份」信号，天然 business。
     "ai_mutual_chat": "cp.alert.ai_mutual_chat",
+    # 托管代理生命周期（2026-08-21 一键代理 P2）：到期/续费受阻要充值、库存告急要
+    # 补货——处置人都是运营（钱+货），不是技术支持，归 business。
+    "proxy_managed": "cp.alert.proxy_managed",
+    # ── 2026-08-21 完备性棘轮补登（原属各自 lane 的登记债，掉进 other=面板不列）──
+    # 人工接管超时：坐席接管后忘交还、客户没人管——主管/运营处置，business。
+    "takeover": "cp.alert.takeover",
+    # 回复额度触顶聚合：调额度/豁免入口都在设置页「回复额度守卫」卡，运营动作。
+    "reply_budget": "cp.alert.reply_budget",
+    # 坐席字符额度水位：谁快用满/谁超额＝排额度，运营动作。
+    "agent_quota": "cp.alert.agent_quota",
 }
 _TECHNICAL_ALERTS: Dict[str, str] = {
     "csrf_reject":         "cp.alert.csrf_reject",
@@ -228,7 +252,11 @@ _TECHNICAL_ALERTS: Dict[str, str] = {
     "ai_quality":          "cp.alert.ai_quality",
     "realtime_voice":      "cp.alert.realtime_voice",
     "avatar_voice":        "cp.alert.avatar_voice",
+    "image_models":        "cp.alert.image_models",
+    "hub_engine":          "cp.alert.hub_engine",
     "human_deliver":       "cp.alert.human_deliver",
+    "bug_intake":          "cp.alert.bug_intake",
+    "assistant_report":    "cp.alert.assistant_report",
     "tg_call":             "cp.alert.tg_call",
     "orchestrator_worker": "cp.alert.orchestrator_worker",
     "memory_key_drift":    "cp.alert.memory_key_drift",
@@ -248,6 +276,102 @@ _TECHNICAL_ALERTS: Dict[str, str] = {
     # 选择器失配的修法是改 desktop_selector_profiles.json 覆写层（技术支持动作），
     # 终端运营看不懂「composer 选择器失效」，故归 technical。
     "inject_health":       "cp.alert.inject_health",
+    # 本地主链保险单向热切 cloud（2026-08-21 完备性棘轮补登）：vLLM 探测连败 →
+    # 自动切云端保服务——「起本地端点再切回」是基建动作，终端运营无从处置。
+    "ai_primary_guard":    "cp.alert.ai_primary_guard",
+}
+
+
+def _vram_lines(hosts: Any, top: int = 2) -> str:
+    """显存归因行：直接点名「谁占着、能不能让路」，省掉翻 GPU 面板那一步。
+
+    共享给两族告警（``hub_engine_alert`` 的「引擎离线」与 ``voice_outage_alert``
+    的「在岗但每发必超时」）——它们是**同一个根因的两种表现**：显存不够时，
+    hub 要么把引擎泊掉（离线，目录 available:false），要么让它带着满卡硬跑
+    （在岗但 36~69s 出话，预算 30s ⇒ 每发必超时）。运维要做的动作完全一样
+    （泊掉可让路的服务 / 上机清无主进程），所以这段话必须一字不差地出现在两处，
+    不能只有其中一个告警带根因（2026-08-22 事故里响的恰好是没带根因那半边）。
+
+    **读不到归因时回落成手查指引而不是留空**：归因本身要打一次 hub HTTP，凌晨
+    显存打满时那次调用恰恰最容易超时——「最需要根因的时刻正好取不到根因」。
+    留空等于把运维推回「绿灯但没声音，无从下手」的原点，所以宁可给一条要自己
+    敲的命令，也不能一个字都不说。
+    """
+    out = ""
+    for host in (hosts or [])[:max(1, int(top))]:
+        if not isinstance(host, dict):
+            continue
+        # 三档限定词对应三种证据强度，混排成同一个裸数字必然误导（2026-08-22 两版
+        # 都栽在这条线上，方向相反）：无限定＝本机**实测**驻留；「约」＝remote 只报
+        # 标称预算（hub 没现场采样过它们，按它算「泊这俩就够」会发现不够）；
+        # 「疑似」＝服务在线但 hub 把占用归不到它，额度是从同台无主池里估的上限
+        # ——值得先试一把泊车，但不能当承诺。实测确为 0 的服务在上游已剔除。
+        cands = list(host.get("parkable") or [])[:3]
+
+        def _who(svc: Any) -> str:
+            # hub 的 label 是「短名 (技术细节)」，硬截 22 字会切在括号中间，出来
+            # 像「唱歌工作室 (AI 翻唱·YingMusic 疑似5.6G」——告警长得像坏了，人就
+            # 不信它。太长时取括号前的短名（那正是给人看的部分）。
+            raw = str(svc.get("label") or svc.get("name") or "")
+            if len(raw) > 22:
+                raw = (raw.split(" (", 1)[0] or raw)[:22]
+            tag = ("疑似" if svc.get("unattributed")
+                   else ("约" if svc.get("est") else ""))
+            return f"{raw} {tag}{int(svc.get('mem_mb') or 0) / 1024:.1f}G"
+
+        who = "、".join(_who(s) for s in cands)
+        # 无主显存单独点名：它不可泊车，却常是最大一块（实测 176 两个孤儿
+        # python.exe 合计 8.6G）。不说的话运维泊完可让路的那些、发现还是不够，
+        # 线索就断了。**但若上列里有「疑似」项，这笔与它们重叠**——那些服务正是
+        # 因为占用归不到自己才被标疑似，额度就是从这个池子里估的。不点出重叠，
+        # 运维会把 8.6G 和 5.6G 相加去规划，算出来的余量是假的。
+        extras_gb = int(host.get("extras_mb") or 0) / 1024
+        overlap = ("，其中一部分疑似就是上列服务，先试泊车再上机"
+                   if any(s.get("unattributed") for s in cands) else
+                   "，泊车腾不出来，需上机排查")
+        orphan = (f"；另有 {extras_gb:.1f}G 无主进程占用（非服务{overlap}）"
+                  if extras_gb >= 1.0 else "")
+        # 常驻大模型单列：它常是最大一笔且**能动**（hub 会驱逐 LAN 大模型让路），
+        # 与「无主进程」必须分开说——后者要上机杀，前者不用。混成一句话，运维会
+        # 把可以自动让路的那部分也当成要上机处理的死账。
+        llm_gb = int(host.get("llm_mb") or 0) / 1024
+        llm = (f"；另有常驻大模型 {llm_gb:.1f}G（ollama 驻留，"
+               f"hub 会自动驱逐让路，无需上机）" if llm_gb >= 1.0 else "")
+        if not who and not orphan and not llm:
+            continue
+        free_gb = int(host.get("free_mb") or 0) / 1024
+        out += (f"**显存({host.get('ip') or 'hub'})**: 空闲 "
+                f"{free_gb:.1f}G，可让路：{who or '无'}{orphan}{llm}\n")
+    return out or ("**显存**: 本次未取到归因（hub 打满时这一跳也会超时）——"
+                   "手查 `GET /api/gpu/overview`，看哪些 parkable 服务在占卡\n")
+
+
+def _is_hub_reason(reasons: Any) -> bool:
+    """失败原因是否指向共用合成层（hub），决定该不该渲染显存归因段。
+
+    单链臂的原因可能是设备端的（``send:``/``share_skip_`` 前缀＝那台手机上的
+    share intent 失败），显存归因对它毫无意义：给了只会把运维引到 GPU 面板前
+    白站一轮。watchdog 侧同样只对 hub 原因去取归因数据，但两边的判断服务于
+    不同问题——它决定「要不要花一次 HTTP」，这里决定「这段话该不该出现」，
+    所以不能靠 ``vram_hosts`` 空不空来推断（空既可能是「与显存无关」也可能是
+    「相关但没取到」，而后者恰恰必须出手查指引）。
+    """
+    try:
+        keys = list(reasons.keys()) if isinstance(reasons, dict) else []
+    except Exception:
+        return False
+    return any(m in str(k) for k in keys
+               for m in ("hub_", "synth_failed", "engine_mismatch"))
+
+
+# 语音链 source → 人话（voice_outage 单链告警的标题里要点名是哪条链；裸 key
+# 如 mr_rpa 对运营是黑话）。缺登记时原样回落 key，绝不因新链未登记而不报。
+_VOICE_SOURCE_LABELS: Dict[str, str] = {
+    "aline": "Telegram 原生语音回复",
+    "autosend": "全自动回复语音（B 线）",
+    "manual": "坐席手动发语音",
+    "wa_rpa": "WhatsApp 手机端语音",
+    "mr_rpa": "Messenger 手机端语音",
 }
 
 
@@ -457,6 +581,44 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
             f"**客户消息**: {peer or '（无）'}\n"
             f"**平台**: {data.get('platform', '?')}\n"
             "[📋 立即处理](/workspace/drafts)"
+        )
+
+    elif event_type == "bug_intake_alert":
+        if str(data.get("kind") or "") == "crisis":
+            title = "🧨 报障群危机词（AI 已压制，需人工接管）"
+            text = (
+                f"**群**: {data.get('chat_id', '?')}\n"
+                f"**用户**: {data.get('reporter', '?')}\n"
+                f"**原话**: {str(data.get('text') or '')[:120]}\n"
+                "[📥 前往收件箱群组动态](/workspace/inbox)"
+            )
+        else:
+            _sev = str(data.get("severity") or "?")
+            title = (f"{'🚨' if _sev == 'P0' else '🐞'} 报障群新工单 "
+                     f"#{data.get('ticket_id', '?')} [{_sev}]")
+            _rc = int(data.get("report_count") or 1)
+            text = (
+                f"**标题**: {str(data.get('title') or '')[:120]}\n"
+                f"**报告人**: {data.get('reporter', '?')}"
+                + (f"（第 {_rc} 人）" if _rc > 1 else "") + "\n"
+                f"**群**: {data.get('chat_id', '?')}"
+            )
+
+    elif event_type == "assistant_report_alert":
+        _sev = str(data.get("severity") or "P2")
+        title = (f"{'🚨' if _sev == 'P0' else '🛎️'} 助手面板报障 "
+                 f"#{data.get('ticket_id', '?')} [{_sev}]"
+                 + ("（并单+1）" if data.get("dup") else ""))
+        # 截图提示 + 处置入口（2026-08-27）：原文案只有描述/人/页面，客服既
+        # 不知道有没有图、也没有可点的去处——收到通知却不知道下一步做什么，
+        # 等于把「最后一公里」接通了又停在路口。
+        _shots = int(data.get("shots") or 0)
+        text = (
+            f"**描述**: {str(data.get('text') or '')[:120]}\n"
+            f"**报告人**: {data.get('reporter', '?')}（web）\n"
+            f"**页面**: {data.get('page', '?')}\n"
+            + (f"**附件**: 📎 {_shots} 张截图\n" if _shots else "")
+            + "[📋 前往处置](/admin/ops)"
         )
 
     elif event_type == "case_alert":
@@ -757,6 +919,73 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 "[📥 打开工作台](/workspace/unified-inbox)"
             )
 
+    elif event_type == "image_models_alert":
+        if data.get("recovered"):
+            title = "✅ 出图模型已恢复"
+            text = (
+                "**状态**: ComfyUI 模型清单已重新可用，生图链恢复\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+        else:
+            title = ("🖼️ 出图模型失踪（重提）" if data.get("reminder")
+                     else "🖼️ 出图模型失踪")
+            text = (
+                f"**服务**: {data.get('url') or 'ComfyUI'}\n"
+                f"**清单**: checkpoints {int(data.get('ckpts') or 0)} 项 / "
+                f"unet {int(data.get('unets') or 0)} 项（此前曾部署过 FLUX）\n"
+                "**影响**: 现场生图（手动出图/生成链）将全数失败，相册链不受影响\n"
+                "**排查**: 检查出图机 ComfyUI models\\checkpoints 目录是否被误删"
+                "（2026-08-22 曾发生整树清空）；恢复模型文件后本告警自动解除\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+
+    elif event_type == "hub_engine_alert":
+        eng = str(data.get("engine") or "")[:60]
+        if data.get("recovered"):
+            title = "✅ hub 语音引擎已重新上岗"
+            text = (
+                f"**引擎**: `{eng}` 在 hub 目录里恢复 `available:true`，"
+                "合成不再被顶包\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+        else:
+            down_min = int(data.get("down_minutes") or 0)
+            down_txt = (f"{down_min // 60} 小时 {down_min % 60} 分钟"
+                        if down_min >= 60 else f"{down_min} 分钟")
+            prefix = "⏰" if data.get("reminder") else "🎚️"
+            title = f"{prefix} hub 语音引擎不可用（已 {down_txt}）"
+            if data.get("strict"):
+                impact = ("`voice_consistency=strict` → 该人设语音**整链拒发**"
+                          "（客户收不到语音，退化成纯文字）")
+            else:
+                impact = ("`voice_consistency=lenient` → hub **静默换别的引擎**"
+                          "合成，客户听到的是**另一个人的声音**（比收不到更糟）")
+            avail = [str(x)[:24] for x in (data.get("available_engines") or [])]
+            avail_txt = ("，目前在岗：" + "、".join(avail[:6])) if avail else ""
+            # 自动唤醒结果：受理了就告诉运维「可能不用起床」，失败了才是真要人上
+            wake = str(data.get("wake") or "")
+            if wake.startswith("accepted"):
+                    wake_txt = ("**已自动尝试唤醒**: 已受理，成了的话下一轮巡检会补发"
+                                "恢复通知（冷载实测 ~35s）——先别动手\n")
+            elif wake.startswith("failed"):
+                reason = wake.split(":", 1)[-1][:40]
+                wake_txt = f"**已自动尝试唤醒**: 失败（{reason}）→ 需要人工介入\n"
+            else:
+                wake_txt = ""
+            vram_txt = _vram_lines(data.get("vram_hosts"))
+            text = (
+                f"**引擎**: `{eng}` 在 hub 引擎目录标着 `available:false`{avail_txt}\n"
+                f"**服务**: {data.get('url') or 'hub'}\n"
+                f"**影响**: {impact}\n"
+                f"{wake_txt}{vram_txt}"
+                "**排查**: 别去重启引擎进程——2026-08-22 实测**引擎自身 `/health` "
+                "200、`model_loaded:true`，hub 目录却仍标不可用**，hub 的路由只认"
+                "目录这一票。到 hub 侧重新登记上岗（`POST /api/engine/start`，或"
+                "运营面板拉起该引擎），再看 `GET /api/engines` 是否转 "
+                "`available:true`；上面点名的 parkable 服务泊车即可腾显存\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+
     elif event_type == "avatar_voice_alert":
         if data.get("recovered"):
             title = "✅ AvatarHub 语音克隆已恢复"
@@ -802,10 +1031,55 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
             )
 
     elif event_type == "voice_outage_alert":
+        _src = str(data.get("source") or "").strip()
+        _src_txt = _VOICE_SOURCE_LABELS.get(_src, _src)
+        # 缩窗自陈：标题里的「24h」在台账事件挤满时是假的（更早的失败已被挤出
+        # deque），而「窗内 0 成功」的分母就是这些事件。不说清楚，运维会按 24h
+        # 估断档时长、并误以为「早上那段是好的」。
+        _win_note = ""
+        if data.get("window_truncated"):
+            try:
+                _eff = float(data.get("effective_window_hours") or 0)
+            except (TypeError, ValueError):
+                _eff = 0.0
+            if _eff > 0:
+                _win_note = (
+                    f"**窗口提醒**: 语音台账事件已满，这个窗实际只覆盖 {_eff:.1f}h"
+                    "——更早的失败已看不到，别据此认为「之前那段是好的」\n")
         if data.get("recovered"):
-            title = "✅ 语音出站已恢复"
+            title = ("✅ 语音出站已恢复" if not _src
+                     else f"✅ 语音出站已恢复（{_src_txt}）")
             text = (
                 "**状态**: 观察窗内重新有语音条成功发出\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+        elif _src:
+            # 单链臂：其他链正常，所以**全局告警不会响**——这条是唯一信号，
+            # 标题必须点名是哪条链，否则运维会去查「语音是不是全挂了」然后
+            # 发现「Telegram 好着呢」，把真实故障（WhatsApp 全灭）当误报关掉。
+            n = int(data.get("attempts") or 0)
+            win = int(data.get("window_hours") or 24)
+            reasons = data.get("top_reasons") or {}
+            r_txt = "、".join(f"{k}×{v}" for k, v in sorted(
+                reasons.items(), key=lambda kv: -int(kv[1] or 0))) or "—"
+            prefix = "⏰" if data.get("reminder") else "🔇"
+            title = (f"{prefix} {_src_txt}的语音全发不出："
+                     f"{win}h 内 {n} 次尝试 0 成功")
+            text = (
+                f"**范围**: 只有这一条链全灭，其他语音链在同一窗口内有成功——"
+                "所以全局「语音出站断档」告警**不会**响，这条是唯一信号\n"
+                f"**失败原因 Top**: {r_txt}\n"
+                "**影响**: 该链该发语音的回复全部回落文字（或压根没发出），"
+                "其他平台的客户听不出异常\n"
+                "**排查**: 先按上面的原因分辨是**这条链自己的活**"
+                "（`send:`/`share_skip_` 前缀＝设备端 share intent/收件人定位失败，"
+                "去看那台设备）还是**共用的合成层**（`hub_` 前缀/`synth_failed`"
+                "＝所有链都会中，只是别的链此刻恰好没发语音）\n"
+                # 单链臂在多链下常常是**唯一**会响的那条（其他链有成功 → 全局臂
+                # 闭嘴），所以合成层根因也必须在这里给全，不能只在全局臂里说；
+                # 但设备端原因不渲染显存段（见 `_is_hub_reason`）。
+                f"{_vram_lines(data.get('vram_hosts')) if _is_hub_reason(reasons) else ''}"
+                f"{_win_note}"
                 "[📊 查看运营总览](/admin/ops)"
             )
         else:
@@ -823,13 +1097,69 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                       else "本进程内无成功记录")
             prefix = "⏰" if data.get("reminder") else "🔇"
             title = f"{prefix} 语音出站连续失败：{win}h 内 {n} 次尝试 0 成功"
+            # 引擎冒名与「hub 挂了」的处置完全相反：后者去看 /health，前者 /health
+            # 正绿着（2026-08-22 事故就是被这条通用排查语引偏，潜伏两小时）。
+            offline = next(
+                (str(k) for k in reasons if "hub_engine_offline" in str(k)), "")
+            mismatch = next(
+                (str(k) for k in reasons if "hub_engine_mismatch" in str(k)), "")
+            timing = next(
+                (str(k) for k in reasons if "hub_synth_timing_out" in str(k)), "")
+            if timing:
+                # 最刁的一档：目录 available:true + 引擎 /health 200 + model_loaded
+                # 全绿，**所有读数都对而结论全错**。不点名「别看那两个绿灯」，运维
+                # 会照着上面 offline/mismatch 的排查语去查目录，然后困惑到放弃。
+                eng = timing.split(":", 1)[1] if ":" in timing else timing
+                fix = (
+                    f"**⚠️ 引擎在岗但答不上来**: `{eng[:60]}` 连续合成超时，本进程"
+                    "已熔断开路、**主动跳过** hub（客户立刻拿到文字，不再白等一轮"
+                    "预算）\n"
+                    "**排查**: 目录 `available:true` 与引擎 `/health` 200 **此刻都是"
+                    "绿的，别在那两处找原因**——2026-08-22 实测同卡显存 97% 满"
+                    "（唱歌 5.7G + 10G 无主 python 进程 + 两个 ollama 模型常驻）→ "
+                    "8 字短句要 36~69s，而预算 `timeout_sec=30` ⇒ 每一发都超时\n"
+                    # 归因随告警一起给：这一档的根因**几乎总是**显存，而「自己去看
+                    # GPU 面板」这一步发生在凌晨、发生在人还没睡醒的时候。
+                    # 引擎离线那族告警早就带这段了，唯独最需要它的这族没带。
+                    f"{_vram_lines(data.get('vram_hosts'))}"
+                    "**处置**: 上面点名的 parkable 服务（唱歌/出图）先泊掉；"
+                    "无主进程占的泊车腾不出来、要上机排查；也可以把质量轨引擎挪到"
+                    "别的卡。根因不解决，语音会一直缺席\n"
+                    "**注意**: 熔断每 5 分钟自动放一发探路，成了就自动恢复——"
+                    "所以「过一会儿好了」不等于问题解决了\n")
+            elif offline:
+                # 合成前预检拦下：根因最明确的一档，直接点名该开哪个引擎
+                eng = offline.split(":", 1)[1] if ":" in offline else offline
+                fix = (
+                    f"**⚠️ 引擎不可用**: hub 引擎目录里 `{eng[:60]}` 标着 "
+                    "`available:false`，再合成必被换成别的引擎（=别人的声音）\n"
+                    "**排查**: 别去重启引擎进程——2026-08-22 实测**引擎自身 "
+                    "`/health` 200、`model_loaded:true`，hub 目录却仍标不可用**，"
+                    "hub 的路由只认目录这一票。到 hub 侧把它重新登记上岗"
+                    "（`POST /api/engine/start`，或运营面板拉起该引擎），再看 "
+                    "`GET /api/engines` 里它是否转 `available:true`\n"
+                    f"{_vram_lines(data.get('vram_hosts'))}"
+                    "**显存吃紧时**: 先把上面点名的 parkable 服务泊车让位\n")
+            elif mismatch:
+                detail = mismatch.split(":", 1)[1] if ":" in mismatch else mismatch
+                fix = (
+                    f"**⚠️ 引擎冒名**: {detail[:120]}\n"
+                    "**排查**: hub `/health` 此时多半是绿的——它把点名的引擎**换成了"
+                    "另一个**（prefer 语义，响应信封不带引擎字段）。查 hub 引擎目录"
+                    "里目标引擎是否 `available:false`，恢复后语音自动回来；"
+                    "临时放行可置 `avatar_voice.hub_fish.verify_engine: false`"
+                    "（会真的把别人的声音发给客户，仅排障用）\n")
+            else:
+                fix = (
+                    "**排查**: 常见原因＝hub 音色档缺失(404)/7852 掉线/参考音丢失；"
+                    "查 app.log 关键字 `TTS failed`，再看 `/api/voice/avatar-status`\n")
             text = (
                 f"**连败**: {streak} 次；最近一次成功: {ok_txt}\n"
                 f"**失败原因 Top**: {r_txt}\n"
                 "**影响**: 该发语音的回复全部回落文字发出（低流量下 7852 探针"
                 "可能全绿），克隆声卖点静默失效\n"
-                "**排查**: 常见原因＝hub 音色档缺失(404)/7852 掉线/参考音丢失；"
-                "查 app.log 关键字 `TTS failed`，再看 `/api/voice/avatar-status`\n"
+                f"{fix}"
+                f"{_win_note}"
                 "[📊 查看运营总览](/admin/ops)"
             )
 
@@ -992,6 +1322,72 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 "[📊 查看运营总览](/admin/ops)"
             )
 
+    elif event_type == "proxy_managed_alert":
+        kind = str(data.get("kind") or "")
+        n = int(data.get("count") or 0)
+        subs = data.get("subs") or []
+        smp = "、".join(
+            f"{s.get('country', '?')}/{s.get('kind', '?')}（剩{s.get('remaining_days', '?')}天）"
+            for s in subs[:3]) or "—"
+        if kind == "expiring":
+            title = f"⏳ {n} 条托管代理即将到期（未开自动续期）"
+            text = (
+                f"**明细**: {smp}\n"
+                "**影响**: 到期即解绑，该账号回到无代理/手动代理状态，"
+                "登录出口会变（有风控风险）\n"
+                "**处置**: 会员页充值后在接入弹窗重新一键开通，"
+                "或运营开 `proxies.managed.auto_renew`\n"
+            )
+        elif kind == "renew_blocked":
+            reasons = data.get("reasons") or {}
+            r_txt = "、".join(f"{k}×{v}" for k, v in sorted(reasons.items())) or "—"
+            need = int(data.get("need_tokens") or 0)
+            title = f"🚨 {n} 条托管代理想续费但续不了（{r_txt}）"
+            text = (
+                f"**缺口**: 共需 {need} Token（insufficient=余额不足需充值；"
+                "no_pricing=价格档被下架需运营恢复配置）\n"
+                f"**明细**: {smp}\n"
+                "**影响**: 到期后代理解绑、账号出口漂移\n"
+                "**处置**: 充值 Token 或恢复 `proxies.managed.pricing` 对应档位\n"
+            )
+        elif kind == "renew_unbilled":
+            title = f"🟠 {n} 条托管代理已续期但扣费未入账（待对账）"
+            text = (
+                "**状态**: 服务已续上（先交付后扣费的刻意方向），钱没收到\n"
+                "**处置**: `python tools/proxy_managed_review.py` 列出待对账行，"
+                "人工补记或核销\n"
+            )
+        elif kind == "expired":
+            countries = data.get("countries") or {}
+            c_txt = "、".join(f"{k}×{v}" for k, v in sorted(countries.items())) or "—"
+            title = f"⛔ {n} 条托管代理已到期回收"
+            text = (
+                f"**地区**: {c_txt}\n"
+                "**状态**: 代理已解绑归还库存；对应账号如仍在用会走无代理直连\n"
+                "**处置**: 需要续用的账号在接入弹窗重新一键开通\n"
+            )
+        elif kind == "low_stock":
+            low = data.get("low") or {}
+            low_txt = "、".join(f"{k} 剩{v}条" for k, v in sorted(low.items())) or "—"
+            title = f"📦 托管代理库存告急（阈值 {int(data.get('min_stock') or 0)}）"
+            text = (
+                f"**水位**: {low_txt}\n"
+                "**影响**: 卖空地区的一键开通会显示「暂无库存」，用户流失点\n"
+                "**处置**: 采购后在接入弹窗「手动添加代理」批量灌入对应地区库存\n"
+            )
+        elif kind == "vendor_balance_low":
+            title = (f"💳 代理供应商预付余额告急："
+                     f"{data.get('balance', '?')}（提醒线 {data.get('min_alert', '?')}）")
+            text = (
+                "**影响**: 即买即用模式下余额就是库存——烧穿后所有地区的一键开通"
+                "都会开始失败\n"
+                "**处置**: 去供应商后台充值（USDT），到账后本告警自动清零\n"
+            )
+        else:
+            title = "🌐 托管代理事件"
+            text = f"**detail**: {json.dumps(data, ensure_ascii=False)[:400]}\n"
+        text += "[📊 查看运营总览](/admin/ops)"
+
     elif event_type == "reply_budget_alert":
         if data.get("recovered"):
             title = "✅ 回复额度触顶已清零"
@@ -1069,6 +1465,16 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
         _prod_txt = (f"**产品**: {_prod}\n" if _prod else "")
         _days = data.get("days_to_done")
         _days_txt = (f"，用时 {_days} 天" if _days is not None else "")
+        # 摸底要点（P3 2026-08-18：goals.notify.include_profile 显式开启才随
+        # payload 出现——画像值出境到外部 IM 是 opt-in，缺省推送不含客户画像）
+        _brief = str(data.get("slots_brief") or "")
+        _brief_txt = (f"**摸底要点**: {_brief}\n" if _brief else "")
+        # 会话深链（收到推送的人 10 秒内能落到现场跟进；conv 含冒号属合法
+        # query 值，仍统一 quote 防脏 id 破坏 markdown 链接）
+        _conv = str(data.get("conversation_id") or "")
+        _conv_link = (
+            f"[💬 打开会话](/workspace?conv={urllib.parse.quote(_conv)}"
+            "&card=goal) · " if _conv else "")
         title = f"🎯 目标达成：{_who} 完成「{_title_txt}」"
         text = (
             f"**账号**: {_acct}\n"
@@ -1076,8 +1482,10 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
             f"**完成方式**: {_kind_txt}\n"
             f"{_amount_txt}"
             f"{_prod_txt}"
+            f"{_brief_txt}"
             "**建议**: 完成后 48h 是跟进黄金窗——发个感谢/追加关怀，"
             "转化类可顺手启动留存链\n"
+            f"{_conv_link}"
             "[🎯 打开目标达成报表](/workspace/goal-report?status=done&days=7)"
         )
 
@@ -1350,11 +1758,33 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
             )
 
     elif event_type == "ai_primary_guard_alert":
-        if data.get("recovered"):
+        _apg_kind = str(data.get("kind") or "")
+        if _apg_kind == "lock_enforced":
+            # 老板锁（2026-08-22）：配置被越权改动 → 装载点强制回锁值
+            title = "🔒 主链锁生效：越权改档已被强制纠正"
+            text = (
+                f"**检测**: ai.primary 被改为 {str(data.get('from_mode') or '?')}，"
+                f"与 primary_lock={str(data.get('lock') or '?')} 不符\n"
+                f"**处置**: 装载时按锁强制生效（现 {str(data.get('effective') or '?')}）"
+                "并回写 overlay\n"
+                "**追责**: 见实例 logs/ai_primary_audit.jsonl（谁在何时经何途径改的）\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+        elif _apg_kind == "lock_rejected":
+            title = "🔒 主链切换请求被锁拒绝"
+            text = (
+                f"**请求**: 切到 {str(data.get('requested') or '?')}"
+                f"（操作者: {str(data.get('actor') or '?')}）\n"
+                f"**锁**: primary_lock={str(data.get('lock') or '?')}"
+                "（老板令 2026-08-22；解除需老板拍板）\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+        elif data.get("recovered"):
             title = "✅ 本地主链已恢复可用（仍在 cloud 档）"
             text = (
-                "**状态**: 本地 vLLM 端点探测恢复；保险为单向降级，未自动切回\n"
-                "**下一步**: 经中枢执行器切回智聊模式（起 :8001+暖机后自动回 local_only）\n"
+                "**状态**: 本地端点探测恢复；保险为单向降级，未自动切回\n"
+                "**下一步**: 主链档位由 ai.primary_lock 治理（2026-08-22 起锁 cloud），"
+                "恢复本地档需老板解锁后经治理接口切换，严禁自动切回\n"
                 "[📊 查看运营总览](/admin/ops)"
             )
         else:
@@ -1592,6 +2022,8 @@ _CARD_META: Dict[str, Tuple[str, str]] = {
     "draft_sla_escalated": ("🔴 严重", "运营"),
     "lan_gpu_alert": ("🟠 警告", "算力"),
     "avatar_voice_alert": ("🟠 警告", "算力"),
+    "image_models_alert": ("🟠 警告", "算力"),
+    "hub_engine_alert": ("🟠 警告", "算力"),
     "tg_call_alert": ("🟠 警告", "算力"),
     "colloquial_llm_alert": ("🔵 提示", "算力"),
     "ai_primary_guard_alert": ("🟠 警告", "算力"),
@@ -1632,6 +2064,7 @@ _CARD_META: Dict[str, Tuple[str, str]] = {
     "voice_burst_alert": ("🟠 警告", "质量"),
     "persona_retired_alert": ("🔵 提示", "质量"),
     "memory_key_drift_alert": ("🔵 提示", "质量"),
+    "proxy_managed_alert": ("🟠 警告", "运营"),
 }
 
 _CARD_RULE = "━━━━━━━━━━━━━━"
@@ -1749,6 +2182,17 @@ class WebhookNotifier:
         etype = str(evt.get("type") or "")
         data = dict(evt.get("data") or {})
         level = str(data.get("autopilot_level") or "")
+        # 「责任坐席副本」（P2 2026-08-18）：payload 自带 agent_chat_id（目前只有
+        # goals.notify 按绑定/开关解析注入）→ 借首个命中的 telegram 渠道的 bot
+        # 加发一份到该坐席；每事件至多一份，管理员渠道那份照发不受影响。
+        agent_copy_pending = str(data.get("agent_chat_id") or "").strip()
+        # 「逐目标点名收件人」（P3 2026-08-18）：payload 自带 extra_chat_ids
+        # （goals params.notify_extra 解析产物）→ 与坐席副本同机制借首个命中的
+        # telegram 渠道逐个加发；每事件至多一轮，与渠道主号/坐席副本去重。
+        extra_copies_pending = [
+            str(x or "").strip()
+            for x in (data.get("extra_chat_ids") or [])
+            if str(x or "").strip()][:5]
 
         for m in self._matchers:
             # 匹配 event type
@@ -1767,6 +2211,26 @@ class WebhookNotifier:
                 continue
 
             await self._send(m, etype, data)
+            if ((agent_copy_pending or extra_copies_pending)
+                    and m["fmt"] == "telegram"):
+                sent_to = {str(m.get("target") or "")}
+                if agent_copy_pending:
+                    if agent_copy_pending not in sent_to:
+                        # 与渠道同号（老板自己建的目标）＝渠道那份已覆盖，跳过防双推
+                        await self._send(
+                            {**m, "name": m["name"] + "+agent",
+                             "target": agent_copy_pending},
+                            etype, data)
+                        sent_to.add(agent_copy_pending)
+                    agent_copy_pending = ""   # 每事件只发一份坐席副本
+                for chat in extra_copies_pending:
+                    if chat in sent_to:
+                        continue
+                    await self._send(
+                        {**m, "name": m["name"] + "+extra", "target": chat},
+                        etype, data)
+                    sent_to.add(chat)
+                extra_copies_pending = []     # 每事件只发一轮点名副本
 
         # 定期清理速率限制记录
         self._rate_limiter.cleanup()
@@ -1782,11 +2246,13 @@ class WebhookNotifier:
             url = _resolve_chat_endpoint(fmt, matcher["url"], token)
             if not url:
                 self.total_errors += 1
+                self.last_error = "missing url/token"
                 logger.warning("Webhook 跳过 [%s]：%s 渠道缺少 url/token",
                                matcher["name"], fmt)
                 return
             if not target:
                 self.total_errors += 1
+                self.last_error = "missing target/chat_id"
                 logger.warning("Webhook 跳过 [%s]：%s 渠道缺少 target",
                                matcher["name"], fmt)
                 return
@@ -1818,19 +2284,39 @@ class WebhookNotifier:
             logger.info("Webhook 发送成功 [%s] %s", matcher["name"], etype)
         except Exception as exc:
             self.total_errors += 1
+            # 失败现场（B24 2026-08-21）：send_test 据此把真实原因带回给面板，
+            # 终结「测试失败：HTTP 200」这类甩状态码的报错
+            self.last_error = str(exc)[:300]
             logger.warning("Webhook 发送失败 [%s]: %s", matcher["name"], exc)
 
     @staticmethod
     def _http_post(url: str, body: bytes, headers: Optional[Dict[str, str]] = None) -> None:
-        """同步 HTTP POST（在 executor 中运行，不阻塞事件循环）。"""
+        """同步 HTTP POST（在 executor 中运行，不阻塞事件循环）。
+
+        HTTPError 富化（B24 2026-08-21）：Telegram Bot API 的失败原因在响应体
+        ``description`` 字段（如 "Bad Request: chat not found"），urllib 的
+        HTTPError 消息只有 "HTTP Error 400"——不读体就永远只能对用户甩状态码。
+        """
         req = urllib.request.Request(
             url,
             data=body,
             headers=headers or {"Content-Type": "application/json; charset=utf-8"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            resp.read()
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                resp.read()
+        except urllib.error.HTTPError as e:
+            desc = ""
+            try:
+                raw = e.read()
+                desc = str(json.loads(raw.decode("utf-8", "replace"))
+                           .get("description") or "")[:200]
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"HTTP {e.code}" + (f": {desc}" if desc else f" {e.reason}")
+            ) from None
 
     async def send_test(self, webhook: Dict[str, Any], etype: str = "autoreply_alert",
                         data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -1851,9 +2337,14 @@ class WebhookNotifier:
             "account_id": "test-account", "detail": "这是一条测试告警（连通性检查）",
         }
         before_err = self.total_errors
+        self.last_error = ""
         await self._send(m, etype, payload)
         ok = self.total_errors == before_err
-        return {"ok": ok, "name": m["name"], "format": m["fmt"]}
+        out: Dict[str, Any] = {"ok": ok, "name": m["name"], "format": m["fmt"]}
+        if not ok:
+            # 原始失败原因（路由层负责译成人话；B24：绝不让面板只看到状态码）
+            out["error_raw"] = str(getattr(self, "last_error", "") or "")
+        return out
 
     # ── 状态快照 ──────────────────────────────────────────────────────────
 

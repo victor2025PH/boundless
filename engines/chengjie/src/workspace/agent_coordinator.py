@@ -78,6 +78,12 @@ class AgentCoordinator:
 
     # ── presence ─────────────────────────────────────────────
 
+    def get_presence(self, agent_id: str) -> Optional[Dict[str, Any]]:
+        """单坐席 presence 行（store/内存同口径；无行 → None）。"""
+        if self._store is not None:
+            return self._store.get_agent_presence(agent_id)
+        return self._presence.get(agent_id)
+
     def set_presence(
         self,
         agent_id: str,
@@ -88,6 +94,12 @@ class AgentCoordinator:
         st = str(status or "online").lower()
         if st not in VALID_STATUS:
             raise ValueError(f"invalid status: {st}")
+        # 审计差分用旧值（2026-08-19：状态切换此前零审计，主管无法追溯
+        # 「昨晚为什么没人接单」）。读失败按空处理，绝不阻断写入。
+        try:
+            prev_st = str((self.get_presence(agent_id) or {}).get("status") or "")
+        except Exception:
+            prev_st = ""
         if self._store is not None:
             row = self._store.upsert_agent_presence(
                 agent_id, display_name=display_name, status=st,
@@ -102,6 +114,21 @@ class AgentCoordinator:
                 "updated_at": now,
             }
             self._presence[agent_id] = row
+        if prev_st != st:
+            # 只记「状态真变化」（heartbeat 同态保活每 30s 一拍，逐拍记账＝纯噪音）
+            try:
+                from src.ops.ops_events import get_ops_event_store
+                ev = get_ops_event_store()
+                if ev is not None:
+                    ev.record(
+                        "presence_change",
+                        account_id=str(agent_id or ""),
+                        platform="workspace",
+                        reason=f"{prev_st or 'new'}->{st}",
+                        detail=str(display_name or ""),
+                    )
+            except Exception:
+                logger.debug("presence 审计落库失败（忽略）", exc_info=True)
         self._publish("agent_presence", row)
         return row
 
@@ -124,11 +151,15 @@ class AgentCoordinator:
     def list_presence(self) -> List[Dict[str, Any]]:
         if self._store is not None:
             return self._store.list_agent_presence(active_within_sec=self.presence_stale_sec)
+        # 口径与 store 分支统一（presence_policy.roster_visible：心跳窗口内三态如实
+        # 返回，含手选「离开」）——此前内存分支剔 offline、SQLite 分支不剔，两个
+        # 分支行为分叉，测试环境与生产各看一套。
+        from src.workspace.presence_policy import roster_visible
         cutoff = self._now() - self.presence_stale_sec
         return [
             v for v in self._presence.values()
             if float(v.get("last_seen_at") or 0) >= cutoff
-            and str(v.get("status") or "offline") != "offline"
+            and roster_visible(v.get("status"))
         ]
 
     # ── P2 多开观测：坐席窗口注册表（进程内，TTL 自清）───────────

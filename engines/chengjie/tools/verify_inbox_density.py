@@ -97,6 +97,7 @@ CONV_ROW_SPREAD_MAX = 2
 # 新增豁免必须写清原因（对齐仓内 _ACCEPTED_DUP_IDS 的登记文化）。
 WASTE_ALLOWLIST = {
     "rt-divider": "工具条分隔线，纯视觉 1px 竖线",
+    "ftab-sep": "筛选行 私聊/群组/频道 与 全部/未读 之间的 1px 竖线（纯视觉）",
     "conv-acct-accent": "会话行左侧账号色条，纯视觉 2px",
     "ava-img": "头像图片容器，背景图渲染（无子节点）",
     "ws-sidebar-resize": "侧栏拖拽把手，靠 cursor/hover 提供 affordance",
@@ -206,6 +207,47 @@ _NARROW_JS = """() => {
     row_h: h(document.querySelector('#conv-items .conv-item')),
   };
 }"""
+
+# B60 族（实施74 三批，2026-08-27）：①滚到底「已归档」入口可见不被盖（原报障
+# 不变量，防回潮）；②群组动态区 computed display 必须是 flex——JS 曾用
+# display='block' 覆写 CSS，body 不受 46% 封顶的 flex 分配约束 → 群一多
+# 超出部分滚不到（40 群实测只能看到前几行，当日实锤修复）。
+_B60_JS = """() => {
+  const items=document.getElementById('conv-items');
+  if(items) items.scrollTop = items.scrollHeight;
+  const foot=document.querySelector('.conv-arch-foot');
+  const gs=document.getElementById('group-section');
+  const out={foot_exists:!!foot, gs_visible:!!gs && gs.style.display!=='none'};
+  if(foot && items){
+    const fr=foot.getBoundingClientRect();
+    const ir=items.getBoundingClientRect();
+    const hit=document.elementFromPoint(Math.round(fr.left+fr.width/2),
+                                        Math.round(fr.top+fr.height/2));
+    out.foot_in_view = fr.height>10 && fr.bottom<=ir.bottom+2 && fr.top>=ir.top-2;
+    out.foot_covered = !!hit && hit!==foot && !foot.contains(hit);
+  }
+  if(out.gs_visible){ out.gs_display=getComputedStyle(gs).display; }
+  return out;
+}"""
+
+_B60_EXPAND_JS = """() => new Promise(res => {
+  const gs=document.getElementById('group-section');
+  if(!gs || gs.style.display==='none') return res({skip:'no groups'});
+  if(!gs.querySelector('.group-sec-body')){
+    const h=gs.querySelector('.group-sec-head'); if(h) h.click();
+  }
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    const b=gs.querySelector('.group-sec-body');
+    if(!b) return res({skip:'no body after expand'});
+    b.scrollTop=b.scrollHeight;
+    const rows=b.querySelectorAll('.conv-item');
+    const last=rows.length?rows[rows.length-1].getBoundingClientRect():null;
+    const br=b.getBoundingClientRect();
+    res({rows:rows.length, scrollable:b.scrollHeight>b.clientHeight,
+         reach:Math.abs(b.scrollTop+b.clientHeight-b.scrollHeight)<3,
+         last_vis:!!last && last.bottom<=br.bottom+3 && last.height>10});
+  }));
+})"""
 
 _DRAWER_JS = """() => {
   const m = document.getElementById('ftab-more-menu');
@@ -392,6 +434,39 @@ def run(base: str, token: str, *, shots: Optional[Path] = None,
                      rh["max"] - rh["min"] <= CONV_ROW_SPREAD_MAX,
                      f"spread={rh['max'] - rh['min']}px <= {CONV_ROW_SPREAD_MAX}px"
                      f"（min={rh['min']} max={rh['max']} n={rh['n']}）")
+
+        # ── 6c. B60 族（实施74 三批）：归档入口可达 + 群组区内部可滚 ──────
+        print("== 6c. B60：归档入口可达 + 群组区内部可滚 ==")
+        b60 = page.evaluate(_B60_JS)
+        if not b60.get("foot_exists"):
+            ck.skip("归档入口可见", "当前视图无「已归档」footer")
+        else:
+            ck.check("滚到底后「已归档」入口完整可见且未被遮挡",
+                     b60.get("foot_in_view") and not b60.get("foot_covered"),
+                     f"in_view={b60.get('foot_in_view')} covered={b60.get('foot_covered')}")
+        if not b60.get("gs_visible"):
+            ck.skip("群组动态区", "该视图无群组")
+        else:
+            ck.check("群组动态区 computed display=flex（勿被 JS 覆写回 block）",
+                     b60.get("gs_display") == "flex",
+                     f"display={b60.get('gs_display')}")
+            ex = page.evaluate(_B60_EXPAND_JS)
+            if ex.get("skip"):
+                ck.skip("群组区滚动", str(ex["skip"]))
+            elif not ex.get("scrollable"):
+                ck.skip("群组区滚动", f"群太少不需滚（rows={ex.get('rows')}）")
+            else:
+                ck.check("展开的群组列表可滚到最后一行",
+                         bool(ex.get("reach") and ex.get("last_vis")),
+                         f"rows={ex.get('rows')} reach={ex.get('reach')} "
+                         f"last={ex.get('last_vis')}")
+            # 收拢回折叠态 + 列表回顶（浏览器本地态，不影响后续 composer 检查）
+            page.evaluate(
+                "() => { const h=document.querySelector('.group-sec-head');"
+                " if(h && document.querySelector('.group-sec-body')) h.click();"
+                " const it=document.getElementById('conv-items');"
+                " if(it) it.scrollTop=0; }")
+            page.wait_for_timeout(400)
 
         # ── 7. composer：预算 + 扫描（只开已读会话，零副作用）─────────
         print("== 7. composer：预算 + 扫描（只打开已读会话）==")

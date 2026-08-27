@@ -1024,6 +1024,7 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
     <button class="dtab" data-dtab="style" onclick="switchDTab('style')">{{ (i18n or {}).get('psn_dtab_style','风格') }}<span class="ddot" id="ddot-style"></span></button>
     <button class="dtab" data-dtab="voice" onclick="switchDTab('voice')">{{ (i18n or {}).get('psn_dtab_voice','语音') }}<span class="ddot" id="ddot-voice"></span></button>
     <button class="dtab" data-dtab="album" onclick="switchDTab('album')">{{ (i18n or {}).get('psn_dtab_album','相册') }}<span class="ddot" id="ddot-album"></span></button>
+    <button class="dtab" data-dtab="stock" onclick="switchDTab('stock')">{{ (i18n or {}).get('psn_dtab_stock','备货') }}<span class="ddot" id="ddot-stock"></span></button>
     <button class="dtab" data-dtab="preview" onclick="switchDTab('preview')">{{ (i18n or {}).get('psn_dtab_preview','预览') }}<span class="ddot" id="ddot-preview"></span><span class="diff-cnt" id="pe-diff-cnt"></span></button>
   </div>
   <!-- Pane: Basic -->
@@ -1221,7 +1222,7 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
             <option value="voice_clone_command">{{ (i18n or {}).get('psn_voice_clone_cmd','声音克隆（命令）') }}</option>
           </select>
         </div>
-        <div class="field-row"><label>{{ (i18n or {}).get('psn_voice_id','音色 / Voice ID') }}</label><input id="pe-vp-voice" type="text" placeholder="zh-CN-XiaoxiaoNeural"></div>
+        <div class="field-row"><label>{{ (i18n or {}).get('psn_voice_id','音色 / Voice ID') }}</label><input id="pe-vp-voice" type="text" placeholder="{{ (i18n or {}).get('psn_voice_id_eg','例：zh-CN-XiaoxiaoNeural') }}"></div>
       </div>
       <!-- 克隆绑定锁提示：voice_profile.backend ∈ 克隆家族时显示（_vpSyncBackendUi 托管） -->
       <div id="pe-vp-clone-hint" style="display:none;font-size:.74rem;color:var(--th-ink-amber7,#b45309);margin-top:.5rem;line-height:1.5">🔒 {{ (i18n or {}).get('psn_vp_clone_bound','该人设已绑定克隆音色（由收件箱的语音登记弹层写入）。改成其他选项＝不再用克隆声；改动后请先试听确认再保存。') }}</div>
@@ -1229,6 +1230,18 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
       <!-- 音色体检（只读）：夜间探针 voice_similarity 最新读数（声纹/自然度/日期） -->
       <div id="pe-vq-row" style="font-size:.74rem;color:var(--t2);margin-top:.55rem;border-top:1px solid var(--bd);padding-top:.55rem;line-height:1.5">
         🩺 {{ (i18n or {}).get('psn_vq_title','音色体检') }}：<span id="pe-vq-line">{{ (i18n or {}).get('psn_vq_none','暂无体检数据') }}</span>
+      </div>
+      <!-- B25-①（实施49 2026-08-21）：克隆音色登记/改绑挪进人设页——「音色跟人走」。
+           组件与收件箱右栏同源（<cp-voice mode="enroll">，登记流单源两挂载点，避免双端
+           重复维护）；「生成语音 / 发送」需要会话上下文，留在收件箱右栏业务助手。 -->
+      <div id="pe-vc-card" style="margin-top:.55rem;border-top:1px solid var(--bd);padding-top:.55rem;">
+        <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;font-size:.74rem;">
+          <b>🎤 {{ (i18n or {}).get('psn_vc_h','克隆音色（跟随人设）') }}</b>
+          <span id="pe-vc-status" style="color:var(--t2);"></span>
+          <button type="button" class="btn btn-sm" id="pe-vc-unbind" onclick="peVcUnbind()" style="display:none;font-size:.72rem;">{{ (i18n or {}).get('psn_vc_unbind_btn','解绑克隆音色') }}</button>
+        </div>
+        <div style="font-size:.7rem;color:var(--t2);margin:.3rem 0 .35rem;line-height:1.5">{{ (i18n or {}).get('psn_vc_sub','上传参考音频完成登记，音色跟随本人设生效；「生成语音 / 发送」在收件箱右栏业务助手。') }}</div>
+        <cp-voice mode="enroll" id="pe-vc-enroll"></cp-voice>
       </div>
     </div>
   </div>
@@ -1300,6 +1313,14 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
     </div>
     <div style="font-size:.7rem;color:var(--t2);margin:.15rem 0 .1rem;line-height:1.5">{{ (i18n or {}).get('pma_summary_sub','（图/视频 + 触发词，客户说到就自动发）') }}</div>
     <div id="pe-album-body">{{ (i18n or {}).get('psn_expand_to_load','点击展开加载…') }}</div>
+  </div>
+  <!-- Pane: Stock readiness（WP-6 备货：档案/音色/相册/台词/指纹 五行聚合）-->
+  <div class="dpane" id="dpane-stock">
+    <div class="pma-panel-hd">🎒 {{ (i18n or {}).get('psn_stock_title','备货就绪度') }}
+      <span id="pe-stock-badge" style="font-size:.66rem;font-weight:400;color:var(--t2);margin-left:.15rem"></span>
+    </div>
+    <div style="font-size:.7rem;color:var(--t2);margin:.15rem 0 .1rem;line-height:1.5">{{ (i18n or {}).get('psn_stock_sub','（档案 / 克隆音色 / 相册 / 台词库 / 说话指纹——缺的这里给入口；全✓＝该人设开箱即用）') }}</div>
+    <div id="pe-stock-body">{{ (i18n or {}).get('psn_expand_to_load','点击展开加载…') }}</div>
   </div>
   <style>
     .pma-panel-hd{display:flex;align-items:center;gap:.4rem;font-size:.82rem;font-weight:600;color:var(--t);margin-top:.1rem}
@@ -1404,6 +1425,11 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
       <span id="dp-source" style="font-size:.72rem;color:var(--t2)"></span>
     </div>
     <p style="font-size:.8rem;color:var(--t2);line-height:1.6;margin:.2rem 0 1rem">{{ (i18n or {}).get('psn_default_desc','未单独绑定画像的会话（含桌面端 Telegram）都使用这套人设。保存后写入 <code>persona_runtime.yaml</code> 并立即生效（无需重启后端）。<br>客户问"你叫什么"时，AI 会用下面的<strong>名字</strong>回答——填一个像真人的名字（如「小雨」），别用角色定位。')|safe }}</p>
+
+    <!-- 实施49 P0-3（内测反馈 B3）：账号级绑定优先于这套默认人设，不显式说明
+         客户就会得出「保存成功但聊天里没变＝坏了」的结论。打开页面即常驻，
+         保存后同源刷新（与 toast 判词共用 _dpScopeVerdict 口径）。 -->
+    <div id="dp-scope" style="display:none;margin:0 0 1rem"></div>
 
     <div class="field-row" style="margin-bottom:.85rem">
       <label style="display:block;font-size:.8rem;font-weight:600;margin-bottom:.3rem">{{ (i18n or {}).get('psn_name_identity','名字（AI 的身份名）') }}</label>
@@ -1581,6 +1607,11 @@ function _closeDrawer() {
   var dirty = document.getElementById('drawer-dirty');
   if (dirty && dirty.classList.contains('show')) {
     if (!confirm(window.T('psn_js_002'))) return false;
+    /* B47（实施74 三批，_273/22:42 追报「放弃后就没有记录了」）：确认丢弃前
+       **强制把当前表单暂存进草稿快照**——旧链路里坐席若先点过恢复条的「忽略」
+       （清快照），此处丢弃＝内容永久丢失。现在丢弃永远留可找回副本，下次打开
+       经「发现未保存草稿→恢复」找回；文案（psn_js_002）同步说清这一点。 */
+    try { clearTimeout(_draftTimer); _saveDraft(); } catch(e) {}
   }
   document.getElementById('drawer-ov').classList.remove('open');
   document.getElementById('profile-drawer').classList.remove('open');
@@ -1596,6 +1627,8 @@ function switchDTab(id) {
   if (tab)  tab.classList.add('active');
   // 相册 tab 惰性加载（切到才拉，避免每次开抽屉都请求）；上传/改/删后由 pmaLoad 自刷。
   if (id === 'album' && !_albumLoaded) { _albumLoaded = true; pmaLoad(); }
+  // 备货 tab 同款惰性加载（WP-6）。
+  if (id === 'stock' && !_stockLoaded) { _stockLoaded = true; stockLoad(); }
 }
 function _markDrawerDirty(e) {
   var d = document.getElementById('drawer-dirty'); if (d) d.classList.add('show');
@@ -1967,7 +2000,7 @@ function _legacyRowHtml(it) {
     return '<span style="font-size:.62rem;font-weight:700;padding:.05rem .35rem;border-radius:4px;margin-left:.35rem;background:' + bg + ';color:' + fg + '">' + _escHtml(txt) + '</span>';
   };
   var tags = '';
-  if (it.rpa_managed) tags += tag(window.T('psn_legacy_rpa'), 'rgba(30,140,242,.12)', '#0d76d9');
+  if (it.rpa_managed) tags += tag(window.T('psn_legacy_rpa'), 'color-mix(in srgb, var(--bl-growth,#1e8cf2) 12%, transparent)', 'var(--bl-growth-600,#0d76d9)');
   if (it.stale) tags += tag(window.T('psn_legacy_stale'), 'rgba(239,68,68,.1)', '#dc2626');
   if (convs.length && !live) tags += tag(window.T('psn_legacy_suppressed'), 'rgba(148,163,184,.15)', 'var(--t3)');
   else if (live) tags += tag(window.T('psn_legacy_live') + ' ' + live, 'rgba(245,158,11,.12)', '#b45309');
@@ -2155,6 +2188,80 @@ function _personaPayload() {
   return base;
 }
 
+// ── 实施49 P0-3：默认人设「生效范围」（内测反馈 B3）──────────────────────────
+// 「保存成功」与「聊天里真的变了」是两件事：账号级绑定优先于域级默认人设，
+// 而账号上线时还会按 platform_login.default_persona_id 自动补一条绑定 →
+// 真实部署里全局默认常常一个账号都管不到。判词只在这里算一次，页面常驻条与
+// 保存后的 toast 共用，避免两处口径分叉（客户看到的与实际行为对不上更糟）。
+function _dpScopeVerdict(sc) {
+  if (!sc || sc.available === false) return null;
+  var total = sc.accounts_total || 0, follow = sc.accounts_following || 0;
+  var over = sc.accounts_overridden || 0;
+  if (!total) return {level: 'info', text: window.T('psn_dpscope_no_account')};
+  if (sc.reaches_nobody) return {level: 'bad', text: window.Tf('psn_dpscope_none', {n: total})};
+  if (over > 0) return {level: 'warn', text: window.Tf('psn_dpscope_partial', {follow: follow, total: total, over: over})};
+  return {level: 'ok', text: window.Tf('psn_dpscope_all', {n: total})};
+}
+
+function _renderDpScope(sc) {
+  var box = document.getElementById('dp-scope');
+  if (!box) return;
+  var v = _dpScopeVerdict(sc);
+  if (!v) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  var tone = {
+    // fallback 必须逐字等于 theme-tokens.css :root 的亮值（门禁 test_th_token_fallbacks_match_css_light_values）
+    ok:   ['var(--th-bg-grn06,rgba(16,185,129,.06))',  'var(--th-bd-grn20,rgba(16,185,129,.2))'],
+    warn: ['var(--th-bg-amber06,rgba(245,158,11,.06))', 'var(--th-bd-amber20,rgba(245,158,11,.2))'],
+    bad:  ['var(--th-bg-red06,rgba(239,68,68,.06))',    'var(--th-bd-red20,rgba(239,68,68,.2))'],
+    info: ['var(--bg)', 'var(--bd)']
+  }[v.level] || ['var(--bg)', 'var(--bd)'];
+  var rows = ['<div style="font-size:.78rem;font-weight:600;line-height:1.5">' + _escHtml(v.text) + '</div>'];
+  var samples = sc.overrides || [];
+  if (samples.length) {
+    var anyAuto = samples.some(function (o) { return o.auto; });
+    var items = samples.map(function (o) {
+      var who = (o.label || o.account_id || '') + (o.label && o.account_id ? ' · ' + o.account_id : '');
+      var pn = o.profile_name || o.profile_id || '';
+      return '<div style="font-size:.7rem;color:var(--t2);margin-top:.16rem">· ' + _escHtml(who)
+        + ' → <b>' + _escHtml(pn) + '</b>'
+        + (o.auto ? ' <span style="font-size:.64rem;opacity:.8">(' + _escHtml(window.T('psn_dpscope_auto_tag')) + ')</span>' : '')
+        + '</div>';
+    }).join('');
+    rows.push('<div style="margin-top:.4rem">' + items
+      + (sc.accounts_overridden > samples.length
+          ? '<div style="font-size:.68rem;color:var(--t3);margin-top:.16rem">…' + _escHtml(window.Tf('psn_dpscope_more', {n: sc.accounts_overridden - samples.length})) + '</div>'
+          : '')
+      + '</div>');
+    if (anyAuto && sc.auto_bind_profile_id) {
+      rows.push('<div style="font-size:.7rem;color:var(--t2);margin-top:.35rem">'
+        + _escHtml(window.Tf('psn_dpscope_auto_note',
+            {name: sc.auto_bind_profile_name || sc.auto_bind_profile_id})) + '</div>');
+    }
+  }
+  if (sc.conv_overrides) {
+    rows.push('<div style="font-size:.7rem;color:var(--t2);margin-top:.3rem">'
+      + _escHtml(window.Tf('psn_dpscope_conv', {n: sc.conv_overrides})) + '</div>');
+  }
+  if (sc.chat_bindings) {
+    rows.push('<div style="font-size:.7rem;color:var(--t2);margin-top:.3rem">'
+      + _escHtml(window.Tf('psn_dpscope_legacy', {n: sc.chat_bindings})) + '</div>');
+  }
+  if (sc.accounts_overridden) {
+    // 刻意不做「一键清空全部账号绑定」：清掉绑定并不保证回落到这套默认人设
+    // （账号下次上线会按 platform_login.default_persona_id 再自动补一条），
+    // 一个「点了以为搞定、其实又被自动绑回去」的按钮比没有按钮更坑。
+    rows.push('<div style="margin-top:.45rem"><a href="javascript:void(0)" onclick="switchTab(\'dashboard\')" '
+      + 'style="font-size:.72rem;font-weight:600;color:var(--th-ink-blue5,#1d4ed8)">'
+      + _escHtml(window.T('psn_dpscope_goto')) + '</a></div>');
+  }
+  box.style.background = tone[0];
+  box.style.border = '1px solid ' + tone[1];
+  box.style.borderRadius = '9px';
+  box.style.padding = '.6rem .75rem';
+  box.style.display = '';
+  box.innerHTML = rows.join('');
+}
+
 // 打开「默认人设」tab 时，把后端当前默认人设回填到表单
 async function loadDefaultPersonaForm() {
   try {
@@ -2172,6 +2279,7 @@ async function loadDefaultPersonaForm() {
     _dpSet('p-reply-length', p.reply_length || (p.speaking && p.speaking.reply_length) || 'balanced');
     var src = document.getElementById('dp-source');
     if (src) src.textContent = p.name ? (window.T('psn_js_059') + p.name) : '';
+    _renderDpScope(d && d.effective_scope);
   } catch (e) {
     _toast(window.T('psn_js_060') + e, 'err');
   }
@@ -2188,7 +2296,17 @@ async function saveDefaultPersona() {
     }, {timeoutMs: 60000});
     const d = await r.json();
     if (d.ok) {
-      _toast(window.T('psn_js_062'), 'ok'); st.textContent = window.T('psn_js_063'); st.className = 'tts-status ok';
+      // P0-3：保存成功 ≠ 生效。有账号被自己的绑定盖住时，toast 必须说出来
+      // （只报「已保存」正是 B3「改了没反应」的错觉来源），并把常驻条刷新。
+      var v = _dpScopeVerdict(d.effective_scope);
+      var msg = window.T('psn_js_062');
+      var tone = 'ok';
+      if (v && (v.level === 'bad' || v.level === 'warn')) {
+        msg = window.T('psn_js_062') + ' — ' + v.text;
+        tone = 'info';
+      }
+      _toast(msg, tone, tone === 'ok' ? 3200 : 7000);
+      st.textContent = window.T('psn_js_063'); st.className = 'tts-status ok';
       loadDefaultPersonaForm();
     }
     else { st.textContent = window.T('psn_js_064') + (d.detail || ''); st.className = 'tts-status err'; }
@@ -2450,6 +2568,149 @@ function _ppTab(which) {
 // ── 相册 / 媒体（DB 注册相册：图/视频 + 触发词，按需自动发）─────────────────
 // 有独立「相册」tab，惰性加载在 switchDTab('album') 里触发（首次切到才 pmaLoad）。
 let _albumLoaded = false;
+let _stockLoaded = false;
+
+// ── WP-6 备货就绪度（档案/音色/相册/台词/指纹 五行；只读聚合 + 缺项入口）────
+async function stockLoad() {
+  const body = document.getElementById('pe-stock-body');
+  const pid = _pmaPid();
+  if (!pid || !body) return;
+  body.innerHTML = window.T('pma_loading');
+  try {
+    const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/stock-readiness');
+    // 特性探测（WP-4 会员卡同款）：模板热更新先于 .py 装载上线的中间态，端点 404
+    // → 显示「随下次重启生效」而不是裸报错；重启装载后自然恢复。
+    if (r.status === 404) { body.textContent = window.T('psn_stock_pending_restart'); return; }
+    if (!r.ok) { body.textContent = window.T('psn_stock_load_fail') + r.status; return; }
+    const d = await r.json();
+    _stockRender(body, pid, d);
+    const badge = document.getElementById('pe-stock-badge');
+    if (badge) badge.textContent = d.ready_count + '/' + d.applicable_count;
+  } catch (e) { body.textContent = window.T('psn_stock_load_fail') + e; }
+}
+function _stockRow(ok, applicable, label, detailHtml, actionHtml) {
+  const icon = !applicable ? '<span style="color:var(--t2)">—</span>'
+    : (ok ? '<span style="color:var(--th-ink-green6,#15803d);font-weight:700">✓</span>'
+          : '<span style="color:var(--th-ink-red5,#b91c1c);font-weight:700">✗</span>');
+  const st = !applicable ? window.T('psn_stock_na')
+    : (ok ? window.T('psn_stock_ready') : window.T('psn_stock_missing'));
+  return '<div style="display:flex;gap:.5rem;align-items:flex-start;padding:.42rem .2rem;border-bottom:1px solid var(--bd)">'
+    + '<div style="width:1rem;text-align:center;flex:none">' + icon + '</div>'
+    + '<div style="flex:1;min-width:0"><div style="font-size:.76rem;font-weight:600">' + label
+    + ' <span style="font-size:.62rem;font-weight:400;color:var(--t2)">' + st + '</span></div>'
+    + '<div style="font-size:.68rem;color:var(--t2);line-height:1.5">' + detailHtml + '</div></div>'
+    + (actionHtml ? '<div style="flex:none">' + actionHtml + '</div>' : '')
+    + '</div>';
+}
+function _stockRender(body, pid, d) {
+  const it = d.items || {};
+  const T = window.T;
+  let html = '';
+  // 完成度条
+  const pct = Math.round((d.completion || 0) * 100);
+  html += '<div style="margin:.3rem 0 .5rem"><div style="height:8px;border-radius:6px;background:var(--input);overflow:hidden">'
+    + '<div style="height:100%;width:' + pct + '%;background:var(--th-ink-green6,#15803d);border-radius:6px"></div></div>'
+    + '<div style="font-size:.66rem;color:var(--t2);margin-top:.2rem">' + pct + '% · ' + d.ready_count + '/' + d.applicable_count
+    + (pct === 100 ? ' · ' + T('psn_stock_done') : '') + '</div></div>';
+  // 1 档案
+  const pr = it.profile || {};
+  html += _stockRow(pr.ready, true, T('psn_stock_row_profile'),
+    _escHtml(pr.name || pid) + ((pr.missing_fields || []).length
+      ? ' · ' + T('psn_stock_profile_fields_missing') + _escHtml((pr.missing_fields || []).join(', ')) : ''),
+    '');
+  // 2 音色
+  const v = it.voice || {};
+  let vdet = v.backend ? (_escHtml(v.backend) + ' · ' + (v.clone ? T('psn_stock_voice_clone') : T('psn_stock_voice_basic'))) : '-';
+  if (v.clone && !v.has_ref) vdet += ' · ' + T('psn_stock_voice_no_ref');
+  if (v.clone && v.has_ref) vdet += ' · ' + (v.has_transcript ? T('psn_stock_transcript_ok') : T('psn_stock_transcript_missing'));
+  html += _stockRow(v.ready, true, T('psn_stock_row_voice'), vdet,
+    v.ready ? '' : '<button class="btn btn-xs" onclick="switchDTab(\'voice\')">' + T('psn_stock_go_voice') + '</button>');
+  // 3 相册
+  const a = it.album || {};
+  html += _stockRow(a.ready, a.applicable, T('psn_stock_row_album'),
+    a.applicable ? (a.count + ' · ' + T('psn_stock_shared') + ' ' + a.shared_count
+      + ((a.scenes || []).length ? ' · ' + _escHtml((a.scenes || []).join('/')) : ''))
+      : T('psn_stock_photos_off'),
+    (a.applicable && !a.ready) ? '<button class="btn btn-xs" onclick="switchDTab(\'album\')">' + T('psn_stock_go_album') + '</button>' : '');
+  // 4 台词库（专属行 + 一键入库）。B106（实施74 b4alt，_514「导入 50 条以为 AI
+  // 该学会主动说」）：行内常驻用途说明——台词库=语音预渲染提速，不教 AI 说话。
+  const ln = it.lines || {};
+  html += _stockRow(ln.ready, true, T('psn_stock_row_lines'),
+    T('psn_stock_lines_own') + ' ' + (ln.count || 0) + ' · ' + T('psn_stock_lines_common') + ' ' + (ln.common_count || 0)
+    + '<div style="font-size:.66rem;color:var(--t2);line-height:1.5;margin-top:.15rem">' + _escHtml(T('psn_stock_lines_note')) + '</div>'
+    + '<div class="pma-row" style="margin-top:.25rem"><input id="pe-stock-line-in" class="pma-in" maxlength="60" placeholder="' + _escAttr(T('psn_stock_lines_ph')) + '">'
+    + '<button class="btn btn-xs" onclick="_stockQuickLine(\'' + _escAttr(pid) + '\')">' + T('psn_stock_lines_add') + '</button>'
+    + '<span id="pe-stock-line-st" class="pma-status"></span></div>', '');
+  // 5 说话指纹（P1-1：模板可编辑 + 直存实例 overlay——打包态出厂件只读也能配）
+  const sp = it.speech_print || {};
+  html += _stockRow(sp.ready, sp.applicable, T('psn_stock_row_print'),
+    sp.applicable
+      ? (sp.ready ? _escHtml(sp.spoken_name || '')
+        : T('psn_stock_print_missing_pre') + '<b>' + _escHtml(sp.spoken_name || '?') + '</b>'
+          + '<textarea id="pe-stock-print-snippet" rows="6" style="width:100%;margin-top:.25rem;font-family:monospace;font-size:.64rem">' + _escHtml(sp.snippet || '') + '</textarea>'
+          + '<div class="pma-row" style="margin-top:.25rem">'
+          + '<button class="btn btn-xs" onclick="_stockSavePrint(\'' + _escAttr(pid) + '\')">' + T('psn_stock_print_save') + '</button>'
+          + '<button class="btn btn-xs" onclick="_stockCopyPrint()">' + T('psn_stock_print_copy') + '</button>'
+          + '<span id="pe-stock-print-st" class="pma-status"></span></div>')
+      : T('psn_stock_pack_missing'),
+    '');
+  body.innerHTML = html;
+}
+async function _stockQuickLine(pid) {
+  const inp = document.getElementById('pe-stock-line-in');
+  const st = document.getElementById('pe-stock-line-st');
+  const text = ((inp || {}).value || '').trim();
+  if (!text) return;
+  if (st) st.textContent = '…';
+  try {
+    const r = await apiFetch('/api/voice/prerender-lines/add', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text: text, target: pid})});
+    if (!r.ok) { if (st) st.textContent = window.T('psn_stock_add_fail') + r.status; return; }
+    if (st) st.textContent = window.T('psn_stock_lines_added');
+    if (inp) inp.value = '';
+    _stockLoaded = true; stockLoad();     // 刷新计数（保持 tab 已加载态）
+  } catch (e) { if (st) st.textContent = window.T('psn_stock_add_fail') + e; }
+}
+function _stockCopyPrint() {
+  const ta = document.getElementById('pe-stock-print-snippet');
+  if (!ta) return;
+  ta.select();
+  try { document.execCommand('copy'); } catch (e) {}
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try { navigator.clipboard.writeText(ta.value); } catch (e) {}
+  }
+  ta.blur();
+  alert(window.T('psn_stock_print_copied'));
+}
+async function _stockSavePrint(pid) {
+  const ta = document.getElementById('pe-stock-print-snippet');
+  const st = document.getElementById('pe-stock-print-st');
+  if (!ta) return;
+  let entry;
+  try {
+    entry = JSON.parse(ta.value);
+    // 兼容「{口称名: 条目}」包装形（复制模板的原样形态）：单键且值为对象 → 解包
+    const keys = Object.keys(entry || {});
+    if (keys.length === 1 && entry[keys[0]] && typeof entry[keys[0]] === 'object') {
+      entry = entry[keys[0]];
+    }
+  } catch (e) { if (st) st.textContent = window.T('psn_stock_print_parse_fail'); return; }
+  if (st) st.textContent = '…';
+  try {
+    const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/speech-print', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({entry: entry})});
+    if (!r.ok) {
+      let msg = r.status;
+      try { msg = ((await r.json()) || {}).detail || r.status; } catch (e) {}
+      if (st) st.textContent = window.T('psn_stock_print_save_fail') + msg;
+      return;
+    }
+    if (st) st.textContent = window.T('psn_stock_print_saved');
+    _stockLoaded = true; stockLoad();      // 行翻✓ + 完成度徽标即刷
+  } catch (e) { if (st) st.textContent = window.T('psn_stock_print_save_fail') + e; }
+}
 
 function _pmaPid() {
   var e = document.getElementById('pe-id');
@@ -2479,7 +2740,13 @@ async function pmaLoad() {
         photosOn = !!(((pd.persona || {}).capabilities || {}).photos);
       }
     } catch (e) { /* 按关显示，开关操作时如实报错 */ }
-    _pmaRender(body, d.items || [], d.stats || {}, photosOn);
+    // B119：全局发图总闸真值（旧后端无此端点 → gate=null 整行不渲染，特性探测 fail-soft）
+    let gate = null;
+    try {
+      const gr = await apiFetch('/api/personas/selfie-gate');
+      if (gr.ok) gate = await gr.json();
+    } catch (e) { /* 不渲染总闸行 */ }
+    _pmaRender(body, d.items || [], d.stats || {}, photosOn, gate);
     pmaFaceLoad();
     const badge = document.getElementById('pe-album-badge');
     if (badge) { const t = (d.stats || {}).total || 0; badge.textContent = t ? '(' + t + ')' : ''; }
@@ -2550,12 +2817,28 @@ async function pmaFaceDelete() {
 // 关 = 该人设整条发图能力关闭（注册相册+AI生成），对话中绝不承诺/暗示发照片；
 // 开 = 恢复相册/发图行为（还需全局 companion.selfie.enabled）。存进人设档案，
 // 走 PUT profiles/{id} merge 语义（只动 capabilities.photos，其余字段不碰）。
-function _pmaCapBar(photosOn, stockTotal) {
+function _pmaCapBar(photosOn, stockTotal, gate) {
   let warn = '';
   if (!photosOn && (stockTotal || 0) > 0) {
     // 已备货但开关关：显式点破「素材不会发出」，防「上传了图忘开开关」
     warn = '<span style="font-size:.72rem;color:var(--warn,#d97706)">'
       + _pmaEsc(window.T('pma_cap_off_stocked').replace('{n}', String(stockTotal))) + '</span>';
+  }
+  // B119（实施74）：全局发图总闸状态行——人设级开关旁显示 companion.selfie.enabled
+  // 真值 + 关闭时给一键开启入口（0826 _580/_581：两闸只开一道，用户无法自查）。
+  let gateRow = '';
+  if (gate && typeof gate.enabled !== 'undefined') {
+    if (gate.enabled) {
+      gateRow = '<span style="font-size:.72rem;color:var(--ok,#16a34a)">✓ '
+        + _pmaEsc(window.T('pma_gate_on')) + '</span>';
+    } else {
+      gateRow = '<span style="font-size:.72rem;color:var(--warn,#d97706)">'
+        + _pmaEsc(window.T('pma_gate_off')) + '</span>'
+        + (gate.writable
+          ? ' <button id="pma-gate-btn" class="btn btn-sm" onclick="pmaEnableSelfieGate()">'
+            + _pmaEsc(window.T('pma_gate_enable')) + '</button>'
+          : '');
+    }
   }
   return '<div class="pma-cap" style="display:flex;align-items:center;flex-wrap:wrap;gap:.55rem;'
     + 'padding:.55rem .6rem;margin-bottom:.55rem;border:1px solid var(--bd);border-radius:10px">'
@@ -2565,8 +2848,35 @@ function _pmaCapBar(photosOn, stockTotal) {
     + '<span id="pma-cap-state" style="font-size:.72rem;color:var(--t2)">'
     + _pmaEsc(window.T(photosOn ? 'pma_cap_on' : 'pma_cap_off')) + '</span>'
     + warn
+    + gateRow
     + '</div>';
 }
+
+// B119（实施74）：相册面板一键开启全局发图总闸（companion.selfie.enabled）
+async function pmaEnableSelfieGate() {
+  const btn = document.getElementById('pma-gate-btn');
+  if (btn) btn.disabled = true;
+  try {
+    const r = await apiFetch('/api/personas/selfie-gate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: true }),
+    });
+    if (!r.ok) {
+      let msg = '';
+      try { msg = ((await r.json()) || {}).detail || ''; } catch (e) { /* keep */ }
+      alert(window.T('pma_gate_fail') + (msg ? ('：' + msg) : ''));
+      if (btn) btn.disabled = false;
+      return;
+    }
+    if (typeof showToast === 'function') showToast(window.T('pma_gate_saved'));
+    pmaLoad();
+  } catch (e) {
+    alert(window.T('pma_gate_fail') + '：' + e);
+    if (btn) btn.disabled = false;
+  }
+}
+window.pmaEnableSelfieGate = pmaEnableSelfieGate;
 
 async function pmaTogglePhotos() {
   const pid = _pmaPid();
@@ -2596,9 +2906,9 @@ async function pmaTogglePhotos() {
   } finally { cb.disabled = false; }
 }
 
-function _pmaRender(body, items, stats, photosOn) {
+function _pmaRender(body, items, stats, photosOn, gate) {
   const on = !!photosOn;
-  const capbar = _pmaCapBar(on, (stats && stats.total) || items.length || 0);
+  const capbar = _pmaCapBar(on, (stats && stats.total) || items.length || 0, gate);
   const faceref = '<div id="pma-faceref" style="display:none;padding:.55rem .6rem;margin-bottom:.55rem;'
     + 'border:1px dashed var(--bd);border-radius:10px;background:var(--bg2,transparent)"></div>';
   // 开关关时上传/测触发词仍可备货与自检，但用 opacity 标「当前不会发出」——
@@ -2778,6 +3088,9 @@ function _resetEditorExtras() {
   _bindingsLoaded = false;
   _promptLoaded = false;
   _albumLoaded = false;
+  _stockLoaded = false;
+  const sb = document.getElementById('pe-stock-body'); if (sb) sb.textContent = window.T('psn_expand_to_load');
+  const sbd = document.getElementById('pe-stock-badge'); if (sbd) sbd.textContent = '';
   const bp = document.getElementById('pe-bindings-panel');
   const pp = document.getElementById('pe-prompt-panel');
   if (bp) { bp.removeAttribute('open'); document.getElementById('pe-bindings-body').textContent = window.T('psn_js_089'); document.getElementById('pe-bindings-badge').textContent = ''; }
@@ -7370,4 +7683,77 @@ function openCreateFlow() {
 <script src="/static/js/persona_create_wizard.js?v=p1"></script>
 <script src="/static/js/persona_chat_test.js?v=20260731b"></script>
 <script src="/static/js/persona_health_panel.js?v=p2"></script>
+<!-- B25-1: clone-voice enrollment on persona page (same cp-voice component as inbox
+     right rail, mode="enroll"). CP_LANG must land before cp-i18n.js (same contract
+     as unified_inbox). sidebar-chrome deliberately not loaded: cp-voice icons
+     degrade to text gracefully. -->
+<script>window.CP_LANG = document.documentElement.getAttribute('lang') || 'zh';</script>
+<script src="/copilot/i18n/cp-i18n.js?v=20260827c"></script>
+{% if ui_lang|default('zh') in ('zh_hant', 'vi', 'th', 'id') %}
+<script src="/copilot/i18n/cp-i18n-ext.{{ ui_lang }}.js?v=20260827b"></script>
+{% endif %}
+<script src="/copilot/client/copilot-client.js?v=20260818c"></script>
+<script src="/copilot/components/cp-voice.js?v=20260827c"></script>
+<script>
+/* B25-1 glue (ASCII only per page gate): status line + unbind + component mount.
+   Hook = _fillDrawerFields wrapper (single funnel: editor-open + JSON-import). */
+var _peVcClient = null;
+var _peVcPid = '';
+function _peVcCli(){
+  if (!_peVcClient && window.CopilotShared && window.CopilotShared.createCopilotClient) {
+    try { _peVcClient = window.CopilotShared.createCopilotClient(); } catch (_e) {}
+  }
+  return _peVcClient;
+}
+async function peVcSync(pid){
+  var host = document.getElementById('pe-vc-enroll');
+  var st = document.getElementById('pe-vc-status');
+  var ub = document.getElementById('pe-vc-unbind');
+  if (!host || !st) return;
+  _peVcPid = String(pid || '');
+  host.setAttribute('persona', _peVcPid);
+  var c = _peVcCli();
+  if (c) host.client = c;   /* setter renders enroll-only mode; idempotent */
+  st.textContent = '';
+  if (ub) ub.style.display = 'none';
+  if (!c || !_peVcPid || !c.voiceProfiles) return;
+  try {
+    var d = await c.voiceProfiles();
+    var rows = (d && d.profiles) || [];
+    var row = null;
+    for (var i = 0; i < rows.length; i++) {
+      if (String(rows[i].persona_id) === _peVcPid) { row = rows[i]; break; }
+    }
+    if (row && row.is_clone) {
+      st.textContent = window.Tf('psn_vc_bound', {voice: row.voice || ''})
+        + (row.ready ? '' : (' ' + window.T('psn_vc_not_ready')));
+      if (ub) ub.style.display = '';
+    } else {
+      st.textContent = window.T('psn_vc_none');
+    }
+  } catch (_e) { /* status line is best-effort; enrollment stays usable */ }
+}
+async function peVcUnbind(){
+  var pid = _peVcPid;
+  var c = _peVcCli();
+  if (!pid || !c || !c.voiceUnbind) return;
+  if (!confirm(window.Tf('psn_vc_unbind_q', {pid: pid}))) return;
+  var purge = confirm(window.T('psn_vc_purge_q'));
+  try {
+    var r = await c.voiceUnbind({ persona_id: pid, purge_cloud: purge });
+    if (r && r.ok) { _toast(window.T('psn_vc_unbind_ok'), 'ok'); }
+    else { _toast((r && (r.message || r.error)) || window.T('psn_vc_req_fail'), 'err'); }
+  } catch (_e) { _toast(window.T('psn_vc_req_fail'), 'err'); }
+  peVcSync(pid);
+}
+if (typeof _fillDrawerFields === 'function') {
+  var _peVcOrigFill = _fillDrawerFields;
+  _fillDrawerFields = function(p){
+    _peVcOrigFill(p);
+    try { peVcSync((p && p.id) || _editingProfileId || ''); } catch (_e) {}
+  };
+}
+window.peVcSync = peVcSync;
+window.peVcUnbind = peVcUnbind;
+</script>
 {% endblock %}

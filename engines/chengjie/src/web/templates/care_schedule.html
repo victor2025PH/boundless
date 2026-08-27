@@ -36,6 +36,12 @@
 .cs3-card .tp{font-size:.72rem;font-weight:600;color:var(--amber);background:rgba(245,158,11,.12);border-radius:4px;padding:.08rem .45rem}
 .cs3-card .due{margin-left:auto;color:var(--t);font-size:.8rem;font-weight:600;text-align:right}
 .cs3-card .due small{display:block;color:var(--t3);font-weight:400;font-size:.72rem}
+/* 机器产出可信度色带（2026-08-22 P1-#6）：>60 天的排期多半是误听日期（实录「192.6 天后
+   的比赛」），黄标提示核对而非静默展示——数据可疑时 UI 有义务说出来 */
+.cs3-far{display:inline-block;margin-top:.2rem;padding:.08rem .45rem;border-radius:999px;
+  font-size:.68rem;font-weight:600;background:rgba(245,158,11,.14);color:#b45309;
+  border:1px solid rgba(245,158,11,.45);cursor:help}
+[data-theme="dark"] .cs3-far{color:#fcd34d}
 .cs3-ava{width:26px;height:26px;border-radius:99px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;
   background:color-mix(in srgb,var(--p,#1e8cf2) 16%,transparent);color:var(--p);font-size:.8rem;font-weight:700}
 .cs3-card .q{margin:.55rem 0 0;background:var(--input);border-radius:10px 10px 10px 4px;padding:.5rem .7rem;font-size:.8rem;color:var(--t2);line-height:1.55;max-width:640px}
@@ -555,6 +561,18 @@ function _csItemName(it){
   var ck=String(it.chat_key||it.contact_key||'');
   return ck.length>20?ck.slice(0,20)+'…':ck;
 }
+/* 远期排期黄标（P1-#6 机器产出可信度）：due 超过 _CS_FAR_DAYS 天＝大概率误听日期，
+   提示核对原话/改期；不拦截不改数据，只把「可疑」说出来。 */
+var _CS_FAR_DAYS=60;
+function _csFarChip(it){
+  try{
+    var due=Number(it&&it.due_at)||0;
+    if(!due) return '';
+    if((due-Date.now()/1000) <= _CS_FAR_DAYS*86400) return '';
+    return '<span class="cs3-far" title="'+esc(window.Tf('cs3_far_chip_t',{n:_CS_FAR_DAYS}))+'">⚠ '
+      +esc(window.T('cs3_far_chip'))+'</span>';
+  }catch(_){ return ''; }
+}
 function _csCardHtml(it){
   var name=_csItemName(it);
   var q=it.source_text
@@ -565,7 +583,7 @@ function _csCardHtml(it){
       '<span class="nm">'+esc(name)+'</span>'+
       '<span class="pf">'+esc(it.platform||'')+'</span>'+
       '<span class="tp">'+esc(it.topic||'—')+'</span>'+
-      '<span class="due">'+_csRel(it.due_at)+'<small>'+(it.due_at?window.wsFmtDateTime(it.due_at):'')+'</small></span>'+
+      '<span class="due">'+_csRel(it.due_at)+'<small>'+(it.due_at?window.wsFmtDateTime(it.due_at):'')+'</small>'+_csFarChip(it)+'</span>'+
     '</div>'+q+
     '<div class="pv" id="cs-pv-'+it.id+'"></div>'+
     '<div class="ops">'+
@@ -749,7 +767,9 @@ async function csPreview(id){
   var box=document.getElementById('cs-pv-'+id);
   var btn=document.getElementById('cs-pvbtn-'+id);
   if(!box)return;
-  box.innerHTML='…';
+  /* B49（实施64 P2-f，`_282`）：等待期给真实反馈（LLM 拟稿可到分钟级，裸「…」
+     像卡死）；超时/中断给人话重试指引，不再把异常对象原样吐给用户。 */
+  box.textContent=window.T('cs2_preview_busy');
   if(btn)btn.disabled=true;
   try{
     var r=await apiFetch('/api/care/schedule/'+id+'/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'},{timeoutMs:60000});
@@ -757,7 +777,11 @@ async function csPreview(id){
     if(!d.ok){box.textContent=window.T('cs2_preview_fail')+(d.reason||r.status);return;}
     box.innerHTML='<span class="pvl">'+window.T('cs2_ghost_ai')+'</span>'+esc(d.preview);
     if(btn)btn.textContent=window.T('cs3_preview_again');
-  }catch(e){box.textContent=window.T('cs2_preview_fail')+e;}
+  }catch(e){
+    var _to=e&&(e.name==='AbortError'||/timeout|abort/i.test(String(e&&e.message||e)));
+    box.textContent=_to?window.T('cs2_preview_timeout')
+                       :(window.T('cs2_preview_fail')+String(e&&e.message||e).slice(0,80));
+  }
   finally{if(btn)btn.disabled=false;}
 }
 async function csSendNow(id){

@@ -25,9 +25,20 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-# 三个最该外发、却最容易掉在缝里的别名（对应记忆里的 L1 盲区 / 人工投递断链 /
-# 机主不在算力机前的主机级告警）。business 受众目录已含 draft_backlog，这里补齐另两个。
-HIGH_VALUE_ALIASES = ("draft_backlog", "human_deliver", "host_alert")
+# 最该外发、却最容易掉在缝里的别名。business 受众目录已含 draft_backlog，这里补齐其余。
+#   draft_backlog / human_deliver / host_alert
+#       —— 对应 L1 盲区 / 人工投递断链 / 机主不在算力机前的主机级告警。
+#   assistant_report / bug_intake（2026-08-27 补）
+#       —— **用户报障通道**。两者都在 _TECHNICAL_ALERTS 而非 business 目录，于是
+#       此前一直不在关注集里：自检、ops「🔔 告警链路」卡、健康灯三处都会对
+#       「用户点了报障、传了截图、提交成功，事件却没有任何通道订阅」判 healthy。
+#       实测 zhiliao：tg-ops 通道启用且订阅了 25 个运维别名，唯独这两个不在——
+#       报障 publish 到 EventBus 之后进虚空，而这是产品对外的核心反馈入口
+#       （小智三大定位之一），断了比运维告警断了更伤。
+#       发布侧本身无条件（assistant_routes 每次提交必 publish，别名 levels=None），
+#       所以「收不到」百分之百是订阅侧的洞，加进关注集即可让它显形。
+HIGH_VALUE_ALIASES = ("draft_backlog", "human_deliver", "host_alert",
+                      "assistant_report", "bug_intake")
 
 # 服务进程实际读写的 overlay 相对位置（相对各自的运行根）。
 WEBHOOKS_REL = "config/notify_webhooks.json"

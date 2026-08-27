@@ -1423,6 +1423,17 @@ class WhatsAppRpaRunner:
         if len(text) > max_chars:
             text = text[:max_chars].rstrip() + "..."
             result["tts_truncated"] = True
+        # 语音断档台账（2026-08-22）：本链此前**完全没接** voice_outage——当晚 hub
+        # 质量轨引擎被同卡显存挤到每发必超时、WhatsApp 全程发不出语音，而台账仍显示
+        # 24h 全绿（它只收 aline/autosend/manual 三条），看门狗与 ops 卡因此一声不响，
+        # 故障靠人耳发现。记账口径＝**这一轮语音的终局**：auto_voice 模式看「发没发
+        # 出去」，其余模式（approval_only）没有发送步骤 → 合成成功即终局。
+        _vo_final = "auto_voice" if mode == "auto_voice" else "synth"
+
+        def _vo(ok: bool, reason: str = "") -> None:
+            from src.ai.voice_outage import note_voice_attempt
+            note_voice_attempt(ok, "wa_rpa", reason)
+
         try:
             self._voice_metrics["tts_attempts"] += 1
             from src.ai.tts_pipeline import get_tts_pipeline
@@ -1437,6 +1448,7 @@ class WhatsAppRpaRunner:
                 result["tts_duration_sec"] = round(rv.duration_sec, 2)
                 if rv.duration_sec > 0 and (rv.duration_sec > hard_max or rv.duration_sec < min_sec):
                     result["tts_error"] = f"duration_guard:{rv.duration_sec:.1f}s"
+                    _vo(False, f"duration_guard:{rv.duration_sec:.1f}s")
                     try:
                         import os as _os
                         if rv.audio_path and _os.path.isfile(rv.audio_path):
@@ -1449,13 +1461,17 @@ class WhatsAppRpaRunner:
                 result["tts_format"] = rv.format
                 self._voice_metrics["tts_ok"] += 1
                 logger.warning("[wa_rpa] TTS ok: %s dur=%.1fs %dms", rv.provider, rv.duration_sec, rv.latency_ms)
+                if _vo_final == "synth":
+                    _vo(True)
                 if mode == "auto_voice":
                     await self._maybe_send_tts_audio(rv.audio_path, cfg, result)
                     if result.get("tts_send_ok"):
                         self._voice_metrics["tts_sent"] += 1
+                        _vo(True)
                     else:
                         self._voice_metrics["tts_send_fail"] += 1
                         _err = str(result.get("tts_send_error") or "")
+                        _vo(False, f"send:{_err or 'unknown'}")
                         # 错误分类：share UI 未出现→轻量恢复；发送按钮未找到→全量回退
                         if _err.startswith("share_skip_"):
                             logger.warning("[wa_rpa] TTS send skipped: %s (no recovery needed)", _err)
@@ -1470,8 +1486,10 @@ class WhatsAppRpaRunner:
             else:
                 self._voice_metrics["tts_fail"] += 1
                 result["tts_error"] = rv.error
-        except Exception:
+                _vo(False, str(rv.error or "synth_failed"))
+        except Exception as ex:
             self._voice_metrics["tts_fail"] += 1
+            _vo(False, f"exception:{type(ex).__name__}")
             logger.debug("[wa_rpa] TTS 异常", exc_info=True)
 
     async def _maybe_send_tts_audio(

@@ -11,10 +11,13 @@ The first implementation is intentionally provider-optional:
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 # 翻译/语种显示名（ISO 639-1 为主）。仅作「显示名 + 统计回退白名单」用——

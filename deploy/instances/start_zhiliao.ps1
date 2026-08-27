@@ -81,6 +81,12 @@ if ($own.Count) {
     }
     if ($isOurs) {
         Write-Host "[start-$InstanceId] $InstanceName 已在跑（端口 $Port，PID=$($pids -join ',')），幂等跳过" -ForegroundColor Green
+        # 进程在跑 ≠ LAN 入口在听：portproxy 套接字常在 DHCP/iphlpsvc 抖动后
+        # 静默消失（手机扫码打 192.168.x:18799 被积极拒绝）。已在跑也要自愈。
+        $ens = Join-Path $PSScriptRoot 'ensure_lan_portproxy.ps1'
+        if (Test-Path $ens) {
+            & $ens -Port $Port
+        }
         exit 0
     }
     Fail "端口 $Port 被非本引擎进程占用 PID=$($pids -join ',')。双实例模式不自动清杀（可能误伤另一实例/其他服务），请人工核实后再起"
@@ -175,5 +181,11 @@ if ($listening) {
     Write-Host "[start-$InstanceId] done — 端口 $Port 已在听  日志=$out" -ForegroundColor Green
 } else {
     Write-Host "[start-$InstanceId] 已拉起（PID=$($r.ProcessId)），引擎初始化通常需 10~30s；用 status_instances.ps1 复核。日志=$out"
+}
+# LAN 扫码入口：web 绑 127.0.0.1，手机走 portproxy。启动后立刻核一次，
+# 避免「电脑页正常、手机扫码无法访问」。失败不挡启动（坐席仍走 127）。
+$ens = Join-Path $PSScriptRoot 'ensure_lan_portproxy.ps1'
+if (Test-Path $ens) {
+    & $ens -Port $Port
 }
 exit 0

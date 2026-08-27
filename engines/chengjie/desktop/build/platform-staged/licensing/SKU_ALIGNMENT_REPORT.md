@@ -270,3 +270,69 @@ Service 节点在原定制部署 2 档之上加挂买断/矩阵）；新数组�
 - `website/` 目录 `npx tsc --noEmit`：**退出码 0，零类型错误**。
 - grep 复核：本次许可文件中剩余 "USDT" 全部为 §8.3 所列支付轨道语义；"3980" 全站已清零。
 - 未运行 `npm run build`（按分工统一执行）。
+
+---
+
+## 9. 2026-08-19 Token 定价改版（ChatGPT 式分层 + 翻译免费化，老板拍板）
+
+### 9.1 决议内容
+
+体系换轨：**订阅（含每月 Token）+ Token 包（耗材）双轮**，统一货币 Token 跨智聊/通译一个钱包。
+
+| 决策点 | 拍板 |
+|---|---|
+| 个人版 | \/月（替代 Entry \；对齐 STUDIO Starter 同价带） |
+| 团队版 | \/坐席/月，最少 2 席（替代整包 \；席位可扩即增收） |
+| 免费版 | \ 正式档（1 账号/1 平台/1,000 Token 月 + 注册送 10,000 体验 Token = 现行试用 1M 字符精确等值） |
+| 按量版 Flex | 0 月费，功能对齐个人版，纯 Token 钱包扣费 |
+| 翻译 | **标准翻译永久免费不限字符**（公平使用 200 万字符/日/授权）；专业翻译 10 Token/千字符、DeepL 认证 40/千字符 |
+| Token 包 | 9.9/10k · 49/60k · 199/300k · 499/1M，12 个月有效，跨产品通用 |
+| 年付 | 全线统一 ×10（送 2 个月），废除首页旧「85 折折合月价」双公式 |
+| 老客迁移 | 存量订阅服务到期；charpack 未用完按 1.5M 字符 = 60,000 Token 换发（客户受益） |
+
+### 9.2 SKU 注册表变更（products/*/product.yaml → 重新生成，25→34 SKU）
+
+新增在售：`chatx-free(0)` / `chatx-personal(39)` / `chatx-team-seat(49/席)` /
+`token-pack-s/m/l/xl(9.9/49/199/499)` / `lingox-free(0)` / `lingox-workbench(29/席)`。
+停售转台账（保留条目防历史订单丢反查）：`chatx-entry(58)` / `chatx-team(198)` /
+`lingox-charpack(59)` / `lingox-team(99)` / `lingox-pro(198)`。
+
+### 9.3 官网侧单源化（新文件 website/lib/chatx-pricing.ts）
+
+- 新单一真相 `chatx-pricing.ts`（档位/Token 费率/包/计算器纯函数）；`pricing.ts` 的
+  autochatOffers/tokenPackOffers/translateOffers 全部派生，旧价降级 legacy 数组仅供
+  findOfferBySkuId 反查；content.ts 套餐卡/产品卡报价行全部派生，零手写数字。
+- 新 `/pricing` 报价决策页（档位对比/Token 计价透明表/用量计算器/竞品锚定/FAQ）；
+  `/order` 退居结算页并新增：Token 包产品线 Tab、团队版坐席步进器（订单新增 seats 字段）、
+  停售档深链平移表 LEGACY_PLAN_MAP（老链接绝不落空）。
+- 门禁升级：`assert-order-lines.mjs` 重写为「可购 key ∈ offer-map + order-lines 禁手写价 +
+  **官网 ⟺ sku_registry 价格逐一相等**」跨仓单源闸；`assert-offer-map.mjs` 断言扩到新档；
+  `check-content-integrity.mjs` 价格断言目标迁到 chatx-pricing.ts（停售 SKU 豁免文案出现）。
+
+### 9.4 引擎侧地基（engines/chengjie，未接线零行为变化）
+
+`src/licensing/token_ledger.py`（语义对齐 quota_store：check→do→record、幂等 ref、fail-open、
+默认关 `licensing.token_ledger.enabled`）+ `tests/test_token_ledger.py` 12 例含
+**官网 ⟺ 引擎 Token 费率交叉钉**（同机比对 chatx-pricing.ts，CI 无 website 自动跳过）。
+
+### 9.5 验证
+
+- `npx tsc --noEmit` 0 错误；`npm run build` 成功（/pricing 静态生成）；
+- `assert-offer-map`（15 条一致）/ `assert-order-lines`（8 SKU 跨仓价一致）/
+  `gate:content`（17 项价格断言）全绿；
+- chengjie `tests/test_token_ledger.py` 12/12。
+
+### 9.6 引擎接线进度（同日 P3→P6，按批次入仓）
+
+| 批次 | 内容 | commit |
+|---|---|---|
+| P3 履约 | 新 SKU specs（per-seat 缩放/`included_tokens_monthly`）+ Token 包 voucher 双载荷（chars/tokens 分流兑付：chars→quota_store、tokens→token_ledger.grant_pack）+ 钱包绑 `contact_core`（续费换 lic_id 不丢钱包） | dc366e5 |
+| P5a 观测 | ai_reply/voice_clone 消费点记账（enforce 未实现＝纯观测）+ 会员页「Token 钱包」卡 + zhiliao 灰度开 | dc366e5 |
+| P5b+P4 | 翻译层级计费（std 免费入公平使用水表 / pro 10 / certified 40 走 DeepL 独立缓存桶）+ AI 生成图计费（仅 fresh 生成，相册/复用不计）+ 公平使用 200 万字符/日 warn-only + 投递侧影子计数（出稿/投递比校准用） | 35b69aa |
+| **P6 enforce** | `should_degrade_action` 五闸判定；耗尽降级免费路径：AI 回复→本地模型（`_reply_free_path` 标记免计费，连带修正断云顶班回复被扣费）/ 专业翻译→标准档 / 克隆声→edge 兜底；`allocate_spend` 修正为「过期批次按到期序吸收支出」（上月消费不侵蚀本月含量）；默认关 `licensing.token_ledger.enforce` | f4290d8 |
+
+**P6 语义要点**：enforce ≠ 阻断——降级目标必须是能出结果的免费路径，无处可去照走付费
+路径（永不断线 > 计费）；从未注资的存量授权不适用（防 enforce 一开全体打降级）。
+AI 配图 enforce 刻意不做（自有 GPU 固定成本，阻断不省钱；P7 再议）。
+线上实弹：token-pack-s 全链（下单→标记到账→watcher 自动签发→兑换→钱包 +10,000）
+已于 2026-08-19 验证，订单 AH-20260819-UDW5DJ。

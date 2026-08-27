@@ -235,11 +235,23 @@ def make_provider(config: Dict[str, Any]):
         # 措辞注意：Facebook 网页端没有扫码登录，这里绝不能出现「扫码」字样——
         # 方式选择卡明写「不使用二维码」，等待页再冒出「扫码均可」是自相矛盾（实录事故）。
         # instruction_key 供前端取本地化文案（zh/en 同源），raw instruction 仅作后端兜底。
+        # B64 续（2026-08-23 117 实测）：interactive（表单中继）模式的浏览器窗口是
+        # **刻意离屏不可见**的，登录发生在应用弹窗内的原生表单——沿用 hosted 的
+        # 「服务器上已打开官方登录窗口，请在该机器上完成登录」文案会让用户满桌面找
+        # 一扇不存在的窗（实录：老板按文案等窗，判定「登录窗打不开」）。两种模式
+        # 必须各说各话。
+        if interactive:
+            _instr = ("已进入应用内登录：请直接在下方表单输入 Facebook 邮箱和密码"
+                      "（需要验证码时也在这里输入），不会弹出浏览器窗口，完成后自动确认。")
+            _instr_key = "inbox.connect.hint_inapp_login"
+        else:
+            _instr = ("服务器上已打开 Facebook 官方登录窗口，请在该机器上完成登录（账密 / 2FA）。"
+                      "完成后本窗口会自动确认——本方式不使用二维码，无需用手机扫描。")
+            _instr_key = "inbox.connect.hint_server_login"
         return {
             "qr_image": qr_image,
-            "instruction": "服务器上已打开 Facebook 官方登录窗口，请在该机器上完成登录（账密 / 2FA）。"
-                           "完成后本窗口会自动确认——本方式不使用二维码，无需用手机扫描。",
-            "instruction_key": "inbox.connect.hint_server_login",
+            "instruction": _instr,
+            "instruction_key": _instr_key,
             "poll": _poll,
             "cancel": _cancel,
             "state": {"login_id": login_id, "base": base},

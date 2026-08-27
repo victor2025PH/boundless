@@ -1,7 +1,8 @@
 /* 坐席工作台(统一收件箱)组件样式 — 三期自 unified_inbox.html 内联 <style> 拆出。
    设计 token(:root 亮/暗变量块)仍在模板内(契约测试锚点 + 首屏无闪);
    本文件只放规则。改动后请递增模板里 link 的 ?v= 缓存戳。 */
-/* 外层 workspace_base 的 body 底色随主题（顶栏 .ws-top 本就深色，天然一致） */
+/* 外层 workspace_base 的 body 底色随主题（顶栏 .ws-top 自 2026-08-17 起同样随主题：
+   --chrome-ink* 令牌，见 workspace_base「亮色顶栏」块） */
 :root[data-cp-theme="dark"] body{background:var(--bg-page);color:var(--text-main);}
 /* 暗色专属：浅蓝 active/选中态（#eff6ff/#bfdbfe/#dbeafe）会在暗色闪白 → 统一改半透明 accent；亮色不受影响。 */
 :root[data-cp-theme="dark"] .ftab.active,
@@ -28,11 +29,15 @@
 /* 撑满父容器（workspace_base 留的 content 区，ws-body = 100vh-52px） */
 .inbox-root{display:grid;grid-template-columns:var(--nav-w) var(--list-w) 1fr;height:100%;overflow:hidden;background:var(--bg-page);}
 
-/* ===== 平台导航栏 ===== */
-.nav-rail{display:flex;flex-direction:column;align-items:center;background:linear-gradient(180deg,#15161b,#1a1c22);padding:8px 0;gap:4px;overflow:visible;box-shadow:inset -1px 0 0 rgba(255,255,255,.07);}
+/* ===== 平台导航栏 =====
+   2026-08-17 起随主题翻转（修「选亮色左栏还是暗的」）：亮=极浅灰面+石板灰图标，
+   暗=原深色渐变。--rail-* 令牌定义在 unified_inbox.html 的 :root 亮/暗块（暗档取
+   历史字面量=暗色零视觉回归）；本文件所有 var() 带暗色回落值——模板与 CSS 热更新
+   有先后窗口，令牌未落地时保持旧观感，每一步自洽。 */
+.nav-rail{display:flex;flex-direction:column;align-items:center;background:var(--rail-bg,linear-gradient(180deg,#15161b,#1a1c22));padding:8px 0;gap:4px;overflow:visible;box-shadow:var(--rail-edge,inset -1px 0 0 rgba(255,255,255,.07));}
 .nav-logo{width:36px;height:36px;border-radius:10px;background:var(--bl-growth-ring,linear-gradient(135deg,#22d3ee,#3b82f6));box-shadow:0 0 12px rgba(34,211,238,.4);display:flex;align-items:center;justify-content:center;margin-bottom:8px;font-size:18px;}
-.nav-plat{position:relative;width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:background .15s,opacity .15s;font-size:22px;color:rgba(255,255,255,.5);flex-shrink:0;}
-.nav-plat:hover{background:rgba(255,255,255,.1);}
+.nav-plat{position:relative;width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:background .15s,opacity .15s;font-size:22px;color:var(--rail-ink,rgba(255,255,255,.5));flex-shrink:0;}
+.nav-plat:hover{background:var(--rail-hover,rgba(255,255,255,.1));}
 .nav-plat.active{background:var(--accent);color:#fff;}
 .nav-plat.disconnected{opacity:.42;}
 .nav-plat.disconnected:hover{opacity:.85;}
@@ -41,27 +46,33 @@
    .nav-rail overflow:visible 不裁）；② 字号 11→10 + 收字距，"99+" 不再撑破胶囊；
    ③ 语义分级与账号 chip 同源：默认中性灰=普通未读，.attn=需人工才警报红——
    红色只在「需要人」时出现，恢复它的动作含义。
-   ⚠ #64748b 灰底 / #17181d 描边是**刻意硬编码**（勿「修」成 --tk-*）：rail 是主题不变的
-   恒深色面（.nav-rail 渐变不随 data-cp-theme 翻转），而 --tk-* 令牌随页面主题走——套令牌
-   会让亮色主题下的徽标拿到「为白底设计的值」，反而错。 */
-.nav-badge{position:absolute;top:-3px;right:-2px;background:#64748b;color:#fff;border-radius:999px;font-size:10px;font-weight:700;min-width:16px;height:15px;display:flex;align-items:center;justify-content:center;padding:0 4px;border:1.5px solid #17181d;pointer-events:none;font-variant-numeric:tabular-nums;letter-spacing:-.2px;line-height:1;}
-.nav-badge.attn{background:var(--tk-danger,#ef4444);}
-.nav-status-dot{position:absolute;bottom:4px;right:5px;width:9px;height:9px;border-radius:50%;border:1.6px solid #17181d;pointer-events:none;}
+   徽标底/字与描边走 --rail-badge- 族与 --rail-ring 令牌（2026-08-17 rail 亮色化：rail 不再是
+   恒深色面）；--rail-ring 必须恒等于 rail 底色——描边的意义是在徽标与图标间抠出一圈
+   「rail 底色」的镂空错觉，跟错面（如 --tk-surface）就会变成一圈异色框。
+   .attn 红底显式配白字：徽标字色令牌亮档是深灰，红底上不可读。
+   ⚠ 注释里别写「星号斜杠」形态的通配缩写：CSS 注释在星斜序列即终止，残文按无效规则
+   吞掉后续声明（2026-08-17 模板 :root 里 rail-bg 被吃掉的同款事故）。 */
+.nav-badge{position:absolute;top:-3px;right:-2px;background:var(--rail-badge-bg,#64748b);color:var(--rail-badge-ink,#fff);border-radius:999px;font-size:10px;font-weight:700;min-width:16px;height:15px;display:flex;align-items:center;justify-content:center;padding:0 4px;border:1.5px solid var(--rail-ring,#17181d);pointer-events:none;font-variant-numeric:tabular-nums;letter-spacing:-.2px;line-height:1;}
+.nav-badge.attn{background:var(--tk-danger,#ef4444);color:#fff;}
+/* 徽标真相化（2026-08-22）：纯未读（无 attn）降为中性小点——数字只留给红色「需人工」
+   可行动数；未读总量在悬浮提示与会话列表里，rail 的像素留给警报。 */
+.nav-badge.dim-dot{min-width:0;width:9px;height:9px;padding:0;border-radius:50%;top:-1px;right:0;font-size:0;}
+.nav-status-dot{position:absolute;bottom:4px;right:5px;width:9px;height:9px;border-radius:50%;border:1.6px solid var(--rail-ring,#17181d);pointer-events:none;}
 .nav-status-dot.on{background:var(--green);}
 .nav-status-dot.off{background:var(--red);}
 .nav-status-dot.none{background:#64748b;}
-.nav-sep{width:32px;height:1px;background:rgba(255,255,255,.1);margin:4px 0;}
+.nav-sep{width:32px;height:1px;background:var(--rail-sep,rgba(255,255,255,.1));margin:4px 0;}
 .nav-bottom{margin-top:auto;display:flex;flex-direction:column;align-items:center;gap:4px;padding-bottom:8px;}
-.nav-icon-btn{position:relative;width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:rgba(255,255,255,.5);font-size:20px;transition:background .15s,filter .15s;}
-.nav-icon-btn:hover{background:rgba(255,255,255,.1);color:#fff;}
+.nav-icon-btn{position:relative;width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--rail-ink,rgba(255,255,255,.5));font-size:20px;transition:background .15s,filter .15s;}
+.nav-icon-btn:hover{background:var(--rail-hover,rgba(255,255,255,.1));color:var(--rail-ink-hover,#fff);}
 .nav-icon-btn.active{background:var(--accent);color:#fff;}
-/* 底部工具图标：矢量化 + 亮化——各自明亮品牌色，暗轨上更醒目；hover 提亮发光、active 归白 */
+/* 底部工具图标：矢量化——亮轨用石板灰、暗轨用明亮色，hover 提亮发光、active 归品牌蓝底白字 */
 .nav-icon-btn svg{width:22px;height:22px;display:block;pointer-events:none;transition:filter .15s;}
-/* 账号管理 = 翠绿实底高亮（小人图标，rail 常驻主入口，突出显示） */
+/* 账号管理 = 翠绿实底高亮（小人图标，rail 常驻主入口，突出显示；品牌绿两主题通用） */
 #acct-nav-btn{color:#fff;background:linear-gradient(135deg,#10b981,#059669);box-shadow:0 0 10px rgba(16,185,129,.4);}
 #acct-nav-btn:hover{background:linear-gradient(135deg,#34d399,#10b981);color:#fff;box-shadow:0 0 14px rgba(16,185,129,.6);}
-#admin-nav-btn{color:#a78bfa;text-decoration:none;}   /* 后台管理 = 紫罗兰（仅主管可见，新标签页开管理台） */
-#cp-theme-btn{color:#e5e7eb;}    /* 主题配色 = 日/月三态图标，亮银描边 */
+#admin-nav-btn{color:var(--rail-violet,#a78bfa);text-decoration:none;}   /* 后台管理 = 紫罗兰（仅主管可见，新标签页开管理台；亮档取深紫保对比度） */
+#cp-theme-btn{color:var(--rail-ink-hi,#e5e7eb);}    /* 主题配色 = 日/月三态图标 */
 .nav-icon-btn:hover svg{filter:brightness(1.18) drop-shadow(0 0 5px currentColor);}
 .nav-icon-btn.active{color:#fff !important;}
 /* 平台/图标悬浮能力卡片 */
@@ -145,9 +156,11 @@
 #archived-more-n{background:rgba(225,29,72,.18);color:var(--tk-danger-ink,#e11d48);}
 .filter-summary{display:flex;flex-wrap:wrap;gap:4px;align-items:center;padding:4px 0 0;font-size:11px;}
 .filter-summary:empty{display:none;}
-.fs-chip{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:999px;background:color-mix(in srgb, var(--accent,#1e8cf2) 10%, transparent);border:1px solid color-mix(in srgb, var(--accent,#1e8cf2) 28%, transparent);color:var(--accent);font-size:11px;}
-.fs-chip .fs-x{cursor:pointer;opacity:.65;font-size:11px;line-height:1;padding:0 1px;}
-.fs-chip .fs-x:hover{opacity:1;}
+/* B88-②：整片可点（片=移除该筛选），× 命中区加大——13px 命中区在 405px 壳里点不中 */
+.fs-chip{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:999px;background:color-mix(in srgb, var(--accent,#1e8cf2) 10%, transparent);border:1px solid color-mix(in srgb, var(--accent,#1e8cf2) 28%, transparent);color:var(--accent);font-size:11px;cursor:pointer;}
+.fs-chip:hover{background:color-mix(in srgb, var(--accent,#1e8cf2) 18%, transparent);}
+.fs-chip .fs-x{cursor:pointer;opacity:.65;font-size:11px;line-height:1;padding:2px 5px;margin:-2px -5px -2px -2px;}
+.fs-chip .fs-x:hover,.fs-chip:hover .fs-x{opacity:1;}
 .fs-clear{color:var(--text-tiny);cursor:pointer;font-size:11px;margin-left:2px;white-space:nowrap;}
 .fs-clear:hover{color:var(--accent);}
 
@@ -162,7 +175,9 @@
 .group-sec-head .gs-mention{font-size:11px;font-weight:800;color:#fff;background:linear-gradient(135deg,#f59e0b,#f97316);border-radius:9px;padding:0 7px;line-height:18px;}
 .group-sec-head .gs-mention + .gs-unread{margin-left:6px;}
 .group-sec-head .gs-unread{font-size:11px;font-weight:700;color:#fff;background:rgba(100,116,139,.5);border-radius:9px;padding:0 7px;line-height:18px;min-width:18px;text-align:center;}
-.group-sec-body{overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent;}
+/* flex:1+min-height:0＝在 46% 封顶内真正可滚（B60 族：min-height 缺省 auto 时
+   flex 子项不肯缩，body 撑破父级被裁掉=「群组滚不到底」）。 */
+.group-sec-body{flex:1 1 auto;min-height:0;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent;}
 /* 首次引导气泡 */
 .group-sec-hint{margin:2px 10px 6px;padding:8px 10px;font-size:11px;line-height:1.6;color:var(--text-sub);background:color-mix(in srgb, var(--accent,#1e8cf2) 8%, transparent);border:1px solid color-mix(in srgb, var(--accent,#1e8cf2) 25%, transparent);border-radius:8px;}
 .group-sec-hint b{color:var(--tk-brand,#3b82f6);font-weight:700;}
@@ -804,9 +819,17 @@ details.xl-adv .xl-default-row{border-top:0;padding-top:0;}
 .conv-persona-badge.ov{padding-left:4px;}
 .conv-persona-badge.ov::before{content:"";width:5px;height:5px;border-radius:50%;flex:none;margin-right:3px;background:var(--tk-emerald,#10b981);box-shadow:0 0 0 1.5px rgba(16,185,129,.22);}
 .conv-nopersona-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#f59e0b;box-shadow:0 0 0 2px rgba(245,158,11,.22);vertical-align:middle;margin-left:4px;flex:0 0 auto;cursor:help;}
-/* P2: 会话条悬浮快捷操作（认领/归档/标签）——hover 才显示，避免常态拥挤 */
-.conv-quick{position:absolute;right:8px;bottom:6px;display:none;gap:5px;z-index:3;}
-.conv-item:hover .conv-quick{display:flex;}
+/* P2: 会话条悬浮快捷操作（认领/归档/标签）——hover 才显示，避免常态拥挤。
+   P0-3（2026-08-27 实施69）：右下角 → 右上角 + 180ms 出现延迟。旧位置（bottom:6px）与
+   第二行右侧的标签/风控 chips（.conv-line2-chips）同占一角且 z-index 更高，坐席想看标签
+   却被工具条盖住（0827 实录报障）；且路过即弹很聒噪。上移后与 .conv-meta（时间/徽标）
+   重叠，故 hover 时把 meta 淡出让位——那是瞬时信息，坐席悬停准备操作时不需要它。
+   display 换 opacity/visibility 才吃得到 transition-delay；pointer-events 同步翻转，
+   防「隐形工具条拦掉行点击」。 */
+.conv-quick{position:absolute;right:8px;top:6px;display:flex;gap:5px;z-index:3;opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-2px);transition:opacity .12s ease,transform .12s ease,visibility 0s linear .12s;}
+.conv-item:hover .conv-quick{opacity:1;visibility:visible;pointer-events:auto;transform:none;transition:opacity .14s ease .18s,transform .14s ease .18s,visibility 0s linear .18s;}
+.conv-item .conv-meta{transition:opacity .12s ease;}
+.conv-item:hover .conv-meta{opacity:.1;transition:opacity .14s ease .18s;}
 .conv-quick .cq-btn{width:26px;height:26px;border-radius:8px;border:1px solid var(--border);background:var(--bg-panel);color:var(--text-sub);cursor:pointer;font-size:13px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;box-shadow:0 2px 6px rgba(0,0,0,.12);transition:transform .1s,border-color .12s,background .12s,box-shadow .12s,color .12s;}
 .conv-quick .cq-btn:hover{color:var(--accent,#6b8af8);border-color:var(--accent,#6b8af8);background:color-mix(in srgb, var(--accent,#1e8cf2) 10%, transparent);transform:translateY(-1px);box-shadow:0 4px 10px color-mix(in srgb, var(--accent,#1e8cf2) 22%, transparent);}
 .conv-quick .cq-btn:active{transform:translateY(0) scale(.92);}
@@ -895,6 +918,13 @@ details.xl-adv .xl-default-row{border-top:0;padding-top:0;}
 .conv-handler.h-manual{color:var(--text-sub);border-color:var(--border);background:var(--bg-soft);}
 .conv-handler.h-me{color:var(--tk-ok-ink);border-color:rgba(16,185,129,.45);background:rgba(16,185,129,.10);}
 .conv-handler.h-other{color:var(--text-sub);border-color:var(--border);background:var(--bg-soft);}
+
+/* 已处理低噪表达（实施49 P0-1，2026-08-20）：常驻列表里「回过了」只用一枚灰勾 +
+   淡化时间戳表达——不加边框不加背景不占宽度，绝不与未读红点/SLA chip 争注意力。
+   选中行不淡化（正在看的那条要清楚）。 */
+.conv-done-tick{display:inline-flex;align-items:center;color:var(--text-tiny);opacity:.75;flex:none;}
+.conv-item.conv-handled:not(.selected) .conv-time{opacity:.6;}
+.conv-item.conv-handled:hover .conv-done-tick{opacity:1;}
 .standby-bulk-btn{border:1px solid var(--border);background:var(--bg-soft);color:var(--text-sub);font-size:11px;font-weight:600;padding:4px 10px;border-radius:6px;cursor:pointer;margin-top:2px;}
 .standby-bulk-btn:hover{background:rgba(245,158,11,.12);color:#b45309;border-color:rgba(245,158,11,.45);}
 .standby-bulk-btn:disabled{opacity:.5;cursor:progress;}
@@ -931,7 +961,8 @@ details.xl-adv .xl-default-row{border-top:0;padding-top:0;}
 .info-sidebar{width:300px;min-width:280px;max-width:min(720px,45vw);flex-shrink:0;border-left:1px solid var(--border);background:var(--bg-panel);display:none;flex-direction:column;overflow:hidden;position:relative;}
 .info-sidebar.show{display:flex;}
 @media(min-width:769px){ #info-toggle-btn{display:none !important;} }
-.ws-sidebar-resize{position:absolute;left:0;top:0;bottom:0;width:5px;cursor:col-resize;z-index:3;touch-action:none;}
+/* 命中区 5→8px（Fitts：高频拖拽目标别抠像素）；视觉高亮仍只在 hover/拖拽时渐显 */
+.ws-sidebar-resize{position:absolute;left:0;top:0;bottom:0;width:8px;cursor:col-resize;z-index:3;touch-action:none;}
 .ws-sidebar-resize:hover,.ws-sidebar-resize.dragging{background:color-mix(in srgb,var(--accent) 28%,transparent);}
 .ws-cp-head{padding:10px 14px;font-size:14px;font-weight:700;color:var(--text-main);border-bottom:1px solid var(--border);flex-shrink:0;background:var(--bg-soft);}
 .ws-cp-tabs{display:flex;gap:4px;padding:8px 12px 0;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--bg-panel);}
@@ -1147,9 +1178,11 @@ details.cp-more .info-row:first-of-type{margin-top:6px;}
 .acct-menu-item .ui-ic{flex:0 0 auto;color:var(--text-tiny);}
 .acct-menu-item:hover .ui-ic,.acct-menu-item:focus .ui-ic{color:inherit;}
 .acct-menu-sep{height:1px;margin:5px 6px;background:var(--border);}
-/* 危险操作在菜单底部、分隔线隔离，红/橙区分登出与删除，降低误触 */
-.acct-menu-item.warn{color:#d97706;}
-.acct-menu-item.warn:hover,.acct-menu-item.warn:focus{background:rgba(217,119,6,.12);color:#d97706;}
+/* 危险操作在菜单底部、分隔线隔离，红/橙区分登出与删除，降低误触。
+   ⚠ 橙色走 --tk-warn-ink（亮 #b45309 / 暗 #fbbf24），别退回硬编码 #d97706——
+   那个值压白底只有 3.4:1，是 B7「浅色主题『更多操作』配色问题」的实际断层点。 */
+.acct-menu-item.warn{color:var(--tk-warn-ink,#b45309);}
+.acct-menu-item.warn:hover,.acct-menu-item.warn:focus{background:rgba(217,119,6,.12);color:var(--tk-warn-ink,#b45309);}
 .acct-menu-item.warn .ui-ic{color:inherit;}
 .acct-menu-item.danger{color:var(--red);}
 .acct-menu-item.danger:hover,.acct-menu-item.danger:focus{background:rgba(225,29,72,.12);color:var(--red);}
@@ -1458,6 +1491,11 @@ button.fleet-cell:disabled{cursor:default;}
 .connect-steps .cs-step{display:flex;align-items:center;gap:5px;opacity:.65;transition:opacity .2s,color .2s;}
 .connect-steps .cs-step.active{opacity:1;color:var(--bdg-info-ink,#0b64b7);font-weight:600;}
 .connect-steps .cs-step.done{opacity:1;color:var(--tk-ok-ink,#15803d);}
+/* B64 三期：第②步微状态（卡在「官方登录」的哪一小步）——小号药丸，随 warn 态换色 */
+.connect-steps .cs-sub{font-size:10px;font-weight:600;line-height:1;padding:2px 6px;border-radius:999px;
+  background:color-mix(in srgb,var(--accent,#6b8af8) 10%,transparent);color:var(--text-sub);}
+.connect-steps.warn .cs-sub{background:color-mix(in srgb,var(--tk-amber,#f59e0b) 14%,transparent);
+  color:var(--tk-amber-ink,#b45309);}
 .connect-steps .cs-dot{width:16px;height:16px;border-radius:50%;border:1.5px solid currentColor;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;}
 .connect-steps .cs-sep{width:14px;height:1.5px;background:currentColor;opacity:.35;}
 .connect-hint{font-size:11.5px;color:var(--text-sub);line-height:1.6;}
@@ -1496,7 +1534,7 @@ button.fleet-cell:disabled{cursor:default;}
 .connect-mode-softwarn{font-size:11px;color:var(--tk-warn-ink,#b45309);margin-top:5px;}
 /* 方式卡随附提示（2026-08-10 运营决策：风险恐吓口径转正向「稳定运行建议」）：
    基础态=info 蓝的建议语气；.sev-warn/.sev-danger 语义皮肤保留给真告警。不拦点击。
-   配色全走 --bdg-*/--tk-*-ink 语义 token（日/夜自适配）——旧写法引用从未定义的
+   配色全走 --bdg-* 与 --tk-*-ink 语义 token（日/夜自适配）——旧写法引用从未定义的
    --tk-amber-ink，暗色恒走亮色回落值 ≈3:1 不可读，正是「暗色看不清」的病根。 */
 .connect-mode-notice{font-size:11.5px;line-height:1.55;margin-top:6px;padding:6px 9px;border-radius:8px;
   color:var(--bdg-info-ink,#0b64b7);background:var(--bdg-info-bg,rgba(30,140,242,.11));
@@ -1639,6 +1677,37 @@ button.fleet-cell:disabled{cursor:default;}
 .cfg-add-proxy{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:6px 0;padding:8px;background:var(--bg-soft);border-radius:8px;}
 .cfg-add-proxy .cfg-input{width:100%;}
 .cfg-add-proxy button.primary{grid-column:1/3;padding:7px;border-radius:8px;background:var(--accent);color:#fff;border:none;font-size:12px;font-weight:600;cursor:pointer;}
+/* 批量导入（P3）：清单 textarea 与结果行横跨两列；等宽字体便于逐行核对 */
+.cfg-imp-text{grid-column:1/3;resize:vertical;min-height:96px;font-family:ui-monospace,Consolas,monospace;font-size:11.5px;line-height:1.5;}
+.cfg-add-proxy .cfg-oc-msg{grid-column:1/3;}
+.cfg-proxy-soon{font-size:11px;color:var(--accent);background:var(--bg-soft);border:1px solid var(--border);border-radius:8px;padding:6px 9px;margin-bottom:8px;line-height:1.5;}
+/* 一键代理卡（托管代理）。刻意不用 emoji 图标：模板 emoji 走非增棘轮，
+   语义由「推荐」标签 + 强调色边框承担，暗色主题下也不会糊成一团。 */
+.cfg-oc{border:1px solid var(--accent);border-radius:10px;padding:10px;margin-bottom:10px;background:var(--bg-soft);}
+.cfg-oc-head{display:flex;align-items:center;gap:6px;margin-bottom:4px;}
+.cfg-oc-name{font-size:12.5px;font-weight:700;color:var(--text-main);}
+.cfg-oc-tag{font-size:10px;font-weight:600;padding:1px 6px;border-radius:999px;background:var(--accent);color:#fff;}
+.cfg-oc-sub{font-size:11px;color:var(--text-sub);line-height:1.5;margin-bottom:8px;}
+.cfg-oc-form{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:7px;}
+.cfg-oc-form .cfg-oc-phone{grid-column:1/3;}
+.cfg-oc-form .cfg-input{width:100%;}
+.cfg-oc-meta{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px;}
+.cfg-oc-meta:empty{display:none;}
+.cfg-badge.accent{color:var(--accent);border-color:var(--accent);}
+.cfg-oc-go{width:100%;padding:8px;border:none;border-radius:8px;background:var(--accent);color:#fff;font-size:12.5px;font-weight:700;cursor:pointer;}
+.cfg-oc-go:disabled{opacity:.55;cursor:not-allowed;}
+.cfg-oc-msg{font-size:11px;line-height:1.5;margin-top:6px;color:var(--text-sub);}
+.cfg-oc-msg:empty{display:none;}
+.cfg-oc-msg.ok{color:var(--tk-ok-ink,#16a34a);}
+.cfg-oc-msg.bad{color:var(--tk-danger-ink,#dc2626);}
+.cfg-oc-or{font-size:10.5px;color:var(--text-sub);text-align:center;margin-top:8px;}
+.cfg-proxy-status{margin:6px 0 4px;padding:8px 9px;background:var(--bg-soft);border-radius:8px;}
+.cfg-proxy-badges{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;}
+.cfg-proxy-badges:empty{display:none;}
+.cfg-badge{font-size:10.5px;padding:2px 7px;border-radius:999px;background:var(--bg-elev);border:1px solid var(--border);color:var(--text-sub);}
+.cfg-badge.ok{color:var(--tk-ok-ink,#16a34a);border-color:var(--tk-ok-ink,#16a34a);}
+.cfg-badge.bad{color:var(--tk-danger-ink,#dc2626);border-color:var(--tk-danger-ink,#dc2626);}
+.cfg-badge.warn{color:var(--tk-warn-ink,#b45309);border-color:var(--tk-warn-ink,#b45309);}
 /* iOS 风格开关 */
 .switch{position:relative;display:inline-block;width:40px;height:22px;flex-shrink:0;}
 .switch input{opacity:0;width:0;height:0;}
@@ -1713,6 +1782,50 @@ button.fleet-cell:disabled{cursor:default;}
   font-weight:700;color:var(--accent);white-space:nowrap;}
 .msg-ai-desc .mad-badge svg{width:11px;height:11px;}
 .msg-ai-desc .mad-text{min-width:0;word-break:break-word;}
+/* P0 2026-08-19 识别摘要防刷屏：超长描述默认折叠 3 行（老消息里的逐字 OCR 汤照样收住），
+   「展开全文/收起」由 _aiDescRow 按长度阈值挂载；短描述不出按钮，行为与旧版逐字节一致。 */
+.msg-ai-desc.mad-clamp .mad-text{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
+.msg-ai-desc .mad-toggle{flex:0 0 auto;align-self:flex-end;border:0;background:none;
+  color:var(--accent);font-size:11px;line-height:1.5;cursor:pointer;padding:0 2px;white-space:nowrap;}
+.msg-ai-desc .mad-toggle:hover{text-decoration:underline;}
+/* P1 2026-08-19 识别类型徽标：VLM 首行「类型=A/B」→ 单据/聊天截图小 chip（C=普通图不占版面） */
+.msg-ai-desc .mad-type{flex:0 0 auto;align-self:flex-start;padding:0 5px;border-radius:7px;
+  font-size:10.5px;line-height:1.6;white-space:nowrap;color:var(--accent);
+  border:1px solid color-mix(in srgb,var(--accent) 45%,transparent);}
+/* P2 2026-08-19「问这张图」面板：预设 chips + 输入行 + 答案区（入站图片气泡内） */
+.msg-imgask{margin-top:6px;padding:7px 8px;border-radius:8px;display:flex;flex-direction:column;gap:6px;
+  background:color-mix(in srgb,var(--accent) 7%,transparent);
+  border:1px dashed color-mix(in srgb,var(--accent) 35%,transparent);}
+.msg-imgask .iga-chips{display:flex;flex-wrap:wrap;gap:4px;}
+.msg-imgask .iga-chip{border:1px solid color-mix(in srgb,var(--accent) 40%,transparent);background:none;
+  color:var(--accent);border-radius:10px;font-size:11px;line-height:1.7;padding:0 8px;cursor:pointer;
+  max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.msg-imgask .iga-chip:hover{background:color-mix(in srgb,var(--accent) 12%,transparent);}
+.msg-imgask .iga-row{display:flex;gap:6px;align-items:center;}
+.msg-imgask .iga-input{flex:1 1 auto;min-width:0;font-size:12px;padding:4px 8px;border-radius:7px;
+  border:1px solid var(--border);background:var(--bg-elev);color:var(--text-main);}
+.msg-imgask .iga-send{flex:0 0 auto;border:0;border-radius:7px;padding:4px 10px;font-size:12px;
+  cursor:pointer;background:var(--accent);color:#fff;}
+.msg-imgask .iga-send:disabled{opacity:.55;cursor:default;}
+.msg-imgask .iga-close{flex:0 0 auto;border:0;background:none;color:var(--text-sub);cursor:pointer;
+  font-size:12px;padding:0 2px;}
+.msg-imgask .iga-out{font-size:12px;line-height:1.55;color:var(--text-main);word-break:break-word;}
+/* P0-A1 2026-08-19 横幅治理：接管让位提示从整条蓝带收敛为轻量 pill（省 ~40% 竖向空间、
+   信息级不抢注意力）；倒计时文本随 /automation 轮询刷新，无新请求。 */
+.tko-pill{display:inline-flex;align-items:center;gap:8px;max-width:100%;padding:3px 10px;
+  border-radius:999px;font-size:12px;line-height:1.5;
+  color:var(--th-ink-blue8,#1e40af);background:color-mix(in srgb,var(--th-bg-blue100,#dbeafe) 60%,transparent);
+  border:1px solid var(--th-bd-blue30,rgba(59,130,246,.3));}
+.tko-pill .tko-txt{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.tko-pill .tko-resume{flex:none;border:0;border-radius:999px;padding:2px 10px;font-size:12px;
+  cursor:pointer;font-weight:600;color:#fff;background:var(--th-ink-blue8,#1e40af);}
+.tko-pill .tko-resume:hover{opacity:.9;}
+/* P1-12 搁置静音态：同一 pill 位换青色系——与接管（蓝＝会自动接回）区分开，
+   青色这条**不会**自己接回，只能显式恢复，配色差异就是那句提醒。 */
+.tko-pill.hold{color:var(--th-ink-teal8,#115e59);
+  background:color-mix(in srgb,var(--th-bg-teal100,#ccfbf1) 60%,transparent);
+  border-color:var(--th-bd-teal30,rgba(20,184,166,.35));}
+.tko-pill.hold .tko-resume{background:#0f766e;}
 /* 出站气泡（深底）里的 AI 摘要行：提亮描述文字，保证深底可读 */
 .msg-row.out .msg-ai-desc{background:color-mix(in srgb,var(--ofg) 12%,transparent);border-left-color:color-mix(in srgb,var(--ofg) 50%,transparent);color:color-mix(in srgb,var(--ofg) 94%,transparent);}
 .msg-row.out .msg-ai-desc .mad-badge{color:color-mix(in srgb,var(--ofg) 88%,transparent);}
@@ -1815,6 +1928,16 @@ button.fleet-cell:disabled{cursor:default;}
 /* （.conv-tags-row 已随 C 批行等高化下线——标签收编进 .conv-line2-chips 行内带） */
 /* 一期美化：普通标签改中性灰（品牌蓝只留给选中/主操作，语义色 tk-* 不变） */
 .conv-tag-chip{display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:600;background:rgba(148,163,184,.16);color:var(--text-sub);line-height:1.5;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* 实施72 P2：多账号聚合视图的行级归属徽标（「经由哪个自有账号」——同名联系人在
+   两个账号下各有一行，无标识无法分辨；单账号视图/单账号平台不渲染零占位） */
+.conv-via{display:inline-flex;align-items:center;margin-left:5px;padding:0 5px;border-radius:8px;font-size:10px;font-weight:600;line-height:15px;background:color-mix(in srgb,var(--tk-brand,#1e8cf2) 13%,transparent);color:var(--tk-text-muted,#94a3b8);max-width:86px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:1px;}
+/* 实施72 P2：补收消息时间标注（合成时间戳——入库回推值非真实收发时刻）：
+   「≈」前缀 + 点状下划线暗示可悬停看解释，不喧宾夺主 */
+.msg-ts-approx{border-bottom:1px dotted var(--tk-text-muted,#94a3b8);cursor:help;opacity:.92;}
+/* 实施72 P3：补收段分隔线（复用 day-divider 骨架，琥珀弱色区分「日期」与「告知」） */
+.day-divider.bf-divider{color:var(--tk-warn-ink,#d97706);opacity:.85;font-size:11px;}
+/* 实施72 P3：失败原因人话短语（「发送失败」旁，悬停显原始码） */
+.msg-fail-why{color:var(--tk-text-muted,#94a3b8);margin-left:5px;font-size:11px;cursor:help;border-bottom:1px dotted var(--tk-text-muted,#94a3b8);}
 .conv-group-tag{display:inline-block;padding:0 5px;border-radius:6px;font-size:11px;font-weight:700;background:rgba(148,163,184,.2);color:var(--tk-text-muted);vertical-align:middle;line-height:15px;margin-left:2px;}
 /* P0 真相化：已退出账号的会话行——整体灰化 + 琥珀「已退出」chip（会话保留可查，
    但一眼可见「这个号已经不在线上」；hover/选中恢复可读性便于查看历史） */
@@ -2025,6 +2148,14 @@ button.fleet-cell:disabled{cursor:default;}
 /* 搁置面板：来源 provenance 行（谁在何时设置——审计反查，读不到即隐藏） */
 .snz-prov{font-size:11px;color:var(--text-sub);margin-top:6px;display:none;}
 .snz-prov.on{display:block;}
+/* P1-12「搁置并停止自动回复」：静音开关行——与预设/自定义/永久并列的一条独立
+   决定（搁多久 × 要不要闭嘴是正交的两件事），故做成常驻勾选而非第五个预设。 */
+.snz-mute{display:flex;align-items:flex-start;gap:8px;width:100%;padding:9px 12px;border:1px solid var(--btn-border);border-radius:10px;background:var(--bg-soft);cursor:pointer;transition:background .12s;}
+.snz-mute:hover{background:rgba(15,118,110,.08);}
+.snz-mute input{margin:2px 0 0;flex:0 0 auto;width:15px;height:15px;accent-color:#0f766e;cursor:pointer;}
+.snz-mute .snz-main{color:var(--text-main);}
+.snz-mute:has(input:checked){border-color:#0f766e;background:rgba(15,118,110,.1);}
+.snz-mute:focus-within{outline:2px solid var(--xl-accent);outline-offset:1px;}
 /* 移动端：搁置面板变底部抽屉（snz-mask 限定，不影响其他 app-confirm 弹窗） */
 @media(max-width:640px){
   .snz-mask{align-items:flex-end;padding:0;}
@@ -2046,35 +2177,38 @@ button.fleet-cell:disabled{cursor:default;}
   .info-sidebar{width:100% !important;}
   .xl-topbar{padding:5px 12px;gap:7px;}
   .xl-top-engine{display:none;}   /* 窄屏隐藏引擎徽标，避免控制条拥挤 */
+  /* 窄屏底栏与桌面 rail 同一表面族（--rail-* 令牌，2026-08-17 随主题翻转；回落值=旧深色） */
   .mob-plat-bar{
     display:flex;align-items:stretch;position:fixed;left:0;right:0;bottom:0;z-index:90;
-    height:56px;background:linear-gradient(180deg,#15161b,#1a1c22);border-top:1px solid rgba(255,255,255,.08);
+    height:56px;background:var(--rail-bg,linear-gradient(180deg,#15161b,#1a1c22));border-top:1px solid var(--rail-sep,rgba(255,255,255,.08));
     padding:0 4px env(safe-area-inset-bottom,0);box-sizing:border-box;
   }
   .mob-plat-scroll{display:flex;align-items:center;gap:2px;flex:1;min-width:0;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;padding:4px 2px;}
   .mob-plat-scroll::-webkit-scrollbar{display:none;}
   .mob-plat-item{
     position:relative;flex:0 0 auto;width:44px;height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;
-    color:#c8cad0;cursor:pointer;border:0;background:transparent;
+    color:var(--rail-ink-mob,#c8cad0);cursor:pointer;border:0;background:transparent;
   }
-  .mob-plat-item.active{background:rgba(255,255,255,.1);color:#fff;}
+  .mob-plat-item.active{background:var(--rail-hover,rgba(255,255,255,.1));color:var(--rail-ink-hover,#fff);}
   .mob-plat-item.disconnected{opacity:.45;}
-  /* 与桌面 .nav-badge 同语义：灰=未读、红=需人工（.attn） */
+  /* 与桌面 .nav-badge 同语义：灰=未读、红=需人工（.attn，红底恒白字） */
   .mob-plat-item .mob-badge{
     position:absolute;top:2px;right:2px;min-width:14px;height:14px;padding:0 3px;border-radius:7px;
-    background:#64748b;color:#fff;font-size:9px;font-weight:700;line-height:14px;text-align:center;font-variant-numeric:tabular-nums;
+    background:var(--rail-badge-bg,#64748b);color:var(--rail-badge-ink,#fff);font-size:9px;font-weight:700;line-height:14px;text-align:center;font-variant-numeric:tabular-nums;
   }
-  .mob-plat-item .mob-badge.attn{background:var(--tk-danger,#ef4444);}
+  .mob-plat-item .mob-badge.attn{background:var(--tk-danger,#ef4444);color:#fff;}
+  /* 徽标真相化：底栏纯未读同降中性小点（与桌面 rail 同语义） */
+  .mob-plat-item .mob-badge.dim-dot{min-width:0;width:8px;height:8px;padding:0;border-radius:50%;font-size:0;}
   .mob-plat-item .mob-dot{position:absolute;bottom:4px;right:6px;width:6px;height:6px;border-radius:50%;}
   .mob-plat-item .mob-dot.ok{background:#22c55e;}
   .mob-plat-item .mob-dot.warn{background:#f59e0b;}
   .mob-plat-item .mob-dot.err,.mob-plat-item .mob-dot.none{background:#64748b;}
-  .mob-plat-acts{display:flex;align-items:center;gap:2px;flex-shrink:0;padding:4px 2px 4px 6px;border-left:1px solid rgba(255,255,255,.08);}
+  .mob-plat-acts{display:flex;align-items:center;gap:2px;flex-shrink:0;padding:4px 2px 4px 6px;border-left:1px solid var(--rail-sep,rgba(255,255,255,.08));}
   .mob-plat-act{
-    width:40px;height:44px;border:0;border-radius:10px;background:transparent;color:#c8cad0;cursor:pointer;
+    width:40px;height:44px;border:0;border-radius:10px;background:transparent;color:var(--rail-ink-mob,#c8cad0);cursor:pointer;
     display:inline-flex;align-items:center;justify-content:center;
   }
-  .mob-plat-act:active{background:rgba(255,255,255,.1);color:#fff;}
+  .mob-plat-act:active{background:var(--rail-hover,rgba(255,255,255,.1));color:var(--rail-ink-hover,#fff);}
   /* 会话打开时隐藏底栏，把纵向空间还给聊天气泡 */
   body.mob-chat-open .mob-plat-bar{display:none;}
   body.mob-chat-open .inbox-root{padding-bottom:0;}
@@ -2257,7 +2391,10 @@ button.ftab-more-item{border:none;background:none;width:100%;text-align:left;fon
 /* P4-11B 群消息气泡内 @提及高亮：用当前文字色 + 加粗下划线，收发气泡（浅/深底）皆清晰 */
 .msg-at{font-weight:700;text-decoration:underline;text-underline-offset:2px;}
 /* P4-11E 群入站气泡发言人名（内联色来自 _speakerColor，每人稳定一色，对齐官方群聊读感）*/
-.msg-speaker{font-size:11px;font-weight:700;line-height:1.2;margin-bottom:2px;}
+.msg-speaker{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;line-height:1.2;margin-bottom:4px;}
+.msg-spk-av{width:18px;height:18px;border-radius:50%;color:#fff;font-size:10px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;flex:none;line-height:18px;letter-spacing:0;}
+.msg-spk-nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.msg-channel-card{border-left:3px solid color-mix(in srgb, var(--accent,#1e8cf2) 55%, transparent);padding-left:8px;}
 .slash-panel-hdr{padding:6px 12px;font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;}
 /* P42 内联 AI 副驾补全浮层已下线（遮挡消息原文，2026-08-07）——样式一并移除 */
 .slash-item{padding:9px 14px;cursor:pointer;display:flex;align-items:flex-start;gap:10px;transition:background .1s;}
@@ -2474,8 +2611,9 @@ button.ftab-more-item{border:none;background:none;width:100%;text-align:left;fon
 /* phone_code：无二维码主视觉，方框藏起；号码/验证码表单占中轴 */
 .connect-qr-wrap.phone-mode{display:none!important;}
 .connect-phone-view,.connect-code-view{max-width:320px;margin:0 auto;text-align:left;}
+/* --ink-slate5 自 2026-08-20 起在两档主题各有定义（见 unified_inbox.html :root），
+   旧的 dark 覆写行已无意义并删除——同一颜色两处真相正是主题漂移的来源。 */
 .connect-phone-label{display:block;font-size:12px;line-height:1.45;color:var(--ink-slate5,#64748b);margin:0 0 8px;}
-:root[data-cp-theme="dark"] .connect-phone-label{color:var(--ink-slate5,#94a3b8);}
 /* color/background 显式成对（input 主题配对门禁）：HTML 里虽恒与 .cfg-input 组合，
    但组合是脆弱前提——谁改掉 class 列表就复现「深色下输入不可见」；token 与 cfg-input 同源 */
 .connect-phone-input,.connect-code-input{width:100%;box-sizing:border-box;font-size:16px;letter-spacing:.02em;color:var(--text-main);background:var(--bg-elev);}
@@ -2523,6 +2661,46 @@ button.ftab-more-item{border:none;background:none;width:100%;text-align:left;fon
 .connect-relay-msg{padding:12px 8px;text-align:center;font-size:13px;font-weight:600;}
 .connect-relay-msg.ok{color:var(--green,#16a34a);}
 .connect-relay-msg.expired{color:var(--text-sub);}
+/* B64 续：官方式分步叙事——步骤标题 / 「接下来」预告 / 验证中舞台 / 卡住升级视图 */
+.connect-relay-head{font-size:13px;font-weight:700;color:var(--text);line-height:1.4;}
+.connect-relay-head.warn{color:var(--tk-amber-ink,#b45309);}
+.connect-relay-next{font-size:11.5px;line-height:1.55;color:var(--text-sub);
+  padding:7px 10px;border-radius:9px;background:var(--bg-soft,#f9fafb);
+  border:1px dashed var(--border);text-align:left;}
+.connect-relay-stage{display:flex;flex-direction:column;gap:4px;align-items:center;}
+.connect-relay-shot.zoomable{cursor:zoom-in;}
+.connect-relay-submit.ghost{background:none;border:1px solid var(--border);
+  color:var(--text);font-weight:600;}
+.connect-relay-submit.ghost:hover{border-color:var(--accent,#6b8af8);color:var(--accent,#6b8af8);filter:none;}
+/* P1：密码显隐眼睛 + 前置清单 + 表单品牌顶条（Messenger 渐变，轻量卡片感） */
+.connect-relay-inwrap{position:relative;display:flex;align-items:center;}
+.connect-relay-inwrap .connect-relay-input{flex:1;}
+.connect-relay-field.has-eye .connect-relay-input{padding-right:52px;}
+.connect-relay-eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);
+  border:0;background:none;padding:3px 7px;font-size:11.5px;font-weight:600;cursor:pointer;
+  color:var(--text-sub);border-radius:6px;}
+.connect-relay-eye:hover{color:var(--accent,#6b8af8);background:color-mix(in srgb,var(--accent,#6b8af8) 10%,transparent);}
+.connect-relay-next.prep{border-style:solid;
+  border-color:color-mix(in srgb,var(--accent,#6b8af8) 30%,transparent);
+  background:color-mix(in srgb,var(--accent,#6b8af8) 6%,transparent);}
+.connect-relay-form{position:relative;padding-top:12px;animation:connectRelayIn .18s ease-out;}
+.connect-relay-form::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;
+  border-radius:3px;background:linear-gradient(90deg,#0084ff,#a033ff 60%,#ff5c87);}
+@keyframes connectRelayIn{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:none;}}
+@media (prefers-reduced-motion: reduce){.connect-relay-form{animation:none;}}
+/* P2：relay 成功画勾（与 connect-qr-okov 同语言的 stroke 动画） */
+.connect-relay-msg.ok{display:flex;flex-direction:column;align-items:center;gap:8px;}
+.connect-relay-check{width:44px;height:44px;}
+.connect-relay-check circle{fill:none;stroke:var(--green,#16a34a);stroke-width:3;
+  stroke-dasharray:151;stroke-dashoffset:151;animation:crCheckRing .5s ease-out forwards;}
+.connect-relay-check path{fill:none;stroke:var(--green,#16a34a);stroke-width:4;
+  stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:40;stroke-dashoffset:40;
+  animation:crCheckTick .32s .38s ease-out forwards;}
+@keyframes crCheckRing{to{stroke-dashoffset:0;}}
+@keyframes crCheckTick{to{stroke-dashoffset:0;}}
+@media (prefers-reduced-motion: reduce){
+  .connect-relay-check circle,.connect-relay-check path{animation:none;stroke-dashoffset:0;}
+}
 /* 错误详情原文（模板内联样式给的 --text-tiny 亮色 4.47:1 差一线；本文件晚于
    模板 <style> 加载，同特异性覆盖即可，不动热区模板）。 */
 .connect-err-body{color:var(--text-sub);}
@@ -2530,6 +2708,76 @@ button.ftab-more-item{border:none;background:none;width:100%;text-align:left;fon
 .connect-hosted-ops{display:flex;align-items:center;justify-content:center;gap:6px;font-size:11.5px;color:var(--text-sub);margin-top:10px;}
 .connect-ops-copy{border:0;background:none;padding:0;font-size:11.5px;font-weight:600;color:var(--accent);cursor:pointer;text-decoration:underline;text-underline-offset:2px;}
 .connect-ops-copy:hover{filter:brightness(1.15);}
+/* ── B64 三期：checkpoint UX 视觉包（手机确认主视觉 / 截图窗体化 / 回执 notice /
+   等待生命感 / 解卡正反馈 / footer 武装态 / 超时挽留位）──────────────────── */
+/* 手机确认主视觉：amber 行动基调（「需要你做一件事」，不是错误红） */
+.connect-relay-hero{display:flex;justify-content:center;padding:2px 0 0;color:var(--tk-amber-ink,#b45309);}
+.crh-phone{width:54px;height:54px;fill:none;stroke:currentColor;stroke-width:2.6;
+  stroke-linecap:round;stroke-linejoin:round;}
+.crh-phone .crh-dot{fill:color-mix(in srgb,var(--tk-amber,#f59e0b) 22%,transparent);
+  stroke:currentColor;animation:crhPulse 1.8s ease-in-out infinite;transform-origin:45px 15px;}
+.crh-phone .crh-check{stroke-width:3;}
+@keyframes crhPulse{0%,100%{transform:scale(1);opacity:1;}50%{transform:scale(1.18);opacity:.75;}}
+@media (prefers-reduced-motion: reduce){.crh-phone .crh-dot{animation:none;}}
+/* 三步清单：数字徽章 + 左对齐（替代 ①②③ 文字墙） */
+.connect-relay-steps{margin:0;padding:0 0 0 2px;list-style:none;counter-reset:crsteps;
+  display:flex;flex-direction:column;gap:7px;text-align:left;max-width:300px;}
+.connect-relay-steps li{counter-increment:crsteps;position:relative;padding-left:26px;
+  font-size:12px;line-height:1.5;color:var(--text);}
+.connect-relay-steps li::before{content:counter(crsteps);position:absolute;left:0;top:1px;
+  width:17px;height:17px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  font-size:10.5px;font-weight:700;color:var(--tk-amber-ink,#b45309);
+  background:color-mix(in srgb,var(--tk-amber,#f59e0b) 16%,transparent);
+  border:1px solid color-mix(in srgb,var(--tk-amber,#f59e0b) 35%,transparent);}
+/* 截图窗体化：迷你标题栏三圆点 + LIVE 徽标（与 hosted 主画布同一视觉语言）+ 更新时间戳 */
+.connect-relay-shotwrap{position:relative;width:100%;border:1px solid var(--border);
+  border-radius:10px;overflow:hidden;background:var(--bg-elev);box-shadow:0 2px 10px rgba(0,0,0,.10);}
+.connect-relay-shotwrap .crs-chrome{display:flex;align-items:center;gap:4px;height:18px;
+  padding:0 8px;background:var(--bg-elev);border-bottom:1px solid var(--border);}
+.connect-relay-shotwrap .crs-chrome i{width:6px;height:6px;border-radius:50%;background:var(--border);}
+.connect-relay-shotwrap .crs-live{position:absolute;top:22px;right:6px;z-index:2;
+  font-size:9.5px;font-weight:700;letter-spacing:.4px;padding:1px 6px;border-radius:999px;
+  background:color-mix(in srgb,var(--green,#16a34a) 14%,transparent);color:#047857;
+  border:1px solid color-mix(in srgb,var(--green,#16a34a) 35%,transparent);}
+:root[data-cp-theme="dark"] .connect-relay-shotwrap .crs-live{color:var(--tk-ok-ink,#34d399);}
+.connect-relay-shotwrap .crs-live::before{content:'';display:inline-block;width:4px;height:4px;
+  border-radius:50%;background:currentColor;margin-right:3px;animation:connect-live-dot 1.6s ease-in-out infinite;}
+.connect-relay-shotwrap .connect-relay-shot{display:block;border:0;border-radius:0;max-width:100%;}
+.connect-relay-shot-ts{font-size:10.5px;color:var(--text-sub);margin-top:3px;}
+/* 折叠截图区（device_confirm：主角是手机动作，画面按需展开） */
+.connect-relay-shotbox{width:100%;text-align:left;}
+.connect-relay-shotbox summary{cursor:pointer;font-size:11.5px;font-weight:600;color:var(--accent,#6b8af8);
+  padding:4px 0;user-select:none;list-style-position:inside;}
+.connect-relay-shotbox summary:hover{filter:brightness(1.1);}
+.connect-relay-shotbox[open] summary{margin-bottom:5px;}
+/* 「继续」回执 notice：miss=琥珀指路 / fail=红色重试 */
+.connect-relay-notice{width:100%;box-sizing:border-box;font-size:12px;line-height:1.5;
+  padding:7px 10px;border-radius:9px;text-align:left;}
+.connect-relay-notice.warn{color:var(--tk-amber-ink,#b45309);
+  border:1px solid color-mix(in srgb,var(--tk-amber,#f59e0b) 35%,transparent);
+  background:color-mix(in srgb,var(--tk-amber,#f59e0b) 10%,transparent);}
+.connect-relay-notice.err{color:var(--danger,#dc2626);
+  border:1px solid color-mix(in srgb,var(--danger,#dc2626) 35%,transparent);
+  background:color-mix(in srgb,var(--danger,#dc2626) 10%,transparent);}
+/* 等待生命感：已等待 / 环境保留倒计时（低调 meta 行） */
+.connect-relay-meta{font-size:10.5px;color:var(--text-sub);letter-spacing:.02em;}
+/* 解卡正反馈：绿色确认条，短驻留后随重渲自然消失 */
+.connect-relay-unstuck{width:100%;box-sizing:border-box;font-size:12px;font-weight:600;
+  padding:6px 10px;border-radius:9px;color:var(--tk-ok-ink,#15803d);text-align:center;
+  background:color-mix(in srgb,var(--green,#16a34a) 12%,transparent);
+  border:1px solid color-mix(in srgb,var(--green,#16a34a) 30%,transparent);
+  animation:crUnstuckIn .25s ease-out;}
+@keyframes crUnstuckIn{from{opacity:0;transform:translateY(-3px);}to{opacity:1;transform:none;}}
+@media (prefers-reduced-motion: reduce){.connect-relay-unstuck{animation:none;}}
+/* footer「重新开始」情境化：checkpoint 态降为幽灵钮；武装态=琥珀警示（二次确认） */
+#connect-refresh-btn:not(.primary){background:none;border:1px solid var(--border);color:var(--text-sub);}
+#connect-refresh-btn:not(.primary):hover{border-color:var(--tk-amber,#f59e0b);color:var(--tk-amber-ink,#b45309);}
+#connect-refresh-btn.armed{border-color:var(--tk-amber,#f59e0b);color:var(--tk-amber-ink,#b45309);
+  background:color-mix(in srgb,var(--tk-amber,#f59e0b) 12%,transparent);font-weight:600;}
+/* 超时挽留位：上报诊断 + 换方式两条出路（复用失败卡按钮样式） */
+.connect-expired-acts{display:flex;align-items:center;justify-content:center;gap:8px;
+  flex-wrap:wrap;margin-top:10px;}
+.connect-expired-acts .connect-fail-report-done{width:100%;text-align:center;margin-top:2px;}
 /* 刚接入账号的身份预览（授权成功层）：头像 + 昵称 */
 .connect-qr-okid{display:flex;align-items:center;justify-content:center;gap:8px;max-width:88%;}
 .connect-qr-okid:empty{display:none;}
@@ -2687,6 +2935,15 @@ html.ws-wall-on .msg-area .msg-ts{
 .ftab[data-f="attn"] .ftab-n{background:var(--tk-danger,#ef4444);color:#fff;}
 .ftab[data-f="attn"].active{background:color-mix(in srgb,var(--tk-danger,#ef4444) 13%,transparent);color:var(--tk-danger-ink,#b91c1c);border-color:color-mix(in srgb,var(--tk-danger,#ef4444) 55%,transparent);}
 .ftab[data-f="attn"].active .ftab-n{background:var(--tk-danger,#ef4444);color:#fff;}
+/* 私聊/群组/频道 scope chip：同行 .ftab，不新造第七套尺寸。群=琥珀、频道=紫，行高不变。 */
+.ftab[data-scope="group"].active{background:color-mix(in srgb,#f59e0b 14%,transparent);color:#b45309;border-color:color-mix(in srgb,#f59e0b 42%,transparent);}
+.ftab[data-scope="group"].active .ftab-n{background:color-mix(in srgb,#f59e0b 28%,transparent);color:#b45309;}
+.ftab[data-scope="channel"].active{background:color-mix(in srgb,#7c3aed 14%,transparent);color:#6d28d9;border-color:color-mix(in srgb,#7c3aed 42%,transparent);}
+.ftab[data-scope="channel"].active .ftab-n{background:color-mix(in srgb,#7c3aed 28%,transparent);color:#6d28d9;}
+.fp-chip[data-scope="group"].active{background:color-mix(in srgb,#f59e0b 14%,transparent);color:#b45309;border-color:color-mix(in srgb,#f59e0b 42%,transparent);}
+.fp-chip[data-scope="channel"].active{background:color-mix(in srgb,#7c3aed 14%,transparent);color:#6d28d9;border-color:color-mix(in srgb,#7c3aed 42%,transparent);}
+:root[data-cp-theme="dark"] .ftab[data-scope="group"].active{background:color-mix(in srgb,#f59e0b 22%,transparent);color:#fbbf24;}
+:root[data-cp-theme="dark"] .ftab[data-scope="channel"].active{background:color-mix(in srgb,#a78bfa 22%,transparent);color:#c4b5fd;}
 /* 目标议程组进「更多」菜单的上下文样式：覆写其独立行时代的 margin / nowrap 横滚 */
 .ftab-more-menu .goal-agenda-filters{margin:4px 0 0;padding:6px 12px 6px;border-top:1px dashed var(--border);flex-wrap:wrap;overflow:visible;max-width:230px;}
 .gaf-menu-label{width:100%;font-size:10px;color:var(--text-tiny);padding-bottom:2px;}
@@ -2828,42 +3085,46 @@ html[data-ws-embed="1"] body.adk-on .inbox-root{height:100%;}
   body.mob-chat-open.adk-on .inbox-root{height:100%;}
 }
 
-/* ===== 官方级消息管理（2026-08-17）：右键菜单 / 置顶徽标 / 消息多选 ===== */
+/* ===== 官方级消息管理（2026-08-17）：右键菜单 / 置顶徽标 / 消息多选 =====
+   ⚠ 表面/文字只走本页主题族 --bg-elev/--border/--bg-soft/--accent 与 --text-* 族（与 .vm-menu 同源）。
+   ⚠ 注释里不得出现 "*"+"/" 相邻（会提前闭合本注释、并让下一条规则被解析器整块丢弃）。
+   首发曾引用 --card-bg/--card-bd/--th-hover/--th-accent——全站 src/web 均无定义，var() 恒走
+   暗色回落值，叠上亮色主题的深墨 --text-main ⇒ 亮色下整块黑底黑字（2026-08-19 实锤修复）。 */
 .ws-ctx-menu{position:fixed;z-index:100000;min-width:196px;max-width:288px;
-  background:var(--card-bg,#1c1d22);border:1px solid var(--card-bd,rgba(255,255,255,.09));
-  border-radius:10px;box-shadow:0 10px 32px rgba(0,0,0,.45);padding:5px;user-select:none;}
+  background:var(--bg-elev,#fff);border:1px solid var(--border,#e5e7eb);
+  border-radius:10px;box-shadow:0 10px 32px rgba(15,23,42,.2);padding:5px;user-select:none;}
 .ws-ctx-item{display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:7px;
-  font-size:13px;color:var(--text-main,#e5e7eb);cursor:pointer;line-height:1.35;white-space:nowrap;}
-.ws-ctx-item:hover{background:var(--th-hover,rgba(255,255,255,.06));}
-.ws-ctx-item.danger{color:var(--tk-danger-ink,#f87171);}
+  font-size:13px;color:var(--text-main,#111827);cursor:pointer;line-height:1.35;white-space:nowrap;}
+.ws-ctx-item:hover{background:var(--bg-soft,#f8fafc);}
+.ws-ctx-item.danger{color:var(--tk-danger-ink,#b91c1c);}
 .ws-ctx-item.disabled{opacity:.42;cursor:not-allowed;}
 .ws-ctx-item.disabled:hover{background:transparent;}
 .ws-ctx-item .wci-ic{display:inline-flex;width:16px;justify-content:center;opacity:.85;flex:none;}
-.ws-ctx-sep{height:1px;margin:4px 6px;background:var(--card-bd,rgba(255,255,255,.08));}
+.ws-ctx-sep{height:1px;margin:4px 6px;background:var(--border,#e5e7eb);}
 /* Account Dock P1：hover 详情卡（纯只读信息面；z 低于右键菜单，两者互斥由 JS 保证） */
 .adk-hv{position:fixed;z-index:99990;min-width:208px;max-width:300px;
-  background:var(--card-bg,#1c1d22);border:1px solid var(--card-bd,rgba(255,255,255,.09));
-  border-radius:10px;box-shadow:0 10px 32px rgba(0,0,0,.45);padding:10px 12px;
+  background:var(--bg-elev,#fff);border:1px solid var(--border,#e5e7eb);
+  border-radius:10px;box-shadow:0 10px 32px rgba(15,23,42,.2);padding:10px 12px;
   pointer-events:none;user-select:none;}
 .adk-hv-head{display:flex;align-items:center;gap:9px;min-width:0;}
 .adk-hv-av{width:30px;height:30px;border-radius:50%;flex:none;display:inline-flex;
   align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;overflow:hidden;}
 .adk-hv-av img{width:100%;height:100%;object-fit:cover;border-radius:50%;}
 .adk-hv-t{min-width:0;display:flex;flex-direction:column;gap:1px;}
-.adk-hv-name{font-size:13px;font-weight:600;color:var(--text-main,#e5e7eb);
+.adk-hv-name{font-size:13px;font-weight:600;color:var(--text-main,#111827);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .adk-hv-plat{font-size:11px;color:var(--text-tiny,#8b93a7);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .adk-hv-rows{display:flex;flex-wrap:wrap;gap:4px 6px;margin-top:8px;}
 .adk-hv-chip{display:inline-flex;align-items:center;gap:4px;font-size:11px;line-height:1;
-  padding:4px 7px;border-radius:999px;color:var(--text-sub,#b8bfce);
-  background:var(--th-hover,rgba(255,255,255,.06));white-space:nowrap;}
+  padding:4px 7px;border-radius:999px;color:var(--text-sub,#6b7280);
+  background:var(--bg-soft,#f8fafc);white-space:nowrap;}
 .adk-hv-chip.on{color:var(--tk-ok-ink,#34d399);}
 .adk-hv-chip.off{color:var(--text-tiny,#8b93a7);}
 .adk-hv-chip.attn{color:var(--tk-danger-ink,#f87171);}
 /* P2：hover 卡「最近活动」行（allChats 客户端聚合，零后端） */
-.adk-hv-recent{margin-top:8px;padding-top:8px;border-top:1px solid var(--card-bd,rgba(255,255,255,.08));
-  font-size:11px;line-height:1.45;color:var(--text-sub,#b8bfce);
+.adk-hv-recent{margin-top:8px;padding-top:8px;border-top:1px solid var(--border,#e5e7eb);
+  font-size:11px;line-height:1.45;color:var(--text-sub,#6b7280);
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
 /* P2：dock 拖拽排序（同平台组内重排；HTML5 DnD，触屏不触发） */
 .adk-item.adk-drag{opacity:.45;}
@@ -2873,7 +3134,7 @@ html[data-ws-embed="1"] body.adk-on .inbox-root{height:100%;}
 .conv-pin-badge{display:inline-flex;color:var(--text-tiny,#8b93a7);opacity:.92;vertical-align:-1px;}
 /* 消息多选：选中气泡描边 + 行手型；操作条为悬浮胶囊（不动线程布局） */
 .msgsel-on .msg-row{cursor:pointer;}
-.msg-row.msg-selected .msg-bubble{outline:2px solid var(--th-accent,#3b82f6);outline-offset:1px;}
+.msg-row.msg-selected .msg-bubble{outline:2px solid var(--accent,#3b82f6);outline-offset:1px;}
 /* 前置勾选框（Telegram 式）：选择模式下每行左侧常驻空心圆、选中=蓝底对号。
    纯 CSS 跟随 .msg-selected 类——keyed-diff 重渲后 _msgSelSync 描回类名即自动恢复，零 JS。 */
 .msgsel-on .msg-row{position:relative;padding-left:34px;}
@@ -2881,21 +3142,21 @@ html[data-ws-embed="1"] body.adk-on .inbox-root{height:100%;}
   width:20px;height:20px;border-radius:50%;box-sizing:border-box;
   border:2px solid color-mix(in srgb,var(--text-tiny,#8b93a7) 75%,transparent);
   background:var(--bg-elev,transparent);transition:background .12s,border-color .12s;}
-.msgsel-on .msg-row:hover::before{border-color:var(--th-accent,#3b82f6);}
-.msgsel-on .msg-row.msg-selected::before{background:var(--th-accent,#3b82f6);border-color:var(--th-accent,#3b82f6);}
+.msgsel-on .msg-row:hover::before{border-color:var(--accent,#3b82f6);}
+.msgsel-on .msg-row.msg-selected::before{background:var(--accent,#3b82f6);border-color:var(--accent,#3b82f6);}
 .msgsel-on .msg-row.msg-selected::after{content:'✓';position:absolute;left:6px;top:50%;margin-top:-10px;
   width:20px;height:20px;display:flex;align-items:center;justify-content:center;
   color:#fff;font-size:13px;font-weight:700;line-height:1;pointer-events:none;}
 .msgsel-bar{position:fixed;left:50%;transform:translateX(-50%);bottom:84px;z-index:9998;
   display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;
-  background:var(--card-bg,#1c1d22);border:1px solid var(--card-bd,rgba(255,255,255,.1));
-  border-radius:12px;padding:8px 12px;box-shadow:0 8px 28px rgba(0,0,0,.4);
-  font-size:12.5px;color:var(--text-main,#e5e7eb);max-width:min(92vw,560px);}
-.msgsel-bar .msb-btn{background:transparent;border:1px solid var(--card-bd,rgba(255,255,255,.18));
+  background:var(--bg-elev,#fff);border:1px solid var(--border,#e5e7eb);
+  border-radius:12px;padding:8px 12px;box-shadow:0 8px 28px rgba(15,23,42,.2);
+  font-size:12.5px;color:var(--text-main,#111827);max-width:min(92vw,560px);}
+.msgsel-bar .msb-btn{background:transparent;border:1px solid var(--btn-border,#d1d5db);
   color:inherit;border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer;white-space:nowrap;}
-.msgsel-bar .msb-btn:hover{background:var(--th-hover,rgba(255,255,255,.07));}
-.msgsel-bar .msb-btn.danger{color:var(--tk-danger-ink,#f87171);
-  border-color:color-mix(in srgb, var(--tk-danger-ink,#f87171) 40%, transparent);}
+.msgsel-bar .msb-btn:hover{background:var(--bg-soft,#f8fafc);}
+.msgsel-bar .msb-btn.danger{color:var(--tk-danger-ink,#b91c1c);
+  border-color:color-mix(in srgb, var(--tk-danger-ink,#b91c1c) 40%, transparent);}
 .msgsel-bar .msb-btn:disabled{opacity:.4;cursor:not-allowed;}
 
 /* ── 消息管理 P2（2026-08-17）：回收站弹层 + 多选快捷键提示 ─────────────── */
@@ -2906,14 +3167,14 @@ html[data-ws-embed="1"] body.adk-on .inbox-root{height:100%;}
 .mo-rc-sub{flex-basis:100%;font-size:11.5px;color:var(--text-sub,#64748b);line-height:1.5;}
 .mo-rc-x{border:none;background:transparent;color:var(--text-sub,#64748b);font-size:16px;line-height:1;cursor:pointer;padding:2px 6px;flex:none;}
 .mo-rc-list{flex:1;overflow-y:auto;padding:6px 10px;min-height:80px;}
-.mo-rc-row{display:flex;align-items:flex-start;gap:8px;padding:8px 6px;border-bottom:1px solid var(--line-soft,#f1f5f9);}
+.mo-rc-row{display:flex;align-items:flex-start;gap:8px;padding:8px 6px;border-bottom:1px solid var(--border,#f1f5f9);}
 .mo-rc-row:last-child{border-bottom:none;}
 .mo-rc-dir{flex:none;font-size:10.5px;font-weight:600;border-radius:5px;padding:1px 6px;margin-top:2px;background:var(--bg-soft,#f1f5f9);color:var(--text-sub,#64748b);}
 .mo-rc-dir.out{background:color-mix(in srgb,var(--accent,#1e8cf2) 14%,transparent);color:var(--tk-brand,#1e8cf2);}
 .mo-rc-body{flex:1;min-width:0;}
 .mo-rc-txt{font-size:12.5px;line-height:1.5;color:var(--text-main,#111);word-break:break-word;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
 .mo-rc-meta{font-size:11px;color:var(--text-tiny,#94a3b8);margin-top:2px;}
-.mo-rc-btn{flex:none;border:1px solid var(--btn-border,#d8dee9);background:var(--bg-soft,#f8fafc);color:var(--text-med,#334155);border-radius:7px;padding:3px 10px;font-size:12px;font-weight:600;cursor:pointer;}
+.mo-rc-btn{flex:none;border:1px solid var(--btn-border,#d8dee9);background:var(--bg-soft,#f8fafc);color:var(--text-main,#334155);border-radius:7px;padding:3px 10px;font-size:12px;font-weight:600;cursor:pointer;}
 .mo-rc-btn:hover{border-color:var(--accent,#1e8cf2);color:var(--tk-brand,#1e8cf2);}
 .mo-rc-btn:disabled{opacity:.5;cursor:default;}
 .mo-rc-btn.all{width:100%;padding:7px 10px;}
@@ -3026,9 +3287,14 @@ html[data-ws-embed="1"] body.adk-on .inbox-root{height:100%;}
 .ws-cp-float.cp-empty .ws-cp-float-bd{display:none;}
 .ws-cp-float.cp-flash{animation:cp-float-flash .9s ease-out;}
 @keyframes cp-float-flash{0%{box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 70%,transparent),0 18px 50px rgba(0,0,0,.28);}100%{box-shadow:0 18px 50px rgba(0,0,0,.28);}}
+/* P1 撕出扩展（2026-08-17）：拖近右栏出「吸附收回」目标区——窗描边高亮 + 侧栏虚线框 */
+.ws-cp-float.cp-dock-near{box-shadow:0 0 0 2px var(--accent),0 18px 50px rgba(0,0,0,.28);}
+.ws-cp-dock-zone{position:fixed;z-index:63;border:2px dashed color-mix(in srgb,var(--accent) 55%,transparent);background:color-mix(in srgb,var(--accent) 8%,transparent);border-radius:12px;pointer-events:none;}
 /* 卡头撕出按钮：常态隐形，悬停卡头才现（低频动作不占常驻视觉位） */
 .cp-tear-btn{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:6px;color:var(--text-tiny);opacity:0;flex:0 0 auto;transition:opacity .12s,color .12s;}
 .cp-card-hd:hover .cp-tear-btn,.cp-tear-btn:focus-visible{opacity:.8;}
+/* 一次性提示期临时显影（_cpMaybeTearTip 加类 4.6s）：不教一次没人知道悬停才显影的按钮存在 */
+.info-sidebar.cp-tear-reveal .cp-tear-btn{opacity:.8;}
 .cp-tear-btn:hover{color:var(--accent);opacity:1;}
 /* 原位回收 chip：虚线框提示「卡片去了哪、怎么回来」 */
 .cp-tear-ph{display:flex;align-items:center;gap:6px;margin-bottom:10px;padding:8px 10px;border:1px dashed var(--border);border-radius:10px;font-size:11.5px;color:var(--text-sub);cursor:pointer;transition:border-color .15s,color .15s;}
@@ -3078,3 +3344,159 @@ html[data-ws-embed="1"] body.adk-on .inbox-root{height:100%;}
   .info-sidebar{position:absolute;inset:0;z-index:6;}
   .info-sidebar.mode-rail,.info-sidebar.mode-hidden{width:100% !important;}
 }
+
+/* ===== Account Dock P5（2026-08-17）：「历史 N」治理面板 =====
+   dock「历史 N」chip 点击弹出的历史账号管理面板：视觉与 .ac-pick-pop / .adk-hv 同族
+   （同 bg/border/阴影 token，明暗自适配）；状态色走 --tk-*-ink 语义 token；
+   窄屏(≤640px)转底部抽屉（bottom:64px 让位移动平台条，与筛选抽屉同约定）。 */
+.adk-hist-pop{position:fixed;z-index:9999;width:336px;max-height:430px;display:flex;flex-direction:column;
+  background:var(--bg-panel);border:1px solid var(--border);border-radius:12px;
+  box-shadow:0 12px 32px rgba(0,0,0,.20);overflow:hidden;animation:ahpIn .14s ease-out;}
+@keyframes ahpIn{from{opacity:0;transform:translateY(-4px);}to{opacity:1;transform:none;}}
+.ahp-head{display:flex;align-items:center;gap:8px;padding:10px 12px 8px;border-bottom:1px solid var(--border);flex:none;}
+.ahp-title{font-size:12.5px;font-weight:700;color:var(--text-main);display:inline-flex;align-items:center;gap:6px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ahp-n{font-size:10.5px;font-weight:600;color:var(--text-sub);background:var(--bg-soft);border-radius:999px;padding:1px 7px;flex:none;}
+.ahp-bulks{margin-left:auto;display:inline-flex;gap:6px;flex:none;}
+.ahp-bulk{border:1px solid var(--border);background:transparent;color:var(--text-sub);font-size:11px;
+  border-radius:999px;padding:3px 9px;cursor:pointer;line-height:1.3;}
+.ahp-bulk:hover{background:var(--bg-soft);color:var(--text-main);}
+.ahp-bulk.warn{color:var(--tk-amber-ink,#d97706);border-color:color-mix(in srgb,var(--tk-amber-ink,#d97706) 40%,transparent);}
+.ahp-rows{overflow-y:auto;padding:4px 6px;flex:1 1 auto;min-height:0;}
+.ahp-row{display:flex;align-items:center;gap:9px;padding:7px 6px;border-radius:9px;}
+.ahp-row:hover{background:var(--bg-soft);}
+.ahp-row .acct-av{flex:none;}
+.ahp-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.ahp-name{display:flex;align-items:center;gap:6px;min-width:0;}
+.ahp-nm{font-size:12.5px;font-weight:600;color:var(--text-main);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ahp-tag{flex:none;font-size:10px;line-height:1;padding:3px 6px;border-radius:999px;border:1px solid var(--border);color:var(--text-sub);}
+.ahp-tag.out{color:var(--tk-amber-ink,#d97706);border-color:color-mix(in srgb,var(--tk-amber-ink,#d97706) 45%,transparent);background:color-mix(in srgb,var(--tk-amber-ink,#d97706) 10%,transparent);}
+.ahp-tag.removed{color:var(--text-sub);background:var(--bg-soft);}
+.ahp-tag.reg{color:var(--tk-ok-ink,#0f766e);border-color:color-mix(in srgb,var(--tk-ok-ink,#0f766e) 40%,transparent);}
+.ahp-meta{font-size:10.5px;color:var(--text-sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ahp-row .ac-unread{flex:none;background:color-mix(in srgb,var(--text-sub,#64748b) 82%,transparent);color:#fff;border-radius:999px;font-size:10px;padding:0 5px;min-width:16px;text-align:center;line-height:15px;font-variant-numeric:tabular-nums;}
+.ahp-cta{flex:none;display:inline-flex;align-items:center;gap:4px;border-radius:8px;font-size:11px;line-height:1.2;
+  padding:5px 9px;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text-main);}
+.ahp-cta:hover{background:var(--bg-soft);}
+.ahp-cta.relogin{color:#fff;background:var(--tk-amber-ink,#d97706);border-color:transparent;}
+.ahp-cta.relogin:hover{filter:brightness(1.08);background:var(--tk-amber-ink,#d97706);}
+.ahp-cta.restore{color:var(--accent,#6b8af8);border-color:color-mix(in srgb,var(--accent,#6b8af8) 45%,transparent);}
+.ahp-more{flex:none;width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;
+  border-radius:8px;border:1px solid transparent;background:transparent;color:var(--text-sub);cursor:pointer;}
+.ahp-more:hover{background:var(--bg-soft);border-color:var(--border);color:var(--text-main);}
+.ahp-empty{padding:18px 10px;text-align:center;font-size:12px;color:var(--text-sub);}
+.ahp-foot{display:flex;align-items:center;gap:8px;padding:7px 12px;border-top:1px solid var(--border);flex:none;}
+.ahp-hint{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;color:var(--text-sub);min-width:0;}
+.ahp-hint svg{flex:none;}
+.ahp-pin{margin-left:auto;flex:none;border:none;background:transparent;color:var(--accent,#6b8af8);font-size:11px;cursor:pointer;padding:2px 4px;border-radius:6px;white-space:nowrap;}
+.ahp-pin:hover{background:var(--bg-soft);}
+.ahp-pin.ghost{margin-left:0;color:var(--text-sub);}
+.ahp-pin.ghost:hover{color:var(--text-main);}
+/* dock chip 悬停 ⋯：默认藏，hover/focus/active 显；紧凑档只给当前选中；触屏常显 */
+.adk-more{flex:none;width:22px;height:22px;display:none;align-items:center;justify-content:center;
+  border:none;background:transparent;border-radius:6px;color:var(--text-sub);cursor:pointer;padding:0;margin-left:-2px;}
+.adk-item:hover .adk-more,.adk-item:focus-within .adk-more,.adk-item.active .adk-more{display:inline-flex;}
+.adk-more:hover{background:var(--bg-hover,var(--bg-soft));color:var(--text-main);}
+.acct-dock.adk-tight .adk-item:not(.active) .adk-more{display:none;}
+@media (hover:none){
+  .adk-item .adk-more{display:inline-flex;}
+  .acct-dock.adk-tight .adk-item:not(.active) .adk-more{display:none;}
+}
+/* 危险确认框「先导出备份」第三键：靠左与 取消/确认 隔开（_appConfirm altText） */
+.app-confirm-acts .app-confirm-btn.alt{margin-right:auto;}
+@media (max-width:640px){
+  .adk-hist-pop{left:8px!important;right:8px;width:auto;top:auto!important;bottom:64px;max-height:min(58vh,440px);}
+}
+@media (prefers-reduced-motion:reduce){
+  .adk-hist-pop{animation:none;}
+}
+
+/* P1 2026-08-20：会话顶栏群/频道只读资料条（不进列表 header 密度账本） */
+.group-thread-bar{display:flex;align-items:center;gap:8px;min-height:28px;padding:2px 12px 2px 14px;
+  border-bottom:1px solid var(--border);background:var(--bg-soft);flex:none;}
+.group-thread-bar[hidden],.gtb-list[hidden]{display:none!important;}
+.gtb-main{display:inline-flex;align-items:center;gap:6px;border:none;background:transparent;padding:0;
+  cursor:pointer;color:var(--text-sub);font-size:12px;min-width:0;font-family:inherit;}
+.gtb-main:hover .gtb-kind,.gtb-main:hover .gtb-n{color:var(--text-main);}
+.gtb-kind{font-weight:700;letter-spacing:.2px;color:var(--text-sub);flex:none;}
+.gtb-discs{display:inline-flex;align-items:center;flex:none;}
+.gtb-discs .gtb-disc{margin-left:-4px;border:1.5px solid var(--bg-soft);}
+.gtb-discs .gtb-disc:first-child{margin-left:0;}
+.gtb-disc{width:18px;height:18px;border-radius:50%;color:#fff;font-size:10px;font-weight:800;
+  display:inline-flex;align-items:center;justify-content:center;flex:none;line-height:18px;letter-spacing:0;}
+.gtb-n{font-size:11px;color:var(--text-tiny);white-space:nowrap;}
+.gtb-caret{font-size:10px;color:var(--text-tiny);flex:none;}
+.gtb-hint{margin-left:auto;font-size:11px;color:var(--text-tiny);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;max-width:46%;}
+.gtb-list{flex:none;max-height:176px;overflow-y:auto;border-bottom:1px solid var(--border);
+  background:var(--bg);padding:4px 12px 8px;}
+.gtb-row{display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:12px;color:var(--text-main);}
+.gtb-nm{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.gtb-sub{font-size:11px;color:var(--text-tiny);flex:none;}
+.gtb-more{font-size:11px;color:var(--text-tiny);padding:4px 2px;}
+
+/* IM 范式（实施49 P0-1，2026-08-20）：列表底部「已归档 N 条」去处条。
+   全部走 token（明暗自适配，不写死一片灰）；常态低调、悬停才亮，绝不与会话行争视觉。 */
+.conv-arch-foot{display:flex;align-items:center;gap:7px;margin:4px 8px 10px;padding:7px 10px;
+  border:1px dashed var(--border);border-radius:9px;background:transparent;cursor:pointer;
+  font-size:11.5px;color:var(--text-tiny);user-select:none;transition:color .15s,border-color .15s,background .15s;}
+.conv-arch-foot:hover{color:var(--text-sub);border-color:color-mix(in srgb,var(--accent,#1e8cf2) 45%,transparent);
+  background:color-mix(in srgb,var(--accent,#1e8cf2) 6%,transparent);}
+.conv-arch-foot:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
+.conv-arch-foot .caf-ic{display:inline-flex;align-items:center;flex:none;}
+.conv-arch-foot .caf-txt{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.conv-arch-foot .caf-go{margin-left:auto;flex:none;color:var(--accent,#1e8cf2);font-weight:600;}
+
+/* 当前会话钉住（实施49 P0-1）：被补回列表的那一行——它不属于当前筛选口径，
+   用虚线左沿 + 轻微降饱和标出「特意为你留着的」，同时保证选中态高亮仍压得住
+   （selected 的背景/左沿在后面的更高特异度规则里，这里只补虚线与透明度）。 */
+.conv-item.conv-pinned-out{border-left:2px dashed color-mix(in srgb,var(--accent,#1e8cf2) 55%,transparent);}
+.conv-item.conv-pinned-out:not(.selected){opacity:.82;}
+.conv-item.conv-pinned-out:not(.selected):hover{opacity:1;}
+
+/* ── P1 空态美化（2026-08-23）：零值 KPI 弱化 ─────────────────────────────
+   空态「今日概览」四卡此前 0 与 95 同字号同浓度抢视线（内测截图观感=「没开张」）。
+   is-zero 由 _updateTodayStrip 按实时数字打/摘：语义底色转中性、数字降灰、角标
+   图标压淡；非零卡维持原有语义色=视线自然落在「有活」的卡上。追加在文件尾＝
+   同特异度后者胜，稳压前文 .new/.wait/.done 底色与暗色块的覆写。 */
+.chat-empty .today-stat.is-zero,
+.chat-empty .today-stat.new.is-zero,
+.chat-empty .today-stat.wait.is-zero,
+.chat-empty .today-stat.done.is-zero{background:var(--bg-soft);}
+.chat-empty .today-stat.is-zero .ts-num{color:var(--text-sub);font-weight:700;}
+.chat-empty .today-stat.is-zero .ts-lbl{color:var(--text-tiny);}
+.chat-empty .today-stat.is-zero .ts-ic{opacity:.22;}
+:root[data-cp-theme="dark"] .chat-empty .today-stat.is-zero{background:rgba(148,163,184,.07);}
+
+/* ── 未读可信化 v2 + 标签编辑弹层（2026-08-23）──────────────────────────────
+   ① ph-dot：灰徽标回归本意——只在「历史未回流」占位会话上显示，且降为无数字
+      小圆点（数字徽标只留给真·新入站，消灭「已读后灰数字回弹」的观感）；
+   ② tage-*：会话标签编辑弹层（复用 tlm 弹层骨架），摘除按钮 ≥24px 点击目标；
+   ③ 行内标签 chip 可点（打开编辑弹层）+ 筛选条尾部 ⚙ 管理入口；
+   ④ 会话头标签 × 扩大命中区（原 10px 图标裸奔，实际点不中）。 */
+.unread-dot.synced.ph-dot{min-width:9px;width:9px;height:9px;padding:0;border-radius:50%;font-size:0;line-height:0;}
+.conv-tag-chip{cursor:pointer;}
+.tag-strip-gear{padding:3px 8px;opacity:.7;font-size:12px;line-height:1;}
+.tag-strip-gear:hover{opacity:1;}
+.hdr-tag-chip .remove-tag{padding:4px;margin:-3px -2px -3px 0;display:inline-flex;align-items:center;border-radius:6px;}
+.tage-chips{display:flex;flex-wrap:wrap;gap:6px;padding:10px 0 8px;min-height:34px;}
+.tage-chip{font-size:12px;padding:4px 4px 4px 10px;cursor:default;}
+.tage-rm{border:0;background:transparent;color:inherit;cursor:pointer;opacity:.65;padding:0;margin-left:2px;min-width:24px;min-height:24px;display:inline-flex;align-items:center;justify-content:center;border-radius:8px;}
+.tage-rm:hover{opacity:1;color:var(--tk-danger,#e11d48);background:rgba(225,29,72,.10);}
+.tage-empty{font-size:12px;color:var(--text-sub);padding:6px 2px 2px;}
+.tage-sug{top:100%;left:0;right:0;}
+
+/* ── P2 徽标层级（2026-08-23）─────────────────────────────────────────────
+   模式徽标（AI/审/手/我）降一档视觉强度：行上唯一该抢眼的数字是未读计数——
+   此前 h-ai 与未读蓝点同色相同浓度，视觉上黏成「AI 1」（内测截图观感）。
+   只降底/描边浓度，不动文字色与色相语义（驾驶舱「谁在开车」三色保留，
+   对比度地板不受影响）。追加在文件尾＝同特异度后者胜。 */
+.conv-handler{font-weight:700;opacity:.88;}
+.conv-handler.h-ai{border-color:color-mix(in srgb, var(--accent,#1e8cf2) 26%, transparent);background:color-mix(in srgb, var(--accent,#1e8cf2) 6%, transparent);}
+.conv-handler.h-review{border-color:rgba(245,158,11,.30);background:rgba(245,158,11,.08);}
+.conv-handler.h-me{border-color:rgba(16,185,129,.30);background:rgba(16,185,129,.07);}
+/* 未读徽标出现时单次轻脉冲（新消息「到达感」，也让合法刷新不再像抖动）；
+   灰色占位点不脉冲；reduced-motion 一律关。 */
+@keyframes unreadPop{0%{transform:scale(.55);opacity:.35;}70%{transform:scale(1.06);}100%{transform:scale(1);opacity:1;}}
+.unread-dot{animation:unreadPop .26s ease-out;}
+.unread-dot.synced{animation:none;}
+@media (prefers-reduced-motion: reduce){.unread-dot{animation:none;}}

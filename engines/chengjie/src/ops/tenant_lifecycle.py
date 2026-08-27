@@ -23,6 +23,7 @@ overlay、登记 stack.json——刻意止步于「不拉起、不签发、不�
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil

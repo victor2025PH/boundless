@@ -8,8 +8,12 @@
   S3  GET /api/stickers/packs —— starter-faces 应有 10 张、LINE 包应在列；
   S4  拉一张 starter 贴纸的 /static URL 验 **magic bytes**（RIFF/WEBP）——
       媒体产物验证纪律：HTTP 200 / 体积 KB 数不构成内容验证。
+  S5  WA 边车 /health caps.sticker（仅信息：false=Node 还没升级，WA 回退图片）。
+  S6  （``--send`` 显式开）真发一张 starter 贴纸到 TG **收藏消息**验证端到端
+      （chat_key 钉死 'me' 只发给账号自己；核对 sent_as=sticker + 观测计数入账）。
 
-副作用：仅 S2 的幂等播种（官方包本来就要播）；不发送任何消息。
+副作用：S2 的幂等播种（官方包本来就要播）；默认**不发送任何消息**，
+仅 ``--send`` 时真发一条到自己的收藏消息。
 WhatsApp 原生贴纸另有前置：Node 边车（whatsapp-baileys）需重启到带
 caps.sticker 的版本，否则 send-sticker 自动回退图片（sent_as=image，不算坏）。
 
@@ -55,6 +59,11 @@ def main() -> int:
     ap.add_argument("--data-root", default=DEFAULT_DATA_ROOT)
     ap.add_argument("--strict", action="store_true",
                     help="路由未装载/flag 关也算 FAIL（重启窗验收模式）")
+    ap.add_argument("--send", action="store_true",
+                    help="S6：真发一张 starter 贴纸到 TG **收藏消息**"
+                         "（chat_key 钉死 'me'，只发给账号自己）验证端到端")
+    ap.add_argument("--account", default="",
+                    help="S6 指定账号 id（跳过自动发现；排障隔离用）")
     args = ap.parse_args()
 
     import requests
@@ -154,6 +163,51 @@ def main() -> int:
               + ("" if cap else "（Node 边车待低峰重启后 WA 才走原生贴纸）"))
     except Exception as ex:  # noqa: BLE001
         print(f"  [INFO] 边车不可达/未配置（WA 发贴纸将回退图片）: {ex}")
+
+    if args.send:
+        print("== S6 真发验收（TG 收藏消息，只发给账号自己）==")
+        # 账号自动发现：'default' 不是受管协议账号（owns_media 要确切 id）——
+        # 从会话列表收集 telegram 账号，逐个探 send-caps 找 can_media 的
+        # （smoke_voice_reuse S1.5 同款纪律）。
+        acct = str(args.account or "")
+        cand: list = [acct] if acct else []
+        if not acct:
+            ch = sess.get(args.base + "/api/unified-inbox/chats"
+                          "?platform=telegram&limit=60", timeout=15).json()
+            rows = ch.get("chats") or ch.get("conversations") or []
+            for r0 in rows:
+                a = str((r0 or {}).get("account_id") or "")
+                if a and a not in cand:
+                    cand.append(a)
+            for a in cand[:8]:
+                cap = sess.get(args.base + "/api/unified-inbox/send-caps",
+                               params={"platform": "telegram",
+                                       "account_id": a},
+                               timeout=10).json()
+                if cap.get("can_media"):
+                    acct = a
+                    break
+        if check("S6 找到可发媒体的协议账号", bool(acct),
+                 f"candidates={cand[:8]} picked={acct}") and file_items:
+            import time as _t
+            sid = str(file_items[0].get("id") or "")
+            r = sess.post(
+                args.base + "/api/unified-inbox/send-sticker",
+                json={"platform": "telegram", "account_id": acct,
+                      "chat_key": "me", "sticker_id": sid,
+                      "client_msg_id": f"stk-smoke-{int(_t.time())}"},
+                headers=csrf_headers(), timeout=60)
+            d = r.json() if r.headers.get("content-type", "").startswith(
+                "application/json") else {}
+            check("S6 发送成功且 sent_as=sticker",
+                  r.status_code == 200 and d.get("ok")
+                  and d.get("sent_as") == "sticker",
+                  f"http={r.status_code} resp={str(d)[:160]}")
+            m = sess.get(args.base + "/api/workspace/metrics",
+                         timeout=15).json()
+            stk_m = (m or {}).get("stickers") or {}
+            check("S6 观测计数已入账（sends>=1）",
+                  int(stk_m.get("sends") or 0) >= 1, f"stats={stk_m}")
 
     n_fail = len(fails)
     print(f"\n== 冒烟结果: {'FAIL ' + str(fails) if n_fail else 'ALL PASS'} ==")

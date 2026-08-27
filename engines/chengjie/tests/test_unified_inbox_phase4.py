@@ -80,7 +80,10 @@ def test_templates_merges_workspace_and_messenger():
     labels = {t["label"] for t in data["templates"]}
     assert "WS" in labels
     assert "MS" in labels
-    assert "greeting" in labels
+    # P0 治理（2026-08-18）：templates.yaml 的机器键名不再裸奔给坐席——显示名走
+    # tp_nm_* 词条（与后台「话术模板」页同一套叫法），zh 默认语言下 greeting → 问候语。
+    assert "greeting" not in labels
+    assert "问候语" in labels
 
 
 def test_kb_search_returns_entries():

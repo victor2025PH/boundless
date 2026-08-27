@@ -286,10 +286,12 @@ def test_translation_service_rebind_ai_client():
 
 class TestFrontendWiring:
     def test_workspace_base_guide_bar(self):
+        # 实施75 batch2：引导横幅退役顶部，改右下卡片提示（去配置/先不管）
         src = (REPO / "src" / "web" / "templates" / "workspace_base.html").read_text(encoding="utf-8")
-        assert 'id="ws-aiguide"' in src
+        assert 'id="ws-aiguide"' not in src, "AI 配置引导横幅不得回归顶部（实施75）"
         assert "ai_key_missing" in src
-        assert "function _wsAiGuideDismiss()" in src  # 顶层声明 = window 可达
+        assert "dedupKey:'aiguide'" in src, "引导提示的每日一次去重键被删"
+        assert "ws_aiguide_dismissed" in src, "「先不管」永久免扰键被删"
         assert "/workspace/setup#ai" in src
 
     def test_page_ctx_exposes_ai_key_missing(self):

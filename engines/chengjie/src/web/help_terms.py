@@ -303,6 +303,22 @@ HELP_TERMS: dict = {
         "usage": "关注未处理事件 → 查看上下文 → 标记处理结果",
         "usage_en": "Watch unhandled events → inspect context → mark the outcome"
     },
+    "nav_voice_eval": {
+        "zh": "声音评测",
+        "en": "Voice Eval",
+        "desc": "试听每个人设的克隆声（直念/拟人化/慢速多版本对比），打分并决定保留、修正或替换",
+        "desc_en": "Audition each persona's cloned voice (verbatim / humanized / slow variants), rate and decide keep, fix or replace",
+        "usage": "逐人设试听 → 打星+判定 → 需替换的在候选区选新音色",
+        "usage_en": "Audition per persona → star + verdict → pick a replacement candidate where needed"
+    },
+    "nav_singing": {
+        "zh": "歌房",
+        "en": "Song Studio",
+        "desc": "人设清唱能力管理：开关与频控护栏、每人设备货试听、曲库启停与声库锚定音",
+        "desc_en": "Manage persona singing: switches and rate guardrails, per-persona stock audition, songbook toggles and voice anchors",
+        "usage": "开总闸 → 备货矩阵逐条试听 → 曲库启停曲目（补货走 song_factory 命令行）",
+        "usage_en": "Enable the master switch → audition the stock matrix → toggle songs (restock via the song_factory CLI)"
+    },
     "nav_care": {
         "zh": "主动关怀",
         "en": "Proactive Care",

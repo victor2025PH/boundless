@@ -179,6 +179,8 @@ def main(argv=None) -> int:
                     help="抽取召回率 PASS 阈值(--memory-extract)")
     ap.add_argument("--extract-max-fp", type=int, default=0,
                     help="允许的最大误抽数(--memory-extract)")
+    ap.add_argument("--assistant-qa", action="store_true",
+                    help="小智产品问答检索评测（BM25 命中率，确定性无需 LLM）")
     ap.add_argument("--persona", action="store_true",
                     help="人设一致性评测（persona_guard 违规召回 + 误伤）")
     ap.add_argument("--emotion", action="store_true",
@@ -402,6 +404,26 @@ def main(argv=None) -> int:
         else:
             print(format_confidence_report(report))
         return 0 if report["passed"] else 1
+
+    if args.assistant_qa:
+        # 语料从代码构建（随包发货的那份），不读线上库——见模块 docstring
+        from src.eval.assistant_qa_eval import (
+            evaluate_assistant_qa,
+            format_report as format_asb_report,
+            targets as asb_targets,
+        )
+
+        res = evaluate_assistant_qa()
+        t = asb_targets()
+        passed = (res["topk_rate"] >= t["topk"] and res["top1_rate"] >= t["top1"])
+        if args.json:
+            print(json.dumps({**res, "targets": t, "passed": passed},
+                             ensure_ascii=False, indent=2))
+        else:
+            print(format_asb_report(res))
+            print(f"  判定：{'PASS' if passed else 'FAIL'}"
+                  f"（下限 top{res['top_k']}≥{t['topk']:.0%} / top1≥{t['top1']:.0%}）")
+        return 0 if passed else 1
 
     if args.persona:
         samples = load_persona_samples(args.dataset or "config/eval/persona_samples.yaml")

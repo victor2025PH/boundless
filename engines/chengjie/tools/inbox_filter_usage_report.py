@@ -51,8 +51,12 @@ if str(_ENGINE_ROOT) not in sys.path:
 from scripts._data_root import resolve_data_roots  # noqa: E402
 
 # 全部 iflt_* 埋点的上线日（P0 主行 chips / P1 面板项 / P2 claimed_m / P4 striptag、
-# sort_sel、view_save 同日）。将来若新增分桶，晚于纪元日的动作在判词里单独标注。
+# sort_sel、view_save 同日）。晚于纪元日的新分桶**按问题挂独立纪元**（push(epoch=)），
+# 否则新桶的「零点击」会被全局窗口读成「满窗无人用」——分不清没人用还是还没装。
 IFLT_EPOCH_DAY = "2026-08-11"
+# 群焦点过滤分桶（iflt_gfocus 主行 / iflt_gfocus_m 面板镜像）2026-08-20 上线，
+# 晚于全局纪元 9 天，观测天数必须按自己的纪元算。
+IFLT_GFOCUS_EPOCH_DAY = "2026-08-20"
 DEFAULT_DAYS = 30
 DEFAULT_MIN_DAYS = 14
 DEFAULT_MIN_TOTAL = 20
@@ -142,20 +146,24 @@ def build_verdicts(agg: Dict[str, Any], *, now_day: str,
     out: List[Dict[str, Any]] = []
 
     def push(question: str, actions: List[str],
-             decide: Callable[[int], Tuple[str, str]]) -> None:
+             decide: Callable[[int], Tuple[str, str]], *,
+             epoch: Optional[str] = None) -> None:
+        # epoch=晚于全局纪元上线的分桶专属纪元（观测天数按它算，防「还没装」误读「无人用」）
+        q_epoch = epoch or epoch_day
+        q_obs = observed_days(now_day, q_epoch) if epoch else obs
         total = sum(g(a) for a in actions)
         ev = {a: g(a) for a in actions}
         if broken_chain:
             out.append({"question": question, "status": "insufficient",
-                        "evidence": ev, "eta_days": max(1, min_days - obs) if obs < min_days else None,
+                        "evidence": ev, "eta_days": max(1, min_days - q_obs) if q_obs < min_days else None,
                         "note": "窗口内 iflt_* 全量为 0——先查埋点链"
                                 "（ops.ui_event_trend 开关 / beacon 路由），别急着下裁决"})
             return
-        if obs < min_days:
+        if q_obs < min_days:
             out.append({"question": question, "status": "insufficient",
                         "evidence": ev,
-                        "eta_days": _eta_days(obs, total, min_days, min_total),
-                        "note": f"观测 {obs}/{min_days} 天（埋点纪元 {epoch_day}）"})
+                        "eta_days": _eta_days(q_obs, total, min_days, min_total),
+                        "note": f"观测 {q_obs}/{min_days} 天（埋点纪元 {q_epoch}）"})
             return
         rec, conf = decide(total)
         out.append({"question": question, "status": "ready",
@@ -207,6 +215,32 @@ def build_verdicts(agg: Dict[str, Any], *, now_day: str,
 
     push("面板采用度（背景读数）", ["iflt_more_open", "iflt_sort_recent",
                                     "iflt_sort_urgent", "iflt_sort_unread", "iflt_sort_sel"], _q4)
+
+    # Q5 群焦点过滤「@我/未读」去留（P2 2026-08-20 上线，独立纪元）。
+    # 入口只在群/频道 scope 可见 → 基数天然小于 Q1-Q4：零点击先对照 scope 本身
+    # 用量（iflt_scope_group/channel）再定性——scope 没人进就不是过滤的问题。
+    gf_obs = observed_days(now_day, IFLT_GFOCUS_EPOCH_DAY)
+
+    def _q5(total: int) -> Tuple[str, str]:
+        row, panel = g("iflt_gfocus"), g("iflt_gfocus_m")
+        scope_n = g("iflt_scope_group") + g("iflt_scope_group_m") \
+            + g("iflt_scope_channel") + g("iflt_scope_channel_m")
+        conf = "high" if (total >= min_total or total == 0) else "low"
+        if row == 0 and panel == 0:
+            if scope_n == 0:
+                return (f"{gf_obs} 天零点击但群/频道 scope 本身也零进入（scope {scope_n} 次）"
+                        "——不是过滤的问题，维持现状，先看 scope 推广/群量", conf)
+            return (f"{gf_obs} 天零点击而 scope 有 {scope_n} 次进入——收掉主行 chip，"
+                    "面板镜像保留即可（代码路径零成本）", conf)
+        if row == 0:
+            return (f"撤主行 chip：面板镜像已承接（面板 {panel} 次 vs 主行 0 次）", conf)
+        if row >= 5 and row >= panel:
+            return (f"保留主行 chip：{row} 次真实点击（面板 {panel} 次）；"
+                    "下一步可实验「群量大的坐席默认开」", conf)
+        return (f"保留观察：主行 {row} / 面板 {panel} 次，量小先不动", conf)
+
+    push("群焦点过滤「@我/未读」去留", ["iflt_gfocus", "iflt_gfocus_m"], _q5,
+         epoch=IFLT_GFOCUS_EPOCH_DAY)
     return out
 
 

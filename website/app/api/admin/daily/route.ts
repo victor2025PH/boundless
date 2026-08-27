@@ -58,9 +58,11 @@ export async function POST(req: NextRequest) {
   // 防编造闸：重试后仍命中业绩编造检测的稿子，绝不自动上频道，降级为草稿等人审。
   if (publish && !post.risky && (autoEnv || !notify)) {
     const day = new Date().toISOString().slice(5, 10).replace("-", "");
+    // 频道主推智聊 ChatX（2026-08-21 起）：官网按钮深链下载页，转化路径从「逛官网」缩短为「直接下载」。
+    const site = { sitePath: "/download/chatx", siteLabel: "💬 免费下载 智聊 ChatX" };
     const res = withImage
-      ? await broadcastPhoto({ photo: post.imagePath, caption: post.text, target: publish, withButton: true, campaign: `daily-${day}` })
-      : await broadcastMessage({ text: post.text, target: publish, withButton: true, campaign: `daily-${day}` });
+      ? await broadcastPhoto({ photo: post.imagePath, caption: post.text, target: publish, withButton: true, campaign: `daily-${day}`, ...site })
+      : await broadcastMessage({ text: post.text, target: publish, withButton: true, campaign: `daily-${day}`, ...site });
     if (res.ok) await recordPublish({ kind: "daily", target: publish, summary: post.theme, campaign: `daily-${day}` });
     return NextResponse.json({ ok: res.ok, published: true, theme: post.theme, results: res.results });
   }

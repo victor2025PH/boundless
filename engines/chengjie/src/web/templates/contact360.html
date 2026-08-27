@@ -143,6 +143,10 @@
       <h4>{{ (i18n or {}).get('c3_s023', "渠道身份") }}</h4>
       <div id="c360-ids"></div>
     </div>
+    <div class="c360-sec" id="c360-origin-sec">
+      <h4>🌐 {{ (i18n or {}).get('c3_s044', "跨平台档案") }}</h4>
+      <div id="c360-origin"><span style="color:var(--th-ink-slate4,#5b6b85);font-size:12px;">{{ (i18n or {}).get('dash.loading', "加载中…") }}</span></div>
+    </div>
     <div class="c360-sec">
       <h4>{{ (i18n or {}).get('c3_s024', "合并 / 拆分") }}</h4>
       <input class="c360-search" id="c360-q" placeholder="{{ (i18n or {}).get('c3_s025', '搜索目标客户（名称/ID/号码）后合并…') }}" onkeydown="if(event.key==='Enter')C360.search()">
@@ -227,6 +231,54 @@
 
     // 合并候选
     renderCands(d.candidates||[]);
+    loadOrigin();
+  }
+
+  function renderOrigin(d){
+    var box=document.getElementById('c360-origin');
+    if(!d||!d.ok){ box.innerHTML='<span style="color:var(--th-ink-slate4,#5b6b85);font-size:12px;">'+window.T('draft.net_err')+'</span>'; return; }
+    if(!d.enabled){
+      box.innerHTML='<div style="font-size:12px;color:var(--th-ink-amber8,#92400e);">'+window.T('c3_s045')+'</div>';
+      return;
+    }
+    var prof=d.profile||{};
+    var pill=d.pill||'';
+    var trail=(d.trail||[]).map(function(t){
+      return '<span class="c360-pill">'+esc(t.label||t.channel||'')+'</span>';
+    }).join('');
+    var imp=(d.imports||[]);
+    var impHtml=imp.length?imp.map(function(b){
+      var st=b.status==='revoked'?window.T('c3_s051'):(b.status==='confirmed'?window.T('c3_s051_ok'):esc(b.status||''));
+      var line=esc(b.source_label||b.source_channel||'?')+' · '+esc(b.file_name||'')+' · '
+        +(b.msg_count||0)+window.T('c3_js047')+(b.date_from||'')+(b.date_to?('~'+b.date_to):'');
+      var btn=(b.status==='confirmed'&&b.batch_id)
+        ?'<button class="tiny-btn" style="margin-top:4px;" onclick="C360.revokeImport(\''+esc(b.batch_id)+'\')">'+window.T('c3_s050')+'</button>':'';
+      return '<div class="c360-attr" style="margin-top:6px;border-top:1px dashed var(--th-bd-gray2,#e5e7eb);padding-top:6px;">'
+        +line+' <span style="color:var(--th-ink-slate4,#5b6b85);">('+st+')</span>'+btn+'</div>';
+    }).join(''):('<span style="color:var(--th-ink-slate4,#5b6b85);font-size:12px;">'+window.T('dash.none')+'</span>');
+    var hasProf=prof.origin_channel||prof.origin_label||prof.preferred_name||prof.background_note;
+    var profBlock=hasProf
+      ?('<div class="c360-attr">'+window.T('c3_s046')+': '+esc(prof.origin_channel||'-')+'</div>'
+        +'<div class="c360-attr">'+window.T('c3_s047')+': '+esc(prof.origin_label||prof.preferred_name||'-')+'</div>'
+        +'<div class="c360-attr">'+window.T('c3_s048')+': '+esc((prof.background_note||'').slice(0,120)||'-')+'</div>')
+      :('<div style="font-size:12px;color:var(--th-ink-slate4,#5b6b85);margin-bottom:6px;">'+window.T('c3_js046')+'</div>');
+    box.innerHTML=(pill?('<div style="margin-bottom:6px;"><span class="c360-pill warn">'+esc(pill)+'</span></div>'):'')
+      +(trail?('<div style="margin-bottom:6px;">'+trail+'</div>'):'')
+      +profBlock
+      +'<div style="font-size:12px;color:var(--th-ink-gray5,#6b7280);margin:8px 0 4px;">'+window.T('c3_s049')+'</div>'
+      +impHtml
+      +'<details style="margin-top:8px;font-size:11px;color:var(--th-ink-slate4,#5b6b85);"><summary>'+window.T('c3_s053')+'</summary>'
+      +'<pre style="white-space:pre-wrap;margin:6px 0 0;font-size:11px;">'+esc(d.block_preview||'')+'</pre></details>';
+  }
+  function loadOrigin(){
+    apiFetch('/api/workspace/contact/'+encodeURIComponent(CONTACT_ID)+'/origin')
+      .then(function(r){
+        // 特性探测：旧后端（路由未装载）返回 404 → 整卡隐藏，而非报「网络错误」
+        // （模板热更新先于 .py 重启上线的中间态必须自洽）。
+        if(r.status===404){ var s=document.getElementById('c360-origin-sec'); if(s) s.style.display='none'; return null; }
+        return r.json();
+      }).then(function(d){ if(d) renderOrigin(d); })
+      .catch(function(){ renderOrigin(null); });
   }
 
   function toLocalInput(ts){
@@ -323,7 +375,7 @@
     },
     addTask:function(){
       var dueVal=document.getElementById('c360-task-due').value;
-      if(!dueVal){ alert(window.T('c3_js013')); return; }
+      if(!dueVal){ AITRNotify.alert(window.T('c3_js013')); return; }
       var due_at=Math.floor(new Date(dueVal).getTime()/1000);
       var note=document.getElementById('c360-task-note').value;
       apiFetch('/api/workspace/contact/'+encodeURIComponent(CONTACT_ID)+'/follow-up',{method:'POST',
@@ -331,29 +383,29 @@
         body:JSON.stringify({due_at:due_at, note:note})}, {timeoutMs: 60000})
         .then(function(r){return r.json();}).then(function(d){
           if(d.ok){ document.getElementById('c360-task-due').value=''; document.getElementById('c360-task-note').value=''; renderTasks(d.follow_up_tasks||[]); }
-          else{ alert(window.T('c3_js014')+(d.error||'')); }
-        }).catch(function(){ alert(window.T('draft.net_err')); });
+          else{ AITRNotify.alert(window.T('c3_js014')+(d.error||'')); }
+        }).catch(function(){ AITRNotify.alert(window.T('draft.net_err')); });
     },
     doneTask:function(tid){
       apiFetch('/api/workspace/follow-up/'+encodeURIComponent(tid)+'/done',{method:'POST'}, {timeoutMs: 60000})
         .then(function(r){return r.json();}).then(function(d){
-          if(d.ok){ C360.reload(); } else{ alert(window.T('ov_js_op_fail')); }
-        }).catch(function(){ alert(window.T('draft.net_err')); });
+          if(d.ok){ C360.reload(); } else{ AITRNotify.alert(window.T('ov_js_op_fail')); }
+        }).catch(function(){ AITRNotify.alert(window.T('draft.net_err')); });
     },
     snoozeTask:function(tid, days){
       apiFetch('/api/workspace/follow-up/'+encodeURIComponent(tid)+'/snooze',{method:'POST',
         headers:{'Content-Type':'application/json'}, body:JSON.stringify({days:days})}, {timeoutMs: 60000})
         .then(function(r){return r.json();}).then(function(d){
-          if(d.ok){ C360.reload(); } else{ alert(window.T('c3_js015')); }
-        }).catch(function(){ alert(window.T('draft.net_err')); });
+          if(d.ok){ C360.reload(); } else{ AITRNotify.alert(window.T('c3_js015')); }
+        }).catch(function(){ AITRNotify.alert(window.T('draft.net_err')); });
     },
     assignTask:function(tid, who){
       if(!who) return;
       apiFetch('/api/workspace/follow-up/'+encodeURIComponent(tid)+'/assign',{method:'POST',
         headers:{'Content-Type':'application/json'}, body:JSON.stringify({assignee:who})}, {timeoutMs: 60000})
         .then(function(r){return r.json();}).then(function(d){
-          if(d.ok){ C360.reload(); } else{ alert(window.T('c3_js016')); }
-        }).catch(function(){ alert(window.T('draft.net_err')); });
+          if(d.ok){ C360.reload(); } else{ AITRNotify.alert(window.T('c3_js016')); }
+        }).catch(function(){ AITRNotify.alert(window.T('draft.net_err')); });
     },
     reload:function(){ load(); },
     loadMore:function(){
@@ -380,16 +432,29 @@
       apiFetch('/api/workspace/contacts/merge-contact',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({source_contact_id:CONTACT_ID, target_contact_id:targetId})}, {timeoutMs: 60000})
         .then(function(r){return r.json();}).then(function(d){
-          if(d.ok){ location.href='/workspace/contact/'+encodeURIComponent(targetId); }
-          else{ alert(window.T('c3_js018')+(d.error||'')); }
-        }).catch(function(){ alert(window.T('draft.net_err')); });
+          if(d.ok){
+            var mm=d.memory_merge;
+            if(mm&&mm.linked){ AITRNotify.alert(window.T('c3_js048')+(mm.rows_merged||0), 'ok'); }
+            location.href='/workspace/contact/'+encodeURIComponent(targetId);
+          }
+          else{ AITRNotify.alert(window.T('c3_js018')+(d.error||'')); }
+        }).catch(function(){ AITRNotify.alert(window.T('draft.net_err')); });
+    },
+    revokeImport:function(batchId){
+      if(!confirm(window.T('c3_js044'))) return;
+      apiFetch('/api/workspace/origin/import/revoke',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({batch_id:batchId})}, {timeoutMs: 60000})
+        .then(function(r){return r.json();}).then(function(d){
+          if(d.ok){ loadOrigin(); }
+          else{ AITRNotify.alert(window.T('c3_js045')+(d.error||'')); }
+        }).catch(function(){ AITRNotify.alert(window.T('draft.net_err')); });
     },
     split:function(ciId){
       if(!confirm(window.T('c3_js019'))) return;
       apiFetch('/api/workspace/contacts/split',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({ci_id:ciId})}, {timeoutMs: 60000}).then(function(r){return r.json();}).then(function(d){
-          if(d.ok){ load(); } else { alert(window.T('c3_js020')+(d.error||'')); }
-        }).catch(function(){ alert(window.T('draft.net_err')); });
+          if(d.ok){ load(); } else { AITRNotify.alert(window.T('c3_js020')+(d.error||'')); }
+        }).catch(function(){ AITRNotify.alert(window.T('draft.net_err')); });
     }
   };
   // P31：360° 互动时间轴

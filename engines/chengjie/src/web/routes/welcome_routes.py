@@ -216,6 +216,21 @@ def register_welcome_routes(
         applied: List[str] = []
         blocked: List[Dict[str, str]] = []
         warns: List[str] = []
+        # 档位**先写**（B37 死锁修复的写侧，2026-08-22）：deliver 的护栏读全局
+        # 档位判「会不会对任何人真发」——auto_ai 档先落，新装机零会话也能一次
+        # 开成（新会话首条入站 bootstrap 即全自动，真发人群随入站诞生）。
+        mode_path = "inbox.auto_draft.automation_mode"
+        ok, msg = cm.set_overlay_flag(mode_path, _TIER_MODE[tier])
+        if ok:
+            applied.append(mode_path)
+        else:
+            blocked.append({"key": mode_path, "reason": str(msg or "write_failed")})
+        if tier == "auto_ai":
+            ok_b, _msg_b = cm.set_overlay_flag(
+                "inbox.auto_draft.bootstrap_automation_mode", True)
+            if ok_b:
+                applied.append("inbox.auto_draft.bootstrap_automation_mode")
+
         for key, field, value in _TIER_INTENTS[tier]:
             chk = check_toggle(config, modes, key, field, value)
             if not chk.get("allowed"):
@@ -231,12 +246,15 @@ def register_welcome_routes(
             else:
                 blocked.append({"key": key, "reason": str(msg or "write_failed")})
 
-        mode_path = "inbox.auto_draft.automation_mode"
-        ok, msg = cm.set_overlay_flag(mode_path, _TIER_MODE[tier])
-        if ok:
-            applied.append(mode_path)
-        else:
-            blocked.append({"key": mode_path, "reason": str(msg or "write_failed")})
+        # 热接线运行中的 worker（真发当场生效，不等重启）；旧进程如实回报
+        rewire = {"rewired": False, "reason": "not_wired"}
+        _rw = getattr(request.app.state, "autosend_rewire", None)
+        if callable(_rw):
+            try:
+                rewire = dict(_rw() or {})
+            except Exception:
+                logger.debug("[welcome] autosend 热接线失败（忽略）", exc_info=True)
+                rewire = {"rewired": False, "reason": "error"}
 
         actor = ""
         try:
@@ -247,7 +265,7 @@ def register_welcome_routes(
                     tier, actor or "shell", applied,
                     [b["key"] for b in blocked])
         out = {"ok": not blocked, "tier": tier,
-               "applied": applied, "blocked": blocked}
+               "applied": applied, "blocked": blocked, "rewire": rewire}
         if warns:
             out["warns"] = warns
         return out

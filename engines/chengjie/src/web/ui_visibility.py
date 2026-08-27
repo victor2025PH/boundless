@@ -44,10 +44,42 @@ simple=True 的既有哲学一致）：
                   ``tools/cockpit_usage_report.py`` 的观测窗因此中止——重新开启
                   后 ck_* 埋点自然续上，别拿藏起来这段的零点击当「没人用」的证据。
 
+部署形态（flavor，2026-08-20 实施49 P1-6）：布尔键之外还有一个**形态维度**——
+同一份代码既跑内部服务器（117 双实例，运维/开发天天用），也跑客户桌面包
+（skuio 那类最终用户）。客户形态下「实时日志 / 开发者工具」这类运维页出现在
+侧栏只会制造「这是给我用的吗」的困惑（B6 原话：不该对用户开放），而内部部署
+必须原样保留。故：
+
+- ``resolve_ui_flavor(config)`` → ``"client"`` | ``"internal"``；
+- 判定序＝显式配置 ``ui_visibility.flavor``（client/internal，运维可写死）→
+  桌面模式（``AITR_DESKTOP_MODE`` env 或 ``app.desktop_mode``，与
+  ``env_probe._is_desktop_mode`` 同口径）→ 否则 internal（服务器部署零变化）；
+- 消费方＝nav_schema（客户形态剔 logs/developer 导航面）。**藏而不废**：
+  ``/logs`` ``/developer`` 的 URL 与 API 一律不封（开发者页本就有密码闸），
+  内部人员在客户机上仍可直接敲地址进去。
+
+坐席规模（seat_mode，2026-08-20 实施49 P1-6 / 反馈 B13）：第三个维度——**数据**
+驱动而非配置驱动。「认领/释放」是多坐席协作原语（认领＝这个客户我跟，防两个人
+同时回同一个客户）；单人部署里它没有任何对手方，只是每行都杵着的一枚按钮 + 一个
+永远等于「全部」的「我的」筛选（B13 原话：功能导向不明，建议非必须则删）。故：
+
+- ``resolve_seat_mode(config, users)`` → ``"multi"`` | ``"single"``；
+- 判定序＝显式配置 ``ui_visibility.seat_mode``（single/multi，运维可写死）→
+  **可进工作台的启用账号数**（``PAGE_PERMISSIONS["workspace"]`` 的角色集＝
+  master/admin/supervisor/agent；viewer 只读不接管故不算坐席）≥2 → multi；
+- 回落 **multi＝显示**：藏错方向的代价不对称——真团队被藏掉认领会退回「两个人
+  同时回同一个客户」，而单人多看一枚按钮只是噪音。读不到用户表/异常一律 multi。
+- 消费方＝收件箱模板（``ws_multi_seat``：行内快捷认领键 / 「我的」筛选 / 会话卡
+  认领按钮 / 认领轮询与自动续租全部随之熄灭）。**藏而不废**：
+  ``/api/workspace/claim*`` 一律不封，加个第二账号刷新即恢复。
+
 契约：
 - 配置键 ``ui_visibility.{manual_console,group_extract,matrix_nav,group_show,
   team_collab,ai_settings}``，缺省 **False=隐藏**（新子系统默认关约定；开启是
   运营/开发决策，走 /developer 页写 overlay）。
+- ``ui_visibility.flavor`` / ``ui_visibility.seat_mode`` 是**字符串**键，刻意
+  不进 ``UI_VISIBILITY_KEYS`` 布尔家族（``resolve_ui_visibility`` 只搬已知布尔
+  键，不会把它们透传进 ``/api/desktop/ui-flags`` 的 flags 里）。
 - ``resolve_ui_visibility`` 纯函数：任何异常/坏类型回落缺省（fail-hidden——
   这些是内部功能，读不到配置时藏起来比露出来安全）。
 - 消费方：admin.py ``_enrich_context`` 注入模板全局 ``ui_vis``；
@@ -57,6 +89,7 @@ simple=True 的既有哲学一致）：
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict
 
 # 键名 → 中文说明（开发者页与审计日志共用；顺序即 UI 渲染顺序）
@@ -92,3 +125,116 @@ def resolve_ui_visibility(config: Any) -> Dict[str, bool]:
 def is_visible(config: Any, key: str) -> bool:
     """单键便捷判定（路由/模板辅助用）。未知键按隐藏处理。"""
     return bool(resolve_ui_visibility(config).get(key, False))
+
+
+# ── 部署形态 ─────────────────────────────────────────────────────────────────
+FLAVOR_CLIENT = "client"
+FLAVOR_INTERNAL = "internal"
+FLAVOR_KEY = "flavor"
+
+_TRUTHY = ("1", "true", "yes", "on")
+
+
+def _desktop_mode(config: Any) -> bool:
+    """桌面/自包含部署判定。与 ``env_probe._is_desktop_mode`` 同口径（那边是
+    启动期唯一事实源；这里 lazy import，导入失败时按同样两个信号自判，绝不
+    因为一个探测函数把导航渲染带崩）。"""
+    try:
+        from src.bootstrap.env_probe import _is_desktop_mode
+        return bool(_is_desktop_mode(config))
+    except Exception:
+        pass
+    try:
+        if str(os.environ.get("AITR_DESKTOP_MODE") or "").strip().lower() in _TRUTHY:
+            return True
+        app_cfg = (config or {}).get("app") if isinstance(config, dict) else None
+        return bool(isinstance(app_cfg, dict) and app_cfg.get("desktop_mode", False))
+    except Exception:
+        return False
+
+
+def resolve_ui_flavor(config: Any = None) -> str:
+    """部署形态 → ``client`` | ``internal``。纯判定，异常一律回落 internal。
+
+    回落方向刻意与布尔键相反（那边 fail-hidden，这里 fail-**internal**＝不隐藏）：
+    读不到配置时把运维页藏掉会让内部机器突然缺入口，而多显示一个入口对客户只是
+    噪音——两害相权，宁可少藏。
+    """
+    try:
+        section = (config or {}).get(CONFIG_SECTION) if isinstance(config, dict) else None
+        if isinstance(section, dict):
+            raw = str(section.get(FLAVOR_KEY) or "").strip().lower()
+            if raw in (FLAVOR_CLIENT, FLAVOR_INTERNAL):
+                return raw
+        return FLAVOR_CLIENT if _desktop_mode(config) else FLAVOR_INTERNAL
+    except Exception:
+        return FLAVOR_INTERNAL
+
+
+def is_client_flavor(config: Any = None) -> bool:
+    return resolve_ui_flavor(config) == FLAVOR_CLIENT
+
+
+# ── 坐席规模（认领/释放这类协作原语的开关）──────────────────────────────────
+SEAT_MODE_KEY = "seat_mode"
+SEAT_MULTI = "multi"
+SEAT_SINGLE = "single"
+
+# 回落坐席角色集：与 web_user_store.PAGE_PERMISSIONS["workspace"] 同口径
+# （那边是唯一事实源，import 失败才用这份拷贝——导航渲染不能被一次导入异常带崩）。
+_SEAT_ROLES_FALLBACK = frozenset({"master", "admin", "supervisor", "agent"})
+
+
+def _seat_roles() -> frozenset:
+    try:
+        from src.utils.web_user_store import PAGE_PERMISSIONS
+        roles = PAGE_PERMISSIONS.get("workspace")
+        if roles:
+            return frozenset(roles)
+    except Exception:
+        pass
+    return _SEAT_ROLES_FALLBACK
+
+
+def count_seat_accounts(users: Any) -> int:
+    """能进工作台的**启用**账号数。纯函数；坏行跳过而非整体放弃。
+
+    ``users`` ＝ ``WebUserStore.list_users()`` 那样的 dict 序列。判据故意只看
+    「角色能不能进工作台」+「账号是否启用」——viewer 只读不接管（认领对它无意义），
+    停用账号更不是坐席。
+    """
+    roles = _seat_roles()
+    n = 0
+    try:
+        for u in (users or []):
+            if not isinstance(u, dict):
+                continue
+            if str(u.get("role") or "").strip().lower() not in roles:
+                continue
+            enabled = u.get("enabled", 1)
+            # 旧库/异常值一律按启用算（宁可多算一个坐席＝多显示，不误藏协作功能）
+            if enabled in (0, "0", False):
+                continue
+            n += 1
+    except Exception:
+        return 0
+    return n
+
+
+def resolve_seat_mode(config: Any = None, users: Any = None) -> str:
+    """坐席规模 → ``multi`` | ``single``。异常/取不到用户表一律 multi（不误藏）。"""
+    try:
+        section = (config or {}).get(CONFIG_SECTION) if isinstance(config, dict) else None
+        if isinstance(section, dict):
+            raw = str(section.get(SEAT_MODE_KEY) or "").strip().lower()
+            if raw in (SEAT_MULTI, SEAT_SINGLE):
+                return raw
+        if users is None:
+            return SEAT_MULTI
+        return SEAT_SINGLE if count_seat_accounts(users) < 2 else SEAT_MULTI
+    except Exception:
+        return SEAT_MULTI
+
+
+def is_multi_seat(config: Any = None, users: Any = None) -> bool:
+    return resolve_seat_mode(config, users) != SEAT_SINGLE

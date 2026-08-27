@@ -169,6 +169,8 @@ class AIClient(LoggerMixin):
         # 此处先置默认，保证**任何构造路径**下该字段都存在；真实解析放在 fallback 配置
         # 之后（要有 _fb_client 才能校验「声明本地优先却没配本地端点」）。
         self._primary_mode = "cloud"
+        # 老板锁（ai.primary_lock，2026-08-22）：真实解析随 primary 一起在 initialize()
+        self._primary_lock = ""
         # 分级路由默认（真实解析在 initialize()；此处防直构对象缺属性，与熔断器同款）
         self._tiers_enabled = False
         self._tiers_default = "normal"
@@ -487,6 +489,26 @@ class AIClient(LoggerMixin):
                 "ai.primary 非法值 %r（应为 cloud|local|local_only），按 cloud 处理",
                 self._primary_mode)
             self._primary_mode = "cloud"
+        # ── 老板锁 ``ai.primary_lock``（2026-08-22，事故沉淀见 ai_primary_audit 模块头）──
+        # 收口点刻意选「生效点」而非各写入口：手改 overlay / 外部自动化（SSH 改文件）/
+        # 任何绕过治理接口的途径，最终都要经本次解析才能生效——在这里拦=全途径拦。
+        # 锁不凌驾下方「本地端点缺失退 cloud」防变砖护栏（安全 > 治理）。
+        _pa_append = None
+        _lock_cfg_mode = self._primary_mode
+        try:
+            from src.ai.ai_primary_audit import append_event as _pa_append  # noqa: F811
+            from src.ai.ai_primary_audit import resolve_lock as _pa_lock
+            self._primary_lock = _pa_lock(ai_config)
+        except Exception:
+            self._primary_lock = ""
+        _lock_enforced = bool(
+            self._primary_lock and self._primary_mode != self._primary_lock)
+        if _lock_enforced:
+            self.logger.warning(
+                "ai.primary=%s 与 primary_lock=%s 不符 → 按锁强制生效"
+                "（解除需运营在 overlay 显式删改 ai.primary_lock 并知会老板）",
+                _lock_cfg_mode, self._primary_lock)
+            self._primary_mode = self._primary_lock
         if self._primary_mode != "cloud" and not (self._fb_client and self._fb_model):
             self.logger.error(
                 "ai.primary=%s 但 ai.fallback 本地端点未配置（需 enabled+base_url+model），退回 cloud",
@@ -498,6 +520,40 @@ class AIClient(LoggerMixin):
                 self._primary_mode, self._fb_model,
                 "严格隐私：本地失败也不回落云端"
                 if self._primary_mode == "local_only" else "本地失败可回落云端")
+        # 审计 + 回写 + 告警（终态确定后做；全部 best-effort，绝不伤初始化主链）
+        if _lock_enforced:
+            if _pa_append:
+                _pa_append(
+                    "lock_enforced", configured=_lock_cfg_mode,
+                    lock=self._primary_lock, effective=self._primary_mode,
+                    via="ai_client_init")
+            # 回写 overlay 让配置文件回到真话（仅在锁真的落成生效值时写，
+            # 「锁 local* 但端点缺失被安全护栏压回 cloud」的分叉态不回写谎话）
+            if self._primary_mode == self._primary_lock:
+                try:
+                    if hasattr(self.config, "set_overlay_flag"):
+                        self.config.set_overlay_flag("ai.primary", self._primary_lock)
+                        self.logger.info(
+                            "ai.primary 已按锁回写 overlay = %s", self._primary_lock)
+                except Exception:
+                    self.logger.debug("ai.primary 锁回写失败（已忽略）", exc_info=True)
+            try:
+                from src.integrations.shared.event_bus import get_event_bus
+                get_event_bus().publish("ai_primary_guard_alert", {
+                    "kind": "lock_enforced",
+                    "from_mode": _lock_cfg_mode,
+                    "lock": self._primary_lock,
+                    "effective": self._primary_mode,
+                    "rate_key": "ai_primary_guard:lock",
+                })
+            except Exception:
+                pass
+        elif _pa_append and (self._primary_lock or self._primary_mode != "cloud"):
+            # 常规解析留痕（锁在场或非 cloud 档才记——默认云档的海量测试构造不刷台账）
+            _pa_append(
+                "resolve", configured=_lock_cfg_mode,
+                effective=self._primary_mode,
+                lock=self._primary_lock or None, via="ai_client_init")
 
         # 云端 Key 备用池：主 Key 坏了先切备用云 Key（质量与主链同级），全池失败才落本地。
         # 池条目缺省继承主链 base_url/model → 「同厂商备用号」只填 api_key 即可。
@@ -2435,6 +2491,22 @@ class AIClient(LoggerMixin):
                     _dctx: Dict[str, Any] = {"callback_roll": _rnd.random()}
                     _crisis = str((context or {}).get("_wellbeing_crisis_level", "") or "")
                     _dctx["suppress_callbacks"] = _crisis in ("elevated", "severe")
+                    # 实施55「聊过即退役」：生活线素材按会话排除已聊过的；
+                    # 本轮选中的 beat 栈进 context，回复真提及时在
+                    # _update_after_reply 记账（先清残留再按需落键）。
+                    context.pop("_life_beat_current", None)
+                    context.pop("_life_beat_ck", None)
+                    _lb_ck = ""
+                    try:
+                        from src.companion.life_beat_ledger import (
+                            convo_key_from_context as _lb_ckfn,
+                            skip_fn_for as _lb_skipfn,
+                        )
+                        _lb_ck = _lb_ckfn(context)
+                        if _lb_ck:
+                            _dctx["beat_skip_fn"] = _lb_skipfn(_lb_ck)
+                    except Exception:
+                        _lb_ck = ""
                     # C1：当前用户消息作为经历召回的相关性查询（情感×时近×相关加权）
                     _dctx["query_text"] = str(
                         (context or {}).get("_current_user_message_for_lang", "") or "")
@@ -2484,6 +2556,10 @@ class AIClient(LoggerMixin):
                         _p_resolved, now=_dp_now, cfg=_dp_cfg, stage=_p_funnel,
                         deep_ctx=_dctx, imperfection_roll=_rnd.random(),
                     )
+                    _lb_beat = str(_dctx.get("_life_beat_chosen") or "")
+                    if _lb_beat and _lb_ck:
+                        context["_life_beat_current"] = _lb_beat
+                        context["_life_beat_ck"] = _lb_ck
                     if _dp_block:
                         parts.append(_dp_block)
                         if "后来怎么样了" in _dp_block:
@@ -2916,7 +2992,21 @@ class AIClient(LoggerMixin):
                 "whatsapp_rpa": "WhatsApp", "messenger": "Messenger",
                 "messenger_rpa": "Messenger", "line": "LINE", "inbox": "收件箱",
             }.get(_plat, "聊天")
-            if _mdesc:
+            # B117（实施74，0826 _576 实录「贴纸被当娃照评论」）：贴纸/GIF 是
+            # **表达心情**的符号，不是真实生活照片——识图描述只作语义参考，
+            # 指令层硬分流禁照片式评论（问「这是你拍的/这是谁」= 当场穿帮）。
+            _stickerish = _mkind in ("sticker", "animated_sticker", "gif")
+            if _stickerish:
+                _sk_ref = f"参考语义：{_mdesc}\n" if _mdesc else ""
+                prompt_parts.append(
+                    f"【{_plat_label} 媒体消息·{_kind_hint}】对方发了一个表情贴纸/动图"
+                    f"（不是真实照片）。{_sk_ref}"
+                    "回复要求：贴纸=表达心情或态度，回应对方此刻的情绪即可（轻松口语，"
+                    "一两句）；绝不把画面当真实生活照片评论（不问「这是你拍的吗/"
+                    "这是谁/亲戚家的？」这类），不逐字描述画面；拿不准含义就轻接一句，"
+                    "不下断言。"
+                )
+            elif _mdesc:
                 prompt_parts.append(
                     f"【{_plat_label} 媒体消息·{_kind_hint}】系统已识别对方发来的媒体内容如下：\n"
                     f"{_mdesc}\n"
@@ -2929,6 +3019,25 @@ class AIClient(LoggerMixin):
                     "内容暂无法识别。请自然承认收到了，并温和追问对方想表达或想了解什么；"
                     "贴纸/表情宜轻松口语，一两句即可。"
                 )
+        # B104（实施74 三批）生成端第一道：初次对话防编造引用——出稿守卫
+        # （outbound_text_guard.strip_unfounded_recall）是兜底，这里在源头消掉。
+        # 三重保守判据：**必须显式带 _conversation_history 键**（试聊/copilot 等
+        # 不带历史跟踪的流不注入——对老会话谎称「初次」比编造引用更伤）、
+        # 无历史摘要（压缩过=老会话）、无长期记忆。
+        try:
+            _hist_b104 = context.get("_conversation_history")
+            if (isinstance(_hist_b104, list)
+                    and not any(isinstance(m, dict) and m.get("role") == "user"
+                                for m in _hist_b104)
+                    and not context.get("_conversation_summary")
+                    and not str(context.get("_episodic_memory_text") or "").strip()):
+                prompt_parts.append(
+                    "【初次对话】这是你们的第一次交谈，此前没有任何聊天记录："
+                    "绝不编造「你之前说过/上次你提到/如你所说」这类过往引用，"
+                    "也不假装记得对方；把对方当刚认识的人自然开场。"
+                )
+        except Exception:
+            pass
         # 关键信息锚定：置顶，避免长对话截断后丢失（陪聊域不注入通道/订单锚点）
         key_anchor = []
         last_reply = (context.get("last_reply") or "").strip()
@@ -3014,11 +3123,27 @@ class AIClient(LoggerMixin):
         _bazi = (context.get("_bazi_block") or "").strip()
         if _bazi:
             prompt_parts.append(_bazi)
+        # B50（实施64 P1-2）：已知画像硬事实 + 禁复问（skill_manager 每轮注入；
+        # 关键词召回挑不中的恒真身份槽在这里兜底，有块即消费）
+        _known_prof = (context.get("_known_profile_block") or "").strip()
+        if _known_prof:
+            prompt_parts.append(_known_prof)
+        # B52（实施64 P1-2）：人设自述近况衔接（要睡了/去健身…TTL 窗内有块即消费）
+        _self_state = (context.get("_self_state_block") or "").strip()
+        if _self_state:
+            prompt_parts.append(_self_state)
         # 报障群值守（bug_intake）：分类/工单上下文块（skill_manager 注入；
         # 开关与群白名单判定全在注入侧，这里有块即消费——与 _bazi_block 同模式）
         _bug_intake = (context.get("_bug_intake_block") or "").strip()
         if _bug_intake:
             prompt_parts.append(_bug_intake)
+        # 引用上下文（2026-08-20 内测实锤「引用+『分析』」）：对方引用某条消息后
+        # 发言，被引用内容注进提示（telegram_client 恒写键，空串=本轮无引用）。
+        # 刻意走提示位不并正文——正文会进记忆抽取，引用的 AI 旧话会被接地成
+        # 「用户说过」（Phase8 幻觉家族）。
+        _quoted = (context.get("_quoted_note") or "").strip()
+        if _quoted:
+            prompt_parts.append(_quoted)
         # 人设长传记检索（personas.bio_retrieval）：客户追问人设长尾细节时
         # skill_manager 关键词检索命中才注入；开关与预算判定都在注入侧，有块即消费
         _pbio = (context.get("_persona_bio_block") or "").strip()
@@ -3102,11 +3227,22 @@ class AIClient(LoggerMixin):
             except Exception:
                 pass
 
+        # 唱歌协同提示（实施58 P1，与下方发图协同同哲学）：对方在要歌时上游
+        # 判定投递语义（会真唱=本稿只是失败兜底 / 发不出=禁文字假唱与承诺），
+        # 从源头避免 LLM 用文字打歌词冒充唱或空头「我唱给你听」。
+        _song_hint = (context.get("_song_coherence_hint") or "").strip()
+        if _song_hint:
+            prompt_parts.append("【唱歌协同——重要】\n" + _song_hint)
+
         # 媒体协同提示（文图一致性）：上游判定「对方在要图但这轮发不出」或
         # 「草稿只是照片失败时的兜底文本」时注入——从源头避免 LLM 写出
         # 「等我拍/照片来了」这类与实际发送状态矛盾的话（承诺守卫是最后防线，
         # 这里是第一防线）。
         _media_hint = (context.get("_media_coherence_hint") or "").strip()
+        # 悬置常驻提示（实施69）：客户在等一张还没到的图（要图/被承诺过 1-N 轮前）
+        # → 每轮都提醒别承诺/别称已发。独立键，**不**带 [PHOTO 禁令、不阻断
+        # Stage/指令发图——本轮系统真发出图时它说的「只有真发出才带图」依然成立。
+        _pending_hint = (context.get("_media_pending_hint") or "").strip()
         if _media_hint:
             # 上游判定「这轮发不出图」→ 除别承诺外，还要禁 [PHOTO 标记（llm/hybrid
             # 模式下 LLM 可能仍打标记 → 执行层虽有闸门二次拦截，但源头禁掉最干净）。
@@ -3115,40 +3251,47 @@ class AIClient(LoggerMixin):
                 from src.ai.photo_directive import build_photo_deny_line
                 _deny = build_photo_deny_line()
             prompt_parts.append("【发图协同——重要】\n" + _media_hint + _deny)
-        elif _is_companion:
-            # 发图能力有效性（photo_capability SSOT，2026-07-31）：全局 selfie 开
-            # **且当前人设 capabilities.photos 开（默认关）** 才注入发图协议/边界
-            # 声明；能力关 → 注入「无发图能力」硬约束。修旧逻辑倒挂——旧代码在
-            # selfie 未启用时什么都不注入，而最需要「别承诺发图」约束的恰是发不了
-            # 图的形态（试聊实录：「我翻翻手机相册哈」连环空头支票）。
-            from src.companion.photo_capability import (
-                no_photo_constraint,
-                persona_photos_enabled,
-                resolve_prompt_persona,
-            )
-            _persona_photos_on = persona_photos_enabled(
-                resolve_prompt_persona(context))
-            if self._media_capability_hint_enabled() and _persona_photos_on:
-                if self._photo_intent_mode() != "keyword":
-                    # 主动决策协议（2026-07-14 决策权上移）：LLM 读完整上下文自行判断
-                    # 要不要发图 + 发什么场景，正文末行 [PHOTO …] 标记声明；系统解析后
-                    # 真出图（PuLID 锁脸）。根治关键词打地鼠（"发一遍新照片"类漏报）。
-                    from src.ai.photo_directive import build_photo_protocol_prompt
-                    prompt_parts.append(build_photo_protocol_prompt())
-                else:
-                    # keyword 回退模式：旧式被动声明（发图判定完全依赖入站关键词）。
-                    prompt_parts.append(
-                        "【媒体能力边界】需要发照片/语音时由系统自动完成真实发送，"
-                        "你专注文字聊天：不要主动写「我发照片给你」「等我拍一张」"
-                        "「我发条语音」这类承诺；**更不要谎称「已经发了」「发过去了」"
-                        "「发到群里了」「你看看这张」**——你的文字里没有真的附带照片，"
-                        "这样说对方收不到会觉得你在骗人；对方要照片时自然回应即可"
-                        "（系统会处理），也不要否认你能拍照。")
-            elif self._capability_hint_allowed():
-                # 能力关闭（全局 selfie 关 或 人设开关关/无人设）：注入硬边界。
-                # 人设关时人设块已带一句短约束（persona_manager 反向消费），这里的
-                # 详细版并存＝防御纵深（persona_block_detail=none 的部署也有兜底）。
-                prompt_parts.append(no_photo_constraint())
+        else:
+            if _pending_hint:
+                # 与下方发图协议/能力声明**共存**（不互斥）：协议管「怎么真发」，
+                # 悬置提示管「没发出去之前嘴上别越界」。
+                prompt_parts.append("【发图协同——重要】\n" + _pending_hint)
+            if _is_companion:
+                # 发图能力有效性（photo_capability SSOT，2026-07-31）：全局 selfie
+                # 开**且当前人设 capabilities.photos 开（默认关）** 才注入发图协议/
+                # 边界声明；能力关 → 注入「无发图能力」硬约束。修旧逻辑倒挂——旧
+                # 代码在 selfie 未启用时什么都不注入，而最需要「别承诺发图」约束的
+                # 恰是发不了图的形态（试聊实录：「我翻翻手机相册哈」连环空头支票）。
+                from src.companion.photo_capability import (
+                    no_photo_constraint,
+                    persona_photos_enabled,
+                    resolve_prompt_persona,
+                )
+                _persona_photos_on = persona_photos_enabled(
+                    resolve_prompt_persona(context))
+                if self._media_capability_hint_enabled() and _persona_photos_on:
+                    if self._photo_intent_mode() != "keyword":
+                        # 主动决策协议（2026-07-14 决策权上移）：LLM 读完整上下文自行
+                        # 判断要不要发图 + 发什么场景，正文末行 [PHOTO …] 标记声明；
+                        # 系统解析后真出图（PuLID 锁脸）。根治关键词打地鼠。
+                        from src.ai.photo_directive import (
+                            build_photo_protocol_prompt,
+                        )
+                        prompt_parts.append(build_photo_protocol_prompt())
+                    else:
+                        # keyword 回退模式：旧式被动声明（发图判定完全依赖入站关键词）。
+                        prompt_parts.append(
+                            "【媒体能力边界】需要发照片/语音时由系统自动完成真实发送，"
+                            "你专注文字聊天：不要主动写「我发照片给你」「等我拍一张」"
+                            "「我发条语音」这类承诺；**更不要谎称「已经发了」「发过去了」"
+                            "「发到群里了」「你看看这张」**——你的文字里没有真的附带照片，"
+                            "这样说对方收不到会觉得你在骗人；对方要照片时自然回应即可"
+                            "（系统会处理），也不要否认你能拍照。")
+                elif self._capability_hint_allowed():
+                    # 能力关闭（全局 selfie 关 或 人设开关关/无人设）：注入硬边界。
+                    # 人设关时人设块已带一句短约束（persona_manager 反向消费），这里
+                    # 的详细版并存＝防御纵深（persona_block_detail=none 部署也有兜底）。
+                    prompt_parts.append(no_photo_constraint())
 
         # 语音能力（2026-07-20）：开了自动语音（inbox.l2_autosend.voice.enabled）时，明确告诉
         # AI 它能发语音——系统会把回复转成人设声音发出。否则拟人人设会自作主张编「我发不了语音/
@@ -3502,6 +3645,10 @@ class AIClient(LoggerMixin):
                 # 2026-08-08 David Lin 事故硬化：借对方名自称 + 被质疑时报名自证
                 f"**对方的名字永远不是你的名字**——绝不能拿对方的名字自称，"
                 f"也绝不能把「对方的名字＋你的姓氏」拼成一个新名字（那是身份穿帮）。"
+                # B42（2026-08-22 _236 实录「you're not that old, Steven」）：镜像方向
+                # 同样写死——自己的名字砸在客户头上是同级穿帮。
+                f"反过来同样成立：**「{_persona_name}」是你自己，绝不能用它称呼对方**。"
+                f"对对方的称呼只能来自客户资料/对方自报的名字；不知道对方叫什么就不用名字。"
                 f"被质疑「像AI/不像真人」时，不要靠报名字自证真实，放松语气继续聊即可。"
             )
         # 对方身份声明（2026-08-08）：把「对方叫什么」显式钉进 prompt，从源头
@@ -3510,7 +3657,8 @@ class AIClient(LoggerMixin):
         if _peer_disp and _is_companion and _peer_disp != _persona_name:
             prompt_parts.append(
                 f"【对方身份】对方的名字/昵称是「{_peer_disp}」。这是**对方**的名字："
-                f"称呼对方时可以用，但绝不能用它自称或拼进你自己的名字。"
+                f"称呼对方时可以用，但绝不能用它自称或拼进你自己的名字；"
+                f"也绝不能反过来用你自己的名字称呼对方。"
             )
 
         # 回复新鲜感（2026-08-02）：出站口头禅账本超限提示 + 今日话题包。
@@ -4432,6 +4580,8 @@ class AIClient(LoggerMixin):
             "provider": self._provider,
             # 主对话位置（ai.primary）；local_* 时 local_fallback_* 计数含「本地主链」调用
             "primary_mode": getattr(self, "_primary_mode", None) or "cloud",
+            # 老板锁（2026-08-22）：非空=主链档位被锁死，越权切换会被强制回锁值
+            "primary_lock": getattr(self, "_primary_lock", "") or None,
             "local_fallback_model": self._fb_model or None,
             "local_fallback_calls": self._fb_calls,
             "local_fallback_ok": self._fb_ok,

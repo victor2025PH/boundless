@@ -41,6 +41,80 @@ _OWN_PREFIXES = ("send_gate_blocked", "kill_switch_blocked")
 
 DEFAULT_PAUSE_MINUTES = 60.0
 
+# ── auth 族（会话/鉴权失效）与「登录变更窗口」降档（P0-1 2026-08-23，B57+B59）──
+#
+# 2026-08-23 升级风暴实锤：更新器换代期间旧后端未完全退出，新旧双进程抢同一份
+# pyrogram 会话 → Telegram 强制注销（AuthKeyDuplicated/SessionRevoked）→ 发送异常
+# 被本模块按 kind=ban **永久**冻结 + meta.banned。可 auth 族错误的含义只是
+# 「这份会话凭证失效了」，与「账号被平台封禁」是两回事——凭证失效重登即活，
+# 永久冻结反而把「重登后明明能用」的账号继续摁死（客户包 09:50 全账号发不出）。
+#
+# 三道疏导（都不影响 UserDeactivated* 等真封禁信号的处置）：
+# 1. `in_login_flux_window`：进程刚启动（升级/重启后所有客户端重新鉴权，此时的
+#    auth 错误大概率是自伤而非封号）或该账号刚登出/重登过 → auth 族降档为
+#    pause + TTL（自动恢复），不判永久 ban、不标 meta.banned。
+# 2. `note_login_change`：登录路由在登录成功/登出时打点，开启该账号的降档窗口。
+# 3. `clear_auth_ban_on_login`：登录成功=最强的「没被封」证据 → 自动解除该账号
+#    auth 族 auto_ban 冻结 + 清 meta.banned（真封禁的账号根本登不进来）。
+_AUTH_FAMILY_NAMES = frozenset({
+    "Unauthorized", "AuthKeyUnregistered", "AuthKeyDuplicated",
+    "SessionRevoked", "SessionExpired",
+})
+_AUTH_FAMILY_MARKERS = (
+    "UNAUTHORIZED", "AUTH_KEY", "AUTHKEY",
+    "SESSION_REVOKED", "SESSIONREVOKED", "SESSION_EXPIRED", "SESSIONEXPIRED",
+)
+DEFAULT_LOGIN_FLUX_WINDOW_MIN = 15.0
+
+_BOOT_TS = time.time()
+_login_changes: Dict[str, float] = {}
+
+
+def _flux_key(platform: str, account_id: str) -> str:
+    return f"{str(platform or '').lower()}:{str(account_id or '')}"
+
+
+def is_auth_family(reason: Any) -> bool:
+    """纯函数：分类 reason / 异常名是否属会话鉴权失效族（≠真封禁）。"""
+    r = str(reason or "")
+    if not r:
+        return False
+    if r in _AUTH_FAMILY_NAMES:
+        return True
+    up = r.upper()
+    return any(m in up for m in _AUTH_FAMILY_MARKERS)
+
+
+def note_login_change(platform: str, account_id: str, *,
+                      now: Optional[float] = None) -> None:
+    """登录成功/登出打点：开启该账号的 auth 族降档窗口（进程内，绝不抛异常）。"""
+    try:
+        ts = float(now if now is not None else time.time())
+        _login_changes[_flux_key(platform, account_id)] = ts
+        if len(_login_changes) > 512:  # 防长期运行无界增长
+            cutoff = ts - DEFAULT_LOGIN_FLUX_WINDOW_MIN * 60.0 * 4
+            for k in [k for k, v in _login_changes.items() if v < cutoff]:
+                _login_changes.pop(k, None)
+    except Exception:
+        pass
+
+
+def in_login_flux_window(platform: str, account_id: str, *,
+                         now: Optional[float] = None,
+                         window_min: float = DEFAULT_LOGIN_FLUX_WINDOW_MIN) -> bool:
+    """该账号是否处于「登录变更窗口」：进程刚启动 或 刚登出/重登。"""
+    try:
+        ts = float(now if now is not None else time.time())
+        win = float(window_min) * 60.0
+        if win <= 0:
+            return False
+        if 0 <= ts - _BOOT_TS < win:
+            return True
+        mark = _login_changes.get(_flux_key(platform, account_id))
+        return mark is not None and 0 <= ts - mark < win
+    except Exception:
+        return False
+
 
 def _exc_seconds(exc: Any) -> float:
     """从 FloodWait 类异常取需等待秒数（pyrogram 常见属性 value/x/seconds）。"""
@@ -84,6 +158,25 @@ def classify(exc: Any) -> Dict[str, Any]:
     return {"kind": "none", "cooldown_sec": 0.0, "reason": name}
 
 
+def _audit_auto_freeze(platform: str, account_id: str, *, reason: str,
+                       ttl_sec: float) -> None:
+    """自动置位落 ops_events 审计（P1 2026-08-23，与手动置位同 kind）。
+
+    此前自动冻结只有瞬时告警（webhook 默认 0 通道＝报进虚空），事后查不到
+    「这号哪天被风控冻过」。best-effort：审计失败绝不影响急停本身。
+    """
+    try:
+        from src.ops.ops_events import get_ops_event_store
+        store = get_ops_event_store()
+        if store is not None:
+            store.record("kill_switch_set", platform=str(platform or ""),
+                         account_id=str(account_id or ""), reason=str(reason or ""),
+                         detail=f"scope=account:{str(platform or '').lower()}:"
+                                f"{account_id} actor=ban_signal ttl_sec={ttl_sec:g}")
+    except Exception:
+        pass
+
+
 def apply_action(
     platform: str,
     account_id: str,
@@ -112,6 +205,8 @@ def apply_action(
         ttl = float((action or {}).get("cooldown_sec") or 0) or pause_minutes * 60.0
         kill_switch.set(scope, reason=f"auto_pause:{reason}", actor="ban_signal",
                         ttl_sec=ttl, now=now)
+        _audit_auto_freeze(platform, account_id,
+                           reason=f"auto_pause:{reason}", ttl_sec=ttl)
         if alert:
             try:
                 alert("account_paused",
@@ -125,6 +220,8 @@ def apply_action(
     # kind == "ban"：永久停 + 注册表标记（机群看板可见，待人工核查）
     kill_switch.set(scope, reason=f"auto_ban:{reason}", actor="ban_signal", ttl_sec=0,
                     now=now)
+    _audit_auto_freeze(platform, account_id,
+                       reason=f"auto_ban:{reason}", ttl_sec=0)
     if registry is not None:
         try:
             # merge_meta：锁内原子合并，防「读出→写回」窗口与其它写者互踩
@@ -183,6 +280,18 @@ def handle_send_exception(
     """
     try:
         action = classify(exc)
+        # P0-1 登录变更窗口降档：升级/重启后所有客户端重新鉴权、账号刚登出/重登时，
+        # auth 族错误九成是「会话凭证失效」而非封号 → pause+TTL 自动恢复，绝不永久
+        # 冻结 + meta.banned（2026-08-23 升级风暴根子②）。真封禁族（UserDeactivated*）
+        # 不在 auth 族，照旧永久处置。
+        try:
+            if (action.get("kind") == "ban"
+                    and is_auth_family(action.get("reason", ""))
+                    and in_login_flux_window(platform, account_id, now=now)):
+                action = {"kind": "pause", "cooldown_sec": 0.0,
+                          "reason": f"auth_flux:{action.get('reason', '')}"}
+        except Exception:
+            pass
         # 反封号反馈：先记 24h 滚动计数（含 none/backoff 早退分支，那正是 FloodWait 所在）
         try:
             rk = risk_kind_for(action["kind"], action.get("reason", ""))
@@ -209,5 +318,78 @@ def handle_send_exception(
         return {"applied": "error", "kind": "none"}
 
 
+def clear_auth_ban_on_login(
+    platform: str,
+    account_id: str,
+    *,
+    kill_switch: Any = None,
+    registry: Any = None,
+    now: Optional[float] = None,
+) -> Dict[str, Any]:
+    """账号登录成功后调用：解除该账号 **auth 族**自动冻结 + 清 meta.banned。
+
+    登录成功=最强的「没被封」证据（真被平台封禁的账号根本登不进来）。只解
+    **自动置位**（actor=ban_signal / reason 带 auto_ban:/auto_pause: 前缀）且原因
+    属 auth 族（会话凭证失效）的冻结；管理员手动冻结与真封禁信号
+    （UserDeactivated* 等）一律不动。顺带 ``note_login_change`` 开启降档窗口
+    （重登后残留客户端可能还会再抛几个旧会话错误）。绝不抛异常。
+    """
+    scope = f"account:{str(platform or '').lower()}:{str(account_id or '')}"
+    out: Dict[str, Any] = {"cleared": False, "meta_cleared": False, "scope": scope}
+    note_login_change(platform, account_id, now=now)
+    try:
+        ks = kill_switch
+        if ks is None:
+            from src.ops import kill_switch as ks_mod
+            ks = ks_mod._singleton  # 只读既有单例：登录路径绝不按 CWD 新建库
+        if ks is not None:
+            rec = None
+            for r in ks.status(now=now):
+                if r.get("scope") == scope:
+                    rec = r
+                    break
+            if rec is not None:
+                actor = str(rec.get("actor") or "").strip().lower()
+                reason = str(rec.get("reason") or "")
+                low = reason.lower()
+                is_auto = (actor == "ban_signal"
+                           or low.startswith("auto_ban:")
+                           or low.startswith("auto_pause:"))
+                if is_auto and is_auth_family(reason):
+                    ks.clear(scope)
+                    out["cleared"] = True
+                    out["was_reason"] = reason
+                    try:
+                        from src.ops.ops_events import get_ops_event_store
+                        store = get_ops_event_store()
+                        if store is not None:
+                            store.record(
+                                "kill_switch_clear",
+                                platform=str(platform or ""),
+                                account_id=str(account_id or ""),
+                                reason="login_success_auto_unban",
+                                detail=f"scope={scope} was={reason}")
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    try:
+        reg = registry
+        if reg is None:
+            from src.integrations.account_registry import get_account_registry
+            reg = get_account_registry()
+        row = reg.get(platform, account_id) if reg is not None else None
+        meta = (row or {}).get("meta") or {}
+        if meta.get("banned") and is_auth_family(meta.get("ban_reason", "")):
+            reg.upsert(platform, account_id,
+                       meta={"banned": False, "ban_reason": ""}, merge_meta=True)
+            out["meta_cleared"] = True
+    except Exception:
+        pass
+    return out
+
+
 __all__ = ["classify", "apply_action", "handle_send_exception",
-           "risk_kind_for", "DEFAULT_PAUSE_MINUTES"]
+           "risk_kind_for", "is_auth_family", "note_login_change",
+           "in_login_flux_window", "clear_auth_ban_on_login",
+           "DEFAULT_PAUSE_MINUTES", "DEFAULT_LOGIN_FLUX_WINDOW_MIN"]

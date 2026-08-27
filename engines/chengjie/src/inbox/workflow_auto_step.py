@@ -33,11 +33,16 @@ logger = logging.getLogger(__name__)
 # 顺延抖动上限（秒）：静默窗结束后 0..15min 按会话散开
 _QUIET_JITTER_SEC = 900
 
+# B41 通道互斥顺延窗（秒）：常规回复通道活跃时链步平移这么久再试（+会话抖动）。
+_MUTEX_DEFER_SEC = 900
+
 
 def resolve_auto_advance_cfg(cfg_root: Any) -> Dict[str, Any]:
     """``inbox.workflows.auto_advance`` 配置段（缺省全关 + 保守预算）。"""
     out = {"enabled": False, "quiet_start": 23, "quiet_end": 8,
-           "max_per_tick": 3, "max_per_day": 30}
+           "max_per_tick": 3, "max_per_day": 30,
+           # B41 通道互斥：会话最近一条出站在此窗口内 → 链步顺延（0=关出站判据）
+           "mutex_outbound_cooldown_sec": 600}
     try:
         if not isinstance(cfg_root, dict):
             return out
@@ -50,9 +55,58 @@ def resolve_auto_advance_cfg(cfg_root: Any) -> Dict[str, Any]:
         out["quiet_end"] = int(aa.get("quiet_end", 8))
         out["max_per_tick"] = max(1, int(aa.get("max_per_tick", 3)))
         out["max_per_day"] = max(1, int(aa.get("max_per_day", 30)))
+        out["mutex_outbound_cooldown_sec"] = max(0.0, float(
+            aa.get("mutex_outbound_cooldown_sec", 600)))
     except Exception:
         pass
     return out
+
+
+def regular_channel_active(
+    store: Any, conv_id: str, *, now: float,
+    outbound_cooldown_sec: float = 600.0,
+) -> str:
+    """B41 通道互斥判据（链让常规）：常规回复通道是否正对该会话「说着话」。
+
+    命中任一 → 返回原因（链步该顺延）：
+      - ``pending_draft``：会话已有待处置/停泊中的**非链**草稿（常规链正在
+        出稿或等人审）——此刻再投一份链稿＝同问双答（impl49 B41 _241 实录）；
+      - ``recent_outbound``：会话刚有出站（窗口内）——紧跟着再来一条营销跟进
+        ＝背靠背双发的观感，节奏拍平移比抢话诚实。
+    判定 fail-open（查询异常返回空串放行）：互斥是降噪护栏，绝不闸死链功能。
+    """
+    cid = str(conv_id or "")
+    if not cid or store is None:
+        return ""
+    try:
+        rows: list = []
+        if hasattr(store, "list_drafts"):
+            for _status in ("pending", "enriching"):
+                try:
+                    rows.extend(store.list_drafts(
+                        status=_status, conversation_id=cid, limit=10) or [])
+                except TypeError:
+                    # 旧 store/测试替身不认 conversation_id 形参 → 跳过该判据
+                    rows = []
+                    break
+        for r in rows:
+            if not str(r.get("source_id") or "").startswith("wf:"):
+                return "pending_draft"
+    except Exception:
+        logger.debug("regular_channel_active: 草稿查询异常（放行）", exc_info=True)
+    if outbound_cooldown_sec > 0:
+        try:
+            msgs = store.list_recent_messages(cid, limit=5) or []
+            for m in msgs:
+                if str(m.get("direction") or "") != "out":
+                    continue
+                ts = float(m.get("ts") or 0)
+                if ts > 0 and now - ts < float(outbound_cooldown_sec):
+                    return "recent_outbound"
+        except Exception:
+            logger.debug(
+                "regular_channel_active: 消息查询异常（放行）", exc_info=True)
+    return ""
 
 
 def in_quiet_hours(hour: int, start: int, end: int) -> bool:
@@ -86,6 +140,9 @@ _STATS: Dict[str, int] = {
     "fallback_remind": 0,  # 生成失败/无上下文 → 降级提醒 toast
     "deferred_quiet": 0,   # 静默窗顺延
     "budget_skipped": 0,   # 预算拦下（当轮回落提醒档）
+    # B41 通道互斥（2026-08-22）：常规通道活跃 → 链步顺延 / 生成后让位丢弃
+    "deferred_mutex": 0,
+    "dropped_mutex": 0,
 }
 
 
@@ -143,6 +200,18 @@ def make_auto_step_hook(app_state: Any, cfg_root: Any):
                 mode = ""
             if mode != "auto_ai":
                 return {"action": "remind"}
+            # B41 通道互斥（链让常规）：会话已有非链待处置稿 / 刚有出站 → 顺延。
+            # 同会话同一时间只允许一条通道出稿——常规回复回应真实入站，优先级
+            # 天然高于按节奏的营销跟进；链的拍平移到互斥窗后再试，不丢不抢。
+            _mx = regular_channel_active(
+                store, str(conv_id), now=now,
+                outbound_cooldown_sec=float(
+                    cfg.get("mutex_outbound_cooldown_sec", 600)))
+            if _mx:
+                _bump("deferred_mutex")
+                _jit = (zlib.crc32(str(conv_id).encode("utf-8")) % 300)
+                return {"action": "defer",
+                        "until": now + _MUTEX_DEFER_SEC + float(_jit)}
             # 闸 4：静默窗 → 顺延（不执行不提醒，节奏平移到窗口后）
             lt_hour = time.localtime(now).tm_hour
             if in_quiet_hours(lt_hour, cfg["quiet_start"], cfg["quiet_end"]):
@@ -232,6 +301,19 @@ async def _generate_and_stage(
             _bump("fallback_remind")
             _publish_step_event(conv_id, ex, note, auto=False)
             return False
+        # B41 通道互斥二次复查：生成的十几秒里常规通道可能已对同一入站出稿
+        # （hook 判定与本协程之间的竞态窗）——让位丢弃本稿 + 降级经典提醒
+        # （拍不黑洞，人看到「该跟进了」自行决定），绝不与常规稿背靠背双发。
+        try:
+            if regular_channel_active(store, conv_id, now=time.time()):
+                _bump("dropped_mutex")
+                _publish_step_event(conv_id, ex, note, auto=False)
+                logger.info(
+                    "[workflow-auto] guard=channel_mutex 常规通道已出稿，"
+                    "链稿让位丢弃 conv=%s step=%s", conv_id, step_idx)
+                return False
+        except Exception:
+            logger.debug("[workflow-auto] 互斥二次复查异常（放行）", exc_info=True)
         # L2 pending 落库：source_id 唯一键幂等；autosend 管线（含 register_l2_callback
         # 事件唤醒）从这里接管——deliver 闸门/翻译/风控/节奏全在那条链上
         store.upsert_draft({
@@ -294,6 +376,7 @@ __all__ = [
     "in_quiet_hours",
     "make_auto_step_hook",
     "quiet_defer_until",
+    "regular_channel_active",
     "resolve_auto_advance_cfg",
     "stats_snapshot",
 ]

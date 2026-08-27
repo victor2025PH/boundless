@@ -26,6 +26,9 @@ def _resolve_current_file(config_manager, stem: str):
     cfg_dir = config_manager.config_path.parent
     _prefix_file_map = {
         "templates": cfg_dir / "templates.yaml",
+        # V2 多语言变体旁挂档：必须晚于本函数的「长前缀优先」排序才不会被
+        # "templates" 误吞（admin.py /api/rollback 的映射同一坑，两处都已设防）。
+        "templates_i18n": cfg_dir / "templates_i18n.yaml",
         "exchange_rates": cfg_dir / "exchange_rates.yaml",
         "reply_strategies": cfg_dir / "reply_strategies.yaml",
         "quota": cfg_dir / "quota_rules.yaml",

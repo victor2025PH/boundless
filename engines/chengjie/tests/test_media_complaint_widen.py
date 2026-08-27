@@ -18,10 +18,13 @@ from src.ai.companion_selfie import (
 @pytest.mark.parametrize("text,expect", [
     # lie_caught：说发没发 / 说话不算话 / 冒充
     ("我没收到啊，你发了吗？啥都没有", "lie_caught"),
-    ("你不是说在海边吗？怎么在家里", "lie_caught"),
+    # 实施69 语义细分：地点/内容对不上 → content_mismatch（正确回应=如实带过，
+    # 与 lie_caught 的「别编传输借口」纠偏不同）；催兑现 → unfulfilled（只计数，
+    # 措辞交悬置常驻 hint）。两条金标随语义升级改钉。
+    ("你不是说在海边吗？怎么在家里", "content_mismatch"),
     ("打字算什么唱歌", "lie_caught"),
     ("说话不算话，光说不做", "lie_caught"),
-    ("照片呢？图呢", "lie_caught"),
+    ("照片呢？图呢", "unfulfilled"),
     ("I didn't get anything, nothing here", "lie_caught"),
     # distrust：整体失望
     ("算了吧，感觉你从头到尾都在敷衍我", "distrust"),

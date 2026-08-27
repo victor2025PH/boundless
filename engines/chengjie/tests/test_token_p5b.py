@@ -153,3 +153,48 @@ def test_shadow_counters_and_disabled_noop(_isolated_ledger):
     record_shadow("x")
     assert shadow_snapshot() == {}
     assert note_translate_fair_use(999, lic_status=_st())["today"] == 0
+
+
+# ── 5) 观测三件套出口（metrics_snapshot / dump_prom）─────────────────────────────
+
+def test_metrics_snapshot_light_shape(_isolated_ledger, monkeypatch):
+    """metrics 面 = wallet_snapshot 轻量版：去 grants/rates 明细、保 enforce/shadow/fair_use。"""
+    from src.licensing import token_ledger as tl
+
+    st = _st()
+    monkeypatch.setattr(
+        "src.licensing.license_manager.get_license_manager",
+        lambda: SimpleNamespace(get_status=lambda: st, status=lambda: st))
+    wallet = tl.wallet_id_for_status(st)
+    _isolated_ledger.grant_pack(wallet, tokens=500, ref="m1")
+    _isolated_ledger.record_spend(wallet, "ai_reply", 30)
+    record_shadow("ai_reply_delivered_auto")
+
+    snap = tl.metrics_snapshot()
+    assert snap["enabled"] is True
+    assert snap["balance"] == 470 and snap["total_spend"] == 30
+    assert snap["by_action"] == {"ai_reply": 30}
+    assert snap["shadow"] == {"ai_reply_delivered_auto": 1}
+    assert "grants" not in snap and "rates" not in snap
+    assert "enforce" in snap and "fair_use" in snap
+
+
+def test_dump_prom_enabled_and_disabled(_isolated_ledger, monkeypatch):
+    from src.licensing import token_ledger as tl
+
+    st = _st()
+    monkeypatch.setattr(
+        "src.licensing.license_manager.get_license_manager",
+        lambda: SimpleNamespace(get_status=lambda: st, status=lambda: st))
+    wallet = tl.wallet_id_for_status(st)
+    _isolated_ledger.grant_pack(wallet, tokens=200, ref="m2")
+    _isolated_ledger.record_spend(wallet, "pro_translate", 10)
+
+    text = tl.dump_prom()
+    assert "token_wallet_balance 190" in text
+    assert 'token_spend_by_action_total{action="pro_translate"} 10' in text
+    assert "token_fair_use_today_chars" in text
+
+    # 总闸关 → 零输出（零流量零噪声，对齐 line_media/credpool 口径）
+    configure_token_ledger(enabled=False)
+    assert tl.dump_prom() == ""

@@ -123,16 +123,29 @@ function resolveSidecarSpawn(spec, o) {
 }
 
 /**
- * 后端真正 serve 的媒体落地目录（纯函数，便于单测）。
+ * 后端真正读写的媒体落地目录（纯函数，便于单测）。
  *
- * 后端把 /static 挂在「代码所在目录」下的 src/web/static：冻结态即
- * resources/backend/_internal/src/web/static，开发态即 <引擎根>/src/web/static。
- * 边车必须写到同一处，前端才能按 /static/protocol_media/... 取到图。
+ * 唯一判据＝后端 `protocol_bridge.protocol_media_root()` 落在哪：
+ *   ① 有数据根契约（`AITR_DATA_DIR`，打包态 backend-launcher 注入 `<userData>/data`）
+ *      → `<dataDir>/protocol_media/<sub>`；
+ *   ② 无契约（开发态裸跑）→ 引擎代码树 `src/web/static/protocol_media/<sub>`。
  *
+ * ①**必须优先**：2026-08-19 起后端媒体根迁到数据根（媒体随实例走、进备份包），
+ * 而这里原先只认代码树 static —— 打包态那是**只读安装目录**，边车要么写失败、
+ * 要么写进后端根本不读的地方。症状极其阴：前端仍能播（admin.py ProtocolMediaStatic
+ * 双根兜底 + 边车写成功的场景），只是后端识别链（ASR/图片 VLM/OCR/声纹/贴纸）全
+ * 拿不到文件 → 无兜底纪律拦下整条回复，表现为「AI 突然不说话」（08-20 whatsapp
+ * 语音实锤）。改这里前先读 `protocol_media_root()` 的 docstring，两边必须逐字同址。
+ *
+ * @param {object} o
+ * @param {string} [o.dataDir] 后端数据根（= backend-launcher 注入的 AITR_DATA_DIR）
  * @returns {string} 绝对路径；无法判定时返回 ""（跳过媒体落地，文字照常收发）
  */
 function resolveMediaDir(spec, o) {
   const exists = (o && o.exists) || (() => false);
+  if (o && o.dataDir) {
+    return path.join(String(o.dataDir), "protocol_media", spec.mediaSubdir);
+  }
   const roots = [];
   if (o && o.isPackaged && o.resourcesPath) {
     const backend = path.join(o.resourcesPath, "backend");
@@ -348,7 +361,8 @@ function createSidecarManager(deps, spec) {
       dataDir,
       backendBaseUrl: backend.base_url || "http://127.0.0.1:18799",
       token: backend.token || "",
-      mediaDir: resolveMediaDir(spec, ctx),
+      // dataDir 一并传入：有数据根契约时媒体根跟后端走 <dataDir>/protocol_media
+      mediaDir: resolveMediaDir(spec, Object.assign({}, ctx, { dataDir })),
     }));
 
     status = "starting";

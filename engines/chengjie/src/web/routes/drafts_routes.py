@@ -117,11 +117,20 @@ def register_drafts_routes(app, *, api_auth):
         status: str = "pending",
         platform: str = "",
         limit: int = 50,
+        conversation_id: str = "",
         _=Depends(api_auth),
     ):
         svc = _get_draft_service(request)
         limit = max(1, min(200, int(limit or 50)))
-        drafts = svc.list_drafts(status=status or "", platform=platform or "", limit=limit)
+        # B86：conversation_id＝会话级精确过滤（体检计数与面板列表同源；旧服务
+        # 无该形参时回落全量口径——宁可多显示不静默空屏）
+        try:
+            drafts = svc.list_drafts(
+                status=status or "", platform=platform or "", limit=limit,
+                conversation_id=str(conversation_id or ""))
+        except TypeError:
+            drafts = svc.list_drafts(
+                status=status or "", platform=platform or "", limit=limit)
         # 「点通过会不会被拦」的**预判**（与护栏同一入口 approve_block_reason，
         # 否则徽标与实际行为不一致＝比没徽标更糟）。让坐席在点之前就看见「这稿太老 /
         # 已经回过」，而不是撞 409 才知道。判定内部按稿龄短路，只有可能被拦的才查会话。
@@ -1215,6 +1224,15 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # 未读可信化 v2（2026-08-23）：工作台已读→平台回执的推送/节流/成败计数
+        # （pushed/push_ok/push_fail/skipped_*）。进程口径重启清零；开关关＝全 0。
+        # 「回执链活着吗」从翻日志变成读数（push_fail 持续涨=worker mark_read 断）。
+        try:
+            from src.inbox.read_sync import stats_snapshot as _read_sync_stats
+            metrics["read_sync"] = _read_sync_stats()
+        except Exception:
+            pass
+
         # spoken_style 真人感文本层灰度（2026-08-11，AvatarHub 交付包桥接）：
         # l1_inject/l2_inject=注入量、l2_skip_lang=zh_only 外语拦截量（应随外语消息同步涨）、
         # l3_changed=出口清洁真剥了东西、l4_*=改写尝试/生效/直通（直通率>30% 该反馈 AvatarHub 线）。
@@ -1225,12 +1243,65 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # 出站文本形态守卫（实施74 B118/B121/B104）：monologue=括号独白拦截、
+        # lang_mix_hard/soft=语种混杂剥除/观测、unfounded_recall=无出处引用剥句。
+        # 进程口径重启清零；恒暴露（全 0=没流量或没命中，与「没接」可区分）。
+        try:
+            from src.ai.outbound_text_guard import guard_stats as _otg_stats
+            metrics["outbound_text_guard"] = _otg_stats()
+        except Exception:
+            pass
+
+        # 图片翻译链路观测（P1-OBS 2026-08-19）：识别/贴回量、OCR 后端分布
+        # （ppocr 微服务灰度决策读数）、块级覆盖率、目标语分布。进程口径重启清零；
+        # 零流量 active=false（ops 卡整卡隐藏）。
+        try:
+            from src.ai.image_xlate_stats import get_image_xlate_stats
+            metrics["image_xlate"] = get_image_xlate_stats().dump()
+        except Exception:
+            pass
+
+        # UI 语言来源分布（系统语言自动跟随 2026-08-27）：negotiated 占比 = 自动
+        # 跟随的真实使用量；negotiated_by_lang = 语种校对优先级的真实数据源。
+        try:
+            from src.web.ui_lang_stats import get_ui_lang_stats
+            metrics["ui_lang"] = get_ui_lang_stats().dump()
+        except Exception:
+            pass
+
+        # Token 计费账本（2026-08-19 Token 定价改版观测三件套）：钱包余额/累计消耗/
+        # 按动作分布 + P5b 投递影子计数（出稿↔投递校准）+ P4 公平使用水表 + P6 enforce
+        # 态。enabled=False 时全零形状照常暴露（区分「没开」和「没流量」）。
+        try:
+            from src.licensing.token_ledger import metrics_snapshot as _tok_metrics
+            metrics["token_ledger"] = _tok_metrics()
+        except Exception:
+            pass
+
         # 发送护栏拦截（P2 2026-08-13）：真实发送尝试被 Kill-Switch/金丝雀/授权/
         # 反封号闸门拦下的进程口径计数（预判/横幅轮询 notify=False 不计——读路径
         # 不污染）；键带 |manual/|auto 后缀（额度族）供「谁在被拦」分道观测。
         try:
             from src.integrations.shared.send_guard import block_stats_snapshot
             metrics["send_gate_blocks"] = block_stats_snapshot()
+        except Exception:
+            pass
+
+        # 跨平台档案（origin_profile P2 2026-08-18）：provider 消费/渲染命中（进程口径，
+        # blocks=AI 真吃到背景的次数）+ 合并联动记忆合流量 + 档案/导入台账总量
+        # （contacts.db 持久口径，重启不清零）。contacts 未启用 → 只出进程计数。
+        try:
+            from src.contacts.origin_context import origin_stats_snapshot
+            _osnap: Dict[str, Any] = dict(origin_stats_snapshot())
+            _contacts_sub = getattr(request.app.state, "contacts", None)
+            _cstore = getattr(_contacts_sub, "store", None) if _contacts_sub else None
+            if _cstore is not None and hasattr(_cstore, "origin_profile_totals"):
+                _osnap["totals"] = _cstore.origin_profile_totals()
+            _ocfg_snap = (getattr(_contacts_sub, "config_snapshot", None) or {}) \
+                if _contacts_sub else {}
+            _osnap["enabled"] = bool(
+                ((_ocfg_snap.get("origin_profile") or {}).get("enabled", False)))
+            metrics["origin_profile"] = _osnap
         except Exception:
             pass
 
@@ -1306,6 +1377,21 @@ def register_metrics_route(app, *, api_auth):
         try:
             from src.companion.bazi_stats import get_bazi_stats
             metrics["bazi"] = get_bazi_stats().dump()
+        except Exception:
+            pass
+
+        # 唱歌能力观测（实施58 P1）：requests/sent/no_stock/capped 计数 +
+        # 按模板分布（进程口径；备货盘点走 avatar-status singing 段）
+        try:
+            from src.companion.song_stock import metrics_snapshot as _song_ms
+            metrics["singing"] = _song_ms()
+        except Exception:
+            pass
+
+        # 报障群 AI 值守观测（bug_intake）：分类计数 + 今日工单 + 开放工单分布
+        try:
+            from src.ops.bug_intake import dump_stats as _bi_dump
+            metrics["bug_intake"] = _bi_dump()
         except Exception:
             pass
 
@@ -1498,6 +1584,13 @@ def register_metrics_route(app, *, api_auth):
         try:
             from src.web.frontend_error_stats import get_frontend_error_stats
             metrics["frontend_errors"] = get_frontend_error_stats().dump()
+        except Exception:
+            pass
+
+        # 坐席手动出图漏斗（尝试/成功/失败码分布/时延/相册秒发占比，2026-08-22 P1）
+        try:
+            from src.web.image_gen_stats import get_image_gen_stats
+            metrics["image_gen"] = get_image_gen_stats().dump()
         except Exception:
             pass
 
@@ -1920,6 +2013,13 @@ def register_metrics_route(app, *, api_auth):
             except Exception:
                 pass
 
+            # 唱歌能力（requests/sent/no_stock/capped + 按模板分布）
+            try:
+                from src.companion.song_stock import get_song_stats
+                buf.write(get_song_stats().dump_prom())
+            except Exception:
+                pass
+
             # 营销目标（建目标/每日拍/注入/主动桥/终态 漏斗计数）
             try:
                 from src.companion.goals.stats import get_goal_stats
@@ -1931,6 +2031,20 @@ def register_metrics_route(app, *, api_auth):
             try:
                 from src.web.frontend_error_stats import get_frontend_error_stats
                 buf.write(get_frontend_error_stats().dump_prom())
+            except Exception:
+                pass
+
+            # 坐席手动出图（尝试/成功/失败码/时延/相册秒发）
+            try:
+                from src.web.image_gen_stats import get_image_gen_stats
+                buf.write(get_image_gen_stats().dump_prom())
+            except Exception:
+                pass
+
+            # Token 计费账本（钱包余额/消耗分布/影子计数/公平使用；未启用=零输出）
+            try:
+                from src.licensing.token_ledger import dump_prom as _tok_dump_prom
+                buf.write(_tok_dump_prom())
             except Exception:
                 pass
 

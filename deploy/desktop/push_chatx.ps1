@@ -177,6 +177,45 @@ if ($Relaunch) {
       exit 10
     }
   }
+  # --- 4.6 display sanity (2026-08-17 .173 lesson) -----------------------------
+  # WARNING-ONLY, never fails the deploy: a cramped logical desktop (e.g. 4K at
+  # the Windows-recommended 300% -> 1280x720) hides the composer toolbar with
+  # zero code involved. Catching it at install time beats the boss catching it
+  # live. Same probe as the fleet ledger; remedy = deploy\desktop\set_seat_scale.ps1.
+  $dprobe = Join-Path $PSScriptRoot '_seat_disp_probe.ps1'
+  if (Test-Path $dprobe) {
+    scp -o ConnectTimeout=6 $dprobe ($TargetSsh + ':C:/Windows/Temp/_seat_disp_probe.ps1') 2>$null | Out-Null
+    $draw = ssh -o ConnectTimeout=6 $TargetSsh 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\Windows\Temp\_seat_disp_probe.ps1' 2>$null
+    $ds = "$draw".Trim()
+    $lhWorst = -1; $dshow = $ds
+    if ($ds -match '^EXACT (\d+)x(\d+)@(\d+)$') {
+      $lhWorst = [int]$Matches[2]
+      $dshow = ($Matches[1] + 'x' + $Matches[2] + '@' + $Matches[3] + '%')
+    }
+    elseif ($ds -match '^(\d+)x(\d+)@(\d+)#(-?\d+)$') {
+      # Reference math lives in chatx_fleet_status.ps1 (two-candidate ladder);
+      # here we only need the LARGEST candidate height for a no-false-alarm warn.
+      $ph2 = [int]$Matches[2]
+      $dpiPct = [int][math]::Round([int]$Matches[3] * 100.0 / 96)
+      $ovr = [int]$Matches[4]
+      $ladder = @(100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500)
+      $candA = $dpiPct
+      $iRec = $ladder.IndexOf($dpiPct)
+      if ($ovr -ne 0 -and $iRec -ge 0) {
+        $iCur = $iRec + $ovr
+        if ($iCur -ge 0 -and $iCur -lt $ladder.Count) { $candA = $ladder[$iCur] }
+      }
+      $lhWorst = [math]::Max([int][math]::Round($ph2 * 100.0 / $candA), [int][math]::Round($ph2 * 100.0 / $dpiPct))
+      $dshow = ($Matches[1] + 'x' + $Matches[2] + ' @' + $candA + '%~')
+    }
+    if ($lhWorst -ge 0) {
+      if ($lhWorst -lt 800) {
+        Say ("WARNING: SMALL DESKTOP on target (display " + $dshow + ", logical height ~" + $lhWorst + " < 800): the composer toolbar may not fit. Fix: deploy\desktop\set_seat_scale.ps1 -TargetSsh <node> -ScalePercent 200 -RestartChatX")
+      } else {
+        Say ("display ok (" + $dshow + ")")
+      }
+    }
+  }
 }
 
 # --- 5. smoke the INSTALLED build (throwaway data dir; never touches real data)

@@ -1,9 +1,18 @@
 node_modules/
-shared/
+# 只忽略**构建期拷贝** desktop/shared/（copy-shared 的落点）——必须带前导斜杠锚定。
+# 原来写作无锚的 `shared/`，会在任意层级匹配，把 desktop/renderer/shared/ 这个
+# **本该入库的**副驾组件镜像一起挡住：磁盘 29 个文件只有 16 个进了版本库，
+# 干净 clone 出来的桌面壳缺 13 个组件（cp-image/cp-kb/panel-manifest/4 个扩展语
+# i18n…）。门禁 test_copilot_shared_sync 在本机全绿（它扫磁盘），只有在干净检出上
+# 才会红——2026-08-27 大收口前用 --preview 检出才照出来。
+/shared/
+hotpatch/
 dist/
+dist-*/
 out/
 *.log
 build/backend-dist/
+build/ffmpeg/
 build/build/
 build/static-staged/
 build/domains-staged/

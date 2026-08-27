@@ -38,14 +38,21 @@
 | POST | `/login/:id/cancel` | 取消该登录 |
 | POST | `/accounts/restore` | 恢复磁盘已持久化会话（幂等） |
 | GET | `/accounts` | 已登录账号（含 `logged_in`） |
-| POST | `/accounts/:id/send` | 发文字 `{thread_id, text, chat_type?}` |
-| POST | `/accounts/:id/send-media` | 发媒体 `{thread_id, media_path, media_type, caption}` |
+| POST | `/accounts/:id/send` | 发文字 `{thread_id, text, chat_type?}`；响应带 `thread_type` |
+| POST | `/accounts/:id/send-media` | 发媒体 `{thread_id, media_path, media_type, caption, chat_type?}`；响应带 `thread_type` |
 | POST | `/accounts/:id/logout` | 登出并清 context |
 | GET | `/health` | 健康探测 |
 
 会话持久化：`sessions/<account_id>/context.json`（zca-js `getContext()`）→ 免重复扫码。
 入站消息经 `PY_INGEST_URL`（默认 `/api/internal/protocol/ingest`，带 `PY_API_TOKEN` Bearer）
 回流统一收件箱；会话健康经 `PY_STATUS_URL`。
+
+**群会话（2026-08-19 P0）**：zca-js 出站必须区分 `ThreadType.User|Group` 而 threadId 不自
+描述——本服务维护**群注册表**（`group-registry.js`：入站学习 + 登录 `getAllGroups` 预热 +
+`sessions/<id>/groups.json` 持久化），出站未显式传 `chat_type` 时自动判群，调用方零改动；
+显式 `chat_type` 参数永远最高优先。群入站另带 `sender_id/sender_name`（气泡发言人名，
+对齐 WhatsApp P4-11E），且**不再**把发言人名当会话名上报（防群名随发言人漂移）。
+门禁：`npm test`（`test/group-registry.test.js`）。
 
 ## 联调核对清单（首次真号验证）
 

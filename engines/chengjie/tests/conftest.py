@@ -260,6 +260,7 @@ def _isolated_web_env(monkeypatch):
         # 托管识图注入也走 env 回放（hosted_gateway.ensure_hosted_vision），同样
         # 会被 ensure_* 写进本进程 → 不剥掉就会串进后续用例的 ConfigManager
         "AITR_HOSTED_VISION_BASE_URL", "AITR_HOSTED_VISION_MODEL",
+        "AITR_HOSTED_VISION_AUTO",
     ):
         monkeypatch.delenv(k, raising=False)
 
@@ -537,6 +538,26 @@ def _isolated_global_rules(tmp_path):
             pm._global_rules_path = old_path
             pm._global_rules = old_cache
             pm._global_rules_sig = old_sig
+
+
+@pytest.fixture(autouse=True)
+def _isolated_desc_inflight():
+    """清空图片识别去重锁（media_enrich._DESC_INFLIGHT，进程级模块状态）。
+
+    锁键=会话id|媒体引用，TTL 90s——不清则前一个用例占过的键会让后一个用例
+    被判「识别进行中」而进等待轮询（budget 默认 20s），测试变慢且行为串味。
+    与其他 autouse 隔离同理：模块级可变状态一律按测试清。"""
+    try:
+        from src.inbox import media_enrich as _me
+        _me._DESC_INFLIGHT.clear()
+    except Exception:
+        pass
+    yield
+    try:
+        from src.inbox import media_enrich as _me
+        _me._DESC_INFLIGHT.clear()
+    except Exception:
+        pass
 
 
 @pytest.fixture()

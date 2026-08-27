@@ -115,11 +115,9 @@ _TELEGRAM_CAPS = (
     ("mark_read", "ok", "ok", "", "P0"),
     ("typing", "ok", "ok", "", "P0"),
     ("reaction_out", "none", "ok", "", "P2"),
-    # 引用回复（2026-08-14 工作台入口整体下线，老板拍板）：08-13 P3 补齐 worker
-    # reply_to→pyrogram 透传后，仍发生「工作台显示引用、手机端没有」（173 实录 19:01）
-    # ——镜像无条件写引用+链路零回执，无法自证引用真上了线。UI 入口已删 →
-    # workspace=none 是诚实态；worker send(reply_to=) 代码保留。恢复前置＝quote_applied 回执。
-    ("quote_reply", "none", "ok", "", "P3"),
+    # 引用回复（2026-08-19）：TG worker 回 quote_applied + 编排器按回执镜像 →
+    # 工作台入口对 telegram/whatsapp 重新打开（见 unified_inbox _canReply）。
+    ("quote_reply", "ok", "ok", "", "P0"),
     ("forward", "bridge", "ok", SURFACE_NATIVE, "P0"),
     ("pin_manage", "bridge", "ok", SURFACE_NATIVE, "P0"),
     ("report", "bridge", "ok", SURFACE_NATIVE, "P0"),
@@ -136,10 +134,9 @@ _WHATSAPP_CAPS = (
     ("mark_read", "ok", "ok", "", "P0"),
     ("typing", "ok", "ok", "", "P0"),
     ("reaction_out", "none", "ok", "", "P2"),
-    # 引用回复（2026-08-14 工作台入口整体下线，老板拍板，三平台同刀）：WA Baileys
-    # quoted 透传本身可用，但工作台统一收件箱不再提供引用入口 → workspace=none；
-    # 原生页自带引用不受影响。worker send(reply_to=) 代码保留，恢复=还原 UI 单点闸。
-    ("quote_reply", "none", "ok", "", "P0"),
+    # 引用回复（2026-08-19）：Baileys quoted 透传 + quote_applied 回执落地，
+    # 工作台入口对 whatsapp 重新打开（与 TG 同口径）。
+    ("quote_reply", "ok", "ok", "", "P0"),
     ("forward", "bridge", "ok", SURFACE_NATIVE, "P0"),
     ("pin_manage", "bridge", "ok", SURFACE_NATIVE, "P0"),
     ("report", "bridge", "ok", SURFACE_NATIVE, "P0"),

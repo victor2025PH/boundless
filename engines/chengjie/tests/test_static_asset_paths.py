@@ -89,12 +89,34 @@ def test_no_cwd_relative_served_static_paths_in_src():
 
 
 def test_protocol_media_root_also_absolute():
-    """协议媒体落地根（同族先例）也必须绝对——一并钉住，防有人「参考」它时改坏。"""
-    from src.integrations.protocol_bridge import protocol_media_root
+    """协议媒体落地根：绝对路径 + 数据根契约（账号资产 P0，2026-08-19 迁移）。
+
+    旧不变量是「必须在引擎 static 下」；媒体迁入实例数据根后分两档：
+    - 有数据根契约（``AITR_DATA_DIR`` / ``AITR_CONFIG_PATH``；生产双实例、桌面壳、
+      测试 conftest 皆有）→ 根必须= <数据根>/protocol_media，且**绝不落引擎树**
+      （那是实例备份带不走、多实例混居的位置——正是迁移的全部动机）；
+    - 无契约（裸开发机/旧单实例）→ 回落旧引擎 static 位置（行为向后兼容）。
+    URL 命名空间（/static/protocol_media/...）由 admin.py 的 ProtocolMediaStatic
+    专属挂载（新根优先、旧根兜底）保证不变。
+    """
+    import os
+
+    from src.integrations.protocol_bridge import (
+        legacy_protocol_media_root, protocol_media_root,
+    )
 
     d = protocol_media_root()
     assert d.is_absolute()
-    assert str(SERVED_STATIC_DIR.resolve()) in str(d.resolve())
+    data_dir = (os.environ.get("AITR_DATA_DIR") or "").strip()
+    assert data_dir, "conftest 应已把 AITR_DATA_DIR 指向进程级 tmp（测试隔离契约）"
+    if not (os.environ.get("AITR_CONFIG_PATH") or "").strip():
+        assert d == Path(data_dir).expanduser() / "protocol_media"
+    # 契约档绝不落引擎树（落了＝备份又带不走了）
+    assert str(SERVED_STATIC_DIR.resolve()) not in str(d.resolve())
+    # 旧根仍钉在引擎 static 下（它是迁移源 + 兜底挂载的 fallback，位置不能漂）
+    legacy = legacy_protocol_media_root()
+    assert legacy.is_absolute()
+    assert str(SERVED_STATIC_DIR.resolve()) in str(legacy.resolve())
 
 
 # ── 唯一刻意保留的 CWD 相对路径：预渲染语音库（两侧契约必须成对存在）────────

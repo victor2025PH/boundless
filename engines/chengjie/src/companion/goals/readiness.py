@@ -293,6 +293,14 @@ def growth_readiness(cfg_root: Any) -> Dict[str, Any]:
             hints.append("流失挽回未开（留存过期后不会自动挽回）")
         elif not rcv_on:
             hints.append("回流再转化未开（挽回回话后不会自动转卖）")
+        # P3 2026-08-18：摸底自动化组合警告——正则轨只覆盖结构化表达
+        # （年龄/职业/坐标等），「兴趣」这类开放槽主要靠 LLM 抽取；LLM 轨
+        # 关着时摸底目标能推进但兴趣槽基本要人工补录，如实提示而非装满血。
+        if not bool(llm.get("enabled", False)):
+            hints.append(
+                "profile_llm 未开：摸底目标的开放槽位（兴趣等）主要靠人工"
+                "补录（正则只认高置信结构化自述）——建议开 "
+                "companion.goals.profile_llm 提升摸底自动化率")
 
     # 主链可跑：总闸 + 自动建 + allowlist 非空 + 人设在档 + 有绑定账号
     acquire_ready = bool(

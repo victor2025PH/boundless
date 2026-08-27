@@ -269,7 +269,9 @@ function renderSnapList() {
     : _allSnaps;
 
   if (!snaps.length) {
-    list.innerHTML = '<div class="snap-empty">'+window.T('diff_js_003')+'</div>';
+    list.innerHTML = '<div class="snap-empty">'+window.T('diff_js_003')+
+      '<div style="margin-top:.5rem;font-size:.72rem;line-height:1.55;opacity:.75;text-align:left">'+window.T('diff_js_008')+'</div>'+
+      '<a href="/templates" style="display:inline-block;margin-top:.55rem;font-size:.75rem;font-weight:600;color:var(--p);text-decoration:none">'+window.T('diff_js_009')+'</a></div>';
     return;
   }
 

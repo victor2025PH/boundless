@@ -62,6 +62,13 @@ test("检查点 → checkpoint 且必须 escalate（回落截图/转交运维，
   assert.equal(r.code, "checkpoint");
 });
 
+test("P1 账号锁定 → checkpoint 家族但 code 单列（前端给「等冷却/申诉」而非「过验证」）", () => {
+  const r = relayStepFromStage(STAGE.ACCOUNT_LOCKED);
+  assert.equal(r.step, RELAY_STEP.CHECKPOINT);
+  assert.equal(r.escalate, true);
+  assert.equal(r.code, "account_locked");
+});
+
 test("认不出 / 加载中 → wait（不硬凑步骤，等下一轮）", () => {
   assert.equal(relayStepFromStage(STAGE.UNKNOWN).step, RELAY_STEP.WAIT);
   assert.equal(relayStepFromStage(undefined).step, RELAY_STEP.WAIT);

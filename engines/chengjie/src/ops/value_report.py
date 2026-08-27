@@ -97,9 +97,32 @@ def _outbound_window(conn, lo: float, hi: float) -> Dict[str, Any]:
     return {"messages_out": int(out_n), "messages_in": int(in_n)}
 
 
-def _goals_window(goal_store: Any, lo: float, hi: float) -> Dict[str, Any]:
-    """营销目标终态窗口段（P2 2026-08-09）。store 侧自兜异常返回全零。"""
-    return dict(goal_store.outcome_counts(lo, hi))
+def _goals_window(goal_store: Any, lo: float, hi: float,
+                  inbox_store: Any = None) -> Dict[str, Any]:
+    """营销目标终态窗口段（P2 2026-08-09）。store 侧自兜异常返回全零。
+
+    P4 2026-08-18：窗口内有失守（failed+expired ≥1）时附三分法 ``triage``
+    ——与失守日报/报表页同一判定（``notify.triage_missed``：offered=开价拍
+    真发出过 / engaged=有来有回 / silent=没聊起来）。生产实测过期是目标系统
+    的主导结局（48 个里 44 个过期），周报只写「未达成 N 个」是句死数字；
+    「已开价未成交」那批最可能是**站外成交没标记**的隐藏赢单，必须点出来。
+    探测预算 ≤50 行（与 digest/报表页同 cap）；旧 store 无窗口取数口 /
+    inbox 缺席 / 任何异常 → 不附 triage 键，行文自动退回纯计数。"""
+    out = dict(goal_store.outcome_counts(lo, hi))
+    try:
+        miss = int(out.get("failed") or 0) + int(out.get("expired") or 0)
+        lister = getattr(goal_store, "list_missed_window", None)
+        if miss > 0 and callable(lister):
+            rows = lister(lo, hi, limit=50) or []
+            if rows:
+                from src.companion.goals.notify import triage_missed
+                tri = {"offered": 0, "engaged": 0, "silent": 0}
+                for v in triage_missed(goal_store, inbox_store, rows).values():
+                    tri[v] = tri.get(v, 0) + 1
+                out["triage"] = tri
+    except Exception:
+        pass                        # 三分法失败退回纯计数，绝不拖垮周报
+    return out
 
 
 def _cases_window(trend_store: Any, lo: float, hi: float) -> Dict[str, Any]:
@@ -111,9 +134,40 @@ def _cases_window(trend_store: Any, lo: float, hi: float) -> Dict[str, Any]:
                 "closed_by_source": {}, "closed_by_resolution": {}}
 
 
+def _safety_window(oe_store: Any, lo: float, hi: float) -> Dict[str, Any]:
+    """风控防护窗口段（P2 2026-08-23 急停可见化）：ops_events 的急停审计聚合。
+
+    auto/manual 按 reason 前缀分（``auto_pause:``/``auto_ban:``＝ban_signal 写入
+    形态，与 ``kill_switch.freeze_source`` 同契约）；lifts 只计人工解除
+    （``kill_switch_clear``——TTL 到点的惰性恢复刻意不落审计行，不虚报）。
+    经 store 的 ``_lock``/``_conn`` 只读查询＝本模块既有惯例（见模块头）。
+    """
+    out = {"auto_freezes": 0, "manual_freezes": 0, "lifts": 0}
+    try:
+        with oe_store._lock:  # noqa: SLF001 —— 与 InboxStore 读法同惯例
+            rows = oe_store._conn.execute(
+                "SELECT kind, reason, COUNT(*) AS n FROM ops_events "
+                "WHERE ts >= ? AND ts < ? "
+                "AND kind IN ('kill_switch_set','kill_switch_clear') "
+                "GROUP BY kind, reason", (lo, hi)).fetchall()
+        for r in rows:
+            kind = str(r["kind"] or "")
+            n = int(r["n"] or 0)
+            if kind == "kill_switch_clear":
+                out["lifts"] += n
+            elif str(r["reason"] or "").startswith(("auto_pause:", "auto_ban:")):
+                out["auto_freezes"] += n
+            else:
+                out["manual_freezes"] += n
+    except Exception:
+        return {"auto_freezes": 0, "manual_freezes": 0, "lifts": 0}
+    return out
+
+
 def build_weekly_value(store: Any, *, goal_store: Any = None,
                        case_trend_store: Any = None,
                        learner: Any = None,
+                       ops_events_store: Any = None,
                        now: Optional[float] = None) -> Dict[str, Any]:
     """7 天 AI 价值总账（本周 + 上周环比）。store=InboxStore；异常返回 {}（软失败）。
 
@@ -127,6 +181,10 @@ def build_weekly_value(store: Any, *, goal_store: Any = None,
 
     ``learner``（融合 P2 2026-08-16）：学习队列段（本周入库知识/覆盖提问/待审
     积压）——同 peek 纪律（``peek_daily_learner``）；两周全零且无积压不出段。
+
+    ``ops_events_store``（P2 2026-08-23）：风控防护段（急停置位/解除审计计数，
+    「AI 替你挡了什么」的价值读数）——同 peek 纪律（``peek_ops_event_store``，
+    绝不新建：CWD 相对缺省路径会在引擎根凭空建空库）；两周全零不出段。
     """
     try:
         t = float(now if now is not None else time.time())
@@ -150,8 +208,8 @@ def build_weekly_value(store: Any, *, goal_store: Any = None,
                 from src.companion.goals.store import peek_goal_store
                 gs = peek_goal_store()
             if gs is not None:
-                g_tw = _goals_window(gs, lo_tw, t)
-                g_lw = _goals_window(gs, lo_lw, lo_tw)
+                g_tw = _goals_window(gs, lo_tw, t, inbox_store=store)
+                g_lw = _goals_window(gs, lo_lw, lo_tw, inbox_store=store)
                 # 两周皆零＝该部署没在用目标（或本周期没动静）——不塞空段占版面
                 if any(g_tw.values()) or any(g_lw.values()):
                     tw["goals"] = g_tw
@@ -187,6 +245,20 @@ def build_weekly_value(store: Any, *, goal_store: Any = None,
                     lw["learner"] = l_lw
         except Exception:
             pass                    # 学习段任何失败不拖垮周报主体
+        # P2 2026-08-23：风控防护段——急停置位/解除的周计数（审计口径，重启不丢）
+        try:
+            oe = ops_events_store
+            if oe is None:
+                from src.ops.ops_events import peek_ops_event_store
+                oe = peek_ops_event_store()
+            if oe is not None:
+                s_tw = _safety_window(oe, lo_tw, t)
+                s_lw = _safety_window(oe, lo_lw, lo_tw)
+                if any(s_tw.values()) or any(s_lw.values()):
+                    tw["safety"] = s_tw
+                    lw["safety"] = s_lw
+        except Exception:
+            pass                    # 防护段任何失败不拖垮周报主体
         return {"this_week": tw, "last_week": lw,
                 "text_lines": weekly_value_lines(tw, lw)}
     except Exception:
@@ -335,6 +407,15 @@ def weekly_value_lines(tw: Dict[str, Any], lw: Dict[str, Any]) -> List[str]:
             seg += f"，赢单 {won} 单" + (f"（${amt}）" if amt else "")
         if miss:
             seg += f"；未达成 {miss} 个"
+            # P4：失守三分法（与失守日报/报表页同判定）——「已开价未成交」
+            # 最可能是站外成交没标记的隐藏赢单，周报必须点名到可行动
+            tri = g.get("triage") or {}
+            if any(tri.values()):
+                seg += (f"（已开价 {tri.get('offered', 0)}"
+                        f" · 聊过没成 {tri.get('engaged', 0)}"
+                        f" · 没聊起来 {tri.get('silent', 0)}）")
+                if tri.get("offered"):
+                    seg += "——开过价的建议到目标报表复核站外是否已成交"
         lines.append(seg)
     # P3：案例跟进段（持久趋势口径；演练立案已静音不进趋势）
     c, cl = tw.get("cases", {}), lw.get("cases", {})
@@ -371,5 +452,18 @@ def weekly_value_lines(tw: Dict[str, Any], lw: Dict[str, Any]) -> List[str]:
         pend = int(n.get("pending", 0) or 0)
         if pend:
             seg += f"；待审草稿 {pend} 条"
+        lines.append(seg)
+    # P2 2026-08-23：风控防护段（有段才出行；排最后——formatter 六行封顶时先让位）
+    s, sl = tw.get("safety", {}), lw.get("safety", {})
+    if s:
+        auto_n = int(s.get("auto_freezes", 0) or 0)
+        total = auto_n + int(s.get("manual_freezes", 0) or 0)
+        seg = (f"风控防护：急停 {total} 次"
+               f"{_pct_delta(total, int(sl.get('auto_freezes', 0) or 0) + int(sl.get('manual_freezes', 0) or 0))}")
+        if auto_n:
+            seg += f"（自动风控 {auto_n} 次）"
+        lifts = int(s.get("lifts", 0) or 0)
+        if lifts:
+            seg += f"，人工解除 {lifts} 次"
         lines.append(seg)
     return lines

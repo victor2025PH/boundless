@@ -515,7 +515,8 @@ class ConfigManager:
         ``vision.enabled=true`` 配一盏「开了但后端未就绪」的黄灯，重启前无法自愈。
 
         令牌复用 ``AITR_HOSTED_AI_KEY``（识图与聊天同一枚，不另存一份免得换新后漂移）。
-        ``enabled`` 用 setdefault：那是运营意图，归 overlay 管，回放只补**供给**。
+        ``enabled`` 默认用 setdefault（运营意图归 overlay）；``AITR_HOSTED_VISION_AUTO=1``
+        时强制重开——那是种子档 ``_hosted_auto`` 的预授权，不是运营「全部关闭」。
         """
         vision = self.config.get("vision")
         if not isinstance(vision, dict):
@@ -552,7 +553,13 @@ class ConfigManager:
         if model:
             vision["model"] = model
         vision["_hosted_vision"] = True
-        vision.setdefault("enabled", True)
+        # 托管自动接入回放（2026-08-22）：ensure_hosted_vision 经 _hosted_auto
+        # 开启的部署，热重载后 enabled 会被 overlay 的 false 抹回——回放必须
+        # 同样重放「自动开启」，否则任何一次写 overlay 都等于把托管识图关掉。
+        if (os.environ.get("AITR_HOSTED_VISION_AUTO") or "").strip() == "1":
+            vision["enabled"] = True
+        else:
+            vision.setdefault("enabled", True)
 
     def _apply_hosted_media_env(self, voice_base: str, asr_base: str) -> None:
         """回放托管克隆语音 / 语音识别注入（与 ``_apply_hosted_vision_env`` 同款理由）。
@@ -572,12 +579,22 @@ class ConfigManager:
                 gateway_first=(os.environ.get("AITR_HOSTED_VOICE_FIRST")
                                or "").strip() == "1",
                 hub_fish_off=(os.environ.get("AITR_HOSTED_HUBFISH_OFF")
-                              or "").strip() == "1")
+                              or "").strip() == "1",
+                # 托管自动接入回放（2026-08-19）：ensure_hosted_voice 经
+                # _hosted_auto 开启的部署，热重载后 enabled 会被 overlay 的
+                # false 抹回——回放必须同样重放「自动开启」，否则任何一次写
+                # overlay 都等于把托管语音关掉（与识图 env 回放同教训）。
+                auto_enable=(os.environ.get("AITR_HOSTED_VOICE_AUTO")
+                             or "").strip() == "1")
         if asr_base:
             apply_hosted_asr(
                 self.config, asr_base,
                 gateway_first=(os.environ.get("AITR_HOSTED_ASR_FIRST")
-                               or "").strip() == "1")
+                               or "").strip() == "1",
+                # 同 voice：_hosted_auto 开启的转写在热重载后 enabled 会被
+                # overlay 的 false 抹回，回放必须重放「自动开启」。
+                auto_enable=(os.environ.get("AITR_HOSTED_ASR_AUTO")
+                             or "").strip() == "1")
 
     def _ensure_baseline(self) -> None:
         """桌面态（AITR_DESKTOP_MODE）产品基线增量补齐——修「种子只影响新装」缺口。

@@ -86,6 +86,96 @@ def build_standby_plan(mode: str) -> Optional[List[Dict[str, Any]]]:
     return _order(plan)
 
 
+# ── P1 2026-08-22「一键全自动」捆绑语义 ─────────────────────────────────────
+# 三档从「只管 worker/deliver 两开关」升级为**一次写全**：默认档位（新会话怎么
+# 落档）与两开关同一动作同一语义——修 impl49 B37/B41 实录「三处入口各管一段、
+# 用户开了全自动还是不回」。extras 走 preset extras 同一直写通道（白名单声明，
+# 非用户输入）；bootstrap 只在全自动档显式置 true（review/manual 档沿
+# automation_mode 的既有缺省语义，不额外写键）。
+_STANDBY_EXTRAS: Dict[str, List[Dict[str, Any]]] = {
+    "watching": [
+        {"path": "inbox.auto_draft.automation_mode", "value": "auto_ai"},
+        {"path": "inbox.auto_draft.bootstrap_automation_mode", "value": True},
+    ],
+    "suggest": [
+        {"path": "inbox.auto_draft.automation_mode", "value": "review"},
+    ],
+    "off": [
+        {"path": "inbox.auto_draft.automation_mode", "value": "manual"},
+    ],
+}
+
+# 每档的存量会话对齐目标（None=该档不做批量对齐）。只对**系统写的**档位行
+# （source ∈ _ALIGN_SOURCES）生效——坐席显式设置（human）、接管（takeover*）、
+# 守卫降档（guard:*/sweep*）、搁置静音（snooze*）全部保留，绝不覆盖人的决定。
+_STANDBY_ALIGN_TARGET: Dict[str, Optional[str]] = {
+    "watching": "auto_ai",
+    "suggest": "review",
+    # off 不批量改行：worker/deliver 双关已保证零自动出站，留档位现场
+    # 便于将来一键恢复（manual 全量覆写是不可逆的信息销毁）。
+    "off": None,
+}
+
+_ALIGN_SOURCES = frozenset({"bootstrap", "standby"})
+
+
+def standby_extras(mode: str) -> List[Dict[str, Any]]:
+    """该档要直写的注册表外 config 路径（白名单声明；未知档返回空）。"""
+    return [dict(e) for e in _STANDBY_EXTRAS.get(mode, [])]
+
+
+def standby_align_target(mode: str) -> Optional[str]:
+    """该档的存量会话对齐目标档位（None=不对齐）。"""
+    return _STANDBY_ALIGN_TARGET.get(mode)
+
+
+def align_existing_conversations(store: Any, target_mode: str) -> int:
+    """把**系统落档**（bootstrap/standby 来源）的存量会话对齐到 ``target_mode``。
+
+    为什么需要：bootstrap 会把「首条入站时刻的全局档位」固化成显式行——用户在
+    「拟稿人审」用了一周再切「全自动」，老客户全被一周前的 review 行钉住，
+    体验就是「开了全自动，老客户还是不自动回」（B37 同族的第二坑）。对齐范围
+    刻意收窄到系统写的行：人（human/takeover/guard/snooze…）写的行原样保留。
+
+    升 ``auto_ai`` 时**群会话一律跳过**——群的全自动只能来自坐席经 confirm_group
+    闸的显式确认（与 ``maybe_bootstrap_automation_mode`` 同一铁律）。
+    逐行走 ``set_automation_mode``（时间线审计照记）；任何单行异常跳过不中断。
+    返回实际改动行数。
+    """
+    if store is None or target_mode not in ("auto_ai", "review", "manual"):
+        return 0
+    try:
+        rows = store.list_automation_mode_rows()
+    except AttributeError:
+        return 0    # 旧 store 无该读口：优雅退化为「只影响新会话」
+    except Exception:
+        return 0
+    changed = 0
+    for r in rows or []:
+        try:
+            cid = str(r.get("conversation_id") or "")
+            cur = str(r.get("automation_mode") or "")
+            src = str(r.get("source") or "")
+            if not cid or cur == target_mode or src not in _ALIGN_SOURCES:
+                continue
+            if target_mode == "auto_ai":
+                # 双判据：会话行（chat_type 元数据）+ 无行时的 id 启发式兜底
+                # （telegram 负 peer 段=群/频道——is_group_conversation 同款
+                # 判据直接喂 conversation_id，防「行还没建」窗口漏判）。
+                from src.inbox.automation_mode import conversation_is_group
+                from src.inbox.ingest import is_group_conversation
+                if (conversation_is_group(store, cid)
+                        or is_group_conversation({
+                            "conversation_id": cid,
+                            "platform": cid.split(":", 1)[0]})):
+                    continue
+            store.set_automation_mode(cid, target_mode, source="standby")
+            changed += 1
+        except Exception:
+            continue
+    return changed
+
+
 def infer_standby_mode(config: Any) -> str:
     """从当前 config 反推所处姿态：off|suggest|watching|custom。
 
@@ -113,5 +203,6 @@ def standby_options() -> List[Dict[str, str]]:
 __all__ = [
     "STANDBY_MODES", "STANDBY_LABELS", "STANDBY_KEYS",
     "is_standby_mode", "build_standby_plan", "infer_standby_mode",
-    "standby_options",
+    "standby_options", "standby_extras", "standby_align_target",
+    "align_existing_conversations",
 ]

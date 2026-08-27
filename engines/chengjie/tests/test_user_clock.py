@@ -542,19 +542,20 @@ def test_user_time_line_zh_exact():
     )
 
 
-def test_user_time_line_en_and_narrow_clock():
+def test_user_time_line_en_replace_clock():
     line = user_time_line(infer_from_stated_place("曼谷"), "en", BKK_0612_UTC)
     assert "2026-07-28" in line and "Tue" in line and "06:12" in line
     assert "early morning" in line
     assert "inference" in line
-    # narrow（行为推断）仍进 prompt，只是时区是固定偏移伪名
-    assert "06:12" in user_time_line(_behavior_clock(7), "zh", BKK_0612_UTC)
 
 
-def test_user_time_line_suppressed_for_weak_signals():
+def test_user_time_line_suppressed_for_non_replace():
+    """2026-08-19 事故同根收口：narrow（裸行为推断）不再进 prompt——错的推断
+    时间进了 prompt，回复链就会在对方上午说「这么晚了早点睡」。"""
     assert user_time_line(None, "zh", BKK_0612_UTC) == ""
     assert user_time_line(infer_from_language("th"), "zh", BKK_0612_UTC) == ""   # advisory
     assert user_time_line(infer_from_phone("+14155550123"), "zh", BKK_0612_UTC) == ""
+    assert user_time_line(_behavior_clock(7), "zh", BKK_0612_UTC) == ""          # narrow
     for junk in JUNK:
         assert isinstance(user_time_line(infer_from_stated_place("曼谷"), "zh", junk), str)
 
@@ -661,18 +662,25 @@ def test_in_quiet_hours_stats_and_garbage():
 # schedule_clock / shift_hours_to_clock
 # ---------------------------------------------------------------------------
 
-def test_schedule_clock_uses_user_clock_for_replace_and_narrow():
+def test_schedule_clock_uses_user_clock_for_replace_only():
+    """2026-08-19 10:12 事故收口：择时基准**只信 replace**（显式信号）。
+
+    旧语义让 narrow 也驱动择时——5 条稀疏活跃样本把国内客户推断成 UTC-5，
+    晚安仪式在服务器上午 10:12 发出。错钟驱动档位＝内容错误（上午说晚安），
+    安静时段防线管不到这层。"""
     ts = BKK_0612_UTC.timestamp()
-    for clock in (infer_from_stated_place("曼谷"), _behavior_clock(7)):
-        hour, day_key, offset = schedule_clock(clock, ts)
-        assert (hour, day_key) == (6, "20260728")
-        assert offset == pytest.approx(7.0)
+    hour, day_key, offset = schedule_clock(infer_from_stated_place("曼谷"), ts)
+    assert (hour, day_key) == (6, "20260728")
+    assert offset == pytest.approx(7.0)
 
 
-def test_schedule_clock_falls_back_to_server_for_weak_signals():
+def test_schedule_clock_falls_back_to_server_for_non_replace():
     ts = BKK_0612_UTC.timestamp()
     server_local = BKK_0612_UTC.astimezone().replace(tzinfo=None)
-    for clock in (None, infer_from_language("th"), infer_from_phone("+14155550123")):
+    for clock in (None, infer_from_language("th"),
+                  infer_from_phone("+14155550123"),
+                  _behavior_clock(7),          # narrow：裸行为推断不再驱动择时
+                  _behavior_clock(-13)):       # 事故形态：推断出美洲偏移
         hour, day_key, offset = schedule_clock(clock, ts)
         assert hour == server_local.hour
         assert day_key == server_local.strftime("%Y%m%d")

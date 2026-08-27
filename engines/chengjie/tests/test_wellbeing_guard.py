@@ -59,6 +59,50 @@ def test_empty_and_neutral():
     assert detect_crisis("今天天气不错我们去喝奶茶吧")["level"] == "none"
 
 
+def test_mundane_english_daily_talk_not_flagged():
+    """B71 金标（实施67 P2-k，`_335` 实锤：正常接送孩子英文口语被立案紧急）。
+
+    「go on + 日常宾语/日期」「traffic is hopeless」「hopeless at cooking」都是
+    家常英语，绝不能立案；误命中词的最终定案等 DC8F 诊断包 matched= 行，此处
+    先按高置信双义短语收紧。"""
+    for msg in [
+        "I can't go on Monday, can you pick up the kids from school?",
+        "We can't go on the trip this weekend, kids have soccer",
+        "There's no reason to go on the highway, school run is faster on 5th",
+        "Sorry running late, traffic is hopeless, picking up the kids now",
+        "I'm hopeless at cooking, let's just order pizza for the kids",
+        "Can't go on the bus with all three kids today",
+    ]:
+        assert detect_crisis(msg)["level"] == "none", msg
+
+
+def test_positive_wish_not_flagged():
+    """B71 误报样本2 金标（实施74 b4alt，`_555` 实锤：英文正面愿望被标紧急）。
+
+    实测 0824 实施67 收紧后本句已 level=none（_555 案例卡系收紧装载前的旧案）；
+    金标钉死防词表后续扩充时回潮——生日愿望/期待句绝不立案。"""
+    for msg in [
+        "I wish next yr i can celebrate my own birthday party with you baba",
+        "I wish I could celebrate my birthday with you next year",
+        "Hope next year we can throw a big party for my birthday",
+    ]:
+        assert detect_crisis(msg)["level"] == "none", msg
+
+
+def test_crisis_english_go_on_still_flagged():
+    """收紧不回退：真危机语义的 go on / hopeless 形态照常立案。"""
+    for msg, lvl in [
+        ("I can't go on anymore", "elevated"),
+        ("I can't go on like this", "elevated"),
+        ("I just can't go on", "elevated"),
+        ("There is no reason to go on", "severe"),
+        ("No reason to live", "severe"),
+        ("I feel so hopeless", "elevated"),
+        ("I'm hopeless, nothing ever works out for me", "elevated"),
+    ]:
+        assert detect_crisis(msg)["level"] == lvl, msg
+
+
 def test_severe_precedence_over_despair():
     # 同时含绝望 + 自伤 → 取 severe
     sig = detect_crisis("我好绝望，真的不想活了")

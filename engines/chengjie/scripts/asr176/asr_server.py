@@ -6,7 +6,9 @@ Contract:
         file:            audio file (ogg/opus from Telegram, wav, mp3, ...)
         model:           ignored (single loaded model serves all requests)
         language:        optional ISO code; omit/auto -> autodetect
-        response_format: "text" -> text/plain body; "json"/default -> {"text": ...}
+        response_format: "text" -> text/plain body; "json"/default -> {"text": ...};
+                         "verbose_json" -> {"text","language","duration",
+                         "segments":[{start,end,text}...]}  (P3 SRT consumers)
     POST /v1/audio/emotion          multipart/form-data
         file: audio file -> {"labels":[...9 emotion2vec labels...],
                              "scores":[...], "model":..., "latency_ms":...}
@@ -96,8 +98,21 @@ def _transcribe_sync(model, path: str, language):
         vad_filter=True,
         vad_parameters={"min_silence_duration_ms": 300},
     )
-    text = "".join(s.text for s in segments).strip()
-    return text, info
+    # P3 2026-08-18: keep per-segment timing (SRT subtitle consumers request
+    # response_format=verbose_json; default json response unchanged).
+    seg_list = []
+    parts = []
+    for s in segments:
+        parts.append(s.text)
+        st = (s.text or "").strip()
+        if st:
+            seg_list.append({
+                "start": round(float(s.start or 0.0), 3),
+                "end": round(float(s.end or 0.0), 3),
+                "text": st,
+            })
+    text = "".join(parts).strip()
+    return text, info, seg_list
 
 
 async def _get_ser_model():
@@ -209,7 +224,8 @@ async def transcriptions(
         m = await _get_model()
         t0 = time.time()
         async with _infer_lock:
-            text, info = await asyncio.to_thread(_transcribe_sync, m, tmp.name, lang)
+            text, info, seg_list = await asyncio.to_thread(
+                _transcribe_sync, m, tmp.name, lang)
         log.info(
             "transcribed %s bytes lang=%s->%s dur=%.1fs elapsed=%.2fs chars=%d",
             len(data), lang or "auto", getattr(info, "language", "?"),
@@ -224,8 +240,17 @@ async def transcriptions(
         except OSError:
             pass
 
-    if (response_format or "").lower() == "text":
+    fmt = (response_format or "").lower()
+    if fmt == "text":
         return PlainTextResponse(text)
+    if fmt == "verbose_json":
+        # OpenAI verbose_json 兼容子集：text/language/duration/segments（SRT 消费方所需）
+        return {
+            "text": text,
+            "language": str(getattr(info, "language", "") or ""),
+            "duration": float(getattr(info, "duration", 0.0) or 0.0),
+            "segments": seg_list,
+        }
     return {"text": text}
 
 

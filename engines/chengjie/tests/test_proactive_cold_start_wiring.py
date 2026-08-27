@@ -100,6 +100,12 @@ class _FakeSkillManager:
     `_episodic_storage_key`（缺失时回落裸 chat_key，正是我们要的简单路径）。
     """
 
+    def resolve_residence(self, memory_key):
+        # city_ask 采集规格（并行线 2026-08 新增）在装配段引用本方法——假件缺它
+        # 会让整个设置阶段抛异常、预览闭包挂载失败（11 例连锁红）。返回 None＝
+        # 「没人有居住地记录」，不影响本文件全部冷启动断言的语义。
+        return None
+
     def resolve_birthday(self, *_a, **_kw):
         return None
 

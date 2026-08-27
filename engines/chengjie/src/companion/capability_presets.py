@@ -150,6 +150,11 @@ def preset_extras(name: str) -> List[Dict[str, Any]]:
 EXTRA_FLAG_DEFAULTS: Dict[str, Any] = {
     "ops.canary.enabled": False,
     "ops.canary.mode": "manual",
+    # P1 2026-08-22：值守三档捆绑写默认档位（standby_extras）——进快照才可回滚。
+    # 缺省值与 automation_mode.global_automation_mode_from_config 的代码缺省一致
+    # （auto_ai / bootstrap 随 auto_ai 默认开），写缺省值＝行为不变。
+    "inbox.auto_draft.automation_mode": "auto_ai",
+    "inbox.auto_draft.bootstrap_automation_mode": True,
 }
 
 

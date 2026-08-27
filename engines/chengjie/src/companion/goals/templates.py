@@ -5,6 +5,11 @@
   按当前人设/语言/上下文现场生成，模板绝不出成品文案（防「群发感」）。
 - 意图池按 ``crc32(goal_id + day)`` 确定性轮换：同目标同日恒定（缓存/复现友好、
   可单测），跨日自然变化（不像机器人每天说一样的话）。
+- 意图池条目为 ``(zh, en)`` 双语对（2026-08-19 i18n P0）：zh 是**权威文案**
+  （planner 落库、prompt 注入、缓存键全走 zh，行为与旧版逐字节一致）；en 只服务
+  UI 英文态展示（``goal_view``/agenda/detail 载荷的 ``intent_en`` 字段，经
+  :func:`intent_en_for` 反查）。**新增意图必须成对写齐 zh+en**——门禁
+  ``tests/test_goal_templates.py`` 钉双语结构。
 - ``push_curve`` 声明每个里程碑的默认推进力度：``none``（只字不提营销）/
   ``soft``（顺势自然带到）/ ``direct``（可以直说）。谁消费谁负责再叠情绪护栏。
 """
@@ -25,11 +30,16 @@ AUTONOMY_LEVELS = ("observe", "suggest", "auto")
 # 今日意图的推进力度
 PUSH_LEVELS = ("none", "soft", "direct")
 
-# 退避日（连发未回时）的纯陪伴意图池——所有模板共用
-CARE_INTENTS = (
-    "今天只关心对方情绪和近况，完全不提任何推进话题",
-    "纯陪伴日：聊对方感兴趣的轻松话题，不带任何目的",
+# 退避日（连发未回时）的纯陪伴意图池——所有模板共用。
+# (zh, en) 成对：zh 是 planner 落库/prompt 注入的权威文案；en 供 UI 英文态显示
+# （intent_en_for 反查）。CARE_INTENTS 保持「中文元组」形状不变（planner/测试契约）。
+CARE_PAIRS = (
+    ("今天只关心对方情绪和近况，完全不提任何推进话题",
+     "Today, only care about how they feel and what's going on — no advancing topics at all"),
+    ("纯陪伴日：聊对方感兴趣的轻松话题，不带任何目的",
+     "Pure companionship day: light topics they enjoy, no agenda"),
 )
+CARE_INTENTS = tuple(zh for zh, _ in CARE_PAIRS)
 
 # 漏斗阶段序（relationship_stage 结算用；与 contacts.Journey 阶段名对齐，全小写比较）
 STAGE_ORDER = (
@@ -69,14 +79,22 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
         ],
         "push_curve": ("none", "soft", "direct", "soft"),
         "intents": {
-            0: ("顺着对方最近聊过的事自然回暖，把互动节奏找回来",
-                "从今天的日常切入，关心一下对方近况，先让对话热起来"),
-            1: ("聊到相关话题时自然展示你在「{item}」上的见解，让对方觉得有收获，不提价格",
-                "用一个贴合对方处境的小例子，带出「{item}」能帮到TA什么"),
-            2: ("对方兴致好时自然提到「{item}」可以看得更深入，顺势说明解锁方式",
-                "如果对方主动追问，就大方介绍「{item}」的内容和价格，态度轻松不推销"),
-            3: ("对方还在犹豫就先退回日常话题，轻描淡写补一句「{item}」随时可以看，给足台阶",
-                "对方已表现兴趣的话，帮TA下决心：说清拿到后马上能看到什么"),
+            0: (("顺着对方最近聊过的事自然回暖，把互动节奏找回来",
+                 "Warm things back up around what they talked about recently and get the rhythm going again"),
+                ("从今天的日常切入，关心一下对方近况，先让对话热起来",
+                 "Open with today's small talk, check in on how they're doing, and let the chat warm up first")),
+            1: (("聊到相关话题时自然展示你在「{item}」上的见解，让对方觉得有收获，不提价格",
+                 "When a related topic comes up, share your insight on \"{item}\" so they feel they're gaining something — no mention of price"),
+                ("用一个贴合对方处境的小例子，带出「{item}」能帮到TA什么",
+                 "Use a small example that fits their situation to show how \"{item}\" could help them")),
+            2: (("对方兴致好时自然提到「{item}」可以看得更深入，顺势说明解锁方式",
+                 "When they're in a good mood, mention that \"{item}\" goes deeper, and casually explain how to unlock it"),
+                ("如果对方主动追问，就大方介绍「{item}」的内容和价格，态度轻松不推销",
+                 "If they ask on their own, introduce \"{item}\" and its price openly — relaxed, never salesy")),
+            3: (("对方还在犹豫就先退回日常话题，轻描淡写补一句「{item}」随时可以看，给足台阶",
+                 "If they hesitate, drop back to everyday topics and lightly add that \"{item}\" is there whenever — leave them an easy out"),
+                ("对方已表现兴趣的话，帮TA下决心：说清拿到后马上能看到什么",
+                 "If they've shown interest, help them decide: spell out what they'll see right away")),
         },
     },
     "conversion_subscribe": {
@@ -99,14 +117,22 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
         ],
         "push_curve": ("none", "soft", "direct", "soft"),
         "intents": {
-            0: ("保持轻松日常互动，让对方觉得跟你聊天是件放松的事",
-                "顺着对方的话题多聊几轮，先把在场感做足"),
-            1: ("在对方用到相关功能/内容时，自然带一句「{item}」还能怎么样，不提价",
-                "让对方感受到你们互动里已经有的价值，为「{item}」做心理铺垫"),
-            2: ("对方兴致好时顺势介绍「{item}」的好处和开通方式，语气像分享不像推销",
-                "对方问到时大方说明「{item}」价格与权益，给对方自己决定的空间"),
-            3: ("不催不逼，隔天自然补一句；对方犹豫就先放下，聊回日常",
-                "对方已心动的话，给一个现在开通的小理由（新内容/陪伴感），帮TA收口"),
+            0: (("保持轻松日常互动，让对方觉得跟你聊天是件放松的事",
+                 "Keep the chat light and daily — talking to you should feel relaxing"),
+                ("顺着对方的话题多聊几轮，先把在场感做足",
+                 "Follow their topics for a few more rounds and build real presence first")),
+            1: (("在对方用到相关功能/内容时，自然带一句「{item}」还能怎么样，不提价",
+                 "When they touch a related feature or topic, slip in what \"{item}\" could add — no price talk"),
+                ("让对方感受到你们互动里已经有的价值，为「{item}」做心理铺垫",
+                 "Let them feel the value already in your chats, paving the way for \"{item}\"")),
+            2: (("对方兴致好时顺势介绍「{item}」的好处和开通方式，语气像分享不像推销",
+                 "When the mood is right, introduce the perks of \"{item}\" and how to subscribe — sharing, not selling"),
+                ("对方问到时大方说明「{item}」价格与权益，给对方自己决定的空间",
+                 "If they ask, lay out the price and benefits of \"{item}\" openly and give them room to decide")),
+            3: (("不催不逼，隔天自然补一句；对方犹豫就先放下，聊回日常",
+                 "No pushing — follow up casually the next day; if they waver, let it go and chat normally"),
+                ("对方已心动的话，给一个现在开通的小理由（新内容/陪伴感），帮TA收口",
+                 "If they're tempted, give one small reason to subscribe now (new content, companionship) and help them close")),
         },
     },
     "relationship_stage": {
@@ -126,14 +152,22 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
         ],
         "push_curve": ("none", "none", "soft", "soft"),
         "intents": {
-            0: ("多用开放式问题让对方多说，找到TA真正愿意聊的话题",
-                "对对方说的每件事都接得住，让TA觉得跟你聊天不费劲"),
-            1: ("回应里自然带上对方之前说过的细节，让TA感到被记住",
-                "在对方的兴趣点上深入聊几轮，制造「聊得来」的感觉"),
-            2: ("适度自我暴露一点日常或小心事，换取对方的信任和分享",
-                "对方提到烦恼时认真接住，给情绪价值不给说教"),
-            3: ("确认对方的核心诉求并自然总结，为下一步做好铺垫",
-                "稳定日常互动节奏，让关系保持在热络状态"),
+            0: (("多用开放式问题让对方多说，找到TA真正愿意聊的话题",
+                 "Ask open questions so they talk more, and find the topics they truly enjoy"),
+                ("对对方说的每件事都接得住，让TA觉得跟你聊天不费劲",
+                 "Catch everything they say so chatting with you feels effortless")),
+            1: (("回应里自然带上对方之前说过的细节，让TA感到被记住",
+                 "Weave in details they mentioned before so they feel remembered"),
+                ("在对方的兴趣点上深入聊几轮，制造「聊得来」的感觉",
+                 "Go a few rounds deep on their interests to build that \"we click\" feeling")),
+            2: (("适度自我暴露一点日常或小心事，换取对方的信任和分享",
+                 "Share a bit of your own day or small worries to earn their trust and openness"),
+                ("对方提到烦恼时认真接住，给情绪价值不给说教",
+                 "When they bring up troubles, hold space — give comfort, not lectures")),
+            3: (("确认对方的核心诉求并自然总结，为下一步做好铺垫",
+                 "Confirm what they really need, sum it up naturally, and set up the next step"),
+                ("稳定日常互动节奏，让关系保持在热络状态",
+                 "Keep a steady daily rhythm so the relationship stays warm")),
         },
     },
     "relationship_intimacy": {
@@ -153,14 +187,22 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
         ],
         "push_curve": ("none", "none", "none", "none"),
         "intents": {
-            0: ("保持轻松日常互动，让对话别断，节奏以对方舒服为准",
-                "找一个今天的小事作话头，把互动自然续上"),
-            1: ("挑一个对方感兴趣的话题深入聊几轮，别浅尝辄止",
-                "认真回应对方说过的事，追问一个走心的细节"),
-            2: ("制造一点专属感：记得TA的偏好、只跟TA说的小事",
-                "用「上次你说…」自然回访，让对方感到被特别对待"),
-            3: ("自然表达在乎和陪伴，让对方习惯有你在",
-                "稳定出现在对方的日常里，不黏不冷"),
+            0: (("保持轻松日常互动，让对话别断，节奏以对方舒服为准",
+                 "Keep easy daily chat going — don't let it drop, pace it by their comfort"),
+                ("找一个今天的小事作话头，把互动自然续上",
+                 "Pick one small thing from today as an opener and keep the thread alive")),
+            1: (("挑一个对方感兴趣的话题深入聊几轮，别浅尝辄止",
+                 "Pick a topic they love and go several rounds deep — don't just skim"),
+                ("认真回应对方说过的事，追问一个走心的细节",
+                 "Respond thoughtfully to what they shared and ask about one heartfelt detail")),
+            2: (("制造一点专属感：记得TA的偏好、只跟TA说的小事",
+                 "Create a sense of \"just us\": remember their preferences and the little things told only to you"),
+                ("用「上次你说…」自然回访，让对方感到被特别对待",
+                 "Circle back with \"last time you said…\" so they feel specially treated")),
+            3: (("自然表达在乎和陪伴，让对方习惯有你在",
+                 "Express care and companionship naturally so having you around becomes a habit"),
+                ("稳定出现在对方的日常里，不黏不冷",
+                 "Show up steadily in their day-to-day — never clingy, never cold")),
         },
     },
     "engagement_reactivate": {
@@ -188,14 +230,22 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
         ],
         "push_curve": ("none", "none", "soft", "soft"),
         "intents": {
-            0: ("用轻量无压力的方式打个招呼，绝不提「好久没回我」",
-                "分享一件自己今天的小事作开场，不要求对方必须回应"),
-            1: ("带上对方之前聊过的一件事自然回访（『上次你说的那事后来怎么样』）",
-                "用一个只有你们聊过的细节唤起对方记忆，显得真诚不群发"),
-            2: ("分享一个对方可能感兴趣的小内容/小更新，给TA一个回来的理由",
-                "提供一点新鲜价值（趣事/进展/内容），别空转寒暄"),
-            3: ("最后一次轻触达：表示自己一直在、随时可以聊，完全不施压",
-                "轻轻收尾：祝好 + 留门（想聊随时找我），保持体面"),
+            0: (("用轻量无压力的方式打个招呼，绝不提「好久没回我」",
+                 "Say hi in a light, zero-pressure way — never mention \"you haven't replied in ages\""),
+                ("分享一件自己今天的小事作开场，不要求对方必须回应",
+                 "Open by sharing a small thing from your own day, with no obligation for them to reply")),
+            1: (("带上对方之前聊过的一件事自然回访（『上次你说的那事后来怎么样』）",
+                 "Follow up on something they once mentioned (\"how did that thing you told me about turn out?\")"),
+                ("用一个只有你们聊过的细节唤起对方记忆，显得真诚不群发",
+                 "Use a detail only the two of you discussed — genuine, clearly not a mass blast")),
+            2: (("分享一个对方可能感兴趣的小内容/小更新，给TA一个回来的理由",
+                 "Share a small update or find they might like — give them a reason to come back"),
+                ("提供一点新鲜价值（趣事/进展/内容），别空转寒暄",
+                 "Offer something fresh (a fun story, progress, content) instead of empty small talk")),
+            3: (("最后一次轻触达：表示自己一直在、随时可以聊，完全不施压",
+                 "One last light touch: you're around and happy to chat anytime — zero pressure"),
+                ("轻轻收尾：祝好 + 留门（想聊随时找我），保持体面",
+                 "Wrap up gently: wish them well and leave the door open (\"ping me anytime\") — stay graceful")),
         },
     },
     "acquire_and_convert": {
@@ -230,16 +280,26 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
         ],
         "push_curve": ("none", "none", "soft", "direct", "soft"),
         "intents": {
-            0: ("以自己的生活和生意日常自然开场，互相认识，让对方觉得你是有趣的真实同路人",
-                "顺着对方的话题聊，先建立「聊得来」的感觉，完全不谈任何工具产品"),
-            1: ("像同行交流一样自然好奇对方在做什么生意/工作，顺势聊到TA平时怎么打理这些事",
-                "顺着生意话题摸一摸对方的日常痛点（人手/回消息/语言/获客），只听只共情不给方案"),
-            2: ("聊到对方的痛点时，自然分享自己踩过的同款坑和现在的解法，让TA觉得有共鸣有收获",
-                "以自己真实使用体验的口吻聊聊工具帮自己省了多少事，别报价别发链接，点到即止"),
-            3: ("对方兴致好时大方介绍适合TA的那款产品：能解决什么、大概什么价，给出官网下单方式",
-                "对方主动追问时详细说明产品与价格档位，附上官网链接，语气像帮朋友参谋不像销售"),
-            4: ("对方还在犹豫就退回日常话题，轻轻补一句有问题随时问我，给足台阶不催单",
-                "对方已有意向的话，帮TA下决心：说清开通后马上能用到什么，提醒官网自助下单即可"),
+            0: (("以自己的生活和生意日常自然开场，互相认识，让对方觉得你是有趣的真实同路人",
+                 "Open with your own life and business day-to-day — get acquainted as a real, interesting peer"),
+                ("顺着对方的话题聊，先建立「聊得来」的感觉，完全不谈任何工具产品",
+                 "Follow their topics and build rapport first — no tools, no products at all")),
+            1: (("像同行交流一样自然好奇对方在做什么生意/工作，顺势聊到TA平时怎么打理这些事",
+                 "Be peer-curious about their business or work, and how they handle it day to day"),
+                ("顺着生意话题摸一摸对方的日常痛点（人手/回消息/语言/获客），只听只共情不给方案",
+                 "Probe everyday pain points along the way (staffing, replies, language, leads) — just listen and empathize, no solutions yet")),
+            2: (("聊到对方的痛点时，自然分享自己踩过的同款坑和现在的解法，让TA觉得有共鸣有收获",
+                 "When their pain point comes up, share the same pit you fell into and how you solve it now — relatable and useful"),
+                ("以自己真实使用体验的口吻聊聊工具帮自己省了多少事，别报价别发链接，点到即止",
+                 "Talk first-person about how much hassle the tool saves you — no prices, no links, just a light touch")),
+            3: (("对方兴致好时大方介绍适合TA的那款产品：能解决什么、大概什么价，给出官网下单方式",
+                 "When they're engaged, openly introduce the right product: what it solves, rough price, and how to order on the site"),
+                ("对方主动追问时详细说明产品与价格档位，附上官网链接，语气像帮朋友参谋不像销售",
+                 "If they press for details, walk through the product and price tiers with the site link — like advising a friend, not selling")),
+            4: (("对方还在犹豫就退回日常话题，轻轻补一句有问题随时问我，给足台阶不催单",
+                 "If they hesitate, return to casual topics and softly add \"ask me anything anytime\" — no chasing"),
+                ("对方已有意向的话，帮TA下决心：说清开通后马上能用到什么，提醒官网自助下单即可",
+                 "If they're keen, help them commit: spell out what they can use right away and that site checkout is self-serve")),
         },
     },
     "retention_expand": {
@@ -278,14 +338,22 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
         ],
         "push_curve": ("soft", "soft", "soft", "direct"),
         "intents": {
-            0: ("关心TA用得顺不顺手，主动问有没有卡壳的地方，像朋友售后不像客服工单",
-                "顺手分享一个自己常用的小技巧或用法，帮TA更快把工具用起来"),
-            1: ("自然聊聊用了之后有没有省事，帮TA把省下的时间和钱说出来，让价值看得见",
-                "听到抱怨或没用起来，先共情再给具体解法，绝不辩解产品"),
-            2: ("顺着TA的业务增长，聊到更高档位或别的产品还能帮上什么，种草不报价",
-                "以自己升级后的真实体验聊聊差别，点到即止不催"),
-            3: ("到期前自然提醒续费，说清续上不断档的好处，附官网自助续费方式",
-                "TA犹豫就问清顾虑（价格/用量/效果），对症回应，给足台阶不催单"),
+            0: (("关心TA用得顺不顺手，主动问有没有卡壳的地方，像朋友售后不像客服工单",
+                 "Ask how it's going and where they're stuck — like a friend checking in, not a support ticket"),
+                ("顺手分享一个自己常用的小技巧或用法，帮TA更快把工具用起来",
+                 "Share a favorite tip or workflow to help them get productive faster")),
+            1: (("自然聊聊用了之后有没有省事，帮TA把省下的时间和钱说出来，让价值看得见",
+                 "Chat about what it's actually saving them — put the time and money into words so the value is visible"),
+                ("听到抱怨或没用起来，先共情再给具体解法，绝不辩解产品",
+                 "If they complain or aren't using it, empathize first, then give a concrete fix — never defend the product")),
+            2: (("顺着TA的业务增长，聊到更高档位或别的产品还能帮上什么，种草不报价",
+                 "As their business grows, mention what a higher tier or another product could add — seeding, no quotes"),
+                ("以自己升级后的真实体验聊聊差别，点到即止不催",
+                 "Describe the difference since you upgraded, in your own words — a light touch, no push")),
+            3: (("到期前自然提醒续费，说清续上不断档的好处，附官网自助续费方式",
+                 "Before expiry, remind them naturally to renew, explain why staying uninterrupted helps, and share the self-serve renewal link"),
+                ("TA犹豫就问清顾虑（价格/用量/效果），对症回应，给足台阶不催单",
+                 "If they waver, ask what's holding them back (price, usage, results), answer that exact concern, and give them space")),
         },
     },
     "profile_discovery": {
@@ -330,14 +398,22 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
         "gap_in_intent": True,
         "phase_days": (2, 5, 8, 10),
         "intents": {
-            0: ("先把互动热起来：顺着TA的话题聊，让TA觉得跟你聊天轻松不设防",
-                "从今天的日常小事自然切入，先建立「聊得来」的感觉，不急着问"),
-            1: ("顺着当下话题自然带出你想了解的那件事，问完就回到闲聊，绝不连环追问",
-                "用「分享自己→顺口反问」换信息：先说你自己的情况，再轻轻问TA"),
-            2: ("对方兴致好时，把还没聊到的那一项自然问出来，语气像朋友好奇不像登记",
-                "结合TA之前说过的事往下追一层，把模糊的信息聊具体"),
-            3: ("把了解到的事自然回带确认（「你之前说…」），别像核对表格",
-                "话题收在轻松处；还缺的信息以后有机会再聊，不硬凑"),
+            0: (("先把互动热起来：顺着TA的话题聊，让TA觉得跟你聊天轻松不设防",
+                 "Warm the chat up first: follow their topics so talking to you feels easy and unguarded"),
+                ("从今天的日常小事自然切入，先建立「聊得来」的感觉，不急着问",
+                 "Ease in with today's small things and build rapport first — no rush to ask questions")),
+            1: (("顺着当下话题自然带出你想了解的那件事，问完就回到闲聊，绝不连环追问",
+                 "Let the current topic lead into the one thing you want to learn, then drop back to small talk — never chain questions"),
+                ("用「分享自己→顺口反问」换信息：先说你自己的情况，再轻轻问TA",
+                 "Trade info by sharing first: tell your side, then gently ask theirs")),
+            2: (("对方兴致好时，把还没聊到的那一项自然问出来，语气像朋友好奇不像登记",
+                 "When they're chatty, ask about the one item you haven't covered — curious friend, not a registration form"),
+                ("结合TA之前说过的事往下追一层，把模糊的信息聊具体",
+                 "Build on what they said before and dig one level deeper to firm up the fuzzy bits")),
+            3: (("把了解到的事自然回带确认（「你之前说…」），别像核对表格",
+                 "Casually confirm what you've learned (\"you mentioned…\") — don't read it like a checklist"),
+                ("话题收在轻松处；还缺的信息以后有机会再聊，不硬凑",
+                 "End on a light note; whatever's missing can wait for another day — don't force it")),
         },
     },
     "custom": {
@@ -365,14 +441,22 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
         # P26：每段扩到 2 条——custom 单条池在同一里程碑期间每天同一句
         # （pick_intent 的 crc32 轮换只在池内生效），目标开场连续几天一个套路
         "intents": {
-            0: ("围绕目标「{note}」找一个自然的切入点起步，节奏以对方舒适为先",
-                "先顺着TA的话题聊热乎，再朝「{note}」的方向轻轻靠一步"),
-            1: ("顺着已有话题把「{note}」自然推进一小步，不生硬",
-                "结合TA今天聊到的事，把「{note}」往前带半步，点到即止"),
-            2: ("在对方兴致好的时候，围绕「{note}」聊得更具体一些",
-                "把「{note}」聊到具体处：给一个贴合TA情况的说法或例子"),
-            3: ("围绕「{note}」自然收口：确认对方的态度，给足台阶",
-                "轻描淡写地把「{note}」收个尾，对方犹豫就先放下聊回日常"),
+            0: (("围绕目标「{note}」找一个自然的切入点起步，节奏以对方舒适为先",
+                 "Find a natural way into \"{note}\" to get started — pace it by their comfort"),
+                ("先顺着TA的话题聊热乎，再朝「{note}」的方向轻轻靠一步",
+                 "Warm up on their topics first, then take one gentle step toward \"{note}\"")),
+            1: (("顺着已有话题把「{note}」自然推进一小步，不生硬",
+                 "Nudge \"{note}\" forward a small step inside the current topic — nothing forced"),
+                ("结合TA今天聊到的事，把「{note}」往前带半步，点到即止",
+                 "Tie \"{note}\" to what they talked about today and move it half a step — just a touch")),
+            2: (("在对方兴致好的时候，围绕「{note}」聊得更具体一些",
+                 "When they're engaged, get more concrete about \"{note}\""),
+                ("把「{note}」聊到具体处：给一个贴合TA情况的说法或例子",
+                 "Make \"{note}\" tangible: give a take or example that fits their situation")),
+            3: (("围绕「{note}」自然收口：确认对方的态度，给足台阶",
+                 "Wrap up \"{note}\" naturally: confirm where they stand and leave them an easy out"),
+                ("轻描淡写地把「{note}」收个尾，对方犹豫就先放下聊回日常",
+                 "Close out \"{note}\" lightly; if they hesitate, set it aside and go back to everyday chat")),
         },
     },
 }
@@ -425,13 +509,33 @@ def push_for_milestone(template: Dict[str, Any], idx: int) -> str:
     return lvl if lvl in PUSH_LEVELS else "soft"
 
 
-def _format_intent(raw: str, params: Dict[str, Any]) -> str:
-    """把模板参数代入意图串（只认 {item}/{note}；缺参优雅留白不抛）。"""
+def _intent_zh(entry: Any) -> str:
+    """池条目 → 中文权威文案（条目=(zh, en) 对；容忍历史纯字符串条目）。"""
+    if isinstance(entry, (list, tuple)) and entry:
+        return str(entry[0] or "")
+    return str(entry or "")
+
+
+def _intent_en(entry: Any) -> str:
+    """池条目 → 英文文案（无英文变体返回 ""）。"""
+    if isinstance(entry, (list, tuple)) and len(entry) > 1:
+        return str(entry[1] or "")
+    return ""
+
+
+def _format_intent(raw: str, params: Dict[str, Any], *, en: bool = False) -> str:
+    """把模板参数代入意图串（只认 {item}/{note}；缺参优雅留白不抛）。
+
+    ``en=True`` 时留白词用英文（"it"/"this goal"）；{note}/{item} 本身是运营
+    手输数据，原样代入不翻译（数据不译原则）。"""
     item = str((params or {}).get("item_label")
                or (params or {}).get("item_id") or "").strip()
     note = str((params or {}).get("note") or "").strip()
+    item_blank = "it" if en else "它"
+    note_blank = "this goal" if en else "这个目标"
     try:
-        return raw.replace("{item}", item or "它").replace("{note}", note or "这个目标")
+        return raw.replace("{item}", item or item_blank).replace(
+            "{note}", note or note_blank)
     except Exception:
         return raw
 
@@ -440,7 +544,10 @@ def pick_intent(
     template: Dict[str, Any], milestone_idx: int, goal_id: str, day: str,
     params: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """确定性选今日意图：``crc32(goal_id+day)`` 定池内下标——同目标同日恒定、跨日轮换。"""
+    """确定性选今日意图：``crc32(goal_id+day)`` 定池内下标——同目标同日恒定、跨日轮换。
+
+    返回值恒为**中文权威文案**（planner 落库 / prompt 注入的口径不变）；
+    英文展示态由 :func:`intent_en_for` 反查同一池取对应英文变体。"""
     pools = template.get("intents") or {}
     keys = sorted(pools.keys())
     if not keys:
@@ -450,7 +557,36 @@ def pick_intent(
     if not pool:
         return ""
     h = zlib.crc32(f"{goal_id}:{day}".encode("utf-8", "ignore"))
-    return _format_intent(str(pool[h % len(pool)]), params or {})
+    return _format_intent(_intent_zh(pool[h % len(pool)]), params or {})
+
+
+def intent_en_for(
+    template: Optional[Dict[str, Any]],
+    params: Optional[Dict[str, Any]],
+    intent_zh: str,
+) -> str:
+    """存量中文意图（goal_actions.intent 落库值）→ 英文对应文案。
+
+    机制＝对模板全部意图池（含退避陪伴池）按同参渲染做**精确匹配**——planner
+    写库的意图必然是某条池文案的参数化渲染（plan_beat 只有 pick_intent /
+    pick_care_intent 两个来源），所以精确匹配可靠且零歧义；匹配不到（历史
+    参数已改 / prompt 链的缺口合流串 / 人工改过）返回 ""，**调用方回落中文**
+    ——宁可英文界面偶见中文原文，绝不给错译。{note}/{item} 是运营手输数据，
+    英文句里原样保留（数据不译）。"""
+    target = str(intent_zh or "").strip()
+    if not target:
+        return ""
+    p = params or {}
+    pools: List[Any] = list(((template or {}).get("intents") or {}).values())
+    pools.append(CARE_PAIRS)
+    for pool in pools:
+        for entry in (pool or ()):
+            en_raw = _intent_en(entry)
+            if not en_raw:
+                continue
+            if _format_intent(_intent_zh(entry), p) == target:
+                return _format_intent(en_raw, p, en=True)
+    return ""
 
 
 def pick_care_intent(goal_id: str, day: str) -> str:
@@ -525,11 +661,13 @@ def phase_cap(phase_days: List[float], elapsed_days: float, lookahead: int = 1) 
 __all__ = [
     "AUTONOMY_LEVELS",
     "CARE_INTENTS",
+    "CARE_PAIRS",
     "GOAL_STATUSES",
     "PUSH_LEVELS",
     "STAGE_ORDER",
     "TEMPLATES",
     "get_template",
+    "intent_en_for",
     "list_templates",
     "milestone_count",
     "milestone_label",

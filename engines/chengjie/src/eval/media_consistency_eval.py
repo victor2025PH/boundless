@@ -51,6 +51,17 @@ _CLAIM_WITHOUT_PHOTO = [re.compile(p, re.IGNORECASE) for p in (
     r"[刚剛]\s*拍\s*(?:的|好)[^\n，,]{0,4}[，,]?\s*(?:发|發|给|給)\s*你",
     r"(?:发|發)\s*(?:给|給)?\s*你\s*(?:啦|了)\s*[～~!！。]?\s*$",
     r"看\s*(?:一)?\s*下\s*(?:我[刚剛]拍)",
+    # 实施69（2026-08-24 夜市摊实录）：完成态口语「这不就来了嘛」、
+    # 「真发过去了」与**传输借口式已发断言**（「信号不好照片没传出去/卡在
+    # 半道」——尾部必须是"没传出/卡住"类断言，「信号不好发不了」是诚实否认
+    # 不命中）；粤语完成态（啱啱拍嘅）来自同期另一客户实录。
+    r"这不\s*就?\s*(?:来|來)\s*(?:了|啦|嘛)",
+    r"(?:真|真的|已经|已經)\s*(?:发|發|传|傳)\s*(?:过去|過去|出去|给你|給你)\s*(?:了|啦)",
+    r"(?:信号|信號|讯号|訊號|网络|網絡)[^\n，,]{0,6}(?:不好|不太行|不行|太差|差)"
+    r"[^\n]{0,10}(?:没传出|沒傳出|没发出|沒發出|卡在|卡住)",
+    r"(?:照片|图|圖)\s*卡\s*(?:在|住)",
+    r"(?:啱啱|头先|頭先)\s*(?:影|拍)\s*(?:嘅|咗)",
+    r"拍\s*好\s*(?:啦|了|咯)(?![吗嗎没沒])",
     r"\bhere(?:'|’)?s\s+(?:a|an|my|the|one)?\s*(?:photo|pic(?:ture)?|selfie)",
     r"\bjust\s+(?:took|sent)\s+(?:this|it|one|a\s+(?:photo|pic|selfie))",
     r"\b(?:photo|pic|selfie)\s+(?:is\s+)?(?:sent|on\s+(?:the|its)\s+way)",
@@ -60,9 +71,10 @@ _CLAIM_WITHOUT_PHOTO = [re.compile(p, re.IGNORECASE) for p in (
 _PAST_REF_RE = re.compile(
     r"上次|之前|昨天|前几天|前幾天|那[张張]|\blast\s+time\b|\bearlier\b")
 
-# 强断言"我在 X"（配文声称身处某场景类；与照片实际场景类冲突才违规）
+# 强断言"我在 X"（配文声称身处某场景类；与照片实际场景类冲突才违规）。
+# 实施69：补东北口语「搁」（「我搁这儿呢」）——实录事故人设的自称句式。
 _SELF_LOCATION_RE = re.compile(
-    r"(?:我|人家)\s*(?:现在|現在|正)?\s*在\s*([^\s，。！？,!?~～]{1,8})"
+    r"(?:我|人家)\s*(?:现在|現在|正)?\s*(?:在|搁|擱)\s*([^\s，。！？,!?~～]{1,8})"
 )
 
 # 场景类词表（zh 断言词 → 类 key；en 场景短语关键词 → 类 key）。
@@ -87,8 +99,12 @@ _SCENE_CLASSES: Dict[str, Dict[str, Sequence[str]]] = {
                 "en": ("bedroom",)},
     "library": {"zh": ("图书馆", "圖書館", "书店", "書店"),
                 "en": ("library", "bookstore")},
-    "street":  {"zh": ("街上", "街头", "街頭"),
-                "en": ("city street", "street style")},
+    # 实施69：夜市/烤串并入 street（实录人设=烧烤店老板娘，其自称场景词
+    # 此前表盲；独立维护，刻意不与生产词表同源）。
+    "street":  {"zh": ("街上", "街头", "街頭", "夜市", "烤串", "大排档",
+                       "大排檔", "烧烤摊", "燒烤攤"),
+                "en": ("city street", "street style", "night market",
+                       "food stall")},
 }
 
 # home 域内互容（"在家" vs bedroom/couch 不算冲突——卧室也是家）
@@ -178,7 +194,22 @@ _GOLDEN_SAMPLES: List[Dict[str, Any]] = [
      "scene": "at the beach, sea in the background", "expect_ok": False},
     {"id": "time1", "text": "刚拍的～", "photo_sent": True,
      "scene": "campus walkway, afternoon light", "hour": 3, "expect_ok": False},
+    # —— 实施69 扩容（2026-08-24 夜市摊实录 + 同期粤语实录）——
+    {"id": "claim3", "text": "哎妈呀，急啥，这不就来了嘛。", "photo_sent": False,
+     "scene": "", "expect_ok": False},                        # 完成态口语谎
+    {"id": "claim4",
+     "text": "哎妈呀，真发过去了，可能夜市这边信号不太行，照片卡在半道儿了。",
+     "photo_sent": False, "scene": "", "expect_ok": False},   # 传输借口式已发断言
+    {"id": "claim5", "text": "黄昏海边嗰张，啱啱拍嘅，你睇清楚係咪真嘅",
+     "photo_sent": False, "scene": "", "expect_ok": False},   # 粤语完成态
+    {"id": "scene2", "text": "我在夜市摊这儿呢，刚收完摊。", "photo_sent": True,
+     "scene": "at home on the couch, cozy and relaxed",
+     "expect_ok": False},                                     # 自称夜市×居家图
     # —— 合法反例（不许误伤）——
+    {"id": "ok_claim_backed", "text": "这不就来了嘛，你看看～", "photo_sent": True,
+     "scene": "", "expect_ok": True},                         # 真附图=真话
+    {"id": "ok_honest_signal", "text": "这边信号不太好，这会儿发不了照片呢",
+     "photo_sent": False, "scene": "", "expect_ok": True},    # 诚实否认≠传输借口
     {"id": "ok1", "text": "这是刚拍的，给你看～喜欢吗？", "photo_sent": True,
      "scene": "in a cozy cafe", "expect_ok": True},           # 附图说刚拍=真话
     {"id": "ok2", "text": "嘿嘿，先卖个关子～多陪我聊聊嘛", "photo_sent": False,

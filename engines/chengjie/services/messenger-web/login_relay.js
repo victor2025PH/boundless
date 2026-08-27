@@ -91,6 +91,10 @@ export function relayStepFromStage(stage, opts) {
       return _mk(RELAY_STEP.E2EE_PIN, { code: "e2ee_pin" });
     case STAGE.CHECKPOINT:
       return _mk(RELAY_STEP.CHECKPOINT, { escalate: true, code: "checkpoint" });
+    case STAGE.ACCOUNT_LOCKED:
+      // 锁定＝检查点家族（同走截图回落视图），但 code 单列——前端据此给「等冷却/
+      // 去申诉」而非「当场过验证」的出路（两者混谈=让用户拿错药方）。
+      return _mk(RELAY_STEP.CHECKPOINT, { escalate: true, code: "account_locked" });
     default:
       // UNKNOWN / 加载中 / 认不出：不硬凑步骤，让前端等下一轮（宁可多等一轮也别错渲表单）。
       return _mk(RELAY_STEP.WAIT);

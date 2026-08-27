@@ -27,6 +27,21 @@
 .rps-dot.on{background:var(--green)}
 .rps-dot.off{background:var(--red)}
 .rps-gate-link{font-size:.8rem;margin-left:auto;font-weight:600}
+/* 影响全自动的因素清单（实施56）：色点+文字双通道（色弱可辨），na 行不渲染 */
+.rps-af{display:flex;flex-direction:column;gap:.4rem;margin-top:.7rem;border-top:1px dashed var(--bd);padding-top:.65rem}
+.rps-af-head{font-size:.8rem;font-weight:700;color:var(--t2);display:flex;align-items:center;gap:.5rem}
+.rps-af-row{display:flex;align-items:center;gap:.55rem;font-size:.82rem;min-height:1.7rem}
+.rps-af-name{font-weight:600;color:var(--t2);flex:none;min-width:6.2em}
+.rps-af-desc{color:var(--t3);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rps-af-row.bad .rps-af-desc{color:var(--red);font-weight:600}
+.rps-af-row.warn .rps-af-desc{color:var(--amber)}
+.rps-dot.warn{background:var(--amber)}
+.rps-af-btn{flex:none;border:1px solid var(--bd);background:var(--input);color:var(--t2);
+  border-radius:8px;padding:.22rem .65rem;font-size:.76rem;font-weight:600;cursor:pointer}
+.rps-af-btn:hover{border-color:var(--brand,#6366f1)}
+.rps-af-btn[disabled]{opacity:.55;cursor:wait}
+.rps-af-ok{font-size:.8rem;color:var(--green)}
+@media (max-width:520px){.rps-af-desc{white-space:normal}}
 /* 回复额度守卫（P0-guard）：状态色义与收件箱预算横幅一致——
    触顶=琥珀 / 豁免=主题主色 / 正常=绿 / 硬停=红（主题 token，暗色免费） */
 .rps-guard-state{display:inline-block;padding:.12rem .55rem;border-radius:999px;font-size:.7rem;font-weight:700}
@@ -154,7 +169,7 @@ input[type=number].rps-num,input[type=text].rps-num{width:110px;padding:.35rem .
 .rps-explain .rps-x-chips{display:flex;flex-wrap:wrap;gap:.45rem;margin-top:.5rem}
 .rps-x-chip{background:var(--input);border-radius:8px;padding:.3rem .6rem;font-size:.8rem;color:var(--t)}
 .rps-x-chip .src{font-size:.7rem;font-weight:700;border-radius:999px;padding:.06rem .42rem;margin-left:.35rem;vertical-align:middle;border:1px solid color-mix(in srgb, currentColor 30%, transparent)}
-.rps-x-chip .src.s-conversation{background:rgba(30,140,242,.14);color:var(--p)}
+.rps-x-chip .src.s-conversation{background:color-mix(in srgb, var(--bl-growth,#1e8cf2) 14%, transparent);color:var(--p)}
 .rps-x-chip .src.s-persona{background:color-mix(in srgb, var(--purple) 14%, transparent);color:var(--purple)}
 .rps-x-chip .src.s-global{background:rgba(16,185,129,.12);color:var(--green)}
 .rps-x-chip .src.s-default,.rps-x-chip .src.s-none{background:color-mix(in srgb, var(--t3) 12%, transparent);color:var(--t3)}
@@ -283,7 +298,7 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
 
   <!-- 锚点导航（P1）：分组直达；非 sticky，不抢层级 -->
   <nav class="rps-anchors" aria-label="{{ (i18n or {}).get('rps_title', "自动回复设置") }}">
-    <a href="#rps-sec-gates">{{ (i18n or {}).get('rps_gate_title', "上游总闸") }}</a>
+    <a href="#rps-sec-gates">{{ (i18n or {}).get('rps_master_title', "AI 接管") }}</a>
     <a href="#rps-sec-guard" id="rps-anchor-guard" style="display:none">{{ (i18n or {}).get('rps_guard_title', "回复额度守卫") }}</a>
     <a href="#rps-preset-card">{{ (i18n or {}).get('rps_nav_preset', "场景预设") }}</a>
     <a href="#rps-sec-mode">{{ (i18n or {}).get('rps_nav_mode', "自动化档位") }}</a>
@@ -312,17 +327,59 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
     <div class="rps-x-chips" id="rps-x-chips"></div>
   </div>
 
-  <!-- 上游总闸（只读） -->
+  <!-- AI 接管主控（P1 2026-08-22）：原「上游总闸」只读卡升级为**可写**三档一键。
+       写入口＝POST /api/companion/standby（捆绑语义：默认档位 + worker + deliver +
+       send-gate + 存量会话对齐 + worker 热接线，单写入口不另造）。旧后端无端点 /
+       非主管 403 → 控件禁用回退只读读数（下方三灯照亮，行为与旧卡一致）。 -->
   <div class="rps-card" id="rps-sec-gates">
-    <h3>🔌 {{ (i18n or {}).get('rps_gate_title', "上游总闸") }}
-      <span class="rps-chip restart" style="background:var(--input);color:var(--t3)">{{ (i18n or {}).get('rps_gate_readonly', "只读") }}</span></h3>
-    <p class="rps-hint">{{ (i18n or {}).get('rps_gate_hint', "真发主开关有双重护栏（能力看板），本页不提供第二个写入口。") }}</p>
-    <div class="rps-gates">
+    <h3>🤖 {{ (i18n or {}).get('rps_master_title', "AI 接管") }}
+      <span class="rps-chip" id="rps-master-busy" style="display:none;background:var(--input);color:var(--t3)">{{ (i18n or {}).get('rps_master_applying', "应用中…") }}</span></h3>
+    <p class="rps-hint">{{ (i18n or {}).get('rps_master_hint', "一个开关管全部：选「全自动」即同时打开自动拟稿、真发与出站安全闸，并把默认档位设为全自动——立即生效，无需再去别处配置。单个会话仍可在收件箱里单独改档。") }}</p>
+    <div class="rps-modes" id="rps-master">
+      <label class="rps-mode">
+        <input type="radio" name="rps-master" value="watching" onchange="rpsSetMaster('watching')">
+        <span class="rps-mode-box">
+          <span class="rps-mode-name"><span class="rps-mode-emoji">🚀</span>{{ (i18n or {}).get('rps_master_auto', "全自动") }}</span>
+          <span class="rps-mode-desc">{{ (i18n or {}).get('rps_master_auto_d', "AI 直接回复客户。拟稿、真发、安全闸一次开齐，新老会话即刻生效。") }}</span>
+        </span>
+      </label>
+      <label class="rps-mode">
+        <input type="radio" name="rps-master" value="suggest" onchange="rpsSetMaster('suggest')">
+        <span class="rps-mode-box">
+          <span class="rps-mode-name"><span class="rps-mode-emoji">📝</span>{{ (i18n or {}).get('rps_master_suggest', "拟稿人审") }}</span>
+          <span class="rps-mode-desc">{{ (i18n or {}).get('rps_master_suggest_d', "AI 先写好草稿，你点「通过」才发出。绝不自动发送。") }}</span>
+        </span>
+      </label>
+      <label class="rps-mode">
+        <input type="radio" name="rps-master" value="off" onchange="rpsSetMaster('off')">
+        <span class="rps-mode-box">
+          <span class="rps-mode-name"><span class="rps-mode-emoji">✋</span>{{ (i18n or {}).get('rps_master_off', "关闭") }}</span>
+          <span class="rps-mode-desc">{{ (i18n or {}).get('rps_master_off_d', "AI 不拟稿也不发送，全部消息人工回复。") }}</span>
+        </span>
+      </label>
+    </div>
+    <div class="rps-hint" id="rps-master-note" style="display:none;margin:.5rem 0 0"></div>
+    <!-- P3 状态行：AI 在干活的证据（周代发数）+ 额度余量 + 暂停原因（人话+出路）。
+         任一数据源缺席该段静默缺席，绝不摆空架子。 -->
+    <div class="rps-hint" id="rps-master-status" style="display:none;margin:.5rem 0 0"></div>
+    <div class="rps-gates" style="margin-top:.55rem">
       <span class="rps-gate"><span class="rps-dot" id="rps-gate-worker"></span>{{ (i18n or {}).get('rps_gate_worker', "自动发送 Worker") }}</span>
       <span class="rps-gate"><span class="rps-dot" id="rps-gate-deliver"></span>{{ (i18n or {}).get('rps_gate_deliver', "AI 真发闸门") }}</span>
       <span class="rps-gate"><span class="rps-dot" id="rps-gate-autodraft"></span>{{ (i18n or {}).get('rps_gate_autodraft', "自动拟稿") }}</span>
       <span class="rps-gate" id="rps-gate-caps" style="display:none"></span>
-      <a class="rps-gate-link" href="/rpa-overview">{{ (i18n or {}).get('rps_gate_link', "去矩阵总览的能力看板调整 →") }}</a>
+      <!-- B37-4（2026-08-22）：客户包 flavor 侧栏没有矩阵总览——本链接跟随侧栏
+           单源探测显隐（rpsRenderGates 内判），防「引进不存在区域」的断头链接
+           （skuio 实录 _253→_260 绕圈）。 -->
+      <a class="rps-gate-link" id="rps-gate-link-adv" href="/rpa-overview">{{ (i18n or {}).get('rps_gate_link_adv', "高级：逐项微调（能力看板）→") }}</a>
+    </div>
+    <!-- 影响全自动的因素清单（实施56 2026-08-22）：数据源 GET /api/reply-settings/health
+         （注册表 src/inbox/autoreply_factors.py 单点判定）；修复按钮全部投**既有**写入口
+         （媒体预设 / 本页白名单 POST / 功能总览 toggle / 守卫卡锚点 / 会员页），本卡零新写端点。
+         旧后端无 health 端点 → 整块隐藏（不摆空架子）。chat 因素刻意不渲染——三档单选就在上方。 -->
+    <div class="rps-af" id="rps-af" style="display:none">
+      <div class="rps-af-head">{{ (i18n or {}).get('rps_af_title', "会影响全自动的因素") }}
+        <span class="rps-af-ok" id="rps-af-allok" style="display:none">{{ (i18n or {}).get('rps_af_all_ok', "✓ 全部就绪，没有会拦住自动回复的问题") }}</span></div>
+      <div id="rps-af-rows"></div>
     </div>
   </div>
 
@@ -345,12 +402,13 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
     <div class="rps-row">
       <span class="rps-row-label">{{ (i18n or {}).get('rps_guard_budget', "每日额度（轮 / 会话）") }}</span>
       <span style="display:inline-flex;align-items:center;gap:.45rem;flex-wrap:wrap">
-        <input type="number" class="rps-num" id="rps-guard-budget" min="5" max="500" step="1" oninput="rpsMarkDirty()">
+        <input type="number" class="rps-num" id="rps-guard-budget" min="0" max="1000000" step="1" oninput="rpsMarkDirty()">
         <button type="button" class="rps-guard-quick" onclick="rpsGuardQuick(40)">40 · {{ (i18n or {}).get('rps_guard_q_default', "默认") }}</button>
         <button type="button" class="rps-guard-quick" onclick="rpsGuardQuick(100)">100 · {{ (i18n or {}).get('rps_guard_q_loose', "宽松") }}</button>
         <button type="button" class="rps-guard-quick" onclick="rpsGuardQuick(200)">200 · {{ (i18n or {}).get('rps_guard_q_demo', "演示") }}</button>
+        <button type="button" class="rps-guard-quick" onclick="rpsGuardQuick(0)">0 · {{ (i18n or {}).get('rps_guard_q_unlimited', "不限") }}</button>
       </span>
-      <span class="rps-row-hint">{{ (i18n or {}).get('rps_guard_budget_hint', "本页可设 5–500。触顶会话可在下表或收件箱横幅一键「今日继续」（仅当天有效）。YAML 手配 0＝不限额（本页刻意不提供，防误设；0 时触顶判定与横幅整体熄灭）。") }}</span>
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_guard_budget_hint', "上不封顶，按需填；0＝不限额（触顶判定与收件箱横幅整体熄灭）。触顶会话可在下表或收件箱横幅一键「今日继续」（仅当天有效）。提醒：此额度是防「对面也是机器人」互刷与单会话过密触发平台风控的保险丝，与 AI 用量计费无关。") }}</span>
     </div>
     <div class="rps-guard-top" id="rps-guard-top" style="display:none"></div>
     <div class="rps-row" style="display:block">
@@ -832,6 +890,21 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
 var RPS_I18N = {
   chipHot: {{ (i18n or {}).get('rps_chip_hot', "保存即生效")|tojson }},
   chipRestart: {{ (i18n or {}).get('rps_chip_restart', "重启后生效")|tojson }},
+  masterConfirmAuto: {{ (i18n or {}).get('rps_master_confirm_auto', "开启全自动：AI 将直接回复客户消息（出站安全闸与每日额度护栏仍然在场）。确定？")|tojson }},
+  masterOnAuto: {{ (i18n or {}).get('rps_master_on_auto', "✅ 全自动已开启：AI 会直接回复客户")|tojson }},
+  masterOnSuggest: {{ (i18n or {}).get('rps_master_on_suggest', "✅ 已切到拟稿人审：AI 只写稿，你来发")|tojson }},
+  masterOnOff: {{ (i18n or {}).get('rps_master_on_off', "✅ AI 已关闭：全部人工回复")|tojson }},
+  masterAligned: {{ (i18n or {}).get('rps_master_aligned', "已同步 {n} 个会话档位")|tojson }},
+  masterSuggestResidual: {{ (i18n or {}).get('rps_master_suggest_residual', "⚠ 仍有 {n} 个会话保持全自动（此前人工显式设置，不被批量覆盖）——需要全停可到收件箱「AI 值守」面板点「全部降为草稿审」")|tojson }},
+  masterNeedsRestart: {{ (i18n or {}).get('rps_master_needs_restart', "重启应用后完全生效")|tojson }},
+  masterCustom: {{ (i18n or {}).get('rps_master_custom', "当前为自定义组合（在能力看板逐项调过）；点选任一档可整体重设。")|tojson }},
+  masterUnavailable: {{ (i18n or {}).get('rps_master_unavailable', "当前版本暂不支持一键切换，下方状态为只读；升级后端后此处可直接操作。")|tojson }},
+  masterFail: {{ (i18n or {}).get('rps_master_fail', "切换失败：")|tojson }},
+  masterStatSent: {{ (i18n or {}).get('rps_master_stat_sent', "近 7 天 AI 已代发 {n} 条")|tojson }},
+  masterStatQuota: {{ (i18n or {}).get('rps_master_stat_quota', "今日 AI 额度剩 {p}%")|tojson }},
+  masterPausedChars: {{ (i18n or {}).get('rps_master_paused_chars', "⏸ 自动回复已暂停：字符额度用完")|tojson }},
+  masterPausedDaily: {{ (i18n or {}).get('rps_master_paused_daily', "⏸ 自动回复已暂停：今日 AI 额度用完（明天自动恢复）")|tojson }},
+  masterQuotaCta: {{ (i18n or {}).get('rps_master_quota_cta', "获取额度 →")|tojson }},
   gateOn: {{ (i18n or {}).get('rps_gate_on', "已开启")|tojson }},
   gateOff: {{ (i18n or {}).get('rps_gate_off', "未开启")|tojson }},
   platformCaps: {{ (i18n or {}).get('rps_gate_platform_caps', "平台档位上限")|tojson }},
@@ -861,6 +934,50 @@ var RPS_I18N = {
   ccFollowConfirm: {{ (i18n or {}).get('rps_cc_follow_confirm', "把「{name}」的独立节奏（当前 {cur}）清除，改为跟随本页滑杆（当前 {min}–{max} 秒）？\n\n写入本机配置，保存后对新消息生效，可随时改回。")|tojson }},
   ccFollowDone: {{ (i18n or {}).get('rps_cc_follow_done', "已改为跟随滑杆——该链路此后随本页「回复节奏」变化")|tojson }},
   ccFollowFail: {{ (i18n or {}).get('rps_cc_follow_fail', "操作失败，请重试")|tojson }},
+  // ── 影响全自动的因素清单（实施56）──
+  afVision: {{ (i18n or {}).get('rps_af_f_vision', "图片消息")|tojson }},
+  afAsr: {{ (i18n or {}).get('rps_af_f_asr', "语音消息")|tojson }},
+  afVoiceOut: {{ (i18n or {}).get('rps_af_f_voice_out', "语音回复")|tojson }},
+  afShort: {{ (i18n or {}).get('rps_af_f_short', "短消息")|tojson }},
+  afXlate: {{ (i18n or {}).get('rps_af_f_xlate', "外语客户")|tojson }},
+  afBudget: {{ (i18n or {}).get('rps_af_f_budget', "今日回复额度")|tojson }},
+  afQuota: {{ (i18n or {}).get('rps_af_f_quota', "托管算力")|tojson }},
+  afSession: {{ (i18n or {}).get('rps_af_f_session', "账号在线")|tojson }},
+  afVisionOk: {{ (i18n or {}).get('rps_af_vision_ok', "能看懂图片")|tojson }},
+  afVisionDisabled: {{ (i18n or {}).get('rps_af_vision_disabled', "识别未开启——客户发图会被拦下等人工")|tojson }},
+  afVisionBackend: {{ (i18n or {}).get('rps_af_vision_backend', "已开启但识别引擎未接入")|tojson }},
+  afVisionBlocks: {{ (i18n or {}).get('rps_af_vision_blocks', "近 30 分钟有 {n} 条图片没看懂被拦下")|tojson }},
+  afAsrOk: {{ (i18n or {}).get('rps_af_asr_ok', "能听懂语音")|tojson }},
+  afAsrDisabled: {{ (i18n or {}).get('rps_af_asr_disabled', "识别未开启——客户发语音会被拦下等人工")|tojson }},
+  afAsrBackend: {{ (i18n or {}).get('rps_af_asr_backend', "已开启但识别引擎未接入")|tojson }},
+  afAsrBlocks: {{ (i18n or {}).get('rps_af_asr_blocks', "近 30 分钟有 {n} 条语音没听懂被拦下")|tojson }},
+  afVoiceOutBlocks: {{ (i18n or {}).get('rps_af_voiceout_blocks', "近 30 分钟有 {n} 条语音回复没发出（已拦下待处理）")|tojson }},
+  afShortOk: {{ (i18n or {}).get('rps_af_short_ok', "任意长度都回（含「好」「嗯」）")|tojson }},
+  afShortWarn: {{ (i18n or {}).get('rps_af_short_warn', "低于 {n} 字的消息不回")|tojson }},
+  afXlateOk: {{ (i18n or {}).get('rps_af_xlate_ok', "自动译成客户的语言")|tojson }},
+  afXlateOff: {{ (i18n or {}).get('rps_af_xlate_off', "出站自动翻译未开")|tojson }},
+  afXlateBlocks: {{ (i18n or {}).get('rps_af_xlate_blocks', "近 30 分钟有 {n} 条翻译失败被拦下")|tojson }},
+  afBudgetUnlimited: {{ (i18n or {}).get('rps_af_budget_unlimited', "不限额")|tojson }},
+  afBudgetOn: {{ (i18n or {}).get('rps_af_budget_on', "守卫开启：每会话每日 {limit} 轮")|tojson }},
+  afBudgetHeadroom: {{ (i18n or {}).get('rps_af_budget_headroom', "额度充足（每会话每日 {limit} 轮）")|tojson }},
+  afBudgetNear: {{ (i18n or {}).get('rps_af_budget_near', "{n} 个会话接近限额")|tojson }},
+  afBudgetExhausted: {{ (i18n or {}).get('rps_af_budget_exhausted', "{n} 个会话已触顶暂停自动回复")|tojson }},
+  afQuotaOk: {{ (i18n or {}).get('rps_af_quota_ok', "余量 {pct}%")|tojson }},
+  afQuotaLow: {{ (i18n or {}).get('rps_af_quota_low', "余量仅 {pct}%——用尽后自动回复会暂停")|tojson }},
+  afQuotaOut: {{ (i18n or {}).get('rps_af_quota_out', "今日额度已用尽，自动回复暂停中")|tojson }},
+  afQuotaUnknown: {{ (i18n or {}).get('rps_af_quota_unknown', "额度暂时查不到（网络波动）")|tojson }},
+  afSessionOk: {{ (i18n or {}).get('rps_af_session_ok', "全部在线")|tojson }},
+  afSessionDown: {{ (i18n or {}).get('rps_af_session_down', "{n} 个账号掉线——期间消息不会自动回")|tojson }},
+  afFixMedia: {{ (i18n or {}).get('rps_af_fix_media', "一键接入")|tojson }},
+  afFixZero: {{ (i18n or {}).get('rps_af_fix_zero', "改为都回")|tojson }},
+  afFixOn: {{ (i18n or {}).get('rps_af_fix_on', "开启")|tojson }},
+  afFixGo: {{ (i18n or {}).get('rps_af_fix_go', "去处理 →")|tojson }},
+  afFixRenew: {{ (i18n or {}).get('rps_af_fix_renew', "续费/升级 →")|tojson }},
+  afFixDone: {{ (i18n or {}).get('rps_af_fix_done', "已处理，正在复查…")|tojson }},
+  afFixFail: {{ (i18n or {}).get('rps_af_fix_fail', "操作失败，请重试")|tojson }},
+  afBundleDone: {{ (i18n or {}).get('rps_af_bundle_done', "已顺手补齐：{items}")|tojson }},
+  afBundleMedia: {{ (i18n or {}).get('rps_af_bundle_media', "图片/语音识别")|tojson }},
+  afBundleShort: {{ (i18n or {}).get('rps_af_bundle_short', "短消息也回")|tojson }},
   savedLive: {{ (i18n or {}).get('rps_saved_live', "已保存并即时生效")|tojson }},
   savedPartial: {{ (i18n or {}).get('rps_saved_partial', "已保存；以下设置将在下次重启后生效：")|tojson }},
   saveFailed: {{ (i18n or {}).get('rps_save_failed', "保存失败")|tojson }},
@@ -870,6 +987,9 @@ var RPS_I18N = {
   poDel: {{ (i18n or {}).get('rps_po_del', "删除")|tojson }},
   poExtraNote: {{ (i18n or {}).get('rps_po_extra_note', "该人设另有本页不管理的高级键（保存不会丢）")|tojson }},
   bubEst: {{ (i18n or {}).get('rps_bub_js_est', "条间隔估算：中文短句约 {zh} · 英文一句约 {en}（不含随机抖动）")|tojson }},
+  // 示例型占位（「例：」前缀）——与上下两条「描述兜底行为」的占位不同类：那两条填空即生效，
+  // 这条是格式示例，不加前缀会被读成「已经配好了 telegram:default」（2026-08-20 内测 B20）。
+  wsKeyEg: {{ (i18n or {}).get('rps_ws_js_key_eg', "例：telegram:default")|tojson }},
   wsAllDays: {{ (i18n or {}).get('rps_ws_js_alldays', "每天")|tojson }},
   wsTzFollow: {{ (i18n or {}).get('rps_ws_js_tzfollow', "跟随全局")|tojson }},
   wsExempt: {{ (i18n or {}).get('rps_ws_js_exempt', "豁免班表（全天候）")|tojson }},
@@ -1460,7 +1580,7 @@ function rpsWsAcctRow(key, entry){
   entry = entry || {};
   var wd = Array.isArray(entry.workdays) ? entry.workdays.join(',') : '';
   return '<tr>'
-    + '<td><input type="text" data-ws="key" value="' + rpsEsc(key) + '" placeholder="telegram:default"></td>'
+    + '<td><input type="text" data-ws="key" value="' + rpsEsc(key) + '" placeholder="' + rpsEsc(RPS_I18N.wsKeyEg) + '"></td>'
     + '<td><input type="text" data-ws="workdays" value="' + rpsEsc(wd) + '" placeholder="' + rpsEsc(RPS_I18N.wsAllDays) + '"></td>'
     + '<td><input type="time" data-ws="start" value="' + rpsEsc(entry.start || '') + '"></td>'
     + '<td><input type="time" data-ws="end" value="' + rpsEsc(entry.end || '') + '"></td>'
@@ -1640,7 +1760,8 @@ function rpsGuardRow(row, guardOn){
   else if (row.exhausted){ st = RPS_I18N.guardStExhausted; cls = 'exhausted'; }
   else if (row.near){ st = RPS_I18N.guardStNear; cls = 'near'; }
   else { st = RPS_I18N.guardStOk; cls = 'ok'; }
-  var used = guardOn ? (row.used + ' / ' + row.limit) : String(row.used);
+  // limit=0（不限额）不渲染「9 / 0」这种误导写法，只报已用数
+  var used = (guardOn && row.limit > 0) ? (row.used + ' / ' + row.limit) : String(row.used);
   // 触顶/接近 → 「今日继续」豁免；已豁免 → 「撤销豁免」后悔药（同一端点 revoke）。
   // 接近额度也给豁免入口：演示前提前放宽正是 near 预警的行动出路。
   var triplet = !!(row.platform && row.chat_key);
@@ -1782,6 +1903,129 @@ function rpsRenderMeta(meta){
   });
 }
 
+/* ── AI 接管主控（P1 2026-08-22）─────────────────────────────────────────────
+   写入口=POST /api/companion/standby（捆绑：默认档位+worker+deliver+send-gate+
+   存量对齐+热接线）。本页不造第二个写入口；成败与副作用（对齐了几个会话/要不要
+   重启）如实回显。旧后端无端点 → 控件禁用回退只读（三灯照亮）。 */
+var rpsMasterBusy = false;
+function rpsMasterRender(mode){
+  var boxes = document.querySelectorAll('#rps-master input[name="rps-master"]');
+  boxes.forEach(function(i){ i.checked = (i.value === mode); });
+  var note = document.getElementById('rps-master-note');
+  if (note){
+    if (mode === 'custom'){ note.style.display = ''; note.textContent = RPS_I18N.masterCustom; }
+    else if (note.getAttribute('data-sticky') !== '1'){ note.style.display = 'none'; }
+  }
+}
+async function rpsMasterLoad(){
+  var wrap = document.getElementById('rps-master');
+  if (!wrap) return;
+  try {
+    var r = await apiFetch('/api/companion/standby');
+    var d = await r.json();
+    if (!r.ok || !d || !d.ok || d.available === false) throw new Error('unavailable');
+    rpsMasterRender(String(d.mode || ''));
+  } catch (e) {
+    wrap.querySelectorAll('input[name="rps-master"]').forEach(function(i){ i.disabled = true; });
+    var note = document.getElementById('rps-master-note');
+    if (note){ note.style.display = ''; note.setAttribute('data-sticky', '1');
+      note.textContent = RPS_I18N.masterUnavailable; }
+  }
+}
+async function rpsSetMaster(mode){
+  if (rpsMasterBusy){ rpsMasterLoad(); return; }
+  if (mode === 'watching' && !confirm(RPS_I18N.masterConfirmAuto)){ rpsMasterLoad(); return; }
+  rpsMasterBusy = true;
+  var busy = document.getElementById('rps-master-busy');
+  if (busy) busy.style.display = '';
+  try {
+    var r = await apiFetch('/api/companion/standby', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({mode: mode})
+    }, {timeoutMs: 60000});
+    var d = await r.json();
+    if (!r.ok || !d || !d.ok) throw new Error((d && (d.message || d.detail)) || ('HTTP ' + r.status));
+    rpsMasterRender(String(d.mode || mode));
+    var bits = [mode === 'watching' ? RPS_I18N.masterOnAuto
+              : mode === 'suggest' ? RPS_I18N.masterOnSuggest : RPS_I18N.masterOnOff];
+    var aligned = parseInt(d.aligned_conversations || 0, 10);
+    if (aligned > 0) bits.push(RPS_I18N.masterAligned.replace('{n}', aligned));
+    // 拟稿人审残留提示（诚实边界）：坐席**显式**设过全自动的会话不被批量降档
+    // （人的显式设置永远优先），它们仍会自动出 L2 稿——如实点名 + 指路收件箱
+    // 值守面板既有的「全部降为草稿审」一键出口，绝不静默留一个「以为全停了
+    // 其实还有 N 个会话在自动跑」的暗仓。
+    var residual = parseInt((d.watching && d.watching.auto_ai) || 0, 10);
+    if (mode === 'suggest' && residual > 0){
+      bits.push(RPS_I18N.masterSuggestResidual.replace('{n}', residual));
+    }
+    // 旧进程无热接线闭包 → 如实提示要重启（绝不谎报「已生效」）
+    if (d.rewire && d.rewire.rewired === false && d.rewire.reason === 'not_wired'
+        && mode !== 'off'){ bits.push(RPS_I18N.masterNeedsRestart); }
+    rpsToast(rpsEsc(bits.join(' · ')), (mode === 'suggest' && residual > 0) ? 'warn' : '');
+    // 开关变了 → 三灯与守卫表重读（轻量刷新，不动表单脏态）
+    try {
+      var r2 = await apiFetch('/api/reply-settings');
+      var d2 = await r2.json();
+      if (d2 && d2.ok) rpsRenderGates(d2.gates);
+    } catch (_e) {}
+    if (typeof rpsGuardEnabled !== 'undefined' && rpsGuardEnabled) rpsGuardRefresh();
+    // 实施56：全自动=顺手补齐理解链（识图/转写）+短消息门槛；其余档只刷新清单
+    if (mode === 'watching'){ rpsFactorBundle(); } else { rpsFactorsLoad(); }
+  } catch (e) {
+    rpsToast(rpsEsc(RPS_I18N.masterFail) + rpsEsc((e && e.message) || ''), 'err');
+    rpsMasterLoad();
+  } finally {
+    rpsMasterBusy = false;
+    if (busy) busy.style.display = 'none';
+  }
+}
+window.rpsSetMaster = rpsSetMaster;   // 内联 onchange 可达性（哑按钮铁律）
+
+/* P3 状态行（2026-08-22）：主控件下一行人话读数——「AI 在干活」的证据（近 7 天
+   代发数，/api/workspace/ai-weekly-brief 1h 缓存端点）+ 托管额度余量 + 暂停原因
+   （额度用尽=最高频的「开了全自动为什么不回」成因，B15/B37 实录）。
+   数据源缺席（旧后端/零流量）→ 对应片段静默缺席。 */
+async function rpsMasterStatus(){
+  var el = document.getElementById('rps-master-status');
+  if (!el) return;
+  var bits = [];
+  var pausedHtml = '';
+  try {
+    var r = await apiFetch('/api/workspace/ai-weekly-brief');
+    var d = await r.json();
+    if (d && d.ok && d.available && (d.sent | 0) > 0){
+      bits.push(rpsEsc(RPS_I18N.masterStatSent.replace('{n}', String(d.sent | 0))));
+    }
+  } catch (_e) {}
+  try {
+    var r2 = await apiFetch('/api/workspace/quota');
+    var q = await r2.json();
+    var st = (q && q.state) || null;      // feat=qs1 才有；legacy 后端静默跳过
+    if (st){
+      var h = st.hosted || {};
+      var paused = '';
+      if (st.verdict === 'chars_out' || st.verdict === 'trial_out'){
+        paused = RPS_I18N.masterPausedChars;
+      } else if (h.enabled && h.exhausted && !h.busy){
+        paused = RPS_I18N.masterPausedDaily;
+      } else if (h.enabled && (h.budget | 0) > 0){
+        var pct = Math.max(0, Math.min(100,
+          Math.round(100 * (h.remaining | 0) / (h.budget | 0))));
+        bits.push(rpsEsc(RPS_I18N.masterStatQuota.replace('{p}', String(pct))));
+      }
+      if (paused){
+        pausedHtml = '<span style="color:var(--amber,#d97706);font-weight:600">'
+          + rpsEsc(paused) + '</span> <a href="/membership">'
+          + rpsEsc(RPS_I18N.masterQuotaCta) + '</a>';
+      }
+    }
+  } catch (_e) {}
+  var html = bits.join(' · ');
+  if (pausedHtml) html += (html ? ' · ' : '') + pausedHtml;
+  if (html){ el.style.display = ''; el.innerHTML = html; }
+  else { el.style.display = 'none'; }
+}
+
 function rpsRenderGates(g){
   g = g || {};
   function dot(id, on){
@@ -1796,6 +2040,11 @@ function rpsRenderGates(g){
   dot('rps-gate-worker', g.worker_enabled);
   dot('rps-gate-deliver', g.deliver);
   dot('rps-gate-autodraft', g.auto_draft_enabled);
+  // B37-4：「高级：逐项微调」跟随侧栏单源——nav 按部署 flavor 服务端裁剪，
+  // 侧栏没有 /rpa-overview 项（客户包）就藏本链接，杜绝把用户引进不存在的区域。
+  var adv = document.getElementById('rps-gate-link-adv');
+  if (adv) adv.style.display =
+    document.querySelector('.sidebar a[href="/rpa-overview"]') ? '' : 'none';
   var caps = g.platform_modes || {};
   var keys = Object.keys(caps);
   var capEl = document.getElementById('rps-gate-caps');
@@ -1807,6 +2056,185 @@ function rpsRenderGates(g){
     } else { capEl.style.display = 'none'; }
   }
 }
+
+/* ── 影响全自动的因素清单（实施56 2026-08-22）────────────────────────────────
+   数据源 GET /api/reply-settings/health（注册表 src/inbox/autoreply_factors.py
+   单点判定；旧后端无端点 → 整块隐藏不摆空架子）。修复按钮全部复用既有写入口：
+   媒体=POST /api/companion/media-capabilities/preset（understand_all，供给先于
+   开关）；短消息=本页白名单 POST；翻译=功能总览 toggle；额度=滚到守卫卡；
+   算力/掉线=深链。零新增写端点。chat 因素刻意不渲染（三档单选就在上方）。 */
+var rpsAfData = null;
+var rpsAfBusy = false;
+var RPS_AF_META = {
+  vision:    {label: RPS_I18N.afVision,   codes: {ok: RPS_I18N.afVisionOk, disabled: RPS_I18N.afVisionDisabled, needs_backend: RPS_I18N.afVisionBackend, blocks: RPS_I18N.afVisionBlocks}},
+  asr:       {label: RPS_I18N.afAsr,      codes: {ok: RPS_I18N.afAsrOk, disabled: RPS_I18N.afAsrDisabled, needs_backend: RPS_I18N.afAsrBackend, blocks: RPS_I18N.afAsrBlocks}},
+  voice_out: {label: RPS_I18N.afVoiceOut, codes: {blocks: RPS_I18N.afVoiceOutBlocks}},
+  short_msg: {label: RPS_I18N.afShort,    codes: {any_len: RPS_I18N.afShortOk, min_len: RPS_I18N.afShortWarn}},
+  translate: {label: RPS_I18N.afXlate,    codes: {on: RPS_I18N.afXlateOk, off: RPS_I18N.afXlateOff, blocks: RPS_I18N.afXlateBlocks}},
+  budget:    {label: RPS_I18N.afBudget,   codes: {unlimited: RPS_I18N.afBudgetUnlimited, on: RPS_I18N.afBudgetOn, headroom: RPS_I18N.afBudgetHeadroom, near: RPS_I18N.afBudgetNear, exhausted: RPS_I18N.afBudgetExhausted}},
+  quota:     {label: RPS_I18N.afQuota,    codes: {ok: RPS_I18N.afQuotaOk, low: RPS_I18N.afQuotaLow, out: RPS_I18N.afQuotaOut, unknown: RPS_I18N.afQuotaUnknown}},
+  session:   {label: RPS_I18N.afSession,  codes: {ok: RPS_I18N.afSessionOk, down: RPS_I18N.afSessionDown}}
+};
+function rpsAfDesc(f){
+  var meta = RPS_AF_META[f.key]; if (!meta) return '';
+  var t = meta.codes[f.code] || '';
+  return t.replace('{n}', String(f.n != null ? f.n : ''))
+          .replace('{limit}', String(f.limit != null ? f.limit : ''))
+          .replace('{pct}', String(f.pct != null ? f.pct : ''));
+}
+function rpsAfFixLabel(f){
+  var k = (f.fix && f.fix.kind) || '';
+  if (k === 'preset') return RPS_I18N.afFixMedia;
+  if (k === 'settings') return RPS_I18N.afFixZero;
+  if (k === 'feature') return RPS_I18N.afFixOn;
+  if (k === 'link' && f.key === 'quota') return RPS_I18N.afFixRenew;
+  if (k === 'anchor' || k === 'link') return RPS_I18N.afFixGo;
+  return '';
+}
+function rpsFactorsRender(d){
+  var box = document.getElementById('rps-af');
+  var rows = document.getElementById('rps-af-rows');
+  var allok = document.getElementById('rps-af-allok');
+  if (!box || !rows) return;
+  rpsAfData = d;
+  rows.textContent = '';
+  var shown = 0, attention = 0;
+  (d.factors || []).forEach(function(f){
+    if (f.key === 'chat' || f.state === 'na' || !RPS_AF_META[f.key]) return;
+    shown++;
+    if (f.state !== 'ok') attention++;
+    var row = document.createElement('div');
+    row.className = 'rps-af-row ' + f.state;
+    var dot = document.createElement('span');
+    dot.className = 'rps-dot ' + (f.state === 'ok' ? 'on' : (f.state === 'bad' ? 'off' : 'warn'));
+    var name = document.createElement('span');
+    name.className = 'rps-af-name'; name.textContent = RPS_AF_META[f.key].label;
+    var desc = document.createElement('span');
+    desc.className = 'rps-af-desc'; desc.textContent = rpsAfDesc(f);
+    desc.title = desc.textContent;
+    row.appendChild(dot); row.appendChild(name); row.appendChild(desc);
+    if (f.fix && f.state !== 'ok'){
+      var btn = document.createElement('button');
+      btn.type = 'button'; btn.className = 'rps-af-btn';
+      btn.setAttribute('data-af-fix', f.key);
+      btn.textContent = rpsAfFixLabel(f);
+      row.appendChild(btn);
+    }
+    rows.appendChild(row);
+  });
+  box.style.display = shown ? '' : 'none';
+  if (allok) allok.style.display = (shown && !attention) ? '' : 'none';
+}
+async function rpsFactorsLoad(){
+  var box = document.getElementById('rps-af');
+  if (!box) return;
+  try {
+    var r = await apiFetch('/api/reply-settings/health');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    var d = await r.json();
+    if (!d || !d.ok) throw new Error('bad payload');
+    rpsFactorsRender(d);
+  } catch (_e) { box.style.display = 'none'; }
+}
+async function rpsAfApplyFix(key){
+  var f = null;
+  ((rpsAfData || {}).factors || []).forEach(function(x){ if (x.key === key) f = x; });
+  if (!f || !f.fix) return;
+  var fix = f.fix;
+  if (fix.kind === 'anchor'){
+    var t = document.querySelector(fix.href);
+    if (t){ t.style.display = ''; t.scrollIntoView({behavior: 'smooth'}); }
+    return;
+  }
+  if (fix.kind === 'link'){ location.href = fix.href; return; }
+  if (rpsAfBusy) return;
+  rpsAfBusy = true;
+  var btn = document.querySelector('#rps-af-rows [data-af-fix="' + key + '"]');
+  if (btn) btn.disabled = true;
+  try {
+    if (fix.kind === 'preset'){
+      var r1 = await apiFetch('/api/companion/media-capabilities/preset', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name: fix.name || 'understand_all', actor: 'reply-settings-af'})
+      }, {timeoutMs: 60000});
+      var d1 = await r1.json();
+      if (!r1.ok || !d1 || !d1.ok) throw new Error((d1 && d1.message) || ('HTTP ' + r1.status));
+    } else if (fix.kind === 'settings'){
+      var r2 = await apiFetch('/api/reply-settings', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({changes: fix.changes || {}})
+      });
+      var d2 = await r2.json();
+      if (!d2 || !d2.ok) throw new Error((d2.errors && d2.errors[0] && d2.errors[0].message) || 'save failed');
+      var ml = (fix.changes || {})['inbox.auto_draft.min_text_len'];
+      var inp = document.getElementById('rps-minlen');
+      if (inp && ml != null) inp.value = ml;   // 表单值同步服务端新值，防假脏
+    } else if (fix.kind === 'feature'){
+      var r3 = await apiFetch('/api/setup/features/toggle', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({key: fix.key, enabled: true})
+      });
+      var d3 = null;
+      try { d3 = await r3.json(); } catch (_je) {}
+      if (!r3.ok) throw new Error((d3 && d3.detail) || ('HTTP ' + r3.status));
+    }
+    rpsToast(rpsEsc(RPS_I18N.afFixDone));
+  } catch (e) {
+    rpsToast(rpsEsc(RPS_I18N.afFixFail) + ' ' + rpsEsc((e && e.message) || ''), 'err');
+  } finally {
+    rpsAfBusy = false;
+    rpsFactorsLoad();
+  }
+}
+(function(){
+  var rows = document.getElementById('rps-af-rows');
+  if (rows) rows.addEventListener('click', function(ev){
+    var b = ev.target && ev.target.closest ? ev.target.closest('[data-af-fix]') : null;
+    if (b) rpsAfApplyFix(b.getAttribute('data-af-fix'));
+  });
+})();
+
+/* 「全自动」一键捆绑（实施56）：选全自动后顺手补齐理解链（识图/转写）与短消息
+   门槛——发送链归 standby 单写入口，理解链归媒体预设单写入口，捆绑在客户端编排
+   （两个既有入口各管各的，不新造服务端复合写端点）。只补 bad/warn 的因素；
+   翻译刻意不自动开（增强项非阻断项，由清单黄灯+按钮显式决定）。 */
+async function rpsFactorBundle(){
+  try {
+    var r = await apiFetch('/api/reply-settings/health');
+    var d = await r.json();
+    if (!r.ok || !d || !d.ok){ rpsFactorsLoad(); return; }
+    var by = {};
+    (d.factors || []).forEach(function(f){ by[f.key] = f; });
+    var did = [];
+    if ((by.vision && by.vision.state === 'bad') || (by.asr && by.asr.state === 'bad')){
+      var r1 = await apiFetch('/api/companion/media-capabilities/preset', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name: 'understand_all', actor: 'standby-bundle'})
+      }, {timeoutMs: 60000});
+      var d1 = null;
+      try { d1 = await r1.json(); } catch (_e1) {}
+      if (r1.ok && d1 && d1.ok) did.push(RPS_I18N.afBundleMedia);
+    }
+    if (by.short_msg && by.short_msg.state === 'warn'){
+      var r2 = await apiFetch('/api/reply-settings', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({changes: {'inbox.auto_draft.min_text_len': 0}})
+      });
+      var d2 = null;
+      try { d2 = await r2.json(); } catch (_e2) {}
+      if (d2 && d2.ok){
+        did.push(RPS_I18N.afBundleShort);
+        var inp = document.getElementById('rps-minlen');
+        if (inp) inp.value = 0;
+      }
+    }
+    if (did.length) rpsToast(rpsEsc(RPS_I18N.afBundleDone.replace('{items}', did.join(' + '))));
+  } catch (_e) {}
+  rpsFactorsLoad();
+}
+window.rpsFactorsLoad = rpsFactorsLoad;
+window.rpsFactorBundle = rpsFactorBundle;
+window.rpsAfApplyFix = rpsAfApplyFix;
 
 function rpsPaceInput(which){
   // 双滑块约束：min 不越过 max
@@ -2705,6 +3133,9 @@ window.rpsGuardQuick = rpsGuardQuick;
 })();
 
 rpsLoad();
+rpsMasterLoad();
+rpsMasterStatus();
+rpsFactorsLoad();
 rpsPoLoadPersonas();
 rpsExplainLoad();
 </script>

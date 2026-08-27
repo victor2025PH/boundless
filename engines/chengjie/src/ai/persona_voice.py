@@ -237,6 +237,42 @@ def resolve_emotion_for_send(
             return None
         default = str(emo_cfg.get("default") or "warm").strip().lower()
 
+        # 骂战态覆写（2026-08-22 实施54 P0-3，最高优先）：本轮 temper 命中
+        # 辱骂 → 回怼文本绝不许用人设默认的 happy/playful 基调念（实录 03:44
+        # 「你才傻逼呢」被渲染成 情绪happy——开心语调骂人比不发更穿帮）。
+        # 单一事实源＝temper 骂战态登记表（skill_manager 注入 hint 时登记，
+        # TTL 180s，键与 A/B 线 convo_key 同构）；无登记＝下方原判定链，
+        # 字节级旧行为。feud（熔断冷处理收场）走 serious——居高临下的冷淡，
+        # 不是火气。intensity 0.85 过强情绪阈值（hub 情感通道 / 7852 强情绪
+        # 路径），确定性不掷签。
+        try:
+            from src.ai.voice_emotion import EmotionSpec
+            from src.companion.temper import (
+                fight_turn_kind,
+                record_fight_voice_override,
+            )
+            # 键第三段只用本函数形参 chat_key——上游
+            # resolve_effective_voice_context 传入时已并好 chat_key or
+            # contact_key；此处若再写 contact_key（非本函数形参）会在
+            # chat_key 为空时 NameError → 被外层 try 吞掉 → 覆写静默失效。
+            _fight_key = (
+                f"{str(platform or '')}:{str(account_id or '')}"
+                f":{str(chat_key or '')}")
+            _fk = fight_turn_kind(_fight_key)
+            if _fk == "insult":
+                record_fight_voice_override()
+                return EmotionSpec("angry", intensity=0.85, pace="fast")
+            if _fk == "feud":
+                record_fight_voice_override()
+                return EmotionSpec("serious", intensity=0.75)
+            if _fk == "grudge":
+                # 记仇期（2026-08-22 P1）：气没全消的端着——冷淡偏平，
+                # 比熔断收场（0.75）轻一档；绝不许回暖档甜嗓念别扭话。
+                record_fight_voice_override()
+                return EmotionSpec("serious", intensity=0.65)
+        except Exception:
+            pass
+
         rel_stage: Optional[str] = None
         if chat_key:
             try:
@@ -418,6 +454,20 @@ def ensure_account_default_persona(
     try:
         row = registry.get(plat, aid) or {}
         meta = row.get("meta") or {}
+        # 实施72（2026-08-27 身份错乱事故）：身份待确认（identity_pending）的账号
+        # **绝不**自动补挂人设——登录位换人后 58 秒内新身份就披上默认人设，是
+        # 「AI 以错误身份说话」的放大器。转正（confirm_account_identity）时由人
+        # 显式选择人设，或届时才补默认。已有显式绑定仍如实返回（下方 existing 分支）。
+        if bool(meta.get("identity_pending")) and not str(
+                meta.get("persona_id") or "").strip():
+            try:
+                import logging
+                logging.getLogger(__name__).info(
+                    "[persona] 账号身份待确认，跳过自动补挂默认人设 "
+                    "platform=%s account=%s", plat, aid)
+            except Exception:
+                pass
+            return ""
         existing = str(meta.get("persona_id") or "").strip()
         if not existing:
             for p in (meta.get("persona_ids") or []):

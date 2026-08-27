@@ -323,7 +323,7 @@ def test_funnel_event_names_match_desktop_catalog():
     """与桌面壳 FR_FUNNEL_EVENTS 同口径（两边各有一张表，靠这条钉住不漂移）。"""
     assert tc.FUNNEL_EVENTS == {
         "welcome", "claim_submit", "claim_ok", "claim_skip", "gift_open", "done",
-        "invite_share"}
+        "invite_share", "invite_open", "claim_back", "claim_banner"}
 
 
 def test_funnel_treats_204_empty_body_as_success(state_file):

@@ -14,9 +14,12 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 # 占位符：CJK 全角方括号 + 序号，普通翻译引擎一般原样保留；restore 时容错匹配。
 _PH_RE = re.compile(r"\u3014\s*(\d+)\s*\u3015")  # 〔N〕
@@ -247,10 +250,15 @@ class AIEngine:
     # 翻译专用 system（P0-198）：绝不带全局 system_prompt / 人设块。
     # 实锤事故（198，2026-07-31）：走完整聊天管线时，conversion 域人设把
     # 「So you married ?」按 bio 答成「离过婚，现在是单身」写进了译文槽。
+    # B56（2026-08-23 `_297`）：追加专名/数字保真铁律——「see you in Cebu」被
+    # 译成「在马尼拉见到你」＝地名被上下文合理化偷换，监督链失真。
     _BARE_TRANSLATION_SYSTEM = (
         "You are a machine translation engine. Translate the text the user "
         "provides. Output ONLY the translation - never answer questions, "
-        "never role-play, never add explanations or comments."
+        "never role-play, never add explanations or comments. "
+        "Proper nouns (place/person/brand names) and numbers must be "
+        "preserved exactly - never substitute a different one; if unsure, "
+        "keep the original word untranslated."
     )
 
     async def bare_chat(self, prompt: str) -> str:
@@ -292,8 +300,10 @@ class AIEngine:
         source_name = LANG_NAMES.get(source_lang, source_lang)
         target_name = LANG_NAMES.get(target_lang, target_lang)
         tone = build_chat_tone(style)   # P1-XT：chat 家族 + 语气附加，单一口径
+        from src.ai.translation_fidelity import FIDELITY_PROMPT_RULE
         prompt = (
             f"Translate the following chat message from {source_name} to {target_name}. "
+            f"{FIDELITY_PROMPT_RULE} "
             f"{tone}{glossary_hint}\n\n{text}"
         )
         try:
@@ -1202,6 +1212,33 @@ class EngineRouter:
         return list(await _aio.gather(*[_one(e) for e in self._engines]))
 
     async def translate(
+        self, text: str, *, source_lang: str, target_lang: str,
+        style: str = "chat", glossary_hint: str = "",
+    ) -> EngineResult:
+        """选路翻译 + B56 译后对账（`_297` 宿务→马尼拉偷换实录）。
+
+        对账层在选路层之外：无论哪个引擎胜出，源文专名/数字锚点在译文缺失
+        → 括注原词追加在译文尾——监督译文的人永远能看到原词。确定性纯函数，
+        任何异常放行原译文，绝不阻塞。
+        """
+        res = await self._translate_pick(
+            text, source_lang=source_lang, target_lang=target_lang,
+            style=style, glossary_hint=glossary_hint)
+        try:
+            if res.ok and res.text:
+                from src.ai.translation_fidelity import annotate_missing_anchors
+                fixed, missing = annotate_missing_anchors(
+                    text, res.text, target_lang)
+                if missing:
+                    logger.info(
+                        "[xlate] 专名对账：锚点 %s 在译文缺失 → 括注原词 "
+                        "(engine=%s)", missing, res.engine)
+                    res.text = fixed
+        except Exception:
+            logger.debug("[xlate] 专名对账异常（放行原译文）", exc_info=True)
+        return res
+
+    async def _translate_pick(
         self, text: str, *, source_lang: str, target_lang: str,
         style: str = "chat", glossary_hint: str = "",
     ) -> EngineResult:

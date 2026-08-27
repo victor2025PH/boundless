@@ -163,11 +163,16 @@ def _load_runtime_api():
         return None
 
 
-def _online_accounts(config_manager: Any) -> List[Dict[str, Any]]:
-    """账号注册表里的在线号原始行（读不到 → 空列表，页面显示空态）。
+def _online_accounts(config_manager: Any,
+                     platform: str = "telegram") -> List[Dict[str, Any]]:
+    """账号注册表里某平台的在线号原始行（读不到 → 空列表，页面显示空态）。
 
     要**原始行**而不是选角候选：体检看的是 ``proxy_id`` / ``mode`` / ``meta``，
     这些字段在洗成候选时会被丢掉。
+
+    ``platform``（P0 多平台）：此前硬编码 ``telegram``——那是把整个导播台钉死在单平台上的
+    唯一硬闸。选角 / 关联体检 / 排班 / 演出矩阵全部从这里取号池，透传平台后它们随导播台
+    的平台上下文切换。注册表是跨平台单库，``reg.list(platform)`` 按平台过滤。
     """
     try:
         from src.integrations.account_registry import AccountRegistry
@@ -181,7 +186,7 @@ def _online_accounts(config_manager: Any) -> List[Dict[str, Any]]:
         if not path.is_file():
             return []
         reg = AccountRegistry(path)
-        return [r for r in (reg.list("telegram") or [])
+        return [r for r in (reg.list(str(platform or "telegram")) or [])
                 if str(r.get("status") or "") == "online"]
     except Exception:  # noqa: BLE001 —— 注册表读不到不该让导播台白屏
         logger.debug("[group_show] 账号注册表不可用", exc_info=True)
@@ -244,28 +249,37 @@ def _save_samples(config_manager: Any, pb: Any, lines: Any) -> bool:
         return False
 
 
-def _recorded_memberships(config_manager: Any) -> Dict[str, List[str]]:
-    """出席台账 ``{群: [号]}``；库不可用 → 空表（排班照跑，只是不知道存量）。"""
-    st = _store(config_manager)
-    if st is None:
-        return {}
-    try:
-        return {k: list(v) for k, v in (st.memberships() or {}).items()}
-    except Exception:  # noqa: BLE001 —— 台账读不到不该让排班整个失败
-        logger.debug("[group_show] 出席台账不可用（按空账处理）", exc_info=True)
-        return {}
+def _recorded_memberships(config_manager: Any,
+                          platform: str = "telegram") -> Dict[str, List[str]]:
+    """出席台账 ``{群: [号]}``；库不可用 → 空表（排班照跑，只是不知道存量）。
 
-
-def _joins_done_today(config_manager: Any) -> Dict[str, int]:
-    """``{号: 今天已加群数}``——排期表的第 1 天要按它预扣额度。
-
-    没有这一步，「做完今天 → 点已加入 → 重排」会把限速刷回满格：同一个号当天被派第二轮。
+    ``platform``（P0）：出席台账主键本就是 ``(platform, group, account)``，按平台取
+    对应那本账——否则 WA 排班会把 TG 的存量出席算进来，跨平台污染稀疏矩阵。
     """
     st = _store(config_manager)
     if st is None:
         return {}
     try:
-        return dict(st.joins_since(time.time() - 86400.0) or {})
+        return {k: list(v)
+                for k, v in (st.memberships(platform=platform) or {}).items()}
+    except Exception:  # noqa: BLE001 —— 台账读不到不该让排班整个失败
+        logger.debug("[group_show] 出席台账不可用（按空账处理）", exc_info=True)
+        return {}
+
+
+def _joins_done_today(config_manager: Any,
+                      platform: str = "telegram") -> Dict[str, int]:
+    """``{号: 今天已加群数}``——排期表的第 1 天要按它预扣额度。
+
+    没有这一步，「做完今天 → 点已加入 → 重排」会把限速刷回满格：同一个号当天被派第二轮。
+    ``platform``（P0）：按平台计数，与出席台账同口径。
+    """
+    st = _store(config_manager)
+    if st is None:
+        return {}
+    try:
+        return dict(st.joins_since(time.time() - 86400.0,
+                                   platform=platform) or {})
     except Exception:  # noqa: BLE001 —— 读不到就按「今天还没加过」，不拦排班
         logger.debug("[group_show] 今日加群计数不可用", exc_info=True)
         return {}
@@ -299,13 +313,17 @@ def _inbox_store(request: Any):
 
 
 def _show_context(request: Any, config_manager: Any, *, window_days: int = 0,
-                  group_key: str = "", pool: Optional[List[str]] = None):
+                  group_key: str = "", pool: Optional[List[str]] = None,
+                  platform: str = "telegram"):
     """本页所有风险读数的**唯一**来源（与影子 CLI、真发链路同一份实现）。
 
     这里刻意不做任何加工：读账口径（窗口、来源并集、软失败姿势）全在
     :mod:`src.companion.group_show.ledgers`。控制台自己再实现一遍的代价不是重复代码，
     是**口径漂移**——卡片上写「预算 2 人」而排练演 4 人，两个数都自称权威，运营只能
     猜哪个是真的。
+
+    ``platform``（P0）：号池默认按平台取，且**读账口径也随平台**（五轴按平台隔离——
+    发言/角色/冷却在 ledgers 层已按平台过滤）。``pool`` 显式传入时覆盖默认取号。
 
     子系统缺失 → ``None``（调用方按空态渲染，不 500）。
     """
@@ -316,11 +334,12 @@ def _show_context(request: Any, config_manager: Any, *, window_days: int = 0,
         return None
     accounts = pool if pool is not None else [
         a for a in (str(r.get("account_id") or "")
-                    for r in _online_accounts(config_manager)) if a]
+                    for r in _online_accounts(config_manager, platform)) if a]
     try:
         return read_show_context(
             _store(config_manager), _inbox_store(request),
-            pool=accounts, group_key=group_key, window_days=window_days)
+            pool=accounts, group_key=group_key, platform=platform,
+            window_days=window_days)
     except Exception:  # noqa: BLE001 —— 读账失败退化成空态，别连累整页
         logger.debug("[group_show] 风险读数不可用（按空态处理）", exc_info=True)
         return None
@@ -355,7 +374,8 @@ def _hours_pair(raw: Any, default: Tuple[int, int]) -> Tuple[int, int]:
 
 
 def _cooldowns(request: Any, config_manager: Any,
-               degraded: List[str]) -> List[Dict[str, Any]]:
+               degraded: List[str], platform: str = "telegram"
+               ) -> List[Dict[str, Any]]:
     """此刻还在跨群冷却窗里的号 + 还要等多久。
 
     刻意**只**读冷却那一本账（而不是整份 :func:`_show_context`）：``degraded`` 会原样
@@ -363,7 +383,7 @@ def _cooldowns(request: Any, config_manager: Any,
     的可信度是它唯一的价值。
 
     ``group_key=""``：这张表横跨所有群，没有「本群」可排除——问的是「谁刚在**某个**群
-    冒过头」，任何一个群都算数。
+    冒过头」，任何一个群都算数。``platform``（P0）：跨群冷却是每平台各自的节奏轴。
     """
     try:
         from src.companion.group_show.ledgers import ShowContext, read_last_spoke
@@ -371,7 +391,7 @@ def _cooldowns(request: Any, config_manager: Any,
         return []
     try:
         last = read_last_spoke(_store(config_manager), _inbox_store(request),
-                               degraded=degraded)
+                               platform=platform, degraded=degraded)
         return list(ShowContext(last_spoke=last).waiting(sorted(last)))[:12]
     except Exception:  # noqa: BLE001 —— 冷却读数是旁路能力，挂了别拦排期
         logger.debug("[group_show] 冷却名单不可用（按空表处理）", exc_info=True)
@@ -492,17 +512,22 @@ def rehearsal_payload(result: Any, generator: str) -> Dict[str, Any]:
 # ── 入参解析（纯函数） ──────────────────────────────────────────────────────
 
 
-def demo_actors(n: Any) -> List[Dict[str, Any]]:
-    """占位演员：各自独立指纹组，保证都能同台（只为看编排结构）。"""
+def demo_actors(n: Any, platform: str = "telegram") -> List[Dict[str, Any]]:
+    """占位演员：各自独立指纹组，保证都能同台（只为看编排结构）。
+
+    ``platform``：占位号的平台标签跟随当前上下文（纯观感一致——排练是 dry-run，
+    这些号并不真存在，平台只是让预览的演员表与所选平台不打架）。
+    """
     count = 4
     try:
         count = int(n)
     except (TypeError, ValueError):
         count = 4
     count = max(1, min(count, MAX_ACTORS))
+    plat = str(platform or "telegram")
     return [{
         "account_id": f"demo{i + 1}",
-        "platform": "telegram",
+        "platform": plat,
         "persona_id": f"persona_{i + 1}",
         "display_name": _DEMO_NAMES[i % len(_DEMO_NAMES)],
         "health": "online",

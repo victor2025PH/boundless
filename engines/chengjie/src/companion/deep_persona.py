@@ -19,7 +19,7 @@ from __future__ import annotations
 import hashlib
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 # 熟络阶段（脾气/不完美/内部梗等"有棱角"行为的闸门，与 persona_manager 同口径）。
 _INTIMATE_STAGES = ("intimate", "steady")
@@ -42,7 +42,9 @@ def _as_list(v: Any) -> List[str]:
 # ── L1 · 人设自传生活线 ──────────────────────────────────────────────────────
 
 def pick_life_beat(
-    persona: Dict[str, Any], now: datetime, *, seed_salt: str = "", stride_days: int = 3
+    persona: Dict[str, Any], now: datetime, *, seed_salt: str = "",
+    stride_days: int = 3,
+    skip_fn: Optional[Callable[[str], bool]] = None,
 ) -> Optional[str]:
     """确定性挑选"人设最近的生活片段"（一条向前走、前后一致的生活线）。
 
@@ -50,6 +52,11 @@ def pick_life_beat(
     选取：以 ``stride_days`` 天为一个「生活阶段」窗（默认 3 天），窗内**稳定不变**（避免
     "昨天说考完试今天又在备考"的自相矛盾），跨窗按 **人设偏移 + 阶段序号**推进轮转。
     无 life_arc → None（不注入，行为不变）。
+
+    ``skip_fn``（实施55「聊过即退役」）：会话级已用素材排除——命中的 beat
+    不进池（该会话不再聊它），全池被排空 → None（生活线让位给新闻等实时
+    素材）。缺省 None＝旧行为逐位不变。排除发生在轮换取模**之前**：池随
+    会话使用逐渐收窄，同日仍确定性稳定。
     """
     if not isinstance(persona, dict):
         return None
@@ -63,6 +70,21 @@ def pick_life_beat(
             pass
     else:
         beats = _as_list(arc)
+    if not beats:
+        return None
+    # 季节接地（2026-08-18「迎新表演」事故）：带明确节令词且今天出窗的节拍
+    # **今天不进池**（8 月不说迎新排练，9 月到窗自动恢复；无需删运营素材）。
+    # 全池被滤空＝今天没有可说的生活节拍，如实返回 None；过滤异常回原池。
+    try:
+        from src.companion.seasonal_guard import filter_seasonal_beats
+        beats = filter_seasonal_beats(beats, now)
+    except Exception:
+        pass
+    if skip_fn is not None:
+        try:
+            beats = [b for b in beats if not skip_fn(b)]
+        except Exception:
+            pass
     if not beats:
         return None
     stride = max(1, int(stride_days or 1))
@@ -631,15 +653,22 @@ def build_deep_persona_block(
     if not cfg.get("enabled", False):
         return ""
     persona = persona or {}
-    deep_ctx = deep_ctx or {}
+    # isinstance 而非 or：空 dict 是 falsy，`or {}` 会换新对象——调用方要靠
+    # 传入的 deep_ctx 读回 _life_beat_chosen（实施55），引用必须保住。
+    deep_ctx = deep_ctx if isinstance(deep_ctx, dict) else {}
     blocks: List[str] = []
 
-    # L1 生活线（persona.life_arc 静态派生，无需 store）
+    # L1 生活线（persona.life_arc 静态派生，无需 store）。
+    # 实施55：deep_ctx.beat_skip_fn＝会话级已用素材排除（聊过即退役）；
+    # 选中的 beat 回写 deep_ctx["_life_beat_chosen"] 供调用方栈进 user_context
+    # ——出站回复真提及它时在 _update_after_reply 记账退役。
     if _flag(cfg, "life_line"):
-        beat = pick_life_beat(persona, now)
+        beat = pick_life_beat(
+            persona, now, skip_fn=deep_ctx.get("beat_skip_fn"))
         lc = format_life_context(beat, theme=life_theme(persona))
         if lc:
             blocks.append(lc)
+            deep_ctx["_life_beat_chosen"] = str(beat or "")
 
     # L3 口味/立场（persona.tastes 静态）
     if _flag(cfg, "tastes"):
@@ -707,15 +736,18 @@ def build_deep_persona_block(
 
 def build_life_beat_opener(
     persona: Dict[str, Any], now: datetime, *, gate: str = "",
+    skip_fn: Optional[Callable[[str], bool]] = None,
 ) -> Dict[str, Any]:
     """把人设"最近的生活片段"做成一条**主动分享**开场（像真人主动说近况）。
 
     gate=="block"（近期危机）→ {}；其余允许（温和分享，soft 也可）。无 life_arc → {}。
     返回 opener dict：``{mode:"life_share", fact, directive}``，与 build_proactive_opener 同形。
+    ``skip_fn``（实施55）＝会话级已用素材排除：该会话聊过的 beat 不再作
+    开场素材，全用完 → {}（升级链自然落到新闻/天气/问候）。
     """
     if str(gate or "").strip().lower() == "block":
         return {}
-    beat = pick_life_beat(persona, now)
+    beat = pick_life_beat(persona, now, skip_fn=skip_fn)
     if not beat:
         return {}
     return {

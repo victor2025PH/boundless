@@ -58,6 +58,11 @@ _REQUEST_MARKERS = (
     "给我张照片", "給我張照片", "给我个相片", "給我個相片",
     "发个照片", "發個照片", "发张相", "發張相", "来个照片", "來個照片",
     "照片呢", "图呢", "圖呢", "照片没看到", "照片沒看到", "没收到照片", "沒收到照片",
+    # 实施69 实录漏网（2026-08-24 夜市摊事故）：「拍个照我看看」「拍照烤串的
+    # 给我看看」两次显式要图零命中 → 图链全程不启动，LLM 独自空转出谎言。
+    # 量词+裸「照」只收「拍X照」结构（「拍照」二字单独出现是动词泛指不收，
+    # 防「我喜欢拍照」误伤）；「拍照…给我看」语序走下方 _REQUEST_PATTERNS。
+    "拍个照", "拍個照", "拍张照", "拍張照", "拍一张照", "拍一張照",
     # 繁体 / 港台常见写法（对方多为繁体输入，简体 marker 匹配不到 → 补齐同义）
     "發張照片", "發個照片", "發張自拍", "發個自拍", "發張圖", "傳張照片", "傳個照片",
     "拍個照片", "來張照片", "給我看看你", "給我看看妳", "看看妳", "想看妳",
@@ -98,10 +103,14 @@ _OBJECT_PHOTO_MARKERS = (
 )
 
 # 用户谈自己的照片：无指向 AI 领属时不命中（防「我给你看我的照片」）。
+# 实施69 追加自述动作组（「我去拍个照」是用户叙述自己要去拍照，不是索图——
+# 新收的「拍个照」marker 若无此护栏会把它误判成要图）。
 _OWN_PHOTO_GUARD = (
     "我的照片", "我的相片", "我嘅照片", "我嘅相片", "我拍了", "我拍的照片",
     "给你看我的", "給你看我的", "我发的照片", "我發的照片", "看我的照片",
     "我的自拍", "發我的照片", "发我的照片",
+    "我去拍", "我拍个", "我拍個", "我拍张", "我拍張", "我来拍", "我來拍",
+    "我要拍", "我先拍",
 )
 
 # 结构化索图（量词/方言插入后纯子串不够）：要/发/睇 + 可选领属 + 相/照片。
@@ -129,6 +138,9 @@ _REQUEST_PATTERNS: Tuple[Pattern[str], ...] = (
         + _PHOTO_CORE,
         re.I,
     ),
+    # 实施69：「拍(照)X给我看看」动词前置语序（「拍照烤串的给我看看」）。
+    # 主体是什么交 wanted_media_subject 判，这里只负责认出「这是要图」。
+    re.compile(r"拍照?[^，。！？!?\n]{0,10}(?:给|給|俾)\s*我\s*(?:看|睇)"),
     # 闽南「甲我看…相」
     re.compile(
         r"(?:甲我|乎我|予我|共我).{0,8}(?:看|睇).{0,10}" + _PHOTO_CORE
@@ -613,13 +625,31 @@ _SCENE_DAY_WORDS = ("morning", "sunrise", "dawn", "noon", "midday", "afternoon",
 _SCENE_EVENING_WORDS = ("evening", "sunset", "dusk", "golden hour")
 _SCENE_NIGHT_WORDS = ("night", "midnight", "late night")
 
+# 深夜(22-6)的白天场所词（2026-08-22「凌晨 3:31 在二手书店看书」实录修复）：
+# 负面剔除词表只认显式时间词 → "secondhand bookstore aisle" 这类无时间词场景
+# 深夜照样入选并注进聊天「你此刻的状态」。深夜的语义是正面白名单（正常人只会
+# 在室内/家里），故对下列公共场所词补一刀：命中且**无显式夜间词**才剔——
+# "night street food market" 自带 night 放行；24h 场所语义（夜班/夜市/酒吧）
+# 应在场景短语里显式带 night 词表达。词表保守：只收「深夜出现＝常识违背」。
+_SCENE_DAYTIME_VENUE_WORDS = (
+    "bookstore", "bookshop", "library", "campus", "classroom", "school",
+    "university", "office", "meeting room", "coworking", "mall",
+    "stationery", "metro", "subway", "commute", "market", "cafe",
+    "coffee shop", "dessert", "bubble tea", "boba", "gym", "yoga studio",
+    "pool", "convenience store", "shop counter",
+)
+
+# 深夜全池冲突时的中性回退场景（聊天注入与生图两个消费面都安全）。
+NIGHT_NEUTRAL_SCENE = "at home, winding down for the night, cozy dim light"
+
 
 def scene_conflicts_with_hour(scene: str, hour: int) -> bool:
     """场景短语的时间词与当前小时是否**硬冲突**（纯函数）。
 
     上午(6-11)剔正午/下午/黄昏/夜景；午后(11-17)剔清晨/夜景；
-    傍晚(17-22)剔清晨/正午；深夜(22-6)剔全部白天+黄昏词。
-    无时间词恒 False（中性场景任何时段可用）。
+    傍晚(17-22)剔清晨/正午；深夜(22-6)剔全部白天+黄昏词，**且**剔无夜间词
+    的白天场所（书店/图书馆/办公室/商场…——2026-08-22 实录补刀，见词表注释）。
+    无时间词且非白天场所恒 False（中性场景任何时段可用）。
 
     2026-07-15 收紧：原白天段(6-17)只剔夜景 → 清晨 7:44 照样取到
     "campus walkway, afternoon light" 注入聊天，LLM 顺着场景说出
@@ -638,7 +668,11 @@ def scene_conflicts_with_hour(scene: str, hour: int) -> bool:
                    ("morning", "sunrise", "dawn") + _SCENE_NIGHT_WORDS)
     if 17 <= h < 22:
         return any(w in s for w in ("morning", "sunrise", "dawn", "noon", "midday"))
-    return any(w in s for w in _SCENE_DAY_WORDS + _SCENE_EVENING_WORDS)
+    if any(w in s for w in _SCENE_DAY_WORDS + _SCENE_EVENING_WORDS):
+        return True
+    if any(w in s for w in _SCENE_NIGHT_WORDS):
+        return False
+    return any(w in s for w in _SCENE_DAYTIME_VENUE_WORDS)
 
 
 def pick_scene_hint(
@@ -659,7 +693,10 @@ def pick_scene_hint(
 
     2026-07-14（Phase19）：先按当前时段剔除**硬冲突**场景（凌晨不取
     "afternoon light"——聊天注入/生图都从这取，深夜发白天图直接穿帮）再轮换；
-    全池冲突则回退原池（有场景总比没场景强）。
+    白天段全池冲突则回退原池（有场景总比没场景强）。
+    **深夜段（22-6）全池冲突不回退原池**（2026-08-22 修）：回退原池＝把刚剔掉的
+    白天场所又请回来（「凌晨在二手书店」的再入口），改回退 ``NIGHT_NEUTRAL_SCENE``
+    ——深夜「在家收尾」永远是安全事实，聊天与生图两个消费面同受益。
     ``weather_snap``（可选）：再滤高置信天气冲突（沙滩×暴雨）；全滤空则回退时段池。
     """
     pool = scene_pool(persona, fallback_scenes)
@@ -672,6 +709,8 @@ def pick_scene_hint(
     fitting = [s for s in pool if not scene_conflicts_with_hour(s, h)]
     if fitting:
         pool = fitting
+    elif h >= 22 or h < 6:
+        return NIGHT_NEUTRAL_SCENE
     if weather_snap is not None:
         try:
             from src.companion.weather_state import scene_conflicts_with_weather
@@ -700,20 +739,33 @@ _LATE_NIGHT_PHRASE = "late night, dim cozy indoor light"
 _ANY_TIME_WORDS = (_SCENE_DAY_WORDS + _SCENE_EVENING_WORDS + _SCENE_NIGHT_WORDS)
 
 
-def ensure_time_of_day(scene: str, now: Any = None) -> str:
+def ensure_time_of_day(scene: str, now: Any = None, weather_snap: Any = None) -> str:
     """给**没有时间词**的场景短语补当前时段光线氛围（纯函数，Phase19）。
 
     用途：LLM 发图指令（photo_directive）的场景直通生图 prompt——LLM 通常会带
     时间（协议要求），漏了就按服务器当前时间兜底，保证凌晨要图不出正午烈日照。
     已有任何时间词 → 原样返回（尊重 LLM 的对话内理解，它可能在描述"上次白天拍的"）。
     空场景返回空（交上游轮换池路径，那边已有时段过滤）。
+
+    ``weather_snap``（2026-08-18 天气匹配生活照）：强天气桶（雨/雪/雾/雷暴）时
+    追加氛围短语——下雨天发的照片带雨天的光，与文案里的真实天气同一个世界；
+    晴/多云/无快照零改变。时间词短路**不跳过**天气后缀（「上次白天拍的」是
+    时间语义，天气仍是此刻的）——但场景自带天气词时后缀让行（见
+    ``weather_scene_suffix``）。
     """
     sc = str(scene or "").strip()
     if not sc:
         return sc
+    _wx = ""
+    if weather_snap is not None:
+        try:
+            from src.companion.weather_state import weather_scene_suffix
+            _wx = weather_scene_suffix(sc, weather_snap)
+        except Exception:
+            _wx = ""
     low = sc.lower()
     if any(w in low for w in _ANY_TIME_WORDS):
-        return sc
+        return sc + (", " + _wx if _wx else "")
     import datetime as _dt
     t = now if isinstance(now, _dt.datetime) else _dt.datetime.now()
     h = t.hour
@@ -722,7 +774,7 @@ def ensure_time_of_day(scene: str, now: Any = None) -> str:
         if lo <= h < hi:
             phrase = p
             break
-    return sc + ", " + phrase
+    return sc + ", " + phrase + (", " + _wx if _wx else "")
 
 
 def build_scene_choice_instruction(
@@ -965,6 +1017,13 @@ _REQUESTED_SCENE_MAP: tuple = (
      "in a quiet library with bookshelves"),
     (("街上", "街头", "街頭", "逛街", "street", "shopping"),
      "on a city street, casual street style"),
+    # 实施69：夜市/街边摊点名（实录：人设「烧烤店老板娘」自称在夜市摊，客户要
+    # 图全程无法定向；归一层 scene_class_of 早认识「夜市→street」，这张表却
+    # 不认——一份知识两张表的漂移，本条对齐）。短语含 night market 关键词 →
+    # scene_class_of 归一仍是 street，相册 street_* 存货可命中。
+    (("夜市", "大排档", "大排檔", "街边摊", "街邊攤", "路边摊", "路邊攤",
+      "night market", "food stall"),
+     "at a night market street food stall, street lamps glowing"),
     (("雨", "下雨", "rain", "rainy"),
      "by the window on a rainy day"),
     (("夜景", "晚上外面", "night view"),
@@ -985,6 +1044,34 @@ def extract_requested_scene(text: str) -> str:
         for k in keys:
             if k in t:
                 return scene
+    return ""
+
+
+# ── 叙事自称场景（实施69 P2，2026-08-27）────────────────────────────────────
+# AI 上一轮亲口说「我在夜市摊这儿呢」，本轮客户泛化要图 → 选图应贴**嘴上说过
+# 的地方**而非轮换值（实录 23:03 说在夜市、23:06 发居家自拍=第一穿帮点；scene
+# 轮换与 LLM 顺人设即兴的叙事本就可能分叉，图跟叙事才是客户视角的一致）。
+# 窄口径：必须是「我+（副词）+在/到/来到/搁+片段」的自述结构，片段能归
+# canonical 场景类才算（「我在想你」「你猜我在哪」都不命中）；「我不在家」
+# 因「不」隔断不命中。消费方＝Stage A prefer_scene（软偏好，无货不拒发）。
+_SELF_SCENE_RE = re.compile(
+    r"(?:我|人家|咱)\s*(?:现在|現在|这会儿|這會兒|正|刚|剛|就)?\s*"
+    r"(?:在|到了?|来到|來到|搁|擱)\s*([^\s，。！？,!?~～\n]{1,10})")
+
+
+def extract_self_claimed_scene(text: str) -> str:
+    """AI 出站文本里「我在X」自称场景 → canonical 场景类；认不出返回 ''。"""
+    s = str(text or "")
+    if not s.strip() or len(s) > 400:
+        return ""
+    try:
+        from src.companion.persona_media import scene_class_of
+    except Exception:
+        return ""
+    for m in _SELF_SCENE_RE.finditer(s):
+        cls = scene_class_of(m.group(1))
+        if cls:
+            return cls
     return ""
 
 
@@ -1024,17 +1111,39 @@ _MEDIA_COMPLAINT_MAP: tuple = (
         "ai生成", "ai做的", "假的吧", "假照片", "骗人", "騙人", "fake",
         "photoshopped", "ai generated", "ai-generated", "not real",
     )),
+    # 实施69（2026-08-27）：内容不符——照片到了但画面与叙事对不上（「说好的
+    # 路灯/夜市在图里看不到」）。与 lie_caught（没收到）分开：两者的正确回应
+    # 完全不同（前者=角度没拍到轻松带过；后者=别编传输借口）；实录 23:07 正是
+    # 把内容质疑听成没收到才滚出「信号不好」连环谎。放 lie_caught 之前（特异
+    # 词先判）；调用方按 repeat 族同口径设「24h 真发过媒体」采信闸。
+    ("content_mismatch", (
+        "照片里没", "照片裡沒", "图里没", "圖裡沒", "照片上没", "照片上沒",
+        "图上没", "圖上沒", "画面里没", "畫面裡沒", "背景不对", "背景不對",
+        "背景不像", "背景呢", "跟你说的不一样", "跟你說的不一樣",
+        "和你说的不一样", "和你說的不一樣", "不是说在", "不是說在",
+        "哪有你说的", "哪有你說的", "not in the photo", "don't see it in",
+        "doesn't show", "photo doesn't match",
+    )),
+    # 实施69：催兑现——「照片呢/图呢」是等图未到的追讨，不是抓包指控。单独
+    # 成类：①观测上与真抓包分开（催收量=承诺兑现链的健康度直读）②纠偏走
+    # 悬置常驻 hint（带主体+催促升级），不占「止损认错」语气。原在 lie_caught
+    # 的这几个词移入本类。
+    ("unfulfilled", (
+        "照片呢", "图呢", "圖呢", "语音呢", "語音呢", "说好的照片", "說好的照片",
+        "怎么还没发", "怎麼還沒發", "怎么还没拍", "怎麼還沒拍", "还没拍好",
+        "還沒拍好", "where's the photo", "where is the photo", "still waiting",
+    )),
     # 2026-07-29 对练实证补漏：抓包「说发没发/说话不算话/冒充」——这类质疑此前
     # 全漏（四句里只「骗人」命中），是「连环解释」的触发前提没被识别的根因。
     ("lie_caught", (
         "没收到", "沒收到", "没看到", "沒看到", "没有收到", "沒有收到",
-        "啥都没有", "什么都没有", "甚麼都沒", "没图", "沒圖", "图呢", "圖呢",
-        "照片呢", "语音呢", "語音呢", "你不是说", "你不是說", "不是说在",
-        "不是說在", "对不上", "對不上", "时间线", "時間線", "前后矛盾",
+        "啥都没有", "什么都没有", "甚麼都沒", "没图", "沒圖",
+        "你不是说", "你不是說",
+        "对不上", "對不上", "时间线", "時間線", "前后矛盾",
         "前後矛盾", "打字算", "打的字算", "假唱", "冒充", "說話不算",
         "说话不算", "食言", "光说不做", "光說不做", "说了不做", "說了不做",
         "didn't get", "didnt get", "didn't receive", "nothing here",
-        "where's the photo", "where is the photo", "you said you", "thought you said",
+        "you said you", "thought you said",
     )),
     # 失望/敷衍/整体不信任（T10 型）——单独一类，配「停止解释、简短真诚」纠偏。
     ("distrust", (
@@ -1072,13 +1181,16 @@ def detect_apology_spiral(text: str) -> bool:
 
 def detect_media_complaint(text: str) -> str:
     """客户是否在**质疑刚收到的图/抓包说谎**（纯函数）：返回 ``repeat``（图重复）/
-    ``not_you``（不像本人）/``fake``（假图/网图）/``lie_caught``（没收到/说话不算话/
-    冒充）/``distrust``（整体失望敷衍）/``""``（无质疑）。
+    ``not_you``（不像本人）/``fake``（假图/网图）/``content_mismatch``（画面与叙事
+    对不上，实施69）/``unfulfilled``（催兑现「照片呢」，实施69）/``lie_caught``
+    （没收到/说话不算话/冒充）/``distrust``（整体失望敷衍）/``""``（无质疑）。
 
-    图文质疑（repeat/not_you/fake）是图文一致性劣化的第一现场信号；lie_caught/
-    distrust 是「说发没发/连环解释」的触发前提（2026-07-29 对练补漏）。词表保守
-    （宁漏勿滥）；repeat/not_you/fake 调用方须先确认「最近真发过媒体」再采信，
-    lie_caught/distrust 不强制该闸（没收到/唱歌冒充本就没有媒体台账）。
+    图文质疑（repeat/not_you/fake/content_mismatch）是图文一致性劣化的第一现场
+    信号；lie_caught/distrust 是「说发没发/连环解释」的触发前提（2026-07-29 对练
+    补漏）。词表保守（宁漏勿滥）；repeat/not_you/fake/content_mismatch 调用方须先
+    确认「最近真发过媒体」再采信，lie_caught/distrust 不强制该闸（没收到/唱歌
+    冒充本就没有媒体台账）；unfulfilled 只计数不设纠偏 hint（措辞由悬置常驻
+    hint 负责，见 skill_manager._maybe_flag_media_complaint）。
     """
     t = str(text or "").strip().lower()
     if not t or len(t) > 200:
@@ -1546,7 +1658,7 @@ class SelfieProvider:
         exclude_paths: Any = None,
         allow_album_fallback: Optional[bool] = None,
         album_scene: str = "", now_hour: Optional[int] = None,
-        prefer_series: str = "",
+        prefer_series: str = "", prefer_scene: str = "",
     ) -> SelfieResult:
         """出图。``base_image`` 非空且存在 → img2img（openai images.edit / command ``{base}``），
         用于锁住人设一致性；album 后端忽略 prompt/base（只挑现成图）。
@@ -1567,6 +1679,10 @@ class SelfieProvider:
         - ``now_hour``：软时段过滤（白天照深夜不发；全冲突时放行但结果
           ``extra["tod_softened"]=True``，配文层须按「之前拍的」口径兜底）。
         - ``prefer_series``：连续性窗口内优先同系列（同套衣服）。
+        - ``prefer_scene``（实施69 P1）：**软**场景偏好——泛化要图时尽量贴
+          AI 当前叙事场景（scene_state 轮换值），有匹配存货才收窄、没有绝不
+          拒发（与 ``album_scene`` 硬语义相对）。非 album 后端忽略（生成链
+          场景走 prompt）。
         """
         rv = SelfieResult(prompt=str(prompt or ""), provider=self.backend)
         if not self.enabled or self.backend in ("", "disabled"):
@@ -1577,7 +1693,8 @@ class SelfieProvider:
             return self._pick_from_album(
                 album_key=album_key, avoid_path=avoid_path,
                 exclude_paths=exclude_paths, required_scene=album_scene,
-                now_hour=now_hour, prefer_series=prefer_series)
+                now_hour=now_hour, prefer_series=prefer_series,
+                prefer_scene=prefer_scene)
         if not rv.prompt.strip():
             rv.error = "empty_prompt"
             return rv
@@ -1620,7 +1737,8 @@ class SelfieProvider:
             fb = self._pick_from_album(
                 album_key=album_key, avoid_path=avoid_path,
                 exclude_paths=exclude_paths, required_scene=album_scene,
-                now_hour=now_hour, prefer_series=prefer_series)
+                now_hour=now_hour, prefer_series=prefer_series,
+                prefer_scene=prefer_scene)
             if fb.ok:
                 fb.prompt = rv.prompt
                 fb.extra["fallback_from"] = self.backend
@@ -1702,6 +1820,7 @@ class SelfieProvider:
         self, *, album_key: str = "", avoid_path: str = "",
         exclude_paths: Any = None, required_scene: str = "",
         now_hour: Optional[int] = None, prefer_series: str = "",
+        prefer_scene: str = "",
     ) -> SelfieResult:
         """从预制相册随机挑一张（尽量避开上一张 ``avoid_path``，避免连发同图）。
 
@@ -1749,12 +1868,29 @@ class SelfieProvider:
         ex = {str(p) for p in (exclude_paths or ())}
         ex_names = {Path(p).name for p in ex}
         # 服装连续性：短窗口内「再拍一张」优先同系列未发文件。
+        _series_hit = False
         if prefer_series:
             same = [f for f in pool
                     if fmeta[f]["series"] == prefer_series
                     and Path(f).name not in ex_names]
             if same:
                 pool = same
+                _series_hit = True
+        # 场景软偏好（实施69 P1）：泛化要图尽量贴 AI 当前叙事场景（scene_state
+        # 轮换值）——「嘴上说在夜市，发的图在客厅」是 2026-08-24 实录第一穿帮点。
+        # 软语义：有匹配存货才收窄、没有绝不拒发（与 required_scene 硬语义相对）；
+        # 连续窗系列命中时让位（「再拍一张」时刚发那张的场景才是现场真相，轮换值
+        # 不该打断同景同装）；时段过滤已在前（深夜偏好夜景库存而非硬塞白天街拍）。
+        _scene_pref_hit = ""
+        if (not _series_hit and not str(required_scene or "").strip()
+                and str(prefer_scene or "").strip()):
+            from src.companion.persona_media import scene_class_of
+            _pref = scene_class_of(prefer_scene) or str(
+                prefer_scene).strip().lower()
+            liked = [f for f in pool if fmeta[f]["scene"] == _pref]
+            if liked:
+                pool = liked
+                _scene_pref_hit = _pref
         if ex:
             sent_series = {album_series_of_path(p) for p in ex}
             sent_series.discard("")
@@ -1778,7 +1914,8 @@ class SelfieProvider:
                                    "series": _pm["series"],
                                    "scene_class": _pm["scene"],
                                    "tod": _pm["tod"],
-                                   "tod_softened": tod_softened})
+                                   "tod_softened": tod_softened,
+                                   "scene_pref_hit": _scene_pref_hit})
 
     def reference_image(self, album_key: str = "") -> str:
         """挑一张相册图当"基础图/锁脸参考"（openai/command 后端 img2img 用）；无相册回空串。
@@ -1882,6 +2019,26 @@ class SelfieProvider:
             raise RuntimeError("openai images: empty download")
         return data
 
+    @staticmethod
+    def command_error_excerpt(stderr: str, stdout: str, limit: int = 480) -> str:
+        """子进程失败给上层的错误摘录：**取尾部**而非头部。
+
+        comfy_infer 的 stderr 先打显存腾挪等过程日志、真正的终局错误在最后——
+        2026-08-22 实锤：UI/服务端日志只见开头 300 字「显存不足…」，真因
+        「ckpt not in []（服务端模型清单为空）」被整段截掉，排障只能上 176 翻
+        _comfy.log。摘录规则：末 3 行非空日志 + 显式 ``ERR_CODE=`` 行（若不在
+        末 3 行内则前置），封顶 ``limit`` 字符（从尾部保留）。
+        """
+        text = (stderr or stdout or "").strip()
+        if not text:
+            return ""
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        code_line = next((ln for ln in reversed(lines) if "ERR_CODE=" in ln), "")
+        tail_lines = lines[-3:]
+        parts = ([code_line] if code_line and code_line not in tail_lines else []) + tail_lines
+        out = " | ".join(parts)
+        return out[-limit:] if len(out) > limit else out
+
     def _generate_command(
         self, prompt: str, out: Path, base_image: str = "", seed: int = -1,
         lora: str = "", lora_weight: float = 1.0,
@@ -1915,7 +2072,13 @@ class SelfieProvider:
                                timeout=self.command_timeout_sec,
                                env=os.environ.copy())
         if r.returncode != 0:
-            raise RuntimeError(f"selfie_command_failed:{(r.stderr or r.stdout or '')[:300]}")
+            # 完整输出（尾 4000 字）落服务端日志——摘录只保终局错误，全量真相
+            # 必须有处可查（此前两头都截断，事故只能靠上出图机翻日志定位）。
+            logger.warning("[selfie_command] rc=%s 输出尾部: %s", r.returncode,
+                           ((r.stderr or "") + (r.stdout or ""))[-4000:])
+            raise RuntimeError(
+                "selfie_command_failed:"
+                f"{self.command_error_excerpt(r.stderr, r.stdout)}")
 
 
 _selfie_singleton: Optional[SelfieProvider] = None

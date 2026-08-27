@@ -160,6 +160,8 @@ def test_backfill_skips_already_enriched_rows():
 def test_two_bare_images_backfill_patches_correct_history_row():
     # 最新入站也是裸图但识别失败（desc=None）；更早一张由补识补上——
     # history 必须精确替换旧行，不误伤最新占位行。
+    # （08-17 无兜底纪律后：识别失败要放行拟稿需 media_degrade_reply 开，
+    #   否则 vision_hold 取消——本例关注 history 替换语义，故开降级。）
     rows = [
         _row("in", "", media_type="image", media_ref="/static/old.jpg",
              mid="m1", ts=100),
@@ -169,7 +171,8 @@ def test_two_bare_images_backfill_patches_correct_history_row():
     ]
     kw, _store, _bf = _run(
         rows, image_desc=None,
-        backfill=("[图片内容] 一杯咖啡", "一杯咖啡"))
+        backfill=("[图片内容] 一杯咖啡", "一杯咖啡"),
+        cfg={"inbox": {"auto_draft": {"media_degrade_reply": True}}})
     users = [h for h in kw["history"] if h["role"] == "user"]
     assert users[0]["content"] == "[图片内容] 一杯咖啡"
     assert users[-1]["content"] == "[图片]"  # 最新失败行保持占位
@@ -179,16 +182,32 @@ def test_two_bare_images_backfill_patches_correct_history_row():
 
 
 def test_vision_fail_soft_degrades():
+    """识别失败 + media_degrade_reply 开 → 降级诚实拟稿（占位喂产线，不扣留）。
+
+    （08-17 无兜底纪律后本例语义更新：降级放行是 opt-in；默认关走 vision_hold
+    取消，见 test_vision_fail_default_holds_draft。）"""
     rows = [
         _row("in", "", media_type="image", media_ref="/static/a.jpg",
              mid="m1", ts=100),
     ]
-    kw, store, bf = _run(rows, image_desc=None)
+    kw, store, bf = _run(
+        rows, image_desc=None,
+        cfg={"inbox": {"auto_draft": {"media_degrade_reply": True}}})
     assert kw["last_inbound"] == "[图片]"
     assert kw.get("media_desc", "") == ""
     # 拟稿仍完成（生成引擎被调用）；最新失败行不在同稿内重复重试
     assert kw.get("last_inbound") is not None
     assert bf.await_count == 0
+
+
+def test_vision_fail_default_holds_draft():
+    """识别失败 + 降级关（默认）→ 08-17 无兜底纪律：取消拟稿不生成。"""
+    rows = [
+        _row("in", "", media_type="image", media_ref="/static/b.jpg",
+             mid="m1", ts=100),
+    ]
+    kw, _store, _bf = _run(rows, image_desc=None)
+    assert kw == {}  # 生成引擎未被调用（vision_hold 在生成之前拦下）
 
 
 def test_backfill_recognition_fail_keeps_old_behavior():

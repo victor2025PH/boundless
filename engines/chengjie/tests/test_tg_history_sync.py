@@ -106,6 +106,31 @@ def test_history_message_obj_outgoing_direction():
     assert obj["direction"] == "out"
 
 
+def test_history_message_obj_carries_group_speaker():
+    """群历史行必须带发言人（``ingest._msg_from_obj`` 读 source.sender_*）。
+
+    只修实时链＝只有「修好之后新收到的」有发言人；群历史（深度回填/账号级同步）
+    是库里群消息的绝大多数，漏了它坐席翻群历史看着像一个人自言自语。
+    """
+    grp = _FakeChat(-1001234, title="工作群", type_value="supergroup")
+    m = _FakeMsg(grp, text="早上好", mid=11, ts=140)
+    m.from_user = types.SimpleNamespace(id=555, first_name="张三")
+    obj = pb.history_message_obj(pb.tg_message_payload(m, "acc1"), m)
+    assert obj["source"]["sender_name"] == "张三"
+    assert obj["source"]["sender_id"] == "555"
+    assert obj["source"]["id"] == "11"        # 去重键不受影响
+
+
+def test_history_message_obj_private_has_no_speaker():
+    """私聊不写发言人（发言人就是会话本人＝纯冗余，且空串是「非群」语义位）。"""
+    chat = _FakeChat(101, first_name="Alice")
+    m = _FakeMsg(chat, text="hi", mid=12, ts=150)
+    m.from_user = types.SimpleNamespace(id=101, first_name="Alice")
+    obj = pb.history_message_obj(pb.tg_message_payload(m, "acc1"), m)
+    assert "sender_name" not in obj["source"]
+    assert "sender_id" not in obj["source"]
+
+
 # ── tg_chat_dict ──────────────────────────────────────────────────────────────
 
 def test_tg_chat_dict_private_identity():
@@ -124,6 +149,18 @@ def test_tg_chat_dict_supergroup_maps_to_group():
         _FakeChat(-1001234, title="工作群", type_value="supergroup"), "acc1")
     assert chat["chat_type"] == "group"
     assert chat["name"] == "工作群"
+
+
+def test_tg_chat_dict_channel_is_not_group():
+    """频道不得被负数 chat_id 启发式算成群。
+
+    ``-100…`` 前缀同样是负数 → infer_chat_type 的 TG 启发式会判 group；只有把
+    ``chat.type`` 真的归一出来才分得开。频道当群 → 群闸/群护栏对着一个只能读的
+    广播会话空转。
+    """
+    chat = pb.tg_chat_dict(
+        _FakeChat(-1009876, title="公告频道", type_value="channel"), "acc1")
+    assert chat["chat_type"] == "channel"
 
 
 def test_tg_chat_dict_no_id_returns_none():

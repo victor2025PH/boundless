@@ -16,6 +16,32 @@ from typing import Any, Dict, List, Optional
 
 from src.ai.translation_service import detect_language
 
+#: 极短拉丁客套词（小写）：语言证据不足，不参与会话语言投票
+_TRIVIAL_LATIN = frozenset({
+    "ok", "okay", "k", "kk", "okk", "yes", "no", "y", "n", "ty", "thx",
+    "thanks", "thank you", "hi", "hello", "hey", "ha", "haha", "hahaha",
+    "lol", "good", "nice", "cool", "done", "wow", "oh", "hmm", "em", "en",
+})
+
+
+def detect_inbound_language(raw: str) -> str:
+    """入站语言检测（带「证据不足不投票」护栏，2026-08-20 实锤）。
+
+    事故：用户在中文群回两个字母「OK」→ detect 判 en → conversations upsert 的
+    「非 unknown 即覆写」把会话语言翻成 en → ①坐席发中文被出站语言守卫 409 拦
+    （「会话语言是 en」）②出站自动翻译开始把中文反向译英发给中文客户。
+    护栏：**纯 ASCII 且（字母数 <4 或命中常见客套词）→ 返回 unknown**（upsert
+    对 unknown 不覆写＝沿用会话既有语言）。真英文会话不受影响——任何一条正常
+    长度的英文消息都会正确投票。
+    """
+    t = str(raw or "").strip()
+    if t and all(ord(c) < 128 for c in t):
+        low = t.lower().rstrip(".!?~ ")
+        letters = sum(1 for c in low if c.isalpha())
+        if low in _TRIVIAL_LATIN or letters < 4:
+            return "unknown"
+    return detect_language(t)
+
 # 统一收件箱草稿/审批的 4 档自动化模式（与 unified_inbox 前端一致）
 SEND_MODES = ["manual", "review", "multi_choice", "auto_ai"]
 
@@ -73,7 +99,10 @@ def name_is_real(name: Any, chat_key: Any) -> bool:
 # 会话类型归一（私聊 / 群组 / 频道）。用于「群组不进升级告警、改走群组动态」分流。
 # 群/超级群/广播群统一归为 ``group``；频道单列 ``channel``；其余（含未知）回落 ``private``，
 # 因为告警侧对未知保守按私聊处理（宁可多提醒一个私聊，不可漏一个真客户）。
-_GROUP_SOURCE_TYPES = {"group", "supergroup", "gigagroup", "megagroup", "room"}
+_GROUP_SOURCE_TYPES = {
+    "group", "supergroup", "gigagroup", "megagroup", "room",
+    "group_thread", "community",
+}
 _PRIVATE_SOURCE_TYPES = {"private", "user", "bot", "dm", "direct"}
 
 
@@ -108,6 +137,27 @@ def infer_chat_type(
         return "group"
     if pt == "channel":
         return "channel"
+    tt = str(src.get("thread_type") or src.get("threadType") or "").strip().lower()
+    if tt in _GROUP_SOURCE_TYPES:
+        return "group"
+    if tt == "channel":
+        return "channel"
+    if "is_group_thread" in src:
+        try:
+            if bool(src.get("is_group_thread")):
+                return "group"
+        except Exception:  # noqa: BLE001
+            pass
+    for _k in ("participants_count", "participant_count", "participantCount"):
+        if _k not in src:
+            continue
+        try:
+            n = int(src.get(_k) or 0)
+        except (TypeError, ValueError):
+            n = 0
+        if n >= 3:
+            return "group"
+        break
     plat = str(platform or "").lower()
     ck = str(chat_key or "").strip()
     if plat == "telegram":
@@ -218,7 +268,7 @@ def message_obj(
     纯加法字段——文本消息显示与既有行为完全不变。
     """
     raw = str(text or "")
-    lang = detect_language(raw)
+    lang = detect_inbound_language(raw)
     if not media_type and not media_ref:
         media_type, media_ref = extract_media(source)
     return {
@@ -311,20 +361,25 @@ def normalize_chat(
 
 
 def _effective_unread_from_row(row: Dict[str, Any]) -> int:
-    """P0：由会话行派生「有效未读」——已读水位覆盖末条则 0，否则用同步 unread。
+    """P0：由会话行派生「有效未读」——已读水位覆盖最后一条**入站**则 0。
 
+    v2（2026-08-23）：闸门 ts 优先 ``last_in_ts``（最后一条入站；0=无入站回流的
+    占位/存量行 → 回落 ``last_ts`` 保旧行为）——自己的出站不再复活未读徽标。
     纯逻辑（不依赖 store 实例，避免 normalizer→store 循环依赖）；与
-    ``InboxStore.effective_unread`` 同口径，读路径统一走这里。
+    ``InboxStore.effective_unread`` / ``sum_effective_unread_by_account`` 的
+    SQL CASE 三处同口径，改任何一处必须同改其余两处。
     """
     try:
         raw = int(row.get("unread") or 0)
         if raw <= 0:
             return 0
         last_ts = float(row.get("last_ts") or 0)
+        last_in = float(row.get("last_in_ts") or 0)
         last_read = float(row.get("last_read_ts") or 0)
     except (TypeError, ValueError):
         return int(row.get("unread") or 0)
-    return raw if last_ts > last_read else 0
+    gate_ts = last_in if last_in > 0 else last_ts
+    return raw if gate_ts > last_read else 0
 
 
 def store_row_to_chat(
@@ -468,6 +523,11 @@ def store_message_to_obj(row: Dict[str, Any]) -> Dict[str, Any]:
         # P4-6A 编辑/撤回：撤回=气泡置灰「已撤回」；编辑=标「已编辑」
         "revoked": bool(row.get("revoked") or 0),
         "edited": bool(row.get("edited") or 0),
+        # 实施72 P2：合成时间戳标记（断线补收/历史回填的 ts=入库回推，只保序）——
+        # 前端据此渲染「≈」标注，绝不把补收时间当真实收发时刻展示。
+        "approx_ts": int(row.get("approx_ts") or 0),
+        # 实施72 P3：投递失败原因码（status=failed 留痕行专属）——气泡自解释
+        "fail_reason": str(row.get("fail_reason") or ""),
         "source": {},
         "from_store": True,
     }

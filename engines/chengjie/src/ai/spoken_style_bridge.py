@@ -101,6 +101,15 @@ def _load():
                 sys.path.insert(0, str(pdir))
             import spoken_style  # noqa: PLC0415
             _MOD = spoken_style
+            # P1-1（2026-08-18）：指纹源重定向到数据区物化合并文件（出厂 ∪
+            # 运营 overlay）——打包态只读安装目录/开发态 git 脏树两个「改不了
+            # 出厂件」的问题一并解决；失败=保持包读出厂件的旧行为，绝不伤主链。
+            try:
+                from src.ai.speech_prints_overlay import install_redirect
+                install_redirect()
+            except Exception:
+                logger.debug("speech_prints overlay 重定向失败（保持旧行为）",
+                             exc_info=True)
         except Exception as e:
             _FAILED = True
             logger.info("spoken_style 包不可用，桥接退化为 no-op: %s", e)
@@ -142,6 +151,14 @@ def system_block(config, role: str = "") -> str:
     ss = _load()
     if ss is None:
         return ""
+    # overlay 保鲜（P1-1）：出厂件/overlay 任一被手改 → 重物化合并文件，包内
+    # mtime 热加载随即生效（保住「改此文件即时生效」的两侧语义）。新鲜时
+    # 只花两次 stat + 一次小 JSON 读，L1 每次构建调用可承受。
+    try:
+        from src.ai.speech_prints_overlay import ensure_runtime_file
+        ensure_runtime_file()
+    except Exception:
+        pass
     c = _cfg(config)
     try:
         blocks = ss.system_blocks(

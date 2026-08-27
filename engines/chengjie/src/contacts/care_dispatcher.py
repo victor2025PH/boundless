@@ -20,7 +20,7 @@ import logging
 import random
 import time
 from datetime import datetime, timedelta
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, List, Optional
 
 from src.contacts.care_schedule import CRISIS_CARE_TOPIC, CareScheduleStore
 
@@ -52,6 +52,9 @@ PeerFilter = Callable[[str, str, str], bool]
 
 _IDENTITY_LEAK = ("作为AI", "作为一个AI", "AI助手", "as an AI", "i'm an ai", "i am an ai")
 
+# B110（实施74 四批，0826 _527 实录「通用抒情模板达不到效果」）：
+# ①具体锚点硬要求 ②结尾轻问题钩子 ④已发关怀负样本（recent_sent 追加块）。
+# ③关系阶段分档留待 intimacy provider 接线（见实施74 备案），危机专线不动。
 _CARE_PROMPT = """你是「{ai_name}」，正在和对方私聊。对方之前提到过 **{topic}**（{when_desc}），
 现在是主动关心这件事的好时机。
 
@@ -64,10 +67,20 @@ _CARE_PROMPT = """你是「{ai_name}」，正在和对方私聊。对方之前�
 请用对方习惯的语言（{lang}）发**一条**主动关心的消息：
 - 像朋友一直惦记着这件事（"你之前说的{topic}…怎么样啦？"）
 - **紧扣「{topic}」这件具体事**，不要泛泛的"在吗 / 最近好吗"
+- 至少自然指涉一个上面「原话/对话要点」里的**具体事实**（工作、宠物、上次提的计划…）；
+  要点为空时，就围绕「{topic}」写一个具体的小场景或小细节，
+  **绝不**写"想你了 / 睡得好吗 / 今天醒得早又想起你"这类空泛抒情模板
+- **结尾带一个轻巧的小问题**（好回答、不逼问），让对方能随手回一句；不要单向抒情收尾
 - 短小亲切 1-2 句，可含一个 emoji
 - 不要说"我是AI"或身份相关的话，不发链接、不索要联系方式
 
 直接输出消息文本，不要前后缀、不要解释。"""
+
+# ④防重负样本块（有已发记录才追加，零记录零 token）
+_CARE_RECENT_BLOCK = """
+
+【你最近已发过的关怀（绝不重复这些句子的开场、句式或比喻，换全新的说法）】
+{recent_lines}"""
 
 # Phase ④续¹⁰：危机来源关怀的「克制陪伴」模板——对方近期情绪低谷/危机信号，主动护栏
 # 拦下了普通打扰、转这条关怀兜底。绝不能用日常约定回访那套轻快寒暄（"你之前说的X怎么样啦~"），
@@ -112,6 +125,7 @@ def build_care_prompt(
     item: dict,
     *,
     context_block: str = "",
+    recent_sent: Optional[List[str]] = None,
     ai_name: str = "她",
     lang: str = "zh",
     now: Optional[float] = None,
@@ -121,12 +135,16 @@ def build_care_prompt(
     P2 2026-08-01 抽出为公共函数：派发器与 ``/api/care/schedule/{sid}/preview``
     预览端点共用——「先看后发」看到的就是真发同一句 prompt 口径，预判与行为
     永远一致（与草稿预判徽标同一设计纪律）。
+
+    ``recent_sent``（B110④，实施74 四批）＝该联系人最近真发过的关怀话术
+    （store.recent_sent_texts），作防重负样本追加进 prompt；空/None 零追加。
+    危机专线刻意不吃本参数（克制陪伴不需要花样，重复的「我在」不是缺陷）。
     """
     n = float(now if now is not None else time.time())
     topic = str(item.get("topic") or "").strip()
     if topic == CRISIS_CARE_TOPIC:
         return _CRISIS_CARE_PROMPT.format(ai_name=ai_name, lang=lang)
-    return _CARE_PROMPT.format(
+    out = _CARE_PROMPT.format(
         ai_name=ai_name,
         topic=topic or "那件事",
         when_desc=_when_desc(float(item.get("event_at") or n), n),
@@ -134,6 +152,11 @@ def build_care_prompt(
         context_block=context_block or "(无具体要点)",
         lang=lang,
     )
+    lines = [s.strip() for s in (recent_sent or []) if str(s or "").strip()]
+    if lines:
+        out += _CARE_RECENT_BLOCK.format(
+            recent_lines="\n".join(f"- {s[:80]}" for s in lines[:5]))
+    return out
 
 
 def _when_desc(event_at: float, now: float) -> str:
@@ -402,8 +425,16 @@ class CareDispatcher:
             self._mark_skipped(sid, "no_context")
             return False
 
+        # B110④：该联系人最近已发关怀 → 防重负样本（危机专线不吃；读失败按空）
+        recent_sent: List[str] = []
+        if not is_crisis_care:
+            try:
+                recent_sent = self._store.recent_sent_texts(contact_key, limit=4)
+            except Exception:
+                recent_sent = []
+
         prompt = build_care_prompt(
-            item, context_block=context_block,
+            item, context_block=context_block, recent_sent=recent_sent,
             ai_name=self._ai_name, lang=self._default_lang, now=now)
         try:
             reply = (await self._ai.chat(prompt) or "").strip()

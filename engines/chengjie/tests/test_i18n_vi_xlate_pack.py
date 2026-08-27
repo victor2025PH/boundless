@@ -65,11 +65,20 @@ def test_vi_values_nonempty_and_placeholders_match_zh():
 
 
 def test_vi_merged_view_still_falls_back_to_english():
-    """未覆盖键回落英文（部分包机制的另一半：不许出现裸键名）。"""
+    """未覆盖键回落英文（部分包机制的另一半：不许出现裸键名）。
+
+    2026-08-27 机翻跑批后 vi 覆盖 ~97%——固定探针键已被真译文覆盖，改为
+    动态找一个仍未覆盖的键（全覆盖时跳过回落探针，与 test_i18n_extra_langs
+    同口径）；机制本身另有 _merge_views 单元验证兜底。
+    """
+    from src.web.i18n_packs import collect_all
     vi_view = get_translations("vi")
     en_view = get_translations("en")
-    # 挑一个刻意未翻的长尾错误键：应等于英文值而非键名
-    key = "inbox.xl.ocr_no_text"
-    assert key not in vi_inbox_xlate.VI
-    assert vi_view.get(key) == en_view.get(key)
-    assert vi_view.get(key) != key
+    zh_view = get_translations("zh")
+    _z, _e, extras = collect_all()
+    ov = extras.get("vi", {})
+    probe = next((k for k in zh_view if k not in ov), None)
+    if probe is None:
+        return  # 全覆盖：无回落面可测
+    assert vi_view.get(probe) == en_view.get(probe)
+    assert vi_view.get(probe) != probe

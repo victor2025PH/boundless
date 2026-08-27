@@ -11,6 +11,13 @@
 # (that is the upgrade-self-heal contract). For a factory-fresh machine pair it
 # with wipe_chatx_data_node.ps1 (delete) or backup_chatx_data_node.ps1 (rename).
 #
+# Since desktop >= 1.0.45 the uninstaller itself grew a data-disposition page
+# (build/installer.nsh): interactive uninstalls let the END USER choose
+# keep-data (default) vs full wipe. The /S path this script uses is UNCHANGED
+# (silent = keep data); passing `--delete-app-data` after /S would also wipe
+# %APPDATA% + updater cache from the uninstaller side -- we deliberately keep
+# using the wipe/backup node scripts instead (finer-grained, _bak-aware).
+#
 # ASCII-only on purpose: PS 5.1 decodes BOM-less UTF-8 as GBK and mangles CJK
 # (the watchdog_emotion_tts.ps1 lesson). The app's product name is CJK, so we
 # NEVER match by display name -- only by install path (telegram-ai-desktop, the

@@ -66,6 +66,11 @@ _REASON_CODES = frozenset({
     # 此前被吞成 expired → 前端自动换码无限循环）。与 tg_unreachable 分开：迁移失败
     # 发生在「初始 DC 通、目标 DC 不通/握手超时」，处置是重试连接而非配代理。
     "dc_migrate_failed",
+    # 平台官方服务端临时拒绝登录验证（2026-08-24 实锤：LINE qrCodeLoginV2 回 code=100
+    # 「Verification is temporarily unavailable」——扫码/输码全对仍被拒＝服务端风控冷却）。
+    # 与 rate_limited（我方请求过频）和 qr_expired（真过期）都不同：处置是**等 10-30 分钟
+    # 且别反复扫**，归错任何一边都会诱导用户马上重试、把冷却越撞越长。当前仅 LINE 归类器产出。
+    "temp_unavailable",
 })
 
 # scanned＝用户已扫码（Telegram MigrateTo/Success 只在客户端确认后出现）。

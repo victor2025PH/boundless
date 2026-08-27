@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="{{ 'zh-CN' if (ui_lang|default('zh'))=='zh' else 'en-US' }}" data-theme="light">
+<html lang="{{ ui_locale|default('zh-CN') }}" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -11,7 +11,7 @@
 <link rel="stylesheet" href="/static/brand/brand.css?v=20260730a">
 <link rel="stylesheet" href="/static/brand/brand-fonts.css?v=20260730a"><!-- 品牌拉丁字 Montserrat（CJK 自动回落系统字），与工作台同一字形 -->
 <link rel="stylesheet" href="/static/brand/brand-lockup.css">
-<link rel="stylesheet" href="/static/brand/auth-surface.css?v=20260730b"><!-- 认证表面品牌层（单一源）；勿在下方内联 <style> 重复定义 --p/--ps/--g、body 字体、orb 底色 -->
+<link rel="stylesheet" href="/static/brand/auth-surface.css?v=20260823a"><!-- 认证表面品牌层（单一源）；勿在下方内联 <style> 重复定义 --p/--ps/--g、body 字体、orb 底色 -->
 <link rel="stylesheet" href="/static/fonts/inter.css"><!-- 自托管 Inter；离线可用，替代原 Google Fonts 外链 -->
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}

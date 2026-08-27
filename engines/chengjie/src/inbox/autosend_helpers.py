@@ -835,6 +835,219 @@ async def autosend_bazi_kline(assistant, platform, account_id, chat_key, text) -
         send_fn=_send_fn, resolve_birth=_resolve_birth)
 
 
+async def autosend_song(assistant, platform, account_id, chat_key, text="") -> bool:
+    """全自动「清唱」（gated，``companion.singing.enabled`` 默认关，2026-08-22 P0）：
+    客户最近一条入站在点名要听歌时，直接发**预渲染**的人设清唱段（hub 唱歌工作室
+    ``dry_vocal`` 产物，夜间 ``scripts/song_prerender.py`` 备货），经
+    orch.send_media 以语音消息发出。返回 True=已发出（本轮草稿被替代，语义同
+    autosend_image）；False=未发 → 回落图/语音/文本正常链。
+
+    刻意不做（P0，改前先读 song_stock 模块 docstring）：
+    - 运行时现场合成（176 白天 VRAM 高水位 + 合成 30s+；无备货就诚实回落）；
+    - 无备货时的冒充（说话声念歌词＝本能力要修的实录穿帮，绝不回退到它）；
+    - 点名曲目翻唱（版权红线；词表只认「要你唱」不认「唱某某的歌」）。
+    """
+    _cfg = assistant.config.config or {}
+    from src.companion.song_stock import (
+        SONG_STICKY_SEC, day_start_ts, detect_song_request, find_stock_file,
+        get_song_ledger, get_song_stats, load_song_manifest, pick_song,
+        requested_song_scene, resolve_singing_cfg, song_gate_verdict,
+        song_sticky_from_texts, song_topic_state, stock_root, templates_dir,
+    )
+    _scfg = resolve_singing_cfg(_cfg)
+    if not _scfg.get("enabled", False):
+        return False
+    # 反双发：仅编排器管理且支持发媒体的账号（与自拍/语音/K线同口径）。
+    from src.integrations.account_orchestrator import (
+        get_orchestrator as _go,
+    )
+    _orch = _go(_cfg)
+    if not _orch.owns_media(platform, account_id):
+        return False
+    # 客户最近一条入站文本（判「要歌」意图；意图判定看入站，不看草稿文本）
+    # + 粘性窗内的既往入站（实施66 P0-2：「不行，必须唱」追加逼唱补判）。
+    _peer_text = ""
+    _prior_in: list = []
+    try:
+        from src.inbox.normalizer import conv_id as _cidf
+        _st = getattr(assistant, "inbox_store", None)
+        if _st is None:
+            return False
+        _cid = _cidf(platform, account_id, chat_key)
+        _recent = _st.list_recent_messages(_cid, limit=8) or []
+        import time as _t_sw
+        _now_sw = _t_sw.time()
+        for _m in reversed(_recent):
+            if str(_m.get("direction") or "in") != "in":
+                continue
+            _txt = str(_m.get("text") or "")
+            if not _txt:
+                continue
+            if not _peer_text:
+                _peer_text = _txt
+                continue
+            _ts_sw = float(_m.get("ts") or 0)
+            if _ts_sw and (_now_sw - _ts_sw) > SONG_STICKY_SEC:
+                continue
+            _prior_in.append(_txt)
+    except Exception:
+        return False
+    if not _peer_text:
+        return False
+    _state = song_topic_state(
+        _peer_text, sticky=song_sticky_from_texts(_prior_in))
+    if _state != "demand":
+        return False
+    if not detect_song_request(_peer_text):
+        get_song_stats().bump("sticky_demand")
+    # 被动逼唱压力（P0-4）：窗内 strict 次数 + 本条 → ≥2 豁免冷却（日帽仍在）
+    _pressure = 1 + sum(1 for _t in _prior_in if detect_song_request(_t))
+    # 定制求歌让位（实施58 P2）：对方要的是「写/唱一首关于我们的」定制歌，
+    # 拿现货顶上=答非所问——交回文本链（draft intake 已建单+可承诺 hint），
+    # 绝不用现货冒充定制。custom 未开闸时维持旧行为（现货能唱就唱）。
+    try:
+        from src.companion.song_orders import (
+            detect_custom_song_request as _dcsr2,
+            resolve_custom_cfg as _rcc2,
+        )
+        if _rcc2(_cfg).get("enabled") and _dcsr2(_peer_text):
+            get_song_stats().bump("custom_yield")
+            return False
+    except Exception:
+        pass
+    _stats = get_song_stats()
+    _stats.bump("requests")
+    # 生效人设（含会话覆写），与图/语音同口径解析。
+    from src.ai.persona_voice import (
+        resolve_effective_persona_id as _repi,
+        resolve_effective_voice_context as _revc,
+    )
+    _pid = _repi(_cfg, platform, account_id, str(chat_key))
+    _real_pid = _pid
+    try:
+        _ctx0 = _revc(
+            _cfg, persona_id=_pid or None, account_persona_id=_pid or None,
+            chat_key=str(chat_key), contact_key=str(chat_key),
+            platform=platform, account_id=account_id)
+        _real_pid = str(_ctx0.get("persona_id") or _pid or "")
+    except Exception:
+        _real_pid = _pid
+    if not _real_pid:
+        _stats.bump("no_persona")
+        return False
+    # 频控（日上限 + 冷却；按会话记账）。
+    import time as _time
+    _now = _time.time()
+    _ledger = get_song_ledger()
+    _ok, _why = song_gate_verdict(
+        _scfg,
+        today_count=_ledger.count_since(_cid, day_start_ts(_now)),
+        last_ts=_ledger.last_ts(_cid), now=_now,
+        demand_pressure=_pressure)
+    if not _ok:
+        _stats.bump(_why)
+        return False
+    if _why == "pressure_exempt":
+        _stats.bump("pressure_exempt")
+    # 选曲：只在**有备货**的模板里挑（部分渲染态不误选）；语言粗判（han 占比）
+    # + 场景提示（生日/晚安）+ 重复窗避重；全被排除 → 宁可不唱。
+    _templates = load_song_manifest(templates_dir(_scfg))
+    if not _templates:
+        _stats.bump("no_template")
+        return False
+    _sroot = stock_root(_scfg)
+    _stocked = [t for t in _templates
+                if find_stock_file(_real_pid, t.id, sroot=_sroot)]
+    if not _stocked:
+        _stats.bump("no_stock")
+        return False
+    _lang = "zh"
+    try:
+        _han = sum(1 for ch in _peer_text if "\u4e00" <= ch <= "\u9fff")
+        _alpha = sum(1 for ch in _peer_text if ch.isascii() and ch.isalpha())
+        if _han == 0 and _alpha >= 4:
+            _lang = "en"
+    except Exception:
+        _lang = "zh"
+    _tmpl = pick_song(
+        _stocked, lang=_lang,
+        scene_hint=requested_song_scene(_peer_text),
+        exclude_ids=_ledger.recent_template_ids(
+            _cid, float(_scfg.get("repeat_window_days", 7) or 7), now=_now),
+        variety_key=_cid,
+        day_key=_time.strftime("%Y%m%d", _time.localtime(_now)),
+        allow_lang_fallback=bool(_scfg.get("allow_lang_fallback", False)))
+    if _tmpl is None:
+        _stats.bump("no_pick")
+        return False
+    _spath = find_stock_file(_real_pid, _tmpl.id, sroot=_sroot)
+    if _spath is None:
+        _stats.bump("no_stock")
+        return False
+    try:
+        _data = _spath.read_bytes()
+    except Exception:
+        assistant.logger.debug("[autosend song] 备货读取失败 %s", _spath,
+                               exc_info=True)
+        _stats.bump("send_failed")
+        return False
+    # 落出站媒体目录拿 /static URL（坐席工作台可回听），以语音消息发出。
+    from src.integrations.protocol_bridge import save_outbound_media
+    try:
+        _local, _url, _ = save_outbound_media(
+            platform, account_id, f"song_{_tmpl.id}{_spath.suffix}", _data)
+    except Exception:
+        assistant.logger.debug("[autosend song] 出站媒体落盘失败", exc_info=True)
+        _stats.bump("send_failed")
+        return False
+    _first_line = next((ln.strip() for ln in str(_tmpl.lyrics or "").splitlines()
+                        if ln.strip()), "")
+    _inbox = f"[唱歌]《{_tmpl.title}》" + (f" ♪ {_first_line[:40]}" if _first_line else "")
+    # 止损话术（实施58 P3-1）：唱歌嗓≠说话嗓的柔性铺垫配文，音色修复后可关
+    from src.companion.song_stock import framing_caption as _fcap
+    _caption = _fcap(_scfg, conv_id=_cid)
+
+    async def _coro():
+        return await _orch.send_media(
+            platform, account_id, chat_key,
+            media_path=_local, media_url=_url,
+            media_type="voice", caption=_caption, inbox_text=_inbox)
+    try:
+        _wl = getattr(assistant, "_web_loop", None)
+        if _wl is not None and _wl.is_running():
+            _f = asyncio.run_coroutine_threadsafe(_coro(), _wl)
+            _res = await asyncio.wrap_future(_f)
+        else:
+            _res = await _coro()
+        _sent = bool(isinstance(_res, dict) and _res.get("delivered"))
+    except Exception:
+        assistant.logger.debug("[autosend song] 发送异常", exc_info=True)
+        _sent = False
+    if not _sent:
+        _stats.bump("send_failed")
+        return False
+    _ledger.record(_cid, _tmpl.id, now=_now)
+    _stats.note_sent(_tmpl.id, _real_pid)
+    # 已发媒体日志合流（与图链 _on_sent 同口径）：草稿链「你最近发过的照片/媒体」
+    # 事实块 + 防「唱完失忆」（客户追问「刚唱的什么」）。skill_manager 缺席静默跳过。
+    try:
+        _sm_ref = getattr(assistant, "skill_manager", None)
+        if _sm_ref is not None:
+            _uc = _sm_ref._get_user_context(str(chat_key))
+            _sm_ref._record_media_sent(
+                _uc, note=f"[唱歌]《{_tmpl.title}》", scene="",
+                series=f"song:{_tmpl.id}")
+            _sm_ref._context_store.mark_dirty(str(chat_key))
+            _sm_ref._context_store.flush(str(chat_key))
+    except Exception:
+        assistant.logger.debug("[autosend song] 媒体日志写入失败（忽略）",
+                               exc_info=True)
+    assistant.logger.info(
+        "[autosend song] 唱段已发 persona=%s tmpl=%s conv=%s file=%s",
+        _real_pid, _tmpl.id, _cid, _spath.name)
+    return True
+
+
 def _is_desktop_account(platform, account_id) -> bool:
     """会话账号是否为内嵌「桌面/扩展」模式（无服务端 worker）。"""
     try:
@@ -1074,6 +1287,17 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
             except Exception:
                 _assistant_ref.logger.debug(
                     "[autosend kline] 失败，回落图/语音/文本", exc_info=True)
+            # 清唱短路（gated，companion.singing 默认关，2026-08-22）：客户点名
+            # 要听歌 → 直发预渲染人设唱段（零现场合成）；无备货/频控中 → 继续
+            # 回落图/语音/文本——绝不用说话声念歌词冒充唱（实录穿帮，勿回退）。
+            try:
+                if await autosend_song(
+                    _assistant_ref, platform, account_id, chat_key, text
+                ):
+                    return {"ok": True, "delivered_as": "voice"}
+            except Exception:
+                _assistant_ref.logger.debug(
+                    "[autosend song] 失败，回落图/语音/文本", exc_info=True)
             # 全自动「按需发图」优先（gated）：LLM 指令直通生成，或对方在要照片时
             # 关键词链出图；成功即作为图片发出、跳过语音/文本；失败 → 继续。
             try:
@@ -1121,8 +1345,31 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
                             _last_is_img = str(
                                 _last_in.get("media_type") or "") in (
                                 "image", "photo")
-                            _mctx = (not _last_is_img) and any(
-                                _wm(str(m.get("text") or "")) for m in _ins)
+                            # 悬置语义（实施69）：窗内**客户要过媒体**或 **AI 自己
+                            # 承诺/offer 过发图**（词表已补「给你拍一张X」语序）都算
+                            # 语境——AI 先开的空头支票同样让客户进入等待态；但其后
+                            # 已有媒体真发出 → 语境闭合（「刚发的那张」是真话，
+                            # 不能剥）。旧版只扫入站且无闭合判定：请求已被兑现后
+                            # 门还开着，真话有被误剥的暴露面，一并修掉。
+                            from src.ai.outbound_promise_guard import (
+                                detect_media_offer as _dmo69,
+                            )
+                            _req_ts = 0.0
+                            _media_ts = 0.0
+                            for _m in _rc:
+                                _mts = float(_m.get("ts") or 0)
+                                _mtxt = str(_m.get("text") or "")
+                                if str(_m.get("direction") or "in") == "in":
+                                    if _wm(_mtxt):
+                                        _req_ts = max(_req_ts, _mts)
+                                else:
+                                    if _dmp(_mtxt) or _dmo69(_mtxt):
+                                        _req_ts = max(_req_ts, _mts)
+                                    if str(_m.get("media_type") or "") in (
+                                            "image", "photo", "video"):
+                                        _media_ts = max(_media_ts, _mts)
+                            _mctx = ((not _last_is_img) and _req_ts > 0
+                                     and _media_ts < _req_ts)
                     except Exception:
                         _mctx = False
                     _promised = (_dmp(str(original_text or ""))
@@ -1237,6 +1484,29 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
             except Exception:
                 _assistant_ref.logger.debug(
                     "[autosend] voice_quiet 判定跳过", exc_info=True)
+            # 文字假唱剥离（实施66 P0-3，B 线出站兜底）：唱歌 hint 是概率性
+            # 防御——草稿仍打出「那我唱了+♪歌词引用」强表演体时句级剥离
+            # （宣告+唱词双证据、零语境依赖防误伤；弱形态由 hint 与 A 线
+            # 5c2s 守卫覆盖）。**必须在语音分支之前**：假唱文本被克隆声念
+            # 出去＝「说话声念歌词」原始事故形态回魂。剥空换台阶句。
+            try:
+                from src.companion.song_stock import (
+                    detect_song_performance as _dsp_b,
+                    get_song_stats as _gss_b,
+                    song_deflection_line as _sdl_b,
+                    strip_song_performance as _ssp_b,
+                )
+                if text and _dsp_b(text):
+                    _gss_b().bump("claim_blocked_b")
+                    _t2 = _ssp_b(text)
+                    text = _t2 if _t2.strip() else _sdl_b(
+                        "zh", key=str(chat_key))
+                    original_text = None  # 语音分支不得念假唱原文
+                    _assistant_ref.logger.info(
+                        "[song] B 线草稿含文字假唱，表演段已剥离 "
+                        "platform=%s acct=%s", platform, account_id)
+            except Exception:
+                pass
             # 全自动语音优先（gated）：成功即作为语音发出；
             # 未启用/不满足/失败 → 回落到下面的文本投递（零行为变更）。
             # 语音念**翻译前原文**（人设克隆声念母语；长度判定同口径），
@@ -1643,3 +1913,146 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
         send_cb = _autosend_deliver
     translate_cb = build_autosend_translate_cb(assistant, web_app)
     return send_cb, translate_cb
+
+
+def build_autosend_support_kwargs(assistant, web_app) -> dict:
+    """投递模式的支撑件全家桶（P1 2026-08-22「一键全自动」热接线用）。
+
+    与 bootstrap 装配 AutosendWorker 时的 persona_resolver / dup_guard /
+    fresh_guard / work_schedule provider / pilot_guard 同口径（活读 config 根的
+    闭包语义一致），供 ``AutosendWorker.apply_send_callbacks`` 在 deliver 运行时
+    翻开时一次注入——deliver_only 兜底实例构造时没有这些件，热升格必须补齐。
+    任何单件构造失败按缺省（None/关闭）软降级，绝不让热接线整体失败。
+    """
+    out: dict = {}
+
+    def _persona_resolver(platform, account_id, chat_key="",
+                          _cfg=assistant.config.config or {}):
+        try:
+            from src.ai.persona_voice import (
+                resolve_effective_persona_id as _repi,
+            )
+            return _repi(_cfg, platform, account_id, str(chat_key or "")) or ""
+        except Exception:
+            return ""
+
+    out["persona_resolver"] = _persona_resolver
+    try:
+        from src.inbox.outbound_dup_guard import resolve_guard_cfg
+        out["dup_guard_cfg"] = resolve_guard_cfg(assistant.config.config or {})
+    except Exception:
+        out["dup_guard_cfg"] = None
+    try:
+        from src.inbox.draft_fresh_guard import parse_fresh_guard_cfg
+        out["fresh_guard_cfg"] = parse_fresh_guard_cfg(
+            assistant.config.config or {})
+    except Exception:
+        out["fresh_guard_cfg"] = None
+
+    def _ws_provider(_cm=assistant.config):
+        try:
+            from src.inbox.work_hours_gate import work_schedule_cfg
+            return work_schedule_cfg(getattr(_cm, "config", None) or {})
+        except Exception:
+            return {}
+
+    out["work_schedule_provider"] = _ws_provider
+
+    def _pilot_guard(platform, account_id, _cm=assistant.config):
+        try:
+            from src.integrations.surface_fusion import (
+                autosend_blocked,
+                note_pilot_yield,
+            )
+            blocked = autosend_blocked(
+                getattr(_cm, "config", None) or {}, platform, account_id)
+            if blocked:
+                note_pilot_yield(platform, account_id, "autosend")
+            return blocked
+        except Exception:
+            return False
+
+    out["pilot_guard"] = _pilot_guard
+    return out
+
+
+def make_autosend_rewire(assistant, web_app):
+    """构造「autosend 热接线」闭包（bootstrap 注册到 ``app.state.autosend_rewire``）。
+
+    为什么存在（P1 2026-08-22）：deliver/worker 此前是**构造期冻结**——能力看板 /
+    向导 / 值守开关写完 overlay 后，真发要等下次重启才生效（impl49 B37 实录
+    「开了全自动还是不回复」三成因之一）。路由在写 overlay 成功后 best-effort
+    调本闭包，把 bootstrap 同款回调注入运行中的 worker：
+
+      - deliver 翻开且 worker 未武装 → 建 send/translate/mark_read/typing 回调
+        + 支撑件全家桶一次注入（deliver_only 兜底实例热升格同路）；
+      - deliver 翻关且 worker 已武装 → 撤 send_callback（自动链停发；人工链
+        与人工投递回调不动——「人的明示决定」不受 deliver 管）；
+      - ``l2_autosend.enabled`` 已开而自动循环未跑 → ``ensure_auto_loop`` 升格
+        （二次启动由 run() 的防双循环护栏兜底）。
+
+    返回摘要 dict（honest response：rewired / loop_started / reason），
+    自吞一切异常——热接线失败不影响 overlay 已写入（重启后仍会生效）。
+    """
+
+    def _rewire() -> dict:
+        try:
+            worker = getattr(web_app.state, "autosend_worker", None)
+            if worker is None:
+                return {"rewired": False, "reason": "no_worker"}
+            cfg_root = assistant.config.config or {}
+            l2 = (cfg_root.get("inbox") or {}).get("l2_autosend") or {}
+            deliver = bool(l2.get("deliver", False))
+            armed = bool(getattr(worker, "_send_callback", None) is not None)
+            out: dict = {"rewired": False, "deliver": deliver}
+            if deliver and not armed:
+                _s_cb, _t_cb = build_autosend_callbacks(
+                    assistant, web_app, True)
+                worker.apply_send_callbacks(
+                    send_callback=_s_cb,
+                    translate_callback=_t_cb,
+                    mark_read_callback=build_autosend_mark_read_cb(
+                        assistant, always=True),
+                    typing_callback=build_autosend_typing_cb(
+                        assistant, always=True),
+                    **build_autosend_support_kwargs(assistant, web_app),
+                )
+                out["rewired"] = True
+                assistant.logger.info(
+                    "[autosend] deliver 已热接线（真发即时生效，无需重启）")
+            elif not deliver and armed:
+                worker.apply_send_callbacks(send_callback=None)
+                out["rewired"] = True
+                assistant.logger.info(
+                    "[autosend] deliver 已热撤线（自动链停发；人工链不受影响）")
+            if (bool(l2.get("enabled", True))
+                    and not bool(getattr(worker, "_running", False))
+                    and hasattr(worker, "ensure_auto_loop")):
+                if worker.ensure_auto_loop():
+                    out["loop_started"] = True
+                    # deliver_only 兜底实例装配时从不注册 L2 事件唤醒（它本就
+                    # 不跑循环）——热升格后必须补上，否则新草稿只能等 60s 轮询
+                    # 兜底（「点了全自动，第一条回复慢一分钟」的隐性台阶）。
+                    # 幂等守卫：重复 rewire 不重复注册（重复注册只是多 set 一次
+                    # event 无害，但没必要攒回调链）。
+                    store = getattr(web_app.state, "inbox_store", None)
+                    if (store is not None
+                            and not getattr(worker, "_l2_cb_registered", False)
+                            and hasattr(store, "register_l2_callback")):
+                        try:
+                            store.register_l2_callback(worker.notify_new_l2)
+                            worker._l2_cb_registered = True
+                        except Exception:
+                            assistant.logger.debug(
+                                "[autosend] 热升格 L2 回调注册失败（轮询兜底仍在）",
+                                exc_info=True)
+                    assistant.logger.info(
+                        "[autosend] 自动循环已热启动（原 deliver_only/停用实例升格）")
+            return out
+        except Exception:
+            assistant.logger.warning(
+                "[autosend] 热接线失败（overlay 已写入，重启后仍会生效）",
+                exc_info=True)
+            return {"rewired": False, "reason": "error"}
+
+    return _rewire

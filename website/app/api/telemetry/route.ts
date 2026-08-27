@@ -53,6 +53,10 @@ export async function POST(req: NextRequest) {
   if (o.anon_id) rec.anon_id = s(o.anon_id, 64);
   if (o.gpu) rec.gpu = s(o.gpu, 48);
   if (o.vram_gb !== undefined && o.vram_gb !== null) rec.vram_gb = toInt(o.vram_gb);
+  // patch = ChatX 桌面壳已落地的热补丁号（0/缺省=未打）。manifest_version 保持纯
+  // semver，热补丁不改它——版本分布仍按安装包聚合，patch 只是同一安装包内的细分。
+  // 仅 chatx_heartbeat 会带，故不进 license_server.py 那份厂商侧参考实现。
+  if (o.patch !== undefined && o.patch !== null) rec.patch = toInt(o.patch);
   rec.items = items.slice(0, 200).map((it) => {
     const d = (it && typeof it === "object" ? it : {}) as Record<string, unknown>;
     return {

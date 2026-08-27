@@ -54,8 +54,23 @@ def trim_stale_history(
     - 断层之前最多保留 ``keep_stale`` 条最近的，且在文本前加「[N天前]」时间标记——
       让模型知道那是旧事，可回忆但别当刚说的接话头。
     - 行内无 ``ts``（0/缺失）视为新鲜（向后兼容旧调用方，零行为变更）。
+    - ``approx_ts``（实施72 P2）：合成时间戳的补收/回填行——ts 是入库回推值不是
+      真实时刻，**间隔判断对它失效**（补收行的合成 ts 紧贴实时消息，永远测不出
+      断层）。故先行打「[补收的历史消息，时间不详] 」标，让模型知道这段是旧事、
+      别按"刚才"的语境接话（「大半夜回 9 天前消息」类幻觉的上下文层防线）。
     """
     msgs = [m for m in (messages or []) if isinstance(m, dict)]
+    _out0: List[Dict[str, Any]] = []
+    for m in msgs:
+        if m.get("approx_ts"):
+            m2 = dict(m)
+            t = str(m2.get("text") or "")
+            if t and not t.startswith("["):
+                m2["text"] = "[补收的历史消息，时间不详] " + t
+            _out0.append(m2)
+        else:
+            _out0.append(m)
+    msgs = _out0
     if len(msgs) <= 1:
         return list(msgs)
     gap_sec = max(1.0, float(gap_hours)) * 3600.0
@@ -276,6 +291,36 @@ async def _translate_reply(app: Any, reply: str, target_lang: str) -> str:
     return ""
 
 
+def _persona_anchor_clock(persona_id: str) -> tuple:
+    """B 线时间锚点的时钟解析：人设有居住地 → (当地 naive 时间, 地名标签)。
+
+    2026-08-22 双时钟事故修复：``build_now_anchor_hint`` 此前恒用服务器钟，
+    与 ai_client 注入的人设当地钟同 prompt 打架（温哥华人设＝「中午」vs
+    「深夜」）。调用点在 effective persona 解析**之后**（persona_id 已是
+    会话生效人设，与出站 world_clock_guard 同源），锚点钟与守卫钟必然一致。
+    解析不出（无 persona / 无居住地）→ ``(None, "")``＝服务器钟旧行为。
+    任何异常吞掉——时间锚点绝不阻断拟稿。
+    """
+    try:
+        pid = str(persona_id or "").strip()
+        if not pid:
+            return None, ""
+        from src.utils.persona_manager import PersonaManager
+        p = PersonaManager.get_instance().get_persona_by_id(pid)
+        if not isinstance(p, dict):
+            return None, ""
+        from src.companion.persona_location import (
+            persona_now,
+            resolve_place_with_fallback,
+        )
+        place = resolve_place_with_fallback(p)
+        if place is None:
+            return None, ""
+        return persona_now(place), place.display("zh")
+    except Exception:
+        return None, ""
+
+
 async def generate_persona_reply(
     *,
     app: Any,
@@ -420,8 +465,16 @@ async def generate_persona_reply(
                     _cid_tc = _conv_id_fn(platform, _acct, str(chat_key))
                 if _ibx_tc is not None and _cid_tc:
                     try:
-                        _rows_tc = _ibx_tc.list_recent_messages(
-                            _cid_tc, limit=int(_tccfg["store_limit"]))
+                        # B87：对端手机删的消息（软删）不再当「客户最近说的」话题锚点
+                        # ——钧口径「AI 可记但不主动提已删内容」在拟稿链上的落点。
+                        # 旧 store 无 include_deleted 形参 → TypeError 回落旧签名。
+                        try:
+                            _rows_tc = _ibx_tc.list_recent_messages(
+                                _cid_tc, limit=int(_tccfg["store_limit"]),
+                                include_deleted=False)
+                        except TypeError:
+                            _rows_tc = _ibx_tc.list_recent_messages(
+                                _cid_tc, limit=int(_tccfg["store_limit"]))
                         _a2 = classify_reply_anchor(
                             _rows_tc, stale_after_sec=_stale_sec,
                             min_monologue=int(_tccfg["min_monologue"]))
@@ -452,7 +505,11 @@ async def generate_persona_reply(
                 )
                 out["time_anchor"] = dict(_tc_meta, followup=True)
                 return out
-            _hints: List[str] = [build_now_anchor_hint()]
+            # 双时钟事故修复（2026-08-22）：锚点钟＝人设当地钟（有居住地时），
+            # 与 ai_client 的【当前真实时间】同源；无居住地回落服务器钟。
+            _anchor_now, _anchor_place = _persona_anchor_clock(persona_id)
+            _hints: List[str] = [build_now_anchor_hint(
+                local_now=_anchor_now, place_label=_anchor_place)]
             if _anchor["kind"] == "stale_unanswered" and _anchor["ts_known"]:
                 _tc_metric("time_anchor_late_hint")
                 _hints.append(build_late_reply_hint(_anchor["age_sec"]))
@@ -1076,7 +1133,10 @@ async def generate_topic_opener(
         _cm_tc = getattr(getattr(app, "state", None), "config_manager", None)
         if resolve_time_context_cfg(
                 getattr(_cm_tc, "config", None) or {}).get("enabled"):
-            ctx["_topic_switch_hint"] = build_now_anchor_hint()
+            # 与回复链同款：opener 锚点也按人设当地钟（双时钟事故修复）。
+            _anchor_now_o, _anchor_place_o = _persona_anchor_clock(persona_id)
+            ctx["_topic_switch_hint"] = build_now_anchor_hint(
+                local_now=_anchor_now_o, place_label=_anchor_place_o)
     except Exception:
         logger.debug("[persona_reply] opener 时间锚点跳过", exc_info=True)
 

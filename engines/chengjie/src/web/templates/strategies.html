@@ -41,6 +41,17 @@
 .map-item{background:var(--input);border-radius:8px;padding:.6rem .8rem;display:flex;align-items:center;justify-content:space-between;gap:.5rem}
 .map-intent{font-weight:600;font-size:.85rem}
 .map-item select{padding:.3rem .5rem;font-size:.8rem;border:1.5px solid var(--bd);border-radius:6px;background:var(--card);color:var(--t);font-weight:500;cursor:pointer}
+/* 2026-08-20 实施49 P1-6：整张映射卡收进「高级」折叠（默认收起；主体页面
+   留给策略卡本身）。展开态由浏览器记不住是刻意的——这是配一次就不动的项。 */
+.map-adv-sum{display:flex;align-items:center;gap:.5rem;cursor:pointer;user-select:none;list-style:none;flex-wrap:wrap}
+.map-adv-sum::-webkit-details-marker{display:none}
+.map-adv-sum::after{content:'▾';margin-left:auto;color:var(--t3);font-size:.9rem;transition:transform .18s}
+#map-adv[open] .map-adv-sum::after{transform:rotate(180deg)}
+.map-adv-chip{font-size:.66rem;font-weight:700;padding:.12rem .42rem;border-radius:5px;background:var(--bd2);color:var(--t3);letter-spacing:.02em}
+.map-adv-title{font-weight:700;font-size:.95rem}
+.map-adv-hint{font-size:.76rem;color:var(--t3);font-weight:400}
+.map-adv-note{font-size:.72rem;color:var(--t3);font-weight:400}
+#map-adv[open] .map-adv-sum{margin-bottom:.4rem;padding-bottom:.5rem;border-bottom:1px solid var(--bd)}
 </style>
 {% endblock %}
 {% block content %}
@@ -193,12 +204,14 @@
   </div>
 </div>
 
-<div class="map-card card fa pro-only">
-  <h2>
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
-    {{ (i18n or {}).get('inbox.ai.intent', "意图") }} → {{ (i18n or {}).get('st_s031', "策略映射") }}
-    <span style="margin-left:auto;font-size:.78rem;color:var(--t3);font-weight:400">{{ (i18n or {}).get('st_s032', "修改后即时生效") }}</span>
-  </h2>
+<details class="map-card card fa pro-only" id="map-adv">
+  <summary class="map-adv-sum">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
+    <span class="map-adv-chip">{{ (i18n or {}).get('st_s037', "高级") }}</span>
+    <span class="map-adv-title">{{ (i18n or {}).get('inbox.ai.intent', "意图") }} → {{ (i18n or {}).get('st_s031', "策略映射") }}</span>
+    <span class="map-adv-hint">{{ (i18n or {}).get('st_s038', "把每个意图路由到哪套策略；不确定就别动，默认值适用于绝大多数场景") }}</span>
+    <span class="map-adv-note">{{ (i18n or {}).get('st_s032', "修改后即时生效") }}</span>
+  </summary>
 
   <!-- 跨平台常用意图 -->
   <div style="margin-top:.6rem;margin-bottom:.3rem;font-size:.76rem;font-weight:600;color:var(--t2);display:flex;align-items:center;gap:.4rem">
@@ -244,7 +257,7 @@
       {% endfor %}
     </div>
   </details>
-</div>
+</details>
 
 <script>
 function markDirty(sid){

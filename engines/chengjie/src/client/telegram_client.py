@@ -122,6 +122,26 @@ TELEGRAM_SERVICE_CHAT_IDS = frozenset(
 TELEGRAM_SERVICE_CHAT_ID = 777000
 
 
+def _inbound_mirror_text(media_type: str, text: str, raw_text: str) -> str:
+    """坐席台镜像正文（显示口径，与 AI 层 text 刻意分离）。
+
+    - 语音：``[语音转录] X`` → ``X``（[语音] 语义由 media_type 承载，P1-2 既有）。
+    - 纯 emoji 文本（B29 实施49 2026-08-21）：``annotate_inbound_emoji`` 把纯 emoji
+      消息整体替换成「[表情] 花痴」——那是给 AI 媒体块解析的注解，按该模块自己的
+      教义（P0-198：加注不进存储正文）**不该**出现在坐席看到的气泡里。镜像行还原
+      客户原始 emoji（``raw_text``=message.text）；贴纸不在此列（message.text 为空，
+      media_type=sticker 走图渲染/占位），AI 层注解不受影响。
+    """
+    t = str(text or "")
+    if media_type == "voice" and t.startswith("[语音转录] "):
+        return t[len("[语音转录] "):]
+    if not media_type and t.startswith("[表情]"):
+        raw = str(raw_text or "").strip()
+        if raw:
+            return raw
+    return t
+
+
 def _normalize_message_text(raw: Any) -> str:
     """P2 编码防护：将消息文本统一为可安全处理的 str，避免 utf-16-le 等解码异常导致整次处理失败。"""
     if raw is None:
@@ -760,6 +780,9 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
             # 目录同步：好友名单 + 云端会话列表 → 通讯录/会话占位（只写名单不产生消息），
             # 让「加了好友但从没开口」的人也能在工作台被看到并主动发起对话。
             asyncio.create_task(self._directory_sync_loop())
+            # B123（实施74）：报障群断线补拉（bug_intake 开且配了群才真跑）——
+            # 断网/重启窗口漏掉的群消息按 seen 账本差集回喂登记链。
+            asyncio.create_task(self._bug_intake_backfill_loop())
             # ASR 启动预热（voice_recognition.warmup_on_boot，默认开）：SenseVoice 懒加载
             # 让重启后首条语音吃 ~20-30s 模型冷启动 → 启动即后台预载；失败不影响启动
             # （转录时仍会按需懒加载兜底）。
@@ -1068,6 +1091,39 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
             except Exception:
                 self.logger.debug("[mirror] 注册已读回执处理器失败", exc_info=True)
 
+            # B87（实施68）：对端手机删消息 → 工作台镜像同步软删。
+            # UpdateDeleteMessages（私聊/小群，只带裸 id）→ 全账号按 platform_msg_id
+            # 软删；UpdateDeleteChannelMessages（带 channel_id）→ 收窄到该会话。
+            # 与已读回执同挂在镜像开启分支（都是「让工作台跟手机一致」的镜像职能）。
+            try:
+                from pyrogram.handlers import RawUpdateHandler as _RUH
+                from pyrogram import raw as _raw2
+
+                _acct_d = getattr(self, "account_id", "default")
+
+                async def _on_deleted(_client, update, _users, _chats):
+                    try:
+                        from src.integrations.protocol_bridge import (
+                            report_deleted_messages,
+                        )
+                        if isinstance(update, _raw2.types.UpdateDeleteMessages):
+                            mids = [str(m) for m in (getattr(update, "messages", None) or [])]
+                            if mids:
+                                report_deleted_messages("telegram", _acct_d, mids)
+                        elif isinstance(update, _raw2.types.UpdateDeleteChannelMessages):
+                            chid = getattr(update, "channel_id", None)
+                            mids = [str(m) for m in (getattr(update, "messages", None) or [])]
+                            if chid is not None and mids:
+                                report_deleted_messages(
+                                    "telegram", _acct_d, mids,
+                                    chat_key=f"-100{int(chid)}")
+                    except Exception:
+                        self.logger.debug("[mirror] 删除同步处理失败", exc_info=True)
+
+                self.client.add_handler(_RUH(_on_deleted))
+            except Exception:
+                self.logger.debug("[mirror] 注册删除同步处理器失败", exc_info=True)
+
         _tg = self.config.get_telegram_config()
         self.logger.info(
             "消息处理器已设置 - 私聊=%s, 群组=%s (动态开关，保存即生效)",
@@ -1259,10 +1315,23 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 prompt=vision_config.get("prompt"),
             )
             if text and text.strip():
+                desc = text.strip()[:2000]
+                # P0 2026-08-19「乱码识图」闸门：键帽/界面元素逐字抄录汤 → 诚实提示
+                # （单一判定源＝media_enrich.desc_looks_garbled，与协议线同口径）。
+                try:
+                    from src.inbox.media_enrich import (
+                        GARBLED_DESC_NOTE, desc_looks_garbled,
+                    )
+                    if desc_looks_garbled(desc):
+                        self.logger.info(
+                            "Vision 产出判为碎片文字汤（%d 字），已替换为提示", len(desc))
+                        return GARBLED_DESC_NOTE
+                except Exception:
+                    pass
                 self.logger.info(
-                    f"Vision 解析成功 ({tag})，长度 {len(text)} 字符"
+                    f"Vision 解析成功 ({tag})，长度 {len(desc)} 字符"
                 )
-                return text.strip()[:2000]
+                return desc
         except Exception as e:
             self.logger.warning(f"Vision 解析失败（不回落 OCR）: {e}")
         return None
@@ -1328,6 +1397,11 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 await message.download(file_name=str(webp_path))
                 if webp_path.exists() and webp_path.stat().st_size > 0:
                     _d = await self._get_image_content(str(webp_path))
+                    if _d:
+                        # P1 2026-08-19：贴纸文本是「[表情] …」格式（无 [图片内容] 标记），
+                        # 前端不解析类型标记 → 首行「类型=C」会裸露，此处剥掉（单一来源）。
+                        from src.inbox.media_enrich import parse_desc_type
+                        _d = parse_desc_type(_d)[1]
                     if _d:
                         vis_desc = _normalize_message_text(_d).strip()[:80]
                 try:
@@ -1407,6 +1481,9 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 try:
                     content = await self._get_image_content(str(image_file))
                     if content:
+                        # P1 2026-08-19：群图作纯上下文文本消费，类型标记无消费方 → 剥掉
+                        from src.inbox.media_enrich import parse_desc_type
+                        content = parse_desc_type(content)[1] or content
                         self.logger.info(f"群内最近一张图解析成功 msg_id={msg_id}，长度 {len(content)} 字符")
                         return content[:2000]
                     self.logger.warning(f"群内最近图: 结果为空 msg_id={msg_id}，尝试下一条带图消息")
@@ -1485,6 +1562,63 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
         except Exception:
             self.logger.debug("[冷却补答] 调度失败（忽略）", exc_info=True)
             return False
+
+    async def _bug_intake_backfill_loop(self):
+        """B123（实施74）：报障群断线补拉循环。
+
+        周期性拉报障群近端历史 × seen 账本差集 → 漏网消息回喂
+        ``bug_intake.observe_group_message``（0827 凌晨断网期两条报障漏登记的
+        catch-up 闭环）。核心在 ``src/ops/bug_intake_backfill.py``（纯函数 +
+        账本），这里只做 pyrogram 适配；bug_intake 未启用/无群配置时循环即退。
+        """
+        try:
+            from src.ops.bug_intake_backfill import (
+                parse_backfill_cfg, run_backfill_once,
+            )
+        except Exception:
+            return
+        await asyncio.sleep(25.0)  # 启动错峰：让主链先起稳
+
+        async def _fetch(chat_id: str, cap: int):
+            rows = []
+            try:
+                cid: Any = int(chat_id)
+            except (TypeError, ValueError):
+                cid = chat_id
+            async for m in self.client.get_chat_history(cid, limit=cap):
+                try:
+                    _fu = getattr(m, "from_user", None)
+                    rows.append({
+                        "id": int(getattr(m, "id", 0) or 0),
+                        "text": str(getattr(m, "text", None)
+                                    or getattr(m, "caption", None) or ""),
+                        "reporter_id": str(getattr(_fu, "id", "") or ""),
+                        "reporter_name": str(
+                            getattr(_fu, "first_name", "") or ""),
+                        "outgoing": bool(getattr(m, "outgoing", False)),
+                        "has_media": bool(getattr(m, "media", None)),
+                    })
+                except Exception:
+                    continue
+            return rows
+
+        while True:
+            interval = 300
+            try:
+                cfg = self.config.config if hasattr(self.config, "config") \
+                    else {}
+                bf = parse_backfill_cfg(cfg)
+                interval = int(bf.get("interval_sec") or 300)
+                if not bf.get("enabled"):
+                    return  # 未启用：整个循环退出（配置开启需重启，与其它循环同约定）
+                summary = await run_backfill_once(
+                    cfg, _fetch, account_id=str(self.account_id or ""))
+                if summary.get("replayed"):
+                    self.logger.info("[bug_backfill] 本轮补登记 %s 条（群 %s 个）",
+                                     summary["replayed"], summary["groups"])
+            except Exception:
+                self.logger.debug("[bug_backfill] 轮次异常（忽略）", exc_info=True)
+            await asyncio.sleep(max(60, interval))
 
     async def _poll_inbound_loop(self):
         """轮询兜底主循环：定时拉取新进站私聊消息（补实时推送缺失）。
@@ -2002,6 +2136,30 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     self.logger.info(f"收到语音消息 [{chat_title}/{username}]（语音识别未启用或依赖未安装）")
                     daily_stats.bump("voice_in")
                     text = "[语音消息 - 识别功能未启用]"
+                    # 2026-08-20 内测实录「新版本语音消息无法接收」：识别不可用时
+                    # 旧实现不落音频归档（归档只在转录分支）——坐席只看到占位文字，
+                    # 原音听不了，体感＝「语音收不到」。现在同管道归档，最坏也能
+                    # 人工听原音；失败不阻塞（占位文字照常入库）。
+                    try:
+                        _vf = await self._download_voice_file(message)
+                        if _vf:
+                            try:
+                                from src.integrations.protocol_bridge import (
+                                    publish_outbound_media,
+                                )
+                                _vurl, _ = publish_outbound_media(
+                                    "telegram",
+                                    getattr(self, "account_id", "default"),
+                                    str(_vf))
+                                voice_media_ref = _vurl or ""
+                            finally:
+                                try:
+                                    _vf.unlink(missing_ok=True)
+                                except Exception:
+                                    pass
+                    except Exception:
+                        self.logger.debug(
+                            "识别未启用分支的语音归档失败（忽略）", exc_info=True)
 
             # 有说明文字但带图时：Vision 单轨，失败不回落 OCR
             has_image = bool(message.photo or (message.document and message.document.mime_type and
@@ -2125,6 +2283,16 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 if m:
                     m.record_message_received()
                     m.set_queue_size(self.message_queue.qsize() + 1)
+                # 引用消息透传（2026-08-20 内测实锤「引用+『分析』」全链不可见）：
+                # 提取被引用消息摘要，供 ①LLM 提示块 ②报障分类 ③镜像 reply_to 列
+                _quoted = {"text": "", "sender": "", "is_me": False}
+                try:
+                    from src.client.quoted_context import extract_quoted
+                    _quoted = extract_quoted(
+                        message, getattr(self.user_info, "id", None)
+                        if getattr(self, "user_info", None) else None)
+                except Exception:
+                    pass
                 msg_data = {
                     'message': message,
                     'user_id': user_id,
@@ -2135,6 +2303,7 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     '_trigger_path': getattr(message, '_trigger_path', None),
                     '_is_voice_msg': bool(message.voice or message.audio),
                     '_peer_audio_emotion': _peer_audio_emotion,
+                    'quoted': _quoted,
                     # P1-2：入站语音归档 URL（转录前已发布），异步段透传进镜像媒体行
                     'voice_media_ref': voice_media_ref,
                     # 插话吸收（interject_absorb）：入队时刻——出队合并的年龄判据
@@ -2404,7 +2573,15 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 _media_type = "voice"
                 _media_ref = str(message_data.get("voice_media_ref") or "")
             if _ocr and _media_type == "image" and "[图片内容]" not in (text or ""):
-                text = f"[图片内容] {_ocr}"
+                # 2026-08-21 值守事故钉子：此处曾把 caption **整个替换**成识图描述——
+                # 用户带文字的截图报障（「发送图片，报错，分析问题」）正文被丢，
+                # AI/bug_intake 观察层/收件箱镜像只见描述，支持号对着截图里的客户
+                # 对话接闲聊（内测群 02:54-03:18 实录，工单 #6 标题也是描述文本）。
+                # 对齐 LINE 线 / media_enrich.enrich_media_text 的既定约定：
+                # caption 在前、描述在后（下游 strip_media_desc/kb_gate 均按此剥离）。
+                _cap = str(text or "").strip()
+                text = (f"{_cap}\n[图片内容] {_ocr}" if _cap
+                        else f"[图片内容] {_ocr}")
             # 会话显示名优先用对方真实昵称（first + last），无则回落 @username，
             # 再无才留空（前端回落脱敏号）——修「名单里显示数字 id 而非真人昵称」。
             # 同时采集 @username / 电话，落库到会话身份列（客户信息面板/头部显示）。
@@ -2432,9 +2609,10 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
             # P1-2：语音镜像正文＝干净转写（与 B 线转录回填、A 线出站镜像同口径；
             # [语音] 语义由 media_type 承载）。AI 链内部仍用带前缀的 text——既有
             # 剥离逻辑在消费端（_VOICE_PREFIX），这里只影响坐席台展示与检索。
-            _mirror_text = text
-            if _media_type == "voice" and str(text or "").startswith("[语音转录] "):
-                _mirror_text = text[len("[语音转录] "):]
+            # B29：纯 emoji 消息镜像还原原始 emoji（口径见 _inbound_mirror_text）。
+            _mirror_text = _inbound_mirror_text(
+                _media_type, text,
+                _normalize_message_text(getattr(message, "text", None) or ""))
             self._emit_inbox(
                 chat_id=chat_id, text=_mirror_text, direction="in",
                 name=_peer_name,
@@ -2769,6 +2947,8 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 '_trigger_path': message_data.get('_trigger_path'),
                 '_send_to_chat': self.send_message,
                 '_send_photo_to_chat': self.send_photo,
+                # 实施66 P0-1：A 线唱歌兑现短路的语音文件直发缝（预渲染唱段）
+                '_send_voice_to_chat': self.send_voice_file,
                 # P3 媒体拟人节奏（2026-08-12）：挑图等待期挂「正在发送照片」气泡
                 '_send_media_action': self._send_upload_photo_action,
                 '_record_gxp_cmd': self.record_gxp_command,
@@ -2792,6 +2972,16 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 # （与 resolve_intimacy_score 用同一 account_id 寻址同一 journey）。
                 'account_id': self.account_id,
             }
+            # 引用上下文（2026-08-20）：**恒写键**——user_context 按会话持久且
+            # merge 只覆盖有键项，只在有引用时写会让旧引用粘住后续轮次
+            # （与 _spoken_variant_request 同教训）。空串=本轮无引用，消费方跳过。
+            try:
+                from src.client.quoted_context import format_quoted_note
+                _sm_context['_quoted_note'] = format_quoted_note(
+                    message_data.get('quoted') or {})
+            except Exception:
+                _sm_context['_quoted_note'] = ""
+            _sm_context['quoted'] = message_data.get('quoted') or {}
             # Q3：仅在有值时注入，None 不写键 → 与 RPA 各线一致、向后兼容
             if _intimacy_score is not None:
                 _sm_context['intimacy_score'] = _intimacy_score

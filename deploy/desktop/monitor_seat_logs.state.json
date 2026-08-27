@@ -1,13 +1,17 @@
 {
   "last_seen": {
-    "kouxing": "2026-08-17 16:24:52",
-    "lianbei": "2026-08-17 16:27:32",
-    "yunsheng": "2026-08-17 16:23:13",
-    "tingxie": "2026-08-17 17:15:05"
+    "kouxing": "2026-08-27 21:17:39",
+    "lianbei": "2026-08-24 16:24:12",
+    "yunsheng": "2026-08-23 08:09:30",
+    "tingxie": "2026-08-23 05:50:18"
   },
   "alerted": {
-    "yunsheng|有客户消息长时间无回复且无待审稿（自动回复链可能被静默拦断）| [WARNING] src.inbox.health_watchdog: 入站漏球：# 个会话最后一条是客户消息、超 #h 无回复且无待审稿（最老 #.#h；样例 messenger:#:#, messenger:#:#, messeng": 1786891924.7339032,
-    "kouxing|有客户消息长时间无回复且无待审稿（自动回复链可能被静默拦断）| [WARNING] src.inbox.health_watchdog: 入站漏球：# 个会话最后一条是客户消息、超 #h 无回复且无待审稿（最老 #.#h；样例 messenger:#:#, messenger:#:#, messeng": 1786935122.015466
+    "kouxing|有客户消息长时间无回复且无待审稿（自动回复链可能被静默拦断）| [WARNING] src.inbox.health_watchdog: 入站漏球：# 个会话最后一条是客户消息、超 #h 无回复且无待审稿（最老 #.#h；样例 messenger:#:#, messenger:#:#, messeng": 1787753221.41024,
+    "kouxing|未分类 ERROR（需人工看）| [ERROR] ai_chat_assistant.AIClient: AI 两次调用均失败, request_id=n/a: Connection error.": 1787753221.4102864,
+    "lianbei|后端异常 / 页面 500 崩溃|Traceback (most recent call last):": 1787757724.4317477,
+    "kouxing|未分类 ERROR（需人工看）| [ERROR] ai_chat_assistant.AIClient: AI 两次调用均失败, request_id=n/a: Request timed out.": 1787761322.331699,
+    "yunsheng|后端异常 / 页面 500 崩溃|Traceback (most recent call last):": 1787780227.6393273,
+    "kouxing|后端异常 / 页面 500 崩溃|Traceback (most recent call last):": 1787781121.6288147
   },
-  "last_run": "2026-08-17 17:52:18"
+  "last_run": "2026-08-27 21:22:15"
 }

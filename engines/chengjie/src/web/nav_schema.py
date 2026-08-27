@@ -70,6 +70,18 @@ NAV_ICONS = {
     "wallet": _STROKE % '<rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/>',
     "truck": _STROKE % '<rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/>',
     "info": _STROKE % '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
+    # 2026-08-18 P0：完整模式侧栏可见项图标去重（含矩阵/变现打开后仍不撞）
+    "trending-down": _STROKE % '<polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/>',
+    "trending-up": _STROKE % '<polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/>',
+    "gauge": _STROKE % '<path d="M12 21a9 9 0 110-18 9 9 0 010 18z"/><path d="M12 12l4-4"/>',
+    "award": _STROKE % '<circle cx="12" cy="8" r="6"/><path d="M8.21 13.89L7 23l5-3 5 3-1.21-9.12"/>',
+    "palette": _STROKE % '<path d="M12 2a10 10 0 00-1 19.95c.6 0 .8-.8.4-1.2a3.5 3.5 0 014.9-4.95c.4.35 1.2.2 1.2-.45A10 10 0 0012 2z"/><circle cx="7.5" cy="10" r="1.1" fill="currentColor"/><circle cx="10.5" cy="7" r="1.1" fill="currentColor"/><circle cx="14.5" cy="7.5" r="1.1" fill="currentColor"/><circle cx="16.5" cy="11" r="1.1" fill="currentColor"/>',
+    "clipboard": _STROKE % '<path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/>',
+    "list": _STROKE % '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
+    "sparkles": _STROKE % '<path d="M12 3l1.6 5.4L19 10l-5.4 1.6L12 17l-1.6-5.4L5 10l5.4-1.6z"/><path d="M19 15l.7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7z"/>',
+    "film": _STROKE % '<rect x="2" y="2" width="20" height="20" rx="2.5"/><path d="M7 2v20M17 2v20M2 12h20M2 7h5M2 17h5M17 7h5M17 17h5"/>',
+    # 2026-08-20：voice_eval 项引用 mic 却没登记 SVG（图标门禁红），侧栏渲染空白格子
+    "mic": _STROKE % '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0014 0"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/>',
 }
 
 # ── 菜单项 ───────────────────────────────────────────────────────────────────
@@ -87,7 +99,7 @@ NAV_ITEMS = {
     "care": dict(feature="care", key="care", path="/care-schedule", icon="heart",
                  label_key="care", label_zh="主动关怀", help="nav_care",
                  cmd_keys="care 关怀 主动 问候"),
-    "relations_health": dict(feature="care", key="relations_health", path="/relations-health", icon="pulse",
+    "relations_health": dict(feature="care", key="relations_health", path="/relations-health", icon="trending-down",
                              label_key="relations_health", label_zh="流失预警",
                              help="nav_relations_health",
                              cmd_keys="churn 流失 预警 关系 健康 relations"),
@@ -130,7 +142,7 @@ NAV_ITEMS = {
                          cmd_keys="whatsapp wa rpa 自动化 自动聊天 模板 渠道中心 "
                                   "真机矩阵 matrix"),
     # 群脉 CrowdX 导播台：多号群戏剧本库 + 离线排练（dry-run，不发真消息）
-    "group_show": dict(key="group_show", path="/group-show", icon="users",
+    "group_show": dict(key="group_show", path="/group-show", icon="film",
                        label_key="gs_nav", label_zh="群脉导播台",
                        cmd_keys="group show crowdx 群脉 导播 导播台 群戏 剧本 排练 炒群"),
     # ai_studio 已解散（2026-08-01）：5 个 tab 中 3 个是兄弟页面套壳，独有能力
@@ -149,6 +161,16 @@ NAV_ITEMS = {
     "episodic": dict(key="episodic", path="/episodic-memory", icon="brain",
                      label_key="episodic", label_zh="AI 记忆", help="nav_episodic",
                      cmd_keys="episodic memory 记忆 情景 情景记忆"),
+    # 2026-08-19：人设声音评测台（tmp_voice_eval 转正）
+    "voice_eval": dict(key="voice_eval", path="/admin/voice-eval", icon="mic",
+                       label_key="voice_eval", label_zh="声音评测",
+                       help="nav_voice_eval",
+                       cmd_keys="voice eval 声音 评测 试听 音色 克隆 语音评测"),
+    # 2026-08-23：歌房（实施58——人设清唱能力管理：开关/备货/曲库/声库）
+    "singing": dict(key="singing", path="/singing", icon="sparkles",
+                    label_key="sg_title", label_zh="歌房",
+                    help="nav_singing",
+                    cmd_keys="singing song 歌房 唱歌 清唱 曲库 声库 唱首歌"),
     "strategies": dict(feature="ai_autosend", key="strategies", path="/strategies", icon="sliders",
                        label_key="strategies", label_zh="回复策略", help="nav_strategies",
                        cmd_keys="strategies 策略 配置 策略配置 回复策略 参数"),
@@ -187,8 +209,15 @@ NAV_ITEMS = {
     "crisis_audit": dict(key="crisis_audit", path="/crisis-audit", icon="alert-triangle",
                          badge="badge-crisis", label_key="crisis_audit", label_zh="危机审计",
                          help="nav_crisis_audit", cmd_keys="crisis 危机 审计 风险"),
-    "audit": dict(key="audit", path="/audit", icon="clock", label_key="audit",
+    "audit": dict(key="audit", path="/audit", icon="clipboard", label_key="audit",
                   label_zh="操作记录", help="nav_audit", cmd_keys="audit 审计 记录 操作"),
+    # 账号资产中心（账号资产保全 P1，2026-08-19）：封号场景「资产可见→可导出→可迁移」
+    # 的产品面，归安全合规组（「出了事怎么查/怎么带走」语义）。/workspace/* 子页与
+    # 主管看板同例不开新窗（2026-08-16 老板点名，见 ws_boards 注释）。
+    "asset_center": dict(key="asset_center", path="/workspace/assets", icon="package",
+                         label_key="ac_nav", label_zh="账号资产中心",
+                         cmd_keys="assets asset 资产 资产中心 账号资产 保全 备份 迁移 "
+                                  "导出 联系人迁移 封号 被封 vault migration export"),
     "users": dict(key="users", path="/users", icon="users", label_key="users",
                   label_zh="用户管理", help="nav_users", cmd_keys="users 用户"),
     "settings": dict(key="settings", path="/settings", icon="gear",
@@ -202,7 +231,7 @@ NAV_ITEMS = {
     #    「用量与额度」正式入口——「用了多少/还剩多少」此前实际存在但不可发现，
     #    是本次改造要修的第一主诉。页面在工作台壳（/workspace/usage），主管闸
     #    在页面路由自身；当前窗口打开（见下方主管看板注释，同一决策）。
-    "usage_center": dict(key="", path="/workspace/usage", icon="grid",
+    "usage_center": dict(key="", path="/workspace/usage", icon="gauge",
                          label_key="nav_usage_center", label_zh="用量与额度",
                          cmd_keys="用量 额度 计量 消耗 余额 字符 对账 账单 usage quota "
                                   "chars balance metering billing 用量看板 用量与额度"),
@@ -214,20 +243,26 @@ NAV_ITEMS = {
     #    __openUniqueUrl 的复用范围、每点必新弹——改与其他洞察面板一致在当前
     #    窗口打开。坐席工作台 workspace 条目不在此列：坐席窗独立+BC 探活去重
     #    是多窗治理主线的刻意设计，勿顺手「统一」掉）。
-    "ws_queue": dict(key="", path="/workspace/queue", icon="pulse",
+    # ── 主管看板页群（2026-08-18 P1）：四看板侧栏收成一个入口 ws_boards，
+    #    页内 _cluster_tabs.html Tab 互切（成员表=PAGE_CLUSTERS.boards）。四页
+    #    本体不动：URL / 路由 / 主管闸 / 独立 PV 归因全保留；单页搜索入口降到
+    #    CMD_EXTRA（Ctrl+K 搜「绩效」仍直达绩效页，不必先进队列再点 Tab）。
+    "ws_boards": dict(key="", path="/workspace/queue", icon="list",
+                      label_key="nav_ws_boards", label_zh="主管看板",
+                      cmd_keys="主管看板 看板 主管 boards 队列 绩效 质量 "
+                               "queue perf quality roi 运营队列"),
+    "ws_queue": dict(key="", path="/workspace/queue", icon="list",
                      label_key="nav_ws_queue", label_zh="运营队列看板",
                      cmd_keys="队列 运营队列 实时队列 排队 queue backlog"),
-    "ws_perf": dict(key="", path="/workspace/agent-perf", icon="bar-chart",
+    "ws_perf": dict(key="", path="/workspace/agent-perf", icon="award",
                     label_key="nav_ws_perf", label_zh="坐席绩效看板",
                     cmd_keys="绩效 坐席绩效 考核 perf performance agent"),
-    "ws_aiq": dict(key="", path="/workspace/ai-quality", icon="radar",
+    "ws_aiq": dict(key="", path="/workspace/ai-quality", icon="sparkles",
                    label_key="nav_ws_aiq", label_zh="AI 质量看板",
                    cmd_keys="AI质量 质量 回复质量 quality aiq ai-quality"),
-    "ws_roi": dict(key="", path="/workspace/roi", icon="dollar",
+    "ws_roi": dict(key="", path="/workspace/roi", icon="trending-up",
                    label_key="nav_ws_roi", label_zh="ROI 看板",
                    cmd_keys="ROI 经营 投产比 营收 roi revenue"),
-    "diff": dict(key="diff", path="/diff", icon="git", label_key="diff", label_zh="版本对比",
-                 help="nav_diff", cmd_keys="diff 对比 版本"),
     "logs": dict(key="logs", path="/logs", icon="terminal", label_key="logs",
                  label_zh="实时日志", help="nav_logs", cmd_keys="logs 日志 终端"),
     "developer": dict(key="developer", path="/developer", icon="code", label_key="developer",
@@ -243,7 +278,7 @@ NAV_ITEMS = {
     # 全角色可用;设置经 /api/workspace/prefs.appearance 漫游(本机缓存+服务端),
     # 收件箱左栏「主题配色」按钮弹出的快捷面板与本页共用同一渲染器(appearance.js)。
     "personal_settings": dict(key="personal_settings", path="/personal-settings",
-                              icon="sliders",
+                              icon="palette",
                               label_key="nav_personal_settings", label_zh="个人设置",
                               cmd_keys="personal settings 个人 设置 个人设置 外观 主题 "
                                        "壁纸 夜间 暗色 字号 圆角 动画 表情 appearance "
@@ -255,6 +290,13 @@ CMD_EXTRA_ITEMS = {
     "templates": dict(key="tpl", path="/templates", icon="file-text",
                       label_key="templates", label_zh="话术模板",
                       cmd_keys="templates 模板 话术"),
+    # 版本对比（2026-08-18 降出侧栏，随上游 /templates 同例）：快照只在网页后台
+    # 保存话术模板/回复策略等旧配置流时自动生成，不用那些编辑流的部署里此页
+    # 常年「暂无快照」＝侧栏常驻空页。降级只动入口：审计页/仪表盘「可回滚」
+    # 深链（/diff?a=…&b=__current__）、/api/rollback 与快捷键 v 全部保留。
+    "diff": dict(key="diff", path="/diff", icon="git", label_key="diff",
+                 label_zh="版本对比", help="nav_diff",
+                 cmd_keys="diff 对比 版本 快照 回滚 rollback snapshot"),
     "import": dict(key="import", path="/import", icon="package",
                    label_key="import_page", label_zh="导入配置", cmd_keys="import 导入"),
     # 坐席「工作目标」深链(/workspace?card=goal → 自动切「客户&关系」tab + 展开目标卡)。
@@ -267,9 +309,24 @@ CMD_EXTRA_ITEMS = {
                       label_zh="工作目标（工作计划）", help="work_goal",
                       cmd_keys="工作目标 工作计划 营销目标 目标 计划 推进 里程碑 今日拍 "
                                "goal goals plan milestone agenda"),
+    # 策略效果（2026-08-18 P0 降出侧栏，随 /diff 同例）：生产 1115 事件 100%
+    # 单策略、A/B 从未配置，页是空壳对照。只动入口：URL / API / Ctrl+K 保留；
+    # G+S 改去 /strategies（回复策略）。tracker.record 与策略配置页不废。
+    "strategy_analytics": dict(NAV_ITEMS["strategy_analytics"]),
+    # 运营漏斗（2026-08-18 P1）：与运营分析同属「看转化」，侧栏只留 analytics
+    # 一个入口，两页经 PAGE_CLUSTERS.analysis 的页内 Tab 互切；本条保 Ctrl+K
+    # 直达与 URL 存活。feature 标注跟原条目（锁定时面板隐藏，与页面闸一致）。
+    "funnel": dict(NAV_ITEMS["funnel"]),
+    # 主管四看板单页入口（2026-08-18 P1，随 ws_boards 页群收编）：侧栏一个
+    # 「主管看板」，单页仍可被 Ctrl+K 按名直达（升格→页群是入口形态变化，
+    # 不是 2026-08-14「孤儿化」的回退——页面有常驻侧栏入口 + 页内 Tab）。
+    "ws_queue": dict(NAV_ITEMS["ws_queue"]),
+    "ws_perf": dict(NAV_ITEMS["ws_perf"]),
+    "ws_aiq": dict(NAV_ITEMS["ws_aiq"]),
+    "ws_roi": dict(NAV_ITEMS["ws_roi"]),
     # ── 工作台主管看板五页：2026-08-14 曾因顶栏「更多」删除收进命令面板当孤儿；
-    #    2026-08-16 管理面改造全部升格正式侧栏入口——四看板进「数据洞察」组、
-    #    用量看板升级为「用量与计费·用量与额度」（见 NAV_ITEMS），此处不再重复。
+    #    2026-08-16 管理面改造升格正式侧栏入口；2026-08-18 P1 收成 ws_boards
+    #    页群入口 + 页内 Tab（用量看板不动，仍在「用量与计费」组）。
 }
 
 DOMAIN_SENTINEL = "__domain_pages__"
@@ -277,9 +334,11 @@ DOMAIN_SENTINEL = "__domain_pages__"
 # ── 完整模式分组 ─────────────────────────────────────────────────────────────
 # 2026-08-16 管理面改造：7 组 → 8 组，每组带一句话定位（note_key/note_zh →
 # base.html 分组标题 title 悬浮），防止分类语义再度漂移。要点：
-# - 「看数」只住数据洞察（策略效果自 AI 与知识移入；主管四看板收编）；
+# - 「看数」只住数据洞察（主管四看板收编；策略效果 2026-08-18 降出侧栏进
+#   CMD_EXTRA，与 /diff 同例——空壳对照页不占常驻位）；
 # - 新组「用量与计费」＝资源与钱（用量与额度 + 会员中心），与「客户营收」
-#   （客户付给你的钱，留数据洞察）刻意分开；
+#   （客户付给你的钱，留数据洞察；侧栏显隐跟 monetization.enabled，档位锁
+#   定时保留锁标升级面）刻意分开；
 # - 系统管理仍 master_only；用户管理页自身权限已放宽 admin（页面路由另判）。
 NAV_GROUPS_FULL = [
     # 域动态页哨兵在「工作台」组尾：支付域渠道/汇率等属日常业务面；且哨兵不能
@@ -295,21 +354,20 @@ NAV_GROUPS_FULL = [
                 "whatsapp_rpa", "group_show"]),
     dict(label_key="section_ai_kb", label_zh="AI 与知识",
          note_key="section_note_ai_kb", note_zh="教 AI 怎么说话",
-         items=["personas", "reply_settings", "strategies", "knowledge",
-                "learner", "episodic"]),
+         items=["personas", "voice_eval", "singing", "reply_settings",
+                "strategies", "knowledge", "learner", "episodic"]),
     dict(label_key="section_insights", label_zh="数据洞察",
          note_key="section_note_insights", note_zh="只看数，不改配置",
-         items=["dash", "ops", "analytics", "funnel", "strategy_analytics",
-                "monetization", "ws_queue", "ws_perf", "ws_aiq", "ws_roi"]),
+         items=["dash", "ops", "analytics", "monetization", "ws_boards"]),
     dict(label_key="section_usage_billing", label_zh="用量与计费",
          note_key="section_note_usage_billing", note_zh="资源花到哪、还剩多少",
          items=["usage_center", "membership"]),
     dict(label_key="section_compliance", label_zh="安全合规",
          note_key="section_note_compliance", note_zh="出了事怎么查",
-         items=["crisis_audit", "audit"]),
+         items=["crisis_audit", "audit", "asset_center"]),
     dict(label_key="section_system", label_zh="系统管理", master_only=True,
          note_key="section_note_system", note_zh="配置这套系统",
-         items=["users", "settings", "diff", "logs", "developer"]),
+         items=["users", "settings", "logs", "developer"]),
     dict(label_key="section_support", label_zh="支持",
          note_key="section_note_support", note_zh="帮助与个性化",
          items=["personal_settings", "help"]),
@@ -331,6 +389,24 @@ SIMPLE_MORE = ["dash", "usage_center", "learner", "crisis_audit",
 # 组内互切与当前页高亮；base.html 与 _ws_sidebar.html 经 nav_matrix_items 消费）。
 MATRIX_ITEM_IDS = ("rpa_overview", "telegram", "line_rpa", "messenger_rpa",
                    "whatsapp_rpa")
+
+# 客户形态（ui_visibility.flavor=client / 桌面包）不渲染的导航项：纯运维/开发面，
+# 对最终用户只是噪音。侧栏与命令面板同时剔除，URL 与 API 不封（/developer 本就
+# 有密码闸）——内部人员在客户机上直接敲地址仍可进。
+# 「运营总览 ops」刻意不在此列：那是老板每天看的经营读数面。
+CLIENT_HIDDEN_ITEM_IDS = ("logs", "developer")
+
+# ── 页群（2026-08-18 P1）：侧栏一个入口 + 页内 Tab 互切 ─────────────────────
+# 「合并看板/漏斗」刻意不做模板级合并：各页 JS 与数据装载互不相干，真合页＝
+# 高风险重写且 PV 归因坍缩成一个数。页群方案＝成员页顶部渲染
+# _cluster_tabs.html（消费本表经 nav_clusters），URL / 路由 / 权限闸 / 独立
+# PV 全保留，侧栏行数 5+2 → 1+1。成员只改这里，模板零改动跟随；
+# 模板侧以 `{% set cluster_id/cluster_here %}` 自报身份（渲染类测试无 request
+# 也能跑，partial 对缺 nav_clusters 的上下文静默不渲染）。
+PAGE_CLUSTERS = {
+    "boards": ("ws_queue", "ws_perf", "ws_aiq", "ws_roi"),
+    "analysis": ("analytics", "funnel"),
+}
 
 
 def _resolve(ids):
@@ -373,6 +449,10 @@ _NAV_CONTEXT = dict(
     nav_simple_more=_resolve(SIMPLE_MORE),
     nav_matrix_items=_resolve(list(MATRIX_ITEM_IDS)),
     nav_cmd_items=_cmd_items(),
+    # 页群 Tab（_cluster_tabs.html 消费）；锁定/显隐过滤刻意不套——成员页自带
+    # 权限闸（主管 302）或 feature 页面守卫，Tab 只是同权页面间的互切。
+    nav_clusters={cid: _resolve(list(ids))
+                  for cid, ids in PAGE_CLUSTERS.items()},
 )
 
 
@@ -424,6 +504,18 @@ def feature_for_page_path(path: str):
     return None
 
 
+def _monetization_product_on(config) -> bool:
+    """变现产品开关：只有 yaml ``monetization.enabled`` 为真才算开。
+
+    缺段/缺键/非 dict = 关。不另造 ui_visibility 键——开变现即回侧栏。
+    """
+    try:
+        mo = (config or {}).get("monetization")
+        return bool(isinstance(mo, dict) and mo.get("enabled"))
+    except Exception:
+        return False
+
+
 def _apply_ui_visibility(ctx: dict, config: dict) -> dict:
     """ui_visibility 导航显隐键（缺省即关=隐藏）→ 全导航面剔除对应项。
 
@@ -433,6 +525,14 @@ def _apply_ui_visibility(ctx: dict, config: dict) -> dict:
       留守组内，「真机矩阵」组标题因此一直显示）。
     - ai_settings 关 → 剔简洁模式「人工转接」项（深链 /settings#escalation，
       该卡片本身也被藏 → 入口留着＝点进去空页）。
+    - monetization.enabled 关 → 剔「客户营收」（空页不占侧栏）。例外：该项
+      已被 feature_gate 打 ``locked=True`` 时留下——锁标升级面是档位契约，
+      不能被产品开关顺手藏掉。
+    - **形态＝client** → 剔「实时日志 / 开发者工具」（2026-08-20 实施49 P1-6，
+      内测反馈 B6：运维页不该对最终用户开放）。这两项是形态维度而非布尔键：
+      内部服务器部署必须原样保留，所以判定走 ``resolve_ui_flavor`` 而不是
+      再造两个默认 False 的键（那会让 117 双实例也跟着丢入口）。「运营总览」
+      刻意**不**在此列——老板要的经营读数就在那页，藏了等于砍功能。
     两键全关 → 组内无真实项，整组消失（防空标题）。URL 刻意不封（藏而不废，
     与 simple=True 深链哲学一致）；判定异常回落「隐藏」——内部功能读不到
     配置时藏起来比露出来安全。
@@ -442,23 +542,34 @@ def _apply_ui_visibility(ctx: dict, config: dict) -> dict:
     完整模式的系统设置项一起干掉。
     """
     flags = {}
+    client_flavor = False
     try:
-        from src.web.ui_visibility import resolve_ui_visibility
+        from src.web.ui_visibility import is_client_flavor, resolve_ui_visibility
         flags = resolve_ui_visibility(config)
+        client_flavor = is_client_flavor(config)
     except Exception:
         flags = {}
     hidden_ids = set()
     hidden_paths = set()
+    if client_flavor:
+        hidden_ids |= set(CLIENT_HIDDEN_ITEM_IDS)
     if not flags.get("matrix_nav", False):
         hidden_ids |= set(MATRIX_ITEM_IDS)
     if not flags.get("group_show", False):
         hidden_ids.add("group_show")
     if not flags.get("ai_settings", False):
         hidden_paths.add(NAV_ITEMS["escalation"]["path"])
+    if not _monetization_product_on(config):
+        hidden_paths.add(NAV_ITEMS["monetization"]["path"])
     if not (hidden_ids or hidden_paths):
         return ctx
 
+    _mo_path = NAV_ITEMS["monetization"]["path"]
+
     def _hidden(it):
+        # 档位锁住的客户营收 = 升级面，产品开关关着也要留在侧栏。
+        if it.get("path") == _mo_path and it.get("locked"):
+            return False
         return (it.get("key") in hidden_ids) or (it.get("path") in hidden_paths)
 
     def _drop_hidden(items):
@@ -489,7 +600,9 @@ def get_nav_context(config: dict = None) -> dict:
     保持全量可见)；传 config → 依次套两层过滤：
     ① feature_gate 锁定项(侧栏 locked 注解/命令面板隐藏，gate 关或异常回落全量)；
     ② ui_visibility.matrix_nav / group_show / ai_settings(缺省隐藏真机矩阵五项、
-      群脉导播台与简洁模式「人工转接」项，开发者页按键开启后回归)。
+      群脉导播台与简洁模式「人工转接」项，开发者页按键开启后回归) +
+      monetization.enabled（缺省隐藏客户营收；档位锁定项保留锁标升级面）+
+      部署形态（client＝桌面包剔实时日志/开发者工具）。
     视图每次重建(列表极小,开销可忽略)。
     """
     if config is None:

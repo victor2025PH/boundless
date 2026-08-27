@@ -207,6 +207,90 @@ def test_developer_page_renders_ai_settings_toggle():
         "开发者页显隐开关清单未收录 ai_settings（藏了却无处可开）"
 
 
+# ── 部署形态（flavor：客户包剔运维页）─────────────────────────────────
+
+def test_flavor_defaults_to_internal_on_server(monkeypatch):
+    from src.web.ui_visibility import (FLAVOR_CLIENT, FLAVOR_INTERNAL,
+                                       is_client_flavor, resolve_ui_flavor)
+
+    monkeypatch.delenv("AITR_DESKTOP_MODE", raising=False)
+    # 服务器部署（无桌面信号）零变化——回落方向刻意与布尔键相反：
+    # 读不到配置时宁可多显示一个入口，也不让内部机器突然缺入口。
+    assert resolve_ui_flavor({}) == FLAVOR_INTERNAL
+    assert resolve_ui_flavor(None) == FLAVOR_INTERNAL
+    assert resolve_ui_flavor("not a dict") == FLAVOR_INTERNAL
+    assert is_client_flavor({}) is False
+    # 桌面信号（env 或 app.desktop_mode）→ 客户形态
+    assert resolve_ui_flavor({"app": {"desktop_mode": True}}) == FLAVOR_CLIENT
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    assert resolve_ui_flavor({}) == FLAVOR_CLIENT
+
+
+def test_flavor_explicit_config_overrides_desktop_detection(monkeypatch):
+    from src.web.ui_visibility import (FLAVOR_CLIENT, FLAVOR_INTERNAL,
+                                       resolve_ui_flavor)
+
+    # 桌面包给内部人员用（117 上的 dogfood 壳）→ 写死 internal 保住运维页
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    assert resolve_ui_flavor(
+        {"ui_visibility": {"flavor": "internal"}}) == FLAVOR_INTERNAL
+    # 反向：服务器部署也能显式声明客户形态
+    monkeypatch.delenv("AITR_DESKTOP_MODE", raising=False)
+    assert resolve_ui_flavor(
+        {"ui_visibility": {"flavor": "CLIENT"}}) == FLAVOR_CLIENT
+    # 乱值不认，回落自动判定
+    assert resolve_ui_flavor(
+        {"ui_visibility": {"flavor": "oops"}}) == FLAVOR_INTERNAL
+
+
+def test_flavor_key_not_in_boolean_family():
+    """flavor 是字符串维度，不得混进布尔键家族。
+
+    混进去就会被 resolve_ui_visibility 强转 bool 塞进 /api/desktop/ui-flags，
+    桌面壳按 flags 判显隐会把 'internal' 当 True 用。
+    """
+    from src.web.ui_visibility import FLAVOR_KEY, UI_VISIBILITY_KEYS
+
+    assert FLAVOR_KEY not in {k for k, _ in UI_VISIBILITY_KEYS}
+    out = resolve_ui_visibility({"ui_visibility": {"flavor": "client"}})
+    assert "flavor" not in out
+    assert out == DEFAULTS
+
+
+def test_nav_ops_pages_hidden_for_client_flavor():
+    from src.web.nav_schema import CLIENT_HIDDEN_ITEM_IDS, get_nav_context
+
+    cfg = {"ui_visibility": {"flavor": "client"}}
+    ctx = get_nav_context(cfg)
+    keys = _nav_keys(ctx)
+    for cid in CLIENT_HIDDEN_ITEM_IDS:
+        assert cid not in keys, f"客户形态侧栏不应出现运维项 {cid}"
+    cmd_keys = {it.get("key") for it in ctx["nav_cmd_items"] if isinstance(it, dict)}
+    assert not (cmd_keys & set(CLIENT_HIDDEN_ITEM_IDS)), \
+        "命令面板同样是发现面，客户形态不应残留运维项"
+    # 「系统管理」组不得整组消失（用户管理 / 系统设置仍在）
+    assert "/settings" in {it.get("path")
+                           for g in ctx["nav_groups"] for it in g["items"]
+                           if isinstance(it, dict)}
+
+
+def test_nav_ops_pages_survive_internal_flavor(monkeypatch):
+    from src.web.nav_schema import CLIENT_HIDDEN_ITEM_IDS, get_nav_context
+
+    monkeypatch.delenv("AITR_DESKTOP_MODE", raising=False)
+    keys = _nav_keys(get_nav_context({}))
+    for cid in CLIENT_HIDDEN_ITEM_IDS:
+        assert cid in keys, f"内部部署必须原样保留 {cid}（117 双实例天天用）"
+
+
+def test_nav_ops_overview_stays_visible_for_client():
+    """运营总览刻意不随形态隐藏——那是老板每天看的经营读数面。"""
+    from src.web.nav_schema import get_nav_context
+
+    ctx = get_nav_context({"ui_visibility": {"flavor": "client"}})
+    assert "ops" in _nav_keys(ctx)
+
+
 def test_nav_no_empty_groups_after_filter():
     from src.web.nav_schema import get_nav_context, DOMAIN_SENTINEL
 
@@ -214,6 +298,141 @@ def test_nav_no_empty_groups_after_filter():
     for g in ctx["nav_groups"]:
         real = [i for i in g["items"] if i != DOMAIN_SENTINEL]
         assert real, f"过滤后出现空组：{g.get('key') or g.get('label')}"
+
+
+def test_nav_monetization_follows_product_switch_not_ui_visibility():
+    """客户营收跟 monetization.enabled，不另造 ui_visibility 键。"""
+    from src.web.nav_schema import get_nav_context
+    from src.web.ui_visibility import UI_VISIBILITY_KEYS
+
+    assert "monetization" not in UI_VISIBILITY_KEYS
+
+    def _has_mo(ctx):
+        for g in ctx["nav_groups"]:
+            for it in g["items"]:
+                if isinstance(it, dict) and it.get("path") == "/monetization":
+                    return True
+        return False
+
+    assert not _has_mo(get_nav_context({}))
+    assert _has_mo(get_nav_context({"monetization": {"enabled": True}}))
+
+
+# ── 形态台账（新页面必须表态：客户端要不要看见）────────────────────────
+# 2026-08-20 实施49 P1-6：客户端形态藏运维页的机制建好之后，真正的风险变成
+# 「以后新加的页面默认漏给客户」——B6 那类反馈（这页不该对用户开放）会重新长出来。
+# 故用棘轮：任何新导航项/命令面板项必须在这张表里表态一次，两种表态法二选一——
+#   ① 客户也该看见 → 把 id 加进本表；
+#   ② 纯运维/开发面 → 加进 nav_schema.CLIENT_HIDDEN_ITEM_IDS（同时也加进本表）。
+# 表本身不判对错，它只保证「有人想过这个问题」，且 review 时一眼能看出新页归属。
+_AUDIENCE_DECLARED = frozenset({
+    "analytics", "asset_center", "audit", "care", "cases", "crisis_audit", "dash",
+    "developer", "diff", "episodic", "escalation", "funnel", "group_show", "help",
+    "import", "knowledge", "learner", "line_rpa", "logs", "membership",
+    "messenger_rpa", "monetization", "ops", "personal_settings", "personas",
+    "relations_health", "reply_settings", "rpa_overview", "settings", "strategies",
+    "strategy_analytics", "telegram", "templates", "usage_center", "users",
+    "voice_eval", "whatsapp_rpa", "work_goal", "workspace", "ws_aiq", "ws_boards",
+    "ws_perf", "ws_queue", "ws_roi",
+})
+
+
+def test_new_nav_items_declare_client_audience():
+    from src.web.nav_schema import CLIENT_HIDDEN_ITEM_IDS, CMD_EXTRA_ITEMS, NAV_ITEMS
+
+    known = set(NAV_ITEMS) | set(CMD_EXTRA_ITEMS)
+    undeclared = sorted(known - _AUDIENCE_DECLARED)
+    assert not undeclared, (
+        f"新页面未表态：{undeclared}。客户端形态（桌面包/最终用户）要不要看见这些页？\n"
+        f"  · 该看见 → 把 id 加进 tests/test_ui_visibility.py::_AUDIENCE_DECLARED；\n"
+        f"  · 纯运维/开发面 → 同时加进 nav_schema.CLIENT_HIDDEN_ITEM_IDS。")
+    stale = sorted(_AUDIENCE_DECLARED - known)
+    assert not stale, f"台账过期（页面已删）：{stale}"
+    assert set(CLIENT_HIDDEN_ITEM_IDS) <= known, "CLIENT_HIDDEN_ITEM_IDS 指向了不存在的导航项"
+
+
+# ── 坐席规模（B13：单人部署藏认领/释放）──────────────────────────────
+def _users(*roles, enabled=True):
+    return [{"username": f"u{i}", "role": r, "enabled": 1 if enabled else 0}
+            for i, r in enumerate(roles)]
+
+
+def test_seat_mode_single_when_only_one_workspace_account():
+    from src.web.ui_visibility import is_multi_seat, resolve_seat_mode
+
+    assert resolve_seat_mode({}, _users("master")) == "single"
+    assert is_multi_seat({}, _users("master")) is False
+
+
+def test_seat_mode_multi_with_two_workspace_accounts():
+    from src.web.ui_visibility import is_multi_seat
+
+    assert is_multi_seat({}, _users("master", "agent")) is True
+
+
+def test_seat_mode_viewer_and_disabled_are_not_seats():
+    """viewer 只读不接管、停用账号不是坐席——两者都不该把单人部署算成团队。"""
+    from src.web.ui_visibility import count_seat_accounts, is_multi_seat
+
+    assert is_multi_seat({}, _users("master") + _users("viewer")) is False
+    disabled = [{"username": "x", "role": "agent", "enabled": 0}]
+    assert is_multi_seat({}, _users("master") + disabled) is False
+    assert count_seat_accounts(_users("master", "admin", "supervisor", "agent")) == 4
+
+
+def test_seat_mode_fails_open_to_multi():
+    """取不到用户表/坏数据一律 multi：藏错方向＝真团队退回「两人回同一个客户」。"""
+    from src.web.ui_visibility import is_multi_seat, resolve_seat_mode
+
+    assert is_multi_seat({}, None) is True          # 用户表不可用
+    assert is_multi_seat(None, None) is True
+    assert resolve_seat_mode({}, ["not-a-dict"]) == "single"  # 坏行跳过，仍如实判定
+    assert is_multi_seat({}, [{"role": "agent"}, {"role": "agent"}]) is True  # 缺 enabled 列按启用
+
+
+def test_seat_mode_explicit_config_overrides_account_count():
+    from src.web.ui_visibility import is_multi_seat
+
+    many = _users("master", "agent", "agent")
+    assert is_multi_seat({"ui_visibility": {"seat_mode": "single"}}, many) is False
+    assert is_multi_seat({"ui_visibility": {"seat_mode": "multi"}}, _users("master")) is True
+    # 无法识别的值＝按数据判（不因写错一个字符把协作功能藏了）
+    assert is_multi_seat({"ui_visibility": {"seat_mode": "solo"}}, many) is True
+
+
+def test_seat_mode_roles_track_workspace_page_permission():
+    """坐席角色集必须跟 web_user_store 的 workspace 页权限同源，别各写一份。"""
+    from src.utils.web_user_store import PAGE_PERMISSIONS
+    from src.web.ui_visibility import _seat_roles
+
+    assert _seat_roles() == frozenset(PAGE_PERMISSIONS["workspace"])
+
+
+def test_seat_mode_key_not_in_boolean_family():
+    from src.web.ui_visibility import UI_VISIBILITY_KEYS, resolve_ui_visibility
+
+    assert "seat_mode" not in dict(UI_VISIBILITY_KEYS)
+    flags = resolve_ui_visibility({"ui_visibility": {"seat_mode": "single"}})
+    assert "seat_mode" not in flags
+
+
+def test_inbox_template_gates_claim_surfaces_on_seat_mode():
+    """收件箱四处认领面必须挂在 ws_multi_seat / MULTI_SEAT 上（静态接线）。"""
+    from pathlib import Path
+
+    html = (Path(__file__).resolve().parents[1] / "src" / "web" / "templates"
+            / "unified_inbox.html").read_text(encoding="utf-8")
+    assert "const MULTI_SEAT =" in html
+    # 三处静态 DOM：主行「我的」chip / 面板镜像项 / 会话卡认领按钮
+    assert html.count("ws_multi_seat is not defined or ws_multi_seat") >= 4
+    assert 'data-f="claimed"' in html and 'id="claim-hdr-btn"' in html
+    # 两处轮询/写入必须早退（否则单坐席仍在写认领行 + 每 8s 打一次 claims）
+    for fn in ("async function renewClaim(c){", "async function _refreshClaimsBulk(){"):
+        i = html.index(fn)
+        assert "if(!MULTI_SEAT) return;" in html[i:i + 260], f"{fn} 缺单坐席早退"
+    # 粘性筛选降级：旧 localStorage/深链带 claimed 进来不得筛出恒空列表
+    j = html.index("function setFilter(f,el){")
+    assert "f==='claimed' && !MULTI_SEAT" in html[j:j + 400]
 
 
 # ── 路由 ─────────────────────────────────────────────────────────────

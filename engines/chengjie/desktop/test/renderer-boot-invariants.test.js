@@ -325,4 +325,133 @@ ok(
   "preload stripReady() 或 openEmbedded shell_tab_id 点名缺失（页内标签条点了切不动/握手无从发出）"
 );
 
+// ⑰ 开机动画（splash P0 2026-08-22）：赛博朋克首启序列的三线接线——
+//    DOM/CSS/驱动三件套 + renderer 状态镜像事件桥 + 主进程防白闪。任一断＝
+//    要么开机黑屏/白闪回归、要么 splash 等不到收幕事件把人永久困在动画后面。
+const splashCss = fs.readFileSync(path.join(rendererDir, "splash.css"), "utf8");
+const splashJs = fs.readFileSync(path.join(rendererDir, "splash.js"), "utf8");
+const shellI18nSrcForSplash = fs.readFileSync(path.join(rendererDir, "shell-i18n.js"), "utf8");
+ok(
+  /<div id="bl-splash"/.test(indexHtml)
+    && indexHtml.indexOf('id="bl-splash"') < indexHtml.indexOf('<div id="app">'),
+  'index.html 丢失 #bl-splash 或未置于 #app 之前（首帧必须先画动画层）'
+);
+ok(
+  /<link rel="stylesheet" href="splash\.css"/.test(indexHtml)
+    && /<script src="splash-model\.js">/.test(indexHtml)
+    && /<script src="splash\.js">/.test(indexHtml),
+  "splash 三件套（splash.css / splash-model.js / splash.js）未全部接入 index.html"
+);
+ok(
+  indexHtml.indexOf('<script src="splash-model.js">') < indexHtml.indexOf('<script src="splash.js">'),
+  "splash-model.js 必须先于 splash.js 加载（驱动层依赖 window.splashModel）"
+);
+ok(
+  /#bl-splash\s*\{[^}]*z-index:\s*99900/.test(splashCss),
+  "splash z-index 漂移（须 99900：低于首启向导 99999/海报 99980——引导叠在动画上交互，高于其余一切）"
+);
+ok(
+  /spAutoHide/.test(splashCss) && /prefers-reduced-motion/.test(splashCss),
+  "splash.css 丢失 150s 自动隐藏保险（脚本没跑起来时的唯一逃生门）或 reduced-motion 降级"
+);
+ok(
+  /aitr:inbox-phase/.test(rendererJs) && /aitr:splash-retry/.test(rendererJs),
+  "renderer.js 丢失 splash 状态镜像事件桥（aitr:inbox-phase 派发 / aitr:splash-retry 重试回派）"
+);
+ok(
+  /if \(!inboxOn\)[\s\S]{0,300}?aitr:inbox-phase/.test(rendererJs),
+  "renderer.js 丢失「收件箱未启用 → 立即通知 splash 收幕」（缺了＝纯内嵌模式开机永久卡动画）"
+);
+ok(
+  /aitr:inbox-phase/.test(splashJs) && /aitr:splash-done/.test(splashJs)
+    && /aitr:splash-retry/.test(splashJs),
+  "splash.js 事件桥断链（消费 aitr:inbox-phase / 派发 aitr:splash-done / 重试回派任一缺失）"
+);
+ok(
+  /try \{ init\(\); \} catch/.test(splashJs) && /style\.animation = "none"/.test(splashJs),
+  "splash.js 丢失异常拆层守卫（init try/catch）或未接管 CSS 自动隐藏保险（跑起来就该关掉它）"
+);
+ok(
+  /backgroundColor:\s*"#05060f"/.test(mainJs) && /show:\s*false/.test(mainJs)
+    && /ready-to-show/.test(mainJs),
+  "main.js 防白闪三件套缺失（backgroundColor 深空底 / show:false / ready-to-show 再亮窗）"
+);
+ok(
+  (shellI18nSrcForSplash.match(/'splash\.amb\.engine\.0':/g) || []).length === 2,
+  "shell-i18n.js 丢失「唤醒量子计算机群」氛围词条（zh/en 各一处）"
+);
+
+// ⑱ 融合标题栏（titlebar merge P2 2026-08-22）：win32 隐藏系统标题栏后，壳级 32px
+//    细条承接「拖拽面 + 原生窗控让位 + ⋯应急菜单（白屏时的报障/更新保命通道）」。
+//    七点接线缺一：要么窗口没处可拖、要么原生按钮悬空盖内容、要么白屏时报障无门。
+ok(
+  /<div id="cx-titlebar">/.test(indexHtml)
+    && indexHtml.indexOf('id="cx-titlebar"') > indexHtml.indexOf('id="bl-splash"')
+    && indexHtml.indexOf('id="cx-titlebar"') < indexHtml.indexOf('<div id="app">'),
+  'index.html 丢失 #cx-titlebar 或位置漂移（须在 #bl-splash 之后、#app 之前）'
+);
+ok(
+  /id="cx-tb-more"/.test(indexHtml) && /data-tbm="about"/.test(indexHtml)
+    && /data-tbm="diag"/.test(indexHtml) && /data-tbm="update"/.test(indexHtml),
+  "index.html 丢失细条⋯应急菜单三件（about/diag/update——webview 白屏时唯一报障入口）"
+);
+ok(
+  /#cx-titlebar\s*\{\s*display:\s*none/.test(styleCss)
+    && /body\.cx-tb-on #cx-titlebar\s*\{[^}]*-webkit-app-region:\s*drag/.test(styleCss)
+    && /body\.cx-tb-on #app\s*\{\s*height:\s*calc\(100vh - 32px\)/.test(styleCss)
+    && /body\.cx-tb-on #bl-splash\s*\{\s*top:\s*32px/.test(styleCss),
+  "style.css 融合标题栏规则缺失（默认隐藏/拖拽面/#app 让高/splash 让位 任一丢＝布局或拖拽断）"
+);
+ok(
+  /#cx-tb-menu\[hidden\]\s*\{\s*display:\s*none\s*!important/.test(styleCss),
+  "style.css 丢失 #cx-tb-menu[hidden] 兜底（display:flex 会压过 hidden 属性——⋯菜单关不上）"
+);
+ok(
+  /function initTitlebar\(/.test(rendererJs)
+    && /get\("tb"\)\s*===\s*"1"/.test(rendererJs)
+    && /cx-tb-title/.test(rendererJs),
+  "renderer.js 丢失 initTitlebar（?tb=1 点亮 / 细条标题镜像）——细条永远不显示或标题恒空"
+);
+ok(
+  /titlebarMenu:/.test(shellPreloadJs) && /onTitlebarTheme:/.test(shellPreloadJs),
+  "shell-preload.js 丢失细条桥（titlebarMenu/onTitlebarTheme 任一缺失＝⋯菜单/主题换肤断链）"
+);
+// ⑱a 全屏收起链（P2b）：F11 全屏后原生窗控消失，细条必须同步收起（否则 32px 死空间）。
+ok(
+  /onTitlebarFs:/.test(shellPreloadJs)
+    && /cx-titlebar-fs/.test(mainJs)
+    && /enter-full-screen/.test(mainJs)
+    && /cx-tb-fs/.test(rendererJs)
+    && /body\.cx-tb-on\.cx-tb-fs #cx-titlebar\s*\{\s*display:\s*none/.test(styleCss)
+    && /body\.cx-tb-on\.cx-tb-fs #app\s*\{\s*height:\s*100vh/.test(styleCss),
+  "全屏收起链断裂（main enter-full-screen 推送 / preload onTitlebarFs / renderer cx-tb-fs / CSS 收起+还原 任一缺失）"
+);
+ok(
+  /titleBarStyle\s*=\s*"hidden"/.test(mainJs)
+    && /titleBarOverlay\s*=\s*\{/.test(mainJs)
+    && /desktop:titlebar-menu/.test(mainJs)
+    && /cx-titlebar-theme/.test(mainJs)
+    && /tb:\s*TB_MERGED\s*\?\s*"1"\s*:\s*"0"/.test(mainJs),
+  "main.js 融合标题栏半件缺失（titleBarStyle/Overlay / titlebar-menu IPC / 主题回推 / ?tb 点亮参 任一丢）"
+);
+// ⑱b 开发者工具全员隐藏（老板令 2026-08-22）：原生菜单与页内 spec 默认清单都不得
+//     再出现 toggleDevTools / devtools 项；唯一入口＝页面「版本号连点 12 次」解锁态
+//     （workspace_base 注入，动作走 desktop:app-menu-action 的 devtools 分支——分支必须保留）。
+ok(
+  !/role:\s*"toggleDevTools"/.test(mainJs),
+  'main.js 原生菜单出现 role:"toggleDevTools"（开发者工具须对所有人隐藏，含 Alt 后门菜单）'
+);
+ok(
+  !/it\("devtools"/.test(mainJs),
+  'main.js appMenuSpec 默认清单出现 devtools 项（只许页面解锁态注入，spec 里不发）'
+);
+ok(
+  /case "devtools":/.test(mainJs),
+  "main.js app-menu-action 丢失 devtools 分支（解锁态菜单项点了无响应）"
+);
+ok(
+  /version:\s*displayVersion\(\)/.test(mainJs) && /devmode_hint/.test(mainJs),
+  "main.js appMenuSpec 丢失 version/extras（帮助菜单版本行与解锁词条无源——彩蛋整链哑掉）"
+);
+
 console.log("renderer-boot-invariants.test.js: " + passed + " passed");

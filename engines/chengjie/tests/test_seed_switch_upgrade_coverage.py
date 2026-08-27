@@ -76,6 +76,27 @@ _EXEMPT: Dict[str, str] = {
         "「按内容长度自适应」复选框（模板 rps-adaptive，键同名，保存即热更），"
         "关掉后随时可再勾回；code 默认 resolve_pacing 取 get('adaptive', False)，"
         "种子写 true 只为出厂即用更拟人的长度自适应节奏，升级安装不写也不影响",
+    # ── 全自动开箱四件套（2026-08-22 拍板，全自动一键化 P2）────────────────
+    "inbox.l2_autosend.enabled":
+        "代码默认已 True：bootstrap/web_app.py 装配 worker 处取 "
+        "_as_cfg.get('enabled', True)，升级安装天然不缺",
+    "inbox.auto_draft.bootstrap_automation_mode":
+        "代码默认等效 True：automation_mode.bootstrap_enabled_from_config 缺省"
+        "＝「全局档位为 auto_ai 即开」，而 global_automation_mode_from_config "
+        "缺省恰为 auto_ai——升级安装不写该键也按同语义生效；种子显式写出只为"
+        "交付承诺文档化",
+    "inbox.l2_autosend.deliver":
+        "**刻意不静默补齐**（与 A 类基线机制的关键区别）：把正在人审运行的存量"
+        "部署无声翻成全自动不可接受。升级可达路径＝①收件箱主管首开的一次性提示"
+        "弹层（unified_inbox._maybeMasterAutoPrompt → 一键开启）②/reply-settings"
+        "「AI 接管」三档主控 ③收件箱「AI 值守」胶囊——三个入口共用 POST "
+        "/api/companion/standby 捆绑写入（含 worker 热接线，免重启生效）。"
+        "种子 true 只翻新装（feature_registry 已 C→B 配套拍板）",
+    "companion_send_gate.enabled":
+        "安全闸随真发同批武装：新装随种子开；存量升级在用户接受上述任一入口的"
+        "「全自动」时由 standby watching 捆绑计划一并写 true（capability_presets"
+        "._priority 保证闸先立、deliver 后武装）——存量不开真发就不需要它，"
+        "刻意不单独补齐",
 }
 
 #: **真实缺口，待产品决策**（沿用本仓 _PENDING_* 惯例：CI 保绿 + 债务可见 + 防过期）。

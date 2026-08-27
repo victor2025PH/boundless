@@ -1,0 +1,23 @@
+{# 管理页 / 工作台子页 PV 埋点（2026-08-18 P0）。
+   一次装载打一条 pv_<slug>，复用 /api/telemetry/ui-event（action 须匹配
+   ui_event_stats._ACTION_RE = ^[a-z][a-z0-9_.]{0,63}$）。
+   跳过登录/登出/模式切换与坐席收件箱（/workspace 已有大量工作台埋点）。
+   slug 优先用模板 active（连字符折下划线），空则从 pathname 派生。 #}
+<script>
+(function(){
+  try{
+    var p=String((location&&location.pathname)||'');
+    if(/^\/(login|logout|set_ui_mode)(\/|$)/.test(p) || p==='/workspace') return;
+    var raw={{ (active|default(''))|tojson }};
+    var slug=String(raw||'').toLowerCase().replace(/-/g,'_').replace(/[^a-z0-9_.]/g,'');
+    if(!/^[a-z][a-z0-9_.]{0,31}$/.test(slug)){
+      slug=p.replace(/\/+$/,'').replace(/^\//,'').replace(/[\/\-]+/g,'_')
+            .replace(/[^a-z0-9_]/gi,'').toLowerCase().slice(0,32);
+      if(!slug) slug='dash';
+    }
+    if(!/^[a-z][a-z0-9_.]{0,31}$/.test(slug)) return;
+    navigator.sendBeacon('/api/telemetry/ui-event', new Blob(
+      [JSON.stringify({page:p,action:'pv_'+slug})],{type:'application/json'}));
+  }catch(_){}
+})();
+</script>

@@ -86,6 +86,48 @@ def checkin_angle(variety_key: str, now: Optional[float] = None) -> str:
     return _CHECKIN_ANGLES[zlib.crc32(seed) % len(_CHECKIN_ANGLES)]
 
 
+# 早/晚安切入角轮换池（2026-08-18 仪式素材化）：早晚安占主动发送 96.7%，此前
+# directive 只有「道一句早安」——每天同一句式即坐席/客户体感「生硬」的大头。
+# 与 _CHECKIN_ANGLES 同哲学：只是参考方向（真实文案仍由 LLM 按人设发挥），
+# crc32(user#slot#日期) 确定性轮换——同用户同日恒定（缓存/测试友好）、隔天自动换、
+# 同一天早安晚安各自不同、同一天不同用户不同（不会全员同款）。
+_RITUAL_MORNING_ANGLES = (
+    "分享你醒来后正在做的一件小事（刚泡的咖啡/在做早餐/赖床听歌）",
+    "提一句你今天的安排或小期待，顺口问TA今天忙不忙",
+    "聊聊今早窗外的天气或光线（有天气素材就按素材说，没有就别编细节）",
+    "说说你早餐吃了什么或想吃什么，好奇TA早上吃了没",
+    "说说你昨晚睡得怎么样（睡太沉/做了个怪梦/被闹钟吓醒），关心TA睡得好不好",
+    "讲一件你出门路上或楼下碰到的小事",
+    "分享你早上在听的歌或刚刷到的一个小东西",
+    "就一句自然的早安，带上你此刻的一个小细节（不追问、不查岗）",
+)
+
+_RITUAL_NIGHT_ANGLES = (
+    "分享你今天碰到的一件具体小事（刚收工/晚饭吃了什么/路上看到的）",
+    "聊聊你此刻在做什么（在看的剧/书/听的歌），顺口问TA睡前一般干嘛",
+    "提一句你明天的小计划或小期待",
+    "聊聊今晚窗外的天气或夜色（有天气素材就按素材说，没有就别编细节）",
+    "说说你晚饭吃了什么或想吃什么，好奇TA吃了没",
+    "轻轻问一句TA今天过得怎么样（只问一句、别连环追问）",
+    "分享一个今天让你忽然想到TA的瞬间（自然一点、别肉麻）",
+    "就一句温柔的晚安，带上你此刻的一个小细节（不追问）",
+)
+
+
+def ritual_angle(slot: str, variety_key: str, now: Optional[float] = None) -> str:
+    """当天该用户该档（morning/night）的仪式问候切入角；非法档位返回 ""。"""
+    import zlib
+    s = str(slot or "").strip().lower()
+    pool = (_RITUAL_MORNING_ANGLES if s == "morning"
+            else _RITUAL_NIGHT_ANGLES if s == "night" else None)
+    if pool is None:
+        return ""
+    ts = now if now is not None else time.time()
+    day = time.strftime("%Y%m%d", time.localtime(ts))
+    seed = f"{variety_key or ''}#{s}#{day}".encode("utf-8", "ignore")
+    return pool[zlib.crc32(seed) % len(pool)]
+
+
 # 各档 gentle_checkin 指令：短档明令禁止「好久没联系」，并要求带具体内容
 # （分享自己此刻的小事）替代空泛的「最近怎么样」模板问候。
 _CHECKIN_DIRECTIVES = {

@@ -105,10 +105,14 @@ def test_vision_survives_overlay_write_and_hot_reload(tmp_path, monkeypatch):
 
 
 def test_hot_reload_replay_respects_explicit_off(tmp_path, monkeypatch):
-    """运营点「全部关闭」写下的 false 是**意图**，回放只补供给、不许把它扳回来。"""
+    """运营点「全部关闭」写下的 false 是**意图**，回放只补供给、不许把它扳回来。
+
+    2026-08-22：桌面态基线会补 ``vision._hosted_auto``。本例显式关掉自动接入，
+    只测「回放不得把 enabled:false 扳回」；托管预授权部署的重开见下一条。
+    """
     monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
     monkeypatch.setenv("AITR_HOSTED_AI_KEY", "cx.tok")
-    cm = _cm(tmp_path)
+    cm = _cm(tmp_path, {"vision": {"_hosted_auto": False}})
     assert hg.ensure_hosted_vision(cm) is True
 
     ok, _ = cm.set_overlay_flag("vision.enabled", False)
@@ -117,6 +121,26 @@ def test_hot_reload_replay_respects_explicit_off(tmp_path, monkeypatch):
 
     assert cm.config["vision"]["enabled"] is False
     # 供给仍在（后端没被删），只是开关按运营意图关着
+    assert vision_backend_ready(cm.config) is True
+
+
+def test_hot_reload_replay_auto_reopens_seeded_off(tmp_path, monkeypatch):
+    """_hosted_auto 部署：种子/overlay 的 enabled:false 是保守默认，不是运营关。
+
+    回放必须重开，否则任何一次写 overlay 都等于把托管识图关掉（2026-08-22
+    外网机「发图即拦」的根因之一）。运营要彻底关走 vision.hosted_opt_out。
+    """
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    monkeypatch.setenv("AITR_HOSTED_AI_KEY", "cx.tok")
+    cm = _cm(tmp_path, {"vision": {"enabled": False, "_hosted_auto": True}})
+    assert hg.ensure_hosted_vision(cm) is True
+    assert cm.config["vision"]["enabled"] is True
+    assert os.environ.get(hg.VISION_ENV_AUTO) == "1"
+
+    ok, _ = cm.set_overlay_flag("vision.enabled", False)
+    assert ok
+    _hot_reload(cm)
+    assert cm.config["vision"]["enabled"] is True
     assert vision_backend_ready(cm.config) is True
 
 

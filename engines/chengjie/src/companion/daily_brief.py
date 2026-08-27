@@ -108,11 +108,17 @@ def ritual_weather_line(
     *,
     slot: str,
     fetch_fn: Optional[Callable[..., Any]] = None,
+    now: Any = None,
 ) -> str:
     """早/晚安 directive 的真实天气素材行；无货返回 ""。
 
     素材行自带反编造约束（「天气细节只以这条为准」）——与全链既有的
     反编造钉子同向，给方向也给事实。
+
+    框架守卫（2026-08-19 「上午晚安」事故连带收口）：本行的「今早/今晚」跟
+    **问候档位**走，而天气值是人设城市的**此刻**——档位与人设当地时段硬冲突
+    （温哥华人设的清晨撞上晚安档）时整行让行，绝不说「今晚你那边」而人设那边
+    是大清早。宽窗口（晨 5-12 / 晚 17-次日5）只拦明显错位；无坐标不判。
     """
     s = str(slot or "").strip().lower()
     if s not in ("morning", "night"):
@@ -121,6 +127,21 @@ def ritual_weather_line(
     desc = _desc_zh(mat)
     if not desc:
         return ""
+    try:
+        from src.companion.persona_location import (
+            persona_now,
+            resolve_place_with_fallback,
+        )
+        place = resolve_place_with_fallback(
+            persona if isinstance(persona, dict) else {})
+        if place is not None:
+            _h = int(persona_now(place, now).hour)
+            if s == "morning" and not (5 <= _h < 12):
+                return ""
+            if s == "night" and (5 <= _h < 17):
+                return ""
+    except Exception:
+        pass  # 判不了按放行（保持旧行为）
     when = "今早" if s == "morning" else "今晚"
     stale = _STALE_NOTE if mat.get("stale") else ""
     return (

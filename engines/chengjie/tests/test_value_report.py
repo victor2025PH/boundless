@@ -179,6 +179,64 @@ def test_goals_section_absent_when_inactive(tmp_path):
     assert not any("目标达成" in ln for ln in v["text_lines"])
 
 
+def test_goals_miss_triage_in_weekly(tmp_path):
+    """P4：失守三分法进周报——与失守日报/报表页同判定（offered=开价拍真发过 /
+    engaged=窗口内 ≥2 条入站 / silent），行文带三分计数，且 offered≥1 时给
+    「复核站外漏标」行动提示（生产 44/48 过期、0 赢单——隐藏赢单是主要读数）。"""
+    from src.companion.goals.store import GoalStore
+    store = _mk_store(tmp_path)
+    gs = GoalStore(":memory:")
+
+    def _mk_missed(chat: str) -> str:
+        g = gs.create_goal(
+            conversation_id=f"telegram:a1:{chat}", platform="telegram",
+            account_id="a1", chat_key=chat, template="acquire_and_convert",
+            now=NOW - 9 * DAY)
+        gs.update_goal_fields(g["goal_id"], status="expired",
+                              done_at=NOW - 1 * DAY)
+        return str(g["goal_id"])
+
+    gid_off = _mk_missed("c-off")
+    _mk_missed("c-eng")
+    _mk_missed("c-sil")
+    # offered 判据＝push_level=direct 且 status=consumed 的拍真实存在
+    gs.upsert_action(gid_off, "2027-01-01", kind="beat", intent="offer",
+                     push_level="direct", status="consumed")
+    # engaged 判据＝[start_ts, done_at] 窗口内 ≥2 条入站
+    with store._lock:
+        c = store._conn
+        for i, ts in enumerate((NOW - 5 * DAY, NOW - 4 * DAY)):
+            c.execute(
+                "INSERT INTO messages (message_id, conversation_id, direction,"
+                " ts, ingested_at) VALUES (?,?,?,?,?)",
+                (f"tm{i}", "telegram:a1:c-eng", "in", ts, ts))
+        c.commit()
+    v = build_weekly_value(store, goal_store=gs, now=NOW)
+    g = v["this_week"]["goals"]
+    assert g["expired"] == 3
+    assert g["triage"] == {"offered": 1, "engaged": 1, "silent": 1}
+    text = "\n".join(v["text_lines"])
+    assert "已开价 1" in text and "聊过没成 1" in text and "没聊起来 1" in text
+    assert "复核" in text, "开过价的失守必须给行动提示"
+
+
+def test_goals_triage_soft_degrade_without_lister(tmp_path):
+    """旧 goal store（无 list_missed_window）→ 无 triage 键、行文退回纯计数
+    ——getattr 特性探测防「假 store/旧进程」硬崩。"""
+    store = _mk_store(tmp_path)
+
+    class _OldGoalStore:
+        def outcome_counts(self, lo, hi):
+            return {"done": 0, "failed": 0, "expired": 2, "won": 0,
+                    "won_amount": 0.0}
+
+    v = build_weekly_value(store, goal_store=_OldGoalStore(), now=NOW)
+    g = v["this_week"]["goals"]
+    assert g["expired"] == 2 and "triage" not in g
+    text = "\n".join(v["text_lines"])
+    assert "未达成 2 个" in text and "已开价" not in text
+
+
 def test_cases_section_included_when_active(tmp_path):
     """P3：案例趋势段——显式传 case_trend_store、窗口内有开/结案 → 出段出行。"""
     from src.utils.case_trend_store import CaseTrendStore

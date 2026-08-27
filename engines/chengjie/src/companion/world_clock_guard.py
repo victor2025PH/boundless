@@ -20,6 +20,8 @@ from src.companion.persona_location import (
 __all__ = [
     "detect_daypart_conflict",
     "strip_daypart_conflicts",
+    "detect_venue_conflict",
+    "strip_venue_conflicts",
     "detect_weekday_conflict",
     "strip_weekday_conflicts",
     "detect_wrong_place_claim",
@@ -118,6 +120,89 @@ def strip_daypart_conflicts(text: str, local_hour: int) -> str:
                 # 孤立定界符丢弃
                 pass
         return "".join(out).strip() or _rejoin(text, kept)
+    except Exception:
+        return str(text or "")
+
+
+# ---- 深夜×白天场所断言（2026-08-22 实录：凌晨 3:31「我在二手书店看书」）----
+#
+# 场景层已在源头收紧（scene_conflicts_with_hour 深夜剔白天场所），这里是
+# **最后防线**：兜 LLM 顺着爱好词（tastes「二手书店淘旧书」）/对话历史自由
+# 发挥出的「此刻在白天场所」断言。口径与本模块一贯哲学一致（宁可漏报不误伤）：
+# 1. 只抓「现在进行」语义句；句含过去/将来/假设限定词（昨天/白天/上次/明天/
+#    打算/想去…）一律放行——那是回忆或计划，不是对此刻的断言。
+# 2. 句含第二人称（你/您）放行——「你还在公司吗」是在问对方。
+# 3. 各场所有营业常识窗（本地小时在窗内即放行）；24h 场所（便利店/夜市/酒吧）
+#    刻意不进表。窗刻意宽（书店到 22 点、办公室到 24 点＝加班合法），只拦
+#    深夜核心段的高置信常识违背。
+# 「在」带否定前瞻：「我不在书店/没在逛街」是澄清不是断言，绝不能剥。
+_Z = r"(?<![不没沒])在"
+_VENUE_CLAIMS: Tuple[Tuple[re.Pattern[str], int, int, str], ...] = tuple(
+    (re.compile(pat, re.IGNORECASE), lo, hi, tag)
+    for pat, lo, hi, tag in (
+        (_Z + r"[^，。！？!?\n]{0,6}(?:书店|書店|图书馆|圖書館)", 8, 22, "bookstore"),
+        (_Z + r"[^，。！？!?\n]{0,6}(?:商场|商場|百貨|百货)|" + _Z + r"逛街", 9, 22, "mall"),
+        (_Z + r"[^，。！？!?\n]{0,6}(?:学校|學校|教室)|" + _Z + r"上课|" + _Z + r"上課", 7, 22, "school"),
+        (_Z + r"[^，。！？!?\n]{0,6}(?:办公室|辦公室)|" + _Z + r"公司|" + _Z + r"开会|"
+         + _Z + r"開會|" + _Z + r"加班", 7, 24, "office"),
+        (_Z + r"[^，。！？!?\n]{0,6}健身房|" + _Z + r"健身|" + _Z + r"撸铁|" + _Z + r"擼鐵",
+         6, 24, "gym"),
+        (_Z + r"[^，。！？!?\n]{0,6}(?:地铁|地鐵|公交)|" + _Z + r"通勤", 6, 24, "commute"),
+        (_Z + r"[^，。！？!?\n]{0,6}(?:咖啡厅|咖啡廳|咖啡店|奶茶店|甜品店)", 7, 24, "cafe"),
+        (r"\b(?:at|in)\s+the\s+(?:library|bookstore|book\s*shop)\b", 8, 22, "bookstore"),
+        (r"\bat\s+the\s+(?:mall|office|gym)\b", 7, 24, "venue_en"),
+    )
+)
+# 非「此刻」限定词：命中即整句放行（回忆/计划/转述都不是对现在的断言）。
+_VENUE_NONNOW_HINT = re.compile(
+    r"昨天|昨晚|前天|上次|那天|之前|当时|當時|白天|早上|上午|中午|下午|傍晚"
+    r"|明天|后天|後天|周末|週末|下周|下週|回头|回頭|待会|待會|一会|一會"
+    r"|打算|想去|要去|准备|準備|计划|計劃|约了|約了|梦|夢|如果|要是|经常|經常"
+    r"|平时|平時|一般|habitually|usually|yesterday|tomorrow|earlier|later"
+    r"|planning|going\s+to|used\s+to|was\s+(?:at|in)|went\s+to",
+    re.IGNORECASE)
+_VENUE_SECOND_PERSON = re.compile(r"你|您|\bare\s+you\b|\bu\b", re.IGNORECASE)
+
+
+def detect_venue_conflict(text: str, local_hour: int) -> Optional[str]:
+    """出站是否断言「此刻在与当地小时常识冲突的场所」；返回场所 tag 或 None。
+
+    ``local_hour`` < 0＝时钟未知，恒不判（保守放行，与 daypart 检测同口径）。
+    """
+    try:
+        if int(local_hour) < 0:
+            return None
+        h = int(local_hour) % 24
+        blob = str(text or "")
+        if not blob.strip():
+            return None
+        for sent in _sentences(blob):
+            if _VENUE_SECOND_PERSON.search(sent):
+                continue
+            if _VENUE_NONNOW_HINT.search(sent):
+                continue
+            for pat, lo, hi, _tag in _VENUE_CLAIMS:
+                if pat.search(sent) and not (lo <= h < hi):
+                    return _tag
+    except Exception:
+        return None
+    return None
+
+
+def strip_venue_conflicts(text: str, local_hour: int) -> str:
+    """句级剥离「此刻在冲突场所」断言句；无冲突原样返回。"""
+    try:
+        if detect_venue_conflict(text, local_hour) is None:
+            return str(text or "")
+        parts = _SENT_SPLIT_RE.split(str(text or ""))
+        out: List[str] = []
+        for i in range(0, len(parts), 2):
+            body = parts[i]
+            delim = parts[i + 1] if i + 1 < len(parts) else ""
+            if body.strip() and detect_venue_conflict(body, local_hour) is not None:
+                continue
+            out.append(body + delim)
+        return "".join(out).strip()
     except Exception:
         return str(text or "")
 
@@ -340,6 +425,7 @@ def apply_world_clock_guard(
     """
     info: dict = {
         "daypart_conflict": None,
+        "venue_conflict": None,
         "weekday_conflict": None,
         "wrong_place": None,
         "changed": False,
@@ -367,11 +453,14 @@ def apply_world_clock_guard(
         # 先在原文上取证（再剥）：时段句常与错城同句，先剥时段会吞掉错城证据。
         if hour >= 0:
             info["daypart_conflict"] = detect_daypart_conflict(raw, hour)
+            info["venue_conflict"] = detect_venue_conflict(raw, hour)
         info["weekday_conflict"] = detect_weekday_conflict(raw, allowed_wd)
         info["wrong_place"] = detect_wrong_place_claim(raw, place)
         out = raw
         if info["daypart_conflict"]:
             out = strip_daypart_conflicts(out, hour)
+        if info["venue_conflict"]:
+            out = strip_venue_conflicts(out, hour)
         if info["weekday_conflict"] is not None:
             out = strip_weekday_conflicts(out, allowed_wd)
         if info["wrong_place"]:

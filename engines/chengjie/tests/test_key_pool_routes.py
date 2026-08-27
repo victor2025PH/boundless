@@ -300,6 +300,30 @@ class TestAiRuntimeStatus:
         r = client.get("/api/workspace/ai-runtime-status").json()
         assert r["degraded"] is False
 
+    def test_kill_switch_field_defaults(self, tmp_path, monkeypatch):
+        # P1 2026-08-23 急停可见化：字段恒在（顶栏冻结条 feat 探测口）；
+        # 单例未初始化 → 全零（读路径绝不新建库）。
+        import src.ops.kill_switch as ks_mod
+        monkeypatch.setattr(ks_mod, "_singleton", None)
+        client, m = _client_mgr(tmp_path)
+        r = client.get("/api/workspace/ai-runtime-status").json()
+        assert r["kill_switch"] == {"active_scopes": 0, "global_active": False}
+
+    def test_kill_switch_field_global_summary(self, tmp_path, monkeypatch):
+        import src.ops.kill_switch as ks_mod
+        from src.ops.kill_switch import KillSwitch
+        ks = KillSwitch(tmp_path / "rf.db")
+        monkeypatch.setattr(ks_mod, "_singleton", ks)
+        ks.set("account:telegram:1", reason="acct")
+        ks.set("global", reason="auto_pause:PeerFlood", actor="ban_signal",
+               ttl_sec=3600)
+        client, m = _client_mgr(tmp_path)
+        r = client.get("/api/workspace/ai-runtime-status").json()
+        k = r["kill_switch"]
+        assert k["active_scopes"] == 2 and k["global_active"] is True
+        assert k["source"] == "auto" and k["cause"] == "PeerFlood"
+        assert isinstance(k["expires_at"], float) and k["expires_at"] > 0
+
 
 class TestUsageDistribution:
     def test_cloud_credentials_aggregates_by_tier(self, tmp_path, monkeypatch):
@@ -328,22 +352,31 @@ class TestUsageDistribution:
 
 
 def test_workspace_base_wires_degrade_bar():
-    """坐席端降级状态条 wiring（静态契约）：条 + 轮询端点 + i18n 键可达。"""
+    """坐席端降级/重启冷却提示 wiring（静态契约）：轮询端点 + i18n 键可达。
+
+    实施75（2026-08-27）起顶部横幅退役：ws-aidegrade / ws-restartcool 两个
+    通栏 div 不得回归（回归=重新占用顶部导航区），提示改走右下统一通知总线
+    （AITRNotify 胶囊 + toast + 消息中心）；quiet_poll 功能信号保留。
+    """
     import pathlib
     repo = pathlib.Path(__file__).resolve().parent.parent
     src = (repo / "src" / "web" / "templates" / "workspace_base.html").read_text(encoding="utf-8")
-    assert 'id="ws-aidegrade"' in src
+    assert 'id="ws-aidegrade"' not in src, "顶部 AI 降级横幅不得回归（实施75）"
+    assert 'id="ws-restartcool"' not in src, "顶部重启冷却蓝条不得回归（实施75）"
     assert "/api/workspace/ai-runtime-status" in src
     assert "ws.aidegrade.mode_pool" in src and "ws.aidegrade.mode_local" in src
-    assert 'id="ws-restartcool"' in src
-    assert "ws.restartcool.text" in src
+    assert "AITRNotify.ongoing.set('aidegrade'" in src
+    assert "AITRNotify.ongoing.set('restartcool'" in src
+    assert "ntf.rc_capsule" in src and "ntf.rc_toast" in src
     assert "instance_restart" in src
     assert "window.__wsRestartCool" in src
-    # P4: 托管到期提醒横幅（tenant_notice → ws-expiry；i18n 键 zh/en 由 pack 门禁守）
-    assert 'id="ws-expiry"' in src
+    # P4 → 实施75 batch2: 到期提醒/AI 拦截横幅退役，迁右下胶囊+卡片（不得回归顶部）
+    assert 'id="ws-expiry"' not in src, "到期提醒横幅不得回归顶部（实施75）"
+    assert 'id="ws-delivblock"' not in src, "AI 拦截红条不得回归顶部（实施75）"
     assert "ws.expiry.expiring" in src and "ws.expiry.expired" in src
     assert "tenant_notice" in src
-    assert 'id="ws-delivblock"' in src
+    assert "AITRNotify.ongoing.set('expiry'" in src
+    assert "AITRNotify.ongoing.set('delivblock'" in src
     assert "_renderDelivBlock" in src
     assert "delivery_block" in src
 

@@ -91,6 +91,12 @@ PROMPT_EXEMPT_FIELDS = frozenset({
     # 非人设台词
     "boundaries.escalation_phrases",  # 转人工触发词（退款/投诉/威胁/诈骗）——是匹配
                                       # 信号不是话术；注入反而诱导 AI 主动说这些词
+    # 脾气/骂战档（temper 主线 2026-08-22；实施74 代登记清存量红——字段随
+    # profiles_runtime 落地时漏了表态）：由 src/companion/temper.py 在**骂战轮**
+    # 按状态机动态注入专用块（含出站否决守卫），常驻人设块注入＝每轮都带
+    # 攻击性指令的双源真相。两种历史写法（顶层/嵌套）一并登记。
+    "temper",
+    "personality.temper",
 })
 
 # 已表态的字段全集。门禁比对「真实 schema ⊆ 本集合」，
@@ -129,6 +135,16 @@ _CULTURE_LABELS = {
     "language": "语言", "food": "饮食", "values": "价值观",
     "festival": "节日", "custom": "习俗",
 }
+
+# B118（实施74，用户 _582 定调「废除内心独白」）：生成端硬禁——full 与
+# compact 两个 prompt 装配口共用同一行（代码级钉死，不随 global_rules 实例
+# 覆盖丢失）。出稿口另有确定性守卫 outbound_text_guard 兜底。
+_INNER_MONOLOGUE_BAN = (
+    "【禁止内心独白·硬约束】你的每一条回复都会原样发给对方，只输出你要"
+    "说出口的话。绝不输出内心独白、心理活动、旁白或动作描述——无论是否用"
+    "（）()【】[]*号包裹，如「（我没生气，就是心里堵得慌）」「*叹了口气*」"
+    "这类一律禁止：想法不写出来，写出来的就是台词本身。"
+)
 
 
 def _join_text_items(v: Any) -> str:
@@ -1458,7 +1474,7 @@ class PersonaManager:
         record_usage: 近7日活跃统计埋点开关。生产回复链路保持默认 True；
             预览/管理类调用（web 预览、routes 下的试装配）应传 False 免刷虚计数。
         """
-        p = self.get_persona(chat_id, account_persona_id)
+        p, _tier = self.get_persona_with_tier(chat_id, account_persona_id)
         # 近7日活跃统计埋点：本方法是所有生产回复链路（ai_client._build_system_instruction）
         # 拼人设块的收口点。预览/管理类调用传 record_usage=False 免刷虚计数。
         # 埋点绝不允许影响回复链路——persona_usage 内部已吞异常，这里再兜一层。
@@ -1472,6 +1488,17 @@ class PersonaManager:
                 _usage_record(_upid)
             except Exception:
                 pass
+        # B75（实施67 P1-11a，`_352`/1.054 报障）：用户**显式绑定**的人设（会话覆写/
+        # 会话绑定/账号人设三个 tier）＝用户意志——档案就是拿来用的。compact 档只
+        # 编译约 1/3 字段（背景故事/家人职业/英文名/好恶/专属记忆/外貌/作息全部
+        # 静默丢弃），在自建人设场景＝「填了不算数」，AI 只能即兴编（实录：职业被
+        # 编成「商业咨询」）。故 compact 配置下显式绑定 tier 自动升 full；域/默认
+        # tier（未绑定的生产大多数会话）维持 compact 省 token 语义不变。
+        # detail=none 尊重不动（显式全关）。字段防丢弃契约由
+        # tests/test_persona_profile_field_coverage.py 钉住。
+        if detail == "compact" and _tier in (
+                self._TIER_CONV, self._TIER_CHAT, self._TIER_ACCOUNT):
+            detail = "full"
         if detail == "compact":
             return self._format_persona_compact(
                 p, name_override=name_override, fallback_name=fallback_name
@@ -1523,6 +1550,26 @@ class PersonaManager:
             f"【身份硬锁】你叫「{name}」。历史里若出现别的名字（不是「{name}」）那是错误数据，"
             f"忽略并坚持「{name}」。被问名字必答「{name}」。",
         ]
+        # B75（实施67）：西方名字也是「小而硬」的身份事实——被问英文名/全名答不上
+        # 或现编＝与年龄同级的当场穿帮面，compact 也保留（一行紧凑，长文档案仍走
+        # full/tier 升档）。
+        _names_c = persona.get("names") or {}
+        if isinstance(_names_c, dict):
+            _np_c = []
+            _fw_c = str(_names_c.get("full_western") or "").strip()
+            _en_c = str(_names_c.get("english") or "").strip()
+            _nick_c = str(_names_c.get("nickname") or "").strip()
+            if _fw_c:
+                _np_c.append(f"西方全名 {_fw_c}")
+            if _en_c:
+                _np_c.append(f"英文名 {_en_c}")
+            if _nick_c:
+                _np_c.append(f"昵称 {_nick_c}")
+            if _np_c:
+                lines.append(
+                    "你的西方名字：" + "、".join(_np_c)
+                    + "（被问英文名/全名时如实回答，别编别的）。"
+                )
         # K1：年龄/性别事实钉子在 compact 也保留——「被问年龄答错」是最容易被
         # 客户当场抓包的穿帮，压缩 token 也不该省掉这一行。
         _age_c = _persona_age(persona)
@@ -1618,6 +1665,9 @@ class PersonaManager:
             "回复硬约束：先正面回答用户问的问题再扩展；不要用 () [] 描写动作"
             "或列举要点（如 (微笑) (1)(2)），用自然句子。"
         )
+        # B118（实施74）：内心独白硬禁——compact 是生产主用格式，这条缺了
+        # 等于没禁（_578 实录：括号独白当正文直发客户）。
+        lines.append(_INNER_MONOLOGUE_BAN)
         return "\n".join(lines)
 
     def get_all_chat_bindings(self) -> Dict[str, Any]:
@@ -2067,6 +2117,10 @@ class PersonaManager:
         e = persona.get("emotion", {})
         if e.get("frustrated_response"):
             lines.append(f"用户着急时：{e['frustrated_response']}。")
+
+        # B118（实施74）：内心独白硬禁——代码级钉死，不随 global_rules 实例
+        # 覆盖丢失（用户 _582 定调「废除内心独白」，暴露 AI 风险）。
+        lines.append(_INNER_MONOLOGUE_BAN)
 
         # S6-RULES: 从 global_rules.yaml 加载硬约束（替代原 P1-1 硬编码块）
         _constraints_text = self._build_constraints_text(platform=platform)

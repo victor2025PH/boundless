@@ -116,8 +116,10 @@ class TestSanitizePatch:
             assert spec["hot"] is True, name
             assert spec["default"] == guard_defaults[name], name
         assert prefix + "sweep_legacy" not in rps.FIELDS
+        # 2026-08-24 老板拍板（B34）：每日额度不设业务上限——lo=0（0=不限额，
+        # 与 budget_flags 同语义）、hi=1_000_000（纯技术帽防荒谬输入）。
         bu = rps.FIELDS[prefix + "daily_reply_budget"]
-        assert (bu["lo"], bu["hi"]) == (5, 500)
+        assert (bu["lo"], bu["hi"]) == (0, 1_000_000)
         # repeat_streak_n 下限 2：n=1 时任何非空入站 streak≥1 → 全量降 review
         # 的必炸脚枪，UI 层必须挡住
         assert rps.FIELDS[prefix + "repeat_streak_n"]["lo"] == 2
@@ -153,14 +155,23 @@ class TestSanitizePatch:
             {"inbox.peer_bot_guard.instant_reply_sec": 0})
         assert errors[0]["code"] == "out_of_range"
 
-    def test_guard_budget_clamp_rejects_zero(self):
-        # 0=不限额是 YAML 专属语义（peer_bot_guard.budget_flags 门禁钉住）——
-        # UI 白名单必须拒 0，防运营把 0 当「全拦」或把「全拦」当 0 误设。
-        _, errors = rps.sanitize_patch(
+    def test_guard_budget_open_range(self):
+        # 2026-08-24 老板拍板（B34 落定，内测实录 600 被旧 [5,500] 拒）：
+        # 0=不限额从 YAML 专属语义升为 UI 一等公民（页面提示写明语义），
+        # 正整数不设业务上限；仅留 1_000_000 技术帽与负数拒绝。
+        clean, errors = rps.sanitize_patch(
             {"inbox.peer_bot_guard.daily_reply_budget": 0})
+        assert errors == []
+        assert clean["inbox.peer_bot_guard.daily_reply_budget"] == 0
+        clean, errors = rps.sanitize_patch(
+            {"inbox.peer_bot_guard.daily_reply_budget": 600})
+        assert errors == []
+        assert clean["inbox.peer_bot_guard.daily_reply_budget"] == 600
+        _, errors = rps.sanitize_patch(
+            {"inbox.peer_bot_guard.daily_reply_budget": -1})
         assert errors[0]["code"] == "out_of_range"
         _, errors = rps.sanitize_patch(
-            {"inbox.peer_bot_guard.daily_reply_budget": 501})
+            {"inbox.peer_bot_guard.daily_reply_budget": 1_000_001})
         assert errors[0]["code"] == "out_of_range"
         clean, errors = rps.sanitize_patch({
             "inbox.peer_bot_guard.enabled": "false",

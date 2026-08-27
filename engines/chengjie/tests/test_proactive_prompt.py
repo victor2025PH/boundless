@@ -278,3 +278,51 @@ def test_ritual_prompt_carries_daily_angle_only_without_pending():
                  "conversation_id": "c1"},
         pending_inbound=["以后给你介绍做你老公"])
     assert "今天的切入角" not in p2            # 接茬就是今天的切入角，不再另配
+
+
+# ── 实施53 P2-2 人设当地钟批注（2026-08-22「一会白天一会晚上」延伸修复）──────
+# 日历块管「问候时点」（对方的钟），本批注管「人设自身状态」（自己的钟）——
+# 两个框架显式分工，防 LLM 在两个都正确的时间框架间随机横跳（B 线双时钟教训）。
+
+def test_persona_clock_note_pure_fn_composes_local_frame():
+    import datetime as dt
+
+    from src.utils.proactive_prompt import build_persona_clock_note
+
+    note = build_persona_clock_note(
+        "加拿大·温哥华", dt.datetime(2026, 8, 21, 12, 31), -15.0)
+    assert "加拿大·温哥华" in note
+    assert "8月21日" in note and "周五" in note and "12:31" in note
+    assert "中午" in note                      # 时段词随人设当地小时
+    assert "我这边" in note                    # 单边桥话术
+    assert "问候时点跟它走" in note            # 与日历块显式分工
+    assert "绝不要把自己的作息放进对方的时段" in note
+
+
+def test_persona_clock_note_near_tz_or_missing_returns_empty():
+    import datetime as dt
+
+    from src.utils.proactive_prompt import build_persona_clock_note
+
+    t = dt.datetime(2026, 8, 21, 12, 31)
+    assert build_persona_clock_note("泰国·清迈", t, -1.0) == ""   # <3h 不注入
+    assert build_persona_clock_note("", t, -15.0) == ""            # 缺城市
+    assert build_persona_clock_note("加拿大·温哥华", None, -15.0) == ""  # 缺时刻
+    assert build_persona_clock_note("加拿大·温哥华", t, "bad") == ""     # 脏偏移
+
+
+def test_persona_clock_note_injected_after_calendar_block():
+    import datetime as dt
+
+    from src.utils.proactive_prompt import build_persona_clock_note
+
+    note = build_persona_clock_note(
+        "加拿大·温哥华", dt.datetime(2026, 8, 21, 17, 5), -15.0)
+    p = build_proactive_prompt(
+        "小柔", {"mode": "ritual_morning", "directive": "道一句早安"},
+        persona_clock_note=note)
+    assert "你的当地钟" in p
+    assert p.index("真实日历") < p.index("你的当地钟")  # 紧跟日历块，分工相邻可见
+    p2 = build_proactive_prompt(
+        "小柔", {"mode": "ritual_morning", "directive": "道一句早安"})
+    assert "你的当地钟" not in p2               # 近时区/无居住地恒空=零行为变化

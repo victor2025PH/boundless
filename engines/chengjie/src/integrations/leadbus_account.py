@@ -24,6 +24,18 @@ from typing import Any, Dict, Optional, Tuple
 # 必须保持不在 account_orchestrator.ORCHESTRATED_MODES 内——由门禁钉死。
 PERSONAL_RPA_MODE = "personal_rpa"
 
+# leadbus 线索落库时合成的占位文案前缀（leadbus_routes 写入 / auto_draft 闸门消费，
+# 两侧必须同源——别在任何一侧手写字面量）。语义＝「捕获到一个潜在线索」的系统标记，
+# **不是客户真实发言**：自动拟稿对它生成回复没有意义（2026-08-18 实锤：52 条线索
+# 批量落库 → LLM 给每条占位符拟了「诶？这是什么意思呀」→ autosend 逐条撞
+# 「WhatsApp 服务未启用」刷 WARNING 触发 triage 告警）。
+LEAD_CAPTURE_PREFIX = "[线索捕获]"
+
+
+def is_lead_capture_text(text: Any) -> bool:
+    """判定一条入站文本是否 leadbus 合成的线索占位符（而非客户真实消息）。"""
+    return str(text or "").lstrip().startswith(LEAD_CAPTURE_PREFIX)
+
 
 def resolve_lead_account(source: Optional[Dict[str, Any]]) -> Tuple[str, bool]:
     """从 leadbus 信封 ``source`` 段解析线索该归属的账号。
@@ -73,4 +85,10 @@ def register_lead_account(
         return False
 
 
-__all__ = ["PERSONAL_RPA_MODE", "resolve_lead_account", "register_lead_account"]
+__all__ = [
+    "PERSONAL_RPA_MODE",
+    "LEAD_CAPTURE_PREFIX",
+    "is_lead_capture_text",
+    "resolve_lead_account",
+    "register_lead_account",
+]

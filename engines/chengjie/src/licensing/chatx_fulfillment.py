@@ -132,6 +132,46 @@ TOPUP_SKU_TOKENS: Dict[str, int] = {
     "token-pack-xl": 1_000_000,
 }
 
+# ── Token 充值档（2026-08-21 充值唯一化；实施50）─────────────────────────────
+# 与官网 website/lib/chatx-pricing.ts::RECHARGE_TIERS / NEWBIE_PACK **同批改**
+# （门禁 tests/test_recharge_fulfillment.py::test_recharge_specs_match_website_source
+#  在两仓同机时交叉钉住；独立 CI 自动跳过）。
+#
+# 履约形态＝topup 凭证带 **chars**（1 Token = 100 字符，token_ledger.CHARS_PER_TOKEN_LEGACY
+# 同口径）：生产扣减当前只强制字符池（Token 钱包默认关、消费点未接线），发 tokens 等于
+# 给客户一笔「现在花不动」的余额；发 chars 立刻可用，钱包上线后按官网公示 1:1 并账。
+# 刻意**不双发** chars+tokens（并账时会双份到账）。
+# 有效期（12/24 个月）当前在字符池层无强制（license_char_topup 无过期列）——
+# 结果=客户只多不少，与「退款回收加赠」同属钱包批次上线后的收紧项。
+RECHARGE_TOKENS_PER_USD = 1_500
+RECHARGE_CHARS_PER_TOKEN = 100  # 并账口径 = token_ledger.CHARS_PER_TOKEN_LEGACY
+
+#: 普通充值档：usd=挂牌价；first_bonus_pct=首笔充值一次性加赠（每人一次，
+#: 判定=同 contact_core / 同机器指纹的历史已付普通充值单，见 is_first_recharge）。
+RECHARGE_SKU_SPECS: Dict[str, Dict[str, int]] = {
+    "recharge-50":    {"usd": 50,    "first_bonus_pct": 0},
+    "recharge-100":   {"usd": 100,   "first_bonus_pct": 5},
+    "recharge-200":   {"usd": 200,   "first_bonus_pct": 10},
+    "recharge-500":   {"usd": 500,   "first_bonus_pct": 20},
+    "recharge-1000":  {"usd": 1000,  "first_bonus_pct": 30},
+    "recharge-5000":  {"usd": 5000,  "first_bonus_pct": 35},
+    "recharge-10000": {"usd": 10000, "first_bonus_pct": 40},
+}
+
+#: 新人首充大礼包：6U = 18,000 Token（2 倍率）；注册 72h 内、每账号一次、
+#: 刻意不占用首充加赠资格（官网口径）。注册锚=试用台账 claim.created_at。
+NEWBIE_SKU = "recharge-newbie-6"
+NEWBIE_TOKENS = 18_000
+NEWBIE_WINDOW_HOURS = 72
+
+#: VIP 累充等级（实施50 P2）：**复充**按客户累计已付充值（严格早于本单的
+#: paid/activated 充值单，含新人包，按 SKU 挂牌价累计）阶梯加赠——
+#: 「复充回归基准价」自此升级为「复充按 VIP 等级加赠」。首充加赠（最高 +40%，
+#: 一次性）不与 VIP 叠加：首单走首充档，之后每一单走 VIP 档。
+#: 比例刻意克制（永久性加赠 ≤ +8% vs 一次性首充 +40%）保毛利；
+#: 与官网 chatx-pricing.ts::VIP_REPEAT_BONUS_TIERS 同批改（跨仓门禁钉住）。
+VIP_REPEAT_BONUS_TIERS: List[tuple] = [(500, 3), (2000, 5), (10000, 8)]
+
 # 已知但不可自动履约（转人工；理由见模块 docstring）。charpack 已迁 TOPUP（P4c）。
 MANUAL_SKUS = frozenset()
 
@@ -262,6 +302,12 @@ REFERRAL_INVITER_CHARS = 100_000
 #: 即弃的女巫账号」，同时顺手激励邀请人帮好友把产品用起来。
 REFERRAL_QUALIFY_CHARS = 10_000
 
+#: 加码发奖（里程碑/首充返利，实施50 P1）单笔上限——**厂商机侧的私钥护栏**：
+#: 金额由官网 bonus_due 计算，但签名端绝不能是官网说多少签多少的橡皮章。
+#: 合法上限=返利封顶 100U 等值（100×1,500 Token×100 字符/Token=15,000,000 字符）；
+#: 里程碑最大档 1,000,000 字符远在其内。超限条目跳过并大声点名（宁可漏发不错发）。
+REFERRAL_BONUS_MAX_CHARS = 15_000_000
+
 
 def build_trial_payload(
     *,
@@ -312,10 +358,11 @@ def build_trial_payload(
 def is_chatx_order(order: Dict[str, Any]) -> bool:
     """该 website 订单是否属于 chatx（zhiliao）。sku_id 前缀优先，product_id 兜底。
 
-    Token 包（token-pack-*）挂 zhiliao 名下（跨 ChatX/LingoX 通用钱包，registry 归属）。
+    Token 包（token-pack-*）与充值档（recharge-*）挂 zhiliao 名下
+    （跨 ChatX/LingoX 通用钱包，registry 归属）。
     """
     sku = str((order or {}).get("sku_id") or "")
-    if sku.startswith("chatx") or sku.startswith("token-pack"):
+    if sku.startswith("chatx") or sku.startswith("token-pack") or sku.startswith("recharge"):
         return True
     return str((order or {}).get("product_id") or "") == "zhiliao"
 
@@ -438,6 +485,8 @@ def manual_followup_orders(
     命中：本引擎订单（chatx/lingox）且未处理未回填，但**license 与 topup 凭证两条
     自动通道都映射不出**（老单缺 sku / 未知 sku / charpack 缺 contact 没绑定面）。
     静默跳过会漏单，必须可见。
+    充值档（recharge-*）刻意不在本函数点名——它们由 ``plan_recharge_fulfillment``
+    专责（自带 manual 队列与**具体原因**，比这里的笼统点名信息量大）。
     """
     done = done_ids or set()
     out: List[Dict[str, Any]] = []
@@ -447,7 +496,295 @@ def manual_followup_orders(
             continue
         if not is_chengjie_order(o):
             continue
+        if is_recharge_sku(str((o or {}).get("sku_id") or "")):
+            continue
         if (fulfillment_payload_for_order(o) is None
                 and topup_voucher_args_for_order(o) is None):
             out.append(o)
     return out
+
+
+# ── 充值档履约（2026-08-21 充值唯一化；实施50）───────────────────────────────
+# 纯函数：首充判定 / 新人包资格 / 凭证参数 / 履约规划。HTTP、签名、state 仍由
+# fulfill_chatx_watch.py 薄壳注入。所有判定都从**官网台账真相**（订单历史 + 试用
+# claim）现算，刻意不建本地「首充台账」——无状态推导自愈且可审计，厂商机 state
+# 文件丢了也不会重复发加赠（历史订单还在）。
+
+def is_recharge_sku(sku: str) -> bool:
+    """是否充值档 SKU（含新人包）。"""
+    s = str(sku or "").strip()
+    return s in RECHARGE_SKU_SPECS or s == NEWBIE_SKU
+
+
+def _parse_iso_epoch(value: Any) -> float:
+    """ISO 8601（官网订单 t / 试用 created_at，含尾缀 Z）→ epoch 秒；解析失败 → 0。"""
+    s = str(value or "").strip()
+    if not s:
+        return 0.0
+    try:
+        from datetime import datetime, timezone
+
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except Exception:
+        return 0.0
+
+
+def _norm_fp(value: Any) -> str:
+    """机器指纹归一（比对用）：去分隔、大写。空/无内容 → 空串。"""
+    s = str(value or "").strip().upper().replace("-", "").replace(" ", "")
+    return s
+
+
+def _order_epoch(order: Dict[str, Any]) -> float:
+    """订单时间锚：优先创建时刻 t（新人 72h 窗按下单时刻算，付款确认可能晚几分钟——
+    按 t 判对客户更有利且不受对账延迟影响）；缺 t 回退 paid_at。"""
+    return _parse_iso_epoch((order or {}).get("t")) or _parse_iso_epoch(
+        (order or {}).get("paid_at"))
+
+
+def _same_person(order_a: Dict[str, Any], order_b: Dict[str, Any]) -> bool:
+    """两笔订单是否同一客户：contact_core 相等（非空）或机器指纹相等（非空）。"""
+    from src.licensing.topup_voucher import contact_core
+
+    ca = contact_core(str((order_a or {}).get("contact") or ""))
+    cb = contact_core(str((order_b or {}).get("contact") or ""))
+    if ca and cb and ca == cb:
+        return True
+    fa = _norm_fp((order_a or {}).get("fingerprint"))
+    fb = _norm_fp((order_b or {}).get("fingerprint"))
+    return bool(fa and fb and fa == fb)
+
+
+def _person_recharge_orders(
+    order: Dict[str, Any],
+    history: Optional[List[Dict[str, Any]]],
+    *,
+    newbie: bool,
+    include_all: bool = False,
+) -> List[Dict[str, Any]]:
+    """同一客户名下的已付充值单（paid/activated；newbie 开关选普通档或新人包，
+    include_all=True 时两类都要——VIP 累充口径）。
+
+    含 order 本身（若不在 history 里则补入）——排序定谁是「第一笔」要用。
+    退款单天然不入池：watcher 只拉 paid/activated，且本函数按 status 过滤——
+    官网把单改成 refunded 后，首充/新人/VIP 判定自动把它当不存在。
+    """
+    if include_all:
+        sku_ok = is_recharge_sku
+    else:
+        sku_ok = ((lambda s: s == NEWBIE_SKU) if newbie
+                  else (lambda s: s in RECHARGE_SKU_SPECS))
+    oid = str((order or {}).get("id") or "")
+    pool: List[Dict[str, Any]] = []
+    seen_ids: set = set()
+    for o in list(history or []) + [order]:
+        i = str((o or {}).get("id") or "")
+        if not i or i in seen_ids:
+            continue
+        if str((o or {}).get("status") or "") not in ("paid", "activated"):
+            continue
+        if not sku_ok(str((o or {}).get("sku_id") or "")):
+            continue
+        if i != oid and not _same_person(order, o):
+            continue
+        seen_ids.add(i)
+        pool.append(o)
+    return pool
+
+
+def is_first_recharge(
+    order: Dict[str, Any],
+    history: Optional[List[Dict[str, Any]]],
+) -> bool:
+    """本单是否该客户的**首笔**普通充值（享一次性加赠）。
+
+    判定＝同客户全部已付普通充值单按 (时间, 订单号) 排序后的第一笔是不是本单——
+    确定性并列裁决：两笔同时到账也只有一笔拿加赠（无状态、可重放，不依赖处理顺序）。
+    新人包（NEWBIE_SKU）刻意不入池：官网口径「新人包不占用首充资格」。
+    """
+    pool = _person_recharge_orders(order, history, newbie=False)
+    if not pool:
+        return True
+    pool.sort(key=lambda o: (_order_epoch(o), str(o.get("id") or "")))
+    return str(pool[0].get("id") or "") == str((order or {}).get("id") or "")
+
+
+def repeat_bonus_pct(cumulative_usd: float) -> int:
+    """VIP 累充等级 → 复充加赠百分比（未达最低门槛 = 0）。"""
+    pct = 0
+    for threshold, tier_pct in VIP_REPEAT_BONUS_TIERS:
+        if cumulative_usd >= threshold:
+            pct = int(tier_pct)
+    return pct
+
+
+def cumulative_recharge_usd_before(
+    order: Dict[str, Any],
+    history: Optional[List[Dict[str, Any]]],
+) -> int:
+    """本单之前（严格按 (时间, 订单号) 早于本单）该客户累计已付充值（USD）。
+
+    金额取 **SKU 挂牌价**而非订单 amount——amount 是客户端提交值，挂牌价才是
+    不可伪造的口径（付款对账已保证钱真到了，但 VIP 档位按台账价累计更保守）。
+    含新人包（6U 也是真金白银）。同时刻并付的单互不计入（strictly-before 语义
+    与 is_first_recharge 的并列裁决一致：谁都不能靠「同秒的另一单」升档）。
+    """
+    self_key = (_order_epoch(order), str((order or {}).get("id") or ""))
+    total = 0
+    for o in _person_recharge_orders(order, history, newbie=False, include_all=True):
+        if str(o.get("id") or "") == str((order or {}).get("id") or ""):
+            continue
+        if (_order_epoch(o), str(o.get("id") or "")) >= self_key:
+            continue
+        sku = str(o.get("sku_id") or "")
+        if sku == NEWBIE_SKU:
+            total += 6
+        elif sku in RECHARGE_SKU_SPECS:
+            total += int(RECHARGE_SKU_SPECS[sku]["usd"])
+    return total
+
+
+def _claims_for_person(
+    order: Dict[str, Any],
+    claims: Optional[List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    """试用台账里属于本单客户的 claim（指纹或 contact_core 匹配）。"""
+    from src.licensing.topup_voucher import contact_core
+
+    fp = _norm_fp((order or {}).get("fingerprint"))
+    cc = contact_core(str((order or {}).get("contact") or ""))
+    out: List[Dict[str, Any]] = []
+    for c in claims or []:
+        cfp = _norm_fp((c or {}).get("fingerprint"))
+        ccc = contact_core(str((c or {}).get("contact") or ""))
+        if (fp and cfp and cfp == fp) or (cc and ccc and ccc == cc):
+            out.append(c)
+    return out
+
+
+def newbie_eligibility(
+    order: Dict[str, Any],
+    history: Optional[List[Dict[str, Any]]],
+    claims: Optional[List[Dict[str, Any]]],
+) -> tuple:
+    """新人包资格：(ok, reason)。
+
+    - 每账号一次：同客户已付新人包单里按 (时间, 订单号) 排序的第一笔才放行
+      （与 is_first_recharge 同款确定性裁决）→ 其余 ``newbie_already_claimed``；
+    - 72h 窗：注册锚=该客户**最早**的试用 claim.created_at；下单时刻超窗 →
+      ``newbie_window_passed``。台账里找不到 claim（先付费后装机的新客）→ 放行
+      （首触即注册语义；官网下单闸另有同口径预检，见 website/lib/newbie-gate.ts）。
+    - claims=None（台账拉取失败）→ 按「无 claim」放行：新人包客单价 6U，
+      挡住全部新客履约比多发几单的代价大得多；每账号一次仍由订单历史强制。
+    """
+    pool = _person_recharge_orders(order, history, newbie=True)
+    if pool:
+        pool.sort(key=lambda o: (_order_epoch(o), str(o.get("id") or "")))
+        if str(pool[0].get("id") or "") != str((order or {}).get("id") or ""):
+            return False, "newbie_already_claimed"
+    mine = _claims_for_person(order, claims)
+    if mine:
+        reg = min(_parse_iso_epoch(c.get("created_at")) or float("inf") for c in mine)
+        ordered_at = _order_epoch(order)
+        if reg != float("inf") and ordered_at > reg + NEWBIE_WINDOW_HOURS * 3600:
+            return False, "newbie_window_passed"
+    return True, ""
+
+
+def recharge_voucher_decision(
+    order: Dict[str, Any],
+    *,
+    history: Optional[List[Dict[str, Any]]] = None,
+    claims: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """一笔 paid 充值单 → 履约决定。
+
+    返回三态：
+      {"action": "issue", "args": {chars, ref, customer, note}, "meta": {...}}
+      {"action": "manual", "reason": "..."}   —— 需人工（缺绑定面/资格不符/托管单）
+      {"action": "skip"}                       —— 非充值单（调用方走其它通道）
+    凭证载荷=chars（tokens×100，理由见 RECHARGE_SKU_SPECS 段注释）；meta 带 Token
+    口径明细供日志/审计。
+    """
+    from src.licensing.order_delivery import is_hosted_order
+
+    sku = str((order or {}).get("sku_id") or "").strip()
+    if not is_recharge_sku(sku):
+        return {"action": "skip"}
+    if is_hosted_order(order):
+        return {"action": "manual", "reason": "hosted_order"}
+    contact = str((order or {}).get("contact") or "").strip()
+    oid = str((order or {}).get("id") or "").strip()
+    if not contact or not oid:
+        return {"action": "manual", "reason": "missing_contact"}
+
+    if sku == NEWBIE_SKU:
+        ok, reason = newbie_eligibility(order, history, claims)
+        if not ok:
+            return {"action": "manual", "reason": reason}
+        tokens = NEWBIE_TOKENS
+        note = f"{sku} newbie x2 tokens={tokens} (1tk={RECHARGE_CHARS_PER_TOKEN}chars)"
+        meta = {"tokens": tokens, "base_tokens": tokens, "bonus_tokens": 0,
+                "first_charge": False, "bonus_pct": 0}
+    else:
+        spec = RECHARGE_SKU_SPECS[sku]
+        base = int(spec["usd"]) * RECHARGE_TOKENS_PER_USD
+        first = is_first_recharge(order, history)
+        vip_pct = 0
+        cum_usd = 0
+        if first:
+            pct = int(spec["first_bonus_pct"])
+            tag = f"first_charge+{pct}%" if pct else "first_charge"
+        else:
+            # 复充走 VIP 累充等级（实施50 P2）：按本单之前的累计已付充值定档。
+            cum_usd = cumulative_recharge_usd_before(order, history)
+            vip_pct = repeat_bonus_pct(cum_usd)
+            pct = vip_pct
+            tag = f"repeat_vip+{pct}%(cum={cum_usd}U)" if pct else "repeat"
+        bonus = base * pct // 100
+        tokens = base + bonus
+        note = (f"{sku} {tag} tokens={tokens} (base {base} + bonus {bonus}; "
+                f"1tk={RECHARGE_CHARS_PER_TOKEN}chars)")
+        meta = {"tokens": tokens, "base_tokens": base, "bonus_tokens": bonus,
+                "first_charge": first, "bonus_pct": pct,
+                "vip_pct": vip_pct, "cum_usd": cum_usd}
+    return {
+        "action": "issue",
+        "args": {"chars": tokens * RECHARGE_CHARS_PER_TOKEN, "ref": oid,
+                 "customer": contact, "note": note},
+        "meta": meta,
+    }
+
+
+def plan_recharge_fulfillment(
+    orders: List[Dict[str, Any]],
+    done_ids: Optional[set] = None,
+    *,
+    history: Optional[List[Dict[str, Any]]] = None,
+    claims: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, List[tuple]]:
+    """从 paid 订单挑出充值单并给出履约计划：{"issue": [(order, args, meta)], "manual": [(order, reason)]}。
+
+    与 select_topup_fulfillable 同款幂等跳过（无 id/已处理/已回填 code）。
+    ``history`` 建议传 paid+activated 全量（首充/每账号一次判定的数据面），
+    ``claims`` 传试用台账列表（新人 72h 窗）——两者缺省时判定按保守放行语义
+    退化（见 newbie_eligibility / is_first_recharge docstring）。
+    """
+    done = done_ids or set()
+    issue: List[tuple] = []
+    manual: List[tuple] = []
+    for o in orders or []:
+        oid = str((o or {}).get("id") or "")
+        if not oid or oid in done or (o or {}).get("code"):
+            continue
+        if not is_recharge_sku(str((o or {}).get("sku_id") or "")):
+            continue
+        d = recharge_voucher_decision(o, history=history, claims=claims)
+        if d["action"] == "issue":
+            issue.append((o, d["args"], d["meta"]))
+        elif d["action"] == "manual":
+            manual.append((o, d["reason"]))
+    return {"issue": issue, "manual": manual}

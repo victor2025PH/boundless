@@ -113,6 +113,11 @@ xyc2026/trustcheck.db
 # agent 临时验收/探针产物（根目录 scratch 约定 _tmp_* 前缀）与登录二维码截图
 _tmp_*
 tmp_tg_qr.png
+# scratch 一律不入库（2026-08-27 大收口前补全）：上面三条 tmp 规则是零散加的，
+# 漏掉了 tmp_198_logs/ 这类事故排查目录——里面是 579KB 后端日志、一次性探针脚本
+# （q.py/q2.py…），以及 msg_secrets.json（Messenger e2ee_pin，**真凭据**）。
+# 差点随一次性大收口进版本库；tmp_ 前缀本就是本仓的 scratch 约定，这里补成通配。
+tmp_*
 # QA 截图缓存（与 .hand-shots / .icon-shots 同族；qa-wizard-shots.mjs 脚本本身仍入库）
 website/.wizard-shots/
 website/.wizard-shots-en/

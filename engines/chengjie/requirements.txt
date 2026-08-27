@@ -36,11 +36,13 @@ cryptography>=42.0.0
 # 失败时模块会自动降级（捕获 ImportError），但生产部署仍应显式安装。
 watchdog>=3.0.0
 
-# L2/L2b 文档翻译：.docx/.xlsx 带版式整篇翻译 + .pdf 文本抽取翻译
-# （src/ai/document_file_translate.py）。任一缺失时对应格式软失败，不影响其他翻译能力。
+# L2/L2b/P1 文档翻译：.docx/.xlsx/.pptx 带版式整篇翻译 + .pdf 文本抽取翻译
+# + .srt/.vtt 字幕保时间轴翻译（零依赖）（src/ai/document_file_translate.py）。
+# 任一缺失时对应格式软失败，不影响其他翻译能力。
 python-docx>=1.1.0
 openpyxl>=3.1.0
 pdfminer.six>=20221105
+python-pptx>=1.0.0
 
 # 命理技能八字排盘（src/companion/bazi_engine.py 软依赖；缺失时命理技能优雅不注入）
 # 纯 Python 零依赖：干支历/四柱/十神/五行/大运流年（MIT，6tail/lunar-python）
@@ -99,6 +101,10 @@ brotli>=1.1.0
 # 中文姓名拼音变体（persona_guard 错误自称名守卫：CJK 人设名 → 罗马化白名单，
 # 防「I'm Lin Xiaoyu」这类正确英文自称被误拦；纯 Python 无二进制依赖，缺库软降级）
 pypinyin>=0.53.0
+
+# 简→繁 UI 词包生成（scripts/i18n_hant.py，s2twp 台湾用语短语级转换；纯 Python。
+# 仅 regen 繁体词包时用到——运行时与测试都不 import，产物 zh_hant_auto.py 随仓库走）
+opencc-python-reimplemented>=0.1.7
 
 # 视频理解依赖系统 ffmpeg/ffprobe（抽画面帧 + 抽音轨；Dockerfile 已装）。
 # 视频音轨复用 faster-whisper ASR；画面帧复用 Pillow 拼图 + Vision。

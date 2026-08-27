@@ -6,8 +6,7 @@
 - **tg/wa 注册表契约**：状态枚举合法 / bridge 必有合法目标 / i18n 双语齐平
   （能力 id 全复用首批词表＝零新键，此处防有人加新 id 忘补词条）；
 - **承重事实钉**（与 worker 代码实测同源，改 worker 能力必须同步这里）：
-  quote_reply workspace=none（2026-08-14 三平台工作台引用入口整体下线，老板拍板；
-  worker 的 reply_to 透传代码保留，恢复前置=quote_applied 回执）；
+  quote_reply workspace=ok（2026-08-19 恢复：quote_applied 回执 + 条件镜像）；
   两平台原生页为完整注入档（受控出站
   链在）→ autosend native=assist（≠ msgr 的 none）——两面都能自动化，正是
   tg/wa 必须上驾驶权锁的原因；
@@ -65,10 +64,8 @@ def test_registry_telegram_core_rows_pinned():
     for cap in ("send_text", "send_media", "mark_read", "typing"):
         assert by_id[cap]["workspace"] == "ok", cap
         assert by_id[cap]["native"] == "ok", cap
-    # 引用回复（2026-08-14 工作台入口整体下线，老板拍板）：链路无 quote_applied 回执、
-    # 镜像无条件渲染引用条 →「坐席见引用、手机端没有」（173 实录）→ UI 入口已删，
-    # workspace=none 是诚实态（worker send(reply_to=) 代码保留，恢复前置=回执落地）。
-    assert by_id["quote_reply"]["workspace"] == "none"
+    # 引用回复（2026-08-19）：quote_applied 回执落地后工作台入口对 TG/WA 重开。
+    assert by_id["quote_reply"]["workspace"] == "ok"
     assert by_id["quote_reply"]["native"] == "ok"
     # 表情回应：两侧 worker 均无方法，原生页先顶
     assert by_id["reaction_out"]["workspace"] == "none"
@@ -89,9 +86,8 @@ def test_registry_whatsapp_core_rows_pinned():
     for cap in ("send_text", "send_media", "mark_read", "typing"):
         assert by_id[cap]["workspace"] == "ok", cap
         assert by_id[cap]["native"] == "ok", cap
-    # 引用回复（2026-08-14 三平台同刀下线）：WA Baileys quoted 透传可用但工作台
-    # 不再提供引用入口 → workspace=none（worker 代码保留）。
-    assert by_id["quote_reply"]["workspace"] == "none"
+    # 引用回复（2026-08-19）：quote_applied 回执落地，工作台入口重开。
+    assert by_id["quote_reply"]["workspace"] == "ok"
     assert by_id["reaction_out"]["workspace"] == "none"
     assert by_id["autosend"]["workspace"] == "ok"
     assert by_id["autosend"]["native"] == "assist"

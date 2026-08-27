@@ -53,7 +53,9 @@
                   (i18n or {}).get('ldov_s2','载入界面…'),
                   (i18n or {}).get('ldov_s3','准备数据…') ]|tojson }};
   var SLOW={{ (i18n or {}).get('ldov_slow','首次载入较慢，再次打开会快很多')|tojson }};
-  var rot=null, slowT=null, hardT=null;
+  var NAVFAIL={{ (i18n or {}).get('ldov_navfail','页面未能打开')|tojson }};
+  var NAVRETRY={{ (i18n or {}).get('ldov_navfail_retry','重试打开')|tojson }};
+  var rot=null, slowT=null, hardT=null, navDest='';
 
   function cycle(){
     var i=0;
@@ -69,13 +71,42 @@
     clearInterval(rot); clearTimeout(slowT); clearTimeout(hardT);
     if(el && el.className.indexOf('blLoad-done')<0) el.className+=' blLoad-done';
   }
-  function show(){
+  // B95（实施68 P1-14）：L2 遮罩超时散开时若还停在原文档＝这次点击的导航被
+  // 吞掉/被登录跳转打断（skuio 实录「正在连接…→ 弹回后台首页」零报错）。
+  // 禁止静默——顶部出显式提示条：目标路径 + 重试 + 可关。导航最终真完成时
+  // 本文档整个被替换，条随之消亡，不会误留。
+  function navFailNote(){
+    if(!navDest) return;
+    var old=document.getElementById('blNavFail'); if(old) old.remove();
+    var n=document.createElement('div');
+    n.id='blNavFail';
+    n.setAttribute('style','position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:99997;'
+      +'display:flex;align-items:center;gap:10px;max-width:92vw;padding:8px 14px;border-radius:10px;'
+      +'background:#2a1520;border:1px solid #a4485c;color:#ffd7de;font-size:13px;'
+      +'font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;'
+      +'box-shadow:0 6px 24px rgba(0,0,0,.45);');
+    var txt=document.createElement('span');
+    txt.textContent=NAVFAIL+': '+navDest;
+    var btn=document.createElement('button');
+    btn.textContent=NAVRETRY;
+    btn.setAttribute('style','border:1px solid #a4485c;background:transparent;color:#ffd7de;'
+      +'border-radius:8px;padding:3px 10px;cursor:pointer;font-size:12px;');
+    btn.onclick=function(){ var d=navDest; n.remove(); if(d) location.assign(d); };
+    var x=document.createElement('span');
+    x.textContent='\u2715';
+    x.setAttribute('style','cursor:pointer;opacity:.7;padding:2px 4px;');
+    x.onclick=function(){ n.remove(); };
+    n.appendChild(txt); n.appendChild(btn); n.appendChild(x);
+    if(document.body) document.body.appendChild(n);
+  }
+  function show(dest){
     if(!el) return;
+    navDest=(typeof dest==='string')?dest:'';
     el.className=el.className.replace(/\s*blLoad-done/g,'');
     cycle();
     clearTimeout(hardT);
-    // 导航被取消/失败时不能把人锁住
-    hardT=setTimeout(hide,15000);
+    // 导航被取消/失败时不能把人锁住；但散开必须带解释（见 navFailNote）
+    hardT=setTimeout(function(){ hide(); navFailNote(); },15000);
   }
 
   cycle();
@@ -98,7 +129,8 @@
     var u; try{ u=new URL(a.href,location.href); }catch(_){ return; }
     if(u.origin!==location.origin) return;
     if(u.pathname===location.pathname&&u.search===location.search) return;  // 同页锚点
-    show();
+    // winname 链接经 __openUnique 开命名窗口（本文档不导航）：不记 dest，防误报「未打开」
+    show(a.hasAttribute('data-winname')?'':(u.pathname+u.search));
   },true);
 })();
 </script>

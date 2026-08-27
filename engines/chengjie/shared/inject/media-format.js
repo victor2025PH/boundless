@@ -27,13 +27,15 @@ function formatMediaResult(kind, res) {
   return { ok: true, label: label, original: original, translated: translated, note: "" };
 }
 
-// 后端常见 reason → 中文提示（便于坐席判断是"未启用"还是"无后端"还是"识别空"）
+// 后端常见 reason → 中文提示（便于坐席判断是"未启用"还是"无后端"还是"识别空"）。
+// B27（2026-08-21）：兜底文案人话化——配置键绝不出现在用户界面（此表只在老后端
+// 不带 message 时才用，新后端 message 已是人话）。
 const REASON_TEXT = {
-  vision_disabled: "图像识别未启用（config.vision.enabled）",
+  vision_disabled: "图像识别服务未接入，请更新到最新版；若仍不行请联系客服",
   no_vision_backend: "未配置可用的图像识别后端",
   ocr_error: "图像识别出错",
   no_text: "图片中未识别到文字",
-  asr_disabled: "语音转写未启用（config.audio_pipeline.enabled）",
+  asr_disabled: "语音转写服务未接入，请更新到最新版；若仍不行请联系客服",
   asr_error: "语音转写出错",
   asr_failed: "语音转写失败",
   no_speech: "未识别到语音内容",

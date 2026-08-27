@@ -1208,6 +1208,25 @@ class GoalStore:
             return []
         return [self._row_to_goal(r) for r in rows]
 
+    def list_missed_window(
+        self, lo: float, hi: float, *, limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """[lo, hi) 窗口内 failed/expired 目标行（AI 价值周报三分法取数口，
+        P4 2026-08-18）。与 ``list_missed_unnotified`` 的差别＝纯窗口、无幂等
+        标记过滤——周报是回看口径，进过失守日报的目标同样要计入本周叙事。
+        最新失守在前（探测预算内优先看最近的）。绝不抛。"""
+        lim = max(1, min(int(limit or 50), 200))
+        try:
+            rows = self._conn.execute(
+                "SELECT * FROM goals WHERE status IN ('failed','expired')"
+                " AND done_at >= ? AND done_at < ?"
+                " ORDER BY done_at DESC LIMIT ?",
+                (float(lo or 0.0), float(hi or 0.0), lim),
+            ).fetchall()
+        except Exception:
+            return []
+        return [self._row_to_goal(r) for r in rows]
+
     def find_recent_terminal_goal(
         self,
         *,

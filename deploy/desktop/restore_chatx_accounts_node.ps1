@@ -18,6 +18,9 @@
 #   data\sessions\                       telegram/LINE protocol session files
 #   data\*-sessions\                     sidecar logins (whatsapp/messenger profiles)
 # Everything else (chat dbs, caches, logs, kb, media) stays factory-fresh.
+# CROSS-REF: the uninstaller's "keep my data" copy (desktop/build/installer.nsh
+# customHeader, cxKeepDetail) is the user-facing rendering of this same
+# inventory -- if this keep-list changes shape, update that copy too.
 #
 # ASCII-only on purpose (PS 5.1 GBK lesson). Never matches the CJK dir name --
 # the backup dir is found by SHAPE (contains data\config\config.yaml) and the

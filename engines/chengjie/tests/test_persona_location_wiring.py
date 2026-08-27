@@ -74,6 +74,10 @@ def test_inject_scene_state_writes_local_time_keys():
     sm.logger = MagicMock()
     sm.config = MagicMock()
     sm.config.config = {"companion": {"weather": {"enabled": False}}}
+    # 时空接地 2026-08-02 从 scene_state 解耦成独立方法后经 self 委托——
+    # spec-mock 会把该委托吞成 no-op（时间键从此不写=测试名存实亡），
+    # 绑回真方法才是本测试想钉的链路（stale-red 对齐 2026-08-18）。
+    sm._inject_time_grounding = SkillManager._inject_time_grounding.__get__(sm)
 
     ctx: dict = {}
     # 绑定真实方法

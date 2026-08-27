@@ -34,6 +34,18 @@
   if (!Base) { console.error("cp-goal: CpPanelBase 未加载"); return; }
 
   const LANG = (root.CopilotShared && root.CopilotShared.lang) === "en" ? "en" : "zh";
+  /* i18n P0（2026-08-19）：今日意图展示态——en UI 优先载荷的 intent_en
+     （templates.py 同池英文变体），缺失回落中文原文（旧后端/存量行零破坏）。
+     注意：发给拟稿链的**指令**仍用中文 intent 本体（prompt 口径不变），
+     只有「给坐席看」的文案走本函数。 */
+  function intentDisp(o) {
+    if (!o) return "";
+    if (LANG === "en") {
+      const en = String(o.intent_en || "");
+      if (en) return en;
+    }
+    return String(o.intent || "");
+  }
   const TERMINAL = { done: 1, failed: 1, expired: 1, cancelled: 1 };
   const AUTONOMY = ["observe", "suggest", "auto"];
   const PUSH_LEVELS = ["none", "soft", "direct"];
@@ -47,8 +59,14 @@
   const DRAFT_KEY_PREFIX = "cp_goal_form_draft_v1:";
   const DRAFT_TTL_MS = 24 * 3600 * 1000;
   const UNDO_MS = 5000;
-  // 场景卡分组序（模板 kind → 组；未知 kind 追加到尾部「其他」组）
-  const KIND_ORDER = ["conversion", "relationship", "engagement", "discovery"];
+  // 场景卡分组序（模板 kind → 组；未知 kind 追加到尾部「其他」组）。
+  // 2026-08-18 摸底置顶：组序=经营漏斗序（先摸清客户 → 建关系 → 转化收钱 →
+  // 救流失），不是「谁最想要钱」序——入口引导坐席按正确顺序开目标，摸底产出的
+  // 画像（年龄/职业/预算）直接反哺后面转化目标的选品与报价。
+  const KIND_ORDER = ["discovery", "conversion", "relationship", "engagement"];
+  // 完成通知链路状态（模块级缓存 5min：跨会话/跨组件实例共享一次探测；
+  // 端点未装载（旧后端/重启窗未到）→ data=null → 整行隐藏＝特性探测，绝不裸奔）
+  const NOTIFY_STATUS = { at: 0, data: null, inflight: false };
   // 摸底槽位 chips 回落表（后端 pickers.discovery_slots 优先；与 profile_slots 登记对齐）
   const FALLBACK_DISCOVERY_SLOTS = [
     { key: "age", track: "relation", label_zh: "年龄", label_en: "Age" },
@@ -272,6 +290,11 @@
                        margin-top:-4px; border-radius:50%; background:inherit;
                        box-shadow:0 0 0 1px var(--cp-surface,#fff); }
       .gl-seg.done { background:var(--cp-ok,#0f9d75); }
+      /* P3b 时间兑底段：虚纹=「节奏保底走到的」，与实心信号段诚实区分 */
+      .gl-seg.done.time { background:repeating-linear-gradient(90deg,
+                          var(--cp-ok,#0f9d75) 0 4px, transparent 4px 7px); }
+      .gl-seg.cur.time { background:repeating-linear-gradient(90deg,
+                         var(--cp-accent,#4f46e5) 0 4px, transparent 4px 7px); }
       .gl-seg.cur { background:var(--cp-accent,#4f46e5);
                     box-shadow:0 0 0 1px color-mix(in srgb,var(--cp-accent,#4f46e5) 30%,transparent);
                     animation:gl-pulse 1.6s ease-in-out infinite; }
@@ -287,6 +310,9 @@
       .gl-meta-btn { background:transparent; border:none; padding:0; margin:0; cursor:pointer;
                      font:inherit; font-size:var(--cp-fs-sm,12px); color:var(--cp-text-dim,#64748b); }
       .gl-meta-btn:hover { color:var(--cp-accent,#4f46e5); }
+      /* P3b 临期紧迫：时间 ≥80% 且进度 <50% → 警示色（点开即改期限） */
+      .gl-meta-btn.urgent { color:var(--cp-warn,#b45309); font-weight:700; }
+      .gl-meta-btn.urgent:hover { color:var(--cp-warn,#b45309); text-decoration:underline; }
       .gl-meta-pen { margin-left:4px; opacity:.55; font-size:10px; }
       .gl-dl-row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
       .gl-dl-row input { width:64px; flex:0 0 auto; }
@@ -432,9 +458,70 @@
       .gl-draft-btn { font-size:10px; padding:1px 7px; margin-left:auto; }
       /* ── 建目标向导 · 第一步：分组场景卡（类别色条 + 线稿图标）────────── */
       .gl-scenlist { display:flex; flex-direction:column; gap:4px; }
-      .gl-grp { font-size:10px; font-weight:700; letter-spacing:.4px;
-                color:var(--cp-text-tiny,#94a3b8); margin:5px 0 0; }
-      .gl-grp:first-child { margin-top:0; }
+      .gl-grp { display:flex; align-items:center; gap:5px;
+                font-size:10px; font-weight:700; letter-spacing:.4px;
+                color:var(--cp-text-dim,#64748b); margin:7px 0 0;
+                padding-top:6px; border-top:1px dashed var(--cp-border,#e2e8f0); }
+      .gl-grp:first-child { margin-top:0; padding-top:0; border-top:none; }
+      .gl-grp-dot { flex:0 0 auto; width:7px; height:7px; border-radius:99px;
+                    background:var(--cp-border,#cbd5e1); }
+      .gl-grp.gk-conversion .gl-grp-dot { background:var(--cp-goal-conv,#b45309); }
+      .gl-grp.gk-relationship .gl-grp-dot { background:var(--cp-goal-rel,#e11d48); }
+      .gl-grp.gk-engagement .gl-grp-dot { background:var(--cp-goal-eng,#0284c7); }
+      .gl-grp.gk-discovery .gl-grp-dot { background:var(--cp-goal-disc,#0d9488); }
+      .gl-grp-n { flex:0 0 auto; font-size:9px; font-weight:600; line-height:14px;
+                  min-width:14px; text-align:center; padding:0 4px; border-radius:99px;
+                  background:var(--cp-surface-2,#f1f5f9); color:var(--cp-text-tiny,#94a3b8); }
+      /* 摸底组「从这里开始」引导（只出现在首组，微文案克制不抢卡片） */
+      .gl-grp-hint { font-size:var(--cp-fs-tiny,11px); line-height:1.4;
+                     color:var(--cp-goal-disc,#0d9488); margin:2px 0 1px;
+                     display:flex; gap:4px; align-items:flex-start; }
+      .gl-grp-hint::before { content:"\u2726"; flex:0 0 auto; opacity:.8; }
+      /* 场景卡 30 天基准线（有样本才渲染；帮坐席选前建立合理预期） */
+      .gl-scen-bench { font-size:10px; color:var(--cp-text-tiny,#94a3b8);
+                       margin-top:2px; font-variant-numeric:tabular-nums; }
+      /* 终局卡：达成金带 + 关键事实 chips + 完成通知状态行 */
+      .gl-term-done { border-left:3px solid var(--cp-gold,#ca8a04);
+                      border-radius:8px; padding:6px 8px; margin:0 -2px;
+                      background:color-mix(in srgb,var(--cp-gold,#ca8a04) 7%,var(--cp-surface,#fff)); }
+      .gl-done-facts { display:flex; flex-wrap:wrap; gap:4px; margin-top:5px; }
+      .gl-done-chip { font-size:10px; line-height:17px; padding:0 7px;
+                      border-radius:99px; font-variant-numeric:tabular-nums;
+                      border:1px solid color-mix(in srgb,var(--cp-gold,#ca8a04) 45%,transparent);
+                      color:var(--cp-warn,#b45309);
+                      background:color-mix(in srgb,var(--cp-gold,#ca8a04) 10%,transparent); }
+      .gl-done-pushed { border-color:color-mix(in srgb,var(--cp-ok,#0f9d75) 45%,transparent);
+                        color:var(--cp-ok,#0f9d75);
+                        background:color-mix(in srgb,var(--cp-ok,#0f9d75) 9%,transparent); }
+      .gl-notify { display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+                   margin-top:6px; padding-top:5px;
+                   border-top:1px dashed var(--cp-border,#e2e8f0); }
+      .gl-notify-ok, .gl-notify-warn { font-size:10px; line-height:1.45; }
+      .gl-notify-ok { color:var(--cp-text-tiny,#94a3b8); }
+      .gl-notify-warn { color:var(--cp-warn,#b45309); }
+      .gl-notify-link { font-size:10px; padding:0 8px; line-height:17px;
+                        border-radius:99px; cursor:pointer;
+                        border:1px solid var(--cp-warn,#b45309);
+                        color:var(--cp-warn,#b45309); background:transparent; }
+      .gl-notify-link:hover { background:color-mix(in srgb,var(--cp-warn,#b45309) 10%,transparent); }
+      /* P3b：点名收件人计数 chip（hover 见名单） */
+      .gl-ne-chip { font-size:10px; line-height:17px; color:var(--cp-text-dim,#64748b);
+                    padding:0 6px; border:1px solid var(--cp-border,#e2e8f0);
+                    border-radius:99px; cursor:default; }
+      /* P3b：「标成交」＝收益动作，emerald 与通用主按钮区分（暂停=素、更多=链） */
+      .gl-acts .gl-win { background:var(--cp-ok,#0f9d75); border-color:var(--cp-ok,#0f9d75); }
+      .gl-acts .gl-win:hover { filter:brightness(1.07); }
+      /* P3 自助绑定迷你表单（通知行内展开） */
+      .gl-nb { flex-basis:100%; margin-top:4px; }
+      .gl-nb-row { display:flex; gap:4px; margin-top:3px; }
+      .gl-nb-row input { flex:1 1 auto; min-width:0; font:inherit;
+                 font-size:var(--cp-fs-tiny,11px); color:var(--cp-text,#1e293b);
+                 background:var(--cp-surface,#fff); border:1px solid var(--cp-border,#e2e8f0);
+                 border-radius:var(--cp-radius-sm,6px); padding:3px 7px; }
+      .gl-nb-row button { flex:0 0 auto; font-size:10px; }
+      .gl-nb-msg { font-size:var(--cp-fs-tiny,11px); color:var(--cp-warn,#b45309);
+                   line-height:1.5; margin-top:3px; }
+      .gl-nb-msg.ok { color:var(--cp-ok,#0f9d75); }
       .gl-scen { display:flex; gap:8px; align-items:flex-start;
                  border:1px solid var(--cp-border,#e2e8f0);
                  border-left:3px solid var(--cp-border,#e2e8f0);
@@ -508,6 +595,9 @@
                     color:var(--cp-text-tiny,#94a3b8); background:transparent; }
       .gl-slotchk.on { color:var(--cp-ok,#0f9d75); border-color:rgba(15,157,117,.45);
                        background:rgba(15,157,117,.08); }
+      /* P3b：人工确认的槽位=实边+深底（可信度分层；auto/llm 维持浅描边） */
+      .gl-slotchk.on.src-agent { border-color:var(--cp-ok,#0f9d75);
+                                 background:rgba(15,157,117,.16); font-weight:600; }
       .gl-slotpicks { margin-top:4px; }
       .gl-disc-tip { margin-top:6px; padding:6px 8px; border-radius:8px;
                      background:rgba(13,148,136,.08);
@@ -650,6 +740,8 @@
         this._slotAsk = "";
         this._wonFormOpen = false;
         this._moreOpen = false;
+        this._nbOpen = false;      // P3 自助绑定表单不跨会话残留
+        this._nbMsg = "";
         this._clearUndo();
         this._prevMsIdx = -1;
         this._celebrateMs = false;
@@ -749,6 +841,7 @@
           dayIndex: g ? (g.day_index || 1) : 0,
           totalDays: g ? (g.total_days || 0) : 0,
           intent: (beat && beat.intent) || "",
+          intentDisplay: intentDisp(beat),
           pushLevel: (beat && beat.push_level) || "",
           status: g ? g.status : "",
           title: g ? (g.title || g.template_name || "") : "",
@@ -832,14 +925,30 @@
 
       const ms = Array.isArray(g.milestones) ? g.milestones : [];
       const mi = parseInt(g.milestone_idx, 10) || 0;
+      // P3b 诚实轨道：摸底类按槽位填充率倒推「信号能到的里程碑」（与 ledger
+      // 同阈值 0.5→2 / 0.8→3；首格=对方开口属信号，放行），超出的段=时间兑底
+      // 走到的 → 虚纹呈现——坐席不再被「按时走格子」的进度骗（28 失守全停
+      // idx=4 曾被误读成跑完弧线，同一教训的卡面版）。非摸底模板无判据不标。
+      let sigMi = -1;
+      const spRows = Array.isArray(g.slots_progress) ? g.slots_progress : [];
+      if (spRows.length) {
+        const fillR = spRows.filter((s) => s && s.filled).length / spRows.length;
+        sigMi = fillR >= 0.8 ? 3 : (fillR >= 0.5 ? 2 : 1);
+      }
       let track = "";
       let msCur = "";
       if (ms.length) {
         track = `<div class="gl-track-wrap"><div class="gl-track">` + ms.map((m, i) => {
           let cls = i < mi ? "gl-seg done" : (i === mi ? "gl-seg cur" : "gl-seg");
+          // 该段代表的「已达位置」：done 段=越过 i 到了 i+1；cur 段=正处 mi
+          const reached = i < mi ? i + 1 : (i === mi ? mi : -1);
+          const timeDriven = sigMi >= 0 && reached > sigMi;
+          if (timeDriven) cls += " time";
           if (i === mi && this._celebrateMs) cls += " celebrate";
           const nm = LANG === "en" ? (m.en || m.zh || "") : (m.zh || m.en || "");
-          return `<div class="${cls}" title="${esc(nm)}"></div>`;
+          const tip = timeDriven
+            ? nm + " · " + this.t("inbox.goal.ms_time_t") : nm;
+          return `<div class="${cls}" title="${esc(tip)}"></div>`;
         }).join("") + `</div>`;
         const cur = ms[Math.min(mi, ms.length - 1)] || {};
         const curNm = LANG === "en" ? (cur.en || cur.zh || "") : (cur.zh || cur.en || "");
@@ -856,8 +965,14 @@
         this._deadlineVal = null;
       }
       const dayTxt = this.t("inbox.goal.day_of", { day: g.day_index || 1, total: g.total_days || 0 });
-      const meta = `<div class="gl-meta"><button type="button" class="gl-meta-btn" data-act="deadline_toggle"` +
-        ` title="${esc(this.t("inbox.goal.deadline.edit_t"))}">${esc(dayTxt)} · ${pct}%` +
+      // P3b 临期紧迫感：时间走掉 ≥80% 而进度未过半 → 天数行转警示色（临最后
+      // 一天的 gl-due 行是「到点了」，这里是提前一段的「要来不及了」）
+      const totD = parseInt(g.total_days, 10) || 0;
+      const urgent = String(g.status) === "active" && totD > 0
+        && (parseInt(g.day_index, 10) || 1) / totD >= 0.8 && pct < 50;
+      const meta = `<div class="gl-meta"><button type="button" class="gl-meta-btn${urgent ? " urgent" : ""}" data-act="deadline_toggle"` +
+        ` title="${esc(this.t(urgent ? "inbox.goal.meta.urgent_t" : "inbox.goal.deadline.edit_t"))}">` +
+        `${urgent ? "\u23F3 " : ""}${esc(dayTxt)} · ${pct}%` +
         `<span class="gl-meta-pen" aria-hidden="true">\u270E</span></button></div>` +
         (this._deadlineOpen ? this._renderDeadlineForm(g) : this._renderDueRow(g));
 
@@ -881,8 +996,8 @@
               `<button class="gl-draft-btn" data-act="drive_draft" title="${esc(this.t("inbox.goal.draft_from_intent"))}">` +
               `${esc(this.t("inbox.goal.draft_from_intent"))}</button></span>`
             : `<span class="gl-fb">` +
-              `<button data-act="beat_adopt" title="${esc(this.t("inbox.goal.act.adopt_only"))}">\uD83D\uDC4D</button>` +
-              `<button data-act="beat_reject" title="${esc(this.t("inbox.goal.act.reject"))}">\uD83D\uDC4E</button>` +
+              `<button data-act="beat_adopt" title="${esc(this.t("inbox.goal.act.adopt_only_t"))}">\uD83D\uDC4D</button>` +
+              `<button data-act="beat_reject" title="${esc(this.t("inbox.goal.act.reject_t"))}">\uD83D\uDC4E</button>` +
               `<button class="primary gl-draft-btn" data-act="beat_adopt_draft" title="${esc(this.t("inbox.goal.act.adopt_draft_t"))}">` +
               `${esc(this.t("inbox.goal.act.adopt_draft"))}</button></span>`;
         }
@@ -890,7 +1005,7 @@
         today = `<div class="gl-sec ${secCls}"><div class="gl-today">` +
           `<span class="gl-pill ${pl}"${pushTip ? ` title="${esc(pushTip)}"` : ""}>` +
           `${esc(this.t("inbox.goal.push." + pl))}</span>` +
-          `<span class="gl-intent">${esc(beat.intent)}</span>${fb}</div></div>`;
+          `<span class="gl-intent">${esc(intentDisp(beat))}</span>${fb}</div></div>`;
       } else if (HOLDS.indexOf(String(g.hold)) >= 0) {
         today = `<div class="gl-sec hold">${esc(this.t("inbox.goal.hold." + String(g.hold)))}</div>`;
       }
@@ -921,7 +1036,7 @@
           : "") +
         `</span>`;
       const acts = `<div class="acts gl-acts">${flip}${more}` +
-        `<button class="primary" data-act="won">${esc(this.t("inbox.goal.act.won"))}</button></div>`;
+        `<button class="primary gl-win" data-act="won">${esc(this.t("inbox.goal.act.won"))}</button></div>`;
 
       let createdHint = "";
       if (this._createdHintAutonomy) {
@@ -945,7 +1060,7 @@
       return `<div class="gl-hdr"><span class="gl-title">${esc(g.title || g.template_name || "")}</span>` +
         `${this._statusBadge(g.status)}${origin}${tag}</div>` + createdHint + track + meta + today +
         this._renderSlotsProgress(g) + this._renderProgress() + this._renderProfile() +
-        this._renderProducts(g) + acts;
+        this._renderProducts(g) + acts + this._notifyRowHtml();
     }
 
     /* P28：摸底类目标 params.slots → 打勾清单（API slots_progress）。
@@ -957,10 +1072,16 @@
       const filled = rows.filter((s) => s && s.filled).length;
       const chips = rows.map((s) => {
         const on = !!s.filled;
+        // P3b 来源标注：auto 正则 / llm 抽取 / agent 人工——「AI 猜的还是人
+        // 核实的」进 tooltip；人工确认档加实心边框（handoff 惯例：可信度可见）
+        const src = (on && /^(auto|llm|agent)$/.test(String(s.src || "")))
+          ? String(s.src) : "";
+        const srcLab = src ? this.t("inbox.goal.slots.src." + src) : "";
         const tip = on
-          ? (String(s.label || s.key) + (s.value ? ": " + s.value : ""))
+          ? (String(s.label || s.key) + (s.value ? ": " + s.value : "")
+             + (srcLab ? " \u00b7 " + srcLab : ""))
           : this.t("inbox.goal.slots.miss_t", { label: s.label || s.key });
-        return `<span class="gl-slotchk${on ? " on" : ""}" title="${esc(tip)}">` +
+        return `<span class="gl-slotchk${on ? " on" : ""}${src ? " src-" + src : ""}" title="${esc(tip)}">` +
           `${on ? "\u2713" : "\u25CB"} ${esc(s.label || s.key)}` +
           (on && s.value ? `\u00b7${esc(s.value)}` : "") + `</span>`;
       }).join("");
@@ -1075,6 +1196,270 @@
       }
     }
 
+    /* 全模板基准线一次取齐（step-1 场景卡「近30天达成率」用；与 _loadBenchmark
+       同一 report 数据源同一 organic 口径。第一步纯卡片零输入框 → 数据到达后
+       _rerender 安全不丢焦点；失败清 tried 位允许下次重试）。 */
+    async _loadBenchAll() {
+      if (this._benchAllTried) return;
+      this._benchAllTried = true;
+      let res = null;
+      try {
+        res = await this._api("/api/goals/report?days=30");
+      } catch (_e) { res = null; }
+      const bt = (res && res.ok && res.data && res.data.by_template)
+        ? res.data.by_template : null;
+      if (!bt) { this._benchAllTried = false; return; }
+      Object.keys(bt).forEach((tid) => {
+        const b = bt[tid] || {};
+        const org = (parseInt(b.done, 10) || 0) + (parseInt(b.failed, 10) || 0)
+          + (parseInt(b.expired, 10) || 0);
+        if (org >= 3) {
+          this._benchCache[tid] = {
+            n: org,
+            rate: Math.round(((parseInt(b.done, 10) || 0) / org) * 100),
+            days: (b.avg_days_to_done == null) ? null
+              : Math.round(Number(b.avg_days_to_done) * 10) / 10,
+          };
+        } else if (!(tid in this._benchCache)) {
+          this._benchCache[tid] = null;   // 样本不足＝不显示（小样本比没数据更误导）
+        }
+      });
+      if (this._formOpen && this._formStep === 1) this._rerender();
+    }
+
+    /* ── 完成通知链路状态（P0 2026-08-18：达成后会不会有人收到推送，面板可见）── */
+
+    _notifyStatusCached() {
+      return (Date.now() - NOTIFY_STATUS.at < 300000) ? NOTIFY_STATUS.data : null;
+    }
+
+    _loadNotifyStatus() {
+      if (NOTIFY_STATUS.inflight
+          || (Date.now() - NOTIFY_STATUS.at < 300000)) return;
+      NOTIFY_STATUS.inflight = true;
+      this._api("/api/goals/notify-status").then((res) => {
+        NOTIFY_STATUS.at = Date.now();
+        NOTIFY_STATUS.data = (res && res.ok && res.data && res.data.ok)
+          ? res.data : null;
+        NOTIFY_STATUS.inflight = false;
+        this._fillNotifyRow();
+      }).catch(() => {
+        NOTIFY_STATUS.at = Date.now();
+        NOTIFY_STATUS.data = null;
+        NOTIFY_STATUS.inflight = false;
+      });
+    }
+
+    _notifyRowInner(st) {
+      const esc = (s) => this.esc(s);
+      if (!st) return "";
+      if (!st.notify_enabled) {
+        return `<span class="gl-notify-warn" title="${esc(this.t("inbox.goal.notify.scan_off_t"))}">` +
+          `${esc(this.t("inbox.goal.notify.scan_off"))}</span>`;
+      }
+      if (st.push_covered) {
+        // P2：定向副本开着且当前登录人已绑定通知号 → 「管理员 + 你」。
+        // P3：未绑定 → 就地「接收推送」自助绑定（保存即真发测试验证可达——
+        // Telegram bot 私聊不了没跟它说过话的人，这是绑定后收不到的最高发故障）
+        const mine = st.push_agent && st.self_bound;
+        const k = mine ? "inbox.goal.notify.push_on_agent" : "inbox.goal.notify.push_on";
+        let bind = "";
+        if (st.push_agent && !st.self_bound) {
+          bind = `<button type="button" class="gl-notify-link" data-act="notify_bind_open">` +
+            `${esc(this.t("inbox.goal.notify.bind_btn"))}</button>`;
+        }
+        return `<span class="gl-notify-ok" title="${esc(this.t(k + "_t"))}">` +
+          `${esc(this.t(k))}</span>` + bind + this._neChipHtml() +
+          this._nbFormHtml() + this._neFormHtml();
+      }
+      // 渠道未订阅「目标达成」：给能开接通弹窗的角色一个直达按钮（宿主
+      // wsAlertlinkOpen 只对 master/operator 渲染——坐席只看提示不受挫）
+      const canConnect = typeof root.wsAlertlinkOpen === "function";
+      return `<span class="gl-notify-warn" title="${esc(this.t("inbox.goal.notify.push_off_t"))}">` +
+        `${esc(this.t("inbox.goal.notify.push_off"))}</span>` +
+        (canConnect
+          ? `<button type="button" class="gl-notify-link" data-act="notify_connect">` +
+            `${esc(this.t("inbox.goal.notify.connect"))}</button>`
+          : "");
+    }
+
+    /* 渲染占位（数据没到＝hidden；到达后 _fillNotifyRow DOM 注入，不整块重渲染
+       ——active 卡上可能开着期限/成交表单，重渲染会抢焦点） */
+    _notifyRowHtml() {
+      this._loadNotifyStatus();
+      const inner = this._notifyRowInner(this._notifyStatusCached());
+      return `<div class="gl-notify" data-ref="notifyrow"${inner ? "" : " hidden"}>${inner}</div>`;
+    }
+
+    _fillNotifyRow() {
+      try {
+        const el = this.shadowRoot
+          && this.shadowRoot.querySelector('[data-ref="notifyrow"]');
+        if (!el) return;
+        const inner = this._notifyRowInner(this._notifyStatusCached());
+        if (inner) { el.innerHTML = inner; el.hidden = false; }
+      } catch (_e) { /* soft */ }
+    }
+
+    /* ── P3：自助绑定迷你表单（通知行内展开；保存=写绑定+立即真发测试）── */
+
+    _nbFormHtml() {
+      if (!this._nbOpen) return "";
+      const esc = (s) => this.esc(s);
+      const busy = !!this._nbBusy;
+      return `<div class="gl-nb">` +
+        `<div class="gl-hint">${esc(this.t("inbox.goal.notify.bind_hint"))}</div>` +
+        `<div class="gl-nb-row">` +
+        `<input type="text" data-ref="nb_chat" inputmode="numeric" autocomplete="off"` +
+        ` spellcheck="false" placeholder="${esc(this.t("inbox.goal.notify.bind_ph"))}"` +
+        ` value="${esc(this._nbVal || "")}">` +
+        `<button type="button" class="primary" data-act="notify_bind_save"${busy ? " disabled" : ""}>` +
+        `${esc(this.t(busy ? "inbox.goal.notify.bind_busy" : "inbox.goal.notify.bind_save"))}</button>` +
+        `<button type="button" data-act="notify_bind_close">${esc(this.t("cp.common.cancel"))}</button>` +
+        `</div>` +
+        (this._nbMsg
+          ? `<div class="gl-nb-msg${this._nbMsgOk ? " ok" : ""}">${esc(this._nbMsg)}</div>`
+          : "") +
+        `</div>`;
+    }
+
+    async _nbSave() {
+      const inp = this._ref("nb_chat");
+      const val = String((inp && inp.value) || "").trim();
+      this._nbVal = val;
+      if (!/^-?\d{1,20}$/.test(val)) {
+        this._nbMsg = this.t("inbox.goal.notify.bind_bad");
+        this._nbMsgOk = false;
+        this._rerender();
+        return;
+      }
+      this._nbBusy = true;
+      this._nbMsg = "";
+      this._rerender();
+      _beacon("goal_notify_bind_save");
+      let res = null;
+      try {
+        res = await this._api("/api/workspace/my-notify-binding", {
+          method: "POST", body: new URLSearchParams({ tg_chat_id: val }),
+        });
+      } catch (_e) { res = null; }
+      if (!(res && res.ok && res.data && res.data.ok)) {
+        this._nbBusy = false;
+        this._nbMsg = String((res && res.data && res.data.detail)
+          || this.t("inbox.goal.err_retry")).slice(0, 160);
+        this._nbMsgOk = false;
+        this._rerender();
+        return;
+      }
+      // 绑定已落库 → 立即真发一条测试（可达性当场验证，不等第一单成交）
+      let tres = null;
+      try {
+        tres = await this._api("/api/workspace/my-notify-binding/test", {
+          method: "POST", body: new URLSearchParams(),
+        });
+      } catch (_e) { tres = null; }
+      this._nbBusy = false;
+      if (tres && tres.ok && tres.data && tres.data.ok) {
+        this._nbMsg = this.t("inbox.goal.notify.bind_ok");
+        this._nbMsgOk = true;
+        _beacon("goal_notify_bind_ok");
+      } else {
+        // 绑定保存成功、测试没送达——把服务端原因给到人（自查后重存即重测）
+        this._nbMsg = String((tres && tres.data && tres.data.detail)
+          || this.t("inbox.goal.notify.bind_test_fail")).slice(0, 200);
+        this._nbMsgOk = false;
+        _beacon("goal_notify_bind_testfail");
+      }
+      NOTIFY_STATUS.at = 0;      // 失效缓存 → 行升格「管理员 + 你」
+      this._loadNotifyStatus();
+      this._rerender();
+    }
+
+    /* ── P3b：逐目标点名收件人（params.notify_extra；通知行内编辑，走既有
+       /update 路由 params 合并——消毒/去重/封顶在服务端，前端只透传）── */
+
+    _neList() {
+      const g = this._d && this._d.goal;
+      const raw = g && g.params && g.params.notify_extra;
+      return Array.isArray(raw) ? raw.map((x) => String(x)) : [];
+    }
+
+    _neChipHtml() {
+      const g = this._d && this._d.goal;
+      if (!g || !g.goal_id
+          || (g.status !== "active" && g.status !== "paused")) return "";
+      const esc = (s) => this.esc(s);
+      const list = this._neList();
+      const chip = list.length
+        ? `<span class="gl-ne-chip" title="${esc(this.t("inbox.goal.notify.extra_n_t", { list: list.join(", ") }))}">` +
+          `${esc(this.t("inbox.goal.notify.extra_n", { n: list.length }))}</span>`
+        : "";
+      return chip +
+        `<button type="button" class="gl-notify-link" data-act="notify_extra_toggle"` +
+        ` title="${esc(this.t("inbox.goal.notify.extra_btn_t"))}">` +
+        `${esc(this.t("inbox.goal.notify.extra_btn"))}</button>`;
+    }
+
+    _neFormHtml() {
+      if (!this._neOpen) return "";
+      const g = this._d && this._d.goal;
+      if (!g || !g.goal_id) return "";
+      const esc = (s) => this.esc(s);
+      const busy = !!this._neBusy;
+      const val = this._neVal != null ? this._neVal : this._neList().join(", ");
+      return `<div class="gl-nb">` +
+        `<div class="gl-hint">${esc(this.t("inbox.goal.notify.extra_hint"))}</div>` +
+        `<div class="gl-nb-row">` +
+        `<input type="text" data-ref="ne_input" autocomplete="off"` +
+        ` spellcheck="false" placeholder="${esc(this.t("inbox.goal.notify.extra_ph"))}"` +
+        ` value="${esc(val)}">` +
+        `<button type="button" class="primary" data-act="notify_extra_save"${busy ? " disabled" : ""}>` +
+        `${esc(this.t(busy ? "inbox.goal.notify.bind_busy" : "inbox.goal.notify.extra_save"))}</button>` +
+        `<button type="button" data-act="notify_extra_close">${esc(this.t("cp.common.cancel"))}</button>` +
+        `</div>` +
+        (this._neMsg
+          ? `<div class="gl-nb-msg${this._neMsgOk ? " ok" : ""}">${esc(this._neMsg)}</div>`
+          : "") +
+        `</div>`;
+    }
+
+    async _neSave() {
+      const g = this._d && this._d.goal;
+      if (!g || !g.goal_id) return;
+      const inp = this._ref("ne_input");
+      const val = String((inp && inp.value) || "").trim();
+      this._neVal = val;
+      this._neBusy = true;
+      this._neMsg = "";
+      this._rerender();
+      _beacon("goal_notify_extra_save");
+      let res = null;
+      try {
+        res = await this._api(`/api/goals/${encodeURIComponent(g.goal_id)}/update`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ params: { notify_extra: val } }),
+        });
+      } catch (_e) { res = null; }
+      this._neBusy = false;
+      if (res && res.ok && res.data && res.data.goal) {
+        const ng = res.data.goal;
+        if (g.today && !ng.today) ng.today = g.today;   // 同 _postDeadline 兜底
+        this._d = Object.assign({}, this._d, { goal: ng });
+        const n = (ng.params && Array.isArray(ng.params.notify_extra))
+          ? ng.params.notify_extra.length : 0;
+        this._neMsg = n ? this.t("inbox.goal.notify.extra_ok", { n })
+          : this.t("inbox.goal.notify.extra_cleared");
+        this._neMsgOk = true;
+        this._neVal = null;
+      } else {
+        this._neMsg = String((res && res.data && res.data.detail)
+          || this.t("inbox.goal.err_retry")).slice(0, 160);
+        this._neMsgOk = false;
+      }
+      this._rerender();
+    }
+
     /* 动态后果提示：加速/放缓/今天收口/低于下限，与后端护栏同一判定式 */
     _deadlineHint(g, raw) {
       const minD = Math.max(1, parseInt(g.day_index, 10) || 1);
@@ -1176,7 +1561,7 @@
           const st = String(a.status || "planned");
           const stKey = ({ planned: 1, consumed: 1, sent: 1, skipped: 1, blocked: 1 })[st] ? st : "planned";
           const day = String(a.day || "").slice(5);
-          const intent = String(a.intent || "");
+          const intent = intentDisp(a);
           const short = intent.length > 46 ? intent.slice(0, 46) + "\u2026" : intent;
           return `<div class="gl-prog-row"><span class="gl-prog-day">${esc(day)}</span>` +
             `<span class="gl-prog-st st-${esc(stKey)}">${esc(this.t("inbox.goal.beat." + stKey))}</span>` +
@@ -1329,12 +1714,57 @@
         `<button class="primary" data-act="slot_ask" data-slot="${esc(key)}">${esc(this.t("inbox.goal.profile.ask_btn"))}</button></div></div>`;
     }
 
+    /* result 原始串（order:ref / manual:by / 信号名）→ 完成方式人话标签 */
+    _doneKindLabel(result) {
+      const r = String(result || "");
+      const k = r.indexOf("order:") === 0 ? "order"
+        : (r.indexOf("manual:") === 0 ? "manual" : (r ? "auto" : ""));
+      if (!k) return "";
+      const v = this.t("inbox.goal.done.kind." + k);
+      return (v && String(v).indexOf("inbox.goal.") !== 0) ? String(v) : "";
+    }
+
+    /* 终局卡（2026-08-18 升级）：达成＝收入时刻——金带 + 完成方式/用时 chips +
+       48h 跟进黄金窗提示 + 转化类顺手接留存目标；失守保持低压灰。原始 result
+       串降级进 tooltip（「order:ORD-9」直晒是黑话）。 */
     _renderTerminal(g) {
       const esc = (s) => this.esc(s);
-      const result = g.result ? `<div class="gl-result">${esc(g.result)}</div>` : "";
-      return `<div class="gl-hdr"><span class="gl-title">${esc(g.title || g.template_name || "")}</span>` +
-        `${this._statusBadge(g.status)}</div>` + result +
-        `<div class="acts gl-acts"><button class="primary" data-act="open_form">${esc(this.t("inbox.goal.again_btn"))}</button></div>`;
+      const done = String(g.status) === "done";
+      const endTs = parseFloat(g.done_at) || parseFloat(g.updated_at) || 0;
+      const start = parseFloat(g.start_ts) || 0;
+      const days = (done && endTs > 0 && start > 0 && endTs > start)
+        ? Math.round(((endTs - start) / 86400) * 10) / 10 : null;
+      const kindTxt = done ? this._doneKindLabel(g.result) : "";
+      // 「已推送提醒」回执（P2）：服务端读通知幂等标记附 notified 键——
+      // true=完成推送真的发出去过；缺键/false（含扫描器 60s 内未跑到）不渲染
+      const pushed = done && g.notified === true;
+      let facts = "";
+      if (kindTxt || days != null || pushed) {
+        facts = `<div class="gl-done-facts">` +
+          (kindTxt ? `<span class="gl-done-chip" title="${esc(String(g.result || ""))}">${esc(kindTxt)}</span>` : "") +
+          (days != null ? `<span class="gl-done-chip">${esc(this.t("inbox.goal.done.days", { n: days }))}</span>` : "") +
+          (pushed ? `<span class="gl-done-chip gl-done-pushed" title="${esc(this.t("inbox.goal.done.pushed_t"))}">${esc(this.t("inbox.goal.done.pushed"))}</span>` : "") +
+          `</div>`;
+      }
+      const hint = done
+        ? `<div class="gl-hint">${esc(this.t("inbox.goal.done.next_hint"))}</div>` : "";
+      // 转化类达成 → 一键接续留存目标（retention 模板在库才给；参数继承上单，
+      // 与 service 的订单自动链同语义——这里是人工成交/无订单 ref 场景的手动口）
+      let chain = "";
+      const tmpl = this._tmplById(String(g.template || ""));
+      if (done && g.template !== "retention_expand"
+          && tmpl && String(tmpl.kind || "") === "conversion"
+          && this._tmplById("retention_expand")) {
+        chain = `<button data-act="chain_retention">${esc(this.t("inbox.goal.done.chain_btn"))}</button>`;
+      }
+      const rawResult = (!done && g.result)
+        ? `<div class="gl-result">${esc(g.result)}</div>` : "";
+      return `<div class="${done ? "gl-term-done" : "gl-term"}">` +
+        `<div class="gl-hdr"><span class="gl-title">${esc(g.title || g.template_name || "")}</span>` +
+        `${this._statusBadge(g.status)}</div>` + facts + rawResult + hint +
+        `<div class="acts gl-acts">${chain}` +
+        `<button class="primary" data-act="open_form">${esc(this.t("inbox.goal.again_btn"))}</button></div>` +
+        `</div>` + this._notifyRowHtml();
     }
 
     _loadPrefs() {
@@ -1874,11 +2304,18 @@
           (t.id === lastTid ? `<span class="gl-scen-last">${esc(this.t("inbox.goal.form.last_used"))}</span>` : "") +
           (t.id === draftTid ? draftBadge : "");
         const desc = this._tmplDesc(t.id);
+        // 30 天基准线（organic 样本 ≥3 才显示；选场景时就建立「几天见效/达成率」
+        // 预期，不用等到改期限才看见）
+        const b = this._benchCache ? this._benchCache[t.id] : null;
+        const bench = (b && b.n)
+          ? `<div class="gl-scen-bench">${esc(this.t("inbox.goal.form.bench_card", { rate: b.rate, n: b.n }))}` +
+            (b.days != null ? esc(` · ${b.days}d`) : "") + `</div>`
+          : "";
         return `<div class="gl-scen gk-${esc(kind)}${sel ? " sel" : ""}" data-act="pick_tmpl"` +
           ` data-tid="${esc(t.id)}" role="radio" aria-checked="${sel ? "true" : "false"}">` +
           `<span class="gl-scen-ic">${this._kindIcon(kind)}</span>` +
           `<div class="gl-scen-mn"><div class="gl-scen-nm">${esc(nm)}${badges}</div>` +
-          (desc ? `<div class="gl-scen-d">${esc(desc)}</div>` : "") + `</div></div>`;
+          (desc ? `<div class="gl-scen-d">${esc(desc)}</div>` : "") + bench + `</div></div>`;
       };
       let rows = "";
       order.forEach((k) => {
@@ -1886,7 +2323,15 @@
         if (!grp || !grp.length) return;
         const gv = this.t("inbox.goal.form.grp." + k);
         if (gv && String(gv).indexOf("inbox.goal.") !== 0) {
-          rows += `<div class="gl-grp">${esc(gv)}</div>`;
+          rows += `<div class="gl-grp gk-${esc(k)}"><span class="gl-grp-dot"></span>` +
+            `<span class="gl-grp-nm">${esc(gv)}</span>` +
+            `<span class="gl-grp-n">${grp.length}</span></div>`;
+          if (k === "discovery") {
+            const sh = this.t("inbox.goal.form.grp_start_hint");
+            if (sh && String(sh).indexOf("inbox.goal.") !== 0) {
+              rows += `<div class="gl-grp-hint">${esc(sh)}</div>`;
+            }
+          }
         }
         rows += grp.map(card).join("");
       });
@@ -2327,6 +2772,7 @@
         if (el) el.disabled = true;
         _beacon("goal_set_click");
         if (!this._templates) await this._loadTemplates();
+        this._loadBenchAll();   // fire-and-forget：场景卡 30 天基准线（到货补渲染）
         this._formOpen = true;
         this._formStep = 1;
         this._formTid = "";
@@ -2462,6 +2908,86 @@
         return;
       }
       if (act === "chain_reco_start") { await this._startRecoChain(el); return; }
+      if (act === "chain_retention") {
+        // 达成的转化目标 → 一键接续留存目标（2026-08-18）：参数继承上单
+        // （product_id/last_plan/base_goal），创建仍走表单第二步人工确认——
+        // 与 service 的订单自动链同语义，这里补的是人工成交/无订单 ref 场景。
+        _beacon("goal_chain_retention");
+        if (!this._templates) await this._loadTemplates();
+        if (!this._tmplById("retention_expand")) return;
+        const src = (this._d && (this._d.goal || this._d.last)) || {};
+        const p = (src && src.params) || {};
+        this._formOpen = true;
+        this._formStep = 2;
+        this._formTid = "retention_expand";
+        this._formAutonomy = "";
+        this._formUsePrefDays = false;
+        this._resetParamState();
+        this._formBaseline = null;
+        this._formDraft = {
+          v: 1, cid: this._draftCid(), tid: "retention_expand", ts: Date.now(),
+          params: {
+            product_id: String(p.product_id || p.item_id || ""),
+            last_plan: String(p.last_plan || ""),
+            base_goal: String(src.goal_id || ""),
+          },
+          days: "", autonomy: this._formAutonomy || "auto",
+          unlockSel: "", tierSel: "", labelTouched: false,
+        };
+        this._rerender();
+        return;
+      }
+      if (act === "notify_connect") {
+        // 宿主外壳的告警接通弹窗（master/operator 才有；坐席侧按钮本就不渲染）
+        _beacon("goal_notify_connect");
+        try {
+          if (typeof root.wsAlertlinkOpen === "function") root.wsAlertlinkOpen();
+        } catch (_e) { /* soft */ }
+        return;
+      }
+      if (act === "notify_bind_open") {
+        this._nbOpen = true;
+        this._nbMsg = "";
+        this._nbVal = "";
+        _beacon("goal_notify_bind_open");
+        this._rerender();
+        setTimeout(() => {
+          const i = this._ref("nb_chat");
+          if (i) { try { i.focus(); } catch (_e) { /* soft */ } }
+        }, 30);
+        return;
+      }
+      if (act === "notify_bind_close") {
+        this._nbOpen = false;
+        this._nbMsg = "";
+        this._rerender();
+        return;
+      }
+      if (act === "notify_bind_save") { await this._nbSave(); return; }
+      if (act === "notify_extra_toggle") {
+        this._neOpen = !this._neOpen;
+        this._neMsg = "";
+        if (this._neOpen) {
+          _beacon("goal_notify_extra_open");
+          this._rerender();
+          setTimeout(() => {
+            const i = this._ref("ne_input");
+            if (i) { try { i.focus(); } catch (_e) { /* soft */ } }
+          }, 30);
+        } else {
+          this._neVal = null;
+          this._rerender();
+        }
+        return;
+      }
+      if (act === "notify_extra_close") {
+        this._neOpen = false;
+        this._neMsg = "";
+        this._neVal = null;
+        this._rerender();
+        return;
+      }
+      if (act === "notify_extra_save") { await this._neSave(); return; }
       if (act === "prog_toggle") {
         this._progOpen = !this._progOpen;
         if (this._progOpen) {
@@ -2847,6 +3373,8 @@
       }
       this.emit("cp-goal-drive-draft", {
         intent: String(intent || ""),
+        // 展示态（en UI 用；指令 text/intent 保持中文权威口径不变）
+        intentDisplay: intentDisp(beat) || String(intent || ""),
         instruction: String(text),
         pushLevel: pl,
         label: String(o.label || "").trim(),

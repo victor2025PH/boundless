@@ -81,6 +81,13 @@ def record_agent_takeover(store: Any, conversation_id: str) -> str:
                 meta = store.get_automation_mode_meta(cid)
             except Exception:
                 meta = None
+        if meta and str(meta.get("mode") or "") == "manual":
+            from src.inbox.snooze_hold import is_snooze_hold_source
+            if is_snooze_hold_source(meta.get("source")):
+                # P1-12：会话正处于「搁置静音」（坐席显式说了「别让 AI 管」）。
+                # 接管标覆盖过去会把它降级成「30 分钟后自动接回」——等于系统
+                # 悄悄推翻用户的决定。已经是 manual，无需重写：原样保留。
+                return str(meta.get("source"))
         if meta and is_takeover_source(meta.get("source")):
             # 连续接管：保住首次记录的 from 档位，只刷新时间戳。
             source = str(meta.get("source"))

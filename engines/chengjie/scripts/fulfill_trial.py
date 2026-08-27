@@ -57,6 +57,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 from src.licensing.chatx_fulfillment import (  # noqa: E402
+    REFERRAL_BONUS_MAX_CHARS,
     REFERRAL_INVITEE_CHARS,
     REFERRAL_INVITER_CHARS,
     TRIAL_GIFT_CHARS,
@@ -350,6 +351,44 @@ def run_once(site: str, key: str, priv_hex: str, *, days: Optional[int] = None,
                 stat["referral"] += 1
             except Exception as e:
                 log(f"  ! referral {rid} 发奖失败: {e}")
+                stat["failed"] += 1
+
+        # ⑤ 加码发奖（里程碑 / 首充返利，实施50 P1）：官网 bonus_due 清单给出
+        # {key, claim_id, fingerprint, contact, chars, ref, note}，本端只做
+        # 「金额护栏 → 签凭证 → 回填」；金额判定逻辑全在官网（qualified 聚合 /
+        # 首付充值单 × 10% × 7 天观察窗），签名端按 REFERRAL_BONUS_MAX_CHARS
+        # 封顶护私钥。老官网无此字段 → 空列表自然跳过。
+        for b in list(resp4.get("bonus_due") or []):
+            bkey = str(b.get("key") or "")
+            chars = int(b.get("chars") or 0)
+            claim_id = str(b.get("claim_id") or "")
+            ref = str(b.get("ref") or bkey)
+            if not bkey or not claim_id or chars <= 0:
+                continue
+            if chars > REFERRAL_BONUS_MAX_CHARS:
+                log(f"  !! bonus {bkey} 金额超护栏（{chars} > {REFERRAL_BONUS_MAX_CHARS}），"
+                    f"拒签并点名——官网台账口径需人工核查")
+                stat["failed"] += 1
+                continue
+            try:
+                fp8 = str(b.get("fingerprint") or "").replace("-", "")[:8] or "unknown"
+                voucher = issue_topup_voucher(
+                    priv_hex, chars=chars, ref=ref,
+                    lic_id=f"trial-{fp8}", customer=str(b.get("contact") or ""),
+                    note=str(b.get("note") or "referral-bonus"))
+                log(f"  ✓ bonus {bkey} 签发 {chars} 字符（{b.get('note') or ''}）")
+                if not dry_run:
+                    _http(f"{base}/api/admin/referrals", method="POST", key=key,
+                          body={"bonus": [{
+                              "key": bkey, "claim_id": claim_id, "ref": ref,
+                              "voucher": voucher, "chars": chars,
+                              "note": str(b.get("note") or ""),
+                          }]})
+                    _audit("referral_bonus", key=bkey, chars=chars,
+                           note=str(b.get("note") or ""))
+                stat["bonus"] = stat.get("bonus", 0) + 1
+            except Exception as e:
+                log(f"  ! bonus {bkey} 发奖失败: {e}")
                 stat["failed"] += 1
 
     return stat

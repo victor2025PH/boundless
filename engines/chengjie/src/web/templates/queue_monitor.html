@@ -1,72 +1,81 @@
 {% extends "workspace_base.html" %}
+{#- 管理面一致性（2026-08-18）：本页由管理员菜单「运营队列看板」进入，挂工作台左侧
+    导航（_ws_sidebar.html，菜单单源 nav_schema.py）。顶层 set 对父模板可见。 -#}
+{% set ws_sidebar = true %}
 {% block title %}{{ (i18n or {}).get('qm_s001', "实时队列看板") }}{% endblock %}
 {% block head %}
 <style>
-  .qm-wrap{height:100%;overflow-y:auto;background:#0f172a;padding:18px;color:#e2e8f0;}
+  /* 令牌驱动（2026-08-18 老板拍板：本页随主题变亮/变暗，废弃原「恒暗大屏」语义）：
+     结构/正文一律 --tk-*（日/夜自适配），状态语义文字用 *-ink 令牌、填充用 accent 令牌。 */
+  .qm-wrap{height:100%;overflow-y:auto;background:var(--tk-bg);padding:18px;color:var(--tk-text);}
   .qm-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;}
-  .qm-header h2{margin:0;font-size:18px;color:#f1f5f9;}
-  .qm-ts{font-size:12px;color:#64748b;}
+  .qm-header h2{margin:0;font-size:18px;color:var(--tk-text);}
+  .qm-ts{font-size:12px;color:var(--tk-text-muted);}
   /* 全局 KPI 卡片 */
   .qm-kpis{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;margin-bottom:18px;}
-  .qm-kpi{background:#1e293b;border:1px solid #334155;border-radius:10px;padding:12px 14px;text-align:center;}
-  .qm-kpi .val{font-size:24px;font-weight:700;color:#f1f5f9;}
-  .qm-kpi .lbl{font-size:11px;color:#64748b;margin-top:2px;}
-  .qm-kpi.crit .val{color:#ef4444;}
-  .qm-kpi.warn .val{color:#f59e0b;}
-  .qm-kpi.ok .val{color:#22c55e;}
+  .qm-kpi{background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:10px;padding:12px 14px;text-align:center;box-shadow:var(--tk-shadow);}
+  .qm-kpi .val{font-size:24px;font-weight:700;color:var(--tk-text);}
+  .qm-kpi .lbl{font-size:11px;color:var(--tk-text-muted);margin-top:2px;}
+  .qm-kpi.crit .val{color:var(--tk-danger-ink);}
+  .qm-kpi.warn .val{color:var(--tk-warn-ink);}
+  .qm-kpi.ok .val{color:var(--tk-ok-ink);}
   /* 坐席卡片列表 */
   .qm-agents{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-bottom:18px;}
-  .qm-agent{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:14px 16px;position:relative;}
-  .qm-agent:hover{border-color:#475569;}
+  .qm-agent{background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:12px;padding:14px 16px;position:relative;box-shadow:var(--tk-shadow);}
+  .qm-agent:hover{border-color:var(--tk-brand);}
   .qm-agent-hdr{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
   .qm-agent-avatar{width:36px;height:36px;border-radius:50%;background:var(--bl-growth-600,#0d76d9);color:#fff;font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
-  .qm-agent-name{font-size:14px;font-weight:600;color:#f1f5f9;}
+  .qm-agent-name{font-size:14px;font-weight:600;color:var(--tk-text);}
   .qm-agent-status{font-size:10px;margin-top:1px;}
-  .status-online{color:#22c55e;}
-  .status-busy{color:#f59e0b;}
-  .status-offline{color:#64748b;}
-  .status-virtual{color:#94a3b8;}
+  .status-online{color:var(--tk-ok-ink);}
+  .status-busy{color:var(--tk-warn-ink);}
+  .status-offline{color:var(--tk-text-muted);}
+  .status-virtual{color:var(--tk-text-muted);}
   .qm-agent-stats{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px;}
   .qm-stat{text-align:center;}
-  .qm-stat .sv{font-size:18px;font-weight:700;color:#f1f5f9;}
-  .qm-stat .sk{font-size:10px;color:#64748b;}
-  .qm-load-bar{height:6px;background:#1e3a5f;border-radius:3px;margin-bottom:10px;overflow:hidden;}
+  .qm-stat .sv{font-size:18px;font-weight:700;color:var(--tk-text);}
+  .qm-stat .sk{font-size:10px;color:var(--tk-text-muted);}
+  .qm-load-bar{height:6px;background:var(--tk-surface-2);border-radius:3px;margin-bottom:10px;overflow:hidden;}
   .qm-load-fill{height:100%;border-radius:3px;transition:width .5s;}
   .qm-agent-acts{display:flex;gap:6px;}
   .qm-btn{flex:1;padding:5px 8px;border:0;border-radius:7px;font-size:11px;cursor:pointer;font-weight:600;}
-  .qm-btn-view{background:var(--bl-growth-700,#0b64b7);color:#fff;}
-  .qm-btn-view:hover{background:#1e40af;}
-  .qm-btn-reassign{background:#374151;color:#e2e8f0;}
-  .qm-btn-reassign:hover{background:#4b5563;}
+  .qm-btn-view{background:var(--bl-growth-600,#0d76d9);color:#fff;}
+  .qm-btn-view:hover{background:var(--bl-growth-700,#0b64b7);}
+  .qm-btn-reassign{background:var(--tk-surface-2);color:var(--tk-text);border:1px solid var(--tk-border);}
+  .qm-btn-reassign:hover{background:var(--tk-border);}
   /* 表格视图 */
-  .qm-table-wrap{background:#1e293b;border:1px solid #334155;border-radius:12px;overflow:hidden;margin-bottom:18px;}
+  .qm-table-wrap{background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:12px;overflow:hidden;margin-bottom:18px;}
   .qm-table{width:100%;border-collapse:collapse;font-size:13px;}
-  .qm-table th{background:#0f172a;padding:10px 14px;text-align:left;font-weight:600;color:#94a3b8;border-bottom:1px solid #334155;font-size:11px;text-transform:uppercase;letter-spacing:.5px;}
-  .qm-table td{padding:10px 14px;border-bottom:1px solid #1e293b;color:#e2e8f0;}
-  .qm-table tr:hover td{background:#243044;}
+  .qm-table th{background:var(--tk-surface-2);padding:10px 14px;text-align:left;font-weight:600;color:var(--tk-text-muted);border-bottom:1px solid var(--tk-border);font-size:11px;text-transform:uppercase;letter-spacing:.5px;}
+  .qm-table td{padding:10px 14px;border-bottom:1px solid var(--tk-border);color:var(--tk-text);}
+  .qm-table tr:hover td{background:var(--tk-surface-2);}
   .qm-table tr:last-child td{border-bottom:0;}
-  .qm-empty{padding:32px;text-align:center;color:#475569;}
+  .qm-empty{padding:32px;text-align:center;color:var(--tk-text-muted);}
   /* 实时刷新指示 */
-  .refresh-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;margin-right:5px;animation:pulse 2s infinite;}
+  .refresh-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--tk-emerald);margin-right:5px;animation:pulse 2s infinite;}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+  @media (prefers-reduced-motion:reduce){.refresh-dot{animation:none;}}
   /* 拖放分配浮层 */
   .reassign-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9000;align-items:center;justify-content:center;}
   .reassign-modal.show{display:flex;}
-  .reassign-box{background:#1e293b;border:1px solid #334155;border-radius:14px;padding:22px;width:360px;max-width:92vw;}
-  .reassign-box h3{margin:0 0 14px;font-size:16px;color:#f1f5f9;}
-  .reassign-select{width:100%;padding:8px 10px;border:1px solid #475569;border-radius:8px;background:#0f172a;color:#e2e8f0;font-size:13px;margin-bottom:14px;}
+  .reassign-box{background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:14px;padding:22px;width:360px;max-width:92vw;box-shadow:var(--tk-shadow-md);}
+  .reassign-box h3{margin:0 0 14px;font-size:16px;color:var(--tk-text);}
+  .reassign-select{width:100%;padding:8px 10px;border:1px solid var(--tk-border);border-radius:8px;background:var(--tk-surface);color:var(--tk-text);font-size:13px;margin-bottom:14px;}
   .reassign-acts{display:flex;gap:8px;justify-content:flex-end;}
   .reassign-confirm{padding:7px 18px;border:0;border-radius:8px;background:var(--bl-growth-600,#0d76d9);color:#fff;font-size:13px;cursor:pointer;font-weight:600;}
-  .reassign-cancel{padding:7px 14px;border:1px solid #475569;border-radius:8px;background:transparent;color:#94a3b8;font-size:13px;cursor:pointer;}
+  .reassign-cancel{padding:7px 14px;border:1px solid var(--tk-border);border-radius:8px;background:transparent;color:var(--tk-text-muted);font-size:13px;cursor:pointer;}
 </style>
 {% endblock %}
 {% block content %}
+{% set cluster_id = "boards" %}{% set cluster_here = "/workspace/queue" %}
+{% include "_cluster_tabs.html" %}
 <div class="qm-wrap">
   <div class="qm-header">
     <h2><span class="refresh-dot"></span>{{ (i18n or {}).get('qm_s002', "实时运营队列看板") }}</h2>
     <div style="display:flex;align-items:center;gap:12px;">
+      <span class="qm-ts">{{ (i18n or {}).get('qm_auto_note', "每 10s 自动刷新") }} ·</span>
       <span class="qm-ts" id="qm-ts">{{ (i18n or {}).get('dash.loading', "加载中…") }}</span>
-      <button onclick="loadQM()" style="padding:5px 12px;border:1px solid #475569;border-radius:7px;background:transparent;color:var(--th-ink-slate4,#5b6b85);font-size:12px;cursor:pointer;">{{ (i18n or {}).get('qm_s003', "手动刷新") }}</button>
+      <button onclick="loadQM()" style="padding:5px 12px;border:1px solid var(--tk-border,#e5e6ea);border-radius:7px;background:transparent;color:var(--tk-text-muted,#5b6b85);font-size:12px;cursor:pointer;">{{ (i18n or {}).get('qm_s003', "手动刷新") }}</button>
     </div>
   </div>
 
@@ -121,11 +130,11 @@
 <div class="reassign-modal" id="reassign-modal">
   <div class="reassign-box">
     <h3>{{ (i18n or {}).get('qm_s012', "重新分配会话") }}</h3>
-    <div style="font-size:13px;color:var(--th-ink-slate4,#5b6b85);margin-bottom:12px;">
-      {{ (i18n or {}).get('qm_s015', "将") }} <strong id="ra-agent-from" style="color:var(--th-ink-slate1,#f1f5f9);"></strong> {{ (i18n or {}).get('qm_s013', "的会话分配给：") }}
+    <div style="font-size:13px;color:var(--tk-text-muted,#5b6b85);margin-bottom:12px;">
+      {{ (i18n or {}).get('qm_s015', "将") }} <strong id="ra-agent-from" style="color:var(--tk-text,#0f1b2d);"></strong> {{ (i18n or {}).get('qm_s013', "的会话分配给：") }}
     </div>
     <select class="reassign-select" id="ra-agent-to"></select>
-    <div style="font-size:12px;color:var(--th-ink-slate5,#64748b);margin-bottom:12px;" id="ra-conv-count"></div>
+    <div style="font-size:12px;color:var(--tk-text-muted,#5b6b85);margin-bottom:12px;" id="ra-conv-count"></div>
     <div class="reassign-acts">
       <button class="reassign-cancel" onclick="closeReassign()">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
       <button class="reassign-confirm" onclick="confirmReassign()">{{ (i18n or {}).get('qm_s014', "确认分配") }}</button>
@@ -156,10 +165,17 @@ window.setView = function(v){
   document.getElementById('view-table-btn').className=v==='table'?'qm-btn qm-btn-view':'qm-btn qm-btn-reassign';
 };
 
+/* 负载配色双口径：填充（进度条）用 accent 令牌，文字用 *-ink 令牌——
+   同一个值两用是旧版病灶（亮底上 accent 文字对比不足）。 */
 function loadColor(pct){
-  if(pct>=80) return '#ef4444';
-  if(pct>=50) return '#f59e0b';
-  return '#22c55e';
+  if(pct>=80) return 'var(--tk-danger)';
+  if(pct>=50) return 'var(--tk-amber)';
+  return 'var(--tk-emerald)';
+}
+function loadInk(pct){
+  if(pct>=80) return 'var(--tk-danger-ink)';
+  if(pct>=50) return 'var(--tk-warn-ink)';
+  return 'var(--tk-ok-ink)';
 }
 
 function renderKPIs(d){
@@ -189,7 +205,7 @@ function renderCards(agents){
     var isVirtual=a.agent_id==='__unassigned__';
     return '<div class="qm-agent">'
       +'<div class="qm-agent-hdr">'
-        +'<div class="qm-agent-avatar" style="background:'+(isVirtual?'#374151':'var(--th-bg-blue6,#2563eb)')+';">'+esc(init)+'</div>'
+        +'<div class="qm-agent-avatar" style="background:'+(isVirtual?'var(--tk-text-muted)':'var(--bl-growth-600,#0d76d9)')+';">'+esc(init)+'</div>'
         +'<div><div class="qm-agent-name">'+esc(a.agent_name||a.agent_id)+'</div>'
           +'<div class="qm-agent-status '+statusClass+'">● '+statusText+'</div></div>'
       +'</div>'
@@ -224,9 +240,9 @@ function renderTable(agents){
       +'<td>'+fmtSec(a.avg_wait_sec||0)+'</td>'
       +'<td>'+fmtSec(a.oldest_wait_sec||0)+'</td>'
       +'<td><div style="display:flex;align-items:center;gap:6px;">'
-        +'<div style="width:80px;height:6px;background:#334155;border-radius:3px;overflow:hidden;">'
+        +'<div style="width:80px;height:6px;background:var(--tk-surface-2);border-radius:3px;overflow:hidden;">'
           +'<div style="width:'+pct+'%;height:100%;background:'+clr+';border-radius:3px;"></div></div>'
-        +'<span style="font-size:11px;color:'+clr+';">'+pct+'%</span></div></td>'
+        +'<span style="font-size:11px;color:'+loadInk(pct)+';">'+pct+'%</span></div></td>'
       +'<td>'
         +(isVirtual?'':('<button class="qm-btn qm-btn-view" style="padding:3px 8px;" onclick="viewAgentConvs(\''+esc(a.agent_id)+'\')">'+window.T('msg_js_2042')+'</button> '
           +(a.open_convs>0?'<button class="qm-btn qm-btn-reassign" style="padding:3px 8px;" onclick="openReassign(\''+esc(a.agent_id)+'\','+a.open_convs+')">'+window.T('inbox.bab.assign')+'</button>':'')))

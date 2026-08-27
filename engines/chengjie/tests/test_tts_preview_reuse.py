@@ -72,6 +72,40 @@ def test_text_key_strip_stable(preview_dir):
     assert why == "" and info is not None
 
 
+# ── P0-V2（2026-08-19）译声语言维度：同文同音色不同目标语 ≠ 同一份音频 ──
+
+
+def test_lang_dimension_hit(preview_dir):
+    """译声试听（ja）→ 同语言发送命中；sidecar 记大小写归一后的语种码。"""
+    (preview_dir / _FN).write_bytes(b"\x00" * 4096)
+    assert tp.record_preview_meta(_FN, text=_TEXT, persona_key="",
+                                  target_lang="JA", meta={"spoken_text": "訳文"})
+    info, why = tp.resolve_reusable_preview(
+        _FN, text=_TEXT, persona_key="", target_lang="ja")
+    assert why == "" and info is not None
+    assert info["meta"]["spoken_text"] == "訳文"
+
+
+def test_lang_dimension_mismatch_rejected(preview_dir):
+    """试听日语后切韩语发送 → 绝不复用日语音频（lang_mismatch 回落现场翻译+合成）。"""
+    (preview_dir / _FN).write_bytes(b"\x00" * 4096)
+    assert tp.record_preview_meta(_FN, text=_TEXT, persona_key="", target_lang="ja")
+    info, why = tp.resolve_reusable_preview(
+        _FN, text=_TEXT, persona_key="", target_lang="ko")
+    assert info is None and why == "lang_mismatch"
+    # 译声试听后关掉译声直发（无目标语）同样不得复用译文音频
+    info2, why2 = tp.resolve_reusable_preview(_FN, text=_TEXT, persona_key="")
+    assert info2 is None and why2 == "lang_mismatch"
+
+
+def test_lang_dimension_legacy_sidecar(preview_dir):
+    """旧 sidecar（无 target_lang 键）＝未翻译发送可命中；带目标语发送必须 miss。"""
+    _seed(preview_dir)   # record_preview_meta 现在会写 target_lang=''，等价旧语义
+    info, why = tp.resolve_reusable_preview(
+        _FN, text=_TEXT, persona_key="", target_lang="ja")
+    assert info is None and why == "lang_mismatch"
+
+
 @pytest.mark.parametrize("bad", [
     "",                                   # 空
     "../secrets.mp3",                     # 穿越

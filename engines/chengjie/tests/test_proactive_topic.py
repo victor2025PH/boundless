@@ -320,6 +320,7 @@ class _SM:
     build_profile_ask_opener = _SMcls.build_profile_ask_opener
     resolve_birthday = _SMcls.resolve_birthday
     resolve_preferred_name = _SMcls.resolve_preferred_name
+    resolve_residence = _SMcls.resolve_residence
     _proactive_story_invite = _SMcls._proactive_story_invite
     _proactive_story_teaser = _SMcls._proactive_story_teaser
     _story_progress_from_context = staticmethod(_SMcls._story_progress_from_context)
@@ -818,9 +819,26 @@ def test_profile_ask_opener_birthday_matches_legacy():
     assert "生日" in out["directive"]
 
 
-def test_profile_ask_opener_unknown_slot_empty():
+def test_profile_ask_opener_city_basic():
     sm = _SM(_StubStore([]))
     out = sm.build_profile_ask_opener("city", memory_key="u1", intimacy=60.0)
+    assert out["mode"] == "ask_city"
+    assert "城市" in out["directive"]
+
+
+def test_resolve_residence_from_memory():
+    sm = _SM(_StubStore([_fact("随便聊聊"), _fact("我住在曼谷")]))
+    assert sm.resolve_residence("u1") == "曼谷"
+
+
+def test_resolve_residence_none_when_absent():
+    sm = _SM(_StubStore([_fact("喜欢猫"), _fact("我生日是3月5日")]))
+    assert sm.resolve_residence("u1") is None
+
+
+def test_profile_ask_opener_unknown_slot_empty():
+    sm = _SM(_StubStore([]))
+    out = sm.build_profile_ask_opener("zodiac", memory_key="u1", intimacy=60.0)
     assert out["mode"] == ""
 
 

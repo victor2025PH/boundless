@@ -23,9 +23,13 @@ from typing import Any, Dict, Optional, Tuple, Union
 
 # 受支持的情绪词表（保持精简——只收各引擎都能稳定表达的）。
 # 每个情绪带一组「画像」：自然语言语气词、ElevenLabs 标签、edge rate/pitch 偏移。
+# angry（2026-08-22 实施54）：temper 回怼功能的配套档——骂回去的文本被人设
+# 默认基调渲染成 happy（开心语调骂人=穿帮）；仅由骂战态覆写链产生
+# （persona_voice.resolve_emotion_for_send），derive_emotion 的常规判定链
+# 刻意不产出它（AI 不会因为「聊到生气话题」就对客户发火）。
 EMOTIONS = (
     "neutral", "warm", "happy", "excited", "playful",
-    "empathetic", "apologetic", "calm", "sad", "serious",
+    "empathetic", "apologetic", "calm", "sad", "serious", "angry",
 )
 
 # 情绪 → 各引擎画像。rate/pitch 为 edge_tts 的相对偏移（百分比/Hz 风格字符串生成用）。
@@ -40,6 +44,7 @@ _EMOTION_PROFILE: Dict[str, Dict[str, Any]] = {
     "calm":       {"tone": "平静、沉稳、舒缓",            "el_tag": "calmly",      "rate": -6,  "pitch": -1},
     "sad":        {"tone": "低落、轻声、略带叹息",        "el_tag": "sadly",       "rate": -10, "pitch": -4},
     "serious":    {"tone": "认真、郑重、清晰",            "el_tag": "seriously",   "rate": -2,  "pitch": -1},
+    "angry":      {"tone": "不耐烦、带火气、语气冲",      "el_tag": "angry",       "rate": 6,   "pitch": 2},
 }
 
 
@@ -389,8 +394,10 @@ def elevenlabs_voice_settings(
 
 # 情绪 → CosyVoice3(AvatarHub 7852) emotion 标签。服务端词表：
 # neutral/happy/sad/angry/fearful/surprised/disgusted/gentle/excited/calm/serious。
-# 系统词表中的「暖/共情类」统一映射 gentle；angry/fearful 等负面标签**刻意不映射**
-# ——AI 角色对用户发火/恐惧不是本产品语气。
+# 系统词表中的「暖/共情类」统一映射 gentle；fearful/disgusted 等标签**刻意不映射**
+# ——AI 角色对用户恐惧/厌恶不是本产品语气。angry 自 2026-08-22（实施54）起
+# 映射：temper 回怼功能已让人设「敢骂回去」，语音层再钉死正向语气就是自相
+# 矛盾（happy 语调骂人=穿帮）；angry 仅由骂战态覆写链产出，常规判定链不产。
 _COSYVOICE_EMOTION: Dict[str, str] = {
     "neutral":    "neutral",
     "warm":       "gentle",
@@ -402,6 +409,7 @@ _COSYVOICE_EMOTION: Dict[str, str] = {
     "calm":       "calm",
     "sad":        "sad",
     "serious":    "serious",
+    "angry":      "angry",
 }
 
 # 强情绪阈值：intensity ≥ 此值才切 7852 的 instruct2 情感路径。
@@ -448,6 +456,7 @@ _EMOTION_SPEED: Dict[str, float] = {
     "happy":      1.04,
     "playful":    1.05,
     "excited":    1.08,
+    "angry":      1.05,   # 吵架语速快而急（与 playful 同级，靠 tone 分火气）
 }
 
 

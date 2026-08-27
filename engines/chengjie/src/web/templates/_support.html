@@ -1,0 +1,476 @@
+<script>
+/* ============================================================================
+   客服支持通道（实施49 P1-9，2026-08-20）——被 base.html 与 workspace_base.html
+   同时 include，两个外壳共用一份实现。
+
+   内测反馈的原话是「打不开」「又崩了」。客服要定位得先问三样东西：机器码、版本、
+   日志——三样都在用户拿不到的地方。本分片把「报障」压成一次点击：
+
+     ① window.openSupportPanel(note)  「求助与支持」面板（实施51 起报障优先布局）：
+                                      可选一句话描述 + 一键打包直传——官网收包即自动
+                                      推送客服 TG，**用户无需再转告任何码**；6 位回执号
+                                      仅作核对。产品/版本/机器码折叠进「详细信息」。
+     ② 报错 toast 内嵌「报障」入口     用户看到红条的**那一刻**就是报障意愿最高的一刻
+     ③ 顶栏「求助」常驻入口（两壳）/ 工作台用户菜单 / Ctrl+K（实施51：入口从暗门
+        提为常驻可见——此前只有头像下拉与命令面板，用户找不到门）
+
+   ── 两个刻意的设计决定 ──────────────────────────────────────────────────
+   A. **toast CTA 走 MutationObserver 而不是改两个 toast 实现**。全站有两套 toast
+      （base.html::showToast 的 `.toast.t-err`、crm-widgets.js::CRMW.toast 的
+      `.tk-toast.err`），逐个改＝两份逻辑 + crm-widgets.js 版本戳/双树同步成本，
+      且将来第三套 toast 又是漏网。观察容器子节点只认 class，一处覆盖全部调用点。
+      观察范围刻意**只到两个 toast 容器**（不是 body subtree）——收件箱 DOM churn
+      极高，body subtree 观察器是实打实的性能税。
+
+   B. **上传带 note（页面 + 报错文案）**。没有它客服第一句永远是「你当时在做什么」，
+      而用户那时已经点掉了红条、复述不出来。上限 200 字由后端 sanitize_note 兜。
+   ============================================================================ */
+(function () {
+  'use strict';
+  if (window.__supBoot) return;
+  window.__supBoot = 1;
+
+  function _T(k, d) { try { return window.T ? window.T(k, d) : d; } catch (_) { return d; } }
+  function _esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function _fetch(url, init, opt) { return (window.apiFetch || fetch)(url, init, opt); }
+
+  /* 埋点（实施51）：sup_open_<入口> / sup_send_ok|fail|off——两周后按
+     「入口点击→上传转化」裁决要不要做主动 nudge。与全站 ui-event 同端点同契约
+     （只送 page+action 两个消毒字段），任何异常静默。 */
+  function _bcn(action) {
+    try {
+      navigator.sendBeacon('/api/telemetry/ui-event', new Blob(
+        [JSON.stringify({ page: (location && location.pathname) || '', action: String(action) })],
+        { type: 'application/json' }));
+    } catch (_) { }
+  }
+
+  /* 持久回执（实施51）：上次报障的回执号/时间落 localStorage——用户关掉面板后
+     心里没底再打开，能看到「上次报障：回执号 X · 已送达客服」而不是一片空白。
+     刻意**不做**「客服已查看」状态回显：包在上传当刻就以文件推进客服 TG（正常
+     路径没有「取包」动作可当已读信号），靠客服手点「已读」按钮的信号不可靠——
+     漏点时界面显示「未查看」反而制造焦虑，比没有更糟。 */
+  var _LAST_KEY = 'sup.last';
+  var _LAST_TTL_MS = 48 * 3600 * 1000;
+  function _lastGet() {
+    try {
+      var d = JSON.parse(localStorage.getItem(_LAST_KEY) || 'null');
+      if (d && d.code && d.ts && (Date.now() - d.ts) < _LAST_TTL_MS) return d;
+    } catch (_) { }
+    return null;
+  }
+  function _lastSet(code) {
+    try { localStorage.setItem(_LAST_KEY, JSON.stringify({ code: String(code), ts: Date.now() })); } catch (_) { }
+  }
+
+  /* 剪贴板：LAN http 下 navigator.clipboard 不存在（非安全上下文），必须留
+     execCommand 兜底——机器码复制不了，整个面板就白做了。 */
+  function _copy(text) {
+    var s = String(text || '');
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(s).then(function () { return true; },
+          function () { return _copyLegacy(s); });
+      }
+    } catch (_) { }
+    return Promise.resolve(_copyLegacy(s));
+  }
+  function _copyLegacy(s) {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = s;
+      ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;top:-1000px;opacity:0;';
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return !!ok;
+    } catch (_) { return false; }
+  }
+
+  /* ── 支持信息（进程级缓存：机器码/版本一次会话内不会变）────────────────── */
+  var _info = null, _infoP = null;
+  /* 桌面壳安装包版本（帮助菜单同源 menuSpec.version＝displayVersion，如 1.051）。
+     坐席连的是 117 源码后端时 /api/support/info.version 恒为 "dev"——那是引擎
+     身份探针用的回落，不能给人看。壳版本拿不到且后端是 dev → 整行隐藏。 */
+  function _shellVersion() {
+    try {
+      var sh = window.__chatxShell;
+      if (sh && typeof sh.menuSpec === 'function') {
+        return Promise.resolve(sh.menuSpec()).then(function (spec) {
+          return (spec && spec.version) ? String(spec.version).trim() : '';
+        }).catch(function () { return ''; });
+      }
+    } catch (_) { }
+    return Promise.resolve('');
+  }
+  function _displayVersion(backend, shell) {
+    var s = String(shell || '').trim();
+    if (s) return s;
+    var b = String(backend || '').trim();
+    if (b && b.toLowerCase() !== 'dev') return b;
+    return '';
+  }
+  /* 后端 branding.py 未重启时 /api/support/info.site 仍可能是 2026-07 防封镜像
+     ai26.sbs；白标客户自己的 website_url 原样保留，只改空值与已知过期镜像。 */
+  var _OFFICIAL_SITE = 'https://bd2026.cc';
+  function _publicSite(site) {
+    var s = String(site || '').trim();
+    if (!s || /ai26\.sbs/i.test(s)) return _OFFICIAL_SITE;
+    return s;
+  }
+  function loadInfo() {
+    if (_info) return Promise.resolve(_info);
+    if (_infoP) return _infoP;
+    _infoP = Promise.all([
+      _fetch('/api/support/info').then(function (r) {
+        return r.ok ? r.json() : {};
+      }).catch(function () { return {}; }),
+      _shellVersion()
+    ]).then(function (pair) {
+      var d = (pair[0] && pair[0].ok) ? pair[0] : {};
+      d.version = _displayVersion(d.version, pair[1]);
+      d.site = _publicSite(d.site);
+      _info = d;      /* 旧后端 404 → 空对象，面板只少几行不报错 */
+      return _info;
+    });
+    return _infoP;
+  }
+
+  /* ── 直传能力探测（probe 只回 {ok}，不打包）───────────────────────────── */
+  var _canP = null;
+  function canUpload() {
+    if (_canP) return _canP;
+    _canP = _fetch('/api/support/diag-upload?probe=1', { method: 'POST' })
+      .then(function (r) { return !!r.ok; })
+      .catch(function () { return false; });
+    return _canP;
+  }
+
+  /* ── 上传：新端点优先，旧后端回落历史 admin 入口 ─────────────────────────
+     404/403 单独标 `off`：模板热更新先于 .py 重启上线是本仓的常态中间态，那个窗口里
+     support 路由还不存在（坐席再撞 admin 回落的 403）。这时给「本版本不支持直传，
+     请复制全部信息发客服」比给一句「上传失败」有用——后者会让用户一直重试。 */
+  function uploadDiag(note) {
+    var body = JSON.stringify({ note: String(note || '').slice(0, 200) });
+    var init = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body };
+    var opt = { timeoutMs: 60000 };   /* 打包+上行比常规接口慢，20s 默认会误杀 */
+    return _fetch('/api/support/diag-upload', init, opt).then(function (r) {
+      if (r.status === 404) {
+        /* 旧后端：support 命名空间还没上线，退回历史入口（管理员可用，坐席会 403） */
+        return _fetch('/api/admin/diagnostic-upload', { method: 'POST' }, opt);
+      }
+      return r;
+    }).then(function (r) {
+      var off = (r.status === 404 || r.status === 403);
+      return r.json().catch(function () { return {}; }).then(function (d) {
+        if (off && !(d && d.ok)) return { ok: false, off: true };
+        return d;
+      });
+    }).catch(function () { return { ok: false }; });
+  }
+
+  /* ── 面板 ──────────────────────────────────────────────────────────────── */
+  var _panel = null;
+  function _close() {
+    if (!_panel) return;
+    try { _panel.remove(); } catch (_) { }
+    _panel = null;
+    document.removeEventListener('keydown', _esc_key, true);
+  }
+  function _esc_key(e) { if (e.key === 'Escape') { e.stopPropagation(); _close(); } }
+
+  /* 面板打开时的「上次报障」回执行（无记录/过期=空串，不占版面） */
+  function _lastLine() {
+    var last = _lastGet();
+    if (!last) return '';
+    var when = '';
+    // 日期一律走 wsFmtDateTime（随 ?lang= 取正确 locale）。**勿改回「内联 Date 对象
+    // 直接调 toLocale* 系方法」那种写法**：它用的是**浏览器** locale，会无视应用的
+    // 语言设置（en 用户仍看到中式日期），而本文件是共享外壳、三个后台页一起中招
+    // ——2026-08-27 实锤回归，门禁 test_swept_admin_pages_localized_dates 会红。
+    // 回退分支刻意用 ISO 截断：写成 toLocaleString 同样违规，门禁照样红。
+    // ⚠ 连注释里都不能出现那个字面序列——门禁是对**渲染后的 HTML** 做正则，
+    //   注释会原样进页面（同日在别处已被这条坑过一次）。
+    try {
+      when = window.wsFmtDateTime
+        ? window.wsFmtDateTime(last.ts)
+        : new Date(last.ts).toISOString().slice(0, 16).replace('T', ' ');
+    } catch (_) { }
+    return '<span class="sup-last">' + _esc(_T('sup.last.prefix', 'Last report')) + ': ' +
+      '<b class="sup-mono">' + _esc(last.code) + '</b> · ' +
+      _esc(_T('sup.diag.sent', 'Delivered to support')) + (when ? ' · ' + _esc(when) : '') + '</span>';
+  }
+
+  function _row(label, value, copyable) {
+    if (!value) return '';
+    return '<div class="sup-row"><span class="sup-k">' + _esc(label) + '</span>' +
+      '<span class="sup-v' + (copyable ? ' sup-mono' : '') + '">' + _esc(value) + '</span>' +
+      (copyable ? '<button type="button" class="sup-cp" data-cp="' + _esc(value) + '">' +
+        _esc(_T('sup.copy', 'Copy')) + '</button>' : '') + '</div>';
+  }
+
+  function openSupportPanel(note, source) {
+    /* 已开着再进来一律**重开**而不是 toggle 关闭：入口有多个（顶栏/菜单/Ctrl+K/报错
+       toast/横幅），连着两条报错时用户点第二个「报障」本意是「换成这一条」，toggle 会把
+       面板关掉＝看起来像点坏了。重开顺带把新的 note 换进去。 */
+    _bcn('sup_open_' + String(source || 'unk').slice(0, 12));
+    if (_panel) _close();
+    var wrap = document.createElement('div');
+    wrap.id = 'sup-modal';
+    wrap.setAttribute('role', 'dialog');
+    wrap.setAttribute('aria-modal', 'true');
+    wrap.innerHTML =
+      '<div class="sup-back"></div>' +
+      '<div class="sup-card">' +
+      '  <div class="sup-hd"><b>' + _esc(_T('sup.title', 'About & Support')) + '</b>' +
+      '    <button type="button" class="sup-x" aria-label="' + _esc(_T('sup.close', 'Close')) + '">\u2715</button>' +
+      '  </div>' +
+      '  <div class="sup-bd" id="sup-bd">' + _esc(_T('sup.loading', 'Loading...')) + '</div>' +
+      '</div>';
+    document.body.appendChild(wrap);
+    _panel = wrap;
+    wrap.querySelector('.sup-x').addEventListener('click', _close);
+    wrap.querySelector('.sup-back').addEventListener('click', _close);
+    document.addEventListener('keydown', _esc_key, true);
+
+    loadInfo().then(function (d) {
+      var bd = document.getElementById('sup-bd');
+      if (!bd) return;
+      var site = d.site || '';
+      /* 实施51（2026-08-21）报障优先布局：主动作置顶 + 可选一句话描述 + 成功态
+         「已送达」；产品/版本/机器码折叠进「详细信息」。措辞对齐真实链路——
+         官网收包即自动推送客服，回执号只是核对用，用户不需要再转告任何码。 */
+      bd.innerHTML =
+        '<div class="sup-hint">' + _esc(_T('sup.diag.hint',
+          'Hit a problem? Press "Send to support" - logs and config are packed and delivered automatically. Nothing else to do.')) +
+        '<br><span class="sup-priv">' + _esc(_T('sup.diag.privacy',
+          'Only runtime logs and config are uploaded - no chat content, no credentials.')) + '</span></div>' +
+        (d.upload === false ? '' :
+          '<textarea class="sup-desc" id="sup-desc" rows="2" maxlength="160" placeholder="' +
+          _esc(_T('sup.desc.ph', '(Optional) One line about what happened')) + '">' +
+          _esc(note ? String(note).slice(0, 160) : '') + '</textarea>') +
+        '<div class="sup-acts">' +
+        /* 后端明说打不出包（精简装机漏带 diagnostic_bundle）时不给按钮——摆一个
+           点了必失败的主按钮，比直说「这版不支持、请复制信息」更耽误人。 */
+        (d.upload === false ? '' :
+          '  <button type="button" class="sup-btn sup-primary" id="sup-up">' +
+          _esc(_T('sup.diag.btn', 'Send to support')) + '</button>') +
+        '  <button type="button" class="sup-btn" id="sup-all">' +
+        _esc(_T('sup.copy_all', 'Copy all details')) + '</button>' +
+        '</div>' +
+        '<div class="sup-out' + (d.upload === false ? ' sup-bad' : '') + '" id="sup-out">' +
+        (d.upload === false ? _esc(_T('sup.diag.off',
+          'This build cannot upload diagnostics. Use "Copy all details" and send it to support.')) : _lastLine()) +
+        '</div>' +
+        '<details class="sup-about"><summary>' + _esc(_T('sup.about.toggle', 'Details (version / machine code)')) + '</summary>' +
+        _row(_T('sup.product', 'Product'), d.product || '', false) +
+        _row(_T('sup.version', 'Version'), d.version || '', true) +
+        _row(_T('sup.machine', 'Machine code'), d.machine_code || '', true) +
+        (site ? '<div class="sup-row"><span class="sup-k">' + _esc(_T('sup.site', 'Website')) +
+          '</span><span class="sup-v"><a href="' + _esc(site) + '" target="_blank" rel="noopener">' +
+          _esc(site) + '</a></span></div>' : '') +
+        '</details>';
+
+      bd.addEventListener('click', function (e) {
+        var b = e.target && e.target.closest ? e.target.closest('[data-cp]') : null;
+        if (!b) return;
+        _copy(b.getAttribute('data-cp')).then(function (ok) {
+          if (!ok) return;
+          var old = b.textContent;
+          b.textContent = _T('sup.copied', 'Copied');
+          setTimeout(function () { try { b.textContent = old; } catch (_) { } }, 1600);
+        });
+      });
+
+      var all = document.getElementById('sup-all');
+      if (all) all.addEventListener('click', function () {
+        var lines = [
+          _T('sup.product', 'Product') + ': ' + (d.product || ''),
+          _T('sup.version', 'Version') + ': ' + (d.version || ''),
+          _T('sup.machine', 'Machine code') + ': ' + (d.machine_code || '')
+        ];
+        if (d.site) lines.push(_T('sup.site', 'Website') + ': ' + d.site);
+        lines.push('URL: ' + location.pathname);
+        var descEl0 = document.getElementById('sup-desc');
+        var d0 = (descEl0 && descEl0.value ? descEl0.value : (note || '')).trim();
+        if (d0) lines.push('Note: ' + d0.slice(0, 200));
+        _copy(lines.join('\n')).then(function (ok) {
+          if (ok) { all.textContent = _T('sup.copied', 'Copied'); }
+        });
+      });
+
+      var btn = document.getElementById('sup-up');
+      if (btn) btn.addEventListener('click', function () {
+        if (btn.disabled) return;
+        btn.disabled = true;
+        var label = btn.textContent;
+        btn.textContent = _T('sup.diag.busy', 'Packing and sending...');
+        /* note 组装：页面路径 | 用户描述（输入框优先，回落入口带来的报错文案）。
+           输入框预填了 note，用户改过就以改后的为准——同一个字段两种来源不重复拼。 */
+        var descEl = document.getElementById('sup-desc');
+        var desc = (descEl && descEl.value ? descEl.value : (note || '')).trim().slice(0, 160);
+        var ctx = (location.pathname || '') + (desc ? ' | ' + desc : '');
+        uploadDiag(ctx).then(function (out) {
+          var box = document.getElementById('sup-out');
+          btn.disabled = false;
+          btn.textContent = label;
+          if (!box) return;
+          if (out && out.ok && out.code) {
+            /* 成功态＝情绪峰值：大对勾「已送达」+ 验证码式回执号 + 预期设定。
+               回执号只是核对用（官网收包已自动推送客服），绝不再教用户「转告」。 */
+            _bcn('sup_send_ok');
+            _lastSet(out.code);
+            box.className = 'sup-out sup-ok';
+            box.innerHTML =
+              '<div class="sup-sent">\u2713 ' + _esc(_T('sup.diag.sent', 'Delivered to support')) + '</div>' +
+              '<div class="sup-code-row">' + _esc(_T('sup.diag.code_lbl', 'Reference code')) +
+              ' <b class="sup-code">' + _esc(out.code) + '</b>' +
+              ' <button type="button" class="sup-cp" data-cp="' + _esc(out.code) + '">' +
+              _esc(_T('sup.copy', 'Copy')) + '</button></div>' +
+              '<div class="sup-expect">' + _esc(_T('sup.diag.expect',
+                'Quote the reference code if support asks; replies usually arrive within minutes during working hours.')) + '</div>';
+          } else {
+            _bcn((out && out.off) ? 'sup_send_off' : 'sup_send_fail');
+            box.className = 'sup-out sup-bad';
+            box.textContent = (out && out.off)
+              ? _T('sup.diag.off', 'This build cannot upload diagnostics. Use "Copy all details" and send it to support.')
+              : ((out && out.detail) ? out.detail
+                : _T('sup.diag.fail', 'Sending failed. Check the network and retry.'));
+          }
+        });
+      });
+    });
+  }
+
+  /* ── 报错 toast 内嵌「报障」──────────────────────────────────────────────
+     只认两个 toast 容器的直接子节点；容器本身可能在页面运行中才被建出来
+     （crm-widgets 懒建 #ws-toast-box），故先观察 body 的**直接子节点**
+     （极低频）等它出现。 */
+  var _watched = [];
+  function _isErrToast(el) {
+    if (!el || el.nodeType !== 1) return false;
+    var c = ' ' + (el.className || '') + ' ';
+    return c.indexOf(' t-err ') >= 0 || (c.indexOf(' tk-toast ') >= 0 && c.indexOf(' err ') >= 0);
+  }
+  function _attachCta(t) {
+    if (!t || t.__supCta) return;
+    t.__supCta = 1;
+    canUpload().then(function (ok) {
+      if (!ok || !t.parentNode) return;   /* 旧后端/无权限 → 不挂死链接 */
+      var a = document.createElement('a');
+      a.href = 'javascript:void 0';
+      a.className = 'sup-toast-cta';
+      a.textContent = '\u2934 ' + _T('sup.cta.toast', 'Report');
+      a.title = _T('sup.cta.toast_title', 'Send diagnostics for this error to support');
+      a.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();          /* crm-widgets 的 toast onclick=关闭，别被它吃掉 */
+        openSupportPanel((t.textContent || '').trim().slice(0, 160), 'toast');
+      });
+      t.appendChild(a);
+    });
+  }
+  function _watch(box) {
+    if (!box || _watched.indexOf(box) >= 0) return;
+    _watched.push(box);
+    for (var i = 0; i < box.children.length; i++) {
+      if (_isErrToast(box.children[i])) _attachCta(box.children[i]);
+    }
+    try {
+      new MutationObserver(function (recs) {
+        for (var r = 0; r < recs.length; r++) {
+          var added = recs[r].addedNodes;
+          for (var n = 0; n < added.length; n++) {
+            if (_isErrToast(added[n])) _attachCta(added[n]);
+          }
+        }
+      }).observe(box, { childList: true });
+    } catch (_) { }
+  }
+  function _bindToasts() {
+    _watch(document.getElementById('toast-root'));
+    _watch(document.getElementById('ws-toast-box'));
+    try {
+      new MutationObserver(function () {
+        var a = document.getElementById('toast-root');
+        var b = document.getElementById('ws-toast-box');
+        if (a) _watch(a);
+        if (b) _watch(b);
+      }).observe(document.body, { childList: true });   /* 只看 body 直接子节点 */
+    } catch (_) { }
+  }
+
+  /* ── 样式（跟随主题 token；缺 token 时回落亮色，暗色壳由 token 接管）──── */
+  function _style() {
+    if (document.getElementById('sup-style')) return;
+    var s = document.createElement('style');
+    s.id = 'sup-style';
+    s.textContent =
+      '#sup-modal{position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;}' +
+      '#sup-modal .sup-back{position:absolute;inset:0;background:rgba(15,23,42,.45);}' +
+      '#sup-modal .sup-card{position:relative;width:min(460px,calc(100vw - 32px));max-height:86vh;overflow:auto;' +
+      'background:var(--tk-surface,#fff);color:var(--tk-text,#16223a);border:1px solid var(--tk-border,#d7dce3);' +
+      'border-radius:14px;box-shadow:0 18px 48px rgba(0,0,0,.28);font-size:13px;line-height:1.5;}' +
+      '#sup-modal .sup-hd{display:flex;align-items:center;justify-content:space-between;gap:10px;' +
+      'padding:13px 16px;border-bottom:1px solid var(--tk-border,#e6e9ef);font-size:14px;}' +
+      '#sup-modal .sup-x{border:0;background:transparent;color:inherit;font-size:15px;cursor:pointer;opacity:.6;padding:2px 4px;}' +
+      '#sup-modal .sup-x:hover{opacity:1;}' +
+      '#sup-modal .sup-bd{padding:14px 16px 16px;}' +
+      '#sup-modal .sup-row{display:flex;align-items:center;gap:8px;padding:5px 0;}' +
+      '#sup-modal .sup-k{flex:none;width:72px;opacity:.65;}' +
+      '#sup-modal .sup-v{flex:1;min-width:0;word-break:break-all;}' +
+      '#sup-modal .sup-mono{font-family:ui-monospace,Menlo,Consolas,monospace;letter-spacing:.4px;}' +
+      '#sup-modal .sup-cp{flex:none;border:1px solid var(--tk-border,#d7dce3);background:transparent;color:inherit;' +
+      'border-radius:6px;font-size:11px;padding:2px 8px;cursor:pointer;opacity:.8;}' +
+      '#sup-modal .sup-cp:hover{opacity:1;background:rgba(125,125,125,.12);}' +
+      '#sup-modal .sup-hint{margin:12px 0 10px;padding:10px 12px;border-radius:9px;' +
+      'background:rgba(125,125,125,.10);opacity:.95;}' +
+      '#sup-modal .sup-priv{opacity:.65;font-size:12px;}' +
+      '#sup-modal .sup-acts{display:flex;gap:8px;flex-wrap:wrap;}' +
+      '#sup-modal .sup-btn{border:1px solid var(--tk-border,#d7dce3);background:transparent;color:inherit;' +
+      'border-radius:8px;padding:7px 14px;font-size:13px;cursor:pointer;}' +
+      '#sup-modal .sup-btn:hover{background:rgba(125,125,125,.12);}' +
+      '#sup-modal .sup-btn:disabled{opacity:.6;cursor:default;}' +
+      '#sup-modal .sup-primary{background:var(--tk-brand,#2563eb);border-color:transparent;color:#fff;font-weight:600;}' +
+      '#sup-modal .sup-primary:hover{filter:brightness(1.06);background:var(--tk-brand,#2563eb);}' +
+      '#sup-modal .sup-out{margin-top:11px;font-size:13px;}' +
+      '#sup-modal .sup-out:empty{display:none;}' +
+      /* token 真名校正（2026-08-23，css_token_refs 门禁点名）：--tk-ok/--tk-err 从未存在，
+         真名是 --tk-ok-ink/--tk-danger-ink（fallback 原值保留，admin 壳无 --tk-* 时零变化） */
+      '#sup-modal .sup-ok{color:var(--tk-ok-ink,#15803d);}' +
+      '#sup-modal .sup-bad{color:var(--tk-danger-ink,#b3261e);}' +
+      /* 实施51：报障优先布局的新件——描述框 / 成功态（大对勾+验证码式回执号+预期）/
+         折叠详情。全部跟随主题 token，暗色壳由 token 接管。 */
+      '#sup-modal .sup-desc{width:100%;box-sizing:border-box;margin:2px 0 10px;padding:8px 10px;' +
+      'border:1px solid var(--tk-border,#d7dce3);border-radius:8px;background:transparent;color:inherit;' +
+      'font:inherit;font-size:13px;resize:vertical;min-height:44px;}' +
+      '#sup-modal .sup-desc:focus{outline:none;border-color:var(--tk-brand,#2563eb);}' +
+      '#sup-modal .sup-sent{font-size:15px;font-weight:700;margin-bottom:6px;}' +
+      '#sup-modal .sup-code-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--tk-text,#16223a);}' +
+      '#sup-modal .sup-code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:22px;letter-spacing:4px;' +
+      'padding:2px 10px;border-radius:8px;background:rgba(21,128,61,.10);}' +
+      '#sup-modal .sup-expect{margin-top:7px;font-size:12px;color:var(--tk-text,#16223a);opacity:.72;}' +
+      '#sup-modal .sup-last{font-size:12px;opacity:.62;}' +
+      '#sup-modal .sup-about{margin-top:13px;border-top:1px solid var(--tk-border,#e6e9ef);padding-top:9px;}' +
+      '#sup-modal .sup-about summary{cursor:pointer;font-size:12px;opacity:.7;user-select:none;}' +
+      '#sup-modal .sup-about summary:hover{opacity:1;}' +
+      '#sup-modal .sup-about[open] summary{margin-bottom:5px;}' +
+      '.sup-toast-cta{margin-left:9px;color:inherit;text-decoration:underline;font-weight:600;' +
+      'white-space:nowrap;cursor:pointer;opacity:.92;}';
+    (document.head || document.documentElement).appendChild(s);
+  }
+
+  window.openSupportPanel = function (note, source) { _style(); openSupportPanel(note, source); };
+  window.__supUploadDiag = uploadDiag;   /* 供其它模块复用（如壳侧「关于」） */
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () { _style(); _bindToasts(); });
+  } else { _style(); _bindToasts(); }
+})();
+</script>

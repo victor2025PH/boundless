@@ -14,8 +14,10 @@ auto_ai"托管、走 ``autodraft_helpers`` 那条链时才有识图/转写/视�
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import time
 from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,134 @@ def is_placeholder_only(text: str) -> bool:
     return t.startswith("[") and t.endswith("]") and len(t) <= 8
 
 
+# --- 识别产物质量闸门（P0 2026-08-19，「乱码识图」事故沉淀） -------------------
+# 事故：客户发来文字密集的图（机械键盘 + 屏幕上的看板/界面），生产 vision prompt 的
+# 「逐字抄录」条款让 VLM 把键帽（F2 F3 QWERTY 3# 4$）、看板卡片标题、界面话术整段
+# 抄进描述 → 坐席端识别行 + 译文行两面文字墙，AI 上下文/记忆抽取被碎片污染。
+# prompt 已改为分类输出（票据仍逐字、普通图只给 1-2 句），这里是模型不听话时的
+# 兜底保险。判定**保守**：宁可放过，绝不误杀票据逐字抄录（字段:值 结构、CJK 标签、
+# 长值 token 不会命中下面任何一条）。
+
+#: 识别描述在消息 text 里的标记前缀（写入方：本模块 / telegram_client / inbound_video）
+MEDIA_DESC_MARKERS = ("[图片内容]", "[视频内容]")
+
+#: 闸门命中时的替换文案——诚实告知「有字但没法可靠抄」，并钉住 AI 不要臆测。
+GARBLED_DESC_NOTE = "图中文字零散（键盘按键/界面元素等），未能可靠识别；不要臆测图片内容"
+
+_KEYBOARD_ROWS = ("qwertyuiop", "asdfghjkl", "zxcvbnm")
+
+#: 语音转写行的行首数据标记（telegram_client 落库格式「[语音转录] 正文」）。
+_VOICE_TRANSCRIPT_MARK = "[语音转录]"
+
+
+def strip_media_desc(text: str) -> str:
+    """剥掉消息文本里的识别描述段，只留客户自己的话（caption）。
+
+    识别描述是**系统自产内容**，两类下游都不该把它当客户的话消费：
+    - 翻译源文（前端 ``_xlateSrcText`` / 服务端 ``inbound_translate`` 同口径）——
+      译它＝把碎片 OCR 再造伪句还烧字符；
+    - 记忆抽取（``ai_client.extract_memory_bullets`` / ``extract_heuristic_facts``）——
+      聊天截图里被抄录的「我是XX」会被当成**用户本人**事实入库（Phase8 幻觉同族）。
+
+    含 ``[图片内容]`` / ``[视频内容]`` 标记 → 只取标记前的 caption 段（可为空串＝
+    无客户文字）；无标记（普通文本 / 语音转写正文）原样返回，行为零变化。
+
+    P0-V（2026-08-19，接 FYI 移交）：行首 ``[语音转录]`` 数据标记同属系统自产——
+    带着送翻译会污染源语检测（6 个 CJK 字把短外语转写判成 zh → 与 zh 目标撞
+    identity → 该行**永远得不到自动译文**），送记忆抽取则把标记当叙述。只剥
+    **行首一次**（正文里出现同字样是客户的话，不动）。与前端 ``_xlateSrcText``
+    同口径（两处必须同改）。
+    """
+    t = str(text or "")
+    ts = t.lstrip()
+    if ts.startswith(_VOICE_TRANSCRIPT_MARK):
+        t = ts[len(_VOICE_TRANSCRIPT_MARK):].lstrip()
+    idx = -1
+    for mk in MEDIA_DESC_MARKERS:
+        i = t.find(mk)
+        if i >= 0 and (idx < 0 or i < idx):
+            idx = i
+    if idx < 0:
+        return t
+    return t[:idx].strip()
+
+
+# 兼容别名（2026-08-19 上午同日改名，尚未进任何重启批次；留别名防并行线引用旧名）
+strip_media_desc_for_translation = strip_media_desc
+
+# 识别描述首行的类型标记（P1 2026-08-19）：prompt 要求 VLM 首行输出「类型=A|B|C」
+# （A=单据逐字 / B=聊天截图概括 / C=普通图简述）。标记**保留在落库文本里**当结构载体：
+# 前端解析成类型徽标并从显示正文剥离；stats 按类型分布计数；AI 上下文原样可见
+# （对回复 LLM 是有用的分类信号）。无标记＝旧产出/模型未遵循 → 一切按未分类走。
+_DESC_TYPE_RE = None  # 懒编译（模块导入零 re 开销）
+
+
+def parse_desc_type(desc: str) -> Tuple[str, str]:
+    """解析识别描述首行的 ``类型=A|B|C`` 标记 → ``(大写代码, 去标记正文)``。
+
+    无标记 / 标记不在首行 → ``("", 原文)``。容忍全角 ＝／：、小写代码与行尾句读。
+    """
+    global _DESC_TYPE_RE
+    import re
+    if _DESC_TYPE_RE is None:
+        _DESC_TYPE_RE = re.compile(
+            r"^\s*(?:类型|type)\s*[=＝:：]\s*([ABCabc])\s*[。．.、]?[ \t]*\r?\n?")
+    t = str(desc or "")
+    m = _DESC_TYPE_RE.match(t)
+    if not m:
+        return "", t
+    return m.group(1).upper(), t[m.end():].strip()
+
+
+def build_ask_image_prompt(question: str) -> str:
+    """「问这张图」的 VLM 提问 prompt（P2 2026-08-19，ask-image 路由消费）。
+
+    与识图描述链分离：这是坐席对单张图的即席提问（类型感知预设或自由输入），
+    与描述链共守同一条纪律——只据画面作答、看不到就直说，绝不编造。
+    """
+    q = " ".join(str(question or "").split())[:200]
+    return (
+        "只根据这张图片回答下面的问题，不要编造：图里没有或看不清的信息就直说"
+        "「图中看不到」。直接给答案，不要复述问题，回答用中文，不超过 80 字。\n"
+        f"问题：{q}"
+    )
+
+
+def desc_looks_garbled(desc: str) -> bool:
+    """识图/识视频产出是否为「碎片文字汤」（键盘键帽 / 界面元素逐字抄录那类）。
+
+    只抓两类高置信汤，其余一律放行：
+    ① 键盘硬信号：qwerty/asdf/zxcv 键盘行出现 ≥2 行，或 F1..F12 功能键连片；
+    ② 比例信号：长文本里「键位型碎片 token」（纯符号 / 字母+数字 ≤4 字符 /
+       数字+符号）既多（≥10 个）又占比高（≥40%）。
+    普通中文描述（整句连写＝超长 token）、英文散文（短虚词不计碎片）、票据逐字
+    抄录（CJK 字段标签 + 长值）都不会命中——有金标回归钉住（test_media_desc_guard）。
+    """
+    import re
+
+    t = str(desc or "").strip()
+    if len(t) < 80:      # 短描述没有刷屏危害，不判（新 prompt 下正常产出都在这档）
+        return False
+    low = t.lower()
+    compact = re.sub(r"[\s\|,，、/]+", "", low)
+    rows = sum(1 for r in _KEYBOARD_ROWS if r in compact)
+    fkeys = len(re.findall(r"\bf(?:1[0-2]|[1-9])\b", low))
+    if rows >= 2 or (rows >= 1 and fkeys >= 4) or fkeys >= 8:
+        return True
+    tokens = [x for x in re.split(r"[\s，,、;；|/·]+", t) if x]
+    if len(tokens) < 15:
+        return False
+    junk = 0
+    for tok in tokens:
+        if re.fullmatch(r"[\W_]+", tok):                    # 纯符号（= - <>? {}[]）
+            junk += 1
+        elif re.fullmatch(r"[A-Za-z]{1,2}\d{1,2}", tok):    # F2 / E3 / K8 类键位
+            junk += 1
+        elif re.fullmatch(r"\d{1,2}[\W_]{1,2}", tok):       # 3# / 4$ / 9( 类符号键
+            junk += 1
+    return junk >= 10 and (junk / len(tokens)) >= 0.4
+
+
 # --- 懒建 ASR transcriber（宿主没建时的兜底） ---------------------------------
 # 背景：TelegramClient.voice_transcriber 只在进程启动时按当时的
 # voice_recognition.enabled 初始化；用户随后用自检卡/运营开关热开 ASR 时，
@@ -65,6 +195,157 @@ def is_placeholder_only(text: str) -> bool:
 # 这里按当前配置懒建一个并缓存（配置指纹变了就重建），让"一键开启"即时生效。
 _LAZY_VTR: Any = None
 _LAZY_VTR_KEY: Optional[str] = None
+
+
+def media_degrade_reply_enabled(config: Optional[Dict[str, Any]]) -> bool:
+    """「识别失败 → 降级诚实自动回」开关（``inbox.auto_draft.media_degrade_reply``）。
+
+    默认 **False**＝维持 2026-08-17 无兜底纪律：图片/语音识别失败一律拦下不回。
+    置 True 时，两条自动回复链（协议直发 protocol_autoreply / 收件箱拟稿
+    autodraft_helpers）对识别失败的图片/语音**不再扣留**，改为携带「无描述媒体」
+    上下文照常生成——ai_client 媒体块对无 desc 媒体自带「自然承认收到 + 温和
+    追问对方想表达什么」话术（诚实降级，绝不装懂，非垫场句：模型明确知道自己
+    没看到内容）。2026-08-22 老板「不要再有小问题掐断全自动」拍板后进桌面种子 +
+    A 类基线（客户包默认开）；**服务器实例代码默认关**保持无兜底纪律，要开走
+    overlay。判定单点在此，两链共用，勿各自再读一遍 config。
+    """
+    try:
+        return bool((((config or {}).get("inbox") or {}).get("auto_draft")
+                     or {}).get("media_degrade_reply", False))
+    except Exception:
+        return False
+
+
+# --- 拟稿等图 + 盲断言闸门（2026-08-23「把人看成猫」事故 P0） --------------------
+# 事故机制（网关流水实锤）：照片行落库与 media_ref/媒体文件就绪之间有秒级窗口
+# （边车先落消息行、后补媒体），拟稿抢在识别前生成 → prompt 里只有「[图片]」占位，
+# ref 为空时连降级分支都进不去（无媒体块无诚实指令），LLM 自由发挥出
+# 「哈哈，这图是你家猫吗」；识图两分钟后才被下一轮补上。修法两层：
+# ① 拟稿对「说有图但还看不到」的行等一等（media_wait_sec 预算内等 ref/文件/
+#    别的链路回写的描述），等到才生成——degrade 只吃「真识别失败」，不再吃
+#    「还没来得及识」；
+# ② 出稿硬校验（blind_image_assertion）：无描述的图片轮，回复不得断言画面内容
+#    ——降级指令是软约束，模型违约就整稿换成诚实追问（honest_image_ask）。
+
+#: 拟稿等图的缺省预算（秒）。生产观测：边车补 ref/文件通常 2~5s、识图 1.5~2s，
+#: 20s 足够覆盖 P95 且远小于「先瞎回再露馅」的社交代价；0=关闭等待（旧行为）。
+DEFAULT_MEDIA_WAIT_SEC = 20.0
+
+#: 等待轮询步长（秒）。测试可 monkeypatch 调小加速。
+_WAIT_TICK_SEC = 1.5
+
+
+def media_wait_sec_from_cfg(config: Optional[Dict[str, Any]]) -> float:
+    """拟稿前等图片就绪的秒数（``inbox.auto_draft.media_wait_sec``，默认 20，0=关）。
+
+    夹 [0, 60]：等太久=客户看到「已读不回」，比慢几秒更伤。"""
+    try:
+        raw = (((config or {}).get("inbox") or {}).get("auto_draft")
+               or {}).get("media_wait_sec")
+        if raw is None:
+            return DEFAULT_MEDIA_WAIT_SEC
+        v = float(raw)
+    except Exception:
+        return DEFAULT_MEDIA_WAIT_SEC
+    return max(0.0, min(v, 60.0))
+
+
+# 同图识别去重锁（进程内）：连发「图 + 紧跟一句话」会触发两个拟稿轮，各自等图后
+# 都去调 VLM = 同图双烧 GPU。首个拟稿轮占坑识别并回写消息行，后来者只轮询等
+# 回写结果。TTL 兜底防异常路径漏清（识别+回写远快于 TTL）。
+_DESC_INFLIGHT: Dict[str, float] = {}
+_INFLIGHT_TTL_SEC = 90.0
+
+
+def try_mark_desc_inflight(key: str) -> bool:
+    """占「这条媒体的识别正在进行」坑；已有未过期标记返回 False（改为轮询等结果）。"""
+    now = time.time()
+    ts = _DESC_INFLIGHT.get(key)
+    if ts and now - ts < _INFLIGHT_TTL_SEC:
+        return False
+    _DESC_INFLIGHT[key] = now
+    return True
+
+
+def clear_desc_inflight(key: str) -> None:
+    _DESC_INFLIGHT.pop(key, None)
+
+
+# 盲断言检测：只在「图片轮且无识别描述」时消费——此时回复对画面内容的任何断言
+# /猜测/夸赞都是装懂。判定分两步：先认「诚实标记」（承认没看到/加载失败＝合规
+# 降级话术，放行）；再抓「断言画面」的高置信句式。有描述时不该调本函数
+# （描述里真提到猫时说猫是对的）。
+_BLIND_RES: Optional[list] = None   # 懒编译
+_HONESTY_RE = None
+
+
+def _blind_res():
+    global _BLIND_RES, _HONESTY_RE
+    if _BLIND_RES is not None:
+        return _BLIND_RES, _HONESTY_RE
+    import re
+    _HONESTY_RE = re.compile(
+        r"看不清|没看清|看不到|看不了|打不开|加载不出|没加载|加载失败|没显示"
+        r"|显示不出|没收到|收不到|没能识别|识别不了|再发一次|重新发一?[张遍次]"
+        r"|(?i:didn'?t\s+load|not\s+load|can'?t\s+(?:see|open|view)"
+        r"|won'?t\s+load|not\s+showing|didn'?t\s+come\s+through)")
+    _BLIND_RES = [
+        # 「这/那(张)图/照片…是/有/拍的/看起来/好像/应该是」——断言或猜测画面
+        re.compile(r"[这那]\s*[张幅个]?\s*(?:图片?|照片|相片)\s*[里上中]?"
+                   r"\s*[^，。！？!?\n]{0,6}?(?:是|有|拍的|画的|写的|看起来|好像|应该是)"),
+        # 「图/照片 里/上/中 的|是|有」
+        re.compile(r"(?:图片?|照片|相片)[里上中](?:的|是|有|那|这)"),
+        # 「看到/看见…图/照片」——声称看过
+        re.compile(r"(?:看到|看见|瞅见|瞧见)(?:你发?的|这|那)?"
+                   r"[^，。！？!?\n]{0,8}(?:图片?|照片|相片)"),
+        # 「拍得真好/拍的挺美」——夸构图=声称看过
+        re.compile(r"拍[得的](?:真|好|很|挺|太)"),
+        # en：断言/夸赞画面
+        re.compile(r"(?i)\b(?:this|that|the)\s+(?:pic(?:ture)?|photo|image|shot)"
+                   r"\s+(?:is|of|looks|shows|seems)"),
+        re.compile(r"(?i)\bis\s+(?:this|that)\s+your\s+\w+"),
+        re.compile(r"(?i)\b(?:nice|great|beautiful|lovely|cute|cool)"
+                   r"\s+(?:pic(?:ture)?|photo|shot|image)\b"),
+    ]
+    return _BLIND_RES, _HONESTY_RE
+
+
+def blind_image_assertion(text: str) -> bool:
+    """无识别描述时，回复是否在断言/猜测/夸赞图片内容（＝装懂，须拦）。
+
+    保守两步：句中带「看不清/加载失败」类诚实标记 → 一律放行（那是合规降级
+    话术）；否则命中任一断言句式才判真。宁可放过含糊句，不误杀正常回复。"""
+    t = str(text or "").strip()
+    if not t:
+        return False
+    res, honesty = _blind_res()
+    if honesty.search(t):
+        return False
+    return any(r.search(t) for r in res)
+
+
+#: 诚实追问话术池（盲断言拦下后的整稿替换）。变体按会话 crc32 确定性轮换：
+#: 同会话稳定（缓存/复读判定友好）、跨会话不千篇一律。
+_HONEST_ASK_POOL = {
+    "zh": [
+        "咦，这张图我这边一直加载不出来，你直接跟我说说拍的是啥呗？",
+        "图好像没加载出来，我这边看不到内容——你发的是什么呀？",
+        "收到图啦，不过我这边显示不出来，你给我描述一下呗？",
+    ],
+    "en": [
+        "Hmm, the picture won't load on my end — what's in it?",
+        "I got the photo but it's not showing for me. What did you send?",
+        "The image isn't loading here — tell me what it is?",
+    ],
+}
+
+
+def honest_image_ask(lang: str, seed: str = "") -> str:
+    """按回复语言取一条诚实追问（非 zh 一律走 en；出站自动翻译层会再对齐客户语言）。"""
+    import zlib
+    pool = _HONEST_ASK_POOL[
+        "zh" if str(lang or "").lower().startswith("zh") else "en"]
+    return pool[zlib.crc32(str(seed or "").encode("utf-8")) % len(pool)]
 
 
 def lazy_voice_transcriber(config: Optional[Dict[str, Any]]) -> Any:
@@ -172,14 +453,14 @@ def _miss_reason(media_type: str, cfg: Dict[str, Any]) -> str:
 
 
 def _record_enrich(media_type: str, cfg: Dict[str, Any], *,
-                   understood: bool, reason: str = "") -> None:
-    """识别结果计数（best-effort，绝不影响主链）。"""
+                   understood: bool, reason: str = "", desc_type: str = "") -> None:
+    """识别结果计数（best-effort，绝不影响主链）。``desc_type``＝首行类型标记（可空）。"""
     try:
         from src.inbox.media_enrich_stats import get_media_enrich_stats
 
         st = get_media_enrich_stats()
         if understood:
-            st.record_understood(media_type)
+            st.record_understood(media_type, desc_type=desc_type)
         else:
             st.record_miss(media_type, reason or _miss_reason(media_type, cfg))
     except Exception:
@@ -193,6 +474,7 @@ async def enrich_inbound_media_text(
     caption: str = "",
     config: Optional[Dict[str, Any]] = None,
     voice_transcriber: Any = None,
+    wait_file_sec: float = 0,
 ) -> Tuple[str, str]:
     """识别入站媒体，返回 ``(供 AI 的文本, 识别描述)``。
 
@@ -200,6 +482,8 @@ async def enrich_inbound_media_text(
     - 语音/音频 → ``voice_transcriber.transcribe_voice_message``（转写即"对方说的话"）。
     - 视频/GIF → ``understand_video_file``（抽关键帧 + 音轨 ASR/SER）。
     - 识别不出 / 无后端 / 远程未下载 → 文本回落 ``caption`` 或占位符，描述空串。
+    - ``wait_file_sec`` > 0：media_ref 一时解析不到本地文件（边车下载中）时，
+      在预算内轮询等文件就绪再识别——「回复抢跑、识图迟到」的共享层修法。
 
     全程软失败，绝不抛异常。
     """
@@ -210,6 +494,11 @@ async def enrich_inbound_media_text(
         return cap, ""
 
     local = _resolve_local_path(media_ref)
+    if not local and media_ref and wait_file_sec > 0:
+        deadline = time.monotonic() + max(0.0, min(float(wait_file_sec), 60.0))
+        while not local and time.monotonic() < deadline:
+            await asyncio.sleep(_WAIT_TICK_SEC)
+            local = _resolve_local_path(media_ref)
     tmp_download: Optional[str] = None
     try:
         # 官方通道镜像常把 CDN https 写进 media_ref（IG/Messenger/Zalo）；
@@ -238,7 +527,15 @@ async def enrich_inbound_media_text(
             desc = ""
 
         desc = (desc or "").strip()
-        _record_enrich(mt, cfg, understood=bool(desc))
+        if desc and mt in (_IMAGE_KINDS | _VIDEO_KINDS) and desc_looks_garbled(desc):
+            # 闸门：VLM 违抗「不要逐字抄零散文字」时兜底——展示/AI/翻译拿到的是诚实提示
+            logger.info("[media_enrich] 识别产出判为碎片文字汤（%s，%d 字），已替换为提示",
+                        mt, len(desc))
+            _record_enrich(mt, cfg, understood=False, reason="garbled")
+            desc = GARBLED_DESC_NOTE
+        else:
+            _record_enrich(mt, cfg, understood=bool(desc),
+                           desc_type=(parse_desc_type(desc)[0] if desc else ""))
         if not desc:
             return (cap or media_placeholder(mt)), ""
 
@@ -290,8 +587,13 @@ async def _maybe_fetch_remote(
 
 
 __all__ = [
+    "blind_image_assertion",
+    "clear_desc_inflight",
     "enrich_inbound_media_text",
+    "honest_image_ask",
     "is_placeholder_only",
     "lazy_voice_transcriber",
     "media_placeholder",
+    "media_wait_sec_from_cfg",
+    "try_mark_desc_inflight",
 ]

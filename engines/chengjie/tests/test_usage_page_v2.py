@@ -66,12 +66,17 @@ def test_usage_exhaust_projection_failsoft():
 
 
 def test_usage_buy_more_link_beside_exhaust():
-    """「增购」链接（/membership）挪到预计耗尽旁常驻醒目位（行随 uq-char 区显隐，
-    不再依赖授权总池块单独可见）。"""
+    """「增购」CTA 落点契约（2026-08-18 P1 升格）：从预计耗尽行内的 12px 文字链
+    升为 .ug-buy 按钮样式、常驻「字符额度（额度健康区）」标题行右侧——随 #uq-char
+    区显隐的语义不变，只是动线从段尾抬到标题行（商业化关键动线不该藏）。
+    2026-08-16 v2 的原断言钉在 uq-exhaust-row 行内，那是当时「挪出授权总池块」的
+    过渡位；预计耗尽文本行保留，只挪 CTA。"""
     html = _usage()
-    assert 'id="uq-exhaust-row"' in html
-    row = html.split('id="uq-exhaust-row"', 1)[1].split("</div>", 2)[0] + "</div>"
-    assert 'href="/membership"' in row, "增购链接不在预计耗尽行内"
+    assert 'id="uq-char"' in html
+    head = html.split('id="uq-char"', 1)[1].split("</h3>", 1)[0]
+    assert 'href="/membership"' in head, "增购 CTA 不在字符额度区标题行内"
+    assert 'class="ug-buy"' in head, "增购 CTA 未按钮化（.ug-buy）"
+    assert 'id="uq-exhaust-row"' in html, "预计耗尽行被误删（只该挪 CTA）"
 
 
 def test_usage_new_apis_still_failsoft():
@@ -85,7 +90,9 @@ def test_usage_new_apis_still_failsoft():
 
 def test_warnbar_skeleton_and_polling():
     html = _base()
-    assert 'id="uqw-bar"' in html, "预警条骨架丢失"
+    # 实施75 batch2：预警条退役顶部，迁右下胶囊+卡片（AITRNotify）
+    assert 'id="uqw-bar"' not in html, "坐席额度预警横幅不得回归顶部（实施75）"
+    assert "AITRNotify.ongoing.set('uqw'" in html, "右下胶囊接线丢失"
     assert "/api/workspace/my-usage" in html, "预警条数据源接线丢失"
     # 首查延迟 10s、之后每 600s（600000ms）
     assert "setTimeout(function(){ _tick(); timer = setInterval(_tick, 600000); }, 10000);" in html, \
@@ -108,12 +115,11 @@ def test_warnbar_stops_polling_after_failures():
 
 
 def test_warnbar_reuses_existing_banner_infra():
-    """无新颜色字面量：warn/over 复用 ws-expiry 两个既有类；显隐走 wsBanner 仲裁器
-    （同刻最多一条横幅），并注册独立 id（uqw- 前缀，不与既有条互踩）。"""
+    """实施75 batch2：渲染面统一走 AITRNotify（右下胶囊语义色 + 每档每日一次卡片），
+    over=红/warn=琥珀由 tone 承载；「点击查看」直达用量页的出口保留为卡片按钮。"""
     html = _base()
-    assert "bar.classList.toggle('ws-expiry-danger', lvl === 'over');" in html
-    assert "bar.classList.toggle('ws-expiry-warn', lvl !== 'over');" in html
-    assert "window.wsBanner.register('uqw-bar', 15, 'flex')" in html
+    assert "tone: lvl === 'over' ? 'error' : 'warn'" in html, "over/warn 语义分档被删"
+    assert "dedupKey: 'uqw:' + lvl" in html, "每档每日一次的去重键被删"
     assert "location.href = '/workspace/usage'" in html, "点击直达用量页的入口被删"
 
 

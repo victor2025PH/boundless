@@ -143,6 +143,7 @@ def plan_proactive_sends(
     user_clock_provider: Optional[Callable[[str], Optional[Any]]] = None,
     backoff_cfg: Optional[Dict[str, Any]] = None,
     response_pacing_cfg: Optional[Dict[str, Any]] = None,
+    read_aware_cfg: Optional[Dict[str, Any]] = None,
     diagnostics: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """决定本轮该主动开场的会话清单（确定性纯函数）。
@@ -207,6 +208,7 @@ def plan_proactive_sends(
         effective_cooldown_hours,
         effective_min_silent_hours,
         never_replied_exhausted,
+        read_aware_cooldown_hours,
         response_rate_factor,
         unanswered_streak,
     )
@@ -302,6 +304,8 @@ def plan_proactive_sends(
             _last_in = 0.0
         # 未回退避：上次真实发送后对方没回过话 → streak 生效，冷却按倍数拉长
         _streak = unanswered_streak(last_sent, entry["streak"], _last_in)
+        # 快照层的已读态（P1 2026-08-18；仅 telegram 有回执，其余为 ""=未知）
+        _read_state = str(c.get("read_state") or "")
         # P2 回复率反哺：慢性信号先缩放基础冷却（stretch≥1 / relax∈[0.5,1]），
         # 急性 streak 退避随后在其上翻倍并封顶——两信号正交叠加。
         _resp_factor = 1.0
@@ -321,7 +325,15 @@ def plan_proactive_sends(
                 _diag(cid, "never_replied_stop",
                       f"对方从未回过话且已尝试 {_streak} 次，出圈", silent_hours)
                 continue
-            _eff_cool = backoff_cooldown_hours(_eff_cool, _streak, backoff_cfg)
+            # P1 已读/未读分流（2026-08-18）：快照带 read_state 且 read_aware 开
+            # → 已读不回退避更陡 / 未读首条不罚+连续未读抬月频；未知=原语义。
+            if read_aware_cfg is not None and read_aware_cfg.get("enabled"):
+                _eff_cool = read_aware_cooldown_hours(
+                    _eff_cool, _streak, _read_state, backoff_cfg,
+                    read_aware_cfg)
+            else:
+                _eff_cool = backoff_cooldown_hours(
+                    _eff_cool, _streak, backoff_cfg)
         if last_pro and (now - last_pro) < _eff_cool * 3600.0:
             _diag(cid, "cooldown",
                   f"距上次主动 {(now - last_pro) / 3600.0:.1f}h，冷却窗 "
@@ -401,6 +413,8 @@ def plan_proactive_sends(
             # 未回退避观测：连续几条主动没得到回应、对方最后开口时间
             "unanswered_streak": _streak,
             "last_in_ts": _last_in,
+            # 已读/未读分流（P1 2026-08-18）：prompt 无压力文体与媒体降级消费
+            "read_state": _read_state,
             # P2 回复率反哺观测：长期观察数与本次冷却倍率（1.0=未生效）
             "response_obs": int(entry.get("obs_n") or 0),
             "response_factor": round(_resp_factor, 2),
@@ -571,11 +585,14 @@ class CompanionProactiveLoop:
         ritual_fn: Optional[Callable[[List[Dict[str, Any]], float], List[Dict[str, Any]]]] = None,
         ritual_cooldown: Any = None,
         fresh_activity_provider: Optional[Callable[[str], float]] = None,
+        unanswered_wall_provider: Optional[Callable[[str], int]] = None,
+        wall_cfg: Optional[Dict[str, Any]] = None,
         pacing_cfg: Optional[Dict[str, Any]] = None,
         priority_fn: Optional[Callable[[Dict[str, Any]], float]] = None,
         user_clock_provider: Optional[Callable[[str], Optional[Any]]] = None,
         backoff_cfg: Optional[Dict[str, Any]] = None,
         response_pacing_cfg: Optional[Dict[str, Any]] = None,
+        read_aware_cfg: Optional[Dict[str, Any]] = None,
         live_cfg_provider: Optional[Callable[[], Dict[str, Any]]] = None,
         now: Callable[[], float] = time.time,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -586,12 +603,20 @@ class CompanionProactiveLoop:
         # 发送前活跃复核（None=不复核，旧行为）：规划→生成→真发有间隔，对方可能刚开口。
         # 真发前拿最新 last_ts 再判一次，近期活跃则跳过——不对刚聊过的人发主动「好久不见」。
         self._fresh_activity_provider = fresh_activity_provider
+        # 未回消息墙（2026-08-18，None=不设墙旧行为）：会话末尾已堆 ≥max_trailing 条
+        # 出站未获回应 → 暂停**一切**主动（含仪式问候——真人不会对着不回消息的人一直
+        # 说；对方打开聊天看到 6 条连排早安 = 社交尴尬 + 一眼机器人）。对方任何一条
+        # 入站即自然解墙。provider 返回末尾连续未回出站条数（含媒体条）。
+        self._unanswered_wall_provider = unanswered_wall_provider
+        self._wall_cfg = wall_cfg
         self._pacing_cfg = pacing_cfg
         self._priority_fn = priority_fn
         # 未回退避（None=不退避旧行为）：对「主动了但没回」的会话按倍数拉长冷却
         self._backoff_cfg = backoff_cfg
         # 回复率反哺（None=不反哺）：长期回复率缩放冷却（慢性信号，正交于 streak）
         self._response_pacing_cfg = response_pacing_cfg
+        # 已读/未读分流（None=不分流）：按最后出站已读态分档退避（P1 2026-08-18）
+        self._read_aware_cfg = read_aware_cfg
         # 用户时钟（None=服务器钟旧行为）：安静时段逐会话判，别把「对方的凌晨」当白天
         self._user_clock_provider = user_clock_provider
         self._cooldown = cooldown_store
@@ -657,6 +682,7 @@ class CompanionProactiveLoop:
         eff_pacing = live.get("pacing_cfg", self._pacing_cfg)
         eff_backoff = live.get("backoff_cfg", self._backoff_cfg)
         eff_response = live.get("response_pacing_cfg", self._response_pacing_cfg)
+        eff_read_aware = live.get("read_aware_cfg", self._read_aware_cfg)
         plans = plan_proactive_sends(
             convs,
             cooldown_map=(self._cooldown.snapshot() if self._cooldown else {}),
@@ -674,6 +700,7 @@ class CompanionProactiveLoop:
             user_clock_provider=self._user_clock_provider,
             backoff_cfg=eff_backoff,
             response_pacing_cfg=eff_response,
+            read_aware_cfg=eff_read_aware,
         )
         # 每日仪式问候（晨 / 晚安）：时段驱动、独立每日每档去重；与沉默回访互补。
         # 同一会话本 tick 既到仪式点又够沉默时，仪式优先（不重复打扰一人）。
@@ -687,8 +714,34 @@ class CompanionProactiveLoop:
                 ritual_ids = {p.get("conversation_id") for p in ritual_plans}
                 plans = ritual_plans + [
                     p for p in plans if p.get("conversation_id") not in ritual_ids]
+        eff_wall = live.get("wall_cfg", self._wall_cfg)
         sent = 0
         for p in plans:
+            # 未回消息墙：末尾已堆 ≥N 条出站未回 → 本轮一切主动（含仪式）跳过，
+            # 不发不记冷却（对方开口自然解墙，下轮候选照常）。fail-open：判定
+            # 异常按放行（防骚扰护栏不做新的静默故障源）。
+            if (self._unanswered_wall_provider is not None
+                    and isinstance(eff_wall, dict)
+                    and eff_wall.get("enabled", True)):
+                try:
+                    _max_tr = int(eff_wall.get("max_trailing", 6) or 6)
+                    _cid_w = str(p.get("conversation_id") or "")
+                    _cnt = int(self._unanswered_wall_provider(_cid_w) or 0)
+                    if 0 < _max_tr <= _cnt:
+                        logger.info(
+                            "[proactive] skip cid=%s 未回消息墙（末尾连续 %d 条"
+                            "出站未获回应，暂停主动直到对方开口）", _cid_w, _cnt)
+                        try:
+                            from src.companion.proactive_stats import (
+                                record_wall_skip,
+                            )
+                            record_wall_skip()
+                        except Exception:
+                            pass
+                        continue
+                except Exception:
+                    logger.debug("[proactive] 未回消息墙判定异常（放行）",
+                                 exc_info=True)
             # 发送前活跃复核：从规划到此刻对方可能刚开口 → 用最新 last_ts 再判一次，
             # 近期活跃则跳过（不发、不记冷却，下轮候选自然刷新）。仪式问候（有 ritual_key，
             # 晨晚安/节日按时点驱动）不受此限——它本就不以「沉默」为前提。

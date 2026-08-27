@@ -1,0 +1,323 @@
+{% extends "workspace_base.html" %}
+{#- 账号资产中心（账号资产保全 P1，2026-08-19，方案 docs/实施47 §4-B）：
+    封号场景「资产可见 → 可导出 → 可迁移」信任阶梯的产品面。
+    数据 = /api/workspace/assets/summary + /ledger（只读聚合，asset_center_routes.py）；
+    导出复用既有 export-history；「迁移包」按 features.export_migration 探测渲染
+    （接管线工单 2 的端点 22:30 装载前不出 CTA，只在封禁卡给一句诚实提示）。 -#}
+{% set ws_sidebar = true %}
+{% block title %}{{ (i18n or {}).get('ac_title', "账号资产中心") }}{% endblock %}
+{% block head %}
+<style>
+  /* 全页 --tk-* 令牌驱动（日/夜自适配）；语义色一律「translucent 底 + ink 字」，
+     红色只给封禁徽章/卡描边，不整屏泛红（方案 §3 UI 视角）。 */
+  .ac-wrap{height:100%;overflow-y:auto;background:var(--tk-bg);padding:18px;max-width:1180px;margin:0 auto;}
+  .ac-back{font-size:12px;color:var(--tk-brand);text-decoration:none;}
+  .ac-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:6px 0 4px;flex-wrap:wrap;}
+  .ac-head h2{margin:0;font-size:19px;color:var(--tk-text);}
+  .ac-sub{font-size:12px;color:var(--tk-text-muted);margin:0 0 14px;max-width:760px;}
+  .ac-kpis{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px;margin-bottom:16px;}
+  .ac-kpi{background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:var(--tk-radius-lg,14px);padding:13px 15px;box-shadow:var(--tk-shadow);}
+  .ac-kpi .v{font-size:25px;font-weight:800;color:var(--tk-text);}
+  .ac-kpi .l{font-size:12px;color:var(--tk-text-muted);margin-top:3px;}
+  .ac-kpi .s{font-size:11px;color:var(--tk-text-muted);margin-top:2px;}
+  .ac-kpi .s.bad{color:var(--tk-danger-ink);font-weight:600;}
+  .ac-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;margin-bottom:16px;}
+  .ac-card{background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:var(--tk-radius-lg,14px);padding:14px;box-shadow:var(--tk-shadow);display:flex;flex-direction:column;gap:9px;}
+  .ac-card.banned{border-color:rgba(239,68,68,.45);}
+  .ac-idrow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .ac-idrow .nm{font-weight:700;color:var(--tk-text);font-size:14px;}
+  .ac-idrow .aid{font-size:11px;color:var(--tk-text-muted);}
+  .ac-st{font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap;}
+  .ac-st.banned{color:var(--tk-danger-ink);background:repeating-linear-gradient(135deg, rgba(239,68,68,.14) 0 6px, rgba(239,68,68,.26) 6px 12px);}
+  .ac-st.online{color:var(--tk-ok-ink);background:rgba(16,185,129,.14);}
+  .ac-st.offline{color:var(--tk-text-muted);background:var(--tk-surface-2);}
+  .ac-st.pending{color:var(--tk-warn-ink);background:rgba(245,158,11,.14);}
+  .ac-st.removed{color:var(--tk-text-muted);background:var(--tk-surface-2);text-decoration:line-through;}
+  .ac-st.history_only{color:var(--tk-text-muted);background:transparent;border:1px dashed var(--tk-border);}
+  .ac-banrsn{font-size:11px;color:var(--tk-danger-ink);}
+  .ac-nums{display:flex;gap:16px;}
+  .ac-nums .cell b{display:block;font-size:17px;font-weight:800;color:var(--tk-text);}
+  .ac-nums .cell span{font-size:11px;color:var(--tk-text-muted);}
+  .ac-reach-head{display:flex;justify-content:space-between;align-items:baseline;font-size:11px;color:var(--tk-text-muted);margin-bottom:4px;}
+  .ac-reach-head b{color:var(--tk-text);font-size:12px;}
+  .ac-bar{display:flex;height:8px;border-radius:5px;overflow:hidden;background:var(--tk-surface-2);}
+  .ac-bar i{display:block;height:100%;}
+  .ac-bar .sg-both{background:rgba(16,185,129,.85);}
+  .ac-bar .sg-user{background:var(--tk-brand);}
+  .ac-bar .sg-phone{background:var(--tk-amber);}
+  .ac-bar .sg-none{background:var(--tk-border);}
+  .ac-legend{display:flex;gap:10px;flex-wrap:wrap;font-size:10.5px;color:var(--tk-text-muted);margin-top:5px;}
+  .ac-legend .dot{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:3px;vertical-align:-1px;}
+  .ac-legend .dot.both{background:rgba(16,185,129,.85);}
+  .ac-legend .dot.user{background:var(--tk-brand);}
+  .ac-legend .dot.phone{background:var(--tk-amber);}
+  .ac-legend .dot.none{background:var(--tk-border);}
+  .ac-meta{font-size:11px;color:var(--tk-text-muted);}
+  .ac-ctas{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:auto;}
+  .ac-actbtn{font-size:12px;padding:4px 11px;border:1px solid var(--tk-border);border-radius:12px;background:var(--tk-surface);color:var(--tk-text);cursor:pointer;}
+  .ac-actbtn:hover{border-color:var(--tk-brand);}
+  .ac-actbtn:disabled{opacity:.55;cursor:default;}
+  .ac-actbtn:focus-visible{outline:2px solid var(--tk-brand);outline-offset:1px;}
+  .ac-actbtn.primary{background:var(--tk-brand);border-color:var(--tk-brand);color:#fff;}
+  .ac-hint{font-size:11px;color:var(--tk-text-muted);}
+  .ac-sec{background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:var(--tk-radius-lg,14px);padding:16px;margin-bottom:14px;box-shadow:var(--tk-shadow);}
+  .ac-sec h3{margin:0 0 10px;font-size:14px;color:var(--tk-text);}
+  .ac-tbl{width:100%;border-collapse:collapse;font-size:12.5px;}
+  .ac-tbl th{text-align:left;color:var(--tk-text-muted);border-bottom:1px solid var(--tk-border);padding:6px 4px;font-weight:600;white-space:nowrap;}
+  .ac-tbl td{padding:6px 4px;border-bottom:1px solid var(--tk-border);color:var(--tk-text);vertical-align:top;}
+  .ac-tbl td.dt{color:var(--tk-text-muted);font-size:11.5px;word-break:break-all;}
+  .ac-ok{color:var(--tk-ok-ink);font-weight:700;}
+  .ac-bad{color:var(--tk-danger-ink);font-weight:700;}
+  .ac-empty{color:var(--tk-text-muted);font-size:13px;padding:34px 16px;text-align:center;}
+  @media (max-width:480px){
+    .ac-cards{grid-template-columns:1fr;}
+    .ac-kpis{grid-template-columns:repeat(2,1fr);}
+    .ac-wrap{padding:12px;}
+  }
+</style>
+{% endblock %}
+{% block content %}
+<div class="ac-wrap">
+  <a class="ac-back" href="/workspace/dash">← {{ (i18n or {}).get('wr_s002', "返回今日概览") }}</a>
+  <div class="ac-head">
+    <h2>🗃️ {{ (i18n or {}).get('ac_title', "账号资产中心") }}</h2>
+    <button class="ac-actbtn" id="ac-refresh" type="button">⟳ {{ (i18n or {}).get('ac_refresh', "刷新") }}</button>
+  </div>
+  <p class="ac-sub">{{ (i18n or {}).get('ac_sub', "每个账号沉淀了多少会话、消息、联系人一目了然；账号被封时数据仍在这里，可随时导出、迁移。") }}</p>
+
+  <div id="ac-loading" class="ac-empty">{{ (i18n or {}).get('ac_loading', "正在盘点资产…") }}</div>
+  <div id="ac-error" class="ac-empty" style="display:none;"></div>
+
+  <div id="ac-body" style="display:none;">
+    <div class="ac-kpis" id="ac-kpis"></div>
+    <div class="ac-cards" id="ac-cards"></div>
+    <div id="ac-cards-empty" class="ac-empty" style="display:none;">{{ (i18n or {}).get('ac_cards_empty', "暂无账号资产——接入渠道并开始收发消息后，这里会按账号呈现全部沉淀。") }}</div>
+
+    <div class="ac-sec">
+      <h3>📜 {{ (i18n or {}).get('ac_ledger_title', "快照 / 导出台账") }}</h3>
+      <div id="ac-ledger-empty" class="ac-empty" style="display:none;">{{ (i18n or {}).get('ac_ledger_empty', "暂无导出、快照记录（导出记录或触发封号自动快照后此处留痕）") }}</div>
+      <table class="ac-tbl" id="ac-ledger-tbl" style="display:none;">
+        <thead><tr>
+          <th>{{ (i18n or {}).get('ac_col_time', "时间") }}</th>
+          <th>{{ (i18n or {}).get('ac_col_acct', "平台 / 账号") }}</th>
+          <th>{{ (i18n or {}).get('ac_col_kind', "类型") }}</th>
+          <th>{{ (i18n or {}).get('ac_col_result', "结果") }}</th>
+          <th>{{ (i18n or {}).get('ac_col_detail', "明细") }}</th>
+        </tr></thead>
+        <tbody id="ac-ledger-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  'use strict';
+  var FEATURES = {export_migration:false, reconnect:false};
+  var ST_LABEL = {
+    banned: window.T('ac_st_banned'),
+    online: window.T('ac_st_online'),
+    offline: window.T('ac_st_offline'),
+    pending: window.T('ac_st_pending'),
+    removed: window.T('ac_st_removed'),
+    history_only: window.T('ac_st_history')
+  };
+  var KIND_LABEL = {
+    account_export: window.T('ac_k_export'),
+    account_purge: window.T('ac_k_purge'),
+    account_export_migration: window.T('ac_k_migration'),
+    account_snapshot: window.T('ac_k_snapshot'),
+    asset_snapshot: window.T('ac_k_snapshot')
+  };
+  function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+  function fmtN(n){try{return Number(n||0).toLocaleString();}catch(e){return String(n||0);}}
+  function fmtMB(b){b=Number(b||0);if(b<=0)return '0 MB';var mb=b/1048576;return (mb>=100?Math.round(mb):mb.toFixed(1))+' MB';}
+  /* 日期一律走全站统一 wsFmtDateTime（随 UI 语言本地化；勿改回内联浏览器 locale
+     写法，门禁 test_sealed_templates_no_legacy_date_formatters 会红）。 */
+  function fmtTs(ts){if(!ts)return '—';try{return window.wsFmtDateTime(ts);}catch(e){return '—';}}
+  function toast(msg, color){try{if(window.CRMW&&CRMW.toast)CRMW.toast(msg,color);}catch(e){}}
+  function jfetch(url, timeoutMs){
+    var ctl = new AbortController();
+    var t = setTimeout(function(){ctl.abort();}, timeoutMs||20000);
+    return fetch(url, {credentials:'same-origin', signal:ctl.signal})
+      .finally(function(){clearTimeout(t);});
+  }
+
+  function kpiHtml(v, label, sub, subBad){
+    return '<div class="ac-kpi"><div class="v">'+v+'</div><div class="l">'+esc(label)+'</div>'
+      +(sub?('<div class="s'+(subBad?' bad':'')+'">'+esc(sub)+'</div>'):'')+'</div>';
+  }
+  function renderKpis(d){
+    var t = d.totals||{};
+    var bk = d.backup||null;
+    var html = '';
+    html += kpiHtml(fmtN(t.accounts), window.T('ac_kpi_accounts'),
+      (t.banned>0 ? (window.T('ac_st_banned')+' '+fmtN(t.banned)) : ''), t.banned>0);
+    html += kpiHtml(fmtN(t.conversations), window.T('ac_kpi_convs'), '');
+    html += kpiHtml(fmtN(t.messages), window.T('ac_kpi_msgs'), '');
+    html += kpiHtml(fmtN(t.contacts), window.T('ac_kpi_contacts'), '');
+    html += kpiHtml(fmtN(t.media_files), window.T('ac_kpi_media'), fmtMB(t.media_bytes));
+    html += kpiHtml(bk ? '📦' : '—', window.T('ac_backup_last'),
+      bk ? (fmtTs(bk.ts)+' · '+fmtMB(bk.bytes)) : window.T('ac_backup_none'));
+    document.getElementById('ac-kpis').innerHTML = html;
+  }
+
+  function numCell(v, label){
+    return '<div class="cell"><b>'+fmtN(v)+'</b><span>'+esc(label)+'</span></div>';
+  }
+  function cardHtml(a){
+    var st = String(a.status||'offline');
+    var stCls = ST_LABEL.hasOwnProperty(st) ? st : 'offline';
+    var c = a.counts||{};
+    var reach = a.reachability||{};
+    var tot = Number(reach.total||0);
+    function w(x){return tot>0 ? String(100*Number(x||0)/tot) : '0';}
+    var covered = Number(reach.covered||0);
+    var covPct = tot>0 ? Math.round(100*covered/tot)+'%' : '—';
+    var html = '<div class="ac-card'+(st==='banned'?' banned':'')+'">';
+    html += '<div class="ac-idrow"><span class="nm">'+esc(a.label||a.account_id)+'</span>'
+      +'<span class="ac-st '+stCls+'">'+esc(ST_LABEL[stCls]||st)+'</span>'
+      +'<span class="aid">'+esc(a.platform)+' · '+esc(a.account_id)+'</span></div>';
+    if(st==='banned' && a.ban_reason){
+      html += '<div class="ac-banrsn">⚠ '+esc(a.ban_reason)+'</div>';
+    }
+    html += '<div class="ac-nums">'
+      + numCell(c.conversations, window.T('ac_n_convs'))
+      + numCell(c.messages, window.T('ac_n_msgs'))
+      + numCell((a.contacts_detail||{}).total, window.T('ac_n_contacts'))
+      + '</div>';
+    html += '<div title="'+esc(window.T('ac_reach_hint'))+'">'
+      + '<div class="ac-reach-head"><span>'+esc(window.T('ac_reach_title'))+'</span><b>'+covPct+'</b></div>'
+      + '<div class="ac-bar">'
+      + '<i class="sg-both" style="width:'+w(reach.both)+'%"></i>'
+      + '<i class="sg-user" style="width:'+w(reach.username_only)+'%"></i>'
+      + '<i class="sg-phone" style="width:'+w(reach.phone_only)+'%"></i>'
+      + '<i class="sg-none" style="width:'+w(reach.none)+'%"></i>'
+      + '</div>'
+      + '<div class="ac-legend">'
+      + '<span><i class="dot both"></i>'+esc(window.T('ac_lg_both'))+' '+fmtN(reach.both)+'</span>'
+      + '<span><i class="dot user"></i>'+esc(window.T('ac_lg_user'))+' '+fmtN(reach.username_only)+'</span>'
+      + '<span><i class="dot phone"></i>'+esc(window.T('ac_lg_phone'))+' '+fmtN(reach.phone_only)+'</span>'
+      + '<span><i class="dot none"></i>'+esc(window.T('ac_lg_none'))+' '+fmtN(reach.none)+'</span>'
+      + '</div></div>';
+    html += '<div class="ac-meta">'+esc(window.T('ac_last_active'))+': '+fmtTs(a.last_ts)
+      +' · '+esc(window.T('ac_media_files'))+': '+fmtN(c.media_files)+'</div>';
+    html += '<div class="ac-ctas">'
+      + '<button class="ac-actbtn" type="button" data-act="export" data-pl="'+esc(a.platform)+'" data-aid="'+esc(a.account_id)+'">⬇ '+esc(window.T('ac_cta_export'))+'</button>';
+    if(FEATURES.export_migration){
+      html += '<button class="ac-actbtn primary" type="button" data-act="migrate" data-pl="'+esc(a.platform)+'" data-aid="'+esc(a.account_id)+'">📦 '+esc(window.T('ac_cta_migrate'))+'</button>';
+    } else if(st==='banned'){
+      html += '<span class="ac-hint">'+esc(window.T('ac_migrate_pending'))+'</span>';
+    }
+    html += '</div></div>';
+    return html;
+  }
+  function renderCards(list){
+    var grid = document.getElementById('ac-cards');
+    var empty = document.getElementById('ac-cards-empty');
+    if(!list || !list.length){
+      grid.innerHTML = '';
+      empty.style.display = '';
+      return;
+    }
+    empty.style.display = 'none';
+    grid.innerHTML = list.map(cardHtml).join('');
+  }
+
+  function renderLedger(rows){
+    var tbl = document.getElementById('ac-ledger-tbl');
+    var empty = document.getElementById('ac-ledger-empty');
+    var body = document.getElementById('ac-ledger-body');
+    if(!rows || !rows.length){
+      tbl.style.display = 'none';
+      empty.style.display = '';
+      return;
+    }
+    empty.style.display = 'none';
+    tbl.style.display = '';
+    body.innerHTML = rows.map(function(r){
+      var ok = String(r.reason||'') === 'ok';
+      return '<tr>'
+        + '<td class="dt">'+fmtTs(r.ts)+'</td>'
+        + '<td>'+esc(r.platform)+' · '+esc(r.account_id||'—')+'</td>'
+        + '<td>'+esc(KIND_LABEL[r.kind]||r.kind)+'</td>'
+        + '<td>'+(ok?('<span class="ac-ok">✓</span>'):('<span class="ac-bad">'+esc(r.reason||'?')+'</span>'))+'</td>'
+        + '<td class="dt">'+esc(r.detail||'')+'</td>'
+        + '</tr>';
+    }).join('');
+  }
+
+  function doExport(pl, aid, btn, migration){
+    var url = '/api/accounts/'+encodeURIComponent(pl)+'/'+encodeURIComponent(aid)
+      + (migration ? '/export-migration' : '/export-history');
+    btn.disabled = true;
+    var old = btn.textContent;
+    btn.textContent = window.T('ac_exporting');
+    jfetch(url, 180000).then(function(r){
+      if(!r.ok) throw new Error('http '+r.status);
+      var cd = r.headers.get('Content-Disposition')||'';
+      var mm = cd.match(/filename="?([^";]+)"?/);
+      return r.blob().then(function(blob){
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = (mm&&mm[1]) || ('chatx-'+(migration?'migration':'history')+'_'+pl+'_'+aid+(migration?'.zip':'.jsonl'));
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function(){try{URL.revokeObjectURL(a.href);a.remove();}catch(e){}}, 2000);
+        toast(window.T('ac_export_ok'), '#16a34a');
+      });
+    }).catch(function(e){
+      toast(window.T('ac_export_fail')+': '+String((e&&e.message)||e), '#dc2626');
+    }).finally(function(){
+      btn.disabled = false;
+      btn.textContent = old;
+    });
+  }
+
+  function load(force){
+    var loading = document.getElementById('ac-loading');
+    var errEl = document.getElementById('ac-error');
+    var bodyEl = document.getElementById('ac-body');
+    errEl.style.display = 'none';
+    if(bodyEl.style.display === 'none') loading.style.display = '';
+    jfetch('/api/workspace/assets/summary'+(force?'?force=1':''), 30000)
+      .then(function(r){
+        if(!r.ok) throw new Error('http '+r.status);
+        return r.json();
+      })
+      .then(function(d){
+        FEATURES = d.features||FEATURES;
+        loading.style.display = 'none';
+        bodyEl.style.display = '';
+        renderKpis(d);
+        renderCards(d.accounts||[]);
+      })
+      .catch(function(e){
+        loading.style.display = 'none';
+        if(bodyEl.style.display === 'none'){
+          errEl.textContent = window.T('ac_load_fail')+' ('+String((e&&e.message)||e)+')';
+          errEl.style.display = '';
+        } else {
+          toast(window.T('ac_load_fail'), '#dc2626');
+        }
+      });
+    jfetch('/api/workspace/assets/ledger?limit=50', 20000)
+      .then(function(r){ return r.ok ? r.json() : {rows:[]}; })
+      .then(function(d){ renderLedger((d&&d.rows)||[]); })
+      .catch(function(){ renderLedger([]); });
+  }
+
+  document.getElementById('ac-cards').addEventListener('click', function(ev){
+    var b = ev.target && ev.target.closest ? ev.target.closest('[data-act]') : null;
+    if(!b) return;
+    var act = b.getAttribute('data-act');
+    var pl = b.getAttribute('data-pl')||'';
+    var aid = b.getAttribute('data-aid')||'';
+    if(act==='export') doExport(pl, aid, b, false);
+    else if(act==='migrate') doExport(pl, aid, b, true);
+  });
+  document.getElementById('ac-refresh').addEventListener('click', function(){ load(true); });
+
+  load(false);
+})();
+</script>
+{% endblock %}

@@ -140,6 +140,137 @@ def build_colloquial_prompt(emotion: str = "neutral", lead: bool = True,
     return "\n".join(parts)
 
 
+# ── 语音剧本 Speech Script v1（实施65，2026-08-23）──────────────────────────
+# 把「停哪/想哪/错哪」的决策权从 crc32/几何切分移交给懂语义的 LLM：口语化改写与
+# 韵律标记合并为**一次** LLM 调用，输出单行剧本「段‖档 段‖档 段」。执行器在
+# voice_pacing.parse_speech_script / paced_synthesize（自动识别）。任何一步失败
+# → None → 调用方回落现行链，绝不劣化。
+# 剧本提示词独立版本号（进缓存键）：改 build_speech_script_prompt 必须 bump——
+# 刻意不用全局 _PROMPT_VERSION（bump 它会把普通口语化的全量落盘缓存一起作废）。
+# v4（2026-08-23 老板耳测四轮后定向）：禁笑声标记（引擎念出来怪异），笑意用话带；
+# 语调起伏交给分段+标点；文本口语度再加码（微信语音口吻）。
+_SCRIPT_PROMPT_VERSION = 4
+
+
+def build_speech_script_prompt(emotion: str = "neutral", style: str = "",
+                               disfluency: bool = False) -> str:
+    """语音剧本系统提示（纯函数）：vivid 口语重塑 + 语义化停顿/呼吸/思考/口误标记。
+
+    与 build_colloquial_prompt(vivid) 的关系＝超集：同一套事实红线，多出剧本标记
+    协议。停顿标记只许出现在**意群边界**（格式上即段尾），这是实施65 的核心不变量。
+    """
+    tone = _EMOTION_TONE.get(str(emotion or "").strip().lower(), "自然放松")
+    parts = [
+        "你是「语音剧本」助手：把 AI 写的回复改成真人发微信语音时随口说的话，"
+        "并用标记标注怎么说。输出**一行**剧本，不要换行。",
+        "剧本格式：把话切成 2-8 个语段，每段一个完整的意思（5-25 字）；"
+        "段与段之间用停顿标记隔开：‖短（顺着说）、‖中（正常换句）、‖长（说完一件事/换话题）。"
+        "最后一段后面**不加**任何标记。",
+        "红线（违反即废）：",
+        "1. 数字、时间、日期、金额、人名、地名、承诺，值和含义一律原样保留；",
+        "2. 不得加入原文没有的事实（语气词/口头禅可以加，「信息」不能加）；",
+        "3. 同一种语言，不串语言；",
+        "4. 只输出剧本一行本身：不要引号、不要解释、不要复述规则。",
+        "改写规则（先改写再分段，往「跟熟人发语音」的口吻改）：",
+        "- 把书面词全换成嘴上说的词：非常→特别、但是→不过、如果→要是、"
+        "现在→这会儿、之后→回头、一起→一块儿、可能→说不定、立刻→这就、"
+        "研究→琢磨/捣鼓、发现→一看、包括→像什么；",
+        "- 句子说短：一口气最多十二三个字，长句拆成几口气说；",
+        "- 语气助词（呀/呢/啦/嘛/哟/啊）自然地撒几个，别每句都有；",
+        "- 去客服腔播音腔，「您」改「你」；书面成语换大白话"
+        "（丰盛的晚餐→整顿好吃的、令人惊讶→没想到）；",
+        "- 如果原文已经很口语，就只分段打标记、少改字。",
+        "停顿标记规则（最重要）：",
+        "- 标记只能打在**一个意思说完的地方**，绝不能把一个意思劈成两半；",
+        "- 顺着往下说、列举中间用‖短；一句话说完用‖中；"
+        "说完一件事、要换话题、要开始问对方之前用‖长；",
+        "- 结尾若是问对方的问题，它自己就是最后一段（后面没有标记）。",
+        "笑的表达（重要）：**禁止使用任何笑声标记**（[laughter] 之类一律不写）；"
+        "笑意用「说出来的话」带：比如「给我乐坏了」「差点笑岔气」「你说逗不逗」；"
+        "「哈哈」整条最多出现一次、最多两个字（哈哈哈哈一长串念出来是假笑）。",
+        "语调起伏（治「念稿式平调」）：",
+        "- 讲事情的段落用平常陈述；讲到转折或爆点的那一段，末尾用感叹号"
+        "（念的人会自然扬起来）；问对方的段落用轻快的问句；",
+        "- 相邻两段别用一样的句式开头（连续「然后…然后…」是机器人）；",
+        "- 关键的转折/爆点前用‖长（停一拍再说，比喊出来更像真人）。",
+        "其他标记：",
+        "- [breath] 只能放在某段的最开头＝先吸口气再说这段：整条 ≥40 字时"
+        "**通常应有恰好 1 处**（放在最长/信息量最大的那一段开头），短回复不用；"
+        "最多 2 处，带 [breath] 的段要 ≥12 字；",
+        "- 思考词（嗯……/我想想）整条最多 1 处，只许出现在三种地方："
+        "回答对方问题的段首、报数字或做选择之前、换话题的段首；",
+        "- 不要新加「哎呀/嘿/哈哈」这类感叹词开场（原文本来就有的可以保留）。",
+        f"语气{tone}。",
+    ]
+    if str(style or "").strip():
+        parts.append(f"说话风格：{str(style).strip()}。")
+    if disfluency:
+        parts.append(
+            "本条允许至多 1 处轻口误（只许在前三分之二的段落里，二选一）："
+            "①重复式＝段首第一个词说两遍（「我、我跟你说」）；"
+            "②自纠式＝把一个普通词说错后马上纠正（「上周…啊不对，上上周」），"
+            "但数字/人名/金额/时间/地名**绝不能**当错词。没有自然的位置就不用。")
+    parts.append(_ANTI_ANSWER_RULE)
+    parts.append(
+        "示例输入1：今天店里客人很多，卖得很好。你吃饭了吗？记得休息。\n"
+        "示例输出1：哎今天店里人可多了，卖得特别好！‖长 嗯……你吃饭了没呀？‖短 记得歇会儿啊\n"
+        "示例输入2：我今天下午去了一趟超市，买了很多东西，包括牛奶、鸡蛋和水果。"
+        "晚上我打算做一顿丰盛的晚餐，犒劳一下自己。今天有个顾客的行为让我觉得很好笑。\n"
+        "示例输出2：[breath]我下午去了趟超市，买了好些东西‖短 牛奶啊鸡蛋啊，"
+        "还有点水果‖中 晚上寻思给自己整顿好吃的‖长 对了今天有个顾客，给我乐坏了‖短 回头说给你听哈")
+    return "\n".join(parts)
+
+
+_SCRIPT_MARK_RE = re.compile(r"‖\s*(短|中|长)")
+_SCRIPT_FIX_RE = re.compile(r"啊不对|哦不对|说错了")
+_SCRIPT_ANCHOR_CHAR_RE = re.compile(r"[0-9A-Za-z]")
+
+
+def strip_speech_script(text: str) -> str:
+    """剥掉剧本标记，还原纯文本（供语义比对/锚点校验/非剧本路径兜底）。"""
+    t = _SCRIPT_MARK_RE.sub("", str(text or ""))
+    t = t.replace("[breath]", "")
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def sanitize_speech_script(raw: str, original: str, *,
+                           max_expand: float = 2.6) -> Optional[str]:
+    """剧本消毒：格式/预算/口误选址不合规 或 剥标记后过不了既有消毒 → None。
+
+    复用 ``sanitize_llm_output`` 的全部事实守卫（长度/语言/锚点）——剧本只是
+    「带标记的口语化产物」，事实红线与普通改写完全同一把尺。
+    """
+    t = str(raw or "").strip()
+    if not t:
+        return None
+    t = re.sub(r"\s*\n+\s*", " ", t)
+    t = _PREFIX_RE.sub("", t).strip().strip(_QUOTE_CHARS).strip()
+    # v4 政策：笑声标记一律不进合成（引擎念出来怪异，老板耳测两轮定案）——
+    # 模型违规写了就静默剥除，不废整条剧本；笑意由文字（「乐坏了」）表达。
+    t = t.replace("[laughter]", "")
+    if "‖" not in t:
+        return None
+    from src.ai.voice_pacing import parse_speech_script
+    chunks = parse_speech_script(t)
+    if not chunks:
+        return None
+    if t.count("[breath]") > 2:
+        return None
+    if sum(1 for c in chunks if c.get("think")) > 2:
+        return None
+    # 口误守卫：不许贴着事实锚点（±8 字符内有数字/拉丁即拒），不许出现在最后一段
+    for m in _SCRIPT_FIX_RE.finditer(t):
+        lo, hi = max(0, m.start() - 8), min(len(t), m.end() + 8)
+        if _SCRIPT_ANCHOR_CHAR_RE.search(t[lo:hi]):
+            return None
+    if _SCRIPT_FIX_RE.search(str(chunks[-1].get("text") or "")):
+        return None
+    plain = strip_speech_script(t)
+    if sanitize_llm_output(plain, original, max_expand=max_expand) is None:
+        return None
+    return t
+
+
 # ── 输出消毒 / 校验（纯函数）─────────────────────────────────────────────────
 _PREFIX_RE = re.compile(
     r"^\s*(口语版|口语|改写后?|结果|输出|回答|答案|译文)\s*[:：]\s*")
@@ -705,6 +836,7 @@ async def llm_colloquialize(
     llm_endpoints: Any = None,
     temperature: float = 0.5,
     min_similarity: float = DEFAULT_MIN_SIMILARITY,
+    script: bool = False,
 ) -> Optional[str]:
     """本地 LLM 口语化。命中缓存直接返回；失败/超时/熔断/校验不过 → None（回落规则档）。
 
@@ -739,9 +871,14 @@ async def llm_colloquialize(
     # vivid 档加了主观口吻框架，天然更长 → 放宽膨胀上限（≤1.8 会误杀正常重塑）。
     if str(intensity or "").strip().lower() == "vivid" and max_expand < 2.2:
         max_expand = 2.2
+    # 剧本档：‖/[breath] 等标记额外占字，再放宽（事实红线由 sanitize 的锚点守卫兜）
+    if script and max_expand < 2.6:
+        max_expand = 2.6
 
     key = _cache_key(core, emotion, bool(lead), style, bool(disfluency),
-                     intensity, temperature)
+                     (f"script{_SCRIPT_PROMPT_VERSION}#" + intensity)
+                     if script else intensity,
+                     temperature)
     hit = _cache_get(key)
     if hit is not None:
         _bump("cache_hits")
@@ -771,9 +908,13 @@ async def llm_colloquialize(
         "auto": ("cloud", "local"),
         "local_first": ("local", "cloud"),
     }.get(prov, ("local",))
-    system = build_colloquial_prompt(emotion, bool(lead), style,
-                                     disfluency=bool(disfluency),
-                                     intensity=intensity)
+    if script:
+        system = build_speech_script_prompt(emotion, style,
+                                            disfluency=bool(disfluency))
+    else:
+        system = build_colloquial_prompt(emotion, bool(lead), style,
+                                         disfluency=bool(disfluency),
+                                         intensity=intensity)
     raw = None
     for _p in order:
         if raw:
@@ -798,7 +939,8 @@ async def llm_colloquialize(
                     continue
                 try:
                     raw = await _rewrite_via_endpoint(
-                        ep, system, core, temperature=temperature)
+                        ep, system, core, temperature=temperature,
+                        max_tokens=400 if script else 240)
                 except Exception as exc:
                     logger.debug("[voice_colloquial_llm] 端点 %s 异常: %s",
                                  ep_key, exc)
@@ -818,9 +960,16 @@ async def llm_colloquialize(
                 raw = None
             _note_provider("fallback", bool(raw))
 
-    out = sanitize_llm_output(raw, core, max_expand=max_expand) if raw else None
+    if not raw:
+        out = None
+    elif script:
+        out = sanitize_speech_script(raw, core, max_expand=max_expand)
+    else:
+        out = sanitize_llm_output(raw, core, max_expand=max_expand)
     if out and out != core:
-        ok, checked = await _semantic_verdict(client, core, out, min_similarity)
+        # 剧本档语义比对用剥标记后的纯文本（标记是韵律指令，不是语义内容）
+        _cmp = strip_speech_script(out) if script else out
+        ok, checked = await _semantic_verdict(client, core, _cmp, min_similarity)
         if not checked:
             # 嵌入侧不可用：拒用本次 LLM 稿（fail-closed），但**不投毒缓存、
             # 不推熔断**——这不是这句话或改写端点的错，嵌入恢复后同句应立即可用。

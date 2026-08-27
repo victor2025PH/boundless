@@ -207,6 +207,12 @@ def classify_login_error(text: str) -> str:
     t = str(text or "").strip().lower()
     if not t:
         return "login_failed"
+    # 必须先于 code=100 规则：LINE 的 code=100 是 SecondaryQrCodeException 通用码，
+    # 既盖「QR 过期」也盖「服务端临时拒绝」。2026-08-24 实录：扫码 20s + 输码 11s 全对，
+    # qrCodeLoginV2 仍回 code=100「Verification is temporarily unavailable」——按 qr_expired
+    # 处理会让用户以为自己太慢而反复重扫，恰恰把风控冷却越撞越长。
+    if "temporarily unavailable" in t:
+        return "temp_unavailable"
     if "pin" in t and any(k in t for k in ("timeout", "timed out", "expired", "not verified")):
         return "pin_timeout"
     if "qr code has expired" in t or "code=100" in t or "expired" in t:
@@ -326,11 +332,31 @@ def _dump_login_transcript(client: Any, config: Dict[str, Any], tag: str) -> str
         return ""
 
 
+# PIN 展示窗口（秒）：服务端不下发 PIN 有效期（createPinCode 只回 pinCode，okline auth.py
+# 实读），只能客户端给一个「诚实偏紧」的估计值。取 120 依据：网关曾在长轮询 ~120.3s 处
+# 回过期响应（见 _LOGIN_HTTP_TIMEOUT_SEC 注释）。宁紧勿松——前端倒计时归零只转
+# 「可能已超时」软提示并继续轮询（权威死亡信号仍是本线程写的 failed 终态），不会误杀
+# 还能成功的会话；将来按 _diag transcript 校准窗口时只改这里，前端零改动自动跟随。
+_PIN_WINDOW_SEC = 120.0
+
+
 def _mark_failed(state: Dict[str, Any], reason_code: str) -> None:
-    """写失败终态：原文不外泄，前端按 ``reason_code`` 出本地化文案。"""
+    """写失败终态：原文不外泄，前端按 ``reason_code`` 出本地化文案。
+
+    阶段感知归因：PIN 已签发后网关报「QR code has expired」（code=100）＝整条登录会话
+    在**验证码环节**到期——用户明明扫码成功了，再说「二维码超时」等于指错路（2026-08-24
+    实录截图：扫完码、输完验证码，界面却让他「重新获取二维码」）。``classify_login_error``
+    保持纯文本归类（2026-07-25 事故原样本仍归 qr_expired），阶段修正只在此处收口。
+    """
     # 用户主动取消已经写过终态，别让随后 qr_login 抛出的连接错误把它改写成故障
     if str(state.get("reason_code") or "") == "cancelled":
         return
+    if reason_code == "qr_expired" and str(state.get("pin") or ""):
+        issued = float(state.get("pin_issued_at") or 0.0)
+        age = (time.time() - issued) if issued > 0 else -1.0
+        # INFO 留档：PIN 签发后多少秒被判过期＝服务端真实窗口的校准数据（调 _PIN_WINDOW_SEC 用）
+        logger.info("[line_protocol] 会话在 PIN 阶段过期（PIN 签发后 %.1fs）→ 归因 pin_timeout", age)
+        reason_code = "pin_timeout"
     state["status"] = "failed"
     state["reason_code"] = reason_code
     state["detail"] = ""
@@ -352,6 +378,9 @@ def _drive_qr_login(client: Any, state: Dict[str, Any], config: Dict[str, Any],
 
     def on_pin(pin: str) -> None:
         state["pin"] = str(pin or "")
+        # 签发时刻＝前端倒计时的锚点（poll 按 _PIN_WINDOW_SEC 推剩余秒），也是失败归因
+        # 「PIN 阶段过期」的校准数据源
+        state["pin_issued_at"] = time.time()
         state["status"] = "pin_needed"
         # PIN 只走独立字段：detail 会被后续阶段的失败文案覆盖，塞这里会在第二段轮询时丢失
         state["detail"] = "请在手机 LINE 上输入验证码"
@@ -528,9 +557,17 @@ def make_provider(config: Dict[str, Any]):
                     logger.debug("[line_protocol] self_profile 富集失败（忽略）", exc_info=True)
                 _kick_orchestrator()
             # pin/reason_code 只在各自状态下回填：PIN 属一次性凭据，登录成功后不该还留在响应里
+            pin_left = 0
+            if st == "pin_needed":
+                issued = float(state.get("pin_issued_at") or 0.0)
+                if issued > 0:
+                    pin_left = max(0, int(_PIN_WINDOW_SEC - (time.time() - issued)))
             return {"status": st, "account_id": mid,
                     "detail": str(state.get("detail") or ""),
                     "pin": (str(state.get("pin") or "") if st == "pin_needed" else ""),
+                    # PIN 剩余展示秒（服务端按签发时刻推算）：前端倒计时以此为准，免得两套
+                    # 时钟各说各话——旧前端写死 240s，比网关真实窗口乐观一倍
+                    "pin_expires_in": pin_left,
                     "reason_code": (str(state.get("reason_code") or "") if st == "failed" else ""),
                     "qr_image": ("" if st == "authorized" else str(state.get("qr_image") or ""))}
 
@@ -550,7 +587,8 @@ def make_provider(config: Dict[str, Any]):
         return {
             "qr_image": str(state.get("qr_image") or ""),
             "instruction": "用手机 LINE 扫码：设置 → 我的账户 →「用其他设备登录 / 登录中的设备」出示二维码，"
-                           "用主设备 LINE 扫描；如提示 PIN，请在手机上输入弹出的数字。",
+                           "用主设备 LINE 扫描。扫完手机上还要输一个 6 位验证码——请把手机拿在手边，"
+                           "全程在 2 分钟内完成。",
             # i18n 键随会话下发：英文坐席按键取本地化指引，raw instruction 仅兜底
             "instruction_key": "inbox.connect.instr_line_protocol",
             "poll": _poll,

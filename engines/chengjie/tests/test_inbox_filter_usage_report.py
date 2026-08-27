@@ -14,6 +14,7 @@ from pathlib import Path
 
 from tools.inbox_filter_usage_report import (
     IFLT_EPOCH_DAY,
+    IFLT_GFOCUS_EPOCH_DAY,
     _report_for_root,
     aggregate,
     build_verdicts,
@@ -23,6 +24,8 @@ from tools.inbox_filter_usage_report import (
 
 EPOCH = IFLT_EPOCH_DAY  # "2026-08-11"
 READY_DAY = "2026-08-25"  # 纪元 + 14 天（观测=15 ≥ 14）
+GFOCUS_EPOCH = IFLT_GFOCUS_EPOCH_DAY  # "2026-08-20"
+GFOCUS_READY_DAY = "2026-09-02"  # gfocus 纪元 + 13 天（观测=14 ≥ 14）
 
 
 def _rows(**totals):
@@ -151,4 +154,41 @@ def test_read_rows_ro_and_prefix_filter(tmp_path: Path):
     assert acts == {"iflt_attn"}
     rep = _report_for_root(tmp_path, days=14, min_days=14, min_total=20, now=now)
     assert rep["grand_total"] == 7 and rep["totals"]["iflt_attn"] == 7
-    assert len(rep["verdicts"]) == 4
+    assert len(rep["verdicts"]) == 5
+
+
+# ── Q5 群焦点过滤：独立纪元（晚上线分桶不得吃全局窗口）──────────────────────
+
+
+def test_gfocus_uses_own_epoch_not_global():
+    # 全局裁决日（全局纪元+14）：Q1 已可裁决，gfocus 上线才 6 天 → 必须 insufficient
+    agg = aggregate(_rows(iflt_claimed=30))
+    vs = build_verdicts(agg, now_day=READY_DAY, min_days=14, min_total=20)
+    assert _verdict(vs, "我的")["status"] == "ready"
+    v5 = _verdict(vs, "群焦点过滤")
+    assert v5["status"] == "insufficient"
+    assert GFOCUS_EPOCH in v5["note"]   # note 必须报自己的纪元，不是全局纪元
+
+
+def test_gfocus_zero_clicks_verdict_checks_scope_usage():
+    # gfocus 满窗零点击：scope 也零进入 → 归因 scope 而非过滤；scope 有量 → 收主行 chip
+    vs = build_verdicts(aggregate(_rows(iflt_claimed=30)),
+                        now_day=GFOCUS_READY_DAY, min_days=14, min_total=20)
+    v5 = _verdict(vs, "群焦点过滤")
+    assert v5["status"] == "ready" and v5["confidence"] == "high"
+    assert "scope 本身也零进入" in v5["recommendation"]
+    vs2 = build_verdicts(aggregate(_rows(iflt_claimed=30, iflt_scope_group=40)),
+                         now_day=GFOCUS_READY_DAY, min_days=14, min_total=20)
+    v52 = _verdict(vs2, "群焦点过滤")
+    assert v52["status"] == "ready"
+    assert "收掉主行 chip" in v52["recommendation"]
+
+
+def test_gfocus_row_dominant_keeps_chip():
+    rows = [{"day": GFOCUS_EPOCH, "action": a, "n": n} for a, n in
+            {"iflt_gfocus": 22, "iflt_gfocus_m": 3, "iflt_scope_group": 40}.items()]
+    vs = build_verdicts(aggregate(rows),
+                        now_day=GFOCUS_READY_DAY, min_days=14, min_total=20)
+    v5 = _verdict(vs, "群焦点过滤")
+    assert v5["status"] == "ready"
+    assert "保留主行 chip" in v5["recommendation"]

@@ -148,8 +148,15 @@ document.addEventListener('click', function(e){
 });
 
 // ─── Toast（简易吐司提示） ──────────────────────────────────────────────
+// 实施75（2026-08-27）：全站 toast 统一右下角——RPA 页优先委托 base 壳的
+// showToast（右下 #toast-root，err 自动延长停留 + 报障 CTA 可挂载）；
+// 壳缺席（独立打开片段等极端场景）才回落旧的底部中央实现。
 let _toastBox;
 rpa.toast = function(msg, kind){
+  if(typeof window.showToast === 'function'){
+    window.showToast(msg, kind==='err' ? 'err' : (kind==='warn' ? 'warn' : (kind==='ok' ? 'ok' : 'info')));
+    return;
+  }
   if(!_toastBox){
     _toastBox = document.createElement('div');
     _toastBox.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;flex-direction:column;gap:.4rem;pointer-events:none;align-items:center';

@@ -23,6 +23,7 @@
 export const STAGE = {
   TWO_FACTOR: "two_factor",
   CHECKPOINT: "checkpoint",
+  ACCOUNT_LOCKED: "account_locked",
   PASSWORD_ERROR: "password_error",
   E2EE_PIN: "e2ee_pin",
   LOGIN_FORM: "login_form",
@@ -39,7 +40,37 @@ const TWO_FACTOR_MARKERS = [
 
 // 泛检查点：风控拦截、设备确认、账号受限都落这里。放在二因子判定之后，
 // 因为二因子本身也是一种 checkpoint，先命中更具体的那条。
-const CHECKPOINT_MARKER = "/checkpoint/";
+// B64 续（2026-08-23 23:55 实录，117 relay-submit 后 0.7s）：FB 把可疑登录押送到
+// `/login/checkpoint_interstitial/?next=…%2Fcheckpoint%2Fstart…`——旧判据只认带尾
+// 斜杠的 `/checkpoint/`，interstitial 变体（下划线接续）不命中，反而被 LOGIN_FORM
+// 的 `/login` 前缀截胡 → 提交后界面对「已进检查点」全盲，用户看到的是「点了没反应」。
+// 判据放宽为无尾斜杠前缀 `/checkpoint`（FB 路径里该词根只用于安全检查点语义），
+// 另对 URL 做一次 decode 再匹配（checkpoint 藏在 next= 编码参数里的形态）。
+const CHECKPOINT_MARKER = "/checkpoint";
+
+// B64（2026-08-23 `_316`/`_317`）：「确认您是真人」机器人验证可以渲染在**非**
+// /checkpoint/ 路径上（登录过渡页/白页上的一小块验证组件）——URL 判据漏网时靠
+// 可见文案兜底。它本质就是检查点的一种：未通过前 FB 不会发 2FA 码，前端拿到
+// checkpoint 提示码才能给「先过验证再等码」的实情指引（而不是让人干等）。
+// 词形刻意收窄到 robot-check 专有句式，不收「security check」这类泛词（2FA 页
+// 的说明文字也常含它，会把「正常等码」误报成检查点）。
+const ROBOT_CHECK_TEXT_RE =
+  /确认您是真人|確認您是真人|确认你是真人|证明您是真人|confirm\s+(that\s+)?you'?re\s+(a\s+)?human|prove\s+(that\s+)?you'?re\s+(a\s+)?human|confirm\s+that\s+you\s+are\s+human/i;
+
+// P1（实施64 B64 二期）：「账号被临时锁定 / 尝试过多」与泛检查点分开报——两者出路完全
+// 不同（锁定＝等冷却或去 facebook.com/login/identify 申诉，泛检查点＝当场过验证），混成
+// 一个码用户只会拿着「过验证」的指引去撞一堵「稍后再试」的墙。词形收窄到 FB 实际句式，
+// 泛词（如单独的 try again later）刻意不收防误报。
+const LOCKED_TEXT_RE =
+  /you.{0,3}re\s+temporarily\s+(blocked|locked)|account\s+(is\s+)?temporarily\s+locked|too\s+many\s+attempts|try\s+again\s+later.{0,40}too\s+many|你已被暂时封锁|帳號已被暫時封鎖|账[号户]已?被?暂时锁定|尝试次数过多|嘗試次數過多|操作过于频繁/i;
+
+// B64 三期（2026-08-24，「手机确认后卡死」余波）：检查点内的「等手机确认」子味——
+// 「请验证你的 Facebook 帐户」入口页 / 「查看通知/在手机上批准」等页面，用户的正确动作
+// 是「去手机 App 确认 → 回来点继续」，与机器人验证（必须盯着画面过验证）叙事完全不同。
+// 词形保守收窄到确认类专有句式；泛词（verify/confirm 单独出现）刻意不收——误报会把
+// 「必须看画面」的用户引去手机上空找通知。
+const DEVICE_CONFIRM_TEXT_RE =
+  /请验证你的.{0,10}[帐账帳]户|請驗證你的.{0,10}帳戶|在手机上(确认|批准)|在手機上(確認|批准)|查看.{0,6}通知|我们已.{0,16}发送.{0,10}通知|check\s+your\s+notifications|approve\s+(this\s+|your\s+)?log-?\s?in|we\s+sent\s+(you\s+)?a\s+notification|approve\s+from\s+another\s+device|waiting\s+for\s+(your\s+)?approval/i;
 
 // E2EE 设备 PIN / 密钥恢复（半死态重登时常见）。放在 checkpoint 之后、login_form 之前：
 // 这些页 URL 常落在 messenger.com 根或 /t/ 下，靠 path/query 关键词 + 可选 pageText。
@@ -69,6 +100,21 @@ export function isE2eePinText(text) {
   return E2EE_PIN_TEXT_RE.test(String(text || ""));
 }
 
+// B99（实施68 P1-9 残留 ⑤）：「你已被暂时阻止 / temporarily blocked」类临时风控页。
+// 0825 实锤：PIN 态反复重试风暴后 FB 对该号弹临时封锁。词表刻意保守（宁漏勿误——
+// 误判=好端端的号被冻 2h）：只认「temporarily/暂时 × blocked/restricted/阻止/封锁」
+// 的强组合文案，不认泛泛的 "try again later"。
+const TEMP_BLOCKED_TEXT_RE = new RegExp(
+  "(you'?re?\\s+temporarily\\s+blocked|temporarily\\s+blocked|"
+  + "temporarily\\s+restricted|"
+  + "(你|您)已?被?暂时(阻止|封锁|限制)|暂时(封锁|阻止)了(你|您)|"
+  + "(你|您)已?被?暫時(阻止|封鎖|限制))", "i");
+
+/** 页面可见文本是否命中「临时封锁」风控提示（发送闸/ban_signal 共用判据）。 */
+export function isTemporarilyBlockedText(text) {
+  return TEMP_BLOCKED_TEXT_RE.test(String(text || ""));
+}
+
 /**
  * 按旁观信号判断登录页此刻处于哪一段。
  *
@@ -91,9 +137,21 @@ export function classifyLoginPage(sig) {
   const hasErrorBox = !!(sig && sig.hasErrorBox);
   const pageText = String((sig && sig.pageText) || "");
   const hasLoginForm = !!(sig && sig.hasLoginForm);
+  // 编码变体展开（checkpoint 常藏在 next=%2Fcheckpoint%2Fstart 里）；坏编码不抛。
+  let urlDecoded = url;
+  try { urlDecoded = decodeURIComponent(url).toLowerCase(); } catch (_) { /* keep raw */ }
 
   if (TWO_FACTOR_MARKERS.some((m) => url.includes(m))) return STAGE.TWO_FACTOR;
-  if (url.includes(CHECKPOINT_MARKER)) return STAGE.CHECKPOINT;
+  // 锁定文案优先于泛检查点：锁定页多半也带 /checkpoint URL，但出路完全不同
+  // （等冷却/申诉 vs 当场过验证）——更具体的判据先走。
+  if (!(hasCUser && hasXs) && LOCKED_TEXT_RE.test(pageText)) return STAGE.ACCOUNT_LOCKED;
+  if (url.includes(CHECKPOINT_MARKER) || urlDecoded.includes(CHECKPOINT_MARKER)) {
+    return STAGE.CHECKPOINT;
+  }
+  // B64：页面可见「确认您是真人」＝活的机器人验证挡在面前——比 cookie 推断
+  // （c_user 有 / xs 无 ⇒「等第二因子」）更接近真相：这道验证不过，2FA 码根本
+  // 不会发。只在未完整登录时判（登录后的页面正文提到这句话不构成证据）。
+  if (!(hasCUser && hasXs) && ROBOT_CHECK_TEXT_RE.test(pageText)) return STAGE.CHECKPOINT;
   // cookie 签名：FB 在密码校验通过后就下发 c_user，xs 要等整条认证走完。两者错位＝
   // 卡在第二因子。URL 认不出改版新页面时，这条仍然成立（不依赖任何页面结构）。
   if (hasCUser && !hasXs) return STAGE.TWO_FACTOR;
@@ -119,6 +177,24 @@ export function classifyLoginPage(sig) {
 }
 
 /**
+ * 检查点子味（B64 三期）：stage=CHECKPOINT 时进一步判「等手机确认」还是泛检查点。
+ * **刻意不进 STAGE 枚举**：hint_code / reason_code / Python 漏斗契约全部不动（窗口期
+ * 失败归因仍是 checkpoint），子味只经 relay-step 的 code 细化前端叙事（手机主视觉 +
+ * 三步清单 vs 截图为主）。机器人验证显式排除——那类页用户必须看着画面过验证，
+ * 把他引去手机上空找通知是指错路。
+ *
+ * @param {string} pageText 页面可见文本片段（与 classifyLoginPage 同源）
+ * @returns {"device_confirm"|""}
+ */
+export function checkpointFlavor(pageText) {
+  const t = String(pageText || "");
+  if (!t) return "";
+  if (ROBOT_CHECK_TEXT_RE.test(t)) return "";
+  if (DEVICE_CONFIRM_TEXT_RE.test(t)) return "device_confirm";
+  return "";
+}
+
+/**
  * 分类结果 → 对外原因码。只有「运维能据此做点什么」的段落出网；
  * 正常等待态返回空串（前端保持默认指引，不弹无谓提示）。
  */
@@ -126,6 +202,7 @@ export function actionableCode(stage) {
   switch (stage) {
     case STAGE.TWO_FACTOR:
     case STAGE.CHECKPOINT:
+    case STAGE.ACCOUNT_LOCKED:
     case STAGE.PASSWORD_ERROR:
     case STAGE.E2EE_PIN:
       return stage;

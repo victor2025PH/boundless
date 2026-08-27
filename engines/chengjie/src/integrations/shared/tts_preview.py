@@ -111,8 +111,15 @@ def preview_text_key(text: Any) -> str:
 
 
 def record_preview_meta(filename: str, *, text: Any, persona_key: str,
-                        meta: Optional[Dict[str, Any]] = None) -> bool:
-    """试听成功后登记复用 sidecar（best-effort：失败只丢复用资格，不影响试听）。"""
+                        meta: Optional[Dict[str, Any]] = None,
+                        target_lang: str = "") -> bool:
+    """试听成功后登记复用 sidecar（best-effort：失败只丢复用资格，不影响试听）。
+
+    ``target_lang``（P0-V2 译声）：试听时的**已解析**目标语（''=未翻译）。文本
+    指纹仍按**请求原文**记（试听=发送以同一组请求入参解析），语言单独成维度
+    ——否则「试听日语 → 切韩语发送」会按 text+persona 命中而把日语音频发出去。
+    调用方负责传入已归一的语种码（本模块只做 strip/lower，不引翻译栈依赖）。
+    """
     fn = str(filename or "").strip()
     if not _PREVIEW_NAME_RE.match(fn):
         return False
@@ -121,6 +128,7 @@ def record_preview_meta(filename: str, *, text: Any, persona_key: str,
             "v": 1,
             "text_sha1": preview_text_key(text),
             "persona_key": str(persona_key or ""),
+            "target_lang": str(target_lang or "").strip().lower(),
             "created_ts": time.time(),
             "meta": dict(meta or {}),
         }
@@ -135,11 +143,12 @@ def record_preview_meta(filename: str, *, text: Any, persona_key: str,
 
 def resolve_reusable_preview(
     filename: str, *, text: Any, persona_key: str,
-    max_age_sec: float = REUSE_MAX_AGE_SEC,
+    max_age_sec: float = REUSE_MAX_AGE_SEC, target_lang: str = "",
 ) -> Tuple[Optional[Dict[str, Any]], str]:
     """发送侧校验入口（带观测计数）：命中/未命中原因自动进 reuse_stats_snapshot。"""
     info, why = _resolve_reusable_preview(
-        filename, text=text, persona_key=persona_key, max_age_sec=max_age_sec)
+        filename, text=text, persona_key=persona_key, max_age_sec=max_age_sec,
+        target_lang=target_lang)
     if info is not None:
         _REUSE_STATS["hits"] = int(_REUSE_STATS["hits"]) + 1
     else:
@@ -149,12 +158,13 @@ def resolve_reusable_preview(
 
 def _resolve_reusable_preview(
     filename: str, *, text: Any, persona_key: str,
-    max_age_sec: float = REUSE_MAX_AGE_SEC,
+    max_age_sec: float = REUSE_MAX_AGE_SEC, target_lang: str = "",
 ) -> Tuple[Optional[Dict[str, Any]], str]:
     """发送侧校验：返回 ``({"path": Path, "meta": dict}, "")`` 或 ``(None, 原因)``。
 
     校验链（宁可回落合成不可发错内容）：文件名白名单（无路径分隔符，防穿越）→
-    音频在 → sidecar 在且可解析 → 音色键一致 → 文本指纹一致 → 未过期 → 非空壳。
+    音频在 → sidecar 在且可解析 → 音色键一致 → 文本指纹一致 → **目标语一致**
+    （P0-V2 译声维度；旧 sidecar 无键按 '' 兼容=只匹配未翻译发送）→ 未过期 → 非空壳。
     """
     fn = str(filename or "").strip()
     if not _PREVIEW_NAME_RE.match(fn):
@@ -173,6 +183,9 @@ def _resolve_reusable_preview(
         return None, "persona_mismatch"
     if str(payload.get("text_sha1") or "") != preview_text_key(text):
         return None, "text_mismatch"
+    if (str(payload.get("target_lang") or "").strip().lower()
+            != str(target_lang or "").strip().lower()):
+        return None, "lang_mismatch"
     try:
         age = time.time() - float(payload.get("created_ts") or 0.0)
     except (TypeError, ValueError):

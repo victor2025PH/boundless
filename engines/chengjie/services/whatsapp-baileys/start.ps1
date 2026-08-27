@@ -58,9 +58,23 @@ $env:WA_SYNC_REACTIONS = "1"
 $env:WA_SYNC_RECEIPTS = "1"
 $env:WA_SYNC_PRESENCE = "1"
 $env:WA_SYNC_EDITS = "1"
-# 媒体落地到 Python 静态目录（前端按 /static URL 加载）
-$env:WA_MEDIA_DIR = "$root\src\web\static\protocol_media\whatsapp"
+# 媒体落地目录：必须与 Python 侧 protocol_bridge.protocol_media_root() 同址，否则
+# 「边车写 A、引擎读 B」＝入站媒体后端识别链全断（ASR/图片 VLM/视频/OCR/声纹/贴纸），
+# 而 UI 因 ProtocolMediaStatic 双根兜底照样能播 → 症状只表现为「AI 突然不回话」，
+# 极难查。2026-08-20 实锤：客户语音落旧引擎树、ASR 在数据根找不到 → 无兜底纪律拦下
+# 整条回复（delivery_block asr:enrich_failed）。
+# 故解析顺序与 protocol_media_root() 逐字对齐：AITR_DATA_DIR（计划任务经
+# autostart-run.ps1 注入，与上面 auth_token 同一契约）→ 无则回落旧引擎树 static
+# （裸开发机：那边 Python 也回落同一处，仍然同址）。
+if ($env:AITR_DATA_DIR) {
+  $mediaRoot = Join-Path $env:AITR_DATA_DIR "protocol_media"
+} else {
+  $mediaRoot = Join-Path $root "src\web\static\protocol_media"
+}
+$env:WA_MEDIA_DIR = Join-Path $mediaRoot "whatsapp"
 $env:WA_MEDIA_URL_BASE = "/static/protocol_media/whatsapp"
+New-Item -ItemType Directory -Force -Path $env:WA_MEDIA_DIR | Out-Null
+Write-Host ("[wa-baileys] media dir = " + $env:WA_MEDIA_DIR)
 $env:LOG_LEVEL = "info"
 
 Write-Host "[wa-baileys] starting on :$($env:PORT) (ingest=$($env:PY_INGEST_URL))"

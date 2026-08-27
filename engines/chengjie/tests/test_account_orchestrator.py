@@ -165,9 +165,12 @@ class FakeSendWorker(FakeWorker):
         super().__init__(account, config)
         self.sent = []
 
-    async def send(self, chat_key, text, *, reply_to=None):
-        self.sent.append({"chat_key": chat_key, "text": text, "reply_to": reply_to})
-        return {"delivered": True, "message_id": "WAMID_REPLY_1"}
+    async def send(self, chat_key, text, *, reply_to=None, chat_type=None):
+        qa = bool(reply_to and reply_to.get("id"))
+        self.sent.append({"chat_key": chat_key, "text": text,
+                          "reply_to": reply_to, "chat_type": chat_type})
+        return {"delivered": True, "message_id": "WAMID_REPLY_1",
+                "quote_applied": qa}
 
 
 async def test_send_threads_reply_to_and_writes_source(registry, monkeypatch):
@@ -193,6 +196,36 @@ async def test_send_threads_reply_to_and_writes_source(registry, monkeypatch):
     # 出站回写带上 source.reply_to（本端气泡也能渲染引用条）
     assert captured.get("source", {}).get("reply_to", {}).get("id") == "WAMID_ORIG"
     assert captured["source"]["reply_to"]["text"] == "原始消息"
+    orch._WORKER_FACTORIES.pop("telegram:protocol", None)
+
+
+class FakeSendNoQuoteFlagWorker(FakeWorker):
+    """接了 reply_to 但不回 quote_applied——模拟 LINE/旧 worker 静默丢引用。"""
+
+    def __init__(self, account, config):
+        super().__init__(account, config)
+        self.sent = []
+
+    async def send(self, chat_key, text, *, reply_to=None):
+        self.sent.append({"chat_key": chat_key, "text": text, "reply_to": reply_to})
+        return {"delivered": True, "message_id": "NOFLAG"}
+
+
+async def test_send_does_not_mirror_quote_without_receipt(registry, monkeypatch):
+    """worker 未回 quote_applied → 出站镜像不得画引用条（173 所见非所发）。"""
+    orch._WORKER_FACTORIES.pop("telegram:protocol", None)
+    orch.register_worker("telegram", "protocol",
+                         lambda a, c: FakeSendNoQuoteFlagWorker(a, c))
+    registry.upsert("telegram", "1", mode="protocol", status="online")
+    o = AccountOrchestrator(registry=registry)
+    await o.sync()
+    captured = {}
+    import src.integrations.protocol_bridge as pb
+    monkeypatch.setattr(pb, "emit_incoming", lambda msg: captured.update(msg))
+    await o.send("telegram", "1", "639111", "引用回复内容",
+                 reply_to={"id": "WAMID_ORIG", "text": "原始消息", "sender": "客户"})
+    src = captured.get("source") or {}
+    assert not src.get("reply_to")
     orch._WORKER_FACTORIES.pop("telegram:protocol", None)
 
 

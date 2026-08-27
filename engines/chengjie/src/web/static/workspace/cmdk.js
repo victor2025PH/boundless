@@ -131,7 +131,10 @@
     { fn: 'setFilter', arg: 'waiting', key: 'ws.cmdk.act_filter_waiting', ic: '\u23f3' },
     { fn: 'setFilter', arg: 'sla', key: 'ws.cmdk.act_filter_sla', ic: '\ud83d\udea8' },
     { fn: 'setFilter', arg: 'unread', key: 'ws.cmdk.act_filter_unread', ic: '\u25cf' },
-    { fn: 'resetAllFilters', key: 'ws.cmdk.act_filter_all', ic: '\u27f2' }
+    { fn: 'resetAllFilters', key: 'ws.cmdk.act_filter_all', ic: '\u27f2' },
+    /* 报障（实施49 P1-9）：坐席出事时最快的键盘路径；函数由 _support.html 挂 window，
+       旧页面没有它 → harvestActions 的 typeof 闸自动跳过，不会出现死条目。 */
+    { fn: 'openSupportPanel', key: 'ws.cmdk.act_support', ic: '\ud83e\ude7a' }
   ];
 
   function harvestActions() {

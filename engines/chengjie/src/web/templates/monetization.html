@@ -367,27 +367,27 @@ async function mzGrant(){
   const contact=document.getElementById('g-contact').value.trim();
   const kind=document.getElementById('g-kind').value;
   const item=document.getElementById('g-item').value.trim();
-  if(!contact||!item){alert(window.T('mo_js038'));return;}
+  if(!contact||!item){AITRNotify.alert(window.T('mo_js038'));return;}
   const payload={contact_key:contact,kind:kind,item_id:item};
   if(kind==='subscribe')payload.days=parseFloat(document.getElementById('g-days').value||'30');
   try{
     const res=await apiFetch('/api/monetize/grant',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}, {timeoutMs: 60000});
     const d=await res.json();
-    if(!d.ok){alert(window.T('rpa_js_fail_colon')+(d.message||d.reason));return;}
+    if(!d.ok){AITRNotify.alert(window.T('rpa_js_fail_colon')+(d.message||d.reason));return;}
     if(d.entitlement)renderEnt(d.entitlement);
     mzLoad();mzRetention();
-  }catch(e){alert(e);}
+  }catch(e){AITRNotify.alert(e);}
 }
 
 async function mzLookup(){
   const contact=document.getElementById('g-contact').value.trim();
-  if(!contact){alert(window.T('mo_js039')+' key');return;}
+  if(!contact){AITRNotify.alert(window.T('mo_js039')+' key');return;}
   try{
     const res=await apiFetch('/api/monetize/entitlement?contact_key='+encodeURIComponent(contact));
     const d=await res.json();
-    if(!d.ok){alert(window.T('rpa_js_fail_colon')+(d.message||d.reason));return;}
+    if(!d.ok){AITRNotify.alert(window.T('rpa_js_fail_colon')+(d.message||d.reason));return;}
     renderEnt(d.entitlement);
-  }catch(e){alert(e);}
+  }catch(e){AITRNotify.alert(e);}
 }
 
 function renderEnt(ent){
@@ -405,7 +405,7 @@ async function mzFeatureCheck(){
   const feature=document.getElementById('fc-feature').value;
   const flag=document.getElementById('fc-flag');
   const box=document.getElementById('fc-result');
-  if(!contact){alert(window.T('mo_js039')+' key');return;}
+  if(!contact){AITRNotify.alert(window.T('mo_js039')+' key');return;}
   flag.textContent=window.T('kb_js_092');box.style.display='none';
   try{
     const res=await apiFetch('/api/monetize/feature-check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contact_key:contact,feature:feature})}, {timeoutMs: 60000});

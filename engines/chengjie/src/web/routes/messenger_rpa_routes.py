@@ -4354,10 +4354,7 @@ def register_messenger_rpa_routes(
             from src.utils.persona_manager import PersonaManager
             from src.integrations.messenger_rpa.state_store import mrpa_chat_cid
             pm = PersonaManager.get_instance()
-            svc = getattr(
-                getattr(request, "app", None),
-                "state", type("_", (), {})()
-            )
+            svc = getattr(app, "state", type("_", (), {})())
             svc_obj = getattr(svc, "messenger_rpa_service", None)
             prefix = "messenger_rpa"
             try:

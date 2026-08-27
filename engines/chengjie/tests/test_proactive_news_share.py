@@ -435,3 +435,73 @@ def test_collect_mode_gate_counts_news_in_rich_arm(tmp_path):
     assert snap["rich"]["modes"] == {"news_share": 20}
     assert abs(snap["rich"]["rate"] - 0.5) < 0.01
     assert snap["reason"] == "ok" and snap["skip_prob"] > 0
+
+
+# ── 8. 实施55「新闻为主」：life_share 让位开关 + 按人设分源 ────────────────────
+
+def _cfg55(cache_path, *, upgrade_life=False, region_feeds=None):
+    dt = {
+        "enabled": True,
+        "feeds": [],
+        "cache_path": str(cache_path),
+        "proactive": {"enabled": True,
+                      "upgrade_life_share": bool(upgrade_life)},
+    }
+    if region_feeds:
+        dt["region_feeds"] = region_feeds
+    return {"companion": {"daily_topics": dt}}
+
+
+def test_upgradeable_modes_default_vs_flag(tmp_path):
+    from src.companion.proactive_topic import news_upgradeable_modes
+    base = news_upgradeable_modes(_cfg55(tmp_path / "c.json"))
+    assert set(base) == {"gentle_checkin", "weather_hook"}   # 默认=旧语义
+    flagged = news_upgradeable_modes(
+        _cfg55(tmp_path / "c.json", upgrade_life=True))
+    assert "life_share" in flagged
+    assert news_upgradeable_modes({}) == ("gentle_checkin", "weather_hook")
+
+
+def test_life_share_yields_to_news_when_flag_on(tmp_path):
+    """开关开 + 新闻有货 → life_share 让位给 news_share（新闻为主）；
+    无货仍原样放行（生活素材是补位不是删除）。"""
+    cache = tmp_path / "topics_cache.json"
+    _stock(cache)
+    life = {"mode": "life_share", "fact": "早市抢着一批贼新鲜的羊肉",
+            "directive": "分享", "silent_hours": 30.0, "gap_bucket": "few_days"}
+    out = maybe_upgrade_to_news(
+        life, _cfg55(cache, upgrade_life=True), "c:55:l1", now=NOW)
+    assert out["mode"] == NEWS_MODE
+    assert out["silent_hours"] == 30.0 and out["gap_bucket"] == "few_days"
+    # 开关关（默认）→ 原样放行（回归钉：旧语义不被本批悄悄翻转）
+    assert maybe_upgrade_to_news(
+        life, _cfg55(cache, upgrade_life=False), "c:55:l2", now=NOW) is life
+    # 开关开但无货 → 原样放行
+    empty = tmp_path / "empty_cache.json"
+    assert maybe_upgrade_to_news(
+        life, _cfg55(empty, upgrade_life=True), "c:55:l3", now=NOW) is life
+
+
+def test_news_opener_region_cache_preferred_and_falls_back(tmp_path):
+    """人设命中 region_feeds → 用区域缓存选题；区域缓存冷启动 → 回落全局池。"""
+    g = tmp_path / "topics_cache.json"
+    _stock(g, topics=[{"title": "全局咖啡节这周末开幕", "summary": "咖啡",
+                       "link": "", "published_ts": NOW - 3600}])
+    cfg = _cfg55(g, region_feeds={"CA": ["https://ca/rss"]})
+    # 区域缓存有货（cfg_for_region 的派生路径）→ 选区域条目
+    ca = tmp_path / "topics_cache.CA.json"
+    ca.write_text(json.dumps({"fetched_ts": NOW, "topics": [
+        {"title": "温哥华美食节人气爆棚", "summary": "美食",
+         "link": "", "published_ts": NOW - 1800}]}, ensure_ascii=False),
+        encoding="utf-8")
+    persona = {"id": "lin_jiaxin", "location": "vancouver"}
+    op = _news_opener(cfg, "c:55:r1", now=NOW, persona_fn=lambda: persona)
+    assert op.get("mode") == NEWS_MODE
+    assert op.get("fact") == "温哥华美食节人气爆棚"
+    # 区域缓存不存在（冷启动）→ 回落全局池（宁可聊全局也不空手）
+    ca.unlink()
+    op2 = _news_opener(cfg, "c:55:r2", now=NOW, persona_fn=lambda: persona)
+    assert op2.get("fact") == "全局咖啡节这周末开幕"
+    # 无 persona / 未命中区域 → 全局池旧行为
+    op3 = _news_opener(cfg, "c:55:r3", now=NOW)
+    assert op3.get("fact") == "全局咖啡节这周末开幕"

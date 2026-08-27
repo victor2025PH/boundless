@@ -32,15 +32,21 @@ def test_directive_warming_adds_restraint():
     assert initial == warm  # initial 与 warming 同样克制
 
 
+def test_directive_city_has_keyword():
+    d = ask_directive("city")
+    assert "城市" in d
+
+
 def test_directive_unknown_slot_empty():
-    assert ask_directive("city") == ""
+    assert ask_directive("zodiac") == ""
     assert ask_directive("") == ""
 
 
 def test_is_collectable():
     assert is_collectable("birthday")
     assert is_collectable("NAME")  # 大小写无关
-    assert not is_collectable("city")
+    assert is_collectable("city")
+    assert not is_collectable("zodiac")
 
 
 # ── should_ask_profile_slot ─────────────────────────────────────────────
@@ -110,3 +116,4 @@ def test_select_empty_none():
 def test_profile_slots_ordered():
     assert PROFILE_SLOTS[0] == "birthday"
     assert "name" in PROFILE_SLOTS
+    assert "city" in PROFILE_SLOTS

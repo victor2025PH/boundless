@@ -129,8 +129,15 @@ def normalize_chat_type(raw: Any) -> str:
     ``"ChatType.SUPERGROUP"``——直接 lower 永远匹配不上 ``"supergroup"``，
     导致群判定恒 False、群消息误入私聊上下文窗（2026-07-25 灰度首日实测）。
     必须优先取 ``.name``；纯字符串输入（测试/旧版本）原样规范化。
+
+    ``.value`` 兜底（2026-08-20）：只有 ``value`` 的鸭子类型（旧 pyrogram 分支、
+    收件箱侧的桩对象）此前会落到 ``str(对象)``＝``<... object at 0x…>``，归一化出
+    一串垃圾——比返回空串更坏（垃圾值不等于任何已知类型，判定静默走「未知」分支）。
+    真枚举两者都有且 ``name`` 先胜，故这是纯加法。
     """
-    return str(getattr(raw, "name", None) or raw or "").strip().lower()
+    return str(getattr(raw, "name", None)
+               or getattr(raw, "value", None)
+               or raw or "").strip().lower()
 
 
 def group_allowlist_blocked(group_reply_cfg: dict, chat_id: Any) -> bool:

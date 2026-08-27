@@ -1,4 +1,8 @@
 {% extends "workspace_base.html" %}
+{#- 管理面一致性（2026-08-18 老板点名）：概览与其他管理面板一样挂工作台左侧导航
+    （_ws_sidebar.html，菜单单源 nav_schema.py；坐席=简洁菜单、主管=完整分组，
+    组件自带角色过滤）。顶层 set 对父模板可见。 -#}
+{% set ws_sidebar = true %}
 {% block title %}{{ i18n.get('dash.page_title', '工作台概览') }}{% endblock %}
 {% block head %}
 <style>
@@ -8,14 +12,24 @@
   .db-card{background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:12px;padding:16px;box-shadow:var(--tk-shadow);}
   /* KPI 数字：科技青→蓝渐变描字，明快有科技感 */
   .db-num{font-size:28px;font-weight:800;background:var(--tk-num-grad);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:var(--tk-brand);}
-  .db-num.warn{background:linear-gradient(135deg,#fdba74,#f97316);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:var(--tk-orange);}
-  .db-lbl{font-size:12px;color:var(--tk-text-muted);margin-top:4px;}
+  /* 警示数字改语义实色（P1 2026-08-18）：渐变描字在暗色下亮度不稳、低分屏/截图发虚——
+     语义状态必须稳定可读，品牌渐变只留给中性数字。 */
+  .db-num.warn{background:none;-webkit-background-clip:initial;background-clip:initial;-webkit-text-fill-color:var(--tk-warn-ink);color:var(--tk-warn-ink);}
+  .db-lbl{font-size:12.5px;color:var(--tk-text-muted);margin-top:4px;}
   /* P5-6：进展中主数字后缀的狭义成交(won) 小数字——覆盖 .db-num 的渐变裁剪填充，避免透明不可见 */
   .db-won-sfx{font-size:13px;font-weight:700;background:none;-webkit-text-fill-color:var(--tk-text-muted);color:var(--tk-text-muted);opacity:.85;}
   /* 经营摘要条（executive strip）：大数字等宽数字位；critical 红字需覆盖 .db-num 的渐变裁剪填充 */
   #db-exec .db-num{font-variant-numeric:tabular-nums;}
-  #db-exec .db-num.crit{background:linear-gradient(135deg,#f87171,#dc2626);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:var(--tk-danger);}
-  .db-exec-sub{font-size:11px;color:var(--tk-text-muted);margin-top:3px;}
+  #db-exec .db-num.crit{background:none;-webkit-background-clip:initial;background-clip:initial;-webkit-text-fill-color:var(--tk-danger-ink);color:var(--tk-danger-ink);}
+  .db-exec-sub{font-size:12px;color:var(--tk-text-muted);margin-top:3px;}
+  /* P1 分组降噪（2026-08-18）：KPI 三组标题 / 零值折叠行 / 合并卡可点副行 */
+  .db-grp-h{grid-column:1/-1;display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;letter-spacing:.05em;color:var(--tk-text-muted);margin:4px 0 -4px;}
+  .db-grp-h::after{content:"";flex:1;height:1px;background:var(--tk-border);}
+  .db-fold{grid-column:1/-1;font-size:12.5px;color:var(--tk-text-muted);border:1px dashed var(--tk-border);border-radius:10px;padding:8px 12px;cursor:pointer;transition:background .12s;}
+  .db-fold:hover{background:var(--tk-surface-2);}
+  .db-fold-btn{color:var(--tk-brand);font-weight:600;margin-left:4px;}
+  .db-sub-act{font-size:11.5px;margin-top:4px;color:var(--tk-warn-ink);font-weight:600;cursor:pointer;}
+  .db-sub-act:hover{text-decoration:underline;}
   .db-sec{background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:12px;padding:16px;margin-bottom:14px;box-shadow:var(--tk-shadow);}
   .db-sec h3{margin:0 0 10px;font-size:14px;color:var(--tk-text);}
   .db-wrap h2{color:var(--tk-text);}
@@ -295,6 +309,101 @@
     var sfx=(typeof won==='number')?'<span class="db-won-sfx" title="'+esc(T('dash.card.won_sfx_t'))+'"> · '+esc(T('dash.card.won_sfx'))+' '+won+'</span>':'';
     return '<div class="db-card db-click" onclick="window.__dbGoDone()" title="'+esc(T('dash.card.done_t'))+'"><div class="db-num">'+num+sfx+'</div><div class="db-lbl">'+esc(T('dash.card.done'))+'</div></div>';
   }
+  // ── P1 概览降噪（2026-08-18）───────────────────────────────────────────
+  // 待回复/超时/严重三卡合一：同一批会话此前在三张卡重复同一个数字（实录满屏 90），
+  // 坐席不知道信哪张。主数字=待回复（点击开明细），副行=其中超时/严重（点击直达超时档）。
+  function _waitCard(sla){
+    var wait=sla.waiting||0, brk=sla.breaching||0, crit=sla.critical||0;
+    var sub='';
+    if(brk>0){
+      sub='<div class="db-sub-act" onclick="window.__dbWaitSub(event)">'
+        +esc(Tf('dash.wait.sub',{n:brk}))
+        +(crit>0?(' <span style="color:var(--tk-danger-ink);">'+esc(T('dash.card.critical'))+' '+crit+'</span>'):'')
+        +'</div>';
+    }
+    return '<div class="db-card db-click" onclick="window.__dbDetail(\'waiting\')">'
+      +'<div class="db-num'+(brk>0?' warn':'')+'">'+wait+'</div>'
+      +'<div class="db-lbl">'+esc(T('dash.card.waiting'))+'</div>'+sub+'</div>';
+  }
+  // KPI 卡定义（分组 + 零值判定）：act=永不折叠的行动卡；result/quality 里
+  // 值为 0/— 的卡默认折叠成一行（新账号「满屏 0」是第一印象杀手）。
+  function _zeroish(v){ return v===0||v==='0'||v==='—'; }
+  function _dbCardDefs(d){
+    var t=d.today||{}, f=d.funnel||{}, sla=d.sla||{}, fr=d.first_response||{}, rs=d.resolution||{};
+    var defs=[];
+    function add(grp,label,html,zero){ defs.push({grp:grp,l:label,html:html,zero:!!zero}); }
+    add('act', T('dash.card.due_mine'), card(d.due_tasks_mine||0,T('dash.card.due_mine'),true), false);
+    add('act', T('dash.card.waiting'), _waitCard(sla), false);
+    if(IS_SUP) add('act', T('dash.card.due_all'), card(d.due_tasks||0,T('dash.card.due_all'),true), false);
+    if(IS_SUP){
+      var nc=t.new_contacts||0, ld=t.leads||0, ho=t.handoffs||0;
+      var dn=_doneCountFromStages(d.stage_counts);
+      var ws=(f.sessions!=null?f.sessions:(f.web_sessions||0));
+      add('result', T('dash.card.new_contacts'), card(nc,T('dash.card.new_contacts')), _zeroish(nc));
+      add('result', T('dash.card.leads'), card(ld,T('dash.card.leads')), _zeroish(ld));
+      add('result', T('dash.card.handoffs'), card(ho,T('dash.card.handoffs')), _zeroish(ho));
+      add('result', T('dash.card.done'), _doneCard(dn,_wonCountFromStages(d.stage_counts)), _zeroish(dn));
+      add('result', T('dash.card.web_sessions'), card(ws,T('dash.card.web_sessions')), _zeroish(ws));
+    }
+    var frtV=fr.today_responded?fmtDur(fr.today_avg_sec):'—';
+    add('quality', T('dash.card.frt_avg'), card(frtV,T('dash.card.frt_avg')), frtV==='—');
+    if(IS_SUP){
+      var att=fr.today_responded?(fr.today_attain_rate+'%'):'—';
+      add('quality', T('dash.card.attain_rate'), card(att,T('dash.card.attain_rate'),'','unresponded'), att==='—');
+      var rsv=rs.today_resolved||0;
+      add('quality', T('dash.card.resolved'), card(rsv,T('dash.card.resolved')), _zeroish(rsv));
+      var rav=rs.today_resolved?fmtDur(rs.today_avg_sec):'—';
+      add('quality', T('dash.card.resolve_avg'), card(rav,T('dash.card.resolve_avg')), rav==='—');
+    }
+    return defs;
+  }
+  var _dbUnfolded=false;
+  function renderTodayCards(d){
+    var el=document.getElementById('db-cards'); if(!el) return;
+    var defs=_dbCardDefs(d);
+    var groups=[['act',T('dash.grp.act')],['result',T('dash.grp.result')],['quality',T('dash.grp.quality')]];
+    var html='';
+    groups.forEach(function(g){
+      var items=defs.filter(function(x){return x.grp===g[0];});
+      if(!items.length) return;
+      var shown=items, folded=[];
+      if(g[0]!=='act' && !_dbUnfolded){
+        shown=items.filter(function(x){return !x.zero;});
+        folded=items.filter(function(x){return x.zero;});
+      }
+      html+='<div class="db-grp-h">'+esc(g[1])+'</div>';
+      html+=shown.map(function(x){return x.html;}).join('');
+      if(folded.length){
+        html+='<div class="db-fold" onclick="window.__dbToggleFold()" title="'+esc(T('dash.fold.show_t'))+'">'
+          +esc(Tf('dash.fold.line',{n:folded.length,names:folded.map(function(x){return x.l;}).join(' · ')}))
+          +'<span class="db-fold-btn">'+esc(T('dash.fold.show'))+' →</span></div>';
+      }
+    });
+    if(_dbUnfolded && defs.some(function(x){return x.zero&&x.grp!=='act';})){
+      html+='<div class="db-fold" onclick="window.__dbToggleFold()"><span class="db-fold-btn">'+esc(T('dash.fold.hide'))+'</span></div>';
+    }
+    el.innerHTML=html;
+  }
+  // P2 折叠行为裁决埋点（2026-08-18）：进 /api/telemetry/ui-event（{page,action} 契约，
+  // 读数 /api/admin/ui-event-trend?prefix=dbkpi_）。裁决问题=「坐席是否频繁展开零值组」
+  // ——频繁展开说明默认折叠折错了东西；wait_sub=合并卡副行的直达使用量（证合并没伤动线）。
+  function _dbBcn(a){
+    try{
+      navigator.sendBeacon('/api/telemetry/ui-event', new Blob(
+        [JSON.stringify({page:'/workspace/dash', action:String(a)})],
+        {type:'application/json'}));
+    }catch(_){}
+  }
+  window.__dbToggleFold=function(){
+    _dbUnfolded=!_dbUnfolded;
+    _dbBcn(_dbUnfolded?'dbkpi_fold_show':'dbkpi_fold_hide');
+    if(_dashData) renderTodayCards(_dashData);
+  };
+  window.__dbWaitSub=function(ev){
+    try{ if(ev) ev.stopPropagation(); }catch(_){}
+    _dbBcn('dbkpi_wait_sub');
+    window.__dbDetail('breaching');
+  };
   var SCOPES=[['waiting',T('dash.scope.waiting')],['breaching',T('dash.scope.breaching')],['critical',T('dash.scope.critical')],['unresponded',T('dash.scope.unresponded')]];
   function scopeLabel(s){ for(var i=0;i<SCOPES.length;i++){ if(SCOPES[i][0]===s) return SCOPES[i][1]; } return s; }
   var _detailAgent=null;
@@ -921,7 +1030,7 @@
         return '<div data-ob-id="'+escHtml(c.id||'')+'" style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--th-bd-amber25,rgba(245,158,11,.25));">'
           +'<span style="width:9px;height:9px;border-radius:50%;background:'+color+';flex-shrink:0;"></span>'
           +'<div style="min-width:0;"><div style="font-size:13px;font-weight:600;color:var(--tk-text);">'+escHtml(c.name)+'</div>'
-          +'<div style="font-size:11px;color:var(--tk-warn-ink);">'+escHtml(c.detail)+'</div></div>'+act+'</div>';
+          +'<div style="font-size:12px;color:var(--tk-warn-ink);">'+escHtml(c.detail)+'</div></div>'+act+'</div>';
       }).join('');
       var s=d.summary||{};
       var headline=d.light==='red'?T('dash.ob.headline_red'):T('dash.ob.headline_yellow');
@@ -1246,21 +1355,10 @@
     apiFetch('/api/workspace/dashboard?days='+curDays()).then(function(r){return r.json();}).then(function(d){
       var t=d.today||{}, f=d.funnel||{}, sla=d.sla||{}, fr=d.first_response||{}, rs=d.resolution||{};
       _dashData=d; renderExec();  // 经营摘要卡3/4 复用本响应，不重复请求
-      // P1.2 核心卡精选：坐席只看「与我当下相关」4 张；经营/团队卡仅主管（IS_SUP）。
-      document.getElementById('db-cards').innerHTML=
-        card(d.due_tasks_mine||0,T('dash.card.due_mine'),true)
-        +card(sla.waiting||0,T('dash.card.waiting'),'',('waiting'))
-        +card(sla.breaching||0,T('dash.card.breaching')+((sla.critical||0)>0?(' · '+T('dash.card.critical')+sla.critical):''),true,'breaching')
-        +card(fr.today_responded?fmtDur(fr.today_avg_sec):'—',T('dash.card.frt_avg'))
-        +(IS_SUP?card(t.new_contacts||0,T('dash.card.new_contacts')):'')
-        +(IS_SUP?card(t.leads||0,T('dash.card.leads')):'')
-        +(IS_SUP?card(t.handoffs||0,T('dash.card.handoffs')):'')
-        +(IS_SUP?_doneCard(_doneCountFromStages(d.stage_counts), _wonCountFromStages(d.stage_counts)):'')
-        +(IS_SUP?card(d.due_tasks||0,T('dash.card.due_all'),true):'')
-        +(IS_SUP?card(fr.today_responded?(fr.today_attain_rate+'%'):'—',T('dash.card.attain_rate'),'','unresponded'):'')
-        +(IS_SUP?card(rs.today_resolved||0,T('dash.card.resolved')):'')
-        +(IS_SUP?card(rs.today_resolved?fmtDur(rs.today_avg_sec):'—',T('dash.card.resolve_avg')):'')
-        +(IS_SUP?card(f.sessions!=null?f.sessions:(f.web_sessions||0),T('dash.card.web_sessions')):'');
+      // P1.2 核心卡精选 → P1 分组降噪（2026-08-18）：三组「现在要处理/今天的成果/
+      // 响应质量」；待回复+超时+严重合并为单卡副行；零值/无数据卡默认折叠成一行
+      // （定义与折叠语义见 _dbCardDefs / renderTodayCards）。
+      renderTodayCards(d);
       var trend=d.trend||[];
       document.getElementById('db-trend').innerHTML= trend.length?
         ('<div style="display:flex;gap:14px;font-size:12px;color:var(--tk-text-muted);margin-bottom:4px;"><span><span style="color:var(--tk-brand);">●</span> '+T('dash.tg.new_contacts')+'</span><span><span style="color:var(--tk-emerald);">●</span> '+T('dash.tg.leads')+'</span><span><span style="color:var(--tk-amber);">●</span> '+T('dash.tg.handoffs')+'</span></div>'

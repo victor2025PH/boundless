@@ -131,6 +131,60 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
         st = _require_store(request)
         return {"items": st.list(str(pid)), "stats": st.stats(str(pid))}
 
+    @app.post("/api/personas/{pid}/speech-print")
+    async def save_persona_speech_print(pid: str, request: Request,
+                                        _=Depends(auth_dep)):
+        """WP-6/P1-1：把该人设的说话指纹条目写进实例 overlay（数据区，升级不丢）。
+
+        Body: ``{entry: {print, catch?, example?, guide?}}``；键=人设口称名
+        （resolve_spoken_name，与 spoken_style 运行时逐字同口径）。打包态出厂件
+        只读也能写（这正是本端点存在的理由）；校验/净化在
+        ``speech_prints_overlay.validate_entry``。
+        """
+        _require_write(request)
+        p = _require_persona(request, pid)
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(400, "invalid JSON body")
+        from src.ai.speech_prints_overlay import save_entry
+        from src.utils.persona_manager import PersonaManager
+        spoken = str(PersonaManager.resolve_spoken_name(p) or "").strip()
+        if not spoken:
+            raise HTTPException(400, tr(request, "err.ws.field_required",
+                                        field="spoken_name"))
+        try:
+            clean = save_entry(spoken, (body or {}).get("entry"))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        _audit(request, "pmedia_speech_print_save", f"{pid}:{spoken}",
+               json.dumps(clean, ensure_ascii=False)[:400])
+        return {"ok": True, "spoken_name": spoken, "entry": clean}
+
+    @app.get("/api/personas/{pid}/stock-readiness")
+    async def persona_stock_readiness(pid: str, request: Request,
+                                      _=Depends(auth_dep)):
+        """WP-6 备货面板：档案/音色/相册/台词/说话指纹 五行就绪度聚合（只读）。
+
+        逻辑全在 ``src.companion.persona_stock``（可单测纯聚合）；本路由只喂
+        真实源（PersonaManager 档案 + 相册供给快照 + 实例配置）。
+        """
+        p = _require_persona(request, pid)
+        from src.companion.media_gap import collect_scene_supply
+        from src.companion.persona_stock import collect_stock_readiness
+
+        cfg = getattr(config_manager, "config", None) or {}
+        scfg = (cfg.get("companion") or {}).get("selfie") or {}
+        try:
+            supply = collect_scene_supply(scfg)
+        except Exception:
+            logger.debug("[persona-stock] 相册供给读取失败（按空计）",
+                         exc_info=True)
+            supply = {}
+        out = collect_stock_readiness(str(pid), p, cfg, supply=supply)
+        out["ok"] = True
+        return out
+
     @app.post("/api/personas/{pid}/media")
     async def upload_persona_media(pid: str, request: Request, _=Depends(auth_dep)):
         """上传一张图/一段视频到该人设相册（multipart: file + 可选 triggers/caption/tags/...）。"""
@@ -290,6 +344,43 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
         out = explain_match(rows, text, generic_ok=generic_ok)
         out["generic_ok"] = generic_ok
         return out
+
+    # ── B119（实施74）：发图全局闸自查面 ─────────────────────────────────────
+    # 事故（0826 _580/_581）：人设级相册开着、全局 companion.selfie.enabled 关着
+    # → AI 推脱不发图；全局闸只在 config，人设页无状态显示无入口，用户无法自查。
+
+    @app.get("/api/personas/selfie-gate")
+    async def get_selfie_gate(request: Request, _=Depends(auth_dep)):
+        """全局发图总闸（companion.selfie.enabled）状态——相册面板自查用。"""
+        cfg = {}
+        try:
+            cfg = getattr(config_manager, "config", None) or {}
+        except Exception:
+            cfg = {}
+        enabled = bool(((cfg.get("companion") or {}).get("selfie") or {})
+                       .get("enabled", False))
+        writable = bool(config_manager is not None
+                        and hasattr(config_manager, "set_overlay_flag"))
+        return {"ok": True, "enabled": enabled, "writable": writable}
+
+    @app.post("/api/personas/selfie-gate")
+    async def set_selfie_gate(request: Request, _=Depends(auth_dep)):
+        """一键开/关全局发图总闸（写 overlay + 审计，与能力开关同语义）。"""
+        _require_write(request)
+        if config_manager is None or not hasattr(config_manager, "set_overlay_flag"):
+            raise HTTPException(503, tr(request, "err.pmedia.gate_not_writable"))
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        value = bool((body or {}).get("value"))
+        ok, msg = config_manager.set_overlay_flag(
+            "companion.selfie.enabled", value)
+        if not ok:
+            raise HTTPException(500, str(msg or "overlay write failed"))
+        _audit(request, "pmedia_selfie_gate", f"value={value}",
+               "global companion.selfie.enabled via album panel (B119)")
+        return {"ok": True, "enabled": value}
 
     # ── face_ref：PuLID 锁脸基准照管理（生成链 reference_image() 按约定名读取）──────
 

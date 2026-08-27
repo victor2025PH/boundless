@@ -3,6 +3,11 @@
    强调色接无界智连蓝阶（暗底取亮档，语义是「同等强调度」而非「同色值」）。 */
 :root[data-cp-theme="dark"],
 .cp-theme-dark {
+  /* UA 原生件（滚动条/表单件）跟随深色；iframe(app.html) 是独立文档，不继承宿主的
+     color-scheme —— 缺这行就是「暗面板上一根 Windows 白滚动条」的直接土壤（2026-08-17 实锤）。 */
+  color-scheme: dark;
+  /* 统一细滚动条 thumb 色（cp-panel-base 注入 scrollbar-color 消费；track 恒透明） */
+  --cp-sb-thumb: rgba(148, 163, 184, .38);
   --cp-bg: #141519;
   --cp-surface: #1d1e24;
   --cp-surface-2: #26272e;
@@ -27,6 +32,8 @@
   --cp-goal-rel: #fb7185;
   --cp-goal-eng: #38bdf8;
   --cp-goal-disc: #2dd4bf;
+  /* gold 暗色取亮档（金带/chips 贴深底可读） */
+  --cp-gold: #eab308;
   --cp-track: #26272e;
   /* 语义状态 底/描边/文字：暗色取半透明 tint（贴深底不发白块），
      文字取亮档（语义=同等强调度而非同色值，与 --cp-ok/--cp-warn 同哲学） */
@@ -34,4 +41,6 @@
   --cp-warn-bg: rgba(245, 185, 69, .12);
   --cp-warn-border: rgba(245, 185, 69, .38);
   --cp-warn-ink: #f5b945;
+  /* danger-bg 暗色取半透明 tint（与 ok-bg/warn-bg 同哲学，贴深底不发白块） */
+  --cp-danger-bg: rgba(240, 106, 106, .14);
 }

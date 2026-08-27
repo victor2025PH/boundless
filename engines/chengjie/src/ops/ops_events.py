@@ -208,6 +208,15 @@ def get_ops_event_store(db_path: str = "config/ops_events.db") -> Optional[OpsEv
     return _store
 
 
+def peek_ops_event_store() -> Optional[OpsEventStore]:
+    """只探测既有单例，绝不新建（与 peek_goal_store 同纪律，2026-08-23）。
+
+    周报等聚合读方用它：``get_ops_event_store`` 的缺省路径是 CWD 相对——从
+    引擎根跑的 CLI 会在仓库里凭空建一个空库并把「零事件」误报成事实。
+    """
+    return _store
+
+
 def reset_ops_event_store() -> None:
     """测试辅助：清空单例。"""
     global _store
@@ -215,4 +224,5 @@ def reset_ops_event_store() -> None:
         _store = None
 
 
-__all__ = ["OpsEventStore", "get_ops_event_store", "reset_ops_event_store"]
+__all__ = ["OpsEventStore", "get_ops_event_store", "peek_ops_event_store",
+           "reset_ops_event_store"]

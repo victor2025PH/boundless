@@ -1,0 +1,821 @@
+# -*- coding: utf-8 -*-
+"""assistant 任务导向 how-to 语料包（第三源，2026-08-20 评审车道补齐）。
+
+背景：20 问金标评测实锤 help_terms（名词解释）+ nav_schema（页面入口）
+两源对「怎么做 X」类问题命中率仅 ~50%（DoD 线 80%）——用户问的是
+操作步骤，语料里只有名词。本包补 30+ 条任务条目。
+
+内容红线（与 seed_corpus 同约）：每条都必须是**产品当前真实行为**
+（依据：代码/规则/已验证的 UI 事实），配置文件类操作一律注明
+「请管理员操作」；禁止写「我以为有」的功能——助手编造功能是一票
+否决项。新增条目时先确认功能真实存在。
+
+id 稳定（howto:<slug>），重跑 = 幂等 upsert。path 供前端「带我去」。
+"""
+from __future__ import annotations
+
+# (slug, title, title_en, content, content_en, keywords, path)
+_HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
+    (
+        "send-voice",
+        "怎么给客户发语音消息",
+        "How to send a voice message",
+        "在坐席工作台打开会话，右栏「语音」组件输入要说的话 → 点「🎙️ 生成语音」"
+        "试听 → 满意后点发送（发送的就是你试听的那条音频）。输入区语音按钮同样"
+        "可生成并发送语音。文字改动后需重新生成，防止发出未试听的内容。",
+        "Open the conversation in the workspace, use the Voice panel on the "
+        "right: type the text, click Generate to preview, then Send (what you "
+        "hear is exactly what is sent). Regenerate after editing the text.",
+        "发语音 语音消息 语音 录音 voice 试听 克隆声 生成语音",
+        "/workspace",
+    ),
+    (
+        "voice-enroll",
+        "怎么登记/克隆一个新音色",
+        "How to enroll (clone) a new voice",
+        "在坐席工作台右栏「语音」组件上传一段参考音频即可零样本登记克隆声"
+        "（系统自动生成逐字稿并预热）。人设的默认音色在「人设工作室」的语音"
+        "档位里配置，请管理员操作。",
+        "Upload a reference audio clip in the workspace Voice panel to enroll "
+        "a cloned voice (zero-shot). Default persona voices are configured in "
+        "Persona Studio by an admin.",
+        "音色 克隆 登记 声音 参考音 enroll clone voice 换声",
+        "/workspace",
+    ),
+    (
+        "change-password",
+        "怎么修改登录密码",
+        "How to change my login password",
+        "点右上角头像打开用户菜单 → 「修改密码」，输入旧密码与新密码保存即可。"
+        "忘记密码请联系管理员在用户管理里重置。",
+        "Open the user menu (top-right avatar) → Change password. If you "
+        "forgot it, ask an admin to reset it in user management.",
+        "改密码 修改密码 密码 password 重置密码 登录",
+        "",
+    ),
+    (
+        "rewatch-tour",
+        "新手引导在哪重看",
+        "How to replay the onboarding tour",
+        "后台管理页：右键（或长按）左下角帮助球 → 「重看新手引导」。坐席工作台"
+        "收件箱右栏「业务助手」有独立的功能引导按钮。",
+        "Admin pages: right-click the help ball → replay tour. The workspace "
+        "inbox right panel has its own tour button.",
+        "新手引导 引导 教程 tour 上手 重看",
+        "",
+    ),
+    (
+        "shortcuts",
+        "快捷键一览在哪看",
+        "Where to see keyboard shortcuts",
+        "在后台管理页按 ? 键打开快捷键帮助面板；按 Ctrl+K 打开命令面板可搜索"
+        "页面与操作。收件箱里有键盘速查按钮。",
+        "Press ? on admin pages for the shortcut overlay; Ctrl+K opens the "
+        "command palette. The inbox has its own keyboard cheat-sheet button.",
+        "快捷键 键盘 shortcuts hotkey 按键",
+        "",
+    ),
+    (
+        "cmd-palette",
+        "命令面板怎么用",
+        "How to use the command palette",
+        "按 Ctrl+K（任意后台页面）打开命令面板，输入页面名或操作关键词回车直达，"
+        "支持中英文搜索，还有刷新/主题/改密/退出等快捷动作。",
+        "Press Ctrl+K on any admin page, type a page name or action keyword "
+        "and hit Enter. Supports zh/en search plus quick actions.",
+        "命令面板 Ctrl+K palette 搜索 快速 跳转",
+        "",
+    ),
+    (
+        "clear-filters",
+        "收件箱筛选怎么清空",
+        "How to clear inbox filters",
+        "收件箱筛选区点「清空筛选」按钮，会重置全部条件（含面板里的状态/目标"
+        "议程/标签/排序）。若列表看起来少了会话，多半是有筛选在生效，先清空。",
+        "Click Clear Filters in the inbox filter bar; it resets every "
+        "condition including status/goal-agenda/tags/sort. If conversations "
+        "seem missing, clear filters first.",
+        "筛选 清空 过滤 filter 重置 会话不见了 列表少了",
+        "/workspace",
+    ),
+    (
+        "report-bug",
+        "在哪提交 bug / 报障",
+        "How to report a bug",
+        "本助手面板切到「报障」标签：一句话描述 + 可选截图（Ctrl+V 粘贴），"
+        "系统会自动附上页面与版本信息，一键提交给开发方。也可在官方 Telegram "
+        "报障群反馈。提交后在「我的」标签跟进进度。",
+        "Switch to the Report tab in this assistant panel: describe the issue "
+        "(optionally paste a screenshot); page and build info are attached "
+        "automatically. Track progress in the My Tickets tab.",
+        "报障 报bug bug 提交问题 反馈 故障 工单 report "
+        "软件坏了 坏了 找谁 出问题 不能用 用不了 崩了",
+        "",
+    ),
+    (
+        "ticket-status",
+        "报障之后怎么看处理进度",
+        "How to track my bug report",
+        "本助手面板「我的」标签列出你提交的全部工单与状态（新建/已修复等）；"
+        "标记「已修复」的工单会请你验证是否解决。",
+        "The My Tickets tab lists all your reports and their status; tickets "
+        "marked fixed will ask you to verify.",
+        "工单 进度 报障进度 修复 状态 ticket "
+        "处理得怎么样 到哪了 有结果吗 我提交的 跟进 什么时候好",
+        "",
+    ),
+    (
+        "account-banned",
+        "账号被风控/封禁了怎么办",
+        "What to do when an account is restricted or banned",
+        "先在「账号资产中心」查看该账号的资产与状态（联系人/可达性/备份）。"
+        "风控事件会记录在运维事件台账并触发告警。恢复或迁移账号请联系管理员"
+        "处理，不要反复重试登录以免加重风控。",
+        "Check the Account Asset Center for the account's assets and status. "
+        "Risk-control events are logged and alerted. Ask an admin before "
+        "retrying logins — repeated attempts can make it worse.",
+        "风控 封号 封禁 被封 banned 限制 账号异常",
+        "/workspace/assets",
+    ),
+    (
+        "reply-budget",
+        "回复额度用完了怎么办",
+        "What to do when the daily reply budget is used up",
+        "「自动回复设置」页的「回复额度守卫」卡可查看/调整每日额度；触顶的会话"
+        "可在收件箱横幅或设置页点「今日继续」豁免（管理员权限）。",
+        "The Reply Budget Guard card on the Auto-reply Settings page shows and "
+        "adjusts daily budgets; capped conversations can be granted a "
+        "same-day relief from the inbox banner or the settings list (admin).",
+        "额度 回复额度 budget 触顶 限额 豁免 用完",
+        "/reply-settings",
+    ),
+    (
+        "kb-add",
+        "知识库怎么添加条目",
+        "How to add a knowledge base entry",
+        "打开「知识库」页 → 新建条目：填分类/标题/触发词/回复模板，保存后建议"
+        "点「向量化」让语义检索生效。也可一键播种起步包快速备货。",
+        "Open the Knowledge page → New entry (category/title/triggers/reply), "
+        "then run embed-all so semantic search picks it up. Starter packs can "
+        "seed a domain in one click.",
+        "知识库 加条目 新建 KB 词条 话术 添加",
+        "/knowledge",
+    ),
+    (
+        "persona-edit",
+        "怎么编辑/更换人设",
+        "How to edit or switch personas",
+        "「人设工作室」页可编辑人设档案（性格/背景/语音/相册）。会话绑定的身份"
+        "在收件箱回复区的身份条可见；换绑后语音音色偏好会自动校正。",
+        "Persona Studio edits persona profiles (personality/voice/albums). "
+        "The identity bar above the composer shows the conversation's bound "
+        "persona; voice preferences auto-correct after rebinding.",
+        "人设 换人设 编辑人设 persona 身份 角色",
+        "/personas",
+    ),
+    (
+        "persona-album",
+        "人设相册怎么上传图片",
+        "How to upload persona album media",
+        "「人设工作室」→ 选中人设 → 相册面板上传图/视频，可配触发词让客户要图"
+        "时自动发送；支持多语配文与关系等级门槛。",
+        "Persona Studio → pick a persona → Album panel: upload images/videos, "
+        "set trigger words for auto-send, captions per language.",
+        "相册 上传图片 图片 照片 album 自拍 视频",
+        "/personas",
+    ),
+    (
+        "goal-create",
+        "怎么给会话建工作目标",
+        "How to create a work goal for a conversation",
+        "收件箱右栏「目标」组件点建目标，两步弹层填写；输入会自动暂存（误关可"
+        "断点续写），创建成功后回列表。",
+        "Use the Goal panel in the inbox right sidebar; the two-step form "
+        "auto-saves drafts so accidental closes never lose input.",
+        "目标 建目标 工作目标 goal 议程",
+        "/workspace",
+    ),
+    (
+        "draft-review",
+        "AI 草稿怎么审批/为什么发送按钮是灰的",
+        "How draft review works / why Send is greyed out",
+        "「草稿审批」页逐条通过/编辑/拒绝。发送置灰通常是护栏拦截：草稿超过 "
+        "24 小时（内容已脱节，请重新生成）或该会话已经回复过（原样发会重复）。"
+        "点「编辑后发送」是推荐出路。",
+        "The Drafts page approves/edits/rejects drafts. A greyed Send means a "
+        "guard tripped: the draft is older than 24h or the conversation was "
+        "already answered. Edit-and-send is the recommended path.",
+        "草稿 审批 通过 发送灰 灰色 拦截 陈旧",
+        "/workspace/drafts",
+    ),
+    (
+        "takeover",
+        "怎么人工接管会话 / 让 AI 停止自动回复",
+        "How to take over a conversation from AI",
+        "在收件箱会话里切换自动化模式：全自动（AI 自答）/ 人审（AI 拟稿人发）/"
+        " 人工。接管后 AI 不再自动发送，坐席手动回复。",
+        "Switch the conversation's automation mode in the inbox: full-auto, "
+        "review (AI drafts, human sends), or manual takeover.",
+        "接管 人工 转人工 停止AI 自动回复 automation",
+        "/workspace",
+    ),
+    (
+        "image-translate",
+        "客户发的图片怎么翻译",
+        "How to translate an image from a customer",
+        "点开收件箱里的图片，在查看器里点翻译即可 OCR+翻译；也可以把截图直接 "
+        "Ctrl+V 粘贴进输入区做图片翻译。",
+        "Open the image in the inbox viewer and hit Translate (OCR + "
+        "translation); you can also paste a screenshot into the composer.",
+        "图片翻译 OCR 翻译图片 截图翻译 识别",
+        "/workspace",
+    ),
+    (
+        "outbound-translate",
+        "发出去的消息会自动翻译吗",
+        "Does outbound text get auto-translated",
+        "开启出站自动翻译后，AI 自动发送与主动触达会先译成会话客户的语言再发；"
+        "文本已是客户语言时自动跳过。该开关由管理员在配置里启用。",
+        "With outbound auto-translate enabled, autosend and proactive messages "
+        "are translated into the customer's language first (skipped when "
+        "already in it). Admins enable it in config.",
+        "自动翻译 出站翻译 翻译 客户语言 外语",
+        "",
+    ),
+    (
+        "send-media",
+        "怎么给客户发图片/文件",
+        "How to send media to a customer",
+        "收件箱输入区的图片按钮选择文件，或直接把截图 Ctrl+V 粘贴到输入区，"
+        "预览确认后发送。",
+        "Use the media button in the composer or paste a screenshot with "
+        "Ctrl+V, preview, then send.",
+        "发图 发图片 发文件 媒体 图片 粘贴",
+        "/workspace",
+    ),
+    (
+        "voice-transcribe",
+        "客户的语音怎么变成文字",
+        "How customer voice notes become text",
+        "客户语音会自动转写成文字显示在会话里（自建 GPU 转写，多语言自动识别），"
+        "无需手动操作。转写异常时请走报障。",
+        "Inbound voice notes are transcribed automatically (self-hosted GPU "
+        "ASR, language auto-detect). Report it if transcription misbehaves.",
+        "语音转文字 转写 听不懂 语音识别 ASR",
+        "",
+    ),
+    (
+        "theme-switch",
+        "怎么切换暗色/亮色主题",
+        "How to switch dark/light theme",
+        "坐席工作台：顶栏主题切换按钮。后台管理页：Ctrl+K 命令面板输入「主题」"
+        "执行切换。",
+        "Workspace: theme toggle in the top bar. Admin pages: Ctrl+K → type "
+        "'theme' → run the toggle action.",
+        "暗色 夜间 主题 dark 亮色 深色模式",
+        "",
+    ),
+    (
+        "lang-switch",
+        "界面语言怎么切换中/英",
+        "How to switch UI language",
+        "坐席工作台顶栏有语言切换按钮（中⇄英，整页生效）；后台管理页在用户菜单"
+        "里切换。",
+        "Workspace: the language button in the top bar switches zh⇄en for the "
+        "whole page; admin pages switch it from the user menu.",
+        "语言 英文 中文 切换语言 language english",
+        "",
+    ),
+    (
+        "multiwin",
+        "为什么提示「在此使用/保持待机」",
+        "Why do I see the use-here / standby prompt",
+        "同一浏览器开了多个工作台窗口时，只有一个主控窗口响铃和操作，其余待机"
+        "（防止重复发送与双响铃）。点「在此使用」把主控切到当前窗口。",
+        "With multiple workspace windows in one browser, only one is primary "
+        "(prevents double-send and double bells). Click Use Here to promote "
+        "the current window.",
+        "多窗口 待机 在此使用 双开 两个窗口",
+        "",
+    ),
+    (
+        "ai-degraded",
+        "AI 回复变慢/顶部出现降级提示怎么办",
+        "What the AI degradation banner means",
+        "顶部降级条表示云端 AI 暂不可用，系统已自动切换本地兜底模型继续出话"
+        "（恢复后自动消失），无需操作。若长时间不恢复或完全无回复，请走报障。",
+        "The banner means the cloud LLM is unreachable and the local fallback "
+        "is serving replies; it clears automatically on recovery. Report if "
+        "it persists.",
+        "降级 变慢 AI不回 云端 本地兜底 慢",
+        "",
+    ),
+    (
+        "channel-down",
+        "平台通道离线（红条）怎么处理",
+        "How to handle the channel-offline red banner",
+        "收件箱顶部红条说明某平台会话掉线（客户消息收不到）。Messenger/WhatsApp "
+        "支持红条上一键重登；其他平台请联系管理员处理。",
+        "The red banner means a platform session dropped. Messenger/WhatsApp "
+        "offer one-click relogin on the banner; other platforms need an admin.",
+        "掉线 离线 红条 通道 连接中断 收不到消息 重登",
+        "/workspace",
+    ),
+    (
+        "alert-webhook",
+        "告警怎么推送到 Telegram",
+        "How to push alerts to Telegram",
+        "后台「告警渠道」面板填 Telegram bot token 与 chat_id，保存后可点测试"
+        "发送；按需订阅告警类型，免重启即时生效（管理员操作）。",
+        "Fill in the Telegram bot token and chat_id on the alert-channel "
+        "panel, test-send, and pick alert types to subscribe (admin; applies "
+        "without restart).",
+        "告警 通知 推送 webhook telegram 报警",
+        "",
+    ),
+    (
+        "proactive-config",
+        "AI 会主动给客户发消息吗 / 怎么控制",
+        "Does the AI proactively message customers / how to control it",
+        "支持按沉默时长主动问候、早晚安仪式、主动关怀，均有冷却与安静时段护栏。"
+        "开关与频率属管理员配置项（companion 配置段），运维看板可观测发送量与"
+        "回复率。",
+        "Proactive check-ins, morning/night rituals and care messages are "
+        "supported with cooldown and quiet-hour guards; admins configure them "
+        "and the ops board shows volume and reply rates.",
+        "主动 主动触达 问候 打招呼 主动消息 关怀",
+        "",
+    ),
+    (
+        "dashboard-where",
+        "运营数据在哪里看",
+        "Where to see operational data",
+        "「仪表盘」页看整体经营数据；「运维总览」页看系统健康与各子系统读数；"
+        "工作台侧栏有坐席绩效/ROI/AI 质量等看板。",
+        "The Dashboard page shows business metrics; Ops Overview shows system "
+        "health; the workspace sidebar has agent-perf/ROI/AI-quality boards.",
+        "数据 看板 仪表盘 报表 统计 dashboard",
+        "/dashboard",
+    ),
+    (
+        "ai-style",
+        "怎么调整 AI 回复的风格/长度",
+        "How to tune AI reply style",
+        "「回复策略」页调整温度、长度与策略；人设的说话风格在「人设工作室」的"
+        "档案里改（personality/style）。改动即时生效。",
+        "Tune temperature/length on the Reply Strategies page; per-persona "
+        "speaking style lives in Persona Studio profiles.",
+        "风格 语气 回复长度 温度 temperature 策略",
+        "/strategies",
+    ),
+    (
+        "term-tips",
+        "术语悬停提示怎么开关",
+        "How to toggle term tooltips",
+        "本助手面板底部工具行可开关「术语提示」；开启后页面上带虚线下划线的"
+        "词条悬停即可看解释。",
+        "Toggle Term Tips in this panel's footer; hovering dashed-underlined "
+        "terms then shows explanations.",
+        "术语 提示 悬停 词条 下划线 tooltip",
+        "",
+    ),
+    (
+        "kb-miss",
+        "客户问的问题 AI 答不上来怎么办",
+        "What to do when the AI can't answer a customer",
+        "知识库页有「未命中查询」清单（客户问了但没答上的问题），照单补条目后"
+        "点向量化即可让 AI 学会。高频缺口优先补。",
+        "The Knowledge page lists missed queries; add entries for them and "
+        "run embed-all so the AI learns. Fix high-frequency gaps first.",
+        "答不上 不会答 未命中 miss 补充 学习",
+        "/knowledge",
+    ),
+    # ── 实施74 P1（2026-08-27）：页面级操作指引补齐 ───────────────────────────
+    # 缺口实测：nav_schema 40 个页面里只有 6 个有 how-to（用户问「这页怎么用」
+    # 34 页答不上）。本批补 12 个最高价值页，逐条**先读代码/模板核实真实行为**
+    # 再写（本文件红线：禁止写「我以为有」的功能）。关键纠正：四个渠道页
+    # **本身不接入账号**，接入统一在坐席工作台的账号抽屉——差点写反。
+    (
+        "connect-telegram",
+        "Telegram 账号怎么接入 / 渠道页怎么用",
+        "How to connect Telegram and use its channel page",
+        "接账号在**坐席工作台的账号抽屉**扫码（渠道页本身不接入）：工作台 → "
+        "账号面板 → 扫码，加的是「坐席多开号」。渠道页「真机矩阵」分四个页签"
+        "（配置 / 语音 / 运维 / 漏斗），改完点「保存消息配置」即热更新、无需重启。"
+        "注意主会话（A 线）掉线不能靠扫码恢复，需管理员在服务器处理。",
+        "Connect accounts from the account drawer in the agent workspace (the "
+        "channel page itself does not onboard accounts). The channel page has "
+        "Config / Voice / Ops / Funnel tabs; Save applies as a hot reload. A "
+        "dropped main session cannot be restored by scanning a QR code.",
+        "telegram 接入 接账号 扫码 添加账号 tg 渠道 登录 多开 电报 电报号",
+        "/workspace/channels/telegram",
+    ),
+    (
+        "connect-line",
+        "LINE 怎么接入 / 渠道页怎么用",
+        "How to connect LINE and use its channel page",
+        "接账号在**坐席工作台的账号抽屉**完成。渠道页分监控 / 待审 / 配置 / "
+        "运维 / 漏斗五个页签，顶部控制条可「立即触发一轮」「暂停 5/15/30 分钟」"
+        "「立即恢复」「手动发送」，配置改完点「保存配置」。",
+        "Connect LINE from the account drawer in the agent workspace. The "
+        "channel page has Monitor / Review / Config / Ops / Funnel tabs, with "
+        "run-now, pause and manual-send controls at the top.",
+        "line 接入 接账号 扫码 渠道 暂停 触发 手动发送 登录 登陆 上号 line号",
+        "/workspace/channels/line",
+    ),
+    (
+        "connect-messenger",
+        "Messenger 怎么接入 / 掉线怎么重登",
+        "How to connect Messenger and re-login after a drop",
+        "接账号在**坐席工作台的账号抽屉**发起（服务器托管浏览器）。掉线时页面"
+        "下方会出现「网页会话异常」健康条，点上面的「重新登录」即可触发，之后"
+        "提示「已触发重登，30 分钟内在 worker 主机完成登录」。Messenger 是唯一"
+        "支持页面内一键重登的渠道。",
+        "Start the connection from the account drawer in the agent workspace "
+        "(server-hosted browser). When a session drops, use Re-login on the "
+        "health bar; you then have 30 minutes to finish login on the worker "
+        "host. Messenger is the only channel with in-page re-login.",
+        "messenger 接入 掉线 重新登录 重登 会话异常 fb",
+        "/workspace/channels/messenger",
+    ),
+    (
+        "connect-whatsapp",
+        "WhatsApp 怎么接入 / 掉线怎么办",
+        "How to connect WhatsApp and handle a dropped session",
+        "接账号在**坐席工作台的账号抽屉**扫码登录。掉线后渠道页只做观测，"
+        "不支持页面内重登——提示会写「请到聊天坐席的账号面板重新扫码」，"
+        "点「去聊天坐席」回工作台重扫即可。",
+        "Scan to connect from the account drawer in the agent workspace. The "
+        "channel page only observes session health; there is no in-page "
+        "re-login for WhatsApp — go back to the workspace account panel and "
+        "scan again.",
+        "whatsapp wa 接入 扫码 掉线 重新扫码 离线",
+        "/workspace/channels/whatsapp",
+    ),
+    (
+        "add-agent-user",
+        "怎么给团队加一个坐席账号",
+        "How to add a team member account",
+        "「用户管理」页点「添加子帐号」→ 填用户名 / 显示名称 / 密码 / 角色 → "
+        "「创建」。主帐号可建管理员、主管、坐席、只读观察员；管理员可建主管、"
+        "坐席、只读观察员。密码至少 6 位，主帐号不可删除或降级。建好后可在每行"
+        "调整角色、额度、权限与启用状态。",
+        "On the Users page click Add sub-account, fill in username / display "
+        "name / password / role, then Create. The master account can create "
+        "admin, supervisor, agent and viewer; an admin can create supervisor, "
+        "agent and viewer. Passwords need 6+ characters; the master account "
+        "cannot be deleted or demoted.",
+        # 「客服人员」必须留在这条：escalation-config 也含「人工客服」，
+        # 2026-08-27 评测实测它会把「怎么新增一个客服人员」抢走——补关键词有
+        # 交叉影响，改任一条都该复跑 assistant_qa_eval 看有没有误伤别人。
+        "加坐席 添加用户 子帐号 新增账号 角色 权限 用户管理 开账号 "
+        "客服人员 新增人员 员工 同事 新人",
+        "/users",
+    ),
+    (
+        "kick-sessions",
+        "怎么把其他设备踢下线 / 看谁在登录",
+        "How to see active sessions and sign out other devices",
+        "「用户管理」页下方有「活跃会话」区，可看当前登录中的会话并点「刷新」；"
+        "怀疑账号被别人用了就点「踢出所有其他设备」，只保留你当前这台。",
+        "The Users page has an Active sessions section: refresh to see current "
+        "logins, or sign out all other devices to keep only your current one.",
+        "踢下线 活跃会话 登录设备 挤下线 安全 会话",
+        "/users",
+    ),
+    (
+        "system-settings",
+        "系统设置里能改什么 / 为什么我打不开",
+        "What the system settings page covers and why it may be blocked",
+        "「系统设置」**只有主帐号能进**，管的是 AI 提示词与行为、人工转接、"
+        "品牌白标、授权激活、演示数据等系统级配置。注意 Telegram 的「私聊消息」"
+        "开关**不在这页**——在「开发者工具」→ Bot 行为配置里勾选后保存。"
+        "简洁模式下本页只显示 AI 提示词与人工转接两块。",
+        "System settings is master-account only: AI prompts and behaviour, "
+        "human escalation, branding, licensing and demo data. The Telegram "
+        "private-chat toggle is NOT here — it lives in Developer tools under "
+        "bot behaviour. Simple mode shows only prompts and escalation.",
+        "系统设置 设置 打不开 权限 提示词 人工转接 品牌 授权",
+        "/settings",
+    ),
+    (
+        "usage-quota",
+        "用量与额度在哪看 / 额度快用完怎么办",
+        "Where to check usage and what to do when quota runs low",
+        "「用量与额度」页：主管/管理员看团队（授权总池、本月团队消耗、每日趋势、"
+        "分坐席用量表、计费对账单可按月生成并导出 CSV），坐席只看「我的用量」。"
+        "进度条到 80% 变黄、100% 变红，并按近 7 天日均估算「约 X 天耗尽」；"
+        "要加量点标题行的「增购 →」到会员中心。",
+        "The Usage page shows the licence pool, this month's team consumption, "
+        "daily trend, per-agent table and a monthly billing statement (CSV "
+        "export). Agents see only their own usage. The bar turns amber at 80% "
+        "and red at 100%, with a days-to-exhaustion estimate; use Buy more to "
+        "top up.",
+        "用量 额度 字符 快用完 耗尽 增购 充值 计费 对账单 "
+        "花了多少 花费 消费 用了多少 这个月 本月 账单",
+        "/workspace/usage",
+    ),
+    (
+        "personal-settings",
+        "怎么改界面主题 / 个人偏好",
+        "How to change the theme and personal preferences",
+        "「个人设置」页的「外观与个性化」可调主题配色，改动带实时预览、"
+        "且跟随账号跨设备漫游。坐席工作台左下角的「主题配色」是同一套设置的"
+        "快捷入口。这页所有登录用户都能用，与主帐号的「系统设置」无关。",
+        "Personal settings → Appearance lets you change the theme with live "
+        "preview; it roams with your account across devices. The Theme "
+        "shortcut at the bottom-left of the workspace opens the same settings. "
+        "Available to every signed-in user.",
+        "主题 换肤 暗色 亮色 外观 个性化 个人设置 配色",
+        "/personal-settings",
+    ),
+    (
+        "audit-log",
+        "谁改了什么怎么查 / 操作记录怎么导出",
+        "How to audit who changed what and export the records",
+        "「操作记录」页有最近 84 天的操作热力图，下面可按条件筛选记录并分页浏览；"
+        "「导出筛选结果」按当前筛选导 CSV、「导出全部」导全量。日志有保留期限，"
+        "页面顶部会写明当前保留策略。",
+        "The Audit page shows an 84-day activity heatmap plus filterable, "
+        "paginated records. Export filtered results or everything as CSV. "
+        "Retention policy is shown at the top of the page.",
+        "操作记录 审计 谁改的 日志 导出 csv 留痕 "
+        "谁把 谁动了 改了什么 变更 谁操作的 改动记录",
+        "/audit",
+    ),
+    (
+        "today-overview",
+        "今日概览看什么 / 为什么我看不到首页",
+        "What the dashboard shows and why you may not see it",
+        "「今日概览」是完整模式的后台首页：待办条、本周 AI 价值（可点「完整报表」"
+        "进运营总览）、授权状态、系统告警横幅。**简洁模式下打开首页会直接跳到"
+        "「案例跟进」**——想看概览请切到完整模式，或用侧栏的「今日概览」入口。",
+        "The dashboard is the full-mode home page: to-dos, weekly AI value "
+        "(with a link to the full report), licence status and system alerts. "
+        "In simple mode the home page redirects to Cases — switch to full mode "
+        "or use the sidebar entry to reach it.",
+        "首页 今日概览 仪表盘 看不到 跳转 待办 dashboard",
+        "/",
+    ),
+    (
+        "help-center",
+        "帮助中心 / 指令参考在哪",
+        "Where to find the command reference and training",
+        "「帮助中心」可搜索并按分区查看指令参考，指令可直接复制；页面上还有"
+        "「打开培训演示」进入全屏培训幻灯片。简洁模式只列常用指令，切完整模式"
+        "看全部。所有能登录的用户都可以用。",
+        "The Help centre lets you search and browse the command reference "
+        "(commands are copyable) and open a full-screen training deck. Simple "
+        "mode lists only common commands; switch to full mode for everything.",
+        "帮助 帮助中心 指令 命令 培训 教程 参考",
+        "/help",
+    ),
+    # ── 实施74 P1 第二批（2026-08-27）：运营/看板/技术页 ─────────────────────
+    # 同样逐条先读代码核实。两条判断值得记：
+    # ① /developer 有二次密码门——**密码绝不写进面向客户的帮助文案**（核实时
+    #    读到了明文，刻意只写「向技术支持索取」）；
+    # ② /logs 与 /developer 对普通客户就是「你不需要进」——明确告诉用户某页
+    #    不用管，本身就是有效的使用帮助，比装作它有用更诚实。
+    (
+        "cases-page",
+        "案例跟进是什么 / 案例从哪来",
+        "What the Cases page is and where cases come from",
+        "「案例跟进」是 AI 判定**需要人接手**的会话清单，由系统自动开案——"
+        "触发信号包括：客户要求人工、危机信号、怀疑对方是机器人、质疑照片或身份、"
+        "满意度走低后的连续追问等。坐席的动线是：认领 → 打开会话处理 → 加备注 → "
+        "结案（可标「已安抚 / 已转人工 / 误报」）。顶部可按「待处理 / 我认领的 / "
+        "高风险 / 已结案」筛选。简洁模式下这页就是首页。",
+        "Cases lists conversations the AI decided need a human: explicit "
+        "requests for a human, crisis signals, bot suspicion, doubts about "
+        "photos or identity, repeated follow-ups after low satisfaction. Claim "
+        "it, open the conversation, add a note, then close it. In simple mode "
+        "this is the home page.",
+        "案例 案例跟进 开案 认领 结案 需要人工 转人工 风险会话",
+        "/cases",
+    ),
+    (
+        "membership-page",
+        "会员中心能干什么 / 在哪买额度",
+        "What the Membership page does and how to buy more",
+        "「会员中心」展示当前授权档位、字符额度、功能矩阵与升级引导，**本身不是"
+        "下单页**：只有配置了商城链接时才会出现「购买 / 续费」外链按钮，否则"
+        "可走的路是——激活授权码、注册领取免费额度、邀请好友、或联系客服申请。"
+        "主帐号还能点「同步授权」拉取最新状态。侧栏入口只对主帐号显示。",
+        "Membership shows your licence tier, character quota, feature matrix "
+        "and upgrade guidance. It is not a checkout page: a Buy/Renew link "
+        "appears only when a shop URL is configured; otherwise activate a "
+        "licence key, claim free credits, invite friends or contact support. "
+        "The master account can also re-sync the licence.",
+        "会员 会员中心 购买 续费 增购 授权 激活 额度 套餐 升级",
+        "/membership",
+    ),
+    (
+        "monetization-page",
+        "客户营收看板看什么",
+        "What the Monetization page shows",
+        "「客户营收」是 C 端用户订阅 / 单点解锁 / 打赏的营收与转化看板，可下钻"
+        "「触墙名单 / 被预算拦名单 / 送达名单 / 预告触达名单」，也能给指定客户"
+        "「开通 / 入账」和「查权益」。需要先开启 monetization.enabled（未开时"
+        "侧栏不显示这个入口），角色需主帐号或管理员。",
+        "Monetization is the revenue and conversion board for end-user "
+        "subscriptions, unlocks and tips, with drill-downs into paywall / "
+        "budget-blocked / delivered lists, plus manual grants and entitlement "
+        "lookup. Requires monetization.enabled and a master/admin role.",
+        "营收 变现 订阅 解锁 打赏 付费 转化 monetization 权益",
+        "/monetization",
+    ),
+    (
+        "learner-page",
+        "学习队列是干嘛的 / 怎么让 AI 变聪明",
+        "What the Learning queue does",
+        "「学习队列」把 AI 没答好的问题变成知识草稿，**必须人工审核才入库**——"
+        "来源有三种：知识库未命中达到次数、客户负反馈、以及你手动「入队学习」"
+        "粘贴的问题。在页面上逐条「通过入库 / 拒绝 / 编辑」，也可批量通过。"
+        "想立刻跑一轮点「立即学习」。注意它教的是「下次答得更好」，"
+        "现在就需要人接手的风险会话在「案例跟进」。",
+        "The Learning queue turns questions the AI handled poorly into "
+        "knowledge drafts that a human must approve before they enter the KB. "
+        "Sources: repeated KB misses, negative feedback, and manually queued "
+        "questions. Approve, reject or edit each draft. It improves future "
+        "answers; conversations needing a human right now live in Cases.",
+        "学习队列 学习 训练 变聪明 草稿 审核 入库 未命中 knowledge",
+        "/learner",
+    ),
+    (
+        "relations-health-page",
+        "流失预警怎么用 / 客户要跑了怎么发现",
+        "How to use the churn-risk page",
+        "「流失预警」按流失风险给联系人排序，选中后可「生成话术」再「直接发送」"
+        "或「打开会话」自己接手，形成发现→挽回的闭环。它有两种模式：开启"
+        "contacts.enabled 并重启后是跨平台旅程的全量榜，否则是基于收件箱信号的"
+        "轻量榜（页面顶部会说明当前跑在哪种模式）。",
+        "Churn risk ranks contacts by risk, then lets you generate a win-back "
+        "message and send it or open the conversation yourself. With "
+        "contacts.enabled it uses the full cross-platform journey; otherwise a "
+        "lightweight inbox-signal ranking. The page states which mode is live.",
+        "流失 预警 挽回 客户要跑 风险 沉默 relations 召回",
+        "/relations-health",
+    ),
+    (
+        "care-schedule-page",
+        "主动关怀是什么 / 怎么开",
+        "What proactive care is and how to enable it",
+        "「主动关怀」让 AI 记住客户在聊天里说过的事（面试、复查、搬家…），"
+        "到点主动问候。开启是分两步的安全设计：先点「开启主动关怀（试运行）」"
+        "——只拟稿不发送，你在页面上逐条「看 AI 会说什么」；读数满意再点"
+        "「开始真发」。随时可「暂停引擎」。",
+        "Proactive care remembers things customers mention (an interview, a "
+        "check-up, a move) and reaches out when the day comes. Enabling is "
+        "deliberately two-stage: start in dry-run (drafts only, review each "
+        "one), then switch to live sending. You can pause the engine anytime.",
+        "主动关怀 关怀 主动问候 提醒 试运行 dry run 定时 care",
+        "/care-schedule",
+    ),
+    (
+        "crisis-audit-page",
+        "危机审计是什么",
+        "What the Crisis audit page is",
+        "「危机审计」是危机级事件的留痕表（客户流露自伤/极端情绪等），供复盘与"
+        "人工处置：可按用户筛选、只看未处理，逐条「标记已处理」。需要先开启"
+        "companion.wellbeing.crisis_audit。内容敏感，建议只给主管或合规角色看。",
+        "Crisis audit is the trail of severe/elevated crisis events for review "
+        "and follow-up: filter by user, show only unhandled, and mark items "
+        "handled. Requires companion.wellbeing.crisis_audit. The content is "
+        "sensitive — keep it to supervisors or compliance roles.",
+        "危机 审计 自伤 极端 安全 留痕 处置 crisis",
+        "/crisis-audit",
+    ),
+    (
+        "episodic-memory-page",
+        "AI 记忆在哪看 / 记错了怎么删",
+        "How to review and fix the AI's long-term memory",
+        "「AI 记忆」页可浏览 AI 记住的长期事实，点「加载」拉取；每条可「确认属实」"
+        "或「删除」，也支持按关键词批量删除（有二次确认）。记错的事实会一直影响"
+        "后续对话，发现了就删——但**误删同样会降低对话质量**，删之前先看清楚。"
+        "确认与删除需要主帐号或管理员权限。",
+        "The AI memory page lists long-term facts the AI has stored. Load them, "
+        "then confirm or delete each one; bulk delete by keyword is available "
+        "with a confirmation step. Wrong facts keep affecting future replies, "
+        "but deleting good ones hurts quality too — read before you delete. "
+        "Confirm/delete requires master or admin.",
+        "记忆 AI记忆 长期记忆 记错 删除 事实 episodic 忘记",
+        "/episodic-memory",
+    ),
+    (
+        "escalation-config",
+        "怎么让 AI 答不上时转人工",
+        "How to hand off to a human when the AI is stuck",
+        "在「系统设置」的「人工客服转接」卡里配（侧栏「人工转接」直达）：启用"
+        "「同问多次转人工」→ 填客服用户名 → 设「同一问题连发几次触发」（默认 3）、"
+        "统计窗口、最短问句长度、触发后冷却 → 点「保存转接配置」。有「一键常用"
+        "默认值」可快速填。这页只有主帐号能进。",
+        "Configure it in the Human handoff card on the Settings page (the "
+        "sidebar Handoff entry deep-links there): enable repeat-question "
+        "handoff, set the agent username, the repeat threshold (default 3), "
+        "the counting window, minimum question length and the cooldown, then "
+        "save. A one-click defaults button is available. Master account only.",
+        "转人工 人工转接 escalation 接管 答不上 转接 客服 同问多次 "
+        "找真人 要真人 真人 人工客服 找人工 要人工",
+        "/settings#escalation",
+    ),
+    (
+        "queue-board",
+        "主管看板看什么 / 怎么给坐席重新分配会话",
+        "What the supervisor queue board does",
+        "「主管看板」实时显示各坐席的负载与待处理会话，可在卡片视图或表格视图"
+        "之间切换，对有会话的坐席点「重新分配」把会话转给别人（弹层里确认分配）。"
+        "**这页只有主管角色能进**，普通坐席打开会被送回工作台。",
+        "The supervisor board shows each agent's load and open conversations in "
+        "card or table view, and lets you reassign conversations to someone "
+        "else. Supervisor role only — other agents are redirected back to the "
+        "workspace.",
+        "主管看板 队列 负载 重新分配 转派 坐席 supervisor queue "
+        "每个客服 接了多少 工作量 谁在忙 分配情况 谁接的",
+        "/workspace/queue",
+    ),
+    (
+        "ops-overview-page",
+        "运营总览 / 老板单页看板怎么看",
+        "How to read the ops overview board",
+        "「运营总览」把 ROI、计费、运行时健康、可靠性等聚合成一页，顶部可"
+        "「筛选卡片」按关键词找、「全部展开·收起」、切「老板视图」只看经营口径。"
+        "**零流量的卡片会整卡隐藏**——看不到某张卡通常表示那个子系统还没启用或"
+        "本窗口没有数据，不是坏了；页面里有「隐藏能力清单」说明哪些没开。",
+        "Ops overview aggregates ROI, billing, runtime health and reliability "
+        "on one page, with card search, expand/collapse all and a boss view. "
+        "Cards with no traffic hide themselves — a missing card usually means "
+        "that subsystem is off or had no data, not that it broke; the page "
+        "lists which capabilities are hidden.",
+        "运营总览 老板看板 ops 指标 健康 卡片 不见了 隐藏 "
+        "一页看全 全部数据 汇总 大盘 总数据 一页",
+        "/admin/ops",
+    ),
+    (
+        "logs-page",
+        "实时日志是给谁用的",
+        "Who the live log page is for",
+        "「实时日志」是给技术支持排查问题用的服务端日志流，可按级别"
+        "（DEBUG/INFO/WARN/ERROR/CRIT）和关键词过滤，支持暂停/清空/下载/跟随。"
+        "**日常运营用不到这页**——遇到问题更快的路是用小智的「报障」一键截图提交，"
+        "我们会带着日志一起看。页面上的「清空」只清当前显示，不影响服务器日志。",
+        "Live logs is a server log stream for technical troubleshooting, with "
+        "level and keyword filters plus pause/clear/download/follow. Day-to-day "
+        "operations do not need it — reporting the problem through the "
+        "assistant (with a screenshot) gets it looked at faster. Clear only "
+        "clears the view, not the server-side log files.",
+        "日志 实时日志 logs 排查 报错 技术 调试",
+        "/logs",
+    ),
+    (
+        "developer-page",
+        "开发者工具是什么 / 我进不去",
+        "What the Developer tools page is",
+        "「开发者工具」放的是敏感配置：AI 接口与密钥、备用 Key 池、Bot 行为、"
+        "内部界面显隐等，因此在登录之外还有一道**独立的开发者密码**门"
+        "（需要时请向技术支持索取，不要在聊天里传）。"
+        "**这页不是给日常运营用的**——里面的开关配错可能让全站异常；"
+        "需要改的东西大多在「系统设置」或「自动回复设置」里就有。",
+        "Developer tools holds sensitive configuration: AI endpoints and keys, "
+        "the backup key pool, bot behaviour and internal UI visibility, so it "
+        "sits behind a separate developer password (ask technical support when "
+        "you need it). It is not meant for day-to-day operations — a wrong "
+        "toggle here can break the whole site; most things you need are in "
+        "Settings or Reply settings.",
+        "开发者 开发者工具 developer 进不去 密码 高级 API key",
+        "/developer",
+    ),
+]
+
+
+# 「带我去」聚光灯锚点（P3 2026-08-21）：跳页后高亮的目标选择器。
+# 纪律：**只登记核实过真实存在的稳定 id/data 属性**（2026-08-21 已逐个查证；
+# knowledge 新建按钮无 id 刻意不录——猜选择器=聚光灯指向空气比没有更糟）。
+# 目标元素不可见时前端优雅跳过（如 reply-settings 守卫卡按 feat 探测显隐）。
+_ANCHORS: dict[str, str] = {
+    "reply-budget": "#rps-sec-guard",        # 回复额度守卫卡（reply_settings.html 实证）
+    "persona-album": '[data-dtab="album"]',  # 人设编辑器「相册」页签（personas.html 实证）
+    "clear-filters": ".fp-clear",            # 收件箱「清空筛选」按钮（unified_inbox.html 实证）
+}
+
+
+def build_howto_entries() -> list[dict]:
+    """how-to 任务条目 → HelpKB 条目（id=howto:<slug>，幂等）。"""
+    out: list[dict] = []
+    for slug, title, title_en, content, content_en, keywords, path in _HOWTO:
+        out.append(
+            {
+                "id": f"howto:{slug}",
+                "title": title,
+                "title_en": title_en,
+                "content": content,
+                "content_en": content_en,
+                "keywords": keywords,
+                "source": "seed:howto",
+                "path": path,
+                "anchor": _ANCHORS.get(slug, ""),
+            }
+        )
+    return out
+
+
+__all__ = ["build_howto_entries"]

@@ -110,6 +110,113 @@ FEATURES: Tuple[Feature, ...] = (
         baseline=True,
         note="多句分条回复（reply_split.parse_bubbles_cfg 总闸；真发仍逐条前端"
              "opt-in，默认开安全）；2026-07-31 拍板升 A"),
+    Feature(
+        key="avatar_voice._hosted_auto", cls="A", slug="hosted_voice_auto",
+        baseline=True, show=False,
+        note="托管语音预授权标记（2026-08-19 报障群实测「客户与语音引擎零通路」）："
+             "仅是标记非开关——enabled 仍静态保守关（avatar_voice.enabled C 类语义"
+             "不变），持设备令牌（cx.*）的部署由 hosted_gateway 运行时纯内存自动"
+             "接入官方语音网关；用户退出走 avatar_voice.hosted_opt_out。A 类补齐"
+             "让存量安装升级后零操作获得托管语音（修「种子只影响新装」）"),
+    Feature(
+        key="voice_recognition._hosted_auto", cls="A", slug="hosted_asr_auto",
+        baseline=True, show=False,
+        note="托管语音识别（转写）预授权标记（2026-08-20 内测群实测「对方语音消息"
+             "无法识别」——本地 ASR 依赖被打包排除、客户部署与转写引擎零通路）："
+             "与 avatar_voice._hosted_auto 同构，持设备令牌的部署由 ensure_hosted_asr"
+             "运行时纯内存接入官网网关转写；用户退出走 voice_recognition."
+             "hosted_opt_out。A 类补齐让存量安装升级后零操作恢复语音识别"),
+    Feature(
+        key="vision._hosted_auto", cls="A", slug="hosted_vision_auto",
+        baseline=True, show=False,
+        note="托管识图预授权标记（2026-08-22 外网机实测「发图即拦、顶栏报 AI 不能"
+             "自动回」——cloud_light 把 vision.base_urls 置空且 enabled 出厂关，"
+             "ensure_hosted_vision 只 setdefault 不扳回显式 false → 网关从未被打）："
+             "与 avatar_voice._hosted_auto 同构，持设备令牌的部署由 ensure_hosted_vision"
+             "运行时纯内存接入官网识图网关（集群 GPU VLM）；用户退出走 vision."
+             "hosted_opt_out。A 类补齐让存量安装升级后零操作获得识图"),
+    Feature(
+        key="inbox.auto_draft.media_degrade_reply", cls="A",
+        slug="media_degrade_reply", baseline=True, show=False,
+        note="识别失败降级诚实自动回（2026-08-22 老板「不要再有小问题掐断全自动」"
+             "拍板，实施56 P1）：图片/语音识别失败时不再扣留整条回复，两条自动链"
+             "放行生成——ai_client 媒体块对无描述媒体自带「自然承认收到+温和追问」"
+             "话术，诚实降级绝不装懂。与 08-17 无兜底纪律的和解＝**代码默认 False**"
+             "（服务器实例维持拦下），客户桌面包经种子/A 类基线默认 True。"
+             "show=False：行为策略非功能卡，判定单点 media_enrich."
+             "media_degrade_reply_enabled"),
+    Feature(
+        key="companion.goals.notify.enabled", cls="A", slug="goals_notify",
+        baseline=True, show=False,
+        note="工作目标完成提醒扫描（2026-08-20 内测群实测：右栏目标卡对用户显示"
+             "「🔕 完成提醒未开启（companion.goals.notify）」——提示甩了一个用户"
+             "碰不到的 config 键，而该功能纯软件零依赖（EventBus 应用内提醒），"
+             "按种子哲学应出厂即开）。goals 本体已是 A 类，本键是其提醒子开关；"
+             "show=False：UI 面就是目标卡自身，不在功能总览重复列行"),
+    Feature(
+        key="assistant.enabled", cls="A", slug="assistant", baseline=True,
+        note="小智 AI 助手悬浮球（产品问答/一键报障/我的工单/教学模式/替我做智能体）："
+             "帮助语料库随代码生成并首启自动播种（src/assistant/seed_corpus），问答 LLM "
+             "走主链托管网关容灾，报障写本地 bug_tickets——零 LAN 硬依赖。2026-08-23 "
+             "老板拍板进基线（1.0.50 发布说明宣传了小智、包里开关却是关的＝发布说明与"
+             "交付配置脱节事故；A 类补齐让存量安装升级后零操作点亮）。子开关 voice "
+             "（依赖 GPU ASR 端点）刻意不进基线，由内测种子显式开"),
+    Feature(
+        key="assistant.agent.enabled", cls="A", slug="assistant_agent",
+        baseline=True, show=False,
+        note="小智「替我做」智能体：动作层全部映射既有白名单写口（settings/"
+             "reply-settings/features toggle…），两段式确认卡+可撤销+审计，纯软件。"
+             "show=False：UI 面就是小智面板自身，功能总览由 assistant 主行代表"),
+    Feature(
+        key="assistant.vision.enabled", cls="A", slug="assistant_vision",
+        baseline=True, show=False,
+        note="小智报障截图 VLM 摘要：best-effort（VLM/托管识图掉线静默，绝不影响"
+             "落单）——软依赖不构成 A 类阻断。show=False 同上"),
+    Feature(
+        key="inbox.outbound_dup_guard.enabled", cls="A", slug="out_dup_guard",
+        baseline=True, show=False,
+        note="出站近重复守卫（2026-08-22 随全自动开箱进基线，B41「同稿双投」防线"
+             "的 DB 镜像层——唯一跨重启的同义双发拦截）：投递前与最近出站比对，"
+             "命中静默跳过。纯软件零依赖、只减发送不增，方向性安全；zhiliao 已"
+             "灰度数周。show=False：内部守卫无用户操作面"),
+    Feature(
+        key="inbox.l2_autosend.fresh_guard.enabled", cls="A",
+        slug="fresh_guard", baseline=True, show=False,
+        note="新入站过期守卫（2026-08-22 随全自动开箱进基线）：拟稿/拟人延迟窗内"
+             "客户又说话 → 旧稿作废等新稿覆盖两问，防「答非所问+两连发」。"
+             "纯软件零依赖、只减发送不增；zhiliao 已灰度数周。show=False 同上"),
+    Feature(
+        key="telegram.poll_fallback.mirror_outgoing", cls="A",
+        slug="tg_out_mirror", baseline=True, show=False,
+        note="TG 出站镜像（2026-08-20 内测群实测「主动给客户发消息，左侧没有客户"
+             "聊天窗口」——镜像默认关 → 纯出站会话永不落收件箱，用户以为丢会话）："
+             "统一收件箱产品的用户理应看到自己发起的会话；镜像文本占位随既有轮询"
+             "零额外下载 RPC、direction=out 永不触发自动回复、MTProto id 去重防双"
+             "气泡、仅私聊。媒体本体归档（mirror_outgoing_media，有下载 RPC 风控"
+             "面）刻意不进基线保持默认关"),
+    # ── 跨平台联系人「精简档」（2026-08-20 内测群实测：右栏「跨平台档案」卡对
+    # 客户报 contacts_disabled 裸错误码——功能整条链随包，只是总开关默认关）。
+    # 拍板结果（实施49 P0-2）＝**开精简档**而非二选一：本地 contacts.db + 跨平台
+    # 档案读写/AI 注入是纯软件（零 LAN/GPU、零账号风险），而这个子系统真正的重
+    # 运行时（衰减/KPI 周期任务、RPA hooks 逐条记账、Mobile Bridge 每 15s 打本机
+    # 18080 手机 rig）全部由 contacts.mode=lite 显式不启动——见 contacts/bootstrap。
+    # ⚠ 两键必须成对：只补 enabled 不补 mode，存量安装会被基线补齐补出 full 档
+    # （resolve_contacts_mode 缺失即 full，这是为不惊动生产/内测坐席刻意选的默认）。
+    Feature(
+        key="contacts.enabled", cls="A", slug="contacts", baseline=True,
+        show=False,
+        note="跨平台联系人库（本地 SQLite）+ 跨平台档案卡：客户端按精简档交付，"
+             "只起 store + origin_profile 读写/AI 注入"),
+    Feature(
+        key="contacts.mode", cls="A", slug="contacts_mode", baseline="lite",
+        show=False,
+        note="contacts 运行档位：客户端 lite（不起周期任务/RPA hooks/Mobile "
+             "Bridge）；运营/内测坐席在 config.desktop.internal.yaml 显式 full"),
+    Feature(
+        key="contacts.origin_profile.enabled", cls="A", slug="origin_profile",
+        baseline=True, show=False,
+        note="跨平台档案（来源平台/那边的昵称/聊过的话题域 → _origin_block 注入）："
+             "纯本地表 + 随包 AI 链，坐席右栏卡的后端；关着就只剩一张报错的卡"),
     # ── B 类：可解锁（依赖齐了可一键开；零依赖 B=未拍板进基线的纯软件功能） ──
     Feature(
         key="memory.vector.enabled", cls="B", slug="memvec",
@@ -174,10 +281,6 @@ FEATURES: Tuple[Feature, ...] = (
         reason="pending", show=False,
         note="运营商向终端聊天用户收费的系统，需 entitlement resolver 配套，误开会闸权益"),
     Feature(
-        key="contacts.enabled", cls="C", slug="contacts", reason="pending",
-        show=False,
-        note="跨平台联系人/交接子系统未做桌面形态评估（种子头注释点名保持关）"),
-    Feature(
         key="line_rpa.enabled", cls="C", slug="line_rpa", reason="infra",
         show=False, note="需安卓真机/adb 基础设施，桌面包不带"),
     Feature(
@@ -187,9 +290,16 @@ FEATURES: Tuple[Feature, ...] = (
         key="whatsapp_rpa.enabled", cls="C", slug="whatsapp_rpa",
         reason="infra", show=False, note="需安卓真机/adb 基础设施，桌面包不带"),
     Feature(
-        key="inbox.l2_autosend.deliver", cls="C", slug="autosend_deliver",
-        reason="safety", show=False,
-        note="AI 亲自发消息的总闸；新装默认必须人审（与 example 安全口径一致）"),
+        # 2026-08-22 拍板（全自动一键化 P2）：C(safety)→B——客户包出厂即全自动
+        # （种子显式 deliver:true，B37 实录两位内测用户 100% 卡死在「装好后还要
+        # 找到第二道开关」上）。安全职责不变、只是搬家：出站安全闸/回复额度守卫/
+        # 每日额度/kill-switch 全部默认在岗，用户可在「AI 接管」三档一键退到
+        # 拟稿人审。刻意不升 A：A 类会在存量安装升级时**静默补齐**——把正在人审
+        # 运行的老部署无声翻成全自动是不可接受的（存量走一次性提示条自选）。
+        key="inbox.l2_autosend.deliver", cls="B", slug="autosend_deliver",
+        gate_feature="ai_autosend",
+        note="AI 自动真发总闸：新装种子出厂即开（全自动开箱），存量升级不静默"
+             "翻转（一次性提示条自选）；随 ai_autosend 档位售卖"),
 )
 
 
@@ -238,6 +348,15 @@ def by_key(key: str) -> Optional[Feature]:
 def product_baseline_map() -> Dict[str, str]:
     """A 类 {key: note}——种子门禁/文档用。"""
     return {f.key: f.note for f in FEATURES if f.cls == "A"}
+
+
+def product_baseline_values() -> Dict[str, Any]:
+    """A 类 {key: baseline}——种子门禁按**声明值**校验，而非一律按 True。
+
+    2026-08-20 起 baseline 不再只有布尔（``contacts.mode="lite"``）：档位型基线
+    同样要求「种子里必须是这个值」，写成别的值＝客户装机跑成另一档。
+    """
+    return {f.key: f.baseline for f in FEATURES if f.cls == "A"}
 
 
 def seed_forbidden_map() -> Dict[str, str]:

@@ -19,7 +19,7 @@
   },
   "unified_inbox": {
     "enabled": true,
-    "label": "人工操作台",
+    "label": "",
     "path": "/workspace",
     "lang": ""
   },
@@ -32,7 +32,6 @@
   },
   "debug": false,
   "_onboarding_note": "首启完成后向导会写入 onboarding:{completed,completed_at,edition}；打包态默认 managed（见 main.js AITR_MANAGED_EDITION），开发态 npm start 为自建。勿在此种子写 managed:true，否则开发态也会藏掉 AI/令牌调试字段。",
-
   "platforms": [
     {
       "id": "telegram",

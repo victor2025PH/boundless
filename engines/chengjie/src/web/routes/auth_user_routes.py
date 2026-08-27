@@ -45,6 +45,7 @@ from src.utils.web_user_store import (
     default_perm_allowed,
     parse_perms,
 )
+from src.web.i18n_packs import UI_LANGS
 from src.web.login_redirect import resolve_post_login_dest, safe_next_path
 from src.web.web_i18n import tr
 
@@ -141,9 +142,11 @@ def register_auth_user_routes(
                 _dest = resolve_post_login_dest(
                     next_raw=next, role_default=_role_default_dest(user["role"]))
                 resp = RedirectResponse(_dest, status_code=303)
-                # 语言跟人走：登录即套用该用户保存的 UI 语言（无偏好则不动，沿用 cookie/默认）
+                # 语言跟人走：登录即套用该用户保存的 UI 语言（无偏好则不动，沿用 cookie/默认）。
+                # 白名单消费 UI_LANGS 单一事实源——此前硬编码 ("zh","en")，vi/th/id 用户
+                # 每次登录偏好丢失（set_lang 落库五语、回填只认两语的不对称 bug）。
                 _lang = (user.get("lang") or "").strip().lower()
-                if _lang in ("zh", "en"):
+                if _lang in UI_LANGS:
                     resp.set_cookie("ui_lang", _lang, max_age=365 * 86400)
                 return resp
             return templates.TemplateResponse(request, "login.html", _login_ctx(
@@ -404,6 +407,148 @@ def register_auth_user_routes(
             "quota": int(updated.get("monthly_char_quota") or 0),
             "alert_pct": int(updated.get("quota_alert_pct") or 80),
         }
+
+    # ── 坐席 Telegram 通知号绑定（P2 2026-08-18：目标达成等业务事件的定向推送
+    #    收件地址；空串=解绑=只推管理员渠道。层级守卫与额度同款）─────────────
+    @app.post("/users/notify-binding/{user_id}")
+    async def users_set_notify_binding(user_id: int, request: Request,
+                                       tg_chat_id: str = Form("")):
+        require_role(request, "users")
+        target = user_store.get_user_by_id(user_id)
+        if not target:
+            raise HTTPException(404, tr(request, "err.team.user_not_found"))
+        _guard_target(request, str(target.get("role") or ""))
+        cleaned = str(tg_chat_id or "").strip()
+        digits = cleaned.lstrip("-")
+        if cleaned and not (digits.isdigit() and len(digits) <= 20
+                            and cleaned.count("-") <= (1 if cleaned.startswith("-") else 0)):
+            raise HTTPException(400, tr(request, "err.team.bad_chat_id"))
+        user_store.update_user(user_id, notify_tg_chat_id=cleaned)
+        updated = user_store.get_user_by_id(user_id) or {}
+        if audit_store:
+            audit_store.log(
+                request.session.get("username", ""), "set_notify_binding",
+                f"{target.get('username')}={'bound' if cleaned else 'unbound'}")
+        return {
+            "ok": True,
+            "tg_chat_id": str(updated.get("notify_tg_chat_id") or ""),
+        }
+
+    # ── 坐席自助绑定 + 测试推送（P3 2026-08-18）────────────────────────────
+    # 管理员代绑（上方端点）之外的自助口：任意登录角色读/写**自己**的通知号——
+    # 走 api_auth choke point（agent 白名单放行 /api/workspace 前缀，与 my-usage
+    # 同款；页面闸 require_auth 会把 agent 303 走，不适用 JSON API）。
+    # 「测试推送」借告警渠道首个启用 telegram 通道的 bot 真发一条：Telegram bot
+    # 无法私聊从没跟它说过话的人——这是绑定后收不到推送的最高发故障，绑定当场
+    # 就能测出来，而不是等第一单成交才发现静默丢失。
+
+    def _self_username(request: Request) -> str:
+        return str(request.session.get("username")
+                   or request.session.get("user") or "").strip()
+
+    def _api_choke(request: Request) -> None:
+        _api_auth = getattr(request.app.state, "api_auth", None)
+        if callable(_api_auth):
+            _api_auth(request)
+        else:  # 极端回落（测试 stub app 无 choke point）
+            require_auth(request)
+
+    def _clean_chat_id(request: Request, raw: str) -> str:
+        cleaned = str(raw or "").strip()
+        digits = cleaned.lstrip("-")
+        if cleaned and not (digits.isdigit() and len(digits) <= 20
+                            and cleaned.count("-") <= (1 if cleaned.startswith("-") else 0)):
+            raise HTTPException(400, tr(request, "err.team.bad_chat_id"))
+        return cleaned
+
+    @app.get("/api/workspace/my-notify-binding")
+    async def api_my_notify_binding_get(request: Request):
+        _api_choke(request)
+        me = _self_username(request)
+        u = user_store.get_user(me) if me else None
+        chat = str((u or {}).get("notify_tg_chat_id") or "").strip()
+        # 只回尾 4 位：页面显示「已绑定 …7810」足够，全量号没必要往前端传
+        return {"ok": True, "username": me, "bound": bool(chat),
+                "chat_tail": chat[-4:] if chat else ""}
+
+    @app.post("/api/workspace/my-notify-binding")
+    async def api_my_notify_binding_set(request: Request,
+                                        tg_chat_id: str = Form("")):
+        _api_choke(request)
+        me = _self_username(request)
+        u = user_store.get_user(me) if me else None
+        if not u:
+            # 令牌直登（admin 不在 web_users 表）没有「自己的行」可写
+            raise HTTPException(404, tr(request, "err.team.user_not_found"))
+        cleaned = _clean_chat_id(request, tg_chat_id)
+        user_store.update_user(int(u["id"]), notify_tg_chat_id=cleaned)
+        if audit_store:
+            audit_store.log(me, "set_notify_binding",
+                            f"self={'bound' if cleaned else 'unbound'}")
+        return {"ok": True, "bound": bool(cleaned)}
+
+    _notify_test_last: dict = {}   # chat_id → ts（30s 防抖，防拿告警 bot 刷屏）
+
+    @app.post("/api/workspace/my-notify-binding/test")
+    async def api_my_notify_binding_test(request: Request,
+                                         user_id: int = Form(None)):
+        """给绑定号真发一条测试推送。缺省=自己；带 user_id=用户管理页的管理员
+        代测（require_role users + 层级守卫，与代绑同权限面）。"""
+        _api_choke(request)
+        if user_id is not None:
+            require_role(request, "users")
+            target_u = user_store.get_user_by_id(int(user_id))
+            if not target_u:
+                raise HTTPException(404, tr(request, "err.team.user_not_found"))
+            _guard_target(request, str(target_u.get("role") or ""))
+        else:
+            me = _self_username(request)
+            target_u = user_store.get_user(me) if me else None
+            if not target_u:
+                raise HTTPException(404, tr(request, "err.team.user_not_found"))
+        chat = str(target_u.get("notify_tg_chat_id") or "").strip()
+        if not chat:
+            raise HTTPException(400, tr(request, "err.team.not_bound"))
+        now = time.time()
+        if now - _notify_test_last.get(chat, 0.0) < 30.0:
+            raise HTTPException(429, tr(request, "err.team.test_too_frequent"))
+        from src.integrations.notify_webhooks_store import effective_webhooks
+        cfg = _runtime_config() or {}
+        chan = next(
+            (w for w in effective_webhooks(cfg)
+             if w.get("enabled") is not False
+             and str(w.get("format") or "").lower() == "telegram"
+             and str(w.get("token") or "").strip()),
+            None)
+        if chan is None:
+            # 告警渠道没接通：测试无从发起——指路接通面板而不是装成功
+            raise HTTPException(503, tr(request, "err.team.no_alert_channel"))
+        from src.inbox.webhook_notifier import (
+            WebhookNotifier,
+            _build_chat_body,
+            _resolve_chat_endpoint,
+        )
+        url = _resolve_chat_endpoint(
+            "telegram", str(chan.get("url") or ""),
+            str(chan.get("token") or ""))
+        body, headers = _build_chat_body(
+            "telegram", tr(request, "tq_notify_test_msg"), chat,
+            str(chan.get("token") or ""))
+        import asyncio as _asyncio
+        try:
+            await _asyncio.get_event_loop().run_in_executor(
+                None, WebhookNotifier._http_post, url, body, headers)
+        except Exception as exc:
+            # 最常见=chat not found / bot blocked：把原因透传给绑定人自查
+            raise HTTPException(502, tr(
+                request, "err.team.test_send_fail",
+                reason=str(exc)[:120]))
+        _notify_test_last[chat] = now
+        if audit_store:
+            audit_store.log(
+                request.session.get("username", ""), "notify_test_push",
+                str(target_u.get("username") or ""))
+        return {"ok": True}
 
     # ── L3 按人权限覆写（读/写同一层级守卫；判定单点在 web_user_store）─────
     def _perm_rows(role: str, perms_json) -> list:

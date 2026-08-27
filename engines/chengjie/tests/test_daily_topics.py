@@ -543,3 +543,77 @@ def test_smalltalk_veto_ipo_and_party_column():
         {"title": "市委巡视组进驻本地文旅集团", "summary": ""},
     ):
         assert smalltalk_topic(t) is False, t["title"]
+
+
+# ── 实施55（2026-08-22）：注入频率可配 + 按人设分源 ────────────────────────────
+
+def test_parse_cfg_offer_percent_default_and_clamp():
+    assert parse_topics_cfg({})["offer_percent"] == 15          # 缺省=旧行为
+    assert parse_topics_cfg({"companion": {"daily_topics": {
+        "offer_percent": 35}}})["offer_percent"] == 35
+    assert parse_topics_cfg({"companion": {"daily_topics": {
+        "offer_percent": 999}}})["offer_percent"] == 100        # 夹界
+    assert parse_topics_cfg({"companion": {"daily_topics": {
+        "offer_percent": "bad"}}})["offer_percent"] == 15       # 脏值回默认
+
+
+def test_should_offer_topics_percent_bounds():
+    # 0%：概率路径永不放行（触发词仍无视一切恒 True）
+    assert should_offer_topics(
+        "随便聊聊今天", 0.0, now=NOW, offer_percent=0) is False
+    assert should_offer_topics(
+        "有什么新鲜事", 0.0, now=NOW, offer_percent=0) is True
+    # 100%：冷却外恒放行；冷却内仍拦（percent 不越过冷却语义）
+    assert should_offer_topics(
+        "随便聊聊今天", 0.0, now=NOW, offer_percent=100) is True
+    assert should_offer_topics(
+        "随便聊聊今天", NOW - 600, now=NOW,
+        cooldown_hours=4, offer_percent=100) is False
+
+
+def test_parse_cfg_region_feeds_sanitized():
+    cfg = parse_topics_cfg({"companion": {"daily_topics": {"region_feeds": {
+        "lin_xiaoyu": ["https://a/rss", "  ", None],
+        "CA": ["https://ca/rss"],
+        "bad key!!": ["https://x/rss"],     # 键消毒后仍非法字符剥掉→"badkey"
+        "empty": [],                        # 空列表整键丢弃
+        "wrong": "not-a-list",              # 坏形态整键丢弃
+    }}}})
+    rf = cfg["region_feeds"]
+    assert rf["lin_xiaoyu"] == ["https://a/rss"]
+    assert rf["CA"] == ["https://ca/rss"]
+    assert "empty" not in rf and "wrong" not in rf
+    assert rf.get("badkey") == ["https://x/rss"]
+    assert parse_topics_cfg({})["region_feeds"] == {}
+
+
+def test_region_key_for_pid_over_country_over_global():
+    from src.companion.daily_topics import region_key_for
+    feeds = {"lin_xiaoyu": ["u1"], "CA": ["u2"]}
+    # 人设 id 直配最优先
+    assert region_key_for({"id": "lin_xiaoyu", "location": "vancouver"},
+                          feeds) == "lin_xiaoyu"
+    # 无 id 配 → 居住地国家码
+    assert region_key_for({"id": "lin_jiaxin", "location": "vancouver"},
+                          feeds) == "CA"
+    # 国家无配 / 无居住地 / 空表 → ""（全局池）
+    assert region_key_for({"id": "x", "location": "shanghai"}, feeds) == ""
+    assert region_key_for({"id": "x"}, feeds) == ""
+    assert region_key_for({"id": "lin_xiaoyu"}, {}) == ""
+    assert region_key_for(None, feeds) == ""
+
+
+def test_cfg_for_region_swaps_feeds_and_cache_path(tmp_path):
+    from src.companion.daily_topics import cfg_for_region
+    base = parse_topics_cfg({"companion": {"daily_topics": {
+        "feeds": ["https://global/rss"],
+        "cache_path": str(tmp_path / "topics_cache.json"),
+        "region_feeds": {"CA": ["https://ca/rss"]},
+    }}})
+    r = cfg_for_region(base, "CA")
+    assert r["feeds"] == ["https://ca/rss"]
+    assert r["cache_path"].endswith("topics_cache.CA.json")
+    assert r["blocklist"] == base["blocklist"]      # 屏蔽词全局同一份
+    # 空键/未知键 → 原配置（全局池零行为变化）
+    assert cfg_for_region(base, "")["cache_path"] == base["cache_path"]
+    assert cfg_for_region(base, "XX")["feeds"] == base["feeds"]

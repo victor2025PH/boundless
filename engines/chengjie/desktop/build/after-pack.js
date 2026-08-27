@@ -28,6 +28,19 @@ function resourcesDir(context) {
 // [包内相对路径, 人话说明, 缺了会怎样]
 const REQUIRED = [
   ["backend", "后端 sidecar 目录", "桌面壳没有后端可拉起，整个 App 打不开工作台"],
+  // 实施49 P1-11（2026-08-20 内测工单 #3）：语音发送要转 OGG/Opus，客户机没有
+  // ffmpeg → 原样上传 WAV 被平台拒 + 错误喷字节流。资产在 build/ffmpeg/ 暂存
+  // （gitignore，构建机从本机 ffmpeg 安装复制或运行 build/stage_ffmpeg.ps1）。
+  [
+    path.join("ffmpeg", "ffmpeg.exe"),
+    "音频格式转换器（语音发送 OGG/Opus 硬前提）",
+    "客户机语音发送原样传 WAV：上传中断报错满屏字节流（内测工单 #3 实锤）",
+  ],
+  [
+    path.join("ffmpeg", "ffprobe.exe"),
+    "音频探测器（时长/封面/媒体体检）",
+    "LINE 语音时长缺失、媒体探针全软失败",
+  ],
   [
     "build-info.json",
     "构建自述（版本/commit/脏文件清单，write-build-info.js 产出）",
@@ -146,6 +159,15 @@ exports.default = async function afterPack(context) {
   }
   const seedStaged = fs.existsSync(path.join(__dirname, "seed-data"));
   const allowStandard = process.env.CHATX_ALLOW_STANDARD === "1";
+  // clean/标准包的反向断言：数据种子绝不允许出现在产物里。场景：build/seed-data
+  // 是上次内测打包的残留，有人设了 CHATX_ALLOW_STANDARD=1 直接打包——extraResources
+  // 照拷不误，打出来的「干净包」就带着生产机的 KB/人设/克隆音色出门了。
+  if (allowStandard && fs.existsSync(path.join(res, "seed-data"))) {
+    throw new Error(
+      "[after-pack] CHATX_ALLOW_STANDARD=1（干净/标准包）但产物里出现了 resources/seed-data ——\n" +
+      "  build/seed-data 是内测种子残留，先跑 npm run stage:clean 清掉再打包（或直接用 npm run dist:win:clean）"
+    );
+  }
   if (!seedStaged && !allowStandard) {
     missing.push(
       "  · 缺 build/seed-data（内测数据种子）→ 内测期唯一形态=内测包；" +
@@ -153,7 +175,19 @@ exports.default = async function afterPack(context) {
     );
   }
   if (seedStaged) {
+    // lite 定制档（stage --profile lite）刻意不带相册/KB/人设资料库——manifest 的
+    // omitted 是**显式声明**（谁略过、略过什么，两端对得上），不在 omitted 里的
+    // 缺件照旧硬拒。标准档 manifest 无 omitted → 行为与从前逐字节一致。
+    let omitted = new Set();
+    try {
+      const mf = JSON.parse(fs.readFileSync(
+        path.join(__dirname, "seed-data", "seed-manifest.json"), "utf8"));
+      if (mf && mf.profile === "lite" && Array.isArray(mf.omitted)) {
+        omitted = new Set(mf.omitted.map((s) => String(s).replace(/\\/g, "/")));
+      }
+    } catch (e) { /* manifest 缺失/坏 → 按标准档全量断言（SEED_REQUIRED 自会点名） */ }
     for (const [rel, what] of SEED_REQUIRED) {
+      if (omitted.has(String(rel).replace(/\\/g, "/"))) continue;
       if (!fs.existsSync(path.join(res, "seed-data", rel))) {
         missing.push(`  · 缺 seed-data/${rel}（${what}）→ 内测包装出来是半残形态`);
       }

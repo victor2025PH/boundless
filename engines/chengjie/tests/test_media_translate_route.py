@@ -136,6 +136,48 @@ def test_within_base_dirs_passes_containment():
         os.rmdir(d)
 
 
+def test_media_kind_document_by_ext():
+    """P0-D：文档按扩展名归类；TG「文件式图片/未知二进制」不受影响。"""
+    from src.inbox.media_resolver import media_kind
+    assert media_kind({"media_ref": "x/y/契约.PDF"}) == "document"
+    assert media_kind({"media_type": "document", "media_ref": "a.png"}) == "image"
+    assert media_kind({"media_type": "document", "media_ref": "a.bin"}) == "other"
+
+
+def test_document_stream_creates_job():
+    """P0-D：会话内 .docx + stream=true → 建任务返回 progress_url（不执行翻译）。"""
+    d = tempfile.mkdtemp()
+    path = os.path.join(d, "contract.docx")
+    with open(path, "wb") as f:
+        f.write(b"PK\x03\x04fake")
+    try:
+        cfg = {"media": {"base_dirs": [d]}}
+        r = _post(_client(cfg=cfg), {
+            "media_ref": path, "media_type": "document",
+            "target_lang": "ja", "stream": True, "file_name": "报价单.docx"})
+        assert r["ok"] is True and r["media_kind"] == "document"
+        assert r["job_id"] and r["progress_url"].endswith(r["job_id"])
+        assert r["file_name"] == "报价单.docx"
+    finally:
+        os.remove(path)
+        os.rmdir(d)
+
+
+def test_document_txt_stays_unsupported():
+    """.txt 不在文档白名单（走「文档翻译」面板粘贴路径）→ unsupported_kind。"""
+    d = tempfile.mkdtemp()
+    path = os.path.join(d, "notes.txt")
+    with open(path, "wb") as f:
+        f.write(b"hello")
+    try:
+        cfg = {"media": {"base_dirs": [d]}}
+        r = _post(_client(cfg=cfg), {"media_ref": path, "media_type": "document"})
+        assert r["ok"] is False and r["reason"] == "unsupported_kind"
+    finally:
+        os.remove(path)
+        os.rmdir(d)
+
+
 def test_store_ref_preferred_over_body():
     """store 里有该消息 media_ref → 优先用受信 ref（忽略 body 传的伪造 ref）。"""
     store = InboxStore(":memory:")

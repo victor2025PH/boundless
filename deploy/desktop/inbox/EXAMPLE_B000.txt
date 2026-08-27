@@ -1,0 +1,10 @@
+HOTPATCH_TICKET
+id: B000
+user: @example
+severity: P2
+scope: shell
+machine: external
+symptom: example only -- delete this file
+repro: n/a
+expect: n/a
+notes: copy this shape

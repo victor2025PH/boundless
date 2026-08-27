@@ -535,7 +535,116 @@
     </div>
   </div>
 
-  <!-- ══ 回复逻辑管理 ══════════════════════════════════════════ -->
+  <!-- ══ 样式指南（活体，2026-08-22 P4）═══════════════════════════
+     Phase0-3 立的界面规矩的单一陈列处：徽标三级制/行动药丸/chip/骨架配方/空态三件套
+     + token 映射 + 发布纪律。全部静态样例零 JS；样例用本壳（base.html）令牌，
+     工作台侧对应类名在注释里点名。规则的机器执行面在各门禁（哑按钮/跨作用域/
+     编码完整性/密度 ratchet/主题对比度），这里是给人看的样板间。 -->
+  <div class="acc">
+    <div class="acc-hd" onclick="toggleAcc(this)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,#f59e0b,#ec4899)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><circle cx="11" cy="11" r="2"/></svg>
+      </div>
+      <div>
+        <div class="acc-title">🎨 {{ (i18n or {}).get('dv_sg_title', "样式指南（活体）") }}</div>
+        <div class="acc-sub">{{ (i18n or {}).get('dv_sg_sub', "徽标 · 药丸 · chip · 骨架屏 · 空态——新界面照抄这里的样板与禁则") }}</div>
+      </div>
+      <svg class="acc-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+    </div>
+    <div class="acc-body" id="body-styleguide">
+      <style>
+        /* 样式指南局部样例（.dv-sg 作用域；只服务本段展示，别的页面禁引用样例类） */
+        .dv-sg{display:flex;flex-direction:column;gap:1rem;font-size:.85rem}
+        .dv-sg h4{margin:.2rem 0 .4rem;font-size:.92rem}
+        .dv-sg .row{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+        .dv-sg .note{color:var(--t3);font-size:.76rem;line-height:1.7}
+        .dv-sg code{background:var(--input);border:1px solid var(--bd);border-radius:5px;padding:.05rem .35rem;font-size:.74rem}
+        .dv-sg .sg-badge{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:15px;padding:0 4px;border-radius:999px;font-size:10px;font-weight:700;background:#64748b;color:#fff}
+        .dv-sg .sg-badge.attn{background:var(--red)}
+        .dv-sg .sg-dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#94a3b8}
+        .dv-sg .sg-pill{display:inline-flex;align-items:center;gap:5px;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid}
+        .dv-sg .sg-pill.sev{background:rgba(225,29,72,.09);color:var(--red);border-color:rgba(225,29,72,.36)}
+        .dv-sg .sg-pill.rev{background:rgba(245,158,11,.12);color:var(--amber);border-color:rgba(245,158,11,.45)}
+        .dv-sg .sg-pill.task{background:rgba(8,145,178,.08);color:#0891b2;border-color:rgba(6,182,212,.35)}
+        .dv-sg .sg-chip{display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;font-size:12px;border:1px solid var(--bd);background:var(--input);color:var(--t2)}
+        .dv-sg .sg-chip.active{border-color:var(--p);color:var(--p);background:color-mix(in srgb,var(--p) 10%,transparent)}
+        .dv-sg .sg-skel{position:relative;overflow:hidden;background:color-mix(in srgb,var(--t3) 16%,transparent);border-radius:6px}
+        .dv-sg .sg-skel::after{content:'';position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--t3) 13%,transparent),transparent);animation:dvSgSweep 1.4s infinite}
+        @keyframes dvSgSweep{to{transform:translateX(100%)}}
+        @media (prefers-reduced-motion: reduce){.dv-sg .sg-skel::after{animation:none}}
+        .dv-sg .sg-empty{border:1px dashed var(--bd);border-radius:12px;padding:1.1rem;text-align:center;max-width:380px}
+        .dv-sg table{border-collapse:collapse;font-size:.76rem}
+        .dv-sg td,.dv-sg th{border:1px solid var(--bd);padding:.3rem .55rem;text-align:left}
+      </style>
+      <div class="dv-sg">
+        <div>
+          <h4>{{ (i18n or {}).get('dv_sg_h1', "① 徽标三级制（2026-08-22 真相化）") }}</h4>
+          <div class="row">
+            <span>{{ (i18n or {}).get('dv_sg_b1a', "需人工：") }}<span class="sg-badge attn">2</span></span>
+            <span>{{ (i18n or {}).get('dv_sg_b1b', "仅未读：") }}<span class="sg-dot"></span></span>
+            <span>{{ (i18n or {}).get('dv_sg_b1c', "无事：") }}<code>{{ (i18n or {}).get('dv_sg_b1d', "不渲染") }}</code></span>
+          </div>
+          <div class="note">{{ (i18n or {}).get('dv_sg_n1', "红=需人工，数字必须是可行动数；纯未读降为中性小点。实现参照：") }}
+            <code>unified_inbox.html::_navBadgeHtml / _acUnreadBadge</code></div>
+        </div>
+        <div>
+          <h4>{{ (i18n or {}).get('dv_sg_h2', "② 行动药丸（顶栏紧急度单轴）") }}</h4>
+          <div class="row">
+            <span class="sg-pill sev">{{ (i18n or {}).get('dv_sg_p_sev', "急需处理") }} <b>94</b></span>
+            <span class="sg-pill rev">{{ (i18n or {}).get('dv_sg_p_rev', "发前确认") }} <b>11</b></span>
+            <span class="sg-pill task">{{ (i18n or {}).get('dv_sg_p_task', "待跟进") }} <b>3</b></span>
+          </div>
+          <div class="note">{{ (i18n or {}).get('dv_sg_n2', "数字=可行动数；点击直达处理面；零数据整颗隐藏。") }}
+            <code>_setPill</code> · <code>window._ui</code></div>
+        </div>
+        <div>
+          <h4>{{ (i18n or {}).get('dv_sg_h3', "③ Chip（筛选/分类）") }}</h4>
+          <div class="row"><span class="sg-chip active">{{ (i18n or {}).get('dv_sg_c1', "待处理 2") }}</span><span class="sg-chip">{{ (i18n or {}).get('dv_sg_c2', "已结案 0") }}</span><span class="sg-chip">{{ (i18n or {}).get('dv_sg_c3', "全部") }}</span></div>
+          <div class="note">{{ (i18n or {}).get('dv_sg_n3', "六家族共用一份度量——别造第七套尺寸。") }}</div>
+        </div>
+        <div>
+          <h4>{{ (i18n or {}).get('dv_sg_h4', "④ 骨架屏三配方") }}</h4>
+          <div class="row">
+            <span>{{ (i18n or {}).get('dv_sg_k1', "KPI：") }}<span class="sg-skel" style="display:inline-block;width:56px;height:22px"></span></span>
+            <span style="flex:1;min-width:180px">{{ (i18n or {}).get('dv_sg_k2', "列表行：") }}<span class="sg-skel" style="display:block;height:14px;margin:4px 0"></span><span class="sg-skel" style="display:block;height:14px;width:72%"></span></span>
+            <span style="flex:1;min-width:160px">{{ (i18n or {}).get('dv_sg_k3', "图表：") }}<span class="sg-skel" style="display:block;height:60px;border-radius:10px"></span></span>
+          </div>
+          <div class="note">{{ (i18n or {}).get('dv_sg_n4', "工作台侧现成类 .tk-skel 家族；管理台侧拷贝本段配方。") }}</div>
+        </div>
+        <div>
+          <h4>{{ (i18n or {}).get('dv_sg_h5', "⑤ 空态三件套（图标 + 一句话 + 主 CTA）") }}</h4>
+          <div class="sg-empty">
+            <div style="font-size:1.8rem">📚</div>
+            <div style="margin:.35rem 0 .6rem;color:var(--t2)">{{ (i18n or {}).get('dv_sg_e1', "还没有知识条目——添加后 AI 回答会引用这里的内容") }}</div>
+            <button class="btn btn-p" type="button" style="pointer-events:none">{{ (i18n or {}).get('dv_sg_e2', "＋ 新建条目") }}</button>
+          </div>
+          <div class="note">{{ (i18n or {}).get('dv_sg_n5', "一句话说清「为什么空+下一步」；CTA 直达动作。") }}</div>
+        </div>
+        <div>
+          <h4>{{ (i18n or {}).get('dv_sg_h6', "⑥ Token 映射与禁则") }}</h4>
+          <table>
+            <tr><th>{{ (i18n or {}).get('dv_sg_t0', "语义") }}</th><th>{{ (i18n or {}).get('dv_sg_t1', "工作台壳（--tk-*）") }}</th><th>{{ (i18n or {}).get('dv_sg_t2', "管理台壳（base）") }}</th><th>{{ (i18n or {}).get('dv_sg_t3', "内联迁移层") }}</th></tr>
+            <tr><td>{{ (i18n or {}).get('dv_sg_r1', "正文/次要文字") }}</td><td>--tk-text / --tk-text-muted</td><td>--t / --t2 / --t3</td><td>--th-ink-*</td></tr>
+            <tr><td>{{ (i18n or {}).get('dv_sg_r2', "面/边/输入面") }}</td><td>--tk-surface / --tk-border</td><td>--card / --bd / --input</td><td>--th-bg-* / --th-bd-*</td></tr>
+            <tr><td>{{ (i18n or {}).get('dv_sg_r3', "语义色（文字）") }}</td><td>--tk-*-ink</td><td>--red / --amber / --green</td><td>--th-ink-*</td></tr>
+            <tr><td>{{ (i18n or {}).get('dv_sg_r4', "品牌强调") }}</td><td>--tk-brand</td><td>--p</td><td>--th-bg-brand</td></tr>
+          </table>
+          <div class="note">{{ (i18n or {}).get('dv_sg_n6', "禁则：JS 禁裸 hex；文字禁 opacity 调灰；暗色走令牌自适配；SVG 主题色走 style 变量。") }}</div>
+        </div>
+        <div>
+          <h4>{{ (i18n or {}).get('dv_sg_h7', "⑦ 发布纪律清单（每批前端落地必做）") }}</h4>
+          <div class="note">
+            1. {{ (i18n or {}).get('dv_sg_n7a', "双戳：bump ui-build + CSS ?v=；") }}<br>
+            2. {{ (i18n or {}).get('dv_sg_n7b', "gate_sweep 收口；") }}<br>
+            3. {{ (i18n or {}).get('dv_sg_n7c', "共享组件改动跑 sync_copilot_mirror.py；") }}<br>
+            4. {{ (i18n or {}).get('dv_sg_n7d', "文件拷贝一律二进制语义。") }}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<!-- ══ 回复逻辑管理 ══════════════════════════════════════════ -->
   <div class="acc">
     <div class="acc-hd" onclick="toggleAcc(this)">
       <div class="acc-hd-icon" style="background:linear-gradient(135deg,#ec4899,#db2777)">

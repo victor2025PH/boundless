@@ -1577,6 +1577,13 @@ export default function AdminPage() {
                   )}
                 </div>
                 <div className="flex items-center gap-2">
+                  {/* 算力调度实时看板入口（实施70 2026-08-27）：独立子页 /admin/compute，同 cookie 直通 */}
+                  <a
+                    href="/admin/compute"
+                    className="flex items-center gap-1 rounded-lg border border-slate-700 px-2.5 py-1.5 text-xs text-cyan-300 hover:border-cyan-500"
+                  >
+                    ⚡ 算力看板
+                  </a>
                   {lastUpdated && (
                     <span className="hidden text-[11px] text-slate-500 sm:inline">
                       更新 {lastUpdated.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}

@@ -112,6 +112,7 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             from src.companion.goals.profile_slots import (
                 parse_selected_slots,
                 slot_label,
+                slot_src,
                 slot_value,
             )
             sel = parse_selected_slots((view.get("params") or {}).get("slots"))
@@ -121,12 +122,15 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 str(view.get("platform") or ""),
                 str(view.get("chat_key") or ""))
             fields = dict((prof or {}).get("fields") or {})
+            # src=值来源（auto 正则/llm 抽取/agent 人工）——卡上打勾清单据此
+            # 标注「AI 猜的还是人核实的」（P3 2026-08-18，行业 handoff 惯例）
             view["slots_progress"] = [
                 {
                     "key": k,
                     "label": slot_label(k, lang),
                     "filled": bool(slot_value(fields, k)),
                     "value": slot_value(fields, k)[:20],
+                    "src": slot_src(fields, k),
                 }
                 for k in sel
             ]
@@ -244,6 +248,22 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             "pickers": _pickers(),
         }
 
+    def _attach_notified(view, store):
+        """done 终局视图附「完成提醒已发出」回执（P2 2026-08-18）——读通知幂等
+        标记（goal_events.completed_notified，与扫描器同一事实源），终局卡据此
+        渲染「✓ 已推送提醒」。非 done / 查询异常不附键（前端缺键=不渲染）。"""
+        if not isinstance(view, dict) or str(view.get("status")) != "done":
+            return view
+        try:
+            from src.companion.goals.notify import NOTIFIED_EVENT_KIND
+            view["notified"] = any(
+                str(e.get("kind") or "") == NOTIFIED_EVENT_KIND
+                for e in store.list_events(
+                    str(view.get("goal_id") or ""), limit=80))
+        except Exception:
+            logger.debug("attach notified skipped", exc_info=True)
+        return view
+
     @app.get("/api/goals/for-conversation")
     async def goals_for_conversation(
         request: Request, conversation_id: str = "", _auth=Depends(auth_dep)
@@ -264,14 +284,18 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             last = recent[0] if recent else None
             return {
                 "goal": None,
-                "last": svc.goal_view(last, lang=_lang(request)) if last else None,
+                "last": _attach_notified(
+                    svc.goal_view(last, lang=_lang(request)), store)
+                if last else None,
             }
         lang = _lang(request)
-        view = _attach_slots_progress(
-            _attach_products(
-                _refreshed_view(svc, store, goal, lang=lang),
+        view = _attach_notified(
+            _attach_slots_progress(
+                _attach_products(
+                    _refreshed_view(svc, store, goal, lang=lang),
+                    store, lang=lang),
                 store, lang=lang),
-            store, lang=lang)
+            store)
         return {"goal": view, "last": None}
 
     @app.get("/api/goals/report")
@@ -391,6 +415,128 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             getattr(request.app.state, "goal_scan_state", None) or {})
         return snap
 
+    @app.get("/api/goals/notify-status")
+    async def goals_notify_status(request: Request, _auth=Depends(auth_dep)):
+        """完成通知链路状态（P0 2026-08-18）：目标卡「达成后会不会有人收到推送」
+        的可见化数据源——此前 notify 扫描器（YAML overlay）与渠道订阅
+        （notify_webhooks.json）都是黑盒，链路半接通（扫描在跑、渠道没订
+        goal_complete）对运营完全隐形，本机实测就这么静默了 9 天。
+
+        口径＝**文件真相**（``effective_webhooks``，mtime 失效缓存，与告警渠道
+        面板同源）；进程侧是否已热更由 alert-link-status 的分歧检测负责，这里
+        不重复造。零密钥响应（布尔/计数/通道名）；任意登录角色可读——坐席看到
+        「达成会通知管理员」本身就是信息。goals 总闸关时随全家 403（前端隐藏）。"""
+        _require_enabled(request)
+        cfg = _cfg_root()
+        from src.companion.goals.notify import resolve_notify_cfg
+        ncfg = resolve_notify_cfg(cfg)
+        out: Dict[str, Any] = {
+            "ok": True,
+            # 扫描器开关（发现完成→发事件；铃铛/toast 随事件天然到位）
+            "notify_enabled": bool(ncfg.get("enabled")),
+            "miss_digest": bool(ncfg.get("miss_digest")),
+            # 外发推送：goal_complete 别名是否有启用通道在订阅
+            "push_covered": False,
+            "push_channels": [],
+            # P2：坐席定向副本开关 + 当前登录人是否已绑定通知号（面板据此把
+            # 「推送给管理员」升格成「管理员 + 你」；未绑定不出错误只如实不升格）
+            "push_agent": bool(ncfg.get("push_agent")),
+            "self_bound": False,
+        }
+        try:
+            from src.integrations.alert_link_audit import audit_alert_link
+            from src.integrations.notify_webhooks_store import effective_webhooks
+            audit = audit_alert_link(effective_webhooks(cfg), ["goal_complete"])
+            chans = (audit.get("per_alias") or {}).get("goal_complete") or []
+            out["push_channels"] = [str(c) for c in chans][:5]
+            out["push_covered"] = bool(chans)
+        except Exception:
+            logger.debug("goal notify-status audit failed", exc_info=True)
+        if out["push_agent"]:
+            try:
+                from src.companion.goals.notify import user_store_for
+                me = str(request.session.get("username")
+                         or request.session.get("user", "") or "").strip()
+                us = user_store_for(_config_path())
+                if me and us is not None:
+                    u = us.get_user(me)
+                    out["self_bound"] = bool(
+                        isinstance(u, dict)
+                        and str(u.get("notify_tg_chat_id") or "").strip())
+            except Exception:
+                logger.debug("notify-status self_bound skipped", exc_info=True)
+        # P3：摸底要点出境开关回显（接通面板据此渲染当前档位）
+        out["include_profile"] = bool(ncfg.get("include_profile"))
+        return out
+
+    # 完成推送设置的可写白名单（P3 2026-08-18）：路径硬编码防任意键注入——
+    # 与 care 引擎 /api/care/engine 同范式（set_overlay_flag 保注释写 overlay，
+    # 热重载 ~30s 生效免重启）。扫描器开关此前只能改 YAML，是「设置面碎在
+    # 四处」的最后一块无 UI 死角。
+    _NOTIFY_FLAG_PATHS = {
+        "enabled": "companion.goals.notify.enabled",
+        "push_agent": "companion.goals.notify.push_agent",
+        "miss_digest": "companion.goals.notify.miss_digest",
+        "include_profile": "companion.goals.notify.include_profile",
+    }
+    # 与告警渠道面板同一排除法（拒 agent/viewer）：完成推送改的是全实例
+    # 通知行为，属主管动作；agent 本被 _agent_guard 前置拦（纵深冗余）。
+    _NOTIFY_CFG_DENY_ROLES = ("agent", "viewer")
+
+    @app.post("/api/goals/notify-settings")
+    async def goals_notify_settings(
+        request: Request, payload: Dict[str, Any], _auth=Depends(auth_dep)
+    ):
+        """完成推送开关面板写口：body 里给到哪个键就写哪个（布尔），其余不动。
+
+        goals 总闸关时随全家 403（与 notify-status 的 _require_enabled 同口径
+        ——总闸都没开，改推送开关是空转）；写失败逐键回报不整体装死。"""
+        _require_enabled(request)
+        try:
+            role = str(request.session.get("role", "") or "")
+        except Exception:
+            role = ""
+        if role in _NOTIFY_CFG_DENY_ROLES:
+            raise HTTPException(
+                403, tr(request, "err.perm.supervisor_required"))
+        if config_manager is None or not hasattr(
+                config_manager, "set_overlay_flag"):
+            return {"ok": False, "reason": "config_unavailable"}
+        body = payload if isinstance(payload, dict) else {}
+        applied, failed = [], []
+        for key, path in _NOTIFY_FLAG_PATHS.items():
+            if key not in body:
+                continue
+            ok, msg = config_manager.set_overlay_flag(path, bool(body[key]))
+            if ok:
+                applied.append(key)
+            else:
+                failed.append({"key": key, "reason": str(msg)})
+        if not applied and not failed:
+            return {"ok": False, "reason": "nothing_to_update"}
+        if applied:
+            try:
+                actor = str(request.session.get("username")
+                            or request.session.get("user", "") or "")[:60]
+            except Exception:
+                actor = ""
+            logger.info("[goal-notify] 推送设置变更 by=%s keys=%s",
+                        actor or "?", ",".join(applied))
+        from src.companion.goals.notify import resolve_notify_cfg as _rncfg
+        eff = _rncfg(_cfg_root())
+        return {
+            "ok": not failed,
+            "applied": applied,
+            "failed": failed,
+            "effective": {
+                "notify_enabled": bool(eff.get("enabled")),
+                "push_agent": bool(eff.get("push_agent")),
+                "miss_digest": bool(eff.get("miss_digest")),
+                "include_profile": bool(eff.get("include_profile")),
+            },
+            "hot_reload_sec": 30,
+        }
+
     @app.post("/api/goals/batch")
     async def goals_batch(
         request: Request, payload: Dict[str, Any], _auth=Depends(auth_dep)
@@ -445,7 +591,11 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         params = body.get("params") if isinstance(body.get("params"), dict) else {}
         title = str(body.get("title") or "")[:120]
         try:
-            actor = str(request.session.get("user", "") or "")[:52]
+            # 生产 session 键是 username（登录只写它）；"user" 是历史误键——
+            # 修前人建目标 created_by 恒空串（P3 2026-08-18 实锤），定向推送的
+            # 「创建人」解析链整条落空。保留 "user" 回落兼容测试桩。
+            actor = str(request.session.get("username")
+                        or request.session.get("user", "") or "")[:52]
         except Exception:
             actor = ""
 
@@ -795,14 +945,27 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         deadline_days = max(1.0, min(deadline_days, 180.0))
 
         try:
-            actor = str(request.session.get("user", "") or "")[:60]
+            # username 为生产真键（见批量口同款注释）；"user" 回落兼容测试桩
+            actor = str(request.session.get("username")
+                        or request.session.get("user", "") or "")[:60]
         except Exception:
             actor = ""
+        params_in = body.get("params") if isinstance(
+            body.get("params"), dict) else {}
+        # notify_extra 入库前消毒（P3：逐目标「达成后通知谁」，写读同一清洗）
+        if "notify_extra" in params_in:
+            from src.companion.goals.notify import sanitize_notify_extra
+            cleaned = sanitize_notify_extra(params_in.get("notify_extra"))
+            params_in = dict(params_in)
+            if cleaned:
+                params_in["notify_extra"] = cleaned
+            else:
+                params_in.pop("notify_extra", None)
         goal = store.create_goal(
             conversation_id=conv, platform=platform, account_id=account_id,
             chat_key=chat_key, template=template_id,
             title=str(body.get("title") or "")[:120],
-            params=body.get("params") if isinstance(body.get("params"), dict) else {},
+            params=params_in,
             # 缺省档＝auto（与批量建目标同口径，2026-08-12 全自动为主）
             autonomy=str(body.get("autonomy") or "auto"),
             priority=int(body.get("priority") or 1),
@@ -859,9 +1022,23 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         view = (_refreshed_view(svc, store, goal, lang=lang)
                 if str(goal.get("status")) == "active"
                 else svc.goal_view(goal, lang=lang))
+        actions = store.list_actions(goal_id, limit=30)
+        # i18n P0：拍史逐行附英文展示态（同池反查；匹配不到=""=前端回落中文）。
+        # 「What AI did」时间线读的就是这批行。
+        try:
+            from src.companion.goals.templates import (
+                get_template as _gt, intent_en_for as _ien,
+            )
+            _tpl = _gt(str(goal.get("template") or "")) or {}
+            _prm = goal.get("params") or {}
+            for _a in actions:
+                if isinstance(_a, dict):
+                    _a["intent_en"] = _ien(_tpl, _prm, str(_a.get("intent") or ""))
+        except Exception:
+            logger.debug("actions intent_en enrich skipped", exc_info=True)
         return {
             "goal": view,
-            "actions": store.list_actions(goal_id, limit=30),
+            "actions": actions,
             "events": store.list_events(goal_id, limit=50),
         }
 
@@ -939,6 +1116,15 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         if isinstance(body.get("params"), dict):
             merged = dict(goal.get("params") or {})
             merged.update(body["params"])
+            # notify_extra 消毒与建目标同口径；显式传空=清除点名收件人
+            if "notify_extra" in body["params"]:
+                from src.companion.goals.notify import sanitize_notify_extra
+                cleaned = sanitize_notify_extra(
+                    body["params"].get("notify_extra"))
+                if cleaned:
+                    merged["notify_extra"] = cleaned
+                else:
+                    merged.pop("notify_extra", None)
             fields["params"] = merged
         if not fields:
             raise HTTPException(400, tr(request, "err.goals.nothing_to_update"))

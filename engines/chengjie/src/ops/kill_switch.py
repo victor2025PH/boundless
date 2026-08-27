@@ -168,6 +168,27 @@ class KillSwitch:
                 return True, scope, str(rec.get("reason") or "")
         return False, "", ""
 
+    def blocking_record(
+        self, platform: str, account_id: str, *, now: Optional[float] = None
+    ) -> Optional[Dict[str, Any]]:
+        """命中作用域的完整记录（含 scope/actor/reason/expires_at）；未冻结 → None。
+
+        与 ``is_blocked`` 同一条判定链（横幅归因用——``is_blocked`` 只回 reason，
+        「谁按的/何时恢复」全在记录里，此前前端拿不到只能一律说「运营手动」）。
+        """
+        now = float(now if now is not None else time.time())
+        with self._lock:
+            for scope in scope_chain(platform, account_id):
+                rec = self._state.get(scope)
+                if not rec:
+                    continue
+                exp = float(rec.get("expires_at") or 0)
+                if exp and exp <= now:
+                    self._delete_locked(scope)
+                    continue
+                return {"scope": scope, **rec}
+        return None
+
     def status(self, *, now: Optional[float] = None) -> List[Dict[str, Any]]:
         """当前生效的作用域列表（已过期的惰性剔除）。"""
         now = float(now if now is not None else time.time())
@@ -215,7 +236,55 @@ def is_blocked(
         return False, "", ""
 
 
+def active_record(
+    platform: str, account_id: str, *, now: Optional[float] = None
+) -> Optional[Dict[str, Any]]:
+    """模块级便捷入口：命中记录或 None。单例缺失/任何异常一律 None（读路径
+    fail-open——归因取不到时横幅回落通用文案，绝不因此拦发送或抛错）。"""
+    ks = _singleton
+    if ks is None:
+        return None
+    try:
+        return ks.blocking_record(platform, account_id, now=now)
+    except Exception:
+        return None
+
+
+def status_snapshot() -> List[Dict[str, Any]]:
+    """模块级只读快照：当前生效作用域列表；单例缺失/异常 → []（fail-open）。
+
+    供 ai-runtime-status 等任意登录可读的状态面消费——绝不经 ``get_kill_switch``
+    （那会在单例未初始化时按 CWD 相对默认路径**新建**一个库；读路径只读既有单例）。
+    """
+    ks = _singleton
+    if ks is None:
+        return []
+    try:
+        return ks.status()
+    except Exception:
+        return []
+
+
+def freeze_source(actor: Any, reason: Any) -> Tuple[str, str]:
+    """纯函数：置位记录的 (actor, reason) → ``("auto"|"manual", cause)``。
+
+    auto 判据＝actor 是 ban_signal，或 reason 带 ``auto_pause:``/``auto_ban:``
+    前缀（G2 自动处置的两个写入形态，见 ``ban_signal.apply_action``）；
+    cause＝人话残端（auto 去掉前缀取风控错误名，manual 原样保留置位理由）。
+    横幅据此分「系统自动风控」vs「管理员手动」两套文案——把两者都说成
+    「运营手动冻结」是 2026-08-23 实录误导的根源。
+    """
+    a = str(actor or "").strip().lower()
+    r = str(reason or "").strip()
+    low = r.lower()
+    if a == "ban_signal" or low.startswith("auto_pause:") or low.startswith("auto_ban:"):
+        cause = r.split(":", 1)[1].strip() if ":" in r else r
+        return "auto", cause
+    return "manual", r
+
+
 __all__ = [
-    "KillSwitch", "get_kill_switch", "is_blocked",
-    "normalize_scope", "scope_chain", "GLOBAL_SCOPE",
+    "KillSwitch", "get_kill_switch", "is_blocked", "active_record",
+    "freeze_source", "status_snapshot", "normalize_scope", "scope_chain",
+    "GLOBAL_SCOPE",
 ]

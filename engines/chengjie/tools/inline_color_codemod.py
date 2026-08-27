@@ -136,6 +136,11 @@ _E = [
     ("bg", "#1e293b", "--th-bg-slate8", None),  # 刻意深底部件，常量
     ("bg", "#0f172a", "--th-bg-slate9", None),
     ("bg", "#1a1f2e", "--th-bg-inkpanel", None),
+    # teal6 补登（2026-08-20 实施49 P1-7）：settings.html「消息发送与频控」卡的图标
+    # 渐变写的是 var(--th-bg-teal6) 且**无 fallback**，而表里从来没有 teal6 →
+    # 变量未定义 → 整条 background 声明失效 → 图标底恒透明（白底白字看不见图标）。
+    # 这正是 docstring 第 3 条要防的那类事故，缺的是表项而非策略。
+    ("bg", "#0d9488", "--th-bg-teal6", None),   # 同族渐变起点（与 teal8 配对，两主题同值）
     ("bg", "#0f766e", "--th-bg-teal8", None),   # 陈旧页横幅渐变（深青，两主题同值）
     ("bg", "#134e4a", "--th-bg-teal9", None),
     ("bg", "#dc2626", "--th-bg-red6", "#e0524a"),

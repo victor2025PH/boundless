@@ -162,6 +162,10 @@ def register_stored_read_routes(app, *, api_auth) -> None:
         # / 旧 store，前端不渲染。
         mode_source = None
         rearm = None
+        # P1-12 搁置静音：与 rearm 并列的第二种「AI 被按住了」态，但**没有**自动
+        # 接回（坐席说的「别管它」不该被超时推翻）→ 必须常驻可见 + 一键恢复，
+        # 否则搁置到点后静音就是隐形的。None＝非搁置静音态，前端不渲染。
+        snooze_hold = None
         try:
             _ms_store = _inbox_store(request)
             if _ms_store is not None and hasattr(
@@ -174,9 +178,10 @@ def register_stored_read_routes(app, *, api_auth) -> None:
                     }
                     from src.inbox.takeover_rearm import rearm_state
                     _cm3 = getattr(request.app.state, "config_manager", None)
-                    rearm = rearm_state(
-                        _meta,
-                        (getattr(_cm3, "config", None) or {}) if _cm3 else {})
+                    _cfg3 = (getattr(_cm3, "config", None) or {}) if _cm3 else {}
+                    rearm = rearm_state(_meta, _cfg3)
+                    from src.inbox.snooze_hold import snooze_hold_state
+                    snooze_hold = snooze_hold_state(_meta, _cfg3)
         except Exception:
             logger.debug("[automation] mode_source 读取失败（忽略）",
                          exc_info=True)
@@ -207,6 +212,22 @@ def register_stored_read_routes(app, *, api_auth) -> None:
                     except Exception:
                         _sg_role = ""
                     send_gate["can_exempt"] = _sg_role not in ("agent", "viewer")
+                    # P0 2026-08-23 急停可见化：横幅「解除停发」能力位——与
+                    # DELETE /api/ops/kill-switch 的 manage_ops 闸同口径
+                    # （master/admin；旧 token 会话无 role 视同 master），防
+                    # 「按钮亮了点下去 403」。判定异常一律 False（少亮不误导）。
+                    try:
+                        _cl_role = _sg_role
+                        if not _cl_role and bool(request.session.get("auth")):
+                            _cl_role = "master"
+                        _us = getattr(request.app.state, "user_store", None)
+                        if _us is not None and hasattr(_us, "can_write"):
+                            send_gate["can_lift"] = bool(
+                                _us.can_write(_cl_role, "manage_ops"))
+                        else:
+                            send_gate["can_lift"] = _cl_role in ("master", "admin")
+                    except Exception:
+                        send_gate["can_lift"] = False
         except Exception:
             logger.debug("[automation] send_gate 快照失败（忽略）", exc_info=True)
             send_gate = None
@@ -227,6 +248,7 @@ def register_stored_read_routes(app, *, api_auth) -> None:
         return {"ok": True, "conversation_id": cid, "mode": mode,
                 "budget": budget, "account": account, "effective": effective,
                 "mode_source": mode_source, "rearm": rearm,
+                "snooze_hold": snooze_hold,
                 "send_gate": send_gate, "snooze_until": snooze_until}
 
     @app.post("/api/unified-inbox/automation")
@@ -320,6 +342,48 @@ def register_stored_read_routes(app, *, api_auth) -> None:
             raise HTTPException(500, tr(request, "err.ws.config_write_failed",
                                         err=str(msg or "")))
         return {"ok": True, "path": path, "value": enabled}
+
+    @app.post("/api/unified-inbox/platform-cap")
+    async def api_unified_inbox_platform_cap_set(request: Request):
+        """主管设置/解除某平台的自动化档位封顶（inbox.auto_draft.platform_modes）。
+
+        Body: ``{platform: str, ceiling: "review"|"manual"|""}``（空串=解除）。
+        P2 2026-08-21（「封顶忘摘」事故闭环）：此前封顶只能 SSH 改 YAML——体检
+        面板看得见、改不了，8/18 的 WA 临时封顶因此挂了 3 天没人摘。走
+        ``set_overlay_flag`` 单键写（保注释 + 内存即时生效 + 不动其他平台的
+        封顶）。**解除用显式空串而非删键**：键缺席会回落构造期快照，快照里
+        可能还躺着旧封顶（P0 2026-08-21 实锤）。与 warmup-review 同主管权限。
+        """
+        from src.web.routes.unified_inbox_auth import _require_supervisor
+        _require_supervisor(request)
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        platform = str((body or {}).get("platform") or "").strip().lower()
+        ceiling = str((body or {}).get("ceiling") or "").strip().lower()
+        if not platform or not platform.replace("_", "").isalnum():
+            # 平台名进 set_overlay_flag 的点分路径，必须先净化（防键注入）
+            raise HTTPException(400, tr(request, "err.ws.field_required",
+                                        field="platform"))
+        if ceiling not in ("", "review", "manual"):
+            raise HTTPException(400, tr(request, "err.ws.platform_cap_invalid"))
+        cm = getattr(request.app.state, "config_manager", None)
+        if cm is None or not hasattr(cm, "set_overlay_flag"):
+            raise HTTPException(503, tr(request, "err.ws.config_write_unavailable"))
+        path = f"inbox.auto_draft.platform_modes.{platform}"
+        ok, msg = cm.set_overlay_flag(path, ceiling)
+        if not ok:
+            raise HTTPException(500, tr(request, "err.ws.config_write_failed",
+                                        err=str(msg or "")))
+        try:
+            operator = str(request.session.get("username", "web_admin"))
+        except Exception:
+            operator = "web_admin"
+        logger.info("[platform-cap] %s -> %r by=%s",
+                    platform, ceiling or "(uncap)", operator)
+        return {"ok": True, "platform": platform, "ceiling": ceiling}
 
     @app.post("/api/unified-inbox/reply-budget/relief")
     async def api_unified_inbox_reply_budget_relief(

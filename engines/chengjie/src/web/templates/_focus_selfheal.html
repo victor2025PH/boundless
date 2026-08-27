@@ -1,0 +1,78 @@
+{# ── B54 输入框焦点自愈（实施68 P1-16，2026-08-26）─────────────────────────
+   实录：钧「主动关怀 → 跳过关怀记录 → 取消 → 输入全死」+ skuio「人设编辑页偶发
+   无光标」+「软件经常性、退出重进恢复」。跨页面 + 重启自愈 ⇒ 不是单页字段 bug：
+   两案的直接诱因都是 window.confirm —— Electron 原生 confirm/alert 关闭后
+   Chromium 的窗口焦点态失步（上游久悬 bug），此后整窗 focus() 全部被忽略，
+   直到 BrowserWindow 被 blur+focus 一轮。
+
+   双层修复（本 partial 由 base.html / workspace_base.html 共同包含）：
+   ① 根治：壳内（__chatxShellFocus 桥在场）包一层 confirm/alert/prompt——原生
+      弹窗一返回立刻请主进程 blur+focus 复位（desktop:focus-fix）。浏览器无此病
+      也无桥，零行为变化。
+   ② 兜底 + 观测：全局捕获相位 mousedown——点了可聚焦控件但 0ms 后焦点没落上
+      → 重试 focus → 仍失败且有壳桥则请壳复位再补一次 focus；每次自愈经
+      /api/telemetry/frontend-error 记 {page, fn:focus_selfheal_*, type}（30s 限流，
+      与哑按钮守卫同一后端），累计数据定位「还有哪页在丢焦点」。
+   显式 disabled/readonly 是业务态，不抢救。#}
+<script>
+(function(){
+  'use strict';
+  var fxApi=null;
+  try{ fxApi=window.__chatxShellFocus||null; }catch(_e){ fxApi=null; }
+  var canFix=!!(fxApi&&typeof fxApi.focusFix==='function');
+
+  // ① 壳内根治：原生弹窗返回即复位窗口焦点态
+  if(canFix){
+    ['confirm','alert','prompt'].forEach(function(k){
+      var orig=window[k];
+      if(typeof orig!=='function') return;
+      window[k]=function(){
+        var r=orig.apply(window,arguments);
+        try{ fxApi.focusFix(); }catch(_e){}
+        return r;
+      };
+    });
+  }
+
+  // ② 全局点击自愈 + 埋点
+  var lastBeacon=0;
+  function beacon(how){
+    var now=Date.now();
+    if(now-lastBeacon<30000) return;   // 限流：坏态下连点不刷爆遥测
+    lastBeacon=now;
+    try{
+      var page=(location.pathname||'/').slice(0,64);
+      if(navigator.sendBeacon){
+        navigator.sendBeacon('/api/telemetry/frontend-error',
+          new Blob([JSON.stringify({page:page,fn:'focus_selfheal_'+how,type:'focus_selfheal'})],
+                   {type:'application/json'}));
+      }
+    }catch(_e){}
+  }
+  document.addEventListener('mousedown',function(e){
+    var t=e.target;
+    if(!t||!t.matches) return;
+    var sel='input,textarea,[contenteditable=""],[contenteditable="true"]';
+    if(!t.matches(sel)){
+      var host=t.closest&&t.closest('[contenteditable=""],[contenteditable="true"]');
+      if(!host) return;
+      t=host;
+    }
+    if(t.disabled||t.readOnly) return;
+    if(t.type&&/^(checkbox|radio|button|submit|file|range|color)$/i.test(t.type)) return;
+    setTimeout(function(){
+      if(document.activeElement===t) return;   // 正常聚焦成功=零开销
+      try{ t.focus({preventScroll:true}); }catch(_e){ try{ t.focus(); }catch(_e2){} }
+      if(document.activeElement===t){ beacon('refocus'); return; }
+      if(canFix){
+        try{ fxApi.focusFix(); }catch(_e){}
+        setTimeout(function(){ try{ t.focus({preventScroll:true}); }catch(_e){} },80);
+        beacon('shell_fix');
+        return;
+      }
+      try{ window.focus(); t.focus(); }catch(_e){}
+      beacon(document.activeElement===t?'window_focus':'fail');
+    },0);
+  },true);
+})();
+</script>

@@ -199,6 +199,15 @@ from src.companion.group_show.live import (  # noqa: F401
     perform,
     plan_live,
 )
+from src.companion.group_show.platform_policy import (  # noqa: F401
+    DEFAULT_PLATFORM_RISK,
+    KNOWN_PLATFORMS,
+    clamp_platform_speakers,
+    known_platforms,
+    normalize_platform,
+    platform_live_allowed,
+    resolve_platform_risk,
+)
 from src.companion.group_show.linkage import (  # noqa: F401
     derive_fingerprint_groups,
     derive_group,
@@ -252,7 +261,9 @@ from src.companion.group_show.playbook import (  # noqa: F401
 
 __all__ = [
     "ALL_HISTORY",
+    "DEFAULT_PLATFORM_RISK",
     "DEFAULT_WINDOW_HOURS",
+    "KNOWN_PLATFORMS",
     "MAX_LIVE_LINES",
     "MAX_LIVE_SECONDS",
     "MIN_CROSS_GROUP_GAP_SEC",
@@ -285,6 +296,7 @@ __all__ = [
     "build_sample_entry",
     "by_playbook",
     "cast_entanglement",
+    "clamp_platform_speakers",
     "clamp_window_hours",
     "co_performance",
     "count_conversions",
@@ -298,6 +310,7 @@ __all__ = [
     "is_selling_slot",
     "is_solo_playbook",
     "is_stale",
+    "known_platforms",
     "linkage_readiness",
     "live_enabled",
     "live_quiet_hours",
@@ -307,6 +320,7 @@ __all__ = [
     "max_safe_groups",
     "merge_speech",
     "next_allowed_ts",
+    "normalize_platform",
     "observed_mix",
     "orchestrator_sender",
     "outcome_verdict",
@@ -315,6 +329,7 @@ __all__ = [
     "performance_metrics",
     "pick_sample_lines",
     "plan_attendance",
+    "platform_live_allowed",
     "playbook_fingerprint",
     "plan_capacity",
     "plan_live",
@@ -328,6 +343,7 @@ __all__ = [
     "read_speech",
     "recommend_mix",
     "recommend_pool_size",
+    "resolve_platform_risk",
     "resolve_speaker_cap",
     "role_capacity",
     "role_headroom",

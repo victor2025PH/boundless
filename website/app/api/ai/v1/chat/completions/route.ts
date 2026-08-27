@@ -109,9 +109,13 @@ export async function POST(req: NextRequest) {
       const billed = await consumeQuota(claims, Math.max(inChars + outChars, 1));
       remaining = billed.remaining;
     }
+    // 识图调用带独立标（2026-08-23）：此前 vision 也记 ev:"chat"，排障只能靠
+    // in===VISION_CHAR_COST 猜——「把人看成猫」事故的服务端流水就因此被误读成
+    // 「零识图调用」。加 vision:1 字段（不改 ev，老消费方零影响）。
     void logGateway({
       ev: "chat", mid: claims.mid, status: upstream.status,
       in: inChars, out: outChars, ms: Date.now() - started,
+      ...(vision ? { vision: 1 } : {}),
     });
 
     return new NextResponse(text, {

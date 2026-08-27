@@ -80,16 +80,21 @@ def _persona_photos_on(monkeypatch):
 # ── ① 场景单一事实源 ─────────────────────────────────────────────────────────
 
 def test_resolve_current_scene_uses_persona_pool_then_config():
+    # 钉白天时刻：本例测「池优先级」，与时段过滤无关——不钉的话深夜跑测试
+    # 会撞上 2026-08-22 的「深夜剔白天场所」新语义（library/office 被剔）。
+    import datetime
+    _noon = datetime.datetime(2026, 7, 14, 13, 0)
     persona = {"selfie_scenes": ["in the dorm", "at the library"]}
     scfg = {"scene_rotation": ["at the office"], "scene_hint": "fallback"}
-    out = cs.resolve_current_scene(persona, scfg)
+    out = cs.resolve_current_scene(persona, scfg, now=_noon)
     assert out in ("in the dorm", "at the library")
     # persona 无池 → config rotation
-    out2 = cs.resolve_current_scene({}, scfg)
+    out2 = cs.resolve_current_scene({}, scfg, now=_noon)
     assert out2 == "at the office"
     # 全无 → default scene_hint
-    assert cs.resolve_current_scene({}, {"scene_hint": "cozy room"}) == "cozy room"
-    assert cs.resolve_current_scene({}, {}) == ""
+    assert cs.resolve_current_scene(
+        {}, {"scene_hint": "cozy room"}, now=_noon) == "cozy room"
+    assert cs.resolve_current_scene({}, {}, now=_noon) == ""
 
 
 def test_resolve_current_scene_stable_within_time_bucket():
@@ -231,9 +236,11 @@ async def test_run_autosend_caption_gets_scene(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "src.integrations.protocol_bridge.save_outbound_media",
         lambda *a, **k: ("/tmp/out.png", "/static/out.png", "image"))
+    # 场景用「无时间词、无场所词」的中性短语：本例测「场景到达配文回调」，
+    # 用 cafe 会在深夜跑测试时被场所过滤剔掉（2026-08-22 语义），夹具时间依赖。
     cfg = {"companion": {"selfie": {
         "enabled": True,
-        "scene_rotation": ["in a cozy cafe"],
+        "scene_rotation": ["in a cozy reading nook"],
         "provider": {"enabled": True, "backend": "openai", "api_key": "x"}}}}
     prov = cs.get_selfie_provider(cfg["companion"]["selfie"]["provider"])
 
@@ -259,7 +266,7 @@ async def test_run_autosend_caption_gets_scene(tmp_path, monkeypatch):
         cfg, "telegram", "acct", "chat", "lin",
         "發個照片給我看看嘛", [], send_fn=_send_fn, llm_caption=_caption)
     assert ok is True
-    assert cap_seen.get("scene") == "in a cozy cafe"  # 场景到达配文回调
+    assert cap_seen.get("scene") == "in a cozy reading nook"  # 场景到达配文回调
     assert sent == ["配文来啦"]
     reset_persona_media_store()
     cs.reset_selfie_provider()
@@ -495,8 +502,13 @@ async def test_guard_keeps_promise_and_fulfills_async(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_guard_fulfill_failure_sends_compensation(monkeypatch):
-    """任务失败 → 语言对齐台阶补偿文本经 _send_to_chat 发出（闭环诚实）。"""
+async def test_guard_fulfill_failure_stays_silent_no_fallback(monkeypatch):
+    """任务失败 → **静默**（无兜底纪律，2026-08-17 老板拍板）：不补台阶话术，
+    走 delivery_block 上报 + 坐席人工接管。
+
+    旧语义（发「手机抽风改天补」类补偿文本）已随无兜底纪律拆除——本测试
+    2026-08-18 对齐已提交行为（stale-red 清账）：断言零补偿文本发出。
+    """
     cs.reset_selfie_provider()
     try:
         sm = _SM(selfie_cfg=_GEN_ON, guard_cfg={"async_fulfill": True})
@@ -521,7 +533,7 @@ async def test_guard_fulfill_failure_sends_compensation(monkeypatch):
             await asyncio.sleep(0.01)
             if not sm._promise_fulfill_inflight:
                 break
-        assert sent_texts and ("改天" in sent_texts[0] or "make it up" in sent_texts[0])
+        assert sent_texts == []  # 静默：绝不向客户发出替代/圆场内容
     finally:
         cs.reset_selfie_provider()
 

@@ -54,6 +54,9 @@ function collect() {
     name: "chatx-build-info",
     version: String(pkg.version || ""),
     displayVersion: String(pkg.displayVersion || ""),
+    // internal=内测包（随包生产数据种子）；clean=对外干净包（零数据种子）。
+    // 舰队/人工核查一眼分清装的是哪种形态，别再靠文件名与目录考古。
+    flavor: ["clean", "lite"].includes(process.env.CHATX_FLAVOR) ? process.env.CHATX_FLAVOR : "internal",
     builtAt: new Date().toISOString(),
     builtOn: process.env.COMPUTERNAME || process.env.HOSTNAME || "",
     git: { commit: "unknown", branch: "unknown", dirty_count: -1, dirty: [] },

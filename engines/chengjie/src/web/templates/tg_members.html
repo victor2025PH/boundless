@@ -8,7 +8,7 @@
   数据源：/api/accounts、/api/tg-members/{jobs,groups,members,members/export,quota}。
   正式上线时的 nav 集成 / base.html 主题化 / 更细粒度 UX 属部署窗口内的真机打磨项。
 -->
-<html lang="zh">
+<html lang="{{ ui_locale|default('zh-CN') }}">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -49,7 +49,7 @@
     th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--border); }
     th { color:var(--dim); font-weight:600; font-size:12px; }
     .pill { display:inline-block; padding:1px 8px; border-radius:999px; font-size:11.5px; }
-    .pill.run { background:rgba(30,140,242,.14); color:var(--accent); }
+    .pill.run { background:color-mix(in srgb, var(--bl-growth,#1e8cf2) 14%, transparent); color:var(--accent); }
     .pill.done { background:rgba(15,157,117,.14); color:var(--ok); }
     .pill.err { background:rgba(220,38,38,.14); color:var(--danger); }
     .pill.adm { background:rgba(217,119,6,.14); color:var(--warn); }

@@ -94,33 +94,59 @@ def test_material_passes_ttl_from_cfg():
 
 
 # ── 素材行渲染 ────────────────────────────────────────────────────────────
+# 框架守卫（2026-08-19「上午晚安」事故连带收口）后，素材行按**人设当地时段**
+# 让行：测试一律注入固定 now（naive=人设当地墙钟），防真实时钟依赖变时间炸弹。
+
+from datetime import datetime as _DT  # noqa: E402
+
+_MORNING_NOW = _DT(2026, 8, 19, 8, 0)   # 人设当地 08:00（晨窗内）
+_NIGHT_NOW = _DT(2026, 8, 19, 21, 30)   # 人设当地 21:30（晚窗内）
 
 
 def test_ritual_line_morning_has_city_desc_and_guard():
-    line = ritual_weather_line(_PERSONA, _CFG_ON, slot="morning", fetch_fn=_fetch_ok)
+    line = ritual_weather_line(_PERSONA, _CFG_ON, slot="morning",
+                               fetch_fn=_fetch_ok, now=_MORNING_NOW)
     assert "成都" in line and "多云" in line and "26°C" in line
     assert "今早" in line
     assert "别" in line and "编" in line  # 反编造约束必须在场
 
 
 def test_ritual_line_night_wording():
-    line = ritual_weather_line(_PERSONA, _CFG_ON, slot="night", fetch_fn=_fetch_ok)
+    line = ritual_weather_line(_PERSONA, _CFG_ON, slot="night",
+                               fetch_fn=_fetch_ok, now=_NIGHT_NOW)
     assert "今晚" in line
 
 
+def test_ritual_line_frame_guard_skips_mismatch():
+    """档位与人设当地时段硬冲突 → 整行让行（「今晚你那边」不许在人设清晨说）。"""
+    # 晚安档 × 人设当地 08:00（如温哥华人设撞服务器晚窗）→ 空
+    assert ritual_weather_line(_PERSONA, _CFG_ON, slot="night",
+                               fetch_fn=_fetch_ok, now=_MORNING_NOW) == ""
+    # 晨安档 × 人设当地 21:30 → 空
+    assert ritual_weather_line(_PERSONA, _CFG_ON, slot="morning",
+                               fetch_fn=_fetch_ok, now=_NIGHT_NOW) == ""
+    # 傍晚 18:00 属晚窗宽容带 → 晚安档放行
+    assert ritual_weather_line(_PERSONA, _CFG_ON, slot="night",
+                               fetch_fn=_fetch_ok,
+                               now=_DT(2026, 8, 19, 18, 0)) != ""
+
+
 def test_ritual_line_invalid_slot_empty():
-    assert ritual_weather_line(_PERSONA, _CFG_ON, slot="noon", fetch_fn=_fetch_ok) == ""
+    assert ritual_weather_line(_PERSONA, _CFG_ON, slot="noon",
+                               fetch_fn=_fetch_ok, now=_MORNING_NOW) == ""
 
 
 def test_ritual_line_disabled_empty():
-    assert ritual_weather_line(_PERSONA, _CFG_OFF, slot="morning", fetch_fn=_fetch_ok) == ""
+    assert ritual_weather_line(_PERSONA, _CFG_OFF, slot="morning",
+                               fetch_fn=_fetch_ok, now=_MORNING_NOW) == ""
 
 
 def test_ritual_line_stale_warns_no_exact_numbers():
     def _stale_fetch(p, **k):
         return _snap(stale=True)
 
-    line = ritual_weather_line(_PERSONA, _CFG_ON, slot="morning", fetch_fn=_stale_fetch)
+    line = ritual_weather_line(_PERSONA, _CFG_ON, slot="morning",
+                               fetch_fn=_stale_fetch, now=_MORNING_NOW)
     assert "数据稍旧" in line and "别报精确数字" in line
 
 
@@ -128,7 +154,8 @@ def test_ritual_line_temp_none_label_only():
     def _no_temp(p, **k):
         return _snap(temp=None)
 
-    line = ritual_weather_line(_PERSONA, _CFG_ON, slot="morning", fetch_fn=_no_temp)
+    line = ritual_weather_line(_PERSONA, _CFG_ON, slot="morning",
+                               fetch_fn=_no_temp, now=_MORNING_NOW)
     assert "多云" in line and "°C" not in line
 
 
@@ -201,7 +228,11 @@ def _patched_env(monkeypatch):
     return pm_stub
 
 
-def test_ritual_opener_carries_weather_line(_patched_env):
+def test_ritual_opener_carries_weather_line(_patched_env, monkeypatch):
+    # 框架守卫走真实人设当地钟 → 钉住 08:00 防「晚上跑测试晨安行被让行」时间炸弹
+    monkeypatch.setattr(
+        "src.companion.persona_location.persona_now",
+        lambda place, now=None: _DT(2026, 8, 19, 8, 0))
     sm = _SM(_StubStore([]))
     out = sm.build_ritual_opener(
         "morning", memory_key="u1", intimacy=50.0, contact_key="tg:acc:u1")

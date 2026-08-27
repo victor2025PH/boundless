@@ -212,14 +212,33 @@ def test_daily_bangkok_replace_clock_real_iana_zone():
     assert plans[0]["clock_offset"] == 7.0
 
 
-def test_daily_narrow_clock_also_used_for_slot_selection():
-    """narrow（行为推断）择时同样跟用户钟——越界防线在安静时段而非择时。"""
+def test_daily_narrow_clock_no_longer_moves_slot_selection():
+    """narrow（裸行为推断）**不再驱动择时**（2026-08-19 10:12 事故收口）。
+
+    旧赌注「narrow 择时=收窄到对方白天、越界防线在安静时段」被生产证伪：
+    5 条稀疏样本把国内客户推断成 UTC-5（country=CN 自相矛盾仍 0.78 置信），
+    晚安仪式在服务器上午 10:12 发出「雨声哗哗…晚安🌙」。错钟驱动档位产生
+    **内容错误**，安静时段防线管不到；择时只信 replace（显式信号）。"""
     now = _ts(14)
     clk = _clock(now, -7, trust=TRUST_NARROW, source="behavior")
+    assert plan_daily_rituals(
+        [_conv("A", now=now)], ritual_sent={}, opener_fn=_ritual_opener,
+        now=now, user_clock_provider=lambda cid: clk) == []
+
+
+def test_daily_incident_regression_goodnight_at_server_morning():
+    """事故形态逐位回归：服务器 10:12 + narrow UTC-5 推断（对方「21:12」）
+    → 绝不出晚安计划；同偏移 replace（显式自述）→ 照常出（能力保留）。"""
+    now = _ts(10, minute=12)
+    narrow = _clock(now, 11, trust=TRUST_NARROW, source="behavior")  # 本地 21:12
+    assert plan_daily_rituals(
+        [_conv("A", now=now)], ritual_sent={}, opener_fn=_ritual_opener,
+        now=now, user_clock_provider=lambda cid: narrow) == []
+    stated = _clock(now, 11, trust=TRUST_REPLACE, source="stated_city")
     plans = plan_daily_rituals(
         [_conv("A", now=now)], ritual_sent={}, opener_fn=_ritual_opener,
-        now=now, user_clock_provider=lambda cid: clk)
-    assert len(plans) == 1 and plans[0]["clock_source"] == "behavior"
+        now=now, user_clock_provider=lambda cid: stated)
+    assert len(plans) == 1 and plans[0]["slot"] == NIGHT
 
 
 def test_daily_advisory_clock_does_not_move_the_window():

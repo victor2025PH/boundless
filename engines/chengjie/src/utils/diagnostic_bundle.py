@@ -69,10 +69,19 @@ def build_diagnostic_bundle(
     meta: Optional[Dict[str, Any]] = None,
     log_tail_kb: int = 256,
     total_cap_mb: int = 8,
+    extra_files: Optional[Dict[str, Path]] = None,
+    extra_tail_kb: int = 2048,
 ) -> bytes:
-    """打一个内存 zip 诊断包，返回字节串。绝不抛（内部逐文件软失败）。"""
+    """打一个内存 zip 诊断包，返回字节串。绝不抛（内部逐文件软失败）。
+
+    ``extra_files``（P2-12 B38 批 2026-08-22）：arcname → 路径的补充清单，每文件
+    取尾部 ``extra_tail_kb``（默认 2MB）。3DTSV9 实战暴露的缺口：桌面部署主日志
+    （app.log/运行时 file handler 落点）常**不在** logs_dir 一级——包里只有
+    fatal/sidecar，主日志零痕迹，排障只能拉库反推。调用方经运行时 logger 树
+    收集真实落点喂进来（见 diag_upload.runtime_log_files）。"""
     tail_cap = max(4, int(log_tail_kb)) * 1024
     total_cap = max(1, int(total_cap_mb)) * 1024 * 1024
+    extra_cap = max(64, int(extra_tail_kb)) * 1024
     total = 0
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -83,6 +92,22 @@ def build_diagnostic_bundle(
             zf.writestr("meta.json", json.dumps(m, ensure_ascii=False, indent=2))
         except Exception:
             zf.writestr("meta.json", "{}")
+        # 补充清单（主日志等）：先于 logs_dir 写入——它是本包存在的头号理由，
+        # 不能被一堆边角日志把总量预算吃光后挤掉
+        for arc, path in dict(extra_files or {}).items():
+            if total >= total_cap:
+                break
+            try:
+                p = Path(path)
+                if not p.is_file():
+                    continue
+                data = _tail_bytes(p, extra_cap)
+                if not data:
+                    continue
+                total += len(data)
+                zf.writestr(str(arc), data)
+            except Exception:
+                continue
         # 配置（白名单 + 打码）
         if config_dir is not None:
             for name in _CONFIG_FILES:

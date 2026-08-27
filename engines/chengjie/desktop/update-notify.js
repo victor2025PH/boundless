@@ -134,8 +134,14 @@ const _EMPTY = { kind: "" };
  *   announcements: normalizeAnnouncements 产物,
  *   appVersion, minSupportedVersion?: "", readIds: [], snoozedUntil: ms, now: ms,
  * }
- * 返回 = { kind:"update"|"announcement", tone, badge, text, action:"restart"|"open"|"none",
- *          id?, link?, version?, forced?: true }
+ * 返回 = { kind:"update"|"announcement", tone, badge, action:"restart"|"open"|"none",
+ *          id?, link?, version?, forced?: true,
+ *          textKey?, vars? | text? }
+ *
+ * i18n 边界（2026-08-19）：**更新类**文案属界面文字 → 只回 `textKey`(+`vars`)，
+ * 取词在渲染层 SH()（此前回中文串，英文坐席看到「当前版本已停止支持…」）。
+ * **公告类**文案是运营从服务端下发的内容数据（本就按运营语言撰写），不该被壳词典
+ * 翻译，故继续回 `text`。渲染层按「有 textKey 优先取词，否则用 text」消费。
  */
 function pickNotice(state) {
   const s = state || {};
@@ -154,7 +160,7 @@ function pickNotice(state) {
       return {
         kind: "update", action: "restart", tone: "urgent", badge: "⛔", forced: true,
         version: upd.version || "",
-        text: `当前版本已停止支持 · 新版本已就绪，请立即重启更新（约 30 秒，不影响账号与聊天记录）`,
+        textKey: "notice.forced_ready",
       };
     }
     if (upd.phase === "downloading") {
@@ -162,12 +168,12 @@ function pickNotice(state) {
       return {
         kind: "update", action: "none", tone: "urgent", badge: "⛔", forced: true,
         version: upd.version || "",
-        text: `当前版本已停止支持 · 正在下载新版本 ${pct}%，完成后请立即重启更新`,
+        textKey: "notice.forced_downloading", vars: { pct },
       };
     }
     return {
       kind: "update", action: "none", tone: "urgent", badge: "⛔", forced: true,
-      text: `当前版本已停止支持 · 正在获取新版本，请保持网络连接稍候`,
+      textKey: "notice.forced_fetching",
     };
   }
 
@@ -177,7 +183,7 @@ function pickNotice(state) {
     return {
       kind: "update", action: "restart", tone: "update", badge: "⬆️",
       version: upd.version || "",
-      text: `新版本 ${v}已就绪 · 点击重启即完成更新（约 30 秒，不影响账号与聊天记录）`,
+      textKey: "notice.update_ready", vars: { v },
     };
   }
   // 2. 紧急公告
@@ -189,7 +195,7 @@ function pickNotice(state) {
     return {
       kind: "update", action: "none", tone: "info", badge: "⬇️",
       version: upd.version || "",
-      text: `新版本 ${v}后台下载中 ${pct}% · 完成后一键重启生效，现在可继续正常使用`,
+      textKey: "notice.update_downloading", vars: { v, pct },
     };
   }
   // 4. 普通公告（发版说明 / 通知）

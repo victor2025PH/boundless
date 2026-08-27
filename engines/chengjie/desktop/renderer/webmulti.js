@@ -16,26 +16,29 @@ function _worst(a, b) { return (_SEV[a] || 0) >= (_SEV[b] || 0) ? a : b; }
 // lastActive 存 epoch 毫秒（~1.7e12）,`|0` 会 32 位截断损坏,必须数值强转。
 function _num(x) { const n = Number(x); return Number.isFinite(n) ? n : 0; }
 
+// ⚠ 三维只出稳定 `key`，**不出文案**（2026-08-20 i18n 收口）：这些字进的是账号栏
+// tooltip——英文壳里写死中文＝坐席每天看见的那一行永远是中文。展示层经
+// SH(key) 取当前语言文案（词典在 renderer/shell-i18n.js 的 health.* 段）。
+
 // 单维:会话在线态 → 三态
 function _sessionDim(online) {
-  if (online === true) return { cls: "ok", text: "在线" };
-  if (online === false) return { cls: "bad", text: "掉线" };
-  return { cls: "wait", text: "未知" };
+  if (online === true) return { cls: "ok", key: "health.session_online" };
+  if (online === false) return { cls: "bad", key: "health.session_offline" };
+  return { cls: "wait", key: "health.unknown" };
 }
 // 单维:注入态（透传 inject-status 的 cls；unsupported→bad）
 function _injectDim(inject) {
-  if (inject === "unsupported") return { cls: "bad", text: "无注入档案" };
+  if (inject === "unsupported") return { cls: "bad", key: "health.inject_unsupported" };
   if (["ok", "warn", "bad", "wait"].indexOf(inject) >= 0) {
-    const t = { ok: "注入正常", warn: "注入失配", bad: "注入异常", wait: "等待注入" }[inject];
-    return { cls: inject, text: t };
+    return { cls: inject, key: "health.inject_" + inject };
   }
-  return { cls: "wait", text: "等待注入" };
+  return { cls: "wait", key: "health.inject_wait" };
 }
 // 单维:翻译链路可达
 function _translateDim(translateOk) {
-  if (translateOk === true) return { cls: "ok", text: "翻译正常" };
-  if (translateOk === false) return { cls: "warn", text: "翻译不可达" };
-  return { cls: "wait", text: "未知" };
+  if (translateOk === true) return { cls: "ok", key: "health.translate_ok" };
+  if (translateOk === false) return { cls: "warn", key: "health.translate_down" };
+  return { cls: "wait", key: "health.unknown" };
 }
 
 // 账号综合健康三态：三维取最差,并给出人话
@@ -50,19 +53,19 @@ function accountHealthState(a) {
   level = _worst(level, inject.cls);
   level = _worst(level, translate.cls);
   // 文案取「最差那一维」的解释,让坐席直接知道卡在哪
-  let text = "正常";
+  let textKey = "health.all_ok";
   const worstDim = [session, inject, translate].reduce((w, d) =>
     (_SEV[d.cls] || 0) > (_SEV[w.cls] || 0) ? d : w
   );
-  if (level !== "ok") text = worstDim.text;
-  return { level, text, dims: { session, inject, translate } };
+  if (level !== "ok") textKey = worstDim.key;
+  return { level, textKey, dims: { session, inject, translate } };
 }
 
-// 账号栏徽标模型
+// 账号栏徽标模型（textKey 同样只是键，取词在展示层）
 function railBadge(state) {
-  const s = state && state.level ? state : { level: "wait", text: "等待" };
+  const s = state && state.level ? state : { level: "wait", textKey: "health.waiting" };
   const dot = { ok: "on", warn: "warn", bad: "off", wait: "idle" }[s.level] || "idle";
-  return { cls: s.level, dot, text: s.text || "" };
+  return { cls: s.level, dot, textKey: s.textKey || "" };
 }
 
 // 账号栏排序:置顶 > 未读多 > 最近活跃 > id 稳定

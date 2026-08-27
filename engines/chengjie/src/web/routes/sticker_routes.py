@@ -193,6 +193,29 @@ def register_sticker_routes(app, auth_dep, audit_store=None, config_manager=None
         sha = hashlib.sha256(norm["webp"]).hexdigest()
         dup = st.find_by_sha(pack_id, sha)
         if dup is not None:
+            # 自愈（2026-08-17 实锤）：「DB 行在、产物文件丢」——/static 下的
+            # 贴纸产物是未跟踪文件，git clean/分支切换/误删会把它们清掉；此时
+            # 幂等重播本该是修复动作，却被 sha 去重挡住＝永久裂图。dedup 命中
+            # 时校验行内 file_path 仍在，丢了按原路径重写（webp/png/gif 全套，
+            # 只写落盘根内，行不动）。
+            try:
+                _fp = str(dup.get("file_path") or "")
+                _root = sticker_root().resolve()
+                if _fp and not os.path.isfile(_fp) \
+                        and _root in Path(_fp).resolve().parents:
+                    Path(_fp).parent.mkdir(parents=True, exist_ok=True)
+                    Path(_fp).write_bytes(norm["webp"])
+                    _pngp = sibling_path(_fp, ".png")
+                    if _pngp:
+                        Path(_pngp).write_bytes(norm["png"])
+                    if norm.get("gif"):
+                        _gifp = sibling_path(_fp, ".gif")
+                        if _gifp:
+                            Path(_gifp).write_bytes(norm["gif"])
+                    logger.info("[stickers] 自愈重写丢失产物 %s", _fp)
+            except Exception:
+                logger.warning("[stickers] 产物自愈失败 id=%s",
+                               dup.get("id"), exc_info=True)
             return {"deduped": dup}
         safe_dir = safe_pack_dir(pack_id)
         d = sticker_root() / safe_dir
@@ -396,14 +419,14 @@ def register_sticker_routes(app, auth_dep, audit_store=None, config_manager=None
         body = await request.json()
         media_ref = str((body or {}).get("media_ref") or "")
         pack_id = str((body or {}).get("pack_id") or COLLECTED_PACK_ID)
-        from src.inbox.media_guard import resolve_contained_path
+        from src.inbox.media_guard import resolve_contained_path_any
         from src.integrations.protocol_bridge import (
-            protocol_media_root, static_media_ref_to_path,
+            protocol_media_roots, static_media_ref_to_path,
         )
         cand = static_media_ref_to_path(media_ref)
         if not cand:
             raise HTTPException(404, tr(request, "err.inbox.media_not_found"))
-        path = resolve_contained_path(str(protocol_media_root()), cand)
+        path = resolve_contained_path_any(protocol_media_roots(), cand)
         if not path or not os.path.isfile(path):
             raise HTTPException(404, tr(request, "err.inbox.media_not_found"))
         if st.get_pack(pack_id) is None:

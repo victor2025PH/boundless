@@ -170,4 +170,21 @@ def register_feature_center_routes(app, auth_dep, config_manager=None):
         if not ok:
             raise HTTPException(500, tr(request, "err.fc.write_failed"))
         logger.info("feature toggle: %s = %s", f.key, want)
+        # B37-5（2026-08-22）：功能总览的开关翻转纳入「档位变更历史」同一账本
+        # （companion_capability_audit.jsonl）——skuio 实录「开关昨夜被未知动作
+        # 关回、不可追溯」：standby/能力看板早已落账，这里是最后一个不落账的
+        # 自助写入口。best-effort，账本写失败绝不影响开关本身。
+        try:
+            from src.web.routes.companion_capability_routes import _audit_toggle
+            _actor = ""
+            try:
+                _actor = str(request.session.get("role") or "")
+            except Exception:
+                _actor = ""
+            _audit_toggle(config_manager,
+                          actor=(_actor or "web-admin"), key=f.key,
+                          field="enabled", value=want, path=f.key,
+                          reason="feature_center")
+        except Exception:
+            logger.debug("feature toggle 审计落账失败（忽略）", exc_info=True)
         return {"ok": True, "item": _item(request, f, _cfg_root())}

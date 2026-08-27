@@ -741,6 +741,12 @@ class KnowledgeBaseStore:
                                               "principles", "example_reply", "forbidden"):
                                     if trans[field]:
                                         entry[f"{field}_{lang}"] = trans[field]
+                                # V0（2026-08-18）：机器稿标记随行下发——消费方（坐席面板/
+                                # 推荐）据此把「机器起草待确认」与「人工已审」区分展示。
+                                try:
+                                    entry[f"_trans_auto_{lang}"] = int(trans["auto_translated"] or 0)
+                                except Exception:
+                                    pass
                         entries.append(entry)
 
         query_lower = query.lower()

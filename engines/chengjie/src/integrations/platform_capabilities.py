@@ -65,10 +65,21 @@ WORKERS: List[Tuple[str, str, str, str]] = [
      "MessengerWebWorker"),
     ("line", "protocol", "src.integrations.account_orchestrator",
      "LineProtocolWorker"),
+    # 2026-08-19 群/频道 P0：Zalo/Instagram 个人号 web worker 此前不在矩阵——
+    # 「未进表」让这两个平台的能力问题只能翻源码，正是本表要消灭的成本。
+    ("zalo", "web", "src.integrations.account_orchestrator",
+     "ZaloPersonalWorker"),
+    ("instagram", "web", "src.integrations.account_orchestrator",
+     "InstagramWebWorker"),
 ]
 
-#: 入站媒体接线点：矩阵行 key → (模块, 函数路径；``.`` 分隔嵌套)。
-#: TG 与 LINE 的 handler 都叫 ``_on_msg``，必须靠外层方法名区分，故用全路径。
+#: 入站接线点：矩阵行 key → 站点。两种形态：
+#:   ("<py 模块>", "<函数路径；. 分隔嵌套>")  → AST 判定（Python handler）
+#:   ("js", "<引擎根相对路径>")               → 文本判定（Node 边车；payload 在 JS 里
+#:                                              构造，Python AST 够不着）
+#: ⚠ 此前 WA/Messenger 挂在共享 ingest 路由 ``api_protocol_ingest`` 上——那只能证明
+#: 「路由会转发」，不能证明「边车真的送了」（Zalo 边车入站媒体只发 [媒体] 占位、
+#: 根本不带 media_type；IG 边车更是显式 chat_type:""）。判定点必须下沉到事实源。
 INBOUND_SITES: Dict[str, Tuple[str, str]] = {
     "telegram:protocol": ("src.integrations.account_orchestrator",
                           "TelegramProtocolWorker._wire_inbound._on_msg"),
@@ -77,11 +88,10 @@ INBOUND_SITES: Dict[str, Tuple[str, str]] = {
                                      "TelegramClient._process_message_async"),
     "line:protocol": ("src.integrations.account_orchestrator",
                       "LineProtocolWorker._start_receiver._on_msg"),
-    # WA 与 Messenger 共用同一个 HTTP ingest（Node 侧 push 进来）
-    "whatsapp:protocol": ("src.web.routes.unified_inbox_account_routes",
-                          "api_protocol_ingest"),
-    "messenger:web": ("src.web.routes.unified_inbox_account_routes",
-                      "api_protocol_ingest"),
+    "whatsapp:protocol": ("js", "services/whatsapp-baileys/server.js"),
+    "messenger:web": ("js", "services/messenger-web/server.js"),
+    "zalo:web": ("js", "services/zalo-personal/server.js"),
+    "instagram:web": ("js", "services/instagram-web/server.js"),
 }
 
 #: 已知**由配置开关决定**的格子：(platform, mode, capability) → 开关路径。
@@ -164,6 +174,162 @@ def _forwards_media_type(func: ast.AST) -> bool:
     return False
 
 
+# ── JS 边车站点的文本判定 ────────────────────────────────────────────────────
+# Node 边车的 ingest payload 在 JS 里构造，Python AST 够不着。文本判定弱于 AST，
+# 但强于「把共享 ingest 路由当事实源」（那会把 Zalo/IG 没送的字段误判成已接线）。
+# 判定范围收窄到「含 direction: 键的对象字面量」＝ingest payload 块，避免把
+# send-media 出站 handler 里的 media_type 误当入站接线（真实假阳性来源，已验证）。
+
+def _js_source(relpath: str) -> Optional[str]:
+    p = Path(__file__).resolve().parents[2] / relpath
+    try:
+        return p.read_text(encoding="utf-8") if p.is_file() else None
+    except OSError:
+        return None
+
+
+def _mask_js_strings(src: str) -> str:
+    """把 JS 字符串字面量**与注释**内容打成空格（保长度/换行），供括号配对与键定位。
+
+    - 模板串 ``${WA_MEDIA_URL_BASE}/${fname}`` 里的花括号会干扰配对；
+    - 注释里的 ``direction:"out"`` 之类字样会被键定位误命中（messenger 边车里
+      真有这样的注释）——两者都必须掩掉。掩码不改变任何偏移：结构分析在掩码
+    文本上做、取值时按同一偏移回原文切片。
+
+    ⚠ **单/双引号串不跨行**是这里唯一的抗错锚（2026-08-20 实锤）：本掩码器不认
+    正则字面量，messenger 边车 37k 处的 ``/can\\'t display/i`` 里那个转义引号
+    曾被当成字符串开头，引号配对从此一路带偏 → ``direction:`` 命中从十几处塌成
+    2 处，判据对文件后半段**彻底失明**（群接线明明写了却报「没接」）。遇到换行就
+    判定「这个引号不是串的开头」并回滚本次掩码，把误伤锁死在一行内。
+    """
+    out = list(src)
+    i, n = 0, len(src)
+    while i < n:
+        ch = src[i]
+        if ch in ("'", '"', "`"):
+            q = ch
+            body_start = i + 1
+            j = body_start
+            aborted = False
+            while j < n:
+                c = src[j]
+                if c == "\\":
+                    j += 2
+                    continue
+                if c == q:
+                    break
+                if c == "\n" and q != "`":
+                    aborted = True  # 不是字符串（多为正则里的转义引号）
+                    break
+                j += 1
+            if aborted:
+                i += 1
+                continue
+            for k in range(body_start, min(j, n)):
+                if src[k] != "\n":
+                    out[k] = " "
+            i = min(j, n) + 1
+            continue
+        elif ch == "/" and i + 1 < n and src[i + 1] == "/":
+            while i < n and src[i] != "\n":
+                out[i] = " "
+                i += 1
+            continue
+        elif ch == "/" and i + 1 < n and src[i + 1] == "*":
+            out[i] = " "
+            out[i + 1] = " "
+            i += 2
+            while i < n:
+                if src[i] == "*" and i + 1 < n and src[i + 1] == "/":
+                    out[i] = " "
+                    out[i + 1] = " "
+                    i += 2
+                    break
+                if src[i] != "\n":
+                    out[i] = " "
+                i += 1
+            continue
+        i += 1
+    return "".join(out)
+
+
+def _js_payload_blocks(src: str) -> List[Tuple[int, int]]:
+    """返回所有「含 ``direction:`` 键的对象字面量」的 (open, close) 偏移对。"""
+    import re as _re
+    masked = _mask_js_strings(src)
+    blocks: List[Tuple[int, int]] = []
+    for m in _re.finditer(r"\bdirection\s*:", masked):
+        # 向后回溯到本对象字面量的开括号（掩码文本上配对，模板串花括号已消毒）
+        depth = 0
+        open_at = -1
+        for i in range(m.start() - 1, -1, -1):
+            c = masked[i]
+            if c == "}":
+                depth += 1
+            elif c == "{":
+                if depth == 0:
+                    open_at = i
+                    break
+                depth -= 1
+        if open_at < 0:
+            continue
+        depth = 0
+        close_at = -1
+        for i in range(open_at, len(masked)):
+            c = masked[i]
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    close_at = i
+                    break
+        if close_at > open_at and (open_at, close_at) not in blocks:
+            blocks.append((open_at, close_at))
+    return blocks
+
+
+def _js_value_expr(src: str, block: Tuple[int, int], key: str) -> Optional[str]:
+    """取对象字面量里 ``key:`` 的值表达式**原文**（掩码文本定位、原文切片）。"""
+    import re as _re
+    masked = _mask_js_strings(src)
+    open_at, close_at = block
+    m = _re.search(r"\b%s\s*:" % _re.escape(key), masked[open_at:close_at])
+    if not m:
+        return None
+    start = open_at + m.end()
+    depth = 0
+    end = close_at
+    for i in range(start, close_at):
+        c = masked[i]
+        if c in "({[":
+            depth += 1
+        elif c in ")}]":
+            depth -= 1
+        elif c == "," and depth == 0:
+            end = i
+            break
+    return src[start:end].strip()
+
+
+def _js_const_empty(expr: str) -> bool:
+    """值表达式是否为**常量空串**（IG 的 ``chat_type: ""`` 形态＝显式没接线）。"""
+    s = (expr or "").strip()
+    return s in ('""', "''", "``") or not s
+
+
+def _js_ingest_key_wired(src: str, key: str, *, must_contain: str = "") -> bool:
+    """任一 ingest payload 块里 ``key`` 接了线（值非常量空串；可要求值含特定字面量）。"""
+    for block in _js_payload_blocks(src):
+        expr = _js_value_expr(src, block, key)
+        if expr is None or _js_const_empty(expr):
+            continue
+        if must_contain and must_contain not in expr:
+            continue
+        return True
+    return False
+
+
 def inbound_media_wired(row_key: str) -> Optional[bool]:
     """该平台的入站 handler 有没有把媒体字段带进 payload。
 
@@ -174,6 +340,11 @@ def inbound_media_wired(row_key: str) -> Optional[bool]:
     if not site:
         return None
     module, dotted = site
+    if module == "js":
+        src = _js_source(dotted)
+        if src is None:
+            return None
+        return _js_ingest_key_wired(src, "media_type")
     src = _module_source(module)
     if src is None:
         return None
@@ -185,6 +356,116 @@ def inbound_media_wired(row_key: str) -> Optional[bool]:
     if func is None:
         return None
     return _forwards_media_type(func)
+
+
+# ── 群会话三列（2026-08-19 群/频道 P0）─────────────────────────────────────────
+# 「群消息进箱」的事实源按行分**三种**（与收媒体列同理：判定点必须在事实发生处）：
+#   sink  Telegram 两档不靠 handler 标注——chat_key 即 chat_id，群/频道为负数，
+#         由落库层 ``normalizer.infer_chat_type`` 启发式分流。判定＝**真调用**该函数
+#         （可执行的活判据，函数改了立刻红）。
+#   py    LINE protocol 在 handler 里显式 ``payload["chat_type"]="group"``（AST 判定）。
+#   js    四个 Node 边车在 ingest payload 里带（或不带）``chat_type``（文本判定；
+#         值必须真含 "group"——IG 的 ``chat_type:""`` 显式空串＝没接线，不算数）。
+
+#: sink 启发式行 → 代表性群 chat_key 探针（负数 TG 群 id）。
+GROUP_SINK_PROBES: Dict[str, str] = {
+    "telegram:protocol": "-1001234567890",
+    "telegram:protocol(companion)": "-1001234567890",
+}
+
+
+def _forwards_group_chat_type(func: ast.AST) -> bool:
+    """函数体内是否把非空 ``chat_type`` 带进 payload（三种真实形态都认）：
+
+    - 调用关键字：``make_message(..., chat_type=ct)``
+    - 下标赋值：``payload["chat_type"] = "group"``（LINE protocol 的实际形态）
+    - 字典字面量：``{"chat_type": _chat_type_str or "private"}``（A 线的实际形态）
+    """
+    def _nonempty(v: ast.AST) -> bool:
+        return not (isinstance(v, ast.Constant) and not str(v.value or "").strip())
+
+    for node in ast.walk(func):
+        if isinstance(node, ast.Call):
+            for kw in node.keywords:
+                if kw.arg == "chat_type" and _nonempty(kw.value):
+                    return True
+        elif isinstance(node, ast.Dict):
+            for k, v in zip(node.keys, node.values):
+                if (isinstance(k, ast.Constant) and k.value == "chat_type"
+                        and v is not None and _nonempty(v)):
+                    return True
+        elif isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                if (isinstance(tgt, ast.Subscript)
+                        and isinstance(tgt.slice, ast.Constant)
+                        and tgt.slice.value == "chat_type"
+                        and _nonempty(node.value)):
+                    return True
+    return False
+
+
+def group_inbound_wired(row_key: str) -> Optional[bool]:
+    """该行的群消息能否被标注/分流进统一收件箱（``None``＝站点找不到＝渲染 ?）。"""
+    if row_key in GROUP_SINK_PROBES:
+        try:
+            from src.inbox.normalizer import infer_chat_type
+            platform = row_key.split(":", 1)[0]
+            return infer_chat_type(platform, GROUP_SINK_PROBES[row_key]) == "group"
+        except Exception:  # noqa: BLE001
+            return None
+    site = INBOUND_SITES.get(row_key)
+    if not site:
+        return None
+    module, dotted = site
+    if module == "js":
+        src = _js_source(dotted)
+        if src is None:
+            return None
+        return _js_ingest_key_wired(src, "chat_type", must_contain="group")
+    src = _module_source(module)
+    if src is None:
+        return None
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return None
+    func = _find_func(tree, dotted)
+    if func is None:
+        return None
+    return _forwards_group_chat_type(func)
+
+
+#: 群管理方法 → 中文标签（hasattr 判据，与 ``CAPABILITY_METHODS`` 同哲学）。
+#: 当前全库只有 TG companion 的 ``invite_to_group``；其余方法名是 P2 的**预留契约**
+#: （新 worker 按这些名字实现即自动进表，勿另起名）。
+GROUP_ADMIN_METHODS: Dict[str, str] = {
+    "invite_to_group": "拉人",
+    "create_group": "建群",
+    "kick_group_member": "踢人",
+    "rename_group": "改名",
+}
+
+
+def worker_group_admin(worker: Any) -> List[str]:
+    """内省 worker 实例的群管理能力标签列表（空列表＝无）。"""
+    return [label for meth, label in GROUP_ADMIN_METHODS.items()
+            if hasattr(worker, meth)]
+
+
+def group_send_state(row: Dict[str, Any]) -> Optional[bool]:
+    """「群内可发」＝群消息进箱 ∧ 发文本。
+
+    推导而非独立判据：WA(@g.us)/LINE(gid)/TG(负 id) 的群地址**自描述**，send 与私聊
+    同方法；Zalo 由边车群注册表自动解析 ThreadType（services/zalo-personal/
+    group-registry.js，2026-08-19 修复——此前 Python 侧不传 chat_type、群回复按
+    User 发）。看不见群（进箱 -）的平台谈不上群内回复，如实 ``-``。
+    """
+    if not row.get("available"):
+        return None
+    rg = row.get("recv_group")
+    if rg is None:
+        return None
+    return bool(rg and (row.get("caps") or {}).get("send_text"))
 
 
 def worker_capabilities(worker: Any) -> Dict[str, bool]:
@@ -222,7 +503,7 @@ def capability_matrix(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
         key = "%s:%s" % (platform, mode)
         w = _instantiate(module, cls_name, cfg)
         site = INBOUND_SITES.get(key)
-        out[key] = {
+        row: Dict[str, Any] = {
             "platform": platform,
             "mode": mode,
             "class": "%s.%s" % (module, cls_name),
@@ -232,8 +513,14 @@ def capability_matrix(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
             # 入站与出站的**判据来源不同**（这个是源码接线，上面那些是方法内省），
             # 故单列一个键而不是混进 caps——省得后人以为它们同源。
             "recv_media": inbound_media_wired(key),
+            # 群三列（2026-08-19）：进箱=接线判定（sink/py/js 三种事实源），
+            # 管理=方法内省，可发=推导（见 group_send_state）。
+            "recv_group": group_inbound_wired(key),
+            "group_admin": (worker_group_admin(w) if w is not None else None),
             "inbound_site": ("%s::%s" % site) if site else "",
         }
+        row["group_send"] = group_send_state(row)
+        out[key] = row
     return out
 
 
@@ -261,6 +548,12 @@ def switched_cells(config: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[st
 
 #: 入站列的表头（判据来源与出站四列不同，见 ``inbound_media_wired``）
 INBOUND_LABEL = "收图/语音（AI 可见）"
+
+#: 群三列表头（判据来源见 ``group_inbound_wired`` / ``group_send_state`` /
+#: ``GROUP_ADMIN_METHODS``）
+GROUP_RECV_LABEL = "群消息进箱"
+GROUP_SEND_LABEL = "群内可发"
+GROUP_ADMIN_LABEL = "群管理 API"
 
 #: 「自动回复设置」页拟人链关心的两项能力（键与 ``CAPABILITY_METHODS`` 对齐）
 HUMANIZE_CAPS = ("mark_read", "typing")
@@ -425,6 +718,14 @@ __all__ = [
     "humanize_caps_by_platform",
     "INBOUND_SITES",
     "INBOUND_LABEL",
+    "GROUP_RECV_LABEL",
+    "GROUP_SEND_LABEL",
+    "GROUP_ADMIN_LABEL",
+    "GROUP_ADMIN_METHODS",
+    "GROUP_SINK_PROBES",
+    "group_inbound_wired",
+    "group_send_state",
+    "worker_group_admin",
     "ACCEPTED_MISMATCHES",
     "MIN_LIVE_SAMPLE",
     "code_flags",

@@ -111,6 +111,9 @@ def diagnose(root: Path, platform: str, account_id: str,
     reg = _ro(cfg_dir / "account_registry.db")
     created_at = 0.0
     business_line = ""
+    # 实施72 P2：meta 快照显式注入 effective_automation（identity_pending /
+    # reconnect_backlog 两层在 CLI 进程里 peek 不到注册表单例，注入才能同口径）
+    acct_meta: Dict[str, Any] = {}
     if reg is not None:
         r = _row(reg, "SELECT * FROM platform_accounts WHERE platform=? AND "
                       "account_id=?", (platform, account_id))
@@ -120,6 +123,7 @@ def diagnose(root: Path, platform: str, account_id: str,
                 meta = json.loads(r.get("meta_json") or "{}")
             except Exception:
                 meta = {}
+            acct_meta = dict(meta)
             created_at = float(r.get("created_at") or 0.0)
             business_line = str(r.get("business_line")
                                 or meta.get("business_line") or "")
@@ -197,7 +201,11 @@ def diagnose(root: Path, platform: str, account_id: str,
         eff = effective_automation(
             store, cfg, conversation_id=cid, platform=platform,
             account_id=account_id, business_line=business_line or None,
-            connected_at=created_at)
+            connected_at=created_at,
+            # 实施72 P2：显式注入（CLI 进程无注册表单例/无完整 store 面）——
+            # identity_pending / reconnect_backlog / own_fleet_peer 三层同口径可见
+            peer_name=str(conv.get("display_name") or ""),
+            account_meta=acct_meta)
     except Exception as exc:  # pragma: no cover - 排障工具自身别崩
         eff = {"error": str(exc)}
     out["effective"] = eff

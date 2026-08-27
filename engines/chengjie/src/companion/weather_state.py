@@ -24,6 +24,8 @@ __all__ = [
     "weather_chat_note",
     "weather_proactive_hook",
     "scene_conflicts_with_weather",
+    "snap_for_persona",
+    "weather_scene_suffix",
     "wmo_label",
     "dump_stats",
     "reset_stats_for_tests",
@@ -288,6 +290,75 @@ def scene_conflicts_with_weather(scene: str, snap: Optional[WeatherSnapshot]) ->
         return False
     except Exception:
         return False
+
+
+# ── 图链天气接线（2026-08-18 天气匹配生活照）────────────────────────────────
+# scene_conflicts_with_weather 自 07 起就在 pick_scene_hint 里备好了 weather_snap
+# 形参，但**没有任何生产调用方真的传**——过滤一直休眠（暴雨天照样轮到
+# "beach picnic"）。下面两个函数是接线件：快照解析（各图链共用）+ 强天气氛围
+# 后缀（正向匹配：雨天的照片带雨天的光）。
+
+def snap_for_persona(
+    persona: Any, weather_cfg: Optional[Dict[str, Any]],
+) -> Optional["WeatherSnapshot"]:
+    """人设城市当前天气快照（图链场景过滤/氛围注入用）；任何不满足 → None。
+
+    闸门：``companion.weather.enabled`` + ``scene_filter``（默认开，随父）。
+    缺坐标/取数失败/异常一律 None（调用方按「无天气信息」走旧行为）；
+    TTL 缓存沿用 ``fetch_weather``（与问候链共享同一份缓存，零额外请求）。
+    """
+    try:
+        wc = weather_cfg if isinstance(weather_cfg, dict) else {}
+        if not wc.get("enabled") or not wc.get("scene_filter", True):
+            return None
+        from src.companion.persona_location import resolve_place_with_fallback
+        place = resolve_place_with_fallback(
+            persona if isinstance(persona, dict) else {})
+        if place is None:
+            return None
+        return fetch_weather(
+            place,
+            ttl_sec=int(wc.get("ttl_sec") or 1800),
+            max_stale_sec=int(wc.get("max_stale_sec") or 10800),
+        )
+    except Exception:
+        return None
+
+
+# 强天气 → 生图氛围短语（仅强信号注入；晴/多云/未知不硬塞——大多数照片
+# 本来就看不出天气，只有雨雪雾天不带氛围才显得「活在另一个世界」）。
+_SCENE_WEATHER_SUFFIX: Dict[str, str] = {
+    "rain": "rainy day ambience, overcast soft light",
+    "drizzle": "light drizzle, overcast soft light",
+    "storm": "stormy sky, moody dark clouds",
+    "snow": "snowy day, soft cold light",
+    "fog": "foggy atmosphere, diffuse light",
+}
+
+_SCENE_WEATHER_WORDS = (
+    "rain", "drizzle", "storm", "snow", "fog", "sunny", "overcast", "cloudy",
+)
+
+
+def weather_scene_suffix(scene: str, snap: Optional["WeatherSnapshot"]) -> str:
+    """场景短语的强天气氛围后缀（不含逗号前缀）；无需注入 → ""。
+
+    - 快照缺失 / 非强天气桶（clear/cloudy/unknown）→ ""；
+    - 场景已自带天气词（含 LLM 指令场景「rainy window」）→ ""（尊重现有描述）；
+    - 陈旧快照（stale）照常注入——氛围是模糊描述，不像温度数值有精确性风险。
+    """
+    try:
+        if snap is None:
+            return ""
+        suffix = _SCENE_WEATHER_SUFFIX.get(str(snap.bucket or ""))
+        if not suffix:
+            return ""
+        low = str(scene or "").lower()
+        if any(w in low for w in _SCENE_WEATHER_WORDS):
+            return ""
+        return suffix
+    except Exception:
+        return ""
 
 
 def dump_stats() -> Dict[str, int]:

@@ -62,7 +62,8 @@ export async function tgCall(method: string, body: Record<string, unknown>) {
 }
 
 export function mainMenuKeyboard(lang: BotLang): InlineBtn[][] {
-  const ai = lang === "zh" ? "👨‍💼 顾问顾嘉（问我）" : "👨‍💼 Ask Gary (consultant)";
+  const ai = lang === "zh" ? "👨‍💼 顾问小界（问我）" : "👨‍💼 Ask Jie (consultant)";
+  const dl = lang === "zh" ? "⬇️ 免费下载 智聊 ChatX" : "⬇️ Download ChatX (free)";
   const open = lang === "zh" ? "🚀 打开官网" : "🚀 Open site";
   const rt = lang === "zh" ? "🎭 实时换脸" : "🎭 Live swap";
   const ac = lang === "zh" ? "💬 AI 成交" : "💬 AI closing";
@@ -75,6 +76,9 @@ export function mainMenuKeyboard(lang: BotLang): InlineBtn[][] {
 
   return [
     [{ text: ai, callback_data: "ask_ai" }],
+    // 主推位（2026-08-22 ChatX 聚焦）：bot 菜单是曝光最高的常驻面，下载深链直达
+    // /download/chatx，campaign=menu-dl 可在 /api/admin/chatx-funnel 单独归因。
+    [{ text: dl, url: siteUtmLink("bot", "menu-dl", "/download/chatx") }],
     // 「打开官网」用 url 按钮打开完整营销站（TG 内置浏览器），与轻量小程序分工区隔。
     [{ text: open, url: siteUtmLink("bot", "menu") }],
     [
@@ -247,7 +251,7 @@ export async function handleCommand(
 /** 客服场景键盘：AI 提问 / 常见问题 / 转人工（转人工会同步通知管理员迎接） */
 function csKeyboard(lang: BotLang): InlineBtn[][] {
   return [
-    [{ text: lang === "zh" ? "👨‍💼 直接问顾嘉（秒回）" : "👨‍💼 Ask Gary (instant)", callback_data: "ask_ai" }],
+    [{ text: lang === "zh" ? "👨‍💼 直接问小界（秒回）" : "👨‍💼 Ask Jie (instant)", callback_data: "ask_ai" }],
     [{ text: lang === "zh" ? "❓ 常见问题" : "❓ FAQ", callback_data: "faq_list" }],
     [{ text: lang === "zh" ? "🙋 转人工客服" : "🙋 Human support", callback_data: "cs_human" }],
   ];
@@ -312,8 +316,8 @@ export async function handleGroupMessage(
   if (!text.trim()) {
     const intro =
       lang === "zh"
-        ? "👋 <b>无界科技 BOUNDLESS 方案顾问 顾嘉（Gary）</b>在这\n🎭 换脸 · 🎙 克隆声音 · 🎬 直播换脸换声 · 🌐 实时换语言 · 💬 AI 自动成交 · 🔐 私有部署\n\n直接 @我提问，或点下方按钮 👇"
-        : "👋 <b>Gary, BOUNDLESS solutions consultant</b> here\n🎭 face swap · 🎙 voice clone · 🎬 live face/voice swap · 🌐 live translation · 💬 AI closing · 🔐 private deploy\n\n@mention me with a question, or tap below 👇";
+        ? "👋 <b>无界科技 BOUNDLESS 方案顾问 小界（Jie）</b>在这\n💬 AI 自动成交 · 🌐 实时换语言 · 🎭 换脸 · 🎙 克隆声音 · 🎬 直播换脸换声 · 🔐 私有部署\n\n直接 @我提问，或点下方按钮 👇"
+        : "👋 <b>Jie, BOUNDLESS solutions consultant</b> here\n💬 AI closing · 🌐 live translation · 🎭 face swap · 🎙 voice clone · 🎬 live face/voice swap · 🔐 private deploy\n\n@mention me with a question, or tap below 👇";
     await sendText(chatId, intro, links, { replyTo });
     return;
   }
@@ -365,8 +369,8 @@ export async function handleCallback(
     await sendText(
       chatId,
       lang === "zh"
-        ? `👤 已为你转人工客服：点下方按钮直达。\n人工已收到提醒，会尽快回复你；急事也可以先把问题发在这里，顾嘉先答。`
-        : `👤 Connecting you to human support — tap below.\nOur team has been notified and will reply soon; meanwhile Gary can answer here instantly.`,
+        ? `👤 已为你转人工客服：点下方按钮直达。\n人工已收到提醒，会尽快回复你；急事也可以先把问题发在这里，小界先答。`
+        : `👤 Connecting you to human support — tap below.\nOur team has been notified and will reply soon; meanwhile Jie can answer here instantly.`,
       [[{ text: lang === "zh" ? "👤 打开人工客服" : "👤 Open human support", url: CONTACT_URL }]]
     );
     const who = from?.username ? `@${from.username}` : from?.first_name ? `${from.first_name}（id ${chatId}）` : `id ${chatId}`;
@@ -413,8 +417,8 @@ export async function handleCallback(
     await sendText(
       chatId,
       lang === "zh"
-        ? "👨‍💼 我是方案顾问<b>顾嘉（Gary）</b>，直接把问题发给我即可，比如：\n· 换脸怎么收费？\n· AI 成交聊天能接哪些平台？\n· 私有部署多少钱？\n\n需要其他同事随时点「👤 人工客服」。"
-        : "👨‍💼 I'm <b>Gary, your solutions consultant</b> — just send me your question, e.g.:\n· How much is face swap?\n· Which platforms does AI closing support?\n· What's the price of private deployment?\n\nNeed a human colleague? Tap \"👤 Human support\" anytime.",
+        ? "👨‍💼 我是方案顾问<b>小界（Jie）</b>，直接把问题发给我即可，比如：\n· 智聊 ChatX 怎么收费？\n· AI 成交聊天能接哪些平台？\n· 私有部署多少钱？\n\n需要其他同事随时点「👤 人工客服」。"
+        : "👨‍💼 I'm <b>Jie, your solutions consultant</b> — just send me your question, e.g.:\n· How is ChatX priced?\n· Which platforms does AI closing support?\n· What's the price of private deployment?\n\nNeed a human colleague? Tap \"👤 Human support\" anytime.",
       [[{ text: lang === "zh" ? "👤 人工客服" : "👤 Human support", url: CONTACT_URL }]]
     );
     return;
@@ -488,32 +492,33 @@ export async function setupBot(opts?: { skipWebhook?: boolean }) {
 
   await run("setMyShortDescription(zh)", "setMyShortDescription", {
     short_description:
-      "换脸·克隆声音·直播换脸换声·实时换语言·AI自动成交。私有部署 · USDT 结算。",
+      "智聊 ChatX：AI自动成交·实时互译，下载即免费开始。另有换脸·克隆声音·直播分身·私有部署 · USDT 结算。",
   });
   // 注意：setMyShortDescription 上限 120 字符，超出会报 BOT_SHARETEXT_INVALID（英文版需精简）。
   await run("setMyShortDescription(en)", "setMyShortDescription", {
     short_description:
-      "Face swap, voice clone, live face/voice swap, live translation, AI auto-closing. Private deploy · USDT.",
+      "ChatX: AI auto-closing chat & live translation, free to start. Plus face swap, voice clone, private deploy · USDT.",
     language_code: "en",
   });
 
+  // 能力序与 brand.ts PRODUCT_ORDER 对齐（2026-08-21 起智聊 ChatX 领跑）。
   await run("setMyDescription(zh)", "setMyDescription", {
     description:
       `${BRAND.company.full} —— ${BRAND.company.tagline.zh}。\n\n` +
-      "🎭 幻颜 FaceX：AI 换脸\n" +
+      "💬 智聊 ChatX：AI 自动成交聊天 · 内置实时互译 · 下载即免费开始\n" +
       "🎙 幻声 VoiceX：AI 声音克隆\n" +
+      "🎭 幻颜 FaceX：AI 换脸\n" +
       "🎬 幻影 LiveX：实时直播换脸换声\n" +
-      "💬 智聊 ChatX：AI 自动成交聊天 · 内置实时互译\n" +
       "🔐 无界底座：自主可控私有部署，数据不出网\n\n" +
       "全程 USDT 结算。点 /start 打开菜单，或直接发消息问我。",
   });
   await run("setMyDescription(en)", "setMyDescription", {
     description:
       `${BRAND.company.full} — ${BRAND.company.tagline.en}\n\n` +
-      "🎭 FaceX: AI face swap\n" +
+      "💬 ChatX: AI auto-closing chat · built-in live translation · free to start\n" +
       "🎙 VoiceX: AI voice cloning\n" +
+      "🎭 FaceX: AI face swap\n" +
       "🎬 LiveX: real-time live face & voice swap\n" +
-      "💬 ChatX: AI auto-closing chat · built-in live translation\n" +
       "🔐 BOUNDLESS Engine: self-controlled private deployment, data stays off-net\n\n" +
       "Settled in USDT. Tap /start for the menu, or just message me.",
     language_code: "en",

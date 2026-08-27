@@ -466,12 +466,16 @@ def local_time_line(place: PersonaPlace, lang: str = "zh", now: Optional[datetim
                 f"你人在{place.display('zh')}，当地时间 {dt:%Y-%m-%d} "
                 f"{_WEEKDAYS_ZH[dt.weekday()]} {dt:%H:%M}（{part}）。"
                 f"问候与作息必须按这个当地时间，禁止按中国/菲律宾（UTC+8）时间说话。"
+                f"你提到自己在做的事、节令活动也要符合这个日期与季节"
+                f"（暑假里不说在排迎新、夏天不说在办圣诞），拿不准就不提。"
             )
         return (
             f"You are in {place.display('en')}. Local time: {dt:%Y-%m-%d} "
             f"{_WEEKDAYS_EN[dt.weekday()]} {dt:%H:%M} ({part}). "
             f"Greetings and daily routine must follow this local clock — "
-            f"do not speak as if you were on China/Philippines (UTC+8) time."
+            f"do not speak as if you were on China/Philippines (UTC+8) time. "
+            f"Activities and seasonal events you mention must also fit this "
+            f"date and season; when unsure, leave them out."
         )
     except Exception:
         return ""
@@ -511,12 +515,18 @@ def time_gap_line(place: Optional[PersonaPlace], lang: str = "zh", now: Optional
         num = f"{off:+g}"
         if str(lang or "zh").lower().startswith("zh"):
             return (
-                f"注意：你与中国有 {num} 小时时差，"
-                "对方白天可能正是你的深夜——表述作息时要自然体现这一点。"
+                f"注意：你与中国有 {num} 小时时差，对方白天可能正是你的深夜。"
+                "你自己的状态一律按你的当地时间表述，并在自然处带上「我这边」"
+                "限定（如「我这边刚过中午」）——这更像真的异地聊天；"
+                "在不确定对方时区时，不要臆断对方那边现在是什么时段。"
             )
         return (
             f"Note: you have a {num}-hour time difference with China; "
-            "the other person's daytime may be your late night — reflect this naturally when talking about your daily routine."
+            "the other person's daytime may be your late night. Always describe "
+            "your own state on your local clock, and naturally qualify it with "
+            "\"over here\" (e.g. \"it's just past noon over here\") — that is how "
+            "real long-distance chats sound; when the other person's timezone "
+            "is unknown, never assume what time of day it is for them."
         )
     except Exception:
         return None

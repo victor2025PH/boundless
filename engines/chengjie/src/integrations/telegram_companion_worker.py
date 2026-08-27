@@ -22,10 +22,69 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+async def run_on_client_loop(client_loop: Any, coro_factory: Any) -> Any:
+    """在 pyrogram client **自己的**事件循环上执行协程（loop 亲和守卫）。
+
+    pyrogram 的 Client/Session 在创建时绑定 ``asyncio.get_event_loop()``，
+    从别的 loop ``await`` 其 invoke/上传必炸 ``attached to a different loop``
+    （2026-08-17 实锤：companion 主号 client 活在 A 线 loop，web 路由的
+    贴纸/图片/语音发送在 ``upload.SaveFilePart`` 首块即崩；2026-08-16
+    voice_sender 同族先例）。两个 TG worker 共用本守卫（与
+    ``tg_delete_full_history`` 同一「共享 TG 助手放本模块」先例）：
+
+    - 同 loop → 直跑（零开销旧行为）；
+    - 跨 loop → ``run_coroutine_threadsafe`` 封送回 client 的 loop；
+    - client 的 loop 未在运行（worker 半死）→ 直跑，让真实异常如实暴露。
+    """
+    try:
+        cur = asyncio.get_running_loop()
+    except RuntimeError:
+        cur = None
+    if (client_loop is None or cur is None or client_loop is cur
+            or not client_loop.is_running()):
+        # 决策必须可观测（2026-08-17 排障教训：守卫静默时无法从外面分辨
+        # 「没生效」和「判了同 loop」）——direct 分支只在异常形态才值得说话。
+        if client_loop is not None and cur is not None and client_loop is not cur:
+            logger.info("[tg-loop-guard] direct (client loop not running) "
+                        "cur=%s client=%s", id(cur), id(client_loop))
+        return await coro_factory()
+    logger.info("[tg-loop-guard] marshalled cur=%s -> client=%s",
+                id(cur), id(client_loop))
+    fut = asyncio.run_coroutine_threadsafe(coro_factory(), client_loop)
+    return await asyncio.wrap_future(fut)
+
+
+def client_bound_loop(inner: Any) -> Any:
+    """pyrogram client 的**权威**事件循环（守卫封送目标的单一解析点）。
+
+    ``session.loop`` 优先——invoke/上传真正绑定的是 Session 创建时的 loop
+    （connect 时 ``asyncio.get_event_loop()``）；``Client.loop`` 是**构造时**
+    的 loop，构造与 start 分属两个 loop 时它会撒谎（2026-08-18 主号贴纸
+    悬案候选机制：守卫问了撒谎的 loop → 判同 loop 直跑 → 会话内部照崩）。
+    session 未建立（未 connect）时回落 Client.loop。
+    """
+    sess = getattr(inner, "session", None)
+    loop = getattr(sess, "loop", None) or getattr(inner, "loop", None)
+    # 2026-08-21 B14（内测打包版全媒体上传跨环，skuio 红框截图实锤：语音/图片同报
+    # 「<Queue ... SaveFilePart ...> is bound to a different event loop」）：
+    # 守卫封送对了还不够——pyrogram 2.0.106 save_file 第 108 行用 **Client.loop**
+    # （构造期 loop）create_task 起上传 worker，队列却绑定 save_file 运行所在的
+    # session loop。构造与 start 分属两环（打包态形态）时 worker 与队列各在一环。
+    # 在唯一解析点顺手把撒谎的 Client.loop 扶正，pyrogram 内部的 create_task /
+    # run_in_executor 才能与封送目标同环。
+    if loop is not None and getattr(inner, "loop", None) is not loop:
+        try:
+            inner.loop = loop
+        except Exception:
+            logger.debug("[tg-loop-guard] realign client.loop failed", exc_info=True)
+    return loop
 
 
 # ── 进程级运行时上下文（app 启动时注入；worker 读取以构建 A 线 client） ──────────
@@ -305,7 +364,23 @@ class TelegramCompanionWorker:
         self.state = "running"
         self.detail = ""
 
+    def _inner_client(self) -> Any:
+        return getattr(self.client, "client", None) if self.client is not None else None
+
+    async def _on_client_loop(self, coro_factory: Any) -> Any:
+        """web 路由等外部 loop 的调用统一过 loop 亲和守卫（见模块级
+        ``run_on_client_loop``）——「worker 客户端活在 web 线程 loop」的旧假设
+        已不成立（A 线 client 活在自己的 loop），跨 loop 直 await 必炸。
+        封送目标经 ``client_bound_loop``（session.loop 优先，Client.loop
+        构造/启动分家时会撒谎）。"""
+        inner = self._inner_client()
+        return await run_on_client_loop(client_bound_loop(inner), coro_factory)
+
     async def send(self, chat_key: str, text: str) -> Dict[str, Any]:
+        return await self._on_client_loop(
+            lambda: self._send_text_inner(chat_key, text))
+
+    async def _send_text_inner(self, chat_key: str, text: str) -> Dict[str, Any]:
         if self.client is None:
             raise RuntimeError("A 线 client 未连接")
         target: Any = chat_key
@@ -325,16 +400,37 @@ class TelegramCompanionWorker:
     async def _send_media_impl(self, chat_key: str, *, media_path: str,
                                media_type: str = "",
                                caption: str = "") -> Dict[str, Any]:
-        """发媒体（图/语音/视频/文件）。只在 ``companion_media`` 开时才被绑成
-        ``send_media`` —— 见 ``__init__`` 里那段说明，别改成普通方法。
+        """发媒体（图/语音/视频/贴纸/文件）。只在 ``companion_media`` 开时才被绑成
+        ``send_media`` —— 见 ``__init__`` 里那段说明，别改成普通方法。"""
+        # 排障插桩（2026-08-17 主号贴纸 loop 悬案）：入口即打 loop 事实——
+        # cur 与 client.loop 的对象 id 是否一致、inner 是否在。谜底揭开后可降 debug。
+        try:
+            _inner_dbg = self._inner_client()
+            _sess_loop = getattr(getattr(_inner_dbg, "session", None), "loop", None)
+            logger.info(
+                "[tg-loop-guard] send_media enter type=%s cur=%s client_loop=%s"
+                " sess_loop=%s inner=%s",
+                media_type, id(asyncio.get_running_loop()),
+                id(getattr(_inner_dbg, "loop", None)) if _inner_dbg is not None else "na",
+                id(_sess_loop) if _sess_loop is not None else "na",
+                _inner_dbg is not None)
+        except Exception:
+            pass
+        return await self._on_client_loop(
+            lambda: self._send_media_inner(
+                chat_key, media_path=media_path, media_type=media_type,
+                caption=caption))
 
-        走**内层 pyrogram**（``self.client.client``）而不是 A 线包装
+    async def _send_media_inner(self, chat_key: str, *, media_path: str,
+                                media_type: str = "",
+                                caption: str = "") -> Dict[str, Any]:
+        """走**内层 pyrogram**（``self.client.client``）而不是 A 线包装
         ``TelegramClient.send_photo``：后者自带收件箱出站镜像，而
         ``AccountOrchestrator.send_media`` 也会镜像一次 —— 委派过去会让一次发送在
         坐席台出现**两行**。护栏面与兄弟 worker ``TelegramProtocolWorker.send_media``
         一致（Kill-Switch / 反封号闸门 / 去重微扰都在编排器那一层统一做）。
         """
-        inner = getattr(self.client, "client", None) if self.client is not None else None
+        inner = self._inner_client()
         if inner is None:
             raise RuntimeError("A 线 client 未连接")
         target: Any = chat_key
@@ -349,6 +445,14 @@ class TelegramCompanionWorker:
             msg = await inner.send_voice(target, media_path, caption=caption)
         elif kind == "video":
             msg = await inner.send_video(target, media_path, caption=caption)
+        elif kind == "sticker":
+            # 2026-08-17 表情包主线：webp → TG 原生贴纸（与兄弟 worker 同分支；
+            # 此前缺失 → 贴纸落 else 被当 document 附件发出。send_sticker 无
+            # caption 形参——贴纸本无配文语义）。
+            msg = await inner.send_sticker(target, media_path)
+        elif kind == "animation":
+            # 动图贴纸走 GIF 动画（与兄弟 worker 同语义）
+            msg = await inner.send_animation(target, media_path, caption=caption)
         else:
             msg = await inner.send_document(target, media_path, caption=caption)
         return {"delivered": True, "message_id": str(getattr(msg, "id", "") or "")}
@@ -434,7 +538,7 @@ class TelegramCompanionWorker:
             target = int(chat_key)
         except (TypeError, ValueError):
             target = chat_key
-        await inner.read_chat_history(target)
+        await self._on_client_loop(lambda: inner.read_chat_history(target))
         return True
 
     async def delete_messages(self, chat_key: str, message_ids: List[str],
@@ -443,7 +547,8 @@ class TelegramCompanionWorker:
 
         与兄弟 worker ``TelegramProtocolWorker.delete_messages`` 同契约：
         ``revoke=True``＝对所有人删除；platform_msg_id 即 pyrogram 消息 id。
-        worker 客户端活在 web 线程 loop → 收件箱路由内直接 await 即可（同 loop）。
+        收件箱路由与 client 可能不同 loop → 经 ``_on_client_loop`` 守卫
+        （「同 loop 直接 await」的旧假设已不成立，2026-08-17 实锤）。
         """
         inner = getattr(self.client, "client", None) if self.client is not None else None
         if inner is None or not hasattr(inner, "delete_messages"):
@@ -461,7 +566,8 @@ class TelegramCompanionWorker:
                 continue
         if not ids:
             return {"ok": False, "reason": "bad_ids"}
-        n = await inner.delete_messages(target, ids, revoke=bool(revoke))
+        n = await self._on_client_loop(
+            lambda: inner.delete_messages(target, ids, revoke=bool(revoke)))
         try:
             n = int(n)
         except (TypeError, ValueError):
@@ -478,7 +584,8 @@ class TelegramCompanionWorker:
         inner = getattr(self.client, "client", None) if self.client is not None else None
         if inner is None or not hasattr(inner, "resolve_peer"):
             raise RuntimeError("A 线 client 未连接")
-        return await tg_delete_full_history(inner, chat_key, revoke=revoke)
+        return await self._on_client_loop(
+            lambda: tg_delete_full_history(inner, chat_key, revoke=revoke))
 
     async def send_chat_action(self, chat_key: str, action: str = "typing") -> bool:
         """挂「正在输入/录音」状态（经 A 线内层 pyrogram client）。"""
@@ -495,7 +602,7 @@ class TelegramCompanionWorker:
             act = ChatAction.RECORD_AUDIO if str(action) == "record_audio" else ChatAction.TYPING
         except Exception:
             return False
-        await inner.send_chat_action(target, act)
+        await self._on_client_loop(lambda: inner.send_chat_action(target, act))
         return True
 
     async def stop(self) -> None:

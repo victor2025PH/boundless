@@ -71,6 +71,13 @@ CHARS_PER_TOKEN_LEGACY = 100
 # Token 包有效期（月）与订阅月含量的自然过期语义。
 PACK_VALID_MONTHS = 12
 
+# 赠送批次有效期（月）——官网公示「赠送 Token 6 个月有效且**先扣**」（2026-08-21
+# 实施50 P2 修正）：allocate_spend 按「先到期先吸收」排序，赠送批带 6 个月过期
+# 自然排在 12/24 个月的实付包**之前**被扣——「先赠后实付」由到期序结构性成立，
+# 不需要另写优先级分支。旧实现赠送永不过期（None 排最后）＝实际先扣实付包，
+# 与公示口径相反；该批次语义修正时无任何生产调用方（钱包消费闸默认关）。
+BONUS_VALID_MONTHS = 6
+
 
 def tokens_for(action: str, units: float) -> int:
     """动作用量 → Token 数（不足一档向上取整；未知动作按 0=不计费并 debug 提示）。
@@ -149,10 +156,16 @@ def _month_end_epoch(now: Optional[float] = None) -> float:
     return calendar.timegm(nxt) - 1
 
 
-def _pack_expiry_epoch(now: Optional[float] = None) -> float:
-    """Token 包过期时刻 = 入账起 PACK_VALID_MONTHS 个自然月（近似 30.44 天/月）。"""
+def _pack_expiry_epoch(now: Optional[float] = None,
+                       months: Optional[float] = None) -> float:
+    """Token 包过期时刻 = 入账起 N 个自然月（近似 30.44 天/月；缺省 PACK_VALID_MONTHS）。
+
+    ``months`` 来自凭证 ``months`` 字段（实施50 P2）：承载「充值 ≥500U 实付
+    24 个月有效」的官网口径——有效期由**签发侧**定进签名契约，兑换端只执行。
+    """
     base = now if now is not None else time.time()
-    return base + PACK_VALID_MONTHS * 30.44 * 86400
+    m = float(months) if months and float(months) > 0 else float(PACK_VALID_MONTHS)
+    return base + m * 30.44 * 86400
 
 
 _DDL = """
@@ -232,10 +245,12 @@ class TokenLedgerStore:
 
     def grant_pack(
         self, lic_id: str, tokens: int, ref: str, note: str = "",
-        *, now: Optional[float] = None,
+        *, valid_months: Optional[float] = None, now: Optional[float] = None,
     ) -> bool:
-        """Token 包入账（ref=订单号；12 个月有效）。重复 ref → False。"""
-        return self._grant(ref, lic_id, tokens, "pack", _pack_expiry_epoch(now), note)
+        """Token 包入账（ref=订单号；缺省 12 个月有效，``valid_months`` 可覆写——
+        大额充值档 ≥500U 的 24 个月承诺经凭证 months 字段传到这里）。重复 ref → False。"""
+        return self._grant(ref, lic_id, tokens, "pack",
+                           _pack_expiry_epoch(now, valid_months), note)
 
     def grant_monthly(
         self, lic_id: str, tokens: int, *, now: Optional[float] = None, note: str = "",
@@ -248,9 +263,26 @@ class TokenLedgerStore:
         ref = f"monthly:{lic_id or 'default'}:{month}"
         return self._grant(ref, lic_id, tokens, "monthly", _month_end_epoch(now), note or month)
 
-    def grant_bonus(self, lic_id: str, tokens: int, ref: str, note: str = "") -> bool:
-        """注册奖励 / 字符池并账（migration）等一次性批次（永不过期）。"""
-        return self._grant(ref, lic_id, tokens, "bonus", None, note)
+    def grant_bonus(
+        self, lic_id: str, tokens: int, ref: str, note: str = "",
+        *, valid_months: Optional[float] = BONUS_VALID_MONTHS,
+        now: Optional[float] = None,
+    ) -> bool:
+        """赠送批次（注册奖励/活动加赠）：默认 **6 个月过期**（官网公示口径，且到期
+        序天然实现「先赠后实扣」——见 BONUS_VALID_MONTHS 注释）。
+        ``valid_months=None`` 显式永不过期（仅限明确的产品决策，勿当缺省用）。
+        """
+        exp = None
+        if valid_months is not None and valid_months > 0:
+            base = now if now is not None else time.time()
+            exp = base + float(valid_months) * 30.44 * 86400
+        return self._grant(ref, lic_id, tokens, "bonus", exp, note)
+
+    def grant_migration(self, lic_id: str, tokens: int, ref: str, note: str = "") -> bool:
+        """字符池 → Token 钱包并账批次（**永不过期**）：并的是客户已付真金白银的
+        存量价值，不是赠送——过期语义只属 bonus/monthly。kind=migration 单独立类，
+        会员页流水与审计能一眼分清「并账」与「奖励」。"""
+        return self._grant(ref, lic_id, tokens, "migration", None, note)
 
     # ── 支出与核算 ─────────────────────────────────────────────────────────
 
@@ -518,6 +550,34 @@ def check_token_balance(
     return out
 
 
+def record_fixed_spend(
+    lic_id: str, action: str, tokens: int, *, now: Optional[float] = None,
+) -> int:
+    """记一笔**定额**支出（价格由业务侧算好），返回实际记账 Token 数；绝不抛。
+
+    与 ``record_token_action`` 的分工：后者按「units × 费率表」计价，适用于翻译字符、
+    AI 回复这类**计量**动作；本函数用于**一次性购买**（如托管代理开通），其价格随
+    供应商成本与地区稀缺度浮动、由运营在自己的配置里定——塞进 ``TOKEN_RATES``
+    会让那张与官网公示逐条对齐的金标表失去「单一事实源」的意义。
+
+    ⚠ **无幂等键**：底层按 ``(钱包, 日, 动作)`` 累加，重复调用就是重复扣费。一次性
+    购买的幂等必须由调用方的订单唯一约束兜住（见 ``proxy_subscription`` 的
+    ``UNIQUE(charge_ref)``）。
+    """
+    try:
+        n = int(tokens or 0)
+        if n <= 0:
+            return 0
+        store = _ensure_store()
+        if store is None:
+            return 0
+        store.record_spend(lic_id, action, n, now=now)
+        return n
+    except Exception:
+        logger.debug("[token_ledger] record_fixed_spend 失败（已忽略）", exc_info=True)
+        return 0
+
+
 def record_token_action(
     lic_id: str, action: str, units: float, *, now: Optional[float] = None,
 ) -> int:
@@ -617,11 +677,12 @@ def record_action_for_status(
 
 def grant_pack_for_status(
     tokens: int, ref: str, *, lic_status: Any = None, note: str = "",
-    now: Optional[float] = None,
+    valid_months: Optional[float] = None, now: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Token 包入账（凭证兑换通道）。返回 {ok, error?, wallet, balance}。绝不抛。
 
     幂等 ref=订单号（同单重复兑换拒绝）；入账后立即回读余额供 UI 展示。
+    ``valid_months`` 透传自凭证 months 字段（缺省=PACK_VALID_MONTHS）。
     """
     try:
         st = lic_status
@@ -635,7 +696,8 @@ def grant_pack_for_status(
         if store is None:
             return {"ok": False, "error": "store_unavailable"}
         wallet = wallet_id_for_status(st)
-        if not store.grant_pack(wallet, tokens, ref, note, now=now):
+        if not store.grant_pack(wallet, tokens, ref, note,
+                                valid_months=valid_months, now=now):
             return {"ok": False, "error": "duplicate_ref", "wallet": wallet,
                     "balance": store.balance(wallet, now=now).get("balance", 0)}
         return {"ok": True, "wallet": wallet, "tokens": int(tokens),
@@ -784,7 +846,71 @@ def wallet_snapshot(lic_status: Any = None, *, now: Optional[float] = None) -> D
     return out
 
 
+# ── 观测出口（三件套之一/二：workspace metrics + Prometheus；ops 卡消费前者）────
+
+def metrics_snapshot() -> Dict[str, Any]:
+    """/api/workspace/metrics.token_ledger 数据源：wallet_snapshot 去掉批次明细
+    （grants 属会员页粒度，metrics 面保持轻量）。enabled=False 时仍给全零形状
+    ——消费方据 enabled 区分「没开」和「没流量」（spoken_style 同口径）。绝不抛。
+    """
+    try:
+        snap = wallet_snapshot()
+        snap.pop("grants", None)
+        snap.pop("rates", None)   # 费率表是静态公示，会员页/官网已有，metrics 不重复背
+        return snap
+    except Exception:
+        logger.debug("[token_ledger] metrics_snapshot 失败（零值）", exc_info=True)
+        return {"enabled": False, "enforce": False, "balance": 0, "total_spend": 0,
+                "today": 0, "by_action": {}, "shadow": {},
+                "fair_use": {"today": 0, "limit": _FAIR_USE_LIMIT, "exceeded": False}}
+
+
+def dump_prom() -> str:
+    """Prometheus text format（drafts_routes format=prometheus 分支消费）。
+
+    未启用 → 空串（零流量零输出，对齐 line_media/credpool 的「有流量才出」口径）。
+    """
+    try:
+        snap = metrics_snapshot()
+        if not snap.get("enabled"):
+            return ""
+        lines = [
+            "# HELP token_wallet_balance Token wallet balance (customer wallet).",
+            "# TYPE token_wallet_balance gauge",
+            f"token_wallet_balance {int(snap.get('balance') or 0)}",
+            "# HELP token_wallet_spend_total Total tokens spent (all time).",
+            "# TYPE token_wallet_spend_total counter",
+            f"token_wallet_spend_total {int(snap.get('total_spend') or 0)}",
+            "# HELP token_wallet_expired_lost Tokens expired unused.",
+            "# TYPE token_wallet_expired_lost gauge",
+            f"token_wallet_expired_lost {int(snap.get('expired_lost') or 0)}",
+            "# HELP token_spend_by_action_total Tokens spent per action.",
+            "# TYPE token_spend_by_action_total counter",
+        ]
+        for act, n in sorted((snap.get("by_action") or {}).items()):
+            lines.append(f'token_spend_by_action_total{{action="{act}"}} {int(n)}')
+        shadow = snap.get("shadow") or {}
+        if shadow:
+            lines += [
+                "# HELP token_shadow_total P5b shadow counters (delivery-point calibration).",
+                "# TYPE token_shadow_total counter",
+            ]
+            for k, n in sorted(shadow.items()):
+                lines.append(f'token_shadow_total{{key="{k}"}} {int(n)}')
+        fu = snap.get("fair_use") or {}
+        lines += [
+            "# HELP token_fair_use_today_chars Free standard-translation chars today.",
+            "# TYPE token_fair_use_today_chars gauge",
+            f"token_fair_use_today_chars {int(fu.get('today') or 0)}",
+        ]
+        return "\n".join(lines) + "\n"
+    except Exception:
+        logger.debug("[token_ledger] dump_prom 失败（空串）", exc_info=True)
+        return ""
+
+
 __all__ = [
+    "BONUS_VALID_MONTHS",
     "CHARS_PER_TOKEN_LEGACY",
     "FAIR_USE_TRANSLATE_CHARS_PER_DAY",
     "PACK_VALID_MONTHS",
@@ -794,11 +920,14 @@ __all__ = [
     "allocate_spend",
     "check_token_balance",
     "configure_token_ledger",
+    "dump_prom",
     "ensure_monthly_tokens",
+    "metrics_snapshot",
     "get_token_ledger",
     "grant_pack_for_status",
     "note_translate_fair_use",
     "record_action_for_status",
+    "record_fixed_spend",
     "record_shadow",
     "record_token_action",
     "reset_token_ledger",

@@ -102,6 +102,8 @@ def test_registered_workers_are_all_in_matrix():
             "whatsapp": {"protocol_enabled": True},
             "messenger": {"web_enabled": True},
             "line": {"protocol_enabled": True},
+            "zalo": {"web_enabled": True},
+            "instagram": {"web_enabled": True},
         },
     }
     AO.ensure_builtin_workers(cfg)
@@ -160,10 +162,28 @@ def test_inbound_checker_discriminates():
                   "        except Exception:\n            pass")
 
 
+#: 收媒体列的**已知真相**（2026-08-19 起判定点下沉到事实源后的实况）：
+#: Zalo 边车入站只发 [媒体] 占位不带 media_type、IG 边车只报线程预览——这两格
+#: 如实为 False。谁把它们接通了（边车 ingest payload 带上非空 media_type），
+#: 这里会红，提醒把真相表和矩阵文档一起更新。
+_RECV_MEDIA_TRUTH = {
+    "telegram:protocol": True,
+    "telegram:protocol(companion)": True,
+    "whatsapp:protocol": True,
+    "messenger:web": True,
+    "line:protocol": True,
+    "zalo:web": False,
+    "instagram:web": False,
+}
+
+
 def test_inbound_wiring_matches_known_truth():
-    """当下四条链**都**已接线（LINE 是 2026-07-31 本次补的，其余本来就有）。"""
-    for key in PC.INBOUND_SITES:
-        assert PC.inbound_media_wired(key) is True, "%s 入站媒体断线了" % key
+    """逐行核对收媒体接线实况（含诚实的 False——「未接」也是要钉住的事实）。"""
+    assert set(_RECV_MEDIA_TRUTH) == set(PC.INBOUND_SITES), "真相表与站点登记不同步"
+    for key, expect in _RECV_MEDIA_TRUTH.items():
+        assert PC.inbound_media_wired(key) is expect, (
+            "%s 收媒体接线实况变了（期望 %s）—— 同步 _RECV_MEDIA_TRUTH 与矩阵文档"
+            % (key, expect))
 
 
 def test_inbound_runtime_switch_caveat_is_accurate():
@@ -354,3 +374,177 @@ def test_matrix_reflects_known_asymmetries():
     for key in ("telegram:protocol", "telegram:protocol(companion)",
                 "whatsapp:protocol", "messenger:web", "line:protocol"):
         assert m[key]["recv_media"] is True, "%s 收不到媒体" % key
+    # Zalo/IG 个人号（2026-08-19 补进矩阵）：能发文本+媒体，但无已读/typing；
+    # 收媒体如实为 False（Zalo 边车入站占位、IG 只报预览）——接通后改真相表
+    for key in ("zalo:web", "instagram:web"):
+        row = caps(key)
+        assert row["send_text"] is True and row["send_media"] is True
+        assert row["mark_read"] is False and row["typing"] is False
+        assert m[key]["recv_media"] is False, "%s 收媒体接通了？同步真相表" % key
+
+
+# ─────────────────── 群三列（2026-08-19 群/频道 P0） ───────────────────
+
+#: 群消息进箱的**已知真相**：WA/Zalo 边车显式标注、LINE handler 显式标注、
+#: TG 两档靠落库层负数 id 启发式；Messenger（同线程 ≥2 发言人）与 IG（线程行
+#: 叠 ≥2 张头像）走网页 DOM 启发式——判据强度弱一档（矩阵文档已如实分档），
+#: 但**接线事实**为真，故此表记 True。全 True 不代表判得准，只代表都接了。
+_RECV_GROUP_TRUTH = {
+    "telegram:protocol": True,
+    "telegram:protocol(companion)": True,
+    "whatsapp:protocol": True,
+    "messenger:web": True,
+    "line:protocol": True,
+    "zalo:web": True,
+    "instagram:web": True,
+}
+
+
+def test_group_inbound_matches_known_truth():
+    assert set(_RECV_GROUP_TRUTH) == set(PC.INBOUND_SITES) | set(PC.GROUP_SINK_PROBES)
+    for key, expect in _RECV_GROUP_TRUTH.items():
+        assert PC.group_inbound_wired(key) is expect, (
+            "%s 群消息进箱实况变了（期望 %s）—— 同步 _RECV_GROUP_TRUTH 与矩阵文档"
+            % (key, expect))
+
+
+def test_group_send_is_derived_from_recv_and_send_text():
+    """群内可发 = 群消息进箱 ∧ 发文本（纯推导，三态语义）。"""
+    mk = lambda avail, rg, st: {"available": avail, "recv_group": rg,  # noqa: E731
+                                "caps": {"send_text": st}}
+    assert PC.group_send_state(mk(True, True, True)) is True
+    assert PC.group_send_state(mk(True, False, True)) is False
+    assert PC.group_send_state(mk(True, True, False)) is False
+    assert PC.group_send_state(mk(True, None, True)) is None
+    assert PC.group_send_state(mk(False, True, True)) is None
+    # 全矩阵自洽：每行的 group_send 都等于推导值
+    for key, row in PC.capability_matrix({}).items():
+        assert row["group_send"] == PC.group_send_state(row), key
+
+
+def test_group_checker_discriminates_py_forms():
+    """py AST 群判定必须认下真实三形态、拒掉空串形态（判不了负=装饰品）。"""
+    import ast as _ast
+
+    def wired(code):
+        return PC._forwards_group_chat_type(_ast.parse(code).body[0])
+
+    # LINE protocol 真实形态：下标赋值
+    assert wired('def f():\n    payload["chat_type"] = "group"')
+    # A 线真实形态：字典字面量（值为表达式）
+    assert wired('def f():\n    d = {"chat_type": ct or "private"}')
+    # 调用关键字形态
+    assert wired("def f():\n    make_message(chat_type=ct)")
+    # 显式空串 = 没接线
+    assert not wired('def f():\n    make_message(chat_type="")')
+    assert not wired('def f():\n    d = {"chat_type": ""}')
+    assert not wired('def f():\n    payload["chat_type"] = ""')
+    # 压根没有 chat_type
+    assert not wired("def f():\n    make_message(text=t, media_type=mt)")
+
+
+_JS_WIRED = """
+async function ingest(m) {
+  const isGroup = m.type === ThreadType.Group;
+  await postJson(URL, {
+    platform: "zalo", chat_key: tid,
+    text: t || "[媒体]", direction: "in",
+    chat_type: isGroup ? "group" : "",
+    media_type: media.media_type || "",
+  });
+}
+"""
+
+_JS_EMPTY_CONST = """
+async function poll(r) {
+  await postJson(URL, { text: r.preview, direction: "in", chat_type: "", msg_id: m });
+}
+"""
+
+_JS_OUTBOUND_ONLY = """
+app.post("/send-media", (req, res) => {
+  const mediaType = String(req.body.media_type || "");
+  doSend({ media_type: mediaType });  // 无 direction: 的块＝出站，不算入站接线
+});
+async function poll(r) {
+  await postJson(URL, { text: r.preview, direction: "in" });
+}
+"""
+
+_JS_TEMPLATE_BRACES = """
+async function ingest(m) {
+  const ref = `${BASE}/${fname}`;
+  await postJson(URL, {
+    direction: fromMe ? "out" : "in",
+    chat_type: isGroup ? "group" : "",
+    media_ref: `${BASE}/${fname}`,
+  });
+}
+"""
+
+
+#: 2026-08-20 实锤：掩码器不认正则字面量，``/can\'t display/i`` 里那个转义单引号
+#: 被当成字符串开头，引号配对从此带偏 → 后文整段被当字符串掩掉，`direction:`
+#: 命中从十几处塌成 2 处，messenger 边车「群已接线」被误判成没接。判据对文件
+#: 后半段失明是最坏的一类 bug（矩阵会**理直气壮地说反话**），故单列回归钉。
+_JS_REGEX_ESCAPED_QUOTE = r"""
+function clean(s) {
+  return String(s).replace(/can\'t display/i, "").replace(/it\"s/i, "");
+}
+async function ingest(m) {
+  await postJson(URL, {
+    direction: "in",
+    chat_type: isGroup ? "group" : "",
+  });
+}
+"""
+
+
+def test_js_masker_survives_regex_escaped_quote():
+    assert PC._js_ingest_key_wired(_JS_REGEX_ESCAPED_QUOTE, "chat_type",
+                                   must_contain="group"), \
+        "掩码器又被正则里的转义引号带偏了（判据会对文件后半段失明）"
+    # 直接钉掩码器本身：换行不得被吞进「字符串」
+    masked = PC._mask_js_strings(_JS_REGEX_ESCAPED_QUOTE)
+    assert masked.count("\n") == _JS_REGEX_ESCAPED_QUOTE.count("\n")
+    assert "direction" in masked and "chat_type" in masked
+
+
+def test_js_ingest_judgement_discriminates():
+    """js 文本判定：认 ternary 真接线、拒显式空串、拒出站块、模板串花括号不破结构。"""
+    assert PC._js_ingest_key_wired(_JS_WIRED, "chat_type", must_contain="group")
+    assert PC._js_ingest_key_wired(_JS_WIRED, "media_type")
+    # IG 真实形态：显式 chat_type:"" ＝没接线
+    assert not PC._js_ingest_key_wired(_JS_EMPTY_CONST, "chat_type",
+                                       must_contain="group")
+    # media_type 只出现在出站 handler（无 direction: 的块）→ 不算入站接线
+    assert not PC._js_ingest_key_wired(_JS_OUTBOUND_ONLY, "media_type")
+    # 模板字符串里的花括号被掩码，payload 块仍能正确圈出
+    assert PC._js_ingest_key_wired(_JS_TEMPLATE_BRACES, "chat_type",
+                                   must_contain="group")
+
+
+def test_group_admin_reflects_worker_methods():
+    """群管理列＝方法内省：当下全库只有 TG companion 的拉人；预留契约名钉住。"""
+    assert set(PC.GROUP_ADMIN_METHODS) == {
+        "invite_to_group", "create_group", "kick_group_member", "rename_group"}
+    m = PC.capability_matrix({})
+    row = m.get("telegram:protocol(companion)")
+    if row is None or not row["available"]:
+        pytest.skip("本机构造不出 telegram companion worker")
+    assert row["group_admin"] == ["拉人"]
+    for key in ("whatsapp:protocol", "zalo:web", "line:protocol",
+                "messenger:web", "instagram:web"):
+        r = m.get(key)
+        if r is None or not r["available"]:
+            continue
+        assert r["group_admin"] == [], "%s 长出群管理方法了？更新真相与文档" % key
+
+
+def test_group_columns_documented():
+    """三列表头 + 频道刻意不覆盖说明必须在生成文档里。"""
+    text = render_matrix({})
+    for label in (PC.GROUP_RECV_LABEL, PC.GROUP_SEND_LABEL, PC.GROUP_ADMIN_LABEL):
+        assert label in text
+    assert "频道（channel/OA/broadcast）刻意不进本表" in text
+    assert "group-registry.js" in text  # Zalo 群发修复的事实源指路

@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<!--
+  开机动画「赛博朋克首启序列」· 人眼层验收预览（splash P0 2026-08-22）
+  ═══════════════════════════════════════════════════════════════════
+  与 acceptance-preview.html 同哲学：**真代码驱动，零平行实现**——本页加载的是
+  真 splash.css / splash-model.js / shell-i18n.js，并且每次场景重播都注入**真
+  splash.js 驱动本体**；被 mock 的只有 window.shell 的三个 IPC（getConfig /
+  backendHealth / backendSpawnStatus）与事件时间线。改了任何 splash 模块，
+  本页行为立刻跟着变，不存在「预览是对的、真机是错的」。
+
+  用法：浏览器直接打开本文件（file:// 即可），点右上场景按钮。
+
+  === 人眼验收清单 ===
+  ① 冷启动全幕：无界 LOGO 光晕入场 →2.2s ChatX 接管；进度导管 12/68/88 三个
+     菱形节点在真实里程碑处点亮并脉冲；氛围行 2.4s 轮换且故障闪 ≤1 次/条；
+     真实行 [阶段 n/6] 秒数递增、engine 段先给「预计还需」；就绪时光波扫过
+     → 整层溶解。
+  ② 慢速冷启：超过 ETA 后「预计还需」消失，换「首次启动较慢（仅此一次）」
+     ——诚实降级，绝不出现倒着走的进度或编造的倒计时。
+  ③ 暖启动闪场：无第一幕，ChatX 直出 +「欢迎回来，指挥官」，≈1.2s 收幕，
+     无进度导管（快机上任何进度条都是噪音）。
+  ④ 故障→恢复：错误面板 verbatim 显示 renderer 状态机文案；「重试连接」回派
+     aitr:splash-retry（本页模拟 renderer 收到后恢复 loading→ready）；
+     「复制诊断信息」落剪贴板。
+  ⑤ 白标让位：config.brand 非空 → 整层瞬间拆除（默认品牌零泄漏）。
+  另：任意时刻 Esc / 3s 后的「跳过动画」→ 极简态（静态 LOGO + 细进度）。
+
+  ⚠ 本页与真壳同为 file:// 源，共享 localStorage——场景会临时写
+  aitr.splash.last_cold_ms（自适应 ETA），页面关闭时自动还原原值。
+-->
+<html lang="zh" data-cp-theme="dark">
+<head>
+<meta charset="utf-8" />
+<title>开机动画 · 验收预览</title>
+<link rel="stylesheet" href="../renderer/splash.css" />
+<script src="../renderer/shell-i18n.js"></script>
+<style>
+  body { margin: 0; background: #05060f; min-height: 100vh; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
+  /* 场景控制条：压在 splash 之上（仅预览页存在） */
+  .pv-bar {
+    position: fixed; top: 10px; right: 10px; z-index: 999999;
+    display: flex; gap: 6px; flex-wrap: wrap; max-width: 560px; justify-content: flex-end;
+  }
+  .pv-bar button {
+    background: rgba(10, 12, 27, .9); color: #cdd9e5; border: 1px solid #33507a;
+    border-radius: 8px; padding: 6px 12px; font-size: 12px; cursor: pointer;
+  }
+  .pv-bar button:hover { border-color: #7a3bf5; color: #fff; }
+  .pv-log {
+    position: fixed; left: 10px; top: 10px; z-index: 999999; width: 300px; max-height: 40vh;
+    overflow-y: auto; font: 10.5px/1.5 Consolas, monospace; color: #5f7a95;
+    background: rgba(5, 6, 15, .72); border: 1px solid #1d2b40; border-radius: 8px; padding: 8px 10px;
+    pointer-events: none;
+  }
+  .pv-hint { position: fixed; bottom: 10px; left: 50%; transform: translateX(-50%); z-index: 999999;
+    font-size: 11px; color: #44607e; pointer-events: none; }
+</style>
+</head>
+<body>
+<!-- 真 splash DOM 模板（与 renderer/index.html 同构；唯一差异=图片路径带 ../renderer/ 前缀，
+     因为本页在 test/ 下。结构若改 index.html，此处同步——人眼预览页允许夹具级拷贝）。 -->
+<template id="pv-splash-tpl">
+  <div id="bl-splash">
+    <div class="sp-bg" aria-hidden="true">
+      <div class="sp-grid"><i></i></div>
+      <div class="sp-stars s1"></div>
+      <div class="sp-stars s2"></div>
+      <div class="sp-beam"></div>
+    </div>
+    <div class="sp-center">
+      <div class="sp-act sp-act1" aria-hidden="true">
+        <img class="sp-mark" src="../renderer/brand/boundless-mark-256.png" alt="" decoding="async" />
+        <div class="sp-word">BOUNDLESS</div>
+        <div class="sp-word-sub" data-sh-i18n="splash.brand.co">无界科技</div>
+      </div>
+      <div class="sp-act sp-act2" aria-hidden="true">
+        <img class="sp-cx" src="../renderer/brand/chatx.png" alt="" decoding="async" />
+        <div class="sp-cx-word"><span data-sh-i18n="brand.product">智聊</span><span class="sp-cx-en">ChatX</span></div>
+        <div class="sp-tagline" data-sh-i18n="splash.tagline">多平台智能会话 · 人机协同工作台</div>
+      </div>
+    </div>
+    <div class="sp-console">
+      <div class="sp-amb" id="sp-amb" aria-hidden="true"></div>
+      <div class="sp-conduit" aria-hidden="true">
+        <div class="sp-track">
+          <div class="sp-fill" id="sp-fill"></div>
+          <i class="sp-node" data-at="12" style="left:12%"></i>
+          <i class="sp-node" data-at="68" style="left:68%"></i>
+          <i class="sp-node" data-at="88" style="left:88%"></i>
+          <i class="sp-node" data-at="99.5" style="left:calc(100% - 2px)"></i>
+        </div>
+        <div class="sp-pct" id="sp-pct">0%</div>
+      </div>
+      <div class="sp-real" id="sp-real"></div>
+      <div class="sp-term" id="sp-term" aria-hidden="true"></div>
+    </div>
+    <div class="sp-err" id="sp-err" hidden>
+      <div class="sp-err-title" data-sh-i18n="splash.err.title">启动序列中断</div>
+      <div class="sp-err-msg" id="sp-err-msg"></div>
+      <div class="sp-err-actions">
+        <button type="button" id="sp-retry" data-sh-i18n="splash.err.retry">重试连接</button>
+        <button type="button" id="sp-diag" data-sh-i18n="splash.err.copy">复制诊断信息</button>
+      </div>
+    </div>
+    <button type="button" class="sp-skip" id="sp-skip" hidden data-sh-i18n="splash.skip">跳过动画</button>
+    <div class="sp-ver" aria-hidden="true">BOUNDLESS ∞ CHATX</div>
+  </div>
+</template>
+
+<div class="pv-bar">
+  <button onclick="pvRun('cold')">① 冷启动全幕（12s）</button>
+  <button onclick="pvRun('slow')">② 慢速冷启（26s，看诚实降级）</button>
+  <button onclick="pvRun('warm')">③ 暖启动闪场</button>
+  <button onclick="pvRun('error')">④ 故障→恢复</button>
+  <button onclick="pvRun('whitelabel')">⑤ 白标让位</button>
+</div>
+<div class="pv-log" id="pv-log"></div>
+<div class="pv-hint">Esc / 3s 后右下「跳过动画」= 极简态 · 本页跑的是真 splash.js，改模块即变</div>
+
+<script src="../renderer/splash-model.js"></script>
+<script>
+"use strict";
+/* 场景编排：只 mock window.shell 三个 IPC + renderer 的 aitr:inbox-phase 事件时间线。
+   splash.js 每次重播动态注入（真驱动、真生命周期，含 kill/重试/极简全路径）。 */
+(function () {
+  var runId = 0;
+  var timers = [];
+  var LS_KEY = "aitr.splash.last_cold_ms";
+  var lsOrig = null;
+  try { lsOrig = localStorage.getItem(LS_KEY); } catch (e) { /* ignore */ }
+  window.addEventListener("beforeunload", function () {
+    try {
+      if (lsOrig == null) localStorage.removeItem(LS_KEY);
+      else localStorage.setItem(LS_KEY, lsOrig);
+    } catch (e) { /* ignore */ }
+  });
+
+  function log(line) {
+    var el = document.getElementById("pv-log");
+    var d = document.createElement("div");
+    d.textContent = "· " + line;
+    el.appendChild(d);
+    el.scrollTop = el.scrollHeight;
+    while (el.childNodes.length > 40) el.removeChild(el.firstChild);
+  }
+  function at(ms, fn) { timers.push(setTimeout(fn, ms)); }
+  function phaseEvt(phase, msg) {
+    window.dispatchEvent(new CustomEvent("aitr:inbox-phase", { detail: { phase: phase, msg: msg || "" } }));
+    log("event: aitr:inbox-phase → " + phase);
+  }
+
+  // 假 webview（load 阶段信号源）：真 splash.js 会对它 addEventListener + getURL。
+  function plantWebview(navAtMs) {
+    var wv = document.createElement("webview");
+    wv.setAttribute("data-kind", "backend");
+    wv.style.display = "none";
+    wv._url = "about:blank";
+    wv.getURL = function () { return wv._url; };
+    document.body.appendChild(wv);
+    at(navAtMs, function () {
+      wv._url = "http://127.0.0.1:18799/workspace";
+      wv.dispatchEvent(new Event("did-navigate"));
+      log("webview: did-navigate → /workspace（load 阶段信号）");
+    });
+    return wv;
+  }
+
+  var SCN = {
+    cold: function () {
+      try { localStorage.setItem(LS_KEY, "11000"); } catch (e) { /* ignore */ }
+      var t0 = Date.now();
+      var state = { spawn: "idle", healthy: false };
+      at(400, function () { state.spawn = "probing"; });
+      at(1700, function () { state.spawn = "starting"; });
+      at(11500, function () { state.spawn = "ready"; state.healthy = true; log("mock: /login 200（health ok）"); });
+      plantWebview(12300);
+      at(13600, function () { phaseEvt("ready"); });
+      return {
+        brand: null,
+        health: function () { return { ok: state.healthy }; },
+        spawn: function () { return { status: state.spawn, lastError: "" }; },
+      };
+    },
+    slow: function () {
+      try { localStorage.setItem(LS_KEY, "8000"); } catch (e) { /* ignore */ }
+      var state = { spawn: "starting", healthy: false };
+      at(25000, function () { state.spawn = "ready"; state.healthy = true; log("mock: 拖了 25s 才 health ok（看 15s 后真实行换『首次较慢』口径）"); });
+      plantWebview(25800);
+      at(27200, function () { phaseEvt("ready"); });
+      return {
+        brand: null,
+        health: function () { return { ok: state.healthy }; },
+        spawn: function () { return { status: state.spawn, lastError: "" }; },
+      };
+    },
+    warm: function () {
+      plantWebview(900);
+      at(2100, function () { phaseEvt("ready"); });
+      return {
+        brand: null,
+        health: function () { return { ok: true }; },
+        spawn: function () { return { status: "running-external", lastError: "" }; },
+      };
+    },
+    error: function () {
+      var state = { spawn: "starting", healthy: false, recovered: false };
+      at(5200, function () {
+        state.spawn = "failed";
+        phaseEvt("error", "无法连接后台服务（错误 -102）。\n正在等待后台启动并自动重连…\n后端地址：http://127.0.0.1:18799");
+      });
+      // 「重试连接」→ 真 splash.js 回派 aitr:splash-retry → 这里扮演 renderer 的 reload()
+      window.addEventListener("aitr:splash-retry", function onRetry() {
+        window.removeEventListener("aitr:splash-retry", onRetry);
+        log("event: aitr:splash-retry（renderer.reload 被回派复用）");
+        phaseEvt("loading", "正在连接后台…");
+        at(1200, function () { state.spawn = "ready"; state.healthy = true; });
+        plantWebview(2000);
+        at(3300, function () { phaseEvt("ready"); });
+      });
+      return {
+        brand: null,
+        health: function () { return { ok: state.healthy }; },
+        spawn: function () { return { status: state.spawn, lastError: state.spawn === "failed" ? "backend.exe exited with code 1" : "" }; },
+      };
+    },
+    whitelabel: function () {
+      return {
+        brand: { product_name_zh: "某某客服", product_name_en: "AcmeChat" },
+        health: function () { return { ok: false }; },
+        spawn: function () { return { status: "probing", lastError: "" }; },
+      };
+    },
+  };
+
+  window.pvRun = function (name) {
+    runId++;
+    timers.forEach(function (t) { clearTimeout(t); });
+    timers = [];
+    document.querySelectorAll("#bl-splash, webview").forEach(function (n) { n.remove(); });
+    document.getElementById("pv-log").textContent = "";
+    log("场景：" + name + "（run #" + runId + "）");
+
+    var scn = SCN[name]();
+    window.shell = {
+      getConfig: function () { return Promise.resolve(scn.brand ? { brand: scn.brand } : {}); },
+      backendHealth: function () { return Promise.resolve(scn.health()); },
+      backendSpawnStatus: function () { return Promise.resolve(scn.spawn()); },
+      uiEvent: function (b) { log("beacon: " + (b && b.action)); return Promise.resolve(); },
+      copy: function (t) { log("clipboard: " + String(t).slice(0, 60).replace(/\s+/g, " ") + "…"); try { navigator.clipboard.writeText(t); } catch (e) { /* ignore */ } return Promise.resolve(); },
+    };
+
+    var tpl = document.getElementById("pv-splash-tpl");
+    document.body.appendChild(tpl.content.cloneNode(true));
+    try { window.shellI18n.applyI18n(document); } catch (e) { /* ignore */ }
+
+    window.addEventListener("aitr:splash-done", function onDone(ev) {
+      window.removeEventListener("aitr:splash-done", onDone);
+      log("event: aitr:splash-done（reason=" + ((ev.detail || {}).reason || "") + "）");
+    });
+
+    var s = document.createElement("script");
+    s.src = "../renderer/splash.js?r=" + runId; // cache-bust：每次重播都是全新驱动实例
+    document.body.appendChild(s);
+  };
+
+  // 打开即演冷启动
+  window.pvRun("cold");
+})();
+</script>
+</body>
+</html>

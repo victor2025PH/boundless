@@ -16,7 +16,9 @@ from pathlib import Path
 import pytest
 
 from src.licensing.token_ledger import (
+    BONUS_VALID_MONTHS,
     CHARS_PER_TOKEN_LEGACY,
+    PACK_VALID_MONTHS,
     TOKEN_RATES,
     TokenLedgerStore,
     allocate_spend,
@@ -139,6 +141,38 @@ def test_pack_expires_after_valid_months(_isolated_ledger):
     assert s.balance("lic1", now=now)["balance"] == 10_000
     after = now + 13 * 31 * 86400  # 13 个月后
     assert s.balance("lic1", now=after)["balance"] == 0
+
+
+def test_bonus_expires_and_spends_before_paid_pack(_isolated_ledger):
+    """「赠送 6 个月有效且先扣」（实施50 P2 修正）：bonus 默认 6 个月过期 →
+    到期序天然排在 12 个月实付包之前——先赠后实扣由结构成立，不靠优先级分支。
+    旧语义（bonus 永不过期）实际先扣实付包，与官网公示相反。"""
+    assert BONUS_VALID_MONTHS == 6 and PACK_VALID_MONTHS == 12
+    s = _isolated_ledger
+    now = time.time()
+    s.grant_bonus("lic1", 1_000, ref="signup", now=now)
+    s.grant_pack("lic1", 10_000, ref="o1", now=now)
+    s.record_spend("lic1", "ai_reply", 600, now=now)
+    bal = s.balance("lic1", now=now)
+    assert bal["balance"] == 10_400  # 赠送 1000 先被吃 600，实付包完整
+    # 7 个月后：赠送批过期；只作废「没被支出吸收」的 400，实付 10k 完整存活
+    after = now + 7 * 30.44 * 86400
+    bal2 = s.balance("lic1", now=after)
+    assert bal2["balance"] == 10_000
+    assert bal2["expired_lost"] == 400
+
+
+def test_bonus_explicit_never_expire_and_migration_kind(_isolated_ledger):
+    """显式 valid_months=None 仍可发永不过期赠送（产品决策口子）；
+    并账批次走独立 kind=migration（付费存量价值，永不过期，与赠送分类隔离）。"""
+    s = _isolated_ledger
+    now = time.time()
+    s.grant_bonus("lic1", 500, ref="evergreen", valid_months=None)
+    s.grant_migration("lic1", 2_000, ref="mig:lic1")
+    far = now + 36 * 30.44 * 86400
+    assert s.balance("lic1", now=far)["balance"] == 2_500
+    # 幂等
+    assert s.grant_migration("lic1", 2_000, ref="mig:lic1") is False
 
 
 def test_spend_order_monthly_first(_isolated_ledger):

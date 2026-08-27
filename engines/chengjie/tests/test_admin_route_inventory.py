@@ -17,6 +17,10 @@ _BASELINE = """
 /sw.js	GET
 /admin/ops	GET
 /admin/tts-dashboard	GET
+/admin/voice-eval	GET
+/api/admin/voice-eval/state	GET
+/api/admin/voice-eval/rate	POST
+/api/admin/voice-eval/audio/{name}	GET
 /ai-studio	GET
 /analytics	GET
 /api/ab-tests/evaluate	GET
@@ -44,6 +48,36 @@ _BASELINE = """
 /api/admin/alert-link-status	GET
 /api/admin/official-webhook-status	GET
 /api/admin/buried-conversations	GET
+/api/admin/bug-intake	GET
+/api/admin/bug-intake/notify-pending	POST
+/api/admin/bug-intake/{ticket_id}/notify	POST
+/api/admin/bug-intake/{ticket_id}/shot/{name}	GET
+/api/admin/bug-intake/{ticket_id}/shots	GET
+/api/admin/bug-intake/{ticket_id}/status	POST
+/api/admin/asset/reconnect/inventory	GET
+/api/admin/asset/reconnect/candidates	GET
+/api/admin/asset/reconnect/claim	POST
+/api/admin/asset/reconnect/auto-claim	POST
+/api/admin/asset/reconnect/claims	GET
+/api/assistant/bootstrap	GET
+/api/assistant/query	POST
+/api/assistant/report	POST
+/api/assistant/tickets	GET
+/api/assistant/feedback	POST
+/api/assistant/transcribe	POST
+/api/assistant/health	GET
+/api/assistant/terms	GET
+/api/assistant/actions	GET
+/api/assistant/act	POST
+/api/assistant/act/history	GET
+/api/assistant/act/undo	POST
+/api/assistant/agent/plan	POST
+/api/assistant/pair	POST
+/api/assistant/pair/sessions	GET
+/api/assistant/pair/revoke	POST
+/api/assistant/flows	GET
+/xz	GET
+/xz/manifest.webmanifest	GET
 /api/admin/ui-event	POST
 /api/telemetry/frontend-error	POST
 /api/admin/ai-quality-calibrate	GET
@@ -403,6 +437,8 @@ _BASELINE = """
 /api/personas/profiles/{profile_id}/prompt-preview	GET
 /api/personas/profiles/{profile_id}/retire-verify	POST
 /api/personas/profiles/{profile_id}/revert	POST
+/api/personas/selfie-gate	GET
+/api/personas/selfie-gate	POST
 /api/personas/status	GET
 /api/personas/sync-to-config	POST
 /api/personas/tg-account/{account_id}/assign-profile	POST
@@ -410,8 +446,13 @@ _BASELINE = """
 /api/personas/{pid}/media	GET
 /api/personas/{pid}/media	POST
 /api/personas/{pid}/media/test	POST
+/api/agent-tasks	GET
+/api/agent-tasks/complete	POST
+/api/agent-tasks/dismiss	POST
 /api/personas/{pid}/media/{mid}	DELETE
 /api/personas/{pid}/media/{mid}	PATCH
+/api/personas/{pid}/speech-print	POST
+/api/personas/{pid}/stock-readiness	GET
 /api/personas/{pid}/face-ref	GET
 /api/personas/{pid}/face-ref	POST
 /api/personas/{pid}/face-ref	DELETE
@@ -430,6 +471,7 @@ _BASELINE = """
 /api/reply-settings/budget-today	GET
 /api/reply-settings/explain	GET
 /api/reply-settings/follow-slider	POST
+/api/reply-settings/health	GET
 /api/report/daily	GET
 /api/report/weekly	GET
 /api/rollback	POST
@@ -492,6 +534,11 @@ _BASELINE = """
 /api/platforms/{platform}/login/{login_id}/cancel	POST
 /api/proxies	GET
 /api/proxies	POST
+/api/proxies/managed/status	GET
+/api/proxies/managed/provision	POST
+/api/proxies/managed/swap	POST
+/api/proxies/managed/overview	GET
+/api/proxies/import	POST
 /api/proxies/{proxy_id}	DELETE
 /api/proxies/{proxy_id}/test	POST
 /api/fingerprints	GET
@@ -581,6 +628,11 @@ _BASELINE = """
 /api/telegram/voice-sample/{filename}	GET
 /api/templates	GET
 /api/templates/{key}	PUT
+/api/templates-i18n	GET
+/api/templates-i18n/confirm	POST
+/api/templates-i18n/delete	POST
+/api/templates-i18n/draft	POST
+/api/templates-i18n/save	POST
 /api/todo-summary	GET
 /api/trigger-decisions	GET
 /api/unified-inbox/analyze	POST
@@ -593,6 +645,7 @@ _BASELINE = """
 /api/unified-inbox/conv-probe	GET
 /api/unified-inbox/why-no-reply	GET
 /api/unified-inbox/warmup-review	POST
+/api/unified-inbox/platform-cap	POST
 /api/unified-inbox/reply-budget/relief	POST
 /api/unified-inbox/messenger/e2ee-pin	POST
 /api/unified-inbox/chats	GET
@@ -619,6 +672,9 @@ _BASELINE = """
 /api/unified-inbox/default-reply-lang/all	GET
 /api/unified-inbox/agent-lang	GET
 /api/unified-inbox/agent-lang	POST
+/api/unified-inbox/conv-xlate-out	GET
+/api/unified-inbox/conv-xlate-out	POST
+/api/unified-inbox/quick-replies	POST
 /api/unified-inbox/translate	POST
 /api/unified-inbox/translate-compare	POST
 /api/unified-inbox/translate-document	POST
@@ -627,6 +683,7 @@ _BASELINE = """
 /api/unified-inbox/translated-file/{token}	GET
 /api/unified-inbox/translate-image	POST
 /api/unified-inbox/translate-message-media	POST
+/api/unified-inbox/translate-video	POST
 /api/unified-inbox/translate-voice	POST
 /api/unified-inbox/translation-engines	GET
 /api/workspace/claim	POST
@@ -642,6 +699,8 @@ _BASELINE = """
 /api/workspace/contact/{contact_id}/follow-up	POST
 /api/workspace/contact/{contact_id}/tasks	GET
 /api/workspace/contact/{contact_id}/timeline	GET
+/api/workspace/contact/{contact_id}/origin	GET
+/api/workspace/contact/{contact_id}/origin	POST
 /api/workspace/conv/{conversation_id}/start-chain	POST
 /api/workspace/workflow-chains	GET
 /api/workspace/workflow-chains	POST
@@ -703,6 +762,7 @@ _BASELINE = """
 /api/setup/ai	GET
 /api/setup/ai-key	POST
 /api/setup/ai-primary	POST
+/api/setup/ai-primary/audit	GET
 /api/setup/deploy-profile	GET
 /api/setup/cloud-credentials	GET
 /api/setup/key-pool	POST
@@ -778,6 +838,7 @@ _BASELINE = """
 /api/workspace/batch/assign	POST
 /api/workspace/notifications	GET
 /api/workspace/notifications/read	POST
+/api/workspace/notifications/sys-status	POST
 /api/workspace/conv/{conversation_id}/notes	GET
 /api/workspace/conv/{conversation_id}/notes	POST
 /api/workspace/conv/{conversation_id}/notes/{note_id}	PATCH
@@ -804,6 +865,19 @@ _BASELINE = """
 /api/voice/tts-test	POST
 /api/voice/tts-test/{filename}	GET
 /api/voice/tts-test-jobs/{job_id}	GET
+/api/singing/overview	GET
+/api/singing/audio/{persona_id}/{template_id}	GET
+/api/singing/anchor/{voice_key}	GET
+/api/singing/config	POST
+/api/singing/template-enable	POST
+/api/singing/orders	GET
+/api/singing/orders/{oid}/audio	GET
+/api/singing/orders/{oid}/approve	POST
+/api/singing/orders/{oid}/reject	POST
+/api/singing/orders/{oid}/retry	POST
+/api/singing/orders/{oid}/delete	POST
+/api/singing/supply-request	POST
+/api/singing/supply-status	GET
 /api/workspace/channel-sessions	GET
 /api/webhook-settings	GET
 /api/webhook-settings	PUT
@@ -889,6 +963,7 @@ _BASELINE = """
 /set_ui_mode	GET
 /settings	GET
 /setup	GET
+/singing	GET
 /strategies	GET
 /strategy-analytics	GET
 /telegram	GET
@@ -943,6 +1018,9 @@ _BASELINE = """
 /users/update/{user_id}	POST
 /users/quota/{user_id}	POST
 /users/perms/{user_id}	POST
+/users/notify-binding/{user_id}	POST
+/api/workspace/my-notify-binding	GET,POST
+/api/workspace/my-notify-binding/test	POST
 /api/users/{user_id}/perms	GET
 /api/users/char-usage	GET
 /api/workspace/my-usage	GET
@@ -1150,6 +1228,21 @@ _ADDITIONS_2026_07_27_GOALS_READINESS = """
 """
 _BASELINE += _ADDITIONS_2026_07_27_GOALS_READINESS
 
+# 2026-08-18：完成通知链路状态（目标卡「达成后会通知谁」可见化；零密钥，
+# 文件真相口径与告警渠道面板同源）。
+_ADDITIONS_2026_08_18_GOALS_NOTIFY_STATUS = """
+/api/goals/notify-status	GET
+"""
+_BASELINE += _ADDITIONS_2026_08_18_GOALS_NOTIFY_STATUS
+
+# 2026-08-18 P3：完成推送设置写口（扫描器/坐席副本/失守日报/画像出境四开关，
+# set_overlay_flag 保注释写 overlay 热生效；路径硬编码白名单，拒 agent/viewer）
+# ——此前扫描器开关只能改 YAML，是推送设置面最后一块无 UI 死角。
+_ADDITIONS_2026_08_18_GOALS_NOTIFY_SETTINGS = """
+/api/goals/notify-settings	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_18_GOALS_NOTIFY_SETTINGS
+
 # 2026-07-27 人设上线前质检（E 线统一登记两家）：quiz=档案自动出题→真人设 prompt
 # 逐题实测→自动判分（persona_quiz_routes.py，任务经 persona_doc_import 注册表轮询）；
 # bio-doc=D2 线「人设传记文档」三端点（契约固定先行入册，路由实现由 D2 落地）。
@@ -1295,6 +1388,13 @@ _ADDITIONS_2026_08_09_TRANSLATE_BATCH = """
 """
 _BASELINE += _ADDITIONS_2026_08_09_TRANSLATE_BATCH
 
+# P2 2026-08-19「问这张图」：坐席对入站图片即席提问（类型感知预设 + 自由输入），
+# VisionClient 带问题重问该图；unified_inbox_vision_routes.register_vision_routes。
+_ADDITIONS_2026_08_19_ASK_IMAGE = """
+/api/unified-inbox/ask-image	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_19_ASK_IMAGE
+
 # 2026-08-10 FB Messenger Webhook 常驻挂载：SkillManager 改为请求期解析
 # （telegram_client → app.state 双兜底），协议号未配置的部署（telegram_client
 # =None）路由也照常挂载——未就绪回 503 由 Meta 重投。见 facebook_webhook.py
@@ -1337,6 +1437,38 @@ _ADDITIONS_2026_08_12_TG_MEMBERS = """
 /tools/tg-members	GET
 """
 _BASELINE += _ADDITIONS_2026_08_12_TG_MEMBERS
+
+# 2026-08-21 工具箱新增「AI 生成图片」（image_gen_routes）+「智能养号」（nurture_routes）。
+# 前者复用 SelfieProvider+image_gate+comfy_infer 现场出图；后者状态复用 fleet-health、
+# 配置写 ops.nurture overlay（执行引擎属下一阶段）。
+_ADDITIONS_2026_08_21_TOOLBOX = """
+/api/image/config	GET
+/api/image/generate	POST
+/api/image/save-album	POST
+/api/nurture/status	GET
+/api/nurture/config	GET
+/api/nurture/config	POST
+/api/nurture/engine	POST
+/api/nurture/shadow	GET
+/api/nurture/probe	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_21_TOOLBOX
+
+# 2026-08-22 手动出图 P1（image_gen_routes 增量）：异步任务三件套（同步长连接
+# 挂 2-5 分钟不可取消 → 任务化+ComfyUI /interrupt 配合）+ 相册优先层（生成前
+# 秒查存货，零 GPU 即取即发；album-file=相册只读文件服务，路径钉死 album_dir
+# 子树）+ mark-sent（发送回写 persona_media_sends——重发冷却/服装连续窗从此
+# 认得手动发出的图，一致性旁路收口）。
+_ADDITIONS_2026_08_22_IMAGE_P1 = """
+/api/image/jobs	POST
+/api/image/jobs/{job_id}	GET
+/api/image/jobs/{job_id}/cancel	POST
+/api/image/album-stock	GET
+/api/image/album-file	GET
+/api/image/mark-sent	POST
+/api/image/scene-hints	GET
+"""
+_BASELINE += _ADDITIONS_2026_08_22_IMAGE_P1
 
 # 2026-08-12 被骂回怼治理（temper_routes）：治理配置读写 + 每人设生效档位 +
 # 回怼诊断器 dry-run（「为什么没怼」运营自查，只读零副作用）。
@@ -1488,6 +1620,73 @@ _ADDITIONS_2026_08_17_STICKERS = """
 /api/unified-inbox/send-sticker	POST
 """
 _BASELINE += _ADDITIONS_2026_08_17_STICKERS
+
+# 2026-08-18 跨平台档案（cp-origin 面板）：客户来源/原平台背景 GET+表单写入 POST
+# + P1 聊天记录导入三件套（解析预览/确认写入/整批撤销）。
+# （unified_inbox_workspace_contacts_routes.py；flag contacts.origin_profile.enabled）。
+_ADDITIONS_2026_08_18_ORIGIN = """
+/api/workspace/origin	GET
+/api/workspace/origin	POST
+/api/workspace/origin/import/parse	POST
+/api/workspace/origin/import/confirm	POST
+/api/workspace/origin/import/revoke	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_18_ORIGIN
+
+# 2026-08-19 账号资产中心（asset_center_routes.py，账号资产保全 P1）：资产总览页 +
+# 汇总/台账只读 API。卡片 CTA 的 export-migration / reconnect 端点按路由表
+# feature-probe，未装载不渲染——那些端点由接管线 / 回连认领线各自入册。
+_ADDITIONS_2026_08_19_ASSET_CENTER = """
+/workspace/assets	GET
+/api/workspace/assets/summary	GET
+/api/workspace/assets/ledger	GET
+"""
+_BASELINE += _ADDITIONS_2026_08_19_ASSET_CENTER
+
+# 2026-08-20 客服支持通道（support_routes.py，实施49 P1-9）：机器码/版本自查 +
+# 坐席可用的一键诊断直传。刻意不复用 /api/admin/diagnostic-upload——ROLE_AGENT
+# 被 _agent_api_allowed 挡在 admin 命名空间外，而报障主力恰是坐席。
+_ADDITIONS_2026_08_20_SUPPORT = """
+/api/support/info	GET
+/api/support/diag-upload	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_20_SUPPORT
+
+# 2026-08-21 quotawall v2 P2.5：额度墙漏斗卡「服务端到账真值」对账线——
+# qw_credited 埋点只统计页面开着等到 watch 命中的场景（关页即漏计），此端点读
+# license_char_topup 台账（凭证兑换/手工直充/自动履约同一张表）按日聚合，
+# 响应只含 day/n/chars 数字（无 lic_id 无订单号）。
+_ADDITIONS_2026_08_21_TOPUP_TREND = """
+/api/admin/license/topup-trend	GET
+"""
+_BASELINE += _ADDITIONS_2026_08_21_TOPUP_TREND
+
+# 2026-08-23 标签治理闭环（unified_inbox_workspace_tags_routes.py）：把某标签从
+# **所有**会话上摘除（含已归档）。库删除刻意不动已打标签（既有语义），此前
+# 「123/333」类测试标签永远挂在筛选条上没有任何全量摘除入口；viewer 拒写，
+# ops_events 留审计（tag_remove_all）。
+_ADDITIONS_2026_08_23_TAG_REMOVE_ALL = """
+/api/workspace/tags/remove-from-all	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_23_TAG_REMOVE_ALL
+
+# 2026-08-26 B88 群线程缺口补拉（实施68 P1-13）：打开会话时对比云端顶部 id 与
+# 镜像最大 id，有缺口自动 sync（/thread 内触发）；本端点＝前端「补拉失败」横幅的
+# 手动重试（豁免 120s 冷却，running 单飞仍生效）。见 unified_inbox_account_routes。
+_ADDITIONS_2026_08_26_GAP_PROBE = """
+/api/platforms/telegram/{account_id}/gap-probe	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_26_GAP_PROBE
+
+# 2026-08-27 实施72 登录身份决议（账号错乱事故根治）：登录位换人 → 新账号进
+# 「身份待确认」隔离态（不自动补挂人设 + 自动化封顶 review + 告警审计）。
+# pending＝隔离清单观测面（任意登录可读）；confirm＝人工转正写口（拒 agent/viewer，
+# 可显式指定人设）。见 src/integrations/account_identity.py。
+_ADDITIONS_2026_08_27_ACCOUNT_IDENTITY = """
+/api/admin/account-identity/pending	GET
+/api/admin/account-identity/confirm	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_27_ACCOUNT_IDENTITY
 
 
 def _parse_baseline():

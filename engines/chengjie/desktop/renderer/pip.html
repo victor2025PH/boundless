@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<!-- 悬浮副驾原生窗 wrapper（cp PiP shell 桥 P1 2026-08-18）。
+     为什么要这一层：Electron 31 的 Document PiP 是 0×0 退化窗（探针实锤，壳内已禁），
+     壳内改走原生 alwaysOnTop BrowserWindow；而 shared/copilot/app.html 只在
+     「parent !== window」时才对外 postMessage——顶层直载它，cp-ready/回填/发送全静默。
+     故用本地 wrapper 包一层 iframe：iframe 的 parent=本页，app 照常吐消息，
+     本页经 __cpPipBridge（pip-preload.js）与主进程互转，宿主工作台经 inbox-preload 收发。
+     共享热区 shared/copilot/app.html 零改动。src 由主进程拼装（?src=），这里再收一道
+     「后端源 + /copilot/app.html 路径」防御。 -->
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>悬浮副驾</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #111318; }
+    iframe { border: 0; width: 100%; height: 100%; display: block; }
+    #pip-err { color: #8b93a1; font: 13px/1.6 system-ui, sans-serif; padding: 24px; }
+  </style>
+</head>
+<body>
+<script>
+  (function () {
+    var src = "";
+    try { src = new URLSearchParams(location.search).get("src") || ""; } catch (e) { /* 无 query 走下方拒载 */ }
+    var appOrigin = "", appProto = "";
+    try { var u = new URL(src); appOrigin = u.origin; appProto = u.protocol; } catch (e) { /* 非法 URL 走下方拒载 */ }
+    if (!/^https?:$/.test(appProto) || src.indexOf("/copilot/app.html") < 0) {
+      var el = document.createElement("div");
+      el.id = "pip-err";
+      el.textContent = "invalid src";
+      document.body.appendChild(el);
+      return;
+    }
+    var f = document.createElement("iframe");
+    f.src = src;
+    document.body.appendChild(f);
+
+    // app → 宿主：iframe 里的 app.html post 给 parent（本页）→ 经桥送主进程。
+    // 只认自家 iframe 的消息（wrapper 是单 iframe 页，source 过滤即足）。
+    window.addEventListener("message", function (e) {
+      if (!f.contentWindow || e.source !== f.contentWindow) return;
+      var m = e && e.data;
+      if (!m || !m.type) return;
+      if (window.__cpPipBridge) window.__cpPipBridge.out(m);
+    });
+
+    // 宿主 → app：主进程转来的 cp-context / cp-cmd 投进 iframe（targetOrigin 钉后端源）。
+    if (window.__cpPipBridge) {
+      window.__cpPipBridge.onIn(function (m) {
+        try { if (f.contentWindow && m) f.contentWindow.postMessage(m, appOrigin || "*"); } catch (e) { /* iframe 未就绪时丢弃，宿主 cp-ready 后会重喂 */ }
+      });
+    }
+  })();
+</script>
+</body>
+</html>

@@ -715,8 +715,10 @@ def test_workbench_delivery_block_wired():
     assert 'metrics["delivery_block"]' in drafts
     html = (_SRC / "web" / "templates" / "workspace_base.html").read_text(
         encoding="utf-8")
-    assert 'id="ws-delivblock"' in html
+    # 实施75 batch2：顶部红条退役，拦截提示走右下胶囊+卡片（AITRNotify）
+    assert "AITRNotify.ongoing.set('delivblock'" in html
     assert "_renderDelivBlock" in html
+    assert "ws.delivblock.text_media" in html
     api = (_SRC / "web" / "templates" / "_api_fetch.html").read_text(
         encoding="utf-8")
     assert "ws-delivblock" in api

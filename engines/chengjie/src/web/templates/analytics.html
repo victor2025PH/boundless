@@ -40,6 +40,8 @@
 {% endblock %}
 {% block content %}
 {% set active="analytics" %}
+{% set cluster_id = "analysis" %}{% set cluster_here = "/analytics" %}
+{% include "_cluster_tabs.html" %}
 
 <!-- refresh bar -->
 <div class="refresh-bar fa pro-only">

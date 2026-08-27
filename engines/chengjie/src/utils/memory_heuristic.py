@@ -48,6 +48,26 @@ def extract_heuristic_facts(text: str) -> List[str]:
     if m:
         out.append(f"用户表示不喜欢：{m.group(1).strip()[:40]}")
 
+    # 年龄（B50 2026-08-23：`_299` 实录「三次自报 38 岁仍被问年龄段」——年龄
+    # 此前根本不被捕获，画像里没有 → LLM 只能问）。保守：只认第一人称现在时
+    # 自报（我38岁/我今年38），排除追忆句（38岁的时候/那年）与第三人称。
+    m = re.search(
+        r"我(?:今年|现在|都)?\s*(\d{1,2})\s*岁(?!的时候|那年|之前|以前)", t)
+    if not m:
+        # 「我今年38」省略「岁」的常见口语——单位负预查排除 38万/38号 等非年龄
+        m = re.search(
+            r"我今年\s*(\d{1,2})(?!\d)"
+            r"(?!\s*(?:年|月|号|日|点|块|元|斤|万|亿|个|天|小时|分|秒|[kKwW]))", t)
+    if not m:
+        m = re.search(r"(?i)\bI(?:'m|\s+am)\s+(\d{1,2})(?:\s+years?\s+old)?\b", t)
+    if m:
+        try:
+            _age = int(m.group(1))
+            if 10 <= _age <= 99:
+                out.append(f"用户年龄：{_age}岁")
+        except (TypeError, ValueError):
+            pass
+
     m = re.search(r"记住[：:]\s*([^。！？\n]{2,80})", t)
     if m:
         out.append(f"用户请我记得：{m.group(1).strip()[:80]}")

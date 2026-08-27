@@ -76,7 +76,7 @@ def test_inbox_host_discoverability(inbox_html: str):
     assert "accent" in inbox_html
     assert "card" in inbox_html and "_handleGoalDeepLink" in inbox_html
     assert "cp-goal-drive-draft" in inbox_html
-    assert "cp-goal.js?v=20260813" in inbox_html  # 改 cp-goal.js 必须 bump 缓存戳（本断言随批次前移）
+    assert "cp-goal.js?v=20260819" in inbox_html  # 改 cp-goal.js 必须 bump 缓存戳（本断言随批次前移）
 
 
 def test_goal_form_draft_survival_layer(goal_js: str, inbox_html: str):
@@ -409,7 +409,9 @@ def test_p22_1_hero_one_click_draft(goal_js: str, inbox_html: str):
     assert "driveDraftFromToday" in inbox_html
     # 宿主缺 instruction 时用 intent+push 回拼（旧事件/英雄卡容错）
     assert "drive_instruction" in inbox_html
-    assert "summary:intent" in inbox_html
+    # i18n P0（2026-08-19）：summary 展示态优先英文变体（intentDisplay），
+    # 指令 text 保持中文权威口径——断言随行为前移
+    assert "summary:(String(det.intentDisplay||'').trim()||intent)" in inbox_html
 
 
 def test_p22_drive_i18n_bilingual():
@@ -641,3 +643,100 @@ def test_p24_goal_kind_tokens_defined_both_themes():
         for tok in ("--cp-goal-conv:", "--cp-goal-rel:", "--cp-goal-eng:",
                     "--cp-goal-disc:"):
             assert tok in css, f"{name} missing {tok}"
+
+
+# ── 2026-08-18：摸底置顶 + 场景卡基准线 + 完成通知可见化 + 终局卡升级 ────────
+
+
+def test_goal_discovery_first_funnel_order(goal_js: str):
+    """KIND_ORDER＝经营漏斗序（信息摸底置顶）——组序是入口引导，不只是排版：
+    摸底产出的画像反哺后面转化目标的选品/报价。回退成「转化第一」即红。"""
+    at = goal_js.find("KIND_ORDER = [")
+    assert at > 0
+    seg = goal_js[at:at + 120]
+    assert seg.find('"discovery"') > 0
+    assert seg.find('"discovery"') < seg.find('"conversion"')
+    # 组头升级（色点+计数）与摸底组「从这里开始」引导
+    assert "gl-grp-dot" in goal_js and "gl-grp-n" in goal_js
+    assert "inbox.goal.form.grp_start_hint" in goal_js
+
+
+def test_goal_scenario_card_benchmark(goal_js: str):
+    """场景卡 30 天基准线：一次 report 取齐（_loadBenchAll），organic≥3 才显示
+    ——选场景时就建立「达成率/几天见效」预期，不必等到改期限才看见。"""
+    assert "_loadBenchAll" in goal_js
+    assert "inbox.goal.form.bench_card" in goal_js
+    assert "gl-scen-bench" in goal_js
+
+
+def test_goal_notify_visibility_row(goal_js: str):
+    """完成通知状态行（达成后会通知谁）：特性探测 /api/goals/notify-status——
+    端点缺席（旧后端/重启窗未到）=整行隐藏绝不裸奔；数据到达走 DOM 注入
+    （_fillNotifyRow）不整块重渲染（active 卡可能开着期限/成交表单，重渲染
+    抢焦点）。未订阅时「去接通」复用宿主 wsAlertlinkOpen（坐席侧无该函数
+    按钮天然不渲染）。"""
+    assert "/api/goals/notify-status" in goal_js
+    assert "_notifyRowHtml" in goal_js and "_fillNotifyRow" in goal_js
+    assert "notify_connect" in goal_js and "wsAlertlinkOpen" in goal_js
+    for key in ("inbox.goal.notify.push_on", "inbox.goal.notify.push_off",
+                "inbox.goal.notify.scan_off", "inbox.goal.notify.connect"):
+        assert key in goal_js, f"missing i18n key {key}"
+    # P2：定向副本升格（push_agent && self_bound → 「管理员 + 你」）
+    assert "inbox.goal.notify.push_on_agent" in goal_js
+    assert "self_bound" in goal_js
+    # P3：通知行内自助绑定迷你表单（保存并测试；缓存失效后行升格）
+    assert "notify_bind_open" in goal_js and "_nbSave" in goal_js
+    assert "/api/workspace/my-notify-binding" in goal_js
+    assert "/api/workspace/my-notify-binding/test" in goal_js
+    assert "NOTIFY_STATUS.at = 0" in goal_js   # 绑定成功必须失效缓存重探
+    for key in ("inbox.goal.notify.bind_btn", "inbox.goal.notify.bind_save",
+                "inbox.goal.notify.bind_ok"):
+        assert key in goal_js, f"missing i18n key {key}"
+
+
+def test_goal_terminal_done_card_upgrade(goal_js: str):
+    """终局卡：达成金带（gl-term-done）+ 完成方式人话（order/manual/auto，
+    原始 result 串降级 tooltip）+ 用时 chips + 48h 跟进提示 + 转化类达成
+    「接续留存目标」一键预填（draft 机制复用，人工成交场景补自动链缺口）。"""
+    assert "gl-term-done" in goal_js
+    assert "_doneKindLabel" in goal_js
+    assert "inbox.goal.done.kind." in goal_js
+    assert "inbox.goal.done.next_hint" in goal_js
+    assert "chain_retention" in goal_js
+    assert '"retention_expand"' in goal_js
+    # P2：完成推送回执 chip（服务端 notified 键驱动；缺键=不渲染）
+    assert "gl-done-pushed" in goal_js
+    assert "inbox.goal.done.pushed" in goal_js
+    assert "g.notified === true" in goal_js
+
+
+def test_goal_new_i18n_keys_bilingual():
+    """2026-08-18 新键 zh/en 双语齐平（pack 门禁管碰撞，这里钉键存在）。"""
+    from src.web.i18n_packs import goals as goals_pack
+    for key in (
+        "inbox.goal.form.grp_start_hint", "inbox.goal.form.bench_card",
+        "inbox.goal.done.days", "inbox.goal.done.kind.order",
+        "inbox.goal.done.kind.manual", "inbox.goal.done.kind.auto",
+        "inbox.goal.done.next_hint", "inbox.goal.done.chain_btn",
+        "inbox.goal.notify.push_on", "inbox.goal.notify.push_on_t",
+        "inbox.goal.notify.push_off", "inbox.goal.notify.push_off_t",
+        "inbox.goal.notify.scan_off", "inbox.goal.notify.scan_off_t",
+        "inbox.goal.notify.connect",
+        "inbox.goal.notify.push_on_agent", "inbox.goal.notify.push_on_agent_t",
+        "inbox.goal.done.pushed", "inbox.goal.done.pushed_t",
+        "inbox.goal.notify.bind_btn", "inbox.goal.notify.bind_hint",
+        "inbox.goal.notify.bind_ph", "inbox.goal.notify.bind_save",
+        "inbox.goal.notify.bind_busy", "inbox.goal.notify.bind_bad",
+        "inbox.goal.notify.bind_ok", "inbox.goal.notify.bind_test_fail",
+    ):
+        for lang in (goals_pack.ZH, goals_pack.EN):
+            assert key in lang, key
+
+
+def test_goal_mirror_tree_synced():
+    """cp-goal.js 双树（shared ↔ desktop/renderer）字节级同步——桌面壳跑旧
+    组件＝坐席看到的与网页端不是同一个面板。"""
+    mirror = (_REPO / "desktop" / "renderer" / "shared" / "copilot"
+              / "components" / "cp-goal.js")
+    assert mirror.is_file()
+    assert mirror.read_bytes() == _GOAL_JS.read_bytes()

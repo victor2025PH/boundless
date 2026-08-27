@@ -54,16 +54,22 @@ _DISPOSITIONS = [
 ]
 
 
-def demo_status(inbox) -> Dict[str, Any]:
-    """当前 demo 数据现状（present + 计数）。"""
+def demo_status(inbox, contacts_store=None) -> Dict[str, Any]:
+    """当前 demo 数据现状（present + 计数；含 contacts 漏斗演示数据）。"""
     if inbox is None or not hasattr(inbox, "count_demo"):
         return {"available": False, "present": False, "counts": {}}
-    counts = inbox.count_demo(DEMO_PREFIX)
+    counts = dict(inbox.count_demo(DEMO_PREFIX))
+    if contacts_store is not None and hasattr(contacts_store, "count_demo_funnel"):
+        try:
+            counts.update(contacts_store.count_demo_funnel(DEMO_PREFIX))
+        except Exception:
+            logger.debug("demo 漏斗计数失败（已忽略）", exc_info=True)
     present = any(int(v or 0) > 0 for v in counts.values())
     return {"available": True, "present": present, "counts": counts}
 
 
-def seed_demo(inbox, *, days: int = 14, kb_store=None, config_manager=None) -> Dict[str, Any]:
+def seed_demo(inbox, *, days: int = 14, kb_store=None, config_manager=None,
+              contacts_store=None) -> Dict[str, Any]:
     """铺示例数据：会话 + 消息 + 草稿处置（跨 days 天分布）。返回汇总计数。
 
     幂等：先清空既有 demo 数据再铺，避免重复累积。
@@ -126,20 +132,36 @@ def seed_demo(inbox, *, days: int = 14, kb_store=None, config_manager=None) -> D
         except Exception:
             logger.debug("demo KB 冷启动失败（已忽略）", exc_info=True)
 
+    # 漏斗演示（可选；contacts 子系统启用时补上老板卡的线索/转化数字——
+    # 口径与日报同源：lead_captured / handoff_sent 事件）
+    funnel: Dict[str, Any] = {}
+    if contacts_store is not None and hasattr(contacts_store, "seed_demo_funnel"):
+        try:
+            funnel = contacts_store.seed_demo_funnel(days=span, prefix=DEMO_PREFIX)
+        except Exception:
+            logger.debug("demo 漏斗铺设失败（已忽略）", exc_info=True)
+
     return {
         "ok": True,
         "conversations": n_conv,
         "messages": n_msg,
         "draft_audits": n_audit,
         "kb_seeded": kb_seeded,
+        "funnel": funnel,
         # 六期：售前可演示 CmdK 全局搜索的提示词（与 _QA 英文例句对齐）
         "search_hints": ["shipping", "WELCOME10", "discount"],
     }
 
 
-def clear_demo(inbox) -> Dict[str, Any]:
+def clear_demo(inbox, contacts_store=None) -> Dict[str, Any]:
     """一键清空 demo 数据（按命名空间前缀），返回删除计数。"""
     if inbox is None or not hasattr(inbox, "purge_demo"):
         return {"ok": False, "detail": "inbox_store 不可用"}
-    removed = inbox.purge_demo(DEMO_PREFIX)
+    removed = dict(inbox.purge_demo(DEMO_PREFIX))
+    if contacts_store is not None and hasattr(contacts_store, "purge_demo_funnel"):
+        try:
+            for k, v in contacts_store.purge_demo_funnel(DEMO_PREFIX).items():
+                removed[f"funnel_{k}"] = v
+        except Exception:
+            logger.debug("demo 漏斗清空失败（已忽略）", exc_info=True)
     return {"ok": True, "removed": removed}

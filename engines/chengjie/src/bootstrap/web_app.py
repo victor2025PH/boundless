@@ -557,6 +557,20 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                         assistant.logger.debug(
                             "人工投递兜底接线跳过", exc_info=True)
 
+                    # ── P1 2026-08-22「一键全自动」热接线闭包 ─────────────
+                    # deliver/worker 此前构造期冻结（开关写完 overlay 要等重启）。
+                    # 路由（值守三档/能力看板/向导档位）写完 overlay 后调它，
+                    # 真发能力就地武装/撤除——「点了全自动」当场生效。
+                    try:
+                        from src.inbox.autosend_helpers import (
+                            make_autosend_rewire,
+                        )
+                        web_app.state.autosend_rewire = make_autosend_rewire(
+                            assistant, web_app)
+                    except Exception:
+                        assistant.logger.debug(
+                            "autosend 热接线闭包注册跳过", exc_info=True)
+
                     # ── K1+K2：SLAWatcher 草稿 SLA 预警 + 自动再分配 ──
                     try:
                         from src.inbox.sla_watcher import SLAWatcher

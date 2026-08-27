@@ -88,14 +88,15 @@ async function photoTo(
   photo: string,
   caption: string,
   withButton: boolean,
-  campaign = ""
+  campaign = "",
+  site?: SiteButton
 ): Promise<BroadcastResult> {
   const isUrl = /^https?:\/\//i.test(photo);
   try {
     let data: { ok?: boolean; description?: string; result?: { message_id?: number } };
     if (isUrl) {
       const body: Record<string, unknown> = { chat_id: chat, photo, caption, parse_mode: "HTML" };
-      if (withButton) body.reply_markup = richButtons(mediumFor(chat), campaign);
+      if (withButton) body.reply_markup = richButtons(mediumFor(chat), campaign, site);
       data = await callApi(token, "sendPhoto", body);
     } else {
       const buf = await readFile(photo);
@@ -103,7 +104,7 @@ async function photoTo(
       form.append("chat_id", chat);
       form.append("caption", caption);
       form.append("parse_mode", "HTML");
-      if (withButton) form.append("reply_markup", JSON.stringify(richButtons(mediumFor(chat), campaign)));
+      if (withButton) form.append("reply_markup", JSON.stringify(richButtons(mediumFor(chat), campaign, site)));
       form.append("photo", new Blob([new Uint8Array(buf)]), path.basename(photo));
       const res = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
         method: "POST",
@@ -155,12 +156,15 @@ export async function broadcastPhoto(opts: {
   target: BroadcastTarget;
   withButton: boolean;
   campaign?: string;
+  sitePath?: string;
+  siteLabel?: string;
 }): Promise<{ ok: boolean; results: BroadcastResult[] }> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) return { ok: false, results: [{ chat: "-", ok: false, error: "no_bot_token" }] };
   const chats = targetChats(opts.target);
+  const site = opts.sitePath || opts.siteLabel ? { path: opts.sitePath, label: opts.siteLabel } : undefined;
   const results = await Promise.all(
-    chats.map((c) => photoTo(token, c, opts.photo, opts.caption, opts.withButton, opts.campaign ?? ""))
+    chats.map((c) => photoTo(token, c, opts.photo, opts.caption, opts.withButton, opts.campaign ?? "", site))
   );
   return { ok: results.length > 0 && results.every((r) => r.ok), results };
 }
@@ -328,13 +332,14 @@ export const CHANNEL_BRAND = {
     title: "无界科技 BOUNDLESS · 官方频道",
     description:
       "无界科技官方频道 · 让沟通，无界。" +
-      "🎭换脸 🎙克隆声音 🎬直播换脸换声 🌐实时换语言 💬AI自动成交 🔐私有部署。" +
-      "真实案例 · 新功能 · 限时优惠第一时间发布 · USDT 结算。官网与客服见置顶。",
+      "主推 💬智聊 ChatX：统一收件箱＋AI 自动成交＋拟人互译，下载即免费开始。" +
+      "另有 🎯真机获客 🎭换脸 🎙克隆声音 🎬直播分身 🔐私有部署。" +
+      "新功能 · 限时优惠第一时间发布 · USDT 结算。官网与客服见置顶。",
   },
   group: {
     title: "无界科技 · 交流群",
     description:
-      "无界科技官方交流群 · 换脸/克隆声音/直播分身/实时换语言/AI 自动成交。" +
+      "无界科技官方交流群 · 主聊 💬智聊 ChatX（收件箱/AI 成交/翻译），也聊换脸、克隆声音、直播分身。" +
       "提问、领试用、同行交流。@小界 或点客服随时响应；广告与刷屏将被移除。",
   },
 } as const;

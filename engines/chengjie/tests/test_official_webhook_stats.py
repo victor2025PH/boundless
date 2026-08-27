@@ -289,7 +289,7 @@ def test_ops_card_triple_registered():
     assert "/api/admin/official-webhook-status" in src
     assert "anchor:'officialWhKpis'" in src
     # 站内惯例：端点 404 / 无启用渠道 → 整卡隐藏
-    assert "if(!d||!d.ok||!d.active){ sec.style.display='none'; return; }" in src
+    assert "if(!d||!d.ok||!d.active){ opsHideCardEl(sec, 'offwh', 'disabled'); return; }" in src
 
 
 def test_i18n_keys_bilingual():

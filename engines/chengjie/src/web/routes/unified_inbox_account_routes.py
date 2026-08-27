@@ -21,7 +21,7 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException, Request
 
@@ -38,6 +38,10 @@ from src.web.routes.unified_inbox_auth import _session_agent
 from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
+
+# 入站语音落库前转录的墙钟上限：协议边车（whatsapp-baileys / messenger-web）在等这个
+# HTTP 返回，超时会让它重投同一条消息。ASR 自己有超时，这层只兜「整条链卡死」。
+_INGEST_ASR_TIMEOUT_SEC = 25.0
 
 # 各平台「边车 worker」的登录 mode——即会主动 POST /session-status 的那些服务所对应的
 # mode（messenger-web=web / whatsapp-baileys=protocol，与各自 login provider 落库口径一致）。
@@ -211,6 +215,72 @@ def _mark_proto_avatar_bad(platform: str, account_id: str) -> None:
 
 def _clear_proto_avatar_bad(platform: str, account_id: str) -> None:
     _PROTO_AVATAR_BAD_UNTIL.pop(f"{platform}:{account_id}", None)
+
+
+def _norm_msg_text(t: Any) -> str:
+    """消息文本归一化（去重与校正索引共用的唯一口径）。"""
+    return " ".join(str(t or "").split()).lower()
+
+
+def approx_fix_index(
+    existing: List[Dict[str, Any]],
+) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    """建「合成时间行」的可校正索引（实施72 P5）：(按平台 msg_id, 按方向|文本)。
+
+    只登记 ``approx_ts=1``（时间是猜的）的行——历史重推带回真实 ts 时，去重本会把
+    那条整体丢弃、错时间永久留库；有了索引就能就地修对。
+    文本键指向多行 → **歧义**（同一句「好」出现两次，认不出真值该贴哪条）→ 从索引
+    剔除：宁可留着「≈」标，也不把真实时间贴到错的行上。msg_id 天然唯一不受此限。
+    """
+    by_id: Dict[str, Dict[str, Any]] = {}
+    by_txt: Dict[str, Dict[str, Any]] = {}
+    ambiguous: set = set()
+    for m in existing or []:
+        if not int(m.get("approx_ts") or 0):
+            continue
+        if not str(m.get("message_id") or "").strip():
+            continue
+        pmid = str(m.get("platform_msg_id") or "").strip()
+        if pmid:
+            by_id[pmid] = m
+        text = _norm_msg_text(m.get("text"))
+        if not text:
+            continue
+        key = f"{m.get('direction')}|{text}"
+        if key in by_txt:
+            ambiguous.add(key)
+        else:
+            by_txt[key] = m
+    for key in ambiguous:
+        by_txt.pop(key, None)
+    return by_id, by_txt
+
+
+def correct_approx_row(
+    store: Any,
+    row: Optional[Dict[str, Any]],
+    real_ts: float,
+) -> bool:
+    """把索引命中的合成时间行校正为真实时间（成功则同步内存快照）。
+
+    校正只许「猜的→真的」单向：store 侧 SQL 另有 ``approx_ts=1`` 闸，真实时间行
+    永不被改写（否则每次重推都是一次时间抖动＝不幂等）。同步 ``row`` 是因为调用方
+    随后要用 existing 快照算「库内最早时间」当合成锚点，读旧值会把残余合成行排到
+    真史之后。旧 store（方法未装载）静默跳过，绝不影响回填主链。
+    """
+    if not row or real_ts <= 0:
+        return False
+    try:
+        if not store.correct_approx_ts(str(row.get("message_id") or ""), real_ts):
+            return False
+    except AttributeError:
+        return False
+    except Exception:
+        logger.debug("[protocol] 补收时间校正失败", exc_info=True)
+        return False
+    row["ts"] = real_ts
+    row["approx_ts"] = 0
+    return True
 
 
 # resolve-peer 端点并发上限：占用的是 starlette 共享线程池（全站 sync 端点共用 ~40 线程），
@@ -529,6 +599,161 @@ def _tg_deep_try_start(account_id: str, chat_key: str) -> bool:
             "started_at": time.time(), "finished_at": 0.0,
         }
         return True
+
+
+# ── B88：线程缺口探测（打开会话时 云端顶部 id vs 镜像最大 id）──────────────
+# 进程内观测表：{cid: {state, checked_at, top_id, mirror_max_id, gap, fetched,
+# inserted, capped, error, error_kind, finished_at}}。状态经 /thread 响应带给
+# 前端（补拉失败必须显式可见，禁止静默漏显——实施64:486 ③）。
+_TG_GAP_PROBE: Dict[str, Dict[str, Any]] = {}
+_TG_GAP_LOCK = threading.Lock()
+_TG_GAP_MAX = 300
+_TG_GAP_COOLDOWN_SEC = 120.0
+
+
+def tg_gap_probe_snapshot(cid: str) -> Dict[str, Any]:
+    """读某会话缺口探测快照（无记录 → state=idle）。"""
+    with _TG_GAP_LOCK:
+        st = _TG_GAP_PROBE.get(str(cid or ""))
+        return dict(st) if st else {"state": "idle"}
+
+
+def _tg_gap_update(cid: str, **kw: Any) -> None:
+    with _TG_GAP_LOCK:
+        _TG_GAP_PROBE.setdefault(str(cid or ""), {}).update(kw)
+
+
+def _tg_gap_try_start(cid: str, now: float, *, force: bool = False) -> bool:
+    """原子置 running；冷却窗内/已在跑 → False。容量按最旧完成态清。
+
+    冷却按 ``checked_at`` 计（不是 finished_at）——/thread 是秒级轮询入口，
+    没有冷却就是每拍一次 RPC。``force``（手动重试按钮）只豁免冷却，不豁免
+    running 单飞。
+    """
+    cid = str(cid or "")
+    with _TG_GAP_LOCK:
+        st = _TG_GAP_PROBE.get(cid) or {}
+        if st.get("state") == "running":
+            return False
+        if not force and (now - float(st.get("checked_at") or 0)) < _TG_GAP_COOLDOWN_SEC:
+            return False
+        if len(_TG_GAP_PROBE) >= _TG_GAP_MAX and cid not in _TG_GAP_PROBE:
+            done = sorted(
+                (k for k, v in _TG_GAP_PROBE.items()
+                 if v.get("state") != "running"),
+                key=lambda k: float(_TG_GAP_PROBE[k].get("checked_at") or 0))
+            for k in done[: max(1, len(_TG_GAP_PROBE) - _TG_GAP_MAX + 1)]:
+                _TG_GAP_PROBE.pop(k, None)
+        _TG_GAP_PROBE[cid] = {
+            "state": "running", "checked_at": float(now),
+            "top_id": 0, "mirror_max_id": 0, "gap": False,
+            "fetched": 0, "inserted": 0, "capped": False,
+            "error": "", "error_kind": "", "finished_at": 0.0,
+        }
+        return True
+
+
+def _gap_probe_pyro(app: Any, account_id: str) -> Any:
+    """B88 取数 client（严格版）：账号专属 worker client；主 client 仅限 default。
+
+    刻意**不**复用 ``_get_tg_pyro_for_account`` 的无条件主 client 回落——按别的
+    账号身份拉历史再按本账号 cid 落库＝串号污染镜像（autosync 同款纪律）。
+    """
+    try:
+        from src.integrations.account_orchestrator import get_orchestrator_if_running
+        orch = get_orchestrator_if_running()
+        if orch is not None:
+            wp = _extract_pyro(getattr(
+                orch.worker_for("telegram", account_id), "client", None))
+            if wp is not None:
+                return wp
+    except Exception:
+        logger.debug("[gap-probe] 取 worker client 失败 acct=%s",
+                     account_id, exc_info=True)
+    if str(account_id or "default") == "default":
+        return _extract_pyro(getattr(
+            getattr(app, "state", None), "telegram_client", None))
+    return None
+
+
+def maybe_probe_tg_thread_gap(
+    app: Any, store: Any, account_id: str, chat_key: str, *,
+    force: bool = False,
+) -> Dict[str, Any]:
+    """B88：打开会话时探测镜像缺口并自动补拉（best-effort，绝不阻塞 /thread）。
+
+    重启/停机窗口造成「线程视图冻在重启前最后一条」（QTSE67 实锤）：列表 ts 走
+    live dialogs 所以还在动、AI 照回，唯独镜像读取链缺了停机段。本钩子在读取
+    入口对比 dialog 顶部 id 与镜像最大 id，有缺口即在该账号 pyrogram loop 上
+    补拉缺口段（ingest 去重、不触发 SSE/auto-draft/自动回复）。
+
+    护栏：per-cid 120s 冷却（/thread 秒级轮询不放大 RPC）+ running 单飞 +
+    账号断网冷却让路 + 账号级同步/全量深同步在跑时让路 + 严格 client 路由
+    （不许主 client 顶别的账号）。返回触发结果（观测用）。
+    """
+    account_id = str(account_id or "default")
+    chat_key = str(chat_key or "")
+    cid = f"telegram:{account_id}:{chat_key}"
+    if store is None or not chat_key:
+        return {"ok": False, "reason": "unavailable"}
+    if _tg_client_cooling(account_id):
+        return {"ok": False, "reason": "client_cooling"}
+    try:
+        if tg_history_sync_snapshot(account_id).get("state") == "running":
+            return {"ok": False, "reason": "busy_account_sync"}
+        from src.integrations.tg_full_sync import full_sync_snapshot
+        if full_sync_snapshot(account_id).get("state") == "running":
+            return {"ok": False, "reason": "busy_full_sync"}
+    except Exception:
+        pass
+    now = time.time()
+    if not _tg_gap_try_start(cid, now, force=force):
+        return {"ok": True, "skipped": "cooldown_or_running"}
+    pyro = _gap_probe_pyro(app, account_id)
+    loop = getattr(pyro, "loop", None)
+    if pyro is None or loop is None or not loop.is_running():
+        # 客户端不可用＝这轮探不了；不算 error（离线是常态），保留 checked_at
+        # 吃冷却防每拍重试。
+        _tg_gap_update(cid, state="skipped", finished_at=time.time())
+        return {"ok": False, "reason": "client_unavailable"}
+    try:
+        mirror_max = int(store.max_numeric_platform_msg_id(cid) or 0)
+    except Exception:
+        mirror_max = 0
+    _tg_gap_update(cid, mirror_max_id=mirror_max)
+    import asyncio
+    from src.inbox.ingest import ingest_thread
+    from src.integrations.protocol_bridge import probe_fill_tg_gap, tg_error_kind
+
+    def _ingest(chat: Dict[str, Any], msgs: List[Dict[str, Any]]) -> int:
+        return ingest_thread(store, chat, msgs)
+
+    async def _run() -> None:
+        try:
+            stats = await probe_fill_tg_gap(
+                pyro, account_id, chat_key,
+                mirror_max_id=mirror_max, cap=300, ingest=_ingest)
+            _tg_gap_update(
+                cid, state="done", finished_at=time.time(),
+                top_id=int(stats.get("top_id") or 0),
+                gap=bool(stats.get("gap")),
+                fetched=int(stats.get("fetched") or 0),
+                inserted=int(stats.get("inserted") or 0),
+                capped=bool(stats.get("capped")))
+            if stats.get("gap"):
+                logger.info(
+                    "[gap-probe] 缺口补拉 cid=%s top=%s mirror=%s 拉=%s 入=%s%s",
+                    cid, stats.get("top_id"), mirror_max,
+                    stats.get("fetched"), stats.get("inserted"),
+                    "（触顶未接上）" if stats.get("capped") else "")
+        except Exception as exc:
+            logger.debug("[gap-probe] 缺口补拉失败 cid=%s", cid, exc_info=True)
+            _tg_gap_update(cid, state="error", error=str(exc)[:200],
+                           error_kind=tg_error_kind(exc),
+                           finished_at=time.time())
+
+    asyncio.run_coroutine_threadsafe(_run(), loop)
+    return {"ok": True, "started": True}
 
 
 def _tg_client_cooling(account_id: str) -> bool:
@@ -1118,7 +1343,9 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         _name = _ident["display_name"]
         _phone = _ident["phone"]
         # 观测：仅私聊 peer 身份分类（named/backfilled/raw），量化各平台「仍是裸 id」比例
-        if direction == "in" and _chat_type != "group":
+        from src.inbox.group_thread import is_one_to_one as _is_1to1
+        _one_to_one = _is_1to1(_chat_type)
+        if direction == "in" and _one_to_one:
             _record_ingest_identity(_plat, _ident["outcome"])
         _reply_to = (body or {}).get("reply_to")
         if not isinstance(_reply_to, dict):
@@ -1152,13 +1379,58 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                         _pre_cid, "manual" if _is_spam_request else "auto_ai")
             except Exception:
                 logger.debug("[protocol] 陌生人请求预置档位失败", exc_info=True)
+        _text = str((body or {}).get("text") or "")
+        _mtype = str((body or {}).get("media_type") or "")
+        _mref = str((body or {}).get("media_ref") or "")
+        # 入站语音**落库前**转录（2026-08-23）：此前转录只活在拟稿的 enrich 里，
+        # 拟稿一被跳过（幂等/守卫/额度/关自动拟稿）转录就跟着不跑，消息行永久停在
+        # 「[语音]」；而占位符不携带消息身份，会让下一条语音被判成重复 → 会话彻底
+        # 哑掉（WA 实锤 08-22 03:47 与 08-23 05:29 两条全空、零回复）。
+        # 必须在 ingest_incoming **之前**：拟稿回调在它内部同步触发，晚一步草稿快照
+        # 就只能拿到占位符。转录到手 → 消息行、草稿快照、A 线自动回复一次性都拿到
+        # 真文本。任何失败保留占位符走原路径，绝不阻断落库。
+        if direction == "in" and _mref and _mtype.lower() in ("voice", "audio"):
+            try:
+                from src.inbox.media_enrich import (
+                    is_placeholder_only, lazy_voice_transcriber,
+                )
+                if is_placeholder_only(_text):
+                    from src.integrations.protocol_bridge import (
+                        static_media_ref_to_path,
+                    )
+                    _cm = getattr(request.app.state, "config_manager", None)
+                    _cfg0 = (getattr(_cm, "config", None) or {}) if _cm else {}
+                    _tc = getattr(request.app.state, "telegram_client", None)
+                    _vtr = getattr(_tc, "voice_transcriber", None) if _tc else None
+                    if _vtr is None:
+                        # 宿主启动后才热开 ASR → 懒建兜底（同 media_enrich 口径）
+                        _vtr = lazy_voice_transcriber(_cfg0)
+                    _vpath = static_media_ref_to_path(_mref)
+                    if _vpath and _vtr is not None:
+                        _vlang = str((_cfg0.get("voice_recognition") or {}).get(
+                            "language", "auto")) or "auto"
+                        _vtxt = await asyncio.wait_for(
+                            _vtr.transcribe_voice_message(str(_vpath), _vlang),
+                            timeout=_INGEST_ASR_TIMEOUT_SEC,
+                        )
+                        if _vtxt and str(_vtxt).strip():
+                            _text = str(_vtxt).strip()
+                            logger.info(
+                                "[protocol] 入站语音落库前转录 %s:%s:%s → %s",
+                                _plat, _acct, _ck, _text[:80])
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[protocol] 入站语音转录超时 %ss，按占位符落库 %s:%s:%s",
+                    _INGEST_ASR_TIMEOUT_SEC, _plat, _acct, _ck)
+            except Exception:
+                logger.debug("[protocol] 入站语音落库前转录失败（忽略）", exc_info=True)
         cid = ingest_incoming(
             store,
             platform=_plat,
             account_id=_acct,
             chat_key=_ck,
             name=_name,
-            text=str((body or {}).get("text") or ""),
+            text=_text,
             ts=float((body or {}).get("ts") or 0),
             msg_id=str((body or {}).get("msg_id") or ""),
             direction=direction,
@@ -1181,8 +1453,10 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                 store.mark_conversation_request(cid, _req_cat)
             except Exception:
                 logger.debug("[protocol] 陌生人请求标记失败", exc_info=True)
-        # 群聊不进自动回复（自动回复面向 1:1）。spam 类陌生人请求只入收件箱、不自动回。
-        if direction == "in" and _chat_type != "group" and not _is_spam_request:
+        # 群/频道/多人房间不进自动回复（自动回复面向 1:1，判据走 group_thread 白名单——
+        # 旧口径 `!= "group"` 会把 channel / supergroup / LINE room 全放进来）。
+        # spam 类陌生人请求只入收件箱、不自动回。
+        if direction == "in" and _one_to_one and not _is_spam_request:
             await maybe_auto_reply(make_message(
                 platform=_plat,
                 account_id=_acct,
@@ -1243,9 +1517,50 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                                  exc_info=True)
         from src.integrations.platform_session_health import (
             get_platform_session_health,
+            mark_superseded_accounts,
         )
         trans = get_platform_session_health().record(
             plat, acct or login_id, status, detail=detail, login_id=login_id)
+        # 身份接替（2026-08-27）：同一登录档案被新账号授权 → 旧账号健康记录已被
+        # record() 翻 logged_out，这里补注册表标记（worker:* → superseded:*）停催办。
+        if trans.get("superseded"):
+            mark_superseded_accounts(plat, trans["superseded"], acct or login_id)
+        # 登录身份决议（实施72 P1-1/P1-2）：authorized 即登记「登录位↔账号」映射
+        # （此前只有连接流轮询会写，relogin/回报路径全绕过 → 换人检测没原料），
+        # 并合并两路换人证据（注册表映射 + 上面 session_health 的 superseded 清单）
+        # → 检测到换人给新账号打 identity_pending 隔离标（不补人设/自动化封顶
+        # review/告警审计），人经 /api/admin/account-identity/confirm 显式转正。
+        if status == "authorized" and acct and login_id:
+            try:
+                from src.integrations.account_identity import (
+                    resolve_login_identity,
+                )
+                resolve_login_identity(
+                    plat, acct, login_id,
+                    extra_prev=list(trans.get("superseded") or []))
+            except Exception:
+                logger.debug("[protocol] 登录身份决议失败（忽略）", exc_info=True)
+        # B99（实施68 P1-9 残留 ⑤）：worker 检出平台「临时封锁」→ 账号级 ban_signal
+        # 暂停（kill_switch TTL 自动恢复，与 TG PeerFlood 同 pause 语义；messenger 面
+        # 此前未接）。临时封锁≠真封禁：绝不 auto_ban 永久冻结/标 meta.banned。
+        # 冻结原因经 kill_switch reason 进拦截横幅；ops_events 审计随 apply_action 落。
+        if status == "blocked" and acct:
+            try:
+                from src.integrations.account_registry import get_account_registry
+                from src.ops.ban_signal import apply_action
+                from src.ops.kill_switch import get_kill_switch
+                apply_action(
+                    plat, acct,
+                    {"kind": "pause", "cooldown_sec": 7200.0,
+                     "reason": f"platform_blocked:{(detail or 'temporarily_blocked')[:60]}"},
+                    kill_switch=get_kill_switch(),
+                    registry=get_account_registry())
+                logger.warning(
+                    "[protocol] %s:%s 平台临时封锁 → 账号级暂停 2h（ban_signal）",
+                    plat, acct)
+            except Exception:
+                logger.debug("[protocol] blocked→ban_signal 处置失败（忽略）",
+                             exc_info=True)
         # P1 被动退出闭环（2026-07-31）：运营点「登出」走 /logout 会写 registry
         # status=offline；但「FB/平台侧把号踢下线」（cookie 失效/风控/手机端解绑）
         # 只有这条 push——此前注册表停留在 online，而健康表是**进程内存态**，服务一
@@ -1281,8 +1596,24 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                     # 也拉不起 worker。removed(软删) 不复活。
                     # 归位顺带清 offline_reason 自灭标记——下一次掉线从头判定。
                     _edge_mode = _EDGE_WORKER_WEB_MODE.get(plat)
+                    _meta_patch: Dict[str, Any] = {"offline_reason": ""}
+                    # 实施72 P2 重连积压盖章：offline→online 的恢复记录
+                    # {恢复时刻, 估算断线时长}（时长≈now-updated_at，行在离线期被
+                    # 其他 meta 写触碰会低估 → 只会少拦不会误拦，方向安全）。
+                    # 消费方＝effective_automation「reconnect_backlog」封顶层：
+                    # 长断线恢复后的短窗内 AI 只拟稿人审（积压消息的时间语境不可信，
+                    # 「大半夜回 9 天前的消息」类穿帮的总闸）。
+                    if _rst == "offline":
+                        try:
+                            import time as _time
+                            _now2 = _time.time()
+                            _meta_patch["last_recovered_at"] = _now2
+                            _meta_patch["last_downtime_sec"] = max(
+                                0.0, _now2 - float(_row.get("updated_at") or _now2))
+                        except Exception:
+                            pass
                     _reg.upsert(plat, acct, status="online", mode=_edge_mode,
-                                meta={"offline_reason": ""}, merge_meta=True)
+                                meta=_meta_patch, merge_meta=True)
             except Exception:
                 logger.debug("[protocol] session-status 注册表状态同步失败",
                              exc_info=True)
@@ -1305,6 +1636,84 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         return {"ok": True, "changed": bool(trans.get("changed")),
                 "went_unhealthy": bool(trans.get("went_unhealthy")),
                 "recovered": bool(trans.get("recovered"))}
+
+    @app.get("/api/admin/account-identity/pending")
+    async def api_account_identity_pending(request: Request):
+        """「身份待确认」账号清单（实施72 隔离态观测面）。
+
+        pending 账号＝登录位被检测到换人、尚未人工转正的账号：AI 只拟稿不自发、
+        不自动补挂人设。任意登录角色可读（observability）；写口见 confirm。
+
+        同时回**近期身份变更审计**（`ops_events` 的 `identity_change`，隔离/转正
+        各一条）：隔离态是瞬时状态，转正后 pending 会空——只看 pending 的看板会在
+        事后什么都看不到，运维无从判断「今天到底换过号没有」。台账缺库/无事件回空
+        列表（前端据此整卡隐藏），绝不因审计读取失败影响 pending 主体。
+        """
+        api_auth(request)
+        from src.integrations.account_identity import pending_accounts
+        out: Dict[str, Any] = {"ok": True, "pending": pending_accounts()}
+        recent: List[Dict[str, Any]] = []
+        try:
+            from src.ops.ops_events import get_ops_event_store
+            st = get_ops_event_store()
+            if st is not None:
+                for r in (st.recent_kinds(["identity_change"], limit=20) or []):
+                    recent.append({
+                        "ts": float(r.get("ts") or 0),
+                        "platform": str(r.get("platform") or ""),
+                        "account_id": str(r.get("account_id") or ""),
+                        "reason": str(r.get("reason") or ""),
+                        "detail": str(r.get("detail") or "")[:200],
+                    })
+        except Exception:
+            logger.debug("[identity] 变更审计读取失败（忽略）", exc_info=True)
+        out["recent"] = recent
+        # 疑似自有号未登记（实施72 下一阶段 P1）：对端命中本机注册表 removed
+        # 归档账号（账密迁去别机的痕迹，Calixa 原型）却没登记 own_fleet.extra
+        # → 卡上提示行。只读提示不封顶（封顶会误伤「老板扮客户」常态流）。
+        try:
+            from src.integrations.account_identity import fleet_candidates
+            out["fleet_candidates"] = fleet_candidates(
+                (getattr(config_manager, "config", None) or {})
+                if config_manager else {},
+                inbox_store=getattr(request.app.state, "inbox_store", None))
+        except Exception:
+            logger.debug("[identity] 自有号候选检测失败（忽略）", exc_info=True)
+            out["fleet_candidates"] = []
+        return out
+
+    @app.post("/api/admin/account-identity/confirm")
+    async def api_account_identity_confirm(request: Request):
+        """身份转正（实施72）：人确认「这个新身份就是本机要运营的账号」。
+
+        body: ``{platform, account_id, persona_id?}``——``persona_id`` 非空＝显式
+        绑定该人设；空＝按域默认补挂（此刻是人的决定，自动补挂禁令不再适用）。
+        清 identity_pending 后自动化封顶层（compute_mode_caps ④）随缓存 TTL
+        （≤60s）解除。运营写口：拒 agent/viewer。
+        """
+        api_auth(request)
+        _require_account_manager(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        plat = str((body or {}).get("platform") or "").lower().strip()
+        acct = str((body or {}).get("account_id") or "").strip()
+        if not plat or not acct:
+            raise HTTPException(400, tr(request, "err.ws.field_required",
+                                        field="platform/account_id"))
+        from src.integrations.account_identity import confirm_account_identity
+        try:
+            actor = str(request.session.get("user", "") or "")
+        except Exception:
+            actor = ""
+        cfg = (getattr(config_manager, "config", None) or {}) if config_manager else {}
+        res = confirm_account_identity(
+            plat, acct, persona_id=str((body or {}).get("persona_id") or ""),
+            config=cfg, actor=actor)
+        if not res.get("ok"):
+            raise HTTPException(404, tr(request, "err.ws.account_not_found"))
+        return {"ok": True, "persona_id": res.get("persona_id") or ""}
 
     @app.post("/api/internal/protocol/inbox-health")
     async def api_protocol_inbox_health(request: Request):
@@ -1390,15 +1799,19 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         历史消息批（首次接入时 top-N 会话各回填末尾若干条，坐席接手即有上下文）。
 
         两条硬护栏：
-        - **只对空会话写入**（store 里该会话尚无任何消息）。即便 worker 已带
-          synth ``msg_id``，跨次回填仍以「空会话才收」为幂等闸——避免半批失败
-          重推时与文本去重口径打架；非空会话如实返回 not_empty。
+        - **合并写入**（实施72 2026-08-27 改）：与库内既有消息按
+          ``platform_msg_id`` ∩ ``(方向, 归一化文本)`` 双层去重后只收新条目——
+          与「拉更早」``_messenger_pull_history`` 同一口径。旧闸「只对空会话
+          写入」在 P3 引入 synth msg_id 后已是过时保守，且被 2026-08-27 竞态
+          实锤打穿：实时链先入 1 条 → 4 秒后整批 14 条历史被 not_empty 拒收、
+          13 条永久丢失（新账号「登录了却没读到记录」的直接成因之一）。
         - **历史语义 = ingest_thread**（与 Telegram 历史同步同一入口）：直写 store，
           不触发 SSE / auto-draft / 自动回复、不改未读——历史绝不惊动 AI 与坐席。
 
-        消息 ts 缺失（DOM 解析不出绝对时间）时按数组序回推（base - n + i 秒），
-        只保证顺序正确；base 取 worker 侧采集时刻。带 ``msg_id`` 时写入
-        ``platform_msg_id``（表情/撤回挂点）。
+        消息 ts 缺失（DOM 解析不出绝对时间）时的合成锚点：空会话按数组序回推
+        （base - n + i 秒，base＝worker 采集时刻）；**非空会话**锚定在库内最早
+        消息之前（只保序——与拉更早同语义，绝不把旧史伪装成新消息）。带
+        ``msg_id`` 时写入 ``platform_msg_id``（表情/撤回挂点 + 跨次去重键）。
         """
         api_auth(request)
         try:
@@ -1424,13 +1837,12 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             logger.debug("[protocol] thread-history 墓碑判定失败（忽略）",
                          exc_info=True)
         try:
-            # 空会话判定必须用 list_recent_messages 而非 get_oldest_message——
-            # 后者只认「带 platform_msg_id」的消息；旧回填无 id 时用它会恒判「空」
-            # → 幂等护栏形同虚设。新回填虽可带 id，仍走 list_recent 统一口径。
-            if store.list_recent_messages(cid, limit=1):
-                return {"ok": True, "inserted": 0, "reason": "not_empty"}
+            # 既有消息快照：空/非空决定合成 ts 锚点方向；非空时兼作去重基准。
+            # 用 list_recent_messages 而非 get_oldest_message——后者只认「带
+            # platform_msg_id」的消息，旧数据无 id 时会恒判「空」。
+            existing = store.list_recent_messages(cid, limit=500) or []
         except Exception:
-            logger.debug("[protocol] thread-history 空会话判定失败", exc_info=True)
+            logger.debug("[protocol] thread-history 既有消息读取失败", exc_info=True)
             return {"ok": False, "reason": "store_error"}
         raw = (body or {}).get("messages") or []
         if not isinstance(raw, list) or not raw:
@@ -1468,7 +1880,12 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                 "text": text,
                 "direction": ("out" if str(m.get("direction") or "in") == "out"
                               else "in"),
-                "ts": ts or (base - n_raw + i),
+                # 空会话：缺 ts 按数组序回推（base - n + i，旧语义原样保留）。
+                # 非空会话：先留 0，去重后统一锚到库内最早消息之前（见下）。
+                "ts": ts or ((base - n_raw + i) if not existing else 0.0),
+                # 实施72 P2 诚实标记：缺真实 ts 的行 ts 是合成值 → approx_ts=1
+                #（消费方：SLO 剔除 / 前端「约·补收」/ AI 新鲜度）；显式 ts 保 0。
+                "approx_ts": 0 if ts else 1,
                 "media_type": media_type,
                 "media_ref": media_ref,
                 "source": src,
@@ -1478,6 +1895,57 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             msgs.append(row)
         if not msgs:
             return {"ok": True, "inserted": 0, "reason": "no_messages"}
+        corrected = 0
+        if existing:
+            # ── 合并分支（实施72）：与拉更早同口径的双层去重 + 前置锚定 ──────
+            def _norm(t: Any) -> str:
+                return " ".join(str(t or "").split()).lower()
+
+            seen_txt = {f"{m.get('direction')}|{_norm(m.get('text'))}"
+                        for m in existing if _norm(m.get("text"))}
+            seen_ids = {str(m.get("platform_msg_id") or "").strip()
+                        for m in existing
+                        if str(m.get("platform_msg_id") or "").strip()}
+            # 实施72 P5 自愈校正索引（与「拉更早」路径共用同一 helper）
+            fix_by_id, fix_by_txt = approx_fix_index(existing)
+            fresh = []
+            for m in msgs:
+                pmid = str(m.get("msg_id") or "").strip()
+                key = f"{m.get('direction')}|{_norm(m.get('text'))}"
+                dup = bool(pmid and pmid in seen_ids) or key in seen_txt
+                if dup:
+                    # 重复行携带真实 ts → 把旧的合成时间修对，而不是整条丢弃
+                    try:
+                        _real = float(m.get("ts") or 0)
+                    except (TypeError, ValueError):
+                        _real = 0.0
+                    if correct_approx_row(
+                            store, fix_by_id.get(pmid) or fix_by_txt.get(key),
+                            _real):
+                        corrected += 1
+                    continue
+                seen_txt.add(key)
+                if pmid:
+                    seen_ids.add(pmid)
+                fresh.append(m)
+            if corrected:
+                logger.info(
+                    "[protocol] thread-history 补收时间校正 %d 条 cid=%s",
+                    corrected, cid)
+            if not fresh:
+                return {"ok": True, "inserted": 0, "reason": "all_duplicates",
+                        "corrected": corrected}
+            try:
+                earliest = min((float(m.get("ts") or 0) for m in existing
+                                if float(m.get("ts") or 0) > 0), default=0.0)
+            except (TypeError, ValueError):
+                earliest = 0.0
+            anchor = earliest or base
+            n_fresh = len(fresh)
+            for j, m in enumerate(fresh):
+                if not float(m.get("ts") or 0):
+                    m["ts"] = anchor - (n_fresh - j)
+            msgs = fresh
         from src.inbox.ingest import ingest_thread
         from src.integrations.protocol_bridge import sanitize_peer_name
         chat = {
@@ -1487,18 +1955,21 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             # 空名由 store CASE 护栏兜住不覆盖真名）
             "name": sanitize_peer_name((body or {}).get("name") or ""),
             "avatar_url": str((body or {}).get("avatar_url") or ""),
-            # last_ts 用批内最新消息时间（store MAX 语义不会回拉）；unread 恒 0：
-            # 回填是历史，绝不制造「新消息」观感。
-            "last_ts": max(float(m["ts"]) for m in msgs),
-            "last_msg": str(msgs[-1].get("text") or ""),
-            "unread": 0,
+            # 空会话：last_ts 用批内最新消息时间（store MAX 语义不会回拉）。
+            # 合并分支：拉的是旧史 → last_ts 传 0（绝不顶掉会话现有排序位），
+            # unread 保持现值。两分支 unread 都不制造「新消息」观感。
+            "last_ts": (0 if existing
+                        else max(float(m["ts"]) for m in msgs)),
+            "last_msg": ("" if existing else str(msgs[-1].get("text") or "")),
+            "unread": (int((store.get_conversation(cid) or {}).get("unread")
+                           or 0) if existing else 0),
         }
         try:
             inserted = int(ingest_thread(store, chat, msgs) or 0)
         except Exception:
             logger.debug("[protocol] thread-history 落库失败", exc_info=True)
             return {"ok": False, "reason": "ingest_error"}
-        return {"ok": True, "inserted": inserted}
+        return {"ok": True, "inserted": inserted, "corrected": corrected}
 
     @app.post("/api/internal/protocol/contacts")
     async def api_protocol_contacts(request: Request):
@@ -2067,47 +2538,67 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
     async def api_platform_group_members(platform: str, account_id: str, request: Request):
         """群成员名单（P4-11，供收件箱 @提及选人面板）。
 
-        query: chat_key=群号(digits)。仅 WhatsApp 协议号；成员名优先用已同步通讯录名，
-        否则回落号码。best-effort——取不到（未在线/非群/无权限）返回空 members。
+        query: chat_key=群号。WhatsApp 优先打直播 API；空/失败/其它平台一律
+        回落会话库入站发言人（``list_group_speakers``）。不再用
+        ``unsupported_platform`` 把选人面板打死——空名单前端自己藏面板。
         """
         api_auth(request)
         platform = str(platform or "").lower()
-        if platform != "whatsapp":
-            return {"ok": False, "reason": "unsupported_platform", "members": []}
         chat_key = str(request.query_params.get("chat_key") or "").strip()
         if not chat_key:
             return {"ok": False, "reason": "missing_chat_key", "members": []}
-        cfg = (config_manager.config if config_manager is not None else {}) or {}
-        from src.integrations.whatsapp_baileys_login import (
-            protocol_enabled as wa_enabled, service_base_url, _get_json,
-        )
-        if not wa_enabled(cfg):
-            return {"ok": False, "reason": "protocol_disabled", "members": []}
-        try:
-            res = await _get_json(
-                f"{service_base_url(cfg)}/accounts/{account_id}/group-members"
-                f"?jid={chat_key}")
-        except Exception:
-            logger.debug("[protocol] 取群成员失败", exc_info=True)
-            return {"ok": False, "reason": "service_error", "members": []}
-        raw = (res or {}).get("members") or []
         store = getattr(request.app.state, "inbox_store", None)
-        members: List[Dict[str, Any]] = []
-        for m in raw:
-            num = str((m or {}).get("number") or "").strip()
-            if not num:
-                continue
-            name = ""
-            if store is not None:
-                try:
-                    name = store.get_protocol_contact_name(platform, account_id, num)
-                except Exception:
-                    name = ""
-            members.append({"jid": str((m or {}).get("jid") or ""),
-                            "number": num, "name": name or num,
-                            "admin": str((m or {}).get("admin") or "")})
-        return {"ok": bool((res or {}).get("ok", False)),
-                "subject": str((res or {}).get("subject") or ""), "members": members}
+
+        def _store_members() -> List[Dict[str, Any]]:
+            if store is None:
+                return []
+            try:
+                from src.inbox.normalizer import conv_id
+                from src.inbox.group_thread import speakers_as_members
+                cid = conv_id(platform, str(account_id or ""), chat_key)
+                rows = store.list_group_speakers(cid) if hasattr(
+                    store, "list_group_speakers") else []
+                return speakers_as_members(rows)
+            except Exception:
+                logger.debug("[protocol] 发言人回落失败", exc_info=True)
+                return []
+
+        live: List[Dict[str, Any]] = []
+        subject = ""
+        live_ok = False
+        if platform == "whatsapp":
+            cfg = (config_manager.config if config_manager is not None else {}) or {}
+            try:
+                from src.integrations.whatsapp_baileys_login import (
+                    protocol_enabled as wa_enabled, service_base_url, _get_json,
+                )
+                if wa_enabled(cfg):
+                    res = await _get_json(
+                        f"{service_base_url(cfg)}/accounts/{account_id}/group-members"
+                        f"?jid={chat_key}")
+                    raw = (res or {}).get("members") or []
+                    for m in raw:
+                        num = str((m or {}).get("number") or "").strip()
+                        if not num:
+                            continue
+                        name = ""
+                        if store is not None:
+                            try:
+                                name = store.get_protocol_contact_name(
+                                    platform, account_id, num)
+                            except Exception:
+                                name = ""
+                        live.append({"jid": str((m or {}).get("jid") or ""),
+                                     "number": num, "name": name or num,
+                                     "admin": str((m or {}).get("admin") or "")})
+                    subject = str((res or {}).get("subject") or "")
+                    live_ok = bool((res or {}).get("ok", False)) and bool(live)
+            except Exception:
+                logger.debug("[protocol] 取群成员失败，回落发言人", exc_info=True)
+        members = live if live_ok else _store_members()
+        source = "live" if live_ok else "store"
+        return {"ok": True, "subject": subject, "members": members,
+                "source": source}
 
     @app.get("/api/platforms/{platform}/{account_id}/contacts")
     async def api_platform_contacts(platform: str, account_id: str, request: Request):
@@ -2314,6 +2805,10 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         except (TypeError, ValueError):
             earliest = 0.0
         base_ts = earliest or time.time()
+        # 实施72 P5：与回填路径共用的自愈校正索引。**拉更早比回填够得更深**——
+        # worker 回填只读线程末尾 ~20 条，早已滚出该窗口的合成时间行只有这条路能修。
+        fix_by_id, fix_by_txt = approx_fix_index(existing)
+        corrected = 0
         fresh: List[Dict[str, Any]] = []
         for m in msgs_raw[:200]:
             if not isinstance(m, dict):
@@ -2321,28 +2816,58 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             text = str(m.get("text") or "")
             direction = "out" if str(m.get("direction") or "in") == "out" else "in"
             pmid = str(m.get("msg_id") or m.get("message_id") or "").strip()
-            if pmid and pmid in seen_ids:
-                continue
             key = f"{direction}|{_norm(text)}"
-            if not _norm(text) or key in seen:
+            if (pmid and pmid in seen_ids) or (_norm(text) and key in seen):
+                try:
+                    _real = float(m.get("ts") or 0)
+                except (TypeError, ValueError):
+                    _real = 0.0
+                if correct_approx_row(
+                        store, fix_by_id.get(pmid) or fix_by_txt.get(key), _real):
+                    corrected += 1
+                continue
+            if not _norm(text):
                 continue
             seen.add(key)
             if pmid:
                 seen_ids.add(pmid)
             src: Dict[str, Any] = {"sender_name": str(m.get("sender") or "")}
+            # 实施72 P4：worker 现在会随行下发 aria 解析出的真实 epoch（认不出=0）
+            try:
+                _real_ts = float(m.get("ts") or 0)
+            except (TypeError, ValueError):
+                _real_ts = 0.0
             row: Dict[str, Any] = {
                 "text": text, "direction": direction, "source": src,
+                "ts": _real_ts,
             }
             if pmid:
                 src["msg_id"] = pmid
                 src["message_id"] = pmid
                 row["msg_id"] = pmid
             fresh.append(row)
+        if corrected:
+            # 校正过就重算锚点：残余合成行要排在**校正后**的真实最早时间之前
+            try:
+                base_ts = min((float(m.get("ts") or 0) for m in existing
+                               if float(m.get("ts") or 0) > 0),
+                              default=0.0) or base_ts
+            except (TypeError, ValueError):
+                pass
         if not fresh:
-            return {"ok": False, "reason": "no_more", "requested": count}
+            # 「一条没新增」但修对了时间也是有效结果（坐席点了「加载更早」不该看到纯失败）
+            return {"ok": bool(corrected), "reason": "no_more",
+                    "requested": count, "corrected": corrected}
         n = len(fresh)
         for i, m in enumerate(fresh):
+            if float(m.get("ts") or 0) > 0:
+                # 实施72 P4：真实时间直存（approx=0）——「拉更早」从「只保序」升级
+                # 为「能保真就保真」；worker 认不出的行仍走下方合成+打标。
+                m["approx_ts"] = 0
+                continue
             m["ts"] = base_ts - (n - i)
+            # 实施72 P2：合成值锚定在库内最早消息之前（只保序），打 approx 标
+            m["approx_ts"] = 1
         from src.inbox.ingest import ingest_thread
         row = None
         try:
@@ -2362,7 +2887,10 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         except Exception:
             logger.debug("[protocol] messenger 历史落库失败", exc_info=True)
             return {"ok": False, "reason": "ingest_error"}
-        return {"ok": True, "requested": count, "inserted": inserted}
+        if corrected:
+            logger.info("[protocol] 拉更早补收时间校正 %d 条 cid=%s", corrected, cid)
+        return {"ok": True, "requested": count, "inserted": inserted,
+                "corrected": corrected}
 
     @app.post("/api/platforms/{platform}/{account_id}/history")
     async def api_platform_history(platform: str, account_id: str, request: Request):
@@ -2803,6 +3331,30 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         asyncio.run_coroutine_threadsafe(_run(), loop)
         return {"ok": True, "started": True, "offset_id": offset_id,
                 **tg_deep_backfill_snapshot(account_id, chat_key)}
+
+    @app.post("/api/platforms/telegram/{account_id}/gap-probe")
+    async def api_telegram_gap_probe(account_id: str, request: Request):
+        """B88：手动重试线程缺口补拉（豁免冷却；running 单飞仍生效）。
+
+        前端线程顶部「补拉失败」横幅的重试按钮打这里；成功与否经 /thread 的
+        ``gap_probe`` 字段回看。
+        """
+        api_auth(request)
+        store = getattr(request.app.state, "inbox_store", None)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        chat_key = str((body or {}).get("chat_key") or "").strip()
+        if not chat_key:
+            raise HTTPException(
+                400, tr(request, "err.ws.field_required", field="chat_key"))
+        res = maybe_probe_tg_thread_gap(
+            request.app, store, account_id, chat_key, force=True)
+        cid = f"telegram:{account_id}:{chat_key}"
+        return {**res, "cid": cid, **{"gap_probe": tg_gap_probe_snapshot(cid)}}
 
     @app.post("/api/platforms/{platform}/{account_id}/sync-groups")
     async def api_platform_sync_groups(platform: str, account_id: str, request: Request):
@@ -3654,6 +4206,26 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         except Exception:
             logger.debug("[accounts] 远端登出失败（忽略）", exc_info=True)
 
+    def _sync_health_logged_out(platform: str, account_id: str,
+                                reason: str) -> None:
+        """运营登出/删除 → 同步内存健康表为 ``logged_out``（best-effort，绝不抛）。
+
+        背景（2026-08-27 Calixa 实锤）：健康表此前只有 worker push 能翻状态，而
+        worker 对「档案已不存在的号」永远不会再 push——运营做了正确操作（登出/
+        删除），顶栏「通道离线」红条却要挂到下一次进程重启。直接 ``record()``
+        不发 EventBus（运营明示动作无需告警回声）；``logged_out`` 仍在不健康
+        集合 → 发送前快速失败语义不变，仅横幅（刻意不显示 logged_out）与催办
+        （注册表 operator/removed 语义）立即熄灭。
+        """
+        try:
+            from src.integrations.platform_session_health import (
+                get_platform_session_health,
+            )
+            get_platform_session_health().record(
+                platform, account_id, "logged_out", detail=reason)
+        except Exception:
+            logger.debug("[accounts] 健康表登出同步失败（忽略）", exc_info=True)
+
     def _clear_session_creds(platform: str, account_id: str,
                              *, status: str = "offline") -> None:
         """清空注册表里可自动重连的会话凭据，使账号需重新扫码登录（保留记录）。
@@ -3694,6 +4266,14 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             logger.debug("[accounts] logout 停止 worker 失败", exc_info=True)
         await _remote_logout(platform, account_id, cfg)
         _clear_session_creds(platform, account_id)
+        _sync_health_logged_out(platform, account_id, "operator logout")
+        # P0-1：登出=登录变更窗口开启——残留客户端随后抛的 auth 族错误（旧会话已
+        # 失效）降档为 pause+TTL，不判永久 ban（升级风暴同族误伤的显式登出面）。
+        try:
+            from src.ops.ban_signal import note_login_change
+            note_login_change(platform, account_id)
+        except Exception:
+            pass
         return {"ok": True, "platform": platform, "account_id": account_id}
 
     @app.post("/api/accounts/{platform}/{account_id}/remove")
@@ -3729,6 +4309,18 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             get_account_registry().remove(platform, account_id)
         except Exception:
             logger.debug("[accounts] remove 注册表移除失败", exc_info=True)
+        _sync_health_logged_out(platform, account_id, "operator remove")
+        # 账号终局 → 作废其全部待处理草稿（2026-08-27：Calixa 移除后一条 L1
+        # 待审稿挂了 10 天——账号没了草稿既发不出也无人清，白占积压看板）。
+        try:
+            _ibx = getattr(request.app.state, "inbox_store", None)
+            if _ibx is not None and hasattr(_ibx, "cancel_drafts_for_account"):
+                _n = _ibx.cancel_drafts_for_account(platform, account_id)
+                if _n:
+                    logger.info("[accounts] remove 连带作废待处理草稿 %d 条 "
+                                "%s:%s", _n, platform, account_id)
+        except Exception:
+            logger.debug("[accounts] remove 草稿作废失败（忽略）", exc_info=True)
         purged: Dict[str, int] = {}
         if purge:
             store = getattr(request.app.state, "inbox_store", None)
@@ -4867,6 +5459,25 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             res = await notifier.send_test(wh)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+        # B24（2026-08-21）报错人话化：把 send_test 带回的原始失败原因映射成
+        # 用户能行动的话术——「测试失败：HTTP 200」这类甩状态码违反人话铁律。
+        # 原始原因保留在日志（notifier 已 warning），响应只给人话+原因摘要。
+        if isinstance(res, dict) and not res.get("ok"):
+            raw = str(res.pop("error_raw", "") or "")
+            low = raw.lower()
+            if "chat not found" in low or "missing target" in low:
+                res["error"] = tr(request, "al.ct.err.chat_not_found")
+            elif ("unauthorized" in low or "missing url/token" in low
+                  or "http 401" in low):
+                res["error"] = tr(request, "al.ct.err.bad_token")
+            elif "blocked" in low or "kicked" in low:
+                res["error"] = tr(request, "al.ct.err.blocked")
+            elif ("timed out" in low or "timeout" in low
+                  or "getaddrinfo" in low or "connection" in low
+                  or "urlopen" in low):
+                res["error"] = tr(request, "al.ct.err.network")
+            else:
+                res["error"] = raw or tr(request, "al.ct.err.unknown")
         return res
 
     @app.get("/api/admin/alert-link-status")

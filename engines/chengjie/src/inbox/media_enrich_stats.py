@@ -35,12 +35,18 @@ class MediaEnrichStats:
         self._missed = 0
         self._by_reason: Dict[str, int] = {}
         self._by_kind: Dict[str, int] = {}
+        self._by_type: Dict[str, int] = {}
         self._last_miss_ts = 0.0
         self._last_miss_reason = ""
 
-    def record_understood(self, kind: str) -> None:
+    def record_understood(self, kind: str, desc_type: str = "") -> None:
+        """``desc_type``＝识别描述首行类型标记（P1 2026-08-19：A 单据/B 聊天截图/
+        C 普通图，空串＝无标记的旧产出）——回答「客户到底在发什么类的图」。"""
+        d = str(desc_type or "").strip()[:8] or "untyped"
         with self._lock:
             self._understood += 1
+            if d in self._by_type or len(self._by_type) < _MAX_KEYS:
+                self._by_type[d] = self._by_type.get(d, 0) + 1
 
     def record_miss(self, kind: str, reason: str) -> None:
         k = str(kind or "?")[:24]
@@ -64,6 +70,7 @@ class MediaEnrichStats:
                 "miss_rate": round(self._missed / total, 4) if total else 0.0,
                 "by_reason": dict(self._by_reason),
                 "by_kind": dict(self._by_kind),
+                "by_type": dict(self._by_type),
                 "last_miss_ts": round(self._last_miss_ts, 3) or 0.0,
                 "last_miss_reason": self._last_miss_reason,
             }
@@ -75,6 +82,7 @@ class MediaEnrichStats:
             self._missed = 0
             self._by_reason.clear()
             self._by_kind.clear()
+            self._by_type.clear()
             self._last_miss_ts = 0.0
             self._last_miss_reason = ""
 

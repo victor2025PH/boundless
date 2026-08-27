@@ -38,6 +38,7 @@ from src.web.routes.unified_inbox_stored_read_routes import register_stored_read
 from src.web.routes.unified_inbox_template_routes import register_template_routes
 from src.web.routes.unified_inbox_tg_join_routes import register_tg_join_routes
 from src.web.routes.unified_inbox_translate_routes import register_translate_routes
+from src.web.routes.unified_inbox_vision_routes import register_vision_routes
 from src.web.routes.unified_inbox_workflow_routes import register_workflow_routes
 from src.web.routes.unified_inbox_workspace_contacts_routes import (
     register_workspace_contacts_routes,
@@ -101,6 +102,8 @@ def register_unified_inbox_routes(
     # ── 5. 辅助读 + 翻译 + 桌面 + 转化 + 分析（slice 37a / 40 / 33 / 32–34）──
     register_aux_read_routes(app, api_auth=api_auth, config_manager=config_manager)
     register_translate_routes(app, api_auth=api_auth)
+    # 图片问答（P2 2026-08-19：「问这张图」，与翻译集群共享媒体反查/围栏/能力闸）
+    register_vision_routes(app, api_auth=api_auth)
     register_desktop_routes(app, api_auth=api_auth)
     register_conversion_outreach_routes(app, api_auth=api_auth)
     register_analyze_routes(app, api_auth=api_auth)

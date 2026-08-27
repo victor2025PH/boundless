@@ -8,6 +8,7 @@ from src.utils.branding import (
     DEFAULT_SITE_NAME,
     DEFAULT_SITE_NAME_SHORT,
     DEFAULT_PRODUCT_NAME,
+    DEFAULT_WEBSITE_URL,
     POWERED_BY_TEXT,
     get_branding,
 )
@@ -22,6 +23,8 @@ def test_defaults_when_no_brand():
     assert b["sidebar_name"] == "无界 · 智聊"
     assert b["primary_color"] == ""
     assert b["show_powered_by"] is True  # 无授权上下文默认放行但 hide 未设 → 显示
+    assert b["website_url"] == DEFAULT_WEBSITE_URL == "https://bd2026.cc"
+    assert "ai26.sbs" not in b["website_url"]
 
 
 def test_overlay_overrides():

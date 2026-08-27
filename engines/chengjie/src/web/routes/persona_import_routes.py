@@ -116,7 +116,11 @@ def register_persona_import_routes(app, auth_dep, audit_store=None,
 
     def _actor(request: Request) -> str:
         try:
-            return request.session.get("user", "") or "api"
+            # 生产 session 键是 username（登录只写它，见 auth_user_routes:137）；
+            # 旧 "user" 键从不存在 → 审计行全记成 "api"（2026-08-18 goal_routes
+            # 同病实锤后连带修复）。保留 "user" 回落兼容测试桩。
+            return (request.session.get("username")
+                    or request.session.get("user", "") or "api")
         except Exception:
             return "api"
 

@@ -73,10 +73,35 @@ for p, e in bad:
 }
 
 $gates = @(
+    # Python 未定义名棘轮（2026-08-27 真活探针事故沉淀）。Step 0 above only proves a
+    # dirty .py PARSES; the incident code parsed fine - health_watchdog's
+    # _check_true_probes called Path(...) while the module had no pathlib import, the
+    # NameError got swallowed by _tick's outer except at DEBUG level, and all four
+    # true-probe domains silently stopped running for a whole restart cycle. The only
+    # signal was a log line that STOPPED appearing. ~20 sibling _check_* methods share
+    # that exact failure shape. Templates have had an inline-JS syntax gate for months
+    # (one syntax error bricks the inbox); this is the Python-side equivalent.
+    # Scope is deliberately just undefined names (pyflakes F821) - no full lint suite,
+    # which would surface thousands of pre-existing warnings and get ignored.
+    # Baseline 2026-08-27: src/ 23 hits / 12 files on first run - and 6 of those files
+    # were REAL live defects the gate found on day one (4 missing imports, one encoding
+    # corruption that had eaten a whole assignment, one nested helper reaching for a
+    # nonexistent `request`), every one of them silently swallowed by an outer except.
+    # All 6 fixed same day => ledger down to 13 hits / 6 files, all annotation-only.
+    # tools/ and scripts/ have always been ZERO. pyflakes missing => SKIP, never a red.
+    'tests/test_python_undefined_names.py',
     # 全站模板 Jinja 编译冒烟（2026-08-17 `){#` 事故沉淀）：任一模板编译失败=对应页
     # 热更新下此刻就是 500（unified_inbox=整个坐席台）。秒级、零上下文，放最前先爆。
     # 手跑同口径：python tools/template_compile_check.py
     'tests/test_template_jinja_compile.py',
+    # 编码腐蚀门禁（2026-08-22 unified_inbox gb18030 乱码整存事故沉淀）：热更面
+    # （模板/i18n包/共享组件/静态前端）不得出现 PUA/替换符/锟斤拷/非法 UTF-8——
+    # 某编辑器用错编码保存一次=全站坐席界面裸奔乱码+恢复耗一条线一小时。秒级。
+    'tests/test_template_encoding_guard.py',
+    # 编码腐蚀指纹（2026-08-22 gb18030 事故沉淀）：热更面（模板/i18n包/共享组件/
+    # 静态前端）不得出现 PUA/替换符/锟斤拷/非法 UTF-8——某编辑器一次错误编码保存
+    # 把 unified_inbox 全文中文毁掉 3398 行并直上生产，恢复耗一条线一小时。秒级。
+    'tests/test_template_encoding_guard.py',
     'tests/test_inbox_inline_handlers_exported.py',
     'tests/test_rpa_inline_handlers_exposed.py',
     # 哑图标门禁（2026-08-08）：图标名引用必须能在 ui_icons.js 注册表解析 + uiIcon 定义唯一
@@ -84,14 +109,41 @@ $gates = @(
     'tests/test_ui_icon_registry.py',
     # 控件位 emoji 棘轮（2026-08-08 P2A）：工作台模板 emoji 计数只减不增，新控件走 SVG。
     'tests/test_workspace_emoji_ratchet.py',
+    # i18n 端到端渲染（2026-08-27 补挂）：<html lang> 随语言、译表整包注入、日期一律
+    # 走 wsFmt*（禁内联 Date+toLocale*，那用浏览器 locale 会无视应用语言设置）。
+    # **它此前不在本清单里，于是烂了没人知道**——发现时 19 个失败：ui_locale 收口后
+    # 断言过期（en 现为 en-US）×16，外加 _support.html 一处真回归（共享外壳里内联
+    # 日期本地化，三个后台页一起中招）。补挂就是为了不再重演「无人看守 → 静默腐烂」。
+    'tests/test_workspace_i18n_render.py',
     'tests/test_template_unique_ids.py',
     'tests/test_template_orphan_refs.py',
+    # 跨作用域幽灵引用（2026-08-22 顶栏药丸全灭事故沉淀，IIFE 颗粒度）：A 作用域内
+    # 定义、B 作用域裸调用、全站无 window 挂载 = 运行时必 ReferenceError 且被
+    # promise .catch 吞掉零信号（_setPill/_ui 两例实锤，药丸/确认弹窗图标静默全灭）。
+    'tests/test_template_cross_block_refs.py',
+    # 编码完整性（2026-08-22 收件箱全站 500 事故沉淀）：UTF-8 严格解码 + 零 U+FFFD +
+    # GBK 系乱码指纹全扫（模板/静态/i18n packs/copilot 双树）——热更新即生产，
+    # 编辑器按 ANSI 误存一次 = 全坐席宕机，本门禁把损毁变成分钟级可见。
+    'tests/test_encoding_integrity.py',
+    # ops warn 卡「去处理」CTA 注册表：key 必须是真卡、目标必须有真路由（防静默孤儿/404）。
+    'tests/test_ops_card_cta.py',
+    # 模板 JS「无主标识符」门禁（2026-08-22 B39 workflows._TYPE_LABELS 删定义留引用
+    # 整页崩事故沉淀；读取形态裸标识符全文件无声明痕迹=必然 ReferenceError）。
+    'tests/test_template_undefined_identifiers.py',
     'tests/test_template_dynamic_dot_access.py',
     'tests/test_template_free_capture.py',
     'tests/test_template_dead_classes.py',
     'tests/test_static_js_free_capture.py',
     'tests/test_template_inline_js_syntax.py',
     'tests/test_template_jinja_comment_trap.py',
+    # CSS 注释陷阱（2026-08-20 内测 B12 实锤）：注释正文里的「星号紧贴斜杠」（多见于
+    # --a-*/--b 这类 token 枚举）提前闭合注释 → 真结束符成游离符 → 浏览器错误恢复把
+    # 紧随其后的整条规则丢弃。花括号照样平衡、CSS 不报错，只是静默少一条规则：被吞的
+    # .ws-ctx-menu(position:fixed) 让「更多操作/右键」菜单落到首屏外＝点了毫无反应。
+    'tests/test_css_comment_trap.py',
+    # 搁置弹窗键盘隔离（2026-08-20 内测 B18 实锤）：stopPropagation 不取消默认插入行为，
+    # 映射外的键（傍晚只有 3 档 → 按 5）在焦点被右栏语音框持有时会原样落字。
+    'tests/test_snooze_dialog_keys.py',
     # 全站模板真编译门禁（2026-08-17 事故沉淀）：comment-trap 抓「注释被静默吞段」
     # 形态，这条用生产同款 Environment 真编译抓「解析失败=页面 500」形态（当日实锤：
     # 额度横幅 CSS 写出 `){#` → unified_inbox 编译失败 → 工作台 500 十八分钟）。
@@ -132,6 +184,9 @@ $gates = @(
     'tests/test_i18n_coverage.py',
     'tests/test_copilot_shared_sync.py',
     'tests/test_copilot_theme_tokens.py',
+    # copilot 词典键可解析 + /copilot 资源两宿主 ?v= 一致（2026-08-22 cp.app.h_nurture
+    # 裸键事故沉淀；与 test_cp_app_i18n_keys 互锁，本条独有面=组件静态字面量+缓存戳）
+    'tests/test_copilot_i18n_keys.py',
     'tests/test_admin_route_inventory.py',
     'tests/test_ops_overview.py',
     # Messenger web sign-in is a CROSS-LANGUAGE contract with no compile-time guard:
@@ -144,6 +199,16 @@ $gates = @(
     # route); same silent-404 risk, same gate shape (shared core in tests/_sidecar_contract.py).
     'tests/test_messenger_sidecar_contract.py',
     'tests/test_whatsapp_sidecar_contract.py',
+    # 实施72（2026-08-27 账号身份错乱事故）：登录身份决议层（登录位换人→隔离态：
+    # 不补人设/自动化封顶 review/显式转正）+ 重连积压封顶 + 外机自有号对端封顶 +
+    # 补收时间戳诚实化（合成 ts 打标→SLO 剔除/气泡「≈」/拟稿上下文防线）+
+    # 回填合并语义（not_empty 拒收竞态=13/14 丢史的回归钉）。这些层横跨
+    # session-status/effective_automation/persona_voice/store 四个多线热点，
+    # 任何一线重构漏接都=身份安全防线静默失效，必须进 sweep 互验。
+    'tests/test_account_identity.py',
+    'tests/test_reconnect_backlog_and_fleet.py',
+    'tests/test_messenger_history_backfill.py',
+    'tests/test_failed_outbound_trace.py',
     # Alert alias coverage: every publish("*_alert") in src must have a NAMED subscribe
     # alias in _EVENT_ALIASES, else ops configuring a webhook can never receive it (alerts
     # into the void - the whole point of wiring the alert egress). The e2e _EMITTED_ALERTS
@@ -228,7 +293,27 @@ $gates = @(
     # 5 个 TG 号无 worker 离线约 2 分钟。解析成功、启动正常、日志无异常，只有这条
     # 查得出。含「本机实例配置必须无重复键」（无实例部署的机器自动跳过）。
     # 同一检查已接进 restart_instance.ps1 前置闸门（真拦，见 -Advise 输出）。
-    'tests/test_config_duplicate_keys.py'
+    'tests/test_config_duplicate_keys.py',
+    # ── 小智（AI 助手）门禁族（实施73/74，2026-08-27）──────────────────────
+    # 五个文件此前都不在本清单里 = 别的线收口时跑不到，改语料/改路由的回归
+    # 只有本线自己跑才发现。它们全是静态或纯确定性（BM25/无网络无模型），
+    # 秒级完成，进 sweep 的代价可以忽略。
+    #
+    # 面板不变量：意图埋点（漏斗分母，删一枚就少一段真相且不报错）、画布令牌
+    # 单源、入口行不得退回 dashed / hint 不得退回截断。
+    'tests/test_assistant_beacons.py',
+    # 报障闭环：报障别名必须在告警关注集里（不在=「点了报障没人收到」而自检
+    # 判 healthy）、前端状态表必须等于后端 VALID_STATUSES、零命中必给报障入口。
+    'tests/test_bug_report_loop.py',
+    # 使用帮助覆盖率棘轮：没有 how-to 的页面数只降不升（新增页面不配操作指引
+    # 就红），外加「不得把开发者密码写进帮助语料」这条安全不变量。
+    'tests/test_howto_coverage.py',
+    # 问答检索质量：BM25 命中率下限 + 阈值校准余量 + 诚实拒答率。语料一改就
+    # 能立刻知道有没有把原本能答的问题搞丢（补关键词有交叉挤占，实测过）。
+    'tests/test_assistant_qa_eval.py',
+    # 「没依据」哨兵：命中时用户必须一个字都看不到、answered 必须记真话、
+    # 哨兵出现在正文中间不得误伤。含端到端真跑路由两例。
+    'tests/test_assistant_no_basis.py'
 )
 
 $missing = @($gates | Where-Object { -not (Test-Path (Join-Path $engineRoot $_)) })
@@ -451,6 +536,19 @@ if ($Full) {
     python (Join-Path $engineRoot 'tools\verify_inbox_density.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 
+    # White-label reskin stress (2026-08-23). Runtime-overrides the --bl-growth brand
+    # family (equivalent to an OEM changing tokens.json) then computed-style-scans for
+    # elements still rendering the OLD brand blue = hardcoded leaks that would ship as
+    # "old blue patches inside the customer's brand". First run found 481 leaks from
+    # just 4 css declarations (--ps alone fed 472 knowledge chips); all cleared same
+    # night via color-mix(token) - this pin keeps the count at zero. Canvas charts
+    # (analytics Chart.js) are a known blind spot, ledgered in the tool docstring.
+    # Read-only; missing playwright / unreachable instance => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: white-label reskin stress, real browser (tools\verify_brand_reskin.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_brand_reskin.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
     # Inbox identity bar (2026-07-30). Persona outreach: the last glance before send
     # must name the effective persona. Conversation-level override already lived in
     # /api/persona/effective + cp-persona, but #identity-bar used to read account-level
@@ -540,6 +638,28 @@ if ($Full) {
     python (Join-Path $engineRoot 'tools\verify_xlate_batch_ui.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 
+    # Message right-click translate group + multi-lang compare popup + lightbox
+    # OCR panel (2026-08-18 P0/P1). Pure-frontend interactions on hot-reloaded
+    # templates; menu typing per message kind / language-chip state machine /
+    # panel<->bubble sync are only provable in a real browser. Fully hermetic:
+    # chats/thread route-mocked to a synthetic conversation, compare & media
+    # translate stub-fulfilled (zero engine cost, zero GPU, zero prod writes).
+    # Missing playwright / unreachable instance => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: message ctx translate + lightbox panel, real browser (tools\verify_xlate_ctx_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_xlate_ctx_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Inline-script syntax gate for hot-reloaded workspace templates (2026-08-18).
+    # A single JS syntax error in unified_inbox.html bricks the whole inbox THE
+    # MOMENT the file is saved (Jinja auto_reload); none of the text-level static
+    # gates parse JS. node --check over all inline <script> blocks (Jinja masked).
+    # Missing node => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: hot-template inline JS syntax (tools\verify_template_js_syntax.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_template_js_syntax.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
     # Theme contrast RENDERED values (2026-08-04 light-mode readability close-out).
     # The static gate pins palette VALUES; only a browser proves what agents SEE -
     # cascade overrides, component opacity, a page missing the token CSS, a more
@@ -550,6 +670,20 @@ if ($Full) {
     Write-Output ''
     Write-Output '=== -Full: theme contrast rendered values, real browser (tools\verify_theme_contrast_ui.py) ==='
     python (Join-Path $engineRoot 'tools\verify_theme_contrast_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Workspace chrome theme consistency (2026-08-17 "light mode still has dark
+    # rail/toolbox" close-out). Three independently-regressable mechanisms only a
+    # real browser proves: chrome token'd top bar / nav rail flipping per theme
+    # (dark leg pinned to the historical literals = zero-regression promise), the
+    # App(iframe) right panel following the host via the cp-cmd set-theme bridge,
+    # and cpSetTheme being the working governed write path (bare cp_theme writes
+    # get overruled by the appearance engine). Read-only; records the admin's
+    # prior night.mode and restores it after (theme prefs roam server-side).
+    # Missing playwright / unreachable instance / no token => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: workspace chrome theme consistency, real browser (tools\verify_ws_chrome_theme.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_ws_chrome_theme.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 
     # Reply-settings page (2026-08-02 readability overhaul): P0 pinned the inline
@@ -623,6 +757,34 @@ if ($Full) {
     Write-Output ''
     Write-Output '=== -Full: proactive care page, real browser (tools\verify_care_ui.py) ==='
     python (Join-Path $engineRoot 'tools\verify_care_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Six admin boards: sidebar mount + light/dark readability (2026-08-18 unified
+    # chrome batch). Static gates prove "{% set ws_sidebar = true %} exists" but not
+    # that the sidebar actually renders/highlights (context starvation collapses it
+    # silently via `or []` guards), nor that both themes stay readable (usage /
+    # agent-perf were hardcoded-light x theme-flipping ink = dark mode unreadable
+    # while every static gate stayed green). Also pins queue_monitor theme-follow
+    # (boss decision 2026-08-18, replaced the always-dark big-screen) via
+    # light-vs-dark wrap background diff, plus zero uncaught page JS errors.
+    # Read-only GETs + window-scoped ?theme= pin (never touches agent prefs).
+    # Missing playwright / unreachable instance / no token => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: admin boards sidebar + dual-theme readability, real browser (tools\verify_boards_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_boards_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Ops hidden-capability panel (2026-08-18 P0-P4 series: footer text-wall ->
+    # collapsed panel + reason groups + popover + toolbar entry). Pure frontend
+    # state machine hot-reloaded straight to production; static gates pin ids/
+    # functions/assert-strings but cannot prove expand/popover/outside-close, nor
+    # that filtering a hidden card's title no longer lies "no match" (the fixed
+    # bug). Read-only: expand/collapse/filter only, never clicks card actions.
+    # Zero-hidden instances auto-skip scenarios 2-7 (panel may vanish entirely).
+    # Missing playwright / unreachable instance / no token => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: ops hidden-capability panel, real browser (tools\verify_ops_hidden_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_ops_hidden_ui.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 
     # Brand token RENDERED values (2026-07-30 brand unification close-out). Static
@@ -774,6 +936,74 @@ if ($Full) {
     Write-Output ''
     Write-Output '=== -Full: right-rail voice clone/send state machine, fixture browser (tools\verify_cp_voice_ui.py) ==='
     python (Join-Path $engineRoot 'tools\verify_cp_voice_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Messenger in-app login (form-relay) driveTick state machine (B64 二期):
+    # submit acknowledgement / verifying escalation / password eye / Enter-submit /
+    # checkpoint+locked screenshot views. Fixture browser (stub fetchJson, zero
+    # sidecar/instance/network). Missing playwright => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: messenger in-app login relay state machine, fixture browser (tools\verify_connect_relay_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_connect_relay_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Song Studio page (impl58 P3-2): request-desk card flow + humanized fail
+    # reasons (no raw JSON) + voice-match dots + feat-probe button hiding on old
+    # backends + mini-player. Read-only (never clicks approve/reject/toggles).
+    # Missing playwright / unreachable instance / no token => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: song studio page, real browser (tools\verify_singing_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_singing_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Toolbox smart-nurture card revamp (2026-08-22 cp.app.h_nurture raw-key incident
+    # close-out): applyI18n missing-key keeps inline fallback (N0 pins the incident),
+    # 3-step engine stepper transitions, go_live inline confirm, shadow plan list,
+    # dirty-lit save, viewer read-only, probe two-click armed state. All interaction
+    # timing no static gate can see. Same fixture style (file:// + real dict + real
+    # component + stub client, zero instance deps, zero writes). Missing playwright
+    # => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: toolbox smart-nurture card revamp, fixture browser (tools\verify_nurture_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_nurture_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Quota wall v2 (2026-08-21): scheduler dedupe / action-trigger via machine
+    # header events / mutex with the daily upsell modal / in-wall voucher redeem /
+    # buy->credit-watch auto-recover / running-low bar with daily snooze. All
+    # runtime scheduler behavior in workspace_base inline JS (hot-reloads straight
+    # to production); the fixture extracts the REAL template segment at run time
+    # (single source - the gate always tests current code, never a stale copy).
+    # Missing playwright => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: quota wall v2 scheduler + recharge loop, fixture browser (tools\verify_quota_wall_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_quota_wall_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # AI assistant ball (P0/P1 2026-08-20): the whole ball/panel DOM is built at
+    # runtime by shared/assistant/assistant-ball.js - template static gates are
+    # blind to it, and the shared component hot-reloads straight to production.
+    # 22 assertions: ball->panel, chip Q&A (JSON events render), feedback POST,
+    # report-hint prefill, report submit + my-tickets, err/429/retry, Esc, mic
+    # capability-hide, screenshot annotate layer, legacy help-ball absorption,
+    # both shells. Same fixture style (file:// + real component + stub fetch,
+    # zero instance deps, zero LLM burn). First run caught a dead chip button.
+    # Missing playwright => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: AI assistant ball, fixture browser (tools\verify_assistant_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_assistant_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Sidebar resize perf rebuild (P0 2026-08-17): pointer-capture drag that must
+    # survive crossing an iframe/<webview> (the old stick-and-jump bug), full-window
+    # shield mount/cleanup, rAF-coalesced width writes, min/max clamps, dblclick
+    # reset via compat mouse chain, keyboard a11y resize, and the desktop CSS
+    # transition-exemption + max-width alignment pins. Real mouse input via CDP --
+    # capture semantics cannot be proven by static gates or synthetic dispatch.
+    # Missing playwright => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: copilot sidebar resize drag, fixture browser (tools\verify_sidebar_resize.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_sidebar_resize.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 
     # Guided onboarding tour engine (P1 2026-08-07): spotlight positioning,

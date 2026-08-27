@@ -196,6 +196,21 @@ def test_normalize_chat_type_plain_string_and_empty():
     assert normalize_chat_type("") == ""
 
 
+def test_normalize_chat_type_value_only_duck_type():
+    """只有 .value 的鸭子类型不得归一成 `<object at 0x…>` 那种垃圾值。
+
+    收件箱侧 tg_chat_dict 与本函数共用归一（频道/群之分靠它，负数 chat_id 启发式
+    把频道也算群），桩对象与旧 pyrogram 分支都只带 value。
+    """
+    class _T:
+        def __init__(self, value):
+            self.value = value
+
+    assert normalize_chat_type(_T("channel")) == "channel"
+    assert normalize_chat_type(_T("supergroup")) == "supergroup"
+    assert "object at" not in normalize_chat_type(_T("group"))
+
+
 # ── reply_logic_key（闸门读 × 记账写 同键契约，2026-08-03 死闸门修复）────────
 # 历史 bug：闸门做「双号隔离」时把读键改成 {account}:{chat}:{user}，记账侧仍写
 # 旧键 {chat}:{user} → 读写永不相交 → last_reply_ts 恒 None → UI「回复逻辑」的

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="{{ {'zh':'zh-CN','en':'en','vi':'vi','th':'th','id':'id'}.get(ui_lang|default('zh'), 'en') }}" data-theme="light">
+<html lang="{{ ui_locale|default('zh-CN') }}" data-theme="light">
 <head>
 <meta charset="utf-8">
 <!-- interactive-widget：软键盘弹出时收缩布局视口（Chromium 108+），fixed 底栏/输入条不被键盘盖住；其它浏览器安全忽略 -->
@@ -10,12 +10,13 @@
 <link rel="stylesheet" href="/static/brand/brand.css?v=20260730a">
 <link rel="stylesheet" href="/static/brand/brand-fonts.css?v=20260730a"><!-- 品牌拉丁字 @font-face 单一源（与 login/setup 同一份，勿再内联重复定义） -->
 <link rel="stylesheet" href="/static/brand/brand-lockup.css">
-<link rel="stylesheet" href="/static/theme-tokens.css?v=20260816a">
-<link rel="stylesheet" href="/static/brand/th-brand-bridge.css?v=20260730a"><!-- 必须排在 theme-tokens 之后：把 --th-*-brand* 后置覆盖为品牌智连蓝 -->
+<link rel="stylesheet" href="/static/theme-tokens.css?v=20260818a">
+<link rel="stylesheet" href="/static/brand/th-brand-bridge.css?v=20260823a"><!-- 必须排在 theme-tokens 之后：把 --th-*-brand* 后置覆盖为品牌智连蓝 -->
 {% include "_i18n_bootstrap.html" %}
 {% include "_api_fetch.html" %}
 {% include "_boot_error_guard.html" %}
 {% include "_win_unique.html" %}
+{% include "_support.html" %}
 <script>
 /* 主题应用提升到 base：让「所有」工作台页面（概览/客户/草稿…）都支持日/夜双模式，
    而非仅收件箱。与 localStorage('cp_theme') 同源；收件箱页另有更完整脚本会再覆写（含组件 css）。
@@ -166,7 +167,7 @@
     --tk-num-grad:linear-gradient(135deg,var(--bl-growth,#1e8cf2),#8b5cf6);    /* KPI 描字渐变（白底可读：品牌蓝→紫）*/
     --tk-shadow:0 2px 10px rgba(15,27,45,.06);
     --tk-shadow-md:0 8px 28px rgba(15,27,45,.12);
-    --tk-ring:rgba(30,140,242,.35);  /* 品牌智连蓝 focus ring */
+    --tk-ring:color-mix(in srgb, var(--bl-growth,#1e8cf2) 35%, transparent);  /* 品牌智连蓝 focus ring（color-mix 引令牌，换肤自动跟随） */
     /* 密度令牌（圆角/间距统一，mode 无关，仅此处定义）*/
     --tk-radius:10px;
     --tk-radius-sm:7px;
@@ -200,7 +201,7 @@
     --tk-num-grad:linear-gradient(135deg,var(--bl-growth-400,#54a7f5),#c084fc);   /* 暗底更亮 */
     --tk-shadow:0 2px 12px rgba(0,0,0,.5);
     --tk-shadow-md:0 10px 32px rgba(0,0,0,.6);
-    --tk-ring:rgba(30,140,242,.45);  /* 品牌智连蓝 focus ring */
+    --tk-ring:color-mix(in srgb, var(--bl-growth,#1e8cf2) 45%, transparent);  /* 品牌智连蓝 focus ring（color-mix 引令牌，换肤自动跟随） */
   }
   *{box-sizing:border-box;}
   .ws-top a:focus-visible,.ws-top button:focus-visible,button:focus-visible,[role="button"]:focus-visible,a.ws-nav-item:focus-visible{outline:2px solid var(--tk-brand);outline-offset:2px;border-radius:6px;}
@@ -221,6 +222,19 @@
   /* JS 渲染常用语义类（替换串内硬编码色，日夜自适配）*/
   .tk-load{color:var(--tk-text-muted);font-size:13px;}
   .tk-load.sm{font-size:12px;}
+  /* ── 骨架屏三配方（2026-08-22 P4 样式指南配套；用法见 /developer「样式指南」）──
+     数据未到时用同形占位替代空白/跳动：KPI 值=tk-skel-kpi、列表行=tk-skel-row、
+     图表区=tk-skel-chart。全部 --tk-* 令牌自适配日夜；prefers-reduced-motion 停闪。
+     采用方式＝把占位元素挂上类，数据到达后整块替换（innerHTML）即自然消失。 */
+  .tk-skel{position:relative;overflow:hidden;background:color-mix(in srgb, var(--tk-text-muted,#94a3b8) 14%, transparent);border-radius:6px;}
+  .tk-skel::after{content:'';position:absolute;inset:0;transform:translateX(-100%);
+    background:linear-gradient(90deg,transparent,color-mix(in srgb, var(--tk-text-muted,#94a3b8) 12%, transparent),transparent);
+    animation:tkSkelSweep 1.4s infinite;}
+  @keyframes tkSkelSweep{to{transform:translateX(100%)}}
+  @media (prefers-reduced-motion: reduce){.tk-skel::after{animation:none}}
+  .tk-skel-kpi{width:56px;height:22px;}
+  .tk-skel-row{width:100%;height:14px;margin:6px 0;}
+  .tk-skel-chart{width:100%;height:60px;border-radius:10px;}
   .tk-fail{color:var(--tk-danger-ink);font-size:13px;}
   .tk-hint{color:var(--tk-text-muted);font-size:12px;}
   .tk-c-crit{color:var(--tk-danger-ink);} .tk-c-warn{color:var(--tk-warn-ink);}
@@ -254,7 +268,14 @@
   /* 壳层仅有的两个装饰性入场动画：随 OS 减弱动效偏好直落终态（收件箱 CSS 同一模式） */
   @media (prefers-reduced-motion:reduce){.tk-toast{animation:none;}.ws-cfm-ov{animation:none;}}
   .tk-toast.muted{background:rgba(91,107,133,.92);}.tk-toast.vio{background:rgba(139,92,246,.93);}
-  .ws-top{height:52px;display:flex;align-items:center;gap:10px;padding:0 16px;color:#fff;flex-wrap:nowrap;overflow:visible;
+  /* ── 顶栏 chrome（2026-08-17 起随主题翻转，P0-c）────────────────────────
+     旧决策「顶栏恒深色 chrome」已被推翻（老板点名「选亮色还是暗的」，与 nav-rail
+     同批）。结构＝基础规则里的字面量就是暗档真值（零回归承诺本身），亮档集中在下方
+     「亮色顶栏」块只覆写三枚 --chrome-ink* 作用域令牌 + 少数不可推导皮肤；
+     消费方一律 var(--chrome-*, 暗档字面量) / color-mix 推导——模板热更新逐步保存的
+     任何中间态都自洽（令牌未落地=保持旧深色观感）。 */
+  .ws-top{--chrome-ink:#fff;--chrome-ink-dim:#e2e8f0;--chrome-ink-faint:#94a3b8;
+    height:52px;display:flex;align-items:center;gap:10px;padding:0 16px;color:var(--chrome-ink,#fff);flex-wrap:nowrap;overflow:visible;
     background:linear-gradient(100deg,#131418 0%,#191b21 60%,#1c1f26 100%);
     box-shadow:inset 0 -1px 0 rgba(255,255,255,.08),0 1px 12px rgba(0,0,0,.25);}
   .ws-brand{display:flex;align-items:center;gap:8px;font-weight:700;font-size:15px;white-space:nowrap;flex-shrink:0;min-width:0}
@@ -262,37 +283,90 @@
   .ws-brand .brand-mark--product{width:22px;height:22px;filter:drop-shadow(0 1px 4px rgba(0,0,0,.25))}
   .ws-spacer{flex:1;}
   .ws-user{font-size:13px;color:#cbd5e1;white-space:nowrap;flex-shrink:0;}
-  .ws-presence{border:1px solid rgba(255,255,255,.25);border-radius:7px;padding:3px 8px;font-size:12px;background:rgba(255,255,255,.08);color:#fff;white-space:nowrap;flex-shrink:0;}
   .ws-funnel{font-size:11px;color:#cbd5e1;white-space:nowrap;max-width:230px;overflow:hidden;text-overflow:ellipsis;flex-shrink:0;}
   .ws-agents{font-size:11px;color:#94a3b8;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0;}
   .ws-logout{color:#fff;text-decoration:none;font-size:13px;border:1px solid rgba(255,255,255,.3);border-radius:7px;padding:4px 12px;white-space:nowrap;flex-shrink:0;}
   .ws-logout:hover{background:rgba(255,255,255,.12);}
   /* 顶栏导航：主入口 + “更多”下拉（降密度，标签永不折行） */
   .ws-nav{display:flex;align-items:center;gap:6px;flex-shrink:0;}
-  .ws-nav a{color:#fff;text-decoration:none;font-size:13px;padding:5px 10px;border-radius:7px;white-space:nowrap;}
-  .ws-nav a:hover{background:rgba(255,255,255,.12);}
+  .ws-nav a{color:var(--chrome-ink,#fff);text-decoration:none;font-size:13px;padding:5px 10px;border-radius:7px;white-space:nowrap;}
+  .ws-nav a:hover{background:color-mix(in srgb, var(--chrome-ink,#fff) 12%, transparent);}
+  /* ── 桌面壳应用菜单（P0 2026-08-22）：菜单≠导航——无图标、字号略小、色略淡；
+     下拉白卡与 .ws-user-menu 同族（两主题恒白底）。顶词配色全走 --chrome-ink*
+     推导（2026-08-17 教训：只写暗档字面量=亮顶栏隐形字）。仅桌面壳 JS 点亮。 */
+  .ws-appmenu{display:flex;align-items:center;gap:0;flex-shrink:0;}
+  .ws-appmenu[hidden]{display:none!important;}
+  .wam-wrap{position:relative;}
+  .wam-top{background:none;border:0;color:var(--chrome-ink-dim,#e2e8f0);font:inherit;font-size:12.5px;line-height:1;padding:6px 8px;border-radius:6px;cursor:pointer;white-space:nowrap;}
+  .wam-top:hover,.wam-wrap.open .wam-top{background:color-mix(in srgb, var(--chrome-ink,#fff) 12%, transparent);color:var(--chrome-ink,#fff);}
+  .wam-panel{display:none;position:absolute;top:34px;left:0;min-width:216px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.18);z-index:10000;padding:6px;}
+  .wam-wrap.open .wam-panel{display:block;}
+  .wam-item{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;border:0;color:#374151;font:inherit;font-size:13px;padding:7px 10px;border-radius:8px;cursor:pointer;white-space:nowrap;}
+  .wam-item:hover{background:#f3f4f6;}
+  .wam-accel{margin-left:auto;padding-left:18px;color:#94a3b8;font-size:11px;font-variant-numeric:tabular-nums;}
+  .wam-sep{height:1px;background:#eef2f7;margin:5px 6px;}
+  /* 帮助菜单底部版本行（连点 12 次解锁开发者模式的彩蛋落点）：刻意做成灰字非按钮态 */
+  .wam-ver{padding:6px 10px 4px;font-size:11px;color:#94a3b8;cursor:default;user-select:none;white-space:nowrap;}
+  .ws-appmenu .ws-top-div{margin:0 4px 0 6px;}
+  /* 菜单点亮时（html.cx-appmenu-on）：顶栏「求助/语言」药丸让宽——求助并入
+     帮助菜单第一项，语言在头像菜单仍有第二入口；纯浏览器两药丸原样不动。 */
+  html.cx-appmenu-on #ws-help-pill{display:none!important;}
+  html.cx-appmenu-on #ws-lang-pill{display:none!important;}
+  @media (max-width:1100px){ .wam-top{padding:6px 5px;font-size:12px;} }
+  /* 窄屏让位核心导航（Alt 唤出的原生菜单条仍是完整后门） */
+  @media (max-width:900px){ .ws-appmenu{display:none!important;} }
+  /* P1（2026-08-23）：菜单点亮时 ≤1280 提前收起药丸文字与用户名给五菜单让宽
+     （标签本就都有 title；纯浏览器无菜单不受影响，全局 1180 档维持原状） */
+  @media (max-width:1280px){
+    html.cx-appmenu-on .ws-pill .ws-pill-lb{display:none;}
+    html.cx-appmenu-on .ws-user-name{display:none;}
+  }
   /* 用户菜单：头像+名字下拉，收纳 状态/今日/设置/退出 */
-  /* 档位徽章（P4b）：深色顶栏上的小 pill，配色按档位区分（与 base.html plan-badge 同族） */
-  .ws-plan-pill{display:inline-flex;align-items:center;height:24px;padding:0 9px;border-radius:12px;font-size:11.5px;font-weight:700;white-space:nowrap;flex-shrink:0;text-decoration:none;border:1px solid rgba(255,255,255,.22);color:#e2e8f0;background:rgba(255,255,255,.08);}
+  /* 档位徽章（P4b）：顶栏小 pill，配色按档位区分（与 base.html plan-badge 同族）。
+     基础规则=暗档（浅色字），亮档在下方「亮色顶栏」块成对覆写（新增档位两块都要补）。 */
+  .ws-plan-pill{display:inline-flex;align-items:center;height:24px;padding:0 9px;border-radius:12px;font-size:11.5px;font-weight:700;white-space:nowrap;flex-shrink:0;text-decoration:none;border:1px solid color-mix(in srgb, var(--chrome-ink,#fff) 22%, transparent);color:var(--chrome-ink-dim,#e2e8f0);background:color-mix(in srgb, var(--chrome-ink,#fff) 8%, transparent);}
   a.ws-plan-pill:hover{filter:brightness(1.25);}
   .ws-plan-basic{background:rgba(59,130,246,.22);border-color:rgba(96,165,250,.5);color:#bfdbfe;}
   .ws-plan-pro{background:rgba(139,92,246,.22);border-color:rgba(167,139,250,.5);color:#ddd6fe;}
   .ws-plan-flagship{background:rgba(245,158,11,.22);border-color:rgba(251,191,36,.55);color:#fde68a;}
   @media (max-width:760px){ .ws-plan-pill{display:none;} }
   .ws-user-wrap{position:relative;flex-shrink:0;}
-  .ws-user-btn{display:flex;align-items:center;gap:7px;cursor:pointer;padding:4px 8px;border-radius:8px;border:1px solid rgba(255,255,255,.18);user-select:none;white-space:nowrap;}
-  .ws-user-btn:hover{background:rgba(255,255,255,.12);}
+  .ws-user-btn{display:flex;align-items:center;gap:7px;cursor:pointer;padding:4px 8px;border-radius:8px;border:1px solid color-mix(in srgb, var(--chrome-ink,#fff) 18%, transparent);user-select:none;white-space:nowrap;}
+  .ws-user-btn:hover{background:color-mix(in srgb, var(--chrome-ink,#fff) 12%, transparent);}
   .ws-user-ava{width:24px;height:24px;border-radius:50%;background:var(--tk-brand,#1e8cf2);color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
-  .ws-user-name{font-size:13px;color:#e2e8f0;max-width:120px;overflow:hidden;text-overflow:ellipsis;}
-  .ws-user-caret{color:#94a3b8;font-size:11px;}
+  .ws-user-name{font-size:13px;color:var(--chrome-ink-dim,#e2e8f0);max-width:120px;overflow:hidden;text-overflow:ellipsis;}
+  .ws-user-caret{color:var(--chrome-ink-faint,#94a3b8);font-size:11px;}
   .ws-user-menu{display:none;position:absolute;top:44px;right:0;min-width:224px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.18);z-index:9999;padding:8px;}
   .ws-user-menu.show{display:block;}
   .ws-um-sec{font-size:11px;font-weight:700;color:#94a3b8;letter-spacing:.04em;padding:7px 8px 3px;}
-  .ws-user-menu .ws-presence{width:100%;margin:2px 0 4px;color:#111827;background:#fff;border:1px solid #d1d5db;}
   .ws-um-info{display:block;max-width:none;white-space:normal;color:#475569;font-size:12px;padding:3px 8px;}
   .ws-um-div{height:1px;background:#eef2f7;margin:6px 2px;}
   .ws-um-item{display:block;color:#374151;text-decoration:none;font-size:13px;padding:8px 10px;border-radius:8px;cursor:pointer;}
   .ws-um-item:hover{background:#f3f4f6;}
+  /* 坐席接待状态选择器 v2（2026-08-19）：radio 行=状态名+一句后果说明——「忙碌=不派新单」
+     此前对坐席完全不可见；跟随 .ws-user-menu 白卡既有配色体系（整卡主题化属后续批次）。 */
+  .ws-presence-grp{display:flex;flex-direction:column;gap:2px;margin:2px 0 4px;}
+  .ws-pr-opt{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:none;border:1px solid transparent;border-radius:8px;padding:6px 8px;cursor:pointer;font:inherit;}
+  .ws-pr-opt:hover{background:#f3f4f6;}
+  .ws-pr-opt.on{background:#eef2ff;border-color:#c7d2fe;}
+  .ws-pr-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;}
+  /* 状态色收进类规则（2026-08-23 清 inline-color 台账 7→4，应 voice 线代记点名）。
+     刻意用字面量不用 token：宿主 .ws-user-menu 两主题恒白底（整卡主题化属后续批次），
+     面不翻转则点不该跟 token 翻转——与上方 .ws-ava-dot 字面量同先例同判据；
+     将来菜单卡随主题翻转时，这三行与 .ws-ava-dot 一起整组迁 token。 */
+  .ws-pr-dot.on{background:#22c55e;}
+  .ws-pr-dot.busy{background:#f59e0b;}
+  .ws-pr-dot.off{background:#94a3b8;}
+  .ws-pr-txt{display:flex;flex-direction:column;min-width:0;}
+  .ws-pr-txt b{font-size:12.5px;color:#111827;font-weight:600;line-height:1.3;}
+  .ws-pr-txt small{font-size:10.5px;color:#6b7280;line-height:1.35;}
+  .ws-pr-chk{margin-left:auto;color:#4f46e5;font-weight:700;visibility:hidden;font-size:12px;flex-shrink:0;}
+  .ws-pr-opt.on .ws-pr-chk{visibility:visible;}
+  .ws-pr-note{font-size:10.5px;color:#94a3b8;line-height:1.5;padding:2px 8px 4px;}
+  .ws-pr-seat{display:none;font-size:11px;color:#dc2626;line-height:1.4;padding:2px 8px 2px;}
+  /* 头像右下状态点（替代旧 box-shadow 光环；白描边在深浅 chrome 上都有切口感） */
+  .ws-user-ava{position:relative;}
+  .ws-ava-dot{position:absolute;right:-2px;bottom:-2px;width:9px;height:9px;border-radius:50%;background:#22c55e;border:1.5px solid rgba(255,255,255,.9);box-sizing:border-box;}
   /* 主题三态分段控件（用户菜单内；菜单底恒为白，配色跟菜单不跟 --tk-*） */
   .ws-theme-seg{display:flex;gap:4px;background:#f1f3f7;border-radius:9px;padding:3px;margin:4px 8px 6px;}
   .ws-theme-seg button{flex:1 1 0;border:0;background:transparent;color:#64748b;font-size:12px;padding:5px 4px;border-radius:7px;cursor:pointer;white-space:nowrap;transition:background .12s,color .12s;}
@@ -341,9 +415,13 @@
   .ws-body.ws-has-side{display:flex;}
   .ws-body.ws-has-side > .ws-body-main{flex:1;min-width:0;height:100%;overflow:hidden;}
   .ws-review{display:none;cursor:pointer;font-size:12px;background:#f59e0b;color:#1b2038;font-weight:600;border-radius:7px;padding:3px 9px;align-items:center;gap:4px;}
-  /* 顶栏告警药丸：固定形状、永不换行、永不被压扁（图标+标签+数字气泡）。顶栏恒深色，单套配色。 */
+  /* 顶栏告警药丸：固定形状、永不换行、永不被压扁（图标+标签+数字气泡）。 */
   /* 顶栏告警药丸：明快科技风。统一 12px 字号 + 霓虹渐变数字胶囊（带发光）。
-     语义三色：⏰时效=橙 / 🛡️风控=紫 / 📌跟进=青(info)，均为高饱和亮色，坐在深色底上有科技感。*/
+     语义三色：时效=橙 / 风控=紫 / 跟进=青(info)。
+     双皮肤注意（2026-08-17 顶栏随主题后）：本段字面量＝暗档真值（高饱和亮字是深底
+     专属，白底上 ≈2:1 不可读）；亮档同语义深 ink 版集中在下方「亮色顶栏」块成对
+     覆写。数字胶囊 .ws-pill-n 自带高饱和渐变+近黑字，两主题通用不覆写。
+     新增药丸变体必须两个块各补一条，缺亮档=白底上隐形字。 */
   .ws-pill{display:none;align-items:center;gap:7px;height:26px;padding:0 11px;border-radius:999px;
     font-size:12px;font-weight:600;line-height:1;white-space:nowrap;flex-shrink:0;cursor:pointer;
     text-decoration:none;border:1px solid transparent;transition:background .14s,border-color .14s,box-shadow .14s,filter .14s;}
@@ -357,7 +435,7 @@
   .ws-pill.pulse{animation:wsPillPulse .85s ease-out 1;}
   @media (prefers-reduced-motion: reduce){ .ws-pill.pulse{animation:none;} }
   /* 顶栏功能分组分隔线：行动药丸区 | 状态区（铃铛） | 账户区 */
-  .ws-top-div{width:1px;height:20px;background:rgba(255,255,255,.16);flex-shrink:0;margin:0 2px;}
+  .ws-top-div{width:1px;height:20px;background:color-mix(in srgb, var(--chrome-ink,#fff) 16%, transparent);flex-shrink:0;margin:0 2px;}
   /* 紧急度单轴 · 第1档「急需处理」（严重超时）：红 = 最高，与下钻面板「🔴 还没人接」同族 */
   .ws-pill.sev{background:rgba(225,29,72,.18);color:#fda4af;border-color:rgba(225,29,72,.55);box-shadow:0 0 0 1px rgba(225,29,72,.14);--pulse-c:rgba(225,29,72,.55);}
   .ws-pill.sev .ws-pill-ic{color:#fb7185;}
@@ -379,6 +457,10 @@
   .ws-pill.quota{background:rgba(167,139,250,.14);color:#ddd6fe;border-color:rgba(167,139,250,.42);}
   .ws-pill.quota .ws-pill-ic{color:#a78bfa;}
   .ws-pill.quota .ws-pill-n{background:linear-gradient(135deg,#ddd6fe,#a78bfa);box-shadow:0 0 8px rgba(167,139,250,.4);}
+  /* B65 L2 自动稿累计胶囊：绿系=「已被机器安静消化」，与告警红橙/任务青/额度紫都不同轴 */
+  .ws-pill.l2auto{background:rgba(22,163,74,.13);color:#bbf7d0;border-color:rgba(22,163,74,.42);}
+  .ws-pill.l2auto .ws-pill-ic{color:#4ade80;}
+  .ws-pill.l2auto .ws-pill-n{background:linear-gradient(135deg,#bbf7d0,#22c55e);box-shadow:0 0 8px rgba(34,197,94,.4);}
   .ws-pill.quota-low{background:rgba(245,158,11,.16);color:#fcd34d;border-color:rgba(245,158,11,.5);}
   .ws-pill.quota-low .ws-pill-ic{color:#fbbf24;}
   .ws-pill.quota-low .ws-pill-n{background:linear-gradient(135deg,#fcd34d,#f59e0b);box-shadow:0 0 8px rgba(245,158,11,.5);}
@@ -396,7 +478,7 @@
   .ws-rv-yes{background:#16a34a;color:#fff;} .ws-rv-no{background:#e5e7eb;color:#374151;}
   .ws-modal-close{float:right;cursor:pointer;color:#6b7280;font-size:18px;}
   /* P24: 通知中心 */
-  .ws-notif-btn{position:relative;cursor:pointer;padding:0 6px;font-size:18px;line-height:52px;color:#fff;user-select:none;}
+  .ws-notif-btn{position:relative;cursor:pointer;padding:0 6px;font-size:18px;line-height:52px;color:var(--chrome-ink,#fff);user-select:none;}
   .ws-notif-badge{position:absolute;top:8px;right:0;background:#ef4444;color:#fff;font-size:10px;font-weight:700;border-radius:8px;min-width:16px;height:16px;line-height:16px;text-align:center;padding:0 3px;display:none;font-variant-numeric:tabular-nums;}
   .ws-notif-panel{position:fixed;top:52px;right:0;width:360px;max-width:95vw;background:#fff;border-radius:0 0 12px 12px;box-shadow:0 8px 32px rgba(0,0,0,.18);z-index:8900;display:none;flex-direction:column;max-height:480px;}
   .ws-notif-hdr{display:flex;justify-content:space-between;align-items:center;padding:12px 16px 8px;border-bottom:1px solid #e5e7eb;}
@@ -469,11 +551,66 @@
   [data-cp-theme="dark"] .ws-drill-allbtn:hover{background:#7c2d12;color:#fed7aa;border-color:#9a3412;}
   /* P7：窄屏药丸只留 图标+数字（标签隐藏，防溢出/换行） */
   @media (max-width:1180px){ .ws-pill-lb{display:none;} .ws-user-name{display:none;} }
-  /* 顶栏 PWA/语言药丸皮肤（内联只留布局，色值集中在此便于主题层覆盖） */
-  .ws-pwa-pill,.ws-lang-pill{
-    border:1px solid rgba(255,255,255,.28);background:rgba(255,255,255,.14);
-    color:var(--th-ink-inverse,#fff);font-size:12px;cursor:pointer;
+  /* 顶栏 PWA/语言药丸皮肤（内联只留布局，色值集中在此便于主题层覆盖）：
+     从 --chrome-ink 推导（暗档=白，计算值与旧 rgba(255,255,255,.28/.14) 逐字节一致），
+     亮档随下方「亮色顶栏」块的令牌重设自动翻转，无需成对覆写。 */
+  .ws-pwa-pill,.ws-lang-pill,.ws-help-pill{
+    border:1px solid color-mix(in srgb, var(--chrome-ink,#fff) 28%, transparent);
+    background:color-mix(in srgb, var(--chrome-ink,#fff) 14%, transparent);
+    color:var(--chrome-ink,#fff);font-size:12px;cursor:pointer;
     white-space:nowrap;user-select:none;margin-right:2px;
+  }
+  /* ── 亮色顶栏（2026-08-17 主题一致性 P0-c：顶栏与 nav-rail 同批随主题）──────
+     暗档＝上方基础规则字面量原样（零回归）；亮档全部集中在本块：重设三枚
+     --chrome-ink* 令牌（token 化消费方自动翻转）+ 少数不可推导皮肤成对覆写。
+     选择器 :root:not([data-cp-theme="dark"])：cpApplyTheme 在 <head> 首屏前必置
+     dark|light 属性，:not(dark) 同时兜住 light 与属性缺席极端态（整页此时也是亮）。 */
+  :root:not([data-cp-theme="dark"]) .ws-top{
+    --chrome-ink:#0f1b2d;
+    --chrome-ink-dim:#334155;
+    --chrome-ink-faint:#64748b;
+    background:var(--tk-surface,#ffffff);
+    box-shadow:inset 0 -1px 0 var(--tk-border,#e5e6ea),0 1px 10px rgba(15,27,45,.06);
+  }
+  /* 品牌字标：brand-lockup.css（与深色 login 共享，勿动源文件）钉了 #fff/#aeb8d4，亮顶栏就地覆写 */
+  :root:not([data-cp-theme="dark"]) .ws-top .brand-lockup__line{color:var(--tk-text,#0f1b2d);}
+  :root:not([data-cp-theme="dark"]) .ws-top .brand-lockup__surface{color:var(--tk-text-muted,#5b6b85);}
+  /* 告警药丸亮档：同语义换深 ink（基础规则的高饱和亮字为深底专属，白底上 ≈2:1）；
+     bg/border 保持同色相半透明 tint，数字胶囊与 pulse 光环两主题通用不覆写 */
+  :root:not([data-cp-theme="dark"]) .ws-pill.sev{background:rgba(225,29,72,.09);color:#be123c;border-color:rgba(225,29,72,.36);box-shadow:0 0 0 1px rgba(225,29,72,.10);}
+  :root:not([data-cp-theme="dark"]) .ws-pill.sev .ws-pill-ic{color:#e11d48;}
+  :root:not([data-cp-theme="dark"]) .ws-pill.warn{background:rgba(244,63,94,.08);color:#be123c;border-color:rgba(244,63,94,.30);}
+  :root:not([data-cp-theme="dark"]) .ws-pill.warn .ws-pill-ic{color:#e11d48;}
+  :root:not([data-cp-theme="dark"]) .ws-pill.review-l4{background:rgba(245,158,11,.12);color:#92400e;border-color:rgba(245,158,11,.45);box-shadow:0 0 0 1px rgba(245,158,11,.10);}
+  :root:not([data-cp-theme="dark"]) .ws-pill.review-l4 .ws-pill-ic{color:#d97706;}
+  :root:not([data-cp-theme="dark"]) .ws-pill.task{background:rgba(8,145,178,.08);color:#0e7490;border-color:rgba(6,182,212,.35);}
+  :root:not([data-cp-theme="dark"]) .ws-pill.task .ws-pill-ic{color:#0891b2;}
+  :root:not([data-cp-theme="dark"]) .ws-pill.quota{background:rgba(124,58,237,.08);color:#6d28d9;border-color:rgba(139,92,246,.35);}
+  :root:not([data-cp-theme="dark"]) .ws-pill.quota .ws-pill-ic{color:#7c3aed;}
+  :root:not([data-cp-theme="dark"]) .ws-pill.l2auto{background:rgba(22,163,74,.09);color:#15803d;border-color:rgba(22,163,74,.35);}
+  :root:not([data-cp-theme="dark"]) .ws-pill.l2auto .ws-pill-ic{color:#16a34a;}
+  :root:not([data-cp-theme="dark"]) .ws-pill.quota-low{background:rgba(245,158,11,.12);color:#92400e;border-color:rgba(245,158,11,.45);}
+  :root:not([data-cp-theme="dark"]) .ws-pill.quota-low .ws-pill-ic{color:#d97706;}
+  :root:not([data-cp-theme="dark"]) .ws-pill.quota-out{background:rgba(225,29,72,.09);color:#be123c;border-color:rgba(225,29,72,.36);}
+  :root:not([data-cp-theme="dark"]) .ws-pill.quota-out .ws-pill-ic{color:#e11d48;}
+  /* 档位徽章亮档：基础规则的浅色字（#bfdbfe 系）贴白底隐形，换同色相深 ink */
+  :root:not([data-cp-theme="dark"]) .ws-plan-basic{background:rgba(59,130,246,.12);border-color:rgba(59,130,246,.40);color:#1d4ed8;}
+  :root:not([data-cp-theme="dark"]) .ws-plan-pro{background:rgba(139,92,246,.12);border-color:rgba(139,92,246,.40);color:#6d28d9;}
+  :root:not([data-cp-theme="dark"]) .ws-plan-flagship{background:rgba(245,158,11,.14);border-color:rgba(245,158,11,.50);color:#92400e;}
+  /* 登录 pill：内联白底在白顶栏上无边界 → 补品牌描边（box-shadow 不在内联集，无需 !important） */
+  :root:not([data-cp-theme="dark"]) .ws-login-pill{box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--tk-brand,#1e8cf2) 40%, transparent);}
+  /* P2-h（实施74，skuio 三催 _574「聊天/客户」组截断）：中等宽度先行收敛——
+     桌面壳常见 ~900-1100px 窗宽 + 英文界面（EN 标签比中文宽 ~40%）时顶栏溢出，
+     768px 断点来不及救。此档只收「文字」不收入口：主导航图标化（title 仍在）、
+     三药丸只留图标、额度徽章/用户名限宽省略——控件全部可见可点，不再被截。 */
+  @media (max-width:1120px){
+    .ws-nav a .ws-nav-lbl{display:none;}
+    .ws-nav a.ws-nav-ic{display:inline-flex;align-items:center;justify-content:center;min-width:32px;}
+    .ws-lang-pill span:not([data-ui-icon]),.ws-pwa-pill span:not([data-ui-icon]),.ws-help-pill span:not([data-ui-icon]){display:none;}
+    .ws-pill.quota{max-width:110px;overflow:hidden;text-overflow:ellipsis;}
+    .ws-user{max-width:120px;overflow:hidden;text-overflow:ellipsis;}
+    .ws-brand .brand-lockup__surface{display:none;}
+    .ws-brand .brand-lockup__sep{display:none;}
   }
   /* 六期：窄屏顶栏收敛 —— 藏全局搜（CmdK 仍可用）、主导航图标化、药丸收成圆点 */
   @media (max-width:768px){
@@ -484,13 +621,13 @@
     .ws-nav a .ws-nav-lbl{display:none;}
     .ws-nav a.ws-nav-ic{display:inline-flex;align-items:center;justify-content:center;min-width:34px;}
     .ws-pill{padding:0 7px;gap:0;}
-    .ws-lang-pill span:not([data-ui-icon]),.ws-pwa-pill span:not([data-ui-icon]){display:none;}
+    .ws-lang-pill span:not([data-ui-icon]),.ws-pwa-pill span:not([data-ui-icon]),.ws-help-pill span:not([data-ui-icon]){display:none;}
     .ws-brand .brand-lockup__name{max-width:4.5em;overflow:hidden;text-overflow:ellipsis;}
   }
   /* 七期：手机宽度只保留最高优先级 SLA 药丸；L4/待跟进入口仍在概览与待办页
      （JS 以内联 display 控显隐，需 !important 覆盖） */
   @media (max-width:560px){
-    #ws-l4-badge,#ws-followup{display:none !important;}
+    #ws-l4-badge,#ws-followup,#ws-l2auto{display:none !important;}
   }
   /* 自定义确认弹框（替代原生 confirm，明快科技风 + 日夜两版） */
   .ws-cfm-ov{position:fixed;inset:0;background:rgba(8,12,24,.55);backdrop-filter:blur(3px);z-index:10001;display:flex;align-items:center;justify-content:center;animation:wsCfmIn .12s ease;}
@@ -551,6 +688,11 @@
   .ws-aiguide-cta{color:#9a3412;}
   /* 托管到期提醒横幅（P4）：expiring=琥珀、expired=红（与 aidegrade/chandown 同色系） */
   .ws-expiry-warn{background:linear-gradient(90deg,#78350f,var(--th-bg-amber8,#92400e));color:#fef3c7;}
+  /* 通道离线横幅陈旧降色（2026-08-27）：断线 >48h 红→琥珀——红色只留给新鲜、
+     应立即行动的掉线；挂了两天的号常态化后继续全红＝没有重点（!important 压过
+     元素上的内联红渐变基色）。 */
+  /* 实施75 batch3：#ws-chandown.stale 随横幅退役移除——>48h 陈旧降档语义
+     由右下胶囊 tone（error→warn）承载（downMin >= 2880 判据不变）。 */
   .ws-expiry-danger{background:linear-gradient(90deg,var(--th-bg-red9,#7f1d1d),var(--th-bg-red8,#991b1b));color:var(--th-ink-red2,#fecaca);}
   .ws-expiry-cta{border:1px solid rgba(255,255,255,.5);background:rgba(255,255,255,.14);color:inherit;}
   .ws-aitrial-tone{background:linear-gradient(90deg,#14532d,#166534);color:#dcfce7;}
@@ -610,8 +752,14 @@
 })();
 </script>
 <script src="/static/workspace/crm-widgets.js?v=20260702a"></script>
+<!-- 实施75：统一通知总线（右下 toast + 系统状态胶囊 + 消息中心留痕）。
+     顶部横幅体系冻结增量：新状态一律走 AITRNotify，勿再注册 wsBanner 横幅。 -->
+<script src="/static/workspace/notify-bus.js?v=20260827b"></script>
 <!-- 三期：⌘K 命令面板（页面导航/会话跳转/动作；自包含模块，样式自注入） -->
-<script src="/static/workspace/cmdk.js?v=20260814a"></script>
+<script src="/static/workspace/cmdk.js?v=20260820a"></script>
+<!-- WP-7 坐席新手任务卡（自包含悬浮组件；flag onboarding.agent_tasks 关=API 404=静默不渲染，
+     完成判定=fetch 旁路监听 5 个权威 API，全✓/收起自动卸载——常态零开销）。 -->
+<script src="/static/workspace/agent-tasks-card.js?v=20260818a" defer></script>
 <!-- PWA（Phase 1）：把工作台做成可安装的原生官网（独立窗口 + 离线壳）。-->
 <link rel="manifest" href="/manifest.webmanifest">
 <script>
@@ -681,11 +829,19 @@
 </head>
 <body>
 {% include "_loading_overlay.html" %}
+{% include "_focus_selfheal.html" %}
 {% include "_guided_tour.html" %}
 <header class="ws-top">
   <span class="ws-brand">
     {% with variant='workspace' %}{% include "_brand_lockup.html" %}{% endwith %}
   </span>
+  {#- 桌面壳应用菜单（P0 2026-08-22）：黑色原生菜单条（文件/编辑/视图/窗口/帮助）
+      并进本行、置于「聊天」之前。仅新桌面壳点亮（__chatxShell.menuSpec 应答 ok，
+      渲染脚本见 cx-shell-strip 块之后）；纯浏览器/旧壳保持 hidden——旧壳原生条
+      还在，页内再画=双菜单。词条来自壳 SHELL_STR（随壳启动语言），页面零兜底
+      文案=无双源。子项一律 <button>：CmdK harvestPages 采 .ws-top a[href]，
+      链接会把「退出」漏进命令面板。 -#}
+  <nav class="ws-appmenu" id="ws-app-menu" hidden></nav>
   <nav class="ws-nav">
     <a href="/workspace" id="nav-inbox" class="ws-nav-ic" style="display:inline-flex;align-items:center;gap:5px;" data-i18n-title="base.nav.chat" title="聊天"><span data-ui-icon="chat" data-size="13"></span><span class="ws-nav-lbl" data-i18n="base.nav.chat">聊天</span></a>
     <a href="/workspace/contacts" class="ws-nav-ic" data-i18n-title="base.nav.contacts" title="客户" style="display:inline-flex;align-items:center;gap:5px;"><span data-ui-icon="users" data-size="13"></span><span class="ws-nav-lbl" data-i18n="base.nav.contacts">客户</span></a>
@@ -708,8 +864,8 @@
   <div id="gs-wrap" style="position:relative;display:flex;align-items:center;">
     <span data-ui-icon="search" data-size="14" style="position:absolute;left:9px;opacity:.55;pointer-events:none;"></span>
     <input id="gs-input" placeholder="全局搜索…" data-i18n-placeholder="base.search_ph" style="
-      width:180px;height:26px;border:1px solid color-mix(in srgb, var(--th-ink-inverse,#fff) 25%, transparent);border-radius:13px;
-      background:color-mix(in srgb, var(--th-ink-inverse,#fff) 12%, transparent);color:var(--th-ink-inverse,#fff);font-size:12px;padding:0 10px 0 28px;
+      width:180px;height:26px;border:1px solid color-mix(in srgb, var(--chrome-ink,#fff) 25%, transparent);border-radius:13px;
+      background:color-mix(in srgb, var(--chrome-ink,#fff) 12%, transparent);color:var(--chrome-ink,#fff);font-size:12px;padding:0 10px 0 28px;
       outline:none;transition:width .2s;" onfocus="this.style.width='240px'" onblur="if(!this.value)this.style.width='180px'"
       oninput="_gsOnInput(this.value)" onkeydown="_gsKey(event)">
     <div id="gs-panel" style="display:none;position:absolute;top:32px;left:0;width:340px;background:var(--th-bg-surface,#fff);
@@ -721,7 +877,10 @@
   <a id="ws-esc" style="display:none;" data-i18n-title="base.pill.esc_t" title="无人接管的严重超时会话"></a>
   <!-- 行动告警药丸：固定形状、永不换行，点击直接下钻处理 -->
   <a class="ws-pill sev" id="ws-sla" data-i18n-title="base.pill.sla_t" title="需要处理的会话（超时未回复 / 还没人接）"></a>
-  <a class="ws-pill review-l4" id="ws-l4-badge" href="/workspace/dash" data-i18n-title="base.pill.l4_t" title="AI 写好的回复，发出前需要你确认（主管放行）"></a>
+  <a class="ws-pill review-l4" id="ws-l4-badge" href="/workspace/drafts" data-i18n-title="base.pill.l4_t" title="AI 写好的回复，发出前需要人确认（L4 需主管放行）· 点击进入草稿审批台"></a>
+  <!-- B65 降噪：L2（低风险+全自动档）草稿不再逐条 toast——AutosendWorker 秒级消化、无需人动手，
+       逐条弹只会淹没真正要人的 L1/L3/L4。改记这颗安静的累计胶囊（本页打开以来），点击进收件箱。 -->
+  <a class="ws-pill l2auto" id="ws-l2auto" href="/workspace" data-i18n-title="base.pill.l2auto_t" title="AI 已自动拟稿并将自动发送的回复（本页打开以来累计）· 点击打开收件箱"></a>
   <a class="ws-pill task" id="ws-followup" href="/workspace/tasks" data-i18n-title="base.pill.followup_t" title="到期待跟进任务"></a>
   <!-- 字符额度 / 首启体验档徽章（P2）：额度用尽会让翻译与 AI 草稿直接停摆，而坐席是
        第一个撞上的人。只让主管在会员中心看得到，等于让一线在毫无预警下发现「AI 不干活了」。
@@ -748,6 +907,14 @@
      background:var(--th-bg-surface,#fff);color:var(--tk-brand,#2563eb);font-weight:600;font-size:12px;text-decoration:none;">
     <span data-ui-icon="key" data-size="13"></span><span data-i18n="base.login.pill">登录</span>
   </a>
+  <!-- 求助（实施51 2026-08-21）：顶栏常驻可见入口——此前唯一常驻入口埋在头像下拉里，
+       内测用户找不到「怎么发诊断」。点击开 _support.html 报障面板（一键打包直传，
+       官网收包自动推送客服）。与语言药丸同族规格；窄屏收成纯图标。 -->
+  <a class="ws-help-pill" id="ws-help-pill" onclick="try{window.openSupportPanel&&window.openSupportPanel('','hdr')}catch(e){}"
+     data-i18n-title="sup.cta.header_t" title="遇到问题？一键把现场发给客服"
+     style="display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 10px;border-radius:13px;">
+    <span data-ui-icon="help" data-size="13"></span><span data-i18n="sup.cta.header">求助</span>
+  </a>
   <!-- 语言切换：顶栏常驻可见按钮（此前仅藏于用户菜单，不易发现）。点击整页切 中⇄英（/set_lang），全站含 copilot 组件随之重渲。 -->
   <a class="ws-lang-pill" id="ws-lang-pill" onclick="window.wsToggleLang&&window.wsToggleLang()"
      data-i18n-title="base.um.lang_t" title="切换语言 / Switch language"
@@ -768,17 +935,34 @@
   <!-- 用户菜单：状态 / 今日概览 / 设置 / 退出 收纳，降低顶栏密度 -->
   <div class="ws-user-wrap" id="ws-user-wrap">
     <span class="ws-user-btn" id="ws-user-btn" onclick="_wsToggleUser(event)">
-      <span class="ws-user-ava">{{ ((user_display_name or user_name or 'U'))[0]|upper }}</span>
+      <span class="ws-user-ava">{{ ((user_display_name or user_name or 'U'))[0]|upper }}<span class="ws-ava-dot" id="ws-ava-dot"></span></span>
       <span class="ws-user-name">{{ (user_display_name or user_name or '') }}</span>
       <span class="ws-user-caret" data-ui-icon="chevron-down" data-size="12"></span>
     </span>
     <div class="ws-user-menu" id="ws-user-menu">
       <div class="ws-um-sec" data-i18n="base.um.status">我的状态</div>
-      <select class="ws-presence" id="ws-presence" data-i18n-title="base.um.status" title="我的状态">
-        <option value="online" data-i18n="base.presence.online">🟢 在线</option>
-        <option value="busy" data-i18n="base.presence.busy">🟡 忙碌</option>
-        <option value="offline" data-i18n="base.presence.offline">⚫ 离线</option>
-      </select>
+      {#- 接待状态 v2（2026-08-19）：原生 select → radio 行（状态名+后果说明）。
+          状态属「人」不属「窗口」：busy 刷新不丢（localStorage+服务端回显）、待机窗心跳
+          不覆盖、席位满时上线被拒会显式提示。点击走事件委托（无内联 onclick）。 -#}
+      <div class="ws-presence-grp" id="ws-presence-grp" role="radiogroup" data-i18n-title="base.um.status" title="我的状态">
+        <button type="button" class="ws-pr-opt" data-st="online" role="radio">
+          <span class="ws-pr-dot on"></span>
+          <span class="ws-pr-txt"><b data-i18n="base.presence.online">在线</b><small data-i18n="base.presence.online_d">接收新会话派单与提醒</small></span>
+          <span class="ws-pr-chk">✓</span>
+        </button>
+        <button type="button" class="ws-pr-opt" data-st="busy" role="radio">
+          <span class="ws-pr-dot busy"></span>
+          <span class="ws-pr-txt"><b data-i18n="base.presence.busy">忙碌</b><small data-i18n="base.presence.busy_d">不派新会话给你；已接的会话不变</small></span>
+          <span class="ws-pr-chk">✓</span>
+        </button>
+        <button type="button" class="ws-pr-opt" data-st="offline" role="radio">
+          <span class="ws-pr-dot off"></span>
+          <span class="ws-pr-txt"><b data-i18n="base.presence.offline">离开</b><small data-i18n="base.presence.offline_d">暂离工位：不参与派单，回来选「在线」恢复</small></span>
+          <span class="ws-pr-chk">✓</span>
+        </button>
+      </div>
+      <div class="ws-pr-seat" id="ws-pr-seat" data-i18n="base.presence.seat_full">席位已满：暂无法上线（可先用「忙碌／离开」）</div>
+      <div class="ws-pr-note" data-i18n="base.presence.scope_note">这是你（坐席）的接待状态；左侧账号栏的绿点＝平台账号连接状态，会话上的「全自动」＝该会话的 AI 档位，三者互不影响。</div>
       <div class="ws-um-sec" data-i18n="base.um.today">今日概览</div>
       <div class="ws-um-info" id="ws-funnel" data-i18n-title="base.um.funnel_t" title="今日 web 漏斗">—</div>
       <div class="ws-um-info" id="ws-agents-online" data-i18n-title="base.um.agents_t" title="在线坐席">—</div>
@@ -801,6 +985,13 @@
          onclick="document.getElementById('ws-user-menu').classList.remove('show')" style="display:flex;align-items:center;gap:6px;"><span data-ui-icon="gear" data-size="14"></span><span data-i18n="base.um.prefs">告警 / 通知设置</span></a>
       <a class="ws-um-item" id="ws-lang-toggle" onclick="window.wsToggleLang&&window.wsToggleLang()" data-i18n-title="base.um.lang_t" title="切换语言 / Switch language" style="display:flex;align-items:center;gap:6px;"><span data-ui-icon="globe" data-size="14"></span><span data-i18n="lang_toggle">English</span></a>
       <a class="ws-um-item" id="ws-admin-link" href="/" data-winname="admin" onclick="return __openUnique(event,this)" style="display:none;" data-i18n-title="base.um.admin_t" title="渠道 / 系统 / 配置（系统管理）"><span data-ui-icon="wrench" data-size="14"></span> <span data-i18n="base.um.admin">管理后台</span></a>
+      {#- 报障入口（实施49 P1-9；实施51 起顶栏另有常驻「求助」药丸，本项保留=菜单
+          习惯用户的第二入口）。面板见 _support.html：一键打包直传，官网收包自动推送
+          客服；旧后端时面板自动降级为只读信息。 -#}
+      <a class="ws-um-item" id="ws-support-btn"
+         onclick="document.getElementById('ws-user-menu').classList.remove('show');try{window.openSupportPanel&&window.openSupportPanel('','menu')}catch(e){}"
+         data-i18n-title="sup.cta.header_t" title="遇到问题？一键把现场发给客服"
+         style="display:flex;align-items:center;gap:6px;"><span data-ui-icon="help" data-size="14"></span><span data-i18n="sup.cta.menu">求助 / 发诊断给客服</span></a>
       <a class="ws-um-item ws-um-danger" href="/logout"><span data-ui-icon="logout" data-size="14"></span> <span data-i18n="base.um.logout">退出登录</span></a>
     </div>
   </div>
@@ -876,52 +1067,235 @@
 })();
 </script>
 {% endif %}
-{% if ai_key_missing %}
-<!-- P0-1 A3：AI Key 未配置引导条（仅主管渲染；关闭记 localStorage，配好后服务端不再渲染） -->
-<div id="ws-aiguide" class="ws-aiguide-tone" style="display:none;align-items:center;gap:10px;padding:8px 14px;font-size:13px;">
-  <span style="flex:0 0 auto;display:inline-flex;" data-ui-icon="key" data-size="15"></span>
-  <span style="flex:1 1 auto;line-height:1.5;" data-i18n="ws.aiguide.text">{{ i18n.get('ws.aiguide.text', 'AI 大模型还没配置：填好 API Key 后，翻译和智能回复才能用。') }}</span>
-  <a href="/workspace/setup#ai" data-i18n="ws.aiguide.cta" class="ws-aiguide-cta" style="flex:0 0 auto;padding:5px 14px;border-radius:8px;
-     background:var(--th-bg-surface,#fff);font-weight:600;text-decoration:none;">{{ i18n.get('ws.aiguide.cta', '去配置') }}</a>
-  <span onclick="_wsAiGuideDismiss()" data-i18n="ws.aiguide.dismiss" style="flex:0 0 auto;cursor:pointer;opacity:.75;
-     padding:5px 8px;text-decoration:underline;">{{ i18n.get('ws.aiguide.dismiss', '先不管') }}</span>
-</div>
 <script>
-function _wsAiGuideDismiss(){
-  try{ localStorage.setItem('ws_aiguide_dismissed','1'); }catch(_){ }
-  window.wsBanner.set('ws-aiguide', false);
-}
+/* ── 桌面壳应用菜单渲染（P0 2026-08-22，配对 desktop/main.js::appMenuSpec）────
+   黑色原生菜单条在新壳 autoHideMenuBar 隐藏后，这里在顶栏品牌与「聊天」之间
+   渲染同构五菜单。点亮条件=__chatxShell.menuSpec 存在且应答 ok（新壳专属；
+   旧壳无此方法=原生条还在，页内不画防双菜单；纯浏览器无桥零变化）。
+   交互对齐经典菜单栏：点开/再点关、开着时悬停横移、Esc/外点关闭；整区
+   mousedown preventDefault 保住 composer 焦点——编辑类动作（粘贴等）的目标
+   就是它，夺焦后 paste 无处可贴。id=support 是页面本地动作（openSupportPanel
+   报障面板），其余回壳主进程执行。全部 addEventListener 零内联 handler。 */
 (function(){
-  var dismissed=false;
-  try{ dismissed=localStorage.getItem('ws_aiguide_dismissed')==='1'; }catch(_){ }
-  var b=document.getElementById('ws-aiguide');
-  /* 经仲裁器声明显示意愿：有更高优先级横幅（通道离线/连接中断）时自动让位，恢复后回显 */
-  if(b && !dismissed) window.wsBanner.set('ws-aiguide', true);
+  var host=document.getElementById('ws-app-menu');
+  var sh=window.__chatxShell;
+  if(!host||!sh||typeof sh.menuSpec!=='function') return;
+  var openWrap=null;
+  var panels={};   // 菜单 id → 下拉面板节点（开发者模式注入 / 版本行定位用）
+  function setOpen(wrap,on){
+    wrap.classList.toggle('open',!!on);
+    var b=wrap.querySelector('.wam-top');
+    if(b) b.setAttribute('aria-expanded',on?'true':'false');
+  }
+  function closeAll(){
+    if(!openWrap) return;
+    var w=openWrap; setOpen(w,false); openWrap=null;
+    /* 键盘态收尾：焦点还留在被藏面板里 → 收回顶词按钮；鼠标路径（mousedown 已
+       preventDefault）activeElement 不在面板内，此分支不触发=零焦点打扰。 */
+    try{ if(w.contains(document.activeElement)){ var b=w.querySelector('.wam-top'); if(b) b.focus(); } }catch(_){ }
+  }
+  /* P2 用量埋点（appmenu_* → /api/telemetry/ui-event，与 theme_/iflt_ 同管道同上限）：
+     open 只记「点击展开」（悬停横移不记，扫一排 5 个菜单不该算 5 次意图），act 记
+     每次动作。读数 /api/admin/ui-event-trend?prefix=appmenu_——两周后按零点击裁决
+     低频菜单去留（本仓裁决文化：零点击即清退候选，别靠感觉留菜单）。 */
+  function bcn(a){
+    try{ navigator.sendBeacon('/api/telemetry/ui-event', new Blob(
+      [JSON.stringify({page:(location&&location.pathname)||'', action:String(a)})],
+      {type:'application/json'})); }catch(_){ }
+  }
+  function fire(id,local){
+    bcn('appmenu_act_'+id);
+    closeAll();
+    if(local){ try{ window.openSupportPanel&&window.openSupportPanel('','appmenu'); }catch(_){ } return; }
+    try{ sh.menuAction(id); }catch(_){ }
+  }
+  function build(menus){
+    menus.forEach(function(m){
+      if(!m||!Array.isArray(m.items)) return;
+      var wrap=document.createElement('span'); wrap.className='wam-wrap';
+      var btn=document.createElement('button'); btn.type='button'; btn.className='wam-top';
+      btn.textContent=m.label||m.id||'';
+      btn.setAttribute('aria-haspopup','true'); btn.setAttribute('aria-expanded','false');
+      var panel=document.createElement('div'); panel.className='wam-panel'; panel.setAttribute('role','menu');
+      panels[m.id]=panel;
+      m.items.forEach(function(it){
+        if(it&&it.type==='sep'){ var s=document.createElement('div'); s.className='wam-sep'; panel.appendChild(s); return; }
+        if(!it||!it.id) return;
+        var b=document.createElement('button'); b.type='button'; b.className='wam-item'; b.setAttribute('role','menuitem');
+        var lb=document.createElement('span'); lb.textContent=it.label||it.id; b.appendChild(lb);
+        if(it.accel){ var ac=document.createElement('span'); ac.className='wam-accel'; ac.textContent=it.accel; b.appendChild(ac); }
+        b.addEventListener('click',function(ev){ ev.stopPropagation(); fire(it.id,it.local===1||it.local===true); });
+        panel.appendChild(b);
+      });
+      btn.addEventListener('click',function(ev){
+        ev.stopPropagation();
+        var was=(openWrap===wrap);
+        closeAll();
+        if(!was){ setOpen(wrap,true); openWrap=wrap; bcn('appmenu_open_'+(m.id||'')); }
+      });
+      btn.addEventListener('mouseenter',function(){
+        if(openWrap&&openWrap!==wrap){ closeAll(); setOpen(wrap,true); openWrap=wrap; }
+      });
+      wrap.appendChild(btn); wrap.appendChild(panel); host.appendChild(wrap);
+    });
+    var div=document.createElement('span'); div.className='ws-top-div'; div.setAttribute('aria-hidden','true');
+    host.appendChild(div);
+    host.addEventListener('mousedown',function(ev){ ev.preventDefault(); });
+    document.addEventListener('click',closeAll);
+    document.addEventListener('keydown',function(ev){ if(ev.key==='Escape') closeAll(); });
+    /* P2 键盘导航（对齐原生菜单栏习惯）：Tab 到顶词 → ↓/Enter 开面板并落焦首项，
+       ↑↓ 循环、Home/End 跳端、←→ 横移到相邻菜单；Esc 走上面的全局监听。
+       仅当焦点在菜单区内才生效（keydown 挂 host）——鼠标路径 mousedown 已
+       preventDefault 不产生焦点，两套互不打扰。 */
+    var itemsOf=function(w){ return Array.prototype.slice.call(w.querySelectorAll('.wam-item')); };
+    host.addEventListener('keydown',function(ev){
+      var k=ev.key;
+      if(!openWrap){
+        var tb=(ev.target&&ev.target.classList&&ev.target.classList.contains('wam-top'))?ev.target:null;
+        if(tb&&k==='ArrowDown'){
+          ev.preventDefault(); tb.click();
+          var fi=openWrap?itemsOf(openWrap):[]; if(fi.length) fi[0].focus();
+        }
+        return;
+      }
+      var list=itemsOf(openWrap);
+      var idx=list.indexOf(document.activeElement);
+      if(k==='ArrowDown'||k==='ArrowUp'){
+        ev.preventDefault();
+        var n=list.length; if(!n) return;
+        var j=(idx<0)?(k==='ArrowDown'?0:n-1):(k==='ArrowDown'?(idx+1)%n:(idx-1+n)%n);
+        list[j].focus();
+      }else if(k==='Home'||k==='End'){
+        ev.preventDefault(); if(list.length) list[k==='Home'?0:list.length-1].focus();
+      }else if(k==='ArrowLeft'||k==='ArrowRight'){
+        ev.preventDefault();
+        var wraps=Array.prototype.slice.call(host.querySelectorAll('.wam-wrap'));
+        var i=wraps.indexOf(openWrap), n2=wraps.length; if(i<0||!n2) return;
+        var w2=wraps[(k==='ArrowRight'?(i+1):(i-1+n2))%n2];
+        closeAll(); setOpen(w2,true); openWrap=w2;
+        var it2=itemsOf(w2); if(it2.length) it2[0].focus();
+      }
+    });
+  }
+  /* ── 主题跟随（titlebar merge P2 2026-08-22）：页面主题翻转 → menuAction(theme_*)
+     → 主进程同步原生窗控 overlay 配色 + 壳级细条（cx-titlebar-theme）。旧壳 main
+     无此分支只回 unknown_action，无害；纯浏览器根本进不到这里。 */
+  function _pushTheme(){
+    var dark=(document.documentElement.getAttribute('data-cp-theme')==='dark');
+    try{ sh.menuAction(dark?'theme_dark':'theme_light'); }catch(_){ }
+  }
+  function _wireThemeSync(){
+    _pushTheme();
+    try{
+      new MutationObserver(_pushTheme).observe(document.documentElement,{attributes:true,attributeFilter:['data-cp-theme']});
+    }catch(_){ }
+  }
+  /* ── 开发者模式（老板令 2026-08-22）：devtools 对所有人隐藏（原生菜单与页内
+     视图菜单均无此项）；帮助菜单底部版本行**连点 12 次**解锁（localStorage
+     aitr.devmode），解锁后视图菜单注入「开发者工具 / 关闭开发者模式」，
+     Ctrl+Shift+I 同步生效。词条全部来自 spec.extras（SHELL_STR 单源，零兜底文案）。 */
+  var DEVMODE_KEY='aitr.devmode';
+  function _devOn(){ try{ return localStorage.getItem(DEVMODE_KEY)==='1'; }catch(_){ return false; } }
+  function _tbToast(msg){
+    if(!msg) return;
+    var wrap=document.querySelector('.tk-toast-wrap');
+    if(!wrap){ wrap=document.createElement('div'); wrap.className='tk-toast-wrap'; document.body.appendChild(wrap); }
+    var t=document.createElement('div'); t.className='tk-toast info'; t.textContent=msg;
+    wrap.appendChild(t); setTimeout(function(){ try{ t.remove(); }catch(_){ } },2600);
+  }
+  function _injectDevItems(ex){
+    var panel=panels.view;
+    if(!panel||panel.querySelector('[data-wam-dev]')) return;
+    var sep=document.createElement('div'); sep.className='wam-sep'; sep.setAttribute('data-wam-dev','1'); panel.appendChild(sep);
+    var dt=document.createElement('button'); dt.type='button'; dt.className='wam-item'; dt.setAttribute('role','menuitem'); dt.setAttribute('data-wam-dev','1');
+    var lb=document.createElement('span'); lb.textContent=ex.devtools||'DevTools'; dt.appendChild(lb);
+    var ac=document.createElement('span'); ac.className='wam-accel'; ac.textContent='Ctrl+Shift+I'; dt.appendChild(ac);
+    dt.addEventListener('click',function(ev){ ev.stopPropagation(); fire('devtools',false); });
+    panel.appendChild(dt);
+    var off=document.createElement('button'); off.type='button'; off.className='wam-item'; off.setAttribute('role','menuitem'); off.setAttribute('data-wam-dev','1');
+    var lb2=document.createElement('span'); lb2.textContent=ex.devmode_off||'Disable developer mode'; off.appendChild(lb2);
+    off.addEventListener('click',function(ev){
+      ev.stopPropagation(); closeAll();
+      try{ localStorage.removeItem(DEVMODE_KEY); }catch(_){ }
+      panel.querySelectorAll('[data-wam-dev]').forEach(function(n){ try{ n.remove(); }catch(_){ } });
+    });
+    panel.appendChild(off);
+  }
+  function _wireDevmode(spec){
+    var ex=(spec&&spec.extras)||{};
+    var hp=panels.help;
+    if(hp&&spec.version){
+      var sep=document.createElement('div'); sep.className='wam-sep'; hp.appendChild(sep);
+      var ver=document.createElement('div'); ver.className='wam-ver';
+      ver.textContent=(ex.version_label||'Version')+' v'+String(spec.version);
+      hp.appendChild(ver);
+      var n=0,timer=null;
+      ver.addEventListener('click',function(ev){
+        ev.stopPropagation();                       /* 连点期间菜单不许被外点逻辑关掉 */
+        if(_devOn()){ _tbToast(ex.devmode_on||''); return; }
+        n++;
+        if(timer) clearTimeout(timer);
+        timer=setTimeout(function(){ n=0; },2500);  /* 停手 2.5s 计数归零 */
+        if(n>=12){
+          n=0;
+          try{ localStorage.setItem(DEVMODE_KEY,'1'); }catch(_){ }
+          _injectDevItems(ex);
+          _tbToast(ex.devmode_on||'');
+        }else if(n>=5){
+          _tbToast(String(ex.devmode_hint||'{n}').replace('{n}',String(12-n)));
+        }
+      });
+    }
+    if(_devOn()) _injectDevItems(ex);
+    document.addEventListener('keydown',function(ev){
+      if(ev.ctrlKey&&ev.shiftKey&&(ev.key==='I'||ev.key==='i')&&_devOn()){ ev.preventDefault(); fire('devtools',false); }
+    });
+  }
+  Promise.resolve(sh.menuSpec()).then(function(spec){
+    if(!spec||spec.ok!==true||!Array.isArray(spec.menus)||!spec.menus.length) return;
+    host.setAttribute('aria-label',spec.lang==='en'?'Application menu':'\u5e94\u7528\u83dc\u5355');
+    build(spec.menus);
+    host.hidden=false;
+    document.documentElement.classList.add('cx-appmenu-on');
+    try{ _wireThemeSync(); }catch(_){ }
+    try{ _wireDevmode(spec); }catch(_){ }
+  }).catch(function(){});
+})();
+</script>
+{% if ai_key_missing %}
+<!-- P0-1 A3 → 实施75：AI Key 未配置引导——顶部横幅退役，改右下卡片提示（每日至多
+     一次，带「去配置/先不管」按钮）+ 消息中心留痕；「先不管」沿用
+     ws_aiguide_dismissed 永久免扰语义（配好后服务端不再渲染本块）。 -->
+<script>
+(function(){
+  var TXT={{ i18n.get('ws.aiguide.text', 'AI 大模型还没配置：填好 API Key 后，翻译和智能回复才能用。')|tojson }};
+  var CTA={{ i18n.get('ws.aiguide.cta', '去配置')|tojson }};
+  var DIS={{ i18n.get('ws.aiguide.dismiss', '先不管')|tojson }};
+  function _fire(){
+    if(!window.AITRNotify) return;
+    var dismissed=false;
+    try{ dismissed=localStorage.getItem('ws_aiguide_dismissed')==='1'; }catch(_){ }
+    if(dismissed) return;
+    AITRNotify.notify({
+      severity:'warn', text:TXT,
+      dedupKey:'aiguide', dedupTtlMs:24*3600000, centerId:'aiguide',
+      actions:[
+        {label:CTA, onClick:function(){ location.href='/workspace/setup#ai'; }},
+        {label:DIS, onClick:function(){ try{ localStorage.setItem('ws_aiguide_dismissed','1'); }catch(_){ } }}
+      ]
+    });
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', _fire);
+  else _fire();
 })();
 </script>
 {% elif ai_trial_mode %}
 <!-- 托管试用/付费托管：经官网网关调云端 AI（Key 只在服务端）；额度徽章 60s 轮询，用尽自动切文案。
      付费托管（ai_hosted_paid，P5 2026-08-08）与试用同链不同措辞——付费客户看「按套餐供给」
      而非「免费试用中」；额度用尽也不弹试用升级窗（那套话术是 bind_code/开通正式版语境）。 -->
-<div id="ws-aitrial" class="ws-aitrial-tone" style="display:none;align-items:center;gap:10px;padding:8px 14px;font-size:13px;">
-  <span style="flex:0 0 auto;display:inline-flex;" data-ui-icon="spark" data-size="15"></span>
-  <span id="ws-aitrial-text" style="flex:1 1 auto;line-height:1.5;"
-        {% if ai_hosted_paid %}data-i18n="ws.aihosted.text"{% else %}data-i18n="ws.aitrial.text"{% endif %}>{%- if ai_hosted_paid -%}
-    {{ i18n.get('ws.aihosted.text', 'AI 服务经官网安全通道按套餐供给，无需配置 API Key；用量在右侧实时可见。') }}
-  {%- else -%}
-    {{ i18n.get('ws.aitrial.text', '免费试用中：已通过官网安全通道调用云端 AI，无需也不必填写 API Key；额度用尽请联系客服续期。') }}
-  {%- endif -%}</span>
-  <span id="ws-aitrial-quota" style="display:none;flex:0 0 auto;align-items:center;gap:6px;font-size:12px;opacity:.92;">
-    <span id="ws-aitrial-quota-txt"></span>
-    <span class="ws-aitrial-meter" style="width:64px;height:6px;border-radius:999px;overflow:hidden;display:inline-block;vertical-align:middle;">
-      <i id="ws-aitrial-quota-bar" style="display:block;height:100%;width:0%;background:var(--th-bg-surface,#fff);border-radius:999px;transition:width .4s ease;"></i>
-    </span>
-  </span>
-  <a href="/membership" data-i18n="ws.aitrial.cta" class="ws-aitrial-cta" style="flex:0 0 auto;padding:5px 14px;border-radius:8px;
-     background:var(--th-bg-surface,#fff);font-weight:600;text-decoration:none;">{{ i18n.get('ws.aitrial.cta', '查看额度') }}</a>
-  <span onclick="_wsAiTrialDismiss()" data-i18n="ws.aitrial.dismiss" style="flex:0 0 auto;cursor:pointer;opacity:.75;
-     padding:5px 8px;text-decoration:underline;">{{ i18n.get('ws.aitrial.dismiss', '知道了') }}</span>
-</div>
+<!-- 实施75：托管试用/付费横幅退役——首日一次右下卡片提示（查看额度/知道了）；
+     额度 busy/exhausted/low 状态改右下胶囊 + 状态变更提示（见下方 _renderQuota）。
+     升级弹窗（ws-aitrial-upsell）保留原样。 -->
 <!-- 额度用尽升级弹窗：最高转化意向时刻——一天最多弹一次，CTA 带绑定码深链跳客服 -->
 <div id="ws-aitrial-upsell" class="ws-upsell-mask" style="display:none;position:fixed;inset:0;z-index:10000;
      backdrop-filter:blur(3px);align-items:center;justify-content:center;">
@@ -934,6 +1308,10 @@ function _wsAiGuideDismiss(){
       <span id="ws-aitrial-up-code" style="display:none;font-family:monospace;font-weight:700;"></span>
     </p>
     <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+      <!-- quotawall v2（2026-08-21）：充值直达（licensing.shop_url 配置且 master 才显；
+           显隐与点击由 JS 按 state.shop_url 决定，无内联 handler） -->
+      <button id="ws-aitrial-up-buy" type="button" class="ws-upsell-go" style="display:none;border:0;border-radius:10px;padding:.6rem 1.4rem;cursor:pointer;
+              font-size:.88rem;font-weight:600;">{{ i18n.get('ws.quotawall.recharge', '立即充值（到账自动恢复）') }}</button>
       <button id="ws-aitrial-up-cta" type="button" class="ws-upsell-go" style="border:0;border-radius:10px;padding:.6rem 1.4rem;cursor:pointer;
               font-size:.88rem;font-weight:600;">{{ i18n.get('ws.aitrial.up_cta', '联系客服续期') }}</button>
       <button id="ws-aitrial-up-later" type="button" style="border:1px solid var(--th-bd-slate2,#e2e8f0);border-radius:10px;padding:.6rem 1.2rem;
@@ -942,16 +1320,14 @@ function _wsAiGuideDismiss(){
   </div>
 </div>
 <script>
-function _wsAiTrialDismiss(){
-  try{ localStorage.setItem('ws_aitrial_dismissed','1'); }catch(_){ }
-  window.wsBanner.set('ws-aitrial', false);
-}
 (function(){
   var dismissed=false;
   try{ dismissed=localStorage.getItem('ws_aitrial_dismissed')==='1'; }catch(_){ }
-  var b=document.getElementById('ws-aitrial');
-  if(!b) return;
   var IS_PAID={{ 'true' if ai_hosted_paid else 'false' }};
+  var TXT_INTRO={%- if ai_hosted_paid -%}{{ i18n.get('ws.aihosted.text', 'AI 服务经官网安全通道按套餐供给，无需配置 API Key；用量在右侧实时可见。')|tojson }}{%- else -%}{{ i18n.get('ws.aitrial.text', '免费试用中：已通过官网安全通道调用云端 AI，无需也不必填写 API Key；额度用尽请联系客服续期。')|tojson }}{%- endif -%};
+  var TXT_CTA={{ i18n.get('ws.aitrial.cta', '查看额度')|tojson }};
+  var TXT_DISMISS={{ i18n.get('ws.aitrial.dismiss', '知道了')|tojson }};
+  var CAPSULE_TITLE={{ i18n.get('ntf.capsule_title', '系统状态 · 点击查看通知中心')|tojson }};
   {%- if ai_hosted_paid %}
   var TXT_EXHAUSTED={{ i18n.get('ws.aihosted.exhausted', '今日 AI 额度已用完，明日自动恢复；持续不够用请联系客服提额或升级套餐。')|tojson }};
   var TXT_BUSY={{ i18n.get('ws.aihosted.busy', 'AI 通道暂时繁忙，请稍后再试；您的额度不受影响。')|tojson }};
@@ -967,9 +1343,13 @@ function _wsAiTrialDismiss(){
     var d=new Date();
     return 'ws_aitrial_upsell_'+d.getFullYear()+('0'+(d.getMonth()+1)).slice(-2)+('0'+d.getDate()).slice(-2);
   }
+  var IS_MASTER={{ 'true' if user_role == 'master' else 'false' }};
   function _maybeShowUpsell(q){
     if(IS_PAID) return;                  /* 付费托管：额度用尽走横幅文案，不弹试用升级窗 */
     if(!q.exhausted || q.busy) return;   /* 全局繁忙不是用户的额度问题，不推销 */
+    /* quotawall v2 互斥：额度墙在场/刚弹过 → 本日推销窗让路（同屏最多一个模态；
+       今天不弹明天键未写，机会不丢） */
+    if(window.__wsQuotaWall&&(window.__wsQuotaWall.isUp()||window.__wsQuotaWall.shownRecently(300000))) return;
     var k=_upsellShownKey();
     try{ if(localStorage.getItem(k)==='1') return; localStorage.setItem(k,'1'); }catch(_){ return; }
     var m=document.getElementById('ws-aitrial-upsell');
@@ -978,13 +1358,32 @@ function _wsAiTrialDismiss(){
       var c=document.getElementById('ws-aitrial-up-code');
       if(c){ c.textContent=' '+q.bind_code; c.style.display='inline'; }
     }
+    /* 充值直达：master 且 shop_url 已随额度轮询下发（state.shop_url）才亮 */
+    try{
+      var st=window.__wsQuotaState||null;
+      var bb=document.getElementById('ws-aitrial-up-buy');
+      if(bb) bb.style.display=(IS_MASTER&&st&&st.shop_url)?'':'none';
+    }catch(_e){}
     m.style.display='flex';
   }
   (function(){
     var cta=document.getElementById('ws-aitrial-up-cta');
     var later=document.getElementById('ws-aitrial-up-later');
     var modal=document.getElementById('ws-aitrial-upsell');
+    var buy=document.getElementById('ws-aitrial-up-buy');
     if(later) later.addEventListener('click',function(){ if(modal) modal.style.display='none'; });
+    if(buy) buy.addEventListener('click',function(){
+      var st=window.__wsQuotaState||null;
+      var u=(st&&st.shop_url)||'';
+      if(!u) return;
+      try{
+        navigator.sendBeacon('/api/telemetry/ui-event', new Blob(
+          [JSON.stringify({page:(location&&location.pathname)||'', action:'qw_cta_buy_daily'})],
+          {type:'application/json'}));
+      }catch(_e){}
+      try{ window.open(u,'_blank'); }catch(_e){}
+      if(modal) modal.style.display='none';
+    });
     if(cta) cta.addEventListener('click',function(){
       cta.disabled=true;
       apiFetch('/api/admin/license/trial-bind-code',
@@ -1009,27 +1408,33 @@ function _wsAiTrialDismiss(){
     if(!q || q.enabled===false || q.error) return;
     _lastQuota=q;
     _maybeShowUpsell(q);
+    /* B82：无限额期（B40 内测放开 / 不限量套餐）——不算百分比、不出状态胶囊、
+       不弹「仅剩 X%」预警。放开了还倒计时是坐席实录困惑（skuio 08-25）。 */
+    if(!window.AITRNotify) return;
+    if(q.unlimited){
+      AITRNotify.ongoing.clear('aitrial');
+      return;   // busy 态仍由 hosted 分支处理；无限额下不存在 exhausted/low
+    }
     var pct=q.budget>0?Math.max(0,Math.min(100,Math.round(q.remaining*100/q.budget))):0;
-    var wrap=document.getElementById('ws-aitrial-quota');
-    var txt=document.getElementById('ws-aitrial-quota-txt');
-    var bar=document.getElementById('ws-aitrial-quota-bar');
-    if(wrap){wrap.style.display='inline-flex';}
-    if(txt){txt.textContent=TXT_QUOTA+' '+pct+'%';}
-    if(bar){bar.style.width=pct+'%';}
-    /* 低额度预警档（P5）：剩 ≤15% 且未用尽——「快没了」比「已没了」早一步提醒 */
+    /* 低额度预警档（P5）：剩 ≤15% 且未用尽——「快没了」比「已没了」早一步提醒。
+       实施75：busy/exhausted/low 三态从顶部横幅迁到右下胶囊（实时状态）+
+       状态首现提示（dedupKey 6h，「须知的状态」不受「知道了」免扰影响）。 */
     var low=(!q.busy && !q.exhausted && q.budget>0 && pct<=15);
-    var t=document.getElementById('ws-aitrial-text');
-    if(t){
-      if(q.busy){t.textContent=TXT_BUSY;}
-      else if(q.exhausted){t.textContent=TXT_EXHAUSTED;}
-      else if(low){t.textContent=window.Tf('ws.aiquota.low',{pct:String(pct)});}
-    }
-    /* 额度用尽/告急即便被 dismiss 过也要浮出来（信息从「可关的告知」升级为「须知的
-       状态」）；但每次页面加载至多回弹一次——用户再次手动关掉后本页不再纠缠 */
-    if((q.exhausted||q.busy||low)&&dismissed&&!_resurfacedOnce){
-      _resurfacedOnce=true;
-      window.wsBanner.set('ws-aitrial', true);
-    }
+    var state=q.busy?'busy':(q.exhausted?'exhausted':(low?'low':''));
+    if(!state){ AITRNotify.ongoing.clear('aitrial'); return; }
+    var stText=q.busy?TXT_BUSY:(q.exhausted?TXT_EXHAUSTED:window.Tf('ws.aiquota.low',{pct:String(pct)}));
+    AITRNotify.ongoing.set('aitrial', {
+      text: stText,
+      tone: q.exhausted?'error':'warn',
+      title: CAPSULE_TITLE
+    });
+    AITRNotify.notify({
+      severity: q.exhausted?'error':'warn',
+      text: stText,
+      dedupKey: 'aitrial:'+state, dedupTtlMs: 6*3600000,
+      centerId: 'aitrial',
+      actions: [{label: TXT_CTA, onClick: function(){ location.href='/membership'; }}]
+    });
   }
   function _pollQuota(){
     apiFetch('/api/workspace/hosted-quota', {credentials:'same-origin'},
@@ -1038,86 +1443,73 @@ function _wsAiTrialDismiss(){
       .then(_renderQuota)
       .catch(function(){});
   }
-  if(!dismissed) window.wsBanner.set('ws-aitrial', true);
+  /* 实施75：入驻介绍从常驻横幅改为首日一次卡片提示；「知道了」沿用免扰键 */
+  if(!dismissed && window.AITRNotify){
+    AITRNotify.notify({
+      severity:'info', text:TXT_INTRO,
+      dedupKey:'aitrial-intro', dedupTtlMs:7*86400000, centerId:'aitrial-intro',
+      actions:[
+        {label:TXT_CTA, onClick:function(){ location.href='/membership'; }},
+        {label:TXT_DISMISS, onClick:function(){ try{ localStorage.setItem('ws_aitrial_dismissed','1'); }catch(_){ } }}
+      ]
+    });
+  }
   _pollQuota();
   setInterval(_pollQuota, 60000);
 })();
 </script>
 {% endif %}
-<!-- 云端 AI 降级状态条（P-KeyPool D，2026-07-12）：熔断/备用 Key/本地兜底顶班期间，
-     给坐席一条温和预期管理（回复稍慢），恢复自动消失。60s 轮询零开销内存快照；
-     桌面壳包的也是本工作台 → 桌面端同享，无需壳侧代码。 -->
-<div id="ws-aidegrade" style="display:none;align-items:center;gap:10px;padding:6px 14px;
-     background:linear-gradient(90deg,#78350f,var(--th-bg-amber8,#92400e));color:#fef3c7;font-size:12.5px;">
-  <span style="flex:0 0 auto;display:inline-flex;" data-ui-icon="cloud" data-size="15"></span>
-  <span style="flex:1 1 auto;line-height:1.5;">
-    <span data-i18n="ws.aidegrade.text">{{ i18n.get('ws.aidegrade.text', '云端 AI 降级中，回复可能稍慢；系统已自动切换备用通道，无需操作。') }}</span>
-    <span id="ws-aidegrade-mode" style="opacity:.85"></span>
-  </span>
-</div>
+<!-- 云端 AI 降级提示（实施75，2026-08-27）：顶部横幅退役，改右下「系统状态胶囊」
+     （AITRNotify.ongoing 'aidegrade'）+ 开始/恢复各一次 toast + 消息中心留痕。
+     渲染逻辑在下方 _wsAiDegradePoll；文案键 ws.aidegrade.text / ntf.ai_*。 -->
 <!-- 平台通道离线警示横幅（2026-07-22）：外部 worker 会话（WhatsApp/Messenger…）掉线/
      过期/放弃自愈时给坐席一条红色警示——「客户不说话」可能是通道假死而非真没消息。
-     数据随 ws-aidegrade 同一 60s 轮询（ai-runtime-status.channels），恢复自动隐藏。
+     数据随 ai-runtime-status 同一 60s 轮询（channels 字段），恢复自动隐藏。
      文案全部由 JS 经 window.T/Tf 填充（platform/account 为英文原文，无需翻译）。 -->
-<div id="ws-chandown" style="display:none;align-items:center;gap:10px;padding:6px 14px;
-     background:linear-gradient(90deg,var(--th-bg-red9,#7f1d1d),var(--th-bg-red8,#991b1b));color:var(--th-ink-red2,#fecaca);font-size:12.5px;">
-  <span style="flex:0 0 auto;display:inline-flex;" data-ui-icon="phone-off" data-size="15"></span>
-  <span style="flex:1 1 auto;line-height:1.5;">
-    <span id="ws-chandown-text"></span>
-    <span id="ws-chandown-detail" style="opacity:.85"></span>
-  </span>
-  <!-- P0（2026-08-14）：红条内嵌一键重登（当前仅 messenger 网页会话支持；由
-       _renderChanDown 按首条异常通道显隐）。无权限（403）就地提示找管理员。 -->
-  <button id="ws-chandown-relogin" type="button" style="display:none;flex:0 0 auto;
-      padding:3px 10px;border:1px solid rgba(255,255,255,.5);border-radius:6px;
-      background:rgba(255,255,255,.14);color:inherit;font-size:12px;cursor:pointer;"></button>
-</div>
-<!-- 实例刚重启冷却条（Phase3）：连环 restart 是「加载超时」主因；冷却窗内温和预期管理，
-     勿催坐席狂刷。数据随同一 60s 轮询（ai-runtime-status.instance_restart）。 -->
-<div id="ws-restartcool" style="display:none;align-items:center;gap:10px;padding:6px 14px;
-     background:linear-gradient(90deg,#1e3a5f,var(--th-bg-blue8,#1e40af));color:#dbeafe;font-size:12.5px;">
-  <span style="flex:0 0 auto;display:inline-flex;" data-ui-icon="refresh" data-size="14"></span>
-  <span style="flex:1 1 auto;line-height:1.5;">
-    <span id="ws-restartcool-text"></span>
-    <span id="ws-restartcool-detail" style="opacity:.85"></span>
-  </span>
-</div>
+<!-- 实施75 batch3：通道离线红条退役（顶栏最后一条业务横幅）——右下胶囊（红；
+     >48h 陈旧降琥珀）+ 异常集合签名首现卡片（重登/登出/24h 暂缓三出路）+ 消息
+     中心留痕。生命周期机制（接替清账/期望在线矩阵/重登痕迹/签名暂缓/重登分诊）
+     全部保留，只换渲染面；渲染在下方 _renderChanDown。 -->
+<!-- 实例重启冷却提示（实施75，2026-08-27，修「蓝条常驻关不掉」投诉）：顶部蓝条退役，
+     改右下胶囊倒计时（AITRNotify.ongoing 'restartcool'）+ 每轮冷却只 toast 一次
+     （LS 世代标记，连环重启风暴聚合为一次提示）+ 消息中心留痕。
+     quiet_poll 功能信号（_setRestartCoolFlag → __wsRestartCool）与视觉解耦，原样保留。 -->
 <!-- 托管到期提醒（P4，2026-08-08）：厂商巡检把到期账本镜像写进实例数据区
      （config/tenant_notice.json）→ ai-runtime-status.tenant_notice 同一 60s 轮询捎带。
      客户在自己工作台看到「快到期/已到期 + 续费深链」；非托管部署该字段恒空、永不显示。 -->
-<div id="ws-expiry" class="ws-expiry-warn" style="display:none;align-items:center;gap:10px;padding:6px 14px;font-size:12.5px;">
-  <span style="flex:0 0 auto;">⏳</span>
-  <span id="ws-expiry-text" style="flex:1 1 auto;line-height:1.5;"></span>
-  <a id="ws-expiry-renew" href="#" target="_blank" rel="noopener" class="ws-expiry-cta"
-     style="display:none;flex:0 0 auto;border-radius:7px;padding:3px 12px;font-size:12px;font-weight:600;text-decoration:none;">{{ i18n.get('ws.expiry.renew', '立即续费') }}</a>
-</div>
+<!-- 实施75：到期提醒横幅退役——右下胶囊（快到期=琥珀/已到期=红）+ 每档每日一次
+     卡片提示（带续费深链）+ 消息中心留痕；渲染在下方 _renderExpiry。 -->
 <!-- 无兜底纪律红条（2026-08-17）：delivery_block 近窗有拦截 → 坐席看见「AI 不可用」
      而不是客户已收到替代品。数据随同一 60s 轮询（ai-runtime-status.delivery_block）。 -->
-<div id="ws-delivblock" style="display:none;align-items:center;gap:10px;padding:6px 14px;
-     background:linear-gradient(90deg,var(--th-bg-red9,#7f1d1d),var(--th-bg-red8,#991b1b));color:var(--th-ink-red2,#fecaca);font-size:12.5px;">
-  <span style="flex:0 0 auto;">⛔</span>
-  <span style="flex:1 1 auto;line-height:1.5;">
-    <span id="ws-delivblock-text" data-i18n="ws.delivblock.text">{{ i18n.get('ws.delivblock.text', 'AI 链路失败，本条未自动回复。请按主机弹窗检修，修好后到待发队列一键放行。') }}</span>
-    <span id="ws-delivblock-detail" style="opacity:.85"></span>
-  </span>
-</div>
+<!-- 实施75：AI 拦截红条退役——右下胶囊（红/降级期琥珀，含最高频主因）+ 拦截期
+     首现卡片提示（保留三条出路：待发队列 / 修复设置(管理角色) / 一键报客服）+
+     消息中心留痕；渲染在下方 _renderDelivBlock。角色闸随 Jinja 注入 JS 旗标。 -->
+<script>window.__wsDelivCanFix={{ 'true' if user_role in ('master', 'operator') else 'false' }};</script>
 <!-- 坐席字符额度预警条（2026-08-16 uqw-*，自包含 IIFE，独立于上方各条与多窗口协调器）：
      任意登录角色轮询 /api/workspace/my-usage（首查延迟 10s、之后每 600s），仅 status.level=
      warn/over 才出条（复用 ws-expiry 两个既有类，零新增色值）；恢复 ok / 接口 404（后端
      未重启）/未登录 → 隐藏，连续 3 次失败停止轮询不刷屏。点击开 /workspace/usage。 -->
-<div id="uqw-bar" class="ws-expiry-warn" style="display:none;align-items:center;gap:10px;padding:6px 14px;font-size:12.5px;cursor:pointer;">
-  <span id="uqw-text" style="flex:1 1 auto;line-height:1.5;"></span>
-  <span style="flex:0 0 auto;font-weight:600;text-decoration:underline;">{{ i18n.get('uq_warnbar_cta', '点击查看') }}</span>
-</div>
+<!-- 实施75：坐席额度预警条退役——warn/over 改右下胶囊（琥珀/红）+ 每档每日一次
+     卡片提示（「点击查看」直达用量页）+ 消息中心留痕；warn-only 语义与
+     404/未登录收敛、连续 3 次失败停轮询的自愈行为全部保留。 -->
 <script>
 (function(){
-  var bar = document.getElementById('uqw-bar');
-  if(!bar || !window.apiFetch) return;
+  if(!window.apiFetch) return;
   var TEXT = {{ i18n.get('uq_warnbar_text', '字符额度已用 {pct}%（{used}/{quota}）')|tojson }};
+  var CTA = {{ i18n.get('uq_warnbar_cta', '点击查看')|tojson }};
+  var TITLE = {{ i18n.get('ntf.capsule_title', '系统状态 · 点击查看通知中心')|tojson }};
   var fails = 0, timer = null;
-  function _set(want){
-    if(window.wsBanner){ window.wsBanner.set('uqw-bar', want); }
-    else{ bar.style.display = want ? 'flex' : 'none'; }
+  function _set(want, lvl, textStr){
+    if(!window.AITRNotify) return;
+    if(!want){ AITRNotify.ongoing.clear('uqw'); return; }
+    AITRNotify.ongoing.set('uqw', {text: textStr, tone: lvl === 'over' ? 'error' : 'warn', title: TITLE});
+    AITRNotify.notify({
+      severity: lvl === 'over' ? 'error' : 'warn',
+      text: textStr,
+      dedupKey: 'uqw:' + lvl, dedupTtlMs: 24 * 3600000,
+      centerId: 'uqw',
+      actions: [{label: CTA, onClick: function(){ location.href = '/workspace/usage'; }}]
+    });
   }
   async function _tick(){
     try{
@@ -1132,12 +1524,9 @@ function _wsAiTrialDismiss(){
       if(!warn){ _set(false); return; }
       var used = Number(d.month_total || 0);
       var pct = (st.pct != null) ? Number(st.pct) : Math.round(used / quota * 100);
-      var t = document.getElementById('uqw-text');
-      if(t) t.textContent = String(TEXT).replace('{pct}', String(pct))
+      var textStr = String(TEXT).replace('{pct}', String(pct))
         .replace('{used}', used.toLocaleString()).replace('{quota}', quota.toLocaleString());
-      bar.classList.toggle('ws-expiry-danger', lvl === 'over');
-      bar.classList.toggle('ws-expiry-warn', lvl !== 'over');
-      _set(true);
+      _set(true, lvl, textStr);
     }catch(_e){
       // 404（后端未重启）/401（未登录）/网络异常 → 收条；连续 3 次停止轮询不刷屏
       fails += 1;
@@ -1145,22 +1534,23 @@ function _wsAiTrialDismiss(){
       if(fails >= 3 && timer){ clearInterval(timer); timer = null; }
     }
   }
-  if(window.wsBanner) window.wsBanner.register('uqw-bar', 15, 'flex');
-  bar.addEventListener('click', function(){ location.href = '/workspace/usage'; });
   setTimeout(function(){ _tick(); timer = setInterval(_tick, 600000); }, 10000);
 })();
 </script>
+<!-- 授权字符池「预计耗尽」预警条（quotawall v2 P2，2026-08-21）：数据=额度轮询
+     state.forecast（服务端按近 7 天日均外推，单一算式），days_left<=3 才出条、
+     每日可贪睡；master 出「立即充值」直达（state.shop_url，点后挂到账自动恢复
+     watch），坐席出「提醒管理员」口径。复用 ws-expiry-warn 皮肤零新增色值；
+     与 uqw-bar（坐席月度额度）是两张水表两条条，各自 wsBanner 仲裁。 -->
+<!-- 实施75：预计耗尽预警条退役——右下胶囊（琥珀，days_left<=3 且未用尽）+ 每日
+     一次卡片提示（master 有充值深链出「立即充值」并挂到账 watch，否则「查看额度
+     详情」）+ 消息中心留痕；渲染在 _qwLowSync，贪睡日键与埋点语义保留。 -->
 <!-- 前端版本陈旧提醒（P2-1，2026-07-29）：坐席工作台常开数天，模板热更新只对刷新后的页面
      生效——旧标签页跑旧 JS 是「已修复的问题坐席还在踩」的根因（当日实录：账号切换条修复后
      旧标签页仍显示旧行为）。静态 /static/workspace/ui-build.txt 首行 token 为单一版本源：
      页面加载首查即基线，此后每 5 分钟（+回前台时）复查，变了出条子请坐席刷新。 -->
-<div id="ws-uibuild" style="display:none;align-items:center;gap:10px;padding:6px 14px;
-     background:linear-gradient(90deg,var(--th-bg-teal9,#134e4a),var(--th-bg-teal8,#0f766e));color:var(--th-ink-teal1,#ccfbf1);font-size:12.5px;">
-  <span style="flex:0 0 auto;display:inline-flex;" data-ui-icon="refresh" data-size="14"></span>
-  <span style="flex:1 1 auto;line-height:1.5;" data-i18n="ws.uibuild.text">{{ i18n.get('ws.uibuild.text', '工作台界面已更新到新版本，刷新页面即可加载（建议先发出/保存手头输入）。') }}</span>
-  <button type="button" id="ws-uibuild-go" style="flex:0 0 auto;border:1px solid color-mix(in srgb,var(--th-ink-teal1,#ccfbf1) 50%,transparent);background:color-mix(in srgb,var(--th-ink-teal1,#ccfbf1) 14%,transparent);color:var(--th-ink-teal1,#ccfbf1);border-radius:7px;padding:3px 12px;font-size:12px;font-weight:600;cursor:pointer;">{{ i18n.get('ws.uibuild.btn', '立即刷新') }}</button>
-  <button type="button" id="ws-uibuild-x" title="{{ i18n.get('ws.uibuild.dismiss', '暂不（2 小时内不再提醒）') }}" aria-label="{{ i18n.get('ws.uibuild.dismiss', '暂不（2 小时内不再提醒）') }}" style="flex:0 0 auto;border:none;background:transparent;color:var(--th-ink-teal1,#ccfbf1);opacity:.7;cursor:pointer;padding:2px 6px;display:inline-flex;align-items:center;"><span data-ui-icon="x" data-size="13"></span></button>
-</div>
+<!-- 实施75：版本陈旧提醒退役顶部——右下胶囊（信息蓝，常驻到刷新/贪睡）+ 卡片
+     提示（立即刷新 / 暂不=2h 贪睡）；探针节奏与贪睡语义保留（下方 IIFE）。 -->
 {#- 告警链路最后一公里（2026-08-05）：0 通道=所有告警报进虚空。管理员横幅 + 一键接通
     弹窗（共享 partial，ops 卡同用）；坐席角色不渲染（后端本就拒写）。 -#}
 {% set alertlink_banner = true %}
@@ -1174,6 +1564,10 @@ function _wsAiTrialDismiss(){
   var SNOOZE_KEY='ws_uibuild_snooze';
   var baseline='';
   var shown=false;
+  var TXT={{ i18n.get('ws.uibuild.text', '工作台界面已更新到新版本，刷新页面即可加载（建议先发出/保存手头输入）。')|tojson }};
+  var BTN={{ i18n.get('ws.uibuild.btn', '立即刷新')|tojson }};
+  var SNZ={{ i18n.get('ws.uibuild.dismiss', '暂不（2 小时内不再提醒）')|tojson }};
+  var TITLE={{ i18n.get('ntf.capsule_title', '系统状态 · 点击查看通知中心')|tojson }};
   function _snoozed(){
     try{ return (Number(sessionStorage.getItem(SNOOZE_KEY)||0) > Date.now()); }catch(_){ return false; }
   }
@@ -1186,22 +1580,24 @@ function _wsAiTrialDismiss(){
       var cur=String((t||'').split(/\r?\n/)[0]||'').trim();
       if(!cur) return;
       if(!baseline){ baseline=cur; return; }   // 首查=基线（即本标签页所载版本）
-      if(cur!==baseline && !_snoozed()){
-        window.wsBanner.set('ws-uibuild', true);
-        shown=true;                            // 已提醒；贪睡按钮会复位继续盯
+      if(cur!==baseline && !_snoozed() && window.AITRNotify){
+        /* 实施75：右下胶囊常驻到刷新/贪睡 + 卡片提示（立即刷新 / 暂不） */
+        AITRNotify.ongoing.set('uibuild', {text:TXT, tone:'info', title:TITLE});
+        AITRNotify.notify({
+          severity:'info', text:TXT, domKey:'uibuild', centerId:'uibuild', ttlMs:20000,
+          actions:[
+            {label:BTN, onClick:function(){ location.reload(); }},
+            {label:SNZ, onClick:function(){
+              try{ sessionStorage.setItem(SNOOZE_KEY, String(Date.now()+2*3600*1000)); }catch(_){}
+              AITRNotify.ongoing.clear('uibuild');
+              shown=false;                     // 贪睡到期后若仍是新版会再次提醒
+            }}
+          ]
+        });
+        shown=true;
       }
     }catch(_){}
   }
-  var el=document.getElementById('ws-uibuild');
-  if(!el) return;
-  var go=document.getElementById('ws-uibuild-go');
-  if(go) go.addEventListener('click', function(){ location.reload(); });
-  var x=document.getElementById('ws-uibuild-x');
-  if(x) x.addEventListener('click', function(){
-    try{ sessionStorage.setItem(SNOOZE_KEY, String(Date.now()+2*3600*1000)); }catch(_){}
-    window.wsBanner.set('ws-uibuild', false);
-    shown=false;                               // 贪睡到期后若仍是新版会再次提醒
-  });
   _tick();
   setInterval(_tick, 300000);
   document.addEventListener('visibilitychange', function(){
@@ -1221,74 +1617,212 @@ function _wsAiTrialDismiss(){
     s = String(s || '');
     return s.length > 12 ? (s.slice(0, 10) + '…') : s;
   }
+  /* ── 通道离线横幅 v2（2026-08-27，Calixa 僵尸横幅事故沉淀）──
+     ① 可暂缓：× = 本浏览器 24h 内不再显示**同一异常集合**（签名=平台:账号:状态
+        列表；任何新掉线/状态变化都会改变签名 → 立即重新弹出，不藏新事故）；
+     ② 登出 CTA：账号已迁移/弃用时「重新登录」只会 404 打转，正确出路是登出
+        （停止收发与提醒，历史可查，可随时重新接入）；
+     ③ 时长人话化（3919 分钟 → 2 天 17 小时）+ >48h 陈旧降色（红→琥珀）；
+     ④ 操作结果驻留 5-10 分钟（旧版 60s 轮询会把报错刷掉，坐席以为「没响应」）；
+     ⑤ 重登失败分诊：404/「档案已不存在」给专属文案+登出出路，不再糊英文原文。 */
   var _chanReloginBusy = false;
+  var _chanLogoutBusy = false;
+  var _chanLastSig = '';      // 当前异常集合签名（供 暂缓/登出后的本地暂缓）
+  var _chanNotifiedSig = '';  // 本页已弹过卡片的签名（轮询重绘只更新胶囊不重复弹卡）
+  var CHAN_SNOOZE_KEY = 'ws_chandown_snooze';
   function _chanLabel(s){
     // P0（2026-08-14）：有昵称显示昵称（红条写 messenger:6158… 坐席不知道是谁掉线）
     var nm = String((s && s.name) || '').trim();
     return String((s && s.platform) || '?') + ':' + (nm || _acctShort(s && s.account_id));
   }
-  function _wireChanRelogin(first){
-    var btn = document.getElementById('ws-chandown-relogin');
-    if(!btn) return;
+  function _chanSig(list){
+    try{
+      return list.map(function(s){
+        return String((s && s.platform) || '') + ':' + String((s && s.account_id) || '')
+          + ':' + String((s && s.status) || '');
+      }).sort().join('|');
+    }catch(_e){ return ''; }
+  }
+  function _chanSnoozed(sig){
+    try{
+      var o = JSON.parse(localStorage.getItem(CHAN_SNOOZE_KEY) || 'null');
+      return !!(o && o.sig === sig && Number(o.until || 0) > Date.now());
+    }catch(_e){ return false; }
+  }
+  function _chanSnooze(sig, ms){
+    try{
+      localStorage.setItem(CHAN_SNOOZE_KEY,
+        JSON.stringify({sig: sig, until: Date.now() + (ms || 86400000)}));
+    }catch(_e){}
+  }
+  function _fmtDownMin(min){
+    min = Math.max(0, Number(min) || 0);
+    if(min >= 2880) return window.Tf('ws.chandown.dur_dh',
+      {d: String(Math.floor(min / 1440)), h: String(Math.floor((min % 1440) / 60))});
+    if(min >= 60) return window.Tf('ws.chandown.dur_hm',
+      {h: String(Math.floor(min / 60)), m: String(min % 60)});
+    return window.Tf('ws.chandown.dur_m', {m: String(min)});
+  }
+  /* 实施75 batch3：操作结果驻留（原 detail 区语义）→ 同键卡片（domKey
+     'chandown-op' 原地更新，轮询不覆盖；ttl 即原「驻留 5-10 分钟」语义）。 */
+  function _chanStick(text, ms, sev){
+    if(!window.AITRNotify) return;
+    AITRNotify.notify({severity: sev || 'info', text: String(text),
+      domKey: 'chandown-op', center: false, ttlMs: ms || 300000});
+  }
+  function _chanReloginable(first){
     // messenger（headed 交互重登）/ whatsapp（baileys 凭据级 reconnect，P1
-    // 2026-08-14 扩展）且有真实 account_id 才亮按钮；其余平台隐藏。
+    // 2026-08-14 扩展）且有真实 account_id 才给重登出路；其余平台隐藏。
     var plat = String((first && first.platform) || '');
     var acct = String((first && first.account_id) || '');
-    if((plat !== 'messenger' && plat !== 'whatsapp') || !acct){
-      btn.style.display = 'none'; return;
-    }
-    btn.textContent = window.T('ws.chandown.relogin_btn');
-    btn.style.display = '';
-    btn.disabled = false;
-    btn.onclick = async function(){
-      if(_chanReloginBusy) return;
-      _chanReloginBusy = true;
-      btn.disabled = true;
-      btn.textContent = '…';
-      var det = document.getElementById('ws-chandown-detail');
-      try{
-        var r = await window.apiFetch('/api/admin/platform-sessions/relogin', {
-          method: 'POST', credentials: 'same-origin',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({platform: plat, account_id: acct}),
-        }, {timeoutMs: 65000});
-        if(r.status === 403){
-          if(det) det.textContent = ' ' + window.T('ws.chandown.relogin_denied');
-        }else if(r.ok){
-          if(det) det.textContent = ' ' + window.T('ws.chandown.relogin_ok');
-        }else{
-          var msg = 'http ' + r.status;
-          try{ var j = await r.json(); if(j && j.detail) msg = String(j.detail).slice(0, 120); }catch(_e){}
-          if(det) det.textContent = ' ' + window.Tf('ws.chandown.relogin_fail', {err: msg});
-        }
-      }catch(e){
-        var det2 = document.getElementById('ws-chandown-detail');
-        if(det2) det2.textContent = ' ' + window.Tf('ws.chandown.relogin_fail',
-          {err: String((e && e.message) || e).slice(0, 120)});
-      }finally{
-        _chanReloginBusy = false;
-        btn.disabled = false;
-        btn.textContent = window.T('ws.chandown.relogin_btn');
-      }
-    };
+    return (plat === 'messenger' || plat === 'whatsapp') && !!acct;
   }
-  function _renderChanDown(ch){
-    var bar = document.getElementById('ws-chandown');
-    if(!bar) return;
-    var list = (ch && ch.unhealthy) || [];
-    if(!list.length){ window.wsBanner.set('ws-chandown', false); return; }
-    var first = list[0] || {};
-    var t = document.getElementById('ws-chandown-text');
-    if(t) t.textContent = window.Tf('ws.chandown.text',
-      {plat: String(first.platform || '?'), n: String(first.down_min != null ? first.down_min : '?')});
-    var det = document.getElementById('ws-chandown-detail');
-    if(det && !_chanReloginBusy){
-      var names = list.map(_chanLabel).join(' · ');
-      det.textContent = ' ' + window.Tf('ws.chandown.hint',
-        {count: String(ch.count || list.length), list: names});
+  function _chanProfileGone(first){
+    // 新后端语义化 404：本机已无该账号登录档案 → 登出是主要出路，结果卡直接带按钮
+    if(!window.AITRNotify) return;
+    AITRNotify.notify({severity: 'warn', text: window.T('ws.chandown.profile_gone'),
+      domKey: 'chandown-op', center: false, ttlMs: 600000,
+      actions: [{label: window.T('ws.chandown.logout_btn'),
+                 onClick: function(){ _chanLogout(first); }}]});
+  }
+  async function _chanRelogin(first){
+    if(_chanReloginBusy) return;
+    _chanReloginBusy = true;
+    var plat = String((first && first.platform) || '');
+    var acct = String((first && first.account_id) || '');
+    _chanStick(window.T('ntf.chan_relogin_wait'), 70000, 'info');
+    try{
+      var r = await window.apiFetch('/api/admin/platform-sessions/relogin', {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({platform: plat, account_id: acct}),
+      }, {timeoutMs: 65000});
+      if(r.status === 403){
+        _chanStick(window.T('ws.chandown.relogin_denied'), 300000, 'warn');
+      }else if(r.status === 404){
+        _chanProfileGone(first);
+      }else if(r.ok){
+        _chanStick(window.T('ws.chandown.relogin_ok2'), 600000, 'success');
+      }else{
+        var msg = 'http ' + r.status;
+        try{ var j = await r.json(); if(j && j.detail) msg = String(j.detail).slice(0, 200); }catch(_e){}
+        if(msg.indexOf('404 Not Found') >= 0){
+          // 旧后端（本批 .py 装载前）仍把 worker 404 包成 502+httpx 原文：
+          // 同样按「档案已不存在」分诊，不把英文堆栈糊给坐席
+          _chanProfileGone(first);
+        }else{
+          _chanStick(window.Tf('ws.chandown.relogin_fail', {err: msg}), 300000, 'error');
+        }
+      }
+    }catch(e){
+      _chanStick(window.Tf('ws.chandown.relogin_fail',
+        {err: String((e && e.message) || e).slice(0, 120)}), 300000, 'error');
+    }finally{
+      _chanReloginBusy = false;
     }
-    _wireChanRelogin(first);
-    window.wsBanner.set('ws-chandown', true);
+  }
+  async function _chanLogout(first){
+    if(_chanLogoutBusy) return;
+    var plat = String((first && first.platform) || '');
+    var acct = String((first && first.account_id) || '');
+    if(!plat || !acct) return;
+    var who = _chanLabel(first);
+    if(!confirm(window.Tf('ws.chandown.logout_confirm', {who: who}))) return;
+    _chanLogoutBusy = true;
+    try{
+      var r = await window.apiFetch('/api/accounts/' + encodeURIComponent(plat)
+        + '/' + encodeURIComponent(acct) + '/logout',
+        {method: 'POST', credentials: 'same-origin'}, {timeoutMs: 30000});
+      if(r.status === 403){
+        _chanStick(window.T('ws.chandown.logout_denied'), 300000, 'warn');
+      }else if(r.ok){
+        _chanStick(window.T('ws.chandown.logout_ok'), 600000, 'success');
+        // 旧后端（未装载对应 .py）不会立刻翻健康表 → 按当前签名本地暂缓，
+        // 胶囊即刻熄灭；新后端下一轮轮询本就不再返回该账号。
+        if(_chanLastSig) _chanSnooze(_chanLastSig, 86400000);
+        if(window.AITRNotify) AITRNotify.ongoing.clear('chandown');
+      }else{
+        var msg = 'http ' + r.status;
+        try{ var j = await r.json(); if(j && j.detail) msg = String(j.detail).slice(0, 160); }catch(_e){}
+        _chanStick(window.Tf('ws.chandown.logout_fail', {err: msg}), 300000, 'error');
+      }
+    }catch(e){
+      _chanStick(window.Tf('ws.chandown.logout_fail',
+        {err: String((e && e.message) || e).slice(0, 120)}), 300000, 'error');
+    }finally{
+      _chanLogoutBusy = false;
+    }
+  }
+  /* 实施75 batch3：渲染面＝右下胶囊（每轮更新时长/痕迹）+ 签名首现卡片（三出路）。
+     >48h 陈旧降档（downMin >= 2880）由胶囊 tone error→warn 承载（原 .stale 语义：
+     红色只留给真紧急）；签名暂缓/接替清账/期望在线矩阵等生命周期机制原样。 */
+  function _renderChanDown(ch){
+    if(!window.AITRNotify) return;
+    var list = (ch && ch.unhealthy) || [];
+    if(!list.length){
+      _chanLastSig = '';
+      AITRNotify.ongoing.clear('chandown');
+      AITRNotify.dismiss('chandown');
+      return;
+    }
+    var sig = _chanSig(list);
+    _chanLastSig = sig;
+    if(_chanSnoozed(sig)){ AITRNotify.ongoing.clear('chandown'); return; }
+    var first = list[0] || {};
+    var downMin = Number(first.down_min != null ? first.down_min : 0) || 0;
+    var stale = downMin >= 2880;
+    var text = window.Tf('ws.chandown.text2', {
+      plat: String(first.platform || '?'),
+      who: String(first.name || '').trim() || _acctShort(first.account_id) || '?',
+      dur: _fmtDownMin(downMin),
+    });
+    // 主文案已含首条的昵称：单条异常不再重复列一遍，多条才列全量清单
+    var names = list.map(_chanLabel).join(' · ');
+    var hint = (list.length > 1)
+      ? (' ' + window.Tf('ws.chandown.hint',
+          {count: String(ch.count || list.length), list: names}))
+      : '';
+    /* 状态中心 v2：服务端重登痕迹（45min 内新鲜才显示）——多坐席值守时
+       「已有人触发过重登」全员可见，防同一个号被两个人各触发一遍。 */
+    var rts = Number(first.relogin_ts || 0) * 1000;
+    if(rts && (Date.now() - rts) < 45 * 60000){
+      var rd = new Date(rts);
+      var rhh = (rd.getHours() < 10 ? '0' : '') + rd.getHours();
+      var rmm = (rd.getMinutes() < 10 ? '0' : '') + rd.getMinutes();
+      hint += ' ' + window.Tf('ws.chandown.relogin_trace', {
+        t: rhh + ':' + rmm,
+        who: String(first.relogin_by || '').trim()
+             || window.T('ws.chandown.relogin_trace_sb'),
+      });
+    }
+    AITRNotify.ongoing.set('chandown', {
+      text: text + hint,
+      tone: stale ? 'warn' : 'error',
+      title: window.T('ntf.capsule_title')
+    });
+    if(_chanNotifiedSig !== sig){
+      _chanNotifiedSig = sig;
+      var acts = [];
+      if(_chanReloginable(first)){
+        acts.push({label: window.T('ws.chandown.relogin_btn'),
+                   onClick: function(){ _chanRelogin(first); }});
+      }
+      acts.push({label: window.T('ws.chandown.logout_btn'),
+                 onClick: function(){ _chanLogout(first); }});
+      acts.push({label: window.T('ws.chandown.dismiss_t'),
+                 onClick: function(){
+                   if(_chanLastSig) _chanSnooze(_chanLastSig, 86400000);
+                   AITRNotify.ongoing.clear('chandown');
+                 }});
+      AITRNotify.notify({
+        severity: stale ? 'warn' : 'error',
+        text: text + hint,
+        dedupKey: 'chandown:' + sig, dedupTtlMs: 4 * 3600000,
+        domKey: 'chandown',
+        centerId: 'chandown',
+        actions: acts
+      });
+    }
   }
   // Phase4: shared soft-cool flag for inbox loadThread adaptive timeout/retry.
   // until = epoch ms; inbox also OR's a local sticky window after /login probe fail.
@@ -1314,95 +1848,187 @@ function _wsAiTrialDismiss(){
       try{ window.dispatchEvent(new CustomEvent('ws-restart-cool-change', {detail: window.__wsRestartCool})); }catch(_e){}
     }
   }
+  /* 实施75（2026-08-27）：重启冷却从顶部蓝条迁到右下——胶囊倒计时 + 每轮冷却
+     只 toast 一次 + 消息中心留痕。修「蓝条常驻且没有关闭入口」投诉：连环重启
+     风暴（冷却窗首尾相接）经 LS 世代标记聚合为一次提示，胶囊只占一行小 chip。
+     _setRestartCoolFlag（quiet_poll → 收件箱轮询降速/abort 拉长）必须先于任何
+     早退调用——功能信号与视觉解耦，勿改回「div 不在就整段 return」的旧结构。 */
   function _renderRestartCool(ir){
-    var bar = document.getElementById('ws-restartcool');
-    if(!bar) return;
     _setRestartCoolFlag(ir);
-    if(!(ir && ir.cooldown_active)){ window.wsBanner.set('ws-restartcool', false); return; }
+    var on = !!(ir && ir.cooldown_active);
+    var ep = _ntfEpisode('rc', on, 30 * 60000);
+    if(!window.AITRNotify) return;
+    if(!on){ AITRNotify.ongoing.clear('restartcool'); return; }
     var mins = ir.cooldown_left_min != null ? ir.cooldown_left_min : 1;
     if(mins < 1) mins = 1;
-    var t = document.getElementById('ws-restartcool-text');
-    if(t) t.textContent = window.Tf('ws.restartcool.text', {n: String(mins)});
-    var det = document.getElementById('ws-restartcool-detail');
-    if(det) det.textContent = ' ' + window.T('ws.restartcool.hint');
-    window.wsBanner.set('ws-restartcool', true);
+    AITRNotify.ongoing.set('restartcool', {
+      text: window.Tf('ntf.rc_capsule', {n: String(mins)}),
+      tone: 'info',
+      title: window.T('ntf.capsule_title')
+    });
+    if(ep === 'start'){
+      AITRNotify.notify({
+        severity: 'info',
+        text: window.Tf('ntf.rc_toast', {n: String(mins)}),
+        centerId: 'restartcool',
+        centerText: window.Tf('ntf.rc_notif', {n: String(mins)})
+      });
+    }
   }
-  /* 托管到期提醒（P4）：tenant_notice 缺失/空=非托管或未临期 → 收横幅。
-     天数向上取整给客户看（0.4 天 → 「1 天内」语义由文案的整数天承担）。 */
+  /* 实施75：LS 世代标记——「状态开始」只提示一次（页面重载/多标签不重复轰炸），
+     结束清标；stale 窗防浏览器关闭后残留标记吞掉下一轮的首次提示。
+     active 期间每轮轮询刷新时戳保持 fresh。返回 start|ongoing|end|idle。 */
+  function _ntfEpisode(key, active, staleMs){
+    var k = 'aitr.ntf.ep.' + key;
+    var now = Date.now(), prev = 0;
+    try{ prev = parseInt(localStorage.getItem(k) || '0', 10) || 0; }catch(_e){}
+    var fresh = prev > 0 && (now - prev) < staleMs;
+    if(active){
+      try{ localStorage.setItem(k, String(now)); }catch(_e){}
+      return fresh ? 'ongoing' : 'start';
+    }
+    if(prev){ try{ localStorage.removeItem(k); }catch(_e){} }
+    return fresh ? 'end' : 'idle';
+  }
+  /* 托管到期提醒（P4 → 实施75 迁右下）：tenant_notice 缺失/空=非托管或未临期 → 收胶囊。
+     天数向上取整给客户看（0.4 天 → 「1 天内」语义由文案的整数天承担）。
+     胶囊常驻承接原横幅的「须知性」；卡片提示每档（expiring/expired）每日一次。 */
   function _renderExpiry(tn){
-    var bar = document.getElementById('ws-expiry');
-    if(!bar) return;
-    if(!tn || !tn.level){ window.wsBanner.set('ws-expiry', false); return; }
-    var t = document.getElementById('ws-expiry-text');
-    if(t){
-      if(tn.level === 'expired'){
-        t.textContent = window.Tf('ws.expiry.expired', {date: String(tn.expires_at || '')});
-      }else{
-        var days = Number(tn.days_left);
-        var n = isFinite(days) ? Math.max(1, Math.ceil(days)) : '?';
-        t.textContent = window.Tf('ws.expiry.expiring', {n: String(n), date: String(tn.expires_at || '')});
-      }
+    if(!window.AITRNotify) return;
+    if(!tn || !tn.level){ AITRNotify.ongoing.clear('expiry'); return; }
+    var expired = tn.level === 'expired';
+    var text;
+    if(expired){
+      text = window.Tf('ws.expiry.expired', {date: String(tn.expires_at || '')});
+    }else{
+      var days = Number(tn.days_left);
+      var n = isFinite(days) ? Math.max(1, Math.ceil(days)) : '?';
+      text = window.Tf('ws.expiry.expiring', {n: String(n), date: String(tn.expires_at || '')});
     }
-    bar.classList.toggle('ws-expiry-danger', tn.level === 'expired');
-    bar.classList.toggle('ws-expiry-warn', tn.level !== 'expired');
-    var a = document.getElementById('ws-expiry-renew');
-    if(a){
-      var u = String(tn.renew_url || '');
-      if(u.indexOf('https://') === 0){ a.href = u; a.style.display = 'inline-block'; }
-      else{ a.style.display = 'none'; }
+    AITRNotify.ongoing.set('expiry', {
+      text: text,
+      tone: expired ? 'error' : 'warn',
+      title: window.T('ntf.capsule_title')
+    });
+    var acts = [];
+    var u = String(tn.renew_url || '');
+    if(u.indexOf('https://') === 0){
+      acts.push({label: window.T('ws.expiry.renew'), onClick: function(){
+        try{ window.open(u, '_blank', 'noopener'); }catch(_e){}
+      }});
     }
-    window.wsBanner.set('ws-expiry', true);
+    AITRNotify.notify({
+      severity: expired ? 'error' : 'warn',
+      text: text,
+      dedupKey: 'expiry:' + tn.level, dedupTtlMs: 24 * 3600000,
+      centerId: 'expiry',
+      actions: acts
+    });
   }
-  function _renderDelivBlock(db){
-    var bar = document.getElementById('ws-delivblock');
-    if(!bar) return;
-    if(!(db && db.active)){ window.wsBanner.set('ws-delivblock', false); return; }
-    var text = document.getElementById('ws-delivblock-text');
-    var detail = document.getElementById('ws-delivblock-detail');
-    if(text) text.textContent = window.T('ws.delivblock.text');
+  /* 实施75：拦截提示迁右下。B31 两级语义保留：AI 降级自愈中 → 软文案（琥珀）；
+     非降级态拦截 → 动作文案（红）。仅识图/转写拦下用 text_media（2026-08-22
+     语义保留）；最高频主因（B73）并入胶囊与卡片正文。 */
+  function _renderDelivBlock(db, degraded){
+    if(!window.AITRNotify) return;
+    var on = !!(db && db.active);
+    var ep = _ntfEpisode('db', on, 10 * 60000);
+    if(!on){ AITRNotify.ongoing.clear('delivblock'); return; }
     var domains = Object.keys(db.by_domain || {});
+    var mediaOnly = domains.length > 0 && domains.every(function(d){
+      return d === 'vision' || d === 'asr';
+    });
+    var key = degraded ? 'ws.delivblock.text_soft'
+      : (mediaOnly ? 'ws.delivblock.text_media' : 'ws.delivblock.text');
+    var text = window.T(key);
     var names = domains.map(function(d){
       var k = 'ws.delivblock.d.' + d;
       var lab = window.T(k);
       return (lab && lab !== k) ? lab : d;
     }).filter(Boolean);
-    if(detail){
-      detail.textContent = names.length
-        ? (' ' + window.Tf('ws.delivblock.detail', {domains: names.join('、')}))
-        : '';
+    var detail = names.length
+      ? (' ' + window.Tf('ws.delivblock.detail', {domains: names.join('、')}))
+      : '';
+    var code = String(db.top_reason_code || '');
+    var rk = 'ws.delivblock.r.' + code;
+    var rlab = code ? window.T(rk) : '';
+    var reason = (rlab && rlab !== rk) ? rlab : String(db.top_reason || '');
+    var rline = reason
+      ? (' ' + window.Tf('ws.delivblock.top_reason', {reason: reason, n: String(db.top_reason_n || 1)}))
+      : '';
+    AITRNotify.ongoing.set('delivblock', {
+      text: text + (reason ? (' · ' + reason) : ''),
+      tone: degraded ? 'warn' : 'error',
+      title: window.T('ntf.capsule_title')
+    });
+    if(ep === 'start'){
+      var acts = [{label: window.T('ws.delivblock.queue_link'), onClick: function(){
+        if(!(window.__wsGoHome && window.__wsGoHome({}))) location.href = '/workspace';
+      }}];
+      if(window.__wsDelivCanFix){
+        acts.push({label: window.T('ws.delivblock.fix_link'), onClick: function(){
+          location.href = '/reply-settings#rps-sec-gates';
+        }});
+      }
+      acts.push({label: window.T('sup.cta.banner'), onClick: function(){
+        try{
+          if(window.openSupportPanel) window.openSupportPanel(String(text).slice(0, 120), 'banner');
+        }catch(_e){}
+      }});
+      AITRNotify.notify({
+        severity: degraded ? 'warn' : 'error',
+        text: text + detail + rline,
+        centerId: 'delivblock',
+        actions: acts
+      });
     }
-    window.wsBanner.set('ws-delivblock', true);
   }
   function _scheduleAiDegradePoll(ms){
     if(_pollTimer){ clearInterval(_pollTimer); _pollTimer = null; }
     _pollTimer = setInterval(_wsAiDegradePoll, ms);
   }
   async function _wsAiDegradePoll(){
-    var bar = document.getElementById('ws-aidegrade');
-    var chan = document.getElementById('ws-chandown');
-    var cool = document.getElementById('ws-restartcool');
-    var expy = document.getElementById('ws-expiry');
-    var deliv = document.getElementById('ws-delivblock');
-    if(!bar && !chan && !cool && !expy && !deliv) return;
+    if(!window.AITRNotify) return;
     try{
       var r = await window.apiFetch('/api/workspace/ai-runtime-status',
         {credentials:'same-origin'}, {timeoutMs: 10000});
       if(!r.ok) throw new Error('http ' + r.status);
       var d = await r.json();
       failStreak = 0;
-      if(bar){
-        if(d && d.degraded){
-          var m = document.getElementById('ws-aidegrade-mode');
-          if(m) m.textContent = _modeText(d.mode || '');
-          window.wsBanner.set('ws-aidegrade', true);
+      /* 实施75：AI 降级从顶部琥珀横幅迁到右下胶囊——降级期间胶囊常驻（琥珀点），
+         开始/恢复各提示一次（LS 世代标记防页面重载重复轰炸），恢复即撤胶囊。 */
+      var dg = !!(d && d.degraded);
+      var dgEp = _ntfEpisode('ai', dg, 10 * 60000);
+      if(window.AITRNotify){
+        if(dg){
+          AITRNotify.ongoing.set('aidegrade', {
+            text: window.T('ntf.ai_capsule') + (d.mode ? (' ' + _modeText(d.mode)) : ''),
+            tone: 'warn',
+            title: window.T('ntf.capsule_title')
+          });
+          if(dgEp === 'start'){
+            AITRNotify.notify({
+              severity: 'warn',
+              text: window.T('ws.aidegrade.text'),
+              centerId: 'aidegrade',
+              centerText: window.T('ws.aidegrade.text')
+            });
+          }
         }else{
-          window.wsBanner.set('ws-aidegrade', false);
+          AITRNotify.ongoing.clear('aidegrade');
+          if(dgEp === 'end'){
+            AITRNotify.notify({
+              severity: 'success',
+              text: window.T('ntf.ai_recovered'),
+              centerId: 'aidegrade',
+              centerText: window.T('ntf.ai_recovered')
+            });
+          }
         }
       }
       _renderChanDown(d && d.channels);
       _renderRestartCool(d && d.instance_restart);
       _renderExpiry(d && d.tenant_notice);
-      _renderDelivBlock(d && d.delivery_block);
+      _renderDelivBlock(d && d.delivery_block, !!(d && d.degraded));
       // Faster refresh while cooling so banner/timeout adaptive clear sooner
       _scheduleAiDegradePoll((d && d.instance_restart && d.instance_restart.cooldown_active) ? 30000 : 60000);
     }catch(_){
@@ -1410,11 +2036,14 @@ function _wsAiTrialDismiss(){
       // Phase4: sticky local soft-cool so inbox lengthens abort even before banner API returns
       failStreak += 1;
       if(failStreak >= 2){
-        window.wsBanner.set('ws-aidegrade', false);
-        window.wsBanner.set('ws-chandown', false);
-        window.wsBanner.set('ws-restartcool', false);
-        window.wsBanner.set('ws-expiry', false);
-        window.wsBanner.set('ws-delivblock', false);
+        /* 实施75：接口连挂＝数据陈旧，本轮询喂的右下胶囊一并收起（不误报） */
+        if(window.AITRNotify){
+          AITRNotify.ongoing.clear('aidegrade');
+          AITRNotify.ongoing.clear('restartcool');
+          AITRNotify.ongoing.clear('expiry');
+          AITRNotify.ongoing.clear('delivblock');
+          AITRNotify.ongoing.clear('chandown');
+        }
         try{
           window.__wsRestartCoolLocal = Date.now() + 180000;
         }catch(_e){}
@@ -1458,18 +2087,72 @@ document.addEventListener('click',function(e){
       }catch(_){ }
     }
   }
+  /* 跨块共享（2026-08-22 修「顶栏行动药丸全灭」）：_pillIc/_setPill 定义在本 IIFE，
+     而全部消费方（followup / quota / sla / 发前确认 四颗药丸的渲染器）在下一个
+     <script> IIFE 里——裸引用抛 ReferenceError 又被各自 promise 的 .catch 吞掉，
+     于是整排药丸静默不渲染（页面无任何报错，遥测也够不到：_setPill 的 beacon 在
+     函数体内，而错误发生在「找不到函数」那一步）。挂 window 恢复跨块解析。
+     _ui 同病（tests/test_template_cross_block_refs.py 首跑抓到）：确认弹窗图标 /
+     SLA 下钻告警行 / 偏好弹窗关闭钮 / 授权只读横幅四处跨块裸调用。 */
+  window._pillIc=_pillIc; window._setPill=_setPill; window._ui=_ui;
 
-  function setPresence(st){
+  // ── 坐席接待状态 v2（2026-08-19）────────────────────────────
+  // 语义：状态属「人」不属「窗口」。修四个实录缺陷：① 刷新/重开把手选「忙碌」静默
+  // 打回在线（旧 init 无条件 setPresence('online')）；② 多窗口各按本窗值心跳互相覆盖
+  // （待机窗现在传 status:'' → 服务端保留现状，last_seen 照常刷新）；③ 关任一窗口即
+  // 全局置离线（待机窗关闭不再置离线）；④ 席位满 403 被静默吞掉（现在回退+显式提示）。
+  var PR_KEY='aitr.ws.presence.v1';
+  var PR_RESTORE_MS=4*3600*1000;   // 手选忙碌的跨会话恢复窗：4h 内重开页面仍是忙碌
+  var PR_TOAST={online:'base.presence.switched_online',busy:'base.presence.switched_busy',offline:'base.presence.switched_offline'};
+  var _prSt='online';
+  function _prPersist(st){ try{ localStorage.setItem(PR_KEY, JSON.stringify({v:st, ts:Date.now(), id:window.__wsAgent.id})); }catch(_){ } }
+  function _prRestore(){
+    try{
+      var rec=JSON.parse(localStorage.getItem(PR_KEY)||'null');
+      if(rec && rec.id===window.__wsAgent.id && rec.v==='busy' && (Date.now()-(rec.ts||0))<PR_RESTORE_MS) return 'busy';
+    }catch(_){ }
+    return '';
+  }
+  function _prSeatNote(show){
+    var el=document.getElementById('ws-pr-seat');
+    if(el) el.style.display = show ? 'block' : 'none';
+  }
+  function _syncPrUi(st){
+    _paintAva(st);
+    var grp=document.getElementById('ws-presence-grp');
+    if(!grp) return;
+    var opts=grp.querySelectorAll('.ws-pr-opt');
+    for(var i=0;i<opts.length;i++){ opts[i].classList.toggle('on', opts[i].getAttribute('data-st')===st); }
+  }
+  function setPresence(st, opts){
+    opts=opts||{};
+    var prev=_prSt;
+    _prSt=st; _syncPrUi(st);
+    if(!opts.silent) _prPersist(st);   // beforeunload 的 offline 不覆盖手选快照（重开要恢复忙碌）
     apiFetch('/api/workspace/presence',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({status:st,display_name:window.__wsAgent.name})}, {timeoutMs: 60000}).catch(function(){});
+      body:JSON.stringify({status:st,display_name:window.__wsAgent.name})}, {timeoutMs: 60000})
+      .then(function(r){
+        if(r && r.status===403 && st!=='offline'){
+          // 席位强制拒绝占席（在线/忙碌都计席）：此前静默失败＝坐席以为在线了。
+          // 回退「离开」+ 显式提示。
+          _prSt='offline'; _syncPrUi('offline'); _prSeatNote(true);
+          try{ CRMW.toast(window.T('base.presence.seat_full'),'#dc2626'); }catch(_){ }
+        } else if(r && r.ok){ _prSeatNote(false); }
+      })
+      .catch(function(){});
+    if(opts.toast && prev!==st){
+      try{ CRMW.toast(window.T(PR_TOAST[st]||PR_TOAST.online)); }catch(_){ }
+    }
   }
   function heartbeat(){
-    var sel=document.getElementById('ws-presence');
-    var body={status:sel?sel.value:'online',display_name:window.__wsAgent.name};
+    var standby=false;
+    try{ var mw=window.__wsMultiWin; standby=!!(mw&&mw.isStandby&&mw.isStandby()); }catch(_){ }
+    // 待机窗不定状态（status:'' → 服务端保留现状）——多窗口不再互相覆盖状态
+    var body={status:standby?'':(_prSt||'online'),display_name:window.__wsAgent.name};
     // P2 多开观测：携带本窗口指纹（id/路径/是否待机），服务端聚合出每人窗口数
     try{
-      var mw=window.__wsMultiWin;
-      if(mw&&mw.winId) body.window={id:mw.winId,path:(location.pathname||'/'),standby:!!(mw.isStandby&&mw.isStandby())};
+      var mw2=window.__wsMultiWin;
+      if(mw2&&mw2.winId) body.window={id:mw2.winId,path:(location.pathname||'/'),standby:standby};
     }catch(_){}
     apiFetch('/api/workspace/heartbeat',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify(body)}, {timeoutMs: 60000}).catch(function(){});
@@ -1490,31 +2173,61 @@ document.addEventListener('click',function(e){
       var agents=(d&&d.agents)||[];
       if(!agents.length){ el.textContent=''; return; }
       el.textContent = window.Tf('base.um.agents_online',{list:agents.map(function(a){
-        var dot=a.status==='busy'?'🟡':(a.status==='online'?'🟢':'⚫');
+        var dot=a.status==='busy'?'🟡':(a.status==='online'?'🟢':'🌙');
         // P2 多开观测：同一坐席开着 >1 个窗口时缀 ×N（含待机窗口），主管一眼可见
         var wn=(a.windows>1)?('×'+a.windows):'';
         return dot+(a.display_name||a.agent_id)+wn;
       }).join(' · ')});
     }).catch(function(){});
   }
-  // P5：头像描边随在线状态变色（在线绿 / 忙碌黄 / 离线灰），不必展开菜单即可自检状态
+  // 头像右下状态点（替代旧 box-shadow 光环；点=业界通识的 presence 呈现）
   function _paintAva(st){
-    var av=document.querySelector('.ws-user-ava'); if(!av) return;
-    var c=st==='busy'?'#f59e0b':(st==='offline'?'#64748b':'#22c55e');
-    av.style.boxShadow='0 0 0 2px '+c;
+    var dot=document.getElementById('ws-ava-dot');
+    if(dot) dot.style.background = st==='busy' ? '#f59e0b' : (st==='offline' ? '#94a3b8' : '#22c55e');
   }
-  var sel=document.getElementById('ws-presence');
-  if(sel){
-    sel.addEventListener('change',function(){ setPresence(sel.value); _paintAva(sel.value); });
-    setPresence('online');
-    _paintAva(sel.value||'online');
+  // 菜单状态行：事件委托（无内联 onclick，规避「函数没挂 window」哑按钮坑）
+  var _grp=document.getElementById('ws-presence-grp');
+  if(_grp){
+    _grp.addEventListener('click',function(e){
+      var btn=e.target && e.target.closest ? e.target.closest('.ws-pr-opt') : null;
+      if(!btn) return;
+      var st=btn.getAttribute('data-st')||'online';
+      if(st!==_prSt) setPresence(st,{toast:true});
+    });
   }
+  // 初始化：本地快照先行渲染（防闪）→ 服务端行校准（另一活窗的忙碌优先，不打回在线）→ 上报。
+  // 旧实现在这里无条件 setPresence('online')，是「手选忙碌活不过一次刷新」的根因。
+  _prSt=_prRestore()||'online';
+  _syncPrUi(_prSt);
+  apiFetch('/api/workspace/presence').then(function(r){return r.json();}).then(function(d){
+    var agents=(d&&d.agents)||[], st=_prSt;
+    for(var i=0;i<agents.length;i++){
+      if(String(agents[i].agent_id)===window.__wsAgent.id){
+        if(agents[i].status==='busy') st='busy';
+        break;
+      }
+    }
+    setPresence(st);
+  }).catch(function(){ setPresence(_prSt); });
   heartbeat(); loadFunnel(); loadAgents();
   setInterval(heartbeat, 30000);
   setInterval(loadFunnel, 120000);
   setInterval(loadAgents, 60000);
-  window.addEventListener('beforeunload',function(){ setPresence('offline'); });
-  window.__wsPresence = { refreshAgents: loadAgents, refreshFunnel: loadFunnel };
+  window.addEventListener('beforeunload',function(){
+    // 待机窗关闭不置离线（主控窗还在服务客户）；主控窗关闭仍置离线——若有待机窗，
+    // 它会在 ≤10s 接管并随即补一拍心跳恢复状态（见 __wsMultiWin promoted 钩子）。
+    try{ var mw=window.__wsMultiWin; if(mw&&mw.isStandby&&mw.isStandby()) return; }catch(_){ }
+    setPresence('offline',{silent:true});
+  });
+  // 同 profile 其他窗口切了状态 → storage 事件同步本窗 UI 与心跳基准（状态属人不属窗）
+  window.addEventListener('storage',function(e){
+    if(!e || e.key!==PR_KEY) return;
+    try{
+      var rec=JSON.parse(e.newValue||'null');
+      if(rec && rec.id===window.__wsAgent.id && rec.v && rec.v!==_prSt){ _prSt=rec.v; _syncPrUi(rec.v); }
+    }catch(_){ }
+  });
+  window.__wsPresence = { refreshAgents: loadAgents, refreshFunnel: loadFunnel, beat: heartbeat };
 })();
 </script>
 <div class="ws-modal" id="ws-review-modal">
@@ -1525,6 +2238,19 @@ document.addEventListener('click',function(e){
   </div>
 </div>
 <script>
+/* 药丸链故障上报（2026-08-22 P1-#3，「药丸全灭」事故的运行时补盲）：四颗顶栏药丸的
+   refresh 链此前用 .catch(function(){}) 静默吞错——函数不可达/渲染抛错/接口挂全都
+   无声。现改为每会话每函数至多一发 beacon（type=pill_chain），进既有前端错误遥测
+   （/api/telemetry/frontend-error → ops「前端哑按钮错误」卡），只送函数名零隐私。
+   挂 window 顶层：本 <script> 内有多个互不共享作用域的 IIFE，块内局部定义够不到。 */
+window._pillChainFail=window._pillChainFail||function(fn){
+  try{
+    var seen=window._pillChainFail._seen=window._pillChainFail._seen||{};
+    if(seen[fn])return; seen[fn]=1;
+    if(navigator.sendBeacon) navigator.sendBeacon('/api/telemetry/frontend-error',
+      new Blob([JSON.stringify({page:location.pathname,fn:String(fn||'pill'),type:'pill_chain'})],{type:'application/json'}));
+  }catch(_){ }
+};
 (function(){
   function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
   var badge=document.getElementById('ws-review');
@@ -1585,7 +2311,7 @@ document.addEventListener('click',function(e){
           _setPill(fuBadge, _pillIc('flag')+'<span class="ws-pill-lb">'+window.T('base.pill.followup')+'</span><span class="ws-pill-n">'+_fn+'</span>');
         }
       }
-    }).catch(function(){});
+    }).catch(function(){_pillChainFail('refreshFu');});
   }
   refreshFu(); setInterval(refreshFu, 60000);
 
@@ -1593,85 +2319,366 @@ document.addEventListener('click',function(e){
   // 分级（ok/low/out）由服务端算（license_routes.quota_level）——顶栏、会员中心、
   // 首启向导三处共用同一套阈值，前端各写一份必然漂移。
   var quotaPill=document.getElementById('ws-quota');
-  // 用尽拦截弹层（2026-08-11）：额度 out 时弹一次三出路（邀请/客服/购买）——
-  // 拦截本身发生在 402（翻译/AI 拟稿停摆），这层是把「为什么停了 + 怎么恢复」
-  // 主动讲给人听，而不是等坐席撞红色报错。每会话只弹一次，可关闭。
-  var _quotaWallUp=false;
-  function _maybeQuotaWall(lv){
-    if(lv!=='out' || _quotaWallUp) return;
-    try{ if(sessionStorage.getItem('ws_quota_wall_v1')) return; }catch(e){}
-    _quotaWallUp=true;
-    try{ sessionStorage.setItem('ws_quota_wall_v1','1'); }catch(e){}
-    var isMaster={{ 'true' if user_role == 'master' else 'false' }};
-    var ov=document.createElement('div');
-    ov.id='ws-quota-wall';
-    ov.style.cssText='position:fixed;inset:0;z-index:9998;background:rgba(10,14,26,.55);'
-      +'display:flex;align-items:center;justify-content:center;backdrop-filter:blur(2px)';
-    var btnCss='display:block;width:100%;box-sizing:border-box;text-align:center;'
-      +'padding:10px 14px;border-radius:9px;font-size:14px;font-weight:600;'
-      +'text-decoration:none;margin-top:10px;border:1px solid var(--bd,#e5e7eb)';
-    var inner='<div style="font-size:16px;font-weight:800;margin-bottom:6px">'
-      +window.T('ws.quotawall.title')+'</div>'
-      +'<div style="font-size:12.5px;color:var(--t2,#667);line-height:1.65">'
-      +window.T(isMaster?'ws.quotawall.body':'ws.quotawall.agent_hint')+'</div>';
-    if(isMaster){
-      inner+='<a href="/membership#mb-invite" style="'+btnCss
-        +';background:var(--blue,#3b82f6);color:var(--th-ink-inverse,#fff);border-color:transparent">'
-        +window.T('ws.quotawall.invite')+'</a>'
-        +'<a href="/membership#mb-cs" style="'+btnCss+';color:var(--t1,#111)">'
-        +window.T('ws.quotawall.cs')+'</a>'
-        +'<a href="/membership#mb-buy" style="'+btnCss+';color:var(--t1,#111)">'
-        +window.T('ws.quotawall.buy')+'</a>';
-    } else {
-      inner+='<a href="/membership" style="'+btnCss
-        +';background:var(--blue,#3b82f6);color:var(--th-ink-inverse,#fff);border-color:transparent">'
-        +window.T('ws.quotawall.view')+'</a>';
-    }
-    inner+='<button type="button" id="ws-quota-wall-later" style="'+btnCss
-      +';background:transparent;color:var(--t2,#667);border-color:transparent;cursor:pointer">'
-      +window.T('ws.quotawall.later')+'</button>';
-    var box=document.createElement('div');
-    box.style.cssText='width:380px;max-width:90vw;background:var(--card,#fff);'
-      +'color:var(--t1,#111);border:1px solid var(--bd,#e5e7eb);border-radius:14px;'
-      +'padding:20px 22px;box-shadow:0 18px 48px rgba(0,0,0,.28)';
-    box.innerHTML=inner;
-    ov.appendChild(box);
-    document.body.appendChild(ov);
-    function _close(){ try{ if(ov.parentNode) ov.parentNode.removeChild(ov); }catch(e){} }
-    var later=box.querySelector('#ws-quota-wall-later');
-    if(later) later.addEventListener('click', _close);
-    ov.addEventListener('click', function(ev){ if(ev.target===ov) _close(); });
-  }
   function _compactNum(n){
     var v=Number(n||0);
     if(v>=1e6) return (v/1e6).toFixed(v>=1e7?0:1).replace(/\.0$/,'')+'M';
     if(v>=1e3) return (v/1e3).toFixed(v>=1e4?0:1).replace(/\.0$/,'')+'k';
     return String(Math.round(v));
   }
+  /* ── 额度墙 v2 + 调度器（2026-08-21 quotawall v2）──
+     变体：chars（授权字符池 402）/ trial（首启体验档 → 出路是注册领免费额度）/
+     tok（Token 钱包 enforce 降级——措辞必须诚实：是「省耗模式」不是「停摆」）/
+     agent（坐席月度额度 403，check_request_quota 对 master 天然放行故 master
+     永远看不到这面墙）。daily（托管日额度）刻意不进本墙——它的弹层=既有
+     #ws-aitrial-upsell（每日一次），两边靠 isUp/shownRecently 互斥。
+     触发两态：action（apiFetch 撞 402/403 机器头 X-AITR-Quota，_api_fetch.html
+     广播 aitr:quota-blocked）＝被拦当下立即解释，同变体 10 分钟去抖；
+     passive（5 分钟轮询发现 out）＝每会话每变体至多一次。「稍后再说」之后模态
+     不再纠缠——常驻提醒交给顶栏红 pill（信息不丢，打扰不再）。
+     裁决数据=服务端 state（feat=qs1 四表合议，src/licensing/quota_state.py）；
+     旧后端无 state → legacy 回落（chars/trial 按顶层字段判）。 */
+  var __wsQuotaWall=(function(){
+    var isMaster={{ 'true' if user_role == 'master' else 'false' }};
+    var _up=false,_lastShown=0,_watchTimer=null,_watchLeft=0,_closeFn=null,_toastEl=null;
+    var BTN='display:block;width:100%;box-sizing:border-box;text-align:center;'
+      +'padding:10px 14px;border-radius:9px;font-size:14px;font-weight:600;'
+      +'text-decoration:none;margin-top:10px;border:1px solid var(--bd,#e5e7eb);cursor:pointer;';
+    var BTN_P=BTN+'background:var(--blue,#3b82f6);color:var(--th-ink-inverse,#fff);border-color:transparent;';
+    var BTN_G=BTN+'background:transparent;color:var(--t1,#111);';
+    var BTN_L=BTN+'background:transparent;color:var(--t2,#667);border-color:transparent;';
+    function _bcn(a){
+      try{
+        navigator.sendBeacon('/api/telemetry/ui-event', new Blob(
+          [JSON.stringify({page:(location&&location.pathname)||'', action:String(a)})],
+          {type:'application/json'}));
+      }catch(_e){}
+    }
+    function _lsN(k){ try{ return Number(localStorage.getItem(k)||0); }catch(_e){ return 0; } }
+    function _lsW(k,v){ try{ localStorage.setItem(k,String(v)); }catch(_e){} }
+    function _st(){ return window.__wsQuotaState||null; }
+    function _el(tag,css,txt){
+      var e=document.createElement(tag);
+      if(css) e.style.cssText=css;
+      if(txt!=null) e.textContent=txt;
+      return e;
+    }
+    function isUp(){ return _up; }
+    function shownRecently(ms){ return (Date.now()-_lastShown)<(ms||300000); }
+    function _upsellVisible(){
+      var m=document.getElementById('ws-aitrial-upsell');
+      return !!(m&&m.style.display&&m.style.display!=='none');
+    }
+    function _toast(msg){
+      try{
+        if(!_toastEl){
+          _toastEl=_el('div','position:fixed;left:50%;bottom:64px;transform:translateX(-50%);'
+            +'z-index:99991;max-width:min(480px,calc(100vw - 32px));padding:10px 16px;'
+            +'border-radius:10px;background:rgba(15,23,42,.92);color:#fff;font-size:13px;'
+            +'line-height:1.5;box-shadow:0 8px 24px rgba(0,0,0,.35);display:none;');
+          (document.body||document.documentElement).appendChild(_toastEl);
+        }
+        _toastEl.textContent=String(msg||'');
+        _toastEl.style.display='block';
+        setTimeout(function(){ try{ _toastEl.style.display='none'; }catch(_e){} }, 6000);
+      }catch(_e){}
+    }
+    function _closeAll(){ if(_closeFn) _closeFn(); }
+    /* 到账自动恢复：点过「立即充值」后 45s×20（15 分钟）盯余量——支付完成回来
+       不用手动刷新；字符增量→credited 文案，verdict 清墙（Token 充值不动字符
+       水表）→recovered 文案。窗口耗尽静默放弃（下轮 5 分钟轮询兜底）。 */
+    function armWatch(){
+      if(_watchTimer) return;
+      var base=window.__wsQuotaPayload||{};
+      var baseRem=Number(base.remaining||0);
+      var baseWall=(base.state&&base.state.wall)||((base.level==='out')?'chars':'');
+      _watchLeft=20;
+      _watchTimer=setInterval(function(){
+        _watchLeft-=1;
+        if(_watchLeft<=0){ clearInterval(_watchTimer); _watchTimer=null; return; }
+        apiFetch('/api/workspace/quota').then(function(r){return r.json();}).then(function(d){
+          if(!d||!d.ok) return;
+          var wallNow=(d.state&&d.state.wall)||((d.level==='out')?'chars':'');
+          var rem=Number(d.remaining||0);
+          var credited=rem>baseRem+1;
+          var recovered=!!baseWall&&!wallNow;
+          if(credited||recovered){
+            clearInterval(_watchTimer); _watchTimer=null;
+            _bcn('qw_credited');
+            _toast(credited
+              ? window.Tf('ws.quotawall.credited',{n:_compactNum(rem-baseRem)})
+              : window.T('ws.quotawall.recovered'));
+            _closeAll();
+            try{ refreshQuota(); }catch(_e){}
+          }
+        }).catch(function(){});
+      }, (window.__qwWatchMs||45000));   /* __qwWatchMs=夹具门禁的快进钩子 */
+    }
+    function _redeem(vin,vbtn,noteMsg){
+      var v=String(vin.value||'').trim();
+      if(!v) return;
+      vbtn.disabled=true;
+      apiFetch('/api/admin/license/topup-voucher',
+        {method:'POST',credentials:'same-origin',
+         headers:{'Content-Type':'application/json'},
+         body:JSON.stringify({voucher:v})}, {timeoutMs:20000})
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          if(j&&j.ok){
+            _bcn('qw_cta_voucher_ok');
+            var n=Number((j.chars!=null?j.chars:j.tokens)||0);
+            _toast(n>0 ? window.Tf('ws.quotawall.credited',{n:_compactNum(n)})
+                       : window.T('ws.quotawall.recovered'));
+            _closeAll();
+            try{ refreshQuota(); }catch(_e){}
+          }else{
+            _bcn('qw_cta_voucher_err');
+            noteMsg(String((j&&(j.detail||j.error))||window.T('ws.quotawall.voucher_err')));
+          }
+        })
+        .catch(function(){ noteMsg(window.T('ws.quotawall.voucher_err')); })
+        .finally(function(){ vbtn.disabled=false; });
+    }
+    function show(variant, opts){
+      opts=opts||{};
+      if(_up) return;
+      if(variant!=='chars'&&variant!=='trial'&&variant!=='tok'&&variant!=='agent') return;
+      if(_upsellVisible()) return;
+      var trig=(opts.trigger==='action')?'action':'passive';
+      var now=Date.now();
+      if(trig==='action'){
+        if(now-_lsN('qw2.act.'+variant)<600000) return;   /* 同变体 10 分钟去抖 */
+        _lsW('qw2.act.'+variant, now);
+      }else{
+        try{
+          if(sessionStorage.getItem('qw2.sess.'+variant)) return;
+          sessionStorage.setItem('qw2.sess.'+variant,'1');
+        }catch(_e){ return; }
+      }
+      _up=true; _lastShown=now;
+      _bcn('qw_shown_'+variant+'_'+trig);
+      var st=_st()||{};
+      var d=window.__wsQuotaPayload||{};
+      var ov=_el('div','position:fixed;inset:0;z-index:9998;background:rgba(10,14,26,.55);'
+        +'display:flex;align-items:center;justify-content:center;backdrop-filter:blur(2px);');
+      ov.id='ws-quota-wall';
+      var box=_el('div','width:392px;max-width:92vw;max-height:86vh;overflow:auto;'
+        +'background:var(--card,#fff);color:var(--t1,#111);border:1px solid var(--bd,#e5e7eb);'
+        +'border-radius:14px;padding:20px 22px;box-shadow:0 18px 48px rgba(0,0,0,.28);');
+      var titleKey={chars:'ws.quotawall.title',trial:'ws.quotawall.title_trial',
+                    tok:'ws.quotawall.title_token',agent:'ws.quotawall.title_agent'}[variant];
+      box.appendChild(_el('div','font-size:16px;font-weight:800;margin-bottom:6px;',
+        window.T(titleKey)));
+      var bodyTxt;
+      if(variant==='agent'){
+        var ag=st.agent||{};
+        bodyTxt=window.Tf('ws.quotawall.body_agent',
+          {used:_compactNum(ag.used||0), quota:_compactNum(ag.quota||0)});
+      }else if(!isMaster){
+        bodyTxt=window.T('ws.quotawall.agent_hint');
+      }else{
+        bodyTxt=window.T(variant==='trial'?'ws.quotawall.body_trial'
+          :(variant==='tok'?'ws.quotawall.body_token':'ws.quotawall.body'));
+      }
+      box.appendChild(_el('div','font-size:12.5px;color:var(--t2,#667);line-height:1.65;',bodyTxt));
+      if((variant==='chars'||variant==='trial')&&Number(d.included||0)>0){
+        box.appendChild(_el('div','font-size:12px;color:var(--t2,#667);margin-top:6px;',
+          window.Tf('base.pill.quota_tip',
+            {used:_compactNum(d.used||0), included:_compactNum(d.included||0)})));
+      }
+      var note=_el('div','display:none;font-size:12px;color:var(--t2,#667);margin-top:8px;line-height:1.5;');
+      function _noteMsg(m){ note.textContent=String(m||''); note.style.display='block'; }
+      box.appendChild(note);
+      function _esc(ev){ if(ev&&(ev.key==='Escape'||ev.key==='Esc')){ ev.preventDefault(); _close(); } }
+      function _close(){
+        try{ if(ov.parentNode) ov.parentNode.removeChild(ov); }catch(_e){}
+        _up=false; _closeFn=null;
+        document.removeEventListener('keydown', _esc, true);
+      }
+      _closeFn=_close;
+      function _link(labelKey, href, bcn, css){
+        var a=_el('a', css||BTN_G, window.T(labelKey));
+        a.href=href;
+        a.addEventListener('click', function(){ _bcn(bcn); });
+        return a;
+      }
+      var primaryEl=null;
+      if(variant==='agent' || !isMaster){
+        primaryEl=_link('ws.quotawall.view','/membership','qw_cta_view',BTN_P);
+        box.appendChild(primaryEl);
+      }else{
+        var shop=String(st.shop_url||'');
+        if(variant==='trial'){
+          primaryEl=_link('ws.quotawall.claim','/membership#mb-claim','qw_cta_claim',BTN_P);
+          box.appendChild(primaryEl);
+        }
+        if(shop){
+          var buy=_el('button', variant==='trial'?BTN_G:BTN_P, window.T('ws.quotawall.recharge'));
+          buy.type='button';
+          buy.addEventListener('click', function(){
+            _bcn('qw_cta_buy');
+            try{ window.open(shop,'_blank'); }catch(_e){}
+            _noteMsg(window.T('ws.quotawall.watching'));
+            armWatch();
+          });
+          box.appendChild(buy);
+          if(!primaryEl) primaryEl=buy;
+        }else if(variant!=='trial'){
+          primaryEl=_link('ws.quotawall.buy','/membership#mb-buy','qw_cta_buy_page',BTN_P);
+          box.appendChild(primaryEl);
+        }
+        /* 凭证兑换内嵌：客服核销/官网发的凭证不用再去会员页找入口 */
+        var vrow=_el('div','display:flex;gap:8px;margin-top:10px;');
+        var vin=_el('input','flex:1 1 auto;min-width:0;padding:9px 10px;border:1px solid '
+          +'var(--bd,#e5e7eb);border-radius:9px;font-size:12.5px;background:transparent;'
+          +'color:var(--t1,#111);');
+        vin.type='text';
+        vin.placeholder=window.T('mb_redeem_ph');
+        var vbtn=_el('button','flex:0 0 auto;padding:9px 14px;border-radius:9px;border:1px solid '
+          +'var(--bd,#e5e7eb);background:transparent;color:var(--t1,#111);font-size:12.5px;'
+          +'font-weight:600;cursor:pointer;', window.T('mb_redeem_btn'));
+        vbtn.type='button';
+        vbtn.addEventListener('click', function(){ _redeem(vin, vbtn, _noteMsg); });
+        vrow.appendChild(vin); vrow.appendChild(vbtn);
+        box.appendChild(vrow);
+        if(variant!=='tok'){
+          box.appendChild(_link('ws.quotawall.invite','/membership#mb-invite','qw_cta_invite',BTN_G));
+        }
+        box.appendChild(_link('ws.quotawall.cs','/membership#mb-cs','qw_cta_cs',BTN_G));
+      }
+      var later=_el('button', BTN_L, window.T('ws.quotawall.later'));
+      later.type='button';
+      later.addEventListener('click', function(){ _bcn('qw_cta_later'); _close(); });
+      box.appendChild(later);
+      ov.appendChild(box);
+      ov.addEventListener('click', function(ev){ if(ev.target===ov) _close(); });
+      document.addEventListener('keydown', _esc, true);
+      document.body.appendChild(ov);
+      try{ if(primaryEl&&primaryEl.focus) primaryEl.focus(); }catch(_e){}
+    }
+    function maybePassive(st){
+      if(st&&st.wall) show(st.wall, {trigger:'passive'});
+    }
+    /* 动作点即时触发：apiFetch 在额度类 402/403 上广播（见 _api_fetch.html）。
+       被拦的那一下当场解释，不等 5 分钟轮询；顺手强刷 pill 让红态立即可见。 */
+    document.addEventListener('aitr:quota-blocked', function(ev){
+      var src=String((ev&&ev.detail&&ev.detail.source)||'');
+      if(!src) return;
+      var st=_st();
+      var v=(src==='agent_chars') ? 'agent'
+        : (((st&&st.wall)==='trial')||((window.__wsQuotaPayload||{}).source==='local_trial'))
+          ? 'trial' : 'chars';
+      show(v, {trigger:'action'});
+      try{ refreshQuota(); }catch(_e){}
+    });
+    return {show:show, maybePassive:maybePassive, isUp:isUp,
+            shownRecently:shownRecently, armWatch:armWatch,
+            isMaster:isMaster, bcn:_bcn};
+  })();
+  window.__wsQuotaWall=__wsQuotaWall;
+  /* ── 预计耗尽预警条（quotawall v2 P2）──
+     数据=state.forecast（服务端近 7 天日均外推，与用量页同算式单源）。
+     days_left<=3 且未用尽才出条；「今天不再提醒」按日贪睡（localStorage 日键）；
+     master 且有充值深链 → 出「立即充值」并挂到账 watch，否则出「查看额度详情」。
+     刻意不在 out 态出条——那是额度墙的场子，两个面同屏喊话=互相稀释。 */
+  var _qwLowBcnFired=false;
+  function _qwLowDayKey(){
+    var d=new Date();
+    return 'qw.low.snooze.'+d.getFullYear()+('0'+(d.getMonth()+1)).slice(-2)+('0'+d.getDate()).slice(-2);
+  }
+  /* 实施75：预警从顶部条迁右下——胶囊在预警期常驻（小 chip），卡片提示每日一次
+     （沿用 qw.low.snooze. 日键，语义从「用户点了暂缓」演进为「今日已提醒」；
+     胶囊不受日键影响，信息不丢）。埋点 qw_low_shown/qw_low_buy 语义保留。 */
+  function _qwLowSync(st,d){
+    if(!window.AITRNotify) return;
+    var want=false, fc=(st&&st.forecast)||null;
+    var lv=String((st&&st.level)||(d&&d.level)||'ok');
+    if(fc && fc.days_left!=null && Number(fc.days_left)<=3 && lv!=='out') want=true;
+    if(!want){ AITRNotify.ongoing.clear('quotalow'); return; }
+    var days=Math.max(0, Math.round(Number(fc.days_left)));
+    var dt=new Date(Date.now()+Number(fc.days_left)*86400000);
+    var master=!!__wsQuotaWall.isMaster;
+    var text=window.Tf(master?'ws.quotalow.text':'ws.quotalow.text_agent', {
+      remaining:_compactNum((d&&d.remaining)==null?0:d.remaining),
+      days:String(days), date:(dt.getMonth()+1)+'-'+dt.getDate()});
+    AITRNotify.ongoing.set('quotalow', {text:text, tone:'warn', title:window.T('ntf.capsule_title')});
+    if(!_qwLowBcnFired){ _qwLowBcnFired=true; __wsQuotaWall.bcn('qw_low_shown'); }
+    var notifiedToday=false;
+    try{ notifiedToday=!!localStorage.getItem(_qwLowDayKey()); }catch(_e){}
+    if(notifiedToday) return;
+    try{ localStorage.setItem(_qwLowDayKey(),'1'); }catch(_e){}
+    var shop=String((st&&st.shop_url)||'');
+    var acts=[];
+    if(master&&shop){
+      acts.push({label:window.T('ws.quotawall.recharge'), onClick:function(){
+        __wsQuotaWall.bcn('qw_low_buy');
+        try{ window.open(shop,'_blank'); }catch(_e){}
+        __wsQuotaWall.armWatch();
+      }});
+    }else{
+      acts.push({label:window.T('ws.quotawall.view'), onClick:function(){ location.href='/membership'; }});
+    }
+    AITRNotify.notify({severity:'warn', text:text, centerId:'quotalow', actions:acts});
+  }
   function refreshQuota(){
     if(!quotaPill) return;
     apiFetch('/api/workspace/quota').then(function(r){return r.json();}).then(function(d){
-      if(!d||!d.ok||!d.visible){ quotaPill.style.display='none'; return; }
-      var lv=String(d.level||'ok');
-      _maybeQuotaWall(lv);
+      if(!d||!d.ok){ quotaPill.style.display='none'; return; }
+      var st=d.state||null;   /* feat=qs1 四表合议；旧后端无此字段=legacy 回落 */
+      window.__wsQuotaState=st;
+      window.__wsQuotaPayload=d;
+      try{ document.dispatchEvent(new CustomEvent('aitr:quota-state',{detail:st})); }catch(_e){}
+      try{ _qwLowSync(st,d); }catch(_e){}
+      var lv=String((st&&st.level)||d.level||'ok');
+      var wallV=(st&&st.wall)||'';
+      var vis=!!d.visible;
+      /* Token 钱包 enforce 用尽 / 坐席月度额度用尽：字符池不可见也值得一颗红 pill
+         ——「AI 在省耗/停摆」必须有常驻可见面，弹层关了信息不能跟着消失。 */
+      var extraPill=(!vis&&(wallV==='tok'||wallV==='agent'));
+      if(!vis&&!extraPill){
+        quotaPill.style.display='none';
+        if(st) __wsQuotaWall.maybePassive(st);
+        return;
+      }
       quotaPill.className='ws-pill quota'+(lv==='out'?' quota-out':(lv==='low'?' quota-low':''));
       var isTrial=(d.source==='local_trial');
-      var lb=window.T(isTrial?'base.pill.quota_trial':'base.pill.quota');
+      var lb=window.T((extraPill&&wallV==='tok')?'base.pill.quota_tokens'
+        :(isTrial?'base.pill.quota_trial':'base.pill.quota'));
       var num=(d.remaining==null)?'—':_compactNum(d.remaining);
       if(lv==='out') num=window.T('base.pill.quota_out');
       _setPill(quotaPill, _pillIc('zap')+'<span class="ws-pill-lb">'+lb+
         '</span><span class="ws-pill-n">'+num+'</span>');
-      // tooltip 讲全：已用/含量 + 体验档剩余时长 + 用尽后会发生什么
+      // tooltip 讲全：已用/含量 + 体验档剩余时长 + 用尽后会发生什么（分水表口径）
       var tip=window.Tf('base.pill.quota_tip',{used:_compactNum(d.used),
         included:_compactNum(d.included)});
-      if(isTrial && d.hours_left!=null && lv!=='out'){
-        tip+=' · '+window.Tf('base.pill.quota_tip_hours',{h:d.hours_left});
-      }
-      if(lv==='out'){
-        tip+=' · '+window.T(d.expired?'base.pill.quota_tip_expired':'base.pill.quota_tip_out');
+      if(extraPill&&st){
+        tip=(wallV==='tok') ? window.T('base.pill.quota_tip_token')
+          : window.Tf('base.pill.quota_tip_agent',
+              {used:_compactNum((st.agent||{}).used||0),
+               quota:_compactNum((st.agent||{}).quota||0)});
+      }else{
+        if(isTrial && d.hours_left!=null && lv!=='out'){
+          tip+=' · '+window.Tf('base.pill.quota_tip_hours',{h:d.hours_left});
+        }
+        if(st && st.forecast && st.forecast.days_left!=null && lv!=='out'){
+          tip+=' · '+window.Tf('ws.quotalow.tip',
+            {days:String(Math.max(0,Math.round(Number(st.forecast.days_left))))});
+        }
+        if(lv==='out'){
+          if(wallV==='tok'){
+            tip+=' · '+window.T('base.pill.quota_tip_token');
+          }else if(wallV==='agent'){
+            tip+=' · '+window.Tf('base.pill.quota_tip_agent',
+              {used:_compactNum(((st||{}).agent||{}).used||0),
+               quota:_compactNum(((st||{}).agent||{}).quota||0)});
+          }else{
+            tip+=' · '+window.T(d.expired?'base.pill.quota_tip_expired':'base.pill.quota_tip_out');
+          }
+        }
       }
       quotaPill.title=tip;
-    }).catch(function(){});
+      if(st){ __wsQuotaWall.maybePassive(st); }
+      else if(lv==='out'){ __wsQuotaWall.show(isTrial?'trial':'chars',{trigger:'passive'}); }
+    }).catch(function(){_pillChainFail('refreshQuota');});
   }
   refreshQuota(); setInterval(refreshQuota, 300000);
 
@@ -1726,7 +2733,7 @@ document.addEventListener('click',function(e){
       _slaItems=d.items||[];
       _slaState={ quiet:!!d.quiet, crit:d.critical||0, brk:d.breaching||0 };
       _renderSlaPill();
-    }).catch(function(){}).finally(function(){
+    }).catch(function(){_pillChainFail('refreshSla');}).finally(function(){
       _slaBusy=false;
       if(_slaAgain){ _slaAgain=false; refreshSla(); }
     });
@@ -2025,32 +3032,50 @@ document.addEventListener('click',function(e){
         if(body&&body.parentNode){ body.parentNode.insertBefore(bar, body); }
       }
     }
+    refreshL4();   // 全员：顶栏「发前确认」药丸（L1+L3+L4 等人处理的草稿；toast 仍在函数内按主管过滤）
     if(MY_IS_SUP){
-      refreshL4();
       // 「更多」菜单已删（2026-08-14）：主管看板入口收口到后台管理（侧栏 + Ctrl+K
       // 命令面板，见 nav_schema.CMD_EXTRA_ITEMS）；此处只剩「回管理后台」链接显隐。
       var _adm=document.getElementById('ws-admin-link'); if(_adm) _adm.style.display='block';  // P1.3：主管可从工作台回管理后台
     }
   }).catch(function(){});
 
-  // B2：L4 高风险草稿 badge + 顶栏告警（主管专属）
+  // B2 → 2026-08-22 升级：顶栏「发前确认」药丸 = 全部等人处理的 pending 草稿
+  // （L1 待审 + L3 需审批 + L4 需主管放行）。此前只数 L4 且仅主管可见，两类真实事故
+  // 因此都不在任何人的第一屏上：L1 曾静默积压 214h、L3（辱骂触发升级转人审）凌晨挂起
+  // 无人察觉。坐席同看（risk-summary 本就 api_auth 全员可读，坐席正是 L1/L3 的处理人）；
+  // L2 刻意不计——autosend 秒级消化，计入只会闪烁。toast 仍主管专属且只跟 L4 增量
+  // （draft_created SSE 已给全员弹过通用通知，药丸再跟 L1/L3 弹＝双重噪音）。
   var _l4Badge=document.getElementById('ws-l4-badge');
   var _l4Prev=0, _slaPrev=0, _l4Inited=false, _l4PulsePrev=0;  // _l4Inited：首次加载只建基线、不弹，避免开页即把历史积压一次性弹出
+  // B65 L2 降噪：L2 草稿（低风险+全自动档）不逐条 toast，改累计进这颗安静胶囊。
+  // 计数是「本页打开以来」的会话级口径（刷新归零）——它的职责是替代弹窗提供
+  // 「AI 正在替你干活」的体感，持久口径在 ops-overview / autosend-status。
+  var _l2AutoPill=document.getElementById('ws-l2auto');
+  var _l2AutoN=0;
+  function _l2AutoBump(dc){
+    _l2AutoN++;
+    if(!_l2AutoPill) return;
+    _setPill(_l2AutoPill, _pillIc('bot')+'<span class="ws-pill-lb">'+window.T('base.pill.l2auto')+'</span><span class="ws-pill-n">'+_l2AutoN+'</span>');
+    try{ _l2AutoPill.title=window.Tf('base.pill.l2auto_dyn',{n:_l2AutoN,chat:String((dc&&dc.chat_name)||'')}); }catch(_){}
+  }
   function refreshL4(){
-    if(!MY_IS_SUP) return;
     apiFetch('/api/drafts/risk-summary').then(function(r){return r.json();}).then(function(d){
       if(!d||!d.ok) return;
-      var l4=(d.by_level&&d.by_level['L4'])||0;
+      var bl=d.by_level||{};
+      var l1=Number(bl['L1'])||0, l3=Number(bl['L3'])||0, l4=Number(bl['L4'])||0;
+      var pend=l1+l3+l4;
       var sla=(d.sla_overdue&&d.sla_overdue>0)?d.sla_overdue:0;
       if(_l4Badge){
-        if(!l4){ _l4Badge.style.display='none'; }
+        if(!pend){ _l4Badge.style.display='none'; }
         else{
-          _setPill(_l4Badge, _pillIc('shield')+'<span class="ws-pill-lb">'+window.T('base.pill.l4')+'</span><span class="ws-pill-n">'+l4+'</span>');
-          if(l4>_l4PulsePrev && _l4Badge.style.display!=='none'){
+          _setPill(_l4Badge, _pillIc('shield')+'<span class="ws-pill-lb">'+window.T('base.pill.l4')+'</span><span class="ws-pill-n">'+pend+'</span>');
+          try{ _l4Badge.title=window.Tf('base.pill.l4_dyn',{n:pend,l1:l1,l3:l3,l4:l4}); }catch(_){}
+          if(pend>_l4PulsePrev && _l4Badge.style.display!=='none'){
             _l4Badge.classList.remove('pulse'); void _l4Badge.offsetWidth; _l4Badge.classList.add('pulse');
           }
         }
-        _l4PulsePrev=l4;
+        _l4PulsePrev=pend;
       }
       // 「更多」菜单已删（2026-08-14）：ws-drafts-link 不复存在，待审总数/SLA 由
       // 顶栏 L4 角标 + toast 承担，草稿队列入口在收件箱内。
@@ -2058,7 +3083,7 @@ document.addEventListener('click',function(e){
       // 之后仅当计数「真正新增」时才 loud toast（仅主管，增量触发）。
       if(!_l4Inited){
         _l4Inited=true;
-      }else{
+      }else if(MY_IS_SUP){
         if(l4>_l4Prev){
           CRMW.toast(window.Tf('base.l4.toast_new',{n:l4}),'#991b1b','alert');
         }
@@ -2068,7 +3093,7 @@ document.addEventListener('click',function(e){
         }
       }
       _l4Prev=l4; _slaPrev=sla;
-    }).catch(function(){});
+    }).catch(function(){_pillChainFail('refreshL4');});
   }
 
   // SSE 实时刷新：跟进任务变更即时更新徽标（及待办页若打开）+ SLA 告警 toast
@@ -2114,14 +3139,21 @@ document.addEventListener('click',function(e){
       } else if(msg && msg.type==='draft_created' && msg.data){
         // G1：新自动草稿生成 → toast 通知 + 转发 CustomEvent 给草稿审批页
         var _dc=msg.data;
-        var _lvlColor={'L2':'#16a34a','L3':'#d97706','L4':'#dc2626'}[_dc.autopilot_level]||'#2563eb';
-        var _toastEl=CRMW.toast(
-          window.Tf('base.sse.draft_created',{lvl:(_dc.autopilot_level||'?'),chat:(_dc.chat_name||_dc.platform||'?'),text:(_dc.peer_text||'').slice(0,30)}),
-          _lvlColor,'clipboard');
-        if(_toastEl && _dc.autopilot_level!=='L2'){
-          // 非 L2 需要人工审批 → 点击 toast 跳转草稿审批页
-          _toastEl.style.cursor='pointer';
-          _toastEl.onclick=function(){ location.href='/workspace/drafts'; };
+        if(_dc.autopilot_level==='L2'){
+          // B65 降噪：L2＝低风险+全自动档，AutosendWorker 秒级消化、坐席无事可做——
+          // 逐条 toast 是纯噪音（老板实录：几个账号同时上线右下角刷屏），还会淹没
+          // 真正要人的 L1/L3/L4。改累计进顶栏「🤖 自动」胶囊，静默不打断。
+          _l2AutoBump(_dc);
+        } else {
+          var _lvlColor={'L3':'#d97706','L4':'#dc2626'}[_dc.autopilot_level]||'#2563eb';
+          var _toastEl=CRMW.toast(
+            window.Tf('base.sse.draft_created',{lvl:(_dc.autopilot_level||'?'),chat:(_dc.chat_name||_dc.platform||'?'),text:(_dc.peer_text||'').slice(0,30)}),
+            _lvlColor,'clipboard');
+          if(_toastEl){
+            // 需要人工审批 → 点击 toast 跳转草稿审批页
+            _toastEl.style.cursor='pointer';
+            _toastEl.onclick=function(){ location.href='/workspace/drafts'; };
+          }
         }
         // 刷新顶栏草稿角标
         refreshL4();
@@ -2383,7 +3415,10 @@ document.addEventListener('click',function(e){
   var _notifications = [];
   // 复发型告警（升级/会话SLA/草稿SLA/队列/异常）会被反复推送（轮询+重连重发）。
   // 这些按「类型+会话」合并：同一会话只保留最新一条，避免铃铛堆几十条同义告警。
-  var _COALESCE_TYPES={ escalation:1, sla_alert:1, draft_sla_breach:1, draft_backlog_summary:1, queue_alert:1, anomaly_alert:1, bot_peer_alert:1 };
+  var _COALESCE_TYPES={ escalation:1, sla_alert:1, draft_sla_breach:1, draft_backlog_summary:1, queue_alert:1, anomaly_alert:1, bot_peer_alert:1,
+    /* 实施75：系统状态（维护/降级留痕，notify-bus 写入）按 data.id 合并——
+       一天 N 次维护只留最新一条，且不计未读角标（实时态由右下胶囊承载） */
+    sys_status:1 };
   function _coalesceKey(n){
     if(!n||!_COALESCE_TYPES[n.type]) return null;
     var d=n.data||{};
@@ -2423,6 +3458,7 @@ document.addEventListener('click',function(e){
     conv_note:      { iconName:'users', bg:'#ede9fe', label:window.T('base.notif.type_conv_note'), accent:'#7c3aed' },
     goal_completed_alert:{ iconName:'star', bg:'#fef9c3', label:window.T('base.notif.type_goal_done'), accent:'#ca8a04' },
     bot_peer_alert: { iconName:'pause', bg:'#fee2e2', label:window.T('base.notif.type_budget_hit'), accent:'#dc2626' },
+    sys_status:     { iconName:'gear', bg:'#e0e7ff', label:window.T('ntf.type_sys'), accent:'#6366f1' },
   };
   // 群组动态：inbox_message 且会话类型为群组/频道 → 折叠展示、不计未读、不打扰
   function _isGroup(n){
@@ -2474,6 +3510,8 @@ document.addEventListener('click',function(e){
       var _bn=d.display_name||d.username||d.chat_key||'?';
       var _bk=_bp.relieved?'base.notif.budget_sub_relieved':(_bp.hard?'base.notif.budget_sub_hard':'base.notif.budget_sub_soft');
       sub = window.Tf(_bk,{name:_bn,used:(_bp.used!=null?_bp.used:'?'),limit:(_bp.limit!=null?_bp.limit:'?')});
+    } else if(n.type==='sys_status'){
+      sub = String(d.text||'').slice(0,80);
     }
     return '<div class="ws-notif-item'+(unread?' unread':'')+'" style="border-left-color:'+(meta.accent||'transparent')+';" onclick="window.__wsNotif.click(\''+esc(JSON.stringify(n).replace(/'/g,'\\'+"'"))+'\')">'
       +'<div class="ws-notif-icon" style="background:'+meta.bg+'">'+(typeof uiIcon==='function'?uiIcon(meta.iconName||'pin',14):'')+'</div>'
@@ -2506,6 +3544,21 @@ document.addEventListener('click',function(e){
     var main = all.filter(function(n){ return !_isGroup(n); }).slice(0,50);
     var groups = all.filter(_isGroup).slice(0,50);
     var html = '';
+    /* 实施75：「进行中」置顶分组＝右下状态胶囊的明细面（同一快照单源）。
+       维护预热/AI 降级/额度预警等持续状态在此可回看，胶囊点击即落到这里。 */
+    var _og = (window.AITRNotify && AITRNotify.ongoing && AITRNotify.ongoing.snapshot)
+      ? AITRNotify.ongoing.snapshot() : [];
+    if(_og.length){
+      var _ogTone = {info:'var(--tk-brand,#1e8cf2)', warn:'#d97706', error:'#dc2626', success:'#16a34a'};
+      var _ogBg = '#e0e7ff';   /* 与 sys_status 图标底同色（JS 拼接，同 _renderItem 模式） */
+      html += '<div class="ws-notif-sec-tag">'+window.T('ntf.ongoing_hdr')+'</div>'
+        + _og.map(function(o){
+            return '<div class="ws-notif-item" style="cursor:default;border-left-color:'+(_ogTone[o.tone]||_ogTone.info)+';">'
+              +'<div class="ws-notif-icon" style="background:'+_ogBg+'">'+(typeof uiIcon==='function'?uiIcon('gear',14):'')+'</div>'
+              +'<div class="ws-notif-body"><div class="ws-notif-title" style="white-space:normal;">'+esc(o.text)+'</div></div>'
+              +'</div>';
+          }).join('');
+    }
     html += main.length ? main.map(_renderItem).join('')
                         : '<div class="ws-notif-empty">'+window.T('base.notif.empty')+'</div>';
     if(groups.length){
@@ -2573,6 +3626,8 @@ document.addEventListener('click',function(e){
   });
 
   if(btn) btn.addEventListener('click', _toggle);
+  /* 实施75：胶囊状态变化时（面板开着）实时重绘「进行中」分组 */
+  document.addEventListener('aitr:ntf-ongoing', function(){ if(_open) _renderNotif(); });
   if(readBtn) readBtn.addEventListener('click', function(e){ e.stopPropagation(); _markRead(); });
   // 十六期：筛选 chips 事件（面板内点击不冒泡关面板）
   var nfBar=document.getElementById('ws-notif-filter');
@@ -2950,6 +4005,9 @@ window.__wsMultiWin = (function(){
         if(_mine(_read(K_PRIMARY))){
           _setState('active');
           try{ CRMW.toast(window.T('base.multiwin.promoted'),'#0f766e'); }catch(_){}
+          /* 接管即补一拍 presence 心跳：原主控关窗置了「离开」，这里立刻以真实状态收复，
+             把假离线窗口从 ≤30s 压到秒级 */
+          try{ window.__wsPresence&&window.__wsPresence.beat&&window.__wsPresence.beat(); }catch(_){}
           _bcn('mw.promoted');
         }
       },150);
@@ -3215,5 +4273,64 @@ window.__wsMultiWin = (function(){
 {% block content %}{% endblock %}
 {% if ws_sidebar %}</div>{% endif %}
 </main>
+<script>
+/* AI 助手悬浮球 loader（2026-08-21 v2 带重试，同 base.html 尾部同款）：
+   失败后 15s/60s 补探 + 回前台再探——实例重启窗内加载的页面不再永久丢球。 */
+(function(){
+  var tries=0, done=false;
+  function inject(b){
+    if(done||window.AssistantBall) return;
+    done=true;
+    var s=document.createElement('script');
+    s.src='/assistant-shared/assistant-ball.js?v=20260827c';
+    s.onload=function(){
+      if(window.AssistantBall) window.AssistantBall.init({
+        shell:'workspace',
+        lang:(window.WS_LANG||document.documentElement.lang||'zh'),
+        boot:b
+      });
+      /* 实施58 P0：教学模式姊妹模块（独立文件；缺席/404=静默零痕迹） */
+      var s2=document.createElement('script');
+      s2.src='/assistant-shared/assistant-teach.js?v=20260827a';
+      s2.onload=function(){
+        if(window.XZTeach) window.XZTeach.init({
+          shell:'workspace',
+          lang:(window.WS_LANG||document.documentElement.lang||'zh')
+        });
+      };
+      document.head.appendChild(s2);
+      /* 实施58 P2：「替我做」智能体+流星执行秀（后端未装载=入口如实待装） */
+      var s3=document.createElement('script');
+      s3.src='/assistant-shared/assistant-agent.js?v=20260827a';
+      s3.onload=function(){
+        if(window.XZAgent) window.XZAgent.init({
+          shell:'workspace',
+          lang:(window.WS_LANG||document.documentElement.lang||'zh')
+        });
+      };
+      document.head.appendChild(s3);
+    };
+    document.head.appendChild(s);
+  }
+  function probe(){
+    if(done) return;
+    fetch('/api/assistant/bootstrap?page='+encodeURIComponent(location.pathname),{cache:'no-store'}).then(function(r){
+      return r.ok ? r.json() : null;
+    }).then(function(b){
+      if(b&&b.ok&&b.enabled){ inject(b); return; }
+      if(++tries===1) setTimeout(probe,15000);
+      else if(tries===2) setTimeout(probe,60000);
+    }).catch(function(){
+      if(++tries===1) setTimeout(probe,15000);
+      else if(tries===2) setTimeout(probe,60000);
+    });
+  }
+  probe();
+  document.addEventListener('visibilitychange',function(){
+    if(document.visibilityState==='visible'&&!done){ tries=0; probe(); }
+  });
+})();
+</script>
+{% include "_page_view_beacon.html" %}
 </body>
 </html>

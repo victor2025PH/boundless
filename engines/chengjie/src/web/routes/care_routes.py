@@ -755,7 +755,15 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
             ai_name = str((cm.get_ai_config() or {}).get("ai_name") or "她")
         except Exception:
             ai_name = "她"
-        prompt = build_care_prompt(item, context_block=context_block, ai_name=ai_name)
+        # B110④ 预览=派发同源：负样本块同样进预览 prompt（缺方法/读失败按空）
+        _recent_sent = []
+        try:
+            _recent_sent = store.recent_sent_texts(
+                str(item.get("contact_key") or ""), limit=4)
+        except Exception:
+            _recent_sent = []
+        prompt = build_care_prompt(item, context_block=context_block,
+                                   recent_sent=_recent_sent, ai_name=ai_name)
         try:
             text = (await ai.chat(prompt) or "").strip()
         except Exception:

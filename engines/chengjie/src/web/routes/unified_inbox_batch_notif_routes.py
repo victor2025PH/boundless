@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from fastapi import Depends, HTTPException, Request
 
@@ -246,6 +247,46 @@ def register_batch_notif_routes(app, *, api_auth) -> None:
         except Exception:
             logger.debug("读取 notif_read_at 失败（已忽略）", exc_info=True)
         return {"ok": True, "notifications": queue[-limit:], "read_at": read_at}
+
+    @app.post("/api/workspace/notifications/sys-status")
+    async def api_workspace_notifications_sys_status(
+        request: Request, _=Depends(api_auth),
+    ):
+        """实施75 batch4：系统状态事件留痕（sys_status）。
+
+        右下通知总线（notify-bus）把维护预热/AI 降级/通道离线等系统事件写进本
+        进程级通知队列 —— 页面刷新 / SSE 断线重连经 GET /api/workspace/notifications
+        自然回放，消息中心不再「刷新即忘」。按 ``data.id`` 合并（同一状态只保留
+        最新一条，一天 N 次维护不堆 N 行），与前端 ``_COALESCE_TYPES`` 同语义；
+        队列上限沿用 SSE 写入方的 200。旧前端不发本请求＝零行为变化。
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        sid = str((body or {}).get("id") or "").strip()[:64]
+        text = str((body or {}).get("text") or "").strip()[:300]
+        if not sid or not text:
+            return {"ok": False, "error": tr(request, "err.ws.field_required", field="id / text")}
+        nq: list = getattr(request.app.state, "notif_queue", None)
+        if nq is None:
+            nq = []
+            request.app.state.notif_queue = nq
+        nq[:] = [
+            n for n in nq
+            if not (
+                (n or {}).get("type") == "sys_status"
+                and str(((n or {}).get("data") or {}).get("id") or "") == sid
+            )
+        ]
+        nq.append({
+            "type": "sys_status",
+            "data": {"id": sid, "text": text},
+            "_notif_ts": int(time.time() * 1000),
+        })
+        if len(nq) > 200:
+            del nq[:-200]
+        return {"ok": True}
 
     @app.post("/api/workspace/notifications/read")
     async def api_workspace_notifications_read(request: Request, _=Depends(api_auth)):

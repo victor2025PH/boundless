@@ -185,16 +185,28 @@ def _nav_paths(ctx, locked_only=None):
 def test_nav_context_marks_locked_items(monkeypatch):
     import src.web.nav_schema as ns
 
-    # gate 关 / 不传 config → 静态全量（同一对象，零开销零变化）
+    # 不传 config → 静态全量（同一对象，零开销零变化）
     assert ns.get_nav_context() is ns._NAV_CONTEXT
-    assert ns.get_nav_context(_cfg(enabled=False)) is ns._NAV_CONTEXT
+    # 传了 config 就会套 ui_visibility 缺省隐藏（矩阵/群脉/转接/未开变现），
+    # 即使 feature_gate 关着也不是同一对象——这是 2026-08-16 显隐层的契约。
+    ctx_off = ns.get_nav_context(_cfg(enabled=False))
+    assert ctx_off is not ns._NAV_CONTEXT
+    assert not _nav_paths(ctx_off, locked_only=True)
+
+    # 锁标测试把显隐层打开，避免缺省藏矩阵把「锁着的升级面」一起滤掉
+    def _nav_vis(enabled=True):
+        c = _cfg(enabled=enabled)
+        c["ui_visibility"] = {
+            "matrix_nav": True, "group_show": True, "ai_settings": True,
+        }
+        return c
 
     # pro 档：flagship 项（RPA 渠道 / 变现）带锁标仍渲染，pro 项无锁标
     monkeypatch.setattr(
         "src.licensing.license_manager.get_license_manager",
         lambda: SimpleNamespace(status=lambda: _st(plan="pro")),
     )
-    ctx = ns.get_nav_context(_cfg())
+    ctx = ns.get_nav_context(_nav_vis())
     unlocked = _nav_paths(ctx, locked_only=False)
     locked = _nav_paths(ctx, locked_only=True)
     assert "/knowledge" in unlocked and "/personas" in unlocked
@@ -217,7 +229,7 @@ def test_nav_context_marks_locked_items(monkeypatch):
             status=lambda: _st(plan="community", licensed=False,
                                state="unlicensed")),
     )
-    ctx2 = ns.get_nav_context(_cfg())
+    ctx2 = ns.get_nav_context(_nav_vis())
     locked2 = _nav_paths(ctx2, locked_only=True)
     assert "/knowledge" in locked2 and "/care-schedule" in locked2
     assert "/workspace" in _nav_paths(ctx2, locked_only=False)
@@ -227,6 +239,9 @@ def test_nav_context_marks_locked_items(monkeypatch):
         "src.licensing.license_manager.get_license_manager",
         lambda: SimpleNamespace(status=lambda: _st(plan="flagship")),
     )
-    ctx3 = ns.get_nav_context(_cfg())
+    ctx3 = ns.get_nav_context(_nav_vis())
     assert not _nav_paths(ctx3, locked_only=True)
-    assert _nav_paths(ctx3) == _nav_paths(ns._NAV_CONTEXT)
+    # flagship 零锁标。显隐层仍按缺省藏矩阵/群脉/未开变现，不等于静态全量。
+    assert "/workspace" in _nav_paths(ctx3)
+    assert "/knowledge" in _nav_paths(ctx3)
+    assert "/monetization" not in _nav_paths(ctx3)

@@ -23,6 +23,7 @@ from src.companion.user_clock_resolver import (
     invalidate,
     reset_stats_for_tests,
     resolve_for_conversation,
+    stated_place_from_inbound_text,
     utc_hours_for_conversation,
 )
 from src.inbox.store import InboxStore
@@ -259,6 +260,78 @@ def test_non_residence_memories_are_ignored():
     store = FakeInboxStore(conversation={"platform": "telegram", "language": "unknown"})
     assert resolve_for_conversation(
         CID, inbox_store=store, episodic_store=epi, memory_key="tg:1", cfg=CFG, now=NOW) is None
+
+
+# ---------------------------------------------------------------------------
+# 信号 1b：入站原文挖掘（聊天里说过但没进 episodic）
+# ---------------------------------------------------------------------------
+
+def test_inbound_text_extract_contract():
+    assert stated_place_from_inbound_text("我在曼谷") == "曼谷"
+    assert stated_place_from_inbound_text("我住在洛杉矶") == "洛杉矶"
+    assert stated_place_from_inbound_text("I'm currently based in Manila")
+    assert stated_place_from_inbound_text("今天曼谷下雨") == ""          # 路过提及
+    assert stated_place_from_inbound_text("我在咖啡馆") == ""            # 不在 35 城白名单
+    assert stated_place_from_inbound_text("我在纽约出差") == ""          # 出行
+    assert stated_place_from_inbound_text("I'm from Bangkok") == ""     # 老家
+    assert stated_place_from_inbound_text("明天去东京玩") == ""
+    assert stated_place_from_inbound_text("") == ""
+    assert stated_place_from_inbound_text(None) == ""
+
+
+def test_inbound_i_am_in_city_becomes_replace_clock_without_memory():
+    """记忆槽空、聊天里说了「我在曼谷」→ 仍是 stated_city replace（海外择时的主漏斗）。"""
+    store = FakeInboxStore(
+        conversation={"platform": "telegram", "language": "unknown"},
+        messages=[{"direction": "in", "ts": NOW - 10, "text": "我在曼谷，这边好热"}],
+    )
+    clock = resolve_for_conversation(CID, inbox_store=store, cfg=CFG, now=NOW)
+    assert clock is not None
+    assert clock.source == "stated_city"
+    assert clock.trust == TRUST_REPLACE
+    assert clock.tz_name == "Asia/Bangkok"
+    assert dump_stats()["inbound_stated"] == 1
+
+
+def test_inbound_city_mention_without_locative_is_ignored():
+    store = FakeInboxStore(
+        conversation={"platform": "telegram", "language": "unknown"},
+        messages=[{"direction": "in", "ts": NOW - 10, "text": "曼谷那家店真好吃"}],
+    )
+    assert resolve_for_conversation(CID, inbox_store=store, cfg=CFG, now=NOW) is None
+
+
+def test_newer_inbound_city_overrides_older_memory():
+    """去年记忆说住北京、昨天聊天说我在曼谷 → 用最新入站（问候要对「此刻所在」）。"""
+    epi = FakeEpisodicStore([_residence_row("我住在北京", created_at=NOW - 365 * 86400)])
+    store = FakeInboxStore(
+        conversation={"platform": "telegram", "language": "zh"},
+        messages=[{"direction": "in", "ts": NOW - 3600, "text": "我在曼谷"}],
+    )
+    clock = resolve_for_conversation(
+        CID, inbox_store=store, episodic_store=epi, memory_key="tg:1", cfg=CFG, now=NOW)
+    assert clock.tz_name == "Asia/Bangkok"
+    assert dump_stats()["inbound_stated"] == 1
+
+
+def test_last_inbound_ts_busts_stale_db_cache():
+    """缓存是行为/负结果、对方之后开口了 → 必须重算，否则「我在曼谷」要等满 6h TTL。"""
+    store = FakeInboxStore(
+        conversation={"platform": "telegram", "language": "unknown"},
+        messages=[{"direction": "in", "ts": NOW - 10, "text": "我在曼谷"}],
+        meta=_fresh_meta(source="", tz_hint="", tz_confidence=-1,
+                         tz_country="", tz_offset=0, tz_resolved_at=NOW - 3600),
+    )
+    # 不传 last_inbound_ts → 负结果缓存命中，挖不到入站
+    assert resolve_for_conversation(CID, inbox_store=store, cfg=CFG, now=NOW) is None
+    assert dump_stats()["cache_hit_db"] == 1
+    clear_cache_for_tests()
+    reset_stats_for_tests()
+    clock = resolve_for_conversation(
+        CID, inbox_store=store, cfg=CFG, now=NOW, last_inbound_ts=NOW - 10)
+    assert clock is not None and clock.source == "stated_city"
+    assert dump_stats()["cache_stale_inbound"] == 1
+    assert dump_stats()["inbound_stated"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -634,7 +707,8 @@ def test_utc_hours_are_utc_not_server_local():
 def test_dump_stats_field_contract_and_isolation():
     snapshot = dump_stats()
     assert set(snapshot) == {"cache_hit_mem", "cache_hit_db", "resolved", "unresolved",
-                             "persist_ok", "persist_fail", "disabled"}
+                             "persist_ok", "persist_fail", "disabled",
+                             "inbound_stated", "cache_stale_inbound"}
     assert all(v == 0 for v in snapshot.values())
     snapshot["resolved"] = 999                 # 返回的是拷贝
     assert dump_stats()["resolved"] == 0

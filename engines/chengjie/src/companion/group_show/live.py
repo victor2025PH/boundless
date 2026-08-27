@@ -63,6 +63,7 @@ from src.companion.group_show.director import GroupShowDirector
 from src.companion.group_show.ecp import project_history_for
 from src.companion.group_show.naturalness import line_similarity, naturalness_score
 from src.companion.group_show.pacing import beat_interval_seconds
+from src.companion.group_show.platform_policy import platform_live_allowed
 from src.companion.group_show.playbook import (
     Casting,
     Playbook,
@@ -307,6 +308,12 @@ class LivePlan:
     solo: bool = False
     #: 此刻是否落在禁演时段（独立信号：即使因缺角先红，运营也要看见「同时还在静默窗」）
     in_quiet_hours: bool = False
+    #: 本平台是否允许真发（``platform_policy`` 红区治理判定，单一事实源）——独立信号，
+    #: 与 in_quiet_hours 同理：即便因缺角先红，运营也要看见「而且这平台本来就是红区」。
+    #: 缺省放行（telegram 现状）。
+    platform_allowed: bool = True
+    #: 不放行时的原因码（platform_red_zone / platform_unvetted / platform_off；放行＝空）。
+    platform_reason: str = ""
 
 
 def is_solo_playbook(playbook: Any) -> bool:
@@ -367,6 +374,20 @@ def plan_live(
         return plan
     plan.armed = True
 
+    # 平台红区治理（platform_policy 单一事实源，与全局 enabled 正交）：不放行的平台
+    # 在此**先 warn**，选角全绿后再升级成硬拒——顺序同 quiet_hours，不遮挡缺角诊断
+    # （运营既要知道「这平台不让真发」，也要顺便看到「你的号够不够」）。挂在引擎里
+    # 而不是路由里，是为了让**每一个**调用方（web / CLI / 将来新入口）都过同一道闸。
+    # telegram 缺省放行，此分支恒不触发，行为与本功能上线前逐字节一致。
+    plan.platform_allowed, plan.platform_reason = platform_live_allowed(
+        app_config, platform)
+    if not plan.platform_allowed:
+        plan.warnings.append(
+            f"warn: 平台 {platform} 缺省不允许真发（{plan.platform_reason}；"
+            "选角过关后仍会拒演）——红区治理：messenger 网页链风控最高、"
+            "未验证平台先排练后开闸。要解禁配 companion.group_show."
+            f"platform_risk.{platform}.live 为 true")
+
     quiet = live_quiet_hours(app_config)
     at_hour = hour if hour is not None else _local_hour(now)
     plan.in_quiet_hours = bool(in_quiet_hours(at_hour, quiet_hours=quiet))
@@ -422,6 +443,17 @@ def plan_live(
             plan.warnings.append(
                 "warn: 单号场景请改用 solo_* 剧本（如 solo_matrixx），"
                 "不要拿四角剧本硬上")
+        return plan
+
+    # 选角全绿之后，平台红区先于禁演时段升级成硬拒：平台被治理禁演是比「现在
+    # 几点」更根本的拒因（换个时间也演不了），故排在 quiet_hours 之前定案。
+    if not plan.platform_allowed:
+        plan.reason = "platform_disabled"
+        plan.warnings.append(
+            f"平台 {platform} 不允许真发（{plan.platform_reason}）：红区治理——"
+            "messenger 走网页自动化风控最高，新平台未验证群语义前先排练。"
+            "排练/排班/体检不受影响；要真发请与运营确认后配"
+            f" companion.group_show.platform_risk.{platform}.live 为 true")
         return plan
 
     # 选角全绿之后，禁演时段才升级成硬拒——此前只是 warn，不遮挡缺角诊断。

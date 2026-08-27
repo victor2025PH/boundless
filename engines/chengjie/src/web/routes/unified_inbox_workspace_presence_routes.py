@@ -19,13 +19,18 @@ from fastapi import Depends, HTTPException, Request
 from src.inbox.normalizer import conv_id
 from src.web.routes.unified_inbox_auth import _session_agent
 from src.workspace.agent_coordinator import AgentCoordinator, web_funnel_snapshot
+from src.workspace.presence_policy import counts_license_seat
 from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
 
 
-def _online_agent_ids(request: Request, within_sec: int = 120) -> list:
-    """近 within_sec 秒内 status=online 的坐席 id（席位强制用）。store 不可用 → []。"""
+def _seat_agent_ids(request: Request, within_sec: int = 120) -> list:
+    """近 within_sec 秒内**占席位**的坐席 id（席位强制用）。store 不可用 → []。
+
+    2026-08-19 起口径＝presence_policy.counts_license_seat（在线+忙碌都计席）：
+    此前只数 online，「忙碌」坐席满功能使用软件却不占席位，是授权绕过缝隙。
+    """
     try:
         from src.web.routes.unified_inbox_services import _inbox_store
         inbox = _inbox_store(request)
@@ -33,18 +38,18 @@ def _online_agent_ids(request: Request, within_sec: int = 120) -> list:
             return []
         rows = inbox.list_agent_presence(active_within_sec=within_sec)
         return [str(r.get("agent_id") or "") for r in rows
-                if str(r.get("status") or "") == "online"]
+                if counts_license_seat(r.get("status"))]
     except Exception:
-        logger.debug("统计在线坐席失败（席位强制放行）", exc_info=True)
+        logger.debug("统计占席坐席失败（席位强制放行）", exc_info=True)
         return []
 
 
 def _seat_block(request: Request, agent_id: str) -> bool:
-    """该坐席上线是否应被授权席位拦截。任何异常 → False（放行，绝不误伤）。"""
+    """该坐席进入占席状态是否应被授权席位拦截。任何异常 → False（放行，绝不误伤）。"""
     try:
         from src.licensing import get_license_manager, seat_block_on_online
         st = get_license_manager().status()
-        return bool(seat_block_on_online(st, _online_agent_ids(request), agent_id))
+        return bool(seat_block_on_online(st, _seat_agent_ids(request), agent_id))
     except Exception:
         logger.debug("席位强制判定失败（放行）", exc_info=True)
         return False
@@ -79,8 +84,10 @@ def register_workspace_presence_routes(app, *, api_auth, config_manager=None) ->
         agent = _session_agent(request)
         coord = AgentCoordinator.from_request(request, config_manager)
         # J·席位强制（License enforce）：仅当 licensing.enforce 开 + 授权有限席位时，
-        # 新坐席「上线」超额 → 403。enforce 关 / seats=0 → 恒放行（零破坏）。
-        if status == "online" and _seat_block(request, agent["agent_id"]):
+        # 新坐席进入**占席状态**（在线/忙碌，policy 单源）超额 → 403。
+        # enforce 关 / seats=0 → 恒放行（零破坏）。已占席坐席换占席档不会自拦
+        # （seat_block_on_online 的 prospective 语义把自己剔重）。
+        if counts_license_seat(status) and _seat_block(request, agent["agent_id"]):
             raise HTTPException(
                 status_code=403,
                 detail="seat_limit:" + tr(request, "err.ws.seat_limit_reached"),
@@ -103,10 +110,23 @@ def register_workspace_presence_routes(app, *, api_auth, config_manager=None) ->
             pass
         agent = _session_agent(request)
         coord = AgentCoordinator.from_request(request, config_manager)
+        hb_status = str(body.get("status") or "")
+        # J·席位强制补缝（2026-08-19）：心跳携带的「升态」（不占席 → 占席）同样过
+        # 席检——否则被拒上线的客户端只要持续发 online 心跳就绕过席位（未刷新的
+        # 旧缓存页正是这种形态）。拦下时不整拒心跳（保活仍要），只降为 ''=保留现状。
+        if hb_status:
+            try:
+                prev_st = str((coord.get_presence(agent["agent_id"]) or {}).get("status") or "")
+                if (counts_license_seat(hb_status)
+                        and not counts_license_seat(prev_st)
+                        and _seat_block(request, agent["agent_id"])):
+                    hb_status = ""
+            except Exception:
+                logger.debug("heartbeat 席位补缝判定失败（放行）", exc_info=True)
         row = coord.heartbeat(
             agent["agent_id"],
             display_name=str(body.get("display_name") or agent["display_name"]),
-            status=str(body.get("status") or ""),
+            status=hb_status,
         )
         # P2 多开观测：心跳可携带窗口指纹 {id, path, standby}（__wsMultiWin 生成），
         # 服务端按坐席聚合窗口数。老客户端不带该字段＝零变化。

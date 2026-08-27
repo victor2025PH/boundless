@@ -21,7 +21,13 @@
 .mb-row-hi td{background:color-mix(in srgb, var(--blue,#3b82f6) 10%, transparent)}
 .mb-row-hi td:first-child{font-weight:600}
 #mb-activate:target{outline:2px solid var(--blue,#3b82f6);outline-offset:2px}
-#mb-claim:target,#mb-invite:target,#mb-cs:target{outline:2px solid var(--blue,#3b82f6);outline-offset:2px}
+#mb-claim:target,#mb-invite:target,#mb-cs:target,#mb-hero:target,#mb-more:target,#mb-trend:target,#mb-matrix:target{outline:2px solid var(--blue,#3b82f6);outline-offset:2px}
+/* 锚点导航（P0 引导 2026-08-21）：10 张卡的长页需要一行「去哪找什么」。
+   字号守 .75rem 下限（admin-theme 可读性纪律）。 */
+.mb2-nav{display:flex;gap:.45rem;flex-wrap:wrap;margin:0 0 1rem}
+.mb2-nav a{font-size:.75rem;padding:.24rem .68rem;border-radius:999px;border:1px solid var(--bd,#e5e7eb);
+  color:var(--t2);text-decoration:none;white-space:nowrap;transition:.15s}
+.mb2-nav a:hover{color:var(--blue,#3b82f6);border-color:var(--blue,#3b82f6)}
 .mb-hero{display:flex;gap:1.4rem;align-items:center;padding:1.1rem 1.3rem;flex-wrap:wrap}
 .mb-hero-num{font-size:2rem;font-weight:800;line-height:1.15;letter-spacing:.3px}
 .mb-chip{display:inline-block;padding:.14rem .55rem;border-radius:999px;font-size:.68rem;
@@ -49,7 +55,26 @@
 {% set lvl_color = 'var(--red,#ef4444)' if lvl == 'out' else ('var(--amber,#d97706)' if lvl == 'low' else 'var(--green,#16a34a)') %}
 
 <div style="max-width:980px">
-  <p style="color:var(--t2);margin:.2rem 0 1rem">{{ (i18n or {}).get('mb_subtitle', '当前授权档位、功能矩阵与用量一览') }}</p>
+  <p style="color:var(--t2);margin:.2rem 0 .7rem">{{ (i18n or {}).get('mb_subtitle', '当前授权档位、功能矩阵与用量一览') }}</p>
+
+  {#- 尝鲜（未注册）接回横幅（P0 引导 2026-08-21）：首启向导里跳过领取的人，
+      在这里被接回领取流程；额度数字用本机真值（licensing.trial 可配，勿写死）。 -#}
+  {% if is_trial_src and can_claim %}
+  <div class="mb-from-hint" id="mb2-trial-banner">
+    <span>🎁 {{ ((i18n or {}).get('mb2_trial_banner', '当前是尝鲜额度（{n} 字符 · 未注册）。留个联系方式即可免费领 100 万字符——无期限、绑定本机。')).format(n='{:,}'.format(inc)) }}</span>
+    <a class="mb-from-cta" href="#mb-claim">{{ (i18n or {}).get('mb2_trial_banner_cta', '立即领取 ↓') }}</a>
+  </div>
+  {% endif %}
+
+  {#- 锚点导航（P0 引导）：长页寻路；条件项跟随对应卡片的渲染条件，不出死锚。 -#}
+  <nav class="mb2-nav">
+    <a href="#mb-hero">{{ (i18n or {}).get('mb2_nav_quota', '额度总览') }}</a>
+    <a href="#mb-more">{{ (i18n or {}).get('mb_more_title', '获取更多字符') }}</a>
+    {% if can_claim %}<a href="#mb-claim">{{ (i18n or {}).get('mb_claim_title', '注册领取免费额度') }}</a>{% endif %}
+    {% if user_role == 'master' %}<a href="#mb-activate">{{ (i18n or {}).get('mb_activate_title', '激活授权') }}</a>{% endif %}
+    {% if mb.quota.history %}<a href="#mb-trend">{{ (i18n or {}).get('mb_trend_title', '用量趋势') }}</a>{% endif %}
+    <a href="#mb-matrix">{{ (i18n or {}).get('mb_matrix_title', '功能矩阵') }}</a>
+  </nav>
 
   {% if not gate.enabled %}
   <div class="card" style="border-left:3px solid var(--amber);margin-bottom:1rem">
@@ -58,7 +83,7 @@
   {% endif %}
 
   {#- ═══ 额度英雄区：环形进度 + 剩余大字（这页存在的第一理由是回答「我还剩多少」） ═══ -#}
-  <div class="card" style="margin-bottom:1.2rem{% if lvl == 'out' %};border-left:3px solid var(--red,#ef4444){% elif lvl == 'low' %};border-left:3px solid var(--amber,#d97706){% endif %}">
+  <div class="card" id="mb-hero" style="margin-bottom:1.2rem{% if lvl == 'out' %};border-left:3px solid var(--red,#ef4444){% elif lvl == 'low' %};border-left:3px solid var(--amber,#d97706){% endif %}">
     <div class="mb-hero">
       <div style="flex:0 0 auto;position:relative;width:128px;height:128px">
         <svg width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="quota">
@@ -111,6 +136,11 @@
           {% elif inc > 0 %}{{ (i18n or {}).get('mb_hero_state_ok', '额度充足') }}{% endif %}
           {% if is_trial_src and q.trial_hours_left is not none and not q.exceeded %}
           <span style="font-weight:400;color:var(--t2)">· {{ ((i18n or {}).get('mb_trial_line', '首启体验档 · 还剩 {h} 小时')).format(h=q.trial_hours_left) }}</span>
+          {% endif %}
+          {#- low/out 前置引导（P1-L 缩水版）：三出路卡就在下方，给一步直达锚点即可，
+              不在英雄区复制按钮组（重复建设）。 -#}
+          {% if lvl in ('low', 'out') %}
+          <a href="#mb-more" style="font-weight:600;font-size:.76rem;margin-left:.35rem;color:var(--blue,#3b82f6);text-decoration:none">{{ (i18n or {}).get('mb2_more_jump', '获取更多 ↓') }}</a>
           {% endif %}
         </div>
         {% if lvl == 'out' %}
@@ -166,7 +196,7 @@
   </div>
 
   {#- ═══ 获取更多字符：邀请（免费）/ 客服（真人）/ 购买（即时）三条出路并排 ═══ -#}
-  <div class="card" style="margin-bottom:1.2rem">
+  <div class="card" id="mb-more" style="margin-bottom:1.2rem">
     <div class="card-h"><h3>{{ (i18n or {}).get('mb_more_title', '获取更多字符') }}</h3></div>
     <div style="padding:.9rem 1rem">
       <div class="mb-more">
@@ -489,7 +519,7 @@
 
   {#- 用量趋势（P5）：按月字符用量柱状图，服务端渲染零 JS；无记录/不限量自动隐藏。 -#}
   {% if mb.quota.history %}
-  <div class="card" style="margin-bottom:1.2rem">
+  <div class="card" id="mb-trend" style="margin-bottom:1.2rem">
     <div class="card-h"><h3>{{ (i18n or {}).get('mb_trend_title', '用量趋势') }}</h3></div>
     <div style="padding:.9rem 1.1rem 1rem">
       {% set mx = mb.quota.history | map(attribute='chars') | max %}
@@ -514,7 +544,7 @@
   {% endif %}
 
   {#- 功能矩阵 -#}
-  <div class="card">
+  <div class="card" id="mb-matrix">
     <div class="card-h"><h3>{{ (i18n or {}).get('mb_matrix_title', '功能矩阵') }}</h3></div>
     {#- E4/E5 来源引导：锁定页/锁标 302 带 ?from=<族> → 一句人话 + 行高亮 + 购买 CTA -#}
     {% if from_hint %}<div class="mb-from-hint"><span>💡 {{ from_hint }}</span>
@@ -624,6 +654,19 @@
   var T_FLAGGED = {{ (i18n or {}).get('mb_invite_flagged', '{n} 条邀请在人工核对中')|tojson }};
   var T_RULE = {{ (i18n or {}).get('mb_invite_rule', '好友注册各得 {b} 字符；好友真实用满 {q} 字符后你再得 {r} 字符（上限 {cap} 人）。')|tojson }};
   var T_NEED = {{ (i18n or {}).get('mb_invite_need_claim', '先在下方「注册领取免费额度」，就会生成你的专属邀请码。')|tojson }};
+  /* 里程碑 / 首充返利 / 分享海报（实施50 P1；旧后端无新字段时相关块自动不渲染） */
+  var T_MILE_T = {{ (i18n or {}).get('mb_invite_milestones_t', '里程碑加码')|tojson }};
+  var T_MILE_ROW = {{ (i18n or {}).get('mb_invite_milestone_row', '邀满 {at} 人 → 额外 +{chars} 字符')|tojson }};
+  var T_MILE_DONE = {{ (i18n or {}).get('mb_invite_milestone_done', '已入账')|tojson }};
+  var T_MILE_NEXT = {{ (i18n or {}).get('mb_invite_next_milestone', '再邀 {n} 人达标，解锁下一档加码')|tojson }};
+  var T_BONUS_EARNED = {{ (i18n or {}).get('mb_invite_bonus_earned', '里程碑 / 返利已入账 {chars} 字符')|tojson }};
+  var T_REBATE_RULE = {{ (i18n or {}).get('mb_invite_rebate_rule', '好友首笔充值，你再得其金额 10% 的等值字符（7 天观察期后自动到账，单笔封顶 100U 等值）。')|tojson }};
+  var T_POSTER_BTN = {{ (i18n or {}).get('mb_invite_poster_btn', '🖼️ 生成分享海报')|tojson }};
+  var T_POSTER_SAVED = {{ (i18n or {}).get('mb_invite_poster_saved', '海报已下载，发给好友吧')|tojson }};
+  var T_POSTER_FAIL = {{ (i18n or {}).get('mb_invite_poster_fail', '生成失败，直接复制邀请码也一样用')|tojson }};
+  var T_P_HEADLINE = {{ (i18n or {}).get('mb_poster_headline', '送你 {b} 字符免费 AI 额度')|tojson }};
+  var T_P_STEPS = {{ (i18n or {}).get('mb_poster_steps', '① 下载智聊 ChatX　② 首启向导填入邀请码　③ 双方奖励自动到账')|tojson }};
+  var T_P_NOTE = {{ (i18n or {}).get('mb_poster_note', '注册再送 10,000 体验 Token · 标准翻译永久免费')|tojson }};
   function esc(s){
     return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
       .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -670,11 +713,40 @@
       }
       var st = d.stats || {};
       var earned = Number(st.chars_earned || 0);
+      var bonusEarned = Number(st.bonus_chars_earned || 0);
+      /* 里程碑阶梯（新后端才有 st.milestones；旧后端整块不渲染，绝不显示半截功能） */
+      var mileHtml = '';
+      if (Array.isArray(st.milestones) && st.milestones.length) {
+        var rows = '';
+        for (var i = 0; i < st.milestones.length; i++) {
+          var m = st.milestones[i] || {};
+          rows += '<div style="display:flex;justify-content:space-between;gap:.5rem;font-size:.72rem;'
+            + 'color:' + (m.rewarded ? 'var(--green,#059669)' : 'var(--t2)') + '">'
+            + '<span>' + esc(T_MILE_ROW.replace('{at}', String(m.at || 0))
+                                       .replace('{chars}', Number(m.chars || 0).toLocaleString())) + '</span>'
+            + (m.rewarded ? '<span>✓ ' + esc(T_MILE_DONE) + '</span>' : '')
+            + '</div>';
+        }
+        mileHtml = '<div style="border:1px solid var(--line,rgba(0,0,0,.08));border-radius:.5rem;padding:.5rem .6rem">'
+          + '<div style="font-size:.68rem;color:var(--t2);margin-bottom:.25rem">🏆 ' + esc(T_MILE_T) + '</div>'
+          + rows
+          + (st.next_milestone_need != null
+            ? '<div style="font-size:.68rem;color:var(--blue,#3b82f6);margin-top:.25rem">'
+              + esc(T_MILE_NEXT.replace('{n}', String(st.next_milestone_need))) + '</div>'
+            : '')
+          + '</div>'
+          + '<div class="mb-inline-msg" style="color:var(--t2)">' + esc(T_REBATE_RULE) + '</div>'
+          + (bonusEarned > 0
+            ? '<div class="mb-inline-msg" style="color:var(--green,#059669);font-weight:600">'
+              + esc(T_BONUS_EARNED.replace('{chars}', bonusEarned.toLocaleString())) + '</div>'
+            : '');
+      }
       var html = ''
         + '<div><div style="font-size:.68rem;color:var(--t2);margin-bottom:.15rem">' + esc(T_CODE) + '</div>'
         + '<div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">'
         + '<span class="mb-code">' + esc(d.code || '') + '</span>'
         + '<button id="mb-inv-copy-code" class="btn btn-sm" type="button">' + esc(T_COPY) + '</button>'
+        + '<button id="mb-inv-poster" class="btn btn-sm" type="button">' + esc(T_POSTER_BTN) + '</button>'
         + '</div></div>'
         + '<div><div style="font-size:.68rem;color:var(--t2);margin-bottom:.15rem">' + esc(T_LINK) + '</div>'
         + '<div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">'
@@ -693,12 +765,104 @@
                     .replace('{q}', Number(d.qualify_chars || 0).toLocaleString())
                     .replace('{r}', Number(d.inviter_bonus || 0).toLocaleString())
                     .replace('{cap}', String(st.cap_total || '')))
-        + '</div>';
+        + '</div>'
+        + mileHtml;
       body.innerHTML = html;
       wireCopy('mb-inv-copy-code', String(d.code || ''));
       wireCopy('mb-inv-copy-link', String(d.share_url || ''));
+      wirePoster(d);
     })
     .catch(function(){ card.style.display = 'none'; });
+
+  /* ── 分享海报生成器（canvas → PNG 下载；纯前端零依赖，失败绝不阻断卡片其余功能）──
+     刻意不放二维码：邀请机制的核心是「首启向导填码」，大号邀请码 + 链接文字
+     即完整信息；二维码需要引码库，收益不抵引入面（P2 视传播数据再议）。 */
+  function rr(g, x, y, w, h, r){
+    g.beginPath();
+    g.moveTo(x + r, y);
+    g.arcTo(x + w, y, x + w, y + h, r);
+    g.arcTo(x + w, y + h, x, y + h, r);
+    g.arcTo(x, y + h, x, y, r);
+    g.arcTo(x, y, x + w, y, r);
+    g.closePath();
+  }
+  function wirePoster(d){
+    var btn = document.getElementById('mb-inv-poster');
+    if (!btn) return;
+    btn.addEventListener('click', function(){
+      beaconShare();
+      try {
+        var c = document.createElement('canvas');
+        c.width = 1080; c.height = 1350;
+        var g = c.getContext('2d');
+        var grad = g.createLinearGradient(0, 0, 1080, 1350);
+        grad.addColorStop(0, '#241a33');
+        grad.addColorStop(0.55, '#141122');
+        grad.addColorStop(1, '#12233a');
+        g.fillStyle = grad;
+        g.fillRect(0, 0, 1080, 1350);
+        /* 顶部品牌 */
+        g.fillStyle = '#fcd34d';
+        g.font = '600 44px "PingFang SC","Microsoft YaHei",sans-serif';
+        g.textAlign = 'center';
+        g.fillText('智聊 ChatX', 540, 130);
+        g.fillStyle = 'rgba(230,237,243,.55)';
+        g.font = '30px "PingFang SC","Microsoft YaHei",sans-serif';
+        g.fillText('AI ' + String.fromCharCode(0x00B7) + ' 多平台客服成交系统', 540, 185);
+        /* 主标（送字符） */
+        g.fillStyle = '#ffffff';
+        g.font = '700 64px "PingFang SC","Microsoft YaHei",sans-serif';
+        g.fillText(T_P_HEADLINE.replace('{b}', Number(d.invitee_bonus || 0).toLocaleString()), 540, 330);
+        g.font = '34px "PingFang SC","Microsoft YaHei",sans-serif';
+        g.fillStyle = 'rgba(230,237,243,.75)';
+        g.fillText(T_P_NOTE, 540, 400);
+        /* 邀请码框 */
+        g.strokeStyle = 'rgba(252,211,77,.65)';
+        g.lineWidth = 4;
+        rr(g, 190, 500, 700, 190, 26);
+        g.stroke();
+        g.fillStyle = 'rgba(252,211,77,.08)';
+        rr(g, 190, 500, 700, 190, 26);
+        g.fill();
+        g.fillStyle = 'rgba(230,237,243,.6)';
+        g.font = '30px "PingFang SC","Microsoft YaHei",sans-serif';
+        g.fillText(T_CODE, 540, 555);
+        g.fillStyle = '#fcd34d';
+        g.font = '700 96px Consolas,Menlo,monospace';
+        g.fillText(String(d.code || ''), 540, 660);
+        /* 步骤 */
+        g.fillStyle = 'rgba(230,237,243,.85)';
+        g.font = '32px "PingFang SC","Microsoft YaHei",sans-serif';
+        var steps = String(T_P_STEPS).split(/\u3000|  /).filter(function(s){ return s.trim(); });
+        for (var i = 0; i < steps.length && i < 4; i++) {
+          g.fillText(steps[i].trim(), 540, 820 + i * 70);
+        }
+        /* 链接 + 底部 */
+        g.fillStyle = '#7dd3fc';
+        g.font = '600 40px Consolas,Menlo,monospace';
+        g.fillText(String(d.share_url || '').replace(/^https?:\/\//, ''), 540, 1140);
+        g.fillStyle = 'rgba(230,237,243,.4)';
+        g.font = '28px "PingFang SC","Microsoft YaHei",sans-serif';
+        g.fillText('bd2026.cc', 540, 1270);
+        c.toBlob(function(blob){
+          if (!blob) { btn.textContent = T_POSTER_FAIL; return; }
+          var a = document.createElement('a');
+          var url = URL.createObjectURL(blob);
+          a.href = url;
+          a.download = 'chatx-invite-' + String(d.code || '').replace(/[^A-Z0-9-]/gi, '') + '.png';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
+          btn.textContent = T_POSTER_SAVED;
+          setTimeout(function(){ btn.textContent = T_POSTER_BTN; }, 2600);
+        }, 'image/png');
+      } catch (e) {
+        btn.textContent = T_POSTER_FAIL;
+        setTimeout(function(){ btn.textContent = T_POSTER_BTN; }, 2600);
+      }
+    });
+  }
 })();
 </script>
 <script>
@@ -829,6 +993,24 @@
       show(T_FAIL + 'network', 'err');
       btn.disabled = false;
     });
+  });
+
+  /* ── 尝鲜接回横幅归因（P2 埋点 claim_banner）：点 CTA 记一次（会话级一次），
+     并顺手把焦点送进联系方式输入框——锚点跳转省下用户再点一次的动作。
+     事件走官方漏斗白名单（trial_claim_client.FUNNEL_EVENTS），旧后端拒收=静默丢，
+     绝不影响锚点跳转本身。 */
+  var bannerCta = document.querySelector('#mb2-trial-banner .mb-from-cta');
+  var _bannerBeaconed = false;
+  if (bannerCta) bannerCta.addEventListener('click', function(){
+    setTimeout(function(){ try { contact.focus(); } catch (e) {} }, 150);
+    if (_bannerBeaconed) return;
+    _bannerBeaconed = true;
+    try {
+      window.apiFetch('/api/admin/license/trial-funnel', {method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({event: 'claim_banner'})}, {timeoutMs: 8000})
+        .catch(function(){});
+    } catch (e) {}
   });
 })();
 </script>

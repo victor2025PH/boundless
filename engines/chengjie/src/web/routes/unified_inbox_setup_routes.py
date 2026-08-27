@@ -55,13 +55,45 @@ def _ai_primary_snapshot(config_manager, ai_client=None) -> Dict[str, Any]:
         effective = str(getattr(ai_client, "_primary_mode", None) or configured).strip().lower()
         if effective not in _AI_PRIMARY_MODES:
             effective = "cloud"
+    lock = ""
+    try:
+        from src.ai.ai_primary_audit import resolve_lock
+        lock = resolve_lock(ai)
+    except Exception:
+        lock = ""
     return {
         "configured": configured,
         "effective": effective,
         "local_ready": local_ready,
         "local_model": str((fb or {}).get("model") or "").strip() or None,
         "divergent": configured != effective,
+        # 老板锁（2026-08-22）：非空=档位锁死，越权切换被拒/被强制回锁值
+        "lock": lock,
+        "locked": bool(lock),
     }
+
+
+def _request_actor(request: "Request") -> str:
+    """审计行的操作者标识（session 用户名/ID → Bearer 壳 → unknown；绝不抛）。"""
+    try:
+        u = request.session.get("username") or request.session.get("user_id")
+        if u:
+            return f"user:{u}"
+    except Exception:
+        pass
+    try:
+        if (request.headers.get("Authorization") or "").startswith("Bearer "):
+            return "bearer-token"
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _request_ip(request: "Request") -> str:
+    try:
+        return str(request.client.host or "") if request.client else ""
+    except Exception:
+        return ""
 
 
 def _usage_tier_group(tier: str) -> str:
@@ -114,12 +146,22 @@ def _channel_health_snapshot() -> Dict[str, Any]:
     ``failed`` 这类「该有人去修」的意外掉线。（``abandoned``＝放弃的登录尝试，
     压根不在不健康集合里，天然不会到这。）
 
+    「期望在线」策略过滤（2026-08-27 状态中心 v2）：与看门狗催办**同一判据**
+    ``session_expected_online``——运营已登出（operator）/ 登录位已被接替
+    （superseded:*）/ 已删除 / 登录尝试幽灵（无注册表行的 msg_* 临时 id）一律
+    不亮。此前口径分裂：worker 重启用陈旧 cookie 重推一次 needs_login，就能把
+    处理完的号再点红（Calixa 僵尸的最后一条上游通路）。ops 卡走 ``dump()`` 原样
+    全量（管理员要看全部真相），本过滤只作用于坐席横幅。
+
     每条目尽力富集 ``name``（注册表 meta.self_name / label）——红条只写
     ``messenger:6158…`` 坐席不知道是谁掉线（2026-08-14 实录），有昵称才可操作。
+    另带 ``relogin_ts/relogin_by``（最近一次人工重登触发的痕迹）——多坐席值守
+    时「已有人在处理」全员可见，防同一个号被两个人各触发一遍。
     """
     try:
         from src.integrations.platform_session_health import (
             ensure_seeded_from_registry, get_platform_session_health,
+            session_expected_online,
         )
         ensure_seeded_from_registry()
         now = time.time()
@@ -133,6 +175,8 @@ def _channel_health_snapshot() -> Dict[str, Any]:
         for key, sess in get_platform_session_health().unhealthy_sessions().items():
             st = str(sess.get("status") or "")
             if st == "logged_out":
+                continue
+            if not session_expected_online(key):
                 continue
             platform, _, account_id = str(key).partition(":")
             since = (float(sess.get("unhealthy_since") or 0.0)
@@ -151,6 +195,8 @@ def _channel_health_snapshot() -> Dict[str, Any]:
                 "name": name[:48],
                 "status": st,
                 "down_min": int(max(0.0, now - since) // 60),
+                "relogin_ts": float(sess.get("last_relogin_ts") or 0.0),
+                "relogin_by": str(sess.get("last_relogin_by") or "")[:24],
             })
         items.sort(key=lambda it: -it["down_min"])
         return {"unhealthy": items, "count": len(items)}
@@ -497,20 +543,80 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
         if mode not in _AI_PRIMARY_MODES:
             return {"ok": False, "detail": tr(request, "err.setup.ai_primary_invalid")}
         ai_cfg = ((getattr(config_manager, "config", None) or {}).get("ai")) or {}
+        _pa_append = None
+        _lock = ""
+        try:
+            from src.ai.ai_primary_audit import append_event as _pa_append  # noqa: F811
+            from src.ai.ai_primary_audit import resolve_lock as _pa_lock
+            _lock = _pa_lock(ai_cfg)
+        except Exception:
+            _lock = ""
+        # 老板锁（2026-08-22）：与锁不符的切换一律拒绝 + 审计 + 告警。
+        # 解锁是显式人工动作（overlay 删改 ai.primary_lock），不给接口留后门。
+        if _lock and mode != _lock:
+            if _pa_append:
+                _pa_append(
+                    "switch_rejected", requested=mode, lock=_lock,
+                    actor=_request_actor(request), ip=_request_ip(request),
+                    via="endpoint")
+            try:
+                from src.integrations.shared.event_bus import get_event_bus
+                get_event_bus().publish("ai_primary_guard_alert", {
+                    "kind": "lock_rejected",
+                    "requested": mode,
+                    "lock": _lock,
+                    "actor": _request_actor(request),
+                    "rate_key": "ai_primary_guard:lock",
+                })
+            except Exception:
+                pass
+            return {
+                "ok": False,
+                "locked": True,
+                "detail": tr(request, "err.setup.ai_primary_locked", mode=_lock),
+                "primary": _ai_primary_snapshot(
+                    config_manager, getattr(request.app.state, "ai_client", None)),
+            }
         if mode != "cloud" and not _local_endpoint_ready(ai_cfg):
             return {"ok": False, "detail": tr(request, "err.setup.ai_primary_need_local")}
+        _mode_before = str(ai_cfg.get("primary") or "cloud").strip().lower()
         ok, msg = config_manager.set_overlay_flag("ai.primary", mode)
         if not ok:
             return {"ok": False, "detail": tr(
                 request, "err.setup.ai_primary_save_failed", reason=msg)}
         ai_ready = await reload_ai_runtime(request.app, config_manager)
         ai_client = getattr(request.app.state, "ai_client", None)
+        if _pa_append:
+            _pa_append(
+                "switch_saved", mode_from=_mode_before, mode_to=mode,
+                actor=_request_actor(request), ip=_request_ip(request),
+                via="endpoint", ai_ready=bool(ai_ready))
         return {
             "ok": True,
             "detail": tr(request, "setup.ai_primary.saved"),
             "ai_ready": bool(ai_ready),
             "primary": _ai_primary_snapshot(config_manager, ai_client),
         }
+
+    @app.get("/api/setup/ai-primary/audit")
+    async def api_setup_ai_primary_audit(request: Request):
+        """主链切换审计台账（最近 50 行）+ 当前锁态（supervisor/壳专属）。
+
+        2026-08-22 沉淀：此前切换不留痕，「谁把主链翻回 local_only」查无对证。
+        """
+        api_auth(request)
+        _require_supervisor_or_shell(request)
+        rows: list = []
+        lock = ""
+        try:
+            from src.ai.ai_primary_audit import read_tail, resolve_lock
+            rows = read_tail(50)
+            ai_cfg = ((getattr(config_manager, "config", None) or {}).get("ai")) or {} \
+                if config_manager is not None else {}
+            lock = resolve_lock(ai_cfg)
+        except Exception:
+            rows = []
+        return {"ok": True, "lock": lock, "locked": bool(lock), "rows": rows}
 
     @app.post("/api/setup/ai-key")
     async def api_setup_ai_key_save(request: Request):
@@ -683,6 +789,33 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
             tenant_notice = read_tenant_notice()
         except Exception:
             tenant_notice = None
+        # P1 2026-08-23 急停可见化：全局急停摘要随同一 60s 轮询捎带（零新增轮询）。
+        # 顶栏冻结条据此渲染——收件箱横幅只覆盖「打开着的会话」，全局急停时坐席
+        # 不该等点进会话才发现。只读既有单例（status_snapshot fail-open），
+        # 无敏感字段（scope/来源/恢复时刻；reason 本就会显示给坐席横幅）。
+        kill_switch = {"active_scopes": 0, "global_active": False}
+        try:
+            from src.ops.kill_switch import (
+                GLOBAL_SCOPE,
+                freeze_source,
+                status_snapshot,
+            )
+            _ks_items = status_snapshot()
+            _ks_global = next(
+                (i for i in _ks_items if i.get("scope") == GLOBAL_SCOPE), None)
+            kill_switch = {
+                "active_scopes": len(_ks_items),
+                "global_active": bool(_ks_global),
+            }
+            if _ks_global:
+                _src, _cause = freeze_source(
+                    _ks_global.get("actor"), _ks_global.get("reason"))
+                kill_switch["source"] = _src
+                kill_switch["cause"] = _cause
+                kill_switch["expires_at"] = (
+                    float(_ks_global.get("expires_at") or 0) or None)
+        except Exception:
+            kill_switch = {"active_scopes": 0, "global_active": False}
         ai_client = getattr(request.app.state, "ai_client", None)
         # 主对话模式（cloud/local/local_only）——坐席条只读 effective，不含密钥/端点。
         primary_mode = "cloud"
@@ -700,7 +833,8 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
                     "primary": primary_mode,
                     "channels": channels, "instance_restart": restart_banner,
                     "tenant_notice": tenant_notice,
-                    "delivery_block": delivery_block}
+                    "delivery_block": delivery_block,
+                    "kill_switch": kill_switch}
         try:
             snap = ai_client.degradation_snapshot()
         except Exception:
@@ -708,11 +842,13 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
                     "primary": primary_mode,
                     "channels": channels, "instance_restart": restart_banner,
                     "tenant_notice": tenant_notice,
-                    "delivery_block": delivery_block}
+                    "delivery_block": delivery_block,
+                    "kill_switch": kill_switch}
         return {"ok": True, **snap, "primary": primary_mode,
                 "channels": channels, "instance_restart": restart_banner,
                 "tenant_notice": tenant_notice,
-                "delivery_block": delivery_block}
+                "delivery_block": delivery_block,
+                "kill_switch": kill_switch}
 
     # 「AI 本周替你完成 N 条回复」坐席可读摘要（2026-08-14）。/api/report/weekly 是
     # 主管专属重报表，普通坐席 403 → 收件箱空态 ROI 行对最该被激励的人反而不显示。

@@ -582,6 +582,32 @@ def test_413_x_body_limit_reflects_per_path_override(auth_client, app) -> None:
     assert int(cap) == 4 * 1024 * 1024, f"write endpoint should report 4MB cap, got {cap}"
 
 
+# ════════════════════════════════════════════════════════════════════════
+# P4（2026-08-18）媒体翻译上传口 body 上限代码级缺省
+# 事故：2MB 全局默认把 base64 媒体上传（音频 25MB/视频 50MB 路由级上限）拦腰
+# 斩断——1.85MB 参考音 b64=2.47MB 被 413，前端却承诺 25MB。
+# ════════════════════════════════════════════════════════════════════════
+
+
+def test_media_translate_endpoints_accept_over_2mb(auth_client, app) -> None:
+    """语音上传口收 3MB body 不得 413（业务层可拒，如 asr_disabled——那是第二道闸）。"""
+    app.state.web_body_oversize_counter = {}
+    payload = {"audio_b64": "data:audio/wav;base64," + "A" * (3 * 1024 * 1024),
+               "target_lang": "zh"}
+    r = auth_client.post("/api/unified-inbox/translate-voice", json=payload)
+    assert r.status_code != 413, \
+        f"voice upload should accept 3MB (36MB default override); got {r.status_code}"
+
+
+def test_media_translate_voice_caps_at_36mb(auth_client, app) -> None:
+    """语音上传口 >36MB 仍 413（覆写是放宽不是放开），X-Body-Limit 回报 36MB。"""
+    app.state.web_body_oversize_counter = {}
+    payload = {"audio_b64": "A" * (37 * 1024 * 1024)}
+    r = auth_client.post("/api/unified-inbox/translate-voice", json=payload)
+    assert r.status_code == 413
+    assert int(r.headers.get("x-body-limit") or 0) == 36 * 1024 * 1024
+
+
 def test_metrics_body_limits_dict_loaded(auth_client, app, config_manager) -> None:
     """P26-C: body_limits in config should be applied at app build time.
 

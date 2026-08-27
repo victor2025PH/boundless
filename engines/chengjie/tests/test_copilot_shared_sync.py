@@ -65,11 +65,22 @@ def test_same_bytes():
 
 
 def test_inbox_script_srcs_resolve():
-    """宿主引用的 /copilot/*.js 必须真实存在（改名/删除后 404=组件静默消失）。"""
+    """宿主引用的 /copilot/*.js 必须真实存在（改名/删除后 404=组件静默消失）。
+
+    扩展语 overlay（zh_hant P3）：src 里的 ``{{ ui_lang }}`` 按模板条件元组展开逐语核档
+    ——per-lang 文件由 scripts/i18n_desktop_ext.py 生成，删任何一语的文件同样红。
+    """
     html = INBOX_TPL.read_text(encoding="utf-8")
     srcs = re.findall(r'src="/copilot/([^"?]+)(?:\?[^"]*)?"', html)
     assert srcs, "unified_inbox.html 未引用任何 /copilot 资源（结构变了？更新本门禁）"
-    missing = [s for s in sorted(set(srcs)) if not (WEB_TREE / s).is_file()]
+    missing = []
+    for s in sorted(set(srcs)):
+        if "{{ ui_lang }}" in s:
+            for lg in ("zh_hant", "vi", "th", "id"):
+                if not (WEB_TREE / s.replace("{{ ui_lang }}", lg)).is_file():
+                    missing.append(s.replace("{{ ui_lang }}", lg))
+        elif not (WEB_TREE / s).is_file():
+            missing.append(s)
     assert not missing, f"宿主引用了不存在的共享组件文件: {missing}"
 
 

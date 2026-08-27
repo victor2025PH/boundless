@@ -34,6 +34,7 @@ import { fileURLToPath } from "url";
 import path from "path";
 import fs from "fs";
 import { chromium } from "playwright";
+import { parseIgThreadRow, threadPreviewKey } from "./ig_threads.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SESSIONS_DIR = process.env.IG_SESSIONS_DIR || path.join(__dirname, "sessions");
@@ -187,8 +188,13 @@ async function ingestMessage(accountId, payload) {
   });
 }
 
-// ── 入站轮询（首版：读 DM 收件箱线程列表 + 末条预览；逐条正文读取为后续增强）─────
-const _lastPreview = new Map(); // `${accountId}:${threadId}` -> last preview text
+// ── 入站轮询（读 DM 收件箱线程列表 + 末条预览；逐条正文读取为后续增强）───────────
+//
+// 2026-08-20 群/频道 P1：行快照多采「叶子文本片段 + 头像张数」，交纯函数
+// `ig_threads.parseIgThreadRow` 判 群/私聊 + 拆 标题/发言人/正文。
+// **刻意不进线程页**——IG 打开会话会给对方留下已读回执，入站探测不该有这种副作用；
+// 因此本层只有列表能给的信息，判不出就如实回落（见该模块头注）。
+const _lastPreview = new Map(); // `${accountId}:${threadId}` -> 上次的语义预览键
 
 async function pollInbox(accountId, rec) {
   if (!POLL_MS || !rec || !rec.loggedIn || !rec.page) return;
@@ -200,25 +206,41 @@ async function pollInbox(accountId, rec) {
       els.slice(0, 20).map((a) => {
         const href = a.getAttribute("href") || "";
         const tid = (href.match(/\/direct\/t\/([^/]+)/) || [])[1] || "";
-        const txt = (a.textContent || "").trim().replace(/\s+/g, " ");
-        return { tid, txt };
+        const rowText = (a.textContent || "").trim().replace(/\s+/g, " ");
+        // 叶子文本片段（DOM 序）：典型 = [群名/人名, 末条预览, 相对时间]
+        const spans = Array.from(a.querySelectorAll("span, div"))
+          .filter((el) => !el.querySelector("span, div"))
+          .map((el) => (el.textContent || "").trim().replace(/\s+/g, " "))
+          .filter(Boolean);
+        // 群线程叠 ≥2 张头像 —— 唯一不受界面语言影响的群信号
+        const imgCount = a.querySelectorAll("img[src]").length;
+        return { tid, rowText, spans, imgCount };
       })
     );
-    for (const r of rows) {
-      if (!r.tid) continue;
-      const key = `${accountId}:${r.tid}`;
+    for (const raw of rows) {
+      if (!raw.tid) continue;
+      const row = parseIgThreadRow(raw);
+      const key = `${accountId}:${row.tid}`;
+      const pkey = threadPreviewKey(row);
       const prev = _lastPreview.get(key);
-      if (prev === r.txt) continue; // 无变化不重复上报
-      _lastPreview.set(key, r.txt);
+      if (prev === pkey) continue; // 无变化不重复上报（键不含相对时间，走时不误触发）
+      _lastPreview.set(key, pkey);
       if (prev === undefined) continue; // 首见只建基线，不把历史当新消息惊动 AI
-      // 首版只上报预览文本（线程名 + 末条截断）；逐条方向权威/全文读取为后续增强。
       await ingestMessage(accountId, {
-        chat_key: r.tid,
-        name: "",
-        text: r.txt || "[新消息]",
-        msg_id: `${r.tid}:${nowSec()}`,
+        chat_key: row.tid,
+        // 群：会话名用群标题、发言人走 sender_name（Python 侧会拼「某人：正文」
+        // 当列表预览，故正文里的前缀已被剥掉，避免出现两遍名字）
+        name: row.title,
+        sender_name: row.senderName,
+        text: row.text || "[新消息]",
+        msg_id: `${row.tid}:${nowSec()}`,
         ts: nowSec(),
-        chat_type: "",
+        // 判出群才带 chat_type（形态与 messenger-web 对齐）——能力矩阵「群消息进箱」
+        // 列的判据就是这里的字面量，勿改写成变量传参，否则判据看不见会报「没接线」。
+        ...(row.chatType === "group" ? { chat_type: "group" } : {}),
+        // ingestMessage 里也会补，这里显式写一遍是**判据定位锚**：矩阵按「含
+        // direction: 键的对象字面量」找 ingest payload 块，缺它这个站点整块看不见。
+        direction: "in",
       });
     }
   } catch (e) {

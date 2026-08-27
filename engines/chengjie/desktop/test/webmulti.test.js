@@ -10,10 +10,12 @@ let pass = 0;
 function ok(name, cond) { assert.ok(cond, name); pass++; }
 
 // ── accountHealthState：三维取最差 ───────────────────────────────────────────
-ok("health 全好→ok", (() => { const s = accountHealthState({ online: true, inject: "ok", translateOk: true }); return s.level === "ok" && s.text === "正常"; })());
-ok("health 掉线→bad", (() => { const s = accountHealthState({ online: false, inject: "ok", translateOk: true }); return s.level === "bad" && s.text === "掉线"; })());
-ok("health 注入失配→warn", (() => { const s = accountHealthState({ online: true, inject: "warn", translateOk: true }); return s.level === "warn" && s.text === "注入失配"; })());
-ok("health 翻译不可达→warn", (() => { const s = accountHealthState({ online: true, inject: "ok", translateOk: false }); return s.level === "warn" && s.text === "翻译不可达"; })());
+// ⚠ 断言的是 textKey（稳定键）而非中文文案：本层 i18n 收口后只出键，取词在
+// renderer/shell-i18n.js 的 health.* 段（拿文案 match 会随产品改写悄悄失效）。
+ok("health 全好→ok", (() => { const s = accountHealthState({ online: true, inject: "ok", translateOk: true }); return s.level === "ok" && s.textKey === "health.all_ok"; })());
+ok("health 掉线→bad", (() => { const s = accountHealthState({ online: false, inject: "ok", translateOk: true }); return s.level === "bad" && s.textKey === "health.session_offline"; })());
+ok("health 注入失配→warn", (() => { const s = accountHealthState({ online: true, inject: "warn", translateOk: true }); return s.level === "warn" && s.textKey === "health.inject_warn"; })());
+ok("health 翻译不可达→warn", (() => { const s = accountHealthState({ online: true, inject: "ok", translateOk: false }); return s.level === "warn" && s.textKey === "health.translate_down"; })());
 ok("health 最差维胜出(掉线>失配)", accountHealthState({ online: false, inject: "warn", translateOk: true }).level === "bad");
 ok("health 全未知→wait", accountHealthState({}).level === "wait");
 ok("health 无注入档案→bad", accountHealthState({ online: true, inject: "unsupported", translateOk: true }).level === "bad");
@@ -21,11 +23,32 @@ ok("health null 安全", accountHealthState(null).level === "wait");
 ok("health 维度齐备", (() => { const d = accountHealthState({ online: true, inject: "ok", translateOk: true }).dims; return d.session && d.inject && d.translate; })());
 
 // ── railBadge ─────────────────────────────────────────────────────────────────
-ok("badge ok→on", railBadge({ level: "ok", text: "正常" }).dot === "on");
-ok("badge bad→off", railBadge({ level: "bad", text: "掉线" }).dot === "off");
-ok("badge warn→warn", railBadge({ level: "warn", text: "x" }).dot === "warn");
-ok("badge wait→idle", railBadge({ level: "wait", text: "x" }).dot === "idle");
+ok("badge ok→on", railBadge({ level: "ok", textKey: "health.all_ok" }).dot === "on");
+ok("badge bad→off", railBadge({ level: "bad", textKey: "health.session_offline" }).dot === "off");
+ok("badge warn→warn", railBadge({ level: "warn", textKey: "x" }).dot === "warn");
+ok("badge wait→idle", railBadge({ level: "wait", textKey: "x" }).dot === "idle");
 ok("badge null 安全", railBadge(null).dot === "idle");
+ok("badge 透传 textKey", railBadge({ level: "warn", textKey: "health.translate_down" }).textKey === "health.translate_down");
+
+// 三维产出的每个键都必须在两语词典里有词条——漏一条账号栏 tooltip 就显裸键
+{
+  const SHI = require("../renderer/shell-i18n.js");
+  const keys = new Set(["health.all_ok", "health.waiting"]);
+  [true, false, undefined].forEach((online) => {
+    ["ok", "warn", "bad", "wait", "unsupported", undefined].forEach((inject) => {
+      [true, false, undefined].forEach((translateOk) => {
+        const s = accountHealthState({ online, inject, translateOk });
+        keys.add(s.textKey);
+        Object.keys(s.dims).forEach((d) => keys.add(s.dims[d].key));
+      });
+    });
+  });
+  keys.forEach((k) => {
+    ["zh", "en"].forEach((lang) => {
+      ok(`health 词典有 ${lang}:${k}`, SHI.tIn(lang, k) !== k);
+    });
+  });
+}
 
 // ── sortRail：置顶 > 未读 > 活跃 > id ────────────────────────────────────────
 const sorted = sortRail([

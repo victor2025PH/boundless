@@ -105,11 +105,65 @@ def test_options_ordered_low_to_high():
 # ── 与护栏组合契约：值守中真发仍受双 opt-in 约束（护栏不被姿态绕过）─────────────
 
 def test_watching_deliver_blocked_without_auto_ai():
-    """请求值守中时，若无 auto_ai 会话 → check_toggle 拦下 deliver（worker 仍可开）。"""
+    """全局默认档非全自动且无 auto_ai 会话 → check_toggle 仍拦 deliver。
+
+    2026-08-22 起需显式钉 automation_mode=review 才触发旧判据——值守「watching」
+    捆绑写入会先把全局档落 auto_ai（standby_extras），届时本闸自然放行；
+    这里守的是「档位没跟上时护栏不放水」的兜底语义。"""
     cfg = _cfg(True, False)          # worker 已开（值守计划会先开 worker）
+    cfg.setdefault("inbox", {})["auto_draft"] = {"automation_mode": "review"}
     chk = check_toggle(cfg, {}, "l2_autosend_deliver", "enabled", True)
     assert chk["allowed"] is False
     assert "auto_ai" in chk["reason"] or "全自动" in chk["reason"]
+
+
+def test_watching_bundle_semantics():
+    """P1 捆绑语义（2026-08-22）：三档 extras/对齐目标的契约钉。"""
+    from src.companion.standby_mode import standby_align_target, standby_extras
+
+    w = {e["path"]: e["value"] for e in standby_extras("watching")}
+    assert w["inbox.auto_draft.automation_mode"] == "auto_ai"
+    assert w["inbox.auto_draft.bootstrap_automation_mode"] is True
+    s = {e["path"]: e["value"] for e in standby_extras("suggest")}
+    assert s["inbox.auto_draft.automation_mode"] == "review"
+    o = {e["path"]: e["value"] for e in standby_extras("off")}
+    assert o["inbox.auto_draft.automation_mode"] == "manual"
+    assert standby_extras("nope") == []
+    assert standby_align_target("watching") == "auto_ai"
+    assert standby_align_target("suggest") == "review"
+    assert standby_align_target("off") is None   # off 刻意不批量覆写档位现场
+
+
+def test_align_existing_conversations_scoped_to_system_sources(tmp_path):
+    """存量对齐只动 bootstrap/standby 来源的行；人的显式设置/接管/守卫降档
+    绝不覆盖；升 auto_ai 时群会话跳过（confirm_group 铁律）。"""
+    from src.inbox.store import InboxStore
+    from src.companion.standby_mode import align_existing_conversations
+
+    store = InboxStore(tmp_path / "align.db")
+    store.set_automation_mode("telegram:a:p1", "review", source="bootstrap")
+    store.set_automation_mode("telegram:a:p2", "review", source="human")
+    store.set_automation_mode("telegram:a:p3", "manual", source="takeover")
+    store.set_automation_mode("telegram:a:p4", "review", source="standby")
+    # 群会话（telegram 负 id）+ bootstrap 来源：升 auto_ai 必须跳过
+    store.set_automation_mode("telegram:a:-100888", "review", source="bootstrap")
+    n = align_existing_conversations(store, "auto_ai")
+    assert n == 2
+    assert store.get_automation_mode_if_set("telegram:a:p1") == "auto_ai"
+    assert store.get_automation_mode_if_set("telegram:a:p2") == "review"    # human 保留
+    assert store.get_automation_mode_if_set("telegram:a:p3") == "manual"    # takeover 保留
+    assert store.get_automation_mode_if_set("telegram:a:p4") == "auto_ai"
+    assert store.get_automation_mode_if_set("telegram:a:-100888") == "review"  # 群跳过
+    # 降 review 无群限制：两条 auto_ai（现 source=standby）回 review
+    n2 = align_existing_conversations(store, "review")
+    assert n2 == 2
+    assert store.get_automation_mode_if_set("telegram:a:p1") == "review"
+    # 无该读口的旧 store → 0（优雅退化）
+    class _Old:
+        pass
+    assert align_existing_conversations(_Old(), "auto_ai") == 0
+    assert align_existing_conversations(None, "auto_ai") == 0
+    assert align_existing_conversations(store, "bogus") == 0
 
 
 def test_watching_deliver_allowed_with_auto_ai_and_gate():

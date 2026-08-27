@@ -63,6 +63,10 @@ class InboxMessage:
     # P4-11E 群发言人：结构化 jid + 名字（缺省空=非群/未知），供气泡上方显示发言人名+稳定色
     sender_id: str = ""
     sender_name: str = ""
+    # 实施72 P2（2026-08-27）补收时间戳诚实化：1=该消息的 ts 是**合成值**（断线
+    # 补收/历史回填时 DOM 拿不到真实发送时刻，按序回推所得）——只保序不保真。
+    # 消费方：前端「约·补收」样式（下阶段）、reply_latency SLO 剔除、AI 新鲜度判定。
+    approx_ts: int = 0
 
 
 @dataclass

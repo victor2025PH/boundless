@@ -65,10 +65,45 @@ def _perm_ok(request: Request, perm: str) -> bool:
         return True
 
 
+# ── 语音/媒体投递错误 → 人话（2026-08-20 内测工单 #3：语音发送失败给用户看的是
+# 裸英文 `err=ex`——VOICE_MESSAGES_FORBIDDEN 这类「对端隐私限制」被当成系统故障
+# 报障。词表按 dead_peer_registry 同款「大写+下划线无关」匹配；顺序=优先级。
+# 只译最终展示文案，原始异常仍进日志（定位不丢）。──────────────────────────
+_SEND_ERR_HUMAN_KEYS = (
+    ("err.inbox.voice_peer_privacy",
+     ("VOICE_MESSAGES_FORBIDDEN", "VOICEMESSAGESFORBIDDEN")),
+    ("err.inbox.send_peer_blocked",
+     ("USER_IS_BLOCKED", "USERISBLOCKED", "YOU_BLOCKED_USER", "YOUBLOCKEDUSER")),
+    ("err.inbox.send_flood",
+     ("PEER_FLOOD", "PEERFLOOD", "FLOOD_WAIT", "FLOODWAIT", "SLOWMODE_WAIT")),
+    ("err.inbox.send_write_forbidden",
+     ("CHAT_WRITE_FORBIDDEN", "CHATWRITEFORBIDDEN",
+      "CHAT_SEND_MEDIA_FORBIDDEN", "CHAT_SEND_PLAIN_FORBIDDEN")),
+    ("err.inbox.send_peer_deactivated",
+     ("INPUT_USER_DEACTIVATED", "USER_DEACTIVATED", "USERDEACTIVATED")),
+)
+
+
+def humanize_send_err_key(ex: Any) -> str:
+    """投递异常/错误文本 → 人话 i18n 键；识别不出返回 ""（调用方走旧通用文案）。"""
+    name = type(ex).__name__ if not isinstance(ex, str) else ""
+    blob = (name + " " + str(ex or "")).upper().replace(" ", "_")
+    for key, markers in _SEND_ERR_HUMAN_KEYS:
+        for m in markers:
+            if m in blob:
+                return key
+    return ""
+
+
 def _deny_capability(request: Request, perm: str) -> None:
-    """能力未授予 → 403（i18n 文案）；放行则无副作用。"""
+    """能力未授予 → 403（i18n 文案 + 机器可读响应头）；放行则无副作用。
+
+    P0-A3 2026-08-19：带 ``X-Deny-Reason: capability``——前端 apiFetch choke point
+    据此出统一「联系管理员开通」指路提示（特性探测，旧前端忽略该头零影响）。
+    """
     if not _perm_ok(request, perm):
-        raise HTTPException(403, tr(request, "err.perm.capability_denied"))
+        raise HTTPException(403, tr(request, "err.perm.capability_denied"),
+                            headers={"X-Deny-Reason": "capability"})
 
 
 # ── 出站媒体体积上限（P3 2026-08-17：25MB 硬编码 → 按平台/配置）────────────
@@ -214,6 +249,11 @@ def _send_blocked_exc(
         detail["used"], detail["cap"] = used, cap
     if frees_at:
         detail["frees_at"] = float(frees_at)
+    # P0 2026-08-23 急停归因：快照带 kill（scope/source/cause/expires_at）时随
+    # 409 透传——点击拦截路径与 45s 轮询同源同貌，横幅立即能显示「谁冻的/几点恢复」。
+    _kill = snap.get("kill") if isinstance(snap.get("kill"), dict) else None
+    if _kill:
+        detail["kill"] = _kill
     logger.warning(
         "[send] guard=send_blocked 护栏拦截已显式回执 conv=%s reason=%s used=%s cap=%s",
         _conv_id(platform, account_id, chat_key), reason, used, cap)
@@ -765,6 +805,18 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 _ibx_fn.record_outbound_xlate(**_funnel_kw)
         except Exception:
             logger.debug("出向翻译漏斗埋点失败（已忽略）", exc_info=True)
+        # B63③：本次发送是对某条「失败留痕」的一键重发（body.resend_of=留痕
+        # message_id）→ 成功后把旧痕 failed→resent（前端收起重发按钮，历史仍
+        # 如实保留那次失败）。best-effort；mark_message_resent 只接受 failed
+        # 行，传错 id / 已改标都是 no-op，绝不影响发送结果。
+        _resend_of = str(body.get("resend_of") or "").strip()
+        if _resend_of:
+            try:
+                _ibx_rs = _inbox_store(request)
+                if _ibx_rs is not None and hasattr(_ibx_rs, "mark_message_resent"):
+                    _ibx_rs.mark_message_resent(_resend_of)
+            except Exception:
+                logger.debug("[send] 失败留痕改标 resent 失败（已忽略）", exc_info=True)
         return {
             "ok": True,
             "result": result,
@@ -772,6 +824,8 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             "sent_text": text,
             "translation": translation_info,
             "bubbles": _bubbles_info,
+            "quote_applied": bool(
+                isinstance(result, dict) and result.get("quote_applied")),
         }
 
     @app.post("/api/unified-inbox/send-gate/exempt")
@@ -988,13 +1042,13 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         目录联接，realpath 口径与 static_asset_paths 教训对齐）。
         """
         from src.inbox.media_guard import (
-            resolve_contained_path, safe_download_name)
+            resolve_contained_path_any, safe_download_name)
         from src.integrations.protocol_bridge import (
-            protocol_media_root, static_media_ref_to_path)
+            protocol_media_roots, static_media_ref_to_path)
         cand = static_media_ref_to_path(str(ref or ""))
         if not cand:
             raise HTTPException(404, tr(request, "err.inbox.media_not_found"))
-        path = resolve_contained_path(str(protocol_media_root()), cand)
+        path = resolve_contained_path_any(protocol_media_roots(), cand)
         if not path or not os.path.isfile(path):
             raise HTTPException(404, tr(request, "err.inbox.media_not_found"))
         from fastapi.responses import FileResponse
@@ -1030,9 +1084,11 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         _deny_capability(request, "chat.send_voice")
         _aq = check_request_quota(request)
         if not _aq["allowed"]:
+            # X-AITR-Quota：quotawall v2 机器可读头（特性探测，旧前端零影响）
             raise HTTPException(403, tr(
                 request, "err.quota.agent_chars_exhausted",
-                used=_aq["used"], quota=_aq["quota"]))
+                used=_aq["used"], quota=_aq["quota"]),
+                headers={"X-AITR-Quota": "agent_chars"})
         _raise_if_account_blocked(request, platform, account_id)
 
         # P0 幂等键（与文本 send 同口径；语音双发还烧双份 TTS/GPU，更值得拦）
@@ -1092,7 +1148,27 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         from src.licensing.quota_store import check_license_quota
         if not check_license_quota()["allowed"]:
             _vst.record_failed(_dedup_scope, _client_msg_id, "quota_exhausted")
-            raise HTTPException(402, tr(request, "err.lic.chars_exhausted"))
+            raise HTTPException(402, tr(request, "err.lic.chars_exhausted"),
+                                headers={"X-AITR-Quota": "license_chars"})
+
+        # ── P0-V2 译声（2026-08-19）：显式 target_lang（'auto'=会话客户语言）→
+        #    先译后念（打中文、发目标语克隆声）。fail-open：翻译失败/identity 念
+        #    原文并如实标记；spoken_text 决定音色语言路由/合成/质量闸/收件箱镜像，
+        #    试听复用契约带语言维度（试听日语后切韩语发送绝不复用日语音频）。
+        _vt_target = str(body.get("target_lang") or "").strip()
+        if _vt_target:
+            try:
+                from src.ai.translation_service import normalize_lang as _nl
+                if _vt_target.lower() == "auto":
+                    _vt_target = _resolve_conv_language(
+                        request, platform, account_id, chat_key)
+                _vt_target = (_nl(_vt_target) or "").lower()
+            except Exception:
+                _vt_target = ""
+            if _vt_target == "unknown":
+                _vt_target = ""
+        spoken_text = text
+        _vxl = {"translated": False, "target_lang": "", "provider": ""}
 
         # ── 所听即所发（P1 2026-08-05）：优先复用坐席刚试听过的产物 ──────────
         # 试听与发送此前是两次独立合成——坐席听到 A 声、客户可能收到 B 声（克隆
@@ -1108,7 +1184,8 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 from src.integrations.shared.tts_preview import (
                     resolve_reusable_preview)
                 _reuse, _rwhy = resolve_reusable_preview(
-                    _preview_fn, text=text, persona_key=str(persona_id or ""))
+                    _preview_fn, text=text, persona_key=str(persona_id or ""),
+                    target_lang=_vt_target)
                 if _reuse is None:
                     logger.info(
                         "[inbox/voice-send] 试听复用未命中(%s) fn=%s → 现场合成",
@@ -1155,7 +1232,22 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                     extra={"fallback_from": str(_meta.get("fallback_from") or ""),
                            "reused_preview": True},
                 )
+                # 译声复用：sidecar 里的 spoken_text=试听时真实念出的译稿——
+                # 收件箱镜像必须写客户实际听到的话，而非坐席手打的原文。
+                if _meta.get("spoken_text"):
+                    spoken_text = str(_meta.get("spoken_text") or "") or text
+                    _vxl = {"translated": True, "target_lang": _vt_target,
+                            "provider": str(_meta.get("xl_provider") or "")}
         if _reuse is None:
+            # P0-V2 译声：现场合成路径先译后念（与 tts-test 同用 resolve_spoken_text，
+            # 试听=发送同入参 ⇒ 同 spoken 文本；翻译服务缓存让二次调用零成本）。
+            if _vt_target:
+                from src.ai.voice_outbound_xlate import resolve_spoken_text
+                spoken_text, _vxl = await resolve_spoken_text(
+                    text, _vt_target, _get_translation_service(request))
+                if _vxl.get("translated"):
+                    # 译声=顺带消费一次翻译，按源文本长度记（与文本出站同口径）
+                    record_request_chars(request, "translation", len(text))
             # 解析语音配置（含声音克隆 voice_profile），允许调用方临时覆盖
             cm = getattr(request.app.state, "config_manager", None)
             raw_cfg = (getattr(cm, "config", None) or {}) if cm else {}
@@ -1170,11 +1262,13 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                     raw_cfg, platform, account_id) or ""
             except Exception:
                 _acc_pid = ""
+            # text=spoken_text：音色的语言路由跟**实际要念的文本**走（译声场景
+            # zh 原文 → ja 译文，克隆语言/edge 音色都该按 ja 解析）。
             voice_ctx = resolve_effective_voice_context(
                 raw_cfg, persona_id=persona_id, chat_key=chat_key or None,
                 account_persona_id=_acc_pid or None,
                 contact_key=chat_key or None, platform=platform,
-                account_id=account_id, text=text)
+                account_id=account_id, text=spoken_text)
             voice_cfg = voice_ctx.get("voice_cfg") or {}
             _explicit_voice_override = isinstance(cfg_override, dict) and any(
                 cfg_override.get(k) for k in ("voice", "backend", "voice_profile"))
@@ -1188,7 +1282,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                     from src.ai.lang_voice_route import (
                         is_reject_tag, route_voice_cfg_for_text)
                     voice_cfg, _lang_route = route_voice_cfg_for_text(
-                        voice_cfg, text, raw_cfg)
+                        voice_cfg, spoken_text, raw_cfg)
                     if is_reject_tag(_lang_route):
                         _vst.record_failed(
                             _dedup_scope, _client_msg_id, "lang_mismatch")
@@ -1215,7 +1309,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 # 防链内各级超时之和越过前端 60s 等待线。
                 _t_synth0 = _time.monotonic()
                 result = await tts.synthesize(
-                    text, timeout_sec=45.0, emotion=voice_ctx.get("emotion"),
+                    spoken_text, timeout_sec=45.0, emotion=voice_ctx.get("emotion"),
                     pre_colloquialized=True, interactive=True,
                     total_budget_sec=45.0)
                 _synth_ms = int((_time.monotonic() - _t_synth0) * 1000)
@@ -1264,7 +1358,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 _dur = float(getattr(result, "duration_sec", 0.0) or 0.0)
                 if _qg["enabled"]:
                     _bad, _why = looks_truncated(
-                        text, _dur,
+                        spoken_text, _dur,
                         min_sec_per_unit=_qg["min_sec_per_unit"],
                         min_units=_qg["min_units"])
                     if _bad:
@@ -1293,8 +1387,8 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
 
             # 坐席字符计量归因（2026-08-16）：**真合成**成功（过质量闸门）才记 tts
             # 字符；上方复用试听产物分支刻意跳过不记账——已在 tts-test 计过，重复
-            # 记＝双计。len(text) 与授权池同口径；开关默认关/未登录/异常零副作用。
-            record_request_chars(request, "tts", len(text))
+            # 记＝双计。按实际合成文本（译声=译文）计，与授权池同口径。
+            record_request_chars(request, "tts", len(spoken_text))
 
         # 转 OGG/Opus，使其在 Telegram/WhatsApp 呈现为"语音消息"（ffmpeg 缺失则原样发）
         _vst.record_stage(_dedup_scope, _client_msg_id, "convert")
@@ -1336,23 +1430,36 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         _t_send0 = _time.monotonic()
         try:
             try:
+                # inbox_text=spoken_text：镜像写客户**实际听到的话**（译声=译文），
+                # 「音频念 A、气泡写 B」是 2026-08-10 事故的同款穿帮机制。
                 res = await orch.send_media(
                     platform, account_id, chat_key,
                     media_path=local, media_url=url, media_type="voice",
-                    caption=caption, inbox_text=text,
+                    caption=caption, inbox_text=spoken_text,
                     sender_name=_voice_sender_name, origin="manual")
             except TypeError:
                 # 旧签名（无 origin kwarg，测试假编排器常见）→ 回落
                 res = await orch.send_media(
                     platform, account_id, chat_key,
                     media_path=local, media_url=url, media_type="voice",
-                    caption=caption, inbox_text=text,
+                    caption=caption, inbox_text=spoken_text,
                     sender_name=_voice_sender_name)
         except Exception as ex:  # noqa: BLE001
             _dedup.release(_dedup_scope, _client_msg_id)  # 失败释放：重试可再发
             _vo_record(False, "deliver_failed")
             _vst.record_failed(_dedup_scope, _client_msg_id, "deliver_failed")
-            raise HTTPException(502, tr(request, "err.inbox.voice_send_failed", err=ex))
+            _hkey = humanize_send_err_key(ex)
+            if _hkey:
+                logger.warning("[send-voice] 投递被平台拒绝（%s）: %s",
+                               _hkey, ex)
+                raise HTTPException(502, tr(request, _hkey))
+            # 截断兜底（2026-08-20 工单 #3 实录）：pyrogram 上传异常的 repr 可能
+            # 内嵌整段 WAV 字节流（<Queue … bytes=b'RIFF…'>），err=ex 直塞模板会把
+            # 满屏乱码喷给用户。全文进日志，展示层只留可读前缀。
+            logger.warning("[send-voice] 投递失败: %r", ex)
+            raise HTTPException(502, tr(
+                request, "err.inbox.voice_send_failed",
+                err=str(ex)[:160]))
         # P0 2026-08-12：拦截/未送达显式回执——此前被拦仍 _vo_record(True) +
         # record_sent，超时对账端点会对坐席谎报「已发出」。
         _undeliv = _result_undelivered(res)
@@ -1365,9 +1472,13 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 raise _send_blocked_exc(
                     request, platform, account_id, chat_key,
                     reason=str(res.get("blocked") or ""))
+            _herr = str(res.get("error") or res.get("error_kind") or "")
+            _hkey2 = humanize_send_err_key(_herr)
+            if _hkey2:
+                logger.warning("[send-voice] 未送达（%s）: %s", _hkey2, _herr)
+                raise HTTPException(502, tr(request, _hkey2))
             raise HTTPException(502, tr(
-                request, "err.inbox.send_not_delivered",
-                msg=str(res.get("error") or res.get("error_kind") or "")))
+                request, "err.inbox.send_not_delivered", msg=_herr))
         _send_ms = int((_time.monotonic() - _t_send0) * 1000)
         _vo_record(True)
         cid = _conv_id(platform, account_id, chat_key)
@@ -1392,6 +1503,9 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             "voice": getattr(result, "voice", ""),
             "emotion": getattr(_emotion, "emotion", "") if _emotion else "",
             "fallback_from": _extra.get("fallback_from", ""),
+            # P0-V2 译声（additive）：translated=false 时 target_lang 恒空串
+            "translated": bool(_vxl.get("translated")),
+            "target_lang": (_vxl.get("target_lang") or "") if _vxl.get("translated") else "",
         }
         _vst.record_sent(_dedup_scope, _client_msg_id, {
             "voice_meta": voice_meta,
@@ -1404,13 +1518,14 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         logger.info(
             "[inbox/voice-send] 已发语音 platform=%s acct=%s pid=%s dur=%sms "
             "provider=%s fallback=%s len=%d colloq=%s/%s prerender=%s reuse=%s "
-            "stage_ms=synth:%d/conv:%d/send:%d total:%d",
+            "xlate=%s stage_ms=synth:%d/conv:%d/send:%d total:%d",
             platform, account_id, voice_meta["persona_id"],
             getattr(result, "latency_ms", 0), voice_meta["provider"] or "-",
-            voice_meta["fallback_from"] or "-", len(text),
+            voice_meta["fallback_from"] or "-", len(spoken_text),
             bool(_extra.get("colloquial")), bool(_extra.get("colloquial_llm")),
             voice_meta["provider"] == "prerendered",
             bool(_extra.get("reused_preview")),
+            voice_meta["target_lang"] or "-",
             _synth_ms, _conv_ms, _send_ms,
             int((_time.monotonic() - _t_route0) * 1000))
         return {
@@ -1421,6 +1536,10 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             "voice_meta": voice_meta,
             # 所听即所发：true=客户收到的就是坐席试听的那份音频（零二次合成）
             "reused_preview": bool(_extra.get("reused_preview")),
+            # P0-V2 译声（additive）：客户实际听到的话 + 坐席原文
+            "voice_translated": bool(_vxl.get("translated")),
+            "sent_text": spoken_text,
+            "original_text": text,
         }
 
     @app.get("/api/unified-inbox/send-voice-status")
