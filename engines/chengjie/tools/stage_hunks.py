@@ -66,7 +66,21 @@
 不要用会创建 commit 的 plumbing 去做只读性质的事**。未跟踪文件改用 ``--untracked-zip``
 纯文件打包，完全走在 git 之外，零 ref 风险。门禁 ``test_stage_hunks`` 钉住这条。
 
-退出码：0 正常 ／ 1 自证不通过或 git 失败（此时 index 零改动，可安全重来）。
+## index 使用纪律（2026-08-27 大收口沉淀，**这条比工具本身更要紧**）
+
+``index`` 是全仓**共享的单一资源**：一条线占着，其他线就都提交不了（``git commit``
+提交的是整个 index，只要有一个外来文件在里面，一次手滑就把别人未完成的活连带交掉）。
+当天实录：index 被占 40+ 分钟，期间三批已通过门禁的改动只能干等。
+
+所以：**暂存后要么很快提交、要么 ``git reset`` 释放，不许长期占用。**
+本工具默认会在发现外来暂存时**直接拒绝**（``--allow-foreign-staged`` 显式豁免）。
+
+收工前让工作树回到干净（切自己的 hunk → ``--preview`` 验 → 提交），比事后追赶
+1200 个文件的积压容易得多——那次收口花了一整轮，还差点把一份含真凭据的排障目录
+提交进去。
+
+退出码：0 正常 ／ 1 自证不通过、index 有外来暂存、或 git 失败（此时 index 零改动，
+可安全重来）。
 """
 
 from __future__ import annotations
@@ -400,6 +414,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--whole", action="store_true",
                     help="整文件暂存（跳过自证，仅当已逐行确认）")
     ap.add_argument("--apply", action="store_true", help="真写 index")
+    ap.add_argument("--allow-foreign-staged", action="store_true",
+                    help="index 里有别人的暂存时仍继续（默认拒绝）")
     ap.add_argument("--preview", help="把 index 检出到该目录（游离 commit）")
     ap.add_argument("--preview-clean", help="清理预览目录")
     ap.add_argument("--snapshot", action="store_true",
@@ -421,12 +437,23 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if args.apply:
             others = _staged_others(args.file)
-            if others:
-                print(f"⚠ index 里已有**不属于本次**的暂存文件 {len(others)} 个"
-                      f"（sibling 的 git commit -a 会连带交掉它们）：")
+            if others and not args.allow_foreign_staged:
+                # **拒绝**而不是警告（2026-08-27 升级）：警告不够——那天 index 被别的线
+                # 占了 40+ 分钟，我全靠自己克制才没把他们的活一起提交；而 `git commit`
+                # 提交的是**整个 index**，只要有一个外来文件在里面，一次手滑就连带交掉
+                # （AGENTS.md 记录过该事故）。index 是共享单一资源，用完即释放。
+                print(f"!! index 里有**不属于本次**的暂存文件 {len(others)} 个——"
+                      f"已拒绝暂存（index 未改动）：", file=sys.stderr)
                 for n in others[:8]:
-                    print(f"    {n}")
-                print("  如非你自己放的，建议先 git reset 再来。\n")
+                    print(f"    {n}", file=sys.stderr)
+                if len(others) > 8:
+                    print(f"    …另有 {len(others) - 8} 个", file=sys.stderr)
+                print("\n  处理办法（三选一）：\n"
+                      "    · 不是你放的 → 先 git reset 清空 index，再重来；\n"
+                      "    · 是你自己的上一批 → 先把它提交掉，index 用完即释放；\n"
+                      "    · 确知无害要一起来 → 加 --allow-foreign-staged 显式承担。",
+                      file=sys.stderr)
+                return 1
 
         rc = 0
         for rel in args.file:

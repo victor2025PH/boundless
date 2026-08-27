@@ -237,6 +237,32 @@ def test_snapshot_path_never_creates_a_commit():
     assert "repo_state()" in seg               # 前后比对零副作用
 
 
+def test_refuses_when_index_holds_foreign_staged_files():
+    """发现外来暂存必须**拒绝**而不只是警告（2026-08-27 升级）。
+
+    警告不够：`git commit` 提交的是整个 index，只要有一个外来文件在里面，一次手滑就
+    把别人未完成的活连带交掉。当天 index 被别的线占了 40+ 分钟，全靠人克制才没出事。
+    豁免要显式（--allow-foreign-staged），且必须在 index 未改动的前提下退出。
+    """
+    src = _TOOL.read_text(encoding="utf-8")
+    i = src.index("if args.apply:")
+    seg = src[i:i + 1600]
+    assert "_staged_others" in seg
+    assert "not args.allow_foreign_staged" in seg
+    assert "return 1" in seg, "必须以非零退出，且不得继续去写 index"
+    # 拒绝分支里不能有任何写 index 的动作（do_file 在其后才被调用）
+    assert "do_file(" not in seg.split("return 1")[0]
+    assert "--allow-foreign-staged" in src, "必须留显式豁免出口"
+
+
+def test_index_discipline_documented():
+    """index 是共享单一资源这条纪律必须写在工具文档里——机制拦得住手滑，
+    拦不住「占着不放」，那要靠人知道规矩。"""
+    src = _TOOL.read_text(encoding="utf-8")
+    assert "index 使用纪律" in src
+    assert "git reset" in src and "共享" in src
+
+
 def test_warns_about_foreign_staged_files():
     """index 里有别人的暂存内容要提醒：sibling 一句 git commit -a 会连带交掉
     （AGENTS.md 记录过该事故）。"""
