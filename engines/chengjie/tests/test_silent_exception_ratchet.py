@@ -202,7 +202,16 @@ def test_no_new_silent_exception_handlers():
           "  1) 记一条带上下文的 logger.debug/warning（最省事，且让故障可见）；\n"
           "  2) 换成具体异常类型（`except KeyError:`）——精确处理不受本门禁约束；\n"
           "  3) 做真正的兜底赋值/补偿动作（那不算静默）。\n"
-        "确因清理存量而下降 → 请同步调小 _SILENT_CEILINGS。"
+        "确因清理存量而下降 → 请同步调小 _SILENT_CEILINGS。\n\n"
+        "⚠ 共享工作树先排除「别人的中批状态」再动手（与 test_ui_build_freshness /\n"
+        "  test_copilot_shared_sync 同款情形）：本门禁按 git **已跟踪**文件的\n"
+        "  **工作树内容**扫描，所以他线对已跟踪文件的未提交修改会算进来，而 CI 看的是\n"
+        "  已提交状态 —— 这种红在 CI 上是绿的。判别一步到位：\n"
+        "      git status --porcelain -- engines/chengjie/src/<模块>/\n"
+        "  有 M 就先看那份 diff 是不是别人的；是就别改别人的在途文件、也**别抬天花板**\n"
+        "  （抬了就把额度永久让出去了），等对方收口即可。\n"
+        "  2026-08-28 实例：src/utils/config_manager.py 的未提交改动新增 1 处，\n"
+        "  utils 工作树 125 / 已提交 124，CI 侧无事。"
     )
 
 
