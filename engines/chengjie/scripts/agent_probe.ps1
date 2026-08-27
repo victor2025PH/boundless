@@ -83,7 +83,41 @@ if ($Intent) {
 Write-Output ("=== agent probe @ {0} (window {1} min, active {2} min) ===" -f `
     $now.ToString('HH:mm:ss'), $WindowMinutes, $HotMinutes)
 Write-Output ''
-Write-Output '--- [1/3] dirty files recently modified (other lines mid-flight?) ---'
+# ---- [1/4] index occupancy -------------------------------------------------
+# 2026-08-27: blocked TWICE in one day on this. The git index is a SINGLE
+# shared slot for the whole worktree - while any line has files staged, nobody
+# else can stage/commit without either waiting or sweeping up the other line's
+# files by accident (the exact way one batch got mixed into another earlier).
+# Unlike dirty files (advisory - you can work around them), a held index is a
+# HARD blocker, so it goes first. mtime of .git/index is only a HINT for "how
+# long" (plumbing refreshes it), so the age is labelled as such rather than
+# dressed up as precision - the staged list itself is the reliable part.
+Write-Output '--- [1/4] git index occupancy (staged = every other line is blocked) ---'
+$stagedNames = @(git diff --cached --name-only 2>$null | Where-Object { $_ })
+if ($stagedNames.Count -eq 0) {
+    Write-Output '  index FREE - safe to stage/commit'
+} else {
+    $idxFile = Join-Path (git rev-parse --git-dir 2>$null) 'index'
+    $ageTxt = 'unknown'
+    if (Test-Path $idxFile) {
+        $mins = [math]::Round(($now - (Get-Item $idxFile).LastWriteTime).TotalMinutes, 1)
+        $ageTxt = ("~{0} min (hint only)" -f $mins)
+    }
+    # Deliberately does NOT claim whose staging it is - the probe cannot tell, and
+    # "your own forgotten staging" is exactly the case protocol rule 1 targets.
+    Write-Output ("  !! index HELD (yours or another line's): {0} file(s), last touched {1}" -f `
+        $stagedNames.Count, $ageTxt)
+    foreach ($n in ($stagedNames | Select-Object -First 8)) { Write-Output ("     {0}" -f $n) }
+    if ($stagedNames.Count -gt 8) {
+        Write-Output ("     ... and {0} more" -f ($stagedNames.Count - 8))
+    }
+    Write-Output '  protocol: stage -> commit (or git reset) within a few minutes.'
+    Write-Output '  do NOT git add -A / git commit -a now: you would sweep their files into your commit.'
+    Write-Output '  tools/stage_hunks.py already refuses to run while foreign files are staged.'
+}
+
+Write-Output ''
+Write-Output '--- [2/4] dirty files recently modified (other lines mid-flight?) ---'
 
 $rows = @()
 foreach ($ln in (git status --short 2>$null)) {
@@ -118,7 +152,7 @@ if ($rows.Count -eq 0) {
 }
 
 Write-Output ''
-Write-Output '--- [2/3] declared intents (what each line PURSUES, not just where it types) ---'
+Write-Output '--- [3/4] declared intents (what each line PURSUES, not just where it types) ---'
 # Stale-intent hygiene (2026-08-12): intents declared BEFORE the latest instance
 # restart have had their on-disk .py (if any) loaded already - the declared
 # "in-flight / awaits restart" state is likely stale, polluting the preflight
@@ -159,7 +193,7 @@ Write-Output '  declare yours:  scripts\agent_probe.ps1 -Intent "theme (files/ar
 Write-Output '  before restart: scripts\restart_preflight.ps1   (chains probe quiet + syntax + Advise + cooldown)'
 
 Write-Output ''
-Write-Output '--- [3/3] instance restart cooldown (piggyback, do not double-restart) ---'
+Write-Output '--- [4/4] instance restart cooldown (piggyback, do not double-restart) ---'
 $cdDir = 'D:\chengjie-instances\.ops\restart_cooldown'
 if (Test-Path $cdDir) {
     $any = $false
