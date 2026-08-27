@@ -928,7 +928,11 @@ class HealthWatchdog:
         try:
             self._check_probe_stalled()
         except Exception:
-            logger.debug("探针停摆自检异常（已忽略）", exc_info=True)
+            # 与 _check_true_probes 同理用 WARNING：这条是「看门狗的看门狗」，是最后
+            # 一道防线，它自己静默死掉就再没有任何东西会发现探针停摆。
+            # （2026-08-27 `tools/watchdog_check_audit.py` 首跑就把它标成 BLIND——
+            #  我当天刚加的检查，自己没有任何正面信号。审计抓的第一个就是作者本人。）
+            logger.warning("探针停摆自检异常（本轮跳过，停摆将无人发现）", exc_info=True)
 
         # 本地主链保险（2026-08-15）：local_only 语义下 vLLM 猝死＝全站 canned 且
         # 绝不回落云端——中枢执行器救不回来的窗口由本检查单向热切 cloud 兜住。
