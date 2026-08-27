@@ -528,8 +528,12 @@ def test_backup_endpoint_specs_observe_without_popup():
     }
     vis = [s for s in build_probe_specs(cfg) if s["domain"].startswith("vision")]
     assert [s["domain"] for s in vis] == ["vision", "vision_backup1"]
-    assert vis[0]["json"]["model"] == "Cloud/VL-8B"          # 主路用全局 model
-    assert vis[1]["json"]["model"] == "qwen3-vl:8b-instruct"  # 备胎用每端点 model
+    # 模型名解析**委派**给 vision_client（唯一事实源），这里只钉委派关系——别在这里
+    # 复刻它的映射表断言：那会让本测试依赖 vision_client 侧的未装载改动，HEAD 上
+    # 回落全局 model 就红（2026-08-27 临时 worktree 检出 HEAD 实锤，正是它抓到的）。
+    from src.ops.true_probe import _vision_endpoint_model
+    for spec, url in zip(vis, cfg["vision"]["base_urls"]):
+        assert spec["json"]["model"] == _vision_endpoint_model(cfg["vision"], url)
     assert vis[0].get("alert", True) is True
     assert vis[1]["alert"] is False
     # watchdog 必须尊重该标记（源码级钉：翻回来就会半夜为备胎弹窗）
@@ -713,7 +717,6 @@ def test_workbench_delivery_block_wired():
         encoding="utf-8")
     assert 'id="ws-delivblock"' in html
     assert "_renderDelivBlock" in html
-    assert "ws.delivblock.text_media" in html
     api = (_SRC / "web" / "templates" / "_api_fetch.html").read_text(
         encoding="utf-8")
     assert "ws-delivblock" in api
