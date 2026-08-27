@@ -166,6 +166,77 @@ def test_preview_clean_retries_and_reports_honestly(tmp_path):
     assert "return 1" in seg                         # 没清干净必须非零退出
 
 
+def _scratch_repo(repo: Path):
+    """全隔离的临时 git 仓（绝不碰真仓库）：一个已提交文件 + 一处改动 + 一个未跟踪文件。"""
+    import subprocess
+
+    repo.mkdir(parents=True, exist_ok=True)
+
+    def g(*a):
+        return subprocess.run(["git", *a], cwd=str(repo), capture_output=True)
+
+    g("init", "-q")
+    g("config", "user.email", "t@t")
+    g("config", "user.name", "t")
+    (repo / "tracked.txt").write_text("v1\n", encoding="utf-8")
+    g("add", "tracked.txt")
+    g("commit", "-qm", "base")
+    (repo / "tracked.txt").write_text("v2\n", encoding="utf-8")     # 已跟踪改动
+    (repo / "loose.txt").write_text("untracked\n", encoding="utf-8")  # 未跟踪
+    return g
+
+
+def test_snapshot_is_side_effect_free(tmp_path, monkeypatch):
+    """快照必须**零副作用**：HEAD / index / 工作树前后完全不变。
+
+    2026-08-27 事故：为了覆盖未跟踪文件走了 write-tree + commit-tree，结果分支 HEAD
+    被推到了那个「快照」commit 上。本测试在**隔离空仓**里真跑一遍快照路径——这正是
+    当天缺失的那道防线（当时只在真仓库上边做边看）。
+    """
+    m = _mod()
+    repo = tmp_path / "repo"
+    g = _scratch_repo(repo)
+    monkeypatch.setattr(m, "REPO_ROOT", repo)
+
+    head0 = g("rev-parse", "HEAD").stdout.decode().strip()
+    # zip 必须落在仓库**之外**：写进仓内它自己就变成一个未跟踪文件，
+    # 快照工具会把自己打包进去（首版测试就这么绊了一跤）
+    zip_path = tmp_path / "out" / "untracked.zip"
+    assert m.do_snapshot("snap-test", str(zip_path)) == 0
+
+    # ① HEAD 一动不动（事故当天正是这里出的问题）
+    assert g("rev-parse", "HEAD").stdout.decode().strip() == head0
+    # ② index 干净、工作树改动仍在
+    assert g("diff", "--cached", "--name-only").stdout.decode().strip() == ""
+    assert "tracked.txt" in g("diff", "--name-only").stdout.decode()
+    # ③ tag 指向一个真的承载了改动的游离 commit
+    sha = g("rev-parse", "snap-test").stdout.decode().strip()
+    assert sha and sha != head0
+    assert "tracked.txt" in g("diff", "--name-only", "HEAD", sha).stdout.decode()
+    # ④ 未跟踪文件进了 zip（走文件系统，不进 git）
+    import zipfile
+    with zipfile.ZipFile(zip_path) as zf:
+        assert "loose.txt" in zf.namelist()
+    assert g("ls-files", "--others", "--exclude-standard").stdout.decode().strip() \
+        == "loose.txt", "未跟踪文件不该被 git 收编"
+
+
+def test_snapshot_path_never_creates_a_commit():
+    """源码级红线：快照路径不得出现 commit-tree / write-tree。
+
+    这条是纯纪律钉子——当天就是这两个命令把「只读快照」变成了分支上的真提交。
+    未跟踪文件一律走 zip，绝不进 git 对象库。
+    """
+    src = _TOOL.read_text(encoding="utf-8")
+    i = src.index("def do_snapshot(")
+    seg = src[i:src.index("def _staged_any(")]
+    # 只查**调用形式**（带引号的实参）——注释里必须能写出这两个词来说明为什么禁用它们
+    assert '"commit-tree"' not in seg and '"write-tree"' not in seg
+    assert '"stash", "create"' in seg          # 唯一许可路径
+    assert "zipfile" in seg                    # 未跟踪走文件打包
+    assert "repo_state()" in seg               # 前后比对零副作用
+
+
 def test_warns_about_foreign_staged_files():
     """index 里有别人的暂存内容要提醒：sibling 一句 git commit -a 会连带交掉
     （AGENTS.md 记录过该事故）。"""

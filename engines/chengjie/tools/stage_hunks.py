@@ -49,6 +49,23 @@
     # ⑤ 门禁绿了 → 回主树 git commit；然后清理预览
     python tools/stage_hunks.py --preview-clean D:\\_wt_preview
 
+    # ⑥ 给整个未提交积压上保险（不改变任何状态；见下「快照纪律」）
+    python tools/stage_hunks.py --snapshot
+    python tools/stage_hunks.py --snapshot --untracked-zip D:\\backlog_untracked.zip
+
+## 快照纪律（2026-08-27 事故沉淀，**改这段前务必读完**）
+
+工作树长期 1000+ 文件未提交，最大的风险是 ``git clean`` / ``checkout`` 一把清掉。
+给它上保险的**唯一许可路径**是 ``git stash create`` + 打 tag：它造出一个游离 commit
+承载全部已跟踪改动，**不动 HEAD、不动 index、不动工作树**（本工具每次都会前后比对
+并断言这三者未变）。
+
+**禁止**用 ``write-tree`` + ``commit-tree`` 那条路去覆盖未跟踪文件。当天我这么做了，
+结果分支 HEAD 被推到了那个"快照" commit 上（隔离空仓复现显示 ``commit-tree`` 本身
+不动 HEAD，现象与机制对不上、根因未查清）——但结论是明确的：**在共享生产仓库上，
+不要用会创建 commit 的 plumbing 去做只读性质的事**。未跟踪文件改用 ``--untracked-zip``
+纯文件打包，完全走在 git 之外，零 ref 风险。门禁 ``test_stage_hunks`` 钉住这条。
+
 退出码：0 正常 ／ 1 自证不通过或 git 失败（此时 index 零改动，可安全重来）。
 """
 
@@ -248,6 +265,77 @@ def do_preview(target: Path) -> int:
     return 0
 
 
+def repo_state() -> Tuple[str, int, int]:
+    """(HEAD sha, index 中与 HEAD 不同的文件数, 工作树改动文件数)——快照前后比对用。"""
+    _, head, _ = git("rev-parse", "HEAD")
+    _, cached, _ = git("diff", "--cached", "--name-only")
+    _, dirty, _ = git("diff", "--name-only")
+    return (head.decode().strip(),
+            len([x for x in cached.decode("utf-8", "replace").split("\n") if x.strip()]),
+            len([x for x in dirty.decode("utf-8", "replace").split("\n") if x.strip()]))
+
+
+def do_snapshot(tag_name: Optional[str], untracked_zip: Optional[str]) -> int:
+    """给未提交积压上保险：``git stash create`` + tag（**唯一许可路径**）。
+
+    刻意只走 stash create：它造游离 commit 承载已跟踪改动而不动任何 ref。
+    未跟踪文件走 ``--untracked-zip`` 纯文件打包，绝不用 commit-tree 造 commit
+    ——2026-08-27 我那么干过，分支 HEAD 被推到了"快照"上（见模块头「快照纪律」）。
+
+    每次都前后比对 HEAD/index/工作树三者：这个操作按定义应当零副作用，
+    真出现变化必须当场喊出来，而不是等人半天后从 git log 里发现。
+    """
+    before = repo_state()
+    name = tag_name or f"backlog-snapshot-{time.strftime('%Y%m%d-%H%M')}"
+
+    _, out, _ = git("stash", "create", f"backlog snapshot {name}")
+    sha = out.decode().strip()
+    if not sha:
+        print("已跟踪文件无改动，无需快照（未跟踪文件仍可用 --untracked-zip 打包）")
+    else:
+        git("tag", "-f", name, sha)
+        _, chk, _ = git("rev-parse", name)
+        if chk.decode().strip()[:12] != sha[:12]:
+            print(f"!! tag 未指向快照 commit：{chk.decode().strip()} != {sha}",
+                  file=sys.stderr)
+            return 1
+        _, files, _ = git("diff", "--name-only", "HEAD", sha)
+        n = len([x for x in files.decode("utf-8", "replace").split("\n") if x.strip()])
+        print(f"已跟踪改动快照：{sha[:12]}  含 {n} 个文件  tag={name}")
+        print(f"  恢复用：git diff HEAD {name} > restore.patch   或   "
+              f"git stash apply {name}")
+
+    if untracked_zip:
+        import zipfile
+
+        _, raw, _ = git("ls-files", "--others", "--exclude-standard", "-z")
+        rels = [p for p in raw.decode("utf-8", "replace").split("\0") if p]
+        zp = Path(untracked_zip)
+        zp.parent.mkdir(parents=True, exist_ok=True)
+        written = 0
+        with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as zf:
+            for rel in rels:
+                src = REPO_ROOT / rel
+                try:
+                    if src.is_file():
+                        zf.write(src, rel)
+                        written += 1
+                except OSError:
+                    pass          # 占用/权限问题跳过单个文件，不让整批失败
+        print(f"未跟踪文件打包：{zp}  {written}/{len(rels)} 个  "
+              f"({zp.stat().st_size // 1024} KB)")
+
+    after = repo_state()
+    if after != before:
+        print(f"!! 快照操作改变了仓库状态（本应零副作用）：\n"
+              f"   前 HEAD/index/dirty = {before}\n"
+              f"   后 HEAD/index/dirty = {after}\n"
+              f"   请立刻核对 git reflog", file=sys.stderr)
+        return 1
+    print(f"零副作用已核对：HEAD={before[0][:8]} index={before[1]} 工作树={before[2]} 未变")
+    return 0
+
+
 def _staged_any() -> bool:
     rc, _, _ = git("diff", "--cached", "--quiet", check=False)
     return rc != 0
@@ -314,15 +402,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--apply", action="store_true", help="真写 index")
     ap.add_argument("--preview", help="把 index 检出到该目录（游离 commit）")
     ap.add_argument("--preview-clean", help="清理预览目录")
+    ap.add_argument("--snapshot", action="store_true",
+                    help="给未提交积压上保险（stash create + tag，零副作用）")
+    ap.add_argument("--snapshot-tag", help="自定义 tag 名")
+    ap.add_argument("--untracked-zip",
+                    help="把未跟踪文件打包到该 zip（纯文件操作，不碰 git）")
     args = ap.parse_args(argv)
 
     try:
+        if args.snapshot or args.untracked_zip:
+            return do_snapshot(args.snapshot_tag, args.untracked_zip)
         if args.preview_clean:
             return do_preview_clean(Path(args.preview_clean))
         if args.preview:
             return do_preview(Path(args.preview))
         if not args.file:
-            ap.error("需要 --file / --preview / --preview-clean 之一")
+            ap.error("需要 --file / --preview / --preview-clean / --snapshot 之一")
 
         if args.apply:
             others = _staged_others(args.file)
