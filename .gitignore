@@ -67,6 +67,12 @@ _pending_models/
 !website/public/**/*.mp3
 !website/public/**/*.mp4
 
+# 真活探针的 ASR 夹具同属「被代码引用、缺了就静默降级」那一类（2026-08-27）：
+# 上面的 *.wav 把它整个挡在版本控制外 → 干净 clone / 别的机器上
+# build_probe_specs 的 ASR_FIXTURE.is_file() 为假，四域探针**静默变三域**且零信号。
+# 与上面官网资产同理放行；136KB，只此一个文件。
+!engines/chengjie/assets/probe/*.wav
+
 # keep empty structure
 !**/.gitkeep
 
