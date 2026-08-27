@@ -751,7 +751,10 @@ class AutosendWorker:
 
                 record_shadow("ai_reply_delivered_human")
             except Exception:
-                pass
+                # 影子计量丢一次＝「出稿 vs 投递」对读偏小。该读数是 enforce 切换的
+                # 判据之一（tools/wallet_shadow_report.py），静默偏差会让决策失真。
+                logger.warning("[AutosendWorker] 影子计量 ai_reply_delivered_human 记账失败",
+                               exc_info=True)
             # 人工通过也进同一账本：坐席刚发过 → 紧随的自动稿同样要垫连发地板
             # （对客户视角「谁按的发送」不重要，背靠背两条出站一样露馅）。
             self._note_conv_sent(item["conversation_id"])
@@ -1074,7 +1077,9 @@ class AutosendWorker:
                                 _dup_reg_ph.unregister(
                                     _conv_id_g, _dup_token)
                             except Exception:
-                                pass
+                                logger.warning(
+                                    "[AutosendWorker] 出站去重撤登记失败 conv=%s（≤600s 内可能误判重复）",
+                                    _conv_id_g, exc_info=True)
                         logger.info(
                             "[AutosendWorker] guard=fresh post_humanize "
                             "延迟窗内客户插话，放弃本条投递 draft=%s conv=%s "
@@ -1122,7 +1127,8 @@ class AutosendWorker:
 
                 record_shadow("ai_reply_delivered_auto")
             except Exception:
-                pass
+                logger.warning("[AutosendWorker] 影子计量 ai_reply_delivered_auto 记账失败",
+                               exc_info=True)
             self._note_conv_sent(_conv_id_g)
             if int(item.get("_attempt", 0)) > 0:
                 self.total_retry_recovered += 1
@@ -1146,7 +1152,11 @@ class AutosendWorker:
                     )
                     _dup_reg2.unregister(_conv, _dup_token)
                 except Exception:
-                    pass
+                    # 撤登记失败不会永久卡死（registry 有 600s TTL 剪枝），但该会话在
+                    # 这段窗口内可能被误判为「已有在途出站」而拦掉下一条 —— 对外表现
+                    # 是「客户没收到回复」，值得留痕以便与投诉对时间。
+                    logger.warning("[AutosendWorker] 出站去重撤登记失败 conv=%s（≤600s 内可能误判重复）",
+                                   _conv, exc_info=True)
             _plat = item.get("platform", "?")
             _permanent = _is_permanent_send_error(str(exc))
             # 跨链共享登记（gated）：注销/被拉黑/无权限这类**永久**不可达写进

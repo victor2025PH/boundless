@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import subprocess
 from collections import defaultdict
 
 _REPO = pathlib.Path(__file__).resolve().parents[1]
@@ -44,8 +45,17 @@ _VOCAL_ATTRS = frozenset({
 _SILENT_CEILINGS: dict[str, int] = {
     "web": 575,
     "integrations": 335,
-    "ai": 213,
-    "inbox": 202,
+    # 213 → 211（2026-08-28）：ai_client 两处「best-effort 包装」补了 WARNING，
+    # 行为不变（仍 fail-open），只是不再无声。两处都不是随手挑的：
+    #   · record_action_for_status("ai_reply") —— 丢一次＝账本少记，钱包余额显得比
+    #     真实更耐用，而 enforce 切换正按余额/跑道天数拍板；
+    #   · notify_key_failure —— 观测链最后一环，它自己挂了就彻底无人知晓。
+    "ai": 211,
+    # 202 → 198（2026-08-28）：autosend_worker 出站链四处补 WARNING，行为不变。
+    #   · record_shadow ×2（影子计量偏小会让 enforce 决策失真）；
+    #   · 出站去重撤登记 ×2（registry 有 600s TTL 会自愈，但窗口内可能误判重复 →
+    #     对外表现是「客户没收到回复」，要能与投诉对时间）。
+    "inbox": 198,
     "companion": 190,
     "skills": 129,
     "utils": 124,
@@ -109,6 +119,33 @@ def _is_vocal(body: list[ast.stmt]) -> bool:
     return False
 
 
+def _tracked_py_files() -> list[pathlib.Path]:
+    """只扫**被 git 跟踪**的 src/*.py。
+
+    2026-08-28 上线首日实锤：首版扫文件系统，于是共享工作树上他线的**未跟踪在途
+    文件**（当时是 src/inbox/migration_export.py，带 2 处静默）会把本门禁顶红——
+    而 CI 的 actions/checkout 只给被跟踪文件，同一份代码在 CI 是绿的。这种
+    「本地红 / CI 绿」的分叉正是 AGENTS 点名要避免的：门禁一旦会因别人没提交的
+    半成品而红，大家就会学会忽略它。
+
+    改为以 git 索引为准后，本门禁的判定面与 CI 完全一致；自己新写的文件在
+    `git add` 之后才纳入统计，与「提交才算数」的直觉也吻合。
+    git 不可用时回落全树扫描（宁可多扫，不要静默漏扫）。
+    """
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "-z", "--", "src/*.py"],
+            cwd=str(_REPO), capture_output=True, timeout=30,
+        )
+        if out.returncode == 0:
+            rels = [r for r in out.stdout.decode("utf-8", "replace").split("\0") if r]
+            if rels:
+                return sorted(_REPO / r for r in rels)
+    except Exception:
+        pass
+    return sorted(SRC_ROOT.rglob("*.py"))
+
+
 _SCAN_CACHE: dict[str, list[str]] | None = None
 
 
@@ -118,7 +155,7 @@ def _scan() -> dict[str, list[str]]:
     if _SCAN_CACHE is not None:
         return _SCAN_CACHE
     found: dict[str, list[str]] = defaultdict(list)
-    for path in sorted(SRC_ROOT.rglob("*.py")):
+    for path in _tracked_py_files():
         if "__pycache__" in path.parts:
             continue
         try:

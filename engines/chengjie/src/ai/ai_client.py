@@ -1201,7 +1201,11 @@ class AIClient(LoggerMixin):
                 self._maybe_refresh_hosted_token()
                 notify_key_failure(self._alert_label(), str(err)[:200])
         except Exception:
-            pass
+            # 这是观测链的**最后一环**：告警调用自己挂掉若也吞掉，key 失效就彻底
+            # 无人知晓（云端欠费/被封会表现为「AI 只是变笨了」）。仍不外抛（告警
+            # 故障不该连累主链），但必须留痕。
+            self.logger.warning("key 失效告警发送失败（告警链断开，请查 host_alert）",
+                                exc_info=True)
 
     def _maybe_refresh_hosted_token(self) -> None:
         """托管令牌 401 自愈（非托管态零开销直返）。绝不抛、绝不阻塞事件循环。"""
@@ -1885,7 +1889,12 @@ class AIClient(LoggerMixin):
 
                     record_action_for_status("ai_reply", 1)
                 except Exception:
-                    pass
+                    # 保持 fail-open（计量绝不能挡出话），但**不能无声**：这里丢一次
+                    # 就是账本少记一条 ai_reply，钱包余额会显得比真实更耐用，而
+                    # enforce 切换正是按这个余额与「跑道天数」拍板的（2026-08-28
+                    # 实测跑道仅 0.8 天，误差直接影响决策）。
+                    self.logger.warning("Token 计量记账失败（已放行出话，账本会少记一条 ai_reply）",
+                                        exc_info=True)
             return reply
         _fb_lang = (context or {}).get("reply_lang", "zh")
         if not self.client:
