@@ -158,6 +158,32 @@ def _vision_endpoint_model(vi: Dict[str, Any], url: str) -> str:
         return default
 
 
+# 配置里推不出预算时的兜底（旧硬编码值，保持零破坏）。有配置就一律跟配置走。
+_VISION_PROBE_FALLBACK_TIMEOUT = 45.0
+
+
+def _vision_endpoint_timeout(vi: Dict[str, Any], url: str) -> float:
+    """每端点探测预算——**跟生产同一个数**，别在探针里另立一套「多久算太久」。
+
+    2026-08-27 老板定线：「20 秒不识图就是有问题，要反馈」。那条线一旦只写进生产
+    配置而探针自留 45s 硬编码，就会出现最难查的一种分裂：**生产已经按 15s 掐断并
+    报失败，探针却还在慢悠悠等到 45s 然后报绿**——看板说健康、客户在挨等，而且谁
+    调了生产超时都不会想到还有第二个数要跟着改。这与本模块 ``_vision_endpoints`` /
+    ``_vision_endpoint_model`` 复用 vision_client 是同一条理由：复用 > 复刻。
+
+    用生产预算来卡探针是**偏宽松**的，方向安全：探针喂的是 64x64 小图，生产是
+    1536x1536 大图（同日实测云端 6.6s 中位就是按生产参数打的）。小图都跑不进大图的
+    预算，生产必然已经坏了——不会误报，只会晚报一点点。
+    """
+    try:
+        from src.vision_client import _endpoint_timeout
+        return float(_endpoint_timeout(
+            vi, url, default=float(vi.get("timeout")
+                                   or _VISION_PROBE_FALLBACK_TIMEOUT)))
+    except Exception:
+        return _VISION_PROBE_FALLBACK_TIMEOUT
+
+
 def build_probe_specs(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     """从运行配置推四域探针规格（纯函数）。域未启用/缺配置 → 不出规格（静默跳过）。"""
     cfg = cfg if isinstance(cfg, dict) else {}
@@ -252,7 +278,7 @@ def build_probe_specs(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
                 # 答案必须提到红：否则「模型在回话」与「模型真看见了图」分不开——
                 # 服务端悄悄丢图 / 路由到纯文本模型时，旧判据一路绿灯。
                 "expect_any": list(_VISION_EXPECT),
-                "timeout": 45.0,
+                "timeout": _vision_endpoint_timeout(vi, _url),
                 # 备胎**只观测不弹窗**：它坏了不影响当下出话（主路还在），半夜弹窗
                 # 是纯噪音；但必须进状态文件/metrics，好在切主之前就看见。
                 **({} if _idx == 0 else {"alert": False}),

@@ -346,6 +346,52 @@ def test_selfcheck_cli_contract(tmp_path, monkeypatch):
     assert mod.selected("vision", ["asr"], False) is False   # 显式 --domain 优先
 
 
+def test_vision_probe_budget_follows_production_not_a_second_hardcoded_number():
+    """探针的「多久算太久」必须跟生产同一个数——不许在探针里再写一个。
+
+    2026-08-27 老板定线「20 秒不识图就是有问题，要反馈」，落在生产 vision 配置上
+    （LAN 5s ＋ 云端 15s ＝ 端到端 20s）。探针若自留 45s 硬编码，就会出现最难查的
+    分裂：**生产已按 15s 掐断并失败，探针慢悠悠等到 45s 报绿**——看板说健康、客户
+    在挨等，而且谁调了生产超时都不会想到还有第二个数要跟着改。
+    """
+    from src.ops.true_probe import (
+        _VISION_PROBE_FALLBACK_TIMEOUT,
+        _vision_endpoint_timeout,
+    )
+
+    vi = {
+        "enabled": True, "model": "qwen3-vl:8b",
+        "base_urls": ["http://192.168.0.176:11434/v1",
+                      "https://api.siliconflow.cn/v1"],
+        "endpoint_timeouts": {"192.168.0.176": 5, "siliconflow": 15},
+        "timeout": 20,
+    }
+    # ① 逐端点跟随生产（快主路 5s／慢备胎 15s，不是一个笼统的大数）
+    assert _vision_endpoint_timeout(vi, "http://192.168.0.176:11434/v1") == 5.0
+    assert _vision_endpoint_timeout(vi, "https://api.siliconflow.cn/v1") == 15.0
+    # ② 未列出的端点吃全局，同样跟随生产
+    assert _vision_endpoint_timeout(vi, "https://other.example/v1") == 20.0
+    # ③ 端到端预算＝顺序试的和，必须守住老板给的 20s
+    total = sum(_vision_endpoint_timeout(vi, u) for u in vi["base_urls"])
+    assert total <= 20.0, f"端到端 {total}s 超过 20s 线"
+    # ④ 配置推不出时才回落硬编码（旧行为零破坏）
+    assert _vision_endpoint_timeout({}, "http://x/v1") == _VISION_PROBE_FALLBACK_TIMEOUT
+
+    # ⑤ 真进 spec：build_probe_specs 出来的 timeout 就是上面这些值，
+    #    不是另一处 45.0 —— 单元函数对了而接线没换是这类修复最常见的半途而废。
+    specs = {s["domain"]: s for s in build_probe_specs(dict(_FULL_CFG, vision=vi))}
+    assert specs["vision"]["timeout"] == 5.0
+    assert specs["vision_backup1"]["timeout"] == 15.0
+
+    # ⑥ ratchet：vision spec 里不许再出现字面超时（第二事实源的复发点）
+    src = (Path(__file__).parent.parent / "src" / "ops"
+           / "true_probe.py").read_text(encoding="utf-8")
+    block = src[src.index('"domain": "vision" if'):]
+    block = block[:block.index("# ── asr")]
+    assert '"timeout": 4' not in block and '"timeout": 3' not in block, \
+        "vision spec 的 timeout 必须由 _vision_endpoint_timeout 推，别写死"
+
+
 def _load_selfcheck():
     import importlib.util
 
