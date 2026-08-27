@@ -313,7 +313,12 @@ $gates = @(
     'tests/test_assistant_qa_eval.py',
     # 「没依据」哨兵：命中时用户必须一个字都看不到、answered 必须记真话、
     # 哨兵出现在正文中间不得误伤。含端到端真跑路由两例。
-    'tests/test_assistant_no_basis.py'
+    'tests/test_assistant_no_basis.py',
+    # 静默吞异常 ratchet（2026-08-28 建账，基线 2,052 处 / 21 模块）：宽异常是刻意
+    # 设计（绝不阻塞主链），问题在**无声**——handler 体只有 pass/return，既不记日志
+    # 也不兜底，故障只能靠用户投诉暴露。不强制清存量，只锁「不许再涨」；未登记模块
+    # 天花板为 0。含探测器自证（植入一处必红，已端到端验过）。
+    'tests/test_silent_exception_ratchet.py'
 )
 
 $missing = @($gates | Where-Object { -not (Test-Path (Join-Path $engineRoot $_)) })
