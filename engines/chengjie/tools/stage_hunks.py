@@ -61,6 +61,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -252,25 +253,51 @@ def _staged_any() -> bool:
     return rc != 0
 
 
-def _force_rm(path: Path) -> None:
+def remove_tree_with_retry(path: Path, attempts: int = 4,
+                           sleep_sec: float = 1.5) -> bool:
+    """强删目录，带重试 → 是否真的删掉了。
+
+    Windows 上刚跑过 pytest 的预览树会被 ``__pycache__`` / 索引器短暂占用：单次
+    ``rmtree`` 失败是常态（2026-08-27 首版实测就卡在这里，还谎报了「已清理」）。
+    只读属性用 chmod 兜，占用用重试兜，**最终以 path.exists() 为唯一判据**。
+    """
     def _onerror(func, p, _exc):
         try:
             Path(p).chmod(stat.S_IWRITE)
             func(p)
         except Exception:
             pass
-    shutil.rmtree(path, onerror=_onerror)
+
+    for i in range(max(1, attempts)):
+        if not path.exists():
+            return True
+        shutil.rmtree(path, onerror=_onerror)
+        if not path.exists():
+            return True
+        if i < attempts - 1:
+            time.sleep(sleep_sec)
+    return not path.exists()
 
 
 def do_preview_clean(target: Path) -> int:
-    """清理预览 worktree。git worktree remove 常因 __pycache__ 占用失败，
-    故 remove 之后再强删目录 + prune（实测必需）。"""
+    """清理预览 worktree。
+
+    两步都必要：``git worktree remove`` 收 git 侧登记（常因文件占用失败），
+    再强删目录 + ``prune``。**报告以磁盘实况为准**——首版无条件打印「已清理」，
+    而目录其实还在，这种谎报比不清理更坏。
+    """
     git("worktree", "remove", "--force", str(target), check=False)
-    if target.exists():
-        _force_rm(target)
+    gone = remove_tree_with_retry(target)
     git("worktree", "prune")
-    print(f"已清理：{target}  存在={target.exists()}")
-    return 0
+    _, wt, _ = git("worktree", "list")
+    listed = str(target) in wt.decode("utf-8", "replace")
+    if gone and not listed:
+        print(f"已清理：{target}")
+        return 0
+    print(f"!! 未能完全清理：目录仍存在={target.exists()}  git 仍登记={listed}\n"
+          f"   多为文件占用（刚在该树跑过 pytest）。稍后重跑本命令，或手动删除：\n"
+          f"   Remove-Item '{target}' -Recurse -Force", file=sys.stderr)
+    return 1
 
 
 def main(argv: Optional[List[str]] = None) -> int:

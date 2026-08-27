@@ -142,6 +142,30 @@ def test_apply_path_verifies_staged_syntax():
     assert "--cached" in seg and '"--check"' in seg   # 先干跑再真应用
 
 
+def test_preview_clean_retries_and_reports_honestly(tmp_path):
+    """清理必须以磁盘实况为判据，且真能删掉带只读文件的树。
+
+    首版无条件打印「已清理」，而刚跑过 pytest 的预览树被 __pycache__ 占用其实没删掉
+    （2026-08-27 实锤）。谎报比不清理更坏——它让人以为干净了。
+    """
+    m = _mod()
+    tree = tmp_path / "wt"
+    (tree / "engines" / "chengjie" / "__pycache__").mkdir(parents=True)
+    f = tree / "engines" / "chengjie" / "__pycache__" / "x.pyc"
+    f.write_bytes(b"\x00")
+    f.chmod(0o444)                                   # 只读也要能删掉
+    assert m.remove_tree_with_retry(tree, attempts=3, sleep_sec=0.01) is True
+    assert not tree.exists()
+    # 不存在的目录视为已清理（幂等，重跑不报错）
+    assert m.remove_tree_with_retry(tmp_path / "nope") is True
+
+    src = _TOOL.read_text(encoding="utf-8")
+    i = src.index("def do_preview_clean(")
+    seg = src[i:src.index("def main(")]
+    assert "target.exists()" in seg                  # 以实况为判据
+    assert "return 1" in seg                         # 没清干净必须非零退出
+
+
 def test_warns_about_foreign_staged_files():
     """index 里有别人的暂存内容要提醒：sibling 一句 git commit -a 会连带交掉
     （AGENTS.md 记录过该事故）。"""
