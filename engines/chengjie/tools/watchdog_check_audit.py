@@ -34,6 +34,30 @@ AttributeError、签名变更的 TypeError）都会让那个检查**从此不再
 
 只读，不改任何文件。
 
+## 要不要推广到别的周期循环？——已经量过了，基本不用（2026-08-27）
+
+这工具好用，第一反应是「全仓推广」。别急，先看这次的实测：
+
+全仓 ``except Exception: logger.debug`` 有 **1626 处 / 159 个文件**——照单列出来是
+一张没人会看的表，因为绝大多数是**正当的** best-effort 兜底（可选的富化、埋点、
+镜像），吞掉正是想要的行为。本工具能出结论，靠的不是「找吞异常」，而是
+``_tick`` 那个**特定形状**：一个周期循环派发若干**独立具名单元**，某个单元死掉后
+整块能力永久消失而循环照常转。
+
+按这个形状扫全仓，同构的只有 6 处，逐个看完只剩两处真同构
+（``line_rpa/service.py::_loop`` 与 ``messenger_rpa/service.py::_standby_loop``，
+共 6 个单元）；``messenger_rpa/runner.py`` 那三处是**单次流程内的步骤**
+（screenshot / exit_thread / finish），吞掉＝这一轮这步失败，不是能力消失，语义不同。
+
+那 6 个单元里 **5 个本来就有 INFO 心跳**。也就是说 **HealthWatchdog 是异类**
+（58 个单元共用一个 tick、又长期无人跑行为测试），不是全仓通病——所以推广没有价值，
+别再花时间重做这段调查。
+
+唯一的真发现：``line_rpa/service.py::_classify_alerts`` 是真 BLIND。它把 adb_lost /
+send_fail_streak 写进告警表，死了之后表就不再进新行——而**「没有行」和「一切正常」
+长得一模一样**，绝症正在于此（告警源哑了比没有告警更糟）。属已知小额债务：
+影响面是 LINE RPA 一条告警路径，修法是加一条周期性 INFO 心跳或让派发处提到 warning。
+
 用法::
 
     python tools/watchdog_check_audit.py            # 表格

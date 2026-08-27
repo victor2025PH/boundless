@@ -346,6 +346,76 @@ def test_selfcheck_cli_contract(tmp_path, monkeypatch):
     assert mod.selected("vision", ["asr"], False) is False   # 显式 --domain 优先
 
 
+def _load_selfcheck():
+    import importlib.util
+
+    path = Path(__file__).parent.parent / "tools" / "true_probe_selfcheck.py"
+    spec = importlib.util.spec_from_file_location("_tp_selfcheck", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_selfcheck_from_state_never_probes_and_distrusts_stale(tmp_path, monkeypatch):
+    """``--from-state`` 三条契约：不探测 ／ 陈旧不当绿 ／「没文件」分两种。
+
+    这个模式的全部价值就是「问一句生产健不健康不用付一次真推理」——一旦它偷偷发探测，
+    价值归零。而它最容易犯的错是把**冻住的旧读数**当健康：watchdog 死掉后状态文件
+    原地不动，四域永远显示上一轮的绿，「绿了但没在更新」和「真的绿」长得一模一样。
+    同日在 ``line_rpa._classify_alerts`` 上认出的是同一个陷阱（告警源哑了＝表里不再
+    进新行＝看起来一切正常），所以这里必须钉死。
+    """
+    import json as _json
+    import time as _time
+
+    mod = _load_selfcheck()
+    monkeypatch.setattr(
+        mod, "run_probe", lambda s: pytest.fail("--from-state 不得发起任何探测"))
+
+    cfg_dir = tmp_path / "config"
+    cfg_dir.mkdir()
+
+    # ① 没有状态文件 + 该实例压根没有可探的域（运营四域全关）＝正常，不许报红。
+    #    这是首版真踩过的误报：对着一台合规实例长年喊红，喊几次就没人看退出码了。
+    monkeypatch.setattr(mod, "load_merged_config", lambda root: {})
+    rep = mod.read_root_state(tmp_path, [])
+    assert rep["present"] is False and rep["nothing_to_probe"] is True
+    assert mod.main(["--from-state", "--data-root", str(tmp_path)]) == 0
+
+    # ② 没有状态文件 + 域配着＝watchdog 没在写，是真问题
+    monkeypatch.setattr(mod, "load_merged_config", lambda root: _FULL_CFG)
+    rep = mod.read_root_state(tmp_path, [])
+    assert rep["present"] is False and rep["nothing_to_probe"] is False
+    assert mod.main(["--from-state", "--data-root", str(tmp_path)]) == 2
+
+    # ③ 新鲜且全绿 → 0
+    fresh = {
+        "updated_ts": _time.time(), "updated_at": "now",
+        "domains": {"vision": {"ok": True, "fails": 0, "detail": "0.3s 红"}},
+        "gaps": {},
+    }
+    (cfg_dir / "true_probe_state.json").write_text(
+        _json.dumps(fresh), encoding="utf-8")
+    assert mod.main(["--from-state", "--data-root", str(tmp_path)]) == 0
+
+    # ④ 同样一份**全绿**读数，只是老了几个钟头 → 必须报红。域仍显示 ok=True，
+    #    退出码却是 2——这正是「不拿冻住的绿冒充健康」的可执行定义。
+    stale = dict(fresh, updated_ts=_time.time() - 6 * 3600)
+    (cfg_dir / "true_probe_state.json").write_text(
+        _json.dumps(stale), encoding="utf-8")
+    rep = mod.read_root_state(tmp_path, [])
+    assert rep["domains"]["vision"]["ok"] is True      # 读数本身还是绿的
+    assert rep["stalled"]                              # 但判定是停摆
+    assert mod.main(["--from-state", "--data-root", str(tmp_path)]) == 2
+
+    # ⑤ 陈旧判据不自己造一套：与 watchdog 告警共用 stalled_verdict，
+    #    两边各算一套就会出现「工具说停摆、告警说正常」的互相打脸。
+    src = (Path(__file__).parent.parent / "tools"
+           / "true_probe_selfcheck.py").read_text(encoding="utf-8")
+    assert "stalled_verdict" in src
+    assert "STATE_MAX_AGE" not in src, "别在 CLI 里复制一份陈旧阈值"
+
+
 def test_build_probe_specs_skips_disabled_domains():
     cfg = {
         "avatar_voice": {"enabled": False},
