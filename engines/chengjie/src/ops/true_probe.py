@@ -5,18 +5,28 @@ fish 健康 ping 绿但真合成挂死——全天语音断档零告警。本模
 **真干活**（真合成 / 真翻译 / 真识图 / 真转写），连续 N 次失败＝主机弹窗 +
 EventBus(host_alert) 外发 + ERROR 日志；恢复补绿窗。
 
+「有回话」同样不算活（2026-08-27 补）：出文本的三个域此前只断言输出非空——VLM 丢了
+视觉塔、或图被服务端悄悄丢弃后照样闲聊，MT 把源文原样回吐（模型装错最常见的形态），
+ASR 把 2 倍速噪声也能吐出一串字（当天实锤，见 ASR_FIXTURE），在旧判据下全是绿的。
+故内容级弱断言进 spec，见 ``content_verdict``；断言词表一律拿**已知坏样本**校准。
+
 结构：
   - ``build_probe_specs(cfg)``  纯函数：从运行配置推每域探针规格（未启用的域无规格）
+  - ``probe_gap_reasons(cfg)``  纯函数：域「开着却推不出规格」＝静默盲区，逐条给原因
+  - ``content_verdict(...)``    纯函数：回答的内容级弱断言（离线可单测）
   - ``run_probe(spec)``         同步 HTTP 执行一个规格（watchdog tick 在线程池里跑，可阻塞）
   - ``next_strike_state(...)``  纯函数：连败/恢复状态机 → 该发什么通知
   - watchdog 侧薄包装见 health_watchdog._check_true_probes
+  - 手动跑一轮（不等 10min tick）：``python tools/true_probe_selfcheck.py``
 """
 from __future__ import annotations
 
 import base64
 import json
 import logging
+import re
 import time
+import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
@@ -24,16 +34,128 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("ai_chat_assistant.true_probe")
 
-# ASR 探针语音夹具（hub index_tts 合成「你好你好，今天天气不错」，2026-08-17 生成）
+# ASR 探针语音夹具（hub index_tts 合成「你好你好，今天天气不错」，2026-08-17 生成；
+# 2026-08-27 修正为 16k 单声道 PCM）。
+# ⚠ 原始夹具是**第二个从没被验过的夹具**：WAV 头声明 44100Hz，而 index_tts 原生是
+# 22050Hz（仓库 media-artifact 纪律里的采样率指纹），于是整段音频以 2 倍速+高八度
+# 播放，ASR 十天来一直把它转成「挺好 挺好 挺好 挺挺挺不錯」——而探针只查「非空」，
+# 所以每 10 分钟照报 asr=ok。按 22050 重解释即逐字还原「今天天氣不錯」，据此定案。
+# 逐字稿 sidecar 在 assets/probe/asr_probe.txt（与参考音同约定）——「它应该念什么」
+# 必须和音频放在一起，光写在代码注释里，动夹具的人看不到。
+# 换夹具必须：跑 test_asr_fixture_is_canonical_16k_wav（离线结构）+
+# `python tools/true_probe_selfcheck.py --domain asr -n 3`（真机复核 _ASR_EXPECT）。
+# 附带好处：内容断言上线后，**夹具再被写坏会让探针直接红**——2 倍速那版转出的
+# 「挺挺挺不錯」过不了 今天/天氣 断言，不会再像这次一样静默绿十天。
 ASR_FIXTURE = Path(__file__).resolve().parents[2] / "assets" / "probe" / "asr_probe.wav"
 
-# 8x8 纯红 PNG（识图探针输入；活性探测不校验内容正确性，只要求模型真跑了推理）
+# 转写断言词表：用**已知坏样本**校准——2 倍速那版输出「挺挺挺不錯」，含「不錯」却
+# 不含「今天/天氣」。故 不错/不錯 刻意排除在外（它连坏样本都能满足＝没有鉴别力），
+# 只收 ASR 真听清了才会出现的词。简繁两版都收（language=auto 的输出会漂）。
+_ASR_EXPECT: Tuple[str, ...] = ("今天", "天气", "天氣")
+
+# 64x64 纯红 PNG（识图探针输入；活性探测不校验内容正确性，只要求模型真跑了推理）。
+# 改这串前先读两条硬约束（2026-08-27 事故沉淀，当天 vision 探针每 10min 红一次）：
+#   ① 必须是**结构完好**的 PNG。旧常量是 8x8 且 IDAT chunk 的 CRC 是坏的、尾部缺
+#      IEND；LAN ollama 解码宽容照收（探针长期绿），03:10 识图切硅基后严格校验直接
+#      400：`{"code":20015,"message":"Verify image file failed: broken PNG file
+#      (bad header checksum in b'IDAT')"}`。**夹具本身从没被验过**是本次真正的根因。
+#   ② 边长必须够大。已知厂商地板是 28px（Qwen3-VL 图像处理器：重新生成的**合法**
+#      8x8 一样被 400 拒——`height(8) or width(8) must be larger than 28 for Qwen 3
+#      VL models`），这里取 64 是**刻意留余量**：紧贴地板 4px 的夹具，下一家把地板
+#      抬高就再炸一次，而尺寸带来的 token/带宽成本可以忽略（168B）。
+# 门禁 test_probe_image_fixture_is_structurally_valid 钉住这两条（纯离线校 CRC+尺寸）。
+# 实测：硅基 Qwen3-VL-8B 与 LAN ollama qwen3-vl:8b-instruct 两家都答「鲜艳的红色」。
 _RED_PNG_B64 = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFklEQVR4nGP8z8Dwn4EIwESM"
-    "olGFlCsEAE1oAhLLuJE1AAAAAElFTkSuQmCC"
+    "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAb0lEQVR4nO3PAQkAAAyEwO9f"
+    "eoshgnABdLep8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjx"
+    "BQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3IPanc8OLDQitxAAAAAElF"
+    "TkSuQmCC"
 )
 
 _AUDIO_MAGIC = (b"RIFF", b"OggS", b"ID3", b"fLaC")
+
+# 识图断言词表：喂纯红图问主色调，真看见了就几乎不可能不提到红。刻意**只收窄集**
+# ——rot/rouge/rojo 之流是别的语言的「红」但同时是 rotate/protection 的子串，收进来
+# 只会制造假绿。假绿是次要损失（漏判），假红要人半夜起床，宁可漏判不误判。
+_VISION_EXPECT: Tuple[str, ...] = ("红", "red", "赤")
+
+_CJK_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
+
+
+def content_verdict(content: str, spec: Dict[str, Any]) -> Tuple[bool, str]:
+    """openai_chat 回答的内容级弱断言（纯函数，离线可单测）。→ (ok, 失败原因)。
+
+    两条声明式判据（都写在 spec 里，是纯数据不是回调）：
+      ``expect_any``   命中任一子串（大小写不敏感）＝证明模型真消费了输入。
+      ``expect_latin`` 结构式：必须有拉丁字母且不得含 CJK＝证明 zh→en 真译了，
+                       而不是把源文原样回吐（词表匹配对 MT 太脆，结构判据才稳）。
+
+    判据一律选「真跑对了就几乎不可能不满足」的那一侧——探针误红的代价（弹窗+
+    信任流失，2026-08-27 实锤）远大于偶尔漏判。
+    """
+    text = (content or "").strip()
+    if not text:
+        return False, "empty completion"
+    expect = spec.get("expect_any") or ()
+    if expect:
+        low = text.lower()
+        if not any(str(k).lower() in low for k in expect):
+            return False, f"answer misses {list(expect)[:3]}: {text[:48]!r}"
+    if spec.get("expect_latin"):
+        if not any("a" <= c <= "z" for c in text.lower()):
+            return False, f"no latin in output: {text[:48]!r}"
+        if _CJK_RE.search(text):
+            return False, f"source echoed (CJK in output): {text[:48]!r}"
+    return True, ""
+
+# hub 侧一次 tts_only 的内部预算（换引擎/换副本重试）实测可达 100-120s，而探针
+# 超时即断连、hub 那边请求仍在途 → 副本被判「疑似挂死」并被后续路由规避，
+# 于是探针本身把业务链推得更坏（2026-08-21 实锤：24 次 wedge 警告全在探针放弃后）。
+# 故 tts 探针超时须**大于** hub 内部预算：默认 90s，且不许配到 60s 以下。
+_TTS_PROBE_TIMEOUT_DEFAULT = 90.0
+_TTS_PROBE_TIMEOUT_FLOOR = 60.0
+
+
+def _tts_probe_timeout(hf: Dict[str, Any]) -> float:
+    """tts 探针超时（秒）：``hub_fish.probe_timeout_sec`` 可调，地板 60s。"""
+    try:
+        v = float(hf.get("probe_timeout_sec") or 0.0)
+    except (TypeError, ValueError):
+        v = 0.0
+    if v <= 0:
+        v = _TTS_PROBE_TIMEOUT_DEFAULT
+    return max(v, _TTS_PROBE_TIMEOUT_FLOOR)
+
+
+def _vision_endpoints(vi: Dict[str, Any]) -> List[str]:
+    """识图端点顺序——**复用** vision_client 的解析，绝不在这里另算一套。
+
+    生产按 ``_vision_base_urls`` 解析（``base_urls`` 在前、单数 ``base_url`` 在后，
+    补 ``/v1`` 并去重）。探针此前只认单数 ``base_url``：两者当前恰好同值，一旦有人
+    只改 ``base_urls``，探针就会在测**另一个端点**还报绿——「探针测的不是生产在用
+    的那条路」是本模块最不该犯的错。导入失败回落单数 base_url（旧行为，零破坏）。
+    """
+    try:
+        from src.vision_client import _vision_base_urls
+        return list(_vision_base_urls(vi) or [])
+    except Exception:
+        one = str(vi.get("base_url") or "").strip()
+        return [one] if one else []
+
+
+def _vision_endpoint_model(vi: Dict[str, Any], url: str) -> str:
+    """每端点模型名——同样复用 vision_client（实施71 的 ``endpoint_models``）。
+
+    云主与 LAN 备对同一模型命名不同（``Qwen/Qwen3-VL-8B-Instruct`` vs
+    ``qwen3-vl:8b-instruct``），两套解析必然漂移；漂移的后果是探针拿不存在的模型名
+    打备胎、把健康端点判死。私有名导入是刻意的：复用 > 复刻。
+    """
+    default = str(vi.get("model") or "").strip()
+    try:
+        from src.vision_client import _endpoint_model
+        return str(_endpoint_model(vi, url, default) or default)
+    except Exception:
+        return default
 
 
 def build_probe_specs(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -62,7 +184,11 @@ def build_probe_specs(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
             specs.append({
                 "domain": "tts", "kind": "hub_tts",
                 "url": str(hf.get("base_url")).rstrip("/") + "/api/tts_only",
-                "json": body, "timeout": 30.0,
+                "json": body, "timeout": _tts_probe_timeout(hf),
+                # 引擎归属判据（2026-08-22）：探针**刻意要 wav**——采样率是引擎身份证，
+                # 而 ogg 转码恒重采样 48k 会把它抹平。生产多走 ogg（查不出），所以这条
+                # 带外探针是「hub 有没有拿别的引擎顶包」唯一的常态化检出面。
+                "engine": _eng,
             })
 
     # ── translate：MT 引擎真翻译（ollama /v1 兼容口，单端点契约）──────────────
@@ -81,51 +207,138 @@ def build_probe_specs(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
                 }],
                 "max_tokens": 60, "temperature": 0,
             },
+            # 译文必须真是英文：MT 把中文源文原样回吐是模型装错/权重没载最常见的
+            # 形态，旧的「非空即绿」判据对它完全睁眼瞎。
+            "expect_latin": True,
             "timeout": 30.0,
         })
 
-    # ── vision：VLM 真识图（base_url 已含 /v1；喂 8x8 红图求一句描述）──────────
+    # ── vision：VLM 真识图（喂纯红图求一句描述），**逐端点** ────────────────
+    # 端点顺序与模型名一律问 vision_client（唯一事实源，见 _vision_endpoints）：
+    # 此前探针只打单数 base_url，而生产按 `base_urls` 在前的顺序解析——两者一旦分叉，
+    # 探针测的就不是生产主路。备胎同样要探：备胎腐烂了若只能在云端故障当天发现，
+    # 那正是最坏的时机（2026-08-27 实测 LAN 备胎当时健康，属运气不属机制）。
     vi = cfg.get("vision") or {}
-    _vi_base = str(vi.get("base_url") or "").strip()
-    if vi.get("enabled") and _vi_base and str(vi.get("model") or "").strip():
-        specs.append({
-            "domain": "vision", "kind": "openai_chat",
-            "url": _vi_base.rstrip("/") + "/chat/completions",
-            "json": {
-                "model": str(vi.get("model")).strip(),
-                "messages": [{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "用一句话说出这张图的主色调。"},
-                        {"type": "image_url", "image_url": {
-                            "url": "data:image/png;base64," + _RED_PNG_B64}},
-                    ],
-                }],
-                "max_tokens": 40, "temperature": 0,
-            },
-            "timeout": 45.0,
-        })
+    _vi_eps = _vision_endpoints(vi)
+    if vi.get("enabled") and _vi_eps and str(vi.get("model") or "").strip():
+        # 云端主路（实施70 识图切硅基）要真 Bearer——探针裸打 401 会把健康端点
+        # 判死（2026-08-27 03:59 实锤 strike）。LAN ollama 忽略 Authorization，
+        # 带真 key 无害；未配/占位仍回落 "probe" 保持旧行为。
+        _vi_key = str(vi.get("api_key") or "").strip()
+        _vi_headers = (
+            {"Authorization": f"Bearer {_vi_key}"}
+            if _vi_key and _vi_key not in ("ollama", "YOUR_ZHIPU_API_KEY")
+            else None
+        )
+        for _idx, _url in enumerate(_vi_eps):
+            specs.append({
+                # 主路仍叫 vision（弹窗/告警语义不变）；备胎独立域名，各自记连败。
+                "domain": "vision" if _idx == 0 else f"vision_backup{_idx}",
+                "kind": "openai_chat",
+                **({"headers": _vi_headers} if _vi_headers else {}),
+                "url": _url.rstrip("/") + "/chat/completions",
+                "json": {
+                    "model": _vision_endpoint_model(vi, _url),
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "用一句话说出这张图的主色调。"},
+                            {"type": "image_url", "image_url": {
+                                "url": "data:image/png;base64," + _RED_PNG_B64}},
+                        ],
+                    }],
+                    "max_tokens": 40, "temperature": 0,
+                },
+                # 答案必须提到红：否则「模型在回话」与「模型真看见了图」分不开——
+                # 服务端悄悄丢图 / 路由到纯文本模型时，旧判据一路绿灯。
+                "expect_any": list(_VISION_EXPECT),
+                "timeout": 45.0,
+                # 备胎**只观测不弹窗**：它坏了不影响当下出话（主路还在），半夜弹窗
+                # 是纯噪音；但必须进状态文件/metrics，好在切主之前就看见。
+                **({} if _idx == 0 else {"alert": False}),
+            })
 
     # ── asr：真转写（OpenAI 兼容 /audio/transcriptions，multipart 夹具 wav）────
     vr = cfg.get("voice_recognition") or {}
     _vr_base = str(vr.get("base_url") or "").strip()
+    if vr.get("enabled") and _vr_base and not ASR_FIXTURE.is_file():
+        # 缺夹具＝这一域**静默消失**（四域探针悄悄变三域，日志里连个名字都不出现）。
+        # 2026-08-27 实测根 .gitignore 的通配 *.wav 正把夹具挡在版本控制外，干净
+        # clone 必然踩到——已加 probe 例外放行，这里再补一句可见的警告兜底。
+        logger.warning("[true_probe] asr 域缺夹具，该域不参与探针：%s", ASR_FIXTURE)
     if vr.get("enabled") and _vr_base and ASR_FIXTURE.is_file():
         specs.append({
             "domain": "asr", "kind": "asr_transcribe",
             "url": _vr_base.rstrip("/") + "/audio/transcriptions",
             "model": str(vr.get("model") or "whisper-1").strip(),
+            # 转写必须听清：ASR 是四域里最容易「有输出即算活」的一个——模型退化/
+            # 喂错音频照样吐得出字，非空判据对它完全睁眼瞎（见 _ASR_EXPECT）。
+            "expect_any": list(_ASR_EXPECT),
             "timeout": 30.0,
         })
 
     return specs
 
 
-def _http_json(url: str, payload: Dict[str, Any], timeout: float) -> Dict[str, Any]:
+def probe_gap_reasons(cfg: Dict[str, Any]) -> Dict[str, str]:
+    """域「开着却推不出探针规格」＝静默盲区（纯函数）→ ``{域: 人话原因}``。
+
+    为什么单独有这个函数：``build_probe_specs`` 对配置不全的域**静默跳过**，于是
+    「运营把 ASR 打开了、但夹具没随仓库分发」与「运营本来就没开 ASR」在输出里
+    长得一模一样——四域探针悄悄变三域，日志里连域名都不出现。2026-08-27 实测根
+    ``.gitignore`` 的通配 ``*.wav`` 正在制造前者。
+
+    只报**前者**：域没开是运营的正常选择（zhiliao_pilot 三个媒体域全关，把它报成
+    问题就是误报——探针误红的代价今天已经付过一次了）。
+
+    「拿到规格没有」这半边一律现问 ``build_probe_specs``（唯一事实源，不复刻它的
+    条件判断）；本函数只额外回答「这个域是不是开着的」。
+    """
+    cfg = cfg if isinstance(cfg, dict) else {}
+    got = {s.get("domain") for s in build_probe_specs(cfg)}
+    gaps: Dict[str, str] = {}
+
+    av = cfg.get("avatar_voice") or {}
+    hf = av.get("hub_fish") if isinstance(av.get("hub_fish"), dict) else {}
+    if av.get("enabled") and hf.get("enabled") and "tts" not in got:
+        gaps["tts"] = ("hub_fish 已启用但推不出规格（缺 base_url 或 profile_map 为空）"
+                       if str(hf.get("base_url") or "").strip()
+                       else "hub_fish 已启用但缺 base_url")
+
+    # translate 没有 enabled 开关，「启用」的真信号是**它在不在引擎链里**——
+    # 光看「配置里有没有 ollama_mt 这个键」会把 config.yaml 自带的空脚手架
+    # （base_url/model 皆空、order 里根本没有它）误判成盲区（zhiliao_pilot 实锤，
+    # 本函数首次真机运行即自己撞上）。order 缺省时一律不判：宁可漏不可误。
+    eng = ((cfg.get("translation") or {}).get("engines") or {})
+    _chain: List[str] = list(eng.get("order") or []) if isinstance(eng.get("order"), list) else []
+    _per_lang = eng.get("per_lang_order")
+    if isinstance(_per_lang, dict):
+        for _v in _per_lang.values():
+            if isinstance(_v, list):
+                _chain.extend(_v)
+    if "ollama_mt" in {str(x).strip() for x in _chain} and "translate" not in got:
+        gaps["translate"] = "ollama_mt 在引擎链里但缺 base_url(s) 或 model"
+
+    vi = cfg.get("vision") or {}
+    if vi.get("enabled") and "vision" not in got:
+        gaps["vision"] = "识图已启用但缺 base_url 或 model"
+
+    vr = cfg.get("voice_recognition") or {}
+    if vr.get("enabled") and "asr" not in got:
+        gaps["asr"] = (f"语音识别已启用但夹具缺失：{ASR_FIXTURE}"
+                       if str(vr.get("base_url") or "").strip()
+                       else "语音识别已启用但缺 base_url")
+    return gaps
+
+
+def _http_json(url: str, payload: Dict[str, Any], timeout: float,
+               headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    hdrs = {"Content-Type": "application/json; charset=utf-8",
+            "Authorization": "Bearer probe"}
+    if headers:
+        hdrs.update(headers)
     req = urllib.request.Request(
-        url, data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json; charset=utf-8",
-                 "Authorization": "Bearer probe"},
-        method="POST")
+        url, data=json.dumps(payload).encode("utf-8"), headers=hdrs, method="POST")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8", "replace"))
 
@@ -152,12 +365,25 @@ def run_probe(spec: Dict[str, Any]) -> Tuple[bool, str]:
             raw = base64.b64decode(str(data.get("audio_base64") or ""), validate=False)
             if len(raw) < 8000 or not raw.startswith(_AUDIO_MAGIC):
                 return False, f"audio invalid ({len(raw)}B)"
-            return True, f"{time.time() - t0:.1f}s {len(raw) // 1024}KB"
+            base = f"{time.time() - t0:.1f}s {len(raw) // 1024}KB"
+            # 「合成成功」≠「目标引擎合成」：hub 是 prefer 语义，点名引擎不可用就静默
+            # 换一个，信封里没有引擎字段。按采样率指纹反查——判出别的已登记引擎即红。
+            try:
+                from src.ai.avatar_voice import engine_attribution
+                verdict, detail = engine_attribution(
+                    raw, str(data.get("format") or "wav"), spec.get("engine"))
+            except Exception:
+                verdict, detail = "unknown", ""
+            if verdict == "mismatch":
+                return False, f"engine mismatch: {detail}"
+            return True, f"{base} {detail}".rstrip()
         if kind == "openai_chat":
-            data = _http_json(url, spec.get("json") or {}, timeout)
+            data = _http_json(url, spec.get("json") or {}, timeout,
+                              headers=spec.get("headers"))
             content = _chat_content(data)
-            if not content:
-                return False, "empty completion"
+            verdict_ok, why = content_verdict(content, spec)
+            if not verdict_ok:
+                return False, why
             return True, f"{time.time() - t0:.1f}s {content[:24]!r}"
         if kind == "asr_transcribe":
             wav = ASR_FIXTURE.read_bytes()
@@ -179,12 +405,195 @@ def run_probe(spec: Dict[str, Any]) -> Tuple[bool, str]:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8", "replace"))
             text = str(data.get("text") or "").strip()
-            if not text:
-                return False, "empty transcription"
+            verdict_ok, why = content_verdict(text, spec)
+            if not verdict_ok:
+                return False, why.replace("empty completion", "empty transcription")
             return True, f"{time.time() - t0:.1f}s {text[:20]!r}"
         return False, f"unknown kind {kind!r}"
+    except urllib.error.HTTPError as ex:
+        # 响应体才是根因。裸 str(HTTPError) 只有「HTTP Error 400: Bad Request」，
+        # 零信息量——2026-08-27 那次坏 PNG 事故靠它排查不出任何东西，得手工复现
+        # 请求才看到 `code 20015 broken PNG file`。4xx 尤其必须带上厂商的话。
+        try:
+            body = " ".join(ex.read().decode("utf-8", "replace").split())
+        except Exception:
+            body = ""
+        return False, f"HTTP {ex.code}: {(body or str(ex.reason))[:180]}"
     except Exception as ex:
         return False, f"{type(ex).__name__}: {str(ex)[:100]}"
+
+
+STATE_FILENAME = "true_probe_state.json"
+
+# 持久化的连败状态最多认这么久。进程停了几天再回来，旧的 alerted 不该继续压住一次
+# 合法首报——把「防弹窗风暴」做成「永久静音」是更坏的失败模式。
+STATE_MAX_AGE_SEC = 24 * 3600.0
+
+
+def state_path(config_dir: Any) -> Path:
+    """状态文件位置（与 identity_shadow_state.json 同目录同风格）。"""
+    return Path(config_dir) / STATE_FILENAME
+
+
+def read_state(path: Any) -> Dict[str, Any]:
+    """读状态（缺失/坏 JSON/形状不对 → 空 dict，绝不抛）。"""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def write_state(
+    path: Any,
+    strikes: Dict[str, Dict[str, Any]],
+    *,
+    observations: Optional[Dict[str, Dict[str, Any]]] = None,
+    gaps: Optional[Dict[str, str]] = None,
+    now: Optional[float] = None,
+) -> bool:
+    """原子落盘（tmp+replace）。失败只记 debug——丢的是去抖基准与观测，绝不能反过来
+    影响探针本身（探针是兜底机制，兜底机制不该新增故障面）。"""
+    ts = float(now if now is not None else time.time())
+    doc: Dict[str, Any] = {
+        "updated_ts": ts,
+        "updated_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)),
+        "domains": {},
+        "gaps": dict(gaps or {}),
+    }
+    for domain, st in (strikes or {}).items():
+        row = dict(st or {})
+        row.update((observations or {}).get(domain) or {})
+        doc["domains"][domain] = row
+    try:
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        tmp.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(p)
+        return True
+    except Exception:
+        logger.debug("[true_probe] 状态落盘失败 path=%s", path, exc_info=True)
+        return False
+
+
+def restore_strike_state(
+    path: Any,
+    *,
+    now: Optional[float] = None,
+    max_age_sec: float = STATE_MAX_AGE_SEC,
+) -> Dict[str, Dict[str, Any]]:
+    """冷启动恢复连败状态（修「同一个问题每次重启弹一次窗」）。
+
+    2026-08-27 实录：识图探针红了一整天，04:48/05:28/06:18 三次重启把内存里的
+    ``alerted`` 清零，于是同一个问题弹了三次窗。持久化后：问题没解决就不再重复报，
+    真恢复了才补绿窗。
+
+    只认新鲜状态（默认 24h）：太旧的一律丢弃当全新开始——宁可多报一次，也不要让
+    一个陈年状态文件把新故障的首报永久静音。形状不对/读不到 → {}。
+    """
+    doc = read_state(path)
+    ts = float(now if now is not None else time.time())
+    try:
+        age = ts - float(doc.get("updated_ts") or 0.0)
+    except (TypeError, ValueError):
+        return {}
+    if age < 0 or age > float(max_age_sec):
+        return {}
+    domains = doc.get("domains")
+    if not isinstance(domains, dict):
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for domain, row in domains.items():
+        if not isinstance(row, dict):
+            continue
+        try:
+            out[str(domain)] = {
+                "fails": int(row.get("fails") or 0),
+                "alerted": bool(row.get("alerted")),
+                "last_ok": float(row.get("last_ok") or 0.0),
+                "last_run": float(row.get("last_run") or 0.0),
+            }
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def metrics_snapshot(config_dir: Any, *, now: Optional[float] = None) -> Dict[str, Any]:
+    """``/api/workspace/metrics`` 的 ``true_probe`` 段——**只读状态文件**。
+
+    绝不在 web 请求里现场跑探针（那会把一次看板刷新变成四发真推理，且请求超时）。
+    ``stale_sec`` 让消费方能区分「四域都绿」与「探针根本没在跑」——后者此前完全
+    不可观测（探针结果只进日志和弹窗，src/web 里搜不到一处引用）。
+    """
+    doc = read_state(state_path(config_dir))
+    if not doc:
+        return {"present": False}
+    ts = float(now if now is not None else time.time())
+    domains = doc.get("domains") if isinstance(doc.get("domains"), dict) else {}
+    out: Dict[str, Any] = {
+        "present": True,
+        "updated_at": str(doc.get("updated_at") or ""),
+        "stale_sec": max(0, int(ts - float(doc.get("updated_ts") or 0.0))),
+        "gaps": doc.get("gaps") if isinstance(doc.get("gaps"), dict) else {},
+        "domains": {},
+        "failing": [],
+    }
+    for domain, row in domains.items():
+        if not isinstance(row, dict):
+            continue
+        ok = bool(row.get("ok"))
+        out["domains"][str(domain)] = {
+            "ok": ok,
+            "fails": int(row.get("fails") or 0),
+            "alerted": bool(row.get("alerted")),
+            "detail": str(row.get("detail") or "")[:120],
+        }
+        if not ok:
+            out["failing"].append(str(domain))
+    return out
+
+
+def stalled_verdict(
+    config_dir: Any,
+    *,
+    interval_min: float = 10.0,
+    factor: float = 3.0,
+    now: Optional[float] = None,
+) -> Optional[Dict[str, Any]]:
+    """探针**自己停摆**的判据（纯函数）→ 停摆详情，或 None（正常）。
+
+    2026-08-27 亲身实锤：接线漏了一个局部 import → NameError 被 tick 外层的 except
+    吞掉 → 探针从重启起整段不跑。当时唯一的信号是「轮次完成那行不再出现」——一个
+    需要人主动去数的负面信号。兜底机制静默停摆是最坏的失败模式，它必须自己有兜底。
+
+    **零误报的构造**：只在「状态文件存在 **且** 陈旧」时成立。
+      · 文件存在 ＝ 探针至少成功跑完过一轮（这台机器上它是work 的）；
+      · 陈旧     ＝ 它停了。
+    从没跑过（无文件）刻意不报——那是「未启用 / 刚部署 / 配置推不出规格」，由
+    metrics 的 ``present=false`` 与 ``probe_gap_reasons`` 表达，在这里报就是误报。
+    """
+    p = state_path(config_dir)
+    doc = read_state(p)
+    if not doc:
+        return None
+    ts = float(now if now is not None else time.time())
+    try:
+        updated = float(doc.get("updated_ts") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if updated <= 0:
+        return None
+    threshold = max(120.0, float(interval_min or 10.0) * 60.0 * max(1.5, float(factor)))
+    stale = ts - updated
+    if stale <= threshold:
+        return None
+    return {
+        "stale_sec": int(stale),
+        "threshold_sec": int(threshold),
+        "updated_at": str(doc.get("updated_at") or ""),
+        "state_file": str(p),
+    }
 
 
 def next_strike_state(
@@ -220,7 +629,16 @@ def next_strike_state(
 
 __all__ = [
     "ASR_FIXTURE",
+    "STATE_FILENAME",
     "build_probe_specs",
+    "content_verdict",
+    "metrics_snapshot",
     "next_strike_state",
+    "probe_gap_reasons",
+    "read_state",
+    "restore_strike_state",
     "run_probe",
+    "stalled_verdict",
+    "state_path",
+    "write_state",
 ]

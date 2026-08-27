@@ -1413,6 +1413,21 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # 四域真活探针（2026-08-27）：读 watchdog 每轮落的 state 文件快照，**绝不在
+        # 请求里现场探针**（那会把一次看板刷新变成四发真推理）。此前探针结果只进日志
+        # 和主机弹窗，src/web 里一处引用都没有——「探针没在跑」完全不可观测，
+        # stale_sec 正是为区分「四域都绿」与「探针停摆」。未跑过 → {"present": false}。
+        try:
+            _tpcm = getattr(request.app.state, "config_manager", None)
+            if _tpcm is not None:
+                from pathlib import Path as _TPPath
+                from src.ops.true_probe import metrics_snapshot as _tpm
+                metrics["true_probe"] = _tpm(
+                    _TPPath(str(getattr(_tpcm, "config_path", "")
+                                or "config/config.yaml")).parent)
+        except Exception:
+            pass
+
         # 记忆去重观测（P5）：灰区对（差一点就并的近义对）累计——「要不要上
         # LLM 仲裁合并」的两周观察读数；store 未接（如纯 web 部署）→ 键缺省。
         try:

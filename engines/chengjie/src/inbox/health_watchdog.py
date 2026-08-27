@@ -916,7 +916,19 @@ class HealthWatchdog:
         try:
             self._check_true_probes()
         except Exception:
-            logger.debug("真活探针巡检异常（已忽略）", exc_info=True)
+            # 刻意用 WARNING 而非本文件惯用的 DEBUG：探针**本身就是兜底机制**，
+            # 它静默停摆是最坏的失败模式。2026-08-27 实锤：接线漏了一个局部 Path
+            # 导入 → NameError 被 DEBUG 吞掉 → 探针从重启起整段不跑、日志零痕迹，
+            # 只有「轮次完成那行不再出现」这一个极易被忽略的负面信号。
+            logger.warning("真活探针巡检异常（本轮跳过，探针未生效）", exc_info=True)
+
+        # 探针停摆自检（同日续）：上面那条 WARNING 只进日志，没人读。本检查**独立
+        # 于** _check_true_probes（它整段抛异常时仍会跑），按状态文件是否陈旧判断
+        # 「探针自己死了」并外发。零误报由 stalled_verdict 的构造保证。
+        try:
+            self._check_probe_stalled()
+        except Exception:
+            logger.debug("探针停摆自检异常（已忽略）", exc_info=True)
 
         # 本地主链保险（2026-08-15）：local_only 语义下 vLLM 猝死＝全站 canned 且
         # 绝不回落云端——中枢执行器救不回来的窗口由本检查单向热切 cloud 兜住。
@@ -4098,21 +4110,40 @@ class HealthWatchdog:
             from src.ops.true_probe import (
                 build_probe_specs,
                 next_strike_state,
+                probe_gap_reasons,
+                restore_strike_state,
                 run_probe,
+                state_path,
+                write_state,
             )
         except Exception:
             return
         specs = build_probe_specs(cfg)
         if not specs:
             return
-        state = getattr(self, "_tp_state", {})
+        from pathlib import Path as _TPPath  # 本模块无顶层 pathlib（同 _check_identity_shadow）
+        _tp_dir = _TPPath(str(getattr(self._config_manager, "config_path", "")
+                              or "config/config.yaml")).parent
+        # 冷启动从状态文件恢复连败态（2026-08-27：识图红了一整天，三次重启把内存
+        # alerted 清零 → 同一个问题弹了三次窗）。太旧的状态由 restore 自己丢弃。
+        state = getattr(self, "_tp_state", None)
+        if state is None:
+            state = restore_strike_state(state_path(_tp_dir), now=ts)
         _round: List[str] = []
+        _obs: Dict[str, Dict[str, Any]] = {}
         for spec in specs:
             domain = str(spec.get("domain") or "")
             ok, detail = run_probe(spec)
             _round.append(f"{domain}={'ok' if ok else 'FAIL'}")
+            _obs[domain] = {"ok": ok, "detail": detail,
+                            "url": str(spec.get("url") or ""),
+                            "alerting": bool(spec.get("alert", True))}
             state, action = next_strike_state(
                 state, domain, ok, fail_strikes=fail_strikes, now=ts)
+            # 备胎类规格（vision_backup*）只观测不弹窗：它坏了不影响当下出话，
+            # 半夜弹窗是纯噪音；连败仍记进状态文件，切主之前看板上就能看见。
+            if not spec.get("alert", True):
+                action = ""
             if ok:
                 logger.debug("[true_probe] %s ok (%s)", domain, detail)
             else:
@@ -4140,9 +4171,73 @@ class HealthWatchdog:
                 except Exception:
                     logger.debug("[true_probe] 恢复通知失败", exc_info=True)
         self._tp_state = state
+        # 状态落盘＝跨重启去抖基准 + 唯一观测数据源（/api/workspace/metrics 的
+        # true_probe 段读它，绝不在 web 请求里现场探针）。写失败不影响本轮结论。
+        try:
+            write_state(state_path(_tp_dir), state, observations=_obs,
+                        gaps=probe_gap_reasons(cfg), now=ts)
+        except Exception:
+            logger.debug("[true_probe] 状态落盘异常（已忽略）", exc_info=True)
         # 轮次摘要恒 INFO：探针本身也要可观测——全 ok 时若只有 DEBUG，
         # 运维无法从 INFO 日志区分「都健康」与「探针根本没跑」（首夜实测盲区）。
         logger.info("[true_probe] 轮次完成 %s", " ".join(_round))
+
+    def _check_probe_stalled(self, *, now: Optional[float] = None) -> None:
+        """真活探针**自己**停摆时外发（2026-08-27 事故的自省闭环）。
+
+        兜底机制必须自己有兜底：当天一个漏掉的局部 import 让 `_check_true_probes`
+        整段抛异常，被 tick 的 except 吞掉，探针从重启起不跑而日志零正面痕迹。本检查
+        独立成一条（那个方法整段挂掉时它照样跑），判据＝状态文件**存在且陈旧**
+        （见 true_probe.stalled_verdict：从没跑过刻意不报，防「未启用」误报）。
+
+        随 `health_watchdog.true_probe.enabled` 生效；恢复自动清零并补绿窗。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        if not isinstance(cfg, dict):
+            return
+        tp = ((cfg.get("health_watchdog") or {}).get("true_probe")) or {}
+        if not isinstance(tp, dict) or not tp.get("enabled", False):
+            return
+        try:
+            from pathlib import Path as _PSPath
+
+            from src.ops.true_probe import stalled_verdict
+        except Exception:
+            return
+        ts = float(now if now is not None else time.time())
+        cfg_dir = _PSPath(str(getattr(self._config_manager, "config_path", "")
+                              or "config/config.yaml")).parent
+        verdict = stalled_verdict(
+            cfg_dir, interval_min=float(tp.get("interval_min", 10) or 10), now=ts)
+        alerted = bool(getattr(self, "_probe_stall_alerted", False))
+        if verdict is None:
+            if alerted:
+                self._probe_stall_alerted = False
+                try:
+                    from src.utils.host_alert import notify_host
+                    notify_host("真活探针已恢复运行",
+                                "真活探针恢复按周期落状态文件，探针链路已复活。",
+                                key="probe_stalled_ok", cooldown_sec=60.0)
+                except Exception:
+                    logger.debug("[true_probe] 停摆恢复通知失败", exc_info=True)
+            return
+        logger.warning("[true_probe] 探针停摆：状态文件 %s 秒未更新（阈值 %s 秒，"
+                       "最后一轮 %s）", verdict["stale_sec"], verdict["threshold_sec"],
+                       verdict["updated_at"])
+        if alerted:
+            return
+        self._probe_stall_alerted = True
+        try:
+            from src.utils.host_alert import notify_host
+            notify_host(
+                "真活探针停摆",
+                (f"真活探针已 {verdict['stale_sec'] // 60} 分钟没有落状态文件"
+                 f"（最后一轮 {verdict['updated_at']}）。四域链路当前**无人巡检**，"
+                 f"请查 app 日志里的「真活探针巡检异常」并用 "
+                 f"tools/true_probe_selfcheck.py 手动补位。"),
+                key="probe_stalled", cooldown_sec=1800.0)
+        except Exception:
+            logger.debug("[true_probe] 停摆告警外发失败", exc_info=True)
 
     def _check_ai_primary_guard(self, *, now: Optional[float] = None) -> None:
         """本地主链保险（2026-08-15，`REPLY_from_zhongshu_20260815` 约定的我方半边）。
