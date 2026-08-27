@@ -25,3 +25,5 @@ pdfminer.six>=20221105  # L2b .pdf 文本抽取翻译
 openai>=1.40.0  # tests/test_companion_selfie.py::test_openai_missing_key_raises 需 import openai（纯 Python 小依赖，非 torch/whisper 级）
 lunar_python>=1.4.0  # tests/test_bazi_*.py 八字排盘（纯 Python 零依赖小库）
 pyflakes>=3.0.0  # tests/test_python_undefined_names.py 未定义名(F821)棘轮门禁（纯 Python 63KB 无配置；缺失时该门禁自行 SKIP，不红）
+pytest-timeout>=2.1.0  # CI 挂起保护。本地 scripts/regression.ps1 一直带 --timeout=90，CI 却没装过这个包
+                       # → 任一 worker 卡住只能烧满 job 超时再给一个不说明原因的失败（2026-08-27 P0 补齐）

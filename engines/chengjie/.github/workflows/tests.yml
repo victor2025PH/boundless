@@ -1,5 +1,11 @@
 name: tests
 
+# ⚠ 本文件在 boundless 单仓下**不会被 GitHub Actions 执行**——Actions 只加载仓库根
+# `.github/workflows/`。生效的那份是仓库根 `.github/workflows/chengjie-tests.yml`
+# （2026-08-27 P0 上移，带 paths 过滤 + working-directory）。
+# 保留本文件是为「chengjie 将来若独立成仓」的场景；两处的关键参数必须同步改，
+# 否则独立回去时又是一套按旧规模写死的配置。
+
 on:
   push:
     # feat-* 也触发：避免长命名分支攒一堆 Linux-only 问题，直到开 PR 才暴露。
@@ -15,7 +21,9 @@ concurrency:
 jobs:
   regression:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 30 而非 15：实跑 --collect-only 为 22,421 条（下方注释的 ~6500 是旧规模），
+    # 按历史比例外推约 14 分钟，15 分钟只剩 1 分钟余量 = 随机超时噪声。
+    timeout-minutes: 30
     strategy:
       # 两版本互不熔断：一个挂也要看另一个结果，便于定位是否版本特异问题。
       fail-fast: false
@@ -49,7 +57,9 @@ jobs:
 
       - name: Run regression (parallel, file-level isolation)
         # -n auto 让 xdist 按文件分 worker 并行；当前规模 ~6500 tests，CI(ubuntu) ~4min、本地 ~4min
-        run: python -m pytest tests/ -n auto -q --tb=line
+        # --timeout 依赖 requirements-ci.txt 新增的 pytest-timeout：此前 CI 无任何挂起
+        # 保护，卡住的 worker 只会烧满 job 超时再给一个不说明原因的失败。
+        run: python -m pytest tests/ -n auto -q --tb=line --timeout=90 --timeout-method=thread
 
   lint:
     # 与 regression 并行的快速门禁：跑 .pre-commit-config.yaml 中「只检查、不改写」的

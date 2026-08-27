@@ -1,0 +1,23 @@
+# gitleaks 忽略清单（2026-08-27 P0：把密钥扫描从「装饰」变成真门禁时建立）
+#
+# 背景：`.pre-commit-config.yaml` 里的 gitleaks 钩子入口是 `gitleaks protect --staged`，
+# 只扫**暂存区差异**且 pass_filenames:false —— 在 CI 里暂存区为空，于是它**永远通过**。
+# 换句话说，把那个钩子直接搬进 CI 得到的是一个零鉴别力的绿灯。CI 改用 `gitleaks dir`
+# （真扫工作树内容），本文件登记它在**已入库文件**上的既有命中。
+#
+# 每条都逐行看过原文并给出判据；不确定是否机密的一律不写进来（宁可让门禁红，
+# 也不要用忽略清单把真问题掩盖掉）。Windows 与 Linux 的指纹分隔符不同，两种都登记。
+#
+# ── 1/2 Telegram api_hash 占位值 ────────────────────────────────────────
+# config.example.yaml L224/L232 位于**被 # 注释掉的多账号示例块**内，值是
+# "abcdef1234567890" / "fedcba0987654321" —— 顺序十六进制的占位样例，非真凭据。
+engines/chengjie/config/config.example.yaml:generic-api-key:224
+engines/chengjie/config/config.example.yaml:generic-api-key:232
+engines\chengjie\config\config.example.yaml:generic-api-key:224
+engines\chengjie\config\config.example.yaml:generic-api-key:232
+#
+# ── 2/2 IndexNow 公开验证 key ───────────────────────────────────────────
+# seo.ts L77。IndexNow 协议**要求**该 key 可被公网匿名读取（站点根放 /<key>.txt
+# 供搜索引擎校验），按设计就不是机密；源码注释已写明轮换方式。
+website/lib/seo.ts:generic-api-key:77
+website\lib\seo.ts:generic-api-key:77
