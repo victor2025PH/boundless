@@ -181,8 +181,13 @@ def _endpoint_timeout(cfg: dict, url: str, default: float = 120.0) -> float:
     （降级时 8.8s+）。把全局 timeout 砍到 5s，主路如愿快切，**云端备胎却会 100% 超时**，
     等于把兜底整条废掉——「快速失败」和「有地方可退」必须分开配。
 
-    代价是明确的：LAN 模型若被 ollama 逐出显存，冷载超过 5s 会失败并切云端（那一发慢，
-    但答得出来），ollama 后台继续把模型载完，下一发即回到 0.2s。这是刻意选择的取舍。
+    「LAN 冷载会不会撞上 5s」——**实测否**（2026-08-27，先量后判）：176 的 ollama
+    服务端默认 keep_alive 是永久（``/api/ps`` 显示 qwen3-vl 的 ``expires_at`` 为 2318 年
+    ＝ ``-1``；而显式带 24h 的 hy-mt2 才显示 24h，两相对照即可确认默认值），本客户端
+    又**刻意不带 keep_alive**（见 ``_ollama_native_images_request``，不覆写 176 侧的
+    常驻钉决策）。所以模型不会被逐出，5s 对 LAN 只会命中「真的没响应」。
+    万一那个常驻钉将来被撤：冷载超 5s 会失败并切云端（那一发慢但答得出来），ollama
+    后台继续把模型载完，下一发即回到 0.2s——降级是软的，不会断服务。
     """
     m = cfg.get("endpoint_timeouts")
     if isinstance(m, dict):
