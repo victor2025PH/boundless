@@ -153,6 +153,55 @@ def _vision_base_urls(cfg: dict) -> List[str]:
     return out
 
 
+def _endpoint_model(cfg: dict, url: str, default: str = "llava") -> str:
+    """每端点模型名（实施71 2026-08-27：混合供应商双活的唯一阻塞就是它）。
+
+    ``vision.endpoint_models: {url片段: model}``——片段子串匹配（如 ``siliconflow`` /
+    ``192.168.0.176``），未命中回落全局 ``model``。云主（硅基 ``Qwen/Qwen3-VL-8B-Instruct``）
+    + LAN 备（ollama ``qwen3-vl:8b-instruct``）两家命名不同，全局单 model 会让回落端点
+    拿到不存在的模型名。api_key 刻意不做每端点：ollama 忽略 Bearer，全局 key 给云端即可。"""
+    m = cfg.get("endpoint_models")
+    if isinstance(m, dict):
+        for frag, name in m.items():
+            f = str(frag or "").strip()
+            n = str(name or "").strip()
+            if f and n and f in str(url or ""):
+                return n
+    return str(cfg.get("model", default) or default)
+
+
+def _endpoint_timeout(cfg: dict, url: str, default: float = 120.0) -> float:
+    """每端点读超时秒数（2026-08-27：「5 秒没响应就切下一个」）。
+
+    ``vision.endpoint_timeouts: {url片段: 秒数}``——与 ``endpoint_models`` 同样的片段
+    子串匹配，未命中回落全局 ``timeout``。
+
+    **为什么必须按端点、不能设全局**：主备两条路的正常耗时差一个数量级。2026-08-27
+    生产参数实测（1536x1536 / 828KB / max_tokens=700）——LAN 中位 0.5s，云端中位 6.6s
+    （降级时 8.8s+）。把全局 timeout 砍到 5s，主路如愿快切，**云端备胎却会 100% 超时**，
+    等于把兜底整条废掉——「快速失败」和「有地方可退」必须分开配。
+
+    代价是明确的：LAN 模型若被 ollama 逐出显存，冷载超过 5s 会失败并切云端（那一发慢，
+    但答得出来），ollama 后台继续把模型载完，下一发即回到 0.2s。这是刻意选择的取舍。
+    """
+    m = cfg.get("endpoint_timeouts")
+    if isinstance(m, dict):
+        for frag, secs in m.items():
+            f = str(frag or "").strip()
+            if not f or f not in str(url or ""):
+                continue
+            try:
+                v = float(secs)
+            except (TypeError, ValueError):
+                continue
+            if v > 0:
+                return v
+    try:
+        return float(cfg.get("timeout", default) or default)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def _wants_openai_primary(merged: dict) -> bool:
     prov = (merged.get("provider") or "zhipu").strip().lower()
     if prov not in ("openai_compatible", "ollama", "openai", "local"):
@@ -274,16 +323,18 @@ class VisionClient:
         key = (self.config.get("api_key") or "ollama").strip()
         if key in ("", "YOUR_ZHIPU_API_KEY"):
             key = "ollama"
-        timeout = float(self.config.get("timeout", 120))
-        # LAN 多端点：连接 5s 快败（防火墙丢包型死主机别吃满整体 timeout），读超时留足
-        # （备端点冷载模型可要 2min+）；SDK 内建重试关掉——重试同一死端点不如立刻切下一个。
-        try:
-            import httpx
-            eff_timeout: Any = httpx.Timeout(timeout, connect=5.0)
-        except Exception:
-            eff_timeout = timeout
+        # 连接 5s 快败（防火墙丢包型死主机别吃满整体 timeout）；SDK 内建重试关掉——
+        # 重试同一死端点不如立刻切下一个。**读超时逐端点算**（_endpoint_timeout）：
+        # 主路要「5 秒没响应就切」，而云端备胎正常就要 6~9 秒，共用一个值必然二选一坏。
         self._oa_endpoints = []
         for base in urls:
+            per = _endpoint_timeout(self.config, base,
+                                    float(self.config.get("timeout", 120) or 120))
+            try:
+                import httpx
+                eff_timeout: Any = httpx.Timeout(per, connect=min(5.0, per))
+            except Exception:
+                eff_timeout = per
             try:
                 self._oa_endpoints.append(
                     (base, OpenAI(api_key=key, base_url=base,
@@ -409,7 +460,7 @@ class VisionClient:
                     ]
                     content.append({"type": "text", "text": text_prompt})
                     resp = cli.chat.completions.create(
-                        model=self.config.get("model", "llava"),
+                        model=_endpoint_model(self.config, url, "llava"),
                         messages=[{"role": "user", "content": content}],
                         max_tokens=int(self.config.get("max_tokens") or 300),
                         temperature=0,
@@ -440,7 +491,7 @@ class VisionClient:
         except Exception:
             num_ctx = 8192
         payload = {
-            "model": self.config.get("model", "llava"),
+            "model": _endpoint_model(self.config, root, "llava"),
             "messages": [{"role": "user", "content": prompt,
                           "images": list(images_b64)}],
             "stream": False,
@@ -450,9 +501,10 @@ class VisionClient:
                 "num_predict": int(self.config.get("max_tokens") or 300),
             },
         }
-        timeout = float(self.config.get("timeout", 120))
+        timeout = _endpoint_timeout(self.config, root,
+                                    float(self.config.get("timeout", 120) or 120))
         r = httpx.post(root + "/api/chat", json=payload,
-                       timeout=httpx.Timeout(timeout, connect=5.0))
+                       timeout=httpx.Timeout(timeout, connect=min(5.0, timeout)))
         r.raise_for_status()
         data = r.json()
         out = ((data.get("message") or {}).get("content") or "").strip()
@@ -474,7 +526,6 @@ class VisionClient:
         self, content: List[dict], *, allow_empty_failover: bool = False,
     ) -> Optional[str]:
         """单/多图共用的端点循环：健康优先→冷却殿后→空答按开关最多换 1 端点。"""
-        model = self.config.get("model", "llava")
         # 健康端点在前，冷却中的殿后（全冷却时仍会硬试，避免全灭期彻底不服务）
         healthy = [(u, c) for u, c in self._oa_endpoints if not _url_cooling(u)]
         cooling = [(u, c) for u, c in self._oa_endpoints if _url_cooling(u)]
@@ -484,7 +535,7 @@ class VisionClient:
         for i, (url, cli) in enumerate(endpoints):
             try:
                 resp = cli.chat.completions.create(
-                    model=model,
+                    model=_endpoint_model(self.config, url, "llava"),
                     messages=[{"role": "user", "content": content}],
                     max_tokens=int(self.config.get("max_tokens") or 300),
                     # 识图是抽取任务不是创作任务：贪心解码保确定性（2026-07-26 实锤：

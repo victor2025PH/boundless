@@ -85,14 +85,18 @@ class _FakeOpenAI:
 
     behaviors: dict = {}
     calls: list = []
+    models: list = []  # (url, model) 逐调用记录——每端点模型契约（实施71）的断言面
+    timeouts: list = []  # (url, timeout) 逐**构造**记录——每端点超时契约的断言面
 
     def __init__(self, api_key=None, base_url=None, timeout=None, **kw):
         self._url = base_url
+        _FakeOpenAI.timeouts.append((base_url, timeout))
         outer = self
 
         class _Completions:
             def create(self, **kw):
                 _FakeOpenAI.calls.append(outer._url)
+                _FakeOpenAI.models.append((outer._url, kw.get("model")))
                 b = _FakeOpenAI.behaviors.get(outer._url)
                 if isinstance(b, Exception):
                     raise b
@@ -113,6 +117,8 @@ def _fake_openai(monkeypatch):
     )
     _FakeOpenAI.behaviors = {}
     _FakeOpenAI.calls = []
+    _FakeOpenAI.models = []
+    _FakeOpenAI.timeouts = []
     vc_mod._URL_BAD_UNTIL.clear()
     yield
     vc_mod._URL_BAD_UNTIL.clear()
@@ -159,6 +165,99 @@ def test_all_cooling_still_hard_tries(_fake_openai):
     _FakeOpenAI.calls = []
     assert _mk_client(["http://a:1", "http://b:2"])._describe_openai_sync("f.jpg") == "recovered"
     assert _FakeOpenAI.calls[0] == "http://a:1/v1"
+
+
+# ---------------------------------------------------------------------------
+# 每端点模型（实施71 2026-08-27）：混合供应商双活（云主+LAN 备）唯一阻塞=两家模型命名不同
+# ---------------------------------------------------------------------------
+
+
+def test_endpoint_model_fragment_match_and_fallback():
+    from src.vision_client import _endpoint_model
+
+    cfg = {
+        "model": "Qwen/Qwen3-VL-8B-Instruct",
+        "endpoint_models": {
+            "siliconflow": "Qwen/Qwen3-VL-8B-Instruct",
+            "192.168.0.176": "qwen3-vl:8b-instruct",
+        },
+    }
+    assert _endpoint_model(cfg, "https://api.siliconflow.cn/v1") == "Qwen/Qwen3-VL-8B-Instruct"
+    assert _endpoint_model(cfg, "http://192.168.0.176:11434/v1") == "qwen3-vl:8b-instruct"
+    # 未命中片段 → 回落全局 model；无任何配置 → default
+    assert _endpoint_model(cfg, "http://other:8000/v1") == "Qwen/Qwen3-VL-8B-Instruct"
+    assert _endpoint_model({}, "http://x/v1") == "llava"
+    # 脏值防御：非 dict / 空片段 / 空模型名一律忽略
+    assert _endpoint_model({"endpoint_models": "junk", "model": "m1"}, "u") == "m1"
+    assert _endpoint_model({"endpoint_models": {"": "x", "u": ""}, "model": "m1"}, "u") == "m1"
+
+
+def test_failover_uses_per_endpoint_model(_fake_openai):
+    """云主挂 → 切 LAN 备时必须换成 LAN 的模型名（全局单 model 会 404 在备端点上）。"""
+    _FakeOpenAI.behaviors = {
+        "https://cloud.example/v1": RuntimeError("cloud down"),
+        "http://192.168.0.176:11434/v1": "备胎描述",
+    }
+    c = VisionClient({
+        "provider": "openai_compatible",
+        "base_urls": ["https://cloud.example", "http://192.168.0.176:11434"],
+        "model": "Cloud/VL-Model",
+        "endpoint_models": {
+            "cloud.example": "Cloud/VL-Model",
+            "192.168.0.176": "qwen3-vl:8b-instruct",
+        },
+    })
+    assert c.initialize()
+    assert c._describe_openai_sync("fake.jpg") == "备胎描述"
+    assert _FakeOpenAI.models == [
+        ("https://cloud.example/v1", "Cloud/VL-Model"),
+        ("http://192.168.0.176:11434/v1", "qwen3-vl:8b-instruct"),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# 每端点超时（2026-08-27）：「5 秒没响应就切下一个」，但云端备胎正常就要 6~9 秒
+# ---------------------------------------------------------------------------
+
+
+def test_endpoint_timeout_fragment_match_and_fallback():
+    from src.vision_client import _endpoint_timeout
+
+    cfg = {"timeout": 150, "endpoint_timeouts": {"192.168.0.176": 5}}
+    assert _endpoint_timeout(cfg, "http://192.168.0.176:11434/v1") == 5.0
+    # 未命中片段 → 回落全局 timeout（云端要留足）
+    assert _endpoint_timeout(cfg, "https://api.siliconflow.cn/v1") == 150.0
+    # 无任何配置 → default
+    assert _endpoint_timeout({}, "http://x/v1", 120.0) == 120.0
+    # 脏值防御：非 dict / 空片段 / 非数字 / 非正数一律忽略，回落全局
+    assert _endpoint_timeout({"endpoint_timeouts": "junk", "timeout": 30}, "u") == 30.0
+    assert _endpoint_timeout(
+        {"endpoint_timeouts": {"": 5, "u": "abc"}, "timeout": 30}, "u") == 30.0
+    assert _endpoint_timeout({"endpoint_timeouts": {"u": 0}, "timeout": 30}, "u") == 30.0
+
+
+def test_per_endpoint_timeout_is_applied_at_client_construction(_fake_openai):
+    """主路 5s 快切、备胎保留长超时——**必须逐端点**。
+
+    这条是「快速失败」与「有地方可退」的分界：全局砍到 5s 主路如愿快切，但云端备胎
+    正常就要 6.6s（降级时 8.8s+），会 100% 超时，等于把兜底整条废掉。
+    """
+    VisionClient({
+        "provider": "openai_compatible",
+        "base_urls": ["http://192.168.0.176:11434", "https://api.siliconflow.cn"],
+        "model": "m",
+        "timeout": 150,
+        "endpoint_timeouts": {"192.168.0.176": 5},
+    }).initialize()
+
+    got = {u: t for u, t in _FakeOpenAI.timeouts}
+    lan = got["http://192.168.0.176:11434/v1"]
+    cloud = got["https://api.siliconflow.cn/v1"]
+    # httpx.Timeout 有 .read；退化路径是裸 float——两种都要能断言
+    assert float(getattr(lan, "read", lan)) == 5.0
+    assert float(getattr(cloud, "read", cloud)) == 150.0
+    # 连接超时不得超过读超时（5s 端点上连接不能还等 5s 以上）
+    assert float(getattr(lan, "connect", 5.0)) <= 5.0
 
 
 def test_empty_answer_does_not_failover(_fake_openai):
