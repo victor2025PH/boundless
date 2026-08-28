@@ -458,6 +458,29 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     web_cfg = config_manager.config.get("web_admin", {})
     secret = web_cfg.get("secret_key", "change-me-in-production")
     token = web_cfg.get("auth_token", "")
+    # worker 专用窄令牌（2026-08-28 P1-6 第一步）：四个 Node 侧车（WhatsApp/Messenger/
+    # Instagram/Zalo）此前持有的是 **admin auth_token**——匹配它就直通 _api_auth 的
+    # 全部路由，等于给协议进程发了管理员钥匙。它们真正需要的只有 /api/internal/*
+    # （11 个端点，实际打的是 protocol/ingest 与 session-status）。
+    # 本键留空＝行为与此前**逐字节相同**；配上才生效，故可先随任意重启装载，
+    # 待引擎确认接受双令牌后再切 Node 侧（顺序不可颠倒，见 worker_token 注释块）。
+    worker_token = str(web_cfg.get("worker_token", "") or "").strip()
+    if worker_token:
+        # 三道自检：与 admin 同值＝零隔离（还不如不配）；过短或占位符＝比不配更危险
+        # （一个可猜的字符串换来内部端点访问）。任一不过一律**降级为未配置**并告警，
+        # 绝不「带病放行」。
+        _wt_bad = ""
+        if hmac.compare_digest(worker_token, str(token or "")):
+            _wt_bad = "与 auth_token 同值（无隔离效果）"
+        elif len(worker_token) < 24:
+            _wt_bad = f"长度 {len(worker_token)} < 24（太短，可暴力猜）"
+        elif any(m in worker_token.upper() for m in ("CHANGE_ME", "YOUR_", "PLACEHOLDER", "EXAMPLE")):
+            _wt_bad = "疑似占位符未替换"
+        if _wt_bad:
+            logger.warning(
+                "[SECURITY] web_admin.worker_token %s —— 已按未配置处理；"
+                "侧车将继续使用 auth_token（管理员级），请换一个独立随机值。", _wt_bad)
+            worker_token = ""
 
     # S2：默认 secret_key 是公开常量（签名 session 可被伪造）。此处仅告警不阻断
     # （本地/测试仍可跑）；真正的「非本地暴露」防护做成 fail-safe，在 bootstrap 启动处
@@ -1195,6 +1218,16 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         auth_header = request.headers.get("Authorization", "")
         if hmac.compare_digest(auth_header, f"Bearer {token}"):
             return
+        # worker 窄令牌：只放行 /api/internal/*（协议侧车的全部所需），其余一律 403。
+        # 刻意用 403 而不是 401：令牌是真的、只是越权，说「没认证」会让排障的人去查
+        # 令牌对不对，而真正该看的是「这个端点不在 worker 的授权面里」。
+        # 未配置（worker_token 为空）时本分支永不进入 = 与改动前逐字节等价。
+        if worker_token and hmac.compare_digest(auth_header, f"Bearer {worker_token}"):
+            if request.url.path.startswith("/api/internal/"):
+                return
+            raise HTTPException(
+                status_code=403,
+                detail="worker 令牌仅授权 /api/internal/*，此端点需管理员令牌")
         sess = request.session.get("auth")
         if sess and hmac.compare_digest(str(sess), str(token)):
             if not _check_session_valid(request):

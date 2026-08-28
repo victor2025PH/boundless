@@ -360,6 +360,16 @@ web_admin:
   port: 18787
   auth_token: YOUR_ADMIN_TOKEN
   secret_key: YOUR_FLASK_SECRET_KEY
+  # ⭐ 协议侧车专用窄令牌（2026-08-28 P1-6）。留空＝维持旧行为，侧车继续用上面的
+  #   auth_token（那是**管理员级**：匹配即直通全部 api_auth 路由）。
+  #   四个 Node 侧车（whatsapp-baileys / messenger-web / instagram-web / zalo-personal）
+  #   真正需要的只有 /api/internal/*（11 个端点），配上本键后它们越界访问会拿 403。
+  #   要求：独立随机值、≥24 字符、不得与 auth_token 同值——任一不满足会被降级为
+  #   「未配置」并在启动日志告警（绝不带病放行）。
+  #   ⚠ 切换顺序不可颠倒：先配本键并**重启引擎**（此时引擎同时接受两把令牌），
+  #   确认无误后再改 services/*/start.ps1 下发新令牌并重启侧车；反过来做会让入站
+  #   消息在引擎认识新令牌之前全部 401。
+  # worker_token: ""
   # P25-A / P26-C: 全局 body size 限制（防大 JSON / chunked 流式攻击）
   # 默认 2MB，按 path 可在 body_limits 覆盖。超限 → 413 + Connection:close + audit_log。
   max_body_bytes: 2097152                # 2 MiB
