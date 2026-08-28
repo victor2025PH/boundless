@@ -49,7 +49,10 @@ _SILENT_CEILINGS: dict[str, int] = {
     #     10MB(图)/50MB(视频)，静默失败＝慢性占盘；
     #   · 账号所有权探测异常 —— 落到 return "offline" 即拦发，而本函数 docstring
     #     写的是「异常一律放行」。分歧待产品决策，先让它可见（**未改返回值**）。
-    "web": 572,
+    # 572 → 571（2026-08-28 判定面从「工作树」改成「index」后的重算，不是又清了一处）：
+    # 上面那批是按工作树口径校准的，其中一处落在他线未提交的修改里，换口径后自然
+    # 不再计入。全部 21 个模块只有本条需要动，其余按新口径逐一吻合。
+    "web": 571,
     "integrations": 335,
     # 213 → 211（2026-08-28）：ai_client 两处「best-effort 包装」补了 WARNING，
     # 行为不变（仍 fail-open），只是不再无声。两处都不是随手挑的：
@@ -125,6 +128,43 @@ def _is_vocal(body: list[ast.stmt]) -> bool:
     return False
 
 
+def _dirty_tracked() -> set[str]:
+    """工作树相对 index 有改动的已跟踪文件（**引擎根相对**，与 ls-files 同基准）。
+
+    ⚠ `--relative` 不能省：`git ls-files` 输出相对 cwd，而 `git diff --name-only`
+    默认输出相对**仓库根**（本仓 cwd=engines/chengjie，两者差一个前缀）。少这个
+    旗标两边路径永远对不上，判别静默失效——2026-08-28 实测踩过一次。
+    """
+    try:
+        out = subprocess.run(
+            ["git", "diff", "--name-only", "--relative", "-z", "--", "src/*.py"],
+            cwd=str(_REPO), capture_output=True, timeout=30,
+        )
+        if out.returncode == 0:
+            return {r for r in out.stdout.decode("utf-8", "replace").split("\0") if r}
+    except Exception:
+        pass
+    return set()
+
+
+def _index_text(rel: str) -> str | None:
+    """读 **index** 里那一版的内容。读不到返回 None。
+
+    ⚠ 必须用 `:./path`（cwd 相对）而不是 `:path`（仓库根相对）——本仓 cwd 在
+    engines/chengjie，后者会「路径不存在」静默失败。同上，实测踩过。
+    """
+    try:
+        out = subprocess.run(
+            ["git", "show", f":./{rel}"],
+            cwd=str(_REPO), capture_output=True, timeout=30,
+        )
+        if out.returncode == 0:
+            return out.stdout.decode("utf-8", "replace")
+    except Exception:
+        pass
+    return None
+
+
 def _tracked_py_files() -> list[pathlib.Path]:
     """只扫**被 git 跟踪**的 src/*.py。
 
@@ -161,11 +201,29 @@ def _scan() -> dict[str, list[str]]:
     if _SCAN_CACHE is not None:
         return _SCAN_CACHE
     found: dict[str, list[str]] = defaultdict(list)
+    dirty = _dirty_tracked()
     for path in _tracked_py_files():
         if "__pycache__" in path.parts:
             continue
+        # 共享工作树自动判别（2026-08-28 二次收口）：**有在途改动的已跟踪文件读
+        # index 那一版**，未改动的直接读磁盘（等价且快）。这样本门禁的判定面 ==
+        # 「你这次会提交出去的内容」== CI 看到的内容，他线没提交的半成品不再算进来。
+        # 上一版只挡住了「未跟踪新文件」，漏了「已跟踪文件的未提交修改」——12 小时内
+        # 因此误红两次（migration_export.py / config_manager.py），红灯疲劳的典型温床。
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+            repo_rel = path.relative_to(_REPO).as_posix()
+        except ValueError:
+            repo_rel = ""
+        src_text: str | None = None
+        if repo_rel and repo_rel in dirty:
+            src_text = _index_text(repo_rel)
+        if src_text is None:
+            try:
+                src_text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+        try:
+            tree = ast.parse(src_text)
         except SyntaxError:
             # 别人半存盘的文件不该把本门禁变红（共享工作树常态）；
             # 语法本身另有 pre-commit debug-statements / CI collect 守。
@@ -203,15 +261,15 @@ def test_no_new_silent_exception_handlers():
           "  2) 换成具体异常类型（`except KeyError:`）——精确处理不受本门禁约束；\n"
           "  3) 做真正的兜底赋值/补偿动作（那不算静默）。\n"
         "确因清理存量而下降 → 请同步调小 _SILENT_CEILINGS。\n\n"
-        "⚠ 共享工作树先排除「别人的中批状态」再动手（与 test_ui_build_freshness /\n"
-        "  test_copilot_shared_sync 同款情形）：本门禁按 git **已跟踪**文件的\n"
-        "  **工作树内容**扫描，所以他线对已跟踪文件的未提交修改会算进来，而 CI 看的是\n"
-        "  已提交状态 —— 这种红在 CI 上是绿的。判别一步到位：\n"
-        "      git status --porcelain -- engines/chengjie/src/<模块>/\n"
-        "  有 M 就先看那份 diff 是不是别人的；是就别改别人的在途文件、也**别抬天花板**\n"
-        "  （抬了就把额度永久让出去了），等对方收口即可。\n"
-        "  2026-08-28 实例：src/utils/config_manager.py 的未提交改动新增 1 处，\n"
-        "  utils 工作树 125 / 已提交 124，CI 侧无事。"
+        "共享工作树的「别人的中批状态」已**自动排除**，不用再人工判别：本门禁对有\n"
+        "在途改动的已跟踪文件读 **index 那一版**，判定面 ==「你这次会提交出去的内容」\n"
+        "== CI 看到的内容。所以本条红基本可以当成**你自己**引入的。\n"
+        "  （沿革：首版扫文件系统 → 他线未跟踪新文件误红；二版只挡未跟踪 → 他线对\n"
+        "   已跟踪文件的未提交修改仍误红。2026-08-28 两个实例分别是\n"
+        "   src/inbox/migration_export.py 与 src/utils/config_manager.py，\n"
+        "   都是工作树 +1 / 已提交不变、CI 侧无事。判别自动化后这类红不再出现。）\n"
+        "  仍要人判的只剩一种：你自己 `git add` 了、但还没想好怎么改 —— 那就按上面\n"
+        "  三选一改掉，**别抬天花板**（抬了就把额度永久让出去了）。"
     )
 
 
