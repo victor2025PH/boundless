@@ -27,7 +27,7 @@
   'use strict';
   if (window.AssistantBall) { return; }
 
-  var VER = '20260828b';
+  var VER = '20260829c';
   var I18N = {
     zh: {
       name: '小智 · AI 助手', open_aria: '打开 AI 助手', close: '关闭',
@@ -45,6 +45,21 @@
       faq_none: '没找到相关条目——直接问小智，答不上会记下来补语料',
       faq_na: '「常问」的后端待装载（下次重启后自动可用）',
       chips_title: '本页常问', chips_more: '更多 →',
+      /* 介绍屏第一句。缺这个键时 t() 回落成裸键，用户看到的就是字面的
+         「hello」——门禁 test_scanner_would_catch_the_hello_regression 专门
+         守它，正因为这条已经真实发生过一次。 */
+      hello: '我是小智，这个系统的内置助手。想知道怎么操作、或者哪里出了问题，问我就行。',
+      /* 拒答不该是死路（2026-08-29 老板实录「回复的内容没一点帮助」）：
+         答不上来时给几条**确定答得上**的问法，比只留一句「不知道」有用。 */
+      suggest_t: '这些我答得上，试试：',
+      suggest_near_t: '你是不是想问：',
+      /* 依据标注：**答什么**与**凭什么答**必须分开说。没有 basis=general
+         这条标注，模型的通用回答会被当成产品承诺。 */
+      basis_product: '依据产品说明',
+      basis_general: '通用回答 · 非产品文档',
+      resize_aria: '调整面板大小（方向键，Shift 加速，Esc 复位）',
+      move_hint: '拖动移动 · 双击复位',
+      reset_geo: '恢复默认大小和位置',
       input_ph: '输入问题，回车发送…', send: '发送',
       thinking: '思考中…', searching: '检索帮助库…',
       src_title: '来源', goto: '带我去', helpful: '有帮助吗',
@@ -104,6 +119,15 @@
       faq_none: 'No entry matched — ask directly; misses are logged for the corpus',
       faq_na: 'The FAQ backend is not loaded yet (available after next restart)',
       chips_title: 'Popular here', chips_more: 'More →',
+      hello: "I'm Xiaozhi, the built-in assistant. Ask me how to do "
+        + 'something, or what went wrong.',
+      suggest_t: 'These I can answer — try one:',
+      suggest_near_t: 'Did you mean:',
+      basis_product: 'From the product description',
+      basis_general: 'General knowledge · not product docs',
+      resize_aria: 'Resize panel (arrow keys, Shift to speed up, Esc to reset)',
+      move_hint: 'Drag to move · double-click to reset',
+      reset_geo: 'Restore default size and position',
       input_ph: 'Type a question…',
       send: 'Send', thinking: 'Thinking…', searching: 'Searching help…',
       src_title: 'Sources', goto: 'Take me there', helpful: 'Helpful?',
@@ -192,6 +216,24 @@
   function injectCss() {
     if (document.getElementById('asb-style')) { return; }
     var css = '' +
+/* ── 主题桥（P2 2026-08-29）────────────────────────────────────────────────
+   `--xz-*` 全站**从来没有被定义过**：三个 assistant-*.js 里到处写
+   `var(--xz-accent,#4f6ef7)`，但没有任何一处定义它，所以生效的永远是回落值。
+   后果不是「代码不整洁」，是**小智根本没接进主题系统**——白标客户换了品牌色、
+   或壳切到暗色，整个面板还是那身长春花紫，与它嵌在里面的产品对不上。
+   这里按宿主逐级桥接：admin 壳有 --p/--card/--t，工作台壳有 --tk-*，
+   两者都没有才落到品牌 SSOT --bl-growth，最后才是原来的字面色。
+   挂 :root 而不是挂 .asb-* ——教学模式的 .xzt-banner/.xzt-bubble、代理模式的
+   卡片都是 position:fixed **直接挂 body** 的，套在小智容器里就漏掉它们（首版
+   实测只桥好了一半）。`--xz-` 前缀本身就是隔离：全站只有 assistant-*.js 认它，
+   宿主不会因为多了几个没人读的变量而变样。 */
+':root{' +
+'--xz-accent:var(--p,var(--tk-brand,var(--bl-growth-600,#4f6ef7)));' +
+'--xz-bg:var(--card,var(--tk-surface,#fff));' +
+'--xz-txt:var(--t,var(--tk-text,#111));' +
+'--xz-muted:var(--t3,var(--tk-text-muted,#888));' +
+'--xz-bd:var(--bd,var(--tk-border,#ddd));' +
+'--xz-hover:var(--sb-hover,rgba(17,24,39,.05))}' +
 '.asb-wrap{position:fixed;z-index:9998;font-family:inherit}' +
 '.asb-ball{width:46px;height:46px;border-radius:50%;border:none;cursor:pointer;' +
 'display:flex;align-items:center;justify-content:center;background:transparent;color:#fff;' +
@@ -267,11 +309,53 @@
 '.asb-dot{position:absolute;top:2px;right:2px;width:10px;height:10px;border-radius:50%;' +
 'background:#ef4444;border:2px solid #fff;display:none;z-index:4}' +
 '.asb-ball.hasdot .asb-dot{display:block}' +
-'.asb-panel{position:fixed;z-index:9999;width:380px;max-width:calc(100vw - 24px);' +
+/* box-sizing 是拖拽的**正确性前提**，不是风格偏好：rect.width 含 1px 边框而
+   style.width 默认写 content-box，两者差 2px。存 rect / 写 style 形成闭环后
+   每拖一次就胖 2px（实测 382→384→386…），几十次后面板自己长满屏。 */
+'.asb-panel{position:fixed;z-index:9999;box-sizing:border-box;width:380px;' +
+'max-width:calc(100vw - 24px);' +
 'height:min(560px,78vh);display:none;flex-direction:column;overflow:hidden;' +
 'background:var(--xz-bg,#fff);color:var(--xz-txt,#111);border:1px solid var(--xz-bd,#ddd);' +
 'border-radius:16px;box-shadow:0 12px 40px rgba(0,0,0,.24);animation:asbUp .18s ease}' +
 '.asb-panel.open{display:flex}' +
+/* ── 自由拖拽/缩放（P1 2026-08-29，老板：「要能随意拖拉位置和放大放小」）──
+   面板原本死锚在球的对角象限，读长回答只能在 380x560 的小窗里滚。
+   拖动期禁掉过渡与动画：否则每帧都在补间，跟手感会糊。 */
+'.asb-panel.asb-moving{animation:none;transition:none;user-select:none}' +
+'.asb-panel.asb-moving .asb-body{pointer-events:none}' +
+'.asb-hd{cursor:grab;touch-action:none}' +
+'.asb-panel.asb-moving .asb-hd{cursor:grabbing}' +
+/* 八向手柄：四边 8px 命中带 + 四角 16px 方块（角优先，故 z 更高）。
+   窄屏整组隐藏——那里 CSS 强制全宽贴底，拖拽没有意义且会挡内容。 */
+'.asb-rs{position:absolute;z-index:6;touch-action:none}' +
+'.asb-rs.n{top:-3px;left:14px;right:14px;height:8px;cursor:ns-resize}' +
+'.asb-rs.s{bottom:-3px;left:14px;right:14px;height:8px;cursor:ns-resize}' +
+'.asb-rs.w{left:-3px;top:14px;bottom:14px;width:8px;cursor:ew-resize}' +
+'.asb-rs.e{right:-3px;top:14px;bottom:14px;width:8px;cursor:ew-resize}' +
+'.asb-rs.nw{top:-3px;left:-3px;width:16px;height:16px;cursor:nwse-resize;z-index:7}' +
+'.asb-rs.ne{top:-3px;right:-3px;width:16px;height:16px;cursor:nesw-resize;z-index:7}' +
+'.asb-rs.sw{bottom:-3px;left:-3px;width:16px;height:16px;cursor:nesw-resize;z-index:7}' +
+'.asb-rs.se{bottom:-3px;right:-3px;width:16px;height:16px;cursor:nwse-resize;z-index:7}' +
+/* 右下角给一个看得见的抓手暗示——不画的话没人知道可以缩放 */
+'.asb-rs.se::after{content:"";position:absolute;right:3px;bottom:3px;width:8px;' +
+'height:8px;border-right:2px solid var(--xz-bd,#ddd);' +
+'border-bottom:2px solid var(--xz-bd,#ddd);border-radius:0 0 3px 0}' +
+'.asb-rs:focus-visible{outline:2px solid var(--xz-accent,#4f6ef7);outline-offset:1px}' +
+/* 吸附提示：贴边命中时描边一下，让「吸住了」有反馈 */
+'.asb-panel.asb-snapped{box-shadow:0 12px 40px rgba(0,0,0,.24),' +
+'0 0 0 2px var(--xz-accent,#4f6ef7)}' +
+'.asb-hd-rst{border:none;background:none;color:var(--xz-muted,#888);' +
+'cursor:pointer;font-size:.85rem;padding:.2rem .4rem;border-radius:8px;' +
+'line-height:1;flex-shrink:0}' +
+'.asb-hd-rst:hover{background:var(--xz-hover,rgba(0,0,0,.05));' +
+'color:var(--xz-txt,#111)}' +
+'.asb-hd-rst[hidden]{display:none}' +
+/* 依据徽标：产品事实卡＝中性；通用知识＝琥珀提示色，因为那句话不是产品承诺，
+   视觉上必须与「有文档依据」区分得开。 */
+'.asb-basis{align-self:flex-start;font-size:.66rem;color:var(--xz-muted,#888);' +
+'border-left:2px solid var(--xz-bd,#ddd);padding:.05rem .45rem;line-height:1.5}' +
+'.asb-basis.gen{color:#b45309;border-left-color:#f59e0b;' +
+'background:rgba(245,158,11,.08);border-radius:0 6px 6px 0}' +
 '@keyframes asbUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}' +
 '.asb-hd{display:flex;align-items:center;gap:.5rem;padding:.6rem .8rem;' +
 'border-bottom:1px solid var(--xz-bd,#ddd);flex-shrink:0}' +
@@ -1236,7 +1320,73 @@
     var y = window.innerHeight - 46 - (window.innerWidth <= 480 ? 76 : 20);
     return { x: window.innerWidth - 46 - 18, y: y };
   }
+  /* ── 面板几何：自由拖拽 + 八向缩放（P1 2026-08-29）──────────────────────
+     存了自定义位置就用自定义的，没存才回落「锚在球的对角象限」的老行为。
+     这个回落是刻意的：多数人从不拖窗，默认体验一个字都不该变。 */
+  var PANEL_KEY = 'asb_panel_v1';
+  var PANEL_MIN_W = 300, PANEL_MIN_H = 260;
+  var SNAP_PX = 18;          /* 贴边吸附命中半径 */
+
+  function panelNarrow() {
+    /* 与 CSS 断点同值（那里强制全宽贴底）——窄屏整套拖拽都不接管 */
+    return window.innerWidth <= 480;
+  }
+  function loadPanelBox() {
+    try {
+      var b = JSON.parse(localStorage.getItem(PANEL_KEY) || 'null');
+      if (b && isFinite(b.x) && isFinite(b.y) && isFinite(b.w) && isFinite(b.h)) {
+        return b;
+      }
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+  function savePanelBox(b) {
+    try { localStorage.setItem(PANEL_KEY, JSON.stringify(b)); }
+    catch (e) { /* ignore */ }
+  }
+  function clearPanelBox() {
+    try { localStorage.removeItem(PANEL_KEY); } catch (e) { /* ignore */ }
+  }
+  /* 夹回视口：窗口变小/换显示器后，存的坐标可能把面板整个推到屏幕外——
+     那会变成「点了没反应」的幽灵故障，所以每次应用都夹一遍。 */
+  function clampBox(b) {
+    var maxW = window.innerWidth - 16, maxH = window.innerHeight - 16;
+    var w = Math.max(PANEL_MIN_W, Math.min(b.w, maxW));
+    var h = Math.max(PANEL_MIN_H, Math.min(b.h, maxH));
+    var x = Math.max(8, Math.min(b.x, window.innerWidth - w - 8));
+    var y = Math.max(8, Math.min(b.y, window.innerHeight - h - 8));
+    return { x: x, y: y, w: w, h: h };
+  }
+  function applyPanelBox(b) {
+    var c = clampBox(b);
+    $panel.style.left = c.x + 'px';
+    $panel.style.top = c.y + 'px';
+    $panel.style.width = c.w + 'px';
+    $panel.style.height = c.h + 'px';
+    return c;
+  }
+  function currentBox() {
+    var r = $panel.getBoundingClientRect();
+    return { x: r.left, y: r.top, w: r.width, h: r.height };
+  }
+  /* 贴边吸附：只吸「移动」不吸「缩放」——缩放时吸边会让人抓不住想要的尺寸。 */
+  function snapBox(b) {
+    var vw = window.innerWidth, vh = window.innerHeight, hit = false;
+    if (Math.abs(b.x - 8) <= SNAP_PX) { b.x = 8; hit = true; }
+    if (Math.abs(vw - (b.x + b.w) - 8) <= SNAP_PX) { b.x = vw - b.w - 8; hit = true; }
+    if (Math.abs(b.y - 8) <= SNAP_PX) { b.y = 8; hit = true; }
+    if (Math.abs(vh - (b.y + b.h) - 8) <= SNAP_PX) { b.y = vh - b.h - 8; hit = true; }
+    return hit;
+  }
+
   function placePanel() {
+    if (!panelNarrow()) {
+      var saved = loadPanelBox();
+      if (saved) { applyPanelBox(saved); return; }
+      /* 没有自定义几何：清掉可能残留的行内尺寸，交还 CSS 默认 */
+      $panel.style.width = '';
+      $panel.style.height = '';
+    }
     /* 面板锚在球的对角象限，贴边自适应 */
     var r = $ball.getBoundingClientRect();
     var pw = Math.min(380, window.innerWidth - 24);
@@ -1249,6 +1399,206 @@
     top = Math.min(Math.max(top, 12), window.innerHeight - ph - 12);
     $panel.style.left = left + 'px';
     $panel.style.top = top + 'px';
+  }
+
+  /* ── 拖拽/缩放引擎 ─────────────────────────────────────────────────────
+     照抄 sidebar-chrome 的成熟形态（指针捕获 + 全屏遮罩 + rAF），三处都不是
+     装饰：① 指针捕获保证手指/鼠标滑出面板甚至滑出窗口仍收得到事件；
+     ② 遮罩挡住底下的 iframe/webview——工作台里嵌着 webview，没有遮罩时指针
+     一旦滑进去，事件就被它吃掉、面板卡在半路；③ rAF 合帧，避免一次移动里
+     写几十遍布局。遮罩自带自愈：万一 onUp 没走到而残留，下次点击自清，
+     绝不把整个界面锁死。 */
+  var _rsShield = null, _rsRaf = 0, _rsPend = null;
+
+  function rsShield(on, cur) {
+    if (on) {
+      if (!_rsShield) {
+        _rsShield = document.createElement('div');
+        _rsShield.setAttribute('aria-hidden', 'true');
+        _rsShield.addEventListener('pointerdown', function () {
+          if (!_rsShield.__busy) { rsShield(false); }
+        });
+      }
+      _rsShield.style.cssText = 'position:fixed;inset:0;z-index:2147483000;' +
+        'background:transparent;touch-action:none;cursor:' + (cur || 'move');
+      _rsShield.__busy = true;
+      if (!_rsShield.parentNode) { document.body.appendChild(_rsShield); }
+    } else if (_rsShield) {
+      _rsShield.__busy = false;
+      if (_rsShield.parentNode) { _rsShield.parentNode.removeChild(_rsShield); }
+    }
+  }
+  function rsFlush() {
+    _rsRaf = 0;
+    if (!_rsPend) { return; }
+    var b = _rsPend; _rsPend = null;
+    applyPanelBox(b);
+  }
+  function rsQueue(b) {
+    _rsPend = b;
+    if (!_rsRaf) { _rsRaf = requestAnimationFrame(rsFlush); }
+  }
+
+  /* dir='' 表示整窗移动；否则是 n/s/e/w 的任意组合（八向）。 */
+  function startPanelGesture(e, dir, node) {
+    if (panelNarrow()) { return; }
+    if (e.button != null && e.button !== 0) { return; }
+    var start = currentBox();
+    var sx = e.clientX, sy = e.clientY;
+    var moving = !dir;
+    var moved = false;   /* 见 onUp：没真移动过就不落盘 */
+    var cur = moving ? 'grabbing'
+      : (node && node.style ? window.getComputedStyle(node).cursor : 'move');
+    $panel.classList.add('asb-moving');
+    rsShield(true, cur);
+    try { node.setPointerCapture(e.pointerId); } catch (e1) { /* ignore */ }
+
+    function onMove(ev) {
+      var dx = ev.clientX - sx, dy = ev.clientY - sy;
+      var b;
+      /* 3px 死区：手抖不算拖动，否则「点一下标题栏」也会被当成自定义位置 */
+      if (!moved && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) { moved = true; }
+      if (moving) {
+        b = { x: start.x + dx, y: start.y + dy, w: start.w, h: start.h };
+        var hit = snapBox(b);
+        $panel.classList.toggle('asb-snapped', hit);
+      } else {
+        b = { x: start.x, y: start.y, w: start.w, h: start.h };
+        /* 东/南方向就地封顶：交给 clampBox 去夹的话，它为了不出界会**上推
+           原点**，表现成「拉右下角结果整个窗往上跳」（实测 y 跳了 102px）。
+           缩放的心理契约是「按住的那个角跟手、对角钉死」，宁可拉不动也不能跳。 */
+        if (dir.indexOf('e') > -1) {
+          b.w = Math.min(start.w + dx, window.innerWidth - start.x - 8);
+        }
+        if (dir.indexOf('s') > -1) {
+          b.h = Math.min(start.h + dy, window.innerHeight - start.y - 8);
+        }
+        /* 西/北边拉伸要同时改原点：只改宽高会让对边跟着跑，手感完全不对 */
+        if (dir.indexOf('w') > -1) {
+          b.w = start.w - dx;
+          if (b.w < PANEL_MIN_W) { b.w = PANEL_MIN_W; }
+          b.x = start.x + (start.w - b.w);
+        }
+        if (dir.indexOf('n') > -1) {
+          b.h = start.h - dy;
+          if (b.h < PANEL_MIN_H) { b.h = PANEL_MIN_H; }
+          b.y = start.y + (start.h - b.h);
+        }
+      }
+      rsQueue(b);
+      if (ev.cancelable) { ev.preventDefault(); }
+    }
+    function onUp() {
+      node.removeEventListener('pointermove', onMove);
+      node.removeEventListener('pointerup', onUp);
+      node.removeEventListener('pointercancel', onUp);
+      try { node.releasePointerCapture(e.pointerId); } catch (e2) { /* ignore */ }
+      if (_rsRaf) { cancelAnimationFrame(_rsRaf); _rsRaf = 0; rsFlush(); }
+      $panel.classList.remove('asb-moving', 'asb-snapped');
+      rsShield(false);
+      /* **没真的动过就不落盘**：单击标题栏（很常见）否则会把当时的位置固化成
+         「自定义几何」，面板从此不再跟随球，用户完全不知道自己做了什么。 */
+      if (!moved) { return; }
+      /* 存**落地后的真实几何**（clamp/min 都已生效），别存计算中间值 */
+      savePanelBox(currentBox());
+      syncGeoReset();
+      beacon(moving ? 'asb_panel_move' : 'asb_panel_resize');
+    }
+    node.addEventListener('pointermove', onMove);
+    node.addEventListener('pointerup', onUp);
+    node.addEventListener('pointercancel', onUp);
+    /* 刻意**不**在 pointerdown 上 preventDefault：那会阻断浏览器合成 click /
+       dblclick。文本选中由 `.asb-moving{user-select:none}` 压住。 */
+  }
+
+  /* 键盘可达（无障碍不是可选项：手柄能 Tab 到就必须能用键盘操作）。
+     方向键 16px 一档，Shift 加速到 48px，Esc 复位。 */
+  function onHandleKey(e, dir) {
+    var step = e.shiftKey ? 48 : 16;
+    var b = currentBox();
+    var dx = e.key === 'ArrowRight' ? step : (e.key === 'ArrowLeft' ? -step : 0);
+    var dy = e.key === 'ArrowDown' ? step : (e.key === 'ArrowUp' ? -step : 0);
+    if (e.key === 'Escape') { resetPanelBox(); return true; }
+    if (!dx && !dy) { return false; }
+    if (!dir) { b.x += dx; b.y += dy; }
+    else {
+      if (dir.indexOf('e') > -1) { b.w += dx; }
+      if (dir.indexOf('s') > -1) { b.h += dy; }
+      if (dir.indexOf('w') > -1) { b.w -= dx; b.x += dx; }
+      if (dir.indexOf('n') > -1) { b.h -= dy; b.y += dy; }
+    }
+    savePanelBox(applyPanelBox(b));
+    syncGeoReset();
+    if (e.preventDefault) { e.preventDefault(); }
+    return true;
+  }
+
+  function resetPanelBox() {
+    clearPanelBox();
+    $panel.style.width = '';
+    $panel.style.height = '';
+    placePanel();
+    syncGeoReset();
+    beacon('asb_panel_reset');
+  }
+
+  /* 复位按钮只在「几何被改过」时露出（没改过就没有可复位的东西）。 */
+  function syncGeoReset() {
+    try {
+      var b = $panel.querySelector('.asb-hd-rst');
+      if (b) { b.hidden = !loadPanelBox(); }
+    } catch (e) { /* ignore */ }
+  }
+
+  /* 自己认双击，不等浏览器合成 dblclick：拖拽用了 setPointerCapture，两次点击
+     的 target 会被重定向到捕获元素，Chromium 判定「不是同一个目标」就**根本不
+     合成 dblclick**——真实鼠标序列下复位永远不触发（合成事件却能过，所以静态
+     测试看不出来）。触摸屏对 dblclick 的支持也参差。 */
+  var _tapT = 0, _tapX = 0, _tapY = 0;
+  function isDoubleTap(e) {
+    var now = Date.now();
+    var dbl = (now - _tapT) < 400 &&
+      Math.abs(e.clientX - _tapX) < 10 && Math.abs(e.clientY - _tapY) < 10;
+    _tapT = dbl ? 0 : now;   /* 认定后清零，防三击被当成第二次双击 */
+    _tapX = e.clientX; _tapY = e.clientY;
+    return dbl;
+  }
+
+  /* 八向手柄。只有右下角进 Tab 序：八个都进会让键盘用户每次穿过面板都要按
+     八下 Tab，而缩放用一个角就够。 */
+  function rsHandlesHtml() {
+    var dirs = ['n', 's', 'w', 'e', 'nw', 'ne', 'sw', 'se'];
+    var out = '';
+    for (var i = 0; i < dirs.length; i++) {
+      var d = dirs[i];
+      out += '<div class="asb-rs ' + d + '" data-rs="' + d + '"' +
+        (d === 'se'
+          ? ' tabindex="0" role="separator" aria-orientation="vertical"' +
+            ' aria-label="' + esc(t('resize_aria')) + '"'
+          : ' aria-hidden="true"') + '></div>';
+    }
+    return out;
+  }
+
+  function wirePanelGestures() {
+    /* 事件委托：renderPanel() 每次重写 innerHTML，直接绑元素会在重渲染后失效 */
+    $panel.addEventListener('pointerdown', function (e) {
+      var h = e.target && e.target.closest ? e.target.closest('.asb-rs') : null;
+      if (h) { startPanelGesture(e, h.getAttribute('data-rs') || 'se', h);
+               return; }
+      var hd = e.target && e.target.closest ? e.target.closest('.asb-hd') : null;
+      /* 标题栏里的按钮（关闭/配对/复位）不能变成拖拽把手 */
+      if (hd && !(e.target.closest && e.target.closest('button'))) {
+        if (isDoubleTap(e)) { resetPanelBox(); return; }
+        startPanelGesture(e, '', hd);
+      }
+    });
+    $panel.addEventListener('keydown', function (e) {
+      var h = e.target && e.target.closest ? e.target.closest('.asb-rs') : null;
+      if (h) { onHandleKey(e, h.getAttribute('data-rs') || 'se'); return; }
+      if (e.target && e.target.classList &&
+          e.target.classList.contains('asb-hd')) { onHandleKey(e, ''); }
+    });
   }
 
   /* ────────────────────────────────────────────── DOM 构建 */
@@ -1281,6 +1631,7 @@
       if (S.open) { placePanel(); }
     });
     wireDrag();
+    wirePanelGestures();
     wireGlobal();
     document.addEventListener('asb-ask', function (e) {
       var q = e && e.detail ? e.detail.q : '';
@@ -1436,6 +1787,12 @@
       '<div class="asb-hd">' +
       '<span class="asb-hd-ic">' + ICON_SPARK + '</span>' +
       '<span class="asb-hd-name">' + esc(dispName()) + '</span>' +
+      /* 复位入口做成**看得见的按钮**而不是只靠双击：双击这类手势发现性极差
+         （没人知道可以双击）。只在几何被改过时出现——没自定义过就没有「复位」
+         可言，常驻只是噪音。 */
+      '<button type="button" class="asb-hd-rst" data-act="rstgeo" hidden' +
+      ' title="' + esc(t('reset_geo')) + '" aria-label="' +
+      esc(t('reset_geo')) + '">⤢</button>' +
       '<button type="button" class="asb-hd-pair" data-act="pair" title="' +
       esc(t('pair_off')) + '" aria-label="' + esc(t('pair_t')) +
       '">📱<i aria-hidden="true"></i></button>' +
@@ -1446,7 +1803,9 @@
       '<div class="asb-body" aria-live="polite"></div>' +
       '<div class="asb-hero"><canvas aria-hidden="true"></canvas></div>' +
       '<div class="asb-ftwrap"></div>' +
-      '<div class="asb-subtabs"></div>';
+      '<div class="asb-subtabs"></div>' +
+      rsHandlesHtml();
+    syncGeoReset();
     $panel.addEventListener('click', onPanelClick);
     $panel.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' && !e.shiftKey &&
@@ -1764,13 +2123,60 @@
   /* 问答模式首屏（P1-3）：欢迎三卡已删除——问功能=输入框、报障=次级页签、
      学操作=模式条第二格，三张卡是同一批入口的第三次重复，只是在挤首屏。
      chips 由 5 条减为 **3 条本页相关**，「全站高频」搬去「常问」面板。 */
-  function renderChatIntro(body) {
-    var chips = (S.boot && S.boot.chips && S.boot.chips.length)
-      ? S.boot.chips.slice(0, 3)
+  /* 「确定答得上」的问法池：介绍屏与拒答建议**共用同一个源**，否则两处会
+     各自漂移，出现「介绍屏推的问题，拒答时却说答不上」这种自相矛盾。
+     exclude 是刚问过的那一句——把用户刚被拒的问题再推一遍是最糟的建议。 */
+  function answerableChips(exclude) {
+    var pool = (S.boot && S.boot.chips && S.boot.chips.length)
+      ? S.boot.chips.slice(0)
       : (S.lang === 'en'
         ? ['How to send a voice message', 'How to report a bug',
            'How to clear inbox filters']
         : ['怎么发语音', '在哪提交 bug', '收件箱筛选怎么清空']);
+    var ex = String(exclude || '').trim();
+    var out = [];
+    for (var i = 0; i < pool.length && out.length < 3; i++) {
+      if (String(pool[i] || '').trim() !== ex) { out.push(pool[i]); }
+    }
+    return out;
+  }
+
+  /* 依据徽标：doc 走既有「来源」块（引用得到具体条目），product/general 只能
+     给一句出处说明——但**必须给**，否则用户无从判断这句话有多少分量。 */
+  function basisHtml(basis) {
+    var key = basis === 'general' ? 'basis_general'
+      : (basis === 'product' ? 'basis_product' : '');
+    if (!key) { return ''; }
+    return '<div class="asb-basis' + (basis === 'general' ? ' gen' : '') +
+      '">' + esc(t(key)) + '</div>';
+  }
+
+  /* 拒答建议：优先用**本次真检索到的条目**（meta.sources），它们是离这个问题
+     最近的东西，服务端本来就送过来了、前端此前直接丢掉；按页面热度推
+     「怎么发语音」那种毫不相干的建议正是老板说的「没区别」。
+     检索空了才回落到「确定答得上」的高频池。 */
+  function suggestHtml(q, meta) {
+    var near = [];
+    try {
+      var ss = (meta && meta.sources) || [];
+      for (var k = 0; k < ss.length && near.length < 3; k++) {
+        var ti = String((ss[k] && ss[k].title) || '').trim();
+        if (ti) { near.push(ti); }
+      }
+    } catch (e0) { near = []; }
+    var list = near.length ? near : answerableChips(q);
+    if (!list.length) { return ''; }
+    var h = '<div class="asb-chips asb-sugg"><span class="asb-chips-t">' +
+      esc(t(near.length ? 'suggest_near_t' : 'suggest_t')) + '</span>';
+    for (var m = 0; m < list.length; m++) {
+      h += '<button type="button" class="asb-chip" data-sugg="1" data-q="' +
+        esc(list[m]) + '">' + esc(list[m]) + '</button>';
+    }
+    return h + '</div>';
+  }
+
+  function renderChatIntro(body) {
+    var chips = answerableChips('');
     var html = '<div class="asb-msg ai">' + mdLite(t('hello')) + '</div>' +
       '<div class="asb-chips"><span class="asb-chips-t">' +
       esc(t('chips_title')) + '</span>';
@@ -2052,8 +2458,14 @@
       orbFlash();
       return;
     }
+    var noBasis = !!(done && done.answered === false);
     var html = '<div class="asb-msg ai">' + mdLite(answer) + '</div>';
-    if (meta && meta.sources && meta.sources.length) {
+    /* 无文档依据但答了（产品事实卡 / 通用知识）→ 标一行出处。doc 依据走下面
+       的「来源」块，不重复标。 */
+    if (!noBasis && done) { html += basisHtml(done.basis); }
+    /* 拒答时**不列来源**：那几条正是被判定「答不了」的东西，摆出来等于
+       「我不知道，但这里有三个不相关的链接」，比不给更让人困惑。 */
+    if (!noBasis && meta && meta.sources && meta.sources.length) {
       html += '<div class="asb-srcs"><span class="asb-srcs-t">' +
         esc(t('src_title')) + '</span>';
       for (var j = 0; j < meta.sources.length; j++) {
@@ -2093,11 +2505,13 @@
        ② done.answered === false —— 服务端判定「没依据」，**答完才知道**：
           零命中，或 LLM 自认参考条目回答不了（NO_BASIS 哨兵）。
        只看 ① 会漏掉「答不上来」这个最该给出路的时刻。 */
-    var noBasis = !!(done && done.answered === false);
     if (reportOn() && ((meta && meta.report_hint) || noBasis)) {
       html += '<button type="button" class="asb-act" data-act="to-report" ' +
         'data-q="' + esc(q) + '">' + esc(t('to_report')) + '</button>';
     }
+    /* 报障是「这可能是故障」的出路；下面这排是「你现在就能得到答案」的出路。
+       两者并存：答不上来的原因多半是语料没覆盖，而不是坏了。 */
+    if (noBasis) { html += suggestHtml(q, meta); }
     replaceThinking(thinkId, html);
     if (done && done.answered && answer) {
       /* 多轮上下文素材（2026-08-23）：只记答成的轮次，随下问送最近 3 轮 */
@@ -2738,6 +3152,7 @@
       return;
     }
     if (act === 'close') { togglePanel(false); return; }
+    if (act === 'rstgeo') { resetPanelBox(); return; }
     /* 标题栏手机操控：配对弹层归 XZAgent（同一条 /api/assistant/pair 链），
        组件缺席则静默——不做死按钮。 */
     if (act === 'pair') {
