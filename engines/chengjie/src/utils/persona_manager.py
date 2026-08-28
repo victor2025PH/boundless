@@ -2027,7 +2027,10 @@ class PersonaManager:
                 if _hint:
                     lines.append(_hint)
             except Exception:
-                pass
+                # 摇点是锦上添花，坏了也不许影响主回复链 → 继续吞，但要留痕：
+                # 静默会让「档位又恒出 3 句」的复发查不出是这里断了还是模型不听话。
+                logger.debug("B130 句数落点注入失败，本轮回落纯区间引导",
+                             exc_info=True)
         max_sentences = _p_max or (0 if _p_len else _rd.get("max_sentences", 0))
         if max_sentences and not reply_length:
             lines.append(f"单次回复建议不超过 {max_sentences} 句。")
