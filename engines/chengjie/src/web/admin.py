@@ -35,6 +35,7 @@ templates.env.auto_reload = True
 # 模板热更新的运行时兜底（2026-08-17 `){#` 事故第三层防线）：坏保存落盘时供应
 # 最后一版好模板 + CRITICAL 限流日志，替代整页 500；冷启动就坏仍照旧抛。
 # 详见 src/web/template_guard.py 的取舍说明；门禁 tests/test_template_guard.py。
+from src.web.body_replay import make_replay_receive  # noqa: E402
 from src.web.template_guard import install_template_guard  # noqa: E402
 
 install_template_guard(templates.env)
@@ -779,16 +780,17 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             if not msg.get("more_body", False):
                 break
         # 3) 重放给下游
+        # 回落目标必须是**替换前**的 receive，故先捕获再替换。这一行有两次
+        # 事故史，机制与判据都写在 body_replay.py 的模块 docstring 里：
+        #   · 旧实现耗尽后返回伪造的 `{"type":"http.disconnect"}` —— 普通响应
+        #     无害，但 StreamingResponse 并发跑 listen_for_disconnect 来实现
+        #     「客户端一走就停止出话」，它把伪信号当真 → 掐掉正在出话的生成器
+        #     ⇒ 小智问答 100% 在 meta 之后 0.2s 断流、前端只剩「网络异常」；
+        #   · 改成 `await request._receive()` 同样错 —— 赋值已发生，那是自调用，
+        #     967 层后 RecursionError，症状与上一种一模一样。
+        # 做成工厂后 original_receive 由闭包捕获，自引用在结构上写不出来。
         full_body = b"".join(body_chunks)
-        replayed = {"done": False}
-
-        async def replay_receive():
-            if replayed["done"]:
-                return {"type": "http.disconnect"}
-            replayed["done"] = True
-            return {"type": "http.request", "body": full_body, "more_body": False}
-
-        request._receive = replay_receive
+        request._receive = make_replay_receive(request._receive, full_body)
         return await call_next(request)
 
     # RBAC user store

@@ -132,6 +132,63 @@ def _is_no_basis(text: str) -> bool:
     return str(text or "").lstrip().upper().startswith(_NO_BASIS)
 
 
+# SSE 注释行（`:` 开头）：不是事件，前端 readNdjson 的 handleLine 直接忽略，
+# 但它让连接上一直有字节流动 —— 故加心跳**零前端改动**。
+_SSE_KEEPALIVE = ": ka\n\n"
+_KA_INTERVAL_SEC = 10.0
+
+
+async def stream_with_keepalive(agen, interval: float = _KA_INTERVAL_SEC):
+    """把上游异步生成器包成「带心跳的流」，产出 ('ka',None) 或 ('piece',数据)。
+
+    为什么必须有（2026-08-28 事故实测）：本端点先推 meta，随后在等 LLM 首个
+    token 期间**完全零字节**（qa_log 里存过 latency_ms=37638 的真实案例）。
+    任何中间层（桌面壳 net stack / 反向 SSH 隧道 / nginx proxy_read_timeout）
+    的空闲超时都会把这段静默当成死连接掐断 → 生成器收 CancelledError →
+    那时再 yield err 已经没有接收者 → 前端只拿到 meta，落到兜底文案
+    「网络异常，请重试」，而用户的网络其实好得很。
+
+    上游异常原样转交调用方（保持原 try/except 语义不变）；上游正常结束即
+    return。**getter 用持久 future 而不是 wait_for(q.get())**：后者在超时
+    取消时存在「已取到值却被丢弃」的竞态，会静默吞掉一个 token。
+    """
+    q: "asyncio.Queue[tuple]" = asyncio.Queue()
+
+    async def _pump():
+        try:
+            async for item in agen:
+                await q.put(("piece", item))
+        except BaseException as exc:  # noqa: BLE001 - 原样转交，不在此判类型
+            await q.put(("exc", exc))
+        else:
+            await q.put(("end", None))
+
+    pump = asyncio.ensure_future(_pump())
+    getter = None
+    try:
+        while True:
+            if getter is None:
+                getter = asyncio.ensure_future(q.get())
+            done_set, _pending = await asyncio.wait({getter}, timeout=interval)
+            if not done_set:
+                yield ("ka", None)
+                continue
+            kind, payload = getter.result()
+            getter = None
+            if kind == "end":
+                return
+            if kind == "exc":
+                raise payload
+            yield ("piece", payload)
+    finally:
+        # 只取消不 await：被取消的 task 不会触发「exception never retrieved」，
+        # 而在生成器 finally 里 await 一个可能已被取消的上游是新的挂起风险。
+        if getter is not None:
+            getter.cancel()
+        if not pump.done():
+            pump.cancel()
+
+
 def _detect_report_hint(q: str) -> bool:
     ql = str(q or "").lower()
     return any(k in ql for k in (
@@ -185,13 +242,24 @@ def register_assistant_routes(app, ctx) -> None:
         面板打字机实时渲染，「不设秒数限制」后的体验闭环（等 8 秒黑盒 →
         看着答案长出来）。api_key='inherit' 复用 ai.api_key（不复制密钥）。
         无超时（老板拍板；SDK 600s 兜底防死连接）。"""
-        base = str(llm_cfg.get("base_url") or "").strip()
-        model = str(llm_cfg.get("model") or "").strip()
+        # 三个键**必须都支持 inherit**（2026-08-28 事故）：此前只有 api_key 写了
+        # inherit，base_url/model 硬编码 api.deepseek.com + deepseek-v4-flash。
+        # 主链端点后来迁到 siliconflow，于是 inherit 取到的是**新家的 key**，
+        # 拿它打旧家端点 → 每次提问 401；而 401 落在 except Exception 里只记一条
+        # WARNING 就静默回落，坐席看到的是「网络异常，请重试」，因果链断了五天
+        # 没人对得上。三键同源（都 inherit）是唯一不会再分叉的配法。
+        _ai = _cfg().get("ai") or {}
+        base = str(llm_cfg.get("base_url") or "inherit").strip()
+        if base in ("", "inherit"):
+            base = str(_ai.get("base_url") or "").strip()
+        model = str(llm_cfg.get("model") or "inherit").strip()
+        if model in ("", "inherit"):
+            model = str(_ai.get("model") or "").strip()
         if not base or not model:
             raise RuntimeError("assistant llm not configured")
         key = str(llm_cfg.get("api_key") or "inherit").strip()
         if key in ("", "inherit"):
-            key = str((_cfg().get("ai") or {}).get("api_key") or "")
+            key = str(_ai.get("api_key") or "")
         from openai import AsyncOpenAI
 
         client = AsyncOpenAI(base_url=base, api_key=key, max_retries=0)
@@ -362,6 +430,12 @@ def register_assistant_routes(app, ctx) -> None:
 
         async def _gen():
             t0 = time.time()
+            ka_sent = 0
+            # 取消定位用的阶段游标（2026-08-28）：本端点被取消时**整段都没有
+            # 现场**——CancelledError 是 BaseException，`except Exception` 抓不到，
+            # 而 yield 是暂停点，取消可以落在任意两个 yield 之间。只报「被取消」
+            # 等于只说了「它死了」，说不出死在哪一步。
+            stage = "start"
             try:
                 from src.assistant.context_builder import build_context_block
                 from src.assistant.help_kb import get_help_kb
@@ -389,8 +463,10 @@ def register_assistant_routes(app, ctx) -> None:
                 # 触发——用户问「运营漏斗这页怎么用」而语料没货时，小智只说一句
                 # 「不知道」就没了，没有任何出路。而「答不上来」恰恰是最该转成
                 # 报障/工单线索的时刻：它同时是用户的死路和我们补语料的照单。
+                stage = "kb_searched"
                 yield _sse({"ev": "meta", "sources": sources,
                             "report_hint": bool(report_hint or not strong)})
+                stage = "meta_sent"
 
                 if not strong:
                     # 零命中：诚实说不知道 + 报障入口，绝不让 LLM 裸编
@@ -411,6 +487,7 @@ def register_assistant_routes(app, ctx) -> None:
                     page=page, role=role, lang=lang,
                     ui_build=str(data.get("ui_build") or "")[:40],
                 )
+                stage = "ctx_built"
                 src_lines = []
                 for i, h in enumerate(strong, 1):
                     src_lines.append(
@@ -491,9 +568,15 @@ def register_assistant_routes(app, ctx) -> None:
                 head_buf = ""
                 gate_open = False
                 if llm_cfg.get("base_url"):
+                    stage = "llm_direct_open"
                     try:
-                        async for piece in _direct_llm_stream(
-                                llm_cfg, prompt, max_tok):
+                        async for _kind, piece in stream_with_keepalive(
+                                _direct_llm_stream(llm_cfg, prompt, max_tok)):
+                            if _kind == "ka":
+                                ka_sent += 1
+                                yield _SSE_KEEPALIVE
+                                continue
+                            stage = "llm_direct_streaming"
                             answer += piece
                             if gate_open:
                                 streamed = True
@@ -512,24 +595,45 @@ def register_assistant_routes(app, ctx) -> None:
                             gate_open = True
                             streamed = True
                             yield _sse({"ev": "delta", "text": head_buf})
-                    except Exception:
-                        logger.warning("[assistant] 直连流式失败%s",
-                                       "（已部分输出）" if streamed else "，回落主链",
-                                       exc_info=True)
+                    except Exception as _exc:
+                        # 认证类失败要单独点名：它不是「网络抖动」而是**配置错了**
+                        # （三键分叉），文案直接给出复查位置，省掉下一次的排查。
+                        _s = str(_exc)
+                        _authish = any(k in _s for k in (
+                            "401", "403", "Authentication", "api key",
+                            "Unauthorized", "invalid_api_key"))
+                        logger.warning(
+                            "[assistant] 直连流式失败%s%s",
+                            "（已部分输出）" if streamed else "，回落主链",
+                            "｜认证被拒：assistant.query.llm 的 base_url/model/"
+                            "api_key 与 ai.* 分叉了（三者必须同源，"
+                            "推荐全写 inherit）" if _authish else "",
+                            exc_info=True)
                         if streamed:
                             raise
                         answer = ""
                 if not answer:
+                    stage = "fallback_main"
                     sm = _resolve_sm()
                     if sm is None or not hasattr(sm, "ai_client"):
                         raise RuntimeError("skill_manager unavailable")
-                    answer = str(await sm.ai_client.generate_reply(
+                    # 回落主链是**非流式**整段返回，静默窗比直连更长（云端降级
+                    # 时尤甚）→ 同样要心跳，否则这条容灾路径自己会被掐断。
+                    _fb = asyncio.ensure_future(sm.ai_client.generate_reply(
                         user_message=prompt,
                         context={"current_intent": "assistant_help",
                                  "kb_context": ""},
                         strategy_overrides={"temperature": 0.3,
                                             "max_tokens": max_tok},
-                    ) or "").strip()
+                    ))
+                    while True:
+                        _done, _p = await asyncio.wait(
+                            {_fb}, timeout=_KA_INTERVAL_SEC)
+                        if _done:
+                            break
+                        ka_sent += 1
+                        yield _SSE_KEEPALIVE
+                    answer = str(_fb.result() or "").strip()
                     if not answer:
                         raise RuntimeError("empty answer")
                     # 非流式路径同样先判后吐（这里还一个字都没发出去）
@@ -564,7 +668,13 @@ def register_assistant_routes(app, ctx) -> None:
             except asyncio.CancelledError:
                 # 直连流收尾/客户端断开都可能是 CancelledError（BaseException），
                 # 不接 = meta 之后静默掐流，前端只能显示「网络异常」。
-                logger.warning("[assistant] query 被取消")
+                # ka/elapsed/stage 是这条日志唯一的诊断价值所在（2026-08-28 补）：
+                # ka>0 ＝连接上一直有字节在流动却照样被掐断，那就不是空闲超时，
+                # 得往桌面壳/代理的别的策略查；ka=0 且耗时很短 ＝客户端自己很快
+                # 走了（切页/关面板）。此前只有一句「被取消」，两种成因分不开。
+                logger.warning(
+                    "[assistant] query 被取消（ka=%d, %.1fs, stage=%s）",
+                    ka_sent, time.time() - t0, stage, exc_info=True)
                 stats.record_query(answered=False, error=True,
                                    latency_ms=int((time.time() - t0) * 1000))
                 try:
@@ -582,7 +692,10 @@ def register_assistant_routes(app, ctx) -> None:
 
         return StreamingResponse(
             _gen(), media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+            # no-transform：显式禁止中间层改写/缓冲响应体（代理常按 Cache-Control
+            # 决定要不要攒够一块再转发，攒就等于把流式变成整段）。
+            headers={"Cache-Control": "no-cache, no-transform",
+                     "X-Accel-Buffering": "no"})
 
     # ------------------------------------------------------------ report
     @app.post("/api/assistant/report")
