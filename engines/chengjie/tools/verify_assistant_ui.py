@@ -11,7 +11,12 @@
 
 覆盖的不变量（编号对应 run_admin/run_ws 里的断言）：
   A1  init 后球在场（aria-expanded=false），面板隐藏
-  A2  点球 → 面板开（对话 tab 激活，欢迎语 + chips 可见）
+  A2  点球 → 面板开（问答模式激活，欢迎语 + chips 可见）
+  M1-M6 实施73 P1 信息架构：模式条三格 / 方向键 / 教学·替我做模式内容 /
+        次级页签顺序（报障·我的·常问·⚙）/ 常问面板与点条目发问 /
+        手机操控在标题栏且状态点跟随真实配对态
+  M3c-e 实施73 P2-1 状态行：「本页 N 处可讲解」异步回填 + 数字与导览站点数
+        相等（静态门禁只能证明两处都调了同一个扫描器，证不了数字相等）
   A3  点 chip → 用户气泡 + AI 回答（JSON events 渲染）+ 来源卡（带我去链接）
   A4  👍 反馈 → POST 带 qa_id + verdict，按钮区变「已记录」
   A5  report_hint 回答 → 出「转报障」按钮；点击 → 切报障 tab 且描述预填
@@ -52,7 +57,7 @@ _HTML = """<!doctype html>
 @@ADMIN_GLOBALS@@
 <script>
 window.__api = { queries: [], reports: [], feedbacks: [], ticketsCalls: 0,
-                 queryMode: 'ok' };
+                 faqCalls: 0, pairSessions: [], queryMode: 'ok' };
 window.fetch = async function (url, opts) {
   url = String(url);
   const J = (o, st) => new Response(JSON.stringify(o),
@@ -100,6 +105,25 @@ window.fetch = async function (url, opts) {
       teach_btn: { zh: '教学按钮', en: 'Teach button',
         desc: '教学按钮说明', desc_en: 'Teach btn desc' } } });
   }
+  if (url.indexOf('/api/assistant/faq') === 0) {
+    window.__api.faqCalls++;
+    if (url.indexOf('q=') > -1) {
+      return J({ ok: true, mode: 'search',
+        items: [{ title: '怎么给客户发语音消息', path: '/workspace' }] });
+    }
+    return J({ ok: true, mode: 'top',
+      page_items: [{ q: '本页高频问题', n: 4 }],
+      global_items: [{ q: '全站高频问题', n: 9 }], seed_items: [] });
+  }
+  if (url.indexOf('/api/assistant/pair/sessions') === 0) {
+    return J({ ok: true, sessions: window.__api.pairSessions });
+  }
+  if (url.indexOf('/api/assistant/act/history') === 0) {
+    return J({ ok: true, items: [
+      { ts: Date.now() / 1000, label: '把回复速度调快', old_h: '慢',
+        new_h: '快', actor: 'me', undoable: true, undo_id: 'u1' }] });
+  }
+  if (url.indexOf('/api/assistant/actions') === 0) { return J({ ok: true, actions: [] }); }
   if (url.indexOf('/api/assistant/tickets') === 0) {
     window.__api.ticketsCalls++;
     return J({ ok: true, tickets: [
@@ -116,6 +140,14 @@ AssistantBall.init({ shell: '@@SHELL@@', lang: 'zh', boot: {
   ok: true, enabled: true, name: '小智', brand: '测试站',
   report_enabled: true, voice: false, kb_entries: 230,
   chips: ['怎么发语音', '在哪提交 bug'] } });
+</script>
+<!-- 实施73 P1 起三个模块必须同时在场才是生产形态：教学/替我做经
+     registerMode 认领模式条第 2/3 格，缺席则面板退化为单模式纯问答。 -->
+<script src="@@TEACH_JS@@"></script>
+<script src="@@AGENT_JS@@"></script>
+<script>
+XZTeach.init({ shell: '@@SHELL@@', lang: 'zh' });
+XZAgent.init({ shell: '@@SHELL@@', lang: 'zh' });
 </script>
 </body></html>
 """
@@ -150,9 +182,14 @@ class Checker:
 
 
 def build_page(td: Path, shell: str) -> Path:
-    ball = (ENGINE / "shared" / "assistant" / "assistant-ball.js").resolve()
+    sh = ENGINE / "shared" / "assistant"
+    ball = (sh / "assistant-ball.js").resolve()
+    teach = (sh / "assistant-teach.js").resolve()
+    agent = (sh / "assistant-agent.js").resolve()
     html = (_HTML
             .replace("@@BALL_JS@@", ball.as_uri())
+            .replace("@@TEACH_JS@@", teach.as_uri())
+            .replace("@@AGENT_JS@@", agent.as_uri())
             .replace("@@SHELL@@", shell)
             .replace("@@ADMIN_GLOBALS@@",
                      _ADMIN_GLOBALS if shell == "admin" else ""))
@@ -173,24 +210,155 @@ def run_admin(page, ck: Checker) -> None:
 
     # A2 点球开面板
     page.click(".asb-ball")
-    ck.check("A2 面板开（对话 tab + 欢迎语 + chips）",
+    page.wait_for_timeout(150)
+    ck.check("A2 面板开（问答模式 + 欢迎语 + chips）",
              ev("() => !!document.querySelector('.asb-panel.open') && "
-                "document.querySelector('.asb-tab[data-tab=\"chat\"]')"
-                ".classList.contains('cur') && "
+                "document.querySelector('.asb-mode[data-mode=\"chat\"]')"
+                ".getAttribute('aria-checked') === 'true' && "
                 "!!document.querySelector('.asb-chips') && "
                 "document.querySelectorAll('.asb-chip').length >= 2"))
+    ck.check("A2b 欢迎三卡已删除（首屏不再有重复入口）",
+             ev("() => !document.querySelector('.asb-h3')"))
+    ck.check("A2c 模式条三格在场（详细断言见 M 组）",
+             ev("() => document.querySelectorAll('.asb-mode').length === 3"),
+             ev("() => document.querySelectorAll('.asb-mode').length + ' modes'"))
 
-    # A2c 欢迎三卡（P1）：问/报/学入口在场；报障卡直达报障 tab
-    ck.check("A2c 欢迎三卡在场",
-             ev("() => document.querySelectorAll('.asb-h3 .asb-h3c')"
-                ".length === 3"))
-    page.click('[data-act="h3-report"]')
+    # A3 chip 问答（JSON events 渲染）
+    _run_admin_chat(page, ck)
+    # ── M 组：实施73 P1 信息架构（放在绝对计数断言之后——M6b 会真发一问） ──
+    _run_modes(page, ck)
+    _run_admin_tail(page, ck)
+
+
+def _run_modes(page, ck: Checker) -> None:
+    ev = page.evaluate
+    ck.check("M1 模式条三格（问答/教学/替我做）+ radiogroup 语义",
+             ev("() => { var b = document.querySelector('.asb-modes'); "
+                "return b && b.getAttribute('role') === 'radiogroup' && "
+                "b.querySelectorAll('.asb-mode').length === 3 && "
+                "!b.classList.contains('solo'); }"),
+             ev("() => document.querySelectorAll('.asb-mode').length + ' modes'"))
+    ck.check("M1b 滑块指示器已定位（面板开时才算得出宽度）",
+             ev("() => { var i = document.querySelector('.asb-modes-ind'); "
+                "return !!i && i.style.opacity === '1' && "
+                "parseFloat(i.style.width) > 10; }"))
+    ck.check("M2 次级页签顺序＝报障·我的·常问·⚙",
+             ev("() => Array.prototype.map.call("
+                "document.querySelectorAll('.asb-subtabs .asb-sub'), "
+                "function (b) { return b.getAttribute('data-tab'); })"
+                ".join(',') === 'report,mine,faq,set'"),
+             ev("() => document.querySelector('.asb-subtabs').textContent"))
+
+    # M3 教学模式：安全承诺整段可见 + 主按钮在场（不是虚线占位）
+    page.click('.asb-mode[data-mode="teach"]')
+    page.wait_for_timeout(150)
+    ck.check("M3 教学模式内容（主按钮 + 安全承诺全文）",
+             ev("() => { var b = document.querySelector('.asb-body'); "
+                "return !!b.querySelector('.asb-md-go') && "
+                "b.textContent.indexOf('不会真的执行') > -1 && "
+                "!!b.querySelector('.asb-md-safe'); }"),
+             ev("() => document.querySelector('.asb-body').textContent.slice(0,120)"))
+    ck.check("M3b 教学模式无输入区（它不靠打字驱动）",
+             ev("() => !document.querySelector('.asb-ftwrap .asb-in')"))
+
+    # M3c-M3e 实施73 P2-1：状态行「本页 N 处可讲解」。词典是 fetch 异步下发的，
+    # 所以先等回填；夹具备了 2 条词条（h3 走 data-anchor、按钮走归一化标题）。
+    page.wait_for_timeout(250)
+    ck.check("M3c 状态行回填「本页 N 处可讲解」（夹具应为 2 处）",
+             ev("() => { var s = document.querySelector('.asb-md-stat'); "
+                "return !!s && s.getAttribute('data-n') === '2' && "
+                "s.textContent.indexOf('2') > -1; }"),
+             ev("() => { var s = document.querySelector('.asb-md-stat'); "
+                "return s ? (s.getAttribute('data-n') + ' | ' + s.textContent) "
+                ": '(no stat line)'; }"))
+    page.click('[data-xzt="mode-tour"]')
+    page.wait_for_timeout(250)
+    # 静态门禁只能证明「两处都调了 scanTeachable」；这一条证明数字真的相等。
+    ck.check("M3d 导览站点数 == 状态行数字（计数与导览同源的运行时证据）",
+             ev("() => { var s = document.querySelector('.asb-md-stat'); "
+                "var b = document.querySelector('.xzt-bubble'); "
+                "return !!s && !!b && b.textContent.indexOf("
+                "'/ ' + s.getAttribute('data-n')) > -1; }"),
+             ev("() => { var b = document.querySelector('.xzt-bubble'); "
+                "return b ? b.textContent.slice(0, 80) : '(no tour bubble)'; }"))
+    # 收尾必须干净：教学态的捕获拦截器还在的话，后面每一条断言的点击都会被吞
+    ev("() => { var x = document.querySelector('[data-xzt=\"tend\"]'); "
+       "if (x) { x.click(); } "
+       "var q = document.querySelector('[data-xzt=\"bexit\"]'); "
+       "if (q) { q.click(); } }")
+    page.wait_for_timeout(200)
+    ck.check("M3e 退出教学态：横幅与气泡都收干净（不留拦截器）",
+             ev("() => !document.querySelector('.xzt-banner') && "
+                "!document.querySelector('.xzt-bubble')"))
+    # start() 是刻意收起面板的（面板挡住页面就没得点了），所以退出教学后
+    # 必须能原样开回来——否则「点了带我走一遍，面板就再也回不来」。
+    if not ev("() => { var p = document.querySelector('.asb-panel'); "
+              "return !!p && p.classList.contains('open'); }"):
+        page.click(".asb-ball")
+        page.wait_for_timeout(250)
+    ck.check("M3f 教学流程走完面板能开回来（不被收起动作卡死）",
+             ev("() => document.querySelector('.asb-panel')"
+                ".classList.contains('open')"))
+
+    # M4 替我做模式：输入区 placeholder 随模式变 + 最近做过 + 撤销就在手边
+    page.click('.asb-mode[data-mode="agent"]')
+    page.wait_for_timeout(250)
+    ck.check("M4 替我做模式 placeholder 随模式变",
+             ev("() => { var i = document.querySelector('.asb-ftwrap .asb-in'); "
+                "return !!i && i.placeholder.indexOf('例如') > -1; }"),
+             ev("() => { var i = document.querySelector('.asb-ftwrap .asb-in'); "
+                "return i ? i.placeholder : '(no composer)'; }"))
+    ck.check("M4b 「做过什么」已并入：最近做过 + 就地撤销",
+             ev("() => { var b = document.querySelector('.asb-body'); "
+                "return b.textContent.indexOf('把回复速度调快') > -1 && "
+                "!!b.querySelector('[data-xza=\"recent-undo\"]'); }"))
+    ck.check("M4c 手机指挥卡在替我做模式内（第二处曝光）",
+             ev("() => document.querySelector('.asb-body').textContent"
+                ".indexOf('用手机指挥') > -1"))
+
+    # M5 方向键在模式间移动（radiogroup 标准交互）
+    ev("() => document.querySelector('.asb-mode[aria-checked=\"true\"]').focus()")
+    page.keyboard.press("ArrowRight")
+    page.wait_for_timeout(150)
+    ck.check("M5 方向键回绕到第一格（问答）",
+             ev("() => document.querySelector('.asb-mode[data-mode=\"chat\"]')"
+                ".getAttribute('aria-checked') === 'true'"))
+
+    # M6 常问面板：分组 + 点条目直接切问答并发问
+    page.click('.asb-sub[data-tab="faq"]')
+    page.wait_for_timeout(250)
+    ck.check("M6 常问面板分组（本页/全站）",
+             ev("() => { var b = document.querySelector('.asb-body'); "
+                "return window.__api.faqCalls > 0 && "
+                "b.textContent.indexOf('本页高频问题') > -1 && "
+                "b.textContent.indexOf('全站高频问题') > -1; }"))
+    ev("() => { window.__faqN = window.__api.queries.length; }")
+    page.click('.asb-faq-i')
+    page.wait_for_timeout(250)
+    ck.check("M6b 点常问条目 → 切回问答并真的发问",
+             ev("() => document.querySelector('.asb-mode[data-mode=\"chat\"]')"
+                ".getAttribute('aria-checked') === 'true' && "
+                "window.__api.queries.length === window.__faqN + 1"))
+
+    # M7 手机操控在标题栏；状态点跟随真实配对态
+    ck.check("M7 标题栏手机键在场且未连=灰",
+             ev("() => { var b = document.querySelector('.asb-hd-pair'); "
+                "return !!b && !b.classList.contains('on'); }"))
+    ev("() => { window.__api.pairSessions = [{ id: 's1' }]; "
+       "var x = document.querySelector('.asb-x'); if (x) x.click(); }")
+    page.click(".asb-ball")
+    page.wait_for_timeout(300)
+    ck.check("M7b 已配对 → 状态点转绿",
+             ev("() => document.querySelector('.asb-hd-pair')"
+                ".classList.contains('on')"))
+    ev("() => { window.__api.pairSessions = []; }")
+
+    page.click('.asb-mode[data-mode="chat"]')
     page.wait_for_timeout(120)
-    ck.check("A2d 报障卡直达报障 tab",
-             ev("() => document.querySelector('.asb-tab[data-tab=\"report\"]')"
-                ".classList.contains('cur')"))
-    page.click('.asb-tab[data-tab="chat"]')
-    page.wait_for_timeout(120)
+
+
+def _run_admin_chat(page, ck: Checker) -> None:
+    ev = page.evaluate
 
     # A3 chip 问答（JSON events 渲染）
     page.click(".asb-chip")
@@ -248,8 +416,8 @@ def run_admin(page, ck: Checker) -> None:
                 "return Array.isArray(last.history) && "
                 "last.history.length >= 1 && !!last.history[0].q; }"))
     page.click("[data-act=\"to-report\"]")
-    ck.check("A5b 报障 tab 激活且描述预填",
-             ev("() => document.querySelector('.asb-tab[data-tab=\"report\"]')"
+    ck.check("A5b 报障页签激活且描述预填",
+             ev("() => document.querySelector('.asb-sub[data-tab=\"report\"]')"
                 ".classList.contains('cur') && "
                 "document.querySelector('.asb-rp-desc').value"
                 ".indexOf('语音按钮') > -1"))
@@ -278,7 +446,7 @@ def run_admin(page, ck: Checker) -> None:
                 "document.body.textContent.indexOf('已修复请更新后验证') > -1"))
 
     # A8 err 事件 → 红气泡 + 重试
-    page.click(".asb-tab[data-tab=\"chat\"]")
+    page.click('.asb-mode[data-mode="chat"]')
     ev("() => { window.__api.queryMode = 'err'; }")
     ev("() => { document.querySelector('.asb-in').value = '再问一次'; }")
     page.click(".asb-send")
@@ -311,6 +479,10 @@ def run_admin(page, ck: Checker) -> None:
              ev("() => document.body.textContent.indexOf('问得太快啦') > -1"))
     ev("() => { window.__api.queryMode = 'ok'; }")
 
+
+def _run_admin_tail(page, ck: Checker) -> None:
+    ev = page.evaluate
+
     # A10 Esc 关面板
     page.keyboard.press("Escape")
     ck.check("A10 Esc 关面板",
@@ -328,7 +500,7 @@ def run_admin(page, ck: Checker) -> None:
        "var c = document.createElement('canvas'); c.width = 320; "
        "c.height = 200; var x = c.getContext('2d'); x.fillStyle = '#fff'; "
        "x.fillRect(0, 0, 320, 200); return c; }; }")
-    page.click(".asb-tab[data-tab=\"report\"]")
+    page.click('.asb-sub[data-tab="report"]')
     page.click("[data-act=\"shot-page\"]")
     page.wait_for_timeout(400)
     ck.check("A12 标注层出现（5 工具钮）",
@@ -341,7 +513,10 @@ def run_admin(page, ck: Checker) -> None:
              ev("() => !document.querySelector('.asb-an') && "
                 "!!document.querySelector('.asb-rp-thumb img')"))
 
-    # A13 旧帮助球功能收编（admin 壳；2026-08-21 起球已退役=全局函数契约）
+    # A13 旧帮助球功能收编（admin 壳；2026-08-21 起球已退役=全局函数契约）。
+    # P1 起它们住在 ⚙ 偏好页里——那是偏好不是功能，不该占主视觉。
+    page.click('.asb-sub[data-tab="set"]')
+    page.wait_for_timeout(150)
     ck.check("A13 工具行四入口在场（tips/tour/cmd/support）",
              ev("() => !!document.querySelector('[data-act=\"tour\"]') && "
                 "!!document.querySelector('[data-act=\"cmd\"]') && "
@@ -365,8 +540,8 @@ def run_admin(page, ck: Checker) -> None:
              ev("() => !!document.querySelector('.asb-nudge')"))
     page.click(".asb-nudge [data-n=\"go\"]")
     page.wait_for_timeout(220)
-    ck.check("A14b 冒泡直达报障 tab 且指纹预填",
-             ev("() => document.querySelector('.asb-tab[data-tab=\"report\"]')"
+    ck.check("A14b 冒泡直达报障页签且指纹预填",
+             ev("() => document.querySelector('.asb-sub[data-tab=\"report\"]')"
                 ".classList.contains('cur') && "
                 "document.querySelector('.asb-rp-desc').value"
                 ".indexOf('boom') > -1"))
@@ -443,7 +618,7 @@ def run_admin(page, ck: Checker) -> None:
     page.wait_for_timeout(150)
 
     # O9 播报按钮（P2）：答案行带 🔊；stub 无 tts 端点 → 点击=诚实失败红气泡
-    page.click(".asb-tab[data-tab=\"chat\"]")
+    page.click('.asb-mode[data-mode="chat"]')
     page.wait_for_timeout(120)
     ck.check("O9 答案行带播报按钮",
              ev("() => !!document.querySelector('[data-act=\"say\"]')"))
@@ -519,10 +694,8 @@ def run_admin(page, ck: Checker) -> None:
                 ".indexOf('asb-ask') > -1"))
 
     # T1 教学模式「让小智详细讲讲」整条点击链（复现 2026-08-23 空点事故）
-    teach = (ENGINE / "shared" / "assistant" / "assistant-teach.js").resolve()
-    page.add_script_tag(path=str(teach))
-    ev("() => { window.XZTeach.init({shell:'admin', lang:'zh'}); "
-       "window.XZTeach.start(); }")
+    # （teach/agent 已随夹具页一起加载＝生产形态，此处只驱动教学态）
+    ev("() => { window.XZTeach.start(); }")
     page.wait_for_timeout(200)
     ev("() => { window.__askN2 = window.__api.queries.length; "
        "document.getElementById('page-title').dispatchEvent("
@@ -589,10 +762,16 @@ def run_admin(page, ck: Checker) -> None:
 def run_ws(page, ck: Checker) -> None:
     ev = page.evaluate
     page.click(".asb-ball")
-    ck.check("W1 workspace 壳面板开且工具行=仅动效档（无 admin 工具）",
+    page.wait_for_timeout(200)
+    ck.check("W1 workspace 壳面板开且模式条三格在场",
              ev("() => !!document.querySelector('.asb-panel.open') && "
-                "document.querySelectorAll('.asb-tools .asb-tool').length === 1"
-                " && !!document.querySelector("
+                "document.querySelectorAll('.asb-mode').length === 3"),
+             ev("() => document.querySelectorAll('.asb-mode').length + ' modes'"))
+    page.click('.asb-sub[data-tab="set"]')
+    page.wait_for_timeout(150)
+    ck.check("W1b ⚙ 偏好=仅动效档（workspace 壳无 admin 全局工具）",
+             ev("() => document.querySelectorAll('.asb-tools .asb-tool')"
+                ".length === 1 && !!document.querySelector("
                 "'.asb-tools [data-act=\"orb-fx\"]') && "
                 "!document.querySelector('.asb-tools [data-act=\"tour\"]')"))
 

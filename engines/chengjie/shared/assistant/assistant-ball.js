@@ -27,22 +27,30 @@
   'use strict';
   if (window.AssistantBall) { return; }
 
-  var VER = '20260827c';
+  var VER = '20260828b';
   var I18N = {
     zh: {
       name: '小智 · AI 助手', open_aria: '打开 AI 助手', close: '关闭',
       tab_chat: '对话', tab_report: '报障', tab_mine: '我的',
-      hello: '你好，我是产品助手。功能怎么用、哪里出问题，都可以直接问我；' +
-        '答不上的我会记下来，故障可切「报障」一键提交。',
-      chips_title: '大家常问', input_ph: '输入问题，回车发送…', send: '发送',
+      /* 模式条（实施73 P1-1）：三大功能升格为一级导航 */
+      modes_aria: '小智模式', mode_chat: '问答', mode_teach: '教学',
+      mode_agent: '替我做',
+      /* 次级页签行（P1-5）：常问排在「我的」之后＝老板拍板的顺序 */
+      tab_faq: '常问', tab_set: '偏好', set_t: '偏好与工具',
+      /* 手机操控进标题栏（P1-2）：图标 + 连接状态点，不占模式条第四格 */
+      pair_t: '手机操控', pair_on: '手机已连', pair_off: '未连手机',
+      faq_ph: '搜索帮助库…', faq_page: '本页常问', faq_global: '全站常问',
+      faq_kb: '帮助库条目', faq_seed: '新手先问这些',
+      faq_empty: '还没有人问过。先在「问答」里问一句，这里会长出来。',
+      faq_none: '没找到相关条目——直接问小智，答不上会记下来补语料',
+      faq_na: '「常问」的后端待装载（下次重启后自动可用）',
+      chips_title: '本页常问', chips_more: '更多 →',
+      input_ph: '输入问题，回车发送…', send: '发送',
       thinking: '思考中…', searching: '检索帮助库…',
       src_title: '来源', goto: '带我去', helpful: '有帮助吗',
       fb_thanks: '已记录，谢谢反馈', retry: '重试',
       stop_t: '停止生成', stopped_gen: '已停止',
       copy_t: '复制回答',
-      h3_ask: '问功能', h3_ask_d: '怎么用直接问',
-      h3_report: '报个障', h3_report_d: '截图一键提交',
-      h3_teach: '学操作', h3_teach_d: '点哪教哪',
       to_report: '🐞 这像是故障？一键转报障',
       rp_ph: '一句话描述遇到的问题（必填，≥5 字）…',
       rp_shot_hint: '截图：在此面板直接 Ctrl+V 粘贴，或',
@@ -84,18 +92,24 @@
     en: {
       name: 'AI Assistant', open_aria: 'Open AI assistant', close: 'Close',
       tab_chat: 'Chat', tab_report: 'Report', tab_mine: 'Mine',
-      hello: 'Hi, I am the product assistant. Ask me how anything works; ' +
-        'unanswered questions are recorded, and bugs can be filed in one ' +
-        'click from the Report tab.',
-      chips_title: 'Popular questions', input_ph: 'Type a question…',
+      modes_aria: 'Assistant modes', mode_chat: 'Ask', mode_teach: 'Learn',
+      mode_agent: 'Do it',
+      tab_faq: 'FAQ', tab_set: 'Prefs', set_t: 'Preferences & tools',
+      pair_t: 'Phone control', pair_on: 'Phone connected',
+      pair_off: 'No phone connected',
+      faq_ph: 'Search help…', faq_page: 'Popular on this page',
+      faq_global: 'Popular everywhere',
+      faq_kb: 'Help entries', faq_seed: 'Good first questions',
+      faq_empty: 'Nothing asked yet. Ask something in Chat and it shows up here.',
+      faq_none: 'No entry matched — ask directly; misses are logged for the corpus',
+      faq_na: 'The FAQ backend is not loaded yet (available after next restart)',
+      chips_title: 'Popular here', chips_more: 'More →',
+      input_ph: 'Type a question…',
       send: 'Send', thinking: 'Thinking…', searching: 'Searching help…',
       src_title: 'Sources', goto: 'Take me there', helpful: 'Helpful?',
       fb_thanks: 'Recorded, thanks', retry: 'Retry',
       stop_t: 'Stop generating', stopped_gen: 'Stopped',
       copy_t: 'Copy answer',
-      h3_ask: 'Ask', h3_ask_d: 'How-to questions',
-      h3_report: 'Report', h3_report_d: 'Screenshot + submit',
-      h3_teach: 'Learn', h3_teach_d: 'Click-to-learn mode',
       to_report: '🐞 Looks like a bug? File a report',
       rp_ph: 'Describe the issue in one sentence (min 5 chars)…',
       rp_shot_hint: 'Screenshot: paste (Ctrl+V) into this panel, or',
@@ -137,6 +151,7 @@
   var S = {
     shell: 'admin', lang: 'zh', boot: null, open: false, busy: false,
     tab: 'chat', shotB64: '', lastQ: '', seen: {}, dot: false,
+    pairN: 0, pairBusy: false,
   };
   var $wrap = null, $ball = null, $panel = null;
 
@@ -273,21 +288,93 @@
 '.asb-x{border:none;background:none;color:var(--xz-muted,#888);cursor:pointer;' +
 'font-size:1rem;padding:.2rem .45rem;border-radius:8px;line-height:1}' +
 '.asb-x:hover{background:var(--xz-input,#f3f4f6);color:var(--xz-txt,#111)}' +
-'.asb-tabs{display:flex;gap:.25rem;padding:.45rem .8rem 0;flex-shrink:0}' +
-'.asb-tab{border:none;background:none;cursor:pointer;font-size:.8rem;font-family:inherit;' +
-'padding:.3rem .7rem;border-radius:999px;color:var(--xz-muted,#888)}' +
-'.asb-tab.cur{background:var(--xz-accent,#4f6ef7);color:#fff;font-weight:600}' +
+/* ── 模式条（实施73 P1-1）：三大功能升格为一级导航 ──────────────────────
+   段控 + 滑块指示器；只有一个模式在册（兄弟组件缺席）时整条隐藏 `.solo`，
+   退化成旧的「纯问答面板」而不是留一个点不动的空段控。 */
+'.asb-modes{position:relative;display:flex;gap:.2rem;flex-shrink:0;' +
+'margin:.5rem .8rem .15rem;padding:.2rem;border-radius:12px;' +
+'background:var(--xz-input,#f3f4f6)}' +
+'.asb-modes.solo{display:none}' +
+'.asb-modes-ind{position:absolute;top:.2rem;bottom:.2rem;left:0;border-radius:10px;' +
+'background:var(--xz-bg,#fff);box-shadow:0 1px 4px rgba(0,0,0,.16);z-index:0;' +
+'pointer-events:none;transition:transform .18s ease,width .18s ease}' +
+'.asb-mode{position:relative;z-index:1;flex:1;border:none;background:none;' +
+'cursor:pointer;font-family:inherit;font-size:.78rem;font-weight:600;' +
+'color:var(--xz-muted,#888);padding:.42rem .3rem;border-radius:10px;display:flex;' +
+'align-items:center;justify-content:center;gap:.28rem;white-space:nowrap}' +
+'.asb-mode i{font-style:normal;font-size:.92rem;line-height:1}' +
+'.asb-mode[aria-checked="true"]{color:var(--xz-txt,#111)}' +
+'.asb-mode:focus-visible{outline:2px solid var(--xz-accent,#4f6ef7);outline-offset:1px}' +
+'@media (prefers-reduced-motion:reduce){.asb-modes-ind{transition:none}}' +
+/* ── 次级页签行（P1-5）：报障 · 我的 · 常问 · ⚙ ───────────────────────── */
+'.asb-subtabs{display:flex;gap:.08rem;align-items:center;flex-shrink:0;' +
+'padding:.28rem .55rem .38rem;border-top:1px solid var(--xz-bd,#ddd)}' +
+'.asb-sub{border:none;background:none;cursor:pointer;font-family:inherit;' +
+'font-size:.7rem;color:var(--xz-muted,#888);padding:.24rem .5rem;border-radius:7px}' +
+'.asb-sub:hover{background:var(--xz-input,#f3f4f6);color:var(--xz-txt,#111)}' +
+'.asb-sub.cur{background:var(--xz-input,#f3f4f6);color:var(--xz-accent,#4f6ef7);' +
+'font-weight:600}' +
+'.asb-sub-sp{flex:1}' +
+/* ── 标题栏手机操控（P1-2）：通道不是第四种能力，故不占模式条 ─────────── */
+'.asb-hd-pair{position:relative;border:none;background:none;cursor:pointer;' +
+'font-size:.95rem;padding:.2rem .4rem;border-radius:8px;line-height:1;' +
+'color:var(--xz-muted,#888)}' +
+'.asb-hd-pair:hover{background:var(--xz-input,#f3f4f6)}' +
+'.asb-hd-pair i{position:absolute;right:2px;bottom:2px;width:7px;height:7px;' +
+'border-radius:50%;background:var(--xz-muted,#bbb);border:1.5px solid var(--xz-bg,#fff)}' +
+'.asb-hd-pair.on{color:var(--xz-txt,#111)}' +
+'.asb-hd-pair.on i{background:#22c55e}' +
+/* ── 模式内容通用卡（球提供，教学/替我做挂载时直接复用＝三个模式一套度量） */
+'.asb-md{display:flex;flex-direction:column;gap:.5rem}' +
+'.asb-md-hero{border:1px solid var(--xz-bd,#ddd);border-radius:12px;' +
+'background:var(--xz-input,#f7f7f9);padding:.65rem .7rem;display:flex;' +
+'flex-direction:column;gap:.42rem}' +
+'.asb-md-t{font-size:.8rem;font-weight:700;display:flex;align-items:center;gap:.35rem}' +
+'.asb-md-d{font-size:.7rem;color:var(--xz-muted,#888);line-height:1.55}' +
+'.asb-md-go{border:none;border-radius:10px;background:var(--xz-accent,#4f6ef7);' +
+'color:#fff;cursor:pointer;font-family:inherit;font-size:.82rem;font-weight:600;' +
+'padding:.55rem .9rem}' +
+'.asb-md-go.off{background:#ef4444}' +
+'.asb-md-row{display:flex;gap:.35rem;flex-wrap:wrap}' +
+'.asb-md-b{border:1px solid var(--xz-bd,#ddd);background:var(--xz-bg,#fff);' +
+'color:var(--xz-txt,#333);border-radius:9px;cursor:pointer;font-family:inherit;' +
+'font-size:.74rem;padding:.32rem .6rem}' +
+'.asb-md-b:hover{border-color:var(--xz-accent,#4f6ef7);color:var(--xz-accent,#4f6ef7)}' +
+'.asb-md-safe{font-size:.68rem;color:var(--xz-muted,#888);line-height:1.55}' +
+/* 模式状态行（实施73 P2-1）：一句「本页 N 处可讲解」就是进入模式的理由。
+   0 处/词典未就绪时同一行改说实话，所以做成中性底色而非成绩单绿。 */
+'.asb-md-stat{font-size:.72rem;line-height:1.5;color:var(--xz-txt,#333);' +
+'background:var(--xz-bg,#fff);border:1px solid var(--xz-bd,#e5e7eb);' +
+'border-radius:9px;padding:.34rem .55rem}' +
+'.asb-md-stat b{color:var(--xz-accent,#4f6ef7);font-size:.86rem;' +
+'padding:0 .12rem}' +
+'.asb-md-stat[data-n="0"],.asb-md-stat[data-n="-1"],' +
+'.asb-md-stat[data-n="-2"]{color:var(--xz-muted,#888)}' +
+'.asb-md-list{display:flex;flex-direction:column}' +
+'.asb-md-li{display:flex;align-items:center;gap:.4rem;font-size:.72rem;' +
+'border-top:1px solid var(--xz-bd,#eee);padding:.34rem 0}' +
+'.asb-md-li .m{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;' +
+'white-space:nowrap}' +
+'.asb-md-li .w{color:var(--xz-muted,#888);font-size:.66rem;flex-shrink:0}' +
+/* ── 常问面板（P1-6） ─────────────────────────────────────────────────── */
+'.asb-faq-s{display:flex;gap:.35rem}' +
+'.asb-faq-s input{flex:1;border:1px solid var(--xz-bd,#ddd);border-radius:10px;' +
+'background:var(--xz-input,#f7f7f9);color:var(--xz-txt,#111);font-family:inherit;' +
+'font-size:.78rem;padding:.4rem .6rem;outline:none}' +
+'.asb-faq-s input:focus{border-color:var(--xz-accent,#4f6ef7)}' +
+'.asb-faq-g{font-size:.66rem;color:var(--xz-muted,#888);margin:.3rem 0 .05rem}' +
+'.asb-faq-i{display:flex;align-items:center;gap:.4rem;width:100%;text-align:left;' +
+'border:1px solid var(--xz-bd,#ddd);background:var(--xz-bg,#fff);' +
+'color:var(--xz-txt,#333);border-radius:9px;cursor:pointer;font-family:inherit;' +
+'font-size:.75rem;padding:.36rem .55rem;box-sizing:border-box}' +
+'.asb-faq-i:hover{border-color:var(--xz-accent,#4f6ef7)}' +
+'.asb-faq-i .q{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;' +
+'white-space:nowrap}' +
+'.asb-faq-i .n{font-size:.64rem;color:var(--xz-muted,#888);flex-shrink:0}' +
 '.asb-body{flex:1;overflow-y:auto;padding:.7rem .8rem;display:flex;' +
 'flex-direction:column;gap:.55rem}' +
 '.asb-chips{display:flex;flex-wrap:wrap;gap:.35rem}' +
 '.asb-chips-t{font-size:.68rem;color:var(--xz-muted,#888);width:100%}' +
-'.asb-h3{display:grid;grid-template-columns:repeat(3,1fr);gap:.4rem;margin:.15rem 0 .3rem}' +
-'.asb-h3c{border:1px solid var(--xz-bd,#ddd);border-radius:11px;cursor:pointer;' +
-'background:var(--xz-input,#f7f7f9);font-family:inherit;padding:.5rem .25rem;' +
-'display:flex;flex-direction:column;align-items:center;gap:.14rem;font-size:1.02rem}' +
-'.asb-h3c b{font-size:.72rem;color:var(--xz-txt,#111)}' +
-'.asb-h3c span{font-size:.6rem;color:var(--xz-muted,#888)}' +
-'.asb-h3c:hover{border-color:var(--xz-accent,#4f6ef7)}' +
 '.asb-chip{border:1px solid var(--xz-bd,#ddd);background:var(--xz-input,#f7f7f9);' +
 'color:var(--xz-txt,#333);border-radius:999px;padding:.22rem .6rem;font-size:.74rem;' +
 'cursor:pointer;font-family:inherit;max-width:100%;overflow:hidden;' +
@@ -350,6 +437,8 @@
 'cursor:crosshair;background:#fff}' +
 '.asb-tools{display:flex;gap:.3rem;flex-wrap:wrap;padding:.4rem .8rem .55rem;' +
 'border-top:1px solid var(--xz-bd,#ddd);flex-shrink:0}' +
+/* ⚙ 面板里复用同一批工具键，但那里它是内容不是底栏，去掉分隔线与内缩 */
+'.asb-body .asb-tools{border-top:none;padding:.1rem 0;gap:.35rem}' +
 '.asb-tool{border:none;background:none;color:var(--xz-muted,#888);cursor:pointer;' +
 'font-size:.68rem;font-family:inherit;padding:.18rem .4rem;border-radius:6px}' +
 '.asb-tool:hover{background:var(--xz-input,#f3f4f6);color:var(--xz-txt,#111)}' +
@@ -1251,6 +1340,9 @@
     }
     if (S.open) {
       placePanel();
+      /* 面板隐藏时 offsetWidth 恒 0 → 滑块只能在开的这一刻定位 */
+      syncModes();
+      loadPair();
       if (S.tab === 'mine') { loadTickets(); }
       var inp = $panel.querySelector('.asb-in');
       if (inp && window.innerWidth > 480) {
@@ -1288,26 +1380,73 @@
     });
   }
 
+  /* ─────────────────────────────── 模式注册表（实施73 P1-1）
+     「小智怎么帮我」升格为一级导航：问答由球自带，教学 / 替我做由姊妹组件
+     在自己 init 时经 `AssistantBall.registerMode` 认领。组件缺席＝该模式
+     **不出现**（而不是留一个点不动的死格），单模式时整条模式条隐藏，退化
+     成旧的纯问答面板。与 orbMode/ask 同属公共 API 层——姊妹线仍不触碰球的
+     内部符号，只是协作面从「往面板里插一行」升级成「认领一个模式」。 */
+  var MODES = {};
+  var MODE_ORDER = [];
+  var SUBTABS = ['report', 'mine', 'faq', 'set'];
+
+  function defineMode(id, def) {
+    if (!MODES[id]) { MODE_ORDER.push(id); }
+    MODES[id] = {
+      id: id,
+      icon: String(def.icon || ''),
+      label: typeof def.label === 'function' ? def.label : null,
+      labelKey: String(def.labelKey || ''),
+      order: Number(def.order) || 50,
+      mount: def.mount,
+      unmount: typeof def.unmount === 'function' ? def.unmount : null,
+      composer: def.composer && typeof def.composer.submit === 'function'
+        ? def.composer : null,
+    };
+    MODE_ORDER.sort(function (a, b) { return MODES[a].order - MODES[b].order; });
+  }
+
+  function registerMode(id, def) {
+    id = String(id || '').trim();
+    if (!id || !def || typeof def.mount !== 'function') { return false; }
+    defineMode(id, def);
+    if ($panel) {
+      renderModes();
+      /* 姊妹组件晚于球 init 注册：若当前正停在该模式（重开面板/深链），
+         补挂一次内容——否则用户看到一个空模式直到手动再点一下。 */
+      if (S.tab === id) { switchTab(id, true); }
+    }
+    return true;
+  }
+
+  function modeLabel(m) {
+    if (m.label) {
+      try { return String(m.label() || ''); } catch (e) { return m.id; }
+    }
+    return m.labelKey ? t(m.labelKey) : m.id;
+  }
+
   /* ────────────────────────────────────────────── 面板渲染 */
   function renderPanel() {
+    if (!MODES.chat) {
+      defineMode('chat', { order: 10, icon: '💬', labelKey: 'mode_chat',
+                           mount: mountChat });
+    }
     $panel.innerHTML = '' +
       '<div class="asb-hd">' +
       '<span class="asb-hd-ic">' + ICON_SPARK + '</span>' +
       '<span class="asb-hd-name">' + esc(dispName()) + '</span>' +
+      '<button type="button" class="asb-hd-pair" data-act="pair" title="' +
+      esc(t('pair_off')) + '" aria-label="' + esc(t('pair_t')) +
+      '">📱<i aria-hidden="true"></i></button>' +
       '<button type="button" class="asb-x" data-act="close" aria-label="' +
       esc(t('close')) + '">✕</button></div>' +
-      '<div class="asb-tabs">' +
-      '<button type="button" class="asb-tab" data-tab="chat">' +
-      esc(t('tab_chat')) + '</button>' +
-      (reportOn() ? '<button type="button" class="asb-tab" data-tab="report">' +
-        esc(t('tab_report')) + '</button>' : '') +
-      (reportOn() ? '<button type="button" class="asb-tab" data-tab="mine">' +
-        esc(t('tab_mine')) + '</button>' : '') +
-      '</div>' +
+      '<div class="asb-modes" role="radiogroup" aria-label="' +
+      esc(t('modes_aria')) + '"></div>' +
       '<div class="asb-body" aria-live="polite"></div>' +
       '<div class="asb-hero"><canvas aria-hidden="true"></canvas></div>' +
       '<div class="asb-ftwrap"></div>' +
-      '<div class="asb-tools"></div>';
+      '<div class="asb-subtabs"></div>';
     $panel.addEventListener('click', onPanelClick);
     $panel.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' && !e.shiftKey &&
@@ -1316,7 +1455,11 @@
            没这行，拼音候选一确认就把半截话发出去） */
         if (e.isComposing || e.keyCode === 229) { return; }
         e.preventDefault();
-        sendQuery();
+        composerSubmit();
+        return;
+      }
+      if (e.target && e.target.classList.contains('asb-mode')) {
+        onModeKey(e);
       }
     });
     $panel.addEventListener('input', function (e) {
@@ -1324,16 +1467,136 @@
         autoGrow(e.target);
       }
     });
-    renderTools();
+    renderModes();
+    renderSubtabs();
     switchTab('chat', true);
+    syncPair();
   }
 
   function reportOn() {
     return !S.boot || S.boot.report_enabled !== false;
   }
 
+  /* ── 模式条 ── */
+  function renderModes() {
+    var box = $panel && $panel.querySelector('.asb-modes');
+    if (!box) { return; }
+    var html = '<span class="asb-modes-ind" aria-hidden="true"></span>';
+    for (var i = 0; i < MODE_ORDER.length; i++) {
+      var m = MODES[MODE_ORDER[i]];
+      html += '<button type="button" class="asb-mode" role="radio" ' +
+        'aria-checked="false" tabindex="-1" data-mode="' + esc(m.id) + '">' +
+        (m.icon ? '<i aria-hidden="true">' + esc(m.icon) + '</i>' : '') +
+        '<span>' + esc(modeLabel(m)) + '</span></button>';
+    }
+    box.innerHTML = html;
+    /* 单模式＝没得切，段控只会显得像个坏掉的开关 */
+    box.classList.toggle('solo', MODE_ORDER.length < 2);
+    syncModes();
+  }
+
+  function syncModes() {
+    var box = $panel && $panel.querySelector('.asb-modes');
+    if (!box) { return; }
+    var btns = box.querySelectorAll('.asb-mode');
+    var cur = null;
+    for (var i = 0; i < btns.length; i++) {
+      var on = btns[i].getAttribute('data-mode') === S.tab;
+      btns[i].setAttribute('aria-checked', on ? 'true' : 'false');
+      btns[i].tabIndex = on ? 0 : -1;
+      if (on) { cur = btns[i]; }
+    }
+    var ind = box.querySelector('.asb-modes-ind');
+    if (!ind) { return; }
+    /* 面板未开时 offsetWidth 恒 0——滑块位置在 togglePanel 打开时补算 */
+    if (!cur || !cur.offsetWidth) { ind.style.opacity = '0'; return; }
+    ind.style.opacity = '1';
+    ind.style.width = cur.offsetWidth + 'px';
+    ind.style.transform = 'translateX(' + cur.offsetLeft + 'px)';
+  }
+
+  /* 段控无障碍：方向键在模式间移动并即时切换（radiogroup 标准行为） */
+  function onModeKey(e) {
+    var d = 0;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { d = 1; }
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { d = -1; }
+    if (!d) { return; }
+    var i = MODE_ORDER.indexOf(S.tab);
+    if (i < 0) { i = 0; }
+    var next = MODE_ORDER[(i + d + MODE_ORDER.length) % MODE_ORDER.length];
+    e.preventDefault();
+    switchTab(next);
+    var btn = $panel.querySelector('.asb-mode[data-mode="' + next + '"]');
+    if (btn) { btn.focus(); }
+  }
+
+  /* ── 次级页签行：报障 · 我的 · 常问 · ⚙（老板拍板的顺序） ── */
+  function renderSubtabs() {
+    var box = $panel && $panel.querySelector('.asb-subtabs');
+    if (!box) { return; }
+    var html = '';
+    if (reportOn()) {
+      html += '<button type="button" class="asb-sub" data-tab="report">' +
+        esc(t('tab_report')) + '</button>' +
+        '<button type="button" class="asb-sub" data-tab="mine">' +
+        esc(t('tab_mine')) + '</button>';
+    }
+    html += '<button type="button" class="asb-sub" data-tab="faq">' +
+      esc(t('tab_faq')) + '</button>' +
+      '<span class="asb-sub-sp"></span>' +
+      '<button type="button" class="asb-sub" data-tab="set" title="' +
+      esc(t('set_t')) + '" aria-label="' + esc(t('set_t')) + '">⚙</button>';
+    box.innerHTML = html;
+    syncSubtabs();
+  }
+
+  function syncSubtabs() {
+    var box = $panel && $panel.querySelector('.asb-subtabs');
+    if (!box) { return; }
+    var b = box.querySelectorAll('.asb-sub');
+    for (var i = 0; i < b.length; i++) {
+      b[i].classList.toggle('cur', b[i].getAttribute('data-tab') === S.tab);
+    }
+  }
+
+  /* ── 标题栏手机操控状态点（P1-2）──
+     手机是「替我做」的远程输入端，不是第四种能力（实施73 §3.1 已拍板）。
+     配对态读既有 /api/assistant/pair/sessions；端点未装载/无权限=静默灰点。 */
+  function syncPair() {
+    var btn = $panel && $panel.querySelector('.asb-hd-pair');
+    if (!btn) { return; }
+    var on = S.pairN > 0;
+    btn.classList.toggle('on', on);
+    btn.title = on ? t('pair_on') : t('pair_off');
+  }
+
+  function loadPair() {
+    if (S.pairBusy) { return; }
+    S.pairBusy = true;
+    fetch('/api/assistant/pair/sessions')
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        S.pairN = (j && j.ok && j.sessions) ? j.sessions.length : 0;
+        syncPair();
+      })
+      .catch(function () { /* 静默：状态点保持灰色 */ })
+      .then(function () { S.pairBusy = false; });
+  }
+
+  function modeApi(id) {
+    return {
+      lang: S.lang,
+      shell: S.shell,
+      ask: askFromOutside,
+      close: function () { togglePanel(false); },
+      /* 姊妹组件状态变了（如开/退教学）→ 让球重挂当前模式内容 */
+      refresh: function () { if (S.tab === id) { switchTab(id, true); } },
+    };
+  }
+
   function renderTools() {
     var box = $panel.querySelector('.asb-tools');
+    if (!box) { return; }
     if (S.shell !== 'admin') {
       /* workspace 壳没有 admin 全局工具，但「动效」档是坐席自己的注意力权：
          8 小时班盯屏的人必须能就地调安静（P2 起不再整行隐藏） */
@@ -1377,41 +1640,93 @@
 
   /* silent=true＝程序化切换（renderPanel 初始化 / 外部投问），不计埋点：
      初始化每次开面板必切一次 chat，混进去会让 asb_tab_chat 恒等于开面板数，
-     「坐席主动去了哪个页签」的信号就被稀释没了。 */
+     「坐席主动去了哪个页签」的信号就被稀释没了。
+     P1 起视图分两类：模式（问答/教学/替我做，计 asb_mode_*）与次级页签
+     （报障/我的/常问/⚙，计 asb_tab_*）——两类的分布要分开读。 */
   function switchTab(tab, silent) {
-    if (!silent) { beacon('asb_tab_' + tab); }
-    S.tab = tab;
-    var tabs = $panel.querySelectorAll('.asb-tab');
-    for (var i = 0; i < tabs.length; i++) {
-      tabs[i].classList.toggle('cur', tabs[i].getAttribute('data-tab') === tab);
+    if (!MODES[tab] && SUBTABS.indexOf(tab) < 0) { tab = 'chat'; }
+    if (!silent) { beacon((MODES[tab] ? 'asb_mode_' : 'asb_tab_') + tab); }
+    var prev = S.tab;
+    if (prev && prev !== tab && MODES[prev] && MODES[prev].unmount) {
+      try { MODES[prev].unmount(); } catch (e0) { /* 姊妹组件异常不拖累球 */ }
     }
+    S.tab = tab;
+    syncModes();
+    syncSubtabs();
     var body = $panel.querySelector('.asb-body');
     var ft = $panel.querySelector('.asb-ftwrap');
     if (REC) { stopRec(true); }
-    if (tab === 'chat') {
-      body.innerHTML = '';
-      if (!chatHistory.length) { renderChatIntro(body); }
-      /* 2026-08-21 老板拍板：不设字数限制（maxlength 移除） */
-      ft.innerHTML = '<div class="asb-ft">' +
-        '<textarea class="asb-in" rows="1" placeholder="' +
-        esc(t('input_ph')) + '"></textarea>' +
-        (voiceOn() ? '<button type="button" class="asb-mic" data-act="mic" ' +
-          'title="' + esc(t('mic_title')) + '" aria-label="' +
-          esc(t('mic_title')) + '">🎤</button>' : '') +
-        '<button type="button" class="asb-send" data-act="send">' +
-        esc(t('send')) + '</button></div>';
-      restoreChat(body);
-    } else if (tab === 'report') {
-      ft.innerHTML = '';
-      renderReport(body);
-    } else {
-      ft.innerHTML = '';
-      body.innerHTML = '<div class="asb-mine-bar">' +
-        '<button type="button" class="asb-tool" data-act="mine-refresh">↻ ' +
-        esc(t('mine_refresh')) + '</button></div>' +
-        '<div class="asb-mine-list"><div class="asb-empty">…</div></div>';
-      loadTickets();
+    ft.innerHTML = '';
+    body.innerHTML = '';
+    if (MODES[tab]) {
+      var host = body;
+      if (tab !== 'chat') {
+        host = document.createElement('div');
+        host.className = 'asb-md';
+        body.appendChild(host);
+      }
+      try {
+        MODES[tab].mount(host, modeApi(tab));
+      } catch (e1) {
+        host.innerHTML = '<div class="asb-empty">' + esc(t('err_net')) + '</div>';
+      }
+      renderComposer(ft, MODES[tab]);
+      return;
     }
+    if (tab === 'report') { renderReport(body); return; }
+    if (tab === 'faq') { renderFaq(body); return; }
+    if (tab === 'set') { renderSettings(body); return; }
+    body.innerHTML = '<div class="asb-mine-bar">' +
+      '<button type="button" class="asb-tool" data-act="mine-refresh">↻ ' +
+      esc(t('mine_refresh')) + '</button></div>' +
+      '<div class="asb-mine-list"><div class="asb-empty">…</div></div>';
+    loadTickets();
+  }
+
+  /* ── 问答模式内容（球自带的那一格） ── */
+  function mountChat(body) {
+    if (!chatHistory.length) { renderChatIntro(body); }
+    restoreChat(body);
+  }
+
+  /* 输入区随模式变（P1-4）：问答=提问框走 sendQuery；带 composer 的模式
+     （替我做=说一件要我做的事）走该模式自己的 submit；教学模式无输入区。 */
+  function renderComposer(ft, mode) {
+    var isChat = mode.id === 'chat';
+    if (!isChat && !mode.composer) { return; }
+    var ph = isChat ? t('input_ph') : composerPh(mode);
+    /* 2026-08-21 老板拍板：不设字数限制（maxlength 移除） */
+    ft.innerHTML = '<div class="asb-ft">' +
+      '<textarea class="asb-in" rows="1" placeholder="' + esc(ph) +
+      '"></textarea>' +
+      ((isChat && voiceOn())
+        ? '<button type="button" class="asb-mic" data-act="mic" ' +
+          'title="' + esc(t('mic_title')) + '" aria-label="' +
+          esc(t('mic_title')) + '">🎤</button>'
+        : '') +
+      '<button type="button" class="asb-send" data-act="send">' +
+      esc(t('send')) + '</button></div>';
+  }
+
+  function composerPh(mode) {
+    var c = mode.composer || {};
+    if (typeof c.ph === 'function') {
+      try { return String(c.ph() || ''); } catch (e) { return t('input_ph'); }
+    }
+    return String(c.ph || t('input_ph'));
+  }
+
+  /* 回车/发送键的单一出口：按当前模式分流（问答=问答链，其余=模式自己的
+     提交）。别在别处再直调 sendQuery——那会让替我做模式的回车问到问答链去。 */
+  function composerSubmit() {
+    var mode = MODES[S.tab];
+    if (!mode || mode.id === 'chat') { sendQuery(); return; }
+    if (!mode.composer) { return; }
+    var inp = $panel.querySelector('.asb-in');
+    var v = inp ? String(inp.value || '').trim() : '';
+    if (!v) { return; }
+    if (inp) { inp.value = ''; inp.style.height = ''; }
+    try { mode.composer.submit(v); } catch (e) { /* 姊妹组件异常不拖累球 */ }
   }
 
   /* ────────────────────────────────────────────── 对话 tab */
@@ -1446,37 +1761,139 @@
     } catch (e) { /* ignore */ }
   }
 
+  /* 问答模式首屏（P1-3）：欢迎三卡已删除——问功能=输入框、报障=次级页签、
+     学操作=模式条第二格，三张卡是同一批入口的第三次重复，只是在挤首屏。
+     chips 由 5 条减为 **3 条本页相关**，「全站高频」搬去「常问」面板。 */
   function renderChatIntro(body) {
     var chips = (S.boot && S.boot.chips && S.boot.chips.length)
-      ? S.boot.chips.slice(0, 5)
+      ? S.boot.chips.slice(0, 3)
       : (S.lang === 'en'
         ? ['How to send a voice message', 'How to report a bug',
            'How to clear inbox filters']
         : ['怎么发语音', '在哪提交 bug', '收件箱筛选怎么清空']);
-    /* 欢迎三卡（P1）：文字墙 → 问/报/学三入口（学=拉起教学模式，互相导流） */
-    var cards = '<div class="asb-h3">' +
-      '<button type="button" class="asb-h3c" data-act="h3-ask">💬<b>' +
-      esc(t('h3_ask')) + '</b><span>' + esc(t('h3_ask_d')) +
-      '</span></button>' +
-      (reportOn()
-        ? '<button type="button" class="asb-h3c" data-act="h3-report">🐞<b>' +
-          esc(t('h3_report')) + '</b><span>' + esc(t('h3_report_d')) +
-          '</span></button>'
-        : '') +
-      '<button type="button" class="asb-h3c" data-act="h3-teach">🎓<b>' +
-      esc(t('h3_teach')) + '</b><span>' + esc(t('h3_teach_d')) +
-      '</span></button>' +
-      '</div>';
     var html = '<div class="asb-msg ai">' + mdLite(t('hello')) + '</div>' +
-      cards +
       '<div class="asb-chips"><span class="asb-chips-t">' +
       esc(t('chips_title')) + '</span>';
     for (var i = 0; i < chips.length; i++) {
       html += '<button type="button" class="asb-chip" data-q="' +
         esc(chips[i]) + '">' + esc(chips[i]) + '</button>';
     }
-    html += '</div>';
+    html += '<button type="button" class="asb-chip" data-tab="faq">' +
+      esc(t('chips_more')) + '</button></div>';
     body.insertAdjacentHTML('beforeend', html);
+  }
+
+  /* ────────────────────────────────────────────── 常问面板（P1-6）
+     单一数据源＝真实问答日志（`qa_log`）+ 帮助库 BM25 搜索，刻意**不做**
+     人工维护的 FAQ 库——人工表必然与实际漂移（实施73 §5 已拍板）。 */
+  function renderFaq(body) {
+    body.innerHTML = '<div class="asb-faq-s">' +
+      '<input class="asb-faq-q" type="search" placeholder="' +
+      esc(t('faq_ph')) + '" aria-label="' + esc(t('faq_ph')) + '"></div>' +
+      '<div class="asb-faq-out"><div class="asb-empty">…</div></div>';
+    var inp = body.querySelector('.asb-faq-q');
+    if (inp) {
+      var timer = 0;
+      inp.addEventListener('input', function () {
+        clearTimeout(timer);
+        timer = setTimeout(function () { loadFaq(inp.value); }, 260);
+      });
+      if (window.innerWidth > 480) { setTimeout(function () { inp.focus(); }, 60); }
+    }
+    loadFaq('');
+  }
+
+  function loadFaq(q) {
+    var out = $panel && $panel.querySelector('.asb-faq-out');
+    if (!out) { return; }
+    q = String(q || '').trim();
+    if (q) { beacon('asb_faq_search'); }
+    var url = '/api/assistant/faq?lang=' + encodeURIComponent(S.lang) +
+      '&page=' + encodeURIComponent(pagePath()) +
+      (q ? '&q=' + encodeURIComponent(q.slice(0, 120)) : '');
+    fetch(url)
+      .then(function (r) {
+        /* 特性探测：前端热更新先于 .py 装载（共享树常态），此刻端点还是
+           404。那是「后端待装载」不是「没人问过」——两句话该做的事完全
+           不同，混成一句会让人以为功能坏了。 */
+        if (r.status === 404) { return { __na: true }; }
+        return r.ok ? r.json() : null;
+      })
+      .then(function (j) {
+        if (!out.isConnected) { return; }
+        if (j && j.__na) {
+          out.innerHTML = '<div class="asb-empty">' + esc(t('faq_na')) +
+            '</div>';
+          return;
+        }
+        if (!j || !j.ok) {
+          out.innerHTML = '<div class="asb-empty">' + esc(t('faq_empty')) +
+            '</div>';
+          return;
+        }
+        out.innerHTML = q ? faqSearchHtml(j) : faqTopHtml(j);
+      })
+      .catch(function () {
+        if (out.isConnected) {
+          out.innerHTML = '<div class="asb-empty">' + esc(t('err_net')) +
+            '</div>';
+        }
+      });
+  }
+
+  function faqRow(q, n) {
+    return '<button type="button" class="asb-faq-i" data-faq="' + esc(q) +
+      '"><span class="q">' + esc(q) + '</span>' +
+      (n > 1 ? '<span class="n">×' + n + '</span>' : '') + '</button>';
+  }
+
+  function faqTopHtml(j) {
+    var pageItems = j.page_items || [];
+    var globalItems = j.global_items || [];
+    var seed = j.seed_items || [];
+    var html = '';
+    var i;
+    if (pageItems.length) {
+      html += '<div class="asb-faq-g">' + esc(t('faq_page')) + '</div>';
+      for (i = 0; i < pageItems.length; i++) {
+        html += faqRow(pageItems[i].q, pageItems[i].n);
+      }
+    }
+    if (globalItems.length) {
+      html += '<div class="asb-faq-g">' + esc(t('faq_global')) + '</div>';
+      for (i = 0; i < globalItems.length; i++) {
+        html += faqRow(globalItems[i].q, globalItems[i].n);
+      }
+    }
+    if (!html && seed.length) {
+      /* 空态 seed：新装机没有任何问答记录，给一组入门问题而不是空面板 */
+      html += '<div class="asb-faq-g">' + esc(t('faq_seed')) + '</div>';
+      for (i = 0; i < seed.length; i++) { html += faqRow(seed[i].q, 0); }
+    }
+    if (!html) {
+      html = '<div class="asb-empty">' + esc(t('faq_empty')) + '</div>';
+    }
+    return html;
+  }
+
+  function faqSearchHtml(j) {
+    var items = j.items || [];
+    if (!items.length) {
+      return '<div class="asb-empty">' + esc(t('faq_none')) + '</div>';
+    }
+    var html = '<div class="asb-faq-g">' + esc(t('faq_kb')) + '</div>';
+    for (var i = 0; i < items.length; i++) {
+      html += faqRow(items[i].title, 0);
+    }
+    return html;
+  }
+
+  /* ────────────────────────────────────────────── ⚙ 偏好与工具（P1-5）
+     动效档从功能区移入此处——它是偏好不是功能，摆在主视觉里只会分散注意。 */
+  function renderSettings(body) {
+    body.innerHTML = '<div class="asb-faq-g">' + esc(t('set_t')) + '</div>' +
+      '<div class="asb-tools"></div>';
+    renderTools();
   }
   function restoreChat(body) {
     for (var i = 0; i < chatHistory.length; i++) {
@@ -2278,8 +2695,19 @@
   /* ────────────────────────────────────────────── 事件委托 */
   function onPanelClick(e) {
     var el = e.target.closest(
-      '[data-act],[data-tab],[data-q],[data-fb],[data-goto]');
+      '[data-act],[data-tab],[data-mode],[data-faq],[data-q],[data-fb],[data-goto]');
     if (!el) { return; }
+    var mode = el.getAttribute('data-mode');
+    if (mode) { switchTab(mode); return; }
+    var faqQ = el.getAttribute('data-faq');
+    if (faqQ) {
+      /* 常问面板点条目＝直接切问答并发问（这就是它存在的理由：把「不知道
+         能问什么」变成一次点击），来源归因单独一枚。 */
+      beacon('asb_faq_pick');
+      switchTab('chat', true);
+      sendQuery(faqQ);
+      return;
+    }
     var tab = el.getAttribute('data-tab');
     if (tab) { switchTab(tab); return; }
     var gotoPath = el.getAttribute('data-goto');
@@ -2310,30 +2738,17 @@
       return;
     }
     if (act === 'close') { togglePanel(false); return; }
-    /* 欢迎三卡是**已知的重复入口**（问功能=输入框、报障=页签、学操作=教学模式
-       同一个 XZTeach.start）。P1 计划删掉它们腾出首屏，但「没人用」得先有证据
-       ——这三枚埋点就是删除决策的裁决依据，不是装饰。 */
-    if (act === 'h3-ask') {
-      beacon('asb_h3_ask');
-      var inp3 = $panel.querySelector('.asb-in');
-      if (inp3) { inp3.focus(); }
-      return;
-    }
-    if (act === 'h3-report') { beacon('asb_h3_report'); switchTab('report'); return; }
-    if (act === 'h3-teach') {
-      beacon('asb_h3_teach');
-      /* 防御式跨模块协作（与 teach→ball 的 window 探测同姿势，零符号耦合） */
-      if (window.XZTeach && typeof window.XZTeach.start === 'function') {
-        togglePanel(false);
-        try { window.XZTeach.start(); } catch (e6) { /* ignore */ }
-      } else {
-        var inp4 = $panel.querySelector('.asb-in');
-        if (inp4) { inp4.focus(); }
+    /* 标题栏手机操控：配对弹层归 XZAgent（同一条 /api/assistant/pair 链），
+       组件缺席则静默——不做死按钮。 */
+    if (act === 'pair') {
+      beacon('asb_pair_open');
+      if (window.XZAgent && typeof window.XZAgent.pair === 'function') {
+        try { window.XZAgent.pair(); } catch (e6) { /* ignore */ }
       }
       return;
     }
     if (act === 'say') { sayText(el, el.getAttribute('data-say') || ''); return; }
-    if (act === 'send') { sendQuery(); return; }
+    if (act === 'send') { composerSubmit(); return; }
     if (act === 'stop-gen') {
       S.aborted = true;
       if (S.abortCtl) { try { S.abortCtl.abort(); } catch (e5) { /* */ } }
@@ -2567,6 +2982,10 @@
     /* 公共 API（实施58 教学/代办线消费）：orbMode('teach'|'agent', on[, 0..1 进度])
        ——黏性模式参与正常优先级；真实信号（听/说/想）永远压过它。 */
     orbMode: orbMode,
+    /* 模式认领（实施73 P1-1）：姊妹组件在自己 init 时把「教学 / 替我做」
+       挂成一级模式；def = {order, icon, labelKey|label, mount(el, api),
+       unmount?, composer?:{ph, submit(text)}}。缺席即该模式不出现。 */
+    registerMode: registerMode,
     /* 开面板 + 投问（教学模式「详细讲讲」）：勿对 .asb-ball 调 click() */
     open: function () { togglePanel(true); },
     ask: askFromOutside,

@@ -25,11 +25,13 @@
   'use strict';
   if (window.XZTeach) { return; }
 
-  var VER = '20260827a';
+  var VER = '20260828b';
 
   var I18N = {
     zh: {
-      row_btn: '🎓 教学模式 · 点哪学哪',
+      mode_t: '点哪学哪',
+      mode_d: '开着它在页面上点任何按钮，小智就地讲这是什么、怎么用。',
+      row_btn: '🎓 开始点哪学哪',
       row_btn_on: '🎓 教学中 · 点此退出',
       row_hint: '进入后点击页面任意位置看讲解，不会真的执行',
       banner: '教学模式：点击页面上任何元素看讲解（不会真的执行）',
@@ -42,6 +44,11 @@
       tour_prev: '← 上一个',
       tour_done: '✅ 逛完了',
       tour_none: '这页还没备好导览词条，先让小智讲讲整页吧',
+      stat_wait: '正在准备讲解词典…',
+      stat_n1: '本页 ',
+      stat_n2: ' 处可讲解',
+      stat_zero: '本页暂时没有可讲解的控件——用「教我这个页」让小智整体讲一遍',
+      stat_off: '讲解词典这会儿取不到，点哪学哪仍可用（讲通用说明）',
       bub_ask: '🤖 让小智详细讲讲',
       bub_close: '知道了',
       bub_safe: '教学模式下点击不会真的执行，放心探索',
@@ -55,7 +62,10 @@
       usage_t: '怎么用：',
     },
     en: {
-      row_btn: '🎓 Teach mode · click to learn',
+      mode_t: 'Click to learn',
+      mode_d: 'Turn it on, click any control on the page, and the assistant '
+        + 'explains what it is and how to use it.',
+      row_btn: '🎓 Start click-to-learn',
       row_btn_on: '🎓 Teaching · click to exit',
       row_hint: 'Click anything on the page for an explanation; nothing is executed',
       banner: 'Teach mode: click any element for an explanation (nothing is executed)',
@@ -68,6 +78,13 @@
       tour_prev: '← Back',
       tour_done: '✅ Done',
       tour_none: 'No tour entries for this page yet — ask the assistant instead',
+      stat_wait: 'Loading the explanation dictionary…',
+      stat_n1: '',
+      stat_n2: ' things I can explain on this page',
+      stat_zero: 'Nothing on this page matches the dictionary yet — use '
+        + '"Teach this page" for a whole-page walkthrough',
+      stat_off: 'The dictionary is unreachable right now; click-to-learn still '
+        + 'works with generic explanations',
       bub_ask: '🤖 Ask the assistant',
       bub_close: 'Got it',
       bub_safe: 'Clicks are intercepted in teach mode — explore safely',
@@ -84,8 +101,9 @@
 
   var S = {
     shell: 'admin', lang: 'zh', on: false,
-    banner: null, hover: null, bubble: null, row: null, mo: null,
-    termIdx: null, dict: null, dictLoading: false,
+    banner: null, hover: null, bubble: null, api: null, claimed: false,
+    termIdx: null, dict: null, dictLoading: false, dictFailed: false,
+    modeEl: null, covSent: {},
   };
 
   function t(k) {
@@ -146,15 +164,6 @@
    不写死色值）；② hint 原为 nowrap+ellipsis，把「不会真的执行任何操作」这句
    打消顾虑的承诺截断成「不会真…」——恰恰是最该看全的那句。改整行独占
    （flex 100%）自然换行，行高两行是刻意的代价。 */
-'.xzt-row{display:flex;align-items:center;gap:.45rem;padding:.4rem .8rem;' +
-'border-top:1px solid var(--xz-bd,#ddd);flex-shrink:0;flex-wrap:wrap}' +
-'.xzt-row button{border:1px solid var(--xz-accent,#4f6ef7);' +
-'background:var(--xz-input,#f3f4f6);' +
-'color:var(--xz-accent,#4f6ef7);border-radius:999px;cursor:pointer;font-family:inherit;' +
-'font-size:.74rem;font-weight:600;padding:.26rem .7rem;white-space:nowrap}' +
-'.xzt-row button:hover{background:rgba(79,110,247,.1)}' +
-'.xzt-row .hint{font-size:.64rem;color:var(--xz-muted,#999);' +
-'flex:1 0 100%;line-height:1.45;word-break:break-word}' +
 '@media(prefers-reduced-motion:reduce){.xzt-banner,.xzt-bubble{animation:none}}';
     var st = document.createElement('style');
     st.id = 'xzt-style';
@@ -188,44 +197,53 @@
     }
   }
 
-  /* ── 面板入口行（对球 DOM 只做追加；被重渲染吃掉则观察者自愈） ── */
-  function ensureRow() {
-    var panel = document.querySelector('.asb-panel');
-    if (!panel || panel.querySelector('.xzt-row')) { return; }
-    var row = document.createElement('div');
-    row.className = 'xzt-row';
-    applyVars(row);
-    var btn = document.createElement('button');
-    btn.type = 'button';
-    btn.textContent = t(S.on ? 'row_btn_on' : 'row_btn');
-    btn.addEventListener('click', function () {
-      if (S.on) { stop(); } else { start(); }
+  /* ── 面板「教学」模式（实施73 P1-1，2026-08-28）──
+     此前是往面板底部插一行虚线胶囊（`.xzt-row` + MutationObserver 自愈）：
+     入口挤在最不显眼的位置、且报障/我的页签下也跟着显示。现在升格为模式条
+     里的一格，由球提供容器、本模块只负责内容——协作面从「插一行」变成
+     「认领一个模式」，仍不触碰球的内部符号（走公共 API registerMode）。 */
+  function mountMode(el, api) {
+    S.api = api;
+    S.modeEl = el;
+    el.innerHTML =
+      '<div class="asb-md-hero">' +
+      '<div class="asb-md-t">🎓 <span>' + esc(t('mode_t')) + '</span></div>' +
+      '<div class="asb-md-d">' + esc(t('mode_d')) + '</div>' +
+      /* P2-1 状态行：由 syncStat 填内容（词典异步下发，这里先留空壳） */
+      '<div class="asb-md-stat" data-n="-1"></div>' +
+      '<button type="button" class="asb-md-go' + (S.on ? ' off' : '') +
+      '" data-xzt="mode-go">' +
+      esc(t(S.on ? 'row_btn_on' : 'row_btn')) + '</button>' +
+      '<div class="asb-md-row">' +
+      '<button type="button" class="asb-md-b" data-xzt="mode-tour">' +
+      esc(t('tour_btn')) + '</button>' +
+      '<button type="button" class="asb-md-b" data-xzt="mode-page">' +
+      esc(t('banner_page')) + '</button></div>' +
+      /* 安全承诺全文常驻（不再是被省略号吃掉半句的一行 hint）——
+         「会不会真的点下去」正是没人敢开教学模式的第一顾虑。 */
+      '<div class="asb-md-safe">🛡 ' + esc(t('row_hint')) + '</div>' +
+      '</div>';
+    applyVars(el);
+    el.addEventListener('click', function (ev) {
+      var b = ev.target.closest('[data-xzt]');
+      if (!b) { return; }
+      var a = b.getAttribute('data-xzt');
+      if (a === 'mode-go') {
+        if (S.on) { stop(); } else { start(); }
+        return;
+      }
+      /* 导览/整页讲解都要先进教学态（它们复用同一套气泡与拦截器） */
+      if (a === 'mode-tour') { if (!S.on) { start(); } startTour(); return; }
+      if (a === 'mode-page') { if (!S.on) { start(); } askPage(); }
     });
-    var hint = document.createElement('span');
-    hint.className = 'hint';
-    hint.textContent = t('row_hint');
-    row.appendChild(btn);
-    row.appendChild(hint);
-    var tools = panel.querySelector('.asb-tools');
-    if (tools) { panel.insertBefore(row, tools); }
-    else { panel.appendChild(row); }
-    S.row = row;
+    syncStat();
   }
+
+  /* 教学态开关会改按钮文案/配色——开或退之后让球重挂本模式内容 */
   function syncRowBtn() {
-    var b = S.row && S.row.querySelector('button');
-    if (b) { b.textContent = t(S.on ? 'row_btn_on' : 'row_btn'); }
-  }
-  function watchPanel() {
-    if (S.mo) { return; }
-    var panel = document.querySelector('.asb-panel');
-    if (!panel || !window.MutationObserver) { return; }
-    var pending = false;
-    S.mo = new MutationObserver(function () {
-      if (pending) { return; }
-      pending = true;
-      setTimeout(function () { pending = false; ensureRow(); }, 250);
-    });
-    S.mo.observe(panel, { childList: true });
+    if (S.api && typeof S.api.refresh === 'function') {
+      try { S.api.refresh(); } catch (e) { /* ignore */ }
+    }
   }
 
   /* ── 讲解底料（2026-08-23 深化）：admin 壳直用模板注入的 TERM_DICT；
@@ -265,8 +283,15 @@
           localStorage.setItem('xzt_terms_v1', JSON.stringify(
             { ver: VER, ts: Date.now(), terms: j.terms }));
         } catch (e) { /* quota：不缓存也能用 */ }
+      } else {
+        S.dictFailed = true;
       }
-    }).catch(function () { /* 后端未装载：保持空泛兜底，绝不报错 */ });
+      syncStat();   /* 词典迟到 → 回填状态行，否则永远停在「正在准备…」 */
+    }).catch(function () {
+      /* 后端未装载：保持空泛兜底，绝不报错——但状态行要如实说取不到 */
+      S.dictFailed = true;
+      syncStat();
+    });
   }
   function normLabel(s) {
     var x = String(s == null ? '' : s).toLowerCase();
@@ -375,7 +400,7 @@
     if (el.nodeType !== 1) { return isOwnUi(el.parentElement || el.parentNode); }
     var hit = null;
     try {
-      hit = el.closest('.xzt-banner,.xzt-bubble,.asb-wrap,.asb-panel,.xzt-row,.asb-an');
+      hit = el.closest('.xzt-banner,.xzt-bubble,.asb-wrap,.asb-panel,.asb-an');
     } catch (e) { hit = null; }
     return !!hit;
   }
@@ -507,15 +532,22 @@
      串成有序讲解（上一处/下一处 + 进度）。零模板改动零后端——词条即导览，
      词典每长一条导览自动多一站；哪页词条备货不足自动如实降级为整页提问。 ── */
   var TOUR = { on: false, items: [], idx: 0 };
+  var TOUR_MAX = 8;   /* 导览站点上限：再多就不是「走一遍」而是上课 */
+  var SCAN_MAX = 60;  /* 计数上限：给「本页 N 处」一个不失真又不卡页的天花板 */
 
-  function collectTourItems() {
+  /* ── 唯一扫描器（实施73 P2-1）：可见交互控件 × 词典命中，按讲解标题去重。
+     ⚠ 计数（本页 N 处可讲解）与导览（带我走一遍）必须共用它。两套扫描一旦
+     分叉，卡片说 12、导览只走 5，用户只会认为导览坏了——门禁钉住这一点。
+     返回 null＝词典未就绪（与「扫出 0 处」是两件事，别合并）。 ── */
+  function scanTeachable(limit) {
     ensureDict();
-    if (!S.dict) { return []; }
+    if (!S.dict) { return null; }
     var nodes;
-    try { nodes = document.querySelectorAll(PICK_SEL); } catch (e) { return []; }
+    try { nodes = document.querySelectorAll(PICK_SEL); } catch (e) { return null; }
     var items = [];
     var seen = {};
-    for (var i = 0; i < nodes.length && items.length < 8; i++) {
+    var cap = limit > 0 ? limit : SCAN_MAX;
+    for (var i = 0; i < nodes.length && items.length < cap; i++) {
       var el = nodes[i];
       if (isOwnUi(el)) { continue; }
       var r;
@@ -529,6 +561,49 @@
     }
     return items;
   }
+  function collectTourItems() {
+    return scanTeachable(TOUR_MAX) || [];
+  }
+
+  /* ── 状态卡「本页 N 处可讲解」（实施73 P2-1）──
+     教学模式此前只说「点哪教哪」，没有任何进入理由；N 是最便宜的那个理由。
+     顺带它是 P2-2「哪页该补词条/锚点」的直接读数（见 beaconCoverage）。
+     -1＝词典还在路上，-2＝取词典失败（三种状态各说各话，不装作 0 处）。 */
+  function teachStat() {
+    if (S.dictFailed && !S.dict) { return -2; }
+    var items = scanTeachable(0);
+    return items === null ? -1 : items.length;
+  }
+  function statHtml(n) {
+    if (n === -2) { return esc(t('stat_off')); }
+    if (n < 0) { return esc(t('stat_wait')); }
+    if (n === 0) { return esc(t('stat_zero')); }
+    return '🧭 ' + esc(t('stat_n1')) + '<b>' + n + '</b>' + esc(t('stat_n2'));
+  }
+  /* beacon 只能带 action 带不了数字 → 分三桶落。ops 里按页看
+     asb_teach_cov_0 的分布，就是「该给哪页补词条」的采购清单。
+     每页每桶一次，避免开合面板把分母灌水。 */
+  function beaconCoverage(n) {
+    var b = n === 0 ? 'asb_teach_cov_0'
+      : (n < 5 ? 'asb_teach_cov_lo' : 'asb_teach_cov_ok');
+    var key = (location.pathname || '/') + '|' + b;
+    if (S.covSent[key]) { return; }
+    S.covSent[key] = 1;
+    beacon(b);
+  }
+  /* 词典是异步下发的（workspace 壳走 /api/assistant/terms），所以状态行
+     必须能被回填——否则首开面板永远停在「正在准备讲解词典…」。 */
+  function syncStat() {
+    var host = S.modeEl;
+    if (!host || !host.isConnected) { S.modeEl = null; return; }
+    var box = host.querySelector('.asb-md-stat');
+    if (!box) { return; }
+    var n = teachStat();
+    box.innerHTML = statHtml(n);
+    box.setAttribute('data-n', String(n));
+    if (n >= 0) { beaconCoverage(n); }
+  }
+
   function startTour() {
     beacon('asb_teach_tour_start');
     TOUR.items = collectTourItems();
@@ -752,12 +827,17 @@
     S.lang = String(opts.lang || '').toLowerCase().indexOf('en') === 0
       ? 'en' : 'zh';
     injectCss();
-    /* 球可能尚未 buildDom 完成：短轮询挂入口行（球缺席=静默零痕迹） */
+    /* 球可能尚未 buildDom 完成：短轮询认领模式（球缺席=静默零痕迹，
+       面板退化为单模式的纯问答，不会留下点不动的空格子）。 */
     var tries = 0;
     (function poll() {
-      ensureRow();
-      watchPanel();
-      if (!S.row && ++tries < 20) { setTimeout(poll, 500); }
+      if (window.AssistantBall &&
+          typeof window.AssistantBall.registerMode === 'function') {
+        S.claimed = window.AssistantBall.registerMode('teach', {
+          order: 20, icon: '🎓', labelKey: 'mode_teach', mount: mountMode,
+        });
+      }
+      if (!S.claimed && ++tries < 20) { setTimeout(poll, 500); }
     })();
   }
 

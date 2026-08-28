@@ -20,6 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TEACH_JS = ROOT / "shared" / "assistant" / "assistant-teach.js"
+BALL_JS = ROOT / "shared" / "assistant" / "assistant-ball.js"
 TEMPLATES = [
     ROOT / "src" / "web" / "templates" / "base.html",
     ROOT / "src" / "web" / "templates" / "workspace_base.html",
@@ -28,6 +29,15 @@ TEMPLATES = [
 
 def _src() -> str:
     return TEACH_JS.read_text(encoding="utf-8")
+
+
+def _fn(src: str, name: str) -> str:
+    """取顶层函数体（到下一个同级 `  function ` 为止）——比整文件 in 判定
+    精确，能抓「断言的那句话搬去了别的函数」这类静默回退。"""
+    i = src.find("function %s(" % name)
+    assert i >= 0, f"函数 {name} 不存在"
+    j = src.find("\n  function ", i + 1)
+    return src[i:j] if j > 0 else src[i:]
 
 
 def test_teach_js_exists_and_nontrivial():
@@ -110,6 +120,77 @@ def test_show_bubble_assigns_s_bubble():
     assert "S.bubble = bub" in src, (
         "showBubble 必须把新建节点赋给 S.bubble，否则 closeBubble 卸不掉"
     )
+
+
+# ── 实施73 P2-1「本页 N 处可讲解」状态卡 ────────────────────────────────
+
+
+def test_stat_and_tour_share_one_scanner():
+    """计数与导览必须同源。两套扫描一旦分叉，卡片说「12 处可讲解」而导览
+    只走 5 站，用户不会认为是两个口径，只会认为导览坏了。"""
+    src = _src()
+    assert "function scanTeachable(" in src, "缺唯一扫描器 scanTeachable"
+    assert re.search(
+        r"function collectTourItems\(\)\s*\{\s*return scanTeachable\(", src
+    ), "collectTourItems 必须是 scanTeachable 的薄封装，不得自己再扫一遍"
+    assert "scanTeachable(" in _fn(src, "teachStat"), (
+        "teachStat 必须复用同一个扫描器"
+    )
+    hits = re.findall(r"querySelectorAll\(PICK_SEL\)", src)
+    assert len(hits) == 1, (
+        f"发现 {len(hits)} 处 PICK_SEL 扫描——计数与导览会各算一套"
+    )
+
+
+def test_stat_states_are_honest_not_zero_washing():
+    """三种状态各说各话：词典在路上 / 取不到 / 本页真的 0 处。
+    把「还没加载」渲染成「0 处可讲解」是谎报没备货，会直接污染 P2-2
+    的补货决策（那份清单正是照 asb_teach_cov_0 去补的）。"""
+    body = _fn(_src(), "statHtml")
+    for key in ("stat_off", "stat_wait", "stat_zero"):
+        assert f"t('{key}')" in body, f"statHtml 缺 {key} 分支"
+    assert "n === -2" in body and "n < 0" in body and "n === 0" in body, (
+        "statHtml 必须把 -2/-1/0 三态分开判"
+    )
+
+
+def test_stat_backfilled_when_dictionary_arrives_late():
+    """workspace 壳的词典靠 GET /api/assistant/terms 异步下发：不回填状态行，
+    首次打开面板会永远停在「正在准备讲解词典…」——比不显示更像坏了。"""
+    body = _fn(_src(), "ensureDict")
+    assert body.count("syncStat()") >= 2, (
+        "ensureDict 的成功与失败两个分支都要回填状态行"
+    )
+    assert "S.dictFailed = true" in body, (
+        "取词典失败必须落标记，否则状态行只能一直装作还在加载"
+    )
+
+
+def test_coverage_beacon_buckets_and_dedup():
+    """beacon 只能带 action 带不了数字，所以 N 落成三桶——ops 里按页看
+    asb_teach_cov_0 的分布就是「该给哪页补词条」的采购清单。
+    每页每桶只发一次，否则反复开合面板会把分母灌水。"""
+    body = _fn(_src(), "beaconCoverage")
+    for action in ("asb_teach_cov_0", "asb_teach_cov_lo", "asb_teach_cov_ok"):
+        assert action in body, f"缺覆盖率分桶埋点 {action}"
+    assert "S.covSent[key]" in body, "覆盖率埋点必须按 页×桶 去重"
+
+
+def test_mode_card_renders_and_fills_stat_line():
+    body = _fn(_src(), "mountMode")
+    assert 'class="asb-md-stat"' in body, (
+        "教学模式卡缺「本页 N 处可讲解」状态行——没有它，进入教学模式依旧没有理由"
+    )
+    assert "syncStat()" in body, "mountMode 挂载后必须填一次状态行"
+
+
+def test_stat_style_stays_in_the_mode_card_family():
+    """`.asb-md-*` 是球提供的模式卡样式族（P0-4 三套变量合流的成果）。
+    状态行样式若另写进 teach 自己的 xzt-style，样式族当场又分叉。"""
+    assert ".asb-md-stat{" in BALL_JS.read_text(encoding="utf-8"), (
+        "状态行样式必须与 .asb-md-* 族同处 assistant-ball.js"
+    )
+    assert ".asb-md-stat{" not in _src(), "teach 模块不得自带 .asb-md-* 样式"
 
 
 def test_loader_init_shell_matches_template():

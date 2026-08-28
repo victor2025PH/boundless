@@ -20,12 +20,18 @@
   'use strict';
   if (window.XZAgent) { return; }
 
-  var VER = '20260827a';
+  var VER = '20260828a';
 
   var I18N = {
     zh: {
       row_btn: '🤖 替我做 · 一句话交给小智',
       row_hint: '规划后逐步执行，改设置前必先确认',
+      mode_t: '一句话交给小智',
+      mode_d: '在下面说一件要我做的事，我会先出计划再逐步执行。',
+      recent_t: '最近做过',
+      pair_card_t: '换个说法：用手机指挥',
+      pair_card_d: '手机扫码连上这台电脑，躺着用语音/打字派活；'
+        + '连接状态见标题栏的 📱。',
       p_title: '替我做',
       p_ph: '例如：把回复速度调快一点 / 为什么不自动回复了',
       p_run: '开始',
@@ -107,6 +113,12 @@
     en: {
       row_btn: '🤖 Do it for me',
       row_hint: 'Plans first; settings need your confirm',
+      mode_t: 'Tell me in one sentence',
+      mode_d: 'Say what you need below — I draft a plan, then run it step by step.',
+      recent_t: 'Recently done',
+      pair_card_t: 'Another way: drive it from your phone',
+      pair_card_d: 'Scan to pair your phone with this desktop and dictate tasks; '
+        + 'connection status lives on the 📱 in the title bar.',
       p_title: 'Do it for me',
       p_ph: 'e.g. speed up replies a bit / why is auto-reply off',
       p_run: 'Go',
@@ -188,7 +200,7 @@
   };
 
   var S = {
-    shell: 'admin', lang: 'zh', row: null, mo: null,
+    shell: 'admin', lang: 'zh', api: null, claimed: false,
     panel: null, card: null, task: null, running: false, stopFlag: false,
     head: null, ballWasHidden: false, confirmResolve: null, probeOk: null,
     voiceOk: null, rec: null, audio: null, standalone: false, pair: null,
@@ -253,15 +265,6 @@
 /* P0-3 2026-08-27（与 assistant-teach.js 同批同理）：虚线→实线+柔和底
    （「没做完」观感），hint 独占整行不再截断。两文件规格必须保持一致，
    否则同一面板里两行入口长得不一样。 */
-'.xza-row{display:flex;align-items:center;gap:.45rem;padding:.4rem .8rem;' +
-'border-top:1px solid var(--xz-bd,#ddd);flex-shrink:0;flex-wrap:wrap}' +
-'.xza-row button{border:1px solid var(--xz-accent,#4f6ef7);' +
-'background:var(--xz-input,#f3f4f6);' +
-'color:var(--xz-accent,#4f6ef7);border-radius:999px;cursor:pointer;font-family:inherit;' +
-'font-size:.74rem;font-weight:600;padding:.26rem .7rem;white-space:nowrap}' +
-'.xza-row button:hover{background:rgba(79,110,247,.1)}' +
-'.xza-row .hint{font-size:.64rem;color:var(--xz-muted,#999);' +
-'flex:1 0 100%;line-height:1.45;word-break:break-word}' +
 '.xza-panel{position:fixed;z-index:10006;width:320px;max-width:calc(100vw - 20px);' +
 'background:var(--xz-bg,#fff);color:var(--xz-txt,#111);border:1px solid var(--xz-bd,#ddd);' +
 'border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.26);padding:.7rem .8rem;' +
@@ -428,57 +431,88 @@
     }
   }
 
-  /* ── 面板入口行 ── */
-  function ensureRow() {
-    var panel = document.querySelector('.asb-panel');
-    if (!panel || panel.querySelector('.xza-row')) { return; }
-    var row = document.createElement('div');
-    row.className = 'xza-row';
-    applyVars(row);
-    var btn = document.createElement('button');
-    btn.type = 'button';
-    btn.textContent = t('row_btn');
-    btn.addEventListener('click', function () {
-      beacon('asb_agent_open');
-      openPanel();
+  /* ── 面板「替我做」模式（实施73 P1-1，2026-08-28）──
+     此前是面板底部一行三枚虚线胶囊（替我做 / 手机操控 / 做过什么）。现在：
+     替我做升格为模式条第三格；**手机操控搬去球的标题栏**（它是本模式的远程
+     输入端，不是第四种能力——实施73 §3.1）并在本模式内再给一张说明卡（两处
+     曝光，语义诚实）；**「做过什么」并入本模式**成常驻「最近做过」3 条 +
+     就地撤销（P1-7：撤销必须在手边，不能藏在第二层弹层里）。 */
+  function mountMode(el, api) {
+    S.api = api;
+    el.innerHTML = '' +
+      '<div class="asb-md-hero">' +
+      '<div class="asb-md-t">⚡ <span>' + esc(t('mode_t')) + '</span></div>' +
+      '<div class="asb-md-d">' + esc(t('mode_d')) + '</div>' +
+      '<div class="asb-md-safe">🛡 ' + esc(t('row_hint')) + '</div></div>' +
+      '<div class="asb-md-hero">' +
+      '<div class="asb-md-t">📱 <span>' + esc(t('pair_card_t')) + '</span></div>' +
+      '<div class="asb-md-d">' + esc(t('pair_card_d')) + '</div>' +
+      '<div class="asb-md-row">' +
+      '<button type="button" class="asb-md-b" data-xza="mode-pair">' +
+      esc(t('pair_btn')) + '</button></div></div>' +
+      '<div class="asb-md-t">📜 <span>' + esc(t('recent_t')) + '</span></div>' +
+      '<div class="asb-md-list xza-recent"><div class="asb-empty">…</div></div>' +
+      '<div class="asb-md-row">' +
+      '<button type="button" class="asb-md-b" data-xza="mode-hist">' +
+      esc(t('hist_btn')) + '</button></div>';
+    applyVars(el);
+    el.addEventListener('click', function (ev) {
+      var b = ev.target.closest('[data-xza]');
+      if (!b) { return; }
+      var a = b.getAttribute('data-xza');
+      if (a === 'mode-pair') { beacon('asb_pair_open'); openPairModal(); return; }
+      if (a === 'mode-hist') { beacon('asb_hist_open'); openHistory(); return; }
+      if (a === 'recent-undo') {
+        beacon('asb_hist_undo');
+        b.disabled = true;
+        post('/api/assistant/act/undo', { undo_id: b.getAttribute('data-undo') })
+          .then(function (j) {
+            if (j.__status === 200 && j.ok) {
+              loadRecent(el.querySelector('.xza-recent'));
+              return;
+            }
+            b.disabled = false;
+            b.textContent = String(j.detail || t('net_err')).slice(0, 24);
+          });
+      }
     });
-    var pairBtn = document.createElement('button');
-    pairBtn.type = 'button';
-    pairBtn.textContent = t('pair_btn');
-    pairBtn.addEventListener('click', function () {
-      beacon('asb_pair_open');
-      openPairModal();
-    });
-    var histBtn = document.createElement('button');
-    histBtn.type = 'button';
-    histBtn.textContent = t('hist_btn');
-    histBtn.addEventListener('click', function () {
-      beacon('asb_hist_open');
-      openHistory();
-    });
-    var hint = document.createElement('span');
-    hint.className = 'hint';
-    hint.textContent = t('row_hint');
-    row.appendChild(btn);
-    row.appendChild(pairBtn);
-    row.appendChild(histBtn);
-    row.appendChild(hint);
-    var tools = panel.querySelector('.asb-tools');
-    if (tools) { panel.insertBefore(row, tools); }
-    else { panel.appendChild(row); }
-    S.row = row;
+    loadRecent(el.querySelector('.xza-recent'));
   }
-  function watchPanel() {
-    if (S.mo) { return; }
-    var panel = document.querySelector('.asb-panel');
-    if (!panel || !window.MutationObserver) { return; }
-    var pending = false;
-    S.mo = new MutationObserver(function () {
-      if (pending) { return; }
-      pending = true;
-      setTimeout(function () { pending = false; ensureRow(); }, 250);
-    });
-    S.mo.observe(panel, { childList: true });
+
+  /* 「最近做过」3 条：与历史弹层同一条 /api/assistant/act/history，只是把
+     最该被看见的三条 + 撤销钮提到模式首屏。取数失败静默——它是补充信息，
+     不该让整个模式卡变成错误页。 */
+  function loadRecent(list) {
+    if (!list) { return; }
+    fetch('/api/assistant/act/history?lang=' + S.lang)
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (!list.isConnected) { return; }
+        var items = (j && j.ok && j.items) ? j.items.slice(0, 3) : [];
+        if (!items.length) {
+          list.innerHTML = '<div class="asb-empty">' + esc(t('hist_empty')) +
+            '</div>';
+          return;
+        }
+        var h = '';
+        for (var i = 0; i < items.length; i++) {
+          var it = items[i] || {};
+          var d = new Date((Number(it.ts) || 0) * 1000);
+          var when = (d.getMonth() + 1) + '-' + d.getDate() + ' ' +
+            ('0' + d.getHours()).slice(-2) + ':' +
+            ('0' + d.getMinutes()).slice(-2);
+          h += '<div class="asb-md-li"><span class="m">' +
+            esc(it.label || it.action_label || '') + '</span>' +
+            '<span class="w">' + esc(when) + '</span>' +
+            (it.undoable
+              ? '<button type="button" class="xza-undo" data-xza="recent-undo"' +
+                ' data-undo="' + esc(it.undo_id) + '">' + esc(t('undo')) +
+                '</button>'
+              : '') + '</div>';
+        }
+        list.innerHTML = h;
+      })
+      .catch(function () { /* 静默 */ });
   }
 
   /* ── 输入小面板 ── */
@@ -1788,12 +1822,29 @@
     }
     var tries = 0;
     (function poll() {
-      ensureRow();
-      watchPanel();
-      if (!S.row && ++tries < 20) { setTimeout(poll, 500); }
+      if (window.AssistantBall &&
+          typeof window.AssistantBall.registerMode === 'function') {
+        S.claimed = window.AssistantBall.registerMode('agent', {
+          order: 30, icon: '⚡', labelKey: 'mode_agent', mount: mountMode,
+          composer: {
+            ph: function () { return t('p_ph'); },
+            submit: function (goal) {
+              beacon('asb_agent_open');
+              /* 收面板再跑：流星执行秀在页面上演，面板挡着就看不见了 */
+              if (S.api && typeof S.api.close === 'function') {
+                try { S.api.close(); } catch (e) { /* */ }
+              }
+              runGoal(goal);
+            },
+          },
+        });
+      }
+      if (!S.claimed && ++tries < 20) { setTimeout(poll, 500); }
     })();
     setTimeout(tryResume, 800);
   }
 
-  window.XZAgent = { init: init, run: runGoal, _ver: VER };
+  window.XZAgent = { init: init, run: runGoal,
+    /* 球的标题栏手机键调这里（配对链仍全部归本模块） */
+    pair: openPairModal, _ver: VER };
 })();
