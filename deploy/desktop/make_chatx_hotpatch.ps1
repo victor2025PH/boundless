@@ -70,8 +70,16 @@ function AllowedRel([string]$rel) {
 }
 
 function RelUnder([string]$root, [string]$full) {
-  $r = (Resolve-Path $root).Path.TrimEnd('\')
-  $f = (Resolve-Path $full).Path
+  # -LiteralPath is mandatory, not stylistic: Resolve-Path treats [ ] ? * as
+  # wildcards, finds no match, returns null, and the next .StartsWith() throws
+  # "cannot call a method on a null-valued expression" -- which aborts the whole
+  # run AFTER electron-builder already spent its minutes. Measured 2026-08-28 on
+  # the first real -IncludeBackend run: backend\_internal\docx\templates\
+  # default-docx-template\[Content_Types].xml (python-docx ships it) is the one
+  # file out of 2728 that has brackets. Same reason every other file touch in
+  # this script is already -LiteralPath.
+  $r = (Resolve-Path -LiteralPath $root).Path.TrimEnd('\')
+  $f = (Resolve-Path -LiteralPath $full).Path
   if (-not $f.StartsWith($r, [StringComparison]::OrdinalIgnoreCase)) { return "" }
   return $f.Substring($r.Length).TrimStart('\').Replace('\', '/')
 }
@@ -182,8 +190,12 @@ foreach ($f in $files) {
   $src = Join-Path $res (($f.path) -replace '/', '\')
   $dst = Join-Path $stage (($f.path) -replace '/', '\')
   $dstDir = Split-Path $dst -Parent
-  if (-not (Test-Path $dstDir)) { New-Item -ItemType Directory -Force -Path $dstDir | Out-Null }
-  Copy-Item -LiteralPath $src -Destination $dst -Force
+  if (-not (Test-Path -LiteralPath $dstDir)) {
+    [IO.Directory]::CreateDirectory($dstDir) | Out-Null
+  }
+  # .NET copy, not Copy-Item: -Destination has no -Literal counterpart, so a
+  # bracketed leaf name can still be read as a wildcard on the way out.
+  [IO.File]::Copy($src, $dst, $true)
 }
 
 $zipPath = Join-Path $OutDir $zipName

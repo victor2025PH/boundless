@@ -215,9 +215,15 @@ Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 
 if (-not $Relaunch) { Say "OK applied (no relaunch)"; exit 0 }
 
-$relaunch = Join-Path $PSScriptRoot 'relaunch_chatx_node.ps1'
-if (Test-Path $relaunch) {
-  & powershell -ExecutionPolicy Bypass -File $relaunch | ForEach-Object { Say $_ }
+# NOT $relaunch: PowerShell variable names are case-insensitive, so that name is
+# the [switch]$Relaunch parameter above, and assigning a String to it throws
+# ArgumentTransformationMetadataException. Measured 2026-08-28 on the first real
+# SSH push: files landed, hotpatch.json was written, and the relaunch never ran
+# -- the seat was left patched but with no app running. Same family as the
+# documented $ShellPid/$Pid collision; keep local names distinct from params.
+$relaunchScript = Join-Path $PSScriptRoot 'relaunch_chatx_node.ps1'
+if (Test-Path $relaunchScript) {
+  & powershell -ExecutionPolicy Bypass -File $relaunchScript | ForEach-Object { Say $_ }
   if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne $null) {
     Say "relaunch not confirmed"
     if (-not $SkipHealth) { exit 5 }
