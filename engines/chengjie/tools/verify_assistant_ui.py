@@ -50,7 +50,15 @@ from typing import List
 ENGINE = Path(__file__).resolve().parents[1]
 
 _HTML = """<!doctype html>
-<html><head><meta charset="utf-8"><title>assistant-ball probe</title></head>
+<html><head><meta charset="utf-8"><title>assistant-ball probe</title>
+<!-- 宿主主题令牌（取自 base.html / workspace_base.html 的真实变量名）。
+     不摆上它们，夹具就永远在测「回落色」，而 P2 主题桥要证的恰恰是
+     「宿主有品牌色时小智跟得上」——那正是它此前做不到的事。 -->
+<style>:root{--bl-growth:#1e8cf2;--bl-growth-600:#0d76d9;
+--p:var(--bl-growth-600,#0d76d9);--card:#fff;--t:#111827;--t3:#5b6b85;
+--bd:rgba(15,27,45,.1);--sb-hover:rgba(17,24,39,.05);
+--tk-brand:var(--bl-growth,#1e8cf2);--tk-surface:#fff;--tk-text:#0f1b2d;
+--tk-text-muted:#5b6b85;--tk-border:#e5e6ea}</style></head>
 <body style="margin:16px;font-family:system-ui,'Microsoft YaHei',sans-serif;">
 <h3 id="page-title" data-anchor="fixture_page">fixture page</h3>
 <button id="t-emoji-btn" type="button">🎓 教学按钮（3）</button>
@@ -80,6 +88,34 @@ window.fetch = async function (url, opts) {
       const body = frames.map(f => 'data: ' + JSON.stringify(f) + '\\n\\n').join('');
       return new Response(body,
         { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    }
+    if (window.__api.queryMode === 'nobasis') {
+      /* 服务端判定「没依据」（零命中或 NO_BASIS 哨兵）：answered=false。
+         关键在于 meta.sources **非空** —— 检索确实捞到了东西，只是那些东西
+         回答不了这个问题。UI 必须抑制它们，否则等于「我不知道，但这里有三个
+         不相关的链接」。这些条目同时是拒答建议的来源。 */
+      return J({ ok: true, events: [
+        { ev: 'meta', report_hint: true, sources: [
+          { id: 'howto:multiwin', title: '在此使用/保持待机是什么意思',
+            path: '/workspace', score: 34 },
+          { id: 'term:info_log', title: '信息日志(INFO)', path: '', score: 33 }] },
+        { ev: 'delta', text: '这个问题我在产品帮助库里没有找到可靠依据。' },
+        { ev: 'done', ms: 5, qa_id: 11, answered: false, basis: 'none' }] });
+    }
+    if (window.__api.queryMode === 'general') {
+      /* 通用知识作答（2026-08-29 P0）：零命中 → 通用链答出来了，done 带
+         basis=general。UI 必须标注「非产品文档」，否则模型随口说的会被当成
+         产品承诺。 */
+      return J({ ok: true, events: [
+        { ev: 'meta', report_hint: false, sources: [] },
+        { ev: 'delta', text: '一般来说可以这样写：您好，很高兴为您服务。' },
+        { ev: 'done', ms: 5, qa_id: 12, answered: true, basis: 'general' }] });
+    }
+    if (window.__api.queryMode === 'product') {
+      return J({ ok: true, events: [
+        { ev: 'meta', report_hint: false, sources: [] },
+        { ev: 'delta', text: '目前对接 Telegram、WhatsApp、LINE、Messenger 和网页；抖音暂不支持。' },
+        { ev: 'done', ms: 5, qa_id: 13, answered: true, basis: 'product' }] });
     }
     const hint = window.__api.queryMode === 'hint';
     return J({ ok: true, events: [
@@ -693,6 +729,67 @@ def _run_admin_tail(page, ck: Checker) -> None:
                 "String(window.__api.queries[window.__api.queries.length-1].q)"
                 ".indexOf('asb-ask') > -1"))
 
+    # ── A17 拒答 UX（2026-08-29，老板实录「回复的内容没一点帮助」）
+    # 清空聊天区：前面用例留下的气泡会污染「拒答时不列来源」这类否定断言。
+    ev("() => { var b = document.querySelector('.asb-body'); "
+       "if (b) { b.innerHTML = ''; } window.__api.queryMode = 'nobasis'; "
+       "return AssistantBall.ask('怎么导出所有客户的手机号'); }")
+    page.wait_for_timeout(400)
+    ck.check("A17 拒答不列来源（那几条正是被判定答不了的）",
+             ev("() => !document.querySelector('.asb-srcs')"),
+             ev("() => document.querySelectorAll('.asb-srcs').length"))
+    ck.check("A17b 拒答给出可答的问法（死路变菜单）",
+             ev("() => !!document.querySelector('.asb-sugg .asb-chip[data-q]')"))
+    ck.check("A17c 拒答同时保留报障出路（可能真是故障）",
+             ev("() => !!document.querySelector('[data-act=\"to-report\"]')"))
+    ck.check("A17d 建议不推荐刚问过的那一句",
+             ev("() => { var c = document.querySelectorAll("
+                "'.asb-sugg .asb-chip[data-q]'); for (var i = 0; i < c.length;"
+                " i++) { if (c[i].getAttribute('data-q').indexOf('导出所有客户')"
+                " > -1) return false; } return true; }"))
+    ck.check("A17e 建议来自本次检索到的最近条目（非页面热度榜）",
+             ev("() => { var c = document.querySelectorAll("
+                "'.asb-sugg .asb-chip[data-q]'); for (var i = 0; i < c.length;"
+                " i++) { if (c[i].getAttribute('data-q').indexOf('在此使用') "
+                "> -1) return true; } return false; }"),
+             ev("() => { var c = document.querySelectorAll("
+                "'.asb-sugg .asb-chip[data-q]'); var o = []; for (var i = 0; "
+                "i < c.length; i++) { o.push(c[i].getAttribute('data-q')); } "
+                "return o.join(' | '); }"))
+    ev("() => { window.__sgN = window.__api.queries.length; "
+       "var c = document.querySelector('.asb-sugg .asb-chip[data-q]'); "
+       "if (c) { c.click(); } }")
+    page.wait_for_timeout(300)
+    ck.check("A17f 点建议真的投问（不是哑 chip）",
+             ev("() => window.__api.queries.length === window.__sgN + 1"))
+
+    # ── A18 依据分层：零命中不再一律拒答，但**凭什么答**必须标出来
+    ev("() => { var b = document.querySelector('.asb-body'); "
+       "if (b) { b.innerHTML = ''; } window.__api.queryMode = 'general'; "
+       "return AssistantBall.ask('帮我写一句问候语'); }")
+    page.wait_for_timeout(400)
+    ck.check("A18 通用知识作答标注「非产品文档」",
+             ev("() => !!document.querySelector('.asb-basis.gen')"),
+             ev("() => { var e = document.querySelector('.asb-basis'); "
+                "return e ? e.textContent : 'none'; }"))
+    ck.check("A18b 通用回答不列来源（本来就没有文档依据）",
+             ev("() => !document.querySelector('.asb-srcs')"))
+    ev("() => { var b = document.querySelector('.asb-body'); "
+       "if (b) { b.innerHTML = ''; } window.__api.queryMode = 'product'; "
+       "return AssistantBall.ask('支持抖音吗'); }")
+    page.wait_for_timeout(400)
+    ck.check("A18c 产品事实卡作答标注「依据产品说明」（中性、非琥珀）",
+             ev("() => { var e = document.querySelector('.asb-basis'); "
+                "return !!e && !e.classList.contains('gen'); }"))
+    ev("() => { var b = document.querySelector('.asb-body'); "
+       "if (b) { b.innerHTML = ''; } window.__api.queryMode = 'ok'; "
+       "return AssistantBall.ask('怎么发语音'); }")
+    page.wait_for_timeout(400)
+    ck.check("A18d 有文档依据时照旧列来源（抑制只针对拒答）",
+             ev("() => !!document.querySelector('.asb-srcs')"))
+
+    run_panel_geometry(page, ck)
+
     # T1 教学模式「让小智详细讲讲」整条点击链（复现 2026-08-23 空点事故）
     # （teach/agent 已随夹具页一起加载＝生产形态，此处只驱动教学态）
     ev("() => { window.XZTeach.start(); }")
@@ -757,6 +854,187 @@ def _run_admin_tail(page, ck: Checker) -> None:
     page.wait_for_timeout(180)
     ck.check("A15b 任意按键熄灯",
              ev("() => !document.querySelector('.asb-spot')"))
+
+
+def run_panel_geometry(page, ck: Checker) -> None:
+    """P1 自由拖拽/缩放（2026-08-29，老板：「要能随意拖拉位置和放大放小」）。
+
+    这些不变量**静态门禁一条都证不了**：面板几何是真实指针事件 + 布局的产物，
+    而模板/JS 热更新直接上生产，没有「未部署」缓冲。所以只能真浏览器点。
+    必须用真 mouse 事件（不是合成 dispatchEvent）才走得到 pointer capture 那条
+    路——首版实测：合成 dblclick 能触发复位，真鼠标序列却不能（capture 让两次
+    点击的 target 不一致，Chromium 因此不派发 dblclick），只有真事件抓得到。
+    """
+    ev = page.evaluate
+
+    ev("() => { localStorage.removeItem('asb_panel_v1'); }")
+    ev("() => { if (!document.querySelector('.asb-panel.open')) "
+       "{ document.querySelector('.asb-ball').click(); } }")
+    page.wait_for_timeout(200)
+
+    ck.check("G1 八向手柄齐备（四边四角）",
+             ev("() => document.querySelectorAll('.asb-rs').length === 8"),
+             ev("() => document.querySelectorAll('.asb-rs').length"))
+    ck.check("G1b 右下角手柄可 Tab 到（键盘用户也能缩放）",
+             ev("() => { var h = document.querySelector('.asb-rs.se'); "
+                "return !!h && h.getAttribute('tabindex') === '0' && "
+                "!!h.getAttribute('aria-label'); }"))
+
+    before = ev("() => { var r = document.querySelector('.asb-panel')"
+                ".getBoundingClientRect(); return {x:r.left,y:r.top,"
+                "w:r.width,h:r.height}; }")
+
+    hd = page.query_selector(".asb-hd")
+    box = hd.bounding_box()
+    page.mouse.move(box["x"] + 60, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(box["x"] + 60 - 160, box["y"] + box["height"] / 2 + 90,
+                    steps=8)
+    page.mouse.up()
+    page.wait_for_timeout(120)
+    after = ev("() => { var r = document.querySelector('.asb-panel')"
+               ".getBoundingClientRect(); return {x:r.left,y:r.top,"
+               "w:r.width,h:r.height}; }")
+    ck.check("G2 拖标题栏真的移动了面板",
+             abs(after["x"] - before["x"]) > 40 or
+             abs(after["y"] - before["y"]) > 40,
+             f"before={before} after={after}")
+    # 每拖一次胖 2px 的回归钉：rect 含边框、style 写 content-box，存写闭环会累积
+    ck.check("G2b 移动不改变尺寸（box-sizing 闭环回归钉）",
+             abs(after["w"] - before["w"]) < 2 and
+             abs(after["h"] - before["h"]) < 2,
+             f"w {before['w']}->{after['w']} h {before['h']}->{after['h']}")
+    ck.check("G3 位置已持久化（刷新后不回弹）",
+             ev("() => !!localStorage.getItem('asb_panel_v1')"))
+
+    # 先真拖到左上角腾出空间：否则底边贴着视口，**本来就拉不高**（首版这条红过，
+    # 查下来是出界封顶生效了＝把正确行为误判成 bug）
+    hd2 = page.query_selector(".asb-hd")
+    b2 = hd2.bounding_box()
+    page.mouse.move(b2["x"] + 60, b2["y"] + b2["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(120, 90, steps=8)
+    page.mouse.up()
+    page.wait_for_timeout(120)
+    after = ev("() => { var r = document.querySelector('.asb-panel')"
+               ".getBoundingClientRect(); return {x:r.left,y:r.top,"
+               "w:r.width,h:r.height}; }")
+    h2 = page.query_selector(".asb-rs.se")
+    hb = h2.bounding_box()
+    page.mouse.move(hb["x"] + hb["width"] / 2, hb["y"] + hb["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(hb["x"] + hb["width"] / 2 + 120,
+                    hb["y"] + hb["height"] / 2 + 100, steps=8)
+    page.mouse.up()
+    page.wait_for_timeout(120)
+    grown = ev("() => { var r = document.querySelector('.asb-panel')"
+               ".getBoundingClientRect(); return {x:r.left,y:r.top,"
+               "w:r.width,h:r.height}; }")
+    ck.check("G4 右下角手柄能放大",
+             grown["w"] > after["w"] + 40 and grown["h"] > after["h"] + 30,
+             f"{after['w']}x{after['h']} -> {grown['w']}x{grown['h']}")
+    # 出界保护曾在这里跟手势打架，把原点上推 102px
+    ck.check("G4b 放大时左上角不动（不是整窗平移）",
+             abs(grown["x"] - after["x"]) < 3 and
+             abs(grown["y"] - after["y"]) < 3,
+             f"origin {after['x']},{after['y']} -> {grown['x']},{grown['y']}")
+
+    # 西北角：改尺寸的同时必须改原点。先推离左边缘，贴边时 clamp 会把 x 顶在
+    # 8px、右边缘跟着外扩（首版这条红过 6px，同样是正确行为被误判）
+    hd3 = page.query_selector(".asb-hd")
+    b3 = hd3.bounding_box()
+    page.mouse.move(b3["x"] + 60, b3["y"] + b3["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(b3["x"] + 60 + 180, b3["y"] + b3["height"] / 2, steps=6)
+    page.mouse.up()
+    page.wait_for_timeout(120)
+    grown = ev("() => { var r = document.querySelector('.asb-panel')"
+               ".getBoundingClientRect(); return {x:r.left,y:r.top,"
+               "w:r.width,h:r.height}; }")
+    h3 = page.query_selector(".asb-rs.nw")
+    nb = h3.bounding_box()
+    page.mouse.move(nb["x"] + nb["width"] / 2, nb["y"] + nb["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(nb["x"] + nb["width"] / 2 - 60,
+                    nb["y"] + nb["height"] / 2 - 50, steps=6)
+    page.mouse.up()
+    page.wait_for_timeout(120)
+    nw = ev("() => { var r = document.querySelector('.asb-panel')"
+            ".getBoundingClientRect(); return {x:r.left,y:r.top,"
+            "w:r.width,h:r.height,r:r.right,b:r.bottom}; }")
+    ck.check("G5 西北角拉伸：右下角保持不动（原点跟着走）",
+             abs(nw["r"] - (grown["x"] + grown["w"])) < 4 and
+             abs(nw["b"] - (grown["y"] + grown["h"])) < 4,
+             f"right {grown['x'] + grown['w']}->{nw['r']} "
+             f"bottom {grown['y'] + grown['h']}->{nw['b']}")
+
+    h4 = page.query_selector(".asb-rs.se")
+    sb = h4.bounding_box()
+    page.mouse.move(sb["x"] + sb["width"] / 2, sb["y"] + sb["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(sb["x"] - 900, sb["y"] - 900, steps=10)
+    page.mouse.up()
+    page.wait_for_timeout(120)
+    tiny = ev("() => { var r = document.querySelector('.asb-panel')"
+              ".getBoundingClientRect(); return {w:r.width,h:r.height}; }")
+    ck.check("G6 最小尺寸护栏（拽过头也不塌成一条线）",
+             tiny["w"] >= 290 and tiny["h"] >= 250,
+             f"{tiny['w']}x{tiny['h']}")
+
+    # 复位走**看得见的按钮**。双击标题栏也支持，但它不是主入口：发现性差，且
+    # 真实鼠标序列下浏览器未必合成 dblclick（见函数 docstring）。
+    ck.check("G7a 几何改过后「复位」按钮出现",
+             ev("() => { var b = document.querySelector('.asb-hd-rst'); "
+                "return !!b && !b.hidden; }"))
+    page.click(".asb-hd-rst")
+    page.wait_for_timeout(150)
+    ck.check("G7 点复位按钮清掉自定义几何",
+             ev("() => !localStorage.getItem('asb_panel_v1')"))
+    ck.check("G7b 复位后按钮自己收起（没有可复位的东西了）",
+             ev("() => { var b = document.querySelector('.asb-hd-rst'); "
+                "return !!b && b.hidden; }"))
+
+    # 越界自愈：存屏幕外坐标，重开必须夹回可视区，否则是「点了没反应」的幽灵
+    ev("() => { localStorage.setItem('asb_panel_v1', JSON.stringify("
+       "{x: 99999, y: 99999, w: 400, h: 400})); }")
+    ev("() => { var p = document.querySelector('.asb-panel'); "
+       "if (p.classList.contains('open')) "
+       "{ document.querySelector('.asb-ball').click(); } }")
+    page.wait_for_timeout(120)
+    ev("() => { document.querySelector('.asb-ball').click(); }")
+    page.wait_for_timeout(200)
+    ck.check("G8 存了屏幕外坐标也会被夹回可视区（防幽灵面板）",
+             ev("() => { var r = document.querySelector('.asb-panel')"
+                ".getBoundingClientRect(); return r.left < window.innerWidth "
+                "&& r.top < window.innerHeight && r.right > 0 && r.bottom > 0;"
+                " }"),
+             ev("() => { var r = document.querySelector('.asb-panel')"
+                ".getBoundingClientRect(); return r.left + ',' + r.top; }"))
+    # 残留遮罩会吃掉整页点击，比面板本身坏了更严重
+    ck.check("G9 手势结束后无残留遮罩（不会锁死整页）",
+             ev("() => { var n = document.querySelectorAll("
+                "'div[aria-hidden=\"true\"]'); for (var i = 0; i < n.length; "
+                "i++) { var s = n[i].style; if (s && s.position === 'fixed' && "
+                "s.zIndex === '2147483000') return false; } return true; }"))
+
+    # ── P2 主题桥：--xz-* 此前全站无定义，面板永远用回落色＝没接进主题系统
+    ck.check("G10 强调色接到宿主品牌令牌（不再是写死的回落色）",
+             ev("() => { var p = document.querySelector('.asb-panel'); "
+                "var v = getComputedStyle(p).getPropertyValue('--xz-accent')"
+                ".trim(); return !!v && v.toLowerCase() !== '#4f6ef7'; }"),
+             ev("() => getComputedStyle(document.querySelector('.asb-panel'))"
+                ".getPropertyValue('--xz-accent').trim()"))
+    ck.check("G10b 面板底色/文字色同样走宿主令牌",
+             ev("() => { var s = getComputedStyle("
+                "document.querySelector('.asb-panel')); "
+                "return !!s.getPropertyValue('--xz-bg').trim() && "
+                "!!s.getPropertyValue('--xz-txt').trim(); }"))
+    # 教学/代理浮层是 position:fixed 直接挂 body 的，桥若只套在小智容器上就漏
+    ck.check("G10c 直挂 body 的浮层（教学气泡等）同样拿得到令牌",
+             ev("() => { var v = getComputedStyle(document.body)"
+                ".getPropertyValue('--xz-accent').trim(); "
+                "return !!v && v.toLowerCase() !== '#4f6ef7'; }"))
+    ev("() => { localStorage.removeItem('asb_panel_v1'); }")
 
 
 def run_ws(page, ck: Checker) -> None:
