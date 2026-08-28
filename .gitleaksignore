@@ -21,3 +21,94 @@ engines\chengjie\config\config.example.yaml:generic-api-key:232
 # 供搜索引擎校验），按设计就不是机密；源码注释已写明轮换方式。
 website/lib/seo.ts:generic-api-key:77
 website\lib\seo.ts:generic-api-key:77
+
+# ══════════════════════════════════════════════════════════════════════
+# 2026-08-28 第二批：CI 首次真跑 gitleaks dir . 扫全仓，报 30 处。
+# 我此前只扫了几个目录就下结论「只有 3 处」—— 验证面不够，这批是补齐。
+# 其中 **5 处是真凭据**（docs/P0实施记录.md 与 docs/维护窗口执行手册.md 里
+# 上次安全加固轮换出的新密钥值，文档自己写着「用后删除」但没删），已按行脱敏，
+# **不列入本忽略清单** —— 那几个值必须视为已泄露并再次轮换。
+# 下面 29 条是逐条看过的误报，按类分组；指纹带行号，行变了会自动失效需重看。
+# ══════════════════════════════════════════════════════════════════════
+#
+# ── 前端 localStorage / sessionStorage 键名常量（值是 'aitr.*' 之类的键路径，非凭据）（8 条）
+engines/chengjie/desktop/renderer/shared/copilot/components/cp-voice.js:generic-api-key:12
+engines\chengjie\desktop\renderer\shared\copilot\components\cp-voice.js:generic-api-key:12
+engines/chengjie/shared/copilot/components/cp-voice.js:generic-api-key:12
+engines\chengjie\shared\copilot\components\cp-voice.js:generic-api-key:12
+engines/chengjie/src/web/templates/unified_inbox.html:generic-api-key:11067
+engines\chengjie\src\web\templates\unified_inbox.html:generic-api-key:11067
+engines/chengjie/src/web/templates/unified_inbox.html:generic-api-key:17164
+engines\chengjie\src\web\templates\unified_inbox.html:generic-api-key:17164
+engines/chengjie/src/web/templates/unified_inbox.html:generic-api-key:17711
+engines\chengjie\src\web\templates\unified_inbox.html:generic-api-key:17711
+engines/chengjie/src/web/templates/unified_inbox.html:generic-api-key:18063
+engines\chengjie\src\web\templates\unified_inbox.html:generic-api-key:18063
+engines/chengjie/src/web/templates/workspace_base.html:generic-api-key:2104
+engines\chengjie\src\web\templates\workspace_base.html:generic-api-key:2104
+engines/chengjie/src/web/templates/workspace_base.html:generic-api-key:3736
+engines\chengjie\src\web\templates\workspace_base.html:generic-api-key:3736
+#
+# ── 测试夹具里的合成 api_hash / chat_key / token（值是 'abc123'、'test-*' 之类）（8 条）
+engines/chengjie/tests/test_baseline_reconcile.py:generic-api-key:29
+engines\chengjie\tests\test_baseline_reconcile.py:generic-api-key:29
+engines/chengjie/tests/test_config_check.py:generic-api-key:174
+engines\chengjie\tests\test_config_check.py:generic-api-key:174
+engines/chengjie/tests/test_config_init.py:generic-api-key:22
+engines\chengjie\tests\test_config_init.py:generic-api-key:22
+engines/chengjie/tests/test_desktop_boot_gate.py:generic-api-key:36
+engines\chengjie\tests\test_desktop_boot_gate.py:generic-api-key:36
+engines/chengjie/tests/test_reply_settings.py:generic-api-key:969
+engines\chengjie\tests\test_reply_settings.py:generic-api-key:969
+engines/chengjie/tests/test_telemetry_beacon.py:generic-api-key:25
+engines\chengjie\tests\test_telemetry_beacon.py:generic-api-key:25
+engines/chengjie/tests/test_unified_inbox_stage1.py:generic-api-key:1993
+engines\chengjie\tests\test_unified_inbox_stage1.py:generic-api-key:1993
+engines/chengjie/validate_credentials.py:generic-api-key:152
+engines\chengjie\validate_credentials.py:generic-api-key:152
+#
+# ── 字符集 / 哈希常量（_TOKEN_ALPHABET 是 ID 字母表；_LEAKED_SECRET_SHA256 是被泄露值的哈希，用于检测而非凭据本身）（2 条）
+engines/chengjie/src/contacts/ids.py:generic-api-key:13
+engines\chengjie\src\contacts\ids.py:generic-api-key:13
+engines/huoke/scripts/ops/config_doctor.py:generic-api-key:42
+engines\huoke\scripts\ops\config_doctor.py:generic-api-key:42
+#
+# ── 文档/示例里的占位 app_secret、api_hash（讲解用，非真值）（7 条）
+docs/P0实施记录.md:generic-api-key:84
+docs\P0实施记录.md:generic-api-key:84
+docs/P0实施记录.md:generic-api-key:85
+docs\P0实施记录.md:generic-api-key:85
+docs/维护窗口执行手册.md:generic-api-key:81
+docs\维护窗口执行手册.md:generic-api-key:81
+docs/维护窗口执行手册.md:generic-api-key:204
+docs\维护窗口执行手册.md:generic-api-key:204
+docs/维护窗口执行手册.md:generic-api-key:205
+docs\维护窗口执行手册.md:generic-api-key:205
+engines/chengjie/docs/facebook_messenger_integration.md:generic-api-key:76
+engines\chengjie\docs\facebook_messenger_integration.md:generic-api-key:76
+engines/chengjie/group-reply-modification-plan.md:generic-api-key:42
+engines\chengjie\group-reply-modification-plan.md:generic-api-key:42
+#
+# ── 按协议必须公开的 key（IndexNow 要求 /<key>.txt 可匿名读取）（1 条）
+website/lib/seo.ts:generic-api-key:73
+website\lib\seo.ts:generic-api-key:73
+
+#    ('engines/avatarhub/tools/claims_lint.py', 'generic-api-key', 54, 'TED_MODEL_TOKEN = "REDACTED"')
+#    ('engines/chengjie/src/integrations/facebook_webhook.py', 'generic-api-key', 24, 'app_secret: "REDACTED"')
+#    ('website/scripts/assert-realtime-link-testdata.mjs', 'generic-api-key', 93, "source_key='REDACTED'")
+#    ('website/scripts/assert-realtime-link-testdata.mjs', 'generic-api-key', 129, "source_key='REDACTED'")
+#
+# ── 逐条看过的其余误报（4 条）
+#   （下面刻意只描述不复刻原值：注释里原样引用被豁免的字符串，会让本文件自己被扫中——
+#     首版就这么中过一次，与仓库规则「注释里不能出现你正要禁掉的那个字面序列」同一个坑。）
+#   claims_lint.py 第 54 行     常量名带 MODEL_TOKEN，值是一个被禁用的模型名，属检测词不是凭据
+#   facebook_webhook.py 第 24 行 docstring 里的配置格式示例，值是连续字母数字的一眼占位
+#   assert-realtime-link 第 93/129 行  冒烟测试用的订单业务编号，非凭据
+engines/avatarhub/tools/claims_lint.py:generic-api-key:54
+engines\avatarhub\tools\claims_lint.py:generic-api-key:54
+engines/chengjie/src/integrations/facebook_webhook.py:generic-api-key:24
+engines\chengjie\src\integrations\facebook_webhook.py:generic-api-key:24
+website/scripts/assert-realtime-link-testdata.mjs:generic-api-key:93
+website\scripts\assert-realtime-link-testdata.mjs:generic-api-key:93
+website/scripts/assert-realtime-link-testdata.mjs:generic-api-key:129
+website\scripts\assert-realtime-link-testdata.mjs:generic-api-key:129

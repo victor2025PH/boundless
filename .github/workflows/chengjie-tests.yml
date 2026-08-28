@@ -139,4 +139,6 @@ jobs:
 
       - name: Scan working tree for secrets
         # checkout 出来的就是被跟踪文件集合，正是「有没有密钥入库」要问的范围。
-        run: gitleaks dir . --no-banner --redact --exit-code 1
+        # `--verbose` 不能省：2026-08-28 首跑报 "leaks found: 30" 就没了下文，
+        # 日志里只有一个计数，谁都没法据此定位——红得不可诊断等于没红。
+        run: gitleaks dir . --no-banner --redact --verbose --exit-code 1

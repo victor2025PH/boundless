@@ -27,3 +27,6 @@ lunar_python>=1.4.0  # tests/test_bazi_*.py 八字排盘（纯 Python 零依赖�
 pyflakes>=3.0.0  # tests/test_python_undefined_names.py 未定义名(F821)棘轮门禁（纯 Python 63KB 无配置；缺失时该门禁自行 SKIP，不红）
 pytest-timeout>=2.1.0  # CI 挂起保护。本地 scripts/regression.ps1 一直带 --timeout=90，CI 却没装过这个包
                        # → 任一 worker 卡住只能烧满 job 超时再给一个不说明原因的失败（2026-08-27 P0 补齐）
+numpy>=1.26  # tests/test_reference_audit.py 顶层 import numpy。本机开发环境自带，CI 精简环境没有
+             # → 2026-08-28 CI 首次真跑即 collect 中断（1 error），整个回归一条都没跑。
+             # 这正是「工作流放错目录、从未执行」被掩盖住的那类缺口。
