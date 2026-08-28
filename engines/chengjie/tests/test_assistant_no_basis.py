@@ -156,7 +156,9 @@ def test_no_basis_records_answered_false():
     assert len(block) == 2, "找不到哨兵处置分支"
     seg = block[1][:900]
     assert "answered=False" in seg, "哨兵分支仍记 answered=True，自答率会继续骗人"
-    assert "record_query(answered=False" in seg, "stats 未同步记未答"
+    # 用「调用 + 参数」两段判，别钉整串字面量：2026-08-29 这行因为要多带
+    # refusal 分型而换行了，钉字面量只会在下次换行时再红一次。
+    assert "record_query(" in seg and "answered=False" in seg, "stats 未同步记未答"
     assert "asb.a.no_hit" in seg, "未给用户诚实说明（复用零命中同一文案）"
 
 
@@ -221,13 +223,16 @@ def test_end_to_end_records_refusal_kind_and_health_surfaces_it(
 
 
 def test_end_to_end_zero_hit_counts_as_no_hit(monkeypatch, tmp_path):
-    """检索零命中要记成 no_hit（补语料），别和哨兵混成一个数。
+    """检索零命中且**连产品事实卡也答不了** → 记成 no_hit（补语料）。
 
-    两者处置完全不同：no_hit 是语料缺条目，no_basis 是条目沾边但答不了。
+    ⚠ 前提在 2026-08-29 变了：零命中不再自动等于「未答」——它先转产品事实卡/
+    通用知识链，那一轮很可能真的答出来（那正是「支持抖音吗」该走的路）。所以
+    要测 no_hit，假 LLM 必须回 NO_BASIS，代表「这条链也答不了」。
+    分型语义本身不变：answered=0 且没有 top_score（零命中没得可传）＝ no_hit。
     """
-    from tests.test_assistant_routes import _client, _mk_app
+    from tests.test_assistant_routes import _FakeAI, _client, _mk_app
 
-    app, *_ = _mk_app(monkeypatch, tmp_path)
+    app, *_ = _mk_app(monkeypatch, tmp_path, fake_ai=_FakeAI(answer="NO_BASIS"))
     c = _client(app)
     # 纯拉丁乱词 → BM25 零命中（与 test_assistant_core 同款探针）
     c.post("/api/assistant/query",
@@ -282,11 +287,16 @@ def test_stats_refusal_kind_is_backward_compatible():
     assert "assistant_miss_no_hit_total 1" in prom
 
 
-def test_route_tags_both_refusal_sites():
-    """两个拒答点必须各自标明类型——漏一个就把两种成因混成一个数。"""
+def test_route_tags_both_refusal_kinds():
+    """两种拒答成因都必须被标出来——漏一个就把它们混成一个数。
+
+    2026-08-29 起两条路合流成一处 record（零命中先走产品事实卡链），分型由
+    `refusal="no_basis" if strong else "no_hit"` 现算，所以这里只钉「两个值都
+    在」；「跟随 strong」由 test_refusal_kind_follows_retrieval 单独钉死。
+    """
     src = ROUTES.read_text(encoding="utf-8")
-    assert 'refusal="no_hit"' in src, "零命中分支未标 refusal 类型"
-    assert 'refusal="no_basis"' in src, "哨兵分支未标 refusal 类型"
+    assert '"no_hit"' in src, "零命中成因未标 refusal 类型"
+    assert '"no_basis"' in src, "哨兵成因未标 refusal 类型"
 
 
 # ── 5. 拒答分型的可观测性（实施74 P5）──────────────────────────────────────
@@ -319,30 +329,33 @@ def test_stats_split_is_derived_from_top_score(tmp_path):
     assert s["no_basis_share"] == 0.5
 
 
-def test_zero_hit_branch_must_not_pass_top_score():
-    """路由的零命中分支**不得**传 top_score——传了分型就静默反转。
+def test_top_score_is_bound_to_retrieval_not_to_branch():
+    """top_score **只在检索真命中时**才进记账——分型语义的唯一支点。
 
-    这是零迁移方案唯一的脆弱点：两个 record() 调用点的参数差异就是全部语义，
-    而写错不会报错、不会变红，只会让看板上的数字互换。
+    ⚠ 2026-08-29 起实现形态变了（原先是「零命中分支 vs 哨兵分支」两处 record，
+    各自参数不同）：零命中不再直接拒答，而是转入产品事实卡/通用知识链，于是
+    两条路合流成一处 record，靠 `if strong:` 决定带不带 top_score。
+    语义完全没变（`answered=0 且 top_score>0` ＝哨兵；`<=0` ＝零命中），
+    但断言必须跟着钉新形态——否则这条门禁只是在找一段已经不存在的文本。
     """
     src = ROUTES.read_text(encoding="utf-8")
-    head, sep, tail = src.partition("if not strong:")
-    assert sep, "找不到零命中分支"
-    branch = tail[:600]
-    assert "answered=False" in branch, "零命中分支语义变了"
-    assert "top_score" not in branch, (
-        "零命中分支传了 top_score——它会被算成「哨兵拒答」，"
-        "看板上零命中与没依据两个数会对调（且不会有任何报错）"
+    head, sep, tail = src.partition("_rec: Dict[str, Any] = {")
+    assert sep, "找不到统一记账字典 _rec（记账形态又变了？）"
+    seg = tail[:400]
+    assert "if strong:" in seg and '_rec["top_score"]' in seg, (
+        "top_score 未与 strong 绑定——docless 轮压根没有检索命中，"
+        "给它记一个分数会让零命中被算成「哨兵拒答」，看板两个数对调"
     )
+    init = seg.split("if strong:", 1)[0]
+    assert "top_score" not in init, "top_score 进了无条件初始化，分型会永远反转"
 
 
-def test_sentinel_branch_must_pass_top_score():
+def test_refusal_kind_follows_retrieval():
+    """拒答归因必须跟随 strong：命中了才叫 no_basis，没命中就是 no_hit。"""
     src = ROUTES.read_text(encoding="utf-8")
-    head, sep, tail = src.partition("if _is_no_basis(answer):")
-    assert sep, "找不到哨兵分支"
-    branch = tail[:600]
-    assert "answered=False" in branch and "top_score=" in branch, (
-        "哨兵分支未带 top_score——它会被算成「零命中」，运营会去补根本不缺的语料"
+    assert 'refusal="no_basis" if strong else "no_hit"' in src, (
+        "拒答分型未跟随检索结果——两种成因会混成一个数，"
+        "运营分不清该补语料（no_hit）还是该改检索/条目（no_basis）"
     )
 
 

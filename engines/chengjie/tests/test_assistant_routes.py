@@ -190,18 +190,81 @@ def test_query_hit_streams_answer_and_logs(monkeypatch, tmp_path):
     assert stats.dump()["answered"] == 1
 
 
-def test_query_no_hit_honest_and_no_llm_call(monkeypatch, tmp_path):
+def test_query_no_hit_falls_through_to_product_facts(monkeypatch, tmp_path):
+    """零命中**不再直接拒答**，改走「产品事实卡 + 通用知识」链（2026-08-29 P0）。
+
+    行为变更的由来（老板实录）：连问「怎么导出所有客户的手机号」「支持抖音吗」
+    得到**逐字相同**的一句「没找到可靠依据」——而后者的答案在系统里是存在的，
+    只是躺在 config 的 system_prompt 里、从没进过 help_kb（实测「支持抖音吗」
+    32.90 分命中「怎么给客户发语音消息」）。
+
+    ⚠ 本用例**取代**了旧的 `test_query_no_hit_honest_and_no_llm_call`。旧断言是
+    `ai.calls == 0`「零命中绝不调 LLM 裸编」——那条**意图**（不许编造产品功能）
+    必须继续成立，只是保障手段从「不调用」换成了「调用但给足约束」：产品事实卡
+    兜底 + 红线 + NO_BASIS 出路。所以下面逐条钉的是**新的保障**，不是放行。
+    """
     app, ai, log, _kb, stats = _mk_app(monkeypatch, tmp_path)
     c = _client(app)
     r = c.post("/api/assistant/query",
                json={"q": "qqxyzzy foobar", "page": "/workspace"})
     evs = _stream_events(r)
     assert [e["ev"] for e in evs] == ["meta", "delta", "done"]
-    assert evs[0]["sources"] == []
-    assert evs[2]["answered"] is False
-    assert ai.calls == 0  # 零命中绝不调 LLM 裸编
+    assert evs[0]["sources"] == []          # 确实零命中
+    assert ai.calls == 1                    # 行为变更：这一轮要问 LLM
+    prompt = ai.last_kwargs["user_message"]
+    # 保障① 产品事实卡在场（能力边界问题的唯一依据来源）
+    assert "产品事实" in prompt and "Telegram" in prompt
+    # 保障② 明确列出不支持的平台——「说不支持」和「不知道」是两回事
+    assert "抖音" in prompt
+    # 保障③ 红线仍在：不许拿通用知识去猜产品行为
+    assert "绝不编造产品功能" in prompt
+    # 保障④ 拒答出路仍在（产品问题且真没依据时还能 NO_BASIS）
+    assert "NO_BASIS" in prompt
+    # 保障⑤ 通用问答要自报家门，否则用户分不清产品承诺与模型闲聊
+    assert "GENERAL" in prompt
+
+
+def test_query_no_hit_sentinel_still_refuses(monkeypatch, tmp_path):
+    """产品问题 + 事实卡也答不了 → 仍然诚实拒答（拒答能力没有被削弱）。"""
+    app, ai, log, _kb, stats = _mk_app(
+        monkeypatch, tmp_path, fake_ai=_FakeAI("NO_BASIS"))
+    c = _client(app)
+    r = c.post("/api/assistant/query",
+               json={"q": "qqxyzzy foobar", "page": "/workspace"})
+    evs = _stream_events(r)
+    done = evs[-1]
+    assert done["answered"] is False and done.get("basis") == "none"
+    assert "NO_BASIS" not in evs[-2]["text"]
     assert log.miss_list(days=1)
     assert stats.dump()["miss"] == 1
+
+
+def test_query_general_answer_is_labelled_and_prefix_stripped(monkeypatch,
+                                                              tmp_path):
+    """通用知识作答：basis=general 且 GENERAL 前缀不许漏给用户看。
+
+    标注是硬要求——不标的话，模型随口说的会被当成产品承诺（销售会拿去报价）。
+    """
+    app, ai, log, _kb, stats = _mk_app(
+        monkeypatch, tmp_path, fake_ai=_FakeAI("GENERAL: 这是通用知识回答。"))
+    c = _client(app)
+    r = c.post("/api/assistant/query",
+               json={"q": "帮我写一句问候语", "page": "/workspace"})
+    evs = _stream_events(r)
+    done = evs[-1]
+    assert done["answered"] is True and done.get("basis") == "general"
+    body = "".join(e["text"] for e in evs if e["ev"] == "delta")
+    assert "这是通用知识回答" in body
+    assert "GENERAL" not in body      # 前缀是给系统看的信号，不是内容
+
+
+def test_query_hit_keeps_doc_basis(monkeypatch, tmp_path):
+    """有文档命中的老路径不受影响，basis 标 doc（回归钉）。"""
+    app, ai, *_ = _mk_app(monkeypatch, tmp_path)
+    c = _client(app)
+    r = c.post("/api/assistant/query", json={"q": "怎么发语音"})
+    done = _stream_events(r)[-1]
+    assert done["answered"] is True and done.get("basis") == "doc"
 
 
 def test_query_rate_limited_429(monkeypatch, tmp_path):

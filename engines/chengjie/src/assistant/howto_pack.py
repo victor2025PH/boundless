@@ -17,6 +17,29 @@ from __future__ import annotations
 # (slug, title, title_en, content, content_en, keywords, path)
 _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
     (
+        "getting-started",
+        "新手上手：这套系统怎么用",
+        "Getting started: how to use this system",
+        "整体主线是三步：①「渠道」页把账号接进来（扫码或登录，各平台各自一页）；"
+        "② 在「坐席工作台」处理会话——AI 会按人设自动拟稿或全自动回复，需要人的"
+        "会话才落到你手里；③「人设工作室」调 AI 的说话风格与自动化档位。"
+        "常用的还有：「运营总览」看整体数据，「知识库」教 AI 回答业务问题，"
+        "「报障」提交问题。第一次用建议先接一个账号跑通，再调人设。",
+        "Three steps: (1) connect an account on the Channels page (QR or login, "
+        "one page per platform); (2) work conversations in the Agent Workspace "
+        "— AI drafts or replies automatically per persona, only what needs a "
+        "human reaches you; (3) tune tone and automation level in Persona "
+        "Studio. Also useful: Ops Overview for metrics, Knowledge Base to teach "
+        "the AI, and Report for issues. First time: connect one account "
+        "end-to-end before tuning personas.",
+        # 词表刻意**不含**「怎么」这类零区分度疑问词：v1 放了「怎么用/怎么使用/
+        # 怎么操作」，把「怎么」的词频抬了三倍，本条随即变成所有「怎么做 X」问题
+        # 的万能吸铁石——负样本「红烧肉怎么做才好吃」被从 32.33 拉到 41.28 命中
+        # 本条，诚实拒答率 7/15 掉到 6/15。只留高区分度词。
+        "上手 入门 新手 主线 总览 流程 第一次 从头 快速开始 getting started onboarding",
+        "/workspace",
+    ),
+    (
         "send-voice",
         "怎么给客户发语音消息",
         "How to send a voice message",

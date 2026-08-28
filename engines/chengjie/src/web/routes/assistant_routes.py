@@ -132,6 +132,86 @@ def _is_no_basis(text: str) -> bool:
     return str(text or "").lstrip().upper().startswith(_NO_BASIS)
 
 
+# 第二枚哨兵（2026-08-29 P0，老板拍板「不能只调用帮助库」）：无文档依据时这一
+# 轮仍然作答，但必须让用户知道**依据是什么**。LLM 自报家门：以 GENERAL 开头＝
+# 「这不是产品文档内容，是通用知识」；不带前缀＝用产品事实卡答的。
+# 为什么用哨兵而不是再调一次 LLM 分类：首段缓冲机制（head_buf）本就已经在等
+# NO_BASIS，多认一个前缀是零成本；多一次往返则要给每条问答加一整个 RTT。
+_GENERAL = "GENERAL"
+
+
+def _is_general(text: str) -> bool:
+    """LLM 是否自报「这是通用知识，不是产品文档内容」。"""
+    return str(text or "").lstrip().upper().startswith(_GENERAL)
+
+
+def _strip_general(text: str) -> str:
+    """剥掉 GENERAL 前缀（含其后的冒号/空白），只留正文给用户看。"""
+    s = str(text or "").lstrip()
+    if not _is_general(s):
+        return text
+    s = s[len(_GENERAL):]
+    return s.lstrip(" :：\t\r\n")
+
+
+def build_docless_prompt(q: str, ctx_block: str, hist_block: str,
+                         lang: str = "zh") -> str:
+    """帮助库零命中时的 prompt：产品事实卡兜底 + 通用知识放行 + 拒答哨兵。
+
+    三条出路互斥且必须自报家门，否则用户分不清「这是产品承诺」还是「模型随口
+    说的」——那比不回答更危险（销售会拿去当承诺）。红线仍是**绝不编造产品功能**：
+    事实卡没写、文档也没有的产品问题一律走 NO_BASIS，不许拿通用知识去猜产品。
+
+    第 2 条的判据是**「是在问产品本身，还是让我帮你做事」**，不是「话题是否与
+    产品相关」——首版用后者，结果「帮我写一句给客户的问候语」因为带了「客户」
+    被判成产品问题拒答（真机实测）。
+    """
+    from src.assistant.product_facts import product_facts_block
+
+    facts = product_facts_block(lang)
+    if str(lang or "").lower().startswith("en"):
+        return (
+            "You are 小智, the in-product assistant of this customer-service "
+            "system. The help corpus returned NOTHING for this question, so "
+            "follow this decision order strictly:\n"
+            "1) If the PRODUCT FACTS below answer it (capability/boundary "
+            "questions such as which platforms are supported) — answer from "
+            "them, concisely.\n"
+            f"2) If it is NOT asking about this product's features, settings, "
+            f"operations or data — e.g. write me something, translate, explain "
+            f"a concept, give advice, chit-chat — then **even if the topic "
+            f"relates to support/sales/customers it counts as general**: "
+            f"answer helpfully but start your reply with `{_GENERAL}` on its "
+            "own, so the UI can label it as general knowledge.\n"
+            f"3) ONLY when it really asks whether THIS product can do "
+            f"something, or how to operate it, and neither the facts nor the "
+            f"docs cover it — output exactly `{_NO_BASIS}` and nothing else.\n"
+            "NEVER invent product features. Do not use general knowledge to "
+            "guess how THIS product behaves. But do not mistake a "
+            "'write something for me' request for a product question.\n\n"
+            f"PRODUCT FACTS:\n{facts}\n\n"
+            f"User context:\n{ctx_block}{hist_block}\n\n"
+            f"User question: {q}"
+        )
+    return (
+        "你是本客服系统的产品内置助手「小智」。这个问题在帮助库里**零命中**，"
+        "请严格按下面的顺序决定怎么答：\n"
+        "1）如果下面的【产品事实】能回答它（如「支持哪些平台」这类能力边界"
+        "问题）——就用事实卡回答，简洁给结论。\n"
+        f"2）如果它**不是在问本产品的功能、设置、操作或数据**——例如让你帮忙"
+        "写文案、翻译、解释概念、出主意、闲聊、常识问答——那么**即使话题与"
+        "客服/销售/客户有关，也算通用问题**：正常热心地回答，但**回复开头单独"
+        f"写 `{_GENERAL}`**，好让界面标注这是通用知识而非产品文档。\n"
+        f"3）只有当它确实在问**本产品**能不能做某事、或该怎么操作，而事实卡与"
+        f"文档都没有覆盖时——才只输出 `{_NO_BASIS}`，别写其他任何内容。\n"
+        "**绝不编造产品功能**；不要用通用知识去猜本产品的行为。但也不要把"
+        "「帮我写点什么」这类请求误判成产品问题而拒答——那类请求你答得了。\n\n"
+        f"【产品事实】\n{facts}\n\n"
+        f"用户上下文：\n{ctx_block}{hist_block}\n\n"
+        f"用户问题：{q}"
+    )
+
+
 # SSE 注释行（`:` 开头）：不是事件，前端 readNdjson 的 handleLine 直接忽略，
 # 但它让连接上一直有字节流动 —— 故加心跳**零前端改动**。
 _SSE_KEEPALIVE = ": ka\n\n"
@@ -210,6 +290,15 @@ def assistant_llm_extra_body(base_url: str, model: str, *,
     if ("deepseek" in base and model_l.startswith("deepseek-v4")
             and not reasoning):
         return {"thinking": {"type": "disabled"}}
+    # vLLM 上的 Qwen3 系（本机 LAN 落点 173:8001 chatx=Qwen3.6-27B-abl）**默认
+    # 开 thinking**：正文全进 reasoning、message.content 恒为 null，预算还被思考
+    # 吃光（finish_reason=length）。2026-08-28 这个坑已经让 LAN 翻译兜底静默失效
+    # 过一次；docless 轮改打这个端点，必须同款关掉，否则用户看到的是空回答。
+    # 键名与 translation_engines / voice_colloquial_llm / ai_client 三处同源。
+    if not reasoning and (":8001" in base or "vllm" in base
+                          or model_l.startswith("chatx")
+                          or model_l.startswith("qwen3")):
+        return {"chat_template_kwargs": {"enable_thinking": False}}
     return {}
 
 
@@ -468,21 +557,16 @@ def register_assistant_routes(app, ctx) -> None:
                             "report_hint": bool(report_hint or not strong)})
                 stage = "meta_sent"
 
-                if not strong:
-                    # 零命中：诚实说不知道 + 报障入口，绝不让 LLM 裸编
-                    latency = int((time.time() - t0) * 1000)
-                    qa_id = get_qa_log().record(
-                        user_id=uid, role=role, page=page, q=q,
-                        answered=False, latency_ms=latency,
-                    )
-                    stats.record_query(answered=False, latency_ms=latency,
-                                       refusal="no_hit")
-                    yield _sse({"ev": "delta",
-                                "text": tr(request, "asb.a.no_hit")})
-                    yield _sse({"ev": "done", "ms": latency, "qa_id": qa_id,
-                                "answered": False})
-                    return
-
+                # 零命中**不再直接拒答**（2026-08-29 P0，老板拍板：「每个问题不能
+                # 只调用帮助，要和 deepseek/硅基的接口结合处理」）。旧行为把三种
+                # 完全不同的情形压成同一句「没找到可靠依据」：
+                #   ① 产品能力边界问题（支持抖音吗）——答案在产品事实卡里，**有**；
+                #   ② 与产品无关的通用问题（帮我写句话）——通用模型答得了；
+                #   ③ 产品问题且确实没依据——这才该拒答。
+                # 实录代价：连问两个不同问题得到逐字相同的回复，用户判定「AI 没用」。
+                # 现在零命中转入 docless 链，由 LLM 自报 GENERAL/NO_BASIS 哨兵分流，
+                # 前端按 basis 标注依据来源——**答什么** 和 **凭什么答** 分开说清楚。
+                docless = not strong
                 ctx_block = build_context_block(
                     page=page, role=role, lang=lang,
                     ui_build=str(data.get("ui_build") or "")[:40],
@@ -514,7 +598,9 @@ def register_assistant_routes(app, ctx) -> None:
                         hist_block = ("\n\n最近对话（仅供理解上下文与指代；"
                                       "事实仍以参考条目为准）：\n"
                                       + "\n".join(pair_lines))
-                if lang == "en":
+                if docless:
+                    prompt = build_docless_prompt(q, ctx_block, hist_block, lang)
+                elif lang == "en":
                     prompt = (
                         "You are the in-product help assistant for this "
                         "customer-service system. Answer ONLY product-usage "
@@ -561,6 +647,17 @@ def register_assistant_routes(app, ctx) -> None:
                 max_tok = max(256, int(qcfg.get("max_tokens", 8000) or 8000))
                 llm_cfg = (qcfg.get("llm")
                            if isinstance(qcfg.get("llm"), dict) else {})
+                # docless 轮走**局域网无审查模型**（老板 8/29 指定）：它既要答
+                # 通用问题（云端模型对某些提问会打太极），又要省云端 token——
+                # 这一轮本就没有文档依据，用不着云端的强检索理解力。
+                # 缺省继承 ai.fallback（173:8001 chatx，OpenAI 兼容），所以不配
+                # general_llm 也能工作；显式配置优先。
+                if docless:
+                    _gen_cfg = qcfg.get("general_llm")
+                    if not isinstance(_gen_cfg, dict) or not _gen_cfg.get("base_url"):
+                        _fb = (_cfg().get("ai") or {}).get("fallback")
+                        _gen_cfg = _fb if isinstance(_fb, dict) else {}
+                    llm_cfg = _gen_cfg or llm_cfg
                 answer = ""
                 streamed = False
                 # 首段缓冲：攒够哨兵长度才决定放不放行——命中哨兵时用户
@@ -589,12 +686,16 @@ def register_assistant_routes(app, ctx) -> None:
                                 break     # 自认没依据：停流，不吐任何内容
                             gate_open = True
                             streamed = True
-                            yield _sse({"ev": "delta", "text": head_buf})
+                            # 剥 GENERAL 前缀：它是给系统看的分层信号，不是给
+                            # 用户看的内容（原样吐出去=回答开头挂着个英文单词）。
+                            yield _sse({"ev": "delta",
+                                        "text": _strip_general(head_buf)})
                         # 回答比哨兵还短（极少见）：出循环时仍未开闸，补吐
                         if not gate_open and head_buf and not _is_no_basis(head_buf):
                             gate_open = True
                             streamed = True
-                            yield _sse({"ev": "delta", "text": head_buf})
+                            yield _sse({"ev": "delta",
+                                        "text": _strip_general(head_buf)})
                     except Exception as _exc:
                         # 认证类失败要单独点名：它不是「网络抖动」而是**配置错了**
                         # （三键分叉），文案直接给出复查位置，省掉下一次的排查。
@@ -638,33 +739,46 @@ def register_assistant_routes(app, ctx) -> None:
                         raise RuntimeError("empty answer")
                     # 非流式路径同样先判后吐（这里还一个字都没发出去）
                     if not _is_no_basis(answer):
-                        yield _sse({"ev": "delta", "text": answer})
+                        yield _sse({"ev": "delta",
+                                    "text": _strip_general(answer)})
                 latency = int((time.time() - t0) * 1000)
-                # LLM 自认没依据 → 与「零命中」同一出口：诚实说明 + 报障入口，
-                # 且 answered=False 让 qa_log / 自答率 / ops「未答清单」记真话。
+                # top_score 与 **strong 绑定**（不是与分支绑定）：docless 轮压根
+                # 没有检索命中，硬取 strong[0] 会 IndexError。语义上也只有真检索
+                # 到东西才有「最高分」这个数，记 0 会污染自答率的分位分析。
+                _top = float(strong[0]["score"]) if strong else None
+                _src_ids = ",".join(s["id"] for s in sources)[:800]
+                _rec: Dict[str, Any] = {
+                    "user_id": uid, "role": role, "page": page, "q": q,
+                    "latency_ms": latency,
+                }
+                if strong:
+                    _rec["top_score"] = _top
+                    _rec["sources"] = _src_ids
+                # LLM 自认没依据 → 诚实说明 + 报障入口，且 answered=False 让
+                # qa_log / 自答率 / ops「未答清单」记真话。
                 if _is_no_basis(answer):
-                    qa_id = get_qa_log().record(
-                        user_id=uid, role=role, page=page, q=q, answered=False,
-                        top_score=float(strong[0]["score"]),
-                        sources=",".join(s["id"] for s in sources)[:800],
-                        latency_ms=latency,
-                    )
-                    stats.record_query(answered=False, latency_ms=latency,
-                                       refusal="no_basis")
+                    qa_id = get_qa_log().record(answered=False, **_rec)
+                    # 拒答归因分两种：检索就没命中（no_hit）vs 命中了但 LLM 判定
+                    # 答不了（no_basis）。ops 卡靠这个分辨「该补语料」还是「语料
+                    # 有但检索/理解不对」，混成一个数就没法照单补货了。
+                    stats.record_query(
+                        answered=False, latency_ms=latency,
+                        refusal="no_basis" if strong else "no_hit")
                     yield _sse({"ev": "delta",
                                 "text": tr(request, "asb.a.no_hit")})
                     yield _sse({"ev": "done", "ms": latency, "qa_id": qa_id,
-                                "answered": False})
+                                "answered": False, "basis": "none"})
                     return
-                qa_id = get_qa_log().record(
-                    user_id=uid, role=role, page=page, q=q, answered=True,
-                    top_score=float(strong[0]["score"]),
-                    sources=",".join(s["id"] for s in sources)[:800],
-                    latency_ms=latency,
-                )
+                # 依据分层（2026-08-29）：**答什么**与**凭什么答**必须分开告诉
+                # 用户。doc＝有文档依据；product＝产品事实卡（能力边界）；
+                # general＝通用知识，不是产品文档——最后这条尤其要标，否则销售
+                # 会把模型随口说的当成产品承诺。
+                basis = ("general" if _is_general(answer)
+                         else ("product" if docless else "doc"))
+                qa_id = get_qa_log().record(answered=True, **_rec)
                 stats.record_query(answered=True, latency_ms=latency)
                 yield _sse({"ev": "done", "ms": latency, "qa_id": qa_id,
-                            "answered": True})
+                            "answered": True, "basis": basis})
             except asyncio.CancelledError:
                 # 直连流收尾/客户端断开都可能是 CancelledError（BaseException），
                 # 不接 = meta 之后静默掐流，前端只能显示「网络异常」。
