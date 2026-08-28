@@ -1796,6 +1796,14 @@ class LineProtocolWorker:
         # 网关正常关流 ~10s 一轮，故它稳步上涨＝接收链在正常工作；配
         # last_inbound_ts 长期不动即「在轮回却收不到 op」＝多半 token 该续期。
         self._recv_cycles: int = 0
+        # impl85 阶段1：拉取兜底（LINE「只出不进」修复，见 line_pull_sync 模块注释）。
+        # _sse_inbound_ts 只在 SSE 路径刷新——兜底的「SSE 活着就休眠」判据必须与
+        # _last_inbound_ts（任意路径入站，观测口径）分开，否则兜底自己拉到消息
+        # 就会把自己休眠掉。
+        self._sse_inbound_ts: float = 0.0
+        self._pull_sync: Any = None
+        self._pull_thread: Optional[threading.Thread] = None
+        self._pull_stop = threading.Event()
         # 出站媒体能力**按开关绑定**，而不是写成普通方法——因为 owns_media() 的判据就是
         # ``hasattr(worker, "send_media")``。写成普通方法即等于「LINE 恒有发媒体能力」，
         # 会把自拍/相册/克隆语音/命理 K 线在 LINE 上一次性全部放开（逆向协议发媒体有
@@ -1830,6 +1838,7 @@ class LineProtocolWorker:
         self.client = OkLine.from_tokens_file(path)
         self._loop = asyncio.get_running_loop()
         self._start_receiver()
+        self._start_pull_sync(path)
         self.state = "running"
         self.detail = ""
         # 存量名单同步刻意放在 running 之后且**不 await**：前端在线态就看编排器 state，
@@ -1973,58 +1982,80 @@ class LineProtocolWorker:
         name = str(inner.get("displayNameOverridden") or inner.get("displayName") or "").strip()
         return name, line_picture_url(str(inner.get("picturePath") or ""))
 
+    def _ingest_inbound(
+        self, message: Dict[str, Any], *, chat_key: str, is_group: bool,
+        text: str, via: str = "sse",
+    ) -> None:
+        """入站消息统一投递口（SSE 实时路径与拉取兜底路径共用，best-effort 绝不抛）。
+
+        impl85 阶段1：从 ``_on_msg`` 闭包提出来——拉取兜底（``line_pull_sync``）补拉
+        到的消息必须与 SSE 路径走**同一条**落库/身份解析/媒体/自动回复链，否则两条
+        路径行为分叉（比如兜底的消息没有头像/不触发自动回复）比收不到更难排查。
+        """
+        try:
+            # B98 入站活性戳：收到任何一条 op（含群/非文本）即刷新——它证明的是
+            # 「接收链还在真收东西」，与「私聊入站是否落库」是两个层次，放在最前。
+            self._last_inbound_ts = time.time()
+            self._inbound_count += 1
+            if via == "sse":
+                # 兜底的休眠判据只认 SSE 真送到的 op（见 __init__ 注释）
+                self._sse_inbound_ts = self._last_inbound_ts
+            if not chat_key:
+                return
+            from src.integrations.protocol_bridge import (
+                emit_incoming, make_message, maybe_auto_reply,
+            )
+            # 私聊：按需向 LINE 拉发送者显示名+头像（getContactsV2 同一次调用免费取头像，
+            # per-peer 缓存）——修「LINE 私聊只显示裸 mid + 无头像」。查的是**对方** mid，
+            # 天然规避「误标成本账号名」。obs 直链稳定 → 直接落库 avatar_url 由前端渲染。
+            peer_name, peer_avatar = ("", "") if is_group else self._resolve_peer_identity(chat_key)
+            msg_id = str((message or {}).get("id") or "")
+            if msg_id:
+                # 记在下载之前：下载可能耗时甚至失败，但已读回执只需要这个 id。
+                # 上界＝账号真实会话数（每条 ~40B）；仍设个天花板防异常膨胀。
+                if len(self._last_in_msg_id) > 2000:
+                    self._last_in_msg_id.clear()
+                self._last_in_msg_id[chat_key] = msg_id
+            media_type, media_ref = self._inbound_media(message, is_group=is_group)
+            if media_type == "sticker" and not media_ref and not str(text).strip():
+                # 贴纸图没下来（CDN 变更/动图/网络）→ 退到贴纸自带文字。用 A 线同款
+                # ``[表情] 语义`` 口径，inbound_enrich 的表情块解析可直接吃。
+                from src.integrations.line_media import sticker_text_hint
+                _hint = sticker_text_hint(message or {})
+                text = f"[表情] {_hint}" if _hint else "[表情]"
+            if not str(text).strip() and not media_type and (message or {}).get("chunks"):
+                # 拉取路径解不开的 Letter-Sealed 消息：宁可占位也不静默丢——
+                # 本修复的对象就是「消息没到工作台」。
+                text = "[消息]"
+            payload = make_message(
+                platform="line", account_id=self.account_id, chat_key=chat_key,
+                name=peer_name, avatar_url=peer_avatar, text=str(text),
+                msg_id=msg_id,
+                media_type=media_type, media_ref=media_ref,
+                direction="in")
+            if is_group:
+                payload["chat_type"] = "group"
+            emit_incoming(payload)
+            if not is_group and self._loop is not None:
+                asyncio.run_coroutine_threadsafe(maybe_auto_reply(payload), self._loop)
+        except Exception:
+            logger.debug("[line-worker] inbound 推送失败 via=%s", via, exc_info=True)
+
     def _start_receiver(self) -> None:
         """后台 daemon 线程跑 okline Bot：收到消息 → 落库 + 自动回复（best-effort）。"""
         from okline import Bot
-        from src.integrations.protocol_bridge import (
-            emit_incoming, make_message, maybe_auto_reply,
-        )
         account_id = self.account_id
         client = self.client
-        loop = self._loop
         bot = Bot(client)
 
         @bot.on_message
         def _on_msg(ctx: Any) -> None:  # noqa: ANN401
             try:
-                # B98 入站活性戳：收到任何一条 op（含群/非文本）即刷新——它证明的是
-                # 「接收链还在真收东西」，与「私聊入站是否落库」是两个层次，放在最前。
-                self._last_inbound_ts = time.time()
-                self._inbound_count += 1
-                text = ctx.text or ""
                 is_group = bool(ctx.is_group)
                 chat_key = str((ctx.to if is_group else ctx.sender) or "")
-                if not chat_key:
-                    return
-                # 私聊：按需向 LINE 拉发送者显示名+头像（getContactsV2 同一次调用免费取头像，
-                # per-peer 缓存）——修「LINE 私聊只显示裸 mid + 无头像」。查的是**对方** mid，
-                # 天然规避「误标成本账号名」。obs 直链稳定 → 直接落库 avatar_url 由前端渲染。
-                peer_name, peer_avatar = ("", "") if is_group else self._resolve_peer_identity(chat_key)
-                msg_id = str((ctx.message or {}).get("id") or "")
-                if msg_id:
-                    # 记在下载之前：下载可能耗时甚至失败，但已读回执只需要这个 id。
-                    # 上界＝账号真实会话数（每条 ~40B）；仍设个天花板防异常膨胀。
-                    if len(self._last_in_msg_id) > 2000:
-                        self._last_in_msg_id.clear()
-                    self._last_in_msg_id[chat_key] = msg_id
-                media_type, media_ref = self._inbound_media(ctx, is_group=is_group)
-                if media_type == "sticker" and not media_ref and not str(text).strip():
-                    # 贴纸图没下来（CDN 变更/动图/网络）→ 退到贴纸自带文字。用 A 线同款
-                    # ``[表情] 语义`` 口径，inbound_enrich 的表情块解析可直接吃。
-                    from src.integrations.line_media import sticker_text_hint
-                    _hint = sticker_text_hint(ctx.message or {})
-                    text = f"[表情] {_hint}" if _hint else "[表情]"
-                payload = make_message(
-                    platform="line", account_id=account_id, chat_key=chat_key,
-                    name=peer_name, avatar_url=peer_avatar, text=str(text),
-                    msg_id=msg_id,
-                    media_type=media_type, media_ref=media_ref,
-                    direction="in")
-                if is_group:
-                    payload["chat_type"] = "group"
-                emit_incoming(payload)
-                if not is_group and loop is not None:
-                    asyncio.run_coroutine_threadsafe(maybe_auto_reply(payload), loop)
+                self._ingest_inbound(
+                    dict(ctx.message or {}), chat_key=chat_key,
+                    is_group=is_group, text=str(ctx.text or ""), via="sse")
             except Exception:
                 logger.debug("[line-worker] inbound 推送失败", exc_info=True)
 
@@ -2084,6 +2115,83 @@ class LineProtocolWorker:
         self._recv_started_ts = time.time()
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
+
+    # ── 拉取兜底（impl85 阶段1：修「LINE 只出不进」，见 line_pull_sync 模块注释） ──
+
+    def _emit_pulled(self, message: Dict[str, Any], *, chat_key: str, is_group: bool) -> None:
+        """拉取兜底 → SSE 同一条投递链（text 直接取消息体，解密已在 pull 模块做完）。"""
+        self._ingest_inbound(
+            dict(message or {}), chat_key=chat_key, is_group=is_group,
+            text=str((message or {}).get("text") or ""), via="pull")
+
+    def _start_pull_sync(self, tokens_file: str) -> None:
+        """独立 daemon 线程跑位点拉取兜底；启动失败只降级不阻断 worker。
+
+        拉取线程用**独立的 OkLine 实例**（``_sync_bootstrap`` 同款纪律：requests
+        Session 跨线程并发复用是雷区），凭据从会话文件懒加载——worker 主 client
+        刷新 token 后回写文件，拉取侧重建 client 时自动跟上。
+        """
+        try:
+            from src.integrations.line_pull_sync import (
+                LinePullSync, resolve_line_pull_cfg,
+            )
+            cfg = resolve_line_pull_cfg(self.config)
+            if not cfg.get("enabled", True):
+                logger.info("[line-worker] pull_sync 已禁用 account=%s", self.account_id)
+                return
+
+            def _factory() -> Any:
+                from okline import OkLine
+                return OkLine.from_tokens_file(tokens_file)
+
+            self._pull_stop = threading.Event()
+            self._pull_sync = LinePullSync(
+                client_factory=_factory, self_mid=self.account_id,
+                state_path=str(tokens_file) + ".pullsync.json",
+                emit=self._emit_pulled, cfg=cfg)
+            interval = float(cfg.get("interval_sec") or 20.0)
+            pull = self._pull_sync
+            stop_evt = self._pull_stop
+
+            def _run() -> None:
+                relogin_reported = False
+                while not stop_evt.wait(interval):
+                    try:
+                        res = pull.tick(sse_last_op_ts=self._sse_inbound_ts)
+                        status = str(res.get("status") or "")
+                        if status == "relogin_required" and not relogin_reported:
+                            relogin_reported = True
+                            self._report_relogin_required()
+                        elif status in ("pulled", "unchanged", "scanned"):
+                            relogin_reported = False
+                    except Exception:
+                        logger.debug("[line-worker] pull_sync tick 异常", exc_info=True)
+                try:
+                    pull.close()
+                except Exception:
+                    pass
+
+            self._pull_thread = threading.Thread(target=_run, daemon=True)
+            self._pull_thread.start()
+        except Exception:
+            logger.debug("[line-worker] pull_sync 启动失败（忽略）", exc_info=True)
+
+    def _report_relogin_required(self) -> None:
+        """LINE 登录凭据过期 → 显式告警（客户报障点名「系统没弹提醒」的缺失面）。
+
+        经 ``report_session_transition``（status=expired）接通既有告警链：
+        坐席顶栏横幅 / ops「平台会话健康」卡 / watchdog 升级提醒 / webhook。
+        """
+        detail = "LINE 登录凭据已过期，请在平台管理里重新扫码登录（收消息已受影响）"
+        self.detail = detail
+        try:
+            from src.integrations.platform_session_health import (
+                report_session_transition,
+            )
+            report_session_transition(
+                "line", self.account_id, "expired", detail=detail)
+        except Exception:
+            logger.debug("[line-worker] 会话过期上报失败（忽略）", exc_info=True)
 
     def _resolve_peer_identity(self, mid: str) -> tuple:
         """惰性解析 LINE 私聊发送者 ``(显示名, 头像 URL)``（备注名优先），per-peer 缓存、best-effort。
@@ -2164,12 +2272,15 @@ class LineProtocolWorker:
 
     # ── 媒体（2026-07-31 补齐：此前 LINE 号只能收发文字）─────────────────────────
 
-    def _inbound_media(self, ctx: Any, *, is_group: bool) -> tuple:
+    def _inbound_media(self, message: Dict[str, Any], *, is_group: bool) -> tuple:
         """入站媒体下载 → ``(媒体大类, /static URL)``；非媒体/关闭/失败均软回落。
 
         **群聊默认不下载**：群与私聊共用同一条 okline 接收线程，热闹的群会把下载耗时
         叠到私聊 AI 回复的延迟上——而私聊才是 AI 与营收所在。要看群里的图，开
         ``platform_login.line.media.groups``。
+
+        （impl85：形参从 okline ctx 改为裸消息 dict——``download_line_media`` 本就
+        只吃消息 dict，SSE 与拉取兜底两条路径共用本方法。）
         """
         try:
             from src.integrations.line_media import (
@@ -2179,7 +2290,7 @@ class LineProtocolWorker:
             if is_group and not mcfg.get("groups", False):
                 return "", ""
             return download_line_media(
-                self.client, ctx.message or {}, self.account_id, cfg=mcfg)
+                self.client, message or {}, self.account_id, cfg=mcfg)
         except Exception:
             logger.debug("[line-worker] 入站媒体处理失败（回落纯文本）", exc_info=True)
             return "", ""
@@ -2285,6 +2396,10 @@ class LineProtocolWorker:
     async def stop(self) -> None:
         self.state = "stopped"
         try:
+            self._pull_stop.set()
+        except Exception:
+            pass
+        try:
             if self.client is not None:
                 self.client.close()
         except Exception:
@@ -2297,14 +2412,23 @@ class LineProtocolWorker:
     def status(self) -> Dict[str, Any]:
         # B98：入站活性快照进 status——诊断/看门狗据此判「登录在、收不到」
         # （recv_started 有值但 last_inbound 长期不动 = 接收链假活）。
-        return {"type": "line_protocol", "account_id": self.account_id,
-                "state": self.state, "detail": self.detail,
-                "recv_started_ts": round(self._recv_started_ts, 1),
-                "last_inbound_ts": round(self._last_inbound_ts, 1),
-                "inbound_count": self._inbound_count,
-                "recv_cycles": self._recv_cycles,
-                "thread_alive": bool(self._thread is not None
-                                     and self._thread.is_alive())}
+        out = {"type": "line_protocol", "account_id": self.account_id,
+               "state": self.state, "detail": self.detail,
+               "recv_started_ts": round(self._recv_started_ts, 1),
+               "last_inbound_ts": round(self._last_inbound_ts, 1),
+               "inbound_count": self._inbound_count,
+               "recv_cycles": self._recv_cycles,
+               "thread_alive": bool(self._thread is not None
+                                    and self._thread.is_alive())}
+        # impl85 阶段1：拉取兜底观测（pulled_total>0 = SSE 流确实在漏消息）
+        if self._pull_sync is not None:
+            try:
+                out["pull_sync"] = self._pull_sync.stats()
+                out["pull_thread_alive"] = bool(
+                    self._pull_thread is not None and self._pull_thread.is_alive())
+            except Exception:
+                pass
+        return out
 
 
 _orchestrator: Optional[AccountOrchestrator] = None

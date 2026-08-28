@@ -583,17 +583,21 @@ async def test_mark_read_soft_fails():
 
 
 def test_inbound_media_skips_groups_by_default():
-    """群与私聊共用同一条接收线程 → 群媒体默认不下载，别让群把私聊回复拖慢。"""
+    """群与私聊共用同一条接收线程 → 群媒体默认不下载，别让群把私聊回复拖慢。
+
+    （impl85：``_inbound_media`` 形参从 okline ctx 改为裸消息 dict——SSE 与
+    拉取兜底两条路径共用，本测试跟随新签名。）
+    """
     w = _worker()
     w.client = _FakeApi(obs=_FakeObs(data=b"IMG"))
-    ctx = type("C", (), {"message": _msg(LM.CT_IMAGE)})()
-    assert w._inbound_media(ctx, is_group=True) == ("", "")
+    message = _msg(LM.CT_IMAGE)
+    assert w._inbound_media(message, is_group=True) == ("", "")
     assert w.client.obs.downloads == []
-    kind, url = w._inbound_media(ctx, is_group=False)
+    kind, url = w._inbound_media(message, is_group=False)
     assert kind == "image" and url
     w2 = _worker(groups=True)
     w2.client = _FakeApi(obs=_FakeObs(data=b"IMG"))
-    assert w2._inbound_media(ctx, is_group=True)[0] == "image"
+    assert w2._inbound_media(message, is_group=True)[0] == "image"
 
 
 # ─────────────────── 5. 探针工具护栏（tools/probe_line_media.py）───────────────
@@ -648,7 +652,6 @@ def test_inbound_media_never_raises():
     """入站落库主流程不能被一次媒体处理异常带走。"""
     w = _worker()
     w.client = None  # 触发 download 内部 AttributeError
-    ctx = type("C", (), {"message": _msg(LM.CT_IMAGE)})()
-    assert w._inbound_media(ctx, is_group=False) == ("image", "")
-    broken = type("C", (), {})()  # 连 .message 都没有
-    assert w._inbound_media(broken, is_group=False) == ("", "")
+    assert w._inbound_media(_msg(LM.CT_IMAGE), is_group=False) == ("image", "")
+    # 消息体缺失/形态坏 → 软回落空媒体（绝不抛）
+    assert w._inbound_media(None, is_group=False) == ("", "")
