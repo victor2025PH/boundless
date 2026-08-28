@@ -16,11 +16,29 @@
 #     与桌面壳 config.json 缺省（127.0.0.1:18799 / admin）对齐，无 env 时也能直连。
 
 # Telegram 协议号（桌面模式默认不用；留空 = 跳过协议客户端初始化，收件箱/翻译不受影响）
+#
+# ⚠ 本段是本文件里**唯一**的 telegram 键（2026-08-28 合并）：原先文件末尾另有一个
+# `telegram:` 只写 poll_fallback，YAML 里后者整段覆盖前者 —— 实测解析结果是
+# `{'poll_fallback': {...}}`，下面这三个凭据字段**根本不存在**。当前不产生行为差异
+# （缺键与空串对 `cfg.get("api_id")` 同样是假值，都走「跳过」分支），但这是个陷阱：
+# 谁以后在这里填了真 api_id，会被静默忽略而毫无提示，而本文件是随桌面包发给客户的
+# 模板。再加 telegram 配置请往本段里加，别另起一个同名键。
 telegram:
   api_id: ""
   api_hash: ""
   phone_number: ""
-  session_name: "desktop"
+  # TG 出站镜像（2026-08-20 内测反馈进基线，原在文件末尾独立 telegram 段）：用户从
+  # 手机/其他端主动发起的私聊必须出现在工作台会话列表（默认关时纯出站会话永不落库
+  # ＝「主动发消息左侧没窗口」）。文本占位随既有轮询零额外下载；direction=out 永不
+  # 触发自动回复；媒体本体归档（mirror_outgoing_media）保持默认关（有下载 RPC 风控面）。
+  poll_fallback:
+    mirror_outgoing: true
+  # ⚠ session_name 刻意保持注释：它在重复键时代**一直是被丢弃的**，代码走
+  # `telegram_cfg.get("session_name") or "camille_bot"`，所以现网桌面端实际用的
+  # 是 camille_bot.session。合并重复键时若顺手把它启用，已部署的机器会去找一个
+  # 不存在的 desktop.session —— 对用户就是「莫名其妙掉线要重新登录」。
+  # 要改会话名是一次独立的迁移（需同时改名现有 session 文件），不能搭在清理里。
+  # session_name: "desktop"
 
 # AI 大模型（桌面托管版默认走官网网关，用户无需填 Key）
 # 启动时 ensure_hosted_ai → POST bd2026.cc/api/ai/device-token → 设备令牌写入内存；
@@ -162,14 +180,6 @@ voice_recognition:
 # 用户退出：vision.hosted_opt_out: true。
 vision:
   _hosted_auto: true
-
-# TG 出站镜像（2026-08-20 内测反馈进基线）：用户从手机/其他端主动发起的私聊
-# 必须出现在工作台会话列表（默认关时纯出站会话永不落库＝「主动发消息左侧没
-# 窗口」）。文本占位随既有轮询零额外下载；direction=out 永不触发自动回复；
-# 媒体本体归档（mirror_outgoing_media）保持默认关（有下载 RPC 风控面）。
-telegram:
-  poll_fallback:
-    mirror_outgoing: true
 
 # 跨平台联系人「精简档」（2026-08-20 内测反馈进基线）：右栏「跨平台档案」卡此前
 # 对客户报一句裸错误码（功能整条链随包、只是总开关默认关）。本段只交付纯软件那半：

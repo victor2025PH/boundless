@@ -43,7 +43,8 @@ param(
     [switch]$Offsite,
     [string]$RcloneExe    = 'C:\Tools\rclone\rclone.exe',
     [string]$RcloneConf   = '',          # 缺省用仓库内 deploy\secrets\rclone_r2.conf
-    [string]$OffsiteRemote = ''          # 例：r2:boundless-backups/zhiliao
+    [string]$OffsiteRemote = '',         # 例：r2:boundless-instance-backups/zhiliao
+    [int]$OffsiteKeepDays = 30           # 远端按**天龄**清理（见下方为什么不用 sync）
 )
 
 $ErrorActionPreference = 'Stop'
@@ -59,6 +60,20 @@ function Say([string]$msg) {
     $line = "[instance_backup {0:yyyy-MM-dd HH:mm:ss}] {1}" -f (Get-Date), $msg
     Write-Host $line
     try { Add-Content -LiteralPath $LogFile -Value $line -Encoding UTF8 } catch {}
+}
+
+# rclone 把进度/NOTICE 写 stderr，而本脚本 $ErrorActionPreference='Stop' 下，PS 5.1
+# 会把原生命令的 stderr 当成 NativeCommandError 抛出 —— 实测：check 明明报
+# "0 differences found"（成功），脚本却在那一行中断、后面的清理压根没跑。
+# 故所有 rclone 调用统一经此包装：局部降级 EAP，把输出原样喂给 Say，只用退出码判成败。
+function Invoke-Rclone {
+    param([string[]]$RcArgs, [string]$Tag = 'rclone')
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $RcloneExe @RcArgs 2>&1 | ForEach-Object { Say "  ${Tag}: $_" }
+        return $LASTEXITCODE
+    } finally { $ErrorActionPreference = $prev }
 }
 
 if (-not (Test-Path -LiteralPath $Wrapper)) { Say "config error: wrapper missing $Wrapper"; exit 2 }
@@ -118,10 +133,30 @@ if ($Offsite) {
         }
         else {
             Say "offsite 上传 $($newest.Name) -> $OffsiteRemote"
-            & $RcloneExe --config $RcloneConf copy $newest.FullName $OffsiteRemote --no-traverse 2>&1 |
-                ForEach-Object { Say "  rclone: $_" }
-            if ($LASTEXITCODE -eq 0) { Say 'offsite OK' }
-            else { Say "offsite FAILED exit=$LASTEXITCODE（本地备份仍然有效，任务不因此报红）" }
+            $rcUp = Invoke-Rclone -Tag 'copy' -RcArgs @(
+                '--config', $RcloneConf, 'copy', $newest.FullName, $OffsiteRemote, '--no-traverse')
+            if ($rcUp -ne 0) {
+                Say "offsite 上传 FAILED exit=$rcUp（本地备份仍然有效，任务不因此报红）"
+            }
+            else {
+                # 「传上去了」只是退出码，不是内容正确。check 比对远端与本地的 hash——
+                # 与本仓 media-artifact 纪律同一条：产物必须验内容才许报 OK。
+                $rcChk = Invoke-Rclone -Tag 'check' -RcArgs @(
+                    '--config', $RcloneConf, 'check', $newest.FullName, $OffsiteRemote, '--one-way')
+                if ($rcChk -eq 0) { Say 'offsite OK（hash 已比对一致）' }
+                else { Say "offsite 上传成功但 **校验不一致** exit=$rcChk —— 远端那份不可信，请人工复核" }
+            }
+
+            # 远端清理刻意用「按天龄删」而不是 rclone sync：
+            # sync 会把「本地没有的」远端对象一并删掉 —— 本地备份盘一旦损坏或被误删，
+            # 下一次 sync 就把异地副本也抹了，恰好在最需要它的时刻。copy + 按龄删则
+            # 本地灾难不会级联到异地，代价只是远端保留窗（默认 30 天）与本地 -Keep 不同步。
+            if ($OffsiteKeepDays -gt 0) {
+                $rcDel = Invoke-Rclone -Tag 'prune' -RcArgs @(
+                    '--config', $RcloneConf, 'delete', $OffsiteRemote, '--min-age', "$($OffsiteKeepDays)d")
+                if ($rcDel -eq 0) { Say "offsite 远端清理完成（保留最近 $OffsiteKeepDays 天）" }
+                else { Say "offsite 远端清理 FAILED exit=$rcDel（不影响本次备份有效性）" }
+            }
         }
     }
 }
