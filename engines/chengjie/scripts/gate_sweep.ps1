@@ -318,7 +318,12 @@ $gates = @(
     # 设计（绝不阻塞主链），问题在**无声**——handler 体只有 pass/return，既不记日志
     # 也不兜底，故障只能靠用户投诉暴露。不强制清存量，只锁「不许再涨」；未登记模块
     # 天花板为 0。含探测器自证（植入一处必红，已端到端验过）。
-    'tests/test_silent_exception_ratchet.py'
+    'tests/test_silent_exception_ratchet.py',
+    # 协议侧车窄令牌作用域（2026-08-28 P1-6 第一步）：四个 Node 侧车此前持 admin
+    # auth_token＝管理员级；新增可选 web_admin.worker_token 只放行 /api/internal/*，
+    # 越界 403。留空＝旧行为。13 例覆盖未配置等价性/隔离属性/向后兼容/三道坏配置降级，
+    # 外加「11 个内部端点全在作用域内」的覆盖面自证（防有人挪前缀后侧车静默 403）。
+    'tests/test_worker_token_scope.py'
 )
 
 $missing = @($gates | Where-Object { -not (Test-Path (Join-Path $engineRoot $_)) })
