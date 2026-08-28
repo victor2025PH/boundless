@@ -27,10 +27,12 @@ def test_audio_pipeline_uses_fallback_when_primary_empty(monkeypatch):
     from src.ai.audio_pipeline import AudioPipeline, TranscribeResult
 
     class FakeFallback:
-        async def _transcribe_file_once(self, path, *, language_hint=None, timeout_sec=30):
+        async def _transcribe_file_once(self, path, *, language_hint=None, timeout_sec=30,
+                                     want_segments=False):
             return TranscribeResult(ok=True, text="fallback text", model="openai:whisper-1")
 
-    async def primary_once(self, path, *, language_hint=None, timeout_sec=30):
+    async def primary_once(self, path, *, language_hint=None, timeout_sec=30,
+                           want_segments=False):
         return TranscribeResult(ok=False, error="local failed", model="faster_whisper:base")
 
     p = AudioPipeline({"enabled": True, "fallback_enabled": True, "fallback_backend": "openai"})
@@ -49,7 +51,8 @@ def test_audio_pipeline_keeps_primary_when_long_enough(monkeypatch):
     import asyncio
     from src.ai.audio_pipeline import AudioPipeline, TranscribeResult
 
-    async def primary_once(self, path, *, language_hint=None, timeout_sec=30):
+    async def primary_once(self, path, *, language_hint=None, timeout_sec=30,
+                           want_segments=False):
         return TranscribeResult(ok=True, text="clear primary text", model="faster_whisper:base")
 
     p = AudioPipeline({
@@ -76,10 +79,12 @@ def test_audio_pipeline_fallback_on_low_confidence(monkeypatch):
     from src.ai.audio_pipeline import AudioPipeline, TranscribeResult
 
     class FakeFallback:
-        async def _transcribe_file_once(self, path, *, language_hint=None, timeout_sec=30):
+        async def _transcribe_file_once(self, path, *, language_hint=None, timeout_sec=30,
+                                     want_segments=False):
             return TranscribeResult(ok=True, text="online text", model="openai:whisper-1")
 
-    async def primary_once(self, path, *, language_hint=None, timeout_sec=30):
+    async def primary_once(self, path, *, language_hint=None, timeout_sec=30,
+                           want_segments=False):
         return TranscribeResult(
             ok=True,
             text="weak text",
