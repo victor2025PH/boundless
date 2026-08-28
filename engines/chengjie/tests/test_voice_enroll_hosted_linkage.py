@@ -121,3 +121,79 @@ def test_tts_test_meta_carries_voice_mapped_from():
     js = (REPO / "shared" / "copilot" / "components" / "cp-voice.js"
           ).read_text(encoding="utf-8")
     assert "voice_mapped_from" in js, "cp-voice 警示条件未覆盖映射场景"
+
+
+# ── B124（2026-08-28）：**合成时**选路也必须落到网关 ──────────────────────────
+#
+# 上面那几条只保护「登记 → 联动开引擎」。0828 钧/skuio 一夜双复现证明这还不够：
+# 引擎开着、登记数据完好、启动日志也写着「克隆语音已接入网关兜底」，但真正合成
+# 那一刻 base_urls 里只有 LAN 192.168.0.x:7852 → 外网不可达 → 超时 → 回落
+# edge_tts＝默认音。启动注入（ensure_hosted_voice）与合成选路是两件事，本节钉后者。
+
+def test_hosted_endpoint_absent_env_is_noop(monkeypatch):
+    """非托管部署（env 未设）→ 原样返回，字节级零行为变更。"""
+    from src.ai.tts_pipeline import _with_hosted_voice_endpoint
+    monkeypatch.delenv("AITR_HOSTED_VOICE_BASE_URL", raising=False)
+    cfg = {"base_urls": ["http://192.168.0.117:7852"]}
+    assert _with_hosted_voice_endpoint(cfg) is cfg
+
+
+def test_hosted_endpoint_prepended_when_lan_unreachable(monkeypatch):
+    """LAN 探测不可达（_FIRST=1）→ 网关排首位，外网首条语音不必先撞死端点。"""
+    from src.ai.tts_pipeline import _with_hosted_voice_endpoint
+    hub = "https://bd2026.cc/api/ai/hub"
+    monkeypatch.setenv("AITR_HOSTED_VOICE_BASE_URL", hub)
+    monkeypatch.setenv("AITR_HOSTED_VOICE_FIRST", "1")
+    out = _with_hosted_voice_endpoint(
+        {"base_urls": ["http://192.168.0.117:7852",
+                       "http://192.168.0.140:7852"]})
+    assert out["base_urls"][0] == hub
+    assert out["base_url"] == hub, "base_url 必须跟随 base_urls[0]"
+    assert "http://192.168.0.117:7852" in out["base_urls"], "LAN 端点不得被丢弃"
+
+
+def test_hosted_endpoint_appended_when_lan_alive(monkeypatch):
+    """办公室机器（LAN 活着）→ 网关只作兜底，直连低延迟不受影响。"""
+    from src.ai.tts_pipeline import _with_hosted_voice_endpoint
+    hub = "https://bd2026.cc/api/ai/hub"
+    monkeypatch.setenv("AITR_HOSTED_VOICE_BASE_URL", hub)
+    monkeypatch.setenv("AITR_HOSTED_VOICE_FIRST", "0")
+    out = _with_hosted_voice_endpoint({"base_urls": ["http://192.168.0.117:7852"]})
+    assert out["base_urls"] == ["http://192.168.0.117:7852", hub]
+    assert out["base_url"] == "http://192.168.0.117:7852"
+
+
+def test_hosted_endpoint_not_duplicated(monkeypatch):
+    """启动注入已生效 → 不再重复补（尾斜杠差异也算同一端点）。"""
+    from src.ai.tts_pipeline import _with_hosted_voice_endpoint
+    hub = "https://bd2026.cc/api/ai/hub"
+    monkeypatch.setenv("AITR_HOSTED_VOICE_BASE_URL", hub + "/")
+    monkeypatch.setenv("AITR_HOSTED_VOICE_FIRST", "1")
+    cfg = {"base_urls": [hub, "http://192.168.0.117:7852"]}
+    assert _with_hosted_voice_endpoint(cfg) is cfg
+
+
+def test_hosted_endpoint_falls_back_to_singular_base_url(monkeypatch):
+    """旧形状（只有单数 base_url）同样要被接管。"""
+    from src.ai.tts_pipeline import _with_hosted_voice_endpoint
+    hub = "https://bd2026.cc/api/ai/hub"
+    monkeypatch.setenv("AITR_HOSTED_VOICE_BASE_URL", hub)
+    monkeypatch.setenv("AITR_HOSTED_VOICE_FIRST", "1")
+    out = _with_hosted_voice_endpoint({"base_url": "http://192.168.0.140:7852"})
+    assert out["base_urls"] == [hub, "http://192.168.0.140:7852"]
+
+
+def test_synth_path_consumes_hosted_endpoint():
+    """接线锚点：写了兜底不接进合成链＝白修（本次事故的形状）。"""
+    src = (REPO / "src" / "ai" / "tts_pipeline.py").read_text(encoding="utf-8")
+    assert "_with_hosted_voice_endpoint(dict(self.avatar_voice or {}))" in src, \
+        "_try_avatar_clone 必须经兜底解析克隆端点"
+
+
+def test_unreachable_log_names_the_endpoints_tried():
+    """回落默认音时必须报出试过哪些端点——否则现场只能靠远程取诊断包定位。"""
+    src = (REPO / "src" / "ai" / "tts_pipeline.py").read_text(encoding="utf-8")
+    assert "client.base_urls" in src and "已试" in src, \
+        "克隆不可达日志必须带端点清单"
+    assert "avatar_clone(7852) unreachable" not in src, \
+        "旧文案把端点写死成 7852，与多端点/网关形态不符"

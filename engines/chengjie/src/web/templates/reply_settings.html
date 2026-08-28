@@ -468,7 +468,7 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
        JS 按 API 是否返回 presets 控显（重启装载前旧进程无此字段 → 整卡隐藏不摆空架子） -->
   <div class="rps-card" id="rps-preset-card" style="display:none">
     <h3>🎛️ {{ (i18n or {}).get('rps_preset_title', "场景预设档") }}</h3>
-    <p class="rps-hint">{{ (i18n or {}).get('rps_preset_hint', "点选即把速度 / 拟人 / 长度 / 语音触发填成该场景的推荐组合——先填进表单，看清底部改动数再保存；emoji、风格要求等个性化项不受影响。") }}</p>
+    <p class="rps-hint">{{ (i18n or {}).get('rps_preset_hint', "点选即把速度 / 拟人 / 长度 / 语音触发填成该场景的推荐组合——先填进表单，看清底部改动数再保存；表情、风格要求等个性化项不受影响。") }}</p>
     <div class="rps-modes" id="rps-presets"></div>
     <div class="rps-preset-state" id="rps-preset-state"></div>
   </div>
@@ -778,7 +778,7 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
   <div class="rps-card" id="rps-sec-style">
     <h3>✍️ {{ (i18n or {}).get('rps_style_title', "内容与风格（全局默认）") }}
       <span class="rps-chip" data-hot-chip="ai.reply_defaults.length"></span></h3>
-    <p class="rps-hint">{{ (i18n or {}).get('rps_style_hint', "长度与 emoji 只对「没有自己设置」的人设生效——人设工作室里的显式设置永远优先，不会被这里覆盖。") }}</p>
+    <p class="rps-hint">{{ (i18n or {}).get('rps_style_hint', "长度与表情只对「没有自己设置」的人设生效——人设工作室里的显式设置永远优先，不会被这里覆盖。") }}</p>
     <div class="rps-row" style="border-top:none">
       <span class="rps-row-label">{{ (i18n or {}).get('rps_style_length', "回复长度") }}</span>
       <select class="rps-select" id="rps-style-length" onchange="rpsMarkDirty()">
@@ -794,10 +794,10 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
       <span class="rps-row-hint">{{ (i18n or {}).get('rps_style_maxsent_hint', "0 = 不限制。选了上面的长度档时此项不生效（长度档优先）；只想给个句数上限就把长度留「跟随人设」。") }}</span>
     </div>
     <div class="rps-row">
-      <span class="rps-row-label">{{ (i18n or {}).get('rps_style_emoji', "emoji 密度") }}</span>
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_style_emoji', "表情密度") }}</span>
       <select class="rps-select" id="rps-style-emoji" onchange="rpsMarkDirty()">
         <option value="">{{ (i18n or {}).get('rps_style_follow', "跟随人设（不干预）") }}</option>
-        <option value="none">{{ (i18n or {}).get('rps_style_emoji_none', "不用 emoji") }}</option>
+        <option value="none">{{ (i18n or {}).get('rps_style_emoji_none', "不用表情") }}</option>
         <option value="minimal">{{ (i18n or {}).get('rps_style_emoji_minimal', "极少（情绪强烈处才用）") }}</option>
         <option value="moderate">{{ (i18n or {}).get('rps_style_emoji_moderate', "适中（约 30% 回复带 1 个）") }}</option>
         <option value="rich">{{ (i18n or {}).get('rps_style_emoji_rich', "较多（约 60% 回复带 1-2 个）") }}</option>
@@ -1017,7 +1017,7 @@ var RPS_I18N = {
   obsHumTitle: {{ (i18n or {}).get('rps_obs_hum_title', "已读 / 打字实测（按平台，成功/失败）")|tojson }},
   obsRead: {{ (i18n or {}).get('rps_obs_read', "已读")|tojson }},
   obsTyping: {{ (i18n or {}).get('rps_obs_typing', "打字")|tojson }},
-  styleOvNote: {{ (i18n or {}).get('rps_style_ov_note', "共 {p} 个人设：{l} 个自定义了长度、{e} 个自定义了 emoji——它们不吃这里的默认值。")|tojson }},
+  styleOvNote: {{ (i18n or {}).get('rps_style_ov_note', "共 {p} 个人设：{l} 个自定义了长度、{e} 个自定义了表情——它们不吃这里的默认值。")|tojson }},
   styleOvLink: {{ (i18n or {}).get('rps_style_ov_link', "去人设工作室查看 →")|tojson }},
   dirtyN: {{ (i18n or {}).get('rps_dirty_n', "{n} 项未保存的修改")|tojson }},
   capsLbl: {{ (i18n or {}).get('rps_caps_lbl', "平台支持")|tojson }},
@@ -1081,7 +1081,7 @@ var RPS_I18N = {
   xOff: {{ (i18n or {}).get('rps_x_off', "关")|tojson }},
   xLength: {{ (i18n or {}).get('rps_style_length', "回复长度")|tojson }},
   xMaxSent: {{ (i18n or {}).get('rps_x_maxsent', "句数 ≤{n}")|tojson }},
-  xEmoji: {{ (i18n or {}).get('rps_style_emoji', "emoji 密度")|tojson }},
+  xEmoji: {{ (i18n or {}).get('rps_style_emoji', "表情密度")|tojson }},
   xTone: {{ (i18n or {}).get('rps_style_tone', "一句话风格要求")|tojson }},
   xUnset: {{ (i18n or {}).get('rps_x_unset', "未约束")|tojson }},
   xLoadFail: {{ (i18n or {}).get('rps_x_load_fail', "会话生效值读取失败（不影响下方设置）")|tojson }},
@@ -1099,7 +1099,7 @@ var RPS_I18N = {
     auto_ai: {{ (i18n or {}).get('rps_mode_auto', "全自动")|tojson }}
   },
   emojiShort: {
-    none: {{ (i18n or {}).get('rps_style_emoji_none', "不用 emoji")|tojson }},
+    none: {{ (i18n or {}).get('rps_style_emoji_none', "不用表情")|tojson }},
     minimal: {{ (i18n or {}).get('rps_val_emoji_minimal', "极少")|tojson }},
     moderate: {{ (i18n or {}).get('rps_val_emoji_moderate', "适中")|tojson }},
     rich: {{ (i18n or {}).get('rps_val_emoji_rich', "较多")|tojson }},
@@ -1151,7 +1151,7 @@ var RPS_I18N = {
     "inbox.l2_autosend.holding.enabled": {{ (i18n or {}).get('rps_holding_label', "待人审消息先发一句缓冲语")|tojson }},
     "ai.reply_defaults.length": {{ (i18n or {}).get('rps_style_length', "回复长度")|tojson }},
     "ai.reply_defaults.max_sentences": {{ (i18n or {}).get('rps_style_maxsent', "最多句数")|tojson }},
-    "ai.reply_defaults.emoji_level": {{ (i18n or {}).get('rps_style_emoji', "emoji 密度")|tojson }},
+    "ai.reply_defaults.emoji_level": {{ (i18n or {}).get('rps_style_emoji', "表情密度")|tojson }},
     "ai.reply_defaults.tone_hint": {{ (i18n or {}).get('rps_style_tone', "一句话风格要求")|tojson }},
     "inbox.auto_draft.platform_modes": {{ (i18n or {}).get('rps_plat_col_cap', "档位封顶")|tojson }},
     "inbox.l2_autosend.deliver_delay.platform_overrides": {{ (i18n or {}).get('rps_plat_fn_delay', "平台节奏覆写")|tojson }},

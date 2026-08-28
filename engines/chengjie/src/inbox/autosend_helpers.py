@@ -1060,6 +1060,47 @@ def _is_desktop_account(platform, account_id) -> bool:
         return False
 
 
+def _guard_translated_lang_mix(assistant, src_text: str, out_text):
+    """译文出口再过一次混语守卫（B125，2026-08-28）。
+
+    B121 的 ``outbound_text_guard`` 挂在**出稿口**（skill_manager 的 A/B 两线），
+    而出站翻译发生在那之后——译文自此再没有任何语种检查。于是 MT 把源文里的
+    代词/短词漏译留在英文句里（实录「You know I'm here, same 我」「im 我」），
+    整条直发客户。守卫本身认得这个形状（latin≥6 且 ≥3×CJK ⇒ hard），只是从来
+    没被喂到译文。
+
+    只跑 ``lang_mix`` 那一半：旁白与无出处引用是**生成端**语义，已在出稿口处置
+    完毕，拿 MT 产物重跑既无意义又会把命中数记重。任何异常/守卫判空一律返回
+    译文原值——翻译链的 HOLD 语义（None）必须原样透传，绝不能被守卫改写成放行。
+    """
+    if not isinstance(out_text, str) or not out_text.strip():
+        return out_text
+    try:
+        from src.ai.outbound_text_guard import (
+            apply_outbound_text_guard as _guard,
+            resolve_cfg as _guard_cfg,
+        )
+        _c = _guard_cfg(assistant.config.config or {})
+        if not (_c.get("enabled", True) and _c.get("lang_mix", True)):
+            return out_text
+        _cleaned, _meta = _guard(
+            out_text,
+            {"enabled": True, "monologue": False, "lang_mix": True,
+             "unfounded_recall": False})
+        if _cleaned != out_text:
+            assistant.logger.warning(
+                "[autosend] 译文混语已剥除（%s）：%r → %r（源文 %r）",
+                _meta.get("lang_mix") or "hard", out_text, _cleaned, src_text)
+            return _cleaned
+        if _meta.get("lang_mix") == "hard_kept":
+            # 剥后残句会更糟（守卫的安全阀），如实留痕便于回看 MT 质量
+            assistant.logger.warning(
+                "[autosend] 译文混语命中但剥除不安全，原样投递：%r", out_text)
+    except Exception:
+        assistant.logger.debug("译文混语守卫跳过", exc_info=True)
+    return out_text
+
+
 def build_autosend_translate_cb(assistant, web_app):
     """构造 AutosendWorker 出站翻译/语言硬闸回调（投递前的语言正确性最后防线）。
 
@@ -1096,10 +1137,12 @@ def build_autosend_translate_cb(assistant, web_app):
             _ts = getattr(web_app.state, "translation_service", None)
             if _ts is None:
                 return str(item.get("text", ""))
-            return await _tot(
+            _out = await _tot(
                 item, translation_service=_ts,
                 store=assistant.inbox_store,
                 source_lang=_src, style=_style, gate_only=_go)
+            return _guard_translated_lang_mix(
+                assistant, str(item.get("text", "")), _out)
 
         _autosend_translate.gate_only = _gate_only
         if _gate_only:

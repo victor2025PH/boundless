@@ -95,7 +95,7 @@ ZH = {
 
     # 场景预设档（P1）
     "rps_preset_title": "场景预设档",
-    "rps_preset_hint": "点选即把速度 / 拟人 / 长度 / 语音触发填成该场景的推荐组合——先填进表单，看清底部改动数再保存；emoji、风格要求等个性化项不受影响。",
+    "rps_preset_hint": "点选即把速度 / 拟人 / 长度 / 语音触发填成该场景的推荐组合——先填进表单，看清底部改动数再保存；表情、风格要求等个性化项不受影响。",
     "rps_preset_cautious": "谨慎养号",
     "rps_preset_cautious_d": "新号 / 防风控：慢节奏全拟人，回复简短克制，语音只跟随对方",
     "rps_preset_natural": "自然真人",
@@ -262,7 +262,7 @@ ZH = {
 
     # 内容与风格全局默认（P0-style）
     "rps_style_title": "内容与风格（全局默认）",
-    "rps_style_hint": "长度与 emoji 只对「没有自己设置」的人设生效——人设工作室里的显式设置永远优先，不会被这里覆盖。",
+    "rps_style_hint": "长度与表情只对「没有自己设置」的人设生效——人设工作室里的显式设置永远优先，不会被这里覆盖。",
     "rps_style_length": "回复长度",
     "rps_style_follow": "跟随人设（不干预）",
     "rps_style_len_concise": "简短（1-2 句，像私聊）",
@@ -270,15 +270,15 @@ ZH = {
     "rps_style_len_detailed": "详细（4-6 句，仍口语）",
     "rps_style_maxsent": "最多句数",
     "rps_style_maxsent_hint": "0 = 不限制。选了上面的长度档时此项不生效（长度档优先）；只想给个句数上限就把长度留「跟随人设」。",
-    "rps_style_emoji": "emoji 密度",
-    "rps_style_emoji_none": "不用 emoji",
+    "rps_style_emoji": "表情密度",
+    "rps_style_emoji_none": "不用表情",
     "rps_style_emoji_minimal": "极少（情绪强烈处才用）",
     "rps_style_emoji_moderate": "适中（约 30% 回复带 1 个）",
     "rps_style_emoji_rich": "较多（约 60% 回复带 1-2 个）",
     "rps_style_tone": "一句话风格要求",
     "rps_style_tone_ph": "例：多用短句和口语语气词，别用书面腔",
     "rps_style_tone_hint": "对全部人设追加的统一说话要求（与上面两项的「兜底」语义不同：这条对所有人设都生效）。留空 = 无。",
-    "rps_style_ov_note": "共 {p} 个人设：{l} 个自定义了长度、{e} 个自定义了 emoji——它们不吃这里的默认值。",
+    "rps_style_ov_note": "共 {p} 个人设：{l} 个自定义了长度、{e} 个自定义了表情——它们不吃这里的默认值。",
     "rps_style_ov_link": "去人设工作室查看 →",
 
     # 拟人细节

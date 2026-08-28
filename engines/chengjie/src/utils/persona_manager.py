@@ -2016,6 +2016,18 @@ class PersonaManager:
             lines.append("回复均衡：2-4 句话，简洁直接，不堆砌客套。")
         elif reply_length in ("detailed", "long"):
             lines.append("可以稍详细：4-6 句，但仍要口语，不写小作文。")
+        # B130（2026-08-28）：区间对模型等于没说——「2-4 句」实测恒出 3 句，机械感
+        # 就是这么来的。每轮在区间内摇一个**具体数字**告诉它写几句（偶发短打见
+        # reply_length_variety）。运营在设置页看到的仍是档位区间，只是每条落点不同。
+        # `ai.reply_defaults.length_variety: false` 可退回旧的纯区间行为。
+        if reply_length and _rd.get("length_variety", True):
+            try:
+                from src.ai.reply_length_variety import sentence_target_hint
+                _hint = sentence_target_hint(reply_length)
+                if _hint:
+                    lines.append(_hint)
+            except Exception:
+                pass
         max_sentences = _p_max or (0 if _p_len else _rd.get("max_sentences", 0))
         if max_sentences and not reply_length:
             lines.append(f"单次回复建议不超过 {max_sentences} 句。")

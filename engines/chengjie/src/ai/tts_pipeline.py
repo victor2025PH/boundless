@@ -626,6 +626,46 @@ def safe_edge_voice(voice: Any, fallback: str = _EDGE_VOICE_DEFAULT) -> str:
     return _EDGE_VOICE_DEFAULT
 
 
+def _with_hosted_voice_endpoint(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """合成时兜底：托管态必须让网关端点出现在克隆候选里（B124，2026-08-28）。
+
+    ``hosted_gateway.ensure_hosted_voice`` 在启动与热重载回放时把
+    ``{site}/api/ai/hub`` 注入 ``avatar_voice.base_urls``。但那条注入链前面串了
+    五道闸（``_wants_hosted`` / ``enabled`` 或 ``_hosted_auto`` / ``_lan_seed`` /
+    未 ``hosted_opt_out`` / ``ai.api_key`` 已是 ``cx.``），任何一道当时没过——或者
+    本管线握着注入**之前**解析出来的那份配置——合成就仍然只打 LAN。外网客户的
+    ``192.168.0.x:7852`` 不可达 → 连接超时 → ``avatar_clone_unreachable`` → 回落
+    ``edge_tts``，用户侧表现就是「克隆登记成功、发出来却是默认音」（0828 钧/skuio
+    一夜双复现）。启动日志此时还写着「克隆语音已接入网关兜底」，两边对不上账，
+    正是这次要靠诊断包才定位的原因。
+
+    这里按 ``ensure_hosted_voice`` 落下的 env 契约（``AITR_HOSTED_VOICE_*``）再兜
+    一次：网关地址已知却不在候选里就补进去，``_FIRST=1``（注入时 LAN 探测不可达）
+    时排首位。env 未设＝非托管部署，原样返回，零行为变更。
+    """
+    hub = str(os.environ.get("AITR_HOSTED_VOICE_BASE_URL") or "").strip().rstrip("/")
+    if not hub:
+        return cfg
+    bases = [
+        str(b).strip().rstrip("/")
+        for b in (cfg.get("base_urls") or [])
+        if str(b).strip()
+    ]
+    if not bases:
+        single = str(cfg.get("base_url") or "").strip().rstrip("/")
+        bases = [single] if single else []
+    if hub in bases:
+        return cfg
+    gateway_first = str(os.environ.get("AITR_HOSTED_VOICE_FIRST") or "").strip() == "1"
+    merged = dict(cfg)
+    merged["base_urls"] = ([hub] + bases) if gateway_first else (bases + [hub])
+    merged["base_url"] = merged["base_urls"][0]
+    logger.info(
+        "[tts] 克隆候选补入托管网关 %s（%s）——启动注入未覆盖本次合成配置",
+        hub, "排首位" if gateway_first else "作兜底")
+    return merged
+
+
 class TTSPipeline:
     """Generate speech from text.
 
@@ -2282,7 +2322,7 @@ class TTSPipeline:
         if not bool(vp.get("owner_consent", False)):
             return _finalize_err("voice_profile_requires_owner_consent")
 
-        cfg = dict(self.avatar_voice or {})
+        cfg = _with_hosted_voice_endpoint(dict(self.avatar_voice or {}))
         cfg["enabled"] = True
 
         # ── 口语化必须在 hub / 本地合成之前（2026-07-24 读稿音根因）────────
@@ -2532,9 +2572,18 @@ class TTSPipeline:
 
         # 健康探测（短超时 + 进程缓存）；不可达且允许兜底 → 回落 edge（绝不阻塞）
         if not await asyncio.to_thread(client.health_ok):
+            # 端点清单必须进日志（B124，2026-08-28）：旧文案只写死「7852」，
+            # 于是「回落成默认音」的现场既看不出试过哪几个地址、也看不出托管网关
+            # 到底在不在候选里——0828 那次只能靠远程取诊断包才定位。
+            _tried = ", ".join(client.base_urls) or "(空)"
             if cloud_fallback:
-                logger.info("[tts] avatar_clone(7852) unreachable → 回落兜底")
+                logger.info(
+                    "[tts] 克隆端点全不可达 → 回落兜底音色（已试：%s）persona=%s",
+                    _tried, self.persona_id or "")
                 return None
+            logger.warning(
+                "[tts] 克隆端点全不可达且禁用兜底 → 拒发（已试：%s）persona=%s",
+                _tried, self.persona_id or "")
             return _finalize_err("avatar_clone_unreachable")
 
         ref_text = str(vp.get("reference_text") or "").strip()

@@ -504,3 +504,87 @@ async def test_empty_draft_still_resolved_when_no_delivery():
     await w._tick()
     assert svc.resolved == ["d_empty"]
     assert w.total_sent == 1
+
+
+# ── B125（2026-08-28）：译文出口的混语守卫 ──────────────────────────────────
+#
+# 事故：「You know I'm here, same 我」「im 我」直发客户。B121 的守卫挂在出稿口，
+# 而出站翻译在它之后——译文自此再没有任何语种检查，MT 漏译的代词就这么出站了。
+
+
+class _FakeAssistant:
+    """最小 assistant 替身：守卫只用 .config.config 与 .logger。"""
+
+    class _Cfg:
+        def __init__(self, d):
+            self.config = d
+
+    class _Log:
+        def __init__(self):
+            self.warnings = []
+
+        def warning(self, *a, **k):
+            self.warnings.append(a[0] if a else "")
+
+        def debug(self, *a, **k):
+            pass
+
+        def info(self, *a, **k):
+            pass
+
+    def __init__(self, cfg=None):
+        self.config = self._Cfg(cfg if cfg is not None else {})
+        self.logger = self._Log()
+
+
+def test_translated_lang_mix_stripped():
+    """生产实录样本：英文主体夹单个汉字 → 剥除后才投递。"""
+    from src.inbox.autosend_helpers import _guard_translated_lang_mix
+    a = _FakeAssistant()
+    out = _guard_translated_lang_mix(a, "你知道我在这儿", "You know I'm here, same 我")
+    assert "我" not in out
+    assert "You know" in out
+    assert a.logger.warnings, "剥除必须留痕（否则 MT 质量问题再次无声）"
+
+
+def test_translated_hold_passes_through():
+    """翻译 HOLD（None）语义必须原样透传——守卫绝不能把不发改成放行。"""
+    from src.inbox.autosend_helpers import _guard_translated_lang_mix
+    assert _guard_translated_lang_mix(_FakeAssistant(), "你好", None) is None
+
+
+def test_clean_translation_untouched():
+    """正常译文零改动（中文译文、含品牌词的英文译文都不许误伤）。"""
+    from src.inbox.autosend_helpers import _guard_translated_lang_mix
+    a = _FakeAssistant()
+    for txt in ("Hello, how are you today?",
+                "你好呀，今天过得怎么样？",
+                "I use iPhone and WhatsApp every day."):
+        assert _guard_translated_lang_mix(a, "src", txt) == txt
+    assert not a.logger.warnings
+
+
+def test_guard_respects_operator_switch():
+    """运营显式关掉 lang_mix → 守卫不动手（与出稿口同口径）。"""
+    from src.inbox.autosend_helpers import _guard_translated_lang_mix
+    a = _FakeAssistant(
+        {"companion": {"outbound_text_guard": {"lang_mix": False}}})
+    bad = "You know I'm here, same 我"
+    assert _guard_translated_lang_mix(a, "src", bad) == bad
+
+
+def test_short_latin_fragment_not_over_stripped():
+    """「im 我」拉丁不足阈值 → 刻意不动（宁可漏拦不误伤，与 B121 同哲学）。
+
+    留此条是让「阈值该不该下调」成为一次显式决策，而不是被顺手改掉。
+    """
+    from src.inbox.autosend_helpers import _guard_translated_lang_mix
+    assert _guard_translated_lang_mix(_FakeAssistant(), "src", "im 我") == "im 我"
+
+
+def test_translate_cb_wires_guard():
+    """接线锚点：守卫必须长在翻译回调出口（两条投递链共用它）。"""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1]
+           / "src" / "inbox" / "autosend_helpers.py").read_text(encoding="utf-8")
+    assert "return _guard_translated_lang_mix(" in src, "翻译回调未接守卫"
