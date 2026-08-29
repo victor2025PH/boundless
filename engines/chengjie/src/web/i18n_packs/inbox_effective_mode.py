@@ -47,6 +47,13 @@ ZH = {
                                      "在平台风控眼里还是两个号互刷，所以这条会话按"
                                      "「{mode}」执行。要放开：从 companion.own_fleet.extra "
                                      "里摘掉该登记。",
+    # ── #12（2026-08-30）：全局真发总闸关着，「全自动」只拟稿不发送 ──
+    "inbox.effcap.deliver_paused": "⏸️ 全局已暂停真发",
+    "inbox.effcap.deliver_paused_t": "全局「AI 接管」当前是拟稿人审/关闭档（真发总闸"
+                                     "关闭），本会话虽设为全自动，实际按「{mode}」执行"
+                                     "：AI 只写草稿、不会自动发出。要恢复这类会话的"
+                                     "自动发送：设置 → 自动回复设置 → AI 接管 选"
+                                     "「全自动」。Telegram 私聊不受此闸影响。",
     "inbox.effcap.generic": "⚠️ 系统封顶",
     "inbox.effcap.generic_t": "会话实际执行档位为「{mode}」（来源：{layer}）。",
 }
@@ -100,6 +107,17 @@ EN = {
                                      "self-farming to platform anti-abuse, so this "
                                      "conversation runs as \"{mode}\". To open it up, "
                                      "remove the entry from companion.own_fleet.extra.",
+    # ── #12 (2026-08-30): global deliver gate is off, "full-auto" only drafts ──
+    "inbox.effcap.deliver_paused": "⏸️ Auto-send paused globally",
+    "inbox.effcap.deliver_paused_t": "The global \"AI takeover\" is currently on "
+                                     "suggest/off (the deliver master switch is "
+                                     "closed), so although this conversation is set "
+                                     "to full-auto it actually runs as \"{mode}\": "
+                                     "the AI only drafts and never sends by itself. "
+                                     "To resume auto-sending for such conversations: "
+                                     "Settings → Auto-reply → AI takeover → "
+                                     "Full-auto. Telegram DMs are not affected by "
+                                     "this gate.",
     "inbox.effcap.generic": "⚠️ System cap",
     "inbox.effcap.generic_t": "This conversation actually runs as \"{mode}\" "
                               "(source: {layer}).",

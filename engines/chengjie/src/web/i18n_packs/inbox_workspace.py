@@ -1920,6 +1920,9 @@ ZH = {
     "inbox.ro.placeholder_offline": "该账号已退出登录 — 重新登录后才能回复",
     "inbox.ro.relogin_btn": "重新登录",
     "inbox.row.h_ai_t": "AI 全自动值守中",
+    "inbox.row.h_ai_paused_t": "会话档位是全自动，但全局「AI 接管」当前为拟稿人审/关闭"
+                               "（真发总闸关闭）：AI 只写草稿、不会自动发出。恢复：设置 →"
+                               " 自动回复设置 → AI 接管 选「全自动」",
     "inbox.row.h_review": "审",
     "inbox.row.h_review_t": "AI 出草稿，等人审后发送",
     "inbox.row.h_manual": "手",
@@ -4535,6 +4538,10 @@ EN = {
     "inbox.ro.placeholder_offline": "This account is logged out — log in again to reply",
     "inbox.ro.relogin_btn": "Log in again",
     "inbox.row.h_ai_t": "AI autopilot is handling this conversation",
+    "inbox.row.h_ai_paused_t": "This conversation is set to full-auto, but the global "
+                               "\"AI takeover\" is on suggest/off (deliver master switch "
+                               "closed): the AI only drafts and never sends by itself. "
+                               "Resume via Settings → Auto-reply → AI takeover → Full-auto",
     "inbox.row.h_review": "Rev",
     "inbox.row.h_review_t": "AI drafts pending human review",
     "inbox.row.h_manual": "Man",

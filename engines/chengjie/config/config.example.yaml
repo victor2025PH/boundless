@@ -3024,6 +3024,14 @@ inbox:
                               #   代答。内部陪聊部署（A 线自带被@触发/interject/群冷却那套群闸）
                               #   可配 [telegram] 保留旧语义；群的显式 auto_ai 仍只能来自坐席
                               #   经 confirm_group 确认，本键不影响。
+    # account_mode_onboarding:
+    #   enabled: false
+                              # ⭐ 新账号「AI 接管方式」确认（P0 2026-08-30，默认关）：开启后每个
+                              #   **新登录**的账号（注册表 created_at 晚于启用基线；存量账号全部
+                              #   豁免零打扰）都要在设置页/收件箱提醒里选一次 全自动(auto_ai) /
+                              #   拟稿人审(review) / 关闭(manual)；确认前该账号按拟稿人审运行
+                              #   （AI 只写稿绝不自动发）。档位层级=会话显式 > 账号级 > 全局；
+                              #   状态落 config/account_mode_onboarding.json（数据区）。
     persona_enrich: true      # ⭐ true（默认）= 自动草稿正文走「人设产线」（与手动「生成草稿」同源：
                               #   SkillManager 意图→策略→KB→人设 LLM + 会话历史 + 客户语言），
                               #   先停泊(enriching)再补全翻 pending；生成正文二次风控只升不降。

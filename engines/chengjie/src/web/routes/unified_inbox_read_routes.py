@@ -743,6 +743,15 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
         platform: str = "", account_id: str = "", include_hidden: int = 0,
     ):
         api_auth(request)
+
+        def _deliver_paused_flag() -> str:
+            """全局真发暂停原因（空串=未暂停）；异常按未暂停（fail-open）。"""
+            try:
+                from src.inbox.automation_mode import deliver_paused_reason
+                return deliver_paused_reason(
+                    getattr(config_manager, "config", None))
+            except Exception:
+                return ""
         # scoped 过滤参数规范化：platform 小写（store 落库口径即小写平台名）、
         # account_id 保大小写（协议号/RPA 账号 id 可能大小写敏感）。
         platform = str(platform or "").strip().lower()
@@ -812,6 +821,7 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
                     # 特性探测标记：前端历史视角据此区分「后端已放行隐藏行」vs
                     # 「旧后端忽略了参数」（后者对已退出号给诚实空态而非装无会话）
                     "hidden_included": want_hidden,
+                    "deliver_paused": _deliver_paused_flag(),
                 }
 
         limit = max(5, min(100, int(limit or 30)))
@@ -893,6 +903,10 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
             "attn_by_account": attn_by_account,
             # P0 账号名录（全库口径；空列表=聚合失败，前端回落客户端推导）
             "accounts_summary": accounts_summary,
+            # #12（2026-08-30）：全局真发暂停旗标（非空字符串=原因）。行级「AI」
+            # 徽标据此叠加「已暂停真发」黄态；判定单点=deliver_paused_reason
+            # （与 effective_automation ⑦ 层同一函数，绝不各算一套）。
+            "deliver_paused": _deliver_paused_flag(),
         }
 
     @app.post("/api/unified-inbox/mark-read")

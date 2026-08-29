@@ -125,15 +125,30 @@ def _order(intentions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     )
 
 
-def build_preset_plan(name: str) -> Optional[List[Dict[str, Any]]]:
-    """预设名 → 有序意图列表；未知预设返回 None。"""
+def build_preset_plan(
+    name: str, overlay: Optional[Dict[str, Any]] = None,
+) -> Optional[List[Dict[str, Any]]]:
+    """预设名 → 有序意图列表；未知预设返回 None。
+
+    ``overlay`` 与值守同口径：仅当 overlay **显式** ``companion_send_gate.enabled
+    is False`` 时，从计划里拿掉 send-gate 意图（运营关闸，预设不得再打开）。
+    ``overlay=None`` / 缺键（测试、旧调用、新装机）保持「预设开闸」原语义。
+    不改 ``PRESETS`` 字面量——跳过发生在计划层，别的调用方不受影响。
+    """
     spec = PRESETS.get(name)
     if not spec:
         return None
+    skip_gate = False
+    if overlay is not None:
+        # 迟导入：standby_mode 顶层已 import 本模块，顶层互引会成环。
+        from src.companion.standby_mode import send_gate_operator_off
+        skip_gate = send_gate_operator_off(overlay)
     plan: List[Dict[str, Any]] = []
     for cap in CAPABILITIES:
         state = spec["states"].get(cap.key)
         if state is None:
+            continue
+        if skip_gate and cap.key == "companion_send_gate":
             continue
         plan.extend(_intentions_for(cap, state))
     return _order(plan)
@@ -188,7 +203,33 @@ def snapshot_to_plan(snapshot: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]
     return _order(plan)
 
 
+def preview_preset(
+    name: str, overlay: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """只读预览：与 ``build_preset_plan`` 同一份计划，零写入。
+
+    ``send_gate_skipped`` 由「预设声明要开闸」但「计划里没有闸」反推——与 apply
+    路径同一 ``build_preset_plan``，不另算一套 operator_off。未知预设返回 None。
+    """
+    spec = PRESETS.get(name)
+    if not spec:
+        return None
+    plan = build_preset_plan(name, overlay=overlay)
+    has_gate = any(it["key"] == "companion_send_gate" for it in (plan or []))
+    declared_on = spec.get("states", {}).get("companion_send_gate") == "on"
+    skipped = bool(declared_on and not has_gate)
+    return {
+        "preset": name,
+        "label": spec["label"],
+        "plan": plan or [],
+        "extras": preset_extras(name),
+        "send_gate_skipped": "operator_off" if skipped else None,
+        "would_write_send_gate": has_gate,
+        "intent_count": len(plan or []),
+    }
+
+
 __all__ = [
     "PRESETS", "EXTRA_FLAG_DEFAULTS", "build_preset_plan", "preset_extras",
-    "capture_extra_flags", "capture_snapshot", "snapshot_to_plan",
+    "capture_extra_flags", "capture_snapshot", "snapshot_to_plan", "preview_preset",
 ]

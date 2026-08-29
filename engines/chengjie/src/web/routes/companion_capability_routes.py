@@ -30,6 +30,30 @@ _RUNTIME_STATE_ATTRS = {
 }
 
 
+def _overlay_dict(cm) -> dict:
+    """读实例 overlay 原文（config.local.yaml），不是合并后的 config。
+
+    值守「运营关闸」判定必须看 overlay 是否**显式**写了
+    ``companion_send_gate.enabled: false``——合并 config 的代码缺省也是 false，
+    读合并值会把新装机误判成运营关闸。文件缺失 / 解析失败 → {}（=未显式关）。
+    """
+    try:
+        raw = getattr(cm, "config_path", "") or ""
+        if not raw:
+            return {}
+        ov = Path(raw).parent / "config.local.yaml"
+        if not ov.is_file():
+            return {}
+        import yaml
+        with open(ov, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        logger.debug("读 overlay 失败（值守 send-gate 决策回落为默认开闸）",
+                     exc_info=True)
+        return {}
+
+
 async def _provision_media_backends(cm, flags) -> dict:
     """开启类预设的**供给**步骤：托管版把识图指向官网网关（幂等）。
 
@@ -572,6 +596,26 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
         return {"ok": True, "available": True,
                 "count": len(entries), "entries": entries}
 
+    @app.get("/api/companion/capabilities/preset-preview")
+    async def api_companion_capability_preset_preview(
+        request: Request, name: str = "", _=Depends(api_auth),
+    ):
+        """只读预览一键预设将写入的意图（含运营关闸时是否跳过 send-gate）。
+
+        与 POST ``/preset`` 共用 ``preview_preset``；本端点零 overlay 写入、
+        零快照、零 rewire。``name`` 未知 → ``error=unknown_preset``。
+        """
+        from src.companion.capability_presets import PRESETS, preview_preset
+
+        cm = getattr(request.app.state, "config_manager", None)
+        if cm is None:
+            return {"ok": False, "available": False, "error": "config_not_ready"}
+        preview = preview_preset(str(name or "").strip(), overlay=_overlay_dict(cm))
+        if preview is None:
+            return {"ok": False, "error": "unknown_preset",
+                    "presets": {k: v["label"] for k, v in PRESETS.items()}}
+        return {"ok": True, "available": True, **preview}
+
     @app.post("/api/companion/capabilities/preset")
     async def api_companion_capability_preset(request: Request, _=Depends(api_auth)):
         """一键预设档：按风险阶梯整档切换（每条仍逐项过护栏）；切换前自动存快照供回滚。
@@ -579,7 +623,7 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
         body: {name: safe_default|dry_run_trial|full_auto, actor?}。
         """
         from src.companion.capability_presets import (
-            PRESETS, build_preset_plan, capture_extra_flags, capture_snapshot,
+            PRESETS, preview_preset, capture_extra_flags, capture_snapshot,
             preset_extras,
         )
         from src.companion.capability_status import collect_capability_status
@@ -596,10 +640,12 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
         body = body if isinstance(body, dict) else {}
         name = str(body.get("name") or "").strip()
         actor = (str(body.get("actor") or "").strip() or "web-admin")
-        plan = build_preset_plan(name)
-        if plan is None:
+        overlay = _overlay_dict(cm)
+        preview = preview_preset(name, overlay=overlay)
+        if preview is None:
             return {"ok": False, "message": f"未知预设: {name}",
                     "presets": {k: v["label"] for k, v in PRESETS.items()}}
+        plan = preview["plan"]
 
         modes = None
         store = getattr(state, "inbox_store", None)
@@ -634,6 +680,8 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
             summary = collect_capability_status(config, runtime=runtime).get("summary")
         except Exception:
             logger.debug("回算概要失败", exc_info=True)
+        if preview.get("send_gate_skipped"):
+            result["send_gate_skipped"] = preview["send_gate_skipped"]
         return {"ok": True, "preset": name, "label": PRESETS[name]["label"],
                 "summary": summary, **result}
 
@@ -698,7 +746,10 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
         双重 opt-in 护栏拦下（如无 auto_ai 会话），以及是否裸奔（send-gate 未开）。
         """
         from src.companion.delivery_calibration import delivery_calibration
-        from src.companion.standby_mode import infer_standby_mode, standby_options
+        from src.companion.standby_mode import (
+            infer_standby_mode, split_state, standby_options,
+            watching_send_gate_fields,
+        )
         from src.companion.capability_toggle import check_toggle
 
         state = request.app.state
@@ -721,6 +772,11 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
             "ok": True, "available": True,
             "mode": infer_standby_mode(config),
             "options": standby_options(),
+            # #12 拆开控制读侧（2026-08-30）：新会话默认档 / worker / 真发总闸 /
+            # 显式全自动行数（关真发前的影响面披露）。旧前端不识此键零影响；
+            # 新前端据此渲染「拆开控制」面板（键缺席=旧后端 → 面板隐藏）。
+            "split": split_state(
+                config, auto_ai_rows=cal["automation_modes"]["auto_ai"]),
             "watching": {
                 "allowed": bool(chk.get("allowed")),
                 "warn": bool(chk.get("warn")),
@@ -731,6 +787,7 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
                 "global_auto_ai": bool(cal.get("global_auto_ai")),
                 "worker": cal["switches"]["worker"],
                 "send_gate": cal["switches"]["send_gate"],
+                **watching_send_gate_fields(_overlay_dict(cm)),
             },
         }
 
@@ -750,8 +807,9 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
         from src.web.routes.unified_inbox_auth import _require_supervisor
         from src.companion.standby_mode import (
             align_existing_conversations, build_standby_plan,
-            infer_standby_mode, is_standby_mode, standby_align_target,
-            standby_extras, STANDBY_LABELS,
+            infer_standby_mode, is_standby_mode, send_gate_operator_off,
+            split_state, standby_align_target, standby_extras,
+            watching_send_gate_fields, STANDBY_LABELS,
         )
         from src.companion.capability_presets import capture_extra_flags, capture_snapshot
         from src.companion.delivery_calibration import delivery_calibration
@@ -771,7 +829,53 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
         body = body if isinstance(body, dict) else {}
         mode = str(body.get("mode") or "").strip()
         actor = (str(body.get("actor") or "").strip() or "web-admin")
-        plan = build_standby_plan(mode)
+        overlay = _overlay_dict(cm)
+
+        # ── #12 拆开控制写侧（2026-08-30）：body {"set": {...}} 单键直写，与三档
+        #    预设互斥（带 set 即不走捆绑路径）。「新会话默认档」只写
+        #    inbox.auto_draft.automation_mode（不动真发/worker/存量会话）；「真发
+        #    总闸」只走 l2_autosend_deliver 能力意图（check_toggle 护栏 + 审计 +
+        #    热接线照旧）——修「切个默认档连真发一起翻、既有全自动 B 线全灭
+        #    零提示」（钧 0830 01:57 审计行实锤）。
+        setter = body.get("set") if isinstance(body.get("set"), dict) else None
+        if setter:
+            modes = None
+            store = getattr(state, "inbox_store", None)
+            if store is not None:
+                try:
+                    modes = store.all_automation_modes()
+                except Exception:
+                    logger.debug("all_automation_modes 失败", exc_info=True)
+            out: dict = {"ok": True, "split_applied": {}}
+            if "default_mode" in setter:
+                dm = str(setter.get("default_mode") or "").strip().lower()
+                from src.inbox.store import AUTOMATION_MODES as _AM
+                if dm not in _AM:
+                    return {"ok": False, "message": f"未知默认档: {dm}"}
+                out.update(_apply_extra_flags(
+                    cm, {"inbox.auto_draft.automation_mode": dm},
+                    actor=actor, reason="standby-split:default_mode"))
+                out["split_applied"]["default_mode"] = dm
+            if "deliver" in setter:
+                want = bool(setter.get("deliver"))
+                from src.companion.capability_presets import (
+                    CAP_BY_KEY, _intentions_for, _order,
+                )
+                cap = CAP_BY_KEY.get("l2_autosend_deliver")
+                mini_plan = (_order(_intentions_for(
+                    cap, "on" if want else "off")) if cap is not None else [])
+                out.update(_apply_plan(cm, config, modes, mini_plan,
+                                       actor=actor,
+                                       reason="standby-split:deliver"))
+                out["split_applied"]["deliver"] = want
+                out["rewire"] = _try_rewire(state)
+            cal = delivery_calibration(config, modes)
+            out["mode"] = infer_standby_mode(config)
+            out["split"] = split_state(
+                config, auto_ai_rows=cal["automation_modes"]["auto_ai"])
+            return out
+
+        plan = build_standby_plan(mode, overlay=overlay)
         if plan is None or not is_standby_mode(mode):
             return {"ok": False, "message": f"未知值守档: {mode}",
                     "options": [{"mode": m, "label": lbl}
@@ -823,9 +927,11 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
         result["rewire"] = _try_rewire(state)
         cal = delivery_calibration(config, modes)
         chk = check_toggle(config, modes, "l2_autosend_deliver", "enabled", True)
-        return {
+        out = {
             "ok": True, "requested": mode, "mode": infer_standby_mode(config),
             "label": STANDBY_LABELS.get(mode, mode),
+            "split": split_state(
+                config, auto_ai_rows=cal["automation_modes"]["auto_ai"]),
             "watching": {
                 "allowed": bool(chk.get("allowed")), "warn": bool(chk.get("warn")),
                 "reason": chk.get("reason") or "",
@@ -833,9 +939,13 @@ def register_companion_capability_routes(app, *, api_auth) -> None:
                 "global_auto_ai": bool(cal.get("global_auto_ai")),
                 "worker": cal["switches"]["worker"],
                 "send_gate": cal["switches"]["send_gate"],
+                **watching_send_gate_fields(overlay),
             },
             **result,
         }
+        if mode == "watching" and send_gate_operator_off(overlay):
+            out["send_gate_skipped"] = "operator_off"
+        return out
 
     @app.get("/api/companion/capabilities/signals")
     async def api_companion_capability_signals(

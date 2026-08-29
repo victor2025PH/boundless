@@ -128,6 +128,52 @@ def test_apply_caps_first_effective_layer_wins():
     assert [c.layer for c in applied] == ["platform"]  # 主因=先命中的层
 
 
+# ── ⑦ 全局真发暂停封顶（#12 2026-08-30）────────────────────────────────────
+
+def _l2(enabled, deliver):
+    return {"inbox": {"l2_autosend": {"enabled": enabled, "deliver": deliver}}}
+
+
+def test_deliver_paused_caps_b_line_platform():
+    """deliver 关（钧 0830「切人审后发」实锤形态）→ 拟稿-投递链平台封 review。"""
+    caps = _caps(platform="line", config=_l2(True, False))
+    assert [c.layer for c in caps] == ["deliver_paused"]
+    assert caps[0].ceiling == "review"
+    assert caps[0].detail == "l2_autosend.deliver=false"
+    # worker 整个关（off 档）同样封，且原因区分
+    caps2 = _caps(platform="whatsapp", config=_l2(False, False))
+    assert [c.layer for c in caps2] == ["deliver_paused"]
+    assert caps2[0].detail == "l2_autosend.enabled=false"
+
+
+def test_deliver_paused_never_caps_telegram():
+    """telegram 刻意豁免：A 线协议直答不经 worker，deliver 不管它——把还在
+    自动回的会话标成「已暂停」是反向撒谎。"""
+    assert _caps(platform="telegram", config=_l2(True, False)) == []
+
+
+def test_deliver_paused_silent_when_watching_or_unconfigured():
+    """双开（值守中）不封；l2_autosend 段整个缺席＝部署形态未知，不表态。"""
+    assert _caps(platform="line", config=_l2(True, True)) == []
+    assert _caps(platform="line", config={}) == []
+
+
+def test_deliver_paused_effective_mode_and_badge_source_agree():
+    """resolver 出口：auto_ai 基础档 + deliver 关 → 有效档 review，主因层
+    deliver_paused——前端胶囊与行徽标（chats 旗标）同一事实源。"""
+    out = effective_automation(
+        _FakeStore("auto_ai"), _l2(True, False), conversation_id="line:a:u1",
+        platform="line", account_id="a", now=NOW, business_line="",
+        connected_at=NOW - 1000 * HOUR)
+    assert out["mode"] == "auto_ai" and out["effective_mode"] == "review"
+    assert [c["layer"] for c in out["caps"]] == ["deliver_paused"]
+    from src.inbox.automation_mode import deliver_paused_reason
+    assert deliver_paused_reason(_l2(True, False)) == "l2_autosend.deliver=false"
+    assert deliver_paused_reason(_l2(True, True)) == ""
+    assert deliver_paused_reason({}) == ""
+    assert deliver_paused_reason(None) == ""
+
+
 # ── 2. resolver 出口（API / CLI 共用） ──────────────────────────────────
 
 class _FakeStore:

@@ -281,6 +281,23 @@ def compute_mode_caps(
     except Exception:
         pass
 
+    # ── ⑦ 全局真发暂停封顶（#12 2026-08-30，钧 0830 01:54 实锤）────────────────
+    # 拟稿-投递链平台（非 telegram）的「全自动」在 l2_autosend worker/deliver
+    # 任一关闭时实际只拟稿零投递——此前档位徽标仍亮全自动绿标＝对人撒谎
+    # （切「拟稿人审」连带关 deliver 后，LINE 会话草稿照生成、零投递、绿标照亮）。
+    # 封 review 让「胶囊说的＝链路做的」。**telegram 刻意豁免**：A 线协议直答
+    # 不经 autosend worker，deliver 不管它，auto_ai 会话照常自动回——生效面以
+    # 链路真相为准，把还在自动回的会话标成「已暂停」是反向撒谎。判定单点＝
+    # ``automation_mode.deliver_paused_reason``（会话列表旗标共用同一函数）。
+    try:
+        if plat and plat != "telegram":
+            from src.inbox.automation_mode import deliver_paused_reason
+            _paused = deliver_paused_reason(config)
+            if _paused:
+                caps.append(ModeCap("deliver_paused", "review", detail=_paused))
+    except Exception:
+        pass
+
     return caps
 
 

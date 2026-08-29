@@ -293,6 +293,42 @@ FIELDS: Dict[str, Dict[str, Any]] = {
         "type": "number", "lo": 0, "hi": 300,
         "default": BUBBLE_TOTAL_BUDGET_DEFAULT, "hot": True,
     },
+    # ── 账号发送额度 / 防轰炸闸门（companion_send_gate，2026-08-29）──────
+    # 老板指令（同日群实录沉淀）：对外支持不得再教用户改配置文件——这组键
+    # 此前只能 YAML 手改（设置页缺位正是那条「方法二」群回复的土壤），全部
+    # 收进白名单。消费方 send_guard.send_blocked → companion_send_gate.
+    # evaluate 逐次发送现读 config → 写 overlay 即生效，全部 hot=True。
+    # default 与 gate_decision/evaluate 的代码缺省一致（门禁按签名钉住）；
+    # 安装包种子（config.desktop.min.yaml）显式带 300/100/3，不受此影响。
+    "companion_send_gate.enabled": {
+        "type": "bool", "default": False, "hot": True,
+    },
+    # target_cap/warmup_start_cap 下限 1：闸门语义里 0＝每天 0 条＝全停
+    # （sends_today >= cap 即拦），与 peer_bot_guard.daily_reply_budget 的
+    # 「0=不限」**相反**——全停走 Kill-Switch，不给这个脚枪留 UI 入口；
+    # 上限沿用 1_000_000 纯技术帽（业务上不封顶，B34 同哲学）。
+    "companion_send_gate.target_cap": {
+        "type": "int", "lo": 1, "hi": 1_000_000, "default": 15, "hot": True,
+    },
+    "companion_send_gate.warmup_start_cap": {
+        "type": "int", "lo": 1, "hi": 1_000_000, "default": 2, "hot": True,
+    },
+    "companion_send_gate.warmup_ramp_days": {
+        "type": "int", "lo": 0, "hi": 365, "default": 14, "hot": True,
+    },
+    "companion_send_gate.block_on_red": {
+        "type": "bool", "default": True, "hot": True,
+    },
+    "companion_send_gate.reserve_for_manual": {
+        "type": "int", "lo": 0, "hi": 100_000, "default": 0, "hot": True,
+    },
+    # 限额白名单（exempt_peers 子串匹配 chat_key）：收件箱横幅「白名单此
+    # 客户」按钮追加的就是这张表——这里是全表管理口（含删除；列表在
+    # overlay 合并里整体替换，无需 REPLACE_PATHS）。
+    "companion_send_gate.exempt_peers": {
+        "type": "str_list", "default": [], "hot": True,
+        "item_maxlen": 64, "max_items": 500,
+    },
 }
 
 _DELAY_PREFIX = "inbox.l2_autosend.deliver_delay."
@@ -600,6 +636,39 @@ def _coerce_workdays(v: Any) -> Optional[List[int]]:
     return sorted(out)
 
 
+def _coerce_str_list(
+    v: Any, *, item_maxlen: int = 64, max_items: int = 500,
+) -> Tuple[Optional[List[str]], str]:
+    """字符串列表（发送闸门白名单等）→ (归一值, 错误码)；错误码空串＝合法。
+
+    条目内空白折叠（chat_key/号码不含空白，折叠比拒绝宽容）、空条目剔除、
+    去重保序；YAML 手写的数字条目（号码不加引号）容忍为 str。空列表合法
+    ＝清空。非列表 / 嵌套容器 → ``bad_list``；条目超长 / 条数超帽 →
+    ``too_long``（拒绝而非静默截断，与 text 同哲学）。
+    """
+    if v is None:
+        return [], ""
+    if isinstance(v, str) or not isinstance(v, (list, tuple)):
+        return None, "bad_list"
+    out: List[str] = []
+    seen = set()
+    for item in v:
+        if isinstance(item, (dict, list, tuple)):
+            return None, "bad_list"
+        s = " ".join(str(item if item is not None else "").split())
+        if not s:
+            continue
+        if len(s) > item_maxlen:
+            return None, "too_long"
+        if s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    if len(out) > max_items:
+        return None, "too_long"
+    return out, ""
+
+
 def _coerce_tzname(v: Any) -> Optional[str]:
     """IANA 时区名（空=跟随服务器本地钟）；非法名拒绝而非静默回落。"""
     s = str(v if v is not None else "").strip()
@@ -677,6 +746,15 @@ def sanitize_patch(
                 errors.append({"field": key, "code": "bad_timezone"})
             else:
                 clean[key] = tzv
+        elif t == "str_list":
+            lst, code = _coerce_str_list(
+                raw_val,
+                item_maxlen=int(spec.get("item_maxlen", 64)),
+                max_items=int(spec.get("max_items", 500)))
+            if code:
+                errors.append({"field": key, "code": code})
+            else:
+                clean[key] = lst
         elif t == "bool":
             b = _coerce_bool(raw_val)
             if b is None:
@@ -995,6 +1073,7 @@ def cross_validate(
     """
     errors_ws = _validate_schedule_window(clean, config)
     errors_ws += _validate_bubble_gap(clean, config)
+    errors_ws += _validate_sendgate_ramp(clean, config)
     kmin = _DELAY_PREFIX + "min_sec"
     kmax = _DELAY_PREFIX + "max_sec"
     if not any(k.startswith(_DELAY_PREFIX) for k in clean):
@@ -1073,6 +1152,32 @@ def _validate_schedule_window(
     return []
 
 
+_SG_TARGET_PATH = "companion_send_gate.target_cap"
+_SG_START_PATH = "companion_send_gate.warmup_start_cap"
+
+
+def _validate_sendgate_ramp(
+    clean: Mapping[str, Any], config: Any,
+) -> List[Dict[str, str]]:
+    """发送闸门爬坡成对规则：合并视图 warmup_start_cap ≤ target_cap。
+
+    起点比目标还高时 account_health 的线性爬坡会倒着走（额度随号龄**下降**），
+    没有一种运营意图长这样——必是填反了，保存时拦下。只在本次触碰任一端时
+    校验（历史脏配置不拦无关项的保存），与班表/条间隔成对规则同哲学。
+    """
+    if _SG_TARGET_PATH not in clean and _SG_START_PATH not in clean:
+        return []
+    target = clean.get(
+        _SG_TARGET_PATH, _coerce_number(_dig(config, _SG_TARGET_PATH, 15)) or 15)
+    start = clean.get(
+        _SG_START_PATH, _coerce_number(_dig(config, _SG_START_PATH, 2)) or 2)
+    try:
+        broken = start > target
+    except TypeError:
+        broken = False
+    return [{"field": _SG_START_PATH, "code": "min_gt_max"}] if broken else []
+
+
 def _validate_bubble_gap(
     clean: Mapping[str, Any], config: Any,
 ) -> List[Dict[str, str]]:
@@ -1127,6 +1232,10 @@ def effective_values(config: Any) -> Dict[str, Any]:
                    if isinstance(val, Mapping) else {})
         elif spec["type"] == "workdays":
             val = list(val) if isinstance(val, (list, tuple)) else []
+        elif spec["type"] == "str_list":
+            # YAML 手写数字条目（号码不加引号）统一 str 化，快照不持活引用
+            val = ([str(x) for x in val]
+                   if isinstance(val, (list, tuple)) else [])
         if path == "inbox.auto_draft.bootstrap_automation_mode" and val is None:
             # 真实缺省语义：全局档位为 auto_ai 时自动 bootstrap
             mode = str(_dig(config, "inbox.auto_draft.automation_mode",
@@ -1157,6 +1266,9 @@ def field_meta() -> Dict[str, Dict[str, Any]]:
             m["keys"] = list(spec.get("keys") or PLATFORMS)
         if spec["type"] == "text":
             m["maxlen"] = spec.get("maxlen", 200)
+        if spec["type"] == "str_list":
+            m["item_maxlen"] = spec.get("item_maxlen", 64)
+            m["max_items"] = spec.get("max_items", 500)
         if "lo" in spec:
             m["lo"] = spec["lo"]
             m["hi"] = spec["hi"]

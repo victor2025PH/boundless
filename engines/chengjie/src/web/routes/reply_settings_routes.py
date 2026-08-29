@@ -36,6 +36,7 @@ _ERR_KEYS = {
     "out_of_range": "rps_err_out_of_range",
     "min_gt_max": "rps_err_min_gt_max",
     "bad_overrides": "rps_err_bad_value",
+    "bad_list": "rps_err_bad_value",
     "bad_persona_id": "rps_err_bad_persona",
     "bad_override_key": "rps_err_bad_value",
     "too_long": "rps_err_too_long",
@@ -346,6 +347,31 @@ def register_reply_settings_routes(
                 **flags,
             })
         return out
+
+    @app.get("/api/reply-settings/sendgate-today")
+    async def api_reply_settings_sendgate_today(
+        request: Request, _=Depends(api_auth),
+    ):
+        """账号发送额度闸门「今日发送量」列表（只读，P1 2026-08-29）。
+
+        与预算表同页同源哲学：滚动 24h 用量 vs 爬坡后上限；闸门关着仍列出
+        用量、verdict 记 ``-``（不装 BLOCK）。注册表缺失 → available=false。
+        纯只读 SQLite ``mode=ro``，不经 SendCountStore（构造即 prune）。
+        """
+        from src.inbox.send_gate_today import (
+            collect_send_gate_today, data_root_from_config_path,
+        )
+        root = data_root_from_config_path(
+            getattr(config_manager, "config_path", None))
+        if root is None:
+            return {"ok": True, "available": False, "gate": {}, "rows": []}
+        try:
+            snap = collect_send_gate_today(
+                root, getattr(config_manager, "config", None) or {})
+        except Exception:
+            logger.debug("sendgate-today 聚合失败（如实降级）", exc_info=True)
+            return {"ok": True, "available": False, "gate": {}, "rows": []}
+        return {"ok": True, **snap}
 
     @app.get("/api/reply-settings/health")
     async def api_reply_settings_health(request: Request, _=Depends(api_auth)):

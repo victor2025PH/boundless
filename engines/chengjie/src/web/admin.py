@@ -4051,6 +4051,20 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _log_rps.getLogger("admin").debug("自动回复设置路由注册跳过", exc_info=True)
 
+    # ── 新账号「AI 接管方式」确认（全自动/拟稿人审/关闭，P0 2026-08-30）──
+    try:
+        from src.web.routes.account_mode_routes import register_account_mode_routes
+
+        register_account_mode_routes(
+            app,
+            api_auth=_api_auth,
+            config_manager=config_manager,
+        )
+    except Exception:
+        import logging as _log_am
+
+        _log_am.getLogger("admin").debug("账号档位路由注册跳过", exc_info=True)
+
     # ── 双面板融合 API（能力注册表 / 驾驶权互斥锁，P0 2026-08-13）──
     try:
         from src.web.routes.surface_fusion_routes import (

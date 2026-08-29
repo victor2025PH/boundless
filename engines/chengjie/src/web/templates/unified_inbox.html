@@ -794,8 +794,17 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
          （2026-08-17 13:32 实锤，模板热更新=直接上生产；陷阱门禁按字面记号扫描，
          注释里也别写出那个连写序列）。 #}
       @media (prefers-reduced-motion: reduce){ #budget-banner.bb-flash,#budget-banner.bb-soft .bb-ic,#budget-banner.bb-hard .bb-ic{animation:none;}}
+      /* 新账号接管确认横幅（P0 2026-08-30）：信息蓝，pending 空时隐藏 */
+      #am-banner{align-items:center;gap:10px;padding:8px 14px;font-size:13px;line-height:1.5;background:rgba(59,130,246,.12);color:var(--tk-brand,#2563eb);border-bottom:1px solid rgba(59,130,246,.3);flex-wrap:wrap;}
+      #am-banner .hdr-btn{flex:none;white-space:nowrap;}
+      #am-banner .am-rec{font-weight:700;border-color:currentColor;}
+      #am-banner a{color:inherit;font-size:12px;flex:none;}
       </style>
       <div id="budget-banner" style="display:none;"></div>
+      <!-- 新账号接管确认（P0 2026-08-30）：新登录账号选 全自动/拟稿人审/关闭，
+           确认前按拟稿人审运行；数据源 /api/reply-settings/account-modes，
+           按钮走事件委托（零内联 onclick），功能关/旧后端/清单空整条隐藏 -->
+      <div id="am-banner" style="display:none;"></div>
 
       <!-- P0 2026-08-12「发送护栏」横幅：额度/急停/放量/授权/会话掉线的常驻可见化
            （当日实锤：warmup_cap 拦下人工发送被包成 ok:true，坐席点了毫无反应）。
@@ -6565,6 +6574,10 @@ async function _loadChatsBody(){
     }
     _setConnBanner(false);   // 恢复：熄灭重连横幅
     _refreshClaimsBulk();    // 二期：旁路刷新全量认领快照（8s 节流，供行徽章/「我的」筛选）
+    // #12（2026-08-30）：全局真发暂停旗标（服务端单点判定 deliver_paused_reason 的
+    // 回显）——行级「AI」徽标据此叠加「已暂停真发」黄态。旧后端无此键＝undefined
+    // → 恒 false，行为与旧版逐字节一致。
+    window._deliverPaused=!!d.deliver_paused;
     allChats=(d.chats||[]).filter(c=>c.account_status!=='offline');
     // 未读可信化 v2：**精确**本地保 0——只压「服务端快照不比本地已读标记新」的行
     // （行没新动静 last_ts<=mark.lastTs，或就是当前打开的会话）；真新入站
@@ -6934,44 +6947,20 @@ function _closeStandbyPop(e){
   }
   pop.classList.remove('show');
 }
-/* P2 2026-08-22 存量升级一次性提示（全自动一键化）：新装种子已出厂全自动；
-   存量部署**绝不静默翻转**（正在人审服务真实客户）——主管首次打开收件箱时
-   弹一次性确认（__wsModal 中央模态；旧壳无模态组件=不打扰，诚实降级）。
-   无论选「开启」还是「保持现状」都只弹这一次；此后入口在值守胶囊与
-   /reply-settings「AI 接管」。 */
-function _maybeMasterAutoPrompt(d){
-  try{
-    if(!d || !d.ok || d.mode==='watching') return;   // 已全自动=无需提示
-    var LSK='aitr.master_auto_prompt.v1';
-    if(localStorage.getItem(LSK)==='1') return;
-    var M=window.__wsModal;
-    if(!M || typeof M.open!=='function') return;
-    localStorage.setItem(LSK,'1');
-    M.open({
-      tone:'warn', icon:'🚀',
-      title: window.T('inbox.masterauto.title'),
-      lead: window.T('inbox.masterauto.lead'),
-      points: [window.T('inbox.masterauto.p1'),
-               window.T('inbox.masterauto.p2'),
-               window.T('inbox.masterauto.p3')],
-      note: window.T('inbox.masterauto.note'),
-      buttons: [
-        {label: window.T('inbox.masterauto.later'), tone:'ghost', focus:true},
-        {label: window.T('inbox.masterauto.enable'), tone:'warn',
-         onClick:function(){
-           if(typeof window.setStandbyMode==='function') window.setStandbyMode('watching');
-         }},
-      ],
-    });
-  }catch(_){ }
-}
+/* 已退役（2026-08-30）：老「一键全自动」两按钮一次性弹窗（保持现状 / 立即开启全自动→
+   全局 watching）与新的「新账号接管确认」三选项（全自动/拟稿人审/关闭，收件箱横幅
+   #am-banner + /reply-settings「🆕 新账号接管确认」卡，数据源 /api/reply-settings/
+   account-modes）语义割裂——一个两按钮弹窗、一个三按钮横幅并存会让主管无所适从。
+   按老板要求彻底收口：本弹窗退役为 no-op，AI 接管选择统一走「新账号三选项 + 值守胶囊
+   （关闭/仅建议/值守中）」。保留函数名与 window 导出，防既有调用点 ReferenceError。 */
+function _maybeMasterAutoPrompt(_d){ /* retired: 见上方注释，统一走新三选项 */ }
 window._maybeMasterAutoPrompt=_maybeMasterAutoPrompt;
 window.loadStandbyMode=async function(){
   if(!_standbyBar()) return;
   try{
     const r=await apiFetch('/api/companion/standby');
     const d=await r.json();
-    if(d&&d.ok){ _renderStandby(d); _maybeMasterAutoPrompt(d); }
+    if(d&&d.ok){ _renderStandby(d); }   // 老「一键全自动」弹窗已退役（统一走新账号三选项）
   }catch(_){ var h=document.querySelector('#standby-hint'); if(h){ h.textContent=window.T('inbox.standby.hint_err'); } }
 };
 window.setStandbyMode=async function(mode){
@@ -13727,6 +13716,80 @@ async function reliefReplyBudget(){
     try{ _toast(window.T('inbox.budget.relief_fail'),'#b91c1c'); }catch(_){}
   }
 }
+// ── 新账号接管确认横幅（P0 2026-08-30）──────────────────────────────────
+// 新登录账号在确认 AI 接管方式前按「拟稿人审」运行；本横幅是坐席侧提醒面
+// （每次展示第一个待确认账号 + 三档按钮，处理后自动接续下一个）。设置页
+// /reply-settings「新账号接管确认」卡是全量管理面。低频轮询（3min）；
+// 旧后端无端点 / 功能关 / 清单空 → 整条隐藏。决策是主管动作，坐席点击
+// 由后端 403 如实拦下（横幅本身对坐席可见=知道新号正处于人审运行）。
+var _amState=null;
+function _amRender(){
+  var el=document.getElementById('am-banner');
+  if(!el) return;
+  var pend=(_amState&&_amState.pending)||[];
+  if(!pend.length){ el.style.display='none'; el.innerHTML=''; return; }
+  var a=pend[0];
+  var name=a.display_name||a.account_id;
+  var msg=window.Tf('inbox.am.banner_one',{name:name});
+  if(pend.length>1) msg+=' · '+window.Tf('inbox.am.banner_more',{m:pend.length-1});
+  function amBtn(mode,key,extra){
+    return '<button class="hdr-btn'+(extra||'')+'" data-am-mode="'+mode
+      +'" data-am-plat="'+esc(a.platform)+'" data-am-aid="'+esc(a.account_id)
+      +'" data-am-name="'+esc(name)+'">'+esc(window.T(key))+'</button>';
+  }
+  el.innerHTML='<span style="flex:1;min-width:220px;">'+esc(msg)+'</span>'
+    +amBtn('auto_ai','inbox.am.mode_auto')
+    +amBtn('review','inbox.am.mode_review',' am-rec')
+    +amBtn('manual','inbox.am.mode_manual')
+    +'<a href="/reply-settings#rps-sec-am">'+esc(window.T('inbox.am.all'))+'</a>';
+  el.style.display='flex';
+}
+async function _amPoll(){
+  var el=document.getElementById('am-banner');
+  if(!el) return;
+  try{
+    var r=await apiFetch('/api/reply-settings/account-modes',null,{timeoutMs:15000});
+    if(!r.ok){ _amState=null; _amRender(); return; }
+    var d=await r.json();
+    _amState=(d&&d.ok&&d.enabled)?d:null;
+  }catch(_){ _amState=null; }
+  _amRender();
+}
+(function(){
+  var el=document.getElementById('am-banner');
+  if(!el||el.__amBound) return;
+  el.__amBound=true;
+  el.addEventListener('click',async function(ev){
+    var btn=ev.target&&ev.target.closest?ev.target.closest('[data-am-mode]'):null;
+    if(!btn||btn.disabled) return;
+    btn.disabled=true;
+    try{
+      var r=await apiFetch('/api/reply-settings/account-modes/decide',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({platform:btn.getAttribute('data-am-plat'),
+          account_id:btn.getAttribute('data-am-aid'),
+          mode:btn.getAttribute('data-am-mode')})},{timeoutMs:30000});
+      var d={}; try{ d=await r.json(); }catch(_){ d={}; }
+      if(!r.ok||!d||d.ok===false){
+        throw new Error((d&&d.errors&&d.errors[0]&&d.errors[0].message)
+          ||(d&&d.detail)||('HTTP '+r.status));
+      }
+      var mkey={auto_ai:'inbox.am.m_auto',review:'inbox.am.m_review',
+        manual:'inbox.am.m_manual'}[String(d.mode||'')]||'';
+      try{ _toast(window.Tf('inbox.am.done',{
+        name:btn.getAttribute('data-am-name')||'',
+        mode:mkey?window.T(mkey):String(d.mode||'')}),'#16a34a'); }catch(_){}
+      _amState=Object.assign({},_amState||{},{pending:(d&&d.pending)||[]});
+      _amRender();
+      try{ _uiBeacon('am_banner_decide'); }catch(_){}
+    }catch(e){
+      try{ _toast(window.T('inbox.am.fail')+((e&&e.message)||''),'#b91c1c'); }catch(_){}
+      btn.disabled=false;
+    }
+  });
+  _amPoll();
+  setInterval(_amPoll,180000);
+})();
 // 触顶弹窗「今日继续」成功（workspace_base __wsBudgetPop 广播）→ 若正开着
 // 该会话，立即回拉状态清横幅（不等 45s 轮询）
 document.addEventListener('aitr:budget-relieved',function(e){
@@ -13792,7 +13855,7 @@ function _renderEffChip(){
   // 实锤：④⑤⑥ 三层上线时忘了这一步）。门禁 test_effcap_layers_have_seat_labels
   // 从 compute_mode_caps 反查，漏一层即红。
   var EFFCAP_LAYERS=['warmup','platform','business_line',
-    'identity_pending','reconnect_backlog','own_fleet_peer'];
+    'identity_pending','reconnect_backlog','own_fleet_peer','deliver_paused'];
   var layer=(EFFCAP_LAYERS.indexOf(String(cap.layer||''))>=0)?String(cap.layer):'generic';
   var effLabel='';
   try{ effLabel=_modeLabel(e.mode); }catch(_){ effLabel=String(e.mode||''); }
@@ -13810,6 +13873,8 @@ function _renderEffChip(){
     tip=window.Tf('inbox.effcap.reconnect_backlog_t',{mode:effLabel});
   }else if(layer==='own_fleet_peer'){
     tip=window.Tf('inbox.effcap.own_fleet_peer_t',{peer:String(cap.detail||''),mode:effLabel});
+  }else if(layer==='deliver_paused'){
+    tip=window.Tf('inbox.effcap.deliver_paused_t',{mode:effLabel});
   }else{
     tip=window.Tf('inbox.effcap.generic_t',{mode:effLabel,layer:String(cap.layer||'')});
   }

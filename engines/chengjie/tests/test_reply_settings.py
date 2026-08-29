@@ -181,6 +181,97 @@ class TestSanitizePatch:
         assert clean["inbox.peer_bot_guard.enabled"] is False
         assert clean["inbox.peer_bot_guard.daily_reply_budget"] == 60
 
+    # ── 账号发送额度 / 防轰炸闸门（companion_send_gate，2026-08-29）────
+
+    def test_sendgate_keys_in_whitelist_and_defaults_synced(self):
+        # 老板指令（0829）：这组键收进设置页，支持不得再教用户改 YAML。
+        # default 必须与消费方 gate_decision/evaluate 的代码缺省一致——
+        # 按**函数签名**对拍（companion_send_gate 无 _DEFAULTS 表），漂移先红。
+        import inspect
+
+        from src.skills.companion_send_gate import gate_decision, gate_enabled
+        sig = {k: p.default
+               for k, p in inspect.signature(gate_decision).parameters.items()}
+        prefix = "companion_send_gate."
+        for name in ("target_cap", "warmup_start_cap", "warmup_ramp_days",
+                     "block_on_red", "reserve_for_manual"):
+            spec = rps.FIELDS.get(prefix + name)
+            assert spec is not None, name
+            assert spec["hot"] is True, name
+            assert spec["default"] == sig[name], name
+        en = rps.FIELDS[prefix + "enabled"]
+        assert en["hot"] is True
+        assert en["default"] is gate_enabled(None) is gate_enabled({}) is False
+        ex = rps.FIELDS[prefix + "exempt_peers"]
+        assert ex["type"] == "str_list" and ex["default"] == []
+
+    def test_sendgate_cap_zero_rejected(self):
+        # 闸门语义里 cap=0＝每天 0 条＝全停（与 peer_bot_guard 的 0=不限
+        # **相反**）——全停走 Kill-Switch，UI 不给这个脚枪留入口。
+        _, errors = rps.sanitize_patch({"companion_send_gate.target_cap": 0})
+        assert errors[0]["code"] == "out_of_range"
+        _, errors = rps.sanitize_patch(
+            {"companion_send_gate.warmup_start_cap": 0})
+        assert errors[0]["code"] == "out_of_range"
+        # 正常值/技术帽：安装包默认 300、支持建议 500 都必须能存
+        clean, errors = rps.sanitize_patch({
+            "companion_send_gate.target_cap": 500,
+            "companion_send_gate.warmup_start_cap": "100",
+            "companion_send_gate.warmup_ramp_days": 3,
+            "companion_send_gate.block_on_red": "off",
+            "companion_send_gate.reserve_for_manual": 5,
+        })
+        assert errors == []
+        assert clean["companion_send_gate.target_cap"] == 500
+        assert clean["companion_send_gate.warmup_start_cap"] == 100
+        assert clean["companion_send_gate.block_on_red"] is False
+
+    def test_sendgate_exempt_str_list(self):
+        # 白名单：去空白/去重保序、数字条目 str 化、空表=清空；
+        # 非列表 / 嵌套 / 超长拒绝（bad_list / too_long）
+        clean, errors = rps.sanitize_patch({
+            "companion_send_gate.exempt_peers":
+                [" 4498639894 ", "user@x", 4498639894, "", None, "user@x"],
+        })
+        assert errors == []
+        assert clean["companion_send_gate.exempt_peers"] == [
+            "4498639894", "user@x"]
+        clean, errors = rps.sanitize_patch(
+            {"companion_send_gate.exempt_peers": []})
+        assert errors == [] and clean["companion_send_gate.exempt_peers"] == []
+        _, errors = rps.sanitize_patch(
+            {"companion_send_gate.exempt_peers": "4498639894"})
+        assert errors[0]["code"] == "bad_list"
+        _, errors = rps.sanitize_patch(
+            {"companion_send_gate.exempt_peers": [["nested"]]})
+        assert errors[0]["code"] == "bad_list"
+        _, errors = rps.sanitize_patch(
+            {"companion_send_gate.exempt_peers": ["x" * 65]})
+        assert errors[0]["code"] == "too_long"
+
+    def test_sendgate_ramp_cross_validate(self):
+        # 起点 > 目标＝爬坡倒着走（额度随号龄下降），合并视图拦下
+        errors = rps.cross_validate(
+            {"companion_send_gate.warmup_start_cap": 100}, 
+            {"companion_send_gate": {"target_cap": 50}})
+        assert errors and errors[0]["code"] == "min_gt_max"
+        assert errors[0]["field"] == "companion_send_gate.warmup_start_cap"
+        # 同批提交自洽 / 只动无关键不连坐历史脏配置
+        assert rps.cross_validate({
+            "companion_send_gate.target_cap": 300,
+            "companion_send_gate.warmup_start_cap": 100,
+        }, {}) == []
+        assert rps.cross_validate(
+            {"companion_send_gate.enabled": True},
+            {"companion_send_gate": {"warmup_start_cap": 100,
+                                     "target_cap": 50}}) == []
+
+    def test_sendgate_exempt_effective_values_stringified(self):
+        # YAML 手写数字条目（号码不加引号）在快照里统一 str（前端 join 不炸）
+        vals = rps.effective_values({
+            "companion_send_gate": {"exempt_peers": [4498639894, "a"]}})
+        assert vals["companion_send_gate.exempt_peers"] == ["4498639894", "a"]
+
     # ── 内容与风格全局默认（P0-style） ──────────────────────────
 
     def test_style_enum_accepts_empty_and_values(self):
@@ -1695,7 +1786,14 @@ def test_i18n_pack_bilingual():
                 "rps_cc_attn_title", "rps_cc_attn_desc", "rps_cc_follow_btn",
                 "rps_cc_follow_confirm", "rps_cc_follow_done",
                 "rps_cc_follow_fail", "rps_pv_adaptive_obs",
-                "rps_pv_adaptive_note"):
+                "rps_pv_adaptive_note",
+                # 2026-08-29：额度命名 + 值守关闸确认 + 今日发送量
+                "rps_master_confirm_auto_keep_off", "rps_master_confirm_auto_cap",
+                "rps_master_gate_kept_off", "rps_guard_title", "rps_sg_title",
+                "rps_af_f_budget", "rps_af_f_quota", "rps_guard_q_factory",
+                "rps_guard_unlimited", "rps_sg_pending", "rps_sg_today",
+                "rps_sg_disabled_note", "rps_nav_quota",
+                "rps_dlg_ok", "rps_dlg_cancel"):
         assert key in pack.ZH and key in pack.EN
 
 
@@ -1894,6 +1992,82 @@ class TestBudgetTodayRoute:
             assert not row["exhausted"] and not row["hard_stopped"]
         finally:
             store.close()
+
+
+class TestSendgateTodayRoute:
+    """GET /api/reply-settings/sendgate-today（P1 2026-08-29）。
+
+    Fake CM 的 config_path=tmp_path/config.yaml → 数据根=tmp_path，
+    库落 tmp_path/config/*.db（与 collector 单测同址）。
+    """
+
+    def test_no_registry_degrades_honestly(self, tmp_path):
+        client, _ = _make_client(tmp_path, config={
+            "companion_send_gate": {"enabled": True, "target_cap": 15}})
+        d = client.get("/api/reply-settings/sendgate-today").json()
+        assert d["ok"] is True and d["available"] is False and d["rows"] == []
+
+    def test_gate_off_usage_without_block(self, tmp_path):
+        import sqlite3
+        import time
+        from src.integrations.account_registry import _DDL as _REG_DDL
+        from src.integrations.protocol_autoreply_limits import _SEND_DDL
+
+        now = time.time()
+        cfg_dir = tmp_path / "config"
+        cfg_dir.mkdir()
+        con = sqlite3.connect(str(cfg_dir / "account_registry.db"))
+        con.executescript(_REG_DDL)
+        con.execute(
+            "INSERT INTO platform_accounts "
+            "(platform, account_id, status, created_at) VALUES (?,?,?,?)",
+            ("telegram", "acct1", "online", now - 30 * 86400))
+        con.commit()
+        con.close()
+        scon = sqlite3.connect(str(cfg_dir / "account_sends.db"))
+        scon.executescript(_SEND_DDL)
+        for i in range(8):
+            scon.execute(
+                "INSERT INTO account_sends (account_key, ts) VALUES (?,?)",
+                ("telegram:acct1", now - i * 60))
+        scon.commit()
+        scon.close()
+        client, _ = _make_client(tmp_path, config={
+            "companion_send_gate": {"enabled": False, "target_cap": 15}})
+        d = client.get("/api/reply-settings/sendgate-today").json()
+        assert d["ok"] and d["available"] is True
+        assert d["gate"]["enabled"] is False
+        row = d["rows"][0]
+        assert row["account"] == "telegram:acct1"
+        assert row["used_24h"] == 8
+        assert row["auto_verdict"] == "-" and row["manual_verdict"] == "-"
+
+
+def test_guard_quick_buttons_match_fields_default():
+    """快捷档数字必须钉 FIELDS 缺省：出厂 500，不得再出现过期的 rpsGuardQuick(40)。"""
+    import re
+    from pathlib import Path
+
+    from src.inbox.reply_pacing_settings import FIELDS
+    html = (Path(__file__).resolve().parent.parent
+            / "src" / "web" / "templates" / "reply_settings.html").read_text(
+                encoding="utf-8")
+    nums = {int(n) for n in re.findall(r"rpsGuardQuick\((\d+)\)", html)}
+    factory = int(FIELDS["inbox.peer_bot_guard.daily_reply_budget"]["default"])
+    assert factory == 500
+    assert factory in nums
+    assert 0 in nums          # 不限额
+    assert 40 not in nums
+
+
+def test_follow_slider_uses_inpage_confirm():
+    """「改为跟随滑杆」走页内 rpsConfirm，不再用 window.confirm（会写 overlay，确认必须同款对话框）。"""
+    from pathlib import Path
+    html = (Path(__file__).resolve().parent.parent
+            / "src" / "web" / "templates" / "reply_settings.html").read_text(
+                encoding="utf-8")
+    assert "await rpsConfirm(RPS_I18N.ccFollowConfirm" in html
+    assert "confirm(RPS_I18N.ccFollowConfirm" not in html
 
 
 # ── 桌面种子节奏约定门禁（2026-08-12） ─────────────────────────────

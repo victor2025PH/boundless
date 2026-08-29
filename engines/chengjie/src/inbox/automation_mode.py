@@ -97,6 +97,47 @@ def global_automation_mode_from_config(config: Optional[Dict[str, Any]]) -> str:
     return mode if mode in AUTOMATION_MODES else _DEFAULT_AUTOMATION_MODE
 
 
+def deliver_paused_reason(config: Optional[Dict[str, Any]]) -> str:
+    """非空＝B 线自动投递此刻**不可能发生**（worker 或真发总闸关着）。
+
+    #12（2026-08-30 钧实锤）：设置页切「拟稿人审」会连带关 ``l2_autosend.deliver``，
+    此后 LINE/WA 等拟稿-投递链平台的「全自动」会话只拟稿零投递，而会话徽标
+    仍亮全自动绿标——本函数是「全局已暂停真发」状态的单一判定点，供
+    effective_automation 封顶层与会话列表旗标共用（两个消费面绝不各算一套）。
+    返回值＝机器可读原因（进 ModeCap.detail 与日志）。
+
+    保守边界：``l2_autosend`` 段**整个缺席**＝部署形态未知（可能压根没有
+    autosend 轴），不表态返空——与封顶层「判不出不封」同一 fail-open 方向；
+    段在场才按 enabled/deliver 两键判（键缺省按 False＝该轴没开）。异常返空。
+    """
+    try:
+        l2 = (((config or {}).get("inbox") or {}).get("l2_autosend"))
+        if not isinstance(l2, dict) or not l2:
+            return ""
+        if not bool(l2.get("enabled")):
+            return "l2_autosend.enabled=false"
+        if not bool(l2.get("deliver")):
+            return "l2_autosend.deliver=false"
+    except Exception:
+        return ""
+    return ""
+
+
+def _account_mode_layer(
+    conversation_id: str, config: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    """账号级档位层（新账号 onboarding，P0 2026-08-30）；None＝本层不表态。
+
+    新登录账号在运营确认「全自动/拟稿人审/关闭」前默认 review；确认后按所选。
+    层级：会话显式 > 账号级 > 全局。功能关/异常 → None（完全旧行为）。
+    """
+    try:
+        from src.inbox.account_mode_onboarding import account_mode_from_cid
+        return account_mode_from_cid(conversation_id, config)
+    except Exception:
+        return None
+
+
 def bootstrap_enabled_from_config(config: Optional[Dict[str, Any]]) -> bool:
     """是否在新会话首条入站时持久化全局档位。"""
     ad = _auto_draft_cfg(config)
@@ -124,7 +165,9 @@ def resolve_automation_mode(
         explicit = store.get_automation_mode_if_set(conversation_id)
         if explicit is not None:
             return explicit
-    mode = global_automation_mode_from_config(config)
+    mode = _account_mode_layer(conversation_id, config)
+    if mode is None:
+        mode = global_automation_mode_from_config(config)
     if (mode == "auto_ai"
             and not group_autopilot_exempt(conversation_id, config)
             and conversation_is_group(store, conversation_id)):
@@ -149,6 +192,16 @@ def maybe_bootstrap_automation_mode(
     explicit = store.get_automation_mode_if_set(conversation_id)
     if explicit is not None:
         return explicit
+    acct_mode = _account_mode_layer(conversation_id, config)
+    if acct_mode is not None:
+        # 账号层生效期**不落盘**：账号决策自身持久，会话动态跟随——运营确认
+        # 「全自动」后该账号存量未显式设置的会话立即生效，无需批量对齐；
+        # 落盘反而把「确认前的 review 默认」永久钉进会话行。群守卫同口径。
+        if (acct_mode == "auto_ai"
+                and not group_autopilot_exempt(conversation_id, config)
+                and conversation_is_group(store, conversation_id)):
+            return "review"
+        return acct_mode
     mode = global_automation_mode_from_config(config)
     if conversation_is_group(store, conversation_id):
         if mode == "auto_ai" and not group_autopilot_exempt(conversation_id, config):
