@@ -66,6 +66,9 @@ if ($healthy) {
         Write-Log "RECOVERED after $($state.fail_streak) fail(s) - $detail"
     }
     $state.fail_streak = 0
+    # 见到健康＝上次拉起尘埃落定，冷却窗清零。冷却只该罩住「拉起后还没见过
+    # 健康」的抖振窗口；不清的话，恢复后 30 分钟内的新故障会被冷却误拦。
+    $state.last_restart = ''
     Save-State $state
     exit 0
 }
@@ -82,11 +85,20 @@ if ([int]$state.fail_streak -lt 2) {
 
 if ($state.last_restart) {
     try {
-        $since = (Get-Date) - [datetime]$state.last_restart
-        if ($since.TotalMinutes -lt $RestartCooldownMin) {
-            Write-Log ("cooldown {0:N1}/{1} min - skip restart" -f $since.TotalMinutes, $RestartCooldownMin)
-            Save-State $state
-            exit 1
+        # 机器重启＝新纪元：state 里的冷却属于上个开机周期，必须失效。
+        # 2026-08-29 实锤：演练拉起(19:50) → 老板重启机器 → 服务没自启，
+        # 20:00 tick 第二振确认后被 9.4/30min 冷却误拦，服务多躺 20 分钟。
+        $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+        if ($boot -gt [datetime]$state.last_restart) {
+            Write-Log "cooldown voided: system rebooted after last restart attempt"
+            $state.last_restart = ''
+        } else {
+            $since = (Get-Date) - [datetime]$state.last_restart
+            if ($since.TotalMinutes -lt $RestartCooldownMin) {
+                Write-Log ("cooldown {0:N1}/{1} min - skip restart" -f $since.TotalMinutes, $RestartCooldownMin)
+                Save-State $state
+                exit 1
+            }
         }
     } catch { }
 }
