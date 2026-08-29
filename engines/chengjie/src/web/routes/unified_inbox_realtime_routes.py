@@ -120,15 +120,38 @@ _COALESCE_NOTIF_TYPES = frozenset({
 })
 
 
-def _notif_content_ok(evt: dict) -> bool:
+def customer_msgs_in_center(config: dict | None) -> bool:
+    """客户聊天消息要不要进通知中心/铃铛历史（impl85 阶段5，工单#30 钧拍板）。
+
+    「铃铛的消息中心，不用显示客户聊天记录，只需要系统的消息或需要人工处理的
+    消息」——客户消息默认**不进**（内容留在通知中心也有隐私问题；会话列表未读
+    才是它的家）。``workspace.notify_center.customer_messages: true`` 重新打开
+    （值守承诺的「想盯消息的人可以自己打开」）。系统/运维/需人工类事件不受影响。
+    """
+    try:
+        ws = (config or {}).get("workspace") or {}
+        nc = ws.get("notify_center") if isinstance(ws, dict) else None
+        if isinstance(nc, dict) and "customer_messages" in nc:
+            return bool(nc.get("customer_messages"))
+    except Exception:
+        pass
+    return False
+
+
+def _notif_content_ok(evt: dict, config: dict | None = None) -> bool:
     """铃铛队列的内容级准入（类型白名单之上的第二道闸，纯函数可门禁）。
 
     bot_peer_alert 是混合语义事件（Tier0/复读/秒回/预算共用一个类型）——
     只有 ``reason=daily_budget``（预算触顶）值得进坐席铃铛历史：它有明确
     的当场行动（今日继续/改人审跟进），其余判定属身份标注，收件箱徽章与
-    webhook 已覆盖。其他类型一律放行（维持旧行为）。
+    webhook 已覆盖。
+    impl85 阶段5：``inbox_message``（客户聊天消息）按 ``customer_msgs_in_center``
+    准入（默认不进——见该函数 docstring）。其他类型一律放行（维持旧行为）。
     """
-    if (evt or {}).get("type") != "bot_peer_alert":
+    etype = (evt or {}).get("type")
+    if etype == "inbox_message":
+        return customer_msgs_in_center(config)
+    if etype != "bot_peer_alert":
         return True
     data = evt.get("data") or {}
     return str(data.get("reason") or "") == "daily_budget"
@@ -328,7 +351,9 @@ def register_realtime_routes(app, *, api_auth) -> None:
             etype = evt.get("type")
             if etype not in _NOTIF_EVENT_TYPES:
                 return
-            if not _notif_content_ok(evt):
+            _cm = getattr(request.app.state, "config_manager", None)
+            if not _notif_content_ok(
+                    evt, (getattr(_cm, "config", None) or {}) if _cm else None):
                 return
             nq: list = getattr(request.app.state, "notif_queue", None)
             if nq is None:

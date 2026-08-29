@@ -3,10 +3,10 @@
 {% block head %}
 <!-- 两端共享 copilot 组件库(单一事实来源 repo 根 shared/copilot,挂 /copilot) -->
 <!-- ?v= 版本号：组件改动后递增，强制浏览器丢弃旧缓存（避免“改了不生效”） -->
-<link rel="stylesheet" href="/copilot/tokens.css?v=20260611">
+<link rel="stylesheet" href="/copilot/tokens.css?v=20260828a">
 <!-- P2 主题：auto 跟随系统 / 手动 light / 手动 dark，持久化到 localStorage('cp_theme')。
      在 <head> 内联尽早执行，避免首屏闪烁；theme-*.css 动态切换，data-cp-theme 同时驱动 cp-* 组件与本页暗色变量。 -->
-<link rel="stylesheet" id="cp-theme-css" href="/copilot/theme-light.css?v=20260817t">
+<link rel="stylesheet" id="cp-theme-css" href="/copilot/theme-light.css?v=20260828a">
 <script>
 (function(){
   var KEY='cp_theme';
@@ -32,7 +32,7 @@
     var eff=effective();
     document.documentElement.setAttribute('data-cp-theme',eff);
     var l=document.getElementById('cp-theme-css');
-    if(l){ var want='/copilot/theme-'+eff+'.css?v=20260817t'; if(l.getAttribute('href')!==want) l.setAttribute('href',want); }
+    if(l){ var want='/copilot/theme-'+eff+'.css?v=20260828a'; if(l.getAttribute('href')!==want) l.setAttribute('href',want); }
     // App(iframe) 右栏主题热同步：?theme= 只在 iframe 加载那一刻被 app.html 读一次，宿主切档
     // 必须 postMessage(set-theme) 跟进，否则「选亮色右栏还是暗的」（2026-08-17 实锤）。
     // 壳未挂/iframe 未加载时静默；发的是本窗口生效档（含桌面壳 URL 钉语义），绝不写 localStorage。
@@ -88,12 +88,12 @@
      此前这里写死 zh:en 三元——繁体坐席会被硬塞英文副驾（zh_hant P3 修复）。
      语言切换走整页刷新(wsToggleLang→/set_lang)，组件随新 LANG 重渲，无需热切换。 -->
 <script>window.CP_LANG = window.WS_LANG || 'zh';</script>
-<script src="/copilot/i18n/cp-i18n.js?v=20260827c"></script>
+<script src="/copilot/i18n/cp-i18n.js?v=20260828c"></script>
 {% if ui_lang|default('zh') in ('zh_hant', 'vi', 'th', 'id') %}
-<script src="/copilot/i18n/cp-i18n-ext.{{ ui_lang }}.js?v=20260827b"></script>
+<script src="/copilot/i18n/cp-i18n-ext.{{ ui_lang }}.js?v=20260828b"></script>
 {% endif %}
 <script src="/copilot/client/copilot-client.js?v=20260822f"></script>
-<script src="/copilot/sidebar-chrome.js?v=20260818a"></script>
+<script src="/copilot/sidebar-chrome.js?v=20260828b"></script>
 <script src="/copilot/components/cp-panel-base.js?v=20260817t"></script>
 <script src="/copilot/components/cp-rel-stage.js?v=20260819a"></script>
 <script src="/copilot/components/cp-persona.js?v=20260822a"></script>
@@ -104,8 +104,8 @@
 <script src="/copilot/components/cp-xlate-tools.js?v=20260817rz1"></script>
 <script src="/copilot/components/cp-goal.js?v=20260819a"></script>
 <script src="/copilot/components/cp-origin.js?v=20260820a"></script>
-<script src="/copilot/components/cp-image.js?v=20260822f"></script>
-<script src="/copilot/components/cp-nurture.js?v=20260822f"></script>
+<script src="/copilot/components/cp-image.js?v=20260828b"></script>
+<script src="/copilot/components/cp-nurture.js?v=20260828b"></script>
 {% endblock %}
 {% block content %}
 <style>
@@ -2882,7 +2882,8 @@ async function cleanupStaleHistAccounts(btn){
 }
 /* 历史行卡（三层结构：身份行 → 元信息（在 acct-id 副行）→ 动作行）。
    动作分层＝1 主 CTA（已退出=重登琥珀 / 已移除=恢复 / 其余=查看历史）+ 查看 +
-   ⋯ 菜单（清未读 / 彻底删除）；desktop/registered 是在册活跃号，不给删除。 */
+   ⋯ 菜单（清未读 / 导出 / 危险项）。危险项按状态二选一（彻底删除 vs 移除），
+   决策表与理由写在 _adkGovItems 头部——两处必须同时改。 */
 function _acctHistRowHtml(h){
   const hp=esc(h.platform), ha=esc(h.account_id), st=String(h.status||'');
   const stCls=(st==='logged_out')?'hist-out':(st==='removed')?'hist-removed'
@@ -2917,7 +2918,7 @@ function _acctHistRowHtml(h){
   const viewBtn=(st==='logged_out'||st==='removed')
     ?`<button type="button" class="acct-btn ghost" onclick="viewAcctChats('${hp}','${ha}','${esc(st)}')">${uiIcon('msg',14)}<span class="lbl">${esc(window.T('inbox.acct.hist_view'))}</span></button>`
     :'';
-  // ⋯ 菜单：低频（清未读/导出）与危险（彻底删除）收进溢出，动作行恒 ≤3 控件
+  // ⋯ 菜单：低频（清未读/导出）与危险（彻底删除 或 移除）收进溢出，动作行恒 ≤3 控件
   const menuId=('hist-menu-'+h.platform+'-'+h.account_id).replace(/[^a-zA-Z0-9_-]/g,'_');
   const items=[];
   if(h.unread){
@@ -2928,6 +2929,8 @@ function _acctHistRowHtml(h){
   const danger=[];
   if(st==='logged_out'||st==='removed'||st==='history_only'){
     danger.push(`<button class="acct-menu-item danger" role="menuitem" title="${esc(window.T('inbox.acct.hist_purge_t'))}" onclick="purgeAcctHistory('${hp}','${ha}',${Number(h.count)||0},this)">${uiIcon('trash',15)}<span>${esc(window.T('inbox.acct.hist_purge'))}</span></button>`);
+  } else if(st==='desktop'||st==='registered'){
+    danger.push(`<button class="acct-menu-item danger" role="menuitem" title="${esc(window.T('inbox.acct.hist_remove_t'))}" onclick="removeAcct('${hp}','${ha}',this)">${uiIcon('trash',15)}<span>${esc(_acctIconLabel('inbox.acct.remove'))}</span></button>`);
   }
   const menu=(items.length||danger.length)
     ?`<button class="acct-btn more" aria-haspopup="menu" aria-expanded="false" aria-controls="${menuId}" title="${esc(window.T('inbox.acct.more'))}" aria-label="${esc(window.T('inbox.acct.more'))}" onclick="toggleAcctMenu(event,'${menuId}')">${uiIcon('more',16)}</button><div class="acct-menu" id="${menuId}" role="menu">${items.join('')}${danger.length?`<div class="acct-menu-sep"></div>${danger.join('')}`:''}</div>`
@@ -3480,9 +3483,14 @@ function _ahpRowHtml(h){
     <button type="button" class="ahp-more" data-act="more" data-plat="${pl}" data-aid="${aid}" data-st="${esc(st)}" data-unread="${h.unread||0}" data-count="${h.count||0}" aria-haspopup="menu" title="${esc(window.T('inbox.acct.more'))}" aria-label="${esc(window.T('inbox.acct.more'))}">${uiIcon('more',15)}</button>
   </div>`;
 }
-/* 治理菜单条目（chip 右键/长按 与 面板行 ⋯ 共用一张决策表；动作函数全为抽屉同源）。
-   删除仅限 logged_out/removed/history_only（desktop/registered 在册活跃号不给，
-   服务端 purgeable 单点仍兜底复核）。 */
+/* 治理菜单条目（chip 右键/长按 与 面板行 ⋯ 共用一张决策表；动作函数全为抽屉同源。
+   抽屉历史行 _acctHistRowHtml 的 ⋯ 菜单按同表给项，两处改一处必须改另一处）。
+   危险项按状态二选一，别再合成一个「删除」：
+   - logged_out/removed/history_only → 彻底删除（purge：清本机会话数据 + 硬删注册表残行）；
+   - desktop/registered → 移除（remove：注册表软删 → 状态转 removed，之后才可彻底删除）。
+     这两态的行来自 _registry_active_map＝注册表里真有行，所以 /remove 不会是空操作
+     （注册表没有的号该路由 404，那正是「点删除没反应」的老病）；purge 仍由服务端
+     _purge_history_blocked 拦到状态转 offline/removed 之后，前后端口径不分叉。 */
 function _adkGovItems(pl,aid,st,unread,count){
   const items=[];
   if(st==='logged_out'){
@@ -3498,6 +3506,8 @@ function _adkGovItems(pl,aid,st,unread,count){
   items.push({label:window.T('inbox.acct.hist_export'),ic:'download',tip:window.T('inbox.acct.hist_export_t'),on:function(){ exportAcctHistory(pl,aid,null); }});
   if(st==='logged_out'||st==='removed'||st==='history_only'){
     items.push('sep',{label:window.T('inbox.acct.hist_purge'),ic:'trash',danger:true,tip:window.T('inbox.acct.hist_purge_t'),on:function(){ _ahpRun(purgeAcctHistory(pl,aid,count,null)); }});
+  } else if(st==='desktop'||st==='registered'){
+    items.push('sep',{label:_acctIconLabel('inbox.acct.remove'),ic:'trash',danger:true,tip:window.T('inbox.acct.hist_remove_t'),on:function(){ _ahpRun(removeAcct(pl,aid,null)); }});
   }
   return items;
 }
@@ -6890,7 +6900,7 @@ function _renderStandby(data, requested){
   else if(mode==='suggest'){ txt=window.T('inbox.standby.hint_suggest'); }
   else if(mode==='watching'){
     txt=window.T('inbox.standby.hint_watching');
-    if(!w.send_gate){ txt+=' · '+window.T('inbox.standby.hint_nogate'); hint.classList.add('warn'); }
+    if(!w.send_gate && !w.send_gate_operator_off){ txt+=' · '+window.T('inbox.standby.hint_nogate'); hint.classList.add('warn'); }
   } else { txt=window.T('inbox.standby.hint_custom'); hint.classList.add('warn'); }
   hint.textContent=txt;
   // 一期美化：同步标题行状态胶囊（点色 + 文案「AI · 档位」）
@@ -12696,7 +12706,7 @@ function renderMessages(c, msgs, opts={}){
       :(_storeFailed
         ?`<span style="color:var(--th-ink-red5,#b91c1c);margin-left:4px;">${window.T('inbox.msg.send_failed')}</span>${_failWhy}${(String(m.text||'').trim()&&!m._resending)?`<button class="tiny-btn" style="margin-left:6px;padding:0 6px;height:18px;line-height:16px;" onclick="resendStoreFailed('${esc(m.message_id||'')}')">${window.T('inbox.msg.resend')}</button>`:''}`
         :(_storeResent?`<span style="color:var(--tk-text-muted);margin-left:4px;">${window.T('inbox.msg.resent')}</span>`:''));
-    pushUnit('m_'+_ukey,`<div class="msg-row ${isOut?'out':'in'}" id="msg-${esc(m.message_id||m._optimistic||'')}" data-mid="${esc(m.message_id||'')}" data-pmid="${esc(_pmid)}">
+    pushUnit('m_'+_ukey,`<div class="msg-row ${isOut?'out':'in'}" id="msg-${esc(m.message_id||m._optimistic||'')}" data-mid="${esc(m.message_id||'')}" data-pmid="${esc(_pmid)}" data-ts="${esc(m.ts||'')}">
       <div class="msg-bubble${_revoked?' msg-bubble-revoked':''}${(!_revoked&&_isChannel&&!isOut)?' msg-channel-card':''}"${optClass}${failClass}>${_bubbleInner}</div>${_reactOut}
       <div class="msg-ts">${ts}${_editedMark}${_tick}${_failTail}</div>
       ${_revoked?'':tools}${waActions}
@@ -12708,10 +12718,86 @@ function renderMessages(c, msgs, opts={}){
   try{ _vpSyncAll(); }catch(_){}
   // 官方级消息管理：多选模式下重渲后把选中态描回新行（keyed-diff 会重建行 DOM）
   try{ if(typeof _msgSelSync==='function') _msgSelSync(el); }catch(_){}
+  // 实施84 P0-5b：渲染后给出站消息补「主动管线来源」chip（keyed-diff 重建行后重描；
+  // 装饰层自带缓存与特性探测，绝不阻塞渲染）
+  try{ _outreachChipsDecorate(); }catch(_){}
 
   // 智能滚动：显式加载（非静默）保持旧语义必滚；静默轮询仅在 DOM 真有变化时才动滚动条
   if(shouldScroll && (changed || !opts.silent)) el.scrollTop=el.scrollHeight;
 }
+
+/* ── 实施84 P0-5b：出站消息「主动管线来源」chip ─────────────────────────────
+   修「客户收到的主动消息坐席说不清是谁发的」：数据源＝outreach_log 统一账本
+   （/api/care/outreach-timeline?conversation_id=，六管线一本账），消息行与触达行
+   按时间就近一对一匹配（触达 ts=入队时刻，deferred 投递可能被安静时段顺延，
+   窗口放宽 24h；每条触达至多标一行，先到先配）。纯装饰层：端点缺席/旧后端
+   /任何异常 → 静默无 chip（特性探测，绝不影响消息流）。i18n 复用关怀页
+   cs5_tl_src_* 词条（i18n packs 合并视图全站可解析）。 */
+var _ocCache={cid:'',ts:0,items:null,inflight:false};
+var _OC_LABELS={care:'cs5_tl_src_care',topic:'cs5_tl_src_topic',ritual:'cs5_tl_src_ritual',reactivation:'cs5_tl_src_react'};
+var _OC_COLORS={care:'#e05d7b',topic:'#4f8bd6',ritual:'#c98a2b',reactivation:'#7a5fd0'};
+function _ocConvId(c){
+  if(!c) return '';
+  return String(c.conversation_id||((c.platform||'')+':'+(c.account_id||'default')+':'+(c.chat_key||'')));
+}
+function _ocApply(cid,items){
+  const c=selectedChat; if(!c||_ocConvId(c)!==cid) return;
+  const area=document.getElementById('msg-area'); if(!area) return;
+  const rows=Array.prototype.slice.call(area.querySelectorAll('.msg-row.out[data-ts]'))
+    .map(function(el){return {el:el,ts:Number(el.getAttribute('data-ts'))||0};})
+    .filter(function(r){return r.ts>0;}).sort(function(a,b){return a.ts-b.ts;});
+  if(!rows.length) return;
+  const its=(items||[]).filter(function(it){
+    // 双保险：旧端点不认 conversation_id 过滤参数时返回全量——客户端再滤一次，
+    // 绝不把别的会话的触达标到本会话的消息上
+    return !it.conversation_id||String(it.conversation_id)===cid;
+  }).map(function(it){
+    return {ts:Number(it.ts)||0,source:String(it.source||''),note:String(it.note||it.batch_id||'')};
+  }).filter(function(it){return it.ts>0;}).sort(function(a,b){return a.ts-b.ts;});
+  const used=new Set();
+  its.forEach(function(it){
+    for(let i=0;i<rows.length;i++){
+      if(used.has(i)) continue;
+      const dt=rows[i].ts-it.ts;
+      if(dt<-300) continue;   // 消息比触达早 5min 以上：不是这单
+      if(dt>86400) break;     // 触达后 24h 内没有出站：放弃该触达（不乱标）
+      used.add(i);
+      const tsEl=rows[i].el.querySelector('.msg-ts');
+      if(tsEl&&!tsEl.querySelector('.msg-src-chip')){
+        const sp=document.createElement('span');
+        sp.className='msg-src-chip';
+        const col=_OC_COLORS[it.source]||'var(--tk-text-muted,#94a3b8)';
+        sp.setAttribute('style','display:inline-block;margin-left:6px;padding:0 6px;border-radius:99px;font-size:.62rem;line-height:1.5;border:1px solid '+col+'55;color:'+col+';vertical-align:middle;');
+        if(it.note) sp.title=it.note;
+        sp.textContent='🤖 '+window.T(_OC_LABELS[it.source]||'cs5_tl_src_other');
+        tsEl.appendChild(sp);
+      }
+      break;
+    }
+  });
+}
+function _outreachChipsDecorate(){
+  try{
+    const c=selectedChat; if(!c) return;
+    const cid=_ocConvId(c); if(!cid) return;
+    if(_ocCache.cid===cid&&_ocCache.items){
+      _ocApply(cid,_ocCache.items);
+      if((Date.now()-_ocCache.ts)<60000) return; // 60s 内不重拉，直接用缓存
+    }
+    if(_ocCache.inflight) return;
+    _ocCache.inflight=true;
+    apiFetch('/api/care/outreach-timeline?days=7&limit=200&conversation_id='+enc(cid))
+      .then(function(r){return r.ok?r.json():null;})
+      .then(function(d){
+        _ocCache.inflight=false;
+        if(!d||!d.ok||!Array.isArray(d.items)) return;
+        _ocCache={cid:cid,ts:Date.now(),items:d.items,inflight:false};
+        _ocApply(cid,d.items);
+      }).catch(function(){_ocCache.inflight=false;});
+  }catch(_e){}
+}
+window._outreachChipsDecorate=_outreachChipsDecorate;
+window._ocApply=_ocApply;
 
 /* ===== 发送消息（乐观 UI）===== */
 let _sendSeq=0; // 防止乱序
@@ -13765,7 +13851,10 @@ function _renderTakeoverBanner(){
   // P0-A1 2026-08-19：整条蓝带 → 轻量 pill + 真倒计时——rearm 快照带 eta_ts（秒级
   // epoch）时算「还剩 N 分钟」，随 /automation 轮询自然刷新；旧后端无 eta_ts 回落
   // 静态 after_minutes 文案。同数据同轮询，零新请求。
-  var txt=window.Tf('inbox.takeover.pill',{time:t||'--:--'});
+  // impl85 阶段2（工单#45 钧拍板）：横幅写明触发原因——让位只由「人工发出内容」
+  // 触发（查看永不触发，有门禁钉住），把这句说给坐席免得再猜「是不是点开就停」。
+  var txt=window.Tf('inbox.takeover.pill',{time:t||'--:--'})
+    +window.T('inbox.takeover.pill_cause');
   var r=_rearmState;
   if(r&&r.enabled){
     var _min=0;

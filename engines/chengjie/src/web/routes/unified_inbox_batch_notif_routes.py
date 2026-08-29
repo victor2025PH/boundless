@@ -237,6 +237,17 @@ def register_batch_notif_routes(app, *, api_auth) -> None:
             n for n in queue
             if (n or {}).get("type") != "conv_note" or _mention_targets_me(n, me)
         ]
+        # impl85 阶段5（工单#30）：客户聊天消息默认不进通知中心——写入侧已按
+        # 配置拦，这里读取侧再滤一遍（覆盖开关切换前的存量条目 + 旧进程残留），
+        # 并把生效值回传给前端（live SSE 写铃铛与服务端同口径，单一开关两面生效）。
+        from src.web.routes.unified_inbox_realtime_routes import (
+            customer_msgs_in_center,
+        )
+        _cm = getattr(request.app.state, "config_manager", None)
+        _cust_ok = customer_msgs_in_center(
+            (getattr(_cm, "config", None) or {}) if _cm else None)
+        if not _cust_ok:
+            queue = [n for n in queue if (n or {}).get("type") != "inbox_message"]
         # P8：随历史一并回传该坐席「已读水位线」，前端据此跨设备恢复已读状态
         read_at = 0
         try:
@@ -246,7 +257,8 @@ def register_batch_notif_routes(app, *, api_auth) -> None:
                 read_at = int(store.get_agent_prefs(agent["agent_id"]).get("notif_read_at") or 0)
         except Exception:
             logger.debug("读取 notif_read_at 失败（已忽略）", exc_info=True)
-        return {"ok": True, "notifications": queue[-limit:], "read_at": read_at}
+        return {"ok": True, "notifications": queue[-limit:], "read_at": read_at,
+                "customer_messages": _cust_ok}
 
     @app.post("/api/workspace/notifications/sys-status")
     async def api_workspace_notifications_sys_status(

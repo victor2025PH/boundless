@@ -754,7 +754,7 @@
 <script src="/static/workspace/crm-widgets.js?v=20260702a"></script>
 <!-- 实施75：统一通知总线（右下 toast + 系统状态胶囊 + 消息中心留痕）。
      顶部横幅体系冻结增量：新状态一律走 AITRNotify，勿再注册 wsBanner 横幅。 -->
-<script src="/static/workspace/notify-bus.js?v=20260827b"></script>
+<script src="/static/workspace/notify-bus.js?v=20260828a"></script>
 <!-- 三期：⌘K 命令面板（页面导航/会话跳转/动作；自包含模块，样式自注入） -->
 <script src="/static/workspace/cmdk.js?v=20260820a"></script>
 <!-- WP-7 坐席新手任务卡（自包含悬浮组件；flag onboarding.agent_tasks 关=API 404=静默不渲染，
@@ -1549,59 +1549,148 @@
      生效——旧标签页跑旧 JS 是「已修复的问题坐席还在踩」的根因（当日实录：账号切换条修复后
      旧标签页仍显示旧行为）。静态 /static/workspace/ui-build.txt 首行 token 为单一版本源：
      页面加载首查即基线，此后每 5 分钟（+回前台时）复查，变了出条子请坐席刷新。 -->
-<!-- 实施75：版本陈旧提醒退役顶部——右下胶囊（信息蓝，常驻到刷新/贪睡）+ 卡片
-     提示（立即刷新 / 暂不=2h 贪睡）；探针节奏与贪睡语义保留（下方 IIFE）。 -->
+<!-- 实施75：版本陈旧提醒退役顶部——右下胶囊（信息蓝，常驻到更新/贪睡）+ 卡片
+     提示（立即更新 / 暂不=2h 贪睡）；探针节奏与贪睡语义保留（下方 IIFE）。
+     2026-08-28 修：胶囊自带常驻动作按钮（卡片 20s 过期后仍可执行）+ 文案不再说
+     「刷新页面」（桌面壳无此入口）+ 空闲静默换版 + severity 分级。 -->
 {#- 告警链路最后一公里（2026-08-05）：0 通道=所有告警报进虚空。管理员横幅 + 一键接通
     弹窗（共享 partial，ops 卡同用）；坐席角色不渲染（后端本就拒写）。 -#}
 {% set alertlink_banner = true %}
 {% include "_alertlink_connect.html" %}
 <script>
 (function(){
-  /* 陈旧前端探针：以标签页加载后的首次读取为基线（无需模板内嵌常量=零双源），
-     首行 token 变化 → wsBanner 出条（优先级 30，让位于连接/通道/降级/冷却类事故条）。
-     探针失败一律静默（老部署没有该文件 / 网络抖动都不该打扰坐席）。 */
+  /* 陈旧前端探针（2026-08-28 重做，老板实录「桌面版没有刷新按钮」）：
+     ① 基线＝标签页加载后的首次读取（无需模板内嵌常量=零双源）；
+     ② 首行 token 变化 → 右下胶囊，**胶囊自带常驻「立即更新」按钮**。旧实现只有
+        卡片带按钮、20s 即逝，之后坐席只剩一句「刷新页面即可加载」——桌面壳是
+        Electron webview，没有地址栏刷新按钮，那等于给了个做不到的指令；
+     ③ 第二行可选 `severity=silent|notice|urgent`（缺省 notice）：silent 只在空闲
+        时静默换版不打扰，urgent 卡片不自动消失。发布侧用 bump_ui_build.py --severity；
+     ④ 空闲自动重载＝最优路径：页面隐藏满 1 分钟且没有「会丢的」未发送内容 → 直接
+        换新版，坐席回来就是新的、零打扰（输入框文字由收件箱 wsconvdraft 会话草稿
+        机制自带幸存：400ms debounce + 2s 巡检，重载不丢）；
+     ⑤ 探针失败一律静默（老部署没有该文件 / 网络抖动都不该打扰坐席）。 */
   var URL='/static/workspace/ui-build.txt';
   var SNOOZE_KEY='ws_uibuild_snooze';
-  var baseline='';
-  var shown=false;
-  var TXT={{ i18n.get('ws.uibuild.text', '工作台界面已更新到新版本，刷新页面即可加载（建议先发出/保存手头输入）。')|tojson }};
-  var BTN={{ i18n.get('ws.uibuild.btn', '立即刷新')|tojson }};
+  var AUTO_N_KEY='ws_uibuild_auto_n';      // 每标签页每小时自动重载配额
+  var AUTO_DONE_KEY='ws_uibuild_autoed';   // 自动换版后的一次性知会标记
+  var AUTO_HIDDEN_MS=60000;                // 隐藏满 1 分钟才敢自动换版
+  var AUTO_MAX_PER_H=3;                    // 防 bump 风暴 / 异常态自我重载死循环
+  var baseline='', shown=false, sev='notice';
+  var hiddenSince=(document.visibilityState==='hidden')?Date.now():0;
+  var SHORT={{ i18n.get('ws.uibuild.short', '界面有新版本')|tojson }};
+  var TXT={{ i18n.get('ws.uibuild.text', '界面有新版本，点「立即更新」重新载入（约 2 秒；输入框里的文字会自动保留）。')|tojson }};
+  var BTN={{ i18n.get('ws.uibuild.btn', '立即更新')|tojson }};
   var SNZ={{ i18n.get('ws.uibuild.dismiss', '暂不（2 小时内不再提醒）')|tojson }};
+  var UNSENT={{ i18n.get('ws.uibuild.unsent', '你还有没发出去的图片或语音，重新载入会把它们清空。建议先发送，再更新。')|tojson }};
+  var FORCE={{ i18n.get('ws.uibuild.force', '仍要更新')|tojson }};
+  var LATER={{ i18n.get('ws.uibuild.later', '先去发送')|tojson }};
+  var AUTODONE={{ i18n.get('ws.uibuild.auto_done', '界面已在后台自动更新到新版本。')|tojson }};
   var TITLE={{ i18n.get('ntf.capsule_title', '系统状态 · 点击查看通知中心')|tojson }};
   function _snoozed(){
     try{ return (Number(sessionStorage.getItem(SNOOZE_KEY)||0) > Date.now()); }catch(_){ return false; }
   }
+  /* 只认「重载会丢」的东西：暂存媒体队列与语音预览。输入框文字不算——它有会话
+     草稿机制兜底，把它算进来会让提示永远处于「有未发送」态而失去分辨力。 */
+  function _blockingUnsent(){
+    try{
+      var m=document.getElementById('media-preview-bar');
+      if(m && m.offsetParent!==null) return true;
+      var v=document.getElementById('voice-preview');
+      if(v && v.offsetParent!==null && String(v.textContent||'').trim()) return true;
+    }catch(_){}
+    return false;
+  }
+  function _doReload(){
+    try{ if(typeof window.__blLoadShow==='function') window.__blLoadShow(); }catch(_){}
+    try{ location.reload(); }catch(_){ try{ location.href=location.href; }catch(_2){} }
+  }
+  function _reloadNow(){
+    if(!_blockingUnsent() || !window.AITRNotify){ _doReload(); return; }
+    /* 有会丢的暂存媒体：绝不偷偷重载，把决定权交回坐席（sticky=必须显式选一个） */
+    AITRNotify.notify({
+      severity:'warn', text:UNSENT, domKey:'uibuild-unsent', center:false, sticky:true,
+      actions:[{label:FORCE, onClick:_doReload}, {label:LATER, onClick:function(){}}]
+    });
+  }
+  function _parseSev(lines){
+    for(var i=1;i<lines.length;i++){
+      var m=/^\s*severity\s*=\s*(silent|notice|urgent)\s*$/i.exec(String(lines[i]||''));
+      if(m) return m[1].toLowerCase();
+    }
+    return 'notice';
+  }
+  function _autoQuota(){
+    try{
+      var h=Math.floor(Date.now()/3600000);
+      var o=JSON.parse(sessionStorage.getItem(AUTO_N_KEY)||'null');
+      return (o && o.h===h) ? {h:h, n:Number(o.n)||0} : {h:h, n:0};
+    }catch(_){ return {h:0, n:AUTO_MAX_PER_H}; }   // 存储不可用＝不自动，保守
+  }
+  function _tryAuto(){
+    if(document.visibilityState!=='hidden') return false;
+    if(!hiddenSince || (Date.now()-hiddenSince)<AUTO_HIDDEN_MS) return false;
+    if(_blockingUnsent()) return false;
+    var q=_autoQuota();
+    if(q.n>=AUTO_MAX_PER_H) return false;
+    try{
+      sessionStorage.setItem(AUTO_N_KEY, JSON.stringify({h:q.h, n:q.n+1}));
+      sessionStorage.setItem(AUTO_DONE_KEY, '1');
+    }catch(_){}
+    _doReload();
+    return true;
+  }
+  function _announce(){
+    if(!window.AITRNotify) return;
+    var tone=(sev==='urgent')?'warn':'info';
+    AITRNotify.ongoing.set('uibuild', {
+      text:SHORT, tone:tone, title:TITLE,
+      action:{label:BTN, onClick:_reloadNow, title:TXT}
+    });
+    AITRNotify.notify({
+      severity:tone, text:TXT, domKey:'uibuild', centerId:'uibuild',
+      ttlMs:(sev==='urgent')?undefined:20000, sticky:(sev==='urgent'),
+      actions:[
+        {label:BTN, onClick:_reloadNow},
+        {label:SNZ, onClick:function(){
+          try{ sessionStorage.setItem(SNOOZE_KEY, String(Date.now()+2*3600*1000)); }catch(_){}
+          AITRNotify.ongoing.clear('uibuild');
+          shown=false;                     // 贪睡到期后若仍是新版会再次提醒
+        }}
+      ]
+    });
+    shown=true;
+  }
   async function _tick(){
-    if(shown) return;
     try{
       var r=await window.apiFetch(URL+'?_='+Date.now(), {cache:'no-store', credentials:'same-origin'}, {timeoutMs:8000});
       if(!r.ok) return;
       var t=await r.text();
-      var cur=String((t||'').split(/\r?\n/)[0]||'').trim();
+      var lines=String(t||'').split(/\r?\n/);
+      var cur=String(lines[0]||'').trim();
       if(!cur) return;
       if(!baseline){ baseline=cur; return; }   // 首查=基线（即本标签页所载版本）
-      if(cur!==baseline && !_snoozed() && window.AITRNotify){
-        /* 实施75：右下胶囊常驻到刷新/贪睡 + 卡片提示（立即刷新 / 暂不） */
-        AITRNotify.ongoing.set('uibuild', {text:TXT, tone:'info', title:TITLE});
-        AITRNotify.notify({
-          severity:'info', text:TXT, domKey:'uibuild', centerId:'uibuild', ttlMs:20000,
-          actions:[
-            {label:BTN, onClick:function(){ location.reload(); }},
-            {label:SNZ, onClick:function(){
-              try{ sessionStorage.setItem(SNOOZE_KEY, String(Date.now()+2*3600*1000)); }catch(_){}
-              AITRNotify.ongoing.clear('uibuild');
-              shown=false;                     // 贪睡到期后若仍是新版会再次提醒
-            }}
-          ]
-        });
-        shown=true;
-      }
+      if(cur===baseline) return;
+      sev=_parseSev(lines);
+      if(_tryAuto()) return;                   // 空闲＝零打扰换版，优先于任何提示
+      if(shown || _snoozed() || sev==='silent') return;
+      _announce();
     }catch(_){}
   }
+  /* 自动换版后的一次性知会：不说「发生了什么」会让坐席以为自己点错了什么 */
+  try{
+    if(sessionStorage.getItem(AUTO_DONE_KEY)){
+      sessionStorage.removeItem(AUTO_DONE_KEY);
+      setTimeout(function(){
+        try{ if(window.AITRNotify) AITRNotify.notify({severity:'success', text:AUTODONE, center:false, ttlMs:6000}); }catch(_){}
+      }, 1500);
+    }
+  }catch(_){}
   _tick();
   setInterval(_tick, 300000);
   document.addEventListener('visibilitychange', function(){
-    if(document.visibilityState==='visible') _tick();
+    if(document.visibilityState==='hidden'){ hiddenSince=Date.now(); }
+    else { hiddenSince=0; _tick(); }
   });
 })();
 </script>
@@ -3212,9 +3301,14 @@ window._pillChainFail=window._pillChainFail||function(fn){
           try{ document.dispatchEvent(new CustomEvent('draft_backlog_summary',{detail:_bs})); }catch(_){}
         }
       }
-      // P24：通知中心 — 所有重要事件写入铃铛
+      // P24：通知中心 — 重要事件写入铃铛。impl85 阶段5（工单#30 钧拍板）：客户聊天
+      // 消息默认不进铃铛（隐私 + 噪音；会话列表未读才是它的家），开关随
+      // GET /api/workspace/notifications 的 customer_messages 回传（服务端队列与
+      // 前端 live 写入同一开关两面生效）；系统/需人工类事件不受影响。
       if(msg && ['inbox_message','draft_sla_breach','draft_backlog_summary','draft_reassigned','conversation_assigned','anomaly_alert','sla_alert','escalation','queue_alert','stage_advance','stage_advance_pending','stage_downgrade','stage_reunion','stage_sync','workflow_step','workflow_execution_completed','workflow_execution_failed','workflow_execution_cancelled','goal_completed_alert'].indexOf(msg.type)>=0){
-        if(window.__wsNotif) window.__wsNotif.add(msg);
+        if(msg.type!=='inbox_message' || window.__wsNotifCenterCustomerMsgs===true){
+          if(window.__wsNotif) window.__wsNotif.add(msg);
+        }
       }
       // P0-协作闭环：同事 @ 提及 —— 定向通知（仅被 @ 的坐席收）：铃铛 + 提示音 +
       // 全局 toast（点击跳转会话）。此前 toast 只在「正开着同一会话」时出现，
@@ -3551,11 +3645,30 @@ window._pillChainFail=window._pillChainFail||function(fn){
     if(_og.length){
       var _ogTone = {info:'var(--tk-brand,#1e8cf2)', warn:'#d97706', error:'#dc2626', success:'#16a34a'};
       var _ogBg = '#e0e7ff';   /* 与 sys_status 图标底同色（JS 拼接，同 _renderItem 模式） */
+      /* 2026-08-28：进行中条目此前一律 cursor:default 纯文本——胶囊带了动作按钮，
+         点进来却什么也做不了（「界面有新版本」正是这么变成死胡同的）。带 action 的
+         条目在此镜像同一个按钮，走事件委托（innerHTML 拼接拿不到函数引用）。 */
+      if(!list.__ogActBound){
+        list.__ogActBound = true;
+        list.addEventListener('click', function(ev){
+          var b = (ev.target && ev.target.closest) ? ev.target.closest('[data-ntf-act]') : null;
+          if(!b) return;
+          ev.preventDefault(); ev.stopPropagation();
+          try{ AITRNotify.ongoing.invoke(b.getAttribute('data-ntf-act')); }catch(_e){}
+        });
+      }
       html += '<div class="ws-notif-sec-tag">'+window.T('ntf.ongoing_hdr')+'</div>'
         + _og.map(function(o){
+            /* 按钮规格复用 notify-bus 的 .wsntf-act 单源（该类刻意不限定在胶囊容器内）；
+               这里零内联样式＝不给模板的内联颜色 ratchet 添新账。 */
+            var _oact = o.actionLabel
+              ? '<button type="button" class="wsntf-act" data-ntf-act="'+esc(o.id)+'">'
+                + esc(o.actionLabel)+'</button>'
+              : '';
             return '<div class="ws-notif-item" style="cursor:default;border-left-color:'+(_ogTone[o.tone]||_ogTone.info)+';">'
               +'<div class="ws-notif-icon" style="background:'+_ogBg+'">'+(typeof uiIcon==='function'?uiIcon('gear',14):'')+'</div>'
               +'<div class="ws-notif-body"><div class="ws-notif-title" style="white-space:normal;">'+esc(o.text)+'</div></div>'
+              +_oact
               +'</div>';
           }).join('');
     }
@@ -3650,6 +3763,8 @@ window._pillChainFail=window._pillChainFail||function(fn){
   function _loadNotifications(){
     apiFetch('/api/workspace/notifications?limit=50').then(function(r){return r.json();}).then(function(d){
       if(!d||!d.ok) return;
+      // impl85 阶段5：同步「客户消息进铃铛」开关（服务端配置单一事实源）
+      window.__wsNotifCenterCustomerMsgs = (d.customer_messages===true);
       // P8：以服务端「已读水位线」对齐本地（跨设备恢复「全部已读」状态，单调前进）
       if(d.read_at && d.read_at>_readAt){ _readAt=d.read_at; try{ localStorage.setItem('ws_notif_read_at',String(_readAt)); }catch(_){ } }
       var hist = d.notifications || [];
@@ -3734,7 +3849,11 @@ window._pillChainFail=window._pillChainFail||function(fn){
 // 偏好存 localStorage（本机级、跨设备不同步），群组默认不打扰（改走「群组动态」）。
 window.__wsNotify = (function(){
   var LS_KEY='ws_notify_prefs_v1';
-  var DEF={sound:true, volume:0.6, popup:'auto', groups:false};
+  // impl85 阶段5（工单#30 值守承诺）：客户消息弹窗默认关——弹窗带消息内容预览，
+  // 客户拍板「不再弹系统通知」（隐私 + 打扰）；提示音保留默认开（无内容、保回复
+  // 及时性）。想开回弹窗：铃铛面板「提示设置」→ 新消息弹窗（坐席显式保存过的
+  // 旧偏好不受影响——load() 里存量键优先于 DEF）。
+  var DEF={sound:true, volume:0.6, popup:'off', groups:false};
   function load(){ try{ return Object.assign({},DEF,JSON.parse(localStorage.getItem(LS_KEY)||'{}')); }catch(_){ return Object.assign({},DEF); } }
   function save(p){ try{ localStorage.setItem(LS_KEY, JSON.stringify(p)); }catch(_){ } }
   var prefs=load();
@@ -4301,7 +4420,7 @@ window.__wsMultiWin = (function(){
       document.head.appendChild(s2);
       /* 实施58 P2：「替我做」智能体+流星执行秀（后端未装载=入口如实待装） */
       var s3=document.createElement('script');
-      s3.src='/assistant-shared/assistant-agent.js?v=20260828a';
+      s3.src='/assistant-shared/assistant-agent.js?v=20260828c';
       s3.onload=function(){
         if(window.XZAgent) window.XZAgent.init({
           shell:'workspace',
