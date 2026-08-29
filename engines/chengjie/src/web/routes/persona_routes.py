@@ -1730,6 +1730,7 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         accounts = tg_cfg.get("accounts")
         matched = False
         matched_flat = False
+        matched_registry = False
         if isinstance(accounts, list) and accounts:
             for acc in accounts:
                 aid = str(acc.get("id") or acc.get("account_id") or "").strip()
@@ -1737,6 +1738,25 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
                     acc["persona_ids"] = pids
                     matched = True
                     break
+        # ── #61（2026-08-30）：运行时注册表账号（桌面 QR 登录，不在 config）──
+        # 绑定写 meta.persona_ids/persona_id（A 线 companion worker 与
+        # protocol_autoreply 的读取真相）；merge_meta=True 铁律——整块替换会把
+        # session_string 等键抹掉（2026-07-23 baileys 实锤同族事故）。
+        # 顺序在 default 扁平槽**之前**：注册表里有这个具体 id 就写注册表，
+        # 只有真正的 default/空 id 才落扁平槽。
+        if not matched and account_id not in ("default", ""):
+            try:
+                from src.integrations.account_registry import get_account_registry
+                _reg = get_account_registry()
+                _row = _reg.get("telegram", account_id)
+                if _row and str(_row.get("status") or "") != "removed":
+                    _reg.upsert("telegram", account_id,
+                                meta={"persona_ids": pids,
+                                      "persona_id": (profile_id or "")},
+                                merge_meta=True)
+                    matched = matched_registry = True
+            except Exception:
+                _plog.debug("tg assign: 运行时注册表写入失败", exc_info=True)
         if not matched and (account_id in ("default", "") or not accounts):
             # 单账号 / default：写扁平槽（注册表 default 分支已支持读取）
             tg_cfg["persona_ids"] = pids
@@ -1744,17 +1764,22 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         if not matched:
             raise HTTPException(404, f"TG account '{account_id}' not found")
 
-        cm.config["telegram"] = tg_cfg
-        if matched_flat:
-            saved = _save_binding_patch(cm, {"telegram": {"persona_ids": pids}})
+        if matched_registry:
+            saved = True   # 注册表即时落库（SQLite），无 config 写盘
         else:
-            saved = cm.save()  # accounts 列表内改动：overlay 整列表会遮蔽主配置
+            cm.config["telegram"] = tg_cfg
+            if matched_flat:
+                saved = _save_binding_patch(cm, {"telegram": {"persona_ids": pids}})
+            else:
+                saved = cm.save()  # accounts 列表内改动：overlay 整列表会遮蔽主配置
         actor = request.session.get("username", "web_admin")
         if audit_store:
             audit_store.log(actor, "tg_assign_profile",
-                          f"account={account_id} profile={profile_id or '(cleared)'}")
+                          f"account={account_id} profile={profile_id or '(cleared)'}"
+                          + (" storage=registry" if matched_registry else ""))
         return {"ok": True, "account_id": account_id, "profile_id": profile_id,
-                "config_saved": saved}
+                "config_saved": saved,
+                "storage": "registry" if matched_registry else "config"}
 
     # ── 统一账号人设绑定：Messenger RPA ───────────────────────────
     @app.post("/api/personas/mrpa-account/{account_id}/assign-profile")
@@ -1864,18 +1889,53 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
 
         # Telegram accounts
         tg_accounts: list = []
+        _tg_default_unconfigured = False
         try:
             from src.client.telegram_account_registry import TelegramAccountRegistry
             _tg_cfg = (getattr(config_manager, "config", None) or {}).get("telegram", {})
             _reg = TelegramAccountRegistry.from_config(_tg_cfg)
             for acc in _reg.all_contexts():
                 primary_pid = acc.persona_ids[0] if acc.persona_ids else ""
+                if (acc.account_id == "default" and not acc.api_id
+                        and not acc.api_hash and not acc.phone_number):
+                    # config 回落单账号占位（无任何凭证）：桌面纯 QR 部署下它不是
+                    # 真账号——若运行时注册表有真账号则丢弃（#61 截图里那个孤零零
+                    # 的 default 就是它）；没有真账号时保留（117 单账号语义不变）。
+                    _tg_default_unconfigured = True
                 tg_accounts.append({
                     "account_id": acc.account_id,
                     "label": acc.label or acc.account_id,
                     "persona_ids": acc.persona_ids,
                     "active_profile": pm.get_persona_by_id(primary_pid) if primary_pid else None,
                 })
+        except Exception:
+            pass
+        # ── #61（2026-08-30 钧实锤「只能看到第一个登录的 TG」）：合并运行时注册表 ──
+        # 桌面 QR 登录的多账号活在 platform_accounts 表（编排器真相），根本不进
+        # config telegram.accounts——旧枚举只读 config，于是「应用到…」弹窗永远
+        # 只有 default/首账号。人设绑定读 meta.persona_ids（A 线 companion worker /
+        # protocol_autoreply 同一读取口径，parse_persona_ids 容忍历史形态）。
+        try:
+            from src.integrations.account_registry import (
+                get_account_registry, parse_persona_ids)
+            _seen_aids = {str(a.get("account_id") or "") for a in tg_accounts}
+            _rt_rows = get_account_registry().list("telegram")
+            for _row in _rt_rows:
+                _aid = str(_row.get("account_id") or "").strip()
+                if not _aid or _aid in _seen_aids:
+                    continue
+                _pids = parse_persona_ids(_row.get("meta"))
+                tg_accounts.append({
+                    "account_id": _aid,
+                    "label": str(_row.get("label") or "").strip() or _aid,
+                    "persona_ids": _pids,
+                    "active_profile": (pm.get_persona_by_id(_pids[0])
+                                       if _pids else None),
+                    "source": "registry",
+                })
+            if _rt_rows and _tg_default_unconfigured:
+                tg_accounts = [a for a in tg_accounts
+                               if a.get("account_id") != "default"]
         except Exception:
             pass
 
