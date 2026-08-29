@@ -55,7 +55,10 @@ _CEILINGS = {
     # owner=inbox unread trust + tag 线）：
     #   +2 🏷 标签编辑器入口（strip gear/编辑弹层三入口批次）；
     #   +1 🧹 在线账号菜单「清除未读」行（acct-menu clear-unread 批次）。
-    "unified_inbox.html": 53,
+    # 2026-08-29 53→54 登记（impl85 线代记，diff 归因 2cc6388c 搭车内容）：
+    #   +1 🤖 出站消息「主动管线来源」chip 标记（impl84 P0-5b，owner=impl84 线；
+    #   语义标记非控件位，是否转 uiIcon 由该线定夺）。
+    "unified_inbox.html": 54,
     "workspace_dashboard.html": 0,
     "workspace_channels.html": 1,
     "draft_review.html": 1,
