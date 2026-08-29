@@ -558,13 +558,22 @@ class WebInboxAdapter:
         store = getattr(request.app.state, "inbox_store", None)
         if store is None:
             return []
+        cfg0 = self._web_cfg(request)
+        # impl85 阶段4：客户形态默认隐藏「在线顾问」入口（#30/#42/#45 拍板），
+        # web_chat.show_in_workspace 显式覆写；服务器/运维形态不受影响。
+        try:
+            from src.integrations.web_chat.service import web_entry_visible
+            if not web_entry_visible(cfg0):
+                return []
+        except Exception:
+            pass
         out: List[Dict[str, Any]] = []
         try:
             rows = store.list_conversations(limit=limit, platform="web") or []
         except Exception:
             logger.debug("WebInboxAdapter list_conversations 失败", exc_info=True)
             return []
-        cfg = self._web_cfg(request)
+        cfg = cfg0
         for r in rows:
             cid = str(r.get("conversation_id") or "")
             mode = "auto_ai"
@@ -584,9 +593,18 @@ class WebInboxAdapter:
         return cfg if isinstance(cfg, dict) else {}
 
     def status(self, request: Any) -> Dict[str, Dict[str, Any]]:
-        web = (self._web_cfg(request).get("web_chat") or {})
+        cfg = self._web_cfg(request)
+        web = (cfg.get("web_chat") or {})
         if not web.get("enabled"):
             return {}
+        # impl85 阶段4：入口隐藏时「账号与平台管理」的在线顾问卡一并不出
+        # （客户报障点名的就是这张卡：「只有刷新和改名功能，无任何实际用途」）。
+        try:
+            from src.integrations.web_chat.service import web_entry_visible
+            if not web_entry_visible(cfg):
+                return {}
+        except Exception:
+            pass
         aid = str(web.get("account_id") or "web")
         return {f"web_{aid}": {
             "platform": "web", "account_id": aid,

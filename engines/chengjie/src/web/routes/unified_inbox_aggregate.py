@@ -434,6 +434,28 @@ def _exclude_logged_out_chats(
     return out
 
 
+def _exclude_hidden_web_chats(
+    request: Request, chats: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """impl85 阶段4：入口隐藏时剔除 platform=web 会话行（含存量残留会话）。
+
+    适配器侧 gate 只管 live 聚合；store-backed 视图会把库里的旧「在线顾问」会话
+    原样列出（#42 截图正是这种残留），必须在双路径共同出口再滤一次。历史留库，
+    只是不进列表（与登出账号过滤同哲学）。
+    """
+    if not chats:
+        return chats
+    try:
+        from src.integrations.web_chat.service import web_entry_visible
+        cm = getattr(request.app.state, "config_manager", None)
+        cfg = (getattr(cm, "config", None) or {}) if cm is not None else {}
+        if web_entry_visible(cfg):
+            return chats
+    except Exception:
+        return chats
+    return [c for c in chats if str(c.get("platform") or "") != "web"]
+
+
 def _chats_for_listing(request: Request, limit: int = 30) -> List[Dict[str, Any]]:
     """收件箱列表数据源（A1 灰度）：
 
@@ -441,7 +463,7 @@ def _chats_for_listing(request: Request, limit: int = 30) -> List[Dict[str, Any]
     - flag 开 + store 可用：列表改用 store-backed 视图（跨平台/跨重启持久），
       实时聚合的副作用（ingest）已经发生；
     - 否则：返回实时聚合结果，并用 store 已持久身份「仅补空」富集（F4，闭合 live 模式身份缺口）。
-    - 末尾统一剔除已登出账号会话（live / store 双路径同口径）。
+    - 末尾统一剔除已登出账号会话 + 隐藏的 web 入口会话（live / store 双路径同口径）。
     """
     live = _collect_all_chats(request, limit=limit)
     if _read_from_store_enabled(request):
@@ -453,9 +475,11 @@ def _chats_for_listing(request: Request, limit: int = 30) -> List[Dict[str, Any]
         }
         stored = _collect_chats_from_store(request, limit=limit, label_map=label_map)
         if stored is not None:
-            return _exclude_logged_out_chats(request, stored)
+            return _exclude_logged_out_chats(
+                request, _exclude_hidden_web_chats(request, stored))
     return _exclude_logged_out_chats(
-        request, _overlay_store_identity(request, live))
+        request, _exclude_hidden_web_chats(
+            request, _overlay_store_identity(request, live)))
 
 
 def _thread_messages_from_store(
