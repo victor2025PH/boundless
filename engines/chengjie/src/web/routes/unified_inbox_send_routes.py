@@ -1372,13 +1372,17 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 # 口语化改写链（实录：LLM 档把「你晚上吃饭了吗…」改写成**对它的
                 # 回答**后念出，气泡 caption=原文、音频=另一句话）。副语言标记/
                 # 情绪/变速照常。interactive=True 把 hub 候选数封顶 1（人在等，
-                # synth_verify 已兜坏 take）；total_budget_sec 与 tts-test 同口径，
-                # 防链内各级超时之和越过前端 60s 等待线。
+                # synth_verify 已兜坏 take）；total_budget_sec 与 tts-test 同口径
+                # （#59 起同走 clone_budget_sec 按字数动态：0.45s/字+10s，≤77 字
+                # 与旧 45s 等值——「试听得出来、发送发不出」是契约破口）。前端超
+                # 时另有 send-voice-status 对账三态，预算放宽不改变那套语义。
+                from src.integrations.shared.tts_preview import clone_budget_sec
                 _t_synth0 = _time.monotonic()
+                _budget = clone_budget_sec(spoken_text)
                 result = await tts.synthesize(
-                    spoken_text, timeout_sec=45.0, emotion=voice_ctx.get("emotion"),
+                    spoken_text, timeout_sec=_budget, emotion=voice_ctx.get("emotion"),
                     pre_colloquialized=True, interactive=True,
-                    total_budget_sec=45.0)
+                    total_budget_sec=_budget)
                 _synth_ms = int((_time.monotonic() - _t_synth0) * 1000)
             except Exception as ex:  # noqa: BLE001
                 _dedup.release(_dedup_scope, _client_msg_id)

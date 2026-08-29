@@ -439,7 +439,8 @@ def test_health_parsers():
 
         mock_open.return_value = _R()
         d = c.health()
-    assert d == {"reachable": True, "models_loaded": True}
+    # shape=引擎形状（#58 2026-08-30）：7852 家族键 → cosyvoice（副语言标记可送）
+    assert d == {"reachable": True, "models_loaded": True, "shape": "cosyvoice"}
 
 
 def test_qwen_health_parser():
@@ -457,7 +458,8 @@ def test_qwen_health_parser():
 
         mock_open.return_value = _R()
         d = c.qwen_health()
-    assert d == {"reachable": True, "models_loaded": True}
+    # qwen(7858) 响应键与 7865 同族 → shape 带出 indextts2；qwen 路径不消费该键
+    assert d == {"reachable": True, "models_loaded": True, "shape": "indextts2"}
 
 
 def _mock_health_resp(payload: dict):
@@ -485,7 +487,8 @@ def test_health_accepts_indextts2_shape():
         mock_open.return_value = _mock_health_resp(
             {"status": "ok", "engine": "index_tts2", "model_loaded": True})
         d = c.health()
-    assert d == {"reachable": True, "models_loaded": True}
+    # shape=indextts2（#58）：该形状端点不得收副语言标记（marks_safe 据此判 False）
+    assert d == {"reachable": True, "models_loaded": True, "shape": "indextts2"}
     with patch("urllib.request.urlopen") as mock_open:
         mock_open.return_value = _mock_health_resp(
             {"status": "ok", "engine": "index_tts2", "model_loaded": True})

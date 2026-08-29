@@ -82,10 +82,10 @@ def flatten_tts_clauses(text: str) -> str:
         return str(text or "").strip()
 
 
-# CosyVoice3 副语言标记——IndexTTS/hub 会当正文念出，hub 路径必须剥掉。
-_COSY_PARA_MARK_RE = re.compile(
-    r"\[(?:sigh|breath|laughter|laughs|laugh|strong)\]", re.IGNORECASE,
-)
+# CosyVoice3 副语言标记：IndexTTS/hub/MiniCPM 会当正文念出，非 Cosy 路径必须剥掉。
+# 家族正则单一事实源＝voice_emotion.strip_paralinguistic_marks（#58 2026-08-30：
+# 旧本地正则漏了 <strong> 尖括号对，且 [breath] 经 avatar 路径漏进 104 IndexTTS-2
+# 被念成「PLAS」——剥除逻辑收口到注入器所在模块，家族增删两边永远同步）。
 
 
 def _breath_from_local_ref(ref_path: str, cache_dir: Path, sr: int):
@@ -135,8 +135,8 @@ def polish_hub_speak_text(text: str) -> str:
         （确定性；已是省略号则跳过）——逼 IndexTTS 喘一口气，减念稿腔。
     """
     try:
-        t = str(text or "")
-        t = _COSY_PARA_MARK_RE.sub("", t)
+        from src.ai.voice_emotion import strip_paralinguistic_marks
+        t = strip_paralinguistic_marks(str(text or ""))
         # 句首连环假笑（哈哈哈/嘿嘿嘿）→ 去掉；开心靠 emotion 标签，不靠念笑字
         t = re.sub(
             r"^\s*[「『\"']?\s*(?:哈{2,}|嘿{2,}|呵{2,}|嘻{2,})[，,！!\s]*",
@@ -1775,6 +1775,18 @@ class TTSPipeline:
 
         cfg = dict(self.minicpm_clone or {})
         cfg["enabled"] = True
+        # 端点按 voice_profile 覆写（2026-08-30 粤语克隆）：voice_lang_route.cantonese
+        # 的 voice_profile 覆写块可带 clone_base_url，把粤语合成指到会念粤语的克隆
+        # 节点（117:7852 CosyVoice3，<|yue|> 标签原生粤语），与全局 minicpm_clone
+        # （104:7865 IndexTTS-2 普通话质量轨——实测念粤文=胡念）分流；参考音仍跟
+        # 人设走＝同一把声讲粤语。普通话链不带此键，行为不变。
+        _vp_url = str(vp.get("clone_base_url") or "").strip()
+        if _vp_url:
+            cfg["base_url"] = _vp_url
+        # 合成文本前缀（与 clone_base_url 同族的 voice_profile 级克隆参数）：
+        # CosyVoice 系方言标签（如 <|yue|>）要求拼在**每次推理文本**最前面才按
+        # 方言发音；拼点在下方 polish 之后（只进引擎，不进缓存键/镜像/记忆）。
+        _vp_prefix = str(vp.get("clone_text_prefix") or "")
         cloud_fallback = bool(cfg.get("cloud_fallback", True))
         client = VoiceCloneClient(cfg)
         ref_text = str(vp.get("reference_text") or "").strip()
@@ -1834,16 +1846,22 @@ class TTSPipeline:
         # **必须喂未 polish 的稿**：polish 把书面句号改成换气「……」，而分段正是按
         # 句号切——先 polish 再切会把整段粘成一块，pacing 静默不触发（首版实锤）。
         # paced_synthesize 收 polish 回调，在切完之后对每段各自施用，顺序才对。
-        _paced = await self._try_minicpm_pacing(
-            rv, mc_out, t0, spec=spec, text=spoken, client=client, ref=ref,
-            ref_text=ref_text, instr=instr, split_part=split_part,
-            interactive=interactive)
-        if _paced is not None:
-            return _paced
+        # 方言前缀（<|yue|>）与分段编排相容性未验证（标签是 per-inference 语义，
+        # 分段会把它切在首段）→ 带前缀时跳过 pacing 整段单发，保正确优先。
+        if not _vp_prefix:
+            _paced = await self._try_minicpm_pacing(
+                rv, mc_out, t0, spec=spec, text=spoken, client=client, ref=ref,
+                ref_text=ref_text, instr=instr, split_part=split_part,
+                interactive=interactive)
+            if _paced is not None:
+                return _paced
 
         spoken = polish_hub_speak_text(spoken) or str(rv.text or "")
         if spoken != str(rv.text or ""):
             rv.extra["minicpm_spoken_text"] = True
+        if _vp_prefix and not spoken.startswith(_vp_prefix):
+            spoken = _vp_prefix + spoken
+            rv.extra["clone_text_prefix"] = _vp_prefix
 
         def _do_clone() -> None:
             client.synthesize_clone(
@@ -2907,13 +2925,22 @@ class TTSPipeline:
             except Exception:
                 emotion = emotion_default
 
-        # 副语言标记注入（仅本地 CosyVoice3）：基于**口语化后**的 synth_text。
+        # 副语言标记注入（仅实证 CosyVoice 形状的上游）：基于**口语化后**的 synth_text。
         # hub 路径已在上方返回，不会走到这里。标记在 CosyVoice3 tokenizer 层消费
         # 绝不读出（2026-07-13 真机 STT 回转验证）。
+        # #58（2026-08-30）：本路径的 base_urls 可以被指到 IndexTTS-2（桌面托管
+        # 网关→104 就是实锤现场），该引擎把 [breath] 当英文念出「PLAS」——注入
+        # 前先问 client 上游健康形状（marks_safe），非 CosyVoice/形状未知一律不注
+        # （错剥=少一口气声，错送=当着客户念英文）；client.tts() 入口另有兜底剥除。
         para_cfg = (cfg.get("paralinguistic")
                     if isinstance(cfg.get("paralinguistic"), dict) else {})
+        try:
+            _marks_ok = bool(getattr(client, "marks_safe", lambda: True)())
+        except Exception:
+            _marks_ok = False
         if (spec is not None and para_cfg.get("enabled", False)
-                and vp.get("paralinguistic", True) is not False):
+                and vp.get("paralinguistic", True) is not False
+                and _marks_ok):
             try:
                 from src.ai.voice_emotion import inject_paralinguistic
                 _before_para = synth_text

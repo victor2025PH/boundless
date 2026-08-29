@@ -210,7 +210,10 @@ def test_tts_per_call_prosody_override(monkeypatch):
     })
     captured: list = []
 
-    def fake_post(url, payload, *, timeout):
+    def fake_post(url, payload, *, timeout, headers=None):
+        # headers 形参（存量红治愈 2026-08-30）：2026-08-02 起 _post_any 给
+        # _post_with_retry 传集群鉴权头 headers=，本 fake 旧签名不收 → TypeError
+        # 在 _post_any 里被当端点故障吞掉 → 本门禁自 8/2 起一直红着没人看见。
         captured.append(json.loads(payload.decode("utf-8")))
         return json.dumps(
             {"audio_base64": base64.b64encode(b"RIFFfake").decode()}

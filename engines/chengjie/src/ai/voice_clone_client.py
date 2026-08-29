@@ -418,6 +418,12 @@ class VoiceCloneClient:
         ``language``：显式指定合成语言（调用方已知回复语种时传入=最高优先）；为空时，
         若 ``auto_language`` 开则按文本内容推导（防「中文声纹念英文」），否则用配置默认。
         """
+        # #58 消费侧守卫（2026-08-30）：/v1/tts/clone 契约家族（MiniCPM/fish/
+        # IndexTTS-2）没有任何上游消费 CosyVoice 副语言标记——漏进来会被当英文
+        # 念出（104 实锤 [breath]→「PLAS」）。无条件剥除，兜住一切上游来源
+        # （LLM 剧本残留/运营手工标注/pacing 分段回调）；幂等，干净文本零开销。
+        from src.ai.voice_emotion import strip_paralinguistic_marks
+        text = strip_paralinguistic_marks(text)
         ref = Path(reference_audio_path)
         if not ref.is_file():
             raise RuntimeError(f"reference_audio_missing:{reference_audio_path}")

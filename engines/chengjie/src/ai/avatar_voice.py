@@ -70,6 +70,11 @@ _GPU_LOCKS_GUARD = threading.Lock()
 # 健康缓存：base_url -> (expires_monotonic, ok)
 _HEALTH_CACHE: Dict[str, Tuple[float, bool]] = {}
 _HEALTH_LOCK = threading.Lock()
+# 上游引擎形状缓存（#58 2026-08-30）：base_url -> "cosyvoice"|"indextts2"。
+# 由健康探测顺带判定（7852 与 7865 的 /health 响应键不同，见 health_shape_of），
+# 不设 TTL——每次探测都会覆写，30s 健康节律天然刷新；副语言标记只对实证
+# CosyVoice 形状的端点放行（IndexTTS-2 会把 [breath] 按英文念出＝「PLAS」事故）。
+_SHAPE_CACHE: Dict[str, str] = {}
 # B1 多端点路由（2026-07-15）：合成失败的端点进冷却，期间路由自动落到下一优先级。
 # base_url -> monotonic 解禁时刻
 _ENDPOINT_BAD_UNTIL: Dict[str, float] = {}
@@ -104,6 +109,24 @@ _BOOT_TRIGGER: Dict[str, float] = {}
 
 
 # ── 纯函数：请求体构建 ────────────────────────────────────────────────────────
+def health_shape_of(data: Any) -> str:
+    """克隆端点 /health 响应 → 上游引擎形状（纯函数，#58 消费侧判据）。
+
+    - mfys CosyVoice(7852) 家族＝``{ok, models_loaded}`` → "cosyvoice"；
+    - IndexTTS-2(7865) 家族＝``{status, model_loaded}`` → "indextts2"；
+    - 其他/非 dict → ""（未知）。
+    托管网关中继会把上游 /health 原样透传，所以经网关也能判出真实引擎。
+    副语言标记（[breath]/[sigh]…）只许送 "cosyvoice"——未知按不安全算。
+    """
+    if not isinstance(data, dict):
+        return ""
+    if "ok" in data or "models_loaded" in data:
+        return "cosyvoice"
+    if "status" in data or "model_loaded" in data:
+        return "indextts2"
+    return ""
+
+
 def normalize_avatar_emotion(emotion: Optional[str], default: str = DEFAULT_EMOTION) -> str:
     """把任意情绪字符串规整到 CosyVoice3 词表；未知/空 → default。纯函数。"""
     e = str(emotion or "").strip().lower()
@@ -1453,9 +1476,13 @@ class AvatarVoiceClient:
         ``{status:"ok", model_loaded}``。只认前者时 base_urls 直指 7865 会
         永远预检不过 → 全量静默回落 edge，与「端点其实活着」矛盾。
         """
-        return self._probe(f"{self.base_url}/health",
-                           ok_keys=("ok", "models_loaded"),
-                           alt_ok_keys=("status", "model_loaded"))
+        d = self._probe(f"{self.base_url}/health",
+                        ok_keys=("ok", "models_loaded"),
+                        alt_ok_keys=("status", "model_loaded"))
+        if d.get("shape"):
+            with _HEALTH_LOCK:
+                _SHAPE_CACHE[self.base_url] = str(d["shape"])
+        return d
 
     def qwen_health(self) -> Dict[str, Any]:
         """7858 健康明细 {reachable, models_loaded}。"""
@@ -1481,6 +1508,8 @@ class AvatarVoiceClient:
             detail["reachable"] = True
             data = json.loads(body.decode("utf-8"))
             if isinstance(data, dict):
+                # 顺带记引擎形状（#58）：克隆探测消费；qwen/stt 探测带出来无害不消费
+                detail["shape"] = health_shape_of(data)
                 flag, loaded_key = ok_keys
                 if alt_ok_keys and flag not in data and alt_ok_keys[0] in data:
                     flag, loaded_key = alt_ok_keys
@@ -1503,12 +1532,28 @@ class AvatarVoiceClient:
         ok = bool(d["reachable"] and d["models_loaded"])
         with _HEALTH_LOCK:
             _HEALTH_CACHE[base] = (now + self.health_cache_sec, ok)
+            if d.get("shape"):
+                _SHAPE_CACHE[base] = str(d["shape"])
         return ok
 
     def health_ok(self, *, use_cache: bool = True) -> bool:
         """克隆链是否可用＝**任一**端点就绪（B1 多端点；单端点=旧语义）。"""
         return any(self._health_ok_base(b, use_cache=use_cache)
                    for b in self.base_urls)
+
+    def marks_safe(self) -> bool:
+        """副语言标记可否随文送出＝**全部**候选端点实证 CosyVoice 形状（#58）。
+
+        IndexTTS-2 会把 ``[breath]`` 等标记当英文念出（104 实锤「PLAS」）；
+        形状未知（还没探过/上游不带特征键）按不安全算——错剥只少一口气声，
+        错送是当着客户念英文。只读缓存零 HTTP：形状由健康探测顺带落下
+        （合成前必过 health_ok / _endpoint_candidates，节律 30s）。
+        """
+        if not self.base_urls:
+            return False
+        with _HEALTH_LOCK:
+            return all(
+                _SHAPE_CACHE.get(b, "") == "cosyvoice" for b in self.base_urls)
 
     # ── B1 端点路由：失败冷却 + 优先级挑选 ───────────────────────────────────
     def _endpoint_cooling(self, base: str) -> bool:
@@ -1663,6 +1708,12 @@ class AvatarVoiceClient:
         pv = self.prosody_enabled if prosody_variation is None else bool(prosody_variation)
         ft = self.flow_temperature if flow_temperature is None else float(flow_temperature)
         tk = self.llm_top_k if llm_top_k is None else int(llm_top_k)
+        # #58 兜底剥除：候选端点不全是 CosyVoice → 副语言标记进不了保真消费层，
+        # 只会被当英文念出。注入层已按 marks_safe 不注，这里兜住 LLM 剧本残留/
+        # 运营手工标注/混合端点池等一切来源（幂等，干净文本零开销）。
+        if not self.marks_safe():
+            from src.ai.voice_emotion import strip_paralinguistic_marks
+            text = strip_paralinguistic_marks(text)
         chunks = self._split(text)
         parts: List[bytes] = []
         for ch in chunks:
@@ -1685,6 +1736,9 @@ class AvatarVoiceClient:
         self, text: str, *, reference_audio_b64: str, instruct: str,
     ) -> bytes:
         """自由语气合成（如「用撒娇黏人的语气说」）→ WAV 字节。失败抛。"""
+        if not self.marks_safe():
+            from src.ai.voice_emotion import strip_paralinguistic_marks
+            text = strip_paralinguistic_marks(text)
         chunks = self._split(text)
         parts: List[bytes] = []
         for ch in chunks:
@@ -1753,6 +1807,14 @@ class AvatarVoiceClient:
                 # 降级为 INFO，避免桌面/坐席机每次启动刷 WARNING（2026-08-07 日志监控实锤）。
                 logger.info(
                     "[avatar_voice] register_spk 需鉴权令牌，本节点未配置，预热跳过（不影响合成）")
+            elif code == 404 or "404" in str(exc):
+                # 契约残留（2026-08-30 网关实锤 404×2）：/v1/tts/register_spk 是
+                # CosyVoice(7852) 专属端点，IndexTTS-2(7865) 没有——克隆走 zero-shot
+                # 本就无需预热，404 是**预期态**不是故障。记指纹止住本进程内重试，
+                # INFO 一次即静默；绝不把它包装成「登记失败」冒给用户。
+                _REGISTERED_SPK.add(fp)
+                logger.info(
+                    "[avatar_voice] 上游无 register_spk 端点（IndexTTS-2 零样本无需预热），跳过")
             else:
                 logger.warning("[avatar_voice] register_spk 失败: %s", exc)
             return False

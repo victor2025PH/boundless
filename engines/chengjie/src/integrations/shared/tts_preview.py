@@ -37,6 +37,30 @@ _DEFAULT_MAX_AGE_SEC: float = 24 * 3600      # keep files up to 24 hours
 _last_cleanup_ts: float = 0.0
 _SYNTHESIZE_TIMEOUT_SEC: float = 120.0       # P15-B: hard timeout per synthesis
 
+# ── #59 交互式克隆合成预算（2026-08-30）：按字数动态，试听=发送同口径 ─────────
+# 网关账本实锤（mid=B990 42 发全 200）：克隆耗时随字数线性 ~0.4s/字（隧道中继
+# +IndexTTS-2 RTF 1.7-1.8），旧固定 45s 预算在 76-80 字处被击穿——服务端合成
+# **成功**、引擎侧预算先到期回落默认音（GPU 白烧+成品丢弃+用户听错声三输）。
+# 0.45s/字 + 10s 裕量；下限 45 保住短文本旧行为（预算只放宽不收紧），上限 190
+# 覆盖 400 字顶格输入（tts-test/cp-voice 同一上限）。fast 档=edge 试听，秒回
+# 链路维持 15s 不变。tts-test 与 send-voice 必须同用本函数（试听=发送契约：
+# 同一段文字不能「试听得出来、发送发不出」）。
+_CLONE_BUDGET_PER_CHAR_SEC: float = 0.45
+_CLONE_BUDGET_BASE_SEC: float = 10.0
+_CLONE_BUDGET_MIN_SEC: float = 45.0
+_CLONE_BUDGET_MAX_SEC: float = 190.0
+_CLONE_BUDGET_FAST_SEC: float = 15.0
+
+
+def clone_budget_sec(text: str, *, fast: bool = False) -> float:
+    """交互式（有人在等）克隆合成的全链预算（秒）——按待合成字数动态。纯函数。"""
+    if fast:
+        return _CLONE_BUDGET_FAST_SEC
+    n = len(str(text or ""))
+    return max(_CLONE_BUDGET_MIN_SEC,
+               min(_CLONE_BUDGET_MAX_SEC,
+                   _CLONE_BUDGET_BASE_SEC + _CLONE_BUDGET_PER_CHAR_SEC * n))
+
 
 def cleanup_tts_previews(max_age_sec: float = _DEFAULT_MAX_AGE_SEC) -> int:
     """P15-A: Delete WAV files older than max_age_sec from tmp_tts_preview/.

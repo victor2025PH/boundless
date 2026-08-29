@@ -710,6 +710,44 @@ def inject_paralinguistic(
     return out
 
 
+# 副语言标记**全家族**（方括号族 + <strong> 强调对）——单一事实源（#58 2026-08-30）。
+# 只有 CosyVoice3(7852) 的 tokenizer 消费这些标记；IndexTTS-2 / MiniCPM / fish
+# （/v1/tts/clone 契约家族）一律当正文按英文念出：104 idx_serve.log 实锤 8 发
+# 合成文本字面含 [breath]（全在逗号后句中位=本模块第 3/4 步注入位），用户听到
+# 固定英文音「PLAS」。凡送往非 CosyVoice 上游的文本，合成前必须过一道剥除。
+_PARA_MARK_FAMILY_RE = None
+
+
+def _para_mark_family_re():
+    """惰性编译（与本模块其余正则同纪律：模块导入零开销）。"""
+    global _PARA_MARK_FAMILY_RE
+    if _PARA_MARK_FAMILY_RE is None:
+        import re
+        _PARA_MARK_FAMILY_RE = re.compile(
+            r"\[(?:sigh|breath|laughter|laughs|laugh|strong)\]|</?strong>",
+            re.IGNORECASE)
+    return _PARA_MARK_FAMILY_RE
+
+
+def strip_paralinguistic_marks(text: str) -> str:
+    """剥副语言标记全家族——送往**非 CosyVoice** 克隆上游前的消费侧守卫。
+
+    ``[sigh]/[breath]/[laughter]/[strong]`` 与 ``<strong>…</strong>`` 只在
+    CosyVoice3 被 tokenizer 层消费（绝不读出）；IndexTTS-2/MiniCPM/fish 会按
+    英文朗读（#58「PLAS」事故）。``<strong>`` 只剥标签、保留被强调的词本体。
+    纯函数、幂等；无标记时原文原样返回（零分配路径）。
+    """
+    t = str(text or "")
+    if not t or ("[" not in t and "<" not in t):
+        return t
+    out = _para_mark_family_re().sub("", t)
+    if out != t:
+        import re
+        # 标记两侧原有空格时剥除会留双空格；只折叠空格不动其他空白
+        out = re.sub(r" {2,}", " ", out)
+    return out
+
+
 # ── 动态 instruct 模板库（CosyVoice3 /v1/tts/instruct 消费）─────────────────
 # 比 emotion 标签更细腻的自然语言语气指令；每情绪 2-3 个「语气内核」变体轮换，
 # 避免同一情绪永远一个味。真机 A/B 已验证（2026-07-12）：instruct 通道中文合成
@@ -842,6 +880,6 @@ __all__ = [
     "to_elevenlabs_text", "elevenlabs_voice_settings",
     "fish_marker", "to_fish_text",
     "to_cosyvoice_emotion", "cosyvoice_speed", "to_cosyvoice_instruct",
-    "inject_paralinguistic",
+    "inject_paralinguistic", "strip_paralinguistic_marks",
     "edge_prosody",
 ]

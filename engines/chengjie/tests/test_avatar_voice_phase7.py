@@ -188,20 +188,33 @@ async def test_pipeline_injects_paralinguistic_into_synth_text(tmp_path):
 
     text = "唉，今天没等到你的消息，有点失落呢。"
     emo = EmotionSpec("sad", intensity=0.9)
+    # #58（2026-08-30）契约收紧：注入要求上游实证 CosyVoice 形状（marks_safe），
+    # 否则 IndexTTS-2 会把 [breath] 当英文念出（「PLAS」事故）。测试里显式钉安全。
     with patch.object(AvatarVoiceClient, "health_ok", return_value=True), \
+         patch.object(AvatarVoiceClient, "marks_safe", return_value=True), \
          patch.object(AvatarVoiceClient, "_post", fake_post):
         rv = await TTSPipeline(cfg(True)).synthesize(text, emotion=emo)
     assert rv.ok
     assert "[sigh]" in sent["body"]["text"] or "[breath]" in sent["body"]["text"]
     assert rv.extra.get("paralinguistic") is True
 
+    # 上游形状未知/非 Cosy（marks_safe=False）→ 同配置也不注入（#58 消费侧闸）
+    with patch.object(AvatarVoiceClient, "health_ok", return_value=True), \
+         patch.object(AvatarVoiceClient, "marks_safe", return_value=False), \
+         patch.object(AvatarVoiceClient, "_post", fake_post):
+        rv_ns = await TTSPipeline(cfg(True)).synthesize(text, emotion=emo)
+    assert rv_ns.ok and sent["body"]["text"] == text
+    assert not rv_ns.extra.get("paralinguistic")
+
     # 开关关 → 原文合成
     with patch.object(AvatarVoiceClient, "health_ok", return_value=True), \
+         patch.object(AvatarVoiceClient, "marks_safe", return_value=True), \
          patch.object(AvatarVoiceClient, "_post", fake_post):
         rv2 = await TTSPipeline(cfg(False)).synthesize(text, emotion=emo)
     assert rv2.ok and sent["body"]["text"] == text
     # 人设级 opt-out
     with patch.object(AvatarVoiceClient, "health_ok", return_value=True), \
+         patch.object(AvatarVoiceClient, "marks_safe", return_value=True), \
          patch.object(AvatarVoiceClient, "_post", fake_post):
         rv3 = await TTSPipeline(
             cfg(True, {"paralinguistic": False})).synthesize(text, emotion=emo)

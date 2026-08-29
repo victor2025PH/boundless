@@ -370,13 +370,19 @@ def register_voice_routes(app, api_auth, config_manager=None):
             # 试听与发送**全同参**（pre_colloquialized + interactive）——坐席听到
             # 的字与发出的字永远一致，试听产物经「所听即所发」复用时零分叉；
             # interactive 同时把 hub 候选数封顶（人在等）+ 豁免开场词去重剥词。
+            # #59（2026-08-30）：预算按字数动态（clone_budget_sec，0.45s/字+10s，
+            # ≤77 字与旧 45s 等值）——旧固定 45s 在 76-80 字被击穿：104 IndexTTS-2
+            # 经隧道 ~0.4s/字，服务端 42 发全 200 合成成功，引擎预算先到期回落
+            # 默认音（成品被丢弃）。send-voice 用同一函数（试听=发送同口径）。
+            from src.integrations.shared.tts_preview import clone_budget_sec
+            _budget = clone_budget_sec(spoken_text, fast=fast)
             result = await _aio.wait_for(
                 tts.synthesize(
-                    spoken_text, timeout_sec=(15.0 if fast else 45.0),
+                    spoken_text, timeout_sec=_budget,
                     emotion=voice_ctx.get("emotion"),
                     pre_colloquialized=True, interactive=True,
-                    total_budget_sec=(15.0 if fast else 45.0)),
-                timeout=(20.0 if fast else 50.0),
+                    total_budget_sec=_budget),
+                timeout=_budget + 5.0,
             )
         except Exception as ex:
             _exs = f"{type(ex).__name__}: {ex}".rstrip(": ")
