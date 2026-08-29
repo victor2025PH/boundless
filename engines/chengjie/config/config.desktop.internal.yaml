@@ -235,10 +235,18 @@ lang_prior:
   phone_platforms:
   - whatsapp
 
-# ── 克隆语音（AvatarHub CosyVoice3 @117 + 备点 140；hub_fish 高保真 @176）────
+# ── 克隆语音（IndexTTS-2 @104:7865 主力；140:7852 CosyVoice 备）──────────────
+# 2026-08-29 域A修复：智聊 TTS 主力迁 104:7865 IndexTTS-2（同 /v1/tts/clone 契约，
+# 老板拍板专用节点），117:7852 CosyVoice 已退役（EmotionTTS_Boot Disabled）——
+# 旧种子 base_urls 指 [117:7852,140:7852] 两个死端点＝装机后克隆必回落通用音。
+# backend 仍用 avatar_clone（不学生产切 minicpm_clone）：hosted_gateway 混合注入
+# **只接管 avatar_voice.base_urls**，外网机器全靠它把官网网关排首位；minicpm_clone
+# 无网关注入路径，出了内网就是死配置。
 # _lan_seed: 授权 hosted_gateway 做混合注入——LAN 可达时网关殿后兜底，不可达时
-# 网关排首位（外网机器克隆语音经 bd2026.cc → 隧道 → 7852）。hub_fish 无健康预检，
+# 网关排首位（外网机器克隆语音经 bd2026.cc → 隧道 → 104:7865）。hub_fish 无健康预检，
 # 外网不可达时会被注入器就地禁用（回内网自动恢复）。
+# ⚠ 种子合并只补缺失键：存量装机的旧 base_urls 不会被本文件覆盖——它们靠
+# 网关中继修复（服务端已指向 104）恢复克隆，本段惠及新装/重置机器。
 avatar_voice:
   enabled: true
   _lan_seed: true
@@ -264,16 +272,19 @@ avatar_voice:
     human_ticks: true
     think_prob: 0.28
     laugh_prob: 0.08
-    # LLM 改写走 LAN 端点列表（173 qwen14b 主 / 198 qwen3:8b 备，逐端点冷却 failover），
-    # 全 LAN 挂了才落云端，最后才规则档——零 API 费主路 + 双 GPU 冗余
+    # ── 2026-08-28 中枢云端优先执行单 ②+⑤：摘 198 qwen3:8b、173:11434 → 173:8001 ──
+    # 旧＝「173 qwen14b 主 / 198 qwen3:8b 备」双 GPU 冗余。两条都撤：
+    #   · 198:11434 qwen3:8b 由中枢撤钉（198 改钉 qwen3-vl:8b 做视觉落点）→ 执行单 ②；
+    #   · 173:11434 不在中枢版图内（173 只保留 vLLM :8001）→ 执行单 ⑤ LAN 互备大扫除。
+    # 现在 LAN 只留一层 173:8001 chatx；它挂了仍有云端、最后规则档，能力不会消失。
+    # ⚠ 本文件是**安装包内置配置**：改动要等下一个 ChatX 包发版才到坐席机；
+    #   已装机器上的旧值由 hosted_gateway 混合形态兜住（LAN 不可达自动切网关）。
     provider: local_first
     temperature: 0.5
     llm_endpoints:
-    - base_url: http://192.168.0.173:11434
-      model: qwen14b-fallback
-      timeout_sec: 6.0
-    - base_url: http://192.168.0.198:11434
-      model: qwen3:8b
+    - base_url: http://192.168.0.173:8001/v1
+      model: chatx
+      api_key: vllm
       timeout_sec: 6.0
     llm_timeout_sec: 12.0
     min_chars: 12
@@ -284,13 +295,17 @@ avatar_voice:
   prosody:
     enabled: true
     flow_temperature: 1.08
+  # 2026-08-29 域A：104:7865 IndexTTS-2 主（健康形状 {status:"ok",model_loaded}，
+  # AvatarVoiceClient._probe 已双形状兼容）；140:7852 CosyVoice 备（断电后未回，
+  # AvatarHub 属地，复活即自动生效）。
   base_urls:
-  - http://192.168.0.117:7852
+  - http://192.168.0.104:7865
   - http://192.168.0.140:7852
-  - http://192.168.0.173:7852
   voice_consistency: strict
   hub_fish:
-    enabled: true
+    # 2026-08-29 与生产对齐关闭（老板拍板不用 176 角色库；智聊克隆统一走 104
+    # IndexTTS-2）。旧值 true 时 LAN 机器 allowlist 人设仍会打 176:9000。
+    enabled: false
     base_url: http://192.168.0.176:9000
     timeout_sec: 75.0
     best_of: 2
@@ -372,22 +387,23 @@ ai:
   persona_block_detail: compact
   num_ctx: 8192
   # 端点序对齐生产机：140 首位（宕机端点排首位=每个冷却窗过期先吃一次连接超时的尾延迟税）
+  # 2026-08-28 执行单 ④：摘除 176:11434 备点（176 整卡腾出后无 bge-m3），LAN 单点 140。
+  # 外网机器上这个地址不可达 → hosted_gateway.ensure_hosted_embed 换成官网网关
+  # （0828 P0-1 补的 /api/ai/v1/embeddings 路由），故单点化不影响外网客户。
   embedding_base_url: http://192.168.0.140:11434
   embedding_base_urls:
   - http://192.168.0.140:11434
-  - http://192.168.0.176:11434
   embedding_model: bge-m3
   fallback:
     enabled: true
-    # 173 qwen14b 7x24 常驻（176 30b 按集群显存纪律不可加载=配置性死亡，2026-08-01 实锤）；
-    # 同时服务：① 主链 DeepSeek 断时的回复兜底 ② colloquial local_first 的口语化改写
-    base_url: http://192.168.0.173:11434
-    model: qwen14b-fallback
-    api_key: ollama
+    # 2026-08-28 执行单 ⑤：173:11434 qwen14b-fallback → 173:8001 chatx（vLLM 27B AWQ）。
+    # 173 在中枢版图里只保留 :8001；11434 探活零驻留＝每次兜底先吃 8GB 冷载的纸面兜底。
+    # 同时服务：① 主链断云时的回复兜底 ② colloquial local_first 的口语化改写。
+    # keep_alive/num_ctx/think 三个 Ollama 原生键已删（/v1 口忽略）。
+    base_url: http://192.168.0.173:8001/v1
+    model: chatx
+    api_key: vllm
     timeout: 90
-    keep_alive: 8h
-    num_ctx: 8192
-    think: false
     # v1.005：与生产一致——聊天主链不用本地小模型顶话（宁可如实失败不出「变笨」
     # 的话；fallback 端点保留给口语化改写等改写型用途）
     chat_fallback: false
@@ -926,18 +942,33 @@ health_watchdog:
 
 translation:
   engines:
+    # ── 2026-08-28 中枢云端优先执行单 ①：翻译主路改云端 ────────────────────────
+    # 旧序 [ollama_mt, ai]＝LAN 优先（v1.005 为省 API 费定的），与老板 0828 拍板的
+    # 「所有能力优先走云端」相反，且对**装在客户机器上的包**是纯亏：LAN 地址不可达，
+    # 每条翻译先吃一次连接超时才落云端。改 [ai, ollama_mt] 后内网/外网都直走云端，
+    # LAN 只作云端不通时的兜底一层。
     order:
-    - ollama_mt
     - ai
+    - ollama_mt
     timeout_sec: 8
     ollama_mt:
-      # v1.005 对齐生产机：MT 主端点迁 176（列表口径），出内网自动回落 ai 引擎
-      base_url: http://192.168.0.176:11434
+      # 执行单 ①：LAN MT 落点 176:11434 hy-mt2 → 173:8001 chatx（vLLM，OpenAI 兼容口）。
+      # 176 整卡腾出后无 hy-mt2；api:"openai" 让 OllamaMT 引擎改打 /v1/chat/completions，
+      # 沿用同一套 Hunyuan 翻译 prompt，零代码改动。keep_alive 是 Ollama 专有语义故删除。
+      base_url: http://192.168.0.173:8001/v1
       base_urls:
-      - http://192.168.0.176:11434
-      model: hy-mt2-7b-official:latest
-      keep_alive: 24h
+      - http://192.168.0.173:8001/v1
+      model: chatx
+      api: openai
+      api_key: vllm
       timeout_sec: 25
+      # 2026-08-28 实测：chatx（Qwen3.6-27B-abl-AWQ）在 vLLM 上**默认开 thinking**
+      # → message.content=null、正文全在 reasoning，max_tokens 被思考吃光 ⇒ 引擎读
+      # content 恒空、兜底静默失效。关掉即恢复（同句 9 token / 1.1s）。
+      # 坐席机这一层尤其要带：它们本就只有「云端 → 这一层」两级。
+      payload_extra:
+        chat_template_kwargs:
+          enable_thinking: false
 
 workspace:
   auto_translate_inbound:

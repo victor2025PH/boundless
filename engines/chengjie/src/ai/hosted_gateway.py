@@ -65,6 +65,17 @@ VOICE_ENV_AUTO = "AITR_HOSTED_VOICE_AUTO"
 ASR_ENV_BASE = "AITR_HOSTED_ASR_BASE_URL"
 ASR_ENV_FIRST = "AITR_HOSTED_ASR_FIRST"
 ASR_ENV_AUTO = "AITR_HOSTED_ASR_AUTO"
+#: 托管嵌入（2026-08-28 P0-1 配套）的 env 回放键。
+#: 背景：客户档不配嵌入端点时 ai_client.embed() 回落**对话客户端**，托管态那就是
+#: 网关，于是它一直在打 ``{site}/api/ai/v1/embeddings``——该路由 0828 才补上。
+#: 但**内测档 overlay 把嵌入端点钉在 LAN**（140/176:11434），外网机器那两个地址
+#: 不可达 → 连续失败 3 次即客户端熔断 120s → 语义记忆召回全程降级为关键词
+#: （B126「客户明说过生日、AI 还反问」）。服务端补路由救不了这批机器，必须客户端
+#: 把不可达的 LAN 嵌入端点换成网关。
+EMBED_ENV_BASE = "AITR_HOSTED_EMBED_BASE_URL"
+EMBED_ENV_MODEL = "AITR_HOSTED_EMBED_MODEL"
+#: 网关侧规范嵌入模型（服务端也会强制改写，此处只为客户端「模型名非空」前提）
+HOSTED_EMBED_MODEL = "bge-m3"
 #: 注入 voice_recognition 用的 api_key 占位值：OpenAITranscriber 在**调用时**把它
 #: 解析为当前设备令牌（AITR_HOSTED_AI_KEY）——转写器构建一次常驻，令牌 30 天
 #: 换新不能把旧值钉死在已构建实例里。
@@ -151,6 +162,29 @@ def lan_alive(url: str, *, timeout: float = 2.0) -> bool:
             return True
     except Exception:
         return False
+
+
+def is_private_endpoint(url: str) -> bool:
+    """URL 主机是否为私网/回环地址（判「这条端点出了内网必然不可达」）。
+
+    公网主机名（客户自配的云端点）一律返回 False —— 那种端点我们绝不改写。
+    解析失败按 False（宁可不动用户配置）。
+    """
+    import ipaddress
+
+    try:
+        host = urllib.parse.urlsplit(str(url or "").strip()).hostname or ""
+    except Exception:
+        return False
+    if not host:
+        return False
+    if host in ("localhost",):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False          # 域名 → 视作公网，不碰
+    return bool(ip.is_private or ip.is_loopback or ip.is_link_local)
 
 
 def _wants_hosted(config: Optional[dict]) -> bool:
@@ -735,6 +769,131 @@ def ensure_hosted_voice(
     return True
 
 
+def _embed_urls(ai: Dict[str, Any]) -> list:
+    """取 ``ai`` 段当前配置的嵌入端点列表（复数键优先，兼容逗号串）。"""
+    raw = ai.get("embedding_base_urls") or ai.get("embedding_base_url") or ""
+    if isinstance(raw, (list, tuple)):
+        items = [str(u or "").strip() for u in raw]
+    else:
+        items = [u.strip() for u in str(raw).split(",")]
+    return [u for u in items if u]
+
+
+def apply_hosted_embed(cfg: Dict[str, Any], gw_base: str) -> bool:
+    """把网关排到 ``ai.embedding_base_url(s)``（纯内存；与 env 回放共用）。
+
+    只在「原端点全是私网地址」时接管，原值存 ``ai._lan_embed`` 可逆还原；
+    公网/云端点（客户自配 OpenAI、自建域名）一律不碰。
+    """
+    ai = cfg.get("ai") if isinstance(cfg.get("ai"), dict) else None
+    if not ai:
+        return False
+    gw = str(gw_base or "").rstrip("/")
+    if not gw:
+        return False
+    if ai.get("_hosted_embed") and _embed_urls(ai) == [gw]:
+        return True                                    # 幂等
+    if not ai.get("_hosted_embed"):
+        stash = _embed_urls(ai)
+        if stash and not all(is_private_endpoint(u) for u in stash):
+            return False                               # 有公网端点 → 尊重用户配置
+        ai["_lan_embed"] = {
+            "embedding_base_url": ai.get("embedding_base_url"),
+            "embedding_base_urls": list(stash) or None,
+            "embedding_model": ai.get("embedding_model"),
+        }
+    ai["embedding_base_url"] = gw
+    ai["embedding_base_urls"] = [gw]
+    # 模型名为空时 ai_client.embed() 直接返回空（不发请求）→ 必须给个非空值；
+    # 网关侧还会强制改写为规范模型，此处只是过客户端那道前置闸。
+    if not str(ai.get("embedding_model") or "").strip():
+        ai["embedding_model"] = HOSTED_EMBED_MODEL
+    # embedding_api_key 刻意不写：ai_client 缺省继承 ai.api_key（=设备令牌），
+    # 令牌换新时自动跟随，写死一份就会在 30 天后静默失效。
+    ai["_hosted_embed"] = True
+    return True
+
+
+def restore_lan_embed(cfg: Dict[str, Any]) -> bool:
+    """回内网（LAN 嵌入端点重新可达）时还原原配置。"""
+    ai = cfg.get("ai") if isinstance(cfg.get("ai"), dict) else None
+    if not ai or not ai.get("_hosted_embed"):
+        return False
+    stash = ai.get("_lan_embed") if isinstance(ai.get("_lan_embed"), dict) else {}
+    for key in ("embedding_base_url", "embedding_base_urls", "embedding_model"):
+        val = stash.get(key)
+        if val in (None, []):
+            ai.pop(key, None)
+        else:
+            ai[key] = val
+    ai.pop("_hosted_embed", None)
+    ai.pop("_lan_embed", None)
+    return True
+
+
+def ensure_hosted_embed(
+    config_manager: Any, *, probe: Optional[Callable[[str], bool]] = None,
+) -> bool:
+    """托管嵌入：LAN 嵌入端点全不可达时改走官网网关（语义记忆召回不再降级）。
+
+    与 ensure_hosted_voice / ensure_hosted_asr 同构（探测 → 注入 → env 双写），
+    但**判据更窄**：只接管「全部端点都是私网地址且全不可达」的配置。
+    公网端点（客户自配 OpenAI 云）与 LAN 可达（办公室机器）都原样不动。
+
+    未配任何嵌入端点的客户档不走这里 —— 那种情况 ai_client 本就回落对话客户端
+    （即网关），服务端 ``/api/ai/v1/embeddings`` 补上后自动可用。
+    """
+    cfg = getattr(config_manager, "config", None) or {}
+    if not _wants_hosted(cfg):
+        return False
+    ai = cfg.get("ai") if isinstance(cfg.get("ai"), dict) else None
+    if not ai:
+        return False
+    if not str(ai.get("api_key") or "").startswith("cx."):
+        return False
+    gw = _gateway_base(cfg)
+    chk = probe or lan_alive
+
+    def _stamp_env() -> None:
+        os.environ[EMBED_ENV_BASE] = gw
+        os.environ[EMBED_ENV_MODEL] = str(
+            ai.get("embedding_model") or HOSTED_EMBED_MODEL)
+
+    # 已接管：判据换成**暂存的 LAN 端点**是否复活（当前配置里已经只有网关，
+    # 拿它去探测永远为真＝永远不还原，漫游回内网就把网关粘死了）。
+    if ai.get("_hosted_embed"):
+        stash = ai.get("_lan_embed") if isinstance(ai.get("_lan_embed"), dict) else {}
+        lan_urls = [u for u in (stash.get("embedding_base_urls") or []) if u]
+        if not lan_urls and stash.get("embedding_base_url"):
+            lan_urls = [str(stash["embedding_base_url"])]
+        if lan_urls and any(chk(u) for u in lan_urls):
+            restore_lan_embed(cfg)
+            os.environ.pop(EMBED_ENV_BASE, None)
+            os.environ.pop(EMBED_ENV_MODEL, None)
+            logger.info("[hosted-embed] LAN 嵌入端点已恢复 → 还原直连")
+            return False
+        _stamp_env()
+        return True
+
+    urls = _embed_urls(ai)
+    if not urls:
+        return False                       # 无端点＝已经在走网关（对话客户端回落）
+    if urls == [gw]:
+        _stamp_env()
+        return True
+    if not all(is_private_endpoint(u) for u in urls):
+        return False
+    if any(chk(u) for u in urls):
+        return False                       # LAN 可达 → 直连低延迟，一个字不改
+    if not apply_hosted_embed(cfg, gw):
+        return False
+    _stamp_env()
+    logger.info(
+        "[hosted-embed] LAN 嵌入端点不可达（%s）→ 改走网关 %s（语义记忆召回恢复）",
+        ", ".join(urls[:3]), gw)
+    return True
+
+
 def ensure_hosted_asr(
     config_manager: Any, *, probe: Optional[Callable[[str], bool]] = None,
 ) -> bool:
@@ -1062,12 +1221,20 @@ def refresh_once(config_manager: Any) -> None:
         ensure_hosted_vision(config_manager)
         ensure_hosted_voice(config_manager)
         ensure_hosted_asr(config_manager)
+        ensure_hosted_embed(config_manager)
     except Exception:
         logger.debug("[hosted-ai] 刷新守护异常（忽略）", exc_info=True)
     try:
         check_remote_diag(config_manager)
     except Exception:
         logger.debug("[remote-diag] 轮询异常（忽略）", exc_info=True)
+    # 实施86 域A-2①：报障 outbox 补传——上传失败暂存的诊断包在每小时刷新轮
+    # 顺手重试（网络恢复后 ≤1h 自动送达；成功上传时另有即时顺手补传）。
+    try:
+        from src.utils.diag_upload import flush_diag_outbox
+        flush_diag_outbox(config_manager)
+    except Exception:
+        logger.debug("[remote-diag] outbox 补传异常（忽略）", exc_info=True)
 
 
 def start_refresh_daemon(config_manager: Any, *, interval_sec: int = 3600) -> bool:

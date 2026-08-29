@@ -113,6 +113,9 @@ ZH = {
     "inbox.acct.hist_purge_ok": "已清除 {n} 条记录",
     "inbox.acct.hist_purge_fail": "删除失败",
     "inbox.acct.hist_purge_unready": "服务端暂未启用该功能，将在下个维护窗口自动生效",
+    # 在册未接管号（桌面工作台 / 在册·未接管）的危险项＝移除而非彻底删除：
+    # 它们注册表里有行、状态仍活跃，服务端拦着不许 purge；先移除转成「已移除」才可清数据
+    "inbox.acct.hist_remove_t": "从账号池移除该在册账号：转为「已移除」后可恢复，或再「彻底删除」清空本机记录。桌面工作台号若桌面端仍在同步，下一条镜像消息会把它重新登记回来",
     # ── 历史账号治理 P1（2026-08-17）：删除前体量预估 + 导出 + 批量清未读 ──
     "inbox.acct.hist_purge_confirm_full": "确定彻底删除「{name}」的历史记录？将从本机清除 {n} 个会话、{m} 条消息（不可恢复）。",
     "inbox.acct.hist_export": "导出记录",
@@ -236,9 +239,17 @@ ZH = {
     "inbox.conv.acct_badge_click_t": "{label} · 点击只看该账号的会话",
     # ── 前端版本陈旧提醒（P2-1，2026-07-29：旧标签页跑旧 JS 是「修好了还在踩」根因）──
     "base.common.close": "关闭",
-    "ws.uibuild.text": "工作台界面已更新到新版本，刷新页面即可加载（建议先发出/保存手头输入）。",
-    "ws.uibuild.btn": "立即刷新",
+    # 2026-08-28 改口径：旧文案「刷新页面即可加载」在桌面壳（Electron webview，无
+    # 地址栏/刷新按钮）是做不到的指令；且胶囊常驻而动作 20s 即逝。现在动作按钮常驻，
+    # 文案只描述结果不描述浏览器操作。short=胶囊短句，text=卡片/消息中心全句。
+    "ws.uibuild.short": "界面有新版本",
+    "ws.uibuild.text": "界面有新版本，点「立即更新」重新载入（约 2 秒；输入框里的文字会自动保留）。",
+    "ws.uibuild.btn": "立即更新",
     "ws.uibuild.dismiss": "暂不（2 小时内不再提醒）",
+    "ws.uibuild.unsent": "你还有没发出去的图片或语音，重新载入会把它们清空。建议先发送，再更新。",
+    "ws.uibuild.force": "仍要更新",
+    "ws.uibuild.later": "先去发送",
+    "ws.uibuild.auto_done": "界面已在后台自动更新到新版本。",
     # ── 抽屉视觉重构 P0（舰队摘要 / 搜索 / 骨架 / 空态 / 中间态）──
     "inbox.acct.sum_plats": "平台",
     "inbox.acct.sum_total": "账号",
@@ -2619,6 +2630,12 @@ ZH = {
     "ws.chandown.waiting": "联系服务器中… {s}s",
     "ws.restartcool.text": "服务刚完成重启，约 {n} 分钟内若偶发加载失败属正常——请稍候自动恢复，勿连续刷新",
     "ws.restartcool.hint": "（系统冷却保护中，连环重启已自动抑制）",
+    # ── 官网连通性胶囊（实施86 域A-2②，#17/#51）──
+    "ws.sitelink.title": "官网连接",
+    "ws.sitelink.pill": "连不上官网服务",
+    "ws.sitelink.pill_m": "连不上官网服务 {m} 分钟",
+    "ws.sitelink.card": "本机暂时连不上官网服务（{site}）：AI 回复、克隆语音、一键报障可能受影响。请检查本机网络（浏览器能否打开官网）；恢复后本提示自动消失，报障内容会自动补传。",
+    "ws.sitelink.recovered": "官网连接已恢复，相关功能自动恢复正常。",
 }
 
 EN = {
@@ -2748,6 +2765,12 @@ EN = {
     "inbox.acct.hist_cleanup_done": "Cleaned up {n} inactive accounts",
     "inbox.acct.hist_cleanup_part": "Cleaned {n} accounts; {f} failed",
     "inbox.acct.hist_purge_unready": "Server not updated yet; this will work after the next maintenance window",
+    "inbox.acct.hist_remove_t": "Remove this registered account from the account "
+                                "pool: it becomes \u201cRemoved\u201d, then you can "
+                                "restore it or \u201cDelete permanently\u201d to erase "
+                                "local records. A desktop-workbench account will be "
+                                "re-registered by the next mirrored message if the "
+                                "desktop app is still syncing",
     "inbox.acct.histview_banner": "Read-only history",
     "inbox.acct.histview_exit": "Exit view",
     "inbox.acct.histview_out_hint": "This account is logged out: history is read-only; log in again to resume messaging",
@@ -2855,9 +2878,14 @@ EN = {
     "inbox.conv.acct_badge_click_t": "{label} · click to view only this account's chats",
     # ── Stale frontend reminder (P2-1, 2026-07-29) ──
     "base.common.close": "Close",
-    "ws.uibuild.text": "The workspace UI has been updated. Refresh the page to load the new version (send/save your current input first).",
-    "ws.uibuild.btn": "Refresh now",
+    "ws.uibuild.short": "New version available",
+    "ws.uibuild.text": "A new version of the workspace is ready. Click \u201cUpdate now\u201d to reload (about 2 seconds; text in your composer is kept).",
+    "ws.uibuild.btn": "Update now",
     "ws.uibuild.dismiss": "Not now (snooze for 2 hours)",
+    "ws.uibuild.unsent": "You still have an unsent photo or voice message. Reloading discards it \u2014 send it first, then update.",
+    "ws.uibuild.force": "Update anyway",
+    "ws.uibuild.later": "Send it first",
+    "ws.uibuild.auto_done": "The interface was updated to the new version in the background.",
     # ── Drawer visual refresh P0 (fleet summary / search / skeleton / empty / interim states) ──
     "inbox.acct.sum_plats": "Platforms",
     "inbox.acct.sum_total": "Accounts",
@@ -5209,4 +5237,10 @@ EN = {
     "ws.chandown.waiting": "Contacting server… {s}s",
     "ws.restartcool.text": "Service just restarted; brief load failures for ~{n} min are expected — wait for auto-reconnect, avoid rapid refresh",
     "ws.restartcool.hint": "(cooldown active — chained restarts are suppressed)",
+    # ── Vendor-site connectivity capsule (impl86 domain A-2(2), #17/#51) ──
+    "ws.sitelink.title": "Vendor site link",
+    "ws.sitelink.pill": "Can't reach the vendor site",
+    "ws.sitelink.pill_m": "Vendor site unreachable for {m} min",
+    "ws.sitelink.card": "This machine can't reach the vendor site ({site}) right now: AI replies, voice cloning and one-click support may be affected. Check this machine's network (does the site open in a browser?). This notice clears automatically on recovery, and pending reports will be re-sent.",
+    "ws.sitelink.recovered": "Vendor site connection restored; related features are back to normal.",
 }

@@ -1979,6 +1979,34 @@
     if(prev){ try{ localStorage.removeItem(k); }catch(_e){} }
     return fresh ? 'end' : 'idle';
   }
+  /* 官网连通性胶囊（实施86 域A-2②，#17/#51）：托管机 AI/克隆语音/报障上报全走
+     官网，断链时此前只表现为一堆互不相干的静默回落。site_link 恒空=非托管部署，
+     整块隐藏；reachable=false → 琥珀胶囊(带断链时长) + 断链/恢复各提示一次。 */
+  function _renderSiteLink(sl){
+    if(!window.AITRNotify) return;
+    var down = !!(sl && sl.reachable === false);
+    var ep = _ntfEpisode('sitelink', down, 10 * 60000);
+    if(!down){
+      AITRNotify.ongoing.clear('sitelink');
+      if(ep === 'end'){
+        AITRNotify.notify({severity: 'success', text: window.T('ws.sitelink.recovered'),
+          centerId: 'sitelink', centerText: window.T('ws.sitelink.recovered')});
+      }
+      return;
+    }
+    var mins = Math.max(0, Number(sl.down_min) || 0);
+    AITRNotify.ongoing.set('sitelink', {
+      text: mins > 0 ? window.Tf('ws.sitelink.pill_m', {m: String(mins)})
+                     : window.T('ws.sitelink.pill'),
+      tone: 'warn',
+      title: window.T('ws.sitelink.title')
+    });
+    if(ep === 'start'){
+      var msg = window.Tf('ws.sitelink.card', {site: String(sl.site || '')});
+      AITRNotify.notify({severity: 'warn', text: msg,
+        centerId: 'sitelink', centerText: msg});
+    }
+  }
   /* 托管到期提醒（P4 → 实施75 迁右下）：tenant_notice 缺失/空=非托管或未临期 → 收胶囊。
      天数向上取整给客户看（0.4 天 → 「1 天内」语义由文案的整数天承担）。
      胶囊常驻承接原横幅的「须知性」；卡片提示每档（expiring/expired）每日一次。 */
@@ -2118,6 +2146,7 @@
       _renderRestartCool(d && d.instance_restart);
       _renderExpiry(d && d.tenant_notice);
       _renderDelivBlock(d && d.delivery_block, !!(d && d.degraded));
+      _renderSiteLink(d && d.site_link);
       // Faster refresh while cooling so banner/timeout adaptive clear sooner
       _scheduleAiDegradePoll((d && d.instance_restart && d.instance_restart.cooldown_active) ? 30000 : 60000);
     }catch(_){
@@ -2132,6 +2161,7 @@
           AITRNotify.ongoing.clear('expiry');
           AITRNotify.ongoing.clear('delivblock');
           AITRNotify.ongoing.clear('chandown');
+          AITRNotify.ongoing.clear('sitelink');
         }
         try{
           window.__wsRestartCoolLocal = Date.now() + 180000;

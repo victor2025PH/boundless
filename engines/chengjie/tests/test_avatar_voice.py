@@ -58,6 +58,28 @@ def _wav_bytes(ms: int = 200, rate: int = 24000) -> bytes:
     return buf.getvalue()
 
 
+def _wav_tone_bytes(ms: int = 200, rate: int = 24000) -> bytes:
+    """生成一段**有能量**的 WAV（440Hz 正弦）。
+
+    hub 产物夹具必须用它：B61 哑音兜底（tts_pipeline `detect_silent_audio`）会把
+    全零 WAV 判成哑音重试→判失败——用静音夹具装 hub 输出＝测试自己撞闸。
+    """
+    import math
+
+    buf = io.BytesIO()
+    n = int(rate * ms / 1000)
+    frames = bytearray()
+    for i in range(n):
+        v = int(12000 * math.sin(2 * math.pi * 440 * i / rate))
+        frames += int(v).to_bytes(2, "little", signed=True)
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(bytes(frames))
+    return buf.getvalue()
+
+
 # ── 纯函数：payload 构建 ──────────────────────────────────────────────────────
 def test_build_clone_payload_shape():
     body = json.loads(build_clone_payload(
@@ -438,6 +460,61 @@ def test_qwen_health_parser():
     assert d == {"reachable": True, "models_loaded": True}
 
 
+def _mock_health_resp(payload: dict):
+    class _R:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps(payload).encode()
+
+    return _R()
+
+
+def test_health_accepts_indextts2_shape():
+    """克隆端点健康预检必须认 IndexTTS-2(7865) 的 {status:"ok",model_loaded} 形状。
+
+    2026-08-29 智聊克隆主力迁 104:7865 后 base_urls 可直指 7865——旧实现只认
+    {ok,models_loaded}，对 7865 永远判不就绪 → 端点活着也全量回落 edge。
+    """
+    c = _client()
+    with patch("urllib.request.urlopen") as mock_open:
+        mock_open.return_value = _mock_health_resp(
+            {"status": "ok", "engine": "index_tts2", "model_loaded": True})
+        d = c.health()
+    assert d == {"reachable": True, "models_loaded": True}
+    with patch("urllib.request.urlopen") as mock_open:
+        mock_open.return_value = _mock_health_resp(
+            {"status": "ok", "engine": "index_tts2", "model_loaded": True})
+        assert c.health_ok(use_cache=False) is True
+
+
+def test_health_indextts2_not_loaded_or_error():
+    """7865 形状的负例：model_loaded=false / status!=ok 都不得判就绪。"""
+    c = _client()
+    with patch("urllib.request.urlopen") as mock_open:
+        mock_open.return_value = _mock_health_resp(
+            {"status": "ok", "model_loaded": False})
+        assert c.health()["models_loaded"] is False
+    with patch("urllib.request.urlopen") as mock_open:
+        mock_open.return_value = _mock_health_resp(
+            {"status": "loading", "model_loaded": True})
+        assert c.health()["models_loaded"] is False
+
+
+def test_health_mfys_shape_still_authoritative():
+    """带 ok 键的响应仍按主形状判——ok:false 不得被 alt 键对救活。"""
+    c = _client()
+    with patch("urllib.request.urlopen") as mock_open:
+        mock_open.return_value = _mock_health_resp(
+            {"ok": False, "models_loaded": True, "status": "ok",
+             "model_loaded": True})
+        assert c.health()["models_loaded"] is False
+
+
 def test_health_unreachable():
     c = _client(base_url="http://127.0.0.1:1", health_timeout_sec=0.2)
     d = c.health()
@@ -735,7 +812,7 @@ async def test_pipeline_hub_fish_hit_takes_priority(tmp_path):
     ref = tmp_path / "ref.wav"
     ref.write_bytes(_wav_bytes(300))
     cfg = _pipeline_cfg_hub(tmp_path, ref)
-    wav = _wav_bytes(600)
+    wav = _wav_tone_bytes(600)
 
     def fake_hub(base_url, profile, text, **kw):
         assert profile == "lin_jiaxin"
@@ -786,7 +863,7 @@ async def test_pipeline_hub_fish_ogg_config_but_hub_falls_back_wav(tmp_path):
     ref = tmp_path / "ref.wav"
     ref.write_bytes(_wav_bytes(300))
     cfg = _pipeline_cfg_hub(tmp_path, ref, response_format="ogg")
-    wav = _wav_bytes(400)
+    wav = _wav_tone_bytes(400)
 
     def fake_hub(base_url, profile, text, **kw):
         assert kw.get("audio_format") == "ogg"
@@ -900,7 +977,7 @@ async def test_pipeline_hub_fish_gets_colloquial_spoken_text(tmp_path):
 
     def fake_hub(base_url, profile, text, **kw):
         seen["text"] = text
-        return _wav_bytes(500), "wav"
+        return _wav_tone_bytes(500), "wav"
 
     async def fake_llm(*a, **k):
         return "说真的，这件事你不用急，慢慢来就好"

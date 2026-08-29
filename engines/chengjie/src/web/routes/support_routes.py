@@ -98,4 +98,9 @@ def register_support_routes(app, ctx) -> None:
                 resp["mini"] = True   # 降级 mini 包送达（additive，旧前端零感知）
             return resp
         err = str(out.get("error") or "upload_failed")
+        # 实施86 域A-2①：长断网时包已落本机 outbox → 文案如实告知「已暂存会自动
+        # 补传」，替代旧的「请检查网络后重试」死胡同（#51 skuio 实录）。
+        if out.get("staged") and err == "upstream_unreachable":
+            return {"ok": False, "staged": True,
+                    "detail": tr(request, "err.svc.upstream_unreachable_staged")}
         return {"ok": False, "detail": error_detail_for(request, err)}

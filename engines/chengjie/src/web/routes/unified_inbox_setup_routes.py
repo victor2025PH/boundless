@@ -789,6 +789,14 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
             tenant_notice = read_tenant_notice()
         except Exception:
             tenant_notice = None
+        # 官网连通性（实施86 域A-2②，#17/#51）：托管机各链（AI/克隆语音/报障）都
+        # 依赖官网，此前断链只会表现为一堆互不相干的静默回落。探针 120s 进程缓存 +
+        # 连续两振才报，同一 60s 轮询捎带；非托管态恒 None（前端隐藏）。
+        try:
+            from src.utils.site_link_probe import site_link_snapshot
+            site_link = await asyncio.to_thread(site_link_snapshot, config_manager)
+        except Exception:
+            site_link = None
         # P1 2026-08-23 急停可见化：全局急停摘要随同一 60s 轮询捎带（零新增轮询）。
         # 顶栏冻结条据此渲染——收件箱横幅只覆盖「打开着的会话」，全局急停时坐席
         # 不该等点进会话才发现。只读既有单例（status_snapshot fail-open），
@@ -834,7 +842,7 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
                     "channels": channels, "instance_restart": restart_banner,
                     "tenant_notice": tenant_notice,
                     "delivery_block": delivery_block,
-                    "kill_switch": kill_switch}
+                    "kill_switch": kill_switch, "site_link": site_link}
         try:
             snap = ai_client.degradation_snapshot()
         except Exception:
@@ -843,12 +851,12 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
                     "channels": channels, "instance_restart": restart_banner,
                     "tenant_notice": tenant_notice,
                     "delivery_block": delivery_block,
-                    "kill_switch": kill_switch}
+                    "kill_switch": kill_switch, "site_link": site_link}
         return {"ok": True, **snap, "primary": primary_mode,
                 "channels": channels, "instance_restart": restart_banner,
                 "tenant_notice": tenant_notice,
                 "delivery_block": delivery_block,
-                "kill_switch": kill_switch}
+                "kill_switch": kill_switch, "site_link": site_link}
 
     # 「AI 本周替你完成 N 条回复」坐席可读摘要（2026-08-14）。/api/report/weekly 是
     # 主管专属重报表，普通坐席 403 → 收件箱空态 ROI 行对最该被激励的人反而不显示。

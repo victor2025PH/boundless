@@ -2,8 +2,10 @@
 # 供官网网关 /api/ai/* 各路由转发（双活，网关按序试 + 失败冷却降权）：
 #   176:11434 -> VPS 127.0.0.1:18411   识图 VLM 主（VISION_RELAY_URLS）
 #   140:11434 -> VPS 127.0.0.1:18412   识图 VLM 备/分流
-#   117:7852  -> VPS 127.0.0.1:18413   克隆 TTS 主（TTS_RELAY_URLS，2026-08-03）
-#   140:7852  -> VPS 127.0.0.1:18414   克隆 TTS 备
+#   104:7865  -> VPS 127.0.0.1:18413   克隆 TTS 主（TTS_RELAY_URLS；2026-08-29 从
+#                117:7852 改指 104 IndexTTS-2——智聊 TTS 主力迁 104、117 CosyVoice
+#                已退役(EmotionTTS_Boot Disabled)，旧指向=外网克隆全灭的根因之一）
+#   140:7852  -> VPS 127.0.0.1:18414   克隆 TTS 备（CosyVoice；断电后未回，AvatarHub 属地）
 #   176:8765  -> VPS 127.0.0.1:18415   GPU ASR（ASR_RELAY_URLS，须带 /v1 后缀）
 # 对应 VPS env：VISION_RELAY_URLS=http://127.0.0.1:18411/v1,http://127.0.0.1:18412/v1
 #              TTS_RELAY_URLS=http://127.0.0.1:18413,http://127.0.0.1:18414
@@ -49,7 +51,7 @@ while ($true) {
     # -N 不执行远程命令；-R 反向转发（识图 176/140 + 克隆TTS 117/140 + GPU ASR 176）；
     # ExitOnForwardFailure 任一端口占用即退出重试（僵尸占端口由下方自清收割）
     & ssh -N -R 127.0.0.1:18411:192.168.0.176:11434 -R 127.0.0.1:18412:192.168.0.140:11434 `
-      -R 127.0.0.1:18413:127.0.0.1:7852 -R 127.0.0.1:18414:192.168.0.140:7852 `
+      -R 127.0.0.1:18413:192.168.0.104:7865 -R 127.0.0.1:18414:192.168.0.140:7852 `
       -R 127.0.0.1:18415:192.168.0.176:8765 `
       -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 `
       -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=15 `

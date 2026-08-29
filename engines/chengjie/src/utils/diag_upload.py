@@ -190,6 +190,182 @@ def classify_upload_error(ex: Exception) -> str:
     return "upstream_unreachable"
 
 
+# ── 报障暂存 outbox（实施86 域A-2①，#51/#17 沉淀）────────────────────────────
+# 现场证据：skuio 机 10:11 点「一键发给客服」报「连不上官网服务」——重试+mini 降级
+# 都过不去的**长断网**窗口里，包被直接丢弃，用户只能记得住的话稍后再点。暂存＝
+# 失败的全尺寸包落本机 outbox，网络恢复后（托管刷新轮/下一次成功上传时）自动补传，
+# 报障现场不再因网络波动而丢。
+OUTBOX_DIRNAME = "diag_outbox"
+#: 只留最新 N 份（全尺寸包可到几十 MB，outbox 不是无限档案馆）
+OUTBOX_MAX_BUNDLES = 3
+#: 超过一周没送出去的现场已过时（日志/配置早变了），清理防僵尸堆积
+OUTBOX_MAX_AGE_SEC = 7 * 86400
+
+
+def outbox_dir(logs_dir: Optional[Path]) -> Optional[Path]:
+    """outbox 目录（``<logs>/diag_outbox``）；logs 目录未知 → None（不暂存）。"""
+    try:
+        if logs_dir is None:
+            return None
+        return Path(logs_dir) / OUTBOX_DIRNAME
+    except Exception:
+        return None
+
+
+def stage_bundle(logs_dir: Optional[Path], blob: bytes, *,
+                 note: str = "", fp: str = "", ver: str = "") -> bool:
+    """把送不出去的诊断包落盘暂存（.zip + 同名 .json sidecar 记转投头元数据）。
+
+    落盘后按「数量上限 + 最长龄」轮转。任何失败返回 False 绝不抛——暂存是
+    最后一层兜底，它自己不能成为新故障源。
+    """
+    import time as _time
+
+    import uuid as _uuid
+
+    d = outbox_dir(logs_dir)
+    if d is None or not blob:
+        return False
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        # uuid 尾缀防同秒碰撞：连环失败的两份包同秒同长会同名互覆（门禁实锤）
+        stem = f"diag_{int(_time.time())}_{_uuid.uuid4().hex[:8]}"
+        (d / f"{stem}.zip").write_bytes(blob)
+        (d / f"{stem}.json").write_text(json.dumps(
+            {"note": str(note or ""), "fp": str(fp or ""),
+             "app": str(ver or ""), "staged_at": int(_time.time())},
+            ensure_ascii=False), encoding="utf-8")
+        _rotate_outbox(d)
+        logger.info("[diag] 上传失败的诊断包已暂存 outbox（%d bytes）待网络恢复补传",
+                    len(blob))
+        return True
+    except Exception:
+        logger.debug("[diag] outbox 暂存失败（已忽略）", exc_info=True)
+        return False
+
+
+def _rotate_outbox(d: Path) -> None:
+    import time as _time
+
+    try:
+        zips = sorted([p for p in d.glob("diag_*.zip") if p.is_file()],
+                      key=lambda p: p.stat().st_mtime)
+        now = _time.time()
+        doomed = []
+        for p in zips:
+            if now - p.stat().st_mtime > OUTBOX_MAX_AGE_SEC:
+                doomed.append(p)
+        keep = [p for p in zips if p not in doomed]
+        if len(keep) > OUTBOX_MAX_BUNDLES:
+            doomed.extend(keep[:len(keep) - OUTBOX_MAX_BUNDLES])
+        for p in doomed:
+            try:
+                p.unlink(missing_ok=True)
+                p.with_suffix(".json").unlink(missing_ok=True)
+            except Exception:
+                pass
+    except Exception:
+        logger.debug("[diag] outbox 轮转失败（已忽略）", exc_info=True)
+
+
+def list_staged(logs_dir: Optional[Path]) -> list:
+    """待补传的包（旧→新）。"""
+    d = outbox_dir(logs_dir)
+    if d is None or not d.is_dir():
+        return []
+    try:
+        return sorted([p for p in d.glob("diag_*.zip") if p.is_file()],
+                      key=lambda p: p.stat().st_mtime)
+    except Exception:
+        return []
+
+
+def flush_diag_outbox(config_manager, *, max_items: int = 2) -> Dict[str, Any]:
+    """尝试补传 outbox 里的暂存包（同步；托管刷新轮/成功上传后调用）。
+
+    语义：
+    - 上传成功 → 删本地件（短码进日志，客服侧照常收包）；
+    - 服务端**拒收**（HTTP 有响应）→ 也删——包已到达对端被明确拒绝，
+      无限重投只会每小时骚扰一次官网；
+    - 连不上 → 立即停（网络还没恢复，剩下的下轮再试）。
+    返回 {sent, dropped, remaining} 观测量。绝不抛。
+    """
+    sent = dropped = 0
+    try:
+        _, logs_dir = resolve_diag_dirs(config_manager)
+        staged = list_staged(logs_dir)
+        if not staged:
+            return {"sent": 0, "dropped": 0, "remaining": 0}
+        site = site_url(config_manager)
+        for p in staged[:max(1, int(max_items))]:
+            side = p.with_suffix(".json")
+            meta: Dict[str, Any] = {}
+            try:
+                meta = json.loads(side.read_text(encoding="utf-8"))
+            except Exception:
+                meta = {}
+            try:
+                blob = p.read_bytes()
+                req = urllib.request.Request(
+                    f"{site}/api/diag-upload", data=blob, method="POST")
+                req.add_header("content-type", "application/zip")
+                req.add_header("x-diag-meta", json.dumps(
+                    {"app": meta.get("app") or "", "fp": meta.get("fp") or "",
+                     "note": meta.get("note") or "", "outbox_delayed": True},
+                    ensure_ascii=False))
+                with urllib.request.urlopen(req, timeout=UPLOAD_TIMEOUT_SEC) as resp:
+                    out = json.loads(resp.read().decode("utf-8") or "{}")
+                if out.get("ok") and out.get("code"):
+                    sent += 1
+                    logger.info("[diag] outbox 补传成功 code=%s（%s）",
+                                out.get("code"), p.name)
+                else:
+                    dropped += 1
+                    logger.info("[diag] outbox 补传被官网拒绝（%s）→ 弃件",
+                                str(out.get("error") or "?")[:80])
+                p.unlink(missing_ok=True)
+                side.unlink(missing_ok=True)
+            except Exception as ex:  # noqa: BLE001
+                kind = classify_upload_error(ex)
+                if kind.startswith("upload_rejected"):
+                    dropped += 1
+                    try:
+                        p.unlink(missing_ok=True)
+                        side.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    logger.info("[diag] outbox 补传遭拒收（%s）→ 弃件", kind)
+                    continue
+                logger.debug("[diag] outbox 补传仍连不上官网，本轮停止", exc_info=True)
+                break
+    except Exception:
+        logger.debug("[diag] outbox 补传异常（已忽略）", exc_info=True)
+    remaining = 0
+    try:
+        _, logs_dir = resolve_diag_dirs(config_manager)
+        remaining = len(list_staged(logs_dir))
+    except Exception:
+        pass
+    return {"sent": sent, "dropped": dropped, "remaining": remaining}
+
+
+def _kick_flush_async(config_manager) -> None:
+    """成功上传后顺手补传 outbox（后台线程，best-effort）——「刚成功」是
+    「网络已恢复」的最强信号，比等托管刷新轮快至多一小时。"""
+    import threading
+
+    def _run() -> None:
+        try:
+            flush_diag_outbox(config_manager)
+        except Exception:
+            logger.debug("[diag] 顺手补传异常（已忽略）", exc_info=True)
+
+    try:
+        threading.Thread(target=_run, name="diag-outbox-flush", daemon=True).start()
+    except Exception:
+        pass
+
+
 def _fatal_log_files(logs_dir: Optional[Path]) -> Dict[str, Path]:
     """logs 目录里的崩溃第一现场（fatal/哨兵），mini 包的核心价值。"""
     out: Dict[str, Path] = {}
@@ -326,19 +502,30 @@ async def build_and_upload(config_manager, note: Any = "") -> Dict[str, Any]:
                 meta=mini_meta, extra_files=mini_extra,
                 extra_tail_kb=MINI_TAIL_KB)
         except Exception:  # noqa: BLE001
-            return {"ok": False, "error": last_err}
+            staged = await asyncio.to_thread(
+                stage_bundle, logs_dir, blob, note=note_s, fp=fp, ver=ver)
+            return {"ok": False, "error": last_err, "staged": bool(staged)}
         try:
             out = await asyncio.to_thread(_upload, mini_blob)
         except Exception as ex:  # noqa: BLE001
             logger.info("mini 诊断包重传仍失败（%d bytes）", len(mini_blob),
                         exc_info=True)
-            return {"ok": False, "error": classify_upload_error(ex)}
+            err2 = classify_upload_error(ex)
+            # 长断网（mini 也 unreachable）→ 全尺寸包落 outbox，网络恢复自动补传
+            # （实施86 域A-2①）。拒收类不暂存：包已到达对端被明确拒绝。
+            staged = False
+            if err2 == "upstream_unreachable":
+                staged = await asyncio.to_thread(
+                    stage_bundle, logs_dir, blob, note=note_s, fp=fp, ver=ver)
+            return {"ok": False, "error": err2, "staged": bool(staged)}
         if not out.get("ok") or not out.get("code"):
             return {"ok": False,
                     "error": str(out.get("error") or "upload_failed")[:120]}
         logger.info("[diag] 全尺寸包传输失败（%s）→ mini 包送达 code=%s",
                     last_err, out.get("code"))
+        _kick_flush_async(config_manager)
         return {"ok": True, "code": str(out.get("code")), "mini": True}
     if not out.get("ok") or not out.get("code"):
         return {"ok": False, "error": str(out.get("error") or "upload_failed")[:120]}
+    _kick_flush_async(config_manager)
     return {"ok": True, "code": str(out.get("code"))}

@@ -1446,8 +1446,16 @@ class AvatarVoiceClient:
 
     # ── 健康 / 自愈 ──────────────────────────────────────────────────────────
     def health(self) -> Dict[str, Any]:
-        """7852 健康明细 {reachable, models_loaded}。best-effort，绝不抛。"""
-        return self._probe(f"{self.base_url}/health", ok_keys=("ok", "models_loaded"))
+        """克隆端点健康明细 {reachable, models_loaded}。best-effort，绝不抛。
+
+        两种上游健康形状都认（2026-08-29 智聊克隆主力迁 104:7865 IndexTTS-2）：
+        mfys CosyVoice(7852)＝``{ok, models_loaded}``；IndexTTS-2(7865)＝
+        ``{status:"ok", model_loaded}``。只认前者时 base_urls 直指 7865 会
+        永远预检不过 → 全量静默回落 edge，与「端点其实活着」矛盾。
+        """
+        return self._probe(f"{self.base_url}/health",
+                           ok_keys=("ok", "models_loaded"),
+                           alt_ok_keys=("status", "model_loaded"))
 
     def qwen_health(self) -> Dict[str, Any]:
         """7858 健康明细 {reachable, models_loaded}。"""
@@ -1459,7 +1467,12 @@ class AvatarVoiceClient:
         return self._probe(
             f"{self.stt_base_url}/health", ok_keys=("ok", "loaded"))
 
-    def _probe(self, url: str, *, ok_keys: Tuple[str, str]) -> Dict[str, Any]:
+    def _probe(
+        self, url: str, *, ok_keys: Tuple[str, str],
+        alt_ok_keys: Optional[Tuple[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """``alt_ok_keys``：主形状的 flag 键不在响应里时改用的备选键对——
+        克隆端点两家服务健康形状不同（7852 vs 7865），按响应实际带哪个键判。"""
         detail: Dict[str, Any] = {"reachable": False, "models_loaded": False}
         try:
             req = urllib.request.Request(url, headers={"Accept": "application/json"})
@@ -1469,6 +1482,8 @@ class AvatarVoiceClient:
             data = json.loads(body.decode("utf-8"))
             if isinstance(data, dict):
                 flag, loaded_key = ok_keys
+                if alt_ok_keys and flag not in data and alt_ok_keys[0] in data:
+                    flag, loaded_key = alt_ok_keys
                 flag_ok = data.get(flag) in (True, "ok")
                 detail["models_loaded"] = bool(flag_ok and data.get(loaded_key, True))
         except Exception as exc:
@@ -1483,7 +1498,8 @@ class AvatarVoiceClient:
                 hit = _HEALTH_CACHE.get(base)
             if hit and hit[0] > now:
                 return hit[1]
-        d = self._probe(f"{base}/health", ok_keys=("ok", "models_loaded"))
+        d = self._probe(f"{base}/health", ok_keys=("ok", "models_loaded"),
+                        alt_ok_keys=("status", "model_loaded"))
         ok = bool(d["reachable"] and d["models_loaded"])
         with _HEALTH_LOCK:
             _HEALTH_CACHE[base] = (now + self.health_cache_sec, ok)
