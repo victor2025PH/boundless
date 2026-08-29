@@ -59,6 +59,22 @@ _RUNNING_SVC_KEYS: set = set()
 # apply_send_callbacks 的「未传」哨兵（None 是合法值=撤能力，不能当缺省用）
 _UNSET = object()
 
+class UndeliveredError(RuntimeError):
+    """投递结果为「数据形态失败」（{delivered:False,...}）时的异常载体。
+
+    实施86 域B-1（#49）：编排器现随失败带回边车结构化字段——``error_kind``
+    （send_backoff/account_blocked/…）与 ``retry_after_ms``（限频退避/临时冻结
+    的确定性恢复时刻）。旧 RuntimeError(str) 会把它们碾成字符串，改期决策
+    （见 _deliver_one 失败分支的 plan_failure_retry）就无从谈起。
+    """
+
+    def __init__(self, msg: str, *, error_kind: str = "",
+                 retry_after_ms: int = 0) -> None:
+        super().__init__(msg)
+        self.error_kind = str(error_kind or "")
+        self.retry_after_ms = int(retry_after_ms or 0)
+
+
 def _is_permanent_send_error(err: str) -> bool:
     """判定投递错误是否为「短期内无法恢复」的平台硬错误（→ 会话封禁冷却）。
 
@@ -210,6 +226,9 @@ class AutosendWorker:
         self._retry_backoff_base: float = float(_rc.get("backoff_base_sec", 30))
         self._retry_backoff_max: float = float(_rc.get("backoff_max_sec", 1800))
         self._retry_queue: List[Dict[str, Any]] = []  # [{item, next_ts}]
+        # 实施86 域B-1：按边车 retry_after_ms 提示改期的次数（与通用重试分开计，
+        # 「改了几次期」与「盲重试几次」是两个信号）
+        self.total_deferred: int = 0
 
         # 运行时状态
         self._running = False
@@ -901,10 +920,12 @@ class AutosendWorker:
         # 真实投递：草稿已 resolve（DB 标记 approved + autosend 审计），现把文本发到平台。
         # resolve-先于-deliver：默认「投递失败宁可丢一条也不重发」；开启 recoverable 后瞬时失败
         # 进重试队列（见下）。失败计入 deliver_errors 但不触发熔断（熔断只看 resolve 错误）。
-        # Sprint2：把到期重试项并入本轮投递（重发同文本，不 re-resolve）。recoverable 关时
-        # _retry_queue 恒空 → deliver_now == to_deliver，行为与旧实现字节级一致。
+        # Sprint2：把到期重试项并入本轮投递（重发同文本，不 re-resolve）。
+        # 实施86 域B-1：排空不再闸 recoverable——限频/冻结改期项（_deferrals）
+        # 独立于通用重试入队，recoverable 关时也必须到期重投；两来源共用一队，
+        # 无任一来源时队列恒空 → deliver_now == to_deliver，与旧行为一致。
         deliver_now = list(to_deliver)
-        if self._recoverable and self._retry_queue:
+        if self._retry_queue:
             _rt_now = time.time()
             _due = [r for r in self._retry_queue if r.get("next_ts", 0) <= _rt_now]
             for r in _due:
@@ -1143,13 +1164,17 @@ class AutosendWorker:
             # 投递失败判定：除显式 ok=False 外，编排器/出站闸门返回
             # {delivered: False} 或 {blocked: ...}（如 kill-switch/send-gate 拦截、
             # 桌面出站被闸门拒）也算未送达——否则会把「被拦截」误计为已送达刷指标。
+            # 实施86 域B-1：结构化字段（error_kind/retry_after_ms）随异常携带，
+            # 失败分支据此决定「按边车提示改期」还是终局留痕。
             if isinstance(res, dict) and (
                 res.get("ok") is False
                 or res.get("delivered") is False
                 or res.get("blocked")
             ):
-                raise RuntimeError(str(
-                    res.get("error") or res.get("blocked") or "send not ok"))
+                raise UndeliveredError(
+                    str(res.get("error") or res.get("blocked") or "send not ok"),
+                    error_kind=str(res.get("error_kind") or ""),
+                    retry_after_ms=int(res.get("retry_after_ms") or 0))
             _delivered_ok = True
             self.total_delivered += 1
             # B41：成功投递补写 DB sent_at（best-effort）——跨重启的「已投过」
@@ -1226,6 +1251,28 @@ class AutosendWorker:
                     "[AutosendWorker] 投递失败 conv=%s platform=%s: %s",
                     _conv, _plat, exc,
                 )
+            # 实施86 域B-1（#49）：边车给了 retry_after_ms（限频退避/临时冻结的
+            # 确定性恢复时刻）→ 按提示改期重投，而不是当场终局失败白丢草稿。
+            # 与 recoverable 通用重试正交（那是盲重试，默认关；这是按平台说的
+            # 时间等，不受 recoverable 开关约束）。超长冻结（>15min，如风控 2h）
+            # 不改期——直接走下方终局留痕让坐席看见，别让草稿滞留数小时。
+            from src.inbox.send_failure_class import plan_failure_retry
+            _defer_plan, _defer_delay = plan_failure_retry(
+                hint_ms=int(getattr(exc, "retry_after_ms", 0) or 0),
+                deferrals_used=int(item.get("_deferrals", 0)),
+                permanent=_permanent)
+            if _defer_plan == "defer":
+                _ditem = dict(item)
+                _ditem["_deferrals"] = int(item.get("_deferrals", 0)) + 1
+                self._retry_queue.append(
+                    {"item": _ditem, "next_ts": time.time() + _defer_delay})
+                self.total_deferred += 1
+                logger.info(
+                    "[AutosendWorker] 投递被限频/冻结（%s），按平台提示 %.0fs 后"
+                    "改期重投（第%d次改期）conv=%s",
+                    getattr(exc, "error_kind", "") or "retry_after",
+                    _defer_delay, _ditem["_deferrals"], _conv)
+                return  # 改期中：本条暂不记 autosend_failed / 不留痕
             # Sprint2 可恢复：瞬时失败且未耗尽 → 排入重试队列（指数退避），不记 failed、
             # 不 re-resolve（幂等重发同文本）。永久错误不重试（会话已进封禁冷却）。
             _attempt = int(item.get("_attempt", 0))
@@ -1800,6 +1847,8 @@ class AutosendWorker:
             "total_retry_scheduled": self.total_retry_scheduled,
             "total_retry_recovered": self.total_retry_recovered,
             "total_retry_exhausted": self.total_retry_exhausted,
+            # 实施86 域B-1：按边车 retry_after_ms 改期重投的次数（#49 限频退避）
+            "total_deferred": self.total_deferred,
             "total_skipped_raced": self.total_skipped_raced,  # resolve 撞闸门（他方已处置）
             # B41（2026-08-22）：幂等钉拒绝数 + 通道互斥让位数——恒 0 是常态，
             # 涨了说明真拦到了双投/双答（去日志看 guard=deliver_once/channel_mutex）

@@ -12508,8 +12508,14 @@ function _failReasonText(code){
   if(low.indexOf('kill_switch')>=0) return window.T('inbox.failr.kill_switch');
   if(low.indexOf('canary')>=0) return window.T('inbox.failr.canary');
   if(low.indexOf('license')>=0) return window.T('inbox.failr.license');
+  /* 实施86 域B-1（#21/#23/#49）：限频/风控/通道三类，与 send_failure_class 的
+     分类词表同口径（先于 session 判——「temporarily blocked」含 blocked 不能
+     掉进兜底）。 */
+  if(low.indexOf('send_backoff')>=0||low.indexOf('too many requests')>=0) return window.T('inbox.failr.rate_limited');
+  if(low.indexOf('account_blocked')>=0||low.indexOf('temporarily blocked')>=0) return window.T('inbox.failr.platform_block');
   if(low.indexOf('e2ee_pin')>=0) return window.T('inbox.failr.e2ee_pin');
   if(low.indexOf('needs_login')>=0||low.indexOf('session')>=0||low.indexOf('logged_out')>=0||low.indexOf('expired')>=0) return window.T('inbox.failr.session');
+  if(low.indexOf('composer')>=0||low.indexOf('upstream')>=0||low.indexOf('bubble_fail')>=0||low.indexOf('render_timeout')>=0) return window.T('inbox.failr.channel');
   return window.Tf('inbox.failr.other',{code:(c.length>42?c.slice(0,41)+'\u2026':c)});
 }
 window._failReasonText=_failReasonText;

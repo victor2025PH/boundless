@@ -72,30 +72,51 @@ async def _get_json(url: str, timeout: float = 20.0) -> Dict[str, Any]:
         return r.json()
 
 
-def http_error_detail(ex: Exception) -> str:
-    """HTTP 状态异常 → 附带响应体里的 error/reason_code（Node 边车的真实败因）。
+def http_error_fields(ex: Exception) -> Dict[str, Any]:
+    """HTTP 状态异常 → 结构化败因 ``{detail, reason_code, retry_after_ms, status}``。
 
     2026-08-15 173 实锤：/send 的 composer-not-found 500 在 Python 侧只留下
     「Server error '500 Internal Server Error' for url …」——真实原因（渲染超时/
     需要接受/PIN 浮层）在响应体里被 ``raise_for_status`` 丢弃，排查只能上机翻边车。
-    duck-typed：任何带 ``.response`` 的异常都尝试提取；提取失败原样返回，绝不抛。
+
+    实施86 域B-1（#49）追加结构化：边车 /send 的 429（连败退避）/423（临时冻结）
+    带 ``retry_after_ms``＝确定性恢复时刻，此前同样死在异常字符串里——autosend
+    拿不到提示只能当场终局失败。duck-typed：任何带 ``.response`` 的异常都尝试
+    提取；任一步失败回落 ``{detail: str(ex), ...零值}``，绝不抛。
     """
-    base = str(ex)
+    out: Dict[str, Any] = {"detail": str(ex), "reason_code": "",
+                           "retry_after_ms": 0, "status": 0}
     resp = getattr(ex, "response", None)
     if resp is None:
-        return base
+        return out
+    try:
+        out["status"] = int(getattr(resp, "status_code", 0) or 0)
+    except Exception:
+        pass
     try:
         body = resp.json()
     except Exception:
-        return base
+        return out
     if not isinstance(body, dict):
-        return base
+        return out
     detail = str(body.get("error") or "").strip()
     reason = str(body.get("reason_code") or "").strip()
+    out["reason_code"] = reason
+    try:
+        out["retry_after_ms"] = max(0, int(body.get("retry_after_ms") or 0))
+    except Exception:
+        pass
     extra = detail
     if reason and reason not in detail:
         extra = f"{detail} [{reason}]" if detail else f"[{reason}]"
-    return f"{base} — {extra}" if extra else base
+    if extra:
+        out["detail"] = f"{str(ex)} — {extra}"
+    return out
+
+
+def http_error_detail(ex: Exception) -> str:
+    """（旧签名保留，全部消费口不变）``http_error_fields`` 的纯文本视图。"""
+    return str(http_error_fields(ex)["detail"])
 
 
 def _normalize_status(raw: str) -> str:

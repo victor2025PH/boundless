@@ -1450,9 +1450,11 @@ class MessengerWebWorker:
         except Exception as ex:  # noqa: BLE001
             # 附带边车响应体里的真实败因（reason_code：render_timeout/needs_accept/
             # e2ee_pin_prompt…）——裸 httpx 文本只有状态码，2026-08-15 173 事故
-            # 排查为此绕了一整圈。
-            from src.integrations.messenger_web_login import http_error_detail
-            _detail = http_error_detail(ex)
+            # 排查为此绕了一整圈。实施86 域B-1（#49）：429/423 的 retry_after_ms
+            # 结构化透出，autosend 据此改期而不是当场终局失败。
+            from src.integrations.messenger_web_login import http_error_fields
+            _f = http_error_fields(ex)
+            _detail = str(_f["detail"])
             # B63-②（实施64 P1-4）：会话性败因（PIN/接受浮层/登出）→ 账号级
             # 健康登记（账号卡/横幅/看门狗点亮），不再逐条静默 500。
             try:
@@ -1462,7 +1464,9 @@ class MessengerWebWorker:
             except Exception:
                 logger.debug("[messenger] 发送败因会话登记失败", exc_info=True)
             return {"delivered": False,
-                    "error": f"messenger send failed: {_detail}"}
+                    "error": f"messenger send failed: {_detail}",
+                    "error_kind": str(_f["reason_code"]),
+                    "retry_after_ms": int(_f["retry_after_ms"])}
         res = res or {}
         # 双重口径：ok 或 delivered 任一显式为 False，或 sent 显式为 False，都判未送达。
         delivered = (res.get("ok", True) is not False

@@ -1704,6 +1704,10 @@ ZH = {
     "inbox.failr.license": "授权只读，外发被禁",
     "inbox.failr.e2ee_pin": "加密会话需输入 PIN 后才能发送",
     "inbox.failr.session": "平台会话失效，需重新登录",
+    # 实施86 域B-1（#21/#23/#49）：限频/风控/通道三类与路由 toast 同口径
+    "inbox.failr.rate_limited": "平台限频，自动降速中，稍后可重发",
+    "inbox.failr.platform_block": "平台风控暂时限制发送（自动冻结中）",
+    "inbox.failr.channel": "发送通道异常（我方侧）",
     "inbox.failr.other": "原因：{code}",
     # composer P2（2026-08-17）：发送按钮成功微反馈 + 键盘快捷键速查浮层
     "inbox.msg.sent_flash": "✓ 已发送",
@@ -4319,6 +4323,9 @@ EN = {
     "inbox.failr.license": "License is read-only — outbound blocked",
     "inbox.failr.e2ee_pin": "Encrypted chat needs the PIN before sending",
     "inbox.failr.session": "Platform session expired — please re-login",
+    "inbox.failr.rate_limited": "Platform rate limit — auto-throttled, resend later",
+    "inbox.failr.platform_block": "Temporarily blocked by the platform (auto-frozen)",
+    "inbox.failr.channel": "Send channel error (our side)",
     "inbox.failr.other": "Reason: {code}",
     "inbox.msg.translating": "Translating…",
     "inbox.msg.sent_flash": "✓ Sent",

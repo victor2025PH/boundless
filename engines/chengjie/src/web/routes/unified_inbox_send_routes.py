@@ -208,6 +208,44 @@ def _raise_if_account_blocked(request: Request, platform: str, account_id: str) 
 # 预判/应答与护栏共用 send_gate_snapshot（同一判定函数），绝不另算一套。
 
 
+def _humanize_send_failure(request: Request, raw_msg: str,
+                           reason_code: str = "") -> str:
+    """败因人话化（实施86 域B-1，#23/#49 实录「Server error '500/429 …'」直显）。
+
+    能归类 → 一句人话 + 括注原始码（排查不丢线索）；归不了类保持原文——
+    宁可技术味也不错贴标签误导排查。纯映射，绝不抛。
+    """
+    try:
+        from src.inbox.send_failure_class import (
+            FAILURE_CLASS_I18N, classify_send_failure)
+        klass = classify_send_failure(raw_msg, reason_code)
+        if not klass:
+            return raw_msg
+        return f"{tr(request, FAILURE_CLASS_I18N[klass])}（{reason_code or klass}）"
+    except Exception:
+        return raw_msg
+
+
+def _trace_failed_manual_send(request: Request, platform: str, account_id: str,
+                              chat_key: str, text: str, reason: str) -> str:
+    """手发失败留痕（实施86 域B-1，#21「无法发送的消息也没有记录」）。
+
+    复用 B63③ 的 status=failed 留痕行（前端既有「发送失败＋一键重发」气泡）——
+    自动链早有此待遇，手发此前失败即蒸发，坐席打的字只剩 toast 一闪。
+    best-effort：留痕失败绝不影响失败响应本身。
+    """
+    try:
+        store = _inbox_store(request)
+        fn = getattr(store, "record_failed_outbound", None)
+        if store is None or fn is None or not str(text or "").strip():
+            return ""
+        cid = _conv_id(platform, account_id, chat_key)
+        return str(fn(cid, text, reason=str(reason or "")[:200]) or "")
+    except Exception:
+        logger.debug("[send] 手发失败留痕写入失败（忽略）", exc_info=True)
+        return ""
+
+
 def _result_undelivered(result: Any) -> str:
     """适配器/编排器返回体的未送达判定：``blocked``（护栏拦截）/``failed``
     （worker 显式报 delivered=False）/``""``（正常）。只认显式 False——
@@ -735,9 +773,18 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 )
         except ChannelSendError as ex:
             _dedup.release(_dedup_scope, _client_msg_id)  # 失败释放：同 id 重试可再发
-            raise HTTPException(ex.status_code, ex.detail)
-        except Exception:
+            # 实施86 域B-1（#21/#23）：真实投递失败 → 失败留痕（坐席在消息流里
+            # 看得见这条没发出去 + 一键重发）+ 败因人话化（不再裸 HTTP 状态行）。
+            _trace_failed_manual_send(
+                request, platform, account_id, chat_key, text,
+                getattr(ex, "reason_code", "") or ex.detail)
+            raise HTTPException(ex.status_code, _humanize_send_failure(
+                request, ex.detail, getattr(ex, "reason_code", "")))
+        except Exception as _send_ex:
             _dedup.release(_dedup_scope, _client_msg_id)
+            _trace_failed_manual_send(
+                request, platform, account_id, chat_key, text,
+                str(_send_ex)[:200])
             raise
         # P0 2026-08-12：编排器把护栏拦截/未送达当**数据**返回（自动链契约），
         # 人工路由必须在此翻译成显式失败——此前包成 ok:true，坐席点了毫无反应，
@@ -746,12 +793,20 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         if _undeliv:
             _dedup.release(_dedup_scope, _client_msg_id)
             if _undeliv == "blocked":
+                # 护栏拦截＝根本没尝试投递，刻意不留痕（重发也会被同一护栏拦，
+                # 留个重发按钮只会误导坐席连点）
                 raise _send_blocked_exc(
                     request, platform, account_id, chat_key,
                     reason=str(result.get("blocked") or ""))
+            _fail_raw = str(result.get("error") or result.get("error_kind") or "")
+            _trace_failed_manual_send(
+                request, platform, account_id, chat_key, text,
+                str(result.get("error_kind") or "") or _fail_raw)
             raise HTTPException(502, tr(
                 request, "err.inbox.send_not_delivered",
-                msg=str(result.get("error") or result.get("error_kind") or "")))
+                msg=_humanize_send_failure(
+                    request, _fail_raw,
+                    str(result.get("error_kind") or ""))))
         cid = (result.get("conversation_id") if isinstance(result, dict) else None) \
             or _conv_id(platform, account_id, chat_key)
         _mark_send(cid)

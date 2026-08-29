@@ -22,12 +22,21 @@ logger = logging.getLogger(__name__)
 
 
 class ChannelSendError(Exception):
-    """渠道发送失败（携带 HTTP 语义状态码，由路由层映射成 HTTPException）。"""
+    """渠道发送失败（携带 HTTP 语义状态码，由路由层映射成 HTTPException）。
 
-    def __init__(self, status_code: int, detail: str) -> None:
+    实施86 域B-1：可选携带边车结构化败因——``reason_code``（send_backoff/
+    account_blocked/e2ee_pin_pending…）供路由出人话与失败留痕，
+    ``retry_after_ms``（限频退避/冻结的确定性恢复时刻）供上游改期。
+    两参缺省零值，既有 raise 点零改动。
+    """
+
+    def __init__(self, status_code: int, detail: str, *,
+                 reason_code: str = "", retry_after_ms: int = 0) -> None:
         super().__init__(detail)
         self.status_code = int(status_code)
         self.detail = str(detail)
+        self.reason_code = str(reason_code or "")
+        self.retry_after_ms = int(retry_after_ms or 0)
 
 
 @runtime_checkable
@@ -405,9 +414,12 @@ class MessengerInboxAdapter:
             # 边车有响应体（HTTP 5xx）≠ 服务不可达：透传真实败因（reason_code：
             # render_timeout/needs_accept/e2ee_pin_prompt…），坐席 toast 直接可读
             # ——2026-08-15 173 事故里这行只显示裸 500，误导排查方向。
-            from src.integrations.messenger_web_login import http_error_detail
+            # 实施86 域B-1：reason_code/retry_after_ms 随异常结构化携带，
+            # 路由据此出人话分类 + 失败留痕（#21/#23/#49）。
+            from src.integrations.messenger_web_login import http_error_fields
             if getattr(ex, "response", None) is not None:
-                _detail = http_error_detail(ex)
+                _f = http_error_fields(ex)
+                _detail = str(_f["detail"])
                 # B63-②：会话性败因（PIN/接受浮层/登出）→ 点亮账号级健康面，
                 # 不再让每条消息各自静默 500（skuio 实录 7/7）。
                 try:
@@ -416,7 +428,9 @@ class MessengerInboxAdapter:
                     note_send_auth_failure("messenger", account_id, _detail)
                 except Exception:
                     logger.debug("[messenger] 发送败因会话登记失败", exc_info=True)
-                raise ChannelSendError(502, _detail)
+                raise ChannelSendError(
+                    502, _detail, reason_code=str(_f["reason_code"]),
+                    retry_after_ms=int(_f["retry_after_ms"]))
             raise ChannelSendError(503, f"Messenger 网页服务不可达: {ex}")
         # 未送达判定收严：ok/delivered/sent 任一显式 False 都算失败（防「composer 未清空」
         # 的静默丢消息被当成功；Node 现也会对该情形回 HTTP 502，双保险）。
@@ -434,7 +448,10 @@ class MessengerInboxAdapter:
                     f"{_err_txt} {res.get('reason_code') or ''}")
             except Exception:
                 logger.debug("[messenger] 发送败因会话登记失败", exc_info=True)
-            raise ChannelSendError(502, _err_txt)
+            raise ChannelSendError(
+                502, _err_txt,
+                reason_code=str(res.get("reason_code") or ""),
+                retry_after_ms=int(res.get("retry_after_ms") or 0))
         return {
             "delivered": True,
             "message_id": str((res or {}).get("message_id") or ""),

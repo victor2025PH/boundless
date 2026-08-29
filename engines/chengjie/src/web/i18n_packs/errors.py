@@ -81,6 +81,13 @@ ZH = {
     "err.inbox.send_blocked_session": "该平台会话已掉线，消息无法送达，请在账号管理里重新登录。",
     "err.inbox.send_blocked_generic": "发送被安全护栏拦截（{reason}），消息未送出。",
     "err.inbox.send_not_delivered": "消息未送达：{msg}",
+    # 实施86 域B-1（工单 #21/#23/#49）：发送失败三类人话（与失败留痕气泡
+    # inbox.failr.* 同一分类口径，映射在 send_failure_class.FAILURE_CLASS_I18N）
+    "err.inbox.sendfail.rate_limited": "触发平台发送限频，系统已自动退避降速，稍后自动恢复——这条消息已留痕，可稍后一键重发",
+    "err.inbox.sendfail.platform_block": "账号被平台风控暂时限制发送（已自动冻结保护，到期自动解除）——消息已留痕，解除后可一键重发",
+    "err.inbox.sendfail.e2ee_pin": "加密会话未解锁：请先在该账号输入恢复 PIN，再一键重发这条消息",
+    "err.inbox.sendfail.session": "平台会话已掉线：请到账号管理重新登录，再一键重发这条消息",
+    "err.inbox.sendfail.channel": "发送通道异常（我方组件），失败详情已记录——可稍后一键重发",
     # 投递被平台拒绝的人话映射（2026-08-20 内测工单 #3：语音发送失败裸报英文）
     "err.inbox.voice_peer_privacy": "对方在 Telegram 隐私设置里限制了接收语音消息，语音发不进去——请改发文字或图片（这不是系统故障）。",
     "err.inbox.send_peer_blocked": "对方与这个账号处于拉黑状态，消息无法送达。",
@@ -205,7 +212,12 @@ EN = {
     "err.inbox.send_blocked_session": "The platform session is offline; the message cannot be delivered. Re-login from account management.",
     "err.inbox.send_blocked_generic": "Blocked by a safety guard ({reason}); the message was not sent.",
     "err.inbox.send_not_delivered": "Message not delivered: {msg}",
-    # Human-readable delivery rejections (2026-08-20 beta ticket #3: raw English errors)
+    # impl86 domain B-1 (tickets #21/#23/#49): three-way human-readable send failures
+    "err.inbox.sendfail.rate_limited": "Platform rate limit hit — sending is auto-throttled and recovers shortly; the message is kept and can be resent with one click",
+    "err.inbox.sendfail.platform_block": "This account is temporarily blocked from sending by the platform (auto-frozen for protection; lifts automatically) — the message is kept for resend",
+    "err.inbox.sendfail.e2ee_pin": "Encrypted chat locked: enter this account's recovery PIN first, then resend the kept message",
+    "err.inbox.sendfail.session": "Platform session offline: re-login from account management, then resend the kept message",
+    "err.inbox.sendfail.channel": "Send channel error (our side) — details recorded; resend later with one click",
     "err.inbox.voice_peer_privacy": "The recipient's Telegram privacy settings block incoming voice messages — send text or an image instead (this is not a system fault).",
     "err.inbox.send_peer_blocked": "This account and the recipient have blocked each other; the message cannot be delivered.",
     "err.inbox.send_flood": "The platform rate-limited this account for sending too fast — wait a bit and avoid rapid consecutive sends.",
