@@ -124,10 +124,13 @@ export async function proxyVision(
   throw lastErr || new Error("all_vision_relays_failed");
 }
 
-// ── 语音中继（2026-08-03）：克隆 TTS(7852) 与 GPU ASR(8765) 经同一条 117→VPS
+// ── 语音中继（2026-08-03）：克隆 TTS 与 GPU ASR(8765) 经同一条 117→VPS
 //    反向隧道暴露到 VPS localhost，网关按设备令牌鉴权转发——把「非局域网机器用
 //    集群算力生成语音 / 听懂语音」补齐到与识图同一安全模型。
-//    TTS_RELAY_URLS  逗号列表（117 主 / 140 备）：http://127.0.0.1:18413,http://127.0.0.1:18414
+//    2026-08-29 起主中继上游=104:7865 IndexTTS-2（同 /v1/tts/clone 契约；备=140:7852
+//    CosyVoice）。健康形状两家不同：7852 出 {ok,models_loaded}、7865 出
+//    {status:"ok",model_loaded}，ttsRelayHealth 两种都认。
+//    TTS_RELAY_URLS  逗号列表（104 主 / 140 备）：http://127.0.0.1:18413,http://127.0.0.1:18414
 //    ASR_RELAY_URLS  须含 /v1 后缀（OpenAI 形态）：http://127.0.0.1:18415/v1
 //    AH_SERVICE_TOKEN 集群内部 X-AH-Svc 令牌——只在 VPS env，**永不下发客户端**
 //    （客户端只持 cx.* 设备令牌；集群令牌由网关侧代注）。
@@ -157,6 +160,65 @@ function orderedOf(urls: string[], cooldown: Map<string, number>): string[] {
     else fresh.push(u);
   }
   return [...fresh, ...cooled]; // 全在冷却也要硬试（比直接失败好）
+}
+
+/** 单次中继尝试的上限（毫秒）：TTS 合成慢，但一台**病态**节点也不能吃掉整个预算。 */
+export const TTS_ATTEMPT_MS = Number(process.env.AI_GATEWAY_TTS_ATTEMPT_MS || 40000);
+export const ASR_ATTEMPT_MS = Number(process.env.AI_GATEWAY_ASR_ATTEMPT_MS || 30000);
+export const EMBED_ATTEMPT_MS = Number(process.env.AI_GATEWAY_EMBED_ATTEMPT_MS || 12000);
+
+/**
+ * 各 AI 路由的**总**预算（毫秒）——超时分层的单一事实源。
+ *
+ * 不变量（内层必须最小，否则外层先响、客户端拿到的是 HTML 而不是我们的 JSON）：
+ *     单次中继上限 × 中继台数  ≤  路由总预算  ≤  nginx proxy_read_timeout
+ *
+ * 2026-08-28 B124 实锤的就是这条被倒挂：nginx 没配 proxy_read_timeout（默认 60s）
+ * 而 TTS 路由预算 90s、识图 120s → 每次超时都由 nginx 先响，客户端收到
+ * `<html>504 Gateway Time-out</html>`。OpenAI/AvatarVoice 客户端都按 JSON 解析，
+ * 于是「网关报错」变成「解析失败」，最终静默回落默认音（与 P0-1 的 embeddings
+ * 404-HTML 是同一个病）。nginx 侧现配 180s，让应用预算永远是那个先响的。
+ */
+export const ROUTE_BUDGET_MS = {
+  tts: 90_000,
+  asr: 60_000,
+  embed: 30_000,
+  chat: 55_000,
+  vision: 120_000,
+  /** nginx `location ^~ /api/ai/` 的 proxy_read_timeout，必须 ≥ 上面所有值。 */
+  nginx_read: 180_000,
+} as const;
+
+/**
+ * 把「调用方总预算」与「单次尝试上限」合成一个 signal。
+ *
+ * 为什么必须有（2026-08-28 B124 实锤）：各 proxy* 原先把**同一个** AbortController
+ * 传给循环里的每一次 fetch，于是第一台中继病态（TCP 通、就是不回包）时它会把整个
+ * 总预算耗光，abort 一响整个循环就结束——**健康的备机永远轮不到**。当时 117:7852
+ * 停摆、140:7852 单点病态（实测 12 字 70s），每发克隆都耗满 90s，再被 nginx 60s
+ * 截成 HTML 504：客户端连 JSON 错误都拿不到，只能静默回落默认音。
+ *
+ * 语义：任一方超时都 abort 本次尝试；调用方总预算到了则**不再试下一台**
+ * （由调用方 signal.aborted 判定），只是单台慢不再连坐其余节点。
+ */
+function attemptSignal(
+  outer: AbortSignal | undefined,
+  ms: number
+): { signal: AbortSignal; release: () => void } {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), Math.max(1000, ms));
+  const relay = () => ac.abort();
+  if (outer) {
+    if (outer.aborted) ac.abort();
+    else outer.addEventListener("abort", relay, { once: true });
+  }
+  return {
+    signal: ac.signal,
+    release: () => {
+      clearTimeout(timer);
+      outer?.removeEventListener("abort", relay);
+    },
+  };
 }
 
 export function ttsRelayEnabled(): boolean {
@@ -193,12 +255,13 @@ export async function proxyTts(
   if (!relays.length) throw new Error("no_tts_relay");
   let lastErr: unknown = null;
   for (const base of relays) {
+    const att = attemptSignal(signal, TTS_ATTEMPT_MS);
     try {
       const r = await fetch(`${base}${path}`, {
         method: "POST",
         headers: relayHeaders({ "Content-Type": "application/json" }),
         body: rawJson,
-        signal,
+        signal: att.signal,
       });
       if (r.status >= 500 && relays.length > 1) {
         _ttsCooldown.set(base, Date.now() + RELAY_COOLDOWN_MS);
@@ -209,6 +272,9 @@ export async function proxyTts(
     } catch (e) {
       _ttsCooldown.set(base, Date.now() + RELAY_COOLDOWN_MS);
       lastErr = e;
+      if (signal?.aborted) break;   // 总预算已到：别再拖着下一台白试
+    } finally {
+      att.release();
     }
   }
   throw lastErr || new Error("all_tts_relays_failed");
@@ -224,6 +290,7 @@ export async function proxyAsr(
   if (!relays.length) throw new Error("no_asr_relay");
   let lastErr: unknown = null;
   for (const base of relays) {
+    const att = attemptSignal(signal, ASR_ATTEMPT_MS);
     try {
       const r = await fetch(`${base}/audio/transcriptions`, {
         method: "POST",
@@ -231,7 +298,7 @@ export async function proxyAsr(
           contentType ? { "Content-Type": contentType } : {}
         ),
         body,
-        signal,
+        signal: att.signal,
       });
       if (r.status >= 500 && relays.length > 1) {
         _asrCooldown.set(base, Date.now() + RELAY_COOLDOWN_MS);
@@ -242,6 +309,9 @@ export async function proxyAsr(
     } catch (e) {
       _asrCooldown.set(base, Date.now() + RELAY_COOLDOWN_MS);
       lastErr = e;
+      if (signal?.aborted) break;
+    } finally {
+      att.release();
     }
   }
   throw lastErr || new Error("all_asr_relays_failed");
@@ -263,16 +333,28 @@ export async function ttsRelayHealth(): Promise<{ ok: boolean; models_loaded: bo
     try {
       const ac = new AbortController();
       const t = setTimeout(() => ac.abort(), 4000);
+      // cache:"no-store" 是必须的：Next.js 会把 route handler 里的裸 GET fetch 写进
+      // 持久 Data Cache（revalidate 默认一年）。2026-08-29 实锤：8/3 缓存的
+      // {ok:true} 被原样回放 26 天，两台中继上游全死健康仍报绿——客户端预检
+      // 选中网关、真合成打死隧道超时回落通用音，监控端却全程无恙。
       const r = await fetch(`${base}/health`, {
+        cache: "no-store",
         headers: relayHeaders({ accept: "application/json" }),
         signal: ac.signal,
       });
       clearTimeout(t);
       if (r.ok) {
         const j = (await r.json().catch(() => null)) as
-          | { ok?: unknown; models_loaded?: unknown }
+          | { ok?: unknown; models_loaded?: unknown;
+              status?: unknown; model_loaded?: unknown }
           | null;
-        if (j && j.ok === true && j.models_loaded !== false) {
+        // 两种上游健康形状都认：mfys CosyVoice(7852)={ok,models_loaded}；
+        // IndexTTS-2(7865)={status:"ok",model_loaded}。字段缺省按就绪算
+        // （与引擎侧 AvatarVoiceClient._probe 同口径）。
+        const flagOk = j !== null && (j.ok === true || j.status === "ok");
+        const loaded =
+          j !== null && j.models_loaded !== false && j.model_loaded !== false;
+        if (flagOk && loaded) {
           ok = true;
           break;
         }
@@ -283,6 +365,102 @@ export async function ttsRelayHealth(): Promise<{ ok: boolean; models_loaded: bo
   }
   _ttsHealth = { ts: now, ok };
   return { ok, models_loaded: ok };
+}
+
+// ── 嵌入中继（2026-08-28，P0-1）：语义记忆召回 / 翻译语义闸门的向量来源。
+//    客户端 ai_client.embed() 未配独立嵌入端点时回落对话客户端的 base_url，
+//    也就是本网关 —— 于是它打的是 POST /api/ai/v1/embeddings。该路由此前**不存在**，
+//    Next.js 回 404 **HTML 页**，OpenAI SDK 解析失败 → 连续 3 次即熔断 120s，
+//    全网客户静默降级成纯关键词召回（B126「客户说过生日、AI 还反问」的根因）。
+//    嵌入模型（bge-m3）与识图 VLM 同住 Ollama，复用同一条 117→VPS 反向隧道端口
+//    （18411/18412），故默认直接沿用 VISION_RELAY_URLS，**无需新增隧道**。
+const EMBED_RELAY_URLS: string[] = (
+  process.env.EMBED_RELAY_URLS || process.env.VISION_RELAY_URLS || process.env.VISION_RELAY_URL || ""
+)
+  .split(",")
+  .map((s) => s.trim().replace(/\/+$/, ""))
+  .filter(Boolean);
+/** 规范嵌入模型：两台中继都装的那个。客户端自报的模型名一律改写成它——
+ *  已发布客户端写死 bge-m3，而向量库的维度必须全网一致，绝不能按客户端心情走。 */
+const EMBED_MODEL_CANONICAL = (process.env.EMBED_MODEL_CANONICAL || "bge-m3").trim();
+/** 嵌入一次调用的最低计额（字符）：短句嵌入也占一轮 GPU，纯按字符会低估。 */
+export const EMBED_CHAR_MIN_COST = Number(process.env.AI_GATEWAY_EMBED_MIN_CHARS || 20);
+
+const _embedCooldown = new Map<string, number>();
+
+export function embedRelayEnabled(): boolean {
+  return EMBED_RELAY_URLS.length > 0;
+}
+
+/** 嵌入入参字符数（input 可为 string 或 string[]）——计额与观测口径。 */
+export function estimateEmbedChars(body: unknown): number {
+  try {
+    const input = (body as { input?: unknown })?.input;
+    if (typeof input === "string") return input.length;
+    if (Array.isArray(input)) {
+      let n = 0;
+      for (const it of input) if (typeof it === "string") n += it.length;
+      return n;
+    }
+    return 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * 嵌入转发：model 统一改写为规范模型，按序试中继、5xx/网络失败冷却降权。
+ * 契约与 Ollama 的 OpenAI 兼容层一致（POST {base}/embeddings，base 已含 /v1）。
+ */
+export async function proxyEmbeddings(
+  body: Record<string, unknown>,
+  signal?: AbortSignal
+): Promise<Response> {
+  const relays = orderedOf(EMBED_RELAY_URLS, _embedCooldown);
+  if (!relays.length) throw new Error("no_embed_relay");
+  const payload = { ...body, model: EMBED_MODEL_CANONICAL };
+  let lastErr: unknown = null;
+  for (const base of relays) {
+    const att = attemptSignal(signal, EMBED_ATTEMPT_MS);
+    try {
+      const r = await fetch(`${base}/embeddings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer ollama" },
+        body: JSON.stringify(payload),
+        signal: att.signal,
+      });
+      if (r.status >= 500 && relays.length > 1) {
+        _embedCooldown.set(base, Date.now() + RELAY_COOLDOWN_MS);
+        lastErr = new Error(`relay_${r.status}`);
+        continue;
+      }
+      return r;
+    } catch (e) {
+      _embedCooldown.set(base, Date.now() + RELAY_COOLDOWN_MS);
+      lastErr = e;
+      if (signal?.aborted) break;
+    } finally {
+      att.release();
+    }
+  }
+  throw lastErr || new Error("all_embed_relays_failed");
+}
+
+/** 观测：嵌入中继与冷却态（console 卡/排障用；不含任何密钥）。 */
+export function embedRelayStatus(): {
+  enabled: boolean;
+  canonical_model: string;
+  relays: Array<{ url: string; cooling: boolean }>;
+} {
+  const now = Date.now();
+  return {
+    enabled: EMBED_RELAY_URLS.length > 0,
+    canonical_model: EMBED_MODEL_CANONICAL,
+    relays: EMBED_RELAY_URLS.map((u) => ({
+      url: u,
+      cooling: (_embedCooldown.get(u) || 0) > now,
+    })),
+  };
 }
 
 /** 观测：识图中继与冷却态（console 卡/排障用；不含任何密钥）。 */

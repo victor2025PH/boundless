@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  ROUTE_BUDGET_MS,
   TTS_CHAR_MIN_COST,
   consumeQuota,
   extractDeviceToken,
@@ -83,9 +84,10 @@ export async function POST(
       }
     }
 
-    // 合成冷载可到几十秒；客户端 synth_timeout 75s，网关放 90s（客户端先放弃）
+    // 合成冷载可到几十秒；客户端 synth_timeout 75s，网关放 90s（客户端先放弃）。
+    // 单台中继另有 TTS_ATTEMPT_MS 上限——病态节点不再吃掉整个预算把备机饿死。
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 90000);
+    const timer = setTimeout(() => ac.abort(), ROUTE_BUDGET_MS.tts);
     let upstream: Response;
     try {
       upstream = await proxyTts(path, raw, ac.signal);

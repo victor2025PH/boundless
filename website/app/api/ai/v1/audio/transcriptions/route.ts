@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   ASR_CHAR_COST,
+  ROUTE_BUDGET_MS,
   asrRelayEnabled,
   consumeQuota,
   extractDeviceToken,
@@ -61,7 +62,7 @@ export async function POST(req: NextRequest) {
     }
 
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 60000);
+    const timer = setTimeout(() => ac.abort(), ROUTE_BUDGET_MS.asr);
     let upstream: Response;
     try {
       upstream = await proxyAsr(body, req.headers.get("content-type") || "", ac.signal);

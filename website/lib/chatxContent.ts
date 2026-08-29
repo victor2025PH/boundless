@@ -10,6 +10,7 @@
  * fetch /downloads/manifest.json（打包脚本生成）自动校正版本与哈希，此处是构建时兜底。
  */
 import type { BrandLang } from "./brand";
+import { faqPageJsonLd, plainText } from "./jsonld";
 
 export interface Cx<T = string> {
   zh: T;
@@ -22,14 +23,19 @@ export const CHATX_RELEASE_BASE = "/downloads";
 
 export const CHATX = {
   download: {
-    version: "1.0.21",
-    size: { zh: "476 MB", en: "476 MB" },
-    filename: "ChatX-Setup-1.0.21.exe",
+    // ⚠ 这几个字段不只是页面兜底文案：它们同时进 SoftwareApplication JSON-LD（见本文件末
+    // chatxDownloadJsonLd），而爬虫**不会**执行运行时那次 manifest.json 校正——落后的版本号
+    // 会被 AI 当事实引用。2026-08-29 随 1.0.60 发版同步（09:50 发布线只更了 manifest，
+    // 本文件停在 1.0.59 → gate:content 红 → 挡住全部 website 部署；bugfix 线补齐）。
+    // 发版流程：改这里四个值（version/size/filename/sha256），与 /downloads/manifest.json 对齐。
+    version: "1.0.60",
+    size: { zh: "546 MB", en: "546 MB" },
+    filename: "ChatX-Setup-1.0.60.exe",
     os: { zh: "Windows 10 / 11（64 位）", en: "Windows 10 / 11 (x64)" },
-    url: `${CHATX_RELEASE_BASE}/ChatX-Setup-1.0.21.exe`,
+    url: `${CHATX_RELEASE_BASE}/ChatX-Setup-1.0.60.exe`,
     /** 与实际上架 /downloads/ 的安装包一致（scripts/gen-chatx-manifest.ps1 计算）；
      *  运行时会被 manifest.json 的值覆盖。 */
-    sha256: "020db8fc4fbe655e5cbeb97563f23ca143547995444b32e5c4237214fc21d1ab",
+    sha256: "0cde19c3ec458efa17a3328e64e0e269dd4d450a8b55b477ffb0766ab2bdefaa",
     /** 运行时清单（打包脚本生成，含 version/size/sha256/signed）。 */
     manifestUrl: `${CHATX_RELEASE_BASE}/manifest.json`,
     macNote: {
@@ -48,9 +54,11 @@ export const CHATX = {
       {
         title: { zh: "下载安装包", en: "Download the installer" },
         time: { zh: "约 2–5 分钟", en: "~2–5 min" },
+        // 刻意不在这里重复版本号与体积：上面 download 段已是唯一事实源，正文再抄一份
+        //（历史上抄成了「1.001.exe / 453 MB」）就会各自腐烂，且这段文字会被爬虫当事实引用。
         detail: {
-          zh: "点击本页下载按钮获取 **ChatX-Setup-1.001.exe**（约 453 MB，含桌面壳与本地服务，一次到位无需再下组件；内测版含本机人设/声线/相册种子）。",
-          en: "Click the download button to get **ChatX-Setup-1.001.exe** (~453 MB, desktop shell plus local backend in one package — no extra components; internal build includes seeded personas/voices/albums).",
+          zh: "点击本页下载按钮获取安装包（版本号与体积见按钮旁标注；含桌面壳与本地服务，一次到位无需再下组件）。",
+          en: "Click the download button on this page to get the installer (version and size are shown next to the button; desktop shell plus local backend in one package — no extra components).",
         },
       },
       {
@@ -117,10 +125,17 @@ export const CHATX = {
         },
       },
       {
+        // 2026-08-28 口径统一：本条原文写「不经过我们的服务器中转…AI 回复调用你自己配置的
+        // AI 服务」，那是**自带 Key 时代的旧口径**，与上面「Do I need my own AI API key?」
+        // 那条（托管版走我们的云网关、Key 在服务端）直接打架。两句同页并存，恰好砸在
+        // 「数据主权」这个核心卖点上；而目录站（G2/Capterra/AlternativeTo）会把这段原样
+        // 镜像到几十个站点，改回来极难。现按事实拆成两件事：**聊天数据**留本机（真），
+        // **AI 推理**默认走托管网关、可改指向自有端点或内网模型节点（也真——
+        // hosted_gateway.py + 官网 /api/ai/* 是前者，config 的 base_url 是后者）。
         q: { zh: "我的账号和聊天数据存在哪里？", en: "Where do my accounts and chat data live?" },
         a: {
-          zh: "全部保存在本机用户目录（登录会话、配置、聊天记录），不经过我们的服务器中转。AI 回复调用你自己配置的 AI 服务，凭据也只存本地。",
-          en: "Everything stays in your local user folder (sessions, config, chat history) — nothing routes through our servers. AI replies call the AI service you configure; credentials are stored locally too.",
+          zh: "聊天记录、登录会话、客户资料全部保存在**本机用户目录**，不经我们的服务器中转。**AI 推理是另一回事**：托管版默认把推理请求送到我们的云端 AI 网关（所以你不必自备也看不到 Key），也可以在配置里改指向你自己的端点或内网模型节点——两种模式下聊天数据都不离开你的机器。",
+          en: "Chat history, platform sessions and customer profiles stay in **your local user folder** — they are not routed through our servers. **AI inference is the exception**: managed ChatX sends inference requests to our cloud AI gateway by default (which is why you never handle an API key), and it can be pointed at your own endpoint or an on-prem model node instead. Either way the chat data itself never leaves your machine.",
         },
       },
       {
@@ -153,4 +168,68 @@ export const CHATX = {
 /** 便捷取值：按语言取一段文案。 */
 export function cx(field: Cx, lang: BrandLang): string {
   return field[lang];
+}
+
+/** 下载页结构化数据（实施77 GEO 批次3，zh/en 两页共用一份构造，防口径分叉）。
+ *
+ *  返回 [SoftwareApplication, FAQPage] 两个节点：
+ *  - SoftwareApplication 的每个字段都必须对应页面上真实可见的事实（版本/体积/系统要求/免费），
+ *    **绝不挂 aggregateRating**——没有真实评分数据，编一个就是给 AI 喂假话（也违反 schema 政策）；
+ *  - FAQPage 与页面折叠面板同源（CHATX.install.faqs），Markdown 标记经 plainText 剥净。
+ *
+ *  publisher 用 @id 指回根 layout 的 Organization 节点，让「这个软件属于哪个实体」在图谱里连通。 */
+export function chatxDownloadJsonLd(lang: BrandLang, siteUrl: string): object[] {
+  const zh = lang === "zh";
+  const d = CHATX.download;
+  const app = {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "@id": `${siteUrl}${zh ? "" : "/en"}/download/chatx#software`,
+    name: zh ? "智聊 ChatX" : "ChatX",
+    alternateName: zh ? ["ChatX", "智聊"] : ["智聊 ChatX"],
+    url: `${siteUrl}${zh ? "" : "/en"}/download/chatx`,
+    applicationCategory: "BusinessApplication",
+    applicationSubCategory: zh ? "全渠道 AI 客服工作台" : "Omni-channel AI customer service workspace",
+    operatingSystem: "Windows 10/11",
+    softwareVersion: d.version,
+    downloadUrl: `${siteUrl}${d.url}`,
+    fileSize: d.size[lang],
+    softwareRequirements: zh
+      ? "Windows 10 / 11（64 位）；约 1.5 GB 可用磁盘；无需独立显卡（AI 推理在云端或内网节点完成）"
+      : "Windows 10 / 11 (64-bit); ~1.5 GB free disk; no dedicated GPU required (AI inference runs on cloud or LAN nodes)",
+    inLanguage: ["zh-CN", "en"],
+    image: `${siteUrl}/brand/products/chatx.png`,
+    isAccessibleForFree: true,
+    featureList: zh
+      ? [
+          "全渠道统一收件箱（Telegram / WhatsApp / Messenger / LINE）",
+          "AI 自动拟稿与自动回复",
+          "实时互译（标准翻译永久免费不限量）",
+          "克隆声语音消息",
+          "客户画像与跟进提醒",
+          "数据保存在本机用户目录",
+          "内置自动更新，SHA-256 可校验",
+        ]
+      : [
+          "Unified omni-channel inbox (Telegram / WhatsApp / Messenger / LINE)",
+          "AI drafting and auto-reply",
+          "Live two-way translation (standard translation free and unlimited)",
+          "Cloned-voice voice messages",
+          "Customer profiles and follow-up reminders",
+          "Data stored in your local user folder",
+          "Built-in auto-update, SHA-256 verifiable",
+        ],
+    offers: {
+      "@type": "Offer",
+      price: "0",
+      priceCurrency: "USD",
+      description: zh ? "免费下载，注册即用（非限时试用）" : "Free download, free to start (not a timed trial)",
+    },
+    publisher: { "@id": `${siteUrl}/#organization` },
+  };
+
+  const faq = faqPageJsonLd(
+    CHATX.install.faqs.map((f) => ({ q: plainText(f.q[lang]), a: plainText(f.a[lang]) })),
+  );
+  return [app, faq];
 }
