@@ -1689,6 +1689,28 @@ _ADDITIONS_2026_08_27_ACCOUNT_IDENTITY = """
 _BASELINE += _ADDITIONS_2026_08_27_ACCOUNT_IDENTITY
 
 
+# 2026-08-29 设置页「账号发送额度」今日用量（与 budget-today 同页正交；随
+# impl86/0830 批 efa24317 的 reply_settings_routes 一并入库）
+_ADDITIONS_2026_08_29_SENDGATE_TODAY = """
+/api/reply-settings/sendgate-today	GET
+"""
+_BASELINE += _ADDITIONS_2026_08_29_SENDGATE_TODAY
+
+# 2026-08-30 新账号「AI 接管方式」确认（全自动/拟稿人审/关闭，默认拟稿人审）：
+# 待确认/已确认清单 + 决策写入（主管；account_mode_routes.py，#63）
+_ADDITIONS_2026_08_30_ACCOUNT_MODES = """
+/api/reply-settings/account-modes	GET
+/api/reply-settings/account-modes/decide	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_30_ACCOUNT_MODES
+
+# 2026-08-29 一键预设只读预览（运营关闸时套用前能看见不会重开闸，#12）
+_ADDITIONS_2026_08_29_PRESET_PREVIEW = """
+/api/companion/capabilities/preset-preview	GET
+"""
+_BASELINE += _ADDITIONS_2026_08_29_PRESET_PREVIEW
+
+
 def _parse_baseline():
     expected = set()
     for line in _BASELINE.strip().splitlines():

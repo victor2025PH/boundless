@@ -1642,7 +1642,14 @@ async function ovCapPreset(name, label){
             dry_run_trial:window.T('ov_js_warn_dry'),
             nurture_mode:window.T('ov_js_warn_nurture'),
             full_auto:window.T('ov_js_warn_full')};
-  if(!confirm(window.Tf('ov_js_preset_confirm',{label:label})+(WARN[name]||'')+window.T('ov_js_preset_confirm2'))) return;
+  var extra='';
+  try{
+    var pre=await rpa.get('/api/companion/capabilities/preset-preview?name='+encodeURIComponent(name));
+    if(pre && pre.ok && pre.send_gate_skipped==='operator_off'){
+      extra=window.T('ov_js_preset_gate_kept_off');
+    }
+  }catch(_e){}
+  if(!confirm(window.Tf('ov_js_preset_confirm',{label:label})+(WARN[name]||'')+extra+window.T('ov_js_preset_confirm2'))) return;
   try{
     var r=await rpa.post('/api/companion/capabilities/preset', {name:name});
     var d=await r.json();
