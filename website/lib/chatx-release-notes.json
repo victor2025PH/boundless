@@ -1,0 +1,239 @@
+[
+  {
+    "version": "1.0.62",
+    "date": "2026-08-29",
+    "title": {
+      "zh": "当前最新版 · 手机扫码操控修复、自动回复档位更听话",
+      "en": "Latest · phone QR control fixed, better auto-reply controls"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "手机扫码操控连不上已根治：局域网入口自动放开（安全令牌才放行），连不上时按原因指路，并新增「一键放行防火墙」。",
+        "自动回复档位更听话：「新会话默认档」与「真发总闸」分开控制、切换前明示波及范围；全局停发时会话徽标如实亮「已暂停真发」。",
+        "新登录账号先确认接管方式（全自动/拟稿人审/关闭）再放行；人设「应用到」支持全部已登录账号。",
+        "AI 记得自己刚说过的话，不再前后矛盾：刚说在泡茶不会转头否认，约好下月不会改口约这周。",
+        "克隆语音修复：不再蹦出英文怪词；长文本试听不再退回标准音色。",
+        "若干稳定性与细节修复。"
+      ],
+      "en": [
+        "Phone QR remote control fixed for good: the LAN entrance now opens automatically (strong-token installs only), failures explain themselves, and a one-click firewall allow is built in.",
+        "Auto-reply modes behave: \"default mode for new chats\" and the \"auto-send master switch\" are separate controls with an impact preview; when sending is paused globally, chat badges honestly show \"auto-send paused\".",
+        "New accounts confirm their takeover mode (full-auto / review / off) before going live; \"Apply to\" now lists every logged-in account.",
+        "The AI remembers what it just said — no more contradicting itself minutes later.",
+        "Cloned-voice fixes: no more stray English words read aloud; long previews no longer fall back to the standard voice.",
+        "Assorted stability and polish fixes."
+      ]
+    }
+  },
+  {
+    "version": "1.0.61",
+    "date": "2026-08-29",
+    "title": {
+      "zh": "克隆语音更稳、发送失败看得见",
+      "en": "Steadier cloned voice, visible send failures"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "克隆语音断链会自动诊断、节点故障自动切换，不再悄悄退化成标准音色。",
+        "发送失败给出人话提示（限流 / 账号受限 / 网络问题），不再一句「发送失败」了事。",
+        "自动回复遇平台限流会自动改期重发。",
+        "手动发送失败会留下记录，可一键重发。",
+        "若干稳定性与细节修复。"
+      ],
+      "en": [
+        "Cloned voice auto-diagnoses dropped links and fails over to a healthy node — no more silently degrading to the standard voice.",
+        "Send failures now explain themselves in plain language (rate limit / restricted account / network) instead of a bare “failed to send”.",
+        "Auto-replies that hit a platform rate limit are automatically rescheduled and retried.",
+        "Manual send failures are logged and can be resent with one click.",
+        "Assorted stability and detail fixes."
+      ]
+    }
+  },
+  {
+    "version": "1.0.60",
+    "date": "2026-08-29",
+    "title": {
+      "zh": "账号发送额度设置 · LINE 与克隆语音修复",
+      "en": "Account send-quota settings · LINE & cloned-voice fixes"
+    },
+    "tags": [
+      "feature",
+      "fix"
+    ],
+    "highlights": {
+      "zh": [
+        "修复 LINE 只能发、收不到消息；人设克隆语音不生效已修复，并新增专属语音节点。",
+        "新增「账号发送额度」可视化设置（日上限、预热爬坡、白名单）。",
+        "AI 防复读：重复内容自动换个说法。",
+        "通知中心去噪；查看会话不再误触「接管静音」；「在线顾问」默认对客户隐藏。",
+        "含报障闭环、等待 AI 时网络异常中断、长消息翻译丢失等一批修复。"
+      ],
+      "en": [
+        "Fixed LINE receiving no messages; the persona cloned-voice failure is fixed, with a dedicated voice node added.",
+        "New visual “account send-quota” settings (daily cap, warm-up ramp, allowlist).",
+        "Anti-repeat replies: repeated content is automatically rephrased.",
+        "Quieter notification center; opening a conversation no longer triggers “takeover mute”; the “online advisor” is hidden from customers by default.",
+        "Includes the incident-report loop, network-error interruptions while waiting for AI, and long-message translation loss fixes."
+      ]
+    }
+  },
+  {
+    "version": "1.0.59",
+    "date": "2026-08-29",
+    "title": {
+      "zh": "LINE 收消息 · 克隆语音 · 报障闭环",
+      "en": "LINE inbound · cloned voice · incident-report loop"
+    },
+    "tags": [
+      "fix",
+      "feature"
+    ],
+    "highlights": {
+      "zh": [
+        "根治 LINE 只能发、收不到消息；凭据过期会主动提醒。",
+        "人设克隆语音不生效已修复。",
+        "报障闭环：在小智里报的问题，修好后会主动通知你。",
+        "等待 AI 时「网络异常」中断已根治；小智页面教学（「本页 N 处可讲解」）。",
+        "账号资产中心：可读身份、改名、一键导出迁移包。",
+        "AI 回复长短更自然；外语译文不再夹带中文语气词。"
+      ],
+      "en": [
+        "Root-fixed LINE being able to send but not receive; you are proactively warned when credentials expire.",
+        "Fixed the persona cloned-voice not taking effect.",
+        "Incident-report loop: issues you report in Xiaozhi now notify you once fixed.",
+        "Root-fixed “network error” interruptions while waiting for AI; in-page guidance in Xiaozhi (“N spots explained on this page”).",
+        "Account asset center: readable identities, renaming, one-click migration-pack export.",
+        "AI reply length feels more natural; foreign-language translations no longer carry Chinese filler particles."
+      ]
+    }
+  },
+  {
+    "version": "1.0.58",
+    "date": "2026-08-27",
+    "title": {
+      "zh": "后台热修复通道 · 稳定性大修复",
+      "en": "Background hotfix channel · major stability pass"
+    },
+    "tags": [
+      "feature",
+      "fix"
+    ],
+    "highlights": {
+      "zh": [
+        "新增「后台热修复」通道：小问题修好后重启即生效，无需重新下载完整安装包。",
+        "修复多账号身份错乱，新增账号交接向导。",
+        "AI 不再「乱回忆」对方没说过的话；关怀消息不再复读。",
+        "小智答不上时会直说，并支持一键报障。",
+        "全站提醒统一为右下角轻提醒 + 消息中心。",
+        "收件箱修复（群聊滚动卡住、编辑草稿误丢）；Messenger / LINE 收发更稳、发图承诺更可靠。"
+      ],
+      "en": [
+        "New “background hotfix” channel: small fixes take effect on restart without re-downloading the full installer.",
+        "Fixed multi-account identity mix-ups; added an account-handover wizard.",
+        "AI no longer “misremembers” things the other side never said; care messages no longer repeat.",
+        "When Xiaozhi can’t answer, it says so directly and supports one-click issue reporting.",
+        "Site-wide alerts unified into a bottom-right light toast plus a message center.",
+        "Inbox fixes (group-chat scroll freezing, accidental draft loss); steadier Messenger / LINE send-receive and more reliable photo-send promises."
+      ]
+    }
+  },
+  {
+    "version": "1.0.56",
+    "date": "2026-08-26",
+    "title": {
+      "zh": "稳定性专项修复",
+      "en": "Stability-focused fixes"
+    },
+    "tags": [
+      "fix"
+    ],
+    "highlights": {
+      "zh": [
+        "修复群聊记录重启后卡在旧消息。",
+        "修复后台数据页与账号资产页打不开。",
+        "修复输入框偶发点不进。",
+        "修复「待审 / 待处理」打开为空。",
+        "Messenger 加密会话发送更稳；平台异常时自动保护账号。",
+        "手机端删除的消息，工作台同步删除。",
+        "整体收发稳定性提升。"
+      ],
+      "en": [
+        "Fixed group-chat history getting stuck on old messages after a restart.",
+        "Fixed the admin data page and account-asset page failing to open.",
+        "Fixed the input box occasionally not accepting clicks.",
+        "Fixed “pending review / pending” opening empty.",
+        "Steadier sending in Messenger encrypted chats; accounts are auto-protected on platform anomalies.",
+        "Messages you delete on your phone are now deleted in the workspace too.",
+        "Overall send-receive stability improvements."
+      ]
+    }
+  },
+  {
+    "version": "1.0.46",
+    "date": "2026-08-21",
+    "title": {
+      "zh": "内测反馈集中修复",
+      "en": "Beta-feedback fixes round-up"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "修复打包版语音、图片发送失败（上传报错）。",
+        "翻译工具提交语音 / 视频改为自动使用官方托管转写，无需任何配置。",
+        "客户发的纯表情消息现在直接显示表情本体（不再是「[表情]」文字）。",
+        "全新安装领取试用后语音登记即刻可用，无需重启。",
+        "带文字的截图报障不再丢失文字（此前会导致 AI 答非所问）。",
+        "人设绑定状态统一，各处显示一致。",
+        "报错提示全面改为人话，不再出现配置键名 / HTTP 状态码；「AI 链路」横幅分「无需操作」与「需处理」两级。",
+        "首启向导绑渠道 / 挑人设改为纯图文指引，不再中途跳走。"
+      ],
+      "en": [
+        "Fixed voice / image send failures in the packaged build (upload error).",
+        "The translation tool now auto-uses hosted transcription for voice / video submissions — no configuration needed.",
+        "Emoji-only messages from customers now show the emoji itself instead of a “[emoji]” placeholder.",
+        "After claiming the trial on a fresh install, voice enrollment works immediately — no restart required.",
+        "Text in screenshot reports is no longer lost (which previously made the AI reply off-topic).",
+        "Persona-binding status is unified and consistent everywhere.",
+        "Error messages are now plain language — no config keys or HTTP status codes; the “AI link” banner is split into “no action needed” and “action required”.",
+        "The first-run wizard’s channel-binding / persona-picking steps are now illustrated guides that don’t navigate you away."
+      ]
+    }
+  },
+  {
+    "version": "1.0.40",
+    "date": "2026-08-18",
+    "title": {
+      "zh": "浮窗 AI 副驾上线 · 工作目标升级",
+      "en": "Floating AI copilot · work-goals upgrade"
+    },
+    "tags": [
+      "feature",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "浮窗 AI 副驾上线：副驾面板可悬浮于任意窗口之上，聊天与辅助两不误。",
+        "工作目标体验升级：先了解客户再定目标，目标完成与风险提醒更醒目。",
+        "界面主题统一焕新（工具栏 / 人设列表 / 滚动条）。",
+        "多项稳定性与细节修复。"
+      ],
+      "en": [
+        "Floating AI copilot: the copilot panel can hover over any window, so chatting and assistance no longer compete for space.",
+        "Work-goals experience upgraded: understand the customer first, then set goals; completion and risk reminders are more prominent.",
+        "Unified UI theme refresh (toolbar / persona list / scrollbars).",
+        "Assorted stability and detail fixes."
+      ]
+    }
+  }
+]
