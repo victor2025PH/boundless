@@ -88,6 +88,43 @@ _COSY_PARA_MARK_RE = re.compile(
 )
 
 
+def _breath_from_local_ref(ref_path: str, cache_dir: Path, sr: int):
+    """本地参考音 → 真吸气样本（磁盘缓存）；任何失败 → None（不放呼吸）。
+
+    与 ``voice_pacing.load_breath_for_profile`` 同产物，区别只在取材：那条是
+    hub 路径、要先 HTTP 拉 ``profiles/<name>/reference_audio``；自建 IndexTTS-2
+    的参考音本来就在盘上，直接读即可，少一跳也少一个失败面。
+
+    缓存键含 ref 的 mtime——换了参考音（换声）必须重新提，否则新音色配旧呼吸。
+    """
+    try:
+        import subprocess
+        import zlib as _zlib
+
+        from src.ai import voice_pacing as vpac
+
+        p = Path(ref_path)
+        if not p.is_file():
+            return None
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        st = p.stat()
+        key = f"{p.name}|{st.st_size}|{st.st_mtime_ns}"
+        cache = cache_dir / (
+            f"mc_{_zlib.crc32(key.encode('utf-8')) & 0xffffffff}_{int(sr)}.wav")
+        if not cache.exists():
+            proc = subprocess.run(
+                ["ffmpeg", "-loglevel", "error", "-i", str(p), "-ar", str(sr),
+                 "-ac", "1", "-f", "wav", "pipe:1"],
+                capture_output=True, timeout=60)
+            if proc.returncode != 0 or proc.stdout[:4] != b"RIFF":
+                return None
+            cache.write_bytes(proc.stdout)
+        x, _sr = vpac.wav_to_float(cache.read_bytes())
+        return vpac.extract_breath(x, sr)
+    except Exception:
+        return None
+
+
 def polish_hub_speak_text(text: str) -> str:
     """Hub/IndexTTS 送稿清洗：去 Cosy 专属标记 + 书面标点改口语换气。
 
@@ -1354,7 +1391,11 @@ class TTSPipeline:
                 return av_rv
             err = "avatar_clone_unreachable"
         elif primary_backend == "minicpm_clone":
-            mc_rv = await self._try_minicpm_clone(rv, out, t0, spec=spec)
+            mc_rv = await self._try_minicpm_clone(
+                rv, out, t0, spec=spec, colloquial_lead=colloquial_lead,
+                pre_colloquialized=pre_colloquialized,
+                skip_llm_colloquial=skip_llm_colloquial,
+                split_part=split_part, interactive=interactive)
             if mc_rv is not None:
                 return mc_rv
             err = "minicpm_clone_unreachable"
@@ -1556,8 +1597,153 @@ class TTSPipeline:
             return None
         return _finalize_err("voice_clone_lan_empty")
 
+    async def _try_minicpm_pacing(
+        self, rv: "TTSResult", out: Path, t0: float, *, spec: Any,
+        text: str, client: Any, ref: str, ref_text: str, instr: str,
+        split_part: bool = False, interactive: bool = False,
+    ) -> Optional["TTSResult"]:
+        """慢速拟人编排的 IndexTTS-2 版（呼吸/段间停顿/背景床/分段变速）。
+
+        复用 ``voice_pacing.paced_synthesize`` 同一套编排——它把后端抽象成
+        ``synth_chunk`` 回调，所以换后端只需换这一个回调，节奏/呼吸/拼接逻辑
+        零改动共用。与 hub 版的两处差异：
+        ① 合成走 ``VoiceCloneClient``（写临时 wav 再读回，客户端只给文件接口）；
+        ② 呼吸样本直接从**本地参考音**提——hub 版要先 HTTP 拉 profile 参考音，
+           本路径的参考音本来就在盘上（``config/voice_refs/*.wav``），省一跳。
+
+        配置读 ``minicpm_clone.pacing``，缺则回落 ``hub_fish.pacing``：节奏参数
+        （tempo/呼吸/背景床）描述的是「人怎么说话」而非「哪个引擎在说」，两条
+        后端共用一份是对的；将来真要分开调，加 ``minicpm_clone.pacing`` 即可覆盖。
+
+        代价实测（104，38 字 3 段）：逐段 16.8s vs 整段 11.8s＝1.4x——IndexTTS-2
+        单次固定开销大，分段惩罚远小于 hub。不适用/失败一律 None → 调用方整段单发。
+        """
+        mc_cfg = self.minicpm_clone if isinstance(self.minicpm_clone, dict) else {}
+        _hf = (self.avatar_voice or {}).get("hub_fish")
+        hf_cfg = _hf if isinstance(_hf, dict) else {}
+        pc = mc_cfg.get("pacing") if isinstance(mc_cfg.get("pacing"), dict) else None
+        if pc is None:
+            pc = hf_cfg.get("pacing") if isinstance(hf_cfg.get("pacing"), dict) else {}
+        if not bool(pc.get("enabled", False)):
+            return None
+        if split_part:
+            return None            # 分条已在消息级编排节奏，条内本就短
+        if interactive and not bool(pc.get("interactive", False)):
+            return None            # 坐席在等：默认不拖慢手动链
+        try:
+            from src.ai import voice_pacing as vpac
+            from src.ai.voice_colloquial import _is_chinese_dominant
+        except Exception:
+            return None
+        if not vpac.numpy_available():
+            return None
+
+        spoken = str(text or "").strip()
+        if not _is_chinese_dominant(spoken):
+            return None            # 停顿策略按中文标点校准
+        try:
+            min_chars = int(pc.get("min_chars", 24) or 24)
+        except (TypeError, ValueError):
+            min_chars = 24
+        if len(spoken) < min_chars:
+            return None
+        try:
+            max_chunks = max(2, int(pc.get("max_chunks", 8) or 8))
+        except (TypeError, ValueError):
+            max_chunks = 8
+        if min(max(len(vpac.split_chunks(spoken)), 1), max_chunks) < 2:
+            return None            # 单段没有「段间」可言
+
+        def _synth_chunk(chunk_text: str, chunk_emo: str) -> bytes:
+            tmp = out.with_name(f"{out.stem}_pc{abs(hash(chunk_text)) % 10**6}.wav")
+            try:
+                client.synthesize_clone(
+                    chunk_text, ref, tmp, reference_text=ref_text,
+                    instructions=instr)
+                data = tmp.read_bytes()
+                if data[:4] != b"RIFF":
+                    raise vpac.PacingSkip("chunk not wav")
+                return data
+            finally:
+                try:
+                    tmp.unlink(missing_ok=True)  # type: ignore[call-arg]
+                except Exception:
+                    pass
+
+        breath_loader = None
+        if bool(pc.get("breath", True)):
+            def breath_loader(sr: int):  # noqa: F811
+                return _breath_from_local_ref(
+                    ref, Path("config/voice_pacing_refs"), sr)
+
+        vp = self.voice_profile or {}
+        try:
+            tempo = float(vp.get("pacing_tempo") or pc.get("tempo", 0.93) or 0.93)
+        except (TypeError, ValueError):
+            tempo = 0.93
+        try:
+            think_tempo = float(pc.get("think_tempo") or 0.0) or max(0.90, tempo - 0.05)
+        except (TypeError, ValueError):
+            think_tempo = max(0.90, tempo - 0.05)
+        emotion = "neutral"
+        if spec is not None:
+            emotion = str(getattr(spec, "emotion", "") or "neutral")
+
+        def _build():
+            return vpac.paced_synthesize(
+                spoken, synth_chunk=_synth_chunk, base_emotion=emotion,
+                expressive=vpac.is_expressive(
+                    str(vp.get("instruct_style") or ""),
+                    str(vp.get("emotion") or "")),
+                polish=polish_hub_speak_text, tempo=tempo,
+                think_tempo=think_tempo, min_chars=min_chars,
+                max_chunks=max_chunks, breath_loader=breath_loader,
+                bed=bool(pc.get("bed", True)),
+                inject_think=bool(pc.get("inject_think", True)),
+                seed_key=str(self.persona_id or ref))
+
+        try:
+            chunk_to = float(pc.get("chunk_timeout_sec", 30.0) or 30.0)
+        except (TypeError, ValueError):
+            chunk_to = 30.0
+        budget = min(max(2.0, len(vpac.split_chunks(spoken)) * chunk_to + 20.0), 300.0)
+        try:
+            audio, meta = await asyncio.wait_for(
+                asyncio.to_thread(_build), timeout=budget)
+        except vpac.PacingSkip as ex:
+            logger.info("[tts] minicpm pacing skip（%s）→ 整段单发", ex)
+            return None
+        except Exception as ex:
+            logger.info("[tts] minicpm pacing 失败（%s）→ 整段单发", ex)
+            return None
+        if not audio or audio[:4] != b"RIFF":
+            return None
+
+        out.write_bytes(audio)
+        rv.ok = True
+        rv.provider = "minicpm_clone+pacing"
+        rv.format = "wav"
+        rv.audio_path = str(out)
+        rv.extra["bytes"] = len(audio)
+        rv.extra["minicpm_base_url"] = getattr(client, "base_url", "")
+        rv.extra["pacing"] = dict(meta or {})
+        try:
+            dur, src = compute_audio_duration_sec(str(out), "wav")
+            rv.duration_sec = float(dur)
+            rv.duration_source = str(src)
+        except Exception:
+            rv.duration_sec = -1.0
+            rv.duration_source = "unknown"
+        rv.latency_ms = int((time.monotonic() - t0) * 1000)
+        logger.info("[tts] minicpm pacing 成功：%s 段 %.1fs",
+                    (meta or {}).get("chunks", "?"), rv.latency_ms / 1000.0)
+        return rv
+
     async def _try_minicpm_clone(
         self, rv: "TTSResult", out: Path, t0: float, *, spec: Any = None,
+        colloquial_lead: bool = True, pre_colloquialized: bool = False,
+        skip_llm_colloquial: bool = False, split_part: bool = False,
+        interactive: bool = False,
     ) -> Optional["TTSResult"]:
         """MiniCPM-o 情感克隆（与 fish_speech 共用 /v1/tts/clone 契约，复用 VoiceCloneClient）。
 
@@ -1637,12 +1823,28 @@ class TTSPipeline:
         # 开场词去重全部静默失效（配置项都在，这条路径读不到）。现与 avatar 链共用
         # 同一份口语化实现。polish_hub_speak_text 是为 IndexTTS 系写的——剥 Cosy 专属
         # 副语言标记（否则会被当正文念出「中括号 sigh」）+ 书面句号改口语换气。
+        # interactive（坐席手打）必须原样透传——「所打即所念」是铁律，一个字都不动；
+        # 这些开关此前被我硬编码成 True/False，等于把手动链也拖进口语化。
         spoken = await self._colloquialize_for_synth(
             rv, spec=spec, cfg=dict(self.avatar_voice or {}),
-            vp=vp, colloquial_lead=True, interactive=False)
+            vp=vp, colloquial_lead=colloquial_lead,
+            pre_colloquialized=pre_colloquialized,
+            skip_llm_colloquial=skip_llm_colloquial, interactive=interactive)
+        # 慢速拟人编排（呼吸/段间停顿/背景床/分段变速）：不适用一律 None → 整段单发。
+        # **必须喂未 polish 的稿**：polish 把书面句号改成换气「……」，而分段正是按
+        # 句号切——先 polish 再切会把整段粘成一块，pacing 静默不触发（首版实锤）。
+        # paced_synthesize 收 polish 回调，在切完之后对每段各自施用，顺序才对。
+        _paced = await self._try_minicpm_pacing(
+            rv, mc_out, t0, spec=spec, text=spoken, client=client, ref=ref,
+            ref_text=ref_text, instr=instr, split_part=split_part,
+            interactive=interactive)
+        if _paced is not None:
+            return _paced
+
         spoken = polish_hub_speak_text(spoken) or str(rv.text or "")
         if spoken != str(rv.text or ""):
             rv.extra["minicpm_spoken_text"] = True
+
         def _do_clone() -> None:
             client.synthesize_clone(
                 spoken, ref, mc_out, reference_text=ref_text, instructions=instr)
