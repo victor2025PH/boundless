@@ -258,6 +258,35 @@ def build_probe_specs(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
             "engine": "index_tts",
         })
 
+    # ── ser：语音情绪真识别（远程 GPU emotion2vec，/v1/audio/emotion）──────────
+    # 2026-08-29 补：SER 是**被动触发**的（客户发语音才调），失败会静默进 120s 冷却
+    # 回落本机 CPU funasr——链路不断、只是从 ~350ms 变秒级，`speech_emotion_remote_total`
+    # 那个计数器要有真实流量才看得出异常，凌晨/低峰零调用时它一直是好的。主动探针是
+    # 唯一能在「没人发语音」时也发现远程 SER 死掉的面。
+    # 夹具复用 ASR_FIXTURE（同一份 wav 喂两个域，零新增资产）。
+    se = cfg.get("speech_emotion") if isinstance(cfg.get("speech_emotion"), dict) else {}
+    _ser_rem = se.get("remote") if isinstance(se.get("remote"), dict) else {}
+    _ser_base = str(_ser_rem.get("base_url") or "").strip()
+    if _ser_base and not ASR_FIXTURE.is_file():
+        logger.warning("[true_probe] ser 域缺夹具，该域不参与探针：%s", ASR_FIXTURE)
+    if _ser_base and ASR_FIXTURE.is_file():
+        try:
+            _ser_to = float(_ser_rem.get("timeout_sec") or 10.0)
+        except (TypeError, ValueError):
+            _ser_to = 10.0
+        specs.append({
+            "domain": "ser", "kind": "ser_emotion",
+            "url": _ser_base.rstrip("/") + "/v1/audio/emotion",
+            # 探针预算比客户端超时宽一档：客户端超时即回落本地（业务不受影响），
+            # 而探针的职责是判「远程到底活没活」，卡在同一秒会把慢当成死。
+            "timeout": _ser_to + 5.0,
+            # 内容级断言：**最高分**必须够尖。emotion2vec 正常输出是尖峰分布
+            # （夹具实测 0.972，第二名 0.0098）；模型未载入/权重坏时退化成接近
+            # 均匀分布（9 类 ⇒ 每类 ~0.111）。刻意**不**断言具体情绪——那会随
+            # 夹具语调与模型版本漂移，而「有没有做出明确判断」才是活性的真判据。
+            "min_top_score": 0.3,
+        })
+
     # ── translate：MT 引擎真翻译（OpenAI 兼容口，单端点契约）──────────────────
     eng = ((cfg.get("translation") or {}).get("engines") or {})
     mt = eng.get("ollama_mt") if isinstance(eng.get("ollama_mt"), dict) else {}
@@ -508,6 +537,13 @@ def probe_gap_reasons(cfg: Dict[str, Any]) -> Dict[str, str]:
         gaps["asr"] = (f"语音识别已启用但夹具缺失：{ASR_FIXTURE}"
                        if str(vr.get("base_url") or "").strip()
                        else "语音识别已启用但缺 base_url")
+
+    # SER 远程配了却推不出规格＝那台 GPU 情绪识别没有任何主动探测面（失败只会静默
+    # 回落本机 CPU，低峰期连计数器都看不出来）。
+    se = cfg.get("speech_emotion") if isinstance(cfg.get("speech_emotion"), dict) else {}
+    _rem = se.get("remote") if isinstance(se.get("remote"), dict) else {}
+    if str(_rem.get("base_url") or "").strip() and "ser" not in got:
+        gaps["ser"] = f"远程 SER 已配置但夹具缺失：{ASR_FIXTURE}"
     return gaps
 
 
@@ -565,6 +601,38 @@ def run_probe(spec: Dict[str, Any]) -> Tuple[bool, str]:
             if not verdict_ok:
                 return False, why
             return True, f"{time.time() - t0:.1f}s {content[:24]!r}"
+        if kind == "ser_emotion":
+            wav = ASR_FIXTURE.read_bytes()
+            boundary = f"----probe{uuid.uuid4().hex}"
+            parts = (
+                f"--{boundary}\r\nContent-Disposition: form-data; "
+                f"name=\"file\"; filename=\"probe.wav\"\r\n"
+                f"Content-Type: audio/wav\r\n\r\n"
+            ).encode("utf-8") + wav + f"\r\n--{boundary}--\r\n".encode("utf-8")
+            req = urllib.request.Request(
+                url, data=parts,
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+                method="POST")
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8", "replace"))
+            labels = data.get("labels") or []
+            scores = data.get("scores") or []
+            if not labels or len(labels) != len(scores):
+                return False, (f"结构异常 labels={len(labels)} scores={len(scores)}"
+                               f"（服务端契约变了或模型未载入）")
+            try:
+                nums = [float(s) for s in scores]
+            except (TypeError, ValueError):
+                return False, "scores 非数值"
+            top = max(nums)
+            floor = float(spec.get("min_top_score") or 0.3)
+            if top < floor:
+                # 均匀分布＝模型没真在判（未载入/权重坏），而 HTTP 200 + 结构完好
+                # 会让「非空即绿」的判据完全睁眼瞎——与 ASR 那次「2 倍速噪声也吐字」同源。
+                return False, (f"分布过平 top={top:.3f} < {floor}"
+                               f"（{len(nums)} 类均分约 {1.0 / max(len(nums), 1):.3f}）")
+            emo = str(labels[nums.index(top)])
+            return True, f"{time.time() - t0:.1f}s {emo}@{top:.2f}"
         if kind == "asr_transcribe":
             wav = ASR_FIXTURE.read_bytes()
             boundary = f"----probe{uuid.uuid4().hex}"
