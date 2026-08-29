@@ -1592,6 +1592,13 @@ class TTSPipeline:
         cloud_fallback = bool(cfg.get("cloud_fallback", True))
         client = VoiceCloneClient(cfg)
         ref_text = str(vp.get("reference_text") or "").strip()
+        if not ref_text:
+            # sidecar 自动发现（2026-08-29，与 `_try_avatar_clone` 对齐）：全部人设的
+            # 逐字稿只落在 `ref.wav` 旁的同名 `.txt`，没写进 voice_profile 字段。本路径
+            # 此前缺这一层回落 → ref_text 恒空 → IndexTTS-2 掉出 inference_zero_shot
+            # 保真路径（逐字稿是它保音色的前提），克隆相似度无声下降。
+            from src.ai.avatar_voice import find_reference_text
+            ref_text = find_reference_text(ref)
 
         # 情感 → instructions（结构化语气，绝不读出）；neutral 则用运营基线 instructions
         instr = self.instructions

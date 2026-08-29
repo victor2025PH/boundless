@@ -178,7 +178,19 @@ def avatar_probe_target(config: Dict[str, Any]) -> str:
     ``base_urls``，本函数仍回落 127.0.0.1 → 探已退役旧服务 → 每 4h 一条假「掉线」
     告警（真身 140:7852 全程健康、客户端用的就是它）。
     """
-    av = (config.get("avatar_voice") or {}) if isinstance(config, dict) else {}
+    cfg = config if isinstance(config, dict) else {}
+    # ── 2026-08-29：TTS 主力迁 minicpm_clone（104 专属 IndexTTS-2）后必须跟着改探针 ──
+    # 智聊全部人设的 voice_profile.backend 已是 minicpm_clone，avatar_voice 的
+    # 140:7852 不再有消费方。继续探它＝探一个自己不用的端点：140 掉线会报成「智聊
+    # 语音掉线」（假告警），而真正在用的 104 挂了反而没有灯——与本函数注释里 2026-08-18
+    # 那次「7852 退役迁 140 后仍探 127.0.0.1」是同一类错位，只是方向换了一次。
+    # 判据取 `minicpm_clone.enabled + base_url`：那正是 `_try_minicpm_clone` 的门控条件。
+    mc = cfg.get("minicpm_clone") if isinstance(cfg.get("minicpm_clone"), dict) else {}
+    if mc.get("enabled", False):
+        _mc = str(mc.get("base_url") or "").strip().rstrip("/")
+        if _mc:
+            return _mc + "/health"
+    av = (cfg.get("avatar_voice") or {}) if isinstance(cfg, dict) else {}
     if not av.get("enabled", False):
         return ""
     base = ""
