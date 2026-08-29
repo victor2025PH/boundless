@@ -3329,12 +3329,42 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                                 _dg_hit.get("similarity", 0.0),
                                 _dg_hit.get("age_sec", 0.0),
                                 str(_dg_hit.get("matched_text", ""))[:60])
+                            # impl85 阶段3（#45 taihua009 02:11 实录）：拦得对，但
+                            # 拦下后空过一轮＝客户干等。用已发内容当负样本换说法
+                            # 重写一条，重写稿再过同一守卫——通过才发，仍雷同/重写
+                            # 失败维持静默跳过（守卫只更严不放松）。自身异常绝不
+                            # 外泄（外层 except 语义是「守卫坏了放行原文」，那会把
+                            # 重复原文发出去）。
+                            _dg_rw = None
                             try:
-                                from src.client.gate_stats import bump as _gate_bump
-                                _gate_bump("dup_guard")
+                                if self.ai_client is not None:
+                                    from src.inbox.outbound_dup_guard import (
+                                        attempt_dup_rewrite as _dg_retry,
+                                        build_dup_rewrite_prompt as _dg_rwp,
+                                    )
+
+                                    async def _dg_rw_fn(_t, _m, _ai=self.ai_client):
+                                        return await _ai.rewrite_local(
+                                            _dg_rwp(_m), _t)
+
+                                    _dg_rw = await _dg_retry(
+                                        text=reply_final, hit=_dg_hit,
+                                        rows=_dg_rows, cfg=_dg_cfg,
+                                        rewrite_fn=_dg_rw_fn, source="a_line")
                             except Exception:
-                                pass
-                            return
+                                _dg_rw = None
+                            if not _dg_rw:
+                                try:
+                                    from src.client.gate_stats import bump as _gate_bump
+                                    _gate_bump("dup_guard")
+                                except Exception:
+                                    pass
+                                return
+                            self.logger.info(
+                                "[dup_guard] A线拦截后换说法重试成功 chat=%s "
+                                "len %d→%d（重写稿已再过守卫）",
+                                chat_id, len(reply_final), len(_dg_rw))
+                            reply_final = _dg_rw
                         # 乐观登记待发文本（先于实际发送）：并行在途/跨链投递立即可见；
                         # 条目按守卫窗口自然过期，A 线无自动重发同文本语义故不撤销
                         # （唯一例外：插话吸收关口中止 → 用 token 撤销，见下）。

@@ -264,13 +264,120 @@ def resolve_guard_cfg(root_config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "window_sec": float(blk.get("window_sec", DEFAULT_WINDOW_SEC)),
         # block_similar=false → 自动链只拦 dup 档（近逐字），similar 档仅计数放行
         "block_similar": bool(blk.get("block_similar", True)),
+        # impl85 阶段3（工单#45 taihua009 02:11 实录）：拦下之后自动「换个说法」
+        # 重生一条再核对一次，拦得对但不该空过这一轮。默认开——它只在守卫已
+        # enabled 且真的拦截时才多一次本地 LLM 改写，是对「静默空轮」的纯改进；
+        # rewrite_retry:false 为紧急停用开关。
+        "rewrite_retry": bool(blk.get("rewrite_retry", True)),
     }
+
+
+# ── 拦截后「换个说法」重试（impl85 阶段3，2026-08-29）─────────────────────────
+# 事故：客户 23 秒连发三条 → 合并重新生成的回复与 89 秒前刚发的三句相似度 98%
+# → 防复读拦得对，但拦下后没有任何补救，这一轮就空过去了（客户干等）。
+# 修法：命中拦截 → 用「已发内容」当负样本让 LLM 换说法重写一条 → **重写稿再过
+# 一次同一守卫**——仍命中就维持静默跳过（绝不硬发），重写链任何异常也维持跳过
+# （守卫语义只可能更严不可能更松）。
+
+def build_dup_rewrite_prompt(matched_text: str) -> str:
+    """重写指令（system prompt）：负样本=刚发过的内容；保语言/保意图/换表达。"""
+    matched = str(matched_text or "").strip()[:280]
+    return (
+        "你是聊天回复改写器。给你的这句话和刚刚已经发出去的内容几乎一样，"
+        "不能原样再发。请换一个说法/角度重写它：保持原意和语气，"
+        "**用与原文完全相同的语言**，长度接近原文，绝不解释、绝不加引号、"
+        "只输出重写后的那句话。\n"
+        f"刚发过的内容（禁止雷同）：{matched}"
+    )
+
+
+def attach_rewrite_fn(cfg: Optional[Dict[str, Any]], ai_client: Any) -> Optional[Dict[str, Any]]:
+    """装配层：把「换说法」重写闭包挂进守卫配置 dict（键 ``rewrite_fn``）。
+
+    ai_client 缺席 / 无 ``rewrite_local``（本地小模型改写原语）→ 原样返回，
+    自动链维持「命中即静默跳过」旧行为。返回**拷贝**（不改调用方传入的 dict）。
+    """
+    if not isinstance(cfg, dict) or ai_client is None:
+        return cfg
+    rewrite_local = getattr(ai_client, "rewrite_local", None)
+    if rewrite_local is None:
+        return cfg
+
+    async def _rewrite(text: str, matched: str) -> Optional[str]:
+        return await rewrite_local(build_dup_rewrite_prompt(matched), str(text))
+
+    out = dict(cfg)
+    out["rewrite_fn"] = _rewrite
+    return out
+
+
+async def attempt_dup_rewrite(
+    *,
+    text: str,
+    hit: Optional[Dict[str, Any]],
+    rows: List[Dict[str, Any]],
+    cfg: Dict[str, Any],
+    rewrite_fn: Any,
+    source: str = "",
+    now: Optional[float] = None,
+) -> Optional[str]:
+    """dup-guard 命中后的重写重试。返回「重写且再核通过」的文本；None=维持跳过。
+
+    ``rewrite_fn``: ``async (text, matched_text) -> Optional[str]``（由调用链注入，
+    A 线用 client.ai_client、B 线经 dup_guard_cfg 携带的闭包）。绝不抛。
+    """
+    if not (cfg or {}).get("rewrite_retry", True):
+        return None
+    if rewrite_fn is None or not str(text or "").strip():
+        return None
+    _record_rewrite("attempted", source)
+    matched = str((hit or {}).get("matched_text") or "")
+    try:
+        new_text = await rewrite_fn(str(text), matched)
+    except Exception:
+        _record_rewrite("error", source)
+        return None
+    new_text = str(new_text or "").strip().strip('"“”「」').strip()
+    if not new_text or len(new_text) > max(200, len(str(text)) * 3):
+        _record_rewrite("unusable", source)
+        return None
+    if normalize_for_dup(new_text) == normalize_for_dup(text):
+        _record_rewrite("unchanged", source)
+        return None
+    try:
+        hit2 = near_duplicate_of_recent(
+            new_text, rows,
+            window_sec=float((cfg or {}).get("window_sec", DEFAULT_WINDOW_SEC)),
+            now=now)
+    except Exception:
+        _record_rewrite("error", source)
+        return None
+    lvl2 = (hit2 or {}).get("level", "")
+    blocked2 = bool(hit2) and (
+        lvl2 == "dup" or bool((cfg or {}).get("block_similar", True)))
+    if blocked2:
+        _record_rewrite("still_dup", source)
+        return None
+    _record_rewrite("rescued", source)
+    return new_text
 
 
 # ── 观测（进程级计数，autosend-status / metrics 可挂）────────────────────────
 _STATS_LOCK = threading.Lock()
 _STATS: Dict[str, int] = {"checked": 0, "hit_dup": 0, "hit_similar": 0, "forced": 0}
 _BLOCKED_BY_SOURCE: Dict[str, int] = {}
+# 拦截后重写重试漏斗（impl85 阶段3）：attempted → rescued（换说法后放行）/
+# still_dup（重写仍雷同，维持跳过）/ unchanged / unusable / error
+_REWRITE_STATS: Dict[str, int] = {}
+
+
+def _record_rewrite(outcome: str, source: str = "") -> None:
+    key = str(outcome or "unknown")
+    with _STATS_LOCK:
+        _REWRITE_STATS[key] = _REWRITE_STATS.get(key, 0) + 1
+        if source:
+            sk = f"{key}:{source}"
+            _REWRITE_STATS[sk] = _REWRITE_STATS.get(sk, 0) + 1
 
 
 def record_dup_check(level: str = "", *, forced: bool = False,
@@ -293,6 +400,7 @@ def dup_guard_metrics_snapshot() -> Dict[str, Any]:
     with _STATS_LOCK:
         snap: Dict[str, Any] = dict(_STATS)
         snap["blocked_by_source"] = dict(_BLOCKED_BY_SOURCE)
+        snap["rewrite"] = dict(_REWRITE_STATS)
         return snap
 
 
@@ -306,4 +414,6 @@ __all__ = [
     "RecentOutboundRegistry",
     "outbound_registry",
     "resolve_guard_cfg",
+    "build_dup_rewrite_prompt",
+    "attempt_dup_rewrite",
 ]

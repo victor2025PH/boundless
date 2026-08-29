@@ -411,10 +411,12 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                             # worker 只收 l2_autosend 子段拿不到全局树，这里解析注入。
                             try:
                                 from src.inbox.outbound_dup_guard import (
+                                    attach_rewrite_fn as _dup_attach_rw,
                                     resolve_guard_cfg as _dup_cfg_fn,
                                 )
-                                _dup_guard_cfg = _dup_cfg_fn(
-                                    assistant.config.config or {})
+                                _dup_guard_cfg = _dup_attach_rw(
+                                    _dup_cfg_fn(assistant.config.config or {}),
+                                    getattr(assistant, "ai_client", None))
                             except Exception:
                                 _dup_guard_cfg = None
                             # 新入站过期守卫配置（inbox.l2_autosend.fresh_guard，默认关）：

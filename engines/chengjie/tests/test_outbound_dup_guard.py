@@ -175,7 +175,8 @@ def test_registry_rows_feed_guard():
 def test_resolve_guard_cfg_defaults_and_overrides():
     from src.inbox.outbound_dup_guard import resolve_guard_cfg
     cfg = resolve_guard_cfg({})
-    assert cfg == {"enabled": False, "window_sec": 180.0, "block_similar": True}
+    assert cfg == {"enabled": False, "window_sec": 180.0, "block_similar": True,
+                   "rewrite_retry": True}
     cfg2 = resolve_guard_cfg({"inbox": {"outbound_dup_guard": {
         "enabled": True, "window_sec": 300, "block_similar": False}}})
     assert cfg2["enabled"] and cfg2["window_sec"] == 300.0

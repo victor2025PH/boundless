@@ -1981,8 +1981,12 @@ def build_autosend_support_kwargs(assistant, web_app) -> dict:
 
     out["persona_resolver"] = _persona_resolver
     try:
-        from src.inbox.outbound_dup_guard import resolve_guard_cfg
-        out["dup_guard_cfg"] = resolve_guard_cfg(assistant.config.config or {})
+        from src.inbox.outbound_dup_guard import (
+            attach_rewrite_fn, resolve_guard_cfg,
+        )
+        out["dup_guard_cfg"] = attach_rewrite_fn(
+            resolve_guard_cfg(assistant.config.config or {}),
+            getattr(assistant, "ai_client", None))
     except Exception:
         out["dup_guard_cfg"] = None
     try:
