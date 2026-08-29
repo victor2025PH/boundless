@@ -395,7 +395,7 @@ class AutosendWorker:
             from src.inbox.outbound_dup_guard import outbound_registry
             rows.extend(outbound_registry.recent_rows(conv))
         except Exception:
-            pass
+            logger.debug("[AutosendWorker] 在途登记表读取失败（忽略）", exc_info=True)
         return rows
 
     def _dup_guard_check(self, item: Dict[str, Any],

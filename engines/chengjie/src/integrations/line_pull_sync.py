@@ -273,7 +273,7 @@ class LinePullSync:
             if self._client is not None:
                 self._client.close()
         except Exception:  # noqa: BLE001
-            pass
+            logger.debug("[line-pull] client close 失败（忽略）", exc_info=True)
         self._client = None
 
     def close(self) -> None:

@@ -566,7 +566,7 @@ class WebInboxAdapter:
             if not web_entry_visible(cfg0):
                 return []
         except Exception:
-            pass
+            logger.debug("[web-adapter] 入口可见性判定失败（按可见）", exc_info=True)
         out: List[Dict[str, Any]] = []
         try:
             rows = store.list_conversations(limit=limit, platform="web") or []
@@ -604,7 +604,7 @@ class WebInboxAdapter:
             if not web_entry_visible(cfg):
                 return {}
         except Exception:
-            pass
+            logger.debug("[web-adapter] 入口可见性判定失败（按可见）", exc_info=True)
         aid = str(web.get("account_id") or "web")
         return {f"web_{aid}": {
             "platform": "web", "account_id": aid,

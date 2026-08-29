@@ -2169,7 +2169,8 @@ class LineProtocolWorker:
                 try:
                     pull.close()
                 except Exception:
-                    pass
+                    logger.debug("[line-worker] pull_sync 收尾关闭失败（忽略）",
+                                 exc_info=True)
 
             self._pull_thread = threading.Thread(target=_run, daemon=True)
             self._pull_thread.start()
@@ -2398,7 +2399,7 @@ class LineProtocolWorker:
         try:
             self._pull_stop.set()
         except Exception:
-            pass
+            logger.debug("[line-worker] pull_stop 置位失败（忽略）", exc_info=True)
         try:
             if self.client is not None:
                 self.client.close()
@@ -2427,7 +2428,8 @@ class LineProtocolWorker:
                 out["pull_thread_alive"] = bool(
                     self._pull_thread is not None and self._pull_thread.is_alive())
             except Exception:
-                pass
+                logger.debug("[line-worker] pull_sync 观测读取失败（忽略）",
+                             exc_info=True)
         return out
 
 

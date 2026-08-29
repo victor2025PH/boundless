@@ -134,7 +134,7 @@ def customer_msgs_in_center(config: dict | None) -> bool:
         if isinstance(nc, dict) and "customer_messages" in nc:
             return bool(nc.get("customer_messages"))
     except Exception:
-        pass
+        logger.debug("[notif] notify_center 配置解析失败（按默认不进）", exc_info=True)
     return False
 
 

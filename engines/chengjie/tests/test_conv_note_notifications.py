@@ -41,8 +41,12 @@ def _build():
             request.session[k] = v
         return {"ok": True}
 
+    # impl85 阶段5：对照类型改用系统类事件（sla_alert）——客户聊天消息
+    # （inbox_message）按新产品语义默认不进通知中心（工单#30 拍板），
+    # 不再适合当「不受过滤影响」的对照组；其准入语义另有
+    # tests/test_notify_center_denoise.py 全套门禁。
     app.state.notif_queue = [
-        _evt("inbox_message", {"conversation_id": "c1", "preview": "hi"}),
+        _evt("sla_alert", {"conversation_id": "c1"}),
         _evt("conv_note", {
             "conversation_id": "c1", "note_id": "n-alice",
             "agent_name": "Bob", "body": "@alice 看下这单",
@@ -68,9 +72,7 @@ def test_history_filters_mentions_per_agent():
     client.post("/__login", json={"username": "alice"})
     d = client.get("/api/workspace/notifications").json()
     types = [(n["type"], (n.get("data") or {}).get("note_id")) for n in d["notifications"]]
-    assert ("inbox_message", None) == (types[0][0], None) or any(
-        t == "inbox_message" for t, _ in types
-    )
+    assert any(t == "sla_alert" for t, _ in types)   # 系统类对照组不受提及过滤影响
     note_ids = {nid for t, nid in types if t == "conv_note"}
     assert note_ids == {"n-alice"}, f"alice 只应看到 @她 的那条，实际 {note_ids}"
 
@@ -88,8 +90,8 @@ def test_history_without_identity_hides_all_mentions():
     client.post("/__login", json={})  # 空 session（无身份）
     d = client.get("/api/workspace/notifications").json()
     assert all(n["type"] != "conv_note" for n in d["notifications"])
-    # 非 conv_note 类型不受影响
-    assert any(n["type"] == "inbox_message" for n in d["notifications"])
+    # 非 conv_note 的系统类型不受影响
+    assert any(n["type"] == "sla_alert" for n in d["notifications"])
 
 
 def test_identity_set_covers_both_conventions():
