@@ -21,7 +21,7 @@ import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -1631,9 +1631,21 @@ class TTSPipeline:
                 return None
             return _finalize_err("minicpm_clone_unreachable")
 
+        # ── 口语化 + IndexTTS 送稿清洗（2026-08-29 补回）───────────────────
+        # 本路径原先直接送 rv.text 书面稿：backend 从 avatar_clone 切到 minicpm_clone
+        # 之后，disfluency / think / laugh / fillers / human_ticks / 人设口头禅 /
+        # 开场词去重全部静默失效（配置项都在，这条路径读不到）。现与 avatar 链共用
+        # 同一份口语化实现。polish_hub_speak_text 是为 IndexTTS 系写的——剥 Cosy 专属
+        # 副语言标记（否则会被当正文念出「中括号 sigh」）+ 书面句号改口语换气。
+        spoken = await self._colloquialize_for_synth(
+            rv, spec=spec, cfg=dict(self.avatar_voice or {}),
+            vp=vp, colloquial_lead=True, interactive=False)
+        spoken = polish_hub_speak_text(spoken) or str(rv.text or "")
+        if spoken != str(rv.text or ""):
+            rv.extra["minicpm_spoken_text"] = True
         def _do_clone() -> None:
             client.synthesize_clone(
-                rv.text, ref, mc_out, reference_text=ref_text, instructions=instr)
+                spoken, ref, mc_out, reference_text=ref_text, instructions=instr)
 
         try:
             await asyncio.wait_for(
@@ -2282,60 +2294,26 @@ class TTSPipeline:
             return None
         return out if (out and out != src) else None
 
-    async def _try_avatar_clone(
-        self, rv: "TTSResult", out: Path, t0: float, *, spec: Any = None,
-        colloquial_lead: bool = True, pre_colloquialized: bool = False,
-        skip_llm_colloquial: bool = False, split_part: bool = False,
+    async def _colloquialize_for_synth(
+        self, rv: "TTSResult", *, spec: Any, cfg: Dict[str, Any],
+        vp: Dict[str, Any], colloquial_lead: bool = True,
+        pre_colloquialized: bool = False, skip_llm_colloquial: bool = False,
         interactive: bool = False,
-        deadline: Optional[float] = None,
-    ) -> Optional["TTSResult"]:
-        """AvatarHub CosyVoice3 情感克隆（本机 7852，backend=avatar_clone）。
+        remaining: Optional[Callable[[], Optional[float]]] = None,
+    ) -> str:
+        """口语化送稿：LLM vivid / 规则档 / C+ 微特征 / 开场词会话级去重。
 
-        ``deadline``（monotonic 时刻，None=不限）：来自 synthesize(total_budget_sec=)
-        的全链截止线——LLM 口语化 / hub / 本机克隆三级各自按剩余预算收口，防止
-        「各级预算之和 ≫ 调用方外闸」时被外层 wait_for 掐死在不知道哪一级。
+        **与后端无关**——hub、本地 CosyVoice3、自建 IndexTTS-2 都该拿同一份口语稿
+        （2026-07-24「读稿音」根因就是 hub 先命中拿到书面稿）。此前这 165 行长在
+        ``_try_avatar_clone`` 内部，于是 2026-08-29 把 backend 切到 ``minicpm_clone``
+        之后整套真人感被静默绕过：``disfluency`` / ``think_prob`` / ``laugh_prob`` /
+        ``fillers`` / ``human_ticks`` / 人设口头禅 / 开场词去重全部不再触发——配置项
+        一个没少，只是那条代码路径读不到。抽成方法后两条后端共用同一实现，
+        不会再随「换后端」丢能力。
 
-        用人设 ``voice_profile.reference_audio_path`` 克隆音色；情绪两条通道：
-          - ``voice_profile.instruct`` 显式配置 → 走 /v1/tts/instruct 自由语气
-            （比标签更细腻，如「用小声耳语的语气说」）；
-          - 否则 EmotionSpec → ``to_cosyvoice_emotion`` 映射为服务端 emotion 标签
-            （neutral 回落每角色可配的 ``emotion_default``，默认 gentle）。
-        参考音逐字稿：``voice_profile.reference_text`` 显式配置优先，否则自动读
-        参考音旁的同名 ``.txt``（见 avatar_voice.find_reference_text）。
-        合成在模块级 GPU 串行锁内执行（并发纪律），产 WAV。
-
-        返回值语义（与 ``_try_minicpm_clone`` 一致）：
-          - ``TTSResult``：成功，或配置类硬失败（缺同意/参考音——暴露不掩盖）
-          - ``None``：不可达/传输失败且 ``cloud_fallback`` → 调用方回落 edge
+        ``remaining()``：调用方剩余预算（秒）回调，None＝不限。LLM 改写只是锦上添花，
+        预算不足时自动退规则档（免费）。
         """
-        from src.ai.avatar_voice import (
-            AvatarVoiceClient,
-            find_reference_text,
-            load_reference_b64,
-        )
-
-        def _finalize_err(msg: str) -> "TTSResult":
-            rv.error = msg
-            rv.latency_ms = int((time.monotonic() - t0) * 1000)
-            return rv
-
-        def _remaining() -> Optional[float]:
-            if deadline is None:
-                return None
-            return deadline - time.monotonic()
-
-        vp = self.voice_profile or {}
-        ref = str(vp.get("reference_audio_path") or "").strip()
-        if not bool(vp.get("owner_consent", False)):
-            return _finalize_err("voice_profile_requires_owner_consent")
-
-        cfg = _with_hosted_voice_endpoint(dict(self.avatar_voice or {}))
-        cfg["enabled"] = True
-
-        # ── 口语化必须在 hub / 本地合成之前（2026-07-24 读稿音根因）────────
-        # 旧序：hub_fish 先命中 → 直接用 rv.text 书面稿 → IndexTTS「念稿感」。
-        # 新序：先口语化（LLM vivid / 规则档）→ hub 与 7852 共用同一口语送稿；
-        # Cosy 副语言标记只给本地 7852（hub 会当正文念出，见 polish_hub_speak_text）。
         synth_text = str(rv.text or "")
         col_cfg = (cfg.get("colloquial")
                    if isinstance(cfg.get("colloquial"), dict) else {})
@@ -2384,7 +2362,7 @@ class TTSPipeline:
                     # 预算收口：LLM 改写只是锦上添花，剩余预算得先保住合成本体
                     # （预留 12s）。压缩后窗口 <2s → 直接走免费规则档，不打 LLM。
                     _llm_t = float(col_cfg.get("llm_timeout_sec", 8.0) or 8.0)
-                    _rem = _remaining()
+                    _rem = (remaining() if remaining else None)
                     if _rem is not None:
                         _llm_t = min(_llm_t, _rem - 12.0)
                     if _rem is not None and _llm_t < 2.0:
@@ -2514,6 +2492,67 @@ class TTSPipeline:
                     synth_text = _og
             except Exception:
                 pass
+        return synth_text
+
+    async def _try_avatar_clone(
+        self, rv: "TTSResult", out: Path, t0: float, *, spec: Any = None,
+        colloquial_lead: bool = True, pre_colloquialized: bool = False,
+        skip_llm_colloquial: bool = False, split_part: bool = False,
+        interactive: bool = False,
+        deadline: Optional[float] = None,
+    ) -> Optional["TTSResult"]:
+        """AvatarHub CosyVoice3 情感克隆（本机 7852，backend=avatar_clone）。
+
+        ``deadline``（monotonic 时刻，None=不限）：来自 synthesize(total_budget_sec=)
+        的全链截止线——LLM 口语化 / hub / 本机克隆三级各自按剩余预算收口，防止
+        「各级预算之和 ≫ 调用方外闸」时被外层 wait_for 掐死在不知道哪一级。
+
+        用人设 ``voice_profile.reference_audio_path`` 克隆音色；情绪两条通道：
+          - ``voice_profile.instruct`` 显式配置 → 走 /v1/tts/instruct 自由语气
+            （比标签更细腻，如「用小声耳语的语气说」）；
+          - 否则 EmotionSpec → ``to_cosyvoice_emotion`` 映射为服务端 emotion 标签
+            （neutral 回落每角色可配的 ``emotion_default``，默认 gentle）。
+        参考音逐字稿：``voice_profile.reference_text`` 显式配置优先，否则自动读
+        参考音旁的同名 ``.txt``（见 avatar_voice.find_reference_text）。
+        合成在模块级 GPU 串行锁内执行（并发纪律），产 WAV。
+
+        返回值语义（与 ``_try_minicpm_clone`` 一致）：
+          - ``TTSResult``：成功，或配置类硬失败（缺同意/参考音——暴露不掩盖）
+          - ``None``：不可达/传输失败且 ``cloud_fallback`` → 调用方回落 edge
+        """
+        from src.ai.avatar_voice import (
+            AvatarVoiceClient,
+            find_reference_text,
+            load_reference_b64,
+        )
+
+        def _finalize_err(msg: str) -> "TTSResult":
+            rv.error = msg
+            rv.latency_ms = int((time.monotonic() - t0) * 1000)
+            return rv
+
+        def _remaining() -> Optional[float]:
+            if deadline is None:
+                return None
+            return deadline - time.monotonic()
+
+        vp = self.voice_profile or {}
+        ref = str(vp.get("reference_audio_path") or "").strip()
+        if not bool(vp.get("owner_consent", False)):
+            return _finalize_err("voice_profile_requires_owner_consent")
+
+        cfg = _with_hosted_voice_endpoint(dict(self.avatar_voice or {}))
+        cfg["enabled"] = True
+
+        # ── 口语化必须在 hub / 本地合成之前（2026-07-24 读稿音根因）────────
+        # 旧序：hub_fish 先命中 → 直接用 rv.text 书面稿 → IndexTTS「念稿感」。
+        # 新序：先口语化（LLM vivid / 规则档）→ hub 与 7852 共用同一口语送稿；
+        # Cosy 副语言标记只给本地 7852（hub 会当正文念出，见 polish_hub_speak_text）。
+        synth_text = await self._colloquialize_for_synth(
+            rv, spec=spec, cfg=cfg, vp=vp, colloquial_lead=colloquial_lead,
+            pre_colloquialized=pre_colloquialized,
+            skip_llm_colloquial=skip_llm_colloquial, interactive=interactive,
+            remaining=_remaining)
 
         # hub IndexTTS-2 优先（口语化后的送稿）；失败贯穿回落本地 CosyVoice3。
         _rem = _remaining()
