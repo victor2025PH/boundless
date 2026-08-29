@@ -37,7 +37,7 @@ from src.web.routes.assistant_routes import _assistant_cfg, _session_user
 
 logger = logging.getLogger(__name__)
 
-_AGENT_JS_VER = "20260827a"  # 与 shared/assistant/assistant-agent.js VER 同步（门禁钉）
+_AGENT_JS_VER = "20260830b"  # 与 shared/assistant/assistant-agent.js VER 同步（门禁钉）
 
 
 def _lan_ip() -> str:
@@ -254,9 +254,24 @@ def register_assistant_pair_routes(app, ctx) -> None:
         base = "http://" + host + ((":" + str(port)) if port else "")
         url = base + "/xz?pair=" + token
         lan_ok = _lan_reachable(host, port)
+        # #57 诊断细分（2026-08-30，钧机弹窗红字实锤）：hairpin 不通的头号根因是
+        # 打包后端只绑回环（旧壳 launcher 把 base_url 的 127.0.0.1 当 serve host）
+        # ——bind 是本进程配置，直接读出来分型，前端按 loopback_bind 指路升级，
+        # 而不是让用户空点「重新生成」。绑定已放开仍不通（防火墙拦入站）→ 通用
+        # 红字 + 壳侧「一键放行防火墙」出口。读不到配置按未知处理（不分型）。
+        bind_host = ""
+        try:
+            bind_host = str(((_cfg().get("web_admin") or {}).get("host"))
+                            or "").strip()
+        except Exception:
+            bind_host = ""
+        lan_reason = ""
+        if not lan_ok and bind_host in ("127.0.0.1", "::1", "localhost"):
+            lan_reason = "loopback_bind"
         return {"ok": True, "url": url, "qr_b64": _qr_data_uri(url),
                 "ttl_sec": int(pairing.PAIR_TTL_SEC),
-                "lan_ok": bool(lan_ok), "lan_host": host}
+                "lan_ok": bool(lan_ok), "lan_host": host,
+                "bind_host": bind_host, "lan_reason": lan_reason}
 
     # ------------------------------------------------------------ 落地/页面
     @app.get("/xz")

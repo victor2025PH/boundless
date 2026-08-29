@@ -499,6 +499,72 @@ ipcMain.handle("desktop:backend-spawn-status", () => backendManager.getStatus())
 // 边车拉起状态：接入弹窗排障用（absent=没随包 / failed=起不来 / running-external=用户自管）。
 ipcMain.handle("desktop:sidecar-status", () => sidecars.getStatus());
 
+// #57 手机扫码操控（2026-08-30）：一键放行 Windows 防火墙（弹一次 UAC）。
+// 绑定侧已由 backend-launcher.lanServeHost 解决（强令牌默认 0.0.0.0）；剩下的
+// 拦路虎是防火墙对随包 backend.exe 的入站默认拒绝——per-user 安装器无提权加不了
+// 规则，只能在用户显式点「放行」时提权补一条**程序级**规则（不开端口大门，
+// 只放行自家 exe；卸载残留规则无害——程序没了规则空转）。开发态（python 跑
+// 源码）不代劳：返回 reason 让页面给指引而不是静默失败。
+ipcMain.handle("desktop:pair-lan-fix", async () => {
+  if (process.platform !== "win32") return { ok: false, reason: "platform" };
+  const path = require("path");
+  const binPath = app.isPackaged
+    ? path.join(process.resourcesPath, "backend", "backend.exe") : "";
+  let exists = false;
+  try { exists = !!binPath && fs.existsSync(binPath); } catch (e) { exists = false; }
+  if (!exists) return { ok: false, reason: "no_bundled_backend" };
+  // 嵌套引号地狱规避：真正的 netsh 命令写进临时 .ps1（UTF-8 带 BOM——安装路径
+  // 常含 CJK，PS5.1 无 BOM 会按 GBK 读花），外层只负责「提权跑这个文件」。
+  // 规则名 ASCII 无空格（免引号）；幂等=先删同名旧规则再加；规则是**程序级**
+  // （只放行自家 backend.exe 的入站，不开端口大门）。
+  const os = require("os");
+  const tmpPs1 = path.join(os.tmpdir(), "chatx_pair_fw_" + Date.now() + ".ps1");
+  const inner = [
+    "netsh advfirewall firewall delete rule name=\"ChatXBackend\" | Out-Null",
+    "netsh advfirewall firewall add rule name=\"ChatXBackend\" dir=in action=allow "
+      + "program=\"" + binPath + "\" enable=yes profile=any",
+    "exit $LASTEXITCODE",
+  ].join("\r\n");
+  try {
+    fs.writeFileSync(tmpPs1, "\uFEFF" + inner, { encoding: "utf8" });
+  } catch (e) {
+    return { ok: false, reason: "tmp_write", error: String((e && e.message) || e) };
+  }
+  const escPs1 = tmpPs1.replace(/'/g, "''");
+  const script = "$ErrorActionPreference='Stop'; try { "
+    + "$p = Start-Process powershell -ArgumentList ('-NoProfile','-ExecutionPolicy','Bypass',"
+    + "'-WindowStyle','Hidden','-File',('\"' + '" + escPs1 + "' + '\"')) -Verb RunAs -Wait -PassThru; "
+    + "exit $p.ExitCode } catch { exit 1223 }";   // 1223 = ERROR_CANCELLED（UAC 被拒）
+  return await new Promise((resolve) => {
+    const done = (out) => {
+      try { fs.unlinkSync(tmpPs1); } catch (e) { /* 临时文件清理 best-effort */ }
+      resolve(out);
+    };
+    let child;
+    try {
+      child = spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+        { windowsHide: true });
+    } catch (e) {
+      done({ ok: false, reason: "spawn", error: String((e && e.message) || e) });
+      return;
+    }
+    const timer = setTimeout(() => {
+      try { child.kill(); } catch (e) { /* best-effort */ }
+      done({ ok: false, reason: "timeout" });
+    }, 120000);
+    child.on("exit", (code) => {
+      clearTimeout(timer);
+      if (code === 0) done({ ok: true });
+      else if (code === 1223) done({ ok: false, reason: "cancelled" });
+      else done({ ok: false, reason: "exit_" + code });
+    });
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      done({ ok: false, reason: "spawn", error: String((e && e.message) || e) });
+    });
+  });
+});
+
 ipcMain.handle("desktop:backend-health", async () => {
   const { base_url } = config.backend || {};
   if (!base_url) return { ok: false, error: "no base_url" };

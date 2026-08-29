@@ -167,6 +167,49 @@ def test_pair_issue_includes_lan_ok(monkeypatch):
     assert j.get("ok") is True
     assert "lan_ok" in j and "url" in j
     assert "/xz?pair=xzp-" in j["url"]
+    # #57 诊断字段（2026-08-30）：bind_host/lan_reason 常在（空串=不分型），
+    # 前端据此把「后端只绑回环（升级可解）」与「防火墙拦入站（一键放行）」分开指路
+    assert "bind_host" in j and "lan_reason" in j
+
+
+def test_pair_issue_flags_loopback_bind(monkeypatch):
+    """hairpin 不通 + web_admin.host 是回环 → lan_reason=loopback_bind（#57 根因分型）。"""
+    import types
+    from fastapi import FastAPI, Request
+    from fastapi.testclient import TestClient
+    from starlette.middleware.sessions import SessionMiddleware
+    from src.web.routes import assistant_pair_routes as apr
+
+    app = FastAPI()
+    app.add_middleware(SessionMiddleware, secret_key="t", same_site="strict")
+
+    @app.get("/_test/login")
+    async def _login(request: Request):
+        request.session["user_id"] = "u1"
+        request.session["username"] = "boss"
+        request.session["role"] = "master"
+        return {"ok": True}
+
+    cfg = {"assistant": {"enabled": True},
+           "web_admin": {"host": "127.0.0.1"}}
+    ctx = types.SimpleNamespace(
+        api_auth=lambda r: None,
+        config_manager=types.SimpleNamespace(config=cfg),
+    )
+    apr.register_assistant_pair_routes(app, ctx)
+    # 强制「探到 LAN IP 但 hairpin 不通」的形态（真机上=只绑回环的实锤症状）
+    monkeypatch.setattr(apr, "_lan_ip", lambda: "192.0.2.10")
+    monkeypatch.setattr(apr, "_lan_reachable", lambda h, p, timeout=0.4: False)
+    c = TestClient(app, follow_redirects=False)
+    c.get("/_test/login")
+    j = c.post("/api/assistant/pair").json()
+    assert j["ok"] is True and j["lan_ok"] is False
+    assert j["bind_host"] == "127.0.0.1"
+    assert j["lan_reason"] == "loopback_bind"
+    # 绑定已放开（0.0.0.0）时同样不通 → 不分型（前端走通用红字+防火墙出口）
+    cfg["web_admin"]["host"] = "0.0.0.0"
+    j2 = c.post("/api/assistant/pair").json()
+    assert j2["lan_ok"] is False and j2["lan_reason"] == ""
 
 
 def test_xz_pair_lands_without_redirect(monkeypatch):

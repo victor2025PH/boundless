@@ -35,7 +35,12 @@ const EXPECTED_APP_ID = "chengjie";
  * 与「renderer 调用的 base_url/token」强一致——否则随包 example 的端口(18787)/占位令牌
  * 与桌面默认(18799/admin)不符，全新安装的桌面壳永远连不上后端。base_url 解析失败则跳过
  * host/port（回落 config 默认），不抛错。
- * @param {{base_url?:string, token?:string}} backend
+ *
+ * #57（2026-08-30）「手机扫码操控连不上」根因就在这里：base_url 默认 127.0.0.1 →
+ * AITR_WEB_HOST=127.0.0.1 → 后端只绑回环，二维码里的 LAN 地址（192.168.x.x:18799）
+ * 手机永远打不开，弹窗自诊红字「局域网入口未就绪」说的就是它。现改为：serve 侧
+ * 按 lanServeHost 决策是否绑 0.0.0.0（renderer 仍连 base_url 的回环地址，两者解耦）。
+ * @param {{base_url?:string, token?:string, lan_access?:boolean}} backend
  * @returns {{AITR_WEB_HOST?:string, AITR_WEB_PORT?:string, AITR_WEB_TOKEN?:string}}
  */
 function webEnvFromBackend(backend) {
@@ -50,7 +55,37 @@ function webEnvFromBackend(backend) {
     /* base_url 非法：跳过 host/port，后端用 config 默认端口 */
   }
   if (backend && backend.token) env.AITR_WEB_TOKEN = String(backend.token);
+  const lanHost = lanServeHost(backend);
+  if (lanHost) env.AITR_WEB_HOST = lanHost;
   return env;
+}
+
+/**
+ * #57：后端 serve 是否放开到局域网（返回 "0.0.0.0" 或 ""=维持 base_url 回环）。
+ *
+ * 决策表（安全第一，逐条有据）：
+ *   - `backend.lan_access === false` → 永不放开（显式关，运维逃生门）。
+ *   - 令牌仍是出厂默认 "admin"/空 → **不放开**，除非 `lan_access === true` 显式
+ *     兜底——admin/admin 面板暴露到整个局域网是比「扫码连不上」更糟的事故；
+ *     托管版首启已轮换随机令牌（token-util），所以正常客户机天然满足强令牌。
+ *   - base_url 指向非回环地址（用户自配远端后端）→ 不动（serve 归远端自己管）。
+ *   - 其余（强令牌 + 回环 base_url）→ "0.0.0.0"：renderer 照走 127.0.0.1，
+ *     手机经 LAN IP 可达，「手机扫码操控」开箱即用。
+ * @param {{base_url?:string, token?:string, lan_access?:boolean}} backend
+ * @returns {string}
+ */
+function lanServeHost(backend) {
+  const b = backend || {};
+  if (b.lan_access === false) return "";
+  const tok = String(b.token == null ? "" : b.token).trim();
+  const strong = !!tok && tok !== "admin";   // token-util.DEFAULT_TOKEN 同义
+  if (!strong && b.lan_access !== true) return "";
+  let host = "127.0.0.1";
+  try {
+    if (b.base_url) host = new URL(String(b.base_url)).hostname || host;
+  } catch (e) { /* 非法 base_url：按回环处理 */ }
+  if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") return "";
+  return "0.0.0.0";
 }
 
 /**
@@ -583,5 +618,5 @@ function createBackendManager(deps) {
 module.exports = {
   resolveBackendSpawn, healthUrl, identityUrl, createBackendManager,
   classifyBackendIdentity, FP_HEALTH_PATH, FP_IDENTITY_PATH, EXPECTED_APP_ID,
-  webEnvFromBackend, sentinelPathFor, electronNodeEnv,
+  webEnvFromBackend, lanServeHost, sentinelPathFor, electronNodeEnv,
 };

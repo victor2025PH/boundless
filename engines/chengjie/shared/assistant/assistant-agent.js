@@ -20,7 +20,7 @@
   'use strict';
   if (window.XZAgent) { return; }
 
-  var VER = '20260828a';
+  var VER = '20260830b';
 
   var I18N = {
     zh: {
@@ -29,11 +29,20 @@
       mode_t: '一句话交给小智',
       mode_d: '在下面说一件要我做的事，我会先出计划再逐步执行。',
       recent_t: '最近做过',
-      pair_card_t: '换个说法：用手机指挥',
-      pair_card_d: '手机扫码连上这台电脑，躺着用语音/打字派活；'
-        + '连接状态见标题栏的 📱。',
+      /* P1-2（2026-08-28）：手机指挥是**远程输入通道**，不是第四种能力，
+         降级成一行次要入口。原文案末尾「连接状态见标题栏的 📱」是用说明
+         代替设计——点这一行就能看到状态，不该让用户去别处找。 */
+      pair_card_t: '用手机指挥',
+      pair_card_d: '扫码一次，之后躺着用语音派活',
+      start_btn: '⚡ 说出你要我做的事',
+      hist_all: '全部 →',
+      /* 空态即引导（P1-3）：新用户在这里最需要「能让我做什么」 */
+      ex_t: '想让我做什么？点一个试试：',
       p_title: '替我做',
-      p_ph: '例如：把回复速度调快一点 / 为什么不自动回复了',
+      /* 380px 面板减去发送键只剩约 250px 可视宽，原来的双示例必然被截成
+         「…为什么不自动回…」（老板截图实录）。完整的「能做什么」清单已由
+         空态的真实能力 chips 承担，placeholder 只留一个最典型的。 */
+      p_ph: '例如：把回复速度调快一点',
       p_run: '开始',
       p_close: '关闭',
       p_na: '智能体后端待装载或未启用（重启窗后自动可用）',
@@ -63,6 +72,10 @@
       undone: '已撤销',
       hot_worker: '已热更生效',
       hot_restart: '写入成功（重启窗后全量生效）',
+      cf_align: '将同步 {n} 个已固化档位的会话',
+      cf_align_g: '（含 {g} 个群）',
+      hot_aligned: '，已同步 {n} 个会话',
+      hot_align_err: '，但存量会话同步失败——旧会话可能仍按旧档位跑',
       diag_line: '结论：',
       diag_warn: '，需关注 ',
       diag_warn2: ' 项',
@@ -92,6 +105,13 @@
       pair_fail: '生成失败，请重试',
       pair_url: '或手机浏览器打开：',
       pair_lan_down: '局域网入口未就绪：手机现在打不开这个地址。请点「重新生成」；仍不行就把电脑与手机连同一 WiFi（不要用流量）。',
+      pair_lan_bind: '本机后端仅监听本机回环（旧版绑定方式）：升级智聊到最新版后局域网入口会自动放开，届时再扫码。',
+      pair_fw_btn: '🛡️ 手机打不开？一键放行防火墙',
+      pair_fw_hint: '同一 WiFi 下手机仍打不开时，多半是 Windows 防火墙拦了入站——点这里放行（会弹一次系统授权）。',
+      pair_fw_busy: '正在放行防火墙…（请在系统弹窗里点「是」）',
+      pair_fw_ok: '✅ 防火墙已放行，手机重扫二维码试试',
+      pair_fw_cancelled: '已取消（系统授权未通过）',
+      pair_fw_fail: '放行失败，请以管理员手动放行 backend.exe 的入站，或联系支持',
       fl_start: '✅ 开始',
       fl_no: '取消',
       fl_step_confirm: '确认要做的事',
@@ -116,11 +136,13 @@
       mode_t: 'Tell me in one sentence',
       mode_d: 'Say what you need below — I draft a plan, then run it step by step.',
       recent_t: 'Recently done',
-      pair_card_t: 'Another way: drive it from your phone',
-      pair_card_d: 'Scan to pair your phone with this desktop and dictate tasks; '
-        + 'connection status lives on the 📱 in the title bar.',
+      pair_card_t: 'Drive it from your phone',
+      pair_card_d: 'Scan once, then dictate tasks from anywhere',
+      start_btn: '⚡ Tell me what to do',
+      hist_all: 'All →',
+      ex_t: 'Not sure? Tap one to try:',
       p_title: 'Do it for me',
-      p_ph: 'e.g. speed up replies a bit / why is auto-reply off',
+      p_ph: 'e.g. speed up replies a bit',
       p_run: 'Go',
       p_close: 'Close',
       p_na: 'Agent backend not loaded/enabled yet (auto after restart window)',
@@ -150,6 +172,11 @@
       undone: 'Undone',
       hot_worker: 'Hot-applied',
       hot_restart: 'Written (fully effective after restart window)',
+      cf_align: 'Also aligns {n} pinned conversations',
+      cf_align_g: ' (incl. {g} groups)',
+      hot_aligned: ', {n} conversations aligned',
+      hot_align_err: ', but stock alignment failed — old chats may still '
+        + 'run the previous mode',
       diag_line: 'Verdict: ',
       diag_warn: ', attention items: ',
       diag_warn2: '',
@@ -179,6 +206,13 @@
       pair_fail: 'Failed, please retry',
       pair_url: 'Or open in the phone browser: ',
       pair_lan_down: 'LAN entrance is down — the phone cannot open this address. Tap Regenerate; keep phone and PC on the same WiFi (not cellular).',
+      pair_lan_bind: 'The backend only listens on loopback (legacy binding): upgrade ChatX to the latest version and the LAN entrance opens automatically.',
+      pair_fw_btn: '🛡️ Phone can\u2019t open it? Allow through firewall',
+      pair_fw_hint: 'If the phone still cannot open the address on the same WiFi, Windows Firewall is likely blocking inbound — click to allow (one system prompt).',
+      pair_fw_busy: 'Allowing through firewall… (click "Yes" in the system prompt)',
+      pair_fw_ok: '✅ Firewall allowed — rescan the QR on your phone',
+      pair_fw_cancelled: 'Cancelled (system authorization declined)',
+      pair_fw_fail: 'Failed — allow inbound for backend.exe manually as admin, or contact support',
       fl_start: '✅ Start',
       fl_no: 'Cancel',
       fl_step_confirm: 'Confirm the goal',
@@ -440,21 +474,29 @@
   function mountMode(el, api) {
     S.api = api;
     el.innerHTML = '' +
-      '<div class="asb-md-hero">' +
+      /* ① 主卡＝本模式唯一主动作。此前两张卡共用 .asb-md-hero（同边框同底
+         色），核心能力与手机通道视觉权重相同，且**核心卡没有按钮、次要卡
+         有按钮** → 视觉引导指向次要功能（老板实录「版面太碎没有重点」）。 */
+      '<div class="asb-md-hero asb-md-hero--pri">' +
       '<div class="asb-md-t">⚡ <span>' + esc(t('mode_t')) + '</span></div>' +
       '<div class="asb-md-d">' + esc(t('mode_d')) + '</div>' +
+      '<div class="asb-md-row">' +
+      '<button type="button" class="asb-md-go" data-xza="mode-start">' +
+      esc(t('start_btn')) + '</button></div>' +
       '<div class="asb-md-safe">🛡 ' + esc(t('row_hint')) + '</div></div>' +
-      '<div class="asb-md-hero">' +
-      '<div class="asb-md-t">📱 <span>' + esc(t('pair_card_t')) + '</span></div>' +
-      '<div class="asb-md-d">' + esc(t('pair_card_d')) + '</div>' +
-      '<div class="asb-md-row">' +
-      '<button type="button" class="asb-md-b" data-xza="mode-pair">' +
-      esc(t('pair_btn')) + '</button></div></div>' +
-      '<div class="asb-md-t">📜 <span>' + esc(t('recent_t')) + '</span></div>' +
+      /* ② 最近做过：标题行自带「全部 →」文字链，取代原来独占一行的次要
+         按钮（原「📜 做过什么」与上方空态「还没有操作记录」语义重复）。 */
+      '<div class="asb-md-hd"><div class="asb-md-t">📜 <span>' +
+      esc(t('recent_t')) + '</span></div>' +
+      '<button type="button" class="asb-md-lnk" data-xza="mode-hist">' +
+      esc(t('hist_all')) + '</button></div>' +
       '<div class="asb-md-list xza-recent"><div class="asb-empty">…</div></div>' +
-      '<div class="asb-md-row">' +
-      '<button type="button" class="asb-md-b" data-xza="mode-hist">' +
-      esc(t('hist_btn')) + '</button></div>';
+      /* ③ 手机指挥降级为一行次要入口（通道≠能力） */
+      '<button type="button" class="asb-md-sub" data-xza="mode-pair">' +
+      '<span class="asb-md-sub-i">📱</span>' +
+      '<span class="asb-md-sub-x"><b>' + esc(t('pair_card_t')) + '</b>' +
+      '<i>' + esc(t('pair_card_d')) + '</i></span>' +
+      '<span class="asb-md-sub-go">›</span></button>';
     applyVars(el);
     el.addEventListener('click', function (ev) {
       var b = ev.target.closest('[data-xza]');
@@ -462,6 +504,21 @@
       var a = b.getAttribute('data-xza');
       if (a === 'mode-pair') { beacon('asb_pair_open'); openPairModal(); return; }
       if (a === 'mode-hist') { beacon('asb_hist_open'); openHistory(); return; }
+      /* 主按钮＝把光标送进输入框（不预填、不提交）：模式说明与输入框之间
+         原本没有任何衔接动作，用户读完得自己找到底部（P1-2）。 */
+      if (a === 'mode-start') {
+        beacon('asb_agent_start');
+        if (S.api && typeof S.api.fill === 'function') { S.api.fill(''); }
+        return;
+      }
+      /* 空态引导 chip：本委托此前**没有** chip 分支，而 chipsHtml 生成的
+         按钮只在独立面板/任务卡两处被处理 → 放进模式内容区会变哑按钮。
+         行为与 onCardClick 同款（runGoal 自带规划+改设置前确认）。 */
+      if (a === 'chip') {
+        var g5 = String(b.getAttribute('data-goal') || '');
+        if (g5) { beacon('asb_agent_chip'); runGoal(g5); }
+        return;
+      }
       if (a === 'recent-undo') {
         beacon('asb_hist_undo');
         b.disabled = true;
@@ -490,8 +547,7 @@
         if (!list.isConnected) { return; }
         var items = (j && j.ok && j.items) ? j.items.slice(0, 3) : [];
         if (!items.length) {
-          list.innerHTML = '<div class="asb-empty">' + esc(t('hist_empty')) +
-            '</div>';
+          renderRecentEmpty(list);
           return;
         }
         var h = '';
@@ -513,6 +569,22 @@
         list.innerHTML = h;
       })
       .catch(function () { /* 静默 */ });
+  }
+
+  /* 空态即引导（P1-3）：新用户在这个位置最需要的是「能让我做什么」，而不是
+     一句「还没有操作记录」+ 下面再一个「做过什么」按钮（两块都是空的）。
+     数据源**复用** abilityLabels ——后端真实动作/流程目录，与「做不了时的
+     死路变菜单」同一口径，所以不会出现「点了才发现做不了」；点击同样走
+     runGoal（规划器先出计划、改设置前必须确认），零新安全面。
+     取不到能力表就退回原来的空文案（宁可少一句引导，不留半截 UI）。 */
+  function renderRecentEmpty(list) {
+    list.innerHTML = '<div class="asb-empty">' + esc(t('hist_empty')) + '</div>';
+    abilityLabels(function (labels) {
+      if (!list.isConnected || !labels.length) { return; }
+      list.innerHTML = '<div class="asb-md-ex">' +
+        '<div class="asb-md-ex-t">' + esc(t('ex_t')) + '</div>' +
+        chipsHtml(labels.slice(0, 4)) + '</div>';
+    });
   }
 
   /* ── 输入小面板 ── */
@@ -880,6 +952,7 @@
       var a = b.getAttribute('data-xza');
       if (a === 'pair-close') { closePair(); return; }
       if (a === 'pair-regen') { loadPairQr(); return; }
+      if (a === 'pair-fw') { pairFwFix(b); return; }
       if (a === 'pair-kick') {
         beacon('asb_pair_kick');
         post('/api/assistant/pair/revoke',
@@ -900,15 +973,56 @@
           esc(String(j.detail || t('pair_fail'))) + '</div>';
         return;
       }
-      box.innerHTML = (j.lan_ok === false
+      // #57 诊断细分（2026-08-30）：lan_reason=loopback_bind（旧版后端只绑回环，
+      // 服务端新字段）→ 指路升级；其余 lan_ok=false 维持通用红字。桌面壳带
+      // pairLanFix 桥（1.0.62+）时常驻「放行防火墙」出口——绑定修好后手机仍
+      // 打不开的，几乎全是 Windows 防火墙拦入站（hairpin 自检测不出它）。
+      var lanMsg = '';
+      if (j.lan_ok === false) {
+        lanMsg = (String(j.lan_reason || '') === 'loopback_bind')
+          ? t('pair_lan_bind') : t('pair_lan_down');
+      }
+      var fwBtn = '';
+      try {
+        if (window.__chatxShell && typeof window.__chatxShell.pairLanFix === 'function') {
+          fwBtn = '<div class="xza-say" style="margin-top:.5rem;font-size:.72rem;opacity:.85">' +
+            esc(t('pair_fw_hint')) + '</div>' +
+            '<div style="margin-top:.3rem"><button type="button" data-xza="pair-fw">' +
+            esc(t('pair_fw_btn')) + '</button></div>';
+        }
+      } catch (e) { fwBtn = ''; }
+      box.innerHTML = (lanMsg
         ? '<div class="xza-say" style="color:#dc2626;margin-bottom:.5rem">' +
-          esc(t('pair_lan_down')) + '</div>'
+          esc(lanMsg) + '</div>'
         : '') +
         (j.qr_b64
         ? '<img alt="QR" src="' + esc(j.qr_b64) + '">'
         : '') +
         '<div class="url">' + esc(t('pair_url')) + esc(String(j.url || '')) +
-        '</div>';
+        '</div>' + fwBtn;
+    });
+  }
+  function pairFwFix(btn) {
+    beacon('asb_pair_fw_fix');
+    var note = document.createElement('div');
+    note.className = 'xza-say';
+    note.style.cssText = 'margin-top:.3rem;font-size:.72rem';
+    note.textContent = t('pair_fw_busy');
+    if (btn) { btn.disabled = true; btn.parentNode.appendChild(note); }
+    window.__chatxShell.pairLanFix().then(function (r) {
+      if (btn) { btn.disabled = false; }
+      if (r && r.ok) {
+        note.textContent = t('pair_fw_ok');
+        loadPairQr();       // 重新自检 + 换新码（旧码可能已过 TTL）
+        return;
+      }
+      var why = String((r && r.reason) || '');
+      note.style.color = '#dc2626';
+      note.textContent = (why === 'cancelled') ? t('pair_fw_cancelled') : t('pair_fw_fail');
+    }).catch(function () {
+      if (btn) { btn.disabled = false; }
+      note.style.color = '#dc2626';
+      note.textContent = t('pair_fw_fail');
     });
   }
   function loadPairSessions() {
@@ -1068,6 +1182,16 @@
             '<span>' + esc(oldS) + '</span>' +
             '<span class="arr">→</span><b>' + esc(newS) +
             '</b></div>';
+        }
+        /* 切档确认卡的存量对齐预览（先看后做：确认前就知道会同步多少
+           已固化档位的会话）；无预览字段=非切档动作/旧后端，零占位 */
+        if (s.confirm.align && Number(s.confirm.align.total) > 0) {
+          var alTxt = t('cf_align')
+            .replace('{n}', String(s.confirm.align.total)) +
+            (Number(s.confirm.align.groups) > 0
+              ? t('cf_align_g').replace('{g}', String(s.confirm.align.groups))
+              : '');
+          html += '<div class="xza-cf-hint">⚠ ' + esc(alTxt) + '</div>';
         }
         html += '<div class="xza-cf-row">' +
           '<button type="button" class="pri" data-xza="cf-apply">' +
@@ -1697,7 +1821,8 @@
         if (j.need_confirm) {
           step.status = 'wait';
           step.note = t('st_wait');
-          step.confirm = { token: j.token, diff: j.diff || [] };
+          step.confirm = { token: j.token, diff: j.diff || [],
+                           align: j.align_preview || null };
           renderCard();
           speak(t('say_confirm'));
           return waitConfirm().then(function (choice) {
@@ -1716,6 +1841,14 @@
                 /* 生效口径只认服务端 hot_applied（诚实：没热更就说重启窗后生效） */
                 var hotNote = j2.hot_applied ? t('hot_worker')
                   : t('hot_restart');
+                /* 存量档位对齐结果（切档动作专属）：同步了几个会话如实说；
+                   服务端报对齐失败也如实说——「已热更」≠ 存量都跟上了 */
+                if (typeof j2.aligned === 'number' && j2.aligned > 0) {
+                  hotNote += t('hot_aligned')
+                    .replace('{n}', String(j2.aligned));
+                } else if (j2.aligned_error) {
+                  hotNote += t('hot_align_err');
+                }
                 return stepDone(step, 'ok', hotNote);
               });
           });

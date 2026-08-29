@@ -76,6 +76,16 @@ const api = {
     try { return ipcRenderer.invoke("desktop:app-menu-action", String(id || "")); }
     catch (_) { return Promise.resolve({ ok: false, error: "ipc unavailable" }); }
   },
+  // #57 手机扫码操控（2026-08-30）：一键放行 Windows 防火墙（主进程提权 UAC，
+  // 程序级规则只放行随包 backend.exe）。小智配对弹窗按 typeof 探测渲染按钮；
+  // 纯浏览器/旧壳无此方法 → 按钮不出现，页面自然降级。
+  pairLanFix() {
+    try {
+      return ipcRenderer.invoke("desktop:pair-lan-fix");
+    } catch (_) {
+      return Promise.resolve({ ok: false, reason: "ipc" });
+    }
+  },
 };
 
 // contextIsolation 开（Electron webview 默认）→ contextBridge；关 → 直挂 window 兜底。
