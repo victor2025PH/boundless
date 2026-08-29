@@ -126,4 +126,133 @@ def build_self_claims_hint(history: List[Dict[str, Any]]) -> str:
     )
 
 
-__all__ = ["extract_self_claims", "build_self_claims_hint"]
+# ── #62（2026-08-30）：近时自述——即时行为 / 时间承诺 ─────────────────────────
+# 实锤两例（钧 0830，截图在单）：01:32「正泡了杯茶发呆」→ 02:03「大半夜的哪能
+# 喝茶，刚泡了杯白水」31 分钟内当客户面自我否认，客户正是冲着那杯茶发问；
+# 03:29「下个月应该会过去一趟，到时候提前跟你约」→ 03:39「你看这周哪天方便？」
+# 10 分钟内推翻自己的时间安排。上面的槽位锚点只覆盖**长期**个人事实（年龄/婚姻
+# /职业…），「在喝什么/说好什么时候见」这类**会过期的**自述不在其内——但过期
+# 恰恰是双刃：拿三天前的「正泡着茶」当锚点会制造反向事故（AI 三天后还坚称在喝
+# 那杯茶）。所以本段带**新鲜度窗口**：
+#   · activity（即时行为）：有 ts 限 6h；无 ts（A 线 _conversation_history 不带
+#     时间戳）退化为「最近 3 条 assistant 消息」的位置近因；
+#   · plan（时间承诺）：有 ts 限 72h；无 ts 限最近 12 条 assistant 消息。
+# 与主锚点同哲学：只引用不解释、每类取最新一句（说法变过就锚最新版，至少止住
+# 继续翻烙饼）、宁可漏勿错锚。
+
+_ACTIVITY_WINDOW_SEC = 6 * 3600.0
+_PLAN_WINDOW_SEC = 72 * 3600.0
+_ACTIVITY_POS_WINDOW = 3   # 无 ts 时 activity 只认最近 N 条 assistant 消息
+_PLAN_POS_WINDOW = 12
+
+# 即时行为：第一人称 + 进行/刚完成态动词（刻意不收「做/开/经营」这类会与 job
+# 槽双重引用的动词；做饭/做菜按字面单列）。饮品「泡/沏/煮了杯X」结构在聊天语境
+# 强指第一人称，允许省略「我」。
+_TRANSIENT_PATTERNS: List[Tuple[str, re.Pattern]] = [
+    ("activity", re.compile(
+        r"我[^，。！？!?\n]{0,6}(?:刚刚?|正在?|在)"
+        r"(?:泡|沏|煮|喝|吃|热|炖|忙|看|听|收工|加班|散步|遛|洗|做饭|做菜|发呆)|"
+        r"(?:泡|沏|煮)了杯[^，。！？!?\n]{0,8}|"
+        r"\bI'?m\s+(?:just\s+)?(?:having|drinking|sipping|brewing|making|"
+        r"eating|cooking|watching|listening to)\b", re.IGNORECASE)),
+    ("plan", re.compile(
+        r"我[^，。！？!?\n]{0,10}(?:下个?月|下下?周|这?周末|明后天|明天|后天|"
+        r"过几天|过阵子|月底|月初|年底)[^，。！？!?\n]{0,16}"
+        r"(?:过去|过来|去|来|约|见)|"
+        r"(?:下个?月|下下?周|这?周末|明后天|明天|后天|过几天|过阵子|月底|年底)"
+        r"[^，。！？!?\n]{0,10}(?:过去|过来|去找你|来看你|去看你|约你?|见面?)|"
+        r"(?:到时候|回头|等我?忙完)[^，。！？!?\n]{0,10}约|"
+        r"\bI(?:'ll| will|'m going to| plan to| might| should)\b"
+        r"[^,.!?\n]{0,40}\b(?:next month|next week|this weekend|tomorrow|"
+        r"in a few days)\b", re.IGNORECASE)),
+]
+
+
+def _ago_phrase(sec: float) -> str:
+    """秒差 → 人话时距（<90s=刚刚；分钟；小时；天）。"""
+    if sec < 90:
+        return "刚刚"
+    if sec < 3600:
+        return f"约 {int(sec // 60)} 分钟前"
+    if sec < 86400:
+        return f"约 {int(sec // 3600)} 小时前"
+    return f"约 {int(sec // 86400)} 天前"
+
+
+def extract_recent_self_statements(
+    history: List[Dict[str, Any]], *, now: float = 0.0,
+) -> List[Dict[str, Any]]:
+    """近时自述（即时行为/时间承诺），过新鲜度窗口后每类取最新一句。
+
+    返回 ``[{kind, text, ago_sec}]``（``ago_sec`` 无 ts 时为 None）。
+    纯函数、绝不抛；行内 ``ts``（epoch 秒）可选——B 线 normalize_history 透传，
+    A 线 _conversation_history 无 ts 走位置近因。
+    """
+    import time as _t
+    now = float(now) if now else _t.time()
+    latest: Dict[str, Dict[str, Any]] = {}
+    try:
+        msgs = [m for m in list(history or [])
+                if isinstance(m, dict) and m.get("role") == "assistant"]
+        msgs = msgs[-_MAX_SCAN_MSGS:]
+        total = len(msgs)
+        for idx, m in enumerate(msgs):
+            pos_from_end = total - idx  # 1 = 最新一条
+            try:
+                mts = float(m.get("ts") or 0)
+            except (TypeError, ValueError):
+                mts = 0.0
+            ago = (now - mts) if mts > 0 else None
+            for sent in _sentences(str(m.get("content") or "")):
+                if sent.endswith(_QUESTION_TAIL):
+                    continue
+                for kind, rx in _TRANSIENT_PATTERNS:
+                    if not rx.search(sent):
+                        continue
+                    if kind == "activity":
+                        if ago is not None:
+                            if ago > _ACTIVITY_WINDOW_SEC:
+                                continue
+                        elif pos_from_end > _ACTIVITY_POS_WINDOW:
+                            continue
+                    else:
+                        if ago is not None:
+                            if ago > _PLAN_WINDOW_SEC:
+                                continue
+                        elif pos_from_end > _PLAN_POS_WINDOW:
+                            continue
+                    latest[kind] = {"kind": kind,
+                                    "text": sent[:_MAX_SENT_CHARS],
+                                    "ago_sec": ago}
+                    break  # 一句只归一类，防同句双引
+    except Exception:
+        return []
+    return [latest[k] for k in ("activity", "plan") if k in latest]
+
+
+def build_recent_self_statement_hint(
+    history: List[Dict[str, Any]], *, now: float = 0.0,
+) -> str:
+    """「你刚说过」锚点（无命中返回 ""）。带时距的原句引用 + 自洽指令。"""
+    stmts = extract_recent_self_statements(history, now=now)
+    if not stmts:
+        return ""
+    lines = []
+    for s in stmts:
+        when = _ago_phrase(float(s["ago_sec"])) if s["ago_sec"] is not None else "刚才"
+        lines.append(f"-（{when}）「{s['text']}」")
+    body = "\n".join(lines)
+    return (
+        "【你刚说过——保持自洽】你最近在本会话里亲口说过（原话摘录）：\n"
+        f"{body}\n"
+        "对方听到了这些话，很可能正顺着它们追问。不要否认或凭空推翻：说过在做"
+        "的事别转头说没做（如说过在泡茶就不能答「哪能喝茶」）；给过的时间安排"
+        "别立刻改口（如说好下个月见就别再问这周哪天）。情况真的变了就自然地"
+        "衔接说明，别装作从没说过。"
+    )
+
+
+__all__ = [
+    "extract_self_claims", "build_self_claims_hint",
+    "extract_recent_self_statements", "build_recent_self_statement_hint",
+]

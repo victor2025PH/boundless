@@ -135,3 +135,108 @@ def test_enrich_wires_self_claims_into_topic_hint():
     )
     hint = ctx.get("_topic_switch_hint") or ""
     assert "自述一致性" in hint and "Divorced" in hint
+
+
+# ── #62（2026-08-30）：近时自述「你刚说过」——即时行为 / 时间承诺 ─────────────
+# 金标语料=钧 0830 两例实锤原话（截图在单 #62）。
+import time as _time
+
+from src.inbox.self_claims import (
+    build_recent_self_statement_hint,
+    extract_recent_self_statements,
+)
+
+
+def _ht(*rows):
+    """带 ts 的历史行：(role, content, ago_sec)。"""
+    now = _time.time()
+    return [{"role": r, "content": c, "ts": now - ago} for r, c, ago in rows]
+
+
+def test_incident_tea_activity_anchored_31min():
+    """01:32「正泡了杯茶发呆」→ 31 分钟后必须还在锚点里（事故窗口）。"""
+    hist = _ht(
+        ("assistant", "这么晚还不睡…我这边刚收工，正泡了杯茶发呆。", 31 * 60),
+        ("user", "你天天喝茶吗？不用睡觉的吗", 5 * 60),
+    )
+    stmts = extract_recent_self_statements(hist)
+    assert any(s["kind"] == "activity" and "泡了杯茶" in s["text"] for s in stmts)
+    hint = build_recent_self_statement_hint(hist)
+    assert "你刚说过" in hint and "泡了杯茶" in hint
+    assert "分钟前" in hint  # 带时距引用
+
+
+def test_incident_plan_anchored_10min():
+    """03:29「下个月应该会过去一趟，到时候提前跟你约」→ 10 分钟后仍锚定。"""
+    hist = _ht(
+        ("assistant", "我下个月应该会过去一趟，到时候提前跟你约。", 10 * 60),
+    )
+    stmts = extract_recent_self_statements(hist)
+    assert any(s["kind"] == "plan" and "下个月" in s["text"] for s in stmts)
+
+
+def test_activity_expires_after_window():
+    """8 小时前的「正泡着茶」不再锚定——过期锚点会制造反向事故。"""
+    hist = _ht(("assistant", "我在泡茶，等会儿陪你聊。", 8 * 3600))
+    assert extract_recent_self_statements(hist) == []
+
+
+def test_plan_survives_longer_than_activity():
+    """时间承诺窗口 72h：昨天说的「下个月过去」今天仍然锚定。"""
+    hist = _ht(("assistant", "我下个月应该会过去一趟，到时候提前跟你约。", 24 * 3600))
+    stmts = extract_recent_self_statements(hist)
+    assert any(s["kind"] == "plan" for s in stmts)
+
+
+def test_no_ts_positional_fallback():
+    """A 线历史无 ts：activity 只认最近 3 条 assistant 消息。"""
+    recent = _h(
+        ("assistant", "我这边刚收工，正泡了杯茶发呆。"),
+        ("assistant", "对了你今天过得怎么样。"),
+    )
+    stmts = extract_recent_self_statements(recent)
+    assert any(s["kind"] == "activity" for s in stmts)
+    assert stmts[0]["ago_sec"] is None
+    # 同一句被垫到 4 条 assistant 之前 → 位置过窗，不锚
+    old = _h(
+        ("assistant", "我这边刚收工，正泡了杯茶发呆。"),
+        ("assistant", "嗯嗯。"), ("assistant", "好呀。"),
+        ("assistant", "对了你今天过得怎么样。"), ("assistant", "哈哈。"),
+    )
+    assert not any(s["kind"] == "activity"
+                   for s in extract_recent_self_statements(old))
+
+
+def test_latest_statement_wins_after_correction():
+    """说法变过 → 锚最新版（02:03 白水替换 01:32 茶）：止住继续翻烙饼。"""
+    hist = _ht(
+        ("assistant", "我这边刚收工，正泡了杯茶发呆。", 40 * 60),
+        ("assistant", "大半夜的哪能喝茶，刚泡了杯白水。", 3 * 60),
+    )
+    stmts = [s for s in extract_recent_self_statements(hist)
+             if s["kind"] == "activity"]
+    assert len(stmts) == 1 and "白水" in stmts[0]["text"]
+
+
+def test_user_side_and_questions_not_anchored():
+    hist = _ht(
+        ("user", "我在泡茶呢。", 60),
+        ("assistant", "你是不是在泡茶？", 30),
+    )
+    assert extract_recent_self_statements(hist) == []
+
+
+def test_enrich_wires_recent_statement_hint():
+    """A/B 共用消费口：enrich 后「你刚说过」块进 _topic_switch_hint。"""
+    from src.inbox.inbound_enrich import apply_inbound_enrichments
+    ctx: dict = {}
+    apply_inbound_enrichments(
+        ctx,
+        text="你天天喝茶吗？",
+        history=_ht(
+            ("assistant", "这么晚还不睡…我这边刚收工，正泡了杯茶发呆。", 31 * 60),
+        ),
+        reply_lang="zh",
+    )
+    hint = ctx.get("_topic_switch_hint") or ""
+    assert "你刚说过" in hint and "泡了杯茶" in hint

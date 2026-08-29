@@ -730,6 +730,17 @@ def apply_inbound_enrichments(
             hints.append(sc_hint)
     except Exception:
         pass
+    # 近时自述「你刚说过」锚点（#62 2026-08-30）：即时行为（泡了杯茶）与时间
+    # 承诺（下个月过去一趟）带新鲜度窗口回注——上面的槽位锚只管长期个人事实，
+    # 这两类会过期的自述曾在 31/10 分钟内被 AI 当客户面自我否认（钧截图实锤）。
+    # A/B 两线同经本函数，双链零额外接线。
+    try:
+        from src.inbox.self_claims import build_recent_self_statement_hint
+        rs_hint = build_recent_self_statement_hint(list(history or []))
+        if rs_hint:
+            hints.append(rs_hint)
+    except Exception:
+        pass
     # AI 质疑应对（2026-08-03，AI 味周报闭环）：客户质疑「你是AI/机器人」或吐槽
     # 「机器味」→ 注入应对要点（别否认三连/别自证/别突然热情），并进程计数供观测。
     # 词表保守（宁漏勿误，正常聊 AI 工具不命中），与周报离线口径同源
