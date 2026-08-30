@@ -50,7 +50,13 @@ def audited_client(tmp_path, monkeypatch):
     pm.delete_profile("lin")
 
 
-def _upload(client, *, name="a.jpg", data=b"\x89PNGdummy", **fields):
+# #67-② 起上传带内容校验：假字节必须带真 magic（PNG 8 字节头 / mp4 ftyp box），
+# 否则会被 sniff_media_bytes 如实拒收——这正是坏文件不再静默落盘的门禁本体。
+_PNG = b"\x89PNG\r\n\x1a\n"
+_MP4 = b"\x00\x00\x00\x18ftypmp42"
+
+
+def _upload(client, *, name="a.jpg", data=_PNG + b"dummy", **fields):
     return client.post(
         "/api/personas/lin/media",
         files={"file": (name, data, "application/octet-stream")}, data=fields)
@@ -139,7 +145,7 @@ def test_upload_photo_with_triggers(client):
 
 
 def test_upload_video_ext(client):
-    r = _upload(client, name="clip.mp4", data=b"\x00\x00mp4", triggers="跳舞")
+    r = _upload(client, name="clip.mp4", data=_MP4 + b"-dummy", triggers="跳舞")
     assert r.json()["item"]["media_type"] == "video"
 
 
@@ -148,7 +154,7 @@ def test_upload_video_probes_metadata(client, monkeypatch):
                         lambda p: {"duration_ms": 4200, "width": 720, "height": 1280})
     monkeypatch.setattr(pmr, "_make_video_thumbnail",
                         lambda src, out, **kw: (Path(out).write_bytes(b"jpg"), True)[1])
-    item = _upload(client, name="clip.mp4", data=b"\x00\x00mp4").json()["item"]
+    item = _upload(client, name="clip.mp4", data=_MP4 + b"-dummy").json()["item"]
     assert item["duration_ms"] == 4200 and item["width"] == 720 and item["height"] == 1280
     assert item["thumb_url"].endswith(".thumb.jpg")
     assert Path(item["file_path"] + ".thumb.jpg").is_file()  # 封面真落盘
@@ -158,7 +164,7 @@ def test_upload_video_too_long_rejected(client, monkeypatch):
     monkeypatch.setattr(pmr, "_MAX_VIDEO_DURATION_MS", 1000)
     monkeypatch.setattr(pmr, "_probe_video",
                         lambda p: {"duration_ms": 5000, "width": 1, "height": 1})
-    r = _upload(client, name="long.mp4", data=b"\x00\x00mp4")
+    r = _upload(client, name="long.mp4", data=_MP4 + b"-dummy")
     assert r.status_code == 413
     assert client.get("/api/personas/lin/media").json()["stats"]["total"] == 0  # 未落库
     # 超长视频文件已回收（相册目录内无残留 .mp4）
@@ -171,7 +177,7 @@ def test_delete_removes_video_thumbnail(client, monkeypatch):
                         lambda p: {"duration_ms": 3000, "width": 10, "height": 10})
     monkeypatch.setattr(pmr, "_make_video_thumbnail",
                         lambda src, out, **kw: (Path(out).write_bytes(b"jpg"), True)[1])
-    item = _upload(client, name="clip.mp4", data=b"\x00\x00mp4").json()["item"]
+    item = _upload(client, name="clip.mp4", data=_MP4 + b"-dummy").json()["item"]
     thumb = Path(item["file_path"] + ".thumb.jpg")
     assert thumb.is_file()
     client.delete(f"/api/personas/lin/media/{item['id']}")
@@ -179,8 +185,8 @@ def test_delete_removes_video_thumbnail(client, monkeypatch):
 
 
 def test_upload_dedup_same_bytes(client):
-    r1 = _upload(client, data=b"same-bytes")
-    r2 = _upload(client, data=b"same-bytes")
+    r1 = _upload(client, data=_PNG + b"same-bytes")
+    r2 = _upload(client, data=_PNG + b"same-bytes")
     assert r2.json().get("deduped") is True
     assert r2.json()["item"]["id"] == r1.json()["item"]["id"]
     assert client.get("/api/personas/lin/media").json()["stats"]["total"] == 1
@@ -189,6 +195,25 @@ def test_upload_dedup_same_bytes(client):
 def test_upload_bad_ext_rejected(client):
     r = _upload(client, name="evil.exe", data=b"MZ")
     assert r.status_code == 400
+
+
+def test_upload_corrupt_content_rejected_67(client):
+    """#67-②（0830 两机实锤）：扩展名合法但内容坏 → 当场 400 诚实拒收。
+
+    此前上传成功只看扩展名+体积，坏文件静默落盘，到 AI 发图才在 pyrogram
+    爆 decode 失败——报障人被「上传成功」骗了一整轮。
+    """
+    r = _upload(client, name="broken.jpg", data=b"\x00\x01broken-not-an-image")
+    assert r.status_code == 400
+    assert client.get("/api/personas/lin/media").json()["stats"]["total"] == 0
+    r2 = _upload(client, name="broken.mp4", data=b"\x00\x01no-ftyp-here-at-all")
+    assert r2.status_code == 400
+
+
+def test_upload_cross_family_magic_allowed_67(client):
+    """扩展名拍错但内容合法（.jpg 里装 PNG）→ 放行（接收端按内容解码）。"""
+    r = _upload(client, name="mislabeled.jpg", data=_PNG + b"real-png-bytes")
+    assert r.status_code == 200
 
 
 def test_upload_too_large_rejected(client, monkeypatch):
@@ -249,7 +274,7 @@ def test_audit_trail_upload_update_delete(audited_client):
 
 def test_trigger_dry_run(client):
     _upload(client, triggers="跳舞")
-    _upload(client, data=b"generic-pool")  # 无触发词=通用池
+    _upload(client, data=_PNG + b"generic-pool")  # 无触发词=通用池
     r = client.post("/api/personas/lin/media/test", json={"text": "给我跳舞看看"})
     body = r.json()
     assert body["pool"] == "keyword" and body["keyword_count"] == 1

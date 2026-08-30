@@ -130,9 +130,16 @@ def shell_backend_log_files() -> Dict[str, Path]:
         data_dir = str(os.environ.get("AITR_DATA_DIR") or "").strip()
         if not data_dir:
             return out
-        p = Path(data_dir).resolve().parent / "logs" / "backend.log"
+        _logs = Path(data_dir).resolve().parent / "logs"
+        p = _logs / "backend.log"
         if p.is_file():
             out["logs/app/backend.log"] = p
+        # #70-②（0830 值守自察）：诊断包此前只收 backend.log——#67 那类
+        # 前端/壳层故障（请求根本没到后端）拿不到第一现场。壳侧 renderer/
+        # webview console 镜像（desktop main.js 落 renderer.log）一并收。
+        r = _logs / "renderer.log"
+        if r.is_file():
+            out["logs/app/renderer.log"] = r
     except Exception:
         return {}
     return out

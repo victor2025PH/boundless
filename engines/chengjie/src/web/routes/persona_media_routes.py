@@ -32,8 +32,22 @@ from src.web.web_i18n import tr
 
 logger = logging.getLogger("ai_chat_assistant.persona_media_routes")
 
-_STATIC_DIR = Path(__file__).resolve().parents[1] / "static"
-_ALBUM_ROOT = _STATIC_DIR / "persona_albums"
+# #67-①（0830 skuio 机实锤）：相册根改走数据根单一事实源——旧 Path(__file__)
+# 推法在打包桌面态落进安装目录（更新即清空）。resolve_album_root 数据根优先、
+# 裸引擎回落旧树；serving 由 admin.py 的 /static/persona_albums 双根挂载兜住。
+from src.companion.media_paths import (
+    LEGACY_ALBUM_ROOT as _ALBUM_ROOT_LEGACY,
+    resolve_album_root as _resolve_album_root,
+    sniff_media_bytes as _sniff_media,
+)
+
+#: 显式覆写口（测试 monkeypatch 既有契约 / 特殊部署）；None=每次按
+#: resolve_album_root() 动态解析（env 热切换、多实例各归各的数据根）。
+_ALBUM_ROOT: "Path | None" = None
+
+
+def _album_root() -> Path:
+    return _ALBUM_ROOT if _ALBUM_ROOT is not None else _resolve_album_root()
 
 _IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 _VIDEO_EXT = {".mp4", ".mov", ".webm", ".m4v"}
@@ -83,6 +97,14 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
     def _store():
         from src.companion.persona_media_store import get_persona_media_store
         return get_persona_media_store()
+
+    # #67-① 存量迁移（幂等 best-effort）：旧引擎树/安装目录相册 → 数据根，
+    # 并把 DB file_path 改指新位置（发送链读 DB 绝对路径，不改写=白复制）。
+    try:
+        from src.companion.media_paths import migrate_legacy_album_tree
+        migrate_legacy_album_tree(_store())
+    except Exception:
+        logger.debug("[pmedia] 相册存量迁移跳过", exc_info=True)
 
     def _actor(request: Request) -> str:
         try:
@@ -206,17 +228,36 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
         if len(data) > limit:
             raise HTTPException(
                 413, tr(request, "err.pmedia.too_large", mb=limit // (1024 * 1024)))
+        # #67-②（0830 两机实锤）+ 媒体产物验证纪律：内容级校验——此前上传
+        # 成功只看扩展名+体积，损坏文件原样落盘，到 AI 发图才在 pyrogram 处
+        # 爆 decode 失败。magic bytes 不过=当场 400（诚实拒收），绝不静默存坏。
+        _bad = _sniff_media(data, ext)
+        if _bad:
+            raise HTTPException(400, tr(
+                request, "err.pmedia.bad_content", why=_bad))
         sha = hashlib.sha256(data).hexdigest()
         dup = st.find_by_sha(str(pid), sha)
         if dup is not None:
             return {"ok": True, "item": dup, "deduped": True}
         safe = _safe_pid(pid)
-        d = _ALBUM_ROOT / safe
+        d = _album_root() / safe
         try:
             d.mkdir(parents=True, exist_ok=True)
             name = f"{uuid.uuid4().hex}{ext}"
             fpath = (d / name).resolve()
             fpath.write_bytes(data)
+            # 落盘后回读验证（纪律：写成功≠内容对）：首段字节与内存不一致
+            # =写入层损坏，当场删除报错，绝不让坏文件带着「上传成功」活下来。
+            _head = fpath.read_bytes()[:16] if fpath.stat().st_size else b""
+            if _head != bytes(data[:16]):
+                try:
+                    fpath.unlink()
+                except Exception:
+                    pass
+                raise HTTPException(500, tr(
+                    request, "err.pmedia.save_failed", err="write verify failed"))
+        except HTTPException:
+            raise
         except Exception as ex:  # noqa: BLE001
             logger.warning("[pmedia] 保存文件失败: %s", ex, exc_info=True)
             raise HTTPException(500, tr(request, "err.pmedia.save_failed", err=str(ex)[:200]))
@@ -315,14 +356,15 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
         st = _require_store(request)
         row = _owned_row(request, st, pid, mid)
         st.delete(str(mid))
-        root = _ALBUM_ROOT.resolve()
+        # 迁移期文件可能在新根或旧树（#67-①），两个根内都算合法删除面。
+        roots = {_album_root().resolve(), _ALBUM_ROOT_LEGACY.resolve()}
         for cand in (str(row.get("file_path") or ""),
                      str(row.get("file_path") or "") + ".thumb.jpg"):
             if not cand:
                 continue
             try:
                 fp = Path(cand).resolve()
-                if fp.is_file() and root in fp.parents:
+                if fp.is_file() and any(r in fp.parents for r in roots):
                     fp.unlink()
             except Exception:
                 logger.debug("[pmedia] 删除文件失败（已忽略）", exc_info=True)

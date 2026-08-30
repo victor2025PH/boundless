@@ -2142,11 +2142,11 @@ async function createWindow() {
     if (!_appMenuClaimed) _menuBarFallback(true);
   });
   win.webContents.on("did-fail-load", (_e, code, desc) =>
-    console.log(`[diag] renderer load FAILED ${code} ${desc}`));
+    rendererDiagLog(`[diag] renderer load FAILED ${code} ${desc}`));
   win.webContents.on("render-process-gone", (_e, d) =>
-    console.log(`[diag] render process gone: ${JSON.stringify(d)}`));
+    rendererDiagLog(`[diag] render process gone: ${JSON.stringify(d)}`));
   win.webContents.on("console-message", (_e, _lvl, msg) =>
-    console.log(`[renderer] ${msg}`));
+    rendererDiagLog(`[renderer] ${msg}`));
   // webview 子 webContents 在 Electron 默认是 sandboxed（与父窗口 sandbox:false 无关），
   // 沙箱内 preload 只能 require electron，无法 require 本地模块（./profiles.js / ./media-format.js）→
   // 注入脚本 tg-inject.js 整体加载失败「module not found: ./profiles.js」。这里对内嵌 webview 关闭
@@ -2161,11 +2161,11 @@ async function createWindow() {
     bindWhatsappWebviewUa(wc);
     wireEditContextMenu(wc);   // 官方页 + 工作台 webview：右键粘贴的主战场
     wc.setWindowOpenHandler(makeBackendPopupHandler());
-    wc.on("did-finish-load", () => console.log("[diag] webview page loaded"));
+    wc.on("did-finish-load", () => rendererDiagLog("[diag] webview page loaded"));
     wc.on("did-fail-load", (_e2, code, desc) =>
-      console.log(`[diag] webview load FAILED ${code} ${desc}`));
+      rendererDiagLog(`[diag] webview load FAILED ${code} ${desc}`));
     wc.on("console-message", (_e2, _lvl, msg, line, sourceId) =>
-      console.log(`[webview] ${msg}${sourceId ? ` (${sourceId}:${line})` : ""}`));
+      rendererDiagLog(`[webview] ${msg}${sourceId ? ` (${sourceId}:${line})` : ""}`));
   });
 
   console.log(`[diag] platforms enabled: ${(config.platforms || []).filter((p) => p.enabled).map((p) => p.id).join(",")}`);
@@ -2459,6 +2459,28 @@ ipcMain.handle("desktop:titlebar-menu", async (e, rawId) => {
 // 公告 HTTP 拉取（含本地缓存）、已读/稍后状态落盘、向 renderer 广播当前通知。
 // 旧行为（更新下载完只写日志、下次重启才生效）升级为：横幅 +「立即重启更新」一键完成。
 const updateNotify = require("./update-notify.js");
+
+// #70-②（0830 值守自察）：壳侧 renderer/webview console 落盘。打包态主进程
+// console.log 没有去处，[renderer]/[webview] 取证线一直在丢——#67 那类「请求
+// 根本没到后端」的前端层故障，诊断包收不到第一现场。落 userData/logs/
+// renderer.log（与 backend.log 同目录，diag_upload.shell_backend_log_files
+// 一并收进诊断包），10MB 轮转一份；写盘失败绝不影响壳运行。
+const RENDERER_LOG_MAX_BYTES = 10 * 1024 * 1024;
+function rendererDiagLog(line) {
+  console.log(line);   // 开发态行为不变（终端仍可见）
+  try {
+    const dir = path.join(app.getPath("userData"), "logs");
+    const fp = path.join(dir, "renderer.log");
+    try { fs.mkdirSync(dir, { recursive: true }); } catch (_e) { /* noop */ }
+    try {
+      const st = fs.statSync(fp);
+      if (st && st.size > RENDERER_LOG_MAX_BYTES) {
+        try { fs.renameSync(fp, `${fp}.1`); } catch (_e) { /* noop */ }
+      }
+    } catch (_e) { /* 首写无文件属正常 */ }
+    fs.appendFileSync(fp, `${new Date().toISOString()} ${String(line)}\n`);
+  } catch (_e) { /* 诊断通道绝不反噬壳 */ }
+}
 
 function _noticeStatePath() { return path.join(app.getPath("userData"), "shell-notices.json"); }
 function _annCachePath() { return path.join(app.getPath("userData"), "announcements-cache.json"); }

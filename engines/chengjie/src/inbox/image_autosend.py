@@ -1114,6 +1114,22 @@ async def run_autosend_image(
         local = str(row.get("file_path") or "")
         url = str(row.get("url") or "")
         mt = str(row.get("media_type") or "photo")
+        # #67-③（0830 skuio 机实锤）：发送前先验条目文件真实存在——DB 指向的
+        # 文件蒸发（旧安装目录被版本更新替换）时，pyrogram 会把路径当 file_id
+        # 报「Failed to decode」，此前被吞成泛化投递失败，排障被带偏一整轮。
+        # 独立归因 album_file_missing + 点名路径；条目跳过交回落链（诚实文字/
+        # 生成），绝不拿一条死路径反复撞。只验**相册管辖**路径（persona_albums
+        # 树下=上传链落的，事故类全在此）；运营外挂的任意路径维持旧语义。
+        if (local and "persona_albums" in local.replace("\\", "/")
+                and not Path(local).is_file()):
+            record_image_fallback("album_file_missing",
+                                  detail=os.path.basename(local)[:60])
+            logger.warning(
+                "[image_autosend] 相册条目文件缺失（DB 指向已蒸发的路径）："
+                "id=%s path=%s —— 按 album_file_missing 归因，条目跳过",
+                row.get("id"), local)
+            row = None
+    if row:
         # 配文语言对齐（2026-07-22）：粤语客户取 caption_i18n["yue"]（语言检测器
         # 把粤语归 zh，靠特征字识别补路由）；其余按调用方 lang（en 等）。
         _cap_lang = lang

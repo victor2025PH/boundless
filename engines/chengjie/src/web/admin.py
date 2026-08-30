@@ -397,6 +397,30 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         except Exception:  # noqa: BLE001
             logger.warning("protocol_media 专属挂载失败（回落旧 /static 单挂载）",
                            exc_info=True)
+        # 人设相册专属挂载（#67-① 0830）：相册落盘迁数据根（打包桌面态旧位置
+        # =安装目录，更新即清空），URL 形态 /static/persona_albums/... 不变——
+        # 数据根优先 + 旧树兜底，与 protocol_media 同款零 404 窗口。
+        # 无数据根契约（根==旧树，裸引擎/CI）不挂＝旧行为。
+        try:
+            from src.companion.media_paths import (
+                LEGACY_ALBUM_ROOT as _pa_legacy,
+                resolve_album_root as _pa_root_fn,
+            )
+            _pa_root = _pa_root_fn()
+            if str(_pa_root.resolve()) != str(_pa_legacy.resolve()):
+                _pa_root.mkdir(parents=True, exist_ok=True)
+                app.mount(
+                    "/static/persona_albums",
+                    ProtocolMediaStatic(
+                        directory=str(_pa_root),
+                        check_dir=False,
+                        fallback_directory=(
+                            str(_pa_legacy) if _pa_legacy.is_dir() else None)),
+                    name="persona_albums",
+                )
+        except Exception:  # noqa: BLE001
+            logger.warning("persona_albums 专属挂载失败（回落旧 /static 单挂载）",
+                           exc_info=True)
         app.mount("/static", CachedStaticFiles(directory=str(_static_dir)), name="static")
     # 两端共享 copilot 组件库(单一事实来源 repo 根 shared/copilot);独立前缀避开 /static 匹配顺序
     # no-cache：iframe 入口 app.html 无 ?v= 戳，必须逐次回源校验防启发式缓存钉住旧版

@@ -303,6 +303,84 @@ class PersonaMediaStore:
             self._conn.commit()
         return row
 
+    def rewrite_file_path_prefix(self, old_prefix: str, new_prefix: str) -> int:
+        """#67-① 存量迁移配套：把 ``file_path`` 的目录前缀整体改写，返回行数。
+
+        发送链按 DB 绝对路径取文件——相册根迁数据根后不改写＝发送仍指旧位置
+        （桌面更新后旧位置蒸发 → pyrogram「Failed to decode」）。仅前缀精确
+        匹配的行被改；幂等（重复调用第二次 0 行）。
+        """
+        old = str(old_prefix or "").strip()
+        new = str(new_prefix or "").strip()
+        if not old or not new or old == new:
+            return 0
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE persona_media SET file_path = ? || substr(file_path, ?)"
+                " WHERE substr(file_path, 1, ?) = ?",
+                (new, len(old) + 1, len(old), old))
+            self._conn.commit()
+        return int(cur.rowcount or 0)
+
+    # ── AI 打标机器写点（实施90；与运营 update() 白名单分离，防误改）──────────
+
+    def set_auto_tag(
+        self, media_id: str, *,
+        phash: Optional[str] = None,
+        auto_meta: Optional[Dict[str, Any]] = None,
+        tag_status: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        thumb_url: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """打标/补齐流水线的专用部分更新（None＝该字段不动）；返回更新后的行。"""
+        sets: List[str] = []
+        args: List[Any] = []
+        if phash is not None:
+            sets.append("phash = ?")
+            args.append(str(phash))
+        if auto_meta is not None:
+            sets.append("auto_meta = ?")
+            args.append(_dumps(dict(auto_meta), "{}"))
+        if tag_status is not None:
+            sets.append("tag_status = ?")
+            args.append(str(tag_status))
+        if tags is not None:
+            sets.append("tags = ?")
+            args.append(_dumps(list(tags), "[]"))
+        if thumb_url is not None:
+            sets.append("thumb_url = ?")
+            args.append(str(thumb_url))
+        if not sets:
+            return self.get(media_id)
+        sets.append("updated_at = ?")
+        args.append(time.time())
+        args.append(str(media_id or ""))
+        try:
+            with self._lock:
+                self._conn.execute(
+                    f"UPDATE persona_media SET {', '.join(sets)} WHERE id = ?",
+                    tuple(args))
+                self._conn.commit()
+        except Exception:
+            logger.debug("[persona_media] set_auto_tag 失败（已忽略）",
+                         exc_info=True)
+            return None
+        return self.get(media_id)
+
+    def phashes(self, persona_id: str) -> Dict[str, str]:
+        """该人设全部**非空**感知指纹 ``{id: phash}``（上传近重复比对用）。"""
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT id, phash FROM persona_media "
+                    "WHERE persona_id = ? AND phash != ''",
+                    (str(persona_id or ""),)).fetchall()
+            return {str(r["id"]): str(r["phash"]) for r in rows}
+        except Exception:
+            logger.debug("[persona_media] phashes 读取失败（已忽略）",
+                         exc_info=True)
+            return {}
+
     def record_hit(self, media_id: str, now: Optional[float] = None) -> None:
         """命中一次（hits+1、last_sent_at=now），供轮播避重 + 内容分析。绝不抛。"""
         ts = float(now if now is not None else time.time())
