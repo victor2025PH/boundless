@@ -235,5 +235,9 @@ else {
     }
 }
 Write-Host ""
+# Broadcast etiquette (boss flagged twice, 0827/0830): the Telegram group @hykjz is LINKED to
+# channel @hykj7 — a channel post auto-forwards into the group. Broadcasting with target=both
+# posts the SAME announcement into the group a second time. Always use target=channel.
+Write-Host "[next] 广播只发频道（target=channel）：群 @hykjz 已链接频道自动转发，双发=群里重复刷屏（老板两次点名）。" -ForegroundColor Yellow
 if ($DryRun) { Ok "DRYRUN complete - build v$Version is publishable; re-run without -DryRun to ship" }
 else { Ok "published v$Version" }

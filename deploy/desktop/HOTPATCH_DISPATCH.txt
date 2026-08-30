@@ -34,7 +34,7 @@ Do not:
 - bump package.json version
 - tell the user "restart to get the fix" until ops replies shipped
 - invent a second update channel
-- post to official channel @hykj7 / group @hykjz (ops does that)
+- post to official channel @hykj7 ONLY (ops does that; the linked group @hykjz auto-forwards channel posts — posting the group separately duplicates the announcement, boss flagged this twice 0827/0830)
 
 After ops ships:
 - ops posts CHANNEL_NOTICE_HOTPATCH to channel+group and in-app announcements
