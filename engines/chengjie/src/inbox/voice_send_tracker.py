@@ -119,6 +119,10 @@ def get_status(scope: str, client_msg_id: str,
             out["voice_meta"] = dict(payload.get("voice_meta") or {})
             if "reused_preview" in payload:
                 out["reused_preview"] = bool(payload.get("reused_preview"))
+            # #72（0830）：文本链复用本表对账——sent 终局带真实 message_id，
+            # 前端超时后对账成功可据此收尾（与轮询镜像同一真相源）。
+            if payload.get("message_id"):
+                out["message_id"] = str(payload.get("message_id"))
         return out
 
 

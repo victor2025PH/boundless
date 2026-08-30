@@ -538,6 +538,20 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 "result": {"duplicate": True},
                 "original_text": text, "sent_text": text, "translation": None,
             }
+        # #72（0830 UDEKBY 实锤）：文本手动链补「超时→对账」——语音链早有的
+        # voice_send_tracker 三态（in_flight/sent/failed）文本链漏配：慢发送
+        # （限流 30-65s/条确认）撞前端超时被误报「发送失败」，坐席点「重发」
+        # =客户收双条。复用同一登记表（scope 前缀 text: 区分），终局在各失败
+        # /成功出口落账，前端超时先打 /send-status 对账再定论。
+        from src.inbox import voice_send_tracker as _txt_tracker
+        _track_scope = f"text:{platform}:{account_id}:{chat_key}"
+        if _client_msg_id:
+            _txt_tracker.record_start(_track_scope, _client_msg_id)
+            _txt_tracker.record_stage(_track_scope, _client_msg_id, "send")
+
+        def _track_failed(reason: str) -> None:
+            if _client_msg_id:
+                _txt_tracker.record_failed(_track_scope, _client_msg_id, reason)
 
         # —— 发送前翻译（outbound 闭环）：默认关闭，显式 target_lang / "auto" 才触发 ——
         original_text = text
@@ -615,6 +629,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             if (_guard_lang and _guard_lang.lower() != "unknown"
                     and not lang_is_cjk(_guard_lang)):
                 _dedup.release(_dedup_scope, _client_msg_id)
+                _track_failed("lang_mismatch")
                 logger.warning(
                     "[send] guard=lang_mismatch 语言错配拦截（待坐席确认）conv=%s lang=%s len=%d",
                     _conv_id(platform, account_id, chat_key), _guard_lang, len(text))
@@ -645,6 +660,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 record_dup_check((_dup_hit or {}).get("level", ""))
                 if _dup_hit:
                     _dedup.release(_dedup_scope, _client_msg_id)
+                    _track_failed("near_duplicate")
                     logger.warning(
                         "[send] guard=near_duplicate 近重复拦截（待坐席确认）conv=%s level=%s sim=%.2f age=%.0fs",
                         _conv_id(platform, account_id, chat_key),
@@ -773,6 +789,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 )
         except ChannelSendError as ex:
             _dedup.release(_dedup_scope, _client_msg_id)  # 失败释放：同 id 重试可再发
+            _track_failed(str(getattr(ex, "reason_code", "") or "send_error"))
             # 实施86 域B-1（#21/#23）：真实投递失败 → 失败留痕（坐席在消息流里
             # 看得见这条没发出去 + 一键重发）+ 败因人话化（不再裸 HTTP 状态行）。
             _trace_failed_manual_send(
@@ -782,6 +799,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 request, ex.detail, getattr(ex, "reason_code", "")))
         except Exception as _send_ex:
             _dedup.release(_dedup_scope, _client_msg_id)
+            _track_failed("send_exception")
             _trace_failed_manual_send(
                 request, platform, account_id, chat_key, text,
                 str(_send_ex)[:200])
@@ -792,6 +810,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         _undeliv = _result_undelivered(result)
         if _undeliv:
             _dedup.release(_dedup_scope, _client_msg_id)
+            _track_failed(str(_undeliv))
             if _undeliv == "blocked":
                 # 护栏拦截＝根本没尝试投递，刻意不留痕（重发也会被同一护栏拦，
                 # 留个重发按钮只会误导坐席连点）
@@ -810,6 +829,22 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         cid = (result.get("conversation_id") if isinstance(result, dict) else None) \
             or _conv_id(platform, account_id, chat_key)
         _mark_send(cid)
+        # #72 终局：sent（前端超时后对账按成功收尾，绝不诱导重发）
+        if _client_msg_id:
+            _txt_tracker.record_sent(_track_scope, _client_msg_id, payload={
+                "message_id": str((result or {}).get("message_id") or "")
+                if isinstance(result, dict) else "",
+            })
+        # #73：手动链真实送达=可达铁证 → 清 dead-peer 陈旧标（正是 UDEKBY 实锤
+        # 场景：05:47 手动送达成功，blocked 标却继续让自动链永久跳过该客户）。
+        try:
+            from src.ops.dead_peer_registry import clear_on_delivery
+            if clear_on_delivery(platform, chat_key):
+                logger.info(
+                    "[send] 送达成功，已解除 %s 的 dead-peer 标（自动回复恢复）",
+                    _conv_id(platform, account_id, chat_key))
+        except Exception:
+            pass
         # P1：发生发送前翻译时，旁路记录「实发译文 → 中文原文/质量」，供 /thread 富集出向双行
         # （跨刷新/重启/设备持久；不触碰 messages 去重）。best-effort，失败不影响发送。
         # 分条发送时只给**首段**挂完整原文（P1-198 问题1实锤：旧逻辑把整段中文原文
@@ -1632,9 +1667,28 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                  f"{str(account_id or 'default')}:{str(chat_key or '')}")
         return {"ok": True, **get_status(scope, str(client_msg_id or ""))}
 
+    @app.get("/api/unified-inbox/send-status")
+    async def api_unified_inbox_send_status(
+        request: Request, platform: str = "", account_id: str = "default",
+        chat_key: str = "", client_msg_id: str = "", _=Depends(page_auth),
+    ):
+        """#72（0830 UDEKBY 实锤）：文本手动发送对账端点——前端超时先问结果。
+
+        语音链的 send-voice-status 同款三态（sent/failed/in_flight/unknown），
+        文本链此前漏配：慢发送（限流 30-65s/条确认）撞前端超时被误报「失败」，
+        坐席点「重发」=客户收双条（05:44 报失败、05:47 实际送达铁证）。
+        前端契约：超时后先打本端点——sent=按成功收尾；failed=如实报错；
+        in_flight/unknown=保守提示「稍后刷新会话确认，勿立即重发」。
+        """
+        from src.inbox.voice_send_tracker import get_status
+        scope = (f"text:{str(platform or '').lower()}:"
+                 f"{str(account_id or 'default')}:{str(chat_key or '')}")
+        return {"ok": True, **get_status(scope, str(client_msg_id or ""))}
+
     @app.get("/api/unified-inbox/send-caps")
     async def api_unified_inbox_send_caps(
         request: Request, platform: str = "", account_id: str = "default",
+        chat_key: str = "",
     ):
         """返回指定平台/账号是否支持从收件箱直发媒体/语音（protocol 多开且在线）。
 
@@ -1714,3 +1768,21 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 (getattr(getattr(request.app.state, "config_manager", None),
                          "config", None) or {}), plat),
         }
+        # #73-③（0830 UDEKBY）可见面：该会话 peer 挂着 dead-peer 标时坐席必须
+        # 看得见「自动回复已对此人停用+原因」——此前 AI 静默跳过、坐席零感知。
+        # chat_key 为可选新参（旧前端不传=响应形状不变）。
+        if chat_key:
+            try:
+                from src.ops.dead_peer_registry import peek_dead_peer_registry
+                _dpr = peek_dead_peer_registry()
+                if _dpr is not None and _dpr.is_blocked(plat, chat_key):
+                    _dpi = _dpr.info_of(plat, chat_key) or {}
+                    out["dead_peer"] = {
+                        "blocked": True,
+                        "reason": str(_dpi.get("reason") or ""),
+                        "since": float(_dpi.get("first_ts") or 0),
+                        "evidence": str(_dpi.get("evidence") or "")[:120],
+                    }
+            except Exception:
+                logger.debug("send-caps dead-peer 探测跳过", exc_info=True)
+        return out

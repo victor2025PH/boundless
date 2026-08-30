@@ -122,13 +122,26 @@ class DeadPeerRegistry:
         self._data: Dict[str, Dict[str, Any]] = {}
         self._load()
 
+    #: #73（0830 UDEKBY 实锤）：未配置时的**内置** TTL——blocked/write_forbidden
+    #: 语义上可解除（对方取消拉黑/群禁言解除），旧默认「永久」让误标/陈旧标
+    #: 变成「客户从此收不到任何自动回复且无人察觉」。deactivated 仍恒永久。
+    _DEFAULT_REASON_TTL = {
+        "blocked": 7 * 86400.0,          # 7 天后放行探路一次
+        "write_forbidden": 3 * 86400.0,  # 3 天（群权限变化更频繁）
+    }
+
     def _ttl_for_reason(self, reason: Optional[str]) -> float:
-        """该 reason 的有效 TTL（秒）。deactivated 恒 0=永久；其余 reason 级优先、回落全局。"""
+        """该 reason 的有效 TTL（秒）。deactivated 恒 0=永久；其余 reason 级优先、
+        回落全局；全局也没配（0=旧「永久」语义）→ 内置默认 TTL（#73）。"""
         r = str(reason or "")
         if r == "deactivated":
             return 0.0   # 账号注销不可逆——即便误配 TTL 也不释放
         v = self._ttl_by_reason.get(r)
-        return v if v is not None else self._ttl
+        if v is not None:
+            return v
+        if self._ttl > 0:
+            return self._ttl
+        return float(self._DEFAULT_REASON_TTL.get(r, 0.0))
 
     # ── 持久化 ────────────────────────────────────────────────
     def _ingest_file(self, f: Path) -> None:
@@ -201,21 +214,30 @@ class DeadPeerRegistry:
             self._data.pop(k, None)
 
     # ── 写 ────────────────────────────────────────────────────
-    def record(self, platform: str, peer: Any, reason: str) -> bool:
-        """登记一个死 peer。返回 True=已落黑名单；False=可自愈/未知 reason 忽略。"""
+    def record(self, platform: str, peer: Any, reason: str,
+               evidence: str = "") -> bool:
+        """登记一个死 peer。返回 True=已落黑名单；False=可自愈/未知 reason 忽略。
+
+        ``evidence``（#73 溯源）：触发标记的原始错误摘要——「这个标哪来的」
+        此前无人能答，排障只能猜。截 160 字防日志巨物入库。
+        """
         if not is_permanent_reason(reason):
             return False
         key = _norm_peer(platform, peer)
         now = time.time()
+        ev = str(evidence or "").strip()[:160]
         with self._lock:
             cur = self._data.get(key)
             if cur:
                 cur["reason"] = reason
                 cur["ts"] = now
                 cur["count"] = int(cur.get("count", 0)) + 1
+                if ev:
+                    cur["evidence"] = ev
             else:
                 self._data[key] = {
-                    "reason": reason, "ts": now, "first_ts": now, "count": 1}
+                    "reason": reason, "ts": now, "first_ts": now, "count": 1,
+                    **({"evidence": ev} if ev else {})}
             self._evict_if_needed()
             self._persist()
         return True
@@ -239,6 +261,16 @@ class DeadPeerRegistry:
         with self._lock:
             ent = self._data.get(_norm_peer(platform, peer))
             return str(ent.get("reason")) if ent else None
+
+    def info_of(self, platform: str, peer: Any) -> Optional[Dict[str, Any]]:
+        """#73 可见面：该 peer 的标记详情（reason/ts/count/evidence）；无标 → None。
+
+        刻意不做 TTL 惰性清理（只读快照，别在读路径写盘）；过期与否由
+        ``is_blocked`` 判定，调用方要联判就两个都问。
+        """
+        with self._lock:
+            ent = self._data.get(_norm_peer(platform, peer))
+            return dict(ent) if ent else None
 
     def unblock(self, platform: str, peer: Any) -> bool:
         key = _norm_peer(platform, peer)
@@ -327,6 +359,22 @@ def peek_dead_peer_registry() -> Optional[DeadPeerRegistry]:
     return _SINGLETON
 
 
+def clear_on_delivery(platform: str, peer: Any) -> bool:
+    """#73（0830 UDEKBY 实锤）：真实送达即清标——送达成功是「可达」的最硬证据。
+
+    事故：peer 被 blocked 标 → 自动链静默跳过；手动链（不经守卫）05:47 实际
+    送达成功，标却继续挂着=「AI 永久不理这位客户且坐席无感知」。任何一条链
+    真发成功都应立即解除标记。单例未建立/未标记 → False（no-op，绝不抛）。
+    """
+    try:
+        reg = peek_dead_peer_registry()
+        if reg is None:
+            return False
+        return reg.unblock(platform, peer)
+    except Exception:
+        return False
+
+
 def reset_singleton() -> None:
     """仅供测试：清空单例，让下次 get 重新按新 path 建。"""
     global _SINGLETON
@@ -337,5 +385,5 @@ def reset_singleton() -> None:
 __all__ = [
     "classify_send_error", "is_permanent_reason", "peer_of", "DeadPeerRegistry",
     "dead_peer_enabled", "get_dead_peer_registry", "peek_dead_peer_registry",
-    "reset_singleton",
+    "clear_on_delivery", "reset_singleton",
 ]

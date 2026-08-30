@@ -1042,6 +1042,15 @@ class TelegramSenderMixin:
                 return False, None
             _sent = await self.client.send_message(chat_id, text)
             self._postsend_record_count()
+            # #73：真实送达=可达铁证 → 清 dead-peer 标（覆盖 TTL 放行探路成功
+            # 后的复位；未标记/未启用时 no-op）。
+            if _dp_on and _dp_reg is not None:
+                try:
+                    if _dp_reg.unblock("telegram", chat_id):
+                        self.logger.info(
+                            "[dead-peer] 送达成功，已解除 %s 的不可达标记", chat_id)
+                except Exception:
+                    pass
             self.logger.info("已发送消息到 %s: %s...", chat_id, text[:50])
             return True, _sent
         except Exception as e:
@@ -1067,7 +1076,9 @@ class TelegramSenderMixin:
                 try:
                     from src.ops.dead_peer_registry import classify_send_error
                     _rsn = classify_send_error(e)
-                    if _rsn and _dp_reg.record("telegram", chat_id, _rsn):
+                    # #73 溯源：evidence 记原始错误摘要——「这个标哪来的」可回答
+                    if _rsn and _dp_reg.record("telegram", chat_id, _rsn,
+                                               evidence=str(e)[:160]):
                         self.logger.info(
                             "[dead-peer] 已拉黑 %s（%s，永久不可达不再重发）", chat_id, _rsn)
                 except Exception:

@@ -7315,12 +7315,40 @@ function _applySendCaps(caps){
 }
 async function _loadSendCaps(c){
   _applySendCaps(null);  // 乐观：先按支持渲染
+  _renderDeadPeerNotice(null);   // #73：换会话先清旧条
   if(!c||!c.platform) return;
   try{
-    const r=await apiFetch(`/api/unified-inbox/send-caps?platform=${encodeURIComponent(c.platform)}&account_id=${encodeURIComponent(c.account_id||'default')}`);
+    const r=await apiFetch(`/api/unified-inbox/send-caps?platform=${encodeURIComponent(c.platform)}&account_id=${encodeURIComponent(c.account_id||'default')}&chat_key=${encodeURIComponent(c.chat_key||'')}`);
     const d=await r.json().catch(()=>({}));
     if(d&&d.ok) _applySendCaps(d);
+    if(d&&d.ok) _renderDeadPeerNotice(d.dead_peer||null);
   }catch(_){ /* 网络异常：保持乐观，点击时仍有 501 兜底 */ }
+}
+/* #73-③（0830 UDEKBY 实锤）：dead-peer 可见面——peer 被标不可达时 AI 静默
+   跳过而坐席零感知（「AI 怎么不理这位客户」无从排查）。composer 上方常驻
+   黄条说明原因与解除方式；手动送达成功服务端自动清标，下次进会话条即消失。 */
+function _renderDeadPeerNotice(dp){
+  try{
+    let el=document.getElementById('dp-warn');
+    if(!dp||!dp.blocked){ if(el) el.style.display='none'; return; }
+    if(!el){
+      const ta=document.getElementById('reply-ta');
+      const host=ta&&ta.parentNode?ta.parentNode:null;
+      if(!host) return;
+      el=document.createElement('div');
+      el.id='dp-warn';
+      el.style.cssText='margin:0 0 .35rem;padding:.4rem .6rem;border-radius:8px;'
+        +'font-size:.76rem;line-height:1.45;background:rgba(245,158,11,.12);'
+        +'border:1px solid rgba(245,158,11,.4);color:var(--t1,#92400e)';
+      host.insertBefore(el, ta);
+    }
+    const rk={'blocked':'inbox.deadpeer.r_blocked',
+              'deactivated':'inbox.deadpeer.r_deactivated',
+              'write_forbidden':'inbox.deadpeer.r_write_forbidden'}[String(dp.reason||'')]
+             ||'inbox.deadpeer.r_other';
+    el.textContent=window.Tf('inbox.deadpeer.notice',{reason:window.T(rk)});
+    el.style.display='block';
+  }catch(_){}
 }
 
 /* ===== 已读本地真相（2026-08-23 未读可信化 v2）=====
@@ -12970,6 +12998,32 @@ function _newClientMsgId(){
    幂等键不拦）。媒体路径另有 _mediaSending 同款闸门。 */
 var _sendInFlight=false;
 
+/* #72（0830 UDEKBY 实锤）：文本发送对账——前端超时 ≠ 发送失败。限流期发送
+   确认 30-65s/条，60s 超时后误报「失败」+「重发」按钮=客户收双条（05:44 报
+   失败、05:47 实际送达铁证）。网络层异常先打 /send-status 三态对账再定论；
+   语音链同款机制（send-voice-status）2026-08-11 已修，文本链此前漏配。 */
+async function _reconcileTextSend(rb){
+  try{
+    if(!rb||!rb.client_msg_id||!rb.platform) return 'unknown';
+    for(let i=0;i<2;i++){
+      const r=await apiFetch('/api/unified-inbox/send-status'
+        +'?platform='+encodeURIComponent(rb.platform)
+        +'&account_id='+encodeURIComponent(rb.account_id||'default')
+        +'&chat_key='+encodeURIComponent(rb.chat_key||'')
+        +'&client_msg_id='+encodeURIComponent(rb.client_msg_id), {}, {timeoutMs:8000});
+      const d=await r.json().catch(()=>({}));
+      const st=String((d&&d.state)||'unknown');
+      if(st==='sent'||st==='failed') return st;
+      if(st==='in_flight'){
+        if(i===0){ await new Promise(res=>setTimeout(res,3000)); continue; }
+        return 'in_flight';
+      }
+      return 'unknown';   // 老后端/条目过期：按旧行为处理
+    }
+  }catch(_){}
+  return 'unknown';
+}
+
 async function sendMsg(){
   if(_sendInFlight) return;          // 连按 Enter / 双击：在途期间直接忽略
   const ta=document.getElementById('reply-ta');
@@ -13157,10 +13211,29 @@ async function sendMsg(){
       }
     }
   }catch(e){
-    const idx=threadMsgs.findIndex(m=>m.message_id===optId);
-    if(idx>=0){ threadMsgs[idx]._optimistic=false; threadMsgs[idx]._failed=true; }
-    renderMessages(selectedChat, threadMsgs, {silent:true});
-    showHint(window.T('inbox.net_err_retry'));
+    // #72：网络异常/超时先对账（optMsg._retryBody 带本次 client_msg_id）——
+    // sent=按成功收尾；in_flight=保守提示不出「重发」；failed/unknown=旧行为。
+    let _recon='unknown';
+    try{ _recon=await _reconcileTextSend(optMsg&&optMsg._retryBody); }catch(_){}
+    if(_recon==='sent'){
+      _sentOk=true;
+      threadMsgs=threadMsgs.filter(m=>m.message_id!==optId);
+      try{ await loadThread(selectedChat,true); await loadChats(); }catch(_){}
+      try{ _refreshConvStatus(selectedChat); }catch(_){}
+      showHint(window.T('inbox.send.slow_confirmed'));
+      try{ _uiBeacon('send_recon_sent'); }catch(_){}
+    } else if(_recon==='in_flight'){
+      // 仍在途：移除乐观气泡（failed+重发按钮是误导），保守提示等刷新
+      threadMsgs=threadMsgs.filter(m=>m.message_id!==optId);
+      renderMessages(selectedChat, threadMsgs, {silent:true});
+      showHint(window.T('inbox.send.status_unknown'));
+      try{ _uiBeacon('send_recon_inflight'); }catch(_){}
+    } else {
+      const idx=threadMsgs.findIndex(m=>m.message_id===optId);
+      if(idx>=0){ threadMsgs[idx]._optimistic=false; threadMsgs[idx]._failed=true; }
+      renderMessages(selectedChat, threadMsgs, {silent:true});
+      showHint(window.T('inbox.net_err_retry'));
+    }
   }
   _sendInFlight=false;
   btn.disabled=false;
