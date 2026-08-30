@@ -1,5 +1,51 @@
 [
   {
+    "version": "1.0.64",
+    "date": "2026-08-30",
+    "title": {
+      "zh": "限时目标冲刺推进引擎：客户沉默也按时间表主动出手，收口话术与全力档",
+      "en": "Sprint engine for timed goals: proactive beats on schedule, closing language and all-out force"
+    },
+    "tags": [
+      "feature",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "v1.0.64（限时目标冲刺版）",
+        "一、限时目标全面进化（「3 小时内要结果」终于名副其实）",
+        "冲刺推进引擎：限时目标（今天收口/这轮聊完）不再干等客户开口——客户沉默时 AI 按时间表主动出手，开场/跟进/收口三拍走完整个窗口",
+        "推进力度加度：临近截止自动切「收口」话术（可明确报价、给出下一步、点明时间有限）；新建目标可选「全力档」——不退避不熔断、首拍即可直说、拍数上限 +2",
+        "「⚡ 立即推进」：目标卡新增手动加速按钮，坐席随时让 AI 当场推进一拍（连点不双发）",
+        "调度全透明：实时倒计时活字 + 「已推进几拍 · 下一主动拍几点」状态行——AI 接下来干什么一眼可见",
+        "拿到联系方式自动结成：检出客户留下微信/电话/邮箱即自动标达成（可关）；到期没人确认的「疑似达成」在卡上一键补录，不再被记成失败",
+        "插队冲刺：会话已有长线目标时一键「暂停长线、插入冲刺」，冲刺结束自动恢复长线目标",
+        "安全边界原样保留：客户情绪危机、明确说过别打扰、人工审核会话——AI 绝不主动出手",
+        "二、配套观测",
+        "冲刺目标失败即时提醒（不再等日报聚合），带「曾检出达成信号」标注",
+        "目标报表新增按节奏档（自然天/今天收口/这轮聊完）拆分的达成率与平均用时",
+        "三、其他",
+        "另含当日多批稳定性修复与体验优化（详见频道历史公告）"
+      ],
+      "en": [
+        "v1.0.64 (Sprint Goals release)",
+        "Sprint goals, now for real (\"results within 3 hours\" finally means it)",
+        "Sprint engine: timed goals (close-today / this-session) no longer wait for the customer to speak — when they go quiet, the AI reaches out on schedule across opening / follow-up / closing beats",
+        "Push-force escalation: near the deadline the AI switches to closing language (state the price, give a clear next step, mention time is short); new goals can pick \"All-out\" force — no backoff, no halt, direct from beat one, +2 beat cap",
+        "\"Push now\" button: nudge the AI to advance one beat on the spot (double-clicks never double-send)",
+        "Transparent scheduling: live countdown plus a \"beats pushed · next proactive beat at HH:MM\" status line — you always know what the AI will do next",
+        "Auto-settle on contact info: when the customer shares WeChat / phone / email, the goal is marked won automatically (optional); expired goals with a detected signal offer one-click \"record win\" instead of counting as failures",
+        "Sprint queue-jump: with a long-term goal active, pause it in one click, run the sprint, and the long-term goal resumes automatically afterwards",
+        "Safety boundaries unchanged: emotional-crisis windows, explicit \"stop messaging me\", and human-review conversations are never touched proactively",
+        "Observability",
+        "Instant alert when a sprint goal misses (no more waiting for the daily digest), flagged when a completion signal had been detected",
+        "Goal reports now split done-rate and time-to-done by pace (natural / today / session)",
+        "Misc",
+        "Also carries today's stability fix batches (see channel history)"
+      ]
+    }
+  },
+  {
     "version": "1.0.63",
     "date": "2026-08-30",
     "title": {
