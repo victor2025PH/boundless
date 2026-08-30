@@ -164,6 +164,10 @@ a.em-open{text-decoration:none;line-height:1;font-weight:700}
     {% endif %}
   </div>
   <p id="em-status" style="font-size:.8rem;color:var(--t2);margin-bottom:.6rem"></p>
+  {# memory-mgmt semantics line (#41 0830): answers what confirm/edit/delete
+     actually mean and whether unconfirmed rows count as memory (agents had
+     to guess before - skuio asked four questions in a row). #}
+  <p style="font-size:.74rem;color:var(--t3);margin:-.3rem 0 .6rem">{{ (i18n or {}).get('em_semantics_hint', "列表中所有条目都会参与 AI 记忆召回；「确认属实」＝人工核实（推断转正入稳定层），「编辑」＝改正后保存（视为人工核实），「删除」＝立即移出、不再参与回复。") }}</p>
   <div class="table-wrap">
     <table class="em-table" id="em-table">
       <thead>
@@ -343,9 +347,12 @@ function _emRowHtml(it) {
     : '—';
   var emb = it.has_embedding ? '<span class="badge-emb on">'+window.T('em_js002')+'</span>' : '<span class="badge-emb off">'+window.T('em_js003')+'</span>';
   var srcOn = it.source === 'ai_inferred';
+  /* memory-mgmt provenance (#41): hover the source badge to see which
+     original message the fact was extracted from (old rows: honest N/A). */
+  var srcTip = _emSrcQuoteTip(it);
   var src = srcOn
-    ? '<span class="badge-src inferred">AI '+window.T('em_s013')+'</span>'
-    : '<span class="badge-src stated">'+window.T('em_s012')+'</span>';
+    ? '<span class="badge-src inferred" style="cursor:help" title="'+_emEsc(srcTip)+'">AI '+window.T('em_s013')+'</span>'
+    : '<span class="badge-src stated" style="cursor:help" title="'+_emEsc(srcTip)+'">'+window.T('em_s012')+'</span>';
   var tier = '';
   if (it.tier === 'stable') tier = '<span class="badge-tier stable">'+window.T('em_js004')+'</span>';
   else if (it.tier === 'stale') tier = '<span class="badge-tier stale">'+window.T('em_js005')+'</span>';
@@ -357,7 +364,14 @@ function _emRowHtml(it) {
     var okBtn = srcOn
       ? '<button type="button" class="btn-ok" data-id="'+it.id+'" onclick="emConfirm(this)" title="'+_emEsc(window.T('em_id_confirm_tip'))+'">'+window.T('em_id_confirm')+'</button>'
       : '';
-    op = okBtn + '<button type="button" class="btn-del" data-id="'+it.id+'" data-name="'+_emEsc(_emRowName(it))+'" onclick="emDel(this)">'+window.T('delete')+'</button>';
+    /* memory-mgmt edit (#41): wrong memories go from delete-only to
+       fix-and-keep. Feature probe: rows carrying source_quote = new backend
+       loaded (PUT route exists); during the hot-template/old-backend window
+       the button stays hidden so nobody clicks into a 404. */
+    var canEdit = Object.prototype.hasOwnProperty.call(it || {}, 'source_quote');
+    op = okBtn
+      + (canEdit ? '<button type="button" class="btn-ok" data-id="'+it.id+'" onclick="emEdit(this)" title="'+_emEsc(window.T('em_edit_tip'))+'">'+window.T('em_edit')+'</button>' : '')
+      + '<button type="button" class="btn-del" data-id="'+it.id+'" data-name="'+_emEsc(_emRowName(it))+'" onclick="emDel(this)">'+window.T('delete')+'</button>';
   } else {
     op = '<span style="color:var(--t3);font-size:.75rem">—</span>';
   }
@@ -727,9 +741,10 @@ function _emDrvErr(e){
 }
 function _emDrvRowHtml(r,personName){
   var srcOn=r.source==='ai_inferred';
+  var srcTipD=_emSrcQuoteTip(r);
   var chips=srcOn
-    ?'<span class="badge-src inferred">AI '+window.T('em_s013')+'</span>'
-    :'<span class="badge-src stated">'+window.T('em_s012')+'</span>';
+    ?'<span class="badge-src inferred" style="cursor:help" title="'+_emEsc(srcTipD)+'">AI '+window.T('em_s013')+'</span>'
+    :'<span class="badge-src stated" style="cursor:help" title="'+_emEsc(srcTipD)+'">'+window.T('em_s012')+'</span>';
   var tier='';
   if(r.tier==='stable')tier='<span class="badge-tier stable">'+window.T('em_js004')+'</span>';
   else if(r.tier==='stale')tier='<span class="badge-tier stale">'+window.T('em_js005')+'</span>';
@@ -737,7 +752,9 @@ function _emDrvRowHtml(r,personName){
   var t=ago?'<span title="'+_emEsc(ago.abs)+'" style="cursor:help">'+_emEsc(ago.rel)+'</span>':'';
   var acts='';
   if(emCanDelete){
+    var canEditD=Object.prototype.hasOwnProperty.call(r||{},'source_quote');
     acts=(srcOn?'<button type="button" class="btn-ok" data-id="'+r.id+'" onclick="emConfirm(this)">'+window.T('em_id_confirm')+'</button>':'')
+      +(canEditD?'<button type="button" class="btn-ok" data-id="'+r.id+'" data-content="'+_emEsc(r.content||'')+'" onclick="emEdit(this)" title="'+_emEsc(window.T('em_edit_tip'))+'">'+window.T('em_edit')+'</button>':'')
       +'<button type="button" class="btn-del" data-id="'+r.id+'" data-name="'+_emEsc(personName||'')+'" onclick="emDel(this)">'+window.T('delete')+'</button>';
   }
   return '<div class="em-drv-row"><div class="c">'+_emEsc(r.content||'')+'</div>'
@@ -995,6 +1012,53 @@ async function emConfirm(btn) {
     csLoad();
     if (_emDrvOpen()) _emDrvReload();
   } catch (e) { alert(e); btn.disabled = false; }
+}
+/* memory-mgmt provenance tip (#41): quote the original message when
+   recorded; old rows honestly say none was recorded. */
+function _emSrcQuoteTip(it) {
+  var q = (it && it.source_quote) ? String(it.source_quote) : '';
+  if (!q) return window.T('em_src_quote_none');
+  if (q.length > 140) q = q.slice(0, 140) + '…';
+  return window.Tf('em_src_quote_tip', {q: q});
+}
+/* memory-mgmt edit (#41 Q3): correct a wrong memory; saving counts as
+   human verification (AI inferences get promoted to user-stated). */
+function emEdit(btn) {
+  var id = (btn&&btn.dataset)?(btn.dataset.id||''):'';
+  if (!id) return;
+  var it = _emFindItem(id);
+  // drawer rows are not in the main list array -> data-content fallback
+  var cur = (it && it.content) ? String(it.content)
+    : ((btn && btn.dataset && btn.dataset.content) ? String(btn.dataset.content) : '');
+  var b = '<textarea id="em-edit-input" maxlength="500" style="width:100%;min-height:90px;'
+        + 'padding:.45rem;border:1px solid var(--bd);border-radius:8px;background:var(--bg1);'
+        + 'color:var(--t1);font-size:.85rem;box-sizing:border-box">'
+        + _emEsc(cur) + '</textarea>'
+        + '<div style="color:var(--t3);font-size:.74rem;margin-top:.35rem">'
+        + _emEsc(window.T('em_edit_tip')) + '</div>';
+  _emModal({
+    title: window.T('em_edit_title'),
+    body: b,
+    ok: window.T('em_edit_save'),
+    onOk: async function(){
+      var ta = document.getElementById('em-edit-input');
+      var v = ta ? ta.value.trim() : '';
+      if (v.length < 2 || v === cur.trim()) return;
+      var st = document.getElementById('em-status');
+      var res = await apiFetch('/api/episodic-memory/' + id, {
+        method: 'PUT', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({content: v}),
+      }, {timeoutMs: 60000});
+      if (!res.ok) {
+        if (st) st.textContent = window.T('em_edit_fail') + ' '
+          + (res.status === 404 ? window.T('em_edit_dup') : res.status);
+        return;
+      }
+      emLoad();
+      csLoad();
+      if (_emDrvOpen()) _emDrvReload();
+    }
+  });
 }
 function emDel(btn) {
   var id = (btn&&btn.dataset)?(btn.dataset.id||''):'';

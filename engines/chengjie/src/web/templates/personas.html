@@ -1097,6 +1097,11 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
       <div class="field-row"><label>{{ (i18n or {}).get('psn_pf_name_nickname','昵称') }}</label><input id="pe-pf-name-nickname" type="text"></div>
       <div class="field-row"><label>{{ (i18n or {}).get('psn_pf_name_usage','名字使用说明') }}</label><input id="pe-pf-name-usage-notes" type="text"></div>
     </div>
+    {# #24（0830）：称呼双向硬钉子字段——babe/baba 互换实锤的运营侧入口 #}
+    <div class="ps-row">
+      <div class="field-row"><label title="{{ (i18n or {}).get('psn_pf_name_callpeer_tip','AI 对客户的固定爱称（如 babe）——注入为硬约束，绝不跟着客户的叫法互换，并压过 AI 推断记忆') }}">{{ (i18n or {}).get('psn_pf_name_callpeer','你称呼对方（爱称）') }}</label><input id="pe-pf-name-callpeer" type="text" placeholder="babe"></div>
+      <div class="field-row"><label title="{{ (i18n or {}).get('psn_pf_name_peercalls_tip','客户对 AI 的称呼（如 baba）——那是对方叫 AI 的，AI 绝不会拿它反过来称呼客户') }}">{{ (i18n or {}).get('psn_pf_name_peercalls','对方称呼你') }}</label><input id="pe-pf-name-peercalls" type="text" placeholder="baba"></div>
+    </div>
     <div class="pf-hd">{{ (i18n or {}).get('psn_pf_g_background','背景故事') }}</div>
     <div class="field-row">
       <label>{{ (i18n or {}).get('psn_pf_g_background','背景故事') }} <span class="pf-cnt" id="pe-pf-bg-count"></span></label>
@@ -3980,6 +3985,8 @@ function _fillProfileTabFields(p, persObj) {
   _pfSetVal('pe-pf-name-english', nms.english);
   _pfSetVal('pe-pf-name-nickname', nms.nickname);
   _pfSetVal('pe-pf-name-usage-notes', nms.usage_notes);
+  _pfSetVal('pe-pf-name-callpeer', nms.call_peer);
+  _pfSetVal('pe-pf-name-peercalls', nms.peer_calls_you);
   _pfSetVal('pe-pf-background', p.background);
   _pfSetLines('pe-pf-memories', ctx.specific_memories);
   _pfSetLines('pe-pf-hobbies', ctx.hobbies);
@@ -4039,7 +4046,8 @@ function _collectProfileTabPatch() {
   // names：任一子键满足包含规则才带 names；带时四子键按各自规则
   var namesOut = {};
   [['pe-pf-name-western','full_western'],['pe-pf-name-english','english'],
-   ['pe-pf-name-nickname','nickname'],['pe-pf-name-usage-notes','usage_notes']].forEach(function(pair){
+   ['pe-pf-name-nickname','nickname'],['pe-pf-name-usage-notes','usage_notes'],
+   ['pe-pf-name-callpeer','call_peer'],['pe-pf-name-peercalls','peer_calls_you']].forEach(function(pair){
     var v = _pfStr(pair[0]);
     if (v || _pfNonEmpty(_pfOrig('names', pair[1]))) namesOut[pair[1]] = v;
   });

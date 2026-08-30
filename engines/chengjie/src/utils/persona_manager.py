@@ -66,6 +66,9 @@ PROMPT_CONSUMED_FIELDS = frozenset({
     # 身份/边界/情绪
     "identity.deny_ai", "identity.deny_ai_reply", "identity.claim_human",
     "boundaries.topics_to_avoid",
+    # #24（0830 skuio 实锤）：称呼双向硬钉子——「你叫对方 X／对方叫你 Y」
+    # 绝不互换；档案称呼显式压过记忆推断（详见 full/compact 两处注入块）。
+    "names.call_peer", "names.peer_calls_you",
     # 已撤销的旧设定（2026-08-03「删除不干净」事故链）：运营删掉某设定后，
     # 会话历史窗口里的旧轮次仍会诱导 LLM 复读（客户甚至会主动灌「你上次给我看过
     # 你的猫」这类假记忆钩子）。本字段显式注入「这些旧设定已作废，绝不再认领」，
@@ -158,6 +161,37 @@ def _join_text_items(v: Any) -> str:
     if isinstance(v, (list, tuple)):
         return "、".join(str(x).strip() for x in v if str(x).strip())
     return str(v or "").strip()
+
+
+def _build_address_pin(persona: Dict[str, Any]) -> str:
+    """#24（0830）称呼双向硬钉子（full/compact 共用；无字段返回空串）。
+
+    字段：``names.call_peer``（你称呼对方）/``names.peer_calls_you``（对方
+    称呼你）。实锤：档案明写「称呼对方为 babe」仍被客户满屏「baba」带跑，
+    且记忆库的 AI 推断（「用户不喜欢被叫 babe」）在反向教唆——故钉子必须
+    显式声明「绝不互换 + 档案压过记忆推断」。
+    """
+    names = persona.get("names") or {}
+    if not isinstance(names, dict):
+        return ""
+    call_peer = str(names.get("call_peer") or "").strip()
+    peer_calls = str(names.get("peer_calls_you") or "").strip()
+    if not (call_peer or peer_calls):
+        return ""
+    parts = []
+    if call_peer:
+        parts.append(f"你对对方的称呼（爱称/昵称）：「{call_peer}」——要用爱称时只用它")
+    if peer_calls:
+        parts.append(
+            f"对方对你的称呼：「{peer_calls}」——那是对方叫**你**的叫法，"
+            "绝不能拿它去称呼对方"
+        )
+    return (
+        "【称呼·硬约束】" + "；".join(parts)
+        + "。两个方向绝不互换：即使对方满屏都在用某个叫法，你对 TA 的称呼"
+        "也不变。这条来自人设档案（运营明示），优先级高于任何「记忆/推断」"
+        "（如记忆里有「对方不喜欢某称呼」这类 AI 推断，也不得推翻本条）。"
+    )
 
 
 def _labelled_pairs(v: Any, labels: Dict[str, str]) -> str:
@@ -1576,6 +1610,11 @@ class PersonaManager:
                     "你的西方名字：" + "、".join(_np_c)
                     + "（被问英文名/全名时如实回答，别编别的）。"
                 )
+        # #24：称呼双向硬钉子——compact 是生产主用格式，称呼互换是当场穿帮
+        # 面（babe/baba 实锤），这条不能省。
+        _addr_c = _build_address_pin(persona)
+        if _addr_c:
+            lines.append(_addr_c)
         # K1：年龄/性别事实钉子在 compact 也保留——「被问年龄答错」是最容易被
         # 客户当场抓包的穿帮，压缩 token 也不该省掉这一行。
         _age_c = _persona_age(persona)
@@ -1818,6 +1857,14 @@ class PersonaManager:
                     + "。在英文场合自然使用英文名；中文朋友叫中文名；"
                     "被问到全名或外国名字时如实回应，不要回避。"
                 )
+
+        # #24（0830 skuio 实锤）：称呼双向硬钉子——档案明写「称呼对方为 babe」
+        # 仍被客户满屏「baba」带跑（AI 模仿着叫回去）。称呼字段必须是硬约束：
+        # 两个方向绝不互换，且显式压过记忆推断（记忆库曾有「用户不喜欢被叫
+        # babe」的 AI 推断在反向教唆——档案是运营明示，永远优先）。
+        _addr = _build_address_pin(persona)
+        if _addr:
+            lines.append(_addr)
 
         # Background / life story — 让 AI 真正"活"在这个身份里
         background = str(persona.get("background") or "").strip()

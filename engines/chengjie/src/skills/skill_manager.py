@@ -4724,6 +4724,39 @@ class SkillManager(LoggerMixin):
         except Exception:
             self.logger.debug("[persona_guard] 自称名守卫异常，保留原回复",
                               exc_info=True)
+        # ── #24 称呼互换守卫（0830 babe/baba 实锤）：档案配了双向称呼字段时，
+        # 呼格位置的「对方叫你的称呼」出站前换回「你叫对方的称呼」。prompt
+        # 硬钉子（_build_address_pin）是第一道，这里兜「钉了仍被带跑」的漏网。
+        # 子开关 companion.persona_guard.address_swap.enabled（默认开）。
+        try:
+            _asw_on = True
+            try:
+                _pg_cfg2 = (((self.config.config or {}).get("companion") or {})
+                            .get("persona_guard") or {}) if self.config else {}
+                _asw_cfg = _pg_cfg2.get("address_swap") if isinstance(
+                    _pg_cfg2, dict) else None
+                if isinstance(_asw_cfg, dict):
+                    _asw_on = bool(_asw_cfg.get("enabled", True))
+            except Exception:
+                _asw_on = True
+            if _asw_on and out and isinstance(persona, dict):
+                _nm24 = persona.get("names") or {}
+                if isinstance(_nm24, dict) and (
+                        _nm24.get("call_peer") or _nm24.get("peer_calls_you")):
+                    from src.utils.persona_guard import swap_vocative_peer_call
+                    cleaned4, _sw_hits = swap_vocative_peer_call(
+                        out,
+                        str(_nm24.get("call_peer") or ""),
+                        str(_nm24.get("peer_calls_you") or ""))
+                    if _sw_hits:
+                        self.logger.warning(
+                            "%s[persona_guard] 称呼互换已纠正（#24）：%r → %r",
+                            log_prefix, _sw_hits[:3],
+                            str(_nm24.get("call_peer") or "")[:20])
+                        out = cleaned4 or out
+        except Exception:
+            self.logger.debug("[persona_guard] 称呼互换守卫异常，保留原回复",
+                              exc_info=True)
         return out
 
     def _apply_outbound_text_guard(
@@ -5196,11 +5229,16 @@ class SkillManager(LoggerMixin):
             mu_facts = mu
 
         try:
+            # 五件套·溯源（#41 0830）：本轮抽取的事实一律登记「抽取自哪句原话
+            # +何时」——「这条推断从哪来的」从无人能答变成条目自带答案。
+            _prov_quote = str(mu_facts or mu or "").strip()[:200]
+            _prov_ts = time.time()
             n_heuristic = 0
             for fact in extract_heuristic_facts(mu_facts):
                 # R12：启发式事实从用户原话正则提取 → user_stated（高置信）
                 rid = self._episodic_store.add_fact(
-                    key, fact, "heuristic", source="user_stated"
+                    key, fact, "heuristic", source="user_stated",
+                    source_quote=_prov_quote, source_ts=_prov_ts,
                 )
                 await self._episodic_patch_embedding(rid, fact)
                 n_heuristic += 1
@@ -5219,7 +5257,8 @@ class SkillManager(LoggerMixin):
             for f in facts_llm:
                 # R12：LLM 抽取是对话推断/概括 → ai_inferred（晋升/推翻 stable 需更高置信）
                 rid = self._episodic_store.add_fact(
-                    key, f, "llm", source="ai_inferred"
+                    key, f, "llm", source="ai_inferred",
+                    source_quote=_prov_quote, source_ts=_prov_ts,
                 )
                 await self._episodic_patch_embedding(rid, f)
 

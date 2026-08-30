@@ -734,11 +734,23 @@ def apply_inbound_enrichments(
     # 承诺（下个月过去一趟）带新鲜度窗口回注——上面的槽位锚只管长期个人事实，
     # 这两类会过期的自述曾在 31/10 分钟内被 AI 当客户面自我否认（钧截图实锤）。
     # A/B 两线同经本函数，双链零额外接线。
+    # #62扩/#82（0830 午批）：同函数续扩 promise（承诺原句锚，反向规则=列表外
+    # 承诺不许认领）与 travel（临时行程=当前状态覆盖层，期间按它叙事到期回归）。
     try:
         from src.inbox.self_claims import build_recent_self_statement_hint
         rs_hint = build_recent_self_statement_hint(list(history or []))
         if rs_hint:
             hints.append(rs_hint)
+    except Exception:
+        pass
+    # #62扩②（0830 第三例「方向混淆」实锤）：对方最近的请求/提议显式标注
+    # 「是 TA 说的」——防 AI 把客户请求（「你可以打字嘛」）转述成自己的承诺
+    # （「之前不是答应了打字陪你嘛」）。保守触发（请求形+陪伴类动词才注入）。
+    try:
+        from src.inbox.self_claims import build_request_direction_hint
+        rq_hint = build_request_direction_hint(list(history or []))
+        if rq_hint:
+            hints.append(rq_hint)
     except Exception:
         pass
     # AI 质疑应对（2026-08-03，AI 味周报闭环）：客户质疑「你是AI/机器人」或吐槽

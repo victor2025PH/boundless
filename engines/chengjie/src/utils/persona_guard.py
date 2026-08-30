@@ -631,8 +631,87 @@ def strip_vocative_self_name(
     return cleaned, hits
 
 
+# ── #24 称呼互换守卫（0830 babe/baba 实锤）────────────────────────────────────
+#
+# 档案明写「你叫对方 babe / 对方叫你 baba」，AI 仍被客户满屏「baba」带跑、把
+# 对方叫成 baba（「good morning baba」形）。prompt 硬钉子是第一道（persona_manager
+# ``_build_address_pin``），这里是出站兜底：呼格位置的 peer_calls_you → call_peer。
+#
+# 只动**呼格形态**（三种）：带逗号呼格（复用 _voc_patterns）、问候语+称呼收尾
+# （good morning baba / 晚安 baba——事故原形没有逗号）、句首独立称呼起头
+# （baba 你睡了吗）。元语句（叫我/叫你/call me…讨论称呼本身）整句跳过——
+# 「你叫我 baba 的时候好可爱」是合法引用，换词反而穿帮；所有格「我是你的 baba」
+# （AI 自指）不属呼格，天然不动。
+
+_ADDR_META_RE = re.compile(
+    r"叫我|喊我|叫你|喊你|你叫|别叫|不要叫|call(?:s|ing|ed)?\s+(?:me|you)|"
+    r"don'?t call", re.IGNORECASE)
+
+_GREET_WORDS = (
+    r"good\s+(?:morning|night|evening|afternoon)|morning|night|"
+    r"hi|hey|hello|miss\s+you|love\s+you|"
+    r"早安|早呀|早|晚安|嗨|想你了|爱你")
+
+
+def _addr_voc_patterns(name: str) -> List[re.Pattern]:
+    n = re.escape(str(name or "").strip())
+    if not n:
+        return []
+    return [
+        # 逗号呼格（与 _voc_patterns 同形）：…, Y 结尾 / Y, … 开头
+        re.compile(r"[,，]\s*(" + n + r")\s*(?=[.!?。！？~～…\s]*$)",
+                   re.IGNORECASE),
+        re.compile(r"^\s*(" + n + r")\s*[,，]", re.IGNORECASE),
+        # 问候语 + 称呼收尾（事故原形，无逗号）：good morning Y / 晚安 Y
+        re.compile(r"(?:" + _GREET_WORDS + r")\s*[,，]?\s+(" + n + r")\b"
+                   r"(?=[.!?。！？~～…\s]*$)", re.IGNORECASE),
+        # 句首独立称呼起头：Y 你睡了吗 / Y what are you doing
+        re.compile(r"^\s*(" + n + r")(?=\s+\S|[，,]\s*\S)", re.IGNORECASE),
+    ]
+
+
+def swap_vocative_peer_call(
+    text: str, call_peer: str, peer_calls_you: str,
+) -> Tuple[str, List[str]]:
+    """呼格位置的「对方叫你的称呼」→「你叫对方的称呼」（#24 出站兜底）。
+
+    返回 ``(纠正后文本, 命中列表)``；任一字段为空/两者相同/无命中原样返回。
+    纯函数绝不抛；只替换称呼 token，句子本体不动。
+    """
+    t = str(text or "")
+    cp = str(call_peer or "").strip()
+    py = str(peer_calls_you or "").strip()
+    if not t.strip() or not cp or not py or _norm(cp) == _norm(py):
+        return t, []
+    hits: List[str] = []
+    out_sents: List[str] = []
+    try:
+        pats = _addr_voc_patterns(py)
+        for sent in _split_sentences_sn(t):
+            s = sent
+            if _ADDR_META_RE.search(s):
+                out_sents.append(s)     # 讨论称呼本身的句子整句放行
+                continue
+            for pat in pats:
+                m = pat.search(s)
+                if not m:
+                    continue
+                if _VOC_SELF_INTRO_TAIL_RE.search(s[:m.start(1)]):
+                    continue            # 自介语境不是呼格
+                hits.append(m.group(1))
+                s = s[:m.start(1)] + cp + s[m.end(1):]
+            out_sents.append(s)
+    except Exception:
+        return t, []
+    if not hits:
+        return t, []
+    cleaned = "".join(out_sents)
+    return (cleaned if cleaned.strip() else t), hits
+
+
 __all__ = [
     "collect_forbidden", "find_violations", "matches_ai_self_identity", "sanitize",
     "build_self_name_allowlist", "find_wrong_self_name", "sanitize_self_name",
     "find_vocative_self_name", "strip_vocative_self_name",
+    "swap_vocative_peer_call",
 ]

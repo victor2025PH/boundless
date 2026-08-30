@@ -142,8 +142,10 @@ def build_self_claims_hint(history: List[Dict[str, Any]]) -> str:
 
 _ACTIVITY_WINDOW_SEC = 6 * 3600.0
 _PLAN_WINDOW_SEC = 72 * 3600.0
+_TRAVEL_WINDOW_SEC = 7 * 86400.0   # 行程自述天然以「天」计
 _ACTIVITY_POS_WINDOW = 3   # 无 ts 时 activity 只认最近 N 条 assistant 消息
 _PLAN_POS_WINDOW = 12
+_TRAVEL_POS_WINDOW = 20
 
 # 即时行为：第一人称 + 进行/刚完成态动词（刻意不收「做/开/经营」这类会与 job
 # 槽双重引用的动词；做饭/做菜按字面单列）。饮品「泡/沏/煮了杯X」结构在聊天语境
@@ -165,6 +167,24 @@ _TRANSIENT_PATTERNS: List[Tuple[str, re.Pattern]] = [
         r"\bI(?:'ll| will|'m going to| plan to| might| should)\b"
         r"[^,.!?\n]{0,40}\b(?:next month|next week|this weekend|tomorrow|"
         r"in a few days)\b", re.IGNORECASE)),
+    # #62扩（0830 第三例反向病）：承诺类自述——「我答应/说好/保证过 X」。
+    # 真承诺进锚点列表，反向规则（列表里没有的承诺不许认领）才有依据。
+    ("promise", re.compile(
+        r"我(?:答应|说好|保证|承诺)(?:过|了)?[^，。！？!?\n]{2,24}|"
+        r"(?:说好|说定)了[^，。！？!?\n]{0,20}|"
+        r"\bI promised?\b[^,.!?\n]{0,40}", re.IGNORECASE)),
+    # #82（0830 两例实锤）：临时行程自述——「我来马尼拉出差三天」。行程期间
+    # 是 AI 的**当前状态**（位置/场景/天气按它叙事），到期回归档案常驻地；
+    # 位置钉子（ai_client）显式引用本锚点作为唯一合法的「档案外位置」来源。
+    ("travel", re.compile(
+        r"我[^，。！？!?\n]{0,8}(?:来|到|在)[^，。！？!?\n]{1,10}"
+        r"(?:出差|旅行|旅游|度假|办事|玩几天|待几天|呆几天)|"
+        r"我(?:这|接下来|最近)?几天(?:都)?在[^，。！？!?\n]{1,10}|"
+        r"(?:来|到)[^，。！？!?\n]{1,8}出差[^，。！？!?\n]{0,12}|"
+        r"\bI'?m (?:in|at) [A-Z][A-Za-z]{2,14}\b[^,.!?\n]{0,24}"
+        r"\b(?:for|on)\b[^,.!?\n]{0,20}"
+        r"\b(?:trip|work|vacation|holiday|days?)\b|"
+        r"\bon a business trip\b", re.IGNORECASE)),
 ]
 
 
@@ -196,6 +216,12 @@ def extract_recent_self_statements(
                 if isinstance(m, dict) and m.get("role") == "assistant"]
         msgs = msgs[-_MAX_SCAN_MSGS:]
         total = len(msgs)
+        _windows = {
+            "activity": (_ACTIVITY_WINDOW_SEC, _ACTIVITY_POS_WINDOW),
+            "plan": (_PLAN_WINDOW_SEC, _PLAN_POS_WINDOW),
+            "promise": (_PLAN_WINDOW_SEC, _PLAN_POS_WINDOW),
+            "travel": (_TRAVEL_WINDOW_SEC, _TRAVEL_POS_WINDOW),
+        }
         for idx, m in enumerate(msgs):
             pos_from_end = total - idx  # 1 = 最新一条
             try:
@@ -209,25 +235,21 @@ def extract_recent_self_statements(
                 for kind, rx in _TRANSIENT_PATTERNS:
                     if not rx.search(sent):
                         continue
-                    if kind == "activity":
-                        if ago is not None:
-                            if ago > _ACTIVITY_WINDOW_SEC:
-                                continue
-                        elif pos_from_end > _ACTIVITY_POS_WINDOW:
+                    _win_sec, _win_pos = _windows.get(
+                        kind, (_PLAN_WINDOW_SEC, _PLAN_POS_WINDOW))
+                    if ago is not None:
+                        if ago > _win_sec:
                             continue
-                    else:
-                        if ago is not None:
-                            if ago > _PLAN_WINDOW_SEC:
-                                continue
-                        elif pos_from_end > _PLAN_POS_WINDOW:
-                            continue
+                    elif pos_from_end > _win_pos:
+                        continue
                     latest[kind] = {"kind": kind,
                                     "text": sent[:_MAX_SENT_CHARS],
                                     "ago_sec": ago}
                     break  # 一句只归一类，防同句双引
     except Exception:
         return []
-    return [latest[k] for k in ("activity", "plan") if k in latest]
+    return [latest[k] for k in ("activity", "plan", "promise", "travel")
+            if k in latest]
 
 
 def build_recent_self_statement_hint(
@@ -242,7 +264,7 @@ def build_recent_self_statement_hint(
         when = _ago_phrase(float(s["ago_sec"])) if s["ago_sec"] is not None else "刚才"
         lines.append(f"-（{when}）「{s['text']}」")
     body = "\n".join(lines)
-    return (
+    hint = (
         "【你刚说过——保持自洽】你最近在本会话里亲口说过（原话摘录）：\n"
         f"{body}\n"
         "对方听到了这些话，很可能正顺着它们追问。不要否认或凭空推翻：说过在做"
@@ -250,9 +272,94 @@ def build_recent_self_statement_hint(
         "别立刻改口（如说好下个月见就别再问这周哪天）。情况真的变了就自然地"
         "衔接说明，别装作从没说过。"
     )
+    kinds = {s["kind"] for s in stmts}
+    # #82：行程自述=当前状态覆盖层——期间主动按它叙事，到期回归档案常驻地。
+    if "travel" in kinds:
+        hint += (
+            "你说过的临时行程（出差/旅行）在期间就是你的**当前状态**：这几天"
+            "谈到你在哪、天气、在做什么都按它叙事；行程时限过了就自然回归你的"
+            "常驻地，不用对方提醒。"
+        )
+    # #62扩（反向）：承诺必须有原句锚——列表里没有的承诺等于从没许过。
+    hint += (
+        "反向同样成立：上面**没有**列出的「承诺/约定」你从没许过——绝不说"
+        "「之前答应过/说好了」去指一件列表里没有的事；对方**请求**过某事"
+        "≠你答应过它。"
+    )
+    return hint
+
+
+# ── #62扩②（0830 第三例）：对方请求方向标注——防「请求-承诺主体互换」 ────────
+# 实锤：客户 02:04 说「你可以打字嘛，太晚了」（对方的请求），AI 10:43 却说
+# 「之前不是答应了打字陪你嘛，说到做到」——把对方的请求转述成自己的承诺。
+# OpenAI messages 的 role 字段挡不住这类混淆，需要把「谁说的」显式写成文字。
+# 保守触发：只抓「请求形 + 陪伴类动词」的用户句（帮我看看这个/发个定位这类
+# 普通请求不触发——过宽会每轮注入纯噪音）。
+
+_PEER_REQUEST_RE = re.compile(
+    r"(?:你可以|你能|能不能|可不可以|可以)[^，。！？!?\n]{0,12}"
+    r"(?:陪|打字|发?语音|视频|见面?|来|过来|电话|聊)[^，。！？!?\n]{0,10}|"
+    r"\b(?:can|could|will|would) you\b[^,.!?\n]{0,40}"
+    r"\b(?:type|text|call|video|visit|meet|stay|talk|chat)\b",
+    re.IGNORECASE)
+_REQUEST_POS_WINDOW = 12   # 只认最近 N 条 user 消息
+_REQUEST_WINDOW_SEC = 72 * 3600.0
+_MAX_REQUESTS = 2
+
+
+def extract_recent_peer_requests(
+    history: List[Dict[str, Any]], *, now: float = 0.0,
+) -> List[str]:
+    """近窗内**对方**的请求/提议句（原句引用）。纯函数、绝不抛。"""
+    import time as _t
+    now = float(now) if now else _t.time()
+    out: List[str] = []
+    try:
+        msgs = [m for m in list(history or [])
+                if isinstance(m, dict) and m.get("role") == "user"]
+        msgs = msgs[-_MAX_SCAN_MSGS:]
+        total = len(msgs)
+        for idx, m in enumerate(msgs):
+            pos_from_end = total - idx
+            try:
+                mts = float(m.get("ts") or 0)
+            except (TypeError, ValueError):
+                mts = 0.0
+            ago = (now - mts) if mts > 0 else None
+            if ago is not None:
+                if ago > _REQUEST_WINDOW_SEC:
+                    continue
+            elif pos_from_end > _REQUEST_POS_WINDOW:
+                continue
+            for sent in _sentences(str(m.get("content") or "")):
+                if _PEER_REQUEST_RE.search(sent):
+                    clipped = sent[:_MAX_SENT_CHARS]
+                    if clipped not in out:
+                        out.append(clipped)
+    except Exception:
+        return []
+    return out[-_MAX_REQUESTS:]
+
+
+def build_request_direction_hint(
+    history: List[Dict[str, Any]], *, now: float = 0.0,
+) -> str:
+    """「谁说的要分清」方向锚（无命中返回 ""）。"""
+    reqs = extract_recent_peer_requests(history, now=now)
+    if not reqs:
+        return ""
+    lines = "\n".join(f"- 「{r}」" for r in reqs)
+    return (
+        "【谁说的要分清】下面这些是**对方**最近对你说的请求/提议（是 TA 说的，"
+        "不是你的承诺）：\n"
+        f"{lines}\n"
+        "你可以现在回应或答应它们，但绝不能把它们说成「我之前答应过/说好了」"
+        "——只有你自己亲口说过的话才是你的承诺。"
+    )
 
 
 __all__ = [
     "extract_self_claims", "build_self_claims_hint",
     "extract_recent_self_statements", "build_recent_self_statement_hint",
+    "extract_recent_peer_requests", "build_request_direction_hint",
 ]

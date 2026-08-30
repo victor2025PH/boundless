@@ -240,3 +240,83 @@ def test_enrich_wires_recent_statement_hint():
     )
     hint = ctx.get("_topic_switch_hint") or ""
     assert "你刚说过" in hint and "泡了杯茶" in hint
+
+
+# ── #62扩/#82（0830 午批）：承诺原句锚 + 临时行程覆盖层 + 请求方向标注 ────────
+
+from src.inbox.self_claims import (  # noqa: E402
+    build_request_direction_hint,
+    extract_recent_peer_requests,
+)
+
+
+def test_promise_statement_anchored():
+    """「我答应过X」进锚点——反向规则（列表外承诺不许认领）才有依据。"""
+    hist = _ht(("assistant", "我答应过陪你跨年，一定到。", 3600))
+    stmts = extract_recent_self_statements(hist)
+    assert any(s["kind"] == "promise" and "答应过" in s["text"] for s in stmts)
+
+
+def test_hint_carries_no_fabrication_rule():
+    """锚点提示必须带反向规则：没列出的承诺=从没许过；请求≠承诺。"""
+    hist = _ht(("assistant", "我这边刚收工，正泡了杯茶发呆。", 10 * 60))
+    hint = build_recent_self_statement_hint(hist)
+    assert "没有" in hint and "承诺" in hint
+    assert "请求" in hint  # 「对方请求过某事≠你答应过它」
+
+
+def test_travel_statement_anchored_and_narrated():
+    """#82 三层模型②：「来马尼拉出差三天」=当前状态覆盖层，hint 带叙事指令。"""
+    hist = _ht(("assistant", "对了，我来马尼拉出差三天，这几天都在酒店。", 6 * 3600))
+    stmts = extract_recent_self_statements(hist)
+    assert any(s["kind"] == "travel" and "马尼拉" in s["text"] for s in stmts)
+    hint = build_recent_self_statement_hint(hist)
+    assert "临时行程" in hint and "回归" in hint
+
+
+def test_travel_window_days_not_hours():
+    """行程窗口 7 天：昨天说的出差今天仍是当前状态；8 天前的过期。"""
+    fresh = _ht(("assistant", "我来马尼拉出差三天。", 24 * 3600))
+    assert any(s["kind"] == "travel"
+               for s in extract_recent_self_statements(fresh))
+    stale = _ht(("assistant", "我来马尼拉出差三天。", 8 * 86400))
+    assert not any(s["kind"] == "travel"
+                   for s in extract_recent_self_statements(stale))
+
+
+def test_incident_request_direction_0830():
+    """第三例实锤：客户「你可以打字嘛，太晚了」绝不能变成 AI 的承诺。"""
+    hist = _ht(
+        ("user", "你可以打字嘛，太晚了。", 3600),
+        ("assistant", "好呀，那我小声点。", 3500),
+    )
+    reqs = extract_recent_peer_requests(hist)
+    assert any("打字" in r for r in reqs)
+    hint = build_request_direction_hint(hist)
+    assert "对方" in hint and "打字" in hint
+    assert "答应过" in hint  # 「绝不能把它们说成我之前答应过」
+
+
+def test_request_direction_only_user_side():
+    """assistant 侧同形句不进「对方请求」列表（方向是本功能的全部意义）。"""
+    hist = _ht(("assistant", "你可以打字嘛，太晚了。", 3600))
+    assert extract_recent_peer_requests(hist) == []
+
+
+def test_ordinary_requests_not_flagged():
+    """普通帮忙类请求（无陪伴动词）不触发——过宽=每轮注入纯噪音。"""
+    hist = _ht(("user", "你可以帮我看看这个文件哪里有问题嘛。", 3600))
+    assert extract_recent_peer_requests(hist) == []
+
+
+def test_enrich_wires_request_direction_hint():
+    from src.inbox.inbound_enrich import apply_inbound_enrichments
+    ctx: dict = {}
+    apply_inbound_enrichments(
+        ctx,
+        text="你怎么不说话了",
+        history=_ht(("user", "你可以打字嘛，太晚了。", 3600)),
+        reply_lang="zh",
+    )
+    hint = ctx.get("_topic_switch_hint") or ""
+    assert "谁说的要分清" in hint

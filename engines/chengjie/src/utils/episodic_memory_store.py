@@ -205,6 +205,32 @@ class EpisodicMemoryStore:
             self._conn.commit()
             logger.info("episodic_memory: added column source")
 
+    def _ensure_provenance_columns(self) -> None:
+        """记忆五件套·来源溯源（#41 0830 定稿）：``source_quote``（抽取自哪句
+        原话）+ ``source_ts``（那句话的时刻）。
+
+        实锤缺口：「用户不喜欢被叫 babe」这条 AI 推断正在反向教唆称呼互换
+        （#24），而「这条推断从哪来的」连运维都答不上——溯源列让每条记忆可
+        回答「抽取自哪句原话、何时」，运营一眼判真伪再决定确认/编辑/删除。
+        旧行默认空串/0＝无溯源（如实展示「早期条目无来源记录」）。
+        """
+        cur = self._conn.execute("PRAGMA table_info(episodic_memory)")
+        cols = [str(r[1]) for r in cur.fetchall()]
+        changed = False
+        if "source_quote" not in cols:
+            self._conn.execute(
+                "ALTER TABLE episodic_memory ADD COLUMN source_quote TEXT"
+                " NOT NULL DEFAULT ''")
+            changed = True
+        if "source_ts" not in cols:
+            self._conn.execute(
+                "ALTER TABLE episodic_memory ADD COLUMN source_ts REAL"
+                " NOT NULL DEFAULT 0")
+            changed = True
+        if changed:
+            self._conn.commit()
+            logger.info("episodic_memory: added source_quote/source_ts columns")
+
     def _init_db(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
@@ -214,6 +240,7 @@ class EpisodicMemoryStore:
         self._ensure_embedding_meta_columns()
         self._ensure_consolidation_columns()
         self._ensure_source_column()
+        self._ensure_provenance_columns()
 
     def close(self) -> None:
         if self._conn:
@@ -228,6 +255,8 @@ class EpisodicMemoryStore:
         embedding_blob: Optional[bytes] = None,
         source: str = "user_stated",
         embedding_model: str = "",
+        source_quote: str = "",
+        source_ts: float = 0.0,
     ) -> Optional[int]:
         """Insert one fact; returns new row id, or None if duplicate / failed.
 
@@ -237,6 +266,9 @@ class EpisodicMemoryStore:
 
         R12：``source`` 标注来源（``user_stated`` / ``ai_inferred``），供 source-aware
         巩固/推翻按置信分级（默认 ``user_stated``，兼容旧调用）。
+
+        五件套（#41 0830）：``source_quote``/``source_ts`` 记「抽取自哪句原话、
+        何时」——空值兼容旧调用（无溯源）；quote 截 200 字防原话超长撑库。
         """
         c = (content or "").strip()
         if len(c) < 2 or len(c) > 500:
@@ -248,13 +280,19 @@ class EpisodicMemoryStore:
         try:
             _emb_dim = (len(embedding_blob) // 4) if embedding_blob else 0
             _emb_model = (embedding_model or "") if embedding_blob else ""
+            _quote = str(source_quote or "").strip()[:200]
+            try:
+                _sts = float(source_ts or 0.0)
+            except (TypeError, ValueError):
+                _sts = 0.0
             cur = self._conn.execute(
                 "INSERT INTO episodic_memory (user_id, content, content_hash, category,"
                 " created_at, embedding, embedding_model, embedding_dim,"
-                " salience, tier, hits, last_seen, source)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'raw', 1, ?, ?)",
+                " salience, tier, hits, last_seen, source, source_quote, source_ts)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'raw', 1, ?, ?, ?, ?)",
                 (user_id, c, h, (category or "general")[:32], now, embedding_blob,
-                 _emb_model, _emb_dim, sal, now, src),
+                 _emb_model, _emb_dim, sal, now, src, _quote,
+                 (_sts if _sts > 0 else now)),
             )
             self._conn.commit()
             return int(cur.lastrowid) if cur.lastrowid else None
@@ -949,6 +987,41 @@ class EpisodicMemoryStore:
             logger.debug("episodic confirm_inferred_fact failed: %s", e)
             return None
 
+    def update_fact_content(self, row_id: int, content: str) -> bool:
+        """五件套·可编辑（#41 0830 定稿问题③）：人工改写记忆条文。
+
+        语义（与「确认属实」同族）：
+        - 内容/哈希/显著性按新文重算；
+        - **向量清空**——旧向量对应旧文本，留着会按旧语义被召回（语义检索
+          宁缺勿错；关键词路径立即生效，向量待下次 embed 批回填）；
+        - 编辑视为人工核准 → ``source`` 升 ``user_stated``（人改过的不再是
+          AI 推断），tier 不动；
+        - 改成与既有条目同文（撞唯一索引）→ False 不动原行（请直接删除本条）。
+        """
+        c = str(content or "").strip()
+        if len(c) < 2 or len(c) > 500:
+            return False
+        try:
+            rid = int(row_id)
+        except (TypeError, ValueError):
+            return False
+        h = hashlib.sha256(_norm_for_hash(c).encode("utf-8")).hexdigest()
+        try:
+            cur = self._conn.execute(
+                "UPDATE episodic_memory SET content = ?, content_hash = ?,"
+                " salience = ?, embedding = NULL, embedding_model = '',"
+                " embedding_dim = 0, source = 'user_stated', last_seen = ?"
+                " WHERE id = ?",
+                (c, h, self._compute_salience(c), time.time(), rid),
+            )
+            self._conn.commit()
+            return int(cur.rowcount or 0) > 0
+        except sqlite3.IntegrityError:
+            return False
+        except Exception as e:  # noqa: BLE001
+            logger.debug("episodic update_fact_content failed: %s", e)
+            return False
+
     def inferred_counts(self) -> Dict[str, int]:
         """R17：全库 AI 推断计数——``pending``（raw 待确认）与 ``total``（任意 tier）。
 
@@ -1042,7 +1115,8 @@ class EpisodicMemoryStore:
 
         rows = self._conn.execute(
             """
-            SELECT content, embedding, created_at, salience, tier
+            SELECT content, embedding, created_at, salience, tier,
+              COALESCE(source, 'user_stated')
             FROM episodic_memory WHERE user_id = ?
               AND COALESCE(tier, 'raw') != 'stale'
             ORDER BY created_at DESC LIMIT ?
@@ -1052,13 +1126,14 @@ class EpisodicMemoryStore:
         if not rows:
             return ""
 
-        pairs: List[Tuple[str, Optional[bytes], float, Optional[float], str]] = [
+        pairs: List[Tuple[str, Optional[bytes], float, Optional[float], str, str]] = [
             (
                 r[0].strip(),
                 r[1],
                 float(r[2] or 0.0),
                 (float(r[3]) if r[3] is not None else None),
                 (str(r[4]) if r[4] else "raw"),
+                (str(r[5]) if r[5] else "user_stated"),
             )
             for r in rows if r and r[0]
         ]
@@ -1108,56 +1183,63 @@ class EpisodicMemoryStore:
                 vw, kw_w = vw / s, kw_w / s
             kws = [
                 self._keyword_overlap_score(qt, t) if want_kw else 0.0
-                for t, _, _, _, _ in pairs
+                for t, *_ in pairs
             ]
             max_kw = max(kws) if kws else 0.0
-            scored_rows: List[Tuple[float, str, float, str]] = []
-            for (t, emb_blob, ts, sal, tier), kw in zip(pairs, kws):
+            scored_rows: List[Tuple[float, str, float, str, str]] = []
+            for (t, emb_blob, ts, sal, tier, src), kw in zip(pairs, kws):
                 kw_n = (kw / max_kw) if max_kw > 1e-9 else 0.0
                 ev = blob_to_vec(emb_blob)
                 vs = cosine_similarity(query_embedding, ev) if ev else 0.0
                 vs = max(0.0, min(1.0, (vs + 1.0) / 2.0))
                 fusion = vw * vs + kw_w * kw_n
                 final = _rerank(fusion, t, ts, sal, tier) if _rerank else fusion
-                scored_rows.append((final, t, ts, tier))
+                scored_rows.append((final, t, ts, tier, src))
             scored_rows.sort(key=lambda x: (-x[0], -len(x[1])))
-            contents = [(x[1], x[2], x[3]) for x in scored_rows]
+            contents = [(x[1], x[2], x[3], x[4]) for x in scored_rows]
         elif want_kw:
-            scored: List[Tuple[float, str, float, str]] = []
-            kws2 = [self._keyword_overlap_score(qt, t) for t, _, _, _, _ in pairs]
+            scored: List[Tuple[float, str, float, str, str]] = []
+            kws2 = [self._keyword_overlap_score(qt, t) for t, *_ in pairs]
             max_kw2 = max(kws2) if kws2 else 0.0
-            for (t, _, ts, sal, tier), sc in zip(pairs, kws2):
+            for (t, _, ts, sal, tier, src), sc in zip(pairs, kws2):
                 if _rerank:
                     base = (sc / max_kw2) if max_kw2 > 1e-9 else 0.0
                     final = _rerank(base, t, ts, sal, tier)
                 else:
                     final = sc
-                scored.append((final, t, ts, tier))
+                scored.append((final, t, ts, tier, src))
             scored.sort(key=lambda x: (-x[0], -len(x[1])))
-            contents = [(x[1], x[2], x[3]) for x in scored]
+            contents = [(x[1], x[2], x[3], x[4]) for x in scored]
         elif _rerank:
             # 无 query（纯近期）但开了重排：以新鲜度为 base 叠加显著性 + 稳定层加权
             from src.utils.memory_salience import recency_factor as _rf
-            scored3: List[Tuple[float, str, float, str]] = []
-            for t, _, ts, sal, tier in pairs:
+            scored3: List[Tuple[float, str, float, str, str]] = []
+            for t, _, ts, sal, tier, src in pairs:
                 base = _rf(ts, None, recency_half_life_days)
-                scored3.append((_rerank(base, t, ts, sal, tier), t, ts, tier))
+                scored3.append((_rerank(base, t, ts, sal, tier), t, ts, tier, src))
             scored3.sort(key=lambda x: (-x[0], -len(x[1])))
-            contents = [(x[1], x[2], x[3]) for x in scored3]
+            contents = [(x[1], x[2], x[3], x[4]) for x in scored3]
         else:
-            contents = [(p[0], p[2], p[4]) for p in pairs]
+            contents = [(p[0], p[2], p[4], p[5]) for p in pairs]
 
         now_ts = time.time()
         lines: List[str] = []
         total = 0
-        for content, ts, tier in contents:
-            line = f"- {content}"
+        for content, ts, tier, src in contents:
+            # 五件套·档案>推断（#41/#24 0830）：AI 推断条目在 prompt 里显式
+            # 标注——LLM 才知道这条不如档案/用户原话可信，冲突时让位（实锤：
+            # 「用户不喜欢被叫 babe」推断压过档案称呼字段在反向教唆）。
+            marks: List[str] = []
+            if src == "ai_inferred":
+                marks.append("AI推断，可信度低于档案")
             if age_hints and tier != "stable" and ts > 0:
                 age = now_ts - ts
                 need = (_AGE_HINT_TRANSIENT_SEC if _looks_transient_fact(content)
                         else _AGE_HINT_MIN_SEC)
                 if age >= need:
-                    line = f"- {content}（{_age_hint_label(age)}前提到）"
+                    marks.append(f"{_age_hint_label(age)}前提到")
+            line = (f"- {content}（{'；'.join(marks)}）" if marks
+                    else f"- {content}")
             if total + len(line) + 1 > max_chars:
                 break
             lines.append(line)
@@ -1216,7 +1298,8 @@ class EpisodicMemoryStore:
             f"""
             SELECT id, user_id, content, category, created_at,
               CASE WHEN embedding IS NOT NULL AND length(embedding) >= 8 THEN 1 ELSE 0 END,
-              COALESCE(source, 'user_stated'), COALESCE(tier, 'raw'), COALESCE(hits, 1)
+              COALESCE(source, 'user_stated'), COALESCE(tier, 'raw'), COALESCE(hits, 1),
+              COALESCE(source_quote, ''), COALESCE(source_ts, 0)
             FROM episodic_memory{clause}
             ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?
             """,
@@ -1234,6 +1317,9 @@ class EpisodicMemoryStore:
                 "source": r[6],
                 "tier": r[7],
                 "hits": int(r[8] or 1),
+                # 五件套·溯源（#41）：抽取自哪句原话/何时（空=早期条目无记录）
+                "source_quote": str(r[9] or ""),
+                "source_ts": float(r[10] or 0),
             })
         return out
 

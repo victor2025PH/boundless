@@ -260,6 +260,62 @@ def register_episodic_identity_routes(app, ctx) -> None:
                 pass
         return {"ok": True, "deleted": int(row_id)}
 
+    @app.put("/api/episodic-memory/{row_id}")
+    async def api_episodic_memory_edit(request: Request, row_id: int):
+        """五件套·可编辑（#41 0830 定稿问题③）：人工改写记忆条文。
+
+        「错误记忆只能删」→「改对了再留」。Body: ``{content}``。语义见
+        ``store.update_fact_content``：新文重算哈希/显著性、向量清空待回填、
+        ``source`` 升 ``user_stated``（人改过＝人工核准，不再是 AI 推断）。
+        改成与既有条目同文 → 404 语义复用（前端提示改用删除）。
+        """
+        _api_write("episodic_memory")(request)
+        sm = _get_sm()
+        if not sm:
+            raise HTTPException(status_code=503, detail=tr(request, "err.epi.bot_not_ready"))
+        _store = getattr(sm, "_episodic_store", None)
+        if _store is None or not hasattr(_store, "update_fact_content"):
+            raise HTTPException(status_code=503, detail=tr(request, "err.epi.bot_not_ready"))
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        content = str(body.get("content") or "").strip()
+        if len(content) < 2 or len(content) > 500:
+            raise HTTPException(status_code=400, detail=tr(
+                request, "err.ws.field_required", field="content"))
+        brief = None
+        if hasattr(_store, "get_row_brief"):
+            try:
+                brief = _store.get_row_brief(int(row_id))
+            except Exception:
+                brief = None
+        ok = _store.update_fact_content(int(row_id), content)
+        if not ok:
+            raise HTTPException(status_code=404, detail=tr(request, "err.epi.record_not_found"))
+        # 与 confirm/delete 审计对称：谁把哪条记忆从什么改成了什么
+        audit = getattr(ctx, "audit_store", None)
+        if audit:
+            try:
+                actor = str(
+                    request.session.get("username")
+                    or request.session.get("role") or "web_admin"
+                )
+                old_val = ""
+                if brief:
+                    old_val = (
+                        f"[{brief.get('source', '')}] "
+                        f"{str(brief.get('content', ''))[:160]}"
+                    )
+                audit.log(
+                    actor, "episodic_edit", target=str(row_id),
+                    old_val=old_val, new_val=content[:160],
+                )
+            except Exception:
+                pass
+        return {"ok": True, "edited": int(row_id)}
+
     @app.post("/api/episodic-memory/bulk-delete")
     async def api_episodic_memory_bulk_delete(request: Request):
         """按关键词批量删除情景记忆（人设内容排查的清理配套，2026-08-03）。

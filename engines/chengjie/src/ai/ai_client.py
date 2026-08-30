@@ -3206,7 +3206,9 @@ class AIClient(LoggerMixin):
                 prompt_parts.append(
                     "【用户长期记忆要点（简要事实；与本轮话题相关时自然回带一句——"
                     "如「你上次说的xxx后来怎样了」——让对方感到被记住；"
-                    "不要机械复述「我记得你说过」，也别每条都提）】\n"
+                    "不要机械复述「我记得你说过」，也别每条都提。"
+                    "标注（AI推断）的条目是系统归纳、不是对方原话：可信度低于"
+                    "人设档案与对方明说，与档案矛盾时一律以档案为准）】\n"
                     + _epi
                 )
         _slo = (context.get("_slow_think_outline") or "").strip()
@@ -3401,6 +3403,26 @@ class AIClient(LoggerMixin):
             _wx_note = (context.get("_persona_weather_note") or "").strip()
             if _wx_note:
                 prompt_parts.append(_wx_note)
+            # #82（0830 两例实锤）：位置身份钉子——档案居住地此前只驱动时钟/
+            # 天气，从不作为「你在哪」的事实进 prompt，AI 凭空自称「马尼拉的
+            # 雨天早晨」（档案=薄荷岛）。位置类自述只许取档案（基线）或会话中
+            # 亲口说过的临时行程（覆盖层，由「你刚说过」travel 锚点承载，到期
+            # 自然回归）；未接真实天气数据时禁断言具体天气现象——「下雨」会
+            # 引来「拍雨景照」索图连环穿帮（本例实录）。
+            _place_pin = (context.get("_persona_place_label") or "").strip()
+            if _place_pin:
+                _pin_txt = (
+                    f"【你的位置】你现居/常驻：{_place_pin}。位置类自述只按此说，"
+                    "绝不自称身在其他城市——除非你在本会话里亲口说过临时行程"
+                    "（出差/旅行，见「你刚说过」），行程期间按它叙事、到期回归。"
+                )
+                if not _wx_note:
+                    _pin_txt += (
+                        "你没有当地实时天气数据：不要主动断言正在下雨/下雪/"
+                        "台风等具体天气现象（同城客户当场能对出破绽），"
+                        "要聊天气只用「有点闷/天气还不错」这类模糊说法。"
+                    )
+                prompt_parts.append(_pin_txt)
             # P2 用户侧在地化：对方当地时间 + 对方那边的节日（skill_manager 注入，
             # 只吃显式信号——见 `_inject_peer_locale` 的 docstring）。有了这两块，
             # 「对方那边几点、今天是不是 TA 的节日」不再靠 LLM 瞎猜。

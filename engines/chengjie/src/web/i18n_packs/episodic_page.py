@@ -55,6 +55,12 @@ ZH = {
     "em_id_cleanup_body": "将删除当前筛选可见的 {n} 条「未识别」记忆（多为已删除会话或测试数据的孤儿键）。逐条落审计，删除后不可恢复。",
     "em_id_cleanup_stale": "清理过期",
     "em_id_cleanup_stale_body": "将删除当前筛选可见的 {n} 条「过期层」记忆（已被记忆整固降级）。逐条落审计，删除后不可恢复。",
+    "em_edit": "编辑",
+    "em_edit_dup": "内容与已有条目重复，未保存（如是多余条目请直接删除）",
+    "em_edit_fail": "编辑失败",
+    "em_edit_save": "保存",
+    "em_edit_tip": "改正这条记忆的内容——保存即视为人工核实（AI 推断随之转正）",
+    "em_edit_title": "编辑记忆",
     "em_id_confirm": "确认属实",
     "em_id_confirm_fail": "确认失败",
     "em_id_confirm_tip": "把这条 AI 推断确认为事实（升格为「用户明说」并进入稳定层）",
@@ -104,6 +110,9 @@ ZH = {
     "em_id_view_group": "按人分组",
     "em_id_view_list": "列表",
     "em_id_working": "处理中 {done}/{total}…",
+    "em_semantics_hint": "列表中所有条目都会参与 AI 记忆召回；「确认属实」＝人工核实（推断转正入稳定层），「编辑」＝改正后保存（视为人工核实），「删除」＝立即移出、不再参与回复。",
+    "em_src_quote_none": "早期条目未记录来源原话",
+    "em_src_quote_tip": "抽取自对方原话：「{q}」",
 }
 
 EN = {
@@ -160,6 +169,12 @@ EN = {
     "em_id_cleanup_body": "Delete the {n} currently visible \"unmatched\" memories (mostly orphan keys from deleted chats or test data). Each deletion is audited and irreversible.",
     "em_id_cleanup_stale": "Clean up stale",
     "em_id_cleanup_stale_body": "Delete the {n} currently visible \"stale tier\" memories (already demoted by consolidation). Each deletion is audited and irreversible.",
+    "em_edit": "Edit",
+    "em_edit_dup": "Same content as an existing entry; not saved (delete this one if redundant)",
+    "em_edit_fail": "Edit failed",
+    "em_edit_save": "Save",
+    "em_edit_tip": "Correct this memory — saving counts as human verification (AI inferences get promoted)",
+    "em_edit_title": "Edit memory",
     "em_id_confirm": "Confirm",
     "em_id_confirm_fail": "Confirm failed",
     "em_id_confirm_tip": "Confirm this AI inference as fact (promote to user-stated, stable tier)",
@@ -209,4 +224,7 @@ EN = {
     "em_id_view_group": "By person",
     "em_id_view_list": "List",
     "em_id_working": "Working {done}/{total}…",
+    "em_semantics_hint": "Every listed entry participates in AI memory recall. \"Confirm\" = human-verified (inference promoted to stable tier); \"Edit\" = correct and save (counts as verified); \"Delete\" = removed immediately, no longer used in replies.",
+    "em_src_quote_none": "No source quote recorded for this early entry",
+    "em_src_quote_tip": "Extracted from their message: \"{q}\"",
 }

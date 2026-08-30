@@ -170,6 +170,7 @@ _BASELINE = """
 /api/episodic-memory/correction-stats	GET
 /api/episodic-memory/summary	GET
 /api/episodic-memory/{row_id}	DELETE
+/api/episodic-memory/{row_id}	PUT
 /api/episodic-memory/{row_id}/confirm	POST
 /api/episodic-memory/key-health	GET
 /api/episodic-memory/key-migrate	POST
