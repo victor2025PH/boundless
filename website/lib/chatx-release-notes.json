@@ -1,5 +1,63 @@
 [
   {
+    "version": "1.0.63",
+    "date": "2026-08-30",
+    "title": {
+      "zh": "0830 报障集中修复：出站语言卫生、人设档案硬约束、相册与发送真相",
+      "en": "Aug 30 bug-bash fixes: outbound language hygiene, hard persona constraints, album & delivery truth"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "v1.0.63（0830 午批修复版）",
+        "一、AI 回复质量",
+        "中英混杂出站（如 \"I'm 我\"）根治：发出前语种一致性校验，检出混杂自动重写一遍再发（三处翻译出口全部设防）",
+        "舞台指示泄漏根治：(tone shifts to playful)、(smiles)、（语气…）、（撒娇）等中英旁白全家族生成端硬禁+出站剥离",
+        "客户发图后回复漂中文根治：识图描述不再被当成客户语言，纯图片消息按会话语言回复",
+        "二、人设档案说了算",
+        "称呼双向硬约束：人设工作室新增「你称呼对方 / 对方称呼你」两个字段，注入为硬约束并压过 AI 自己的推断记忆；出站再加一道互换自动纠正（good morning baba 自动纠回 babe）",
+        "位置只按档案说：档案写薄荷岛就绝不自称在马尼拉；会话中亲口说过的出差/旅行自动成为临时状态（期间按它叙事、到期回归）；没接天气数据不再断言下雨下雪",
+        "承诺自洽：AI 亲口说过的承诺不否认、没说过的绝不捏造（客户的请求不会被扭成\"我答应过\"）",
+        "三、记忆库管理升级（四问全答）",
+        "每条记忆带来源溯源：悬停即见\"抽取自哪句原话\"",
+        "新增「编辑」：错误记忆改对了再留（保存即人工核准）",
+        "AI 推断条目在生成时自动降权，与档案冲突以档案为准",
+        "四、相册与发送",
+        "相册上传存储迁至数据目录：版本更新不再清空相册（存量自动迁移）；上传加内容完整性校验，损坏文件当场提示重传；\"相册是空的\"误报修正",
+        "手动发送不再误报失败：慢发送（限流期确认要 30-65 秒）超时后先对账再定论，确认已发出就提示勿重发",
+        "「客户不可达」误标修复：标记带来源可回溯、7 天自动到期、任一条消息真实送达立即解除；会话上方新增黄条提示\"自动回复已暂停+原因\"",
+        "五、其他",
+        "诊断包补收桌面壳前端日志（前端层故障从此有第一现场）",
+        "语音转录通道服务端已于当日热修恢复（无需客户端操作）"
+      ],
+      "en": [
+        "v1.0.63 (Aug 30 noon-batch fixes)",
+        "AI reply quality",
+        "Mixed-language outbound (e.g. \"I'm 我\") fixed for good: outbound language-consistency check intercepts and rewrites before sending (all three translation exits guarded)",
+        "Stage-direction leaks eradicated: (tone shifts to playful), (smiles), Chinese aside brackets and the whole family are now hard-banned at generation and stripped at the outbound gate",
+        "Replies no longer drift to Chinese after the customer sends a photo: vision captions are never mistaken for the customer's language",
+        "Persona profile is now authoritative",
+        "Two-way address fields: new \"You call them / They call you\" fields in Persona Studio, injected as hard constraints that override AI-inferred memories; an outbound guard auto-corrects swapped pet names",
+        "Location follows the profile: no more claiming to be in Manila when the profile says Bohol; trips mentioned in chat become a temporary state (narrated during, auto-expiring after); no more asserting rain/snow without real weather data",
+        "Promise integrity: promises the AI actually made are never denied, and ones it never made are never claimed",
+        "Memory management upgrade",
+        "Every memory now carries provenance (hover to see the original message it was extracted from)",
+        "New Edit action: fix a wrong memory and keep it (saving counts as human verification)",
+        "AI-inferred entries are de-prioritized at generation time; the profile wins on conflict",
+        "Album & delivery truth",
+        "Album uploads moved to the data directory: updates no longer wipe albums (existing files migrate automatically); uploads are content-validated so corrupted files are rejected on the spot; the misleading \"album is empty\" error is fixed",
+        "Manual sends no longer report false failures: on timeout the client reconciles with the server before concluding (slow rate-limited confirmations of 30-65s are recognized as sent)",
+        "\"Unreachable customer\" mis-flags fixed: flags carry evidence, expire after 7 days, and clear instantly on any successful delivery; a visible banner explains when auto-reply is paused",
+        "Other",
+        "Diagnostic bundles now include the desktop shell's renderer log",
+        "The voice-transcription relay was hot-fixed server-side the same day (no client action needed)"
+      ]
+    }
+  },
+  {
     "version": "1.0.62",
     "date": "2026-08-29",
     "title": {
