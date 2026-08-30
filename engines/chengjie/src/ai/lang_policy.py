@@ -94,6 +94,25 @@ _STALE_LABEL_RE = re.compile(r"\[\s*(?:\d+\s*天前|很久以前)\s*\]")
 _EMOJI_NOTE_RE = re.compile(r"[（(]\s*表情\s*[：:][^）)\n]*[）)]?")
 
 
+def strip_system_injected(text: str) -> str:
+    """只剥**系统注入**的媒体描述/占位标记，保留客户自己的话（caption/转写）。
+
+    与 :func:`strip_neutral_tokens` 的关系：后者面向「语言证据」口径，还会剥
+    URL/数字/emoji/中性词；本函数面向「这段文字里哪些是客户说的」口径——
+    识图中文描述行（``[图片内容] …``）、语音标记、时间断层标签、emoji 加注
+    是系统写的，不该参与任何「用户消息语言」判定（#74 实锤：媒体轮把
+    【输出语言】指令带偏成中文的正是这些行）。
+    """
+    t = str(text or "")
+    if not t.strip():
+        return ""
+    t = _MEDIA_DESC_LINE_RE.sub(" ", t)
+    t = _VOICE_TAG_RE.sub(" ", t)
+    t = _STALE_LABEL_RE.sub(" ", t)
+    t = _EMOJI_NOTE_RE.sub(" ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
 def strip_neutral_tokens(text: str) -> str:
     """剥离语言中性内容，返回可作为语言证据的「实质文本」。
 

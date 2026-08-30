@@ -46,17 +46,41 @@ _ASTERISK_RE = re.compile(r"(?<!\*)\*([^*\n]{1,60})\*(?!\*)")
 
 # 旁白/动作/心理活动标记词（中文按子串、英文按词边界）——刻意收窄到
 # 「几乎不可能是正文补充语」的动作/心理词，防误伤正常括号注释。
+# #71（0830，B118 英文变体实锤「(tone shifts to playful)」直发客户）：补齐
+# 中英「语气/舞台指示」全家族——语气切换、声线描述、方式副词、眼神动作。
 _NARRATION_ZH = (
     "叹气", "叹了", "轻叹", "微笑", "苦笑", "傻笑", "偷笑", "大笑", "轻笑",
     "沉默", "摇头", "点头", "皱眉", "挠头", "耸肩", "翻白眼", "看着", "望着",
     "盯着", "凑近", "靠近", "深呼吸", "哽咽", "抹泪", "擦泪", "撇嘴", "嘟嘴",
     "脸红", "心里", "心想", "内心", "自言自语", "小声", "低声", "停顿",
     "沉思", "想了想", "环顾", "装作", "假装", "扶额", "捂脸", "揉了揉",
+    # ── #71 扩充：语气/声线/亲昵动作类舞台指示 ──
+    "语气", "口吻", "语调", "声音放", "压低声", "轻声", "撒娇", "宠溺",
+    "坏笑", "挑眉", "眨眼", "眨了眨", "歪头", "咬唇", "咬着唇", "清了清嗓",
+    "清嗓", "凑到", "贴近", "撅嘴", "别过头", "移开视线", "对视",
 )
-_NARRATION_ZH_SHORT = {"笑", "哭", "叹", "汗", "尬", "无奈", "害羞", "委屈"}
+_NARRATION_ZH_SHORT = {"笑", "哭", "叹", "汗", "尬", "无奈", "害羞", "委屈",
+                       "温柔", "调皮", "俏皮"}
 _NARRATION_EN = re.compile(
     r"\b(sighs?|smiles?|smiling|laughs?|laughing|nods?|nodding|pauses?|"
     r"whispers?|whispering|blushes|blushing|shrugs?|chuckles?|grins?|"
+    # ── #71 扩充：语气切换/声线（实锤形态 "(tone shifts to playful)"） ──
+    r"tone (?:shifts?|softens?|turns?|changes?|drops?|becomes?)|"
+    r"shifts? (?:to|into) \w+|"
+    r"voice (?:softens?|drops?|lowers?|trembl\w*|breaks?)|"
+    r"(?:in|with) an? \w+ (?:tone|voice)|"
+    # ── #71 扩充：常见动作/眼神舞台指示 ──
+    r"giggles?|giggling|winks?|winking|smirks?|smirking|"
+    r"leans? (?:in|closer|back|forward)|rolls? (?:his |her |their )?eyes|"
+    r"bites? (?:his |her |their )?lips?|"
+    r"raises? (?:an |his |her |their )?eyebrows?|"
+    r"tilts? (?:his |her |their )?head|clears? (?:his |her |their )?throat|"
+    r"takes? a deep breath|deep breath|"
+    r"eyes (?:widen|light up|sparkle|narrow)|"
+    r"looks? (?:away|down|up|at you)|stares?|gazes?|"
+    # ── #71 扩充：方式副词（独立成旁白时几乎必是舞台指示） ──
+    r"playfully|teasingly|jokingly|sarcastically|nervously|shyly|"
+    r"dramatically|hesitantly|mischievously|sheepishly|softly|gently|"
     r"thinking|internally|to (?:him|her)self)\b",
     re.IGNORECASE,
 )

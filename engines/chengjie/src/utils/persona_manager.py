@@ -144,6 +144,12 @@ _INNER_MONOLOGUE_BAN = (
     "说出口的话。绝不输出内心独白、心理活动、旁白或动作描述——无论是否用"
     "（）()【】[]*号包裹，如「（我没生气，就是心里堵得慌）」「*叹了口气*」"
     "这类一律禁止：想法不写出来，写出来的就是台词本身。"
+    # #71（0830 实锤）：英文会话里 "(tone shifts to playful)" 字面直发客户——
+    # 中文禁令对英文输出约束力弱，补英文镜像句（含实锤形态做反例）。
+    " This applies to every language: never write stage directions or"
+    " narration like \"(tone shifts to playful)\", \"(smiles)\", \"(pauses)\","
+    " \"*sighs*\" — anything in brackets or asterisks describing your tone,"
+    " actions or feelings is forbidden; output only the spoken line itself."
 )
 
 

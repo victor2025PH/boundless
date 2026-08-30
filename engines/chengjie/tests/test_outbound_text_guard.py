@@ -292,3 +292,145 @@ def test_persona_prompt_hard_ban_in_both_modes():
     # 常量定义 + full 模式 append + compact 模式 append
     assert src.count("_INNER_MONOLOGUE_BAN") >= 3
     assert "禁止内心独白" in src
+
+
+# ── #71（0830 午批）：舞台指示中英全家族 ─────────────────────────────────────
+
+def test_tone_shift_stage_direction_stripped_71():
+    """0830 实锤原文：'(tone shifts to playful)' 字面直发客户。"""
+    src = ("You're making I swear. (tone shifts to playful)"
+           "Maybe one day you cook for me")
+    cleaned, hits = sanitize_inner_monologue(src)
+    assert "tone shifts" not in cleaned
+    assert "Maybe one day you cook for me" in cleaned
+    assert hits
+
+
+def test_zh_tone_stage_direction_stripped_71():
+    """中文变体（#68 单里 skuio 同日实录「（语气转为 playful）」）。"""
+    cleaned, hits = sanitize_inner_monologue("好呀好呀（语气转为 playful）明天见啦")
+    assert "语气" not in cleaned
+    assert "好呀好呀" in cleaned and "明天见啦" in cleaned
+    assert hits
+
+
+def test_stage_direction_family_stripped_71():
+    """中英舞台指示家族逐形态验证（语气/声线/动作/方式副词）。"""
+    cases = [
+        ("Sure! (voice softens) I'm always here for you.", "voice softens"),
+        ("Haha (winks) you know me so well my friend.", "winks"),
+        ("Well (leans in closer) tell me more about it.", "leans in"),
+        ("Okay (takes a deep breath) let's talk about us.", "deep breath"),
+        ("Fine (rolls her eyes) whatever you say dear.", "rolls her eyes"),
+        ("Hmm (playfully) guess what I did today?", "playfully"),
+        ("Come on (shifts to teasing) you missed me right?", "shifts to"),
+        ("嗯嗯（撒娇）人家想你了嘛", "撒娇"),
+        ("好啦（坏笑）等你哦", "坏笑"),
+        ("知道啦（温柔）早点休息", "温柔"),
+        ("那说好了（清了清嗓子）下次一起去", "清了清嗓"),
+    ]
+    for s, gone in cases:
+        cleaned, hits = sanitize_inner_monologue(s)
+        assert gone not in cleaned, s
+        assert hits, s
+
+
+def test_legit_parenthetical_still_kept_after_71():
+    """#71 扩表后仍不误伤正常括号补充语（宁可漏拦不误伤的底线不动）。"""
+    for s in ("我买了新手机（iPhone 15）超好用",
+              "会议改到明天（周三）下午三点",
+              "That costs $20 (about 145 RMB) in total price.",
+              "下载链接（官网首页）已经发你了"):
+        cleaned, hits = sanitize_inner_monologue(s)
+        assert cleaned == s, s
+        assert not hits, s
+
+
+# ── #64（0830 三度复报）：拉丁主体夹 CJK 残字 → 拦截重写档 ───────────────────
+
+def test_reply_lang_mismatch_latin_cjk_residue_64():
+    """「I'm 我」形态判 mismatch → _guard_reply_language 走一次重写。"""
+    from src.ai.ai_client import AIClient
+    f = AIClient._reply_lang_mismatch
+    assert f("I'm 我, and I'm not going anywhere.", "en") is True
+    assert f("I'm me, and I'm not going anywhere.", "en") is False
+    # 旧口径（CJK 绝对主体）不回归
+    assert f("这是一段很长的中文回复内容哦亲爱的", "en") is True
+    # 字母不足 6 的短句不动（防误伤「ok 我」类正常混说）
+    assert f("ok 我", "en") is False
+    # zh / ja 目标语分支不受扩展影响
+    assert f("哈哈 ok 啦没问题", "zh") is False
+    assert f("こんにちは、元気ですか", "ja") is False
+
+
+def test_deferred_translate_exit_guarded_64():
+    """deferred 触达翻译出口必须挂混语守卫（三条翻译出口唯一裸奔的那条）。"""
+    import re as _re
+    src = (_ENGINE_ROOT / "main.py").read_text(encoding="utf-8")
+    m = _re.search(
+        r"async def _maybe_translate_outbound.*?(?=\n    (?:async )?def )",
+        src, _re.S)
+    assert m, "main.py 里找不到 _maybe_translate_outbound"
+    assert "_guard_translated_lang_mix" in m.group(0)
+
+
+# ── #74（0830）：媒体轮语言锚——识图中文描述不得冒充用户语言 ──────────────────
+
+def test_strip_system_injected_media_lines_74():
+    from src.ai.lang_policy import strip_system_injected
+    assert strip_system_injected("[图片内容] 白盘装熟虾，旁边有蘑菇汤") == ""
+    got = strip_system_injected(
+        "this looks so yummy today\n[图片内容] 白盘装熟虾和螃蟹")
+    assert "yummy" in got and "熟虾" not in got
+    # 语音标记只剥标记本身，转写正文（客户原话）保留
+    assert "hello there" in strip_system_injected("[语音] hello there")
+
+
+def test_media_turn_lang_rule_follows_reply_lang_74():
+    """英文会话发图（无 caption）：语言指令跟 reply_lang，绝不变中文命令。"""
+    p = _mk_ai()._build_context_prompt({
+        "last_message": "[图片内容] 白盘装熟虾，旁边有蘑菇汤和螃蟹",
+        "reply_lang": "en",
+        "channel": "telegram", "chat_type": "private",
+    })
+    assert "「English」" in p
+    assert "用户当前消息语言为「中文」" not in p
+
+
+def test_media_turn_caption_language_wins_74():
+    """带英文 caption 的媒体轮：按 caption 判语言，不被中文描述压过。"""
+    p = _mk_ai()._build_context_prompt({
+        "last_message": (
+            "this looks so yummy, what do you think about it\n"
+            "[图片内容] 白盘装熟虾和蘑菇汤"),
+        "channel": "telegram", "chat_type": "private",
+    })
+    assert "「English」" in p
+
+
+def test_media_turn_without_lang_never_commands_zh_74():
+    """纯媒体轮且无 reply_lang：宁可不注入语言指令，绝不默认命令中文。"""
+    p = _mk_ai()._build_context_prompt({
+        "last_message": "[图片内容] 白盘装熟虾，旁边有蘑菇汤",
+        "channel": "telegram", "chat_type": "private",
+    })
+    assert "你必须用该语言回复" not in p
+
+
+def test_zh_text_turn_lang_rule_unchanged_74():
+    """普通中文文本轮：行为与改前一致（仍注入中文指令）。"""
+    p = _mk_ai()._build_context_prompt({
+        "last_message": "今天吃了火锅超开心呀",
+        "channel": "telegram", "chat_type": "private",
+    })
+    assert "「中文」" in p
+
+
+def test_vision_block_marked_as_system_annotation_74():
+    """image_ocr_text 块必须自带「系统标注/勿跟随其语言」声明。"""
+    p = _mk_ai()._build_context_prompt({
+        "last_message": "look at this",
+        "image_ocr_text": "白盘装熟虾，旁边有蘑菇汤",
+    })
+    assert "系统自动标注" in p
+    assert "非对方原话" in p

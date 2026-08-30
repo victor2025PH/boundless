@@ -622,10 +622,16 @@ class AIChatAssistant:
             from src.inbox.draft_models import _conv_id
             item = {"conversation_id": _conv_id(str(platform), str(account_id), str(chat_key)),
                     "text": str(text)}
-            return await translate_outbound_text(
+            _out = await translate_outbound_text(
                 item, translation_service=ts, store=self.inbox_store,
                 source_lang=cfg.get("source_lang") or "zh", style=cfg.get("style") or "chat",
                 gate_only=not cfg.get("enabled"))
+            # #64/B125 补口（0830）：deferred 触达是三条翻译出口里唯一没挂
+            # 混语守卫的（autosend 自动链/人工通过链都经 build_autosend_translate_cb
+            # 的 _guard_translated_lang_mix）——MT 漏译残字（「I'm 我」）从这里
+            # 照样直发客户。同一守卫补齐；HOLD(None) 语义原样透传。
+            from src.inbox.autosend_helpers import _guard_translated_lang_mix
+            return _guard_translated_lang_mix(self, str(text), _out)
         except Exception:
             self.logger.debug("[deferred_outbox] 出站翻译跳过", exc_info=True)
             return text

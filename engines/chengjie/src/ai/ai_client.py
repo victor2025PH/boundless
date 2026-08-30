@@ -2192,6 +2192,14 @@ class AIClient(LoggerMixin):
         letters = len(re.findall(r"[A-Za-z]", reply))
         if cjk > 8 and letters < cjk:
             return True
+        # B121/#64（0830 三度复报）：拉丁主体夹 CJK 残字（「I'm 我, and I'm not
+        # going anywhere.」）——出站语种一致性的「拦截→重写」档：判 mismatch 让
+        # _guard_reply_language 走一次轻量重写（比出稿口硬剥少数派字符产出更通顺
+        # 的成句）；重写仍不干净时守卫回退原文，出稿口 outbound_text_guard 的
+        # 确定性剥除仍是最后防线。形状与 detect_lang_mix 的 hard 档同口径
+        # （字母 ≥6 且 ≥3×CJK 且 CJK ≥1），教学场景（重写后仍带该词）自然回退。
+        if letters >= 6 and cjk >= 1 and letters >= 3 * cjk:
+            return True
         return False
 
     def _chat_reply_surface(self, context: Optional[Dict[str, Any]]) -> bool:
@@ -3061,7 +3069,20 @@ class AIClient(LoggerMixin):
         # 情绪感知写入 prompt：引导语气，不改变情绪增强器后处理逻辑
         emotion_hint = (context.get("user_emotion_hint") or "").strip().lower()
         _um = context.get("_current_user_message_for_lang") or context.get("last_message") or ""
-        lang_hint = self._detect_message_language(_um)
+        # #74（0830 实锤）：媒体轮的「[图片内容] 中文描述」是系统标注不是用户话语，
+        # 直接喂语言检测会让本块**主动命令**AI 用中文回复外语客户（英文会话每次
+        # 发图都被带偏成中文）。先剥系统注入行，只对客户自己的话（caption/语音
+        # 转写正文）判语言；剥空（纯媒体轮）→ 回落会话级 reply_lang 决策（其证据
+        # 链早已豁免媒体行），两者皆空才跳过注入——绝不拿描述语言冒充用户语言。
+        try:
+            from src.ai.lang_policy import strip_system_injected as _ssi
+            _um_lang_src = _ssi(_um)
+        except Exception:
+            _um_lang_src = str(_um or "")
+        if _um_lang_src.strip():
+            lang_hint = self._detect_message_language(_um_lang_src)
+        else:
+            lang_hint = str(context.get("reply_lang") or "").strip()
         if lang_hint:
             lang_name = self._LANG_NAMES.get(lang_hint, lang_hint) or "中文"
             _channel = str(context.get("channel") or context.get("platform") or "").strip().lower()
@@ -3501,7 +3522,14 @@ class AIClient(LoggerMixin):
         # 用户刚发的图片/截图内容（Vision 或 OCR），仅根据此真实内容回复
         image_ocr_text = context.get('image_ocr_text')
         if image_ocr_text:
-            prompt_parts.append(f"用户刚发的图片/截图内容（Vision/OCR）:\n{image_ocr_text[:2000]}")
+            # #74：描述是系统自动标注（恒为中文），显式声明「非对方话语、勿跟随
+            # 其语言」——外语会话发图后回复漂中文的第二道钉子（第一道在【输出语言】
+            # 块的媒体行剥离）。
+            prompt_parts.append(
+                f"用户刚发的图片/截图内容（Vision/OCR，系统自动标注，非对方原话）:\n"
+                f"{image_ocr_text[:2000]}\n"
+                "（以上描述仅供你理解画面；它的语言不代表对方的语言，回复语言"
+                "一律按【输出语言】/LANGUAGE RULE 执行）")
 
         # 近期群内机器人/通知消息（支付域可参考订单/通道；陪聊域不注入以免模型接工作话）
         recent_bot = context.get('recent_bot_messages')
