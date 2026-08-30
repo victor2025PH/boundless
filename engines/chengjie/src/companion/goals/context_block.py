@@ -19,11 +19,23 @@ _PUSH_LABEL = {
     "none": "今天只陪伴，营销内容只字不提",
     "soft": "只在话题自然贴近时轻轻带到，绝不生硬转折",
     "direct": "对方兴致好时可以直说，但禁止硬销、禁止连环追问",
+    # close（P1 2026-08-30）：限时档收口窗专用——用户显式拍板的冲刺，
+    # 允许明确说法/报价/给下一步动作；体面底线仍在（拒绝即收、不纠缠）
+    "close": "窗口快关了：可以明确报价、给出下一步动作、点明时间有限；"
+             "对方明确拒绝就体面收住，绝不纠缠",
 }
 
 _DISCIPLINE = (
     "【推进纪律】自然融入当下话题；对方情绪低落、敷衍或明确拒绝时，"
     "彻底放下目标只陪伴；绝不承诺线下见面/私下转账等越界内容。"
+)
+
+# 限时档纪律（P1 2026-08-30）：与 natural 的差异是刻意的——「敷衍→彻底放下」
+# 对用户显式拍板的冲刺太软（敷衍可换角度再试一次）；「明确拒绝/情绪低落→放下」
+# 与越界红线原样保留（那是安全语义不是节奏语义）。
+_DISCIPLINE_SPRINT = (
+    "【推进纪律】自然融入当下话题；对方只是敷衍可换个角度再推一次，"
+    "明确拒绝或情绪低落就彻底放下；绝不承诺线下见面/私下转账等越界内容。"
 )
 
 
@@ -61,8 +73,8 @@ def build_goal_block(
     lvl = str(push_level or "soft").strip().lower()
     if lvl not in _PUSH_LABEL:
         lvl = "soft"
-    if suppress_push and lvl == "direct":
-        lvl = "soft"
+    if suppress_push and lvl in ("direct", "close"):
+        lvl = "soft"        # 同轮已有其他变现引导：双线推销降档
 
     mi_disp = max(0, int(milestone_idx)) + 1
     n_total = max(1, int(milestone_total or 4))
@@ -107,7 +119,8 @@ def build_goal_block(
         lines.append(
             f"【画像缺口】还想在闲聊中自然了解：{gap}"
             "（顺着话题带出来，一次最多问一件，绝不像查户口）")
-    lines.append(_DISCIPLINE)
+    # 限时档（remaining_sec 有值）用冲刺纪律：敷衍可再试，拒绝/低落仍放下
+    lines.append(_DISCIPLINE_SPRINT if used_remaining else _DISCIPLINE)
     block = "\n".join(lines)
     cap = max(120, int(max_chars or DEFAULT_MAX_CHARS))
     if len(block) > cap:

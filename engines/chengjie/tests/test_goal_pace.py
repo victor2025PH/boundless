@@ -140,3 +140,72 @@ def test_remaining_and_total_sec():
     assert abs(remaining_sec(g, now) - 1800) < 1e-6
     assert abs(total_sec(g) - 2400) < 1e-6
     assert remaining_sec({"deadline_ts": now - 10}, now) == 0.0
+
+
+# ── P1 2026-08-30 推进力加度 ─────────────────────────────────────────────
+def test_sprint_push_escalates_to_close_by_remaining():
+    from src.companion.goals.pace import sprint_push as sp
+    # 剩余 <35% → close，不论拍序（第 1 拍也收口）
+    assert sp("today", 0, "soft", remaining_ratio=0.2) == "close"
+    assert sp("session", 3, "soft", remaining_ratio=0.34) == "close"
+    # 剩余充足 → 维持拍序档
+    assert sp("today", 0, "soft", remaining_ratio=0.8) == "soft"
+    assert sp("today", 1, "soft", remaining_ratio=0.8) == "direct"
+    # 阈值可配
+    assert sp("today", 0, "soft", remaining_ratio=0.5,
+              escalate_at=0.6) == "close"
+    # none（退避陪伴日）任何情况不覆盖
+    assert sp("today", 0, "none", remaining_ratio=0.1) == "none"
+    # natural 不参与
+    assert sp("natural", 0, "soft", remaining_ratio=0.1) == "soft"
+    # 坏 remaining 值 → 按无值处理
+    assert sp("today", 1, "soft", remaining_ratio="x") == "direct"
+
+
+def test_sprint_push_max_mode_first_beat_direct():
+    from src.companion.goals.pace import sprint_push as sp
+    assert sp("today", 0, "soft", mode="max") == "direct"
+    assert sp("session", 0, "soft", mode="MAX") == "direct"
+    # max 不影响收口升档与 none 让路
+    assert sp("today", 0, "soft", remaining_ratio=0.1, mode="max") == "close"
+    assert sp("today", 0, "none", mode="max") == "none"
+
+
+def test_planner_thresholds_overrides_and_max():
+    assert planner_thresholds(
+        "today", overrides={"backoff_after": 2, "halt_after": 5},
+    ) == {"backoff_after": 2, "halt_after": 5}
+    # 部分覆写：只给 halt
+    assert planner_thresholds(
+        "session", overrides={"halt_after": 4},
+    ) == {"backoff_after": 1, "halt_after": 4}
+    # 坏值回基线
+    assert planner_thresholds(
+        "today", overrides={"backoff_after": "x"},
+    ) == {"backoff_after": 1, "halt_after": 3}
+    # 全力模式：退避/熔断双关（0=planner 的关闭语义）；natural 恒空
+    assert planner_thresholds("today", mode="max") == {
+        "backoff_after": 0, "halt_after": 0}
+    assert planner_thresholds("natural", mode="max") == {}
+
+
+def test_effective_beat_cap_overrides_and_max():
+    from src.companion.goals.pace import effective_beat_cap as ec
+    assert ec("today") == 4
+    assert ec("session") == 3
+    assert ec("natural") == 0
+    assert ec("today", overrides={"today_cap": 6}) == 6
+    assert ec("session", overrides={"session_cap": 5}) == 5
+    assert ec("today", mode="max") == 6           # +2
+    assert ec("today", overrides={"today_cap": 3}, mode="max") == 5
+    assert ec("today", overrides={"today_cap": "bad"}) == 4
+
+
+def test_slot_key_closing_half_hour_bucket():
+    t1 = time.mktime((2026, 8, 30, 18, 10, 0, 0, 0, -1))
+    t2 = time.mktime((2026, 8, 30, 18, 40, 0, 0, 0, -1))
+    assert slot_key("today", t1).endswith("T18")
+    assert slot_key("today", t1, closing=True).endswith("T18h0")
+    assert slot_key("today", t2, closing=True).endswith("T18h1")
+    # session/natural 不受 closing 影响
+    assert slot_key("session", t1, 5.0, closing=True) == "s:5"

@@ -33,6 +33,13 @@ def test_three_line_structure():
     assert lines[2].startswith("【推进纪律】")
 
 
+def test_remaining_sec_replaces_day_fraction():
+    block = _block(remaining_sec=42 * 60)
+    assert "剩余42分钟" in block
+    assert "第3/14天" not in block
+    assert _block(remaining_sec=0).count("即将到期") == 1
+
+
 def test_discipline_line_always_present():
     for kw in ({}, {"intent": ""}, {"push_level": "direct"},
                {"suppress_push": True}, {"total_days": 0}):
@@ -138,3 +145,44 @@ def test_goal_view_block_without_today_beat():
     assert block.count("\n") == 1                # 无今日意图 → 2 行
     assert "【今日意图】" not in block
     assert "【推进纪律】" in block
+
+
+# ── P1 2026-08-30：close 收口档 + 冲刺纪律行 ────────────────────────────────
+
+def test_close_push_label_and_sprint_discipline():
+    view = {
+        "title": "拿到微信号", "milestone_label": "收口", "milestone_idx": 3,
+        "day_index": 1, "total_days": 0, "pace": "today",
+        "remaining_sec": 1500.0, "total_sec": 10800.0,
+        "today": {"intent": "大方求一个答复", "push_level": "close"},
+    }
+    block = goal_view_block(view)
+    assert "剩余25分钟" in block
+    assert "可以明确报价" in block                 # close 档语义
+    assert "换个角度再推一次" in block              # 冲刺纪律行
+    assert "彻底放下目标只陪伴" not in block        # 不再用 natural 纪律
+    # 越界红线在冲刺纪律里原样保留
+    assert "线下见面" in block
+
+
+def test_close_demoted_by_suppress_push():
+    view = {
+        "title": "拿到微信号", "milestone_label": "收口", "milestone_idx": 3,
+        "day_index": 1, "total_days": 0, "pace": "today",
+        "remaining_sec": 1500.0,
+        "today": {"intent": "收口", "push_level": "close"},
+    }
+    block = goal_view_block(view, suppress_push=True)
+    assert "可以明确报价" not in block             # 同轮双线推销 → 降 soft
+    assert "轻轻带到" in block
+
+
+def test_natural_goal_keeps_original_discipline():
+    view = {
+        "title": "冲会员", "milestone_label": "价值铺垫", "milestone_idx": 1,
+        "day_index": 2, "total_days": 21, "pace": "natural",
+        "today": {"intent": "带一句", "push_level": "soft"},
+    }
+    block = goal_view_block(view)
+    assert "彻底放下目标只陪伴" in block           # natural 纪律不动
+    assert "换个角度再推一次" not in block

@@ -22,7 +22,11 @@ import time
 from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable, List, Optional
 
-from src.contacts.care_schedule import CRISIS_CARE_TOPIC, CareScheduleStore
+from src.contacts.care_schedule import (
+    CRISIS_CARE_TOPIC,
+    GOAL_CARE_NORM_PREFIX,
+    CareScheduleStore,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +53,20 @@ SentHook = Callable[[dict], None]
 # 该跳过不派发）。bot 不该收任何主动消息——**危机关怀也不豁免**（给 @SpamBot 发
 # 「我一直都在」比日常寒暄更荒谬）。best-effort，异常按放行（增量护栏 fail-open）。
 PeerFilter = Callable[[str, str, str], bool]
+# prompt_extras_provider：(item dict) -> {"persona_line","memory_block","goal_block"}
+# （实施84 P0-2：拟稿注入人设口吻/长期记忆/工作目标背景——此前 care 文案只有
+# 最近 8 条原文，产出「怎么样啦」式泛泛话术）。None/异常 → 空增强（旧行为）。
+PromptExtrasProvider = Callable[[dict], dict]
+# user_clock_provider：(item dict) -> UserClock|None（实施84 P0-6：安静时段按客户
+# 当地时间顺延——「事件日 20:00 服务器时间」对跨时区客户可能是凌晨三点）。
+# None/解析不出 → 服务器本地钟（旧行为）。
+UserClockProvider = Callable[[dict], Any]
+# goal_row_policy：(item dict) -> {"exempt_budget","ignore_quiet","jitter"}（P0
+# 2026-08-30 冲刺推进器）：**只对 goal:* 行**征询的豁免策略——限时冲刺是用户
+# 显式拍板的全力决定，联系人预算/安静时段顺延/慢抖动这些「骚扰型」闸门按
+# 配置放行；危机/opt-out/对端 bot 等「安全型」闸门不在此列（绝不豁免）。
+# None/异常/非 goal 行 → {}（全默认，旧行为）。
+GoalRowPolicy = Callable[[dict], dict]
 
 _IDENTITY_LEAK = ("作为AI", "作为一个AI", "AI助手", "as an AI", "i'm an ai", "i am an ai")
 
@@ -63,7 +81,7 @@ _CARE_PROMPT = """你是「{ai_name}」，正在和对方私聊。对方之前�
 
 【你们最近的对话要点（可自然引用）】
 {context_block}
-
+{extra_blocks}
 请用对方习惯的语言（{lang}）发**一条**主动关心的消息：
 - 像朋友一直惦记着这件事（"你之前说的{topic}…怎么样啦？"）
 - **紧扣「{topic}」这件具体事**，不要泛泛的"在吗 / 最近好吗"
@@ -81,6 +99,65 @@ _CARE_RECENT_BLOCK = """
 
 【你最近已发过的关怀（绝不重复这些句子的开场、句式或比喻，换全新的说法）】
 {recent_lines}"""
+
+# 实施84 P1-2：目标推进型关怀（topic_norm=goal:* 的排期行）——框架是「你们在
+# 推进的事到节点了」，不是「对方之前提到过」（那是约定回访的叙事，对目标行
+# 是张冠李戴）。方向与分寸由 extra_blocks 里的【工作目标背景】进一步框定。
+_GOAL_CARE_PROMPT = """你是「{ai_name}」，正在和对方私聊。你们之间有一件正在推进的事：**{topic}**（{source_text}），
+现在是自然跟进一步的好时机。
+
+【你们最近的对话要点（可自然引用）】
+{context_block}
+{extra_blocks}
+请用对方习惯的语言（{lang}）发**一条**自然的消息：
+- 以关心对方近况开场，顺势把「{topic}」轻轻往前带一步
+- 绝不硬销、不催促、不报价、不甩链接；感觉对方兴致不高就只陪伴
+- 尽量自然指涉一个「对话要点」里的具体事实；没有要点就围绕近况写个小切入
+- **结尾带一个轻巧的小问题**（好回答、不逼问）
+- 短小亲切 1-2 句，可含一个 emoji
+- 不要说"我是AI"或身份相关的话，不索要联系方式
+
+直接输出消息文本，不要前后缀、不要解释。"""
+
+# P0 2026-08-30 冲刺推进器：带相位后缀的目标行（topic_norm=goal:{gid}:p{n}）
+# 用「限时推进」专线——与普通目标行的差异是刻意的：这是用户显式拍板的限时
+# 冲刺，收口拍**允许**明确说法/报价/给下一步动作（普通行的「不催促不报价」
+# 刹车在这里松开）；体面底线仍在（对方明确拒绝就收住、不纠缠、不越界）。
+_GOAL_SPRINT_PROMPT = """你是「{ai_name}」，正在和对方私聊。你们之间有一件**限时推进**的事：**{topic}**（{window_line}），
+现在轮到你主动推进一步。
+
+【本拍要做的事】
+{phase_line}
+
+【你们最近的对话要点（可自然引用）】
+{context_block}
+{extra_blocks}
+请用对方习惯的语言（{lang}）发**一条**自然的消息：
+- 按「本拍要做的事」推进：可以说得具体、给明确的说法或下一步；收口拍可以大方求一个答复
+- 语气像真人朋友，自然体面；对方明确拒绝或情绪低落就体面收住，绝不纠缠
+- 尽量自然指涉一个「对话要点」里的具体事实；结尾给一个好回答的小问题或明确的下一步
+- 短小 1-2 句，可含一个 emoji
+- 不要说"我是AI"或身份相关的话；绝不承诺线下见面/私下转账等越界内容
+
+直接输出消息文本，不要前后缀、不要解释。"""
+
+
+def _compose_extra_blocks(persona_line: str = "", memory_block: str = "",
+                          goal_block: str = "") -> str:
+    """拟稿增强块（实施84 P0-2）：人设口吻 / 长期记忆 / 工作目标背景。
+    全空 → ""（prompt 与旧版逐字一致，零 token 开销）。"""
+    parts = []
+    p = str(persona_line or "").strip()
+    if p:
+        parts.append(f"\n【你的说话风格（保持这个人的口吻）】\n{p}")
+    m = str(memory_block or "").strip()
+    if m:
+        parts.append("\n【你记得的关于对方的事（可自然引用一件，别一次全说）】"
+                     f"\n{m}")
+    g = str(goal_block or "").strip()
+    if g:
+        parts.append(f"\n{g}")
+    return "".join(parts)
 
 # Phase ④续¹⁰：危机来源关怀的「克制陪伴」模板——对方近期情绪低谷/危机信号，主动护栏
 # 拦下了普通打扰、转这条关怀兜底。绝不能用日常约定回访那套轻快寒暄（"你之前说的X怎么样啦~"），
@@ -100,10 +177,39 @@ _CRISIS_CARE_PROMPT = """你是「{ai_name}」，正在和对方私聊。对方�
 直接输出消息文本，不要前后缀、不要解释。"""
 
 
-def shift_out_of_quiet_hours(ts: float, *, start_hour: float, end_hour: float) -> float:
-    """命中安静时段则顺延到其结束时刻；否则原样返回。start==end 表示无安静窗。"""
+def shift_out_of_quiet_hours(
+    ts: float, *, start_hour: float, end_hour: float, clock: Any = None,
+) -> float:
+    """命中安静时段则顺延到其结束时刻；否则原样返回。start==end 表示无安静窗。
+
+    ``clock``（实施84 P0-6，可选 UserClock）：安静窗按**客户当地时间**判定与
+    顺延——「事件日 20:00 服务器时间」对跨时区客户可能是凌晨三点。全程在
+    客户本地 naive 时间里做差再折回 epoch（``user_now`` 铁律返回 naive）；
+    换算异常回落服务器本地钟＝旧行为。
+    """
     if start_hour == end_hour:
         return ts
+    if clock is not None:
+        try:
+            from src.companion.user_clock import user_now
+            udt = user_now(clock, ts)
+            h = udt.hour + udt.minute / 60.0
+            overnight = start_hour > end_hour
+            in_quiet = (
+                (not overnight and start_hour <= h < end_hour)
+                or (overnight and (h >= start_hour or h < end_hour))
+            )
+            if not in_quiet:
+                return ts
+            target = udt.replace(hour=int(end_hour) % 24, minute=0,
+                                 second=0, microsecond=0)
+            if overnight and h >= start_hour:
+                target = target + timedelta(days=1)
+            if target <= udt:
+                target = target + timedelta(days=1)
+            return ts + (target - udt).total_seconds()
+        except Exception:
+            logger.debug("user clock 安静窗换算异常（回落服务器钟）", exc_info=True)
     dt = datetime.fromtimestamp(ts)
     h = dt.hour + dt.minute / 60.0
     overnight = start_hour > end_hour
@@ -129,8 +235,12 @@ def build_care_prompt(
     ai_name: str = "她",
     lang: str = "zh",
     now: Optional[float] = None,
+    persona_line: str = "",
+    memory_block: str = "",
+    goal_block: str = "",
 ) -> str:
-    """由一条 care_schedule 行构造派发 prompt（危机主题自动切「克制陪伴」专线）。
+    """由一条 care_schedule 行构造派发 prompt（危机主题自动切「克制陪伴」专线；
+    ``topic_norm=goal:*`` 的排期行切「目标推进」专线）。
 
     P2 2026-08-01 抽出为公共函数：派发器与 ``/api/care/schedule/{sid}/preview``
     预览端点共用——「先看后发」看到的就是真发同一句 prompt 口径，预判与行为
@@ -138,20 +248,68 @@ def build_care_prompt(
 
     ``recent_sent``（B110④，实施74 四批）＝该联系人最近真发过的关怀话术
     （store.recent_sent_texts），作防重负样本追加进 prompt；空/None 零追加。
-    危机专线刻意不吃本参数（克制陪伴不需要花样，重复的「我在」不是缺陷）。
+    ``persona_line`` / ``memory_block`` / ``goal_block``（实施84 P0-2）＝人设
+    口吻 / 长期记忆要点 / 工作目标背景，全空零追加。危机专线刻意不吃任何
+    增强与负样本（克制陪伴不需要花样，也绝不回放低谷内容）。
     """
     n = float(now if now is not None else time.time())
     topic = str(item.get("topic") or "").strip()
     if topic == CRISIS_CARE_TOPIC:
         return _CRISIS_CARE_PROMPT.format(ai_name=ai_name, lang=lang)
-    out = _CARE_PROMPT.format(
-        ai_name=ai_name,
-        topic=topic or "那件事",
-        when_desc=_when_desc(float(item.get("event_at") or n), n),
-        source_text=(str(item.get("source_text") or "") or "(无)")[:200],
-        context_block=context_block or "(无具体要点)",
-        lang=lang,
-    )
+    extra_blocks = _compose_extra_blocks(
+        persona_line=persona_line, memory_block=memory_block,
+        goal_block=goal_block)
+    is_goal_care = str(item.get("topic_norm") or "").startswith(
+        GOAL_CARE_NORM_PREFIX)
+    # 冲刺相位行（goal:{gid}:p{n}）→ 限时推进专线；解析失败回落普通目标行
+    sprint_phase: Optional[int] = None
+    if is_goal_care:
+        try:
+            from src.companion.goals.sprint_ticker import parse_goal_care_norm
+            _gid, sprint_phase = parse_goal_care_norm(item.get("topic_norm"))
+        except Exception:
+            sprint_phase = None
+    if is_goal_care and sprint_phase is not None:
+        try:
+            from src.companion.goals.sprint_ticker import (
+                phase_directive,
+                remaining_phrase,
+            )
+            _pl = phase_directive(int(sprint_phase))
+            _dl = float(item.get("event_at") or 0)
+            _win = (f"剩余{remaining_phrase(_dl - n)}" if _dl > n
+                    else "窗口即将结束")
+        except Exception:
+            _pl = str(item.get("source_text") or "自然推进一步")[:120]
+            _win = "时间窗有限"
+        out = _GOAL_SPRINT_PROMPT.format(
+            ai_name=ai_name,
+            topic=topic or "那件事",
+            window_line=_win,
+            phase_line=_pl,
+            context_block=context_block or "(无具体要点)",
+            extra_blocks=extra_blocks,
+            lang=lang,
+        )
+    elif is_goal_care:
+        out = _GOAL_CARE_PROMPT.format(
+            ai_name=ai_name,
+            topic=topic or "那件事",
+            source_text=(str(item.get("source_text") or "") or "(无)")[:200],
+            context_block=context_block or "(无具体要点)",
+            extra_blocks=extra_blocks,
+            lang=lang,
+        )
+    else:
+        out = _CARE_PROMPT.format(
+            ai_name=ai_name,
+            topic=topic or "那件事",
+            when_desc=_when_desc(float(item.get("event_at") or n), n),
+            source_text=(str(item.get("source_text") or "") or "(无)")[:200],
+            context_block=context_block or "(无具体要点)",
+            extra_blocks=extra_blocks,
+            lang=lang,
+        )
     lines = [s.strip() for s in (recent_sent or []) if str(s or "").strip()]
     if lines:
         out += _CARE_RECENT_BLOCK.format(
@@ -203,6 +361,10 @@ class CareDispatcher:
         budget_gate: Optional[BudgetGate] = None,
         sent_hook: Optional[SentHook] = None,
         peer_filter: Optional[PeerFilter] = None,
+        prompt_extras_provider: Optional[PromptExtrasProvider] = None,
+        user_clock_provider: Optional[UserClockProvider] = None,
+        dry_resample_hours: float = 24.0,
+        goal_row_policy: Optional[GoalRowPolicy] = None,
     ) -> None:
         self._store = store
         self._ai = ai_client
@@ -229,6 +391,15 @@ class CareDispatcher:
         self._sent_hook = sent_hook
         # 对方机器人/自家账号守卫（P1 2026-08-03）：None=旧行为（不拦）
         self._peer_filter = peer_filter
+        # 实施84 P0-2/P0-6：拟稿增强（人设/记忆/目标）与客户时钟（安静窗按对方
+        # 当地时间）。均可选，None=旧行为。
+        self._prompt_extras_provider = prompt_extras_provider
+        self._user_clock_provider = user_clock_provider
+        # P0 2026-08-30 冲刺推进器：goal:* 行豁免策略（None=旧行为）
+        self._goal_row_policy = goal_row_policy
+        # 实施84 P0-4：dry 语义改「不消费待办」后，同一条待办每 tick 都会再到期
+        # ——重拟冷却防止每 5 分钟烧一次 LLM（可经实时配置 dry_resample_hours 调）。
+        self._dry_resample_hours = max(0.0, float(dry_resample_hours))
         # 健康自检读数（/api/care/health 消费）：最近一次 tick 的时刻/结果/是否被闸
         self.last_tick_ts: float = 0.0
         self.last_tick_scheduled: int = 0
@@ -319,6 +490,11 @@ class CareDispatcher:
                 self._max_per_tick = max(1, int(cfg.get("max_per_tick", self._max_per_tick)))
             except Exception:
                 pass
+            try:
+                self._dry_resample_hours = max(0.0, float(
+                    cfg.get("dry_resample_hours", self._dry_resample_hours)))
+            except Exception:
+                pass
         self.last_tick_gated = False
         # 每轮先清理逾期太久仍 pending 的待办（错过关怀时机不补发），best-effort
         try:
@@ -352,6 +528,22 @@ class CareDispatcher:
         except Exception:
             pass
 
+    def prompt_extras(self, item: dict) -> dict:
+        """拟稿增强块（人设/记忆/目标背景，实施84 P0-2）。
+
+        公开方法：预览路由复用——「先看后发」与真发同一份增强口径（与
+        build_care_prompt 抽为公共函数是同一条设计纪律）。provider 未注入/
+        异常 → {}（prompt 与旧版逐字一致）。
+        """
+        if self._prompt_extras_provider is None:
+            return {}
+        try:
+            out = self._prompt_extras_provider(dict(item))
+            return out if isinstance(out, dict) else {}
+        except Exception:
+            logger.debug("care prompt_extras_provider 异常（忽略）", exc_info=True)
+            return {}
+
     async def _dispatch_one(self, item: dict, now: float) -> bool:
         sid = int(item["id"])
         contact_key = str(item.get("contact_key") or "")
@@ -379,6 +571,26 @@ class CareDispatcher:
         # 不追问、不引用具体事、不寒暄；且**不因变现配额/无上下文而跳过**：
         # 危机期的一句陪伴不该被计费门控掐断，也不该因「没聊过具体事」而不发（陪伴本身即目的）。
         is_crisis_care = topic == CRISIS_CARE_TOPIC
+        # 实施84 P1-2：目标推进型排期行（goal:*）——模板与 no_context 豁免见下
+        is_goal_care = str(item.get("topic_norm") or "").startswith(
+            GOAL_CARE_NORM_PREFIX)
+        # P0 2026-08-30：冲刺行豁免策略（只对 goal:* 行征询；异常=全默认）
+        goal_policy: dict = {}
+        if is_goal_care and self._goal_row_policy is not None:
+            try:
+                gp = self._goal_row_policy(dict(item))
+                goal_policy = gp if isinstance(gp, dict) else {}
+            except Exception:
+                logger.debug("goal_row_policy 异常（按默认）", exc_info=True)
+                goal_policy = {}
+
+        # 实施84 P0-4：dry 语义改「不消费待办」后同一行每 tick 仍到期——重拟
+        # 冷却窗内直接静默跳过（不 mark、不烧 LLM；行保持 pending 待真发/过期）。
+        if self._dry_run:
+            _last_dry = float(item.get("dry_sampled_at") or 0)
+            if (_last_dry > 0
+                    and (now - _last_dry) < self._dry_resample_hours * 3600.0):
+                return False
 
         # K2b：变现配额门控——免费用户主动关怀超额 → 跳过（gate 关时回调返 True 不拦）。
         # 放在 LLM 之前，超额时不白耗 token。**危机关怀豁免**（伦理优先于变现）。
@@ -401,9 +613,12 @@ class CareDispatcher:
 
         # P3：每联系人主动预算——该联系人今天已被主动摸过太多/太近 → 本条让路。
         # 放 LLM 之前（省 token）；只拦真发（dry_run 样本要流动）；危机关怀豁免；
+        # 冲刺行按策略豁免（min_gap 4h/日 2 条的预算刻度是天级关怀的，2-12h
+        # 冲刺窗内第二拍必被它吃掉——用户拍板的全力档不吃这个刹车）；
         # gate 自身异常按放行（fail-open：预算是体验优化，不是安全红线）。
         if (self._budget_gate is not None and not is_crisis_care
-                and not self._dry_run):
+                and not self._dry_run
+                and not goal_policy.get("exempt_budget")):
             allowed = True
             try:
                 allowed = bool(self._budget_gate(contact_key))
@@ -421,7 +636,9 @@ class CareDispatcher:
             except Exception:
                 logger.debug("context_provider 异常", exc_info=True)
         # 危机关怀不要求上下文（陪伴本身即目的），也**不注入**对话要点（避免回放低谷内容）。
-        if self._skip_if_no_context and not context_block and not is_crisis_care:
+        # 目标推进行同样豁免（实施84 P1-2）：目标节点本身就是开口理由，source_text 自带背景。
+        if (self._skip_if_no_context and not context_block
+                and not is_crisis_care and not is_goal_care):
             self._mark_skipped(sid, "no_context")
             return False
 
@@ -433,9 +650,15 @@ class CareDispatcher:
             except Exception:
                 recent_sent = []
 
+        # 实施84 P0-2：拟稿增强块（人设口吻/记忆要点/目标背景）；危机专线不吃
+        extras = {} if is_crisis_care else self.prompt_extras(item)
+
         prompt = build_care_prompt(
             item, context_block=context_block, recent_sent=recent_sent,
-            ai_name=self._ai_name, lang=self._default_lang, now=now)
+            ai_name=self._ai_name, lang=self._default_lang, now=now,
+            persona_line=str(extras.get("persona_line") or ""),
+            memory_block=str(extras.get("memory_block") or ""),
+            goal_block=str(extras.get("goal_block") or ""))
         try:
             reply = (await self._ai.chat(prompt) or "").strip()
         except Exception:
@@ -455,10 +678,30 @@ class CareDispatcher:
         if not reply:
             return False
 
-        # O3 改进②：发送时刻命中 quiet_hours → 顺延到结束（而非跳过）
-        defer_until = now + random.uniform(self._jitter[0], self._jitter[1])
-        defer_until = shift_out_of_quiet_hours(
-            defer_until, start_hour=self._quiet_start, end_hour=self._quiet_end)
+        # O3 改进②：发送时刻命中 quiet_hours → 顺延到结束（而非跳过）。
+        # 实施84 P0-6：能解析出客户时钟时按**对方当地时间**判安静窗（provider
+        # 未注入/解析不出 → clock=None＝服务器钟，旧行为）。
+        _clock = None
+        if self._user_clock_provider is not None:
+            try:
+                _clock = self._user_clock_provider(dict(item))
+            except Exception:
+                _clock = None
+        # 冲刺行用快抖动（默认 60-1200s 对 2-12h 窗口太慢）；策略给坏值回默认
+        _jit = self._jitter
+        gp_jit = goal_policy.get("jitter")
+        if isinstance(gp_jit, (tuple, list)) and len(gp_jit) == 2:
+            try:
+                _jit = (float(gp_jit[0]), float(gp_jit[1]))
+            except (TypeError, ValueError):
+                _jit = self._jitter
+        defer_until = now + random.uniform(_jit[0], _jit[1])
+        # 冲刺行可按策略跳过安静时段顺延（顺延到早 8 点＝3 小时目标必死；
+        # 用户拍板的全力档自担深夜打扰）；普通行为不变
+        if not goal_policy.get("ignore_quiet"):
+            defer_until = shift_out_of_quiet_hours(
+                defer_until, start_hour=self._quiet_start,
+                end_hour=self._quiet_end, clock=_clock)
 
         if self._dry_run:
             logger.info("[care DRY] id=%s contact=%s topic=%s reply=%r",
@@ -478,8 +721,13 @@ class CareDispatcher:
                 })
             except Exception:
                 logger.debug("record_care_dry_run 异常", exc_info=True)
-            # 快照进 care 表：metrics 侧样本是进程内易失的，本列是持久口径
-            self._store.mark_sent(sid, note="dry_run", sent_text=reply)
+            # 快照进 care 表（持久口径）但**不消费待办**（实施84 P0-4）：行保持
+            # pending——转真发后仍按期发出、逾期由 expire_overdue 正常收口。
+            # 旧版 store 无该方法时回落旧语义（混版部署不炸链）。
+            if hasattr(self._store, "mark_dry_sampled"):
+                self._store.mark_dry_sampled(sid, sent_text=reply, now=now)
+            else:
+                self._store.mark_sent(sid, note="dry_run", sent_text=reply)
             return True
 
         try:
@@ -506,19 +754,46 @@ class CareDispatcher:
         self._store.mark_sent(sid, note=f"deferred:{int(row_id)}", sent_text=reply)
         return True
 
+    def _hits_dislike(self, reply: str):
+        """(命中?, 相似样本)。双源黑名单（实施84 P0-6）：
+
+        ① metrics 会话级黑名单——**刻意进程内**（既有设计：主观判断重启重审）；
+        ② care 自己的持久 👎 判定（``review`` 列）——本机日均多次重启，纯进程
+          黑名单实际存活不了几小时；care 的审核判定本就落库，防重直接读它，
+          重启后黑名单不再清零。任一源异常按未命中（fail-open）。
+        """
+        try:
+            from src.monitoring.metrics_store import get_metrics_store
+            is_sim, similar_to = get_metrics_store().is_similar_to_disliked(
+                reply, threshold=0.7)
+            if is_sim:
+                return True, similar_to
+        except Exception:
+            pass
+        try:
+            persisted = (self._store.disliked_texts(limit=20)
+                         if hasattr(self._store, "disliked_texts") else [])
+        except Exception:
+            persisted = []
+        if persisted:
+            from difflib import SequenceMatcher
+            best, best_t = 0.0, ""
+            for d in persisted:
+                r = SequenceMatcher(None, reply, d).ratio()
+                if r > best:
+                    best, best_t = r, d
+            if best >= 0.7:
+                return True, best_t
+        return False, ""
+
     async def _avoid_disliked(self, prompt: str, reply: str, sid: int) -> str:
         """Phase O 质量闭环：reply 命中 dislike 黑名单 → 重生成一次。
 
         返回最终可用 reply；若重生成仍相似/失败则 mark_skipped 并返回空串。
-        复用 reactivation 的同一黑名单（被运营标记的雷同话术应全局避免）。
+        黑名单＝metrics 会话级 + care 持久 👎 双源（``_hits_dislike``）。
         """
         try:
-            from src.monitoring.metrics_store import get_metrics_store
-            ms = get_metrics_store()
-        except Exception:
-            return reply  # metrics 不可用不阻断派发
-        try:
-            is_sim, similar_to = ms.is_similar_to_disliked(reply, threshold=0.7)
+            is_sim, similar_to = self._hits_dislike(reply)
         except Exception:
             return reply
         if not is_sim:
@@ -536,7 +811,7 @@ class CareDispatcher:
             reply2 = ""
         if reply2 and len(reply2) >= 4:
             try:
-                is_sim2, _ = ms.is_similar_to_disliked(reply2, threshold=0.7)
+                is_sim2, _ = self._hits_dislike(reply2)
             except Exception:
                 is_sim2 = False
             low2 = reply2.lower()

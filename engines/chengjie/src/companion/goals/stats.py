@@ -31,6 +31,8 @@ class GoalStats:
         "offer_strip_samples", "offer_strip_by_source",
         "offer_strip_by_persona", "claim_stripped",
         "deadline_shorten", "deadline_extend",
+        "sprint_scheduled", "sprint_sent", "sprint_nudges",
+        "sprint_auto_settled",
     )
 
     def __init__(self) -> None:
@@ -81,6 +83,11 @@ class GoalStats:
         self.claim_stripped = 0
         self.deadline_shorten = 0
         self.deadline_extend = 0
+        # 冲刺推进器（P0 2026-08-30）：时间驱动主动拍的排期/真发/手动加速
+        self.sprint_scheduled = 0
+        self.sprint_sent = 0
+        self.sprint_nudges = 0
+        self.sprint_auto_settled = 0
 
     # ── 记录（绝不抛）────────────────────────────────────────────────────────
     def record_created(self) -> None:
@@ -129,6 +136,22 @@ class GoalStats:
     def record_beat_sent_proactive(self) -> None:
         with self._lock:
             self.beats_sent_proactive += 1
+
+    def record_sprint_scheduled(self) -> None:
+        with self._lock:
+            self.sprint_scheduled += 1
+
+    def record_sprint_sent(self) -> None:
+        with self._lock:
+            self.sprint_sent += 1
+
+    def record_sprint_nudge(self) -> None:
+        with self._lock:
+            self.sprint_nudges += 1
+
+    def record_sprint_auto_settled(self) -> None:
+        with self._lock:
+            self.sprint_auto_settled += 1
 
     def record_settle(self, *, milestones_advanced: int = 0) -> None:
         with self._lock:
@@ -334,6 +357,10 @@ class GoalStats:
                 "claim_stripped": self.claim_stripped,
                 "deadline_edits": {"shorten": self.deadline_shorten,
                                    "extend": self.deadline_extend},
+                "sprint": {"scheduled": self.sprint_scheduled,
+                           "sent": self.sprint_sent,
+                           "nudges": self.sprint_nudges,
+                           "auto_settled": self.sprint_auto_settled},
             }
             out["active"] = bool(
                 self.created or injected or self.beats_planned
@@ -399,6 +426,12 @@ class GoalStats:
                 "# HELP goals_link_stripped_total Off-discipline site links stripped",
                 "# TYPE goals_link_stripped_total counter",
                 f"goals_link_stripped_total {self.link_stripped}",
+                "# HELP goals_sprint_total Sprint ticker proactive beats",
+                "# TYPE goals_sprint_total counter",
+                f'goals_sprint_total{{kind="scheduled"}} {self.sprint_scheduled}',
+                f'goals_sprint_total{{kind="sent"}} {self.sprint_sent}',
+                f'goals_sprint_total{{kind="nudge"}} {self.sprint_nudges}',
+                f'goals_sprint_total{{kind="auto_settled"}} {self.sprint_auto_settled}',
                 "# HELP goals_retention_created_total Retention goals auto-created on won deals",
                 "# TYPE goals_retention_created_total counter",
                 f"goals_retention_created_total {self.retention_created}",

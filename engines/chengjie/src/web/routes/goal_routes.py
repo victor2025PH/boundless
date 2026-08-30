@@ -267,6 +267,11 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             "caps": {
                 "bridge_enabled": bool(bridge_cfg.get("enabled", False)),
                 "proactive_enabled": bool(proactive_cfg.get("enabled", False)),
+                # P3 2026-08-30：冲刺推进器开关——前端据此如实描述限时档行为
+                # （开=「AI 按时间表主动出击」；关=「对方开口才推进」）
+                "sprint_enabled": bool(
+                    (goals_cfg.get("sprint") or {}).get("enabled", False)
+                    if isinstance(goals_cfg.get("sprint"), dict) else False),
             },
             # P24 建目标向导：参数枚举源（解锁项/会员档/官网产品/阶段词表）
             "pickers": _pickers(),
@@ -286,6 +291,45 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                     str(view.get("goal_id") or ""), limit=80))
         except Exception:
             logger.debug("attach notified skipped", exc_info=True)
+        return view
+
+    def _attach_sprint_live(view, store):
+        """活跃冲刺目标 → 调度透明化字段（P3 2026-08-30）：
+        ``sprint_live: {ticker_on, beats_used, next_phase_ts, nudgeable}``——
+        卡上「第X拍 · 下一主动拍≈xx:xx / 引擎未开」状态行的数据源。
+        非冲刺/非活跃零开销直通；best-effort 绝不抛。"""
+        try:
+            if not isinstance(view, dict):
+                return view
+            if str(view.get("pace") or "natural") == "natural":
+                return view
+            if str(view.get("status")) != "active":
+                return view
+            from src.companion.goals.service import resolve_goals_cfg
+            from src.companion.goals.sprint_ticker import (
+                next_phase_ts,
+                parse_sprint_cfg,
+            )
+            scfg = parse_sprint_cfg(resolve_goals_cfg(_cfg_root()))
+            goal_like = {
+                "start_ts": view.get("start_ts"),
+                "deadline_ts": view.get("deadline_ts"),
+            }
+            beats = store.list_actions(str(view.get("goal_id") or ""),
+                                       limit=120)
+            ticker_on = bool(scfg.get("enabled"))
+            view["sprint_live"] = {
+                "ticker_on": ticker_on,
+                "beats_used": len(beats),
+                "next_phase_ts": round(
+                    next_phase_ts(goal_like, scfg), 1) if ticker_on else 0,
+                # 立即推进按钮显隐：auto 档 + 引擎开（档位/危机等硬闸在
+                # 路由内再查一遍——按钮只是入口不是授权）
+                "nudgeable": ticker_on
+                and str(view.get("autonomy") or "") == "auto",
+            }
+        except Exception:
+            logger.debug("sprint live attach skipped", exc_info=True)
         return view
 
     def _attach_sprint_recap(view, store):
@@ -360,7 +404,8 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 store, lang=lang),
             store)
         # settle-on-read 可能本轮刚转终态（限时目标到期）——复盘字段同样要附
-        return {"goal": _attach_sprint_recap(view, store), "last": None}
+        return {"goal": _attach_sprint_live(
+            _attach_sprint_recap(view, store), store), "last": None}
 
     @app.get("/api/goals/report")
     async def goals_report(
@@ -477,6 +522,13 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         # 教训）。空 dict=循环没挂载（旧进程/测试 app），如实外露。
         snap["scan_loop"] = dict(
             getattr(request.app.state, "goal_scan_state", None) or {})
+        # P4 2026-08-30：冲刺推进器心跳（同一教训同一疗法）——running/enabled/
+        # 上轮排入数/各跳过原因。空 dict=推进器没挂载。
+        try:
+            _tk = getattr(request.app.state, "goal_sprint_ticker", None)
+            snap["sprint_loop"] = dict(_tk.snapshot()) if _tk else {}
+        except Exception:
+            snap["sprint_loop"] = {}
         return snap
 
     @app.get("/api/goals/notify-status")
@@ -1304,6 +1356,96 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         return {"ok": True,
                 "goal": svc.goal_view(goal, action, lang=_lang(request))}
 
+    @app.post("/api/goals/{goal_id}/sprint/nudge")
+    async def goals_sprint_nudge(
+        request: Request, goal_id: str, _auth=Depends(auth_dep),
+    ):
+        """坐席「立即推进」（P3 2026-08-30）：冲刺目标当场排一条主动拍。
+
+        人拍板绕过**节奏闸**（沉默阈/出站间隔），**安全闸原样过**：
+        危机 block / opt-out 静默 / 会话档位（仅 auto_ai 自发）——按钮是
+        入口不是授权。全相位已排过 → 409 exhausted（引擎已在路上，连点
+        不会双发：相位 topic_norm 去重是同一道闸）。"""
+        svc = _require_enabled(request)
+        _deny_viewer(request)
+        store = _store(svc)
+        goal = store.get_goal(goal_id)
+        if goal is None:
+            raise HTTPException(404, tr(request, "err.goals.not_found"))
+        if str(goal.get("status")) != "active":
+            raise HTTPException(409, tr(request, "err.goals.not_active"))
+        from src.companion.goals.pace import is_sprint, resolve_pace
+        from src.companion.goals.sprint_ticker import (
+            load_optout_mutes,
+            parse_sprint_cfg,
+            schedule_nudge,
+        )
+        if not is_sprint(resolve_pace(goal)):
+            raise HTTPException(400, tr(request, "err.goals.not_sprint"))
+        scfg = parse_sprint_cfg(svc.resolve_goals_cfg(_cfg_root()))
+        if not scfg.get("enabled"):
+            raise HTTPException(
+                409, tr(request, "err.goals.sprint_disabled"))
+        if str(goal.get("autonomy") or "") != "auto":
+            raise HTTPException(
+                409, tr(request, "err.goals.nudge_not_auto"))
+        conv = str(goal.get("conversation_id") or "")
+        inbox = _inbox_store()
+        # 会话档位：人审会话不自发（与推进器同闸；读不到=fail-closed）
+        try:
+            mode = str(inbox.get_automation_mode(conv) or "") \
+                if inbox is not None else ""
+        except Exception:
+            mode = ""
+        if mode != "auto_ai":
+            raise HTTPException(
+                409, tr(request, "err.goals.nudge_not_auto"))
+        # 危机 block（meta 口径；skill_manager 级危机库判定由推进器/回复链兜）
+        try:
+            from src.utils.wellbeing_guard import proactive_emotion_gate
+            import time as _t
+            meta = (inbox.get_conv_meta(conv) or {}) if inbox else {}
+            _i = meta.get("last_emotion_intensity")
+            if proactive_emotion_gate(
+                    None, now=_t.time(),
+                    last_emotion=str(meta.get("last_emotion") or ""),
+                    last_emotion_intensity=(
+                        float(_i) if _i is not None else None)) == "block":
+                raise HTTPException(
+                    409, tr(request, "err.goals.nudge_blocked"))
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+        # opt-out 静默（客户说过别再发——人工加速也不越）
+        try:
+            mutes = load_optout_mutes(_config_path())
+            if conv in mutes:
+                from src.utils.proactive_optout import optout_active
+                import time as _t2
+                if optout_active(mutes.get(conv), now=_t2.time()):
+                    raise HTTPException(
+                        409, tr(request, "err.goals.nudge_muted"))
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+        from src.contacts.care_schedule import get_care_schedule_store
+        res = schedule_nudge(get_care_schedule_store(), goal, cfg=scfg)
+        if res is None:
+            raise HTTPException(
+                409, tr(request, "err.goals.nudge_exhausted"))
+        phase, rid = res
+        store.add_event(goal_id, "sprint_nudge", f"p{phase} care#{rid}")
+        try:
+            from src.companion.goals.stats import get_goal_stats
+            get_goal_stats().record_sprint_nudge()
+        except Exception:
+            pass
+        logger.info("[goal-sprint] 坐席手动加速 goal=%s p%s care#%s",
+                    goal_id, phase, rid)
+        return {"ok": True, "phase": int(phase), "care_id": int(rid)}
+
     @app.post("/api/goals/{goal_id}/status")
     async def goals_status(
         request: Request, goal_id: str, payload: Dict[str, Any],
@@ -1334,6 +1476,11 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             # 终局，人工闭环（P2 成交回流的保底路径）。
             ("active", "done"): "done",
             ("paused", "done"): "done",
+            # P2 2026-08-30 补确认：到期时检出过达成信号但没人点（冲刺窗短，
+            # 绿条常等到过期）→ 终局卡「疑似达成→补确认」走这条迁移。与迟到
+            # 订单复活（settle_order_ref 的 late 分支）同一哲学：达成是硬事实，
+            # 到期只是跟踪窗先关了。cancelled 仍不可复活（人工叫停是明示决定）。
+            ("expired", "done"): "done",
         }
         new_status = transitions.get((cur, action))
         if new_status is None:
@@ -1385,6 +1532,13 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             # P7 回流再转化：坐席手动把挽回目标标 done（对方回来了）与
             # settle-on-read 同权（内部门控 created_by=winback_auto，普通目标零影响）
             svc.maybe_spawn_reconvert(store, _cfg_root(), goal)
+        # 冲刺插队回程票（P2/P3 2026-08-30）：人工终局（成交/取消）同样恢复
+        # 被暂停的长线目标（settle-on-read 路径在 refresh_goal 内已挂同钩）
+        if new_status in ("done", "cancelled") and goal is not None:
+            try:
+                svc.maybe_resume_linked_goal(store, goal)
+            except Exception:
+                logger.debug("linked resume skipped", exc_info=True)
         return {"ok": True,
                 "goal": svc.goal_view(goal, lang=_lang(request))}
 

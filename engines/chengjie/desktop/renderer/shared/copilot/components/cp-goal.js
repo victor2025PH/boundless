@@ -48,7 +48,8 @@
   }
   const TERMINAL = { done: 1, failed: 1, expired: 1, cancelled: 1 };
   const AUTONOMY = ["observe", "suggest", "auto"];
-  const PUSH_LEVELS = ["none", "soft", "direct"];
+  // close=收口档（P3 2026-08-30：限时档剩余 <35% 升档产生）
+  const PUSH_LEVELS = ["none", "soft", "direct", "close"];
   const HOLDS = ["emotion", "silent", "no_intent", "pace_cap"];
   const PACES = ["natural", "today", "session"];
   /* 旧后端 templates 响应可能缺 sprint_ok；与 pace.SPRINT_OK 对齐的前端回落。 */
@@ -136,6 +137,10 @@
       this._formAutonomy = "";       // 参与度单选卡当前选择（跨 DOM 更新持久）
       this._formUsePrefDays = true;  // 首开用偏好天数；坐席换场景后跟场景默认
       this._formPace = "natural";    // 推进节奏：自然天 / 今天收口 / 这轮聊完
+      this._formForce = "steady";    // 冲刺推进力度：稳妥 / 全力（P3 2026-08-30）
+      this._jumpOffer = false;       // 撞 active_limit 后的「插队开冲刺」提议行
+      this._resumeGoalId = "";       // 插队回程票：冲刺终局要恢复的长线目标
+      this._spTick = 0;              // 冲刺倒计时 30s 活字计时器
       this._catalog = null;          // /api/monetize/catalog 解析结果（解锁项/会员档）
       this._catalogTried = false;    // 只试一次，失败回落通用输入框
       this._unlockSel = "";          // 解锁项下拉选中 id（"__custom__"=高级手填）
@@ -389,6 +394,16 @@
                         color:var(--cp-accent-deep,var(--cp-accent,#3730a3)); }
       .gl-pill.none { background:color-mix(in srgb,var(--cp-text-tiny,#94a3b8) 16%,transparent);
                       color:var(--cp-text-dim,#64748b); cursor:help; }
+      /* close 收口档（P3 2026-08-30）：琥珀系=冲刺视觉语言（与买家信号条同族） */
+      .gl-pill.close { background:color-mix(in srgb,var(--cp-goal-sprint,#d97706) 18%,transparent);
+                       color:var(--cp-goal-sprint,#b45309); cursor:help; }
+      /* 冲刺调度状态行 + 立即推进（P3 2026-08-30） */
+      .gl-sprint-line { display:flex; gap:6px; align-items:center; justify-content:space-between;
+                        font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b);
+                        margin-top:2px; }
+      .gl-sprint-line .gl-nudge { flex:0 0 auto; font-size:var(--cp-fs-tiny,11px); padding:1px 8px;
+                        border-color:var(--cp-goal-sprint,#d97706); color:var(--cp-goal-sprint,#b45309);
+                        background:color-mix(in srgb,var(--cp-goal-sprint,#d97706) 8%,transparent); }
       .gl-acts { justify-content:flex-end; margin-top:var(--cp-gap-sm,6px); align-items:center; }
       .gl-acts .gl-link { background:transparent; border:none; color:var(--cp-text-tiny,#94a3b8);
                           text-decoration:underline; padding:2px 4px; }
@@ -978,12 +993,15 @@
           `<button type="button" class="gl-buysig-x" data-act="signal_dismiss" data-ts="${esc(String(sig.ts || 0))}"` +
           ` title="${esc(this.t("inbox.goal.signal.dismiss"))}" aria-label="${esc(this.t("inbox.goal.signal.dismiss"))}">\u2715</button></div>`;
       }
+      // 上一个目标疑似达成没人点（P2/P3 2026-08-30）：空态也给补录入口——
+      // 终局卡只在刚过期那一轮可见，之后都停在这个空态
+      const lastRevive = this._reviveBarHtml(last);
       return sigBar + `<div class="gl-empty">${this._emptyIllust()}` +
         `<div class="gl-lead">${esc(this.t("inbox.goal.empty_lead"))}</div>` +
         `<div class="gl-alias">${esc(this.t("inbox.goal.alias_note"))}</div>` +
         `<div class="acts" style="justify-content:center">` +
         `<button class="primary" data-act="open_form">${esc(this.t("inbox.goal.set_btn"))}</button></div></div>` +
-        this._lastLine(last);
+        lastRevive + this._lastLine(last);
     }
 
     _renderActive(g) {
@@ -1061,15 +1079,48 @@
           `<button type="button" data-act="extend_30m">${esc(this.t("inbox.goal.extend_30m"))}</button>` +
           `<button type="button" data-act="extend_2h">${esc(this.t("inbox.goal.extend_2h"))}</button></span>`
         : "";
-      /* 限时节奏用倒计时 + 顺延按钮，不走「改成天数」表单（分钟级期限填成整数天会立刻过期） */
+      /* 限时节奏用倒计时 + 顺延按钮，不走「改成天数」表单（分钟级期限填成整数天会立刻过期）。
+         倒计时活字（P3 2026-08-30）：sp_remain 由 30s tick 原位刷新，不整卡重渲染。 */
       const metaInner = isSprint
-        ? `<span class="gl-meta-txt${urgent ? " urgent" : ""}">${urgent ? "\u23F3 " : ""}${esc(dayTxt)} · ${pct}%</span>${ext}`
+        ? `<span class="gl-meta-txt${urgent ? " urgent" : ""}">${urgent ? "\u23F3 " : ""}` +
+          `<span data-ref="sp_remain" data-dl="${esc(String(parseFloat(g.deadline_ts) || 0))}">${esc(dayTxt)}</span>` +
+          ` · ${pct}%</span>${ext}`
         : `<button type="button" class="gl-meta-btn${urgent ? " urgent" : ""}" data-act="deadline_toggle"` +
           ` title="${esc(this.t(urgent ? "inbox.goal.meta.urgent_t" : "inbox.goal.deadline.edit_t"))}">` +
           `${urgent ? "\u23F3 " : ""}${esc(dayTxt)} · ${pct}%` +
           `<span class="gl-meta-pen" aria-hidden="true">\u270E</span></button>`;
-      const meta = `<div class="gl-meta">${metaInner}</div>` +
+      // 冲刺调度状态行（P3 2026-08-30）：把推进器的时刻表摊开给坐席——
+      // 「已推进几拍 · 下一主动拍几点 / 引擎没开只等对方开口」+ 手动加速入口。
+      let sprintLine = "";
+      const live = (isSprint && g.status === "active"
+        && g.sprint_live && typeof g.sprint_live === "object")
+        ? g.sprint_live : null;
+      if (live) {
+        const bits = [];
+        const bn = parseInt(live.beats_used, 10) || 0;
+        if (bn > 0) bits.push(this.t("inbox.goal.sprint.beats", { n: bn }));
+        if (!live.ticker_on) {
+          bits.push(this.t("inbox.goal.sprint.engine_off"));
+        } else {
+          const nts = parseFloat(live.next_phase_ts) || 0;
+          if (nts > Date.now() / 1000) {
+            const nd = new Date(nts * 1000);
+            const hhmm = ("0" + nd.getHours()).slice(-2) + ":" +
+              ("0" + nd.getMinutes()).slice(-2);
+            bits.push(this.t("inbox.goal.sprint.next_beat", { t: hhmm }));
+          } else {
+            bits.push(this.t("inbox.goal.sprint.engine_wait"));
+          }
+        }
+        const nudge = live.nudgeable
+          ? `<button type="button" class="gl-nudge" data-act="sprint_nudge">` +
+            `${esc(this.t("inbox.goal.sprint.nudge_btn"))}</button>`
+          : "";
+        sprintLine = `<div class="gl-sprint-line"><span>${esc(bits.join(" · "))}</span>${nudge}</div>`;
+      }
+      const meta = `<div class="gl-meta">${metaInner}</div>` + sprintLine +
         (isSprint ? "" : (this._deadlineOpen ? this._renderDeadlineForm(g) : this._renderDueRow(g)));
+      if (isSprint && g.status === "active") this._armSprintTick();
 
       let today = "";
       const beat = g.today;
@@ -1885,12 +1936,27 @@
       }
       const rawResult = (!done && g.result)
         ? `<div class="gl-result">${esc(g.result)}</div>` : "";
+      // 疑似达成补录（P2/P3 2026-08-30）：到期前检出过联系方式信号但没人点确认
+      // → expired 不是终审——「补录成交」走 expired→done 迁移（与迟到订单复活同哲学）
+      const revive = this._reviveBarHtml(g);
       return `<div class="${done ? "gl-term-done" : "gl-term"}">` +
         `<div class="gl-hdr"><span class="gl-title">${esc(g.title || g.template_name || "")}</span>` +
-        `${this._statusBadge(g.status)}</div>` + facts + rawResult + hint +
+        `${this._statusBadge(g.status)}</div>` + facts + rawResult + revive + hint +
         `<div class="acts gl-acts">${chain}` +
         `<button class="primary" data-act="open_form">${esc(this.t("inbox.goal.again_btn"))}</button></div>` +
         `</div>` + this._notifyRowHtml();
+    }
+
+    _reviveBarHtml(g) {
+      const esc = (s) => this.esc(s);
+      if (!g || String(g.status) !== "expired") return "";
+      const osig = (g.params && typeof g.params === "object")
+        ? g.params.outcome_signal : null;
+      if (!osig || !osig.v) return "";
+      return `<div class="gl-sec gl-outcome">` +
+        `<span class="gl-outcome-tx">\uD83C\uDFAF ${esc(this.t("inbox.goal.outcome.revive", { v: String(osig.v) }))}</span>` +
+        `<button type="button" class="primary" data-act="revive_won">` +
+        `${esc(this.t("inbox.goal.outcome.revive_btn"))}</button></div>`;
     }
 
     _loadPrefs() {
@@ -1977,7 +2043,7 @@
       const esc = (s) => this.esc(s);
       let chips = [];
       if (pace === "session") chips = [30, 60, 90];
-      else if (pace === "today") chips = [4, 8];
+      else if (pace === "today") chips = [3, 4, 8];   // 3h=老板口径的经典冲刺窗
       else chips = [7, 14, 30];
       const suffix = pace === "session" ? (LANG === "en" ? "m" : "分")
         : (pace === "today" ? "h" : "");
@@ -1993,7 +2059,16 @@
 
     _paceSegHtml(pace) {
       const esc = (s) => this.esc(s);
-      const hint = this.t("inbox.goal.form.pace." + pace + "_hint");
+      // 文案与行为一致（P3 2026-08-30）：冲刺推进器开着 → 限时档如实描述
+      // 「对方不开口也会主动出手」；关着 → 维持「对方开口才推进」的旧口径
+      const engineOn = !!(this._templates && this._templates.caps
+        && this._templates.caps.sprint_enabled);
+      let hint = "";
+      if (engineOn && pace !== "natural") {
+        hint = this.t("inbox.goal.form.pace." + pace + "_hint_engine");
+        if (!hint || String(hint).indexOf("inbox.goal.") === 0) hint = "";
+      }
+      if (!hint) hint = this.t("inbox.goal.form.pace." + pace + "_hint");
       const hintOk = hint && String(hint).indexOf("inbox.goal.") !== 0;
       return `<div><label class="gl-fl">${esc(this.t("inbox.goal.form.pace"))}</label>` +
         `<div class="gl-pace" role="radiogroup">` + PACES.map((p) =>
@@ -2032,6 +2107,131 @@
       const days = (dl - start + addSec) / 86400;
       _beacon("goal_extend");
       await this._postDeadline(days, { quiet: true });
+    }
+
+    /* ── 冲刺（P3 2026-08-30）：倒计时活字 / 立即推进 / 补录成交 / 插队 ── */
+
+    _armSprintTick() {
+      if (this._spTick) return;
+      this._spTick = setInterval(() => {
+        try {
+          if (!this.isConnected) {
+            clearInterval(this._spTick); this._spTick = 0; return;
+          }
+          const el = this.shadowRoot.querySelector('[data-ref="sp_remain"]');
+          if (!el) {           // 卡片已切走/终局 → 停表（下次渲染重新武装）
+            clearInterval(this._spTick); this._spTick = 0; return;
+          }
+          const dl = parseFloat(el.getAttribute("data-dl")) || 0;
+          if (!dl) return;
+          const rem = dl - Date.now() / 1000;
+          if (rem <= 0) {      // 到期：整卡刷新拿终局（settle-on-read）
+            clearInterval(this._spTick); this._spTick = 0;
+            this.refresh(); return;
+          }
+          el.textContent = this.t("inbox.goal.remaining",
+            { t: this._fmtRemain(rem) });
+        } catch (_e) { /* 计时器绝不抛 */ }
+      }, 30000);
+    }
+
+    async _sprintNudge(btn) {
+      const g = this._d && this._d.goal;
+      if (!g || !g.goal_id) return;
+      if (btn) btn.disabled = true;
+      let res = null;
+      try {
+        res = await this._api(
+          `/api/goals/${encodeURIComponent(g.goal_id)}/sprint/nudge`,
+          { method: "POST", headers: { "Content-Type": "application/json" },
+            body: "{}" });
+      } catch (_e) { res = null; }
+      _beacon("goal_sprint_nudge");
+      if (res && res.ok && res.data && res.data.ok) {
+        this._flashToast(this.t("inbox.goal.sprint.nudge_ok"));
+        this.refresh();
+        return;
+      }
+      const detail = res && res.data && res.data.detail;
+      this._flashToast((typeof detail === "string" && detail)
+        || this.t("cp.base.err"));
+      if (btn) btn.disabled = false;
+    }
+
+    async _reviveWon(btn) {
+      // 补录成交：expired 但曾检出达成信号的目标（d.goal 刚过期 / d.last 历史）
+      const d = this._d || {};
+      const g = (d.goal && TERMINAL[String(d.goal.status)] ? d.goal : null)
+        || d.last || null;
+      if (!g || !g.goal_id) return;
+      if (btn) btn.disabled = true;
+      let res = null;
+      try {
+        res = await this._api(
+          `/api/goals/${encodeURIComponent(g.goal_id)}/status`,
+          { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "done" }) });
+      } catch (_e) { res = null; }
+      _beacon("goal_revive_won");
+      if (res && res.ok) {
+        this._flashToast(this.t("inbox.goal.outcome.revive_ok"));
+        this.emit("cp-goal-changed",
+          { action: "revive", conversationId: (this._ctx || {}).conversationId });
+        this.refresh();
+        return;
+      }
+      if (btn) btn.disabled = false;
+    }
+
+    async _jumpSprint(btn) {
+      /* 冲刺插队：暂停当前长线目标 → 带 resume_goal_id 重新提交冲刺表单
+         （后端在冲刺终局自动恢复长线目标——「回程票」）。 */
+      const ctx = this._ctx || {};
+      if (!ctx.conversationId) return;
+      if (btn) btn.disabled = true;
+      let cur = null;
+      try {
+        const r = await this._api(
+          "/api/goals/for-conversation?conversation_id=" +
+          encodeURIComponent(ctx.conversationId));
+        cur = r && r.ok && r.data && r.data.goal;
+      } catch (_e) { cur = null; }
+      if (!cur || !cur.goal_id || TERMINAL[String(cur.status)]) {
+        this._jumpOffer = false;
+        if (btn) btn.disabled = false;
+        this._rerender();
+        return;
+      }
+      let pr = null;
+      try {
+        pr = await this._api(
+          `/api/goals/${encodeURIComponent(cur.goal_id)}/status`,
+          { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "pause" }) });
+      } catch (_e) { pr = null; }
+      if (!(pr && pr.ok)) {
+        if (btn) btn.disabled = false;
+        return;
+      }
+      this._resumeGoalId = String(cur.goal_id);
+      this._jumpOffer = false;
+      _beacon("goal_sprint_jump");
+      await this._create(null);
+    }
+
+    _forceSegHtml() {
+      const esc = (s) => this.esc(s);
+      const cur = this._formForce === "max" ? "max" : "steady";
+      const hint = cur === "max"
+        ? this.t("inbox.goal.form.force.max_hint") : "";
+      return `<div><label class="gl-fl">${esc(this.t("inbox.goal.form.force"))}</label>` +
+        `<div class="gl-pace" role="radiogroup">` +
+        ["steady", "max"].map((f) =>
+          `<button type="button" class="${f === cur ? "on" : ""}" data-act="pick_force"` +
+          ` data-force="${f}" role="radio" aria-checked="${f === cur ? "true" : "false"}">` +
+          `${esc(this.t("inbox.goal.form.force." + f))}</button>`).join("") +
+        `</div>` +
+        (hint ? `<div class="gl-pace-hint">${esc(hint)}</div>` : "") + `</div>`;
     }
 
     /* ── 建目标向导 · 参数控件注册表 ──────────────────────────────────────
@@ -2687,6 +2887,7 @@
         prefNote +
         (this._sprintOk(tmpl) ? this._paceSegHtml(pace) : "") +
         this._horizonInputHtml(pace, daysVal) +
+        (sprintBand ? this._forceSegHtml() : "") +
         `<div><label class="gl-fl">${esc(this.t("inbox.goal.form.autonomy"))}</label>` +
         this._autonomyCardsHtml(this._formAutonomy, sprintBand) +
         `<input type="hidden" data-ref="autonomy" value="${esc(this._formAutonomy)}">` +
@@ -2694,6 +2895,11 @@
         `<span data-ref="anotetx">${esc(aNote)}</span></div></div>` +
         `<div class="gl-pace-line" data-ref="pace_line">${esc(this._paceLineText(pace, daysVal, this._formAutonomy))}</div>` +
         `<div class="gl-ferr" data-ref="ferr" hidden></div>` +
+        (this._jumpOffer && sprintBand
+          ? `<div class="gl-mrestore"><span>${esc(this.t("inbox.goal.sprint.jump_note"))}</span>` +
+            `<button type="button" class="primary" data-act="jump_sprint">` +
+            `${esc(this.t("inbox.goal.sprint.jump_btn"))}</button></div>`
+          : "") +
         `</div>` +
         `<div class="gl-mfoot"><span class="gl-mhint" data-ref="mhint" hidden></span>` +
         `<button data-act="form_back">${esc(this.t("inbox.goal.form.back"))}</button>` +
@@ -3259,6 +3465,18 @@
       }
       if (act === "extend_30m") { await this._extendDeadline(30 * 60); return; }
       if (act === "extend_2h") { await this._extendDeadline(2 * 3600); return; }
+      if (act === "pick_force") {
+        const f = (el && el.getAttribute("data-force")) === "max"
+          ? "max" : "steady";
+        if (f === this._formForce) return;
+        this._formForce = f;
+        _beacon("goal_pick_force_" + f);
+        this._rerender();
+        return;
+      }
+      if (act === "sprint_nudge") { await this._sprintNudge(el); return; }
+      if (act === "revive_won") { await this._reviveWon(el); return; }
+      if (act === "jump_sprint") { await this._jumpSprint(el); return; }
       if (act === "note_example") {
         const i = (el && el.getAttribute("data-ex")) || "";
         const tx = this.t("inbox.goal.form.note_ex" + i);
@@ -3680,6 +3898,11 @@
       if ((pace === "today" || pace === "session") && body.autonomy === "observe") {
         body.autonomy = "suggest";
       }
+      // 冲刺附加参数（P3 2026-08-30）：全力档 + 插队回程票（仅限时档携带）
+      if (pace !== "natural") {
+        if (this._formForce === "max") params.sprint_mode = "max";
+        if (this._resumeGoalId) params.resume_goal_id = this._resumeGoalId;
+      }
 
       if (btn) btn.disabled = true;
       let res = null;
@@ -3712,6 +3935,8 @@
         this._formDraft = null;          // 已提交＝草稿使命完成
         this._clearDraftStore(ctx.conversationId);
         this._formBaseline = null;
+        this._resumeGoalId = "";         // 回程票已随目标入库
+        this._jumpOffer = false;
         // 一次性「接下来会发生什么」提示（按所选自治档如实说明，消除「建完然后呢」断崖）
         this._createdHintAutonomy = String(body.autonomy || "auto");
         this._createdHintTid = String(this._formTid || "");
@@ -3736,6 +3961,12 @@
         return;
       }
       if (btn) btn.disabled = false;
+      // 撞每会话活跃上限 + 正在建冲刺（P3 2026-08-30）→ 出「暂停长线插队」
+      // 提议行（重渲染表单带出按钮；ferr 文案照常显示后端 detail）
+      if (res && res.status === 409 && pace !== "natural" && !this._jumpOffer) {
+        this._jumpOffer = true;
+        this._rerender();
+      }
       const fe = this._ref("ferr");
       if (fe) {
         const detail = res && res.data && res.data.detail;

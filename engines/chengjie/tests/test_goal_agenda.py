@@ -35,7 +35,10 @@ ITEM_KEYS = {
     "title", "template", "template_name", "status",
     "day_index", "total_days", "progress",
     "milestone_idx", "milestone_label",
-    "intent", "push_level", "hold", "feedback", "beat_status", "autonomy",
+    # intent_en＝additive 英文展示态（i18n P0 2026-08-19 加进 agenda_item，
+    # 契约钉当时漏更新——0830 冲刺批补钉）
+    "intent", "intent_en", "push_level", "hold", "feedback", "beat_status",
+    "autonomy",
 }
 COUNT_KEYS = {"total", "with_push", "pending_feedback", "adopted", "rejected",
               "hold", "shown"}

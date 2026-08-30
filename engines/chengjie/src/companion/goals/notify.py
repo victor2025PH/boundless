@@ -39,6 +39,28 @@ logger = logging.getLogger("GoalNotify")
 NOTIFIED_EVENT_KIND = "completed_notified"
 MISS_EVENT_KIND = "miss_notified"
 
+__all__ = [
+    "AUTO_CREATED_BY",
+    "MISS_EVENT_KIND",
+    "NOTIFIED_EVENT_KIND",
+    "build_completion_payload",
+    "build_slots_brief",
+    "resolve_agent_push_target",
+    "resolve_extra_push_targets",
+    "resolve_notify_cfg",
+    "resolve_sweep_cfg",
+    "result_kind",
+    "run_scan_loop",
+    "sanitize_notify_extra",
+    "scan_and_notify",
+    "scan_miss_digest",
+    "scan_sprint_miss",
+    "scan_tick",
+    "settle_sweep",
+    "triage_missed",
+    "user_store_for",
+]
+
 
 def resolve_sweep_cfg(cfg_root: Any) -> Dict[str, Any]:
     """``companion.goals.sweep`` 配置（缺省全关；数值夹紧防配坏）。"""
@@ -510,6 +532,100 @@ def triage_missed(
     return out
 
 
+def scan_sprint_miss(
+    store: GoalStore,
+    cfg_root: Any,
+    *,
+    inbox_store: Any = None,
+    publish: Optional[Callable[[str, Dict[str, Any]], Any]] = None,
+    now: Optional[float] = None,
+) -> Dict[str, int]:
+    """冲刺目标失守**即时单条**告警（P2 2026-08-30）：pace=today/session 的
+    failed/expired 不等日报聚合门槛（3 条或 24h）——3 小时目标失败后趁热复盘
+    窗口极短，日报级时延等于放弃运营抓手。
+
+    与日报共用 ``MISS_EVENT_KIND`` 幂等标记与 ``goal_miss_alert`` 事件名，
+    payload 形状=日报同构（count=1 + 单目标附加字段），webhook formatter
+    零改动可渲染；先于日报跑 → 已标记的冲刺行天然不再进日报。随
+    ``notify.enabled`` 总闸 + ``sprint.enabled``（冲刺没开就没有这类目标）。
+    返回 ``{scanned, alerted}``。绝不抛。"""
+    out = {"scanned": 0, "alerted": 0}
+    try:
+        if not goals_enabled(cfg_root):
+            return out
+        cfg = resolve_notify_cfg(cfg_root)
+        if not cfg["enabled"]:
+            return out
+        try:
+            from src.companion.goals.sprint_ticker import parse_sprint_cfg
+            if not parse_sprint_cfg(
+                    resolve_goals_cfg(cfg_root)).get("enabled"):
+                return out
+        except Exception:
+            return out
+        from src.companion.goals.pace import is_sprint, resolve_pace
+        n = float(now if now is not None else time.time())
+        since = n - cfg["lookback_hours"] * 3600.0
+        rows = store.list_missed_unnotified(
+            since_ts=since, limit=50, kind=MISS_EVENT_KIND)
+        sprint_rows = [g for g in rows if is_sprint(resolve_pace(g))]
+        if not sprint_rows:
+            return out
+        out["scanned"] = len(sprint_rows)
+        names = _display_names(
+            inbox_store,
+            [str(g.get("conversation_id") or "") for g in sprint_rows])
+        if publish is None:
+            from src.integrations.shared.event_bus import get_event_bus
+            publish = get_event_bus().publish
+        for g in sprint_rows[:10]:              # 单轮限流（同 max_per_scan 量级）
+            gid = str(g.get("goal_id") or "")
+            try:
+                st = str(g.get("status") or "")
+                tid = str(g.get("template") or "")
+                template = get_template(tid) or {}
+                conv = str(g.get("conversation_id") or "")
+                result = str(g.get("result") or "")
+                payload = {
+                    # 日报同构段（formatter 兼容）
+                    "count": 1,
+                    "failed": 1 if st == "failed" else 0,
+                    "expired": 1 if st == "expired" else 0,
+                    "by_template": {
+                        str(template.get("name_zh") or tid): 1},
+                    "by_account": {
+                        f"{g.get('platform', '')}:{g.get('account_id', '')}": 1},
+                    "oldest_hours": round(
+                        max(0.0, n - float(g.get("done_at") or n)) / 3600.0, 1),
+                    "window_hours": round(cfg["lookback_hours"], 0),
+                    # 单目标附加段（冲刺即时告警专属）
+                    "sprint": True,
+                    "goal_id": gid,
+                    "title": str(g.get("title") or ""),
+                    "conversation_id": conv,
+                    "contact_name": names.get(conv, ""),
+                    "result": result,
+                    "with_signal": result == "expired_with_signal",
+                    # 每目标一生至多失守一次（幂等标记）——按目标限流即可
+                    "rate_key": f"goal_miss:sprint:{gid}",
+                }
+                publish("goal_miss_alert", payload)
+                store.add_event(
+                    gid, MISS_EVENT_KIND,
+                    json.dumps({"at": round(n, 1), "sprint": 1},
+                               separators=(",", ":")))
+                out["alerted"] += 1
+                logger.info(
+                    "[goal-notify] 冲刺目标失守即时告警 goal=%s status=%s%s",
+                    gid, st, "（曾检出达成信号）"
+                    if payload["with_signal"] else "")
+            except Exception:
+                logger.debug("sprint miss item skipped", exc_info=True)
+    except Exception:
+        logger.debug("scan_sprint_miss failed", exc_info=True)
+    return out
+
+
 def scan_miss_digest(
     store: GoalStore,
     cfg_root: Any,
@@ -654,6 +770,12 @@ def scan_tick(
             if res.get("notified"):
                 logger.info("[goal-notify] 本轮发出 %d 条目标达成通知",
                             res["notified"])
+            # 冲刺失守即时单条（P2 2026-08-30）先于日报：标记过的行不再进日报
+            sm = scan_sprint_miss(
+                store, cfg_root, inbox_store=inbox_store, now=n)
+            state["sprint_miss_total"] = (
+                int(state.get("sprint_miss_total") or 0)
+                + int(sm.get("alerted") or 0))
             dig = scan_miss_digest(
                 store, cfg_root, inbox_store=inbox_store, now=n)
             state["miss_digested_total"] += int(dig.get("digested") or 0)

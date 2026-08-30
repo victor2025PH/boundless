@@ -36,6 +36,9 @@ NATURAL_MAX_DAYS = 180.0
 SESSION_CAP = 3   # 整段目标最多几拍
 TODAY_CAP = 4     # 每个日历日最多几拍
 
+# 力度全集（close=收口档，P1 2026-08-30 仅限时档产生；natural 曲线不出它）
+PUSH_ORDER = ("none", "soft", "direct", "close")
+
 _DAY = 86400.0
 
 
@@ -136,11 +139,15 @@ def slot_key(
     pace: Any,
     now: Optional[float] = None,
     last_inbound_ts: float = 0.0,
+    *,
+    closing: bool = False,
 ) -> str:
     """规划/取拍用的槽位键。仍写入 ``goal_actions.day``（TEXT，无需迁移）。
 
     - natural → ``YYYY-MM-DD``（与 ``planner.day_key`` 同口径）
-    - today → ``YYYY-MM-DDTHH``（本地时）
+    - today → ``YYYY-MM-DDTHH``（本地时）；``closing=True``（收口窗，P1
+      2026-08-30）细化到半小时桶 ``…THHh0|h1``——3 小时目标的最后一段
+      每小时一拍太粗，对方一句「我再想想」就把收口拍耗光了
     - session → ``s:{int(last_inbound_ts)}``；无入站时 ``s:0``（整段共用一槽，
       没人开口不连拍——比虚构回合更老实）
     """
@@ -156,7 +163,10 @@ def slot_key(
         return f"s:{ts}"
     t = time.localtime(n)
     if p == "today":
-        return f"{t.tm_year:04d}-{t.tm_mon:02d}-{t.tm_mday:02d}T{t.tm_hour:02d}"
+        key = f"{t.tm_year:04d}-{t.tm_mon:02d}-{t.tm_mday:02d}T{t.tm_hour:02d}"
+        if closing:
+            key += f"h{0 if t.tm_min < 30 else 1}"
+        return key
     from src.companion.goals.planner import day_key
     return day_key(n)
 
@@ -169,6 +179,26 @@ def beat_cap(pace: Any) -> int:
     if p == "today":
         return TODAY_CAP
     return 0
+
+
+def effective_beat_cap(
+    pace: Any, *, overrides: Optional[Dict[str, Any]] = None, mode: str = "",
+) -> int:
+    """生效封顶（P1 2026-08-30）：配置覆写 > 内置默认；全力档（mode=max）
+    在此之上 +2（收口窗细化出的半小时槽要有额度可用）。natural 恒 0。"""
+    p = normalize_pace(pace)
+    if p == "natural":
+        return 0
+    cap = beat_cap(p)
+    key = "session_cap" if p == "session" else "today_cap"
+    if isinstance(overrides, dict) and overrides.get(key) is not None:
+        try:
+            cap = max(1, min(int(overrides[key]), 24))
+        except (TypeError, ValueError):
+            pass
+    if str(mode or "").strip().lower() == "max":
+        cap += 2
+    return cap
 
 
 def count_beats_for_cap(
@@ -189,34 +219,82 @@ def count_beats_for_cap(
     return 0
 
 
-def planner_thresholds(pace: Any) -> Dict[str, int]:
+def planner_thresholds(
+    pace: Any,
+    *,
+    overrides: Optional[Dict[str, Any]] = None,
+    mode: str = "",
+) -> Dict[str, int]:
     """覆盖 planner 的 unanswered 退避/熔断。空 dict = 用配置缺省。
 
     session：对方开口后我们已经带目标说了 1 次 → 退避；再说 1 次仍无新开口
     → 熔断（「跟一句就停」）。today 稍宽。crisis/情绪 hold 不在这里、不动。
+
+    P1 2026-08-30：
+    - ``overrides``（``companion.goals.sprint.{backoff_after,halt_after}``）
+      显式覆写基线（骚扰刹车松紧交运营）；
+    - ``mode=="max"``（目标 ``params.sprint_mode``，用户逐目标显式拍板的
+      全力档）→ 退避/熔断双双置 0（planner 对 0 的语义就是关闭）——
+      危机/情绪 hold 是另一层（planner 第 1 步），不在此列、不受影响。
     """
     p = normalize_pace(pace)
+    if p == "natural":
+        return {}
+    if str(mode or "").strip().lower() == "max":
+        return {"backoff_after": 0, "halt_after": 0}
     if p == "session":
-        return {"backoff_after": 1, "halt_after": 2}
-    if p == "today":
-        return {"backoff_after": 1, "halt_after": 3}
-    return {}
+        out = {"backoff_after": 1, "halt_after": 2}
+    else:
+        out = {"backoff_after": 1, "halt_after": 3}
+    if isinstance(overrides, dict):
+        for k in ("backoff_after", "halt_after"):
+            if overrides.get(k) is not None:
+                try:
+                    out[k] = max(0, min(int(overrides[k]), 20))
+                except (TypeError, ValueError):
+                    pass
+    return out
 
 
-def sprint_push(pace: Any, beat_index: int, template_push: str = "soft") -> str:
+# 收口升档默认阈：剩余占比 < 该值 → 力度升 close（可经 sprint.escalate_at 覆写）
+DEFAULT_ESCALATE_AT = 0.35
+
+
+def sprint_push(
+    pace: Any,
+    beat_index: int,
+    template_push: str = "soft",
+    *,
+    remaining_ratio: Optional[float] = None,
+    escalate_at: float = DEFAULT_ESCALATE_AT,
+    mode: str = "",
+) -> str:
     """限时档覆盖推进力度。``push_level == none`` 的陪伴日**不**覆盖——那是
-    unanswered 退避的产物，硬改成 direct 等于拆掉让路。"""
+    unanswered 退避的产物，硬改成 direct 等于拆掉让路。
+
+    P1 2026-08-30 推进力加度：
+    - ``remaining_ratio``（剩余/总时长）低于 ``escalate_at`` → **close 收口档**
+      （不论拍序——哪怕是第 1 拍，窗口只剩 1/3 就该收口而不是试探）；
+    - ``mode=="max"``（全力档）→ 首拍即 direct（默认档首拍 soft 试探）。
+    """
     p = normalize_pace(pace)
     lvl = str(template_push or "soft")
-    if lvl not in ("none", "soft", "direct"):
+    if lvl not in PUSH_ORDER:
         lvl = "soft"
     if p == "natural" or lvl == "none":
         return lvl
+    is_max = str(mode or "").strip().lower() == "max"
+    if remaining_ratio is not None:
+        try:
+            rr = float(remaining_ratio)
+        except (TypeError, ValueError):
+            rr = -1.0
+        if 0 <= rr < max(0.0, min(float(escalate_at or 0), 0.9)):
+            return "close"
     idx = max(0, int(beat_index or 0))
-    if p == "session":
-        return "soft" if idx <= 0 else "direct"
-    # today：首拍 soft，之后 direct
-    return "soft" if idx <= 0 else "direct"
+    if idx <= 0:
+        return "direct" if is_max else "soft"
+    return "direct"
 
 
 def remaining_sec(goal: Optional[Dict[str, Any]], now: Optional[float] = None) -> float:
@@ -238,11 +316,14 @@ def total_sec(goal: Optional[Dict[str, Any]]) -> float:
 
 
 __all__ = [
+    "DEFAULT_ESCALATE_AT",
     "PACES",
+    "PUSH_ORDER",
     "SPRINT_OK",
     "beat_cap",
     "clamp_deadline_days",
     "count_beats_for_cap",
+    "effective_beat_cap",
     "infer_pace_from_goal",
     "infer_pace_from_seconds",
     "is_sprint",

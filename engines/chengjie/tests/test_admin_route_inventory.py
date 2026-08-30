@@ -448,6 +448,8 @@ _BASELINE = """
 /api/personas/{pid}/media	GET
 /api/personas/{pid}/media	POST
 /api/personas/{pid}/media/test	POST
+/api/personas/{pid}/media/retag-all	POST
+/api/personas/{pid}/media/{mid}/retag	POST
 /api/agent-tasks	GET
 /api/agent-tasks/complete	POST
 /api/agent-tasks/dismiss	POST
@@ -1230,6 +1232,13 @@ _ADDITIONS_2026_07_27_GOALS_READINESS = """
 """
 _BASELINE += _ADDITIONS_2026_07_27_GOALS_READINESS
 
+# P3 2026-08-30 冲刺推进器：坐席「立即推进」——冲刺目标当场排一条主动拍
+# （节奏闸对人工触发不适用；危机/opt-out/会话档位等安全闸原样过）。
+_ADDITIONS_2026_08_30_GOALS_SPRINT_NUDGE = """
+/api/goals/{goal_id}/sprint/nudge	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_30_GOALS_SPRINT_NUDGE
+
 # 2026-08-18：完成通知链路状态（目标卡「达成后会通知谁」可见化；零密钥，
 # 文件真相口径与告警渠道面板同源）。
 _ADDITIONS_2026_08_18_GOALS_NOTIFY_STATUS = """
@@ -1690,23 +1699,59 @@ _ADDITIONS_2026_08_27_ACCOUNT_IDENTITY = """
 """
 _BASELINE += _ADDITIONS_2026_08_27_ACCOUNT_IDENTITY
 
+# 2026-08-28 迁移包导出（实施47 §5 工单 2，migration_export_routes.py）：把某账号的
+# 联系人（人的并集 + conversations 身份列 + CRM best-effort）、会话/消息、可选媒体
+# 打成一份离线 zip，manifest 带 sha256 与体量对账。资产中心页自 08-19 起就在按
+# 路径探测 /export-migration（features.export_migration），端点缺席时 CTA 不渲染 →
+# 装载即点亮，前端零改动。preview 是零副作用体量/覆盖率预览，与真导出同一套取数。
+_ADDITIONS_2026_08_28_MIGRATION_EXPORT = """
+/api/accounts/{platform}/{account_id}/export-migration	GET
+/api/accounts/{platform}/{account_id}/migration-preview	GET
+"""
+_BASELINE += _ADDITIONS_2026_08_28_MIGRATION_EXPORT
 
-# 2026-08-29 设置页「账号发送额度」今日用量（与 budget-today 同页正交；随
-# impl86/0830 批 efa24317 的 reply_settings_routes 一并入库）
+# 2026-08-28 实施81 报障工单处置台：/admin/bug-tickets
+# ＝实施74 §6.1 推迟的「客服工单处置页」（列表/详情/截图/状态流转/一键回访）；
+# /reply＝处置台「群内回复」——@报障人 + 工单号 footer 经工单归属账号发进原群，
+# 成功自动回写工单 note（值守回复从手写一次性脚本收口成产品动作）。
+_ADDITIONS_2026_08_28_BUG_TICKETS = """
+/admin/bug-tickets	GET
+/api/admin/bug-intake/{ticket_id}/reply	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_28_BUG_TICKETS
+
+# 2026-08-29 代登记（归属：主动关怀线）：/api/care/outreach-timeline 已随 HEAD
+# 提交在应用注册，但清单漏登 → extra-route 门禁红。按「已提交的主动新增须登记」
+# 契约代为补行；若关怀线另有登记块，合并时以其为准删本行。
+_ADDITIONS_2026_08_29_CARE_TIMELINE = """
+/api/care/outreach-timeline	GET
+"""
+_BASELINE += _ADDITIONS_2026_08_29_CARE_TIMELINE
+
+# 2026-08-29 代登记（归属：小智助手线，faq 端点已随其今晨提交上线并实测 200——
+# 见意向板「api/assistant/faq 200 with real qa_log data」）：清单漏登 → extra-route
+# 门禁红挡全树 preflight。按「已提交的主动新增须登记」契约代为补行；若助手线
+# 另有登记块，合并时以其为准删本行。
+_ADDITIONS_2026_08_29_ASSISTANT_FAQ = """
+/api/assistant/faq	GET
+"""
+_BASELINE += _ADDITIONS_2026_08_29_ASSISTANT_FAQ
+
+# 2026-08-29 设置页「账号发送额度」今日用量（与 budget-today 同页正交）
 _ADDITIONS_2026_08_29_SENDGATE_TODAY = """
 /api/reply-settings/sendgate-today	GET
 """
 _BASELINE += _ADDITIONS_2026_08_29_SENDGATE_TODAY
 
 # 2026-08-30 新账号「AI 接管方式」确认（全自动/拟稿人审/关闭，默认拟稿人审）：
-# 待确认/已确认清单 + 决策写入（主管；account_mode_routes.py，#63）
+# 待确认/已确认清单 + 决策写入（主管；account_mode_routes.py）
 _ADDITIONS_2026_08_30_ACCOUNT_MODES = """
 /api/reply-settings/account-modes	GET
 /api/reply-settings/account-modes/decide	POST
 """
 _BASELINE += _ADDITIONS_2026_08_30_ACCOUNT_MODES
 
-# 2026-08-29 一键预设只读预览（运营关闸时套用前能看见不会重开闸，#12）
+# 2026-08-29 一键预设只读预览（运营关闸时套用前能看见不会重开闸）
 _ADDITIONS_2026_08_29_PRESET_PREVIEW = """
 /api/companion/capabilities/preset-preview	GET
 """

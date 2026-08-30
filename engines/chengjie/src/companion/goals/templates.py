@@ -27,8 +27,9 @@ GOAL_STATUSES = ("active", "paused", "done", "failed", "expired", "cancelled")
 # 与 cp-goal 表单缺省/推荐徽标）；本元组是**成员集**，顺序不承载展示语义
 # （UI 展示序在 cp-goal._autonomyCardsHtml 前端定，test_goal_routes 钉此顺序）。
 AUTONOMY_LEVELS = ("observe", "suggest", "auto")
-# 今日意图的推进力度
-PUSH_LEVELS = ("none", "soft", "direct")
+# 今日意图的推进力度（close=收口档，P1 2026-08-30 仅限时档的剩余时间升档产生；
+# 模板 push_curve 不写它——natural 弧线没有「窗口快关了」的语义）
+PUSH_LEVELS = ("none", "soft", "direct", "close")
 
 # 退避日（连发未回时）的纯陪伴意图池——所有模板共用。
 # (zh, en) 成对：zh 是 planner 落库/prompt 注入的权威文案；en 供 UI 英文态显示

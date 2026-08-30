@@ -83,7 +83,8 @@ def test_every_template_structural_invariants():
 
 
 def test_shared_vocabularies():
-    assert PUSH_LEVELS == ("none", "soft", "direct")
+    # close=收口档（P1 2026-08-30 限时档剩余时间升档产生；模板 push_curve 不写它）
+    assert PUSH_LEVELS == ("none", "soft", "direct", "close")
     assert AUTONOMY_LEVELS == ("observe", "suggest", "auto")
     assert set(GOAL_STATUSES) == {
         "active", "paused", "done", "failed", "expired", "cancelled"}

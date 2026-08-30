@@ -235,9 +235,16 @@ def settle_goal(
         mi = max(mi, milestone_count(template) - 1)
         events.append(("status", f"done:{result}"))
     elif status == "active" and deadline_ts > 0 and n > deadline_ts:
-        # 过期：唤回类=failed（对方没回来），其余=expired（到期未达成）
+        # 过期：唤回类=failed（对方没回来），其余=expired（到期未达成）。
+        # P2 2026-08-30：曾检出达成信号（对方给过联系方式）但没人确认 →
+        # result 单列 expired_with_signal——报表把「疑似成了没人点」与
+        # 「真没成」分开数，终局卡据此出「补确认」入口（不冒充人工确认）。
         status = "failed" if tid == "engagement_reactivate" else "expired"
-        result = result or "deadline"
+        if not result:
+            result = ("expired_with_signal"
+                      if isinstance(params.get("outcome_signal"), dict)
+                         and params.get("outcome_signal")
+                      else "deadline")
         events.append(("status", f"{status}:deadline"))
 
     if mi != old_mi and status in ("active", "done"):

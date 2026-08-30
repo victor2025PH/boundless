@@ -109,6 +109,55 @@ def test_hint_empty_for_non_auto_or_disabled():
                           chat_key="nobody", goals_store=gs2) == ""
 
 
+# ── P0 2026-08-30 冲刺档修复：hint 槽位随节奏档 + 到期扫描让路 ────────────────
+def test_hint_finds_sprint_slot_beat():
+    """限时档的拍在小时/回合槽——旧 day_key 查法永远找不到（修复回归）。"""
+    from src.companion.goals.pace import slot_key
+    gs = GoalStore(":memory:")
+    g = gs.create_goal(
+        conversation_id=CID, platform="telegram", account_id="default",
+        chat_key="u1", template="custom", title="限时收口",
+        autonomy="auto", deadline_days=3 / 24.0,
+        params={"pace": "today", "note": "拿到微信号"}, now=NOW - 600)
+    gs.upsert_action(g["goal_id"], slot_key("today", NOW),
+                     intent="趁热把微信号要下来", push_level="direct", now=NOW)
+    out = care_goal_hint(_cfg(), conversation_id=CID, platform="telegram",
+                         account_id="default", chat_key="u1", now=NOW,
+                         goals_store=gs)
+    assert "趁热把微信号要下来" in out
+
+
+def test_hint_falls_back_to_latest_beat_row():
+    """当前槽无拍（如冲刺主动拍的 z: 键）→ 回落最近一行，不再空手。"""
+    gs = GoalStore(":memory:")
+    g = gs.create_goal(
+        conversation_id=CID, platform="telegram", account_id="default",
+        chat_key="u1", template="custom", title="限时收口",
+        autonomy="auto", deadline_days=3 / 24.0,
+        params={"pace": "today", "note": "拿到微信号"}, now=NOW - 600)
+    gs.upsert_action(g["goal_id"], f"z:{int(NOW - 120)}",
+                     intent="把这件事说具体", push_level="direct",
+                     status="sent", now=NOW - 120)
+    out = care_goal_hint(_cfg(), conversation_id=CID, platform="telegram",
+                         account_id="default", chat_key="u1", now=NOW,
+                         goals_store=gs)
+    assert "把这件事说具体" in out
+
+
+def test_scan_skips_sprint_goals():
+    """冲刺档归 sprint_ticker 全权：days_before=3 天对 3h 目标=建单即入窗，
+    到期关怀通道必须让路（防双通道重复触达）。"""
+    gs = GoalStore(":memory:")
+    gs.create_goal(
+        conversation_id=CID, platform="telegram", account_id="default",
+        chat_key="u1", template="custom", title="限时收口",
+        autonomy="auto", deadline_days=3 / 24.0,
+        params={"pace": "today", "note": "拿到微信号"}, now=NOW)
+    cs = CareScheduleStore(":memory:")
+    assert scan_goal_deadlines(cs, _cfg(), now=NOW + 60, goals_store=gs) == 0
+    assert cs.count(status="pending") == 0
+
+
 # ── P1-1：捕获事件回流 ───────────────────────────────────────────────────────
 def test_capture_event_written_when_enabled():
     gs = GoalStore(":memory:")

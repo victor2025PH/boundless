@@ -1660,7 +1660,18 @@ companion:
     quiet_start_hour: 23     # 安静时段开始（命中则顺延发送，不打扰）
     quiet_end_hour: 8        # 安静时段结束
     dry_run: false           # 灰度：只生成+log 不真发
+    # 实施84 P0-4（2026-08-29）：dry_run 语义改为「快照不消费待办」——行保持
+    # pending，转真发后仍按期发出。同一行每 tick 会再到期 → 重拟冷却防烧 LLM。
+    dry_resample_hours: 24   # 同一待办两次试运行拟稿的最小间隔（小时，0=不冷却）
     grace_days: 1            # 逾期超此天数的待办标记 expired（错过时机不补发）
+    # 实施84 P0-2（2026-08-29）：派发前跳过「近期已聊过该主题」的待办——只认
+    # **出站**消息（客户自己反复提不算「我们已关心过」），0=关闭该护栏。
+    already_discussed_hours: 48
+    # 实施84 P0-2（2026-08-29）：拟稿增强块（全 best-effort，任一源失败退回旧口径）。
+    memory_in_prompt: true   # episodic 记忆要点按约定主题重排后喂进拟稿 prompt
+    goal_hint: true          # 该会话活跃 auto 档工作目标的背景/今日方向喂进拟稿
+                             # （goals.enabled 关闭时自动为空；「今天只陪伴」的拍
+                             # 会转成显式禁营销指令——人的驳回在 care 出口同样生效）
     # P2 2026-08-01：LLM 抽取影子模式（多语种召回升级的对照期）。shadow=true 时
     # LLM 与正则对同一入站流并跑，只写对照日志 logs/care_shadow/*.jsonl + 计数
     # （绝不入库、绝不发送）；enabled 为未来「LLM 真实捕获」预留，当前版本不消费。
@@ -1673,6 +1684,15 @@ companion:
       # 正确率达标 → 翻 true（overlay 热生效；前提=实例已装载 P4 代码，判据=
       # /api/care/health 的 shadow 快照含 captured 字段）。防双写三层见模块注释。
       enabled: false
+    # 实施84 P0-3（2026-08-29）：软承诺捕获——「下次给你看照片/等我忙完这阵」这类
+    # **无未来时间锚**的高价值回访点，硬约定层全部漏网（captured_24h=0 的主因之一）。
+    # 默认关；开后 due=now+due_hours，置信独立把关；同句有时间锚让位硬约定层绝不双捕；
+    # 问句/敷衍语（「下次再说」）不捕；per-contact pending 上限是防灌真护栏。
+    capture_soft:
+      enabled: false
+      min_confidence: 0.55       # 软层独立置信阈值（有主题词 0.65 / 摘要兜底 0.55）
+      due_hours: 72              # 软承诺回访时点 = 捕获后 N 小时
+      max_pending_per_contact: 2 # 该联系人 pending 达上限则不再软捕获
     # P3 2026-08-01：每联系人主动预算（真发防打扰闸，默认开——只减发送不增）。
     # 读写共用 outreach_log 共享账本：proactive_topic 真发本就落账、care 真发也落账；
     # 该联系人今天已被主动摸够（max_daily_touches 含本次）或距上次太近（min_gap_hours）
@@ -1681,6 +1701,16 @@ companion:
       enabled: true
       min_gap_hours: 4       # 距该联系人上次任何主动触达的最小间隔
       max_daily_touches: 2   # 本地自然日内主动触达上限（含本次 care）
+    # 实施84 P1-1/P1-2（2026-08-29）：主动关怀 × 工作目标（companion.goals）联通。
+    # enabled=true 后：① 捕获的约定回流该会话活跃目标的事件时间线（capture_events，
+    # 坐席在目标卡「AI 做了什么」可见）；② auto 档活跃目标 deadline 前 days_before 天
+    # 自动排一条「目标推进型关怀」（topic_norm=goal:*，走 care 全套预算/安静/人审/
+    # dry_run 护栏；30 天 topic_norm 去重保证同一 deadline 只排一次）。
+    # goals.enabled 关闭时本段自动空转零副作用。拟稿目标背景另由上方 goal_hint 控制。
+    goal_link:
+      enabled: false
+      days_before: 3         # deadline 前几天排期到期关怀
+      capture_events: true   # 捕获约定回流目标事件时间线
   # 多平台 deferred 发送队列：care/reactivation 的**非 messenger** 主动消息发送闭环。
   # messenger 仍走既有 RPA runner deferred 路径；本队列服务 telegram/line/whatsapp 等
   # 可编程发送平台——经编排器 worker 统一投递，复用 kill-switch/quiet_hours/pacing/
@@ -1743,6 +1773,16 @@ companion:
     # region_feeds:
     #   lin_xiaoyu: ["https://news.google.com/rss/search?q=哈尔滨&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"]
     #   CA: ["https://news.google.com/rss?hl=zh-CN&gl=CA&ceid=CA:zh-Hans"]
+    # ── 实施84 P2 内容策略（2026-08-29 老板拍板）────────────────────────────
+    exclude_sports: true     # 不做球队赛事类分享/素材（默认开；生活方式类健身/
+                             # 露营词不受影响，只剔赛事/球队语义）
+    # prefer_kinds: [entertainment, news]  # 选题类别偏好序：社会/娱乐新闻为主
+    # 新闻以「用户所在国家」为准（显式信号：自述城市/号码国码/语种默认国，
+    # 经 user_clock 解析）：region_feeds[国家码] 运营配置优先，否则自动构造
+    # 该国 Google News 源（按国家独立缓存 u-<CC>，冷启动回落全局池）。
+    # 「用户在哪」优先于「人设在哪」（实施55 的人设分源降为第二优先级）。
+    user_region:
+      enabled: false
     # 主动触达也用新鲜事（2026-08-03）：升级链 生活分享 → news_share → 天气；
     # 72h/会话频控 + 缓存超 24h 视同无货（旧闻不当「今天」说）。需与 enabled 同开。
     proactive:
@@ -2042,6 +2082,20 @@ companion:
       enabled: true            # false=整组关（回旧行为：无场景硬匹配/时段过滤/冷却/连续窗/衣着）
       resend_cooldown_hours: 24  # 同图同会话重发冷却（小时；0=关）
       continuity_minutes: 90     # 服装连续窗（分钟；0=关）——窗内优先同系列未发图
+      # 【重发策略】（实施90，2026-08-30）：cooldown=旧行为（排除面耗尽时「翻旧照」
+      #   重发最久没发的那张）；strict=同一会话**绝不**重发同一张——pHash 近重复族
+      #   同罪（同一批连拍/重编码视作同一张），素材耗尽交生成链出新图或诚实文字
+      #   （「绝不发重复照片」的硬档；需真出图后端兜供给，否则熟客会更常收到
+      #   「没有新的啦」类诚实回落）。
+      resend_policy: cooldown
+      # 【季节/地点门】（实施90，随 enabled 总闸，默认开）：只对带 season:/place:
+      #   标注的条目生效（标注来自 album_ai 上传打标 / retag 补标 / 运营手标——
+      #   未打标的部署零行为变化）。通用池/轮播剔除对立季照片（冬天绝不发盛夏
+      #   海滩照）与异国照片（人设在温哥华不轮播东京街景）；运营触发词命中的
+      #   条目**不受限**（显式意图最高优先——旅行旧照就该配"东京/旅行"触发词，
+      #   配文按「之前去玩拍的」口径写）。
+      season_gate: true
+      place_gate: true
       # 【今日衣着状态】（P1）：persona+日期确定性选一件「今天穿的」，A/B 两条生成链
       #   prompt 注入 wearing <outfit>、聊天状态块同源注入（被问「穿了什么」按此答）——
       #   图-文-跨链三同源，明天自动换装；连续窗内刚发过相册某衣着系列 → 衣着跟随该系列
@@ -2085,6 +2139,28 @@ companion:
       enabled: false
       timeout_sec: 12          # 单次核对上限，超时放行
       kinds: [selfie, video, photo]  # 只核人像类；物体图已有 image_gate 的 subject_match 后验
+    # 【相册 AI 打标】（实施90，2026-08-30，**默认关**——新子系统约定）：上传照片时
+    #   自动完成 EXIF 抽提示→剥离（隐私：GPS/拍摄时间绝不落盘外泄，只留 月份/国别/
+    #   季节结论）、pHash 近重复预警、缩略图；开启本闸后再加一步——**局域网 VLM**
+    #   （vision.base_urls，强制 LAN，绝不回落云端视觉）识图产出：场景/时段/季节/
+    #   地点标签（scene:/tod:/season:/place:，运营已有值绝不覆盖）+ 触发词/关系门槛/
+    #   描述**建议**（只进 auto_meta，UI 采纳才生效）+ NSFW/疑似未成年安全检查
+    #   （未成年×露肤硬红线自动下架待人工复核）。
+    #   手动「补标/重新打标」端点不受本闸（运营显式动作，与回填 CLI 同语义）。
+    #   打标单工位串行（不与聊天链抢 GPU）；VLM 不可达=该条 tag_status=failed，
+    #   上传本身永不受阻。
+    # album_ai:
+    #   enabled: false
+    #   auto_on_upload: true   # 随 enabled：上传成功即排队打标
+    #   max_batch: 200         # 一次「整册补标」的条目上限
+    #   # 语义召回·影子（实施90 阶段二，独立于上面的打标闸）：触发词字面 miss 时
+    #   # 后台线程记「按语义（bge-m3 余弦，客户话 vs AI 描述+触发词）会召回哪张」
+    #   # ——只记 logs/album_recall_shadow/*.jsonl + 计数，绝不真发绝不阻塞回复链。
+    #   # 周审 jsonl 命中质量达标后再考虑升真发档（另立键，防手滑直通线上）。
+    #   semantic_recall:
+    #     enabled: false
+    #     min_cosine: 0.62     # 召回下限（bge-m3 口径；影子期先看分布再调）
+    #     max_candidates: 40   # 单次参赛素材上限（控嵌入批大小）
     # 【媒体拟人节奏】（P3，2026-08-12，**默认关**）相册/自拍等媒体短路路径在文本
     #   humanize 序列**之前**发出 → 客户点名要图时 <1s 秒发照片（实录 0.8s）——真人翻
     #   相册挑图至少要几秒，秒发图与秒回文字是同一种机器指纹。开启后媒体出站前补一段
@@ -2302,6 +2378,37 @@ companion:
     planner:
       backoff_after_unanswered: 2   # 对方未回期间已带目标发过 N 拍 → 退避纯陪伴日（力度 none）
       halt_after_unanswered: 4      # 达 N 拍仍未回 → 完全 hold（目标块不再注入，彻底让路）
+    # P0 2026-08-30 冲刺推进器（默认关）：限时目标（pace=today/session）的时间驱动
+    #   主动拍——此前限时档只有「对方开口才拍」一条通道（bridge 拒 sprint 上主动
+    #   顺风车，且 proactive 沉默阈值 12-48h 在 2-12h 窗口内永不放行），客户沉默
+    #   ＝到期必 expired。开启后按剩余时间相位（开场/跟进/收口）把主动拍排进
+    #   care 派发管线（LLM 拟稿引用目标背景 + deferred 队列投递）。
+    #   只作用于 autonomy=auto 的冲刺目标 + auto_ai 档会话；危机情绪/opt-out/
+    #   对端 bot/平台白名单等安全闸绝不豁免。
+    sprint:
+      enabled: false
+      interval_sec: 120          # 扫描周期（秒）
+      max_per_tick: 6            # 每轮最多排入几条主动拍（全实例）
+      phase_points: [0.0, 0.45, 0.75]   # 相位点（占目标总时长比例）：开场/跟进/收口
+      silence_min_sec: 600       # 对方最近开口 < 此秒数 → 让回复链接管，主动拍不出手
+      min_gap_sec: 1500          # 距我方上一条出站 < 此秒数 → 等下一轮（防连珠炮）
+      min_remaining_sec: 180     # 剩余不足此秒数不再排（来不及送达）
+      exempt_contact_budget: true   # 冲刺拍豁免 care 每联系人预算（min_gap 4h/日 2 条是天级刻度）
+      ignore_quiet_hours: false     # true=安静时段照发（用户拍板全力档才开；默认仍顺延）
+      jitter_sec: [30, 180]      # 冲刺拍派发抖动（care 默认 60-1200s 对小时级窗口太慢）
+      platforms: [telegram]      # 主动出手平台白名单（对齐 proactive_topic 实施72 收敛）
+      # ── P1 推进力加度 ──
+      escalate_at: 0.35          # 剩余占比 < 此值 → 力度升 close（收口档：可明确报价/给下一步）
+      # backoff_after: 1         # 覆写限时档退避拍数（缺省 session=1 / today=1）
+      # halt_after: 3            # 覆写限时档熔断拍数（缺省 session=2 / today=3）
+      # today_cap: 4             # 覆写 today 档单日拍封顶（缺省 4）
+      # session_cap: 3           # 覆写 session 档整段拍封顶（缺省 3）
+      # 另：目标级全力模式走建目标表单「推进力度=全力」（params.sprint_mode=max）——
+      # 退避/熔断归零、首拍即 direct、封顶 +2；危机情绪 hold 与 opt-out 不受影响。
+      # ── P2 完成提速 ──
+      auto_settle_contact: false   # 高置信联系方式信号 → 冲刺目标直接结算 done
+                                   # （result=signal:*，报表单列分桶不冒充人工确认；
+                                   # 关=只出「去标成交」提示，确认权在人）
     # P0 2026-08-09 定时结算扫描（默认关）：settle-on-read 的补丁——完成判定原本只在
     #   有人打开会话时发生，客户半夜付费而坐席没点开那个会话＝系统永远不知道完成了。
     #   宿主＝bootstrap 常备扫描循环（60s tick，配置热自闸免重启；刻意不挂
@@ -3350,11 +3457,19 @@ translation:
       min_chars: 12                  # 低于此长度不咨询统计层（短文本统计不可靠）
   # P56：多翻译引擎（按 order 故障转移；首个可用且非空者获胜，AI 兜底）
   engines:
-    # 可选内置名：ollama_mt/ai/deepl/google/microsoft/youdao/baidu；
+    # 可选内置名：ollama_mt/ai/deepl/google/microsoft/youdao/baidu/opencc；
     # custom 段里的任意名字（OpenAI 兼容通用线）写进 order 即参战。
     # 例：["ollama_mt", "gemini_flash", "qwen_mt", "youdao", "baidu", "microsoft", "ai"]
     order: ["ai"]
     timeout_sec: 8
+    # opencc（2026-08-29）：本地简→繁确定性转换线（零 token/微秒级/100% 保真），
+    # 只吃「中文源 → zh-tw」，其他语对自动让位下游引擎。推荐姿势＝order 加 "opencc"
+    # + per_lang_order 把 zh-tw 重排到 opencc 优先（LLM 兜「源不是中文」的场景）：
+    #   order: ["opencc", "ai"]
+    #   per_lang_order: {"zh-tw": ["opencc", "ai"]}
+    # profile 可换 s2tw（仅字形不换词）/ s2hk（香港繁体）；缺 opencc 库自动跳过。
+    # opencc:
+    #   profile: "s2twp"               # 台湾正体 + 台湾用词（软件→軟體、视频→影片）
     deepl:
       api_key: ""                    # 填则启用 DeepL（缺 key 自动跳过）
       pro: false                     # true=api.deepl.com（Pro），false=api-free.deepl.com
@@ -3867,6 +3982,16 @@ bug_intake:
   max_replies_per_user_hour: 4    # 同一用户每小时最多回几条（超额静默）
   max_replies_per_group_hour: 20  # 整群每小时 AI 发言上限（防刷屏）
   collect_window_min: 30          # 报障信息收集窗（分钟）：窗内该用户消息持续接话
+  # 修复回访「获取方式」段（实施81 P0-3）：按发版节奏在 overlay 改（如
+  # 「已推送热补丁，重启智聊即生效」/「请更新到 1.0.59」）。留空＝回访不带
+  # 更新段——服务端修复即时生效，硬塞「请更新」反而误导；处置台可按单覆写。
+  update_hint: ""
+  # 官方 bot 代发（实施82 P0，2026-08-29 拍板）：回访/处置台群内回复优先经
+  # notify_webhooks 里的 telegram bot 发送（品牌身份、将来可挂按钮）；bot
+  # 未配 token/未进群/失败自动回落支持号用户账号（旧链原样，客户部署零 bot
+  # 不劣化）。置 false＝纯用户账号旧链。bot 消息回流观察管线时由自咬环守卫
+  # 硬压制（防公示里的 bug 词被自己登记成新工单）。
+  bot_send: true
 
 companion_send_gate:
   enabled: false
@@ -4529,8 +4654,18 @@ assistant:
     min_score: 35
     max_tokens: 8000           # 回答长度上限（2026-08-21 起不再设小额上限/超时）
     # 助手专属直连 LLM（可选）：主链被切 local_only 等场景下，助手问答直打
-    # 此 OpenAI 兼容端点（快路径），失败自动回落主链容灾（generate_reply）。
-    # api_key: inherit = 复用 ai.api_key（不复制密钥）。base_url 留空=恒走主链。
+    # 此 OpenAI 兼容端点（快路径，逐 token 打字机），失败自动回落主链容灾
+    # （generate_reply）。base_url 留空=恒走主链。
+    # ⚠ 三个键必须同源（2026-08-28 生产事故）：曾经只有 api_key 写 inherit，
+    #   base_url/model 是硬编码的 api.deepseek.com + deepseek-v4-flash；主链
+    #   端点后来迁到 siliconflow，于是 inherit 取到的是**新家的 key**，拿它去
+    #   打旧家端点 → 每次提问 401 → 坐席看到的却是「网络异常，请重试」，
+    #   足足五天没人能对上因果。三键全写 inherit 就永远不会再分叉。
+    # inherit 语义：base_url/model/api_key 分别复用 ai.base_url/ai.model/
+    #   ai.api_key（不复制密钥）；要单独指一个更便宜/更快的模型时才填显式值，
+    #   且**填了就得自己负责跟随主链迁移**。
+    # 出厂默认保持 base_url 留空＝恒走主链（行为与历史一致、零意外）；要开
+    #   直连流式打字机就把三个键都写 inherit。
     llm:
       base_url: ""
       model: ""

@@ -76,7 +76,67 @@ def test_inbox_host_discoverability(inbox_html: str):
     assert "accent" in inbox_html
     assert "card" in inbox_html and "_handleGoalDeepLink" in inbox_html
     assert "cp-goal-drive-draft" in inbox_html
-    assert "cp-goal.js?v=20260819" in inbox_html  # 改 cp-goal.js 必须 bump 缓存戳（本断言随批次前移）
+    assert "cp-goal.js?v=20260830" in inbox_html  # 改 cp-goal.js 必须 bump 缓存戳（本断言随批次前移）
+
+
+def test_goal_sprint_pace_ui(goal_js: str):
+    """P0 2026-08-29 限时节奏：分段控件 / 倒计时顺延 / hold / 草稿 pace。"""
+    assert "pace_cap" in goal_js
+    assert 'data-act="pick_pace"' in goal_js
+    assert "gl-pace" in goal_js
+    assert 'data-act="extend_30m"' in goal_js
+    assert 'data-ref="pace_line"' in goal_js
+    assert "_sprintOk" in goal_js
+    assert "goal_pick_pace" in goal_js
+    assert "inbox.goal.form.arc_hint_sprint" in goal_js
+    # P1：today 三拍短弧 + 达成信号提示行（只提示不自动结算）
+    assert "arc_today_" in goal_js
+    assert "gl-outcome" in goal_js
+    assert "outcome_signal" in goal_js
+    assert "inbox.goal.outcome.contact" in goal_js
+    # P2：限时终局复盘（分钟级用时 + 拍数 chip，tooltip=最后一拍意图）
+    assert "inbox.goal.done.dur" in goal_js
+    assert "inbox.goal.term.beats" in goal_js
+
+
+def test_goal_sprint_p3_ui(goal_js: str):
+    """P3 2026-08-30 冲刺前端：倒计时活字 / 调度状态行+立即推进 / close 档 /
+    力度选择（全力）/ 补录成交 / 插队回程票。改 cp-goal.js 冲刺区前先读
+    CLAUDE 的冲刺主线段。"""
+    # 倒计时活字（30s tick 原位刷新，不整卡重渲染）
+    assert 'data-ref="sp_remain"' in goal_js
+    assert "_armSprintTick" in goal_js
+    # 调度状态行 + 手动加速（安全闸在路由，按钮只是入口）
+    assert "gl-sprint-line" in goal_js
+    assert 'data-act="sprint_nudge"' in goal_js
+    assert "sprint_live" in goal_js
+    assert "inbox.goal.sprint.nudge_btn" in goal_js
+    assert "/sprint/nudge" in goal_js
+    # close 收口档进力度全集 + 配色
+    assert '"close"' in goal_js
+    assert ".gl-pill.close" in goal_js
+    # 力度选择（稳妥/全力 → params.sprint_mode）
+    assert 'data-act="pick_force"' in goal_js
+    assert "sprint_mode" in goal_js
+    assert "inbox.goal.form.force" in goal_js
+    # 疑似达成补录（expired→done 迁移的前端入口；空态也可达）
+    assert 'data-act="revive_won"' in goal_js
+    assert "inbox.goal.outcome.revive" in goal_js
+    # 插队回程票（暂停长线→冲刺带 resume_goal_id）
+    assert 'data-act="jump_sprint"' in goal_js
+    assert "resume_goal_id" in goal_js
+    # 文案与行为一致：推进器开关驱动限时档提示（caps.sprint_enabled）
+    assert "sprint_enabled" in goal_js
+    assert "_hint_engine" in goal_js
+    # 3h chip（老板口径的经典冲刺窗）
+    assert "[3, 4, 8]" in goal_js
+    assert "beats_used" in goal_js and "last_beat_intent" in goal_js
+    # P1（信号驱动）：买家信号条 + 直达限时表单 + 可关闭；画像陈旧 ⏳
+    assert "gl-buysig" in goal_js
+    assert 'data-act="open_form_sprint"' in goal_js
+    assert 'data-act="signal_dismiss"' in goal_js
+    assert "signal_hint" in goal_js
+    assert "inbox.goal.slots.stale_t" in goal_js
 
 
 def test_goal_form_draft_survival_layer(goal_js: str, inbox_html: str):
@@ -501,7 +561,7 @@ def test_p24_step1_grouped_cards_custom_highlight(goal_js: str):
     assert "gl-adv-pill" in goal_js
     assert "inbox.goal.form.adv_pill" in goal_js
     for tok in ("--cp-goal-conv", "--cp-goal-rel", "--cp-goal-eng",
-                "--cp-goal-disc", "--cp-violet"):
+                "--cp-goal-disc", "--cp-goal-sprint", "--cp-violet"):
         assert tok in goal_js, f"missing token ref {tok}"
     assert '"discovery"' in goal_js  # KIND_ORDER 含摸底组
     # 旧「进阶」下划线文字链退役（被高亮卡取代）
@@ -597,7 +657,25 @@ def test_p24_i18n_dynamic_keys_bilingual():
         "inbox.goal.form.last_used", "inbox.goal.form.back",
         "inbox.goal.form.arc_title", "inbox.goal.form.arc_hint",
         "inbox.goal.form.params_title", "inbox.goal.form.summary",
-        "inbox.goal.form.days_help", "inbox.goal.form.auto_note_help",
+        "inbox.goal.form.days_help", "inbox.goal.form.days_help_today",
+        "inbox.goal.form.days_help_session", "inbox.goal.form.pace",
+        "inbox.goal.form.pace.natural", "inbox.goal.form.pace.today",
+        "inbox.goal.form.pace.session", "inbox.goal.form.pace_line",
+        "inbox.goal.form.pace.natural_hint", "inbox.goal.form.pace.today_hint",
+        "inbox.goal.form.pace.session_hint",
+        "inbox.goal.form.horizon_h", "inbox.goal.form.horizon_min",
+        "inbox.goal.form.chip_today_end", "inbox.goal.form.arc_hint_sprint",
+        "inbox.goal.form.arc_session_1", "inbox.goal.form.arc_session_2",
+        "inbox.goal.form.arc_session_3", "inbox.goal.form.arc_today_1",
+        "inbox.goal.form.arc_today_2", "inbox.goal.form.arc_today_3",
+        "inbox.goal.form.note_ex1_chip",
+        "inbox.goal.hold.pace_cap", "inbox.goal.remaining",
+        "inbox.goal.extend_30m", "inbox.goal.extend_2h",
+        "inbox.goal.outcome.contact", "inbox.goal.outcome.confirm",
+        "inbox.goal.done.dur", "inbox.goal.term.beats",
+        "inbox.goal.signal.buying", "inbox.goal.signal.open_btn",
+        "inbox.goal.signal.dismiss", "inbox.goal.slots.stale_t",
+        "err.goals.pace_not_allowed", "inbox.goal.form.auto_note_help",
         "inbox.goal.form.adv_params", "inbox.goal.form.per_month",
         "inbox.goal.form.item_label_ph", "inbox.goal.form.unlock_custom_opt",
         "inbox.goal.form.unlock_custom_id", "inbox.goal.form.unlock_custom_id_ph",
@@ -607,6 +685,8 @@ def test_p24_i18n_dynamic_keys_bilingual():
         "inbox.goal.form.note_ph_reactivate", "inbox.goal.form.note_ex_t",
         "inbox.goal.form.note_ex1", "inbox.goal.form.note_ex2",
         "inbox.goal.form.note_ex3",
+        "inbox.goal.form.note_ex1_chip", "inbox.goal.form.note_ex2_chip",
+        "inbox.goal.form.note_ex3_chip",
         "inbox.goal.param_label.conversion_unlock.item_id",
         "inbox.goal.param_help.conversion_unlock.item_id",
         "inbox.goal.param_label.conversion_unlock.item_label",
@@ -641,7 +721,7 @@ def test_p24_goal_kind_tokens_defined_both_themes():
     for name in ("theme-light.css", "theme-dark.css"):
         css = (_REPO / "shared" / "copilot" / name).read_text(encoding="utf-8")
         for tok in ("--cp-goal-conv:", "--cp-goal-rel:", "--cp-goal-eng:",
-                    "--cp-goal-disc:"):
+                    "--cp-goal-disc:", "--cp-goal-sprint:"):
             assert tok in css, f"{name} missing {tok}"
 
 

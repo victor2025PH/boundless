@@ -253,6 +253,13 @@ def refresh_goal(
                     maybe_spawn_reconvert(store, cfg_root, goal, now=n)
                 except Exception:
                     logger.debug("reconvert hook skipped", exc_info=True)
+            # 冲刺插队回程票：任意终态（含 expired）恢复被暂停的长线目标
+            if (res["status"] in ("done", "failed", "expired")
+                    and old_status == "active"):
+                try:
+                    maybe_resume_linked_goal(store, goal)
+                except Exception:
+                    logger.debug("linked resume skipped", exc_info=True)
         out["goal"] = goal
 
         if str(goal.get("status")) != "active":
@@ -261,23 +268,48 @@ def refresh_goal(
         # 拍槽位：natural=日历日；today=小时；session=对方本条入站。
         # 限时档绝不能再走「每天一拍」——60 分钟目标否则整段只有一拍、到期必 expired。
         from src.companion.goals.pace import (
-            beat_cap,
+            DEFAULT_ESCALATE_AT,
             count_beats_for_cap,
+            effective_beat_cap,
             is_sprint,
             planner_thresholds,
+            remaining_sec as _rem_sec,
             resolve_pace,
             slot_key,
             sprint_push,
+            total_sec as _tot_sec,
         )
         pace = resolve_pace(goal)
-        day = slot_key(pace, n, float(signals.last_inbound_ts or 0))
+        sprint = is_sprint(pace)
+        # P1 推进力加度：冲刺配置覆写 + 全力模式（params.sprint_mode，用户逐
+        # 目标显式拍板）+ 剩余占比（收口升档判据）。
+        scfg: Dict[str, Any] = {}
+        sprint_mode = ""
+        rem_ratio: Optional[float] = None
+        closing = False
+        if sprint:
+            try:
+                from src.companion.goals.sprint_ticker import parse_sprint_cfg
+                scfg = parse_sprint_cfg(resolve_goals_cfg(cfg_root))
+            except Exception:
+                scfg = {}
+            sprint_mode = str(
+                (goal.get("params") or {}).get("sprint_mode") or "")
+            _tot = _tot_sec(goal)
+            if _tot > 0:
+                rem_ratio = _rem_sec(goal, n) / _tot
+                closing = rem_ratio < float(
+                    scfg.get("escalate_at") or DEFAULT_ESCALATE_AT)
+        day = slot_key(pace, n, float(signals.last_inbound_ts or 0),
+                       closing=closing)
         action = store.get_action(gid, day)
         if action is None:
             cfg = resolve_goals_cfg(cfg_root)
             pl = (cfg.get("planner") or {}) if isinstance(cfg, dict) else {}
             existing = store.list_actions(gid, limit=120)
-            n_existing = count_beats_for_cap(existing, pace, n) if is_sprint(pace) else 0
-            cap = beat_cap(pace)
+            n_existing = count_beats_for_cap(existing, pace, n) if sprint else 0
+            cap = (effective_beat_cap(pace, overrides=scfg, mode=sprint_mode)
+                   if sprint else 0)
             if cap and n_existing >= cap:
                 stats.record_hold("pace_cap")
                 out["hold"] = "pace_cap"
@@ -295,7 +327,7 @@ def refresh_goal(
                 store.count_events_since(gid, "beat_rejected", since_reject),
                 store.count_events_since(
                     gid, "beat_reject_undone", since_reject))
-            th = planner_thresholds(pace)
+            th = planner_thresholds(pace, overrides=scfg, mode=sprint_mode)
             try:
                 backoff = int(th.get(
                     "backoff_after", pl.get("backoff_after_unanswered", 2) or 0))
@@ -320,14 +352,23 @@ def refresh_goal(
                 return out
             push = str(beat.get("push_level") or "soft")
             intent = str(beat.get("intent") or "")
-            if is_sprint(pace):
-                push = sprint_push(pace, n_existing, push)
+            if sprint:
+                push = sprint_push(
+                    pace, n_existing, push,
+                    remaining_ratio=rem_ratio,
+                    escalate_at=float(
+                        scfg.get("escalate_at") or DEFAULT_ESCALATE_AT),
+                    mode=sprint_mode)
                 # 限时档意图换 sprint 池（按拍序）：日历池的「隔天补一句/
                 # 改天再聊」在 60 分钟目标里穿帮。push=none（退避陪伴日）
                 # 不换——陪伴意图与节奏无关；无 sprint 池的模板保持原意图。
+                # close（收口升档）钉收口池（99 夹到末段）——力度收口而意图
+                # 还在「先探探兴趣」是自相矛盾的稿。
                 if push != "none":
                     si = pick_sprint_intent(
-                        template, n_existing, gid, day,
+                        template,
+                        99 if push == "close" else n_existing,
+                        gid, day,
                         params=goal.get("params") or {})
                     if si:
                         intent = si
@@ -593,6 +634,92 @@ def sanitize_won_meta(raw: Any) -> Dict[str, Any]:
     return out
 
 
+def _maybe_auto_settle_outcome(
+    store: GoalStore,
+    cfg_root: Any,
+    goal: Dict[str, Any],
+    *,
+    now: Optional[float] = None,
+) -> Optional[Dict[str, Any]]:
+    """冲刺目标的达成信号自动结算（P2 2026-08-30，``sprint.auto_settle_contact``
+    默认关）。前置：目标是限时档 + 冲刺功能开 + 信号已写进 params。
+
+    成功 → 返回最新目标行（status=done，result=``signal:<kind>:<v>``）；
+    不满足/失败 → None（提示行为不变，确认权仍在人）。绝不抛。"""
+    try:
+        if not isinstance(goal, dict):
+            return None
+        from src.companion.goals.pace import is_sprint, resolve_pace
+        if not is_sprint(resolve_pace(goal)):
+            return None
+        from src.companion.goals.sprint_ticker import parse_sprint_cfg
+        scfg = parse_sprint_cfg(resolve_goals_cfg(cfg_root))
+        if not (scfg.get("enabled") and scfg.get("auto_settle_contact")):
+            return None
+        gid = str(goal.get("goal_id") or "")
+        sig = (goal.get("params") or {}).get("outcome_signal")
+        if not gid or not isinstance(sig, dict) or not sig.get("v"):
+            return None
+        n = float(now if now is not None else time.time())
+        fields: Dict[str, Any] = {
+            "status": "done", "done_at": n, "progress": 1.0,
+            "result": (f"signal:{str(sig.get('kind') or 'contact')}:"
+                       f"{str(sig.get('v'))[:60]}")[:200],
+        }
+        try:
+            ms = (get_template(str(goal.get("template") or "")) or {}).get(
+                "milestones") or []
+            if ms:
+                fields["milestone_idx"] = len(ms) - 1
+        except Exception:
+            pass
+        if not store.update_goal_fields(gid, **fields):
+            return None
+        store.add_event(gid, "status", "active->done:signal_auto")
+        try:
+            get_goal_stats().record_terminal("done")
+            get_goal_stats().record_sprint_auto_settled()
+        except Exception:
+            pass
+        logger.info("[goal-sprint] 达成信号自动结算 done：%s（%s）",
+                    gid, fields["result"][:60])
+        fresh = store.get_goal(gid) or dict(goal, **fields)
+        # 冲刺插队闭环：终态即恢复被暂停的长线目标（有链接才动）
+        maybe_resume_linked_goal(store, fresh)
+        return fresh
+    except Exception:
+        logger.debug("_maybe_auto_settle_outcome failed", exc_info=True)
+        return None
+
+
+def maybe_resume_linked_goal(store: GoalStore, goal: Dict[str, Any]) -> bool:
+    """冲刺插队的回程票（P2/P3 2026-08-30）：目标带 ``params.resume_goal_id``
+    且已到任意终态 → 把那条 **paused** 的长线目标恢复 active。
+
+    只认 paused（人工又动过的不碰）；恢复与否都不影响本目标终态。绝不抛。"""
+    try:
+        if not isinstance(goal, dict):
+            return False
+        if str(goal.get("status") or "") not in (
+                "done", "failed", "expired", "cancelled"):
+            return False
+        rid = str((goal.get("params") or {}).get("resume_goal_id") or "").strip()
+        if not rid:
+            return False
+        linked = store.get_goal(rid)
+        if linked is None or str(linked.get("status") or "") != "paused":
+            return False
+        if not store.update_goal_fields(rid, status="active"):
+            return False
+        store.add_event(rid, "status", "paused->active:sprint_return")
+        store.add_event(str(goal.get("goal_id") or ""), "linked_resume", rid)
+        logger.info("[goal-sprint] 冲刺终局，恢复长线目标 %s", rid)
+        return True
+    except Exception:
+        logger.debug("maybe_resume_linked_goal failed", exc_info=True)
+        return False
+
+
 def maybe_auto_create_goal(
     store: GoalStore,
     cfg_root: Any,
@@ -799,9 +926,22 @@ def build_block_for_chat(
                     maybe_outcome_shadow,
                     maybe_outcome_signal,
                 )
-                maybe_outcome_signal(store, goal, inbound_text, now=now)
+                sig_hit = maybe_outcome_signal(
+                    store, goal, inbound_text, now=now)
                 # 影子轨（P2）：约时间/付款只记事件不出提示——攒精度数据
                 maybe_outcome_shadow(store, goal, inbound_text, now=now)
+                # P2 2026-08-30 冲刺自动结算（sprint.auto_settle_contact，
+                # 默认关）：限时目标 + 高置信联系方式信号 → 直接 done。
+                # 3 小时窗里「绿条等人点」常常等到过期——用户拍板要最快时，
+                # 检出即结算；result=signal:* 单列分桶，报表不冒充人工确认。
+                if sig_hit:
+                    settled = _maybe_auto_settle_outcome(
+                        store, cfg_root, goal, now=now)
+                    if settled is not None:
+                        _note_meta(False, "outcome_auto_settled",
+                                   goal_id=str(goal.get("goal_id") or ""),
+                                   title=str(goal.get("title") or ""))
+                        return None
             except Exception:
                 logger.debug("outcome signal skipped", exc_info=True)
         # observe 档：目标只作看板观测，完全不进 prompt
@@ -1808,6 +1948,7 @@ __all__ = [
     "is_negative_emotion",
     "maybe_auto_create_goal",
     "maybe_create_retention_goal",
+    "maybe_resume_linked_goal",
     "maybe_spawn_reconvert",
     "refresh_goal",
     "resolve_plan_product",

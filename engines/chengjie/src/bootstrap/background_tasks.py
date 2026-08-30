@@ -106,6 +106,120 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
             except Exception:
                 return ""
 
+        def _care_already_discussed(contact_key: str, topic: str) -> bool:
+            """O3 改进① 正式接线（实施84 P0-2；构造参数一直在、此前从未注入）：
+            近 N 小时（already_discussed_hours，默认 48，0=关）**出站**消息里
+            已经提过该主题 → 跳过（防「刚聊完面试，晚上机器又来打卡问面试」）。
+            只认出站：客户自己反复提不算「我们已关心过」。异常按未聊过（放行）。"""
+            import time as _t
+            try:
+                hours = float(_live_care_cfg().get("already_discussed_hours", 48) or 0)
+                t = str(topic or "").strip()
+                if hours <= 0 or len(t) < 2 or assistant.inbox_store is None:
+                    return False
+                msgs = assistant.inbox_store.list_recent_messages(
+                    contact_key, limit=30) or []
+                cutoff = _t.time() - hours * 3600.0
+                for m in msgs:
+                    if str(m.get("direction") or "") != "out":
+                        continue
+                    if float(m.get("ts") or 0) < cutoff:
+                        continue
+                    if t in str(m.get("text") or ""):
+                        return True
+                return False
+            except Exception:
+                return False
+
+        def _care_prompt_extras(item: dict) -> dict:
+            """拟稿增强块（实施84 P0-2）：人设口吻 / episodic 记忆要点 / 工作目标
+            背景。全部 best-effort——任一源失败该块为空，prompt 退回旧口径。"""
+            out = {"persona_line": "", "memory_block": "", "goal_block": ""}
+            cfg_live = _live_care_cfg()
+            platform = str(item.get("platform") or "")
+            account_id = str(item.get("account_id") or "default")
+            chat_key = str(item.get("chat_key") or "")
+            contact_key = str(item.get("contact_key") or "")
+            # ① 人设口吻（与主动触达 _persona_style 同源解析——七个人设不该写出同一句关怀）
+            try:
+                from src.ai.persona_voice import resolve_effective_persona_id
+                from src.utils.persona_manager import PersonaManager
+                pid = resolve_effective_persona_id(
+                    assistant.config.config or {}, platform, account_id, chat_key)
+                if pid:
+                    p = PersonaManager.get_instance().get_persona_by_id(pid) or {}
+                    pers = p.get("personality")
+                    style = (str(pers.get("style") or "")
+                             if isinstance(pers, dict) else "")
+                    hint = " ".join(str(p.get("style_hint") or "").split())
+                    seg = "；".join(s for s in (style, hint) if s)
+                    out["persona_line"] = seg[:160]
+            except Exception:
+                assistant.logger.debug("care persona 增强失败（忽略）", exc_info=True)
+            # ② episodic 记忆要点（按约定主题重排相关性；memory_in_prompt 默认开）
+            try:
+                if bool(cfg_live.get("memory_in_prompt", True)):
+                    sm = assistant.skill_manager
+                    epi = getattr(sm, "_episodic_store", None) if sm else None
+                    if epi is not None and sm is not None:
+                        mkey = sm._episodic_storage_key(
+                            chat_key, "", platform, account_id)
+                        topic = str(item.get("topic") or "").strip()
+                        out["memory_block"] = (epi.get_bullets_for_prompt(
+                            mkey, max_items=5, max_chars=400,
+                            query_text=(topic or None),
+                            rerank_keywords=bool(topic)) or "").strip()
+            except Exception:
+                assistant.logger.debug("care 记忆增强失败（忽略）", exc_info=True)
+            # ③ 工作目标背景（实施84 care×goal 打通的 P0 面；goal_hint 默认开，
+            # 且 goals.enabled 关闭时该函数自身返回空）
+            try:
+                if bool(cfg_live.get("goal_hint", True)):
+                    from src.contacts.care_goal_link import care_goal_hint
+                    out["goal_block"] = care_goal_hint(
+                        assistant.config, conversation_id=contact_key,
+                        platform=platform, account_id=account_id,
+                        chat_key=chat_key)
+            except Exception:
+                assistant.logger.debug("care 目标增强失败（忽略）", exc_info=True)
+            return out
+
+        def _care_user_clock(item: dict):
+            """客户时钟（实施84 P0-6）：``companion.user_clock`` enabled+schedule
+            双开且解析信任档 ∈ replace/narrow 才接管 care 安静窗（与主动触达
+            调度接管同一准入）。解析不出/异常 → None（服务器钟，旧行为）。"""
+            try:
+                comp2 = (assistant.config.config.get("companion") or {})
+                uc = dict(comp2.get("user_clock") or {})
+                if not (uc.get("enabled", False) and uc.get("schedule", False)):
+                    return None
+                from src.companion.user_clock_resolver import (
+                    resolve_for_conversation,
+                )
+                sm = assistant.skill_manager
+                epi = getattr(assistant, "_episodic_store", None)
+                if epi is None and sm is not None:
+                    epi = getattr(sm, "_episodic_store", None)
+                mkey = ""
+                try:
+                    if sm is not None:
+                        mkey = sm._episodic_storage_key(
+                            str(item.get("chat_key") or ""), "",
+                            str(item.get("platform") or ""),
+                            str(item.get("account_id") or ""))
+                except Exception:
+                    mkey = ""
+                clock = resolve_for_conversation(
+                    str(item.get("contact_key") or ""),
+                    inbox_store=assistant.inbox_store,
+                    episodic_store=epi, memory_key=mkey, cfg=uc)
+                if clock is not None and getattr(clock, "trust", "") in (
+                        "replace", "narrow"):
+                    return clock
+                return None
+            except Exception:
+                return None
+
         ai_name = "她"
         try:
             ai_name = str((assistant.config.get_ai_config() or {}).get("ai_name") or "她")
@@ -152,6 +266,8 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
             """care 真发成功 → outreach_log 落账（batch_id=care:<topic>，note=care）。
 
             让 care 触达对「预算读侧 / proactive_review 周报 / 将来任何消费方」可见。
+            实施84 P1-2 增量：目标推进型行（topic_norm=goal:*）同时把「已发」回执
+            写进目标事件时间线（坐席在目标卡看得到这次触达）。
             """
             store = assistant.inbox_store
             if store is None:
@@ -164,13 +280,59 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
                 account_id=str(item.get("account_id") or "default"),
                 note="care",
             )
+            try:
+                from src.companion.goals.sprint_ticker import (
+                    parse_goal_care_norm,
+                    record_sprint_beat_sent,
+                )
+                gid, phase = parse_goal_care_norm(item.get("topic_norm"))
+                if gid:
+                    from src.companion.goals.store import peek_goal_store
+                    gstore = peek_goal_store()
+                    if gstore is not None:
+                        if phase is not None:
+                            # 冲刺主动拍（P0 2026-08-30）：落拍行+beat_sent+计数
+                            record_sprint_beat_sent(gstore, gid, phase)
+                            gstore.add_event(
+                                gid, "care_sent",
+                                f"冲刺拍 p{phase} 已发出：{topic}")
+                        else:
+                            gstore.add_event(
+                                gid, "care_sent", f"到期关怀已发出：{topic}")
+            except Exception:
+                assistant.logger.debug("care→goal 发出回执失败（忽略）", exc_info=True)
 
         # 对方机器人/自家账号守卫（P1 2026-08-03）：care 派发前统一卫生闸——
         # 谓词已在捕获接线前构造（2026-08-18 捕获/派发共用 _care_peer_filter）。
 
+        def _goal_row_policy(item: dict) -> dict:
+            """冲刺行豁免策略（P0 2026-08-30）：goals.sprint 实时配置 →
+            {exempt_budget, ignore_quiet, jitter}。非相位行/关闸/异常 → {}。"""
+            try:
+                from src.companion.goals.service import resolve_goals_cfg
+                from src.companion.goals.sprint_ticker import (
+                    parse_goal_care_norm,
+                    parse_sprint_cfg,
+                )
+                gid, phase = parse_goal_care_norm(item.get("topic_norm"))
+                if not gid or phase is None:
+                    return {}
+                scfg = parse_sprint_cfg(resolve_goals_cfg(
+                    assistant.config.config or {}))
+                if not scfg.get("enabled"):
+                    return {}
+                return {
+                    "exempt_budget": bool(scfg.get("exempt_contact_budget")),
+                    "ignore_quiet": bool(scfg.get("ignore_quiet_hours")),
+                    "jitter": scfg.get("jitter_sec"),
+                }
+            except Exception:
+                return {}
+
         dispatcher = CareDispatcher(
             store=care_store, ai_client=assistant.ai_client, send_callback=_care_send,
             context_provider=_care_context, proactive_allowed=proactive_paywall,
+            already_discussed=_care_already_discussed,
             ai_name=ai_name,
             max_per_tick=int(cfg.get("max_per_tick", 3)),
             interval_sec=float(cfg.get("interval_sec", 600)),
@@ -182,6 +344,9 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
             budget_gate=_care_budget_gate,
             sent_hook=_care_sent_hook,
             peer_filter=_care_peer_filter,
+            prompt_extras_provider=_care_prompt_extras,
+            user_clock_provider=_care_user_clock,
+            goal_row_policy=_goal_row_policy,
         )
         await dispatcher.start()
         assistant._care_dispatcher = dispatcher
@@ -191,6 +356,73 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
             "✅ proactive_care 派发循环已常备（interval=%ss, enabled=%s, dry_run=%s）",
             cfg.get("interval_sec", 600), bool(cfg.get("enabled", False)),
             bool(cfg.get("dry_run", False)))
+
+        # 实施84 P1-2：目标到期 → care 排期扫描器（常备接线 + 配置热闸：
+        # proactive_care.goal_link.enabled 默认关，关闸时每 tick 空转零副作用）。
+        try:
+            from src.contacts.care_goal_link import CareGoalScanner
+            goal_scanner = CareGoalScanner(
+                care_store=care_store, config_obj=assistant.config,
+                interval_sec=max(900.0, float(cfg.get("interval_sec", 600)) * 2))
+            await goal_scanner.start()
+            assistant._care_goal_scanner = goal_scanner
+            if web_app is not None:
+                engine_state["goal_scanner"] = goal_scanner
+            assistant.logger.info(
+                "✅ care×goal 到期排期扫描已常备（goal_link.enabled=%s）",
+                bool((cfg.get("goal_link") or {}).get("enabled", False)))
+        except Exception:
+            assistant.logger.warning("care goal 扫描器启动跳过", exc_info=True)
+
+        # P0 2026-08-30：冲刺推进器——限时目标（today/session）的时间驱动主动拍。
+        # 常备接线 + 配置热闸（companion.goals.sprint.enabled 默认关，关闸时
+        # 每 tick 空转零副作用）；排期进 care 管线，发送享 care 全套护栏。
+        try:
+            from src.companion.goals.sprint_ticker import SprintGoalTicker
+
+            def _sprint_emotion_gate(goal: dict, meta: dict) -> str:
+                """冲刺主动拍的情绪/危机档位：复用 skill_manager 同一判定
+                （能查 crisis_event_store，block 真正可达）。失败 → ""。"""
+                try:
+                    sm = assistant.skill_manager
+                    if sm is None:
+                        return ""
+                    mkey = sm._episodic_storage_key(
+                        str(goal.get("chat_key") or ""), "",
+                        str(goal.get("platform") or ""),
+                        str(goal.get("account_id") or ""))
+                    _i = meta.get("last_emotion_intensity")
+                    return str(sm._proactive_emotion_gate(
+                        mkey, str(meta.get("last_emotion") or ""),
+                        float(_i) if _i is not None else -1.0) or "")
+                except Exception:
+                    return ""
+
+            sprint_ticker = SprintGoalTicker(
+                care_store=care_store, config_obj=assistant.config,
+                inbox_store_getter=lambda: assistant.inbox_store,
+                emotion_gate=_sprint_emotion_gate)
+            await sprint_ticker.start()
+            assistant._goal_sprint_ticker = sprint_ticker
+            if web_app is not None:
+                engine_state["sprint_ticker"] = sprint_ticker
+                try:
+                    web_app.state.goal_sprint_ticker = sprint_ticker
+                except Exception:
+                    pass
+            _scfg0 = {}
+            try:
+                from src.companion.goals.service import resolve_goals_cfg
+                from src.companion.goals.sprint_ticker import parse_sprint_cfg
+                _scfg0 = parse_sprint_cfg(resolve_goals_cfg(
+                    assistant.config.config or {}))
+            except Exception:
+                _scfg0 = {}
+            assistant.logger.info(
+                "✅ 冲刺推进器已常备（goals.sprint.enabled=%s）",
+                bool(_scfg0.get("enabled", False)))
+        except Exception:
+            assistant.logger.warning("冲刺推进器启动跳过", exc_info=True)
 
         # P2 2026-08-01：LLM 抽取影子扫描——与真实捕获同一入站事件源（第二个
         # inbound 回调，内部自带配置闸+廉价门），LLM 对照在异步 drain 循环限批限
@@ -481,6 +713,30 @@ async def maybe_start_reactivation_loop(assistant) -> None:
             assistant.logger.debug(
                 "reactivation peer_filter 构造失败（不拦）", exc_info=True)
 
+        # 实施84 P0-6：reactivation 真发落 outreach_log 共享账本——此前只写
+        # journey_events，逃逸在每联系人打扰预算（care contact_budget 读侧）与
+        # 统一触达时间线之外；同一个客户可能同日吃「召回+关怀+问候」三连。
+        def _react_sent_hook(info: dict) -> None:
+            store = assistant.inbox_store
+            if store is None:
+                return
+            try:
+                from src.inbox.normalizer import conv_id as _cid
+                cid = _cid(str(info.get("channel") or ""),
+                           str(info.get("account_id") or "default"),
+                           str(info.get("chat_name") or ""))
+                store.record_outreach(
+                    cid,
+                    batch_id=f"reactivation:silent_"
+                             f"{int(float(info.get('silent_days') or 0))}d",
+                    platform=str(info.get("channel") or ""),
+                    account_id=str(info.get("account_id") or "default"),
+                    note="reactivation",
+                )
+            except Exception:
+                assistant.logger.debug(
+                    "reactivation outreach 落账失败（忽略）", exc_info=True)
+
         loop = ReactivationLoop(
             scheduler=assistant.contacts.reactivation,
             store=assistant.contacts.store,
@@ -491,6 +747,7 @@ async def maybe_start_reactivation_loop(assistant) -> None:
             min_silent_sec=_min_silent_days * 86400.0,
             ai_name=ai_name,
             peer_filter=_react_peer_filter,
+            sent_hook=_react_sent_hook,
             max_per_tick=int(cfg_react.get("max_per_tick", 3)),
             interval_sec=float(cfg_react.get("interval_sec", 600)),
             skip_if_no_episodic=bool(cfg_react.get("skip_if_no_episodic", True)),
@@ -756,6 +1013,37 @@ def maybe_init_monetization(assistant, web_app=None) -> None:
         assistant.logger.info("✅ C 端变现已就绪（EntitlementStore 已挂载）")
     except Exception:
         assistant.logger.warning("C 端变现初始化跳过", exc_info=True)
+
+
+async def reconcile_dead_peer_marks(assistant) -> None:
+    """#88 存量 dead-peer 标记核销（启动一次性迁移，幂等；flag 关=no-op）。
+
+    0830 skuio 实锤：#73 补齐「送达即清标」钩子之前累积的旧标记（Kate/Yhang
+    『曾被对方拉黑』）没有任何核销机制——客户早已恢复可达（消息带勾送达）、
+    黄条仍常驻且自动回复停摆。开机后延迟扫一遍登记表：标记时间之后 messages
+    出站镜像（只在成功路径写入）里有任一出站行 → 清标。deactivated 恒不核销。
+    """
+    try:
+        from src.ops.dead_peer_registry import (
+            reconcile_stale_marks, registry_from_config,
+        )
+        reg = registry_from_config(assistant.config)
+        if reg is None:
+            return   # flag 关 / 配置不可解析：零行为
+        store = getattr(assistant, "inbox_store", None)
+        db_path = getattr(store, "_db_path", None) if store is not None else None
+        if not db_path:
+            return
+        # 错开启动高峰（store 迁移/各链预热），核销不抢窗口
+        await asyncio.sleep(30)
+        out = await asyncio.to_thread(
+            reconcile_stale_marks, reg, db_path, log=assistant.logger)
+        if out.get("cleared"):
+            assistant.logger.info(
+                "✅ dead-peer 存量核销完成：检查 %s 条、解除 %s 条陈旧标记",
+                out.get("checked", 0), out.get("cleared", 0))
+    except Exception:
+        assistant.logger.debug("dead-peer 存量核销跳过", exc_info=True)
 
 
 async def episodic_backfill_periodic(assistant):
