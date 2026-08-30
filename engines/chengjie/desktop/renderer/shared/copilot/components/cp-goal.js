@@ -49,7 +49,12 @@
   const TERMINAL = { done: 1, failed: 1, expired: 1, cancelled: 1 };
   const AUTONOMY = ["observe", "suggest", "auto"];
   const PUSH_LEVELS = ["none", "soft", "direct"];
-  const HOLDS = ["emotion", "silent", "no_intent"];
+  const HOLDS = ["emotion", "silent", "no_intent", "pace_cap"];
+  const PACES = ["natural", "today", "session"];
+  /* 旧后端 templates 响应可能缺 sprint_ok；与 pace.SPRINT_OK 对齐的前端回落。 */
+  const SPRINT_OK_FALLBACK = {
+    custom: 1, conversion_unlock: 1, conversion_subscribe: 1, acquire_and_convert: 1,
+  };
   // P22：生命周期/人设自动创建的来源 → UI「AI 自建」徽标
   const AUTO_ORIGIN = { auto_create: 1, winback_auto: 1, retention_auto: 1, reconvert_auto: 1 };
   const PREFS_KEY = "cp_goal_form_prefs_v1";
@@ -130,6 +135,7 @@
       this._formTid = "";
       this._formAutonomy = "";       // 参与度单选卡当前选择（跨 DOM 更新持久）
       this._formUsePrefDays = true;  // 首开用偏好天数；坐席换场景后跟场景默认
+      this._formPace = "natural";    // 推进节奏：自然天 / 今天收口 / 这轮聊完
       this._catalog = null;          // /api/monetize/catalog 解析结果（解锁项/会员档）
       this._catalogTried = false;    // 只试一次，失败回落通用输入框
       this._unlockSel = "";          // 解锁项下拉选中 id（"__custom__"=高级手填）
@@ -202,6 +208,7 @@
           const tip = this._ref("disc_tip");
           if (tip) tip.hidden = !DISCOVERY_NOTE_RE.test(String(t.value || ""));
         }
+        if (t.getAttribute("data-ref") === "days") this._updatePaceLine();
         this._draftCapture();   // 逐键实时进草稿（文本/数字/滑杆走 input）
       });
       this.shadowRoot.addEventListener("keydown", (e) => {
@@ -327,6 +334,30 @@
                      border:1px solid color-mix(in srgb,var(--cp-warn,#d97706) 40%,transparent);
                      background:color-mix(in srgb,var(--cp-warn,#d97706) 12%,transparent); }
       .gl-due button { font-size:var(--cp-fs-tiny,11px); padding:1px 8px; }
+      .gl-extend { display:inline-flex; gap:4px; margin-left:4px; vertical-align:middle; }
+      .gl-extend button { font-size:10px; padding:1px 6px; }
+      .gl-meta-txt { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b);
+                     font-variant-numeric:tabular-nums; }
+      .gl-meta-txt.urgent { color:var(--cp-warn,#b45309); font-weight:700; }
+      /* 达成信号提示（像是达成了→去标成交）：ok 绿系区分于推进/让路条 */
+      .gl-outcome { display:flex; gap:6px; align-items:center;
+                    border-left-color:var(--cp-ok,#0f9d75);
+                    background:color-mix(in srgb,var(--cp-ok,#0f9d75) 8%,var(--cp-surface-2,#f8fafc)); }
+      .gl-outcome-tx { flex:1 1 auto; min-width:0; font-size:var(--cp-fs-sm,12px);
+                       color:var(--cp-text,#374151); line-height:1.5; }
+      .gl-outcome button { flex:0 0 auto; font-size:11px; padding:2px 9px; }
+      /* 买家信号（问价→趁热开限时目标）：sprint 琥珀系 */
+      .gl-buysig { display:flex; gap:6px; align-items:center;
+                   border-left-color:var(--cp-goal-sprint,#d97706);
+                   background:color-mix(in srgb,var(--cp-goal-sprint,#d97706) 9%,var(--cp-surface-2,#f8fafc)); }
+      .gl-buysig-tx { flex:1 1 auto; min-width:0; font-size:var(--cp-fs-sm,12px);
+                      color:var(--cp-text,#374151); line-height:1.5; }
+      .gl-buysig button.primary { flex:0 0 auto; font-size:11px; padding:2px 9px; }
+      .gl-buysig-x { flex:0 0 auto; border:none; background:transparent; cursor:pointer;
+                     color:var(--cp-text-tiny,#94a3b8); padding:2px 4px; font-size:12px; }
+      .gl-buysig-x:hover { color:var(--cp-text,#1e293b); }
+      /* 画像槽位陈旧（>90 天未更新）：虚线降饱和 + ⏳ */
+      .gl-slotchk.stale { border-style:dashed; opacity:.78; }
       .gl-sec { border-radius:8px; padding:7px 9px; margin:var(--cp-gap-xs,4px) 0;
                 background:var(--cp-surface-2,#f8fafc); border:1px solid var(--cp-border,#e2e8f0);
                 border-left:3px solid var(--cp-border,#e2e8f0); }
@@ -386,6 +417,9 @@
                  border-radius:var(--cp-radius-sm,6px); padding:4px 7px; }
       .gl-form textarea { resize:vertical; min-height:54px; line-height:1.5; }
       .gl-form input[type="range"] { padding:0; border:none; background:transparent; }
+      .gl-form input:focus,.gl-form textarea:focus,.gl-form select:focus {
+        outline:none; border-color:var(--cp-accent,#4f46e5);
+        box-shadow:0 0 0 2px var(--cp-accent-weak,rgba(30,140,242,.22)); }
       .gl-hint { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-tiny,#94a3b8);
                  line-height:1.45; margin-top:2px; }
       .gl-ferr { font-size:var(--cp-fs-tiny,11px); color:var(--cp-danger,#dc2626); line-height:1.45; }
@@ -584,6 +618,7 @@
       .gl-modal.gk-engagement .gl-mband { background:var(--cp-goal-eng,#0284c7); }
       .gl-modal.gk-discovery .gl-mband { background:var(--cp-goal-disc,#0d9488); }
       .gl-modal.gk-custom .gl-mband { background:var(--cp-violet,#7c3aed); }
+      .gl-modal.sprint .gl-mband { background:var(--cp-goal-sprint,#d97706); }
       /* 摸底进度打勾清单 + 建目标槽位 chips */
       .gl-slots { margin-top:6px; }
       .gl-slots-hd { font-size:var(--cp-fs-tiny,11px); font-weight:600;
@@ -653,9 +688,9 @@
                     font-size:10px; line-height:16px; text-align:center; font-weight:700; }
       .gl-arc-nm { flex:1 1 auto; min-width:0; }
       /* AI 参与度三张单选卡（替代原生 select，选中态 accent 描边） */
-      .gl-auto-cards { display:flex; flex-direction:column; gap:4px; }
-      .gl-auto-card { border:1px solid var(--cp-border,#e2e8f0); border-radius:8px;
-                      padding:6px 9px; cursor:pointer; background:var(--cp-surface,#fff); }
+      .gl-auto-cards { display:flex; flex-direction:row; flex-wrap:wrap; gap:4px; }
+      .gl-auto-card { flex:1 1 88px; border:1px solid var(--cp-border,#e2e8f0); border-radius:8px;
+                      padding:5px 7px; cursor:pointer; background:var(--cp-surface,#fff); }
       .gl-auto-card.sel { border-color:var(--cp-accent,#4f46e5);
                           background:var(--cp-accent-weak,rgba(79,70,229,.06));
                           box-shadow:0 0 0 1px var(--cp-accent,#4f46e5) inset; }
@@ -663,6 +698,24 @@
                     color:var(--cp-text,#1e293b); display:flex; align-items:center; gap:6px; }
       .gl-auto-d { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b);
                    line-height:1.45; margin-top:1px; }
+      /* 限时节奏分段（自然天 / 今天收口 / 这轮聊完） */
+      .gl-pace { display:flex; gap:0; border:1px solid var(--cp-border,#e2e8f0);
+                 border-radius:8px; overflow:hidden; }
+      .gl-pace button { flex:1; font:inherit; font-size:var(--cp-fs-tiny,11px);
+                        padding:6px 4px; border:0; border-right:1px solid var(--cp-border,#e2e8f0);
+                        background:var(--cp-surface,#fff); color:var(--cp-text-dim,#64748b);
+                        cursor:pointer; }
+      .gl-pace button:last-child { border-right:0; }
+      .gl-pace button.on { background:var(--cp-accent-weak,rgba(79,70,229,.08));
+                           color:var(--cp-accent,#4f46e5); font-weight:700; }
+      .gl-modal.sprint .gl-pace button.on {
+        background:color-mix(in srgb,var(--cp-goal-sprint,#d97706) 16%,transparent);
+        color:var(--cp-goal-sprint,#d97706); }
+      .gl-pace-hint { font-size:10px; color:var(--cp-text-tiny,#94a3b8);
+                      line-height:1.4; margin-top:3px; }
+      .gl-hz-chips { display:flex; flex-wrap:wrap; gap:4px; margin-top:4px; }
+      .gl-pace-line { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b);
+                      line-height:1.45; }
       /* 信息气泡（中性说明，替代橙色警告字——「未开主动触达」是状态不是错误） */
       .gl-note-info { display:flex; gap:6px; align-items:flex-start; padding:6px 9px;
                       border-radius:8px; font-size:var(--cp-fs-tiny,11px); line-height:1.5;
@@ -731,6 +784,7 @@
         this._formStep = 1;
         this._formTid = "";
         this._formAutonomy = "";
+        this._formPace = "natural";
         this._formUsePrefDays = true;
         this._resetParamState();
         this._createdHintAutonomy = "";
@@ -824,7 +878,7 @@
       this._emitLoadedSignal(null);
       if (this._formOpen) return this._renderForm() + this._lastLine(last) + this._toastHtml();
       if (term) return this._renderTerminal(term) + this._toastHtml();
-      return this._renderEmpty(last) + this._toastHtml();
+      return this._renderEmpty(last, d.signal_hint) + this._toastHtml();
     }
 
     _emitLoadedSignal(g) {
@@ -902,9 +956,29 @@
         <circle cx="18" cy="6" r="2.2"/></svg>`;
     }
 
-    _renderEmpty(last) {
+    _sigDismissed(sig) {
+      try {
+        const k = "cp_goal_sig_dismiss:" + this._draftCid();
+        const v = parseFloat(root.sessionStorage
+          && root.sessionStorage.getItem(k));
+        return isFinite(v) && v >= parseFloat((sig && sig.ts) || 0);
+      } catch (_e) { return false; }
+    }
+
+    _renderEmpty(last, sig) {
       const esc = (s) => this.esc(s);
-      return `<div class="gl-empty">${this._emptyIllust()}` +
+      // 买家信号（P1 2026-08-29）：无目标 + 近窗在问价/要购买方式 → 趁热
+      // 直达「今天收口」限时表单。只提示不动作；✕=本会话本条信号内不再提。
+      let sigBar = "";
+      if (sig && sig.v && String(sig.kind || "buying") === "buying"
+          && !this._sigDismissed(sig)) {
+        sigBar = `<div class="gl-sec gl-buysig">` +
+          `<span class="gl-buysig-tx">\uD83D\uDD25 ${esc(this.t("inbox.goal.signal.buying", { v: String(sig.v) }))}</span>` +
+          `<button type="button" class="primary" data-act="open_form_sprint">${esc(this.t("inbox.goal.signal.open_btn"))}</button>` +
+          `<button type="button" class="gl-buysig-x" data-act="signal_dismiss" data-ts="${esc(String(sig.ts || 0))}"` +
+          ` title="${esc(this.t("inbox.goal.signal.dismiss"))}" aria-label="${esc(this.t("inbox.goal.signal.dismiss"))}">\u2715</button></div>`;
+      }
+      return sigBar + `<div class="gl-empty">${this._emptyIllust()}` +
         `<div class="gl-lead">${esc(this.t("inbox.goal.empty_lead"))}</div>` +
         `<div class="gl-alias">${esc(this.t("inbox.goal.alias_note"))}</div>` +
         `<div class="acts" style="justify-content:center">` +
@@ -964,17 +1038,38 @@
         this._deadlineOpen = false;
         this._deadlineVal = null;
       }
-      const dayTxt = this.t("inbox.goal.day_of", { day: g.day_index || 1, total: g.total_days || 0 });
-      // P3b 临期紧迫感：时间走掉 ≥80% 而进度未过半 → 天数行转警示色（临最后
-      // 一天的 gl-due 行是「到点了」，这里是提前一段的「要来不及了」）
-      const totD = parseInt(g.total_days, 10) || 0;
-      const urgent = String(g.status) === "active" && totD > 0
-        && (parseInt(g.day_index, 10) || 1) / totD >= 0.8 && pct < 50;
-      const meta = `<div class="gl-meta"><button type="button" class="gl-meta-btn${urgent ? " urgent" : ""}" data-act="deadline_toggle"` +
-        ` title="${esc(this.t(urgent ? "inbox.goal.meta.urgent_t" : "inbox.goal.deadline.edit_t"))}">` +
-        `${urgent ? "\u23F3 " : ""}${esc(dayTxt)} · ${pct}%` +
-        `<span class="gl-meta-pen" aria-hidden="true">\u270E</span></button></div>` +
-        (this._deadlineOpen ? this._renderDeadlineForm(g) : this._renderDueRow(g));
+      const paceNow = String(g.pace || "natural");
+      const isSprint = paceNow === "today" || paceNow === "session";
+      let dayTxt;
+      let urgent;
+      if (isSprint) {
+        const rem = (g.remaining_sec != null)
+          ? parseFloat(g.remaining_sec)
+          : Math.max(0, (parseFloat(g.deadline_ts) || 0) - (Date.now() / 1000));
+        const tot = parseFloat(g.total_sec) || 0;
+        dayTxt = this.t("inbox.goal.remaining", { t: this._fmtRemain(rem) });
+        urgent = String(g.status) === "active" && tot > 0
+          && ((tot - rem) / tot) >= 0.8 && pct < 50;
+      } else {
+        dayTxt = this.t("inbox.goal.day_of", { day: g.day_index || 1, total: g.total_days || 0 });
+        const totD = parseInt(g.total_days, 10) || 0;
+        urgent = String(g.status) === "active" && totD > 0
+          && (parseInt(g.day_index, 10) || 1) / totD >= 0.8 && pct < 50;
+      }
+      const ext = (isSprint && g.status === "active")
+        ? `<span class="gl-extend">` +
+          `<button type="button" data-act="extend_30m">${esc(this.t("inbox.goal.extend_30m"))}</button>` +
+          `<button type="button" data-act="extend_2h">${esc(this.t("inbox.goal.extend_2h"))}</button></span>`
+        : "";
+      /* 限时节奏用倒计时 + 顺延按钮，不走「改成天数」表单（分钟级期限填成整数天会立刻过期） */
+      const metaInner = isSprint
+        ? `<span class="gl-meta-txt${urgent ? " urgent" : ""}">${urgent ? "\u23F3 " : ""}${esc(dayTxt)} · ${pct}%</span>${ext}`
+        : `<button type="button" class="gl-meta-btn${urgent ? " urgent" : ""}" data-act="deadline_toggle"` +
+          ` title="${esc(this.t(urgent ? "inbox.goal.meta.urgent_t" : "inbox.goal.deadline.edit_t"))}">` +
+          `${urgent ? "\u23F3 " : ""}${esc(dayTxt)} · ${pct}%` +
+          `<span class="gl-meta-pen" aria-hidden="true">\u270E</span></button>`;
+      const meta = `<div class="gl-meta">${metaInner}</div>` +
+        (isSprint ? "" : (this._deadlineOpen ? this._renderDeadlineForm(g) : this._renderDueRow(g)));
 
       let today = "";
       const beat = g.today;
@@ -1010,6 +1105,18 @@
         today = `<div class="gl-sec hold">${esc(this.t("inbox.goal.hold." + String(g.hold)))}</div>`;
       }
 
+      // 达成信号提示（P1 2026-08-29）：后端检出高置信信号（如对方留了联系
+      // 方式）→ 绿条 +「去标成交」。只提示不自动结算，确认权在坐席。
+      let outcome = "";
+      const osig = (g.params && typeof g.params === "object")
+        ? g.params.outcome_signal : null;
+      if (osig && osig.v && String(osig.kind || "contact") === "contact"
+          && g.status === "active" && !this._wonFormOpen) {
+        outcome = `<div class="gl-sec gl-outcome">` +
+          `<span class="gl-outcome-tx">\uD83C\uDFAF ${esc(this.t("inbox.goal.outcome.contact", { v: String(osig.v) }))}</span>` +
+          `<button type="button" class="primary" data-act="won">${esc(this.t("inbox.goal.outcome.confirm"))}</button></div>`;
+      }
+
       if (this._wonFormOpen) {
         return `<div class="gl-hdr"><span class="gl-title">${esc(g.title || g.template_name || "")}</span>` +
           `${this._statusBadge(g.status)}</div>` +
@@ -1030,7 +1137,7 @@
         `<button class="gl-link" data-act="more_toggle">${esc(this.t("inbox.goal.more_menu"))} \u22EF</button>` +
         (this._moreOpen
           ? `<div class="gl-more-pop">` +
-            `<button class="safe" data-act="deadline_toggle">${esc(this.t("inbox.goal.deadline.title"))}</button>` +
+            (isSprint ? "" : `<button class="safe" data-act="deadline_toggle">${esc(this.t("inbox.goal.deadline.title"))}</button>`) +
             `<button data-act="redirect">${esc(this.t("inbox.goal.act.redirect"))}</button>` +
             `<button data-act="cancel">${esc(this.t("inbox.goal.act.cancel"))}</button></div>`
           : "") +
@@ -1058,7 +1165,7 @@
       }
 
       return `<div class="gl-hdr"><span class="gl-title">${esc(g.title || g.template_name || "")}</span>` +
-        `${this._statusBadge(g.status)}${origin}${tag}</div>` + createdHint + track + meta + today +
+        `${this._statusBadge(g.status)}${origin}${tag}</div>` + createdHint + track + meta + outcome + today +
         this._renderSlotsProgress(g) + this._renderProgress() + this._renderProfile() +
         this._renderProducts(g) + acts + this._notifyRowHtml();
     }
@@ -1077,13 +1184,17 @@
         const src = (on && /^(auto|llm|agent)$/.test(String(s.src || "")))
           ? String(s.src) : "";
         const srcLab = src ? this.t("inbox.goal.slots.src." + src) : "";
+        // P1 时效感知：值超 90 天未更新 → ⏳ 提醒顺口再确认（不是判错，是提醒）
+        const stale = !!(on && s.stale);
         const tip = on
           ? (String(s.label || s.key) + (s.value ? ": " + s.value : "")
-             + (srcLab ? " \u00b7 " + srcLab : ""))
+             + (srcLab ? " \u00b7 " + srcLab : "")
+             + (stale ? " \u00b7 " + this.t("inbox.goal.slots.stale_t") : ""))
           : this.t("inbox.goal.slots.miss_t", { label: s.label || s.key });
-        return `<span class="gl-slotchk${on ? " on" : ""}${src ? " src-" + src : ""}" title="${esc(tip)}">` +
+        return `<span class="gl-slotchk${on ? " on" : ""}${src ? " src-" + src : ""}${stale ? " stale" : ""}" title="${esc(tip)}">` +
           `${on ? "\u2713" : "\u25CB"} ${esc(s.label || s.key)}` +
-          (on && s.value ? `\u00b7${esc(s.value)}` : "") + `</span>`;
+          (on && s.value ? `\u00b7${esc(s.value)}` : "") +
+          (stale ? "\u23F3" : "") + `</span>`;
       }).join("");
       return `<div class="gl-sec gl-slots"><div class="gl-slots-hd">` +
         `${esc(this.t("inbox.goal.slots.title"))} · ${filled}/${rows.length}</div>` +
@@ -1476,7 +1587,7 @@
 
     /* 改期限的唯一 POST 出口：表单保存与临期快捷动作共用（口径零分叉）。
        成功＝收表单/换视图/toast/回源刷新；失败＝把 detail 暂存给调用方渲染。 */
-    async _postDeadline(days) {
+    async _postDeadline(days, opts) {
       const g = this._d && this._d.goal;
       if (!g || !g.goal_id) return false;
       this._lastDeadlineErr = "";
@@ -1495,7 +1606,9 @@
         const ng = res.data.goal;
         if (g.today && !ng.today) ng.today = g.today;   // 旧后端 update 不带 today
         this._d = Object.assign({}, this._d, { goal: ng });
-        this._flashToast(this.t("inbox.goal.deadline.saved", { n: days }));
+        this._flashToast((opts && opts.quiet) || days < 1
+          ? this.t("inbox.goal.toast_saved")
+          : this.t("inbox.goal.deadline.saved", { n: days }));
         this._rerender();
         this.emit("cp-goal-changed", { action: "deadline", conversationId: g.conversation_id });
         this.refresh();   // 回源刷一次：产品行/今日拍与服务端结算完全对齐
@@ -1732,17 +1845,30 @@
       const done = String(g.status) === "done";
       const endTs = parseFloat(g.done_at) || parseFloat(g.updated_at) || 0;
       const start = parseFloat(g.start_ts) || 0;
-      const days = (done && endTs > 0 && start > 0 && endTs > start)
+      const paceT = String(g.pace || "natural");
+      const sprintT = paceT === "today" || paceT === "session";
+      // 限时目标用时按分钟/小时口径（「用时 0 天」是废话）；自然天维持天口径
+      const days = (!sprintT && done && endTs > 0 && start > 0 && endTs > start)
         ? Math.round(((endTs - start) / 86400) * 10) / 10 : null;
+      const durTxt = (sprintT && done && endTs > start && start > 0)
+        ? this.t("inbox.goal.done.dur", { t: this._fmtRemain(endTs - start) })
+        : "";
+      // 限时复盘（P2）：用了几拍 + 最后一拍意图（tooltip）——「停在哪」
+      // 失守时比成功时更该看见
+      const beatsN = parseInt(g.beats_used, 10);
+      const beatsTxt = (sprintT && isFinite(beatsN) && beatsN > 0)
+        ? this.t("inbox.goal.term.beats", { n: beatsN }) : "";
       const kindTxt = done ? this._doneKindLabel(g.result) : "";
       // 「已推送提醒」回执（P2）：服务端读通知幂等标记附 notified 键——
       // true=完成推送真的发出去过；缺键/false（含扫描器 60s 内未跑到）不渲染
       const pushed = done && g.notified === true;
       let facts = "";
-      if (kindTxt || days != null || pushed) {
+      if (kindTxt || days != null || durTxt || beatsTxt || pushed) {
         facts = `<div class="gl-done-facts">` +
           (kindTxt ? `<span class="gl-done-chip" title="${esc(String(g.result || ""))}">${esc(kindTxt)}</span>` : "") +
           (days != null ? `<span class="gl-done-chip">${esc(this.t("inbox.goal.done.days", { n: days }))}</span>` : "") +
+          (durTxt ? `<span class="gl-done-chip">${esc(durTxt)}</span>` : "") +
+          (beatsTxt ? `<span class="gl-done-chip" title="${esc(String(g.last_beat_intent || ""))}">${esc(beatsTxt)}</span>` : "") +
           (pushed ? `<span class="gl-done-chip gl-done-pushed" title="${esc(this.t("inbox.goal.done.pushed_t"))}">${esc(this.t("inbox.goal.done.pushed"))}</span>` : "") +
           `</div>`;
       }
@@ -1784,6 +1910,128 @@
       const list = (this._templates && this._templates.templates) || [];
       for (let i = 0; i < list.length; i++) { if (list[i].id === tid) return list[i]; }
       return null;
+    }
+
+    _sprintOk(tmpl) {
+      if (!tmpl) return false;
+      if (tmpl.sprint_ok === true) return true;
+      if (tmpl.sprint_ok === false) return false;
+      return !!SPRINT_OK_FALLBACK[String(tmpl.id || "")];
+    }
+
+    _normPace(p) {
+      const s = String(p || "").toLowerCase();
+      return PACES.indexOf(s) >= 0 ? s : "natural";
+    }
+
+    _defaultHorizon(pace, tmpl) {
+      if (pace === "session") return 60;
+      if (pace === "today") return 8;
+      return (tmpl && tmpl.default_days) || 14;
+    }
+
+    _hoursUntilMidnight() {
+      const n = new Date();
+      const end = new Date(n.getFullYear(), n.getMonth(), n.getDate() + 1);
+      const h = (end - n) / 3600000;
+      return Math.max(2, Math.min(12, Math.round(h * 10) / 10));
+    }
+
+    _fmtRemain(sec) {
+      const s = Math.max(0, parseFloat(sec) || 0);
+      if (s < 90) return LANG === "en" ? "<1 min" : "不到1分钟";
+      if (s < 3600) {
+        const m = Math.max(1, Math.round(s / 60));
+        return LANG === "en" ? (m + " min") : (m + " 分钟");
+      }
+      const h = s / 3600;
+      if (h < 10) {
+        const t = h.toFixed(1);
+        return LANG === "en" ? (t + " h") : (t + " 小时");
+      }
+      const hr = Math.round(h);
+      return LANG === "en" ? (hr + " h") : (hr + " 小时");
+    }
+
+    _paceLineText(pace, daysVal, autonomy) {
+      const pLab = this.t("inbox.goal.form.pace." + pace);
+      let hz;
+      if (pace === "session") hz = LANG === "en" ? (daysVal + " min") : (daysVal + " 分钟");
+      else if (pace === "today") hz = LANG === "en" ? (daysVal + " h") : (daysVal + " 小时");
+      else hz = LANG === "en" ? (daysVal + " days") : (daysVal + " 天");
+      const aLab = this._autonomyLabel(autonomy);
+      const line = this.t("inbox.goal.form.pace_line", { pace: pLab, horizon: hz, autonomy: aLab });
+      return (line && String(line).indexOf("inbox.goal.") !== 0)
+        ? line : (pLab + " · " + hz + " · " + aLab);
+    }
+
+    _updatePaceLine() {
+      const el = this._ref("pace_line");
+      if (!el) return;
+      const dy = this._ref("days");
+      el.textContent = this._paceLineText(
+        this._formPace || "natural", dy ? (dy.value || "") : "", this._formAutonomy || "auto");
+    }
+
+    _horizonChipsHtml(pace) {
+      const esc = (s) => this.esc(s);
+      let chips = [];
+      if (pace === "session") chips = [30, 60, 90];
+      else if (pace === "today") chips = [4, 8];
+      else chips = [7, 14, 30];
+      const suffix = pace === "session" ? (LANG === "en" ? "m" : "分")
+        : (pace === "today" ? "h" : "");
+      let html = chips.map((v) =>
+        `<button type="button" class="gl-chip" data-act="horizon_chip" data-val="${v}">` +
+        `${esc(String(v) + suffix)}</button>`).join("");
+      if (pace === "today") {
+        html += `<button type="button" class="gl-chip" data-act="horizon_today_end">` +
+          `${esc(this.t("inbox.goal.form.chip_today_end"))}</button>`;
+      }
+      return `<div class="gl-hz-chips">${html}</div>`;
+    }
+
+    _paceSegHtml(pace) {
+      const esc = (s) => this.esc(s);
+      const hint = this.t("inbox.goal.form.pace." + pace + "_hint");
+      const hintOk = hint && String(hint).indexOf("inbox.goal.") !== 0;
+      return `<div><label class="gl-fl">${esc(this.t("inbox.goal.form.pace"))}</label>` +
+        `<div class="gl-pace" role="radiogroup">` + PACES.map((p) =>
+          `<button type="button" class="${p === pace ? "on" : ""}" data-act="pick_pace"` +
+          ` data-pace="${p}" role="radio" aria-checked="${p === pace ? "true" : "false"}">` +
+          `${esc(this.t("inbox.goal.form.pace." + p))}</button>`).join("") +
+        `</div>` +
+        (hintOk ? `<div class="gl-pace-hint">${esc(hint)}</div>` : "") + `</div>`;
+    }
+
+    _horizonInputHtml(pace, daysVal) {
+      const esc = (s) => this.esc(s);
+      let min = "1", max = "180", step = "1", lab = this.t("inbox.goal.form.days");
+      let help = this.t("inbox.goal.form.days_help");
+      if (pace === "session") {
+        min = "15"; max = "120"; step = "5";
+        lab = this.t("inbox.goal.form.horizon_min");
+        help = this.t("inbox.goal.form.days_help_session");
+      } else if (pace === "today") {
+        min = "2"; max = "12"; step = "0.5";
+        lab = this.t("inbox.goal.form.horizon_h");
+        help = this.t("inbox.goal.form.days_help_today");
+      }
+      return `<div><label class="gl-fl">${esc(lab)}</label>` +
+        `<input type="number" min="${min}" max="${max}" step="${step}" data-ref="days"` +
+        ` value="${esc(String(daysVal))}">` +
+        this._horizonChipsHtml(pace) +
+        this._helpHtml(help) + `</div>`;
+    }
+
+    async _extendDeadline(addSec) {
+      const g = this._d && this._d.goal;
+      const start = parseFloat(g && g.start_ts) || 0;
+      const dl = parseFloat(g && g.deadline_ts) || 0;
+      if (!(start > 0 && dl > start)) return;
+      const days = (dl - start + addSec) / 86400;
+      _beacon("goal_extend");
+      await this._postDeadline(days, { quiet: true });
     }
 
     /* ── 建目标向导 · 参数控件注册表 ──────────────────────────────────────
@@ -2125,10 +2373,12 @@
       let extra = "";
       if (tid === "custom") {
         const chips = [1, 2, 3].map((i) => {
-          const tx = this.t("inbox.goal.form.note_ex" + i);
-          if (!tx || String(tx).indexOf("inbox.goal.") === 0) return "";
+          const full = this.t("inbox.goal.form.note_ex" + i);
+          if (!full || String(full).indexOf("inbox.goal.") === 0) return "";
+          const chip = this.t("inbox.goal.form.note_ex" + i + "_chip");
+          const lab = (chip && String(chip).indexOf("inbox.goal.") !== 0) ? chip : full;
           return `<button type="button" class="gl-chip" data-act="note_example"` +
-            ` data-ex="${i}">${esc(tx)}</button>`;
+            ` data-ex="${i}">${esc(lab)}</button>`;
         }).join("");
         if (chips) {
           extra = `<div class="gl-hint">${esc(this.t("inbox.goal.form.note_ex_t"))}</div>` +
@@ -2379,8 +2629,22 @@
         : (tmpl.name_zh || tmpl.name_en || tmpl.id);
       const desc = this._tmplDesc(tmpl.id);
       const prefs = this._loadPrefs();
-      const daysVal = (this._formUsePrefDays && prefs.deadline_days > 0)
-        ? prefs.deadline_days : (tmpl.default_days || 14);
+      const pace = this._sprintOk(tmpl) ? this._normPace(this._formPace) : "natural";
+      this._formPace = pace;
+      let daysVal;
+      if (this._formDraft && this._formDraft.tid === tmpl.id && this._formDraft.days) {
+        daysVal = this._formDraft.days;
+      } else if (this._formUsePrefDays && prefs.template === tmpl.id) {
+        if (pace === "natural" && prefs.deadline_days > 0
+            && this._normPace(prefs.pace || "natural") === "natural") {
+          daysVal = prefs.deadline_days;
+        } else if (pace !== "natural" && this._normPace(prefs.pace) === pace
+            && prefs.horizon > 0) {
+          daysVal = prefs.horizon;
+        }
+      }
+      if (daysVal == null) daysVal = this._defaultHorizon(pace, tmpl);
+      const sprintBand = pace === "today" || pace === "session";
       // 全自动为主（2026-08-12 运营方针）：缺省 auto；偏好记忆只回放 suggest/auto
       // ——observe 是「这个目标先看看」的一次性选择，不许粘成后续所有目标的默认
       // （实录：一次选了只观察，之后三个目标全默认 observe → 坐席以为功能没生效）
@@ -2388,9 +2652,11 @@
         && prefs.autonomy !== "observe") ? prefs.autonomy : "auto";
       const curAuto = AUTONOMY.indexOf(this._formAutonomy) >= 0
         ? this._formAutonomy : prefAuto;
-      this._formAutonomy = curAuto;
-      const aNote = this._autonomyNoteFull(curAuto);
-      const prefNote = (this._formUsePrefDays && prefs.deadline_days > 0)
+      this._formAutonomy = (sprintBand && curAuto === "observe") ? "suggest" : curAuto;
+      const aNote = this._autonomyNoteFull(this._formAutonomy);
+      const prefNote = (this._formUsePrefDays && prefs.template === tmpl.id
+        && ((pace === "natural" && prefs.deadline_days > 0)
+          || (pace !== "natural" && prefs.horizon > 0)))
         ? `<div class="gl-hint">${esc(this.t("inbox.goal.prefs_restored"))}</div>` : "";
       const hasParams = ((tmpl.params) || []).length > 0;
       const paramsSec = hasParams
@@ -2405,7 +2671,7 @@
         : "";
       // 背板＝ov_dismiss（判脏：干净回第一步/有输入不关闭），显式退出走 ×/「返回」/Esc
       return `<div class="gl-ov" data-act="ov_dismiss" role="presentation">` +
-        `<div class="gl-modal gk-${esc(kind)}" data-act="modal_noop" role="dialog"` +
+        `<div class="gl-modal gk-${esc(kind)}${sprintBand ? " sprint" : ""}" data-act="modal_noop" role="dialog"` +
         ` aria-modal="true" aria-label="${esc(nm)}">` +
         `<div class="gl-mband"></div>` +
         `<div class="gl-mhd"><span class="gl-scen-ic">${this._kindIcon(kind)}</span>` +
@@ -2416,18 +2682,17 @@
         (desc ? `<div class="gl-mdesc">${esc(desc)}</div>` : "") +
         `<div class="gl-mbody gl-form">` +
         restoreBar +
-        this._arcHtml(tmpl) +
+        this._arcHtml(tmpl, pace) +
         paramsSec +
         prefNote +
-        `<div><label class="gl-fl">${esc(this.t("inbox.goal.form.days"))}</label>` +
-        `<input type="number" min="1" max="180" step="1" data-ref="days" value="${esc(String(daysVal))}">` +
-        this._helpHtml(this.t("inbox.goal.form.days_help")) + `</div>` +
+        (this._sprintOk(tmpl) ? this._paceSegHtml(pace) : "") +
+        this._horizonInputHtml(pace, daysVal) +
         `<div><label class="gl-fl">${esc(this.t("inbox.goal.form.autonomy"))}</label>` +
-        this._autonomyCardsHtml(curAuto) +
-        `<input type="hidden" data-ref="autonomy" value="${esc(curAuto)}">` +
+        this._autonomyCardsHtml(this._formAutonomy, sprintBand) +
+        `<input type="hidden" data-ref="autonomy" value="${esc(this._formAutonomy)}">` +
         `<div class="gl-note-info" data-ref="anote"${aNote ? "" : " hidden"}>${this._infoIcon()}` +
         `<span data-ref="anotetx">${esc(aNote)}</span></div></div>` +
-        `<div class="gl-hint">${esc(this.t("inbox.goal.form.summary"))}</div>` +
+        `<div class="gl-pace-line" data-ref="pace_line">${esc(this._paceLineText(pace, daysVal, this._formAutonomy))}</div>` +
         `<div class="gl-ferr" data-ref="ferr" hidden></div>` +
         `</div>` +
         `<div class="gl-mfoot"><span class="gl-mhint" data-ref="mhint" hidden></span>` +
@@ -2438,40 +2703,64 @@
 
     /* 「AI 会怎么推进」节奏预览：里程碑 + 推进力度（push_curve 由包2 后端
        templates 响应提供；旧后端无此字段 → 只显示里程碑名，不猜力度）。 */
-    _arcHtml(tmpl) {
+    _arcHtml(tmpl, pace) {
       const esc = (s) => this.esc(s);
-      const ms = Array.isArray(tmpl.milestones) ? tmpl.milestones : [];
-      if (!ms.length) return "";
-      const curve = Array.isArray(tmpl.push_curve) ? tmpl.push_curve : [];
-      const rows = ms.map((m, i) => {
-        const nm = LANG === "en" ? (m.en || m.zh || "") : (m.zh || m.en || "");
-        let pill = "";
-        if (curve.length) {
-          const pl = String(curve[Math.min(i, curve.length - 1)] || "");
-          if (PUSH_LEVELS.indexOf(pl) >= 0) {
-            pill = `<span class="gl-pill ${pl}">${esc(this.t("inbox.goal.push." + pl))}</span>`;
+      pace = this._normPace(pace || this._formPace);
+      let rows = "";
+      if (pace === "session" || pace === "today") {
+        // 限时档＝按拍序的三步短弧（后端 sprint_push：首拍 soft、之后 direct）
+        const pref = pace === "session" ? "arc_session_" : "arc_today_";
+        const names = [
+          this.t("inbox.goal.form." + pref + "1"),
+          this.t("inbox.goal.form." + pref + "2"),
+          this.t("inbox.goal.form." + pref + "3"),
+        ];
+        const curve = ["soft", "direct", "direct"];
+        rows = names.map((nm, i) => {
+          const pl = curve[i];
+          const pill = `<span class="gl-pill ${pl}">${esc(this.t("inbox.goal.push." + pl))}</span>`;
+          return `<div class="gl-arc-row"><span class="gl-arc-idx">${i + 1}</span>` +
+            `<span class="gl-arc-nm">${esc(nm)}</span>${pill}</div>`;
+        }).join("");
+      } else {
+        const ms = Array.isArray(tmpl.milestones) ? tmpl.milestones : [];
+        if (!ms.length) return "";
+        const curve = Array.isArray(tmpl.push_curve) ? tmpl.push_curve : [];
+        rows = ms.map((m, i) => {
+          const nm = LANG === "en" ? (m.en || m.zh || "") : (m.zh || m.en || "");
+          let pill = "";
+          if (curve.length) {
+            const pl = String(curve[Math.min(i, curve.length - 1)] || "");
+            if (PUSH_LEVELS.indexOf(pl) >= 0) {
+              pill = `<span class="gl-pill ${pl}">${esc(this.t("inbox.goal.push." + pl))}</span>`;
+            }
           }
-        }
-        return `<div class="gl-arc-row"><span class="gl-arc-idx">${i + 1}</span>` +
-          `<span class="gl-arc-nm">${esc(nm)}</span>${pill}</div>`;
-      }).join("");
+          return `<div class="gl-arc-row"><span class="gl-arc-idx">${i + 1}</span>` +
+            `<span class="gl-arc-nm">${esc(nm)}</span>${pill}</div>`;
+        }).join("");
+      }
+      const hint = (pace === "today" || pace === "session")
+        ? this.t("inbox.goal.form.arc_hint_sprint")
+        : this.t("inbox.goal.form.arc_hint");
       return `<div><div class="gl-msec-t">${esc(this.t("inbox.goal.form.arc_title"))}</div>` +
         `<div class="gl-arc">${rows}</div>` +
-        `<div class="gl-hint">${esc(this.t("inbox.goal.form.arc_hint"))}</div></div>`;
+        `<div class="gl-hint">${esc(hint)}</div></div>`;
     }
 
     /* AI 参与度三张单选卡（点选走 pick_autonomy，DOM 级切换不重渲染表单）。
        展示序＝auto 优先、observe 垫底（2026-08-12 全自动为主：推荐徽标随迁 auto，
        只观察降为末位进阶选项；后端 autonomy_levels 只作成员集，展示序前端定）。 */
-    _autonomyCardsHtml(cur) {
+    _autonomyCardsHtml(cur, sprintBand) {
       const esc = (s) => this.esc(s);
       const raw = (this._templates && this._templates.autonomy_levels
         && this._templates.autonomy_levels.length)
         ? this._templates.autonomy_levels : AUTONOMY;
       const rank = { auto: 0, suggest: 1, observe: 2 };
-      const levels = raw.slice().sort((a, b) =>
-        (rank[String(a)] == null ? 9 : rank[String(a)])
-        - (rank[String(b)] == null ? 9 : rank[String(b)]));
+      const levels = raw.slice()
+        .filter((l) => !(sprintBand && String(l) === "observe"))
+        .sort((a, b) =>
+          (rank[String(a)] == null ? 9 : rank[String(a)])
+          - (rank[String(b)] == null ? 9 : rank[String(b)]));
       return `<div class="gl-auto-cards" role="radiogroup">` + levels.map((l) => {
         const lvl = String(l);
         const sel = lvl === cur;
@@ -2480,7 +2769,7 @@
         return `<div class="gl-auto-card${sel ? " sel" : ""}" data-act="pick_autonomy"` +
           ` data-lvl="${esc(lvl)}" role="radio" aria-checked="${sel ? "true" : "false"}">` +
           `<div class="gl-auto-nm">${esc(this._autonomyLabel(lvl))}${rec}</div>` +
-          `<div class="gl-auto-d">${esc(this._autonomyHint(lvl))}</div></div>`;
+          `<div class="gl-auto-d"${sel ? "" : " hidden"}>${esc(this._autonomyHint(lvl))}</div></div>`;
       }).join("") + `</div>`;
     }
 
@@ -2498,6 +2787,11 @@
     /* 参与度单选卡点选：类切换 + 隐藏 input 同步 + 注解气泡更新（零重渲染） */
     _setAutonomy(lvl) {
       if (AUTONOMY.indexOf(lvl) < 0) return;
+      const tmpl = this._tmplById(this._formTid);
+      const pace = this._normPace(this._formPace);
+      if ((pace === "today" || pace === "session") && this._sprintOk(tmpl) && lvl === "observe") {
+        lvl = "suggest";
+      }
       this._formAutonomy = lvl;
       const hid = this._ref("autonomy");
       if (hid) hid.value = lvl;
@@ -2505,12 +2799,15 @@
         const on = c.getAttribute("data-lvl") === lvl;
         c.classList.toggle("sel", on);
         c.setAttribute("aria-checked", on ? "true" : "false");
+        const hint = c.querySelector(".gl-auto-d");
+        if (hint) hint.hidden = !on;
       });
       const note = this._autonomyNoteFull(lvl);
       const n = this._ref("anote");
       const tx = this._ref("anotetx");
       if (tx) tx.textContent = note;
       if (n) n.hidden = !note;
+      this._updatePaceLine();
     }
 
     /* 弹层参数控件的会话内状态（换场景/重开表单/切会话时清零） */
@@ -2556,7 +2853,10 @@
 
     /* 第二步当前值全量快照（与 _create 的取值口径一致：一切 [data-param-key] + 期限 + 参与度） */
     _formSnapshot() {
-      const snap = { tid: this._formTid, autonomy: this._formAutonomy || "", params: {}, days: "" };
+      const snap = {
+        tid: this._formTid, autonomy: this._formAutonomy || "", params: {},
+        days: "", pace: this._formPace || "natural",
+      };
       this.shadowRoot.querySelectorAll("[data-param-key]").forEach((el) => {
         const k = el.getAttribute("data-param-key");
         if (k) snap.params[k] = String(el.value == null ? "" : el.value);
@@ -2569,7 +2869,8 @@
     _snapshotDiffers(a, b) {
       if (!a || !b) return true;
       if (a.tid !== b.tid || String(a.days) !== String(b.days)
-        || String(a.autonomy) !== String(b.autonomy)) return true;
+        || String(a.autonomy) !== String(b.autonomy)
+        || String(a.pace || "natural") !== String(b.pace || "natural")) return true;
       const keys = {};
       Object.keys(a.params || {}).forEach((k) => { keys[k] = 1; });
       Object.keys(b.params || {}).forEach((k) => { keys[k] = 1; });
@@ -2599,6 +2900,7 @@
       const d = {
         v: 1, cid, tid: this._formTid, ts: Date.now(),
         params: snap.params, days: snap.days, autonomy: snap.autonomy,
+        pace: snap.pace || this._formPace || "natural",
         unlockSel: this._unlockSel, tierSel: this._tierSel, labelTouched: !!this._labelTouched,
       };
       this._formDraft = d;
@@ -2639,7 +2941,9 @@
         }
         const dy = this._ref("days");
         if (dy && d.days) dy.value = String(d.days);
+        if (d.pace) this._formPace = this._normPace(d.pace);
         if (d.autonomy && AUTONOMY.indexOf(d.autonomy) >= 0) this._setAutonomy(d.autonomy);
+        this._updatePaceLine();
         const rg = sr.querySelector('input[data-chg="range"]');
         if (rg) {
           const out = this._ref("rangeval");
@@ -2777,6 +3081,7 @@
         this._formStep = 1;
         this._formTid = "";
         this._formAutonomy = "";
+        this._formPace = "natural";
         this._formUsePrefDays = true;
         this._resetParamState();
         this._formBaseline = null;
@@ -2787,6 +3092,7 @@
           this._formTid = dr.tid;
           this._formStep = 2;
           this._formUsePrefDays = false;   // 期限以草稿为准（回填在 _applyFormDraft）
+          if (dr.pace) this._formPace = this._normPace(dr.pace);
           if (this._needsCatalog(dr.tid) && this._catalog == null && !this._catalogTried) {
             await this._loadCatalog();
           }
@@ -2800,6 +3106,46 @@
         this._formStep = 1;
         // 编辑期挂起的外部刷新此刻补上（数据新鲜度在表单关闭后立即恢复）
         if (this._ctxDeferred) { this.refresh(); return; }
+        this._rerender();
+        return;
+      }
+      if (act === "signal_dismiss") {
+        // ✕＝本会话对「这条及更早」的买家信号不再提（sessionStorage 存信号 ts）
+        try {
+          root.sessionStorage && root.sessionStorage.setItem(
+            "cp_goal_sig_dismiss:" + this._draftCid(),
+            String((el && el.getAttribute("data-ts")) || (Date.now() / 1000)));
+        } catch (_e) { /* ignore */ }
+        _beacon("goal_signal_dismiss");
+        this._rerender();
+        return;
+      }
+      if (act === "open_form_sprint") {
+        // 买家信号直达：custom + 今天收口，跳过第一步（趁热收口的最短路径）
+        if (el) el.disabled = true;
+        _beacon("goal_signal_open");
+        if (!this._templates) await this._loadTemplates();
+        this._loadBenchAll();
+        this._formOpen = true;
+        if (!this._templates || !this._tmplById("custom")) {
+          this._formStep = 1;          // 模板取数失败 → 回落普通第一步
+          this._formTid = "";
+          this._rerender();
+          return;
+        }
+        this._formTid = "custom";
+        this._formStep = 2;
+        this._formPace = this._sprintOk(this._tmplById("custom"))
+          ? "today" : "natural";
+        this._formAutonomy = "";
+        this._formUsePrefDays = false;
+        this._resetParamState();
+        this._formBaseline = null;
+        const drs = this._loadDraftStore();
+        this._formDraft = drs;
+        if (drs && drs.tid === "custom" && drs.pace) {
+          this._formPace = this._normPace(drs.pace);
+        }
         this._rerender();
         return;
       }
@@ -2822,7 +3168,14 @@
         this._resetParamState();
         this._formAutonomy = "";
         const _prefs = this._loadPrefs();
-        this._formUsePrefDays = (_prefs.template === this._formTid && _prefs.deadline_days > 0);
+        const sprint = this._sprintOk(this._tmplById(this._formTid));
+        if (!sprint) this._formPace = "natural";
+        else if (_prefs.template === this._formTid && PACES.indexOf(_prefs.pace) >= 0)
+          this._formPace = _prefs.pace;
+        else this._formPace = "natural";
+        this._formUsePrefDays = (_prefs.template === this._formTid && (
+          (this._formPace === "natural" && _prefs.deadline_days > 0)
+          || (this._formPace !== "natural" && _prefs.horizon > 0)));
         _beacon("goal_form_draft_clear");
         this._rerender();
         return;
@@ -2841,11 +3194,21 @@
         const prefs = this._loadPrefs();
         this._formTid = tid;
         this._formStep = 2;
-        // 期限偏好只在「又选了上次那个场景」时回放；换场景跟场景默认
-        this._formUsePrefDays = (prefs.template === tid && prefs.deadline_days > 0);
+        const sprint = this._sprintOk(this._tmplById(tid));
+        if (!sprint) this._formPace = "natural";
+        else if (prefs.template === tid && PACES.indexOf(prefs.pace) >= 0)
+          this._formPace = prefs.pace;
+        else this._formPace = "natural";
+        // 期限偏好只在「又选了上次那个场景」且节奏对得上时回放；换场景跟场景默认
+        this._formUsePrefDays = (prefs.template === tid && (
+          (this._formPace === "natural" && prefs.deadline_days > 0)
+          || (this._formPace !== "natural" && prefs.horizon > 0)));
         this._resetParamState();
         this._formBaseline = null;   // 换场景重拍出厂快照
-        if (this._formDraft && this._formDraft.tid === tid) this._formUsePrefDays = false;
+        if (this._formDraft && this._formDraft.tid === tid) {
+          this._formUsePrefDays = false;
+          if (this._formDraft.pace) this._formPace = this._normPace(this._formDraft.pace);
+        }
         _beacon(tid === "custom" ? "goal_form_pick_custom" : "goal_form_pick_scenario");
         // 解锁项/会员档需要价目表：先取再开弹层（避免控件回落后再替换闪烁）
         if (this._needsCatalog(tid) && this._catalog == null && !this._catalogTried) {
@@ -2859,6 +3222,43 @@
         this._draftCapture();   // 参与度点选走 DOM 级切换不触发 input/change，手动进草稿
         return;
       }
+      if (act === "pick_pace") {
+        const p = this._normPace(el && el.getAttribute("data-pace"));
+        if (!this._sprintOk(this._tmplById(this._formTid))) return;
+        if (p === this._formPace) return;
+        this._formPace = p;
+        if ((p === "today" || p === "session") && this._formAutonomy === "observe") {
+          this._formAutonomy = "suggest";
+        }
+        const tmpl = this._tmplById(this._formTid) || {};
+        const def = String(this._defaultHorizon(p, tmpl));
+        if (this._formDraft && this._formDraft.tid === this._formTid) {
+          this._formDraft.pace = p;
+          this._formDraft.days = def;
+        }
+        this._formUsePrefDays = false;
+        this._formBaseline = null;
+        _beacon("goal_pick_pace");
+        this._rerender();
+        return;
+      }
+      if (act === "horizon_chip") {
+        const v = String((el && el.getAttribute("data-val")) || "");
+        const dy = this._ref("days");
+        if (dy && v) { dy.value = v; this._draftCapture(); this._updatePaceLine(); }
+        return;
+      }
+      if (act === "horizon_today_end") {
+        const dy = this._ref("days");
+        if (dy) {
+          dy.value = String(this._hoursUntilMidnight());
+          this._draftCapture();
+          this._updatePaceLine();
+        }
+        return;
+      }
+      if (act === "extend_30m") { await this._extendDeadline(30 * 60); return; }
+      if (act === "extend_2h") { await this._extendDeadline(2 * 3600); return; }
       if (act === "note_example") {
         const i = (el && el.getAttribute("data-ex")) || "";
         const tx = this.t("inbox.goal.form.note_ex" + i);
@@ -2887,13 +3287,14 @@
         const slots = this._inferSlotsFromNote(note);
         this._formTid = "profile_discovery";
         this._formStep = 2;
+        this._formPace = "natural";
         this._formUsePrefDays = false;
         this._resetParamState();
         this._formBaseline = null;
         this._formDraft = {
           v: 1, cid: this._draftCid(), tid: "profile_discovery", ts: Date.now(),
           params: { slots: slots.join(","), note: note },
-          days: "", autonomy: this._formAutonomy || "auto",
+          days: "", autonomy: this._formAutonomy || "auto", pace: "natural",
           unlockSel: "", tierSel: "", labelTouched: false,
         };
         _beacon("goal_switch_discovery");
@@ -3022,6 +3423,8 @@
       if (act === "deadline_toggle") {
         const g0 = this._d && this._d.goal;
         if (!g0 || !g0.goal_id) return;
+        const p0 = String(g0.pace || "natural");
+        if (p0 === "today" || p0 === "session") return;
         this._moreOpen = false;
         this._deadlineOpen = !this._deadlineOpen;
         this._deadlineForGid = String(g0.goal_id || "");
@@ -3265,8 +3668,18 @@
       const aSel = this._ref("autonomy");
       if (aSel && aSel.value) body.autonomy = String(aSel.value);
       const daysEl = this._ref("days");
-      const days = daysEl ? parseFloat(daysEl.value) : 0;
-      if (isFinite(days) && days > 0) body.deadline_days = days;
+      const raw = daysEl ? parseFloat(daysEl.value) : 0;
+      const pace = this._sprintOk(this._tmplById(this._formTid))
+        ? this._normPace(this._formPace) : "natural";
+      body.pace = pace;
+      if (isFinite(raw) && raw > 0) {
+        if (pace === "session") body.deadline_days = raw / 1440;
+        else if (pace === "today") body.deadline_days = raw / 24;
+        else body.deadline_days = raw;
+      }
+      if ((pace === "today" || pace === "session") && body.autonomy === "observe") {
+        body.autonomy = "suggest";
+      }
 
       if (btn) btn.disabled = true;
       let res = null;
@@ -3279,11 +3692,21 @@
       } catch (_e) { res = null; }
       if (res && res.status === 403) { this._hideCard(!_showDisabledHint()); return; }
       if (res && res.ok && res.data && res.data.ok !== false) {
-        this._savePrefs({
+        const prev = this._loadPrefs();
+        const saved = {
           template: this._formTid,
           autonomy: body.autonomy || "auto",
-          deadline_days: body.deadline_days || 0,
-        });
+          pace: pace,
+        };
+        if (pace === "natural") {
+          saved.deadline_days = body.deadline_days || 0;
+          if (typeof prev.horizon === "number") saved.horizon = prev.horizon;
+        } else {
+          saved.horizon = raw;
+          saved.deadline_days = (typeof prev.deadline_days === "number" && prev.deadline_days > 0)
+            ? prev.deadline_days : 0;
+        }
+        this._savePrefs(saved);
         this._formOpen = false;
         this._formStep = 1;
         this._formDraft = null;          // 已提交＝草稿使命完成
@@ -3330,7 +3753,10 @@
         res = await this._api(`/api/goals/${encodeURIComponent(g.goal_id)}/beat/feedback`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ verdict }),
+          body: JSON.stringify({
+            verdict,
+            day: (g.today && g.today.day) ? String(g.today.day) : undefined,
+          }),
         });
       } catch (_e) { res = null; }
       if (res && res.status === 403) { this._hideCard(!_showDisabledHint()); return false; }
@@ -3464,6 +3890,7 @@
           this._formStep = 1;
           this._formTid = "";
           this._formAutonomy = "";
+          this._formPace = "natural";
           this._formUsePrefDays = true;
           this._resetParamState();
         }

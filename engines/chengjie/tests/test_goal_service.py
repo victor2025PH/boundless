@@ -316,3 +316,140 @@ class TestBuildBlockForChat:
             user_context={"user_emotion_hint": "sad"}, now=now)
         assert block is None                        # 情绪 hold → 不注入
         assert store.get_action(goal["goal_id"], day_key(now)) is None
+
+
+class _InboxTs:
+    def __init__(self, ts):
+        self._ts = ts
+
+    def list_recent_messages(self, conversation_id, limit=30):
+        return [{"direction": "in", "ts": self._ts}]
+
+
+class TestSprintPaceRefresh:
+    def test_session_two_inbounds_two_slots(self):
+        now = time.time()
+        cfg = _enabled_cfg()
+        cfg["companion"]["goals"]["db_path"] = ":memory:"
+        store = get_configured_store(cfg, None)
+        goal = store.create_goal(
+            conversation_id="telegram:a1:801", platform="telegram",
+            account_id="a1", chat_key="801", template="custom",
+            params={"pace": "session"}, deadline_days=60 / 1440.0, now=now)
+        t1, t2 = now - 120, now - 30
+        r1 = refresh_goal(store, cfg, goal, inbox_store=_InboxTs(t1), now=now)
+        r2 = refresh_goal(store, cfg, goal, inbox_store=_InboxTs(t2), now=now)
+        assert r1["action"]["day"] == f"s:{int(t1)}"
+        assert r2["action"]["day"] == f"s:{int(t2)}"
+        assert r1["action"]["action_id"] != r2["action"]["action_id"]
+
+    def test_session_cap_holds_pace_cap(self):
+        now = time.time()
+        cfg = _enabled_cfg()
+        cfg["companion"]["goals"]["db_path"] = ":memory:"
+        store = get_configured_store(cfg, None)
+        goal = store.create_goal(
+            conversation_id="telegram:a1:802", platform="telegram",
+            account_id="a1", chat_key="802", template="custom",
+            params={"pace": "session"}, deadline_days=90 / 1440.0, now=now)
+        for i in range(3):
+            ts = now - 300 + i * 10
+            res = refresh_goal(store, cfg, goal, inbox_store=_InboxTs(ts), now=now)
+            assert res.get("hold") is None and res.get("action")
+        res4 = refresh_goal(
+            store, cfg, goal, inbox_store=_InboxTs(now - 5), now=now)
+        assert res4.get("hold") == "pace_cap"
+        assert res4.get("action") is None
+
+    def test_sprint_beat_uses_sprint_intent_pool(self):
+        """限时档首拍意图来自 intents_sprint（与 pick_sprint_intent 同参
+        逐字一致）——日历池的「隔天补一句」不得进 60 分钟目标。"""
+        from src.companion.goals.templates import (
+            TEMPLATES,
+            pick_sprint_intent,
+        )
+        now = time.time()
+        cfg = _enabled_cfg()
+        cfg["companion"]["goals"]["db_path"] = ":memory:"
+        store = get_configured_store(cfg, None)
+        goal = store.create_goal(
+            conversation_id="telegram:a1:803", platform="telegram",
+            account_id="a1", chat_key="803", template="custom",
+            params={"pace": "session", "note": "要到TA的微信"},
+            deadline_days=60 / 1440.0, now=now)
+        t1 = now - 60
+        res = refresh_goal(store, cfg, goal, inbox_store=_InboxTs(t1), now=now)
+        act = res["action"]
+        assert act is not None
+        expect = pick_sprint_intent(
+            TEMPLATES["custom"], 0, goal["goal_id"], f"s:{int(t1)}",
+            params=goal["params"])
+        assert act["intent"] == expect
+        assert "「要到TA的微信」" in act["intent"]
+
+    def test_sprint_care_day_keeps_care_intent(self):
+        """连续驳回 ≥2 → 退避陪伴日：限时档不得把陪伴意图/none 力度覆盖成
+        sprint 收口话术（覆盖了＝拆掉让路）。"""
+        from src.companion.goals.templates import CARE_INTENTS
+        now = time.time()
+        cfg = _enabled_cfg()
+        cfg["companion"]["goals"]["db_path"] = ":memory:"
+        store = get_configured_store(cfg, None)
+        goal = store.create_goal(
+            conversation_id="telegram:a1:804", platform="telegram",
+            account_id="a1", chat_key="804", template="custom",
+            params={"pace": "session", "note": "要到TA的微信"},
+            deadline_days=60 / 1440.0, now=now)
+        store.add_event(goal["goal_id"], "beat_rejected", "t1")
+        store.add_event(goal["goal_id"], "beat_rejected", "t2")
+        res = refresh_goal(
+            store, cfg, goal, inbox_store=_InboxTs(now - 60), now=now)
+        act = res["action"]
+        assert act is not None
+        assert act["push_level"] == "none"
+        assert act["intent"] in CARE_INTENTS
+
+
+def test_outcome_report_by_pace(mem_store):
+    """报表按节奏拆终态：params.pace/期限跨度 → natural/session 分桶，
+    done_rate/won/avg_hours_to_done 各算各的。"""
+    now = time.time()
+    g1 = _new_goal(mem_store, chat_key="901", template="custom",
+                   now=now - 7200)
+    assert mem_store.update_goal_fields(
+        g1["goal_id"], status="done", done_at=now - 60,
+        result="manual:won", progress=1.0)
+    g2 = mem_store.create_goal(
+        conversation_id="telegram:a1:902", platform="telegram",
+        account_id="a1", chat_key="902", template="custom",
+        params={"pace": "session"}, deadline_days=60 / 1440.0,
+        now=now - 3600)
+    assert mem_store.update_goal_fields(
+        g2["goal_id"], status="expired", done_at=now - 30)
+    rep = mem_store.outcome_report(now - 86400, now=now)
+    bp = rep["by_pace"]
+    assert bp["natural"]["done"] == 1 and bp["natural"]["won"] == 1
+    assert bp["natural"]["done_rate"] == 1.0
+    assert bp["natural"]["avg_hours_to_done"] and \
+        bp["natural"]["avg_hours_to_done"] > 0
+    assert "_done_hours" not in bp["natural"]
+    assert bp["session"]["expired"] == 1
+    assert bp["session"]["done_rate"] == 0.0
+    assert "_done_hours" not in bp["session"]
+
+
+def test_outcome_report_outcome_signals(mem_store):
+    """达成信号读数：正式轨/影子轨 × 目标现状分桶——影子轨 done 占比是
+    「检测器要不要升级为正式提示」的判据。"""
+    now = time.time()
+    g1 = _new_goal(mem_store, chat_key="911", template="custom")
+    mem_store.add_event(g1["goal_id"], "outcome_signal", "contact:abc")
+    assert mem_store.update_goal_fields(
+        g1["goal_id"], status="done", done_at=now, result="manual:won")
+    g2 = _new_goal(mem_store, chat_key="912", template="custom")
+    mem_store.add_event(g2["goal_id"], "outcome_shadow_appointment", "明天3点")
+    rep = mem_store.outcome_report(now - 3600, now=now)
+    sig = rep["outcome_signals"]
+    assert sig["outcome_signal"] == {"n": 1, "done": 1}
+    assert sig["outcome_shadow_appointment"] == {"n": 1, "active": 1}
+    assert "outcome_shadow_payment" not in sig

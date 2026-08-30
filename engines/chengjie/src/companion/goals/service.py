@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 from src.companion.goals import store as goal_store_mod
 from src.companion.goals.context_block import goal_view_block
 from src.companion.goals.ledger import settle_goal
-from src.companion.goals.planner import day_key, effective_rejects, plan_beat
+from src.companion.goals.planner import effective_rejects, plan_beat
 from src.companion.goals.signals import collect_signals
 from src.companion.goals.stats import get_goal_stats
 from src.companion.goals.store import GoalStore, get_goal_store
@@ -25,6 +25,7 @@ from src.companion.goals.templates import (
     get_template,
     intent_en_for,
     milestone_label,
+    pick_sprint_intent,
 )
 
 logger = logging.getLogger("GoalService")
@@ -257,12 +258,30 @@ def refresh_goal(
         if str(goal.get("status")) != "active":
             return out
 
-        # 当日拍（幂等）：已有 → 直接用；没有 → 规划（hold 则不建）
-        day = day_key(n)
+        # 拍槽位：natural=日历日；today=小时；session=对方本条入站。
+        # 限时档绝不能再走「每天一拍」——60 分钟目标否则整段只有一拍、到期必 expired。
+        from src.companion.goals.pace import (
+            beat_cap,
+            count_beats_for_cap,
+            is_sprint,
+            planner_thresholds,
+            resolve_pace,
+            slot_key,
+            sprint_push,
+        )
+        pace = resolve_pace(goal)
+        day = slot_key(pace, n, float(signals.last_inbound_ts or 0))
         action = store.get_action(gid, day)
         if action is None:
             cfg = resolve_goals_cfg(cfg_root)
             pl = (cfg.get("planner") or {}) if isinstance(cfg, dict) else {}
+            existing = store.list_actions(gid, limit=120)
+            n_existing = count_beats_for_cap(existing, pace, n) if is_sprint(pace) else 0
+            cap = beat_cap(pace)
+            if cap and n_existing >= cap:
+                stats.record_hold("pace_cap")
+                out["hold"] = "pace_cap"
+                return out
             engaged = store.count_engaged_since(gid, signals.last_inbound_ts)
             # 坐席驳回回流（P2）：近窗 beat_rejected 事件 → planner 降档/退避
             try:
@@ -276,11 +295,22 @@ def refresh_goal(
                 store.count_events_since(gid, "beat_rejected", since_reject),
                 store.count_events_since(
                     gid, "beat_reject_undone", since_reject))
+            th = planner_thresholds(pace)
+            try:
+                backoff = int(th.get(
+                    "backoff_after", pl.get("backoff_after_unanswered", 2) or 0))
+            except (TypeError, ValueError):
+                backoff = 2
+            try:
+                halt = int(th.get(
+                    "halt_after", pl.get("halt_after_unanswered", 4) or 0))
+            except (TypeError, ValueError):
+                halt = 4
             beat = plan_beat(
                 template=template, goal=goal, signals=signals, day=day,
                 engaged_since_inbound=engaged,
-                backoff_after=int(pl.get("backoff_after_unanswered", 2) or 0),
-                halt_after=int(pl.get("halt_after_unanswered", 4) or 0),
+                backoff_after=backoff,
+                halt_after=halt,
                 recent_rejects=rejects,
             )
             if beat is None or beat.get("hold"):
@@ -288,9 +318,21 @@ def refresh_goal(
                 stats.record_hold(reason)
                 out["hold"] = reason
                 return out
+            push = str(beat.get("push_level") or "soft")
+            intent = str(beat.get("intent") or "")
+            if is_sprint(pace):
+                push = sprint_push(pace, n_existing, push)
+                # 限时档意图换 sprint 池（按拍序）：日历池的「隔天补一句/
+                # 改天再聊」在 60 分钟目标里穿帮。push=none（退避陪伴日）
+                # 不换——陪伴意图与节奏无关；无 sprint 池的模板保持原意图。
+                if push != "none":
+                    si = pick_sprint_intent(
+                        template, n_existing, gid, day,
+                        params=goal.get("params") or {})
+                    if si:
+                        intent = si
             action = store.upsert_action(
-                gid, day, intent=str(beat.get("intent") or ""),
-                push_level=str(beat.get("push_level") or "soft"), now=n)
+                gid, day, intent=intent, push_level=push, now=n)
             if action is not None:
                 stats.record_beat_planned()
         out["action"] = action
@@ -313,8 +355,12 @@ def goal_view(
     template = get_template(tid) or {}
     start = float(goal.get("start_ts") or 0)
     deadline = float(goal.get("deadline_ts") or 0)
-    total_days = int(round((deadline - start) / _DAY)) if (
-        start > 0 and deadline > start) else int(template.get("default_days") or 0)
+    from src.companion.goals.pace import remaining_sec, resolve_pace, total_sec
+    pace = resolve_pace(goal)
+    if start > 0 and deadline > start:
+        total_days = int(round((deadline - start) / _DAY))
+    else:
+        total_days = int(template.get("default_days") or 0)
     day_index = int((n - start) // _DAY) + 1 if start > 0 else 1
     title = str(goal.get("title") or "").strip()
     if not title:
@@ -351,6 +397,9 @@ def goal_view(
         "progress": float(goal.get("progress") or 0.0),
         "day_index": day_index,
         "total_days": total_days,
+        "pace": pace,
+        "remaining_sec": round(remaining_sec(goal, n), 1),
+        "total_sec": round(total_sec(goal), 1),
         "start_ts": start,
         "deadline_ts": deadline,
         "result": str(goal.get("result") or ""),
@@ -740,6 +789,21 @@ def build_block_for_chat(
         if goal is None:
             _note_meta(False, "no_goal")
             return None
+        # P1 达成信号（2026-08-29）：自定义目标在要联系方式、对方本条真给了
+        # → 记 outcome_signal（params+事件，右栏卡出「像是达成了」提示行）。
+        # 只提示不自动结算——确认权在人。放在 observe 早退**之前**：观察档
+        # 恰恰只看不动，达成信号是它最需要的观测。
+        if str(inbound_text or "").strip():
+            try:
+                from src.companion.goals.outcome import (
+                    maybe_outcome_shadow,
+                    maybe_outcome_signal,
+                )
+                maybe_outcome_signal(store, goal, inbound_text, now=now)
+                # 影子轨（P2）：约时间/付款只记事件不出提示——攒精度数据
+                maybe_outcome_shadow(store, goal, inbound_text, now=now)
+            except Exception:
+                logger.debug("outcome signal skipped", exc_info=True)
         # observe 档：目标只作看板观测，完全不进 prompt
         if str(goal.get("autonomy") or "suggest") == "observe":
             _note_meta(False, "observe",

@@ -769,6 +769,13 @@ class GoalStore:
                        "n": 0, "done_rate": 0.0, "avg_days_to_done": None,
                        "won": 0, "won_rate": 0.0},
             "by_template": {},
+            # P1（2026-08-29）：按推进节奏拆终态（natural/today/session）——
+            # 「限时收口的达成率 vs 自然天」是限时档该不该继续放量的读数
+            "by_pace": {},
+            # P2（2026-08-29）：达成信号读数——正式轨 outcome_signal +
+            # 影子轨 shadow_*（约时间/付款）。「影子命中的目标最终 done 多少」
+            # ＝影子轨要不要升级为正式提示的判据
+            "outcome_signals": {},
             "beats": {"planned": 0, "consumed": 0, "sent": 0, "skipped": 0},
             "feedback": {"adopt": 0, "reject": 0},
             "recent": [],
@@ -856,6 +863,79 @@ class GoalStore:
             if organic:
                 t["done_rate"] = round(t["done"] / organic, 3)
                 t["won_rate"] = round(int(t["won"]) / organic, 3)
+
+            # P1（2026-08-29）按节奏拆终态：pace 藏在 params JSON + 期限跨度
+            # 推断（resolve_pace 单一口径）——SQL 聚合做不对白名单校验，改
+            # 拉窗口内终态行（LIMIT 兜底）Python 分组，正确性优先。
+            try:
+                from src.companion.goals.pace import resolve_pace
+                rows = self._conn.execute(
+                    "SELECT template, params, start_ts, deadline_ts, status,"
+                    " done_at, result FROM goals"
+                    " WHERE status IN ('done','failed','expired','cancelled')"
+                    " AND done_at >= ? LIMIT 5000", (s,),
+                ).fetchall()
+                for r in rows:
+                    try:
+                        pjson = json.loads(r["params"] or "{}")
+                    except Exception:
+                        pjson = {}
+                    pace = resolve_pace({
+                        "template": str(r["template"] or ""),
+                        "params": pjson,
+                        "start_ts": r["start_ts"],
+                        "deadline_ts": r["deadline_ts"],
+                    })
+                    st = str(r["status"])
+                    bp = out["by_pace"].setdefault(pace, {
+                        "done": 0, "failed": 0, "expired": 0, "cancelled": 0,
+                        "n": 0, "won": 0, "done_rate": 0.0, "won_rate": 0.0,
+                        "avg_hours_to_done": None, "_done_hours": 0.0})
+                    bp[st] = int(bp.get(st) or 0) + 1
+                    bp["n"] += 1
+                    if st == "done":
+                        res_s = str(r["result"] or "")
+                        if res_s.startswith(("order:", "manual:")):
+                            bp["won"] += 1
+                        try:
+                            da = float(r["done_at"] or 0)
+                            st0 = float(r["start_ts"] or 0)
+                            if da > st0 > 0:
+                                bp["_done_hours"] += (da - st0) / 3600.0
+                        except (TypeError, ValueError):
+                            pass
+                for bp in out["by_pace"].values():
+                    organic = bp["done"] + bp["failed"] + bp["expired"]
+                    if organic:
+                        bp["done_rate"] = round(bp["done"] / organic, 3)
+                        bp["won_rate"] = round(bp["won"] / organic, 3)
+                    hours = bp.pop("_done_hours", 0.0)
+                    if bp["done"]:
+                        bp["avg_hours_to_done"] = round(
+                            hours / bp["done"], 1)
+            except Exception:
+                pass
+
+            # P2（2026-08-29）：达成信号 × 目标当前状态（正式轨 + 影子轨）。
+            # 每格＝「窗口内记过该信号的目标数」按现状分桶——影子轨的
+            # done 占比就是「检测器值不值得升级为正式提示」的读数。
+            try:
+                rows = self._conn.execute(
+                    "SELECT e.kind AS kind, g.status AS status,"
+                    " COUNT(DISTINCT e.goal_id) AS n"
+                    " FROM goal_events e JOIN goals g ON g.goal_id = e.goal_id"
+                    " WHERE e.ts >= ? AND e.kind IN ('outcome_signal',"
+                    " 'outcome_shadow_appointment','outcome_shadow_payment')"
+                    " GROUP BY e.kind, g.status", (s,),
+                ).fetchall()
+                for r in rows:
+                    ent = out["outcome_signals"].setdefault(
+                        str(r["kind"]), {"n": 0})
+                    ent[str(r["status"])] = (
+                        int(ent.get(str(r["status"])) or 0) + int(r["n"]))
+                    ent["n"] += int(r["n"])
+            except Exception:
+                pass
 
             # 终态时的里程碑分布（获客漏斗「死在哪一段」读数；cancelled 不计——
             # 运营叫停不代表客户走到哪）

@@ -67,6 +67,11 @@ def plan_priority(
             chat_key=chat_key, account_id=account_id)
         if goal is None or str(goal.get("autonomy") or "") != "auto":
             return 0.0
+        # 限时档（session/today）P0 不搭主动顺风车——那是「对方开口才拍」，
+        # 再加一条没人求的主动开场等于把节奏改成 chase。
+        from src.companion.goals.pace import is_sprint, resolve_pace
+        if is_sprint(resolve_pace(goal)):
+            return 0.0
         # 今日拍已发/被驳回 → 今天带不了目标意图，别浪费名额增益
         from src.companion.goals.planner import day_key
         action = store.get_action(str(goal.get("goal_id") or ""), day_key())
@@ -112,6 +117,9 @@ def augment_plan_with_goal(
             conversation_id=conversation_id, platform=platform,
             chat_key=chat_key, account_id=account_id)
         if goal is None or str(goal.get("autonomy") or "") != "auto":
+            return
+        from src.companion.goals.pace import is_sprint, resolve_pace
+        if is_sprint(resolve_pace(goal)):
             return
         # 会话档位闸：仅全自动会话（人审会话的营销推进必须过人）
         if inbox_store is not None and conversation_id:

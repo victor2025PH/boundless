@@ -119,6 +119,7 @@ def test_templates_shape():
     for t in d["templates"]:
         assert "intents" not in t                 # 内部意图池不外泄
         assert len(t["milestones"]) in (4, 5)     # 获客转化=5 段弧线
+        assert "sprint_ok" in t
 
 
 # ── create ──────────────────────────────────────────────────────────────────
@@ -162,6 +163,50 @@ class TestCreate:
             "account_id": "a9", "chat_key": "900"})
         assert r.status_code == 200
         assert r.json()["goal"]["conversation_id"] == "telegram:a9:900"
+
+    def test_create_session_pace_stores_subday_deadline(self):
+        client, _ = _build_client()
+        r = _create(client, template="custom", pace="session",
+                    deadline_days=60 / 1440.0)
+        assert r.status_code == 200
+        g = r.json()["goal"]
+        assert g["pace"] == "session"
+        assert g["params"]["pace"] == "session"
+        span = float(g["deadline_ts"]) - float(g["start_ts"])
+        assert abs(span - 3600.0) < 2.0          # 60 分钟，不被抬到 1 天
+        assert g["today"] and str(g["today"]["day"]).startswith("s:")
+
+    def test_create_session_rejected_on_relationship_template(self):
+        client, _ = _build_client()
+        r = _create(client, template="relationship_intimacy", pace="session",
+                    deadline_days=60 / 1440.0)
+        assert r.status_code == 400
+
+    def test_create_natural_still_clamps_below_one_day(self):
+        client, _ = _build_client()
+        r = _create(client, deadline_days=0.04)
+        assert r.status_code == 200
+        g = r.json()["goal"]
+        assert g["pace"] == "natural"
+        assert g["total_days"] == 1
+
+    def test_create_sprint_observe_coerces_to_suggest(self):
+        client, _ = _build_client()
+        r = _create(client, template="custom", pace="session",
+                    autonomy="observe", deadline_days=60 / 1440.0)
+        assert r.status_code == 200
+        assert r.json()["goal"]["autonomy"] == "suggest"
+
+    def test_beat_feedback_honors_session_slot_day(self):
+        client, _ = _build_client()
+        g = _create(client, template="custom", pace="session",
+                    deadline_days=60 / 1440.0).json()["goal"]
+        day = g["today"]["day"]
+        r = client.post(f"/api/goals/{g['goal_id']}/beat/feedback",
+                        json={"verdict": "adopt", "day": day})
+        assert r.status_code == 200
+        assert r.json()["goal"]["today"]["detail"] == "adopted"
+        assert r.json()["goal"]["today"]["day"] == day
 
     def test_unknown_template_400(self):
         client, _ = _build_client()
@@ -282,8 +327,8 @@ class TestUpdate:
         r = client.post(f"/api/goals/{gid}/update",
                         json={"params": {"item_label": "详批"}})
         assert r.status_code == 200
-        assert r.json()["goal"]["params"] == {"item_id": "a",
-                                              "item_label": "详批"}
+        assert r.json()["goal"]["params"] == {
+            "item_id": "a", "item_label": "详批", "pace": "natural"}
 
     def test_update_empty_payload_400(self):
         client, _ = _build_client()
@@ -1224,4 +1269,96 @@ def test_slots_progress_carries_src():
         f"/api/goals/for-conversation?conversation_id={CONV}").json()
     rows = {s["key"]: s for s in d["goal"]["slots_progress"]}
     assert rows["age"]["filled"] is True and rows["age"]["src"] == "llm"
+    assert rows["age"]["stale"] is False          # 刚写的值不陈旧
     assert rows["interests"]["filled"] is False and rows["interests"]["src"] == ""
+    assert rows["interests"]["stale"] is False    # 空槽绝不误标陈旧
+
+
+def test_slots_progress_flags_stale_values():
+    """画像时效（P1 2026-08-29）：值超 90 天未更新 → stale=True（⏳ 提醒
+    顺口再确认）；旧行裸值无 ts → 年龄未知，绝不误标。"""
+    import time as _t
+
+    from src.companion.goals.store import get_goal_store
+    client, _ = _build_client()
+    r = _create(client, template="profile_discovery",
+                params={"slots": "budget,timeline"})
+    assert r.status_code == 200
+    get_goal_store().upsert_customer_profile(
+        "telegram", "100", {"budget": "500刀"}, source="auto",
+        now=_t.time() - 120 * 86400)
+    d = client.get(
+        f"/api/goals/for-conversation?conversation_id={CONV}").json()
+    rows = {s["key"]: s for s in d["goal"]["slots_progress"]}
+    assert rows["budget"]["filled"] is True and rows["budget"]["stale"] is True
+    assert rows["timeline"]["stale"] is False
+
+
+def test_slot_staleness_pure_helpers():
+    import time as _t
+
+    from src.companion.goals.profile_slots import (
+        SLOT_STALE_DAYS,
+        slot_age_days,
+        slot_is_stale,
+    )
+
+    now = _t.time()
+    fields = {
+        "budget": {"v": "500刀", "src": "auto", "ts": now - 100 * 86400},
+        "age": {"v": "28", "src": "auto", "ts": now - 3600},
+        "occupation": "老师",              # 旧行裸值无 ts
+        "need": {"v": "", "src": "auto", "ts": now - 999 * 86400},   # 空值
+    }
+    assert SLOT_STALE_DAYS == 90.0
+    assert 99 < slot_age_days(fields, "budget", now=now) < 101
+    assert slot_is_stale(fields, "budget", now=now) is True
+    assert slot_is_stale(fields, "age", now=now) is False
+    assert slot_age_days(fields, "occupation", now=now) == -1.0
+    assert slot_is_stale(fields, "occupation", now=now) is False
+    assert slot_is_stale(fields, "need", now=now) is False
+    assert slot_is_stale({}, "budget", now=now) is False
+    assert slot_is_stale(None, "budget", now=now) is False
+
+
+# ── 限时终局复盘（P2 2026-08-29）：用了几拍 + 最后一拍意图 ───────────────────
+
+
+def test_for_conversation_sprint_recap_on_terminal():
+    import time as _t
+
+    from src.companion.goals.store import get_goal_store
+    client, _ = _build_client()
+    r = _create(client, template="custom", pace="session",
+                deadline_days=60 / 1440.0,
+                params={"note": "这轮要到TA的微信"})
+    assert r.status_code == 200
+    gid = r.json()["goal"]["goal_id"]
+    store = get_goal_store()
+    # 建目标当轮已规划首拍（无入站 → 槽 s:0）；再补两拍模拟真实回合
+    store.upsert_action(gid, "s:123", intent="试探意向", push_level="soft")
+    store.upsert_action(gid, "s:456", intent="要一个结果", push_level="direct")
+    assert store.update_goal_fields(gid, deadline_ts=_t.time() - 60)
+    # 活跃路径：settle-on-read 当轮转 expired → 复盘字段随视图附上
+    d = client.get(
+        f"/api/goals/for-conversation?conversation_id={CONV}").json()
+    g = d["goal"]
+    assert g["status"] == "expired" and g["pace"] == "session"
+    assert g["beats_used"] == 3
+    assert g["last_beat_intent"] == "要一个结果"    # s:456 字典序最新
+    # 已终态后再取 → last 路径同样带复盘
+    d2 = client.get(
+        f"/api/goals/for-conversation?conversation_id={CONV}").json()
+    assert d2["goal"] is None
+    assert d2["last"]["beats_used"] == 3
+    assert d2["last"]["last_beat_intent"] == "要一个结果"
+
+
+def test_for_conversation_natural_view_has_no_recap_fields():
+    """自然天目标（含活跃限时目标）不带复盘字段——只有终态限时目标才查拍表。"""
+    client, _ = _build_client()
+    r = _create(client)
+    assert r.status_code == 200
+    d = client.get(
+        f"/api/goals/for-conversation?conversation_id={CONV}").json()
+    assert "beats_used" not in d["goal"]

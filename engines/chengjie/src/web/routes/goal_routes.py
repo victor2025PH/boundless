@@ -49,6 +49,27 @@ def _split_conversation_id(conversation_id: str):
     return "", "", ""
 
 
+def _find_beat_action(store: Any, goal: Dict[str, Any], body: Any = None):
+    """拍反馈查找：显式 day（前端 ``g.today.day``）→ 当前槽 → 最近一行。
+
+    限时档的槽不是日历日，不能再只查 ``day_key()``。
+    """
+    from src.companion.goals.pace import resolve_pace, slot_key
+    gid = str((goal or {}).get("goal_id") or "")
+    explicit = str((body or {}).get("day") or "").strip()
+    if explicit:
+        a = store.get_action(gid, explicit)
+        if a is not None:
+            return a
+    pace = resolve_pace(goal)
+    sk = slot_key(pace, None, 0.0)
+    a = store.get_action(gid, sk)
+    if a is not None:
+        return a
+    rows = store.list_actions(gid, limit=8)
+    return rows[0] if rows else None
+
+
 def register_goal_routes(app, auth_dep, config_manager=None):
     """注册营销目标路由。``config_manager`` 供配置段/库路径解析。"""
 
@@ -111,6 +132,7 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         try:
             from src.companion.goals.profile_slots import (
                 parse_selected_slots,
+                slot_is_stale,
                 slot_label,
                 slot_src,
                 slot_value,
@@ -123,7 +145,8 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 str(view.get("chat_key") or ""))
             fields = dict((prof or {}).get("fields") or {})
             # src=值来源（auto 正则/llm 抽取/agent 人工）——卡上打勾清单据此
-            # 标注「AI 猜的还是人核实的」（P3 2026-08-18，行业 handoff 惯例）
+            # 标注「AI 猜的还是人核实的」（P3 2026-08-18，行业 handoff 惯例）；
+            # stale=值超 90 天未更新（P1 2026-08-29，提醒顺口再确认而非硬信旧值）
             view["slots_progress"] = [
                 {
                     "key": k,
@@ -131,6 +154,7 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                     "filled": bool(slot_value(fields, k)),
                     "value": slot_value(fields, k)[:20],
                     "src": slot_src(fields, k),
+                    "stale": slot_is_stale(fields, k),
                 }
                 for k in sel
             ]
@@ -264,6 +288,29 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             logger.debug("attach notified skipped", exc_info=True)
         return view
 
+    def _attach_sprint_recap(view, store):
+        """终态限时目标 → 复盘字段：用了几拍 + 最后一拍意图（终局卡
+        「停在哪」一眼可见）。natural / 非终态零开销直通。"""
+        try:
+            if not isinstance(view, dict):
+                return view
+            if str(view.get("pace") or "natural") == "natural":
+                return view
+            if str(view.get("status")) not in (
+                    "done", "failed", "expired", "cancelled"):
+                return view
+            acts = store.list_actions(
+                str(view.get("goal_id") or ""), limit=120)
+            view["beats_used"] = len(acts)
+            if acts:
+                # list_actions 按 day DESC：session 槽 s:{ts} 定长数字、
+                # today 槽 YYYY-MM-DDTHH——字典序即时间序，首行=最后一拍
+                view["last_beat_intent"] = str(
+                    acts[0].get("intent") or "")[:80]
+        except Exception:
+            logger.debug("sprint recap attach skipped", exc_info=True)
+        return view
+
     @app.get("/api/goals/for-conversation")
     async def goals_for_conversation(
         request: Request, conversation_id: str = "", _auth=Depends(auth_dep)
@@ -282,12 +329,28 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             recent = [g for g in store.list_goals(limit=20)
                       if str(g.get("conversation_id") or "") == conv]
             last = recent[0] if recent else None
-            return {
+            out = {
                 "goal": None,
-                "last": _attach_notified(
-                    svc.goal_view(last, lang=_lang(request)), store)
+                "last": _attach_sprint_recap(_attach_notified(
+                    svc.goal_view(last, lang=_lang(request)), store), store)
                 if last else None,
             }
+            # P1（2026-08-29）买家信号：无目标的会话近窗在问价/要购买方式
+            # → 卡上提示「趁热开今天收口」。只提示不动作，拍板权在坐席。
+            try:
+                from src.companion.goals.buying_signal import (
+                    scan_recent_inbound,
+                )
+                from src.integrations.protocol_bridge import get_inbox_store
+                inbox = get_inbox_store()
+                if inbox is not None:
+                    hint = scan_recent_inbound(
+                        inbox.list_recent_messages(conv, limit=12))
+                    if hint:
+                        out["signal_hint"] = hint
+            except Exception:
+                logger.debug("buying signal hint skipped", exc_info=True)
+            return out
         lang = _lang(request)
         view = _attach_notified(
             _attach_slots_progress(
@@ -296,7 +359,8 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                     store, lang=lang),
                 store, lang=lang),
             store)
-        return {"goal": view, "last": None}
+        # settle-on-read 可能本轮刚转终态（限时目标到期）——复盘字段同样要附
+        return {"goal": _attach_sprint_recap(view, store), "last": None}
 
     @app.get("/api/goals/report")
     async def goals_report(
@@ -589,6 +653,8 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         except (TypeError, ValueError):
             priority = 1
         params = body.get("params") if isinstance(body.get("params"), dict) else {}
+        params = dict(params)
+        params["pace"] = "natural"
         title = str(body.get("title") or "")[:120]
         try:
             # 生产 session 键是 username（登录只写它）；"user" 是历史误键——
@@ -908,9 +974,16 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         svc = _require_enabled(request)
         _deny_viewer(request)
         from src.companion.goals.templates import get_template
+        from src.companion.goals.pace import (
+            clamp_deadline_days,
+            is_sprint,
+            normalize_pace,
+            pace_allowed,
+        )
         body = payload or {}
         template_id = str(body.get("template") or "").strip()
-        if get_template(template_id) is None:
+        tmpl = get_template(template_id)
+        if tmpl is None:
             raise HTTPException(400, tr(request, "err.goals.template_unknown"))
 
         conv = str(body.get("conversation_id") or "").strip()
@@ -939,10 +1012,19 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             deadline_days = float(body.get("deadline_days") or 0)
         except (TypeError, ValueError):
             deadline_days = 0.0
-        if deadline_days <= 0:
-            tmpl = get_template(template_id) or {}
-            deadline_days = float(tmpl.get("default_days") or 14)
-        deadline_days = max(1.0, min(deadline_days, 180.0))
+        params_in = body.get("params") if isinstance(
+            body.get("params"), dict) else {}
+        params_in = dict(params_in)
+        pace = normalize_pace(body.get("pace") or params_in.get("pace"))
+        if not pace_allowed(template_id, pace):
+            raise HTTPException(400, tr(request, "err.goals.pace_not_allowed"))
+        deadline_days = clamp_deadline_days(
+            pace, deadline_days,
+            default_days=float(tmpl.get("default_days") or 14))
+        params_in["pace"] = pace
+        autonomy = str(body.get("autonomy") or "auto")
+        if is_sprint(pace) and autonomy == "observe":
+            autonomy = "suggest"
 
         try:
             # username 为生产真键（见批量口同款注释）；"user" 回落兼容测试桩
@@ -950,13 +1032,10 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                         or request.session.get("user", "") or "")[:60]
         except Exception:
             actor = ""
-        params_in = body.get("params") if isinstance(
-            body.get("params"), dict) else {}
         # notify_extra 入库前消毒（P3：逐目标「达成后通知谁」，写读同一清洗）
         if "notify_extra" in params_in:
             from src.companion.goals.notify import sanitize_notify_extra
             cleaned = sanitize_notify_extra(params_in.get("notify_extra"))
-            params_in = dict(params_in)
             if cleaned:
                 params_in["notify_extra"] = cleaned
             else:
@@ -967,7 +1046,7 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             title=str(body.get("title") or "")[:120],
             params=params_in,
             # 缺省档＝auto（与批量建目标同口径，2026-08-12 全自动为主）
-            autonomy=str(body.get("autonomy") or "auto"),
+            autonomy=autonomy,
             priority=int(body.get("priority") or 1),
             deadline_days=deadline_days,
             created_by=actor,
@@ -1144,8 +1223,10 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         lang = _lang(request)
         if goal is not None and str(goal.get("status") or "") == "active":
             if deadline_detail:
-                from src.companion.goals.planner import day_key
-                store.delete_planned_action(goal_id, day_key())
+                for a in store.list_actions(goal_id, limit=120):
+                    d = str((a or {}).get("day") or "")
+                    if d:
+                        store.delete_planned_action(goal_id, d)
             return {"ok": True,
                     "goal": _refreshed_view(svc, store, goal, lang=lang)}
         return {"ok": True,
@@ -1180,12 +1261,12 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         verdict = str(body.get("verdict") or "").strip().lower()
         if verdict not in ("adopt", "reject", "undo"):
             raise HTTPException(400, tr(request, "err.goals.bad_verdict"))
-        from src.companion.goals.planner import day_key
-        action = store.get_action(goal_id, day_key())
+        action = _find_beat_action(store, goal, body)
         if action is None:
             raise HTTPException(409, tr(request, "err.goals.no_beat_today"))
         reason = str(body.get("reason") or "agent").strip()[:120]
         aid = str(action.get("action_id") or "")
+        slot = str(action.get("day") or "")
         if verdict == "undo":
             # 撤销哪一种，由拍现状说话（与清单渲染同一个判定函数）
             prev = svc.beat_feedback_state(action)
@@ -1218,7 +1299,8 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             except Exception:
                 pass
         goal = store.get_goal(goal_id) or goal
-        action = store.get_action(goal_id, day_key())
+        if slot:
+            action = store.get_action(goal_id, slot) or action
         return {"ok": True,
                 "goal": svc.goal_view(goal, action, lang=_lang(request))}
 

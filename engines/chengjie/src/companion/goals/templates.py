@@ -53,6 +53,23 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
         "name_en": "Paid unlock",
         "kind": "conversion",
         "default_days": 14,
+        # 限时节奏（today/session）意图池：按**拍序**（第几拍）取，不按里程碑
+        # ——60 分钟目标没有「分天弧线」，日历池的「隔天补一句/改天再聊」在
+        # 这一通里直接穿帮。键=0/1/2（上越界夹末段=收口拍）。
+        "intents_sprint": {
+            0: (("顺着当下话题自然带到「{item}」，先探探对方此刻的兴趣",
+                 "Let the current topic lead to \"{item}\" and feel out their interest right now"),
+                ("接住对方正在聊的事，顺势点一句「{item}」能帮上什么，先不提价",
+                 "Catch what they're chatting about and slip in what \"{item}\" could do for them — no price yet")),
+            1: (("对方有兴趣就把「{item}」讲具体：内容、价格、怎么解锁，一次说清",
+                 "If they're interested, get specific about \"{item}\": what's inside, the price, and how to unlock — all in one go"),
+                ("趁热大方介绍「{item}」怎么开通，语气像分享不像推销",
+                 "While it's warm, walk them through unlocking \"{item}\" — sharing, not selling")),
+            2: (("时间不多了：大方问一句要不要现在解锁「{item}」；犹豫就收住，留个台阶",
+                 "Time is short: ask plainly if they'd like to unlock \"{item}\" now; if they waver, ease off and leave them an out"),
+                ("最后一拍：想要就带TA走完解锁「{item}」的步骤，不想要就聊回日常，不纠缠",
+                 "Last beat: if they want \"{item}\", walk them through it; if not, drop back to normal chat — no chasing")),
+        },
         # P24：默认值中性化——item_id/item_label 由前端向导按变现价目表下拉
         # 选择并联动（默认「八字详批」曾与实际业务错位、坐席照发穿帮；引擎侧
         # create_goal 不合并默认值，改空仅影响表单预填，零行为变更）。
@@ -102,6 +119,20 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
         "name_en": "Subscription",
         "kind": "conversion",
         "default_days": 21,
+        "intents_sprint": {
+            0: (("顺着对方正在聊的事，自然带一句「{item}」的好处，先看反应",
+                 "Follow what they're talking about and mention one perk of \"{item}\" — read the reaction first"),
+                ("先把当下话题聊舒服，再顺势提到「{item}」，不提价",
+                 "Keep the current topic comfortable, then bring up \"{item}\" naturally — no price talk")),
+            1: (("对方有兴趣就把「{item}」的权益和价格一次说清，给TA自己决定的空间",
+                 "If they're keen, lay out the perks and price of \"{item}\" in one go and give them room to decide"),
+                ("趁热说明「{item}」怎么开通，像帮朋友参谋，不像销售",
+                 "While it's warm, explain how to start \"{item}\" — like advising a friend, not selling")),
+            2: (("时间不多了：直接问TA要不要现在开通「{item}」；犹豫就收住，改聊日常",
+                 "Time is short: ask directly if they'd like to start \"{item}\" now; if they hesitate, ease off into normal chat"),
+                ("最后一拍：给一个现在开通「{item}」的小理由帮TA收口；不行就体面放下",
+                 "Last beat: offer one small reason to subscribe to \"{item}\" now; if it's a no, let it go gracefully")),
+        },
         "params": [
             {"key": "tier", "type": "string", "default": "vip",
              "label_zh": "目标会员档", "label_en": "Target tier"},
@@ -264,6 +295,22 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
         "phase_days": (2, 4, 7, 9, 10),
         "catalog": True,
         "profile_slots": True,
+        # 限时池不带 {item}：product 可能是画像自动选品（params 无 item_label），
+        # 留白代入会渲染成「它」——泛指措辞更老实。
+        "intents_sprint": {
+            0: (("顺着对方的生意/工作话题接住，把TA当下最头疼的事聊具体",
+                 "Pick up their business or work topic and get concrete about what's bugging them most right now"),
+                ("先像同行一样聊起来，顺势摸清TA现在怎么处理这件事",
+                 "Chat like a peer first, and casually learn how they handle this today")),
+            1: (("对准TA的痛点介绍合适的产品：能解决什么、大概什么价，一次说清",
+                 "Match their pain point with the right product: what it solves and roughly what it costs — in one go"),
+                ("以自己真实在用的口吻推荐对应产品，说清能省下什么",
+                 "Recommend the matching product as a real user, and spell out what it saves them")),
+            2: (("时间不多了：直接问TA想不想试试，给出官网下单/试用方式；犹豫就收住",
+                 "Time is short: ask if they'd like to try it and share the site link to order or trial; if they waver, ease off"),
+                ("最后一拍：帮TA下决心——开通后马上能用到什么说清楚；不行就留门后会有期",
+                 "Last beat: help them decide — spell out what they get right away; if not now, leave the door open")),
+        },
         "params": [
             {"key": "product_id", "type": "string", "default": "",
              "label_zh": "主推产品（留空=按画像自动选品）",
@@ -421,6 +468,20 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
         "name_en": "Custom",
         "kind": "custom",
         "default_days": 14,
+        "intents_sprint": {
+            0: (("顺着对方此刻的话头接住，把「{note}」自然带进来，先看TA的反应",
+                 "Pick up what they're saying right now, bring \"{note}\" in naturally, and read their reaction first"),
+                ("先回应对方正在聊的事，再朝「{note}」轻轻靠一步——语气像聊天，不像办事",
+                 "Respond to what they're talking about first, then take one gentle step toward \"{note}\" — chat, not business")),
+            1: (("对方接话了就把「{note}」说具体：给一个明确的说法或提议，看TA态度",
+                 "If they engage, get concrete about \"{note}\": make one clear point or proposal and gauge their stance"),
+                ("趁话题还热，把「{note}」往前推一步，说到具体处，不绕弯子",
+                 "While the topic is warm, push \"{note}\" one step forward — be specific, no detours")),
+            2: (("这轮时间不多了：围绕「{note}」大方要一个明确答复；TA犹豫就体面收住，绝不缠着追问",
+                 "Time is short this round: ask plainly for a clear answer on \"{note}\"; if they hesitate, wrap up gracefully — never badger"),
+                ("最后一拍：把「{note}」收个口——能定就定下来，定不了也留好台阶，聊回日常",
+                 "Last beat: close out \"{note}\" — settle it if you can; if not, leave an easy out and return to everyday chat")),
+        },
         "params": [
             {"key": "note", "type": "string", "default": "",
              "label_zh": "目标描述（给 AI 看的推进方向）",
@@ -477,6 +538,7 @@ def list_templates() -> List[Dict[str, Any]]:
     节奏预览据此给每段里程碑标推进力度（不提销售/顺势/可直说）。
     """
     out: List[Dict[str, Any]] = []
+    from src.companion.goals.pace import sprint_ok as _sprint_ok
     for tid, t in TEMPLATES.items():
         out.append({
             "id": tid,
@@ -487,6 +549,8 @@ def list_templates() -> List[Dict[str, Any]]:
             "params": [dict(p) for p in t["params"]],
             "milestones": [dict(m) for m in t["milestones"]],
             "push_curve": list(t.get("push_curve") or ()),
+            # 限时节奏（今天收口 / 这轮聊完）白名单：旧前端缺字段则不展示档位
+            "sprint_ok": _sprint_ok(tid),
         })
     return out
 
@@ -560,6 +624,28 @@ def pick_intent(
     return _format_intent(_intent_zh(pool[h % len(pool)]), params or {})
 
 
+def pick_sprint_intent(
+    template: Dict[str, Any], beat_index: int, goal_id: str, day: str,
+    params: Optional[Dict[str, Any]] = None,
+) -> str:
+    """限时档（today/session）按**拍序**取今日意图；无 sprint 池 → ""
+    （调用方保留日历池意图，行为零回退）。
+
+    键=第几拍（0/1/2，上越界夹末段——最后一拍的语义就是「收口」）；同拍槽
+    仍按 crc32 在池内轮换（day=槽位键：session 每回合换、today 每小时换，
+    同目标不同拍不复读）。返回中文权威文案，英文经 :func:`intent_en_for` 反查。"""
+    pools = (template or {}).get("intents_sprint") or {}
+    keys = sorted(pools.keys())
+    if not keys:
+        return ""
+    bi = max(0, min(int(beat_index or 0), max(keys)))
+    pool = pools.get(bi) or pools.get(keys[-1]) or ()
+    if not pool:
+        return ""
+    h = zlib.crc32(f"sprint:{goal_id}:{day}".encode("utf-8", "ignore"))
+    return _format_intent(_intent_zh(pool[h % len(pool)]), params or {})
+
+
 def intent_en_for(
     template: Optional[Dict[str, Any]],
     params: Optional[Dict[str, Any]],
@@ -567,17 +653,19 @@ def intent_en_for(
 ) -> str:
     """存量中文意图（goal_actions.intent 落库值）→ 英文对应文案。
 
-    机制＝对模板全部意图池（含退避陪伴池）按同参渲染做**精确匹配**——planner
-    写库的意图必然是某条池文案的参数化渲染（plan_beat 只有 pick_intent /
-    pick_care_intent 两个来源），所以精确匹配可靠且零歧义；匹配不到（历史
-    参数已改 / prompt 链的缺口合流串 / 人工改过）返回 ""，**调用方回落中文**
-    ——宁可英文界面偶见中文原文，绝不给错译。{note}/{item} 是运营手输数据，
-    英文句里原样保留（数据不译）。"""
+    机制＝对模板全部意图池（含退避陪伴池 + 限时池）按同参渲染做**精确匹配**
+    ——planner 写库的意图必然是某条池文案的参数化渲染（plan_beat 只有
+    pick_intent / pick_care_intent 两个来源，限时档另有 pick_sprint_intent
+    覆盖），所以精确匹配可靠且零歧义；匹配不到（历史参数已改 / prompt 链的
+    缺口合流串 / 人工改过）返回 ""，**调用方回落中文**——宁可英文界面偶见
+    中文原文，绝不给错译。{note}/{item} 是运营手输数据，英文句里原样保留
+    （数据不译）。"""
     target = str(intent_zh or "").strip()
     if not target:
         return ""
     p = params or {}
     pools: List[Any] = list(((template or {}).get("intents") or {}).values())
+    pools.extend(((template or {}).get("intents_sprint") or {}).values())
     pools.append(CARE_PAIRS)
     for pool in pools:
         for entry in (pool or ()):
@@ -675,6 +763,7 @@ __all__ = [
     "phase_floor",
     "pick_care_intent",
     "pick_intent",
+    "pick_sprint_intent",
     "push_for_milestone",
     "scaled_phase_days",
     "template_ids",

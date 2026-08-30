@@ -26,6 +26,7 @@ from src.companion.goals.templates import (
     milestone_label,
     pick_care_intent,
     pick_intent,
+    pick_sprint_intent,
     push_for_milestone,
     template_ids,
 )
@@ -104,8 +105,15 @@ def test_list_templates_public_shape_no_intents_leak():
     assert {e["id"] for e in out} == EXPECTED_IDS
     for e in out:
         assert "intents" not in e, e["id"]
+        assert "intents_sprint" not in e, e["id"]
         assert {"id", "name_zh", "name_en", "kind", "default_days",
                 "params", "milestones"} <= set(e)
+        assert "sprint_ok" in e
+        if e["id"] in ("custom", "conversion_unlock", "conversion_subscribe",
+                       "acquire_and_convert"):
+            assert e["sprint_ok"] is True
+        else:
+            assert e["sprint_ok"] is False
         assert len(e["milestones"]) in (4, 5)
 
 
@@ -164,6 +172,76 @@ def test_pick_intent_note_substitution_and_fallback():
     assert "「推广新品」" in out and "{note}" not in out
     out2 = pick_intent(t, 0, "g", "2026-07-01", params={})
     assert "「这个目标」" in out2 and "{note}" not in out2
+
+
+# ── 限时意图池（P1 2026-08-29）：按拍序取，避免日历话术进 60 分钟目标 ────────
+
+def test_sprint_intent_pools_structure_bilingual():
+    """sprint-ok 模板必须带 intents_sprint（键 0/1/2，条目 (zh,en) 双语对、
+    每段 ≥2 条防复读）；非 sprint 模板不得声明（声明了也没人消费=死数据）。"""
+    from src.companion.goals.pace import SPRINT_OK
+
+    for tid in SPRINT_OK:
+        pools = TEMPLATES[tid].get("intents_sprint")
+        assert pools and set(pools.keys()) == {0, 1, 2}, tid
+        for pool in pools.values():
+            assert len(pool) >= 2, tid
+            for entry in pool:
+                assert isinstance(entry, tuple) and len(entry) == 2, (tid, entry)
+                zh, en = entry
+                assert isinstance(zh, str) and zh and _has_cjk(zh), (tid, zh)
+                assert isinstance(en, str) and en and not _has_cjk(en), (tid, en)
+    for tid, t in TEMPLATES.items():
+        if tid not in SPRINT_OK:
+            assert "intents_sprint" not in t, tid
+
+
+def test_pick_sprint_intent_deterministic_substitution_and_clamps():
+    t = TEMPLATES["custom"]
+    p = {"note": "留联系方式"}
+    a = pick_sprint_intent(t, 0, "g-s", "s:1000", params=p)
+    assert a == pick_sprint_intent(t, 0, "g-s", "s:1000", params=p)
+    assert "「留联系方式」" in a and "{note}" not in a
+    # 上越界夹到末段（收口拍）；下越界夹到 0
+    zh2 = [e[0].replace("{note}", "留联系方式") for e in t["intents_sprint"][2]]
+    assert pick_sprint_intent(t, 99, "g", "s:1", params=p) in zh2
+    assert pick_sprint_intent(t, -1, "g", "s:1", params=p) != ""
+    # 无限时池的模板 / 空模板 → ""（调用方保留日历池意图）
+    assert pick_sprint_intent(TEMPLATES["relationship_stage"], 0, "g", "s:1") == ""
+    assert pick_sprint_intent({}, 0, "g", "s:1") == ""
+
+
+def test_pick_sprint_intent_rotates_across_slots():
+    t = TEMPLATES["conversion_unlock"]
+    seen = {pick_sprint_intent(t, 1, "g-rot", f"s:{i}",
+                               params={"item_label": "详批"}) for i in range(14)}
+    assert len(seen) >= 2
+
+
+def test_sprint_intents_avoid_calendar_wording():
+    """限时池文案不得出现「隔天/改天/明天/每天」类日历词——限时档存在的
+    全部理由就是这轮/今天收口，日历话术漏进来＝功能自相矛盾。"""
+    for tid in ("custom", "conversion_unlock", "conversion_subscribe",
+                "acquire_and_convert"):
+        for pool in TEMPLATES[tid]["intents_sprint"].values():
+            for zh, _en in pool:
+                for bad in ("隔天", "改天", "明天", "每天", "分天"):
+                    assert bad not in zh, (tid, zh)
+
+
+def test_intent_en_for_covers_sprint_pools():
+    params = {"item_label": "八字详批", "note": "推广新品"}
+    for tid in ("custom", "conversion_unlock", "conversion_subscribe",
+                "acquire_and_convert"):
+        t = TEMPLATES[tid]
+        for bi in (0, 1, 2):
+            for i in range(6):
+                zh = pick_sprint_intent(t, bi, f"g-{tid}", f"s:{i}",
+                                        params=params)
+                en = intent_en_for(t, params, zh)
+                assert en, (tid, bi, zh)
+                assert not _has_cjk(
+                    en.replace("八字详批", "").replace("推广新品", "")), (tid, en)
 
 
 def test_pick_care_intent_deterministic_and_rotates():

@@ -216,6 +216,38 @@ def slot_src(fields: Optional[Dict[str, Any]], key: str) -> str:
     return ""
 
 
+# 时效感知（P1 2026-08-29，借业界记忆层 validity-window 思想的轻量版）：
+# 画像单元本就带 ts——超窗的值该顺口再确认，而不是拿 90 天前的旧值继续推。
+SLOT_STALE_DAYS = 90.0
+
+
+def slot_age_days(
+    fields: Optional[Dict[str, Any]], key: str, *, now: Optional[float] = None,
+) -> float:
+    """槽位值年龄（天）。无值 / 旧行裸值无 ts → -1（未知，不判陈旧）。"""
+    cell = (fields or {}).get(str(key or ""))
+    if not (isinstance(cell, dict) and str(cell.get("v") or "").strip()):
+        return -1.0
+    try:
+        ts = float(cell.get("ts") or 0)
+    except (TypeError, ValueError):
+        return -1.0
+    if ts <= 0:
+        return -1.0
+    import time as _t
+    n = float(now if now is not None else _t.time())
+    return max(0.0, (n - ts) / 86400.0)
+
+
+def slot_is_stale(
+    fields: Optional[Dict[str, Any]], key: str, *,
+    now: Optional[float] = None, days: float = SLOT_STALE_DAYS,
+) -> bool:
+    """值超过 ``days`` 天未更新 → 陈旧（未知年龄绝不误标）。"""
+    age = slot_age_days(fields, key, now=now)
+    return age >= 0 and age >= max(1.0, float(days))
+
+
 def facts_line(
     fields: Optional[Dict[str, Any]], *, limit: int = 5, max_chars: int = 88,
 ) -> str:

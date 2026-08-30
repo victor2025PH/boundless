@@ -41,6 +41,7 @@ def build_goal_block(
     profile_gap: str = "",
     context_note: str = "",
     profile_facts: str = "",
+    remaining_sec: Optional[float] = None,
     max_chars: int = DEFAULT_MAX_CHARS,
 ) -> Optional[str]:
     """组 3-6 行目标块。无标题（无目标）→ None。
@@ -66,7 +67,24 @@ def build_goal_block(
     mi_disp = max(0, int(milestone_idx)) + 1
     n_total = max(1, int(milestone_total or 4))
     head = f"【工作目标】{t} · 里程碑 {mi_disp}/{n_total} {milestone_label}"
-    if total_days > 0:
+    # 限时档 total_days 可能是 0：用剩余分钟/小时，别写成第 1/0 天
+    used_remaining = False
+    if remaining_sec is not None:
+        try:
+            rs = float(remaining_sec)
+        except (TypeError, ValueError):
+            rs = -1.0
+        if rs >= 0:
+            used_remaining = True
+            mins = int(round(rs / 60.0)) if rs > 0 else 0
+            if mins <= 0:
+                head += "（即将到期）"
+            elif mins < 60:
+                head += f"（剩余{max(1, mins)}分钟）"
+            else:
+                hours = max(1, int(round(mins / 60.0)))
+                head += f"（剩余{hours}小时）"
+    if (not used_remaining) and total_days > 0:
         d = max(1, int(day_index))
         head += f"（第{min(d, int(total_days))}/{int(total_days)}天）"
 
@@ -139,6 +157,8 @@ def goal_view_block(
     sfx = str(note_suffix or "").strip()
     if sfx:
         note = f"{note}；{sfx}" if note else sfx
+    pace = str(view.get("pace") or "")
+    rem = view.get("remaining_sec") if pace in ("today", "session") else None
     return build_goal_block(
         title=str(view.get("title") or ""),
         milestone_label=str(view.get("milestone_label") or ""),
@@ -152,6 +172,7 @@ def goal_view_block(
         profile_gap=profile_gap,
         context_note=note,
         profile_facts=profile_facts,
+        remaining_sec=rem,
         max_chars=max_chars,
     )
 
