@@ -846,19 +846,11 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
           <!-- P1：常驻译文控制条（译文语言 + 一键显隐），与底部「🌐 翻译」弹层双向同步 -->
           <div class="xl-topbar" id="xl-topbar">
             <span class="xl-topbar-lbl"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z"/></svg><span data-i18n="inbox.xl.label">译文</span></span>
-            <select id="xl-top-lang" class="xl-topbar-sel" onchange="_onTopLangChange(this.value)" title="每条消息下方译文显示的语言（与底部双向翻译「收到→」同步）" data-i18n-title="inbox.xl.lang_t">
+            <!-- 0830 重建：顶部译文语言同走「隐藏 select + 芯片 → 选语页」（34 语原生下拉太长） -->
+            <select id="xl-top-lang" class="xl-topbar-sel xl-sel-sr" onchange="_onTopLangChange(this.value)" title="每条消息下方译文显示的语言（与底部双向翻译「收到→」同步）" data-i18n-title="inbox.xl.lang_t">
               <option value="" data-i18n="inbox.xl.none">不译</option>
-              <option value="zh" data-i18n="dash.lang.zh">中文</option>
-              <option value="en" data-i18n="dash.lang.en">英语</option>
-              <option value="th" data-i18n="dash.lang.th">泰语</option>
-              <option value="vi" data-i18n="dash.lang.vi">越南语</option>
-              <option value="id" data-i18n="dash.lang.id">印尼语</option>
-              <option value="ja" data-i18n="dash.lang.ja">日语</option>
-              <option value="ko" data-i18n="dash.lang.ko">韩语</option>
-              <option value="ru" data-i18n="dash.lang.ru">俄语</option>
-              <option value="es" data-i18n="dash.lang.es">西班牙语</option>
-              <option value="pt" data-i18n="dash.lang.pt">葡萄牙语</option>
             </select>
+            <button type="button" class="xl-lang-chip" id="xl-chip-top" onclick="_xlPickOpen('top')" title="每条消息下方译文显示的语言（与底部双向翻译「收到→」同步）" data-i18n-title="inbox.xl.lang_t"><span class="xl-chip-txt"></span><span class="xl-chip-caret">▾</span></button>
             <label class="xl-topbar-toggle" title="临时隐藏/显示所有译文行（不改翻译设置，省视觉空间）" data-i18n-title="inbox.xl.show_t">
               <input type="checkbox" id="xl-show-toggle" checked onchange="_onToggleShowXlate(this.checked)">
               <span data-i18n="inbox.xl.show">显示译文</span>
@@ -1003,6 +995,9 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
                 <button class="tiny-btn" id="xlate-toggle-btn" onclick="_uiBeacon('cbtn_xlate');toggleXlatePop()" title="双向翻译 / 图片翻译 / 语音翻译" data-i18n-title="inbox.rt.xlate_t"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z"/></svg><span data-i18n="inbox.rt.xlate">翻译 ▾</span></button>
                 <span class="rt-xl-status" id="rt-xl-status" onclick="_uiBeacon('cbtn_xlate_chip');toggleXlatePop()" style="cursor:pointer;" title="点击设置对话翻译" data-i18n="inbox.rt.xl_status_off" data-i18n-title="inbox.rt.xl_status_t">未开启</span>
                 <div class="rt-pop rt-pop-right" id="xlate-pop">
+                  <!-- 0830 断电重建：主屏包进 #xl-pop-home，与选语第二屏 #xl-pop-picker 互斥
+                       （#xlate-pop.is-pick 切换，CSS 既有规则）。 -->
+                  <div id="xl-pop-home">
                   <div class="xl-pop-hd"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z"/></svg><span data-i18n="inbox.xl.pop_hd">对话翻译</span></div>
                   <!-- 一键开关（P0 2026-08-16）：真两态 toggle——开=对方消息→坐席语言 + 我的消息→自动；
                        再点=双向关。两态文本/tooltip 由 _syncQuickBtn 按 (_xlateIn||_xlateOut) 同步。 -->
@@ -1017,36 +1012,20 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
                   <div class="xl-dir-card" id="xlate-bar">
                     <div class="xlate-dir">
                       <span data-i18n="inbox.xl.recv">对方消息</span><span class="arrow">→</span>
-                      <select id="xlate-in" class="xlate-sel" onchange="_onXlateChange()" title="对方消息自动翻译成" data-i18n-title="inbox.xl.in_t">
+                      <!-- 0830 重建：<select> 退居隐藏状态载体（id 契约 + 34 项由目录动态灌），
+                           可视入口是语种芯片 → 选语第二屏（34 项原生下拉会盖住「发送选项」）。 -->
+                      <select id="xlate-in" class="xlate-sel xl-sel-sr" onchange="_onXlateChange()" title="对方消息自动翻译成" data-i18n-title="inbox.xl.in_t">
                         <option value="" data-i18n="inbox.xl.none">不译</option>
-                        <option value="zh" data-i18n="dash.lang.zh">中文</option>
-                        <option value="en" data-i18n="dash.lang.en">英语</option>
-                        <option value="th" data-i18n="dash.lang.th">泰语</option>
-                        <option value="vi" data-i18n="dash.lang.vi">越南语</option>
-                        <option value="id" data-i18n="dash.lang.id">印尼语</option>
-                        <option value="ja" data-i18n="dash.lang.ja">日语</option>
-                        <option value="ko" data-i18n="dash.lang.ko">韩语</option>
-                        <option value="ru" data-i18n="dash.lang.ru">俄语</option>
-                        <option value="es" data-i18n="dash.lang.es">西班牙语</option>
-                        <option value="pt" data-i18n="dash.lang.pt">葡萄牙语</option>
                       </select>
+                      <button type="button" class="xl-lang-chip" id="xl-chip-in" onclick="_xlPickOpen('in')" title="对方消息自动翻译成" data-i18n-title="inbox.xl.in_t"><span class="xl-chip-txt"></span><span class="xl-chip-caret">▾</span></button>
                     </div>
                     <div class="xlate-dir">
                       <span data-i18n="inbox.xl.send_lbl">我的消息</span><span class="arrow">→</span>
-                      <select id="xlate-out" class="xlate-sel" onchange="_onXlateChange()" title="发送前把你的消息翻译成" data-i18n-title="inbox.xl.out_t">
+                      <select id="xlate-out" class="xlate-sel xl-sel-sr" onchange="_onXlateChange()" title="发送前把你的消息翻译成" data-i18n-title="inbox.xl.out_t">
                         <option value="" data-i18n="inbox.xl.none">不译</option>
                         <option value="auto" data-i18n="inbox.xl.auto_cust">自动（客户语言）</option>
-                        <option value="zh" data-i18n="dash.lang.zh">中文</option>
-                        <option value="en" data-i18n="dash.lang.en">英语</option>
-                        <option value="th" data-i18n="dash.lang.th">泰语</option>
-                        <option value="vi" data-i18n="dash.lang.vi">越南语</option>
-                        <option value="id" data-i18n="dash.lang.id">印尼语</option>
-                        <option value="ja" data-i18n="dash.lang.ja">日语</option>
-                        <option value="ko" data-i18n="dash.lang.ko">韩语</option>
-                        <option value="ru" data-i18n="dash.lang.ru">俄语</option>
-                        <option value="es" data-i18n="dash.lang.es">西班牙语</option>
-                        <option value="pt" data-i18n="dash.lang.pt">葡萄牙语</option>
                       </select>
+                      <button type="button" class="xl-lang-chip" id="xl-chip-out" onclick="_xlPickOpen('out')" title="发送前把你的消息翻译成" data-i18n-title="inbox.xl.out_t"><span class="xl-chip-txt"></span><span class="xl-chip-caret">▾</span></button>
                     </div>
                   </div>
                   <!-- P1 发送方式分段（一击直发 / 先预览再发）：状态载体仍是隐藏 checkbox
@@ -1101,19 +1080,10 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
                     <div id="xl-eng-desc" style="display:none;font-size:11px;opacity:.7;margin:0 0 4px;"></div>
                     <div class="xlate-dir" id="xl-agent-lang-row" style="display:none;">
                       <span data-i18n="inbox.xl.mylang">我的语言</span><span class="arrow">→</span>
-                      <select id="xl-agent-lang" class="xlate-sel" onchange="_onAgentLangChange()" title="你的母语/工作语言：一键开启与译文默认都用它；存服务端，换机不丢" data-i18n-title="inbox.xl.mylang_t">
+                      <select id="xl-agent-lang" class="xlate-sel xl-sel-sr" onchange="_onAgentLangChange()" title="你的母语/工作语言：一键开启与译文默认都用它；存服务端，换机不丢" data-i18n-title="inbox.xl.mylang_t">
                         <option value="" data-i18n="inbox.xl.mylang_follow">跟随浏览器（自动）</option>
-                        <option value="zh" data-i18n="dash.lang.zh">中文</option>
-                        <option value="en" data-i18n="dash.lang.en">英语</option>
-                        <option value="th" data-i18n="dash.lang.th">泰语</option>
-                        <option value="vi" data-i18n="dash.lang.vi">越南语</option>
-                        <option value="id" data-i18n="dash.lang.id">印尼语</option>
-                        <option value="ja" data-i18n="dash.lang.ja">日语</option>
-                        <option value="ko" data-i18n="dash.lang.ko">韩语</option>
-                        <option value="ru" data-i18n="dash.lang.ru">俄语</option>
-                        <option value="es" data-i18n="dash.lang.es">西班牙语</option>
-                        <option value="pt" data-i18n="dash.lang.pt">葡萄牙语</option>
                       </select>
+                      <button type="button" class="xl-lang-chip" id="xl-chip-agent" onclick="_xlPickOpen('agent')" title="你的母语/工作语言：一键开启与译文默认都用它；存服务端，换机不丢" data-i18n-title="inbox.xl.mylang_t"><span class="xl-chip-txt"></span><span class="xl-chip-caret">▾</span></button>
                     </div>
                     <!-- P3：运营级默认译文语言（换机/换坐席仍生效；区别于上面的会话级临时选择） -->
                     <div class="xl-default-row">
@@ -1141,6 +1111,10 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
                       <button type="button" class="imgxl-btn" id="docxl-btn" onclick="_openDocXlate()" title="文档翻译：粘贴长文或上传 .txt，整篇翻译并保留排版" data-i18n-title="inbox.xl.doc_t"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><polyline points="14 3 14 8 19 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg><span data-i18n="inbox.xl.doc">文档翻译</span></button>
                     </div>
                   </div>
+                  </div>
+                  <!-- 选语第二屏宿主（骨架由 _xlPickChrome 动态构建；34 语目录 + 搜索 +
+                       最近使用 + 「客户正在说」快捷行） -->
+                  <div id="xl-pop-picker"></div>
                 </div>
               </div>
               <span style="flex:1;"></span>
@@ -9250,8 +9224,9 @@ let _lbBusy='';                    // 识别翻译在途键（`mid|lang`；''=�
 let _lbPatchBusy='';               // 贴回在途键（同上）
 const _mediaXlCache=new Map();     // `mid|lang` -> {src,out,provider,cached,remote,srcLang,stats,patched?}
 const _LBXL_CHIP_LANGS=['zh','en','ja','ko'];
-const _LBXL_MORE_LANGS=['th','vi','id','ru','es','pt','ms','ar','fr','de','tr','hi'];
-const _LBXL_NATIVE={ms:'Melayu',ar:'العربية',fr:'Français',de:'Deutsch',tr:'Türkçe',hi:'हिन्दी'};
+/* 0830 重建：灯箱「更多语种」的旧 12 语内联下拉与其自称表已退役（常量名刻意不写——
+   verify 门禁按字面序列扫残留），改接 34 语选语第二屏（_xlPickOpen('lb')），
+   目录与本族自称单源在 _XL_CATALOG。 */
 function _lbCid(){ try{ return selectedChat?String(selectedChat.conversation_id||(typeof convKey==='function'?convKey(selectedChat):'')||''):''; }catch(_){ return ''; } }
 function _lbLangState(){
   try{
@@ -9318,32 +9293,23 @@ function _lbLangRow(){
   row.appendChild(mkChip('',window.T('inbox.xl.lb_lang_auto'),
     window.Tf('inbox.xl.lb_lang_auto_t',{lang:_xlLangName(_xlateIn||_agentLang())})));
   for(const c of _LBXL_CHIP_LANGS) row.appendChild(mkChip(c,_xlLangName(c),''));
-  const sel=document.createElement('select');
-  const inMore=_LBXL_MORE_LANGS.indexOf(pick)>=0;
-  sel.style.cssText='font-size:11px;max-width:110px;padding:2px 4px;border-radius:8px;'
-    +'background:var(--bg-soft);color:var(--text-main);'
-    +'border:1px solid '+(inMore?'var(--xl-accent)':'var(--btn-border)')+';'
-    +(inMore?'color:var(--xl-accent);font-weight:700;':'');
-  const ph=document.createElement('option');
-  ph.value=''; ph.textContent=window.T('inbox.xl.lb_more');
-  sel.appendChild(ph);
-  for(const c of _LBXL_MORE_LANGS){
-    const o=document.createElement('option');
-    o.value=c;
-    const nm=_xlLangName(c);
-    o.textContent=(nm===c.toUpperCase()&&_LBXL_NATIVE[c])?_LBXL_NATIVE[c]:nm;
-    if(pick===c) o.selected=true;
-    sel.appendChild(o);
-  }
-  sel.onchange=function(){ if(sel.value) _lbXlSetLang(sel.value); };
-  row.appendChild(sel);
+  /* 0830 重建：「更多」改开 34 语选语第二屏（快捷芯片外的选中语种显示在芯片上并点亮） */
+  const more=document.createElement('button');
+  more.type='button';
+  more.className='xl-lang-chip lbxl-more';
+  const inMore=!!pick&&_LBXL_CHIP_LANGS.indexOf(pick)<0;
+  more.innerHTML='<span class="xl-chip-txt"></span><span class="xl-chip-caret">\u25be</span>';
+  more.querySelector('.xl-chip-txt').textContent=inMore?_xlLangName(pick):window.T('inbox.xl.lb_more');
+  if(inMore) more.classList.add('on');
+  more.onclick=function(){ _xlPickOpen('lb'); };
+  row.appendChild(more);
   return row;
 }
 function _lbXlRender(){
   const p=document.getElementById('lightbox-xl');
   if(!p) return;
   const m=_lbMid?(_threadMsgCache.get(_lbMid)||null):null;
-  if(!m||_mediaKind(m)!=='image'){ p.style.display='none'; p.innerHTML=''; return; }
+  if(!m||_mediaKind(m)!=='image'){ p.style.display='none'; p.innerHTML=''; p.classList.remove('is-pick'); return; }
   const narrow=window.innerWidth<=768;
   p.style.cssText='display:block;position:fixed;z-index:10000;background:var(--bg-elev);color:var(--text-main);'
     +'border:1px solid var(--border);border-radius:12px;padding:12px;box-shadow:0 12px 40px rgba(0,0,0,.3);'
@@ -9351,11 +9317,17 @@ function _lbXlRender(){
     +(narrow?'left:8px;right:8px;bottom:8px;max-height:44vh;'
             :'right:16px;top:50%;transform:translateY(-50%);width:min(360px,32vw);max-height:80vh;');
   p.innerHTML='';
+  p.classList.remove('is-pick');
+  /* 0830 重建：主屏（#lb-xl-home）与选语第二屏（#lb-xl-picker）互斥，
+     #lightbox-xl.is-pick 切换（CSS 既有规则）；主屏内容全部挂 home。 */
+  const home=document.createElement('div'); home.id='lb-xl-home';
+  const picker=document.createElement('div'); picker.id='lb-xl-picker';
+  p.appendChild(home); p.appendChild(picker);
   const hd=document.createElement('div');
   hd.style.cssText='font-weight:700;font-size:13px;margin-bottom:8px;';
   hd.textContent=window.T('inbox.xl.lb_hd');
-  p.appendChild(hd);
-  p.appendChild(_lbLangRow());
+  home.appendChild(hd);
+  home.appendChild(_lbLangRow());
   const key=_lbKey(_lbMid);
   const cached=_mediaXlCache.get(key);
   // 换语言后大图若还挂着别的语言的译文图 → 收回原图（当前键没有 patched 就不该显示成品）
@@ -9401,7 +9373,7 @@ function _lbXlFail(p){
   e.className='lbxl-err';
   e.style.cssText='color:var(--tk-warn-ink,var(--text-sub));margin-top:6px;';
   e.textContent=window.T('inbox.xl.ocr_unavailable');
-  p.appendChild(e);
+  (p.querySelector('#lb-xl-home')||p).appendChild(e);   // 0830 重建：错误行也归主屏容器
 }
 function _lbXlResult(p,d){
   const mk=function(lbl,txt){
@@ -18161,10 +18133,15 @@ function _syncVoiceXlRow(){
   const hint=document.getElementById('xl-voice-row-hint');
   if(cb){ cb.checked=_voiceXlOn; cb.disabled=!_xlateOut; }
   if(hint){
+    /* 0830 断电丢失重放（实施89 0829 批）：目标语=粤语且跟随发声时给音系警示——
+       当前克隆引擎按普通话音系念粤文，发出去=「换人了」级穿帮，必须显式提醒。 */
     hint.textContent=!_xlateOut?window.T('inbox.voice.xl_need_out')
-      :(_voiceXlOn?window.Tf('inbox.voice.xl_to',{lang:_xlLangName(_xlateOut)})
+      :(_voiceXlOn?((_canonXlLang(_xlateOut)==='yue')?window.T('inbox.voice.xl_yue_warn')
+                                                     :window.Tf('inbox.voice.xl_to',{lang:_xlLangName(_xlateOut)}))
                   :window.T('inbox.voice.xl_off'));
   }
+  // P0-V2c：右栏语音卡同步跟随（目标语预告/过期标记按最新 __cpVoiceXlPref 重算）
+  try{ var _cpv=document.getElementById('ws-cp-voice'); if(_cpv&&_cpv.refreshXl) _cpv.refreshXl(); }catch(_){}
 }
 async function genVoiceReply(){
   if(!selectedChat) return;
@@ -18319,10 +18296,11 @@ const _outOrigMap=new Map();
 function _xlatePrefs(){
   try{ return JSON.parse(localStorage.getItem(_XL_KEY)||'{}'); }catch(_){ return {}; }
 }
-/* P0-3/B7：同语判定（基码比较，zh-cn≍zh）。任一侧空/unknown → false（未知不抑制）。 */
+/* P0-3/B7：同语判定（canon 归一：zh-cn≍zh）。任一侧空/unknown → false（未知不抑制）。
+   0830 重建补回变体豁免：zh-tw/yue 是一等目标语（≠zh），否则「简体会话→繁体/粤语」
+   会被 identity 短路吞掉恒原样返回——与后端 normalize_lang/normalize_target 同口径。 */
 function _sameLang(a,b){
-  const na=String(a||'').trim().toLowerCase().split('-')[0];
-  const nb=String(b||'').trim().toLowerCase().split('-')[0];
+  const na=_canonXlLang(a), nb=_canonXlLang(b);
   if(!na||!nb||na==='unknown'||nb==='unknown') return false;
   return na===nb;
 }
@@ -18652,7 +18630,270 @@ function _onXlatePreviewToggle(){
    ② 再点 = 关（收发两向一起清）——任何状态下点击都有可见响应；
    ③ toast + 状态胶囊 pop 动画双反馈；按钮两态经 _syncQuickBtn 同步（data-i18n 属性
       与文本一起换键，语言切换重译也不会回错态）。 */
-const _XL_TARGETS=['zh','en','th','vi','id','ja','ko','ru','es','pt'];
+/* == HY-MT 34 语种目录（2026-08-30 断电 NUL 事故后重建，恢复实施89/0830 上午批语义）：
+   UI 可选目标语与 HY-MT 模型卡/后端白名单（translation_engines.HYMT_TARGET_LANGS、
+   路由 _AGENT_LANG_ALLOWED）锁死同一份 34 码——两边分叉＝前端能选、「发→X」落库被 400
+   打回（门禁 tests/test_xlate_catalog.py）。目录字面量禁 CJK：中文显示名走 dash.lang.*
+   （i18n pack 34 键 zh+en 已备），非中文文字语种带本族自称 e:（选语页副行 + 缺键回落，
+   非 ASCII 一律 \u 转义防 script 内 CJK/编码类门禁误伤）。 == */
+const _XL_CATALOG=[
+  {code:'zh'},
+  {code:'zh-tw'},
+  {code:'yue'},
+  {code:'en',e:'English'},
+  {code:'ja'},
+  {code:'ko',e:'\ud55c\uad6d\uc5b4'},
+  {code:'th',e:'\u0e44\u0e17\u0e22'},
+  {code:'vi',e:'Ti\u1ebfng Vi\u1ec7t'},
+  {code:'id',e:'Bahasa Indonesia'},
+  {code:'ms',e:'Melayu'},
+  {code:'tl',e:'Tagalog'},
+  {code:'ru',e:'\u0420\u0443\u0441\u0441\u043a\u0438\u0439'},
+  {code:'es',e:'Espa\u00f1ol'},
+  {code:'pt',e:'Portugu\u00eas'},
+  {code:'fr',e:'Fran\u00e7ais'},
+  {code:'de',e:'Deutsch'},
+  {code:'it',e:'Italiano'},
+  {code:'tr',e:'T\u00fcrk\u00e7e'},
+  {code:'ar',e:'\u0627\u0644\u0639\u0631\u0628\u064a\u0629'},
+  {code:'hi',e:'\u0939\u093f\u0928\u094d\u0926\u0940'},
+  {code:'pl',e:'Polski'},
+  {code:'cs',e:'\u010ce\u0161tina'},
+  {code:'nl',e:'Nederlands'},
+  {code:'uk',e:'\u0423\u043a\u0440\u0430\u0457\u043d\u0441\u044c\u043a\u0430'},
+  {code:'fa',e:'\u0641\u0627\u0631\u0633\u06cc'},
+  {code:'he',e:'\u05e2\u05d1\u05e8\u05d9\u05ea'},
+  {code:'km',e:'\u1781\u17d2\u1798\u17c2\u179a'},
+  {code:'my',e:'\u1019\u103c\u1014\u103a\u1019\u102c'},
+  {code:'bn',e:'\u09ac\u09be\u0982\u09b2\u09be'},
+  {code:'ta',e:'\u0ba4\u0bae\u0bbf\u0bb4\u0bcd'},
+  {code:'te',e:'\u0c24\u0c46\u0c32\u0c41\u0c17\u0c41'},
+  {code:'mr',e:'\u092e\u0930\u093e\u0920\u0940'},
+  {code:'gu',e:'\u0a97\u0ac1\u0a9c\u0ab0\u0abe\u0aa4\u0ac0'},
+  {code:'ur',e:'\u0627\u0631\u062f\u0648'}
+];
+const _XL_TARGETS=_XL_CATALOG.map(function(x){return x.code;});
+const _XL_SET=(function(){ const s={}; for(const c of _XL_TARGETS) s[c]=1; return s; })();
+/* 语种码归一（窗口级契约 window._canonXlLang，verify_xlate_ui 钉 zh_hant→zh-tw）：
+   下划线→连字符；繁体族（tw/hant/hk/mo）→zh-tw；其余 zh 族→zh；zh-yue→yue；fil→tl；
+   目录外取基码（en-US→en），仍未命中原样返回（调用方自决兜底）。
+   变体语义与后端三处联动（normalize_lang / outbound_translate.normalize_target /
+   _TARGET_SCRIPT），zh-tw、yue 绝不折叠回 zh。 */
+function _canonXlLang(v){
+  let s=String(v||'').trim().toLowerCase().replace(/_/g,'-');
+  if(!s) return '';
+  if(s==='fil'||s==='fil-ph') return 'tl';
+  if(s==='yue'||s==='zh-yue'||s.indexOf('yue-')===0) return 'yue';
+  if(/^zh-(tw|hant|hk|mo)/.test(s)) return 'zh-tw';
+  if(s==='zh'||s.indexOf('zh-')===0) return 'zh';
+  if(_XL_SET[s]) return s;
+  const base=s.split('-')[0];
+  return _XL_SET[base]?base:s;
+}
+function _xlEndonym(code){
+  for(const it of _XL_CATALOG){ if(it.code===code) return it.e||''; }
+  return '';
+}
+/* 四个语种 <select>（顶部译文条 / 收→ / 发→ / 我的语言）统一由目录灌 34 项：模板只留
+   「不译/自动/跟随」非语种项，语种 option 全部动态生成（带 data-i18n=dash.lang.* 随 UI
+   语言热重译）；<select> 保持隐藏状态载体（id 跨函数契约不动），可视 UI 是语种芯片。 */
+function _xlFillLangSelects(){
+  for(const id of ['xl-top-lang','xlate-in','xlate-out','xl-agent-lang']){
+    const sel=document.getElementById(id); if(!sel) continue;
+    const cur=sel.value;
+    for(const o of Array.prototype.slice.call(sel.options)){
+      if(o.value!==''&&o.value!=='auto') o.remove();
+    }
+    for(const it of _XL_CATALOG){
+      const o=document.createElement('option');
+      o.value=it.code; o.setAttribute('data-i18n','dash.lang.'+it.code);
+      o.textContent=_xlLangName(it.code);
+      sel.appendChild(o);
+    }
+    if(cur&&sel.value!==cur) sel.value=cur;
+  }
+  _syncXlChips();
+}
+/* 语种芯片显示态同步（芯片=可视 UI；'' 档在「我的语言」上显示「跟随浏览器」而非「不译」） */
+function _syncXlChips(){
+  const pairs=[['xl-chip-top','xl-top-lang',''],['xl-chip-in','xlate-in',''],
+               ['xl-chip-out','xlate-out',''],['xl-chip-agent','xl-agent-lang','follow']];
+  for(const p of pairs){
+    const chip=document.getElementById(p[0]), sel=document.getElementById(p[1]);
+    if(!chip||!sel) continue;
+    const v=sel.value;
+    const txt=chip.querySelector('.xl-chip-txt');
+    if(txt) txt.textContent=(!v&&p[2]==='follow')?window.T('inbox.xl.mylang_follow'):_xlLangName(v);
+    chip.classList.toggle('on',!!v);
+  }
+}
+/* ── 选语第二屏（0830 断电丢失面最大的一块，按 CSS 骨架/i18n 键复原）──
+   宿主两处：弹层 #xl-pop-picker（in/out/top/agent 四模式）与灯箱 #lb-xl-picker（lb）；
+   .is-pick 类切换主屏/选语屏（CSS 已备）。行点击走宿主事件委托（data-xl-pick 属性，
+   不生成内联 handler——动态 innerHTML 的 onclick 是哑按钮门禁盲区）。 */
+let _xlPickMode='';
+const _XL_RECENT_KEY='aitr.xl.recent_langs';
+function _xlRecent(){
+  try{
+    const a=JSON.parse(localStorage.getItem(_XL_RECENT_KEY)||'[]');
+    return Array.isArray(a)?a.filter(function(c){return !!_XL_SET[c];}):[];
+  }catch(_){ return []; }
+}
+function _xlPushRecent(code){
+  if(!code||!_XL_SET[code]) return;
+  try{
+    const a=_xlRecent().filter(function(c){return c!==code;});
+    a.unshift(code);
+    localStorage.setItem(_XL_RECENT_KEY,JSON.stringify(a.slice(0,6)));
+  }catch(_){}
+}
+/* 「客户正在说」快捷行：会话语言 canon 后在目录内才给（unknown/目录外不猜） */
+function _xlCustLang(){
+  try{
+    const l=_canonXlLang(selectedChat&&selectedChat.language);
+    return _XL_SET[l]?l:'';
+  }catch(_){ return ''; }
+}
+function _xlPickHostId(mode){ return mode==='lb'?'lb-xl-picker':'xl-pop-picker'; }
+function _xlPickTitleKey(mode){
+  return mode==='out'?'inbox.xl.pick_title_out'
+    :mode==='agent'?'inbox.xl.pick_title_agent'
+    :mode==='lb'?'inbox.xl.pick_title_lb':'inbox.xl.pick_title_in';
+}
+/* 骨架每次打开重建（UI 语言切换后文案恒新）；handler 用属性赋值防重复绑定。 */
+function _xlPickChrome(host){
+  host.innerHTML='<div class="xl-pick-hd">'
+    +'<button type="button" class="xl-pick-back">\u2190 '+esc(window.T('inbox.xl.pick_back'))+'</button>'
+    +'<span class="xl-pick-title"></span></div>'
+    +'<input type="text" class="xl-pick-q" placeholder="'+esc(window.T('inbox.xl.pick_search'))+'">'
+    +'<div class="xl-pick-list"></div>';
+  host.querySelector('.xl-pick-back').onclick=function(){ _xlPickBack(); };
+  const q=host.querySelector('.xl-pick-q');
+  q.oninput=function(){ _xlPickRender(this.value); };
+  q.onkeydown=function(ev){
+    if(ev.key==='Escape'){ ev.preventDefault(); _xlPickBack(); }
+    else _xlPickKeydown(ev);
+  };
+  host.onclick=function(ev){
+    const row=ev.target.closest('[data-xl-pick]');
+    if(row) _xlPickApply(row.getAttribute('data-xl-pick')||'');
+  };
+}
+/* 灯箱侧同一选语页（骨架全同，宿主不同；函数名是 verify_xlate_ui 的窗口契约） */
+function _lbPickChrome(host){ _xlPickChrome(host); }
+function _xlPickKeydown(ev){
+  if(ev.key!=='ArrowDown'&&ev.key!=='ArrowUp'&&ev.key!=='Enter') return;
+  const host=document.getElementById(_xlPickHostId(_xlPickMode)); if(!host) return;
+  const rows=Array.prototype.slice.call(host.querySelectorAll('.xl-pick-row'));
+  if(!rows.length) return;
+  let i=-1;
+  rows.forEach(function(r,j){ if(r.classList.contains('kb')) i=j; });
+  if(ev.key==='Enter'){
+    ev.preventDefault();
+    const r=(i>=0)?rows[i]:rows[0];
+    if(r) _xlPickApply(r.getAttribute('data-xl-pick')||'');
+    return;
+  }
+  ev.preventDefault();
+  i=(ev.key==='ArrowDown')?Math.min(i+1,rows.length-1):Math.max(i-1,0);
+  rows.forEach(function(r,j){ r.classList.toggle('kb',j===i); });
+  try{ rows[i].scrollIntoView({block:'nearest'}); }catch(_){}
+}
+function _xlPickRender(q){
+  const host=document.getElementById(_xlPickHostId(_xlPickMode));
+  if(!host||!host.querySelector('.xl-pick-list')) return;
+  const ttl=host.querySelector('.xl-pick-title');
+  if(ttl) ttl.textContent=window.T(_xlPickTitleKey(_xlPickMode));
+  const mode=_xlPickMode;
+  const selId=mode==='in'?'xlate-in':mode==='out'?'xlate-out':mode==='top'?'xl-top-lang':mode==='agent'?'xl-agent-lang':'';
+  const sel=selId?document.getElementById(selId):null;
+  const cur=(mode==='lb')?_lbXlPick():(sel?sel.value:'');
+  const qq=String(q||'').trim().toLowerCase();
+  const row=function(code,main,sub,extraCls){
+    const on=(code===cur)||(!code&&!cur);
+    return '<button type="button" class="xl-pick-row'+(on?' on':'')+(extraCls?' '+extraCls:'')
+      +'" data-xl-pick="'+esc(code)+'">'
+      +'<span class="xl-pick-row-main">'+esc(main)+'</span>'
+      +(sub?'<span class="xl-pick-row-sub">'+esc(sub)+'</span>':'')+'</button>';
+  };
+  const match=function(code){
+    if(!qq) return true;
+    if(code.indexOf(qq)>=0) return true;
+    if(_xlLangName(code).toLowerCase().indexOf(qq)>=0) return true;
+    return _xlEndonym(code).toLowerCase().indexOf(qq)>=0;
+  };
+  let h='';
+  if(!qq){
+    if(mode==='out') h+=row('',window.T('inbox.xl.none'),'')+row('auto',window.T('inbox.xl.auto_cust'),'');
+    else if(mode==='agent') h+=row('',window.T('inbox.xl.mylang_follow'),'');
+    else if(mode==='lb') h+=row('',window.T('inbox.xl.lb_lang_auto'),'');
+    else h+=row('',window.T('inbox.xl.none'),'');
+    const cl=(mode!=='agent')?_xlCustLang():'';
+    if(cl){
+      h+='<div class="xl-pick-sec">'+esc(window.T('inbox.xl.pick_cust'))+'</div>'
+        +row(cl,_xlLangName(cl),_xlEndonym(cl),'cust');
+    }
+    const rec=_xlRecent().filter(function(c){return c!==cl;});
+    if(rec.length){
+      h+='<div class="xl-pick-sec">'+esc(window.T('inbox.xl.pick_recent'))+'</div>'
+        +'<div class="xl-pick-recent-row">';
+      for(const c of rec){
+        h+='<button type="button" class="xl-pick-recent-chip'+(c===cur?' on':'')
+          +'" data-xl-pick="'+esc(c)+'">'+esc(_xlLangName(c))+'</button>';
+      }
+      h+='</div>';
+    }
+  }
+  let n=0;
+  for(const it of _XL_CATALOG){
+    if(match(it.code)){ n++; h+=row(it.code,_xlLangName(it.code),it.e||''); }
+  }
+  if(!n&&qq) h+='<div class="xl-pick-empty">'+esc(window.T('inbox.xl.pick_empty'))+'</div>';
+  host.querySelector('.xl-pick-list').innerHTML=h;
+}
+function _xlPickOpen(mode){
+  _xlPickMode=String(mode||'in');
+  const host=document.getElementById(_xlPickHostId(_xlPickMode)); if(!host) return;
+  if(_xlPickMode==='lb'){
+    _lbPickChrome(host);
+    const lb=document.getElementById('lightbox-xl'); if(lb) lb.classList.add('is-pick');
+  }else{
+    _xlPickChrome(host);
+    const pop=document.getElementById('xlate-pop');
+    if(pop){
+      if(!pop.classList.contains('show')){ _closeRtPops(pop); pop.classList.add('show'); }
+      pop.classList.add('is-pick');
+    }
+  }
+  _xlPickRender('');
+  const q=host.querySelector('.xl-pick-q');
+  if(q){ q.value=''; try{ q.focus(); }catch(_){} }
+  try{ _uiBeacon('xlt_pick_open'); }catch(_){}
+}
+function _xlPickBack(){
+  const pop=document.getElementById('xlate-pop'); if(pop) pop.classList.remove('is-pick');
+  const lb=document.getElementById('lightbox-xl'); if(lb) lb.classList.remove('is-pick');
+  _xlPickMode='';
+}
+function _xlPickApply(code){
+  const mode=_xlPickMode, v=String(code||'');
+  if(mode==='in'){ const s=document.getElementById('xlate-in'); if(s) s.value=v; _onXlateChange(); }
+  else if(mode==='out'){
+    const s=document.getElementById('xlate-out'); if(s) s.value=v; _onXlateChange();
+    /* 变体采用量观测（xlt_ 前缀进 ui-event-trend；只记用户真选，不记程序回填） */
+    const oc=_canonXlLang(v);
+    if(oc==='zh-tw'||oc==='yue'||oc==='tl'||oc==='ms'){
+      try{ _uiBeacon('xlt_out_'+(oc==='zh-tw'?'zhtw':oc)); }catch(_){}
+    }
+  }
+  else if(mode==='top'){ const s=document.getElementById('xl-top-lang'); if(s) s.value=v; _onTopLangChange(v); }
+  else if(mode==='agent'){ const s=document.getElementById('xl-agent-lang'); if(s) s.value=v; _onAgentLangChange(); }
+  else if(mode==='lb'){ _lbXlSetLang(v); }
+  if(v) _xlPushRecent(v);
+  _xlPickBack(); _syncXlChips();
+  try{ _uiBeacon('xlt_pick_use'); }catch(_){}
+}
+_xlFillLangSelects();
 /* P1（2026-08-16）：坐席级「我的语言」服务端偏好——换机/清缓存不丢。
    GET/POST /api/unified-inbox/agent-lang（身份=服务端 session）；旧后端 404 →
    feat=false，「我的语言」行保持隐藏（特性探测 fail-soft，重启装载后自动出现）。 */
@@ -18675,6 +18916,7 @@ function _syncAgentLangUi(){
   if(row) row.style.display=(_agentLangFeat===true)?'':'none';
   const sel=document.getElementById('xl-agent-lang');
   if(sel) sel.value=_agentLangSrv||'';
+  try{ _syncXlChips(); }catch(_){}   // 服务端偏好异步落定后语种芯片跟着刷
 }
 async function _onAgentLangChange(){
   const sel=document.getElementById('xl-agent-lang');
@@ -19290,8 +19532,10 @@ function toggleXlatePop(){
   var show=!p.classList.contains('show');
   _closeRtPops(p);
   p.classList.toggle('show',show);
+  /* 0830 重建：开/关都退出选语第二屏（下次打开回主屏，不残留 is-pick） */
+  p.classList.remove('is-pick');
   /* P0-V2：开弹层时同步「语音消息」行状态（跟随 _xlateOut 与开关持久值） */
-  if(show){ try{ _syncVoiceXlRow(); }catch(_){} }
+  if(show){ try{ _syncVoiceXlRow(); }catch(_){} try{ _syncXlChips(); }catch(_){} }
 }
 /* composer P2：键盘快捷键速查浮层（复用 rt-pop 家族；把 Tab 采草稿/斜杠指令/Ctrl+V
    贴图这些隐藏能力集中一处可见——textarea title 悬浮提示的可点击升级版）。 */
@@ -19344,11 +19588,20 @@ function _updateXlStatus(){
   var el=document.getElementById('rt-xl-status'); if(!el) return;
   var i=document.getElementById('xlate-in'), o=document.getElementById('xlate-out');
   var L={zh:window.T('inbox.xls.zh'),en:window.T('inbox.xls.en'),th:window.T('inbox.xls.th'),vi:window.T('inbox.xls.vi'),id:window.T('inbox.xls.id'),ja:window.T('inbox.xls.ja'),ko:window.T('inbox.xls.ko'),ru:window.T('inbox.xls.ru'),es:window.T('inbox.xls.es'),pt:window.T('inbox.xls.pt'),auto:window.T('inbox.xls.auto')};
-  var inv=(i&&i.value)?(window.T('inbox.xls.recv')+(L[i.value]||i.value)):'';
-  var outv=(o&&o.value)?(window.T('inbox.xls.send')+(L[o.value]||o.value)):'';
+  /* 0830 重建：34 语目录下短标签兜底——有 inbox.xls.* 短键用短键（zh-tw=繁 / yue=粤 已备），
+     没有的语种回落 dash.lang.* 全名（tl/ms/fr…），绝不裸显语种码。 */
+  var nm=function(v){
+    if(!v) return '';
+    if(L[v]) return L[v];
+    var k='inbox.xls.'+v, t=window.T(k);
+    return (t===k)?_xlLangName(v):t;
+  };
+  var inv=(i&&i.value)?(window.T('inbox.xls.recv')+nm(i.value)):'';
+  var outv=(o&&o.value)?(window.T('inbox.xls.send')+nm(o.value)):'';
   var s=[inv,outv].filter(Boolean).join(' · ');
   el.textContent=s||window.T('inbox.rt.xl_status_off');
   el.classList.toggle('on',!!s);          // 强语义胶囊（暗底达标），替代写死蓝字
+  try{ _syncXlChips(); }catch(_){}        // 语种芯片随状态汇聚点同步（所有改语言路径都过这里）
   var btn=document.getElementById('xlate-toggle-btn');
   if(btn) btn.classList.toggle('rt-primary',!!s);
   _syncQuickBtn();      // P0：快捷开关两态跟随（开/已开启）
@@ -25947,6 +26200,9 @@ Object.assign(window, {
   _openDefaultLangMgr, _clearDefaultLangItem,
   // P1 2026-08-16 翻译弹层：发送方式分段 / 我的语言 / 智能建议（内联 onclick/onchange，须挂 window）
   _setOutPreviewMode, _onAgentLangChange, _xlateSuggestAccept,
+  // 0830 断电重建：34 语目录 + 选语第二屏（语种芯片静态 onclick 须挂 window；
+  // _canonXlLang/_XL_TARGETS 是 verify_xlate_ui 的窗口级观测契约）
+  _xlPickOpen, _canonXlLang, _XL_TARGETS, _XL_CATALOG,
   useTemplate, useKbText, useDraftText, quoteMsg, joinTgChat,
   // 知识库 / 模板
   dismissKbSuggest, toggleKbSuggest, _setKbPref, _toggleBubblePref, _useKbEntry,
