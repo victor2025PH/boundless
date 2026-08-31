@@ -226,10 +226,10 @@ HELP_TERMS: dict = {
     "nav_unified_inbox": {
         "zh": "坐席工作台",
         "en": "Agent Workspace",
-        "desc": "多平台统一收件箱：坐席在此接待所有渠道的客户对话，支持人工/AI 协作回复（新窗口打开）",
-        "desc_en": "Unified multi-platform inbox where agents handle customer chats from every channel, with human/AI co-reply (opens in a new window)",
-        "usage": "点击在新窗口打开 → 扫码接入账号 → 认领会话开始接待",
-        "usage_en": "Click to open in a new window → link accounts via QR → claim a conversation to start"
+        "desc": "多平台统一收件箱：坐席在此接待所有渠道的客户对话，支持人工/AI 协作回复（独立窗口打开；已开着的工作台会被复用聚焦，不会重复新开）",
+        "desc_en": "Unified multi-platform inbox where agents handle customer chats from every channel, with human/AI co-reply (opens in its own window; an already-open workspace is reused and focused instead of duplicated)",
+        "usage": "点击在独立窗口打开（已打开则切过去）→ 扫码接入账号 → 认领会话开始接待",
+        "usage_en": "Click to open in its own window (or switch to the one already open) → link accounts via QR → claim a conversation to start"
     },
     "nav_learner": {
         "zh": "学习队列",
@@ -357,8 +357,8 @@ HELP_TERMS: dict = {
     "work_goal": {
         "zh": "工作目标",
         "en": "Work Goal",
-        "desc": "为一段客户关系设定的推进目标：选模板（付费解锁/会员订阅/关系推进/沉默唤回/获客转化…）+ 期限 + 自治档，AI 按里程碑弧线（多数模板 4 段）分天推进，每天出一次「今日拍」。也叫「工作计划」，管理端与配置里叫「营销目标」——三个说法是同一个东西。需管理员开启 companion.goals.enabled，未开启时整卡不出现",
-        "desc_en": "A progress goal set for one customer relationship: pick a template (paid unlock / subscription / relationship / reactivation / acquire-and-convert…) plus a deadline and an autonomy level, and the AI advances it day by day along a milestone arc (4 segments in most templates), producing one daily beat. Also called the \"work plan\"; the admin side and config call it \"marketing goal\" — all three are the same thing. Requires companion.goals.enabled; the whole card is hidden while it is off",
+        "desc": "为一段客户关系设定的推进目标：选模板（付费解锁/会员订阅/关系推进/沉默唤回/获客转化…）+ 期限 + 自治档，AI 按里程碑弧线（多数模板 4 段）分天推进，每天出一次「今日拍」。转化类与自定义可选「今天收口 / 这轮聊完」限时节奏。也叫「工作计划」，管理端与配置里叫「营销目标」——三个说法是同一个东西。需管理员开启 companion.goals.enabled，未开启时整卡不出现",
+        "desc_en": "A progress goal set for one customer relationship: pick a template (paid unlock / subscription / relationship / reactivation / acquire-and-convert…) plus a deadline and an autonomy level, and the AI advances it day by day along a milestone arc (4 segments in most templates), producing one daily beat. Conversion and custom templates can pick a same-day or this-chat sprint cadence. Also called the \"work plan\"; the admin side and config call it \"marketing goal\" — all three are the same thing. Requires companion.goals.enabled; the whole card is hidden while it is off",
         "usage": "坐席工作台 → 选中会话 → 右栏「客户关系」→「工作目标」卡",
         "usage_en": "Agent Workspace → select a conversation → right rail \"Customer\" → the \"Work Goal\" card"
     },
@@ -1164,6 +1164,76 @@ HELP_TERMS: dict = {
         "en": "Pre-live check",
         "desc": "真发前最后一道体检，只体检不发一条消息。看选角/闸门预检是否通过、双锁是否武装、是否处于禁演时段。真发需另开配置锁 + 代码锁两把锁",
         "desc_en": "The final check before going live - it checks only, sends nothing. Shows whether casting/gate preflight passes, whether the double lock is armed, and quiet-hours status. Going live needs both the config lock and the code lock"
+    },
+    "rps_peer_budget": {
+        "zh": "单会话额度",
+        "en": "Per-conversation budget",
+        "desc": "每个会话每天最多自动回复几轮。对面也是机器人时，没有这道保险丝会空转烧额度（曾实录 80 秒 78 轮）。0＝不限额。坐席手动发送不受限，次日自动恢复。",
+        "desc_en": "Caps auto-reply rounds per conversation per day. Without this fuse, bot-vs-bot loops burn budget (a real incident: 78 rounds in 80 seconds). 0 = unlimited. Manual agent sends are never limited; the cap resets next day."
+    },
+    "rps_account_send_gate": {
+        "zh": "单账号日发额度",
+        "en": "Per-account daily send cap",
+        "desc": "整个账号每天最多发多少条（含新号爬坡）。单号发太多会触发平台风控。与「单会话额度」正交：那道管对轰，这道管整号总量。运营在 overlay 里显式关掉后，一键全自动也不会重开。",
+        "desc_en": "How many messages one account may send per day (new accounts ramp up). Too many on one account trips platform rate flags. Orthogonal to the per-conversation budget: that stops bot loops; this caps the whole account. If operators explicitly turn it off in the overlay, switching to full auto will not reopen it."
+    },
+    # ── v1.0.66 新功能词条（2026-09-01，实施93）：小智对话测试实锤这批功能
+    #    零语料只能拒答——补齐后 seed_corpus 自动进帮助库。只写已验证行为。 ───
+    "workflow_sop": {
+        "zh": "工作链",
+        "en": "Workflow SOP",
+        "desc": "预设的多步跟进剧本（破冰/报价跟单/复购唤醒等），按天数间隔逐步推进；执行档分「拟稿人审」与「自动发送」，链推进期间 AI 普通回复自动让路",
+        "desc_en": "Preset multi-step follow-up scripts (icebreak, quote follow-up, win-back) advanced on day intervals; runs in draft-review or auto-send mode, and normal AI replies yield while a chain is running",
+        "usage": "坐席工作台右栏「工作链」组件给当前会话挂链/换链/停链；收件箱筛选面板可按筛选结果批量挂链；建链与预设包在「工作链」页（/workflows）",
+        "usage_en": "Attach/switch/stop chains from the Workflows panel in the workspace right rail; bulk-attach from the inbox filter panel; create chains and seed preset packs on /workflows"
+    },
+    "deal_engine": {
+        "zh": "成交引擎",
+        "en": "Deal engine",
+        "desc": "按会话内容识别客户旅程阶段（破冰→试探→报价→成交），给出下一步最优动作与建议跟进链，并在工作链页出成交看板；属服务端开关",
+        "desc_en": "Classifies each conversation's journey stage (icebreak, probing, quoting, closing), suggests the next best action and chain, and adds a deal dashboard to the Workflows page; enabled server-side",
+        "usage": "开启后建议自动出现在工作台右栏；「工作链」页看不到成交引擎卡＝当前部署未开启，请管理员启用",
+        "usage_en": "Once enabled, suggestions appear in the right rail automatically; no deal-engine card on /workflows means this deployment has it off - ask an admin"
+    },
+    "voice_clone_bind": {
+        "zh": "克隆音色并绑定人设",
+        "en": "Clone voice & bind persona",
+        "desc": "从客户语音消息一键克隆音色并绑到人设，之后该人设的语音回复即用克隆声；登记需勾选授权确认，完成页可直接试听/撤销",
+        "desc_en": "Clone a voice from a customer's voice message and bind it to a persona; later voice replies use the clone. Registration requires a consent tick; the success screen offers audition and undo",
+        "usage": "消息流语音行「⋮」→「克隆音色并绑定人设」；弹层只 ×/完成/Esc 可关，点外部不会误关（试听生成中安全）",
+        "usage_en": "Voice row \"...\" menu → Clone voice & bind persona; the dialog closes only via X / Done / Esc - clicking outside never dismisses it mid-audition"
+    },
+    "ai_image_gen": {
+        "zh": "AI 生成图片",
+        "en": "AI image generation",
+        "desc": "工具箱卡片：按人设/模式（自拍/物件）/场景现场生成图片，预览后发送到会话或存入相册；相册有匹配存货时先出缩略图零等待直发",
+        "desc_en": "Toolbox card: generate images by persona, mode (selfie/object) and scene, preview, then send to the conversation or save to the album; matching album stock shows thumbnails for zero-wait sending",
+        "usage": "「功能未启用」＝该部署没接出图算力（外网部署属正常）；引擎「未部署」置灰；「服务器不可达」黄条预警；失败出人话错误卡可复制诊断",
+        "usage_en": "\"Not enabled\" means no image backend in this deployment (normal off-LAN); undeployed engines are greyed; \"server unreachable\" shows an amber banner; failures show an error card with diagnostic copy"
+    },
+    "media_ai_desc": {
+        "zh": "AI 识图",
+        "en": "AI vision summary",
+        "desc": "客户发来的图片/视频自动识别成摘要，显示在媒体卡下方的折叠行（超长折 3 行）；是坐席内部参考，绝不以消息气泡出现、也不会发给客户",
+        "desc_en": "Customer images and videos are auto-summarised in a folded row under the media card (long text folds to three lines); internal reference for agents - never rendered as a chat bubble, never sent to the customer",
+        "usage": "点「展开全文」看完整识别；对图片点「问这张图」可就画面追问",
+        "usage_en": "Click expand for the full text; use \"Ask about this image\" to probe the picture"
+    },
+    "voice_fallback_note": {
+        "zh": "标准音色回落",
+        "en": "Standard-voice fallback",
+        "desc": "生成/发送语音未用克隆声时，语音面板会说明原因（该语言暂不支持克隆声/额度用尽/克隆通道暂不可用）并给出路，如一键关翻译重新生成",
+        "desc_en": "When a voice is synthesized without the cloned timbre, the voice panel explains why (language unsupported by the clone, quota exhausted, clone channel down) and offers a way out, e.g. one-tap regenerate without translation",
+        "usage": "看到黄条按提示操作；「标准音色」徽标＝本条不是人设克隆声",
+        "usage_en": "Follow the amber note's suggestion; a \"standard voice\" badge means this clip is not the persona's cloned voice"
+    },
+    "birthday_capture": {
+        "zh": "生日自动记忆",
+        "en": "Birthday auto-capture",
+        "desc": "客户明说生日会自动写入 AI 记忆——包括「今天是我的生日」这类没有具体日期的说法（按当天记）；AI 自己的反问不会被误记",
+        "desc_en": "When a customer states their birthday it is captured into AI memory - including date-less phrasings like \"today is my birthday\" (recorded as today); the AI's own questions are never miscaptured",
+        "usage": "「AI 记忆」页搜索该客户可查看/修正生日条目",
+        "usage_en": "Search the customer on the AI Memory page to view or correct the birthday entry"
     }
 }
 

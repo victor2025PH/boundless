@@ -17,29 +17,6 @@ from __future__ import annotations
 # (slug, title, title_en, content, content_en, keywords, path)
 _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
     (
-        "getting-started",
-        "新手上手：这套系统怎么用",
-        "Getting started: how to use this system",
-        "整体主线是三步：①「渠道」页把账号接进来（扫码或登录，各平台各自一页）；"
-        "② 在「坐席工作台」处理会话——AI 会按人设自动拟稿或全自动回复，需要人的"
-        "会话才落到你手里；③「人设工作室」调 AI 的说话风格与自动化档位。"
-        "常用的还有：「运营总览」看整体数据，「知识库」教 AI 回答业务问题，"
-        "「报障」提交问题。第一次用建议先接一个账号跑通，再调人设。",
-        "Three steps: (1) connect an account on the Channels page (QR or login, "
-        "one page per platform); (2) work conversations in the Agent Workspace "
-        "— AI drafts or replies automatically per persona, only what needs a "
-        "human reaches you; (3) tune tone and automation level in Persona "
-        "Studio. Also useful: Ops Overview for metrics, Knowledge Base to teach "
-        "the AI, and Report for issues. First time: connect one account "
-        "end-to-end before tuning personas.",
-        # 词表刻意**不含**「怎么」这类零区分度疑问词：v1 放了「怎么用/怎么使用/
-        # 怎么操作」，把「怎么」的词频抬了三倍，本条随即变成所有「怎么做 X」问题
-        # 的万能吸铁石——负样本「红烧肉怎么做才好吃」被从 32.33 拉到 41.28 命中
-        # 本条，诚实拒答率 7/15 掉到 6/15。只留高区分度词。
-        "上手 入门 新手 主线 总览 流程 第一次 从头 快速开始 getting started onboarding",
-        "/workspace",
-    ),
-    (
         "send-voice",
         "怎么给客户发语音消息",
         "How to send a voice message",
@@ -78,13 +55,16 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
     ),
     (
         "rewatch-tour",
-        "新手引导在哪重看",
-        "How to replay the onboarding tour",
-        "后台管理页：右键（或长按）左下角帮助球 → 「重看新手引导」。坐席工作台"
-        "收件箱右栏「业务助手」有独立的功能引导按钮。",
-        "Admin pages: right-click the help ball → replay tour. The workspace "
-        "inbox right panel has its own tour button.",
-        "新手引导 引导 教程 tour 上手 重看",
+        "新手引导在哪（已下线）",
+        "Where is the onboarding tour (retired)",
+        "新手引导已下线（2026-08-31 起）：产品改为装好即用，不再有首启向导和"
+        "页面导览。想了解某个功能直接问小智（例如「怎么发语音」「工作链怎么用」），"
+        "或问「这个软件怎么用」看整体上手主线。",
+        "The onboarding tour was retired (2026-08-31): the product is now "
+        "install-and-go with no first-run wizard or page tours. Just ask me "
+        "about any feature (e.g. \"how to send a voice message\"), or ask "
+        "\"how to use this system\" for the getting-started overview.",
+        "新手引导 引导 教程 tour 上手 重看 向导 没有引导",
         "",
     ),
     (
@@ -120,6 +100,25 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "seem missing, clear filters first.",
         "筛选 清空 过滤 filter 重置 会话不见了 列表少了",
         "/workspace",
+    ),
+    (
+        # 实施81：报障工单处置台（master 专属运维面；关键词刻意窄——「报障/提交
+        # 问题」等提交侧词属 report-bug 条目，别抢）
+        "bug-tickets-console",
+        "报障工单在哪管理 / 处置",
+        "Where to manage bug tickets",
+        "「安全合规 → 报障工单」（/admin/bug-tickets，管理员专属）：左侧列表点任意"
+        "工单看详情与截图，右侧可流转状态（标「已修复」时填一句修复说明）、"
+        "一键回访 @报障人、直接群内回复（带快捷模板）；顶部「补发回访积压」"
+        "可把离线期没发出去的回访一次补齐。",
+        "Compliance → Bug tickets (/admin/bug-tickets, master only): pick a "
+        "ticket to see details and screenshots; update status (add a fix note "
+        "when marking fixed), notify the reporter, or reply into the group "
+        "with quick templates. \u201cFlush pending notifies\u201d re-sends "
+        "undelivered fix notifications.",
+        "报障工单 工单处置 工单管理 处置台 工单在哪 回访 修复回访 "
+        "已知问题 修复进展 tickets console 工单状态",
+        "/admin/bug-tickets",
     ),
     (
         "report-bug",
@@ -806,6 +805,172 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "Settings or Reply settings.",
         "开发者 开发者工具 developer 进不去 密码 高级 API key",
         "/developer",
+    ),
+    # ── 总览缺口（2026-08-29，老板实测「回复的内容没一点帮助」）───────────────
+    # 44 条 how-to 全是**具体任务**，没有一条讲「整体怎么用、我该从哪开始」——
+    # 而那正是新用户问的第一句。更坏的是纯词汇检索给了**同词不同义的假命中**：
+    # 实测「怎么使用这个软件」62.01 分命中 howto:multiwin（「在此**使用**/保持
+    # 待机」）、「怎么操作这个软件」79.59 分命中 term:nav_audit（「**操作**记录」）。
+    # 都过了 min_score=35，所以走的不是零命中，而是 NO_BASIS 哨兵：答题 LLM 看着
+    # 不相关的条目，诚实地拒绝硬凑——机制没坏，缺的是这条语料。
+    # keywords 刻意把「使用 / 操作」这两个被假命中占据的词收进来，让总览条目在
+    # 它们上面压过那两条（改词表后必须重跑 tools/... 的分数对照，见门禁）。
+    (
+        "getting-started",
+        "这个软件怎么用 / 我第一次用该从哪开始",
+        "How to use this system / where do I start",
+        "主线四步：① **接账号**——在坐席工作台的账号抽屉扫码（四个渠道页本身"
+        "不接入账号）；② **配人设**——「人设工作室」设定性格/语音/相册，决定 AI "
+        "用什么身份跟客户说话；③ **定自动化档位**——每个会话可选 全自动（AI 自答）"
+        "/ 人审（AI 拟稿、人点发送）/ 人工，在收件箱会话里切换；④ **日常盯盘**"
+        "——「坐席工作台」处理会话，「草稿审批」过 AI 拟稿，「案例跟进」是 AI 判定"
+        "需要人接手的清单。想看效果去「今日概览」（完整模式的首页）。"
+        "要具体步骤就直接问我那件事（例如「怎么发语音」「Telegram 怎么接入」"
+        "「怎么人工接管」），或去「帮助中心」看指令参考。",
+        "Four steps. (1) Connect accounts: scan from the account drawer in the "
+        "agent workspace — the four channel pages do not onboard accounts. "
+        "(2) Set up personas in Persona Studio (personality/voice/album); that "
+        "is the identity the AI speaks as. (3) Choose an automation mode per "
+        "conversation in the inbox: full-auto, review (AI drafts, a human "
+        "sends), or manual. (4) Day to day: work conversations in the agent "
+        "workspace, clear AI drafts on the Drafts page, and handle Cases (what "
+        "the AI flagged for a human). The dashboard shows results. For a "
+        "specific task just ask me about it, or open the Help centre.",
+        # ⚠ 词表刻意**不含「怎么」**：它是零区分度的疑问词，几乎每条 how-to 问句
+        # 都带它。首版写了「怎么用/怎么使用/怎么操作」三遍，把「怎么」的词频堆到
+        # 让本条变成「所有怎么X问题」的万能匹配——负样本「红烧肉怎么做才好吃」
+        # 当场从 32.33（拒答）被吸到 41.28 命中本条，拒答率 7/15 掉到 6/15。
+        # 区分度靠「上手/入门/主线/总览」这些词，不靠堆常见字。
+        "使用 用法 操作 上手 快速上手 入门 新手 第一次 从哪开始 开始 "
+        "干什么 有什么功能 功能 主线 流程 整体 总览 教程 "
+        "这个软件 这个系统 软件 系统 how to use getting started overview",
+        "/workspace",
+    ),
+    # ── v1.0.66 新功能批（2026-09-01，实施93 发版随包；老板指令：每个新功能
+    #    小智必须能正常引导——发版前对话测试实测 5/8 落「无依据拒答」，本批补齐。
+    #    内容红线照旧：只写已验证的真实 UI 行为，运营侧服务端开关一律写明
+    #    「请管理员操作」。keywords 不堆「怎么」（零区分度，见 getting-started 教训）。──
+    (
+        "attach-workflow",
+        "工作链（跟进 SOP）怎么给客户挂上",
+        "How to attach a follow-up SOP chain to a customer",
+        "工作链＝预设的多步跟进剧本（破冰/报价跟单/复购唤醒等），按设定的天数"
+        "间隔逐步推进。挂链：在坐席工作台打开会话 → 右栏「工作链」组件 → 选一条"
+        "链 → 启动；同一处可换链/停链，进行中的链会显示当前步与下一步时间。"
+        "批量挂链：收件箱筛选面板筛出目标客户 → 面板底部「按当前筛选批量挂链」"
+        "（默认先试算再确认）。链的执行档有「拟稿人审」与「自动发送」两种，链"
+        "推进期间 AI 普通回复会自动给链让路。链本身在「工作链」页（/workflows）"
+        "创建或用预设包一键生成。",
+        "A workflow chain is a preset multi-step follow-up script advanced on "
+        "day intervals. Attach: open the conversation in the workspace, use "
+        "the Workflows panel on the right, pick a chain and start it; the "
+        "same panel switches or stops chains. Bulk attach: filter the inbox, "
+        "then use \"bulk attach by current filter\" at the bottom of the "
+        "filter panel (dry-run first). Chains run in draft-review or "
+        "auto-send mode, and normal AI replies yield to a running chain. "
+        "Create chains (or seed preset packs) on the Workflows page.",
+        "工作链 跟进链 链条 挂链 SOP 剧本 跟单 批量挂链 停链 换链 "
+        "follow-up workflow chain attach",
+        "/workflows",
+    ),
+    (
+        "deal-engine",
+        "成交引擎是什么、在哪打开",
+        "What is the deal engine and where to enable it",
+        "成交引擎按会话内容识别客户所处的旅程阶段（破冰→试探→报价→成交），"
+        "在工作台右栏给出「下一步最优动作」与建议挂的跟进链（一键启动），并在"
+        "「工作链」页出成交看板（阶段分布/链归因）。它是服务端开关：若「工作链」"
+        "页看不到成交引擎卡，说明当前部署尚未开启，请管理员在服务端配置里启用；"
+        "开启后旅程阶段与建议会自动出现，无需坐席逐个设置。",
+        "The deal engine classifies each conversation's journey stage "
+        "(icebreak, probing, quoting, closing), suggests the next best action "
+        "and a chain to attach (one tap) in the right-side panel, and adds a "
+        "deal dashboard to the Workflows page. It is a server-side switch: if "
+        "the Workflows page shows no deal-engine card, this deployment has "
+        "not enabled it - ask an admin. Once on, stages and suggestions "
+        "appear automatically.",
+        "成交引擎 成交 旅程 阶段 报价 下一步 建议链 NBA deal engine journey "
+        "stage 看板",
+        "/workflows",
+    ),
+    (
+        "clone-voice-from-message",
+        "怎么从客户语音克隆音色并绑定人设",
+        "How to clone a voice from a message and bind it to a persona",
+        "在会话消息流里找到一条语音 → 点语音行的「⋮」→ 「克隆音色并绑定人设」→ "
+        "弹层里确认音色名、选要绑定的人设、勾选授权确认 → 登记。完成页可直接"
+        "试听克隆效果，并可「设为本会话音色」或「撤销」。弹层只能用 × / 完成 / "
+        "Esc 关闭，点弹层外不会误关（试听生成中也不怕误触）。另一条路：右栏"
+        "「语音」组件上传参考音频登记（见「怎么登记/克隆一个新音色」）。",
+        "Find a voice message in the thread, click its \"...\" menu, choose "
+        "\"Clone voice & bind persona\", then confirm the name, pick the "
+        "persona, tick the consent box and register. The success screen lets "
+        "you audition the clone, set it for this conversation, or undo. The "
+        "dialog closes only via X / Done / Esc - clicking outside never "
+        "dismisses it mid-audition. Alternative: upload a reference clip in "
+        "the right-side Voice panel.",
+        "克隆音色 克隆 音色 绑定人设 语音克隆 声音 试听 授权 voice clone bind "
+        "persona",
+        "/workspace",
+    ),
+    (
+        "view-image-summary",
+        "客户图片的 AI 识别摘要在哪看",
+        "Where to see the AI summary of a customer's image",
+        "收件箱消息流里，客户发来的图片/视频下方会出现「AI 识图 / AI 识视频」"
+        "摘要行（超长默认折叠 3 行，点「展开全文」看完整识别内容）。对着图片"
+        "点「问这张图」可以就画面内容追问。识别是给坐席看的内部参考，绝不会以"
+        "消息气泡出现在会话里，也不会发给客户（v1.0.66 起连无图附件的识别行"
+        "也统一收进摘要卡）。",
+        "In the inbox thread, an \"AI vision / AI video\" summary row appears "
+        "under customer images and videos (long text folds to three lines - "
+        "click expand). Use \"Ask about this image\" on the picture to probe "
+        "further. The summary is internal reference for agents: it never "
+        "renders as a chat bubble and is never sent to the customer (since "
+        "v1.0.66 even rows without a media attachment fold into the card).",
+        "识图 识别 图片识别 AI识图 摘要 OCR 图片内容 识视频 问这张图 vision "
+        "summary image",
+        "/workspace",
+    ),
+    (
+        "gen-image",
+        "AI 生成图片怎么用、点了没反应怎么办",
+        "How to use AI image generation / button seems dead",
+        "坐席工作台右栏工具箱「AI 生成图片」卡：选人设、模式（自拍/物件）、"
+        "引擎与场景，填提示词 → 生成 → 预览后可发送到当前会话、存入人设相册或"
+        "下载；相册已有合适存货时会先出缩略图，点选可零等待直接发送。面板会如实"
+        "显示状态：「功能未启用」＝该部署没有接出图算力（外网部署通常如此，属"
+        "正常，不是故障）；引擎显示「未部署」＝选项置灰不可选；「服务器不可达」"
+        "＝黄条预警。生成失败会出人话错误卡，附「复制诊断信息」可直接发给运维。",
+        "Workspace right-rail toolbox card \"AI image\": pick persona, mode "
+        "(selfie/object), engine and scene, write a prompt, generate, then "
+        "send to the conversation, save to the album or download. If the "
+        "album already has matching stock, thumbnails appear for zero-wait "
+        "sending. The panel is honest about state: \"not enabled\" means this "
+        "deployment has no image backend (normal for off-LAN installs, not a "
+        "bug); undeployed engines are greyed out; \"server unreachable\" "
+        "shows an amber banner. Failures show a human-readable error card "
+        "with one-tap diagnostic copy.",
+        "生成图片 AI生图 出图 自拍 图片生成 没反应 未启用 image generation "
+        "generate picture",
+        "/workspace",
+    ),
+    (
+        "update-app",
+        "怎么把智聊更新到最新版本",
+        "How to update ChatX to the latest version",
+        "有新版本时应用内会弹更新公告，顶部出现「立即重启更新」横幅——点它重启"
+        "即完成升级，聊天数据全部保留。也可以到官网下载页重新下载安装包覆盖"
+        "安装（同样保数据）。装好后在「关于」页核对版本号。小修补丁会自动在"
+        "后台下载，同样通过重启横幅生效。",
+        "When a new version ships, an in-app announcement appears and a "
+        "\"restart to update\" banner shows at the top - click it and the "
+        "upgrade completes on restart with all data kept. You can also "
+        "reinstall from the official download page (data is kept too). Check "
+        "the About page for the version afterwards. Small hotfixes download "
+        "in the background and apply via the same restart banner.",
+        "更新 升级 新版本 最新版 版本 重启更新 下载页 update upgrade version",
+        "",
     ),
 ]
 
