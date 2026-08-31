@@ -25,16 +25,16 @@ export const CHATX = {
   download: {
     // ⚠ 这几个字段不只是页面兜底文案：它们同时进 SoftwareApplication JSON-LD（见本文件末
     // chatxDownloadJsonLd），而爬虫**不会**执行运行时那次 manifest.json 校正——落后的版本号
-    // 会被 AI 当事实引用。2026-08-30 随 1.0.64 发版同步（发版流程：改这里四个值
+    // 会被 AI 当事实引用。2026-08-31 随 1.0.65 发版同步（发版流程：改这里四个值
     // version/size/filename/sha256，与 /downloads/manifest.json 对齐，gate:content 检查 5 钉住）。
-    version: "1.0.64",
+    version: "1.0.65",
     size: { zh: "562 MB", en: "562 MB" },
-    filename: "ChatX-Setup-1.0.64.exe",
+    filename: "ChatX-Setup-1.0.65.exe",
     os: { zh: "Windows 10 / 11（64 位）", en: "Windows 10 / 11 (x64)" },
-    url: `${CHATX_RELEASE_BASE}/ChatX-Setup-1.0.64.exe`,
+    url: `${CHATX_RELEASE_BASE}/ChatX-Setup-1.0.65.exe`,
     /** 与实际上架 /downloads/ 的安装包一致（scripts/gen-chatx-manifest.ps1 计算）；
      *  运行时会被 manifest.json 的值覆盖。 */
-    sha256: "73069739c38666e9fc148e924577a0facdf49c577de1479672a7b010b427a4a3",
+    sha256: "6001b730bd84ae8309d49fdee5481ecd1d43222182cfb498d563430bfe59c7a3",
     /** 运行时清单（打包脚本生成，含 version/size/sha256/signed）。 */
     manifestUrl: `${CHATX_RELEASE_BASE}/manifest.json`,
     macNote: {

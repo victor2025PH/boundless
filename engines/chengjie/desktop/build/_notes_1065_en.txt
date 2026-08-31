@@ -1,0 +1,21 @@
+v1.0.65 (Bug-report closure release)
+
+1. Three outbound guards at the single send checkpoint (the "fixed but came back" family)
+- Mixed-language ("I'm 我") fixed for good: the language-mix check now sits at the last gate every message passes — text, voice narration and image-turn replies are all checked before sending; detected mixes get rewritten, and stripped if the rewrite is still dirty. Every reported incident sentence is now a regression golden
+- Voice pet-name correction: the address guard used to cover text only; it now runs right before speech synthesis — narration text is corrected to the customer's profile pet name (near-variants like baba→babe are recognized)
+- Language pinning, double-insured: once a conversation is pinned "send → English", generation writes in the pinned language AND the send gate auto-translates anything that still mismatches (fixes "AI replied in Chinese after a photo")
+- Transcription can no longer flip the conversation language: a single mis-transcribed voice note (e.g. Chinese audio decoded as Korean) no longer drags the reply language — switching requires two consecutive notes in the same language or a text message from the customer
+
+2. Grounded or silent — no more fabrication
+- Shared-past narrative lock: fabricated "remember that seafood place we went to" stories are intercepted before sending — banned outright in newly-acquainted conversations, and blocked in mature ones unless backed by chat history or memory; goal-push copy is hard-banned from inventing shared history as a lead-in
+- Memory entry governance: ambiguous "user calls themselves X" phrasing is banned (new entries must name their subject); contradictory entries for the same customer (age 22 vs 21) auto-converge to the newest with old values demoted for audit; a sweep tool cleans legacy entries
+- Real weather grounding: on by default — the AI checks real weather for the persona's home city (new "Location" field in the persona editor); with no weather facts it must stay vague, and fabricated "it's raining here too" claims are stripped before sending
+
+3. Voice & profile-capture fixes
+- "Speak the translation → Japanese" no longer times out: the wait budget now has a foreign-language tier (ja/ko synthesis is slower per character; worst observed 28s now has ample headroom); Chinese behavior unchanged
+- Profile capture: the Location slot can no longer be filled with a language word ("English"); "I'm a student" self-descriptions now correctly fill the Occupation slot
+- LINE voice duration & media reliability: multi-tier duration resolution (works on machines without ffmpeg), automatic download retry with token refresh, and original-file fetch with transcript backfill
+
+4. Misc
+- Multilingual voice foundation hardening (ja/ko clone chain and language gates) plus multiple stability batches
+- The workflow management page was rebuilt this release; if you still see "page script error" please report with a screenshot
