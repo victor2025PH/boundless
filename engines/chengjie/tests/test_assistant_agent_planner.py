@@ -14,12 +14,24 @@ from src.assistant import actions as act
 
 # ── prompt ───────────────────────────────────────────────────────────────
 def test_prompt_contains_catalog_and_whitelist():
+    # 实施91 起 runner 动作（pc_*）只在**有可用受控机**时才进目录——总闸关/
+    # 无配对机器时列了也必被拒，纯噪音（agent_planner 内有注释钉此语义）。
+    # 本门禁随契约分两档：无受控机=runner 动作必须不出现、其余全出现；
+    # 有受控机=全量出现（「目录↔prompt 不漂移」的原始约束在此档全量成立）。
     p = ap.build_planner_prompt("把回复调快点", "master",
                                 ["/workspace", "/reply-settings"], lang="zh")
-    for aid in act.ACTIONS:
-        assert aid in p
+    for aid, spec in act.ACTIONS.items():
+        if spec["kind"] == "runner":
+            assert aid not in p, f"无受控机时 runner 动作 {aid} 不该进目录"
+        else:
+            assert aid in p
     assert "/reply-settings" in p
     assert "JSON" in p
+    p2 = ap.build_planner_prompt("把回复调快点", "master",
+                                 ["/workspace", "/reply-settings"], lang="zh",
+                                 pc_machines=["seat-01"])
+    for aid in act.ACTIONS:
+        assert aid in p2, f"有受控机时动作 {aid} 必须进目录（目录↔prompt 漂移）"
 
 
 def test_prompt_agent_role_excludes_l2():
@@ -93,7 +105,10 @@ def test_validate_l2_carries_diff_and_clean_params():
         {"action": "set_reply_delay",
          "params": {"min_sec": 3, "max_sec": 8, "evil_extra": "x"}},
     ), cfg, "master")
-    s = v["steps"][0]
+    # page 未知 → 确定性导航会在设置步前插 goto（详见 _maybe_insert_home_nav），
+    # 本用例只关心 L2 步本身的 diff/clean_params 契约
+    s = v["steps"][-1]
+    assert s["action"] == "set_reply_delay"
     assert s["level"] == "L2" and s["diff"]
     assert s["params"] == {"min_sec": 3, "max_sec": 8}  # 越界键被剥掉
     olds = {d["path"]: d["old"] for d in s["diff"]}
@@ -155,3 +170,58 @@ def test_validate_ask_passthrough_only_when_no_steps():
     v3 = ap.validate_plan({"say": "s", "ask": "问" * 300, "steps": []},
                           {}, "master")
     assert len(v3["ask"]) <= 120
+
+
+# ── 确定性「带你去」导航（2026-08-30，「原来会带我去页面现在不带了」）─────
+_NAV = {"/workspace", "/reply-settings", "/rpa-overview"}
+
+
+def test_home_nav_inserted_before_settings_step():
+    """改设置且人不在对应页面 → 首个设置步前确定性插 goto（不靠 LLM 心情）。"""
+    v = ap.validate_plan(_steps(
+        {"action": "set_automation_mode", "params": {"mode": "review"}},
+    ), {}, "master", nav_paths=_NAV, page="/workspace")
+    assert [s["action"] for s in v["steps"]] == \
+        ["goto_page", "set_automation_mode"]
+    nav = v["steps"][0]
+    assert nav["kind"] == "nav" and nav["goto"] == "/reply-settings"
+    assert nav["level"] == "L1" and nav["params"] == {"path": "/reply-settings"}
+    assert nav["label"]
+    # companion 能力开关走能力看板
+    v2 = ap.validate_plan(_steps(
+        {"action": "toggle_selfie", "params": {"enabled": True}},
+    ), {}, "master", nav_paths=_NAV, page="/workspace")
+    assert v2["steps"][0]["goto"] == "/rpa-overview"
+
+
+def test_home_nav_skipped_when_already_on_page():
+    for page in ("/reply-settings", "/reply-settings?tab=voice"):
+        v = ap.validate_plan(_steps(
+            {"action": "set_automation_mode", "params": {"mode": "review"}},
+        ), {}, "master", nav_paths=_NAV, page=page)
+        assert [s["action"] for s in v["steps"]] == ["set_automation_mode"]
+
+
+def test_home_nav_not_duplicated_when_llm_already_planned_goto():
+    v = ap.validate_plan(_steps(
+        {"action": "goto_page", "params": {"path": "/reply-settings"}},
+        {"action": "set_automation_mode", "params": {"mode": "review"}},
+    ), {}, "master", nav_paths=_NAV, page="/workspace")
+    assert [s["action"] for s in v["steps"]] == \
+        ["goto_page", "set_automation_mode"]
+
+
+def test_home_nav_skipped_when_home_not_whitelisted():
+    v = ap.validate_plan(_steps(
+        {"action": "set_automation_mode", "params": {"mode": "review"}},
+    ), {}, "master", nav_paths={"/workspace"}, page="/workspace")
+    assert [s["action"] for s in v["steps"]] == ["set_automation_mode"]
+
+
+def test_home_nav_untouched_for_non_settings_plans():
+    v = ap.validate_plan(_steps(
+        {"action": "goto_page", "params": {"path": "/workspace"}},
+        {"action": "query_ai_status", "params": {}},
+    ), {}, "master", nav_paths=_NAV, page="/knowledge")
+    assert [s["action"] for s in v["steps"]] == \
+        ["goto_page", "query_ai_status"]

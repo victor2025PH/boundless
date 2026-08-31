@@ -37,7 +37,7 @@ from src.web.routes.assistant_routes import _assistant_cfg, _session_user
 
 logger = logging.getLogger(__name__)
 
-_AGENT_JS_VER = "20260830b"  # 与 shared/assistant/assistant-agent.js VER 同步（门禁钉）
+_AGENT_JS_VER = "20260831c"  # 与 shared/assistant/assistant-agent.js VER 同步（门禁钉）
 
 
 def _lan_ip() -> str:
