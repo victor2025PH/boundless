@@ -1,5 +1,39 @@
 [
   {
+    "version": "1.0.66",
+    "date": "2026-08-31",
+    "title": {
+      "zh": "聊天流零内部泄漏 · 语音防误触 · 记忆与布局修复",
+      "en": "Clean chat stream, voice dialog guard, memory and layout fixes"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "聊天流更干净：AI 识图/翻译等内部分析内容绝不再以消息气泡出现在会话里（会话与列表预览双收口）。",
+        "克隆音色弹层防误触：试听生成中点到弹层外不再整层丢失，只有 ×/完成/Esc 才关闭。",
+        "语音面板更诚实：如实说明「为什么用了标准音色」（语言不支持/额度/通道），支持一键关翻译重新生成；系统音色明确标注。",
+        "AI 记忆更贴心：客户说「今天是我的生日」也能记住；AI 不再把内部目标备注带进回复。",
+        "工作台修复：小屏幕布局根修（会话列表可滚动）、未读徽标口径修正（只数可见私聊）、「标记成交」按钮修复、打开会话即校准发送上限。",
+        "上手更清爽：移除首启向导与新手导览，装好即用。",
+        "LINE 链路加固：语音时长正确显示，媒体可一键回取并自动补全转写。",
+        "Messenger 发送失败给出人话原因并按提示自动改期重投，失败消息留痕可一键重发。"
+      ],
+      "en": [
+        "Cleaner chat stream: internal AI vision/translation analysis never appears as message bubbles anymore (thread and list preview both sealed).",
+        "Voice-clone dialog guard: clicking outside no longer closes the dialog mid-audition; only X / Done / Esc close it.",
+        "Honest voice panel: it now explains why a standard voice was used (language unsupported / quota / channel), with one-tap regenerate without translation; system voices are clearly labeled.",
+        "Smarter memory: saying \"today is my birthday\" is now remembered; the AI no longer leaks internal goal notes into replies.",
+        "Workspace fixes: small-screen layout root fix (conversation list scrolls), unread badge now counts visible private chats only, \"mark deal\" button fixed, send caps reconcile when opening a conversation.",
+        "Cleaner first run: the first-launch wizard and tour have been removed - install and go.",
+        "LINE pipeline hardened: correct voice durations, one-tap media refetch with automatic transcript backfill.",
+        "Messenger send failures now show human-readable reasons and auto-reschedule per hint; failed messages are kept in the thread with one-tap resend."
+      ]
+    }
+  },
+  {
     "version": "1.0.65",
     "date": "2026-08-31",
     "title": {

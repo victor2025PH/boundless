@@ -1,0 +1,8 @@
+Cleaner chat stream: internal AI vision/translation analysis never appears as message bubbles anymore (thread and list preview both sealed).
+Voice-clone dialog guard: clicking outside no longer closes the dialog mid-audition; only X / Done / Esc close it.
+Honest voice panel: it now explains why a standard voice was used (language unsupported / quota / channel), with one-tap regenerate without translation; system voices are clearly labeled.
+Smarter memory: saying "today is my birthday" is now remembered; the AI no longer leaks internal goal notes into replies.
+Workspace fixes: small-screen layout root fix (conversation list scrolls), unread badge now counts visible private chats only, "mark deal" button fixed, send caps reconcile when opening a conversation.
+Cleaner first run: the first-launch wizard and tour have been removed - install and go.
+LINE pipeline hardened: correct voice durations, one-tap media refetch with automatic transcript backfill.
+Messenger send failures now show human-readable reasons and auto-reschedule per hint; failed messages are kept in the thread with one-tap resend.
