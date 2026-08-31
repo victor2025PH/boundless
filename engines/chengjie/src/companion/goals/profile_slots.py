@@ -397,6 +397,21 @@ _OCCUPATION_RE = re.compile(
     r"([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9 ]{1,11}?)"
     r"(?:的|生意|平台|店|铺|公司|工作室)?(?=[，。,.!！?？\s]|$)")
 _OCCUPATION_STOP = re.compile(r"^(?:什么|啥|梦|不了|不到|完)$")
+# 职业自述（#108 实施91，0831 实锤「对方已经明确说自己是学生，职业槽仍空」）：
+# 「我(是)做X的」句形罩不住身份名词自述——「我是学生 / I'm a student」。
+# 闭集名词白名单（宁可漏采不错采）：只收无歧义的身份词，开放式「我是X」
+# 绝不采（「我是觉得…/我是认真的」误采面）。
+_OCC_SELF_ZH_RE = re.compile(
+    r"我(?:现在|目前)?(?:还)?是(?:一名|一个|个)?"
+    r"(大?学生|研究生|留学生|高中生|上班族|自由职业|宝妈|全职妈妈|"
+    r"老师|教师|护士|医生|程序员|工程师|设计师|会计|律师|司机|厨师|"
+    r"公务员|销售|导游|主播)"
+    r"(?=[，。,.!！?？~～\s]|$)")
+_OCC_SELF_EN_RE = re.compile(
+    r"\bI(?:'m|\s+am)\s+(?:still\s+)?a\s+"
+    r"((?:college |university |high school )?student|teacher|nurse|doctor|"
+    r"engineer|designer|accountant|lawyer|driver|chef|freelancer)\b",
+    re.IGNORECASE)
 
 # 年龄（P26）：只认明确自述——「我28岁 / 我今年28了 / I'm 28 years old」。
 # 「我今年28」不带 岁/了 刻意不采（可能是 28 号出发/28 楼）；「我住28楼」
@@ -433,6 +448,47 @@ _INTERESTS_STOP = re.compile(
     r"^(?:谁|啥|什么|这|那|上|的|了|就|不|没|it\b|this\b|that\b)",
     re.IGNORECASE)
 _INTERESTS_TRAIL_RE = re.compile(r"(?:啦|哈|呢|哦|喔|嘛|呀|吧|了)+$")
+
+
+# ── 槽位值语义体检（#108 实施91，0831 实锤「坐标槽被填 English」）──────────
+# LLM 摘录轨的接地护栏只验「出处」（值确实在原文里）不验「语义」——客户说
+# "Can we talk in English?"，LLM 把语言词塞进 location，接地照过 → 坐标=English。
+# 本体检按槽位收窄：语言名绝不是 坐标/称呼/职业（interests 不拦——「喜欢学
+# English」是合法兴趣）。deny-list 制（宁可漏拦不误拦），正则/LLM 两轨同吃。
+_LANG_NAME_WORDS = (
+    "english", "chinese", "mandarin", "cantonese", "japanese", "korean",
+    "tagalog", "filipino", "spanish", "french", "german", "russian",
+    "thai", "vietnamese", "indonesian", "malay", "hindi", "arabic",
+    "英语", "英文", "中文", "汉语", "普通话", "粤语", "日语", "日文",
+    "韩语", "韩文", "泰语", "越南语", "菲语", "他加禄语", "西语", "西班牙语",
+    "法语", "德语", "俄语", "印尼语", "马来语",
+)
+_LANG_NAME_SET = {w.casefold() for w in _LANG_NAME_WORDS}
+_LANG_GUARDED_SLOTS = ("location", "name", "occupation")
+
+
+def slot_value_suspect(key: str, value: str) -> str:
+    """槽位值语义体检：返回不合格原因（空串=通过）。纯函数绝不抛。
+
+    当前唯一规则＝语言名不得进 坐标/称呼/职业（#108 实锤形态）。新增规则
+    往这里加——两条采集轨（正则/LLM）与人工回填校验共用单点。
+    """
+    try:
+        k = str(key or "").strip().lower()
+        v = str(value or "").strip()
+        if not v:
+            return ""
+        if k in _LANG_GUARDED_SLOTS:
+            vn = v.casefold().strip(" .。!！?？~～")
+            if vn in _LANG_NAME_SET:
+                return "lang_name"
+            # 「English语/英语课」这类带缀形态也拦（坐标/称呼语境下无合法解释）
+            if k == "location" and any(
+                    w in vn for w in _LANG_NAME_SET if len(w) >= 4):
+                return "lang_name"
+        return ""
+    except Exception:
+        return ""
 
 
 def capture_from_text(text: str) -> List[Tuple[str, str]]:
@@ -498,6 +554,10 @@ def capture_from_text(text: str) -> List[Tuple[str, str]]:
     m = _OCCUPATION_RE.search(t)
     if m and not _OCCUPATION_STOP.match(m.group(1).strip()):
         _add("occupation", m.group(1).strip())
+    if "occupation" not in seen:
+        m = _OCC_SELF_ZH_RE.search(t) or _OCC_SELF_EN_RE.search(t)
+        if m:
+            _add("occupation", m.group(1).strip())
 
     m = _AGE_RE.search(t)
     if m:

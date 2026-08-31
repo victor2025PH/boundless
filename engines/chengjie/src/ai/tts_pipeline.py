@@ -881,6 +881,40 @@ class TTSPipeline:
                 format=self.format, error="no_speakable_text",
             )
         text_s = _cleaned if _cleaned else str(text or "")
+        # ── 出站收口点·语音面（#105 实施91，2026-08-31）：呼格纠正 + 混语剥除
+        # 在**合成前**收口——音频出门后无法再改，文本收口点（orch.send/A 线
+        # 发送口）罩不住语音链正是 #105 击穿机制（英文客户听到「…without you,
+        # baba」，档案明记偏好 babe；#24 呼格守卫只装在 A/B 出稿口，主动问候
+        # 语音链裸奔）。放在 t2s/预渲染/缓存**之前**＝纠正后文本即音频身份，
+        # 键随之走零错声窗口。interactive=坐席手打逐字链豁免（所打即所念）。
+        # （pipeline 只持声音段配置拿不到全量 config → 语音面按缺省全开；
+        # 确定性/幂等/零 LLM，无名字档案的人设 vocative 天然 no-op。）
+        if text_s and not interactive:
+            try:
+                from src.ai.sendpoint_guard import presynth_text_guard
+                text_s = presynth_text_guard(
+                    text_s, persona_id=str(self.persona_id or ""))
+            except Exception:
+                pass
+        # ── 繁体 → 简体发音输入（P0-3 2026-08-31，zh-tw 零成本进克隆覆盖）────
+        # 克隆引擎按简体建模、繁简同音——只转喂给合成的文本，展示层（译稿/
+        # 消息记录）不动；日文/粤语/非中文主体在转换器内建豁免，backend 非
+        # 克隆链不转。转换发生在预渲染/缓存查找之前＝键随简体文本走，两种
+        # 写法的同一句话天然共享同一份音频。opt-out：avatar_voice.clone_t2s:false。
+        _t2s_applied = False
+        if text_s and self._clone_t2s_enabled():
+            try:
+                from src.ai.lang_voice_route import (
+                    is_clone_backend,
+                    to_simplified_for_tts,
+                )
+                if is_clone_backend(self._effective_backend()):
+                    _conv = to_simplified_for_tts(text_s)
+                    if _conv != text_s:
+                        text_s = _conv
+                        _t2s_applied = True
+            except Exception:
+                pass
         if emotion is not None:
             spec = coerce_emotion(emotion)
         elif self.emotion_enabled:

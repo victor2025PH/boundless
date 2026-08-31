@@ -137,6 +137,15 @@ _PROBES: Dict[str, _Probe] = {
     # 反向消费（2026-07-31）：人设级发图开关开 → 「没有发照片功能」默认约束必须消失
     "capabilities.photos": _Probe(True, "你没有发照片/图片的功能", mode="absent"),
     "emotion.frustrated_response": _Probe("探针安抚先道歉", "探针安抚先道歉"),
+    # 粤语人设（2026-08-30）：voice_profile 里唯一进 prompt 的键——cantonese 注入
+    # 全程粤语书写块；哨兵值是枚举而非随机串（消费逻辑只认 cantonese）
+    "voice_profile.dialect_flavor": _Probe("cantonese", "【语言·粤语人设】"),
+    # #24 称呼双向硬钉子（0830 batchB 登记消费、0831 补哨兵）：_build_address_pin
+    # 把两字段各渲染成一行硬约束（babe/baba 互换实锤的 prompt 第一道）
+    "names.call_peer": _Probe("probe_callpeer_babe",
+                              "「probe_callpeer_babe」——要用爱称时只用它"),
+    "names.peer_calls_you": _Probe("probe_peercalls_baba",
+                                   "「probe_peercalls_baba」——那是对方叫"),
 }
 
 # 豁免字段的哨兵：这些值出现在 prompt 里就是泄漏（运行时配置 / 内部 id /
@@ -145,11 +154,11 @@ _EXEMPT_PROBES: Dict[str, Any] = {
     "id": "probe_exempt_profile_id",
     "_mrpa_source": "probe_exempt_mrpa_source",
     "tags": ["probe_exempt_tag"],
-    "voice_profile": {
-        "backend": "probe_exempt_backend",
-        "voice": "probe_exempt_voice",
-        "reference_audio_path": "D:/probe_exempt_ref.wav",
-    },
+    # voice_profile 按**子键**逐条设（不能整块 dict）：_sample_persona 先设 _PROBES
+    # 再设本表，整块赋值会覆盖掉 voice_profile.dialect_flavor 的消费探针（2026-08-30）
+    "voice_profile.backend": "probe_exempt_backend",
+    "voice_profile.voice": "probe_exempt_voice",
+    "voice_profile.reference_audio_path": "D:/probe_exempt_ref.wav",
     "location": "probe_exempt_location_slug",
     "life_arc": {
         "theme": "probe_exempt_arc_theme",

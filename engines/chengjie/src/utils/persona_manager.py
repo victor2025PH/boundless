@@ -69,6 +69,11 @@ PROMPT_CONSUMED_FIELDS = frozenset({
     # #24（0830 skuio 实锤）：称呼双向硬钉子——「你叫对方 X／对方叫你 Y」
     # 绝不互换；档案称呼显式压过记忆推断（详见 full/compact 两处注入块）。
     "names.call_peer", "names.peer_calls_you",
+    # 语音配置里唯一进 prompt 的键（2026-08-30 粤语人设）：仅出货档
+    # cantonese → 注入「全程粤语书写」块。未出货方言（闽南/川渝/…）在
+    # normalize 时清掉，不得进 prompt、不得走口音假装。
+    # voice_profile 其余键仍整块豁免（见 PROMPT_EXEMPT_FIELDS）。
+    "voice_profile.dialect_flavor",
     # 已撤销的旧设定（2026-08-03「删除不干净」事故链）：运营删掉某设定后，
     # 会话历史窗口里的旧轮次仍会诱导 LLM 复读（客户甚至会主动灌「你上次给我看过
     # 你的猫」这类假记忆钩子）。本字段显式注入「这些旧设定已作废，绝不再认领」，
@@ -87,6 +92,7 @@ PROMPT_EXEMPT_FIELDS = frozenset({
     "_mrpa_source",          # 导入来源标记，纯内部血缘
     "tags",                  # 运营分组/路由元数据（Studio 筛选、bulk_bind），非人设事实
     "voice_profile",         # TTS 后端/音色/参考音路径：语音链运行时配置
+                             # （例外：dialect_flavor 已挪 CONSUMED——粤语档进 prompt）
     # 由**其它子系统**各自拼块注入，这里注入会形成双源真相
     "location",              # persona_location：本地时钟/天气/场景块的单一事实源
     "life_arc",              # deep_persona：L1 生活线按 stride_days 派生自己的块
@@ -1573,6 +1579,13 @@ class PersonaManager:
         for _k in ("speaking", "identity", "boundaries", "emotion", "context"):
             if _k in out and not isinstance(out[_k], dict):
                 out[_k] = {}
+        vp = out.get("voice_profile")
+        if isinstance(vp, dict) and "dialect_flavor" in vp:
+            from src.ai.cosy_dialect import normalize_dialect_flavor
+            vp = dict(vp)
+            vp["dialect_flavor"] = normalize_dialect_flavor(
+                str(vp.get("dialect_flavor") or ""))
+            out["voice_profile"] = vp
         return out
 
     def _format_persona_compact(
@@ -1833,6 +1846,20 @@ class PersonaManager:
             lines.append(
                 f"【性别事实】你是{_gender}。平时不用特意声明，但被问到或需要自称时"
                 f"不能说错，也别用与之矛盾的自称。"
+            )
+
+        # ★ 粤语人设：voice_profile.dialect_flavor = cantonese 时全程粤语书写。
+        # 出站语音由 voice_lang_route 检测粤文切 CosyVoice3 <|yue|> / Edge zh-HK。
+        # 未出货方言在 normalize_profile_shape 已清掉，这里只认 cantonese。
+        from src.ai.cosy_dialect import normalize_dialect_flavor
+        _vp_dialect = normalize_dialect_flavor(
+            str(((persona.get("voice_profile") or {})
+                 .get("dialect_flavor") or "")))
+        if _vp_dialect == "cantonese":
+            lines.append(
+                "【语言·粤语人设】你面向粤语用户，默认用粤语（广东话书写形：我哋/係/"
+                "唔/嘅/咗/嗰/点解）自然交流，像地道广东人倾偈，不要写成普通话；"
+                "对方明确用普通话或其他语言时跟随对方的语言。"
             )
 
         # Western names / aliases — 让 AI 知道自己的英文名和文化名字

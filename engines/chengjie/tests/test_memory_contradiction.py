@@ -228,3 +228,85 @@ def test_stable_not_superseded_when_no_conflict(mem):
     _set_hits(mem, new, 4)
     res = mem.resolve_contradictions(uid, supersede_stable=True, stable_min_hits=2)
     assert res["stable_superseded"] == 0
+
+
+# ── #96（实施91，0831 原图 867 实锤）：第三人称/存量句式归槽 + 矛盾收敛 ──────
+
+def test_extract_third_person_age_forms():
+    """LLM 抽取的第三人称年龄句式必须归 age 槽（三条年龄条目打架的根因：
+    旧表只认第一人称/规范模板，矛盾消解全程看不见它们）。"""
+    assert extract_slot("用户今年22岁")[:2] == ("age", "22")
+    assert extract_slot("用户21岁")[:2] == ("age", "21")
+    assert extract_slot("用户今年21岁")[:2] == ("age", "21")
+    assert extract_slot("客户大概25岁")[:2] == ("age", "25")
+    # 追忆句仍排除
+    assert extract_slot("用户28岁的时候在北京") is None
+
+
+def test_extract_third_person_name_forms():
+    """新规范「客户自称X」（可不带冒号）与存量双解句式「用户称呼自己为X」
+    都归 name 槽；值首字符禁数字（防「自称22岁」误归 name）。"""
+    assert extract_slot("客户自称fei")[:2] == (SLOT_NAME, "fei")
+    assert extract_slot("用户称呼自己为fei")[:2] == (SLOT_NAME, "fei")
+    assert extract_slot("用户称呼自己为“fei”")[:2] == (SLOT_NAME, "fei")
+    assert extract_slot("客户自称22岁")[:2] != (SLOT_NAME, "22岁") \
+        if extract_slot("客户自称22岁") else True
+
+
+def test_incident_age_trio_resolves_to_newest(mem):
+    """0831 实锤三条年龄条目 → 矛盾消解保留最新（22岁），旧值标 stale。"""
+    uid = "age_trio"
+    a = _add_ts(mem, uid, "用户21岁", 1000.0)
+    b = _add_ts(mem, uid, "用户今年21岁", 2000.0)
+    c = _add_ts(mem, uid, "用户今年22岁", 3000.0)
+    res = mem.resolve_contradictions(uid)
+    assert res["superseded"] == 2
+    tiers = {row[0]: row[1] for row in mem._conn.execute(
+        "SELECT id, COALESCE(tier,'raw') FROM episodic_memory "
+        "WHERE user_id=?", (uid,)).fetchall()}
+    assert tiers[c] == "raw" and tiers[a] == "stale" and tiers[b] == "stale"
+
+
+def test_consolidate_contradictions_default_on():
+    """skill_manager 落库链的 resolve_contradictions 运行默认必须为 True
+    （#96：显式 false 可关，但缺省要能收敛矛盾条目）。"""
+    import inspect
+
+    from src.skills.skill_manager import SkillManager
+    src = inspect.getsource(SkillManager)
+    import re as _re
+    m = _re.search(
+        r"ccfg\.get\(\s*[\"']resolve_contradictions[\"']\s*,\s*(\w+)\s*\)", src)
+    assert m and m.group(1) == "True", "consolidate 矛盾消解缺省被关回去了"
+
+
+def test_legacy_sweep_scan_and_apply(tmp_path):
+    """存量清扫工具：dry-run 盘点 + --apply 收敛（矛盾/同值重复）。"""
+    import sqlite3 as _sq
+
+    from scripts.memory_legacy_sweep import scan_user, sweep_root
+
+    root = tmp_path / "data"
+    (root / "config").mkdir(parents=True)
+    store = EpisodicMemoryStore(root / "config" / "bot.db")
+    uid = "u1"
+    _add_ts(store, uid, "用户21岁", 1000.0)
+    _add_ts(store, uid, "用户今年22岁", 2000.0)
+    _add_ts(store, uid, "用户称呼自己为fei", 1500.0)
+    store.close()
+
+    conn = _sq.connect(str(root / "config" / "bot.db"))
+    conn.row_factory = _sq.Row
+    rep = scan_user(conn, uid)
+    conn.close()
+    assert rep["conflict_groups"], "矛盾组必须被盘点出来"
+    assert rep["double_parse_n"] >= 1, "双解句式必须被点名"
+
+    out = sweep_root(root, apply=True)
+    assert out["applied"].get("conflict_superseded", 0) >= 1
+    # 复扫：矛盾已收敛
+    conn2 = _sq.connect(str(root / "config" / "bot.db"))
+    conn2.row_factory = _sq.Row
+    rep2 = scan_user(conn2, uid)
+    conn2.close()
+    assert not rep2["conflict_groups"]

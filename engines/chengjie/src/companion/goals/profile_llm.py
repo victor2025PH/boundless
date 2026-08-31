@@ -254,6 +254,19 @@ async def run_llm_capture(
         allowed = {m["key"] for m in missing}
         grounded = {k: v for k, v in ground_extracted(text, data).items()
                     if k in allowed}
+        # #108（实施91）：语义体检——接地只验出处不验语义，「坐标=English」
+        # 这类「原文里确实有这个词但塞错槽」的值在此拦下（单点在 profile_slots，
+        # 正则/LLM 两轨同吃）。
+        try:
+            from src.companion.goals.profile_slots import slot_value_suspect
+            _bad = {k: slot_value_suspect(k, v) for k, v in grounded.items()}
+            for k, why in _bad.items():
+                if why:
+                    logger.info("[goal-profile-llm] 槽位值语义不合格丢弃 "
+                                "%s=%r（%s）", k, grounded[k][:20], why)
+            grounded = {k: v for k, v in grounded.items() if not _bad.get(k)}
+        except Exception:
+            pass
         if not grounded:
             return 0
         store.upsert_customer_profile(

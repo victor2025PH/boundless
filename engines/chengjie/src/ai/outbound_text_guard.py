@@ -311,10 +311,373 @@ def strip_unfounded_recall(
     return out, hits
 
 
+# ── 回忆类断言接地锁（#91，实施90 二批） ─────────────────────────────────────
+#
+# 实锤（0830 钧，会话十翼，工单 #91 已定性纯幻觉）：记忆库全空、历史无一字
+# 提过电脑，AI 当轮现编「你上次提过那台惠普OMEN电竞系列吗」还自夸「我记性
+# 可好了」。B104 只拦「首答无记忆」的新联系人；本锁覆盖**全部轮次**：凡是
+# 「你上次提过/说过 X」式回忆断言，X 必须与**用户侧历史原话或记忆条目**有
+# 内容级词汇重叠（CJK bigram / 拉丁词 / 数字，与 Phase8 memory_grounding
+# 同一口径）——对不上＝当轮现编，整句剥除。
+#
+# 保守设计（与记忆接地同哲学「宁可漏记不可错记」，此处=宁可不提不许编）：
+# - 断言内容取不出内容 token（超短）→ 放行（无从判断）；
+# - 接地语料为空（历史没传进来）→ 整体不动手（守卫缺料绝不乱杀）；
+# - 通用功能 bigram（那台/这个/时候…）不算接地证据——防「用户说过『那台』」
+#   这类停用词碰瓷让幻觉溜过；剔完没有内容 token 的断言同样放行。
+# 与 B104 的分工：B104 管「首答任何回忆措辞必编造」（零语料也拦），本锁管
+# 「有历史但断言内容对不上」；两者共用句级剥除与回退纪律。
+
+# 回忆断言标记（比 B104 的 _RECALL_ZH 宽：补「提过/发过/聊过」与「你说过你」
+# 形——B104 刻意窄是因为它零语料一刀切，本锁有接地校验兜底，可以宽进严出）
+_RECALL_CLAIM_ZH = _RECALL_ZH + (
+    "你上次提过", "你之前提过", "你提到过", "你提过", "你说过你", "你说过想",
+    "你发过", "你聊过", "你不是提过", "你跟我提过", "你和我提过",
+    "记得你提过", "你曾提过", "你那天说", "你那天提",
+)
+_RECALL_CLAIM_EN = re.compile(
+    r"\b(you (?:mentioned|said|told me|talked about)\b[^,.!?\n]{0,60}"
+    r"\b(?:before|last time|earlier|the other day)|"
+    r"(?:last time|earlier|the other day)[^,.!?\n]{0,20}"
+    r"\byou (?:mentioned|said|told me)|"
+    r"you once (?:mentioned|said|told me)|"
+    r"didn'?t you (?:say|mention|tell me))\b",
+    re.IGNORECASE,
+)
+# 英文标记**词**（供内容抽取挖除——检测正则带内容窗口，全挖会把断言内容
+# 一起挖没 → 无从接地；时间指涉词单列同挖，它们不是断言内容）。
+_RECALL_EN_MARKER_SPAN_RE = re.compile(
+    r"\b(?:you (?:mentioned|said|told me|talked about)(?:\s+that)?|"
+    r"you once (?:mentioned|said|told me)|"
+    r"didn'?t you (?:say|mention|tell me)|"
+    r"as you (?:said|mentioned)|"
+    r"remember (?:when )?you (?:said|told me|mentioned)|"
+    r"before|last time|earlier|the other day)\b",
+    re.IGNORECASE,
+)
+
+# 断言内容里不算「接地证据」的通用 bigram（功能词/指代词/时间词——用户历史里
+# 几乎必然出现过，拿它们当锚等于不设防）。刻意小而保守：删多了会把合法回忆
+# 误判成幻觉（token 剔光=放行，故这个表偏大时反而是放行偏置，安全）。
+_GENERIC_BIGRAMS = frozenset({
+    "那台", "那个", "这个", "这些", "那些", "什么", "时候", "现在", "今天",
+    "明天", "昨天", "上次", "之前", "以前", "后来", "东西", "事情", "还是",
+    "就是", "不是", "可以", "喜欢", "觉得", "知道", "咱们", "我们", "你们",
+    "怎么", "这样", "那样", "有点", "一下", "一个", "对吧", "是不",
+})
+
+
+def _recall_marker_spans(sentence: str) -> List[Tuple[int, int]]:
+    """句内全部回忆标记的 (start, end) 区间（zh 子串 + en 标记词正则）。"""
+    s = sentence or ""
+    spans: List[Tuple[int, int]] = []
+    for p in _RECALL_CLAIM_ZH:
+        start = 0
+        while True:
+            i = s.find(p, start)
+            if i < 0:
+                break
+            spans.append((i, i + len(p)))
+            start = i + len(p)
+    for m in _RECALL_EN_MARKER_SPAN_RE.finditer(s):
+        spans.append((m.start(), m.end()))
+    return spans
+
+
+def _claim_content(sentence: str) -> str:
+    """剥掉回忆标记后的断言内容（用于接地校验）。"""
+    s = sentence or ""
+    spans = sorted(_recall_marker_spans(s))
+    if not spans:
+        return s
+    out: List[str] = []
+    prev = 0
+    for a, b in spans:
+        if a > prev:
+            out.append(s[prev:a])
+        prev = max(prev, b)
+    out.append(s[prev:])
+    return " ".join(x for x in out if x)
+
+
+def _has_recall_claim(sentence: str) -> bool:
+    s = sentence or ""
+    if any(p in s for p in _RECALL_CLAIM_ZH):
+        return True
+    return bool(_RECALL_CLAIM_EN.search(s))
+
+
+def _grounding_tokens(text: str) -> Tuple[set, set]:
+    """接地 token（CJK bigram / 拉丁词+数字），复用 Phase8 记忆接地同一口径。"""
+    try:
+        from src.ai.memory_grounding import _content_tokens
+        return _content_tokens(text)
+    except Exception:
+        return set(), set()
+
+
+def strip_hallucinated_recall(
+    text: str, *,
+    user_texts: Optional[List[str]] = None,
+    memory_text: str = "",
+) -> Tuple[str, List[str]]:
+    """#91-A：回忆类断言接地锁——「你上次提过X」对不上历史/记忆即整句剥除。
+
+    ``user_texts``＝用户侧历史消息文本；``memory_text``＝情景记忆块整文。
+    语料两者皆空 → 不动手（缺料不乱杀）；命中句剥空回退原文。
+    """
+    src = text or ""
+    if not src.strip():
+        return src, []
+    corpus_parts = [str(t) for t in (user_texts or []) if str(t or "").strip()]
+    if str(memory_text or "").strip():
+        corpus_parts.append(str(memory_text))
+    if not corpus_parts:
+        return src, []
+    c_bi, c_latin = _grounding_tokens("\n".join(corpus_parts))
+    if not c_bi and not c_latin:
+        return src, []
+    hits: List[str] = []
+    kept: List[str] = []
+    for seg in _split_sentences(src):
+        if not seg:
+            continue
+        if not _has_recall_claim(seg):
+            kept.append(seg)
+            continue
+        claim = _claim_content(seg)
+        f_bi, f_latin = _grounding_tokens(claim)
+        f_bi = f_bi - _GENERIC_BIGRAMS
+        if not f_bi and not f_latin:
+            kept.append(seg)          # 断言无实词 → 无从判断，放行
+            continue
+        if (f_bi & c_bi) or (f_latin & c_latin):
+            kept.append(seg)          # 对得上原话/记忆 → 合法回忆
+            continue
+        hits.append(seg.strip())      # 现编断言 → 整句剥除
+    if not hits:
+        return src, []
+    out = _cleanup_spacing("".join(kept))
+    if not out:
+        return src, hits
+    return out, hits
+
+
+# ── #110 共同经历叙事接地锁（实施91，0831 原图 880 四连实锤）──────────────────
+#
+# #91-A 只拦「你说过/提过X」**引用式**主张；叙事式虚构（「我们一起在河边那家
+# 小海鲜店…老板一直给我们续杯」「你吃了烤大虾，我发誓你还吃了我的一半」）
+# 没有引用句形，整段绕过——同为无接地记忆主张，本锁把检测面扩到「宣称共同
+# 经历/共同事件」。两档处置：
+# ① **关系阶段闸**（最廉价确定）：stage=initial/warming（初识/试探）——刚认识
+#   不存在任何共同过去，物理世界共同经历叙事一律剥（聊天指涉「我们上次聊到」
+#   已被句形排除，不误伤）；
+# ② 阶段更深/未知：与 #91-A 同一套接地校验（句内容 token 对不上历史/记忆
+#   → 现编，剥句）。语料两者皆空且非早期阶段 → 不动手（缺料不乱杀）。
+# 句形宁窄勿宽：高频关怀问句（「你吃了吗/你吃了饭没」）、将来邀约（「下次
+# 我们一起去」）、聊天指涉（「我们上次聊到」）都在句形层排除。
+
+_SHARED_PAST_ZH_RE = re.compile(
+    # 我们一起去过/吃过/看过…（明确共同过去动作）
+    r"我们(?:一起|俩|两个人)?(?:去|吃|喝|看|逛|玩|见|住|待)过"
+    # 我们上次/那天/那晚…（过去时点锚 + 具体行为动词；聊/说不收=聊天指涉合法）
+    r"|我们(?:上次|那天|那晚|那次|当时)(?:一起)?[^。！？!?\n]{0,6}(?:去|吃|喝|看|逛|玩|坐)"
+    # 还记得我们/那家…（唤起共同记忆）
+    r"|(?:你还记得|还记得|记得)(?:我们|咱们|那)[^。！？!?\n]{0,10}(?:一起|那家|那晚|那次|店|餐厅|馆)"
+    # 第三方服务我们（老板给我们续杯——事故原形①）
+    r"|(?:老板|服务员|店家|老板娘)[^。！？!?\n]{0,10}给(?:我们|咱们)"
+    # 重返老地方（再坐在那张同样的桌子旁——事故原形④）
+    r"|再(?:去|坐在?|回到)[^。！？!?\n]{0,12}(?:同样|那家|那间|那张|老地方)"
+    # 补叙式共同用餐（你还吃了我的一半——事故原形②；裸「你吃了」刻意不收，
+    # 「你吃了吗/你吃了饭没」是最高频关怀问句）
+    r"|你还(?:吃|喝|点|尝)了"
+    r"|我发誓你[^。！？!?\n]{0,12}(?:吃|喝|点|拿)"
+    # 追忆过去时点（我仍然会想起那晚——事故原形③）
+    r"|想起(?:那晚|那天|那次)"
+    r"|想起(?:我们|咱们)[^。！？!?\n]{0,10}(?:一起|去|吃|喝|看|玩)"
+)
+_SHARED_PAST_EN_RE = re.compile(
+    r"\bremember (?:when|that time) we\b"
+    r"|\bwe (?:went|ate|visited|sat)\b[^,.!?\n]{0,40}"
+    r"\b(?:together|that (?:night|day|evening)|last (?:time|week|month))\b"
+    r"|\bthat (?:night|evening|day) we\b"
+    r"|\bwe had\b[^,.!?\n]{0,30}\bthat (?:night|day|evening)\b"
+    r"|\b(?:sit|sat) at the same table\b"
+    r"|\bwe used to\b",
+    re.IGNORECASE,
+)
+# 早期关系阶段（共同物理过去按定义不存在）——companion_relationship.STAGE_ORDER
+# 前两档；stage 值经 str 归一，未知/空不算早期（宁可走接地档不误杀）。
+_EARLY_STAGES = frozenset({"initial", "warming"})
+
+
+def _has_shared_past_claim(sentence: str) -> bool:
+    s = sentence or ""
+    return bool(_SHARED_PAST_ZH_RE.search(s) or _SHARED_PAST_EN_RE.search(s))
+
+
+def strip_ungrounded_shared_past(
+    text: str, *,
+    user_texts: Optional[List[str]] = None,
+    memory_text: str = "",
+    relationship_stage: str = "",
+) -> Tuple[str, List[str]]:
+    """#110：共同经历叙事接地锁。返回 ``(out, hits)``；命中句剥空回退原文。
+
+    早期阶段（initial/warming）命中即剥（无需语料）；其余阶段走接地校验，
+    语料缺席不动手。
+    """
+    src = text or ""
+    if not src.strip():
+        return src, []
+    stage = str(relationship_stage or "").strip().lower()
+    early = stage in _EARLY_STAGES
+    corpus_parts = [str(t) for t in (user_texts or []) if str(t or "").strip()]
+    if str(memory_text or "").strip():
+        corpus_parts.append(str(memory_text))
+    c_bi: set = set()
+    c_latin: set = set()
+    if corpus_parts:
+        c_bi, c_latin = _grounding_tokens("\n".join(corpus_parts))
+    if not early and not (c_bi or c_latin):
+        return src, []          # 非早期且无语料 → 缺料不乱杀
+    hits: List[str] = []
+    kept: List[str] = []
+    for seg in _split_sentences(src):
+        if not seg:
+            continue
+        if not _has_shared_past_claim(seg):
+            kept.append(seg)
+            continue
+        if early:
+            hits.append(seg.strip())   # 初识/试探期：共同过去按定义不存在
+            continue
+        f_bi, f_latin = _grounding_tokens(seg)
+        f_bi = f_bi - _GENERIC_BIGRAMS
+        if not f_bi and not f_latin:
+            kept.append(seg)
+            continue
+        if (f_bi & c_bi) or (f_latin & c_latin):
+            kept.append(seg)           # 对得上历史/记忆 → 真实共同语境
+            continue
+        hits.append(seg.strip())
+    if not hits:
+        return src, []
+    out = _cleanup_spacing("".join(kept))
+    if not out:
+        return src, hits
+    return out, hits
+
+
+# ── 认错口癖去重（#91-C） ────────────────────────────────────────────────────
+#
+# 实锤（同单 C 层）：「哎呀被你抓包了」被测试人点名「AI犯错都会讲」——认错
+# 话术单一模板复读，错一次说一次，油腻感直接出戏。**历史即状态**：近几条
+# assistant 消息里已用过同款口癖 → 本条换变体（确定性轮换，选近史里没出现
+# 过的；变体池确保句子结构完整，绝不裸剥留残句）。零新存储、纯函数。
+
+_APOLOGY_FAMILIES: List[Tuple[str, "re.Pattern[str]", Tuple[str, ...]]] = [
+    ("zhuabao",
+     re.compile(r"被你(?:抓包|逮到|逮个正着)(?:了)?[啦哈呀嘛~～]?"),
+     ("让你说着了", "好吧我承认", "行吧，瞒不过你", "我认栽")),
+    ("faxian",
+     re.compile(r"被你发现(?:了)?[啦哈呀嘛~～]?"),
+     ("让你看出来了", "好吧藏不住", "行吧，逃不过你的眼睛")),
+]
+_APOLOGY_RECENT_WINDOW = 8   # 只看最近 N 条 assistant 消息
+
+
+def dedup_apology_catchphrase(
+    text: str, recent_assistant_texts: Optional[List[str]] = None,
+) -> Tuple[str, List[str]]:
+    """#91-C：同会话认错口癖去重——近史用过的口癖换确定性变体。
+
+    返回 ``(out, hits)``；hits＝被替换的原口癖片段。近史缺席/未复读原样返回。
+    """
+    src = text or ""
+    if not src.strip():
+        return src, []
+    recent = [str(t) for t in (recent_assistant_texts or [])
+              if str(t or "").strip()][-_APOLOGY_RECENT_WINDOW:]
+    if not recent:
+        return src, []
+    recent_blob = "\n".join(recent)
+    hits: List[str] = []
+    out = src
+    for _fam, rx, variants in _APOLOGY_FAMILIES:
+        m = rx.search(out)
+        if not m:
+            continue
+        if not rx.search(recent_blob):
+            continue          # 近史没用过 → 本条是首次，合法
+        # 变体选择：先挑近史没出现过的；全出现过按 crc32(文本) 确定性轮换
+        # （确定性=同稿重跑同结果，缓存/重试友好）。
+        unused = [v for v in variants if v not in recent_blob]
+        pool = unused or list(variants)
+        import zlib
+        pick = pool[zlib.crc32(src.encode("utf-8", "ignore")) % len(pool)]
+        hits.append(m.group(0))
+        out = out[:m.start()] + pick + out[m.end():]
+    if not hits:
+        return src, []
+    out = _cleanup_spacing(out)
+    return (out or src), hits
+
+
+# ── 出站收口点混语兜底（#97，实施91） ────────────────────────────────────────
+#
+# 击穿实锤（0830 21:47，v1.0.63 已带 #64 修复仍出「I'm 我 the one who's still
+# here…」）：#64 把守卫挂在 A/B 出稿口 + 三条**翻译**出口，但主动触达/关怀/
+# 唤醒等 deferred 链的文案不经出稿口、英文客户又不触发翻译（「已是客户语言即
+# 跳过不译」）→ 整条 orch.send 直发路径裸奔。修法＝把确定性混语兜底装到
+# **全平台全链共过的 send 收口点**（AccountOrchestrator.send / A 线
+# sender._send_reply 经 outbound_quality_pass）——无论文本从哪条链来、中途被
+# 谁改写过，出门前必过这一道。
+#
+# 分层契约（与 #64 架构互补，不替代）：LLM 重写档在**生成端**
+# （ai_client._guard_reply_language：检出→重写→复检），收口点只做确定性剥除
+# ——send 热路径绝不挂 LLM（延迟 + 失败面；本模块头部设计原则第 1 条）。
+# 复检恒成立：hard 剥除按定义清空全部 CJK，唯一失败面是「剥后过短拒剥」
+# （hard_kept，如裸「im 我」），此时保留原文出站与 #64 行为一致（有测试钉住）。
+# **人工手打文本绝不动**——坐席刻意中英混写是人的表达（origin=manual 由调用方
+# 把关不进本函数）。
+
+
+def sendpoint_lang_mix_pass(text: str) -> Tuple[str, str]:
+    """出站收口点混语兜底（确定性、零 LLM、绝不抛）。
+
+    返回 ``(应发送文本, action)``；action ∈ ``""``（未命中/守卫不动手）、
+    ``"hard_stripped"``（拉丁主体夹 CJK 已剥）、``"hard_kept"``（命中但剥后
+    过短，保留原文）、``"soft"``（CJK 主体夹整句英文，只观测）。
+    """
+    src = text or ""
+    try:
+        if not src.strip():
+            return src, ""
+        verdict = detect_lang_mix(src)
+        action = str(verdict.get("action") or "")
+        if action == "hard":
+            stripped = strip_minority_script(src)
+            if stripped != src and stripped.strip():
+                _STATS["sendpoint_hard"] += 1
+                return stripped, "hard_stripped"
+            _STATS["sendpoint_kept"] += 1
+            return src, "hard_kept"
+        if action == "soft":
+            _STATS["sendpoint_soft"] += 1
+            return src, "soft"
+        return src, ""
+    except Exception:
+        return src, ""
+
+
 # ── 编排入口 + 配置 + 观测 ───────────────────────────────────────────────────
 
 _STATS: Dict[str, int] = {"monologue": 0, "lang_mix_hard": 0, "lang_mix_soft": 0,
-                          "unfounded_recall": 0}
+                          "unfounded_recall": 0, "recall_grounding": 0,
+                          "shared_past": 0, "apology_dedup": 0,
+                          "sendpoint_hard": 0, "sendpoint_kept": 0,
+                          "sendpoint_soft": 0}
 
 
 def guard_stats() -> Dict[str, int]:
@@ -322,7 +685,12 @@ def guard_stats() -> Dict[str, int]:
 
 
 def resolve_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, bool]:
-    """读 ``companion.outbound_text_guard``；暴露风险守卫族默认开。"""
+    """读 ``companion.outbound_text_guard``；暴露风险守卫族默认开。
+
+    ``vocative``/``lang_pin``（实施91 #105/#106）＝收口点呼格纠正与铆定语言
+    兜底的子开关（消费方在 ``sendpoint_guard``，与本模块共用同一配置段——
+    收口点守卫是一个家族，开关不散落两处）。
+    """
     raw: Dict[str, Any] = {}
     try:
         raw = (((config or {}).get("companion") or {})
@@ -336,27 +704,42 @@ def resolve_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, bool]:
         "monologue": bool(raw.get("monologue", True)),
         "lang_mix": bool(raw.get("lang_mix", True)),
         "unfounded_recall": bool(raw.get("unfounded_recall", True)),
+        "recall_grounding": bool(raw.get("recall_grounding", True)),
+        "apology_dedup": bool(raw.get("apology_dedup", True)),
+        "vocative": bool(raw.get("vocative", True)),
+        "lang_pin": bool(raw.get("lang_pin", True)),
+        "shared_past": bool(raw.get("shared_past", True)),
     }
 
 
 def apply_outbound_text_guard(
     text: str, cfg: Optional[Dict[str, bool]] = None, *,
     user_turns: Optional[int] = None, has_memory: bool = False,
+    user_texts: Optional[List[str]] = None, memory_text: str = "",
+    recent_assistant_texts: Optional[List[str]] = None,
+    relationship_stage: str = "",
 ) -> Tuple[str, Dict[str, Any]]:
-    """出稿口统一入口：旁白 → 无出处引用 → 混语，返回 (清洗后文本, 命中元数据)。
+    """出稿口统一入口：旁白 → 无出处引用 → 回忆接地 → 共同经历 → 认错去重 → 混语。
 
     meta = ``{"monologue_hits": [...], "recall_hits": [...],
+    "recall_grounding_hits": [...], "shared_past_hits": [...],
+    "apology_hits": [...],
     "lang_mix": ""|"soft"|"hard_stripped"|"hard_kept"}``。
-    ``user_turns``/``has_memory`` 供 B104（调用方不传＝该守卫整体不动手）。
-    任何内部异常返回原文（调用方兜 try 双保险）。
+    ``user_turns``/``has_memory`` 供 B104；``user_texts``/``memory_text`` 供
+    #91-A/#110 接地锁；``recent_assistant_texts`` 供 #91-C 口癖去重；
+    ``relationship_stage`` 供 #110 关系阶段闸（各自缺料时对应守卫整体
+    不动手）。任何内部异常返回原文（调用方兜 try 双保险）。
     """
     meta: Dict[str, Any] = {"monologue_hits": [], "recall_hits": [],
+                            "recall_grounding_hits": [],
+                            "shared_past_hits": [], "apology_hits": [],
                             "lang_mix": ""}
     src = text or ""
     if not src.strip():
         return src, meta
     c = cfg or {"enabled": True, "monologue": True, "lang_mix": True,
-                "unfounded_recall": True}
+                "unfounded_recall": True, "recall_grounding": True,
+                "apology_dedup": True, "shared_past": True}
     if not c.get("enabled", True):
         return src, meta
     out = src
@@ -371,6 +754,29 @@ def apply_outbound_text_guard(
         if rhits:
             meta["recall_hits"] = rhits
             _STATS["unfounded_recall"] += 1
+    # #91-A：回忆断言接地（B104 之后——首答一刀切已把零轮场景清掉，这里
+    # 管有历史但断言内容对不上的现编）。
+    if c.get("recall_grounding", True):
+        out, ghits = strip_hallucinated_recall(
+            out, user_texts=user_texts, memory_text=memory_text)
+        if ghits:
+            meta["recall_grounding_hits"] = ghits
+            _STATS["recall_grounding"] += 1
+    # #110：共同经历叙事接地锁（#91-A 的语法盲区——「我们一起…」叙事式虚构
+    # 不带引用句形；初识/试探期直接禁，深阶段走接地）。
+    if c.get("shared_past", True):
+        out, shits = strip_ungrounded_shared_past(
+            out, user_texts=user_texts, memory_text=memory_text,
+            relationship_stage=relationship_stage)
+        if shits:
+            meta["shared_past_hits"] = shits
+            _STATS["shared_past"] += 1
+    # #91-C：认错口癖同会话去重（换变体不裸剥，句子结构恒完整）。
+    if c.get("apology_dedup", True):
+        out, ahits = dedup_apology_catchphrase(out, recent_assistant_texts)
+        if ahits:
+            meta["apology_hits"] = ahits
+            _STATS["apology_dedup"] += 1
     if c.get("lang_mix", True):
         verdict = detect_lang_mix(out)
         if verdict["action"] == "hard":

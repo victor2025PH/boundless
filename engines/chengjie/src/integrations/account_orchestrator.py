@@ -511,8 +511,11 @@ class AccountOrchestrator:
             platform, account_id, config=self._config, registry=self._registry,
             chat_key=str(chat_key or ""), origin=str(origin or "auto"))
         if _blk:
-            logger.warning("[orchestrator] 媒体发送被护栏拦截 %s:%s (%s, origin=%s)",
-                           platform, account_id, _reason, origin)
+            # #77（0830 AW7MUV 实锤）：拦截日志必须带目标 peer——只记账号时
+            # 「拦的是白名单客户还是其他客户」无从定性，豁免生效与否不可验证。
+            logger.warning(
+                "[orchestrator] 媒体发送被护栏拦截 %s:%s → peer=%s (%s, origin=%s)",
+                platform, account_id, chat_key, _reason, origin)
             return {"delivered": False, "blocked": _reason}
         m = self._managed.get(account_key(platform, account_id))
         if not (m is not None and m.state == "running"
@@ -605,9 +608,69 @@ class AccountOrchestrator:
             platform, account_id, config=self._config, registry=self._registry,
             chat_key=str(chat_key or ""), origin=str(origin or "auto"))
         if _blk:
-            logger.warning("[orchestrator] 发送被护栏拦截 %s:%s (%s, origin=%s)",
-                           platform, account_id, _reason, origin)
+            # #77：拦截日志带目标 peer（同媒体路径，白名单豁免可验证性）
+            logger.warning(
+                "[orchestrator] 发送被护栏拦截 %s:%s → peer=%s (%s, origin=%s)",
+                platform, account_id, chat_key, _reason, origin)
             return {"delivered": False, "blocked": _reason}
+        # #97/#105/#106（实施91）：出站收口点守卫三连——L2 autosend / 主动触达 /
+        # 关怀 / 唤醒等全部**自动链**经编排器出门前统一过检：①混语确定性剥除
+        # （0830 击穿实锤：deferred 链英文文案不经出稿口也不触发翻译出口，
+        # 「I'm 我 …」直发英文客户）；②呼格纠正（peer_calls_you→call_peer 互换 +
+        # call_peer 近形 baba→babe + 人设名当客户呼格剥除——#105 语音问候链、
+        # #96 Steven 案的文本面同款病）；③铆定语言兜底（B67「发→X」explicit ×
+        # 文字系统冲突 → 注入的翻译器修正；HOLD=放弃本条，无兜底纪律）。
+        # **人工路径绝不动**（origin=manual 是坐席亲手打的字/人审后的终稿）；
+        # 开关随 companion.outbound_text_guard.{enabled,lang_mix,vocative,
+        # lang_pin}（默认开）。
+        if str(origin or "auto") != "manual" and text:
+            try:
+                from src.ai.outbound_text_guard import (
+                    resolve_cfg as _otg_cfg, sendpoint_lang_mix_pass)
+                _g = _otg_cfg(self._config)
+                if _g.get("enabled", True) and _g.get("lang_mix", True):
+                    _clean, _act = sendpoint_lang_mix_pass(text)
+                    if _act == "hard_stripped":
+                        logger.warning(
+                            "[orchestrator] 发送口混语兜底已剥 CJK（#97）"
+                            " %s:%s → peer=%s: %r → %r",
+                            platform, account_id, chat_key,
+                            text[:60], _clean[:60])
+                        text = _clean
+                    elif _act == "hard_kept":
+                        logger.warning(
+                            "[orchestrator] 发送口混语命中但剥后过短，保留原文"
+                            "（#97） %s:%s: %r",
+                            platform, account_id, text[:60])
+                if _g.get("enabled", True) and _g.get("vocative", True):
+                    from src.ai.sendpoint_guard import (
+                        resolve_sendpoint_names, sendpoint_vocative_pass)
+                    _nm = resolve_sendpoint_names(
+                        self._config, platform, account_id,
+                        str(chat_key or ""), registry=self._registry)
+                    if _nm:
+                        _vt, _vm = sendpoint_vocative_pass(text, _nm)
+                        if _vt != text:
+                            logger.warning(
+                                "[orchestrator] 发送口呼格已纠正（#105/#96）"
+                                " %s:%s → peer=%s: swap=%s near=%s self=%s",
+                                platform, account_id, chat_key,
+                                _vm.get("swap_hits"), _vm.get("near_hits"),
+                                _vm.get("self_voc_hits"))
+                            text = _vt
+                if _g.get("enabled", True) and _g.get("lang_pin", True):
+                    from src.ai.sendpoint_guard import sendpoint_lang_pin_fix
+                    _pt, _pact = await sendpoint_lang_pin_fix(
+                        platform, account_id, str(chat_key or ""), text)
+                    if _pt is None:
+                        # HOLD：发错语言比不发更糟（2026-08-17 无兜底纪律）
+                        return {"delivered": False,
+                                "blocked": "lang_pin_hold"}
+                    if _pt != text:
+                        text = _pt
+            except Exception:
+                logger.debug("[orchestrator] 收口点守卫异常（原样放行）",
+                             exc_info=True)
         m = self._managed.get(account_key(platform, account_id))
         if not (m is not None and m.state == "running"
                 and m.worker is not None and hasattr(m.worker, "send")):

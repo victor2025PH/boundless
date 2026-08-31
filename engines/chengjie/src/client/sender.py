@@ -274,7 +274,8 @@ class TelegramSenderMixin:
 
     # ── 统一发送护栏/节流/记账（A 线文本回复 + 形象照直发共用一套，防图文混发绕过风控） ──
 
-    def _presend_blocked(self, *, is_autoreply: bool = False) -> bool:
+    def _presend_blocked(self, *, is_autoreply: bool = False,
+                         peer: Any = None) -> bool:
         """发送前统一护栏：G1 全局 Kill-Switch + N 线反封号闸门 + 账号限速/熔断 + 营业时段。
 
         返回 True=应跳过本次外发（冻结/被闸门拦）；任何异常一律静默放行（绝不因护栏自身报错阻断发送）。
@@ -283,6 +284,12 @@ class TelegramSenderMixin:
         ``is_autoreply``：True=本次是「入站自动回复」（受营业时段 hours 约束——非营业时段
         转人工不自动发）；False=主动发/坐席接管/编排器/测试（只受限速与急停，不被时段拦，
         坐席深夜也能联系客户）。限速（时/日上限+熔断）对两类外发一律生效（账号级安全）。
+
+        ``peer``（#77，0830 AW7MUV 实锤）：本次发送的目标 chat id（可选）。两用：
+        ① 反封号闸门接 ``exempt_peers`` 白名单豁免——此前 A 线**完全没接**白名单
+        （B 线/编排器早有），白名单客户的 A 线自动回复照样被 daily_cap 拦；
+        ② 拦截日志带目标 peer（「拦的是白名单客户还是别人」从此可定性）。
+        不传＝行为与旧版一致（无豁免、日志无 peer）。
         """
         # License 到期硬阻断（Sprint2）：enforce 开且授权失效(只读) → 跳过 A 线外发。
         # 默认 enforce=false → 恒放行，零破坏；fail-open。
@@ -341,9 +348,18 @@ class TelegramSenderMixin:
             pass
         # ── 反封号健康闸门（预热 cap + 红黄绿灯）──
         try:
-            from src.skills.companion_send_gate import evaluate, gate_enabled
+            from src.skills.companion_send_gate import (
+                evaluate, gate_enabled, peer_exempt,
+            )
             from src.skills.account_signals import build_account_signals
             if gate_enabled(_gcfg):
+                # #77：exempt_peers 白名单豁免——A 线此前没接（B 线/编排器早有），
+                # 白名单客户的 A 线自动回复照样被额度拦。命中即放行 + INFO 留痕。
+                if peer is not None and peer_exempt(_gcfg, str(peer)):
+                    self.logger.info(
+                        "[send_gate] 白名单豁免命中 telegram:%s → peer=%s"
+                        "（本次发送不受额度限制）", _acct, peer)
+                    return False
                 # N3 修：A 线此前只传 limiter，缺 registry → age_days/banned/status 恒缺省，
                 # 使「号被封禁/移除」无法自动停发（反封号闸门形同虚设）。补传 registry，
                 # 让 banned=meta.banned or status==removed 真正生效（best-effort，取不到不阻断）。
@@ -361,10 +377,12 @@ class TelegramSenderMixin:
                 )
                 _dec = evaluate(_sig, _gcfg)
                 if not _dec.get("allowed", True):
+                    # #77：日志带目标 peer——「拦的是谁」从此可定性
                     self.logger.warning(
-                        "[send_gate] 账号 %s 被反封号闸门拦截: %s (light=%s, score=%s)",
-                        _sig["account_id"], _dec.get("reason"),
-                        _dec.get("light"), _dec.get("score"),
+                        "[send_gate] 账号 %s 被反封号闸门拦截 → peer=%s: %s "
+                        "(light=%s, score=%s)",
+                        _sig["account_id"], peer if peer is not None else "?",
+                        _dec.get("reason"), _dec.get("light"), _dec.get("score"),
                     )
                     return True
         except Exception:
@@ -765,7 +783,10 @@ class TelegramSenderMixin:
         try:
             # 统一发送前护栏（与 send_photo 共用）：G1 Kill-Switch + 反封号闸门 + 限速 + 营业时段。
             # 这是「入站自动回复」路径 → is_autoreply=True（受营业时段约束；主动发/编排器不受时段拦）。
-            if self._presend_blocked(is_autoreply=True):
+            if self._presend_blocked(
+                    is_autoreply=True,
+                    peer=getattr(getattr(original_message, "chat", None),
+                                 "id", None)):
                 return
             # 拟人已读回执：回复前先「看」消息（对端由未读变已读），再节流/发送。
             await self._mark_peer_read(
@@ -787,6 +808,49 @@ class TelegramSenderMixin:
                     persona_name=self._persona_display_name())
             except Exception:
                 pass
+            # #105/#106（实施91）：A 线原生回复的收口点守卫余下两连——呼格纠正
+            # + 铆定语言兜底（混语已在 outbound_quality_pass 内）。A 线不经
+            # 编排器，orch.send 的收口点罩不到这条链（#106 击穿机制：B67
+            # 「发→英」在 A 线从无消费点，图片轮三连纯中文直发英文铆定会话）。
+            # 开关随 companion.outbound_text_guard.{vocative,lang_pin}。
+            try:
+                from src.ai.outbound_text_guard import resolve_cfg as _sp_cfg
+                _sp_conf = getattr(self, "config", None) or {}
+                _spg = _sp_cfg(_sp_conf)
+                _sp_chat = str(getattr(
+                    getattr(original_message, "chat", None), "id", "") or "")
+                _sp_acct = str(
+                    getattr(self, "account_id", "default") or "default")
+                if _spg.get("enabled", True) and _spg.get("vocative", True):
+                    from src.ai.sendpoint_guard import (
+                        resolve_sendpoint_names, sendpoint_vocative_pass)
+                    _nm = resolve_sendpoint_names(
+                        _sp_conf, "telegram", _sp_acct, _sp_chat)
+                    if _nm:
+                        _vt, _vm = sendpoint_vocative_pass(_out_text, _nm)
+                        if _vt != _out_text:
+                            self.logger.warning(
+                                "[sendpoint] A 线呼格已纠正（#105/#96）"
+                                "chat=%s: swap=%s near=%s self=%s",
+                                _sp_chat, _vm.get("swap_hits"),
+                                _vm.get("near_hits"),
+                                _vm.get("self_voc_hits"))
+                            _out_text = _vt
+                if _spg.get("enabled", True) and _spg.get("lang_pin", True):
+                    from src.ai.sendpoint_guard import sendpoint_lang_pin_fix
+                    _pt, _pact = await sendpoint_lang_pin_fix(
+                        "telegram", _sp_acct, _sp_chat, _out_text)
+                    if _pt is None:
+                        # HOLD：发错语言比不发更糟（无兜底纪律）；本条放弃。
+                        self.logger.warning(
+                            "[sendpoint] A 线铆定语言 HOLD，本条不发 chat=%s: %r",
+                            _sp_chat, _out_text[:60])
+                        return
+                    if _pt != _out_text:
+                        _out_text = _pt
+            except Exception:
+                self.logger.debug("[sendpoint] A 线收口点守卫异常（原样放行）",
+                                  exc_info=True)
             # WP-4 rider ① 系统级披露（compliance.disclosure.notice，基线关）：
             # 每会话首条 AI 出站前置披露语，持久防重键=conv_id（与 B 线 autosend /
             # 协议线/主动触达同键空间——任一条线先披露过，其余线不再重复）。刻意
@@ -824,6 +888,9 @@ class TelegramSenderMixin:
             # 统一发送后记账（与 send_photo 共用）：刷新墙钟 + 记入共用发送计数器
             # （喂反封号闸门 + 机群健康灯今日外发量，best-effort 绝不阻断发送）。
             self._postsend_record_count()
+            # #88：A 线自动回复送达成功也要清 dead-peer 标——此前只有主动外发/
+            # 手动路由清，自动回复一直在送达、黄条却赖着不走（Yhang 实锤）。
+            self._dead_peer_clear_on_delivery(original_message.chat.id)
             # N4b 出站镜像（坐席台）+ Q3 contacts 外发互动（mutuality）——与富媒体共用一处。
             # 带回真实 message.id 作幂等键，乐观镜像行与回显共用主键 → 精确去重。
             self._postsend_mirror_and_record(
@@ -982,6 +1049,22 @@ class TelegramSenderMixin:
                 self._handle_send_exc(e2)
             return None
 
+    def _dead_peer_clear_on_delivery(self, chat_id: Any) -> None:
+        """#88：真实送达=可达铁证 → 清 dead-peer 标（gated；未标/未启用 no-op）。
+
+        0830 skuio 实锤（工单 #88）：#73 的清标只挂了 ``_send_text_guarded``
+        （主动外发）与手动路由——A 线**自动回复**（``_send_reply``）与媒体直发
+        （send_photo / send_voice_file）送达成功时标记纹丝不动 → Yhang 会话消息
+        18:38 双勾送达、黄条「曾被对方拉黑」仍常驻。任何真实送达路径都必须清。
+        """
+        try:
+            _on, _reg = self._dead_peer_guard()
+            if _on and _reg is not None and _reg.unblock("telegram", chat_id):
+                self.logger.info(
+                    "[dead-peer] 送达成功，已解除 %s 的不可达标记", chat_id)
+        except Exception:
+            pass
+
     def _dead_peer_guard(self):
         """死 peer 登记表守卫（gated on ``ops.dead_peer_registry.enabled``，默认关）。
 
@@ -1034,7 +1117,7 @@ class TelegramSenderMixin:
             return False, None
         try:
             # 统一发送前护栏：G1 Kill-Switch + N 线反封号闸门（与 _send_reply/send_photo 共用）
-            if self._presend_blocked():
+            if self._presend_blocked(peer=chat_id):
                 return False, None
             await self._presend_pace()
             if not self.client:
@@ -1042,15 +1125,9 @@ class TelegramSenderMixin:
                 return False, None
             _sent = await self.client.send_message(chat_id, text)
             self._postsend_record_count()
-            # #73：真实送达=可达铁证 → 清 dead-peer 标（覆盖 TTL 放行探路成功
-            # 后的复位；未标记/未启用时 no-op）。
-            if _dp_on and _dp_reg is not None:
-                try:
-                    if _dp_reg.unblock("telegram", chat_id):
-                        self.logger.info(
-                            "[dead-peer] 送达成功，已解除 %s 的不可达标记", chat_id)
-                except Exception:
-                    pass
+            # #73/#88：真实送达=可达铁证 → 清 dead-peer 标（覆盖 TTL 放行探路
+            # 成功后的复位；未标记/未启用时 no-op）。
+            self._dead_peer_clear_on_delivery(chat_id)
             self.logger.info("已发送消息到 %s: %s...", chat_id, text[:50])
             return True, _sent
         except Exception as e:
@@ -1120,7 +1197,7 @@ class TelegramSenderMixin:
             if not photo_path:
                 return False
             # 统一发送前护栏（与文本回复共用）：冻结/被反封号闸门拦 → 不发，避免图绕过风控。
-            if self._presend_blocked():
+            if self._presend_blocked(peer=chat_id):
                 self.logger.info("照片发送被发送前护栏拦截，跳过（chat=%s）", chat_id)
                 return False
             # 统一节流：与文本共用墙钟，图文混发也排队（不瞬时双发触发反垃圾）。
@@ -1146,6 +1223,7 @@ class TelegramSenderMixin:
                     pass
             # 统一记账：刷新墙钟 + 记入共用计数器（照片也计入今日外发量，反封号不漏算）。
             self._postsend_record_count()
+            self._dead_peer_clear_on_delivery(chat_id)   # #88 媒体送达同清标
             # 出站镜像 + contacts 记账：坐席台看见「AI 发了图」、亲密度计入这次外发。
             # 带 media_ref → 工作台渲染成**真图**而不只是一行「[图片] 配文」；
             # 发布用 canonical 原图（不是去重微扰出的临时副本，那个已被删掉）。
@@ -1181,7 +1259,7 @@ class TelegramSenderMixin:
                 return False
             if not voice_path:
                 return False
-            if self._presend_blocked():
+            if self._presend_blocked(peer=chat_id):
                 self.logger.info("语音文件发送被发送前护栏拦截，跳过（chat=%s）", chat_id)
                 return False
             await self._presend_pace()
@@ -1199,6 +1277,7 @@ class TelegramSenderMixin:
                 return False
             # 发送已成功——之后的记账/镜像失败绝不能把「已送达」误报成 False
             # （调用方会回落文字=客户收到双份）。
+            self._dead_peer_clear_on_delivery(chat_id)   # #88 语音送达同清标
             try:
                 self._postsend_record_count()
                 _note = (mirror_note or "").strip() or "[语音]"
@@ -1463,7 +1542,9 @@ class TelegramSenderMixin:
 
             # 统一发送前护栏（与文本/照片共用）：冻结/被反封号闸门拦 → 不出语音、也不白跑 TTS。
             # 返回 False → 调用方回退文本 _send_reply，文本同样会被护栏拦 → 冻结期彻底静默。
-            if self._presend_blocked():
+            if self._presend_blocked(
+                    peer=getattr(getattr(original_message, "chat", None),
+                                 "id", None)):
                 self.logger.info("[voice_reply] skip: 发送前护栏拦截（kill-switch/反封号闸门）")
                 return False
 

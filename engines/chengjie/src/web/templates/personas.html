@@ -1102,6 +1102,10 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
       <div class="field-row"><label title="{{ (i18n or {}).get('psn_pf_name_callpeer_tip','AI 对客户的固定爱称（如 babe）——注入为硬约束，绝不跟着客户的叫法互换，并压过 AI 推断记忆') }}">{{ (i18n or {}).get('psn_pf_name_callpeer','你称呼对方（爱称）') }}</label><input id="pe-pf-name-callpeer" type="text" placeholder="babe"></div>
       <div class="field-row"><label title="{{ (i18n or {}).get('psn_pf_name_peercalls_tip','客户对 AI 的称呼（如 baba）——那是对方叫 AI 的，AI 绝不会拿它反过来称呼客户') }}">{{ (i18n or {}).get('psn_pf_name_peercalls','对方称呼你') }}</label><input id="pe-pf-name-peercalls" type="text" placeholder="baba"></div>
     </div>
+    {# #104（0831）：所在地字段——此前仅 YAML 可配，客户端无入口 → 天气/时差接地对运营不可达 #}
+    <div class="ps-row">
+      <div class="field-row"><label title="{{ (i18n or {}).get('psn_pf_location_tip','人设常驻城市（如 马尼拉 / Vancouver）——驱动当地时间、时差桥与真实天气接地（不填则从背景文本自动推断；填 none 显式关闭）') }}">{{ (i18n or {}).get('psn_pf_location','所在地（城市）') }}</label><input id="pe-pf-location" type="text" placeholder="Manila"></div>
+    </div>
     <div class="pf-hd">{{ (i18n or {}).get('psn_pf_g_background','背景故事') }}</div>
     <div class="field-row">
       <label>{{ (i18n or {}).get('psn_pf_g_background','背景故事') }} <span class="pf-cnt" id="pe-pf-bg-count"></span></label>
@@ -3987,6 +3991,22 @@ function _fillProfileTabFields(p, persObj) {
   _pfSetVal('pe-pf-name-usage-notes', nms.usage_notes);
   _pfSetVal('pe-pf-name-callpeer', nms.call_peer);
   _pfSetVal('pe-pf-name-peercalls', nms.peer_calls_you);
+  // #104 所在地：字符串直填；dict（自定义 lat/lon，仅 YAML 可配）取展示名回填，
+  // 并记录填入基准——collect 端「dict 且未改」不出键，防精确坐标被覆写成字符串
+  (function(){
+    var locEl = document.getElementById('pe-pf-location');
+    if (!locEl) return;
+    var lv = '';
+    var isDict = false;
+    if (typeof p.location === 'string') { lv = p.location; }
+    else if (p.location && typeof p.location === 'object' && !Array.isArray(p.location)) {
+      isDict = true;
+      lv = String(p.location.city || p.location.slug || p.location.name || '');
+    }
+    locEl.value = lv;
+    locEl.dataset.orig = lv;
+    locEl.dataset.origDict = isDict ? '1' : '';
+  })();
   _pfSetVal('pe-pf-background', p.background);
   _pfSetLines('pe-pf-memories', ctx.specific_memories);
   _pfSetLines('pe-pf-hobbies', ctx.hobbies);
@@ -4052,6 +4072,16 @@ function _collectProfileTabPatch() {
     if (v || _pfNonEmpty(_pfOrig('names', pair[1]))) namesOut[pair[1]] = v;
   });
   if (Object.keys(namesOut).length) patch.names = namesOut;
+  // #104 所在地：字符串城市名（引擎按 CITY_PRESETS/文本推断解析；"none"=显式关）。
+  // 原值为 dict（自定义 lat/lon）且输入未改 → 不出键（防覆写精确坐标）。
+  (function(){
+    var locEl = document.getElementById('pe-pf-location');
+    if (!locEl) return;
+    var lv = (locEl.value || '').trim();
+    var wasDict = locEl.dataset.origDict === '1';
+    if (wasDict && lv === (locEl.dataset.orig || '')) return;
+    if (lv || _pfNonEmpty(_pfOrig('location'))) patch.location = lv;
+  })();
   // 顶层字符串
   var bg = _pfStr('pe-pf-background');
   if (bg || _pfNonEmpty(_pfOrig('background'))) patch.background = bg;
@@ -7687,7 +7717,7 @@ function openCreateFlow() {
 </script>
 {# ── P1/P2 功能模块(独立静态文件,personas.html 拆分的起点)─────────────────── #}
 <script src="/static/js/persona_studio_core.js?v=20260730a"></script>
-<script src="/static/js/persona_apply_modal.js?v=p1"></script>
+<script src="/static/js/persona_apply_modal.js?v=p2"></script>
 <script src="/static/js/persona_create_wizard.js?v=p1"></script>
 <script src="/static/js/persona_chat_test.js?v=20260731b"></script>
 <script src="/static/js/persona_health_panel.js?v=p2"></script>
@@ -7696,12 +7726,12 @@ function openCreateFlow() {
      as unified_inbox). sidebar-chrome deliberately not loaded: cp-voice icons
      degrade to text gracefully. -->
 <script>window.CP_LANG = document.documentElement.getAttribute('lang') || 'zh';</script>
-<script src="/copilot/i18n/cp-i18n.js?v=20260827c"></script>
+<script src="/copilot/i18n/cp-i18n.js?v=20260831a"></script>
 {% if ui_lang|default('zh') in ('zh_hant', 'vi', 'th', 'id') %}
-<script src="/copilot/i18n/cp-i18n-ext.{{ ui_lang }}.js?v=20260827b"></script>
+<script src="/copilot/i18n/cp-i18n-ext.{{ ui_lang }}.js?v=20260831a"></script>
 {% endif %}
-<script src="/copilot/client/copilot-client.js?v=20260818c"></script>
-<script src="/copilot/components/cp-voice.js?v=20260827c"></script>
+<script src="/copilot/client/copilot-client.js?v=20260830y"></script>
+<script src="/copilot/components/cp-voice.js?v=20260831a"></script>
 <script>
 /* B25-1 glue (ASCII only per page gate): status line + unbind + component mount.
    Hook = _fillDrawerFields wrapper (single funnel: editor-open + JSON-import). */

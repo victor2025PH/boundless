@@ -45,18 +45,49 @@ _SYNTHESIZE_TIMEOUT_SEC: float = 120.0       # P15-B: hard timeout per synthesis
 # 覆盖 400 字顶格输入（tts-test/cp-voice 同一上限）。fast 档=edge 试听，秒回
 # 链路维持 15s 不变。tts-test 与 send-voice 必须同用本函数（试听=发送契约：
 # 同一段文字不能「试听得出来、发送发不出」）。
+#
+# #102（实施91，0831）：0.45s/字是**中文**合成速率口径——「跟随翻译发声」的
+# 日/韩译稿单字显著更慢（网关账实锤：ja 33 字三连 17.6~28.0s ≈ 0.53~0.85s/字，
+# 服务端全 200、引擎预算先到期，成品白扔）。外语档（lang=ja/ko 或文本假名/
+# 谚文实质占比）系数上浮 0.9s/字 + 15s 裕量、地板抬到 60s——33 字最坏 28s
+# 也留一次重试余量。lang 由调用方给（tts-test 译声目标语）；不给时按文本
+# 文字系统自判（send-voice 手打日文同样受益）。
 _CLONE_BUDGET_PER_CHAR_SEC: float = 0.45
 _CLONE_BUDGET_BASE_SEC: float = 10.0
 _CLONE_BUDGET_MIN_SEC: float = 45.0
 _CLONE_BUDGET_MAX_SEC: float = 190.0
 _CLONE_BUDGET_FAST_SEC: float = 15.0
+_CLONE_BUDGET_FOREIGN_PER_CHAR_SEC: float = 0.9
+_CLONE_BUDGET_FOREIGN_BASE_SEC: float = 15.0
+_CLONE_BUDGET_FOREIGN_MIN_SEC: float = 60.0
+_KANA_HANGUL_RE = re.compile(r"[\u3040-\u30ff\uac00-\ud7af]")
 
 
-def clone_budget_sec(text: str, *, fast: bool = False) -> float:
-    """交互式（有人在等）克隆合成的全链预算（秒）——按待合成字数动态。纯函数。"""
+def _is_foreign_slow_lang(text: str, lang: str) -> bool:
+    """待合成文本是否属「单字更慢」的外语档（ja/ko 显式或文字系统自判）。"""
+    lg = str(lang or "").strip().lower().split("-")[0]
+    if lg in ("ja", "ko"):
+        return True
+    t = str(text or "")
+    if not t:
+        return False
+    kana = len(_KANA_HANGUL_RE.findall(t))
+    return kana >= max(2, len(t) // 4)
+
+
+def clone_budget_sec(text: str, *, fast: bool = False, lang: str = "") -> float:
+    """交互式（有人在等）克隆合成的全链预算（秒）——按待合成字数动态。纯函数。
+
+    ``lang``：待合成文本的目标语种（#102 外语档系数）；空=按文本自判。
+    """
     if fast:
         return _CLONE_BUDGET_FAST_SEC
     n = len(str(text or ""))
+    if _is_foreign_slow_lang(text, lang):
+        return max(_CLONE_BUDGET_FOREIGN_MIN_SEC,
+                   min(_CLONE_BUDGET_MAX_SEC,
+                       _CLONE_BUDGET_FOREIGN_BASE_SEC
+                       + _CLONE_BUDGET_FOREIGN_PER_CHAR_SEC * n))
     return max(_CLONE_BUDGET_MIN_SEC,
                min(_CLONE_BUDGET_MAX_SEC,
                    _CLONE_BUDGET_BASE_SEC + _CLONE_BUDGET_PER_CHAR_SEC * n))

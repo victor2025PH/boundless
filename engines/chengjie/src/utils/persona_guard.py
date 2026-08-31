@@ -38,6 +38,52 @@ _PERCEPTION_PREFIX_RE = re.compile(
     r"(觉得|以为|当成|当作|误会|怀疑)[^。！？!?\n]{0,4}$"
 )
 
+# ── 他人串扰自曝红线（#91-B，0830 钧实锤）────────────────────────────────────
+# 事故原话：AI 被戳穿记忆幻觉后回「我记岔了，可能把别人的事记到你头上了」——
+# 向客户自曝「我同时聊着很多人」，陪伴人设当场崩塌。此类话术与「自称 AI」同级
+# （身份红线，无条件检，不依赖人设 forbidden_phrases 配置）；honest_identity
+# 合规模式下随身份家族一并豁免（诚实档的 AI 说自己服务多人不算穿帮）。
+# 保守词形：必须同时含「别人/其他人」指涉 + 「记错归因/搞混」语义——单纯认错
+# （「我记岔了」）不命中，那是正常人也会说的话。
+_MULTI_PEER_LEAK_PATTERNS = [
+    # 把别人的事记到你头上 / 把人家的话安到你身上（事故原形）
+    re.compile(r"把(别人|其他人|人家|别的[\u4e00-\u9fff]{1,3})的"
+               r"[^。！？!?\n]{0,6}(记|安|算|套|挂)到你(头|身)上"),
+    # 语序变体：别人的事…记到你头上
+    re.compile(r"(别人|其他人|人家)[^。！？!?\n]{0,10}记到你(头|身)上"),
+    # 把你和别人搞混/记混/弄混/认错/记串
+    re.compile(r"把你(和|跟|与)(别人|其他人|别的人|人家)"
+               r"[^。！？!?\n]{0,6}(搞混|记混|弄混|搞错|认错|记串)"),
+    # 跟别人聊的（内容）记混/串了
+    re.compile(r"(跟|和|与)(别人|其他人)(聊|说)的"
+               r"[^。！？!?\n]{0,8}(记混|搞混|记串|串了|弄混)"),
+    # 聊的人（太）多 + 记混/记不清/串（自曝多会话存在的根形态）
+    re.compile(r"(聊|加|认识|联系)的人(太|真|好)?多"
+               r"[^。！？!?\n]{0,10}(记混|搞混|记不清|记岔|记串|串了|弄混)"),
+    re.compile(r"\b(?:mixed|mix(?:ing)?|got)\s+you\s+up\s+with\s+"
+               r"(?:someone|somebody|another|other)", re.I),
+    re.compile(r"\bconfus(?:ed|ing)\s+you\s+with\s+"
+               r"(?:someone|somebody|another|other)", re.I),
+    re.compile(r"\b(?:talk|chat)(?:t?ing)?\s+(?:to|with)\s+(?:so\s+)?many\s+"
+               r"(?:people|others)\b[^,.!?\n]{0,30}\b(?:mix|confus)", re.I),
+]
+
+
+def matches_multi_peer_leak(text: str) -> List[str]:
+    """文本中「他人串扰自曝」命中片段（#91-B 红线，无条件检）。纯函数绝不抛。"""
+    out: List[str] = []
+    try:
+        s = str(text or "")
+        if not s:
+            return []
+        for pat in _MULTI_PEER_LEAK_PATTERNS:
+            m = pat.search(s)
+            if m:
+                out.append(m.group(0))
+    except Exception:
+        return []
+    return out
+
 # ── 已撤销旧设定的「认领」检测（2026-08-04 P2 期，出站兜底）────────────────────
 # prompt 钉子（boundaries.retired_facts）偶尔还是会被历史窗口压过——AI 又说出
 # 「我家猫今天很乖」。本检测**刻意只抓第一人称认领**：
@@ -110,8 +156,11 @@ def collect_forbidden(
     except Exception:
         retired = []
     deny_ai = bool(identity.get("deny_ai")) and not honest_identity
+    # #91-B：他人串扰自曝红线——身份家族，无条件开（不依赖人设配置）；
+    # honest_identity 合规模式随家族豁免。
     return {"phrases": phrases, "deny_ai": deny_ai,
-            "retired_terms": retired}
+            "retired_terms": retired,
+            "peer_leak": not honest_identity}
 
 
 def _norm(s: str) -> str:
@@ -161,6 +210,8 @@ def find_violations(
         hits.extend(_matches_ai_self_id(text))
     if fb.get("retired_terms"):
         hits.extend(_matches_retired_claims(text, fb["retired_terms"]))
+    if fb.get("peer_leak"):
+        hits.extend(matches_multi_peer_leak(text))
     return hits
 
 
@@ -183,6 +234,8 @@ def _sentence_violates(sentence: str, fb: Dict[str, Any]) -> bool:
     if fb.get("retired_terms") and _matches_retired_claims(
             sentence, fb["retired_terms"]):
         return True
+    if fb.get("peer_leak") and matches_multi_peer_leak(sentence):
+        return True
     return False
 
 
@@ -200,7 +253,8 @@ def sanitize(
     if not text:
         return text, []
     fb = collect_forbidden(persona, honest_identity=honest_identity)
-    if not fb["phrases"] and not fb["deny_ai"] and not fb.get("retired_terms"):
+    if (not fb["phrases"] and not fb["deny_ai"]
+            and not fb.get("retired_terms") and not fb.get("peer_leak")):
         return text, []
     violations = find_violations(text, persona, honest_identity=honest_identity)
     if not violations:
@@ -539,8 +593,12 @@ def sanitize_self_name(
 # 只抓高置信**呼格形态**（句首「Name, …」/ 句尾「…, Name」），并且：
 #   - 对方已知名字含该名 → 全跳（客户真叫这个名，禁了就误伤）；
 #   - 名字前是自我介绍语境（我是/我叫/叫我/I'm/call me/this is…）→ 不算呼格；
-#   - 对方名字**未知**（peer_names 空）→ 整体不判——没有客户资料就无法排除
-#     「对方恰好同名」，宁可漏报不误伤（与孤儿引用门禁同哲学）。
+#   - 对方名字**未知**（peer_names 空）→ **照判**（#96 0830 Steven 实锤改判：
+#     B 线草稿链没有 peer 名管道、A 线也有拿不到显示名的时刻，旧「不判」语义
+#     让最需要守卫的路径恰好裸奔。prompt 侧铁律本就是「不知道对方叫什么就
+#     不用名字」——守卫按同一契约执行；「对方恰好与人设同名且档案不知情」的
+#     极端同名场景，token 级剥离的代价只是少喊一声名字，远轻于把自己人设名
+#     砸在客户头上的身份穿帮）。
 # 剥离粒度＝**名字 token 本身**而非整句——"you're not that old, Steven" 去掉
 # 呼格名后句子本体仍是有效回复；整句剥反而把内容杀掉。
 
@@ -568,19 +626,24 @@ def find_vocative_self_name(
     self_names: List[str] | None,
     peer_names: List[str] | None = None,
 ) -> List[str]:
-    """返回被用来**称呼对方**的自己人设名命中列表（高置信呼格形态）。纯函数绝不抛。"""
+    """返回被用来**称呼对方**的自己人设名命中列表（高置信呼格形态）。纯函数绝不抛。
+
+    ``peer_names`` 空＝对方名未知 → **照判**（#96：B 线无 peer 名管道曾致该路
+    裸奔；prompt 契约本就是「不知道对方叫什么就不用名字」）；非空且含该名 →
+    客户真叫这个名，跳过不判。
+    """
     hits: List[str] = []
     try:
         t = str(text or "")
         peers = [str(p or "").strip() for p in (peer_names or []) if str(p or "").strip()]
-        if not t.strip() or not peers:
-            return []          # 对方名未知 → 不判（无法排除同名客户）
-        peer_norm = _norm(" ".join(peers))
+        if not t.strip():
+            return []
+        peer_norm = _norm(" ".join(peers)) if peers else ""
         for name in (self_names or []):
             nm = str(name or "").strip()
             if len(nm) < 2:
                 continue
-            if _norm(nm) and _norm(nm) in peer_norm:
+            if peer_norm and _norm(nm) and _norm(nm) in peer_norm:
                 continue       # 客户名里含此名 → 称呼合法
             for sent in _split_sentences_sn(t):
                 for pat in _voc_patterns(nm):
@@ -665,6 +728,12 @@ def _addr_voc_patterns(name: str) -> List[re.Pattern]:
         # 问候语 + 称呼收尾（事故原形，无逗号）：good morning Y / 晚安 Y
         re.compile(r"(?:" + _GREET_WORDS + r")\s*[,，]?\s+(" + n + r")\b"
                    r"(?=[.!?。！？~～…\s]*$)", re.IGNORECASE),
+        # 问候语 + 称呼 + 逗号续句（#105 金标扩形，真实问候高频形态：
+        # Good morning Y, did you sleep well? / Miss you Y, come back soon）
+        re.compile(r"(?:" + _GREET_WORDS + r")\s*[,，]?\s+(" + n + r")\s*[,，]",
+                   re.IGNORECASE),
+        # 双逗号夹呼格（…, Y, …）——Y 是档案配置的称呼词，误伤面可忽略
+        re.compile(r"[,，]\s*(" + n + r")\s*[,，]", re.IGNORECASE),
         # 句首独立称呼起头：Y 你睡了吗 / Y what are you doing
         re.compile(r"^\s*(" + n + r")(?=\s+\S|[，,]\s*\S)", re.IGNORECASE),
     ]
@@ -711,6 +780,7 @@ def swap_vocative_peer_call(
 
 __all__ = [
     "collect_forbidden", "find_violations", "matches_ai_self_identity", "sanitize",
+    "matches_multi_peer_leak",
     "build_self_name_allowlist", "find_wrong_self_name", "sanitize_self_name",
     "find_vocative_self_name", "strip_vocative_self_name",
     "swap_vocative_peer_call",

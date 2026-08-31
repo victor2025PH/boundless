@@ -165,10 +165,15 @@ def get_outbound_guard() -> OutboundRecentGuard:
 
 def outbound_quality_pass(
     text: str, *, chat_id: Any = None, persona_name: str = "",
+    lang_mix: bool = True,
 ) -> str:
     """发送口统一过检：自称改写 + 复读检测（指标/日志），返回应发送的文本。
 
     任何内部异常都返回原文——质量关卡绝不能把消息卡死。
+
+    ``lang_mix``（#97 实施91）：出站收口点混语兜底——A 线原生回复的**发送口**
+    也过一道确定性剥除（出稿口守卫之后文本仍可能被后续层改写，且历史上
+    「守卫罩不到的路径」正是击穿点；本参数默认开，纯确定性零 LLM）。
     """
     try:
         out = str(text or "")
@@ -189,6 +194,21 @@ def outbound_quality_pass(
             except Exception:
                 pass
             out = fixed
+        if lang_mix:
+            try:
+                from src.ai.outbound_text_guard import sendpoint_lang_mix_pass
+                deflected, act = sendpoint_lang_mix_pass(out)
+                if act == "hard_stripped":
+                    logger.warning(
+                        "[outbound_quality] 发送口混语兜底已剥 CJK（#97）: "
+                        "%r → %r", out[:60], deflected[:60])
+                    out = deflected
+                elif act == "hard_kept":
+                    logger.warning(
+                        "[outbound_quality] 发送口混语命中但剥后过短，保留原文"
+                        "（#97）: %r", out[:60])
+            except Exception:
+                pass
         if get_outbound_guard().note_and_check(chat_id, out):
             logger.warning(
                 "[outbound_quality] 出站复读（同会话近 5 条内一字不差）chat=%s: %r",

@@ -374,8 +374,13 @@ def register_voice_routes(app, api_auth, config_manager=None):
             # ≤77 字与旧 45s 等值）——旧固定 45s 在 76-80 字被击穿：104 IndexTTS-2
             # 经隧道 ~0.4s/字，服务端 42 发全 200 合成成功，引擎预算先到期回落
             # 默认音（成品被丢弃）。send-voice 用同一函数（试听=发送同口径）。
+            # #102（实施91，0831）：「跟随翻译发声」的外语档预算——ja/ko 单字
+            # 合成显著慢于中文口径（网关账实锤 33 字 17.6~28s 全 200、引擎预算
+            # 先到期白扔成品），译声目标语显式传入走外语系数+60s 地板。
             from src.integrations.shared.tts_preview import clone_budget_sec
-            _budget = clone_budget_sec(spoken_text, fast=fast)
+            _budget = clone_budget_sec(
+                spoken_text, fast=fast,
+                lang=str(_xl.get("target_lang") or ""))
             result = await _aio.wait_for(
                 tts.synthesize(
                     spoken_text, timeout_sec=_budget,

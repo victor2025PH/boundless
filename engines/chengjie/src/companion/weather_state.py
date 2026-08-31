@@ -10,13 +10,14 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 __all__ = [
     "WeatherSnapshot",
@@ -25,6 +26,7 @@ __all__ = [
     "weather_proactive_hook",
     "scene_conflicts_with_weather",
     "snap_for_persona",
+    "strip_weather_claim_conflicts",
     "weather_scene_suffix",
     "wmo_label",
     "dump_stats",
@@ -234,6 +236,92 @@ def weather_chat_note(snap: Optional[WeatherSnapshot], lang: str = "zh") -> str:
         )
     except Exception:
         return ""
+
+
+# ── #104 出站天气断言守卫（实施91，0831 原图 860 实锤）──────────────────────
+#
+# 事故：客户发下雨视频，AI 回「It's drizzling lightly on my side too / 我这边
+# 也在下着小雨」——人设所在地真实天气零事实来源，纯共情镜像编造。prompt 层
+# 已有「无事实禁报天气」钉子（ai_client 位置钉），本守卫是发送前确定性兜底
+# （与 world_clock_guard.strip_wrong_place_claims 同形制）：
+# - 无天气事实（bucket 空）→ 第一人称本地天气**现象断言**整句剥除；
+# - 有事实 → 只剥与 bucket 明确冲突的断言（说下雨而实际晴）。
+# 只抓「我这边/我这里/我们这」锚定的第一人称断言——问对方天气（你那边下雨
+# 了吗）/聊天气常识绝不误伤。剥空回退原文。
+
+_WX_SELF_ANCHOR = r"(?:我这边|我这里|我这儿|我们这边?|我家这边?)"
+# 现象词 → 冲突判定用的 bucket 类集合（断言 bucket ∈ 集合 = 与事实一致）
+_WX_CLAIM_CLASSES: Tuple[Tuple[re.Pattern, frozenset], ...] = (
+    (re.compile(_WX_SELF_ANCHOR + r"[^。！？!?\n]{0,6}(?:也)?(?:正)?在?下著?着?"
+                r"(?:小|大|中|毛毛|阵)?雨"),
+     frozenset({"rain", "drizzle", "storm"})),
+    (re.compile(_WX_SELF_ANCHOR + r"[^。！？!?\n]{0,6}(?:也)?(?:正)?在?下著?着?"
+                r"(?:小|大|中|阵)?雪"),
+     frozenset({"snow"})),
+    (re.compile(_WX_SELF_ANCHOR + r"[^。！？!?\n]{0,6}(?:雷|暴雨|台风|打雷)"),
+     frozenset({"storm"})),
+    (re.compile(_WX_SELF_ANCHOR + r"[^。！？!?\n]{0,6}(?:太阳(?:好大|很大|挺大)|"
+                r"大太阳|阳光(?:好|很|正)好|晴(?:得|的)?(?:很|发亮)?)"),
+     frozenset({"clear"})),
+    (re.compile(_WX_SELF_ANCHOR + r"[^。！？!?\n]{0,6}(?:阴天|阴沉|多云)"),
+     frozenset({"cloudy"})),
+    (re.compile(_WX_SELF_ANCHOR + r"[^。！？!?\n]{0,6}(?:起雾|大雾|有雾)"),
+     frozenset({"fog"})),
+    # EN：on my side / over here / where I am 锚定（裸 here 误伤面大不收）
+    (re.compile(r"(?:it'?s|it is)\s+(?:also\s+)?(?:drizzl|rain|pour)\w*"
+                r"[^,.!?\n]{0,24}(?:on my side|over here|where I am)|"
+                r"(?:drizzl|rain|pour)\w*[^,.!?\n]{0,16}"
+                r"(?:on my side|over here|where I am)(?:\s+too)?",
+                re.IGNORECASE),
+     frozenset({"rain", "drizzle", "storm"})),
+    (re.compile(r"(?:it'?s|it is)\s+(?:also\s+)?snow\w*[^,.!?\n]{0,24}"
+                r"(?:on my side|over here|where I am)", re.IGNORECASE),
+     frozenset({"snow"})),
+    (re.compile(r"(?:it'?s|it is)\s+(?:so\s+)?sunny[^,.!?\n]{0,24}"
+                r"(?:on my side|over here|where I am)", re.IGNORECASE),
+     frozenset({"clear"})),
+)
+_WX_SENT_SPLIT_RE = re.compile(r"(?<=[。！？!?.\n])")
+
+
+def strip_weather_claim_conflicts(
+    text: str, bucket: str = "",
+) -> Tuple[str, List[str]]:
+    """第一人称本地天气断言 vs 事实 bucket：无事实全剥、有事实剥冲突。
+
+    返回 ``(应出站文本, 命中列表)``；未命中/剥空回退原样。纯函数绝不抛。
+    """
+    src = str(text or "")
+    try:
+        if not src.strip():
+            return src, []
+        b = str(bucket or "").strip().lower()
+        hits: List[str] = []
+        kept: List[str] = []
+        for seg in _WX_SENT_SPLIT_RE.split(src):
+            if not seg:
+                continue
+            bad = False
+            for pat, ok_buckets in _WX_CLAIM_CLASSES:
+                if not pat.search(seg):
+                    continue
+                if not b or b == "unknown":
+                    bad = True     # 零事实：任何本地天气现象断言都是编的
+                elif b not in ok_buckets:
+                    bad = True     # 有事实：断言与 bucket 相斥（说雨实际晴）
+                break
+            if bad:
+                hits.append(seg.strip())
+            else:
+                kept.append(seg)
+        if not hits:
+            return src, []
+        out = "".join(kept).strip()
+        if not out:
+            return src, hits
+        return out, hits
+    except Exception:
+        return src, []
 
 
 def weather_proactive_hook(snap: Optional[WeatherSnapshot], lang: str = "zh") -> Optional[str]:

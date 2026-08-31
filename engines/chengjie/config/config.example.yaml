@@ -868,6 +868,30 @@ voice_lang_route:
     enabled: true                 # 随父开关（voice_lang_route.enabled=false 时整体关）
     reject_unmapped: true         # 无音色可映射时拒发语音（false=保持原音色照发）
     voices: {}                    # 语种前缀→音色覆写，如 {en: en-US-AriaNeural}
+  # clone_langs（P2 2026-08-31 全语种克隆）：通用「语种 → 克隆节点」路由，粤语
+  # 专线机制的泛化——参考音跟人设走＝**同一把声讲外语**。命中语种把本次合成
+  # 改派到指定克隆节点（fish /v1/tts/clone 契约直连），并携带闸门放行标记
+  # （TTSPipeline 语种能力闸对该语种放行）。缺省空映射=不启用零行为变化。
+  # ⚠ 开闸前置：节点×语种×参考音必先过
+  #     python tools/verify_clone_lang.py --clone-url <节点> --ref <参考音> \
+  #       --cases <语种>:<标注> --lang-tag
+  #   全 PASS + 人耳抽检通过才落配置（配置即背书，闸门按标记放行）。
+  # 实测钉子（2026-08-31，117:7852 CosyVoice3）：clone_text_prefix 语言标签
+  # **必配**——缺了=日文汉字按中文读音念出（"今日は"→"今儿我"怪声实锤）；
+  # 该部署 ja/ko 语言正确（CER 0.07/0.0），es 不支持（英语音系胡念）。
+  # clone_langs:
+  #   ja:
+  #     backend: minicpm_clone
+  #     voice_profile:
+  #       clone_base_url: http://127.0.0.1:7852
+  #       clone_text_prefix: "<|ja|>"
+  #     fallback_voice: ja-JP-NanamiNeural
+  #   ko:
+  #     backend: minicpm_clone
+  #     voice_profile:
+  #       clone_base_url: http://127.0.0.1:7852
+  #       clone_text_prefix: "<|ko|>"
+  #     fallback_voice: ko-KR-SunHiNeural
 
 # ── 新会话初始语言先验（lang_prior，2026-07-23）────────────────────────
 # 新好友第一条消息常是 "Hi"/emoji/贴图——语言中性判不出证据，决策链落空到
@@ -907,6 +931,26 @@ avatar_voice:
   # 音色一致性（2026-07-27）：strict=hub 挂了拒发语音（回落文字），绝不让本机 7852
   # 另一份参考音静默顶班换声；lenient=旧行为（贯穿回落本地克隆）。
   voice_consistency: lenient
+  # 繁→简发音输入（P0-3 2026-08-31，默认开）：克隆引擎按简体建模、繁简同音——
+  # 繁体文本（zh-tw 译声/繁体客户）在合成前转简体防念错字，展示层（译稿/消息
+  # 记录）不动；日文/粤语/非中文主体内建豁免。这是纠正既有缺陷非新子系统
+  # （简体文本恒等转换，行为不变）；个别部署要原样直送置 false。
+  # clone_t2s: true
+  # 克隆主路可念语种显式覆写（运营最了解自家节点；缺省由引擎能力表自动推导，
+  # 见 lang_voice_route.CLONE_ENGINE_LANGS）。设置后 effective-config.voice_langs
+  # 警示与合成层语种闸都按此表判。例：voice_langs: [zh, en, ja]
+  # voice_langs: []
+  # 合成后 ASR 回转校验门（默认关；开=坏 take 自动重合成取较优，fail-open 绝不
+  # 阻塞发声）。多语轨（P2-9 2026-08-31）：非中文文本按目标语种强制转写 + 通用
+  # 字符级 CER（旧行为「非中文不评」＝新语种开闸后最需要质检的语种零回验）；
+  # multilingual: false 回旧行为，foreign_cer_threshold 为外语轨独立阈值
+  # （字符级对拉丁语种天然偏严，缺省 0.35 略宽于中文轨 0.30）。
+  # synth_verify:
+  #   enabled: true
+  #   cer_threshold: 0.3
+  #   max_retries: 1
+  #   multilingual: true
+  #   foreign_cer_threshold: 0.35
   hub_fish:
     enabled: false                       # 默认关（opt-in；本机 overlay 开）
     base_url: http://192.168.0.176:9000  # 幻声 hub 单一 LAN 网关
@@ -926,6 +970,21 @@ avatar_voice:
     profile_map: {}
     # 请求级钉住 TTS 引擎（空=沿用 hub 档配置）。需 hub /api/tts_only 认 tts_engine 键。
     # tts_engine: moss_ttsd
+    # 语种→引擎改派（P1 2026-08-31 全语种克隆）：钉住引擎念不了的语种按语种改派
+    # 到 hub 上另一台引擎（如主链 index_tts 只会中英，日文改派 fish_speech）。
+    # 键=BCP47 语言前缀，值=hub 引擎名；缺省空映射=旧行为（tts_engine 一刀切）。
+    # 语种能力闸（lang_voice_route.CLONE_ENGINE_LANGS/clone_voice_langs）读同一份
+    # 配置：映射语种若在目标引擎能力表内，自动计入「可念语种」（effective-config
+    # 的 voice_langs 与合成层闸门同步放行）；映射到未登记引擎的语种不虚报能力。
+    # 改派后的引擎照常吃目录预检/超时熔断/采样率指纹闸（prefer 语义防顶包三件套）。
+    # ⚠ 开闸前置（2026-08-31 实测沉淀）：引擎语言能力 ≠ 「你的声纹档×该引擎」
+    # 可用——档按 A 引擎形态注册时 B 引擎可能消费不到参考音（实测 fish 对
+    # IndexTTS-2 形态档全语种翻车：别人的声音/哑音）。任何映射落 overlay 前必跑
+    #   python tools/verify_clone_lang.py --profile <档名> --cases <语种>:<引擎>
+    # 全 PASS + 人耳抽检通过才开闸。
+    # lang_engines:
+    #   ja: fish_speech
+    #   es: fish_speech
     # ⚠ 钉了引擎就必须知道 hub 的引擎解析是 **prefer 语义**：点名引擎在
     # /api/engines 目录里 available:false（显存吃紧被 idle_park 泊车/掉登记）时，
     # hub **静默换一个引擎**合成——客户听到的是另一个人的声音，而引擎进程自身
@@ -1578,17 +1637,22 @@ companion:
   #   - platform: messenger
   #     account_id: "61584070255403"
   #     name: "Calixa Lopez"
-  # 当地天气事实源（Open-Meteo，免 API key；默认关）。依赖人设 location.lat/lon
-  # （见 persona_location.CITY_PRESETS / profiles_runtime.location）。热路径只读缓存，
-  # 绝不在出话链阻塞等 HTTP；缺数据/陈旧>max_stale → 不注入（禁编数值）。
+  # 当地天气事实源（Open-Meteo，免 API key）。依赖人设 location.lat/lon
+  # （见 persona_location.CITY_PRESETS / profiles_runtime.location / 人设编辑器
+  # 「所在地」字段）。热路径只读缓存，绝不在出话链阻塞等 HTTP；缺数据/陈旧
+  # >max_stale → 不注入（禁编数值）。
+  # #104（实施91 2026-08-31）起**默认开**：默认关的旧态=AI 对人设当地天气零
+  # 事实来源，「我这边也在下雨」全靠共情镜像编造（0831 实锤）。软失败零阻断，
+  # 无所在地人设零改变；显式 false 可关。
   weather:
-    enabled: false
+    enabled: true
     ttl_sec: 1800            # 新鲜缓存（秒）
     max_stale_sec: 10800     # 陈旧仍可用上限（秒）；再旧丢弃
     inject_chat: true        # 写入聊天 prompt 内部事实块
     proactive_hook: true     # 暴雨/雷暴/极端气温时给主动开场种子
     scene_filter: true       # 生图/场景轮换避开高置信天气冲突（沙滩×暴雨等）
     greeting_inject: true    # 早晚安/温和问候附「人设城市真实天气」素材行（daily_brief；随父开关）
+    claim_guard: true        # #104 出站兜底：无天气事实剥「我这边在下雨」类断言/有事实剥冲突断言
   # ── 用户侧时钟（P2，默认关）──────────────────────────────────────────────
   # 主动触达此前全部锚定**服务器**时区（UTC+8），而客户遍布多时区 → 「早安」发到对方
   # 半夜。开启后按会话推断客户时区（src/companion/user_clock.py），择时/安静时段改按
@@ -1834,6 +1898,10 @@ companion:
     max_per_tick: 3          # 每轮最多主动开场会话数
     quiet_start_hour: 23     # 安静时段起（不打扰），24h 制
     quiet_end_hour: 8        # 安静时段止
+    # 实施92b 与跟进 SOP 链划界（默认开）：会话有在途工作链（running/paused）
+    # 时业务节奏由链主导（到点提醒/自动拟稿），本闲聊回访让路跳过——防「链刚
+    # 跟进完 15 分钟又来一条没话找话」双打扰。预览页 skip 原因=chain_running。
+    yield_to_chains: true
     # 冷启动隔离（2026-08-04 智拓机 .198 事故根因闸，默认开；代码默认亦为开，即便本段
     # 缺失也生效——安全 floor 不依赖配置）：新登录/新接入的账号在预热窗内一律不主动
     # 外呼。根因＝目录同步把手机历史会话灌进来后，个个「沉默数月」立刻满足沉默阈值，
@@ -2994,11 +3062,34 @@ inbox:
       quiet_end: 8        # 静默窗止；start==end 视为不启用窗
       max_per_tick: 3     # 每 tick(60s) 最多自动拟稿数（防 LLM 齐射拖垮循环）
       max_per_day: 30     # 每日自动拟稿总预算（DB 口径，跨重启稳）
-    # 条件自动开链（链 trigger_conditions 配了 silence_days / churn_risk_high
-    # 时的每小时扫描）每日预算：0=不限（旧行为）。这是「对沉默客户群发开链」
-    # 的总闸门——没预算的自动化是事故温床。
+    # 条件自动开链（链 trigger_conditions 配了 silence_days / churn_risk_high /
+    # stage_enter 时的每小时扫描）每日预算：0=不限（旧行为）。这是「对客户
+    # 群发开链」的总闸门——没预算的自动化是事故温床。
     auto_start:
       max_per_day: 30
+    # ── 实施92 P0-1 客户回复即让路（默认开，护栏性质）─────────────────────
+    # 会话有运行中工作链且客户来了新消息 → 链按档位让路：pause=暂停交人接管
+    # （默认）/ complete=按完成收束（唤回类链的语义）/ continue=不让路。
+    # 链级可在编辑器单独配 on_reply 覆盖全局默认。显式 enabled:false =
+    # 恢复旧「时钟不看人」行为（链会无视客户已回复继续按点提醒/自动步）。
+    reply_yield:
+      enabled: true
+      default_action: pause
+    # ── 实施92 P0-2 客户旅程阶段脊柱（新子系统默认关）────────────────────
+    # new→contacted→nurturing→quoting→deal→repeat 的业务成交轴（与陪伴
+    # 关系阶段 rel_stage 正交）。开启后：60s tick 增量推导阶段（规则：双向
+    # 互动=建联；跨 nurturing_min_days 天且 ≥nurturing_min_msgs 条=培育；
+    # 命中报价关键词=报价）+ 链 trigger_conditions.stage_enter 触发生效
+    # （进报价自动挂跟单、成交自动挂关怀）。deal/repeat 只由「标记成交」
+    # 或人工设置进入，自动推导绝不宣称成交。推荐经 /workflows 页「成交
+    # 引擎」一键开启（自动接好两条种子链 + 回填存量会话阶段）。
+    journey:
+      enabled: false
+      nurturing_min_days: 2
+      nurturing_min_msgs: 6
+      quote_lookback_days: 14
+      # quote_keywords: ["报价", "价格", "多少钱", ...]   # 缺省保守词表，可按行业覆写
+      scan_limit: 120
 
   # ── E2 自动草稿生成（Auto-Draft Pipeline）──────────────────────
   # ⭐ 对方机器人守卫：识别「聊天对方是 bot / 自动应答」并停掉 AI 自动回复，
@@ -4676,6 +4767,20 @@ assistant:
                                # 执行逐步走 /api/assistant/act——L2 设置必须人点
                                # 确认卡，全部可撤销+审计；坐席角色仅 L0/L1
     max_steps: 5               # 单次计划步数上限（1..8）
+  pc_runner:
+    enabled: false             # 「电脑操控」Windows runner（实施91 P1，默认关）。
+                               # MVP 只读侦察受控机 UIA 控件树（list_windows /
+                               # read_tree / screenshot）；动作面 P1-2 才开。
+                               # 开启前置：① 受控机上跑 runner/pc_runner.py 并配
+                               # PC_RUNNER_TOKEN 环境变量；② 下面 machines 声明白
+                               # 名单；③ 本键置 true。三重闸缺一不可。
+    token: ""                  # 与受控机 runner 共享的 Bearer token（也可在
+                               # machines[].token 逐机覆写）。⚠ 走 config.local
+                               # overlay 或环境变量，切勿提交进 git。
+    machines: []               # 受控机白名单（"只管自己人"的字面实现——不在此
+                               # 列的机器小智永远碰不到）。示例：
+                               # - {id: zhuji, base_url: "http://127.0.0.1:18760", label: "主机"}
+                               # - {id: kouxing, base_url: "http://192.168.0.198:18760", label: "视觉机"}
   report:
     enabled: true              # 报障通道（随总闸）
     max_shot_kb: 2048          # 截图附件上限（PNG/JPEG，magic bytes 校验）

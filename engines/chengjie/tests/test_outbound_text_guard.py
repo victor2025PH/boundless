@@ -144,14 +144,21 @@ def test_apply_guard_disabled_passthrough():
 
 
 def test_resolve_cfg_defaults_on_and_overridable():
+    # vocative/lang_pin/shared_past（实施91 #105/#106/#110）与旧五键同段
+    # 配置、同默认开
     full_on = {"enabled": True, "monologue": True, "lang_mix": True,
-               "unfounded_recall": True}
+               "unfounded_recall": True, "recall_grounding": True,
+               "apology_dedup": True, "vocative": True, "lang_pin": True,
+               "shared_past": True}
     assert resolve_cfg(None) == full_on
     assert resolve_cfg({}) == full_on
     got = resolve_cfg({"companion": {"outbound_text_guard": {
-        "enabled": False, "lang_mix": False, "unfounded_recall": False}}})
+        "enabled": False, "lang_mix": False, "unfounded_recall": False,
+        "recall_grounding": False, "apology_dedup": False}}})
     assert got == {"enabled": False, "monologue": True, "lang_mix": False,
-                   "unfounded_recall": False}
+                   "unfounded_recall": False, "recall_grounding": False,
+                   "apology_dedup": False, "vocative": True, "lang_pin": True,
+                   "shared_past": True}
 
 
 def test_empty_input_passthrough():
@@ -434,3 +441,175 @@ def test_vision_block_marked_as_system_annotation_74():
     })
     assert "系统自动标注" in p
     assert "非对方原话" in p
+
+
+# ── #91-A（0830 OMEN 实锤）：回忆类断言接地锁 ────────────────────────────────
+
+_OMEN_REPLY = "你上次提过那台惠普OMEN电竞系列吗？对吧，我记性可好了😊"
+_HIST_NO_PC = ["今天好累啊", "晚上想吃点清淡的", "你平时都几点睡"]
+
+
+def test_recall_grounding_strips_omen_case_91():
+    """事故金标：历史/记忆全无 OMEN → 现编断言整句剥除。"""
+    from src.ai.outbound_text_guard import strip_hallucinated_recall
+    out, hits = strip_hallucinated_recall(
+        _OMEN_REPLY, user_texts=_HIST_NO_PC, memory_text="")
+    assert hits, "OMEN 现编断言必须被抓"
+    assert "OMEN" not in out and "惠普" not in out
+
+
+def test_recall_grounding_keeps_grounded_claim_91():
+    """用户真提过 → 合法回忆放行（原话词汇重叠即接地）。"""
+    from src.ai.outbound_text_guard import strip_hallucinated_recall
+    out, hits = strip_hallucinated_recall(
+        "你上次提过想去大阪玩，机票看了吗？",
+        user_texts=["我一直想去大阪玩来着", "最近好忙"], memory_text="")
+    assert not hits
+    assert "大阪" in out
+
+
+def test_recall_grounding_memory_counts_as_evidence_91():
+    """记忆条目也是合法出处（对上记忆块即放行）。"""
+    from src.ai.outbound_text_guard import strip_hallucinated_recall
+    out, hits = strip_hallucinated_recall(
+        "记得你提过你家养了只橘猫",
+        user_texts=["早", "嗯嗯"], memory_text="- 用户养了一只橘猫（2026-08）")
+    assert not hits
+    assert "橘猫" in out
+
+
+def test_recall_grounding_no_corpus_no_action_91():
+    """语料没传（历史缺席）→ 整体不动手，缺料绝不乱杀。"""
+    from src.ai.outbound_text_guard import strip_hallucinated_recall
+    out, hits = strip_hallucinated_recall(
+        _OMEN_REPLY, user_texts=[], memory_text="")
+    assert not hits and out == _OMEN_REPLY
+
+
+def test_recall_grounding_generic_bigrams_not_evidence_91():
+    """通用功能词（那台/这个/时候）不算接地证据——碰瓷放行是不设防。"""
+    from src.ai.outbound_text_guard import strip_hallucinated_recall
+    out, hits = strip_hallucinated_recall(
+        "今晚打算干嘛呀？你上次提过那台惠普OMEN电竞本对吧。",
+        user_texts=["那台空调好吵", "这个时候你还没睡呀"], memory_text="")
+    assert hits, "仅「那台/这个」重叠不构成接地"
+    assert "OMEN" not in out and "今晚打算干嘛呀" in out
+
+
+def test_recall_grounding_strip_all_falls_back_91():
+    """整条都是现编断言 → 剥空回退原文（绝不吞掉回复）。"""
+    from src.ai.outbound_text_guard import strip_hallucinated_recall
+    src = "你上次提过那台惠普OMEN电竞系列吗"
+    out, hits = strip_hallucinated_recall(
+        src, user_texts=_HIST_NO_PC, memory_text="")
+    assert hits and out == src
+
+
+def test_recall_grounding_wired_via_apply_91():
+    """编排入口穿线：user_texts/memory_text 进 apply → meta 带命中。"""
+    out, meta = apply_outbound_text_guard(
+        "哈哈今天好玩吗？你上次提过那台惠普OMEN电竞系列吧。",
+        resolve_cfg(None), user_turns=5, has_memory=False,
+        user_texts=_HIST_NO_PC, memory_text="")
+    assert meta["recall_grounding_hits"]
+    assert "OMEN" not in out and "好玩吗" in out
+
+
+def test_recall_grounding_en_variant_91():
+    """英文形态：you mentioned X before 同样接地校验。"""
+    from src.ai.outbound_text_guard import strip_hallucinated_recall
+    out, hits = strip_hallucinated_recall(
+        "You mentioned that HP OMEN laptop before, right?",
+        user_texts=["so tired today", "what did you eat"], memory_text="")
+    assert hits
+    out2, hits2 = strip_hallucinated_recall(
+        "You mentioned that HP OMEN laptop before, right?",
+        user_texts=["I want an HP OMEN so bad"], memory_text="")
+    assert not hits2 and "OMEN" in out2
+
+
+# ── #91-C（同单）：认错口癖同会话去重 ────────────────────────────────────────
+
+def test_apology_dedup_swaps_variant_91():
+    """近史用过「被你抓包了」→ 本条换变体，句子结构完整。"""
+    from src.ai.outbound_text_guard import dedup_apology_catchphrase
+    out, hits = dedup_apology_catchphrase(
+        "哎呀，被你抓包了啦，我记岔了",
+        recent_assistant_texts=["嘿嘿被你抓包了，上次说错了"])
+    assert hits
+    assert "被你抓包" not in out
+    assert "我记岔了" in out          # 句子其余部分保留
+
+
+def test_apology_dedup_first_use_untouched_91():
+    """近史没用过 → 首次使用合法，原样放行。"""
+    from src.ai.outbound_text_guard import dedup_apology_catchphrase
+    src = "哎呀，被你抓包了啦"
+    out, hits = dedup_apology_catchphrase(
+        src, recent_assistant_texts=["昨晚睡得好吗", "我去做饭啦"])
+    assert not hits and out == src
+
+
+def test_apology_dedup_no_history_no_action_91():
+    """近史缺席 → 不动手（缺料纪律与接地锁一致）。"""
+    from src.ai.outbound_text_guard import dedup_apology_catchphrase
+    src = "被你抓包了"
+    out, hits = dedup_apology_catchphrase(src, recent_assistant_texts=None)
+    assert not hits and out == src
+
+
+def test_apology_dedup_deterministic_91():
+    """确定性：同稿同近史两次运行结果一致（缓存/重试友好）。"""
+    from src.ai.outbound_text_guard import dedup_apology_catchphrase
+    recent = ["被你抓包了哈"]
+    a = dedup_apology_catchphrase("被你抓包了，我认", recent)
+    b = dedup_apology_catchphrase("被你抓包了，我认", recent)
+    assert a == b
+
+
+def test_apology_dedup_picks_unused_variant_91():
+    """变体选择避开近史已出现的（同会话不重样的核心语义）。"""
+    from src.ai.outbound_text_guard import dedup_apology_catchphrase
+    recent = ["被你抓包了", "让你说着了", "好吧我承认"]
+    out, hits = dedup_apology_catchphrase("被你抓包了啦", recent)
+    assert hits
+    assert "让你说着了" not in out and "好吧我承认" not in out
+
+
+# ── #91-B（同单）：他人串扰自曝红线（persona_guard 家族） ────────────────────
+
+def test_peer_leak_redline_golden_91():
+    """事故原话金标：『可能把别人的事记到你头上了』必拦。"""
+    from src.utils.persona_guard import matches_multi_peer_leak
+    assert matches_multi_peer_leak("我记岔了，可能把别人的事记到你头上了")
+    assert matches_multi_peer_leak("不好意思，把你和别人搞混了")
+    assert matches_multi_peer_leak("我聊的人太多，记混了")
+    assert matches_multi_peer_leak("Sorry, I mixed you up with someone else")
+
+
+def test_peer_leak_plain_apology_not_hit_91():
+    """单纯认错不命中——「我记岔了」是正常人也说的话，红线只拦自曝他人。"""
+    from src.utils.persona_guard import matches_multi_peer_leak
+    for s in ("哎呀我记岔了，抱歉", "我记错了，你说的对",
+              "最近脑子不好使，记不清了", "你和别人不一样呀",
+              "别人都说这家店好吃"):
+        assert not matches_multi_peer_leak(s), s
+
+
+def test_peer_leak_sanitize_strips_sentence_91():
+    """sanitize 无条件剥除红线句（不依赖人设 forbidden_phrases 配置）。"""
+    from src.utils.persona_guard import sanitize
+    out, hits = sanitize(
+        "哎呀被你抓包了。我记岔了，可能把别人的事记到你头上了。别生气嘛。",
+        {})   # 空人设也要拦——红线与人设配置无关
+    assert hits
+    assert "别人的事" not in out
+    assert "别生气嘛" in out
+
+
+def test_peer_leak_honest_identity_exempt_91():
+    """honest_identity 合规模式随身份家族豁免（诚实档自述多客户不算穿帮）。"""
+    from src.utils.persona_guard import sanitize
+    src = "抱歉，我可能把别人的事记到你头上了"
+    out, hits = sanitize(src, {}, honest_identity=True)
+    assert not hits and out == src

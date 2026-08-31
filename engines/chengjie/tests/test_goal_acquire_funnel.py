@@ -147,6 +147,59 @@ def test_capture_authority_both_polarities():
     assert dict(capture_from_text("我得跟合伙人商量一下"))["authority"] == "需上报"
 
 
+def test_capture_occupation_self_identity_forms():
+    """#108（实施91，0831 原图 872 实锤）：客户明说「是学生」职业槽必须回填
+    ——旧表只认「做X/开X」句形，身份名词自述全漏。闭集白名单宁可漏采。"""
+    assert dict(capture_from_text("我是学生，平时课多"))["occupation"] == "学生"
+    assert dict(capture_from_text("我现在还是个大学生"))["occupation"] == "大学生"
+    assert dict(capture_from_text(
+        "I'm a college student, super busy"))["occupation"] == "college student"
+    # 开放式「我是X」仍不采（误采面）
+    assert "occupation" not in dict(capture_from_text("我是认真的"))
+    assert "occupation" not in dict(capture_from_text("我是不太懂这个"))
+
+
+def test_slot_value_suspect_language_names():
+    """#108：语言名不得进 坐标/称呼/职业（『坐标=English』实锤——LLM 摘录
+    接地只验出处不验语义）；兴趣槽不拦（「喜欢学English」合法）。"""
+    from src.companion.goals.profile_slots import slot_value_suspect
+    assert slot_value_suspect("location", "English") == "lang_name"
+    assert slot_value_suspect("location", "英语") == "lang_name"
+    assert slot_value_suspect("name", "Tagalog") == "lang_name"
+    assert slot_value_suspect("occupation", "中文") == "lang_name"
+    assert slot_value_suspect("location", "宿务") == ""
+    assert slot_value_suspect("interests", "English") == ""
+    assert slot_value_suspect("location", "") == ""
+
+
+def test_llm_capture_drops_suspect_slot_values():
+    """LLM 摘录轨端到端：接地通过但语义不合格的值（坐标=English）必须在
+    入库前被丢弃。"""
+    import asyncio
+
+    from src.companion.goals.profile_llm import run_llm_capture
+
+    class _FakeAI:
+        async def chat(self, prompt):
+            return '{"location": "English", "occupation": "学生"}'
+
+    class _FakeStore:
+        def __init__(self):
+            self.written = None
+
+        def upsert_customer_profile(self, platform, chat_key, fields,
+                                    source="llm", now=None):
+            self.written = dict(fields)
+
+    store = _FakeStore()
+    missing = [{"key": "location"}, {"key": "occupation"}]
+    n = asyncio.run(run_llm_capture(
+        _FakeAI(), store, platform="telegram", chat_key="c1",
+        text="I want to practice English. 我是学生。", missing=missing))
+    assert n == 1
+    assert store.written == {"occupation": "学生"}, store.written
+
+
 def test_capture_rejects_low_confidence():
     # 「我是觉得…」不是自称；裸数字不是预算；无团队语境的数字不是规模
     assert "name" not in dict(capture_from_text("我是觉得这样挺好的"))

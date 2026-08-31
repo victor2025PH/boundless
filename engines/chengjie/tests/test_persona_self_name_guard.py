@@ -311,10 +311,25 @@ def test_vocative_peer_actually_named_same_skipped():
     assert find_vocative_self_name(_VOC_INCIDENT, ["Steven"], ["Steven Wu"]) == []
 
 
-def test_vocative_unknown_peer_skipped():
-    # 对方名未知 → 不判（无法排除同名客户，宁可漏报不误伤）
-    assert find_vocative_self_name(_VOC_INCIDENT, ["Steven"], []) == []
-    assert find_vocative_self_name(_VOC_INCIDENT, ["Steven"], None) == []
+def test_vocative_unknown_peer_now_judged():
+    # #96（0830 Steven 四连报实锤）改判：对方名未知 → **照判**。
+    # 旧「不判」语义让 B 线（无 peer 名管道）恰好裸奔；prompt 契约本就是
+    # 「不知道对方叫什么就不用名字」，守卫按同一契约执行。
+    assert find_vocative_self_name(_VOC_INCIDENT, ["Steven"], []) == ["Steven"]
+    assert find_vocative_self_name(_VOC_INCIDENT, ["Steven"], None) == ["Steven"]
+
+
+_VOC_INCIDENT_96 = (
+    "That sunset was unreal, wish you were there to judge it with me, Steven."
+)
+
+
+def test_vocative_incident_96_stripped_without_peer():
+    # #96 事故原句（原图 833）：B 线拿不到 peer 名也必须拦
+    cleaned, hits = strip_vocative_self_name(_VOC_INCIDENT_96, ["Steven"], None)
+    assert hits == ["Steven"]
+    assert "Steven" not in cleaned
+    assert "wish you were there" in cleaned
 
 
 def test_vocative_peer_name_address_untouched():

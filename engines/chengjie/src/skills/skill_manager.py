@@ -1548,6 +1548,41 @@ class SkillManager(LoggerMixin):
                 _lm_prev = str(user_context.get("last_message") or "").strip()
                 if _lm_prev and _lm_prev != _stripped:
                     _lang_hist.append({"role": "user", "content": _lm_prev})
+                # #95 语音轮语言锚（实施91，0830 停电期实锤：中文客户语音被回落
+                # 转写器转出韩语乱码 → 旧链当强证据采信 → 韩语回话+韩语 TTS）。
+                # 判定纯函数 lang_policy.voice_turn_lang_suspect（与 #74 图片轮
+                # 同族原则、与 WA 线 voice_lang_suspect 同契约）：转写语种 ≠ 会话
+                # 稳定语言 → 本条不参与语言决策（粘住会话语言）+ 置嫌疑标记
+                # （prompt 走「听不清请确认」块）。换语言坐实通道：客户**文字**
+                # 消息（非语音轮不进锚）/ 连续两条同语种语音（纯函数内豁免）。
+                try:
+                    _voice_turn = str(context.get("media_type") or "")\
+                        .strip().lower() in ("voice", "audio")
+                    if _voice_turn and _lang_detect_src:
+                        from src.ai.lang_policy import voice_turn_lang_suspect
+                        _vl_stable = (
+                            str(user_context.get("user_lang_pref") or "").strip()
+                            or _prev_lang)
+                        if voice_turn_lang_suspect(
+                                _lang_detect_src, stable_lang=_vl_stable,
+                                prev_user_text=_lm_prev):
+                            self.logger.info(
+                                "%s[lang] 语音轮语言锚：转写语种偏离会话稳定"
+                                "语言（=%s），本条不参与语言决策（#95）",
+                                log_prefix, _vl_stable)
+                            _lang_detect_src = ""
+                            user_context["_voice_lang_suspect"] = True
+                            try:
+                                from src.monitoring.metrics_store import (
+                                    get_metrics_store,
+                                )
+                                get_metrics_store().record_lang_event(
+                                    "voice_suspect")
+                            except Exception:
+                                pass
+                except Exception:
+                    self.logger.debug("%s语音轮语言锚异常（按旧行为放行）",
+                                      log_prefix, exc_info=True)
                 # 初始语言先验（lang_prior，默认关）：新会话首条 "Hi"/emoji 类
                 # 中性消息全链落空时，按账号配置/WA 国码给 default 供个先验语言
                 # （治「给菲律宾新好友第一句回中文」）。仅无 prev_lang 时计算——
@@ -1638,6 +1673,41 @@ class SkillManager(LoggerMixin):
                         get_metrics_store().record_lang_event("stable_switch")
                     except Exception:
                         pass
+
+            # 3b2. B67「发→X」显式铆定 ≻ 一切自动语言决策（#106 实施91，0831
+            # 击穿实锤：会话铆「发→英」，图片轮仍三连纯中文——A 线从无 B67 消费
+            # 点）。生成端直接按铆定语言写稿（root fix）；发送口另有文字系统
+            # 冲突兜底翻译（sendpoint_lang_pin_fix，第二道）。变体铆定
+            # （zh-tw/yue）生成按 zh 写，字形转换归翻译层（实施89 契约：检测端
+            # 不产变体码、OpenCC/引擎管字形）。锁定分支（reply_lang_locked）
+            # 同样覆写——铆定是坐席显式声明，优先级高于调用方预设。
+            try:
+                from src.ai.sendpoint_guard import outbound_lang_pin
+                _b67_pin = outbound_lang_pin(
+                    str(user_context.get("platform")
+                        or context.get("platform") or "telegram"),
+                    str(_acct_id or "default"), str(_chat_id or ""))
+                if _b67_pin:
+                    _b67_gen = {"zh-tw": "zh", "zh-hk": "zh",
+                                "yue": "zh"}.get(_b67_pin, _b67_pin)
+                    if _b67_gen and _b67_gen != str(
+                            user_context.get("reply_lang") or ""):
+                        self.logger.info(
+                            "%s[lang] B67 出站铆定生效：reply_lang %s → %s"
+                            "（#106，explicit 优先）", log_prefix,
+                            user_context.get("reply_lang"), _b67_gen)
+                        user_context["reply_lang"] = _b67_gen
+                        try:
+                            from src.monitoring.metrics_store import (
+                                get_metrics_store,
+                            )
+                            get_metrics_store().record_lang_event(
+                                "outbound_pin")
+                        except Exception:
+                            pass
+            except Exception:
+                self.logger.debug("%sB67 铆定读取异常（按原决策）",
+                                  log_prefix, exc_info=True)
 
             # 携带上条语音的声学情绪（SER）→ 供情感上下文/危机联动/出站语气共用。
             _pae = context.get("_peer_audio_emotion") if context else None
@@ -4693,7 +4763,8 @@ class SkillManager(LoggerMixin):
                 # ── 称呼混淆守卫（B42 2026-08-22，_236 实录「you're not that
                 # old, Steven」）：上面守「拿对方名自称」，这里守镜像方向——
                 # 用**自己的**人设名呼叫对方（呼格形态）。只抹名字 token 不动
-                # 句子本体；对方名未知/同名一律不判（纯函数内兜）。
+                # 句子本体；同名客户不判（纯函数内兜）；对方名未知**照判**
+                # （#96 0830 实锤改判——B 线无 peer 名管道曾致该路裸奔）。
                 # 子开关 persona_guard.vocative.enabled（默认开，随总开关）。
                 _voc_on = True
                 try:
@@ -4785,6 +4856,9 @@ class SkillManager(LoggerMixin):
                 (self.config.config or {}) if self.config else {})
             turns: Optional[int] = None
             has_mem = False
+            _user_texts: List[str] = []
+            _mem_text = ""
+            _asst_texts: List[str] = []
             if isinstance(user_context, dict):
                 try:
                     hist = user_context.get("_conversation_history") or []
@@ -4793,12 +4867,29 @@ class SkillManager(LoggerMixin):
                         if isinstance(m, dict) and m.get("role") == "user")
                     if user_context.get("_conversation_summary"):
                         turns = None
-                    has_mem = bool(str(
-                        user_context.get("_episodic_memory_text") or "").strip())
+                    _mem_text = str(
+                        user_context.get("_episodic_memory_text") or "").strip()
+                    has_mem = bool(_mem_text)
+                    # #91-A/C 语料：用户侧原话（回忆断言接地）+ assistant 近史
+                    # （认错口癖去重）。history 缺席=对应守卫自动不动手。
+                    _user_texts = [
+                        str(m.get("content") or "") for m in hist
+                        if isinstance(m, dict) and m.get("role") == "user"]
+                    _asst_texts = [
+                        str(m.get("content") or "") for m in hist
+                        if isinstance(m, dict) and m.get("role") == "assistant"]
                 except Exception:
                     turns, has_mem = None, False
+                    _user_texts, _mem_text, _asst_texts = [], "", []
+            _rel_stage = ""
+            if isinstance(user_context, dict):
+                _rel_stage = str(
+                    user_context.get("relationship_stage") or "")
             cleaned, meta = apply_outbound_text_guard(
-                reply, cfg, user_turns=turns, has_memory=has_mem)
+                reply, cfg, user_turns=turns, has_memory=has_mem,
+                user_texts=_user_texts, memory_text=_mem_text,
+                recent_assistant_texts=_asst_texts,
+                relationship_stage=_rel_stage)
             if meta.get("monologue_hits"):
                 self.logger.warning(
                     "%s[outbound_text_guard] 拦截内心独白/旁白 %r（B118）",
@@ -4810,6 +4901,24 @@ class SkillManager(LoggerMixin):
                     "turns=%s）", log_prefix,
                     [h[:40] for h in meta["recall_hits"][:3]], turns,
                 )
+            if meta.get("recall_grounding_hits"):
+                self.logger.warning(
+                    "%s[outbound_text_guard] 拦截现编回忆断言 %r（#91-A，"
+                    "对不上历史/记忆原话）", log_prefix,
+                    [h[:40] for h in meta["recall_grounding_hits"][:3]],
+                )
+            if meta.get("shared_past_hits"):
+                self.logger.warning(
+                    "%s[outbound_text_guard] 拦截虚构共同经历叙事 %r"
+                    "（#110，stage=%s）", log_prefix,
+                    [h[:40] for h in meta["shared_past_hits"][:3]],
+                    _rel_stage or "-",
+                )
+            if meta.get("apology_hits"):
+                self.logger.info(
+                    "%s[outbound_text_guard] 认错口癖已换变体 %r（#91-C）",
+                    log_prefix, [h[:20] for h in meta["apology_hits"][:3]],
+                )
             if meta.get("lang_mix"):
                 _lvl = self.logger.warning if str(
                     meta["lang_mix"]).startswith("hard") else self.logger.info
@@ -4817,6 +4926,37 @@ class SkillManager(LoggerMixin):
                     "%s[outbound_text_guard] 语种混杂 %s（B121）出站前=%r",
                     log_prefix, meta["lang_mix"], reply[:60],
                 )
+            # #104（实施91，0831 原图 860「我这边也在下着小雨」实锤）：
+            # 第一人称本地天气断言 vs 事实兜底——无天气事实（weather 关/无
+            # 所在地/取数失败）全剥、有事实剥与 bucket 相斥的断言。prompt 层
+            # 「无事实禁报天气」钉子是第一道，这里保证编造断言绝不出站。
+            # 子开关 companion.weather.claim_guard（默认开）。
+            try:
+                _wx_guard_on = True
+                _wcfg104 = (((self.config.config or {}).get("companion") or {})
+                            .get("weather") or {}) if self.config else {}
+                if isinstance(_wcfg104, dict):
+                    _wx_guard_on = bool(_wcfg104.get("claim_guard", True))
+                if _wx_guard_on and (cleaned or reply):
+                    from src.companion.weather_state import (
+                        strip_weather_claim_conflicts,
+                    )
+                    _wx_snap = (user_context or {}).get(
+                        "_persona_weather_snap") if isinstance(
+                            user_context, dict) else None
+                    _wx_bucket = str(getattr(_wx_snap, "bucket", "") or "")
+                    _wx_out, _wx_hits = strip_weather_claim_conflicts(
+                        cleaned or reply, _wx_bucket)
+                    if _wx_hits:
+                        self.logger.warning(
+                            "%s[outbound_text_guard] 拦截无接地/冲突天气断言"
+                            " %r（#104，bucket=%s）", log_prefix,
+                            [h[:40] for h in _wx_hits[:3]],
+                            _wx_bucket or "无事实")
+                        cleaned = _wx_out
+            except Exception:
+                self.logger.debug("[outbound_text_guard] 天气断言守卫异常"
+                                  "（保留原文）", exc_info=True)
             return cleaned or reply
         except Exception:
             self.logger.debug(
@@ -5277,8 +5417,11 @@ class SkillManager(LoggerMixin):
                         min_hits=int(ccfg.get("min_hits", 2)),
                         min_salience=(float(_ms) if _ms is not None else None),
                         dedup_threshold=_dd_thr,
+                        # #96（实施91）：默认开——0831 实锤同客户三条年龄条目
+                        # 并存打架（22岁/21岁/今年21岁），矛盾消解保留最新、
+                        # 旧值标 stale（保留备查，绝不硬删）。显式 false 仍可关。
                         resolve_contradictions=bool(
-                            ccfg.get("resolve_contradictions", False)
+                            ccfg.get("resolve_contradictions", True)
                         ),
                         # R11：新证据推翻旧 stable 结论（搬家/分手）；默认关
                         supersede_stable=bool(ccfg.get("supersede_stable", False)),
@@ -6014,12 +6157,18 @@ class SkillManager(LoggerMixin):
             if (_crc(seed) % 1000) / 1000.0 >= max(0.0, min(1.0, prob)):
                 return ""
             from src.companion.daily_topics import (
+                parse_topics_cfg,
                 pick_topics_for,
                 smalltalk_topic,
             )
+            # 实施84 P2：仪式闲聊选题同样吃内容策略（不做赛事、社会/娱乐为主）
+            _tc = parse_topics_cfg(_cfg)
             _tastes = [str(w) for w in (interests or []) if str(w).strip()]
             topics = pick_topics_for(
-                _tastes or None, k=4, variety_key=f"rst:{contact_key}") or []
+                _tastes or None, k=4, variety_key=f"rst:{contact_key}",
+                cache_path=_tc.get("cache_path"),
+                exclude_sports=bool(_tc.get("exclude_sports", True)),
+                prefer_kinds=_tc.get("prefer_kinds")) or []
             light = [t for t in topics if smalltalk_topic(t)]
             if not light:
                 return ""
@@ -6413,6 +6562,7 @@ class SkillManager(LoggerMixin):
         user_context.pop("_peer_clock_line", None)
         user_context.pop("_peer_holiday_note", None)
         user_context.pop("_peer_local_now", None)
+        user_context.pop("_peer_country", None)
         try:
             _cfg = self.config.config if hasattr(self.config, "config") else (
                 self.config if isinstance(self.config, dict) else {})
@@ -6444,6 +6594,16 @@ class SkillManager(LoggerMixin):
                     language=lang,
                     cfg=uc_cfg,
                 )
+            # 实施84 P2：用户国别顺手入 context（同一次解析零额外成本）——
+            # daily_topics 的「新闻以用户所在国家为准」消费它；显式信号
+            # （自述城市/号码国码/语种默认国）解析不出＝不落键。
+            if clock is not None:
+                try:
+                    _cc = str(getattr(clock, "country", "") or "").strip().upper()
+                    if len(_cc) == 2:
+                        user_context["_peer_country"] = _cc
+                except Exception:
+                    pass
             if want_clock and clock is not None:
                 from src.companion.user_clock import user_now, user_time_line
                 _line = user_time_line(clock, "zh")
@@ -6598,19 +6758,29 @@ class SkillManager(LoggerMixin):
             )
             tcfg = parse_topics_cfg(cfg)
             if tcfg["enabled"]:
-                # 实施55 按人设分源：人设 id / 居住地国家命中 region_feeds →
-                # 该区域独立缓存独立刷新（哈尔滨人设聊哈尔滨/国内社会新闻、
-                # 温哥华人设聊加拿大本地）；未命中＝全局池旧行为。
+                # 分源优先级（实施84 P2 > 实施55）：**用户**所在国家（显式信号：
+                # 自述城市/号码国码，经 _inject_peer_locale 落 _peer_country）
+                # → 人设居住地 → 全局池。「用户在哪」优先于「人设在哪」——
+                # 老板拍板「新闻以用户所在城市和国家为准」。
                 _rcfg = tcfg
                 try:
                     from src.companion.daily_topics import (
                         cfg_for_region,
+                        cfg_for_user_region,
                         region_key_for,
                     )
-                    _rk = region_key_for(
-                        _persona_obj, tcfg.get("region_feeds"))
-                    if _rk:
-                        _rcfg = cfg_for_region(tcfg, _rk)
+                    _ucc = str(user_context.get("_peer_country") or "").strip()
+                    if _ucc:
+                        _ucfg = cfg_for_user_region(
+                            tcfg, _ucc,
+                            lang=str(user_context.get("reply_lang") or "zh"))
+                        if _ucfg is not None:
+                            _rcfg = _ucfg
+                    if _rcfg is tcfg:
+                        _rk = region_key_for(
+                            _persona_obj, tcfg.get("region_feeds"))
+                        if _rk:
+                            _rcfg = cfg_for_region(tcfg, _rk)
                 except Exception:
                     _rcfg = tcfg
                 refresh_if_stale(_rcfg)  # 后台 daemon 线程，绝不阻塞本轮
@@ -6619,6 +6789,28 @@ class SkillManager(LoggerMixin):
                     or user_context.get("conversation_id")
                     or user_context.get("user_id")
                     or "") or "_"
+                # 实施84 P2 兴趣路由：**用户**聊天里的兴趣词（episodic 记忆文本
+                # 的内容 token，与 ritual 兴趣词同一取词口径）为主词、人设口味
+                # 为次词——「根据用户聊天中喜欢的事情做新话题」。提取失败回落
+                # 纯人设词（旧行为）。
+                _user_words: List[str] = []
+                try:
+                    _epi_txt = str(
+                        user_context.get("_episodic_memory_text") or "")
+                    if _epi_txt.strip():
+                        from src.ai.memory_grounding import _content_tokens
+                        _lat, _cjk = _content_tokens(_epi_txt)
+                        _user_words = (list(_lat) + list(_cjk))[:24]
+                except Exception:
+                    _user_words = []
+                _pick_kw = {
+                    "k": tcfg["pick_k"],
+                    "variety_key": _key if _key != "_" else "",
+                    "exclude_sports": bool(tcfg.get("exclude_sports", True)),
+                    "prefer_kinds": tcfg.get("prefer_kinds"),
+                }
+                if _user_words:
+                    _pick_kw["secondary_tastes"] = persona_words
                 # 直球新闻问句 → 强指令（弱指令实测被 LLM 忽略答「没什么新闻」）
                 _news_ask = is_news_question(text)
                 if should_offer_topics(
@@ -6628,16 +6820,14 @@ class SkillManager(LoggerMixin):
                     # variety_key=会话键：素材轮换按会话分散（同会话当日恒定），
                     # 防「所有人同一天拿到同一批头条」的机器人味（news_share 同修）
                     _topics = pick_topics_for(
-                        persona_words, k=tcfg["pick_k"],
-                        cache_path=_rcfg["cache_path"],
-                        variety_key=_key if _key != "_" else "")
+                        _user_words or persona_words,
+                        cache_path=_rcfg["cache_path"], **_pick_kw)
                     # 区域缓存冷启动（刚配好还没刷出来）→ 回落全局池，
                     # 宁可聊全局新闻也不空手（区域缓存刷出后自动切回）
                     if not _topics and _rcfg is not tcfg:
                         _topics = pick_topics_for(
-                            persona_words, k=tcfg["pick_k"],
-                            cache_path=tcfg["cache_path"],
-                            variety_key=_key if _key != "_" else "")
+                            _user_words or persona_words,
+                            cache_path=tcfg["cache_path"], **_pick_kw)
                     def _news_metric(_name: str) -> None:
                         try:
                             from src.monitoring.metrics_store import (
@@ -8345,6 +8535,15 @@ class SkillManager(LoggerMixin):
                     generic_ok = False
         except Exception:
             pass
+        # 实施90 季节/地点门（与 B 线 pick_registered_media 同口径）：
+        # 人设「此刻季节 + 所在国」上下文，软失败=不设门。
+        _geo90 = {"season": "", "country": ""}
+        if _cc.get("season_gate") or _cc.get("place_gate"):
+            try:
+                from src.companion.media_taxonomy import persona_geo_context
+                _geo90 = persona_geo_context(pid)
+            except Exception:
+                _geo90 = {"season": "", "country": ""}
         try:
             row = pick_media(store, pid, text, generic_ok=generic_ok,
                              avoid_id=avoid, bond_level=bond,
@@ -8354,7 +8553,12 @@ class SkillManager(LoggerMixin):
                              resend_cooldown_hours=_cc.get(
                                  "resend_cooldown_hours", 0),
                              continuity_minutes=_cc.get(
-                                 "continuity_minutes", 0))
+                                 "continuity_minutes", 0),
+                             no_resend=bool(_cc.get("no_resend")),
+                             now_season=(str(_geo90.get("season") or "")
+                                         if _cc.get("season_gate") else ""),
+                             home_country=(str(_geo90.get("country") or "")
+                                           if _cc.get("place_gate") else ""))
         except Exception:
             row = None
         if not row:
@@ -9226,7 +9430,7 @@ class SkillManager(LoggerMixin):
                 ((self.config.config or {}).get("companion") or {})
                 .get("weather") or {}
             ) if getattr(self, "config", None) else {}
-            if not (isinstance(_wcfg, dict) and _wcfg.get("enabled")
+            if not (isinstance(_wcfg, dict) and _wcfg.get("enabled", True)
                     and _wcfg.get("scene_filter", True)):
                 return None
             return snap
@@ -9281,10 +9485,13 @@ class SkillManager(LoggerMixin):
             _gap = time_gap_line(_place, "zh", _local_now)
             if _gap:
                 user_context["_persona_time_gap_line"] = _gap
-            # 当地天气事实（companion.weather.enabled；默认关，软失败）
+            # 当地天气事实（companion.weather.enabled；#104 实施91 起默认开
+            # ——Open-Meteo 免 key + TTL 缓存 + 软失败，无所在地人设零改变；
+            # 显式 false 可关。默认关的旧态=「AI 对人设当地天气零事实来源」，
+            # 共情镜像客户天气纯靠编，0831 原图 860 实锤）
             try:
                 _wcfg = _cc.get("weather") or {}
-                if isinstance(_wcfg, dict) and _wcfg.get("enabled"):
+                if isinstance(_wcfg, dict) and _wcfg.get("enabled", True):
                     from src.companion.weather_state import (
                         fetch_weather, weather_chat_note,
                         weather_proactive_hook,

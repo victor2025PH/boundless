@@ -120,6 +120,11 @@ async def start_assistant(assistant):
             )
             asyncio.create_task(assistant._periodic_self_heal(), name="kb_periodic_self_heal")
             asyncio.create_task(assistant._periodic_daily_learn(), name="daily_learner")
+            # ★ #88：dead-peer 存量标记核销（一次性启动迁移；flag 关=no-op）——
+            #   标记之后有成功出站的陈旧标（升级前累积）自动解除，黄条不再赖着。
+            from src.bootstrap.background_tasks import reconcile_dead_peer_marks
+            asyncio.create_task(
+                reconcile_dead_peer_marks(assistant), name="dead_peer_reconcile")
 
             # ★ W3-3G / W3-3K：启动 reunion 草稿成功率评估循环（DraftEvalScheduler）
             if assistant.contacts is not None and assistant.contacts.store is not None:
@@ -147,6 +152,18 @@ async def start_assistant(assistant):
 
             # ★ 多平台 deferred 队列（非 messenger 主动消息的发送闭环；默认关）
             await assistant._maybe_start_deferred_outbox()
+
+            # ★ 出站收口点铆定语言翻译器（#106 实施91）：orch.send / A 线发送口
+            #   的 sendpoint_lang_pin_fix 复用 deferred 同一翻译包装
+            #   （translate_outbound_text：B67 explicit 优先 + 已是客户语言即
+            #   跳过 + HOLD 无兜底纪律）。注册失败只损失兜底翻译（守卫本体
+            #   passthru 放行），绝不影响启动。
+            try:
+                from src.ai.sendpoint_guard import set_sendpoint_translator
+                set_sendpoint_translator(assistant._maybe_translate_outbound)
+                assistant.logger.info("✅ 出站收口点铆定翻译器已注册（#106）")
+            except Exception:
+                assistant.logger.debug("收口点铆定翻译器注册跳过", exc_info=True)
 
             # ★ 质量趋势持久化（周期落地 companion_quality_overview；默认关）
             await assistant._maybe_start_quality_trend()
