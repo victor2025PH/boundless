@@ -119,6 +119,14 @@ REAL: List[Tuple[str, str, str]] = [
     # 吞了回复，客户消息超 2h 无回复且无待审稿必触发此 WARNING，从此 15min 内上报。
     (r"入站漏球",
      "warn", "有客户消息长时间无回复且无待审稿（自动回复链可能被静默拦断）"),
+    # 2026-08-31 #101 教训：LINE 语音/图下载失败此前是 debug 级＝任何监控都看不见，
+    # 客户机上「无音频存档」两天无人能归因。line_media 已升 WARNING，这里接住：
+    # download_error/empty_body/write_error 是链路坏（token/网络/磁盘），too_large
+    # 是护栏正常工作不报。出站时长探不到（对方端将显示 0:00）同报。
+    (r"\[line_media\] 入站媒体未取到.*reason=(download_error|empty_body|write_error)",
+     "warn", "LINE 入站媒体拉取失败（客户发的图/语音坐席看不到）——查 token/网络；会话里可点「拉取原件」补救"),
+    (r"\[line_media\] 出站媒体时长未探到",
+     "warn", "LINE 出站语音/视频缺时长（对方端显示 0:00）——查随包 ffmpeg/ffprobe 是否完好"),
 ]
 
 _ERR_LINE = re.compile(r"\[(ERROR|WARNING|CRITICAL)\]|Traceback|Exception in ASGI|not iterable")

@@ -260,3 +260,142 @@ def test_fetch_guards(rig, monkeypatch):
     finally:
         uar._MEDIA_FETCH_INFLIGHT.discard(mid)
     assert dl.await_count == 0                # 全部护栏路径零下载 RPC
+
+
+# ═════════ 4) LINE fetch-media（#101：同一按钮/同一响应契约的 LINE 版）═════════
+# 入站下载瞬态失败/token 陈旧 → 行落成「无音频存档」（media_type 有、ref 空）；
+# OBS 对象在 LINE 服务端仍在（真机取证 ≥2 天可回取）→ 本端点按 platform_msg_id
+# 走生产同一条 download_line_media 回取回填。
+
+LACCT = "Uacc1"
+LPEER = "Upeer1"
+LMSGID = "629370458785710302"
+_LURL = f"/static/protocol_media/line/{LACCT}_{LMSGID}.m4a"
+
+
+def _lcid() -> str:
+    return f"line:{LACCT}:{LPEER}"
+
+
+def _ingest_line_row(store, *, msg_id: str = LMSGID, text: str = "",
+                     media_type: str = "voice") -> str:
+    pb.ingest_incoming(
+        store, platform="line", account_id=LACCT, chat_key=LPEER,
+        text=text, direction="in", msg_id=msg_id,
+        media_type=media_type, media_ref="", ts=time.time())
+    rows = store.list_messages(_lcid())
+    return str(rows[-1]["message_id"])
+
+
+@pytest.fixture()
+def line_rig(tmp_path, monkeypatch):
+    """最小 app：真 store + 假编排器（运行中的 LINE worker 带假 okline client）。"""
+    store = InboxStore(tmp_path / "inbox.db")
+    cfgm = SimpleNamespace(config={})   # platform_login.line.media.inbound 默认开
+    app = FastAPI()
+    uar.register_account_routes(app, api_auth=lambda r: None, config_manager=cfgm)
+    app.state.inbox_store = store
+    client = TestClient(app)
+    uar._MEDIA_FETCH_INFLIGHT.clear()
+    fake_worker = SimpleNamespace(client=SimpleNamespace(tag="okline"))
+    import src.integrations.account_orchestrator as ao
+    monkeypatch.setattr(ao, "get_orchestrator", lambda: SimpleNamespace(
+        worker_for=lambda p, a: fake_worker
+        if (p, a) == ("line", LACCT) else None))
+    try:
+        yield SimpleNamespace(app=app, client=client, store=store,
+                              cfgm=cfgm, worker=fake_worker)
+    finally:
+        uar._MEDIA_FETCH_INFLIGHT.clear()
+
+
+def _lpost(rig_, mid: str, acct: str = LACCT):
+    return rig_.client.post(
+        f"/api/platforms/line/{acct}/fetch-media", json={"message_id": mid})
+
+
+def test_line_fetch_happy_path_backfills_row(line_rig, monkeypatch):
+    import src.integrations.line_media as LM
+    seen = {}
+
+    def _dl(client, message, account_id, *, cfg=None):
+        seen["msg"] = dict(message)
+        seen["acct"] = account_id
+        seen["client"] = client
+        return "voice", _LURL
+
+    monkeypatch.setattr(LM, "download_line_media", _dl)
+    mid = _ingest_line_row(line_rig.store)
+    d = _lpost(line_rig, mid).json()
+    assert d["ok"] is True and d["media_ref"] == _LURL
+    # 回取用行上的 platform_msg_id + 按 media_type 推的 contentType（voice→3）
+    assert seen["msg"] == {"id": LMSGID, "contentType": 3, "contentMetadata": {}}
+    assert seen["acct"] == LACCT
+    assert seen["client"] is line_rig.worker.client, "必须用运行中 worker 的 client"
+    row = line_rig.store.get_message(mid)
+    assert row["media_type"] == "voice" and row["media_ref"] == _LURL
+
+
+def test_line_fetch_disabled_by_inbound_switch(line_rig):
+    line_rig.cfgm.config = {
+        "platform_login": {"line": {"media": {"inbound": False}}}}
+    mid = _ingest_line_row(line_rig.store)
+    assert _lpost(line_rig, mid).json() == {"ok": False, "reason": "disabled"}
+
+
+def test_line_fetch_idempotent_short_circuit(line_rig, monkeypatch):
+    import src.integrations.line_media as LM
+    calls = []
+    monkeypatch.setattr(
+        LM, "download_line_media",
+        lambda *a, **k: calls.append(1) or ("voice", _LURL))
+    mid = _ingest_line_row(line_rig.store)
+    assert _lpost(line_rig, mid).json()["ok"] is True
+    d = _lpost(line_rig, mid).json()
+    assert d["ok"] is True and d.get("already") is True
+    assert len(calls) == 1, "行已有 ref → 不该再打第二次 OBS"
+
+
+def test_line_fetch_download_failure_leaves_row_untouched(line_rig, monkeypatch):
+    import src.integrations.line_media as LM
+    monkeypatch.setattr(LM, "download_line_media", lambda *a, **k: ("voice", ""))
+    mid = _ingest_line_row(line_rig.store)
+    assert _lpost(line_rig, mid).json() == {"ok": False,
+                                            "reason": "download_failed"}
+    assert line_rig.store.get_message(mid)["media_ref"] == ""
+
+
+def test_line_fetch_guards(line_rig, monkeypatch):
+    import src.integrations.account_orchestrator as ao
+    import src.integrations.line_media as LM
+    calls = []
+    monkeypatch.setattr(
+        LM, "download_line_media",
+        lambda *a, **k: calls.append(1) or ("voice", _LURL))
+    # 纯文本占位行（media_type 空）→ LINE 推不出 contentType，如实 no_media
+    bare = _ingest_line_row(line_rig.store, msg_id="629370458785710999",
+                            text="[图片]", media_type="")
+    assert _lpost(line_rig, bare).json()["reason"] == "no_media"
+    # 哈希兜底键（无平台消息 id）→ OBS 无从定位
+    nokey = _ingest_line_row(line_rig.store, msg_id="")
+    assert _lpost(line_rig, nokey).json()["reason"] == "no_platform_msg_id"
+    # 账号不匹配（路径账号 ≠ 行所属账号）
+    mid = _ingest_line_row(line_rig.store, msg_id="629370458785711000")
+    assert _lpost(line_rig, mid, acct="other").json()["reason"] == \
+        "account_mismatch"
+    # TG 会话的行投到 LINE 端点 → 平台如实拒绝
+    tg_mid = _ingest_row(line_rig.store, media_type="image")
+    assert _lpost(line_rig, tg_mid).json()["reason"] == "unsupported_platform"
+    # worker 不在线（编排器无该账号）→ client_unavailable
+    monkeypatch.setattr(ao, "get_orchestrator", lambda: SimpleNamespace(
+        worker_for=lambda p, a: None))
+    assert _lpost(line_rig, mid).json()["reason"] == "client_unavailable"
+    # 行级单飞：in-flight 中直接 busy
+    monkeypatch.setattr(ao, "get_orchestrator", lambda: SimpleNamespace(
+        worker_for=lambda p, a: line_rig.worker))
+    uar._MEDIA_FETCH_INFLIGHT.add(mid)
+    try:
+        assert _lpost(line_rig, mid).json()["reason"] == "busy"
+    finally:
+        uar._MEDIA_FETCH_INFLIGHT.discard(mid)
+    assert calls == [], "全部护栏路径零 OBS 下载"

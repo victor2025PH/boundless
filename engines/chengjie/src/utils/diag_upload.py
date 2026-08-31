@@ -456,6 +456,16 @@ async def build_and_upload(config_manager, note: Any = "") -> Dict[str, Any]:
     note_s = sanitize_note(note)
     if note_s:
         meta["user_note"] = note_s
+    # #101：LINE 媒体收发计数随包——入站 miss 原因分布（download_error/empty_body/
+    # write_error…）就是「无音频存档」的远程归因读数；进程内存计数重启即清，
+    # 包里这份＝事发现场。零流量（active=False）不占版面。只记原因标签，无消息原文。
+    try:
+        from src.integrations.line_media_stats import get_line_media_stats
+        _lm = get_line_media_stats().dump()
+        if _lm.get("active"):
+            meta["line_media"] = _lm
+    except Exception:
+        pass
     fp = machine_code()
 
     # B98/B76：主 app.log（runtime_log_files）+ 打包态壳镜像 backend.log

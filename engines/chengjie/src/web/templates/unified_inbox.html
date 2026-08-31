@@ -8974,16 +8974,23 @@ function _legacyVoiceHtml(text, m){
   const tx=body?`<div class="msg-voice-tx" title="${window.T('inbox.media.voice_tx_t')}"><span class="vx-ic">${uiIcon('mic',12)}</span>${nChip}<span>${esc(body)}</span></div>`:'';
   return (tx||`<div class="msg-media-placeholder">${window.T('inbox.media.voice')}${nChip}</div>`)+na+_fetchBtnHtml(m);
 }
-/* ── 媒体按需拉取（P1，2026-08-04）：无归档媒体行的「拉取原件」入口 ──
+/* ── 媒体按需拉取（P1，2026-08-04；#101 起扩到 LINE）：无归档媒体行的「拉取原件」──
    面向三类行：历史同步的结构化媒体行（media_type 有、media_ref 空）、镜像/入站
-   超限或失败的行、存量「[图片]」纯占位行。只对 Telegram 会话且行有 message_id 时
-   出现——服务端按行上的 platform_msg_id 去云端取回（云端与手机同源，消息没删就
-   拉得回），update_message_media 幂等回填后原地重渲成真图/播放器。 */
+   超限或失败的行、存量「[图片]」纯占位行。服务端按行上的 platform_msg_id 回取，
+   update_message_media 幂等回填后原地重渲成真图/播放器。平台差异：
+   TG=云端与手机同源，任何行形态都能试拉；LINE=按 OBS 对象回取，需要行上有
+   media_type 才推得出 contentType（贴纸行里没存 STKID，回取不了不出按钮）。 */
+const _LINE_FETCHABLE=new Set(['voice','audio','image','photo','video','document','file']);
 function _fetchBtnHtml(m){
   if(!m||!m.message_id) return '';
-  if(!selectedChat||String(selectedChat.platform||'')!=='telegram') return '';
+  const plat=String((selectedChat&&selectedChat.platform)||'');
+  let tip='inbox.media.fetch_t';
+  if(plat==='line'){
+    if(!_LINE_FETCHABLE.has(String(m.media_type||'').toLowerCase())) return '';
+    tip='inbox.media.fetch_line_t';
+  }else if(plat!=='telegram') return '';
   const id=esc(String(m.message_id));
-  return ` <button class="tiny-btn media-fetch-btn" data-mfid="${id}" title="${window.T('inbox.media.fetch_t')}" onclick="fetchMsgMedia('${id}')">${window.T('inbox.media.fetch')}</button>`;
+  return ` <button class="tiny-btn media-fetch-btn" data-mfid="${id}" title="${window.T(tip)}" onclick="fetchMsgMedia('${id}')">${window.T('inbox.media.fetch')}</button>`;
 }
 /* 存量裸占位行（「[图片]」等纯文本、无 media_type/media_ref）→ 升级为占位卡+拉取
    按钮；非 TG/无行主键时返回 null 维持旧的纯文本渲染，绝不误伤。 */
@@ -8996,12 +9003,15 @@ function _legacyMediaFetchHtml(m){
 }
 async function fetchMsgMedia(msgId){
   if(!selectedChat) return;
+  // #101 P1：TG 之外 LINE 也能回取（服务端各有端点、同一响应契约）；其余平台无服务端支持
+  const plat=String(selectedChat.platform||'');
+  if(plat!=='telegram'&&plat!=='line') return;
   const btn=document.querySelector('.media-fetch-btn[data-mfid="'+String(msgId).replace(/["\\]/g,'')+'"]');
   if(btn){ if(btn.disabled) return; btn.disabled=true; btn.textContent=window.T('inbox.media.fetching'); }
   try{
     const acct=encodeURIComponent(selectedChat.account_id||'default');
-    // 服务端从 TG 拉媒体可跑到分钟级 → 显式长预算；超时按钮回「重试」态，比裸 fetch 永挂「获取中」强
-    const r=await apiFetch('/api/platforms/telegram/'+acct+'/fetch-media',{method:'POST',
+    // 服务端拉媒体可跑到分钟级 → 显式长预算；超时按钮回「重试」态，比裸 fetch 永挂「获取中」强
+    const r=await apiFetch('/api/platforms/'+encodeURIComponent(plat)+'/'+acct+'/fetch-media',{method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({message_id:String(msgId)})}, {timeoutMs:120000});
     const d=(await r.json().catch(()=>null))||{};
@@ -9011,7 +9021,8 @@ async function fetchMsgMedia(msgId){
       try{ renderMessages(selectedChat, threadMsgs, {silent:true, preserveTop:true}); }catch(_){}
       return;
     }
-    const map={disabled:'inbox.media.fetch_disabled',oversize:'inbox.media.fetch_oversize',
+    const map={disabled:(plat==='line'?'inbox.media.fetch_disabled_line':'inbox.media.fetch_disabled'),
+      oversize:'inbox.media.fetch_oversize',
       message_not_found:'inbox.media.fetch_gone',no_media:'inbox.media.fetch_gone'};
     if(btn){ btn.disabled=false; btn.textContent=window.T(map[String(d.reason||'')]||'inbox.media.fetch_failed'); }
   }catch(_){

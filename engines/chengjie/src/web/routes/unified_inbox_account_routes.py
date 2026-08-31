@@ -3132,6 +3132,116 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                 "media_type": str(fresh.get("media_type") or mt),
                 "media_ref": str(fresh.get("media_ref") or mr)}
 
+    # 行上的 media_type → LINE contentType（回取用）。贴纸刻意不回取：贴纸图在
+    # 商店 CDN、按 contentMetadata.STKID 定位，而行里没存 STKID，无从定位。
+    _LINE_FETCH_CT = {
+        "voice": 3, "audio": 3, "image": 1, "photo": 1, "video": 2,
+        "document": 14, "file": 14,
+    }
+
+    @app.post("/api/platforms/line/{account_id}/fetch-media")
+    async def api_line_fetch_media(account_id: str, request: Request):
+        """LINE 版媒体按需拉取（#101 P1）：与 TG 端点同契约、同一个前端按钮。
+
+        入站下载瞬态失败/token 陈旧会把行落成「无音频存档」（``media_type`` 有、
+        ``media_ref`` 空），而 OBS 对象在 LINE 服务端仍在（真机取证：≥2 天后仍可
+        回取）——本端点按行上的 ``platform_msg_id`` 走**生产同一条**
+        ``download_line_media``（含 401 刷 token + 瞬态重试）重新归档回填。
+
+        闸门＝``platform_login.line.media.inbound``（与入站自动下载同一开关）：
+        OBS GET 是官方客户端打开会话本就会发的请求，无 TG 的 FloodWait 类风控
+        风险，刻意不另设 ``media_fetch`` 开关。单飞/并发上限与 TG 共用同一套
+        （``_MEDIA_FETCH_INFLIGHT``——全局媒体拉取预算本就该跨平台共享）。
+        """
+        api_auth(request)
+        store = getattr(request.app.state, "inbox_store", None)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        message_id = str((body or {}).get("message_id") or "").strip()
+        if not message_id:
+            raise HTTPException(
+                400, tr(request, "err.ws.field_required", field="message_id"))
+        from src.integrations.line_media import resolve_line_media_cfg
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        mcfg = resolve_line_media_cfg(cfg)
+        if not mcfg.get("inbound", True):
+            return {"ok": False, "reason": "disabled"}
+
+        row = store.get_message(message_id)
+        if not row:
+            return {"ok": False, "reason": "message_not_found"}
+        if str(row.get("media_ref") or "").strip():
+            # 已有归档（并发拉取/镜像先到）：幂等直接返回现值，不重复下载
+            return {"ok": True, "already": True,
+                    "media_type": str(row.get("media_type") or ""),
+                    "media_ref": str(row.get("media_ref") or "")}
+        cid = str(row.get("conversation_id") or "")
+        conv = store.get_conversation(cid) or {}
+        if str(conv.get("platform") or "") != "line":
+            return {"ok": False, "reason": "unsupported_platform"}
+        if str(conv.get("account_id") or "") != str(account_id or ""):
+            return {"ok": False, "reason": "account_mismatch"}
+        ct = _LINE_FETCH_CT.get(str(row.get("media_type") or "").strip().lower())
+        if ct is None:
+            # 行上没有可回取的媒体形态（纯文本占位/贴纸）——LINE 需要 contentType
+            # 才能推扩展名与识别大类，这与 TG「get_messages 自带媒体形态」不同。
+            return {"ok": False, "reason": "no_media"}
+        pmid = str(row.get("platform_msg_id") or "").strip()
+        if not pmid.isdigit():
+            # 旧行落库时没有平台消息 id（:h: 哈希兜底键）——OBS 无从定位
+            return {"ok": False, "reason": "no_platform_msg_id"}
+
+        from src.integrations.account_orchestrator import get_orchestrator
+        worker = get_orchestrator().worker_for("line", account_id)
+        client = getattr(worker, "client", None)
+        if client is None:
+            return {"ok": False, "reason": "client_unavailable"}
+        if message_id in _MEDIA_FETCH_INFLIGHT:
+            return {"ok": False, "reason": "busy"}
+        if len(_MEDIA_FETCH_INFLIGHT) >= _MEDIA_FETCH_MAX_CONCURRENT:
+            return {"ok": False, "reason": "busy"}
+
+        _MEDIA_FETCH_INFLIGHT.add(message_id)
+        try:
+            from src.integrations.line_media import download_line_media
+            fake = {"id": pmid, "contentType": ct, "contentMetadata": {}}
+            try:
+                # OBS GET 是同步 requests → 丢线程；不占 worker 的 _api_lock——
+                # 下载不取 reqSeq，与接收线程内的入站下载同一并发语义。
+                mt, mr = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        download_line_media, client, fake,
+                        str(account_id or ""), cfg=mcfg),
+                    timeout=60.0)
+            except (TimeoutError, asyncio.TimeoutError):
+                return {"ok": False, "reason": "timeout"}
+            except Exception:
+                logger.debug("[protocol] line 媒体按需拉取失败", exc_info=True)
+                return {"ok": False, "reason": "service_error"}
+        finally:
+            _MEDIA_FETCH_INFLIGHT.discard(message_id)
+        try:
+            from src.integrations.outbound_mirror_stats import (
+                get_outbound_mirror_stats,
+            )
+            get_outbound_mirror_stats().record_publish(
+                "line", f"fetch_{mt or 'unknown'}", ok=bool(mr))
+        except Exception:
+            pass
+        if not mr:
+            # miss 细因已由 download_line_media 记 WARNING + line_media_stats
+            return {"ok": False, "reason": "download_failed"}
+        store.update_message_media(
+            cid, media_type=mt, media_ref=mr, message_id=message_id)
+        fresh = store.get_message(message_id) or {}
+        return {"ok": True,
+                "media_type": str(fresh.get("media_type") or mt),
+                "media_ref": str(fresh.get("media_ref") or mr)}
+
     @app.get("/api/platforms/telegram/{account_id}/full-sync")
     async def api_telegram_full_sync_status(account_id: str, request: Request):
         """全量深同步进度快照（前端轮询）+ 断点账本摘要（已完成会话数）。"""

@@ -39,6 +39,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+import time
 from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -255,9 +256,22 @@ def _probe_media_flow(api: Any, chat_mid: str) -> str:
 def _probe_duration_ms(path: str) -> int:
     """音/视频时长（毫秒），软失败返回 0。
 
-    LINE 的语音条按 ``contentMetadata.DURATION`` 画时长与波形，给 0 会显示成
-    「0:00」——像坏消息。ffprobe 缺失时只能认 0，不阻断发送。
+    LINE 的语音/视频条按 ``contentMetadata.DURATION`` 画时长与波形，给 0 会显示成
+    「0:00」——像坏消息（#101 实锤：客户桌面包对方端全是 0:00）。首选
+    ``voice_sender.probe_audio_duration_ms``：它经 ``ffmpeg_resolver`` 找 ffprobe
+    ——客户包的 ffprobe 在 ``resources/ffmpeg/``、不在 PATH，此前这里走的
+    ``media_probe`` 是裸 ``shutil.which``，打包态永远探不到＝0:00 的根因。
+    ``media_probe.probe_video`` 兜底（现已同接 resolver，双保险；对纯音频同样
+    能出容器级 duration）。仍探不到只能按 0 发，不阻断发送。
     """
+    try:
+        from src.client.voice_sender import probe_audio_duration_ms
+        ms = probe_audio_duration_ms(path)
+        if ms and int(ms) > 0:
+            return int(ms)
+    except Exception:
+        logger.debug("[line_media] probe_audio_duration_ms 异常（转 media_probe 兜底）",
+                     exc_info=True)
     try:
         from src.companion.media_probe import probe_video
         info = probe_video(path) or {}
@@ -265,6 +279,82 @@ def _probe_duration_ms(path: str) -> int:
     except Exception:
         logger.debug("[line_media] 时长探测失败（按 0 发）", exc_info=True)
         return 0
+
+
+_OBS_RETRY_SLEEP_SEC = 0.8
+_OBS_REFRESH_COOLDOWN_SEC = 600.0
+#: 这些 miss 原因是「链路坏了」而非配置/护栏选择——必须在 WARNING 级可见
+#: （#101 教训：旧 debug 级日志在客户机 backend.log 里根本查不到，失败原因只能猜）。
+_MISS_WARN_REASONS = frozenset({"download_error", "empty_body", "write_error"})
+
+
+def _http_status(exc: BaseException) -> int:
+    """从 requests.HTTPError 类异常里挖 HTTP 状态码；挖不到返回 0。"""
+    resp = getattr(exc, "response", None)
+    try:
+        return int(getattr(resp, "status_code", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _try_refresh_token(api: Any) -> bool:
+    """OBS 下载遇 401/403 时显式刷一次 access token（600s 冷却，绝不抛）。
+
+    okline 只给 thrift 调用（``transport.post_json``）挂了 401 自动刷新钩子；
+    OBS 下载走裸 ``_send`` GET **不在保护圈内**——token 陈旧时文字链自愈、媒体
+    下载全灭，正是 #101「文字收得到、语音无音频存档」的结构洞。刷新复用
+    ``line_pull_sync.refresh_client_token``（摘钩防递归 + 回写会话文件）；
+    冷却防 refresh token 已死时每条媒体都白打一次 tokenRefresh。
+    """
+    now = time.monotonic()
+    try:
+        last = float(getattr(api, "_lm_refresh_ts", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        last = 0.0
+    if (now - last) < _OBS_REFRESH_COOLDOWN_SEC:
+        return False
+    try:
+        api._lm_refresh_ts = now  # noqa: SLF001 —— 按 client 记冷却戳（duck-typed）
+    except Exception:
+        pass
+    try:
+        from src.integrations.line_pull_sync import refresh_client_token
+        ok = bool(refresh_client_token(api))
+        if ok:
+            logger.info("[line_media] OBS 下载 401 → access token 已刷新，重试下载")
+        return ok
+    except Exception:
+        logger.debug("[line_media] token 刷新异常", exc_info=True)
+        return False
+
+
+def _obs_download_with_retry(api: Any, msg_id: str) -> Tuple[bytes, str]:
+    """OBS 对象下载，至多两次尝试；返回 ``(字节, 最后失败摘要)``。
+
+    真机取证（#101）：同一对象几分钟内两败两成——瞬态失败 × 零重试就是
+    「无音频存档」的日常来源，一次重试即可吃掉大部分瞬态。401/403 先刷
+    token 再立刻重试（见 ``_try_refresh_token``）；其余失败（含 200 空体）
+    短退避后重试一次。上界＝2 次 GET + 至多 1 次 tokenRefresh，单次仍由
+    okline transport 的 30s 超时兜底。
+    """
+    last = ""
+    for attempt in (1, 2):
+        try:
+            data = api.obs.download_object(_OBS_SERVICE, _OBS_SID, msg_id) or b""
+            if data:
+                return data, ""
+            last = "empty_body"
+        except Exception as exc:  # noqa: BLE001
+            last = f"{type(exc).__name__}: {str(exc)[:120]}"
+            logger.debug("[line_media] OBS 下载失败 attempt=%d id=%s",
+                         attempt, msg_id, exc_info=True)
+            if attempt == 1 and _http_status(exc) in (401, 403):
+                if _try_refresh_token(api):
+                    continue  # 刷新成功 → 立刻重试，不吃退避
+                break  # 刷新失败/冷却中：再试大概率仍 401，别白打
+        if attempt == 1:
+            time.sleep(_OBS_RETRY_SLEEP_SEC)
+    return b"", last
 
 
 def _download_sticker(url: str, timeout: float = 10.0) -> bytes:
@@ -300,9 +390,20 @@ def download_line_media(
     if meta is None:
         return "", ""
     kind, ext = meta
+    msg_id = str((message or {}).get("id") or "")
 
-    def _miss(reason: str) -> Tuple[str, str]:
+    def _miss(reason: str, detail: str = "") -> Tuple[str, str]:
         _record_inbound(kind, ok=False, skip_reason=reason)
+        if reason in ("disabled", "stickers_disabled"):
+            # 运营配置选择，不是故障——保持安静
+            logger.debug("[line_media] 入站媒体按开关跳过 kind=%s id=%s reason=%s",
+                         kind, msg_id, reason)
+        else:
+            # 链路失败必须 INFO/WARNING 级可见（#101：debug 级＝客户机上无法归因）
+            log = logger.warning if reason in _MISS_WARN_REASONS else logger.info
+            log("[line_media] 入站媒体未取到 kind=%s id=%s acct=%s reason=%s%s",
+                kind, msg_id, account_id, reason,
+                f" err={detail}" if detail else "")
         return kind, ""
 
     mcfg = cfg if isinstance(cfg, dict) else resolve_line_media_cfg(None)
@@ -312,36 +413,36 @@ def download_line_media(
     max_bytes = int(mcfg.get("inbound_max_bytes") or DEFAULT_INBOUND_MAX_BYTES)
     declared = line_declared_size(message)
     if declared and declared > max_bytes:
-        logger.info("[line_media] 入站媒体自报超限跳过下载 kind=%s size=%s max=%s",
-                    kind, declared, max_bytes)
-        return _miss("too_large_declared")
+        return _miss("too_large_declared", f"size={declared} max={max_bytes}")
 
-    msg_id = str((message or {}).get("id") or "")
     data = b""
-    try:
-        if kind == "sticker":
-            if not mcfg.get("stickers", True):
-                return _miss("stickers_disabled")
-            url = sticker_image_url(message)
-            if not url:
-                return _miss("no_sticker_id")
+    fail_detail = ""
+    if kind == "sticker":
+        if not mcfg.get("stickers", True):
+            return _miss("stickers_disabled")
+        url = sticker_image_url(message)
+        if not url:
+            return _miss("no_sticker_id")
+        try:
             data = _download_sticker(url)
-        else:
-            if not msg_id:
-                return _miss("no_message_id")
-            data = api.obs.download_object(_OBS_SERVICE, _OBS_SID, msg_id) or b""
-    except Exception:
-        logger.debug("[line_media] 入站媒体下载失败 kind=%s id=%s", kind, msg_id,
-                     exc_info=True)
-        return _miss("download_error")
+        except Exception:  # noqa: BLE001 —— _download_sticker 自身软失败，此处纯保险
+            logger.debug("[line_media] 贴纸下载异常 id=%s", msg_id, exc_info=True)
+            data = b""
+    else:
+        if not msg_id:
+            return _miss("no_message_id")
+        try:
+            data, fail_detail = _obs_download_with_retry(api, msg_id)
+        except Exception as exc:  # noqa: BLE001 —— 纯保险：helper 自身不应抛
+            return _miss("download_error", f"{type(exc).__name__}: {str(exc)[:120]}")
 
     if not data:
+        if fail_detail and fail_detail != "empty_body":
+            return _miss("download_error", fail_detail)
         return _miss("empty_body")
     # 自报体积不可信/缺失时的兜底：真实字节到手才知道大小，超限即丢（护磁盘）
     if len(data) > max_bytes:
-        logger.info("[line_media] 入站媒体实际超限丢弃 kind=%s size=%s max=%s",
-                    kind, len(data), max_bytes)
-        return _miss("too_large_actual")
+        return _miss("too_large_actual", f"size={len(data)} max={max_bytes}")
 
     try:
         from src.integrations.protocol_bridge import media_paths
@@ -351,9 +452,55 @@ def download_line_media(
             fh.write(data)
         _record_inbound(kind, ok=True)
         return kind, url
+    except Exception as exc:  # noqa: BLE001
+        return _miss("write_error", f"{type(exc).__name__}: {str(exc)[:120]}")
+
+
+#: 已是 AAC 家族容器（LINE 语音条原生格式）——无需转码
+_LINE_AUDIO_READY_EXTS = frozenset({".m4a", ".aac", ".mp4"})
+
+
+def _convert_audio_for_line(path: str) -> str:
+    """出站音频 → AAC/M4A 临时文件；不需要/失败返回空串＝按原格式直传（旧行为）。
+
+    全平台语音统一产 OGG/Opus（TG/WA 的语音条格式）。真机取证（#101）：LINE
+    服务端会把上传的 OGG 转码成 M4A 再分发（download 回吐 ``ftypisom``）——
+    能用但属未文档化行为；显式转 M4A 上传把「对方端能不能播」变成确定性，
+    且时长探测对象与实发文件永远一致。ffmpeg 走 resolver（客户包
+    ``resources/ffmpeg/`` 可达）。**调用方负责删除返回的临时文件。**
+    """
+    ext = os.path.splitext(str(path or ""))[1].lower()
+    if ext in _LINE_AUDIO_READY_EXTS:
+        return ""
+    try:
+        from src.utils.ffmpeg_resolver import ffmpeg_path
+        ff = ffmpeg_path()
     except Exception:
-        logger.debug("[line_media] 入站媒体落盘失败 kind=%s", kind, exc_info=True)
-        return _miss("write_error")
+        ff = None
+    if not ff:
+        return ""
+    import subprocess
+    import tempfile
+    dst = os.path.join(tempfile.gettempdir(),
+                       f"line_voice_{secrets.token_hex(6)}.m4a")
+    try:
+        r = subprocess.run(
+            [ff, "-y", "-v", "error", "-i", str(path), "-vn",
+             "-c:a", "aac", "-b:a", "64k", "-movflags", "+faststart", dst],
+            capture_output=True, text=True, timeout=60,
+        )
+        if r.returncode == 0 and os.path.isfile(dst) and os.path.getsize(dst) > 0:
+            return dst
+        logger.debug("[line_media] 音频转 M4A 失败 rc=%s（按原格式发）：%s",
+                     getattr(r, "returncode", "?"),
+                     (getattr(r, "stderr", "") or "")[:200])
+    except Exception:
+        logger.debug("[line_media] 音频转 M4A 异常（按原格式发）", exc_info=True)
+    try:
+        os.remove(dst)
+    except Exception:
+        pass
+    return ""
 
 
 def send_line_media(
@@ -389,21 +536,42 @@ def send_line_media(
         return _fail("unsupported_media_type")
     content_type, obs_type, cat = hit
 
+    # 音频显式转 M4A（#101 P1-2）：转成即用转码产物（字节/文件名/时长三者同源），
+    # 转不成按原格式直传＝旧行为。临时产物本函数负责清理。
+    tmp_m4a = _convert_audio_for_line(path) if content_type == CT_AUDIO else ""
+    if tmp_m4a:
+        path = tmp_m4a
+
+    def _drop_tmp() -> None:
+        if tmp_m4a:
+            try:
+                os.remove(tmp_m4a)
+            except Exception:
+                pass
+
     try:
         with open(path, "rb") as fh:
             data = fh.read()
     except Exception:
         logger.debug("[line_media] 出站媒体读取失败 path=%s", path, exc_info=True)
+        _drop_tmp()
         return _fail("media_unreadable")
 
     max_bytes = int(mcfg.get("outbound_max_bytes") or DEFAULT_OUTBOUND_MAX_BYTES)
     if len(data) > max_bytes:
+        _drop_tmp()
         return _fail("media_too_large")
 
     name = os.path.basename(path) or "media.bin"
     duration_ms = (
         _probe_duration_ms(path) if content_type in (CT_AUDIO, CT_VIDEO) else 0
     )
+    if content_type in (CT_AUDIO, CT_VIDEO) and duration_ms <= 0:
+        # 到这一步还探不到时长＝ffprobe 彻底缺席：对方端将显示 0:00（#101 的
+        # 用户可见形态）。发送不阻断（有声音总比没有强），但必须在日志可归因。
+        logger.warning("[line_media] 出站媒体时长未探到（对方端将显示 0:00）"
+                       " kind=%s path=%s", kind_label, name)
+    _drop_tmp()
 
     from okline.enums import ContentType, EncryptedAccessTokenFeatureType
     from okline.models import Message

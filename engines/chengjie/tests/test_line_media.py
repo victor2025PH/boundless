@@ -655,3 +655,206 @@ def test_inbound_media_never_raises():
     assert w._inbound_media(_msg(LM.CT_IMAGE), is_group=False) == ("image", "")
     # 消息体缺失/形态坏 → 软回落空媒体（绝不抛）
     assert w._inbound_media(None, is_group=False) == ("", "")
+
+
+# ─────────────────── 6. #101 双向修复（时长探测 / 下载重试 / M4A 转码）───────────
+# 事故：入站语音「无音频存档」（下载瞬态失败×零重试×debug 级日志不可诊）+
+# 出站语音对方端 0:00（打包态 ffprobe 不在 PATH，裸 shutil.which 探不到随包二进制）。
+
+
+def test_probe_duration_prefers_resolver_aware_probe(monkeypatch):
+    """时长首选 ``voice_sender.probe_audio_duration_ms``（经 ffmpeg_resolver 找 ffprobe）。
+
+    #101 根因：客户桌面包的 ffprobe 在 ``resources/ffmpeg/`` 不在 PATH，旧链路
+    只走 media_probe 的裸 ``shutil.which`` → 打包态恒 0 → 对方端 0:00。
+    """
+    import src.client.voice_sender as VS
+    monkeypatch.setattr(VS, "probe_audio_duration_ms", lambda p: 4321)
+    assert LM._probe_duration_ms("whatever.ogg") == 4321
+
+
+def test_probe_duration_falls_back_to_media_probe(monkeypatch):
+    import src.client.voice_sender as VS
+    import src.companion.media_probe as MP
+    monkeypatch.setattr(VS, "probe_audio_duration_ms", lambda p: None)
+    monkeypatch.setattr(MP, "probe_video", lambda p: {"duration_ms": 777})
+    assert LM._probe_duration_ms("x.ogg") == 777
+    monkeypatch.setattr(MP, "probe_video", lambda p: None)
+    assert LM._probe_duration_ms("x.ogg") == 0
+
+
+def test_media_probe_binaries_are_resolver_aware(monkeypatch):
+    """media_probe 家族必须经 ffmpeg_resolver 解析二进制（resolver 内部才有
+    「打包布局 → PATH」的完整回落序；裸 which 在打包态永远 False）。"""
+    import src.companion.media_probe as MP
+    import src.utils.ffmpeg_resolver as FR
+    monkeypatch.setattr(FR, "ffprobe_path", lambda: r"C:\bundled\ffprobe.exe")
+    monkeypatch.setattr(FR, "ffmpeg_path", lambda: r"C:\bundled\ffmpeg.exe")
+    assert MP.ffprobe_available() is True
+    assert MP.ffmpeg_available() is True
+    monkeypatch.setattr(FR, "ffprobe_path", lambda: None)
+    monkeypatch.setattr(FR, "ffmpeg_path", lambda: None)
+    assert MP.ffprobe_available() is False
+    assert MP.ffmpeg_available() is False
+
+
+class _FlakyObs:
+    """脚本化 OBS：每次 download 依次消费 script（'ok' / 'empty' / 异常实例）。"""
+
+    def __init__(self, script):
+        self.script = list(script)
+        self.calls = 0
+        self.uploads = []
+
+    def download_object(self, service, sid, oid, **kw):
+        self.calls += 1
+        step = self.script.pop(0)
+        if step == "ok":
+            return b"AUDIOBYTES"
+        if step == "empty":
+            return b""
+        raise step
+
+
+def _http_401():
+    class _R:
+        status_code = 401
+
+    exc = RuntimeError("unauthorized")
+    exc.response = _R()
+    return exc
+
+
+def test_download_retries_once_on_transient(monkeypatch):
+    """瞬态失败重试一次（#101 真机取证：同一对象几分钟内两败两成）。"""
+    monkeypatch.setattr(LM.time, "sleep", lambda s: None)
+    api = _FakeApi(obs=_FlakyObs([RuntimeError("conn reset"), "ok"]))
+    kind, url = LM.download_line_media(api, _msg(LM.CT_AUDIO, mid="V1"), "a")
+    assert kind == "voice" and url.endswith(".m4a")
+    assert api.obs.calls == 2
+
+
+def test_download_empty_body_retries_once(monkeypatch):
+    monkeypatch.setattr(LM.time, "sleep", lambda s: None)
+    api = _FakeApi(obs=_FlakyObs(["empty", "ok"]))
+    _, url = LM.download_line_media(api, _msg(LM.CT_AUDIO, mid="V2"), "a")
+    assert url != ""
+    assert api.obs.calls == 2
+
+
+def test_download_401_refreshes_token_then_retries(monkeypatch):
+    """OBS 走裸 GET，不在 okline 的 401 自动刷新圈内（那个钩子只挂在 thrift
+    ``post_json`` 上）——token 陈旧时文字链自愈、媒体全灭，必须显式刷新重试。"""
+    monkeypatch.setattr(LM.time, "sleep", lambda s: None)
+    refreshed = []
+    import src.integrations.line_pull_sync as LPS
+    monkeypatch.setattr(LPS, "refresh_client_token",
+                        lambda c: refreshed.append(c) or True)
+    api = _FakeApi(obs=_FlakyObs([_http_401(), "ok"]))
+    _, url = LM.download_line_media(api, _msg(LM.CT_AUDIO, mid="V3"), "a")
+    assert url != ""
+    assert refreshed == [api]
+    assert api.obs.calls == 2
+
+
+def test_download_401_refresh_failure_stops_early(monkeypatch):
+    """刷新失败（refresh token 已死/冷却中）→ 不再白打第二次 GET。"""
+    monkeypatch.setattr(LM.time, "sleep", lambda s: None)
+    import src.integrations.line_pull_sync as LPS
+    monkeypatch.setattr(LPS, "refresh_client_token", lambda c: False)
+    api = _FakeApi(obs=_FlakyObs([_http_401(), "ok"]))
+    _, url = LM.download_line_media(api, _msg(LM.CT_AUDIO, mid="V4"), "a")
+    assert url == ""
+    assert api.obs.calls == 1
+    assert _stats()["inbound"]["skipped"].get("download_error") == 1
+
+
+def test_refresh_cooldown_prevents_hammering(monkeypatch):
+    """同一 client 冷却窗内只刷一次：refresh token 已死时别每条媒体都白打。"""
+    monkeypatch.setattr(LM.time, "sleep", lambda s: None)
+    calls = []
+    import src.integrations.line_pull_sync as LPS
+    monkeypatch.setattr(LPS, "refresh_client_token",
+                        lambda c: calls.append(1) or True)
+    api = _FakeApi(obs=_FlakyObs([_http_401(), _http_401(), _http_401()]))
+    LM.download_line_media(api, _msg(LM.CT_AUDIO, mid="V5"), "a")   # 刷新→重试仍 401
+    LM.download_line_media(api, _msg(LM.CT_AUDIO, mid="V6"), "a")   # 冷却中→单次即止
+    assert len(calls) == 1
+    assert api.obs.calls == 3
+
+
+def test_download_failure_logs_warning(monkeypatch, caplog):
+    """失败必须 WARNING 级可见（#101 教训：debug 级＝客户机上无法远程归因）。"""
+    import logging as _logging
+    monkeypatch.setattr(LM.time, "sleep", lambda s: None)
+    api = _FakeApi(obs=_FakeObs(raise_on_download=True))
+    with caplog.at_level(_logging.WARNING, logger="src.integrations.line_media"):
+        LM.download_line_media(api, _msg(LM.CT_AUDIO, mid="V9"), "acctX")
+    joined = " ".join(r.getMessage() for r in caplog.records)
+    assert "reason=download_error" in joined
+    assert "V9" in joined and "acctX" in joined
+
+
+def test_config_switch_misses_stay_quiet(monkeypatch, caplog):
+    """开关关是运营选择不是故障——不许升 WARNING 制造告警噪音。"""
+    import logging as _logging
+    api = _FakeApi()
+    off = LM.resolve_line_media_cfg(_cfg(inbound=False))
+    with caplog.at_level(_logging.INFO, logger="src.integrations.line_media"):
+        LM.download_line_media(api, _msg(LM.CT_IMAGE), "a", cfg=off)
+    assert not caplog.records
+
+
+def test_send_voice_converts_to_m4a(monkeypatch, tmp_path):
+    """OGG 语音出站显式转 M4A：上传字节/文件名/时长三者同源自转码产物，
+    临时产物用完即清；原文件绝不动（发送失败重试还要用）。"""
+    pytest.importorskip("okline")
+    made = {}
+
+    def _fake_convert(path):
+        dst = tmp_path / "conv.m4a"
+        dst.write_bytes(b"M4ABYTES")
+        made["src"] = path
+        return str(dst)
+
+    monkeypatch.setattr(LM, "_convert_audio_for_line", _fake_convert)
+    monkeypatch.setattr(LM, "_probe_duration_ms", lambda p: 2000)
+    src = tmp_path / "v.ogg"
+    src.write_bytes(b"OggS....")
+    api = _FakeApi()
+    res = LM.send_line_media(api, "U", media_path=str(src), media_type="voice")
+    assert res["delivered"] is True
+    assert api.obs.uploads[0]["size"] == len(b"M4ABYTES")
+    assert api.obs.uploads[0]["name"] == "conv.m4a"
+    assert api.sent_messages[0]["contentMetadata"]["DURATION"] == "2000"
+    assert made["src"] == str(src)
+    assert not (tmp_path / "conv.m4a").exists(), "转码临时产物必须清理"
+    assert src.exists()
+
+
+def test_send_voice_conversion_failure_falls_back_to_original(monkeypatch, tmp_path):
+    """转不成 M4A（ffmpeg 缺失/坏源）→ 按原格式直传＝改动前行为，绝不因转码挡投递。"""
+    pytest.importorskip("okline")
+    monkeypatch.setattr(LM, "_convert_audio_for_line", lambda p: "")
+    monkeypatch.setattr(LM, "_probe_duration_ms", lambda p: 1500)
+    src = tmp_path / "v.ogg"
+    src.write_bytes(b"OggSdata")
+    api = _FakeApi()
+    res = LM.send_line_media(api, "U", media_path=str(src), media_type="voice")
+    assert res["delivered"] is True
+    assert api.obs.uploads[0]["size"] == len(b"OggSdata")
+    assert src.exists()
+
+
+def test_convert_audio_helper_noop_for_aac_family(tmp_path):
+    p = tmp_path / "a.m4a"
+    p.write_bytes(b"x")
+    assert LM._convert_audio_for_line(str(p)) == ""
+
+
+def test_convert_audio_helper_soft_fails_without_ffmpeg(monkeypatch, tmp_path):
+    import src.utils.ffmpeg_resolver as FR
+    monkeypatch.setattr(FR, "ffmpeg_path", lambda: None)
+    p = tmp_path / "a.ogg"
+    p.write_bytes(b"OggS")
+    assert LM._convert_audio_for_line(str(p)) == ""

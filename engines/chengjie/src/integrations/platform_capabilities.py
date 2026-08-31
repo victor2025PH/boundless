@@ -86,8 +86,10 @@ INBOUND_SITES: Dict[str, Tuple[str, str]] = {
     # companion 运行时走 A 线 client 自己的入站（生产实际在跑的就是这档）
     "telegram:protocol(companion)": ("src.client.telegram_client",
                                      "TelegramClient._process_message_async"),
+    # impl85 阶段1（工单#44）把 payload 构造从 _start_receiver._on_msg 闭包提为
+    # _ingest_inbound 方法（SSE 与拉取兜底共用）——登记随代码走，钉旧闭包只会判 False。
     "line:protocol": ("src.integrations.account_orchestrator",
-                      "LineProtocolWorker._start_receiver._on_msg"),
+                      "LineProtocolWorker._ingest_inbound"),
     "whatsapp:protocol": ("js", "services/whatsapp-baileys/server.js"),
     "messenger:web": ("js", "services/messenger-web/server.js"),
     "zalo:web": ("js", "services/zalo-personal/server.js"),

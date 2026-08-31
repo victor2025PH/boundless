@@ -1361,6 +1361,7 @@ _BASELINE += _ADDITIONS_2026_08_03_CASE_CLAIM
 # + 全局并发上限；body {"message_id"}。
 _ADDITIONS_2026_08_04_FETCH_MEDIA = """
 /api/platforms/telegram/{account_id}/fetch-media	POST
+/api/platforms/line/{account_id}/fetch-media	POST
 """
 _BASELINE += _ADDITIONS_2026_08_04_FETCH_MEDIA
 
