@@ -1164,6 +1164,14 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # P1-9 账号健康（2026-08-29）：冻结/掉线/近7天风控一份快照——
+        # ops「🛡️ 账号健康」卡数据源；全部 peek 既有单例，逐段软失败
+        try:
+            from src.ops.account_health import collect_account_health
+            metrics["account_health"] = collect_account_health()
+        except Exception:
+            pass
+
         # InboxStore 草稿统计
         try:
             inbox = getattr(request.app.state, "inbox_store", None)
@@ -1249,6 +1257,15 @@ def register_metrics_route(app, *, api_auth):
         try:
             from src.ai.outbound_text_guard import guard_stats as _otg_stats
             metrics["outbound_text_guard"] = _otg_stats()
+        except Exception:
+            pass
+
+        # 出站收口点守卫（实施91 #97/#105/#106）：呼格纠正（互换/近形/人设名）、
+        # 铆定语言冲突（检出/翻译/HOLD/放行）、语音合成前收口两计数。skuio 复测
+        # 验收期值守直接读这里判「守卫在不在动手」。进程口径重启清零；恒暴露。
+        try:
+            from src.ai.sendpoint_guard import sendpoint_guard_stats
+            metrics["sendpoint_guard"] = sendpoint_guard_stats()
         except Exception:
             pass
 
@@ -1692,8 +1709,25 @@ def register_metrics_route(app, *, api_auth):
         try:
             from src.companion.persona_media_store import get_persona_media_store
             _pms = get_persona_media_store()
+            # 实施90：挑图拦截计数（进程口径）随相册指标一并出（有流量才带键）
+            try:
+                from src.companion.album_gate_stats import snapshot as _ags_snap
+                _gates = _ags_snap()
+            except Exception:
+                _gates = None
             if _pms is not None:
                 metrics["persona_media"] = _pms.analytics()
+                if _gates and _gates.get("active"):
+                    metrics["persona_media"]["gates"] = _gates
+                try:
+                    from src.companion.album_semantic_recall import (
+                        snapshot as _asr_snap,
+                    )
+                    _shadow = _asr_snap()
+                    if _shadow.get("active"):
+                        metrics["persona_media"]["semantic_shadow"] = _shadow
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -2191,6 +2225,19 @@ def register_metrics_route(app, *, api_auth):
                        "Persona album media items by type", labels='type="photo"')
                 _gauge("ws_persona_media_by_type", pm.get("video", 0),
                        labels='type="video"')
+                # 实施90：挑图门禁拦截（进程口径；零流量不出行）
+                _g = pm.get("gates") or {}
+                if _g:
+                    _gauge("ws_persona_media_gate_picks_total",
+                           _g.get("picks", 0),
+                           "Album pick attempts that returned a media")
+                    _gauge("ws_persona_media_gate_refused_total",
+                           _g.get("refused", 0),
+                           "Album pick attempts refused by gates")
+                    for _reason, _n in (_g.get("refused_by") or {}).items():
+                        if _n:
+                            _gauge("ws_persona_media_gate_refused_by",
+                                   _n, labels=f'reason="{_reason}"')
 
             # 贴纸：发送/收藏（进程口径）+ 备货水位（包/张，持久口径）
             stk = metrics.get("stickers") or {}

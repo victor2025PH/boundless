@@ -219,7 +219,53 @@ def main(argv=None) -> int:
     ap.add_argument("--duel-semantic", action="store_true",
                     help="对练语义层评测（sycophancy/编身世/不合时宜推销三轴；"
                          "金标形状常驻，实跑需 EVAL_LLM=1）")
+    ap.add_argument("--lang-mix", action="store_true",
+                    help="出站混语收口评测（#97 实施91：发送收口点+出稿口双层，"
+                         "「I'm 我」家族金标；纯函数常驻）")
+    ap.add_argument("--sendpoint-guard", action="store_true",
+                    help="出站收口点守卫评测（#105 呼格 baba→babe/#96 人设名呼格"
+                         "/#106 铆定语言冲突；纯函数常驻）")
+    ap.add_argument("--recall-claim", action="store_true",
+                    help="回忆断言接地锁评测（#91-A OMEN 案金标：现编必拦+"
+                         "合法回忆零误伤；纯函数常驻）")
+    ap.add_argument("--shared-past", action="store_true",
+                    help="共同经历叙事锁评测（#110 海鲜店四连金标：初识期禁+"
+                         "深阶段接地；纯函数常驻）")
     args = ap.parse_args(argv)
+
+    if args.lang_mix:
+        from src.eval.lang_mix_eval import (
+            evaluate_lang_mix, format_lang_mix_report,
+        )
+        report = evaluate_lang_mix()
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print(format_lang_mix_report(report))
+        return 0 if report["passed"] else 1
+
+    if args.sendpoint_guard:
+        from src.eval.sendpoint_guard_eval import (
+            evaluate_sendpoint_guard, format_sendpoint_guard_report,
+        )
+        report = evaluate_sendpoint_guard()
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print(format_sendpoint_guard_report(report))
+        return 0 if report["passed"] else 1
+
+    if args.recall_claim:
+        from src.eval.recall_claim_eval import evaluate_recall_claim_guard
+        report = evaluate_recall_claim_guard()
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0 if report["passed"] else 1
+
+    if args.shared_past:
+        from src.eval.recall_claim_eval import evaluate_shared_past_guard
+        report = evaluate_shared_past_guard()
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0 if report["passed"] else 1
 
     if args.duel_semantic:
         # 注意：此处若不用别名，局部 import 会把模块级 `format_report`（意图评测
