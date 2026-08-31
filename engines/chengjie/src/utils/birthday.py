@@ -98,21 +98,70 @@ def should_ask_birthday(
         cooldown_days=cooldown_days)
 
 
-def birthday_from_turn(user_msg: Any, reply: Any) -> Optional[Tuple[int, int]]:
+# Stage S2（实施93 工单#43）：相对日期口——客户亲口说「今天是我的生日 / it's my
+# birthday」时**没有任何显式月日**，上面的日期正则永远抽不到 → 客户说过生日当天、
+# AI 转头还反问「今天是你的生日？」（0827 Kate 实录）。保守四闸（宁可漏判）：
+# ① 只扫**用户消息**——AI 回复里的「今天是你的生日？」是提问，扫回复必误报；
+# ② 必须自指（我的生日 / my birthday），「你的生日」形态不命中；
+# ③ 否定一票否决（不是/没到/not/isn't）；
+# ④ 「生日+名词」（礼物/蛋糕/派对…）与「birthday+延期词」（tomorrow/month/soon…）
+#    不算「今天生日」的证据（礼物可以早到晚到，误记一天比不记更尴尬）。
+_REL_SELF_ZH = re.compile(
+    r"(?:今天|今日|這是|这是)[^。！!？?\n]{0,12}?我(?:的)?生日"
+    r"|我(?:的)?生日[^。！!？?\n]{0,8}?(?:就是今天|是今天|今天|今日)"
+)
+_REL_SELF_EN = re.compile(
+    r"\bit'?s\s+my\s+b(?:irth)?day\b(?!\s*(?:month|week|soon|tomorrow|next|on\b|in\b|coming))"
+    r"|\bmy\s+b(?:irth)?day\s+(?:is\s+)?today\b"
+    r"|\btoday\s+is\s+my\s+b(?:irth)?day\b",
+    re.IGNORECASE,
+)
+_REL_NEG = re.compile(
+    r"不是|不算|没到|沒到|还没|還沒|才不|并不|並不"
+    r"|\bnot\s+my\b|\bisn'?t\s+my\b|\bwasn'?t\b",
+    re.IGNORECASE,
+)
+_REL_NOUN_SUFFIX = re.compile(
+    r"生日\s*(?:礼物|禮物|蛋糕|派对|派對|聚会|聚會|红包|紅包|愿望|願望|计划|計劃|那天|当天|當天)"
+)
+
+
+def birthday_today_claim(text: Any) -> bool:
+    """这条**用户消息**是否在声称「今天是我的生日」（无显式月日的相对形态）。"""
+    t = str(text or "").strip()
+    if not t or len(t) > 400:
+        return False
+    if _REL_NEG.search(t) or _REL_NOUN_SUFFIX.search(t):
+        return False
+    return bool(_REL_SELF_ZH.search(t) or _REL_SELF_EN.search(t))
+
+
+def birthday_from_turn(
+    user_msg: Any, reply: Any, now: Optional[float] = None,
+) -> Optional[Tuple[int, int]]:
     """从一轮对话（用户消息 + AI 回复）里抽生日 (月,日)，闭合「问→答→记」（Stage S）。
 
-    两路自包含、无需跨边界状态：
+    三路自包含、无需跨边界状态：
     1. **用户原话**含生日（"我生日是3月5日"）→ 直接抽。
     2. **AI 回复**含生日确认（"记住啦，你3月5号生日"）→ 抽 AI 回复——这覆盖了用户只回一个
        裸日期（"3月5号"，无关键词不被路1命中）、而 AI 在本轮自然复述确认的情况。
+    3. **用户相对声称**（"今天是我的生日 / it's my birthday"，Stage S2）→ 生日＝当天
+       （本地时区，``now`` 缺省取当前时间；只认用户消息，见 ``birthday_today_claim``）。
 
-    两路都要求**生日关键词**：AI 的「提问」回复（"你生日哪天呀？"）无日期 → 不会误抽；
-    只有「确认」回复（带日期）才命中——天然区分问 vs 答，零误报。
+    前两路都要求**生日关键词**：AI 的「提问」回复（"你生日哪天呀？"）无日期 → 不会误抽；
+    只有「确认」回复（带日期）才命中——天然区分问 vs 答，零误报。显式日期永远优先于
+    相对声称（路3 推断的是「说话那天」，路1/2 是逐字事实）。
     """
     bd = extract_birthday(user_msg)
     if bd is not None:
         return bd
-    return extract_birthday(reply)
+    bd = extract_birthday(reply)
+    if bd is not None:
+        return bd
+    if birthday_today_claim(user_msg):
+        lt = time.localtime(now if now is not None else time.time())
+        return (lt.tm_mon, lt.tm_mday)
+    return None
 
 
 def birthday_fact_text(month: int, day: int) -> str:
@@ -148,5 +197,6 @@ __all__ = [
     "is_birthday_today",
     "should_ask_birthday",
     "birthday_from_turn",
+    "birthday_today_claim",
     "birthday_fact_text",
 ]

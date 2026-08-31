@@ -145,6 +145,59 @@ def test_fact_text_roundtrips():
     assert extract_birthday(txt) == (3, 5)  # 规范文案能被复解析（resolve_birthday 可用）
 
 
+# ── birthday_today_claim / 相对日期路3（Stage S2，实施93 工单#43）──────────
+
+from src.utils.birthday import birthday_today_claim  # noqa: E402
+
+_TODAY = _at(2026, 8, 31)
+
+
+def test_rel_claim_zh_today():
+    assert birthday_today_claim("今天是我的生日") is True
+    assert birthday_today_claim("因为这是我的生日") is True
+    assert birthday_today_claim("我生日就是今天啦") is True
+
+
+def test_rel_claim_en_today():
+    assert birthday_today_claim("cause it's my birthday") is True
+    assert birthday_today_claim("Its my bday") is True
+    assert birthday_today_claim("today is my birthday!!") is True
+    assert birthday_today_claim("my birthday is today") is True
+
+
+def test_rel_claim_rejects_negation_and_deferral():
+    assert birthday_today_claim("今天不是我的生日") is False
+    assert birthday_today_claim("it's not my birthday") is False
+    assert birthday_today_claim("it's my birthday tomorrow") is False
+    assert birthday_today_claim("it's my birthday month") is False
+
+
+def test_rel_claim_rejects_other_person_and_nouns():
+    # 「你的生日」/ 生日+名词（礼物可早到晚到）都不构成「今天是TA生日」的证据
+    assert birthday_today_claim("今天是你的生日吗") is False
+    assert birthday_today_claim("这是我的生日礼物，昨天到的") is False
+    assert birthday_today_claim("看，这是我的生日蛋糕照片") is False
+
+
+def test_turn_rel_claim_returns_today():
+    # 事故形态（0827 Kate 实录）：无显式月日，只说「今天是我的生日」→ 记当天
+    assert birthday_from_turn("cause it's my birthday", "aww happy birthday!!",
+                              now=_TODAY) == (8, 31)
+    assert birthday_from_turn("今天是我的生日哦", "生日快乐呀！", now=_TODAY) == (8, 31)
+
+
+def test_turn_rel_claim_only_from_user_msg():
+    # AI 反问「今天是你的生日？」绝不能被当成事实抽走（扫回复必误报）
+    assert birthday_from_turn("哈哈你猜", "哦等等，今天是你的生日？",
+                              now=_TODAY) is None
+
+
+def test_turn_explicit_date_beats_rel_claim():
+    # 显式日期（逐字事实）优先于相对推断
+    assert birthday_from_turn("今天是我的生日，9月1号", "生日快乐！",
+                              now=_TODAY) == (9, 1)
+
+
 # ── _capture_birthday_fact（Stage S，集成）────────────────────────────────
 
 import logging as _logging  # noqa: E402
