@@ -1,0 +1,43 @@
+# 小智对话回归金标（tools/xiaozhi_dialog_eval.py 消费）。
+#
+# 口径：每题真跑「BM25 检索 → LLM 引用作答」全链（与线上 /api/assistant/query
+# 同一套路由代码），判定四态：
+#   GUIDED  = 有来源 + 非拒答 + 命中 must_any 任一关键词（答案真的在引导）
+#   WRONG   = 有来源作答但 must_any 全脱靶（答非所问，比拒答更糟）
+#   REFUSED = 诚实拒答（语料缺口——补 help_terms / howto_pack，红线：只写真实行为）
+#   NO-SOURCE = 零检索命中却出了话（检索层缺口）
+#
+# 纪律（2026-09-01 老板指令 · chatx-desktop-install.mdc「频道发版文案纪律」§3）：
+# 每次发版要宣传的新功能，先在这里加金标题目再跑一轮——小智答不上不许发版。
+# must_any 是「至少命中其一」的宽口径：抓跑偏，不逼措辞。
+questions:
+  - tag: sop_workflow
+    q: "SOP 工作链怎么用？怎么给客户挂上跟进链条？"
+    must_any: ["工作链", "/workflows"]
+  - tag: deal_engine
+    q: "成交引擎是什么？在哪里打开？"
+    must_any: ["旅程", "工作链", "管理员"]
+  - tag: vision_summary
+    q: "客户发来的图片，AI 识别的内容摘要在哪里看？"
+    must_any: ["AI 识图", "识图", "展开"]
+  - tag: voice_clone_bind
+    q: "怎么克隆客户的音色并绑定到人设？"
+    must_any: ["克隆音色", "绑定", "语音行"]
+  - tag: birthday_memory
+    q: "客户说今天是他生日，AI 会记住吗？"
+    must_any: ["记住", "记忆", "AI 记忆"]
+  - tag: voice_fallback
+    q: "发语音时为什么用了标准音色而不是克隆音色？"
+    must_any: ["标准音色", "原因", "语言", "额度"]
+  - tag: image_gen
+    q: "AI 生成图片功能怎么用？点了没反应怎么办？"
+    must_any: ["生成图片", "未启用", "工具箱"]
+  - tag: app_update
+    q: "怎么把智聊更新到最新版本？"
+    must_any: ["重启更新", "下载页", "更新"]
+  - tag: getting_started
+    q: "这个软件怎么用？我第一次用该从哪开始？"
+    must_any: ["账号", "人设", "工作台"]
+  - tag: send_voice
+    q: "怎么给客户发语音消息？"
+    must_any: ["语音", "生成", "试听"]
