@@ -579,6 +579,46 @@ def test_accounts_truth_i18n_keys_bilingual():
         assert EN.get(k), k
 
 
+# ── 「📲 LINE 媒体收发」卡（#101 2026-08-31：无音频存档/0:00 的远程归因读数面）──
+
+def test_line_media_card_renders_and_registered():
+    """卡片三件套（section / 渲染函数 / 注册表）+ 共享 metrics 分发链两分支 + 隐藏惯例。
+
+    这张卡是 #101（LINE 语音双向断）修复后的防回归读数面：入站 miss 原因分布
+    直接回答「无音频存档为什么」，出站 recall_failed 非零＝客户可能看到破媒体。
+    """
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1]
+           / "src" / "web" / "templates" / "ops_overview.html").read_text(
+               encoding="utf-8")
+    assert 'id="lineMediaSection"' in src
+    assert "function renderLineMedia(d)" in src
+    assert "d.line_media" in src                  # 数据源（共享 /api/workspace/metrics）
+    assert "anchor:'lineMediaKpis'" in src        # 卡片注册表登记
+    # 共享分发链两分支都要接：正常响应 + 403（无主管权限时清卡不留 loading）
+    assert "renderLineMedia(d)" in src
+    assert "renderLineMedia(null)" in src
+    # 零流量（active=false）整卡隐藏的站内惯例
+    assert "opsHideCardEl(sec,'linemedia','no_data')" in src
+    # 灯语义：撤回失败=红（客户可能看到破媒体），真 miss/出站失败=黄
+    assert "recallFail>0 ? 'red'" in src
+    # disabled/stickers_disabled 是运营开关选择，绝不计入告警口径
+    assert "stickers_disabled" in src
+
+
+def test_line_media_card_i18n_keys_bilingual():
+    from src.web.i18n_packs.ops_overview_page import EN, ZH
+
+    keys = ("ov2_s_linemedia", "ov2_lm_hint", "ov2_js_lm_in",
+            "ov2_js_lm_in_miss", "ov2_js_lm_out", "ov2_js_lm_recall",
+            "ov2_js_lm_recall_fail", "ov2_js_lm_miss_tbl", "ov2_js_lm_fail_tbl",
+            "ov2_js_lm_col_reason", "ov2_js_lm_col_n")
+    for k in keys:
+        assert ZH.get(k), k
+        assert EN.get(k), k
+
+
 # ── 「🌐 跨平台档案」卡（P2 2026-08-18：来源背景 → AI 记忆注入的读数面）──
 
 def test_origin_profile_card_renders_and_registered():

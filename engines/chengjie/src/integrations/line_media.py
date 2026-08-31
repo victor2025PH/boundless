@@ -253,16 +253,122 @@ def _probe_media_flow(api: Any, chat_mid: str) -> str:
         return ""
 
 
+#: Opus 的 OGG granulepos 恒按 48kHz 计（RFC 7845 §4），与编码采样率无关
+_OPUS_GRANULE_RATE = 48_000
+#: OGG 尾页扫描窗：正常语音条的最后一页远小于此；防对超大文件全量搜索
+_OGG_TAIL_SCAN_BYTES = 128 * 1024
+
+
+def _ogg_opus_duration_ms(path: str) -> int:
+    """OGG/Opus 时长（毫秒）——零依赖读容器：末页 granulepos ÷ 48kHz。
+
+    只认 Opus（头部 4KB 内有 ``OpusHead``）：Vorbis 的 granule 单位是流采样率，
+    还得再解析 ident 头，而本仓语音链全是 Opus——宁窄勿错。解析失败返回 0。
+    """
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(4096)
+            if b"OggS" != head[:4] or b"OpusHead" not in head:
+                return 0
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - _OGG_TAIL_SCAN_BYTES))
+            tail = fh.read()
+        at = tail.rfind(b"OggS")
+        if at < 0 or at + 14 > len(tail):
+            return 0
+        granule = int.from_bytes(tail[at + 6:at + 14], "little", signed=True)
+        if granule <= 0:
+            return 0
+        return int(granule * 1000 // _OPUS_GRANULE_RATE)
+    except Exception:
+        logger.debug("[line_media] OGG 纯解析失败 path=%s", path, exc_info=True)
+        return 0
+
+
+def _mp4_duration_ms(path: str) -> int:
+    """MP4/M4A 时长（毫秒）——零依赖 box 走查：``moov→mvhd`` 的 duration/timescale。
+
+    顶层顺序扫 box（支持 64 位 largesize），进 ``moov`` 后找 ``mvhd``（v0 32 位 /
+    v1 64 位两种布局）。任何异常/形态不符返回 0。
+    """
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fsize = fh.tell()
+            fh.seek(0)
+
+            def _walk(start: int, end: int, depth: int = 0) -> int:
+                pos = start
+                while pos + 8 <= end and depth < 4:
+                    fh.seek(pos)
+                    hdr = fh.read(8)
+                    if len(hdr) < 8:
+                        return 0
+                    box_size = int.from_bytes(hdr[:4], "big")
+                    box_type = hdr[4:8]
+                    payload_at = pos + 8
+                    if box_size == 1:  # 64 位 largesize
+                        big = fh.read(8)
+                        if len(big) < 8:
+                            return 0
+                        box_size = int.from_bytes(big, "big")
+                        payload_at = pos + 16
+                    if box_size < 8 or pos + box_size > end + 8:
+                        return 0
+                    if box_type == b"moov":
+                        got = _walk(payload_at, min(end, pos + box_size), depth + 1)
+                        if got:
+                            return got
+                    elif box_type == b"mvhd":
+                        body = fh.read(32)
+                        if len(body) < 20:
+                            return 0
+                        version = body[0]
+                        if version == 1:
+                            timescale = int.from_bytes(body[20:24], "big")
+                            duration = int.from_bytes(body[24:32], "big")
+                        else:
+                            timescale = int.from_bytes(body[12:16], "big")
+                            duration = int.from_bytes(body[16:20], "big")
+                        if timescale <= 0 or duration <= 0:
+                            return 0
+                        return int(duration * 1000 // timescale)
+                    pos += box_size
+                return 0
+
+            return _walk(0, fsize)
+    except Exception:
+        logger.debug("[line_media] MP4 纯解析失败 path=%s", path, exc_info=True)
+        return 0
+
+
+def _pure_duration_ms(path: str) -> int:
+    """零依赖时长兜底（#101 P2）：ffmpeg/ffprobe 彻底缺席时的最后一层。
+
+    覆盖本仓语音链的两种真实容器：OGG/Opus（TTS 统一产出）与 M4A（LINE 侧
+    转码产物/回取件）。解析失败返回 0＝维持「按 0 发」旧行为。
+    """
+    ext = os.path.splitext(str(path or ""))[1].lower()
+    if ext in (".ogg", ".opus", ".oga"):
+        return _ogg_opus_duration_ms(path)
+    if ext in (".m4a", ".mp4", ".aac", ".mov"):
+        return _mp4_duration_ms(path)
+    return 0
+
+
 def _probe_duration_ms(path: str) -> int:
     """音/视频时长（毫秒），软失败返回 0。
 
     LINE 的语音/视频条按 ``contentMetadata.DURATION`` 画时长与波形，给 0 会显示成
-    「0:00」——像坏消息（#101 实锤：客户桌面包对方端全是 0:00）。首选
-    ``voice_sender.probe_audio_duration_ms``：它经 ``ffmpeg_resolver`` 找 ffprobe
-    ——客户包的 ffprobe 在 ``resources/ffmpeg/``、不在 PATH，此前这里走的
-    ``media_probe`` 是裸 ``shutil.which``，打包态永远探不到＝0:00 的根因。
-    ``media_probe.probe_video`` 兜底（现已同接 resolver，双保险；对纯音频同样
-    能出容器级 duration）。仍探不到只能按 0 发，不阻断发送。
+    「0:00」——像坏消息（#101 实锤：客户桌面包对方端全是 0:00）。三层：
+
+    1. ``voice_sender.probe_audio_duration_ms``：经 ``ffmpeg_resolver`` 找 ffprobe
+       ——客户包的 ffprobe 在 ``resources/ffmpeg/``、不在 PATH，此前这里走的
+       ``media_probe`` 是裸 ``shutil.which``，打包态永远探不到＝0:00 的根因；
+    2. ``media_probe.probe_video`` 兜底（同接 resolver；对纯音频同样出容器级时长）；
+    3. 纯 Python 容器解析（``_pure_duration_ms``）——随包 ffmpeg 被杀毒软件隔离/
+       损坏这类「彻底没有 ffprobe」的机器也能给出真时长，0:00 不再有死角。
     """
     try:
         from src.client.voice_sender import probe_audio_duration_ms
@@ -275,10 +381,12 @@ def _probe_duration_ms(path: str) -> int:
     try:
         from src.companion.media_probe import probe_video
         info = probe_video(path) or {}
-        return max(0, int(info.get("duration_ms") or 0))
+        ms = int(info.get("duration_ms") or 0)
+        if ms > 0:
+            return ms
     except Exception:
-        logger.debug("[line_media] 时长探测失败（按 0 发）", exc_info=True)
-        return 0
+        logger.debug("[line_media] media_probe 探测异常（转纯解析兜底）", exc_info=True)
+    return max(0, _pure_duration_ms(path))
 
 
 _OBS_RETRY_SLEEP_SEC = 0.8

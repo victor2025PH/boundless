@@ -365,6 +365,77 @@ def test_line_fetch_download_failure_leaves_row_untouched(line_rig, monkeypatch)
     assert line_rig.store.get_message(mid)["media_ref"] == ""
 
 
+def test_line_fetch_backfills_transcript(line_rig, monkeypatch):
+    """#101 P2：救活语音后顺带转写回填——坐席能读、AI 能看，不是只修播放器。"""
+    import src.inbox.media_enrich as ME
+    import src.integrations.line_media as LM
+    monkeypatch.setattr(LM, "download_line_media",
+                        lambda *a, **k: ("voice", _LURL))
+    seen = {}
+
+    async def _fake_enrich(**kw):
+        seen.update(kw)
+        return "hello from the voice", "hello from the voice"
+
+    monkeypatch.setattr(ME, "enrich_inbound_media_text", _fake_enrich)
+    mid = _ingest_line_row(line_rig.store)
+    d = _lpost(line_rig, mid).json()
+    assert d["ok"] is True
+    assert d.get("text") == "hello from the voice"
+    assert seen["media_type"] == "voice" and seen["media_ref"] == _LURL
+    assert line_rig.store.get_message(mid)["text"] == "hello from the voice"
+
+
+def test_line_fetch_transcript_placeholder_not_written(line_rig, monkeypatch):
+    """enrich 识别不出回吐「[语音]」占位——那不是转写，不写行不回传。"""
+    import src.inbox.media_enrich as ME
+    import src.integrations.line_media as LM
+    monkeypatch.setattr(LM, "download_line_media",
+                        lambda *a, **k: ("voice", _LURL))
+
+    async def _fake_enrich(**kw):
+        return "[语音]", ""
+
+    monkeypatch.setattr(ME, "enrich_inbound_media_text", _fake_enrich)
+    mid = _ingest_line_row(line_rig.store)
+    d = _lpost(line_rig, mid).json()
+    assert d["ok"] is True and "text" not in d
+    assert line_rig.store.get_message(mid)["text"] == ""
+
+
+def test_line_fetch_transcript_failure_still_ok(line_rig, monkeypatch):
+    """转写是锦上添花：ASR 挂了不影响「媒体已回填」的成功语义。"""
+    import src.inbox.media_enrich as ME
+    import src.integrations.line_media as LM
+    monkeypatch.setattr(LM, "download_line_media",
+                        lambda *a, **k: ("voice", _LURL))
+
+    async def _fake_enrich(**kw):
+        raise RuntimeError("asr down")
+
+    monkeypatch.setattr(ME, "enrich_inbound_media_text", _fake_enrich)
+    mid = _ingest_line_row(line_rig.store)
+    d = _lpost(line_rig, mid).json()
+    assert d["ok"] is True and d["media_ref"] == _LURL and "text" not in d
+
+
+def test_line_fetch_transcript_never_stomps_real_text(line_rig, monkeypatch):
+    """行上已有真实正文（客户配文）→ 转写绝不覆盖（update_message_text 守卫）。"""
+    import src.inbox.media_enrich as ME
+    import src.integrations.line_media as LM
+    monkeypatch.setattr(LM, "download_line_media",
+                        lambda *a, **k: ("voice", _LURL))
+
+    async def _fake_enrich(**kw):
+        return "transcribed words", ""
+
+    monkeypatch.setattr(ME, "enrich_inbound_media_text", _fake_enrich)
+    mid = _ingest_line_row(line_rig.store, text="客户自己的配文")
+    d = _lpost(line_rig, mid).json()
+    assert d["ok"] is True and "text" not in d
+    assert line_rig.store.get_message(mid)["text"] == "客户自己的配文"
+
+
 def test_line_fetch_guards(line_rig, monkeypatch):
     import src.integrations.account_orchestrator as ao
     import src.integrations.line_media as LM

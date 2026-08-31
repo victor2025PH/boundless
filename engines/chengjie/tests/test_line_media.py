@@ -858,3 +858,88 @@ def test_convert_audio_helper_soft_fails_without_ffmpeg(monkeypatch, tmp_path):
     p = tmp_path / "a.ogg"
     p.write_bytes(b"OggS")
     assert LM._convert_audio_for_line(str(p)) == ""
+
+
+# ─────────────────── 7. #101 P2：零依赖时长解析（ffmpeg 彻底缺席的最后兜底）──────
+
+
+def _fake_ogg_opus(granule: int) -> bytes:
+    """最小可解析 OGG/Opus：首页含 OpusHead 标识，末页带 granulepos。"""
+    head = (b"OggS" + bytes(2) + (0).to_bytes(8, "little")
+            + bytes(14) + b"OpusHead" + bytes(32))
+    tail = (b"OggS" + bytes(2)
+            + int(granule).to_bytes(8, "little", signed=True) + bytes(18))
+    return head + tail
+
+
+def _fake_m4a(duration: int, timescale: int = 1000, version: int = 0) -> bytes:
+    """最小可解析 M4A：ftyp + moov(mvhd v0/v1)。"""
+    if version == 0:
+        payload = (bytes([0]) + bytes(3) + bytes(4) + bytes(4)
+                   + timescale.to_bytes(4, "big") + duration.to_bytes(4, "big"))
+    else:
+        payload = (bytes([1]) + bytes(3) + bytes(8) + bytes(8)
+                   + timescale.to_bytes(4, "big") + duration.to_bytes(8, "big"))
+    mvhd = (8 + len(payload)).to_bytes(4, "big") + b"mvhd" + payload
+    moov = (8 + len(mvhd)).to_bytes(4, "big") + b"moov" + mvhd
+    ftyp = (16).to_bytes(4, "big") + b"ftyp" + b"isomiso2"
+    return ftyp + moov
+
+
+def test_ogg_opus_pure_duration(tmp_path):
+    p = tmp_path / "v.ogg"
+    p.write_bytes(_fake_ogg_opus(96_000))          # 96000/48kHz = 2s
+    assert LM._ogg_opus_duration_ms(str(p)) == 2000
+    # 非 Opus 的 OGG（无 OpusHead）→ 宁窄勿错，不猜
+    p2 = tmp_path / "vorbis.ogg"
+    p2.write_bytes(b"OggS" + bytes(2) + (96_000).to_bytes(8, "little") + bytes(40))
+    assert LM._ogg_opus_duration_ms(str(p2)) == 0
+    # 垃圾字节 → 0
+    p3 = tmp_path / "junk.ogg"
+    p3.write_bytes(b"not-an-ogg")
+    assert LM._ogg_opus_duration_ms(str(p3)) == 0
+
+
+def test_mp4_pure_duration_v0_and_v1(tmp_path):
+    p0 = tmp_path / "a.m4a"
+    p0.write_bytes(_fake_m4a(2500, timescale=1000, version=0))
+    assert LM._mp4_duration_ms(str(p0)) == 2500
+    p1 = tmp_path / "b.m4a"
+    p1.write_bytes(_fake_m4a(90_000, timescale=30_000, version=1))
+    assert LM._mp4_duration_ms(str(p1)) == 3000
+    junk = tmp_path / "c.m4a"
+    junk.write_bytes(b"\x00\x00\x00\x08free")
+    assert LM._mp4_duration_ms(str(junk)) == 0
+
+
+def test_probe_duration_pure_python_is_last_resort(monkeypatch, tmp_path):
+    """前两层全灭（无 ffprobe 可用）时，纯解析仍给出真时长——0:00 不再有死角。"""
+    import src.client.voice_sender as VS
+    import src.companion.media_probe as MP
+    monkeypatch.setattr(VS, "probe_audio_duration_ms", lambda p: None)
+    monkeypatch.setattr(MP, "probe_video", lambda p: None)
+    p = tmp_path / "v.ogg"
+    p.write_bytes(_fake_ogg_opus(144_000))
+    assert LM._probe_duration_ms(str(p)) == 3000
+
+
+def test_pure_duration_matches_ffprobe_on_real_files(tmp_path):
+    """真实编码件交叉验证：纯解析与 ffprobe 口径须一致（无 ffmpeg 的机器跳过）。"""
+    import subprocess
+    from src.utils.ffmpeg_resolver import ffmpeg_path
+    ff = ffmpeg_path()
+    if not ff:
+        pytest.skip("本机无 ffmpeg，跳过真实编码件交叉验证")
+    ogg = tmp_path / "t.ogg"
+    subprocess.run(
+        [ff, "-y", "-v", "error", "-f", "lavfi",
+         "-i", "sine=frequency=440:duration=2", "-c:a", "libopus", str(ogg)],
+        check=True, timeout=60, capture_output=True)
+    ms = LM._ogg_opus_duration_ms(str(ogg))
+    assert 1800 <= ms <= 2400, f"OGG 纯解析={ms}ms 偏离 2s 真值"
+    m4a = tmp_path / "t.m4a"
+    subprocess.run(
+        [ff, "-y", "-v", "error", "-i", str(ogg), "-vn", "-c:a", "aac", str(m4a)],
+        check=True, timeout=60, capture_output=True)
+    ms2 = LM._mp4_duration_ms(str(m4a))
+    assert 1800 <= ms2 <= 2500, f"M4A 纯解析={ms2}ms 偏离 2s 真值"

@@ -425,6 +425,13 @@
     <div id="outMirrorDetail"></div>
   </section>
 
+  <section id="lineMediaSection" style="display:none;">
+    <h2>📲 {{ (i18n or {}).get('ov2_s_linemedia', "LINE 媒体收发") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_lm_hint', "LINE 号收发图/语音的健康面（#101）。入站「未取到」＝客户媒体没下载成功（坐席端显示「无音频存档」）；出站「撤回失败」非零＝客户可能看到了破媒体，最高优先查。") }}</div>
+    <div class="grid" id="lineMediaKpis"></div>
+    <div id="lineMediaDetail"></div>
+  </section>
+
   <section id="personaOvSection" style="display:none;">
     <h2>🎭 {{ (i18n or {}).get('ov2_s_po', "人设覆写（会话级换绑用量与 legacy 债）") }}</h2>
     <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_po_sub', "出站解析按档位分布 + 治理动作累计。决策「conv_override 要不要默认开」与「legacy 清理收官时点」都看这里。") }}</div>
@@ -2616,7 +2623,7 @@ async function loadFrontendErrors(){
   if(!kp || !dv) return;
   try{
     const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
-    if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; try{ renderProfilePush(null); }catch(_pp){} try{ renderUiEvents(null); }catch(_ue){} try{ renderDpickFunnel(null); }catch(_df){} try{ renderPersonaOverride(null); }catch(_po){} try{ renderCsrfRejects(null); }catch(_cs){} try{ renderOutboundMirror(null); }catch(_om){} try{ renderPhotoCapability(null); }catch(_pc){} try{ renderLoginFunnel(null); }catch(_lf){} try{ renderPeerBotGuard(null); }catch(_bp){} try{ renderAccountsTruth(null); }catch(_at){} try{ renderOriginProfile(null); }catch(_or){} try{ renderTokenLedger(null); }catch(_tk){} try{ renderImageXlate(null); }catch(_ix){} return; }
+    if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; try{ renderProfilePush(null); }catch(_pp){} try{ renderUiEvents(null); }catch(_ue){} try{ renderDpickFunnel(null); }catch(_df){} try{ renderPersonaOverride(null); }catch(_po){} try{ renderCsrfRejects(null); }catch(_cs){} try{ renderOutboundMirror(null); }catch(_om){} try{ renderLineMedia(null); }catch(_lm){} try{ renderPhotoCapability(null); }catch(_pc){} try{ renderLoginFunnel(null); }catch(_lf){} try{ renderPeerBotGuard(null); }catch(_bp){} try{ renderAccountsTruth(null); }catch(_at){} try{ renderAccountHealth(null); }catch(_ah){} try{ renderOriginProfile(null); }catch(_or){} try{ renderTokenLedger(null); }catch(_tk){} try{ renderImageXlate(null); }catch(_ix){} return; }
     const d = await r.json();
     try{ renderImageXlate(d); }catch(_ix){}
     try{ renderTokenLedger(d); }catch(_tk){}
@@ -2626,10 +2633,12 @@ async function loadFrontendErrors(){
     try{ renderPersonaOverride(d); }catch(_po){}
     try{ renderCsrfRejects(d); }catch(_cs){}
     try{ renderOutboundMirror(d); }catch(_om){}
+    try{ renderLineMedia(d); }catch(_lm){}
     try{ renderPhotoCapability(d); }catch(_pc){}
     try{ renderLoginFunnel(d); }catch(_lf){}
     try{ renderPeerBotGuard(d); }catch(_bp){}
     try{ renderAccountsTruth(d); }catch(_at){}
+    try{ renderAccountHealth(d); }catch(_ah){}
     try{ renderOriginProfile(d); }catch(_or){}
     var fe = d.frontend_errors || null;
     if(!fe || !(Number(fe.total)||0)){
@@ -3353,6 +3362,55 @@ function renderOutboundMirror(d){
     +   '<table><tr><th>'+window.T('ov2_js_om_col_kind')+'</th><th>'+window.T('ov2_js_om_col_total')+'</th><th>'+window.T('ov2_js_om_col_fail')+'</th></tr>'+rows(byKind)+'</table></div>'
     + '<div style="flex:1;min-width:220px;"><div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_js_om_by_plat')+'</div>'
     +   '<table><tr><th>'+window.T('ov2_js_om_col_plat')+'</th><th>'+window.T('ov2_js_om_col_total')+'</th><th>'+window.T('ov2_js_om_col_fail')+'</th></tr>'+rows(byPlat)+'</table></div>'
+    + '</div>';
+}
+
+// 📲 LINE 媒体收发卡（#101，2026-08-31）：与 loadFrontendErrors 共享同一次
+// /api/workspace/metrics 响应，读 line_media 段（入站下载成败/miss 原因分布 +
+// 出站两步链成败/撤回）。「无音频存档」的远程归因读数面；零流量整卡隐藏。
+// 灯语义：recall_failed>0=红（客户可能看到破媒体）；入站真 miss/出站失败>0=黄；
+// 有流量全顺=绿。disabled/stickers_disabled 是运营开关选择，不计入 miss。
+function renderLineMedia(d){
+  var sec = document.getElementById('lineMediaSection');
+  var kp = document.getElementById('lineMediaKpis');
+  var dv = document.getElementById('lineMediaDetail');
+  if(!sec || !kp || !dv) return;
+  var lm = (d && d.line_media) || null;
+  if(!lm || !lm.active){ opsSetCardLight('linemedia',''); opsHideCardEl(sec,'linemedia','no_data'); return; }
+  opsShowCardEl(sec,'linemedia');
+  var inb = lm.inbound||{}, out = lm.outbound||{};
+  var skipped = inb.skipped||{}, failed = out.failed||{};
+  var benign = {disabled:1, stickers_disabled:1};
+  var missBad = 0;
+  Object.keys(skipped).forEach(function(k){ if(!benign[k]) missBad += Number(skipped[k])||0; });
+  var outFail = 0;
+  Object.keys(failed).forEach(function(k){ outFail += Number(failed[k])||0; });
+  var recalled = Number(out.orphan_recalled)||0;
+  var recallFail = Number(out.recall_failed)||0;
+  opsSetCardLight('linemedia', recallFail>0 ? 'red' : ((missBad>0||outFail>0) ? 'yellow' : 'green'));
+  var kpis = [
+    {label:window.T('ov2_js_lm_in'), value:fmt(Number(inb.ok)||0)+' / '+fmt(Number(inb.total)||0)},
+    {label:window.T('ov2_js_lm_in_miss'), value:fmt(missBad), color:(missBad?'var(--red)':null)},
+    {label:window.T('ov2_js_lm_out'), value:fmt(Number(out.ok)||0)+' / '+fmt(Number(out.total)||0)},
+    {label:window.T('ov2_js_lm_recall'),
+     value:fmt(recalled)+(recallFail?(' · '+window.T('ov2_js_lm_recall_fail')+' '+fmt(recallFail)):''),
+     color:(recallFail?'var(--red)':null)},
+  ];
+  kp.innerHTML = kpis.map(function(c){
+    return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+      '</div><div style="font-size:20px;font-weight:600;margin-top:4px;'+(c.color?('color:'+c.color+';'):'')+'">'+c.value+'</div></div>';
+  }).join('');
+  function _lmRows(obj){
+    return Object.keys(obj).slice(0, 8).map(function(k){
+      return '<tr><td>'+esc(String(k))+'</td><td>'+(Number(obj[k])||0)+'</td></tr>';
+    }).join('') || '<tr><td colspan="2" class="muted">—</td></tr>';
+  }
+  dv.innerHTML =
+    '<div style="display:flex;gap:16px;flex-wrap:wrap;">'
+    + '<div style="flex:1;min-width:220px;"><div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_js_lm_miss_tbl')+'</div>'
+    +   '<table><tr><th>'+window.T('ov2_js_lm_col_reason')+'</th><th>'+window.T('ov2_js_lm_col_n')+'</th></tr>'+_lmRows(skipped)+'</table></div>'
+    + '<div style="flex:1;min-width:220px;"><div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_js_lm_fail_tbl')+'</div>'
+    +   '<table><tr><th>'+window.T('ov2_js_lm_col_reason')+'</th><th>'+window.T('ov2_js_lm_col_n')+'</th></tr>'+_lmRows(failed)+'</table></div>'
     + '</div>';
 }
 
@@ -8141,6 +8199,7 @@ var _OPS_HIDE_HINT = {
   imgen:    {reason:'no_data'},
   csrf:     {reason:'healthy'},
   omirror:  {reason:'healthy'},
+  linemedia:{reason:'no_data'},
   buried:   {reason:'healthy'},
   ppush:    {reason:'disabled'},
   photocap: {reason:'disabled'},

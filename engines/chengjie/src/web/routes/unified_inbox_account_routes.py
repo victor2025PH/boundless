@@ -3237,10 +3237,35 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             return {"ok": False, "reason": "download_failed"}
         store.update_message_media(
             cid, media_type=mt, media_ref=mr, message_id=message_id)
+        # 转写/识别回填（#101 P2，best-effort）：救活的语音坐席要能读、AI 要能看——
+        # 只回填播放器等于修了一半。走平台无关的 enrich 链（ASR/VLM），30s 预算；
+        # update_message_text 自带「仅空/媒体占位才覆盖」守卫，绝不踩真实正文。
+        # 任何失败静默：媒体本体已回填成功，转写是锦上添花。
+        backfilled_text = ""
+        if mt in ("voice", "audio", "image", "video"):
+            try:
+                from src.inbox.media_enrich import enrich_inbound_media_text
+                _etext, _ = await asyncio.wait_for(
+                    enrich_inbound_media_text(
+                        media_type=mt, media_ref=mr, config=cfg),
+                    timeout=30.0)
+                _etext = str(_etext or "").strip()
+                # enrich 识别不出时回吐「[语音]」类占位——那不是转写，别写行
+                from src.integrations.protocol_bridge import media_placeholder
+                if _etext and _etext != media_placeholder(mt):
+                    if store.update_message_text(
+                            cid, text=_etext, message_id=message_id):
+                        backfilled_text = _etext
+            except Exception:
+                logger.debug("[protocol] line 拉取后转写回填失败（媒体已回填）",
+                             exc_info=True)
         fresh = store.get_message(message_id) or {}
-        return {"ok": True,
-                "media_type": str(fresh.get("media_type") or mt),
-                "media_ref": str(fresh.get("media_ref") or mr)}
+        out = {"ok": True,
+               "media_type": str(fresh.get("media_type") or mt),
+               "media_ref": str(fresh.get("media_ref") or mr)}
+        if backfilled_text:
+            out["text"] = str(fresh.get("text") or backfilled_text)
+        return out
 
     @app.get("/api/platforms/telegram/{account_id}/full-sync")
     async def api_telegram_full_sync_status(account_id: str, request: Request):

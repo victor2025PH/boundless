@@ -9017,7 +9017,9 @@ async function fetchMsgMedia(msgId){
     const d=(await r.json().catch(()=>null))||{};
     if(d.ok&&d.media_ref){
       const m=(threadMsgs||[]).find(x=>String(x.message_id||'')===String(msgId));
-      if(m){ m.media_ref=d.media_ref; if(d.media_type) m.media_type=d.media_type; }
+      // d.text＝服务端顺带回填的转写/识别文本（LINE 版，best-effort）——语音行救活后
+      // 播放器和转写一起出现；TG 版无此字段，向后兼容
+      if(m){ m.media_ref=d.media_ref; if(d.media_type) m.media_type=d.media_type; if(d.text) m.text=d.text; }
       try{ renderMessages(selectedChat, threadMsgs, {silent:true, preserveTop:true}); }catch(_){}
       return;
     }
