@@ -6,7 +6,7 @@
 <link rel="stylesheet" href="/copilot/tokens.css?v=20260828a">
 <!-- P2 主题：auto 跟随系统 / 手动 light / 手动 dark，持久化到 localStorage('cp_theme')。
      在 <head> 内联尽早执行，避免首屏闪烁；theme-*.css 动态切换，data-cp-theme 同时驱动 cp-* 组件与本页暗色变量。 -->
-<link rel="stylesheet" id="cp-theme-css" href="/copilot/theme-light.css?v=20260828a">
+<link rel="stylesheet" id="cp-theme-css" href="/copilot/theme-light.css?v=20260831g">
 <script>
 (function(){
   var KEY='cp_theme';
@@ -32,7 +32,7 @@
     var eff=effective();
     document.documentElement.setAttribute('data-cp-theme',eff);
     var l=document.getElementById('cp-theme-css');
-    if(l){ var want='/copilot/theme-'+eff+'.css?v=20260828a'; if(l.getAttribute('href')!==want) l.setAttribute('href',want); }
+    if(l){ var want='/copilot/theme-'+eff+'.css?v=20260831g'; if(l.getAttribute('href')!==want) l.setAttribute('href',want); }
     // App(iframe) 右栏主题热同步：?theme= 只在 iframe 加载那一刻被 app.html 读一次，宿主切档
     // 必须 postMessage(set-theme) 跟进，否则「选亮色右栏还是暗的」（2026-08-17 实锤）。
     // 壳未挂/iframe 未加载时静默；发的是本窗口生效档（含桌面壳 URL 钉语义），绝不写 localStorage。
@@ -88,21 +88,21 @@
      此前这里写死 zh:en 三元——繁体坐席会被硬塞英文副驾（zh_hant P3 修复）。
      语言切换走整页刷新(wsToggleLang→/set_lang)，组件随新 LANG 重渲，无需热切换。 -->
 <script>window.CP_LANG = window.WS_LANG || 'zh';</script>
-<script src="/copilot/i18n/cp-i18n.js?v=20260828c"></script>
+<script src="/copilot/i18n/cp-i18n.js?v=20260831h"></script>
 {% if ui_lang|default('zh') in ('zh_hant', 'vi', 'th', 'id') %}
-<script src="/copilot/i18n/cp-i18n-ext.{{ ui_lang }}.js?v=20260828b"></script>
+<script src="/copilot/i18n/cp-i18n-ext.{{ ui_lang }}.js?v=20260831h"></script>
 {% endif %}
-<script src="/copilot/client/copilot-client.js?v=20260822f"></script>
+<script src="/copilot/client/copilot-client.js?v=20260830y"></script>
 <script src="/copilot/sidebar-chrome.js?v=20260828b"></script>
 <script src="/copilot/components/cp-panel-base.js?v=20260817t"></script>
 <script src="/copilot/components/cp-rel-stage.js?v=20260819a"></script>
 <script src="/copilot/components/cp-persona.js?v=20260822a"></script>
 <script src="/copilot/components/cp-collab.js?v=20260822c"></script>
-<script src="/copilot/components/cp-chain-exec.js?v=20260813a"></script>
+<script src="/copilot/components/cp-chain-exec.js?v=20260831f"></script>
 <script src="/copilot/components/cp-draft.js?v=20260813a"></script>
-<script src="/copilot/components/cp-voice.js?v=20260827c"></script>
+<script src="/copilot/components/cp-voice.js?v=20260831h"></script>
 <script src="/copilot/components/cp-xlate-tools.js?v=20260817rz1"></script>
-<script src="/copilot/components/cp-goal.js?v=20260819a"></script>
+<script src="/copilot/components/cp-goal.js?v=20260831f"></script>
 <script src="/copilot/components/cp-origin.js?v=20260820a"></script>
 <script src="/copilot/components/cp-image.js?v=20260828b"></script>
 <script src="/copilot/components/cp-nurture.js?v=20260828b"></script>
@@ -369,7 +369,7 @@
 #wf-mgr-x:hover{border-color:var(--accent);color:var(--accent);}
 #wf-mgr-frame{flex:1;border:0;width:100%;background:var(--bg-elev);}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260827e">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260831b">
 <link rel="stylesheet" href="/static/workspace/appearance.css?v=20260804a">
 <!-- 表情包面板 + 文件卡片/媒体队列样式（2026-08-17 主线；组件逻辑在 sticker-panel.js，
      文末引入——flag 关闭时组件不注入任何 UI，模板零回归面） -->
@@ -588,6 +588,13 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
               <!-- 二期降噪：「保存视图」从常驻整条 saved-views-bar 迁到此处（低频列表操作）。
                    用 <button> 而非 div：原生键盘可达，无需扩 _a11yUpgrade 选择器。 -->
               <button type="button" class="ftab-more-item" onclick="_uiBeacon('iflt_view_save');saveCurrentView()" data-i18n="inbox.view.save" data-i18n-title="inbox.view.save_t">保存视图</button>
+              {# 实施92e 批量操作区：筛选即选择——把当前筛选结果批量挂跟进 SOP。
+                 默认隐藏，deal-engine 状态接口带 auto_send 键（=92b 后端已装载，
+                 bulk-start 同批）才点亮（旧后端零死按钮）。 #}
+              <div class="fp-sec" id="fp-bulk-sec" style="display:none;" data-i18n="inbox.filter.sec_bulk">批量操作</div>
+              <div class="fp-chips" id="fp-bulk" style="display:none;">
+                <button type="button" class="fp-chip" onclick="_uiBeacon('iflt_bulk_sop');bulkSopFromFilter()" title="{{ (i18n or {}).get('inbox.bulk.sop_btn_t', '把当前筛选出的私聊会话批量挂上一条跟进 SOP 链（每次最多 50 个；在途/7 天内挂过的自动剔除）') }}" data-i18n="inbox.bulk.sop_btn">📤 给当前筛选结果挂跟进 SOP</button>
+              </div>
               <div class="fp-foot">
                 <button type="button" class="fp-clear" onclick="_uiBeacon('iflt_clear_all');resetAllFilters()" data-i18n="inbox.filter.summary_clear">清空筛选</button>
                 <button type="button" class="fp-done" onclick="_closeFtabMore()" data-i18n="inbox.filter.panel_done">完成</button>
@@ -1189,7 +1196,7 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
              绝对定位覆盖层（.show 开关语义不变）。 -->
         <div class="info-sidebar" id="info-sidebar">
           <div class="ws-sidebar-resize" id="ws-sidebar-resize" title="拖动调节宽度" data-i18n-title="inbox.sidebar.resize_t"></div>
-          <div class="ws-cp-head" style="display:flex;align-items:center;gap:6px;"><span data-i18n="inbox.cp.title">业务助手</span><span id="ws-cp-tour-btn" role="button" tabindex="0" title="重看新手引导" data-i18n-title="inbox.cptour.replay_t" onclick="_cpTourStart(true)" style="cursor:pointer;margin-left:auto;opacity:.65;user-select:none;display:inline-flex;" data-ui-icon="help" data-size="14"></span><span id="ws-cp-dockall-btn" role="button" tabindex="0" title="收回全部悬浮小窗" data-i18n-title="inbox.cp.tear_dockall_t" onclick="_cpTearDockAll()" style="cursor:pointer;opacity:.65;user-select:none;display:none;"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="14 6 8 12 14 18"/><line x1="19" y1="5" x2="19" y2="19"/></svg></span><span id="ws-cp-pip-btn" role="button" tabindex="0" title="悬浮到系统小窗：置顶于所有应用之上；再点一次关闭。" data-i18n-title="inbox.cp.pip_btn_t" onclick="_cpPipToggle()" style="cursor:pointer;opacity:.65;user-select:none;display:none;"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"/><rect x="12" y="12" width="7" height="5" rx="1"/></svg></span><span id="ws-cp-app-toggle" role="button" tabindex="0" title="切换统一 App（与桌面同源 /copilot/app.html，单一前端 App）" data-i18n-title="inbox.cp.app_toggle_t" onclick="wsToggleApp()" style="cursor:pointer;opacity:.6;user-select:none;display:inline-flex;" data-ui-icon="flask" data-size="14"></span><span id="ws-cp-collapse-btn" role="button" tabindex="0" title="收起为侧轨（快捷键 ]）" data-i18n-title="inbox.cp.collapse_t" onclick="toggleInfoSidebar()" style="cursor:pointer;opacity:.65;user-select:none;display:inline-flex;"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="7 7 12 12 7 17"/><polyline points="13 7 18 12 13 17"/></svg></span><span id="ws-cp-hide-btn" role="button" tabindex="0" title="彻底隐藏面板（Shift+] 或右缘把手唤回）" data-i18n-title="inbox.cp.hide_t" onclick="_cpPanelHide()" style="cursor:pointer;opacity:.65;user-select:none;display:inline-flex;"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="12" x2="20" y2="12"/></svg></span></div>
+          <div class="ws-cp-head" style="display:flex;align-items:center;gap:6px;"><span data-i18n="inbox.cp.title" style="margin-right:auto">业务助手</span><span id="ws-cp-dockall-btn" role="button" tabindex="0" title="收回全部悬浮小窗" data-i18n-title="inbox.cp.tear_dockall_t" onclick="_cpTearDockAll()" style="cursor:pointer;opacity:.65;user-select:none;display:none;"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="14 6 8 12 14 18"/><line x1="19" y1="5" x2="19" y2="19"/></svg></span><span id="ws-cp-pip-btn" role="button" tabindex="0" title="悬浮到系统小窗：置顶于所有应用之上；再点一次关闭。" data-i18n-title="inbox.cp.pip_btn_t" onclick="_cpPipToggle()" style="cursor:pointer;opacity:.65;user-select:none;display:none;"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"/><rect x="12" y="12" width="7" height="5" rx="1"/></svg></span><span id="ws-cp-app-toggle" role="button" tabindex="0" title="切换统一 App（与桌面同源 /copilot/app.html，单一前端 App）" data-i18n-title="inbox.cp.app_toggle_t" onclick="wsToggleApp()" style="cursor:pointer;opacity:.6;user-select:none;display:inline-flex;" data-ui-icon="flask" data-size="14"></span><span id="ws-cp-collapse-btn" role="button" tabindex="0" title="收起为侧轨（快捷键 ]）" data-i18n-title="inbox.cp.collapse_t" onclick="toggleInfoSidebar()" style="cursor:pointer;opacity:.65;user-select:none;display:inline-flex;"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="7 7 12 12 7 17"/><polyline points="13 7 18 12 13 17"/></svg></span><span id="ws-cp-hide-btn" role="button" tabindex="0" title="彻底隐藏面板（Shift+] 或右缘把手唤回）" data-i18n-title="inbox.cp.hide_t" onclick="_cpPanelHide()" style="cursor:pointer;opacity:.65;user-select:none;display:inline-flex;"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="12" x2="20" y2="12"/></svg></span></div>
           <div class="ws-cp-tabs" id="ws-cp-tabs">
             <button type="button" class="ws-cp-tab active" data-tab="reply" title="回复台" data-i18n-title="inbox.cp.tab.reply"><span class="ws-cp-tab-ic" data-cp-ic="msg"></span><span data-i18n="inbox.cp.tab.reply">回复台</span><span class="ws-cp-tab-badge" id="ws-cp-tab-badge-reply"></span></button>
             <button type="button" class="ws-cp-tab" data-tab="customer" title="客户关系" data-i18n-title="inbox.cp.tab.customer"><span class="ws-cp-tab-ic" data-cp-ic="heart"></span><span data-i18n="inbox.cp.tab.customer">客户关系</span><span class="ws-cp-tab-badge" id="ws-cp-tab-badge-customer"></span></button>
@@ -4773,6 +4780,66 @@ function _closeFtabMore(){
    （与 _uiBeacon 同教训，哑按钮门禁口径）。 */
 window._closeFtabMore=_closeFtabMore;
 
+/* ── 实施92e 批量挂 SOP（筛选即选择）───────────────────────────────────────
+   刻意不造勾选模型：当前筛选结果（filtered，私聊、去掉锁定行）就是选区，
+   直投 bulk-start 的 conversation_ids（服务端仍做私聊校验+在途/7天防重，
+   默认 dry_run 先出预览数再确认落地）。链选择用编号 prompt——面板内嵌
+   二级选择器不值得在热区铺 DOM，链总数通常 ≤6。 */
+async function _bulkSopFeatureCheck(){
+  try{
+    const r=await apiFetch('/api/workspace/workflows/deal-engine');
+    if(!r.ok) return;
+    const d=await r.json();
+    if(d && d.auto_send !== undefined){   // 92b 批已装载＝bulk-start 同批在线
+      const s=document.getElementById('fp-bulk-sec');
+      const b=document.getElementById('fp-bulk');
+      if(s) s.style.display='';
+      if(b) b.style.display='';
+    }
+  }catch(_){/* 探测失败保持隐藏 */}
+}
+async function bulkSopFromFilter(){
+  _closeFtabMore();
+  const rows=(filtered||[]).filter(c=>c && !isGroupConv(c) && !_isRemovedRow(c) && !_isLoggedOutRow(c));
+  const ids=rows.map(c=>c.conversation_id).filter(Boolean).slice(0,50);
+  if(!ids.length){ _toast(window.T('inbox.bulk.sop_none'),'#d97706'); return; }
+  let chains=[];
+  try{
+    const r=await apiFetch('/api/workspace/workflow-chains');
+    chains=(((await r.json())||{}).chains||[]).filter(c=>c && c.enabled);
+  }catch(_){ chains=[]; }
+  if(!chains.length){ _toast(window.T('inbox.bulk.sop_nochain'),'#d97706'); return; }
+  const menu=chains.map((c,i)=>(i+1)+'. '+(c.name||c.chain_id)).join('\n');
+  const pick=prompt(window.Tf('inbox.bulk.sop_pick',{n:ids.length})+'\n'+menu,'1');
+  if(pick==null) return;
+  const idx=parseInt(pick,10)-1;
+  if(!(idx>=0 && idx<chains.length)) return;
+  const chain=chains[idx];
+  const url='/api/workspace/workflow-chains/'+encodeURIComponent(chain.chain_id)+'/bulk-start';
+  let dv=null;
+  try{
+    const r=await apiFetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({conversation_ids:ids,limit:50,dry_run:true})},{timeoutMs:60000});
+    dv=await r.json();
+  }catch(_){ dv=null; }
+  if(!dv || !dv.ok){ _toast(window.T('inbox.bulk.sop_fail'),'#dc2626'); return; }
+  if(!Number(dv.candidates)){ _toast(window.T('inbox.bulk.sop_none_eligible'),'#d97706'); return; }
+  if(!confirm(window.Tf('inbox.bulk.sop_confirm',{n:dv.candidates,name:chain.name||chain.chain_id}))) return;
+  try{
+    const r=await apiFetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({conversation_ids:ids,limit:50,dry_run:false})},{timeoutMs:60000});
+    const d=await r.json();
+    if(d && d.ok){
+      _toast(window.Tf('inbox.bulk.sop_done',{n:d.started||0}),'#16a34a');
+      _uiBeacon('iflt_bulk_sop_done');
+    }else{
+      _toast(window.T('inbox.bulk.sop_fail'),'#dc2626');
+    }
+  }catch(_){ _toast(window.T('inbox.bulk.sop_fail'),'#dc2626'); }
+}
+window.bulkSopFromFilter=bulkSopFromFilter;
+try{ _bulkSopFeatureCheck(); }catch(_){}
+
 /* P0 收敛（2026-08-11）：主筛选行单行横滚的「右边还有」暗示——有溢出且没滚到底 → .has-ovf
    渐隐遮罩（CSS）。这是议程行旧病（nowrap+藏滚动条+零暗示 → 被裁的 chip 等于不存在）的反面实现。 */
 function _syncFtabOverflow(){
@@ -5473,9 +5540,23 @@ async function _refreshClaimsBulk(){
   }catch(_){}
 }
 // P2: 会话预览 HTML——我方最后发言加「你：」前缀，一眼知道该不该自己回
+/* #124（实施93 §1）：列表预览同口径去 meta——识图/识视频描述汤绝不进预览行
+   （取 caption，无 caption 回落裸占位 token）；行首 [语音转录] 数据标记剥掉只留
+   转写正文（那是客户真实说话内容）。调用时机在全部脚本执行后，_splitMediaDesc
+   后置定义可安全引用。 */
+function _previewSafeText(t){
+  t=String(t||'');
+  if(t.lastIndexOf('[\u8bed\u97f3\u8f6c\u5f55]',0)===0) t=t.slice(6).replace(/^\s+/,'');
+  const iImg=t.indexOf('[\u56fe\u7247\u5185\u5bb9]');
+  const iVid=t.indexOf('[\u89c6\u9891\u5185\u5bb9]');
+  if(iImg<0 && iVid<0) return t;
+  const sp=_splitMediaDesc(t);
+  const isVid=(iVid>=0 && (iImg<0 || iVid<iImg));
+  return sp.caption || (isVid?'[\u89c6\u9891]':'[\u56fe\u7247]');
+}
 function _previewHtml(c){
   const prefix = (c.last_direction==='out') ? '<span class="conv-dir-me">'+window.T('inbox.conv.you_prefix')+'</span>' : '';
-  return prefix + esc(c.last_text||'');
+  return prefix + esc(_previewSafeText(c.last_text||''));
 }
 
 /* ===== P1 会话列表美化：统一 UI 图标集 + 标签语义分类 ===== */
@@ -7290,12 +7371,14 @@ function _applySendCaps(caps){
 async function _loadSendCaps(c){
   _applySendCaps(null);  // 乐观：先按支持渲染
   _renderDeadPeerNotice(null);   // #73：换会话先清旧条
+  _renderTravelNotice(null,null); // #113：换会话先清旧行程条
   if(!c||!c.platform) return;
   try{
     const r=await apiFetch(`/api/unified-inbox/send-caps?platform=${encodeURIComponent(c.platform)}&account_id=${encodeURIComponent(c.account_id||'default')}&chat_key=${encodeURIComponent(c.chat_key||'')}`);
     const d=await r.json().catch(()=>({}));
     if(d&&d.ok) _applySendCaps(d);
     if(d&&d.ok) _renderDeadPeerNotice(d.dead_peer||null);
+    if(d&&d.ok) _renderTravelNotice(d.travel_state||null, c);
   }catch(_){ /* 网络异常：保持乐观，点击时仍有 501 兜底 */ }
 }
 /* #73-③（0830 UDEKBY 实锤）：dead-peer 可见面——peer 被标不可达时 AI 静默
@@ -7324,6 +7407,55 @@ function _renderDeadPeerNotice(dp){
     el.style.display='block';
   }catch(_){}
 }
+/* #113（0831 skuio「马尼拉复读」实锤）：临时行程可见面——AI 自述「在 X 出差」
+   期间叙事会跟着行程走，运营此前完全看不见这层状态、更无从纠正。composer 上方
+   信息条展示原句 + 一键清除（写服务端水位 → 草稿链立即回归档案常驻地）。
+   anchored=false（单句未经客户回应）用弱化文案：几小时内自动失效。 */
+function _renderTravelNotice(ts, c){
+  try{
+    let el=document.getElementById('travel-warn');
+    if(!ts||!ts.active){ if(el) el.style.display='none'; return; }
+    if(!el){
+      const ta=document.getElementById('reply-ta');
+      const host=ta&&ta.parentNode?ta.parentNode:null;
+      if(!host) return;
+      el=document.createElement('div');
+      el.id='travel-warn';
+      el.style.cssText='margin:0 0 .35rem;padding:.4rem .6rem;border-radius:8px;'
+        +'display:flex;align-items:center;gap:8px;font-size:.76rem;line-height:1.45;'
+        +'background:color-mix(in srgb, var(--accent,#1e8cf2) 10%, transparent);'
+        +'border:1px solid color-mix(in srgb, var(--accent,#1e8cf2) 32%, transparent);'
+        +'color:var(--text-main,#0f172a)';
+      const ta2=document.getElementById('reply-ta');
+      host.insertBefore(el, ta2);
+    }
+    const key=ts.anchored?'inbox.travel.notice':'inbox.travel.notice_soft';
+    const short=String(ts.text||'').slice(0,42);
+    el.innerHTML='<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;'
+      +'white-space:nowrap;" title="'+esc(String(ts.text||''))+'">'
+      +esc(window.Tf(key,{text:short}))+'</span>'
+      +'<button type="button" class="tiny-btn" style="flex:none;" '
+      +'title="'+esc(window.T('inbox.travel.clear_t'))+'" '
+      +'onclick="clearTravelState()">'+esc(window.T('inbox.travel.clear'))+'</button>';
+    el.style.display='flex';
+  }catch(_){}
+}
+async function clearTravelState(){
+  try{
+    const c=selectedChat;
+    if(!c||!c.platform) return;
+    const r=await apiFetch('/api/unified-inbox/travel-state/clear',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({platform:c.platform, account_id:c.account_id||'default',
+                           chat_key:c.chat_key||''})});
+    const d=await r.json().catch(()=>({}));
+    if(d&&d.ok){
+      _renderTravelNotice(null,null);
+      _toast(window.T('inbox.travel.cleared'),'#16a34a');
+    }
+  }catch(_){}
+}
+window.clearTravelState=clearTravelState;
 
 /* ===== 已读本地真相（2026-08-23 未读可信化 v2）=====
    _localReadMark[key]={lastTs,exp}：坐席「读到哪」（以当时行 last_ts 为界，TTL 10min）。
@@ -8975,6 +9107,24 @@ function _legacyMediaFetchHtml(m){
   if(!btn) return null;
   return `<div class="msg-media-placeholder">${esc(t)}${btn}</div>`;
 }
+/* #124（实施93 §1）识图 meta 泄漏收口：LINE RPA/DOM 抓取链写入的行只有
+   text=「[图片内容] 描述汤」而无 media_type/media_ref，此前落到默认纯文本气泡
+   ＝整段内部标注以消息块可见（原图 937 实锤）。带描述标记的行一律路由到媒体卡
+   同款白名单展示：caption + 占位 chip + 折叠 AI 摘要行（_aiDescRow 自带 140 字
+   折叠）。与 photo/video 分支同源；语音转写行走 _legacyVoiceHtml、翻译 meta 由
+   服务端 #115 拒绝词表收口——四类引擎 meta（识图/OCR/转写/翻译）到此全堵。 */
+function _legacyDescHtml(m){
+  const t=String((m&&m.text)||'');
+  const iImg=t.indexOf('[\u56fe\u7247\u5185\u5bb9]');   // [图片内容]
+  const iVid=t.indexOf('[\u89c6\u9891\u5185\u5bb9]');   // [视频内容]
+  if(iImg<0 && iVid<0) return null;
+  const sp=_splitMediaDesc(t);
+  if(!sp.desc) return null;
+  const isVid=(iVid>=0 && (iImg<0 || iVid<iImg));
+  const cap=sp.caption?`<div class="msg-media-cap">${_linkifyEsc(sp.caption,m,false)}</div>`:'';
+  const ph=`<div class="msg-media-placeholder">${window.T(isVid?'inbox.media.video':'inbox.media.photo')}${_fetchBtnHtml(m)}</div>`;
+  return `${cap}${ph}${_aiDescRow(sp.desc, isVid?'inbox.media.ai_video':'inbox.media.ai_img')}`;
+}
 async function fetchMsgMedia(msgId){
   if(!selectedChat) return;
   // #101 P1：TG 之外 LINE 也能回取（服务端各有端点、同一响应契约）；其余平台无服务端支持
@@ -9009,7 +9159,7 @@ function _renderMediaContent(m){
   const mt=(m.media_type||m.source?.type||'').toLowerCase();
   const ref=m.media_ref||m.source?.url||m.source?.file_url||'';
   // 如果有文字就优先文字（文字+图片一起显示）
-  if(!mt && !ref) return _legacyVoiceHtml(m.text, m) || _legacyMediaFetchHtml(m); // 存量语音/媒体占位行兜底；其余纯文本返回 null 走默认逻辑
+  if(!mt && !ref) return _legacyVoiceHtml(m.text, m) || _legacyDescHtml(m) || _legacyMediaFetchHtml(m); // 存量语音/识别描述/媒体占位行兜底；其余纯文本返回 null 走默认逻辑
 
   const textPart=m.text?`<div style="margin-bottom:4px;">${_linkifyEsc(m.text,m,false)}</div>`:'';
 
@@ -13163,6 +13313,15 @@ async function sendMsg(){
       // 立即回拉档位真值 → 下拉/让位横幅马上说真话，而不是等 45s 周期刷新
       // （.198/.104 事故里坐席对「自己关掉了 AI」零感知的修复点）。
       try{ _refreshConvStatus(selectedChat); }catch(_){}
+      // #88（0830 Yhang 实锤）：送达成功=服务端已清 dead-peer 标——立即重拉
+      // send-caps 让黄条 ≤5s 消失（旧行为要等下次进会话才刷新，坐席看着
+      // 「明明发出去了黄条还挂着」以为修复无效）。仅黄条在场时才多这一次请求。
+      try{
+        if(document.getElementById('dp-warn')
+           && document.getElementById('dp-warn').style.display!=='none'){
+          _loadSendCaps(selectedChat);
+        }
+      }catch(_){}
       // v2：发出去=读过了——本地已读标记推到现在 + 水位补写。防「自己的回复把
       // last_ts 顶过水位 → 手机端未读残值被重新点亮」（旧后端口径下的回弹路径 B；
       // 新后端 last_in_ts 闸门本就免疫，此处是旧后端过渡期的前端兜底）。
@@ -15700,119 +15859,7 @@ function _syncHeroVisibility(){
   hero.style.display=(_wsCpTab==='customer')?'':'none';
 }
 
-/* ===== P18: 业务助手三步上手引导（coach marks）=====
-   解决「找到了也不会用」：首次（localStorage ws_cp_tour_done_v1 未置）在右栏
-   出现时自动放一遍；右栏头部问号按钮随时重看。纯前端零后端；锚点缺失（如目标卡
-   403 隐藏）自动回落到备选锚点或居中弹层，绝不卡死。 */
-var _CP_TOUR_DONE_KEY='ws_cp_tour_done_v1';
-var _cpTourIdx=0,_cpTourOn=false;
-function _cpTourSteps(){
-  return [
-    {sel:'#cp-hero', tab:'customer',
-     t:window.T('inbox.cptour.step1_t'), b:window.T('inbox.cptour.step1_b')},
-    {sel:'[data-cp-card="goal"]', alt:'.ws-cp-tab[data-tab="customer"]', tab:'customer',
-     t:window.T('inbox.cptour.step2_t'), b:window.T('inbox.cptour.step2_b')},
-    {sel:'#reply-ta', alt:'.ws-cp-tab[data-tab="reply"]', tab:'reply',
-     t:window.T('inbox.cptour.step3_t'), b:window.T('inbox.cptour.step3_b')},
-    {sel:'#ws-cp-collapse-btn', alt:'#ws-cp-tabs', tab:'reply',
-     t:window.T('inbox.cptour.step4_t'), b:window.T('inbox.cptour.step4_b')}
-  ];
-}
-function _cpTourEl(st){
-  var el=null;
-  try{ el=st.sel?document.querySelector(st.sel):null; }catch(_){}
-  if(el&&el.offsetParent===null) el=null;      // hidden（如 403 整卡隐藏）→ 备选锚点
-  if(!el&&st.alt){ try{ el=document.querySelector(st.alt); }catch(_){} }
-  if(el&&el.offsetParent===null) el=null;
-  return el;
-}
-function _cpTourStart(manual){
-  if(_cpTourOn) return;
-  if(typeof WS_USE_APP!=='undefined'&&WS_USE_APP) return;  // App 模式无这些锚点
-  _cpTourOn=true; _cpTourIdx=0;
-  try{ _uiBeacon(manual?'goal_tour_replay':'goal_tour_show'); }catch(_){}
-  _cpTourRender();
-}
-function _cpTourNext(d){ _cpTourIdx+=(d||1); _cpTourRender(); }
-function _cpTourEnd(done){
-  _cpTourOn=false;
-  try{ localStorage.setItem(_CP_TOUR_DONE_KEY,'1'); }catch(_){}
-  try{ _uiBeacon(done?'goal_tour_done':'goal_tour_skip'); }catch(_){}
-  ['cp-tour-veil','cp-tour-hl','cp-tour-pop'].forEach(function(id){
-    var n=document.getElementById(id); if(n) n.remove();
-  });
-}
-function _cpTourRender(){
-  var steps=_cpTourSteps();
-  if(_cpTourIdx<0) _cpTourIdx=0;
-  if(_cpTourIdx>=steps.length){ _cpTourEnd(true); return; }
-  var st=steps[_cpTourIdx];
-  try{
-    if(_cpTourIdx===1&&typeof _cpExpandAndScroll==='function') _cpExpandAndScroll('goal','customer');
-    else if(st.tab&&typeof setWsCpTab==='function') setWsCpTab(st.tab);
-  }catch(_){}
-  setTimeout(function(){ _cpTourPlace(st,steps.length); },120);
-}
-function _cpTourPlace(st,total){
-  if(!_cpTourOn) return;
-  var veil=document.getElementById('cp-tour-veil');
-  if(!veil){
-    veil=document.createElement('div'); veil.id='cp-tour-veil'; veil.className='cp-tour-veil';
-    veil.addEventListener('click',function(){ _cpTourNext(1); });
-    document.body.appendChild(veil);
-  }
-  var hl=document.getElementById('cp-tour-hl');
-  if(!hl){ hl=document.createElement('div'); hl.id='cp-tour-hl'; hl.className='cp-tour-hl'; document.body.appendChild(hl); }
-  var pop=document.getElementById('cp-tour-pop');
-  if(!pop){
-    pop=document.createElement('div'); pop.id='cp-tour-pop'; pop.className='cp-tour-pop';
-    pop.addEventListener('click',function(ev){
-      var b=ev.target.closest('[data-tour]'); if(!b) return;
-      ev.stopPropagation();
-      var a=b.getAttribute('data-tour');
-      if(a==='next') _cpTourNext(1);
-      else if(a==='prev') _cpTourNext(-1);
-      else if(a==='skip') _cpTourEnd(false);
-    });
-    document.body.appendChild(pop);
-  }
-  var el=_cpTourEl(st);
-  var r=el?el.getBoundingClientRect():null;
-  if(r){
-    hl.style.display='block';
-    hl.style.left=(r.left-4)+'px'; hl.style.top=(r.top-4)+'px';
-    hl.style.width=(r.width+8)+'px'; hl.style.height=(r.height+8)+'px';
-  } else hl.style.display='none';
-  var last=_cpTourIdx===total-1;
-  pop.innerHTML='<div class="cp-tour-t">'+esc(st.t)+'</div>'
-    +'<div class="cp-tour-b">'+esc(st.b)+'</div>'
-    +'<div class="cp-tour-ft"><span class="cp-tour-dots">'+(_cpTourIdx+1)+'/'+total+'</span>'
-    +'<button type="button" class="tiny-btn" data-tour="skip">'+esc(window.T('inbox.cptour.skip'))+'</button>'
-    +(_cpTourIdx>0?'<button type="button" class="tiny-btn" data-tour="prev">'+esc(window.T('inbox.cptour.prev'))+'</button>':'')
-    +'<button type="button" class="tiny-btn cp-tour-next" data-tour="next">'+esc(window.T(last?'inbox.cptour.done':'inbox.cptour.next'))+'</button></div>';
-  pop.style.visibility='hidden'; pop.style.display='block';
-  var pw=pop.offsetWidth||300, ph=pop.offsetHeight||150, left, top;
-  if(r){
-    left=r.left-pw-14;
-    if(left<8){
-      left=Math.min(Math.max(8,r.left), window.innerWidth-pw-8);
-      top=r.bottom+12;
-    }
-    if(top===undefined) top=Math.min(Math.max(8,r.top), window.innerHeight-ph-8);
-    if(top+ph>window.innerHeight-8) top=Math.max(8,window.innerHeight-ph-8);
-  } else { left=(window.innerWidth-pw)/2; top=(window.innerHeight-ph)/2; }
-  pop.style.left=left+'px'; pop.style.top=top+'px';
-  pop.style.visibility='visible';
-}
-function _cpTourMaybeAuto(){
-  try{
-    if(_cpTourOn) return;
-    if(window.innerWidth<900) return;                          // 窄屏布局不自动打扰
-    if(typeof WS_USE_APP!=='undefined'&&WS_USE_APP) return;
-    if(localStorage.getItem(_CP_TOUR_DONE_KEY)==='1') return;
-    setTimeout(function(){ if(!_cpTourOn) _cpTourStart(false); },800);
-  }catch(_){}
-}
+/* ===== P18 业务助手三步引导已退役（2026-08-31 新手引导删除）===== */
 
 function initWsCopilot(){
   if(!window.CopilotShared) return;
@@ -15971,9 +16018,30 @@ function initWsCopilot(){
       // 右栏 cp-voice 直发成功后消息流/会话列表跟手刷新——此前该事件无人消费，
       // 语音气泡要等下一轮轮询才出现，坐席误以为没发出去（再点一次=双发未遂）。
       try{ _toast(window.T('inbox.voice.sent'),'#0f9d75'); }catch(_){}
-      // 埋点分桶：reuse=所听即所发命中（客户收到的=坐席试听的那份，零二次合成）
+      // 埋点分桶：reuse=所听即所发命中（客户收到的=坐席试听的那份，零二次合成）；
+      // xl=译声命中（客户听到的是译稿）——两维独立计，回答「右栏语音翻译用量多大」
       try{ _uiBeacon('cpv_sent'+((ev&&ev.detail&&ev.detail.reused)?'_reuse':'')); }catch(_){}
+      try{ if(ev&&ev.detail&&ev.detail.translated) _uiBeacon('cpv_sent_xl'); }catch(_){}
       try{ if(typeof selectedChat!=='undefined'&&selectedChat){ loadThread(selectedChat,true); loadChats(); } }catch(_){}
+    });
+  }
+  if(!document.__cpVoiceXlBound){
+    document.__cpVoiceXlBound=1;
+    document.addEventListener('cp-voice-xl-changed', function(ev){
+      // 右栏语音卡切了「跟随翻译发声」（与主输入框同一 localStorage 键）：
+      // 同文档的翻译设置弹层行跟着刷新（storage 事件不覆盖同文档），并分桶埋点。
+      try{ _voiceXlOn=(localStorage.getItem('aitr.voicexl')||'1')==='1'; }catch(_){}
+      try{ if(typeof _syncVoiceXlRow==='function') _syncVoiceXlRow(); }catch(_){}
+      try{ _uiBeacon('cpv_xl_'+((ev&&ev.detail&&ev.detail.on)?'on':'off')); }catch(_){}
+    });
+  }
+  if(!document.__cpVoiceWarnBound){
+    document.__cpVoiceWarnBound=1;
+    document.addEventListener('cp-voice-warn', function(ev){
+      // 右栏语音卡警示观测（P0 2026-08-31 提示风暴复盘）：kind=fb_lang|fb_quota|
+      // fb_channel|silent|stale → cpv_warn_* 趋势（/api/admin/ui-event-trend?prefix=cpv_）
+      // ——「警示刷屏」从老板肉眼发现变成看板可查、可定阈值。
+      try{ var wk=String((ev&&ev.detail&&ev.detail.kind)||''); if(/^[a-z_]{1,24}$/.test(wk)) _uiBeacon('cpv_warn_'+wk); }catch(_){}
     });
   }
   document.addEventListener('cp-action-done', function(e){
@@ -16111,7 +16179,6 @@ function syncWsCopilot(c){
   _tryConsumeGoalDeepLink();
   _cpPanelSyncOnSelect();
   if(typeof _syncGoalQuickBtn==='function') _syncGoalQuickBtn();
-  _cpTourMaybeAuto();   // P18：首次可见时自动放一遍三步引导（看过即静默）
   if(_wsCpTab==='tools'&&!_cpCardCollapsed('analysis')) _loadAiAnalysis(c);
 }
 
@@ -16878,12 +16945,12 @@ try{ window.addEventListener('resize',_cpTearReclamp); }catch(_){}
 /* 撕出可发现性一次性提示（P4 2026-08-18）：撕出按钮常态 opacity:0 悬停卡头才显影，
    不教一次没人知道功能存在（cp_panel_usage_report 的「满窗零使用→入口太隐蔽」判词
    要等两周，先教后裁）。工具箱页签首开触发：提示气泡（复用 ws-cp-mode-tip）+
-   全部撕出按钮临时显影 4.6s。tour 运行期/窄屏/App(iframe)/已有或记忆过浮窗（说明
+   全部撕出按钮临时显影 4.6s。窄屏/App(iframe)/已有或记忆过浮窗（说明
    已会用）一律不弹；先取词后烧一次性额度（键缺失不弹也不白烧）。 */
 function _cpMaybeTearTip(tab){
   if(tab!=='tools') return;
   if(typeof _cpTorn!=='object'||!_cpTorn) return;   // 初始化顺序守卫：onChange 可早于本块的 var 赋值
-  if(!_cpPinnedWide()||_cpTourOn) return;
+  if(!_cpPinnedWide()) return;
   if(typeof WS_USE_APP!=='undefined'&&WS_USE_APP) return;
   if(Object.keys(_cpTorn).length||_cpTearWanted().length) return;
   var txt=_cpTearT('inbox.cp.tip_tear');
@@ -18121,6 +18188,10 @@ async function _reconcileVoiceSend(c,cid){
 let _voiceXlOn=true;
 try{ _voiceXlOn=(localStorage.getItem('aitr.voicexl')||'1')==='1'; }catch(_){}
 function _voiceXlTarget(){ return (_voiceXlOn&&_xlateOut)?_xlateOut:''; }
+/* P0-V2c（2026-08-30 用户实测修正）：右栏语音卡的目标语偏好注入——坐席显式选了
+   「我的消息 → X」就译成 X（坐席心智模型：「我都把翻译改成英文了」）；未设置/
+   auto → 组件回落 'auto'=会话客户语言。只读 getter，组件侧 try/catch 消费。 */
+window.__cpVoiceXlPref=function(){ try{ return _xlateOut||''; }catch(_){ return ''; } };
 function _onVoiceXlToggle(){
   const cb=document.getElementById('xl-voice-follow');
   _voiceXlOn=!!(cb&&cb.checked);
@@ -18344,6 +18415,7 @@ function _loadXlateForConv(c){
   _updateXlStatus();
   _syncTopXlate();                    // P1：同步顶部常驻「译文语言」控件
   _syncLangWarn();                    // D 批：换会话重算语言错配警示（残留输入/新会话语言）
+  _syncVoiceXlRow();                  // P0-V2c：换会话后语音行/右栏语音卡目标语同步刷新
 }
 // P3：服务端运营默认译文语言——介于「会话级偏好」与「浏览器本地默认」之间，换机/换坐席不丢。
 let _xlServerDefaultApplicable=false;
@@ -18517,6 +18589,7 @@ function _onXlateChange(){
   _updateXlStatus();
   _syncTopXlate();                    // P1：底部弹层改语言后回写顶部常驻控件
   _syncLangWarn();                    // D 批：开了出站翻译 → 错配警示即时熄灭
+  _syncVoiceXlRow();                  // P0-V2c：改目标语后语音行/右栏语音卡即时跟随
   // 立即对当前线程入站消息补译
   if(_xlateIn && threadMsgs.length) _autoTranslateInbound();
 }
@@ -19510,7 +19583,14 @@ async function _vcmUndo(){
   const ov=document.getElementById('vcm-overlay');
   if(ov){
     ov.addEventListener('click',function(e){
-      if(e.target===ov){ _vcmClose(false); return; }   // 点遮罩关闭（busy 期由 _vcmClose 内部守卫拦下）
+      // #52（实施93 §2b）：点遮罩**不再关闭**——试听生成中误触即整层丢失（skuio 10:30
+      // 实录）。出口只留 × / 完成 / Esc（对齐 cp-goal 背板防误触语义）；误触给轻微
+      // 脉冲提示「弹层还在」，零 CSS 依赖（Web Animations API，不支持则静默）。
+      if(e.target===ov){
+        const bx=ov.querySelector('.vcm-box');
+        if(bx&&bx.animate){ try{ bx.animate([{transform:'scale(1)'},{transform:'scale(1.02)'},{transform:'scale(1)'}],{duration:180}); }catch(_){} }
+        return;
+      }
       const it=e.target.closest('[data-act]');
       if(!it) return;
       const act=it.getAttribute('data-act');
@@ -23333,6 +23413,9 @@ function _showConnectPhonePhase(phase){
 // 提示语优先级：开局故障说明 > 后端 instruction_key（本地化）> hosted 本地键 >
 // 后端 raw instruction > 平台扫码兜底
 function _connectHintText(d){
+  return _withWaQrTip(_connectHintBase(d));
+}
+function _connectHintBase(d){
   // provider 开局即报障（如 messenger-web 微服务没起）：此时 raw instruction 就是
   // 故障说明，绝不能用「窗口已打开」的形态固定文案盖住它（首轮 poll 前有 2.5s 窗口）
   if(d && d.reason_code) return d.instruction||window.T('inbox.connect.hint_failstart');
@@ -23344,6 +23427,18 @@ function _connectHintText(d){
   if(key) return key;
   if(_connectKind==='hosted') return window.T('inbox.connect.hint_server_login');
   return (d&&d.instruction)||window.Tf('inbox.connect.hint_scan',{plat:platName(_connectPlat)});
+}
+/* #79（0830 B990 包实锤）：WA 同网/同 IP 配对被手机端风控拒绝是「扫码后零回包」
+   主因——用户配对时手机改用流量后一次成功（09:02 亲测）。贴士常驻 WA 扫码窗
+   （失败后才提示=已烧掉一次尝试），过期/超时态同样附带（_waExpiredHint）。 */
+function _withWaQrTip(txt){
+  if(_connectPlat==='whatsapp' && _connectKind==='qr' && txt){
+    return txt+'\n'+window.T('inbox.connect.hint_wa_mobiledata');
+  }
+  return txt;
+}
+function _waExpiredHint(){
+  return _withWaQrTip(window.T(_kindVocab().expired_hint));
 }
 /* B64 续：relay 相位 → 步骤条/状态行同步（官方式「每一步都知道现在在哪、下一步是什么」）。
    dedupe：同相位不重复动 DOM（poll 2.5s 一轮，重刷=文案闪烁）。相位键在 startConnect
@@ -25462,7 +25557,8 @@ async function pollConnect(){
         _setConnectQr(null);
         startConnect();
       } else {
-        _setConnectState('err',window.T(_kindVocab().expired_st),window.T(_kindVocab().expired_hint));
+        // #79：WA 扫码过期/超时 → 提示里附「改用手机流量」贴士（同网风控主因）
+        _setConnectState('err',window.T(_kindVocab().expired_st),_waExpiredHint());
       }
     }
     else if(st==='failed'){
@@ -25835,7 +25931,17 @@ function initSSE(){
           _loadChainExecutions(selectedChat.conversation_id);
         }
         if(t==='workflow_execution_failed'){
-          _toast(window.Tf('inbox.chain.failed',{name:(data.chain_name||'')}),'#ef4444');
+          // #53/#48（0830 skuio 实锤）：批量失败每条一弹=红框刷屏挡操作 → 走
+          // 通知总线 domKey 聚合（一张卡带 ×N + ✕ + 自动淡出）；总线缺席回落旧 toast。
+          if(window.AITRNotify){
+            AITRNotify.notify({
+              severity:'error',
+              text:window.Tf('inbox.chain.failed',{name:(data.chain_name||'')}),
+              domKey:'wf_failed', center:false
+            });
+          }else{
+            _toast(window.Tf('inbox.chain.failed',{name:(data.chain_name||'')}),'#ef4444');
+          }
         }
       }
     };
@@ -26292,8 +26398,6 @@ Object.assign(window, {
   _onImgXlatePick, _onVoiceXlatePick, _onDocFilePick, _onDocxFilePick,
   // P17 Phase2: 右栏收起时的「工作目标」快捷入口（窄屏可达性）
   _openGoalQuick,
-  // P18: 业务助手三步引导（右栏 ❓ 内联 onclick）
-  _cpTourStart,
 });
 
 /* 兜底：内联 onclick 调到未暴露函数会抛 ReferenceError，过去表现为「点击无响应」
