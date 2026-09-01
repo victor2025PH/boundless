@@ -381,15 +381,16 @@ def _bot_token() -> str:
     return ""
 
 
-def deliver_bot(text: str) -> Tuple[bool, str]:
-    """主通道：@tgzkw_bot 私聊 @Sousaun（chat_id=SOUSAUN_TG_ID）。"""
+def deliver_bot(text: str, chat_id: str = SOUSAUN_TG_ID) -> Tuple[bool, str]:
+    """主通道：@tgzkw_bot 私聊（缺省 @Sousaun；实施81 起 duty 工具族经
+    ``chat_id`` 参数改投 @ai_zkw——本脚本自身行为不变）。"""
     tok = _bot_token()
     if not tok:
         return False, "notify_webhooks.json 无 bot token"
     api = f"https://api.telegram.org/bot{tok}/sendMessage"
     chunks = _chunk(text, 3800)
     for i, ch in enumerate(chunks):
-        payload = {"chat_id": SOUSAUN_TG_ID,
+        payload = {"chat_id": str(chat_id),
                    "text": ch if len(chunks) == 1 else f"({i+1}/{len(chunks)})\n{ch}"}
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(

@@ -6,7 +6,9 @@
 #                117:7852 改指 104 IndexTTS-2——智聊 TTS 主力迁 104、117 CosyVoice
 #                已退役(EmotionTTS_Boot Disabled)，旧指向=外网克隆全灭的根因之一）
 #   140:7852  -> VPS 127.0.0.1:18414   克隆 TTS 备（CosyVoice；断电后未回，AvatarHub 属地）
-#   176:8765  -> VPS 127.0.0.1:18415   GPU ASR（ASR_RELAY_URLS，须带 /v1 后缀）
+#   198:8765  -> VPS 127.0.0.1:18415   GPU ASR（ASR_RELAY_URLS，须带 /v1 后缀；
+#                2026-08-30 从 176:8765 改指 198——ASR 单点断电后迁 198（whisper
+#                large-v3-turbo cuda + SER），旧指向=全网转录瘫 7h 的根因，同 TTS 18413 病）
 # 对应 VPS env：VISION_RELAY_URLS=http://127.0.0.1:18411/v1,http://127.0.0.1:18412/v1
 #              TTS_RELAY_URLS=http://127.0.0.1:18413,http://127.0.0.1:18414
 #              ASR_RELAY_URLS=http://127.0.0.1:18415/v1
@@ -52,7 +54,7 @@ while ($true) {
     # ExitOnForwardFailure 任一端口占用即退出重试（僵尸占端口由下方自清收割）
     & ssh -N -R 127.0.0.1:18411:192.168.0.176:11434 -R 127.0.0.1:18412:192.168.0.140:11434 `
       -R 127.0.0.1:18413:192.168.0.104:7865 -R 127.0.0.1:18414:192.168.0.140:7852 `
-      -R 127.0.0.1:18415:192.168.0.176:8765 `
+      -R 127.0.0.1:18415:192.168.0.198:8765 `
       -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 `
       -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=15 `
       -i $key $vps 2>&1 | ForEach-Object {

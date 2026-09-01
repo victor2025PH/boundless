@@ -1,7 +1,16 @@
 # boundless cluster 鈥?generated from deploy/machines.json
 # DO NOT hand-edit; re-run tools/render_ssh_config.ps1
 
-Host huansheng
+Host ganzhi
+    HostName 192.168.0.176
+    User user
+    IdentityFile ~/.ssh/id_ed25519
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host zhongshu
     HostName 192.168.0.176
     User user
     IdentityFile ~/.ssh/id_ed25519
@@ -19,7 +28,7 @@ Host hub176
     ServerAliveInterval 30
     ConnectTimeout 8
 
-Host pc5090
+Host swap176
     HostName 192.168.0.176
     User user
     IdentityFile ~/.ssh/id_ed25519
@@ -28,7 +37,70 @@ Host pc5090
     ServerAliveInterval 30
     ConnectTimeout 8
 
-Host tongyi
+Host interp176
+    HostName 192.168.0.176
+    User user
+    IdentityFile ~/.ssh/id_ed25519
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host gpu176
+    HostName 192.168.0.176
+    User user
+    IdentityFile ~/.ssh/id_ed25519
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host yuyan
+    HostName 192.168.0.173
+    User admin
+    IdentityFile ~/.ssh/cluster_controller
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host yunsheng
+    HostName 192.168.0.173
+    User admin
+    IdentityFile ~/.ssh/cluster_controller
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host tts173
+    HostName 192.168.0.173
+    User admin
+    IdentityFile ~/.ssh/cluster_controller
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host llm173
+    HostName 192.168.0.173
+    User admin
+    IdentityFile ~/.ssh/cluster_controller
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host gpu173
+    HostName 192.168.0.173
+    User admin
+    IdentityFile ~/.ssh/cluster_controller
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host zhuji
     HostName 192.168.0.117
     User Administrator
     IdentityFile ~/.ssh/cluster_controller
@@ -37,7 +109,7 @@ Host tongyi
     ServerAliveInterval 30
     ConnectTimeout 8
 
-Host hub117
+Host shengbei
     HostName 192.168.0.117
     User Administrator
     IdentityFile ~/.ssh/cluster_controller
@@ -46,7 +118,7 @@ Host hub117
     ServerAliveInterval 30
     ConnectTimeout 8
 
-Host pc117
+Host tts117
     HostName 192.168.0.117
     User Administrator
     IdentityFile ~/.ssh/cluster_controller
@@ -55,8 +127,8 @@ Host pc117
     ServerAliveInterval 30
     ConnectTimeout 8
 
-Host zhituo
-    HostName 192.168.0.198
+Host seat117
+    HostName 192.168.0.117
     User Administrator
     IdentityFile ~/.ssh/cluster_controller
     IdentitiesOnly yes
@@ -64,8 +136,8 @@ Host zhituo
     ServerAliveInterval 30
     ConnectTimeout 8
 
-Host lipsync198
-    HostName 192.168.0.198
+Host gpu117
+    HostName 192.168.0.117
     User Administrator
     IdentityFile ~/.ssh/cluster_controller
     IdentitiesOnly yes
@@ -73,8 +145,8 @@ Host lipsync198
     ServerAliveInterval 30
     ConnectTimeout 8
 
-Host gpu198
-    HostName 192.168.0.198
+Host shengyin
+    HostName 192.168.0.104
     User Administrator
     IdentityFile ~/.ssh/cluster_controller
     IdentitiesOnly yes
@@ -82,7 +154,7 @@ Host gpu198
     ServerAliveInterval 30
     ConnectTimeout 8
 
-Host huanyan-node
+Host lianbei
     HostName 192.168.0.104
     User Administrator
     IdentityFile ~/.ssh/cluster_controller
@@ -109,7 +181,7 @@ Host gpu104
     ServerAliveInterval 30
     ConnectTimeout 8
 
-Host huanyan
+Host voice104
     HostName 192.168.0.104
     User Administrator
     IdentityFile ~/.ssh/cluster_controller
@@ -118,7 +190,16 @@ Host huanyan
     ServerAliveInterval 30
     ConnectTimeout 8
 
-Host tongchuan-node
+Host jiyi
+    HostName 192.168.0.140
+    User Administrator
+    IdentityFile ~/.ssh/cluster_controller
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    ConnectTimeout 8
+
+Host tingxie
     HostName 192.168.0.140
     User Administrator
     IdentityFile ~/.ssh/cluster_controller
@@ -145,8 +226,8 @@ Host gpu140
     ServerAliveInterval 30
     ConnectTimeout 8
 
-Host tongchuan
-    HostName 192.168.0.140
+Host shijue
+    HostName 192.168.0.198
     User Administrator
     IdentityFile ~/.ssh/cluster_controller
     IdentitiesOnly yes
@@ -154,36 +235,36 @@ Host tongchuan
     ServerAliveInterval 30
     ConnectTimeout 8
 
-Host huanying
-    HostName 192.168.0.173
-    User admin
+Host kouxing
+    HostName 192.168.0.198
+    User Administrator
     IdentityFile ~/.ssh/cluster_controller
     IdentitiesOnly yes
     StrictHostKeyChecking accept-new
     ServerAliveInterval 30
     ConnectTimeout 8
 
-Host livex173
-    HostName 192.168.0.173
-    User admin
+Host lipsync198
+    HostName 192.168.0.198
+    User Administrator
     IdentityFile ~/.ssh/cluster_controller
     IdentitiesOnly yes
     StrictHostKeyChecking accept-new
     ServerAliveInterval 30
     ConnectTimeout 8
 
-Host gpu173
-    HostName 192.168.0.173
-    User admin
+Host gpu198
+    HostName 192.168.0.198
+    User Administrator
     IdentityFile ~/.ssh/cluster_controller
     IdentitiesOnly yes
     StrictHostKeyChecking accept-new
     ServerAliveInterval 30
     ConnectTimeout 8
 
-Host voice173
-    HostName 192.168.0.173
-    User admin
+Host asr198
+    HostName 192.168.0.198
+    User Administrator
     IdentityFile ~/.ssh/cluster_controller
     IdentitiesOnly yes
     StrictHostKeyChecking accept-new

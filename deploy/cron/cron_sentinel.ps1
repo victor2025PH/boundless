@@ -12,7 +12,8 @@ param(
     [string]$BaseUrl   = '',            # 告警中继基址（缺省 env PERSONA_SYNC_BASE / https://bd2026.cc）
     [string]$IngestKey = '',            # 中继密钥（缺省 env EVENT_INGEST_KEY）
     [int]$StaleHours   = 26,            # 上次运行超过此小时数（且应已跑过）视为超期；0=不查超期
-    [switch]$Heartbeat                  # 全绿时每日心跳一次；也可设机器级 SENTINEL_HEARTBEAT=1
+    [switch]$Heartbeat,                 # 全绿时每日心跳一次；也可设机器级 SENTINEL_HEARTBEAT=1
+    [string]$SelfTask  = 'Boundless-cron-sentinel'  # 本哨兵自身的任务名，排除出巡检集（见下）
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,7 +44,13 @@ function Send-Alert([string]$text) {
 }
 
 # ── 巡检 \Boundless\ 任务 ────────────────────────────────────────────
-$tasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like "*$Prefix*" -or $_.TaskPath -like "*$Prefix*" })
+# 排除哨兵自身：本脚本发现异常时 exit 1，Windows 把它记成自己的 LastTaskResult，
+# 下一轮扫到就再次判失败 —— 一旦响过一次即自我供能、永远红，且**永远走不到**下方
+# 「全绿→补发恢复 + 每日心跳」分支（2026-08-27 实测：其余任务全绿后它仍只报自己）。
+# 哨兵自身死活由心跳负责（见文件头 §心跳），本就不该靠自扫，故此处排除不减弱覆盖。
+$tasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue |
+    Where-Object { $_.TaskName -like "*$Prefix*" -or $_.TaskPath -like "*$Prefix*" } |
+    Where-Object { $_.TaskName -ne $SelfTask })
 if (-not $tasks.Count) { Say "未发现 $Prefix 计划任务，退出（本机可能未装运营 cron）"; exit 0 }
 
 $benign = @(0, 267009, 267011)   # 0=成功 267009=正在运行 267011=从未运行
@@ -55,7 +62,15 @@ foreach ($t in $tasks) {
     $info = $t | Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
     if (-not $info) { continue }
     $rc = $info.LastTaskResult
-    if ($benign -notcontains $rc) {
+    # 0x800710E0(2147946720) = "操作员或管理员拒绝了请求"。对**正在运行**的任务这是
+    # 结构性正常态：常驻守护配了高频触发器（如 Boundless-compute-pusher 每 1 分钟拉起、
+    # python 侧自带单例锁），首个实例长跑期间后续每次触发都会被调度器拒绝并记下此码
+    # —— 于是哨兵每 30 分钟报一次假警，红灯疲劳之后真故障也没人看了。
+    # 刻意**不**把它无条件并入 $benign：同一个码在非运行态是真失败（2026-08-27 实测
+    # TenantBackupNightly 因 LogonType=Interactive 在无交互会话时被拒，正是此码），
+    # 无条件放行会把那类静默失败一起掩盖掉。
+    $runRefused = ($rc -eq 2147946720 -and [string]$t.State -eq 'Running')
+    if (($benign -notcontains $rc) -and (-not $runRefused)) {
         $failed += ("{0}=rc{1}(@{2:MM-dd HH:mm})" -f $t.TaskName, $rc, $info.LastRunTime)
     }
     elseif ($StaleHours -gt 0 -and $info.LastRunTime -and $info.LastRunTime -gt [datetime]'2000-01-01' `

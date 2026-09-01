@@ -1,125 +1,356 @@
 {
-  "_comment": "五机台账单一源。SSH 别名 / 中文名 / 角色 / 路径。改机器只改本文件 + docs/MACHINE_SSH.md。",
-  "hub": { "id": "huansheng", "ip": "192.168.0.176", "port": 9000 },
+  "_comment": [
+    "六机台账单一源（v2 · 2026-08-05 按现役功能全员改名）。SSH 别名 / 中文名 / 角色 / 路径 / 壁纸 / 哨兵看护端口。",
+    "改机器只改本文件，然后依次重跑：tools/render_ssh_config.ps1 → tools/setup_machine_mesh.ps1（或最小化只发 config）；",
+    "壁纸重生成 python tools/make_machine_wallpapers.py；对账 python tools/machines_lint.py。",
+    "命名法：id=功能拼音（跟职能走，本次 v2 全员改名）；ssh[0]=主别名；ssh 其余=职能/统一别名；",
+    "ssh_deprecated=旧名过渡别名（2026-11-05 日落删除）。角色权威源=engines/avatarhub cluster_map.json，本表 role_now 是其摘要。",
+    "resolution=该机实际屏幕（壁纸按此渲染）；accent=机器识别色（壁纸/终端/主题统一用）；watch_ports=桌面哨兵看护的本机算力端口。",
+    "mac=网卡物理地址（2026-08-08 隔空指挥 P2 增列，WOL 唤醒用；ARP+getmac 实采）。"
+  ],
+  "version": "2026-08-29",
+  "gateway": "192.168.0.1",
+  "hub": {
+    "id": "zhongshu",
+    "ip": "192.168.0.176",
+    "port": 9000
+  },
   "machines": [
     {
-      "id": "huansheng",
-      "zh": "幻声",
-      "ssh": ["huansheng", "hub176", "pc5090"],
+      "id": "zhongshu",
+      "legacy_ids": [
+        "huansheng"
+      ],
+      "zh": "感知机",
+      "zh_legacy": "中枢",
+      "ssh": [
+        "ganzhi",
+        "zhongshu",
+        "hub176",
+        "swap176",
+        "interp176",
+        "gpu176"
+      ],
+      "ssh_deprecated": [
+        "huansheng",
+        "pc5090"
+      ],
       "ip": "192.168.0.176",
+      "mac": "08:BF:B8:17:C4:3A",
       "hostname_hint": "DESKTOP-SH6IM7V",
       "user": "user",
       "key": "id_ed25519",
-      "role": "dev",
+      "role": "hub",
+      "role_short": "出图·AvatarHub主控",
+      "role_now": "感知与生成：ComfyUI 出图 :8188（智聊出图唯一落点）+ AvatarHub 主控 :9000 + ollama 视觉/嵌入 :11434（换脸/同传/渲染链按泊车态，2026-08-29）",
       "gpu": "RTX 5090 32G",
-      "products": ["幻声", "幻影", "幻颜", "通传"],
-      "brand_keys": ["voicex", "livex", "facex", "voxx"],
+      "resolution": "1920x1080",
+      "accent": "#E8B341",
+      "products": [
+        "幻声",
+        "幻影",
+        "幻颜",
+        "通传"
+      ],
+      "brand_keys": [
+        "voicex",
+        "livex",
+        "facex",
+        "voxx"
+      ],
       "primary_brand": "voicex",
-      "dev_paths": ["engines/avatarhub", "products/huansheng", "products/huanying", "products/huanyan", "products/tongchuan"],
+      "dev_paths": [
+        "engines/avatarhub",
+        "products/huansheng",
+        "products/huanying",
+        "products/huanyan",
+        "products/tongchuan"
+      ],
       "workdir": "D:\\\\boundless",
       "shortcut": "D:\\\\开发\\\\幻声",
-      "wallpaper": "brand-assets/05_backgrounds/machines/huansheng-wallpaper.png",
-      "services": ["avatar_hub:9000", "fish_tts", "lipsync", "ollama"]
+      "wallpaper": "brand-assets/05_backgrounds/machines/zhongshu-wallpaper.png",
+      "services": [
+        "avatar_hub:9000",
+        "faceswap:8000",
+        "faceswap2:8003",
+        "live_interpreter:7900",
+        "fish_tts:7855",
+        "sbv2_tts:7861",
+        "ditto:8096",
+        "musetalk_lipsync:8090",
+        "vcam:7870",
+        "funasr_stt:7864",
+        "dolphin_stt:7867",
+        "live_director:7910",
+        "ollama_embed:11434"
+      ],
+      "watch_ports": [
+        9000,
+        8188
+      ],
+      "note": "开发/打包机；2026-08-29 智聊单点编制：本机=出图唯一落点(ComfyUI 8188)+AvatarHub 主控；faceswap/同传按泊车态，watch 不再盯 8000/7900（板上常年红字即此，勿回填）"
     },
     {
-      "id": "tongyi",
-      "zh": "通译",
-      "ssh": ["tongyi", "hub117", "pc117"],
-      "ip": "192.168.0.117",
-      "hostname_hint": "MS-DEFYSOMWQYBZ",
-      "user": "Administrator",
-      "key": "cluster_controller",
-      "role": "dev",
-      "gpu": "RTX 3060 12G",
-      "products": ["通译", "智聊"],
-      "brand_keys": ["lingox", "chatx"],
-      "primary_brand": "lingox",
-      "dev_paths": ["engines/chengjie", "products/tongyi", "products/zhiliao", "website"],
-      "workdir": "D:\\\\boundless",
-      "shortcut": "D:\\\\开发\\\\通译",
-      "shortcut_extra": ["D:\\\\开发\\\\智聊"],
-      "wallpaper": "brand-assets/05_backgrounds/machines/tongyi-wallpaper.png",
-      "services": ["emotion_tts:7852", "qwen3_tts:7858"]
-    },
-    {
-      "id": "zhituo",
-      "zh": "智拓",
-      "ssh": ["zhituo", "lipsync198", "gpu198"],
-      "ip": "192.168.0.198",
-      "hostname_hint": "XTW-20250807FDX",
-      "user": "Administrator",
-      "key": "cluster_controller",
-      "role": "dev",
-      "gpu": "RTX 4070 12G",
-      "products": ["智拓"],
-      "brand_keys": ["reachx"],
-      "primary_brand": "reachx",
-      "dev_paths": ["engines/huoke", "products/zhituo"],
-      "workdir": "D:\\\\boundless",
-      "shortcut": "D:\\\\开发\\\\智拓",
-      "wallpaper": "brand-assets/05_backgrounds/machines/zhituo-wallpaper.png",
-      "services": ["ollama:11434"],
-      "note": "2026-08-01 起兼任 LAN LLM 备节点：Ollama qwen3:8b(智聊口语化第二端点)+qwen3:4b(备)；启动器 C:\\\\Users\\\\Administrator\\\\ollama_serve.bat（Run 键自启，模型库 D:\\\\ollama_models，OLLAMA_HOST=0.0.0.0，防火墙仅放 192.168.0.0/24；ICMP 被防火墙禁，探活用 /api/version 别用 ping）"
-    },
-    {
-      "id": "huanyan-node",
-      "zh": "幻颜节点",
-      "ssh": ["huanyan-node", "face104", "gpu104", "huanyan"],
-      "ip": "192.168.0.104",
-      "hostname_hint": "XTZJ-2026WERVDN",
-      "user": "Administrator",
-      "key": "cluster_controller",
-      "role": "compute",
-      "gpu": "RTX 4070 12G",
-      "products": ["幻颜"],
-      "brand_keys": ["facex"],
-      "primary_brand": "facex",
-      "dev_paths": ["engines/avatarhub"],
-      "workdir": "D:\\\\boundless",
-      "shortcut": "D:\\\\开发\\\\幻颜节点",
-      "wallpaper": "brand-assets/05_backgrounds/machines/huanyan-node-wallpaper.png",
-      "services": ["faceswap:8000"],
-      "note": "算力节点：改码只在幻声机，本机 git pull 后重启服务"
-    },
-    {
-      "id": "tongchuan-node",
-      "zh": "通传节点",
-      "ssh": ["tongchuan-node", "stt140", "gpu140", "tongchuan"],
-      "ip": "192.168.0.140",
-      "hostname_hint": "XTZJ-2026YXDYXU",
-      "user": "Administrator",
-      "key": "cluster_controller",
-      "role": "compute",
-      "gpu": "RTX 4070 12G",
-      "products": ["通传"],
-      "brand_keys": ["voxx"],
-      "primary_brand": "voxx",
-      "dev_paths": ["engines/avatarhub"],
-      "workdir": "D:\\\\boundless",
-      "shortcut": "D:\\\\开发\\\\通传节点",
-      "wallpaper": "brand-assets/05_backgrounds/machines/tongchuan-node-wallpaper.png",
-      "services": ["stt:7854", "nemo_stt:7857"],
-      "note": "算力节点：改码只在幻声机，本机 git pull 后重启服务"
-    },
-    {
-      "id": "huanying",
-      "zh": "幻影",
-      "ssh": ["huanying", "livex173", "gpu173", "voice173"],
+      "id": "yunsheng",
+      "legacy_ids": [
+        "huanying"
+      ],
+      "zh": "语言机",
+      "zh_legacy": "韵声",
+      "ssh": [
+        "yuyan",
+        "yunsheng",
+        "tts173",
+        "llm173",
+        "gpu173"
+      ],
+      "ssh_deprecated": [
+        "huanying",
+        "voice173",
+        "livex173"
+      ],
       "ip": "192.168.0.173",
+      "mac": "C8:7F:54:09:A2:07",
       "hostname_hint": "DESKTOP-07NVNHG",
       "user": "admin",
       "key": "cluster_controller",
       "role": "compute",
+      "role_short": "LAN唯一LLM",
+      "role_now": "语言：vLLM chatx :8001（局域网唯一 LLM，口语化/内容兜底）+ ollama 容灾 :11434；IndexTTS :7865 已泊、智聊 TTS 主力迁 104（2026-08-29）",
       "gpu": "RTX 5090 32G",
-      "products": ["幻影"],
-      "brand_keys": ["livex"],
-      "primary_brand": "livex",
-      "dev_paths": ["engines/avatarhub"],
-      "workdir": "C:\\\\boundless",
-      "shortcut": "C:\\\\开发\\\\幻影",
-      "wallpaper": "brand-assets/05_backgrounds/machines/huanying-wallpaper.png",
-      "services": ["glm4voice_web:8888", "glm4voice_phone:10011", "glm4voice_vllm:10010"],
-      "note": "算力节点：GLM-4-Voice 实时语音（176 部署，C:\\\\models\\\\glm-4-voice）；改码在幻声机，本机 git pull 后重启服务"
+      "resolution": "3840x2160",
+      "accent": "#C43BF0",
+      "products": [
+        "幻声"
+      ],
+      "brand_keys": [
+        "voicex"
+      ],
+      "primary_brand": "voicex",
+      "dev_paths": [],
+      "workdir": "C:\\\\models",
+      "shortcut": "",
+      "wallpaper": "brand-assets/05_backgrounds/machines/yunsheng-wallpaper.png",
+      "services": [
+        "vllm_chatx:8001",
+        "ollama_llm:11434"
+      ],
+      "watch_ports": [
+        8001,
+        11434
+      ],
+      "note": "SSH 用 admin@（Administrator 会被 22 端口重置）；显存互斥轮换见 cluster_map _note；全集群唯一 4K 屏"
+    },
+    {
+      "id": "shengbei",
+      "legacy_ids": [
+        "tongyi"
+      ],
+      "zh": "主机",
+      "zh_legacy": "声备",
+      "ssh": [
+        "zhuji",
+        "shengbei",
+        "tts117",
+        "seat117",
+        "gpu117"
+      ],
+      "ssh_deprecated": [
+        "tongyi",
+        "hub117",
+        "pc117"
+      ],
+      "ip": "192.168.0.117",
+      "mac": "B4:2E:99:8E:8C:6A",
+      "hostname_hint": "MS-DEFYSOMWQYBZ",
+      "user": "Administrator",
+      "key": "cluster_controller",
+      "role": "dev",
+      "role_short": "智聊生产·坐席",
+      "role_now": "智聊生产 + 坐席：智聊实例 :18799 + qwen3_tts :7858 + 四平台 worker（智聊 TTS 主力=104:7865 IndexTTS-2，2026-08-29）",
+      "gpu": "RTX 3060 12G",
+      "resolution": "1920x1080",
+      "accent": "#F0A010",
+      "products": [
+        "通译",
+        "智聊"
+      ],
+      "brand_keys": [
+        "lingox",
+        "chatx"
+      ],
+      "primary_brand": "lingox",
+      "dev_paths": [
+        "engines/chengjie",
+        "products/tongyi",
+        "products/zhiliao",
+        "website"
+      ],
+      "workdir": "D:\\\\boundless",
+      "shortcut": "D:\\\\开发\\\\通译",
+      "shortcut_extra": [
+        "D:\\\\开发\\\\智聊"
+      ],
+      "wallpaper": "brand-assets/05_backgrounds/machines/shengbei-wallpaper.png",
+      "services": [
+        "zhiliao:18799",
+        "qwen3_tts:7858"
+      ],
+      "watch_ports": [
+        18799,
+        7858
+      ],
+      "note": "watch 增列 18799（2026-08-29 停电事故沉淀：引擎宕机 5.4h 桌面零提示）；智聊重启窗口 15-30s 内的 svcdown 横幅属预期瞬态"
+    },
+    {
+      "id": "lianbei",
+      "legacy_ids": [
+        "huanyan-node"
+      ],
+      "zh": "声音机",
+      "zh_legacy": "脸备",
+      "ssh": [
+        "shengyin",
+        "lianbei",
+        "face104",
+        "gpu104",
+        "voice104"
+      ],
+      "ssh_deprecated": [
+        "huanyan-node",
+        "huanyan"
+      ],
+      "ip": "192.168.0.104",
+      "mac": "04:7C:16:42:E2:72",
+      "hostname_hint": "XTZJ-2026WERVDN",
+      "user": "Administrator",
+      "key": "cluster_controller",
+      "role": "compute",
+      "role_short": "智聊语音唯一",
+      "role_now": "声音：IndexTTS-2 :7865 智聊克隆唯一落点（IndexTTS104 开机任务+5min 看护已挂；faceswap 已停用 Disabled，2026-08-29）",
+      "gpu": "RTX 4070 12G",
+      "resolution": "1920x1080",
+      "accent": "#B62BF5",
+      "products": [
+        "幻颜"
+      ],
+      "brand_keys": [
+        "facex"
+      ],
+      "primary_brand": "facex",
+      "dev_paths": [
+        "engines/avatarhub"
+      ],
+      "workdir": "C:\\\\模仿音色",
+      "shortcut": "C:\\\\开发\\\\幻颜节点",
+      "wallpaper": "brand-assets/05_backgrounds/machines/lianbei-wallpaper.png",
+      "services": [
+        "indextts2:7865"
+      ],
+      "watch_ports": [
+        7865
+      ],
+      "note": "算力节点：改码只在中枢机，本机 git pull 后重启服务；回切主引擎=PATCH /api/config key=faceswap 指回本机"
+    },
+    {
+      "id": "tingxie",
+      "legacy_ids": [
+        "tongchuan-node"
+      ],
+      "zh": "记忆机",
+      "zh_legacy": "听写",
+      "ssh": [
+        "jiyi",
+        "tingxie",
+        "stt140",
+        "gpu140"
+      ],
+      "ssh_deprecated": [
+        "tongchuan-node",
+        "tongchuan"
+      ],
+      "ip": "192.168.0.140",
+      "mac": "F4:B5:20:55:2C:12",
+      "hostname_hint": "XTZJ-2026YXDYXU",
+      "user": "Administrator",
+      "key": "cluster_controller",
+      "role": "compute",
+      "role_short": "嵌入·STT",
+      "role_now": "记忆：bge-m3 嵌入 :11434（智聊记忆/检索主路）+ whisper STT :7854（ASR 备份位）；nemo :7857 已停；CosyVoice :7852 停电后未回（AvatarHub 属地，2026-08-29）",
+      "gpu": "RTX 4070 12G",
+      "resolution": "1920x1200",
+      "accent": "#F07800",
+      "products": [
+        "通传"
+      ],
+      "brand_keys": [
+        "voxx"
+      ],
+      "primary_brand": "voxx",
+      "dev_paths": [
+        "engines/avatarhub"
+      ],
+      "workdir": "D:\\\\boundless",
+      "shortcut": "D:\\\\开发\\\\通传节点",
+      "wallpaper": "brand-assets/05_backgrounds/machines/tingxie-wallpaper.png",
+      "services": [
+        "ollama_embed:11434",
+        "stt:7854"
+      ],
+      "watch_ports": [
+        7854,
+        11434
+      ],
+      "note": "算力节点；16:10 屏(1920x1200)，壁纸按原生比例渲染；显存最紧，新增服务先改 cluster_map 账本"
+    },
+    {
+      "id": "kouxing",
+      "legacy_ids": [
+        "zhituo"
+      ],
+      "zh": "视觉机",
+      "zh_legacy": "口型",
+      "ssh": [
+        "shijue",
+        "kouxing",
+        "lipsync198",
+        "gpu198",
+        "asr198"
+      ],
+      "ssh_deprecated": [
+        "zhituo"
+      ],
+      "ip": "192.168.0.198",
+      "mac": "74:56:3C:61:CF:9E",
+      "hostname_hint": "XTW-20250807FDX",
+      "user": "Administrator",
+      "key": "cluster_controller",
+      "role": "dev",
+      "role_short": "识图·ASR+SER",
+      "role_now": "视觉与听觉：qwen3-vl 识图 :11434（智聊识图单点）+ aitr_asr ASR+SER :8765（2026-08-29 迁入，asr_loaded+ser_loaded）；lipsync 热备退役",
+      "gpu": "RTX 4070 12G",
+      "resolution": "1920x1080",
+      "accent": "#1E6BF0",
+      "products": [
+        "智拓"
+      ],
+      "brand_keys": [
+        "reachx"
+      ],
+      "primary_brand": "reachx",
+      "dev_paths": [],
+      "workdir": "D:\\\\boundless",
+      "shortcut": "D:\\\\开发\\\\智拓",
+      "wallpaper": "brand-assets/05_backgrounds/machines/kouxing-wallpaper.png",
+      "services": [
+        "ollama:11434",
+        "aitr_asr:8765"
+      ],
+      "watch_ports": [
+        11434,
+        8765
+      ],
+      "note": "lipsync 池次位（SVC_LIPSYNC=中枢主+本机溢出）"
     }
   ]
 }

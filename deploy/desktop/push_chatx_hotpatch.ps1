@@ -18,7 +18,16 @@ param(
   [string]$StageDir = 'C:\Users\Administrator\Downloads\chatx',
   [string]$DesktopDir = "D:\boundless\engines\chengjie\desktop",
   [switch]$Relaunch,
-  [switch]$DryRun
+  [switch]$DryRun,
+  # impl81 P0-3b: after a successful push, flush pending fix-notifies so the
+  # reporters in the bug groups actually learn their fix has shipped.
+  # Default OFF (it sends real group messages) - opt-in per push.
+  [switch]$NotifyPending,
+  # impl81 P2-3: refresh bug_intake.update_hint (the "how to get the fix" line
+  # in fix-notifies) as part of the push, e.g. -UpdateHint "hotpatch pushed,
+  # restart ChatX". Writes the production overlay (comment-preserving) - only
+  # when explicitly passed, never automatic.
+  [string]$UpdateHint = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -99,4 +108,30 @@ if ($failed.Count) {
   exit 3
 }
 Say "OK all targets"
+
+# impl81 P2-3: operator explicitly passed a new update hint -> write it BEFORE
+# any notify, so flushed notifies already carry the fresh "how to get it" line.
+if ($UpdateHint) {
+  try {
+    Push-Location "D:\boundless\engines\chengjie"
+    & python "tools\duty_update_hint.py" --set $UpdateHint 2>&1 | ForEach-Object { Say ("[hint] " + $_) }
+    Pop-Location
+  } catch { Say ("[hint] update skipped: " + $_.Exception.Message) }
+}
+
+# impl81 P0-3b: fix shipped != reporter told. Surface the pending fix-notify
+# backlog every push; -NotifyPending flushes it (real group messages, opt-in).
+$dutyTool = "D:\boundless\engines\chengjie\tools\duty_notify_pending.py"
+if (Test-Path $dutyTool) {
+  $flushArg = @()
+  if ($NotifyPending) { $flushArg = @('--flush') }
+  try {
+    Push-Location "D:\boundless\engines\chengjie"
+    & python $dutyTool @flushArg 2>&1 | ForEach-Object { Say ("[notify] " + $_) }
+    Pop-Location
+  } catch { Say ("[notify] check skipped: " + $_.Exception.Message) }
+  if (-not $NotifyPending) {
+    Say "[notify] pending fix-notifies are NOT sent automatically; re-run with -NotifyPending or: python tools\duty_notify_pending.py --flush"
+  }
+}
 exit 0

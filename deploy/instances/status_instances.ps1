@@ -35,9 +35,37 @@ $Instances = @(
     [pscustomobject]@{ id='tongyi';  name='通译 LingoX'; port=18899; alt_port=18887; param=$TongyiData }
 )
 
+# portproxy 豁免表（2026-08-29 事故：14:14 整机重启后引擎未起，LAN 直连入口的
+# netsh portproxy 监听（svchost/iphlpsvc 持有 192.168.x.x:18799）被本探测算成
+# 「端口被非引擎进程占用」→ watchdog 按防呆哲学拒绝自愈 → 5.4h 永久宕机。
+# stop_instance.ps1 自 2026-08-12 起就有同款窄豁免，此处对齐：只豁免
+# 「svchost 且 监听地址:端口 与在册 v4tov4 规则完全匹配、转发目标 127.0.0.1」；
+# 回环上的陌生进程照旧算占用，真端口劫持不会被掩护。
+$script:ppRules = @()
+try {
+    foreach ($ln in @(netsh interface portproxy show v4tov4 2>$null)) {
+        if ("$ln" -match '^\s*(\d+\.\d+\.\d+\.\d+)\s+(\d+)\s+(\S+)\s+(\d+)\s*$' -and $Matches[3] -eq '127.0.0.1') {
+            $script:ppRules += ("{0}:{1}" -f $Matches[1], [int]$Matches[2])
+        }
+    }
+} catch {}
+$script:svchostPidCache = @{}
+
 function Get-PortHolders([int]$port) {
-    @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
-        Select-Object -ExpandProperty OwningProcess -Unique)
+    $conns = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+    $holders = @()
+    foreach ($c in $conns) {
+        $holderPid = [int]$c.OwningProcess
+        if ($script:ppRules -contains ("{0}:{1}" -f $c.LocalAddress, [int]$c.LocalPort)) {
+            if (-not $script:svchostPidCache.ContainsKey($holderPid)) {
+                $p = Get-CimInstance Win32_Process -Filter "ProcessId=$holderPid" -ErrorAction SilentlyContinue
+                $script:svchostPidCache[$holderPid] = ($p -and $p.Name -ieq 'svchost.exe')
+            }
+            if ($script:svchostPidCache[$holderPid]) { continue }
+        }
+        if ($holders -notcontains $holderPid) { $holders += $holderPid }
+    }
+    return ,$holders
 }
 
 # 从端口持有进程反查真实数据根：start_*.ps1 的 cmd 链形如
