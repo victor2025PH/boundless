@@ -13,6 +13,7 @@ import { usePathname } from "next/navigation";
 import { Gift, X } from "lucide-react";
 import { track } from "@/lib/track";
 import { NEWBIE_PACK, rechargeUnitPrice, tokenRate } from "@/lib/chatx-pricing";
+import { overlayPolicy } from "@/lib/overlay-policy";
 
 const LS_KEY = "bl-newbie-poster-dismissed-ts";
 const MUTE_DAYS = 7;
@@ -26,8 +27,13 @@ export default function NewbieFloatingPoster() {
   const zh = !pathname.startsWith("/en");
 
   // 排除页：价格页（有整幅海报）/ 下单页（勿打断支付）/ 小程序视图 / 素材舞台
+  // + 实施78 P0-3：国际路由与 GEO 落地页由 lib/overlay-policy 统一判定（促销浮层对西方
+  //   B2B 买家是可信度减分项，对 AI 直达的陌生读者是抢戏）——判定收在一处，别在此另写正则。
   const excluded =
-    /^\/(en\/)?(pricing|order)/.test(pathname) || pathname.startsWith("/app") || pathname.startsWith("/robot-stage");
+    !overlayPolicy(pathname).promo ||
+    /^\/(en\/)?(pricing|order)/.test(pathname) ||
+    pathname.startsWith("/app") ||
+    pathname.startsWith("/robot-stage");
 
   useEffect(() => {
     if (excluded) return;

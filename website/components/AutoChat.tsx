@@ -98,8 +98,9 @@ export default function AutoChat() {
                   className="overflow-hidden rounded-2xl border border-white/10 bg-ink-900/60"
                 >
                   <div className="border-b border-white/10 bg-ink-800/50 px-4 py-2.5 text-sm text-slate-300">
+                    {/* 实施78 P0-2：标签此前硬编「原文 SRC」，英文页出现中文字形 */}
                     <span className="mr-2 rounded bg-white/10 px-1.5 py-0.5 text-[11px] font-medium text-slate-400">
-                      原文 SRC
+                      {zh ? "原文 SRC" : "SOURCE"}
                     </span>
                     {c.src}
                   </div>

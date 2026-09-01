@@ -136,7 +136,7 @@ function ClientCard({ app, zh, live }: { app: ClientApp; zh: boolean; live?: Liv
         <div className="min-w-0">
           <div className="truncate font-semibold text-white">
             {app.name[lang]}
-            <span className="ml-1.5 text-xs font-normal text-slate-500">{app.subName}</span>
+            <span className="ml-1.5 text-xs font-normal text-slate-500">{app.subName[lang]}</span>
           </div>
           <div className={`mt-0.5 inline-flex rounded-full border px-2 py-px text-[10px] ${accent.chip}`}>
             {zh ? CATEGORIES[app.family].zh : CATEGORIES[app.family].en}

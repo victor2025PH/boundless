@@ -10,6 +10,7 @@ import {
   PRODUCT_OPTICAL_SCALE,
 } from "@/components/productMeta";
 import { track } from "@/lib/track";
+import { isColdExternalEntry } from "@/lib/overlay-policy";
 import { abExpose } from "@/lib/ab";
 
 /** 科幻开场页（进入 AI 世界）：全屏星际之门场景 + WebAudio 合成氛围音乐。
@@ -65,9 +66,12 @@ const COPY = {
   },
   en: {
     title: "BOUNDLESS",
-    sub: "无 界 科 技",
+    /* 实施78 P0-2：英文档原为中文页的镜像（sub「无 界 科 技」+ taglineSub「让沟通，无界」）。
+       中文页放拉丁转写是助记，反过来对不识汉字的访客只是噪音，且在我们主打「数据主权」时
+       多余地暗示产品来源。副标改拉丁字形，第二行留空（下方按真值渲染，不出空 span）。 */
+    sub: "A I   E N G I N E",
     tagline: "Communication, Boundless.",
-    taglineSub: "让沟通，无界",
+    taglineSub: "",
     enter: "ENTER THE AI WORLD",
     hint: "Sound on recommended · scroll or click",
     soundOff: "ENABLE SOUND",
@@ -869,6 +873,18 @@ export default function IntroCover() {
       setShow(false);
       return;
     }
+    /* 实施78 P0-3：搜索 / AI 答案 / 广告 / 社媒点进来的冷流量直接跳过开场片。
+     * 那批人带着问题来、耐心最低，也恰恰是最贵的流量；品牌片留给直接访问与站内往返的访客。
+     * 与「会话内只出现一次」共用同一条退场路径（写 SEEN_KEY），避免二次导航又冒出来。 */
+    if (isColdExternalEntry()) {
+      dismissedInRuntime = true;
+      try {
+        sessionStorage.setItem(SEEN_KEY, "1");
+      } catch {}
+      setShow(false);
+      track("intro_skipped_cold_entry");
+      return;
+    }
     let seen = false;
     try {
       seen = !!sessionStorage.getItem(SEEN_KEY);
@@ -1239,25 +1255,33 @@ export default function IntroCover() {
       </button>
 
       <div className="bl-intro-content">
+        {/* 实施78 P0-2：`.zh-part` 只在 max-width:520px 被 CSS 藏起来，而开场页本就只在
+            桌面展示（移动端整层跳过）——等于英文桌面版一直挂着「· 无界引擎」。按语言渲染。 */}
         <div className="bl-stage bl-kicker">
           BOUNDLESS <span className="dot">·</span> AI ENGINE
-          <span className="zh-part">
-            {" "}
-            <span className="dot">·</span> 无界引擎
-          </span>
+          {lang === "zh" && (
+            <span className="zh-part">
+              {" "}
+              <span className="dot">·</span> 无界引擎
+            </span>
+          )}
         </div>
         {/* 公司主标 + 无界科技 组成居中锁定图（picture：webp -79% 体积，旧浏览器原生回退 png） */}
         <div className="bl-stage bl-brandmark">
           <picture>
             <source srcSet="/brand/logos/boundless-mark-512.webp" type="image/webp" />
-            <img src="/brand/logos/boundless-mark-512.png" alt={BRAND.company.full} draggable={false} />
+            <img
+              src="/brand/logos/boundless-mark-512.png"
+              alt={lang === "zh" ? BRAND.company.full : BRAND.company.en}
+              draggable={false}
+            />
           </picture>
         </div>
         <div className="bl-title-zh">{c.title}</div>
         <div className="bl-stage bl-title-en">{c.sub}</div>
         <div className="bl-stage bl-tagline">
           {c.tagline}
-          <span className="en">{c.taglineSub}</span>
+          {c.taglineSub && <span className="en">{c.taglineSub}</span>}
         </div>
         <div className="bl-stage bl-five">
           {lang === "zh" ? (

@@ -5,7 +5,7 @@ import SectionNav from "@/components/SectionNav";
 import Hero from "@/components/Hero";
 import FilmSection from "@/components/FilmSection";
 import BrandShowcase from "@/components/BrandShowcase";
-import { LazyAISprite, LazyDragonQuest } from "@/components/fx/LazyFx";
+import HomeEasterEggs from "@/components/fx/HomeEasterEggs";
 import TrustBar from "@/components/TrustBar";
 import SolutionPicker from "@/components/SolutionPicker";
 import ProductMatrix from "@/components/ProductMatrix";
@@ -23,15 +23,11 @@ export default function SiteHome() {
   return (
     <main className="relative min-h-screen">
       <IntroCover />
-      {/* 两个纯装饰彩蛋走 LazyFx（dynamic ssr:false）懒加载，不占首屏关键路径。
-          <768px 整体隐藏（hidden md:contents）：390px 屏上机器人+星珠徽章与聊天气泡/
-          粘性条五层浮动互相叠压、遮挡菜单（2026-08-07 实录截图），彩蛋定位为桌面体验；
-          md+ 用 display:contents 让包装层对布局零影响。 */}
-      <div className="hidden md:contents">
-        <LazyAISprite />
-        {/* 龙珠彩蛋：每日到访集星珠，七星聚召唤界龙（与 AISprite 通过 bl:apply-skin 事件解耦） */}
-        <LazyDragonQuest />
-      </div>
+      {/* 彩蛋层（吉祥物 + 龙珠集星）走 LazyFx（dynamic ssr:false）懒加载，不占首屏关键路径。
+          <768px 整体隐藏、md+ 用 display:contents 使包装层对布局零影响（既有约定见
+          HomeEasterEggs 注释）。实施78 P0-3 起由 HomeEasterEggs 按 lib/overlay-policy
+          决定游戏化彩蛋出不出——国际路由默认关，中文页行为不变。 */}
+      <HomeEasterEggs />
       <Navbar />
       <SectionNav />
       {/* 品牌块(公司+三系七图标) 在上，营销主文案区(大标题+按钮) 在下 */}

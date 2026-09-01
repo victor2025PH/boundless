@@ -81,6 +81,15 @@ function Invoke-Remote([string]$Command, [int]$TimeoutSec = 60) {
   return ($r.Output -join "`n")
 }
 
+# 从发布指针文件里取版本号：manifest.json 走 JSON 键，latest.yml（electron-updater）走首行。
+function Get-PublishVersion([string]$Text) {
+  if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
+  $m = [regex]::Match($Text, '"version"\s*:\s*"([0-9][0-9.]*)"')
+  if (-not $m.Success) { $m = [regex]::Match($Text, '(?m)^version:\s*([0-9][0-9.]*)\s*$') }
+  if ($m.Success) { return $m.Groups[1].Value }
+  return $null
+}
+
 Push-Location $WebRoot
 try {
   Write-Host '[0/4] sync:brand（vendored 品牌 preset，缺则服务器 next build 必挂）...'
@@ -185,6 +194,7 @@ try {
     if (-not $SkipAssets) {
       $appDir = "$RemoteDir/yuntech"
       $changed = 0
+      $staleGuard = @()
       foreach ($rel in @('public/downloads', 'public/releases')) {
         $localDir = Join-Path $WebRoot ($rel -replace '/', '\')
         if (-not (Test-Path $localDir)) { continue }
@@ -198,6 +208,19 @@ try {
           # 变更判定分两档：大安装包比大小（快，几百 MB 不值当算哈希）；
           # 小元数据文件（manifest/latest.yml）比 MD5——换版本号后字节数常常不变
           # （版本/哈希/日期全定长），按大小判会被误跳过导致页面停在旧版本。
+          # 发布指针单向守卫（2026-08-28 实锤事故）：public/downloads 的真相在**服务器**——
+          # 打包线可能把新版发布到服务器/R2 而没回填本地树。此处原本无条件「本地覆盖远端」，
+          # 于是一次纯官网内容部署把 latest.yml 从 1.0.58 打回 1.0.57，桌面自动更新当场指向旧包。
+          # 现在对带版本号的指针文件比版本：远端更新 → 跳过并报警（内容部署照常完成，绝不回退生产）。
+          if ($f.Name -in @('latest.yml', 'manifest.json')) {
+            $localVer = Get-PublishVersion (Get-Content $f.FullName -Raw)
+            $remoteVer = Get-PublishVersion (Invoke-Remote "cat '$remoteFile' 2>/dev/null || true")
+            if ($localVer -and $remoteVer -and ([version]$remoteVer -gt [version]$localVer)) {
+              Write-Host ("    ! {0}：远端 {1} 比本地 {2} 新 → 跳过上传（本地树落后）" -f $sub, $remoteVer, $localVer) -ForegroundColor Yellow
+              $staleGuard += ("{0}（远端 {1} > 本地 {2}）" -f $sub, $remoteVer, $localVer)
+              continue
+            }
+          }
           if ($f.Length -gt 1MB) {
             $sz = (Invoke-Remote "stat -c %s '$remoteFile' 2>/dev/null || echo 0").Trim()
             if ($sz -eq [string]$f.Length) {
@@ -222,6 +245,12 @@ try {
           }
           $changed++
         }
+      }
+      if ($staleGuard.Count -gt 0) {
+        Write-Host ''
+        Write-Warning ("发布指针未同步，已保留生产原值（官网内容部署不受影响）：`n  - " +
+          ($staleGuard -join "`n  - ") +
+          "`n  处理：请打包线把最新发布物（含 latest.yml / manifest.json）回填 website/public/downloads 后再部署。")
       }
       # Next.js 只在启动时建立 public/ 静态索引：新增文件后不重启会 404（本次事故的第二成因）。
       if ($changed -gt 0) {

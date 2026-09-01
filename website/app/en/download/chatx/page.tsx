@@ -4,8 +4,9 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import ChatxDownloadSection from "@/components/ChatxDownloadSection";
 import InviteRefBanner from "@/components/InviteRefBanner";
+import MobileDesktopHandoff from "@/components/MobileDesktopHandoff";
 import { SITE_URL } from "@/lib/site";
-import { CHATX } from "@/lib/chatxContent";
+import { chatxDownloadJsonLd } from "@/lib/chatxContent";
 
 const LANGUAGES = { "zh-CN": "/download/chatx", en: "/en/download/chatx", "x-default": "/download/chatx" };
 
@@ -21,26 +22,28 @@ export const metadata: Metadata = {
   },
 };
 
-const appLd = {
-  "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  name: "ChatX",
-  applicationCategory: "BusinessApplication",
-  operatingSystem: "Windows 10/11",
-  softwareVersion: CHATX.download.version,
-  offers: { "@type": "Offer", price: "0", priceCurrency: "USD", description: "Free download & trial" },
-  publisher: { "@type": "Organization", name: "BOUNDLESS", url: SITE_URL },
-};
+// SoftwareApplication + FAQPage nodes (impl-77 GEO batch 3): built in lib/chatxContent.ts so the
+// zh and en pages cannot drift apart, and so the FAQ schema mirrors the visible accordion exactly.
+const ld = chatxDownloadJsonLd("en", SITE_URL);
 
 export default function ChatxDownloadPageEn() {
   return (
     <main className="relative min-h-screen">
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(appLd) }} />
+      {ld.map((node, i) => (
+        <script
+          key={i}
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(node) }}
+        />
+      ))}
       <Navbar />
       {/* ?ref=ZL-XXXXXX referral banner (useSearchParams needs Suspense; page stays static) */}
       <Suspense fallback={null}>
         <InviteRefBanner lang="en" />
       </Suspense>
+      {/* impl-78 P1-2: mobile → desktop handoff card (below md only). Mounted at page level
+          rather than inside ChatxDownloadSection, which a parallel line is editing. */}
+      <MobileDesktopHandoff lang="en" />
       <ChatxDownloadSection lang="en" />
       <Footer />
     </main>

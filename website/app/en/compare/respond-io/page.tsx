@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import ComparePage from "@/components/ComparePage";
+import FaqJsonLd from "@/components/FaqJsonLd";
 import { compareSpecs } from "@/lib/compare-content";
 
 export const metadata: Metadata = {
@@ -18,5 +19,10 @@ export const metadata: Metadata = {
 };
 
 export default function CompareRespondIoPageEn() {
-  return <ComparePage spec={compareSpecs["respond-io"]} />;
+  return (
+    <>
+      <FaqJsonLd faq={compareSpecs["respond-io"].faq} lang="en" />
+      <ComparePage spec={compareSpecs["respond-io"]} />
+    </>
+  );
 }

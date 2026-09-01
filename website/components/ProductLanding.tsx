@@ -71,8 +71,15 @@ function LandingNav({ product, L, ui }: { product: LandingKey; L: LandingDict; u
         <div className="flex items-center gap-3">
           <Link href={home} className="flex items-center gap-2">
             <BrandMark className="h-8 w-8" />
+            {/* 实施78 P0-2：英文路由只出 BOUNDLESS（与 Navbar/Footer/BrandShowcase 同口径） */}
             <span className="hidden text-base font-semibold tracking-wide text-white sm:inline">
-              {BRAND.company.zh} <span className="text-slate-400">{BRAND.company.en}</span>
+              {lang === "zh" ? (
+                <>
+                  {BRAND.company.zh} <span className="text-slate-400">{BRAND.company.en}</span>
+                </>
+              ) : (
+                BRAND.company.en
+              )}
             </span>
           </Link>
           <span className="hidden rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-xs text-slate-300 md:inline">
@@ -232,6 +239,18 @@ function DemoBlock({ product, L, clipLabels }: { product: LandingKey; L: Landing
                 <pre className="whitespace-pre-wrap font-mono text-[13px] leading-relaxed text-slate-300">
                   {LANDING_MEDIA.fateKline.chartSummary}
                 </pre>
+                {/* 英文页并列一段对照译读：上面那块是引擎逐字输出（保留干支原文才诚实，
+                    也是英文 BaZi 内容的惯例），这里让英文读者与 AI 引擎读得懂。 */}
+                {lang !== "zh" && (
+                  <>
+                    <p className="mb-1.5 mt-4 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">
+                      English gloss
+                    </p>
+                    <pre className="whitespace-pre-wrap font-mono text-[13px] leading-relaxed text-slate-400">
+                      {LANDING_MEDIA.fateKline.chartSummaryEn}
+                    </pre>
+                  </>
+                )}
                 <p className="mt-3 text-[11px] text-slate-500">
                   {lang === "zh"
                     ? "示例样盘 · 虚构生辰（1995-08-17）——时辰性别齐全，所以有时柱与大运；缺哪项，引擎就少排哪项。"

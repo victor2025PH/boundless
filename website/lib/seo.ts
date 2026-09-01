@@ -39,6 +39,10 @@ export const SITE_PAGES: SitePage[] = [
   { slug: "/compliance", bilingual: true, changeFrequency: "monthly", priority: 0.6, enPriority: 0.6 },
   { slug: "/compare/respond-io", bilingual: true, changeFrequency: "monthly", priority: 0.6, enPriority: 0.6 },
   { slug: "/compare/salesmartly", bilingual: true, changeFrequency: "monthly", priority: 0.6, enPriority: 0.6 },
+  // 实施77 渠道四（2026-08-27）：GEO 对比矩阵扩容——选型指南枢纽页 + 两个新竞品对比页
+  { slug: "/compare", bilingual: true, changeFrequency: "weekly", priority: 0.7, enPriority: 0.7 },
+  { slug: "/compare/sleekflow", bilingual: true, changeFrequency: "monthly", priority: 0.6, enPriority: 0.6 },
+  { slug: "/compare/wati", bilingual: true, changeFrequency: "monthly", priority: 0.6, enPriority: 0.6 },
 ];
 
 /** 合规隔离：主站对外可见的页面 = SITE_PAGES 去掉 gated（高风险）slug。

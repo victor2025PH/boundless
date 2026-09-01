@@ -26,8 +26,9 @@ export type PlatformStatus = "available" | "coming" | "planned";
 export interface ClientApp {
   key: "chatx" | "avatarhub" | "matrixx";
   name: { zh: string; en: string };
-  /** 副名（另一语言名 / 引擎名），卡片上以弱化样式展示 */
-  subName: string;
+  /** 副名（另一语言名 / 引擎名），卡片上以弱化样式展示。
+   *  实施78 P0-2：改为按语言取——原为单串，英文下载页会渲染出「STUDIO 实时数字人引擎」。 */
+  subName: { zh: string; en: string };
   /** 三系归属：决定卡片 accent 色（lib/brand.ts CATEGORIES 同源） */
   family: CategoryKey;
   /** 产品图标 key（ProductIcon 渲染）；无对应产品条目（引擎级客户端）则为 null，用公司 ∞ 标 */
@@ -51,7 +52,7 @@ export const CLIENT_APPS: ClientApp[] = [
   {
     key: "chatx",
     name: { zh: "智聊 ChatX", en: "ChatX" },
-    subName: "ChatHub",
+    subName: { zh: "ChatHub", en: "ChatHub" },
     family: "growth",
     productIcon: "chatx",
     tagline: {
@@ -68,7 +69,7 @@ export const CLIENT_APPS: ClientApp[] = [
   {
     key: "avatarhub",
     name: { zh: "幻境 STUDIO ", en: "STUDIO" },
-    subName: "实时数字人引擎",
+    subName: { zh: "实时数字人引擎", en: "Digital Human Engine" },
     family: "studio",
     productIcon: null,
     iconSrc: "/brand/products/studio.png",
@@ -86,7 +87,7 @@ export const CLIENT_APPS: ClientApp[] = [
   {
     key: "matrixx",
     name: { zh: "智控 MatrixX", en: "MatrixX" },
-    subName: "TeleFleet",
+    subName: { zh: "TeleFleet", en: "TeleFleet" },
     family: "growth",
     productIcon: "matrixx",
     // 中性口径：能力细节与营销话术只在其 noindex 落地页/下载页出现。

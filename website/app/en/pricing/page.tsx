@@ -4,6 +4,7 @@ import Footer from "@/components/Footer";
 import PricingPage from "@/components/PricingPage";
 import { SITE_URL } from "@/lib/site";
 import { tokenPackOffers, translateOffers, toSchemaOffer } from "@/lib/pricing";
+import { pricingFaqJsonLd } from "@/lib/pricing-faq";
 
 const LANGUAGES = { "zh-CN": "/pricing", en: "/en/pricing", "x-default": "/pricing" };
 
@@ -30,10 +31,14 @@ const pricingLd = {
   offers: [...tokenPackOffers, ...translateOffers].map(toSchemaOffer),
 };
 
+// Page-level FAQPage schema (GEO batch 2) — same source as the visible FAQ (lib/pricing-faq).
+const faqLd = pricingFaqJsonLd(false);
+
 export default function PricingRouteEn() {
   return (
     <main className="relative min-h-screen">
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(pricingLd) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(faqLd) }} />
       <Navbar />
       <PricingPage />
       <Footer />

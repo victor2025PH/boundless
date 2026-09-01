@@ -4,8 +4,9 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import ChatxDownloadSection from "@/components/ChatxDownloadSection";
 import InviteRefBanner from "@/components/InviteRefBanner";
+import MobileDesktopHandoff from "@/components/MobileDesktopHandoff";
 import { SITE_URL } from "@/lib/site";
-import { CHATX } from "@/lib/chatxContent";
+import { chatxDownloadJsonLd } from "@/lib/chatxContent";
 
 export const metadata: Metadata = {
   title: "下载智聊 ChatX 客户端 · 无界科技 BOUNDLESS",
@@ -22,26 +23,28 @@ export const metadata: Metadata = {
   },
 };
 
-const appLd = {
-  "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  name: "智聊 ChatX",
-  applicationCategory: "BusinessApplication",
-  operatingSystem: "Windows 10/11",
-  softwareVersion: CHATX.download.version,
-  offers: { "@type": "Offer", price: "0", priceCurrency: "USD", description: "免费下载试用" },
-  publisher: { "@type": "Organization", name: "无界科技 BOUNDLESS", url: SITE_URL },
-};
+// SoftwareApplication + FAQPage 两个节点（实施77 GEO 批次3）：构造在 lib/chatxContent.ts，
+// 与页面可见内容同源——FAQ 折叠面板显示什么，schema 就是什么。
+const ld = chatxDownloadJsonLd("zh", SITE_URL);
 
 export default function ChatxDownloadPage() {
   return (
     <main className="relative min-h-screen">
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(appLd) }} />
+      {ld.map((node, i) => (
+        <script
+          key={i}
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(node) }}
+        />
+      ))}
       <Navbar />
       {/* ?ref=ZL-XXXXXX 邀请归因横幅（useSearchParams 需 Suspense，页面保持静态渲染） */}
       <Suspense fallback={null}>
         <InviteRefBanner lang="zh" />
       </Suspense>
+      {/* 实施78 P1-2：移动端交接卡（仅 <md 显示）。挂在页面层而不是塞进
+          ChatxDownloadSection——那个文件属并行线在改，页面层插入零冲突。 */}
+      <MobileDesktopHandoff lang="zh" />
       <ChatxDownloadSection lang="zh" />
       <Footer />
     </main>

@@ -10,6 +10,7 @@ import {
   Download,
   HardDrive,
   HelpCircle,
+  History,
   KeyRound,
   MessageCircle,
   Monitor,
@@ -21,10 +22,11 @@ import { useLang } from "./LanguageContext";
 import Reveal from "./fx/Reveal";
 import RichText from "./RichText";
 import ProductIcon from "./ProductIcon";
+import ProductScreenshots from "./ProductScreenshots";
 import { CHATX } from "@/lib/chatxContent";
 import { dlHref } from "@/lib/mirror";
 import { track } from "@/lib/track";
-import { CONTACT_URL, TELEGRAM_DISPLAY } from "@/lib/site";
+import { CONTACT_EMAIL, CONTACT_EMAIL_URL, CONTACT_URL, TELEGRAM_DISPLAY } from "@/lib/site";
 import type { BrandLang } from "@/lib/brand";
 
 /** /downloads/manifest.json 的运行时形态（打包脚本生成；构建时兜底见 chatxContent） */
@@ -82,10 +84,10 @@ export default function ChatxDownloadSection({ lang: forced }: { lang?: BrandLan
       external: false,
     },
     {
-      icon: RefreshCw,
-      title: zh ? "内置自动更新" : "Auto-update built in",
-      desc: zh ? "启动检查 · 后台下载 · 退出安装" : "Check on launch, install on exit",
-      href: "#faq",
+      icon: History,
+      title: zh ? "版本更新记录" : "Release notes",
+      desc: zh ? `最新 v${version} 更新了什么` : `What's new in v${version}`,
+      href: zh ? "/download/chatx/releases" : "/en/download/chatx/releases",
       external: false,
     },
     {
@@ -233,6 +235,10 @@ export default function ChatxDownloadSection({ lang: forced }: { lang?: BrandLan
           </div>
         </Reveal>
 
+        {/* 真实界面截图（实施78 P0-5/P0-6）：放在下载按钮之后、教程之前——
+            「让我下 442MB 未签名 exe，却不给我看软件长什么样」是最先要答的疑问 */}
+        <ProductScreenshots lang={lang} />
+
         {/* 装前自查 + 分步安装教程 */}
         <Reveal className="mt-12">
           <div id="install-guide" className="glass scroll-mt-28 rounded-2xl border border-white/10 p-6 md:p-8">
@@ -364,6 +370,21 @@ export default function ChatxDownloadSection({ lang: forced }: { lang?: BrandLan
                     ? "把报错截图发给客服，安装 / 接入 / 授权问题秒回。"
                     : "Send a screenshot to support — install, onboarding and licensing answered fast."}
                 </p>
+                {/* 邮箱兜底（实施78 U5）：此前整页唯一联系方式是 Telegram，而从 AI/搜索
+                    进来的国际访客常常不用 Telegram，也不会为问一个问题装一个 App。
+                    判空渲染——lib/site.CONTACT_EMAIL 为空时这行不出现，绝不显示会退信的地址。 */}
+                {CONTACT_EMAIL && (
+                  <p className="mt-1.5 text-xs text-slate-500">
+                    {zh ? "不用 Telegram？发邮件也行：" : "Not on Telegram? Email us: "}
+                    <a
+                      href={CONTACT_EMAIL_URL}
+                      onClick={() => track("cta_click", { where: "chatx_download_email" })}
+                      className="text-neon-cyan underline decoration-dotted underline-offset-2 transition hover:text-white"
+                    >
+                      {CONTACT_EMAIL}
+                    </a>
+                  </p>
+                )}
               </div>
             </div>
             <a

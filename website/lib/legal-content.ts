@@ -1,4 +1,5 @@
 import type { LegalSection } from "@/components/LegalShell";
+import { CONTACT_EMAIL, TELEGRAM_DISPLAY } from "@/lib/site";
 
 export const LEGAL_UPDATED = "2026-06-13";
 
@@ -252,12 +253,23 @@ export const crisisProtocolSections: LegalSection[] = [
   {
     h: { zh: "联系方式与法域说明", en: "Contact & jurisdiction note" },
     p: {
+      /* 实施78 P0-6：这两行原是未填模板占位符（「【运营方填写…】」/「[To be completed
+         by the operator…]」），而两个页面（/compliance/crisis-protocol 与 /en 侧）都已
+         线上可访问 200——我们把合规当卖点，自己的合规页却写着「待填」，是可信度硬伤。
+         现在先填本站真实联系人，同时保留该段的模板用途（客户自行部署时要换成自己的）。
+         邮箱行按 lib/site.CONTACT_EMAIL 判空：没开通就不出现，绝不写一个会退信的地址。 */
       zh: [
-        "【运营方填写：合规联系人 / 邮箱 / 即时通讯联系方式。】",
+        `本站服务的合规联系人：无界科技 BOUNDLESS（服务提供方），即时通讯 ${TELEGRAM_DISPLAY}` +
+          (CONTACT_EMAIL ? `，邮箱 ${CONTACT_EMAIL}` : "") +
+          "。",
+        "若你把本工具部署给自己的客户使用，请把上一行替换为**你自己**的合规联系人——披露、公示与年报的法定义务主体是服务运营方（deployer），不是工具提供方。",
         "本模板不构成法律意见；运营方应根据其属地法规（如 EU AI Act 第 50 条、加州 SB 243、纽约 GBL §1700）对内容作最终审定。",
       ],
       en: [
-        "[To be completed by the operator: compliance contact / email / messaging handle.]",
+        `Compliance contact for this site: BOUNDLESS (service provider), messaging ${TELEGRAM_DISPLAY}` +
+          (CONTACT_EMAIL ? `, email ${CONTACT_EMAIL}` : "") +
+          ".",
+        "If you deploy this toolkit for your own customers, replace the line above with **your own** compliance contact — the legal duty for disclosure, public notice and annual reporting sits with the service operator (deployer), not the tool vendor.",
         "This template is not legal advice; operators should finalize the content per their local regulations (e.g. EU AI Act Art. 50, California SB 243, New York GBL §1700).",
       ],
     },

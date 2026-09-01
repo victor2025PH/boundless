@@ -82,8 +82,15 @@ export default function BrandPage() {
         <section className="text-center">
           <div className="mx-auto mb-6 flex items-center justify-center gap-3">
             <BrandMark className="h-14 w-14" />
+            {/* 实施78 P0-2：英文路由只出 BOUNDLESS（与 Navbar/Footer/BrandShowcase 同口径） */}
             <span className="text-2xl font-bold tracking-wide">
-              {BRAND.company.zh} <span className="text-slate-400">{BRAND.company.en}</span>
+              {lang === "zh" ? (
+                <>
+                  {BRAND.company.zh} <span className="text-slate-400">{BRAND.company.en}</span>
+                </>
+              ) : (
+                BRAND.company.en
+              )}
             </span>
           </div>
           <p className="mb-3 text-xs font-medium uppercase tracking-[0.3em] text-neon-cyan">{c.kicker}</p>
@@ -125,11 +132,13 @@ export default function BrandPage() {
                         ? "border-neon-violet/50"
                         : "border-amber-400/50"
                   }`}>
+                    {/* 实施78 P0-2：英文页不做反向双写（「Growth 智连」对不识汉字的
+                        访客是噪音），与 Navbar / BrandShowcase / ProductMatrix 同口径 */}
                     <h4 className="text-lg font-bold text-white">
                       {lang === "zh" ? cc.zh : cc.en}
-                      <span className={`ml-2 text-sm font-medium ${ui.label}`}>
-                        {lang === "zh" ? cc.en : cc.zh}
-                      </span>
+                      {lang === "zh" && (
+                        <span className={`ml-2 text-sm font-medium ${ui.label}`}>{cc.en}</span>
+                      )}
                     </h4>
                     <p className="mt-0.5 text-xs text-slate-500">
                       {c.breakLabel} · {lang === "zh" ? cc.breakZh : cc.breakEn}
@@ -163,8 +172,17 @@ export default function BrandPage() {
                             <span className="font-mono text-xs text-slate-600">0{idx + 1}</span>
                           </div>
                           <div className="flex items-baseline gap-2">
-                            <span className="text-xl font-bold text-white">{p.zh}</span>
-                            <span className={`text-sm font-semibold ${ui.enName}`}>{p.en}</span>
+                            {/* P0-2：中文页「智聊 ChatX」双写，英文页只出拉丁名 */}
+                            {lang === "zh" && <span className="text-xl font-bold text-white">{p.zh}</span>}
+                            <span
+                              className={
+                                lang === "zh"
+                                  ? `text-sm font-semibold ${ui.enName}`
+                                  : "text-xl font-bold text-white"
+                              }
+                            >
+                              {p.en}
+                            </span>
                           </div>
                           <p className="mt-0.5 text-xs text-slate-500">
                             {p.scene[lang]} · {p.alt}

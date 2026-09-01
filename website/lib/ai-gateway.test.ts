@@ -17,6 +17,9 @@ process.env.AI_GATEWAY_QUOTA_DB = path.join(
   fs.mkdtempSync(path.join(os.tmpdir(), "gwtest-")),
   "quota.db"
 );
+// 刻意**只**设识图中继、不设 EMBED_RELAY_URLS：嵌入必须自动沿用它
+// （bge-m3 与 VLM 同住 Ollama，复用同一条隧道端口 → 上线不必新增 env/隧道）。
+process.env.VISION_RELAY_URLS = "http://127.0.0.1:18411/v1,http://127.0.0.1:18412/v1";
 
 async function main() {
   const gw = await import("./ai-gateway");
@@ -103,6 +106,38 @@ async function main() {
   const vs = gw.visionRelayStatus();
   assert.equal(typeof vs.enabled, "boolean");
   assert.ok(vs.canonical_model.length > 0);
+
+  // ── 嵌入中继（P0-1，B126 根因）：沿用识图隧道 + 字符估算 + 计额下限 ──
+  // 「enabled」是这条路由的生死开关：为 false 时 route 直接回 503，而
+  // 503 与 404-HTML 的区别正是本次修复的全部意义（客户端能解析成 JSON 错误）。
+  assert.equal(gw.embedRelayEnabled(), true, "未显式配 EMBED_RELAY_URLS 时须继承识图中继");
+  const es = gw.embedRelayStatus();
+  assert.deepEqual(
+    es.relays.map((r) => r.url),
+    ["http://127.0.0.1:18411/v1", "http://127.0.0.1:18412/v1"]
+  );
+  assert.equal(es.canonical_model, "bge-m3");
+  assert.equal(gw.estimateEmbedChars({ input: "你好世界" }), 4);
+  assert.equal(gw.estimateEmbedChars({ input: ["abc", "de"] }), 5);
+  assert.equal(gw.estimateEmbedChars({ input: [] }), 0);
+  assert.equal(gw.estimateEmbedChars({}), 0);          // 无 input → route 回 400
+  assert.equal(gw.estimateEmbedChars({ input: 42 }), 0);
+  assert.ok(gw.EMBED_CHAR_MIN_COST > 0);
+
+  // ── 超时分层不变量（B124 实锤，2026-08-28）──
+  // 内层必须最小：中继尝试 × 台数 ≤ 路由预算 ≤ nginx。倒挂时超时由 nginx 先响，
+  // 客户端收到 HTML 504 而非我们的 JSON —— 那就成了「静默回落默认音」。
+  const B = gw.ROUTE_BUDGET_MS;
+  const relayCount = 2; // TTS/识图/嵌入都是双活；ASR 单点
+  assert.ok(gw.TTS_ATTEMPT_MS * relayCount <= B.tts,
+    `TTS 单台上限 ${gw.TTS_ATTEMPT_MS}ms × ${relayCount} 必须装进路由预算 ${B.tts}ms`);
+  assert.ok(gw.ASR_ATTEMPT_MS <= B.asr);
+  assert.ok(gw.EMBED_ATTEMPT_MS * relayCount <= B.embed);
+  for (const [name, ms] of Object.entries(B)) {
+    if (name === "nginx_read") continue;
+    assert.ok(ms <= B.nginx_read,
+      `路由预算 ${name}=${ms}ms 超过 nginx proxy_read_timeout ${B.nginx_read}ms → 客户端会收到 nginx 的 HTML 504`);
+  }
 
   // ── 生产环境缺 AI_GATEWAY_SECRET → 网关整体禁用 ──
   assert.equal(gw.gatewayEnabled(), true);

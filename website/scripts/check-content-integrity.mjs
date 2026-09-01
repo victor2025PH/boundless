@@ -1,7 +1,7 @@
 /**
  * 内容完整性门禁（gate:content）—— 官网文案必须跟着产品事实走。
  *
- * 四道检查，任一违规 exit 1 并打印清单（对齐 engines/chengjie 的 ratchet 门禁文化：
+ * 六道检查，任一违规 exit 1 并打印清单（对齐 engines/chengjie 的 ratchet 门禁文化：
  * 清理过的坏内容不许回潮，新增内容必须过事实源）：
  *   1. 静态资产存在性 —— 源码字符串里引用的 /xxx.png 等本地资产必须真实存在于 public/。
  *   2. 价格一致性 —— lib/content.ts / lib/pricing.ts 里的价格必须与
@@ -11,6 +11,16 @@
  *   4. 测试数 ratchet —— lib/content.ts 宣传的「N+ 自动化(回归)测试」数字必须 ≤
  *      engines/{chengjie,huoke}/tests 下实际测试文件数（test_*.py / *_test.py 递归计数），
  *      防夸大失实；两侧任一取不到（文案改措辞 / 部署机没有 engines/）→ warning 跳过不 fail。
+ *   5. 发布事实源一致性 —— lib/chatxContent.ts 的 CHATX.download（version/filename/
+ *      sha256/size）必须与 public/downloads/manifest.json（打包脚本生成的实况）一致。
+ *      为什么值得一道门禁：下载页运行时会 fetch manifest.json 自动校正显示值，所以
+ *      人眼在页面上**看不出** chatxContent.ts 已经落后；但 SoftwareApplication JSON-LD
+ *      用的是构建时的字面量，而爬虫不执行那次校正 —— 落后的版本号会被 AI 当事实引用
+ *      （2026-08-28 实录：JSON-LD 卡在 1.0.21，线上实际 1.0.58，差了 37 个版本）。
+ *   6. 版本更新记录覆盖 —— lib/chatx-release-notes.json（官网发布页数据源）结构合法，
+ *      且必须收录 manifest.json 的已发布版本。执行「每次发包都生成 changelog 条目」：
+ *      发了新包却忘了 `node scripts/gen-chatx-changelog.mjs add` → 这里红。
+ *      manifest 缺失（只检出 website/ 的部署机）→ 仅做结构校验，跳过覆盖比对。
  *
  * 用法（在 website/ 下）：
  *   npm run gate:content        # prebuild 也会自动跑
@@ -343,11 +353,182 @@ function checkTestCountRatchet() {
 }
 
 // ---------------------------------------------------------------------------
+// 检查 5：发布事实源一致性（chatxContent.ts ⇄ public/downloads/manifest.json）
+// ---------------------------------------------------------------------------
+// manifest.json 由 scripts/gen-chatx-manifest.ps1 在打包后生成，是「实际上架了什么」的实况；
+// chatxContent.ts 是构建时字面量，同时喂页面兜底文案与 SoftwareApplication JSON-LD。
+//
+// 刻意软失败（warning 而非 fail）的两种情况：
+//   - manifest.json 不存在：website/.gitignore 忽略整个 /public/downloads（442MB 安装包不进
+//     仓库），所以全新 clone 与只检出 website/ 的部署机上本来就没有这个文件；
+//   - manifest.json 解析失败：坏文件不该让整条 prebuild 停摆，但要显式喊出来。
+//
+// 刻意**不**断言「filename 指向的 exe 在本地存在」：大文件由发布流程单独上传到服务器，
+// 本地/CI 常态缺失（2026-08-28 实测本地无 1.0.58 而线上 HEAD 200），断言必然误报。
+const manifestPath = join(publicDir, "downloads", "manifest.json");
+const chatxContentPath = join(websiteRoot, "lib", "chatxContent.ts");
+
+/** 抽 `key: "value"` 的首个匹配（download 块在文件最前，同名 key 在其后不再出现字面量形）。 */
+function firstStringField(src, key) {
+  const m = new RegExp(`^\\s*${key}\\s*:\\s*"([^"]*)"`, "m").exec(src);
+  return m ? m[1] : null;
+}
+
+function checkReleaseFacts() {
+  const warnings = [];
+  const problems = [];
+  const facts = {};
+
+  if (!existsSync(chatxContentPath)) {
+    problems.push("缺 lib/chatxContent.ts —— 下载页事实源文件不存在（被移动/删除时须同步本门禁）");
+    return { warnings, problems, facts };
+  }
+  const src = readFileSync(chatxContentPath, "utf8");
+
+  const version = firstStringField(src, "version");
+  const filename = firstStringField(src, "filename");
+  const sha256 = firstStringField(src, "sha256");
+  // size: { zh: "442 MB", en: "442 MB" }
+  const sizeM = /^\s*size\s*:\s*\{\s*zh:\s*"([^"]*)"\s*,\s*en:\s*"([^"]*)"\s*\}/m.exec(src);
+  // url: `${CHATX_RELEASE_BASE}/ChatX-Setup-1.0.58.exe`（模板串，与 182 行的页面 url 靠基址锚点区分）
+  const urlM = /url:\s*`\$\{CHATX_RELEASE_BASE\}\/([^`]+)`/.exec(src);
+
+  const missingFields = [];
+  if (!version) missingFields.push("version");
+  if (!filename) missingFields.push("filename");
+  if (!sha256) missingFields.push("sha256");
+  if (!sizeM) missingFields.push("size");
+  if (!urlM) missingFields.push("url");
+  if (missingFields.length > 0) {
+    problems.push(
+      `lib/chatxContent.ts 里解析不到 CHATX.download 字段：${missingFields.join(", ")} —— 源码形状变更，请同步本门禁的解析正则`
+    );
+    return { warnings, problems, facts };
+  }
+  Object.assign(facts, { version, filename, sha256, sizeZh: sizeM[1], sizeEn: sizeM[2], urlFile: urlM[1] });
+
+  // 5a 内部自洽（不依赖 manifest，任何环境都能查）
+  if (urlM[1] !== filename) {
+    problems.push(`download.url 指向 ${urlM[1]} 但 download.filename 是 ${filename} —— 改文件名时漏改 url`);
+  }
+  const expectName = `ChatX-Setup-${version}.exe`;
+  if (filename !== expectName) {
+    problems.push(`download.filename=${filename} 与 version=${version} 不匹配（期望 ${expectName}）—— 升版本时漏改文件名`);
+  }
+  if (sizeM[1] !== sizeM[2]) {
+    problems.push(`download.size 中英不一致（zh="${sizeM[1]}" en="${sizeM[2]}"）—— 同一个安装包体积不该有两个值`);
+  }
+  if (!/^[0-9a-f]{64}$/i.test(sha256)) {
+    problems.push(`download.sha256 不是 64 位十六进制：${sha256}`);
+  }
+
+  // 5b 与打包实况比对（manifest 缺失属预期环境差异 → warning）
+  if (!existsSync(manifestPath)) {
+    warnings.push(
+      "public/downloads/manifest.json 不存在（/public/downloads 已被 .gitignore，全新 clone 与只检出 website/ 的部署机属预期）—— 跳过与打包实况的比对，仅完成内部自洽检查"
+    );
+    return { warnings, problems, facts };
+  }
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  } catch (err) {
+    warnings.push(`public/downloads/manifest.json 解析失败（${err.message}）—— 跳过比对，但请检查打包脚本产物`);
+    return { warnings, problems, facts };
+  }
+  facts.manifestVersion = manifest.version;
+
+  if (String(manifest.version ?? "") !== version) {
+    problems.push(
+      `版本漂移：chatxContent.ts=${version} vs manifest.json=${manifest.version} —— JSON-LD 会把落后的版本号喂给爬虫/AI`
+    );
+  }
+  if (String(manifest.filename ?? "") !== filename) {
+    problems.push(`文件名漂移：chatxContent.ts=${filename} vs manifest.json=${manifest.filename}`);
+  }
+  if (String(manifest.sha256 ?? "").toLowerCase() !== sha256.toLowerCase()) {
+    problems.push(
+      `SHA-256 漂移：chatxContent.ts=${sha256.slice(0, 12)}… vs manifest.json=${String(manifest.sha256 ?? "").slice(0, 12)}… —— 用户按页面校验和核对会失败`
+    );
+  }
+  // 体积："442 MB" ⇄ size_mb "442"（只比数字，容忍单位写法差异）
+  const claimedMb = /(\d+(?:\.\d+)?)/.exec(sizeM[1]);
+  const actualMb = /(\d+(?:\.\d+)?)/.exec(String(manifest.size_mb ?? ""));
+  if (claimedMb && actualMb && claimedMb[1] !== actualMb[1]) {
+    problems.push(`体积漂移：chatxContent.ts="${sizeM[1]}" vs manifest.json size_mb="${manifest.size_mb}"`);
+  }
+  return { warnings, problems, facts };
+}
+
+// ---------------------------------------------------------------------------
+// 检查 6：版本更新记录覆盖（lib/chatx-release-notes.json ⇄ manifest.json）
+// ---------------------------------------------------------------------------
+// 官网发布页 /download/chatx/releases 的数据源。执行「每次发包都生成 changelog 条目」：
+// 结构合法性任何环境都查；覆盖比对依赖 manifest（缺失=部署机预期，warning 跳过）。
+const changelogPath = join(websiteRoot, "lib", "chatx-release-notes.json");
+const CHANGELOG_TAGS = new Set(["feature", "fix", "improve", "security"]);
+
+function checkChangelogCoverage() {
+  const warnings = [];
+  const problems = [];
+  let latest = null;
+
+  if (!existsSync(changelogPath)) {
+    problems.push("缺 lib/chatx-release-notes.json —— 官网版本更新记录数据源不存在（被移动/删除时须同步本门禁）");
+    return { warnings, problems, latest };
+  }
+  let notes;
+  try {
+    notes = JSON.parse(readFileSync(changelogPath, "utf8"));
+  } catch (err) {
+    problems.push(`lib/chatx-release-notes.json 解析失败（${err.message}）`);
+    return { warnings, problems, latest };
+  }
+  if (!Array.isArray(notes) || notes.length === 0) {
+    problems.push("lib/chatx-release-notes.json 应为非空数组");
+    return { warnings, problems, latest };
+  }
+
+  // 结构合法性（逐条）
+  const versions = new Set();
+  notes.forEach((n, i) => {
+    const at = `#${i} (v${n?.version ?? "?"})`;
+    if (!/^\d+\.\d+\.\d+$/.test(String(n?.version ?? ""))) problems.push(`changelog ${at} version 不是语义化版本`);
+    else versions.add(n.version);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(n?.date ?? ""))) problems.push(`changelog ${at} date 不是 YYYY-MM-DD`);
+    if (!n?.title?.zh || !n?.title?.en) problems.push(`changelog ${at} title 缺 zh/en`);
+    if (!Array.isArray(n?.tags) || n.tags.length === 0 || !n.tags.every((t) => CHANGELOG_TAGS.has(t)))
+      problems.push(`changelog ${at} tags 非法（须为 feature|fix|improve|security 非空数组）`);
+    const zh = n?.highlights?.zh, en = n?.highlights?.en;
+    if (!Array.isArray(zh) || zh.length === 0 || !Array.isArray(en) || en.length === 0)
+      problems.push(`changelog ${at} highlights.zh / highlights.en 须为非空数组（双语站不缺一边）`);
+  });
+  latest = notes[0]?.version ?? null;
+
+  // 覆盖比对：manifest 的已发布版本必须在 changelog 里（缺 manifest = 部署机预期，跳过）
+  if (existsSync(manifestPath)) {
+    try {
+      const mv = String(JSON.parse(readFileSync(manifestPath, "utf8")).version ?? "").trim();
+      if (mv && !versions.has(mv)) {
+        problems.push(
+          `已发布 v${mv}（manifest.json）但 lib/chatx-release-notes.json 缺该版本条目 —— 发包时请跑 node scripts/gen-chatx-changelog.mjs add --version ${mv} ...`
+        );
+      }
+    } catch (err) {
+      warnings.push(`manifest.json 解析失败（${err.message}）—— 跳过 changelog 覆盖比对`);
+    }
+  } else {
+    warnings.push("public/downloads/manifest.json 不存在（部署机预期）—— 仅校验 changelog 结构，跳过覆盖比对");
+  }
+  return { warnings, problems, latest };
+}
+
+// ---------------------------------------------------------------------------
 // 主流程
 // ---------------------------------------------------------------------------
 let failed = false;
 
-console.log("[gate:content] ── 检查 1/4 静态资产存在性 ──");
+console.log("[gate:content] ── 检查 1/6 静态资产存在性 ──");
 const assets = checkAssets();
 console.log(
   `[gate:content] 扫描 ${assets.fileCount} 个源文件，命中 ${assets.refCount} 处本地资产引用`
@@ -364,7 +545,7 @@ if (assets.missing.length > 0) {
   console.log("[gate:content] ✓ 资产引用全部存在");
 }
 
-console.log("[gate:content] ── 检查 2/4 价格一致性（事实源 product-facts.json）──");
+console.log("[gate:content] ── 检查 2/6 价格一致性（事实源 product-facts.json）──");
 const prices = checkPrices();
 console.log(`[gate:content] 比对 ${prices.checked} 项价格断言`);
 if (prices.problems.length > 0) {
@@ -375,7 +556,7 @@ if (prices.problems.length > 0) {
   console.log("[gate:content] ✓ 价格与事实源一致");
 }
 
-console.log("[gate:content] ── 检查 3/4 禁用宣传语黑名单 ──");
+console.log("[gate:content] ── 检查 3/6 禁用宣传语黑名单 ──");
 const banned = checkBannedClaims();
 if (banned.length > 0) {
   failed = true;
@@ -387,7 +568,7 @@ if (banned.length > 0) {
   console.log("[gate:content] ✓ 无禁用宣传语");
 }
 
-console.log("[gate:content] ── 检查 4/4 测试数 ratchet（宣传数 ≤ 实际测试文件数）──");
+console.log("[gate:content] ── 检查 4/6 测试数 ratchet（宣传数 ≤ 实际测试文件数）──");
 const testCount = checkTestCountRatchet();
 for (const w of testCount.warnings) console.log(`[gate:content] ⚠ ${w}`);
 if (testCount.actual != null) {
@@ -405,6 +586,36 @@ if (testCount.problems.length > 0) {
   console.log("[gate:content] ✓ 宣传测试数未超过实际");
 } else {
   console.log("[gate:content] ⚠ 测试数 ratchet 本轮跳过（原因见上方 warning）");
+}
+
+console.log("[gate:content] ── 检查 5/6 发布事实源一致性（chatxContent.ts ⇄ downloads/manifest.json）──");
+const release = checkReleaseFacts();
+for (const w of release.warnings) console.log(`[gate:content] ⚠ ${w}`);
+if (release.facts.version) {
+  // 实况常驻输出：发版复核直接读这一行确认三处（页面兜底/JSON-LD/打包清单）同版本
+  const mv = release.facts.manifestVersion ? `，manifest ${release.facts.manifestVersion}` : "";
+  console.log(
+    `[gate:content] [release] chatxContent ${release.facts.version} / ${release.facts.filename} / ${release.facts.sizeZh} / sha256 ${release.facts.sha256.slice(0, 12)}…${mv}`
+  );
+}
+if (release.problems.length > 0) {
+  failed = true;
+  console.log(`[gate:content] ✗ ${release.problems.length} 项发布事实源不一致：`);
+  for (const problem of release.problems) console.log(`  - ${problem}`);
+} else {
+  console.log("[gate:content] ✓ 发布事实源一致");
+}
+
+console.log("[gate:content] ── 检查 6/6 版本更新记录覆盖（chatx-release-notes.json ⇄ manifest.json）──");
+const changelog = checkChangelogCoverage();
+for (const w of changelog.warnings) console.log(`[gate:content] ⚠ ${w}`);
+if (changelog.latest) console.log(`[gate:content] [changelog] 最新条目 v${changelog.latest}`);
+if (changelog.problems.length > 0) {
+  failed = true;
+  console.log(`[gate:content] ✗ ${changelog.problems.length} 项版本更新记录问题：`);
+  for (const problem of changelog.problems) console.log(`  - ${problem}`);
+} else {
+  console.log("[gate:content] ✓ 版本更新记录结构合法且覆盖已发布版本");
 }
 
 if (failed) {

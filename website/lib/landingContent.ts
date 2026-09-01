@@ -566,5 +566,12 @@ export const LANDING_MEDIA = {
     height: 640,
     chartSummary:
       "四柱：乙亥 甲申 庚辰 辛巳（1995-08-17 生，属猪）\n日主：庚金\n透干十神：年正财、月偏财、时劫财\n五行（月令双计）：金4 木2 水1 火1 土1；日主偏强（粗判），喜用候选：火、水、木\n当前大运：丁亥（28岁起）\n今年流年：2026 丙午",
+    /* 英文页的对照译读（实施78 P0-2）。上面那段的标签写的是「引擎逐字输出」——把它换成
+       英文就变成假话了，而且英文世界的 BaZi 内容本来就惯例保留干支原文（Jia-Zi 一类）。
+       所以中文原文留作证据、另给一段英文对照：英文读者读得懂，AI 引擎也抓得到可引用文本。
+       术语沿用本文件 fate 段 caps/faq 已确立的英文口径（four pillars / day master /
+       ten gods / luck cycle），别在这里另造一套译名。 */
+    chartSummaryEn:
+      "Four pillars: Yi-Hai, Jia-Shen, Geng-Chen, Xin-Si (born 1995-08-17, Year of the Pig)\nDay master: Geng (yang Metal)\nTen gods on visible stems: Proper Wealth (year), Indirect Wealth (month), Rob Wealth (hour)\nFive elements (month branch double-counted): Metal 4, Wood 2, Water 1, Fire 1, Earth 1 — day master slightly strong (rough read), favorable candidates: Fire, Water, Wood\nCurrent luck cycle: Ding-Hai (from age 28)\nThis year: 2026 Bing-Wu",
   },
 };

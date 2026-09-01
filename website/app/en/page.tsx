@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import SiteHome from "@/components/SiteHome";
+import { content } from "@/lib/content";
+import { faqPageJsonLd } from "@/lib/jsonld";
 
 const LANGUAGES = { "zh-CN": "/", en: "/en", "x-default": "/" };
 
@@ -24,6 +26,14 @@ export const metadata: Metadata = {
   },
 };
 
+// 首页 FAQPage schema（英文路由 → 英文条目；与可见 Faq 组件同源，见 app/page.tsx 注释）
+const faqLd = faqPageJsonLd(content.en.faq.items);
+
 export default function HomeEn() {
-  return <SiteHome />;
+  return (
+    <>
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(faqLd) }} />
+      <SiteHome />
+    </>
+  );
 }

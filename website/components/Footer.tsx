@@ -5,6 +5,7 @@ import { useLang } from "./LanguageContext";
 import BrandMark from "./BrandMark";
 import { BRAND } from "@/lib/brand";
 import { NAV_PRICING, navLabel } from "@/lib/nav";
+import { CONTACT_EMAIL, CONTACT_EMAIL_URL, CONTACT_URL, TELEGRAM_DISPLAY } from "@/lib/site";
 
 export default function Footer() {
   const { t, lang } = useLang();
@@ -17,6 +18,11 @@ export default function Footer() {
   const mainLinks = [
     { href: `${home}#products`, label: t.footer.links[0] },
     { href: zh ? NAV_PRICING.path! : `/en${NAV_PRICING.path!}`, label: navLabel(NAV_PRICING, lang) },
+    // 实施78 P1-6（2026-08-28）：/compare 枢纽页此前**站内零入口**——AI 会直达具体对比子页，
+    // 真人从首页却找不到对比内容（信息架构断层 X5）。页脚是最稳的常驻入口，同时给站内链接
+    // 结构（AI 也吃链接图）；标签刻意用「对比选型 / Comparisons」而不是「竞品对比」（后者
+    // 像在替对手做广告）。
+    { href: zh ? "/compare" : "/en/compare", label: zh ? "对比选型" : "Comparisons" },
     { href: zh ? "/brand" : "/en/brand", label: t.footer.links[2] },
     { href: `${home}#contact`, label: t.footer.links[3] },
   ];
@@ -38,11 +44,36 @@ export default function Footer() {
           <div className="max-w-sm">
             <div className="flex items-center gap-2">
               <BrandMark className="h-8 w-8" />
-              <span className="font-semibold text-white">{BRAND.company.zh} {BRAND.company.en}</span>
+              {/* 实施78 P0-2：英文路由只出 BOUNDLESS（与 Navbar/BrandShowcase 同口径） */}
+              <span className="font-semibold text-white">
+                {zh ? `${BRAND.company.zh} ${BRAND.company.en}` : BRAND.company.en}
+              </span>
             </div>
             <p className="mt-4 text-xs leading-relaxed text-slate-500">
               <span className="font-medium text-slate-400">{t.footer.disclaimerTitle}：</span>
               {t.footer.disclaimer}
+            </p>
+            {/* 服务提供方身份 + 可写信的联系方式（实施78 P0-6 / D9）：此前全站联系方式只有
+                Telegram，而我们把 EU AI Act 第 50 条「标明 provider 身份」当卖点，说不圆；
+                西方 B2B 买家也习惯先看有没有邮箱。邮箱按 lib/site.CONTACT_EMAIL 判空——
+                没开通就只出 Telegram，绝不写一个会退信的地址。 */}
+            <p className="mt-3 text-xs leading-relaxed text-slate-500">
+              <span className="font-medium text-slate-400">
+                {zh ? "服务提供方" : "Service provider"}：
+              </span>
+              {zh ? `${BRAND.company.zh} ${BRAND.company.en}` : BRAND.company.en}
+              {" · "}
+              <a href={CONTACT_URL} target="_blank" rel="noopener" className="transition hover:text-slate-300">
+                {TELEGRAM_DISPLAY}
+              </a>
+              {CONTACT_EMAIL && (
+                <>
+                  {" · "}
+                  <a href={CONTACT_EMAIL_URL} className="transition hover:text-slate-300">
+                    {CONTACT_EMAIL}
+                  </a>
+                </>
+              )}
             </p>
           </div>
 

@@ -11,6 +11,7 @@
     "sync:brand": "node scripts/sync-brand.mjs",
     "sync:facts": "node scripts/sync-product-facts.mjs",
     "gate:content": "node scripts/check-content-integrity.mjs",
+    "verify:seo": "node scripts/verify-seo-live.mjs",
     "verify:robot": "node scripts/robot-shot.mjs .robot-shots && node scripts/robot-behavior.mjs .robot-shots",
     "perf:robot": "node scripts/robot-perf.mjs",
     "assets:robot": "node scripts/robot-capture.mjs",
@@ -21,7 +22,10 @@
     "qa:intro-button": "node scripts/qa-intro-button.mjs",
     "qa:intro-button-ios": "node scripts/qa-intro-button-ios.mjs",
     "qa:intro": "node scripts/qa-intro-motion.mjs && node scripts/qa-intro-button.mjs",
-    "qa:trial": "node scripts/qa-trial-flow.mjs"
+    "qa:en-cjk": "node scripts/qa-en-cjk.mjs",
+    "qa:trial": "node scripts/qa-trial-flow.mjs",
+    "qa:cjk": "node scripts/qa-en-cjk.mjs",
+    "qa:m-a11y": "node scripts/qa-mobile-a11y.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",

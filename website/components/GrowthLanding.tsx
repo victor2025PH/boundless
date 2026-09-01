@@ -117,8 +117,15 @@ export default function GrowthLanding() {
           <div className="flex items-center gap-3">
             <Link href={home} className="flex items-center gap-2">
               <BrandMark className="h-8 w-8" />
+              {/* 实施78 P0-2：英文路由只出 BOUNDLESS（与 Navbar/Footer/BrandShowcase 同口径） */}
               <span className="hidden text-base font-semibold text-white sm:inline">
-                {BRAND.company.zh} <span className="text-slate-400">{BRAND.company.en}</span>
+                {lang === "zh" ? (
+                  <>
+                    {BRAND.company.zh} <span className="text-slate-400">{BRAND.company.en}</span>
+                  </>
+                ) : (
+                  BRAND.company.en
+                )}
               </span>
             </Link>
             <span className="hidden rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-xs text-slate-300 md:inline">
@@ -229,9 +236,18 @@ export default function GrowthLanding() {
                           className="h-12 w-12 object-contain"
                         />
                         <div>
+                          {/* P0-2：中文页「智聊 ChatX」双写，英文页只出拉丁名 */}
                           <div className="flex items-baseline gap-2">
-                            <span className="text-lg font-bold text-white">{p.zh}</span>
-                            <span className="text-sm font-semibold text-neon-cyan">{p.en}</span>
+                            {lang === "zh" && <span className="text-lg font-bold text-white">{p.zh}</span>}
+                            <span
+                              className={
+                                lang === "zh"
+                                  ? "text-sm font-semibold text-neon-cyan"
+                                  : "text-lg font-bold text-white"
+                              }
+                            >
+                              {p.en}
+                            </span>
                           </div>
                           <p className="mt-0.5 text-xs text-slate-500">{p.scene[lang]}</p>
                         </div>

@@ -106,8 +106,10 @@ export default function LingoDualPath() {
       id: "interpret",
       iconKey: "voxx",
       icon: Headphones,
-      title: voxx.zh,
-      subtitle: voxx.en,
+      // 实施78 P0-2：英文路由标题用拉丁名（原恒为 voxx.zh，英文页出现「通传 VoxX」）；
+      // 英文下副标题与主标题会重复，故置空由卡片自行省略。
+      title: lang === "zh" ? voxx.zh : voxx.en,
+      subtitle: lang === "zh" ? voxx.en : "",
       tag: voxx.scene[lang],
       desc: voxx.desc[lang],
       points: c.interpretPoints,

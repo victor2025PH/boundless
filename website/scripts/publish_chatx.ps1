@@ -14,6 +14,14 @@
 #   5. pm2 restart (Next.js rebuilds its public/ static index) + public verification
 #   6. hygiene: keep the newest -Keep versions, delete older exe/blockmap locally, on the VPS AND on R2
 #
+# ALSO, every release must grow the website changelog page (/download/chatx/releases). That page's
+# data lives in website/lib/chatx-release-notes.json (git-tracked, bilingual) — NOT in this
+# downloads flow. After publishing, run the generator and redeploy the website:
+#   node website/scripts/gen-chatx-changelog.mjs add --version <ver> --tags fix,improve \
+#     --title-zh "..." --title-en "..." --zh <notes.txt> --en <notes_en.txt>
+# gate:content check 6 fails the website build if a published version has no changelog entry, so
+# you cannot forget. This script prints the exact command with -Version prefilled at the end.
+#
 # -DryRun does every read-only check and PRINTS what it would upload/restart/delete, touching nothing
 # remote. Run it first, always.
 #
@@ -235,6 +243,12 @@ else {
     }
 }
 Write-Host ""
+# Changelog reminder (every release must grow /download/chatx/releases; gate:content check 6 enforces).
+$notesArg = if ($NotesFile) { $NotesFile } else { "<notes.txt>" }
+Write-Host "[next] 生成官网版本更新记录条目（发布页 /download/chatx/releases）：" -ForegroundColor Cyan
+Write-Host "  node scripts/gen-chatx-changelog.mjs add --version $Version --tags fix,improve \" -ForegroundColor Cyan
+Write-Host "    --title-zh `"一句话主题`" --title-en `"one-line title`" --zh $notesArg --en <notes_en.txt>" -ForegroundColor Cyan
+Write-Host "  然后重新部署 website（gate:content 检查 6 会拦住漏补的版本）。" -ForegroundColor Cyan
 # Broadcast etiquette (boss flagged twice, 0827/0830): the Telegram group @hykjz is LINKED to
 # channel @hykj7 — a channel post auto-forwards into the group. Broadcasting with target=both
 # posts the SAME announcement into the group a second time. Always use target=channel.

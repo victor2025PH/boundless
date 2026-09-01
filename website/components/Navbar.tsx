@@ -163,9 +163,12 @@ export default function Navbar() {
                   const ui = CATEGORY_UI[cat];
                   return (
                     <div key={cat}>
+                      {/* 实施78 P0-2：中文页「智连 GROWTH」双写助记，英文页只留英文名——
+                          反向双写（「GROWTH 智连」）对不识汉字的访客是纯噪音。与
+                          BrandShowcase 的三系标题同一口径，两处要一起改。 */}
                       <div className={`mb-2 border-b border-white/5 pb-1.5 text-xs font-semibold ${ui.label}`}>
                         {lang === "zh" ? cc.zh : cc.en}
-                        <span className="ml-1 font-normal text-slate-500">{lang === "zh" ? cc.en : cc.zh}</span>
+                        {lang === "zh" && <span className="ml-1 font-normal text-slate-500">{cc.en}</span>}
                       </div>
                       <div className="flex flex-col gap-0.5">
                         {publicProductsInCategory(cat).map((key) => {
@@ -188,8 +191,14 @@ export default function Navbar() {
                               />
                               <span className="min-w-0 flex-1">
                                 <span className="block text-sm text-slate-200 group-hover/item:text-white">
-                                  {p.zh}
-                                  <span className={`ml-1.5 text-xs ${CATEGORY_UI[cat].enName}`}>{p.en}</span>
+                                  {lang === "zh" ? (
+                                    <>
+                                      {p.zh}
+                                      <span className={`ml-1.5 text-xs ${CATEGORY_UI[cat].enName}`}>{p.en}</span>
+                                    </>
+                                  ) : (
+                                    p.en
+                                  )}
                                 </span>
                                 <span className="block truncate text-[11px] text-slate-500">{p.scene[lang]}</span>
                               </span>
@@ -335,9 +344,9 @@ export default function Navbar() {
               <div key={cat} className="mb-2 last:mb-0">
                 <div className={`px-2 py-1 text-xs font-semibold ${CATEGORY_UI[cat].label}`}>
                   {lang === "zh" ? CATEGORIES[cat].zh : CATEGORIES[cat].en}
-                  <span className="ml-1.5 font-normal text-slate-600">
-                    {lang === "zh" ? CATEGORIES[cat].en : CATEGORIES[cat].zh}
-                  </span>
+                  {lang === "zh" && (
+                    <span className="ml-1.5 font-normal text-slate-600">{CATEGORIES[cat].en}</span>
+                  )}
                 </div>
                 <div className="flex flex-col">
                   {publicProductsInCategory(cat).map((key) => {
@@ -354,7 +363,7 @@ export default function Navbar() {
                       >
                         <ProductIcon product={key} size={24} alt="" className="h-6 w-6 shrink-0 object-contain" />
                         <span className="min-w-0 flex-1">
-                          {p.zh}
+                          {lang === "zh" ? p.zh : p.en}
                           <span className="ml-1.5 text-[11px] text-slate-500">{p.scene[lang]}</span>
                         </span>
                         {CLIENT_COVERED_PRODUCTS.has(key) && (
@@ -458,8 +467,15 @@ export default function Navbar() {
         >
           <a href={onHome ? "#top" : home} className="flex min-w-0 items-center gap-2">
             <BrandMark className="h-9 w-9 shrink-0" />
+            {/* 实施78 P0-2：英文路由只出 BOUNDLESS（纯拉丁字形），中文路由保持双写 */}
             <span className="truncate text-lg font-semibold tracking-wide text-white">
-              {BRAND.company.zh} <span className="hidden text-slate-400 sm:inline">{BRAND.company.en}</span>
+              {lang === "zh" ? (
+                <>
+                  {BRAND.company.zh} <span className="hidden text-slate-400 sm:inline">{BRAND.company.en}</span>
+                </>
+              ) : (
+                BRAND.company.en
+              )}
             </span>
           </a>
 
@@ -526,7 +542,13 @@ export default function Navbar() {
               <a href={onHome ? "#top" : home} onClick={() => setOpen(false)} className="flex items-center gap-2">
                 <BrandMark className="h-8 w-8" />
                 <span className="text-base font-semibold text-white">
-                  {BRAND.company.zh} <span className="text-slate-400">{BRAND.company.en}</span>
+                  {lang === "zh" ? (
+                    <>
+                      {BRAND.company.zh} <span className="text-slate-400">{BRAND.company.en}</span>
+                    </>
+                  ) : (
+                    BRAND.company.en
+                  )}
                 </span>
               </a>
               <button

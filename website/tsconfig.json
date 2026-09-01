@@ -39,7 +39,9 @@
     ".next-new/types/**/*.ts",
     ".next-dev-iter/types/**/*.ts",
     ".next-hand-redesign/types/**/*.ts",
-    ".next-verify3/types/**/*.ts"
+    ".next-verify3/types/**/*.ts",
+    ".next-geo-check/types/**/*.ts",
+    ".next-p0-verify/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

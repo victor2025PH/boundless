@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import ComparePage from "@/components/ComparePage";
+import FaqJsonLd from "@/components/FaqJsonLd";
 import { compareSpecs } from "@/lib/compare-content";
 
 export const metadata: Metadata = {
@@ -18,5 +19,10 @@ export const metadata: Metadata = {
 };
 
 export default function CompareSalesmartlyPage() {
-  return <ComparePage spec={compareSpecs["salesmartly"]} />;
+  return (
+    <>
+      <FaqJsonLd faq={compareSpecs["salesmartly"].faq} lang="zh" />
+      <ComparePage spec={compareSpecs["salesmartly"]} />
+    </>
+  );
 }

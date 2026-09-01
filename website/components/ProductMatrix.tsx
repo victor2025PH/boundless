@@ -93,11 +93,11 @@ export default function ProductMatrix() {
               <div key={cat}>
                 <Reveal>
                   <div className={`mb-5 flex flex-wrap items-baseline gap-x-3 gap-y-1 border-l-2 pl-3 ${borderL}`}>
+                    {/* 实施78 P0-2：英文页不做反向双写（「GROWTH 智连」对不识汉字的访客是噪音），
+                        与 Navbar / BrandShowcase 三系标题同一口径 */}
                     <h3 className="text-lg font-bold text-white">
                       {lang === "zh" ? cc.zh : cc.en}
-                      <span className={`ml-2 text-sm font-medium ${ui.label}`}>
-                        {lang === "zh" ? cc.en : cc.zh}
-                      </span>
+                      {lang === "zh" && <span className={`ml-2 text-sm font-medium ${ui.label}`}>{cc.en}</span>}
                     </h3>
                     <span className="text-xs text-slate-500">
                       {c.breakLabel} · {lang === "zh" ? cc.breakZh : cc.breakEn}
@@ -123,15 +123,15 @@ export default function ProductMatrix() {
                               <ProductIcon
                                 product={key}
                                 size={48}
-                                alt={`${p.zh} ${p.en}`}
+                                alt={lang === "zh" ? `${p.zh} ${p.en}` : p.en}
                                 className="h-12 w-12 object-contain transition-transform group-hover:scale-110"
                               />
                             </motion.span>
                             <span className="font-mono text-xs text-slate-600">0{idx + 1}</span>
                           </div>
                           <div className="flex items-baseline gap-2">
-                            <span className="text-xl font-bold text-white">{p.zh}</span>
-                            <span className={`text-sm font-semibold ${ui.enName}`}>{p.en}</span>
+                            <span className="text-xl font-bold text-white">{lang === "zh" ? p.zh : p.en}</span>
+                            {lang === "zh" && <span className={`text-sm font-semibold ${ui.enName}`}>{p.en}</span>}
                           </div>
                           <p className="mt-0.5 text-xs text-slate-500">{p.scene[lang]} · {p.alt}</p>
                           <p className="mt-3 flex-1 text-sm leading-relaxed text-slate-300">{p.desc[lang]}</p>
